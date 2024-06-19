@@ -56,7 +56,9 @@ func newMultiObjPolicy(config *multiObjConfig) *multiObjPolicy {
 }
 
 func (m *multiObjPolicy) OnObject(obj *catalog.ObjectEntry) {
-	m.objects = append(m.objects, obj)
+	if len(m.objects) < m.config.maxObjs {
+		m.objects = append(m.objects, obj)
+	}
 }
 
 func (m *multiObjPolicy) Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind) {

@@ -967,65 +967,68 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 		dirtyTree := entry.GetTree().GetTable(table.ID)
 		_, endTs := entry.GetTimeRange()
 
-		stats := table.Stats
-		stats.Lock()
-		defer stats.Unlock()
+		func() {
+			stats := table.Stats
+			stats.Lock()
+			defer stats.Unlock()
 
-		if force {
-			logutil.Infof("[flushtabletail] force flush %v-%s", table.ID, table.GetLastestSchemaLocked().Name)
-			if err := r.fireFlushTabletail(table, dirtyTree, endTs); err == nil {
-				stats.ResetDeadlineWithLock()
+			if force {
+				logutil.Infof("[flushtabletail] force flush %v-%s", table.ID, table.GetLastestSchemaLocked().Name)
+				if err := r.fireFlushTabletail(table, dirtyTree, endTs); err == nil {
+					stats.ResetDeadlineWithLock()
+				}
+				return
 			}
-			continue
-		}
 
-		if stats.LastFlush.IsEmpty() {
-			// first boot, just bail out, and never enter this branch again
-			stats.LastFlush = stats.LastFlush.Next()
-			stats.ResetDeadlineWithLock()
-			continue
-		}
+			if stats.LastFlush.IsEmpty() {
+				// first boot, just bail out, and never enter this branch again
+				stats.LastFlush = stats.LastFlush.Next()
+				stats.ResetDeadlineWithLock()
+				return
+			}
 
-		flushReady := func() bool {
-			if !table.IsActive() {
-				count++
-				if pressure < 0.5 || count < 200 {
+			flushReady := func() bool {
+				if !table.IsActive() {
+					count++
+					if pressure < 0.5 || count < 200 {
+						return true
+					}
+					return false
+				}
+				if stats.FlushDeadline.Before(time.Now()) {
+					return true
+				}
+				if asize+dsize > stats.FlushMemCapacity {
+					return true
+				}
+				if asize < common.Const1MBytes && dsize > 2*common.Const1MBytes+common.Const1MBytes/2 {
+					return true
+				}
+				if asize > common.Const1MBytes && rand.Float64() < pressure {
 					return true
 				}
 				return false
 			}
-			if stats.FlushDeadline.Before(time.Now()) {
-				return true
-			}
-			if asize+dsize > stats.FlushMemCapacity {
-				return true
-			}
-			if asize < common.Const1MBytes && dsize > 2*common.Const1MBytes+common.Const1MBytes/2 {
-				return true
-			}
-			if asize > common.Const1MBytes && rand.Float64() < pressure {
-				return true
-			}
-			return false
-		}
 
-		ready := flushReady()
-		// debug log, delete later
-		if !stats.LastFlush.IsEmpty() && asize+dsize > 2*1000*1024 {
-			logutil.Infof("[flushtabletail] %v(%v) %v dels  FlushCountDown %v, flushReady %v",
-				table.GetLastestSchemaLocked().Name,
-				common.HumanReadableBytes(asize+dsize),
-				common.HumanReadableBytes(dsize),
-				time.Until(stats.FlushDeadline),
-				ready,
-			)
-		}
-
-		if ready {
-			if err := r.fireFlushTabletail(table, dirtyTree, endTs); err == nil {
-				stats.ResetDeadlineWithLock()
+			ready := flushReady()
+			// debug log, delete later
+			if !stats.LastFlush.IsEmpty() && asize+dsize > 2*1000*1024 {
+				logutil.Infof("[flushtabletail] %v(%v) %v dels  FlushCountDown %v, flushReady %v",
+					table.GetLastestSchemaLocked().Name,
+					common.HumanReadableBytes(asize+dsize),
+					common.HumanReadableBytes(dsize),
+					time.Until(stats.FlushDeadline),
+					ready,
+				)
 			}
-		}
+
+			if ready {
+				if err := r.fireFlushTabletail(table, dirtyTree, endTs); err == nil {
+					stats.ResetDeadlineWithLock()
+				}
+			}
+			return
+		}()
 	}
 }
 
