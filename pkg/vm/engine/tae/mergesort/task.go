@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/docker/go-units"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -114,9 +115,11 @@ func DoMergeAndWrite(
 	/*out args, keep the transfer infomation*/
 	commitEntry := mergehost.GetCommitEntry()
 	fromObjsDesc := ""
+	fromSize := uint32(0)
 	for _, o := range commitEntry.MergedObjs {
 		obj := objectio.ObjectStats(o)
-		fromObjsDesc = fmt.Sprintf("%s%s,", fromObjsDesc, common.ShortObjId(*obj.ObjectName().ObjectId()))
+		fromObjsDesc += common.ShortObjId(*obj.ObjectName().ObjectId()) + ","
+		fromSize += obj.OriginSize()
 	}
 	tableDesc := fmt.Sprintf("%v-%v", commitEntry.TblId, commitEntry.TableName)
 	logutil.Info("[Start] Mergeblocks",
@@ -124,6 +127,7 @@ func DoMergeAndWrite(
 		zap.String("on", mergehost.HostHintName()),
 		zap.String("txn-start-ts", commitEntry.StartTs.DebugString()),
 		zap.String("from-objs", fromObjsDesc),
+		zap.String("from-size", units.BytesSize(float64(fromSize))),
 	)
 	phaseDesc := "prepare data"
 	defer func() {
@@ -154,9 +158,10 @@ func DoMergeAndWrite(
 	toObjsDesc := ""
 	for _, o := range commitEntry.CreatedObjs {
 		obj := objectio.ObjectStats(o)
-		toObjsDesc += fmt.Sprintf("%s(%v)Rows(%v),",
+		toObjsDesc += fmt.Sprintf("%s(%v, %s)Rows(%v),",
 			common.ShortObjId(*obj.ObjectName().ObjectId()),
 			obj.BlkCnt(),
+			units.BytesSize(float64(obj.OriginSize())),
 			obj.Rows())
 	}
 
