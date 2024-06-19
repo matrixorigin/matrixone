@@ -125,6 +125,8 @@ message CNService {
   WorkState WorkState           = 7;
   // QueryAddress is the address of queryservice.QueryService.
   string QueryAddress           = 8;
+  // CommitID is the git commit ID of the cn node.
+  string CommitID = 9;
 }
 
 // TNService tn service metadata
