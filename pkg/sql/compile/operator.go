@@ -1924,6 +1924,10 @@ func constructTableScan() *table_scan.Argument {
 	return table_scan.NewArgument()
 }
 
+func constructValueScan() *value_scan.Argument {
+	return value_scan.NewArgument()
+}
+
 func extraJoinConditions(exprs []*plan.Expr) (*plan.Expr, []*plan.Expr) {
 	exprs = colexec.SplitAndExprs(exprs)
 	eqConds := make([]*plan.Expr, 0, len(exprs))

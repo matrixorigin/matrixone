@@ -106,11 +106,16 @@ func (s *Scope) initDataSource(c *Compile) (err error) {
 		if s.DataSource.Bat != nil {
 			return
 		}
-		bat, err := constructValueScanBatch(s.Proc.Ctx, c.proc, s.DataSource.node)
-		if err != nil {
-			return err
+
+		if s.Instructions[0].Op == vm.ValueScan {
+			if s.DataSource.node.NodeType == plan.Node_VALUE_SCAN {
+				bat, err := constructValueScanBatch(s.Proc.Ctx, c.proc, s.DataSource.node)
+				if err != nil {
+					return err
+				}
+				s.DataSource.Bat = bat
+			}
 		}
-		s.DataSource.Bat = bat
 	} else {
 		if s.DataSource.TableDef != nil {
 			return nil
