@@ -23,7 +23,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
@@ -446,7 +445,7 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	// }
 	// v.FreeMsg = append(v.FreeMsg, time.Now().String()+" : typ="+v.typ.DescString()+" "+string(debug.Stack()))
 
-	reuse.Free[Vector](v, nil)
+	//reuse.Free[Vector](v, nil)
 }
 
 func (v *Vector) MarshalBinary() ([]byte, error) {
