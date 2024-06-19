@@ -349,6 +349,7 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 		}
 
 		bh := GetRawBatchBackgroundExec(ctx, ses)
+		defer bh.Close()
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
 		var pubAccountId int32
 		if pubAccountId = getAccountIdByName(ctx, ses, bh, pubAccountName); pubAccountId == -1 {

@@ -17,6 +17,7 @@ package logservicedriver
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	// "time"
 )
@@ -64,6 +65,7 @@ func (d *LogServiceDriver) doTruncate() {
 }
 
 func (d *LogServiceDriver) truncateLogservice(lsn uint64) {
+	logutil.Infof("LogService Driver: Start Truncate %d", lsn)
 	client, err := d.clientPool.Get()
 	if err == ErrClientPoolClosed {
 		return
@@ -75,19 +77,31 @@ func (d *LogServiceDriver) truncateLogservice(lsn uint64) {
 	ctx, cancel := context.WithTimeout(context.Background(), d.config.TruncateDuration)
 	err = client.c.Truncate(ctx, lsn)
 	cancel()
+	if moerr.IsMoErrCode(err, moerr.ErrInvalidTruncateLsn) {
+		truncatedLsn := d.getLogserviceTruncate()
+		if truncatedLsn == lsn {
+			err = nil
+		}
+	}
 	if err != nil {
 		err = RetryWithTimeout(d.config.RetryTimeout, func() (shouldReturn bool) {
-			logutil.Infof("LogService Driver: retry truncate, err is %v", err)
+			logutil.Infof("LogService Driver: retry truncate, lsn %d err is %v", lsn, err)
 			ctx, cancel := context.WithTimeout(context.Background(), d.config.TruncateDuration)
 			err = client.c.Truncate(ctx, lsn)
 			cancel()
+			if moerr.IsMoErrCode(err, moerr.ErrInvalidTruncateLsn) {
+				truncatedLsn := d.getLogserviceTruncate()
+				if truncatedLsn == lsn {
+					err = nil
+				}
+			}
 			return err == nil
 		})
 		if err != nil {
 			panic(err)
 		}
 	}
-	logutil.Infof("LogService Driver: Truncate %d", lsn)
+	logutil.Infof("LogService Driver: Truncate %d successfully", lsn)
 }
 func (d *LogServiceDriver) getLogserviceTruncate() (lsn uint64) {
 	client, err := d.clientPool.Get()
