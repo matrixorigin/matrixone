@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
@@ -63,13 +64,15 @@ import (
 )
 
 var (
-	configFile   = flag.String("cfg", "", "toml configuration used to start mo-service")
-	launchFile   = flag.String("launch", "", "toml configuration used to launch mo cluster")
-	versionFlag  = flag.Bool("version", false, "print version information")
-	daemon       = flag.Bool("daemon", false, "run mo-service in daemon mode")
-	withProxy    = flag.Bool("with-proxy", false, "run mo-service with proxy module started")
-	maxProcessor = flag.Int("max-processor", 0, "set max processor for go runtime")
-	globalEtlFS  fileservice.FileService
+	configFile        = flag.String("cfg", "", "toml configuration used to start mo-service")
+	launchFile        = flag.String("launch", "", "toml configuration used to launch mo cluster")
+	versionFlag       = flag.Bool("version", false, "print version information")
+	daemon            = flag.Bool("daemon", false, "run mo-service in daemon mode")
+	withProxy         = flag.Bool("with-proxy", false, "run mo-service with proxy module started")
+	maxProcessor      = flag.Int("max-processor", 0, "set max processor for go runtime")
+	globalEtlFS       fileservice.FileService
+	globalServiceType string
+	globalNodeId      string
 )
 
 func init() {
@@ -175,6 +178,8 @@ func startService(
 	}
 	setupProcessLevelRuntime(cfg, stopper)
 
+	malloc.SetDefaultConfig(cfg.Malloc)
+
 	setupStatusServer(runtime.ProcessLevelRuntime())
 
 	goroutine.StartLeakCheck(stopper, cfg.Goroutine)
@@ -221,6 +226,8 @@ func startService(
 
 	if globalEtlFS == nil {
 		globalEtlFS = etlFS
+		globalServiceType = st.String()
+		globalNodeId = uuid
 	}
 
 	switch st {

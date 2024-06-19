@@ -383,7 +383,7 @@ type ExecCtx struct {
 	cws             []ComputationWrapper
 	input           *UserInput
 	//In the session migration, skip the response to the client
-	skipRespClient bool
+	inMigration bool
 	//In the session migration, executeParamTypes for the EXECUTE stmt should be migrated
 	//from the old session to the new session.
 	executeParamTypes []byte
