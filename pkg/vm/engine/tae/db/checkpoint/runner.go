@@ -237,6 +237,8 @@ type runner struct {
 
 	onceStart sync.Once
 	onceStop  sync.Once
+
+	openTime time.Time
 }
 
 func NewRunner(
@@ -253,6 +255,7 @@ func NewRunner(
 		source:    source,
 		observers: new(observers),
 		wal:       wal,
+		openTime:  time.Now(),
 	}
 	r.storage.entries = btree.NewBTreeGOptions(func(a, b *CheckpointEntry) bool {
 		return a.end.Less(&b.end)
@@ -762,6 +765,11 @@ func (r *runner) tryScheduleIncrementalCheckpoint(start, end types.TS) {
 
 func (r *runner) tryScheduleCheckpoint(endts types.TS) {
 	if r.disabled.Load() {
+		logutil.Infof("Checkpoint is disable")
+		return
+	}
+	if time.Since(r.openTime) < time.Minute*20 {
+		logutil.Infof("Checkpoint is disable. TN has been running for %v", time.Since(r.openTime))
 		return
 	}
 	entry := r.MaxCheckpoint()
