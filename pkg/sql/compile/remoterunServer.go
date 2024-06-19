@@ -16,38 +16,210 @@ package compile
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"hash/crc32"
-	"runtime"
-	"sync/atomic"
-	"time"
-
-	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
-
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
-
-	"github.com/matrixorigin/matrixone/pkg/logservice"
-
 	"github.com/google/uuid"
-
-	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
+	"runtime"
+	"time"
 )
+
+// CnServerMessageHandler receive and deal the message from cn-client.
+//
+// The message should always *pipeline.Message here.
+// there are 2 types of pipeline message now.
+//
+//  1. notify message :
+//     a message to tell the dispatch pipeline where its remote receiver are.
+//     and we use this connection's write-back method to send the data.
+//     or
+//     a message to stop the running pipeline.
+//
+//  2. scope message :
+//     a message contains the encoded pipeline.
+//     we decoded it and run it locally.
+func CnServerMessageHandler(
+	ctx context.Context,
+	serverAddress string,
+	message morpc.Message,
+	cs morpc.ClientSession,
+	storageEngine engine.Engine, fileService fileservice.FileService, lockService lockservice.LockService,
+	queryClient qclient.QueryClient,
+	HaKeeper logservice.CNHAKeeperClient, udfService udf.Service, txnClient client.TxnClient,
+	autoIncreaseCM *defines.AutoIncrCacheManager,
+	messageAcquirer func() morpc.Message) (err error) {
+
+	startTime := time.Now()
+	defer func() {
+		v2.PipelineServerDurationHistogram.Observe(time.Since(startTime).Seconds())
+
+		if e := recover(); e != nil {
+			err = moerr.ConvertPanicError(ctx, e)
+			getLogger().Error("panic in CnServerMessageHandler",
+				zap.String("error", err.Error()))
+			err = errors.Join(err, cs.Close())
+		}
+	}()
+
+	// check message is valid.
+	msg, ok := message.(*pipeline.Message)
+	if !ok {
+		logutil.Errorf("cn server should receive *pipeline.Message, but get %v", message)
+		panic("cn server receive a message with unexpected type")
+	}
+
+	// prepare the receiver structure, just for easy using the `send` method.
+	receiver := newMessageReceiverOnServer(ctx, serverAddress, msg,
+		cs, messageAcquirer, storageEngine, fileService, lockService, queryClient, HaKeeper, udfService, txnClient, autoIncreaseCM)
+
+	// how to handle the *pipeline.Message.
+	if receiver.needNotReply {
+		err = handlePipelineMessage(&receiver)
+	} else {
+		if err = handlePipelineMessage(&receiver); err != nil {
+			err = receiver.sendError(err)
+		} else {
+			err = receiver.sendEndMessage()
+		}
+	}
+
+	// if this message is responsible for the execution of certain pipelines, they should be ended after message processing is completed.
+	if receiver.messageTyp == pipeline.Method_PipelineMessage || receiver.messageTyp == pipeline.Method_PrepareDoneNotifyMessage {
+		// keep listening until connection was closed
+		// to prevent some strange handle order between 'stop sending message' and others.
+		if err == nil {
+			<-ctx.Done()
+		}
+		colexec.Get().RemoveRunningPipeline(receiver.clientSession)
+	}
+	return err
+}
+
+func handlePipelineMessage(receiver *messageReceiverOnServer) error {
+
+	switch receiver.messageTyp {
+	case pipeline.Method_PrepareDoneNotifyMessage:
+		dispatchProc, err := receiver.GetProcByUuid(receiver.messageUuid)
+		if err != nil || dispatchProc == nil {
+			return err
+		}
+		if cancel := colexec.Get().RecordRunningPipeline(receiver.clientSession, dispatchProc); cancel {
+			dispatchProc.Cancel()
+			return nil
+		}
+
+		infoToDispatchOperator := process.WrapCs{
+			MsgId: receiver.messageId,
+			Uid:   receiver.messageUuid,
+			Cs:    receiver.clientSession,
+			Err:   make(chan error, 1),
+		}
+
+		// todo : the timeout should be removed.
+		//		but I keep it here because I don't know whether it will cause hung sometimes.
+		timeLimit, cancel := context.WithTimeout(context.TODO(), HandleNotifyTimeout)
+
+		succeed := false
+		select {
+		case <-timeLimit.Done():
+			err = moerr.NewInternalError(receiver.ctx, "send notify msg to dispatch operator timeout")
+		case dispatchProc.DispatchNotifyCh <- infoToDispatchOperator:
+			succeed = true
+		case <-receiver.ctx.Done():
+		case <-dispatchProc.Ctx.Done():
+		}
+		cancel()
+
+		if err != nil || !succeed {
+			dispatchProc.Cancel()
+			return err
+		}
+
+		select {
+		case <-receiver.ctx.Done():
+			dispatchProc.Cancel()
+
+		// there is no need to check the dispatchProc.Ctx.Done() here.
+		// because we need to receive the error from dispatchProc.DispatchNotifyCh.
+		case err = <-infoToDispatchOperator.Err:
+		}
+		return err
+
+	case pipeline.Method_PipelineMessage:
+		runCompile := receiver.newCompile()
+		if cancel := colexec.Get().RecordRunningPipeline(receiver.clientSession, runCompile.proc); cancel {
+			runCompile.proc.Cancel()
+			return nil
+		}
+
+		// decode and running the pipeline.
+		s, err := decodeScope(receiver.scopeData, runCompile.proc, true, runCompile.e)
+		if err != nil {
+			return err
+		}
+		s = appendWriteBackOperator(runCompile, s)
+		s.SetContextRecursively(runCompile.ctx)
+
+		defer func() {
+			runCompile.proc.FreeVectors()
+			runCompile.proc.CleanValueScanBatchs()
+			runCompile.proc.AnalInfos = nil
+			runCompile.anal.analInfos = nil
+
+			runCompile.Release()
+			s.release()
+		}()
+		err = s.ParallelRun(runCompile)
+		if err == nil {
+			// record the number of s3 requests
+			runCompile.proc.AnalInfos[runCompile.anal.curr].S3IOInputCount += runCompile.counterSet.FileService.S3.Put.Load()
+			runCompile.proc.AnalInfos[runCompile.anal.curr].S3IOInputCount += runCompile.counterSet.FileService.S3.List.Load()
+			runCompile.proc.AnalInfos[runCompile.anal.curr].S3IOOutputCount += runCompile.counterSet.FileService.S3.Head.Load()
+			runCompile.proc.AnalInfos[runCompile.anal.curr].S3IOOutputCount += runCompile.counterSet.FileService.S3.Get.Load()
+			runCompile.proc.AnalInfos[runCompile.anal.curr].S3IOOutputCount += runCompile.counterSet.FileService.S3.Delete.Load()
+			runCompile.proc.AnalInfos[runCompile.anal.curr].S3IOOutputCount += runCompile.counterSet.FileService.S3.DeleteMulti.Load()
+
+			receiver.finalAnalysisInfo = runCompile.proc.AnalInfos
+		} else {
+			// there are 3 situations to release analyzeInfo
+			// 1 is free analyzeInfo of Local CN when release analyze
+			// 2 is free analyzeInfo of remote CN before transfer back
+			// 3 is free analyzeInfo of remote CN when errors happen before transfer back
+			// this is situation 3
+			for i := range runCompile.proc.AnalInfos {
+				reuse.Free[process.AnalyzeInfo](runCompile.proc.AnalInfos[i], nil)
+			}
+		}
+		return err
+
+	case pipeline.Method_StopSending:
+		colexec.Get().CancelRunningPipeline(receiver.clientSession)
+
+	default:
+		panic(fmt.Sprintf("unknown pipeline message type %d.", receiver.messageTyp))
+	}
+	return nil
+}
 
 const (
 	maxMessageSizeToMoRpc = 64 * mpool.MB
@@ -64,7 +236,7 @@ const (
 	HandleNotifyTimeout = 300 * time.Second
 )
 
-// cnInformation records service information to help handle messages.
+// message receiver's cn information.
 type cnInformation struct {
 	cnAddr      string
 	storeEngine engine.Engine
@@ -76,8 +248,7 @@ type cnInformation struct {
 	aicm        *defines.AutoIncrCacheManager
 }
 
-// processHelper records source process information to help
-// rebuild the process at the remote node.
+// information to rebuild a process.
 type processHelper struct {
 	id               string
 	lim              process.Limitation
@@ -90,177 +261,7 @@ type processHelper struct {
 	StmtId           uuid.UUID
 }
 
-// messageSenderOnClient is a structure
-// for sending message and receiving results on cn-client.
-type messageSenderOnClient struct {
-	ctx       context.Context
-	ctxCancel context.CancelFunc
-
-	streamSender morpc.Stream
-	receiveCh    chan morpc.Message
-
-	c *Compile
-}
-
-func newMessageSenderOnClient(
-	ctx context.Context, c *Compile, toAddr string) (*messageSenderOnClient, error) {
-	var sender = new(messageSenderOnClient)
-
-	streamSender, err := cnclient.GetStreamSender(toAddr)
-	if err != nil {
-		return sender, err
-	}
-
-	sender.streamSender = streamSender
-	if _, ok := ctx.Deadline(); !ok {
-		sender.ctx, sender.ctxCancel = context.WithTimeout(ctx, time.Second*10000)
-	} else {
-		sender.ctx = ctx
-	}
-	sender.c = c
-	return sender, nil
-}
-
-// XXX we can set a scope as argument directly next day.
-func (sender *messageSenderOnClient) send(
-	scopeData, procData []byte, _ pipeline.Method) error {
-	sdLen := len(scopeData)
-	if sdLen <= maxMessageSizeToMoRpc {
-		message := cnclient.AcquireMessage()
-		message.SetID(sender.streamSender.ID())
-		message.SetMessageType(pipeline.Method_PipelineMessage)
-		message.SetData(scopeData)
-		message.SetProcData(procData)
-		message.SetSequence(0)
-		message.SetSid(pipeline.Status_Last)
-		return sender.streamSender.Send(sender.ctx, message)
-	}
-
-	start := 0
-	cnt := uint64(0)
-	for start < sdLen {
-		end := start + maxMessageSizeToMoRpc
-
-		message := cnclient.AcquireMessage()
-		message.SetID(sender.streamSender.ID())
-		message.SetMessageType(pipeline.Method_PipelineMessage)
-		message.SetSequence(cnt)
-		if end >= sdLen {
-			message.SetData(scopeData[start:sdLen])
-			message.SetProcData(procData)
-			message.SetSid(pipeline.Status_Last)
-		} else {
-			message.SetData(scopeData[start:end])
-			message.SetSid(pipeline.Status_WaitingNext)
-		}
-
-		if err := sender.streamSender.Send(sender.ctx, message); err != nil {
-			return err
-		}
-		cnt++
-		start = end
-	}
-	return nil
-}
-
-func (sender *messageSenderOnClient) receiveMessage() (morpc.Message, error) {
-	select {
-	case <-sender.ctx.Done():
-		return nil, nil
-
-	case val, ok := <-sender.receiveCh:
-		if !ok || val == nil {
-			// ch close
-			logutil.Errorf("the stream is closed, ok: %v, val: %v", ok, val)
-			return nil, moerr.NewStreamClosed(sender.ctx)
-		}
-		return val, nil
-	}
-}
-
-func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool, err error) {
-	var val morpc.Message
-	var m *pipeline.Message
-	var dataBuffer []byte
-
-	for {
-		val, err = sender.receiveMessage()
-		if err != nil {
-			return nil, false, err
-		}
-		if val == nil {
-			return nil, true, nil
-		}
-
-		m = val.(*pipeline.Message)
-		if info, get := m.TryToGetMoErr(); get {
-			return nil, false, info
-		}
-		if m.IsEndMessage() {
-			anaData := m.GetAnalyse()
-			if len(anaData) > 0 {
-				ana := new(pipeline.AnalysisList)
-				if err = ana.Unmarshal(anaData); err != nil {
-					return nil, false, err
-				}
-				mergeAnalyseInfo(sender.c.anal, ana)
-			}
-			return nil, true, nil
-		}
-
-		if dataBuffer == nil {
-			dataBuffer = m.Data
-		} else {
-			dataBuffer = append(dataBuffer, m.Data...)
-		}
-
-		if m.WaitingNextToMerge() {
-			continue
-		}
-		if m.Checksum != crc32.ChecksumIEEE(dataBuffer) {
-			return nil, false, moerr.NewInternalErrorNoCtx("Packages delivered by morpc is broken")
-		}
-
-		bat, err = decodeBatch(sender.c.proc.Mp(), dataBuffer)
-		return bat, false, err
-	}
-}
-
-func mergeAnalyseInfo(target *anaylze, ana *pipeline.AnalysisList) {
-	source := ana.List
-	if len(target.analInfos) != len(source) {
-		return
-	}
-	for i := range target.analInfos {
-		n := source[i]
-		atomic.AddInt64(&target.analInfos[i].OutputSize, n.OutputSize)
-		atomic.AddInt64(&target.analInfos[i].OutputRows, n.OutputRows)
-		atomic.AddInt64(&target.analInfos[i].InputRows, n.InputRows)
-		atomic.AddInt64(&target.analInfos[i].InputSize, n.InputSize)
-		atomic.AddInt64(&target.analInfos[i].MemorySize, n.MemorySize)
-		target.analInfos[i].MergeArray(n)
-		atomic.AddInt64(&target.analInfos[i].TimeConsumed, n.TimeConsumed)
-		atomic.AddInt64(&target.analInfos[i].WaitTimeConsumed, n.WaitTimeConsumed)
-		atomic.AddInt64(&target.analInfos[i].DiskIO, n.DiskIO)
-		atomic.AddInt64(&target.analInfos[i].S3IOByte, n.S3IOByte)
-		atomic.AddInt64(&target.analInfos[i].S3IOInputCount, n.S3IOInputCount)
-		atomic.AddInt64(&target.analInfos[i].S3IOOutputCount, n.S3IOOutputCount)
-		atomic.AddInt64(&target.analInfos[i].NetworkIO, n.NetworkIO)
-		atomic.AddInt64(&target.analInfos[i].ScanTime, n.ScanTime)
-		atomic.AddInt64(&target.analInfos[i].InsertTime, n.InsertTime)
-	}
-}
-
-func (sender *messageSenderOnClient) close() {
-	if sender.ctxCancel != nil {
-		sender.ctxCancel()
-	}
-	// XXX not a good way to deal it if close failed.
-	_ = sender.streamSender.Close(true)
-}
-
-// messageReceiverOnServer is a structure
-// for processing received message and writing results back at cn-server.
+// messageReceiverOnServer supported a series methods to write back results.
 type messageReceiverOnServer struct {
 	ctx         context.Context
 	messageId   uint64
@@ -276,8 +277,7 @@ type messageReceiverOnServer struct {
 	maxMessageSize  int
 	scopeData       []byte
 
-	// XXX what's that. So confused.
-	sequence uint64
+	needNotReply bool
 
 	// result.
 	finalAnalysisInfo []*process.AnalyzeInfo
@@ -305,7 +305,7 @@ func newMessageReceiverOnServer(
 		clientSession:   cs,
 		messageAcquirer: messageAcquirer,
 		maxMessageSize:  maxMessageSizeToMoRpc,
-		sequence:        0,
+		needNotReply:    m.NeedNotReply,
 	}
 	receiver.cnInformation = cnInformation{
 		cnAddr:      cnAddr,
@@ -335,10 +335,6 @@ func newMessageReceiverOnServer(
 			panic("cn receive a message with wrong process bytes")
 		}
 		receiver.scopeData = m.Data
-
-	default:
-		logutil.Errorf("unknown cmd %d for pipeline.Message", m.GetCmd())
-		panic("unknown message type")
 	}
 
 	return receiver
@@ -431,7 +427,6 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		return err
 	}
 
-	checksum := crc32.ChecksumIEEE(data)
 	dataLen := len(data)
 	if dataLen <= receiver.maxMessageSize {
 		m, errA := receiver.acquireMessage()
@@ -440,11 +435,7 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		}
 		m.SetMessageType(pipeline.Method_BatchMessage)
 		m.SetData(data)
-		// XXX too bad.
-		m.SetCheckSum(checksum)
-		m.SetSequence(receiver.sequence)
 		m.SetSid(pipeline.Status_Last)
-		receiver.sequence++
 		return receiver.clientSession.Write(receiver.ctx, m)
 	}
 	// if data is too large, cut and send
@@ -457,14 +448,11 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		if end >= dataLen {
 			end = dataLen
 			m.SetSid(pipeline.Status_Last)
-			m.SetCheckSum(checksum)
 		} else {
 			m.SetSid(pipeline.Status_WaitingNext)
 		}
 		m.SetMessageType(pipeline.Method_BatchMessage)
 		m.SetData(data[start:end])
-		m.SetSequence(receiver.sequence)
-		receiver.sequence++
 
 		if errW := receiver.clientSession.Write(receiver.ctx, m); errW != nil {
 			return errW
