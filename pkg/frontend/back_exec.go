@@ -180,6 +180,11 @@ func (back *backExec) GetExecResultBatches() []*batch.Batch {
 }
 
 func (back *backExec) ClearExecResultBatches() {
+	for _, bat := range back.backSes.resultBatches {
+		if bat != nil {
+			bat.Clean(back.backSes.pool)
+		}
+	}
 	back.backSes.resultBatches = nil
 }
 
