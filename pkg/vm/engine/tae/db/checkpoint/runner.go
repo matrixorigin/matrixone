@@ -768,7 +768,7 @@ func (r *runner) tryScheduleCheckpoint(endts types.TS) {
 		logutil.Infof("Checkpoint is disable")
 		return
 	}
-	if time.Since(r.openTime) < time.Minute*20 {
+	if time.Since(r.openTime) < time.Minute*5 {
 		logutil.Infof("Checkpoint is disable. TN has been running for %v", time.Since(r.openTime))
 		return
 	}
