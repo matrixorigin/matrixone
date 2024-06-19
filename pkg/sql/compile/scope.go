@@ -141,27 +141,20 @@ func (s *Scope) Run(c *Compile) (err error) {
 	}()
 
 	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
-	// DataSource == nil specify the empty scan
-	if s.DataSource == nil {
-		p = pipeline.New(0, nil, s.Instructions, s.Reg)
-		if _, err = p.ConstRun(nil, s.Proc); err != nil {
-			return err
-		}
+
+	id := uint64(0)
+	if s.DataSource.TableDef != nil {
+		id = s.DataSource.TableDef.TblId
+	}
+	p = pipeline.New(id, s.DataSource.Attributes, s.Instructions, s.Reg)
+	if s.DataSource.isConst {
+		_, err = p.ConstRun(s.DataSource.Bat, s.Proc)
 	} else {
-		id := uint64(0)
-		if s.DataSource.TableDef != nil {
-			id = s.DataSource.TableDef.TblId
+		var tag int32
+		if s.DataSource.node != nil && len(s.DataSource.node.RecvMsgList) > 0 {
+			tag = s.DataSource.node.RecvMsgList[0].MsgTag
 		}
-		p = pipeline.New(id, s.DataSource.Attributes, s.Instructions, s.Reg)
-		if s.DataSource.isConst {
-			_, err = p.ConstRun(s.DataSource.Bat, s.Proc)
-		} else {
-			var tag int32
-			if s.DataSource.node != nil && len(s.DataSource.node.RecvMsgList) > 0 {
-				tag = s.DataSource.node.RecvMsgList[0].MsgTag
-			}
-			_, err = p.Run(s.DataSource.R, tag, s.Proc)
-		}
+		_, err = p.Run(s.DataSource.R, tag, s.Proc)
 	}
 
 	select {
