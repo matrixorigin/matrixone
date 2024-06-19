@@ -918,7 +918,7 @@ type MediaWriter interface {
 type MysqlReader interface {
 	MediaReader
 	Property
-	Read(options ReadOptions) (interface{}, error)
+	Read() (interface{}, error)
 	HandleHandshake(ctx context.Context, payload []byte) (bool, error)
 	Authenticate(ctx context.Context) error
 	ParseSendLongData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error

@@ -19,7 +19,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha1"
-	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"math"
@@ -494,8 +493,8 @@ func (mp *MysqlProtocolImpl) WritePrepareResponse(ctx context.Context, stmt *Pre
 	return mp.SendPrepareResponse(ctx, stmt)
 }
 
-func (mp *MysqlProtocolImpl) Read(options ReadOptions) (interface{}, error) {
-	return mp.tcpConn.Read(options)
+func (mp *MysqlProtocolImpl) Read() (interface{}, error) {
+	return mp.tcpConn.Read()
 }
 
 func (mp *MysqlProtocolImpl) GetSession() *Session {
@@ -1824,7 +1823,7 @@ func (mp *MysqlProtocolImpl) negotiateAuthenticationMethod(ctx context.Context) 
 		return nil, err
 	}
 
-	read, err := mp.tcpConn.Read(ReadOptions{})
+	read, err := mp.tcpConn.Read()
 	if err != nil {
 		return nil, err
 	}
@@ -2508,7 +2507,6 @@ func (mp *MysqlProtocolImpl) WriteResultSetRow(mrs *MysqlResultSet, cnt uint64) 
 
 	//make rows into the batch
 	for i := uint64(0); i < cnt; i++ {
-		mp.openRow()
 		//begin1 := time.Now()
 		if useBinaryRow {
 			err = mp.appendResultSetBinaryRow(mrs, i)
@@ -2525,30 +2523,9 @@ func (mp *MysqlProtocolImpl) WriteResultSetRow(mrs *MysqlResultSet, cnt uint64) 
 			}
 			return err
 		}
-
-		//output into outbuf
-		mp.closeRow()
 	}
 
 	return err
-}
-
-// open a new row of the resultset
-func (mp *MysqlProtocolImpl) openRow() {
-	mp.openPacket()
-}
-
-// close a finished row of the resultset
-func (mp *MysqlProtocolImpl) closeRow() error {
-	err := mp.closePacket(true)
-	if err != nil {
-		return err
-	}
-	err = mp.flushIfFull()
-	if err != nil {
-		return err
-	}
-	return nil
 }
 
 // flushOutBuffer the data in the outbuf into the network
@@ -2558,7 +2535,7 @@ func (mp *MysqlProtocolImpl) flushIfFull() error {
 		mp.writeBytes += uint64(mp.bytesInOutBuffer)
 		// FIXME: use a suitable timeout value
 		mp.ses.CountPacket(1)
-		err := mp.tcpConn.Flush(0)
+		err := mp.tcpConn.Flush()
 		if err != nil {
 			return err
 		}
@@ -2567,118 +2544,8 @@ func (mp *MysqlProtocolImpl) flushIfFull() error {
 	return nil
 }
 
-// open a new mysql protocol packet
-func (mp *MysqlProtocolImpl) openPacket() {
-	outbuf := mp.tcpConn.OutBuf()
-	n := 4
-	outbuf.Grow(n)
-	/*
-		offset = writerIndex - readerIndex
-		writerIndex = GetReaderIndex() + offset
-	*/
-	offset := outbuf.GetWriteIndex() - outbuf.GetReadIndex()
-	mp.beginOffset = offset
-	writeIdx := mp.getBeginWriteIndex()
-	writeIdx += n
-	mp.bytesInOutBuffer += n
-	outbuf.SetWriteIndex(writeIdx)
-}
-
-func (mp *MysqlProtocolImpl) getBeginWriteIndex() int {
-	if mp.beginOffset < 0 {
-		panic("invalid offset")
-	}
-	return mp.tcpConn.OutBuf().GetReadIndex() + mp.beginOffset
-}
-
-// fill the packet with data
-func (mp *MysqlProtocolImpl) fillPacket(elems ...byte) error {
-	outbuf := mp.tcpConn.OutBuf()
-
-	n := len(elems)
-	i := 0
-	curLen := 0
-	hasDataLen := 0
-	curDataLen := 0
-	var buf []byte
-	var err error
-	for ; i < n; i += curLen {
-		if !mp.isInPacket() {
-			mp.openPacket()
-		}
-		//length of data in the packet
-		hasDataLen = outbuf.GetWriteIndex() - mp.getBeginWriteIndex() - HeaderLengthOfTheProtocol
-		curLen = int(MaxPayloadSize) - hasDataLen
-		curLen = Min(curLen, n-i)
-		if curLen < 0 {
-			return moerr.NewInternalError(mp.ctx, "needLen %d < 0. hasDataLen %d n - i %d", curLen, hasDataLen, n-i)
-		}
-		outbuf.Grow(curLen)
-		buf = outbuf.RawBuf()
-		writeIdx := outbuf.GetWriteIndex()
-		copy(buf[writeIdx:], elems[i:i+curLen])
-		writeIdx += curLen
-		mp.bytesInOutBuffer += curLen
-		outbuf.SetWriteIndex(writeIdx)
-
-		//> 16MB, split it
-		curDataLen = outbuf.GetWriteIndex() - mp.getBeginWriteIndex() - HeaderLengthOfTheProtocol
-		if curDataLen == int(MaxPayloadSize) {
-			err = mp.closePacket(i+curLen == n)
-			if err != nil {
-				return err
-			}
-			err = mp.flushIfFull()
-			if err != nil {
-				return err
-			}
-
-		}
-	}
-
-	return nil
-}
-
-// close a mysql protocol packet
-func (mp *MysqlProtocolImpl) closePacket(appendZeroPacket bool) error {
-	if !mp.isInPacket() {
-		return nil
-	}
-	outbuf := mp.tcpConn.OutBuf()
-	payLoadLen := outbuf.GetWriteIndex() - mp.getBeginWriteIndex() - 4
-	if payLoadLen < 0 || payLoadLen > int(MaxPayloadSize) {
-		return moerr.NewInternalError(mp.ctx, "invalid payload len :%d curWriteIdx %d beginWriteIdx %d ",
-			payLoadLen, outbuf.GetWriteIndex(), mp.getBeginWriteIndex())
-	}
-
-	buf := outbuf.RawBuf()
-	binary.LittleEndian.PutUint32(buf[mp.getBeginWriteIndex():], uint32(payLoadLen))
-	buf[mp.getBeginWriteIndex()+3] = mp.GetSequenceId()
-
-	mp.AddSequenceId(1)
-
-	if appendZeroPacket && payLoadLen == int(MaxPayloadSize) { //last 16MB packet,append a zero packet
-		//if the size of the last packet is exactly MaxPayloadSize, a zero-size payload should be sent
-		mp.openPacket()
-		buf = outbuf.RawBuf()
-		binary.LittleEndian.PutUint32(buf[mp.getBeginWriteIndex():], uint32(0))
-		buf[mp.getBeginWriteIndex()+3] = mp.GetSequenceId()
-		mp.AddSequenceId(1)
-	}
-
-	mp.resetPacket()
-	return nil
-}
-
-/*
-*
-append the elems into the outbuffer
-*/
 func (mp *MysqlProtocolImpl) append(elems ...byte) {
-	err := mp.fillPacket(elems...)
-	if err != nil {
-		panic(err)
-	}
+	mp.tcpConn.Append(elems...)
 }
 
 func (mp *MysqlProtocolImpl) appendDatetime(dt types.Datetime) {
@@ -2750,7 +2617,6 @@ func (mp *MysqlProtocolImpl) SendResultSetTextRow(mrs *MysqlResultSet, r uint64)
 // the server send every row of the result set as an independent packet
 func (mp *MysqlProtocolImpl) sendResultSetTextRow(mrs *MysqlResultSet, r uint64) error {
 	var err error
-	mp.openRow()
 	if err = mp.appendResultSetTextRow(mrs, r); err != nil {
 		//ERR_Packet in case of error
 		err1 := mp.sendErrPacket(moerr.ER_UNKNOWN_ERROR, DefaultMySQLState, err.Error())
@@ -2759,18 +2625,6 @@ func (mp *MysqlProtocolImpl) sendResultSetTextRow(mrs *MysqlResultSet, r uint64)
 		}
 		return err
 	}
-
-	err = mp.closeRow()
-	if err != nil {
-		return err
-	}
-	//begin2 := time.Now()
-	//err = mp.writePackets(data)
-	//if err != nil {
-	//	return moerr.NewInternalError("send result set text row failed. error: %v", err)
-	//}
-	//mp.sendTime += time.Since(begin2)
-
 	return nil
 }
 
@@ -2817,56 +2671,10 @@ func (mp *MysqlProtocolImpl) sendResultSet(ctx context.Context, set ResultSet, c
 
 // the server sends the payload to the client
 func (mp *MysqlProtocolImpl) writePackets(payload []byte) error {
-
-	//protocol header length
-	var headerLen = HeaderOffset
-	var header [4]byte
-
-	//position of the first data byte
-	var i = headerLen
-	var length = len(payload)
-	var curLen int
-	for ; i < length; i += curLen {
-		//var packet []byte = mp.packet[:0]
-		curLen = Min(int(MaxPayloadSize), length-i)
-
-		//make mysql client protocol header
-		//4 bytes
-		//int<3>    the length of payload
-		mp.io.WriteUint32(header[:], 0, uint32(curLen))
-
-		//int<1> sequence id
-		mp.io.WriteUint8(header[:], 3, mp.GetSequenceId())
-
-		//send packet
-		var packet = append(header[:], payload[i:i+curLen]...)
-
-		mp.ses.CountPacket(1)
-		err := mp.tcpConn.Write(packet, WriteOptions{Flush: true})
-		if err != nil {
-			return err
-		}
-		mp.AddFlushBytes(uint64(len(packet)))
-		mp.AddSequenceId(1)
-
-		if i+curLen == length && curLen == int(MaxPayloadSize) {
-			//if the size of the last packet is exactly MaxPayloadSize, a zero-size payload should be sent
-			header[0] = 0
-			header[1] = 0
-			header[2] = 0
-			header[3] = mp.GetSequenceId()
-			mp.ses.CountPacket(1)
-			//send header / zero-sized packet
-			err := mp.tcpConn.Write(header[:], WriteOptions{Flush: true})
-			mp.AddFlushBytes(uint64(len(header)))
-			if err != nil {
-				return err
-			}
-
-			mp.AddSequenceId(1)
-		}
+	err := mp.tcpConn.Write(payload)
+	if err != nil {
+		return err
 	}
-
 	return nil
 }
 
@@ -2931,65 +2739,6 @@ func (mp *MysqlProtocolImpl) receiveExtraInfo(rs *baseIO) {
 	ses.proxyAddr = mp.Peer()
 }
 
-/*
-//ther server reads a part of payload from the connection
-//the part may be a whole payload
-func (mp *MysqlProtocolImpl) recvPartOfPayload() ([]byte, error) {
-	//var length int
-	//var header []byte
-	//var err error
-	//if header, err = mp.io.ReadPacket(4); err != nil {
-	//	return nil, moerr.NewInternalError("read header failed.error:%v", err)
-	//} else if header[3] != mp.sequenceId {
-	//	return nil, moerr.NewInternalError("client sequence id %d != server sequence id %d", header[3], mp.sequenceId)
-	//}
-
-	mp.sequenceId++
-	//length = int(uint32(header[0]) | uint32(header[1])<<8 | uint32(header[2])<<16)
-
-	var payload []byte
-	//if payload, err = mp.io.ReadPacket(length); err != nil {
-	//	return nil, moerr.NewInternalError("read payload failed.error:%v", err)
-	//}
-	return payload, nil
-}
-
-//the server read a payload from the connection
-func (mp *MysqlProtocolImpl) recvPayload() ([]byte, error) {
-	payload, err := mp.recvPartOfPayload()
-	if err != nil {
-		return nil, err
-	}
-
-	//only one part
-	if len(payload) < int(MaxPayloadSize) {
-		return payload, nil
-	}
-
-	//payload has been split into many parts.
-	//read them all together
-	var part []byte
-	for {
-		part, err = mp.recvPartOfPayload()
-		if err != nil {
-			return nil, err
-		}
-
-		payload = append(payload, part...)
-
-		//only one part
-		if len(part) < int(MaxPayloadSize) {
-			break
-		}
-	}
-	return payload, nil
-}
-*/
-
-/*
-generate random ascii string.
-Reference to :mysql 8.0.23 mysys/crypt_genhash_impl.cc generate_user_salt(char*,int)
-*/
 func generate_salt(n int) []byte {
 	buf := make([]byte, n)
 	r := rand.New(rand.NewSource(time.Now().UTC().UnixNano()))

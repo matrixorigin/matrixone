@@ -379,12 +379,11 @@ func (rm *RoutineManager) Handler(rs *baseIO, msg interface{}, received uint64) 
 	routine.setInProcessRequest(true)
 	defer routine.setInProcessRequest(false)
 	protocol := routine.getProtocol()
-	packet, ok := msg.(*Packet)
 
-	protocol.SetU8(SEQUENCEID, uint8(packet.SequenceID+1))
-	var seq = protocol.GetU8(SEQUENCEID)
+	payload, ok := msg.([]byte)
+
 	if !ok {
-		err = moerr.NewInternalError(ctx, "message is not Packet")
+		err = moerr.NewInternalError(ctx, "message is not payload")
 		routine.ses.Error(ctx,
 			"Error occurred",
 			zap.Error(err))
@@ -393,32 +392,6 @@ func (rm *RoutineManager) Handler(rs *baseIO, msg interface{}, received uint64) 
 
 	ses := routine.getSession()
 	ts := ses.timestampMap
-
-	length := packet.Length
-	payload := packet.Payload
-	for uint32(length) == MaxPayloadSize {
-		msg, err = protocol.Read(ReadOptions{})
-		if err != nil {
-			ses.Error(ctx,
-				"Failed to read message",
-				zap.Error(err))
-			return err
-		}
-
-		packet, ok = msg.(*Packet)
-		if !ok {
-			err = moerr.NewInternalError(ctx, "message is not Packet")
-			ses.Error(ctx,
-				"An error occurred",
-				zap.Error(err))
-			return err
-		}
-
-		protocol.SetU8(SEQUENCEID, uint8(packet.SequenceID+1))
-		seq = protocol.GetU8(SEQUENCEID)
-		payload = append(payload, packet.Payload...)
-		length = packet.Length
-	}
 
 	// finish handshake process
 	if !protocol.GetBool(ESTABLISHED) {
@@ -512,7 +485,6 @@ func (rm *RoutineManager) Handler(rs *baseIO, msg interface{}, received uint64) 
 	}
 
 	req := ToRequest(payload)
-	req.seq = seq
 
 	//handle request
 	err = routine.handleRequest(req)

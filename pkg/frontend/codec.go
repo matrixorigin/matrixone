@@ -29,74 +29,17 @@ var (
 
 const PacketHeaderLength = 4
 
-type Codec interface {
-	// Encode encode message into the out buffer or write directly to the underlying connection.
-	Encode(message any, out *ByteBuf, conn io.Writer) error
-	// Decode decode message from the bytes buffer, returns false if there is not enough data.
-	Decode(in *ByteBuf) (message any, complete bool, err error)
-}
-
 func NewSqlCodec() codec.Codec {
 	return &sqlCodec{}
-}
-
-func NewMysqlCodec() Codec {
-	return &mysqlCodec{}
 }
 
 type sqlCodec struct {
 }
 
-type mysqlCodec struct {
-}
 type Packet struct {
 	Length     int32
 	SequenceID int8
 	Payload    []byte
-}
-
-func (c *mysqlCodec) Decode(in *ByteBuf) (interface{}, bool, error) {
-	readable := in.Readable()
-	if readable < PacketHeaderLength {
-		return nil, false, nil
-	}
-
-	header := in.PeekN(0, PacketHeaderLength)
-	length := int32(uint32(header[0]) | uint32(header[1])<<8 | uint32(header[2])<<16)
-	if length == 0 {
-		return nil, false, errorInvalidLength0
-	}
-
-	sequenceID := int8(header[3])
-
-	if readable < int(length)+PacketHeaderLength {
-		return nil, false, nil
-	}
-
-	in.Skip(PacketHeaderLength)
-	in.SetMarkIndex(in.GetReadIndex() + int(length))
-	payload := in.ReadMarkedData()
-
-	packet := &Packet{
-		Length:     length,
-		SequenceID: sequenceID,
-		Payload:    payload,
-	}
-
-	return packet, true, nil
-}
-
-func (c *mysqlCodec) Encode(data interface{}, out *ByteBuf, writer io.Writer) error {
-	x := data.([]byte)
-	xlen := len(x)
-	tlen, err := out.Write(data.([]byte))
-	if err != nil {
-		return err
-	}
-	if tlen != xlen {
-		return errorLenOfWrittenNotEqLenOfData
-	}
-	return nil
 }
 
 func (c *sqlCodec) Decode(in *buf.ByteBuf) (interface{}, bool, error) {

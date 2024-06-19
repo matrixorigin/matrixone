@@ -22,7 +22,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/fagongzi/goetty/v2"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -41,7 +40,6 @@ var ConnIDAllocKey = "____server_conn_id"
 type MOServer struct {
 	addr        string
 	uaddr       string
-	app         goetty.NetApplication
 	rm          *RoutineManager
 	readTimeout time.Duration
 
@@ -51,7 +49,6 @@ type MOServer struct {
 
 	pu     *config.ParameterUnit
 	logger *zap.Logger
-	codec  Codec
 
 	listeners []net.Listener
 }
@@ -108,8 +105,7 @@ func (mo *MOServer) Stop() error {
 
 	for s := range mo.rm.clients {
 		if err := s.Close(); err != nil {
-			s.logger.Error("session closed failed",
-				zap.Error(err))
+			return err
 		}
 	}
 	mo.logger.Debug("application stopped")
@@ -147,6 +143,7 @@ func (mo *MOServer) startAcceptLoop() {
 			tempDelay = 0
 
 			rs := NewIOSession(conn, NewSessionAllocator(mo.pu))
+			mo.rm.Created(rs)
 
 			go func() {
 				defer func() {
@@ -248,7 +245,18 @@ func NewMOServer(
 		rm:          rm,
 		readTimeout: pu.SV.SessionTimeout.Duration,
 		pu:          pu,
-		codec:       NewMysqlCodec(),
+		logger:      logutil.GetGlobalLogger(),
+	}
+	listenerTcp, err := net.Listen("tcp", addr)
+	if err != nil {
+		logutil.Panicf("start server failed with %+v", err)
+	}
+
+	listenerUnix, err := net.Listen("unix", unixAddr)
+	mo.listeners = append(mo.listeners, listenerTcp, listenerUnix)
+
+	if err != nil {
+		logutil.Panicf("start server failed with %+v", err)
 	}
 	if err != nil {
 		logutil.Panicf("start server failed with %+v", err)
@@ -259,9 +267,8 @@ func NewMOServer(
 // handleMessage receives the message from the client and executes it
 func (mo *MOServer) handleMessage(rs *baseIO) error {
 	received := uint64(0)
-	option := ReadOptions{Timeout: mo.readTimeout}
 	for {
-		msg, err := rs.Read(option)
+		msg, err := rs.Read()
 		if err != nil {
 			if err == io.EOF {
 				return nil

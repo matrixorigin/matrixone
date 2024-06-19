@@ -2079,7 +2079,7 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	}
 	start := time.Now()
 	var msg interface{}
-	msg, err = mysqlRrWr.Read(ReadOptions{})
+	msg, err = mysqlRrWr.Read()
 	if err != nil {
 		mysqlRrWr.SetU8(SEQUENCEID, mysqlRrWr.GetU8(SEQUENCEID)+1)
 		if errors.Is(err, errorInvalidLength0) {
@@ -2091,20 +2091,22 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 		return
 	}
 
-	packet, ok := msg.(*Packet)
+	payload, ok := msg.([]byte)
 	if !ok {
 		mysqlRrWr.SetU8(SEQUENCEID, mysqlRrWr.GetU8(SEQUENCEID)+1)
-		err = moerr.NewInvalidInput(execCtx.reqCtx, "invalid packet")
+		err = moerr.NewInvalidInput(execCtx.reqCtx, "invalid payload")
 		return
 	}
 
-	mysqlRrWr.SetU8(SEQUENCEID, uint8(packet.SequenceID+1))
-	seq := uint8(packet.SequenceID + 1)
-	length := packet.Length
+	//mysqlRrWr.SetU8(SEQUENCEID, uint8(packet.SequenceID+1))
+	//seq := uint8(packet.SequenceID + 1)
+	//TODO: need check!
+	seq := uint8(0)
+	length := len(payload)
 	if length == 0 {
 		return
 	}
-	ses.CountPayload(len(packet.Payload))
+	ses.CountPayload(len(payload))
 
 	skipWrite := false
 	// If inner error occurs(unexpected or expected(ctrl-c)), proc.LoadLocalReader will be closed.
@@ -2112,7 +2114,7 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	// So we need a flag[skipWrite] to tell us whether we need to write the data to pipe.
 	// https://github.com/matrixorigin/matrixone/issues/6665#issuecomment-1422236478
 
-	_, err = writer.Write(packet.Payload)
+	_, err = writer.Write(payload)
 	if err != nil {
 		skipWrite = true // next, we just need read the rest of the data,no need to write it to pipe.
 		ses.Errorf(execCtx.reqCtx,
@@ -2123,7 +2125,7 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	epoch, printEvery, minReadTime, maxReadTime, minWriteTime, maxWriteTime := uint64(0), uint64(1024), 24*time.Hour, time.Nanosecond, 24*time.Hour, time.Nanosecond
 	for {
 		readStart := time.Now()
-		msg, err = mysqlRrWr.Read(ReadOptions{})
+		msg, err = mysqlRrWr.Read()
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
 				seq += 1
@@ -2139,20 +2141,20 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 		if readTime < minReadTime {
 			minReadTime = readTime
 		}
-		packet, ok = msg.(*Packet)
+		payload, ok = msg.([]byte)
 		if !ok {
 			err = moerr.NewInvalidInput(execCtx.reqCtx, "invalid packet")
 			seq += 1
 			mysqlRrWr.SetU8(SEQUENCEID, seq)
 			break
 		}
-		seq = uint8(packet.SequenceID + 1)
-		mysqlRrWr.SetU8(SEQUENCEID, seq)
-		ses.CountPayload(len(packet.Payload))
+		//seq = uint8(packet.SequenceID + 1)
+		//mysqlRrWr.SetU8(SEQUENCEID, seq)
+		ses.CountPayload(len(payload))
 
 		writeStart := time.Now()
 		if !skipWrite {
-			_, err = writer.Write(packet.Payload)
+			_, err = writer.Write(payload)
 			if err != nil {
 				ses.Errorf(execCtx.reqCtx,
 					"Failed to load local file",
