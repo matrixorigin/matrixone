@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -138,57 +137,6 @@ func evalValue(exprImpl *plan.Expr_F, tblDef *plan.TableDef, isVec bool, pkName 
 	return true, types.T(tblDef.Cols[colPos].Typ.Id), vals
 }
 
-func intersectionVector[T types.OrderedT | types.Decimal128](a, b []T, ret *vector.Vector, proc *process.Process, cmp func(x, y T) int) {
-	for i := range a {
-		idx := sort.Search(len(b), func(j int) bool {
-			return cmp(b[j], a[i]) >= 0
-		})
-		if idx >= len(b) {
-			break
-		}
-
-		if cmp(a[i], b[idx]) == 0 {
-			vector.AppendFixed[T](ret, a[i], false, proc.Mp())
-		}
-
-		b = b[idx:]
-	}
-}
-
-func unionVector[T types.OrderedT | types.Decimal128](a, b []T, ret *vector.Vector, proc *process.Process, cmp func(x, y T) int) {
-	var i, j int
-	var prevVal T
-	for i < len(a) && j < len(b) {
-		if cmp(a[i], b[j]) <= 0 {
-			if (i == 0 && j == 0) || cmp(prevVal, a[i]) != 0 {
-				prevVal = a[i]
-				vector.AppendFixed(ret, a[i], false, proc.Mp())
-			}
-			i++
-		} else {
-			if (i == 0 && j == 0) || cmp(prevVal, b[j]) != 0 {
-				prevVal = b[j]
-				vector.AppendFixed(ret, b[j], false, proc.Mp())
-			}
-			j++
-		}
-	}
-
-	for ; i < len(a); i++ {
-		if (i == 0 && j == 0) || cmp(prevVal, a[i]) != 0 {
-			prevVal = a[i]
-			vector.AppendFixed(ret, a[i], false, proc.Mp())
-		}
-	}
-
-	for ; j < len(b); j++ {
-		if (i == 0 && j == 0) || cmp(prevVal, b[j]) != 0 {
-			prevVal = b[j]
-			vector.AppendFixed(ret, b[j], false, proc.Mp())
-		}
-	}
-}
-
 func mergeBaseFilterInKind(left, right BasePKFilter, isOR bool, proc *process.Process) (ret BasePKFilter) {
 	var ok bool
 	var va, vb *vector.Vector
@@ -209,141 +157,145 @@ func mergeBaseFilterInKind(left, right BasePKFilter, isOR bool, proc *process.Pr
 		a := vector.MustFixedCol[int8](va)
 		b := vector.MustFixedCol[int8](vb)
 		if isOR {
-			unionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y int8) int { return int(x - y) })
+			vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y int8) int { return int(x - y) })
 		} else {
-			intersectionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y int8) int { return int(x - y) })
+			vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y int8) int { return int(x - y) })
 		}
 	case types.T_int16:
 		a := vector.MustFixedCol[int16](va)
 		b := vector.MustFixedCol[int16](vb)
 		if isOR {
-			unionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y int16) int { return int(x - y) })
+			vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y int16) int { return int(x - y) })
 		} else {
-			intersectionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y int16) int { return int(x - y) })
+			vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y int16) int { return int(x - y) })
 		}
 	case types.T_int32:
 		a := vector.MustFixedCol[int32](va)
 		b := vector.MustFixedCol[int32](vb)
 		if isOR {
-			unionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y int32) int { return int(x - y) })
+			vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y int32) int { return int(x - y) })
 		} else {
-			intersectionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y int32) int { return int(x - y) })
+			vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y int32) int { return int(x - y) })
 		}
 	case types.T_int64:
 		a := vector.MustFixedCol[int64](va)
 		b := vector.MustFixedCol[int64](vb)
 		if isOR {
-			unionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y int64) int { return int(x - y) })
+			vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y int64) int { return int(x - y) })
 		} else {
-			intersectionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y int64) int { return int(x - y) })
+			vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y int64) int { return int(x - y) })
 		}
 	case types.T_float32:
 		a := vector.MustFixedCol[float32](va)
 		b := vector.MustFixedCol[float32](vb)
 		if isOR {
-			unionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y float32) int { return int(x - y) })
+			vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y float32) int { return int(x - y) })
 		} else {
-			intersectionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y float32) int { return int(x - y) })
+			vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y float32) int { return int(x - y) })
 		}
 	case types.T_float64:
 		a := vector.MustFixedCol[float64](va)
 		b := vector.MustFixedCol[float64](vb)
 		if isOR {
-			unionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y float64) int { return int(x - y) })
+			vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y float64) int { return int(x - y) })
 		} else {
-			intersectionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y float64) int { return int(x - y) })
+			vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y float64) int { return int(x - y) })
 		}
 	case types.T_uint8:
 		a := vector.MustFixedCol[uint8](va)
 		b := vector.MustFixedCol[uint8](vb)
 		if isOR {
-			unionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y uint8) int { return int(x - y) })
+			vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y uint8) int { return int(x - y) })
 		} else {
-			intersectionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y uint8) int { return int(x - y) })
+			vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y uint8) int { return int(x - y) })
 		}
 	case types.T_uint16:
 		a := vector.MustFixedCol[uint16](va)
 		b := vector.MustFixedCol[uint16](vb)
 		if isOR {
-			unionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y uint16) int { return int(x - y) })
+			vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y uint16) int { return int(x - y) })
 		} else {
-			intersectionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y uint16) int { return int(x - y) })
+			vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y uint16) int { return int(x - y) })
 		}
 	case types.T_uint32:
 		a := vector.MustFixedCol[uint32](va)
 		b := vector.MustFixedCol[uint32](vb)
 		if isOR {
-			unionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y uint32) int { return int(x - y) })
+			vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y uint32) int { return int(x - y) })
 		} else {
-			intersectionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y uint32) int { return int(x - y) })
+			vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y uint32) int { return int(x - y) })
 		}
 	case types.T_uint64:
 		a := vector.MustFixedCol[uint64](va)
 		b := vector.MustFixedCol[uint64](vb)
 		if isOR {
-			unionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y uint64) int { return int(x - y) })
+			vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y uint64) int { return int(x - y) })
 		} else {
-			intersectionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y uint64) int { return int(x - y) })
+			vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y uint64) int { return int(x - y) })
 		}
 	case types.T_date:
 		a := vector.MustFixedCol[types.Date](va)
 		b := vector.MustFixedCol[types.Date](vb)
 		if isOR {
-			unionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y types.Date) int { return int(x - y) })
+			vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y types.Date) int { return int(x - y) })
 		} else {
-			intersectionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y types.Date) int { return int(x - y) })
+			vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y types.Date) int { return int(x - y) })
 		}
 	case types.T_time:
 		a := vector.MustFixedCol[types.Time](va)
 		b := vector.MustFixedCol[types.Time](vb)
 		if isOR {
-			unionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y types.Time) int { return int(x - y) })
+			vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y types.Time) int { return int(x - y) })
 		} else {
-			intersectionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y types.Time) int { return int(x - y) })
+			vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y types.Time) int { return int(x - y) })
 		}
 	case types.T_datetime:
 		a := vector.MustFixedCol[types.Datetime](va)
 		b := vector.MustFixedCol[types.Datetime](vb)
 		if isOR {
-			unionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y types.Datetime) int { return int(x - y) })
+			vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y types.Datetime) int { return int(x - y) })
 		} else {
-			intersectionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y types.Datetime) int { return int(x - y) })
+			vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y types.Datetime) int { return int(x - y) })
 		}
 	case types.T_timestamp:
 		a := vector.MustFixedCol[types.Timestamp](va)
 		b := vector.MustFixedCol[types.Timestamp](vb)
 		if isOR {
-			unionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y types.Timestamp) int { return int(x - y) })
+			vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y types.Timestamp) int { return int(x - y) })
 		} else {
-			intersectionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y types.Timestamp) int { return int(x - y) })
+			vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y types.Timestamp) int { return int(x - y) })
 		}
 	case types.T_decimal64:
 		a := vector.MustFixedCol[types.Decimal64](va)
 		b := vector.MustFixedCol[types.Decimal64](vb)
 		if isOR {
-			unionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y types.Decimal64) int { return int(x - y) })
+			vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y types.Decimal64) int { return int(x - y) })
 		} else {
-			intersectionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y types.Decimal64) int { return int(x - y) })
+			vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y types.Decimal64) int { return int(x - y) })
 		}
 	case types.T_decimal128:
 		a := vector.MustFixedCol[types.Decimal128](va)
 		b := vector.MustFixedCol[types.Decimal128](vb)
 		if isOR {
-			unionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y types.Decimal128) int { return types.CompareDecimal128(x, y) })
+			vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y types.Decimal128) int { return types.CompareDecimal128(x, y) })
 		} else {
-			intersectionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y types.Decimal128) int { return types.CompareDecimal128(x, y) })
+			vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y types.Decimal128) int { return types.CompareDecimal128(x, y) })
 		}
-	case types.T_varchar, types.T_char:
 
-	case types.T_json:
+	case types.T_varchar, types.T_char, types.T_json, types.T_binary, types.T_text:
+		if isOR {
+			vector.Union2VectorValen(va, vb, ret.vec.(*vector.Vector), proc.Mp())
+		} else {
+			vector.Intersection2VectorVarlen(va, vb, ret.vec.(*vector.Vector), proc.Mp())
+		}
 
 	case types.T_enum:
 		a := vector.MustFixedCol[types.Enum](va)
 		b := vector.MustFixedCol[types.Enum](vb)
 		if isOR {
-			unionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y types.Enum) int { return int(x - y) })
+			vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y types.Enum) int { return int(x - y) })
 		} else {
-			intersectionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y types.Enum) int { return int(x - y) })
+			vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y types.Enum) int { return int(x - y) })
 		}
 	default:
 		return BasePKFilter{}
