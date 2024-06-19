@@ -29,7 +29,7 @@ func init() {
 	)
 }
 
-func (p Process) TypeName() string {
+func (proc Process) TypeName() string {
 	return "Process"
 }
 
