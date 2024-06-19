@@ -95,6 +95,9 @@ func (s *Scope) release() {
 		s.Instructions[i].Arg.Release()
 		s.Instructions[i].Arg = nil
 	}
+	if s.Proc != nil {
+		reuse.Free[process.Process](s.Proc, nil)
+	}
 	reuse.Free[Scope](s, nil)
 }
 

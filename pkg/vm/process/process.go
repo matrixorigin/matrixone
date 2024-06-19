@@ -60,27 +60,27 @@ func New(
 	hakeeper logservice.CNHAKeeperClient,
 	udfService udf.Service,
 	aicm *defines.AutoIncrCacheManager) *Process {
-	return &Process{
-		mp:           m,
-		Ctx:          ctx,
-		TxnClient:    txnClient,
-		TxnOperator:  txnOperator,
-		FileService:  fileService,
-		IncrService:  incrservice.GetAutoIncrementService(ctx),
-		UnixTime:     time.Now().UnixNano(),
-		LastInsertID: new(uint64),
-		LockService:  lockService,
-		Aicm:         aicm,
-		vp: &vectorPool{
-			vecs:  make(map[uint8][]*vector.Vector),
-			Limit: VectorLimit,
-		},
-		valueScanBatch: make(map[[16]byte]*batch.Batch),
-		QueryClient:    queryClient,
-		Hakeeper:       hakeeper,
-		UdfService:     udfService,
-		logger:         util.GetLogger(), // TODO: set by input
+	p := NewProcFromReuse()
+	p.mp = m
+	p.Ctx = ctx
+	p.TxnClient = txnClient
+	p.TxnOperator = txnOperator
+	p.FileService = fileService
+	p.IncrService = incrservice.GetAutoIncrementService(ctx)
+	p.UnixTime = time.Now().UnixNano()
+	p.LastInsertID = new(uint64)
+	p.LockService = lockService
+	p.Aicm = aicm
+	p.vp = &vectorPool{
+		vecs:  make(map[uint8][]*vector.Vector),
+		Limit: VectorLimit,
 	}
+	p.valueScanBatch = make(map[[16]byte]*batch.Batch)
+	p.QueryClient = queryClient
+	p.Hakeeper = hakeeper
+	p.UdfService = udfService
+	p.logger = util.GetLogger() // TODO: set by input
+	return p
 }
 
 func NewWithAnalyze(p *Process, ctx context.Context, regNumber int, anals []*AnalyzeInfo) *Process {
@@ -92,7 +92,7 @@ func NewWithAnalyze(p *Process, ctx context.Context, regNumber int, anals []*Ana
 
 // NewFromProc create a new Process based on another process.
 func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
-	proc := new(Process)
+	proc := NewProcFromReuse()
 	newctx, cancel := context.WithCancel(ctx)
 	proc.Id = p.Id
 	proc.vp = p.vp
