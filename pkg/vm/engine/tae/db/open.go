@@ -189,8 +189,8 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	// Init timed scanner
 	scanner := NewDBScanner(db, nil)
 	db.MergeHandle = newMergeTaskBuilder(db)
-	db.newMergeHandle = merge.NewObjectMergeArchon(db.Runtime, db.CNMergeSched)
-	scanner.RegisterOp(db.newMergeHandle)
+	db.mergeScheduler = merge.NewScheduler(db.Runtime, db.CNMergeSched)
+	scanner.RegisterOp(db.mergeScheduler)
 	db.Wal.Start()
 	db.BGCheckpointRunner.Start()
 
