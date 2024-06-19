@@ -210,7 +210,7 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 		logutil.Infof("[UpdateSnapshot] cost %v", time.Since(now))
 	}()
 	sm.updateTableInfo(data)
-	if sm.tid == 0 {
+	if sm.tid == 0 && len(sm.tides) == 0 {
 		return sm
 	}
 	ins := data.GetObjectBatchs()
@@ -452,7 +452,7 @@ func (sm *SnapshotMeta) SaveTableInfo(name string, fs fileservice.FileService) (
 				bat.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector(),
 				table.deleteAt, false, common.DebugAllocator)
 
-			if table.tid == sm.tid {
+			if _, ok := sm.tides[table.tid]; ok {
 				vector.AppendFixed[uint32](
 					snapTableBat.GetVectorByName(catalog2.SystemColAttr_AccID).GetDownstreamVector(),
 					table.accID, false, common.DebugAllocator)
@@ -521,12 +521,21 @@ func (sm *SnapshotMeta) RebuildTableInfo(ins *containers.Batch) {
 
 func (sm *SnapshotMeta) RebuildTid(ins *containers.Batch) {
 	insTIDs := vector.MustFixedCol[uint64](ins.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
-	if ins.Length() != 1 {
+	accIDs := vector.MustFixedCol[uint32](ins.GetVectorByName(catalog2.SystemColAttr_AccID).GetDownstreamVector())
+	if ins.Length() < 1 {
 		logutil.Warnf("RebuildTid unexpected length %d", ins.Length())
 		return
 	}
 	logutil.Infof("RebuildTid tid %d", insTIDs[0])
 	sm.SetTid(insTIDs[0])
+	for i := 0; i < ins.Length(); i++ {
+		tid := insTIDs[i]
+		accid := accIDs[i]
+		if _, ok := sm.tides[tid]; !ok {
+			sm.tides[tid] = struct{}{}
+			logutil.Info("[RebuildSnapshotTid]", zap.Uint64("tid", tid), zap.Uint32("account id", accid))
+		}
+	}
 }
 
 func (sm *SnapshotMeta) Rebuild(ins *containers.Batch) {
