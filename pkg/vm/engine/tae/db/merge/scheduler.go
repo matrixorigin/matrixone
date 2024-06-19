@@ -23,7 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 )
 
-type ObjectMergeArchon struct {
+type Scheduler struct {
 	tid      uint64
 	executor *MergeExecutor
 
@@ -34,8 +34,8 @@ type ObjectMergeArchon struct {
 	tableRowDel int
 }
 
-func NewObjectMergeArchon(rt *dbutils.Runtime, scheduler CNMergeScheduler) *ObjectMergeArchon {
-	return &ObjectMergeArchon{
+func NewScheduler(rt *dbutils.Runtime, scheduler CNMergeScheduler) *Scheduler {
+	return &Scheduler{
 		executor: NewMergeExecutor(rt, scheduler),
 		policies: [2]policy{
 			newSingleObjPolicy(nil),
@@ -44,19 +44,19 @@ func NewObjectMergeArchon(rt *dbutils.Runtime, scheduler CNMergeScheduler) *Obje
 	}
 }
 
-func (m *ObjectMergeArchon) OnPostDatabase(database *catalog.DBEntry) error {
+func (m *Scheduler) OnPostDatabase(*catalog.DBEntry) error {
 	return nil
 }
 
-func (m *ObjectMergeArchon) OnPostObject(object *catalog.ObjectEntry) error {
+func (m *Scheduler) OnPostObject(*catalog.ObjectEntry) error {
 	return nil
 }
 
-func (m *ObjectMergeArchon) OnTombstone(tombstone data.Tombstone) error {
+func (m *Scheduler) OnTombstone(data.Tombstone) error {
 	return nil
 }
 
-func (m *ObjectMergeArchon) OnDatabase(*catalog.DBEntry) error {
+func (m *Scheduler) OnDatabase(*catalog.DBEntry) error {
 	if StopMerge.Load() {
 		return moerr.GetOkStopCurrRecur()
 	}
@@ -66,7 +66,7 @@ func (m *ObjectMergeArchon) OnDatabase(*catalog.DBEntry) error {
 	return nil
 }
 
-func (m *ObjectMergeArchon) OnTable(tableEntry *catalog.TableEntry) error {
+func (m *Scheduler) OnTable(tableEntry *catalog.TableEntry) error {
 	if StopMerge.Load() {
 		return moerr.GetOkStopCurrRecur()
 	}
@@ -83,7 +83,7 @@ func (m *ObjectMergeArchon) OnTable(tableEntry *catalog.TableEntry) error {
 	return nil
 }
 
-func (m *ObjectMergeArchon) resetForTable(entry *catalog.TableEntry) {
+func (m *Scheduler) resetForTable(entry *catalog.TableEntry) {
 	m.tid = 0
 	if entry != nil {
 		m.tid = entry.ID
@@ -93,19 +93,19 @@ func (m *ObjectMergeArchon) resetForTable(entry *catalog.TableEntry) {
 	m.policies[m.run].Clear()
 }
 
-func (m *ObjectMergeArchon) PreExecute() error {
+func (m *Scheduler) PreExecute() error {
 	logutil.Infof("[Mergeblocks] Start Run %d", m.run)
 	m.executor.RefreshMemInfo()
 	return nil
 }
 
-func (m *ObjectMergeArchon) PostExecute() error {
+func (m *Scheduler) PostExecute() error {
 	m.run = (m.run + 1) % len(m.policies)
 	m.executor.PrintStats()
 	return nil
 }
 
-func (m *ObjectMergeArchon) OnPostTable(tableEntry *catalog.TableEntry) (err error) {
+func (m *Scheduler) OnPostTable(tableEntry *catalog.TableEntry) (err error) {
 	if m.tid == 0 {
 		return
 	}
@@ -125,7 +125,7 @@ func (m *ObjectMergeArchon) OnPostTable(tableEntry *catalog.TableEntry) (err err
 	return
 }
 
-func (m *ObjectMergeArchon) OnObject(objectEntry *catalog.ObjectEntry) error {
+func (m *Scheduler) OnObject(objectEntry *catalog.ObjectEntry) error {
 	if !objectEntry.IsActive() {
 		return moerr.GetOkStopCurrRecur()
 	}

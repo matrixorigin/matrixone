@@ -64,9 +64,9 @@ func (m *multiObjPolicy) Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHos
 		return nil, TaskHostDN
 	}
 	if !m.objects[0].GetSortKeyZonemap().IsInited() {
-		revisedObj := make([]*catalog.ObjectEntry, len(m.objects))
-		copy(revisedObj, m.objects)
-		return revisedObj, TaskHostDN
+		revisedObj := make([]*catalog.ObjectEntry, m.config.maxObjs)
+		n := copy(revisedObj, m.objects)
+		return revisedObj[:n], TaskHostDN
 	}
 
 	t := m.objects[0].GetSortKeyZonemap().GetType()
