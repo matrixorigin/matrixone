@@ -96,6 +96,9 @@ func (m *multiObjPolicy) Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHos
 			break
 		}
 	}
+	if set.size < 20*common.Const1MBytes {
+		return nil, TaskHostDN
+	}
 	if len(set.entries) > m.config.maxObjs {
 		m.objects = set.entries[:m.config.maxObjs]
 	}
