@@ -688,7 +688,7 @@ func constructBasePKFilter(expr *plan.Expr, tblDef *plan.TableDef, proc *process
 	case *plan.Expr_F:
 		switch name := exprImpl.F.Func.ObjName; name {
 		case "and":
-			filters := make([]BasePKFilter, len(exprImpl.F.Args))
+			var filters []BasePKFilter
 			for idx := range exprImpl.F.Args {
 				ff := constructBasePKFilter(exprImpl.F.Args[idx], tblDef, proc)
 				if ff.valid {
@@ -723,14 +723,14 @@ func constructBasePKFilter(expr *plan.Expr, tblDef *plan.TableDef, proc *process
 			return ret
 
 		case "or":
-			filters := make([]BasePKFilter, len(exprImpl.F.Args))
+			var filters []BasePKFilter
 			for idx := range exprImpl.F.Args {
 				ff := constructBasePKFilter(exprImpl.F.Args[idx], tblDef, proc)
 				if !ff.valid {
 					return BasePKFilter{}
 				}
 
-				filters[idx] = ff
+				filters = append(filters, ff)
 			}
 
 			if len(filters) == 0 {
