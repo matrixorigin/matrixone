@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -77,8 +78,9 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	if stmt.Param.FileSize < LoadParallelMinSize {
 		stmt.Param.Parallel = false
 	}
-	stmt.Param.Tail.ColumnList = nil
 	stmt.Param.LoadFile = true
+	columnList := stmt.Param.Tail.ColumnList
+	stmt.Param.Tail.ColumnList = nil
 	if stmt.Param.ScanType != tree.INLINE {
 		json_byte, err := json.Marshal(stmt.Param)
 		if err != nil {
@@ -132,7 +134,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		NodeType: plan.Node_PROJECT,
 		Stats:    &plan.Stats{},
 	}
-	ifExistAutoPkCol, err := getProjectNode(stmt, ctx, projectNode, tableDef)
+	ifExistAutoPkCol, err := getProjectNode(stmt, ctx, projectNode, tableDef, columnList)
 	if err != nil {
 		return nil, err
 	}
@@ -231,56 +233,50 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 	return param.Filepath, nil
 }
 
-func getProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, tableDef *TableDef) (bool, error) {
+func getProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, tableDef *TableDef, columnList []tree.LoadColumn) (bool, error) {
 	tblName := string(stmt.Table.ObjectName)
-	colToIndex := make(map[int32]string, 0)
+	colToIndex := make(map[string]int32, 0)
 	ifExistAutoPkCol := false
-	if len(stmt.Param.Tail.ColumnList) == 0 {
+	if len(columnList) == 0 {
 		for i := 0; i < len(tableDef.Cols); i++ {
-			colToIndex[int32(i)] = tableDef.Cols[i].Name
+			colToIndex[tableDef.Cols[i].Name] = int32(i)
 		}
 	} else {
-		for i, col := range stmt.Param.Tail.ColumnList {
+		for i, col := range columnList {
 			switch realCol := col.(type) {
 			case *tree.UnresolvedName:
 				colName := realCol.ColName()
 				if _, ok := tableDef.Name2ColIndex[colName]; !ok {
 					return ifExistAutoPkCol, moerr.NewInternalError(ctx.GetContext(), "column '%s' does not exist", realCol.ColNameOrigin())
 				}
-				colToIndex[int32(i)] = colName
+				colToIndex[colName] = int32(i)
 			case *tree.VarExpr:
 				//NOTE:variable like '@abc' will be passed by.
 			default:
 				return ifExistAutoPkCol, moerr.NewInternalError(ctx.GetContext(), "unsupported column type %v", realCol)
 			}
 		}
+		lastColIdx := len(tableDef.Cols) - 1
+		if lastColIdx >= 0 && tableDef.Cols[lastColIdx].Name == catalog.FakePrimaryKeyColName {
+			colToIndex[catalog.FakePrimaryKeyColName] = int32(lastColIdx)
+		}
 	}
 	node.ProjectList = make([]*plan.Expr, len(tableDef.Cols))
-	projectVec := make([]*plan.Expr, len(tableDef.Cols))
-	for i := 0; i < len(tableDef.Cols); i++ {
-		tmp := &plan.Expr{
-			Typ: tableDef.Cols[i].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					ColPos: int32(i),
-					Name:   tblName + "." + tableDef.Cols[i].Name,
-				},
-			},
-		}
-		projectVec[i] = tmp
-	}
-	for i := 0; i < len(tableDef.Cols); i++ {
-		if v, ok := colToIndex[int32(i)]; ok {
-			node.ProjectList[tableDef.Name2ColIndex[v]] = projectVec[i]
-		}
-	}
 	var tmp *plan.Expr
-	//var err error
 	for i := 0; i < len(tableDef.Cols); i++ {
-		if node.ProjectList[i] != nil {
+		if colListId, ok := colToIndex[tableDef.Cols[i].Name]; ok {
+			tmp = &plan.Expr{
+				Typ: tableDef.Cols[i].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						ColPos: int32(colListId),
+						Name:   tblName + "." + tableDef.Cols[i].Name,
+					},
+				},
+			}
+			node.ProjectList[i] = tmp
 			continue
 		}
-
 		if tableDef.Cols[i].Default.Expr == nil || tableDef.Cols[i].Default.NullAbility {
 			tmp = makePlan2NullConstExprWithType()
 		} else {
@@ -295,6 +291,7 @@ func getProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, table
 			ifExistAutoPkCol = true
 		}
 	}
+
 	return ifExistAutoPkCol, nil
 }
 

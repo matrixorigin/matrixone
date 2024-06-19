@@ -129,10 +129,19 @@ func (obj *aobject) PrepareCompact() bool {
 			return false
 		}
 	} else {
-		if !obj.meta.PrepareCompactLocked() ||
-			!obj.appendMVCC.PrepareCompactLocked() /* all appends are committed */ {
+		if !obj.meta.PrepareCompactLocked() {
+			if obj.meta.CheckPrintPrepareCompactLocked() {
+				obj.meta.PrintPrepareCompactDebugLog()
+			}
+			return false
+		}
+		if !obj.appendMVCC.PrepareCompactLocked() /* all appends are committed */ {
 			if obj.meta.CheckPrintPrepareCompactLocked() {
 				logutil.Infof("obj %v, data prepare compact failed", obj.meta.ID.String())
+				if !obj.meta.HasPrintedPrepareComapct {
+					obj.meta.HasPrintedPrepareComapct = true
+					logutil.Infof("append MVCC %v", obj.appendMVCC.StringLocked())
+				}
 			}
 			return false
 		}

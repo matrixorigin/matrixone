@@ -370,12 +370,9 @@ func checkVisibleColumnCnt(ctx context.Context, tblInfo *TableDef, addCount, dro
 func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *TableDef) error {
 	for i := 0; i < len(tbInfo.Indexes); i++ {
 		indexInfo := tbInfo.Indexes[i]
-		for j := 0; j < len(indexInfo.Parts); j++ {
-			if catalog.ResolveAlias(indexInfo.Parts[j]) == colName {
-				indexInfo.Parts = append(indexInfo.Parts[:j], indexInfo.Parts[j+1:]...)
-				break
-			}
-		}
+		indexInfo.Parts = RemoveIf[string](indexInfo.Parts, func(t string) bool {
+			return catalog.ResolveAlias(t) == colName
+		})
 		if indexInfo.Unique {
 			// handle unique index
 			if len(indexInfo.Parts) == 0 {
@@ -419,12 +416,9 @@ func handleDropColumnWithPrimaryKey(ctx context.Context, colName string, tbInfo 
 	if tbInfo.Pkey != nil && tbInfo.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 		return nil
 	} else {
-		for i := 0; i < len(tbInfo.Pkey.Names); i++ {
-			if tbInfo.Pkey.Names[i] == colName {
-				tbInfo.Pkey.Names = append(tbInfo.Pkey.Names[:i], tbInfo.Pkey.Names[i+1:]...)
-				break
-			}
-		}
+		tbInfo.Pkey.Names = RemoveIf[string](tbInfo.Pkey.Names, func(t string) bool {
+			return t == colName
+		})
 
 		if len(tbInfo.Pkey.Names) == 0 {
 			tbInfo.Pkey = nil
@@ -491,14 +485,9 @@ func checkDropColumnWithPartition(ctx context.Context, tbInfo *TableDef, colName
 
 // checkModifyNewColumn Check the position information of the newly formed column and place the new column in the target location
 func handleDropColumnPosition(ctx context.Context, tableDef *TableDef, col *ColDef) error {
-	targetPos := -1
-	for i := 0; i < len(tableDef.Cols); i++ {
-		if tableDef.Cols[i].Name == col.Name {
-			targetPos = i
-			break
-		}
-	}
-	tableDef.Cols = append(tableDef.Cols[:targetPos], tableDef.Cols[targetPos+1:]...)
+	tableDef.Cols = RemoveIf[*ColDef](tableDef.Cols, func(t *ColDef) bool {
+		return t.Name == col.Name
+	})
 	return nil
 }
 
@@ -512,17 +501,9 @@ func handleDropColumnWithClusterBy(ctx context.Context, copyTableDef *TableDef, 
 		} else {
 			clNames = []string{clusterBy.Name}
 		}
-		deleteIndex := -1
-		for j, part := range clNames {
-			if part == originCol.Name {
-				deleteIndex = j
-				break
-			}
-		}
-
-		if deleteIndex != -1 {
-			clNames = append(clNames[:deleteIndex], clNames[deleteIndex+1:]...)
-		}
+		clNames = RemoveIf[string](clNames, func(t string) bool {
+			return t == originCol.Name
+		})
 
 		if len(clNames) == 0 {
 			copyTableDef.ClusterBy = nil

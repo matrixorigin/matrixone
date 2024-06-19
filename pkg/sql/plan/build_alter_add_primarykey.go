@@ -110,12 +110,9 @@ func DropPrimaryKey(ctx CompilerContext, alterPlan *plan.AlterTable, alterCtx *A
 			}
 		}
 	} else {
-		for idx, coldef := range tableDef.Cols {
-			if coldef.Hidden && pkey.PkeyColName == coldef.Name {
-				tableDef.Cols = append(tableDef.Cols[:idx], tableDef.Cols[idx+1:]...)
-				break
-			}
-		}
+		tableDef.Cols = RemoveIf[*ColDef](tableDef.Cols, func(coldef *ColDef) bool {
+			return coldef.Hidden && pkey.PkeyColName == coldef.Name
+		})
 	}
 	tableDef.Pkey = nil
 	return nil

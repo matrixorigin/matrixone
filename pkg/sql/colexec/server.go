@@ -15,6 +15,7 @@
 package colexec
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"sync/atomic"
 
 	"github.com/google/uuid"
@@ -49,6 +50,9 @@ func NewServer(client logservice.CNHAKeeperClient) *Server {
 		hakeeper:      client,
 		uuidCsChanMap: UuidProcMap{mp: make(map[uuid.UUID]uuidProcMapItem, 1024)},
 		cnSegmentMap:  CnSegmentMap{mp: make(map[objectio.Segmentid]int32, 1024)},
+		receivedRunningPipeline: RunningPipelineMapForRemoteNode{
+			fromRpcClientToRunningPipeline: make(map[morpc.ClientSession]*process.Process, 1024),
+		},
 	}
 	Set(s)
 	return s

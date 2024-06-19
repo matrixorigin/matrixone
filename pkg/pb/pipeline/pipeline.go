@@ -37,14 +37,6 @@ func (m *Message) SetSid(sid Status) {
 	m.Sid = sid
 }
 
-func (m *Message) SetCheckSum(sum uint32) {
-	m.Checksum = sum
-}
-
-func (m *Message) SetSequence(s uint64) {
-	m.Sequence = s
-}
-
 func (m *Message) SetMoError(ctx context.Context, err error) {
 	m.Err = EncodedMessageError(ctx, err)
 }
