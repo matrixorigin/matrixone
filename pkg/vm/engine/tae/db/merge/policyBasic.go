@@ -354,5 +354,3 @@ func (o *basic) ResetForTable(entry *catalog.TableEntry) {
 
 	o.config = o.configProvider.GetConfig(entry)
 }
-
-func (o *basic) OnPostTable() {}

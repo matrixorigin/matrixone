@@ -52,8 +52,8 @@ type MergeExecutor struct {
 	memAvail            int
 	memSpare            int // 10% of total memory or container memory limit
 	cpuPercent          float64
-	activeMergeBlkCount int32
-	activeEstimateBytes int64
+	activeMergeBlkCount atomic.Int32
+	activeEstimateBytes atomic.Int64
 	taskConsume         struct {
 		sync.Mutex
 		o map[objectio.ObjectId]struct{}
@@ -99,22 +99,19 @@ func (e *MergeExecutor) RefreshMemInfo() {
 }
 
 func (e *MergeExecutor) PrintStats() {
-	cnt := atomic.LoadInt32(&e.activeMergeBlkCount)
-	if cnt == 0 && e.MemAvailBytes() > 512*common.Const1MBytes {
-		return
-	}
+	cnt := e.activeMergeBlkCount.Load()
 
 	logutil.Infof(
 		"Mergeblocks avail mem: %v(%v reserved), active mergeing size: %v, active merging blk cnt: %d",
 		common.HumanReadableBytes(e.memAvail),
 		common.HumanReadableBytes(e.memSpare),
-		common.HumanReadableBytes(int(atomic.LoadInt64(&e.activeEstimateBytes))), cnt,
+		common.HumanReadableBytes(int(e.activeEstimateBytes.Load())), cnt,
 	)
 }
 
 func (e *MergeExecutor) AddActiveTask(taskId uint64, blkn, esize int) {
-	atomic.AddInt64(&e.activeEstimateBytes, int64(esize))
-	atomic.AddInt32(&e.activeMergeBlkCount, int32(blkn))
+	e.activeEstimateBytes.Add(int64(esize))
+	e.activeMergeBlkCount.Add(int32(blkn))
 	e.taskConsume.Lock()
 	if e.taskConsume.m == nil {
 		e.taskConsume.m = make(activeTaskStats)
@@ -134,8 +131,8 @@ func (e *MergeExecutor) OnExecDone(v any) {
 	delete(e.taskConsume.m, task.ID())
 	e.taskConsume.Unlock()
 
-	atomic.AddInt32(&e.activeMergeBlkCount, -int32(stat.blk))
-	atomic.AddInt64(&e.activeEstimateBytes, -int64(stat.estBytes))
+	e.activeMergeBlkCount.Add(-int32(stat.blk))
+	e.activeEstimateBytes.Add(-int64(stat.estBytes))
 }
 
 func (e *MergeExecutor) ExecuteSingleObjMerge(entry *catalog.TableEntry, mobjs []*catalog.ObjectEntry, kind TaskHostKind) {
@@ -236,7 +233,7 @@ func (e *MergeExecutor) ExecuteMultiObjMerge(entry *catalog.TableEntry, mobjs []
 }
 
 func (e *MergeExecutor) MemAvailBytes() int {
-	merging := int(atomic.LoadInt64(&e.activeEstimateBytes))
+	merging := int(e.activeEstimateBytes.Load())
 	avail := e.memAvail - e.memSpare - merging
 	if avail < 0 {
 		avail = 0
