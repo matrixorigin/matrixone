@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/list"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"go.uber.org/zap"
 )
 
 // WithWait setup wait func to wait some condition ready
@@ -548,13 +549,26 @@ func (s *service) getLockTableWithCreate(
 		return nil, err
 	}
 
-	v := s.tableGroups.set(group, tableID, s.createLockTableByBind(bind))
+	new := s.createLockTableByBind(bind)
+	v := s.tableGroups.set(group, tableID, new)
+	getLogger().Info("lock table not found, create new",
+		zap.String("service", s.serviceID),
+		zap.String("bind", bind.String()),
+		zap.String("current", fmt.Sprintf("%p", v)),
+		zap.String("new", fmt.Sprintf("%p", new)),
+	)
 	return v, nil
 }
 
 func (s *service) handleBindChanged(newBind pb.LockTable) {
 	new := s.createLockTableByBind(newBind)
-	s.tableGroups.set(newBind.Group, newBind.Table, new)
+	current := s.tableGroups.set(newBind.Group, newBind.Table, new)
+	getLogger().Info("lock table bind changed, create new",
+		zap.String("service", s.serviceID),
+		zap.String("new-bind", newBind.String()),
+		zap.String("current", fmt.Sprintf("%p", current)),
+		zap.String("new", fmt.Sprintf("%p", new)),
+	)
 }
 
 func (s *service) createLockTableByBind(bind pb.LockTable) lockTable {
@@ -1002,6 +1016,11 @@ func (m *lockTableHolder) removeWithFilter(filter func(uint64, lockTable) bool) 
 	defer m.Unlock()
 	for id, v := range m.tables {
 		if filter(id, v) {
+			getLogger().Info("lock table removed",
+				zap.String("service", m.service),
+				zap.String("bind", v.getBind().DebugString()),
+				zap.String("current", fmt.Sprintf("%p", v)),
+			)
 			v.close()
 			delete(m.tables, id)
 		}

@@ -561,6 +561,10 @@ func (cs *clientSession) Close() error {
 	return cs.conn.Close()
 }
 
+func (cs *clientSession) SessionCtx() context.Context {
+	return cs.ctx
+}
+
 func (cs *clientSession) cleanSend() {
 	for {
 		select {
