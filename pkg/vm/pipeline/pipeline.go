@@ -96,25 +96,14 @@ func (p *Pipeline) ConstRun(bat *batch.Batch, proc *process.Process) (end bool, 
 		case <-p.reg.Ch:
 		}
 	}
-	pipelineInputBatches := []*batch.Batch{bat, nil}
 
-	for _, ins := range p.instructions {
-		ins.Idx += 1
-		ins.IsFirst = false
+	if valueScanOperator, ok := p.instructions[0].Arg.(*value_scan.Argument); ok {
+		pipelineInputBatches := []*batch.Batch{bat}
+		if bat != nil {
+			pipelineInputBatches = append(pipelineInputBatches, nil)
+		}
+		valueScanOperator.Batchs = pipelineInputBatches
 	}
-
-	valueScanOperator := value_scan.Argument{
-		Batchs: pipelineInputBatches,
-	}
-	p.instructions = append([]vm.Instruction{
-		{
-			Op:      vm.ValueScan,
-			Idx:     0,
-			Arg:     &valueScanOperator,
-			IsFirst: true,
-			IsLast:  false,
-		},
-	}, p.instructions...)
 
 	if err = vm.Prepare(p.instructions, proc); err != nil {
 		return false, err
