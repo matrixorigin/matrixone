@@ -19,5 +19,5 @@ a
 20001
 40000
 40001
-drop table t2
+drop table t2;
 drop database testdb;
