@@ -98,55 +98,61 @@ func (bio *baseIO) Close() error {
 	return nil
 }
 
-func (bio *baseIO) Read() (any, error) {
-	payloads := make([]byte, 0)
+func (bio *baseIO) Read() ([]byte, error) {
+	payloads := make([][]byte, 0)
+	var err error
 	for {
 		if !bio.connected {
 			return nil, moerr.NewInternalError(moerr.Context(), "The IOSession connection has been closed")
 		}
-		var readLength int
 		var packetLength int
-		for {
-			n, err := bio.conn.Read(bio.in.header[readLength:])
-			if err != nil {
-				return nil, err
-			}
-			readLength += n
-			if readLength == HeaderLengthOfTheProtocol {
-				packetLength = int(uint32(bio.in.header[0]) | uint32(bio.in.header[1])<<8 | uint32(bio.in.header[2])<<16)
-				break
-			}
+		err = bio.ReadBytes(bio.in.header, HeaderLengthOfTheProtocol)
+		if err != nil {
+			return nil, err
 		}
+		packetLength = int(uint32(bio.in.header[0]) | uint32(bio.in.header[1])<<8 | uint32(bio.in.header[2])<<16)
+		sequenceId := bio.in.header[3]
+		bio.sequenceId = sequenceId + 1
 
 		if packetLength == 0 {
 			break
 		}
+
 		payload, err := bio.ReadOnePayload(packetLength)
 		if err != nil {
 			return nil, err
 		}
 
 		if uint32(packetLength) == MaxPayloadSize {
-			payloads = append(payloads, payload...)
+			payloads = append(payloads, payload)
+			continue
 		}
 
 		if len(payloads) == 0 {
 			return payload, err
 		} else {
-			payloads = append(payloads, payload...)
 			break
 		}
 	}
 
-	return payloads, nil
+	totalLength := 0
+	for _, payload := range payloads {
+		totalLength += len(payload)
+	}
+	finalPayload := bio.allocator.Alloc(totalLength)
 
+	copyIndex := 0
+	for _, payload := range payloads {
+		copy(finalPayload[copyIndex:], payload)
+		bio.allocator.Free(payload)
+		copyIndex += len(payload)
+	}
+	return finalPayload, nil
 }
 
 func (bio *baseIO) ReadOnePayload(packetLength int) ([]byte, error) {
 	var buf []byte
-	var readLength int
 	var err error
-	var n int
 
 	if packetLength > fixBufferSize {
 		buf = bio.allocator.Alloc(packetLength)
@@ -154,17 +160,29 @@ func (bio *baseIO) ReadOnePayload(packetLength int) ([]byte, error) {
 	} else {
 		buf = bio.in.fixBuf
 	}
+	err = bio.ReadBytes(buf[:packetLength], packetLength)
+	if err != nil {
+		return nil, err
+	}
+
+	payload := bio.allocator.Alloc(packetLength)
+	copy(payload, buf[:packetLength])
+	return payload, nil
+}
+
+func (bio *baseIO) ReadBytes(buf []byte, Length int) error {
+	var err error
+	var n int
+	var readLength int
 	for {
-		n, err = bio.conn.Read(buf[readLength:packetLength])
+		n, err = bio.conn.Read(buf[readLength:])
 		if err != nil {
-			return nil, err
+			return err
 		}
 		readLength += n
 
-		if readLength == packetLength {
-			payload := make([]byte, packetLength)
-			copy(payload, buf[:packetLength])
-			return payload, nil
+		if readLength == Length {
+			return nil
 		}
 	}
 }

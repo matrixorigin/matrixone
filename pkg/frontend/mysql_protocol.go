@@ -1823,25 +1823,15 @@ func (mp *MysqlProtocolImpl) negotiateAuthenticationMethod(ctx context.Context) 
 		return nil, err
 	}
 
-	read, err := mp.tcpConn.Read()
+	data, err := mp.tcpConn.Read()
 	if err != nil {
 		return nil, err
 	}
 
-	if read == nil {
-		return nil, moerr.NewInternalError(ctx, "read nil from tcp conn")
-	}
-
-	pack, ok := read.(*Packet)
-	if !ok {
-		return nil, moerr.NewInternalError(ctx, "it is not the Packet")
-	}
-
-	if pack == nil {
+	if data == nil {
 		return nil, moerr.NewInternalError(ctx, "packet is null")
 	}
 
-	data := pack.Payload
 	mp.AddSequenceId(1)
 	return data, nil
 }
@@ -2523,6 +2513,11 @@ func (mp *MysqlProtocolImpl) WriteResultSetRow(mrs *MysqlResultSet, cnt uint64) 
 			}
 			return err
 		}
+	}
+
+	err = mp.tcpConn.Flush()
+	if err != nil {
+		return err
 	}
 
 	return err
