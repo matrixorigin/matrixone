@@ -108,7 +108,7 @@ func CnServerMessageHandler(
 		// keep listening until connection was closed
 		// to prevent some strange handle order between 'stop sending message' and others.
 		if err == nil {
-			<-ctx.Done()
+			<-receiver.connectionCtx.Done()
 		}
 		colexec.Get().RemoveRunningPipeline(receiver.clientSession, receiver.messageId)
 	}
@@ -142,10 +142,10 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		succeed := false
 		select {
 		case <-timeLimit.Done():
-			err = moerr.NewInternalError(receiver.ctx, "send notify msg to dispatch operator timeout")
+			err = moerr.NewInternalError(receiver.messageCtx, "send notify msg to dispatch operator timeout")
 		case dispatchProc.DispatchNotifyCh <- infoToDispatchOperator:
 			succeed = true
-		case <-receiver.ctx.Done():
+		case <-receiver.connectionCtx.Done():
 		case <-dispatchProc.Ctx.Done():
 		}
 		cancel()
@@ -156,7 +156,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		}
 
 		select {
-		case <-receiver.ctx.Done():
+		case <-receiver.connectionCtx.Done():
 			dispatchProc.Cancel()
 
 		// there is no need to check the dispatchProc.Ctx.Done() here.
@@ -263,7 +263,9 @@ type processHelper struct {
 
 // messageReceiverOnServer supported a series methods to write back results.
 type messageReceiverOnServer struct {
-	ctx         context.Context
+	messageCtx    context.Context
+	connectionCtx context.Context
+
 	messageId   uint64
 	messageTyp  pipeline.Method
 	messageUuid uuid.UUID
@@ -299,7 +301,8 @@ func newMessageReceiverOnServer(
 	aicm *defines.AutoIncrCacheManager) messageReceiverOnServer {
 
 	receiver := messageReceiverOnServer{
-		ctx:             ctx,
+		messageCtx:      ctx,
+		connectionCtx:   cs.SessionCtx(),
 		messageId:       m.GetId(),
 		messageTyp:      m.GetCmd(),
 		clientSession:   cs,
@@ -343,7 +346,7 @@ func newMessageReceiverOnServer(
 func (receiver *messageReceiverOnServer) acquireMessage() (*pipeline.Message, error) {
 	message, ok := receiver.messageAcquirer().(*pipeline.Message)
 	if !ok {
-		return nil, moerr.NewInternalError(receiver.ctx, "get a message with wrong type.")
+		return nil, moerr.NewInternalError(receiver.messageCtx, "get a message with wrong type.")
 	}
 	message.SetID(receiver.messageId)
 	return message, nil
@@ -357,8 +360,10 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 		panic(err)
 	}
 	pHelper, cnInfo := receiver.procBuildHelper, receiver.cnInformation
+
+	runningCtx, runningCancel := context.WithCancel(receiver.connectionCtx)
 	proc := process.New(
-		receiver.ctx,
+		runningCtx,
 		mp,
 		pHelper.txnClient,
 		pHelper.txnOperator,
@@ -368,6 +373,7 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 		cnInfo.hakeeper,
 		cnInfo.udfService,
 		cnInfo.aicm)
+	proc.Cancel = runningCancel
 	proc.UnixTime = pHelper.unixTime
 	proc.Id = pHelper.id
 	proc.Lim = pHelper.lim
@@ -410,9 +416,9 @@ func (receiver *messageReceiverOnServer) sendError(
 	message.SetID(receiver.messageId)
 	message.SetSid(pipeline.Status_MessageEnd)
 	if errInfo != nil {
-		message.SetMoError(receiver.ctx, errInfo)
+		message.SetMoError(receiver.messageCtx, errInfo)
 	}
-	return receiver.clientSession.Write(receiver.ctx, message)
+	return receiver.clientSession.Write(receiver.messageCtx, message)
 }
 
 func (receiver *messageReceiverOnServer) sendBatch(
@@ -436,7 +442,7 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		m.SetMessageType(pipeline.Method_BatchMessage)
 		m.SetData(data)
 		m.SetSid(pipeline.Status_Last)
-		return receiver.clientSession.Write(receiver.ctx, m)
+		return receiver.clientSession.Write(receiver.messageCtx, m)
 	}
 	// if data is too large, cut and send
 	for start, end := 0, 0; start < dataLen; start = end {
@@ -454,7 +460,7 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		m.SetMessageType(pipeline.Method_BatchMessage)
 		m.SetData(data[start:end])
 
-		if errW := receiver.clientSession.Write(receiver.ctx, m); errW != nil {
+		if errW := receiver.clientSession.Write(receiver.messageCtx, m); errW != nil {
 			return errW
 		}
 	}
@@ -484,7 +490,7 @@ func (receiver *messageReceiverOnServer) sendEndMessage() error {
 		}
 		message.SetAnalysis(data)
 	}
-	return receiver.clientSession.Write(receiver.ctx, message)
+	return receiver.clientSession.Write(receiver.messageCtx, message)
 }
 
 func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, error) {
@@ -533,9 +539,9 @@ func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID) (*process.
 		case <-getCtx.Done():
 			colexec.Get().GetProcByUuid(uid, true)
 			getCancel()
-			return nil, moerr.NewInternalError(receiver.ctx, "get dispatch process by uuid timeout")
+			return nil, moerr.NewInternalError(receiver.messageCtx, "get dispatch process by uuid timeout")
 
-		case <-receiver.ctx.Done():
+		case <-receiver.connectionCtx.Done():
 			colexec.Get().GetProcByUuid(uid, true)
 			getCancel()
 			return nil, nil
