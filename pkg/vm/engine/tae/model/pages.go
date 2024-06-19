@@ -17,6 +17,11 @@ package model
 import (
 	"bytes"
 	"fmt"
+	"github.com/gogo/protobuf/proto"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -26,20 +31,31 @@ import (
 
 type HashPageTable = TransferTable[*TransferHashPage]
 
+type BlockRead interface {
+	LoadTableByBlock(loc objectio.Location, fs fileservice.FileService) (bat *batch.Batch, release func(), err error)
+}
+
 type TransferHashPage struct {
 	common.RefHelper
 	bornTS      time.Time
 	id          *common.ID // not include blk offset
 	hashmap     map[uint32]types.Rowid
+	location    objectio.Location
+	fs          fileservice.FileService
+	rd          BlockRead
 	isTransient bool
+	isPersisted bool
 }
 
-func NewTransferHashPage(id *common.ID, ts time.Time, isTransient bool) *TransferHashPage {
+func NewTransferHashPage(id *common.ID, ts time.Time, isTransient bool, fs fileservice.FileService, rd BlockRead) *TransferHashPage {
 	page := &TransferHashPage{
 		bornTS:      ts,
 		id:          id,
 		hashmap:     make(map[uint32]types.Rowid),
+		fs:          fs,
+		rd:          rd,
 		isTransient: isTransient,
+		isPersisted: false,
 	}
 	page.OnZeroCB = page.Close
 	return page
@@ -85,6 +101,77 @@ func (page *TransferHashPage) Train(from uint32, to types.Rowid) {
 }
 
 func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) {
+	flag := page.isPersisted
+
+	if page.isPersisted {
+		logutil.Infof("transfer loadding table")
+		page.loadTable()
+	}
+
 	dest, ok = page.hashmap[from]
+	if flag {
+		logutil.Infof("taansfer after loadding table %v", ok)
+	}
 	return
+}
+
+func toProtoRowid(rowid [24]byte) api.RowId {
+	return api.RowId{Id: rowid[:]}
+}
+
+func fromProtoRowid(protoRowid api.RowId) [24]byte {
+	var rowid [24]byte
+	copy(rowid[:], protoRowid.Id)
+	return rowid
+}
+
+func (page *TransferHashPage) Marshal() []byte {
+	m := make(map[uint32]api.RowId)
+	for k, v := range page.hashmap {
+		m[k] = toProtoRowid(v)
+	}
+	mapping := &api.HashPageMap{M: m}
+	data, _ := proto.Marshal(mapping)
+	return data
+}
+
+func (page *TransferHashPage) Unmarshal(data []byte) error {
+	var mapping api.HashPageMap
+	err := proto.Unmarshal(data, &mapping)
+	if err != nil {
+		return err
+	}
+
+	for key, value := range mapping.M {
+		page.hashmap[key] = fromProtoRowid(value)
+	}
+	return nil
+}
+
+func (page *TransferHashPage) SetLocation(location objectio.Location) {
+	page.location = location
+}
+
+func (page *TransferHashPage) ClearTable() {
+	time.Sleep(10 * time.Second)
+	clear(page.hashmap)
+	page.isPersisted = true
+}
+
+func (page *TransferHashPage) loadTable() {
+	page.isPersisted = false
+
+	var bat *batch.Batch
+	var release func()
+	bat, release, err := page.rd.LoadTableByBlock(page.location, page.fs)
+	if err != nil {
+		return
+	}
+	err = page.Unmarshal(bat.Vecs[0].GetBytesAt(0))
+	if err != nil {
+		release()
+		return
+	}
+
+	go page.ClearTable()
 }

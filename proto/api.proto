@@ -408,3 +408,11 @@ message MergeTaskEntry {
     uint32 user_id = 8;
     uint32 role_id = 9;
 }
+
+message RowId {
+    bytes id = 1;
+}
+
+message HashPageMap {
+    map<uint32, RowId> m = 1[(gogoproto.nullable) = false];
+}

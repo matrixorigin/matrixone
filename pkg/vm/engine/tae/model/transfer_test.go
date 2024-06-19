@@ -15,6 +15,8 @@
 package model
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"testing"
 	"time"
 
@@ -33,7 +35,7 @@ func TestTransferPage(t *testing.T) {
 		BlockID: *objectio.NewBlockid(sid, 2, 0),
 	}
 
-	memo1 := NewTransferHashPage(&src, time.Now(), false)
+	memo1 := NewTransferHashPage(&src, time.Now(), false, *new(fileservice.FileService), blockio.NewBlockRead())
 	assert.Zero(t, memo1.RefCount())
 
 	for i := 0; i < 10; i++ {
@@ -47,7 +49,7 @@ func TestTransferPage(t *testing.T) {
 
 	ttl := time.Millisecond * 10
 	now := time.Now()
-	memo2 := NewTransferHashPage(&src, now, false)
+	memo2 := NewTransferHashPage(&src, now, false, *new(fileservice.FileService), blockio.NewBlockRead())
 	defer memo2.Close()
 	assert.Zero(t, memo2.RefCount())
 
@@ -77,7 +79,7 @@ func TestTransferTable(t *testing.T) {
 	id2 := common.ID{BlockID: *objectio.NewBlockid(sid, 2, 0)}
 
 	now := time.Now()
-	page1 := NewTransferHashPage(&id1, now, false)
+	page1 := NewTransferHashPage(&id1, now, false, *new(fileservice.FileService), blockio.NewBlockRead())
 	for i := 0; i < 10; i++ {
 		rowID := *objectio.NewRowid(&id2.BlockID, uint32(i))
 		page1.Train(uint32(i), rowID)
