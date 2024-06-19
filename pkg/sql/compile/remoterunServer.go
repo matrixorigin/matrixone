@@ -18,6 +18,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
+	"time"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -40,8 +43,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
-	"runtime"
-	"time"
 )
 
 // CnServerMessageHandler receive and deal the message from cn-client.
@@ -145,7 +146,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 			err = moerr.NewInternalError(receiver.messageCtx, "send notify msg to dispatch operator timeout")
 		case dispatchProc.DispatchNotifyCh <- infoToDispatchOperator:
 			succeed = true
-		case <-receiver.connectionCtx.Done():
+		case <-receiver.messageCtx.Done():
 		case <-dispatchProc.Ctx.Done():
 		}
 		cancel()
@@ -156,7 +157,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		}
 
 		select {
-		case <-receiver.connectionCtx.Done():
+		case <-receiver.messageCtx.Done():
 			dispatchProc.Cancel()
 
 		// there is no need to check the dispatchProc.Ctx.Done() here.
@@ -541,7 +542,7 @@ func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID) (*process.
 			getCancel()
 			return nil, moerr.NewInternalError(receiver.messageCtx, "get dispatch process by uuid timeout")
 
-		case <-receiver.connectionCtx.Done():
+		case <-receiver.messageCtx.Done():
 			colexec.Get().GetProcByUuid(uid, true)
 			getCancel()
 			return nil, nil
