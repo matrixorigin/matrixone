@@ -193,6 +193,8 @@ type runner struct {
 		checkpointBlockRows int
 		checkpointSize      int
 
+		startupLatency time.Duration
+
 		reservedWALEntryCount uint64
 	}
 
@@ -768,8 +770,8 @@ func (r *runner) tryScheduleCheckpoint(endts types.TS) {
 		logutil.Infof("Checkpoint is disable")
 		return
 	}
-	if time.Since(r.openTime) < time.Minute*5 {
-		logutil.Infof("Checkpoint is disable. TN has been running for %v", time.Since(r.openTime))
+	if time.Since(r.openTime) < r.options.startupLatency {
+		logutil.Infof("Checkpoint is disable. TN has been running for %v, startup latency %v", time.Since(r.openTime), r.options.startupLatency)
 		return
 	}
 	entry := r.MaxCheckpoint()
@@ -858,6 +860,9 @@ func (r *runner) fillDefaults() {
 	}
 	if r.options.checkpointSize <= 0 {
 		r.options.checkpointSize = logtail.DefaultCheckpointSize
+	}
+	if r.options.startupLatency <= 0 {
+		r.options.startupLatency = time.Minute * 5
 	}
 }
 
