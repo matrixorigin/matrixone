@@ -113,12 +113,16 @@ func (s *singleObjPolicy) Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHo
 				return nil, TaskHostDN
 			}
 		}
-		return dnobjs, TaskHostDN
+		revisedObjs := make([]*catalog.ObjectEntry, len(dnobjs))
+		copy(revisedObjs, dnobjs)
+		return revisedObjs, TaskHostDN
 	}
 
 	schedCN := func() ([]*catalog.ObjectEntry, TaskHostKind) {
 		cnobjs := s.controlMem(s.objects, int64(common.RuntimeCNMergeMemControl.Load()))
-		return cnobjs, TaskHostCN
+		revisedObjs := make([]*catalog.ObjectEntry, len(cnobjs))
+		copy(revisedObjs, cnobjs)
+		return revisedObjs, TaskHostDN
 	}
 
 	if isStandalone && mergeOnDNIfStandalone {

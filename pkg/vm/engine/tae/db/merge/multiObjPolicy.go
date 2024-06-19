@@ -96,7 +96,7 @@ func (m *multiObjPolicy) Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHos
 			break
 		}
 	}
-	if set.size < 20*common.Const1MBytes {
+	if set.size < 20*common.Const1MBytes && set.rows < 10000 {
 		return nil, TaskHostDN
 	}
 	if len(set.entries) > m.config.maxObjs {
@@ -124,17 +124,20 @@ type entrySet struct {
 	entries  []*catalog.ObjectEntry
 	maxValue any
 	size     int
+	rows     int
 }
 
 func (s *entrySet) reset(t types.T) {
 	s.entries = s.entries[:0]
 	s.maxValue = minValue(t)
 	s.size = 0
+	s.rows = 0
 }
 
 func (s *entrySet) add(t types.T, obj *catalog.ObjectEntry) {
 	s.entries = append(s.entries, obj)
 	s.size += obj.GetOriginSize()
+	s.rows += obj.GetRemainingRows()
 	zmMax := obj.GetSortKeyZonemap().GetMax()
 	if compute.CompareGeneric(s.maxValue, zmMax, t) < 0 {
 		s.maxValue = zmMax
