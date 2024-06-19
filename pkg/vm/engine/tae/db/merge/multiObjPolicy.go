@@ -60,7 +60,7 @@ func (m *multiObjPolicy) OnObject(obj *catalog.ObjectEntry) {
 }
 
 func (m *multiObjPolicy) Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind) {
-	if len(m.objects) < 2 {
+	if len(m.objects) < 2 || cpu > 90 {
 		return nil, TaskHostDN
 	}
 	if !m.objects[0].GetSortKeyZonemap().IsInited() {
