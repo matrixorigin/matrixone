@@ -1121,7 +1121,7 @@ func constructValueScanBatch(ctx context.Context, proc *process.Process, node *p
 	var nodeId uuid.UUID
 	var exprList []colexec.ExpressionExecutor
 
-	if node == nil || node.TableDef == nil { // like : select 1, 2
+	if node.RowsetData == nil { // select 1,2
 		bat := batch.NewWithSize(1)
 		bat.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 1, proc.Mp())
 		bat.SetRowCount(1)
@@ -1187,11 +1187,11 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 	n := ns[curNodeIdx]
 	switch n.NodeType {
 	case plan.Node_VALUE_SCAN:
-		ds := newScope(Normal)
-		ds.DataSource = &Source{isConst: true, node: n}
-		ds.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
-		ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
-		ss = c.compileSort(n, c.compileProjection(n, []*Scope{ds}))
+		ss, err = c.compileValueScan(n)
+		if err != nil {
+			return nil, err
+		}
+		ss = c.compileSort(n, c.compileProjection(n, ss))
 		return ss, nil
 	case plan.Node_EXTERNAL_SCAN:
 		if n.ObjRef != nil {
@@ -2016,7 +2016,13 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 
 	if len(fileList) == 0 {
 		ret := newScope(Normal)
-		ret.DataSource = nil
+		ret.DataSource = &Source{isConst: true, node: n}
+		ret.appendInstruction(vm.Instruction{
+			Op:      vm.ValueScan,
+			Idx:     c.anal.curr,
+			IsFirst: c.anal.isFirst,
+			Arg:     constructValueScan(),
+		})
 		ret.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
 
 		return []*Scope{ret}, nil
@@ -2190,6 +2196,22 @@ func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) []*Scope {
 	c.anal.isFirst = false
 
 	return ss
+}
+
+func (c *Compile) compileValueScan(n *plan.Node) ([]*Scope, error) {
+	ds := newScope(Normal)
+	ds.DataSource = &Source{isConst: true, node: n}
+	ds.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
+	ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
+
+	ds.appendInstruction(vm.Instruction{
+		Op:      vm.ValueScan,
+		Idx:     c.anal.curr,
+		IsFirst: c.anal.isFirst,
+		Arg:     constructValueScan(),
+	})
+
+	return []*Scope{ds}, nil
 }
 
 func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
