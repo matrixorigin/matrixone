@@ -107,7 +107,7 @@ func (s *Scope) initDataSource(c *Compile) (err error) {
 			return
 		}
 
-		if s.Instructions[0].Op == vm.ValueScan {
+		if len(s.Instructions) > 0 && s.Instructions[0].Op == vm.ValueScan {
 			if s.DataSource.node.NodeType == plan.Node_VALUE_SCAN {
 				bat, err := constructValueScanBatch(s.Proc.Ctx, c.proc, s.DataSource.node)
 				if err != nil {
