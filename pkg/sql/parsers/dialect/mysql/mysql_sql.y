@@ -623,7 +623,7 @@ import (
 %type <str> non_reserved_keyword
 %type <str> equal_opt column_keyword_opt
 %type <str> as_opt_id name_string
-%type <cstr> ident as_name_opt db_name_cstr
+%type <cstr> ident as_name_opt db_name_ident
 %type <str> table_alias explain_sym prepare_sym deallocate_sym stmt_name reset_sym
 %type <unresolvedObjectName> unresolved_object_name table_column_name
 %type <unresolvedObjectName> table_name_unresolved
@@ -1000,7 +1000,7 @@ snapshot_restore_stmt:
     {
         $$ = &tree.RestoreSnapShot{
             Level: tree.RESTORELEVELCLUSTER,
-            SnapShotName: tree.Identifier($5.ToLower()),
+            SnapShotName: tree.Identifier($5.Compare()),
         }
 
     }
@@ -1008,57 +1008,57 @@ snapshot_restore_stmt:
     {
         $$ = &tree.RestoreSnapShot{
             Level: tree.RESTORELEVELACCOUNT,
-            AccountName:tree.Identifier($3.ToLower()),
-            SnapShotName:tree.Identifier($6.ToLower()),
+            AccountName:tree.Identifier($3.Compare()),
+            SnapShotName:tree.Identifier($6.Compare()),
         }
     }
 |   RESTORE ACCOUNT ident DATABASE ident FROM SNAPSHOT ident
     {
         $$ = &tree.RestoreSnapShot{
             Level: tree.RESTORELEVELDATABASE,
-            AccountName: tree.Identifier($3.ToLower()),
-            DatabaseName: tree.Identifier($5.ToLower()),
-            SnapShotName: tree.Identifier($8.ToLower()),
+            AccountName: tree.Identifier($3.Compare()),
+            DatabaseName: tree.Identifier($5.Compare()),
+            SnapShotName: tree.Identifier($8.Compare()),
         }
     }
 |   RESTORE ACCOUNT ident DATABASE ident TABLE ident FROM SNAPSHOT ident
     {
         $$ = &tree.RestoreSnapShot{
             Level: tree.RESTORELEVELTABLE,
-            AccountName: tree.Identifier($3.ToLower()),
-            DatabaseName: tree.Identifier($5.ToLower()),
-            TableName: tree.Identifier($7.ToLower()),
-            SnapShotName: tree.Identifier($10.ToLower()),
+            AccountName: tree.Identifier($3.Compare()),
+            DatabaseName: tree.Identifier($5.Compare()),
+            TableName: tree.Identifier($7.Compare()),
+            SnapShotName: tree.Identifier($10.Compare()),
         }
     }
 |   RESTORE ACCOUNT ident FROM SNAPSHOT ident TO ACCOUNT ident
     {
         $$ = &tree.RestoreSnapShot{ 
             Level: tree.RESTORELEVELACCOUNT,
-            AccountName:tree.Identifier($3.ToLower()),
-            SnapShotName:tree.Identifier($6.ToLower()),
-            ToAccountName: tree.Identifier($9.ToLower()),
+            AccountName:tree.Identifier($3.Compare()),
+            SnapShotName:tree.Identifier($6.Compare()),
+            ToAccountName: tree.Identifier($9.Compare()),
         }
     }
 |   RESTORE ACCOUNT ident DATABASE ident FROM SNAPSHOT ident TO ACCOUNT ident
     {
         $$ = &tree.RestoreSnapShot{
             Level: tree.RESTORELEVELDATABASE,
-            AccountName: tree.Identifier($3.ToLower()),
-            DatabaseName: tree.Identifier($5.ToLower()),
-            SnapShotName: tree.Identifier($8.ToLower()),
-            ToAccountName: tree.Identifier($11.ToLower()),
+            AccountName: tree.Identifier($3.Compare()),
+            DatabaseName: tree.Identifier($5.Compare()),
+            SnapShotName: tree.Identifier($8.Compare()),
+            ToAccountName: tree.Identifier($11.Compare()),
         }
     }
 |   RESTORE ACCOUNT ident DATABASE ident TABLE ident FROM SNAPSHOT ident TO ACCOUNT ident
     {
         $$ = &tree.RestoreSnapShot{
             Level: tree.RESTORELEVELTABLE,
-            AccountName: tree.Identifier($3.ToLower()),
-            DatabaseName: tree.Identifier($5.ToLower()),
-            TableName: tree.Identifier($7.ToLower()),
-            SnapShotName: tree.Identifier($10.ToLower()),
-            ToAccountName: tree.Identifier($13.ToLower()),
+            AccountName: tree.Identifier($3.Compare()),
+            DatabaseName: tree.Identifier($5.Compare()),
+            TableName: tree.Identifier($7.Compare()),
+            SnapShotName: tree.Identifier($10.Compare()),
+            ToAccountName: tree.Identifier($13.Compare()),
         }
     }
 
@@ -1132,7 +1132,7 @@ leave_stmt:
     LEAVE ident
     {
         $$ = &tree.LeaveStmt{
-            Name: tree.Identifier($2.ToLower()),
+            Name: tree.Identifier($2.Compare()),
         }
     }
 
@@ -1140,7 +1140,7 @@ iterate_stmt:
     ITERATE ident
     {
         $$ = &tree.IterateStmt{
-            Name: tree.Identifier($2.ToLower()),
+            Name: tree.Identifier($2.Compare()),
         }
     }
 
@@ -1156,7 +1156,7 @@ while_stmt:
 |   ident ':' WHILE expression DO stmt_list_return END WHILE ident
     {
         $$ = &tree.WhileStmt{
-            Name: tree.Identifier($1.ToLower()),
+            Name: tree.Identifier($1.Compare()),
             Cond: $4,
             Body: $6,
         }
@@ -1174,7 +1174,7 @@ repeat_stmt:
 |    ident ':' REPEAT stmt_list_return UNTIL expression END REPEAT ident
     {
         $$ = &tree.RepeatStmt{
-            Name: tree.Identifier($1.ToLower()),
+            Name: tree.Identifier($1.Compare()),
             Body: $4,
             Cond: $6,
         }
@@ -1191,7 +1191,7 @@ loop_stmt:
 |   ident ':' LOOP stmt_list_return END LOOP ident
     {
         $$ = &tree.LoopStmt{
-            Name: tree.Identifier($1.ToLower()),
+            Name: tree.Identifier($1.Compare()),
             Body: $4,
         }
     }
@@ -2527,7 +2527,7 @@ begin_stmt:
     }
 
 use_stmt:
-    USE db_name_cstr
+    USE db_name_ident
     {
         name := $2
         secondaryRole := false
@@ -5821,12 +5821,12 @@ proc_name:
     ident
     {
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        $$ = tree.NewProcedureName(tree.Identifier($1.ToLower()), prefix)
+        $$ = tree.NewProcedureName(tree.Identifier($1.Compare()), prefix)
     }
 |   ident '.' ident
     {
-        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.ToLower()), ExplicitSchema: true}
-        $$ = tree.NewProcedureName(tree.Identifier($3.ToLower()), prefix)
+        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier(yylex.(*Lexer).GetTblName("", $1.Origin())), ExplicitSchema: true}
+        $$ = tree.NewProcedureName(tree.Identifier($3.Compare()), prefix)
     }
 
 proc_args_list_opt:
@@ -8556,7 +8556,7 @@ ident:
     	$$ = tree.NewCStr($1, 1)
     }
 
-db_name_cstr:
+db_name_ident:
     ident
     {
     	$$ = yylex.(*Lexer).GetDbNameCStr($1.Origin())

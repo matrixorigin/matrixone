@@ -493,6 +493,11 @@ func TestSingleTableSQLBuilder(t *testing.T) {
 		"select * from (values row(1,1), row(2,2), row(3,3)) a (c1, c2)",
 		"prepare stmt1 from select * from nation where n_name like ? or n_nationkey > 10 order by 2 limit '10' for update",
 	}
+
+	sqls = []string{
+		"values row(1,1), row(2,2), row(3,3) order by column_0 limit 2",
+		//"select * from (values row(1,1), row(2,2), row(3,3)) a (c1, c2)",
+	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
 	// should error

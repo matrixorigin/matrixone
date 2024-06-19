@@ -9932,7 +9932,7 @@ yydefault:
 		{
 			yyLOCAL = &tree.RestoreSnapShot{
 				Level:        tree.RESTORELEVELCLUSTER,
-				SnapShotName: tree.Identifier(yyDollar[5].cstrUnion().ToLower()),
+				SnapShotName: tree.Identifier(yyDollar[5].cstrUnion().Compare()),
 			}
 
 		}
@@ -9944,8 +9944,8 @@ yydefault:
 		{
 			yyLOCAL = &tree.RestoreSnapShot{
 				Level:        tree.RESTORELEVELACCOUNT,
-				AccountName:  tree.Identifier(yyDollar[3].cstrUnion().ToLower()),
-				SnapShotName: tree.Identifier(yyDollar[6].cstrUnion().ToLower()),
+				AccountName:  tree.Identifier(yyDollar[3].cstrUnion().Compare()),
+				SnapShotName: tree.Identifier(yyDollar[6].cstrUnion().Compare()),
 			}
 		}
 		yyVAL.union = yyLOCAL
@@ -9956,9 +9956,9 @@ yydefault:
 		{
 			yyLOCAL = &tree.RestoreSnapShot{
 				Level:        tree.RESTORELEVELDATABASE,
-				AccountName:  tree.Identifier(yyDollar[3].cstrUnion().ToLower()),
-				DatabaseName: tree.Identifier(yyDollar[5].cstrUnion().ToLower()),
-				SnapShotName: tree.Identifier(yyDollar[8].cstrUnion().ToLower()),
+				AccountName:  tree.Identifier(yyDollar[3].cstrUnion().Compare()),
+				DatabaseName: tree.Identifier(yyDollar[5].cstrUnion().Compare()),
+				SnapShotName: tree.Identifier(yyDollar[8].cstrUnion().Compare()),
 			}
 		}
 		yyVAL.union = yyLOCAL
@@ -9969,10 +9969,10 @@ yydefault:
 		{
 			yyLOCAL = &tree.RestoreSnapShot{
 				Level:        tree.RESTORELEVELTABLE,
-				AccountName:  tree.Identifier(yyDollar[3].cstrUnion().ToLower()),
-				DatabaseName: tree.Identifier(yyDollar[5].cstrUnion().ToLower()),
-				TableName:    tree.Identifier(yyDollar[7].cstrUnion().ToLower()),
-				SnapShotName: tree.Identifier(yyDollar[10].cstrUnion().ToLower()),
+				AccountName:  tree.Identifier(yyDollar[3].cstrUnion().Compare()),
+				DatabaseName: tree.Identifier(yyDollar[5].cstrUnion().Compare()),
+				TableName:    tree.Identifier(yyDollar[7].cstrUnion().Compare()),
+				SnapShotName: tree.Identifier(yyDollar[10].cstrUnion().Compare()),
 			}
 		}
 		yyVAL.union = yyLOCAL
@@ -9983,9 +9983,9 @@ yydefault:
 		{
 			yyLOCAL = &tree.RestoreSnapShot{
 				Level:         tree.RESTORELEVELACCOUNT,
-				AccountName:   tree.Identifier(yyDollar[3].cstrUnion().ToLower()),
-				SnapShotName:  tree.Identifier(yyDollar[6].cstrUnion().ToLower()),
-				ToAccountName: tree.Identifier(yyDollar[9].cstrUnion().ToLower()),
+				AccountName:   tree.Identifier(yyDollar[3].cstrUnion().Compare()),
+				SnapShotName:  tree.Identifier(yyDollar[6].cstrUnion().Compare()),
+				ToAccountName: tree.Identifier(yyDollar[9].cstrUnion().Compare()),
 			}
 		}
 		yyVAL.union = yyLOCAL
@@ -9996,10 +9996,10 @@ yydefault:
 		{
 			yyLOCAL = &tree.RestoreSnapShot{
 				Level:         tree.RESTORELEVELDATABASE,
-				AccountName:   tree.Identifier(yyDollar[3].cstrUnion().ToLower()),
-				DatabaseName:  tree.Identifier(yyDollar[5].cstrUnion().ToLower()),
-				SnapShotName:  tree.Identifier(yyDollar[8].cstrUnion().ToLower()),
-				ToAccountName: tree.Identifier(yyDollar[11].cstrUnion().ToLower()),
+				AccountName:   tree.Identifier(yyDollar[3].cstrUnion().Compare()),
+				DatabaseName:  tree.Identifier(yyDollar[5].cstrUnion().Compare()),
+				SnapShotName:  tree.Identifier(yyDollar[8].cstrUnion().Compare()),
+				ToAccountName: tree.Identifier(yyDollar[11].cstrUnion().Compare()),
 			}
 		}
 		yyVAL.union = yyLOCAL
@@ -10010,11 +10010,11 @@ yydefault:
 		{
 			yyLOCAL = &tree.RestoreSnapShot{
 				Level:         tree.RESTORELEVELTABLE,
-				AccountName:   tree.Identifier(yyDollar[3].cstrUnion().ToLower()),
-				DatabaseName:  tree.Identifier(yyDollar[5].cstrUnion().ToLower()),
-				TableName:     tree.Identifier(yyDollar[7].cstrUnion().ToLower()),
-				SnapShotName:  tree.Identifier(yyDollar[10].cstrUnion().ToLower()),
-				ToAccountName: tree.Identifier(yyDollar[13].cstrUnion().ToLower()),
+				AccountName:   tree.Identifier(yyDollar[3].cstrUnion().Compare()),
+				DatabaseName:  tree.Identifier(yyDollar[5].cstrUnion().Compare()),
+				TableName:     tree.Identifier(yyDollar[7].cstrUnion().Compare()),
+				SnapShotName:  tree.Identifier(yyDollar[10].cstrUnion().Compare()),
+				ToAccountName: tree.Identifier(yyDollar[13].cstrUnion().Compare()),
 			}
 		}
 		yyVAL.union = yyLOCAL
@@ -10111,7 +10111,7 @@ yydefault:
 //line mysql_sql.y:1133
 		{
 			yyLOCAL = &tree.LeaveStmt{
-				Name: tree.Identifier(yyDollar[2].cstrUnion().ToLower()),
+				Name: tree.Identifier(yyDollar[2].cstrUnion().Compare()),
 			}
 		}
 		yyVAL.union = yyLOCAL
@@ -10121,7 +10121,7 @@ yydefault:
 //line mysql_sql.y:1141
 		{
 			yyLOCAL = &tree.IterateStmt{
-				Name: tree.Identifier(yyDollar[2].cstrUnion().ToLower()),
+				Name: tree.Identifier(yyDollar[2].cstrUnion().Compare()),
 			}
 		}
 		yyVAL.union = yyLOCAL
@@ -10143,7 +10143,7 @@ yydefault:
 //line mysql_sql.y:1157
 		{
 			yyLOCAL = &tree.WhileStmt{
-				Name: tree.Identifier(yyDollar[1].cstrUnion().ToLower()),
+				Name: tree.Identifier(yyDollar[1].cstrUnion().Compare()),
 				Cond: yyDollar[4].exprUnion(),
 				Body: yyDollar[6].statementsUnion(),
 			}
@@ -10167,7 +10167,7 @@ yydefault:
 //line mysql_sql.y:1175
 		{
 			yyLOCAL = &tree.RepeatStmt{
-				Name: tree.Identifier(yyDollar[1].cstrUnion().ToLower()),
+				Name: tree.Identifier(yyDollar[1].cstrUnion().Compare()),
 				Body: yyDollar[4].statementsUnion(),
 				Cond: yyDollar[6].exprUnion(),
 			}
@@ -10190,7 +10190,7 @@ yydefault:
 //line mysql_sql.y:1192
 		{
 			yyLOCAL = &tree.LoopStmt{
-				Name: tree.Identifier(yyDollar[1].cstrUnion().ToLower()),
+				Name: tree.Identifier(yyDollar[1].cstrUnion().Compare()),
 				Body: yyDollar[4].statementsUnion(),
 			}
 		}
@@ -16640,7 +16640,7 @@ yydefault:
 //line mysql_sql.y:5822
 		{
 			prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-			yyLOCAL = tree.NewProcedureName(tree.Identifier(yyDollar[1].cstrUnion().ToLower()), prefix)
+			yyLOCAL = tree.NewProcedureName(tree.Identifier(yyDollar[1].cstrUnion().Compare()), prefix)
 		}
 		yyVAL.union = yyLOCAL
 	case 916:
@@ -16648,8 +16648,8 @@ yydefault:
 		var yyLOCAL *tree.ProcedureName
 //line mysql_sql.y:5827
 		{
-			prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier(yyDollar[1].cstrUnion().ToLower()), ExplicitSchema: true}
-			yyLOCAL = tree.NewProcedureName(tree.Identifier(yyDollar[3].cstrUnion().ToLower()), prefix)
+			prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier(yylex.(*Lexer).GetTblName("", yyDollar[1].cstrUnion().Origin())), ExplicitSchema: true}
+			yyLOCAL = tree.NewProcedureName(tree.Identifier(yyDollar[3].cstrUnion().Compare()), prefix)
 		}
 		yyVAL.union = yyLOCAL
 	case 917:

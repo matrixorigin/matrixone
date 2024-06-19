@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"go/constant"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -2188,10 +2189,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			proc.SetValueScanBatch(nodeUUID, bat)
 		}
 
-		err = builder.addBinding(nodeID, tree.AliasClause{
-			Alias: "_ValueScan",
-		}, ctx)
-		if err != nil {
+		if err = builder.addBinding(nodeID, tree.AliasClause{Alias: "_valuescan"}, ctx); err != nil {
 			return 0, err
 		}
 	} else {
@@ -2315,7 +2313,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			builder.nameByColRef[[2]int32{ctx.projectTag, int32(i)}] = tree.String(selectList[i].Expr, dialect.MYSQL)
 
 			if selectList[i].As != nil && !selectList[i].As.Empty() {
-				ctx.aliasMap[selectList[i].As.ToLower()] = &aliasItem{
+				ctx.aliasMap[selectList[i].As.Compare()] = &aliasItem{
 					idx:     int32(i),
 					astExpr: selectList[i].Expr,
 				}
@@ -3730,7 +3728,20 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 	var defaultVals []string
 	var binding *Binding
 	var table string
-	if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_MATERIAL_SCAN || node.NodeType == plan.Node_EXTERNAL_SCAN || node.NodeType == plan.Node_FUNCTION_SCAN || node.NodeType == plan.Node_VALUE_SCAN || node.NodeType == plan.Node_SINK_SCAN || node.NodeType == plan.Node_RECURSIVE_SCAN || node.NodeType == plan.Node_SOURCE_SCAN {
+
+	scanNodes := []plan.Node_NodeType{
+		plan.Node_TABLE_SCAN,
+		plan.Node_MATERIAL_SCAN,
+		plan.Node_EXTERNAL_SCAN,
+		plan.Node_FUNCTION_SCAN,
+		plan.Node_VALUE_SCAN,
+		plan.Node_SINK_SCAN,
+		plan.Node_RECURSIVE_SCAN,
+		plan.Node_SOURCE_SCAN,
+	}
+	//lower := builder.compCtx.GetLowerCaseTableNames()
+
+	if slices.Contains(scanNodes, node.NodeType) {
 		if (node.NodeType == plan.Node_VALUE_SCAN || node.NodeType == plan.Node_SINK_SCAN || node.NodeType == plan.Node_RECURSIVE_SCAN) && node.TableDef == nil {
 			return nil
 		}

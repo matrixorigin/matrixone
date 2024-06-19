@@ -18,9 +18,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_Function(t *testing.T) {

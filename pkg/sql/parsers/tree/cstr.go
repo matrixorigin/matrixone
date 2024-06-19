@@ -37,10 +37,6 @@ func NewCStr(str string, lower int64) *CStr {
 	return cs
 }
 
-func (cs *CStr) ToLower() string {
-	return strings.ToLower(cs.o)
-}
-
 func (cs *CStr) Origin() string {
 	return cs.o
 }

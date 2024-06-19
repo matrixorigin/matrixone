@@ -25,7 +25,6 @@ import (
 )
 
 func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
-
 	bc := &BindContext{
 		groupByAst:     make(map[string]int32),
 		aggregateByAst: make(map[string]int32),
@@ -37,9 +36,14 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 		bindingByTag:   make(map[int32]*Binding),
 		bindingByTable: make(map[string]*Binding),
 		bindingByCol:   make(map[string]*Binding),
-		lower:          builder.compCtx.GetLowerCaseTableNames(),
+		lower:          1,
 		parent:         parent,
 	}
+
+	if builder != nil {
+		bc.lower = builder.compCtx.GetLowerCaseTableNames()
+	}
+
 	if parent != nil {
 		bc.defaultDatabase = parent.defaultDatabase
 		bc.normalCTE = parent.normalCTE

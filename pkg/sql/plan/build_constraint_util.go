@@ -1107,12 +1107,10 @@ func buildValueScan(
 		proc.SetValueScanBatch(nodeId, bat)
 	}
 	info.rootId = builder.appendNode(scanNode, bindCtx)
-	err = builder.addBinding(info.rootId, tree.AliasClause{
-		Alias: "_ValueScan",
-	}, bindCtx)
-	if err != nil {
+	if err = builder.addBinding(info.rootId, tree.AliasClause{Alias: "_valuescan"}, bindCtx); err != nil {
 		return err
 	}
+
 	lastTag = builder.genNewTag()
 	info.rootId = builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_PROJECT,
