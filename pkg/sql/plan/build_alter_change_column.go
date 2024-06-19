@@ -16,13 +16,14 @@ package plan
 
 import (
 	"context"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	"strings"
 )
 
 // ChangeColumn Can rename a column and change its definition, or both. Has more capability than MODIFY or RENAME COLUMN,
@@ -32,16 +33,16 @@ func ChangeColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 	tableDef := alterPlan.CopyTableDef
 
 	// get the original column name
-	originalColName := spec.OldColumnName.Parts[0]
+	originalColName := spec.OldColumnName.ColName()
 
 	specNewColumn := spec.NewColumn
 	// get the new column name
-	newColName := specNewColumn.Name.Parts[0]
+	newColName := specNewColumn.Name.ColName()
 
 	// Check whether original column has existed.
 	col := FindColumn(tableDef.Cols, originalColName)
 	if col == nil || col.Hidden {
-		return moerr.NewBadFieldError(ctx.GetContext(), originalColName, alterPlan.TableDef.Name)
+		return moerr.NewBadFieldError(ctx.GetContext(), spec.OldColumnName.ColNameOrigin(), alterPlan.TableDef.Name)
 	}
 
 	if isColumnWithPartition(col.Name, tableDef.Partition) {
@@ -108,7 +109,7 @@ func ChangeColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 // buildChangeColumnAndConstraint Build the changed new column definition, and check its column level integrity constraints,
 // and check other table level constraints, such as primary keys, indexes, etc
 func buildChangeColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable, originalCol *ColDef, specNewColumn *tree.ColumnTableDef, colType plan.Type) (*ColDef, error) {
-	newColName := specNewColumn.Name.Parts[0]
+	newColName := specNewColumn.Name.ColName()
 	// Check if the new column name is valid and conflicts with internal hidden columns
 	err := CheckColumnNameValid(ctx.GetContext(), newColName)
 	if err != nil {
@@ -149,7 +150,7 @@ func buildChangeColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTa
 		case *tree.AttributeComment:
 			comment := attribute.CMT.String()
 			if getNumOfCharacters(comment) > maxLengthOfColumnComment {
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "comment for column '%s' is too long", specNewColumn.Name.Parts[0])
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "comment for column '%s' is too long", specNewColumn.Name.ColNameOrigin())
 			}
 			newCol.Comment = comment
 		case *tree.AttributeAutoIncrement:
@@ -210,7 +211,7 @@ func buildChangeColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTa
 		}
 	}
 	if auto_incr && hasDefaultValue {
-		return nil, moerr.NewErrInvalidDefault(ctx.GetContext(), specNewColumn.Name.Parts[0])
+		return nil, moerr.NewErrInvalidDefault(ctx.GetContext(), specNewColumn.Name.ColNameOrigin())
 	}
 	if !hasDefaultValue {
 		defaultValue, err := buildDefaultExpr(specNewColumn, colType, ctx.GetProcess())

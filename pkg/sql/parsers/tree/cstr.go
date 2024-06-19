@@ -20,7 +20,9 @@ import (
 
 type CStrParts [4]*CStr
 type CStr struct {
+	// user origin input
 	o string
+	// use for compare
 	c string
 	// quote bool
 }

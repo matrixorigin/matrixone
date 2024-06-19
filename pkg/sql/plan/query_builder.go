@@ -2161,14 +2161,9 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			}
 
 			colName := fmt.Sprintf("column_%d", i) // like MySQL
-			as := tree.NewCStr(colName, 0)
 			selectList = append(selectList, tree.SelectExpr{
-				Expr: &tree.UnresolvedName{
-					NumParts: 1,
-					Star:     false,
-					Parts:    [4]string{colName, "", "", ""},
-				},
-				As: as,
+				Expr: tree.NewUnresolvedColName(colName),
+				As:   tree.NewCStr(colName, ctx.lower),
 			})
 			ctx.headings = append(ctx.headings, colName)
 			tableDef.Cols[i] = &plan.ColDef{
@@ -2214,7 +2209,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			if ctx.initSelect {
 				clause.Exprs = append(clause.Exprs, makeZeroRecursiveLevel())
 			} else if ctx.recSelect {
-				clause.Exprs = append(clause.Exprs, makePlusRecursiveLevel(ctx.cteName))
+				clause.Exprs = append(clause.Exprs, makePlusRecursiveLevel(ctx.cteName, ctx.lower))
 			}
 		}
 		// unfold stars and generate headings
@@ -2256,8 +2251,12 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 
 		if !ctx.isTryBindingCTE && ctx.recSelect {
 			f := &tree.FuncExpr{
-				Func:  tree.FuncName2ResolvableFunctionReference(tree.SetUnresolvedName(moCheckRecursionLevelFun)),
-				Exprs: tree.Exprs{tree.NewComparisonExpr(tree.LESS_THAN, tree.SetUnresolvedName(ctx.cteName, moRecursiveLevelCol), tree.NewNumValWithType(constant.MakeInt64(moDefaultRecursionMax), fmt.Sprintf("%d", moDefaultRecursionMax), false, tree.P_int64))},
+				Func: tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName(moCheckRecursionLevelFun)),
+				Exprs: tree.Exprs{tree.NewComparisonExpr(
+					tree.LESS_THAN,
+					tree.NewUnresolvedName(tree.NewCStr(ctx.cteName, ctx.lower), tree.NewCStr(moRecursiveLevelCol, 1)),
+					tree.NewNumValWithType(constant.MakeInt64(moDefaultRecursionMax), fmt.Sprintf("%d", moDefaultRecursionMax), false, tree.P_int64),
+				)},
 			}
 			if clause.Where != nil {
 				clause.Where = &tree.Where{Type: tree.AstWhere, Expr: tree.NewAndExpr(clause.Where.Expr, f)}
@@ -2399,15 +2398,15 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			return 0, err
 		}
 		r := col.(*tree.UnresolvedName)
-		table := r.Parts[1]
-		schema := ctx.defaultDatabase
-		if len(r.Parts[2]) > 0 {
-			schema = r.Parts[2]
+		table := r.TblName()
+		schema := r.DbName()
+		if len(schema) == 0 {
+			schema = ctx.defaultDatabase
 		}
 
 		// snapshot to fix
 		pk := builder.compCtx.GetPrimaryKeyDef(schema, table, Snapshot{TS: &timestamp.Timestamp{}})
-		if len(pk) > 1 || pk[0].Name != r.Parts[0] {
+		if len(pk) > 1 || pk[0].Name != r.ColName() {
 			return 0, moerr.NewNotSupported(builder.GetContext(), "%s is not primary key in time window", tree.String(col, dialect.MYSQL))
 		}
 		h.insideAgg = true
@@ -2424,7 +2423,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			Flag: plan.OrderBySpec_INTERNAL | plan.OrderBySpec_ASC | plan.OrderBySpec_NULLS_FIRST,
 		}
 
-		name := tree.SetUnresolvedName("interval")
+		name := tree.NewUnresolvedColName("interval")
 		arg2 := tree.NewNumValWithType(constant.MakeString(astTimeWindow.Interval.Unit), astTimeWindow.Interval.Unit, false, tree.P_char)
 		itr := &tree.FuncExpr{
 			Func:  tree.FuncName2ResolvableFunctionReference(name),
@@ -2968,7 +2967,7 @@ func appendSelectList(
 
 		case *tree.UnresolvedName:
 			if expr.Star {
-				cols, names, err := ctx.unfoldStar(builder.GetContext(), expr.Parts[0], accountId == catalog.System_Account)
+				cols, names, err := ctx.unfoldStar(builder.GetContext(), expr.ColName(), accountId == catalog.System_Account)
 				if err != nil {
 					return nil, err
 				}
@@ -2977,10 +2976,8 @@ func appendSelectList(
 			} else {
 				if selectExpr.As != nil && !selectExpr.As.Empty() {
 					ctx.headings = append(ctx.headings, selectExpr.As.Origin())
-				} else if expr.CStrParts[0] != nil {
-					ctx.headings = append(ctx.headings, expr.CStrParts[0].Origin())
 				} else {
-					ctx.headings = append(ctx.headings, expr.Parts[0])
+					ctx.headings = append(ctx.headings, expr.ColNameOrigin())
 				}
 
 				newExpr, err := ctx.qualifyColumnNames(expr, NoAlias)
@@ -3684,10 +3681,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
 				} else if util.TableIsClusterTable(midNode.GetTableDef().GetTableType()) {
 					ctx.binder = NewWhereBinder(builder, ctx)
-					left := &tree.UnresolvedName{
-						NumParts: 1,
-						Parts:    tree.NameParts{util.GetClusterTableAttributeName()},
-					}
+					left := tree.NewUnresolvedColName(util.GetClusterTableAttributeName())
 					right := tree.NewNumVal(constant.MakeUint64(uint64(currentAccountID)), strconv.Itoa(int(currentAccountID)), false)
 					right.ValType = tree.P_uint64
 					//account_id = the accountId of the non-sys account

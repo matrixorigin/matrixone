@@ -32,20 +32,19 @@ func ModifyColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 	tableDef := alterPlan.CopyTableDef
 
 	specNewColumn := spec.NewColumn
-	originalColName := specNewColumn.Name.Parts[0]
+	colName := specNewColumn.Name.ColName()
 
 	// Check whether added column has existed.
-	colName := specNewColumn.Name.Parts[0]
-	col := FindColumn(tableDef.Cols, originalColName)
+	col := FindColumn(tableDef.Cols, colName)
 	if col == nil || col.Hidden {
-		return moerr.NewBadFieldError(ctx.GetContext(), colName, alterPlan.TableDef.Name)
+		return moerr.NewBadFieldError(ctx.GetContext(), specNewColumn.Name.ColNameOrigin(), alterPlan.TableDef.Name)
 	}
 
 	colType, err := getTypeFromAst(ctx.GetContext(), specNewColumn.Type)
 	if err != nil {
 		return err
 	}
-	if err = checkAddColumnType(ctx.GetContext(), &colType, specNewColumn.Name.Parts[0]); err != nil {
+	if err = checkAddColumnType(ctx.GetContext(), &colType, colName); err != nil {
 		return err
 	}
 

@@ -16,8 +16,9 @@ package tree
 
 import (
 	"fmt"
-	"github.com/stretchr/testify/require"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 )
@@ -40,20 +41,12 @@ func Test_Function(t *testing.T) {
 
 	// FunctionArg
 	arg1 := &FunctionArgDecl{
-		Name: &UnresolvedName{
-			NumParts: 1,
-			Star:     false,
-			Parts:    NameParts([]string{"a", "", "", ""}),
-		},
+		Name: NewUnresolvedColName("a"),
 		Type: intType,
 	}
 
 	arg2 := &FunctionArgDecl{
-		Name: &UnresolvedName{
-			NumParts: 1,
-			Star:     false,
-			Parts:    NameParts([]string{"b", "", "", ""}),
-		},
+		Name: NewUnresolvedColName("b"),
 		Type: intType,
 	}
 
