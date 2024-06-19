@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -76,6 +77,7 @@ type BasePKFilter struct {
 	op    int
 	lb    []byte
 	ub    []byte
+	vec   any
 	oid   types.T
 }
 
@@ -95,8 +97,8 @@ func (b *BasePKFilter) String() string {
 		function.PREFIX_IN:      "prefix_in",
 		function.PREFIX_BETWEEN: "prefix_between",
 	}
-	return fmt.Sprintf("valid = %v, op = %s, lb = %v, ub = %v, oid = %s",
-		b.valid, name[b.op], b.lb, b.ub, b.oid.String())
+	return fmt.Sprintf("valid = %v, op = %s, lb = %v, ub = %v, vec.type=%T, oid = %s",
+		b.valid, name[b.op], b.lb, b.ub, b.vec, b.oid.String())
 }
 
 func evalValue(exprImpl *plan.Expr_F, tblDef *plan.TableDef, isVec bool, pkName string, proc *process.Process) (
@@ -136,13 +138,236 @@ func evalValue(exprImpl *plan.Expr_F, tblDef *plan.TableDef, isVec bool, pkName 
 	return true, types.T(tblDef.Cols[colPos].Typ.Id), vals
 }
 
+func intersectionVector[T types.OrderedT | types.Decimal128](a, b []T, ret *vector.Vector, proc *process.Process, cmp func(x, y T) int) {
+	for i := range a {
+		idx := sort.Search(len(b), func(j int) bool {
+			return cmp(b[j], a[i]) >= 0
+		})
+		if idx >= len(b) {
+			break
+		}
+
+		if cmp(a[i], b[idx]) == 0 {
+			vector.AppendFixed[T](ret, a[i], false, proc.Mp())
+		}
+
+		b = b[idx:]
+	}
+}
+
+func unionVector[T types.OrderedT | types.Decimal128](a, b []T, ret *vector.Vector, proc *process.Process, cmp func(x, y T) int) {
+	var i, j int
+	var prevVal T
+	for i < len(a) && j < len(b) {
+		if cmp(a[i], b[j]) <= 0 {
+			if i == 0 || cmp(prevVal, a[i]) != 0 {
+				prevVal = a[i]
+				vector.AppendFixed(ret, a[i], false, proc.Mp())
+			}
+			i++
+		} else {
+			if j == 0 || cmp(prevVal, b[j]) != 0 {
+				prevVal = b[j]
+				vector.AppendFixed(ret, b[j], false, proc.Mp())
+			}
+			j++
+		}
+	}
+
+	for ; i < len(a); i++ {
+		if i == 0 || cmp(prevVal, a[i]) != 0 {
+			prevVal = a[i]
+			vector.AppendFixed(ret, a[i], false, proc.Mp())
+		}
+	}
+
+	for ; j < len(b); j++ {
+		if j == 0 || cmp(prevVal, b[j]) != 0 {
+			prevVal = b[j]
+			vector.AppendFixed(ret, b[j], false, proc.Mp())
+		}
+	}
+}
+
+func mergeBaseFilterInKind(left, right BasePKFilter, isOR bool, proc *process.Process) (ret BasePKFilter) {
+	va := vector.NewVec(types.T_any.ToType())
+	vb := vector.NewVec(types.T_any.ToType())
+	ret.vec = vector.NewVec(left.oid.ToType())
+
+	va.UnmarshalBinary(left.vec.([]byte))
+	vb.UnmarshalBinary(right.vec.([]byte))
+
+	switch va.GetType().Oid {
+	case types.T_int8:
+		a := vector.MustFixedCol[int8](va)
+		b := vector.MustFixedCol[int8](vb)
+		if isOR {
+			unionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y int8) int { return int(x - y) })
+		} else {
+			intersectionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y int8) int { return int(x - y) })
+		}
+	case types.T_int16:
+		a := vector.MustFixedCol[int16](va)
+		b := vector.MustFixedCol[int16](vb)
+		if isOR {
+			unionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y int16) int { return int(x - y) })
+		} else {
+			intersectionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y int16) int { return int(x - y) })
+		}
+	case types.T_int32:
+		a := vector.MustFixedCol[int32](va)
+		b := vector.MustFixedCol[int32](vb)
+		if isOR {
+			unionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y int32) int { return int(x - y) })
+		} else {
+			intersectionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y int32) int { return int(x - y) })
+		}
+	case types.T_int64:
+		a := vector.MustFixedCol[int64](va)
+		b := vector.MustFixedCol[int64](vb)
+		if isOR {
+			unionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y int64) int { return int(x - y) })
+		} else {
+			intersectionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y int64) int { return int(x - y) })
+		}
+	case types.T_float32:
+		a := vector.MustFixedCol[float32](va)
+		b := vector.MustFixedCol[float32](vb)
+		if isOR {
+			unionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y float32) int { return int(x - y) })
+		} else {
+			intersectionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y float32) int { return int(x - y) })
+		}
+	case types.T_float64:
+		a := vector.MustFixedCol[float64](va)
+		b := vector.MustFixedCol[float64](vb)
+		if isOR {
+			unionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y float64) int { return int(x - y) })
+		} else {
+			intersectionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y float64) int { return int(x - y) })
+		}
+	case types.T_uint8:
+		a := vector.MustFixedCol[uint8](va)
+		b := vector.MustFixedCol[uint8](vb)
+		if isOR {
+			unionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y uint8) int { return int(x - y) })
+		} else {
+			intersectionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y uint8) int { return int(x - y) })
+		}
+	case types.T_uint16:
+		a := vector.MustFixedCol[uint16](va)
+		b := vector.MustFixedCol[uint16](vb)
+		if isOR {
+			unionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y uint16) int { return int(x - y) })
+		} else {
+			intersectionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y uint16) int { return int(x - y) })
+		}
+	case types.T_uint32:
+		a := vector.MustFixedCol[uint32](va)
+		b := vector.MustFixedCol[uint32](vb)
+		if isOR {
+			unionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y uint32) int { return int(x - y) })
+		} else {
+			intersectionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y uint32) int { return int(x - y) })
+		}
+	case types.T_uint64:
+		a := vector.MustFixedCol[uint64](va)
+		b := vector.MustFixedCol[uint64](vb)
+		if isOR {
+			unionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y uint64) int { return int(x - y) })
+		} else {
+			intersectionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y uint64) int { return int(x - y) })
+		}
+	case types.T_date:
+		a := vector.MustFixedCol[types.Date](va)
+		b := vector.MustFixedCol[types.Date](vb)
+		if isOR {
+			unionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y types.Date) int { return int(x - y) })
+		} else {
+			intersectionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y types.Date) int { return int(x - y) })
+		}
+	case types.T_time:
+		a := vector.MustFixedCol[types.Time](va)
+		b := vector.MustFixedCol[types.Time](vb)
+		if isOR {
+			unionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y types.Time) int { return int(x - y) })
+		} else {
+			intersectionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y types.Time) int { return int(x - y) })
+		}
+	case types.T_datetime:
+		a := vector.MustFixedCol[types.Datetime](va)
+		b := vector.MustFixedCol[types.Datetime](vb)
+		if isOR {
+			unionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y types.Datetime) int { return int(x - y) })
+		} else {
+			intersectionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y types.Datetime) int { return int(x - y) })
+		}
+	case types.T_timestamp:
+		a := vector.MustFixedCol[types.Timestamp](va)
+		b := vector.MustFixedCol[types.Timestamp](vb)
+		if isOR {
+			unionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y types.Timestamp) int { return int(x - y) })
+		} else {
+			intersectionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y types.Timestamp) int { return int(x - y) })
+		}
+	case types.T_decimal64:
+		a := vector.MustFixedCol[types.Decimal64](va)
+		b := vector.MustFixedCol[types.Decimal64](vb)
+		if isOR {
+			unionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y types.Decimal64) int { return int(x - y) })
+		} else {
+			intersectionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y types.Decimal64) int { return int(x - y) })
+		}
+	case types.T_decimal128:
+		a := vector.MustFixedCol[types.Decimal128](va)
+		b := vector.MustFixedCol[types.Decimal128](vb)
+		if isOR {
+			unionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y types.Decimal128) int { return types.CompareDecimal128(x, y) })
+		} else {
+			intersectionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y types.Decimal128) int { return types.CompareDecimal128(x, y) })
+		}
+	case types.T_varchar, types.T_char:
+
+	case types.T_json:
+
+	case types.T_enum:
+		a := vector.MustFixedCol[types.Enum](va)
+		b := vector.MustFixedCol[types.Enum](vb)
+		if isOR {
+			unionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y types.Enum) int { return int(x - y) })
+		} else {
+			intersectionVector(a, b, ret.vec.(*vector.Vector), proc, func(x, y types.Enum) int { return int(x - y) })
+		}
+	default:
+		return BasePKFilter{}
+		//panic(basePKFilter.oid.String())
+	}
+
+	ret.valid = true
+	ret.op = left.op
+	ret.oid = left.oid
+
+	return ret
+}
+
 // left op in (">", ">=", "=", "<", "<="), right op in (">", ">=", "=", "<", "<=")
 // left op AND right op
 // left op OR right op
-func mergeFilters(left, right BasePKFilter, connector int) (finalFilter BasePKFilter) {
+func mergeFilters(left, right BasePKFilter, connector int, proc *process.Process) (finalFilter BasePKFilter) {
+	defer func() {
+		finalFilter.oid = left.oid
+	}()
+
 	switch connector {
 	case function.AND:
 		switch left.op {
+		case function.IN:
+			switch right.op {
+			case function.IN:
+				// a in (...) and a in (...)
+				finalFilter = mergeBaseFilterInKind(left, right, false, proc)
+			}
+
 		case function.GREAT_EQUAL:
 			switch right.op {
 			case function.GREAT_EQUAL, function.GREAT_THAN:
@@ -306,6 +531,13 @@ func mergeFilters(left, right BasePKFilter, connector int) (finalFilter BasePKFi
 
 	case function.OR:
 		switch left.op {
+		case function.IN:
+			switch right.op {
+			case function.IN:
+				// a in (...) and a in (...)
+				finalFilter = mergeBaseFilterInKind(left, right, true, proc)
+			}
+
 		case function.GREAT_EQUAL:
 			switch right.op {
 			case function.GREAT_EQUAL, function.GREAT_THAN:
@@ -497,31 +729,69 @@ func constructBasePKFilter(expr *plan.Expr, tblDef *plan.TableDef, proc *process
 	case *plan.Expr_F:
 		switch name := exprImpl.F.Func.ObjName; name {
 		case "and":
-			leftFilter := constructBasePKFilter(exprImpl.F.Args[0], tblDef, proc)
-			rightFilter := constructBasePKFilter(exprImpl.F.Args[1], tblDef, proc)
-
-			if !leftFilter.valid {
-				return rightFilter
+			filters := make([]BasePKFilter, len(exprImpl.F.Args))
+			for idx := range exprImpl.F.Args {
+				ff := constructBasePKFilter(exprImpl.F.Args[idx], tblDef, proc)
+				if ff.valid {
+					filters = append(filters, ff)
+				}
 			}
 
-			if !rightFilter.valid {
-				return leftFilter
-			}
-
-			filter = mergeFilters(leftFilter, rightFilter, function.AND)
-			filter.oid = leftFilter.oid
-
-		case "or":
-			leftFilter := constructBasePKFilter(exprImpl.F.Args[0], tblDef, proc)
-			rightFilter := constructBasePKFilter(exprImpl.F.Args[1], tblDef, proc)
-
-			if !leftFilter.valid || !rightFilter.valid {
+			if len(filters) == 0 {
 				return BasePKFilter{}
 			}
 
-			filter = mergeFilters(leftFilter, rightFilter, function.OR)
-			filter.oid = leftFilter.oid
+			for idx := 0; idx < len(filters)-1; {
+				f1 := filters[idx]
+				f2 := filters[idx+1]
+				ff := mergeFilters(f1, f2, function.AND, proc)
 
+				if !ff.valid {
+					return BasePKFilter{}
+				}
+
+				idx++
+				filters[idx] = ff
+			}
+
+			ret := filters[len(filters)-1]
+			return ret
+
+		case "or":
+			if strings.Contains(tblDef.Name, "t1") {
+				x := 0
+				x++
+			}
+
+			filters := make([]BasePKFilter, len(exprImpl.F.Args))
+			for idx := range exprImpl.F.Args {
+				ff := constructBasePKFilter(exprImpl.F.Args[idx], tblDef, proc)
+				if !ff.valid {
+					return BasePKFilter{}
+				}
+
+				filters = append(filters, ff)
+			}
+
+			if len(filters) == 0 {
+				return BasePKFilter{}
+			}
+
+			for idx := 0; idx < len(filters)-1; {
+				f1 := filters[idx]
+				f2 := filters[idx+1]
+				ff := mergeFilters(f1, f2, function.OR, proc)
+
+				if !ff.valid {
+					return BasePKFilter{}
+				}
+
+				idx++
+				filters[idx] = ff
+			}
+
+			ret := filters[len(filters)-1]
+			return ret
 		case ">=":
 			//a >= ?
 			ok, oid, vals := evalValue(exprImpl, tblDef, false, tblDef.Pkey.PkeyColName, proc)
@@ -594,7 +864,7 @@ func constructBasePKFilter(expr *plan.Expr, tblDef *plan.TableDef, proc *process
 			}
 			filter.valid = true
 			filter.op = function.IN
-			filter.lb = vals[0]
+			filter.vec = vals[0]
 			filter.oid = oid
 
 		case "prefix_in":
@@ -604,7 +874,7 @@ func constructBasePKFilter(expr *plan.Expr, tblDef *plan.TableDef, proc *process
 			}
 			filter.valid = true
 			filter.op = function.PREFIX_IN
-			filter.lb = vals[0]
+			filter.vec = vals[0]
 			filter.oid = oid
 
 		case "between":
@@ -780,9 +1050,14 @@ func constructInMemPKFilter(
 		inMemPKFilter.SetFullData(basePKFilter.op, false, packed...)
 
 	case function.IN, function.PREFIX_IN:
-		vec := vector.NewVec(types.T_any.ToType())
-		vec.UnmarshalBinary(basePKFilter.lb)
-		packed = logtailreplay.EncodePrimaryKeyVector(vec, packer)
+		if vec, ok := basePKFilter.vec.(*vector.Vector); ok {
+			packed = logtailreplay.EncodePrimaryKeyVector(vec, packer)
+		} else {
+			vec := vector.NewVec(types.T_any.ToType())
+			vec.UnmarshalBinary(basePKFilter.vec.([]byte))
+			packed = logtailreplay.EncodePrimaryKeyVector(vec, packer)
+		}
+
 		if basePKFilter.op == function.PREFIX_IN {
 			for x := range packed {
 				packed[x] = packed[x][0 : len(packed[x])-1]
