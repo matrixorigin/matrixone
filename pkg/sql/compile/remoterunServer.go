@@ -166,7 +166,11 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		return err
 
 	case pipeline.Method_PipelineMessage:
-		runCompile := receiver.newCompile()
+		runCompile, errBuildCompile := receiver.newCompile()
+		if errBuildCompile != nil {
+			return errBuildCompile
+		}
+
 		if cancel := colexec.Get().RecordRunningPipeline(receiver.clientSession, runCompile.proc); cancel {
 			runCompile.proc.Cancel()
 			return nil
@@ -353,15 +357,21 @@ func (receiver *messageReceiverOnServer) acquireMessage() (*pipeline.Message, er
 }
 
 // newCompile make and return a new compile to run a pipeline.
-func (receiver *messageReceiverOnServer) newCompile() *Compile {
+func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	// compile is almost surely wanting a small or middle pool.  Later.
 	mp, err := mpool.NewMPool("compile", 0, mpool.NoFixed)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	pHelper, cnInfo := receiver.procBuildHelper, receiver.cnInformation
 
-	runningCtx, runningCancel := context.WithCancel(receiver.connectionCtx)
+	// required deadline.
+	deadline, ok := receiver.messageCtx.Deadline()
+	if !ok {
+		return nil, moerr.NewInternalError(receiver.messageCtx, "message context need a deadline.")
+	}
+
+	runningCtx, runningCancel := context.WithDeadline(receiver.connectionCtx, deadline)
 	proc := process.New(
 		runningCtx,
 		mp,
@@ -401,10 +411,12 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, c.counterSet)
 	c.ctx = defines.AttachAccountId(c.proc.Ctx, pHelper.accountId)
 
+	// a method to send back.
 	c.fill = func(b *batch.Batch) error {
 		return receiver.sendBatch(b)
 	}
-	return c
+
+	return c, nil
 }
 
 func (receiver *messageReceiverOnServer) sendError(
