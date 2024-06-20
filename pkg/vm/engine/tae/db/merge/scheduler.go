@@ -79,7 +79,6 @@ func (m *Scheduler) OnTable(tableEntry *catalog.TableEntry) error {
 	if !tableEntry.IsCommittedLocked() {
 		return moerr.GetOkStopCurrRecur()
 	}
-	logutil.Infof("OnTable: %s", tableEntry.GetFullName())
 	m.resetForTable(tableEntry)
 	return nil
 }
