@@ -114,7 +114,7 @@ func CnServerMessageHandler(
 		//if err == nil {
 		//	<-receiver.connectionCtx.Done()
 		//}
-		colexec.Get().RemoveRunningPipeline(receiver.clientSession)
+		colexec.Get().RemoveRunningPipeline(receiver.clientSession, receiver.messageId)
 	}
 	return err
 }
@@ -127,7 +127,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		if err != nil || dispatchProc == nil {
 			return err
 		}
-		if cancel := colexec.Get().RecordRunningPipeline(receiver.clientSession, dispatchProc); cancel {
+		if cancel := colexec.Get().RecordRunningPipeline(receiver.clientSession, receiver.messageId, dispatchProc); cancel {
 			dispatchProc.Cancel()
 			return nil
 		}
@@ -175,7 +175,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 			return errBuildCompile
 		}
 
-		if cancel := colexec.Get().RecordRunningPipeline(receiver.clientSession, runCompile.proc); cancel {
+		if cancel := colexec.Get().RecordRunningPipeline(receiver.clientSession, receiver.messageId, runCompile.proc); cancel {
 			runCompile.proc.Cancel()
 			return nil
 		}
@@ -221,7 +221,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		return err
 
 	case pipeline.Method_StopSending:
-		colexec.Get().CancelRunningPipeline(receiver.clientSession)
+		colexec.Get().CancelRunningPipeline(receiver.clientSession, receiver.messageId)
 
 	default:
 		panic(fmt.Sprintf("unknown pipeline message type %d.", receiver.messageTyp))
