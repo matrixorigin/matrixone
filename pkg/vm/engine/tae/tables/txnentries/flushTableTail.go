@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"io"
 	"time"
 
@@ -131,7 +130,7 @@ func (entry *flushTableTailEntry) addTransferPages() {
 		}
 		id := entry.ablksHandles[i].Fingerprint()
 		entry.pageIds = append(entry.pageIds, id)
-		page := model.NewTransferHashPage(id, time.Now(), isTransient, entry.rt.Fs.Service, blockio.NewBlockRead())
+		page := model.NewTransferHashPage(id, time.Now(), isTransient, model.TransferHashPageParams{Fs: nil, Rd: nil})
 		for srcRow, dst := range m {
 			blkid := objectio.NewBlockidWithObjectID(entry.createdBlkHandles.GetID(), uint16(dst.BlkIdx))
 			page.Train(uint32(srcRow), *objectio.NewRowid(blkid, uint32(dst.RowIdx)))

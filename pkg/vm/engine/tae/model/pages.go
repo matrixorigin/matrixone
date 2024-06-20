@@ -36,25 +36,28 @@ type BlockRead interface {
 	LoadTableByBlock(loc objectio.Location, fs fileservice.FileService) (bat *batch.Batch, release func(), err error)
 }
 
+type TransferHashPageParams struct {
+	Fs fileservice.FileService
+	Rd BlockRead
+}
+
 type TransferHashPage struct {
 	common.RefHelper
 	bornTS      time.Time
 	id          *common.ID // not include blk offset
 	hashmap     map[uint32]types.Rowid
-	location    objectio.Location
-	fs          fileservice.FileService
-	rd          BlockRead
+	loc         objectio.Location
+	params      TransferHashPageParams
 	isTransient bool
 	isPersisted bool
 }
 
-func NewTransferHashPage(id *common.ID, ts time.Time, isTransient bool, fs fileservice.FileService, rd BlockRead) *TransferHashPage {
+func NewTransferHashPage(id *common.ID, ts time.Time, isTransient bool, params TransferHashPageParams) *TransferHashPage {
 	page := &TransferHashPage{
 		bornTS:      ts,
 		id:          id,
 		hashmap:     make(map[uint32]types.Rowid),
-		fs:          fs,
-		rd:          rd,
+		params:      params,
 		isTransient: isTransient,
 		isPersisted: false,
 	}
@@ -115,7 +118,7 @@ func (page *TransferHashPage) Train(from uint32, to types.Rowid) {
 func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) {
 	flag := page.isPersisted
 
-	if flag && page.location == nil {
+	if flag && page.loc == nil {
 		return types.Rowid{}, false
 	}
 
@@ -162,7 +165,7 @@ func (page *TransferHashPage) Unmarshal(data []byte) error {
 }
 
 func (page *TransferHashPage) SetLocation(location objectio.Location) {
-	page.location = location
+	page.loc = location
 }
 
 func (page *TransferHashPage) clearTable() {
@@ -172,15 +175,15 @@ func (page *TransferHashPage) clearTable() {
 }
 
 func (page *TransferHashPage) loadTable() {
-	logutil.Infof("transfer load persist table, objectname: %v", page.location.Name().String())
-	if page.location == nil {
+	logutil.Infof("transfer load persist table, objectname: %v", page.loc.Name().String())
+	if page.loc == nil {
 		return
 	}
 	page.isPersisted = false
 
 	var bat *batch.Batch
 	var release func()
-	bat, release, err := page.rd.LoadTableByBlock(page.location, page.fs)
+	bat, release, err := page.params.Rd.LoadTableByBlock(page.loc, page.params.Fs)
 	if err != nil {
 		return
 	}
@@ -197,10 +200,10 @@ func (page *TransferHashPage) loadTable() {
 }
 
 func (page *TransferHashPage) clearPersistTable() {
-	if page.location == nil {
+	if page.loc == nil {
 		return
 	}
-	logutil.Infof("transfer clear persist table, objectname: %v", page.location.Name().String())
-	page.fs.Delete(context.Background(), page.location.Name().String())
-	page.location = nil
+	logutil.Infof("transfer clear persist table, objectname: %v", page.loc.Name().String())
+	page.params.Fs.Delete(context.Background(), page.loc.Name().String())
+	page.loc = nil
 }
