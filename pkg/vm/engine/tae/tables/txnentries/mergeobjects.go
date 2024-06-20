@@ -97,6 +97,7 @@ func (entry *mergeObjectsEntry) prepareTransferPage() {
 	k := 0
 	for _, obj := range entry.droppedObjs {
 		name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+		var pages []*model.TransferHashPage
 		var writer *blockio.BlockWriter
 		writer, err := blockio.NewBlockWriterNew(entry.rt.Fs.Service, name, 0, nil)
 		for j := 0; j < obj.BlockCnt(); j++ {
@@ -123,11 +124,10 @@ func (entry *mergeObjectsEntry) prepareTransferPage() {
 			t := types.T_varchar.ToType()
 			vw := entry.rt.VectorPool.Transient.GetVector(&t)
 			v, releasev := vw.GetDownstreamVector(), vw.Close
+			defer releasev()
 			vectorRowCnt := 1
-			vector.AppendBytes(v, data, false, entry.rt.VectorPool.Transient.GetMPool())
-
+			err = vector.AppendBytes(v, data, false, entry.rt.VectorPool.Transient.GetMPool())
 			if err != nil {
-				releasev()
 				return
 			}
 
@@ -136,26 +136,29 @@ func (entry *mergeObjectsEntry) prepareTransferPage() {
 			bat.Vecs[0] = v
 			_, err = writer.WriteTombstoneBatch(bat)
 			if err != nil {
-				releasev()
 				return
 			}
-			var blocks []objectio.BlockObject
-			blocks, _, err = writer.Sync(context.Background())
-			releasev()
-			if err != nil {
-				return
-			}
-			location := blockio.EncodeLocation(
-				name,
-				blocks[k].GetExtent(),
-				uint32(vectorRowCnt),
-				blocks[k].GetID())
-			page.SetLocation(location)
 
 			entry.pageIds = append(entry.pageIds, id)
 			_ = entry.rt.TransferTable.AddPage(page)
-			go page.ClearTable()
+			pages = append(pages, page)
 			k++
+		}
+		var blocks []objectio.BlockObject
+		blocks, _, err = writer.Sync(context.Background())
+
+		if err != nil {
+			return
+		}
+
+		for i, blk := range blocks {
+			location := blockio.EncodeLocation(
+				name,
+				blk.GetExtent(),
+				uint32(1),
+				blk.GetID())
+			pages[i].SetLocation(location)
+			go pages[i].ClearTable()
 		}
 	}
 	if k != len(entry.transMappings.Mappings) {
