@@ -441,7 +441,7 @@ func (s *service) handleRequest(
 			s.aicm,
 			s.acquireMessage)
 		if err != nil {
-			logutil.Errorf("error occurred while handling the pipeline message, "+
+			logutil.Infof("error occurred while handling the pipeline message, "+
 				"msg is %v, error is %v",
 				req, err)
 		}
@@ -803,7 +803,10 @@ func (s *service) initInternalSQlExecutor(mp *mpool.MPool) {
 }
 
 func (s *service) initIncrService() {
-	store, err := incrservice.NewSQLStore(s.sqlExecutor)
+	store, err := incrservice.NewSQLStore(
+		s.sqlExecutor,
+		s.lockService,
+	)
 	if err != nil {
 		panic(err)
 	}
