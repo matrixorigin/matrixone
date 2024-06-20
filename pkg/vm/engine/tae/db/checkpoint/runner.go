@@ -1027,7 +1027,6 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 					stats.ResetDeadlineWithLock()
 				}
 			}
-			return
 		}()
 	}
 }
