@@ -26,6 +26,7 @@ import (
 	"github.com/elastic/gosigar/cgroup"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 )
 
 var (
@@ -170,6 +171,35 @@ func Run(stopper *stopper.Stopper) {
 		runWithContainer(stopper)
 	} else {
 		runWithoutContainer(stopper)
+	}
+	runSystemMonitor(stopper)
+}
+
+func runSystemMonitor(stopper *stopper.Stopper) {
+	err := stopper.RunTask(
+		func(ctx context.Context) {
+			ticker := time.NewTicker(time.Second)
+			defer ticker.Stop()
+
+			last := time.Now()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					interval := time.Since(last)
+					if interval > time.Second*2 {
+						logutil.Info("system is busy",
+							zap.String("expect", "1s"),
+							zap.Duration("actual", interval))
+					}
+					last = time.Now()
+				}
+			}
+		},
+	)
+	if err != nil {
+		panic(err)
 	}
 }
 
