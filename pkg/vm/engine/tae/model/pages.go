@@ -66,7 +66,7 @@ func NewTransferHashPage(id *common.ID, ts time.Time, isTransient bool, fs files
 	}(page)
 
 	go func(page *TransferHashPage) {
-		time.Sleep(20 * time.Second)
+		time.Sleep(10 * time.Minute)
 		page.clearPersistTable()
 	}(page)
 
@@ -116,7 +116,7 @@ func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) 
 	flag := page.isPersisted
 
 	if flag && page.location == nil {
-		return page.hashmap[from], false
+		return types.Rowid{}, false
 	}
 
 	if page.isPersisted {
@@ -125,9 +125,6 @@ func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) 
 	}
 
 	dest, ok = page.hashmap[from]
-	if flag {
-		logutil.Infof("taansfer after loadding table %v", ok)
-	}
 	return
 }
 
@@ -169,12 +166,16 @@ func (page *TransferHashPage) SetLocation(location objectio.Location) {
 }
 
 func (page *TransferHashPage) clearTable() {
-	logutil.Infof("transfer clear table loc %v", page.location)
+	logutil.Infof("transfer clear hash table")
 	clear(page.hashmap)
 	page.isPersisted = true
 }
 
 func (page *TransferHashPage) loadTable() {
+	logutil.Infof("transfer load persist table, objectname: %v", page.location.Name().String())
+	if page.location == nil {
+		return
+	}
 	page.isPersisted = false
 
 	var bat *batch.Batch
@@ -199,7 +200,7 @@ func (page *TransferHashPage) clearPersistTable() {
 	if page.location == nil {
 		return
 	}
-	logutil.Infof("tansfer clear persisted table loc %v", page.location)
+	logutil.Infof("transfer clear persist table, objectname: %v", page.location.Name().String())
 	page.fs.Delete(context.Background(), page.location.Name().String())
 	page.location = nil
 }
