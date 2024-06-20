@@ -965,7 +965,7 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 		ctx.WriteString(node.Type.ToString())
 		ctx.WriteByte(' ')
 	}
-	if node.Func.FunctionReference.(*UnresolvedName).Parts[0] == "trim" {
+	if node.Func.FunctionReference.(*UnresolvedName).ColName() == "trim" {
 		trimExprsFormat(ctx, node.Exprs)
 	} else {
 		node.Exprs.Format(ctx)

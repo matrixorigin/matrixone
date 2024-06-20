@@ -34,7 +34,7 @@ func AddPrimaryKey(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.P
 	primaryKeys := make([]string, 0)
 	pksMap := map[string]bool{}
 	for _, key := range spec.KeyParts {
-		colName := key.ColName.Parts[0] // name of primary key column
+		colName := key.ColName.ColName() // name of primary key column
 		col := FindColumn(tableDef.Cols, colName)
 		if col == nil {
 			return moerr.NewErrKeyColumnDoesNotExist(ctx.GetContext(), colName)
