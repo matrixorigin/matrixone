@@ -49,6 +49,20 @@ func (m *MockClientSession) EXPECT() *MockClientSessionMockRecorder {
 	return m.recorder
 }
 
+// AsyncWrite mocks base method.
+func (m *MockClientSession) AsyncWrite(response morpc.Message) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "AsyncWrite", response)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// AsyncWrite indicates an expected call of AsyncWrite.
+func (mr *MockClientSessionMockRecorder) AsyncWrite(response interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AsyncWrite", reflect.TypeOf((*MockClientSession)(nil).AsyncWrite), response)
+}
+
 // Close mocks base method.
 func (m *MockClientSession) Close() error {
 	m.ctrl.T.Helper()
@@ -64,45 +78,45 @@ func (mr *MockClientSessionMockRecorder) Close() *gomock.Call {
 }
 
 // CreateCache mocks base method.
-func (m *MockClientSession) CreateCache(arg0 context.Context, arg1 uint64) (morpc.MessageCache, error) {
+func (m *MockClientSession) CreateCache(ctx context.Context, cacheID uint64) (morpc.MessageCache, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CreateCache", arg0, arg1)
+	ret := m.ctrl.Call(m, "CreateCache", ctx, cacheID)
 	ret0, _ := ret[0].(morpc.MessageCache)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // CreateCache indicates an expected call of CreateCache.
-func (mr *MockClientSessionMockRecorder) CreateCache(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockClientSessionMockRecorder) CreateCache(ctx, cacheID interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateCache", reflect.TypeOf((*MockClientSession)(nil).CreateCache), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateCache", reflect.TypeOf((*MockClientSession)(nil).CreateCache), ctx, cacheID)
 }
 
 // DeleteCache mocks base method.
-func (m *MockClientSession) DeleteCache(arg0 uint64) {
+func (m *MockClientSession) DeleteCache(cacheID uint64) {
 	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "DeleteCache", arg0)
+	m.ctrl.Call(m, "DeleteCache", cacheID)
 }
 
 // DeleteCache indicates an expected call of DeleteCache.
-func (mr *MockClientSessionMockRecorder) DeleteCache(arg0 interface{}) *gomock.Call {
+func (mr *MockClientSessionMockRecorder) DeleteCache(cacheID interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteCache", reflect.TypeOf((*MockClientSession)(nil).DeleteCache), arg0)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteCache", reflect.TypeOf((*MockClientSession)(nil).DeleteCache), cacheID)
 }
 
 // GetCache mocks base method.
-func (m *MockClientSession) GetCache(arg0 uint64) (morpc.MessageCache, error) {
+func (m *MockClientSession) GetCache(cacheID uint64) (morpc.MessageCache, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetCache", arg0)
+	ret := m.ctrl.Call(m, "GetCache", cacheID)
 	ret0, _ := ret[0].(morpc.MessageCache)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetCache indicates an expected call of GetCache.
-func (mr *MockClientSessionMockRecorder) GetCache(arg0 interface{}) *gomock.Call {
+func (mr *MockClientSessionMockRecorder) GetCache(cacheID interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetCache", reflect.TypeOf((*MockClientSession)(nil).GetCache), arg0)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetCache", reflect.TypeOf((*MockClientSession)(nil).GetCache), cacheID)
 }
 
 // RemoteAddress mocks base method.
@@ -119,23 +133,32 @@ func (mr *MockClientSessionMockRecorder) RemoteAddress() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RemoteAddress", reflect.TypeOf((*MockClientSession)(nil).RemoteAddress))
 }
 
-// Write mocks base method.
-func (m *MockClientSession) Write(arg0 context.Context, arg1 morpc.Message) error {
+// SessionCtx mocks base method.
+func (m *MockClientSession) SessionCtx() context.Context {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Write", arg0, arg1)
+	ret := m.ctrl.Call(m, "SessionCtx")
+	ret0, _ := ret[0].(context.Context)
+	return ret0
+}
+
+// SessionCtx indicates an expected call of SessionCtx.
+func (mr *MockClientSessionMockRecorder) SessionCtx() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SessionCtx", reflect.TypeOf((*MockClientSession)(nil).SessionCtx))
+}
+
+// Write mocks base method.
+func (m *MockClientSession) Write(ctx context.Context, response morpc.Message) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Write", ctx, response)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-// AsyncWrite mocks base method.
-func (m *MockClientSession) AsyncWrite(arg1 morpc.Message) error {
-	panic("not supported")
-}
-
 // Write indicates an expected call of Write.
-func (mr *MockClientSessionMockRecorder) Write(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockClientSessionMockRecorder) Write(ctx, response interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Write", reflect.TypeOf((*MockClientSession)(nil).Write), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Write", reflect.TypeOf((*MockClientSession)(nil).Write), ctx, response)
 }
 
 // MockStream is a mock of Stream interface.
@@ -162,17 +185,17 @@ func (m *MockStream) EXPECT() *MockStreamMockRecorder {
 }
 
 // Close mocks base method.
-func (m *MockStream) Close(arg0 bool) error {
+func (m *MockStream) Close(closeConn bool) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Close", arg0)
+	ret := m.ctrl.Call(m, "Close", closeConn)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // Close indicates an expected call of Close.
-func (mr *MockStreamMockRecorder) Close(arg0 interface{}) *gomock.Call {
+func (mr *MockStreamMockRecorder) Close(closeConn interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Close", reflect.TypeOf((*MockStream)(nil).Close), arg0)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Close", reflect.TypeOf((*MockStream)(nil).Close), closeConn)
 }
 
 // ID mocks base method.
@@ -205,15 +228,15 @@ func (mr *MockStreamMockRecorder) Receive() *gomock.Call {
 }
 
 // Send mocks base method.
-func (m *MockStream) Send(arg0 context.Context, arg1 morpc.Message) error {
+func (m *MockStream) Send(ctx context.Context, request morpc.Message) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Send", arg0, arg1)
+	ret := m.ctrl.Call(m, "Send", ctx, request)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // Send indicates an expected call of Send.
-func (mr *MockStreamMockRecorder) Send(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockStreamMockRecorder) Send(ctx, request interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Send", reflect.TypeOf((*MockStream)(nil).Send), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Send", reflect.TypeOf((*MockStream)(nil).Send), ctx, request)
 }
