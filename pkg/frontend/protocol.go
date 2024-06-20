@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+
 	"github.com/fagongzi/goetty/v2"
 	"go.uber.org/zap"
 
@@ -81,6 +82,8 @@ type Response struct {
 	*/
 	affectedRows, lastInsertId uint64
 	warnings                   uint16
+	isIssue3482                bool
+	loadLocalFile              string
 }
 
 func NewResponse(category int, affectedRows, lastInsertId uint64, warnings, status uint16, cmd int, d interface{}) *Response {

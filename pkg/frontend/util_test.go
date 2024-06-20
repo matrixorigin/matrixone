@@ -1288,3 +1288,9 @@ func Test_convertRowsIntoBatch(t *testing.T) {
 
 	}
 }
+
+func Test_issue3482(t *testing.T) {
+	s := issue3482SqlPrefix + " "
+	ui := UserInput{sql: s}
+	assert.True(t, ui.isIssue3482Sql())
+}
