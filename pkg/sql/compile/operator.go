@@ -1193,7 +1193,7 @@ func constructDeleteDispatchAndLocal(
 	rs[currentIdx].NodeInfo = ss[currentIdx].NodeInfo
 	rs[currentIdx].Magic = Remote
 	rs[currentIdx].PreScopes = append(rs[currentIdx].PreScopes, ss[currentIdx])
-	rs[currentIdx].Proc = process.NewWithAnalyze(c.proc, c.ctx, len(ss), c.anal.analInfos)
+	rs[currentIdx].Proc = process.NewFromProc(c.proc, c.ctx, len(ss))
 	rs[currentIdx].RemoteReceivRegInfos = make([]RemoteReceivRegInfo, 0, len(ss)-1)
 
 	// use arg.RemoteRegs to know the uuid,
