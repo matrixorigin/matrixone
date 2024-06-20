@@ -358,7 +358,7 @@ func (opt Options) WithCNHeartbeatInterval(interval time.Duration) Options {
 	return opt
 }
 
-// GetTNStorageType returns the storage type that the dnservice used
+// GetTNStorageType returns the storage type that the tnservice used
 func (opt Options) GetTNStorageType() tnservice.StorageType {
 	return opt.storage.tnStorage
 }

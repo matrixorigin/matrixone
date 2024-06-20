@@ -98,6 +98,7 @@ func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
 	stubs := gostub.StubFunc(&ExeSqlInBgSes, nil, nil)
 	defer stubs.Reset()
 	_ = ses.InitSystemVariables(context.TODO())
+	ses.mrs = &MysqlResultSet{}
 
 	return ses
 }

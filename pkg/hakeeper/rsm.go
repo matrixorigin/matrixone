@@ -72,14 +72,21 @@ func parseCmdTag(cmd []byte) pb.HAKeeperUpdateType {
 	return pb.HAKeeperUpdateType(binaryEnc.Uint32(cmd))
 }
 
-func GetInitialClusterRequestCmd(numOfLogShards uint64,
-	numOfTNShards uint64, numOfLogReplicas uint64, nextID uint64, nextIDByKey map[string]uint64) []byte {
+func GetInitialClusterRequestCmd(
+	numOfLogShards uint64,
+	numOfTNShards uint64,
+	numOfLogReplicas uint64,
+	nextID uint64,
+	nextIDByKey map[string]uint64,
+	nonVotingLocality map[string]string,
+) []byte {
 	req := pb.InitialClusterRequest{
-		NumOfLogShards:   numOfLogShards,
-		NumOfTNShards:    numOfTNShards,
-		NumOfLogReplicas: numOfLogReplicas,
-		NextID:           nextID,
-		NextIDByKey:      nextIDByKey,
+		NumOfLogShards:    numOfLogShards,
+		NumOfTNShards:     numOfTNShards,
+		NumOfLogReplicas:  numOfLogReplicas,
+		NextID:            nextID,
+		NextIDByKey:       nextIDByKey,
+		NonVotingLocality: nonVotingLocality,
 	}
 	payload, err := req.Marshal()
 	if err != nil {
@@ -200,6 +207,25 @@ func parseDeleteCNStoreCmd(cmd []byte) pb.DeleteCNStore {
 	return result
 }
 
+func parseUpdateNonVotingReplicaNumCmd(cmd []byte) uint64 {
+	if parseCmdTag(cmd) != pb.UpdateNonVotingReplicaNum {
+		panic("not a UpdateNonVotingReplicaNum cmd")
+	}
+	return binaryEnc.Uint64(cmd[headerSize:])
+}
+
+func parseUpdateNonVotingLocalityCmd(cmd []byte) pb.Locality {
+	if parseCmdTag(cmd) != pb.UpdateNonVotingLocality {
+		panic("not a UpdateNonVotingLocality cmd")
+	}
+	payload := cmd[headerSize:]
+	var locality pb.Locality
+	if err := locality.Unmarshal(payload); err != nil {
+		panic(err)
+	}
+	return locality
+}
+
 func GetSetStateCmd(state pb.HAKeeperState) []byte {
 	cmd := make([]byte, headerSize+4)
 	binaryEnc.PutUint32(cmd, uint32(pb.SetStateUpdate))
@@ -243,6 +269,22 @@ func GetTNStoreHeartbeatCmd(data []byte) []byte {
 
 func GetProxyHeartbeatCmd(data []byte) []byte {
 	return getHeartbeatCmd(data, pb.ProxyHeartbeatUpdate)
+}
+
+func GetUpdateNonVotingReplicaNumCmd(num uint64) []byte {
+	cmd := make([]byte, headerSize+8)
+	binaryEnc.PutUint32(cmd, uint32(pb.UpdateNonVotingReplicaNum))
+	binaryEnc.PutUint64(cmd[headerSize:], num)
+	return cmd
+}
+
+func GetUpdateNonVotingLocality(locality pb.Locality) []byte {
+	cmd := make([]byte, headerSize+locality.ProtoSize())
+	binaryEnc.PutUint32(cmd, uint32(pb.UpdateNonVotingLocality))
+	if _, err := locality.MarshalTo(cmd[headerSize:]); err != nil {
+		panic(err)
+	}
+	return cmd
 }
 
 func getHeartbeatCmd(data []byte, tag pb.HAKeeperUpdateType) []byte {
@@ -562,6 +604,22 @@ func (s *stateMachine) handleProxyHeartbeat(cmd []byte) sm.Result {
 	return s.getCommandBatch(hb.UUID)
 }
 
+func (s *stateMachine) handleUpdateNonVotingReplicaNum(cmd []byte) sm.Result {
+	s.state.NonVotingReplicaNum = parseUpdateNonVotingReplicaNumCmd(cmd)
+	return sm.Result{}
+}
+
+func (s *stateMachine) handleUpdateNonVotingLocality(cmd []byte) sm.Result {
+	locality := parseUpdateNonVotingLocalityCmd(cmd)
+	for k, v := range locality.Value {
+		if v == "" {
+			delete(locality.Value, k)
+		}
+	}
+	s.state.NonVotingLocality = locality
+	return sm.Result{}
+}
+
 // FIXME: NextID should be set to K8SIDRangeEnd once HAKeeper state is
 // set to HAKeeperBootstrapping.
 func (s *stateMachine) handleInitialClusterRequestCmd(cmd []byte) sm.Result {
@@ -617,6 +675,8 @@ func (s *stateMachine) handleInitialClusterRequestCmd(cmd []byte) sm.Result {
 		s.state.NextIDByKey = req.NextIDByKey
 	}
 
+	s.state.NonVotingLocality.Value = req.NonVotingLocality
+
 	plog.Infof("initial cluster set, HAKeeper is in BOOTSTRAPPING state")
 	s.state.State = pb.HAKeeperBootstrapping
 	return result
@@ -667,6 +727,10 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 		return s.handleDeleteCNCmd(parseDeleteCNStoreCmd(cmd).StoreID), nil
 	case pb.ProxyHeartbeatUpdate:
 		return s.handleProxyHeartbeat(cmd), nil
+	case pb.UpdateNonVotingReplicaNum:
+		return s.handleUpdateNonVotingReplicaNum(cmd), nil
+	case pb.UpdateNonVotingLocality:
+		return s.handleUpdateNonVotingLocality(cmd), nil
 	default:
 		panic(moerr.NewInvalidInputNoCtxf("unknown haKeeper cmd '%v'", cmd))
 	}
@@ -674,17 +738,19 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 
 func (s *stateMachine) handleStateQuery() interface{} {
 	internal := &pb.CheckerState{
-		Tick:               s.state.Tick,
-		ClusterInfo:        s.state.ClusterInfo,
-		TNState:            s.state.TNState,
-		LogState:           s.state.LogState,
-		CNState:            s.state.CNState,
-		ProxyState:         s.state.ProxyState,
-		State:              s.state.State,
-		TaskSchedulerState: s.state.TaskSchedulerState,
-		TaskTableUser:      s.state.TaskTableUser,
-		NextId:             s.state.NextID,
-		NextIDByKey:        s.state.NextIDByKey,
+		Tick:                s.state.Tick,
+		ClusterInfo:         s.state.ClusterInfo,
+		TNState:             s.state.TNState,
+		LogState:            s.state.LogState,
+		CNState:             s.state.CNState,
+		ProxyState:          s.state.ProxyState,
+		State:               s.state.State,
+		TaskSchedulerState:  s.state.TaskSchedulerState,
+		TaskTableUser:       s.state.TaskTableUser,
+		NextId:              s.state.NextID,
+		NextIDByKey:         s.state.NextIDByKey,
+		NonVotingReplicaNum: s.state.NonVotingReplicaNum,
+		NonVotingLocality:   s.state.NonVotingLocality,
 	}
 	copied := deepcopy.Copy(internal)
 	result, ok := copied.(*pb.CheckerState)
@@ -763,6 +829,7 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 			ServiceAddress: info.ServiceAddress,
 			Replicas:       info.Replicas,
 			ConfigData:     info.ConfigData,
+			Locality:       info.Locality,
 		}
 		cd.LogStores = append(cd.LogStores, n)
 	}

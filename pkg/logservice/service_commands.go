@@ -17,6 +17,7 @@ package logservice
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"reflect"
 	"time"
 
@@ -35,16 +36,28 @@ func (s *Service) handleCommands(cmds []pb.ScheduleCommand) {
 			switch cmd.ConfigChange.ChangeType {
 			case pb.AddReplica:
 				s.handleAddReplica(cmd)
+			case pb.AddNonVotingReplica:
+				logutil.Infof("liubo: handle add non-voting replica %d, shard %d",
+					cmd.ConfigChange.Replica.ReplicaID, cmd.ConfigChange.Replica.ShardID)
+				s.handleAddNonVotingReplica(cmd)
 			case pb.RemoveReplica:
+				s.handleRemoveReplica(cmd)
+			case pb.RemoveNonVotingReplica:
 				s.handleRemoveReplica(cmd)
 			case pb.StartReplica:
 				s.handleStartReplica(cmd)
+			case pb.StartNonVotingReplica:
+				logutil.Infof("liubo: handle start non-voting replica %d, shard %d",
+					cmd.ConfigChange.Replica.ReplicaID, cmd.ConfigChange.Replica.ShardID)
+				s.handleStartNonVotingReplica(cmd)
 			case pb.StopReplica:
+				s.handleStopReplica(cmd)
+			case pb.StopNonVotingReplica:
 				s.handleStopReplica(cmd)
 			case pb.KillZombie:
 				s.handleKillZombie(cmd)
 			default:
-				panic("unknown config change cmd type")
+				panic(fmt.Sprintf("unknown config change cmd type %d", cmd.ConfigChange.ChangeType))
 			}
 		} else if cmd.GetShutdownStore() != nil {
 			s.handleShutdownStore(cmd)
@@ -64,6 +77,16 @@ func (s *Service) handleAddReplica(cmd pb.ScheduleCommand) {
 	target := cmd.ConfigChange.Replica.UUID
 	if err := s.store.addReplica(shardID, replicaID, target, epoch); err != nil {
 		s.runtime.Logger().Error("failed to add replica", zap.Error(err))
+	}
+}
+
+func (s *Service) handleAddNonVotingReplica(cmd pb.ScheduleCommand) {
+	shardID := cmd.ConfigChange.Replica.ShardID
+	replicaID := cmd.ConfigChange.Replica.ReplicaID
+	epoch := cmd.ConfigChange.Replica.Epoch
+	target := cmd.ConfigChange.Replica.UUID
+	if err := s.store.addNonVotingReplica(shardID, replicaID, target, epoch); err != nil {
+		s.runtime.Logger().Error("failed to add non-voting replica", zap.Error(err))
 	}
 }
 
@@ -87,6 +110,23 @@ func (s *Service) handleStartReplica(cmd pb.ScheduleCommand) {
 		}
 	} else {
 		if err := s.store.startReplica(shardID,
+			replicaID, cmd.ConfigChange.InitialMembers, join); err != nil {
+			s.runtime.Logger().Error("failed to start log replica", zap.Error(err))
+		}
+	}
+}
+
+func (s *Service) handleStartNonVotingReplica(cmd pb.ScheduleCommand) {
+	shardID := cmd.ConfigChange.Replica.ShardID
+	replicaID := cmd.ConfigChange.Replica.ReplicaID
+	join := len(cmd.ConfigChange.InitialMembers) == 0
+	if shardID == hakeeper.DefaultHAKeeperShardID {
+		if err := s.store.startHAKeeperNonVotingReplica(replicaID,
+			cmd.ConfigChange.InitialMembers, join); err != nil {
+			s.runtime.Logger().Error("failed to start HAKeeper replica", zap.Error(err))
+		}
+	} else {
+		if err := s.store.startNonVotingReplica(shardID,
 			replicaID, cmd.ConfigChange.InitialMembers, join); err != nil {
 			s.runtime.Logger().Error("failed to start log replica", zap.Error(err))
 		}

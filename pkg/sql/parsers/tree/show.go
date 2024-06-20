@@ -863,6 +863,36 @@ func NewShowConnectors(f bool) *ShowConnectors {
 	return &ShowConnectors{}
 }
 
+type ShowLogserviceReplicas struct {
+	showImpl
+}
+
+func (node *ShowLogserviceReplicas) Format(ctx *FmtCtx) {
+	ctx.WriteString("show logservice replicas")
+}
+func (node *ShowLogserviceReplicas) GetStatementType() string { return "Show Logservice Replicas" }
+func (node *ShowLogserviceReplicas) GetQueryType() string     { return QueryTypeOth }
+
+type ShowLogserviceStores struct {
+	showImpl
+}
+
+func (node *ShowLogserviceStores) Format(ctx *FmtCtx) {
+	ctx.WriteString("show logservice stores")
+}
+func (node *ShowLogserviceStores) GetStatementType() string { return "Show Logservice Stores" }
+func (node *ShowLogserviceStores) GetQueryType() string     { return QueryTypeOth }
+
+type ShowLogserviceSettings struct {
+	showImpl
+}
+
+func (node *ShowLogserviceSettings) Format(ctx *FmtCtx) {
+	ctx.WriteString("show logservice settings")
+}
+func (node *ShowLogserviceSettings) GetStatementType() string { return "Show Logservice Settings" }
+func (node *ShowLogserviceSettings) GetQueryType() string     { return QueryTypeOth }
+
 type EmptyStmt struct {
 	statementImpl
 }

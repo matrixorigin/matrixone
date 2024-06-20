@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package dnservice
+package tnservice
 
 import (
 	"sort"
@@ -59,50 +59,65 @@ func getCheckState(
 	return s.(*state)
 }
 
+type tnServiceChecker struct {
+	hakeeper.CheckerCommonFields
+	tnState pb.TNState
+}
+
+func NewTNServiceChecker(
+	commonFields hakeeper.CheckerCommonFields,
+	tnState pb.TNState,
+) hakeeper.ModuleChecker {
+	return &tnServiceChecker{
+		CheckerCommonFields: commonFields,
+		tnState:             tnState,
+	}
+}
+
 // Check checks tn state and generate operator for expired tn store.
 // The less shard ID, the higher priority.
 // NB: the returned order should be deterministic.
-func Check(
-	service string,
-	idAlloc util.IDAllocator,
-	cfg hakeeper.Config,
-	cluster pb.ClusterInfo,
-	tnState pb.TNState,
-	user pb.TaskTableUser,
-	currTick uint64,
-) []*operator.Operator {
-	stores, reportedShards := parseTnState(cfg, tnState, currTick)
-	runtime.ServiceRuntime(service).Logger().Debug("reported tn shards in cluster",
+func (c *tnServiceChecker) Check() []*operator.Operator {
+	stores, reportedShards := parseTnState(c.Cfg, c.tnState, c.CurrentTick)
+	runtime.ServiceRuntime(c.ServiceID).Logger().Debug("reported tn shards in cluster",
 		zap.Any("dn shard IDs", reportedShards.shardIDs),
 		zap.Any("dn shards", reportedShards.shards),
 	)
 	for _, node := range stores.ExpiredStores() {
-		runtime.ServiceRuntime(service).Logger().Info("node is expired", zap.String("uuid", node.ID))
+		runtime.ServiceRuntime(c.ServiceID).Logger().Info("node is expired", zap.String("uuid", node.ID))
 	}
 	if len(stores.WorkingStores()) < 1 {
-		runtime.ServiceRuntime(service).Logger().Warn("no working tn stores")
+		runtime.ServiceRuntime(c.ServiceID).Logger().Warn("no working tn stores")
 		return nil
 	}
 
-	mapper := parseClusterInfo(cluster)
+	mapper := parseClusterInfo(c.Cluster)
 
 	var operators []*operator.Operator
 
 	// 1. check reported tn state
 	operators = append(operators,
-		checkReportedState(service, reportedShards, mapper, stores.WorkingStores(), idAlloc)...,
+		checkReportedState(c.ServiceID, reportedShards, mapper, stores.WorkingStores(), c.Alloc)...,
 	)
 
 	// 2. check expected tn state
 	operators = append(operators,
-		checkInitiatingShards(service, reportedShards, mapper, stores.WorkingStores(), idAlloc, cluster, cfg, currTick)...,
+		checkInitiatingShards(
+			c.ServiceID,
+			reportedShards,
+			mapper,
+			stores.WorkingStores(),
+			c.Alloc,
+			c.Cluster,
+			c.Cfg,
+			c.CurrentTick)...,
 	)
 
-	if user.Username != "" {
+	if c.User.Username != "" {
 		for _, store := range stores.WorkingStores() {
-			if !tnState.Stores[store.ID].TaskServiceCreated {
+			if !c.tnState.Stores[store.ID].TaskServiceCreated {
 				operators = append(operators, operator.CreateTaskServiceOp("",
-					store.ID, pb.TNService, user))
+					store.ID, pb.TNService, c.User))
 			}
 		}
 	}

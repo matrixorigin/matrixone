@@ -25,11 +25,19 @@ import (
 )
 
 func CreateAddReplica(uuid string, shardInfo pb.LogShardInfo, replicaID uint64) (*Operator, error) {
-	return NewBuilder("", shardInfo).AddPeer(string(uuid), replicaID).Build()
+	return NewBuilder("", shardInfo).AddPeer(uuid, replicaID).Build()
+}
+
+func CreateAddNonVotingReplica(uuid string, shardInfo pb.LogShardInfo, replicaID uint64) (*Operator, error) {
+	return NewBuilder("", shardInfo).AddNonVotingPeer(uuid, replicaID).Build()
 }
 
 func CreateRemoveReplica(uuid string, shardInfo pb.LogShardInfo) (*Operator, error) {
-	return NewBuilder("", shardInfo).RemovePeer(string(uuid)).Build()
+	return NewBuilder("", shardInfo).RemovePeer(uuid).Build()
+}
+
+func CreateRemoveNonVotingReplica(uuid string, shardInfo pb.LogShardInfo) (*Operator, error) {
+	return NewBuilder("", shardInfo).RemoveNonVotingPeer(uuid).Build()
 }
 
 func CreateStopReplica(brief string, uuid string, shardID uint64, epoch uint64) *Operator {
@@ -45,6 +53,11 @@ func CreateKillZombie(brief, uuid string, shardID, replicaID uint64) *Operator {
 func CreateStartReplica(brief, uuid string, shardID, replicaID uint64) *Operator {
 	return NewOperator(brief, shardID, 0,
 		StartLogService{Replica{UUID: uuid, ShardID: shardID, ReplicaID: replicaID}})
+}
+
+func CreateStartNonVotingReplica(brief, uuid string, shardID, replicaID uint64) *Operator {
+	return NewOperator(brief, shardID, 0,
+		StartNonVotingLogService{Replica{UUID: uuid, ShardID: shardID, ReplicaID: replicaID}})
 }
 
 func CreateTaskServiceOp(brief, uuid string, serviceType pb.ServiceType, user pb.TaskTableUser) *Operator {

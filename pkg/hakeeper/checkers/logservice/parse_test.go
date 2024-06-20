@@ -30,11 +30,16 @@ func TestFixedLogShardInfo(t *testing.T) {
 	cases := []struct {
 		desc string
 
-		record        metadata.LogShardRecord
+		record metadata.LogShardRecord
+
+		// nonVotingReplicaNum is the required non-voting replica number.
+		nonVotingReplicaNum uint64
+
 		info          pb.LogShardInfo
 		expiredStores []string
 
-		expected *fixingShard
+		expectedNormal    *fixingShard
+		expectedNonVoting *fixingShard
 	}{
 		{
 			desc: "normal case",
@@ -46,10 +51,14 @@ func TestFixedLogShardInfo(t *testing.T) {
 				ShardID:  1,
 				Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 			},
-			expected: &fixingShard{
+			expectedNormal: &fixingShard{
 				shardID:  1,
 				replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 				toAdd:    0,
+			},
+			expectedNonVoting: &fixingShard{
+				shardID:  1,
+				replicas: map[uint64]string{},
 			},
 		},
 		{
@@ -62,10 +71,14 @@ func TestFixedLogShardInfo(t *testing.T) {
 				ShardID:  1,
 				Replicas: map[uint64]string{1: "a", 2: "b"},
 			},
-			expected: &fixingShard{
+			expectedNormal: &fixingShard{
 				shardID:  1,
 				replicas: map[uint64]string{1: "a", 2: "b"},
 				toAdd:    1,
+			},
+			expectedNonVoting: &fixingShard{
+				shardID:  1,
+				replicas: map[uint64]string{},
 			},
 		},
 		{
@@ -79,27 +92,128 @@ func TestFixedLogShardInfo(t *testing.T) {
 				Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 				LeaderID: 2,
 			},
-			expected: &fixingShard{
+			expectedNormal: &fixingShard{
 				shardID:  1,
 				replicas: map[uint64]string{2: "b"},
+				toAdd:    0,
+			},
+			expectedNonVoting: &fixingShard{
+				shardID:  1,
+				replicas: map[uint64]string{},
+			},
+		},
+		{
+			desc: "shard 1 has no non-voting replicas, and the expecting num is 3",
+			record: metadata.LogShardRecord{
+				ShardID:          1,
+				NumberOfReplicas: 3,
+			},
+			info: pb.LogShardInfo{
+				ShardID:  1,
+				Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+			},
+			nonVotingReplicaNum: 3,
+			expectedNormal: &fixingShard{
+				shardID:  1,
+				replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+				toAdd:    0,
+			},
+			expectedNonVoting: &fixingShard{
+				shardID:  1,
+				replicas: map[uint64]string{},
+				toAdd:    3,
+			},
+		},
+		{
+			desc: "shard 1 has 6 replicas, including 3 non-voting replicas, and the expecting num is 3",
+			record: metadata.LogShardRecord{
+				ShardID:          1,
+				NumberOfReplicas: 3,
+			},
+			info: pb.LogShardInfo{
+				ShardID:           1,
+				Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
+				NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f"},
+			},
+			nonVotingReplicaNum: 3,
+			expectedNormal: &fixingShard{
+				shardID:  1,
+				replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+				toAdd:    0,
+			},
+			expectedNonVoting: &fixingShard{
+				shardID:  1,
+				replicas: map[uint64]string{4: "d", 5: "e", 6: "f"},
+				toAdd:    0,
+			},
+		},
+		{
+			desc: "shard 1 has 6 replicas, including 2 non-voting replicas, and the expecting num is 3",
+			record: metadata.LogShardRecord{
+				ShardID:          1,
+				NumberOfReplicas: 3,
+			},
+			info: pb.LogShardInfo{
+				ShardID:           1,
+				Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
+				NonVotingReplicas: map[uint64]string{4: "d", 5: "e"},
+			},
+			nonVotingReplicaNum: 3,
+			expectedNormal: &fixingShard{
+				shardID:  1,
+				replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+				toAdd:    0,
+			},
+			expectedNonVoting: &fixingShard{
+				shardID:  1,
+				replicas: map[uint64]string{4: "d", 5: "e"},
+				toAdd:    1,
+			},
+		},
+		{
+			desc: "shard 1 has 6 replicas, including 2 non-voting replicas, and the expecting num is 3",
+			record: metadata.LogShardRecord{
+				ShardID:          1,
+				NumberOfReplicas: 3,
+			},
+			info: pb.LogShardInfo{
+				ShardID:           1,
+				Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
+				NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f", 7: "g"},
+			},
+			nonVotingReplicaNum: 3,
+			expectedNormal: &fixingShard{
+				shardID:  1,
+				replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+				toAdd:    0,
+			},
+			expectedNonVoting: &fixingShard{
+				shardID:  1,
+				replicas: map[uint64]string{5: "e", 6: "f", 7: "g"},
 				toAdd:    0,
 			},
 		},
 	}
 
-	for _, c := range cases {
-		output := fixedLogShardInfo(c.record, c.info, c.expiredStores)
-		assert.Equal(t, c.expected, output)
+	for i, c := range cases {
+		fmt.Printf("case %v: %s\n", i, c.desc)
+		normal, nonVoting := fixedLogShardInfo(c.record, c.nonVotingReplicaNum, c.info, c.expiredStores)
+		assert.Equal(t, c.expectedNormal, normal)
+		assert.Equal(t, c.expectedNonVoting, nonVoting)
 	}
 }
 
 func TestCollectStats(t *testing.T) {
 	cases := []struct {
-		desc     string
-		cluster  pb.ClusterInfo
-		infos    pb.LogState
-		expired  []string
-		expected *stats
+		desc              string
+		cluster           pb.ClusterInfo
+		infos             pb.LogState
+		expired           []string
+		expectedNormal    *stats
+		expectedNonVoting *stats
+
+		// nonVotingReplicaNum is the required non-voting replica number.
+		nonVotingReplicaNum uint64
 	}{
 		{
 			desc: "Normal case",
@@ -146,8 +260,10 @@ func TestCollectStats(t *testing.T) {
 								Term:     0}}}},
 				},
 			},
-			expired:  []string{},
-			expected: &stats{toRemove: map[uint64][]replica{}, toAdd: map[uint64]uint32{}}},
+			expired:           []string{},
+			expectedNormal:    &stats{toRemove: map[uint64][]replica{}, toAdd: map[uint64]uint32{}},
+			expectedNonVoting: &stats{toRemove: map[uint64][]replica{}, toAdd: map[uint64]uint32{}, nonVoting: true},
+		},
 		{
 			desc: "Shard 1 has only 2 replicas, which is expected as 3.",
 			cluster: pb.ClusterInfo{
@@ -181,8 +297,10 @@ func TestCollectStats(t *testing.T) {
 								Term:     0}}}},
 				},
 			},
-			expired:  []string{},
-			expected: &stats{toRemove: map[uint64][]replica{}, toAdd: map[uint64]uint32{1: 1}}},
+			expired:           []string{},
+			expectedNormal:    &stats{toRemove: map[uint64][]replica{}, toAdd: map[uint64]uint32{1: 1}},
+			expectedNonVoting: &stats{toRemove: map[uint64][]replica{}, toAdd: map[uint64]uint32{}, nonVoting: true},
+		},
 		{
 			desc: "replica on Store c is not started.",
 			cluster: pb.ClusterInfo{
@@ -218,8 +336,10 @@ func TestCollectStats(t *testing.T) {
 						Replicas: []pb.LogReplicaInfo{}},
 				},
 			},
-			expected: &stats{toStart: []replica{{"c", 1, 0, 3}},
-				toRemove: map[uint64][]replica{}, toAdd: map[uint64]uint32{}}},
+			expectedNormal: &stats{toStart: []replica{{"c", 1, 0, 3}},
+				toRemove: map[uint64][]replica{}, toAdd: map[uint64]uint32{}},
+			expectedNonVoting: &stats{toRemove: map[uint64][]replica{}, toAdd: map[uint64]uint32{}, nonVoting: true},
+		},
 		{
 			desc: "replica on Store d is a zombie.",
 			cluster: pb.ClusterInfo{
@@ -266,11 +386,14 @@ func TestCollectStats(t *testing.T) {
 								Replicas: map[uint64]string{1: "a", 2: "b", 4: "d"},
 								Epoch:    0,
 								LeaderID: 0,
-								Term:     0}}}},
+								Term:     0},
+						}}},
 				},
 			},
-			expected: &stats{zombies: []replica{{"d", 1, 0, 0}},
-				toRemove: map[uint64][]replica{}, toAdd: map[uint64]uint32{}}},
+			expectedNormal: &stats{zombies: []replica{{"d", 1, 0, 0}},
+				toRemove: map[uint64][]replica{}, toAdd: map[uint64]uint32{}},
+			expectedNonVoting: &stats{toRemove: map[uint64][]replica{}, toAdd: map[uint64]uint32{}, nonVoting: true},
+		},
 		{
 			desc: "do not remove replica d if it is in LogShardInfo.Replicas, despite it's epoch is small.",
 			cluster: pb.ClusterInfo{
@@ -313,9 +436,11 @@ func TestCollectStats(t *testing.T) {
 					}}},
 				},
 			},
-			expected: &stats{
+			expectedNormal: &stats{
 				toRemove: map[uint64][]replica{},
-				toAdd:    map[uint64]uint32{}}},
+				toAdd:    map[uint64]uint32{}},
+			expectedNonVoting: &stats{toRemove: map[uint64][]replica{}, toAdd: map[uint64]uint32{}, nonVoting: true},
+		},
 		{
 			desc: "Shard 1 has 4 replicas, which is expected as 3.",
 			cluster: pb.ClusterInfo{
@@ -366,9 +491,10 @@ func TestCollectStats(t *testing.T) {
 								Term:     0}}}},
 				},
 			},
-			expected: &stats{toRemove: map[uint64][]replica{1: {{"a", 1, 0, 1}}},
+			expectedNormal: &stats{toRemove: map[uint64][]replica{1: {{"a", 1, 0, 1}}},
 				toAdd: map[uint64]uint32{},
 			},
+			expectedNonVoting: &stats{toRemove: map[uint64][]replica{}, toAdd: map[uint64]uint32{}, nonVoting: true},
 		},
 		{
 			desc: "Store a is expired",
@@ -411,17 +537,510 @@ func TestCollectStats(t *testing.T) {
 								Term:     0}}}}},
 			},
 			expired: []string{"a"},
-			expected: &stats{
+			expectedNormal: &stats{
 				toRemove: map[uint64][]replica{1: {{uuid: "a", shardID: 1, replicaID: 1}}},
 				toAdd:    map[uint64]uint32{},
 			},
+			expectedNonVoting: &stats{toRemove: map[uint64][]replica{}, toAdd: map[uint64]uint32{}, nonVoting: true},
+		},
+
+		// for non-voting replicas
+		{
+			desc: "nothing happened",
+			cluster: pb.ClusterInfo{
+				TNShards: nil,
+				LogShards: []metadata.LogShardRecord{{
+					ShardID:          1,
+					NumberOfReplicas: 3}}},
+			nonVotingReplicaNum: 3,
+			infos: pb.LogState{
+				Shards: map[uint64]pb.LogShardInfo{
+					1: {
+						ShardID:           1,
+						Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
+						Epoch:             1,
+						LeaderID:          0,
+						Term:              0,
+						NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f"},
+					}},
+				Stores: map[string]pb.LogStoreInfo{
+					"a": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:           1,
+								Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:             1,
+								LeaderID:          0,
+								Term:              0,
+								NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f"},
+							}}}},
+					"b": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:           1,
+								Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:             1,
+								LeaderID:          0,
+								Term:              0,
+								NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f"},
+							}}}},
+					"c": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:           1,
+								Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:             1,
+								LeaderID:          0,
+								Term:              0,
+								NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f"},
+							}}}},
+					"d": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:           1,
+								Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:             1,
+								LeaderID:          0,
+								Term:              0,
+								NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f"},
+							}}}},
+					"e": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:           1,
+								Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:             1,
+								LeaderID:          0,
+								Term:              0,
+								NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f"},
+							}}}},
+					"f": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:           1,
+								Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:             1,
+								LeaderID:          0,
+								Term:              0,
+								NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f"},
+							}}}},
+				},
+			},
+			expired:           []string{},
+			expectedNormal:    &stats{toRemove: map[uint64][]replica{}, toAdd: map[uint64]uint32{}},
+			expectedNonVoting: &stats{toRemove: map[uint64][]replica{}, toAdd: map[uint64]uint32{}, nonVoting: true},
+		},
+		{
+			desc: "shard 1 has 3 normal replicas and 0 non-voting replicas, but expect 3 non-voting replica",
+			cluster: pb.ClusterInfo{
+				TNShards: nil,
+				LogShards: []metadata.LogShardRecord{{
+					ShardID:          1,
+					NumberOfReplicas: 3}}},
+			nonVotingReplicaNum: 3,
+			infos: pb.LogState{
+				Shards: map[uint64]pb.LogShardInfo{
+					1: {
+						ShardID:  1,
+						Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+						Epoch:    1,
+						LeaderID: 0,
+						Term:     0,
+					}},
+				Stores: map[string]pb.LogStoreInfo{
+					"a": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:  1,
+								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:    1,
+								LeaderID: 0,
+								Term:     0,
+							}}}},
+					"b": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:  1,
+								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:    1,
+								LeaderID: 0,
+								Term:     0,
+							}}}},
+					"c": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:  1,
+								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:    1,
+								LeaderID: 0,
+								Term:     0}}}},
+				},
+			},
+			expired:           []string{},
+			expectedNormal:    &stats{toRemove: map[uint64][]replica{}, toAdd: map[uint64]uint32{}},
+			expectedNonVoting: &stats{toRemove: map[uint64][]replica{}, toAdd: map[uint64]uint32{1: 3}, nonVoting: true},
+		},
+		{
+			desc: "shard 1 has 3 normal replicas and 4 non-voting replicas, but only 3 non-voting replica expected",
+			cluster: pb.ClusterInfo{
+				TNShards: nil,
+				LogShards: []metadata.LogShardRecord{{
+					ShardID:          1,
+					NumberOfReplicas: 3}}},
+			nonVotingReplicaNum: 3,
+			infos: pb.LogState{
+				Shards: map[uint64]pb.LogShardInfo{
+					1: {
+						ShardID:           1,
+						Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
+						Epoch:             1,
+						LeaderID:          0,
+						Term:              0,
+						NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f", 7: "g"},
+					}},
+				Stores: map[string]pb.LogStoreInfo{
+					"a": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:           1,
+								Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:             1,
+								LeaderID:          0,
+								Term:              0,
+								NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f", 7: "g"},
+							}}}},
+					"b": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:           1,
+								Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:             1,
+								LeaderID:          0,
+								Term:              0,
+								NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f", 7: "g"},
+							}}}},
+					"c": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:           1,
+								Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:             1,
+								LeaderID:          0,
+								Term:              0,
+								NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f", 7: "g"},
+							}}}},
+					"d": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:           1,
+								Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:             1,
+								LeaderID:          0,
+								Term:              0,
+								NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f", 7: "g"},
+							}}}},
+					"e": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:           1,
+								Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:             1,
+								LeaderID:          0,
+								Term:              0,
+								NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f", 7: "g"},
+							}}}},
+					"f": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:           1,
+								Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:             1,
+								LeaderID:          0,
+								Term:              0,
+								NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f", 7: "g"},
+							}}}},
+					"g": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:           1,
+								Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:             1,
+								LeaderID:          0,
+								Term:              0,
+								NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f", 7: "g"},
+							}}}},
+				},
+			},
+			expired:        []string{},
+			expectedNormal: &stats{toRemove: map[uint64][]replica{}, toAdd: map[uint64]uint32{}},
+			expectedNonVoting: &stats{toRemove: map[uint64][]replica{
+				1: {{uuid: "d", shardID: 1, replicaID: 4}},
+			}, toAdd: map[uint64]uint32{}, nonVoting: true},
+		},
+		{
+			desc: "non-voting replica on store f is not started.",
+			cluster: pb.ClusterInfo{
+				LogShards: []metadata.LogShardRecord{{
+					ShardID:          1,
+					NumberOfReplicas: 3}}},
+			nonVotingReplicaNum: 3,
+			infos: pb.LogState{
+				Shards: map[uint64]pb.LogShardInfo{
+					1: {
+						ShardID:           1,
+						Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
+						Epoch:             1,
+						LeaderID:          0,
+						NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f"},
+						Term:              0}},
+				Stores: map[string]pb.LogStoreInfo{
+					"a": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:           1,
+								Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:             1,
+								LeaderID:          0,
+								Term:              0,
+								NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f"},
+							}}}},
+					"b": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:           1,
+								Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:             1,
+								LeaderID:          0,
+								Term:              0,
+								NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f"},
+							}}}},
+					"c": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:           1,
+								Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:             1,
+								LeaderID:          0,
+								Term:              0,
+								NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f"},
+							}}}},
+					"d": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:           1,
+								Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:             1,
+								LeaderID:          0,
+								Term:              0,
+								NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f"},
+							}}}},
+					"e": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:           1,
+								Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:             1,
+								LeaderID:          0,
+								Term:              0,
+								NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f"},
+							}}}},
+					"f": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
+						Replicas: []pb.LogReplicaInfo{}},
+				},
+			},
+			expectedNormal: &stats{toRemove: map[uint64][]replica{}, toAdd: map[uint64]uint32{}},
+			expectedNonVoting: &stats{toStart: []replica{{"f", 1, 0, 6}},
+				toRemove: map[uint64][]replica{}, toAdd: map[uint64]uint32{}, nonVoting: true},
+		},
+		{
+			desc: "non-voting replica on store d is a zombie.",
+			cluster: pb.ClusterInfo{
+				LogShards: []metadata.LogShardRecord{{
+					ShardID:          1,
+					NumberOfReplicas: 3}}},
+			nonVotingReplicaNum: 3,
+			infos: pb.LogState{
+				Shards: map[uint64]pb.LogShardInfo{
+					1: {
+						ShardID:           1,
+						Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
+						Epoch:             1,
+						LeaderID:          0,
+						Term:              0,
+						NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f"},
+					},
+				},
+				Stores: map[string]pb.LogStoreInfo{
+					"a": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:           1,
+								Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:             1,
+								LeaderID:          0,
+								Term:              0,
+								NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f"},
+							}}}},
+					"b": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:           1,
+								Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:             1,
+								LeaderID:          0,
+								Term:              0,
+								NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f"},
+							}}}},
+					"c": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:           1,
+								Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:             1,
+								LeaderID:          0,
+								Term:              0,
+								NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f"},
+							}}}},
+					"d": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:           1,
+								Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:             1,
+								LeaderID:          0,
+								Term:              0,
+								NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f"},
+							}}}},
+					"e": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:           1,
+								Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:             1,
+								LeaderID:          0,
+								Term:              0,
+								NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f"},
+							}}}},
+					"f": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:           1,
+								Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:             1,
+								LeaderID:          0,
+								Term:              0,
+								NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f"},
+							}}}},
+					"g": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:           1,
+								Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:             0,
+								LeaderID:          0,
+								Term:              0,
+								NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f"},
+							}}}},
+				},
+			},
+			expectedNormal: &stats{zombies: []replica{{"g", 1, 0, 0}},
+				toRemove: map[uint64][]replica{}, toAdd: map[uint64]uint32{}},
+			expectedNonVoting: &stats{toRemove: map[uint64][]replica{}, toAdd: map[uint64]uint32{}, nonVoting: true},
+		},
+		{
+			desc: "store f is expired.",
+			cluster: pb.ClusterInfo{
+				LogShards: []metadata.LogShardRecord{{
+					ShardID:          1,
+					NumberOfReplicas: 3}}},
+			nonVotingReplicaNum: 3,
+			infos: pb.LogState{
+				Shards: map[uint64]pb.LogShardInfo{
+					1: {
+						ShardID:           1,
+						Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
+						Epoch:             1,
+						LeaderID:          0,
+						Term:              0,
+						NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f"},
+					},
+				},
+				Stores: map[string]pb.LogStoreInfo{
+					"a": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:           1,
+								Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:             1,
+								LeaderID:          0,
+								Term:              0,
+								NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f"},
+							}}}},
+					"b": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:           1,
+								Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:             1,
+								LeaderID:          0,
+								Term:              0,
+								NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f"},
+							}}}},
+					"c": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:           1,
+								Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:             1,
+								LeaderID:          0,
+								Term:              0,
+								NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f"},
+							}}}},
+					"d": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:           1,
+								Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:             1,
+								LeaderID:          0,
+								Term:              0,
+								NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f"},
+							}}}},
+					"e": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:           1,
+								Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:             1,
+								LeaderID:          0,
+								Term:              0,
+								NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f"},
+							}}}},
+					"f": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:           1,
+								Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:             1,
+								LeaderID:          0,
+								Term:              0,
+								NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f"},
+							}}}},
+				},
+			},
+			expired:        []string{"f"},
+			expectedNormal: &stats{toRemove: map[uint64][]replica{}, toAdd: map[uint64]uint32{}},
+			expectedNonVoting: &stats{toRemove: map[uint64][]replica{
+				1: {{uuid: "f", shardID: 1, replicaID: 6}},
+			}, toAdd: map[uint64]uint32{}, nonVoting: true},
 		},
 	}
 
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
-		stat := parseLogShards(c.cluster, c.infos, c.expired)
-		assert.Equal(t, c.expected, stat)
+		normal, nonVoting := parseLogShards(c.cluster, c.infos, c.expired, c.nonVotingReplicaNum)
+		assert.Equal(t, c.expectedNormal, normal)
+		assert.Equal(t, c.expectedNonVoting, nonVoting)
 	}
 }
 
@@ -480,7 +1099,11 @@ func TestCollectStore(t *testing.T) {
 		fmt.Printf("case %v: %s\n", i, c.desc)
 		cfg := hakeeper.Config{}
 		cfg.Fill()
-		working, expired := parseLogStores(cfg, c.infos, c.tick)
+		workingStores, expired := parseLogStores(cfg, c.infos, c.tick)
+		var working []string
+		for storeID := range workingStores {
+			working = append(working, storeID)
+		}
 		sort.Slice(working, func(i, j int) bool {
 			return working[i] < working[j]
 		})
@@ -490,7 +1113,7 @@ func TestCollectStore(t *testing.T) {
 		assert.Equal(t, c.expected, expired)
 		cfg1 := hakeeper.Config{LogStoreTimeout: time.Hour}
 		cfg1.Fill()
-		working, expired = parseLogStores(cfg1, c.infos, c.tick)
+		_, expired = parseLogStores(cfg1, c.infos, c.tick)
 		assert.Equal(t, []string{}, expired)
 	}
 }

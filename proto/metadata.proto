@@ -76,6 +76,8 @@ message LogShard {
   LogShardRecord LogShardRecord = 1 [(gogoproto.nullable) = false, (gogoproto.embed) = true];
   // ReplicaID is the replica ID of the replica running on the LogStore. 
   uint64 ReplicaID  = 2;
+  // NonVoting indicates if the replica is a non-voting one.
+  bool NonVoting = 3;
 }
 
 // TNStore TN store metadata

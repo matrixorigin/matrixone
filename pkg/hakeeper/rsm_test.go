@@ -980,3 +980,46 @@ func TestHandleProxyHeartbeat(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, uint64(3), info.Tick)
 }
+
+func TestHandleUpdateNonVotingReplicaNum(t *testing.T) {
+	tsm1 := NewStateMachine(0, 1).(*stateMachine)
+	cmd := GetUpdateNonVotingReplicaNumCmd(10)
+	_, err := tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	n := tsm1.state.NonVotingReplicaNum
+	assert.Equal(t, uint64(10), n)
+}
+
+func TestHandleUpdateNonVotingLocality(t *testing.T) {
+	tsm1 := NewStateMachine(0, 1).(*stateMachine)
+	cmd := GetUpdateNonVotingLocality(pb.Locality{
+		Value: map[string]string{
+			"k1": "v1",
+			"k2": "v2",
+			"k3": "",
+		},
+	})
+	_, err := tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	l := tsm1.state.NonVotingLocality
+	assert.Equal(t, pb.Locality{
+		Value: map[string]string{
+			"k1": "v1",
+			"k2": "v2",
+		},
+	}, l)
+
+	cmd = GetUpdateNonVotingLocality(pb.Locality{
+		Value: map[string]string{
+			"k1": "v1",
+		},
+	})
+	_, err = tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	l = tsm1.state.NonVotingLocality
+	assert.Equal(t, pb.Locality{
+		Value: map[string]string{
+			"k1": "v1",
+		},
+	}, l)
+}

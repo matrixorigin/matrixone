@@ -308,7 +308,14 @@ func proceedHAKeeperToRunning(t *testing.T, store *store) {
 	assert.Equal(t, pb.HAKeeperCreated, state.State)
 
 	nextIDByKey := map[string]uint64{"a": 1, "b": 2}
-	err = store.setInitialClusterInfo(1, 1, 1, hakeeper.K8SIDRangeEnd+10, nextIDByKey)
+	err = store.setInitialClusterInfo(
+		1,
+		1,
+		1,
+		hakeeper.K8SIDRangeEnd+10,
+		nextIDByKey,
+		nil,
+	)
 	assert.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -525,6 +532,14 @@ func TestAddReplicaRejectedForInvalidCCI(t *testing.T) {
 	runStoreTest(t, fn)
 }
 
+func TestAddNonVotingReplicaRejectedForInvalidCCI(t *testing.T) {
+	fn := func(t *testing.T, store *store) {
+		err := store.addNonVotingReplica(1, 100, uuid.New().String(), 0)
+		assert.Equal(t, dragonboat.ErrRejected, err)
+	}
+	runStoreTest(t, fn)
+}
+
 func TestAddReplica(t *testing.T) {
 	fn := func(t *testing.T, store *store) {
 		for {
@@ -543,6 +558,29 @@ func TestAddReplica(t *testing.T) {
 		assert.NoError(t, err)
 		hb := store.getHeartbeatMessage()
 		assert.Equal(t, 2, len(hb.Replicas[0].Replicas))
+	}
+	runStoreTest(t, fn)
+}
+
+func TestAddNonVotingReplica(t *testing.T) {
+	fn := func(t *testing.T, store *store) {
+		for {
+			_, _, ok, err := store.nh.GetLeaderID(1)
+			require.NoError(t, err)
+			if ok {
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		m, err := store.nh.SyncGetShardMembership(ctx, 1)
+		require.NoError(t, err)
+		err = store.addNonVotingReplica(1, 100, uuid.New().String(), m.ConfigChangeID)
+		assert.NoError(t, err)
+		hb := store.getHeartbeatMessage()
+		assert.Equal(t, 1, len(hb.Replicas[0].Replicas))
+		assert.Equal(t, 1, len(hb.Replicas[0].NonVotingReplicas))
 	}
 	runStoreTest(t, fn)
 }
@@ -938,6 +976,49 @@ func TestDeleteCNStore(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NotEmpty(t, state)
 		assert.Equal(t, 0, len(state.CNState.Stores))
+	}
+	runStoreTest(t, fn)
+}
+
+func TestManagedHAKeeperClient_UpdateNonVotingReplicaNum(t *testing.T) {
+	fn := func(t *testing.T, store *store) {
+		peers := make(map[uint64]dragonboat.Target)
+		peers[1] = store.id()
+		assert.NoError(t, store.startHAKeeperReplica(1, peers, false))
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+		defer cancel()
+		var num uint64 = 5
+		err := store.updateNonVotingReplicaNum(ctx, num)
+		assert.NoError(t, err)
+
+		state, err := store.getCheckerState()
+		assert.NoError(t, err)
+		assert.Equal(t, num, state.NonVotingReplicaNum)
+	}
+	runStoreTest(t, fn)
+}
+
+func TestManagedHAKeeperClient_UpdateNonVotingLocality(t *testing.T) {
+	fn := func(t *testing.T, store *store) {
+		peers := make(map[uint64]dragonboat.Target)
+		peers[1] = store.id()
+		assert.NoError(t, store.startHAKeeperReplica(1, peers, false))
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+		defer cancel()
+		locality := pb.Locality{
+			Value: map[string]string{
+				"k1": "v1",
+				"k2": "v2",
+			},
+		}
+		err := store.updateNonVotingLocality(ctx, locality)
+		assert.NoError(t, err)
+
+		state, err := store.getCheckerState()
+		assert.NoError(t, err)
+		assert.Equal(t, locality, state.NonVotingLocality)
 	}
 	runStoreTest(t, fn)
 }

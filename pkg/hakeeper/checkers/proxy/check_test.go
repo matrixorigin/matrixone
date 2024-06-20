@@ -90,7 +90,18 @@ func TestCheck(t *testing.T) {
 	currentTick := expiredTick + 1
 	cfg := hakeeper.Config{}
 	cfg.Fill()
-	ops := Check(cfg, infos, currentTick)
+	pc := NewProxyServiceChecker(
+		hakeeper.NewCheckerCommonFields(
+			"",
+			cfg,
+			nil,
+			pb.ClusterInfo{},
+			pb.TaskTableUser{},
+			currentTick,
+		),
+		infos,
+	)
+	ops := pc.Check()
 	assert.Equal(t, 1, len(ops))
 	steps := ops[0].OpSteps()
 	assert.Equal(t, 1, len(steps))

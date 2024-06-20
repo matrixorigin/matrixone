@@ -20,8 +20,23 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
-func Check(cfg hakeeper.Config, infos pb.ProxyState, currentTick uint64) (operators []*operator.Operator) {
-	_, expired := parseProxyStores(cfg, infos, currentTick)
+type proxyServiceChecker struct {
+	hakeeper.CheckerCommonFields
+	proxyState pb.ProxyState
+}
+
+func NewProxyServiceChecker(
+	commonFields hakeeper.CheckerCommonFields,
+	proxyState pb.ProxyState,
+) hakeeper.ModuleChecker {
+	return &proxyServiceChecker{
+		CheckerCommonFields: commonFields,
+		proxyState:          proxyState,
+	}
+}
+
+func (c *proxyServiceChecker) Check() (operators []*operator.Operator) {
+	_, expired := parseProxyStores(c.Cfg, c.proxyState, c.CurrentTick)
 	for _, uuid := range expired {
 		operators = append(operators, operator.CreateDeleteProxyOp("", uuid))
 	}

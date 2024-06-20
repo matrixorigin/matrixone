@@ -261,7 +261,7 @@ func shutdownStores(serviceType pb.ServiceType, stores map[string]struct{}) []*o
 	case pb.TNService:
 		for id := range stores {
 			op := operator.NewOperator(
-				"dnservice", operator.NoopShardID, operator.NoopEpoch,
+				"tnservice", operator.NoopShardID, operator.NoopEpoch,
 				operator.StopTnStore{StoreID: id},
 			)
 			ops = append(ops, op)

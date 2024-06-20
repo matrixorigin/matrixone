@@ -623,3 +623,21 @@ func TestProxyStateUpdate(t *testing.T) {
 		ListenAddress: hb1.ListenAddress,
 	})
 }
+
+func TestLocalityFormat(t *testing.T) {
+	var l1 *Locality
+	assert.Equal(t, "", l1.Format())
+	l1 = &Locality{}
+	assert.Equal(t, "", l1.Format())
+	l1 = &Locality{Value: map[string]string{}}
+	assert.Equal(t, "", l1.Format())
+	l1 = &Locality{Value: map[string]string{
+		"k1": "v1",
+	}}
+	assert.Equal(t, "k1:v1", l1.Format())
+	l1 = &Locality{Value: map[string]string{
+		"k1": "v1",
+		"k2": "v2",
+	}}
+	assert.Equal(t, "k1:v1;k2:v2", l1.Format())
+}

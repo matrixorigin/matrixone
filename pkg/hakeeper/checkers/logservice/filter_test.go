@@ -24,36 +24,158 @@ import (
 func TestSelector(t *testing.T) {
 	cases := []struct {
 		shardInfo logservice.LogShardInfo
-		stores    []string
+		stores    map[string]logservice.Locality
+		required  logservice.Locality
 		expected  string
 	}{
+		// empty locality
 		{
 			shardInfo: logservice.LogShardInfo{
 				Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 			},
-			stores: []string{"a", "b", "c", "d"},
-
+			stores: map[string]logservice.Locality{
+				"a": {},
+				"b": {},
+				"c": {},
+				"d": {},
+			},
 			expected: "d",
 		},
 		{
 			shardInfo: logservice.LogShardInfo{
 				Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 			},
-			stores: []string{"a", "b", "c"},
-
+			stores: map[string]logservice.Locality{
+				"a": {},
+				"b": {},
+				"c": {},
+			},
 			expected: "",
 		},
 		{
 			shardInfo: logservice.LogShardInfo{
 				Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 			},
-			stores:   []string{"a", "b", "c", "e", "hello", "d"},
+			stores: map[string]logservice.Locality{
+				"a":     {},
+				"b":     {},
+				"c":     {},
+				"e":     {},
+				"hello": {},
+				"d":     {},
+			},
 			expected: "d",
+		},
+		{
+			shardInfo: logservice.LogShardInfo{
+				Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+			},
+			stores: map[string]logservice.Locality{
+				"a":     {},
+				"b":     {},
+				"c":     {},
+				"e":     {},
+				"hello": {},
+				"d":     {Value: map[string]string{"k1": "v1"}},
+			},
+			expected: "e",
+		},
+
+		// not empty locality
+		{
+			shardInfo: logservice.LogShardInfo{
+				Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+			},
+			stores: map[string]logservice.Locality{
+				"a": {},
+				"b": {},
+				"c": {},
+				"d": {Value: map[string]string{"k1": "v1"}},
+			},
+			required: logservice.Locality{
+				Value: map[string]string{"k1": "v1"},
+			},
+			expected: "d",
+		},
+
+		{
+			shardInfo: logservice.LogShardInfo{
+				Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+			},
+			stores: map[string]logservice.Locality{
+				"a": {},
+				"b": {},
+				"c": {},
+				"d": {Value: map[string]string{"k1": "v2"}},
+			},
+			required: logservice.Locality{
+				Value: map[string]string{"k1": "v1"},
+			},
+			expected: "",
 		},
 	}
 
 	for _, c := range cases {
-		output := selectStore(c.shardInfo, c.stores)
+		output := selectStore(c.shardInfo, c.stores, c.required)
 		assert.Equal(t, c.expected, output)
+	}
+}
+
+func TestFilterLocality(t *testing.T) {
+	cases := []struct {
+		store    logservice.Locality
+		required logservice.Locality
+		expect   bool
+	}{
+		{
+			store: logservice.Locality{
+				Value: map[string]string{
+					"a": "a",
+					"b": "b",
+				},
+			},
+			required: logservice.Locality{
+				Value: map[string]string{
+					"a": "a",
+				},
+			},
+			expect: true,
+		},
+		{
+			store: logservice.Locality{
+				Value: map[string]string{
+					"a": "a",
+					"b": "b",
+				},
+			},
+			required: logservice.Locality{
+				Value: map[string]string{
+					"a": "a",
+					"b": "a",
+				},
+			},
+			expect: false,
+		},
+		{
+			store: logservice.Locality{
+				Value: map[string]string{
+					"a": "a",
+					"b": "b",
+				},
+			},
+			required: logservice.Locality{
+				Value: map[string]string{
+					"a": "a",
+					"b": "b",
+					"c": "c",
+				},
+			},
+			expect: false,
+		},
+	}
+
+	for _, c := range cases {
+		r := filterLocality(c.store, c.required)
+		assert.Equal(t, c.expect, r)
 	}
 }

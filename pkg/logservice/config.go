@@ -20,14 +20,13 @@ import (
 	"strings"
 	"time"
 
-	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/util"
-
 	"github.com/google/uuid"
 	"github.com/lni/dragonboat/v4"
 	"github.com/lni/vfs"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 )
 
@@ -148,6 +147,15 @@ type Config struct {
 	HAKeeperTruncateInterval toml.Duration `toml:"hakeeper-truncate-interval"`
 	// ExplicitHostname is the hostname used in draogboat.
 	ExplicitHostname string `toml:"explicit-hostname"`
+	// Locality sets the locality information of the logservice instance.
+	// The format is "key1:value1;key2:value2".
+	// It is mainly used to allocate non-voting replicas.
+	Locality string `toml:"locality"`
+	// IsNonVoting indicates if this node is a non-voting node.
+	// If it is a non-voting node, it can only receive replicated states from leader,
+	// but it is neither allowed to vote for leader, nor considered as a part of the
+	// quorum when replicating state.
+	IsNonVoting bool `toml:"is-non-voting"`
 
 	RPC struct {
 		// MaxMessageSize is the max size for RPC message. The default value is 10MiB.
@@ -199,6 +207,8 @@ type Config struct {
 			// already exists.
 			Force bool `toml:"force"`
 		} `toml:"restore"`
+		// NonVotingLocality is the locality for non-voting replicas.
+		NonVotingLocality string `toml:"non-voting-locality" user_setting:"advanced"`
 	}
 
 	HAKeeperConfig struct {
@@ -410,6 +420,7 @@ func DefaultConfig() Config {
 		HAKeeperCheckInterval:    toml.Duration{Duration: hakeeper.CheckDuration},
 		TruncateInterval:         toml.Duration{Duration: defaultTruncateInterval},
 		HAKeeperTruncateInterval: toml.Duration{Duration: defaultHAKeeperTruncateInterval},
+		IsNonVoting:              false,
 		RPC: struct {
 			MaxMessageSize toml.ByteSize `toml:"max-message-size"`
 			EnableCompress bool          `toml:"enable-compress"`
@@ -430,6 +441,7 @@ func DefaultConfig() Config {
 				FilePath string `toml:"file-path"`
 				Force    bool   `toml:"force"`
 			} `toml:"restore"`
+			NonVotingLocality string `toml:"non-voting-locality" user_setting:"advanced"`
 		}(struct {
 			BootstrapCluster      bool
 			NumOfLogShards        uint64
@@ -440,6 +452,7 @@ func DefaultConfig() Config {
 				FilePath string
 				Force    bool
 			}
+			NonVotingLocality string
 		}{
 			BootstrapCluster:      true,
 			NumOfLogShards:        1,
@@ -453,6 +466,7 @@ func DefaultConfig() Config {
 				FilePath: defaultRestoreFilePath,
 				Force:    false,
 			},
+			NonVotingLocality: "",
 		}),
 		HAKeeperConfig: struct {
 			TickPerSecond   int           `toml:"tick-per-second"`
@@ -630,6 +644,29 @@ func (c *Config) GossipServiceAddr() string {
 		return fmt.Sprintf("%s:%d", c.ServiceHost, c.GossipPort)
 	}
 	return c.GossipAddress
+}
+
+// getLocality returns a pointer to logservicepb.Locality instance.
+// It creates a instance by parsing the content in Config.Locality,
+// which is just a string value. The format of the string value
+// should be like: "key1:value1;key2:value2[;]"
+func (c *Config) getLocality() logservicepb.Locality {
+	if c.Locality == "" {
+		return logservicepb.Locality{}
+	}
+	locality := logservicepb.Locality{
+		Value: make(map[string]string),
+	}
+	sep1, sep2 := ";", ":"
+	kvs := strings.Split(c.Locality, sep1)
+	for _, kv := range kvs {
+		pair := strings.Split(kv, sep2)
+		if len(pair) != 2 || pair[0] == "" || pair[1] == "" {
+			continue
+		}
+		locality.Value[pair[0]] = pair[1]
+	}
+	return locality
 }
 
 func dumpLogConfig(cfg Config) (map[string]*logservicepb.ConfigItem, error) {

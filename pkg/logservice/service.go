@@ -32,7 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/dnservice"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/tnservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -115,7 +115,7 @@ func NewService(
 		service.runtime = runtime.DefaultRuntime()
 	}
 
-	dnservice.InitCheckState(cfg.UUID)
+	tnservice.InitCheckState(cfg.UUID)
 
 	store, err := newLogStore(cfg, service.getTaskService, service.runtime)
 	if err != nil {
@@ -293,6 +293,10 @@ func (s *Service) handle(ctx context.Context, req pb.Request,
 		return s.handleDeleteCNStore(ctx, req), pb.LogRecordResponse{}
 	case pb.PROXY_HEARTBEAT:
 		return s.handleProxyHeartbeat(ctx, req), pb.LogRecordResponse{}
+	case pb.UPDATE_NON_VOTING_REPLICA_NUM:
+		return s.handleUpdateNonVotingReplicaNum(ctx, req), pb.LogRecordResponse{}
+	case pb.UPDATE_NON_VOTING_LOCALITY:
+		return s.handleUpdateNonVotingLocality(ctx, req), pb.LogRecordResponse{}
 	default:
 		resp := getResponse(req)
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(
@@ -532,6 +536,25 @@ func (s *Service) handleProxyHeartbeat(ctx context.Context, req pb.Request) pb.R
 		return resp
 	} else {
 		resp.CommandBatch = &cb
+	}
+	return resp
+}
+
+func (s *Service) handleUpdateNonVotingReplicaNum(ctx context.Context, req pb.Request) pb.Response {
+	num := req.NonVotingReplicaNum
+	resp := getResponse(req)
+	if err := s.store.updateNonVotingReplicaNum(ctx, num); err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+		return resp
+	}
+	return resp
+}
+
+func (s *Service) handleUpdateNonVotingLocality(ctx context.Context, req pb.Request) pb.Response {
+	resp := getResponse(req)
+	if err := s.store.updateNonVotingLocality(ctx, *req.NonVotingLocality); err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+		return resp
 	}
 	return resp
 }

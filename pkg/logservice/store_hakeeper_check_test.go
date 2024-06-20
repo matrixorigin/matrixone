@@ -295,7 +295,14 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperCreated, state.State)
 		nextIDByKey := map[string]uint64{"a": 1, "b": 2}
-		require.NoError(t, store1.setInitialClusterInfo(1, 1, 3, hakeeper.K8SIDRangeEnd+10, nextIDByKey))
+		require.NoError(t, store1.setInitialClusterInfo(
+			1,
+			1,
+			3,
+			hakeeper.K8SIDRangeEnd+10,
+			nextIDByKey,
+			nil,
+		))
 		state, err = store1.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperBootstrapping, state.State)
@@ -552,7 +559,14 @@ func TestSetInitialClusterInfo(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperCreated, state.State)
 		nextIDByKey := map[string]uint64{"a": 1, "b": 2}
-		require.NoError(t, store.setInitialClusterInfo(1, 1, 1, hakeeper.K8SIDRangeEnd+10, nextIDByKey))
+		require.NoError(t, store.setInitialClusterInfo(
+			1,
+			1,
+			1,
+			hakeeper.K8SIDRangeEnd+10,
+			nextIDByKey,
+			nil,
+		))
 		state, err = store.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperBootstrapping, state.State)
@@ -576,7 +590,14 @@ func testBootstrap(t *testing.T, fail bool) {
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperCreated, state.State)
 		nextIDByKey := map[string]uint64{"a": 1, "b": 2}
-		require.NoError(t, store.setInitialClusterInfo(1, 1, 1, hakeeper.K8SIDRangeEnd+10, nextIDByKey))
+		require.NoError(t, store.setInitialClusterInfo(
+			1,
+			1,
+			1,
+			hakeeper.K8SIDRangeEnd+10,
+			nextIDByKey,
+			nil,
+		))
 		state, err = store.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperBootstrapping, state.State)
@@ -666,7 +687,14 @@ func TestTaskSchedulerCanScheduleTasksToCNs(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperCreated, state.State)
 		nextIDByKey := map[string]uint64{"a": 1, "b": 2}
-		require.NoError(t, store.setInitialClusterInfo(1, 1, 1, hakeeper.K8SIDRangeEnd+10, nextIDByKey))
+		require.NoError(t, store.setInitialClusterInfo(
+			1,
+			1,
+			1,
+			hakeeper.K8SIDRangeEnd+10,
+			nextIDByKey,
+			nil,
+		))
 		state, err = store.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperBootstrapping, state.State)
@@ -767,7 +795,14 @@ func TestTaskSchedulerCanReScheduleExpiredTasks(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperCreated, state.State)
 		nextIDByKey := map[string]uint64{"a": 1, "b": 2}
-		require.NoError(t, store.setInitialClusterInfo(1, 1, 1, hakeeper.K8SIDRangeEnd+10, nextIDByKey))
+		require.NoError(t, store.setInitialClusterInfo(
+			1,
+			1,
+			1,
+			hakeeper.K8SIDRangeEnd+10,
+			nextIDByKey,
+			nil,
+		))
 		state, err = store.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperBootstrapping, state.State)

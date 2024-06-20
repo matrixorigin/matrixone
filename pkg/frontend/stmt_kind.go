@@ -177,7 +177,11 @@ func statementCanBeExecutedInUncommittedTransaction(ctx context.Context, ses FeS
 		*tree.ShowCreatePublications,
 		*tree.ShowBackendServers,
 		*tree.ShowAccountUpgrade,
-		*tree.ShowConnectors:
+		*tree.ShowConnectors,
+		*tree.ShowLogserviceReplicas,
+		*tree.ShowLogserviceStores,
+		*tree.ShowLogserviceSettings,
+		*tree.SetLogserviceSettings:
 		return true, nil
 		//others
 	case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainFor, *InternalCmdFieldList:

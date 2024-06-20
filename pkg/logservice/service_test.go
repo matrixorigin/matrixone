@@ -1187,3 +1187,88 @@ func TestServiceHandleProxyHeartbeat(t *testing.T) {
 	}
 	runServiceTest(t, true, true, fn)
 }
+
+func TestServiceHandleUpdateNonVotingReplicaNum(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		ctx0, cancel0 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel0()
+		req := pb.Request{
+			Method:              pb.UPDATE_NON_VOTING_REPLICA_NUM,
+			NonVotingReplicaNum: 3,
+		}
+		resp := s.handleUpdateNonVotingReplicaNum(ctx0, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+
+		ctx3, cancel3 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel3()
+		req = pb.Request{
+			Method: pb.GET_CLUSTER_STATE,
+		}
+		resp = s.handleGetCheckerState(ctx3, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		assert.NotEmpty(t, resp.CheckerState)
+		assert.Equal(t, uint64(3), resp.CheckerState.NonVotingReplicaNum)
+	}
+	runServiceTest(t, true, true, fn)
+}
+
+func TestServiceHandleUpdateNonVotingLocality(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		ctx0, cancel0 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel0()
+		req := pb.Request{
+			Method: pb.UPDATE_NON_VOTING_LOCALITY,
+			NonVotingLocality: &pb.Locality{
+				Value: map[string]string{
+					"region": "east",
+					"type":   "mysql",
+				},
+			},
+		}
+		resp := s.handleUpdateNonVotingLocality(ctx0, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+
+		ctx1, cancel1 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel1()
+		req = pb.Request{
+			Method: pb.GET_CLUSTER_STATE,
+		}
+		resp = s.handleGetCheckerState(ctx1, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		assert.NotEmpty(t, resp.CheckerState)
+		assert.Equal(t, 2, len(resp.CheckerState.NonVotingLocality.Value))
+		v, ok := resp.CheckerState.NonVotingLocality.Value["region"]
+		assert.True(t, ok)
+		assert.Equal(t, "east", v)
+		v, ok = resp.CheckerState.NonVotingLocality.Value["type"]
+		assert.True(t, ok)
+		assert.Equal(t, "mysql", v)
+
+		ctx2, cancel2 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel2()
+		req = pb.Request{
+			Method: pb.UPDATE_NON_VOTING_LOCALITY,
+			NonVotingLocality: &pb.Locality{
+				Value: map[string]string{
+					"zone": "asia",
+				},
+			},
+		}
+		resp = s.handleUpdateNonVotingLocality(ctx2, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+
+		ctx3, cancel3 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel3()
+		req = pb.Request{
+			Method: pb.GET_CLUSTER_STATE,
+		}
+		resp = s.handleGetCheckerState(ctx3, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		assert.NotEmpty(t, resp.CheckerState)
+		assert.Equal(t, 1, len(resp.CheckerState.NonVotingLocality.Value))
+		v, ok = resp.CheckerState.NonVotingLocality.Value["zone"]
+		assert.True(t, ok)
+		assert.Equal(t, "asia", v)
+	}
+	runServiceTest(t, true, true, fn)
+}

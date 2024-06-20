@@ -96,9 +96,10 @@ func (s *CNState) Update(hb CNStoreHeartbeat, tick uint64) {
 	storeInfo.QueryAddress = hb.QueryAddress
 	storeInfo.GossipAddress = hb.GossipAddress
 	storeInfo.GossipJoined = hb.GossipJoined
-	if hb.ConfigData != nil {
-		storeInfo.ConfigData = hb.ConfigData
-	}
+	// TODO(liubo:)
+	// if hb.ConfigData != nil {
+	// 	storeInfo.ConfigData = hb.ConfigData
+	// }
 	storeInfo.Resource = hb.Resource
 	storeInfo.CommitID = hb.CommitID
 	s.Stores[hb.UUID] = storeInfo
@@ -170,9 +171,9 @@ func (s *TNState) Update(hb TNStoreHeartbeat, tick uint64) {
 	storeInfo.LockServiceAddress = hb.LockServiceAddress
 	storeInfo.ShardServiceAddress = hb.ShardServiceAddress
 	storeInfo.TaskServiceCreated = hb.TaskServiceCreated
-	if hb.ConfigData != nil {
-		storeInfo.ConfigData = hb.ConfigData
-	}
+	// if hb.ConfigData != nil {
+	// 	storeInfo.ConfigData = hb.ConfigData
+	// }
 	storeInfo.QueryAddress = hb.QueryAddress
 	s.Stores[hb.UUID] = storeInfo
 }
@@ -203,9 +204,10 @@ func (s *LogState) updateStores(hb LogStoreHeartbeat, tick uint64) {
 	storeInfo.GossipAddress = hb.GossipAddress
 	storeInfo.Replicas = hb.Replicas
 	storeInfo.TaskServiceCreated = hb.TaskServiceCreated
-	if hb.ConfigData != nil {
-		storeInfo.ConfigData = hb.ConfigData
-	}
+	// if hb.ConfigData != nil {
+	// 	storeInfo.ConfigData = hb.ConfigData
+	// }
+	storeInfo.Locality = hb.Locality
 	s.Stores[hb.UUID] = storeInfo
 }
 
@@ -214,16 +216,19 @@ func (s *LogState) updateShards(hb LogStoreHeartbeat) {
 		recorded, ok := s.Shards[incoming.ShardID]
 		if !ok {
 			recorded = LogShardInfo{
-				ShardID:  incoming.ShardID,
-				Replicas: make(map[uint64]string),
+				ShardID:           incoming.ShardID,
+				Replicas:          make(map[uint64]string),
+				NonVotingReplicas: make(map[uint64]string),
 			}
 		}
 
 		if incoming.Epoch > recorded.Epoch {
 			recorded.Epoch = incoming.Epoch
 			recorded.Replicas = incoming.Replicas
+			recorded.NonVotingReplicas = incoming.NonVotingReplicas
 		} else if incoming.Epoch == recorded.Epoch && incoming.Epoch > 0 {
-			if !reflect.DeepEqual(recorded.Replicas, incoming.Replicas) {
+			if !reflect.DeepEqual(recorded.Replicas, incoming.Replicas) ||
+				!reflect.DeepEqual(recorded.NonVotingReplicas, incoming.NonVotingReplicas) {
 				panic(fmt.Sprintf("inconsistent replicas, recorded: %+v, incoming: %+v",
 					recorded, incoming))
 			}
@@ -317,8 +322,27 @@ func (s *ProxyState) Update(hb ProxyHeartbeat, tick uint64) {
 	storeInfo.UUID = hb.UUID
 	storeInfo.Tick = tick
 	storeInfo.ListenAddress = hb.ListenAddress
-	if hb.ConfigData != nil {
-		storeInfo.ConfigData = hb.ConfigData
-	}
+	// if hb.ConfigData != nil {
+	//	storeInfo.ConfigData = hb.ConfigData
+	// }
 	s.Stores[hb.UUID] = storeInfo
+}
+
+func (l *Locality) Format() string {
+	if l == nil || l.Value == nil {
+		return ""
+	}
+	if len(l.Value) == 0 {
+		return ""
+	}
+	var keys []string
+	for k := range l.Value {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var s string
+	for _, k := range keys {
+		s += fmt.Sprintf("%s:%s;", k, l.Value[k])
+	}
+	return s[:len(s)-1]
 }

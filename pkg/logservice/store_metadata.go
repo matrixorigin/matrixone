@@ -266,10 +266,11 @@ func (l *store) mustSaveMetadata() {
 	}
 }
 
-func (l *store) addMetadata(shardID uint64, replicaID uint64) {
+func (l *store) addMetadata(shardID uint64, replicaID uint64, nonVoting bool) {
 	rec := metadata.LogShard{}
 	rec.ShardID = shardID
 	rec.ReplicaID = replicaID
+	rec.NonVoting = nonVoting
 	l.mu.Lock()
 	defer l.mu.Unlock()
 

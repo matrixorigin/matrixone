@@ -15,6 +15,7 @@
 package logservice
 
 type replica struct {
+	// uuid is the store UUID
 	uuid    string
 	shardID uint64
 	epoch   uint64
@@ -39,11 +40,15 @@ type stats struct {
 	// toAdd collects replicas that needs to be added in config.
 	// The key is shardID and the value is the number of replicas to be added.
 	toAdd map[uint64]uint32
+
+	// nonVoting indicates if it is a stats for non-voting replicas.
+	nonVoting bool
 }
 
-func newStats() *stats {
+func newStats(nonVoting bool) *stats {
 	return &stats{
-		toRemove: make(map[uint64][]replica),
-		toAdd:    make(map[uint64]uint32),
+		toRemove:  make(map[uint64][]replica),
+		toAdd:     make(map[uint64]uint32),
+		nonVoting: nonVoting,
 	}
 }
