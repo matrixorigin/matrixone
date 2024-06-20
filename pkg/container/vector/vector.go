@@ -4188,12 +4188,9 @@ func Intersection2VectorOrdered[T types.OrderedT | types.Decimal128](a, b []T, r
 		long = a
 		short = b
 	}
-
-	var k int
 	var lenLong, lenShort = len(long), len(short)
 
 	ret.PreExtend(lenLong+lenShort, mp)
-	retCol := MustFixedCol[T](ret)
 
 	for i := range short {
 		idx := sort.Search(lenLong, func(j int) bool {
@@ -4204,39 +4201,33 @@ func Intersection2VectorOrdered[T types.OrderedT | types.Decimal128](a, b []T, r
 		}
 
 		if cmp(short[i], long[idx]) == 0 {
-			retCol[k] = short[i]
-			k++
+			AppendFixed(ret, short[i], false, mp)
 		}
 
 		long = long[idx:]
 	}
-
-	ret.SetLength(k)
 }
 
 // Union2VectorOrdered does a ∪ b ==> ret, keeps all item unique and sorted
 // it assumes that a and b all sorted already
 func Union2VectorOrdered[T types.OrderedT | types.Decimal128](a, b []T, ret *Vector, mp *mpool.MPool, cmp func(x, y T) int) {
-	var i, j, k int
+	var i, j int
 	var prevVal T
 	var lenA, lenB = len(a), len(b)
 
 	ret.PreExtend(lenA+lenB, mp)
-	retCol := MustFixedCol[T](ret)
 
 	for i < lenA && j < lenB {
 		if cmp(a[i], b[j]) <= 0 {
 			if (i == 0 && j == 0) || cmp(prevVal, a[i]) != 0 {
 				prevVal = a[i]
-				retCol[k] = a[i]
-				k++
+				AppendFixed(ret, a[i], false, mp)
 			}
 			i++
 		} else {
 			if (i == 0 && j == 0) || cmp(prevVal, b[j]) != 0 {
 				prevVal = b[j]
-				retCol[k] = b[j]
-				k++
+				AppendFixed(ret, b[j], false, mp)
 			}
 			j++
 		}
@@ -4245,20 +4236,16 @@ func Union2VectorOrdered[T types.OrderedT | types.Decimal128](a, b []T, ret *Vec
 	for ; i < lenA; i++ {
 		if (i == 0 && j == 0) || cmp(prevVal, a[i]) != 0 {
 			prevVal = a[i]
-			retCol[k] = a[i]
-			k++
+			AppendFixed(ret, a[i], false, mp)
 		}
 	}
 
 	for ; j < lenB; j++ {
 		if (i == 0 && j == 0) || cmp(prevVal, b[j]) != 0 {
 			prevVal = b[j]
-			retCol[k] = b[j]
-			k++
+			AppendFixed(ret, b[j], false, mp)
 		}
 	}
-
-	ret.SetLength(k)
 }
 
 // Intersection2VectorVarlen does a ∩ b ==> ret, keeps all item unique and sorted
@@ -4284,7 +4271,6 @@ func Intersection2VectorVarlen(va, vb *Vector, ret *Vector, mp *mpool.MPool) {
 
 	var lenLong, lenShort = len(longCol), len(shortCol)
 
-	var k int
 	ret.PreExtend(lenLong+lenShort, mp)
 
 	for i := range shortCol {
@@ -4297,20 +4283,17 @@ func Intersection2VectorVarlen(va, vb *Vector, ret *Vector, mp *mpool.MPool) {
 		}
 
 		if bytes.Equal(shortBytes, longCol[idx].GetByteSlice(longArea)) {
-			SetBytesAt(ret, k, shortBytes, mp)
-			k++
+			AppendBytes(ret, shortBytes, false, mp)
 		}
 
 		longCol = longCol[idx:]
 	}
-
-	ret.SetLength(k)
 }
 
 // Union2VectorValen does a ∪ b ==> ret, keeps all item unique and sorted
 // it assumes that va and vb all sorted already
 func Union2VectorValen(va, vb *Vector, ret *Vector, mp *mpool.MPool) {
-	var i, j, k int
+	var i, j int
 	var prevVal []byte
 
 	cola, areaa := MustVarlenaRawData(va)
@@ -4327,15 +4310,13 @@ func Union2VectorValen(va, vb *Vector, ret *Vector, mp *mpool.MPool) {
 		if bytes.Compare(ba, bb) <= 0 {
 			if (i == 0 && j == 0) || bytes.Equal(prevVal, ba) {
 				prevVal = ba
-				SetBytesAt(ret, k, ba, mp)
-				k++
+				AppendBytes(ret, ba, false, mp)
 			}
 			i++
 		} else {
 			if (i == 0 && j == 0) || bytes.Equal(prevVal, bb) {
 				prevVal = bb
-				SetBytesAt(ret, k, bb, mp)
-				k++
+				AppendBytes(ret, bb, false, mp)
 			}
 			j++
 		}
@@ -4345,8 +4326,7 @@ func Union2VectorValen(va, vb *Vector, ret *Vector, mp *mpool.MPool) {
 		ba := cola[i].GetByteSlice(areaa)
 		if (i == 0 && j == 0) || bytes.Equal(prevVal, ba) {
 			prevVal = ba
-			SetBytesAt(ret, k, ba, mp)
-			k++
+			AppendBytes(ret, ba, false, mp)
 		}
 	}
 
@@ -4354,10 +4334,7 @@ func Union2VectorValen(va, vb *Vector, ret *Vector, mp *mpool.MPool) {
 		bb := colb[j].GetByteSlice(areab)
 		if (i == 0 && j == 0) || bytes.Equal(prevVal, bb) {
 			prevVal = bb
-			SetBytesAt(ret, k, bb, mp)
-			k++
+			AppendBytes(ret, bb, false, mp)
 		}
 	}
-
-	ret.SetLength(k)
 }
