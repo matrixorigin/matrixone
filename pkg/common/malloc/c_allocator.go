@@ -30,14 +30,16 @@ func NewCAllocator() *CAllocator {
 
 var _ Allocator = new(CAllocator)
 
-func (c *CAllocator) Allocate(size uint64) (unsafe.Pointer, Deallocator, error) {
+func (c *CAllocator) Allocate(size uint64, hints Hints) (unsafe.Pointer, Deallocator, error) {
 	ptr := C.malloc(C.ulong(size))
-	clear(unsafe.Slice((*byte)(ptr), size))
+	if hints&NoClear == 0 {
+		clear(unsafe.Slice((*byte)(ptr), size))
+	}
 	return ptr, c, nil
 }
 
 var _ Deallocator = new(CAllocator)
 
-func (c *CAllocator) Deallocate(ptr unsafe.Pointer) {
+func (c *CAllocator) Deallocate(ptr unsafe.Pointer, hints Hints) {
 	C.free(ptr)
 }
