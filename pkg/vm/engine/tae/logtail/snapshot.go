@@ -143,11 +143,11 @@ func NewSnapshotMeta() *SnapshotMeta {
 }
 
 func (sm *SnapshotMeta) updateTableInfo(data *CheckpointData) {
-	insTable, _, _, _, delTableTxn := data.GetTblBatchs()
+	insTable, insTableTxn, _, _, delTableTxn := data.GetTblBatchs()
 	insAccIDs := vector.MustFixedCol[uint32](insTable.GetVectorByName(catalog2.SystemColAttr_AccID).GetDownstreamVector())
 	insTIDs := vector.MustFixedCol[uint64](insTable.GetVectorByName(catalog2.SystemRelAttr_ID).GetDownstreamVector())
 	insDBIDs := vector.MustFixedCol[uint64](insTable.GetVectorByName(catalog2.SystemRelAttr_DBID).GetDownstreamVector())
-	insCreateAts := vector.MustFixedCol[types.Timestamp](insTable.GetVectorByName(catalog2.SystemRelAttr_CreateAt).GetDownstreamVector())
+	insCreateAts := vector.MustFixedCol[types.TS](insTableTxn.GetVectorByName(txnbase.SnapshotAttr_CommitTS).GetDownstreamVector())
 	insTableNameVec := insTable.GetVectorByName(catalog2.SystemRelAttr_Name).GetDownstreamVector()
 	insTableArea := insTableNameVec.GetArea()
 	insTableNames := vector.MustFixedCol[types.Varlena](insTableNameVec)
@@ -167,8 +167,7 @@ func (sm *SnapshotMeta) updateTableInfo(data *CheckpointData) {
 			sm.tables[accID] = make(map[uint64]*TableInfo)
 		}
 		dbid := insDBIDs[i]
-		create := insCreateAts[i]
-		createAt := types.BuildTS(create.Unix(), 0)
+		createAt := insCreateAts[i]
 		if sm.tables[accID][tid] != nil {
 			continue
 		}
@@ -781,8 +780,8 @@ func isSnapshotRefers(table *TableInfo, snapVec []types.TS) bool {
 		mid := left + (right-left)/2
 		snapTS := snapVec[mid]
 		if snapTS.GreaterEq(&table.createAt) && snapTS.Less(&table.deleteAt) {
-			logutil.Infof("isSnapshotRefers: %s, create %v, drop %v",
-				snapTS.ToString(), table.createAt.ToString(), table.deleteAt.ToString())
+			logutil.Infof("isSnapshotRefers: %s, create %v, drop %v, tid %d",
+				snapTS.ToString(), table.createAt.ToString(), table.deleteAt.ToString(), table.tid)
 			return true
 		} else if snapTS.Less(&table.createAt) {
 			left = mid + 1

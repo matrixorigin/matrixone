@@ -1041,14 +1041,15 @@ func Test_ConstructBasePKFilter(t *testing.T) {
 		{op: function.EQUAL, valid: true, lb: encodeVal(10)},
 		{valid: false},
 		{valid: false},
-		{op: function.IN, valid: true, lb: encodeVec([]int64{1, 2})},
+		{op: function.IN, valid: true, vec: encodeVec([]int64{1, 2})},
+		// "b=40 and a=50",
+		{valid: true, op: function.EQUAL, lb: encodeVal(50)},
 		{valid: false},
 		{valid: false},
 		{valid: false},
 		{valid: false},
 		{valid: false},
-		{valid: false},
-		{valid: false},
+		{valid: true, op: function.EQUAL, lb: encodeVal(30)},
 		{valid: false},
 
 		// "a>=1 and a<=3",
@@ -1645,6 +1646,10 @@ func Test_ConstructBasePKFilter(t *testing.T) {
 
 	tableDef.Pkey.PkeyColName = "a"
 	for i, expr := range exprs {
+		if exprStrings[i] == "b=40 and a=50" {
+			x := 0
+			x++
+		}
 		basePKFilter := constructBasePKFilter(expr, tableDef, proc)
 		require.Equal(t, filters[i].valid, basePKFilter.valid, exprStrings[i])
 		if filters[i].valid {

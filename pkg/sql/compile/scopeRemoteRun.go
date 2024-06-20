@@ -630,7 +630,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		s.NodeInfo.Data = []byte(p.Node.Payload)
 		s.NodeInfo.Header = objectio.DecodeInfoHeader(p.Node.Type)
 	}
-	s.Proc = process.NewWithAnalyze(proc, proc.Ctx, int(p.ChildrenCount), analNodes)
+	s.Proc = process.NewFromProc(proc, proc.Ctx, int(p.ChildrenCount))
 	{
 		for i := range s.Proc.Reg.MergeReceivers {
 			ctx.regs[s.Proc.Reg.MergeReceivers[i]] = int32(i)
@@ -1048,6 +1048,8 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *table_scan.Argument:
 		in.TableScan = &pipeline.TableScan{}
+	case *value_scan.Argument:
+		in.ValueScan = &pipeline.ValueScan{}
 	default:
 		return -1, nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", opr.Op))
 	}
@@ -1476,6 +1478,9 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		v.Arg = arg
 	case vm.TableScan:
 		arg := table_scan.NewArgument()
+		v.Arg = arg
+	case vm.ValueScan:
+		arg := value_scan.NewArgument()
 		v.Arg = arg
 	default:
 		return v, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", opr.Op))

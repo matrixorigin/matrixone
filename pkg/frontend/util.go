@@ -1391,3 +1391,15 @@ func checkMoreResultSet(status uint16, isLastStmt bool) uint16 {
 	}
 	return status
 }
+
+func Copy[T any](src []T) []T {
+	if src == nil {
+		return nil
+	}
+	if len(src) == 0 {
+		return []T{}
+	}
+	dst := make([]T, len(src))
+	copy(dst, src)
+	return dst
+}

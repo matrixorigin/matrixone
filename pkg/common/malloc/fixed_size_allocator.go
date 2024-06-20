@@ -1,4 +1,4 @@
-// Copyright 2021 - 2024 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,19 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package statsinfo
+package malloc
 
-import "math"
+import "unsafe"
 
-func (sc *StatsInfo) NeedUpdate(currentApproxObjNum int64) bool {
-	if sc.ApproxObjectNumber == 0 || sc.AccurateObjectNumber == 0 {
-		return true
-	}
-	if math.Abs(float64(sc.ApproxObjectNumber-currentApproxObjNum)) >= float64(sc.AccurateObjectNumber) {
-		return true
-	}
-	if float64(currentApproxObjNum)/float64(sc.ApproxObjectNumber) > 1.05 || float64(currentApproxObjNum)/float64(sc.ApproxObjectNumber) < 0.95 {
-		return true
-	}
-	return false
+type FixedSizeAllocator interface {
+	Allocate(hint Hints) (unsafe.Pointer, Deallocator, error)
 }

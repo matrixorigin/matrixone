@@ -412,7 +412,7 @@ func (s *service) watch(ctx context.Context) {
 	defer ticker.Stop()
 
 	fetch := func() ([]string, []string, error) {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
 		defer cancel()
 		var features []string
 		var states []string
@@ -503,7 +503,7 @@ func (s *service) updateState(feature, state string) error {
 		return moerr.NewNotSupportedNoCtx("feature %s", feature)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
 	defer cancel()
 
 	now, _ := s.clock.Now()
