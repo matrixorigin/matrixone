@@ -168,7 +168,7 @@ func (gs *GlobalStats) ShouldUpdate(key pb.StatsInfoKey, entryNum int64) bool {
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
 	info, ok := gs.mu.statsInfoMap[key]
-	if ok && info != nil && info.BlockNumber > entryNum {
+	if ok && info != nil && info.BlockNumber-entryNum > 64 {
 		return false
 	}
 	return true

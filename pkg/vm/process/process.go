@@ -83,13 +83,6 @@ func New(
 	}
 }
 
-func NewWithAnalyze(p *Process, ctx context.Context, regNumber int, anals []*AnalyzeInfo) *Process {
-	proc := NewFromProc(p, ctx, regNumber)
-	proc.AnalInfos = make([]*AnalyzeInfo, len(anals))
-	copy(proc.AnalInfos, anals)
-	return proc
-}
-
 // NewFromProc create a new Process based on another process.
 func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	proc := new(Process)
