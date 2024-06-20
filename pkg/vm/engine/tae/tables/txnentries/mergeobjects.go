@@ -100,6 +100,9 @@ func (entry *mergeObjectsEntry) prepareTransferPage() {
 		var pages []*model.TransferHashPage
 		var writer *blockio.BlockWriter
 		writer, err := blockio.NewBlockWriterNew(entry.rt.Fs.Service, name, 0, nil)
+		if err != nil {
+			return
+		}
 		for j := 0; j < obj.BlockCnt(); j++ {
 			if len(entry.transMappings.Mappings[k].M) == 0 {
 				k++
