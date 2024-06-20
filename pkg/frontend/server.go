@@ -16,6 +16,10 @@ package frontend
 
 import (
 	"context"
+	"crypto/tls"
+	"fmt"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"io"
 	"net"
 	"sync"
@@ -76,7 +80,7 @@ func (mo *MOServer) GetRoutineManager() *RoutineManager {
 
 func (mo *MOServer) Start() error {
 	logutil.Infof("Server Listening on : %s ", mo.addr)
-	mo.startAcceptLoop()
+	mo.startListener()
 	setMoServerStarted(true)
 	return nil
 }
@@ -112,58 +116,183 @@ func (mo *MOServer) Stop() error {
 	return nil
 }
 
-func (mo *MOServer) startAcceptLoop() {
+func (mo *MOServer) startListener() {
 	mo.logger.Debug("mo server accept loop started")
 	defer func() {
 		mo.logger.Debug("mo server accept loop stopped")
 	}()
 
-	listenFunc := func(listener net.Listener) {
-		defer mo.wg.Done()
-
-		var tempDelay time.Duration
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-
-				if ne, ok := err.(net.Error); ok && ne.Timeout() {
-					if tempDelay == 0 {
-						tempDelay = 5 * time.Millisecond
-					} else {
-						tempDelay *= 2
-					}
-					if max := 1 * time.Second; tempDelay > max {
-						tempDelay = max
-					}
-					time.Sleep(tempDelay)
-					continue
-				}
-				return
-			}
-			tempDelay = 0
-
-			rs := NewIOSession(conn, NewSessionAllocator(mo.pu))
-			mo.rm.Created(rs)
-
-			go func() {
-				defer func() {
-					if err := rs.Close(); err != nil {
-						mo.logger.Error("close session failed", zap.Error(err))
-					}
-				}()
-				if err := mo.handleMessage(rs); err != nil {
-					mo.logger.Error("handle session failed", zap.Error(err))
-				}
-			}()
-		}
-	}
-
 	for _, listener := range mo.listeners {
 		mo.wg.Add(1)
-		go listenFunc(listener)
+		go mo.startAccept(listener)
 	}
 }
 
+func (mo *MOServer) startAccept(listener net.Listener) {
+	defer mo.wg.Done()
+
+	var tempDelay time.Duration
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+
+			if ne, ok := err.(net.Error); ok && ne.Timeout() {
+				if tempDelay == 0 {
+					tempDelay = 5 * time.Millisecond
+				} else {
+					tempDelay *= 2
+				}
+				if max := 1 * time.Second; tempDelay > max {
+					tempDelay = max
+				}
+				time.Sleep(tempDelay)
+				continue
+			}
+			return
+		}
+		tempDelay = 0
+
+		rs := NewIOSession(conn, NewSessionAllocator(mo.pu))
+		mo.rm.Created(rs)
+		err = mo.handshake(rs)
+
+		if err != nil {
+			mo.rm.Closed(rs)
+			mo.logger.Error("HandShake error", zap.Error(err))
+			return
+		}
+		go mo.handleLoop(rs)
+
+	}
+}
+
+func (mo *MOServer) handshake(rs *baseIO) error {
+	var err error
+	var isTlsHeader bool
+	rm := mo.rm
+	ctx, span := trace.Start(rm.getCtx(), "RoutineManager.Handler",
+		trace.WithKind(trace.SpanKindStatement))
+	defer span.End()
+
+	tempCtx, tempCancel := context.WithTimeout(ctx, getGlobalPu().SV.SessionTimeout.Duration)
+	defer tempCancel()
+
+	routine := rm.getRoutine(rs)
+	protocol := routine.getProtocol()
+
+	ses := routine.getSession()
+	ts := ses.timestampMap
+
+	ts[TSEstablishStart] = time.Now()
+	ses.Debugf(tempCtx, "HANDLE HANDSHAKE")
+
+	err = protocol.WriteHandshake()
+
+	if err != nil {
+		mo.logger.Error(
+			"Failed to handshake with server, quitting routine...",
+			zap.Error(err))
+		routine.killConnection(true)
+		return err
+	}
+
+	ses.Debugf(rm.getCtx(), "have sent handshake packet to connection %s", rs.RemoteAddress())
+
+	payload, err := rs.Read()
+	if err != nil {
+		return err
+	}
+
+	if protocol.GetU32(CAPABILITY)&CLIENT_SSL != 0 && !protocol.GetBool(TLS_ESTABLISHED) {
+		ses.Debugf(tempCtx, "setup ssl")
+		isTlsHeader, err = protocol.HandleHandshake(tempCtx, payload)
+		if err != nil {
+			ses.Error(tempCtx,
+				"An error occurred",
+				zap.Error(err))
+			return err
+		}
+		if isTlsHeader {
+			ts[TSUpgradeTLSStart] = time.Now()
+			ses.Debugf(tempCtx, "upgrade to TLS")
+			// do upgradeTls
+			tlsConn := tls.Server(rs.RawConn(), rm.getTlsConfig())
+			ses.Debugf(tempCtx, "get TLS conn ok")
+			tlsCtx, cancelFun := context.WithTimeout(tempCtx, 20*time.Second)
+			if err = tlsConn.HandshakeContext(tlsCtx); err != nil {
+				ses.Error(tempCtx,
+					"Error occurred before cancel()",
+					zap.Error(err))
+				cancelFun()
+				ses.Error(tempCtx,
+					"Error occurred after cancel()",
+					zap.Error(err))
+				return err
+			}
+			cancelFun()
+			ses.Debugf(tempCtx, "TLS handshake ok")
+			rs.UseConn(tlsConn)
+			ses.Debugf(tempCtx, "TLS handshake finished")
+
+			// tls upgradeOk
+			protocol.SetBool(TLS_ESTABLISHED, true)
+			ts[TSUpgradeTLSEnd] = time.Now()
+			v2.UpgradeTLSDurationHistogram.Observe(ts[TSUpgradeTLSEnd].Sub(ts[TSUpgradeTLSStart]).Seconds())
+		} else {
+			// client don't ask server to upgrade TLS
+			if err := protocol.Authenticate(tempCtx); err != nil {
+				return err
+			}
+			protocol.SetBool(TLS_ESTABLISHED, true)
+			protocol.SetBool(ESTABLISHED, true)
+		}
+	} else {
+		ses.Debugf(tempCtx, "handleHandshake")
+		_, err = protocol.HandleHandshake(tempCtx, payload)
+		if err != nil {
+			ses.Error(tempCtx,
+				"Error occurred",
+				zap.Error(err))
+			return err
+		}
+		if err = protocol.Authenticate(tempCtx); err != nil {
+			return err
+		}
+		protocol.SetBool(ESTABLISHED, true)
+	}
+	ts[TSEstablishEnd] = time.Now()
+	v2.EstablishDurationHistogram.Observe(ts[TSEstablishEnd].Sub(ts[TSEstablishStart]).Seconds())
+	ses.Info(ctx, fmt.Sprintf("mo accept connection, time cost of Created: %s, Establish: %s, UpgradeTLS: %s, Authenticate: %s, SendErrPacket: %s, SendOKPacket: %s, CheckTenant: %s, CheckUser: %s, CheckRole: %s, CheckDbName: %s, InitGlobalSysVar: %s",
+		ts[TSCreatedEnd].Sub(ts[TSCreatedStart]).String(),
+		ts[TSEstablishEnd].Sub(ts[TSEstablishStart]).String(),
+		ts[TSUpgradeTLSEnd].Sub(ts[TSUpgradeTLSStart]).String(),
+		ts[TSAuthenticateEnd].Sub(ts[TSAuthenticateStart]).String(),
+		ts[TSSendErrPacketEnd].Sub(ts[TSSendErrPacketStart]).String(),
+		ts[TSSendOKPacketEnd].Sub(ts[TSSendOKPacketStart]).String(),
+		ts[TSCheckTenantEnd].Sub(ts[TSCheckTenantStart]).String(),
+		ts[TSCheckUserEnd].Sub(ts[TSCheckUserStart]).String(),
+		ts[TSCheckRoleEnd].Sub(ts[TSCheckRoleStart]).String(),
+		ts[TSCheckDbNameEnd].Sub(ts[TSCheckDbNameStart]).String(),
+		ts[TSInitGlobalSysVarEnd].Sub(ts[TSInitGlobalSysVarStart]).String()))
+
+	dbName := protocol.GetStr(DBNAME)
+	if dbName != "" {
+		ses.SetDatabaseName(dbName)
+	}
+	rm.sessionManager.AddSession(ses)
+	return nil
+}
+
+func (mo *MOServer) handleLoop(rs *baseIO) {
+	defer func() {
+		if err := rs.Close(); err != nil {
+			mo.logger.Error("close session failed", zap.Error(err))
+		}
+	}()
+	if err := mo.handleMessage(rs); err != nil {
+		mo.logger.Error("handle session failed", zap.Error(err))
+	}
+}
 func (mo *MOServer) isStarted() bool {
 	mo.mu.RLock()
 	defer mo.mu.RUnlock()

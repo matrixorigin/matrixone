@@ -4,38 +4,7 @@ import (
 	"encoding/binary"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"net"
-	"time"
 )
-
-// WriteOptions write options
-type WriteOptions struct {
-	// Timeout deadline for write
-	Timeout time.Duration
-	// Flush flush data to net.Conn
-	Flush bool
-}
-
-// ReadOptions read options
-type ReadOptions struct {
-	// Timeout deadline for read
-	Timeout time.Duration
-}
-
-type IOSession interface {
-	ID() uint64
-
-	Write(msg any, options WriteOptions) error
-
-	Read(option ReadOptions) (any, error)
-
-	Flush(timeout time.Duration) error
-
-	OutBuf() *ByteBuf
-
-	RemoteAddress() string
-
-	Disconnect() error
-}
 
 type baseIO struct {
 	id                    uint64
@@ -100,6 +69,11 @@ func (bio *baseIO) Close() error {
 
 func (bio *baseIO) Read() ([]byte, error) {
 	payloads := make([][]byte, 0)
+	defer func() {
+		for _, payload := range payloads {
+			bio.allocator.Free(payload)
+		}
+	}()
 	var err error
 	for {
 		if !bio.connected {
@@ -139,6 +113,7 @@ func (bio *baseIO) Read() ([]byte, error) {
 	for _, payload := range payloads {
 		totalLength += len(payload)
 	}
+	//TODO: check life cycle
 	finalPayload := bio.allocator.Alloc(totalLength)
 
 	copyIndex := 0
@@ -205,7 +180,7 @@ func (bio *baseIO) Flush() error {
 	if bio.out.length == 0 {
 		return nil
 	}
-
+	defer bio.Reset()
 	var err error
 	dataLength := bio.out.length
 	for dataLength > int(MaxPayloadSize) {
@@ -286,6 +261,7 @@ func (bio *baseIO) FlushLength(length int) error {
 }
 
 func (bio *baseIO) Write(payload []byte) error {
+	defer bio.Reset()
 	if !bio.connected {
 		return moerr.NewInternalError(moerr.Context(), "The IOSession connection has been closed")
 	}
@@ -320,4 +296,14 @@ func (bio *baseIO) closeConn() error {
 		}
 	}
 	return nil
+}
+
+func (bio *baseIO) Reset() {
+	bio.out.length = 0
+	bio.out.fixIndex = 0
+	bio.out.cutIndex = 0
+	for node := bio.out.dynamicBuf.Front(); node != nil; node = node.Next() {
+		bio.allocator.Free(node.Value.([]byte))
+	}
+	bio.out.dynamicBuf.Init()
 }

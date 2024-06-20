@@ -277,17 +277,6 @@ func (rm *RoutineManager) Created(rs *baseIO) {
 	if getGlobalPu().SV.ProxyEnabled {
 		pro.receiveExtraInfo(rs)
 	}
-
-	err = pro.WriteHandshake()
-	if err != nil {
-		pro.ses.Error(cancelCtx,
-			"Failed to handshake with server, quitting routine...",
-			zap.Error(err))
-		routine.killConnection(true)
-		return
-	}
-
-	ses.Debugf(rm.getCtx(), "have sent handshake packet to connection %s", rs.RemoteAddress())
 	rm.setRoutine(rs, pro.connectionID, routine)
 }
 
