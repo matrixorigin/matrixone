@@ -161,6 +161,7 @@ func TestHAKeeperClientSendCNHeartbeat(t *testing.T) {
 		hb := pb.CNStoreHeartbeat{
 			UUID:           s.ID(),
 			ServiceAddress: "addr1",
+			CommitID:       "c123",
 		}
 		_, err = c1.SendCNHeartbeat(ctx, hb)
 		require.NoError(t, err)
@@ -197,6 +198,7 @@ func TestHAKeeperClientSendCNHeartbeat(t *testing.T) {
 			ServiceAddress: "addr1",
 			WorkState:      metadata.WorkState_Working,
 			UpTime:         cd.CNStores[0].UpTime,
+			CommitID:       hb.CommitID,
 		}
 		tn := pb.TNStore{
 			UUID:                 s.ID(),
