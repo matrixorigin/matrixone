@@ -138,6 +138,7 @@ func testFileService(
 		assert.Equal(t, []byte("1234567"), content)
 		assert.Equal(t, []byte("56"), buf1.Bytes())
 		assert.Equal(t, []byte("123456789ab"), vec.Entries[6].Data)
+		vec.Release()
 
 		// stat
 		entry, err := fs.StatFile(ctx, "foo")
@@ -160,6 +161,7 @@ func testFileService(
 		err = fs.Read(ctx, &vec)
 		assert.Nil(t, err)
 		assert.Equal(t, []byte("8"), vec.Entries[0].Data)
+		vec.Release()
 
 		// sub path
 		err = fs.Write(ctx, IOVector{
@@ -772,10 +774,9 @@ func testFileService(
 		}
 		err = fs.Read(ctx, vec)
 		assert.Nil(t, err)
-
 		assert.Nil(t, vec.Entries[0].Data)
 		assert.Equal(t, []byte("foo"), vec.Entries[1].Data)
-
+		vec.Release()
 	})
 
 	t.Run("named path", func(t *testing.T) {
