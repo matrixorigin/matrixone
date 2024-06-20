@@ -99,10 +99,7 @@ func (entry *mergeObjectsEntry) prepareTransferPage() {
 		name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
 		var pages []*model.TransferHashPage
 		var writer *blockio.BlockWriter
-		writer, err := blockio.NewBlockWriterNew(entry.rt.Fs.Service, name, 0, nil)
-		if err != nil {
-			return
-		}
+		writer, _ = blockio.NewBlockWriterNew(entry.rt.Fs.Service, name, 0, nil)
 		for j := 0; j < obj.BlockCnt(); j++ {
 			if len(entry.transMappings.Mappings[k].M) == 0 {
 				k++
@@ -132,7 +129,7 @@ func (entry *mergeObjectsEntry) prepareTransferPage() {
 			v, releasev := vw.GetDownstreamVector(), vw.Close
 			defer releasev()
 			vectorRowCnt := 1
-			err = vector.AppendBytes(v, data, false, entry.rt.VectorPool.Transient.GetMPool())
+			err := vector.AppendBytes(v, data, false, entry.rt.VectorPool.Transient.GetMPool())
 			if err != nil {
 				return
 			}
@@ -151,7 +148,7 @@ func (entry *mergeObjectsEntry) prepareTransferPage() {
 			k++
 		}
 		var blocks []objectio.BlockObject
-		blocks, _, err = writer.Sync(context.Background())
+		blocks, _, err := writer.Sync(context.Background())
 		if err != nil {
 			return
 		}
