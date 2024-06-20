@@ -50,9 +50,17 @@ delete from table01 where col1 = 1;
 internal error: cannot insert/update/delete from public table
 update table01 set col1 = 100 where col2 = 2413242;
 internal error: cannot insert/update/delete from public table
+select * from table01;
+col1    col2
+1    2
+234    2413242
 show table status;
 Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment    Role_id    Role_name
 table01    Tae    Dynamic    2    0    104    0    0    NULL    0    2024-05-09 16:47:45    NULL    NULL    utf-8    NULL            0    moadmin
+select * from table01;
+col1    col2
+1    2
+234    2413242
 drop table table01;
 internal error: can not drop subscription table table01
 show subscriptions;
