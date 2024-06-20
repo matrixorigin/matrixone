@@ -74,7 +74,7 @@ func (s *singleObjPolicy) refreshTimeThreshold() {
 
 func (s *singleObjPolicy) OnObject(obj *catalog.ObjectEntry) {
 	dels := obj.GetObjectData().GetTotalChanges()
-	createAt := obj.GetCreatedAtLocked()
+	createAt := obj.GetCreatedAt()
 	iscandidate := func() bool {
 		// object with a lot of holes
 		if dels > s.config.minDeletes && dels > obj.GetRows()/2 {
