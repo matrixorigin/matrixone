@@ -131,18 +131,19 @@ func (m *Scheduler) OnObject(objectEntry *catalog.ObjectEntry) error {
 		return moerr.GetOkStopCurrRecur()
 	}
 
-	objectEntry.RLock()
-	defer objectEntry.RUnlock()
-
 	// Skip uncommitted entries
+	objectEntry.RLock()
 	// TODO: consider the case: add metaloc, is it possible to see a constructing object?
 	if !objectEntry.IsCommittedLocked() || !catalog.ActiveObjectWithNoTxnFilter(objectEntry.BaseEntryImpl) {
+		objectEntry.RUnlock()
 		return moerr.GetOkStopCurrRecur()
 	}
 
 	if objectEntry.IsAppendable() {
+		objectEntry.RUnlock()
 		return moerr.GetOkStopCurrRecur()
 	}
+	objectEntry.RUnlock()
 
 	// Rows will check objectStat, and if not loaded, it will load it.
 	rows, err := objectEntry.GetObjectData().Rows()
