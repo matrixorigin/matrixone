@@ -246,8 +246,10 @@ func (bio *baseIO) FlushLength(length int) error {
 		if err != nil {
 			return err
 		}
-		bio.out.fixIndex = 0
 		length -= bio.out.fixIndex
+		bio.out.length -= bio.out.fixIndex
+		bio.out.fixIndex = 0
+
 	}
 
 	for length != 0 {
@@ -262,7 +264,9 @@ func (bio *baseIO) FlushLength(length int) error {
 			}
 
 			bio.out.cutIndex += length
+			bio.out.length -= length
 			length = 0
+
 		} else {
 			_, err = bio.conn.Write(data[bio.out.cutIndex:])
 
@@ -271,6 +275,7 @@ func (bio *baseIO) FlushLength(length int) error {
 			}
 
 			length -= nodeLength
+			bio.out.length -= nodeLength
 			bio.out.dynamicBuf.Remove(node)
 			bio.out.alloc.Free(data)
 			bio.out.cutIndex = 0
@@ -286,11 +291,6 @@ func (bio *baseIO) Write(payload []byte) error {
 	}
 	var err error
 	var header [4]byte
-
-	err = bio.Flush()
-	if err != nil {
-		return err
-	}
 
 	length := len(payload)
 	binary.LittleEndian.PutUint32(header[:], uint32(length))
