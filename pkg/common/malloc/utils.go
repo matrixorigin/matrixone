@@ -14,6 +14,11 @@
 
 package malloc
 
+const (
+	MB = 1 << 20
+	GB = 1 << 30
+)
+
 func ptrTo[T any](v T) *T {
 	return &v
 }

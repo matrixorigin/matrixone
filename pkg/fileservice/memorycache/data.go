@@ -50,7 +50,7 @@ func newData(
 		globalSize: globalSize,
 	}
 	var err error
-	data.ptr, data.deallocator, err = allocator.Allocate(uint64(size))
+	data.ptr, data.deallocator, err = allocator.Allocate(uint64(size), malloc.NoHints)
 	if err != nil {
 		panic(err)
 	}
@@ -63,7 +63,7 @@ func newData(
 func (d *Data) free() {
 	d.globalSize.Add(-int64(d.size))
 	d.buf = nil
-	d.deallocator.Deallocate(d.ptr)
+	d.deallocator.Deallocate(d.ptr, malloc.NoHints)
 	metric.FSMallocLiveObjectsMemoryCache.Dec()
 }
 
