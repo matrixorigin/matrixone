@@ -20,7 +20,7 @@ func (sc *StatsInfo) NeedUpdate(currentApproxObjNum int64) bool {
 	if sc.ApproxObjectNumber == 0 || sc.AccurateObjectNumber == 0 {
 		return true
 	}
-	if math.Abs(float64(sc.ApproxObjectNumber-currentApproxObjNum)) >= 10 {
+	if math.Abs(float64(sc.ApproxObjectNumber-currentApproxObjNum)) >= float64(sc.AccurateObjectNumber) {
 		return true
 	}
 	if float64(currentApproxObjNum)/float64(sc.ApproxObjectNumber) > 1.05 || float64(currentApproxObjNum)/float64(sc.ApproxObjectNumber) < 0.95 {
