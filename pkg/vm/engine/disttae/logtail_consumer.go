@@ -807,7 +807,7 @@ func (c *PushClient) waitSubOrUnsubscribed(ctx context.Context, dbId, tblId uint
 		case <-ctx.Done():
 			return InvalidSubState, ctx.Err()
 		case <-ticker.C:
-			err, ok, state := c.subOrUnsubscribed(ctx, dbId, tblId)
+			ok, state, err := c.subOrUnsubscribed(ctx, dbId, tblId)
 			if err != nil {
 				return state, err
 			} else if ok {
@@ -831,7 +831,7 @@ func (c *PushClient) waitUnsubscribedOrSubscribing(ctx context.Context, dbId, tb
 		case <-ctx.Done():
 			return InvalidSubState, ctx.Err()
 		case <-ticker.C:
-			err, ok, state := c.unsubscribedOrSubscribing(ctx, dbId, tblId)
+			ok, state, err := c.unsubscribedOrSubscribing(ctx, dbId, tblId)
 			if err != nil {
 				return state, err
 				//return nil, state
@@ -846,16 +846,16 @@ func (c *PushClient) waitUnsubscribedOrSubscribing(ctx context.Context, dbId, tb
 		dbId, tblId)
 }
 
-func (c *PushClient) subOrUnsubscribed(ctx context.Context, dbId, tblId uint64) (error, bool, SubscribeState) {
+func (c *PushClient) subOrUnsubscribed(ctx context.Context, dbId, tblId uint64) (bool, SubscribeState, error) {
 	c.subscribed.mutex.Lock()
 	defer c.subscribed.mutex.Unlock()
 	v, exist := c.subscribed.m[SubTableID{DatabaseID: dbId, TableID: tblId}]
 	if exist {
 		if v.SubState == Subscribed {
 			//table is subscribed
-			return nil, true, v.SubState
+			return true, v.SubState, nil
 		} else {
-			return nil, false, v.SubState
+			return false, v.SubState, nil
 		}
 	}
 	//table is unsubscribed
@@ -863,21 +863,21 @@ func (c *PushClient) subOrUnsubscribed(ctx context.Context, dbId, tblId uint64) 
 		SubState: Subscribing,
 	}
 	if err := c.subscribeTable(ctx, api.TableID{DbId: dbId, TbId: tblId}); err != nil {
-		return err, false, Subscribing
+		return false, Subscribing, err
 	}
-	return nil, true, Subscribing
+	return true, Subscribing, nil
 }
 
 // isUnsubscribed check if the table is unsubscribed, if yes, set the table status to subscribing and do subscribe.
-func (c *PushClient) unsubscribedOrSubscribing(ctx context.Context, dbId, tblId uint64) (error, bool, SubscribeState) {
+func (c *PushClient) unsubscribedOrSubscribing(ctx context.Context, dbId, tblId uint64) (bool, SubscribeState, error) {
 	c.subscribed.mutex.Lock()
 	defer c.subscribed.mutex.Unlock()
 	v, exist := c.subscribed.m[SubTableID{DatabaseID: dbId, TableID: tblId}]
 	if exist {
 		if v.SubState == Subscribing {
-			return nil, true, v.SubState
+			return true, v.SubState, nil
 		} else {
-			return nil, false, v.SubState
+			return false, v.SubState, nil
 		}
 	}
 
@@ -885,9 +885,9 @@ func (c *PushClient) unsubscribedOrSubscribing(ctx context.Context, dbId, tblId 
 		SubState: Subscribing,
 	}
 	if err := c.subscribeTable(ctx, api.TableID{DbId: dbId, TbId: tblId}); err != nil {
-		return err, false, Subscribing
+		return false, Subscribing, err
 	}
-	return nil, true, Subscribing
+	return true, Subscribing, nil
 }
 
 func (s *subscribedTable) setTableSubscribe(dbId, tblId uint64) {
