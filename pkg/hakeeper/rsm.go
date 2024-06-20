@@ -728,6 +728,7 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 			ConfigData:          info.ConfigData,
 			Resource:            info.Resource,
 			UpTime:              info.UpTime,
+			CommitID:            info.CommitID,
 		}
 		cd.CNStores = append(cd.CNStores, n)
 	}

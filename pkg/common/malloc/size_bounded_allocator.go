@@ -43,7 +43,7 @@ func NewSizeBoundedAllocator(upstream Allocator, maxSize uint64, counter *atomic
 	ret.funcPool = sync.Pool{
 		New: func() any {
 			argumented := new(argumentedFuncDeallocator[uint64])
-			argumented.fn = func(_ unsafe.Pointer, size uint64) {
+			argumented.fn = func(_ unsafe.Pointer, hints Hints, size uint64) {
 				ret.counter.Add(-size)
 				ret.funcPool.Put(argumented)
 			}
@@ -56,7 +56,7 @@ func NewSizeBoundedAllocator(upstream Allocator, maxSize uint64, counter *atomic
 
 var _ Allocator = new(SizeBoundedAllocator)
 
-func (s *SizeBoundedAllocator) Allocate(size uint64) (unsafe.Pointer, Deallocator, error) {
+func (s *SizeBoundedAllocator) Allocate(size uint64, hints Hints) (unsafe.Pointer, Deallocator, error) {
 	for {
 
 		cur := s.counter.Load()
@@ -70,7 +70,7 @@ func (s *SizeBoundedAllocator) Allocate(size uint64) (unsafe.Pointer, Deallocato
 			continue
 		}
 
-		ptr, dec, err := s.upstream.Allocate(size)
+		ptr, dec, err := s.upstream.Allocate(size, hints)
 		if err != nil {
 			// give back
 			s.counter.Add(-size)
