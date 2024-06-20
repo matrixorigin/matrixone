@@ -509,11 +509,14 @@ func (s *service) getLockTableWithCreate(
 		return v, nil
 	}
 
+	wait := false
+	get := true
 	var c chan struct{}
 	fn := func() lockTable {
 		s.mu.Lock()
 		waitC := s.getAllocatingC(group, tableID, true)
 		if waitC != nil {
+			wait = true
 			s.mu.Unlock()
 			<-waitC
 			s.mu.Lock()
@@ -521,6 +524,7 @@ func (s *service) getLockTableWithCreate(
 
 		v := s.tableGroups.get(group, tableID)
 		if v == nil {
+			get = false
 			c = make(chan struct{})
 			m, ok := s.mu.allocating[group]
 			if !ok {
@@ -570,6 +574,8 @@ func (s *service) getLockTableWithCreate(
 		zap.String("service", s.serviceID),
 		zap.Uint32("group", group),
 		zap.String("bind", bind.DebugString()),
+		zap.Bool("wait", wait),
+		zap.Bool("get", get),
 		zap.String("table-groups", fmt.Sprintf("%p", s.tableGroups)),
 	)
 
