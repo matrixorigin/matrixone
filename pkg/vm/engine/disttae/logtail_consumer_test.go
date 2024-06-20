@@ -41,8 +41,7 @@ func TestSubscribedTable(t *testing.T) {
 		subscribeRecord.setTableSubscribe(tbl.db, tbl.tb)
 	}
 	require.Equal(t, 4, len(subscribeRecord.m))
-	ok, _ := subscribeRecord.getTableSubscribe(tbls[0].db, tbls[0].tb)
-	require.Equal(t, true, ok)
+	require.Equal(t, true, subscribeRecord.isSubscribed(tbls[0].db, tbls[0].tb))
 	for _, tbl := range tbls {
 		subscribeRecord.setTableUnsubscribe(tbl.db, tbl.tb)
 	}

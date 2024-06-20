@@ -87,7 +87,8 @@ const (
 type SubscribeState int32
 
 const (
-	Subscribing SubscribeState = iota
+	InvalidSubState SubscribeState = iota
+	Subscribing
 	Subscribed
 	Unsubscribing
 	Unsubscribed
@@ -266,73 +267,45 @@ func (c *PushClient) validLogTailMustApplied(snapshotTS timestamp.Timestamp) {
 // TryToSubscribeTable subscribe a table and block until subscribe succeed.
 func (c *PushClient) TryToSubscribeTable(
 	ctx context.Context,
-	dbId, tblId uint64) error {
+	dbId, tblId uint64) (err error) {
 
+	//if table has been subscribed, return quickly.
 	if ok := c.subscribed.isSubscribed(dbId, tblId); ok {
-		//table is subscribed, fast return.
 		return nil
 	}
 
-	// state machine: Subscribing -> Subscribed -> Unsubscribing -> Unsubscribed-->Subscribing
+	err, state := c.tryToSubscribe(ctx, dbId, tblId)
+	if err != nil {
+		return err
+	}
+
+	// state machine for subscribe table.
 	for {
 
-		state := c.subscribed.subState(dbId, tblId)
-
 		switch state {
+
 		case Subscribing:
+			//wait for subscribe succeed or unsubscribed.
+			err, state = c.waitSubOrUnsubscribed(ctx, dbId, tblId)
+			if err != nil {
+				return err
+			}
 
 		case Unsubscribing:
 			//need to wait for unsubscribe succeed for making the subscribe and unsubscribe execute in order,
 			// otherwise the partition state will leak log tails.
-			err := c.subscribed.waitUnsubscribed(ctx, dbId, tblId)
+			err, state = c.waitUnsubscribedOrSubscribing(ctx, dbId, tblId)
 			if err != nil {
 				return err
 			}
 
 		case Subscribed:
 			return nil
+
 		}
 
 	}
 
-	//if state == Unsubscribing {
-	//	//FIXME:: need to set the state to Subscribing?
-	//	err := c.subscribed.waitUnsubscribed(ctx, dbId, tblId)
-	//	if err != nil {
-	//		return err
-	//	}
-	//	//FIXME:: wait ??
-
-	//	// Start to subscribe table.
-	//	if err := c.subscribeTable(ctx, api.TableID{DbId: dbId, TbId: tblId}); err != nil {
-	//		return err
-	//	}
-
-	//} else if state == Subscribing {
-
-	//}
-
-	//// Start to subscribe table.
-	//if err := c.subscribeTable(ctx, api.TableID{DbId: dbId, TbId: tblId}); err != nil {
-	//	return err
-	//}
-
-	//ticker := time.NewTicker(periodToCheckTableSubscribeSucceed)
-	//defer ticker.Stop()
-
-	//for i := 0; i < maxCheckRangeTableSubscribeSucceed; i++ {
-	//	select {
-	//	case <-ctx.Done():
-	//		return ctx.Err()
-	//	case <-ticker.C:
-	//		if ok, _ := c.subscribed.getTableSubscribe(dbId, tblId); ok {
-	//			return nil
-	//		}
-	//	}
-	//}
-	//logutil.Errorf("%s wait tbl[db: %d, tbl: %d] subscribe succeed timeout[%s]",
-	//	logTag, dbId, tblId, maxTimeToCheckTableSubscribeSucceed)
-	//return moerr.NewInternalError(ctx, "Wait for table subscribe succeed timeout, please try again.")
 }
 
 // this method will ignore lock check, subscribe a table and block until subscribe succeed.
@@ -354,7 +327,7 @@ func (c *PushClient) forcedSubscribeTable(
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			if ok, _ := c.subscribed.getTableSubscribe(dbId, tblId); ok {
+			if ok := c.subscribed.isSubscribed(dbId, tblId); ok {
 				return nil
 			}
 		}
@@ -791,28 +764,20 @@ type SubTableStatus struct {
 	LatestTime time.Time
 }
 
-func (s *subscribedTable) getTableSubscribe(dbId, tblId uint64) (bool, SubscribeState) {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-	status, ok := s.m[SubTableID{DatabaseID: dbId, TableID: tblId}]
-	if ok {
-		if status.SubState == Unsubscribing {
-			ok = false
-		} else if status.SubState == Subscribing {
-			ok = false
-		} else {
-			//Subscribed: update the LatestTime
-			s.m[SubTableID{DatabaseID: dbId, TableID: tblId}] = SubTableStatus{
-				SubState:   status.SubState,
-				LatestTime: time.Now(),
-			}
+func (c *PushClient) tryToSubscribe(ctx context.Context, dbId, tblId uint64) (error, SubscribeState) {
+	c.subscribed.mutex.Lock()
+	defer c.subscribed.mutex.Unlock()
+	_, ok := c.subscribed.m[SubTableID{DatabaseID: dbId, TableID: tblId}]
+	if !ok {
+		c.subscribed.m[SubTableID{DatabaseID: dbId, TableID: tblId}] = SubTableStatus{
+			SubState: Subscribing,
 		}
-		return ok, s.m[SubTableID{DatabaseID: dbId, TableID: tblId}].SubState
+		if err := c.subscribeTable(ctx, api.TableID{DbId: dbId, TbId: tblId}); err != nil {
+			return err, Subscribing
+		}
 	}
-	s.m[SubTableID{DatabaseID: dbId, TableID: tblId}] = SubTableStatus{
-		SubState: Subscribing,
-	}
-	return ok, s.m[SubTableID{DatabaseID: dbId, TableID: tblId}].SubState
+	return nil, c.subscribed.m[SubTableID{DatabaseID: dbId, TableID: tblId}].SubState
+
 }
 
 func (s *subscribedTable) isSubscribed(dbId, tblId uint64) bool {
@@ -820,72 +785,106 @@ func (s *subscribedTable) isSubscribed(dbId, tblId uint64) bool {
 	defer s.mutex.Unlock()
 	v, exist := s.m[SubTableID{DatabaseID: dbId, TableID: tblId}]
 	if exist && v.SubState == Subscribed {
+		//update latest time
+		s.m[SubTableID{DatabaseID: dbId, TableID: tblId}] = SubTableStatus{
+			SubState:   Subscribed,
+			LatestTime: time.Now(),
+		}
 		return true
 	}
 	return false
 }
 
-func (s *subscribedTable) waitSubscribed(ctx context.Context, dbId, tblId uint64) error {
+func (c *PushClient) waitSubOrUnsubscribed(ctx context.Context, dbId, tblId uint64) (error, SubscribeState) {
 	ticker := time.NewTicker(periodToCheckTableSubscribeSucceed)
 	defer ticker.Stop()
 
 	for i := 0; i < maxCheckRangeTableSubscribeSucceed; i++ {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return ctx.Err(), InvalidSubState
 		case <-ticker.C:
-			if ok := s.isSubscribed(dbId, tblId); ok {
-				return nil
+			err, ok, state := c.subOrUnsubscribed(ctx, dbId, tblId)
+			if err != nil {
+				return err, state
+			} else if ok {
+				return nil, state
 			}
 		}
 	}
-	logutil.Errorf("%s wait for tbl[db: %d, tbl: %d] unsubscribe succeed timeout[%s]",
+	logutil.Errorf("%s wait for tbl[db: %d, tbl: %d] subscribed succeed timeout[%s]",
 		logTag, dbId, tblId, maxTimeToCheckTableSubscribeSucceed)
-	return moerr.NewInternalError(ctx, "Wait for tbl[db:%d, tbl:%d] unsubscribe succeed timeout",
-		dbId, tblId)
+	return moerr.NewInternalError(ctx, "Wait for tbl[db:%d, tbl:%d] subscribed succeed timeout",
+		dbId, tblId), InvalidSubState
 }
 
-func (s *subscribedTable) waitUnsubscribed(ctx context.Context, dbId, tblId uint64) error {
+// waitUnsubscribed wait for table unsubscribe succeed and set the table status to subscribing.
+func (c *PushClient) waitUnsubscribedOrSubscribing(ctx context.Context, dbId, tblId uint64) (error, SubscribeState) {
 	ticker := time.NewTicker(periodToCheckTableUnSubscribeSucceed)
 	defer ticker.Stop()
 
 	for i := 0; i < maxCheckRangeTableUnSubscribeSucceed; i++ {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return ctx.Err(), InvalidSubState
 		case <-ticker.C:
-			if ok := s.isUnsubscribed(dbId, tblId); ok {
-				return nil
+			err, ok, state := c.unsubscribedOrSubscribing(ctx, dbId, tblId)
+			if err != nil {
+				return err, state
+				//return nil, state
+			} else if ok {
+				return nil, state
 			}
 		}
 	}
 	logutil.Errorf("%s wait for tbl[db: %d, tbl: %d] unsubscribe succeed timeout[%s]",
 		logTag, dbId, tblId, maxTimeToCheckTableUnSubscribeSucceed)
 	return moerr.NewInternalError(ctx, "Wait for tbl[db:%d, tbl:%d] unsubscribe succeed timeout",
-		dbId, tblId)
+		dbId, tblId), InvalidSubState
 }
 
-func (s *subscribedTable) isUnsubscribed(dbId, tblId uint64) bool {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-	_, exist := s.m[SubTableID{DatabaseID: dbId, TableID: tblId}]
+func (c *PushClient) subOrUnsubscribed(ctx context.Context, dbId, tblId uint64) (error, bool, SubscribeState) {
+	c.subscribed.mutex.Lock()
+	defer c.subscribed.mutex.Unlock()
+	v, exist := c.subscribed.m[SubTableID{DatabaseID: dbId, TableID: tblId}]
 	if exist {
-		return false
+		if v.SubState == Subscribed {
+			//table is subscribed
+			return nil, true, v.SubState
+		} else {
+			return nil, false, v.SubState
+		}
 	}
-	s.m[SubTableID{DatabaseID: dbId, TableID: tblId}] = SubTableStatus{
+	//table is unsubscribed
+	c.subscribed.m[SubTableID{DatabaseID: dbId, TableID: tblId}] = SubTableStatus{
 		SubState: Subscribing,
 	}
-	return true
+	if err := c.subscribeTable(ctx, api.TableID{DbId: dbId, TbId: tblId}); err != nil {
+		return err, false, Subscribing
+	}
+	return nil, true, Subscribing
 }
 
-func (s *subscribedTable) subState(dbId, tblId uint64) SubscribeState {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-	key, exist := s.m[SubTableID{DatabaseID: dbId, TableID: tblId}]
-	if !exist {
-		return Unsubscribed
+// isUnsubscribed check if the table is unsubscribed, if yes, set the table status to subscribing and do subscribe.
+func (c *PushClient) unsubscribedOrSubscribing(ctx context.Context, dbId, tblId uint64) (error, bool, SubscribeState) {
+	c.subscribed.mutex.Lock()
+	defer c.subscribed.mutex.Unlock()
+	v, exist := c.subscribed.m[SubTableID{DatabaseID: dbId, TableID: tblId}]
+	if exist {
+		if v.SubState == Subscribing {
+			return nil, true, v.SubState
+		} else {
+			return nil, false, v.SubState
+		}
 	}
-	return key.SubState
+
+	c.subscribed.m[SubTableID{DatabaseID: dbId, TableID: tblId}] = SubTableStatus{
+		SubState: Subscribing,
+	}
+	if err := c.subscribeTable(ctx, api.TableID{DbId: dbId, TbId: tblId}); err != nil {
+		return err, false, Subscribing
+	}
+	return nil, true, Subscribing
 }
 
 func (s *subscribedTable) setTableSubscribe(dbId, tblId uint64) {
