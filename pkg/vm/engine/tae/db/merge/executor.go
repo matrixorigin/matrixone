@@ -100,6 +100,9 @@ func (e *MergeExecutor) RefreshMemInfo() {
 
 func (e *MergeExecutor) PrintStats() {
 	cnt := e.activeMergeBlkCount.Load()
+	if cnt == 0 && e.MemAvailBytes() > 512*common.Const1MBytes {
+		return
+	}
 
 	logutil.Infof(
 		"Mergeblocks avail mem: %v(%v reserved), active mergeing size: %v, active merging blk cnt: %d",
