@@ -1,10 +1,23 @@
 package frontend
 
 import (
+	"container/list"
 	"encoding/binary"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"net"
 )
+
+const (
+	fixBufferSize = 1024 * 1024
+)
+
+type Allocator interface {
+	// Alloc allocate a []byte with len(data) >= size, and the returned []byte cannot
+	// be expanded in use.
+	Alloc(capacity int) []byte
+	// Free free the allocated memory
+	Free([]byte)
+}
 
 type baseIO struct {
 	id                    uint64
@@ -12,9 +25,15 @@ type baseIO struct {
 	localAddr, remoteAddr string
 	connected             bool
 	sequenceId            uint8
-	in                    *ByteBuf
-	out                   *ByteBuf
-	allocator             Allocator
+
+	header     []byte // buf data, auto +/- size
+	fixBuf     []byte
+	dynamicBuf *list.List
+	fixIndex   int
+	cutIndex   int
+	length     int
+
+	allocator Allocator
 }
 
 // NewIOSession create a new io session
@@ -24,12 +43,11 @@ func NewIOSession(conn net.Conn, allocator Allocator) *baseIO {
 		localAddr:  conn.RemoteAddr().String(),
 		remoteAddr: conn.LocalAddr().String(),
 		connected:  true,
-		in:         nil,
-		out:        nil,
+		dynamicBuf: list.New(),
 		allocator:  allocator,
 	}
-	bio.in = NewByteBuf(allocator)
-	bio.out = NewByteBuf(allocator)
+	bio.header = bio.allocator.Alloc(HeaderLengthOfTheProtocol)
+	bio.fixBuf = bio.allocator.Alloc(fixBufferSize)
 
 	return bio
 }
@@ -56,13 +74,12 @@ func (bio *baseIO) Close() error {
 	}
 	bio.connected = false
 
-	if bio.out != nil {
-		bio.out.Close()
-	}
-	if bio.in != nil {
-		bio.in.Close()
-	}
+	bio.allocator.Free(bio.header)
+	bio.allocator.Free(bio.fixBuf)
 
+	for e := bio.dynamicBuf.Front(); e != nil; e = e.Next() {
+		bio.allocator.Free(e.Value.([]byte))
+	}
 	getGlobalRtMgr().Closed(bio)
 	return nil
 }
@@ -80,12 +97,12 @@ func (bio *baseIO) Read() ([]byte, error) {
 			return nil, moerr.NewInternalError(moerr.Context(), "The IOSession connection has been closed")
 		}
 		var packetLength int
-		err = bio.ReadBytes(bio.in.header, HeaderLengthOfTheProtocol)
+		err = bio.ReadBytes(bio.header, HeaderLengthOfTheProtocol)
 		if err != nil {
 			return nil, err
 		}
-		packetLength = int(uint32(bio.in.header[0]) | uint32(bio.in.header[1])<<8 | uint32(bio.in.header[2])<<16)
-		sequenceId := bio.in.header[3]
+		packetLength = int(uint32(bio.header[0]) | uint32(bio.header[1])<<8 | uint32(bio.header[2])<<16)
+		sequenceId := bio.header[3]
 		bio.sequenceId = sequenceId + 1
 
 		if packetLength == 0 {
@@ -133,7 +150,7 @@ func (bio *baseIO) ReadOnePayload(packetLength int) ([]byte, error) {
 		buf = bio.allocator.Alloc(packetLength)
 		defer bio.allocator.Free(buf)
 	} else {
-		buf = bio.in.fixBuf
+		buf = bio.fixBuf
 	}
 	err = bio.ReadBytes(buf[:packetLength], packetLength)
 	if err != nil {
@@ -163,26 +180,26 @@ func (bio *baseIO) ReadBytes(buf []byte, Length int) error {
 }
 
 func (bio *baseIO) Append(elems ...byte) {
-	remainFixBuf := fixBufferSize - bio.out.fixIndex
+	remainFixBuf := fixBufferSize - bio.fixIndex
 	if len(elems) > remainFixBuf {
 		buf := bio.allocator.Alloc(len(elems))
 		copy(buf, elems)
-		bio.out.dynamicBuf.PushBack(buf)
+		bio.dynamicBuf.PushBack(buf)
 	} else {
-		copy(bio.out.fixBuf[bio.out.fixIndex:], elems)
-		bio.out.fixIndex += len(elems)
+		copy(bio.fixBuf[bio.fixIndex:], elems)
+		bio.fixIndex += len(elems)
 	}
-	bio.out.length += len(elems)
+	bio.length += len(elems)
 	return
 }
 
 func (bio *baseIO) Flush() error {
-	if bio.out.length == 0 {
+	if bio.length == 0 {
 		return nil
 	}
 	defer bio.Reset()
 	var err error
-	dataLength := bio.out.length
+	dataLength := bio.length
 	for dataLength > int(MaxPayloadSize) {
 		err = bio.FlushLength(int(MaxPayloadSize))
 		if err != nil {
@@ -197,7 +214,7 @@ func (bio *baseIO) Flush() error {
 		return err
 	}
 
-	bio.out.dynamicBuf.Init()
+	bio.dynamicBuf.Init()
 
 	return err
 
@@ -215,45 +232,45 @@ func (bio *baseIO) FlushLength(length int) error {
 		return err
 	}
 
-	if bio.out.fixIndex != 0 {
-		_, err = bio.conn.Write(bio.out.fixBuf[:bio.out.fixIndex])
+	if bio.fixIndex != 0 {
+		_, err = bio.conn.Write(bio.fixBuf[:bio.fixIndex])
 
 		if err != nil {
 			return err
 		}
-		length -= bio.out.fixIndex
-		bio.out.length -= bio.out.fixIndex
-		bio.out.fixIndex = 0
+		length -= bio.fixIndex
+		bio.length -= bio.fixIndex
+		bio.fixIndex = 0
 
 	}
 
 	for length != 0 {
-		node := bio.out.dynamicBuf.Front()
+		node := bio.dynamicBuf.Front()
 		data := node.Value.([]byte)
-		nodeLength := len(data) - bio.out.cutIndex
+		nodeLength := len(data) - bio.cutIndex
 		if nodeLength > length {
-			_, err = bio.conn.Write(data[bio.out.cutIndex : bio.out.cutIndex+length])
+			_, err = bio.conn.Write(data[bio.cutIndex : bio.cutIndex+length])
 
 			if err != nil {
 				return err
 			}
 
-			bio.out.cutIndex += length
-			bio.out.length -= length
+			bio.cutIndex += length
+			bio.length -= length
 			length = 0
 
 		} else {
-			_, err = bio.conn.Write(data[bio.out.cutIndex:])
+			_, err = bio.conn.Write(data[bio.cutIndex:])
 
 			if err != nil {
 				return err
 			}
 
 			length -= nodeLength
-			bio.out.length -= nodeLength
-			bio.out.dynamicBuf.Remove(node)
-			bio.out.alloc.Free(data)
-			bio.out.cutIndex = 0
+			bio.length -= nodeLength
+			bio.dynamicBuf.Remove(node)
+			bio.allocator.Free(data)
+			bio.cutIndex = 0
 		}
 	}
 
@@ -299,11 +316,11 @@ func (bio *baseIO) closeConn() error {
 }
 
 func (bio *baseIO) Reset() {
-	bio.out.length = 0
-	bio.out.fixIndex = 0
-	bio.out.cutIndex = 0
-	for node := bio.out.dynamicBuf.Front(); node != nil; node = node.Next() {
+	bio.length = 0
+	bio.fixIndex = 0
+	bio.cutIndex = 0
+	for node := bio.dynamicBuf.Front(); node != nil; node = node.Next() {
 		bio.allocator.Free(node.Value.([]byte))
 	}
-	bio.out.dynamicBuf.Init()
+	bio.dynamicBuf.Init()
 }
