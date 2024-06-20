@@ -441,7 +441,7 @@ func (s *service) handleRequest(
 			s.aicm,
 			s.acquireMessage)
 		if err != nil {
-			logutil.Errorf("error occurred while handling the pipeline message, "+
+			logutil.Infof("error occurred while handling the pipeline message, "+
 				"msg is %v, error is %v",
 				req, err)
 		}
