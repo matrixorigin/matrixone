@@ -4189,56 +4189,76 @@ func Intersection2VectorOrdered[T types.OrderedT | types.Decimal128](a, b []T, r
 		short = b
 	}
 
+	var k int
+	var lenLong, lenShort = len(long), len(short)
+
+	ret.PreExtend(lenLong+lenShort, mp)
+	retCol := MustFixedCol[T](ret)
+
 	for i := range short {
-		idx := sort.Search(len(long), func(j int) bool {
+		idx := sort.Search(lenLong, func(j int) bool {
 			return cmp(long[j], short[i]) >= 0
 		})
-		if idx >= len(long) {
+		if idx >= lenLong {
 			break
 		}
 
 		if cmp(short[i], long[idx]) == 0 {
-			AppendFixed[T](ret, short[i], false, mp)
+			retCol[k] = short[i]
+			k++
 		}
 
 		long = long[idx:]
 	}
+
+	ret.SetLength(k)
 }
 
 // Union2VectorOrdered does a ∪ b ==> ret, keeps all item unique and sorted
 // it assumes that a and b all sorted already
 func Union2VectorOrdered[T types.OrderedT | types.Decimal128](a, b []T, ret *Vector, mp *mpool.MPool, cmp func(x, y T) int) {
-	var i, j int
+	var i, j, k int
 	var prevVal T
-	for i < len(a) && j < len(b) {
+	var lenA, lenB = len(a), len(b)
+
+	ret.PreExtend(lenA+lenB, mp)
+	retCol := MustFixedCol[T](ret)
+
+	for i < lenA && j < lenB {
 		if cmp(a[i], b[j]) <= 0 {
 			if (i == 0 && j == 0) || cmp(prevVal, a[i]) != 0 {
 				prevVal = a[i]
-				AppendFixed(ret, a[i], false, mp)
+				retCol[k] = a[i]
+				k++
 			}
 			i++
 		} else {
 			if (i == 0 && j == 0) || cmp(prevVal, b[j]) != 0 {
 				prevVal = b[j]
-				AppendFixed(ret, b[j], false, mp)
+				retCol[k] = b[j]
+				k++
 			}
 			j++
 		}
 	}
 
-	for ; i < len(a); i++ {
+	for ; i < lenA; i++ {
 		if (i == 0 && j == 0) || cmp(prevVal, a[i]) != 0 {
 			prevVal = a[i]
-			AppendFixed(ret, a[i], false, mp)
+			retCol[k] = a[i]
+			k++
 		}
 	}
 
-	for ; j < len(b); j++ {
+	for ; j < lenB; j++ {
 		if (i == 0 && j == 0) || cmp(prevVal, b[j]) != 0 {
 			prevVal = b[j]
-			AppendFixed(ret, b[j], false, mp)
+			retCol[k] = b[j]
+			k++
 		}
 	}
+
+	ret.SetLength(k)
 }
 
 // Intersection2VectorVarlen does a ∩ b ==> ret, keeps all item unique and sorted
@@ -4262,63 +4282,82 @@ func Intersection2VectorVarlen(va, vb *Vector, ret *Vector, mp *mpool.MPool) {
 		longArea = areaa
 	}
 
+	var lenLong, lenShort = len(longCol), len(shortCol)
+
+	var k int
+	ret.PreExtend(lenLong+lenShort, mp)
+
 	for i := range shortCol {
-		idx := sort.Search(len(longCol), func(j int) bool {
-			return bytes.Compare(longCol[j].GetByteSlice(longArea), shortCol[i].GetByteSlice(shortArea)) >= 0
+		shortBytes := shortCol[i].GetByteSlice(shortArea)
+		idx := sort.Search(lenLong, func(j int) bool {
+			return bytes.Compare(longCol[j].GetByteSlice(longArea), shortBytes) >= 0
 		})
-		if idx >= len(longCol) {
+		if idx >= lenLong {
 			break
 		}
 
-		if bytes.Equal(shortCol[i].GetByteSlice(shortArea), longCol[idx].GetByteSlice(longArea)) {
-			AppendBytes(ret, shortCol[i].GetByteSlice(shortArea), false, mp)
+		if bytes.Equal(shortBytes, longCol[idx].GetByteSlice(longArea)) {
+			SetBytesAt(ret, k, shortBytes, mp)
+			k++
 		}
 
 		longCol = longCol[idx:]
 	}
+
+	ret.SetLength(k)
 }
 
 // Union2VectorValen does a ∪ b ==> ret, keeps all item unique and sorted
 // it assumes that va and vb all sorted already
 func Union2VectorValen(va, vb *Vector, ret *Vector, mp *mpool.MPool) {
-	var i, j int
+	var i, j, k int
 	var prevVal []byte
 
 	cola, areaa := MustVarlenaRawData(va)
 	colb, areab := MustVarlenaRawData(vb)
 
-	for i < len(cola) && j < len(colb) {
+	var lenA, lenB = len(cola), len(colb)
+
+	ret.PreExtend(lenA+lenB, mp)
+
+	for i < lenA && j < lenB {
 		bb := colb[j].GetByteSlice(areab)
 		ba := cola[i].GetByteSlice(areaa)
 
 		if bytes.Compare(ba, bb) <= 0 {
 			if (i == 0 && j == 0) || bytes.Equal(prevVal, ba) {
 				prevVal = ba
-				AppendBytes(ret, ba, false, mp)
+				SetBytesAt(ret, k, ba, mp)
+				k++
 			}
 			i++
 		} else {
 			if (i == 0 && j == 0) || bytes.Equal(prevVal, bb) {
 				prevVal = bb
-				AppendBytes(ret, bb, false, mp)
+				SetBytesAt(ret, k, bb, mp)
+				k++
 			}
 			j++
 		}
 	}
 
-	for ; i < len(cola); i++ {
+	for ; i < lenA; i++ {
 		ba := cola[i].GetByteSlice(areaa)
 		if (i == 0 && j == 0) || bytes.Equal(prevVal, ba) {
 			prevVal = ba
-			AppendBytes(ret, ba, false, mp)
+			SetBytesAt(ret, k, ba, mp)
+			k++
 		}
 	}
 
-	for ; j < len(colb); j++ {
+	for ; j < lenB; j++ {
 		bb := colb[j].GetByteSlice(areab)
 		if (i == 0 && j == 0) || bytes.Equal(prevVal, bb) {
 			prevVal = bb
-			AppendBytes(ret, bb, false, mp)
+			SetBytesAt(ret, k, bb, mp)
+			k++
 		}
 	}
+
+	ret.SetLength(k)
 }

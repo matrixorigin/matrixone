@@ -323,7 +323,7 @@ func mergeFilters(left, right BasePKFilter, connector int, proc *process.Process
 		case function.IN:
 			switch right.op {
 			case function.IN:
-				// a in (...) and a in (...)
+				// a in (...) and a in (...) and a in (...) and ...
 				finalFilter = mergeBaseFilterInKind(left, right, false, proc)
 			}
 
