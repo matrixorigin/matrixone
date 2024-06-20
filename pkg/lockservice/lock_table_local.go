@@ -264,6 +264,7 @@ func (l *localLockTable) unlock(
 					zap.Int("keys-count", locks.len()),
 					zap.String("hold-bind", b.DebugString()),
 					zap.String("bind", l.bind.DebugString()),
+					zap.String("current", fmt.Sprintf("%p", l)),
 					waitTxnArrayField("holders", lock.holders.txns),
 					txnField(txn))
 			}
