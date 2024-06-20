@@ -100,6 +100,7 @@ func (s *CNState) Update(hb CNStoreHeartbeat, tick uint64) {
 		storeInfo.ConfigData = hb.ConfigData
 	}
 	storeInfo.Resource = hb.Resource
+	storeInfo.CommitID = hb.CommitID
 	s.Stores[hb.UUID] = storeInfo
 }
 

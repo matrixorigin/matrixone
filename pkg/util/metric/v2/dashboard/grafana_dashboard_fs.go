@@ -153,7 +153,7 @@ func (c *DashboardCreator) initFSIOMergerDurationRow() dashboard.Option {
 				"initiate",
 			},
 			[]float64{0.90, 0.99, 1},
-			[]float32{1, 1, 1},
+			[]float32{3, 3, 3},
 			axis.Unit("seconds"),
 			axis.Min(0))...,
 	)
@@ -202,7 +202,7 @@ func (c *DashboardCreator) initFSReadWriteDurationRow() dashboard.Option {
 				"io-read-all",
 			},
 			[]float64{0.90, 0.99, 1},
-			[]float32{1, 1, 1},
+			[]float32{3, 3, 3},
 			axis.Unit("seconds"),
 			axis.Min(0))...,
 	)
