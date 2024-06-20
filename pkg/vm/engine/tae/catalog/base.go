@@ -268,12 +268,6 @@ func (be *BaseEntryImpl[T]) DeleteAfter(ts types.TS) bool {
 	return un.DeletedAt.Greater(&ts)
 }
 
-func (be *BaseEntryImpl[T]) GetCreatedAt() types.TS {
-	be.RLock()
-	defer be.RUnlock()
-	return be.GetCreatedAtLocked()
-}
-
 func (be *BaseEntryImpl[T]) GetCreatedAtLocked() types.TS {
 	un := be.GetLatestNodeLocked()
 	if un == nil {
