@@ -70,11 +70,11 @@ var (
 
 	restorePubDbDataFmt = "insert into `%s`.`%s` SELECT * FROM `%s`.`%s` {snapshot = '%s'} WHERE  DATABASE_NAME = '%s'"
 
-	deleteAccountsFmt = "delete from mo_catalog.mo_account where account_id != 0"
+	getRestoreAccountsFmt = "select account_name, account_id from mo_catalog.mo_account where account_name in (select account_name from mo_catalog.mo_account {MO_TS = %d });`"
 
-	restoreMoAccountsFmt = "insert into mo_catalog.mo_account select * from mo_catalog.mo_account {MO_TS = %d} where account_id != 0"
+	getDropAccountFmt = "select account_name from mo_catalog.mo_account where account_name not in (select account_name from mo_catalog.mo_account {MO_TS = %d });`"
 
-	getAllAccountsFmt = "select account_name, account_id from mo_catalog.mo_account"
+	dropAccountFmt = "drop account if exists %s;"
 
 	skipDbs = []string{"mysql", "system", "system_metrics", "mo_task", "mo_debug", "information_schema", moCatalog}
 
@@ -1350,13 +1350,13 @@ func restoreToCluster(ctx context.Context, ses *Session, bh BackgroundExec, snap
 
 	// drop accounts
 
-	// restore mo_accounts table
-	if err = restoreMoAccountsTable(ctx, bh, snapshotName, snapshotTs); err != nil {
+	err = getDropAccounts(ctx, bh, snapshotName, snapshotTs)
+	if err != nil {
 		return
 	}
 
 	// get all accounts
-	accounts, err := getRestoreAccounts(ctx, bh, snapshotName)
+	accounts, err := getRestoreAccounts(ctx, bh, snapshotName, snapshotTs)
 	if err != nil {
 		return
 	}
@@ -1419,33 +1419,14 @@ func restoreToCluster(ctx context.Context, ses *Session, bh BackgroundExec, snap
 
 }
 
-func restoreMoAccountsTable(ctx context.Context, bh BackgroundExec, snapshotName string, snapshotTs int64) (err error) {
-	getLogger().Info(fmt.Sprintf("[%s] start to restore mo_accounts table, restore timestamp: %d", snapshotName, snapshotTs))
-
-	// delete current mo_accounts
-	getLogger().Info(fmt.Sprintf("[%s] start to delete current accounts", snapshotName))
-	if err = bh.Exec(ctx, deleteAccountsFmt); err != nil {
-		return
-	}
-
-	// insert data
-	insertIntoSql := fmt.Sprintf(restoreMoAccountsFmt, snapshotTs)
-	beginTime := time.Now()
-	getLogger().Info(fmt.Sprintf("[%s] start to insert into select mo_accounts, insert sql: %s", snapshotName, insertIntoSql))
-	if err = bh.Exec(ctx, insertIntoSql); err != nil {
-		return
-	}
-	getLogger().Info(fmt.Sprintf("[%s] insert into select mo_accounts, cost: %v", snapshotName, time.Since(beginTime)))
-
-	return
-}
-
-func getRestoreAccounts(ctx context.Context, bh BackgroundExec, snapshotName string) (accounts []accountRecord, err error) {
-	getLogger().Info(fmt.Sprintf("[%s] start to get all accounts", snapshotName))
+func getRestoreAccounts(ctx context.Context, bh BackgroundExec, snapshotName string, snapshotTs int64) (accounts []accountRecord, err error) {
+	getLogger().Info(fmt.Sprintf("[%s] start to get restore accounts", snapshotName))
 	var erArray []ExecResult
 
+	sql := fmt.Sprintf(getRestoreAccountsFmt, snapshotTs)
+	getLogger().Info(fmt.Sprintf("[%s] get restore accounts sql: %s", snapshotName, sql))
 	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, getAllAccountsFmt)
+	err = bh.Exec(ctx, sql)
 	if err != nil {
 		return
 	}
@@ -1472,10 +1453,39 @@ func getRestoreAccounts(ctx context.Context, bh BackgroundExec, snapshotName str
 	return
 }
 
-func dropAccounts(ctx context.Context, bh BackgroundExec, snapshotName string, snapshotTs int64) (err error) {
-	getLogger().Info(fmt.Sprintf("[%s] start to drop all accounts", snapshotName))
-	if err = bh.Exec(ctx, deleteAccountsFmt); err != nil {
+func getDropAccounts(ctx context.Context, bh BackgroundExec, snapshotName string, snapshotTs int64) (err error) {
+	getLogger().Info(fmt.Sprintf("[%s] start to get drop accounts", snapshotName))
+	var erArray []ExecResult
+
+	sql := fmt.Sprintf(getDropAccountFmt, snapshotTs)
+	getLogger().Info(fmt.Sprintf("[%s] get drop accounts sql: %s", snapshotName, sql))
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
 		return
+	}
+
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		return
+	}
+
+	dropAccounts := make([]string, 0)
+	if execResultArrayHasData(erArray) {
+		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+			var account string
+			if account, err = erArray[0].GetString(ctx, i, 0); err != nil {
+				return
+			}
+			dropAccounts = append(dropAccounts, account)
+		}
+	}
+
+	for _, account := range dropAccounts {
+		getLogger().Info(fmt.Sprintf("[%s]start to  drop account: %v", snapshotName, account))
+		if err = bh.Exec(ctx, fmt.Sprintf(dropAccountFmt, account)); err != nil {
+			return
+		}
 	}
 	return
 }
