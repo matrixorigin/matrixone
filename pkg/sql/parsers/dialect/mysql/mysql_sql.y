@@ -10351,7 +10351,7 @@ expression:
     }
 |   expression PIPE_CONCAT expression %prec PIPE_CONCAT
     {
-        name := tree.NewUnresolvedColName($2)
+        name := tree.NewUnresolvedColName("concat")
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr("concat", 1),

@@ -3780,6 +3780,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			} else {
 				cols[i] = col.Name
 			}
+			cols[i] = strings.ToLower(cols[i])
 			colIsHidden[i] = col.Hidden
 			types[i] = &col.Typ
 			if col.Default != nil {
@@ -3823,8 +3824,9 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			if i < len(alias.Cols) {
 				cols[i] = string(alias.Cols[i])
 			} else {
-				cols[i] = strings.ToLower(col)
+				cols[i] = col
 			}
+			cols[i] = strings.ToLower(cols[i])
 			types[i] = &projects[i].Typ
 			colIsHidden[i] = false
 			defaultVals[i] = ""

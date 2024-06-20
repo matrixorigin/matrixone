@@ -22880,7 +22880,7 @@ yydefault:
 		var yyLOCAL tree.Expr
 //line mysql_sql.y:10352
 		{
-			name := tree.NewUnresolvedColName(yyDollar[2].str)
+			name := tree.NewUnresolvedColName("concat")
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
 				FuncName: tree.NewCStr("concat", 1),
