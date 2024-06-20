@@ -110,7 +110,7 @@ func (m LockTable) Equal(v LockTable) bool {
 
 // DebugString returns the debug string
 func (m LockTable) DebugString() string {
-	return fmt.Sprintf("%d-%s-%d", m.Table, m.ServiceID, m.Version)
+	return fmt.Sprintf("%d-%d(%d)-%s-%d", m.Group, m.Table, m.OriginTable, m.ServiceID, m.Version)
 }
 
 // WithGranularity set rows granularity, the default granularity is Row.
