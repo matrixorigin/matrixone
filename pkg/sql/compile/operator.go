@@ -567,6 +567,7 @@ func constructFuzzyFilter(n, tableScan, sinkScan *plan.Node) *fuzzyfilter.Argume
 	arg := fuzzyfilter.NewArgument()
 	arg.PkName = pkName
 	arg.PkTyp = pkTyp
+	arg.IfInsertFromUnique = n.IfInsertFromUnique
 
 	// if tableScan.Stats.Outcnt < sinkScan.Stats.Outcnt {
 	// 	arg.BuildIdx = 0 // build on tableScan
