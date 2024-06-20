@@ -325,7 +325,7 @@ func InKind(encodes [][]byte, kind int) PrimaryKeyMatchSpec {
 
 	var prev []byte = nil
 	updateEncoded := func() bool {
-		if idx == 0 {
+		if idx == 0 && idx < vecLen {
 			prev = encodes[idx]
 			encoded = encodes[idx]
 			idx++
