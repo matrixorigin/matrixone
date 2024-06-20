@@ -146,7 +146,6 @@ func (entry *mergeObjectsEntry) prepareTransferPage() {
 		}
 		var blocks []objectio.BlockObject
 		blocks, _, err = writer.Sync(context.Background())
-
 		if err != nil {
 			return
 		}
@@ -158,7 +157,6 @@ func (entry *mergeObjectsEntry) prepareTransferPage() {
 				uint32(1),
 				blk.GetID())
 			pages[i].SetLocation(location)
-			go pages[i].ClearTable()
 		}
 	}
 	if k != len(entry.transMappings.Mappings) {

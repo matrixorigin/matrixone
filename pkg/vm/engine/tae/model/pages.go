@@ -16,6 +16,7 @@ package model
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -58,6 +59,17 @@ func NewTransferHashPage(id *common.ID, ts time.Time, isTransient bool, fs files
 		isPersisted: false,
 	}
 	page.OnZeroCB = page.Close
+
+	go func(page *TransferHashPage) {
+		time.Sleep(10 * time.Second)
+		page.clearTable()
+	}(page)
+
+	go func(page *TransferHashPage) {
+		time.Sleep(20 * time.Second)
+		page.clearPersistTable()
+	}(page)
+
 	return page
 }
 
@@ -102,6 +114,10 @@ func (page *TransferHashPage) Train(from uint32, to types.Rowid) {
 
 func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) {
 	flag := page.isPersisted
+
+	if flag && page.location == nil {
+		return page.hashmap[from], false
+	}
 
 	if page.isPersisted {
 		logutil.Infof("transfer loadding table")
@@ -152,8 +168,8 @@ func (page *TransferHashPage) SetLocation(location objectio.Location) {
 	page.location = location
 }
 
-func (page *TransferHashPage) ClearTable() {
-	time.Sleep(10 * time.Second)
+func (page *TransferHashPage) clearTable() {
+	logutil.Infof("transfer clear table loc %v", page.location)
 	clear(page.hashmap)
 	page.isPersisted = true
 }
@@ -173,5 +189,17 @@ func (page *TransferHashPage) loadTable() {
 		return
 	}
 
-	go page.ClearTable()
+	go func(page *TransferHashPage) {
+		time.Sleep(10 * time.Second)
+		page.clearTable()
+	}(page)
+}
+
+func (page *TransferHashPage) clearPersistTable() {
+	if page.location == nil {
+		return
+	}
+	logutil.Infof("tansfer clear persisted table loc %v", page.location)
+	page.fs.Delete(context.Background(), page.location.Name().String())
+	page.location = nil
 }
