@@ -39,7 +39,7 @@ func AddColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Alter
 
 	specNewColumn := spec.Column
 	// Check whether added column has existed.
-	newColName := specNewColumn.Name.Parts[0]
+	newColName := specNewColumn.Name.ColName()
 	if col := FindColumn(tableDef.Cols, newColName); col != nil {
 		return moerr.NewErrDupFieldName(ctx.GetContext(), newColName)
 	}
@@ -84,7 +84,7 @@ func handleAddColumnPosition(ctx context.Context, tableDef *TableDef, newCol *Co
 }
 
 func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable, specNewColumn *tree.ColumnTableDef, colType plan.Type) (*ColDef, error) {
-	newColName := specNewColumn.Name.Parts[0]
+	newColName := specNewColumn.Name.ColName()
 	// Check if the new column name is valid and conflicts with internal hidden columns
 	err := CheckColumnNameValid(ctx.GetContext(), newColName)
 	if err != nil {
@@ -127,7 +127,7 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 		case *tree.AttributeComment:
 			comment := attribute.CMT.String()
 			if getNumOfCharacters(comment) > maxLengthOfColumnComment {
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "comment for column '%s' is too long", specNewColumn.Name.Parts[0])
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "comment for column '%s' is too long", specNewColumn.Name.ColNameOrigin())
 			}
 			newCol.Comment = comment
 		case *tree.AttributeAutoIncrement:
@@ -189,7 +189,7 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 
 	hasDefaultValue = defaultValue.Expr != nil
 	if auto_incr && hasDefaultValue {
-		return nil, moerr.NewErrInvalidDefault(ctx.GetContext(), specNewColumn.Name.Parts[0])
+		return nil, moerr.NewErrInvalidDefault(ctx.GetContext(), specNewColumn.Name.ColNameOrigin())
 	}
 	if !hasDefaultValue {
 		defaultValue, err := buildDefaultExpr(specNewColumn, colType, ctx.GetProcess())
@@ -260,7 +260,7 @@ func checkAddColumWithUniqueKey(ctx context.Context, tableDef *TableDef, uniKey 
 
 	indexParts := make([]string, 0)
 	for _, keyPart := range uniKey.KeyParts {
-		name := keyPart.ColName.Parts[0]
+		name := keyPart.ColName.ColName()
 		indexParts = append(indexParts, name)
 	}
 	if len(indexParts) > MaxKeyParts {
@@ -294,16 +294,16 @@ func findPositionRelativeColumn(ctx context.Context, cols []*ColDef, pos *tree.C
 	} else if pos.Typ == tree.ColumnPositionAfter {
 		relcolIndex := -1
 		for i, col := range cols {
-			if col.Name == pos.RelativeColumn.Parts[0] {
+			if col.Name == pos.RelativeColumn.ColName() {
 				relcolIndex = i
 				break
 			}
 		}
 		if relcolIndex == -1 {
-			return -1, moerr.NewBadFieldError(ctx, pos.RelativeColumn.Parts[0], "Columns Set")
+			return -1, moerr.NewBadFieldError(ctx, pos.RelativeColumn.ColNameOrigin(), "Columns Set")
 		}
 		// the insertion position is after the above column.
-		position = int(relcolIndex + 1)
+		position = relcolIndex + 1
 	}
 	return position, nil
 }

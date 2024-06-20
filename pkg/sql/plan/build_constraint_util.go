@@ -126,25 +126,25 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 		parts := updateExpr.Names[0]
 		expr := updateExpr.Expr
 		if parts.NumParts > 1 {
-			colName := parts.Parts[0]
-			tblName := parts.Parts[1]
+			colName := parts.ColName()
+			tblName := parts.TblName()
 			if _, tblExists := tblInfo.alias[tblName]; tblExists {
 				if _, colExists := allColumns[tblName][colName]; colExists {
 					appendToTbl(tblName, colName, expr)
 				} else {
-					return nil, moerr.NewInternalError(ctx.GetContext(), "column '%v' not found in table %s", colName, tblName)
+					return nil, moerr.NewInternalError(ctx.GetContext(), "column '%v' not found in table %s", parts.ColNameOrigin(), parts.TblNameOrigin())
 				}
 			} else {
-				return nil, moerr.NewNoSuchTable(ctx.GetContext(), "", tblName)
+				return nil, moerr.NewNoSuchTable(ctx.GetContext(), "", parts.TblNameOrigin())
 			}
 		} else {
-			colName := parts.Parts[0]
+			colName := parts.ColName()
 			tblName := ""
 			found := false
-			for alias, colulmns := range allColumns {
-				if _, colExists := colulmns[colName]; colExists {
+			for alias, columns := range allColumns {
+				if _, colExists := columns[colName]; colExists {
 					if tblName != "" {
-						return nil, moerr.NewInternalError(ctx.GetContext(), "Column '%v' in field list is ambiguous", colName)
+						return nil, moerr.NewInternalError(ctx.GetContext(), "Column '%v' in field list is ambiguous", parts.ColNameOrigin())
 					}
 					found = true
 					appendToTbl(alias, colName, expr)
@@ -158,9 +158,9 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 					}
 					str += string(c.Name.Alias)
 				}
-				return nil, moerr.NewInternalError(ctx.GetContext(), "column '%v' not found in table or the target table %s of the UPDATE is not updatable", colName, str)
+				return nil, moerr.NewInternalError(ctx.GetContext(), "column '%v' not found in table or the target table %s of the UPDATE is not updatable", parts.ColNameOrigin(), str)
 			} else if !found {
-				return nil, moerr.NewInternalError(ctx.GetContext(), "column '%v' not found in table %s", colName, tblName)
+				return nil, moerr.NewInternalError(ctx.GetContext(), "column '%v' not found in table %s", parts.ColNameOrigin(), tblName)
 			}
 		}
 	}
@@ -604,7 +604,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			// get update cols
 			updateCols := make(map[string]tree.Expr)
 			for _, updateExpr := range stmt.OnDuplicateUpdate {
-				col := updateExpr.Names[0].Parts[0]
+				col := updateExpr.Names[0].ColName()
 				updateCols[col] = updateExpr.Expr
 			}
 
@@ -739,20 +739,20 @@ func deleteToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Dele
 		if haveConstraint {
 			defIdx := tblInfo.alias[alias]
 			for _, col := range tblInfo.tableDefs[defIdx].Cols {
-				ret, _ = tree.NewUnresolvedName(builder.GetContext(), alias, col.Name)
+				ret = tree.NewUnresolvedName(tree.NewCStr(alias, bindCtx.lower), tree.NewCStr(col.Name, 1))
 				selectList = append(selectList, tree.SelectExpr{
 					Expr: ret,
 				})
 			}
 		} else {
 			defIdx := tblInfo.alias[alias]
-			ret, _ = tree.NewUnresolvedName(builder.GetContext(), alias, catalog.Row_ID)
+			ret = tree.NewUnresolvedName(tree.NewCStr(alias, bindCtx.lower), tree.NewCStr(catalog.Row_ID, 1))
 			selectList = append(selectList, tree.SelectExpr{
 				Expr: ret,
 			})
 			pkName := getTablePriKeyName(tblInfo.tableDefs[defIdx].Pkey)
 			if pkName != "" {
-				ret, _ = tree.NewUnresolvedName(builder.GetContext(), alias, pkName)
+				ret = tree.NewUnresolvedName(tree.NewCStr(alias, bindCtx.lower), tree.NewCStr(pkName, 1))
 				selectList = append(selectList, tree.SelectExpr{
 					Expr: ret,
 				})
@@ -1054,7 +1054,7 @@ func buildValueScan(
 	if builder.isPrepareStatement && !(len(OnDuplicateUpdate) == 1 && OnDuplicateUpdate[0] == nil) {
 		for _, expr := range OnDuplicateUpdate {
 			var updateExpr *plan.Expr
-			col := tableDef.Cols[colToIdx[expr.Names[0].Parts[0]]]
+			col := tableDef.Cols[colToIdx[expr.Names[0].ColName()]]
 			if nv, ok := expr.Expr.(*tree.ParamExpr); ok {
 				updateExpr = &plan.Expr{
 					Typ: constTextType,
@@ -1107,12 +1107,10 @@ func buildValueScan(
 		proc.SetValueScanBatch(nodeId, bat)
 	}
 	info.rootId = builder.appendNode(scanNode, bindCtx)
-	err = builder.addBinding(info.rootId, tree.AliasClause{
-		Alias: "_ValueScan",
-	}, bindCtx)
-	if err != nil {
+	if err = builder.addBinding(info.rootId, tree.AliasClause{Alias: "_valuescan"}, bindCtx); err != nil {
 		return err
 	}
+
 	lastTag = builder.genNewTag()
 	info.rootId = builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_PROJECT,

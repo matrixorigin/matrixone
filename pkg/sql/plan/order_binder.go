@@ -31,7 +31,7 @@ func NewOrderBinder(projectionBinder *ProjectionBinder, selectList tree.SelectEx
 
 func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
 	if colRef, ok := astExpr.(*tree.UnresolvedName); ok && colRef.NumParts == 1 {
-		if selectItem, ok := b.ctx.aliasMap[colRef.Parts[0]]; ok {
+		if selectItem, ok := b.ctx.aliasMap[colRef.ColName()]; ok {
 			return &plan.Expr{
 				Typ: b.ctx.projects[selectItem.idx].Typ,
 				Expr: &plan.Expr_Col{
