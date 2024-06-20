@@ -260,7 +260,7 @@ type MysqlProtocolImpl struct {
 	//TODO: make it global
 	io IOPackage
 
-	tcpConn *baseIO
+	tcpConn *ConnManager
 
 	quit atomic.Bool
 
@@ -561,7 +561,7 @@ const bit4TcpWriteCopy = 12 // 1<<12 == 4096
 // 2nd part: upload part, calculation = payload / 16KiB
 // 3rd part: response part, calculation = sendByte / 4KiB
 //   - ioCopyBufferSize currently is 4096 Byte, which is the option for goetty_buf.ByteBuf, set by goetty_buf.WithIOCopyBufferSize(...).
-//     goetty_buf.ByteBuf.WriteTo(...) will call by io.CopyBuffer(...) if do baseIO.Flush().
+//     goetty_buf.ByteBuf.WriteTo(...) will call by io.CopyBuffer(...) if do ConnManager.Flush().
 //   - If ioCopyBufferSize is changed, you should see the calling of goetty.NewApplicationWithListenAddress(...) in NewMOServer()
 func (mp *MysqlProtocolImpl) CalculateOutTrafficBytes(reset bool) (bytes int64, packets int64) {
 	ses := mp.GetSession()
@@ -2702,7 +2702,7 @@ func (mp *MysqlProtocolImpl) MakeEOFPayload(warnings, status uint16) []byte {
 }
 
 // receiveExtraInfo tries to receive salt and labels read from proxy module.
-func (mp *MysqlProtocolImpl) receiveExtraInfo(rs *baseIO) {
+func (mp *MysqlProtocolImpl) receiveExtraInfo(rs *ConnManager) {
 	// TODO(volgariver6): when proxy is stable, remove this deadline setting.
 	if err := rs.RawConn().SetReadDeadline(time.Now().Add(defaultSaltReadTimeout)); err != nil {
 		mp.ses.Debugf(mp.ctx, "failed to set deadline for salt updating: %v", err)
@@ -2749,7 +2749,7 @@ func generate_salt(n int) []byte {
 	}
 	return buf
 }
-func NewMysqlClientProtocol(connectionID uint32, tcp *baseIO, maxBytesToFlush int, SV *config.FrontendParameters) *MysqlProtocolImpl {
+func NewMysqlClientProtocol(connectionID uint32, tcp *ConnManager, maxBytesToFlush int, SV *config.FrontendParameters) *MysqlProtocolImpl {
 	salt := generate_salt(20)
 	mysql := &MysqlProtocolImpl{
 		io:               NewIOPackage(true),

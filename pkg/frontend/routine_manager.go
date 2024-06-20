@@ -41,7 +41,7 @@ import (
 type RoutineManager struct {
 	mu      sync.RWMutex
 	ctx     context.Context
-	clients map[*baseIO]*Routine
+	clients map[*ConnManager]*Routine
 	// routinesByID keeps the routines by connection ID.
 	routinesByConnID map[uint32]*Routine
 	tlsConfig        *tls.Config
@@ -161,14 +161,14 @@ func (rm *RoutineManager) getCtx() context.Context {
 	return rm.ctx
 }
 
-func (rm *RoutineManager) setRoutine(rs *baseIO, id uint32, r *Routine) {
+func (rm *RoutineManager) setRoutine(rs *ConnManager, id uint32, r *Routine) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 	rm.clients[rs] = r
 	rm.routinesByConnID[id] = r
 }
 
-func (rm *RoutineManager) getRoutine(rs *baseIO) *Routine {
+func (rm *RoutineManager) getRoutine(rs *ConnManager) *Routine {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 	return rm.clients[rs]
@@ -184,7 +184,7 @@ func (rm *RoutineManager) getRoutineByConnID(id uint32) *Routine {
 	return nil
 }
 
-func (rm *RoutineManager) deleteRoutine(rs *baseIO) *Routine {
+func (rm *RoutineManager) deleteRoutine(rs *ConnManager) *Routine {
 	var rt *Routine
 	var ok bool
 	rm.mu.Lock()
@@ -236,7 +236,7 @@ func (rm *RoutineManager) GetAccountRoutineManager() *AccountRoutineManager {
 	return rm.accountRoutine
 }
 
-func (rm *RoutineManager) Created(rs *baseIO) {
+func (rm *RoutineManager) Created(rs *ConnManager) {
 	logutil.Debugf("get the connection from %s", rs.RemoteAddress())
 	createdStart := time.Now()
 	connID, err := rm.getConnID()
@@ -283,7 +283,7 @@ func (rm *RoutineManager) Created(rs *baseIO) {
 /*
 When the io is closed, the Closed will be called.
 */
-func (rm *RoutineManager) Closed(rs *baseIO) {
+func (rm *RoutineManager) Closed(rs *ConnManager) {
 	rt := rm.deleteRoutine(rs)
 	if rt == nil {
 		return
@@ -339,7 +339,7 @@ func (rm *RoutineManager) kill(ctx context.Context, killConnection bool, idThatK
 	return nil
 }
 
-func getConnectionInfo(rs *baseIO) string {
+func getConnectionInfo(rs *ConnManager) string {
 	conn := rs.RawConn()
 	if conn != nil {
 		return fmt.Sprintf("connection from %s to %s", conn.RemoteAddr(), conn.LocalAddr())
@@ -347,7 +347,7 @@ func getConnectionInfo(rs *baseIO) string {
 	return fmt.Sprintf("connection from %s", rs.RemoteAddress())
 }
 
-func (rm *RoutineManager) Handler(rs *baseIO, msg interface{}, received uint64) error {
+func (rm *RoutineManager) Handler(rs *ConnManager, msg interface{}, received uint64) error {
 	logutil.Debugf("get request from %d:%s", rs.ID(), rs.RemoteAddress())
 	defer func() {
 		logutil.Debugf("request from %d:%s has been processed", rs.ID(), rs.RemoteAddress())
@@ -555,7 +555,7 @@ func NewRoutineManager(ctx context.Context) (*RoutineManager, error) {
 	}
 	rm := &RoutineManager{
 		ctx:              ctx,
-		clients:          make(map[*baseIO]*Routine),
+		clients:          make(map[*ConnManager]*Routine),
 		routinesByConnID: make(map[uint32]*Routine),
 		accountRoutine:   accountRoutine,
 	}

@@ -19,7 +19,7 @@ type Allocator interface {
 	Free([]byte)
 }
 
-type baseIO struct {
+type ConnManager struct {
 	id                    uint64
 	conn                  net.Conn
 	localAddr, remoteAddr string
@@ -37,8 +37,8 @@ type baseIO struct {
 }
 
 // NewIOSession create a new io session
-func NewIOSession(conn net.Conn, allocator Allocator) *baseIO {
-	bio := &baseIO{
+func NewIOSession(conn net.Conn, allocator Allocator) *ConnManager {
+	bio := &ConnManager{
 		conn:       conn,
 		localAddr:  conn.RemoteAddr().String(),
 		remoteAddr: conn.LocalAddr().String(),
@@ -52,22 +52,22 @@ func NewIOSession(conn net.Conn, allocator Allocator) *baseIO {
 	return bio
 }
 
-func (bio *baseIO) ID() uint64 {
+func (bio *ConnManager) ID() uint64 {
 	return bio.id
 }
 
-func (bio *baseIO) RawConn() net.Conn {
+func (bio *ConnManager) RawConn() net.Conn {
 	return bio.conn
 }
 
-func (bio *baseIO) UseConn(conn net.Conn) {
+func (bio *ConnManager) UseConn(conn net.Conn) {
 	bio.conn = conn
 }
-func (bio *baseIO) Disconnect() error {
+func (bio *ConnManager) Disconnect() error {
 	return bio.closeConn()
 }
 
-func (bio *baseIO) Close() error {
+func (bio *ConnManager) Close() error {
 	err := bio.closeConn()
 	if err != nil {
 		return err
@@ -84,7 +84,7 @@ func (bio *baseIO) Close() error {
 	return nil
 }
 
-func (bio *baseIO) Read() ([]byte, error) {
+func (bio *ConnManager) Read() ([]byte, error) {
 	payloads := make([][]byte, 0)
 	defer func() {
 		for _, payload := range payloads {
@@ -142,7 +142,7 @@ func (bio *baseIO) Read() ([]byte, error) {
 	return finalPayload, nil
 }
 
-func (bio *baseIO) ReadOnePayload(packetLength int) ([]byte, error) {
+func (bio *ConnManager) ReadOnePayload(packetLength int) ([]byte, error) {
 	var buf []byte
 	var err error
 
@@ -162,7 +162,7 @@ func (bio *baseIO) ReadOnePayload(packetLength int) ([]byte, error) {
 	return payload, nil
 }
 
-func (bio *baseIO) ReadBytes(buf []byte, Length int) error {
+func (bio *ConnManager) ReadBytes(buf []byte, Length int) error {
 	var err error
 	var n int
 	var readLength int
@@ -179,7 +179,7 @@ func (bio *baseIO) ReadBytes(buf []byte, Length int) error {
 	}
 }
 
-func (bio *baseIO) Append(elems ...byte) {
+func (bio *ConnManager) Append(elems ...byte) {
 	remainFixBuf := fixBufferSize - bio.fixIndex
 	if len(elems) > remainFixBuf {
 		buf := bio.allocator.Alloc(len(elems))
@@ -193,7 +193,7 @@ func (bio *baseIO) Append(elems ...byte) {
 	return
 }
 
-func (bio *baseIO) Flush() error {
+func (bio *ConnManager) Flush() error {
 	if bio.length == 0 {
 		return nil
 	}
@@ -220,7 +220,7 @@ func (bio *baseIO) Flush() error {
 
 }
 
-func (bio *baseIO) FlushLength(length int) error {
+func (bio *ConnManager) FlushLength(length int) error {
 	var header [4]byte
 	var err error
 	binary.LittleEndian.PutUint32(header[:], uint32(length))
@@ -277,7 +277,7 @@ func (bio *baseIO) FlushLength(length int) error {
 	return nil
 }
 
-func (bio *baseIO) Write(payload []byte) error {
+func (bio *ConnManager) Write(payload []byte) error {
 	defer bio.Reset()
 	if !bio.connected {
 		return moerr.NewInternalError(moerr.Context(), "The IOSession connection has been closed")
@@ -302,11 +302,11 @@ func (bio *baseIO) Write(payload []byte) error {
 	return nil
 }
 
-func (bio *baseIO) RemoteAddress() string {
+func (bio *ConnManager) RemoteAddress() string {
 	return bio.remoteAddr
 }
 
-func (bio *baseIO) closeConn() error {
+func (bio *ConnManager) closeConn() error {
 	if bio.conn != nil {
 		if err := bio.conn.Close(); err != nil {
 			return err
@@ -315,7 +315,7 @@ func (bio *baseIO) closeConn() error {
 	return nil
 }
 
-func (bio *baseIO) Reset() {
+func (bio *ConnManager) Reset() {
 	bio.length = 0
 	bio.fixIndex = 0
 	bio.cutIndex = 0
