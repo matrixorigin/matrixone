@@ -17,6 +17,7 @@ package gc
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 )
 
@@ -155,4 +156,5 @@ type Cleaner interface {
 	DisableGCForTest()
 	SetCheckGC(enable bool)
 	GetMPool() *mpool.MPool
+	GetSnapshots() (map[uint32]containers.Vector, error)
 }

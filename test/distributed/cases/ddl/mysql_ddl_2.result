@@ -239,7 +239,7 @@ col12    DATE(0)    YES        null
 col13    DATETIME(0)    YES        null        
 col14    TIMESTAMP(0)    YES        null        
 col15    BOOL(0)    YES        null        
-col16    DECIMAL64(16)    YES        null        
+col16    DECIMAL(16)    YES        null        
 col17    TEXT(0)    YES        null        
 col18    JSON(0)    YES        null        
 col19    BLOB(0)    YES        null        
@@ -284,7 +284,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    YES    MUL    null        
 b    CHAR(10)    YES        null        
 c    DATE(0)    YES        null        
-d    DECIMAL64(7)    YES        null        
+d    DECIMAL(7)    YES        null        
 drop table if exists t2;
 CREATE TABLE t2(
 col1 TINYINT DEFAULT NULL,
@@ -314,7 +314,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    YES        null        
 b    CHAR(10)    YES        null        
 c    DATE(0)    YES    MUL    null        
-d    DECIMAL64(7)    YES    UNI    null        
+d    DECIMAL(7)    YES    UNI    null        
 drop table if exists t4;
 CREATE TABLE t4(
 a INTEGER,
@@ -329,5 +329,5 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    YES    UNI    null        
 b    CHAR(10)    YES        null        
 c    DATE(0)    YES        null        
-d    DECIMAL64(7)    YES        null        
+d    DECIMAL(7)    YES        null        
 drop database if exists db1;

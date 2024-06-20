@@ -363,6 +363,14 @@ message StreamScan {
   int64 limit = 3;
 }
 
+message TableScan {
+
+}
+
+message ValueScan {
+
+}
+
 message SampleFunc {
   enum SampleType {
     Rows = 0;
@@ -425,6 +433,8 @@ message Instruction{
   int32 max_parallel = 42;
   IndexJoin index_join = 43;
   ProductL2 product_l2 = 44;
+  TableScan table_scan = 45;
+  ValueScan value_scan = 46;
 }
 
 message AnalysisList {
@@ -442,6 +452,7 @@ message Source {
   plan.TableDef tableDef = 8;
   timestamp.Timestamp timestamp = 9;
   repeated plan.RuntimeFilterSpec runtime_filter_probe_list = 10;
+  bool is_const = 11;
 }
 
 message NodeInfo {

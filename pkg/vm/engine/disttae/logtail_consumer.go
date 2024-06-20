@@ -400,6 +400,9 @@ func (c *PushClient) receiveOneLogtail(ctx context.Context, e *Engine) error {
 	ctx, cancel := context.WithTimeout(ctx, maxTimeToWaitServerResponse)
 	defer cancel()
 
+	// Client receives one logtail counter.
+	defer v2.LogTailClientReceiveCounter.Add(1)
+
 	resp := c.subscriber.receiveResponse(ctx)
 	if resp.err != nil {
 		// POSSIBLE ERROR: context deadline exceeded, rpc closed, decode error.

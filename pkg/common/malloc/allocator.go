@@ -17,9 +17,9 @@ package malloc
 import "unsafe"
 
 type Allocator interface {
-	Allocate(size uint64) (unsafe.Pointer, Deallocator, error)
+	Allocate(size uint64, hint Hints) (unsafe.Pointer, Deallocator, error)
 }
 
 type Deallocator interface {
-	Deallocate(unsafe.Pointer)
+	Deallocate(ptr unsafe.Pointer, hint Hints)
 }

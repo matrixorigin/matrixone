@@ -664,7 +664,7 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 				s.cfg.Txn.MaxActiveAges.Duration,
 				func(actives []client.ActiveTxn) {
 					name, _ := uuid.NewV7()
-					profPath := catalog.BuildProfilePath("routine", name.String()) + ".gz"
+					profPath := catalog.BuildProfilePath("CN", s.cfg.UUID, "leakcheck_routine", name.String()) + ".gz"
 
 					for _, txn := range actives {
 						fields := []zap.Field{
@@ -826,7 +826,10 @@ func (s *service) initInternalSQlExecutor(mp *mpool.MPool) {
 }
 
 func (s *service) initIncrService() {
-	store, err := incrservice.NewSQLStore(s.sqlExecutor)
+	store, err := incrservice.NewSQLStore(
+		s.sqlExecutor,
+		s.lockService,
+	)
 	if err != nil {
 		panic(err)
 	}

@@ -66,21 +66,12 @@ func (p *Pipeline) Run(r engine.Reader, topValueMsgTag int32, proc *process.Proc
 		}
 	}
 
-	tableScanOperator := table_scan.Argument{
-		Reader:         r,
-		TopValueMsgTag: topValueMsgTag,
-		Attrs:          p.attrs,
-		TableID:        p.tableID,
+	if tableScanOperator, ok := p.instructions[0].Arg.(*table_scan.Argument); ok {
+		tableScanOperator.Reader = r
+		tableScanOperator.TopValueMsgTag = topValueMsgTag
+		tableScanOperator.Attrs = p.attrs
+		tableScanOperator.TableID = p.tableID
 	}
-	p.instructions = append([]vm.Instruction{
-		{
-			Op:      vm.TableScan,
-			Idx:     -1,
-			Arg:     &tableScanOperator,
-			IsFirst: true,
-			IsLast:  false,
-		},
-	}, p.instructions...)
 
 	if err = vm.Prepare(p.instructions, proc); err != nil {
 		return false, err
@@ -105,25 +96,14 @@ func (p *Pipeline) ConstRun(bat *batch.Batch, proc *process.Process) (end bool, 
 		case <-p.reg.Ch:
 		}
 	}
-	pipelineInputBatches := []*batch.Batch{bat, nil}
 
-	for _, ins := range p.instructions {
-		ins.Idx += 1
-		ins.IsFirst = false
+	if valueScanOperator, ok := p.instructions[0].Arg.(*value_scan.Argument); ok {
+		pipelineInputBatches := []*batch.Batch{bat}
+		if bat != nil {
+			pipelineInputBatches = append(pipelineInputBatches, nil)
+		}
+		valueScanOperator.Batchs = pipelineInputBatches
 	}
-
-	valueScanOperator := value_scan.Argument{
-		Batchs: pipelineInputBatches,
-	}
-	p.instructions = append([]vm.Instruction{
-		{
-			Op:      vm.ValueScan,
-			Idx:     0,
-			Arg:     &valueScanOperator,
-			IsFirst: true,
-			IsLast:  false,
-		},
-	}, p.instructions...)
 
 	if err = vm.Prepare(p.instructions, proc); err != nil {
 		return false, err
