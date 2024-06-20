@@ -1429,11 +1429,11 @@ func restoreMoAccountsTable(ctx context.Context, bh BackgroundExec, snapshotName
 	// insert data
 	insertIntoSql := fmt.Sprintf(restoreMoAccountsFmt, snapshotTs)
 	beginTime := time.Now()
-	getLogger().Info(fmt.Sprintf("[%s] start to insert select mo_accounts, insert sql: %s", snapshotName, insertIntoSql))
+	getLogger().Info(fmt.Sprintf("[%s] start to insert into select mo_accounts, insert sql: %s", snapshotName, insertIntoSql))
 	if err = bh.Exec(ctx, insertIntoSql); err != nil {
 		return
 	}
-	getLogger().Info(fmt.Sprintf("[%s] insert select mo_accounts, cost: %v", snapshotName, time.Since(beginTime)))
+	getLogger().Info(fmt.Sprintf("[%s] insert into select mo_accounts, cost: %v", snapshotName, time.Since(beginTime)))
 
 	return
 }
@@ -1454,18 +1454,17 @@ func getRestoreAccounts(ctx context.Context, bh BackgroundExec, snapshotName str
 	}
 
 	if execResultArrayHasData(erArray) {
-		for _, er := range erArray {
-			for row := uint64(0); row < er.GetRowCount(); row++ {
-				var account accountRecord
-				if account.accountId, err = er.GetUint64(ctx, row, 0); err != nil {
-					return
-				}
-				if account.accountName, err = er.GetString(ctx, row, 1); err != nil {
-					return
-				}
-				accounts = append(accounts, account)
-				getLogger().Info(fmt.Sprintf("[%s] get account: %v, account id: %d", snapshotName, account.accountName, account.accountId))
+		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+			var account accountRecord
+			if account.accountName, err = erArray[0].GetString(ctx, i, 0); err != nil {
+				return
 			}
+			if account.accountId, err = erArray[0].GetUint64(ctx, i, 1); err != nil {
+				return
+			}
+			accounts = append(accounts, account)
+			getLogger().Info(fmt.Sprintf("[%s] get account: %v, account id: %d", snapshotName, account.accountName, account.accountId))
+
 		}
 	}
 	return
