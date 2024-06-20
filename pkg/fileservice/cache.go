@@ -39,6 +39,7 @@ type CacheConfig struct {
 	DiskEvictTarget      *float64       `toml:"disk-evict-target"`
 	RemoteCacheEnabled   bool           `toml:"remote-cache-enabled"`
 	RPC                  morpc.Config   `toml:"rpc"`
+	CheckOverlaps        bool           `toml:"check-overlaps"`
 
 	QueryClient      client.QueryClient            `json:"-"`
 	KeyRouterFactory KeyRouterFactory[pb.CacheKey] `json:"-"`

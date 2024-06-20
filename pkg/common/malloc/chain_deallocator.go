@@ -23,9 +23,9 @@ type chainDeallocator []Deallocator
 
 var _ Deallocator = &chainDeallocator{}
 
-func (c *chainDeallocator) Deallocate(ptr unsafe.Pointer) {
+func (c *chainDeallocator) Deallocate(ptr unsafe.Pointer, hints Hints) {
 	for i := len(*c) - 1; i >= 0; i-- {
-		(*c)[i].Deallocate(ptr)
+		(*c)[i].Deallocate(ptr, hints)
 	}
 	*c = (*c)[:0]
 	chainDeallocatorPool.Put(c)
