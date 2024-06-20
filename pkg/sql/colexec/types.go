@@ -61,42 +61,65 @@ type Server struct {
 type RunningPipelineMapForRemoteNode struct {
 	sync.Mutex
 
-	fromRpcClientToRunningPipeline map[morpc.ClientSession]*process.Process
+	fromRpcClientToRunningPipeline map[rpcClientItem]*process.Process
 }
 
-func (srv *Server) RecordRunningPipeline(session morpc.ClientSession, proc *process.Process) (queryCancel bool) {
+type rpcClientItem struct {
+	// connection.
+	tcp morpc.ClientSession
+
+	// stream id.
+	id uint64
+}
+
+func (srv *Server) RecordRunningPipeline(session morpc.ClientSession, id uint64, proc *process.Process) (queryCancel bool) {
 	srv.receivedRunningPipeline.Lock()
 	defer srv.receivedRunningPipeline.Unlock()
 
+	item := rpcClientItem{
+		tcp: session,
+		id:  id,
+	}
+
 	// CancelRunningPipeline was called before, this query has been canceled.
-	if _, ok := srv.receivedRunningPipeline.fromRpcClientToRunningPipeline[session]; ok {
-		delete(srv.receivedRunningPipeline.fromRpcClientToRunningPipeline, session)
+	if _, ok := srv.receivedRunningPipeline.fromRpcClientToRunningPipeline[item]; ok {
+		delete(srv.receivedRunningPipeline.fromRpcClientToRunningPipeline, item)
 		return true
 	}
 
-	srv.receivedRunningPipeline.fromRpcClientToRunningPipeline[session] = proc
+	srv.receivedRunningPipeline.fromRpcClientToRunningPipeline[item] = proc
 	return false
 }
 
-func (srv *Server) CancelRunningPipeline(session morpc.ClientSession) {
+func (srv *Server) CancelRunningPipeline(session morpc.ClientSession, id uint64) {
 	srv.receivedRunningPipeline.Lock()
 	defer srv.receivedRunningPipeline.Unlock()
 
-	p, ok := srv.receivedRunningPipeline.fromRpcClientToRunningPipeline[session]
+	item := rpcClientItem{
+		tcp: session,
+		id:  id,
+	}
+
+	p, ok := srv.receivedRunningPipeline.fromRpcClientToRunningPipeline[item]
 	if ok {
 		p.Cancel()
-		delete(srv.receivedRunningPipeline.fromRpcClientToRunningPipeline, session)
+		delete(srv.receivedRunningPipeline.fromRpcClientToRunningPipeline, item)
 	} else {
 		// indicate that this query was canceled. once anyone want to start this query, should just return.
-		srv.receivedRunningPipeline.fromRpcClientToRunningPipeline[session] = nil
+		srv.receivedRunningPipeline.fromRpcClientToRunningPipeline[item] = nil
 	}
 }
 
-func (srv *Server) RemoveRunningPipeline(session morpc.ClientSession) {
+func (srv *Server) RemoveRunningPipeline(session morpc.ClientSession, id uint64) {
 	srv.receivedRunningPipeline.Lock()
 	defer srv.receivedRunningPipeline.Unlock()
 
-	delete(srv.receivedRunningPipeline.fromRpcClientToRunningPipeline, session)
+	item := rpcClientItem{
+		tcp: session,
+		id:  id,
+	}
+
+	delete(srv.receivedRunningPipeline.fromRpcClientToRunningPipeline, item)
 }
 
 type uuidProcMapItem struct {

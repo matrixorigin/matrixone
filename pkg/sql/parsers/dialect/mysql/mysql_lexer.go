@@ -141,13 +141,13 @@ func (l *Lexer) GetDbNameCStr(origin string) *tree.CStr {
 	return tree.NewCStr(origin, l.lower)
 }
 
-//func (l *Lexer) GetTblNameCStr(dbName, tblName string) *tree.CStr {
-//	if slices.Contains(CaseInsensitiveDbs, strings.ToLower(dbName)) {
-//		return tree.NewCStr(tblName, 1)
-//	}
-//
-//	return tree.NewCStr(tblName, l.lower)
-//}
+func (l *Lexer) GetTblNameCStr(dbName, tblName string) *tree.CStr {
+	if slices.Contains(CaseInsensitiveDbs, strings.ToLower(dbName)) {
+		return tree.NewCStr(tblName, 1)
+	}
+
+	return tree.NewCStr(tblName, l.lower)
+}
 
 func (l *Lexer) Error(err string) {
 	errMsg := fmt.Sprintf("You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. %s", err)

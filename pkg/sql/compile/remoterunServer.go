@@ -106,11 +106,15 @@ func CnServerMessageHandler(
 	// if this message is responsible for the execution of certain pipelines, they should be ended after message processing is completed.
 	if receiver.messageTyp == pipeline.Method_PipelineMessage || receiver.messageTyp == pipeline.Method_PrepareDoneNotifyMessage {
 		// keep listening until connection was closed
-		// to prevent some strange handle order between 'stop sending message' and others.
-		if err == nil {
-			<-receiver.connectionCtx.Done()
-		}
-		colexec.Get().RemoveRunningPipeline(receiver.clientSession)
+		// to prevent some strange handle order between 'stop sending message' and others. this can help prevent memory leak.
+		// todo: since clientSession is not reused currently, there is no need to do this wait.
+		//  I will optimize this code in the `main branch` in the future.
+		//  we need a new flag like `txnID` as the key value of RecordRunningPipeline, to avoid clientSession maybe used to record content from
+		//  other queries and not being cleared (because Method_StopSending was handled before Method_PipelineMessage).
+		//if err == nil {
+		//	<-receiver.connectionCtx.Done()
+		//}
+		colexec.Get().RemoveRunningPipeline(receiver.clientSession, receiver.messageId)
 	}
 	return err
 }
@@ -123,7 +127,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		if err != nil || dispatchProc == nil {
 			return err
 		}
-		if cancel := colexec.Get().RecordRunningPipeline(receiver.clientSession, dispatchProc); cancel {
+		if cancel := colexec.Get().RecordRunningPipeline(receiver.clientSession, receiver.messageId, dispatchProc); cancel {
 			dispatchProc.Cancel()
 			return nil
 		}
@@ -171,7 +175,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 			return errBuildCompile
 		}
 
-		if cancel := colexec.Get().RecordRunningPipeline(receiver.clientSession, runCompile.proc); cancel {
+		if cancel := colexec.Get().RecordRunningPipeline(receiver.clientSession, receiver.messageId, runCompile.proc); cancel {
 			runCompile.proc.Cancel()
 			return nil
 		}
@@ -217,7 +221,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		return err
 
 	case pipeline.Method_StopSending:
-		colexec.Get().CancelRunningPipeline(receiver.clientSession)
+		colexec.Get().CancelRunningPipeline(receiver.clientSession, receiver.messageId)
 
 	default:
 		panic(fmt.Sprintf("unknown pipeline message type %d.", receiver.messageTyp))
