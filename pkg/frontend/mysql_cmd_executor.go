@@ -2148,6 +2148,9 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 			mysqlRrWr.SetU8(SEQUENCEID, seq)
 			break
 		}
+		if len(payload) == 0 {
+			break
+		}
 		//seq = uint8(packet.SequenceID + 1)
 		//mysqlRrWr.SetU8(SEQUENCEID, seq)
 		ses.CountPayload(len(payload))
