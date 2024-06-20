@@ -265,7 +265,7 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) (err error) {
 			}
 		}
 
-		if err := entry.setCachedData(); err != nil {
+		if err := entry.setCachedData(ctx); err != nil {
 			return err
 		}
 
