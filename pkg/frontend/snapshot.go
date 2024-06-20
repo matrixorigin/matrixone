@@ -811,7 +811,7 @@ func recreateTable(
 		}
 		getLogger().Info(fmt.Sprintf("[%s] insert select table: %v, cost: %v", snapshotName, tblInfo.tblName, time.Since(beginTime)))
 	} else {
-		insertIntoSql := fmt.Sprintf(restoreTableDataByNameFmt, tblInfo.dbName, tblInfo.tblName, tblInfo.dbName, tblInfo.tblName, snapshotName)
+		insertIntoSql := fmt.Sprintf(restoreTableDataByTsFmt, tblInfo.dbName, tblInfo.tblName, tblInfo.dbName, tblInfo.tblName, snapshotTs)
 		beginTime := time.Now()
 		getLogger().Info(fmt.Sprintf("[%s] start to insert select table: %v, insert sql: %s", snapshotName, tblInfo.tblName, insertIntoSql))
 		if err = bh.ExecRestore(ctx, insertIntoSql, curAccountId, toAccountId); err != nil {
@@ -1348,6 +1348,8 @@ func checkAndRestorePublicationRecord(
 func restoreToCluster(ctx context.Context, ses *Session, bh BackgroundExec, snapshotName string, snapshotTs int64) (err error) {
 	getLogger().Info(fmt.Sprintf("[%s] start to restore cluster, restore timestamp: %d", snapshotName, snapshotTs))
 
+	// drop accounts
+
 	// restore mo_accounts table
 	if err = restoreMoAccountsTable(ctx, bh, snapshotName, snapshotTs); err != nil {
 		return
@@ -1466,6 +1468,14 @@ func getRestoreAccounts(ctx context.Context, bh BackgroundExec, snapshotName str
 			getLogger().Info(fmt.Sprintf("[%s] get account: %v, account id: %d", snapshotName, account.accountName, account.accountId))
 
 		}
+	}
+	return
+}
+
+func dropAccounts(ctx context.Context, bh BackgroundExec, snapshotName string, snapshotTs int64) (err error) {
+	getLogger().Info(fmt.Sprintf("[%s] start to drop all accounts", snapshotName))
+	if err = bh.Exec(ctx, deleteAccountsFmt); err != nil {
+		return
 	}
 	return
 }

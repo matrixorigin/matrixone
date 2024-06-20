@@ -254,7 +254,7 @@ INSERT INTO factories (factory_name, address) VALUES ('Factory WWWW', '2031 Birc
 select count(*) from test_snapshot_restore.factories;
 -- @session
 
--- @session:id=2&user=acc02:test_account&password=222
+-- @session:id=2&user=acc02:test_account&password=111
 create database if not exists snapshot_read;
 use snapshot_read;
 create table test_snapshot_read (a int);
@@ -379,7 +379,7 @@ INSERT INTO factories (factory_name, address) VALUES ('Factory WWWW', '2031 Birc
 select count(*) from test_snapshot_restore.factories;
 -- @session
 
--- @session:id=3&user=acc03:test_account&password=333
+-- @session:id=3&user=acc03:test_account&password=111
 create database if not exists snapshot_read;
 use snapshot_read;
 create table test_snapshot_read (a int);
@@ -513,12 +513,12 @@ drop database if exists snapshot_read;
 drop database if exists test_snapshot_restore;
 -- @session
 
--- @session:id=2&user=acc02:test_account&password=222
+-- @session:id=2&user=acc02:test_account&password=111
 drop database if exists snapshot_read;
 drop database if exists test_snapshot_restore;
 -- @session
 
--- @session:id=3&user=acc03:test_account&password=333
+-- @session:id=3&user=acc03:test_account&password=111
 drop database if exists snapshot_read;
 drop database if exists test_snapshot_restore;
 -- @session
@@ -541,7 +541,7 @@ select count(*) from test_snapshot_restore.test_restore_2;
 select count(*) from test_snapshot_restore.factories;
 -- @session
 
--- @session:id=2&user=acc02:test_account&password=222
+-- @session:id=2&user=acc02:test_account&password=111
 select count(*) from snapshot_read.test_snapshot_read;
 select count(*) from snapshot_read.users;
 select count(*) from snapshot_read.students;
@@ -550,7 +550,7 @@ select count(*) from test_snapshot_restore.test_restore_2;
 select count(*) from test_snapshot_restore.factories;
 -- @session
 
--- @session:id=3&user=acc03:test_account&password=333
+-- @session:id=3&user=acc03:test_account&password=111
 select count(*) from snapshot_read.test_snapshot_read;
 select count(*) from snapshot_read.users;
 select count(*) from snapshot_read.students;
@@ -565,3 +565,8 @@ drop database if exists test_snapshot_restore;
 drop account if exists acc01;
 drop account if exists acc02;
 drop account if exists acc03;
+
+show databases like 'snapshot_read';
+show databases like 'test_snapshot_restore';
+-- @ignore:1
+show snapshots;
