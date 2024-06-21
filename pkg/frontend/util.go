@@ -1148,6 +1148,26 @@ func (ui *UserInput) getSqlSourceType(i int) string {
 	return sqlType
 }
 
+const (
+	issue3482SqlPrefix    = "load data local infile '/data/customer/sutpc_001/data_csv"
+	issue3482SqlPrefixLen = len(issue3482SqlPrefix)
+)
+
+// !!!NOTE!!! For debug
+// https://github.com/matrixorigin/MO-Cloud/issues/3482
+// TODO: remove it in the future
+func (ui *UserInput) isIssue3482Sql() bool {
+	if ui == nil {
+		return false
+	}
+	sql := ui.getSql()
+	sqlLen := len(sql)
+	if sqlLen <= issue3482SqlPrefixLen {
+		return false
+	}
+	return strings.HasPrefix(sql, issue3482SqlPrefix)
+}
+
 func unboxExprStr(ctx context.Context, expr tree.Expr) (string, error) {
 	if e, ok := expr.(*tree.NumVal); ok && e.ValType == tree.P_char {
 		return e.OrigString(), nil

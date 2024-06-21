@@ -82,25 +82,25 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, e
 	}
 
-	if arg.buf != nil {
-		proc.PutBatch(arg.buf)
-		arg.buf = nil
+	if arg.ctr.buf != nil {
+		proc.PutBatch(arg.ctr.buf)
+		arg.ctr.buf = nil
 	}
-	arg.buf = result.Batch
-	if arg.buf == nil {
+	arg.ctr.buf = result.Batch
+	if arg.ctr.buf == nil {
 		result.Status = vm.ExecStop
 		return result, e
 	}
-	if arg.buf.IsEmpty() {
+	if arg.ctr.buf.IsEmpty() {
 		return result, e
 	}
 
-	if arg.buf.VectorCount() != len(tblArg.retSchema) {
+	if arg.ctr.buf.VectorCount() != len(tblArg.ctr.retSchema) {
 		result.Status = vm.ExecStop
 		return result, moerr.NewInternalError(proc.Ctx, "table function %s return length mismatch", tblArg.FuncName)
 	}
-	for i := range tblArg.retSchema {
-		if arg.buf.GetVector(int32(i)).GetType().Oid != tblArg.retSchema[i].Oid {
+	for i := range tblArg.ctr.retSchema {
+		if arg.ctr.buf.GetVector(int32(i)).GetType().Oid != tblArg.ctr.retSchema[i].Oid {
 			result.Status = vm.ExecStop
 			return result, moerr.NewInternalError(proc.Ctx, "table function %s return type mismatch", tblArg.FuncName)
 		}
@@ -126,7 +126,7 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	for i := range tblArg.Rets {
 		retSchema[i] = dupType(&tblArg.Rets[i].Typ)
 	}
-	tblArg.retSchema = retSchema
+	tblArg.ctr.retSchema = retSchema
 
 	switch tblArg.FuncName {
 	case "unnest":
