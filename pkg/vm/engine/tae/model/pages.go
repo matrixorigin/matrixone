@@ -166,16 +166,21 @@ func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) 
 		logutil.Infof("[TransferHashPage] persist table is cleared")
 		return types.Rowid{}, false
 	}
-
 	if page.isPersisted {
+		diskStart := time.Now()
 		page.loadTable()
 		v2.TransferDiskHitCounter.Inc()
+		diskDuration := time.Since(diskStart)
+		v2.TransferDurationDiskHistogram.Observe(diskDuration.Seconds())
 	} else {
 		v2.TransferMemoryHitCounter.Inc()
 	}
 	v2.TransferTotalHitCounter.Inc()
 
+	memstart := time.Now()
 	dest, ok = page.hashmap[from]
+	memduration := time.Since(memstart)
+	v2.TransferDurationMemoryHistogram.Observe(memduration.Seconds())
 
 	var str string
 	if ok {

@@ -40,3 +40,15 @@ var (
 	TransferRowTotalCounter = transferRowCounter.WithLabelValues("total")
 	TransferRowHitCounter   = transferRowCounter.WithLabelValues("hit")
 )
+
+var (
+	transferDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: "mo",
+		Subsystem: "transfer",
+		Name:      "duration",
+		Help:      "The duration of transfer.",
+	}, []string{"type"})
+
+	TransferDurationMemoryHistogram = transferDurationHistogram.WithLabelValues("memory")
+	TransferDurationDiskHistogram   = transferDurationHistogram.WithLabelValues("disk")
+)
