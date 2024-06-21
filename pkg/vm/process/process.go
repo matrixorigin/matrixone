@@ -18,6 +18,8 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"io"
 	"sync/atomic"
 	"time"
 
@@ -170,6 +172,26 @@ func (proc *Process) GetQueryClient() qclient.QueryClient {
 
 func (proc *Process) GetFileService() fileservice.FileService {
 	return proc.Base.FileService
+}
+
+func (proc *Process) GetUnixTime() int64 {
+	return proc.Base.UnixTime
+}
+
+func (proc *Process) GetIncrService() incrservice.AutoIncrementService {
+	return proc.Base.IncrService
+}
+
+func (proc *Process) GetLoadLocalReader() *io.PipeReader {
+	return proc.Base.LoadLocalReader
+}
+
+func (proc *Process) GetLockService() lockservice.LockService {
+	return proc.Base.LockService
+}
+
+func (proc *Process) GetWaitPolicy() lock.WaitPolicy {
+	return proc.Base.WaitPolicy
 }
 
 func (proc *Process) GetHaKeeper() logservice.CNHAKeeperClient {

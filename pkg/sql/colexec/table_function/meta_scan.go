@@ -53,9 +53,9 @@ func metaScanCall(_ int, proc *process.Process, arg *Argument, result *vm.CallRe
 	}
 	uuid := vector.MustFixedCol[types.Uuid](v)[0]
 	// get file size
-	path := catalog.BuildQueryResultMetaPath(proc.SessionInfo.Account, uuid.ToString())
+	path := catalog.BuildQueryResultMetaPath(proc.GetSessionInfo().Account, uuid.ToString())
 	// read meta's meta
-	reader, err := blockio.NewFileReader(proc.FileService, path)
+	reader, err := blockio.NewFileReader(proc.Base.FileService, path)
 	if err != nil {
 		return false, err
 	}

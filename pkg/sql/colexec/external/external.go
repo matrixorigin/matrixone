@@ -81,10 +81,10 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	_, span := trace.Start(proc.Ctx, "ExternalPrepare")
 	defer span.End()
 	param := arg.Es
-	if proc.Lim.MaxMsgSize == 0 {
+	if proc.GetLim().MaxMsgSize == 0 {
 		param.maxBatchSize = uint64(morpc.GetMessageSize())
 	} else {
-		param.maxBatchSize = proc.Lim.MaxMsgSize
+		param.maxBatchSize = proc.GetLim().MaxMsgSize
 	}
 	param.maxBatchSize = uint64(float64(param.maxBatchSize) * 0.6)
 	if param.Extern == nil {
@@ -95,7 +95,7 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 		if err := plan2.InitS3Param(param.Extern); err != nil {
 			return err
 		}
-		param.Extern.FileService = proc.FileService
+		param.Extern.FileService = proc.Base.FileService
 	}
 	if !loadFormatIsValid(param.Extern) {
 		return moerr.NewNYI(proc.Ctx, "load format '%s'", param.Extern.Format)
@@ -328,7 +328,7 @@ func readFile(param *ExternalParam, proc *process.Process) (io.ReadCloser, error
 		return io.NopCloser(bytes.NewReader(util.UnsafeStringToBytes(param.Extern.Data))), nil
 	}
 	if param.Extern.Local {
-		return io.NopCloser(proc.LoadLocalReader), nil
+		return io.NopCloser(proc.GetLoadLocalReader()), nil
 	}
 	fs, readPath, err := plan2.GetForETLWithType(param.Extern, param.Fileparam.Filepath)
 	if err != nil {

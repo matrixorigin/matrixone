@@ -560,7 +560,7 @@ func (txn *Transaction) getTable(
 		id,
 	)
 
-	database, err := txn.engine.Database(ctx, dbName, txn.proc.TxnOperator)
+	database, err := txn.engine.Database(ctx, dbName, txn.proc.Base.TxnOperator)
 	if err != nil {
 		return nil, err
 	}

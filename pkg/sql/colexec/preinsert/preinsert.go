@@ -117,7 +117,7 @@ func (arg *Argument) Call(proc *proc) (vm.CallResult, error) {
 }
 
 func genAutoIncrCol(bat *batch.Batch, proc *proc, arg *Argument) error {
-	lastInsertValue, err := proc.IncrService.InsertValues(
+	lastInsertValue, err := proc.GetIncrService().InsertValues(
 		proc.Ctx,
 		arg.TableDef.TblId,
 		bat,

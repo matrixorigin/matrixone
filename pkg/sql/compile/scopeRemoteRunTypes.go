@@ -17,11 +17,12 @@ package compile
 import (
 	"context"
 	"fmt"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"hash/crc32"
 	"runtime"
 	"sync/atomic"
 	"time"
+
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 
@@ -376,9 +377,9 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 		cnInfo.aicm)
 	proc.UnixTime = pHelper.unixTime
 	proc.Id = pHelper.id
-	proc.Lim = pHelper.lim
-	proc.SessionInfo = pHelper.sessionInfo
-	proc.SessionInfo.StorageEngine = cnInfo.storeEngine
+	proc.Base.Lim = pHelper.lim
+	proc.Base.SessionInfo = pHelper.sessionInfo
+	proc.Base.SessionInfo.StorageEngine = cnInfo.storeEngine
 	proc.AnalInfos = make([]*process.AnalyzeInfo, len(pHelper.analysisNodeList))
 	for i := range proc.AnalInfos {
 		proc.AnalInfos[i] = reuse.Alloc[process.AnalyzeInfo](nil)
@@ -386,7 +387,7 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 	}
 	proc.DispatchNotifyCh = make(chan process.WrapCs)
 	{
-		txn := proc.TxnOperator.Txn()
+		txn := proc.Base.TxnOperator.Txn()
 		txnId := txn.GetID()
 		proc.StmtProfile = process.NewStmtProfile(uuid.UUID(txnId), pHelper.StmtId)
 	}

@@ -257,7 +257,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch) erro
 		addr = getGlobalPu().ClusterNodes[0].Addr
 	}
 	cwft.proc.Ctx = execCtx.reqCtx
-	cwft.proc.FileService = getGlobalPu().FileService
+	cwft.proc.Base.FileService = getGlobalPu().FileService
 
 	var tenant string
 	tInfo := cwft.ses.GetTenantInfo()

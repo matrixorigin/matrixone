@@ -553,14 +553,14 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		//  I kept the old codes here without any modify. I don't know if there is one `GetRelation(txn, scanNode, scheme, table)`
 		{
 			n := s.DataSource.node
-			txnOp := s.Proc.TxnOperator
+			txnOp := s.proc.Base.TxnOperator
 			if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
 				if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
-					n.ScanSnapshot.TS.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
+					n.ScanSnapshot.TS.Less(c.proc.Base.TxnOperator.Txn().SnapshotTS) {
 					if c.proc.GetCloneTxnOperator() != nil {
 						txnOp = c.proc.GetCloneTxnOperator()
 					} else {
-						txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanSnapshot.TS)
+						txnOp = c.proc.Base.TxnOperator.CloneSnapshotOp(*n.ScanSnapshot.TS)
 						c.proc.SetCloneTxnOperator(txnOp)
 					}
 
@@ -577,7 +577,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 			rel, err = db.Relation(ctx, s.DataSource.RelationName, c.proc)
 			if err != nil {
 				var e error // avoid contamination of error messages
-				db, e = c.e.Database(ctx, defines.TEMPORARY_DBNAME, s.Proc.TxnOperator)
+				db, e = c.e.Database(ctx, defines.TEMPORARY_DBNAME, s.proc.Base.TxnOperator)
 				if e != nil {
 					return nil, e
 				}
@@ -1166,7 +1166,7 @@ func (s *Scope) notifyAndReceiveFromRemote(wg *sync.WaitGroup, errChan chan erro
 				streamSender, errStream := cnclient.GetStreamSender(fromAddr)
 				if errStream != nil {
 					s.Proc.Errorf(s.Proc.Ctx, "Failed to get stream sender txnID=%s, err=%v",
-						s.Proc.TxnOperator.Txn().DebugString(), errStream)
+						s.proc.Base.TxnOperator.Txn().DebugString(), errStream)
 					closeWithError(errStream, s.Proc.Reg.MergeReceivers[receiverIdx])
 					return
 				}

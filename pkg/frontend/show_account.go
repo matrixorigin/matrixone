@@ -159,8 +159,8 @@ func requestStorageUsage(ctx context.Context, ses *Session, accIds [][]int64) (r
 
 	// create a new proc for `handler`
 	proc := process.New(ctx, ses.proc.GetMPool(),
-		ses.proc.TxnClient, txnOperator,
-		ses.proc.FileService, ses.proc.LockService,
+		ses.proc.Base.TxnClient, txnOperator,
+		ses.proc.Base.FileService, ses.proc.LockService,
 		ses.proc.QueryClient, ses.proc.Hakeeper,
 		ses.proc.UdfService, ses.proc.Aicm,
 	)

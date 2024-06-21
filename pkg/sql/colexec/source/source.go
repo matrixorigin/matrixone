@@ -76,7 +76,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	switch arg.status {
 	case retrieve:
-		arg.buf, err = mokafka.RetrieveData(proc.Ctx, proc.SessionInfo.SourceInMemScanBatch, arg.Configs, arg.attrs, arg.types, arg.Offset, arg.Limit, proc.Mp(), mokafka.NewKafkaAdapter)
+		arg.buf, err = mokafka.RetrieveData(proc.Ctx, proc.GetSessionInfo().SourceInMemScanBatch, arg.Configs, arg.attrs, arg.types, arg.Offset, arg.Limit, proc.Mp(), mokafka.NewKafkaAdapter)
 		if err != nil {
 			result.Status = vm.ExecStop
 			return result, err
