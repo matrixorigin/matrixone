@@ -50,9 +50,11 @@ type MergeExecutor struct {
 	cnSched             CNMergeScheduler
 	memAvail            int
 	memSpare            int // 10% of total memory or container memory limit
+	transPageLimit      uint64
 	cpuPercent          float64
 	activeMergeBlkCount int32
 	activeEstimateBytes int64
+	roundMergeRows      uint64
 	taskConsume         struct {
 		sync.Mutex
 		o map[objectio.ObjectId]struct{}
@@ -83,6 +85,18 @@ func (e *MergeExecutor) setSpareMem(total uint64) {
 	} else {
 		e.memSpare = tenth
 	}
+
+	availTotal := total - uint64(e.memSpare)
+
+	if availTotal > 200*common.Const1GBytes {
+		e.transPageLimit = availTotal / 25 * 2 // 8%
+	} else if availTotal > 100*common.Const1GBytes {
+		e.transPageLimit = availTotal / 25 * 3 // 12%
+	} else if availTotal > 40*common.Const1GBytes {
+		e.transPageLimit = availTotal / 25 * 4 // 16%
+	} else {
+		e.transPageLimit = math.MaxUint64 // no limit
+	}
 }
 
 func (e *MergeExecutor) RefreshMemInfo() {
@@ -95,6 +109,7 @@ func (e *MergeExecutor) RefreshMemInfo() {
 	if percents, err := cpu.Percent(0, false); err == nil {
 		e.cpuPercent = percents[0]
 	}
+	e.roundMergeRows = 0
 }
 
 func (e *MergeExecutor) PrintStats() {
@@ -138,6 +153,9 @@ func (e *MergeExecutor) OnExecDone(v any) {
 }
 
 func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, policy Policy) {
+	if e.roundMergeRows*36 /*28 * 1.3 */ > e.transPageLimit/8 {
+		return
+	}
 	e.tableName = fmt.Sprintf("%v-%v", entry.ID, entry.GetLastestSchema().Name)
 
 	mobjs, kind := policy.Revise(e.CPUPercent(), int64(e.MemAvailBytes()))
@@ -202,6 +220,9 @@ func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, policy Policy) {
 			return
 		}
 		e.AddActiveTask(task.ID(), blkCnt, esize)
+		for _, obj := range mobjs {
+			e.roundMergeRows += uint64(obj.GetRemainingRows())
+		}
 		logMergeTask(e.tableName, task.ID(), mobjs, blkCnt, osize, esize)
 	}
 
@@ -215,6 +236,10 @@ func (e *MergeExecutor) MemAvailBytes() int {
 		avail = 0
 	}
 	return avail
+}
+
+func (e *MergeExecutor) TransferPageSizeLimit() uint64 {
+	return e.transPageLimit
 }
 
 func (e *MergeExecutor) CPUPercent() int64 {
