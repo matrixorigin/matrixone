@@ -242,6 +242,7 @@ func (h *Handle) HandleDiskCleaner(
 		var ttl time.Duration
 		ttl, err = time.ParseDuration(value)
 		if err != nil {
+			logutil.Errorf("parse ttl failed: %v", err)
 			return nil, err
 		}
 
