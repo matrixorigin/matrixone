@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"io"
 	"time"
 
@@ -123,6 +125,10 @@ func NewFlushTableTailEntry(
 // add transfer pages for dropped aobjects
 func (entry *flushTableTailEntry) addTransferPages() {
 	isTransient := !entry.tableEntry.GetLastestSchemaLocked().HasPK()
+	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+	var pages []*model.TransferHashPage
+	var writer *blockio.BlockWriter
+	writer, _ = blockio.NewBlockWriterNew(entry.rt.Fs.Service, name, 0, nil)
 	for i, mcontainer := range entry.transMappings.Mappings {
 		m := mcontainer.M
 		if len(m) == 0 {
@@ -135,7 +141,43 @@ func (entry *flushTableTailEntry) addTransferPages() {
 			blkid := objectio.NewBlockidWithObjectID(entry.createdBlkHandles.GetID(), uint16(dst.BlkIdx))
 			page.Train(uint32(srcRow), *objectio.NewRowid(blkid, uint32(dst.RowIdx)))
 		}
+
+		data := page.Pin().Val.Marshal()
+		t := types.T_varchar.ToType()
+		vw := entry.rt.VectorPool.Transient.GetVector(&t)
+		v, releasev := vw.GetDownstreamVector(), vw.Close
+		defer releasev()
+		vectorRowCnt := 1
+		err := vector.AppendBytes(v, data, false, entry.rt.VectorPool.Transient.GetMPool())
+		if err != nil {
+			return
+		}
+
+		bat := batch.New(true, []string{"mapping"})
+		bat.SetRowCount(vectorRowCnt)
+		bat.Vecs[0] = v
+		_, err = writer.WriteTombstoneBatch(bat)
+		if err != nil {
+			return
+		}
+
 		entry.rt.TransferTable.AddPage(page)
+		pages = append(pages, page)
+	}
+
+	var blocks []objectio.BlockObject
+	blocks, _, err := writer.Sync(context.Background())
+	if err != nil {
+		return
+	}
+
+	for i, blk := range blocks {
+		location := blockio.EncodeLocation(
+			name,
+			blk.GetExtent(),
+			uint32(1),
+			blk.GetID())
+		pages[i].SetLocation(location)
 	}
 }
 
