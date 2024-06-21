@@ -106,6 +106,8 @@ const (
 var (
 	ncpu           = runtime.GOMAXPROCS(0)
 	ctxCancelError = context.Canceled.Error()
+
+	cantCompileForPrepareErr = moerr.NewCantCompileForPrepareNoCtx()
 )
 
 // NewCompile is used to new an object of compile
@@ -134,7 +136,6 @@ func NewCompile(
 	c.cnLabel = cnLabel
 	c.startAt = startAt
 	c.disableRetry = false
-	c.cantSaveForPrepare = false
 	if c.proc.TxnOperator != nil {
 		// TODO: The action of updating the WriteOffset logic should be executed in the `func (c *Compile) Run(_ uint64)` method.
 		// However, considering that the delay ranges are not completed yet, the UpdateSnapshotWriteOffset() and
@@ -172,11 +173,21 @@ func (c *Compile) GetMessageCenter() *process.MessageCenter {
 	return nil
 }
 
-func (c *Compile) Reset(startAt time.Time) {
+func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch) error, sql string) {
+	c.proc = proc
+	c.fill = fill
+	c.sql = sql
+	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, c.counterSet)
+	c.ctx = c.proc.Ctx
+	c.proc.Ctx = context.WithValue(c.proc.Ctx, defines.EngineKey{}, c.e)
 	c.affectRows.Store(0)
 
 	for _, info := range c.anal.analInfos {
 		info.Reset()
+	}
+
+	for _, s := range c.scope {
+		s.Reset(c)
 	}
 
 	c.MessageBoard = c.MessageBoard.Reset()
@@ -186,6 +197,9 @@ func (c *Compile) Reset(startAt time.Time) {
 		f.reset()
 	}
 	c.startAt = startAt
+	if c.proc.TxnOperator != nil {
+		c.proc.TxnOperator.GetWorkspace().UpdateSnapshotWriteOffset()
+	}
 }
 
 func (c *Compile) clear() {
@@ -221,7 +235,7 @@ func (c *Compile) clear() {
 	c.needLockMeta = false
 	c.isInternal = false
 	c.lastAllocID = 0
-	c.cantSaveForPrepare = false
+	c.isPrepare = false
 
 	for k := range c.metaTables {
 		delete(c.metaTables, k)
@@ -342,9 +356,6 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, fill func(*batch.B
 	}
 	if c.shouldReturnCtxErr() {
 		return c.proc.Ctx.Err()
-	}
-	if !c.IsTpQuery() {
-		c.cantSaveForPrepare = true
 	}
 	return nil
 }
@@ -650,6 +661,10 @@ func (c *Compile) canRetry(err error) bool {
 
 func (c *Compile) IsTpQuery() bool {
 	return c.execType == plan2.ExecTypeTP
+}
+
+func (c *Compile) SetIsPrepare(isPrepare bool) {
+	c.isPrepare = isPrepare
 }
 
 /*
@@ -1910,6 +1925,9 @@ func calculatePartitions(start, end, n int64) [][2]int64 {
 }
 
 func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope, error) {
+	if c.isPrepare {
+		return nil, cantCompileForPrepareErr
+	}
 	ctx, span := trace.Start(ctx, "compileExternScan")
 	defer span.End()
 	start := time.Now()
@@ -1918,7 +1936,6 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 			c.proc.Infof(ctx, "compileExternScan cost %v", t)
 		}
 	}()
-	c.cantSaveForPrepare = true
 
 	t := time.Now()
 
@@ -2373,7 +2390,7 @@ func (c *Compile) compileRestrict(n *plan.Node, ss []*Scope) []*Scope {
 	}
 	currentFirstFlag := c.anal.isFirst
 	// for dynamic parameter, substitute param ref and const fold cast expression here to improve performance
-	newFilters, err := plan2.ConstandFoldList(n.FilterList, c.proc, true)
+	newFilters, err := plan2.ConstandFoldList(n.FilterList, c.proc, false)
 	if err != nil {
 		newFilters = n.FilterList
 	}
@@ -4116,7 +4133,9 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	}
 
 	if c.determinExpandRanges(n) {
-		c.cantSaveForPrepare = true
+		if c.isPrepare {
+			return nil, nil, nil, cantCompileForPrepareErr
+		}
 		db, err = c.e.Database(ctx, n.ObjRef.SchemaName, txnOp)
 		if err != nil {
 			return nil, nil, nil, err
