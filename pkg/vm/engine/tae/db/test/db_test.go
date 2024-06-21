@@ -18,12 +18,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"math/rand"
-	"os"
-	"path"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -8997,6 +8993,15 @@ func TestVisitTombstone(t *testing.T) {
 
 func TestPersistTransferTable(t *testing.T) {
 	ctx := context.Background()
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(13, 3)
+	schema.BlockMaxRows = 10
+	schema.ObjectMaxBlocks = 3
+	tae.BindSchema(schema)
+	testutil.CreateRelation(t, tae.DB, "db", schema, true)
+
 	ttl := time.Minute
 	table := model.NewTransferTable[*model.TransferHashPage](ttl)
 	defer table.Close()
@@ -9005,21 +9010,9 @@ func TestPersistTransferTable(t *testing.T) {
 	id1 := common.ID{BlockID: *objectio.NewBlockid(sid, 1, 0)}
 	id2 := common.ID{BlockID: *objectio.NewBlockid(sid, 2, 0)}
 
-	dir := InitTestEnv(ModuleName, t.Name())
-	dir = path.Join(dir, "/local")
-	c := fileservice.Config{
-		Name:    defines.LocalFileServiceName,
-		Backend: "DISK",
-		DataDir: dir,
-		Cache:   fileservice.DisabledCacheConfig,
-	}
-	service, err := fileservice.NewFileService(ctx, c, nil)
-	assert.Nil(t, err)
-	defer service.Close()
-
 	now := time.Now()
 	params := model.NewTransferHashPageParams(
-		model.WithFs(service),
+		model.WithFs(tae.Runtime.Fs.Service),
 		model.WithRd(blockio.NewBlockRead()),
 		model.WithTTL(2*time.Second),
 	)
@@ -9033,12 +9026,14 @@ func TestPersistTransferTable(t *testing.T) {
 
 	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
 	var writer *blockio.BlockWriter
-	writer, _ = blockio.NewBlockWriterNew(service, name, 0, nil)
+	writer, _ = blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, name, 0, nil)
 	data := page.Pin().Val.Marshal()
 	ty := types.T_varchar.ToType()
-	v := vector.NewVec(ty)
+	vw := tae.Runtime.VectorPool.Transient.GetVector(&ty)
+	v, releasev := vw.GetDownstreamVector(), vw.Close
+	defer releasev()
 	vectorRowCnt := 1
-	err = vector.AppendBytes(v, data, false, mpool.MustNew("test"))
+	err := vector.AppendBytes(v, data, false, tae.Runtime.VectorPool.Transient.GetMPool())
 	if err != nil {
 		return
 	}
@@ -9076,6 +9071,15 @@ func TestPersistTransferTable(t *testing.T) {
 
 func TestClearPersistTransferTable(t *testing.T) {
 	ctx := context.Background()
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(13, 3)
+	schema.BlockMaxRows = 10
+	schema.ObjectMaxBlocks = 3
+	tae.BindSchema(schema)
+	testutil.CreateRelation(t, tae.DB, "db", schema, true)
+
 	ttl := time.Minute
 	table := model.NewTransferTable[*model.TransferHashPage](ttl)
 	defer table.Close()
@@ -9084,21 +9088,9 @@ func TestClearPersistTransferTable(t *testing.T) {
 	id1 := common.ID{BlockID: *objectio.NewBlockid(sid, 1, 0)}
 	id2 := common.ID{BlockID: *objectio.NewBlockid(sid, 2, 0)}
 
-	dir := InitTestEnv(ModuleName, t.Name())
-	dir = path.Join(dir, "/local")
-	c := fileservice.Config{
-		Name:    defines.LocalFileServiceName,
-		Backend: "DISK",
-		DataDir: dir,
-		Cache:   fileservice.DisabledCacheConfig,
-	}
-	service, err := fileservice.NewFileService(ctx, c, nil)
-	assert.Nil(t, err)
-	defer service.Close()
-
 	now := time.Now()
 	params := model.NewTransferHashPageParams(
-		model.WithFs(service),
+		model.WithFs(tae.Runtime.Fs.Service),
 		model.WithRd(blockio.NewBlockRead()),
 		model.WithTTL(time.Second),
 		model.WithDiskTTL(2*time.Second),
@@ -9113,12 +9105,14 @@ func TestClearPersistTransferTable(t *testing.T) {
 
 	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
 	var writer *blockio.BlockWriter
-	writer, _ = blockio.NewBlockWriterNew(service, name, 0, nil)
+	writer, _ = blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, name, 0, nil)
 	data := page.Pin().Val.Marshal()
 	ty := types.T_varchar.ToType()
-	v := vector.NewVec(ty)
+	vw := tae.Runtime.VectorPool.Transient.GetVector(&ty)
+	v, releasev := vw.GetDownstreamVector(), vw.Close
+	defer releasev()
 	vectorRowCnt := 1
-	err = vector.AppendBytes(v, data, false, mpool.MustNew("test"))
+	err := vector.AppendBytes(v, data, false, tae.Runtime.VectorPool.Transient.GetMPool())
 	if err != nil {
 		return
 	}
@@ -9150,24 +9144,4 @@ func TestClearPersistTransferTable(t *testing.T) {
 		_, ok := page.Transfer(uint32(i))
 		assert.False(t, ok)
 	}
-}
-
-func GetDefaultTestPath(module string, name string) string {
-	return filepath.Join("/tmp", module, name)
-}
-
-func MakeDefaultTestPath(module string, name string) string {
-	path := GetDefaultTestPath(module, name)
-	os.MkdirAll(path, os.FileMode(0755))
-	return path
-}
-
-func RemoveDefaultTestPath(module string, name string) {
-	path := GetDefaultTestPath(module, name)
-	os.RemoveAll(path)
-}
-
-func InitTestEnv(module string, name string) string {
-	RemoveDefaultTestPath(module, name)
-	return MakeDefaultTestPath(module, name)
 }
