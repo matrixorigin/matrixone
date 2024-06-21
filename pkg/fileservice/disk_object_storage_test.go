@@ -12,46 +12,39 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package malloc
+package fileservice
 
 import (
-	"fmt"
-	"runtime"
-	"strings"
+	"context"
 	"testing"
 )
 
-func TestCheckedDeallocator(t *testing.T) {
-	allocator := NewClassAllocator(ptrTo(uint32(1)))
+func TestDiskObjectStorage(t *testing.T) {
+	ctx := context.Background()
 
-	func() {
-		defer func() {
-			p := recover()
-			if p == nil {
-				t.Fatal("should panic")
-			}
-			msg := fmt.Sprintf("%v", p)
-			if !strings.Contains(msg, "double free") {
-				t.Fatalf("got %v", msg)
-			}
-		}()
-		ptr, dec, err := allocator.Allocate(42)
+	testFileService(t, 0, func(name string) FileService {
+		dir := t.TempDir()
+		fs, err := NewS3FS(
+			ctx,
+			ObjectStorageArguments{
+				Name:     name,
+				Endpoint: "disk",
+				Bucket:   dir,
+			},
+			DisabledCacheConfig,
+			//CacheConfig{
+			//	MemoryCapacity: ptrTo(toml.ByteSize(1 << 30)),
+			//	DiskPath:       ptrTo(diskCacheDir),
+			//	DiskCapacity:   ptrTo(toml.ByteSize(1 << 30)),
+			//},
+			nil,
+			false,
+			true,
+		)
 		if err != nil {
 			t.Fatal(err)
 		}
-		dec.Deallocate(ptr)
-		dec.Deallocate(ptr)
-	}()
-
-	func() {
-		ptr, dec, err := allocator.Allocate(42)
-		_ = ptr
-		_ = dec
-		if err != nil {
-			t.Fatal(err)
-		}
-		dec.Deallocate(ptr) // comment out this line to trigger memory leak panic
-	}()
-	runtime.GC()
+		return fs
+	})
 
 }
