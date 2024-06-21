@@ -233,17 +233,17 @@ func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 }
 
 func resetChildren(arg *Argument, bats []*batch.Batch) {
+	valueScanArg := &value_scan.Argument{
+		Batchs: bats,
+	}
+	valueScanArg.Prepare(nil)
 	if arg.NumChildren() == 0 {
-		arg.AppendChild(&value_scan.Argument{
-			Batchs: bats,
-		})
+		arg.AppendChild(valueScanArg)
 
 	} else {
 		arg.SetChildren(
 			[]vm.Operator{
-				&value_scan.Argument{
-					Batchs: bats,
-				},
+				valueScanArg,
 			})
 	}
 	arg.ctr.state = vm.Build

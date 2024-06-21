@@ -16,6 +16,7 @@ package fileservice
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"os"
 	"time"
@@ -26,9 +27,11 @@ import (
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
-func (i *IOEntry) setCachedData() error {
+func (i *IOEntry) setCachedData(ctx context.Context) error {
+	LogEvent(ctx, "setCachedData begin")
 	t0 := time.Now()
 	defer func() {
+		LogEvent(ctx, "setCachedData end")
 		metric.FSReadDurationSetCachedData.Observe(time.Since(t0).Seconds())
 	}()
 	if i.ToCacheData == nil {
@@ -40,7 +43,9 @@ func (i *IOEntry) setCachedData() error {
 	if i.allocator == nil {
 		i.allocator = GetDefaultCacheDataAllocator()
 	}
+	LogEvent(ctx, "ToCacheData begin")
 	bs, err := i.ToCacheData(bytes.NewReader(i.Data), i.Data, i.allocator)
+	LogEvent(ctx, "ToCacheData end")
 	if err != nil {
 		return err
 	}
@@ -48,7 +53,7 @@ func (i *IOEntry) setCachedData() error {
 	return nil
 }
 
-func (i *IOEntry) ReadFromOSFile(file *os.File) (err error) {
+func (i *IOEntry) ReadFromOSFile(ctx context.Context, file *os.File) (err error) {
 	finally := i.prepareData()
 	defer finally(&err)
 	r := io.LimitReader(file, i.Size)
@@ -68,7 +73,7 @@ func (i *IOEntry) ReadFromOSFile(file *os.File) (err error) {
 	if i.ReadCloserForRead != nil {
 		*i.ReadCloserForRead = io.NopCloser(bytes.NewReader(i.Data))
 	}
-	if err := i.setCachedData(); err != nil {
+	if err := i.setCachedData(ctx); err != nil {
 		return err
 	}
 

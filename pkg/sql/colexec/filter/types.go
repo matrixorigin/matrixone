@@ -30,7 +30,6 @@ type Argument struct {
 	E       *plan.Expr
 	exeExpr *plan.Expr
 	IsEnd   bool
-	buf     *batch.Batch
 
 	vm.OperatorBase
 }
@@ -67,6 +66,7 @@ func (arg *Argument) Release() {
 }
 
 type container struct {
+	buf       *batch.Batch
 	executors []colexec.ExpressionExecutor
 }
 

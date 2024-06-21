@@ -58,7 +58,7 @@ var (
 	defaultRpcMaxMsgSize              = 1024 * mpool.KB
 	defaultRPCStreamPoisonTime        = 5 * time.Second
 	defaultLogtailCollectInterval     = 2 * time.Millisecond
-	defaultLogtailResponseSendTimeout = 10 * time.Second
+	defaultLogtailResponseSendTimeout = time.Minute
 	defaultPullWorkerPoolSize         = 50
 
 	storageDir     = "storage"
