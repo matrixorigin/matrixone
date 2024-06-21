@@ -313,6 +313,7 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 
 	tp := reuse.Alloc[tracePoint](nil)
 	defer reuse.Free(tp, nil)
+	tp.ctx = ctx
 	ctx = httptrace.WithClientTrace(ctx, tp.getClientTrace())
 
 	var bytesWritten int
@@ -412,6 +413,7 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 
 	tp := reuse.Alloc[tracePoint](nil)
 	defer reuse.Free(tp, nil)
+	tp.ctx = ctx
 	ctx = httptrace.WithClientTrace(ctx, tp.getClientTrace())
 
 	if len(vector.Entries) == 0 {
@@ -593,7 +595,9 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 		ctx, spanR := trace.Start(ctx, "S3FS.read.getReader")
 		defer spanR.End()
 		key := s.pathToKey(path.File)
+		LogEvent(ctx, "storage.Read begin")
 		r, err := s.storage.Read(ctx, key, min, max)
+		LogEvent(ctx, "storage.Read end")
 		if err != nil {
 			return nil, err
 		}
@@ -882,6 +886,7 @@ func (s *S3FS) Cost() *CostAttr {
 }
 
 type tracePoint struct {
+	ctx               context.Context
 	start             time.Time
 	dnsStart          time.Time
 	connectStart      time.Time
@@ -901,6 +906,10 @@ func newTracePoint() *tracePoint {
 	tp.ct.ConnectDone = tp.connectDonePoint
 	tp.ct.TLSHandshakeStart = tp.tlsHandshakeStartPoint
 	tp.ct.TLSHandshakeDone = tp.tlsHandshakeDonePoint
+	tp.ct.GotFirstResponseByte = tp.gotFirstResponseByte
+	tp.ct.Got100Continue = tp.got100Continue
+	tp.ct.WroteHeaders = tp.wroteHeaders
+	tp.ct.Wait100Continue = tp.wait100Continue
 	return tp
 }
 
@@ -909,6 +918,7 @@ func (tp tracePoint) TypeName() string {
 }
 
 func resetTracePoint(tp *tracePoint) {
+	tp.ctx = nil
 	tp.start = time.Time{}
 	tp.dnsStart = time.Time{}
 	tp.connectStart = time.Time{}
@@ -920,35 +930,59 @@ func (tp *tracePoint) getClientTrace() *httptrace.ClientTrace {
 }
 
 func (tp *tracePoint) getConnPoint(hostPort string) {
+	LogEvent(tp.ctx, "httptrace.GetConn")
 	tp.start = time.Now()
 }
 
 func (tp *tracePoint) gotConnPoint(info httptrace.GotConnInfo) {
+	LogEvent(tp.ctx, "httptrace.GotConn")
 	metric.S3GetConnDurationHistogram.Observe(time.Since(tp.start).Seconds())
 }
 
 func (tp *tracePoint) dnsStartPoint(di httptrace.DNSStartInfo) {
+	LogEvent(tp.ctx, "httptrace.DNSStart")
 	metric.S3DNSResolveCounter.Inc()
 	tp.dnsStart = time.Now()
 }
 
 func (tp *tracePoint) dnsDonePoint(di httptrace.DNSDoneInfo) {
+	LogEvent(tp.ctx, "httptrace.DNSDone")
 	metric.S3DNSResolveDurationHistogram.Observe(time.Since(tp.dnsStart).Seconds())
 }
 
 func (tp *tracePoint) connectStartPoint(network, addr string) {
+	LogEvent(tp.ctx, "httptrace.ConnectStart")
 	metric.S3ConnectCounter.Inc()
 	tp.connectStart = time.Now()
 }
 
 func (tp *tracePoint) connectDonePoint(network, addr string, err error) {
+	LogEvent(tp.ctx, "httptrace.ConnectDone")
 	metric.S3ConnectDurationHistogram.Observe(time.Since(tp.connectStart).Seconds())
 }
 
 func (tp *tracePoint) tlsHandshakeStartPoint() {
+	LogEvent(tp.ctx, "httptrace.TLSHandshakeStart")
 	tp.tlsHandshakeStart = time.Now()
 }
 
 func (tp *tracePoint) tlsHandshakeDonePoint(cs tls.ConnectionState, err error) {
+	LogEvent(tp.ctx, "httptrace.TLSHandshakeDone")
 	metric.S3TLSHandshakeDurationHistogram.Observe(time.Since(tp.tlsHandshakeStart).Seconds())
+}
+
+func (tp *tracePoint) gotFirstResponseByte() {
+	LogEvent(tp.ctx, "httptrace.GotFirstResponseByte")
+}
+
+func (tp *tracePoint) got100Continue() {
+	LogEvent(tp.ctx, "httptrace.Got100Continue")
+}
+
+func (tp *tracePoint) wroteHeaders() {
+	LogEvent(tp.ctx, "httptrace.WroteHeaders")
+}
+
+func (tp *tracePoint) wait100Continue() {
+	LogEvent(tp.ctx, "httptrace.Wait100Continue")
 }

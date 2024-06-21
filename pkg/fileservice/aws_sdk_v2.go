@@ -364,6 +364,7 @@ func (a *AwsSDKv2) Read(
 
 	if max == nil {
 		// read to end
+		LogEvent(ctx, "AwsSDKv2 getObject begin")
 		r, err := a.getObject(
 			ctx,
 			min,
@@ -373,6 +374,7 @@ func (a *AwsSDKv2) Read(
 				Key:    ptrTo(key),
 			},
 		)
+		LogEvent(ctx, "AwsSDKv2 getObject end")
 		err = a.mapError(err, key)
 		if err != nil {
 			return nil, err
@@ -380,6 +382,7 @@ func (a *AwsSDKv2) Read(
 		return r, nil
 	}
 
+	LogEvent(ctx, "AwsSDKv2 getObject begin")
 	r, err = a.getObject(
 		ctx,
 		min,
@@ -389,6 +392,7 @@ func (a *AwsSDKv2) Read(
 			Key:    ptrTo(key),
 		},
 	)
+	LogEvent(ctx, "AwsSDKv2 getObject end")
 	err = a.mapError(err, key)
 	if err != nil {
 		return nil, err
