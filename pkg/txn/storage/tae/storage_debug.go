@@ -124,7 +124,7 @@ func (s *taeStorage) Debug(ctx context.Context,
 			})
 		}
 		return resp.Read()
-	case uint32(api.OpCode_OpDiskDiskCleaner)
+	case uint32(api.OpCode_OpDiskDiskCleaner):
 		resp, err := handleRead(ctx, txnMeta, data, s.taeHandler.HandleDiskCleaner)
 		if err != nil {
 			return types.Encode(&api.SyncLogTailResp{
