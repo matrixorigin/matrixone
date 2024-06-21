@@ -401,4 +401,4 @@ INNER JOIN DirectReports AS d
 ON e.ManagerID = d.EmployeeID
 )
 update DirectReports set Title='manager assistant' where ManagerID=273;
-internal error: column 'title' not found in table or the target table directreports of the UPDATE is not updatable
+internal error: column 'Title' not found in table or the target table directreports of the UPDATE is not updatable
