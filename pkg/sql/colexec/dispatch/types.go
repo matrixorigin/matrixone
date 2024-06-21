@@ -49,6 +49,7 @@ type container struct {
 	isRemote bool
 	// prepared specify waiting remote receiver ready or not
 	prepared bool
+	hasData  bool
 
 	// for send-to-any function decide send to which reg
 	sendCnt       int
@@ -57,7 +58,6 @@ type container struct {
 	remoteRegsCnt int
 
 	remoteToIdx map[uuid.UUID]int
-	hasData     bool
 
 	batchCnt []int
 	rowCnt   []int
@@ -70,6 +70,8 @@ type Argument struct {
 	IsSink bool
 	// RecSink means this is a Recursive Sink Node
 	RecSink bool
+
+	ShuffleType int32
 	// FuncId means the sendFunc you want to call
 	FuncId int
 	// LocalRegs means the local register you need to send to.
@@ -77,7 +79,6 @@ type Argument struct {
 	// RemoteRegs specific the remote reg you need to send to.
 	RemoteRegs []colexec.ReceiveInfo
 	// for shuffle dispatch
-	ShuffleType         int32
 	ShuffleRegIdxLocal  []int
 	ShuffleRegIdxRemote []int
 

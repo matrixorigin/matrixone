@@ -54,8 +54,8 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {
+	arg.ctr = new(container)
 	if arg.RemoteDelete {
-		arg.ctr = new(container)
 		arg.ctr.state = vm.Build
 		arg.ctr.blockId_type = make(map[types.Blockid]int8)
 		arg.ctr.blockId_bitmap = make(map[types.Blockid]*nulls.Nulls)
@@ -70,8 +70,8 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 		if err != nil {
 			return err
 		}
-		arg.source = rel
-		arg.partitionSources = partitionRels
+		arg.ctr.source = rel
+		arg.ctr.partitionSources = partitionRels
 	}
 
 	return nil
@@ -123,26 +123,26 @@ func (arg *Argument) remoteDelete(proc *process.Process) (vm.CallResult, error) 
 	if arg.ctr.state == vm.Eval {
 		// ToDo: CNBlock Compaction
 		// blkId,delta_metaLoc,type
-		if arg.resBat != nil {
-			proc.PutBatch(arg.resBat)
-			arg.resBat = nil
+		if arg.ctr.resBat != nil {
+			proc.PutBatch(arg.ctr.resBat)
+			arg.ctr.resBat = nil
 		}
-		arg.resBat = batch.NewWithSize(5)
-		arg.resBat.Attrs = []string{
+		arg.ctr.resBat = batch.NewWithSize(5)
+		arg.ctr.resBat.Attrs = []string{
 			catalog.BlockMeta_Delete_ID,
 			catalog.BlockMeta_DeltaLoc,
 			catalog.BlockMeta_Type,
 			catalog.BlockMeta_Partition,
 			catalog.BlockMeta_Deletes_Length,
 		}
-		arg.resBat.SetVector(0, proc.GetVector(types.T_text.ToType()))
-		arg.resBat.SetVector(1, proc.GetVector(types.T_text.ToType()))
-		arg.resBat.SetVector(2, proc.GetVector(types.T_int8.ToType()))
-		arg.resBat.SetVector(3, proc.GetVector(types.T_int32.ToType()))
+		arg.ctr.resBat.SetVector(0, proc.GetVector(types.T_text.ToType()))
+		arg.ctr.resBat.SetVector(1, proc.GetVector(types.T_text.ToType()))
+		arg.ctr.resBat.SetVector(2, proc.GetVector(types.T_int8.ToType()))
+		arg.ctr.resBat.SetVector(3, proc.GetVector(types.T_int32.ToType()))
 
 		for pidx, blockidRowidbatch := range arg.ctr.partitionId_blockId_rowIdBatch {
 			for blkid, bat := range blockidRowidbatch {
-				if err = vector.AppendBytes(arg.resBat.GetVector(0), blkid[:], false, proc.GetMPool()); err != nil {
+				if err = vector.AppendBytes(arg.ctr.resBat.GetVector(0), blkid[:], false, proc.GetMPool()); err != nil {
 					return result, err
 				}
 				bat.SetRowCount(bat.GetVector(0).Length())
@@ -151,13 +151,13 @@ func (arg *Argument) remoteDelete(proc *process.Process) (vm.CallResult, error) 
 					result.Status = vm.ExecStop
 					return result, err1
 				}
-				if err = vector.AppendBytes(arg.resBat.GetVector(1), byts, false, proc.GetMPool()); err != nil {
+				if err = vector.AppendBytes(arg.ctr.resBat.GetVector(1), byts, false, proc.GetMPool()); err != nil {
 					return result, err
 				}
-				if err = vector.AppendFixed(arg.resBat.GetVector(2), arg.ctr.blockId_type[blkid], false, proc.GetMPool()); err != nil {
+				if err = vector.AppendFixed(arg.ctr.resBat.GetVector(2), arg.ctr.blockId_type[blkid], false, proc.GetMPool()); err != nil {
 					return result, err
 				}
-				if err = vector.AppendFixed(arg.resBat.GetVector(3), int32(pidx), false, proc.GetMPool()); err != nil {
+				if err = vector.AppendFixed(arg.ctr.resBat.GetVector(3), int32(pidx), false, proc.GetMPool()); err != nil {
 					return result, err
 				}
 			}
@@ -165,7 +165,7 @@ func (arg *Argument) remoteDelete(proc *process.Process) (vm.CallResult, error) 
 
 		for pidx, blockidDeltaloc := range arg.ctr.partitionId_blockId_deltaLoc {
 			for blkid, bat := range blockidDeltaloc {
-				if err = vector.AppendBytes(arg.resBat.GetVector(0), blkid[:], false, proc.GetMPool()); err != nil {
+				if err = vector.AppendBytes(arg.ctr.resBat.GetVector(0), blkid[:], false, proc.GetMPool()); err != nil {
 					return result, err
 				}
 				//bat.Attrs = {catalog.BlockMeta_DeltaLoc}
@@ -175,25 +175,25 @@ func (arg *Argument) remoteDelete(proc *process.Process) (vm.CallResult, error) 
 					result.Status = vm.ExecStop
 					return result, err1
 				}
-				if err = vector.AppendBytes(arg.resBat.GetVector(1), byts, false, proc.GetMPool()); err != nil {
+				if err = vector.AppendBytes(arg.ctr.resBat.GetVector(1), byts, false, proc.GetMPool()); err != nil {
 					return result, err
 				}
-				if err = vector.AppendFixed(arg.resBat.GetVector(2), int8(FlushDeltaLoc), false, proc.GetMPool()); err != nil {
+				if err = vector.AppendFixed(arg.ctr.resBat.GetVector(2), int8(FlushDeltaLoc), false, proc.GetMPool()); err != nil {
 					return result, err
 				}
-				if err = vector.AppendFixed(arg.resBat.GetVector(3), int32(pidx), false, proc.GetMPool()); err != nil {
+				if err = vector.AppendFixed(arg.ctr.resBat.GetVector(3), int32(pidx), false, proc.GetMPool()); err != nil {
 					return result, err
 				}
 			}
 		}
 
-		arg.resBat.SetRowCount(arg.resBat.Vecs[0].Length())
-		arg.resBat.Vecs[4], err = vector.NewConstFixed(types.T_uint32.ToType(), arg.ctr.deleted_length, arg.resBat.RowCount(), proc.GetMPool())
+		arg.ctr.resBat.SetRowCount(arg.ctr.resBat.Vecs[0].Length())
+		arg.ctr.resBat.Vecs[4], err = vector.NewConstFixed(types.T_uint32.ToType(), arg.ctr.deleted_length, arg.ctr.resBat.RowCount(), proc.GetMPool())
 		if err != nil {
 			result.Status = vm.ExecStop
 			return result, err
 		}
-		result.Batch = arg.resBat
+		result.Batch = arg.ctr.resBat
 		arg.ctr.state = vm.End
 		return result, nil
 	}
@@ -235,7 +235,7 @@ func (arg *Argument) normalDelete(proc *process.Process) (vm.CallResult, error) 
 			tempRows := uint64(delBatch.RowCount())
 			if tempRows > 0 {
 				affectedRows += tempRows
-				err = arg.partitionSources[i].Delete(proc.Ctx, delBatch, catalog.Row_ID)
+				err = arg.ctr.partitionSources[i].Delete(proc.Ctx, delBatch, catalog.Row_ID)
 				if err != nil {
 					delBatch.Clean(proc.Mp())
 					return result, err
@@ -251,7 +251,7 @@ func (arg *Argument) normalDelete(proc *process.Process) (vm.CallResult, error) 
 		}
 		affectedRows = uint64(delBatch.RowCount())
 		if affectedRows > 0 {
-			err = arg.source.Delete(proc.Ctx, delBatch, catalog.Row_ID)
+			err = arg.ctr.source.Delete(proc.Ctx, delBatch, catalog.Row_ID)
 			if err != nil {
 				delBatch.Clean(proc.GetMPool())
 				return result, err
