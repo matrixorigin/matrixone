@@ -48,6 +48,7 @@ type container struct {
 
 	batches       []*batch.Batch
 	batchRowCount int
+	lastrow       int
 	rbat          *batch.Batch
 
 	expr colexec.ExpressionExecutor
@@ -61,7 +62,8 @@ type container struct {
 	evecs []evalVector
 	vecs  []*vector.Vector
 
-	mp *hashmap.JoinMap
+	mp  *hashmap.JoinMap
+	bat *batch.Batch
 
 	maxAllocSize int64
 }
@@ -72,8 +74,6 @@ type Argument struct {
 	Typs       []types.Type
 	Cond       *plan.Expr
 	Conditions [][]*plan.Expr
-	bat        *batch.Batch
-	lastrow    int
 
 	HashOnPK           bool
 	IsShuffle          bool
@@ -129,11 +129,12 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 		anal.Alloc(ctr.maxAllocSize)
 
+		if arg.ctr.bat != nil {
+			proc.PutBatch(arg.ctr.bat)
+			arg.ctr.bat = nil
+		}
+		arg.ctr.lastrow = 0
 		arg.ctr = nil
-	}
-	if arg.bat != nil {
-		proc.PutBatch(arg.bat)
-		arg.bat = nil
 	}
 }
 

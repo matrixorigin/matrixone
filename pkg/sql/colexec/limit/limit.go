@@ -34,17 +34,18 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 
 func (arg *Argument) Prepare(proc *process.Process) error {
 	var err error
-	if arg.limitExecutor == nil {
-		arg.limitExecutor, err = colexec.NewExpressionExecutor(proc, arg.LimitExpr)
+	arg.ctr = new(container)
+	if arg.ctr.limitExecutor == nil {
+		arg.ctr.limitExecutor, err = colexec.NewExpressionExecutor(proc, arg.LimitExpr)
 		if err != nil {
 			return err
 		}
 	}
-	vec, err := arg.limitExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+	vec, err := arg.ctr.limitExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 	if err != nil {
 		return err
 	}
-	arg.limit = uint64(vector.MustFixedCol[uint64](vec)[0])
+	arg.ctr.limit = uint64(vector.MustFixedCol[uint64](vec)[0])
 
 	return nil
 }
@@ -56,7 +57,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
-	if arg.limit == 0 {
+	if arg.ctr.limit == 0 {
 		result := vm.NewCallResult()
 		result.Batch = nil
 		result.Status = vm.ExecStop
@@ -77,22 +78,22 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	bat := result.Batch
 	anal.Input(bat, arg.GetIsFirst())
 
-	if arg.Seen >= arg.limit {
+	if arg.ctr.seen >= arg.ctr.limit {
 		result.Batch = nil
 		result.Status = vm.ExecStop
 		return result, nil
 	}
 	length := bat.RowCount()
-	newSeen := arg.Seen + uint64(length)
-	if newSeen >= arg.limit { // limit - seen
-		batch.SetLength(bat, int(arg.limit-arg.Seen))
-		arg.Seen = newSeen
+	newSeen := arg.ctr.seen + uint64(length)
+	if newSeen >= arg.ctr.limit { // limit - seen
+		batch.SetLength(bat, int(arg.ctr.limit-arg.ctr.seen))
+		arg.ctr.seen = newSeen
 		anal.Output(bat, arg.GetIsLast())
 
 		result.Status = vm.ExecStop
 		return result, nil
 	}
 	anal.Output(bat, arg.GetIsLast())
-	arg.Seen = newSeen
+	arg.ctr.seen = newSeen
 	return result, nil
 }

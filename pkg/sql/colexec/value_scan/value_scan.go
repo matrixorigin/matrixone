@@ -29,6 +29,7 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
+	arg.ctr = new(container)
 	return nil
 }
 
@@ -46,13 +47,13 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	//default:
 	//}
 
-	if arg.idx < len(arg.Batchs) {
-		result.Batch = arg.Batchs[arg.idx]
-		if arg.idx > 0 {
-			proc.PutBatch(arg.Batchs[arg.idx-1])
-			arg.Batchs[arg.idx-1] = nil
+	if arg.ctr.idx < len(arg.Batchs) {
+		result.Batch = arg.Batchs[arg.ctr.idx]
+		if arg.ctr.idx > 0 {
+			proc.PutBatch(arg.Batchs[arg.ctr.idx-1])
+			arg.Batchs[arg.ctr.idx-1] = nil
 		}
-		arg.idx += 1
+		arg.ctr.idx += 1
 	}
 
 	return result, nil
