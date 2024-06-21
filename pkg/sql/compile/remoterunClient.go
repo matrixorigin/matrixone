@@ -416,8 +416,5 @@ func (sender *messageSenderOnClient) close() {
 	if sender.ctxCancel != nil {
 		sender.ctxCancel()
 	}
-	if sender.alreadyClose {
-		return
-	}
 	_ = sender.streamSender.Close(true)
 }
