@@ -125,10 +125,7 @@ func BuildMoDataBaseFilter(curAccountId uint64) tree.Expr {
 	// left is: account_id = cur_accountId
 	left := makeAccountIdEqualAst(curAccountId)
 
-	datnameColName := &tree.UnresolvedName{
-		NumParts: 1,
-		Parts:    tree.NameParts{catalog.SystemDBAttr_Name},
-	}
+	datnameColName := tree.NewUnresolvedColName(catalog.SystemDBAttr_Name)
 
 	mo_catalogConst := tree.NewNumValWithType(constant.MakeString(catalog.MO_CATALOG), catalog.MO_CATALOG, false, tree.P_char)
 	inValues := tree.NewTuple(tree.Exprs{mo_catalogConst})
@@ -162,10 +159,7 @@ func BuildMoTablesFilter(curAccountId uint64) tree.Expr {
 	// left is: account_id = cur_accountId
 	left := makeAccountIdEqualAst(curAccountId)
 
-	relnameColName := &tree.UnresolvedName{
-		NumParts: 1,
-		Parts:    tree.NameParts{catalog.SystemRelAttr_Name},
-	}
+	relnameColName := tree.NewUnresolvedColName(catalog.SystemRelAttr_Name)
 
 	mo_databaseConst := tree.NewNumValWithType(constant.MakeString(catalog.MO_DATABASE), catalog.MO_DATABASE, false, tree.P_char)
 	mo_tablesConst := tree.NewNumValWithType(constant.MakeString(catalog.MO_TABLES), catalog.MO_TABLES, false, tree.P_char)
@@ -199,15 +193,9 @@ func BuildMoColumnsFilter(curAccountId uint64) tree.Expr {
 	// left is: account_id = cur_accountId
 	left := makeAccountIdEqualAst(curAccountId)
 
-	att_relnameColName := &tree.UnresolvedName{
-		NumParts: 1,
-		Parts:    tree.NameParts{catalog.SystemColAttr_RelName},
-	}
+	att_relnameColName := tree.NewUnresolvedColName(catalog.SystemColAttr_RelName)
 
-	att_dblnameColName := &tree.UnresolvedName{
-		NumParts: 1,
-		Parts:    tree.NameParts{catalog.SystemColAttr_DBName},
-	}
+	att_dblnameColName := tree.NewUnresolvedColName(catalog.SystemColAttr_DBName)
 
 	mo_catalogConst := tree.NewNumValWithType(constant.MakeString(catalog.MO_CATALOG), catalog.MO_CATALOG, false, tree.P_char)
 	inValues := tree.NewTuple(tree.Exprs{mo_catalogConst})
@@ -240,20 +228,14 @@ func BuildMoColumnsFilter(curAccountId uint64) tree.Expr {
 
 // build equal ast expr: colName = 'xxx'
 func makeStringEqualAst(lColName, rValue string) tree.Expr {
-	relkindColName := &tree.UnresolvedName{
-		NumParts: 1,
-		Parts:    tree.NameParts{lColName},
-	}
+	relkindColName := tree.NewUnresolvedColName(lColName)
 	clusterConst := tree.NewNumValWithType(constant.MakeString(rValue), rValue, false, tree.P_char)
 	return tree.NewComparisonExpr(tree.EQUAL, relkindColName, clusterConst)
 }
 
 // build ast expr: account_id = cur_accountId
 func makeAccountIdEqualAst(curAccountId uint64) tree.Expr {
-	accountIdColName := &tree.UnresolvedName{
-		NumParts: 1,
-		Parts:    tree.NameParts{"account_id"},
-	}
+	accountIdColName := tree.NewUnresolvedColName("account_id")
 	curAccountIdConst := tree.NewNumValWithType(constant.MakeUint64(uint64(curAccountId)), strconv.Itoa(int(curAccountId)), false, tree.P_int64)
 	return tree.NewComparisonExpr(tree.EQUAL, accountIdColName, curAccountIdConst)
 }

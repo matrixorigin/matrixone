@@ -15,11 +15,12 @@
 package plan
 
 import (
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"strings"
 )
 
 // RenameColumn Can change a column name but not its definition.
@@ -28,15 +29,15 @@ func RenameColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 	tableDef := alterPlan.CopyTableDef
 
 	// get the original column name
-	originalColName := spec.OldColumnName.Parts[0]
+	originalColName := spec.OldColumnName.ColName()
 
 	// get the new column name
-	newColName := spec.NewColumnName.Parts[0]
+	newColName := spec.NewColumnName.ColName()
 
 	// Check whether original column has existed.
 	originalCol := FindColumn(tableDef.Cols, originalColName)
 	if originalCol == nil || originalCol.Hidden {
-		return moerr.NewBadFieldError(ctx.GetContext(), originalColName, alterPlan.TableDef.Name)
+		return moerr.NewBadFieldError(ctx.GetContext(), spec.OldColumnName.ColNameOrigin(), alterPlan.TableDef.Name)
 	}
 
 	if originalColName == newColName {
@@ -56,7 +57,7 @@ func RenameColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 	if newColName != originalColName {
 		newcol := FindColumn(tableDef.Cols, newColName)
 		if newcol != nil {
-			return moerr.NewErrDupFieldName(ctx.GetContext(), newColName)
+			return moerr.NewErrDupFieldName(ctx.GetContext(), spec.NewColumnName.ColNameOrigin())
 		}
 
 		// If the column name of the table changes, it is necessary to check if it is associated
@@ -116,19 +117,19 @@ func AlterColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Alt
 	tableDef := alterPlan.CopyTableDef
 
 	// get the original column name
-	originalColName := spec.ColumnName.Parts[0]
+	originalColName := spec.ColumnName.ColName()
 
 	// Check whether original column has existed.
 	originalCol := FindColumn(tableDef.Cols, originalColName)
 	if originalCol == nil || originalCol.Hidden {
-		return moerr.NewBadFieldError(ctx.GetContext(), originalColName, alterPlan.TableDef.Name)
+		return moerr.NewBadFieldError(ctx.GetContext(), spec.ColumnName.ColNameOrigin(), alterPlan.TableDef.Name)
 	}
 
 	for i, col := range tableDef.Cols {
 		if strings.EqualFold(col.Name, originalCol.Name) {
 			colDef := DeepCopyColDef(col)
 			if spec.OptionType == tree.AlterColumnOptionSetDefault {
-				tmpColumnDef := tree.NewColumnTableDef(spec.ColumnName, nil, []tree.ColumnAttribute{spec.DefalutExpr})
+				tmpColumnDef := tree.NewColumnTableDef(spec.ColumnName, nil, []tree.ColumnAttribute{spec.DefaultExpr})
 				defer func() {
 					tmpColumnDef.Free()
 				}()
@@ -155,11 +156,11 @@ func OrderByColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.A
 	tableDef := alterPlan.CopyTableDef
 	for _, order := range spec.AlterOrderByList {
 		// get the original column name
-		originalColName := order.Column.Parts[0]
+		originalColName := order.Column.ColName()
 		// Check whether original column has existed.
 		originalCol := FindColumn(tableDef.Cols, originalColName)
 		if originalCol == nil || originalCol.Hidden {
-			return moerr.NewBadFieldError(ctx.GetContext(), originalColName, alterPlan.TableDef.Name)
+			return moerr.NewBadFieldError(ctx.GetContext(), order.Column.ColNameOrigin(), alterPlan.TableDef.Name)
 		}
 	}
 	return nil
