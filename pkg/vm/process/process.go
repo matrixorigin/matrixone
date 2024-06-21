@@ -106,7 +106,8 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 		}
 	}
 	proc.DispatchNotifyCh = make(chan WrapCs)
-
+	proc.TxnOperator = p.TxnOperator
+	proc.CloneTxnOperator = p.CloneTxnOperator
 	return proc
 }
 
