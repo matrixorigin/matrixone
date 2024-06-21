@@ -34,13 +34,13 @@ const (
 type container struct {
 	colexec.ReceiverOperator
 	state int
+	buf   *batch.Batch
 }
 
 type Argument struct {
 	ctr                *container
 	Result             []int32
 	Typs               []types.Type
-	buf                *batch.Batch
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	vm.OperatorBase
 }
@@ -84,9 +84,11 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 	ctr := arg.ctr
 	if ctr != nil {
 		ctr.FreeAllReg()
+		if arg.ctr.buf != nil {
+			arg.ctr.buf.Clean(proc.Mp())
+			arg.ctr.buf = nil
+		}
 		arg.ctr = nil
 	}
-	if arg.buf != nil {
-		arg.buf.Clean(proc.Mp())
-	}
+
 }
