@@ -40,9 +40,9 @@ func builtInInternalGetAdminName(parameters []*vector.Vector, result vector.Func
 
 		exec := v.(executor.SQLExecutor)
 		opts := executor.Options{}.WithAccountID(uint32(accountId)).
-			WithTxn(proc.GetCloneTxnOperator()).
+			WithTxn(proc.TxnOperator).
 			WithTimeZone(proc.GetSessionInfo().TimeZone)
-		if proc.GetCloneTxnOperator() != nil {
+		if proc.TxnOperator != nil {
 			opts = opts.WithDisableIncrStatement() // this option always with WithTxn()
 		}
 		res, err := exec.Exec(proc.Ctx, "SELECT user_name FROM mo_catalog.mo_user ORDER BY user_id ASC LIMIT 1", opts)

@@ -43,7 +43,7 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	var e error
 	start := time.Now()
-	txnOp := proc.Base.TxnOperator
+	txnOp := proc.TxnOperator
 	seq := uint64(0)
 	if txnOp != nil {
 		seq = txnOp.NextSequence()
@@ -123,8 +123,8 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 
 		trace.GetService().TxnRead(
-			proc.Base.TxnOperator,
-			proc.Base.TxnOperator.Txn().SnapshotTS,
+			proc.TxnOperator,
+			proc.TxnOperator.Txn().SnapshotTS,
 			arg.TableID,
 			arg.Attrs,
 			bat)

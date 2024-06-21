@@ -37,7 +37,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	}
 	tblName := qry.GetTableDef().GetName()
 
-	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.Base.TxnOperator)
+	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		return err
 	}
@@ -47,7 +47,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		return err
 	}
 
-	if c.proc.Base.TxnOperator.Txn().IsPessimistic() {
+	if c.proc.TxnOperator.Txn().IsPessimistic() {
 		var retryErr error
 		// 1. lock origin table metadata in catalog
 		if err = lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
@@ -282,7 +282,7 @@ func updateTableForeignKeyColId(c *Compile, changColDefMap map[uint64]*plan.ColD
 		//fk self refer does not update
 		return nil
 	} else {
-		_, _, childRelation, err = c.e.GetRelationById(c.ctx, c.proc.Base.TxnOperator, childTblId)
+		_, _, childRelation, err = c.e.GetRelationById(c.ctx, c.proc.TxnOperator, childTblId)
 		if err != nil {
 			return err
 		}
@@ -342,7 +342,7 @@ func restoreNewTableRefChildTbls(c *Compile, copyRel engine.Relation, refChildTb
 // notifyParentTableFkTableIdChange Notify the parent table of changes in the tableid of the foreign key table
 func notifyParentTableFkTableIdChange(c *Compile, fkey *plan.ForeignKeyDef, oldTableId uint64) error {
 	foreignTblId := fkey.ForeignTbl
-	_, _, fatherRelation, err := c.e.GetRelationById(c.ctx, c.proc.Base.TxnOperator, foreignTblId)
+	_, _, fatherRelation, err := c.e.GetRelationById(c.ctx, c.proc.TxnOperator, foreignTblId)
 	if err != nil {
 		return err
 	}

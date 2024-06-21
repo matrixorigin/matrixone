@@ -387,7 +387,7 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 	}
 	proc.DispatchNotifyCh = make(chan process.WrapCs)
 	{
-		txn := proc.Base.TxnOperator.Txn()
+		txn := proc.TxnOperator.Txn()
 		txnId := txn.GetID()
 		proc.Base.StmtProfile = process.NewStmtProfile(uuid.UUID(txnId), pHelper.StmtId)
 	}

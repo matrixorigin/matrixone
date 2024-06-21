@@ -250,7 +250,7 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 		snapshotId = newUUid.String()
 
 		// 2. get snapshot ts
-		// ts := ses.proc.Base.TxnOperator.SnapshotTS()
+		// ts := ses.proc.TxnOperator.SnapshotTS()
 		// snapshotTs = ts.String()
 
 		sql, err = getSqlForCreateSnapshot(ctx, snapshotId, snapshotName, time.Now().UTC().UnixNano(), snapshotLevel.String(), string(stmt.Object.ObjName), databaseName, tableName, objId)

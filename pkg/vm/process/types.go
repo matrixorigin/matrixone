@@ -337,7 +337,6 @@ type BaseProcess struct {
 	// unix timestamp
 	UnixTime            int64
 	TxnClient           client.TxnClient
-	TxnOperator         client.TxnOperator
 	AnalInfos           []*AnalyzeInfo
 	SessionInfo         SessionInfo
 	Ctx                 context.Context
@@ -357,7 +356,6 @@ type BaseProcess struct {
 	WaitPolicy          lock.WaitPolicy
 	MessageBoard        *MessageBoard
 	logger              *log.MOLogger
-	CloneTxnOperator    client.TxnOperator
 }
 
 // Process contains context used in query execution
@@ -369,6 +367,10 @@ type Process struct {
 	Ctx              context.Context
 	Cancel           context.CancelFunc
 	DispatchNotifyCh chan WrapCs
+
+	//todo why there is a clone
+	TxnOperator      client.TxnOperator
+	CloneTxnOperator client.TxnOperator
 }
 
 type vectorPool struct {
@@ -491,11 +493,15 @@ func (proc *Process) SetCacheForAutoCol(name string) {
 }
 
 func (proc *Process) SetCloneTxnOperator(op client.TxnOperator) {
-	proc.Base.CloneTxnOperator = op
+	proc.CloneTxnOperator = op
 }
 
 func (proc *Process) GetCloneTxnOperator() client.TxnOperator {
-	return proc.Base.CloneTxnOperator
+	return proc.CloneTxnOperator
+}
+
+func (proc *Process) GetTxnOperator() client.TxnOperator {
+	return proc.TxnOperator
 }
 
 type analyze struct {

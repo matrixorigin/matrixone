@@ -297,7 +297,7 @@ func TestCallLockOpWithHasPrevCommitLessMe(t *testing.T) {
 				resetChildren(arg2, valueScan.Batchs[0])
 				defer arg2.rt.parker.FreeMem()
 
-				proc.Base.TxnOperator.TxnRef().SnapshotTS = timestamp.Timestamp{PhysicalTime: math.MaxInt64}
+				proc.TxnOperator.TxnRef().SnapshotTS = timestamp.Timestamp{PhysicalTime: math.MaxInt64}
 
 				_, err = arg2.Call(proc)
 				assert.NoError(t, err)

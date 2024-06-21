@@ -134,12 +134,12 @@ func NewCompile(
 	c.cnLabel = cnLabel
 	c.startAt = startAt
 	c.disableRetry = false
-	if c.proc.Base.TxnOperator != nil {
+	if c.proc.TxnOperator != nil {
 		// TODO: The action of updating the WriteOffset logic should be executed in the `func (c *Compile) Run(_ uint64)` method.
 		// However, considering that the delay ranges are not completed yet, the UpdateSnapshotWriteOffset() and
 		// the assignment of `Compile.TxnOffset` should be moved into the `func (c *Compile) Run(_ uint64)` method in the later stage.
-		c.proc.Base.TxnOperator.GetWorkspace().UpdateSnapshotWriteOffset()
-		c.TxnOffset = c.proc.Base.TxnOperator.GetWorkspace().GetSnapshotWriteOffset()
+		c.proc.TxnOperator.GetWorkspace().UpdateSnapshotWriteOffset()
+		c.TxnOffset = c.proc.TxnOperator.GetWorkspace().GetSnapshotWriteOffset()
 	} else {
 		c.TxnOffset = 0
 	}
@@ -281,8 +281,8 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, fill func(*batch.B
 		}
 	}()
 
-	if c.proc.Base.TxnOperator != nil && c.proc.Base.TxnOperator.Txn().IsPessimistic() {
-		txnOp := c.proc.Base.TxnOperator
+	if c.proc.TxnOperator != nil && c.proc.TxnOperator.Txn().IsPessimistic() {
+		txnOp := c.proc.TxnOperator
 		seq := txnOp.NextSequence()
 		txnTrace.GetService().AddTxnDurationAction(
 			txnOp,
@@ -461,7 +461,7 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 		sql = c.sql
 	}
 
-	txnOp := c.proc.Base.TxnOperator
+	txnOp := c.proc.TxnOperator
 	seq := uint64(0)
 	if txnOp != nil {
 		seq = txnOp.NextSequence()
@@ -509,8 +509,8 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 		s.SetOperatorInfoRecursively(c.allocOperatorID)
 	}
 
-	if c.proc.Base.TxnOperator != nil {
-		writeOffset = uint64(c.proc.Base.TxnOperator.GetWorkspace().GetSnapshotWriteOffset())
+	if c.proc.TxnOperator != nil {
+		writeOffset = uint64(c.proc.TxnOperator.GetWorkspace().GetSnapshotWriteOffset())
 	}
 	result = &util2.RunResult{}
 	var span trace.Span
@@ -534,9 +534,9 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 		span.End(trace.WithStatementExtra(sp.GetTxnId(), sp.GetStmtId(), sp.GetSqlOfStmt()))
 	}()
 
-	if c.proc.Base.TxnOperator != nil {
-		c.proc.Base.TxnOperator.GetWorkspace().IncrSQLCount()
-		c.proc.Base.TxnOperator.ResetRetry(false)
+	if c.proc.TxnOperator != nil {
+		c.proc.TxnOperator.GetWorkspace().IncrSQLCount()
+		c.proc.TxnOperator.ResetRetry(false)
 	}
 
 	v2.TxnStatementTotalCounter.Inc()
@@ -548,21 +548,21 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 
 		c.fatalLog(retryTimes, err)
 		if !c.canRetry(err) {
-			if c.proc.Base.TxnOperator.Txn().IsRCIsolation() &&
+			if c.proc.TxnOperator.Txn().IsRCIsolation() &&
 				moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
 				orphan, e := c.proc.Base.LockService.IsOrphanTxn(
 					c.proc.Ctx,
-					c.proc.Base.TxnOperator.Txn().ID,
+					c.proc.TxnOperator.Txn().ID,
 				)
 				if e != nil {
 					getLogger().Error("failed to convert dup to orphan txn error",
-						zap.String("txn", hex.EncodeToString(c.proc.Base.TxnOperator.Txn().ID)),
+						zap.String("txn", hex.EncodeToString(c.proc.TxnOperator.Txn().ID)),
 						zap.Error(err),
 					)
 				}
 				if e == nil && orphan {
 					getLogger().Warn("convert dup to orphan txn error",
-						zap.String("txn", hex.EncodeToString(c.proc.Base.TxnOperator.Txn().ID)),
+						zap.String("txn", hex.EncodeToString(c.proc.TxnOperator.Txn().ID)),
 					)
 					err = moerr.NewCannotCommitOrphan(c.proc.Ctx)
 				}
@@ -585,24 +585,24 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	}
 	result.AffectRows = runC.getAffectedRows()
 
-	if c.proc.Base.TxnOperator != nil {
-		return result, c.proc.Base.TxnOperator.GetWorkspace().Adjust(writeOffset)
+	if c.proc.TxnOperator != nil {
+		return result, c.proc.TxnOperator.GetWorkspace().Adjust(writeOffset)
 	}
 	return result, nil
 }
 
 func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 	v2.TxnStatementRetryCounter.Inc()
-	c.proc.Base.TxnOperator.ResetRetry(true)
-	c.proc.Base.TxnOperator.GetWorkspace().IncrSQLCount()
+	c.proc.TxnOperator.ResetRetry(true)
+	c.proc.TxnOperator.GetWorkspace().IncrSQLCount()
 
 	// clear the workspace of the failed statement
-	if e := c.proc.Base.TxnOperator.GetWorkspace().RollbackLastStatement(c.ctx); e != nil {
+	if e := c.proc.TxnOperator.GetWorkspace().RollbackLastStatement(c.ctx); e != nil {
 		return nil, e
 	}
 
 	// increase the statement id
-	if e := c.proc.Base.TxnOperator.GetWorkspace().IncrStatementID(c.ctx, false); e != nil {
+	if e := c.proc.TxnOperator.GetWorkspace().IncrStatementID(c.ctx, false); e != nil {
 		return nil, e
 	}
 
@@ -636,7 +636,7 @@ func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 func (c *Compile) isRetryErr(err error) bool {
 	return (moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
 		moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) &&
-		c.proc.Base.TxnOperator.Txn().IsRCIsolation()
+		c.proc.TxnOperator.Txn().IsRCIsolation()
 }
 
 func (c *Compile) canRetry(err error) bool {
@@ -1680,7 +1680,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 
 		block := false
 		// only pessimistic txn needs to block downstream operators.
-		if c.proc.Base.TxnOperator.Txn().IsPessimistic() {
+		if c.proc.TxnOperator.Txn().IsPessimistic() {
 			block = n.LockTargets[0].Block
 			if block {
 				ss = []*Scope{c.newMergeScope(ss)}
@@ -2267,18 +2267,18 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 
 	//-----------------------------------------------------------------------------------------------------
 	ctx := c.ctx
-	txnOp = c.proc.Base.TxnOperator
+	txnOp = c.proc.TxnOperator
 	err = disttae.CheckTxnIsValid(txnOp)
 	if err != nil {
 		return err
 	}
 	if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
 		if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
-			n.ScanSnapshot.TS.Less(c.proc.Base.TxnOperator.Txn().SnapshotTS) {
-			if c.proc.GetCloneTxnOperator() != nil {
-				txnOp = c.proc.GetCloneTxnOperator()
+			n.ScanSnapshot.TS.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
+			if c.proc.TxnOperator != nil {
+				txnOp = c.proc.TxnOperator
 			} else {
-				txnOp = c.proc.Base.TxnOperator.CloneSnapshotOp(*n.ScanSnapshot.TS)
+				txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanSnapshot.TS)
 				c.proc.SetCloneTxnOperator(txnOp)
 			}
 
@@ -2289,7 +2289,7 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	}
 	//-----------------------------------------------------------------------------------------------------
 
-	if c.proc != nil && c.proc.Base.TxnOperator != nil {
+	if c.proc != nil && c.proc.TxnOperator != nil {
 		ts = txnOp.Txn().SnapshotTS
 	}
 	{
@@ -3987,14 +3987,14 @@ func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation, blockFilterLis
 
 	//-----------------------------------------------------------------------------------------------------
 	ctx := c.ctx
-	txnOp = c.proc.Base.TxnOperator
+	txnOp = c.proc.TxnOperator
 	if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
 		if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
-			n.ScanSnapshot.TS.Less(c.proc.Base.TxnOperator.Txn().SnapshotTS) {
-			if c.proc.GetCloneTxnOperator() != nil {
-				txnOp = c.proc.GetCloneTxnOperator()
+			n.ScanSnapshot.TS.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
+			if c.proc.TxnOperator != nil {
+				txnOp = c.proc.TxnOperator
 			} else {
-				txnOp = c.proc.Base.TxnOperator.CloneSnapshotOp(*n.ScanSnapshot.TS)
+				txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanSnapshot.TS)
 				c.proc.SetCloneTxnOperator(txnOp)
 			}
 
@@ -4084,12 +4084,12 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 
 	//------------------------------------------------------------------------------------------------------------------
 	ctx := c.ctx
-	txnOp = c.proc.Base.TxnOperator
+	txnOp = c.proc.TxnOperator
 	if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
 		if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
-			n.ScanSnapshot.TS.Less(c.proc.Base.TxnOperator.Txn().SnapshotTS) {
+			n.ScanSnapshot.TS.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
 
-			txnOp = c.proc.Base.TxnOperator.CloneSnapshotOp(*n.ScanSnapshot.TS)
+			txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanSnapshot.TS)
 			c.proc.SetCloneTxnOperator(txnOp)
 
 			if n.ScanSnapshot.Tenant != nil {
@@ -4855,7 +4855,7 @@ func (c *Compile) runSqlWithResult(sql string) (executor.Result, error) {
 		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
 		// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
 		WithDisableIncrStatement().
-		WithTxn(c.proc.Base.TxnOperator).
+		WithTxn(c.proc.TxnOperator).
 		WithDatabase(c.db).
 		WithTimeZone(c.proc.GetSessionInfo().TimeZone)
 	return exec.Exec(c.proc.Ctx, sql, opts)
@@ -4941,7 +4941,7 @@ func (c *Compile) fatalLog(retry int, err error) {
 		return
 	}
 
-	txnTrace.GetService().TxnError(c.proc.Base.TxnOperator, err)
+	txnTrace.GetService().TxnError(c.proc.TxnOperator, err)
 
 	v, ok := moruntime.ProcessLevelRuntime().
 		GetGlobalVariables(moruntime.EnableCheckInvalidRCErrors)
@@ -4950,7 +4950,7 @@ func (c *Compile) fatalLog(retry int, err error) {
 	}
 
 	c.proc.Fatalf(c.ctx, "BUG(RC): txn %s retry %d, error %+v\n",
-		hex.EncodeToString(c.proc.Base.TxnOperator.Txn().ID),
+		hex.EncodeToString(c.proc.TxnOperator.Txn().ID),
 		retry,
 		err.Error())
 }

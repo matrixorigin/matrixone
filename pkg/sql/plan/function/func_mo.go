@@ -54,10 +54,10 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 
 	// XXX WTF
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-	if proc.GetCloneTxnOperator() == nil {
+	if proc.TxnOperator == nil {
 		return moerr.NewInternalError(proc.Ctx, "MoTableRows: txn operator is nil")
 	}
-	txn := proc.GetCloneTxnOperator()
+	txn := proc.TxnOperator
 
 	var ok bool
 	// XXX old code starts a new transaction.   why?
@@ -169,10 +169,10 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 	tbls := vector.GenerateFunctionStrParameter(ivecs[1])
 
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-	if proc.GetCloneTxnOperator() == nil {
+	if proc.TxnOperator == nil {
 		return moerr.NewInternalError(proc.Ctx, "MoTableSize: txn operator is nil")
 	}
-	txn := proc.GetCloneTxnOperator()
+	txn := proc.TxnOperator
 
 	var ok bool
 	// XXX old code starts a new transaction.   why?
@@ -359,10 +359,10 @@ func MoTableColMin(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 
 func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	e, ok := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-	if !ok || proc.GetCloneTxnOperator() == nil {
+	if !ok || proc.TxnOperator == nil {
 		return moerr.NewInternalError(proc.Ctx, "MoTableColMaxMin: txn operator is nil")
 	}
-	txn := proc.GetCloneTxnOperator()
+	txn := proc.TxnOperator
 
 	dbNames := vector.GenerateFunctionStrParameter(parameters[0])
 	tableNames := vector.GenerateFunctionStrParameter(parameters[1])

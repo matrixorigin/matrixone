@@ -67,7 +67,6 @@ func New(
 		mp:           m,
 		Ctx:          ctx,
 		TxnClient:    txnClient,
-		TxnOperator:  txnOperator,
 		FileService:  fileService,
 		IncrService:  incrservice.GetAutoIncrementService(ctx),
 		UnixTime:     time.Now().UnixNano(),
@@ -85,8 +84,9 @@ func New(
 		logger:         util.GetLogger(), // TODO: set by input
 	}
 	return &Process{
-		Ctx:  ctx,
-		Base: baseProcess,
+		Ctx:         ctx,
+		TxnOperator: txnOperator,
+		Base:        baseProcess,
 	}
 }
 

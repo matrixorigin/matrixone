@@ -11465,7 +11465,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
 		ses.proc = testutil.NewProc()
-		ses.proc.Base.TxnOperator = txnOperator
+		ses.proc.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
@@ -11526,7 +11526,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
 		ses.proc = testutil.NewProc()
-		ses.proc.Base.TxnOperator = txnOperator
+		ses.proc.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
@@ -11587,7 +11587,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
 		ses.proc = testutil.NewProc()
-		ses.proc.Base.TxnOperator = txnOperator
+		ses.proc.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
@@ -11652,7 +11652,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
 		ses.proc = testutil.NewProc()
-		ses.proc.Base.TxnOperator = txnOperator
+		ses.proc.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
@@ -11717,7 +11717,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
 		ses.proc = testutil.NewProc()
-		ses.proc.Base.TxnOperator = txnOperator
+		ses.proc.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
@@ -11783,7 +11783,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
 		ses.proc = testutil.NewProc()
-		ses.proc.Base.TxnOperator = txnOperator
+		ses.proc.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
@@ -11849,7 +11849,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
 		ses.proc = testutil.NewProc()
-		ses.proc.Base.TxnOperator = txnOperator
+		ses.proc.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),

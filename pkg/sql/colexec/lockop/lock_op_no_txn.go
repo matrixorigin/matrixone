@@ -84,7 +84,7 @@ func UnlockWithUniqueID(
 	ctx context.Context,
 	uniqueID string) error {
 	proc := mustGetProcessByUniqueID(uniqueID)
-	return proc.Base.TxnOperator.Commit(ctx)
+	return proc.TxnOperator.Commit(ctx)
 }
 
 func getInternalProcessByUniqueID(

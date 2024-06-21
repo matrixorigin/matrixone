@@ -40,8 +40,8 @@ func handleFlush() handleFunc {
 			if len(parameters) == 0 || len(parameters) > 3 {
 				return nil, moerr.NewInternalErrorNoCtx("handleFlush: expected \"TableId\" or \"DbName.TableName[.AccountId]\" ")
 			}
-			txnOp := proc.GetCloneTxnOperator()
-			if proc.GetCloneTxnOperator() == nil {
+			txnOp := proc.TxnOperator
+			if proc.TxnOperator == nil {
 				return nil, moerr.NewInternalError(proc.Ctx, "handleFlush: txn operator is nil")
 			}
 
