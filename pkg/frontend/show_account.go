@@ -162,7 +162,7 @@ func requestStorageUsage(ctx context.Context, ses *Session, accIds [][]int64) (r
 		ses.proc.Base.TxnClient, txnOperator,
 		ses.proc.Base.FileService, ses.proc.Base.LockService,
 		ses.proc.Base.QueryClient, ses.proc.Base.Hakeeper,
-		ses.proc.UdfService, ses.proc.Aicm,
+		ses.proc.Base.UdfService, ses.proc.Base.Aicm,
 	)
 
 	handler := ctl.GetTNHandlerFunc(api.OpCode_OpStorageUsage, whichTN, payload, responseUnmarshaler)

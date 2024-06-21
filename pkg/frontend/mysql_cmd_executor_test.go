@@ -1064,7 +1064,7 @@ func TestProcessLoadLocal(t *testing.T) {
 		}
 		proc := testutil.NewProc()
 		var writer *io.PipeWriter
-		proc.LoadLocalReader, writer = io.Pipe()
+		proc.Base.LoadLocalReader, writer = io.Pipe()
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 		ioses := mock_frontend.NewMockIOSession(ctrl)
@@ -1094,7 +1094,7 @@ func TestProcessLoadLocal(t *testing.T) {
 		go func(buf []byte) {
 			tmp := buf
 			for {
-				n, err := proc.LoadLocalReader.Read(tmp)
+				n, err := proc.Base.LoadLocalReader.Read(tmp)
 				if err != nil {
 					break
 				}

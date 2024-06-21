@@ -1743,7 +1743,7 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 	var ret *plan2.Plan
 	var err error
 
-	txnOp := ctx.GetProcess().TxnOperator
+	txnOp := ctx.GetProcess().GetCloneTxnOperator()
 	start := time.Now()
 	seq := uint64(0)
 	if txnOp != nil {
@@ -2113,7 +2113,7 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	ses.CountPayload(len(packet.Payload))
 
 	skipWrite := false
-	// If inner error occurs(unexpected or expected(ctrl-c)), proc.LoadLocalReader will be closed.
+	// If inner error occurs(unexpected or expected(ctrl-c)), proc.Base.LoadLocalReader will be closed.
 	// Then write will return error, but we need to read the rest of the data and not write it to pipe.
 	// So we need a flag[skipWrite] to tell us whether we need to write the data to pipe.
 	// https://github.com/matrixorigin/matrixone/issues/6665#issuecomment-1422236478
@@ -2513,7 +2513,7 @@ func executeStmt(ses *Session,
 		ses.SetData(nil)
 	case *tree.Load:
 		if st.Local {
-			execCtx.proc.LoadLocalReader, execCtx.loadLocalWriter = io.Pipe()
+			execCtx.proc.Base.LoadLocalReader, execCtx.loadLocalWriter = io.Pipe()
 		}
 	case *tree.ShowGrants:
 		if len(st.Username) == 0 {

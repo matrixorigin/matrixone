@@ -135,7 +135,7 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		setFPrints(fPrintTxnOp, execCtx.ses.GetFPrints())
 		if execCtx.runResult, err = execCtx.runner.Run(0); err != nil {
 			if loadLocalErrGroup != nil { // release resources
-				err2 := execCtx.proc.LoadLocalReader.Close()
+				err2 := execCtx.proc.Base.LoadLocalReader.Close()
 				if err2 != nil {
 					ses.Error(execCtx.reqCtx,
 						"processLoadLocal goroutine failed",
