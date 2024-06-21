@@ -50,6 +50,10 @@ type compilerContext struct {
 	mu                   sync.Mutex
 }
 
+func (c *compilerContext) GetLowerCaseTableNames() int64 {
+	return 1
+}
+
 func (c *compilerContext) GetViews() []string {
 	return nil
 }

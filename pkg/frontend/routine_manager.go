@@ -400,7 +400,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	payloads := make([][]byte, 1)
 	payloads[0] = payload
 	for uint32(length) == MaxPayloadSize {
-		msg, err = protocol.Read(goetty.ReadOptions{})
+		msg, err = protocol.Read(goetty.ReadOptions{Timeout: getGlobalPu().SV.SessionTimeout.Duration})
 		if err != nil {
 			ses.Error(ctx,
 				"Failed to read message",

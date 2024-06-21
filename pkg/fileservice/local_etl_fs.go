@@ -339,7 +339,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 				}
 			}
 
-			if err := entry.setCachedData(); err != nil {
+			if err := entry.setCachedData(ctx); err != nil {
 				return err
 			}
 

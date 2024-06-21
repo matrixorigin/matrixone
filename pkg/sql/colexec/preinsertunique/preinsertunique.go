@@ -41,6 +41,7 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {
+	arg.ctr = new(container)
 	return nil
 }
 
@@ -67,17 +68,17 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	uniqueColumnPos := arg.PreInsertCtx.Columns
 	pkPos := int(arg.PreInsertCtx.PkColumn)
 
-	if arg.buf != nil {
-		proc.PutBatch(arg.buf)
-		arg.buf = nil
+	if arg.ctr.buf != nil {
+		proc.PutBatch(arg.ctr.buf)
+		arg.ctr.buf = nil
 	}
 	isUpdate := inputBat.Vecs[len(inputBat.Vecs)-1].GetType().Oid == types.T_Rowid
 	if isUpdate {
-		arg.buf = batch.NewWithSize(3)
-		arg.buf.Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName, catalog.Row_ID}
+		arg.ctr.buf = batch.NewWithSize(3)
+		arg.ctr.buf.Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName, catalog.Row_ID}
 	} else {
-		arg.buf = batch.NewWithSize(2)
-		arg.buf.Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName}
+		arg.ctr.buf = batch.NewWithSize(2)
+		arg.ctr.buf.Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName}
 	}
 
 	colCount := len(uniqueColumnPos)
@@ -98,22 +99,22 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			return result, err
 		}
 	}
-	arg.buf.SetVector(indexColPos, vec)
-	arg.buf.SetRowCount(vec.Length())
+	arg.ctr.buf.SetVector(indexColPos, vec)
+	arg.ctr.buf.SetRowCount(vec.Length())
 
 	vec, err = util.CompactPrimaryCol(inputBat.Vecs[pkPos], bitMap, proc)
 	if err != nil {
 		return result, err
 	}
-	arg.buf.SetVector(pkColPos, vec)
+	arg.ctr.buf.SetVector(pkColPos, vec)
 
 	if isUpdate {
 		rowIdInBat := len(inputBat.Vecs) - 1
-		arg.buf.SetVector(rowIdColPos, proc.GetVector(*inputBat.Vecs[rowIdInBat].GetType()))
-		if err = arg.buf.Vecs[rowIdColPos].UnionBatch(inputBat.Vecs[rowIdInBat], 0, inputBat.Vecs[rowIdInBat].Length(), nil, proc.Mp()); err != nil {
+		arg.ctr.buf.SetVector(rowIdColPos, proc.GetVector(*inputBat.Vecs[rowIdInBat].GetType()))
+		if err = arg.ctr.buf.Vecs[rowIdColPos].UnionBatch(inputBat.Vecs[rowIdInBat], 0, inputBat.Vecs[rowIdInBat].Length(), nil, proc.Mp()); err != nil {
 			return result, err
 		}
 	}
-	result.Batch = arg.buf
+	result.Batch = arg.ctr.buf
 	return result, nil
 }

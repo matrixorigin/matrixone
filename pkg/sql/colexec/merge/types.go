@@ -26,6 +26,7 @@ import (
 var _ vm.Operator = new(Argument)
 
 type container struct {
+	buf *batch.Batch
 	colexec.ReceiverOperator
 }
 
@@ -33,7 +34,6 @@ type Argument struct {
 	ctr      *container
 	SinkScan bool
 
-	buf *batch.Batch
 	vm.OperatorBase
 }
 
@@ -80,10 +80,11 @@ func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.ctr != nil {
 		arg.ctr.FreeMergeTypeOperator(pipelineFailed)
+		if arg.ctr.buf != nil {
+			arg.ctr.buf.Clean(proc.Mp())
+			arg.ctr.buf = nil
+		}
 		arg.ctr = nil
 	}
-	if arg.buf != nil {
-		arg.buf.Clean(proc.Mp())
-		arg.buf = nil
-	}
+
 }

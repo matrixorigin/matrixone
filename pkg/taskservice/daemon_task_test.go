@@ -112,9 +112,9 @@ func TestRunDaemonTask(t *testing.T) {
 
 func (r *taskRunner) testRegisterExecutor(t *testing.T, code task.TaskCode, started *atomic.Bool) {
 	r.RegisterExecutor(code, func(ctx context.Context, task task.Task) error {
-		started.Store(true)
 		ar := newMockActiveRoutine()
 		assert.NoError(t, r.Attach(context.Background(), 1, ar))
+		started.Store(true)
 		for {
 			select {
 			case <-ar.cancelC:

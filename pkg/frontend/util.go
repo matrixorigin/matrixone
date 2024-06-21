@@ -269,7 +269,7 @@ func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx) (interface{}, err
 	switch v := e.(type) {
 	case *tree.UnresolvedName:
 		// set @a = on, type of a is bool.
-		return v.Parts[0], nil
+		return v.ColName(), nil
 	}
 
 	var err error
@@ -363,7 +363,7 @@ func GetSimpleExprValue(ctx context.Context, e tree.Expr, ses *Session) (interfa
 	switch v := e.(type) {
 	case *tree.UnresolvedName:
 		// set @a = on, type of a is bool.
-		return v.Parts[0], nil
+		return v.ColName(), nil
 	default:
 		builder := plan2.NewQueryBuilder(plan.Query_SELECT, ses.GetTxnCompileCtx(), false, false)
 		bindContext := plan2.NewBindContext(builder, nil)
@@ -1146,6 +1146,26 @@ func (ui *UserInput) getSqlSourceType(i int) string {
 		sqlType = ui.sqlSourceType[i]
 	}
 	return sqlType
+}
+
+const (
+	issue3482SqlPrefix    = "load data local infile '/data/customer/sutpc_001/data_csv"
+	issue3482SqlPrefixLen = len(issue3482SqlPrefix)
+)
+
+// !!!NOTE!!! For debug
+// https://github.com/matrixorigin/MO-Cloud/issues/3482
+// TODO: remove it in the future
+func (ui *UserInput) isIssue3482Sql() bool {
+	if ui == nil {
+		return false
+	}
+	sql := ui.getSql()
+	sqlLen := len(sql)
+	if sqlLen <= issue3482SqlPrefixLen {
+		return false
+	}
+	return strings.HasPrefix(sql, issue3482SqlPrefix)
 }
 
 func unboxExprStr(ctx context.Context, expr tree.Expr) (string, error) {
