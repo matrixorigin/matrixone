@@ -127,9 +127,7 @@ func (s *taeStorage) Debug(ctx context.Context,
 	case uint32(api.OpCode_OpDiskDiskCleaner):
 		resp, err := handleRead(ctx, txnMeta, data, s.taeHandler.HandleDiskCleaner)
 		if err != nil {
-			return types.Encode(&api.SyncLogTailResp{
-				CkpLocation: "Failed",
-			})
+			return nil, err
 		}
 		return resp.Read()
 	default:
