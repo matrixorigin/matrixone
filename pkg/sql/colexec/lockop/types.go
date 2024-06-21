@@ -61,14 +61,17 @@ type LockOptions struct {
 	hasNewVersionInRangeFunc hasNewVersionInRangeFunc
 }
 
+type container struct {
+	// state used for save lock op temp state.
+	rt *state
+}
+
 // Argument lock op argument.
 type Argument struct {
+	ctr     *container
 	engine  engine.Engine
 	targets []lockTarget
 	block   bool
-
-	// state used for save lock op temp state.
-	rt *state
 
 	vm.OperatorBase
 }

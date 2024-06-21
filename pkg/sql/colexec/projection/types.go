@@ -29,7 +29,6 @@ var _ vm.Operator = new(Argument)
 type Argument struct {
 	ctr *container
 	Es  []*plan.Expr
-	buf *batch.Batch
 	vm.OperatorBase
 
 	maxAllocSize int
@@ -67,6 +66,7 @@ func (arg *Argument) Release() {
 }
 
 type container struct {
+	buf           *batch.Batch
 	projExecutors []colexec.ExpressionExecutor
 	uafs          []func(v, w *vector.Vector) error // vector.GetUnionAllFunction
 }
@@ -83,12 +83,13 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 			}
 		}
 		arg.ctr.projExecutors = nil
+		if arg.ctr.buf != nil {
+			arg.ctr.buf.Clean(proc.Mp())
+			arg.ctr.buf = nil
+		}
 		arg.ctr = nil
 	}
-	if arg.buf != nil {
-		arg.buf.Clean(proc.Mp())
-		arg.buf = nil
-	}
+
 	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Alloc(int64(arg.maxAllocSize))
 }

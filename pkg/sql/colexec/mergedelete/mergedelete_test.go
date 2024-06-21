@@ -146,7 +146,9 @@ func TestMergeDelete(t *testing.T) {
 	batch2.SetRowCount(3)
 
 	argument1 := Argument{
-		delSource:    &mockRelation{},
+		ctr: &container{
+			delSource: &mockRelation{},
+		},
 		AffectedRows: 0,
 		OperatorBase: vm.OperatorBase{
 			OperatorInfo: vm.OperatorInfo{
@@ -164,7 +166,7 @@ func TestMergeDelete(t *testing.T) {
 	require.Equal(t, uint64(15), argument1.AffectedRows)
 
 	// Check DelSource
-	result0 := argument1.delSource.(*mockRelation).result
+	result0 := argument1.ctr.delSource.(*mockRelation).result
 	// check attr names
 	require.True(t, reflect.DeepEqual(
 		[]string{
@@ -184,7 +186,7 @@ func TestMergeDelete(t *testing.T) {
 	require.Equal(t, uint64(60), argument1.AffectedRows)
 
 	// Check DelSource
-	result1 := argument1.delSource.(*mockRelation).result
+	result1 := argument1.ctr.delSource.(*mockRelation).result
 	// check attr names
 	require.True(t, reflect.DeepEqual(
 		[]string{
@@ -212,10 +214,12 @@ func TestMergeDelete(t *testing.T) {
 }
 
 func resetChildren(arg *Argument, bat *batch.Batch) {
+	valueScanArg := &value_scan.Argument{
+		Batchs: []*batch.Batch{bat},
+	}
+	valueScanArg.Prepare(nil)
 	arg.SetChildren(
 		[]vm.Operator{
-			&value_scan.Argument{
-				Batchs: []*batch.Batch{bat},
-			},
+			valueScanArg,
 		})
 }

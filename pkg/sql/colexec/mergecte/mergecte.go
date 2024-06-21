@@ -50,9 +50,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	defer anal.Stop()
 	var msg *process.RegisterMessage
 	result := vm.NewCallResult()
-	if arg.buf != nil {
-		proc.PutBatch(arg.buf)
-		arg.buf = nil
+	if arg.ctr.buf != nil {
+		proc.PutBatch(arg.ctr.buf)
+		arg.ctr.buf = nil
 	}
 	switch arg.ctr.status {
 	case sendInitial:
@@ -61,15 +61,15 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			result.Status = vm.ExecStop
 			return result, msg.Err
 		}
-		arg.buf = msg.Batch
-		if arg.buf == nil {
+		arg.ctr.buf = msg.Batch
+		if arg.ctr.buf == nil {
 			arg.ctr.status = sendLastTag
 		}
 		fallthrough
 	case sendLastTag:
 		if arg.ctr.status == sendLastTag {
 			arg.ctr.status = sendRecursive
-			arg.buf = makeRecursiveBatch(proc)
+			arg.ctr.buf = makeRecursiveBatch(proc)
 			arg.ctr.RemoveChosen(1)
 		}
 	case sendRecursive:
@@ -80,25 +80,25 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				result.Status = vm.ExecStop
 				return result, nil
 			}
-			arg.buf = msg.Batch
-			if !arg.buf.Last() {
+			arg.ctr.buf = msg.Batch
+			if !arg.ctr.buf.Last() {
 				break
 			}
 
-			arg.buf.SetLast()
+			arg.ctr.buf.SetLast()
 			arg.ctr.curNodeCnt--
 			if arg.ctr.curNodeCnt == 0 {
 				arg.ctr.curNodeCnt = arg.ctr.nodeCnt
 				break
 			} else {
-				proc.PutBatch(arg.buf)
+				proc.PutBatch(arg.ctr.buf)
 			}
 		}
 	}
 
-	anal.Input(arg.buf, arg.GetIsFirst())
-	anal.Output(arg.buf, arg.GetIsLast())
-	result.Batch = arg.buf
+	anal.Input(arg.ctr.buf, arg.GetIsFirst())
+	anal.Output(arg.ctr.buf, arg.GetIsLast())
+	result.Batch = arg.ctr.buf
 	return result, nil
 }
 
