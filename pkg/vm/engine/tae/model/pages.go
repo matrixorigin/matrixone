@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -113,21 +114,33 @@ func (page *TransferHashPage) Pin() *common.PinnedItem[*TransferHashPage] {
 
 func (page *TransferHashPage) Train(from uint32, to types.Rowid) {
 	page.hashmap[from] = to
+	v2.TransferRowTotalCounter.Inc()
 }
 
 func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) {
 	flag := page.isPersisted
-
 	if flag && page.loc == nil {
+		logutil.Infof("[TransferHashPage] persist table is cleared")
 		return types.Rowid{}, false
 	}
 
 	if page.isPersisted {
-		logutil.Infof("transfer loadding table")
 		page.loadTable()
+		v2.TransferDiskHitCounter.Inc()
+	} else {
+		v2.TransferMemoryHitCounter.Inc()
 	}
+	v2.TransferTotalHitCounter.Inc()
 
 	dest, ok = page.hashmap[from]
+
+	var str string
+	if ok {
+		str = "succeeded"
+	} else {
+		str = "failed"
+	}
+	logutil.Infof("[TransferHashPage] get transfer %v", str)
 	return
 }
 
@@ -169,13 +182,13 @@ func (page *TransferHashPage) SetLocation(location objectio.Location) {
 }
 
 func (page *TransferHashPage) clearTable() {
-	logutil.Infof("transfer clear hash table")
+	logutil.Infof("[TransferHashPage] clear hash table")
 	clear(page.hashmap)
 	page.isPersisted = true
 }
 
 func (page *TransferHashPage) loadTable() {
-	logutil.Infof("transfer load persist table, objectname: %v", page.loc.Name().String())
+	logutil.Infof("[TransferHashPage] load persist table, objectname: %v", page.loc.Name().String())
 	if page.loc == nil {
 		return
 	}
@@ -193,6 +206,8 @@ func (page *TransferHashPage) loadTable() {
 		return
 	}
 
+	v2.TransferRowHitCounter.Add(float64(len(page.hashmap)))
+
 	go func(page *TransferHashPage) {
 		time.Sleep(10 * time.Second)
 		page.clearTable()
@@ -203,7 +218,7 @@ func (page *TransferHashPage) clearPersistTable() {
 	if page.loc == nil {
 		return
 	}
-	logutil.Infof("transfer clear persist table, objectname: %v", page.loc.Name().String())
+	logutil.Infof("[TransferHashPage] clear persist table, objectname: %v", page.loc.Name().String())
 	page.params.Fs.Delete(context.Background(), page.loc.Name().String())
 	page.loc = nil
 }
