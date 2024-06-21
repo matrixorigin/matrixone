@@ -79,6 +79,7 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 
 func (arg *Argument) Prepare(proc *process.Process) error {
 	_, span := trace.Start(proc.Ctx, "ExternalPrepare")
+	arg.ctr = new(container)
 	defer span.End()
 	param := arg.Es
 	if proc.Lim.MaxMsgSize == 0 {
@@ -165,21 +166,21 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		param.Fileparam.Filepath = param.FileList[param.Fileparam.FileIndex]
 		param.Fileparam.FileIndex++
 	}
-	if arg.buf != nil {
-		proc.PutBatch(arg.buf)
-		arg.buf = nil
+	if arg.ctr.buf != nil {
+		proc.PutBatch(arg.ctr.buf)
+		arg.ctr.buf = nil
 	}
-	arg.buf, err = scanFileData(ctx, param, proc)
+	arg.ctr.buf, err = scanFileData(ctx, param, proc)
 	if err != nil {
 		param.Fileparam.End = true
 		return result, err
 	}
 
-	if arg.buf != nil {
-		anal.Output(arg.buf, arg.GetIsLast())
-		arg.maxAllocSize = max(arg.maxAllocSize, arg.buf.Size())
+	if arg.ctr.buf != nil {
+		anal.Output(arg.ctr.buf, arg.GetIsLast())
+		arg.ctr.maxAllocSize = max(arg.ctr.maxAllocSize, arg.ctr.buf.Size())
 	}
-	result.Batch = arg.buf
+	result.Batch = arg.ctr.buf
 	if result.Batch != nil {
 		result.Batch.ShuffleIDX = int32(param.Idx)
 	}
