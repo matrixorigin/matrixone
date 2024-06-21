@@ -208,7 +208,7 @@ func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, e
 	if stmt.Like != nil {
 		// append filter [AND datname like stmt.Like] to WHERE clause
 		likeExpr := stmt.Like
-		likeExpr.Left = tree.SetUnresolvedName("datname")
+		likeExpr.Left = tree.NewUnresolvedColName("datname")
 		return returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
 	}
 
@@ -308,7 +308,7 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 	if stmt.Like != nil {
 		// append filter [AND relname like stmt.Like] to WHERE clause
 		likeExpr := stmt.Like
-		likeExpr.Left = tree.SetUnresolvedName("relname")
+		likeExpr.Left = tree.NewUnresolvedColName("relname")
 		return returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
 	}
 
@@ -596,7 +596,7 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	if stmt.Like != nil {
 		// append filter [AND ma.attname like stmt.Like] to WHERE clause
 		likeExpr := stmt.Like
-		likeExpr.Left = tree.SetUnresolvedName("attname")
+		likeExpr.Left = tree.NewUnresolvedColName("attname")
 		return returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
 	}
 
@@ -673,7 +673,7 @@ func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Pla
 	if stmt.Like != nil {
 		// append filter [AND ma.relname like stmt.Like] to WHERE clause
 		likeExpr := stmt.Like
-		likeExpr.Left = tree.SetUnresolvedName("relname")
+		likeExpr.Left = tree.NewUnresolvedColName("relname")
 		return returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
 	}
 
@@ -728,7 +728,7 @@ func buildShowFunctionOrProcedureStatus(stmt *tree.ShowFunctionOrProcedureStatus
 	if stmt.Like != nil {
 		// append filter [AND ma.attname like stmt.Like] to WHERE clause
 		likeExpr := stmt.Like
-		likeExpr.Left = tree.SetUnresolvedName("name")
+		likeExpr.Left = tree.NewUnresolvedColName("name")
 		return returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
 	}
 
@@ -756,7 +756,7 @@ func buildShowTriggers(stmt *tree.ShowTarget, ctx CompilerContext) (*Plan, error
 	if stmt.Like != nil {
 		// append filter [AND ma.attname like stmt.Like] to WHERE clause
 		likeExpr := stmt.Like
-		likeExpr.Left = tree.SetUnresolvedName("event_object_table")
+		likeExpr.Left = tree.NewUnresolvedColName("event_object_table")
 		return returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
 	}
 
@@ -872,7 +872,7 @@ func buildShowRoles(stmt *tree.ShowRolesStmt, ctx CompilerContext) (*Plan, error
 	if stmt.Like != nil {
 		// append filter [AND mo_role.role_name like stmt.Like] to WHERE clause
 		likeExpr := stmt.Like
-		likeExpr.Left = tree.SetUnresolvedName("role_name")
+		likeExpr.Left = tree.NewUnresolvedColName("role_name")
 		return returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
 	}
 
@@ -886,7 +886,7 @@ func buildShowStages(stmt *tree.ShowStages, ctx CompilerContext) (*Plan, error) 
 	if stmt.Like != nil {
 		// append filter [AND mo_stages.stage_name like stmt.Like] to WHERE clause
 		likeExpr := stmt.Like
-		likeExpr.Left = tree.SetUnresolvedName("stage_name")
+		likeExpr.Left = tree.NewUnresolvedColName("stage_name")
 		return returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
 	}
 
