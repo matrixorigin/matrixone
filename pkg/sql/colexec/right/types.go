@@ -128,17 +128,14 @@ func (arg *Argument) Release() {
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
-		if !ctr.handledLast {
-			if arg.NumCPU > 0 {
-				if arg.IsMerger {
-					for i := uint64(1); i < arg.NumCPU; i++ {
-						<-arg.Channel
-					}
-				} else {
-					arg.Channel <- ctr.matched
+		if !ctr.handledLast && arg.NumCPU > 1 {
+			if arg.IsMerger {
+				for i := uint64(1); i < arg.NumCPU; i++ {
+					<-arg.Channel
 				}
+			} else {
+				arg.Channel <- nil
 			}
-			ctr.handledLast = true
 		}
 		ctr.cleanBatch(proc)
 		ctr.cleanHashMap()
