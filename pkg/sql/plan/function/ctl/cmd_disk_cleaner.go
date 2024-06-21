@@ -70,7 +70,9 @@ func handleDiskCleaner() handleFunc {
 			return payload, nil
 		},
 		func(data []byte) (any, error) {
-			resp := api.TNStringResponse{}
+			resp := api.TNStringResponse{
+				ReturnStr: string(data),
+			}
 			protoc.MustUnmarshal(&resp, data)
 			return resp, nil
 		})
