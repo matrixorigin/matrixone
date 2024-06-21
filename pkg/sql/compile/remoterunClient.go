@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"go.uber.org/zap"
 	"sync/atomic"
@@ -216,6 +217,8 @@ func newMessageSenderOnClient(
 	if sender.receiveCh == nil {
 		sender.receiveCh, err = sender.streamSender.Receive()
 	}
+
+	v2.PipelineMessageSenderCounter.Inc()
 	return sender, err
 }
 
@@ -417,4 +420,6 @@ func (sender *messageSenderOnClient) close() {
 		sender.ctxCancel()
 	}
 	_ = sender.streamSender.Close(true)
+
+	v2.PipelineMessageSenderCounter.Desc()
 }
