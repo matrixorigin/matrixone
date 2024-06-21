@@ -438,6 +438,7 @@ func createCompile(
 	defer func() {
 		if err != nil && retCompile != nil {
 			retCompile.Release()
+			retCompile = nil
 		}
 	}()
 	retCompile.SetBuildPlanFunc(func() (*plan2.Plan, error) {
