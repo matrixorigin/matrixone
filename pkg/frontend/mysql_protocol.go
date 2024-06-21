@@ -2308,7 +2308,7 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow(mrs *MysqlResultSet, rowId
 		}
 	}
 
-	err = mp.tcpConn.Flush()
+	err = mp.tcpConn.FinishedPacket()
 	if err != nil {
 		return err
 	}
@@ -2464,7 +2464,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint6
 			return moerr.NewInternalError(mp.ctx, "unsupported column type %d ", mysqlColumn.ColumnType())
 		}
 	}
-	err := mp.tcpConn.Flush()
+	err := mp.tcpConn.FinishedPacket()
 	if err != nil {
 		return err
 	}

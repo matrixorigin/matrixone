@@ -152,17 +152,31 @@ func (mo *MOServer) startAccept(listener net.Listener) {
 		}
 		tempDelay = 0
 
-		rs := NewIOSession(conn, NewSessionAllocator(mo.pu))
-		mo.rm.Created(rs)
-		err = mo.handshake(rs)
+		go mo.handleConn(conn)
 
-		if err != nil {
-			mo.rm.Closed(rs)
-			mo.logger.Error("HandShake error", zap.Error(err))
-			return
+	}
+}
+func (mo *MOServer) handleConn(conn net.Conn) {
+	rs := NewIOSession(conn, mo.pu)
+	mo.rm.Created(rs)
+	err := mo.handshake(rs)
+
+	if err != nil {
+		mo.rm.Closed(rs)
+		mo.logger.Error("HandShake error", zap.Error(err))
+		return
+	}
+	mo.handleLoop(rs)
+}
+
+func (mo *MOServer) handleLoop(rs *ConnManager) {
+	defer func() {
+		if err := rs.Close(); err != nil {
+			mo.logger.Error("close session failed", zap.Error(err))
 		}
-		go mo.handleLoop(rs)
-
+	}()
+	if err := mo.handleMessage(rs); err != nil {
+		mo.logger.Error("handle session failed", zap.Error(err))
 	}
 }
 
@@ -283,16 +297,6 @@ func (mo *MOServer) handshake(rs *ConnManager) error {
 	return nil
 }
 
-func (mo *MOServer) handleLoop(rs *ConnManager) {
-	defer func() {
-		if err := rs.Close(); err != nil {
-			mo.logger.Error("close session failed", zap.Error(err))
-		}
-	}()
-	if err := mo.handleMessage(rs); err != nil {
-		mo.logger.Error("handle session failed", zap.Error(err))
-	}
-}
 func (mo *MOServer) isStarted() bool {
 	mo.mu.RLock()
 	defer mo.mu.RUnlock()
@@ -395,29 +399,39 @@ func NewMOServer(
 
 // handleMessage receives the message from the client and executes it
 func (mo *MOServer) handleMessage(rs *ConnManager) error {
-	received := uint64(0)
 	for {
-		msg, err := rs.Read()
+		err := mo.handleRequest(rs)
 		if err != nil {
-			if err == io.EOF {
-				return nil
-			}
-
-			logutil.Error("session read failed",
-				zap.Error(err))
-			return err
-		}
-
-		received++
-
-		err = mo.rm.Handler(rs, msg, received)
-		if err != nil {
-			if skipClientQuit(err.Error()) {
-				return nil
-			} else {
-				logutil.Error("session handle failed, close this session", zap.Error(err))
-			}
 			return err
 		}
 	}
+}
+
+func (mo *MOServer) handleRequest(rs *ConnManager) error {
+	var msg []byte
+	var err error
+	defer func() {
+		rs.allocator.Free(msg)
+	}()
+	msg, err = rs.Read()
+	if err != nil {
+		if err == io.EOF {
+			return nil
+		}
+
+		logutil.Error("session read failed",
+			zap.Error(err))
+		return err
+	}
+
+	err = mo.rm.Handler(rs, msg)
+	if err != nil {
+		if skipClientQuit(err.Error()) {
+			return nil
+		} else {
+			logutil.Error("session handle failed, close this session", zap.Error(err))
+		}
+		return err
+	}
+	return nil
 }

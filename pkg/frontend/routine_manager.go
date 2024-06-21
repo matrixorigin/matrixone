@@ -347,13 +347,12 @@ func getConnectionInfo(rs *ConnManager) string {
 	return fmt.Sprintf("connection from %s", rs.RemoteAddress())
 }
 
-func (rm *RoutineManager) Handler(rs *ConnManager, msg interface{}, received uint64) error {
+func (rm *RoutineManager) Handler(rs *ConnManager, msg []byte) error {
 	logutil.Debugf("get request from %d:%s", rs.ID(), rs.RemoteAddress())
 	defer func() {
 		logutil.Debugf("request from %d:%s has been processed", rs.ID(), rs.RemoteAddress())
 	}()
 	var err error
-	var isTlsHeader bool
 	ctx, span := trace.Start(rm.getCtx(), "RoutineManager.Handler",
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End()
@@ -367,111 +366,9 @@ func (rm *RoutineManager) Handler(rs *ConnManager, msg interface{}, received uin
 	routine.updateGoroutineId()
 	routine.setInProcessRequest(true)
 	defer routine.setInProcessRequest(false)
-	protocol := routine.getProtocol()
-
-	payload, ok := msg.([]byte)
-
-	if !ok {
-		err = moerr.NewInternalError(ctx, "message is not payload")
-		routine.ses.Error(ctx,
-			"Error occurred",
-			zap.Error(err))
-		return err
-	}
+	payload := msg
 
 	ses := routine.getSession()
-	ts := ses.timestampMap
-
-	// finish handshake process
-	if !protocol.GetBool(ESTABLISHED) {
-		tempCtx, tempCancel := context.WithTimeout(ctx, getGlobalPu().SV.SessionTimeout.Duration)
-		defer tempCancel()
-		ts[TSEstablishStart] = time.Now()
-		ses.Debugf(tempCtx, "HANDLE HANDSHAKE")
-
-		/*
-			di := MakeDebugInfo(payload,80,8)
-			logutil.Infof("RP[%v] Payload80[%v]",rs.RemoteAddr(),di)
-		*/
-		if protocol.GetU32(CAPABILITY)&CLIENT_SSL != 0 && !protocol.GetBool(TLS_ESTABLISHED) {
-			ses.Debugf(tempCtx, "setup ssl")
-			isTlsHeader, err = protocol.HandleHandshake(tempCtx, payload)
-			if err != nil {
-				ses.Error(tempCtx,
-					"An error occurred",
-					zap.Error(err))
-				return err
-			}
-			if isTlsHeader {
-				ts[TSUpgradeTLSStart] = time.Now()
-				ses.Debugf(tempCtx, "upgrade to TLS")
-				// do upgradeTls
-				tlsConn := tls.Server(rs.RawConn(), rm.getTlsConfig())
-				ses.Debugf(tempCtx, "get TLS conn ok")
-				tlsCtx, cancelFun := context.WithTimeout(tempCtx, 20*time.Second)
-				if err = tlsConn.HandshakeContext(tlsCtx); err != nil {
-					ses.Error(tempCtx,
-						"Error occurred before cancel()",
-						zap.Error(err))
-					cancelFun()
-					ses.Error(tempCtx,
-						"Error occurred after cancel()",
-						zap.Error(err))
-					return err
-				}
-				cancelFun()
-				ses.Debugf(tempCtx, "TLS handshake ok")
-				rs.UseConn(tlsConn)
-				ses.Debugf(tempCtx, "TLS handshake finished")
-
-				// tls upgradeOk
-				protocol.SetBool(TLS_ESTABLISHED, true)
-				ts[TSUpgradeTLSEnd] = time.Now()
-				v2.UpgradeTLSDurationHistogram.Observe(ts[TSUpgradeTLSEnd].Sub(ts[TSUpgradeTLSStart]).Seconds())
-			} else {
-				// client don't ask server to upgrade TLS
-				if err := protocol.Authenticate(tempCtx); err != nil {
-					return err
-				}
-				protocol.SetBool(TLS_ESTABLISHED, true)
-				protocol.SetBool(ESTABLISHED, true)
-			}
-		} else {
-			ses.Debugf(tempCtx, "handleHandshake")
-			_, err = protocol.HandleHandshake(tempCtx, payload)
-			if err != nil {
-				ses.Error(tempCtx,
-					"Error occurred",
-					zap.Error(err))
-				return err
-			}
-			if err = protocol.Authenticate(tempCtx); err != nil {
-				return err
-			}
-			protocol.SetBool(ESTABLISHED, true)
-		}
-		ts[TSEstablishEnd] = time.Now()
-		v2.EstablishDurationHistogram.Observe(ts[TSEstablishEnd].Sub(ts[TSEstablishStart]).Seconds())
-		ses.Info(ctx, fmt.Sprintf("mo accept connection, time cost of Created: %s, Establish: %s, UpgradeTLS: %s, Authenticate: %s, SendErrPacket: %s, SendOKPacket: %s, CheckTenant: %s, CheckUser: %s, CheckRole: %s, CheckDbName: %s, InitGlobalSysVar: %s",
-			ts[TSCreatedEnd].Sub(ts[TSCreatedStart]).String(),
-			ts[TSEstablishEnd].Sub(ts[TSEstablishStart]).String(),
-			ts[TSUpgradeTLSEnd].Sub(ts[TSUpgradeTLSStart]).String(),
-			ts[TSAuthenticateEnd].Sub(ts[TSAuthenticateStart]).String(),
-			ts[TSSendErrPacketEnd].Sub(ts[TSSendErrPacketStart]).String(),
-			ts[TSSendOKPacketEnd].Sub(ts[TSSendOKPacketStart]).String(),
-			ts[TSCheckTenantEnd].Sub(ts[TSCheckTenantStart]).String(),
-			ts[TSCheckUserEnd].Sub(ts[TSCheckUserStart]).String(),
-			ts[TSCheckRoleEnd].Sub(ts[TSCheckRoleStart]).String(),
-			ts[TSCheckDbNameEnd].Sub(ts[TSCheckDbNameStart]).String(),
-			ts[TSInitGlobalSysVarEnd].Sub(ts[TSInitGlobalSysVarStart]).String()))
-
-		dbName := protocol.GetStr(DBNAME)
-		if dbName != "" {
-			ses.SetDatabaseName(dbName)
-		}
-		rm.sessionManager.AddSession(ses)
-		return nil
-	}
 
 	req := ToRequest(payload)
 
