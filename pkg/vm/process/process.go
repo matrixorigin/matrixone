@@ -60,7 +60,7 @@ func New(
 	hakeeper logservice.CNHAKeeperClient,
 	udfService udf.Service,
 	aicm *defines.AutoIncrCacheManager) *Process {
-	return &Process{
+	baseProcess := &BaseProcess{
 		mp:           m,
 		Ctx:          ctx,
 		TxnClient:    txnClient,
@@ -81,40 +81,17 @@ func New(
 		UdfService:     udfService,
 		logger:         util.GetLogger(), // TODO: set by input
 	}
+	return &Process{
+		Ctx:  ctx,
+		Base: baseProcess,
+	}
 }
 
 // NewFromProc create a new Process based on another process.
 func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	proc := new(Process)
 	newctx, cancel := context.WithCancel(ctx)
-	proc.Id = p.Id
-	proc.vp = p.vp
-	proc.mp = p.Mp()
-	proc.prepareBatch = p.prepareBatch
-	proc.prepareExprList = p.prepareExprList
-	proc.Lim = p.Lim
-	proc.TxnClient = p.TxnClient
-	proc.TxnOperator = p.TxnOperator
-	proc.AnalInfos = p.AnalInfos
-	proc.SessionInfo = p.SessionInfo
-	proc.FileService = p.FileService
-	proc.IncrService = p.IncrService
-	proc.QueryClient = p.QueryClient
-	proc.Hakeeper = p.Hakeeper
-	proc.UdfService = p.UdfService
-	proc.UnixTime = p.UnixTime
-	proc.LastInsertID = p.LastInsertID
-	proc.LockService = p.LockService
-	proc.Aicm = p.Aicm
-	proc.LoadTag = p.LoadTag
-	proc.MessageBoard = p.MessageBoard
-	proc.StmtProfile = p.StmtProfile
-
-	proc.prepareParams = p.prepareParams
-	proc.resolveVariableFunc = p.resolveVariableFunc
-
-	proc.logger = p.logger
-
+	proc.Base = p.Base
 	// reg and cancel
 	proc.Ctx = newctx
 	proc.Cancel = cancel
@@ -126,8 +103,7 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 		}
 	}
 	proc.DispatchNotifyCh = make(chan WrapCs)
-	proc.LoadLocalReader = p.LoadLocalReader
-	proc.WaitPolicy = p.WaitPolicy
+
 	return proc
 }
 
@@ -157,11 +133,11 @@ func (proc *Process) UnmarshalBinary(_ []byte) error {
 }
 
 func (proc *Process) QueryId() string {
-	return proc.Id
+	return proc.Base.Id
 }
 
 func (proc *Process) SetQueryId(id string) {
-	proc.Id = id
+	proc.Base.Id = id
 }
 
 // XXX MPOOL
@@ -177,7 +153,7 @@ func (proc *Process) GetMPool() *mpool.MPool {
 	if proc == nil {
 		return xxxProcMp
 	}
-	return proc.mp
+	return proc.Base.mp
 }
 
 func (proc *Process) Mp() *mpool.MPool {
@@ -185,27 +161,27 @@ func (proc *Process) Mp() *mpool.MPool {
 }
 
 func (proc *Process) GetPrepareParams() *vector.Vector {
-	return proc.prepareParams
+	return proc.Base.prepareParams
 }
 
 func (proc *Process) SetPrepareParams(prepareParams *vector.Vector) {
-	proc.prepareParams = prepareParams
+	proc.Base.prepareParams = prepareParams
 }
 
 func (proc *Process) SetPrepareBatch(bat *batch.Batch) {
-	proc.prepareBatch = bat
+	proc.Base.prepareBatch = bat
 }
 
 func (proc *Process) GetPrepareBatch() *batch.Batch {
-	return proc.prepareBatch
+	return proc.Base.prepareBatch
 }
 
 func (proc *Process) SetPrepareExprList(exprList any) {
-	proc.prepareExprList = exprList
+	proc.Base.prepareExprList = exprList
 }
 
 func (proc *Process) GetPrepareExprList() any {
-	return proc.prepareExprList
+	return proc.Base.prepareExprList
 }
 
 func (proc *Process) OperatorOutofMemory(size int64) bool {
@@ -233,10 +209,10 @@ func (proc *Process) ResetContextFromParent(parent context.Context) context.Cont
 }
 
 func (proc *Process) GetAnalyze(idx, parallelIdx int, parallelMajor bool) Analyze {
-	if idx >= len(proc.AnalInfos) || idx < 0 {
+	if idx >= len(proc.Base.AnalInfos) || idx < 0 {
 		return &analyze{analInfo: nil, parallelIdx: parallelIdx, parallelMajor: parallelMajor}
 	}
-	return &analyze{analInfo: proc.AnalInfos[idx], wait: 0, parallelIdx: parallelIdx, parallelMajor: parallelMajor}
+	return &analyze{analInfo: proc.Base.AnalInfos[idx], wait: 0, parallelIdx: parallelIdx, parallelMajor: parallelMajor}
 }
 
 func (proc *Process) AllocVectorOfRows(typ types.Type, nele int, nsp *nulls.Nulls) (*vector.Vector, error) {
@@ -257,15 +233,15 @@ func (proc *Process) WithSpanContext(sc trace.SpanContext) {
 }
 
 func (proc *Process) CopyValueScanBatch(src *Process) {
-	proc.valueScanBatch = src.valueScanBatch
+	proc.Base.valueScanBatch = src.Base.valueScanBatch
 }
 
 func (proc *Process) SetVectorPoolSize(limit int) {
-	proc.vp.Limit = limit
+	proc.Base.vp.Limit = limit
 }
 
 func (proc *Process) CopyVectorPool(src *Process) {
-	proc.vp = src.vp
+	proc.Base.vp = src.Base.vp
 }
 
 func (proc *Process) NewBatchFromSrc(src *batch.Batch, preAllocSize int) (*batch.Batch, error) {
@@ -329,13 +305,13 @@ func (proc *Process) PutBatch(bat *batch.Batch) {
 			// XXX I left the old logic here. But it's unreasonable to use the number of rows to determine if a vector's size.
 			// use Allocated() may suitable.
 			if vec.IsConst() || vec.NeedDup() || vec.Allocated() > 8192*64 {
-				vec.Free(proc.mp)
+				vec.Free(proc.Base.mp)
 				bat.ReplaceVector(vec, nil)
 				continue
 			}
 
-			if !proc.vp.putVector(vec) {
-				vec.Free(proc.mp)
+			if !proc.Base.vp.putVector(vec) {
+				vec.Free(proc.Base.mp)
 			}
 			bat.ReplaceVector(vec, nil)
 		}
@@ -351,17 +327,17 @@ func (proc *Process) PutBatch(bat *batch.Batch) {
 }
 
 func (proc *Process) FreeVectors() {
-	proc.vp.freeVectors(proc.Mp())
+	proc.Base.vp.freeVectors(proc.Mp())
 }
 
 func (proc *Process) PutVector(vec *vector.Vector) {
-	if !proc.vp.putVector(vec) {
+	if !proc.Base.vp.putVector(vec) {
 		vec.Free(proc.Mp())
 	}
 }
 
 func (proc *Process) GetVector(typ types.Type) *vector.Vector {
-	if vec := proc.vp.getVector(typ); vec != nil {
+	if vec := proc.Base.vp.getVector(typ); vec != nil {
 		vec.Reset(typ)
 		return vec
 	}
@@ -405,19 +381,19 @@ func (vp *vectorPool) getVector(typ types.Type) *vector.Vector {
 // log do logging.
 // just for Info/Error/Warn/Debug/Fatal
 func (proc *Process) log(ctx context.Context, level zapcore.Level, msg string, fields ...zap.Field) {
-	if proc.SessionInfo.LogLevel.Enabled(level) {
+	if proc.Base.SessionInfo.LogLevel.Enabled(level) {
 		fields = appendSessionField(fields, proc)
 		fields = appendTraceField(fields, ctx)
-		proc.logger.Log(msg, log.DefaultLogOptions().WithLevel(level).AddCallerSkip(2), fields...)
+		proc.Base.logger.Log(msg, log.DefaultLogOptions().WithLevel(level).AddCallerSkip(2), fields...)
 	}
 }
 
 func (proc *Process) logf(ctx context.Context, level zapcore.Level, msg string, args ...any) {
-	if proc.SessionInfo.LogLevel.Enabled(level) {
+	if proc.Base.SessionInfo.LogLevel.Enabled(level) {
 		fields := make([]zap.Field, 0, 5)
 		fields = appendSessionField(fields, proc)
 		fields = appendTraceField(fields, ctx)
-		proc.logger.Log(fmt.Sprintf(msg, args...), log.DefaultLogOptions().WithLevel(level).AddCallerSkip(2), fields...)
+		proc.Base.logger.Log(fmt.Sprintf(msg, args...), log.DefaultLogOptions().WithLevel(level).AddCallerSkip(2), fields...)
 	}
 }
 
@@ -464,8 +440,8 @@ func (proc *Process) Debugf(ctx context.Context, msg string, args ...any) {
 // appendSessionField append session id, transaction id and statement id to the fields
 func appendSessionField(fields []zap.Field, proc *Process) []zap.Field {
 	if proc != nil {
-		fields = append(fields, logutil.SessionIdField(uuid.UUID(proc.SessionInfo.SessionId).String()))
-		if p := proc.StmtProfile; p != nil {
+		fields = append(fields, logutil.SessionIdField(uuid.UUID(proc.Base.SessionInfo.SessionId).String()))
+		if p := proc.Base.StmtProfile; p != nil {
 			fields = append(fields, logutil.StatementIdField(uuid.UUID(p.stmtId).String()))
 			fields = append(fields, logutil.TxnIdField(hex.EncodeToString(p.txnId[:])))
 		}
