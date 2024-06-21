@@ -1,3 +1,4 @@
+-- @bvt:issue#17073
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
 
@@ -704,3 +705,4 @@ drop snapshot if exists cluster_sp;
 -- @ignore:1
 show snapshots;
 
+-- @bvt:issue
