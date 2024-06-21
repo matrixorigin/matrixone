@@ -672,10 +672,10 @@ Dr. Charlie    Computer Science    Introduction to Computer Science    Fall 2024
 Dr. Delta    Mathematics    Advanced Mathematics    Spring 2024
 select * from StudentOverallPerformance;
 studentname    studentgrade    averagegrade
-Eve    null    3.50000000
-Frank    null    3.60000000
 Alice Smith    3.50    3.60000000
 Bob Johnson    3.70    3.60000000
+Eve    null    3.50000000
+Frank    null    3.60000000
 drop snapshot if exists cluster_sp;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
@@ -689,7 +689,7 @@ drop database if exists School;
 drop database if exists University;
 drop database if exists EducationSystem;
 restore cluster from snapshot cluster_sp;
-no such table company.employees
+invalid database snapshot_read
 select count(*) from snapshot_read.test_snapshot_read;
 invalid database snapshot_read
 select count(*) from snapshot_read.users;
