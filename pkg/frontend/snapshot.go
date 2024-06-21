@@ -70,7 +70,7 @@ var (
 
 	restorePubDbDataFmt = "insert into `%s`.`%s` SELECT * FROM `%s`.`%s` {snapshot = '%s'} WHERE  DATABASE_NAME = '%s'"
 
-	getRestoreAccountsFmt = "select account_name, account_id from mo_catalog.mo_account where account_name in (select account_name from mo_catalog.mo_account {MO_TS = %d });"
+	getRestoreAccountsFmt = "select account_name, account_id from mo_catalog.mo_account where account_name in (select account_name from mo_catalog.mo_account {MO_TS = %d }) ORDER BY account_id ASC;"
 
 	getDropAccountFmt = "select account_name from mo_catalog.mo_account where account_name not in (select account_name from mo_catalog.mo_account {MO_TS = %d });"
 
@@ -339,6 +339,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	if err != nil {
 		return err
 	}
+
 	if snapshot == nil {
 		return moerr.NewInternalError(ctx, "snapshot %s does not exist", snapshotName)
 	}
@@ -377,7 +378,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		}
 
 		if snapshot.level != tree.SNAPSHOTLEVELCLUSTER.String() {
-			err = moerr.NewInternalError(ctx, "snapshot %s is not cluster level", snapshotName)
+			err = moerr.NewInternalError(ctx, "snapshot %s is not cluster level snapshot", snapshotName)
 			return
 		}
 	}
@@ -412,6 +413,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	if err != nil {
 		return
 	}
+
 	// get foreign key table infos
 	fkTableMap, err := getTableInfoMap(ctx, bh, snapshotName, dbName, tblName, sortedFkTbls)
 	if err != nil {
@@ -1368,7 +1370,7 @@ func restoreToCluster(ctx context.Context, ses *Session, bh BackgroundExec, snap
 			return
 		}
 
-		getLogger().Info(fmt.Sprintf("[%s] cluster start to restore account: %v", snapshotName, account.accountName))
+		getLogger().Info(fmt.Sprintf("[%s] cluster restore start to restore account: %v, account id: %d", snapshotName, account.accountName, account.accountId))
 		toAccountId := account.accountId
 
 		// pre restore account
@@ -1413,6 +1415,7 @@ func restoreToCluster(ctx context.Context, ses *Session, bh BackgroundExec, snap
 		if err = CancelCheck(ctx); err != nil {
 			return
 		}
+		getLogger().Info(fmt.Sprintf("[%s] restore account: %v, account id: %d success", snapshotName, account.accountName, account.accountId))
 	}
 
 	return

@@ -504,7 +504,13 @@ INSERT INTO factories (factory_name, address) VALUES ('Factory WWWW', '2031 Birc
 select count(*) from test_snapshot_restore.factories;
 -- @session
 
+-- @cleanup
+drop snapshot if exists cluster_sp;
+-- @ignore:1
+show snapshots;
 create snapshot cluster_sp for cluster;
+-- @ignore:1
+show snapshots;
 drop database if exists snapshot_read;
 drop database if exists test_snapshot_restore;
 
