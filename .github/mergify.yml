@@ -58,6 +58,15 @@ pull_request_rules:
 
           Approved by: @{{ approved_reviews_by | join(', @') }}
 
+
+  - name: Auto Request Reviewer
+    conditions:
+      - base!=main
+    actions:
+      request_reviews:
+        users:
+          - fengttt
+
   - name: Auto update branch
     conditions:
       - created-at>=00:10 ago
