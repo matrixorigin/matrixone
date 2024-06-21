@@ -14,32 +14,55 @@
 
 package fileservice
 
-import "github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
+import (
+	"unsafe"
 
-type Bytes []byte
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+)
+
+type Bytes struct {
+	bytes       []byte
+	ptr         unsafe.Pointer
+	deallocator malloc.Deallocator
+}
 
 func (b Bytes) Size() int64 {
-	return int64(len(b))
+	return int64(len(b.bytes))
 }
 
 func (b Bytes) Bytes() []byte {
-	return b
+	return b.bytes
 }
 
 func (b Bytes) Slice(length int) memorycache.CacheData {
-	return b[:length]
+	b.bytes = b.bytes[:length]
+	return b
 }
 
 func (b Bytes) Release() {
+	if b.deallocator != nil {
+		b.deallocator.Deallocate(b.ptr, malloc.NoHints)
+		metric.FSMallocLiveObjectsBytes.Dec()
+	}
 }
 
-func (b Bytes) Retain() {
+type bytesAllocator struct {
+	allocator malloc.Allocator
 }
-
-type bytesAllocator struct{}
 
 var _ CacheDataAllocator = new(bytesAllocator)
 
 func (b *bytesAllocator) Alloc(size int) memorycache.CacheData {
-	return make(Bytes, size)
+	ptr, dec, err := b.allocator.Allocate(uint64(size), malloc.NoHints)
+	if err != nil {
+		panic(err)
+	}
+	metric.FSMallocLiveObjectsBytes.Inc()
+	return Bytes{
+		bytes:       unsafe.Slice((*byte)(ptr), size),
+		ptr:         ptr,
+		deallocator: dec,
+	}
 }
