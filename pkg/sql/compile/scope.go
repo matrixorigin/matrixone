@@ -557,8 +557,8 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 			if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
 				if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
 					n.ScanSnapshot.TS.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
-					if c.proc.TxnOperator != nil {
-						txnOp = c.proc.TxnOperator
+					if c.proc.GetCloneTxnOperator() != nil {
+						txnOp = c.proc.GetCloneTxnOperator()
 					} else {
 						txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanSnapshot.TS)
 						c.proc.SetCloneTxnOperator(txnOp)
