@@ -160,6 +160,22 @@ func (proc *Process) Mp() *mpool.MPool {
 	return proc.GetMPool()
 }
 
+func (proc *Process) GetLim() Limitation {
+	return proc.Base.Lim
+}
+
+func (proc *Process) GetQueryClient() qclient.QueryClient {
+	return proc.Base.QueryClient
+}
+
+func (proc *Process) GetFileService() fileservice.FileService {
+	return proc.Base.FileService
+}
+
+func (proc *Process) GetHaKeeper() logservice.CNHAKeeperClient {
+	return proc.Base.Hakeeper
+}
+
 func (proc *Process) GetPrepareParams() *vector.Vector {
 	return proc.Base.prepareParams
 }

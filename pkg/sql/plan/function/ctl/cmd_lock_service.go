@@ -53,7 +53,7 @@ func handleRemoveRemoteLockTable(
 		return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s, use account_id + '-' + table_id + '-' + bind_version", parameter)
 	}
 
-	qt := proc.QueryClient
+	qt := proc.GetQueryClient()
 	mc := clusterservice.GetMOCluster()
 	var addrs []string
 	mc.GetCNServiceWithoutWorkingState(
@@ -108,7 +108,7 @@ func handleGetLatestBind(
 		return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s, use account_id + '-' + table_id", parameter)
 	}
 
-	qt := proc.QueryClient
+	qt := proc.GetQueryClient()
 	mc := clusterservice.GetMOCluster()
 	var addr string
 	mc.GetTNService(
