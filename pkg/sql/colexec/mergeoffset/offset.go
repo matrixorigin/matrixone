@@ -63,9 +63,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	result := vm.NewCallResult()
 	var msg *process.RegisterMessage
-	if arg.buf != nil {
-		proc.PutBatch(arg.buf)
-		arg.buf = nil
+	if arg.ctr.buf != nil {
+		proc.PutBatch(arg.ctr.buf)
+		arg.ctr.buf = nil
 	}
 
 	for {
@@ -82,26 +82,26 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			return result, nil
 		}
 
-		arg.buf = msg.Batch
-		anal.Input(arg.buf, arg.GetIsFirst())
+		arg.ctr.buf = msg.Batch
+		anal.Input(arg.ctr.buf, arg.GetIsFirst())
 		if arg.ctr.seen > arg.ctr.offset {
-			anal.Output(arg.buf, arg.GetIsLast())
-			result.Batch = arg.buf
+			anal.Output(arg.ctr.buf, arg.GetIsLast())
+			result.Batch = arg.ctr.buf
 			return result, nil
 		}
-		length := arg.buf.RowCount()
+		length := arg.ctr.buf.RowCount()
 		// bat = PartOne + PartTwo, and PartTwo is required.
 		if arg.ctr.seen+uint64(length) > arg.ctr.offset {
 			sels := newSels(int64(arg.ctr.offset-arg.ctr.seen), int64(length)-int64(arg.ctr.offset-arg.ctr.seen), proc)
 			arg.ctr.seen += uint64(length)
-			arg.buf.Shrink(sels, false)
+			arg.ctr.buf.Shrink(sels, false)
 			proc.Mp().PutSels(sels)
-			anal.Output(arg.buf, arg.GetIsLast())
-			result.Batch = arg.buf
+			anal.Output(arg.ctr.buf, arg.GetIsLast())
+			result.Batch = arg.ctr.buf
 			return result, nil
 		}
 		arg.ctr.seen += uint64(length)
-		proc.PutBatch(arg.buf)
+		proc.PutBatch(arg.ctr.buf)
 	}
 }
 

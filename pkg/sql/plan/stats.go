@@ -883,6 +883,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.Outcnt = childStats.Outcnt
 			node.Stats.Cost = childStats.Outcnt
 			node.Stats.Selectivity = childStats.Selectivity
+			node.Stats.BlockNum = childStats.BlockNum
 		}
 	}
 
@@ -1016,11 +1017,18 @@ func recalcStatsByRuntimeFilter(scanNode *plan.Node, joinNode *plan.Node, builde
 		return
 	}
 
-	if joinNode.JoinType == plan.Node_INDEX {
+	if joinNode.JoinType == plan.Node_INDEX || joinNode.NodeType == plan.Node_FUZZY_FILTER {
 		scanNode.Stats.Outcnt = builder.qry.Nodes[joinNode.Children[1]].Stats.Outcnt
+		if scanNode.Stats.Outcnt > scanNode.Stats.TableCnt {
+			scanNode.Stats.Outcnt = scanNode.Stats.TableCnt
+		}
 		scanNode.Stats.BlockNum = int32(scanNode.Stats.Outcnt/3) + 1
-		scanNode.Stats.Cost = float64(scanNode.Stats.BlockNum * DefaultBlockMaxRows)
-		scanNode.Stats.Selectivity = builder.qry.Nodes[joinNode.Children[1]].Stats.Selectivity
+		scanNode.Stats.Cost = float64(scanNode.Stats.BlockNum) * DefaultBlockMaxRows
+		if scanNode.Stats.Cost > scanNode.Stats.TableCnt {
+			scanNode.Stats.Cost = scanNode.Stats.TableCnt
+			scanNode.Stats.BlockNum = int32(scanNode.Stats.TableCnt / DefaultBlockMaxRows)
+		}
+		scanNode.Stats.Selectivity = scanNode.Stats.Outcnt / scanNode.Stats.TableCnt
 		return
 	}
 	runtimeFilterSel := builder.qry.Nodes[joinNode.Children[1]].Stats.Selectivity

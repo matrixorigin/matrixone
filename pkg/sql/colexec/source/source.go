@@ -67,22 +67,22 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	_, span := trace.Start(proc.Ctx, "SourceCall")
 	defer span.End()
 
-	if arg.buf != nil {
-		proc.PutBatch(arg.buf)
-		arg.buf = nil
+	if arg.ctr.buf != nil {
+		proc.PutBatch(arg.ctr.buf)
+		arg.ctr.buf = nil
 	}
 	result := vm.NewCallResult()
 	var err error
 
-	switch arg.status {
+	switch arg.ctr.status {
 	case retrieve:
-		arg.buf, err = mokafka.RetrieveData(proc.Ctx, proc.SessionInfo.SourceInMemScanBatch, arg.Configs, arg.attrs, arg.types, arg.Offset, arg.Limit, proc.Mp(), mokafka.NewKafkaAdapter)
+		arg.ctr.buf, err = mokafka.RetrieveData(proc.Ctx, proc.SessionInfo.SourceInMemScanBatch, arg.Configs, arg.attrs, arg.types, arg.Offset, arg.Limit, proc.Mp(), mokafka.NewKafkaAdapter)
 		if err != nil {
 			result.Status = vm.ExecStop
 			return result, err
 		}
-		arg.status = end
-		result.Batch = arg.buf
+		arg.ctr.status = end
+		result.Batch = arg.ctr.buf
 		result.Status = vm.ExecNext
 	case end:
 		result.Status = vm.ExecStop

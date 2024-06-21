@@ -34,11 +34,11 @@ type TransferHashPage struct {
 	isTransient bool
 }
 
-func NewTransferHashPage(id *common.ID, ts time.Time, isTransient bool) *TransferHashPage {
+func NewTransferHashPage(id *common.ID, ts time.Time, pageSize int, isTransient bool) *TransferHashPage {
 	page := &TransferHashPage{
 		bornTS:      ts,
 		id:          id,
-		hashmap:     make(map[uint32]types.Rowid),
+		hashmap:     make(map[uint32]types.Rowid, pageSize),
 		isTransient: isTransient,
 	}
 	page.OnZeroCB = page.Close
