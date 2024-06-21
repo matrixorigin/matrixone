@@ -206,6 +206,8 @@ func (l *lockTableAllocator) setRestartService(serviceID string) {
 			zap.String("serviceID", serviceID))
 		return
 	}
+	getLogger().Info("set restart lock service",
+		zap.String("serviceID", serviceID))
 	b.setStatus(pb.Status_ServiceLockWaiting)
 }
 
@@ -305,6 +307,9 @@ func (l *lockTableAllocator) disableGroupTables(groupTables []pb.LockTable, b *s
 			l.getLockTablesLocked(t.Group)[t.Table] = old
 			delete(b.groupTables[t.Group], t.Table)
 		}
+	}
+	if len(groupTables) > 0 {
+		logBindsMove(groupTables)
 	}
 }
 

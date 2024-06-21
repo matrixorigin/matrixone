@@ -299,6 +299,7 @@ func (s *service) checkCanMoveGroupTables() {
 	}
 	s.mu.restartTime, _ = s.clock.Now()
 	s.mu.status = pb.Status_ServiceLockWaiting
+	logStatusChange(s.mu.status, pb.Status_ServiceLockWaiting)
 }
 
 func (s *service) incRef(group uint32, table uint64) {
@@ -318,17 +319,18 @@ func (s *service) canLockOnServiceStatus(
 	if s.isStatus(pb.Status_ServiceLockEnable) {
 		return true
 	}
+	defer logCanLockOnService()
 	if opts.Sharding == pb.Sharding_ByRow {
 		tableID = shardingByRow(rows[0])
 	}
 	if !s.validGroupTable(opts.Group, tableID) {
 		return false
 	}
-	if s.activeTxnHolder.empty() {
-		return false
-	}
 	if s.activeTxnHolder.hasActiveTxn(txnID) {
 		return true
+	}
+	if s.activeTxnHolder.empty() {
+		return false
 	}
 	if opts.SnapShotTs.LessEq(s.getRestartTime()) {
 		return true
@@ -390,12 +392,23 @@ func (s *service) setStatus(status pb.Status) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.mu.status = status
+	logStatusChange(s.mu.status, status)
 }
 
 func (s *service) getStatus() pb.Status {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.mu.status
+}
+
+func (s *service) topGroupTables() []pb.LockTable {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.mu.groupTables) == 0 {
+		return nil
+	}
+	g := s.mu.groupTables[0]
+	return g
 }
 
 func (s *service) popGroupTables() []pb.LockTable {
