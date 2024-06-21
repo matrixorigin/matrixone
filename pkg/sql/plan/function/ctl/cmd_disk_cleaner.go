@@ -49,7 +49,7 @@ func IsValidArg(parameter string, proc *process.Process) (*db.DiskCleaner, error
 	return &db.DiskCleaner{
 		Op:    op,
 		Key:   key,
-		Value: parameters[1],
+		Value: parameters[2],
 	}, nil
 }
 
