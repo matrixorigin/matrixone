@@ -30,8 +30,10 @@ select * from table01;
 truncate table table01;
 delete from table01 where col1 = 1;
 update table01 set col1 = 100 where col2 = 2413242;
+select * from table01;
 -- @ignore:10,11,12
 show table status;
+select * from table01;
 drop table table01;
 -- @ignore:3,5
 show subscriptions;

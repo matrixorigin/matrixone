@@ -803,7 +803,10 @@ func (s *service) initInternalSQlExecutor(mp *mpool.MPool) {
 }
 
 func (s *service) initIncrService() {
-	store, err := incrservice.NewSQLStore(s.sqlExecutor)
+	store, err := incrservice.NewSQLStore(
+		s.sqlExecutor,
+		s.lockService,
+	)
 	if err != nil {
 		panic(err)
 	}

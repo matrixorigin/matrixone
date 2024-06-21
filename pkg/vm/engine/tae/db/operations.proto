@@ -50,6 +50,7 @@ message DiskCleaner{
 message Checkpoint {
     option (gogoproto.typedecl) = false;
     int64 FlushDuration         = 1 [(gogoproto.casttype) = "time.Duration"];
+    bool  Enable                = 2;
 }
 
 message InterceptCommit {

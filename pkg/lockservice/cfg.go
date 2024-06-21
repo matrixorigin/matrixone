@@ -27,6 +27,7 @@ var (
 	defaultMaxFixedSliceSize      = 1 << 20 * 10 // 10mb
 	defaultKeepRemoteLockDuration = time.Second
 	defaultKeepBindTimeout        = time.Second * 10
+	defaultRemoteLockTimeout      = time.Minute * 1
 )
 
 // Config lock service config
@@ -99,7 +100,7 @@ func (c *Config) Validate() {
 		c.KeepRemoteLockDuration.Duration = defaultKeepRemoteLockDuration
 	}
 	if c.RemoteLockTimeout.Duration == 0 {
-		c.RemoteLockTimeout.Duration = c.KeepRemoteLockDuration.Duration * 10
+		c.RemoteLockTimeout.Duration = defaultRemoteLockTimeout
 	}
 	if c.KeepBindTimeout.Duration == 0 {
 		c.KeepBindTimeout.Duration = defaultKeepBindTimeout

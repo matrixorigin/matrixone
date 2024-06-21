@@ -1370,10 +1370,7 @@ func appendPrimaryConstraintPlan(
 				scanNode.RuntimeFilterProbeList = nil // can not use both
 			} else {
 				tableScanId = builder.appendNode(scanNode, bindCtx)
-				// temporary solution for the plan of dml go without optimizer
-				// prevent table scan from running on multiple CNs.
-				// because the runtime filter can only run on one now.
-				scanNode.Stats = DefaultMinimalStats()
+				scanNode.Stats.ForceOneCN = true
 			}
 
 			// Perform partition pruning on the full table scan of the partitioned table in the insert statement
@@ -1407,6 +1404,7 @@ func appendPrimaryConstraintPlan(
 					},
 				}
 				fuzzyFilterNode.RuntimeFilterBuildList = []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimitOnPK(scanNode.Stats.TableCnt), buildExpr)}
+				recalcStatsByRuntimeFilter(scanNode, fuzzyFilterNode, builder)
 			}
 
 			lastNodeId = builder.appendNode(fuzzyFilterNode, bindCtx)
@@ -1527,6 +1525,7 @@ func appendPrimaryConstraintPlan(
 					RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimitOnPK(scanNode.Stats.TableCnt), buildExpr)},
 				}
 				lastNodeId = builder.appendNode(joinNode, bindCtx)
+				recalcStatsByRuntimeFilter(scanNode, joinNode, builder)
 
 				// append agg node.
 				aggGroupBy := []*Expr{

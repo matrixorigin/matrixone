@@ -196,6 +196,22 @@ func (h *Handle) HandleForceCheckpoint(
 	return nil, err
 }
 
+func (h *Handle) HandleDisableCheckpoint(
+	ctx context.Context,
+	meta txn.TxnMeta,
+	req *db.Checkpoint,
+	resp *api.SyncLogTailResp) (cb func(), err error) {
+
+	enable := req.Enable
+
+	if enable {
+		h.db.BGCheckpointRunner.EnableCheckpoint()
+	} else {
+		h.db.BGCheckpointRunner.DisableCheckpoint()
+	}
+	return nil, err
+}
+
 func (h *Handle) HandleBackup(
 	ctx context.Context,
 	meta txn.TxnMeta,

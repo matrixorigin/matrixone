@@ -75,6 +75,7 @@ func (m *DiskCleaner) UnmarshalBinary(data []byte) error {
 
 type Checkpoint struct {
 	FlushDuration time.Duration
+	Enable        bool
 }
 
 func (m *Checkpoint) MarshalBinary() ([]byte, error) {
