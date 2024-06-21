@@ -128,7 +128,7 @@ func (s *taeStorage) Debug(ctx context.Context,
 		_, err := handleRead(ctx, txnMeta, data, s.taeHandler.HandleDiskCleaner)
 		if err != nil {
 			resp := protoc.MustMarshal(&api.TNStringResponse{
-				ReturnStr: "Failed" + err.Error(),
+				ReturnStr: "Failed!" + err.Error(),
 			})
 			return resp, err
 		}

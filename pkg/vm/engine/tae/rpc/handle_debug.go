@@ -245,7 +245,11 @@ func (h *Handle) HandleDiskCleaner(
 			logutil.Errorf("parse ttl failed: %v", err)
 			return nil, err
 		}
-
+		// ttl should be at least 1 hour,
+		if ttl < time.Hour {
+			logutil.Errorf("ttl should be at least 1 hour")
+			return nil, moerr.NewInvalidArgNoCtx(key, value)
+		}
 		h.db.DiskCleaner.GetCleaner().AddChecker(
 			func(item any) bool {
 				checkpoint := item.(*checkpoint.CheckpointEntry)
