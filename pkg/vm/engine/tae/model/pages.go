@@ -57,7 +57,7 @@ func (page *TransferHashPage) TTL(now time.Time, ttl time.Duration) bool {
 
 func (page *TransferHashPage) Close() {
 	logutil.Debugf("Closing %s", page.String())
-	clear(page.hashmap)
+	page.hashmap = make(map[uint32]types.Rowid)
 }
 
 func (page *TransferHashPage) Length() int {
