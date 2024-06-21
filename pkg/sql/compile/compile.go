@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"math"
 	"net"
 	"runtime"
@@ -325,10 +326,19 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, fill func(*batch.B
 
 	c.pn = pn
 
+	if strings.HasPrefix(c.sql, "SELECT c_discount, c_last, c_credit") {
+		fmt.Println("--")
+	}
+
 	// Compile may exec some function that need engine.Engine.
 	c.proc.Ctx = context.WithValue(c.proc.Ctx, defines.EngineKey{}, c.e)
 	// generate logic pipeline for query.
 	c.scope, err = c.compileScope(ctx, pn)
+
+	if strings.HasPrefix(c.sql, "SELECT c_discount, c_last, c_credit") {
+		scopeInfo := DebugShowScopes(c.scope)
+		fmt.Printf("----------------------------------wuxiliang start----------------------------------\nSQL:%s %s\n--------------------------------------------", c.sql, scopeInfo)
+	}
 
 	if err != nil {
 		return err
@@ -361,6 +371,11 @@ func (c *Compile) run(s *Scope) error {
 	if s == nil {
 		return nil
 	}
+
+	if strings.HasPrefix(c.sql, "SELECT c_discount, c_last, c_credit FROM bmsql_customer") {
+		fmt.Println("----------------------------------------")
+	}
+
 	switch s.Magic {
 	case Normal:
 		defer c.fillAnalyzeInfo()
@@ -528,6 +543,16 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	c.ctx, span = trace.Start(c.ctx, "Compile.Run", trace.WithKind(trace.SpanKindStatement))
 	_, task := gotrace.NewTask(context.TODO(), "pipeline.Run")
 	defer func() {
+		if strings.HasPrefix(c.sql, "SELECT c_discount, c_last, c_credit") {
+			scopeInfo := DebugShowScopes(c.scope)
+			fmt.Printf("----------------------------------wuxiliang end----------------------------------\nSQL:%s %s\n--------------------------------------------", c.sql, scopeInfo)
+		}
+
+		if strings.HasPrefix(c.sql, "select") && (strings.Contains(c.sql, "lineitem") || strings.Contains(c.sql, "nation")) {
+			scopeInfo := DebugShowScopes(c.scope)
+			fmt.Printf("----------------------------------wuxiliang end----------------------------------\nSQL:%s %s\n--------------------------------------------", c.sql, scopeInfo)
+		}
+
 		releaseRunC()
 
 		task.End()
@@ -1188,8 +1213,8 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 	switch n.NodeType {
 	case plan.Node_VALUE_SCAN:
 		ds := newScope(Normal)
-		ds.DataSource = &Source{isConst: true, node: n}
-		ds.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
+		ds.DataSource = &Source{isConst: true, node: n}  // 建议提供一个NewSource函数
+		ds.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1} // 建议提供一个NewNode函数
 		ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
 		ss = c.compileSort(n, c.compileProjection(n, []*Scope{ds}))
 		return ss, nil
@@ -2199,13 +2224,32 @@ func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
 	}
 	ss := make([]*Scope, 0, len(nodes))
 
+	currentFirstFlag := c.anal.isFirst
 	for i := range nodes {
 		s, err := c.compileTableScanWithNode(n, nodes[i])
 		if err != nil {
 			return nil, err
 		}
+
+		//-----------------------------------------------------------------------------------
+		tableScanOperator := table_scan.Argument{
+			TableID: n.TableDef.TblId,
+		}
+		tableScanOperator.OpStats = process.NewOperatorStats("table_scan")
+
+		s.appendInstruction(vm.Instruction{
+			Op:      vm.TableScan,
+			Idx:     c.anal.curr,
+			Arg:     &tableScanOperator,
+			IsFirst: currentFirstFlag,
+			IsLast:  false,
+		})
+		//-----------------------------------------------------------------------------------
+
 		ss = append(ss, s)
 	}
+	c.anal.isFirst = false
+
 	ss[0].PartialResults = partialResults
 	ss[0].PartialResultTypes = partialResultTypes
 	return ss, nil
@@ -2344,11 +2388,14 @@ func (c *Compile) compileRestrict(n *plan.Node, ss []*Scope) []*Scope {
 	}
 	filterExpr := colexec.RewriteFilterExprList(newFilters)
 	for i := range ss {
+		argument := constructRestrict(n, filterExpr)
+		argument.OpStats = process.NewOperatorStats("Filter")
+
 		ss[i].appendInstruction(vm.Instruction{
 			Op:      vm.Filter,
 			Idx:     c.anal.curr,
 			IsFirst: currentFirstFlag,
-			Arg:     constructRestrict(n, filterExpr),
+			Arg:     argument,
 		})
 	}
 	c.anal.isFirst = false
@@ -2361,11 +2408,14 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 	}
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
+		argument := constructProjection(n)
+		argument.OpStats = process.NewOperatorStats("Projection")
+
 		ss[i].appendInstruction(vm.Instruction{
 			Op:      vm.Projection,
 			Idx:     c.anal.curr,
 			IsFirst: currentFirstFlag,
-			Arg:     constructProjection(n),
+			Arg:     argument,
 		})
 	}
 	c.anal.isFirst = false
@@ -4720,6 +4770,10 @@ func dupType(typ *plan.Type) types.Type {
 
 // Update the specific scopes's instruction to true
 // then update the current idx
+// 更新updateScopes的pipeline算子流结尾标志，然后更新 compile PlanNode过程中的当前分析状态(curr 和 isFirst 属性)。建议更名为nextAnalyzeNode
+// updateScopes：前一个被遍历的Plan Node被编译成的Scope数组，需要将其中的每一个Scope对应的Pipeline
+// 算子流的结尾算子isLast置为true， 标识为对应Node的结束
+// nextId：下一个待遍历的Plan Node索引NodeId
 func (c *Compile) setAnalyzeCurrent(updateScopes []*Scope, nextId int) {
 	if updateScopes != nil {
 		updateScopesLastFlag(updateScopes)
@@ -4729,6 +4783,7 @@ func (c *Compile) setAnalyzeCurrent(updateScopes []*Scope, nextId int) {
 	c.anal.isFirst = true
 }
 
+// updateScopesLastFlag 遍历 updateScopes列表，将每个 Scope对应的流水线算子流的结尾算子的 isLast 属性设置为 true
 func updateScopesLastFlag(updateScopes []*Scope) {
 	for _, s := range updateScopes {
 		if len(s.Instructions) == 0 {

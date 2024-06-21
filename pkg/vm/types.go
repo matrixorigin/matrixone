@@ -113,12 +113,13 @@ const (
 type Instruction struct {
 	// Op specified the operator code of an instruction.
 	Op OpType
-	// Idx specified the analysis information index.
+	// Idx specified the analysis information index. -->  pipeline算子所属的plan Node索引id， 一个PlanNode可以对应多个算子
 	Idx int
 	// Arg contains the operand of this instruction.
 	Arg Operator
 
 	// flag for analyzeInfo record the row information
+	// IsFirst是指逻辑执行计划Node对应的pipeline流水线中第一个算子， IsLast对应的pipeline流水线中最后一个算子
 	IsFirst bool
 	IsLast  bool
 
@@ -264,11 +265,12 @@ func NewCallResult() CallResult {
 }
 
 type OperatorInfo struct {
-	Idx           int
+	Idx           int // pipeline算子所属的plan Node索引id
 	ParallelIdx   int
 	ParallelMajor bool
 	IsFirst       bool
 	IsLast        bool
+	OpStats       *process.OperatorStats
 
 	CnAddr      string
 	OperatorID  int32

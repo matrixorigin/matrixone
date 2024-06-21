@@ -16,7 +16,6 @@ package projection
 
 import (
 	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -63,7 +62,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
-	defer anal.Stop()
+
+	defer func() {
+		anal.Stop()
+		arg.OpStats.UpdateStats(anal.GetAnalyzeInfo())
+	}()
 
 	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() {
 		return result, nil

@@ -67,6 +67,7 @@ func setAnalyzeInfo(ins Instructions, proc *process.Process) {
 			Idx:     ins[i].Idx,
 			IsFirst: ins[i].IsFirst,
 			IsLast:  ins[i].IsLast,
+			OpStats: ins[i].Arg.GetOperatorBase().OpStats,
 
 			CnAddr:      ins[i].CnAddr,
 			OperatorID:  ins[i].OperatorID,

@@ -16,6 +16,7 @@ package process
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -67,6 +68,7 @@ type Analyze interface {
 	Network(*batch.Batch)
 	AddScanTime(t time.Time)
 	AddInsertTime(t time.Time)
+	GetAnalyzeInfo() *AnalyzeInfo
 }
 
 var (
@@ -599,4 +601,84 @@ func (a *AnalyzeInfo) AddSingleParallelTimeConsumed(major bool, parallelIdx int,
 			a.TimeConsumedArrayMinor[parallelIdx] += t
 		}
 	}
+}
+
+// ----------------------------------------------------------------------------------------------------------------------
+
+// OperatorStats 结构体定义
+type OperatorStats struct {
+	OperatorName       string // 算子名称
+	CallCount          int    // 调用次数
+	TotalInputRows     int64  // 总输入行数
+	TotalOutputRows    int64  // 总输出行数
+	TotalInputSize     int64  // 总输入数据大小
+	TotalInputBlocks   int64  // 总输入块数
+	TotalOutputSize    int64  // 总输出数据大小
+	TotalMemorySize    int64  // 总内存使用量
+	TotalDiskIO        int64  // 总磁盘IO
+	TotalS3IOByte      int64  // 总S3IO字节数
+	TotalS3InputCount  int64  // 总S3输入计数
+	TotalS3OutputCount int64  // 总S3输出计数
+	TotalNetworkIO     int64  // 总网络IO
+	TotalScanTime      int64  // 总扫描时间
+	TotalInsertTime    int64  // 总插入时间
+}
+
+// NewOperatorStats 构造函数
+func NewOperatorStats(operatorName string) *OperatorStats {
+	return &OperatorStats{
+		OperatorName: operatorName,
+	}
+}
+
+// UpdateStats 更新统计信息的方法
+func (ps *OperatorStats) UpdateStats(info *AnalyzeInfo) {
+	ps.CallCount++
+	ps.TotalInputRows += info.InputRows
+	ps.TotalOutputRows += info.OutputRows
+	ps.TotalInputSize += info.InputSize
+	ps.TotalInputBlocks += info.InputBlocks
+	ps.TotalOutputSize += info.OutputSize
+	ps.TotalMemorySize += info.MemorySize
+	ps.TotalDiskIO += info.DiskIO
+	ps.TotalS3IOByte += info.S3IOByte
+	ps.TotalS3InputCount += info.S3IOInputCount
+	ps.TotalS3OutputCount += info.S3IOOutputCount
+	ps.TotalNetworkIO += info.NetworkIO
+	ps.TotalScanTime += info.ScanTime
+	ps.TotalInsertTime += info.InsertTime
+}
+
+// String 方法
+func (ps *OperatorStats) String() string {
+	return fmt.Sprintf("Operator Name: %s,"+
+		"Call Count: %d, "+
+		"Total Input Rows: %d, "+
+		"Total Output Rows: %d, "+
+		"Total Input Size: %d bytes, "+
+		"Total Input Blocks: %d, "+
+		"Total Output Size: %d bytes, "+
+		"Total Memory Size: %d bytes, "+
+		"Total Disk IO: %d bytes, "+
+		"Total S3 IO Byte: %d bytes, "+
+		"Total S3 Input Count: %d, "+
+		"Total S3 Output Count: %d, "+
+		"Total Network IO: %d bytes, "+
+		"Total Scan Time: %d ms, "+
+		"Total Insert Time: %d ms ",
+		ps.OperatorName,
+		ps.CallCount,
+		ps.TotalInputRows,
+		ps.TotalOutputRows,
+		ps.TotalInputSize,
+		ps.TotalInputBlocks,
+		ps.TotalOutputSize,
+		ps.TotalMemorySize,
+		ps.TotalDiskIO,
+		ps.TotalS3IOByte,
+		ps.TotalS3InputCount,
+		ps.TotalS3OutputCount,
+		ps.TotalNetworkIO,
+		ps.TotalScanTime,
+		ps.TotalInsertTime)
 }

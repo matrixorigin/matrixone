@@ -66,21 +66,32 @@ func (p *Pipeline) Run(r engine.Reader, topValueMsgTag int32, proc *process.Proc
 		}
 	}
 
-	tableScanOperator := table_scan.Argument{
-		Reader:         r,
-		TopValueMsgTag: topValueMsgTag,
-		Attrs:          p.attrs,
-		TableID:        p.tableID,
-	}
-	p.instructions = append([]vm.Instruction{
-		{
-			Op:      vm.TableScan,
-			Idx:     -1,
-			Arg:     &tableScanOperator,
-			IsFirst: true,
-			IsLast:  false,
-		},
-	}, p.instructions...)
+	/*
+		tableScanOperator := table_scan.Argument{
+			Reader:         r,
+			TopValueMsgTag: topValueMsgTag,
+			Attrs:          p.attrs,
+			TableID:        p.tableID,
+		}
+		tableScanOperator.OpStats = process.NewOperatorStats("table_scan")
+
+		p.instructions = append([]vm.Instruction{
+			{
+				Op:      vm.TableScan,
+				Idx:     -1,
+				Arg:     &tableScanOperator,
+				IsFirst: true,
+				IsLast:  false,
+			},
+		}, p.instructions...)
+	*/
+	//-----------------------------------------------------------------------------------------------------
+	argument := p.instructions[0].Arg.(*table_scan.Argument)
+	argument.Reader = r
+	argument.TopValueMsgTag = topValueMsgTag
+	argument.Attrs = p.attrs
+	argument.TableID = p.tableID
+	//-----------------------------------------------------------------------------------------------------
 
 	if err = vm.Prepare(p.instructions, proc); err != nil {
 		return false, err

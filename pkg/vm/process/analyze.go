@@ -84,12 +84,14 @@ func (a *analyze) Stop() {
 	}
 }
 
+// 建议改名为 RecordMemAlloc
 func (a *analyze) Alloc(size int64) {
 	if a.analInfo != nil {
 		atomic.AddInt64(&a.analInfo.MemorySize, size)
 	}
 }
 
+// 建议改名为 RecordInputBlockNum
 func (a *analyze) InputBlock() {
 	if a.analInfo != nil {
 		atomic.AddInt64(&a.analInfo.InputBlocks, 1)
@@ -158,4 +160,8 @@ func (a *analyze) AddInsertTime(t time.Time) {
 	if a.analInfo != nil {
 		atomic.AddInt64(&a.analInfo.InsertTime, int64(time.Since(t)))
 	}
+}
+
+func (a *analyze) GetAnalyzeInfo() *AnalyzeInfo {
+	return a.analInfo
 }

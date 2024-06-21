@@ -193,9 +193,14 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 	// explain the operator information
 	showInstruction := func(instruction vm.Instruction, mp map[*process.WaitRegister]int) string {
 		id := instruction.Op
+		argument := instruction.Arg
 		name, ok := debugInstructionNames[id]
 		if ok {
-			str := name
+			str := fmt.Sprintf("%s (idx:%v, isFirst:%v, isLast:%v)", name, instruction.Idx, instruction.IsFirst, instruction.IsLast)
+			if argument.GetOperatorBase().OpStats != nil {
+				str += argument.GetOperatorBase().OpStats.String()
+			}
+
 			if id == vm.Connector {
 				var receiver = "unknown"
 				arg := instruction.Arg.(*connector.Argument)

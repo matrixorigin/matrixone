@@ -186,10 +186,10 @@ type scopeContext struct {
 // anaylze information
 type anaylze struct {
 	// curr is the current index of plan
-	curr      int
+	curr      int // 建议将名字修改为currentNodeIdx,  表示在compilePlanScope不断递归迭代过程中当前plan Node
 	isFirst   bool
 	qry       *plan.Query
-	analInfos []*process.AnalyzeInfo
+	analInfos []*process.AnalyzeInfo // The length of `analInfos` is equal to the number of logical plan `Nodes`
 }
 
 func (a *anaylze) S3IOInputCount(idx int, count int64) {
@@ -200,7 +200,7 @@ func (a *anaylze) S3IOOutputCount(idx int, count int64) {
 	atomic.AddInt64(&a.analInfos[idx].S3IOOutputCount, count)
 }
 
-func (a *anaylze) Nodes() []*process.AnalyzeInfo {
+func (a *anaylze) Nodes() []*process.AnalyzeInfo { // 函数名不合理，建议修改为 GetAnalyzeInfo
 	return a.analInfos
 }
 

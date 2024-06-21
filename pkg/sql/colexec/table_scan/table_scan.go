@@ -16,6 +16,7 @@ package table_scan
 
 import (
 	"bytes"
+	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -59,10 +60,15 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		0,
 		nil)
 
+	if arg.TableID == 282829 {
+		fmt.Println("-------------------")
+	}
+
 	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer func() {
 		anal.Stop()
+		arg.OpStats.UpdateStats(anal.GetAnalyzeInfo())
 
 		cost := time.Since(start)
 
@@ -77,13 +83,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}()
 
 	result := vm.NewCallResult()
-	//select {
-	//case <-proc.Ctx.Done():
-	//	result.Batch = nil
-	//	result.Status = vm.ExecStop
-	//	return result, proc.Ctx.Err()
-	//default:
-	//}
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		e = err
 		return vm.CancelResult, err
@@ -139,6 +138,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		bat.Cnt = 1
 		anal.InputBlock()
 		anal.S3IOByte(bat)
+
 		batSize := bat.Size()
 		arg.maxAllocSize = max(arg.maxAllocSize, batSize)
 
