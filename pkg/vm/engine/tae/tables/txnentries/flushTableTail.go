@@ -126,7 +126,7 @@ func NewFlushTableTailEntry(
 func (entry *flushTableTailEntry) addTransferPages() {
 	isTransient := !entry.tableEntry.GetLastestSchemaLocked().HasPK()
 	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
-	pages := make([]*model.TransferHashPage, len(entry.transMappings.Mappings))
+	pages := make([]*model.TransferHashPage, 0, len(entry.transMappings.Mappings))
 	var writer *blockio.BlockWriter
 	writer, _ = blockio.NewBlockWriterNew(entry.rt.Fs.Service, name, 0, nil)
 	for i, mcontainer := range entry.transMappings.Mappings {

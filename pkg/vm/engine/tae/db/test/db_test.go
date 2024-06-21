@@ -18,7 +18,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"math/rand"
+	"os"
+	"path"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -8988,4 +8993,181 @@ func TestVisitTombstone(t *testing.T) {
 	t.Log(tae.Catalog.SimplePPString(3))
 	tae.Restart(context.Background())
 	t.Log(tae.Catalog.SimplePPString(3))
+}
+
+func TestPersistTransferTable(t *testing.T) {
+	ctx := context.Background()
+	ttl := time.Minute
+	table := model.NewTransferTable[*model.TransferHashPage](ttl)
+	defer table.Close()
+	sid := objectio.NewSegmentid()
+
+	id1 := common.ID{BlockID: *objectio.NewBlockid(sid, 1, 0)}
+	id2 := common.ID{BlockID: *objectio.NewBlockid(sid, 2, 0)}
+
+	dir := InitTestEnv(ModuleName, t.Name())
+	dir = path.Join(dir, "/local")
+	c := fileservice.Config{
+		Name:    defines.LocalFileServiceName,
+		Backend: "DISK",
+		DataDir: dir,
+		Cache:   fileservice.DisabledCacheConfig,
+	}
+	service, err := fileservice.NewFileService(ctx, c, nil)
+	assert.Nil(t, err)
+	defer service.Close()
+
+	now := time.Now()
+	params := model.NewTransferHashPageParams(
+		model.WithFs(service),
+		model.WithRd(blockio.NewBlockRead()),
+		model.WithTTL(2*time.Second),
+	)
+	page := model.NewTransferHashPage(&id1, now, false, params)
+	ids := make([]types.Rowid, 10)
+	for i := 0; i < 10; i++ {
+		rowID := *objectio.NewRowid(&id2.BlockID, uint32(i))
+		page.Train(uint32(i), rowID)
+		ids[i] = rowID
+	}
+
+	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+	var writer *blockio.BlockWriter
+	writer, _ = blockio.NewBlockWriterNew(service, name, 0, nil)
+	data := page.Pin().Val.Marshal()
+	ty := types.T_varchar.ToType()
+	v := vector.NewVec(ty)
+	vectorRowCnt := 1
+	err = vector.AppendBytes(v, data, false, mpool.MustNew("test"))
+	if err != nil {
+		return
+	}
+
+	bat := batch.New(true, []string{"mapping"})
+	bat.SetRowCount(vectorRowCnt)
+	bat.Vecs[0] = v
+	_, err = writer.WriteTombstoneBatch(bat)
+	if err != nil {
+		return
+	}
+	var blocks []objectio.BlockObject
+	blocks, _, err = writer.Sync(context.Background())
+	if err != nil {
+		return
+	}
+
+	location := blockio.EncodeLocation(
+		name,
+		blocks[0].GetExtent(),
+		uint32(1),
+		blocks[0].GetID())
+
+	page.SetLocation(location)
+
+	time.Sleep(2 * time.Second)
+	ispersist := page.IsPersist()
+	assert.True(t, ispersist)
+	for i := 0; i < 10; i++ {
+		id, ok := page.Transfer(uint32(i))
+		assert.True(t, ok)
+		assert.Equal(t, ids[i], id)
+	}
+}
+
+func TestClearPersistTransferTable(t *testing.T) {
+	ctx := context.Background()
+	ttl := time.Minute
+	table := model.NewTransferTable[*model.TransferHashPage](ttl)
+	defer table.Close()
+	sid := objectio.NewSegmentid()
+
+	id1 := common.ID{BlockID: *objectio.NewBlockid(sid, 1, 0)}
+	id2 := common.ID{BlockID: *objectio.NewBlockid(sid, 2, 0)}
+
+	dir := InitTestEnv(ModuleName, t.Name())
+	dir = path.Join(dir, "/local")
+	c := fileservice.Config{
+		Name:    defines.LocalFileServiceName,
+		Backend: "DISK",
+		DataDir: dir,
+		Cache:   fileservice.DisabledCacheConfig,
+	}
+	service, err := fileservice.NewFileService(ctx, c, nil)
+	assert.Nil(t, err)
+	defer service.Close()
+
+	now := time.Now()
+	params := model.NewTransferHashPageParams(
+		model.WithFs(service),
+		model.WithRd(blockio.NewBlockRead()),
+		model.WithTTL(time.Second),
+		model.WithDiskTTL(2*time.Second),
+	)
+	page := model.NewTransferHashPage(&id1, now, false, params)
+	ids := make([]types.Rowid, 10)
+	for i := 0; i < 10; i++ {
+		rowID := *objectio.NewRowid(&id2.BlockID, uint32(i))
+		page.Train(uint32(i), rowID)
+		ids[i] = rowID
+	}
+
+	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+	var writer *blockio.BlockWriter
+	writer, _ = blockio.NewBlockWriterNew(service, name, 0, nil)
+	data := page.Pin().Val.Marshal()
+	ty := types.T_varchar.ToType()
+	v := vector.NewVec(ty)
+	vectorRowCnt := 1
+	err = vector.AppendBytes(v, data, false, mpool.MustNew("test"))
+	if err != nil {
+		return
+	}
+
+	bat := batch.New(true, []string{"mapping"})
+	bat.SetRowCount(vectorRowCnt)
+	bat.Vecs[0] = v
+	_, err = writer.WriteTombstoneBatch(bat)
+	if err != nil {
+		return
+	}
+	var blocks []objectio.BlockObject
+	blocks, _, err = writer.Sync(context.Background())
+	if err != nil {
+		return
+	}
+
+	location := blockio.EncodeLocation(
+		name,
+		blocks[0].GetExtent(),
+		uint32(1),
+		blocks[0].GetID())
+
+	page.SetLocation(location)
+
+	time.Sleep(2 * time.Second)
+	assert.True(t, page.IsPersist())
+	for i := 0; i < 10; i++ {
+		_, ok := page.Transfer(uint32(i))
+		assert.False(t, ok)
+	}
+}
+
+func GetDefaultTestPath(module string, name string) string {
+	return filepath.Join("/tmp", module, name)
+}
+
+func MakeDefaultTestPath(module string, name string) string {
+	path := GetDefaultTestPath(module, name)
+	os.MkdirAll(path, os.FileMode(0755))
+	return path
+}
+
+func RemoveDefaultTestPath(module string, name string) {
+	path := GetDefaultTestPath(module, name)
+	os.RemoveAll(path)
+}
+
+func InitTestEnv(module string, name string) string {
+	RemoveDefaultTestPath(module, name)
+	return MakeDefaultTestPath(module, name)
 }

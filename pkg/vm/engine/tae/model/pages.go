@@ -108,12 +108,12 @@ func NewTransferHashPage(id *common.ID, ts time.Time, isTransient bool, params T
 	page.OnZeroCB = page.Close
 
 	go func(page *TransferHashPage) {
-		time.Sleep(10 * time.Second)
+		time.Sleep(params.TTL)
 		page.clearTable()
 	}(page)
 
 	go func(page *TransferHashPage) {
-		time.Sleep(10 * time.Minute)
+		time.Sleep(params.DiskTTL)
 		page.clearPersistTable()
 	}(page)
 
@@ -252,7 +252,7 @@ func (page *TransferHashPage) loadTable() {
 	v2.TransferRowHitCounter.Add(float64(len(page.hashmap)))
 
 	go func(page *TransferHashPage) {
-		time.Sleep(10 * time.Second)
+		time.Sleep(page.params.TTL)
 		page.clearTable()
 	}(page)
 }
@@ -264,4 +264,8 @@ func (page *TransferHashPage) clearPersistTable() {
 	logutil.Infof("[TransferHashPage] clear persist table, objectname: %v", page.loc.Name().String())
 	page.params.Fs.Delete(context.Background(), page.loc.Name().String())
 	page.loc = nil
+}
+
+func (page *TransferHashPage) IsPersist() bool {
+	return page.isPersisted
 }
