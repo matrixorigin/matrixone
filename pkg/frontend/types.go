@@ -389,6 +389,7 @@ type ExecCtx struct {
 	executeParamTypes []byte
 	resper            Responser
 	results           []ExecResult
+	isIssue3482       bool
 }
 
 // outputCallBackFunc is the callback function to send the result to the client.
