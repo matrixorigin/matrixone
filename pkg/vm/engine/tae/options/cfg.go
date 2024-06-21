@@ -47,6 +47,7 @@ type CheckpointCfg struct {
 	GCCheckpointInterval      time.Duration
 	DisableGCCheckpoint       bool
 	ReservedWALEntryCount     uint64
+	StartupLatency            time.Duration
 
 	// only for test
 	// it is used to control the block rows of the checkpoint

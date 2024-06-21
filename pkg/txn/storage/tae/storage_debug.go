@@ -69,7 +69,18 @@ func (s *taeStorage) Debug(ctx context.Context,
 			ReturnStr: "OK",
 		})
 		return resp, err
-
+	case uint32(api.OpCode_OpDisableCheckpoint):
+		_, err := handleRead(ctx, txnMeta, data, s.taeHandler.HandleDisableCheckpoint)
+		if err != nil {
+			resp := protoc.MustMarshal(&api.TNStringResponse{
+				ReturnStr: "Failed",
+			})
+			return resp, err
+		}
+		resp := protoc.MustMarshal(&api.TNStringResponse{
+			ReturnStr: "OK",
+		})
+		return resp, err
 	case uint32(api.OpCode_OpInspect):
 		resp, err := handleRead(ctx, txnMeta, data, s.taeHandler.HandleInspectTN)
 		if err != nil {

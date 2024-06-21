@@ -193,6 +193,8 @@ type runner struct {
 		checkpointBlockRows int
 		checkpointSize      int
 
+		startupLatency time.Duration
+
 		reservedWALEntryCount uint64
 	}
 
@@ -237,6 +239,8 @@ type runner struct {
 
 	onceStart sync.Once
 	onceStop  sync.Once
+
+	openTime time.Time
 }
 
 func NewRunner(
@@ -253,6 +257,7 @@ func NewRunner(
 		source:    source,
 		observers: new(observers),
 		wal:       wal,
+		openTime:  time.Now(),
 	}
 	r.storage.entries = btree.NewBTreeGOptions(func(a, b *CheckpointEntry) bool {
 		return a.end.Less(&b.end)
@@ -762,6 +767,11 @@ func (r *runner) tryScheduleIncrementalCheckpoint(start, end types.TS) {
 
 func (r *runner) tryScheduleCheckpoint(endts types.TS) {
 	if r.disabled.Load() {
+		logutil.Infof("Checkpoint is disable")
+		return
+	}
+	if time.Since(r.openTime) < r.options.startupLatency {
+		logutil.Infof("Checkpoint is disable. TN has been running for %v, startup latency %v", time.Since(r.openTime), r.options.startupLatency)
 		return
 	}
 	entry := r.MaxCheckpoint()
@@ -850,6 +860,9 @@ func (r *runner) fillDefaults() {
 	}
 	if r.options.checkpointSize <= 0 {
 		r.options.checkpointSize = logtail.DefaultCheckpointSize
+	}
+	if r.options.startupLatency <= 0 {
+		r.options.startupLatency = time.Minute * 5
 	}
 }
 
