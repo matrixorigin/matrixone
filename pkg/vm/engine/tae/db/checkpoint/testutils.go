@@ -51,10 +51,12 @@ type TestRunner interface {
 
 // DisableCheckpoint stops generating checkpoint
 func (r *runner) DisableCheckpoint() {
+	logutil.Infof("Checkpoint is Disable")
 	r.disabled.Store(true)
 }
 
 func (r *runner) EnableCheckpoint() {
+	logutil.Infof("Checkpoint is Enable")
 	r.disabled.Store(false)
 }
 

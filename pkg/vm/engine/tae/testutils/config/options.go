@@ -35,6 +35,7 @@ func WithQuickScanAndCKPOpts2(in *options.Options, factor int) (opts *options.Op
 	opts.CheckpointCfg.MinCount = int64(factor)
 	opts.CheckpointCfg.IncrementalInterval *= time.Duration(factor)
 	opts.CheckpointCfg.BlockRows = 10
+	opts.CheckpointCfg.StartupLatency = time.Millisecond
 	opts.Ctx = context.Background()
 	return opts
 }
@@ -54,6 +55,7 @@ func WithQuickScanAndCKPOpts(in *options.Options) (opts *options.Options) {
 	opts.CheckpointCfg.GCCheckpointInterval = time.Millisecond * 10
 	opts.CheckpointCfg.BlockRows = 10
 	opts.CheckpointCfg.GlobalVersionInterval = time.Millisecond * 10
+	opts.CheckpointCfg.StartupLatency = time.Millisecond
 	opts.GCCfg = new(options.GCCfg)
 	opts.GCCfg.ScanGCInterval = time.Millisecond * 10
 	opts.GCCfg.GCTTL = time.Millisecond * 1
@@ -76,6 +78,7 @@ func WithQuickScanAndCKPAndGCOpts(in *options.Options) (opts *options.Options) {
 	opts.CheckpointCfg.IncrementalInterval = time.Millisecond * 20
 	opts.CheckpointCfg.GlobalMinCount = 1
 	opts.CheckpointCfg.BlockRows = 10
+	opts.CheckpointCfg.StartupLatency = time.Millisecond
 
 	opts.GCCfg = new(options.GCCfg)
 	// ScanGCInterval does not need to be too fast, because manual gc will be performed in the case
@@ -100,6 +103,7 @@ func WithOpts(in *options.Options, factor float64) (opts *options.Options) {
 	opts.CheckpointCfg.IncrementalInterval = time.Second * 2 * time.Duration(factor)
 	opts.CheckpointCfg.GlobalMinCount = 10
 	opts.CheckpointCfg.BlockRows = 10
+	opts.CheckpointCfg.StartupLatency = time.Millisecond
 	opts.Ctx = context.Background()
 	return opts
 }

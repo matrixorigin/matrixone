@@ -46,6 +46,7 @@ var (
 	CoreDumpMethod         = "COREDUMP"
 	InterceptCommitMethod  = "INTERCEPTCOMMIT"
 	MergeObjectsMethod     = "MERGEOBJECTS"
+	DisableCKPMethod       = "DISABLECKP"
 
 	GetProtocolVersionMethod = "GETPROTOCOLVERSION"
 	SetProtocolVersionMethod = "SETPROTOCOLVERSION"
@@ -85,6 +86,7 @@ var (
 		CoreDumpMethod:         handleCoreDump,
 		InterceptCommitMethod:  handleInterceptCommit(),
 		MergeObjectsMethod:     handleMerge(),
+		DisableCKPMethod:       handleDisableCheckpoint(),
 
 		GetProtocolVersionMethod: handleGetProtocolVersion,
 		SetProtocolVersionMethod: handleSetProtocolVersion,
