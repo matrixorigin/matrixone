@@ -97,7 +97,7 @@ func (entry *mergeObjectsEntry) prepareTransferPage() {
 	k := 0
 	for _, obj := range entry.droppedObjs {
 		name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
-		var pages []*model.TransferHashPage
+		pages := make([]*model.TransferHashPage, obj.BlockCnt())
 		var writer *blockio.BlockWriter
 		writer, _ = blockio.NewBlockWriterNew(entry.rt.Fs.Service, name, 0, nil)
 		for j := 0; j < obj.BlockCnt(); j++ {
