@@ -107,13 +107,11 @@ func CnServerMessageHandler(
 	if receiver.messageTyp == pipeline.Method_PipelineMessage || receiver.messageTyp == pipeline.Method_PrepareDoneNotifyMessage {
 		// keep listening until connection was closed
 		// to prevent some strange handle order between 'stop sending message' and others. this can help prevent memory leak.
-		// todo: since clientSession is not reused currently, there is no need to do this wait.
-		//  I will optimize this code in the `main branch` in the future.
-		//  we need a new flag like `txnID` as the key value of RecordRunningPipeline, to avoid clientSession maybe used to record content from
-		//  other queries and not being cleared (because Method_StopSending was handled before Method_PipelineMessage).
-		//if err == nil {
-		//	<-receiver.connectionCtx.Done()
-		//}
+		// todo: it is tcp connection now. branch 1.2 will close the tcp, but other branches are not. should be careful.
+		//  other branch should listen to streamCtx.
+		if err == nil {
+			<-receiver.connectionCtx.Done()
+		}
 		colexec.Get().RemoveRunningPipeline(receiver.clientSession, receiver.messageId)
 	}
 	return err
