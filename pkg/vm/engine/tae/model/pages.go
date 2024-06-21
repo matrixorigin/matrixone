@@ -38,8 +38,51 @@ type BlockRead interface {
 }
 
 type TransferHashPageParams struct {
-	Fs fileservice.FileService
-	Rd BlockRead
+	Fs      fileservice.FileService
+	Rd      BlockRead
+	TTL     time.Duration
+	DiskTTL time.Duration
+}
+
+type Option func(*TransferHashPageParams)
+
+func WithFs(fs fileservice.FileService) Option {
+	return func(params *TransferHashPageParams) {
+		params.Fs = fs
+	}
+}
+
+func WithRd(rd BlockRead) Option {
+	return func(params *TransferHashPageParams) {
+		params.Rd = rd
+	}
+}
+
+func WithTTL(ttl time.Duration) Option {
+	return func(params *TransferHashPageParams) {
+		params.TTL = ttl
+	}
+}
+
+func WithDiskTTL(diskTTL time.Duration) Option {
+	return func(params *TransferHashPageParams) {
+		params.DiskTTL = diskTTL
+	}
+}
+
+func NewTransferHashPageParams(opts ...Option) TransferHashPageParams {
+	params := TransferHashPageParams{
+		Fs:      nil,
+		Rd:      nil,
+		TTL:     10 * time.Second,
+		DiskTTL: 10 * time.Minute,
+	}
+
+	for _, opt := range opts {
+		opt(&params)
+	}
+
+	return params
 }
 
 type TransferHashPage struct {

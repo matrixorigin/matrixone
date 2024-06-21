@@ -136,7 +136,11 @@ func (entry *flushTableTailEntry) addTransferPages() {
 		}
 		id := entry.ablksHandles[i].Fingerprint()
 		entry.pageIds = append(entry.pageIds, id)
-		page := model.NewTransferHashPage(id, time.Now(), isTransient, model.TransferHashPageParams{Fs: nil, Rd: nil})
+		params := model.NewTransferHashPageParams(
+			model.WithFs(entry.rt.Fs.Service),
+			model.WithRd(blockio.NewBlockRead()),
+		)
+		page := model.NewTransferHashPage(id, time.Now(), isTransient, params)
 		for srcRow, dst := range m {
 			blkid := objectio.NewBlockidWithObjectID(entry.createdBlkHandles.GetID(), uint16(dst.BlkIdx))
 			page.Train(uint32(srcRow), *objectio.NewRowid(blkid, uint32(dst.RowIdx)))

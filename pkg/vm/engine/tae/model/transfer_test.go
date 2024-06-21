@@ -33,7 +33,8 @@ func TestTransferPage(t *testing.T) {
 		BlockID: *objectio.NewBlockid(sid, 2, 0),
 	}
 
-	memo1 := NewTransferHashPage(&src, time.Now(), false, TransferHashPageParams{Fs: nil, Rd: nil})
+	params := NewTransferHashPageParams()
+	memo1 := NewTransferHashPage(&src, time.Now(), false, params)
 	assert.Zero(t, memo1.RefCount())
 
 	for i := 0; i < 10; i++ {
@@ -47,7 +48,7 @@ func TestTransferPage(t *testing.T) {
 
 	ttl := time.Millisecond * 10
 	now := time.Now()
-	memo2 := NewTransferHashPage(&src, now, false, TransferHashPageParams{Fs: nil, Rd: nil})
+	memo2 := NewTransferHashPage(&src, now, false, params)
 	defer memo2.Close()
 	assert.Zero(t, memo2.RefCount())
 
@@ -77,7 +78,8 @@ func TestTransferTable(t *testing.T) {
 	id2 := common.ID{BlockID: *objectio.NewBlockid(sid, 2, 0)}
 
 	now := time.Now()
-	page1 := NewTransferHashPage(&id1, now, false, TransferHashPageParams{Fs: nil, Rd: nil})
+	params := NewTransferHashPageParams()
+	page1 := NewTransferHashPage(&id1, now, false, params)
 	for i := 0; i < 10; i++ {
 		rowID := *objectio.NewRowid(&id2.BlockID, uint32(i))
 		page1.Train(uint32(i), rowID)
