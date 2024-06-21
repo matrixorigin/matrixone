@@ -274,7 +274,7 @@ func (c *PushClient) TryToSubscribeTable(
 		return nil
 	}
 
-	state, err := c.tryToSubscribe(ctx, dbId, tblId)
+	state, err := c.toSubIfUnsubscribed(ctx, dbId, tblId)
 	if err != nil {
 		return err
 	}
@@ -770,7 +770,7 @@ type SubTableStatus struct {
 	LatestTime time.Time
 }
 
-func (c *PushClient) tryToSubscribe(ctx context.Context, dbId, tblId uint64) (SubscribeState, error) {
+func (c *PushClient) toSubIfUnsubscribed(ctx context.Context, dbId, tblId uint64) (SubscribeState, error) {
 	c.subscribed.mutex.Lock()
 	defer c.subscribed.mutex.Unlock()
 	_, ok := c.subscribed.m[SubTableID{DatabaseID: dbId, TableID: tblId}]
