@@ -213,7 +213,7 @@ func doComQueryInBack(backSes *backSession, execCtx *ExecCtx,
 		getGlobalPu().HAKeeperClient,
 		getGlobalPu().UdfService,
 		getGlobalAic())
-	proc.Id = backSes.getNextProcessId()
+	proc.Base.Id = backSes.getNextProcessId()
 	proc.Base.Lim.Size = getGlobalPu().SV.ProcessLimitationSize
 	proc.Base.Lim.BatchRows = getGlobalPu().SV.ProcessLimitationBatchRows
 	proc.Base.Lim.MaxMsgSize = getGlobalPu().SV.MaxMessageSize

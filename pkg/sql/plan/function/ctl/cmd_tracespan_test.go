@@ -95,7 +95,7 @@ func TestCanHandleSelfCmd(t *testing.T) {
 	require.Nil(t, err)
 
 	a1.proc = new(process.Process)
-	a1.proc.QueryClient = cli
+	a1.proc.Base.QueryClient = cli
 	a1.service = cn
 	a1.parameter = fmt.Sprintf("%s:enable:s3,local:10", uuid)
 
@@ -148,7 +148,7 @@ func TestCanTransferQuery(t *testing.T) {
 	qs1.AddHandleFunc(query.CmdMethod_TraceSpan, mockHandleTraceSpan, false)
 	qs2.AddHandleFunc(query.CmdMethod_TraceSpan, mockHandleTraceSpan, false)
 
-	a1.proc.QueryClient = qt1
+	a1.proc.Base.QueryClient = qt1
 
 	err = qs1.Start()
 	require.Nil(t, err)

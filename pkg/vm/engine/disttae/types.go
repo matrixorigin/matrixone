@@ -576,7 +576,7 @@ func (txn *Transaction) GetSQLCount() uint64 {
 // 2. not first sql
 func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) error {
 	needResetSnapshot := false
-	newTimes := txn.proc.TxnClient.GetSyncLatestCommitTSTimes()
+	newTimes := txn.proc.Base.TxnClient.GetSyncLatestCommitTSTimes()
 	if newTimes > txn.syncCommittedTSCount {
 		txn.syncCommittedTSCount = newTimes
 		needResetSnapshot = true

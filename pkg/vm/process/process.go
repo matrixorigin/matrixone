@@ -18,10 +18,11 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"io"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"

@@ -292,7 +292,7 @@ func (exec *txnExecutor) Exec(
 		exec.s.us,
 		exec.s.aicm,
 	)
-	proc.WaitPolicy = statementOption.WaitPolicy()
+	proc.Base.WaitPolicy = statementOption.WaitPolicy()
 	proc.SetVectorPoolSize(0)
 	proc.Base.SessionInfo.TimeZone = exec.opts.GetTimeZone()
 	proc.Base.SessionInfo.Buf = exec.s.buf

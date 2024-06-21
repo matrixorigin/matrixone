@@ -47,7 +47,7 @@ func TestHandleGetProtocolVersion(t *testing.T) {
 	require.NoError(t, err)
 
 	arguments.proc = new(process.Process)
-	arguments.proc.QueryClient = qt
+	arguments.proc.Base.QueryClient = qt
 	arguments.service = cn
 
 	err = qs.Start()
@@ -76,7 +76,7 @@ func TestHandleSetProtocolVersion(t *testing.T) {
 	require.NoError(t, err)
 	qt, err := qclient.NewQueryClient(id, morpc.Config{})
 	require.NoError(t, err)
-	proc.QueryClient = qt
+	proc.Base.QueryClient = qt
 
 	cases := []struct {
 		service serviceType

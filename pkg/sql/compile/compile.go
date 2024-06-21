@@ -127,7 +127,7 @@ func NewCompile(
 	c.uid = uid
 	c.sql = sql
 	c.proc = proc
-	c.proc.MessageBoard = c.MessageBoard
+	c.proc.Base.MessageBoard = c.MessageBoard
 	c.stmt = stmt
 	c.addr = addr
 	c.isInternal = isInternal
@@ -550,7 +550,7 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 		if !c.canRetry(err) {
 			if c.proc.Base.TxnOperator.Txn().IsRCIsolation() &&
 				moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
-				orphan, e := c.proc.LockService.IsOrphanTxn(
+				orphan, e := c.proc.Base.LockService.IsOrphanTxn(
 					c.proc.Ctx,
 					c.proc.Base.TxnOperator.Txn().ID,
 				)
@@ -989,10 +989,10 @@ func (c *Compile) getCNList() (engine.Nodes, error) {
 	}
 
 	// We should always make sure the current CN is contained in the cn list.
-	if c.proc == nil || c.proc.QueryClient == nil {
+	if c.proc == nil || c.proc.Base.QueryClient == nil {
 		return cnList, nil
 	}
-	cnID := c.proc.QueryClient.ServiceID()
+	cnID := c.proc.Base.QueryClient.ServiceID()
 	for _, node := range cnList {
 		if node.Id == cnID {
 			return cnList, nil
@@ -1829,8 +1829,8 @@ func (c *Compile) constructScopeForExternal(addr string, parallel bool) *Scope {
 	ds.NodeInfo = getEngineNode(c)
 	ds.NodeInfo.Addr = addr
 	ds.Proc = process.NewFromProc(c.proc, c.ctx, 0)
-	c.proc.LoadTag = c.anal.qry.LoadTag
-	ds.Proc.LoadTag = true
+	c.proc.Base.LoadTag = c.anal.qry.LoadTag
+	ds.Proc.Base.LoadTag = true
 	ds.DataSource = &Source{isConst: true}
 	return ds
 }
@@ -1838,7 +1838,7 @@ func (c *Compile) constructScopeForExternal(addr string, parallel bool) *Scope {
 func (c *Compile) constructLoadMergeScope() *Scope {
 	ds := newScope(Merge)
 	ds.Proc = process.NewFromProc(c.proc, c.ctx, 1)
-	ds.Proc.LoadTag = true
+	ds.Proc.Base.LoadTag = true
 	ds.appendInstruction(vm.Instruction{
 		Op:      vm.Merge,
 		Idx:     c.anal.curr,
@@ -3518,7 +3518,7 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 	}
 	rs.Proc = process.NewFromProc(c.proc, c.ctx, cnt)
 	if len(ss) > 0 {
-		rs.Proc.LoadTag = ss[0].Proc.LoadTag
+		rs.Proc.Base.LoadTag = ss[0].Proc.Base.LoadTag
 	}
 	rs.appendInstruction(vm.Instruction{
 		Op:      vm.Merge,
@@ -3931,7 +3931,7 @@ func (c *Compile) initAnalyze(qry *plan.Query) {
 			node.AnalyzeInfo = new(plan.AnalyzeInfo)
 		}
 	}
-	c.proc.AnalInfos = c.anal.analInfos
+	c.proc.Base.AnalInfos = c.anal.analInfos
 }
 
 func (c *Compile) fillAnalyzeInfo() {

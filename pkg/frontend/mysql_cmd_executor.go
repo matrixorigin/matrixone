@@ -2618,7 +2618,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 	proc.CopyVectorPool(ses.proc)
 	proc.CopyValueScanBatch(ses.proc)
-	proc.Id = ses.getNextProcessId()
+	proc.Base.Id = ses.getNextProcessId()
 	proc.Base.Lim.Size = getGlobalPu().SV.ProcessLimitationSize
 	proc.Base.Lim.BatchRows = getGlobalPu().SV.ProcessLimitationBatchRows
 	proc.Base.Lim.MaxMsgSize = getGlobalPu().SV.MaxMessageSize
@@ -2782,9 +2782,9 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		}
 
 		// update UnixTime for new query, which is used for now() / CURRENT_TIMESTAMP
-		proc.UnixTime = time.Now().UnixNano()
+		proc.Base.UnixTime = time.Now().UnixNano()
 		if ses.proc != nil {
-			ses.proc.UnixTime = proc.UnixTime
+			ses.proc.Base.UnixTime = proc.Base.UnixTime
 		}
 		execCtx.stmt = stmt
 		execCtx.isLastStmt = i >= len(cws)-1
