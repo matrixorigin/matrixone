@@ -134,6 +134,7 @@ func NewCompile(
 	c.cnLabel = cnLabel
 	c.startAt = startAt
 	c.disableRetry = false
+	c.cantSaveForPrepare = false
 	if c.proc.TxnOperator != nil {
 		// TODO: The action of updating the WriteOffset logic should be executed in the `func (c *Compile) Run(_ uint64)` method.
 		// However, considering that the delay ranges are not completed yet, the UpdateSnapshotWriteOffset() and
@@ -220,6 +221,7 @@ func (c *Compile) clear() {
 	c.needLockMeta = false
 	c.isInternal = false
 	c.lastAllocID = 0
+	c.cantSaveForPrepare = false
 
 	for k := range c.metaTables {
 		delete(c.metaTables, k)
@@ -340,6 +342,9 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, fill func(*batch.B
 	}
 	if c.shouldReturnCtxErr() {
 		return c.proc.Ctx.Err()
+	}
+	if !c.IsTpQuery() {
+		c.cantSaveForPrepare = true
 	}
 	return nil
 }
@@ -1913,6 +1918,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 			c.proc.Infof(ctx, "compileExternScan cost %v", t)
 		}
 	}()
+	c.cantSaveForPrepare = true
 
 	t := time.Now()
 
@@ -4110,6 +4116,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	}
 
 	if c.determinExpandRanges(n) {
+		c.cantSaveForPrepare = true
 		db, err = c.e.Database(ctx, n.ObjRef.SchemaName, txnOp)
 		if err != nil {
 			return nil, nil, nil, err
