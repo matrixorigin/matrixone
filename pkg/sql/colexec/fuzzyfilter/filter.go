@@ -210,6 +210,8 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 				// send collisionKeys to output operator to run background SQL
 				ctr.rbat.SetRowCount(ctr.rbat.Vecs[0].Length())
+				arg.Callback(ctr.rbat)
+
 				result.Batch = ctr.rbat
 				result.Status = vm.ExecStop
 				ctr.state = End
