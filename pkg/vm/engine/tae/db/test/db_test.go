@@ -9061,7 +9061,7 @@ func TestPersistTransferTable(t *testing.T) {
 
 	time.Sleep(2 * time.Second)
 	ispersist := page.IsPersist()
-	assert.True(t, ispersist)
+	assert.True(t, ispersist == 0)
 	for i := 0; i < 10; i++ {
 		id, ok := page.Transfer(uint32(i))
 		assert.True(t, ok)

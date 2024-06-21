@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -93,7 +94,7 @@ type TransferHashPage struct {
 	loc         objectio.Location
 	params      TransferHashPageParams
 	isTransient bool
-	isPersisted bool
+	isPersisted int32
 }
 
 func NewTransferHashPage(id *common.ID, ts time.Time, isTransient bool, params TransferHashPageParams) *TransferHashPage {
@@ -103,7 +104,7 @@ func NewTransferHashPage(id *common.ID, ts time.Time, isTransient bool, params T
 		hashmap:     make(map[uint32]types.Rowid),
 		params:      params,
 		isTransient: isTransient,
-		isPersisted: false,
+		isPersisted: 0,
 	}
 	page.OnZeroCB = page.Close
 
@@ -161,12 +162,11 @@ func (page *TransferHashPage) Train(from uint32, to types.Rowid) {
 }
 
 func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) {
-	flag := page.isPersisted
-	if flag && page.loc == nil {
+	if atomic.LoadInt32(&page.isPersisted) == 1 && page.loc == nil {
 		logutil.Infof("[TransferHashPage] persist table is cleared")
 		return types.Rowid{}, false
 	}
-	if page.isPersisted {
+	if atomic.LoadInt32(&page.isPersisted) == 1 {
 		diskStart := time.Now()
 		page.loadTable()
 		v2.TransferDiskHitCounter.Inc()
@@ -232,7 +232,7 @@ func (page *TransferHashPage) SetLocation(location objectio.Location) {
 func (page *TransferHashPage) clearTable() {
 	logutil.Infof("[TransferHashPage] clear hash table")
 	clear(page.hashmap)
-	page.isPersisted = true
+	atomic.StoreInt32(&page.isPersisted, 1)
 }
 
 func (page *TransferHashPage) loadTable() {
@@ -240,21 +240,22 @@ func (page *TransferHashPage) loadTable() {
 	if page.loc == nil {
 		return
 	}
-	page.isPersisted = false
 
 	var bat *batch.Batch
 	var release func()
 	bat, release, err := page.params.Rd.LoadTableByBlock(page.loc, page.params.Fs)
+	defer release()
 	if err != nil {
 		return
 	}
 	err = page.Unmarshal(bat.Vecs[0].GetBytesAt(0))
 	if err != nil {
-		release()
 		return
 	}
 
 	v2.TransferRowHitCounter.Add(float64(len(page.hashmap)))
+
+	atomic.StoreInt32(&page.isPersisted, 1)
 
 	go func(page *TransferHashPage) {
 		time.Sleep(page.params.TTL)
@@ -271,6 +272,6 @@ func (page *TransferHashPage) clearPersistTable() {
 	page.loc = nil
 }
 
-func (page *TransferHashPage) IsPersist() bool {
-	return page.isPersisted
+func (page *TransferHashPage) IsPersist() int32 {
+	return atomic.LoadInt32(&page.isPersisted)
 }
