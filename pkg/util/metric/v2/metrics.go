@@ -187,6 +187,7 @@ func initFrontendMetrics() {
 
 func initPipelineMetrics() {
 	registry.MustRegister(PipelineServerDurationHistogram)
+	registry.MustRegister(pipelineStreamCounter)
 }
 
 func getDurationBuckets() []float64 {
