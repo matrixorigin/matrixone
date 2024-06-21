@@ -20,7 +20,9 @@ import (
 
 type CStrParts [4]*CStr
 type CStr struct {
+	// user origin input
 	o string
+	// use for compare
 	c string
 	// quote bool
 }
@@ -33,10 +35,6 @@ func NewCStr(str string, lower int64) *CStr {
 	}
 	cs.c = strings.ToLower(cs.o)
 	return cs
-}
-
-func (cs *CStr) ToLower() string {
-	return strings.ToLower(cs.o)
 }
 
 func (cs *CStr) Origin() string {
