@@ -76,6 +76,7 @@ type BasePKFilter struct {
 	op    int
 	lb    []byte
 	ub    []byte
+	vec   any
 	oid   types.T
 }
 
@@ -95,8 +96,8 @@ func (b *BasePKFilter) String() string {
 		function.PREFIX_IN:      "prefix_in",
 		function.PREFIX_BETWEEN: "prefix_between",
 	}
-	return fmt.Sprintf("valid = %v, op = %s, lb = %v, ub = %v, oid = %s",
-		b.valid, name[b.op], b.lb, b.ub, b.oid.String())
+	return fmt.Sprintf("valid = %v, op = %s, lb = %v, ub = %v, vec.type=%T, oid = %s",
+		b.valid, name[b.op], b.lb, b.ub, b.vec, b.oid.String())
 }
 
 func evalValue(exprImpl *plan.Expr_F, tblDef *plan.TableDef, isVec bool, pkName string, proc *process.Process) (
@@ -136,13 +137,196 @@ func evalValue(exprImpl *plan.Expr_F, tblDef *plan.TableDef, isVec bool, pkName 
 	return true, types.T(tblDef.Cols[colPos].Typ.Id), vals
 }
 
+func mergeBaseFilterInKind(left, right BasePKFilter, isOR bool, proc *process.Process) (ret BasePKFilter) {
+	var ok bool
+	var va, vb *vector.Vector
+	ret.vec = vector.NewVec(left.oid.ToType())
+
+	if va, ok = left.vec.(*vector.Vector); !ok {
+		va = vector.NewVec(types.T_any.ToType())
+		va.UnmarshalBinary(left.vec.([]byte))
+	}
+
+	if vb, ok = right.vec.(*vector.Vector); !ok {
+		vb = vector.NewVec(types.T_any.ToType())
+		vb.UnmarshalBinary(right.vec.([]byte))
+	}
+
+	switch va.GetType().Oid {
+	case types.T_int8:
+		a := vector.MustFixedCol[int8](va)
+		b := vector.MustFixedCol[int8](vb)
+		if isOR {
+			vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y int8) int { return int(x - y) })
+		} else {
+			vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y int8) int { return int(x - y) })
+		}
+	case types.T_int16:
+		a := vector.MustFixedCol[int16](va)
+		b := vector.MustFixedCol[int16](vb)
+		if isOR {
+			vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y int16) int { return int(x - y) })
+		} else {
+			vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y int16) int { return int(x - y) })
+		}
+	case types.T_int32:
+		a := vector.MustFixedCol[int32](va)
+		b := vector.MustFixedCol[int32](vb)
+		if isOR {
+			vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y int32) int { return int(x - y) })
+		} else {
+			vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y int32) int { return int(x - y) })
+		}
+	case types.T_int64:
+		a := vector.MustFixedCol[int64](va)
+		b := vector.MustFixedCol[int64](vb)
+		if isOR {
+			vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y int64) int { return int(x - y) })
+		} else {
+			vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y int64) int { return int(x - y) })
+		}
+	case types.T_float32:
+		a := vector.MustFixedCol[float32](va)
+		b := vector.MustFixedCol[float32](vb)
+		if isOR {
+			vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y float32) int { return int(x - y) })
+		} else {
+			vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y float32) int { return int(x - y) })
+		}
+	case types.T_float64:
+		a := vector.MustFixedCol[float64](va)
+		b := vector.MustFixedCol[float64](vb)
+		if isOR {
+			vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y float64) int { return int(x - y) })
+		} else {
+			vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y float64) int { return int(x - y) })
+		}
+	case types.T_uint8:
+		a := vector.MustFixedCol[uint8](va)
+		b := vector.MustFixedCol[uint8](vb)
+		if isOR {
+			vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y uint8) int { return int(x - y) })
+		} else {
+			vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y uint8) int { return int(x - y) })
+		}
+	case types.T_uint16:
+		a := vector.MustFixedCol[uint16](va)
+		b := vector.MustFixedCol[uint16](vb)
+		if isOR {
+			vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y uint16) int { return int(x - y) })
+		} else {
+			vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y uint16) int { return int(x - y) })
+		}
+	case types.T_uint32:
+		a := vector.MustFixedCol[uint32](va)
+		b := vector.MustFixedCol[uint32](vb)
+		if isOR {
+			vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y uint32) int { return int(x - y) })
+		} else {
+			vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y uint32) int { return int(x - y) })
+		}
+	case types.T_uint64:
+		a := vector.MustFixedCol[uint64](va)
+		b := vector.MustFixedCol[uint64](vb)
+		if isOR {
+			vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y uint64) int { return int(x - y) })
+		} else {
+			vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y uint64) int { return int(x - y) })
+		}
+	case types.T_date:
+		a := vector.MustFixedCol[types.Date](va)
+		b := vector.MustFixedCol[types.Date](vb)
+		if isOR {
+			vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y types.Date) int { return int(x - y) })
+		} else {
+			vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y types.Date) int { return int(x - y) })
+		}
+	case types.T_time:
+		a := vector.MustFixedCol[types.Time](va)
+		b := vector.MustFixedCol[types.Time](vb)
+		if isOR {
+			vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y types.Time) int { return int(x - y) })
+		} else {
+			vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y types.Time) int { return int(x - y) })
+		}
+	case types.T_datetime:
+		a := vector.MustFixedCol[types.Datetime](va)
+		b := vector.MustFixedCol[types.Datetime](vb)
+		if isOR {
+			vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y types.Datetime) int { return int(x - y) })
+		} else {
+			vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y types.Datetime) int { return int(x - y) })
+		}
+	case types.T_timestamp:
+		a := vector.MustFixedCol[types.Timestamp](va)
+		b := vector.MustFixedCol[types.Timestamp](vb)
+		if isOR {
+			vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y types.Timestamp) int { return int(x - y) })
+		} else {
+			vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y types.Timestamp) int { return int(x - y) })
+		}
+	case types.T_decimal64:
+		a := vector.MustFixedCol[types.Decimal64](va)
+		b := vector.MustFixedCol[types.Decimal64](vb)
+		if isOR {
+			vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y types.Decimal64) int { return int(x - y) })
+		} else {
+			vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y types.Decimal64) int { return int(x - y) })
+		}
+	case types.T_decimal128:
+		a := vector.MustFixedCol[types.Decimal128](va)
+		b := vector.MustFixedCol[types.Decimal128](vb)
+		if isOR {
+			vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y types.Decimal128) int { return types.CompareDecimal128(x, y) })
+		} else {
+			vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y types.Decimal128) int { return types.CompareDecimal128(x, y) })
+		}
+
+	case types.T_varchar, types.T_char, types.T_json, types.T_binary, types.T_text:
+		if isOR {
+			vector.Union2VectorValen(va, vb, ret.vec.(*vector.Vector), proc.Mp())
+		} else {
+			vector.Intersection2VectorVarlen(va, vb, ret.vec.(*vector.Vector), proc.Mp())
+		}
+
+	case types.T_enum:
+		a := vector.MustFixedCol[types.Enum](va)
+		b := vector.MustFixedCol[types.Enum](vb)
+		if isOR {
+			vector.Union2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y types.Enum) int { return int(x - y) })
+		} else {
+			vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y types.Enum) int { return int(x - y) })
+		}
+	default:
+		return BasePKFilter{}
+		//panic(basePKFilter.oid.String())
+	}
+
+	ret.valid = true
+	ret.op = left.op
+	ret.oid = left.oid
+
+	return ret
+}
+
 // left op in (">", ">=", "=", "<", "<="), right op in (">", ">=", "=", "<", "<=")
 // left op AND right op
 // left op OR right op
-func mergeFilters(left, right BasePKFilter, connector int) (finalFilter BasePKFilter) {
+func mergeFilters(left, right BasePKFilter, connector int, proc *process.Process) (finalFilter BasePKFilter) {
+	defer func() {
+		finalFilter.oid = left.oid
+	}()
+
 	switch connector {
 	case function.AND:
 		switch left.op {
+		case function.IN:
+			switch right.op {
+			case function.IN:
+				// a in (...) and a in (...) and a in (...) and ...
+				finalFilter = mergeBaseFilterInKind(left, right, false, proc)
+			}
+
 		case function.GREAT_EQUAL:
 			switch right.op {
 			case function.GREAT_EQUAL, function.GREAT_THAN:
@@ -306,6 +490,13 @@ func mergeFilters(left, right BasePKFilter, connector int) (finalFilter BasePKFi
 
 	case function.OR:
 		switch left.op {
+		case function.IN:
+			switch right.op {
+			case function.IN:
+				// a in (...) and a in (...)
+				finalFilter = mergeBaseFilterInKind(left, right, true, proc)
+			}
+
 		case function.GREAT_EQUAL:
 			switch right.op {
 			case function.GREAT_EQUAL, function.GREAT_THAN:
@@ -497,26 +688,76 @@ func constructBasePKFilter(expr *plan.Expr, tblDef *plan.TableDef, proc *process
 	case *plan.Expr_F:
 		switch name := exprImpl.F.Func.ObjName; name {
 		case "and":
-			leftFilter := constructBasePKFilter(exprImpl.F.Args[0], tblDef, proc)
-			rightFilter := constructBasePKFilter(exprImpl.F.Args[1], tblDef, proc)
+			var filters []BasePKFilter
+			for idx := range exprImpl.F.Args {
+				ff := constructBasePKFilter(exprImpl.F.Args[idx], tblDef, proc)
+				if ff.valid {
+					filters = append(filters, ff)
+				}
+			}
 
-			if !leftFilter.valid || !rightFilter.valid {
+			if len(filters) == 0 {
 				return BasePKFilter{}
 			}
 
-			filter = mergeFilters(leftFilter, rightFilter, function.AND)
-			filter.oid = leftFilter.oid
+			for idx := 0; idx < len(filters)-1; {
+				f1 := filters[idx]
+				f2 := filters[idx+1]
+				ff := mergeFilters(f1, f2, function.AND, proc)
+
+				if !ff.valid {
+					return BasePKFilter{}
+				}
+
+				idx++
+				filters[idx] = ff
+			}
+
+			for idx := 0; idx < len(filters)-1; idx++ {
+				if vec, ok := filters[idx].vec.(*vector.Vector); ok {
+					vec.Free(proc.Mp())
+				}
+			}
+
+			ret := filters[len(filters)-1]
+			return ret
 
 		case "or":
-			leftFilter := constructBasePKFilter(exprImpl.F.Args[0], tblDef, proc)
-			rightFilter := constructBasePKFilter(exprImpl.F.Args[1], tblDef, proc)
+			var filters []BasePKFilter
+			for idx := range exprImpl.F.Args {
+				ff := constructBasePKFilter(exprImpl.F.Args[idx], tblDef, proc)
+				if !ff.valid {
+					return BasePKFilter{}
+				}
 
-			if !leftFilter.valid || !rightFilter.valid {
+				filters = append(filters, ff)
+			}
+
+			if len(filters) == 0 {
 				return BasePKFilter{}
 			}
 
-			filter = mergeFilters(leftFilter, rightFilter, function.OR)
-			filter.oid = leftFilter.oid
+			for idx := 0; idx < len(filters)-1; {
+				f1 := filters[idx]
+				f2 := filters[idx+1]
+				ff := mergeFilters(f1, f2, function.OR, proc)
+
+				if !ff.valid {
+					return BasePKFilter{}
+				}
+
+				idx++
+				filters[idx] = ff
+			}
+
+			for idx := 0; idx < len(filters)-1; idx++ {
+				if vec, ok := filters[idx].vec.(*vector.Vector); ok {
+					vec.Free(proc.Mp())
+				}
+			}
+
+			ret := filters[len(filters)-1]
+			return ret
 
 		case ">=":
 			//a >= ?
@@ -590,7 +831,7 @@ func constructBasePKFilter(expr *plan.Expr, tblDef *plan.TableDef, proc *process
 			}
 			filter.valid = true
 			filter.op = function.IN
-			filter.lb = vals[0]
+			filter.vec = vals[0]
 			filter.oid = oid
 
 		case "prefix_in":
@@ -600,7 +841,7 @@ func constructBasePKFilter(expr *plan.Expr, tblDef *plan.TableDef, proc *process
 			}
 			filter.valid = true
 			filter.op = function.PREFIX_IN
-			filter.lb = vals[0]
+			filter.vec = vals[0]
 			filter.oid = oid
 
 		case "between":
@@ -662,103 +903,105 @@ func constructInMemPKFilter(
 	put := packerPool.Get(&packer)
 	defer put.Put()
 
-	switch basePKFilter.oid {
-	case types.T_int8:
-		lbVal = types.DecodeInt8(basePKFilter.lb)
-		if len(basePKFilter.ub) > 0 {
-			ubVal = types.DecodeInt8(basePKFilter.ub)
+	if basePKFilter.op != function.IN && basePKFilter.op != function.PREFIX_IN {
+		switch basePKFilter.oid {
+		case types.T_int8:
+			lbVal = types.DecodeInt8(basePKFilter.lb)
+			if len(basePKFilter.ub) > 0 {
+				ubVal = types.DecodeInt8(basePKFilter.ub)
+			}
+		case types.T_int16:
+			lbVal = types.DecodeInt16(basePKFilter.lb)
+			if len(basePKFilter.ub) > 0 {
+				ubVal = types.DecodeInt16(basePKFilter.ub)
+			}
+		case types.T_int32:
+			lbVal = types.DecodeInt32(basePKFilter.lb)
+			if len(basePKFilter.ub) > 0 {
+				ubVal = types.DecodeInt32(basePKFilter.ub)
+			}
+		case types.T_int64:
+			lbVal = types.DecodeInt64(basePKFilter.lb)
+			if len(basePKFilter.ub) > 0 {
+				ubVal = types.DecodeInt64(basePKFilter.ub)
+			}
+		case types.T_float32:
+			lbVal = types.DecodeFloat32(basePKFilter.lb)
+			if len(basePKFilter.ub) > 0 {
+				ubVal = types.DecodeFloat32(basePKFilter.ub)
+			}
+		case types.T_float64:
+			lbVal = types.DecodeFloat64(basePKFilter.lb)
+			if len(basePKFilter.ub) > 0 {
+				ubVal = types.DecodeFloat64(basePKFilter.ub)
+			}
+		case types.T_uint8:
+			lbVal = types.DecodeUint8(basePKFilter.lb)
+			if len(basePKFilter.ub) > 0 {
+				ubVal = types.DecodeUint8(basePKFilter.ub)
+			}
+		case types.T_uint16:
+			lbVal = types.DecodeUint16(basePKFilter.lb)
+			if len(basePKFilter.ub) > 0 {
+				ubVal = types.DecodeUint16(basePKFilter.ub)
+			}
+		case types.T_uint32:
+			lbVal = types.DecodeUint32(basePKFilter.lb)
+			if len(basePKFilter.ub) > 0 {
+				ubVal = types.DecodeUint32(basePKFilter.ub)
+			}
+		case types.T_uint64:
+			lbVal = types.DecodeUint64(basePKFilter.lb)
+			if len(basePKFilter.ub) > 0 {
+				ubVal = types.DecodeUint64(basePKFilter.ub)
+			}
+		case types.T_date:
+			lbVal = types.DecodeDate(basePKFilter.lb)
+			if len(basePKFilter.ub) > 0 {
+				ubVal = types.DecodeDate(basePKFilter.ub)
+			}
+		case types.T_time:
+			lbVal = types.DecodeTime(basePKFilter.lb)
+			if len(basePKFilter.ub) > 0 {
+				ubVal = types.DecodeTime(basePKFilter.ub)
+			}
+		case types.T_datetime:
+			lbVal = types.DecodeDatetime(basePKFilter.lb)
+			if len(basePKFilter.ub) > 0 {
+				ubVal = types.DecodeDatetime(basePKFilter.ub)
+			}
+		case types.T_timestamp:
+			lbVal = types.DecodeTimestamp(basePKFilter.lb)
+			if len(basePKFilter.ub) > 0 {
+				ubVal = types.DecodeTimestamp(basePKFilter.ub)
+			}
+		case types.T_decimal64:
+			lbVal = types.DecodeDecimal64(basePKFilter.lb)
+			if len(basePKFilter.ub) > 0 {
+				ubVal = types.DecodeDecimal64(basePKFilter.ub)
+			}
+		case types.T_decimal128:
+			lbVal = types.DecodeDecimal128(basePKFilter.lb)
+			if len(basePKFilter.ub) > 0 {
+				ubVal = types.DecodeDecimal128(basePKFilter.ub)
+			}
+		case types.T_varchar, types.T_char:
+			lbVal = basePKFilter.lb
+			ubVal = basePKFilter.ub
+		case types.T_json:
+			lbVal = types.DecodeJson(basePKFilter.lb)
+			if len(basePKFilter.ub) > 0 {
+				ubVal = types.DecodeJson(basePKFilter.ub)
+			}
+		case types.T_enum:
+			lbVal = types.DecodeEnum(basePKFilter.lb)
+			if len(basePKFilter.ub) > 0 {
+				ubVal = types.DecodeEnum(basePKFilter.ub)
+			}
+		default:
+			return
+			//panic(basePKFilter.oid.String())
 		}
-	case types.T_int16:
-		lbVal = types.DecodeInt16(basePKFilter.lb)
-		if len(basePKFilter.ub) > 0 {
-			ubVal = types.DecodeInt16(basePKFilter.ub)
-		}
-	case types.T_int32:
-		lbVal = types.DecodeInt32(basePKFilter.lb)
-		if len(basePKFilter.ub) > 0 {
-			ubVal = types.DecodeInt32(basePKFilter.ub)
-		}
-	case types.T_int64:
-		lbVal = types.DecodeInt64(basePKFilter.lb)
-		if len(basePKFilter.ub) > 0 {
-			ubVal = types.DecodeInt64(basePKFilter.ub)
-		}
-	case types.T_float32:
-		lbVal = types.DecodeFloat32(basePKFilter.lb)
-		if len(basePKFilter.ub) > 0 {
-			ubVal = types.DecodeFloat32(basePKFilter.ub)
-		}
-	case types.T_float64:
-		lbVal = types.DecodeFloat64(basePKFilter.lb)
-		if len(basePKFilter.ub) > 0 {
-			ubVal = types.DecodeFloat64(basePKFilter.ub)
-		}
-	case types.T_uint8:
-		lbVal = types.DecodeUint8(basePKFilter.lb)
-		if len(basePKFilter.ub) > 0 {
-			ubVal = types.DecodeUint8(basePKFilter.ub)
-		}
-	case types.T_uint16:
-		lbVal = types.DecodeUint16(basePKFilter.lb)
-		if len(basePKFilter.ub) > 0 {
-			ubVal = types.DecodeUint16(basePKFilter.ub)
-		}
-	case types.T_uint32:
-		lbVal = types.DecodeUint32(basePKFilter.lb)
-		if len(basePKFilter.ub) > 0 {
-			ubVal = types.DecodeUint32(basePKFilter.ub)
-		}
-	case types.T_uint64:
-		lbVal = types.DecodeUint64(basePKFilter.lb)
-		if len(basePKFilter.ub) > 0 {
-			ubVal = types.DecodeUint64(basePKFilter.ub)
-		}
-	case types.T_date:
-		lbVal = types.DecodeDate(basePKFilter.lb)
-		if len(basePKFilter.ub) > 0 {
-			ubVal = types.DecodeDate(basePKFilter.ub)
-		}
-	case types.T_time:
-		lbVal = types.DecodeTime(basePKFilter.lb)
-		if len(basePKFilter.ub) > 0 {
-			ubVal = types.DecodeTime(basePKFilter.ub)
-		}
-	case types.T_datetime:
-		lbVal = types.DecodeDatetime(basePKFilter.lb)
-		if len(basePKFilter.ub) > 0 {
-			ubVal = types.DecodeDatetime(basePKFilter.ub)
-		}
-	case types.T_timestamp:
-		lbVal = types.DecodeTimestamp(basePKFilter.lb)
-		if len(basePKFilter.ub) > 0 {
-			ubVal = types.DecodeTimestamp(basePKFilter.ub)
-		}
-	case types.T_decimal64:
-		lbVal = types.DecodeDecimal64(basePKFilter.lb)
-		if len(basePKFilter.ub) > 0 {
-			ubVal = types.DecodeDecimal64(basePKFilter.ub)
-		}
-	case types.T_decimal128:
-		lbVal = types.DecodeDecimal128(basePKFilter.lb)
-		if len(basePKFilter.ub) > 0 {
-			ubVal = types.DecodeDecimal128(basePKFilter.ub)
-		}
-	case types.T_varchar, types.T_char:
-		lbVal = basePKFilter.lb
-		ubVal = basePKFilter.ub
-	case types.T_json:
-		lbVal = types.DecodeJson(basePKFilter.lb)
-		if len(basePKFilter.ub) > 0 {
-			ubVal = types.DecodeJson(basePKFilter.ub)
-		}
-	case types.T_enum:
-		lbVal = types.DecodeEnum(basePKFilter.lb)
-		if len(basePKFilter.ub) > 0 {
-			ubVal = types.DecodeEnum(basePKFilter.ub)
-		}
-	default:
-		return
-		//panic(basePKFilter.oid.String())
 	}
 
 	switch basePKFilter.op {
@@ -776,9 +1019,14 @@ func constructInMemPKFilter(
 		inMemPKFilter.SetFullData(basePKFilter.op, false, packed...)
 
 	case function.IN, function.PREFIX_IN:
-		vec := vector.NewVec(types.T_any.ToType())
-		vec.UnmarshalBinary(basePKFilter.lb)
-		packed = logtailreplay.EncodePrimaryKeyVector(vec, packer)
+		if vec, ok := basePKFilter.vec.(*vector.Vector); ok {
+			packed = logtailreplay.EncodePrimaryKeyVector(vec, packer)
+		} else {
+			vec := vector.NewVec(types.T_any.ToType())
+			vec.UnmarshalBinary(basePKFilter.vec.([]byte))
+			packed = logtailreplay.EncodePrimaryKeyVector(vec, packer)
+		}
+
 		if basePKFilter.op == function.PREFIX_IN {
 			for x := range packed {
 				packed[x] = packed[x][0 : len(packed[x])-1]
@@ -1434,8 +1682,12 @@ func constructBlockReadPKFilter(pkName string, basePKFilter BasePKFilter) blocki
 		unSortedSearchFunc = vector.LinearCollectOffsetsByPrefixBetweenFactory(basePKFilter.lb, basePKFilter.ub)
 
 	case function.IN:
-		vec := vector.NewVec(types.T_any.ToType())
-		vec.UnmarshalBinary(basePKFilter.lb)
+		var ok bool
+		var vec *vector.Vector
+		if vec, ok = basePKFilter.vec.(*vector.Vector); !ok {
+			vec = vector.NewVec(types.T_any.ToType())
+			vec.UnmarshalBinary(basePKFilter.vec.([]byte))
+		}
 
 		switch vec.GetType().Oid {
 		case types.T_bit:
@@ -1499,8 +1751,13 @@ func constructBlockReadPKFilter(pkName string, basePKFilter BasePKFilter) blocki
 		}
 
 	case function.PREFIX_IN:
-		vec := vector.NewVec(types.T_any.ToType())
-		vec.UnmarshalBinary(basePKFilter.lb)
+		var ok bool
+		var vec *vector.Vector
+		if vec, ok = basePKFilter.vec.(*vector.Vector); !ok {
+			vec = vector.NewVec(types.T_any.ToType())
+			vec.UnmarshalBinary(basePKFilter.vec.([]byte))
+		}
+
 		sortedSearchFunc = vector.CollectOffsetsByPrefixInFactory(vec)
 		unSortedSearchFunc = vector.LinearCollectOffsetsByPrefixInFactory(vec)
 

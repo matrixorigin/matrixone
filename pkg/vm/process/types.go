@@ -651,8 +651,7 @@ func (ps *OperatorStats) UpdateStats(info *AnalyzeInfo) {
 
 // String 方法
 func (ps *OperatorStats) String() string {
-	return fmt.Sprintf("Operator Name: %s,"+
-		"Call Count: %d, "+
+	return fmt.Sprintf(" Call Count: %d, "+
 		"Total Input Rows: %d, "+
 		"Total Output Rows: %d, "+
 		"Total Input Size: %d bytes, "+
@@ -664,9 +663,7 @@ func (ps *OperatorStats) String() string {
 		"Total S3 Input Count: %d, "+
 		"Total S3 Output Count: %d, "+
 		"Total Network IO: %d bytes, "+
-		"Total Scan Time: %d ms, "+
-		"Total Insert Time: %d ms ",
-		ps.OperatorName,
+		"Total Scan Time: %d ms",
 		ps.CallCount,
 		ps.TotalInputRows,
 		ps.TotalOutputRows,
@@ -679,6 +676,5 @@ func (ps *OperatorStats) String() string {
 		ps.TotalS3InputCount,
 		ps.TotalS3OutputCount,
 		ps.TotalNetworkIO,
-		ps.TotalScanTime,
-		ps.TotalInsertTime)
+		ps.TotalScanTime)
 }

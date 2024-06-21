@@ -83,14 +83,6 @@ func New(
 	}
 }
 
-func NewWithAnalyze(p *Process, ctx context.Context, regNumber int, anals []*AnalyzeInfo) *Process {
-	proc := NewFromProc(p, ctx, regNumber)
-	proc.AnalInfos = make([]*AnalyzeInfo, len(anals))
-	// copy 函数只会拷贝指针，而不会拷贝指针所指向的内容。这意味着 proc.AnalInfos 和传入的 anals 将共享相同的 AnalyzeInfo 实例，这可能会导致数据不一致的问题。
-	copy(proc.AnalInfos, anals)
-	return proc
-}
-
 // NewFromProc create a new Process based on another process.
 func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	proc := new(Process)

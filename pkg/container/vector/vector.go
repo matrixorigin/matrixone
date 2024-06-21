@@ -23,7 +23,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
@@ -446,7 +445,7 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	// }
 	// v.FreeMsg = append(v.FreeMsg, time.Now().String()+" : typ="+v.typ.DescString()+" "+string(debug.Stack()))
 
-	reuse.Free[Vector](v, nil)
+	//reuse.Free[Vector](v, nil)
 }
 
 func (v *Vector) MarshalBinary() ([]byte, error) {
@@ -4176,4 +4175,166 @@ func BuildVarlenaFromArray[T types.RealNumbers](vec *Vector, v *types.Varlena, a
 		return nil
 	}
 	return BuildVarlenaNoInline(vec, v, bs, m)
+}
+
+// Intersection2VectorOrdered does a ∩ b ==> ret, keeps all item unique and sorted
+// it assumes that a and b all sorted already
+func Intersection2VectorOrdered[T types.OrderedT | types.Decimal128](a, b []T, ret *Vector, mp *mpool.MPool, cmp func(x, y T) int) {
+	var long, short []T
+	if len(a) < len(b) {
+		long = b
+		short = a
+	} else {
+		long = a
+		short = b
+	}
+	var lenLong, lenShort = len(long), len(short)
+
+	ret.PreExtend(lenLong+lenShort, mp)
+
+	for i := range short {
+		idx := sort.Search(lenLong, func(j int) bool {
+			return cmp(long[j], short[i]) >= 0
+		})
+		if idx >= lenLong {
+			break
+		}
+
+		if cmp(short[i], long[idx]) == 0 {
+			AppendFixed(ret, short[i], false, mp)
+		}
+
+		long = long[idx:]
+	}
+}
+
+// Union2VectorOrdered does a ∪ b ==> ret, keeps all item unique and sorted
+// it assumes that a and b all sorted already
+func Union2VectorOrdered[T types.OrderedT | types.Decimal128](a, b []T, ret *Vector, mp *mpool.MPool, cmp func(x, y T) int) {
+	var i, j int
+	var prevVal T
+	var lenA, lenB = len(a), len(b)
+
+	ret.PreExtend(lenA+lenB, mp)
+
+	for i < lenA && j < lenB {
+		if cmp(a[i], b[j]) <= 0 {
+			if (i == 0 && j == 0) || cmp(prevVal, a[i]) != 0 {
+				prevVal = a[i]
+				AppendFixed(ret, a[i], false, mp)
+			}
+			i++
+		} else {
+			if (i == 0 && j == 0) || cmp(prevVal, b[j]) != 0 {
+				prevVal = b[j]
+				AppendFixed(ret, b[j], false, mp)
+			}
+			j++
+		}
+	}
+
+	for ; i < lenA; i++ {
+		if (i == 0 && j == 0) || cmp(prevVal, a[i]) != 0 {
+			prevVal = a[i]
+			AppendFixed(ret, a[i], false, mp)
+		}
+	}
+
+	for ; j < lenB; j++ {
+		if (i == 0 && j == 0) || cmp(prevVal, b[j]) != 0 {
+			prevVal = b[j]
+			AppendFixed(ret, b[j], false, mp)
+		}
+	}
+}
+
+// Intersection2VectorVarlen does a ∩ b ==> ret, keeps all item unique and sorted
+// it assumes that va and vb all sorted already
+func Intersection2VectorVarlen(va, vb *Vector, ret *Vector, mp *mpool.MPool) {
+	var shortCol, longCol []types.Varlena
+	var shortArea, longArea []byte
+
+	cola, areaa := MustVarlenaRawData(va)
+	colb, areab := MustVarlenaRawData(vb)
+
+	if len(cola) <= len(colb) {
+		shortCol = cola
+		shortArea = areaa
+		longCol = colb
+		longArea = areab
+	} else {
+		shortCol = colb
+		shortArea = areab
+		longCol = cola
+		longArea = areaa
+	}
+
+	var lenLong, lenShort = len(longCol), len(shortCol)
+
+	ret.PreExtend(lenLong+lenShort, mp)
+
+	for i := range shortCol {
+		shortBytes := shortCol[i].GetByteSlice(shortArea)
+		idx := sort.Search(lenLong, func(j int) bool {
+			return bytes.Compare(longCol[j].GetByteSlice(longArea), shortBytes) >= 0
+		})
+		if idx >= lenLong {
+			break
+		}
+
+		if bytes.Equal(shortBytes, longCol[idx].GetByteSlice(longArea)) {
+			AppendBytes(ret, shortBytes, false, mp)
+		}
+
+		longCol = longCol[idx:]
+	}
+}
+
+// Union2VectorValen does a ∪ b ==> ret, keeps all item unique and sorted
+// it assumes that va and vb all sorted already
+func Union2VectorValen(va, vb *Vector, ret *Vector, mp *mpool.MPool) {
+	var i, j int
+	var prevVal []byte
+
+	cola, areaa := MustVarlenaRawData(va)
+	colb, areab := MustVarlenaRawData(vb)
+
+	var lenA, lenB = len(cola), len(colb)
+
+	ret.PreExtend(lenA+lenB, mp)
+
+	for i < lenA && j < lenB {
+		bb := colb[j].GetByteSlice(areab)
+		ba := cola[i].GetByteSlice(areaa)
+
+		if bytes.Compare(ba, bb) <= 0 {
+			if (i == 0 && j == 0) || bytes.Equal(prevVal, ba) {
+				prevVal = ba
+				AppendBytes(ret, ba, false, mp)
+			}
+			i++
+		} else {
+			if (i == 0 && j == 0) || bytes.Equal(prevVal, bb) {
+				prevVal = bb
+				AppendBytes(ret, bb, false, mp)
+			}
+			j++
+		}
+	}
+
+	for ; i < lenA; i++ {
+		ba := cola[i].GetByteSlice(areaa)
+		if (i == 0 && j == 0) || bytes.Equal(prevVal, ba) {
+			prevVal = ba
+			AppendBytes(ret, ba, false, mp)
+		}
+	}
+
+	for ; j < lenB; j++ {
+		bb := colb[j].GetByteSlice(areab)
+		if (i == 0 && j == 0) || bytes.Equal(prevVal, bb) {
+			prevVal = bb
+			AppendBytes(ret, bb, false, mp)
+		}
+	}
 }

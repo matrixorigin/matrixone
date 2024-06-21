@@ -22,6 +22,7 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -341,7 +342,7 @@ func (s *Scope) remoteRun(c *Compile) (err error) {
 	if errEncode != nil {
 		return errEncode
 	}
-	s.Instructions = append(s.Instructions, lastInstruction)
+	s.appendInstruction(lastInstruction)
 
 	// encode the process related information
 	pData, errEncodeProc := encodeProcessInfo(s.Proc, c.sql)
@@ -416,7 +417,7 @@ func encodeProcessInfo(
 
 func appendWriteBackOperator(c *Compile, s *Scope) *Scope {
 	rs := c.newMergeScope([]*Scope{s})
-	rs.Instructions = append(rs.Instructions, vm.Instruction{
+	rs.appendInstruction(vm.Instruction{
 		Op:  vm.Output,
 		Idx: -1, // useless
 		Arg: output.NewArgument().
@@ -495,6 +496,7 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 			TableDef:               s.DataSource.TableDef,
 			Timestamp:              &s.DataSource.Timestamp,
 			RuntimeFilterProbeList: s.DataSource.RuntimeFilterSpecs,
+			IsConst:                s.DataSource.isConst,
 		}
 		if s.DataSource.Bat != nil {
 			data, err := types.Encode(s.DataSource.Bat)
@@ -610,6 +612,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			TableDef:           dsc.TableDef,
 			Timestamp:          *dsc.Timestamp,
 			RuntimeFilterSpecs: dsc.RuntimeFilterProbeList,
+			isConst:            dsc.IsConst,
 		}
 		if len(dsc.Block) > 0 {
 			bat := new(batch.Batch)
@@ -627,7 +630,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		s.NodeInfo.Data = []byte(p.Node.Payload)
 		s.NodeInfo.Header = objectio.DecodeInfoHeader(p.Node.Type)
 	}
-	s.Proc = process.NewWithAnalyze(proc, proc.Ctx, int(p.ChildrenCount), analNodes)
+	s.Proc = process.NewFromProc(proc, proc.Ctx, int(p.ChildrenCount))
 	{
 		for i := range s.Proc.Reg.MergeReceivers {
 			ctx.regs[s.Proc.Reg.MergeReceivers[i]] = int32(i)
@@ -1043,6 +1046,10 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Limit:  t.Limit,
 			Offset: t.Offset,
 		}
+	case *table_scan.Argument:
+		in.TableScan = &pipeline.TableScan{}
+	case *value_scan.Argument:
+		in.ValueScan = &pipeline.ValueScan{}
 	default:
 		return -1, nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", opr.Op))
 	}
@@ -1468,6 +1475,12 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.TblDef = t.TblDef
 		arg.Limit = t.Limit
 		arg.Offset = t.Offset
+		v.Arg = arg
+	case vm.TableScan:
+		arg := table_scan.NewArgument()
+		v.Arg = arg
+	case vm.ValueScan:
+		arg := value_scan.NewArgument()
 		v.Arg = arg
 	default:
 		return v, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", opr.Op))

@@ -23,7 +23,7 @@ rename01    CREATE TABLE `rename01` (\n  `col1new` INT DEFAULT NULL,\n  `col2` D
 show columns from rename01;
 Field    Type    Null    Key    Default    Extra    Comment
 col1new    INT(32)    YES        null        
-col2    DECIMAL128(38)    YES        null        
+col2    DECIMAL(38)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'name01' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
 drop table rename01;
@@ -189,11 +189,11 @@ col1new    col2
 show columns from primary01;
 Field    Type    Null    Key    Default    Extra    Comment
 col1new    INT(32)    NO    PRI    null        
-col2    DECIMAL128(38)    YES        null        
+col2    DECIMAL(38)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'primary01' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 primary01    col1new    INT    NO
-primary01    col2    DECIMAL128    YES
+primary01    col2    DECIMAL    YES
 drop table primary01;
 drop table if exists foreign01;
 create table foreign01(col1 int primary key,
@@ -330,13 +330,13 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    MUL    null        
 bnew    CHAR(10)    YES        null        
 c    DATE(0)    YES        null        
-d    DECIMAL64(7)    YES        null        
+d    DECIMAL(7)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'index01' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 index01    a    INT    NO
 index01    bnew    CHAR    YES
 index01    c    DATE    YES
-index01    d    DECIMAL64    YES
+index01    d    DECIMAL    YES
 drop table index01;
 drop table if exists index02;
 CREATE TABLE index02(a INTEGER PRIMARY KEY, b CHAR(10), c date, d decimal(7,2), INDEX(a, b), KEY(c));
@@ -372,13 +372,13 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 bnewnew    CHAR(10)    YES        null        
 c    DATE(0)    YES    MUL    null        
-d    DECIMAL64(7)    YES        null        
+d    DECIMAL(7)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'index02' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
+table_name    COLUMN_NAME    data_type    is_nullable
 index02    a    INT    NO
 index02    bnewnew    CHAR    YES
 index02    c    DATE    YES
-index02    d    DECIMAL64    YES
+index02    d    DECIMAL    YES
 select * from index02;
 a    bnewnew    c    d
 2    ac    1981-02-20    1600.00
@@ -426,10 +426,10 @@ uuuyggbbjbj    col2
 show columns from temporary01;
 Field    Type    Null    Key    Default    Extra    Comment
 uuuyggbbjbj    INT(32)    YES        null        
-col2    DECIMAL128(38)    YES        null        
+col2    DECIMAL(38)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'temporary01' and COLUMN_NAME not like '__mo%';
-table_name    column_name    data_type    is_nullable
-temporary01    col2    DECIMAL128    YES
+table_name    COLUMN_NAME    data_type    is_nullable
+temporary01    col2    DECIMAL    YES
 temporary01    uuuyggbbjbj    INT    YES
 drop table temporary01;
 drop table if exists ex_table_2_1;

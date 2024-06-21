@@ -616,6 +616,9 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr, txnOffset i
 			err)
 
 		v2.TxnTableRangeDurationHistogram.Observe(cost.Seconds())
+		if err != nil {
+			logutil.Errorf("txn: %s, error: %v", tbl.db.op.Txn().DebugString(), err)
+		}
 	}()
 
 	var blocks objectio.BlockInfoSlice
@@ -2466,6 +2469,7 @@ func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.Objec
 		objInfos = make([]logtailreplay.ObjectInfo, 0, len(objstats))
 		iter, err := state.NewObjectsIter(snapshot)
 		if err != nil {
+			logutil.Errorf("txn: %s, error: %v", tbl.db.op.Txn().DebugString(), err)
 			return nil, err
 		}
 		for iter.Next() {

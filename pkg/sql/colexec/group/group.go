@@ -130,7 +130,10 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
-	defer anal.Stop()
+	defer func() {
+		anal.Stop()
+		arg.OpStats.UpdateStats(anal.GetAnalyzeInfo())
+	}()
 
 	return arg.ctr.processGroupByAndAgg(arg, proc, anal, arg.GetIsFirst(), arg.GetIsLast())
 }

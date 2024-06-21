@@ -334,8 +334,8 @@ type FeSession interface {
 	ResetFPrints()
 	EnterFPrint(idx int)
 	ExitFPrint(idx int)
-	SetStaticTxnId(id []byte)
-	GetStaticTxnId() uuid.UUID
+	SetStaticTxnInfo(string)
+	GetStaticTxnInfo() string
 	GetShareTxnBackgroundExec(ctx context.Context, newRawBatch bool) BackgroundExec
 	SessionLogger
 }
@@ -383,12 +383,13 @@ type ExecCtx struct {
 	cws             []ComputationWrapper
 	input           *UserInput
 	//In the session migration, skip the response to the client
-	skipRespClient bool
+	inMigration bool
 	//In the session migration, executeParamTypes for the EXECUTE stmt should be migrated
 	//from the old session to the new session.
 	executeParamTypes []byte
 	resper            Responser
 	results           []ExecResult
+	isIssue3482       bool
 }
 
 // outputCallBackFunc is the callback function to send the result to the client.
@@ -453,7 +454,7 @@ type feSessionImpl struct {
 	fprints      footPrints
 	respr        Responser
 	//refreshed once
-	staticTxnId uuid.UUID
+	staticTxnInfo string
 }
 
 func (ses *feSessionImpl) EnterFPrint(idx int) {
@@ -697,6 +698,11 @@ func (ses *feSessionImpl) GetUpstream() FeSession {
 
 // ClearResultBatches does not call Batch.Clear().
 func (ses *feSessionImpl) ClearResultBatches() {
+	for _, bat := range ses.resultBatches {
+		if bat != nil {
+			bat.Clean(ses.pool)
+		}
+	}
 	ses.resultBatches = nil
 }
 
@@ -853,11 +859,11 @@ func (ses *feSessionImpl) GetResponser() Responser {
 	return ses.respr
 }
 
-func (ses *feSessionImpl) SetStaticTxnId(id []byte) {
-	copy(ses.staticTxnId[:], id)
+func (ses *feSessionImpl) SetStaticTxnInfo(info string) {
+	ses.staticTxnInfo = info
 }
-func (ses *feSessionImpl) GetStaticTxnId() uuid.UUID {
-	return ses.staticTxnId
+func (ses *feSessionImpl) GetStaticTxnInfo() string {
+	return ses.staticTxnInfo
 }
 
 func (ses *Session) GetDebugString() string {

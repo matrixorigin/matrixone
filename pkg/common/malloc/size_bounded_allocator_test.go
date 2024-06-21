@@ -23,22 +23,26 @@ import (
 func TestSizeBoundedAllocator(t *testing.T) {
 	testAllocator(t, func() Allocator {
 		return NewSizeBoundedAllocator(
-			GetDefault(nil),
+			NewClassAllocator(NewFixedSizeMmapAllocator),
 			1<<40,
 			nil,
 		)
 	})
 
 	t.Run("out of space", func(t *testing.T) {
-		allocator := NewSizeBoundedAllocator(GetDefault(nil), 24, nil)
-		p1, d1, err := allocator.Allocate(12)
+		allocator := NewSizeBoundedAllocator(
+			NewClassAllocator(NewFixedSizeMmapAllocator),
+			24,
+			nil,
+		)
+		p1, d1, err := allocator.Allocate(12, NoHints)
 		assert.Nil(t, err)
-		_, _, err = allocator.Allocate(12)
+		_, _, err = allocator.Allocate(12, NoHints)
 		assert.Nil(t, err)
-		_, _, err = allocator.Allocate(12)
+		_, _, err = allocator.Allocate(12, NoHints)
 		assert.ErrorContains(t, err, "out of space")
-		d1.Deallocate(p1)
-		_, _, err = allocator.Allocate(12)
+		d1.Deallocate(p1, NoHints)
+		_, _, err = allocator.Allocate(12, NoHints)
 		assert.Nil(t, err)
 	})
 }
@@ -47,7 +51,7 @@ func BenchmarkSizeBoundedAllocator(b *testing.B) {
 	for _, n := range benchNs {
 		benchmarkAllocator(b, func() Allocator {
 			return NewSizeBoundedAllocator(
-				GetDefault(nil),
+				NewClassAllocator(NewFixedSizeMmapAllocator),
 				1<<40,
 				nil,
 			)
@@ -58,7 +62,7 @@ func BenchmarkSizeBoundedAllocator(b *testing.B) {
 func FuzzSizeBoundedAllocator(f *testing.F) {
 	fuzzAllocator(f, func() Allocator {
 		return NewSizeBoundedAllocator(
-			GetDefault(nil),
+			NewClassAllocator(NewFixedSizeMmapAllocator),
 			1<<40,
 			nil,
 		)

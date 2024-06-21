@@ -17,6 +17,7 @@ package txnimpl
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -280,7 +281,7 @@ func (space *tableSpace) CloseAppends() {
 }
 
 // Append appends batch of data into anode.
-func (space *tableSpace) Append(data *containers.Batch) (err error) {
+func (space *tableSpace) Append(data *containers.Batch) (dur float64, err error) {
 	if space.appendable == nil {
 		space.registerANode()
 	}
@@ -296,6 +297,7 @@ func (space *tableSpace) Append(data *containers.Batch) (err error) {
 		}
 		dedupType := space.table.store.txn.GetDedupType()
 		if schema.HasPK() && dedupType == txnif.FullDedup {
+			now := time.Now()
 			if err = space.index.BatchInsert(
 				data.Attrs[schema.GetSingleSortKeyIdx()],
 				data.Vecs[schema.GetSingleSortKeyIdx()],
@@ -305,6 +307,7 @@ func (space *tableSpace) Append(data *containers.Batch) (err error) {
 				false); err != nil {
 				break
 			}
+			dur += time.Since(now).Seconds()
 		}
 		offset += appended
 		space.rows += appended

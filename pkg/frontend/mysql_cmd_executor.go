@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -348,6 +349,7 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 		}
 
 		bh := GetRawBatchBackgroundExec(ctx, ses)
+		defer bh.Close()
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
 		var pubAccountId int32
 		if pubAccountId = getAccountIdByName(ctx, ses, bh, pubAccountName); pubAccountId == -1 {
@@ -2062,6 +2064,8 @@ func canExecuteStatementInUncommittedTransaction(reqCtx context.Context, ses FeS
 	return nil
 }
 
+// processLoadLocal executes the load data local.
+// load data local interaction: https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_com_query_response_local_infile_request.html
 func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, writer *io.PipeWriter) (err error) {
 	mysqlRrWr := ses.GetResponser().MysqlRrWr()
 	defer func() {
@@ -2080,7 +2084,7 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	}
 	start := time.Now()
 	var msg interface{}
-	msg, err = mysqlRrWr.Read(goetty.ReadOptions{})
+	msg, err = mysqlRrWr.Read(goetty.ReadOptions{Timeout: getGlobalPu().SV.SessionTimeout.Duration})
 	if err != nil {
 		mysqlRrWr.SetU8(SEQUENCEID, mysqlRrWr.GetU8(SEQUENCEID)+1)
 		if errors.Is(err, errorInvalidLength0) {
@@ -2101,6 +2105,7 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 
 	mysqlRrWr.SetU8(SEQUENCEID, uint8(packet.SequenceID+1))
 	seq := uint8(packet.SequenceID + 1)
+	//empty packet means the file is over.
 	length := packet.Length
 	if length == 0 {
 		return
@@ -2121,10 +2126,10 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 			zap.String("path", param.Filepath),
 			zap.Error(err))
 	}
-	epoch, printEvery, minReadTime, maxReadTime, minWriteTime, maxWriteTime := uint64(0), uint64(1024), 24*time.Hour, time.Nanosecond, 24*time.Hour, time.Nanosecond
+	epoch, printEvery, minReadTime, maxReadTime, minWriteTime, maxWriteTime := uint64(0), uint64(1024*60), 24*time.Hour, time.Nanosecond, 24*time.Hour, time.Nanosecond
 	for {
 		readStart := time.Now()
-		msg, err = mysqlRrWr.Read(goetty.ReadOptions{})
+		msg, err = mysqlRrWr.Read(goetty.ReadOptions{Timeout: getGlobalPu().SV.SessionTimeout.Duration})
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
 				seq += 1
@@ -2151,6 +2156,11 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 		mysqlRrWr.SetU8(SEQUENCEID, seq)
 		ses.CountPayload(len(packet.Payload))
 
+		//empty packet means the file is over.
+		if packet.Length == 0 {
+			break
+		}
+
 		writeStart := time.Now()
 		if !skipWrite {
 			_, err = writer.Write(packet.Payload)
@@ -2171,13 +2181,22 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 			}
 		}
 		if epoch%printEvery == 0 {
-			ses.Debugf(execCtx.reqCtx, "load local '%s', epoch: %d, skipWrite: %v, minReadTime: %s, maxReadTime: %s, minWriteTime: %s, maxWriteTime: %s,", param.Filepath, epoch, skipWrite, minReadTime.String(), maxReadTime.String(), minWriteTime.String(), maxWriteTime.String())
+			if execCtx.isIssue3482 {
+				ses.Infof(execCtx.reqCtx, "load local '%s', epoch: %d, skipWrite: %v, minReadTime: %s, maxReadTime: %s, minWriteTime: %s, maxWriteTime: %s,\n", param.Filepath, epoch, skipWrite, minReadTime.String(), maxReadTime.String(), minWriteTime.String(), maxWriteTime.String())
+			}
 			minReadTime, maxReadTime, minWriteTime, maxWriteTime = 24*time.Hour, time.Nanosecond, 24*time.Hour, time.Nanosecond
 		}
 		epoch += 1
 	}
-	ses.Debugf(execCtx.reqCtx, "load local '%s', read&write all data from client cost: %s", param.Filepath, time.Since(start))
+	if execCtx.isIssue3482 {
+		ses.Infof(execCtx.reqCtx, "load local '%s', read&write all data from client cost: %s\n", param.Filepath, time.Since(start))
+	}
 	return
+}
+
+func makeCompactTxnInfo(op TxnOperator) string {
+	txn := op.Txn()
+	return fmt.Sprintf("%s:%s", hex.EncodeToString(txn.ID), txn.SnapshotTS.DebugString())
 }
 
 func executeStmtWithResponse(ses *Session,
@@ -2276,9 +2295,15 @@ func executeStmtWithWorkspace(ses FeSession,
 		return nil
 	}
 
-	autocommit, err = autocommitValue(execCtx.reqCtx, ses)
-	if err != nil {
-		return err
+	//in session migration, the txn forced to be autocommit.
+	//then the txn can be committed.
+	if execCtx.inMigration {
+		autocommit = true
+	} else {
+		autocommit, err = autocommitValue(execCtx.reqCtx, ses)
+		if err != nil {
+			return err
+		}
 	}
 
 	execCtx.txnOpt.autoCommit = autocommit
@@ -2300,7 +2325,7 @@ func executeStmtWithWorkspace(ses FeSession,
 
 	//refresh txn id
 	ses.SetTxnId(txnOp.Txn().ID)
-	ses.SetStaticTxnId(txnOp.Txn().ID)
+	ses.SetStaticTxnInfo(makeCompactTxnInfo(txnOp))
 
 	//refresh proc txnOp
 	execCtx.proc.TxnOperator = txnOp
@@ -2310,6 +2335,9 @@ func executeStmtWithWorkspace(ses FeSession,
 		return err
 	}
 
+	ses.EnterFPrint(118)
+	defer ses.ExitFPrint(118)
+	setFPrints(txnOp, execCtx.ses.GetFPrints())
 	//!!!NOTE!!!: statement management
 	//2. start statement on workspace
 	txnOp.GetWorkspace().StartStatement()
@@ -2322,6 +2350,9 @@ func executeStmtWithWorkspace(ses FeSession,
 
 		txnOp = ses.GetTxnHandler().GetTxn()
 		if txnOp != nil {
+			ses.EnterFPrint(119)
+			defer ses.ExitFPrint(119)
+			setFPrints(txnOp, execCtx.ses.GetFPrints())
 			//most of the cases, txnOp will not nil except that "set autocommit = 1"
 			//commit the txn immediately then the txnOp is nil.
 			txnOp.GetWorkspace().EndStatement()
@@ -2348,6 +2379,9 @@ func executeStmtWithIncrStmt(ses FeSession,
 	if ses.IsDerivedStmt() {
 		return
 	}
+	ses.EnterFPrint(117)
+	defer ses.ExitFPrint(117)
+	setFPrints(txnOp, execCtx.ses.GetFPrints())
 	//3. increase statement id
 	err = txnOp.GetWorkspace().IncrStatementID(execCtx.reqCtx, false)
 	if err != nil {
@@ -2641,6 +2675,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	statsInfo := statistic.StatsInfo{ParseStartTime: beginInstant}
 	execCtx.reqCtx = statistic.ContextWithStatsInfo(execCtx.reqCtx, &statsInfo)
 	execCtx.input = input
+	execCtx.isIssue3482 = input.isIssue3482Sql()
 
 	cws, err := GetComputationWrapper(execCtx, ses.GetDatabaseName(),
 		ses.GetUserName(),
@@ -2837,9 +2872,14 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		var query = util.UnsafeBytesToString(req.GetData().([]byte))
 		ses.addSqlCount(1)
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(SubStringFromBegin(query, int(getGlobalPu().SV.LengthOfQueryPrinted))))
-		err = doComQuery(ses, execCtx, &UserInput{sql: query})
+		input := &UserInput{sql: query}
+		err = doComQuery(ses, execCtx, input)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), err)
+			resp.isIssue3482 = input.isIssue3482Sql()
+			if resp.isIssue3482 {
+				resp.loadLocalFile = query
+			}
 		}
 		return resp, nil
 	case COM_INIT_DB:

@@ -373,8 +373,8 @@ func (c *client) tryCreate(backend string) bool {
 }
 
 func (c *client) gcIdleTask(ctx context.Context) {
-	c.logger.Info("gc idle backends task started")
-	defer c.logger.Error("gc idle backends task stopped")
+	c.logger.Debug("gc idle backends task started")
+	defer c.logger.Debug("gc idle backends task stopped")
 
 	ticker := time.NewTicker(c.options.maxIdleDuration)
 	defer ticker.Stop()
@@ -400,7 +400,7 @@ func (c *client) triggerGCInactive(remote string) {
 
 func (c *client) gcInactiveTask(ctx context.Context) {
 	c.logger.Debug("gc inactive backends task started")
-	defer c.logger.Error("gc inactive backends task stopped")
+	defer c.logger.Debug("gc inactive backends task stopped")
 
 	for {
 		select {

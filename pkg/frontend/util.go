@@ -504,9 +504,14 @@ func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string
 		ses.Debug(ctx, "query trace status", logutil.StatementField(str), logutil.StatusField(status.String()))
 		err = nil // make sure: it is nil for EndStatement
 	} else {
-		txnId := ses.GetStaticTxnId()
-		ses.Error(ctx, "query trace status", logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err),
-			logutil.TxnIdField(hex.EncodeToString(txnId[:])))
+		ses.Error(
+			ctx,
+			"query trace status",
+			logutil.StatementField(str),
+			logutil.StatusField(status.String()),
+			logutil.ErrorField(err),
+			logutil.TxnInfoField(ses.GetStaticTxnInfo()),
+		)
 	}
 
 	// pls make sure: NO ONE use the ses.tStmt after EndStatement
@@ -1143,6 +1148,26 @@ func (ui *UserInput) getSqlSourceType(i int) string {
 	return sqlType
 }
 
+const (
+	issue3482SqlPrefix    = "load data local infile '/data/customer/sutpc_001/data_csv"
+	issue3482SqlPrefixLen = len(issue3482SqlPrefix)
+)
+
+// !!!NOTE!!! For debug
+// https://github.com/matrixorigin/MO-Cloud/issues/3482
+// TODO: remove it in the future
+func (ui *UserInput) isIssue3482Sql() bool {
+	if ui == nil {
+		return false
+	}
+	sql := ui.getSql()
+	sqlLen := len(sql)
+	if sqlLen <= issue3482SqlPrefixLen {
+		return false
+	}
+	return strings.HasPrefix(sql, issue3482SqlPrefix)
+}
+
 func unboxExprStr(ctx context.Context, expr tree.Expr) (string, error) {
 	if e, ok := expr.(*tree.NumVal); ok && e.ValType == tree.P_char {
 		return e.OrigString(), nil
@@ -1365,4 +1390,16 @@ func checkMoreResultSet(status uint16, isLastStmt bool) uint16 {
 		status |= SERVER_MORE_RESULTS_EXISTS
 	}
 	return status
+}
+
+func Copy[T any](src []T) []T {
+	if src == nil {
+		return nil
+	}
+	if len(src) == 0 {
+		return []T{}
+	}
+	dst := make([]T, len(src))
+	copy(dst, src)
+	return dst
 }
