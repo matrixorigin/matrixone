@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,20 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package memorycache
+package malloc
 
-func (r RCBytes) Release() {
-	r.d.release(r.size)
-}
+import "unsafe"
 
-func (r RCBytes) Bytes() []byte {
-	if r.d == nil {
-		return nil
-	}
-	return r.d.Buf()
-}
-
-func (r RCBytes) Slice(n int) CacheData {
-	r.d.Truncate(n)
-	return r
+type FixedSizeAllocator interface {
+	Allocate(hint Hints) (unsafe.Pointer, Deallocator, error)
 }

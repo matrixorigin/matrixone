@@ -77,7 +77,7 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 	sender.safeToClose = false
 	sender.alreadyClose = false
 	err = receiveMessageFromCnServer(c, s, sender)
-	return nil, nil
+	return sender, nil
 }
 
 func prepareRemoteRunSendingData(sqlStr string, s *Scope) (scopeData []byte, processData []byte, err error) {
