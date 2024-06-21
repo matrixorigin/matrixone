@@ -126,7 +126,6 @@ func (table *TransferTable[T]) DeletePage(id *common.ID) {
 	delete(table.pages, *id)
 
 	v2.TaskMergeTransferPageLengthGauge.Sub(float64(cnt))
-	return
 }
 
 func (table *TransferTable[T]) Close() {
