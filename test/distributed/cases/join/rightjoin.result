@@ -102,3 +102,17 @@ SELECT * FROM t1 RIGHT JOIN t3 on t1.S1=t3.S1;
 s1    s2    s1    s2
 SELECT * FROM t1 RIGHT JOIN t3 on t1.S2=t3.S2;
 s1    s2    s1    s2
+drop table if exists t1;
+drop table if exists t2;
+drop table if exists t3;
+create table t1(a int);
+create table t2(a int);
+create table t3(a int);
+insert into t1 select * from generate_series(1,1000000,1) g;
+insert into t2 select * from generate_series(1,2000,1) g;
+select count(*) from t1 right join t2 on t1.a=t2.a join t3 on t1.a=t3.a;
+count(*)
+0
+drop table t1;
+drop table t2;
+drop table t3;
