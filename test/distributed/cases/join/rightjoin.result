@@ -113,6 +113,18 @@ insert into t2 select * from generate_series(1,2000,1) g;
 select count(*) from t1 right join t2 on t1.a=t2.a join t3 on t1.a=t3.a;
 count(*)
 0
+select count(*) from t1 right join t2 on t1.a=t2.a join t3 on t1.a=t3.a where t1.a<500000;
+count(*)
+0
+select count(*) from t1 right join t2 on t1.a=t2.a join t3 on t1.a=t3.a where t1.a<100000&&t2.a<1500;
+count(*)
+0
+select count(*) from t1 right join t2 on t1.a=t2.a join t3 on t1.a=t3.a where t1.a<20000;
+count(*)
+0
+select count(*) from t1 right join t2 on t1.a=t2.a join t3 on t1.a=t3.a where t2.a<1200;
+count(*)
+0
 drop table t1;
 drop table t2;
 drop table t3;
