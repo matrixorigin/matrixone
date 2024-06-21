@@ -1743,7 +1743,7 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 	var ret *plan2.Plan
 	var err error
 
-	txnOp := ctx.GetProcess().GetCloneTxnOperator()
+	txnOp := ctx.GetProcess().GetTxnOperator()
 	start := time.Now()
 	seq := uint64(0)
 	if txnOp != nil {
