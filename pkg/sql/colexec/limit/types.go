@@ -24,11 +24,15 @@ import (
 
 var _ vm.Operator = new(Argument)
 
-type Argument struct {
-	Seen          uint64 // seen is the number of tuples seen so far
-	LimitExpr     *plan.Expr
+type container struct {
+	seen          uint64 // seen is the number of tuples seen so far
 	limit         uint64
 	limitExecutor colexec.ExpressionExecutor
+}
+type Argument struct {
+	ctr       *container
+	LimitExpr *plan.Expr
+
 	vm.OperatorBase
 }
 
@@ -73,8 +77,12 @@ func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if arg.limitExecutor != nil {
-		arg.limitExecutor.Free()
-		arg.limitExecutor = nil
+	if arg.ctr != nil {
+		if arg.ctr.limitExecutor != nil {
+			arg.ctr.limitExecutor.Free()
+			arg.ctr.limitExecutor = nil
+		}
+		arg.ctr = nil
 	}
+
 }

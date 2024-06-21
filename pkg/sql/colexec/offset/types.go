@@ -24,11 +24,14 @@ import (
 
 var _ vm.Operator = new(Argument)
 
-type Argument struct {
-	Seen           uint64 // seen is the number of tuples seen so far
-	OffsetExpr     *plan.Expr
+type container struct {
+	seen           uint64 // seen is the number of tuples seen so far
 	offset         uint64
 	offsetExecutor colexec.ExpressionExecutor
+}
+type Argument struct {
+	ctr        *container
+	OffsetExpr *plan.Expr
 
 	vm.OperatorBase
 }
@@ -74,8 +77,12 @@ func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if arg.offsetExecutor != nil {
-		arg.offsetExecutor.Free()
-		arg.offsetExecutor = nil
+	if arg.ctr != nil {
+		if arg.ctr.offsetExecutor != nil {
+			arg.ctr.offsetExecutor.Free()
+			arg.ctr.offsetExecutor = nil
+		}
+		arg.ctr = nil
 	}
+
 }

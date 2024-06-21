@@ -24,17 +24,19 @@ import (
 
 var _ vm.Operator = new(Argument)
 
+type container struct {
+	// 1. single table's delete (main table)
+	delSource engine.Relation
+	// 2. partition sub tables
+	partitionSources []engine.Relation
+}
 type Argument struct {
+	ctr                 *container
 	AddAffectedRows     bool
 	AffectedRows        uint64
 	Ref                 *plan.ObjectRef
 	Engine              engine.Engine
 	PartitionTableNames []string
-
-	// 1. single table's delete (main table)
-	delSource engine.Relation
-	// 2. partition sub tables
-	partitionSources []engine.Relation
 
 	vm.OperatorBase
 }

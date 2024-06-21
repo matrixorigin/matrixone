@@ -428,6 +428,7 @@ func TestGenerateSeriesString(t *testing.T) {
 
 func TestGenerateSeriesPrepare(t *testing.T) {
 	err := generateSeriesPrepare(nil, &Argument{
+		ctr: &container{},
 		OperatorBase: vm.OperatorBase{
 			OperatorInfo: vm.OperatorInfo{
 				Idx:     0,
