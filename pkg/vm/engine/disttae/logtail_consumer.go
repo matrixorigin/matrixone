@@ -302,6 +302,9 @@ func (c *PushClient) TryToSubscribeTable(
 		case Subscribed:
 			return nil
 
+		case Unsubscribed:
+			panic("Impossible tate")
+
 		}
 
 	}
@@ -776,7 +779,9 @@ func (c *PushClient) tryToSubscribe(ctx context.Context, dbId, tblId uint64) (Su
 			SubState: Subscribing,
 		}
 		if err := c.subscribeTable(ctx, api.TableID{DbId: dbId, TbId: tblId}); err != nil {
-			return Subscribing, err
+			//restore the table status.
+			delete(c.subscribed.m, SubTableID{DatabaseID: dbId, TableID: tblId})
+			return Unsubscribed, err
 		}
 	}
 	return c.subscribed.m[SubTableID{DatabaseID: dbId, TableID: tblId}].SubState, nil
@@ -863,7 +868,9 @@ func (c *PushClient) subOrUnsubscribed(ctx context.Context, dbId, tblId uint64) 
 		SubState: Subscribing,
 	}
 	if err := c.subscribeTable(ctx, api.TableID{DbId: dbId, TbId: tblId}); err != nil {
-		return false, Subscribing, err
+		//restore the table status.
+		delete(c.subscribed.m, SubTableID{DatabaseID: dbId, TableID: tblId})
+		return true, Unsubscribed, err
 	}
 	return true, Subscribing, nil
 }
@@ -885,7 +892,9 @@ func (c *PushClient) unsubscribedOrSubscribing(ctx context.Context, dbId, tblId 
 		SubState: Subscribing,
 	}
 	if err := c.subscribeTable(ctx, api.TableID{DbId: dbId, TbId: tblId}); err != nil {
-		return false, Subscribing, err
+		//restore the table status.
+		delete(c.subscribed.m, SubTableID{DatabaseID: dbId, TableID: tblId})
+		return true, Unsubscribed, err
 	}
 	return true, Subscribing, nil
 }
