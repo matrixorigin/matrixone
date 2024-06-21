@@ -32,11 +32,11 @@ func fuzzAllocator(
 		}
 
 		size := i % (8 * GB)
-		ptr, dec, err := allocator.Allocate(size)
+		ptr, dec, err := allocator.Allocate(size, NoHints)
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer dec.Deallocate(ptr)
+		defer dec.Deallocate(ptr, NoHints)
 
 		slice := unsafe.Slice((*byte)(ptr), size)
 		for _, i := range slice {
