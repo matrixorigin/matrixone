@@ -1274,7 +1274,8 @@ func Test_RecordParseErrorStatement(t *testing.T) {
 	ses := newTestSession(t, ctrl)
 
 	proc := &process.Process{
-		Ctx: context.TODO(),
+		Base: &process.BaseProcess{},
+		Ctx:  context.TODO(),
 	}
 
 	motrace.GetTracerProvider().SetEnable(true)
