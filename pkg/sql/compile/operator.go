@@ -569,18 +569,21 @@ func constructFuzzyFilter(n, tableScan, sinkScan *plan.Node) *fuzzyfilter.Argume
 	arg.PkTyp = pkTyp
 	arg.IfInsertFromUnique = n.IfInsertFromUnique
 
-	if tableScan.Stats.Outcnt < sinkScan.Stats.Outcnt {
-		// build on tableScan
+	if (tableScan.Stats.Cost / sinkScan.Stats.Cost) < 0.3 {
+		// build on tableScan, because the existing data is significantly less than the data to be inserted
+		// this will happend
 		arg.BuildIdx = 0
 		if arg.IfInsertFromUnique {
-			arg.N = tableScan.Stats.Outcnt
+			// probe on sinkScan with test
+			arg.N = tableScan.Stats.Cost
 		} else {
-			arg.N = 1.2*sinkScan.Stats.Outcnt + tableScan.Stats.Outcnt
+			// probe on sinkScan with test and add
+			arg.N = sinkScan.Stats.Cost + tableScan.Stats.Cost
 		}
 	} else {
-		// build on sinkScan
+		// build on sinkScan, as tableScan can guarantee uniqueness, probe on tableScan with test
 		arg.BuildIdx = 1
-		arg.N = 1.2 * sinkScan.Stats.Outcnt
+		arg.N = sinkScan.Stats.Cost
 	}
 
 	// currently can not build runtime filter on table scan and probe it on sink scan

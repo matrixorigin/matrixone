@@ -127,6 +127,7 @@ if Stats(Table Scan) > Stats(Sink Scan)
 
 	Build on Sink scan
 		Test and Add
+		-> can be optimized to Add if the sinkScan data can guarantee uniqueness
 	Probe on Table scan
 		Test
 
@@ -136,6 +137,7 @@ else
 		Add
 	Probe on Sink scan
 		Test and Add
+		-> can be optimized to Test if the sinkScan data can guarantee uniqueness
 */
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
@@ -240,10 +242,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 // =========================================================================
 // utils functions
 
-/*
-opt4 : If the sinkScan data can guarantee uniqueness, then TestAndAdd can be optimized to Test/Add,
-depending on whether it is built on tableScan or SinkScan.
-*/
 func (arg *Argument) handleBuild(proc *process.Process, pkCol *vector.Vector) error {
 	buildOnSink := arg.ifBuildOnSink()
 
