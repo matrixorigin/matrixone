@@ -2846,7 +2846,7 @@ var _ MysqlRrWr = &testMysqlWriter{}
 type testMysqlWriter struct {
 	username string
 	database string
-	ioses    goetty.IOSession
+	ioses    ConnManager
 }
 
 func (fp *testMysqlWriter) GetStr(PropertyID) string {
@@ -2941,8 +2941,8 @@ func (fp *testMysqlWriter) WritePrepareResponse(ctx context.Context, stmt *Prepa
 	panic("implement me")
 }
 
-func (fp *testMysqlWriter) Read(options goetty.ReadOptions) (interface{}, error) {
-	return fp.ioses.Read(options)
+func (fp *testMysqlWriter) Read() (interface{}, error) {
+	return fp.ioses.Read()
 }
 
 func (fp *testMysqlWriter) UpdateCtx(ctx context.Context) {

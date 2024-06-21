@@ -30,7 +30,8 @@ type ConnManager struct {
 	header                []byte
 	fixBuf                []byte
 	dynamicBuf            *list.List
-	fixIndex              int
+	endFixIndex           int
+	startFixIndex         int
 	length                int
 	preLength             int
 	preLengths            *list.List
@@ -87,6 +88,11 @@ func (cm *ConnManager) Close() error {
 	for e := cm.dynamicBuf.Front(); e != nil; e = e.Next() {
 		cm.allocator.Free(e.Value.([]byte))
 	}
+
+	for e := cm.preLengths.Front(); e != nil; e = e.Next() {
+		cm.allocator.Free(e.Value.([]byte))
+	}
+
 	getGlobalRtMgr().Closed(cm)
 	return nil
 }
@@ -115,7 +121,6 @@ func (cm *ConnManager) Read() ([]byte, error) {
 		if packetLength == 0 {
 			break
 		}
-
 		payload, err := cm.ReadOnePayload(packetLength)
 		if err != nil {
 			return nil, err
@@ -214,14 +219,14 @@ func (cm *ConnManager) Append(elems ...byte) {
 }
 
 func (cm *ConnManager) AppendPart(elems []byte) {
-	remainFixBuf := fixBufferSize - cm.fixIndex
+	remainFixBuf := fixBufferSize - cm.endFixIndex
 	if len(elems) > remainFixBuf {
 		buf := cm.allocator.Alloc(len(elems))
 		copy(buf, elems)
 		cm.dynamicBuf.PushBack(buf)
 	} else {
-		copy(cm.fixBuf[cm.fixIndex:], elems)
-		cm.fixIndex += len(elems)
+		copy(cm.fixBuf[cm.endFixIndex:], elems)
+		cm.endFixIndex += len(elems)
 	}
 	cm.length += len(elems)
 	return
@@ -237,7 +242,7 @@ func (cm *ConnManager) FinishedPacket() error {
 	cm.sequenceId += 1
 
 	cm.preLengths.PushBack(header)
-	err := cm.Flush()
+	err := cm.FlushIfFull()
 
 	if err != nil {
 		return err
@@ -282,16 +287,19 @@ func (cm *ConnManager) Flush() error {
 func (cm *ConnManager) FlushLength(length int) error {
 	var err error
 
-	if cm.fixIndex != 0 {
-		err = cm.WriteToConn(cm.fixBuf[:cm.fixIndex])
-
-		if err != nil {
-			return err
+	if cm.startFixIndex != cm.endFixIndex {
+		hasFixLength := cm.endFixIndex - cm.startFixIndex
+		if length > hasFixLength {
+			err = cm.WriteToConn(cm.fixBuf[cm.startFixIndex:cm.endFixIndex])
+			length -= hasFixLength
+			cm.length -= hasFixLength
+			cm.startFixIndex += hasFixLength
+		} else {
+			err = cm.WriteToConn(cm.fixBuf[cm.startFixIndex : cm.startFixIndex+length])
+			cm.length -= length
+			cm.startFixIndex += length
+			length = 0
 		}
-		length -= cm.fixIndex
-		cm.length -= cm.fixIndex
-		cm.fixIndex = 0
-
 	}
 
 	for length != 0 {
@@ -373,7 +381,8 @@ func (cm *ConnManager) closeConn() error {
 
 func (cm *ConnManager) Reset() {
 	cm.length = 0
-	cm.fixIndex = 0
+	cm.startFixIndex = 0
+	cm.endFixIndex = 0
 	cm.preLength = 0
 
 	for node := cm.dynamicBuf.Front(); node != nil; node = node.Next() {
