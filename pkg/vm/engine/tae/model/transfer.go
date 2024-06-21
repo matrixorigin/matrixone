@@ -140,5 +140,5 @@ func (table *TransferTable[T]) Close() {
 	for _, item := range table.pages {
 		item.Close()
 	}
-	clear(table.pages)
+	table.pages = make(map[common.ID]*common.PinnedItem[T])
 }
