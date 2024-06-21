@@ -54,7 +54,6 @@ func init() {
 				types.T_int8.ToType(),
 			},
 			arg: &Argument{
-				Seen:      0,
 				LimitExpr: plan2.MakePlan2Uint64ConstExprWithType(8),
 				OperatorBase: vm.OperatorBase{
 					OperatorInfo: vm.OperatorInfo{
@@ -71,7 +70,6 @@ func init() {
 				types.T_int8.ToType(),
 			},
 			arg: &Argument{
-				Seen:      0,
 				LimitExpr: plan2.MakePlan2Uint64ConstExprWithType(10),
 				OperatorBase: vm.OperatorBase{
 					OperatorInfo: vm.OperatorInfo{
@@ -88,7 +86,9 @@ func init() {
 				types.T_int8.ToType(),
 			},
 			arg: &Argument{
-				Seen:      0,
+				ctr: &container{
+					seen: 0,
+				},
 				LimitExpr: plan2.MakePlan2Uint64ConstExprWithType(12),
 				OperatorBase: vm.OperatorBase{
 					OperatorInfo: vm.OperatorInfo{
@@ -156,7 +156,6 @@ func BenchmarkLimit(b *testing.B) {
 					types.T_int8.ToType(),
 				},
 				arg: &Argument{
-					Seen:      0,
 					LimitExpr: plan2.MakePlan2Int64ConstExprWithType(8),
 				},
 			},
@@ -184,10 +183,12 @@ func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 }
 
 func resetChildren(arg *Argument, bats []*batch.Batch) {
+	valueScanArg := &value_scan.Argument{
+		Batchs: bats,
+	}
+	valueScanArg.Prepare(nil)
 	arg.SetChildren(
 		[]vm.Operator{
-			&value_scan.Argument{
-				Batchs: bats,
-			},
+			valueScanArg,
 		})
 }

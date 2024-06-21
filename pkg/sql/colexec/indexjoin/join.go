@@ -66,11 +66,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				continue
 			}
 
-			if arg.buf != nil {
-				proc.PutBatch(arg.buf)
-				arg.buf = nil
+			if arg.ctr.buf != nil {
+				proc.PutBatch(arg.ctr.buf)
+				arg.ctr.buf = nil
 			}
-			arg.buf = batch.NewWithSize(len(ap.Result))
+			arg.ctr.buf = batch.NewWithSize(len(ap.Result))
 			for i, pos := range ap.Result {
 				srcVec := bat.Vecs[pos]
 				vec := proc.GetVector(*srcVec.GetType())
@@ -78,12 +78,12 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 					vec.Free(proc.Mp())
 					return result, err
 				}
-				arg.buf.SetVector(int32(i), vec)
+				arg.ctr.buf.SetVector(int32(i), vec)
 			}
-			arg.buf.AddRowCount(bat.RowCount())
+			arg.ctr.buf.AddRowCount(bat.RowCount())
 			proc.PutBatch(bat)
-			result.Batch = arg.buf
-			anal.Output(arg.buf, arg.GetIsLast())
+			result.Batch = arg.ctr.buf
+			anal.Output(arg.ctr.buf, arg.GetIsLast())
 			return result, nil
 
 		default:

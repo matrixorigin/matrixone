@@ -71,19 +71,19 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	bat := result.Batch
 	anal.Input(bat, arg.GetIsFirst())
 
-	if arg.buf != nil {
-		proc.PutBatch(arg.buf)
-		arg.buf = nil
+	if arg.ctr.buf != nil {
+		proc.PutBatch(arg.ctr.buf)
+		arg.ctr.buf = nil
 	}
 
-	arg.buf = batch.NewWithSize(len(arg.Es))
+	arg.ctr.buf = batch.NewWithSize(len(arg.Es))
 	// keep shuffleIDX unchanged
-	arg.buf.ShuffleIDX = bat.ShuffleIDX
+	arg.ctr.buf.ShuffleIDX = bat.ShuffleIDX
 	// do projection.
 	for i := range arg.ctr.projExecutors {
 		vec, err := arg.ctr.projExecutors[i].Eval(proc, []*batch.Batch{bat}, nil)
 		if err != nil {
-			for _, newV := range arg.buf.Vecs {
+			for _, newV := range arg.ctr.buf.Vecs {
 				if newV != nil {
 					for k, oldV := range bat.Vecs {
 						if oldV != nil && newV == oldV {
@@ -92,20 +92,20 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 					}
 				}
 			}
-			arg.buf = nil
+			arg.ctr.buf = nil
 			return result, err
 		}
-		arg.buf.Vecs[i] = vec
+		arg.ctr.buf.Vecs[i] = vec
 	}
 
-	newAlloc, err := colexec.FixProjectionResult(proc, arg.ctr.projExecutors, arg.ctr.uafs, arg.buf, bat)
+	newAlloc, err := colexec.FixProjectionResult(proc, arg.ctr.projExecutors, arg.ctr.uafs, arg.ctr.buf, bat)
 	if err != nil {
 		return result, err
 	}
 	arg.maxAllocSize = max(arg.maxAllocSize, newAlloc)
-	arg.buf.SetRowCount(bat.RowCount())
+	arg.ctr.buf.SetRowCount(bat.RowCount())
 
-	anal.Output(arg.buf, arg.GetIsLast())
-	result.Batch = arg.buf
+	anal.Output(arg.ctr.buf, arg.GetIsLast())
+	result.Batch = arg.ctr.buf
 	return result, nil
 }

@@ -61,22 +61,22 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 		arg.ctr.bats = append(arg.ctr.bats, bat)
 	}
-	arg.buf = arg.ctr.bats[0]
+	arg.ctr.buf = arg.ctr.bats[0]
 	arg.ctr.bats = arg.ctr.bats[1:]
 
-	if arg.buf.Last() {
+	if arg.ctr.buf.Last() {
 		arg.ctr.last = false
 	}
 
-	if arg.buf.End() {
-		arg.buf.Clean(proc.Mp())
+	if arg.ctr.buf.End() {
+		arg.ctr.buf.Clean(proc.Mp())
 		result.Batch = nil
 		result.Status = vm.ExecStop
 		return result, nil
 	}
 
-	anal.Input(arg.buf, arg.GetIsFirst())
-	anal.Output(arg.buf, arg.GetIsLast())
-	result.Batch = arg.buf
+	anal.Input(arg.ctr.buf, arg.GetIsFirst())
+	anal.Output(arg.ctr.buf, arg.GetIsLast())
+	result.Batch = arg.ctr.buf
 	return result, nil
 }

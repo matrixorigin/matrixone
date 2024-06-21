@@ -30,7 +30,12 @@ const (
 	end      = 1
 )
 
+type container struct {
+	status int
+	buf    *batch.Batch
+}
 type Argument struct {
+	ctr    *container
 	TblDef *plan.TableDef
 	Offset int64
 	Limit  int64
@@ -39,9 +44,6 @@ type Argument struct {
 	attrs   []string
 	types   []types.Type
 	Configs map[string]interface{}
-
-	buf    *batch.Batch
-	status int
 
 	vm.OperatorBase
 }
@@ -82,8 +84,12 @@ func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if arg.buf != nil {
-		arg.buf.Clean(proc.Mp())
-		arg.buf = nil
+	if arg.ctr != nil {
+		if arg.ctr.buf != nil {
+			arg.ctr.buf.Clean(proc.Mp())
+			arg.ctr.buf = nil
+		}
+		arg.ctr = nil
 	}
+
 }

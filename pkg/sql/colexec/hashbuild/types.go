@@ -39,36 +39,36 @@ const (
 
 type container struct {
 	state              int
+	keyWidth           int // keyWidth is the width of hash columns, it determines which hash map to use.
 	hasNull            bool
+	runtimeFilterIn    bool
 	multiSels          [][]int32
 	batches            []*batch.Batch
 	batchIdx           int
-	tmpBatch           *batch.Batch
 	inputBatchRowCount int
+	tmpBatch           *batch.Batch
 
 	executor []colexec.ExpressionExecutor
 	vecs     [][]*vector.Vector
 
 	intHashMap *hashmap.IntHashMap
 	strHashMap *hashmap.StrHashMap
-	keyWidth   int // keyWidth is the width of hash columns, it determines which hash map to use.
 
-	uniqueJoinKeys  []*vector.Vector
-	runtimeFilterIn bool
+	uniqueJoinKeys []*vector.Vector
 }
 
 type Argument struct {
 	ctr *container
 	// need to generate a push-down filter expression
-	NeedExpr    bool
-	NeedHashMap bool
-	IsDup       bool
-	Typs        []types.Type
-	Conditions  []*plan.Expr
+	NeedExpr         bool
+	NeedHashMap      bool
+	IsDup            bool
+	HashOnPK         bool
+	NeedMergedBatch  bool
+	NeedAllocateSels bool
+	Typs             []types.Type
+	Conditions       []*plan.Expr
 
-	HashOnPK          bool
-	NeedMergedBatch   bool
-	NeedAllocateSels  bool
 	RuntimeFilterSpec *pbplan.RuntimeFilterSpec
 	vm.OperatorBase
 }

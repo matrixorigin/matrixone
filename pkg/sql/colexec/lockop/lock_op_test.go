@@ -60,7 +60,7 @@ func TestCallLockOpWithNoConflict(t *testing.T) {
 		[][]int32{{0, 1, 2}},
 		func(proc *process.Process, arg *Argument) {
 			require.NoError(t, arg.Prepare(proc))
-			arg.rt.hasNewVersionInRange = testFunc
+			arg.ctr.rt.hasNewVersionInRange = testFunc
 			result, err := arg.Call(proc)
 			require.NoError(t, err)
 
@@ -83,11 +83,11 @@ func TestCallLockOpWithConflict(t *testing.T) {
 		[][]int32{{0, 1, 2}},
 		func(proc *process.Process, arg *Argument) {
 			require.NoError(t, arg.Prepare(proc))
-			arg.rt.hasNewVersionInRange = testFunc
+			arg.ctr.rt.hasNewVersionInRange = testFunc
 
-			arg.rt.parker.Reset()
-			arg.rt.parker.EncodeInt32(0)
-			conflictRow := arg.rt.parker.Bytes()
+			arg.ctr.rt.parker.Reset()
+			arg.ctr.rt.parker.EncodeInt32(0)
+			conflictRow := arg.ctr.rt.parker.Bytes()
 			_, err := proc.LockService.Lock(
 				proc.Ctx,
 				tableID,
@@ -125,11 +125,11 @@ func TestCallLockOpWithConflictWithRefreshNotEnabled(t *testing.T) {
 		[][]int32{{0, 1, 2}},
 		func(proc *process.Process, arg *Argument) {
 			require.NoError(t, arg.Prepare(proc))
-			arg.rt.hasNewVersionInRange = testFunc
+			arg.ctr.rt.hasNewVersionInRange = testFunc
 
-			arg.rt.parker.Reset()
-			arg.rt.parker.EncodeInt32(0)
-			conflictRow := arg.rt.parker.Bytes()
+			arg.ctr.rt.parker.Reset()
+			arg.ctr.rt.parker.EncodeInt32(0)
+			conflictRow := arg.ctr.rt.parker.Bytes()
 			_, err := proc.LockService.Lock(
 				proc.Ctx,
 				tableID,
@@ -142,6 +142,7 @@ func TestCallLockOpWithConflictWithRefreshNotEnabled(t *testing.T) {
 			go func() {
 				defer close(c)
 				arg2 := &Argument{
+					ctr: &container{},
 					OperatorBase: vm.OperatorBase{
 						OperatorInfo: vm.OperatorInfo{
 							Idx:     1,
@@ -150,14 +151,14 @@ func TestCallLockOpWithConflictWithRefreshNotEnabled(t *testing.T) {
 						},
 					},
 				}
-				arg2.rt = &state{}
-				arg2.rt.retryError = nil
+				arg2.ctr.rt = &state{}
+				arg2.ctr.rt.retryError = nil
 				arg2.targets = arg.targets
 				arg2.Prepare(proc)
-				arg2.rt.hasNewVersionInRange = testFunc
+				arg2.ctr.rt.hasNewVersionInRange = testFunc
 				valueScan := arg.GetChildren(0).(*value_scan.Argument)
 				resetChildren(arg2, valueScan.Batchs[0])
-				defer arg2.rt.parker.FreeMem()
+				defer arg2.ctr.rt.parker.FreeMem()
 
 				_, err = arg2.Call(proc)
 				assert.NoError(t, err)
@@ -182,11 +183,11 @@ func TestCallLockOpWithHasPrevCommit(t *testing.T) {
 		[][]int32{{0, 1, 2}},
 		func(proc *process.Process, arg *Argument) {
 			require.NoError(t, arg.Prepare(proc))
-			arg.rt.hasNewVersionInRange = testFunc
+			arg.ctr.rt.hasNewVersionInRange = testFunc
 
-			arg.rt.parker.Reset()
-			arg.rt.parker.EncodeInt32(0)
-			conflictRow := arg.rt.parker.Bytes()
+			arg.ctr.rt.parker.Reset()
+			arg.ctr.rt.parker.EncodeInt32(0)
+			conflictRow := arg.ctr.rt.parker.Bytes()
 
 			// txn01 commit
 			_, err := proc.LockService.Lock(
@@ -211,6 +212,7 @@ func TestCallLockOpWithHasPrevCommit(t *testing.T) {
 			go func() {
 				defer close(c)
 				arg2 := &Argument{
+					ctr: &container{},
 					OperatorBase: vm.OperatorBase{
 						OperatorInfo: vm.OperatorInfo{
 							Idx:     1,
@@ -219,14 +221,14 @@ func TestCallLockOpWithHasPrevCommit(t *testing.T) {
 						},
 					},
 				}
-				arg2.rt = &state{}
-				arg2.rt.retryError = nil
+				arg2.ctr.rt = &state{}
+				arg2.ctr.rt.retryError = nil
 				arg2.targets = arg.targets
 				arg2.Prepare(proc)
-				arg2.rt.hasNewVersionInRange = testFunc
+				arg2.ctr.rt.hasNewVersionInRange = testFunc
 				valueScan := arg.GetChildren(0).(*value_scan.Argument)
 				resetChildren(arg2, valueScan.Batchs[0])
-				defer arg2.rt.parker.FreeMem()
+				defer arg2.ctr.rt.parker.FreeMem()
 
 				_, err = arg2.Call(proc)
 				assert.NoError(t, err)
@@ -251,11 +253,11 @@ func TestCallLockOpWithHasPrevCommitLessMe(t *testing.T) {
 		[][]int32{{0, 1, 2}},
 		func(proc *process.Process, arg *Argument) {
 			require.NoError(t, arg.Prepare(proc))
-			arg.rt.hasNewVersionInRange = testFunc
+			arg.ctr.rt.hasNewVersionInRange = testFunc
 
-			arg.rt.parker.Reset()
-			arg.rt.parker.EncodeInt32(0)
-			conflictRow := arg.rt.parker.Bytes()
+			arg.ctr.rt.parker.Reset()
+			arg.ctr.rt.parker.EncodeInt32(0)
+			conflictRow := arg.ctr.rt.parker.Bytes()
 
 			// txn01 commit
 			_, err := proc.LockService.Lock(
@@ -280,6 +282,7 @@ func TestCallLockOpWithHasPrevCommitLessMe(t *testing.T) {
 			go func() {
 				defer close(c)
 				arg2 := &Argument{
+					ctr: &container{},
 					OperatorBase: vm.OperatorBase{
 						OperatorInfo: vm.OperatorInfo{
 							Idx:     1,
@@ -288,14 +291,14 @@ func TestCallLockOpWithHasPrevCommitLessMe(t *testing.T) {
 						},
 					},
 				}
-				arg2.rt = &state{}
-				arg2.rt.retryError = nil
+				arg2.ctr.rt = &state{}
+				arg2.ctr.rt.retryError = nil
 				arg2.targets = arg.targets
 				arg2.Prepare(proc)
-				arg2.rt.hasNewVersionInRange = testFunc
+				arg2.ctr.rt.hasNewVersionInRange = testFunc
 				valueScan := arg.GetChildren(0).(*value_scan.Argument)
 				resetChildren(arg2, valueScan.Batchs[0])
-				defer arg2.rt.parker.FreeMem()
+				defer arg2.ctr.rt.parker.FreeMem()
 
 				proc.TxnOperator.TxnRef().SnapshotTS = timestamp.Timestamp{PhysicalTime: math.MaxInt64}
 
@@ -325,7 +328,7 @@ func TestLockWithBlocking(t *testing.T) {
 			arg *Argument,
 			idx int,
 			isFirst, isLast bool) (bool, error) {
-			arg.rt.hasNewVersionInRange = testFunc
+			arg.ctr.rt.hasNewVersionInRange = testFunc
 			arg.OperatorBase.OperatorInfo = vm.OperatorInfo{
 				Idx:     idx,
 				IsFirst: isFirst,
@@ -337,8 +340,8 @@ func TestLockWithBlocking(t *testing.T) {
 				end.Batch.Clean(proc.GetMPool())
 			}
 			if end.Status == vm.ExecStop {
-				if arg.rt.parker != nil {
-					arg.rt.parker.FreeMem()
+				if arg.ctr.rt.parker != nil {
+					arg.ctr.rt.parker.FreeMem()
 				}
 			}
 			return end.Status == vm.ExecStop, nil
@@ -386,7 +389,7 @@ func TestLockWithBlockingWithConflict(t *testing.T) {
 			arg *Argument,
 			idx int,
 			isFirst, isLast bool) (bool, error) {
-			arg.rt.hasNewVersionInRange = testFunc
+			arg.ctr.rt.hasNewVersionInRange = testFunc
 			arg.OperatorBase.OperatorInfo = vm.OperatorInfo{
 				Idx:     idx,
 				IsFirst: isFirst,
@@ -396,8 +399,8 @@ func TestLockWithBlockingWithConflict(t *testing.T) {
 			return ok.Status == vm.ExecStop, err
 		},
 		func(arg *Argument, proc *process.Process) {
-			require.True(t, moerr.IsMoErrCode(arg.rt.retryError, moerr.ErrTxnNeedRetry))
-			for _, bat := range arg.rt.cachedBatches {
+			require.True(t, moerr.IsMoErrCode(arg.ctr.rt.retryError, moerr.ErrTxnNeedRetry))
+			for _, bat := range arg.ctr.rt.cachedBatches {
 				bat.Clean(proc.Mp())
 			}
 			arg.Free(proc, false, nil)
@@ -425,7 +428,7 @@ func TestLockWithHasNewVersionInLockedTS(t *testing.T) {
 		[][]int32{{0, 1, 2}},
 		func(proc *process.Process, arg *Argument) {
 			require.NoError(t, arg.Prepare(proc))
-			arg.rt.hasNewVersionInRange = func(
+			arg.ctr.rt.hasNewVersionInRange = func(
 				proc *process.Process,
 				rel engine.Relation,
 				tableID uint64,
@@ -437,8 +440,8 @@ func TestLockWithHasNewVersionInLockedTS(t *testing.T) {
 
 			_, err := arg.Call(proc)
 			require.NoError(t, err)
-			require.Error(t, arg.rt.retryError)
-			require.True(t, moerr.IsMoErrCode(arg.rt.retryError, moerr.ErrTxnNeedRetry))
+			require.Error(t, arg.ctr.rt.retryError)
+			require.True(t, moerr.IsMoErrCode(arg.ctr.rt.retryError, moerr.ErrTxnNeedRetry))
 		},
 		client.WithTimestampWaiter(tw),
 	)
@@ -525,7 +528,7 @@ func runLockBlockingOpTest(
 				batches2 = append(batches2, bat)
 			}
 			require.NoError(t, arg.Prepare(proc))
-			arg.rt.batchFetchFunc = func(process.Analyze) *process.RegisterMessage {
+			arg.ctr.rt.batchFetchFunc = func(process.Analyze) *process.RegisterMessage {
 				if len(batches) == 0 {
 					return testutil.NewRegMsg(nil)
 				}
@@ -600,10 +603,12 @@ func runLockOpTest(
 }
 
 func resetChildren(arg *Argument, bat *batch.Batch) {
+	valueScanArg := &value_scan.Argument{
+		Batchs: []*batch.Batch{bat},
+	}
+	valueScanArg.Prepare(nil)
 	arg.SetChildren(
 		[]vm.Operator{
-			&value_scan.Argument{
-				Batchs: []*batch.Batch{bat},
-			},
+			valueScanArg,
 		})
 }
