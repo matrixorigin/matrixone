@@ -811,7 +811,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 			if arg.E != nil {
 				newExprList = append(newExprList, arg.E)
 			}
-			arg.E = colexec.RewriteFilterExprList(newExprList)
+			arg.SetExeExpr(colexec.RewriteFilterExprList(newExprList))
 		}
 	}
 
