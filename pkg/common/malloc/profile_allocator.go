@@ -74,27 +74,27 @@ func (h *HeapSampleValues) Values() []int64 {
 }
 
 type ProfileAllocator struct {
-	upstream        Allocator
-	profiler        *Profiler[HeapSampleValues, *HeapSampleValues]
-	profileFraction uint32
-	funcPool        sync.Pool
+	upstream Allocator
+	profiler *Profiler[HeapSampleValues, *HeapSampleValues]
+	fraction uint32
+	funcPool sync.Pool
 }
 
 func NewProfileAllocator(
 	upstream Allocator,
 	profiler *Profiler[HeapSampleValues, *HeapSampleValues],
-	profileRate uint32,
+	fraction uint32,
 ) *ProfileAllocator {
 	ret := &ProfileAllocator{
-		upstream:        upstream,
-		profiler:        profiler,
-		profileFraction: profileRate,
+		upstream: upstream,
+		profiler: profiler,
+		fraction: fraction,
 	}
 
 	ret.funcPool = sync.Pool{
 		New: func() any {
 			argumented := new(argumentedFuncDeallocator[profileDeallocateArgs])
-			argumented.fn = func(_ unsafe.Pointer, args profileDeallocateArgs) {
+			argumented.fn = func(_ unsafe.Pointer, hints Hints, args profileDeallocateArgs) {
 				args.values.InuseBytes.Add(int64(-args.size))
 				args.values.InuseObjects.Add(-1)
 				ret.funcPool.Put(argumented)
@@ -113,13 +113,13 @@ type profileDeallocateArgs struct {
 
 var _ Allocator = new(ProfileAllocator)
 
-func (p *ProfileAllocator) Allocate(size uint64) (unsafe.Pointer, Deallocator, error) {
-	ptr, dec, err := p.upstream.Allocate(size)
+func (p *ProfileAllocator) Allocate(size uint64, hints Hints) (unsafe.Pointer, Deallocator, error) {
+	ptr, dec, err := p.upstream.Allocate(size, hints)
 	if err != nil {
 		return nil, nil, err
 	}
 	const skip = 1 // p.Allocate
-	values := p.profiler.Sample(skip, p.profileFraction)
+	values := p.profiler.Sample(skip, p.fraction)
 	values.AllocatedBytes.Add(int64(size))
 	values.AllocatedObjects.Add(1)
 	values.InuseBytes.Add(int64(size))

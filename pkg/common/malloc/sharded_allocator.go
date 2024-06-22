@@ -28,8 +28,8 @@ func NewShardedAllocator(numShards int, newShard func() Allocator) ShardedAlloca
 
 var _ Allocator = ShardedAllocator{}
 
-func (s ShardedAllocator) Allocate(size uint64) (unsafe.Pointer, Deallocator, error) {
+func (s ShardedAllocator) Allocate(size uint64, hints Hints) (unsafe.Pointer, Deallocator, error) {
 	pid := runtime_procPin()
 	runtime_procUnpin()
-	return s[pid%len(s)].Allocate(size)
+	return s[pid%len(s)].Allocate(size, hints)
 }
