@@ -237,7 +237,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 					R: r,
 					C: counter,
 				}
-				cacheData, err := entry.ToCacheData(cr, nil, DefaultCacheDataAllocator)
+				cacheData, err := entry.ToCacheData(cr, nil, GetDefaultCacheDataAllocator())
 				if err != nil {
 					return err
 				}
@@ -287,7 +287,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 					r: io.TeeReader(r, buf),
 					closeFunc: func() error {
 						defer f.Close()
-						cacheData, err := entry.ToCacheData(buf, buf.Bytes(), DefaultCacheDataAllocator)
+						cacheData, err := entry.ToCacheData(buf, buf.Bytes(), GetDefaultCacheDataAllocator())
 						if err != nil {
 							return err
 						}
@@ -339,7 +339,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 				}
 			}
 
-			if err := entry.setCachedData(); err != nil {
+			if err := entry.setCachedData(ctx); err != nil {
 				return err
 			}
 

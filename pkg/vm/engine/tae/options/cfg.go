@@ -24,7 +24,7 @@ const (
 	defaultRpcMaxMessageSize      = 16 * mpool.KB
 	defaultRpcEnableChecksum      = true
 	defaultLogtailCollectInterval = 50 * time.Millisecond
-	defaultResponseSendTimeout    = 30 * time.Second
+	defaultResponseSendTimeout    = time.Minute
 	defaultRpcStreamPoisonTime    = 5 * time.Second
 	// The default value of PullWorkerPoolSize.
 	defaultPullWorkerPoolSize = 50
@@ -47,6 +47,7 @@ type CheckpointCfg struct {
 	GCCheckpointInterval      time.Duration
 	DisableGCCheckpoint       bool
 	ReservedWALEntryCount     uint64
+	StartupLatency            time.Duration
 
 	// only for test
 	// it is used to control the block rows of the checkpoint

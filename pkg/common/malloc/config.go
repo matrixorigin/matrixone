@@ -22,6 +22,11 @@ import (
 )
 
 type Config struct {
+	// !! REMEMBER TO CHANGE SetDefaultConfig WHEN ADDING FIELDS
+
+	// Allocator controls which allocator to use
+	Allocator *string `toml:"allocator"`
+
 	// CheckFraction controls the fraction of checked deallocations
 	// On average, 1 / fraction of deallocations will be checked for double free or missing free
 	CheckFraction *uint32 `toml:"check-fraction"`
@@ -39,7 +44,7 @@ var defaultConfig = func() *atomic.Pointer[Config] {
 
 	// default config
 	ret.Store(&Config{
-		CheckFraction:     ptrTo(uint32(65536)),
+		CheckFraction:     ptrTo(uint32(512)),
 		EnableMetrics:     ptrTo(true),
 		FullStackFraction: ptrTo(uint32(10)),
 	})
@@ -61,6 +66,9 @@ func SetDefaultConfig(delta Config) {
 	}
 	if delta.FullStackFraction != nil {
 		config.FullStackFraction = delta.FullStackFraction
+	}
+	if delta.Allocator != nil {
+		config.Allocator = delta.Allocator
 	}
 
 	// update

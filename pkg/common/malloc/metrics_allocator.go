@@ -33,7 +33,7 @@ func NewMetricsAllocator(upstream Allocator) *MetricsAllocator {
 	ret.funcPool = sync.Pool{
 		New: func() any {
 			argumented := new(argumentedFuncDeallocator[uint64])
-			argumented.fn = func(_ unsafe.Pointer, size uint64) {
+			argumented.fn = func(_ unsafe.Pointer, hints Hints, size uint64) {
 				metric.MallocCounterFreeBytes.Add(float64(size))
 				ret.funcPool.Put(argumented)
 			}
@@ -50,8 +50,8 @@ type AllocateInfo struct {
 
 var _ Allocator = new(MetricsAllocator)
 
-func (m *MetricsAllocator) Allocate(size uint64) (unsafe.Pointer, Deallocator, error) {
-	ptr, dec, err := m.upstream.Allocate(size)
+func (m *MetricsAllocator) Allocate(size uint64, hints Hints) (unsafe.Pointer, Deallocator, error) {
+	ptr, dec, err := m.upstream.Allocate(size, hints)
 	if err != nil {
 		return nil, nil, err
 	}

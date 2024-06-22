@@ -1801,6 +1801,7 @@ func doFormatExpr(expr *plan.Expr, out *bytes.Buffer, depth int) {
 	default:
 		out.WriteString(fmt.Sprintf("%sExpr_Unknown(%s)", prefix, expr.String()))
 	}
+	out.WriteString(fmt.Sprintf("%sExpr_Selectivity(%v)", prefix, expr.Selectivity))
 }
 
 // databaseIsValid checks whether the database exists or not.
