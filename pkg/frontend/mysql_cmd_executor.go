@@ -1074,11 +1074,11 @@ func createPrepareStmt(
 		//only DQL & DML will pre compile
 		comp, err = createCompile(execCtx, ses, ses.proc, originSQL, saveStmt, preparePlan.GetDcl().GetPrepare().Plan, ses.GetOutputCallback(execCtx), true)
 		if err != nil {
+			if comp != nil {
+				comp.Release()
+				comp = nil
+			}
 			if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
-				if comp != nil {
-					comp.Release()
-					comp = nil
-				}
 				return nil, err
 			}
 		}
@@ -1087,12 +1087,12 @@ func createPrepareStmt(
 			comp.Release()
 			comp = nil
 		}
-	}
 
-	// @xxx when refactor prepare finish, remove this code
-	if comp != nil {
-		comp.Release()
-		comp = nil
+		// @xxx when refactor prepare finish, remove this code
+		if comp != nil {
+			comp.Release()
+			comp = nil
+		}
 	}
 
 	prepareStmt := &PrepareStmt{

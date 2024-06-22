@@ -246,6 +246,10 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch) erro
 		if retComp == nil {
 			cwft.compile, err = createCompile(execCtx, cwft.ses, cwft.proc, cwft.ses.GetSql(), cwft.stmt, cwft.plan, fill, false)
 			if err != nil {
+				if cwft.compile != nil {
+					cwft.compile.Release()
+					cwft.compile = nil
+				}
 				return nil, err
 			}
 			cwft.compile.SetOriginSQL(originSQL)
@@ -266,6 +270,10 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch) erro
 	} else {
 		cwft.compile, err = createCompile(execCtx, cwft.ses, cwft.proc, execCtx.sqlOfStmt, cwft.stmt, cwft.plan, fill, false)
 		if err != nil {
+			if cwft.compile != nil {
+				cwft.compile.Release()
+				cwft.compile = nil
+			}
 			return nil, err
 		}
 	}
@@ -435,12 +443,6 @@ func createCompile(
 		getStatementStartAt(execCtx.reqCtx),
 	)
 	retCompile.SetIsPrepare(isPrepare)
-	defer func() {
-		if err != nil && retCompile != nil {
-			retCompile.Release()
-			retCompile = nil
-		}
-	}()
 	retCompile.SetBuildPlanFunc(func() (*plan2.Plan, error) {
 		plan, err := buildPlan(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), stmt)
 		if err != nil {
@@ -457,14 +459,14 @@ func createCompile(
 	}
 	err = retCompile.Compile(execCtx.reqCtx, plan, fill)
 	if err != nil {
-		return nil, err
+		return
 	}
 	// check if it is necessary to initialize the temporary engine
 	if !ses.GetTxnHandler().HasTempEngine() && retCompile.NeedInitTempEngine() {
 		// 0. init memory-non-dist storage
 		err = ses.GetTxnHandler().CreateTempStorage(GetClock())
 		if err != nil {
-			return nil, err
+			return
 		}
 
 		// temporary storage is passed through Ctx
@@ -481,7 +483,7 @@ func createCompile(
 		txnOp2 := ses.GetTxnHandler().GetTxn()
 		err = tempEngine.Create(execCtx.reqCtx, defines.TEMPORARY_DBNAME, txnOp2)
 		if err != nil {
-			return nil, err
+			return
 		}
 	}
 	retCompile.SetOriginSQL(originSQL)
