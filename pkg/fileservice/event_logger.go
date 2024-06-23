@@ -16,6 +16,7 @@ package fileservice
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -51,13 +52,17 @@ func WithEventLogger(ctx context.Context) context.Context {
 	return ctx
 }
 
-func LogEvent(ctx context.Context, ev string) {
+func LogEvent(ctx context.Context, ev string, args ...any) {
 	v := ctx.Value(EventLoggerKey)
 	if v == nil {
 		return
 	}
 	logger := v.(*eventLogger)
-	logger.emit(ev)
+	if len(args) > 0 {
+		logger.emit(fmt.Sprintf(ev, args...))
+	} else {
+		logger.emit(ev)
+	}
 }
 
 func (e *eventLogger) emit(ev string) {
