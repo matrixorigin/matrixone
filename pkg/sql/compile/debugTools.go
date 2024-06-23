@@ -49,6 +49,7 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.Single:                  "single",
 	vm.Mark:                    "mark",
 	vm.LoopJoin:                "loop join",
+	vm.IndexJoin:               "index join",
 	vm.LoopLeft:                "loop left",
 	vm.LoopSemi:                "loop semi",
 	vm.LoopAnti:                "loop anti",
