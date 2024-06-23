@@ -736,7 +736,10 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 	case *projection.Argument:
 		in.ProjectList = t.Es
 	case *restrict.Argument:
-		in.Filter = t.E
+		in.Filter = t.GetExeExpr()
+		if in.Filter == nil {
+			in.Filter = t.E
+		}
 	case *semi.Argument:
 		in.SemiJoin = &pipeline.SemiJoin{
 			Result:                 t.Result,

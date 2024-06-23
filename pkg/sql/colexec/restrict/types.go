@@ -74,6 +74,10 @@ func (arg *Argument) SetExeExpr(e *plan.Expr) {
 	arg.exeExpr = e
 }
 
+func (arg *Argument) GetExeExpr() *plan.Expr {
+	return arg.exeExpr
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.ctr != nil {
 		arg.ctr.cleanExecutor()
