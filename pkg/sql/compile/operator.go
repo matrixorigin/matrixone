@@ -515,7 +515,6 @@ func constructRestrict(n *plan.Node, filterExpr *plan2.Expr) *filter.Argument {
 	arg := filter.NewArgument()
 	arg.E = filterExpr
 	arg.IsEnd = n.IsEnd
-	arg.OpStats = process.NewOperatorStats("Filter")
 	return arg
 }
 
@@ -710,7 +709,6 @@ func constructInsert(n *plan.Node, eg engine.Engine) (*insert.Argument, error) {
 func constructProjection(n *plan.Node) *projection.Argument {
 	arg := projection.NewArgument()
 	arg.Es = n.ProjectList
-	arg.OpStats = process.NewOperatorStats("Projection")
 	return arg
 }
 
@@ -1164,7 +1162,6 @@ func constructGroup(_ context.Context, n, cn *plan.Node, needEval bool, shuffleD
 	arg.Exprs = n.GroupBy
 	arg.IsShuffle = shuffleGroup
 	arg.PreAllocSize = preAllocSize
-	arg.OpStats = process.NewOperatorStats("group")
 	return arg
 }
 
@@ -1926,7 +1923,6 @@ func constructJoinCondition(expr *plan.Expr, proc *process.Process) (*plan.Expr,
 
 func constructTableScan() *table_scan.Argument {
 	argument := table_scan.NewArgument()
-	argument.OpStats = process.NewOperatorStats("table_scan")
 	return argument
 }
 
