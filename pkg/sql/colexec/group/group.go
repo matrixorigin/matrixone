@@ -164,6 +164,7 @@ func (ctr *container) processGroupByAndAgg(
 				if result.Batch.IsEmpty() {
 					continue
 				}
+
 				anal.Input(result.Batch, isFirst)
 
 				bat := result.Batch

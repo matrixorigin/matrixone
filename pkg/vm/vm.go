@@ -55,8 +55,8 @@ func setAnalyzeInfo(ins Instructions, proc *process.Process) {
 		switch ins[i].Op {
 		case Output:
 			ins[i].Idx = -1
-		case TableScan:
-			ins[i].Idx = ins[i+1].Idx
+			//case TableScan:
+			//	ins[i].Idx = ins[i+1].Idx
 		}
 	}
 
@@ -126,6 +126,7 @@ func Run(ins Instructions, proc *process.Process) (end bool, err error) {
 
 	setAnalyzeInfo(ins, proc)
 
+	// 建立算子之间的父子关系，建议在Compile完成后进行操作
 	for i := 1; i < len(ins); i++ {
 		ins[i].Arg.AppendChild(ins[i-1].Arg)
 	}
