@@ -38,34 +38,33 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
 	state              int
+	keyWidth           int // keyWidth is the width of hash columns, it determines which hash map to use.
 	hasNull            bool
-	isMerge            bool
+	runtimeFilterIn    bool
 	multiSels          [][]int32
 	batches            []*batch.Batch
 	batchIdx           int
-	tmpBatch           *batch.Batch
 	inputBatchRowCount int
+	tmpBatch           *batch.Batch
 	executor           []colexec.ExpressionExecutor
 	vecs               [][]*vector.Vector
 	intHashMap         *hashmap.IntHashMap
 	strHashMap         *hashmap.StrHashMap
-	keyWidth           int // keyWidth is the width of hash columns, it determines which hash map to use.
 	uniqueJoinKeys     []*vector.Vector
-	runtimeFilterIn    bool
 }
 
 type Argument struct {
 	ctr *container
 	// need to generate a push-down filter expression
-	NeedExpr          bool
-	IsDup             bool
-	Typs              []types.Type
-	Conditions        []*plan.Expr
-	HashOnPK          bool
-	NeedMergedBatch   bool
-	NeedAllocateSels  bool
+	NeedExpr         bool
+	IsDup            bool
+	HashOnPK         bool
+	NeedMergedBatch  bool
+	NeedAllocateSels bool
+	Typs             []types.Type
+	Conditions       []*plan.Expr
+
 	RuntimeFilterSpec *pbplan.RuntimeFilterSpec
 	vm.OperatorBase
 }
@@ -112,12 +111,6 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		ctr.cleanBatches(proc)
 		ctr.cleanEvalVectors()
 		ctr.cleanHashMap()
-		ctr.FreeMergeTypeOperator(pipelineFailed)
-		if ctr.isMerge {
-			ctr.FreeMergeTypeOperator(pipelineFailed)
-		} else {
-			ctr.FreeAllReg()
-		}
 		arg.ctr = nil
 	}
 }

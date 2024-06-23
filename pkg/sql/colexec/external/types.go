@@ -99,11 +99,13 @@ type FilterParam struct {
 	blockReader  *blockio.BlockReader
 }
 
-type Argument struct {
-	Es  *ExternalParam
-	buf *batch.Batch
-
+type container struct {
 	maxAllocSize int
+	buf          *batch.Batch
+}
+type Argument struct {
+	ctr *container
+	Es  *ExternalParam
 
 	vm.OperatorBase
 }
@@ -149,12 +151,15 @@ func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if arg.buf != nil {
-		arg.buf.Clean(proc.Mp())
-		arg.buf = nil
+	if arg.ctr != nil {
+		if arg.ctr.buf != nil {
+			arg.ctr.buf.Clean(proc.Mp())
+			arg.ctr.buf = nil
+		}
+		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+		anal.Alloc(int64(arg.ctr.maxAllocSize))
+		arg.ctr = nil
 	}
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
-	anal.Alloc(int64(arg.maxAllocSize))
 }
 
 type ParseLineHandler struct {

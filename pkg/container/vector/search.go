@@ -24,6 +24,297 @@ import (
 const kMinLenForSubVector = 4
 const kMaxLenForBinarySearch = 64
 
+func OrderedSearchOffsetsByLess[T types.OrderedT](ub T, closed bool, quick bool) func(vector *Vector) []int32 {
+	return func(vector *Vector) []int32 {
+		var sels []int32
+		rows := MustFixedCol[T](vector)
+		if len(rows) == 0 {
+			return sels
+		}
+
+		for x := range rows {
+			if closed && rows[x] <= ub {
+				sels = append(sels, int32(x))
+			} else if !closed && rows[x] < ub {
+				sels = append(sels, int32(x))
+			} else if quick {
+				break
+			}
+		}
+		return sels
+	}
+}
+
+func OrderedSearchOffsetsByGreat[T types.OrderedT](lb T, closed bool, quick bool) func(vector *Vector) []int32 {
+	return func(vector *Vector) []int32 {
+		var sels []int32
+		rows := MustFixedCol[T](vector)
+		if len(rows) == 0 {
+			return sels
+		}
+		ll := len(rows)
+		for x := ll - 1; x >= 0; x-- {
+			if closed && rows[x] >= lb {
+				sels = append(sels, int32(x))
+			} else if !closed && rows[x] > lb {
+				sels = append(sels, int32(x))
+			} else if quick {
+				break
+			}
+		}
+		return sels
+	}
+}
+
+func FixedSizeSearchOffsetsByLess[
+	T types.Decimal128 | types.Decimal64](
+	ub T, closed bool, quick bool, cmp func(a, b T) int) func(vector *Vector) []int32 {
+	return func(vector *Vector) []int32 {
+		var sels []int32
+		rows := MustFixedCol[T](vector)
+		if len(rows) == 0 {
+			return sels
+		}
+
+		for x := range rows {
+			if closed && cmp(rows[x], ub) <= 0 {
+				sels = append(sels, int32(x))
+			} else if !closed && cmp(rows[x], ub) < 0 {
+				sels = append(sels, int32(x))
+			} else if quick {
+				break
+			}
+		}
+		return sels
+	}
+}
+
+func FixedSizeSearchOffsetsByGreat[
+	T types.Decimal128 | types.Decimal64](
+	lb T, closed bool, quick bool, cmp func(a, b T) int) func(vector *Vector) []int32 {
+	return func(vector *Vector) []int32 {
+		var sels []int32
+		rows := MustFixedCol[T](vector)
+		if len(rows) == 0 {
+			return sels
+		}
+
+		for x := len(rows) - 1; x >= 0; x-- {
+			if closed && cmp(rows[x], lb) <= 0 {
+				sels = append(sels, int32(x))
+			} else if !closed && cmp(rows[x], lb) < 0 {
+				sels = append(sels, int32(x))
+			} else if quick {
+				break
+			}
+		}
+		return sels
+	}
+}
+
+func VarlenSearchOffsetByLess(ub []byte, closed bool, quick bool) func(*Vector) []int32 {
+	return func(vector *Vector) []int32 {
+		var sels []int32
+		vecLen := vector.Length()
+		if vecLen == 0 {
+			return sels
+		}
+
+		for x := 0; x < vecLen; x++ {
+			if closed && bytes.Compare(vector.GetBytesAt(x), ub) <= 0 {
+				sels = append(sels, int32(x))
+			} else if !closed && bytes.Compare(vector.GetBytesAt(x), ub) < 0 {
+				sels = append(sels, int32(x))
+			} else if quick {
+				break
+			}
+		}
+
+		return sels
+	}
+}
+
+func VarlenSearchOffsetByGreat(lb []byte, closed bool, quick bool) func(*Vector) []int32 {
+	return func(vector *Vector) []int32 {
+		var sels []int32
+		vecLen := vector.Length()
+		if vecLen == 0 {
+			return sels
+		}
+
+		for x := vecLen - 1; x >= 0; x-- {
+			if closed && bytes.Compare(vector.GetBytesAt(x), lb) >= 0 {
+				sels = append(sels, int32(x))
+			} else if !closed && bytes.Compare(vector.GetBytesAt(x), lb) > 0 {
+				sels = append(sels, int32(x))
+			} else if quick {
+				break
+			}
+		}
+
+		return sels
+	}
+}
+
+func OrderedLinearSearchOffsetByValFactory[T types.OrderedT | types.Decimal128 | types.Decimal64](
+	vals []T, cmp func(T, T) int) func(*Vector) []int32 {
+	return func(vector *Vector) []int32 {
+		var sels []int32
+		rows := MustFixedCol[T](vector)
+		if len(rows) == 0 {
+			return sels
+		}
+		// sort the rows first maybe better if there has many vals
+		for x := range rows {
+			for y := range vals {
+				if (cmp != nil && cmp(rows[x], vals[y]) == 0) || (cmp == nil && rows[x] == vals[y]) {
+					sels = append(sels, int32(x))
+					break
+				}
+			}
+		}
+		return sels
+	}
+}
+
+func FixedSizeLinearSearchOffsetByValFactory[T types.Decimal128 | types.Decimal64](
+	vals []T, cmp func(T, T) int) func(*Vector) []int32 {
+	return OrderedLinearSearchOffsetByValFactory(vals, cmp)
+}
+
+func VarlenLinearSearchOffsetByValFactory(vals [][]byte) func(*Vector) []int32 {
+	return func(vector *Vector) []int32 {
+		var sels []int32
+		vecLen := vector.Length()
+		if vecLen == 0 {
+			return sels
+		}
+		for x := 0; x < vecLen; x++ {
+			for y := range vals {
+				if bytes.Equal(vals[y], vector.GetBytesAt(x)) {
+					sels = append(sels, int32(x))
+					break
+				}
+			}
+		}
+		return sels
+	}
+}
+
+func LinearCollectOffsetsByPrefixEqFactory(val []byte) func(*Vector) []int32 {
+	return func(vector *Vector) []int32 {
+		var sels []int32
+		vecLen := vector.Length()
+		if vecLen == 0 {
+			return sels
+		}
+		col, area := MustVarlenaRawData(vector)
+		for x := 0; x < vecLen; x++ {
+			if bytes.HasPrefix(col[x].GetByteSlice(area), val) {
+				sels = append(sels, int32(x))
+			}
+		}
+		return sels
+	}
+}
+
+func LinearCollectOffsetsByPrefixBetweenFactory(lb, ub []byte) func(*Vector) []int32 {
+	return func(vector *Vector) []int32 {
+		var sels []int32
+		vecLen := vector.Length()
+		if vecLen == 0 {
+			return sels
+		}
+		col, area := MustVarlenaRawData(vector)
+		for x := 0; x < vecLen; x++ {
+			bb := col[x].GetByteSlice(area)
+			if types.PrefixCompare(bb, lb) >= 0 && types.PrefixCompare(bb, ub) <= 0 {
+				sels = append(sels, int32(x))
+			}
+		}
+		return sels
+	}
+}
+
+func LinearCollectOffsetsByBetweenFactory[T types.OrderedT](lb, ub T, hint int) func(*Vector) []int32 {
+	// 0: [,]
+	// 1: (,]
+	// 2: [,)
+	// 3: (,)
+	var check func(oth T) bool
+	switch hint {
+	case 0:
+		check = func(oth T) bool { return oth >= lb && oth <= ub }
+	case 1:
+		check = func(oth T) bool { return oth > lb && oth <= ub }
+	case 2:
+		check = func(oth T) bool { return oth >= lb && oth < ub }
+	case 3:
+		check = func(oth T) bool { return oth > lb && oth < ub }
+	default:
+		panic(hint)
+	}
+	return func(vector *Vector) []int32 {
+		var sels []int32
+		vecLen := vector.Length()
+		if vecLen == 0 {
+			return sels
+		}
+		cols := MustFixedCol[T](vector)
+		for x := 0; x < vecLen; x++ {
+			if check(cols[x]) {
+				sels = append(sels, int32(x))
+			}
+			//if cols[x] >= lb && cols[x] <= ub {
+			//
+			//}
+		}
+		return sels
+	}
+}
+
+func FixedSizedLinearCollectOffsetsByBetweenFactory[
+	T types.Decimal128 | types.Decimal64](lb, ub T, cmp func(T, T) int) func(*Vector) []int32 {
+	return func(vector *Vector) []int32 {
+		var sels []int32
+		vecLen := vector.Length()
+		if vecLen == 0 {
+			return sels
+		}
+		cols := MustFixedCol[T](vector)
+		for x := 0; x < vecLen; x++ {
+			if cmp(cols[x], lb) >= 0 && cmp(cols[x], ub) <= 0 {
+				sels = append(sels, int32(x))
+			}
+		}
+		return sels
+	}
+}
+
+func LinearCollectOffsetsByPrefixInFactory(rvec *Vector) func(*Vector) []int32 {
+	return func(lvec *Vector) []int32 {
+		var sels []int32
+		lvecLen := lvec.Length()
+		rvecLen := rvec.Length()
+		if lvecLen == 0 || rvecLen == 0 {
+			return sels
+		}
+		lcol, larea := MustVarlenaRawData(lvec)
+		rcol, rarea := MustVarlenaRawData(rvec)
+
+		for x := 0; x < lvecLen; x++ {
+			bb := lcol[x].GetByteSlice(larea)
+			for y := 0; y < rvecLen; y++ {
+				if types.PrefixCompare(bb, rcol[y].GetByteSlice(rarea)) == 0 {
+					sels = append(sels, int32(x))
+					break
+				}
+			}
+		}
+		return sels
+	}
+}
+
 func OrderedBinarySearchOffsetByValFactory[T types.OrderedT](vals []T) func(*Vector) []int32 {
 	return func(vec *Vector) []int32 {
 		var sels []int32
@@ -237,6 +528,84 @@ func CollectOffsetsByPrefixBetweenFactory(lval, rval []byte) func(*Vector) []int
 		}
 		end := sort.Search(lvlen, func(i int) bool {
 			return types.PrefixCompare(lcol[i].GetByteSlice(larea), rval) > 0
+		})
+		if start == end {
+			return nil
+		}
+		sels := make([]int32, end-start)
+		for i := start; i < end; i++ {
+			sels[i-start] = int32(i)
+		}
+		return sels
+	}
+}
+
+func CollectOffsetsByBetweenWithCompareFactory[T types.Decimal128](lval, rval T, cmp func(T, T) int) func(*Vector) []int32 {
+	return func(vec *Vector) []int32 {
+		vecLen := vec.Length()
+		if vecLen == 0 {
+			return nil
+		}
+		cols := MustFixedCol[T](vec)
+		start := sort.Search(vecLen, func(i int) bool {
+			return cmp(cols[i], lval) >= 0
+		})
+		if start == vecLen {
+			return nil
+		}
+		end := sort.Search(vecLen, func(i int) bool {
+			return cmp(cols[i], rval) > 0
+		})
+		if start == end {
+			return nil
+		}
+		sels := make([]int32, end-start)
+		for i := start; i < end; i++ {
+			sels[i-start] = int32(i)
+		}
+		return sels
+	}
+}
+
+func CollectOffsetsByBetweenFactory[T types.OrderedT](lval, rval T, hint int) func(*Vector) []int32 {
+	// 0: [,]
+	// 1: (,]
+	// 2: [,)
+	// 3: (,)
+	var cmpLeft, cmpRight func(oth, val T) bool
+	switch hint {
+	case 0:
+		cmpLeft = func(oth, val T) bool { return oth >= val }
+		cmpRight = func(oth, val T) bool { return oth > val }
+	case 1:
+		cmpLeft = func(oth, val T) bool { return oth > val }
+		cmpRight = func(oth, val T) bool { return oth > val }
+	case 2:
+		cmpLeft = func(oth, val T) bool { return oth >= val }
+		cmpRight = func(oth, val T) bool { return oth >= val }
+	case 3:
+		cmpLeft = func(oth, val T) bool { return oth > val }
+		cmpRight = func(oth, val T) bool { return oth >= val }
+	default:
+		panic(hint)
+	}
+
+	return func(vec *Vector) []int32 {
+		vecLen := vec.Length()
+		if vecLen == 0 {
+			return nil
+		}
+		cols := MustFixedCol[T](vec)
+		start := sort.Search(vecLen, func(i int) bool {
+			//return cols[i] >= lval
+			return cmpLeft(cols[i], lval)
+		})
+		if start == vecLen {
+			return nil
+		}
+		end := sort.Search(vecLen, func(i int) bool {
+			//return cols[i] > rval
+			return cmpRight(cols[i], rval)
 		})
 		if start == end {
 			return nil

@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -124,6 +125,7 @@ func (txn *Transaction) WriteBatch(
 		if tableId != catalog.MO_DATABASE_ID &&
 			tableId != catalog.MO_TABLES_ID && tableId != catalog.MO_COLUMNS_ID {
 			txn.workspaceSize += uint64(bat.Size())
+			txn.insertCount += bat.RowCount()
 		}
 	}
 	e := Entry{
@@ -391,8 +393,19 @@ func (txn *Transaction) checkDup() error {
 func (txn *Transaction) dumpBatchLocked(offset int) error {
 	var size uint64
 	var pkCount int
-	if txn.workspaceSize < WorkspaceThreshold {
-		return nil
+
+	//offset < 0 indicates commit.
+	if offset < 0 {
+		//if txn.workspaceSize < WorkspaceThreshold {
+		//	return nil
+		//}
+		if txn.workspaceSize < WorkspaceThreshold && txn.insertCount < InsertEntryThreshold {
+			return nil
+		}
+	} else {
+		if txn.workspaceSize < WorkspaceThreshold {
+			return nil
+		}
 	}
 
 	dumpAll := offset < 0
@@ -536,12 +549,22 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 	return nil
 }
 
-func (txn *Transaction) getTable(id uint32, dbName string, tbName string) (engine.Relation, error) {
-	database, err := txn.engine.DatabaseByAccountID(id, dbName, txn.proc.TxnOperator)
+func (txn *Transaction) getTable(
+	id uint32,
+	dbName string,
+	tbName string,
+) (engine.Relation, error) {
+	ctx := context.WithValue(
+		context.Background(),
+		defines.TenantIDKey{},
+		id,
+	)
+
+	database, err := txn.engine.Database(ctx, dbName, txn.proc.TxnOperator)
 	if err != nil {
 		return nil, err
 	}
-	tbl, err := database.(*txnDatabase).RelationByAccountID(id, tbName, nil)
+	tbl, err := database.Relation(ctx, tbName, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -555,9 +578,9 @@ func (txn *Transaction) insertPosForCNBlock(
 	b *batch.Batch,
 	dbName string,
 	tbName string) error {
-	blks := vector.MustBytesCol(vec)
-	for i, blk := range blks {
-		blkInfo := *objectio.DecodeBlockInfo(blk)
+	blks, area := vector.MustVarlenaRawData(vec)
+	for i := range blks {
+		blkInfo := *objectio.DecodeBlockInfo(blks[i].GetByteSlice(area))
 		txn.cnBlkId_Pos[blkInfo.BlockID] = Pos{
 			bat:       b,
 			accountId: id,
@@ -805,6 +828,7 @@ func (txn *Transaction) mergeTxnWorkspaceLocked() error {
 	if len(txn.batchSelectList) > 0 {
 		for _, e := range txn.writes {
 			if sels, ok := txn.batchSelectList[e.bat]; ok {
+				txn.insertCount -= e.bat.RowCount() - len(sels)
 				e.bat.Shrink(sels, false)
 				delete(txn.batchSelectList, e.bat)
 			}
@@ -1118,24 +1142,47 @@ func (txn *Transaction) GetSnapshotWriteOffset() int {
 	return txn.snapshotWriteOffset
 }
 
-func (txn *Transaction) transferDeletesLocked() error {
+func (txn *Transaction) transferDeletesLocked(ctx context.Context, commit bool) error {
+	var latestTs timestamp.Timestamp
 	txn.timestamps = append(txn.timestamps, txn.op.SnapshotTS())
 	if txn.statementID > 0 && txn.op.Txn().IsRCIsolation() {
 		var ts timestamp.Timestamp
 		if txn.statementID == 1 {
 			ts = txn.timestamps[0]
+			txn.start = time.Now()
 		} else {
 			//statementID > 1
 			ts = txn.timestamps[txn.statementID-2]
 		}
+		if commit {
+			if time.Since(txn.start) < time.Second*5 {
+				return nil
+			}
+			//It's important to push the snapshot ts to the latest ts
+			if err := txn.op.UpdateSnapshot(
+				ctx,
+				timestamp.Timestamp{}); err != nil {
+				return err
+			}
+			latestTs = txn.op.SnapshotTS()
+			txn.resetSnapshot()
+		}
+
 		return txn.forEachTableHasDeletesLocked(func(tbl *txnTable) error {
 			ctx := tbl.proc.Load().Ctx
 			state, err := tbl.getPartitionState(ctx)
 			if err != nil {
 				return err
 			}
-			deleteObjs, createObjs := state.GetChangedObjsBetween(types.TimestampToTS(ts),
-				types.TimestampToTS(tbl.db.op.SnapshotTS()))
+			var endTs timestamp.Timestamp
+			if commit {
+				endTs = latestTs
+			} else {
+				endTs = tbl.db.op.SnapshotTS()
+			}
+			deleteObjs, createObjs := state.GetChangedObjsBetween(
+				types.TimestampToTS(ts),
+				types.TimestampToTS(endTs))
 
 			trace.GetService().ApplyFlush(
 				tbl.db.op.Txn().ID,

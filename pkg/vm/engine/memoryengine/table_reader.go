@@ -17,6 +17,7 @@ package memoryengine
 import (
 	"context"
 	"encoding/binary"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -41,7 +42,7 @@ type IterInfo struct {
 	IterID ID
 }
 
-func (t *Table) NewReader(ctx context.Context, parallel int, expr *plan.Expr, bytes []byte, _ bool) (readers []engine.Reader, err error) {
+func (t *Table) NewReader(ctx context.Context, parallel int, expr *plan.Expr, bytes []byte, _ bool, txnOffset int) (readers []engine.Reader, err error) {
 	readers = make([]engine.Reader, parallel)
 	shardIDs := ShardIdSlice(bytes)
 
@@ -210,7 +211,7 @@ func (t *Table) GetEngineType() engine.EngineType {
 	return engine.Memory
 }
 
-func (t *Table) Ranges(_ context.Context, _ []*plan.Expr) (engine.Ranges, error) {
+func (t *Table) Ranges(_ context.Context, _ []*plan.Expr, _ int) (engine.Ranges, error) {
 	// return encoded shard ids
 	nodes := getTNServices(t.engine.cluster)
 	shards := make(ShardIdSlice, 0, len(nodes)*8)

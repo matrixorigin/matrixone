@@ -610,7 +610,7 @@ func TestObject1(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err := db.CreateRelation(schema)
 	assert.Nil(t, err)
-	_, err = rel.CreateObject(false)
+	_, err = rel.CreateObject()
 	assert.Nil(t, err)
 	err = txn1.Commit(context.Background())
 	assert.Nil(t, err)
@@ -630,7 +630,7 @@ func TestObject1(t *testing.T) {
 	}
 	assert.Equal(t, 1, cnt)
 
-	_, err = rel.CreateObject(false)
+	_, err = rel.CreateObject()
 	assert.Nil(t, err)
 
 	objIt = rel.MakeObjectIt()
@@ -686,7 +686,7 @@ func TestObject2(t *testing.T) {
 	rel, _ := db.CreateRelation(schema)
 	objCnt := 10
 	for i := 0; i < objCnt; i++ {
-		_, err := rel.CreateObject(false)
+		_, err := rel.CreateObject()
 		assert.Nil(t, err)
 	}
 

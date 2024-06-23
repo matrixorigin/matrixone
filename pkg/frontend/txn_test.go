@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -244,6 +245,7 @@ func newMockErrSession(t *testing.T, ctx context.Context, ctrl *gomock.Controlle
 			txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 			txnOperator.EXPECT().Rollback(gomock.Any()).Return(moerr.NewInternalError(ctx, "throw error")).AnyTimes()
 			txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+			txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 			wsp := newTestWorkspace()
 			txnOperator.EXPECT().GetWorkspace().Return(wsp).AnyTimes()
 			txnOperator.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
@@ -254,9 +256,6 @@ func newMockErrSession(t *testing.T, ctx context.Context, ctrl *gomock.Controlle
 	eng.EXPECT().Hints().Return(engine.Hints{
 		CommitOrRollbackTimeout: time.Second,
 	}).AnyTimes()
-
-	var gSys GlobalSystemVariables
-	InitGlobalSystemVariables(&gSys)
 
 	ses := newTestSession(t, ctrl)
 	getGlobalPu().TxnClient = txnClient
@@ -275,6 +274,7 @@ func newMockErrSession2(t *testing.T, ctx context.Context, ctrl *gomock.Controll
 			txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 			txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 			txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+			txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 			wsp := newTestWorkspace()
 			wsp.reportErr1 = true
 			txnOperator.EXPECT().GetWorkspace().Return(wsp).AnyTimes()
@@ -287,8 +287,39 @@ func newMockErrSession2(t *testing.T, ctx context.Context, ctrl *gomock.Controll
 		CommitOrRollbackTimeout: time.Second,
 	}).AnyTimes()
 
-	var gSys GlobalSystemVariables
-	InitGlobalSystemVariables(&gSys)
+	ses := newTestSession(t, ctrl)
+	getGlobalPu().TxnClient = txnClient
+	getGlobalPu().StorageEngine = eng
+	ses.txnHandler.storage = eng
+
+	var c clock.Clock
+	_ = ses.GetTxnHandler().CreateTempStorage(c)
+	return ses
+}
+
+func newMockErrSession3(t *testing.T, ctx context.Context, ctrl *gomock.Controller) *Session {
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(ctx context.Context, commitTS timestamp.Timestamp, options ...TxnOption) (client.TxnOperator, error) {
+			txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+			txnOperator.EXPECT().Txn().Return(txn.TxnMeta{
+				ID: []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+			}).AnyTimes()
+			txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
+			txnOperator.EXPECT().Commit(gomock.Any()).Return(moerr.NewInternalError(ctx, "r-w conflicts")).AnyTimes()
+			txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+			wsp := newTestWorkspace()
+			wsp.reportErr1 = true
+			txnOperator.EXPECT().GetWorkspace().Return(wsp).AnyTimes()
+			txnOperator.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
+			return txnOperator, nil
+		}).AnyTimes()
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	eng.EXPECT().Hints().Return(engine.Hints{
+		CommitOrRollbackTimeout: time.Second,
+	}).AnyTimes()
+
 	ses := newTestSession(t, ctrl)
 	getGlobalPu().TxnClient = txnClient
 	getGlobalPu().StorageEngine = eng
@@ -315,6 +346,7 @@ func Test_rollbackStatement(t *testing.T) {
 				wsp := newTestWorkspace()
 				txnOperator.EXPECT().GetWorkspace().Return(wsp).AnyTimes()
 				txnOperator.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
+				txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 				return txnOperator, nil
 			}).AnyTimes()
 		eng := mock_frontend.NewMockEngine(ctrl)
@@ -328,9 +360,6 @@ func Test_rollbackStatement(t *testing.T) {
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 		ioses.EXPECT().Ref().AnyTimes()
-
-		var gSys GlobalSystemVariables
-		InitGlobalSystemVariables(&gSys)
 
 		ses := newTestSession(t, ctrl)
 		getGlobalPu().TxnClient = txnClient
@@ -667,5 +696,33 @@ func Test_rollbackStatement6(t *testing.T) {
 		convey.So(err, convey.ShouldNotBeNil)
 		t2 := ses.txnHandler.GetTxn()
 		convey.So(t2, convey.ShouldBeNil)
+	})
+}
+
+func Test_commit(t *testing.T) {
+	convey.Convey("commit txn", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ctx := defines.AttachAccountId(context.TODO(), sysAccountID)
+		ses := newMockErrSession3(t, ctx, ctrl)
+		var txnOp TxnOperator
+		ec := newTestExecCtx(ctx, ctrl)
+		ec.ses = ses
+		ec.txnOpt = FeTxnOption{
+			autoCommit: true,
+		}
+		err := ses.GetTxnHandler().Create(ec)
+		convey.So(err, convey.ShouldBeNil)
+		txnOp = ses.GetTxnHandler().GetTxn()
+		convey.So(ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), convey.ShouldBeFalse)
+		convey.So(ses.GetTxnHandler().OptionBitsIsSet(OPTION_NOT_AUTOCOMMIT), convey.ShouldBeFalse)
+		convey.So(!ses.GetTxnHandler().InMultiStmtTransactionMode(), convey.ShouldBeTrue)
+		convey.So(ses.GetTxnHandler().InActiveTxn() &&
+			NeedToBeCommittedInActiveTransaction(&tree.Insert{}), convey.ShouldBeFalse)
+		convey.So(txnOp != nil && !ses.IsDerivedStmt(), convey.ShouldBeTrue)
+		err = ses.GetTxnHandler().Commit(ec)
+		fmt.Println(err)
+		convey.So(err, convey.ShouldNotBeNil)
 	})
 }

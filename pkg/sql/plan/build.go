@@ -27,13 +27,13 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
-func runBuildSelectByBinder(stmtType plan.Query_StatementType, ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool) (*Plan, error) {
+func runBuildSelectByBinder(stmtType plan.Query_StatementType, ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool, skipStats bool) (*Plan, error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementBuildSelectHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	builder := NewQueryBuilder(stmtType, ctx, isPrepareStmt)
+	builder := NewQueryBuilder(stmtType, ctx, isPrepareStmt, skipStats)
 	bindCtx := NewBindContext(builder, nil)
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()
@@ -92,15 +92,15 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 	defer task.End()
 	switch stmt := stmt.(type) {
 	case *tree.Select:
-		return runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt, isPrepareStmt)
+		return runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt, isPrepareStmt, false)
 	case *tree.ParenSelect:
-		return runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt.Select, isPrepareStmt)
+		return runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt.Select, isPrepareStmt, false)
 	case *tree.ExplainAnalyze:
 		return buildExplainAnalyze(ctx, stmt, isPrepareStmt)
 	case *tree.Insert:
 		return buildInsert(stmt, ctx, false, isPrepareStmt)
 	case *tree.Replace:
-		return buildReplace(stmt, ctx, isPrepareStmt)
+		return buildReplace(stmt, ctx, isPrepareStmt, false)
 	case *tree.Update:
 		return buildTableUpdate(stmt, ctx, isPrepareStmt)
 	case *tree.Delete:
@@ -220,20 +220,6 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 	default:
 		return nil, moerr.NewInternalError(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
 	}
-}
-
-// GetExecType get executor will execute base AP or TP
-func GetExecTypeFromPlan(pn *Plan) ExecInfo {
-	defInfo := ExecInfo{
-		Typ:        ExecTypeAP,
-		WithGPU:    false,
-		WithBigMem: false,
-		CnNumbers:  2,
-	}
-	if IsTpQuery(pn.GetQuery()) {
-		defInfo.Typ = ExecTypeTP
-	}
-	return defInfo
 }
 
 // GetResultColumnsFromPlan

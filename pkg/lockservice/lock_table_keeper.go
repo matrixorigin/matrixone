@@ -193,7 +193,7 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 	req.KeepLockTableBind.ServiceID = k.serviceID
 	req.KeepLockTableBind.Status = k.service.getStatus()
 	if !k.service.isStatus(pb.Status_ServiceLockEnable) {
-		req.KeepLockTableBind.LockTables = k.service.popGroupTables()
+		req.KeepLockTableBind.LockTables = k.service.topGroupTables()
 		req.KeepLockTableBind.TxnIDs = k.service.activeTxnHolder.getAllTxnID()
 	}
 
@@ -208,6 +208,7 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 
 	if resp.KeepLockTableBind.OK {
 		switch resp.KeepLockTableBind.Status {
+		case pb.Status_ServiceLockEnable:
 		case pb.Status_ServiceLockWaiting:
 			// maybe pb.Status_ServiceUnLockSucc
 			if k.service.isStatus(pb.Status_ServiceLockEnable) {
@@ -215,6 +216,10 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 			}
 		default:
 			k.service.setStatus(resp.KeepLockTableBind.Status)
+		}
+		if len(req.KeepLockTableBind.LockTables) > 0 {
+			logBindsMove(k.service.popGroupTables())
+			logStatus(k.service.getStatus())
 		}
 		return
 	}

@@ -326,6 +326,10 @@ func (node *ShowDatabases) StmtKind() StmtKind {
 	return defaultResRowTyp
 }
 
+func (node *ShowAccountUpgrade) StmtKind() StmtKind {
+	return defaultResRowTyp
+}
+
 func (node *ShowTables) StmtKind() StmtKind {
 	return defaultResRowTyp
 }

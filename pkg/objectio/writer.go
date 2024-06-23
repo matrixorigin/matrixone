@@ -211,8 +211,9 @@ func (w *objectWriterV1) UpdateBlockZM(tye DataMetaType, blkIdx int, seqnum uint
 	w.blocks[tye][blkIdx].meta.ColumnMeta(seqnum).SetZoneMap(zm)
 }
 
-func (w *objectWriterV1) WriteBF(blkIdx int, seqnum uint16, buf []byte) (err error) {
+func (w *objectWriterV1) WriteBF(blkIdx int, seqnum uint16, buf []byte, typ uint8) (err error) {
 	w.blocks[SchemaData][blkIdx].bloomFilter = buf
+	w.blocks[SchemaData][blkIdx].meta.BlockHeader().SetBloomFilterType(typ)
 	return
 }
 
@@ -541,14 +542,15 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 	return blockObjects, err
 }
 
-// Sync is for testing
 func (w *objectWriterV1) Sync(ctx context.Context, items ...WriteOptions) error {
 	var err error
 	w.buffer.SetDataOptions(items...)
 	defer func() {
 		if err != nil {
 			w.buffer = nil
-			logutil.Error("[DoneWithErr] Write Sync error", zap.Error(err))
+			logutil.Error("[DoneWithErr] Write Sync error",
+				zap.Error(err),
+				zap.String("file name", w.fileName))
 		}
 	}()
 	// if a compact task is rollbacked, it may leave a written file in fs

@@ -70,19 +70,6 @@ var (
 	S3WriteIOBytesHistogram = s3IOBytesHistogram.WithLabelValues("write")
 	S3ReadIOBytesHistogram  = s3IOBytesHistogram.WithLabelValues("read")
 
-	s3IODurationHistogram = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "mo",
-			Subsystem: "fs",
-			Name:      "s3_io_duration_seconds",
-			Help:      "Bucketed histogram of s3 io duration.",
-			Buckets:   getDurationBuckets(),
-		}, []string{"type"})
-	S3WriteIODurationHistogram = s3IODurationHistogram.WithLabelValues("write")
-	S3ReadIODurationHistogram  = s3IODurationHistogram.WithLabelValues("read")
-	S3ListIODurationHistogram  = s3IODurationHistogram.WithLabelValues("list")
-	S3StatIODurationHistogram  = s3IODurationHistogram.WithLabelValues("stat")
-
 	s3ConnDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "mo",
@@ -106,17 +93,6 @@ var (
 		}, []string{"type"})
 	LocalWriteIOBytesHistogram = localIOBytesHistogram.WithLabelValues("write")
 	LocalReadIOBytesHistogram  = localIOBytesHistogram.WithLabelValues("read")
-
-	localIODurationHistogram = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "mo",
-			Subsystem: "fs",
-			Name:      "local_io_duration_seconds",
-			Help:      "Bucketed histogram of local io duration.",
-			Buckets:   getDurationBuckets(),
-		}, []string{"type"})
-	LocalWriteIODurationHistogram = localIODurationHistogram.WithLabelValues("write")
-	LocalReadIODurationHistogram  = localIODurationHistogram.WithLabelValues("read")
 )
 
 var (
@@ -142,4 +118,50 @@ var (
 		}, []string{"type"})
 	IOMergerDurationInitiate = ioMergerDuration.WithLabelValues("initiate")
 	IOMergerDurationWait     = ioMergerDuration.WithLabelValues("wait")
+)
+
+var (
+	fsReadWriteDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "read_write_duration",
+			Help:      "read write duration",
+			Buckets:   getDurationBuckets(),
+		},
+		[]string{"type"},
+	)
+	FSReadDurationReadVectorCache   = fsReadWriteDuration.WithLabelValues("read-vector-cache")
+	FSReadDurationUpdateVectorCache = fsReadWriteDuration.WithLabelValues("update-vector-cache")
+	FSReadDurationReadMemoryCache   = fsReadWriteDuration.WithLabelValues("read-memory-cache")
+	FSReadDurationUpdateMemoryCache = fsReadWriteDuration.WithLabelValues("update-memory-cache")
+	FSReadDurationReadDiskCache     = fsReadWriteDuration.WithLabelValues("read-disk-cache")
+	FSReadDurationUpdateDiskCache   = fsReadWriteDuration.WithLabelValues("update-disk-cache")
+	FSReadDurationReadRemoteCache   = fsReadWriteDuration.WithLabelValues("read-remote-cache")
+	FSReadDurationGetReader         = fsReadWriteDuration.WithLabelValues("get-reader")
+	FSReadDurationGetContent        = fsReadWriteDuration.WithLabelValues("get-content")
+	FSReadDurationGetEntryData      = fsReadWriteDuration.WithLabelValues("get-entry-data")
+	FSReadDurationWriteToWriter     = fsReadWriteDuration.WithLabelValues("write-to-writer")
+	FSReadDurationSetCachedData     = fsReadWriteDuration.WithLabelValues("set-cached-data")
+	FSReadDurationDiskCacheSetFile  = fsReadWriteDuration.WithLabelValues("disk-cache-set-file")
+	FSReadDurationList              = fsReadWriteDuration.WithLabelValues("list")
+	FSReadDurationStat              = fsReadWriteDuration.WithLabelValues("stat")
+	FSReadDurationIOReadAll         = fsReadWriteDuration.WithLabelValues("io-read-all")
+
+	FSWriteDurationWrite = fsReadWriteDuration.WithLabelValues("write")
+)
+
+var (
+	fsMallocLiveObjects = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "malloc_live_objects",
+			Help:      "malloc live objects",
+		},
+		[]string{"type"},
+	)
+	FSMallocLiveObjectsIOEntryData = fsMallocLiveObjects.WithLabelValues("io_entry_data")
+	FSMallocLiveObjectsBytes       = fsMallocLiveObjects.WithLabelValues("bytes")
+	FSMallocLiveObjectsMemoryCache = fsMallocLiveObjects.WithLabelValues("memory_cache")
 )

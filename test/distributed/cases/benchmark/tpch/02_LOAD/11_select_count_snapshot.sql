@@ -8,6 +8,7 @@ drop table if exists orders;
 drop table if exists part;
 drop table if exists partsupp;
 drop table if exists supplier;
+
 select sleep(10);
 -- customer
 select count(*) from customer {snapshot = 'tpch_snapshot'};
@@ -206,5 +207,6 @@ select count(*) from tpch.supplier {snapshot = 'tpch_cluster'};
 select count(*) from tpch.supplier {snapshot = 'tpch_cluster'};
 select count(*) from tpch.supplier {snapshot = 'tpch_cluster'};
 select count(*) from tpch.supplier {snapshot = 'tpch_cluster'};
+
 
 drop snapshot tpch_cluster;

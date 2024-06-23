@@ -130,7 +130,7 @@ func (entry *flushTableTailEntry) addTransferPages() {
 		}
 		id := entry.ablksHandles[i].Fingerprint()
 		entry.pageIds = append(entry.pageIds, id)
-		page := model.NewTransferHashPage(id, time.Now(), isTransient)
+		page := model.NewTransferHashPage(id, time.Now(), len(m), isTransient)
 		for srcRow, dst := range m {
 			blkid := objectio.NewBlockidWithObjectID(entry.createdBlkHandles.GetID(), uint16(dst.BlkIdx))
 			page.Train(uint32(srcRow), *objectio.NewRowid(blkid, uint32(dst.RowIdx)))
@@ -320,8 +320,6 @@ func (entry *flushTableTailEntry) MakeCommand(csn uint32) (cmd txnif.TxnCmd, err
 	return &flushTableTailCmd{}, nil
 }
 func (entry *flushTableTailEntry) IsAborted() bool { return false }
-func (entry *flushTableTailEntry) Set1PC()         {}
-func (entry *flushTableTailEntry) Is1PC() bool     { return false }
 
 ////////////////////////////////////////
 // flushTableTailCmd

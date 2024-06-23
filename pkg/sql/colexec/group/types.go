@@ -71,6 +71,7 @@ func (ev *ExprEvalVector) Free() {
 
 type container struct {
 	typ       int
+	state     vm.CtrState
 	inserted  []uint8
 	zInserted []uint8
 
@@ -86,20 +87,17 @@ type container struct {
 	groupVecsNullable bool
 
 	bat *batch.Batch
-
-	hasAggResult bool
-
-	state vm.CtrState
 }
 
 type Argument struct {
 	ctr          *container
 	IsShuffle    bool // is shuffle group
+	NeedEval     bool // need to projection the aggregate column
 	PreAllocSize uint64
-	NeedEval     bool         // need to projection the aggregate column
-	Exprs        []*plan.Expr // group Expressions
-	Types        []types.Type
-	Aggs         []aggexec.AggFuncExecExpression
+
+	Exprs []*plan.Expr // group Expressions
+	Types []types.Type
+	Aggs  []aggexec.AggFuncExecExpression
 
 	vm.OperatorBase
 }

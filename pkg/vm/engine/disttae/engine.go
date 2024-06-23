@@ -22,10 +22,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-
-	"github.com/panjf2000/ants/v2"
-	_ "go.uber.org/automaxprocs"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -44,18 +40,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	txn2 "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	client2 "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/stack"
+	"github.com/matrixorigin/matrixone/pkg/version"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/panjf2000/ants/v2"
 )
 
 var _ engine.Engine = new(Engine)
@@ -121,9 +120,7 @@ func New(
 	}
 	e.gcPool = pool
 
-	e.globalStats = NewGlobalStats(ctx, e, keyRouter,
-		WithLogtailUpdateStatsThreshold(threshold),
-	)
+	e.globalStats = NewGlobalStats(ctx, e, keyRouter)
 
 	e.messageCenter = &process.MessageCenter{
 		StmtIDToBoard: make(map[uuid.UUID]*process.MessageBoard, 64),
@@ -141,9 +138,9 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	if op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("create database in snapshot txn")
 	}
-	txn := op.GetWorkspace().(*Transaction)
-	if txn == nil {
-		return moerr.NewTxnClosedNoCtx(op.Txn().ID)
+	txn, err := txnIsValid(op)
+	if err != nil {
+		return err
 	}
 	typ := getTyp(ctx)
 	sql := getSql(ctx)
@@ -189,62 +186,12 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	return nil
 }
 
-func (e *Engine) DatabaseByAccountID(
-	accountID uint32,
-	name string,
-	op client.TxnOperator) (engine.Database, error) {
-	logDebugf(op.Txn(), "Engine.DatabaseByAccountID %s", name)
-	txn := op.GetWorkspace().(*Transaction)
-	if txn == nil || txn.op.Status() == txn2.TxnStatus_Aborted {
-		return nil, moerr.NewTxnClosedNoCtx(op.Txn().ID)
-	}
-	if v, ok := txn.databaseMap.Load(databaseKey{name: name, accountId: accountID}); ok {
-		return v.(*txnDatabase), nil
-	}
-	if name == catalog.MO_CATALOG {
-		db := &txnDatabase{
-			op:           op,
-			databaseId:   catalog.MO_CATALOG_ID,
-			databaseName: name,
-		}
-		return db, nil
-	}
-	key := &cache.DatabaseItem{
-		Name:      name,
-		AccountId: accountID,
-		Ts:        txn.op.SnapshotTS(),
-	}
-	var catalog *cache.CatalogCache
-	var err error
-	if !txn.op.IsSnapOp() {
-		catalog = e.getLatestCatalogCache()
-	} else {
-		catalog, err = e.getOrCreateSnapCatalogCache(
-			context.Background(),
-			types.TimestampToTS(txn.op.SnapshotTS()))
-		if err != nil {
-			return nil, err
-		}
-	}
-	if ok := catalog.GetDatabase(key); !ok {
-		return nil, moerr.GetOkExpectedEOB()
-	}
-	return &txnDatabase{
-		op:                op,
-		databaseName:      name,
-		databaseId:        key.Id,
-		rowId:             key.Rowid,
-		databaseType:      key.Typ,
-		databaseCreateSql: key.CreateSql,
-	}, nil
-}
-
 func (e *Engine) Database(ctx context.Context, name string,
 	op client.TxnOperator) (engine.Database, error) {
 	logDebugf(op.Txn(), "Engine.Database %s", name)
-	txn := op.GetWorkspace().(*Transaction)
-	if txn == nil || txn.op.Status() == txn2.TxnStatus_Aborted {
-		return nil, moerr.NewTxnClosedNoCtx(op.Txn().ID)
+	txn, err := txnIsValid(op)
+	if err != nil {
+		return nil, err
 	}
 	accountId, err := defines.GetAccountId(ctx)
 	if err != nil {
@@ -305,9 +252,9 @@ func (e *Engine) Database(ctx context.Context, name string,
 func (e *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]string, error) {
 	var dbs []string
 
-	txn := op.GetWorkspace().(*Transaction)
-	if txn == nil {
-		return nil, moerr.NewTxnClosed(ctx, op.Txn().ID)
+	txn, err := txnIsValid(op)
+	if err != nil {
+		return nil, err
 	}
 	accountId, err := defines.GetAccountId(ctx)
 	if err != nil {
@@ -355,9 +302,10 @@ func (e *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]string
 }
 
 func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error) {
-	txn := op.GetWorkspace().(*Transaction)
-	if txn == nil {
-		return "", "", moerr.NewTxnClosed(ctx, op.Txn().ID)
+	var txn *Transaction
+	txn, err = txnIsValid(op)
+	if err != nil {
+		return "", "", err
 	}
 	accountId, err := defines.GetAccountId(ctx)
 	if err != nil {
@@ -423,9 +371,10 @@ func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId
 }
 
 func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName, tableName string, rel engine.Relation, err error) {
-	txn := op.GetWorkspace().(*Transaction)
-	if txn == nil {
-		return "", "", nil, moerr.NewTxnClosed(ctx, op.Txn().ID)
+	var txn *Transaction
+	txn, err = txnIsValid(op)
+	if err != nil {
+		return "", "", nil, err
 	}
 	switch tableId {
 	case catalog.MO_DATABASE_ID:
@@ -538,17 +487,28 @@ func (e *Engine) AllocateIDByKey(ctx context.Context, key string) (uint64, error
 	return e.idGen.AllocateIDByKey(ctx, key)
 }
 
-func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator) error {
+func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator) (err error) {
+	defer func() {
+		if err != nil {
+			if strings.Contains(name, "sysbench_db") {
+				logutil.Errorf("delete database %s failed: %v", name, err)
+				logutil.Errorf("stack: %s", stack.Callers(3))
+				logutil.Errorf("txnmeta %v", op.Txn().DebugString())
+			}
+		}
+	}()
+
 	var databaseId uint64
 	var rowId types.Rowid
+	var txn *Transaction
 	//var db *txnDatabase
 	if op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("delete database in snapshot txn")
 	}
 
-	txn := op.GetWorkspace().(*Transaction)
-	if txn == nil {
-		return moerr.NewTxnClosedNoCtx(op.Txn().ID)
+	txn, err = txnIsValid(op)
+	if err != nil {
+		return err
 	}
 
 	accountId, err := defines.GetAccountId(ctx)
@@ -696,11 +656,13 @@ func (e *Engine) Nodes(
 	// If the requested labels are empty, return all CN servers.
 	if len(cnLabel) == 0 {
 		cluster.GetCNService(selector, func(c metadata.CNService) bool {
-			nodes = append(nodes, engine.Node{
-				Mcpu: ncpu,
-				Id:   c.ServiceID,
-				Addr: c.PipelineServiceAddress,
-			})
+			if c.CommitID == version.CommitID {
+				nodes = append(nodes, engine.Node{
+					Mcpu: ncpu,
+					Id:   c.ServiceID,
+					Addr: c.PipelineServiceAddress,
+				})
+			}
 			return true
 		})
 		return nodes, nil
@@ -709,19 +671,23 @@ func (e *Engine) Nodes(
 	selector = clusterservice.NewSelector().SelectByLabel(cnLabel, clusterservice.EQ_Globbing)
 	if isInternal || strings.ToLower(tenant) == "sys" {
 		route.RouteForSuperTenant(selector, username, nil, func(s *metadata.CNService) {
-			nodes = append(nodes, engine.Node{
-				Mcpu: ncpu,
-				Id:   s.ServiceID,
-				Addr: s.PipelineServiceAddress,
-			})
+			if s.CommitID == version.CommitID {
+				nodes = append(nodes, engine.Node{
+					Mcpu: ncpu,
+					Id:   s.ServiceID,
+					Addr: s.PipelineServiceAddress,
+				})
+			}
 		})
 	} else {
 		route.RouteForCommonTenant(selector, nil, func(s *metadata.CNService) {
-			nodes = append(nodes, engine.Node{
-				Mcpu: ncpu,
-				Id:   s.ServiceID,
-				Addr: s.PipelineServiceAddress,
-			})
+			if s.CommitID == version.CommitID {
+				nodes = append(nodes, engine.Node{
+					Mcpu: ncpu,
+					Id:   s.ServiceID,
+					Addr: s.PipelineServiceAddress,
+				})
+			}
 		})
 	}
 	return nodes, nil
@@ -733,7 +699,15 @@ func (e *Engine) Hints() (h engine.Hints) {
 }
 
 func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp,
-	expr *plan.Expr, ranges []byte, tblDef *plan.TableDef, proc any) ([]engine.Reader, error) {
+	expr *plan.Expr, filter any, ranges []byte, tblDef *plan.TableDef, proc any) ([]engine.Reader, error) {
+	var blockReadPKFilter blockio.BlockReadFilter
+	if filter == nil {
+		// remote block reader
+		basePKFilter := constructBasePKFilter(expr, tblDef, proc.(*process.Process))
+		blockReadPKFilter = constructBlockReadPKFilter(tblDef.Pkey.PkeyColName, basePKFilter)
+		//fmt.Println("remote filter: ", basePKFilter.String(), blockReadPKFilter)
+	}
+
 	blkSlice := objectio.BlockInfoSlice(ranges)
 	rds := make([]engine.Reader, num)
 	blkInfos := make([]*objectio.BlockInfo, 0, blkSlice.Len())
@@ -745,7 +719,7 @@ func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Times
 			//FIXME::why set blk.EntryState = false ?
 			blk.EntryState = false
 			rds[i] = newBlockReader(
-				ctx, tblDef, ts, []*objectio.BlockInfo{blk}, expr, e.fs, proc.(*process.Process),
+				ctx, tblDef, ts, []*objectio.BlockInfo{blk}, expr, blockReadPKFilter, e.fs, proc.(*process.Process),
 			)
 		}
 		for j := len(blkInfos); j < num; j++ {
@@ -759,7 +733,7 @@ func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Times
 	if err != nil {
 		return nil, err
 	}
-	blockReaders := newBlockReaders(ctx, fs, tblDef, ts, num, expr, proc.(*process.Process))
+	blockReaders := newBlockReaders(ctx, fs, tblDef, ts, num, expr, blockReadPKFilter, proc.(*process.Process))
 	distributeBlocksToBlockReaders(blockReaders, num, len(blkInfos), infos, steps)
 	for i := 0; i < num; i++ {
 		rds[i] = blockReaders[i]

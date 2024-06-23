@@ -216,9 +216,7 @@ type txnOperator struct {
 	lockService          lockservice.LockService
 	sequence             atomic.Uint64
 	createTs             timestamp.Timestamp
-	//read-only txn operators for supporting snapshot read feature.
-	children []*txnOperator
-	parent   atomic.Pointer[txnOperator]
+	parent               atomic.Pointer[txnOperator]
 
 	mu struct {
 		sync.RWMutex
@@ -231,6 +229,8 @@ type txnOperator struct {
 		retry        bool
 		lockSeq      uint64
 		waitLocks    map[uint64]Lock
+		//read-only txn operators for supporting snapshot read feature.
+		children []*txnOperator
 	}
 
 	commitCounter   counter
@@ -282,29 +282,28 @@ func (tc *txnOperator) CloneSnapshotOp(snapshot timestamp.Timestamp) TxnOperator
 	op.workspace = tc.workspace.CloneSnapshotWS()
 	op.workspace.BindTxnOp(op)
 
-	tc.children = append(tc.children, op)
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	tc.mu.children = append(tc.mu.children, op)
+
 	op.parent.Store(tc)
 	return op
 }
 
 func newTxnOperatorWithSnapshot(
 	sender rpc.TxnSender,
-	snapshot []byte) (*txnOperator, error) {
-	v := &txn.CNTxnSnapshot{}
-	if err := v.Unmarshal(snapshot); err != nil {
-		return nil, err
-	}
-
+	snapshot txn.CNTxnSnapshot,
+) *txnOperator {
 	tc := &txnOperator{sender: sender}
-	tc.txnID = v.Txn.ID
-	tc.options = v.Options
-	tc.mu.txn = v.Txn
+	tc.txnID = snapshot.Txn.ID
+	tc.options = snapshot.Options
+	tc.mu.txn = snapshot.Txn
 	tc.mu.txn.Mirror = true
-	tc.mu.lockTables = v.LockTables
+	tc.mu.lockTables = snapshot.LockTables
 
 	tc.adjust()
 	util.LogTxnCreated(tc.mu.txn)
-	return tc, nil
+	return tc
 }
 
 func (tc *txnOperator) setWaitActive(v bool) {
@@ -394,19 +393,18 @@ func (tc *txnOperator) Status() txn.TxnStatus {
 	return tc.mu.txn.Status
 }
 
-func (tc *txnOperator) Snapshot() ([]byte, error) {
+func (tc *txnOperator) Snapshot() (txn.CNTxnSnapshot, error) {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 
 	if err := tc.checkStatus(true); err != nil {
-		return nil, err
+		return txn.CNTxnSnapshot{}, err
 	}
-	snapshot := &txn.CNTxnSnapshot{
+	return txn.CNTxnSnapshot{
 		Txn:        tc.mu.txn,
 		LockTables: tc.mu.lockTables,
 		Options:    tc.options,
-	}
-	return snapshot.Marshal()
+	}, nil
 }
 
 func (tc *txnOperator) UpdateSnapshot(

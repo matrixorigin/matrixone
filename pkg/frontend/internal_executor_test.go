@@ -49,7 +49,7 @@ func TestIe(t *testing.T) {
 	executor := newIe()
 	executor.ApplySessionOverride(ie.NewOptsBuilder().Username("dump").Finish())
 	sess := executor.newCmdSession(ctx, ie.NewOptsBuilder().Database("mo_catalog").Internal(true).Finish())
-	assert.Equal(t, "dump", sess.GetMysqlProtocol().GetUserName())
+	assert.Equal(t, "dump", sess.GetResponser().GetStr(USERNAME))
 
 	err := executor.Exec(ctx, "whatever", ie.NewOptsBuilder().Finish())
 	assert.Error(t, err)
@@ -67,20 +67,18 @@ func TestIeProto(t *testing.T) {
 	p := executor.proto
 	assert.True(t, p.IsEstablished())
 	p.SetEstablished()
-	p.Quit()
+	p.Close()
 	p.ResetStatistics()
-	_ = p.GetStats()
 	_ = p.ConnectionID()
 	ctx := context.TODO()
-	assert.Panics(t, func() { p.GetRequest([]byte{1}) })
-	assert.Nil(t, p.SendColumnDefinitionPacket(ctx, nil, 1))
-	assert.Nil(t, p.SendColumnCountPacket(1))
-	assert.Nil(t, p.SendEOFPacketIf(0, 1))
-	assert.Nil(t, p.sendOKPacket(1, 1, 0, 0, ""))
-	assert.Nil(t, p.sendEOFOrOkPacket(0, 1))
+	assert.Nil(t, p.WriteColumnDef(ctx, nil, 1))
+	assert.Nil(t, p.WriteLengthEncodedNumber(1))
+	assert.Nil(t, p.WriteEOFIF(0, 1))
+	assert.Nil(t, p.WriteOK(1, 1, 0, 0, ""))
+	assert.Nil(t, p.WriteEOFOrOK(0, 1))
 
 	p.stashResult = true
-	p.SendResponse(ctx, &Response{
+	p.WriteResponse(ctx, &Response{
 		category:     OkResponse,
 		status:       0,
 		affectedRows: 1,
@@ -88,7 +86,7 @@ func TestIeProto(t *testing.T) {
 	})
 	assert.Nil(t, nil, p.result.resultSet)
 	assert.Equal(t, uint64(1), p.result.affectedRows)
-	p.SendResponse(ctx, &Response{
+	p.WriteResponse(ctx, &Response{
 		category: ResultResponse,
 		status:   0,
 		data: &MysqlExecutionResult{
@@ -100,18 +98,11 @@ func TestIeProto(t *testing.T) {
 	assert.Equal(t, 42, v.(int))
 
 	p.ResetStatistics()
-	assert.NoError(t, p.SendResultSetTextBatchRowSpeedup(mockResultSet(), 1))
+	assert.NoError(t, p.WriteResultSetRow(mockResultSet(), 1))
 	r := p.swapOutResult()
 	v, e := r.Value(ctx, 0, 0)
 	assert.NoError(t, e)
 	assert.Equal(t, 42, v.(int))
-	p.ResetStatistics()
-	assert.NoError(t, p.SendResultSetTextBatchRow(mockResultSet(), 1))
-	r = p.swapOutResult()
-	v, e = r.Value(ctx, 0, 0)
-	assert.NoError(t, e)
-	assert.Equal(t, 42, v.(int))
-	assert.Equal(t, uint64(1), r.affectedRows)
 	p.ResetStatistics()
 
 	r = p.swapOutResult()

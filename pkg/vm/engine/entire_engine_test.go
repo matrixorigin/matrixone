@@ -140,10 +140,10 @@ func TestEntireEngineHints(t *testing.T) {
 func TestEntireEngineNewBlockReader(t *testing.T) {
 	ctx := context.TODO()
 	ee := buildEntireEngineWithoutTempEngine()
-	ee.NewBlockReader(ctx, 1, timestamp.Timestamp{}, nil, nil, nil, nil)
+	ee.NewBlockReader(ctx, 1, timestamp.Timestamp{}, nil, nil, nil, nil, nil)
 	assert.Equal(t, only_engine, ee.state)
 	ee = buildEntireEngineWithTempEngine()
-	ee.NewBlockReader(ctx, 1, timestamp.Timestamp{}, nil, nil, nil, nil)
+	ee.NewBlockReader(ctx, 1, timestamp.Timestamp{}, nil, nil, nil, nil, nil)
 	assert.Equal(t, only_engine, ee.state)
 }
 
@@ -272,7 +272,7 @@ func (e *testEngine) Hints() (h Hints) {
 }
 
 func (e *testEngine) NewBlockReader(_ context.Context, _ int, _ timestamp.Timestamp,
-	_ *plan.Expr, _ []byte, _ *plan.TableDef, proc any) ([]Reader, error) {
+	_ *plan.Expr, _ any, _ []byte, _ *plan.TableDef, proc any) ([]Reader, error) {
 	e.parent.step = e.parent.step + 1
 	if e.name == origin {
 		e.parent.state = e.parent.state + e.parent.step*e.parent.state
@@ -350,8 +350,8 @@ func (o *testOperator) Rollback(ctx context.Context) error {
 	return nil
 }
 
-func (o *testOperator) Snapshot() ([]byte, error) {
-	return nil, nil
+func (o *testOperator) Snapshot() (txn.CNTxnSnapshot, error) {
+	return txn.CNTxnSnapshot{}, nil
 }
 
 func (o *testOperator) Txn() txn.TxnMeta {

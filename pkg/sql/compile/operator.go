@@ -19,6 +19,8 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shufflebuild"
 
@@ -494,6 +496,13 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.N = t.N
 		arg.PkName = t.PkName
 		arg.PkTyp = t.PkTyp
+		arg.BuildIdx = t.BuildIdx
+		res.Arg = arg
+	case vm.TableScan:
+		arg := table_scan.NewArgument()
+		res.Arg = arg
+	case vm.ValueScan:
+		arg := value_scan.NewArgument()
 		res.Arg = arg
 	default:
 		panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceIns.Op))
@@ -541,7 +550,7 @@ func constructOnduplicateKey(n *plan.Node, eg engine.Engine) *onduplicatekey.Arg
 	return arg
 }
 
-func constructFuzzyFilter(n, right *plan.Node) *fuzzyfilter.Argument {
+func constructFuzzyFilter(n, tableScan, sinkScan *plan.Node) *fuzzyfilter.Argument {
 	pkName := n.TableDef.Pkey.PkeyColName
 	var pkTyp plan.Type
 	if pkName == catalog.CPrimaryKeyColName {
@@ -558,9 +567,34 @@ func constructFuzzyFilter(n, right *plan.Node) *fuzzyfilter.Argument {
 	arg := fuzzyfilter.NewArgument()
 	arg.PkName = pkName
 	arg.PkTyp = pkTyp
-	arg.N = right.Stats.Outcnt
-	if len(n.RuntimeFilterBuildList) > 0 {
-		arg.RuntimeFilterSpec = n.RuntimeFilterBuildList[0]
+	arg.IfInsertFromUnique = n.IfInsertFromUnique
+
+	if (tableScan.Stats.Cost / sinkScan.Stats.Cost) < 0.3 {
+		// build on tableScan, because the existing data is significantly less than the data to be inserted
+		// this will happend
+		arg.BuildIdx = 0
+		if arg.IfInsertFromUnique {
+			// probe on sinkScan with test
+			arg.N = tableScan.Stats.Cost
+		} else {
+			// probe on sinkScan with test and add
+			arg.N = sinkScan.Stats.Cost + tableScan.Stats.Cost
+		}
+	} else {
+		// build on sinkScan, as tableScan can guarantee uniqueness, probe on tableScan with test
+		arg.BuildIdx = 1
+		arg.N = sinkScan.Stats.Cost
+	}
+
+	// currently can not build runtime filter on table scan and probe it on sink scan
+	// so only use runtime filter when build on sink scan
+	if arg.BuildIdx == 1 {
+		if len(n.RuntimeFilterBuildList) > 0 {
+			arg.RuntimeFilterSpec = n.RuntimeFilterBuildList[0]
+		}
+	} else {
+		tableScan.RuntimeFilterProbeList = nil
+		n.RuntimeFilterBuildList = nil
 	}
 	return arg
 }
@@ -583,7 +617,12 @@ func constructPreInsert(ns []*plan.Node, n *plan.Node, eg engine.Engine, proc *p
 	if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
 		if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
 			n.ScanSnapshot.TS.Less(proc.TxnOperator.Txn().SnapshotTS) {
-			txnOp = proc.TxnOperator.CloneSnapshotOp(*n.ScanSnapshot.TS)
+			if proc.GetCloneTxnOperator() != nil {
+				txnOp = proc.GetCloneTxnOperator()
+			} else {
+				txnOp = proc.TxnOperator.CloneSnapshotOp(*n.ScanSnapshot.TS)
+				proc.SetCloneTxnOperator(txnOp)
+			}
 
 			if n.ScanSnapshot.Tenant != nil {
 				ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.Tenant.TenantID)
@@ -1028,7 +1067,7 @@ func constructWindow(_ context.Context, n *plan.Node, proc *process.Process) *wi
 				if err != nil {
 					panic(err)
 				}
-				cfg = []byte(vec.UnsafeGetStringAt(0))
+				cfg = []byte(vec.GetStringAt(0))
 				vec.Free(proc.Mp())
 
 				args = f.F.Args[:len(f.F.Args)-1]
@@ -1097,7 +1136,7 @@ func constructGroup(_ context.Context, n, cn *plan.Node, needEval bool, shuffleD
 					if err != nil {
 						panic(err)
 					}
-					cfg = []byte(vec.UnsafeGetStringAt(0))
+					cfg = []byte(vec.GetStringAt(0))
 					vec.Free(proc.Mp())
 
 					args = f.F.Args[:len(f.F.Args)-1]
@@ -1164,7 +1203,7 @@ func constructDeleteDispatchAndLocal(
 	rs[currentIdx].NodeInfo = ss[currentIdx].NodeInfo
 	rs[currentIdx].Magic = Remote
 	rs[currentIdx].PreScopes = append(rs[currentIdx].PreScopes, ss[currentIdx])
-	rs[currentIdx].Proc = process.NewWithAnalyze(c.proc, c.ctx, len(ss), c.anal.analInfos)
+	rs[currentIdx].Proc = process.NewFromProc(c.proc, c.ctx, len(ss))
 	rs[currentIdx].RemoteReceivRegInfos = make([]RemoteReceivRegInfo, 0, len(ss)-1)
 
 	// use arg.RemoteRegs to know the uuid,
@@ -1889,6 +1928,14 @@ func constructJoinCondition(expr *plan.Expr, proc *process.Process) (*plan.Expr,
 		return e.F.Args[1], e.F.Args[0]
 	}
 	return e.F.Args[0], e.F.Args[1]
+}
+
+func constructTableScan() *table_scan.Argument {
+	return table_scan.NewArgument()
+}
+
+func constructValueScan() *value_scan.Argument {
+	return value_scan.NewArgument()
 }
 
 func extraJoinConditions(exprs []*plan.Expr) (*plan.Expr, []*plan.Expr) {

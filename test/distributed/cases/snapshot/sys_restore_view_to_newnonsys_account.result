@@ -548,10 +548,9 @@ no such table test02.enrollments
 drop table students;
 drop table Courses;
 no such table test02.courses
+drop database test02;
+drop database test02;
 drop snapshot sp07;
-internal error: snapshot sp07 does not exist
-drop database test02;
-drop database test02;
 drop database if exists test02;
 create database test02;
 use test02;

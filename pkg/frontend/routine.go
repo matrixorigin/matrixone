@@ -40,7 +40,7 @@ import (
 // use the executor to handle requests, and response them.
 type Routine struct {
 	//protocol layer
-	protocol MysqlProtocol
+	protocol MysqlRrWr
 
 	cancelRoutineCtx  context.Context
 	cancelRoutineFunc context.CancelFunc
@@ -143,14 +143,14 @@ func (rt *Routine) getCancelRoutineCtx() context.Context {
 	return rt.cancelRoutineCtx
 }
 
-func (rt *Routine) getProtocol() MysqlProtocol {
+func (rt *Routine) getProtocol() MysqlRrWr {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 	return rt.protocol
 }
 
 func (rt *Routine) getConnectionID() uint32 {
-	return rt.getProtocol().ConnectionID()
+	return rt.getProtocol().GetU32(CONNID)
 }
 
 func (rt *Routine) updateGoroutineId() {
@@ -176,6 +176,9 @@ func (rt *Routine) setSession(ses *Session) {
 }
 
 func (rt *Routine) getSession() *Session {
+	if rt == nil {
+		return nil
+	}
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 	return rt.ses
@@ -267,6 +270,7 @@ func (rt *Routine) handleRequest(req *Request) error {
 	ses.ResetFPrints()
 	ses.EnterFPrint(0)
 	defer ses.ExitFPrint(0)
+	defer ses.ResetFPrints()
 
 	if rt.needPrintSessionInfo() {
 		ses.Info(routineCtx, "mo received first request")
@@ -293,11 +297,22 @@ func (rt *Routine) handleRequest(req *Request) error {
 	}
 
 	if resp != nil {
-		if err = rt.getProtocol().SendResponse(tenantCtx, resp); err != nil {
-			ses.Error(tenantCtx,
-				"Failed to send response",
-				zap.String("response", fmt.Sprintf("%v", resp)),
-				zap.Error(err))
+		if err = rt.getProtocol().WriteResponse(tenantCtx, resp); err != nil {
+			if resp.isIssue3482 {
+				ses.Error(tenantCtx,
+					"Failed to send response",
+					zap.String("response", fmt.Sprintf("%v", resp)),
+					zap.String("load local ", resp.loadLocalFile),
+					zap.Error(err))
+			} else {
+				ses.Error(tenantCtx,
+					"Failed to send response",
+					zap.String("response", fmt.Sprintf("%v", resp)),
+					zap.Error(err))
+			}
+		}
+		if resp.isIssue3482 {
+			ses.Infof(tenantCtx, "load local '%s' exec failed. response error success", resp.loadLocalFile)
 		}
 	}
 
@@ -335,7 +350,7 @@ func (rt *Routine) handleRequest(req *Request) error {
 		//close the network connection
 		proto := rt.getProtocol()
 		if proto != nil {
-			proto.Quit()
+			proto.Close()
 		}
 	}
 
@@ -383,7 +398,7 @@ func (rt *Routine) killConnection(killMyself bool) {
 			//If it is not in processing the request, just close the network
 			proto := rt.protocol
 			if proto != nil {
-				proto.Quit()
+				proto.Close()
 			}
 		}
 
@@ -427,7 +442,7 @@ func (rt *Routine) cleanup() {
 		rt.releaseRoutineCtx()
 
 		//step D: clean protocol
-		rt.protocol.Quit()
+		rt.protocol.Close()
 		rt.protocol = nil
 
 		//step E: release the resources related to the session
@@ -447,6 +462,7 @@ func (rt *Routine) migrateConnectionTo(ctx context.Context, req *query.MigrateCo
 		}
 		defer rt.mc.endMigrate()
 		ses := rt.getSession()
+		ses.UpdateDebugString()
 		err = Migrate(ses, req)
 	})
 	return err
@@ -465,7 +481,7 @@ func (rt *Routine) migrateConnectionFrom(resp *query.MigrateConnFromResponse) er
 	return nil
 }
 
-func NewRoutine(ctx context.Context, protocol MysqlProtocol, parameters *config.FrontendParameters, rs goetty.IOSession) *Routine {
+func NewRoutine(ctx context.Context, protocol MysqlRrWr, parameters *config.FrontendParameters, rs goetty.IOSession) *Routine {
 	ctx = trace.Generate(ctx) // fill span{trace_id} in ctx
 	cancelRoutineCtx, cancelRoutineFunc := context.WithCancel(ctx)
 	ri := &Routine{

@@ -20,6 +20,8 @@ import (
 	"io"
 	"testing"
 
+	"github.com/prashantv/gostub"
+
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 
 	"github.com/BurntSushi/toml"
@@ -72,11 +74,12 @@ func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
 	ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 	ioses.EXPECT().Ref().AnyTimes()
+	ioses.EXPECT().Disconnect().AnyTimes()
 	proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
 	testutil.SetupAutoIncrService()
 	//new session
-	ses := NewSession(context.TODO(), proto, testPool, GSysVariables, true, nil)
+	ses := NewSession(context.TODO(), proto, testPool)
 	var c clock.Clock
 	_ = ses.GetTxnHandler().CreateTempStorage(c)
 	tenant := &TenantInfo{
@@ -88,6 +91,10 @@ func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
 		DefaultRoleID: moAdminRoleID,
 	}
 	ses.SetTenantInfo(tenant)
+
+	stubs := gostub.StubFunc(&ExeSqlInBgSes, nil, nil)
+	defer stubs.Reset()
+	_ = ses.InitSystemVariables(context.TODO())
 
 	return ses
 }
@@ -119,7 +126,7 @@ func Test_saveQueryResultMeta(t *testing.T) {
 	var files []resultFileInfo
 	//prepare session
 	ses := newTestSession(t, ctrl)
-	_ = ses.SetGlobalVar(context.TODO(), "save_query_result", int8(1))
+	_ = ses.SetSessionSysVar(context.TODO(), "save_query_result", int8(1))
 	defer ses.Close()
 
 	const blockCnt int = 3
@@ -167,13 +174,13 @@ func Test_saveQueryResultMeta(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	asts, err := parsers.Parse(ctx, dialect.MYSQL, "select a,b,c from t", 1, 0)
+	asts, err := parsers.Parse(ctx, dialect.MYSQL, "select a,b,c from t", 1)
 	assert.Nil(t, err)
 
 	ses.ast = asts[0]
 	ses.p = &plan.Plan{}
 
-	yes := openSaveQueryResult(ctx, ses)
+	yes := canSaveQueryResult(ctx, ses)
 	assert.True(t, yes)
 
 	//result string
@@ -182,12 +189,12 @@ func Test_saveQueryResultMeta(t *testing.T) {
 
 	for i := 0; i < blockCnt; i++ {
 		data := newBatch(typs, blockCnt, proc)
-		err = saveQueryResult(ctx, ses, data)
+		err = saveBatch(ctx, ses, data)
 		assert.Nil(t, err)
 	}
 
 	//save result meta
-	err = saveQueryResultMeta(ctx, ses)
+	err = saveMeta(ctx, ses)
 	assert.Nil(t, err)
 
 	retColDef, err = openResultMeta(ctx, ses, testUUID.String())

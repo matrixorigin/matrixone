@@ -106,12 +106,26 @@ var (
 				NotNullable: false,
 			},
 		},
+		{
+			Name: catalog.MetaColNames[catalog.SAVED_ROW_COUNT_IDX],
+			Typ: plan.Type{
+				Id:          int32(catalog.MetaColTypes[catalog.SAVED_ROW_COUNT_IDX].Oid),
+				NotNullable: false,
+			},
+		},
+		{
+			Name: catalog.MetaColNames[catalog.QUERY_ROW_COUNT_IDX],
+			Typ: plan.Type{
+				Id:          int32(catalog.MetaColTypes[catalog.QUERY_ROW_COUNT_IDX].Oid),
+				NotNullable: false,
+			},
+		},
 	}
 )
 
 func (builder *QueryBuilder) buildMetaScan(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, childId int32) (int32, error) {
 	var err error
-	val, err := builder.compCtx.ResolveVariable("save_query_result", true, true)
+	val, err := builder.compCtx.ResolveVariable("save_query_result", true, false)
 	if err == nil {
 		if v, _ := val.(int8); v == 0 {
 			return 0, moerr.NewNoConfig(builder.GetContext(), "save query result")

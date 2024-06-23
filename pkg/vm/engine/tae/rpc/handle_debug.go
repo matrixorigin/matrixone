@@ -84,7 +84,8 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 		memo.LeaveProcessing()
 	}()
 
-	specialSize := memo.GatherSpecialTableSize()
+	//specialSize := memo.GatherSpecialTableSize()
+	specialSize := uint64(0)
 	usages := memo.GatherAllAccSize()
 	for accId := range usages {
 		if accId != uint64(catalog.System_Account) {
@@ -113,7 +114,7 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 		resp.Sizes = append(resp.Sizes, size)
 	}
 
-	var notReadyNewAcc []uint64
+	//var notReadyNewAcc []uint64
 
 	// new accounts
 	traverseCatalogForNewAccounts(h.db.Catalog, memo, newIds)
@@ -123,18 +124,19 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 			resp.AccIds = append(resp.AccIds, int64(newIds[idx]))
 			resp.Sizes = append(resp.Sizes, size)
 			memo.AddReqTrace(uint64(newIds[idx]), size, start, "new, ready")
-		} else {
-			notReadyNewAcc = append(notReadyNewAcc, newIds[idx])
 		}
+		//else {
+		//	notReadyNewAcc = append(notReadyNewAcc, newIds[idx])
+		//}
 	}
 
 	memo.ClearNewAccCache()
 
-	for idx := range notReadyNewAcc {
-		resp.AccIds = append(resp.AccIds, int64(notReadyNewAcc[idx]))
-		resp.Sizes = append(resp.Sizes, specialSize)
-		memo.AddReqTrace(uint64(newIds[idx]), specialSize, start, " new, not ready, only special")
-	}
+	//for idx := range notReadyNewAcc {
+	//	resp.AccIds = append(resp.AccIds, int64(notReadyNewAcc[idx]))
+	//	resp.Sizes = append(resp.Sizes, specialSize)
+	//	memo.AddReqTrace(uint64(newIds[idx]), specialSize, start, "new, not ready, only special")
+	//}
 
 	resp.Succeed = true
 

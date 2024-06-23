@@ -457,9 +457,8 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 		return err
 	}
 
-	oq := newFakeOutputQueue(outputRS)
 	for _, b := range accInfosBatches {
-		if err = fillResultSet(ctx, oq, b, ses); err != nil {
+		if err = fillResultSet(ctx, b, ses, outputRS); err != nil {
 			return err
 		}
 	}
@@ -467,23 +466,20 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 	ses.SetMysqlResultSet(outputRS)
 
 	ses.rs = columnDef
-	if openSaveQueryResult(ctx, ses) {
-		err = saveResult(ctx, ses, accInfosBatches)
-	}
 
-	return err
-}
-
-func saveResult(ctx context.Context, ses *Session, outputBatch []*batch.Batch) error {
-	for _, b := range outputBatch {
-		if err := saveQueryResult(ctx, ses, b); err != nil {
+	if canSaveQueryResult(ctx, ses) {
+		err = saveQueryResult(ctx, ses,
+			func() ([]*batch.Batch, error) {
+				return accInfosBatches, nil
+			},
+			nil,
+		)
+		if err != nil {
 			return err
 		}
 	}
-	if err := saveQueryResultMeta(ctx, ses); err != nil {
-		return err
-	}
-	return nil
+
+	return err
 }
 
 func initOutputRs(dest *MysqlResultSet, src *MysqlResultSet, ctx context.Context) error {
@@ -511,10 +507,22 @@ func getAccountInfo(ctx context.Context,
 	if err != nil {
 		return nil, nil, err
 	}
-
-	rsOfMoAccount = bh.GetExecResultBatches()
+	//the resultBatches referred outside this function far away
+	rsOfMoAccount = Copy[*batch.Batch](bh.GetExecResultBatches())
 	if len(rsOfMoAccount) == 0 {
 		return nil, nil, moerr.NewInternalError(ctx, "no account info")
+	}
+
+	//copy rsOfMoAccount from backgroundExec
+	//the original batches to be released at the ClearExecResultBatches or the backgroundExec.Close
+	//the rsOfMoAccount to be released at the end of the doShowAccounts
+	for i := 0; i < len(rsOfMoAccount); i++ {
+		originBat := rsOfMoAccount[i]
+
+		rsOfMoAccount[i], err = originBat.Dup(mp)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 
 	batchCount := len(rsOfMoAccount)

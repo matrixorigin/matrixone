@@ -26,13 +26,9 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/util/profile"
-
 	"github.com/fagongzi/goetty/v2"
-
 	"github.com/matrixorigin/matrixone/pkg/bootstrap"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -54,6 +50,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
+	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
@@ -63,9 +60,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/profile"
 	"github.com/matrixorigin/matrixone/pkg/util/status"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func NewService(
@@ -290,7 +290,16 @@ func (s *service) Close() error {
 	if err := s.server.Close(); err != nil {
 		return err
 	}
-	return s.lockService.Close()
+	if err := s.lockService.Close(); err != nil {
+		return err
+	}
+	if s.shardService != nil {
+		if err := s.shardService.Close(); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // ID implements the frontend.BaseService interface.
@@ -655,7 +664,7 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 				s.cfg.Txn.MaxActiveAges.Duration,
 				func(actives []client.ActiveTxn) {
 					name, _ := uuid.NewV7()
-					profPath := catalog.BuildProfilePath("routine", name.String()) + ".gz"
+					profPath := catalog.BuildProfilePath("CN", s.cfg.UUID, "leakcheck_routine", name.String()) + ".gz"
 
 					for _, txn := range actives {
 						fields := []zap.Field{
@@ -728,6 +737,29 @@ func (s *service) initLockService() {
 	}
 }
 
+func (s *service) initShardService() {
+	cfg := s.getShardServiceConfig()
+	if !cfg.Enable {
+		return
+	}
+
+	store := shardservice.NewShardStorage(
+		runtime.ProcessLevelRuntime().Clock(),
+		s.sqlExecutor,
+		s.timestampWaiter,
+		nil,
+		s.storeEngine,
+	)
+	s.shardService = shardservice.NewService(
+		cfg,
+		store,
+	)
+	runtime.ProcessLevelRuntime().SetGlobalVariables(
+		runtime.ShardService,
+		s.shardService,
+	)
+}
+
 func (s *service) GetSQLExecutor() executor.SQLExecutor {
 	return s.sqlExecutor
 }
@@ -794,7 +826,10 @@ func (s *service) initInternalSQlExecutor(mp *mpool.MPool) {
 }
 
 func (s *service) initIncrService() {
-	store, err := incrservice.NewSQLStore(s.sqlExecutor)
+	store, err := incrservice.NewSQLStore(
+		s.sqlExecutor,
+		s.lockService,
+	)
 	if err != nil {
 		panic(err)
 	}
@@ -924,4 +959,19 @@ func (l *locker) Get(
 		return false, err
 	}
 	return v == 1, nil
+}
+
+func (s *service) initProcessCodecService() {
+	runtime.ProcessLevelRuntime().SetGlobalVariables(
+		runtime.ProcessCodecService,
+		process.NewCodecService(
+			s._txnClient,
+			s.fileService,
+			s.lockService,
+			s.queryClient,
+			s._hakeeperClient,
+			s.udfService,
+			s.storeEngine,
+		),
+	)
 }

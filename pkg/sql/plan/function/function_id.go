@@ -354,6 +354,7 @@ const (
 	VECTOR_DIMS     //VECTOR DIMENSIONS
 	NORMALIZE_L2    //NORMALIZE L2
 	L2_DISTANCE     //L2_DISTANCE
+	L2_DISTANCE_SQ  //L2_DISTANCE_SQ
 	COSINE_DISTANCE //COSINE_DISTANCE
 	CLUSTER_CENTERS // CLUSTER_CENTERS
 	SUB_VECTOR      // SUB_VECTOR
@@ -662,6 +663,7 @@ var functionIdRegister = map[string]int32{
 	"vector_dims":       VECTOR_DIMS,
 	"normalize_l2":      NORMALIZE_L2,
 	"l2_distance":       L2_DISTANCE,
+	"l2_distance_sq":    L2_DISTANCE_SQ,
 	"cosine_distance":   COSINE_DISTANCE,
 
 	"python_user_defined_function": PYTHON_UDF,

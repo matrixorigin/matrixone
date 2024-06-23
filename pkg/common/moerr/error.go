@@ -274,6 +274,10 @@ const (
 	ErrKeyAlreadyExists uint16 = 21001
 	ErrArenaFull        uint16 = 21002
 
+	// Group 11: sharding
+	ErrReplicaNotFound uint16 = 21101
+	ErrReplicaNotMatch uint16 = 21102
+
 	// ErrEnd, the max value of MOErrorCode
 	ErrEnd uint16 = 65535
 )
@@ -492,6 +496,10 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	// Group 10: skip list
 	ErrKeyAlreadyExists: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "record with this key already exists"},
 	ErrArenaFull:        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "allocation failed because arena is full"},
+
+	// Group 11: sharding
+	ErrReplicaNotFound: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "cannot find the shard replica %s"},
+	ErrReplicaNotMatch: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "shard replica not match current %s, received %s"},
 
 	// Group End: max value of MOErrorCode
 	ErrEnd: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: end of errcode code"},

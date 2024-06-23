@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -33,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -44,6 +46,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+var _ plan2.CompilerContext = &TxnCompilerContext{}
+
 type TxnCompilerContext struct {
 	dbName               string
 	buildAlterView       bool
@@ -52,12 +56,18 @@ type TxnCompilerContext struct {
 	snapshot             *plan2.Snapshot
 	views                []string
 	//for support explain analyze
-	tcw     *TxnComputationWrapper
+	tcw     ComputationWrapper
 	execCtx *ExecCtx
 	mu      sync.Mutex
 }
 
-var _ plan2.CompilerContext = &TxnCompilerContext{}
+func (tcc *TxnCompilerContext) GetLowerCaseTableNames() int64 {
+	lower := int64(0)
+	if val, err := tcc.execCtx.ses.GetSessionSysVar("lower_case_table_names"); err != nil {
+		lower = val.(int64)
+	}
+	return lower
+}
 
 func (tcc *TxnCompilerContext) SetExecCtx(execCtx *ExecCtx) {
 	tcc.mu.Lock()
@@ -90,7 +100,7 @@ func (tcc *TxnCompilerContext) SetSnapshot(snapshot *plan2.Snapshot) {
 }
 
 func (tcc *TxnCompilerContext) ReplacePlan(execPlan *plan.Execute) (*plan.Plan, tree.Statement, error) {
-	p, st, _, err := replacePlan(tcc.execCtx.reqCtx, tcc.execCtx.ses.(*Session), tcc.tcw, execPlan)
+	p, st, _, err := replacePlan(tcc.execCtx.reqCtx, tcc.execCtx.ses.(*Session), tcc.tcw.(*TxnComputationWrapper), execPlan)
 	return p, st, err
 }
 
@@ -214,6 +224,30 @@ func (tcc *TxnCompilerContext) GetDatabaseId(dbName string, snapshot plan2.Snaps
 		return 0, moerr.NewInternalError(tempCtx, "The databaseid of '%s' is not a valid number", dbName)
 	}
 	return databaseId, nil
+}
+
+func (tcc *TxnCompilerContext) GetDbLevelConfig(dbName string, varName string) (string, error) {
+	switch varName {
+	case "unique_check_on_autoincr":
+		// check if the database is a system database
+		if _, ok := sysDatabases[dbName]; !ok {
+			ses := tcc.GetSession()
+			if _, ok := ses.(*backSession); ok {
+				return "None", nil
+			}
+			ret, err := ses.GetConfig(tcc.GetContext(), dbName, varName)
+			if err != nil {
+				return "", err
+			}
+			if ret != nil {
+				return ret.(string), nil
+			}
+			return "None", nil
+		}
+		return "Check", nil
+	default:
+	}
+	return "", moerr.NewInternalError(tcc.GetContext(), "The variable '%s' is not a valid database level variable", varName)
 }
 
 // getRelation returns the context (maybe updated) and the relation
@@ -377,6 +411,13 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 	defer func() {
 		v2.TxnStatementResolveDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
+
+	// In order to be compatible with various GUI clients and BI tools, lower case db and table name if it's a mysql system table
+	if slices.Contains(mysql.CaseInsensitiveDbs, strings.ToLower(dbName)) {
+		dbName = strings.ToLower(dbName)
+		tableName = strings.ToLower(tableName)
+	}
+
 	dbName, sub, err := tcc.ensureDatabaseIsNotEmpty(dbName, true, snapshot)
 	if err != nil {
 		return nil, nil
@@ -573,7 +614,7 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 	}
 }
 
-func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (varValue interface{}, err error) {
 	ctx := tcc.execCtx.reqCtx
 
 	if ctx.Value(defines.InSp{}) != nil && ctx.Value(defines.InSp{}).(bool) {
@@ -588,17 +629,24 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 
 	if isSystemVar {
 		if isGlobalVar {
-			return tcc.GetSession().GetGlobalSystemVariableValue(ctx, varName)
+			if varValue, err = tcc.GetSession().GetGlobalSysVar(varName); err != nil {
+				return
+			}
 		} else {
-			return tcc.GetSession().GetSessionVar(ctx, varName)
+			if varValue, err = tcc.GetSession().GetSessionSysVar(varName); err != nil {
+				return
+			}
 		}
 	} else {
-		_, val, err := tcc.GetSession().GetUserDefinedVar(varName)
-		if val == nil {
+		var udVar *UserDefinedVar
+		if udVar, err = tcc.GetSession().GetUserDefinedVar(varName); err != nil || udVar == nil {
 			return nil, err
 		}
-		return val.Value, err
+
+		varValue = udVar.Value
 	}
+
+	return
 }
 
 func (tcc *TxnCompilerContext) ResolveAccountIds(accountNames []string) (accountIds []uint32, err error) {

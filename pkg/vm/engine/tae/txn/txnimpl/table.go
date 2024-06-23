@@ -21,20 +21,17 @@ import (
 	"runtime/trace"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/util"
-	"go.uber.org/zap"
-
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-
 	"github.com/RoaringBitmap/roaring"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/moprobe"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/util"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -45,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
+	"go.uber.org/zap"
 )
 
 var (
@@ -462,21 +460,21 @@ func (tbl *txnTable) SoftDeleteObject(id *types.Objectid) (err error) {
 	return
 }
 
-func (tbl *txnTable) CreateObject(is1PC bool) (obj handle.Object, err error) {
+func (tbl *txnTable) CreateObject() (obj handle.Object, err error) {
 	perfcounter.Update(tbl.store.ctx, func(counter *perfcounter.CounterSet) {
 		counter.TAE.Object.Create.Add(1)
 	})
-	return tbl.createObject(catalog.ES_Appendable, is1PC, nil)
+	return tbl.createObject(catalog.ES_Appendable, nil)
 }
 
-func (tbl *txnTable) CreateNonAppendableObject(is1PC bool, opts *objectio.CreateObjOpt) (obj handle.Object, err error) {
+func (tbl *txnTable) CreateNonAppendableObject(opts *objectio.CreateObjOpt) (obj handle.Object, err error) {
 	perfcounter.Update(tbl.store.ctx, func(counter *perfcounter.CounterSet) {
 		counter.TAE.Object.CreateNonAppendable.Add(1)
 	})
-	return tbl.createObject(catalog.ES_NotAppendable, is1PC, opts)
+	return tbl.createObject(catalog.ES_NotAppendable, opts)
 }
 
-func (tbl *txnTable) createObject(state catalog.EntryState, is1PC bool, opts *objectio.CreateObjOpt) (obj handle.Object, err error) {
+func (tbl *txnTable) createObject(state catalog.EntryState, opts *objectio.CreateObjOpt) (obj handle.Object, err error) {
 	var factory catalog.ObjectDataFactory
 	if tbl.store.dataFactory != nil {
 		factory = tbl.store.dataFactory.MakeObjectFactory()
@@ -488,9 +486,6 @@ func (tbl *txnTable) createObject(state catalog.EntryState, is1PC bool, opts *ob
 	obj = newObject(tbl, meta)
 	tbl.store.IncreateWriteCnt()
 	tbl.store.txn.GetMemo().AddObject(tbl.entry.GetDB().ID, tbl.entry.ID, &meta.ID)
-	if is1PC {
-		meta.Set1PC()
-	}
 	tbl.txnEntries.Append(meta)
 	return
 }
@@ -589,7 +584,9 @@ func (tbl *txnTable) AddDeleteNode(id *common.ID, node txnif.DeleteNode) error {
 }
 
 func (tbl *txnTable) Append(ctx context.Context, data *containers.Batch) (err error) {
+	var dedupDur float64
 	if tbl.schema.HasPK() && !tbl.schema.IsSecondaryIndexTable() {
+		now := time.Now()
 		dedupType := tbl.store.txn.GetDedupType()
 		if dedupType == txnif.FullDedup {
 			//do PK deduplication check against txn's work space.
@@ -616,11 +613,19 @@ func (tbl *txnTable) Append(ctx context.Context, data *containers.Batch) (err er
 				return
 			}
 		}
+		dedupDur += time.Since(now).Seconds()
 	}
+
 	if tbl.tableSpace == nil {
 		tbl.tableSpace = newTableSpace(tbl)
 	}
-	return tbl.tableSpace.Append(data)
+
+	dur, err := tbl.tableSpace.Append(data)
+	dedupDur += dur
+
+	v2.TxnTNAppendDeduplicateDurationHistogram.Observe(dedupDur)
+
+	return err
 }
 func (tbl *txnTable) AddObjsWithMetaLoc(ctx context.Context, stats containers.Vector) (err error) {
 	return stats.Foreach(func(v any, isNull bool, row int) error {
@@ -932,7 +937,6 @@ func (tbl *txnTable) UpdateDeltaLoc(id *common.ID, deltaloc objectio.Location) (
 	if isNewNode {
 		tbl.txnEntries.Append(entry)
 	}
-	meta.Is1PC()
 	return
 }
 
@@ -1493,9 +1497,6 @@ func (tbl *txnTable) ApplyCommit() (err error) {
 		if tbl.txnEntries.IsDeleted(idx) {
 			continue
 		}
-		if node.Is1PC() {
-			continue
-		}
 		if err = node.ApplyCommit(tbl.store.txn.GetID()); err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrTxnNotFound) {
 				var buf bytes.Buffer
@@ -1536,60 +1537,10 @@ func (tbl *txnTable) ApplyCommit() (err error) {
 	return
 }
 
-func (tbl *txnTable) Apply1PCCommit() (err error) {
-	for idx, node := range tbl.txnEntries.entries {
-		if tbl.txnEntries.IsDeleted(idx) {
-			continue
-		}
-		if !node.Is1PC() {
-			continue
-		}
-		if err = node.ApplyCommit(tbl.store.txn.GetID()); err != nil {
-			if moerr.IsMoErrCode(err, moerr.ErrTxnNotFound) {
-				var buf bytes.Buffer
-				buf.WriteString(fmt.Sprintf("%d/%d No Txn, node type %T, ", idx, len(tbl.txnEntries.entries), node))
-				obj, ok := node.(*catalog.ObjectEntry)
-				if ok {
-					buf.WriteString(fmt.Sprintf("obj %v, ", obj.StringWithLevel(3)))
-				}
-				for idx2, node2 := range tbl.txnEntries.entries {
-					buf.WriteString(fmt.Sprintf("%d. node type %T, ", idx2, node2))
-					obj, ok := node2.(*catalog.ObjectEntry)
-					if ok {
-						buf.WriteString(fmt.Sprintf("obj %v, ", obj.StringWithLevel(3)))
-					}
-				}
-				tbl.dumpCore(buf.String())
-			}
-			if moerr.IsMoErrCode(err, moerr.ErrMissingTxn) {
-				var buf bytes.Buffer
-				buf.WriteString(fmt.Sprintf("%d/%d missing txn, node type %T, ", idx, len(tbl.txnEntries.entries), node))
-				obj, ok := node.(*catalog.ObjectEntry)
-				if ok {
-					buf.WriteString(fmt.Sprintf("obj %v, ", obj.StringWithLevel(3)))
-				}
-				for idx2, node2 := range tbl.txnEntries.entries {
-					buf.WriteString(fmt.Sprintf("%d. node type %T, ", idx2, node2))
-					obj, ok := node2.(*catalog.ObjectEntry)
-					if ok {
-						buf.WriteString(fmt.Sprintf("obj %v, ", obj.StringWithLevel(3)))
-					}
-				}
-				tbl.dumpCore(buf.String())
-			}
-			break
-		}
-		tbl.csnStart++
-	}
-	return
-}
 func (tbl *txnTable) ApplyRollback() (err error) {
 	csn := tbl.csnStart
 	for idx, node := range tbl.txnEntries.entries {
 		if tbl.txnEntries.IsDeleted(idx) {
-			continue
-		}
-		if node.Is1PC() {
 			continue
 		}
 		if err = node.ApplyRollback(); err != nil {

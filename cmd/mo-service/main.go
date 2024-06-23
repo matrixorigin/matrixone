@@ -31,6 +31,7 @@ import (
 	_ "time/tzdata"
 
 	"github.com/google/uuid"
+	"go.uber.org/automaxprocs/maxprocs"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -43,6 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/gossip"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -62,14 +64,20 @@ import (
 )
 
 var (
-	configFile   = flag.String("cfg", "", "toml configuration used to start mo-service")
-	launchFile   = flag.String("launch", "", "toml configuration used to launch mo cluster")
-	versionFlag  = flag.Bool("version", false, "print version information")
-	daemon       = flag.Bool("daemon", false, "run mo-service in daemon mode")
-	withProxy    = flag.Bool("with-proxy", false, "run mo-service with proxy module started")
-	maxProcessor = flag.Int("max-processor", 0, "set max processor for go runtime")
-	globalEtlFS  fileservice.FileService
+	configFile        = flag.String("cfg", "", "toml configuration used to start mo-service")
+	launchFile        = flag.String("launch", "", "toml configuration used to launch mo cluster")
+	versionFlag       = flag.Bool("version", false, "print version information")
+	daemon            = flag.Bool("daemon", false, "run mo-service in daemon mode")
+	withProxy         = flag.Bool("with-proxy", false, "run mo-service with proxy module started")
+	maxProcessor      = flag.Int("max-processor", 0, "set max processor for go runtime")
+	globalEtlFS       fileservice.FileService
+	globalServiceType string
+	globalNodeId      string
 )
+
+func init() {
+	maxprocs.Set(maxprocs.Logger(func(string, ...interface{}) {}))
+}
 
 func main() {
 	if *maxProcessor > 0 {
@@ -218,6 +226,8 @@ func startService(
 
 	if globalEtlFS == nil {
 		globalEtlFS = etlFS
+		globalServiceType = st.String()
+		globalNodeId = uuid
 	}
 
 	switch st {
@@ -484,7 +494,10 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 	}
 	if !SV.DisableMetric || SV.EnableMetricToProm {
 		stopper.RunNamedTask("metric", func(ctx context.Context) {
-			if act := mometric.InitMetric(ctx, nil, &SV, UUID, nodeRole, mometric.WithWriterFactory(writerFactory)); !act {
+			if act := mometric.InitMetric(ctx, nil, &SV, UUID, nodeRole,
+				mometric.WithWriterFactory(writerFactory),
+				mometric.WithFrontendServerStarted(frontend.MoServerIsStarted),
+			); !act {
 				return
 			}
 			<-ctx.Done()

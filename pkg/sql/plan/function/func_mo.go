@@ -18,9 +18,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -33,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 const (
@@ -45,7 +47,7 @@ const (
 // Mo functions are better tested with bvt.
 
 // MoTableRows returns an estimated row number of a table.
-func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[int64](result)
 	dbs := vector.GenerateFunctionStrParameter(ivecs[0])
 	tbls := vector.GenerateFunctionStrParameter(ivecs[1])
@@ -57,14 +59,10 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 	}
 	txn := proc.TxnOperator
 
-	var accountId uint32
-	var accSwitched bool
+	var ok bool
 	// XXX old code starts a new transaction.   why?
 	for i := uint64(0); i < uint64(length); i++ {
-		if accSwitched {
-			accSwitched = false
-			proc.Ctx = defines.AttachAccountId(proc.Ctx, accountId)
-		}
+		foolCtx := proc.Ctx
 
 		db, dbnull := dbs.GetStrValue(i)
 		tbl, tblnull := tbls.GetStrValue(i)
@@ -77,20 +75,19 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 			dbStr := functionUtil.QuickBytesToStr(db)
 			tblStr := functionUtil.QuickBytesToStr(tbl)
 
-			if isClusterTable(dbStr, tblStr) {
-				//if it is the cluster table in the general account, switch into the sys account
-				accountId, err = defines.GetAccountId(proc.Ctx)
-				if err != nil {
+			if ok, err = specialTableFilterForNonSys(foolCtx, dbStr, tblStr); ok && err == nil {
+				if err = rs.Append(int64(0), false); err != nil {
 					return err
 				}
-				if accountId != uint32(sysAccountID) {
-					accSwitched = true
-					proc.Ctx = defines.AttachAccountId(proc.Ctx, uint32(sysAccountID))
-				}
+				continue
 			}
-			ctx := proc.Ctx
+
+			if err != nil {
+				return err
+			}
+
 			var dbo engine.Database
-			dbo, err = e.Database(ctx, dbStr, txn)
+			dbo, err = e.Database(foolCtx, dbStr, txn)
 			if err != nil {
 				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 					var buf bytes.Buffer
@@ -109,14 +106,14 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 				}
 				return err
 			}
-			rel, err = dbo.Relation(ctx, tblStr, nil)
+			rel, err = dbo.Relation(foolCtx, tblStr, nil)
 			if err != nil {
 				return err
 			}
 
 			// get the table definition information and check whether the current table is a partition table
 			var engineDefs []engine.TableDef
-			engineDefs, err = rel.TableDefs(ctx)
+			engineDefs, err = rel.TableDefs(foolCtx)
 			if err != nil {
 				return err
 			}
@@ -135,25 +132,24 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 			}
 
 			var rows uint64
-
 			// check if the current table is partitioned
 			if partitionInfo != nil {
 				var prel engine.Relation
 				var prows uint64
 				// for partition table,  the table rows is equal to the sum of the partition tables.
 				for _, partitionTable := range partitionInfo.PartitionTableNames {
-					prel, err = dbo.Relation(ctx, partitionTable, nil)
+					prel, err = dbo.Relation(foolCtx, partitionTable, nil)
 					if err != nil {
 						return err
 					}
-					prows, err = prel.Rows(ctx)
+					prows, err = prel.Rows(foolCtx)
 					if err != nil {
 						return err
 					}
 					rows += prows
 				}
 			} else {
-				if rows, err = rel.Rows(ctx); err != nil {
+				if rows, err = rel.Rows(foolCtx); err != nil {
 					return err
 				}
 			}
@@ -167,7 +163,7 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 }
 
 // MoTableSize returns an estimated size of a table.
-func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[int64](result)
 	dbs := vector.GenerateFunctionStrParameter(ivecs[0])
 	tbls := vector.GenerateFunctionStrParameter(ivecs[1])
@@ -178,7 +174,7 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 	}
 	txn := proc.TxnOperator
 
-	var accountId uint32
+	var ok bool
 	// XXX old code starts a new transaction.   why?
 	for i := uint64(0); i < uint64(length); i++ {
 		foolCtx := proc.Ctx
@@ -194,15 +190,15 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 			dbStr := functionUtil.QuickBytesToStr(db)
 			tblStr := functionUtil.QuickBytesToStr(tbl)
 
-			if isClusterTable(dbStr, tblStr) {
-				//if it is the cluster table in the general account, switch into the sys account
-				accountId, err = defines.GetAccountId(foolCtx)
-				if err != nil {
+			if ok, err = specialTableFilterForNonSys(foolCtx, dbStr, tblStr); ok && err == nil {
+				if err = rs.Append(int64(0), false); err != nil {
 					return err
 				}
-				if accountId != uint32(sysAccountID) {
-					foolCtx = defines.AttachAccountId(foolCtx, uint32(sysAccountID))
-				}
+				continue
+			}
+
+			if err != nil {
+				return err
 			}
 
 			var dbo engine.Database
@@ -249,6 +245,26 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 		}
 	}
 	return nil
+}
+
+var specialRegexp = regexp.MustCompile(fmt.Sprintf("%s|%s|%s",
+	catalog.MO_TABLES, catalog.MO_DATABASE, catalog.MO_COLUMNS))
+
+func specialTableFilterForNonSys(ctx context.Context, dbStr, tblStr string) (bool, error) {
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return false, err
+	}
+
+	if accountId == sysAccountID || dbStr != catalog.MO_CATALOG {
+		return false, nil
+	}
+
+	if specialRegexp.MatchString(tblStr) || isClusterTable(dbStr, tblStr) {
+		return true, nil
+	}
+
+	return false, nil
 }
 
 func originalTableSize(ctx context.Context, db engine.Database, rel engine.Relation) (size uint64, err error) {
@@ -332,16 +348,16 @@ func indexesTableSize(ctx context.Context, db engine.Database, rel engine.Relati
 }
 
 // MoTableColMax return the max value of the column
-func MoTableColMax(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	return moTableColMaxMinImpl("mo_table_col_max", ivecs, result, proc, length)
+func MoTableColMax(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return moTableColMaxMinImpl("mo_table_col_max", ivecs, result, proc, length, selectList)
 }
 
 // MoTableColMax return the max value of the column
-func MoTableColMin(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	return moTableColMaxMinImpl("mo_table_col_min", ivecs, result, proc, length)
+func MoTableColMin(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return moTableColMaxMinImpl("mo_table_col_min", ivecs, result, proc, length, selectList)
 }
 
-func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	e, ok := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
 	if !ok || proc.TxnOperator == nil {
 		return moerr.NewInternalError(proc.Ctx, "MoTableColMaxMin: txn operator is nil")
@@ -419,7 +435,8 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 				return err
 			}
 
-			ranges, err := rel.Ranges(ctx, nil)
+			//ranges, err := rel.Ranges(ctx, nil)
+			ranges, err := rel.Ranges(ctx, nil, 0)
 			if err != nil {
 				return err
 			}
@@ -561,7 +578,7 @@ var (
 )
 
 // CastIndexToValue returns enum type index according to the value
-func CastIndexToValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func CastIndexToValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	typeEnums := vector.GenerateFunctionStrParameter(ivecs[0])
 	indexs := vector.GenerateFunctionFixedTypeParameter[uint16](ivecs[1])
@@ -591,7 +608,7 @@ func CastIndexToValue(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 }
 
 // CastValueToIndex returns enum type index according to the value
-func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[uint16](result)
 	typeEnums := vector.GenerateFunctionStrParameter(ivecs[0])
 	enumValues := vector.GenerateFunctionStrParameter(ivecs[1])
@@ -622,7 +639,7 @@ func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 }
 
 // CastIndexValueToIndex returns enum type index according to the index value
-func CastIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func CastIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[uint16](result)
 	typeEnums := vector.GenerateFunctionStrParameter(ivecs[0])
 	enumIndexValues := vector.GenerateFunctionFixedTypeParameter[uint16](ivecs[1])
@@ -652,7 +669,7 @@ func CastIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultW
 }
 
 // CastNanoToTimestamp returns timestamp string according to the nano
-func CastNanoToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func CastNanoToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	nanos := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
 

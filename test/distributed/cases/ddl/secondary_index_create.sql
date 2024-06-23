@@ -51,14 +51,14 @@ select name, type, column_name from mo_catalog.mo_indexes mi where name="idx4";
 
 -- 1.e Create Table syntax
 drop table if exists t1;
-create table t1(id VARCHAR(255) PRIMARY KEY,name VARCHAR(255),age int, index(name));
+create table t1(id VARCHAR(255) PRIMARY KEY,name VARCHAR(255),age int, index idx5(name));
 insert into t1 values("a","Abby", 24);
 insert into t1 values("b","Bob", 25);
 insert into t1 values("c","Carol", 23);
 select * from t1;
 show index from t1;
 show create table t1;
-select name, type, column_name from mo_catalog.mo_indexes mi where mi.column_name ="name" or mi.column_name="__mo_alias_id";
+select name, type, column_name from mo_catalog.mo_indexes mi where name="idx5";
 
 -- 1.f Create Secondary Index on PK alone. ie SK = PK.
 drop table if exists t1;

@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 
@@ -40,6 +41,8 @@ type ObjectEntry struct {
 	table *TableEntry
 	*ObjectNode
 	objData data.Object
+
+	HasPrintedPrepareComapct bool
 }
 
 func (entry *ObjectEntry) GetLoaded() bool {
@@ -404,12 +407,6 @@ func (entry *ObjectEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	return newObjectCmd(id, cmdType, entry), nil
 }
 
-func (entry *ObjectEntry) Set1PC() {
-	entry.GetLatestNodeLocked().Set1PC()
-}
-func (entry *ObjectEntry) Is1PC() bool {
-	return entry.GetLatestNodeLocked().Is1PC()
-}
 func (entry *ObjectEntry) PPString(level common.PPLevel, depth int, prefix string) string {
 	var w bytes.Buffer
 	_, _ = w.WriteString(fmt.Sprintf("%s%s%s", common.RepeatStr("\t", depth), prefix, entry.StringWithLevel(level)))
@@ -655,6 +652,50 @@ func (entry *ObjectEntry) GetPKZoneMap(
 	}
 	return stats.SortKeyZoneMap(), nil
 }
+
+func (entry *ObjectEntry) CheckPrintPrepareCompact() bool {
+	entry.RLock()
+	defer entry.RUnlock()
+	return entry.CheckPrintPrepareCompactLocked()
+}
+
+func (entry *ObjectEntry) CheckPrintPrepareCompactLocked() bool {
+	lastNode := entry.GetLatestNodeLocked()
+	startTS := lastNode.GetStart()
+	return startTS.Physical() < time.Now().UTC().UnixNano()-(time.Minute*30).Nanoseconds()
+}
+
+func (entry *ObjectEntry) PrintPrepareCompactDebugLog() {
+	if entry.HasPrintedPrepareComapct {
+		return
+	}
+	entry.HasPrintedPrepareComapct = true
+	s := fmt.Sprintf("prepare compact failed, obj %v", entry.PPString(3, 0, ""))
+	lastNode := entry.GetLatestNodeLocked()
+	startTS := lastNode.GetStart()
+	if lastNode.Txn != nil {
+		s = fmt.Sprintf("%s txn is %x.", s, lastNode.Txn.GetID())
+	}
+	it := entry.GetTable().MakeObjectIt(false)
+	for ; it.Valid(); it.Next() {
+		obj := it.Get().GetPayload()
+		obj.RLock()
+		sameTxn := false
+		obj.LoopChainLocked(func(m *MVCCNode[*ObjectMVCCNode]) bool {
+			if m.Start.Equal(&startTS) {
+				sameTxn = true
+				return false
+			}
+			return true
+		})
+		obj.RUnlock()
+		if sameTxn {
+			s = fmt.Sprintf("%s %v.", s, obj.PPString(3, 0, ""))
+		}
+	}
+	logutil.Infof(s)
+}
+
 func MockObjEntryWithTbl(tbl *TableEntry, size uint64) *ObjectEntry {
 	stats := objectio.NewObjectStats()
 	objectio.SetObjectStatsSize(stats, uint32(size))

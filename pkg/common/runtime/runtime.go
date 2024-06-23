@@ -130,7 +130,7 @@ func (r *runtime) GetGlobalVariables(name string) (any, bool) {
 
 // DefaultRuntime used to test
 func DefaultRuntime() Runtime {
-	return DefaultRuntimeWithLevel(zap.DebugLevel)
+	return DefaultRuntimeWithLevel(zap.InfoLevel)
 }
 
 // DefaultRuntime used to test

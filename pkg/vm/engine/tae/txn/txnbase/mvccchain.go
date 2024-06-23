@@ -256,12 +256,6 @@ func (be *MVCCChain[T]) ApplyCommit(id string) error {
 	return be.GetLatestNodeLocked().ApplyCommit(id)
 }
 
-func (be *MVCCChain[T]) Apply1PCCommit(id string) error {
-	be.Lock()
-	defer be.Unlock()
-	return be.GetLatestNodeLocked().ApplyCommit(id)
-}
-
 func (be *MVCCChain[T]) PrepareCommit() error {
 	be.Lock()
 	defer be.Unlock()

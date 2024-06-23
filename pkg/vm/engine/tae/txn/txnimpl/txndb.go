@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -306,19 +307,19 @@ func (db *txnDB) GetObject(id *common.ID) (obj handle.Object, err error) {
 	return table.GetObject(id.ObjectID())
 }
 
-func (db *txnDB) CreateObject(tid uint64, is1PC bool) (obj handle.Object, err error) {
+func (db *txnDB) CreateObject(tid uint64) (obj handle.Object, err error) {
 	var table *txnTable
 	if table, err = db.getOrSetTable(tid); err != nil {
 		return
 	}
-	return table.CreateObject(is1PC)
+	return table.CreateObject()
 }
-func (db *txnDB) CreateNonAppendableObject(tid uint64, is1PC bool, opt *objectio.CreateObjOpt) (obj handle.Object, err error) {
+func (db *txnDB) CreateNonAppendableObject(tid uint64, opt *objectio.CreateObjOpt) (obj handle.Object, err error) {
 	var table *txnTable
 	if table, err = db.getOrSetTable(tid); err != nil {
 		return
 	}
-	return table.CreateNonAppendableObject(is1PC, opt)
+	return table.CreateNonAppendableObject(opt)
 }
 
 func (db *txnDB) UpdateObjectStats(id *common.ID, stats *objectio.ObjectStats) error {
@@ -400,27 +401,10 @@ func (db *txnDB) WaitPrepared() (err error) {
 	}
 	return
 }
-func (db *txnDB) Apply1PCCommit() (err error) {
-	if db.createEntry != nil && db.createEntry.Is1PC() {
-		if err = db.createEntry.ApplyCommit(db.store.txn.GetID()); err != nil {
-			return
-		}
-	}
-	for _, table := range db.tables {
-		if err = table.Apply1PCCommit(); err != nil {
-			break
-		}
-	}
-	if db.dropEntry != nil && db.dropEntry.Is1PC() {
-		if err = db.dropEntry.ApplyCommit(db.store.txn.GetID()); err != nil {
-			return
-		}
-	}
-	return
-}
+
 func (db *txnDB) ApplyCommit() (err error) {
 	now := time.Now()
-	if db.createEntry != nil && !db.createEntry.Is1PC() {
+	if db.createEntry != nil {
 		if err = db.createEntry.ApplyCommit(db.store.txn.GetID()); err != nil {
 			return
 		}
@@ -430,7 +414,7 @@ func (db *txnDB) ApplyCommit() (err error) {
 			break
 		}
 	}
-	if db.dropEntry != nil && !db.dropEntry.Is1PC() {
+	if db.dropEntry != nil {
 		if err = db.dropEntry.ApplyCommit(db.store.txn.GetID()); err != nil {
 			return
 		}
@@ -464,11 +448,15 @@ func (db *txnDB) PrePrepare(ctx context.Context) (err error) {
 			return
 		}
 	}
+
+	now := time.Now()
 	for _, table := range db.tables {
 		if err = table.PrePrepareDedup(ctx); err != nil {
 			return
 		}
 	}
+	v2.TxnTNPrePrepareDeduplicateDurationHistogram.Observe(time.Since(now).Seconds())
+
 	for _, table := range db.tables {
 		if err = table.PrePrepare(); err != nil {
 			return

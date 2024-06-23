@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -26,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -53,8 +54,7 @@ func init() {
 				types.T_int8.ToType(),
 			},
 			arg: &Argument{
-				Seen:      0,
-				LimitExpr: plan2.MakePlan2Int64ConstExprWithType(8),
+				LimitExpr: plan2.MakePlan2Uint64ConstExprWithType(8),
 				OperatorBase: vm.OperatorBase{
 					OperatorInfo: vm.OperatorInfo{
 						Idx:     0,
@@ -70,8 +70,7 @@ func init() {
 				types.T_int8.ToType(),
 			},
 			arg: &Argument{
-				Seen:      0,
-				LimitExpr: plan2.MakePlan2Int64ConstExprWithType(10),
+				LimitExpr: plan2.MakePlan2Uint64ConstExprWithType(10),
 				OperatorBase: vm.OperatorBase{
 					OperatorInfo: vm.OperatorInfo{
 						Idx:     0,
@@ -87,8 +86,10 @@ func init() {
 				types.T_int8.ToType(),
 			},
 			arg: &Argument{
-				Seen:      0,
-				LimitExpr: plan2.MakePlan2Int64ConstExprWithType(12),
+				ctr: &container{
+					seen: 0,
+				},
+				LimitExpr: plan2.MakePlan2Uint64ConstExprWithType(12),
 				OperatorBase: vm.OperatorBase{
 					OperatorInfo: vm.OperatorInfo{
 						Idx:     0,
@@ -155,7 +156,6 @@ func BenchmarkLimit(b *testing.B) {
 					types.T_int8.ToType(),
 				},
 				arg: &Argument{
-					Seen:      0,
 					LimitExpr: plan2.MakePlan2Int64ConstExprWithType(8),
 				},
 			},
@@ -183,10 +183,12 @@ func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 }
 
 func resetChildren(arg *Argument, bats []*batch.Batch) {
+	valueScanArg := &value_scan.Argument{
+		Batchs: bats,
+	}
+	valueScanArg.Prepare(nil)
 	arg.SetChildren(
 		[]vm.Operator{
-			&value_scan.Argument{
-				Batchs: bats,
-			},
+			valueScanArg,
 		})
 }

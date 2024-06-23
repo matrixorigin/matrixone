@@ -84,7 +84,7 @@ name    type    column_name
 idx4    MULTIPLE    name
 idx4    MULTIPLE    __mo_alias_id
 drop table if exists t1;
-create table t1(id VARCHAR(255) PRIMARY KEY,name VARCHAR(255),age int, index(name));
+create table t1(id VARCHAR(255) PRIMARY KEY,name VARCHAR(255),age int, index idx5(name));
 insert into t1 values("a","Abby", 24);
 insert into t1 values("b","Bob", 25);
 insert into t1 values("c","Carol", 23);
@@ -95,19 +95,15 @@ b    Bob    25
 c    Carol    23
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    1    name    1    name    A    0    NULL    NULL    YES                    YES    NULL
+t1    1    idx5    1    name    A    0    NULL    NULL    YES                    YES    NULL
 t1    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    NULL
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n  `id` VARCHAR(255) NOT NULL,\n  `name` VARCHAR(255) DEFAULT NULL,\n  `age` INT DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `name` (`name`)\n)
-select name, type, column_name from mo_catalog.mo_indexes mi where mi.column_name ="name" or mi.column_name="__mo_alias_id";
+t1    CREATE TABLE `t1` (\n  `id` VARCHAR(255) NOT NULL,\n  `name` VARCHAR(255) DEFAULT NULL,\n  `age` INT DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx5` (`name`)\n)
+select name, type, column_name from mo_catalog.mo_indexes mi where name="idx5";
 name    type    column_name
-name    MULTIPLE    name
-name    MULTIPLE    __mo_alias_id
-PRIMARY    PRIMARY    name
-PRIMARY    PRIMARY    name
-name    UNIQUE    name
-name    UNIQUE    name
+idx5    MULTIPLE    name
+idx5    MULTIPLE    __mo_alias_id
 drop table if exists t1;
 create table t1(a double primary key, b int);
 insert into t1 values(1.5,100);

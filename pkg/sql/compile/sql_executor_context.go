@@ -16,7 +16,9 @@ package compile
 
 import (
 	"context"
+	"slices"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -24,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -45,6 +48,10 @@ type compilerContext struct {
 	dbOfView, nameOfView string
 	sql                  string
 	mu                   sync.Mutex
+}
+
+func (c *compilerContext) GetLowerCaseTableNames() int64 {
+	return 1
 }
 
 func (c *compilerContext) GetViews() []string {
@@ -185,6 +192,16 @@ func (c *compilerContext) GetDatabaseId(dbName string, snapshot plan.Snapshot) (
 	return databaseId, nil
 }
 
+func (c *compilerContext) GetDbLevelConfig(dbName string, varName string) (string, error) {
+	switch varName {
+	// For scenarios that are background SQL, use the default configuration to avoid triggering background SQL again.
+	case "unique_check_on_autoincr":
+		return "Check", nil
+	default:
+		return "", moerr.NewInternalError(c.GetContext(), "The variable '%s' is not a valid database level variable", varName)
+	}
+}
+
 func (c *compilerContext) DefaultDatabase() string {
 	return c.defaultDB
 }
@@ -267,6 +284,12 @@ func (c *compilerContext) ResolveById(tableId uint64, snapshot plan.Snapshot) (o
 }
 
 func (c *compilerContext) Resolve(dbName string, tableName string, snapshot plan.Snapshot) (*plan.ObjectRef, *plan.TableDef) {
+	// In order to be compatible with various GUI clients and BI tools, lower case db and table name if it's a mysql system table
+	if slices.Contains(mysql.CaseInsensitiveDbs, strings.ToLower(dbName)) {
+		dbName = strings.ToLower(dbName)
+		tableName = strings.ToLower(tableName)
+	}
+
 	dbName, err := c.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
 		return nil, nil

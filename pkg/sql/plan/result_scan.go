@@ -31,7 +31,7 @@ import (
 
 func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindContext) (int32, error) {
 	var err error
-	val, err := builder.compCtx.ResolveVariable("save_query_result", true, true)
+	val, err := builder.compCtx.ResolveVariable("save_query_result", true, false)
 	if err == nil {
 		if v, _ := val.(int8); v == 0 {
 			return 0, moerr.NewNoConfig(builder.GetContext(), "save query result")

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -50,6 +51,7 @@ const (
 	Parallel
 	CreateDatabase
 	CreateTable
+	CreateView
 	CreateIndex
 	DropDatabase
 	DropTable
@@ -76,6 +78,7 @@ type Source struct {
 	PartitionRelationNames []string
 	Attributes             []string
 	R                      engine.Reader
+	Rel                    engine.Relation
 	Bat                    *batch.Batch
 	FilterExpr             *plan.Expr // todo: change this to []*plan.Expr
 	node                   *plan.Node
@@ -121,6 +124,8 @@ type Scope struct {
 	PreScopes []*Scope
 	// NodeInfo contains the information about the remote node.
 	NodeInfo engine.Node
+	// TxnOffset represents the transaction's write offset, specifying the starting position for reading data.
+	TxnOffset int
 	// Instructions contains command list of this scope.
 	Instructions vm.Instructions
 	// Proc contains the execution context.
@@ -223,8 +228,9 @@ func (a *anaylze) release() {
 type Compile struct {
 	scope []*Scope
 
-	pn   *plan.Plan
-	info plan2.ExecInfo
+	pn *plan.Plan
+
+	execType plan2.ExecType
 
 	// fill is a result writer runs a callback function.
 	// fill will be called when result data is ready.
@@ -249,6 +255,8 @@ type Compile struct {
 	ctx context.Context
 	// proc stores the execution context.
 	proc *process.Process
+	// TxnOffset read starting offset position within the transaction during the execute current statement
+	TxnOffset int
 
 	MessageBoard *process.MessageBoard
 

@@ -90,13 +90,11 @@ func (ctr *container) appendBatch(proc *process.Process, bat *batch.Batch) (enou
 func (ctr *container) sortAndSend(proc *process.Process, result *vm.CallResult) (err error) {
 	if ctr.batWaitForSort != nil {
 		for i := range ctr.sortExprExecutor {
-			ctr.sortVectors[i], err = ctr.sortExprExecutor[i].Eval(proc, []*batch.Batch{ctr.batWaitForSort})
+			ctr.sortVectors[i], err = ctr.sortExprExecutor[i].Eval(proc, []*batch.Batch{ctr.batWaitForSort}, nil)
 			if err != nil {
 				return err
 			}
 		}
-
-		var strCol []string
 
 		firstVec := ctr.sortVectors[0]
 		if cap(ctr.resultOrderList) >= ctr.batWaitForSort.RowCount() {
@@ -113,12 +111,7 @@ func (ctr *container) sortAndSend(proc *process.Process, result *vm.CallResult) 
 		if !firstVec.IsConst() {
 			nullCnt := firstVec.GetNulls().Count()
 			if nullCnt < firstVec.Length() {
-				if firstVec.GetType().IsVarlen() {
-					strCol = vector.MustStrCol(firstVec)
-				} else {
-					strCol = nil
-				}
-				sort.Sort(ctr.desc[0], ctr.nullsLast[0], nullCnt > 0, ctr.resultOrderList, firstVec, strCol)
+				sort.Sort(ctr.desc[0], ctr.nullsLast[0], nullCnt > 0, ctr.resultOrderList, firstVec)
 			}
 		}
 
@@ -138,16 +131,11 @@ func (ctr *container) sortAndSend(proc *process.Process, result *vm.CallResult) 
 
 					nullCnt := vec.GetNulls().Count()
 					if nullCnt < vec.Length() {
-						if vec.GetType().IsVarlen() {
-							strCol = vector.MustStrCol(vec)
-						} else {
-							strCol = nil
-						}
 						for m, n := 0, len(ps); m < n; m++ {
 							if m == n-1 {
-								sort.Sort(desc, nullsLast, nullCnt > 0, sels[ps[m]:], vec, strCol)
+								sort.Sort(desc, nullsLast, nullCnt > 0, sels[ps[m]:], vec)
 							} else {
-								sort.Sort(desc, nullsLast, nullCnt > 0, sels[ps[m]:ps[m+1]], vec, strCol)
+								sort.Sort(desc, nullsLast, nullCnt > 0, sels[ps[m]:ps[m+1]], vec)
 							}
 						}
 					}

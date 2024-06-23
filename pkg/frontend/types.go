@@ -17,29 +17,31 @@ package frontend
 import (
 	"context"
 	"io"
+	"strings"
 	"time"
 
+	"github.com/fagongzi/goetty/v2"
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const (
@@ -78,6 +80,7 @@ type ComputationWrapper interface {
 	Plan() *plan.Plan
 	ResetPlanAndStmt(stmt tree.Statement)
 	Free()
+	ParamVals() []any
 }
 
 type ColumnInfo interface {
@@ -152,7 +155,7 @@ func (icfl *InternalCmdFieldList) Format(ctx *tree.FmtCtx) {
 }
 
 func (icfl *InternalCmdFieldList) StmtKind() tree.StmtKind {
-	return tree.MakeStmtKind(tree.OUTPUT_STATUS, tree.RESP_BY_SITUATION, tree.EXEC_IN_FRONTEND)
+	return tree.MakeStmtKind(tree.OUTPUT_STATUS, tree.RESP_STATUS, tree.EXEC_IN_FRONTEND)
 }
 
 func (icfl *InternalCmdFieldList) GetStatementType() string { return "InternalCmd" }
@@ -211,17 +214,6 @@ func getStatementType(stmt tree.Statement) tree.StatementType {
 //	tableInfos map[string][]ColumnInfo
 //}
 
-// outputPool outputs the data
-type outputPool interface {
-	resetLineStr()
-
-	reset()
-
-	getEmptyRow() ([]interface{}, error)
-
-	flush() error
-}
-
 func (prepareStmt *PrepareStmt) Close() {
 	if prepareStmt.params != nil {
 		prepareStmt.params.Free(prepareStmt.proc.Mp())
@@ -258,12 +250,8 @@ func NewSessionAllocator(pu *config.ParameterUnit) *SessionAllocator {
 	return ret
 }
 
-func (s *SessionAllocator) Alloc(capacity int) []byte {
-	alloc, err := s.mp.Alloc(capacity)
-	if err != nil {
-		panic(err)
-	}
-	return alloc
+func (s *SessionAllocator) Alloc(capacity int) ([]byte, error) {
+	return s.mp.Alloc(capacity)
 }
 
 func (s SessionAllocator) Free(bs []byte) {
@@ -280,11 +268,14 @@ type FeSession interface {
 	GetSql() string
 	GetAccountId() uint32
 	GetTenantInfo() *TenantInfo
+	GetConfig(ctx context.Context, dbName, varName string) (any, error)
 	GetBackgroundExec(ctx context.Context) BackgroundExec
 	GetRawBatchBackgroundExec(ctx context.Context) BackgroundExec
-	GetGlobalSystemVariableValue(ctx context.Context, name string) (interface{}, error)
-	GetSessionVar(ctx context.Context, name string) (interface{}, error)
-	GetUserDefinedVar(name string) (SystemVariableType, *UserDefinedVar, error)
+	GetGlobalSysVars() *SystemVariables
+	GetGlobalSysVar(name string) (interface{}, error)
+	GetSessionSysVars() *SystemVariables
+	GetSessionSysVar(name string) (interface{}, error)
+	GetUserDefinedVar(name string) (*UserDefinedVar, error)
 	GetDebugString() string
 	GetFromRealUser() bool
 	getLastCommitTS() timestamp.Timestamp
@@ -294,12 +285,11 @@ type FeSession interface {
 	GetStmtId() uuid.UUID
 	GetSqlOfStmt() string
 	updateLastCommitTS(ts timestamp.Timestamp)
-	GetMysqlProtocol() MysqlProtocol
+	GetResponser() Responser
 	GetTxnHandler() *TxnHandler
 	GetDatabaseName() string
 	SetDatabaseName(db string)
 	GetMysqlResultSet() *MysqlResultSet
-	GetGlobalVar(ctx context.Context, name string) (interface{}, error)
 	SetNewResponse(category int, affectedRows uint64, cmd int, d interface{}, isLastStmt bool) *Response
 	GetTxnCompileCtx() *TxnCompilerContext
 	GetCmd() CommandType
@@ -344,6 +334,9 @@ type FeSession interface {
 	ResetFPrints()
 	EnterFPrint(idx int)
 	ExitFPrint(idx int)
+	SetStaticTxnInfo(string)
+	GetStaticTxnInfo() string
+	GetShareTxnBackgroundExec(ctx context.Context, newRawBatch bool) BackgroundExec
 	SessionLogger
 }
 
@@ -385,16 +378,18 @@ type ExecCtx struct {
 	runner          ComputationRunner
 	loadLocalWriter *io.PipeWriter
 	proc            *process.Process
-	proto           MysqlProtocol
 	ses             FeSession
 	txnOpt          FeTxnOption
 	cws             []ComputationWrapper
 	input           *UserInput
 	//In the session migration, skip the response to the client
-	skipRespClient bool
+	inMigration bool
 	//In the session migration, executeParamTypes for the EXECUTE stmt should be migrated
 	//from the old session to the new session.
 	executeParamTypes []byte
+	resper            Responser
+	results           []ExecResult
+	isIssue3482       bool
 }
 
 // outputCallBackFunc is the callback function to send the result to the client.
@@ -408,7 +403,6 @@ type outputCallBackFunc func(FeSession, *ExecCtx, *batch.Batch) error
 // TODO: shared component among the session implmentation
 type feSessionImpl struct {
 	pool          *mpool.MPool
-	proto         MysqlProtocol
 	buf           *buffer.Buffer
 	stmtProfile   process.StmtProfile
 	tenant        *TenantInfo
@@ -436,7 +430,11 @@ type feSessionImpl struct {
 	//	in the same transaction.
 	derivedStmt bool
 
-	gSysVars *GlobalSystemVariables
+	// gSysVars is a pointer to account's sys vars (saved in GSysVarsMgr)
+	gSysVars *SystemVariables
+	// sesSysVars is session level sys vars; init as a copy of account's sys vars
+	sesSysVars *SystemVariables
+
 	// when starting a transaction in session, the snapshot ts of the transaction
 	// is to get a TN push to CN to get the maximum commitTS. but there is a problem,
 	// when the last transaction ends and the next one starts, it is possible that the
@@ -454,6 +452,9 @@ type feSessionImpl struct {
 	debugStr     string
 	disableTrace bool
 	fprints      footPrints
+	respr        Responser
+	//refreshed once
+	staticTxnInfo string
 }
 
 func (ses *feSessionImpl) EnterFPrint(idx int) {
@@ -469,7 +470,9 @@ func (ses *feSessionImpl) ExitFPrint(idx int) {
 }
 
 func (ses *feSessionImpl) Close() {
-	ses.proto = nil
+	if ses.respr != nil {
+		ses.respr.Close()
+	}
 	ses.mrs = nil
 	if ses.txnHandler != nil {
 		ses.txnHandler = nil
@@ -482,6 +485,7 @@ func (ses *feSessionImpl) Close() {
 	}
 	ses.sql = ""
 	ses.gSysVars = nil
+	ses.sesSysVars = nil
 	ses.allResultSet = nil
 	ses.tenant = nil
 	ses.debugStr = ""
@@ -514,16 +518,16 @@ func (ses *feSessionImpl) GetFPrints() footPrints {
 }
 
 func (ses *feSessionImpl) SetDatabaseName(db string) {
-	ses.proto.SetDatabaseName(db)
+	ses.respr.SetStr(DBNAME, db)
 	ses.txnCompileCtx.SetDatabase(db)
 }
 
 func (ses *feSessionImpl) GetDatabaseName() string {
-	return ses.proto.GetDatabaseName()
+	return ses.respr.GetStr(DBNAME)
 }
 
 func (ses *feSessionImpl) GetUserName() string {
-	return ses.proto.GetUserName()
+	return ses.respr.GetStr(USERNAME)
 }
 
 func (ses *feSessionImpl) DisableTrace() bool {
@@ -536,16 +540,6 @@ func (ses *feSessionImpl) SetMemPool(mp *mpool.MPool) {
 
 func (ses *feSessionImpl) GetMemPool() *mpool.MPool {
 	return ses.pool
-}
-
-func (ses *feSessionImpl) GetMysqlProtocol() MysqlProtocol {
-	return ses.proto
-}
-
-func (ses *feSessionImpl) ReplaceProtocol(proto MysqlProtocol) MysqlProtocol {
-	old := ses.proto
-	ses.proto = proto
-	return old
 }
 
 func (ses *feSessionImpl) GetBuffer() *buffer.Buffer {
@@ -704,6 +698,11 @@ func (ses *feSessionImpl) GetUpstream() FeSession {
 
 // ClearResultBatches does not call Batch.Clear().
 func (ses *feSessionImpl) ClearResultBatches() {
+	for _, bat := range ses.resultBatches {
+		if bat != nil {
+			bat.Clean(ses.pool)
+		}
+	}
 	ses.resultBatches = nil
 }
 
@@ -720,8 +719,94 @@ func (ses *feSessionImpl) AppendResultBatch(bat *batch.Batch) error {
 	return nil
 }
 
-func (ses *feSessionImpl) GetGlobalSysVars() *GlobalSystemVariables {
+func (ses *feSessionImpl) GetGlobalSysVars() *SystemVariables {
 	return ses.gSysVars
+}
+
+func (ses *feSessionImpl) GetGlobalSysVar(name string) (interface{}, error) {
+	name = strings.ToLower(name)
+	if sv, ok := gSysVarsDefs[name]; !ok {
+		return nil, moerr.NewInternalErrorNoCtx(errorSystemVariableDoesNotExist())
+	} else if sv.Scope == ScopeSession {
+		return nil, moerr.NewInternalErrorNoCtx(errorSystemVariableIsSession())
+	}
+
+	return ses.gSysVars.Get(name), nil
+}
+
+func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interface{}) (err error) {
+	name = strings.ToLower(name)
+
+	def, ok := gSysVarsDefs[name]
+	if !ok {
+		return moerr.NewInternalErrorNoCtx(errorSystemVariableDoesNotExist())
+	}
+
+	if def.Scope == ScopeSession {
+		return moerr.NewInternalErrorNoCtx(errorSystemVariableIsSession())
+	}
+
+	if !def.GetDynamic() {
+		return moerr.NewInternalErrorNoCtx(errorSystemVariableIsReadOnly())
+	}
+
+	if val, err = def.GetType().Convert(val); err != nil {
+		return err
+	}
+
+	// save to table first
+	if err = doSetGlobalSystemVariable(ctx, ses, name, val); err != nil {
+		return
+	}
+	ses.gSysVars.Set(name, val)
+	return
+}
+
+func (ses *feSessionImpl) GetSessionSysVars() *SystemVariables {
+	return ses.sesSysVars
+}
+
+func (ses *feSessionImpl) GetSessionSysVar(name string) (interface{}, error) {
+	name = strings.ToLower(name)
+	if _, ok := gSysVarsDefs[name]; !ok {
+		return nil, moerr.NewInternalErrorNoCtx(errorSystemVariableDoesNotExist())
+	}
+
+	// init SystemVariables GlobalSysVarsMgr need to read table, read table need to use SessionSysVar
+	// when ses.sesSysVars is nil
+	// in this scenario, use Default value in gSysVarsDefs
+	if ses.sesSysVars == nil {
+		return gSysVarsDefs[name].Default, nil
+	}
+	return ses.sesSysVars.Get(name), nil
+}
+
+func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val interface{}) (err error) {
+	name = strings.ToLower(name)
+
+	def, ok := gSysVarsDefs[name]
+	if !ok {
+		return moerr.NewInternalErrorNoCtx(errorSystemVariableDoesNotExist())
+	}
+
+	if def.Scope == ScopeGlobal {
+		return moerr.NewInternalErrorNoCtx(errorSystemVariableIsGlobal())
+	}
+
+	if !def.GetDynamic() {
+		return moerr.NewInternalErrorNoCtx(errorSystemVariableIsReadOnly())
+	}
+
+	if val, err = def.GetType().Convert(val); err != nil {
+		return
+	}
+
+	if def.UpdateSessVar != nil {
+		err = def.UpdateSessVar(ctx, ses, ses.sesSysVars, name, val)
+	} else {
+		ses.sesSysVars.Set(name, val)
+	}
+	return
 }
 
 func (ses *feSessionImpl) SetSql(sql string) {
@@ -764,8 +849,137 @@ func (ses *feSessionImpl) GetUUIDString() string {
 	return ses.uuid.String()
 }
 
+func (ses *feSessionImpl) ReplaceResponser(resper Responser) Responser {
+	old := ses.respr
+	ses.respr = resper
+	return old
+}
+
+func (ses *feSessionImpl) GetResponser() Responser {
+	return ses.respr
+}
+
+func (ses *feSessionImpl) SetStaticTxnInfo(info string) {
+	ses.staticTxnInfo = info
+}
+func (ses *feSessionImpl) GetStaticTxnInfo() string {
+	return ses.staticTxnInfo
+}
+
 func (ses *Session) GetDebugString() string {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.debugStr
+}
+
+type PropertyID int
+
+const (
+	USERNAME PropertyID = iota + 1
+	DBNAME
+	//Connection id
+	CONNID
+	//Peer address
+	PEER
+	//Seqeunce id
+	SEQUENCEID
+	//capability bits
+	CAPABILITY
+	ESTABLISHED
+	TLS_ESTABLISHED
+)
+
+type Property interface {
+	GetStr(PropertyID) string
+	SetStr(PropertyID, string)
+	SetU32(PropertyID, uint32)
+	GetU32(PropertyID) uint32
+	SetU8(PropertyID, uint8)
+	GetU8(PropertyID) uint8
+	SetBool(PropertyID, bool)
+	GetBool(PropertyID) bool
+}
+
+type Responser interface {
+	Property
+	RespPreMeta(*ExecCtx, any) error
+	RespResult(*ExecCtx, *batch.Batch) error
+	RespPostMeta(*ExecCtx, any) error
+	MysqlRrWr() MysqlRrWr
+	Close()
+	ResetStatistics()
+}
+
+type MediaReader interface {
+}
+
+type MediaWriter interface {
+	Write(*ExecCtx, *batch.Batch) error
+	Close()
+}
+
+// MysqlReader read packet using mysql format
+type MysqlReader interface {
+	MediaReader
+	Property
+	Read(options goetty.ReadOptions) (interface{}, error)
+	HandleHandshake(ctx context.Context, payload []byte) (bool, error)
+	Authenticate(ctx context.Context) error
+	ParseSendLongData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
+	ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
+}
+
+// MysqlWriter write batch & control packets using mysql protocol format
+type MysqlWriter interface {
+	MediaWriter
+	Property
+	WriteHandshake() error
+	WriteOK(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error
+	WriteOKtWithEOF(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error
+	WriteEOF(warnings, status uint16) error
+	WriteEOFIF(warnings uint16, status uint16) error
+	WriteEOFOrOK(warnings uint16, status uint16) error
+	WriteERR(errorCode uint16, sqlState, errorMessage string) error
+	WriteLengthEncodedNumber(uint64) error
+	WriteColumnDef(context.Context, Column, int) error
+	WriteRow() error
+	WriteTextRow() error
+	WriteBinaryRow() error
+	WriteResultSetRow(mrs *MysqlResultSet, count uint64) error
+	WriteResponse(context.Context, *Response) error
+	WritePrepareResponse(ctx context.Context, stmt *PrepareStmt) error
+	WriteLocalInfileRequest(filepath string) error
+
+	CalculateOutTrafficBytes(b bool) (int64, int64)
+	ResetStatistics()
+	UpdateCtx(ctx context.Context)
+}
+
+type MysqlRrWr interface {
+	MysqlReader
+	MysqlWriter
+}
+
+// MysqlPayloadWriter make final payload for the packet
+type MysqlPayloadWriter interface {
+	OpenRow() error
+	CloseRow() error
+	OpenPayload() error
+	FillPayload() error
+	ClosePayload(bool) error
+}
+
+// BinaryWriter write batch into fileservice
+type BinaryWriter interface {
+	MediaWriter
+}
+
+// CsvWriter write batch into csv file
+type CsvWriter interface {
+	MediaWriter
+}
+
+// MemWriter write batch into memory pool
+type MemWriter interface {
+	MediaWriter
 }

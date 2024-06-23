@@ -44,59 +44,7 @@ import (
 
 var (
 	_ ComputationWrapper = &TxnComputationWrapper{}
-	_ ComputationWrapper = &NullComputationWrapper{}
 )
-
-type NullComputationWrapper struct {
-	*TxnComputationWrapper
-}
-
-func InitNullComputationWrapper(ses *Session, stmt tree.Statement, proc *process.Process) *NullComputationWrapper {
-	return &NullComputationWrapper{
-		TxnComputationWrapper: InitTxnComputationWrapper(ses, stmt, proc),
-	}
-}
-
-func (ncw *NullComputationWrapper) GetAst() tree.Statement {
-	return ncw.stmt
-}
-
-func (ncw *NullComputationWrapper) GetColumns(context.Context) ([]interface{}, error) {
-	return []interface{}{}, nil
-}
-
-func (ncw *NullComputationWrapper) Compile(any any, fill func(*batch.Batch) error) (interface{}, error) {
-	return nil, nil
-}
-
-func (ncw *NullComputationWrapper) RecordExecPlan(ctx context.Context) error {
-	return nil
-}
-
-func (ncw *NullComputationWrapper) GetUUID() []byte {
-	return ncw.uuid[:]
-}
-
-func (ncw *NullComputationWrapper) Run(ts uint64) (*util2.RunResult, error) {
-	return nil, nil
-}
-
-func (ncw *NullComputationWrapper) GetLoadTag() bool {
-	return false
-}
-func (ncw *NullComputationWrapper) Clear() {
-
-}
-func (ncw *NullComputationWrapper) Plan() *plan.Plan {
-	return nil
-}
-func (ncw *NullComputationWrapper) ResetPlanAndStmt(tree.Statement) {
-
-}
-
-func (ncw *NullComputationWrapper) Free() {
-	ncw.Clear()
-}
 
 type TxnComputationWrapper struct {
 	stmt      tree.Statement
@@ -156,6 +104,11 @@ func (cwft *TxnComputationWrapper) Clear() {
 	cwft.ses = nil
 	cwft.compile = nil
 	cwft.runResult = nil
+	cwft.paramVals = nil
+}
+
+func (cwft *TxnComputationWrapper) ParamVals() []any {
+	return cwft.paramVals
 }
 
 func (cwft *TxnComputationWrapper) GetProcess() *process.Process {

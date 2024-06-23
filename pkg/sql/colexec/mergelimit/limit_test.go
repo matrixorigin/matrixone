@@ -19,6 +19,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -26,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -172,7 +173,7 @@ func newTestCase(limit uint64) limitTestCase {
 			types.T_int8.ToType(),
 		},
 		arg: &Argument{
-			Limit: plan.MakePlan2Int64ConstExprWithType(int64(limit)),
+			Limit: plan.MakePlan2Uint64ConstExprWithType(limit),
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
 					Idx:     0,

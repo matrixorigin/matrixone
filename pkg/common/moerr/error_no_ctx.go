@@ -266,8 +266,8 @@ func NewTAENeedRetryNoCtx() *Error {
 	return newError(Context(), ErrTAENeedRetry)
 }
 
-func NewTxnStaleNoCtx() *Error {
-	return newError(Context(), ErrTxnStale)
+func NewTxnStaleNoCtx(msg string) *Error {
+	return newError(Context(), ErrTxnStale, msg)
 }
 
 func NewWaiterPausedNoCtx() *Error {
@@ -373,4 +373,12 @@ func NewKeyAlreadyExistsNoCtx() *Error {
 
 func NewArenaFullNoCtx() *Error {
 	return newError(Context(), ErrArenaFull)
+}
+
+func NewReplicaNotFound(replica string) *Error {
+	return newError(Context(), ErrReplicaNotFound, replica)
+}
+
+func NewReplicaNotMatch(current, received string) *Error {
+	return newError(Context(), ErrReplicaNotMatch, current, received)
 }

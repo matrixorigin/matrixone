@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	txn2 "github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -157,118 +158,7 @@ func (db *txnDatabase) getRelationById(ctx context.Context, id uint64) (string, 
 	return tblName, rel, nil
 }
 
-func (db *txnDatabase) RelationByAccountID(
-	accountID uint32,
-	name string,
-	proc any) (engine.Relation, error) {
-	logDebugf(db.op.Txn(), "txnDatabase.RelationByAccountID table %s", name)
-	txn := db.getTxn()
-	if txn.op.Status() == txn2.TxnStatus_Aborted {
-		return nil, moerr.NewTxnClosedNoCtx(txn.op.Txn().ID)
-	}
-
-	key := genTableKey(accountID, name, db.databaseId)
-	// check the table is deleted or not
-	if _, exist := db.getTxn().deletedTableMap.Load(key); exist {
-		if strings.Contains(name, "_copy_") {
-			stackInfo := debug.Stack()
-			logutil.Error(moerr.NewParseError(context.Background(), "table %q does not exists", name).Error(), zap.String("Stack Trace", string(stackInfo)))
-		}
-		return nil, moerr.NewParseError(context.Background(), "table %q does not exist", name)
-	}
-
-	p := db.getTxn().proc
-	if proc != nil {
-		p = proc.(*process.Process)
-	}
-
-	rel := db.getTxn().getCachedTable(context.Background(), key)
-	if rel != nil {
-		rel.proc.Store(p)
-		return rel, nil
-	}
-
-	// get relation from the txn created tables cache: created by this txn
-	if v, ok := db.getTxn().createMap.Load(key); ok {
-		v.(*txnTable).proc.Store(p)
-		return v.(*txnTable), nil
-	}
-
-	// special tables
-	if db.databaseName == catalog.MO_CATALOG {
-		switch name {
-		case catalog.MO_DATABASE:
-			id := uint64(catalog.MO_DATABASE_ID)
-			defs := catalog.MoDatabaseTableDefs
-			return db.openSysTable(p, id, name, defs), nil
-		case catalog.MO_TABLES:
-			id := uint64(catalog.MO_TABLES_ID)
-			defs := catalog.MoTablesTableDefs
-			return db.openSysTable(p, id, name, defs), nil
-		case catalog.MO_COLUMNS:
-			id := uint64(catalog.MO_COLUMNS_ID)
-			defs := catalog.MoColumnsTableDefs
-			return db.openSysTable(p, id, name, defs), nil
-		}
-	}
-	item := &cache.TableItem{
-		Name:       name,
-		DatabaseId: db.databaseId,
-		AccountId:  accountID,
-		Ts:         db.op.SnapshotTS(),
-	}
-	var catache *cache.CatalogCache
-	var err error
-	if !db.op.IsSnapOp() {
-		catache = db.getTxn().engine.getLatestCatalogCache()
-	} else {
-		catache, err = db.getTxn().engine.getOrCreateSnapCatalogCache(
-			context.Background(),
-			types.TimestampToTS(db.op.SnapshotTS()))
-		if err != nil {
-			return nil, err
-		}
-	}
-	if ok := catache.GetTable(item); !ok {
-		logutil.Debugf("txnDatabase.Relation table %q(acc %d db %d) does not exist",
-			name,
-			accountID,
-			db.databaseId)
-		return nil, moerr.NewParseError(context.Background(), "table %q does not exist", name)
-	}
-
-	tbl := &txnTable{
-		db:            db,
-		accountId:     item.AccountId,
-		tableId:       item.Id,
-		version:       item.Version,
-		tableName:     item.Name,
-		defs:          item.Defs,
-		tableDef:      item.TableDef,
-		primaryIdx:    item.PrimaryIdx,
-		primarySeqnum: item.PrimarySeqnum,
-		clusterByIdx:  item.ClusterByIdx,
-		relKind:       item.Kind,
-		viewdef:       item.ViewDef,
-		comment:       item.Comment,
-		partitioned:   item.Partitioned,
-		partition:     item.Partition,
-		createSql:     item.CreateSql,
-		constraint:    item.Constraint,
-		rowid:         item.Rowid,
-		rowids:        item.Rowids,
-		lastTS:        txn.op.SnapshotTS(),
-	}
-	tbl.proc.Store(p)
-
-	db.getTxn().tableCache.tableMap.Store(key, tbl)
-	return tbl, nil
-}
-
 func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (engine.Relation, error) {
-	if db.databaseName == "test" && name == "bugt" && db.op.IsSnapOp() {
-		logutil.Infof("xxxx open relation, txn:%s", db.op.Txn().DebugString())
-	}
 	logDebugf(db.op.Txn(), "txnDatabase.Relation table %s", name)
 	txn := db.getTxn()
 	if txn.op.Status() == txn2.TxnStatus_Aborted {
@@ -318,58 +208,22 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 			return db.openSysTable(p, id, name, defs), nil
 		}
 	}
-	item := &cache.TableItem{
-		Name:       name,
-		DatabaseId: db.databaseId,
-		AccountId:  accountId,
-		Ts:         db.op.SnapshotTS(),
-	}
-	var catache *cache.CatalogCache
-	if !db.op.IsSnapOp() {
-		catache = db.getTxn().engine.getLatestCatalogCache()
-	} else {
-		catache, err = db.getTxn().engine.getOrCreateSnapCatalogCache(
-			ctx,
-			types.TimestampToTS(db.op.SnapshotTS()))
-		if err != nil {
-			return nil, err
-		}
-	}
-	if ok := catache.GetTable(item); !ok {
-		logutil.Debugf("txnDatabase.Relation table %q(acc %d db %d) does not exist",
-			name,
-			accountId,
-			db.databaseId)
-		if strings.Contains(name, "_copy_") {
-			stackInfo := debug.Stack()
-			logutil.Error(moerr.NewParseError(context.Background(), "table %q does not exists", name).Error(), zap.String("Stack Trace", string(stackInfo)))
-		}
-		return nil, moerr.NewParseError(ctx, "table %q does not exist", name)
+
+	item, err := db.getTableItem(
+		ctx,
+		accountId,
+		name,
+		db.getTxn().engine,
+	)
+	if err != nil {
+		return nil, err
 	}
 
-	tbl := &txnTable{
-		db:            db,
-		accountId:     item.AccountId,
-		tableId:       item.Id,
-		version:       item.Version,
-		tableName:     item.Name,
-		defs:          item.Defs,
-		tableDef:      item.TableDef,
-		primaryIdx:    item.PrimaryIdx,
-		primarySeqnum: item.PrimarySeqnum,
-		clusterByIdx:  item.ClusterByIdx,
-		relKind:       item.Kind,
-		viewdef:       item.ViewDef,
-		comment:       item.Comment,
-		partitioned:   item.Partitioned,
-		partition:     item.Partition,
-		createSql:     item.CreateSql,
-		constraint:    item.Constraint,
-		rowid:         item.Rowid,
-		rowids:        item.Rowids,
-		lastTS:        txn.op.SnapshotTS(),
-	}
-	tbl.proc.Store(p)
+	tbl := newTxnTableWithItem(
+		db,
+		item,
+		p,
+	)
 
 	db.getTxn().tableCache.tableMap.Store(key, tbl)
 	return tbl, nil
@@ -663,4 +517,60 @@ func (db *txnDatabase) openSysTable(p *process.Process, id uint64, name string,
 	tbl.GetTableDef(context.TODO())
 	tbl.proc.Store(p)
 	return tbl
+}
+
+func (db *txnDatabase) getTableItem(
+	ctx context.Context,
+	accountID uint32,
+	name string,
+	engine *Engine,
+) (cache.TableItem, error) {
+	item := cache.TableItem{
+		Name:       name,
+		DatabaseId: db.databaseId,
+		AccountId:  accountID,
+		Ts:         db.op.SnapshotTS(),
+	}
+
+	c, err := getCatalogCache(
+		ctx,
+		engine,
+		db.op,
+	)
+	if err != nil {
+		return cache.TableItem{}, err
+	}
+
+	if ok := c.GetTable(&item); !ok {
+		logutil.Debugf("txnDatabase.Relation table %q(acc %d db %d) does not exist",
+			name,
+			accountID,
+			db.databaseId)
+		if strings.Contains(name, "_copy_") {
+			stackInfo := debug.Stack()
+			logutil.Error(moerr.NewParseError(context.Background(), "table %q does not exists", name).Error(), zap.String("Stack Trace", string(stackInfo)))
+		}
+		return cache.TableItem{}, moerr.NewParseError(ctx, "table %q does not exist", name)
+	}
+	return item, nil
+}
+
+func getCatalogCache(
+	ctx context.Context,
+	engine *Engine,
+	op client.TxnOperator,
+) (*cache.CatalogCache, error) {
+	var cache *cache.CatalogCache
+	var err error
+	if !op.IsSnapOp() {
+		cache = engine.getLatestCatalogCache()
+	} else {
+		cache, err = engine.getOrCreateSnapCatalogCache(
+			ctx,
+			types.TimestampToTS(op.SnapshotTS()))
+		if err != nil {
+			return nil, err
+		}
+	}
+	return cache, nil
 }

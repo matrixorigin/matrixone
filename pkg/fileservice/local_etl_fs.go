@@ -339,7 +339,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 				}
 			}
 
-			if err := entry.setCachedData(); err != nil {
+			if err := entry.setCachedData(ctx); err != nil {
 				return err
 			}
 
@@ -564,6 +564,12 @@ func (l *LocalETLFS) syncDir(nativePath string) error {
 		return err
 	}
 	return nil
+}
+
+func (l *LocalETLFS) Cost() *CostAttr {
+	return &CostAttr{
+		List: CostLow,
+	}
 }
 
 func (l *LocalETLFS) toNativeFilePath(filePath string) string {

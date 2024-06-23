@@ -32,6 +32,7 @@ func (c *DashboardCreator) initMemDashboard() error {
 		"Memory Metrics",
 		c.withRowOptions(
 			c.initMpoolAllocatorRow(),
+			c.initMallocRow(),
 		)...)
 	if err != nil {
 		return err
@@ -99,5 +100,22 @@ func (c *DashboardCreator) initMpoolAllocatorRow() dashboard.Option {
 	return dashboard.Row(
 		"TAE Mpool Allocator",
 		options...,
+	)
+}
+
+func (c *DashboardCreator) initMallocRow() dashboard.Option {
+	return dashboard.Row(
+		"malloc",
+		c.withMultiGraph(
+			"allocate and free bytes",
+			4,
+			[]string{
+				`sum(` + c.getMetricWithFilter("mo_mem_malloc_counter", `type="allocate"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_mem_malloc_counter", `type="free"`) + `)`,
+			},
+			[]string{
+				"allocat",
+				"free",
+			}),
 	)
 }

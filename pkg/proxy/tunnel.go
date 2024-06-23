@@ -65,6 +65,12 @@ func withRebalancePolicy(policy RebalancePolicy) tunnelOption {
 	}
 }
 
+func withRealConn() tunnelOption {
+	return func(t *tunnel) {
+		t.realConn = true
+	}
+}
+
 type transferType int
 
 const (
@@ -94,8 +100,13 @@ type tunnel struct {
 	rebalancer *rebalancer
 	// transferProactive means that the connection transfer is more proactive.
 	rebalancePolicy RebalancePolicy
-
+	// transferType is the type for transferring: rebalancing and scaling.
 	transferType transferType
+	// realConn indicates the connection in the tunnel is a real network
+	// connection but not a net.Pipe. It is used for testing. If it does NOt
+	// run in testing, the Close() method does not to be called, as it is
+	// closed in goetty module.
+	realConn bool
 
 	// transferIntent indicates that this tunnel was tried to transfer to
 	// other servers, but not safe to. Set it to true to do the transfer
@@ -398,8 +409,14 @@ func (t *tunnel) getNewServerConn(ctx context.Context) (*MySQLConn, error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
-	newConn, err := t.cc.BuildConnWithServer(t.mu.serverConn.RemoteAddr().String())
+	prevAddr := t.mu.serverConn.RemoteAddr().String()
+	t.logger.Info("build connection with new server", zap.String("prev addr", prevAddr))
+	newConn, err := t.cc.BuildConnWithServer(prevAddr)
 	if err != nil {
+		t.logger.Error("failed to build connection with new server",
+			zap.String("prev addr", prevAddr),
+			zap.Error(err),
+		)
 		return nil, err
 	}
 	return newMySQLConn(connServerName, newConn.RawConn(), 0, t.reqC, t.respC, newConn.ConnID()), nil
@@ -424,7 +441,10 @@ func (t *tunnel) Close() error {
 		close(t.respC)
 
 		cc, sc := t.getConns()
-		if cc != nil {
+		// cc.Close() just only close the raw net connection, and it
+		// is closed in goetty module, so do NOT need to close it here:
+		// cc, sc := t.getConns()
+		if cc != nil && !t.realConn {
 			_ = cc.Close()
 		}
 		if sc != nil {

@@ -42,7 +42,8 @@ type evalVector struct {
 type container struct {
 	colexec.ReceiverOperator
 
-	state int
+	state   int
+	lastrow int
 
 	inBuckets []uint8
 
@@ -64,6 +65,7 @@ type container struct {
 	mp *hashmap.JoinMap
 
 	maxAllocSize int64
+	bat          *batch.Batch
 }
 
 type Argument struct {
@@ -72,8 +74,6 @@ type Argument struct {
 	Typs       []types.Type
 	Cond       *plan.Expr
 	Conditions [][]*plan.Expr
-	bat        *batch.Batch
-	lastrow    int
 
 	HashOnPK           bool
 	IsShuffle          bool
@@ -129,11 +129,12 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 		anal.Alloc(ctr.maxAllocSize)
 
+		if arg.ctr.bat != nil {
+			proc.PutBatch(arg.ctr.bat)
+			arg.ctr.bat = nil
+		}
+		arg.ctr.lastrow = 0
 		arg.ctr = nil
-	}
-	if arg.bat != nil {
-		proc.PutBatch(arg.bat)
-		arg.bat = nil
 	}
 }
 

@@ -265,7 +265,7 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) (err error) {
 			}
 		}
 
-		if err := entry.setCachedData(); err != nil {
+		if err := entry.setCachedData(ctx); err != nil {
 			return err
 		}
 
@@ -344,6 +344,12 @@ func (m *MemoryFS) deleteSingle(ctx context.Context, filePath string) error {
 	m.tree.Delete(pivot)
 
 	return nil
+}
+
+func (m *MemoryFS) Cost() *CostAttr {
+	return &CostAttr{
+		List: CostLow,
+	}
 }
 
 type _MemFSEntry struct {
