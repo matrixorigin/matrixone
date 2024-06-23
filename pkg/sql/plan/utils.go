@@ -1154,10 +1154,7 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 	if err != nil {
 		return nil, err
 	}
-	if f.CannotFold() {
-		return expr, nil
-	}
-	if f.IsRealTimeRelated() && !varAndParamIsConst {
+	if f.CannotFold() || f.IsRealTimeRelated() {
 		return expr, nil
 	}
 	isVec := false

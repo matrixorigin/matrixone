@@ -19,7 +19,6 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -39,20 +38,11 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	arg.ctr = new(container)
-	var filterExpr *plan.Expr
+	ap := arg
+	ap.ctr = new(container)
 
-	if arg.exeExpr == nil {
-		if arg.E != nil {
-			filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, arg.E, proc, true)
-		}
-	} else {
-		filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, arg.exeExpr, proc, true)
-	}
-	if err != nil {
-		return err
-	}
-	arg.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{filterExpr}))
+	filterList := colexec.SplitAndExprs([]*plan.Expr{ap.E})
+	ap.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, filterList)
 	return err
 }
 
