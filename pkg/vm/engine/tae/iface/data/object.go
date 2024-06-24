@@ -140,7 +140,7 @@ type Object interface {
 
 	Init() error
 	TryUpgrade() error
-	GCInMemeoryDeletesByTSForTest(types.TS)
+	GCInMemoryDeletesByTSForTest(types.TS)
 	UpgradeAllDeleteChain()
 	CollectAppendInRange(start, end types.TS, withAborted bool, mp *mpool.MPool) (*containers.BatchWithVersion, error)
 	CollectDeleteInRange(ctx context.Context, start, end types.TS, withAborted bool, mp *mpool.MPool) (*containers.Batch, *bitmap.Bitmap, error)
