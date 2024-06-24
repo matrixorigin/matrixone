@@ -24,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -87,6 +87,7 @@ func NewTransferHashPageParams(opts ...Option) TransferHashPageParams {
 }
 
 type TransferHashPage struct {
+	latch sync.Mutex
 	common.RefHelper
 	bornTS      time.Time
 	id          *common.ID // not include blk offset
@@ -94,7 +95,7 @@ type TransferHashPage struct {
 	loc         objectio.Location
 	params      TransferHashPageParams
 	isTransient bool
-	isPersisted int32
+	isPersisted bool
 }
 
 func NewTransferHashPage(id *common.ID, ts time.Time, isTransient bool, params TransferHashPageParams) *TransferHashPage {
@@ -104,7 +105,7 @@ func NewTransferHashPage(id *common.ID, ts time.Time, isTransient bool, params T
 		hashmap:     make(map[uint32]types.Rowid),
 		params:      params,
 		isTransient: isTransient,
-		isPersisted: 0,
+		isPersisted: false,
 	}
 	page.OnZeroCB = page.Close
 
@@ -162,11 +163,13 @@ func (page *TransferHashPage) Train(from uint32, to types.Rowid) {
 }
 
 func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) {
-	if atomic.LoadInt32(&page.isPersisted) == 1 && page.loc == nil {
+	page.latch.Lock()
+	if page.isPersisted && page.loc == nil {
 		logutil.Infof("[TransferHashPage] persist table is cleared")
+		page.latch.Unlock()
 		return types.Rowid{}, false
 	}
-	if atomic.LoadInt32(&page.isPersisted) == 1 {
+	if page.isPersisted {
 		diskStart := time.Now()
 		page.loadTable()
 		v2.TransferDiskHitCounter.Inc()
@@ -176,6 +179,7 @@ func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) 
 		v2.TransferMemoryHitCounter.Inc()
 	}
 	v2.TransferTotalHitCounter.Inc()
+	page.latch.Unlock()
 
 	memstart := time.Now()
 	dest, ok = page.hashmap[from]
@@ -226,13 +230,17 @@ func (page *TransferHashPage) Unmarshal(data []byte) error {
 }
 
 func (page *TransferHashPage) SetLocation(location objectio.Location) {
+	page.latch.Lock()
+	defer page.latch.Unlock()
 	page.loc = location
 }
 
 func (page *TransferHashPage) clearTable() {
+	page.latch.Lock()
+	defer page.latch.Unlock()
 	logutil.Infof("[TransferHashPage] clear hash table")
 	clear(page.hashmap)
-	atomic.StoreInt32(&page.isPersisted, 1)
+	page.isPersisted = true
 }
 
 func (page *TransferHashPage) loadTable() {
@@ -255,7 +263,7 @@ func (page *TransferHashPage) loadTable() {
 
 	v2.TransferRowHitCounter.Add(float64(len(page.hashmap)))
 
-	atomic.StoreInt32(&page.isPersisted, 1)
+	page.isPersisted = true
 
 	go func(page *TransferHashPage) {
 		time.Sleep(page.params.TTL)
@@ -264,6 +272,8 @@ func (page *TransferHashPage) loadTable() {
 }
 
 func (page *TransferHashPage) clearPersistTable() {
+	page.latch.Lock()
+	defer page.latch.Unlock()
 	if page.loc == nil {
 		return
 	}
@@ -272,6 +282,8 @@ func (page *TransferHashPage) clearPersistTable() {
 	page.loc = nil
 }
 
-func (page *TransferHashPage) IsPersist() int32 {
-	return atomic.LoadInt32(&page.isPersisted)
+func (page *TransferHashPage) IsPersist() bool {
+	page.latch.Lock()
+	defer page.latch.Unlock()
+	return page.isPersisted
 }
