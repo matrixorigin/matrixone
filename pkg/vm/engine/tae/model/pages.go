@@ -38,26 +38,31 @@ type BlockRead interface {
 	LoadTableByBlock(loc objectio.Location, fs fileservice.FileService) (bat *batch.Batch, release func(), err error)
 }
 
+var (
+	RD     BlockRead
+	FS     fileservice.FileService
+	rdOnce sync.Once
+	fsOnce sync.Once
+)
+
+func SetBlockRead(rd BlockRead) {
+	rdOnce.Do(func() {
+		RD = rd
+	})
+}
+
+func SetFileService(fs fileservice.FileService) {
+	fsOnce.Do(func() {
+		FS = fs
+	})
+}
+
 type TransferHashPageParams struct {
-	Fs      fileservice.FileService
-	Rd      BlockRead
 	TTL     time.Duration
 	DiskTTL time.Duration
 }
 
 type Option func(*TransferHashPageParams)
-
-func WithFs(fs fileservice.FileService) Option {
-	return func(params *TransferHashPageParams) {
-		params.Fs = fs
-	}
-}
-
-func WithRd(rd BlockRead) Option {
-	return func(params *TransferHashPageParams) {
-		params.Rd = rd
-	}
-}
 
 func WithTTL(ttl time.Duration) Option {
 	return func(params *TransferHashPageParams) {
@@ -69,21 +74,6 @@ func WithDiskTTL(diskTTL time.Duration) Option {
 	return func(params *TransferHashPageParams) {
 		params.DiskTTL = diskTTL
 	}
-}
-
-func NewTransferHashPageParams(opts ...Option) TransferHashPageParams {
-	params := TransferHashPageParams{
-		Fs:      nil,
-		Rd:      nil,
-		TTL:     10 * time.Second,
-		DiskTTL: 10 * time.Minute,
-	}
-
-	for _, opt := range opts {
-		opt(&params)
-	}
-
-	return params
 }
 
 type TransferHashPage struct {
@@ -98,7 +88,15 @@ type TransferHashPage struct {
 	isPersisted bool
 }
 
-func NewTransferHashPage(id *common.ID, ts time.Time, isTransient bool, params TransferHashPageParams) *TransferHashPage {
+func NewTransferHashPage(id *common.ID, ts time.Time, isTransient bool, opts ...Option) *TransferHashPage {
+	params := TransferHashPageParams{
+		TTL:     10 * time.Second,
+		DiskTTL: 10 * time.Minute,
+	}
+	for _, opt := range opts {
+		opt(&params)
+	}
+
 	page := &TransferHashPage{
 		bornTS:      ts,
 		id:          id,
@@ -243,7 +241,7 @@ func (page *TransferHashPage) loadTable() {
 
 	var bat *batch.Batch
 	var release func()
-	bat, release, err := page.params.Rd.LoadTableByBlock(page.loc, page.params.Fs)
+	bat, release, err := RD.LoadTableByBlock(page.loc, FS)
 	defer release()
 	if err != nil {
 		return
@@ -270,7 +268,7 @@ func (page *TransferHashPage) clearPersistTable() {
 		return
 	}
 	logutil.Infof("[TransferHashPage] clear persist table, objectname: %v", page.loc.Name().String())
-	page.params.Fs.Delete(context.Background(), page.loc.Name().String())
+	FS.Delete(context.Background(), page.loc.Name().String())
 	page.loc = nil
 }
 

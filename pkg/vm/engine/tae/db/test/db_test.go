@@ -9011,12 +9011,15 @@ func TestPersistTransferTable(t *testing.T) {
 	id2 := common.ID{BlockID: *objectio.NewBlockid(sid, 2, 0)}
 
 	now := time.Now()
-	params := model.NewTransferHashPageParams(
-		model.WithFs(tae.Runtime.Fs.Service),
-		model.WithRd(blockio.NewBlockRead()),
+	if model.RD == nil {
+		model.SetBlockRead(blockio.NewBlockRead())
+	}
+	if model.FS == nil {
+		model.SetFileService(tae.Runtime.Fs.Service)
+	}
+	page := model.NewTransferHashPage(&id1, now, false,
 		model.WithTTL(2*time.Second),
 	)
-	page := model.NewTransferHashPage(&id1, now, false, params)
 	ids := make([]types.Rowid, 10)
 	for i := 0; i < 10; i++ {
 		rowID := *objectio.NewRowid(&id2.BlockID, uint32(i))
@@ -9088,13 +9091,16 @@ func TestClearPersistTransferTable(t *testing.T) {
 	id2 := common.ID{BlockID: *objectio.NewBlockid(sid, 2, 0)}
 
 	now := time.Now()
-	params := model.NewTransferHashPageParams(
-		model.WithFs(tae.Runtime.Fs.Service),
-		model.WithRd(blockio.NewBlockRead()),
+	if model.RD == nil {
+		model.SetBlockRead(blockio.NewBlockRead())
+	}
+	if model.FS == nil {
+		model.SetFileService(tae.Runtime.Fs.Service)
+	}
+	page := model.NewTransferHashPage(&id1, now, false,
 		model.WithTTL(time.Second),
 		model.WithDiskTTL(2*time.Second),
 	)
-	page := model.NewTransferHashPage(&id1, now, false, params)
 	ids := make([]types.Rowid, 10)
 	for i := 0; i < 10; i++ {
 		rowID := *objectio.NewRowid(&id2.BlockID, uint32(i))
