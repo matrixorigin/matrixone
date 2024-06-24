@@ -206,6 +206,13 @@ type Policy interface {
 	GetConfig(*catalog.TableEntry) any
 }
 
+type policy interface {
+	Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind)
+	OnObject(obj *catalog.ObjectEntry)
+	Clear()
+	ObjCnt() int
+}
+
 func NewUpdatePolicyReq(c *BasicPolicyConfig) *api.AlterTableReq {
 	return &api.AlterTableReq{
 		Kind: api.AlterKind_UpdatePolicy,
