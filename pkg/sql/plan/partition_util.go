@@ -56,7 +56,7 @@ func checkPartitionExprAllowed(ctx context.Context, tb *plan.TableDef, e tree.Ex
 		if !ok {
 			return moerr.NewNYI(ctx, "invalid function expr '%v'", v)
 		}
-		funcName := strings.ToLower(funcRef.Parts[0])
+		funcName := funcRef.ColName()
 		if _, ok := AllowedPartitionFuncMap[funcName]; ok {
 			return nil
 		}
@@ -87,7 +87,7 @@ func checkPartitionExprArgs(ctx context.Context, tblInfo *plan.TableDef, e tree.
 	if !ok {
 		return moerr.NewNYI(ctx, "invalid function expr '%v'", expr)
 	}
-	funcName := strings.ToLower(funcRef.Parts[0])
+	funcName := funcRef.ColName()
 
 	argsType, err := collectArgsType(ctx, tblInfo, expr.Exprs...)
 	if err != nil {
@@ -143,9 +143,9 @@ func collectArgsType(ctx context.Context, tblInfo *plan.TableDef, exprs ...tree.
 		}
 
 		// Check whether column name exist in the table
-		column := findColumnByName(col.Parts[0], tblInfo)
+		column := findColumnByName(col.ColName(), tblInfo)
 		if column == nil {
-			return nil, moerr.NewBadFieldError(ctx, col.Parts[0], "partition function")
+			return nil, moerr.NewBadFieldError(ctx, col.ColNameOrigin(), "partition function")
 		}
 		types = append(types, column.GetTyp().Id)
 	}

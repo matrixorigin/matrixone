@@ -724,7 +724,7 @@ func (c *Compile) runOnce() error {
 	for _, f := range c.fuzzys {
 		if f != nil && f.cnt > 0 {
 			if f.cnt > 10 {
-				c.proc.Warnf(c.ctx, "fuzzy filter cnt is %d, may be too high", f.cnt)
+				c.proc.Debugf(c.ctx, "double check dup for `%s`.`%s`:collision cnt is %d, may be too high", f.db, f.tbl, f.cnt)
 			}
 			err = f.backgroundSQLCheck(c)
 			if err != nil {
@@ -3165,29 +3165,25 @@ func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scop
 		Arg: arg,
 	})
 
-	outData, err := newFuzzyCheck(n)
+	fuzzyCheck, err := newFuzzyCheck(n)
 	if err != nil {
 		return nil, err
 	}
-	c.fuzzys = append(c.fuzzys, outData)
+	c.fuzzys = append(c.fuzzys, fuzzyCheck)
+
 	// wrap the collision key into c.fuzzy, for more information,
 	// please refer fuzzyCheck.go
-	rs.appendInstruction(vm.Instruction{
-		Op: vm.Output,
-		Arg: output.NewArgument().
-			WithFunc(
-				func(bat *batch.Batch) error {
-					if bat == nil || bat.IsEmpty() {
-						return nil
-					}
-					// the batch will contain the key that fuzzyCheck
-					if err := outData.fill(c.ctx, bat); err != nil {
-						return err
-					}
+	arg.Callback = func(bat *batch.Batch) error {
+		if bat == nil || bat.IsEmpty() {
+			return nil
+		}
+		// the batch will contain the key that fuzzyCheck
+		if err := fuzzyCheck.fill(c.ctx, bat); err != nil {
+			return err
+		}
 
-					return nil
-				}),
-	})
+		return nil
+	}
 
 	return []*Scope{rs}, nil
 }

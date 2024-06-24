@@ -1185,7 +1185,7 @@ type AlterTableAlterColumnClause struct {
 	alterOptionImpl
 	Typ         AlterTableOptionType
 	ColumnName  *UnresolvedName
-	DefalutExpr *AttributeDefault
+	DefaultExpr *AttributeDefault
 	Visibility  VisibleType
 	OptionType  AlterColumnOptionType
 }
@@ -1194,7 +1194,7 @@ func NewAlterTableAlterColumnClause(typ AlterTableOptionType, columnName *Unreso
 	a := reuse.Alloc[AlterTableAlterColumnClause](nil)
 	a.Typ = typ
 	a.ColumnName = columnName
-	a.DefalutExpr = defalutExpr
+	a.DefaultExpr = defalutExpr
 	a.Visibility = visibility
 	a.OptionType = optionType
 	return a
@@ -1207,7 +1207,7 @@ func (node *AlterTableAlterColumnClause) Format(ctx *FmtCtx) {
 	node.ColumnName.Format(ctx)
 	if node.OptionType == AlterColumnOptionSetDefault {
 		ctx.WriteString(" set ")
-		node.DefalutExpr.Format(ctx)
+		node.DefaultExpr.Format(ctx)
 	} else if node.OptionType == AlterColumnOptionSetVisibility {
 		ctx.WriteString(" set")
 		switch node.Visibility {
@@ -1227,8 +1227,8 @@ func (node *AlterTableAlterColumnClause) reset() {
 	// if node.ColumnName != nil {
 	// node.ColumnName.Free()
 	// }
-	// if node.DefalutExpr != nil {
-	// node.DefalutExpr.Free()
+	// if node.DefaultExpr != nil {
+	// node.DefaultExpr.Free()
 	// }
 	*node = AlterTableAlterColumnClause{}
 }
