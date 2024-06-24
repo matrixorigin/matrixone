@@ -246,6 +246,7 @@ func (c *checkpointCleaner) Replay() error {
 		//No account table information, it may be a new cluster or an upgraded cluster,
 		//and the table information needs to be initialized from the checkpoint
 		maxConsumed := c.maxConsumed.Load()
+		isConsumedGCkp := false
 		checkpointEntries, err := checkpoint.ListSnapshotCheckpoint(c.ctx, c.fs.Service, ckp.GetEnd(), 0, checkpoint.SpecifiedCheckpoint)
 		if err != nil {
 			logutil.Warnf("list checkpoint failed, err[%v]", err)
@@ -259,6 +260,25 @@ func (c *checkpointCleaner) Replay() error {
 			if err != nil {
 				logutil.Warnf("load checkpoint data failed, err[%v]", err)
 				continue
+			}
+			if entry.GetType() == checkpoint.ET_Global {
+				isConsumedGCkp = true
+			}
+			c.snapshotMeta.InitTableInfo(ckpData)
+		}
+		if !isConsumedGCkp {
+			// The global checkpoint that Specified checkpoint depends on may have been GC,
+			// so we need to load a latest global checkpoint
+			entry := c.ckpClient.MaxGlobalCheckpoint()
+			if entry == nil {
+				logutil.Warnf("not found max global checkpoint!")
+				return nil
+			}
+			logutil.Infof("load max global checkpoint: %s, consumedEnd: %s", entry.String(), maxConsumed.String())
+			ckpData, err := c.collectCkpData(entry)
+			if err != nil {
+				logutil.Warnf("load max global checkpoint data failed, err[%v]", err)
+				return nil
 			}
 			c.snapshotMeta.InitTableInfo(ckpData)
 		}
