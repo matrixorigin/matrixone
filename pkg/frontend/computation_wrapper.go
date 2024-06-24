@@ -246,10 +246,6 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch) erro
 		if retComp == nil {
 			cwft.compile, err = createCompile(execCtx, cwft.ses, cwft.proc, cwft.ses.GetSql(), cwft.stmt, cwft.plan, fill, false)
 			if err != nil {
-				if cwft.compile != nil {
-					cwft.compile.Release()
-					cwft.compile = nil
-				}
 				return nil, err
 			}
 			cwft.compile.SetOriginSQL(originSQL)
@@ -270,10 +266,6 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch) erro
 	} else {
 		cwft.compile, err = createCompile(execCtx, cwft.ses, cwft.proc, execCtx.sqlOfStmt, cwft.stmt, cwft.plan, fill, false)
 		if err != nil {
-			if cwft.compile != nil {
-				cwft.compile.Release()
-				cwft.compile = nil
-			}
 			return nil, err
 		}
 	}
@@ -428,6 +420,12 @@ func createCompile(
 	stats := statistic.StatsInfoFromContext(execCtx.reqCtx)
 	stats.CompileStart()
 	defer stats.CompileEnd()
+	defer func() {
+		if err != nil && retCompile != nil {
+			retCompile.Release()
+			retCompile = nil
+		}
+	}()
 	retCompile = compile.NewCompile(
 		addr,
 		ses.GetDatabaseName(),

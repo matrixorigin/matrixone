@@ -1074,10 +1074,6 @@ func createPrepareStmt(
 		//only DQL & DML will pre compile
 		comp, err = createCompile(execCtx, ses, ses.proc, originSQL, saveStmt, preparePlan.GetDcl().GetPrepare().Plan, ses.GetOutputCallback(execCtx), true)
 		if err != nil {
-			if comp != nil {
-				comp.Release()
-				comp = nil
-			}
 			if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
 				return nil, err
 			}
