@@ -120,7 +120,7 @@ func (entry *mergeObjectsEntry) prepareTransferPage() {
 
 func (entry *mergeObjectsEntry) PrepareRollback() (err error) {
 	for _, id := range entry.pageIds {
-		_ = entry.rt.TransferTable.DeletePage(id)
+		entry.rt.TransferTable.DeletePage(id)
 	}
 	entry.pageIds = nil
 	return
