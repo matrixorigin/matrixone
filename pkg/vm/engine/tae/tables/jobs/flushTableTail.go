@@ -423,9 +423,6 @@ func (task *flushTableTailTask) prepareAObjSortedData(
 	totalRowCnt := views.Length()
 	bat.Deletes = views.Deletes.Clone()
 	task.aObjDeletesCnt += bat.Deletes.GetCardinality()
-	if views == nil {
-		return
-	}
 	for i, colidx := range idxs {
 		vec := views.Vecs[i]
 		if vec == nil {
