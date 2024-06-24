@@ -1381,6 +1381,18 @@ func (s *Scope) CreateView(c *Compile) error {
 		)
 		return err
 	}
+
+	err = maybeCreateAutoIncrement(
+		c.ctx,
+		dbSource,
+		qry.GetTableDef(),
+		c.proc.TxnOperator,
+		nil,
+	)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
