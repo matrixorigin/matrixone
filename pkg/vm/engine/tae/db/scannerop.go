@@ -106,6 +106,9 @@ func (s *MergeTaskBuilder) PreExecute() error {
 			common.HumanReadableBytes(int(pagesize)),
 			common.HumanReadableBytes(int(s.executor.TransferPageSizeLimit())))
 		s.skipForTransPageLimit = true
+	} else {
+		logutil.Infof("[mergeblocks]: transfer page %v",
+			common.HumanReadableBytes(int(pagesize)))
 	}
 	return nil
 }

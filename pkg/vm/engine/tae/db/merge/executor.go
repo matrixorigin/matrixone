@@ -71,10 +71,6 @@ func NewMergeExecutor(rt *dbutils.Runtime, sched CNMergeScheduler) *MergeExecuto
 
 func (e *MergeExecutor) setSpareMem(total uint64) {
 	containerMLimit, err := memlimit.FromCgroup()
-	logutil.Infof("[Mergeblocks] constainer memory limit %v, host mem %v, err %v",
-		common.HumanReadableBytes(int(containerMLimit)),
-		common.HumanReadableBytes(int(total)),
-		err)
 	tenth := int(float64(total) * 0.1)
 	limitdiff := 0
 	if containerMLimit > 0 {
@@ -97,6 +93,12 @@ func (e *MergeExecutor) setSpareMem(total uint64) {
 	} else {
 		e.transPageLimit = math.MaxUint64 // no limit
 	}
+	logutil.Infof("[Mergeblocks] constainer memory limit %v, host mem %v, spare mem %v, trans limit %v, err %v",
+		common.HumanReadableBytes(int(containerMLimit)),
+		common.HumanReadableBytes(int(total)),
+		common.HumanReadableBytes(e.memSpare),
+		common.HumanReadableBytes(int(e.transPageLimit)),
+		err)
 }
 
 func (e *MergeExecutor) RefreshMemInfo() {
