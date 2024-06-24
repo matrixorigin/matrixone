@@ -1381,18 +1381,6 @@ func (s *Scope) CreateView(c *Compile) error {
 		)
 		return err
 	}
-
-	err = maybeCreateAutoIncrement(
-		c.ctx,
-		dbSource,
-		qry.GetTableDef(),
-		c.proc.TxnOperator,
-		nil,
-	)
-	if err != nil {
-		return err
-	}
-
 	return nil
 }
 
@@ -3198,6 +3186,7 @@ func maybeCreateAutoIncrement(
 	if len(cols) == 0 {
 		return nil
 	}
+
 	return incrservice.GetAutoIncrementService(ctx).Create(
 		ctx,
 		def.TblId,
