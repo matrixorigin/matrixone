@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -45,54 +46,18 @@ func (c AutoColumn) getInsertSQL() string {
 }
 
 type sqlStore struct {
+	ls   lockservice.LockService
 	exec executor.SQLExecutor
 }
 
-func NewSQLStore(exec executor.SQLExecutor) (IncrValueStore, error) {
-	return &sqlStore{exec: exec}, nil
-}
-
-func (s *sqlStore) NewTxnOperator(ctx context.Context) client.TxnOperator {
-	return s.exec.NewTxnOperator(ctx)
-}
-
-// only use for debug
-func (s *sqlStore) SelectAll(
-	ctx context.Context,
-	tableID uint64,
-	txnOp client.TxnOperator) (string, error) {
-	fetchSQL := fmt.Sprintf(`select col_name, table_id from %s`, incrTableName)
-	opts := executor.Options{}.
-		WithDatabase(database).
-		WithTxn(txnOp)
-	txnInfo := ""
-	if txnOp != nil {
-		opts = opts.WithDisableIncrStatement()
-		txnInfo = txnOp.Txn().DebugString()
-	} else {
-		opts = opts.WithEnableTrace()
-	}
-	res, err := s.exec.Exec(ctx, fetchSQL, opts)
-	if err != nil {
-		return "", err
-	}
-	defer res.Close()
-
-	accountId, err := defines.GetAccountId(ctx)
-	if err != nil {
-		return "", err
-	}
-	str := fmt.Sprintf("Cannot find tableID %d in table %s, accountid %d, txn: %s", tableID, incrTableName,
-		accountId, txnInfo)
-	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		for i := 0; i < rows; i++ {
-			str += fmt.Sprintf("\tcol_name: %s, table_id: %d\n",
-				executor.GetStringRows(cols[0])[i],
-				executor.GetFixedRows[uint64](cols[1])[i])
-		}
-		return true
-	})
-	return str, nil
+func NewSQLStore(
+	exec executor.SQLExecutor,
+	ls lockservice.LockService,
+) (IncrValueStore, error) {
+	return &sqlStore{
+		exec: exec,
+		ls:   ls,
+	}, nil
 }
 
 func (s *sqlStore) Create(
@@ -130,7 +95,8 @@ func (s *sqlStore) Allocate(
 	tableID uint64,
 	colName string,
 	count int,
-	txnOp client.TxnOperator) (uint64, uint64, error) {
+	txnOp client.TxnOperator,
+) (uint64, uint64, error) {
 	var current, next, step uint64
 	ok := false
 
@@ -156,6 +122,7 @@ func (s *sqlStore) Allocate(
 			return false
 		}
 	}
+	retry := false
 	for {
 		err := s.exec.ExecTxn(
 			ctx,
@@ -176,23 +143,18 @@ func (s *sqlStore) Allocate(
 				res.Close()
 
 				if rows != 1 {
-					accountId, err := defines.GetAccountId(ctx)
-					if err != nil {
-						return err
-					}
-					selectAll, err := s.SelectAll(ctx, tableID, txnOp)
+					accountID, err := defines.GetAccountId(ctx)
 					if err != nil {
 						return err
 					}
 					trace.GetService().Sync()
 					getLogger().Fatal("BUG: read incr record invalid",
 						zap.String("fetch-sql", fetchSQL),
-						zap.Any("account", accountId),
+						zap.Any("account", accountID),
 						zap.Uint64("table", tableID),
 						zap.String("col", colName),
 						zap.Int("rows", rows),
 						zap.Duration("cost", time.Since(start)),
-						zap.String("select-all", selectAll),
 						zap.Bool("ctx-done", ctxDone()))
 				}
 
@@ -212,23 +174,28 @@ func (s *sqlStore) Allocate(
 
 				if res.AffectedRows == 1 {
 					ok = true
+				} else if ctxDone() {
+					return ctx.Err()
 				} else {
-					accountId, err := defines.GetAccountId(ctx)
-					if err != nil {
-						return err
+					ctx2, cancel := context.WithTimeout(context.Background(), time.Second*30)
+					defer cancel()
+					ok, err := s.ls.IsOrphanTxn(ctx2, txnOp.Txn().ID)
+					if ok || err != nil {
+						retry = true
+						return moerr.NewTxnNeedRetryNoCtx()
 					}
-					selectAll, err := s.SelectAll(ctx, tableID, txnOp)
+
+					accountID, err := defines.GetAccountId(ctx)
 					if err != nil {
 						return err
 					}
 					trace.GetService().Sync()
 					getLogger().Fatal("BUG: update incr record returns invalid affected rows",
 						zap.String("update-sql", sql),
-						zap.Any("account", accountId),
+						zap.Any("account", accountID),
 						zap.Uint64("table", tableID),
 						zap.String("col", colName),
 						zap.Uint64("affected-rows", res.AffectedRows),
-						zap.String("select-all", selectAll),
 						zap.Duration("cost", time.Since(start)),
 						zap.Bool("ctx-done", ctxDone()))
 				}
@@ -238,8 +205,9 @@ func (s *sqlStore) Allocate(
 			opts)
 		if err != nil {
 			// retry ww conflict if the txn is not pessimistic
-			if txnOp != nil && !txnOp.Txn().IsPessimistic() &&
-				moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
+			if retry ||
+				(txnOp != nil && !txnOp.Txn().IsPessimistic() &&
+					moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict)) {
 				continue
 			}
 

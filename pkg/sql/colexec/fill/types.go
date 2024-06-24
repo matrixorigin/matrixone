@@ -54,8 +54,8 @@ type container struct {
 	status    int
 	subStatus int
 	colIdx    int
-	buf       *batch.Batch
 	idx       int
+	buf       *batch.Batch
 
 	// linear
 	nullIdx int

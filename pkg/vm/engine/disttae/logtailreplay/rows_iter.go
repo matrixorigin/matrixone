@@ -314,27 +314,42 @@ func InKind(encodes [][]byte, kind int) PrimaryKeyMatchSpec {
 	vecLen := len(encodes)
 	currentPhase := seek
 
+	match := func(key, ee []byte) bool {
+		if kind == function.PREFIX_IN {
+			return bytes.HasPrefix(key, ee)
+		} else {
+			// in
+			return bytes.Equal(key, ee)
+		}
+	}
+
+	var prev []byte = nil
 	updateEncoded := func() bool {
+		if idx == 0 && idx < vecLen {
+			prev = encodes[idx]
+			encoded = encodes[idx]
+			idx++
+			return true
+		}
+
+		for idx < vecLen && match(encodes[idx], prev) {
+			idx++
+		}
+
 		if idx >= vecLen {
 			return false
 		}
+
+		// not match
+		prev = encodes[idx]
 		encoded = encodes[idx]
 		idx++
 		return true
 	}
 
-	match := func(key []byte) bool {
-		if kind == function.PREFIX_IN {
-			return bytes.HasPrefix(key, encoded)
-		} else {
-			// in
-			return bytes.Equal(key, encoded)
-		}
-	}
-
 	return PrimaryKeyMatchSpec{
 		Name: "InKind",
-		Move: func(p *primaryKeyIter) bool {
+		Move: func(p *primaryKeyIter) (ret bool) {
 			if first {
 				first = false
 				// each seek may visit height items
@@ -364,7 +379,7 @@ func InKind(encodes [][]byte, kind int) PrimaryKeyMatchSpec {
 					if !p.iter.Seek(&PrimaryIndexEntry{Bytes: encoded}) {
 						return false
 					}
-					if match(p.iter.Item().Bytes) {
+					if match(p.iter.Item().Bytes, encoded) {
 						currentPhase = scan
 						return true
 					}
@@ -373,7 +388,7 @@ func InKind(encodes [][]byte, kind int) PrimaryKeyMatchSpec {
 					if !p.iter.Next() {
 						return false
 					}
-					if match(p.iter.Item().Bytes) {
+					if match(p.iter.Item().Bytes, encoded) {
 						return true
 					}
 					p.iter.Prev()

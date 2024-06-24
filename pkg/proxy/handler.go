@@ -132,6 +132,7 @@ func (h *handler) handle(c goetty.IOSession) error {
 
 	// Create a new tunnel to manage client connection and server connection.
 	t := newTunnel(h.ctx, h.logger, h.counterSet,
+		withRealConn(),
 		withRebalancePolicy(RebalancePolicyMapping[h.config.RebalancePolicy]),
 		withRebalancer(h.rebalancer),
 	)
@@ -220,10 +221,18 @@ func (h *handler) handle(c goetty.IOSession) error {
 		return h.ctx.Err()
 	case err := <-t.errC:
 		if isEOFErr(err) || isConnEndErr(err) {
+			h.logger.Info("connection closed",
+				zap.Uint32("Conn ID", cc.ConnID()),
+				zap.Uint64("session ID", c.ID()),
+			)
 			return nil
 		}
 		h.counterSet.updateWithErr(err)
-		h.logger.Error("proxy handle error", zap.Error(err))
+		h.logger.Error("proxy handle error",
+			zap.Uint32("Conn ID", cc.ConnID()),
+			zap.Uint64("session ID", c.ID()),
+			zap.Error(err),
+		)
 		return err
 	}
 }
