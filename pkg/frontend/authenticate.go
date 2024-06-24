@@ -4298,7 +4298,7 @@ func postDropSuspendAccount(
 	}
 	var nodes []string
 	currTenant := ses.GetTenantInfo().GetTenant()
-	currUser := ses.GetTenantInfo().User
+	currUser := ses.GetTenantInfo().GetUser()
 	labels := clusterservice.NewSelector().SelectByLabel(
 		map[string]string{"account": accountName}, clusterservice.Contain)
 	sysTenant := isSysTenant(currTenant)
@@ -9124,7 +9124,7 @@ func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.St
 }
 
 func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string, varValue interface{}) (err error) {
-	accountId := uint64(ses.GetTenantInfo().TenantID)
+	accountId := uint64(ses.GetTenantInfo().GetTenantID())
 	accountName := ses.GetTenantName()
 	varName = strings.ToLower(varName)
 	bh := ses.GetBackgroundExec(ctx)

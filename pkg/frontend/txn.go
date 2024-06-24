@@ -363,8 +363,8 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 		connectionID = execCtx.resper.GetU32(CONNID)
 	}
 	if execCtx.ses.GetTenantInfo() != nil {
-		accountID = execCtx.ses.GetTenantInfo().TenantID
-		userName = execCtx.ses.GetTenantInfo().User
+		accountID = execCtx.ses.GetTenantInfo().GetTenantID()
+		userName = execCtx.ses.GetTenantInfo().GetUser()
 	}
 	sessionInfo := execCtx.ses.GetDebugString()
 	opts = append(opts,
