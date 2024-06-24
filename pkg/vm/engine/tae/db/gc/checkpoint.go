@@ -274,6 +274,7 @@ func (c *checkpointCleaner) Replay() error {
 				logutil.Warnf("not found max global checkpoint!")
 				return nil
 			}
+			logutil.Infof("load max global checkpoint: %s, consumedEnd: %s", entry.String(), maxConsumed.String())
 			ckpData, err := c.collectCkpData(entry)
 			if err != nil {
 				logutil.Warnf("load max global checkpoint data failed, err[%v]", err)
