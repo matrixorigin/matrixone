@@ -343,4 +343,34 @@ drop table if exists load_data_t2;
 create table load_data_t2(id int, name varchar(20), age int);
 LOAD DATA infile '$resources/load_data/test_columnlist_01.csv' into table load_data_t2 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (id,   name , age);
 select * from load_data_t2 order by id;
+delete from load_data_t2;
+
+LOAD DATA infile '$resources/load_data/test_columnlist_01.csv' into table load_data_t2 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (name, id, age);
+
+
+LOAD DATA infile '$resources/load_data/test_columnlist_01.csv' into table load_data_t2 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (id,   name );
+select * from load_data_t2 order by id;
+delete from load_data_t2;
+
+LOAD DATA infile '$resources/load_data/test_columnlist_01.csv' into table load_data_t2 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (id,   name , age, address);
+
+
+LOAD DATA infile '$resources/load_data/test_columnlist_02.csv' into table load_data_t2 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (id, name, age);
+select * from load_data_t2;
+delete from load_data_t2;
+
+LOAD DATA infile '$resources/load_data/test_columnlist_02.csv' into table load_data_t2 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (id, name);
+select * from load_data_t2 order by id;
+delete from load_data_t2;
+
+LOAD DATA infile '$resources/load_data/test_columnlist_02.csv' into table load_data_t2 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (age, name);
+select * from load_data_t2 order by id;
 drop table load_data_t2;
+
+drop table if exists load_data_t3;
+create table load_data_t3(col1 int not null, col2 varchar(20) default "jane", col3 int);
+LOAD DATA infile '$resources/load_data/test_columnlist_02.csv' into table load_data_t3 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (col3, col2);
+
+LOAD DATA infile '$resources/load_data/test_columnlist_03.csv' into table load_data_t3 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (col1, col3);
+select * from load_data_t3 order by id;
+drop table load_data_t3;
