@@ -56,7 +56,7 @@ func SetFileService(fs fileservice.FileService) {
 	fsOnce.Do(func() {
 		FS = fs
 	})
-	logutil.Infof("[TransferHashPage] FS init %v", FS != nil)
+	logutil.Infof("[TransferHashPage] FS %v", FS)
 }
 
 type TransferHashPageParams struct {

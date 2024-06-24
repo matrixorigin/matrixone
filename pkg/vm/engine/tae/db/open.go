@@ -92,6 +92,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	if opts.Fs == nil {
 		// TODO:fileservice needs to be passed in as a parameter
 		opts.Fs = objectio.TmpNewFileservice(ctx, path.Join(dirname, "data"))
+		logutil.Infof("[TransferHashPage] FS %v", opts.Fs)
 	}
 
 	db = &DB{
