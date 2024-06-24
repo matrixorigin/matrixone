@@ -54,6 +54,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
@@ -3261,6 +3262,10 @@ func getSubscriptionMeta(ctx context.Context, dbName string, ses FeSession, txn 
 }
 
 func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, accName, pubName string) (subs *plan.SubscriptionMeta, err error) {
+	start := time.Now()
+	defer func() {
+		v2.CheckSubValidDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 	var (
@@ -7606,6 +7611,10 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *createAccount) (er
 	if !(tenant.IsSysTenant() && tenant.IsMoAdminRole()) {
 		return moerr.NewInternalError(ctx, "tenant %s user %s role %s do not have the privilege to create the new account", tenant.GetTenant(), tenant.GetUser(), tenant.GetDefaultRole())
 	}
+	start := time.Now()
+	defer func() {
+		v2.TotalCreateDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 
 	//normalize the name
 	err = normalizeNameOfAccount(ctx, ca)
@@ -7647,6 +7656,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *createAccount) (er
 			return rtnErr
 		}
 
+		start1 := time.Now()
 		//USE the mo_catalog
 		// MOVE into txn, make sure only create ONE txn.
 		rtnErr = bh.Exec(ctx, "use mo_catalog;")
@@ -7671,6 +7681,10 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *createAccount) (er
 				return rtnErr
 			}
 		}
+
+		v2.Step1DurationHistogram.Observe(time.Since(start1).Seconds())
+
+		start2 := time.Now()
 
 		// create some tables and databases for new account
 		rtnErr = bh.Exec(newTenantCtx, createMoIndexesSql)
@@ -7706,6 +7720,8 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *createAccount) (er
 				return rtnErr
 			}
 		}
+
+		v2.Step2DurationHistogram.Observe(time.Since(start2).Seconds())
 
 		// create tables for new account
 		rtnErr = createTablesInMoCatalogOfGeneralTenant2(bh, ca, newTenantCtx, newTenant, getGlobalPu())
@@ -7823,10 +7839,17 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 }
 
 func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccount, newTenantCtx context.Context, newTenant *TenantInfo, pu *config.ParameterUnit) error {
+	start := time.Now()
+	defer func() {
+		v2.CreateTablesInMoCatalogDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 	var err error
 	var initDataSqls []string
 	newTenantCtx, span := trace.Debug(newTenantCtx, "createTablesInMoCatalogOfGeneralTenant2")
 	defer span.End()
+
+	start1 := time.Now()
+
 	//create tables for the tenant
 	for _, sql := range createSqls {
 		//only the SYS tenant has the table mo_account
@@ -7838,6 +7861,8 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 			return err
 		}
 	}
+
+	v2.ExecDDL1DurationHistogram.Observe(time.Since(start1).Seconds())
 
 	//initialize the default data of tables for the tenant
 	addSqlIntoSet := func(sql string) {
@@ -7911,6 +7936,8 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 	addSqlIntoSet(addInitSystemVariablesSql(uint64(newTenant.GetTenantID()), newTenant.GetTenant(), QueryResultMaxsize, pu))
 	addSqlIntoSet(addInitSystemVariablesSql(uint64(newTenant.GetTenantID()), newTenant.GetTenant(), QueryResultTimeout, pu))
 
+	start2 := time.Now()
+
 	//fill the mo_role, mo_user, mo_role_privs, mo_user_grant, mo_role_grant
 	for _, sql := range initDataSqls {
 		bh.ClearExecResultSet()
@@ -7919,11 +7946,17 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 			return err
 		}
 	}
+
+	v2.InitData1DurationHistogram.Observe(time.Since(start2).Seconds())
 	return nil
 }
 
 // createTablesInSystemOfGeneralTenant creates the database system and system_metrics as the external tables.
 func createTablesInSystemOfGeneralTenant(ctx context.Context, bh BackgroundExec, newTenant *TenantInfo) error {
+	start := time.Now()
+	defer func() {
+		v2.CreateTablesInSystemDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 	ctx, span := trace.Debug(ctx, "createTablesInSystemOfGeneralTenant")
 	defer span.End()
 
@@ -7948,6 +7981,10 @@ func createTablesInSystemOfGeneralTenant(ctx context.Context, bh BackgroundExec,
 
 // createTablesInInformationSchemaOfGeneralTenant creates the database information_schema and the views or tables.
 func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh BackgroundExec) error {
+	start := time.Now()
+	defer func() {
+		v2.CreateTablesInInfoSchemaDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 	ctx, span := trace.Debug(ctx, "createTablesInInformationSchemaOfGeneralTenant")
 	defer span.End()
 	//with new tenant
