@@ -420,17 +420,18 @@ func (task *flushTableTailTask) prepareAObjSortedData(
 		return
 	}
 	bat = containers.NewBatch()
-	totalRowCnt := views.Columns[0].Length()
-	bat.Deletes = views.DeleteMask.Clone()
+	totalRowCnt := views.Length()
+	bat.Deletes = views.Deletes.Clone()
 	task.aObjDeletesCnt += bat.Deletes.GetCardinality()
-	defer views.Close()
+	if views == nil {
+		return
+	}
 	for i, colidx := range idxs {
-		colview := views.Columns[i]
-		if colview == nil {
+		vec := views.Vecs[i]
+		if vec == nil {
 			empty = true
 			return
 		}
-		vec := colview.Orphan()
 		if vec.Length() == 0 {
 			empty = true
 			vec.Close()

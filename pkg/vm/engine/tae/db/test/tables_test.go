@@ -419,8 +419,9 @@ func TestTxn6(t *testing.T) {
 					assert.Nil(t, err)
 					defer view.Close()
 					assert.NotEqual(t, bats[0].Length(), view.Length())
-					t.Log(view.DeleteMask.String())
-					assert.Equal(t, bats[0].Length()-1, view.ApplyDeletes().Length())
+					t.Log(view.Deletes.String())
+					view.Compact()
+					assert.Equal(t, bats[0].Length()-1, view.Length())
 				}
 				it.Next()
 			}
@@ -511,14 +512,14 @@ func TestFlushAblkMerge(t *testing.T) {
 				view, _ := blk.GetColumnDataById(context.Background(), uint16(j), 3, common.DefaultAllocator)
 				assert.NotNil(t, view)
 				defer view.Close()
-				if view.DeleteMask != nil {
-					t.Log(view.DeleteMask.String())
+				if view.Deletes != nil {
+					t.Log(view.Deletes.String())
 				}
 				pkView, _ := blk.GetColumnDataById(context.Background(), uint16(j), schema.GetSingleSortKeyIdx(), common.DefaultAllocator)
 				defer pkView.Close()
 				for i := 0; i < pkView.Length(); i++ {
-					pkv, _ := pkView.GetValue(i)
-					colv, _ := view.GetValue(i)
+					pkv := pkView.Vecs[0].Get(i)
+					colv := view.Vecs[0].Get(i)
 					assert.Equal(t, mapping[pkv.(int32)], colv)
 				}
 

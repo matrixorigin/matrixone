@@ -90,7 +90,7 @@ func (obj *object) GetColumnDataByIds(
 	blkID uint16,
 	colIdxes []int,
 	mp *mpool.MPool,
-) (view *containers.BlockView, err error) {
+) (view *containers.Batch, err error) {
 	node := obj.PinNode()
 	defer node.Unref()
 	schema := readSchema.(*catalog.Schema)
@@ -109,7 +109,7 @@ func (obj *object) GetColumnDataById(
 	blkID uint16,
 	col int,
 	mp *mpool.MPool,
-) (view *containers.ColumnView, err error) {
+) (view *containers.Batch, err error) {
 	schema := readSchema.(*catalog.Schema)
 	return obj.ResolvePersistedColumnData(
 		ctx,

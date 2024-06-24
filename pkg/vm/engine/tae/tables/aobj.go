@@ -167,7 +167,7 @@ func (obj *aobject) GetColumnDataByIds(
 	_ uint16,
 	colIdxes []int,
 	mp *mpool.MPool,
-) (view *containers.BlockView, err error) {
+) (view *containers.Batch, err error) {
 	return obj.resolveColumnDatas(
 		ctx,
 		txn,
@@ -185,7 +185,7 @@ func (obj *aobject) GetColumnDataById(
 	_ uint16,
 	col int,
 	mp *mpool.MPool,
-) (view *containers.ColumnView, err error) {
+) (view *containers.Batch, err error) {
 	return obj.resolveColumnData(
 		ctx,
 		txn,
@@ -203,7 +203,7 @@ func (obj *aobject) resolveColumnDatas(
 	colIdxes []int,
 	skipDeletes bool,
 	mp *mpool.MPool,
-) (view *containers.BlockView, err error) {
+) (view *containers.Batch, err error) {
 	node := obj.PinNode()
 	defer node.Unref()
 
@@ -256,7 +256,7 @@ func (obj *aobject) resolveColumnData(
 	col int,
 	skipDeletes bool,
 	mp *mpool.MPool,
-) (view *containers.ColumnView, err error) {
+) (view *containers.Batch, err error) {
 	node := obj.PinNode()
 	defer node.Unref()
 

@@ -82,10 +82,10 @@ type Object interface {
 
 	GetColumnDataById(
 		ctx context.Context, txn txnif.AsyncTxn, readSchema any /*avoid import cycle*/, blkID uint16, colIdx int, mp *mpool.MPool,
-	) (*containers.ColumnView, error)
+	) (*containers.Batch, error)
 	GetColumnDataByIds(
 		ctx context.Context, txn txnif.AsyncTxn, readSchema any, blkID uint16, colIdxes []int, mp *mpool.MPool,
-	) (*containers.BlockView, error)
+	) (*containers.Batch, error)
 	Prefetch(idxes []uint16, blkID uint16) error
 	GetMeta() any
 
@@ -94,7 +94,7 @@ type Object interface {
 	TryDeleteByDeltaloc(txn txnif.AsyncTxn, blkID uint16, deltaLoc objectio.Location) (node txnif.TxnEntry, ok bool, err error)
 
 	GetTotalChanges() int
-	CollectChangesInRange(ctx context.Context, blkID uint16, startTs, endTs types.TS, mp *mpool.MPool) (*containers.BlockView, error)
+	CollectChangesInRange(ctx context.Context, blkID uint16, startTs, endTs types.TS, mp *mpool.MPool) (*containers.Batch, error)
 
 	// check wether any delete intents with prepared ts within [from, to]
 	HasDeleteIntentsPreparedIn(from, to types.TS) (bool, bool)

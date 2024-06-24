@@ -1335,8 +1335,8 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, node InsertNode
 			if err != nil {
 				return err
 			}
-			colV.ApplyDeletes()
-			pks = colV.Orphan()
+			colV.Compact()
+			pks = colV.Vecs[0]
 			defer pks.Close()
 		}
 		err = nil
