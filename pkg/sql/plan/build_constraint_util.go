@@ -361,8 +361,9 @@ func getDmlTableInfo(ctx CompilerContext, tableExprs tree.TableExprs, with *tree
 
 func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Insert, info *dmlSelectInfo) (bool, map[string]bool, map[string]bool, error) {
 	var err error
+	var skipDupCheckForAutoPk bool
 	var syntaxHasColumnNames bool
-	// var uniqueCheckOnAutoIncr string
+	var uniqueCheckOnAutoIncr string
 	var insertColumns []string
 	tableDef := info.tblInfo.tableDefs[0]
 	tableObjRef := info.tblInfo.objRef[0]
@@ -377,12 +378,12 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	info.tblInfo.oldColPosMap = append(info.tblInfo.oldColPosMap, oldColPosMap)
 	info.tblInfo.newColPosMap = append(info.tblInfo.newColPosMap, oldColPosMap)
 
-	// dbName := string(stmt.Table.(*tree.TableName).SchemaName)
-	// if dbName == "" {
-	// 	dbName = builder.compCtx.DefaultDatabase()
-	// }
+	dbName := string(stmt.Table.(*tree.TableName).SchemaName)
+	if dbName == "" {
+		dbName = builder.compCtx.DefaultDatabase()
+	}
 
-	existAutoPkCol := false
+	insertAutoPkWithOutValues := false
 
 	insertWithoutUniqueKeyMap := make(map[string]bool)
 	var ifInsertFromUniqueColMap map[string]bool
@@ -579,22 +580,24 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	projectList := make([]*Expr, 0, len(tableDef.Cols))
 	pkCols := make(map[string]struct{})
 	for _, name := range tableDef.Pkey.Names {
-		pkCols[name] = struct{}{}
+		if name != catalog.FakePrimaryKeyColName {
+			pkCols[name] = struct{}{}
+		}
 	}
 	for _, col := range tableDef.Cols {
 		if oldExpr, exists := insertColToExpr[col.Name]; exists {
 			projectList = append(projectList, oldExpr)
-			// if col.Typ.AutoIncr {
-			// if _, ok := pkCols[col.Name]; ok {
-			// 	uniqueCheckOnAutoIncr, err = builder.compCtx.GetDbLevelConfig(dbName, "unique_check_on_autoincr")
-			// 	if err != nil {
-			// 		return false, nil, err
-			// 	}
-			// 	if uniqueCheckOnAutoIncr == "Error" {
-			// 		return false, nil, moerr.NewInvalidInput(builder.GetContext(), "When unique_check_on_autoincr is set to error, insertion of the specified value into auto-incr pk column is not allowed.")
-			// 	}
-			// }
-			// }
+			if col.Typ.AutoIncr {
+				if _, ok := pkCols[col.Name]; ok {
+					uniqueCheckOnAutoIncr, err = builder.compCtx.GetDbLevelConfig(dbName, "unique_check_on_autoincr")
+					if err != nil {
+						return false, nil, nil, err
+					}
+					if uniqueCheckOnAutoIncr == "Error" {
+						return false, nil, nil, moerr.NewInvalidInput(builder.GetContext(), "When unique_check_on_autoincr is set to error, insertion of the specified value into auto-incr pk column is not allowed.")
+					}
+				}
+			}
 		} else {
 			defExpr, err := getDefaultExpr(builder.GetContext(), col)
 			if err != nil {
@@ -602,12 +605,30 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			}
 
 			if col.Typ.AutoIncr {
-				if _, ok := pkCols[col.Name]; ok {
-					existAutoPkCol = true
+				if _, exists := pkCols[col.Name]; exists {
+					insertAutoPkWithOutValues = true
+					uniqueCheckOnAutoIncr, err = builder.compCtx.GetDbLevelConfig(dbName, "unique_check_on_autoincr")
+					if err != nil {
+						return false, nil, nil, err
+					}
 				}
 			}
 
 			projectList = append(projectList, defExpr)
+		}
+	}
+
+	if insertAutoPkWithOutValues {
+		switch uniqueCheckOnAutoIncr {
+		case "None":
+			if builder.compCtx.GetProcess().AutoPkGenByIncrService {
+				skipDupCheckForAutoPk = false
+			} else {
+				skipDupCheckForAutoPk = true
+				builder.compCtx.GetProcess().AutoPkGenByIncrService = true
+			}
+		case "Check":
+			skipDupCheckForAutoPk = false
 		}
 	}
 
@@ -804,7 +825,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		}
 	}
 
-	return existAutoPkCol, insertWithoutUniqueKeyMap, ifInsertFromUniqueColMap, nil
+	return skipDupCheckForAutoPk, insertWithoutUniqueKeyMap, ifInsertFromUniqueColMap, nil
 }
 
 func deleteToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Delete, haveConstraint bool, tblInfo *dmlTableInfo) (int32, error) {

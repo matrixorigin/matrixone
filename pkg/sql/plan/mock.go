@@ -865,6 +865,10 @@ func (m *MockCompilerContext) GetDatabaseId(dbName string, snapshot Snapshot) (u
 	return 0, nil
 }
 
+func (m *MockCompilerContext) GetDbLevelConfig(dbName string, varName string) (string, error) {
+	return "", nil
+}
+
 func (m *MockCompilerContext) DefaultDatabase() string {
 	return "tpch"
 }

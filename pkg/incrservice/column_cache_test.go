@@ -146,6 +146,25 @@ func TestInsertInt16WithManual(t *testing.T) {
 	)
 }
 
+func TestConcurrentlyInsertInt16(t *testing.T) {
+	total := 1000
+	goroutines := 200
+
+	rowsPerGoroutine := int(total / goroutines)
+
+	inputs := make([]*vector.Vector, 0, goroutines)
+	for i := 0; i < goroutines; i++ {
+		manualValueStart := int16(i * rowsPerGoroutine)
+		manualValues := []int16{manualValueStart, manualValueStart + 1}
+		manualRows := []int{0, 1}
+		inputs = append(inputs, newTestVector[int16](rowsPerGoroutine, types.New(types.T_int16, 0, 0), manualValues, manualRows))
+	}
+	testColumnCacheConcurrentlyManualInsert[int16](
+		t,
+		inputs,
+	)
+}
+
 func TestInsertInt32(t *testing.T) {
 	fillValues := []int32{1, 2, 3, 4, 5, 6, 7, 8}
 	fillRows := []int{0, 1, 2, 3, 4, 5, 6, 7}
@@ -173,6 +192,25 @@ func TestInsertInt32WithManual(t *testing.T) {
 	)
 }
 
+func TestConcurrentlyInsertInt32(t *testing.T) {
+	total := 1000
+	goroutines := 200
+
+	rowsPerGoroutine := int(total / goroutines)
+
+	inputs := make([]*vector.Vector, 0, goroutines)
+	for i := 0; i < goroutines; i++ {
+		manualValueStart := int32(i * rowsPerGoroutine)
+		manualValues := []int32{manualValueStart, manualValueStart + 1}
+		manualRows := []int{0, 1}
+		inputs = append(inputs, newTestVector[int32](rowsPerGoroutine, types.New(types.T_int32, 0, 0), manualValues, manualRows))
+	}
+	testColumnCacheConcurrentlyManualInsert[int32](
+		t,
+		inputs,
+	)
+}
+
 func TestInsertInt64(t *testing.T) {
 	fillValues := []int64{1, 2, 3, 4, 5, 6, 7, 8}
 	fillRows := []int{0, 1, 2, 3, 4, 5, 6, 7}
@@ -197,6 +235,25 @@ func TestInsertInt64WithManual(t *testing.T) {
 		15,
 		newTestVector(8, types.New(types.T_int64, 0, 0), manualValues, manualRows),
 		newTestVector(8, types.New(types.T_int64, 0, 0), fillValues, fillRows),
+	)
+}
+
+func TestConcurrentlyInsertInt64(t *testing.T) {
+	total := 10000
+	goroutines := 2000
+
+	rowsPerGoroutine := int(total / goroutines)
+
+	inputs := make([]*vector.Vector, 0, goroutines)
+	for i := 0; i < goroutines; i++ {
+		manualValueStart := int64(i * rowsPerGoroutine)
+		manualValues := []int64{manualValueStart, manualValueStart + 1}
+		manualRows := []int{0, 1}
+		inputs = append(inputs, newTestVector[int64](rowsPerGoroutine, types.New(types.T_int64, 0, 0), manualValues, manualRows))
+	}
+	testColumnCacheConcurrentlyManualInsert[int64](
+		t,
+		inputs,
 	)
 }
 
@@ -254,6 +311,25 @@ func TestInsertUint16WithManual(t *testing.T) {
 	)
 }
 
+func TestConcurrentlyInsertUInt16(t *testing.T) {
+	total := 1000
+	goroutines := 200
+
+	rowsPerGoroutine := int(total / goroutines)
+
+	inputs := make([]*vector.Vector, 0, goroutines)
+	for i := 0; i < goroutines; i++ {
+		manualValueStart := uint16(i * rowsPerGoroutine)
+		manualValues := []uint16{manualValueStart, manualValueStart + 1}
+		manualRows := []int{0, 1}
+		inputs = append(inputs, newTestVector[uint16](rowsPerGoroutine, types.New(types.T_uint16, 0, 0), manualValues, manualRows))
+	}
+	testColumnCacheConcurrentlyManualInsert[uint16](
+		t,
+		inputs,
+	)
+}
+
 func TestInsertUint32(t *testing.T) {
 	fillValues := []uint32{1, 2, 3, 4, 5, 6, 7, 8}
 	fillRows := []int{0, 1, 2, 3, 4, 5, 6, 7}
@@ -281,6 +357,25 @@ func TestInsertUint32WithManual(t *testing.T) {
 	)
 }
 
+func TestConcurrentlyInsertUInt32(t *testing.T) {
+	total := 1000
+	goroutines := 200
+
+	rowsPerGoroutine := int(total / goroutines)
+
+	inputs := make([]*vector.Vector, 0, goroutines)
+	for i := 0; i < goroutines; i++ {
+		manualValueStart := uint32(i * rowsPerGoroutine)
+		manualValues := []uint32{manualValueStart, manualValueStart + 1}
+		manualRows := []int{0, 1}
+		inputs = append(inputs, newTestVector[uint32](rowsPerGoroutine, types.New(types.T_uint32, 0, 0), manualValues, manualRows))
+	}
+	testColumnCacheConcurrentlyManualInsert[uint32](
+		t,
+		inputs,
+	)
+}
+
 func TestInsertUint64(t *testing.T) {
 	fillValues := []uint64{1, 2, 3, 4, 5, 6, 7, 8}
 	fillRows := []int{0, 1, 2, 3, 4, 5, 6, 7}
@@ -305,6 +400,25 @@ func TestInsertUint64WithManual(t *testing.T) {
 		15,
 		newTestVector(8, types.New(types.T_uint64, 0, 0), manualValues, manualRows),
 		newTestVector(8, types.New(types.T_uint64, 0, 0), fillValues, fillRows),
+	)
+}
+
+func TestConcurrentlyInsertUInt64(t *testing.T) {
+	total := 10000
+	goroutines := 2000
+
+	rowsPerGoroutine := int(total / goroutines)
+
+	inputs := make([]*vector.Vector, 0, goroutines)
+	for i := 0; i < goroutines; i++ {
+		manualValueStart := uint64(i * rowsPerGoroutine)
+		manualValues := []uint64{manualValueStart, manualValueStart + 1}
+		manualRows := []int{0, 1}
+		inputs = append(inputs, newTestVector[uint64](rowsPerGoroutine, types.New(types.T_uint64, 0, 0), manualValues, manualRows))
+	}
+	testColumnCacheConcurrentlyManualInsert[uint64](
+		t,
+		inputs,
 	)
 }
 
@@ -468,6 +582,40 @@ func testColumnCacheInsert[T constraints.Integer](
 			assert.Equal(t,
 				vector.MustFixedCol[T](expect),
 				vector.MustFixedCol[T](input))
+		},
+	)
+}
+
+// concurrently insert manual values into column cache, to check if lastInsertValue is greater than
+// any manual value, need to ensure that the inserted values themselves are not duplicated.
+// since the inserts are concurrent, the results returned cannot be expected
+func testColumnCacheConcurrentlyManualInsert[T constraints.Integer](
+	t *testing.T,
+	inputs []*vector.Vector,
+) {
+	goroutines := len(inputs)
+	runColumnCacheTests(
+		t,
+		10,
+		1,
+		func(
+			ctx context.Context,
+			c *columnCache) {
+			var wg sync.WaitGroup
+			for i := 0; i < goroutines; i++ {
+				wg.Add(1)
+				index := i // Create a local variable and assign the value of i to it.
+				go func() {
+					defer wg.Done()
+					rows := inputs[index].Length()
+					lastInsertValue, err := c.insertAutoValues(ctx, 0, inputs[index], rows, nil)
+					require.NoError(t, err)
+
+					vs := vector.MustFixedCol[T](inputs[index])
+					require.GreaterOrEqual(t, lastInsertValue, uint64(vs[0]+T(rows)-1))
+				}()
+			}
+			wg.Wait()
 		},
 	)
 }
