@@ -107,6 +107,7 @@ func CnServerMessageHandler(
 	if receiver.messageTyp == pipeline.Method_PipelineMessage || receiver.messageTyp == pipeline.Method_PrepareDoneNotifyMessage {
 		// keep listening until connection was closed
 		// to prevent some strange handle order between 'stop sending message' and others.
+		// todo: it is tcp connection now. should be very careful, we should listen to stream context next day.
 		if err == nil {
 			<-receiver.connectionCtx.Done()
 		}
@@ -263,7 +264,10 @@ type processHelper struct {
 
 // messageReceiverOnServer supported a series methods to write back results.
 type messageReceiverOnServer struct {
-	messageCtx    context.Context
+	messageCtx context.Context
+
+	// connectionCtx is the tcp connection context now.
+	// should be stream context next day once we have only one tcp between 2 cn nodes.
 	connectionCtx context.Context
 
 	messageId   uint64
