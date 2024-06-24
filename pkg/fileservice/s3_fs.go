@@ -417,6 +417,7 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	ctx = WithEventLogger(ctx)
+	LogEvent(ctx, "S3FS.Read, vector %+v", vector)
 	defer func() {
 		LogEvent(ctx, "Read return")
 		LogSlowEvent(ctx, time.Second*10)
@@ -630,7 +631,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 		t0 := time.Now()
 		LogEvent(ctx, "getContent begin")
 		defer func() {
-			LogEvent(ctx, "getContent end")
+			LogEvent(ctx, "getContent end, length %v", len(bs))
 			metric.FSReadDurationGetContent.Observe(time.Since(t0).Seconds())
 		}()
 		ctx, spanC := trace.Start(ctx, "S3FS.read.getContent")
@@ -652,7 +653,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 		tStart := time.Now()
 		LogEvent(ctx, "getContent io.ReadAll begin")
 		bs, err = io.ReadAll(reader)
-		LogEvent(ctx, "getContent io.ReadAll end")
+		LogEvent(ctx, "getContent io.ReadAll end, length %v", len(bs))
 		metric.FSReadDurationIOReadAll.Observe(time.Since(tStart).Seconds())
 		if err != nil {
 			return nil, err
