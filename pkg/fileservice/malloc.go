@@ -12,24 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package malloc
+package fileservice
 
 import (
-	"testing"
+	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 )
 
-func BenchmarkAllocFree(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		_, handle := Alloc(4096)
-		handle.Free()
-	}
-}
+var initMallocAllocatorOnce sync.Once
 
-func BenchmarkParallelAllocFree(b *testing.B) {
-	b.RunParallel(func(pb *testing.PB) {
-		for size := 1; pb.Next(); size++ {
-			_, handle := Alloc(size % 65536)
-			handle.Free()
-		}
+var _mallocAllocator malloc.Allocator
+
+func getMallocAllocator() malloc.Allocator {
+	// delay initialization of global allocator
+	// ugly, but we tend to read malloc config from files instead of env vars
+	initMallocAllocatorOnce.Do(func() {
+		_mallocAllocator = malloc.GetDefault(nil)
 	})
+	return _mallocAllocator
 }

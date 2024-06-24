@@ -170,7 +170,7 @@ func (resper *MysqlResp) respStatus(ses *Session,
 	execCtx *ExecCtx) (err error) {
 	ses.EnterFPrint(73)
 	defer ses.ExitFPrint(73)
-	if execCtx.skipRespClient {
+	if execCtx.inMigration {
 		return nil
 	}
 	var rspLen uint64
@@ -246,6 +246,8 @@ func (resper *MysqlResp) respStatus(ses *Session,
 			ses.DeleteSeqValues(execCtx.proc)
 		}
 
+		isIssue3482 := false
+		localFileName := ""
 		switch st := execCtx.stmt.(type) {
 		case *tree.Insert:
 			res.lastInsertId = execCtx.proc.GetLastInsertID()
@@ -267,12 +269,26 @@ func (resper *MysqlResp) respStatus(ses *Session,
 			err = doDropFunctionWithDB(execCtx.reqCtx, ses, execCtx.stmt, func(path string) error {
 				return execCtx.proc.FileService.Delete(execCtx.reqCtx, path)
 			})
+		case *tree.Load:
+			if st.Local && execCtx.isIssue3482 {
+				isIssue3482 = true
+				localFileName = st.Param.Filepath
+			}
 		}
 
 		if err2 := resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, res); err2 != nil {
-			err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
+			if isIssue3482 {
+				err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. local local '%s' response error:%v ", localFileName, err2)
+			} else {
+				err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
+			}
+
 			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
 			return err
+		}
+
+		if isIssue3482 {
+			ses.Infof(execCtx.reqCtx, "local local '%s' response ok", localFileName)
 		}
 	}
 	return

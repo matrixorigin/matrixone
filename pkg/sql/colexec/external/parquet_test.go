@@ -89,7 +89,7 @@ func Test_getMapper(t *testing.T) {
 			if v.IsNull() {
 				require.True(t, vec.IsNull(uint64(i)))
 			} else {
-				require.Equal(t, v.String(), vec.UnsafeGetStringAt(i))
+				require.Equal(t, v.String(), vec.GetStringAt(i))
 			}
 		}
 	})

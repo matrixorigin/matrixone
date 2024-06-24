@@ -661,3 +661,4 @@ schema_name
 mocloud_meta
 DEALLOCATE PREPARE mo_stmt_id_1;
 DROP DATABASE mocloud_meta;
+SET TIME_ZONE = "SYSTEM";

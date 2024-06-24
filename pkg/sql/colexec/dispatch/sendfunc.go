@@ -16,7 +16,6 @@ package dispatch
 
 import (
 	"context"
-	"hash/crc32"
 	"sync/atomic"
 
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -344,7 +343,6 @@ func sendToAnyFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool,
 }
 
 func sendBatchToClientSession(ctx context.Context, encodeBatData []byte, wcs process.WrapCs) error {
-	checksum := crc32.ChecksumIEEE(encodeBatData)
 	if len(encodeBatData) <= maxMessageSizeToMoRpc {
 		msg := cnclient.AcquireMessage()
 		{
@@ -352,7 +350,6 @@ func sendBatchToClientSession(ctx context.Context, encodeBatData []byte, wcs pro
 			msg.Data = encodeBatData
 			msg.Cmd = pipeline.Method_BatchMessage
 			msg.Sid = pipeline.Status_Last
-			msg.Checksum = checksum
 		}
 		if err := wcs.Cs.Write(ctx, msg); err != nil {
 			return err
@@ -374,7 +371,6 @@ func sendBatchToClientSession(ctx context.Context, encodeBatData []byte, wcs pro
 			msg.Data = encodeBatData[start:end]
 			msg.Cmd = pipeline.Method_BatchMessage
 			msg.Sid = sid
-			msg.Checksum = checksum
 		}
 
 		if err := wcs.Cs.Write(ctx, msg); err != nil {

@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,18 +14,22 @@
 
 package malloc
 
-import (
-	"testing"
-	"unsafe"
-)
+import "unsafe"
 
-func TestAllocFree(t *testing.T) {
-	for i := 0; i < 1<<19; i++ {
-		ptr, handle := Alloc(i)
-		bs := unsafe.Slice((*byte)(ptr), i)
-		if len(bs) != i {
-			t.Fatal()
-		}
-		handle.Free()
+type ShardedAllocator []Allocator
+
+func NewShardedAllocator(numShards int, newShard func() Allocator) ShardedAllocator {
+	var ret ShardedAllocator
+	for i := 0; i < numShards; i++ {
+		ret = append(ret, newShard())
 	}
+	return ret
+}
+
+var _ Allocator = ShardedAllocator{}
+
+func (s ShardedAllocator) Allocate(size uint64, hints Hints) (unsafe.Pointer, Deallocator, error) {
+	pid := runtime_procPin()
+	runtime_procUnpin()
+	return s[pid%len(s)].Allocate(size, hints)
 }

@@ -112,7 +112,7 @@ func NewLocalFS(
 	if fs.memCache != nil {
 		fs.allocator = fs.memCache
 	} else {
-		fs.allocator = DefaultCacheDataAllocator
+		fs.allocator = GetDefaultCacheDataAllocator()
 	}
 
 	return fs, nil
@@ -182,7 +182,7 @@ func (l *LocalFS) Write(ctx context.Context, vector IOVector) error {
 	defer func() {
 		// cover another func to catch the err when process Write
 		span.End(trace.WithFSReadWriteExtra(vector.FilePath, err, int64(bytesWritten)))
-		metric.LocalWriteIODurationHistogram.Observe(time.Since(start).Seconds())
+		metric.FSWriteDurationWrite.Observe(time.Since(start).Seconds())
 		metric.LocalWriteIOBytesHistogram.Observe(float64(bytesWritten))
 	}()
 
@@ -292,12 +292,10 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	bytesCounter := new(atomic.Int64)
-	start := time.Now()
+	t0 := time.Now()
 	defer func() {
-		LocalReadIODuration := time.Since(start)
-
-		metric.LocalReadIODurationHistogram.Observe(LocalReadIODuration.Seconds())
 		metric.LocalReadIOBytesHistogram.Observe(float64(bytesCounter.Load()))
+		metric.FSReadDurationGetContent.Observe(time.Since(t0).Seconds())
 	}()
 
 	if len(vector.Entries) == 0 {
@@ -319,7 +317,7 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 
 	allocator := l.allocator
 	if vector.Policy.Any(SkipMemoryCache) {
-		allocator = DefaultCacheDataAllocator
+		allocator = GetDefaultCacheDataAllocator()
 	}
 	for i := range vector.Entries {
 		vector.Entries[i].allocator = allocator
@@ -500,7 +498,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 					C: counter,
 				}
 				var bs memorycache.CacheData
-				bs, err = entry.ToCacheData(cr, nil, DefaultCacheDataAllocator)
+				bs, err = entry.ToCacheData(cr, nil, GetDefaultCacheDataAllocator())
 				if err != nil {
 					return err
 				}
@@ -563,9 +561,8 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 				entry.Size = int64(len(data))
 
 			} else {
-				if int64(len(entry.Data)) < entry.Size {
-					entry.Data = make([]byte, entry.Size)
-				}
+				finally := entry.prepareData()
+				defer finally(&err)
 				var n int
 				n, err = io.ReadFull(r, entry.Data)
 				if err != nil {
@@ -576,7 +573,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 				}
 			}
 
-			if err = entry.setCachedData(); err != nil {
+			if err = entry.setCachedData(ctx); err != nil {
 				return err
 			}
 
@@ -600,6 +597,12 @@ func (l *LocalFS) handleReadCloserForRead(
 ) (err error) {
 
 	var file *os.File
+	defer func() {
+		if err != nil && file != nil {
+			_ = file.Close()
+		}
+	}()
+
 	file, err = os.Open(nativePath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -607,11 +610,7 @@ func (l *LocalFS) handleReadCloserForRead(
 		}
 		return err
 	}
-	defer func() {
-		if err != nil {
-			_ = file.Close()
-		}
-	}()
+
 	fileWithChecksum := NewFileWithChecksum(ctx, file, _BlockContentSize, l.perfCounterSets)
 
 	entry := vector.Entries[i]
@@ -643,7 +642,7 @@ func (l *LocalFS) handleReadCloserForRead(
 			closeFunc: func() error {
 				defer file.Close()
 				var bs memorycache.CacheData
-				bs, err = entry.ToCacheData(buf, buf.Bytes(), DefaultCacheDataAllocator)
+				bs, err = entry.ToCacheData(buf, buf.Bytes(), GetDefaultCacheDataAllocator())
 				if err != nil {
 					return err
 				}

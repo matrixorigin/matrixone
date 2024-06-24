@@ -266,8 +266,8 @@ func NewTAENeedRetryNoCtx() *Error {
 	return newError(Context(), ErrTAENeedRetry)
 }
 
-func NewTxnStaleNoCtx() *Error {
-	return newError(Context(), ErrTxnStale)
+func NewTxnStaleNoCtx(msg string) *Error {
+	return newError(Context(), ErrTxnStale, msg)
 }
 
 func NewWaiterPausedNoCtx() *Error {
@@ -284,6 +284,10 @@ func NewNewTxnInCNRollingRestart() *Error {
 
 func NewPrevCheckpointNotFinished() *Error {
 	return newError(Context(), ErrPrevCheckpointNotFinished)
+}
+
+func NewCantDelGCCheckerNoCtx() *Error {
+	return newError(Context(), ErrCantDelGCChecker)
 }
 
 func NewNotFoundNoCtx() *Error {

@@ -15,6 +15,7 @@
 package colexec
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"reflect"
 	"sync"
 
@@ -49,6 +50,76 @@ type Server struct {
 	uuidCsChanMap UuidProcMap
 	//txn's local segments.
 	cnSegmentMap CnSegmentMap
+
+	receivedRunningPipeline RunningPipelineMapForRemoteNode
+}
+
+// RunningPipelineMapForRemoteNode
+// is a map to record which pipeline was built for a remote node.
+// these pipelines will send data to a remote node,
+// we record them for a better control for their lives.
+type RunningPipelineMapForRemoteNode struct {
+	sync.Mutex
+
+	fromRpcClientToRunningPipeline map[rpcClientItem]*process.Process
+}
+
+type rpcClientItem struct {
+	// connection.
+	tcp morpc.ClientSession
+
+	// stream id.
+	id uint64
+}
+
+func (srv *Server) RecordRunningPipeline(session morpc.ClientSession, id uint64, proc *process.Process) (queryCancel bool) {
+	srv.receivedRunningPipeline.Lock()
+	defer srv.receivedRunningPipeline.Unlock()
+
+	item := rpcClientItem{
+		tcp: session,
+		id:  id,
+	}
+
+	// CancelRunningPipeline was called before, this query has been canceled.
+	if _, ok := srv.receivedRunningPipeline.fromRpcClientToRunningPipeline[item]; ok {
+		delete(srv.receivedRunningPipeline.fromRpcClientToRunningPipeline, item)
+		return true
+	}
+
+	srv.receivedRunningPipeline.fromRpcClientToRunningPipeline[item] = proc
+	return false
+}
+
+func (srv *Server) CancelRunningPipeline(session morpc.ClientSession, id uint64) {
+	srv.receivedRunningPipeline.Lock()
+	defer srv.receivedRunningPipeline.Unlock()
+
+	item := rpcClientItem{
+		tcp: session,
+		id:  id,
+	}
+
+	p, ok := srv.receivedRunningPipeline.fromRpcClientToRunningPipeline[item]
+	if ok {
+		p.Cancel()
+		delete(srv.receivedRunningPipeline.fromRpcClientToRunningPipeline, item)
+	} else {
+		// indicate that this query was canceled. once anyone want to start this query, should just return.
+		srv.receivedRunningPipeline.fromRpcClientToRunningPipeline[item] = nil
+	}
+}
+
+func (srv *Server) RemoveRunningPipeline(session morpc.ClientSession, id uint64) {
+	srv.receivedRunningPipeline.Lock()
+	defer srv.receivedRunningPipeline.Unlock()
+
+	item := rpcClientItem{
+		tcp: session,
+		id:  id,
+	}
+
+	delete(srv.receivedRunningPipeline.fromRpcClientToRunningPipeline, item)
 }
 
 type uuidProcMapItem struct {

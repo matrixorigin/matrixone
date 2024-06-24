@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,32 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package memorycache
+package fileservice
 
 import (
-	"sync/atomic"
-	"unsafe"
-
-	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"context"
+	"testing"
+	"time"
 )
 
-func newData(size int, counter *atomic.Int64) *Data {
-	if size == 0 {
-		return nil
-	}
-	counter.Add(int64(size))
-	data := &Data{
-		size: size,
-	}
-	ptr, handle := malloc.Alloc(size)
-	data.bufHandle = handle
-	data.buf = unsafe.Slice((*byte)(ptr), size)
-	data.ref.init(1)
-	return data
-}
-
-func (d *Data) free(counter *atomic.Int64) {
-	counter.Add(-int64(d.size))
-	d.buf = nil
-	d.bufHandle.Free()
+func TestEventLogger(t *testing.T) {
+	ctx := context.Background()
+	ctx = WithEventLogger(ctx)
+	LogEvent(ctx, "foo")
+	LogEvent(ctx, "bar")
+	LogEvent(ctx, "baz")
+	LogSlowEvent(ctx, time.Nanosecond)
 }

@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,25 +16,25 @@ package malloc
 
 import "unsafe"
 
-type Handle struct {
-	ptr   unsafe.Pointer
-	class int
+type FuncDeallocator func(ptr unsafe.Pointer)
+
+var _ Deallocator = FuncDeallocator(nil)
+
+func (f FuncDeallocator) Deallocate(ptr unsafe.Pointer, hints Hints) {
+	f(ptr)
 }
 
-var dumbHandle = &Handle{
-	class: -1,
+type argumentedFuncDeallocator[T any] struct {
+	argument T
+	fn       func(unsafe.Pointer, Hints, T)
 }
 
-func (h *Handle) Free() {
-	if h.class < 0 {
-		return
-	}
-	pid := runtime_procPin()
-	runtime_procUnpin()
-	shard := pid % numShards
-	select {
-	case shards[shard].pools[h.class] <- h:
-		shards[shard].numFree.Add(1)
-	default:
-	}
+func (a *argumentedFuncDeallocator[T]) SetArgument(arg T) {
+	a.argument = arg
+}
+
+var _ Deallocator = &argumentedFuncDeallocator[int]{}
+
+func (a *argumentedFuncDeallocator[T]) Deallocate(ptr unsafe.Pointer, hints Hints) {
+	a.fn(ptr, hints, a.argument)
 }

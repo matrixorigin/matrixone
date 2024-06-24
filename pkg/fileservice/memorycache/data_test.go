@@ -18,13 +18,15 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/stretchr/testify/require"
 )
 
 func TestData(t *testing.T) {
-	var size atomic.Int64
+	allocator := malloc.GetDefault(nil)
 
-	d := newData(1, &size)
+	var size atomic.Int64
+	d := newData(allocator, 1, &size)
 	require.NotEqual(t, nil, d)
 	// test refs
 	require.Equal(t, int32(1), d.refs())
@@ -33,17 +35,17 @@ func TestData(t *testing.T) {
 	buf[0] = 1
 	require.Equal(t, byte(1), d.Buf()[0])
 	// test Truncate
-	d.Truncate(0)
+	d.Slice(0)
 	require.Equal(t, 0, len(d.Buf()))
 	// test acquire
 	d.acquire()
 	require.Equal(t, int32(2), d.refs())
 	// test release
-	d.release(&size)
+	d.Release()
 	require.Equal(t, int32(1), d.refs())
-	d.release(&size)
+	d.Release()
 	require.Equal(t, int64(0), size.Load())
 	// boundary test
-	d = newData(0, &size)
+	d = newData(allocator, 0, &size)
 	require.Equal(t, (*Data)(nil), d)
 }

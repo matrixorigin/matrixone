@@ -687,7 +687,7 @@ func restoreViews(
 
 	g := topsort{next: make(map[string][]string)}
 	for key, view := range viewMap {
-		stmts, err := parsers.Parse(ctx, dialect.MYSQL, view.createSql, 1, 0)
+		stmts, err := parsers.Parse(ctx, dialect.MYSQL, view.createSql, 1)
 		if err != nil {
 			return err
 		}
@@ -717,7 +717,7 @@ func restoreViews(
 		if tblInfo, ok := viewMap[key]; ok {
 			getLogger().Info(fmt.Sprintf("[%s] start to restore view: %v", snapshotName, tblInfo.tblName))
 
-			if err = bh.Exec(toCtx, "use "+tblInfo.dbName); err != nil {
+			if err = bh.Exec(toCtx, "use `"+tblInfo.dbName+"`"); err != nil {
 				return err
 			}
 
@@ -747,7 +747,7 @@ func recreateTable(
 
 	ctx = defines.AttachAccountId(ctx, toAccountId)
 
-	if err = bh.Exec(ctx, fmt.Sprintf("use %s", tblInfo.dbName)); err != nil {
+	if err = bh.Exec(ctx, fmt.Sprintf("use `%s`", tblInfo.dbName)); err != nil {
 		return
 	}
 

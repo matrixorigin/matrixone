@@ -89,3 +89,9 @@ func WithReserveWALEntryCount(count uint64) Option {
 		r.options.reservedWALEntryCount = count
 	}
 }
+
+func WithStartupLatancy(latency time.Duration) Option {
+	return func(r *runner) {
+		r.options.startupLatency = latency
+	}
+}

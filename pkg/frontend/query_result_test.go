@@ -20,8 +20,9 @@ import (
 	"io"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/prashantv/gostub"
+
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 
 	"github.com/BurntSushi/toml"
 	"github.com/golang/mock/gomock"
@@ -173,7 +174,7 @@ func Test_saveQueryResultMeta(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	asts, err := parsers.Parse(ctx, dialect.MYSQL, "select a,b,c from t", 1, 0)
+	asts, err := parsers.Parse(ctx, dialect.MYSQL, "select a,b,c from t", 1)
 	assert.Nil(t, err)
 
 	ses.ast = asts[0]

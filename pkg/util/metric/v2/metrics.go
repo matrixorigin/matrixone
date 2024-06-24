@@ -60,6 +60,7 @@ func initMemMetrics() {
 	registry.MustRegister(memMPoolAllocatedSizeGauge)
 	registry.MustRegister(MemTotalCrossPoolFreeCounter)
 	registry.MustRegister(memMPoolHighWaterMarkGauge)
+	registry.MustRegister(mallocCounter)
 }
 
 func initTaskMetrics() {
@@ -83,14 +84,13 @@ func initFileServiceMetrics() {
 	registry.MustRegister(S3DNSResolveCounter)
 
 	registry.MustRegister(s3IOBytesHistogram)
-	registry.MustRegister(s3IODurationHistogram)
 	registry.MustRegister(s3ConnDurationHistogram)
 	registry.MustRegister(localIOBytesHistogram)
-	registry.MustRegister(localIODurationHistogram)
 
 	registry.MustRegister(ioMergerCounter)
 	registry.MustRegister(ioMergerDuration)
-	registry.MustRegister(fsReadDuration)
+	registry.MustRegister(fsMallocLiveObjects)
+	registry.MustRegister(fsReadWriteDuration)
 }
 
 func initLogtailMetrics() {
@@ -106,7 +106,9 @@ func initLogtailMetrics() {
 	registry.MustRegister(logTailSendDurationHistogram)
 	registry.MustRegister(LogTailLoadCheckpointDurationHistogram)
 
-	registry.MustRegister(LogTailCollectDurationHistogram)
+	registry.MustRegister(LogTailPushCollectionDurationHistogram)
+	registry.MustRegister(LogTailPullCollectionPhase1DurationHistogram)
+	registry.MustRegister(LogTailPullCollectionPhase2DurationHistogram)
 	registry.MustRegister(LogTailSubscriptionCounter)
 	registry.MustRegister(txnTNSideDurationHistogram)
 }
@@ -138,6 +140,7 @@ func initTxnMetrics() {
 	registry.MustRegister(txnCNCommittedLocationQuantityGauge)
 
 	registry.MustRegister(txnRangesSelectivityHistogram)
+	registry.MustRegister(txnTNDeduplicateDurationHistogram)
 }
 
 func initRPCMetrics() {
@@ -184,6 +187,7 @@ func initFrontendMetrics() {
 
 func initPipelineMetrics() {
 	registry.MustRegister(PipelineServerDurationHistogram)
+	registry.MustRegister(pipelineStreamCounter)
 }
 
 func getDurationBuckets() []float64 {

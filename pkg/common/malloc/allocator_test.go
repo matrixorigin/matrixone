@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,33 +14,36 @@
 
 package malloc
 
-import "time"
+import (
+	"math"
+	"testing"
+	"unsafe"
+)
 
-func init() {
-	go func() {
-		lastNumAllocs := make([]int64, numShards)
-		for range time.NewTicker(time.Second * 37).C {
-			for i := 0; i < numShards; i++ {
-				numAllocs := shards[i].numAlloc.Load()
-				if numAllocs == lastNumAllocs[i] {
-					// not active, flush
-					shards[i].flush()
+func testAllocator(
+	t *testing.T,
+	newAllocator func() Allocator,
+) {
+	t.Helper()
+
+	t.Run("allocate", func(t *testing.T) {
+		allocator := newAllocator()
+		for i := uint64(1); i < 128*MB; i = uint64(math.Ceil(float64(i) * 1.1)) {
+			ptr, dec, err := allocator.Allocate(i, NoHints)
+			if err != nil {
+				t.Fatal(err)
+			}
+			slice := unsafe.Slice((*byte)(ptr), i)
+			for _, i := range slice {
+				if i != 0 {
+					t.Fatal("not zeroed")
 				}
-				lastNumAllocs[i] = numAllocs
 			}
+			for i := range slice {
+				slice[i] = byte(i)
+			}
+			dec.Deallocate(ptr, NoHints)
 		}
-	}()
-}
+	})
 
-func (s *Shard) flush() {
-	for _, ch := range s.pools {
-	loop:
-		for {
-			select {
-			case <-ch:
-			default:
-				break loop
-			}
-		}
-	}
 }

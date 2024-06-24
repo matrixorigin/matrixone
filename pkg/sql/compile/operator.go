@@ -615,7 +615,12 @@ func constructPreInsert(ns []*plan.Node, n *plan.Node, eg engine.Engine, proc *p
 	if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
 		if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
 			n.ScanSnapshot.TS.Less(proc.TxnOperator.Txn().SnapshotTS) {
-			txnOp = proc.TxnOperator.CloneSnapshotOp(*n.ScanSnapshot.TS)
+			if proc.GetCloneTxnOperator() != nil {
+				txnOp = proc.GetCloneTxnOperator()
+			} else {
+				txnOp = proc.TxnOperator.CloneSnapshotOp(*n.ScanSnapshot.TS)
+				proc.SetCloneTxnOperator(txnOp)
+			}
 
 			if n.ScanSnapshot.Tenant != nil {
 				ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.Tenant.TenantID)
@@ -756,6 +761,7 @@ func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Contex
 				FileList:        fileList,
 				FileSize:        FileSize,
 				ClusterTable:    n.GetClusterTable(),
+				TblName:         n.TableDef.Name,
 			},
 			ExParam: external.ExParam{
 				Fileparam: new(external.ExFileparam),
@@ -1083,7 +1089,7 @@ func constructWindow(_ context.Context, n *plan.Node, proc *process.Process) *wi
 				if err != nil {
 					panic(err)
 				}
-				cfg = []byte(vec.UnsafeGetStringAt(0))
+				cfg = []byte(vec.GetStringAt(0))
 				vec.Free(proc.Mp())
 
 				args = f.F.Args[:len(f.F.Args)-1]
@@ -1152,7 +1158,7 @@ func constructGroup(_ context.Context, n, cn *plan.Node, ibucket, nbucket int, n
 					if err != nil {
 						panic(err)
 					}
-					cfg = []byte(vec.UnsafeGetStringAt(0))
+					cfg = []byte(vec.GetStringAt(0))
 					vec.Free(proc.Mp())
 
 					args = f.F.Args[:len(f.F.Args)-1]
