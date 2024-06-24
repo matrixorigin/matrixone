@@ -128,11 +128,11 @@ SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME   
 create snapshot cluster_sp for cluster;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-cluster_sp    2024-06-21 07:36:16.472205    cluster            
+cluster_sp    2024-06-24 01:55:14.543559    cluster            
 drop database if exists snapshot_read;
 drop database if exists test_snapshot_restore;
 restore account acc01 from snapshot cluster_sp;
-internal error: accountName(acc01) does not match snapshot.accountName()
+internal error: find 0 snapshot records by name(019047f4-5a21-7e8f-88fc-6fe124f201a2_cluster_sp_mock), expect only 1
 select count(*) from snapshot_read.test_snapshot_read;
 invalid database snapshot_read
 select count(*) from snapshot_read.users;
@@ -469,13 +469,13 @@ SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME   
 create snapshot cluster_sp for cluster;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-cluster_sp    2024-06-21 07:36:36.734525    cluster            
+cluster_sp    2024-06-24 01:57:12.620855    cluster            
 drop database if exists snapshot_read;
 SQL parser error: table "mo_role_privs" does not exist
 drop database if exists test_snapshot_restore;
 SQL parser error: table "mo_role_privs" does not exist
 restore account acc01 from snapshot cluster_sp;
-internal error: accountName(acc01) does not match snapshot.accountName()
+internal error: find 0 snapshot records by name(019047f6-2741-7705-9017-04b998f3a41c_cluster_sp_mock), expect only 1
 select * from Company.Departments;
 departmentid    name    managerid
 1    Research and Development    null
@@ -594,7 +594,9 @@ drop snapshot if exists cluster_sp;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
 drop account if exists acc01;
+internal error: can not drop database. It has been referenced by foreign keys
 create account acc01 admin_name = 'test_account' identified by '111';
+internal error: the tenant acc01 exists
 CREATE DATABASE School;
 USE School;
 drop table if exists Students;
@@ -831,10 +833,10 @@ Dr. Charlie    Computer Science    Introduction to Computer Science    Fall 2024
 Dr. Delta    Mathematics    Advanced Mathematics    Spring 2024
 select * from StudentOverallPerformance;
 studentname    studentgrade    averagegrade
-Eve    null    3.50000000
-Frank    null    3.60000000
 Alice Smith    3.50    3.60000000
 Bob Johnson    3.70    3.60000000
+Eve    null    3.50000000
+Frank    null    3.60000000
 drop snapshot if exists cluster_sp;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
@@ -923,6 +925,7 @@ Frank    null    3.60000000
 Alice Smith    3.50    3.60000000
 Bob Johnson    3.70    3.60000000
 drop account if exists acc01;
+internal error: can not drop database. It has been referenced by foreign keys
 drop snapshot if exists cluster_sp;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
