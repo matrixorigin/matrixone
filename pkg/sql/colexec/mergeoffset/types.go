@@ -30,6 +30,7 @@ type container struct {
 	colexec.ReceiverOperator
 	seen           uint64
 	offset         uint64
+	buf            *batch.Batch
 	offsetExecutor colexec.ExpressionExecutor
 }
 
@@ -38,7 +39,6 @@ type Argument struct {
 	Offset *plan.Expr
 	// ctr contains the attributes needn't do serialization work
 	ctr *container
-	buf *batch.Batch
 	vm.OperatorBase
 }
 
@@ -89,10 +89,11 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 			arg.ctr.offsetExecutor.Free()
 			arg.ctr.offsetExecutor = nil
 		}
+		if arg.ctr.buf != nil {
+			arg.ctr.buf.Clean(proc.Mp())
+			arg.ctr.buf = nil
+		}
 		arg.ctr = nil
 	}
-	if arg.buf != nil {
-		arg.buf.Clean(proc.Mp())
-		arg.buf = nil
-	}
+
 }

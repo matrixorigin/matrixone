@@ -96,7 +96,7 @@ func (s *service) Read(
 			s.newReadRequest(
 				shard,
 				req.Method,
-				req.Data,
+				req.Param,
 				opts.readAt,
 			),
 		)
@@ -120,7 +120,7 @@ func (s *service) Read(
 			selected.values[i],
 			opts.readAt,
 			req.Method,
-			req.Data,
+			req.Param,
 		)
 		if e == nil {
 			req.Apply(v)
@@ -156,7 +156,7 @@ func (s *service) doRead(
 	shard pb.TableShard,
 	readAt timestamp.Timestamp,
 	method int,
-	payload []byte,
+	param pb.ReadParam,
 ) ([]byte, error) {
 	if err := s.validReplica(
 		shard,
@@ -176,7 +176,7 @@ func (s *service) doRead(
 		ctx,
 		shard,
 		method,
-		payload,
+		param,
 		readAt,
 	)
 }

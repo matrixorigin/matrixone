@@ -129,6 +129,8 @@ type CompilerContext interface {
 	SetSnapshot(snapshot *Snapshot)
 	GetViews() []string
 	SetViews(views []string)
+
+	GetLowerCaseTableNames() int64
 }
 
 type Optimizer interface {
@@ -195,6 +197,7 @@ type OptimizerHints struct {
 	forceOneCN                 int
 	execType                   int
 	disableRightJoin           int
+	printShuffle               int
 }
 
 type CTERef struct {
@@ -281,6 +284,9 @@ type BindContext struct {
 	snapshot *Snapshot
 	// all view keys(dbName#viewName)
 	views []string
+
+	// lower is sys var lower_case_table_names
+	lower int64
 }
 
 type NameTuple struct {

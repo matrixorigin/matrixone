@@ -16,12 +16,15 @@
 
 syntax = "proto3";
 package logservice;
+
 option go_package = "github.com/matrixorigin/matrixone/pkg/pb/logservice";
 
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 import "metadata.proto";
 
 option (gogoproto.goproto_enum_prefix_all) = false;
+option (gogoproto.sizer_all) = false;
+option (gogoproto.protosizer_all) = true;
 
 enum UpdateType {
   LeaseHolderIDUpdate = 0;
@@ -51,6 +54,7 @@ message CNStore {
   Resource Resource = 13 [(gogoproto.nullable) = false];
   int64 UpTime = 14;
   string          ShardServiceAddress = 15;
+  string CommitID = 16;
 }
 
 message TNStore {
@@ -131,6 +135,7 @@ message CNStoreHeartbeat {
   ConfigData      ConfigData         = 12;
   Resource        Resource           = 13 [(gogoproto.nullable) = false];
   string  ShardServiceAddress   = 14;
+  string          CommitID           = 15;
 }
 
 // CNAllocateID is the periodic message sent tp the HAKeeper by CN stores.
@@ -503,6 +508,7 @@ message CNStoreInfo {
   Resource        Resource           = 14 [(gogoproto.nullable) = false];
   int64           UpTime             = 15;
   string       ShardServiceAddress   = 16;
+  string          CommitID           = 17;
 }
 
 // CNState contains all CN details known to the HAKeeper.

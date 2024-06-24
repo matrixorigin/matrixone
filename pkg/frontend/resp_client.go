@@ -30,7 +30,7 @@ func setResponse(ses *Session, isLastStmt bool, rspLen uint64) *Response {
 // response the client
 func respClientWhenSuccess(ses *Session,
 	execCtx *ExecCtx) (err error) {
-	if execCtx.skipRespClient {
+	if execCtx.inMigration {
 		return nil
 	}
 	err = execCtx.resper.RespPostMeta(execCtx, nil)
@@ -48,7 +48,7 @@ func respClientWhenSuccess(ses *Session,
 
 func (resper *MysqlResp) respClientWithoutFlush(ses *Session,
 	execCtx *ExecCtx) (err error) {
-	if execCtx.skipRespClient {
+	if execCtx.inMigration {
 		return nil
 	}
 	switch execCtx.stmt.StmtKind().RespType() {

@@ -19,14 +19,35 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync"
 )
 
-func NewDefault(config *Config) (allocator Allocator) {
+var defaultAllocator Allocator
+
+var setDefaultAllocatorOnce sync.Once
+
+func GetDefault(defaultConfig *Config) Allocator {
+	setDefaultAllocatorOnce.Do(func() {
+		defaultAllocator = newDefault(defaultConfig)
+	})
+	return defaultAllocator
+}
+
+func newDefault(config *Config) (allocator Allocator) {
+	// config
 	if config == nil {
 		c := *defaultConfig.Load()
 		config = &c
 	}
 
+	// debug
+	if os.Getenv("MO_MALLOC_DEBUG") != "" {
+		config.CheckFraction = ptrTo(uint32(1))
+		config.FullStackFraction = ptrTo(uint32(1))
+		config.EnableMetrics = ptrTo(true)
+	}
+
+	// profile
 	defer func() {
 		if config.FullStackFraction != nil && *config.FullStackFraction > 0 {
 			allocator = NewProfileAllocator(
@@ -37,21 +58,51 @@ func NewDefault(config *Config) (allocator Allocator) {
 		}
 	}()
 
-	switch strings.TrimSpace(strings.ToLower(os.Getenv("MO_MALLOC"))) {
+	// checked
+	defer func() {
+		if config.CheckFraction != nil && *config.CheckFraction > 0 {
+			allocator = NewCheckedAllocator(
+				allocator,
+				*config.CheckFraction,
+			)
+		}
+	}()
+
+	if config.Allocator == nil {
+		config.Allocator = ptrTo("mmap")
+	}
+
+	switch strings.ToLower(*config.Allocator) {
 
 	case "c":
+		// c allocator
 		allocator = NewCAllocator()
 		if config.EnableMetrics != nil && *config.EnableMetrics {
 			allocator = NewMetricsAllocator(allocator)
 		}
 		return allocator
 
-	case "old":
+	case "go":
+		// go allocator
 		return NewShardedAllocator(
 			runtime.GOMAXPROCS(0),
 			func() Allocator {
 				var ret Allocator
-				ret = NewPureGoClassAllocator(256 * MB)
+				ret = NewClassAllocator(NewFixedSizeSyncPoolAllocator)
+				if config.EnableMetrics != nil && *config.EnableMetrics {
+					ret = NewMetricsAllocator(ret)
+				}
+				return ret
+			},
+		)
+
+	case "mmap":
+		// mmap allocator
+		return NewShardedAllocator(
+			runtime.GOMAXPROCS(0),
+			func() Allocator {
+				var ret Allocator
+				ret = NewClassAllocator(NewFixedSizeMmapAllocator)
 				if config.EnableMetrics != nil && *config.EnableMetrics {
 					ret = NewMetricsAllocator(ret)
 				}
@@ -60,25 +111,14 @@ func NewDefault(config *Config) (allocator Allocator) {
 		)
 
 	default:
-		return NewShardedAllocator(
-			runtime.GOMAXPROCS(0),
-			func() Allocator {
-				var ret Allocator
-				ret = NewClassAllocator(config.CheckFraction)
-				if config.EnableMetrics != nil && *config.EnableMetrics {
-					ret = NewMetricsAllocator(ret)
-				}
-				return ret
-			},
-		)
-
+		panic("unknown allocator: " + *config.Allocator)
 	}
 }
 
 var globalProfiler = NewProfiler[HeapSampleValues]()
 
 func init() {
-	http.HandleFunc("/debug/pprof/malloc", func(w http.ResponseWriter, req *http.Request) {
+	http.HandleFunc("/debug/malloc", func(w http.ResponseWriter, req *http.Request) {
 		globalProfiler.Write(w)
 	})
 }

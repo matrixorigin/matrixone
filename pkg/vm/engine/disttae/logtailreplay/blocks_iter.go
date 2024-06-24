@@ -16,6 +16,7 @@ package logtailreplay
 
 import (
 	"bytes"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -41,7 +42,8 @@ func (p *PartitionState) ApproxObjectsNum() int {
 
 func (p *PartitionState) NewObjectsIter(ts types.TS) (ObjectsIter, error) {
 	if ts.Less(&p.minTS) {
-		return nil, moerr.NewTxnStaleNoCtx()
+		msg := fmt.Sprintf("(%s<%s)", ts.ToString(), p.minTS.ToString())
+		return nil, moerr.NewTxnStaleNoCtx(msg)
 	}
 	iter := p.dataObjects.Copy().Iter()
 	ret := &objectsIter{

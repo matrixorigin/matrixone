@@ -49,7 +49,11 @@ func newData(
 		size:       size,
 		globalSize: globalSize,
 	}
-	data.ptr, data.deallocator = allocator.Allocate(uint64(size))
+	var err error
+	data.ptr, data.deallocator, err = allocator.Allocate(uint64(size), malloc.NoHints)
+	if err != nil {
+		panic(err)
+	}
 	metric.FSMallocLiveObjectsMemoryCache.Inc()
 	data.buf = unsafe.Slice((*byte)(data.ptr), size)
 	data.ref.init(1)
@@ -59,7 +63,7 @@ func newData(
 func (d *Data) free() {
 	d.globalSize.Add(-int64(d.size))
 	d.buf = nil
-	d.deallocator.Deallocate(d.ptr)
+	d.deallocator.Deallocate(d.ptr, malloc.NoHints)
 	metric.FSMallocLiveObjectsMemoryCache.Dec()
 }
 

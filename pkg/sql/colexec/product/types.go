@@ -35,12 +35,11 @@ const (
 type container struct {
 	colexec.ReceiverOperator
 
-	state int
-	bat   *batch.Batch
-	rbat  *batch.Batch
-	inBat *batch.Batch
-
+	state    int
 	probeIdx int
+	bat      *batch.Batch
+	rbat     *batch.Batch
+	inBat    *batch.Batch
 }
 
 type Argument struct {

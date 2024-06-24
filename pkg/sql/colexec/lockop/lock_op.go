@@ -63,17 +63,18 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {
-	arg.rt = &state{}
-	arg.rt.fetchers = make([]FetchLockRowsFunc, 0, len(arg.targets))
+	arg.ctr = new(container)
+	arg.ctr.rt = &state{}
+	arg.ctr.rt.fetchers = make([]FetchLockRowsFunc, 0, len(arg.targets))
 	for idx := range arg.targets {
-		arg.rt.fetchers = append(arg.rt.fetchers,
+		arg.ctr.rt.fetchers = append(arg.ctr.rt.fetchers,
 			GetFetchRowsFunc(arg.targets[idx].primaryColumnType))
 	}
-	arg.rt.parker = types.NewPacker(proc.Mp())
-	arg.rt.retryError = nil
-	arg.rt.step = stepLock
+	arg.ctr.rt.parker = types.NewPacker(proc.Mp())
+	arg.ctr.rt.retryError = nil
+	arg.ctr.rt.step = stepLock
 	if arg.block {
-		arg.rt.InitReceiver(proc, true)
+		arg.ctr.rt.InitReceiver(proc, true)
 	}
 	return nil
 }
@@ -116,7 +117,7 @@ func callNonBlocking(
 	defer anal.Stop()
 
 	if result.Batch == nil {
-		return result, arg.rt.retryError
+		return result, arg.ctr.rt.retryError
 	}
 	bat := result.Batch
 	if bat.IsEmpty() {
@@ -141,7 +142,7 @@ func callBlocking(
 	defer anal.Stop()
 
 	result := vm.NewCallResult()
-	if arg.rt.step == stepLock {
+	if arg.ctr.rt.step == stepLock {
 		for {
 			bat, err := arg.getBatch(proc, anal, isFirst)
 			if err != nil {
@@ -150,9 +151,9 @@ func callBlocking(
 
 			// no input batch any more, means all lock performed.
 			if bat == nil {
-				arg.rt.step = stepDownstream
-				if len(arg.rt.cachedBatches) == 0 {
-					arg.rt.step = stepEnd
+				arg.ctr.rt.step = stepDownstream
+				if len(arg.ctr.rt.cachedBatches) == 0 {
+					arg.ctr.rt.step = stepEnd
 				}
 				break
 			}
@@ -168,30 +169,30 @@ func callBlocking(
 
 			// blocking lock node. Never pass the input batch into downstream operators before
 			// all lock are performed.
-			arg.rt.cachedBatches = append(arg.rt.cachedBatches, bat)
+			arg.ctr.rt.cachedBatches = append(arg.ctr.rt.cachedBatches, bat)
 		}
 	}
 
-	if arg.rt.step == stepDownstream {
-		if arg.rt.retryError != nil {
-			arg.rt.step = stepEnd
-			return result, arg.rt.retryError
+	if arg.ctr.rt.step == stepDownstream {
+		if arg.ctr.rt.retryError != nil {
+			arg.ctr.rt.step = stepEnd
+			return result, arg.ctr.rt.retryError
 		}
 
-		if len(arg.rt.cachedBatches) == 0 {
-			arg.rt.step = stepEnd
+		if len(arg.ctr.rt.cachedBatches) == 0 {
+			arg.ctr.rt.step = stepEnd
 		} else {
-			bat := arg.rt.cachedBatches[0]
-			arg.rt.cachedBatches = arg.rt.cachedBatches[1:]
+			bat := arg.ctr.rt.cachedBatches[0]
+			arg.ctr.rt.cachedBatches = arg.ctr.rt.cachedBatches[1:]
 			result.Batch = bat
 			return result, nil
 		}
 	}
 
-	if arg.rt.step == stepEnd {
+	if arg.ctr.rt.step == stepEnd {
 		result.Status = vm.ExecStop
 		arg.cleanCachedBatch(proc)
-		return result, arg.rt.retryError
+		return result, arg.ctr.rt.retryError
 	}
 
 	panic("BUG")
@@ -231,13 +232,13 @@ func performLock(
 			proc,
 			priVec,
 			target.primaryColumnType,
-			DefaultLockOptions(arg.rt.parker).
+			DefaultLockOptions(arg.ctr.rt.parker).
 				WithLockMode(lock.LockMode_Exclusive).
-				WithFetchLockRowsFunc(arg.rt.fetchers[idx]).
+				WithFetchLockRowsFunc(arg.ctr.rt.fetchers[idx]).
 				WithMaxBytesPerLock(int(proc.LockService.GetConfig().MaxLockRowCount)).
 				WithFilterRows(target.filter, filterCols).
 				WithLockTable(target.lockTable, target.changeDef).
-				WithHasNewVersionInRangeFunc(arg.rt.hasNewVersionInRange),
+				WithHasNewVersionInRangeFunc(arg.ctr.rt.hasNewVersionInRange),
 		)
 		if getLogger().Enabled(zap.DebugLevel) {
 			getLogger().Debug("lock result",
@@ -271,19 +272,19 @@ func performLock(
 		if !needRetry && !refreshTS.IsEmpty() {
 			needRetry = true
 		}
-		if !arg.rt.defChanged {
-			arg.rt.defChanged = defChanged
+		if !arg.ctr.rt.defChanged {
+			arg.ctr.rt.defChanged = defChanged
 		}
 	}
 	// when a transaction needs to operate on many data, there may be multiple conflicts on the
 	// data, and if you go to retry every time a conflict occurs, you will also encounter conflicts
 	// when you retry. We need to return the conflict after all the locks have been added successfully,
 	// so that the retry will definitely succeed because all the locks have been put.
-	if needRetry && arg.rt.retryError == nil {
-		arg.rt.retryError = retryError
+	if needRetry && arg.ctr.rt.retryError == nil {
+		arg.ctr.rt.retryError = retryError
 	}
-	if arg.rt.defChanged {
-		arg.rt.retryError = retryWithDefChangedError
+	if arg.ctr.rt.defChanged {
+		arg.ctr.rt.retryError = retryWithDefChangedError
 	}
 	return nil
 }
@@ -841,32 +842,36 @@ func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error
 
 // Free free mem
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if arg.rt == nil {
-		return
+	if arg.ctr != nil {
+		if arg.ctr.rt != nil {
+			if arg.ctr.rt.parker != nil {
+				arg.ctr.rt.parker.FreeMem()
+			}
+			arg.ctr.rt.retryError = nil
+			arg.cleanCachedBatch(proc)
+			arg.ctr.rt.FreeMergeTypeOperator(pipelineFailed)
+			arg.ctr.rt = nil
+		}
+		arg.ctr = nil
 	}
-	if arg.rt.parker != nil {
-		arg.rt.parker.FreeMem()
-	}
-	arg.rt.retryError = nil
-	arg.cleanCachedBatch(proc)
-	arg.rt.FreeMergeTypeOperator(pipelineFailed)
+
 }
 
 func (arg *Argument) cleanCachedBatch(_ *process.Process) {
 	// do not need clean,  only set nil
-	// for _, bat := range arg.rt.cachedBatches {
+	// for _, bat := range arg.ctr.rt.cachedBatches {
 	// 	bat.Clean(proc.Mp())
 	// }
-	arg.rt.cachedBatches = nil
+	arg.ctr.rt.cachedBatches = nil
 }
 
 func (arg *Argument) getBatch(
 	_ *process.Process,
 	anal process.Analyze,
 	isFirst bool) (*batch.Batch, error) {
-	fn := arg.rt.batchFetchFunc
+	fn := arg.ctr.rt.batchFetchFunc
 	if fn == nil {
-		fn = arg.rt.ReceiveFromAllRegs
+		fn = arg.ctr.rt.ReceiveFromAllRegs
 	}
 
 	msg := fn(anal)

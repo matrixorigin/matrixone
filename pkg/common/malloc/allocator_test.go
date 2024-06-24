@@ -29,7 +29,10 @@ func testAllocator(
 	t.Run("allocate", func(t *testing.T) {
 		allocator := newAllocator()
 		for i := uint64(1); i < 128*MB; i = uint64(math.Ceil(float64(i) * 1.1)) {
-			ptr, dec := allocator.Allocate(i)
+			ptr, dec, err := allocator.Allocate(i, NoHints)
+			if err != nil {
+				t.Fatal(err)
+			}
 			slice := unsafe.Slice((*byte)(ptr), i)
 			for _, i := range slice {
 				if i != 0 {
@@ -39,7 +42,7 @@ func testAllocator(
 			for i := range slice {
 				slice[i] = byte(i)
 			}
-			dec.Deallocate(ptr)
+			dec.Deallocate(ptr, NoHints)
 		}
 	})
 

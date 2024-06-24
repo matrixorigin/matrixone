@@ -187,14 +187,14 @@ func (s *MemShardStorage) Read(
 	ctx context.Context,
 	shard pb.TableShard,
 	method int,
-	payload []byte,
+	param pb.ReadParam,
 	ts timestamp.Timestamp,
 ) ([]byte, error) {
 	s.RLock()
 	defer s.RUnlock()
 
 	var value []byte
-	key := newKey(payload, ts)
+	key := newKey(param.KeyParam.Key, ts)
 	s.kv.DescendRange(
 		key,
 		func(
@@ -203,7 +203,7 @@ func (s *MemShardStorage) Read(
 			if bytes.Equal(k, key) {
 				return true
 			}
-			if !bytes.Equal(payload, k[:len(k)-12]) {
+			if !bytes.Equal(param.KeyParam.Key, k[:len(k)-12]) {
 				return false
 			}
 

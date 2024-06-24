@@ -33,10 +33,6 @@ set global lower_case_table_names=0;
 select @@global.lower_case_table_names;
 @@lower_case_table_names
 0
-set global keep_user_target_list_in_result = 0;
-select @@global.keep_user_target_list_in_result;
-@@keep_user_target_list_in_result
-0
 set global interactive_timeout = 20;
 show global variables like 'interactive_timeout';
 Variable_name    Value
@@ -87,9 +83,6 @@ select @@GLOBAL.max_connections;
 151
 select @@global.lower_case_table_names;
 @@lower_case_table_names
-1
-select @@global.keep_user_target_list_in_result;
-@@keep_user_target_list_in_result
 1
 show global variables like 'interactive_timeout';
 Variable_name    Value
@@ -167,10 +160,6 @@ internal error: the system variable is global
 select @@lower_case_table_names;
 @@lower_case_table_names
 1
-set keep_user_target_list_in_result = 0;
-select @@keep_user_target_list_in_result;
-@@keep_user_target_list_in_result
-0
 set interactive_timeout = 100;
 SELECT @@interactive_timeout;
 @@interactive_timeout
@@ -222,8 +211,47 @@ save_query_result    off
 select @@lower_case_table_names;
 @@lower_case_table_names
 1
-select @@keep_user_target_list_in_result;
-@@keep_user_target_list_in_result
+SELECT @@interactive_timeout;
+@@interactive_timeout
+28800
+SELECT @@net_write_timeout;
+@@net_write_timeout
+60
+SELECT @@wait_timeout;
+@@wait_timeout
+28800
+SELECT @@sql_select_limit;
+@@sql_select_limit
+18446744073709551615
+SELECT @@max_allowed_packet;
+@@max_allowed_packet
+67108864
+SELECT @@tx_isolation;
+@@tx_isolation
+REPEATABLE-READ
+select @@SESSION.SQL_LOG_BIN;
+@@SQL_LOG_BIN
+0
+SELECT @@session.autocommit;
+@@autocommit
+1
+select @@TIME_ZONE;
+@@TIME_ZONE
+SYSTEM
+SELECT @@session.autocommit;
+@@autocommit
+1
+select @@max_connections;
+@@max_connections
+151
+show variables like 'enable_privilege_cache';
+Variable_name    Value
+enable_privilege_cache    on
+SHOW VARIABLES LIKE 'save_query_result';
+Variable_name    Value
+save_query_result    off
+select @@lower_case_table_names;
+@@lower_case_table_names
 1
 SELECT @@interactive_timeout;
 @@interactive_timeout
@@ -267,12 +295,6 @@ save_query_result    off
 select @@lower_case_table_names;
 @@lower_case_table_names
 1
-select @@keep_user_target_list_in_result;
-@@keep_user_target_list_in_result
-1
-SELECT @@interactive_timeout;
-@@interactive_timeout
-28800
 SELECT @@net_write_timeout;
 @@net_write_timeout
 60
@@ -297,48 +319,34 @@ SELECT @@session.autocommit;
 select @@TIME_ZONE;
 @@TIME_ZONE
 SYSTEM
-SELECT @@session.autocommit;
-@@autocommit
+show global variables like '%lower_case_table%';
+Variable_name    Value
+lower_case_table_names    1
+set global lower_case_table_names=0;
+show global variables like '%lower_case_table%';
+Variable_name    Value
+lower_case_table_names    0
+SELECT @@global.lower_case_table_names;
+@@lower_case_table_names
+0
+SELECT @@session.lower_case_table_names;
+@@lower_case_table_names
 1
-select @@max_connections;
-@@max_connections
-151
-show variables like 'enable_privilege_cache';
-Variable_name    Value
-enable_privilege_cache    on
-SHOW VARIABLES LIKE 'save_query_result';
-Variable_name    Value
-save_query_result    off
 select @@lower_case_table_names;
 @@lower_case_table_names
 1
-select @@keep_user_target_list_in_result;
-@@keep_user_target_list_in_result
-1
-SELECT @@net_write_timeout;
-@@net_write_timeout
-60
-SELECT @@wait_timeout;
-@@wait_timeout
-28800
-SELECT @@sql_select_limit;
-@@sql_select_limit
-18446744073709551615
-SELECT @@max_allowed_packet;
-@@max_allowed_packet
-67108864
-SELECT @@tx_isolation;
-@@tx_isolation
-REPEATABLE-READ
-select @@SESSION.SQL_LOG_BIN;
-@@SQL_LOG_BIN
+SELECT @@session.lower_case_table_names;
+@@lower_case_table_names
 0
-SELECT @@session.autocommit;
-@@autocommit
-1
-select @@TIME_ZONE;
-@@TIME_ZONE
-SYSTEM
+select @@lower_case_table_names;
+@@lower_case_table_names
+0
+show global variables like '%lower_case_table%';
+Variable_name    Value
+lower_case_table_names    0
+SELECT @@global.lower_case_table_names;
+@@lower_case_table_names
+0
 drop account acc1;
 drop account acc2;
 drop account acc3;

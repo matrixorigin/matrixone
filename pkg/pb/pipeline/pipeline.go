@@ -21,10 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
-func (m *Message) Size() int {
-	return m.ProtoSize()
-}
-
 func (m *Message) GetID() uint64 {
 	return m.Id
 }
@@ -86,7 +82,7 @@ func (m *Message) DebugString() string {
 		}
 		errInfo = me.Error()
 	}
-	return fmt.Sprintf("MessageSize: %d, sid: %d, ErrInfo: %s, batchSize: %d", m.Size(), m.Sid, errInfo, len(m.Data))
+	return fmt.Sprintf("MessageSize: %d, sid: %d, ErrInfo: %s, batchSize: %d", m.ProtoSize(), m.Sid, errInfo, len(m.Data))
 }
 
 func (m *Message) IsBatchMessage() bool {

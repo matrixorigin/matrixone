@@ -270,6 +270,7 @@ func (rt *Routine) handleRequest(req *Request) error {
 	ses.ResetFPrints()
 	ses.EnterFPrint(0)
 	defer ses.ExitFPrint(0)
+	defer ses.ResetFPrints()
 
 	if rt.needPrintSessionInfo() {
 		ses.Info(routineCtx, "mo received first request")
@@ -297,10 +298,21 @@ func (rt *Routine) handleRequest(req *Request) error {
 
 	if resp != nil {
 		if err = rt.getProtocol().WriteResponse(tenantCtx, resp); err != nil {
-			ses.Error(tenantCtx,
-				"Failed to send response",
-				zap.String("response", fmt.Sprintf("%v", resp)),
-				zap.Error(err))
+			if resp.isIssue3482 {
+				ses.Error(tenantCtx,
+					"Failed to send response",
+					zap.String("response", fmt.Sprintf("%v", resp)),
+					zap.String("load local ", resp.loadLocalFile),
+					zap.Error(err))
+			} else {
+				ses.Error(tenantCtx,
+					"Failed to send response",
+					zap.String("response", fmt.Sprintf("%v", resp)),
+					zap.Error(err))
+			}
+		}
+		if resp.isIssue3482 {
+			ses.Infof(tenantCtx, "load local '%s' exec failed. response error success", resp.loadLocalFile)
 		}
 	}
 
@@ -450,6 +462,7 @@ func (rt *Routine) migrateConnectionTo(ctx context.Context, req *query.MigrateCo
 		}
 		defer rt.mc.endMigrate()
 		ses := rt.getSession()
+		ses.UpdateDebugString()
 		err = Migrate(ses, req)
 	})
 	return err

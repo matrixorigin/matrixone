@@ -22,9 +22,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-
-	"github.com/panjf2000/ants/v2"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -50,11 +47,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/stack"
+	"github.com/matrixorigin/matrixone/pkg/version"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/panjf2000/ants/v2"
 )
 
 var _ engine.Engine = new(Engine)
@@ -120,9 +120,7 @@ func New(
 	}
 	e.gcPool = pool
 
-	e.globalStats = NewGlobalStats(ctx, e, keyRouter,
-		WithLogtailUpdateStatsThreshold(threshold),
-	)
+	e.globalStats = NewGlobalStats(ctx, e, keyRouter)
 
 	e.messageCenter = &process.MessageCenter{
 		StmtIDToBoard: make(map[uuid.UUID]*process.MessageBoard, 64),
@@ -658,11 +656,13 @@ func (e *Engine) Nodes(
 	// If the requested labels are empty, return all CN servers.
 	if len(cnLabel) == 0 {
 		cluster.GetCNService(selector, func(c metadata.CNService) bool {
-			nodes = append(nodes, engine.Node{
-				Mcpu: ncpu,
-				Id:   c.ServiceID,
-				Addr: c.PipelineServiceAddress,
-			})
+			if c.CommitID == version.CommitID {
+				nodes = append(nodes, engine.Node{
+					Mcpu: ncpu,
+					Id:   c.ServiceID,
+					Addr: c.PipelineServiceAddress,
+				})
+			}
 			return true
 		})
 		return nodes, nil
@@ -671,19 +671,23 @@ func (e *Engine) Nodes(
 	selector = clusterservice.NewSelector().SelectByLabel(cnLabel, clusterservice.EQ_Globbing)
 	if isInternal || strings.ToLower(tenant) == "sys" {
 		route.RouteForSuperTenant(selector, username, nil, func(s *metadata.CNService) {
-			nodes = append(nodes, engine.Node{
-				Mcpu: ncpu,
-				Id:   s.ServiceID,
-				Addr: s.PipelineServiceAddress,
-			})
+			if s.CommitID == version.CommitID {
+				nodes = append(nodes, engine.Node{
+					Mcpu: ncpu,
+					Id:   s.ServiceID,
+					Addr: s.PipelineServiceAddress,
+				})
+			}
 		})
 	} else {
 		route.RouteForCommonTenant(selector, nil, func(s *metadata.CNService) {
-			nodes = append(nodes, engine.Node{
-				Mcpu: ncpu,
-				Id:   s.ServiceID,
-				Addr: s.PipelineServiceAddress,
-			})
+			if s.CommitID == version.CommitID {
+				nodes = append(nodes, engine.Node{
+					Mcpu: ncpu,
+					Id:   s.ServiceID,
+					Addr: s.PipelineServiceAddress,
+				})
+			}
 		})
 	}
 	return nodes, nil
@@ -695,7 +699,15 @@ func (e *Engine) Hints() (h engine.Hints) {
 }
 
 func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp,
-	expr *plan.Expr, ranges []byte, tblDef *plan.TableDef, proc any) ([]engine.Reader, error) {
+	expr *plan.Expr, filter any, ranges []byte, tblDef *plan.TableDef, proc any) ([]engine.Reader, error) {
+	var blockReadPKFilter blockio.BlockReadFilter
+	if filter == nil {
+		// remote block reader
+		basePKFilter := constructBasePKFilter(expr, tblDef, proc.(*process.Process))
+		blockReadPKFilter = constructBlockReadPKFilter(tblDef.Pkey.PkeyColName, basePKFilter)
+		//fmt.Println("remote filter: ", basePKFilter.String(), blockReadPKFilter)
+	}
+
 	blkSlice := objectio.BlockInfoSlice(ranges)
 	rds := make([]engine.Reader, num)
 	blkInfos := make([]*objectio.BlockInfo, 0, blkSlice.Len())
@@ -707,7 +719,7 @@ func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Times
 			//FIXME::why set blk.EntryState = false ?
 			blk.EntryState = false
 			rds[i] = newBlockReader(
-				ctx, tblDef, ts, []*objectio.BlockInfo{blk}, expr, e.fs, proc.(*process.Process),
+				ctx, tblDef, ts, []*objectio.BlockInfo{blk}, expr, blockReadPKFilter, e.fs, proc.(*process.Process),
 			)
 		}
 		for j := len(blkInfos); j < num; j++ {
@@ -721,7 +733,7 @@ func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Times
 	if err != nil {
 		return nil, err
 	}
-	blockReaders := newBlockReaders(ctx, fs, tblDef, ts, num, expr, proc.(*process.Process))
+	blockReaders := newBlockReaders(ctx, fs, tblDef, ts, num, expr, blockReadPKFilter, proc.(*process.Process))
 	distributeBlocksToBlockReaders(blockReaders, num, len(blkInfos), infos, steps)
 	for i := 0; i < num; i++ {
 		rds[i] = blockReaders[i]

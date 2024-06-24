@@ -17,7 +17,6 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"sync/atomic"
 
 	"github.com/fagongzi/goetty/v2"
 	"go.uber.org/zap"
@@ -83,6 +82,8 @@ type Response struct {
 	*/
 	affectedRows, lastInsertId uint64
 	warnings                   uint16
+	isIssue3482                bool
+	loadLocalFile              string
 }
 
 func NewResponse(category int, affectedRows, lastInsertId uint64, warnings, status uint16, cmd int, d interface{}) *Response {
@@ -135,12 +136,6 @@ func (resp *Response) SetCategory(category int) {
 
 func (mp *MysqlProtocolImpl) UpdateCtx(ctx context.Context) {
 	mp.ctx = ctx
-}
-
-func (mp *MysqlProtocolImpl) incDebugCount(i int) {
-	if i >= 0 && i < len(mp.debugCount) {
-		atomic.AddUint64(&mp.debugCount[i], 1)
-	}
 }
 
 func (mp *MysqlProtocolImpl) setQuit(b bool) bool {

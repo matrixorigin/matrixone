@@ -177,7 +177,7 @@ func (m *testMethodBasedMessage) UnwrapError() error {
 	return err
 }
 
-func (m *testMethodBasedMessage) Size() int {
+func (m *testMethodBasedMessage) ProtoSize() int {
 	return 12 + len(m.err) + len(m.payload)
 }
 

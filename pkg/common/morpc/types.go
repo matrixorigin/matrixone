@@ -33,7 +33,7 @@ type Message interface {
 	// DebugString return debug string
 	DebugString() string
 	// Size size of message after marshal
-	Size() int
+	ProtoSize() int
 	// MarshalTo marshal to target byte slice
 	MarshalTo(data []byte) (int, error)
 	// Unmarshal unmarshal from data

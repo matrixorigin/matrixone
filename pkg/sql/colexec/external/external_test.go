@@ -66,6 +66,7 @@ func newTestCase(format, jsondata string) externalTestCase {
 		proc:  proc,
 		types: []types.Type{types.T_int8.ToType()},
 		arg: &Argument{
+			ctr: &container{},
 			Es: &ExternalParam{
 				ExParamConst: ExParamConst{
 					Ctx: ctx,

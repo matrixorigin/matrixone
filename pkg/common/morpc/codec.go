@@ -137,7 +137,7 @@ func (c *messageCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer
 }
 
 func (c *messageCodec) Valid(msg Message) error {
-	n := msg.Size()
+	n := msg.ProtoSize()
 	if n >= c.bc.maxBodySize {
 		return moerr.NewInternalErrorNoCtx("message body %d is too large, max is %d",
 			n,
@@ -415,7 +415,7 @@ func (c *baseCodec) readCustomHeaders(flag byte, msg *RPCMessage, data []byte, o
 func (c *baseCodec) writeBody(
 	out *buf.ByteBuf,
 	msg Message) ([]byte, error) {
-	size := msg.Size()
+	size := msg.ProtoSize()
 	if size == 0 {
 		return nil, nil
 	}

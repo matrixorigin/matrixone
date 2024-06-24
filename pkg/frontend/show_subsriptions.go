@@ -188,7 +188,7 @@ func getSubInfoFromSql(ctx context.Context, ses FeSession, sql string) (subName,
 	}
 
 	var ast []tree.Statement
-	if ast, err = mysql.Parse(ctx, sql, lowerAny.(int64), 0); err != nil {
+	if ast, err = mysql.Parse(ctx, sql, lowerAny.(int64)); err != nil {
 		return
 	}
 	defer func() {

@@ -75,7 +75,7 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 	if err != nil {
 		return err
 	}
-	statements, err := mysql.Parse(ctx, sql, v.(int64), 0)
+	statements, err := mysql.Parse(ctx, sql, v.(int64))
 	if err != nil {
 		return err
 	}
@@ -122,7 +122,7 @@ func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uin
 	if err != nil {
 		return err
 	}
-	statements, err := mysql.Parse(ctx, sql, v.(int64), 0)
+	statements, err := mysql.Parse(ctx, sql, v.(int64))
 	if err != nil {
 		return err
 	}
@@ -180,6 +180,11 @@ func (back *backExec) GetExecResultBatches() []*batch.Batch {
 }
 
 func (back *backExec) ClearExecResultBatches() {
+	for _, bat := range back.backSes.resultBatches {
+		if bat != nil {
+			bat.Clean(back.backSes.pool)
+		}
+	}
 	back.backSes.resultBatches = nil
 }
 

@@ -45,9 +45,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	defer anal.Stop()
 	var msg *process.RegisterMessage
 	result := vm.NewCallResult()
-	if arg.buf != nil {
-		proc.PutBatch(arg.buf)
-		arg.buf = nil
+	if arg.ctr.buf != nil {
+		proc.PutBatch(arg.ctr.buf)
+		arg.ctr.buf = nil
 	}
 
 	for {
@@ -61,16 +61,16 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			return result, nil
 		}
 
-		arg.buf = msg.Batch
-		if arg.buf.Last() && arg.SinkScan {
-			proc.PutBatch(arg.buf)
+		arg.ctr.buf = msg.Batch
+		if arg.ctr.buf.Last() && arg.SinkScan {
+			proc.PutBatch(arg.ctr.buf)
 			continue
 		}
 		break
 	}
 
-	anal.Input(arg.buf, arg.GetIsFirst())
-	anal.Output(arg.buf, arg.GetIsLast())
-	result.Batch = arg.buf
+	anal.Input(arg.ctr.buf, arg.GetIsFirst())
+	anal.Output(arg.ctr.buf, arg.GetIsLast())
+	result.Batch = arg.ctr.buf
 	return result, nil
 }
