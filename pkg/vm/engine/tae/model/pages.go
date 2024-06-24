@@ -237,15 +237,18 @@ func (page *TransferHashPage) clearTable() {
 
 func (page *TransferHashPage) loadTable() {
 	logutil.Infof("[TransferHashPage] load persist table, objectname: %v", page.loc.Name().String())
-	if page.loc == nil || RD == nil || FS == nil {
+	if page.loc == nil {
 		return
 	}
+
+	logutil.Infof("[TransferHashPage] loc %v, rd %v, fs %v", page.loc.Name().String(), RD, FS)
 
 	var bat *batch.Batch
 	var release func()
 	bat, release, err := RD.LoadTableByBlock(page.loc, FS)
 	defer release()
 	if err != nil {
+		logutil.Errorf("[TransferHashPage] load table failed, %v", err)
 		return
 	}
 	err = page.Unmarshal(bat.Vecs[0].GetBytesAt(0))
