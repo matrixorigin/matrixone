@@ -31,7 +31,7 @@ pull_request_rules:
       - "#changes-requested-reviews-by<=0"
       - label!=do-not-merge/wip
       - base=1.2-dev
-      - approved-reviews-by=sukki37
+      - approved-reviews-by=fengttt
     actions:
       queue:
         name: release-1.2
@@ -48,7 +48,7 @@ pull_request_rules:
       - "#changes-requested-reviews-by<=0"
       - label!=do-not-merge/wip
       - base=1.1-dev
-      - approved-reviews-by=sukki37
+      - approved-reviews-by=fengttt
     actions:
       queue:
         name: release-1.1
@@ -59,14 +59,6 @@ pull_request_rules:
           {{ body.split("___\n\n### **PR Type**")[0] | trim | get_section("## What this PR does / why we need it:") }}
 
           Approved by: @{{ approved_reviews_by | join(', @') }}
-
-  - name: Auto Request Reviewer
-    conditions:
-      - base!=main
-    actions:
-      request_reviews:
-        users:
-          - sukki37
 
   - name: Auto update branch
     conditions:

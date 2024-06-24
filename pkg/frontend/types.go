@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -122,6 +123,8 @@ type PrepareStmt struct {
 
 	params              *vector.Vector
 	getFromSendLongData map[int]struct{}
+
+	compile *compile.Compile
 }
 
 /*
@@ -229,6 +232,10 @@ func (prepareStmt *PrepareStmt) Close() {
 				expr.Free()
 			}
 		}
+	}
+	if prepareStmt.compile != nil {
+		prepareStmt.compile.Release()
+		prepareStmt.compile = nil
 	}
 	if prepareStmt.PrepareStmt != nil {
 		prepareStmt.PrepareStmt.Free()

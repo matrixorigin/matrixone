@@ -1,6 +1,8 @@
 # default owner for stuff that is not explicitly set for ownership
 # for triage only
 
+* @fengttt
+
 # github and CI-related stuff
 .github @sukki37
 .github/actions @sukki37
@@ -45,9 +47,6 @@
 /pkg/cacheservice @volgariver6
 
 /pkg/clusterservice @volgariver6
-
-
-
 
 # pkg/common
 /pkg/common @zhangxu19830126

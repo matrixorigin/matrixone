@@ -49,12 +49,13 @@ type testWorkspace struct {
 
 func (txn *testWorkspace) UpdateSnapshotWriteOffset() {
 	//TODO implement me
-	panic("implement me")
+	// panic("implement me")
 }
 
 func (txn *testWorkspace) GetSnapshotWriteOffset() int {
 	//TODO implement me
-	panic("implement me")
+	// panic("implement me")
+	return 0
 }
 
 func newTestWorkspace() *testWorkspace {

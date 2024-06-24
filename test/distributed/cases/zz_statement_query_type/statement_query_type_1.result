@@ -3,7 +3,7 @@ statement    query_type    sql_source_type
 use system    Other    external_sql
 rollback    TCL    external_sql
 deallocate prepare s1    Other    external_sql
-execute s1 using @a // prepare s1 from select * from test_table where col1=? ; set @a=2    Other    external_sql
+execute s1 using @a // select * from test_table where col1=? ; set @a=2    Other    external_sql
 set @a=2    Other    external_sql
 prepare s1 from select * from test_table where col1=?    Other    external_sql
 drop database db2    DDL    external_sql
