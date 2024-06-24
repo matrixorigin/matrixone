@@ -238,7 +238,7 @@ type Session struct {
 }
 
 func (ses *Session) InitSystemVariables(ctx context.Context) (err error) {
-	if ses.gSysVars, err = GSysVarsMgr.Get(ses.GetTenantInfo().TenantID, ses, ctx); err != nil {
+	if ses.gSysVars, err = GSysVarsMgr.Get(ses.GetTenantInfo().GetTenantID(), ses, ctx); err != nil {
 		return
 	}
 	ses.sesSysVars = ses.gSysVars.Clone()
@@ -533,7 +533,7 @@ func NewSession(connCtx context.Context, proto MysqlRrWr, mp *mpool.MPool) *Sess
 		getGlobalPu().QueryClient,
 		getGlobalPu().HAKeeperClient,
 		getGlobalPu().UdfService,
-		getGlobalAic())
+		getGlobalAicm())
 
 	ses.proc.Lim.Size = getGlobalPu().SV.ProcessLimitationSize
 	ses.proc.Lim.BatchRows = getGlobalPu().SV.ProcessLimitationBatchRows
@@ -982,15 +982,6 @@ func (ses *Session) GetTxnInfo() string {
 	}
 	meta := txnOp.Txn()
 	return meta.DebugString()
-}
-
-func (ses *Session) GetDatabaseName() string {
-	return ses.GetResponser().GetStr(DBNAME)
-}
-
-func (ses *Session) SetDatabaseName(db string) {
-	ses.GetResponser().SetStr(DBNAME, db)
-	ses.GetTxnCompileCtx().SetDatabase(db)
 }
 
 func (ses *Session) DatabaseNameIsEmpty() bool {

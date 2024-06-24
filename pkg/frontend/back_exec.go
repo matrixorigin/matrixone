@@ -214,7 +214,7 @@ func doComQueryInBack(backSes *backSession, execCtx *ExecCtx,
 		getGlobalPu().QueryClient,
 		getGlobalPu().HAKeeperClient,
 		getGlobalPu().UdfService,
-		getGlobalAic())
+		getGlobalAicm())
 	proc.Id = backSes.getNextProcessId()
 	proc.Lim.Size = getGlobalPu().SV.ProcessLimitationSize
 	proc.Lim.BatchRows = getGlobalPu().SV.ProcessLimitationBatchRows
@@ -704,10 +704,6 @@ func (backSes *backSession) getNextProcessId() string {
 }
 
 func (backSes *backSession) cleanCache() {
-}
-
-func (backSes *backSession) GetUpstream() FeSession {
-	return backSes.upstream
 }
 
 func (backSes *backSession) getCNLabels() map[string]string {
