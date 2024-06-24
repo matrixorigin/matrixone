@@ -213,8 +213,10 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 			// as possible.
 			gs.triggerUpdate(key)
 
+			logutil.Infof("get stats before wait %+v", key)
 			// Wait until stats info of the key is updated.
 			gs.mu.cond.Wait()
+			logutil.Infof("get stats after wait %+v", key)
 
 			info, ok = gs.mu.statsInfoMap[key]
 		}
@@ -442,7 +444,9 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 	// The update time of the table key should be updated just before
 	// trying to update stats.
 	gs.statsUpdated.Store(key, time.Now())
+	start := time.Now()
 
+	logutil.Infof("stats start update %+v", key)
 	// the time used to init stats info is not need to be too precise.
 	now := timestamp.Timestamp{PhysicalTime: time.Now().UnixNano()}
 	req := newUpdateStatsRequest(
@@ -458,6 +462,7 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 		logutil.Errorf("failed to init stats info for table %v, err: %v", key, err)
 		return
 	}
+	logutil.Infof("stats update duration %+v, %v", key, time.Since(start))
 	updated = true
 }
 
