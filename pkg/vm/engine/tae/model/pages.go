@@ -237,7 +237,7 @@ func (page *TransferHashPage) clearTable() {
 
 func (page *TransferHashPage) loadTable() {
 	logutil.Infof("[TransferHashPage] load persist table, objectname: %v", page.loc.Name().String())
-	if page.loc == nil {
+	if page.loc == nil || RD == nil || FS == nil {
 		return
 	}
 
