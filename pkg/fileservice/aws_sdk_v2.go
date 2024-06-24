@@ -24,7 +24,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	"github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -111,12 +110,7 @@ func NewAwsSDKv2(
 	// options for s3 client
 	s3Options := []func(*s3.Options){
 		func(opts *s3.Options) {
-
-			opts.Retryer = retry.NewStandard(func(o *retry.StandardOptions) {
-				o.MaxAttempts = maxRetryAttemps
-				o.RateLimiter = noOpRateLimit{}
-			})
-
+			opts.Retryer = new(aws.NopRetryer)
 		},
 	}
 
@@ -606,15 +600,6 @@ func (a *AwsSDKv2) mapError(err error, path string) error {
 	}
 	return err
 }
-
-// from https://github.com/aws/aws-sdk-go-v2/issues/543
-type noOpRateLimit struct{}
-
-func (noOpRateLimit) AddTokens(uint) error { return nil }
-func (noOpRateLimit) GetToken(context.Context, uint) (func() error, error) {
-	return noOpToken, nil
-}
-func noOpToken() error { return nil }
 
 func (o ObjectStorageArguments) credentialsProviderForAwsSDKv2(
 	ctx context.Context,
