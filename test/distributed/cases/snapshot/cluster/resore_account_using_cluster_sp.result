@@ -128,7 +128,7 @@ SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME   
 create snapshot cluster_sp for cluster;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-cluster_sp    2024-06-24 06:34:11.093572    cluster            
+cluster_sp    2024-06-24 09:10:58.007964    cluster            
 drop database if exists snapshot_read;
 drop database if exists test_snapshot_restore;
 restore account acc01 from snapshot cluster_sp;
@@ -474,7 +474,7 @@ SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME   
 create snapshot cluster_sp for cluster;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-cluster_sp    2024-06-24 06:34:13.788928    cluster            
+cluster_sp    2024-06-24 09:10:59.735423    cluster            
 drop database if exists Payroll;
 drop database if exists Projects;
 drop database if exists Company;

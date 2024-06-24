@@ -444,11 +444,11 @@ select * from Projects.ProjectManagers;
 select * from Payroll.Salaries;
 select * from Payroll.ProjectBonuses;
 select * from Payroll.DepartmentBudgets;
--- @session
-
 drop database if exists Payroll;
 drop database if exists Projects;
 drop database if exists Company;
+-- @session
+
 drop account if exists acc01;
 drop snapshot if exists cluster_sp;
 -- @ignore:1
