@@ -420,9 +420,10 @@ create snapshot cluster_sp for cluster;
 -- @ignore:1
 show snapshots;
 
--- @session:id=1&user=acc01:test_account&password=111
-drop database if exists snapshot_read;
-drop database if exists test_snapshot_restore;
+-- @session:id=2&user=acc01:test_account&password=111
+drop database if exists Payroll;
+drop database if exists Projects;
+drop database if exists Company;
 -- @session
 
 restore account acc01 from snapshot cluster_sp;
@@ -446,6 +447,9 @@ select * from Payroll.ProjectBonuses;
 select * from Payroll.DepartmentBudgets;
 -- @session
 
+drop database if exists Payroll;
+drop database if exists Projects;
+drop database if exists Company;
 drop account if exists acc01;
 drop snapshot if exists cluster_sp;
 -- @ignore:1
@@ -675,6 +679,14 @@ drop snapshot if exists cluster_sp;
 -- @ignore:1
 show snapshots;
 create snapshot cluster_sp for cluster;
+
+-- @session:id=3&user=acc01:test_account&password=111
+drop database if exists School;
+drop database if exists University;
+drop database if exists EducationSystem;
+-- @session
+
+restore account acc01 from snapshot cluster_sp;
 
 -- @session:id=3&user=acc01:test_account&password=111
 select * from School.Students;
