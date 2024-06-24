@@ -527,7 +527,7 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 						p.rows.Delete(entry)
 
 						// delete the row's primary index
-						if objEntry.EntryState && len(entry.PrimaryIndexBytes) > 0 {
+						if len(entry.PrimaryIndexBytes) > 0 {
 							p.primaryIndex.Delete(&PrimaryIndexEntry{
 								Bytes:      entry.PrimaryIndexBytes,
 								RowEntryID: entry.ID,
@@ -798,7 +798,7 @@ func (p *PartitionState) HandleMetadataInsert(
 						p.rows.Delete(entry)
 
 						// delete the row's primary index
-						if isAppendable && len(entry.PrimaryIndexBytes) > 0 {
+						if len(entry.PrimaryIndexBytes) > 0 {
 							p.primaryIndex.Delete(&PrimaryIndexEntry{
 								Bytes:      entry.PrimaryIndexBytes,
 								RowEntryID: entry.ID,

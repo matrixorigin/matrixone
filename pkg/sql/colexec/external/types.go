@@ -156,11 +156,10 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 			arg.ctr.buf.Clean(proc.Mp())
 			arg.ctr.buf = nil
 		}
+		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+		anal.Alloc(int64(arg.ctr.maxAllocSize))
+		arg.ctr = nil
 	}
-
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
-	anal.Alloc(int64(arg.ctr.maxAllocSize))
-	arg.ctr = nil
 }
 
 type ParseLineHandler struct {
