@@ -21,107 +21,101 @@ type Allocator interface {
 	Free([]byte)
 }
 
-type ConnManager struct {
+type Conn struct {
 	id                    uint64
 	conn                  net.Conn
 	localAddr, remoteAddr string
 	connected             bool
 	sequenceId            uint8
-	header                []byte
+	header                [4]byte
 	fixBuf                []byte
+	curBuf                []byte
+	curHeader             []byte
 	dynamicBuf            *list.List
-	endFixIndex           int
-	startFixIndex         int
-	length                int
-	preLength             int
-	preLengths            *list.List
+	writeIndex            int
+	bufferLength          int
+	packetLength          int
 	maxBytesToFlush       int
 	timeout               time.Duration
 	allocator             Allocator
 }
 
 // NewIOSession create a new io session
-func NewIOSession(conn net.Conn, pu *config.ParameterUnit) *ConnManager {
+func NewIOSession(conn net.Conn, pu *config.ParameterUnit) *Conn {
 
-	bio := &ConnManager{
+	bio := &Conn{
 		conn:            conn,
 		localAddr:       conn.RemoteAddr().String(),
 		remoteAddr:      conn.LocalAddr().String(),
 		connected:       true,
 		dynamicBuf:      list.New(),
-		preLengths:      list.New(),
 		allocator:       NewSessionAllocator(pu),
 		timeout:         pu.SV.SessionTimeout.Duration,
-		maxBytesToFlush: int(pu.SV.MaxBytesInOutbufToFlush) * 1024,
+		maxBytesToFlush: fixBufferSize,
 	}
-	bio.header = bio.allocator.Alloc(HeaderLengthOfTheProtocol)
 	bio.fixBuf = bio.allocator.Alloc(fixBufferSize)
-
+	bio.curHeader = bio.fixBuf[:HeaderLengthOfTheProtocol]
+	bio.curBuf = bio.fixBuf
 	return bio
 }
 
-func (cm *ConnManager) ID() uint64 {
-	return cm.id
+func (c *Conn) ID() uint64 {
+	return c.id
 }
 
-func (cm *ConnManager) RawConn() net.Conn {
-	return cm.conn
+func (c *Conn) RawConn() net.Conn {
+	return c.conn
 }
 
-func (cm *ConnManager) UseConn(conn net.Conn) {
-	cm.conn = conn
+func (c *Conn) UseConn(conn net.Conn) {
+	c.conn = conn
 }
-func (cm *ConnManager) Disconnect() error {
-	return cm.closeConn()
+func (c *Conn) Disconnect() error {
+	return c.closeConn()
 }
 
-func (cm *ConnManager) Close() error {
-	err := cm.closeConn()
+func (c *Conn) Close() error {
+	err := c.closeConn()
 	if err != nil {
 		return err
 	}
-	cm.connected = false
+	c.connected = false
 
-	cm.allocator.Free(cm.header)
-	cm.allocator.Free(cm.fixBuf)
+	c.allocator.Free(c.fixBuf)
 
-	for e := cm.dynamicBuf.Front(); e != nil; e = e.Next() {
-		cm.allocator.Free(e.Value.([]byte))
+	for e := c.dynamicBuf.Front(); e != nil; e = e.Next() {
+		c.allocator.Free(e.Value.([]byte))
 	}
 
-	for e := cm.preLengths.Front(); e != nil; e = e.Next() {
-		cm.allocator.Free(e.Value.([]byte))
-	}
-
-	getGlobalRtMgr().Closed(cm)
+	getGlobalRtMgr().Closed(c)
 	return nil
 }
 
-func (cm *ConnManager) Read() ([]byte, error) {
+func (c *Conn) Read() ([]byte, error) {
 	payloads := make([][]byte, 0)
 	defer func() {
 		for _, payload := range payloads {
-			cm.allocator.Free(payload)
+			c.allocator.Free(payload)
 		}
 	}()
 	var err error
 	for {
-		if !cm.connected {
+		if !c.connected {
 			return nil, moerr.NewInternalError(moerr.Context(), "The IOSession connection has been closed")
 		}
 		var packetLength int
-		err = cm.ReadBytes(cm.header, HeaderLengthOfTheProtocol)
+		err = c.ReadBytes(c.header[:], HeaderLengthOfTheProtocol)
 		if err != nil {
 			return nil, err
 		}
-		packetLength = int(uint32(cm.header[0]) | uint32(cm.header[1])<<8 | uint32(cm.header[2])<<16)
-		sequenceId := cm.header[3]
-		cm.sequenceId = sequenceId + 1
+		packetLength = int(uint32(c.header[0]) | uint32(c.header[1])<<8 | uint32(c.header[2])<<16)
+		sequenceId := c.header[3]
+		c.sequenceId = sequenceId + 1
 
 		if packetLength == 0 {
 			break
 		}
-		payload, err := cm.ReadOnePayload(packetLength)
+		payload, err := c.ReadOnePayload(packetLength)
 		if err != nil {
 			return nil, err
 		}
@@ -143,43 +137,43 @@ func (cm *ConnManager) Read() ([]byte, error) {
 	for _, payload := range payloads {
 		totalLength += len(payload)
 	}
-	finalPayload := cm.allocator.Alloc(totalLength)
+	finalPayload := c.allocator.Alloc(totalLength)
 
 	copyIndex := 0
 	for _, payload := range payloads {
 		copy(finalPayload[copyIndex:], payload)
-		cm.allocator.Free(payload)
+		c.allocator.Free(payload)
 		copyIndex += len(payload)
 	}
 	return finalPayload, nil
 }
 
-func (cm *ConnManager) ReadOnePayload(packetLength int) ([]byte, error) {
+func (c *Conn) ReadOnePayload(packetLength int) ([]byte, error) {
 	var buf []byte
 	var err error
 
 	if packetLength > fixBufferSize {
-		buf = cm.allocator.Alloc(packetLength)
-		defer cm.allocator.Free(buf)
+		buf = c.allocator.Alloc(packetLength)
+		defer c.allocator.Free(buf)
 	} else {
-		buf = cm.fixBuf
+		buf = c.fixBuf
 	}
-	err = cm.ReadBytes(buf[:packetLength], packetLength)
+	err = c.ReadBytes(buf[:packetLength], packetLength)
 	if err != nil {
 		return nil, err
 	}
 
-	payload := cm.allocator.Alloc(packetLength)
+	payload := c.allocator.Alloc(packetLength)
 	copy(payload, buf[:packetLength])
 	return payload, nil
 }
 
-func (cm *ConnManager) ReadBytes(buf []byte, Length int) error {
+func (c *Conn) ReadBytes(buf []byte, Length int) error {
 	var err error
 	var n int
 	var readLength int
 	for {
-		n, err = cm.ReadFromConn(buf[readLength:])
+		n, err = c.ReadFromConn(buf[readLength:])
 		if err != nil {
 			return err
 		}
@@ -190,70 +184,85 @@ func (cm *ConnManager) ReadBytes(buf []byte, Length int) error {
 		}
 	}
 }
-func (cm *ConnManager) ReadFromConn(buf []byte) (int, error) {
-	err := cm.conn.SetReadDeadline(time.Now().Add(cm.timeout))
+func (c *Conn) ReadFromConn(buf []byte) (int, error) {
+	err := c.conn.SetReadDeadline(time.Now().Add(c.timeout))
 	if err != nil {
 		return 0, err
 	}
-	n, err := cm.conn.Read(buf)
+	n, err := c.conn.Read(buf)
 	return n, err
 }
 
-func (cm *ConnManager) Append(elems ...byte) {
+func (c *Conn) Append(elems ...byte) {
 	cutIndex := 0
 	for {
-		remainPacketLength := int(MaxPayloadSize) - cm.length
+		remainPacketLength := int(MaxPayloadSize) - c.bufferLength
 		if len(elems[cutIndex:]) <= remainPacketLength {
 			break
 		}
 
-		cm.AppendPart(elems[cutIndex:remainPacketLength])
-		err := cm.FinishedPacket()
+		c.AppendPart(elems[cutIndex:remainPacketLength])
+		err := c.FinishedPacket()
 		if err != nil {
 			panic(err)
 		}
 		cutIndex += remainPacketLength
 	}
 
-	cm.AppendPart(elems)
+	c.AppendPart(elems)
 }
 
-func (cm *ConnManager) AppendPart(elems []byte) {
-	remainFixBuf := fixBufferSize - cm.endFixIndex
-	if len(elems) > remainFixBuf {
-		buf := cm.allocator.Alloc(len(elems))
-		copy(buf, elems)
-		cm.dynamicBuf.PushBack(buf)
+func (c *Conn) AppendPart(elems []byte) {
+	var buf []byte
+	remainBuf := fixBufferSize - c.writeIndex
+	remainBuf = Max(0, remainBuf)
+	if len(elems) > remainBuf {
+		if remainBuf > 0 {
+			copy(c.curBuf[c.writeIndex:], elems[:remainBuf])
+		}
+
+		if len(elems)-remainBuf < fixBufferSize {
+			buf = c.allocator.Alloc(fixBufferSize)
+
+		} else {
+			buf = c.allocator.Alloc(len(elems) - remainBuf)
+		}
+
+		copy(buf, elems[remainBuf:])
+		c.writeIndex = len(elems) - remainBuf
+		c.dynamicBuf.PushBack(buf)
+		c.curBuf = buf
+
 	} else {
-		copy(cm.fixBuf[cm.endFixIndex:], elems)
-		cm.endFixIndex += len(elems)
+		copy(c.curBuf[c.writeIndex:], elems)
+		c.writeIndex += len(elems)
 	}
-	cm.length += len(elems)
+	c.bufferLength += len(elems)
+	c.packetLength += len(elems)
 	return
 }
+func (c *Conn) BeginPacket() {
+	c.curHeader = c.curBuf[c.writeIndex : c.writeIndex+HeaderLengthOfTheProtocol]
+	c.writeIndex += HeaderLengthOfTheProtocol
+}
 
-func (cm *ConnManager) FinishedPacket() error {
-	rowLength := cm.length - cm.preLength
-	cm.preLength += rowLength
-	header := cm.allocator.Alloc(HeaderLengthOfTheProtocol)
-
-	binary.LittleEndian.PutUint32(header[:], uint32(rowLength))
-	header[3] = cm.sequenceId
-	cm.sequenceId += 1
-
-	cm.preLengths.PushBack(header)
-	err := cm.FlushIfFull()
-
+func (c *Conn) FinishedPacket() error {
+	binary.LittleEndian.PutUint32(c.curHeader, uint32(c.packetLength))
+	c.curHeader[3] = c.sequenceId
+	c.sequenceId += 1
+	c.packetLength = 0
+	err := c.FlushIfFull()
 	if err != nil {
 		return err
 	}
+
 	return nil
 }
 
-func (cm *ConnManager) FlushIfFull() error {
+func (c *Conn) FlushIfFull() error {
 	var err error
-	if cm.length >= cm.maxBytesToFlush {
-		err = cm.Flush()
+	if c.bufferLength >= c.maxBytesToFlush {
+		err = c.Flush()
 		if err != nil {
 			return err
 		}
@@ -261,76 +270,53 @@ func (cm *ConnManager) FlushIfFull() error {
 	return err
 }
 
-func (cm *ConnManager) Flush() error {
+func (c *Conn) Flush() error {
+	if c.bufferLength == 0 {
+		return nil
+	}
 	var err error
-	defer cm.Reset()
-	for cm.preLengths.Len() > 0 {
-		node := cm.preLengths.Front()
-		header := node.Value.([]byte)
-		packetLength := uint32(header[0]) | uint32(header[1])<<8 | uint32(header[2])<<16
-		err = cm.WriteToConn(header)
+	defer c.Reset()
+	if c.dynamicBuf.Len() == 0 {
+		err = c.WriteToConn(c.fixBuf[:c.writeIndex])
 		if err != nil {
 			return err
 		}
-		cm.preLengths.Remove(node)
-		cm.allocator.Free(node.Value.([]byte))
-
-		err = cm.FlushLength(int(packetLength))
+	} else {
+		err = c.WriteToConn(c.fixBuf)
 		if err != nil {
 			return err
+		}
+		for c.dynamicBuf.Len() > 0 {
+			node := c.dynamicBuf.Front()
+			data := node.Value.([]byte)
+			if node.Next() == nil {
+				err = c.WriteToConn(data[:c.writeIndex])
+				if err != nil {
+					return err
+				}
+			} else {
+				err = c.WriteToConn(data)
+				if err != nil {
+					return err
+				}
+			}
+			c.allocator.Free(node.Value.([]byte))
+			c.dynamicBuf.Remove(node)
 		}
 	}
 	return err
 
 }
 
-func (cm *ConnManager) FlushLength(length int) error {
-	var err error
-
-	if cm.startFixIndex != cm.endFixIndex {
-		hasFixLength := cm.endFixIndex - cm.startFixIndex
-		if length > hasFixLength {
-			err = cm.WriteToConn(cm.fixBuf[cm.startFixIndex:cm.endFixIndex])
-			length -= hasFixLength
-			cm.length -= hasFixLength
-			cm.startFixIndex += hasFixLength
-		} else {
-			err = cm.WriteToConn(cm.fixBuf[cm.startFixIndex : cm.startFixIndex+length])
-			cm.length -= length
-			cm.startFixIndex += length
-			length = 0
-		}
-	}
-
-	for length != 0 {
-		node := cm.dynamicBuf.Front()
-		data := node.Value.([]byte)
-		nodeLength := len(data)
-
-		err = cm.WriteToConn(data)
-
-		if err != nil {
-			return err
-		}
-
-		length -= nodeLength
-		cm.length -= nodeLength
-		cm.dynamicBuf.Remove(node)
-		cm.allocator.Free(data)
-	}
-
-	return nil
-}
-
-func (cm *ConnManager) Write(payload []byte) error {
-	defer cm.Reset()
-	if !cm.connected {
+func (c *Conn) Write(payload []byte) error {
+	defer c.Reset()
+	if !c.connected {
 		return moerr.NewInternalError(moerr.Context(), "The IOSession connection has been closed")
 	}
 
 	var err error
 
-	err = cm.Flush()
+	err = c.Flush()
 	if err != nil {
 		return err
 	}
@@ -339,25 +325,20 @@ func (cm *ConnManager) Write(payload []byte) error {
 
 	length := len(payload)
 	binary.LittleEndian.PutUint32(header[:], uint32(length))
-	header[3] = cm.sequenceId
-	cm.sequenceId += 1
+	header[3] = c.sequenceId
+	c.sequenceId += 1
 
-	err = cm.WriteToConn(header[:])
-	if err != nil {
-		return err
-	}
-
-	err = cm.WriteToConn(payload)
+	err = c.WriteToConn(append(header[:], payload...))
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (cm *ConnManager) WriteToConn(buf []byte) error {
+func (c *Conn) WriteToConn(buf []byte) error {
 	sendlength := 0
 	for sendlength != len(buf) {
-		n, err := cm.conn.Write(buf[sendlength:])
+		n, err := c.conn.Write(buf[sendlength:])
 		sendlength += n
 		if err != nil {
 			return err
@@ -366,32 +347,28 @@ func (cm *ConnManager) WriteToConn(buf []byte) error {
 	return nil
 }
 
-func (cm *ConnManager) RemoteAddress() string {
-	return cm.remoteAddr
+func (c *Conn) RemoteAddress() string {
+	return c.remoteAddr
 }
 
-func (cm *ConnManager) closeConn() error {
-	if cm.conn != nil {
-		if err := cm.conn.Close(); err != nil {
+func (c *Conn) closeConn() error {
+	if c.conn != nil {
+		if err := c.conn.Close(); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (cm *ConnManager) Reset() {
-	cm.length = 0
-	cm.startFixIndex = 0
-	cm.endFixIndex = 0
-	cm.preLength = 0
-
-	for node := cm.dynamicBuf.Front(); node != nil; node = node.Next() {
-		cm.allocator.Free(node.Value.([]byte))
+func (c *Conn) Reset() {
+	c.bufferLength = 0
+	c.packetLength = 0
+	c.writeIndex = 0
+	c.curHeader = c.fixBuf[:HeaderLengthOfTheProtocol]
+	c.curBuf = c.fixBuf
+	for node := c.dynamicBuf.Front(); node != nil; node = node.Next() {
+		c.allocator.Free(node.Value.([]byte))
 	}
-	cm.dynamicBuf.Init()
+	c.dynamicBuf.Init()
 
-	for node := cm.preLengths.Front(); node != nil; node = node.Next() {
-		cm.allocator.Free(node.Value.([]byte))
-	}
-	cm.preLengths.Init()
 }

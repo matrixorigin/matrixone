@@ -260,7 +260,7 @@ type MysqlProtocolImpl struct {
 	//TODO: make it global
 	io IOPackage
 
-	tcpConn *ConnManager
+	tcpConn *Conn
 
 	quit atomic.Bool
 
@@ -561,7 +561,7 @@ const bit4TcpWriteCopy = 12 // 1<<12 == 4096
 // 2nd part: upload part, calculation = payload / 16KiB
 // 3rd part: response part, calculation = sendByte / 4KiB
 //   - ioCopyBufferSize currently is 4096 Byte, which is the option for goetty_buf.ByteBuf, set by goetty_buf.WithIOCopyBufferSize(...).
-//     goetty_buf.ByteBuf.WriteTo(...) will call by io.CopyBuffer(...) if do ConnManager.Flush().
+//     goetty_buf.ByteBuf.WriteTo(...) will call by io.CopyBuffer(...) if do Conn.Flush().
 //   - If ioCopyBufferSize is changed, you should see the calling of goetty.NewApplicationWithListenAddress(...) in NewMOServer()
 func (mp *MysqlProtocolImpl) CalculateOutTrafficBytes(reset bool) (bytes int64, packets int64) {
 	ses := mp.GetSession()
@@ -2153,6 +2153,7 @@ func (mp *MysqlProtocolImpl) appendNullBitMap(mrs *MysqlResultSet, columnsLength
 
 // the server convert every row of the result set into the format that mysql protocol needs
 func (mp *MysqlProtocolImpl) appendResultSetBinaryRow(mrs *MysqlResultSet, rowIdx uint64) error {
+	mp.tcpConn.BeginPacket()
 	mp.append(defines.OKHeader) // append OkHeader
 
 	columnsLength := mrs.GetColumnCount()
@@ -2317,6 +2318,7 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow(mrs *MysqlResultSet, rowId
 
 // the server convert every row of the result set into the format that mysql protocol needs
 func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint64) error {
+	mp.tcpConn.BeginPacket()
 	for i := uint64(0); i < mrs.GetColumnCount(); i++ {
 		column, err := mrs.GetColumn(mp.ctx, i)
 		if err != nil {
@@ -2702,7 +2704,7 @@ func (mp *MysqlProtocolImpl) MakeEOFPayload(warnings, status uint16) []byte {
 }
 
 // receiveExtraInfo tries to receive salt and labels read from proxy module.
-func (mp *MysqlProtocolImpl) receiveExtraInfo(rs *ConnManager) {
+func (mp *MysqlProtocolImpl) receiveExtraInfo(rs *Conn) {
 	// TODO(volgariver6): when proxy is stable, remove this deadline setting.
 	if err := rs.RawConn().SetReadDeadline(time.Now().Add(defaultSaltReadTimeout)); err != nil {
 		mp.ses.Debugf(mp.ctx, "failed to set deadline for salt updating: %v", err)
@@ -2749,7 +2751,7 @@ func generate_salt(n int) []byte {
 	}
 	return buf
 }
-func NewMysqlClientProtocol(connectionID uint32, tcp *ConnManager, maxBytesToFlush int, SV *config.FrontendParameters) *MysqlProtocolImpl {
+func NewMysqlClientProtocol(connectionID uint32, tcp *Conn, maxBytesToFlush int, SV *config.FrontendParameters) *MysqlProtocolImpl {
 	salt := generate_salt(20)
 	mysql := &MysqlProtocolImpl{
 		io:               NewIOPackage(true),

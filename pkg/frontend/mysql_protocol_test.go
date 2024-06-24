@@ -2846,7 +2846,7 @@ var _ MysqlRrWr = &testMysqlWriter{}
 type testMysqlWriter struct {
 	username string
 	database string
-	ioses    ConnManager
+	ioses    Conn
 }
 
 func (fp *testMysqlWriter) GetStr(PropertyID) string {

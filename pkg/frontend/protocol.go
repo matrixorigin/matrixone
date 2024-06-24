@@ -208,7 +208,7 @@ func (mp *MysqlProtocolImpl) safeQuit() {
 	}
 }
 
-func (mp *MysqlProtocolImpl) GetTcpConnection() *ConnManager {
+func (mp *MysqlProtocolImpl) GetTcpConnection() *Conn {
 	return mp.tcpConn
 }
 

@@ -169,7 +169,7 @@ func (mo *MOServer) handleConn(conn net.Conn) {
 	mo.handleLoop(rs)
 }
 
-func (mo *MOServer) handleLoop(rs *ConnManager) {
+func (mo *MOServer) handleLoop(rs *Conn) {
 	defer func() {
 		if err := rs.Close(); err != nil {
 			mo.logger.Error("close session failed", zap.Error(err))
@@ -180,7 +180,7 @@ func (mo *MOServer) handleLoop(rs *ConnManager) {
 	}
 }
 
-func (mo *MOServer) handshake(rs *ConnManager) error {
+func (mo *MOServer) handshake(rs *Conn) error {
 	var err error
 	var isTlsHeader bool
 	rm := mo.rm
@@ -398,7 +398,7 @@ func NewMOServer(
 }
 
 // handleMessage receives the message from the client and executes it
-func (mo *MOServer) handleMessage(rs *ConnManager) error {
+func (mo *MOServer) handleMessage(rs *Conn) error {
 	for {
 		err := mo.handleRequest(rs)
 		if err != nil {
@@ -407,7 +407,7 @@ func (mo *MOServer) handleMessage(rs *ConnManager) error {
 	}
 }
 
-func (mo *MOServer) handleRequest(rs *ConnManager) error {
+func (mo *MOServer) handleRequest(rs *Conn) error {
 	var msg []byte
 	var err error
 	defer func() {
