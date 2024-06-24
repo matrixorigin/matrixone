@@ -18,6 +18,7 @@ import (
 	"context"
 	"math"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -368,6 +369,8 @@ func (gs *GlobalStats) waitLogtailUpdated(tid uint64) {
 	}
 }
 
+var count atomic.Int32
+
 func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 	ts, ok := gs.statsUpdated.Load(key)
 	if ok && time.Since(ts.(time.Time)) < MinUpdateInterval {
@@ -458,11 +461,13 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 		approxObjectNum,
 		stats,
 	)
+	count.Add(1)
 	if err := UpdateStats(gs.ctx, req); err != nil {
 		logutil.Errorf("failed to init stats info for table %v, err: %v", key, err)
 		return
 	}
-	logutil.Infof("stats update duration %+v, %v", key, time.Since(start))
+	count.Add(-1)
+	logutil.Infof("stats update duration %+v, %v, count %d", key, time.Since(start), count.Load())
 	updated = true
 }
 
