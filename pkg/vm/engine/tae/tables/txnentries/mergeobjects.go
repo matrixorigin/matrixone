@@ -116,10 +116,12 @@ func (entry *mergeObjectsEntry) prepareTransferPage() {
 			if model.RD == nil {
 				model.SetBlockRead(blockio.NewBlockRead())
 			}
-			if model.FS == nil {
-				model.SetFileService(entry.rt.Fs.Service)
-			}
-			page := model.NewTransferHashPage(id, time.Now(), isTransient)
+			//if model.FS == nil {
+			//	model.SetFileService(entry.rt.Fs.Service)
+			//}
+			page := model.NewTransferHashPage(id, time.Now(), isTransient,
+				model.WithFileService(entry.rt.Fs.Service),
+			)
 			for srcRow, dst := range mapping {
 				objID := entry.createdObjs[dst.ObjIdx].ID
 				blkID := objectio.NewBlockidWithObjectID(&objID, uint16(dst.BlkIdx))

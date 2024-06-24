@@ -39,8 +39,8 @@ type BlockRead interface {
 }
 
 var (
-	RD     BlockRead
-	FS     fileservice.FileService
+	RD BlockRead
+	//FS     fileservice.FileService
 	rdOnce sync.Once
 	fsOnce sync.Once
 )
@@ -52,19 +52,26 @@ func SetBlockRead(rd BlockRead) {
 	logutil.Infof("[TransferHashPage] RD init %v", RD != nil)
 }
 
-func SetFileService(fs fileservice.FileService) {
-	fsOnce.Do(func() {
-		FS = fs
-	})
-	logutil.Infof("[TransferHashPage] FS init %v", FS != nil)
-}
+//func SetFileService(fs fileservice.FileService) {
+//	fsOnce.Do(func() {
+//		FS = fs
+//	})
+//	logutil.Infof("[TransferHashPage] FS init %v", FS != nil)
+//}
 
 type TransferHashPageParams struct {
+	FS      fileservice.FileService
 	TTL     time.Duration
 	DiskTTL time.Duration
 }
 
 type Option func(*TransferHashPageParams)
+
+func WithFileService(fs fileservice.FileService) Option {
+	return func(params *TransferHashPageParams) {
+		params.FS = fs
+	}
+}
 
 func WithTTL(ttl time.Duration) Option {
 	return func(params *TransferHashPageParams) {
@@ -241,11 +248,11 @@ func (page *TransferHashPage) loadTable() {
 		return
 	}
 
-	logutil.Infof("[TransferHashPage] loc %v, rd %v, fs %v", page.loc.Name().String(), RD, FS)
+	logutil.Infof("[TransferHashPage] loc %v, rd %v, fs %v", page.loc.Name().String(), RD, page.params.FS)
 
 	var bat *batch.Batch
 	var release func()
-	bat, release, err := RD.LoadTableByBlock(page.loc, FS)
+	bat, release, err := RD.LoadTableByBlock(page.loc, page.params.FS)
 	defer release()
 	if err != nil {
 		logutil.Errorf("[TransferHashPage] load table failed, %v", err)
@@ -273,7 +280,7 @@ func (page *TransferHashPage) clearPersistTable() {
 		return
 	}
 	logutil.Infof("[TransferHashPage] clear persist table, objectname: %v", page.loc.Name().String())
-	FS.Delete(context.Background(), page.loc.Name().String())
+	page.params.FS.Delete(context.Background(), page.loc.Name().String())
 	page.loc = nil
 }
 

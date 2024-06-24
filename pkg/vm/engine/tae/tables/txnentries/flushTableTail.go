@@ -139,10 +139,12 @@ func (entry *flushTableTailEntry) addTransferPages() {
 		if model.RD == nil {
 			model.SetBlockRead(blockio.NewBlockRead())
 		}
-		if model.FS == nil {
-			model.SetFileService(entry.rt.Fs.Service)
-		}
-		page := model.NewTransferHashPage(id, time.Now(), isTransient)
+		//if model.FS == nil {
+		//	model.SetFileService(entry.rt.Fs.Service)
+		//}
+		page := model.NewTransferHashPage(id, time.Now(), isTransient,
+			model.WithFileService(entry.rt.Fs.Service),
+		)
 		for srcRow, dst := range m {
 			blkid := objectio.NewBlockidWithObjectID(entry.createdBlkHandles.GetID(), uint16(dst.BlkIdx))
 			page.Train(uint32(srcRow), *objectio.NewRowid(blkid, uint32(dst.RowIdx)))
