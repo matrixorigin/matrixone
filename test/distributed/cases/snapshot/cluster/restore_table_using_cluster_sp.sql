@@ -778,7 +778,7 @@ drop database if exists Payroll;
 drop database if exists Projects;
 drop database if exists Company;
 drop account if exists acc01;
-drop snapshot if exists cluster_sp;
+drop snapshot if exists account_sp;
 -- @ignore:1
 show snapshots;
 

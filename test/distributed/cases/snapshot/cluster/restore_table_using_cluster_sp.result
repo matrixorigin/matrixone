@@ -128,7 +128,7 @@ SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME   
 create snapshot cluster_sp for cluster;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-cluster_sp    2024-06-24 07:51:44.441632    cluster            
+cluster_sp    2024-06-24 08:04:51.550364    cluster            
 drop database if exists snapshot_read;
 drop database if exists test_snapshot_restore;
 restore account acc01 database snapshot_read table test_snapshot_read from snapshot cluster_sp;
@@ -479,7 +479,7 @@ SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME   
 create snapshot cluster_sp for cluster;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-cluster_sp    2024-06-24 07:51:47.219996    cluster            
+cluster_sp    2024-06-24 08:04:53.14297    cluster            
 drop database if exists Payroll;
 drop database if exists Projects;
 drop database if exists Company;
@@ -936,7 +936,7 @@ SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME   
 create snapshot account_sp for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-account_sp    2024-06-24 07:51:48.99163    account    acc01        
+account_sp    2024-06-24 08:04:55.687172    account    acc01        
 drop database if exists Payroll;
 drop database if exists Projects;
 drop database if exists Company;
@@ -1070,10 +1070,9 @@ drop database if exists Payroll;
 drop database if exists Projects;
 drop database if exists Company;
 drop account if exists acc01;
-drop snapshot if exists cluster_sp;
+drop snapshot if exists account_sp;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-account_sp    2024-06-24 07:51:48.99163    account    acc01        
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
 CREATE DATABASE School;
@@ -1319,7 +1318,6 @@ Bob Johnson    3.70    3.60000000
 drop snapshot if exists cluster_sp;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-account_sp    2024-06-24 07:51:48.99163    account    acc01        
 create snapshot cluster_sp for cluster;
 drop database if exists School;
 drop database if exists University;
@@ -1410,11 +1408,11 @@ Eve    3.50000000
 Frank    3.60000000
 select * from EducationSystem.ComprehensiveStudentCourseInfo;
 studentname    studentgrade    coursetitle    coursegrade
+Eve    null    Introduction to Computer Science    3.50
+Frank    null    Advanced Mathematics    3.60
 Alice Smith    3.50    Calculus    3.50
 Bob Johnson    3.70    Calculus    3.60
 Alice Smith    3.50    Physics    3.70
-Eve    null    Introduction to Computer Science    3.50
-Frank    null    Advanced Mathematics    3.60
 select * from EducationSystem.ComprehensiveEducatorInfo;
 professorname    departmentname    coursetitle    semester
 Dr. Charlie    Computer Science    Introduction to Computer Science    Fall 2024
@@ -1429,4 +1427,3 @@ drop account if exists acc01;
 drop snapshot if exists cluster_sp;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-account_sp    2024-06-24 07:51:48.99163    account    acc01        
