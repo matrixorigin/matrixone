@@ -358,7 +358,10 @@ func (c *Compile) run(s *Scope) error {
 		if err != nil {
 			return err
 		}
-		c.setAffectedRows(s.Instructions[len(s.Instructions)-1].Arg.(*mergedelete.Argument).AffectedRows)
+		mergeArg := s.Instructions[len(s.Instructions)-1].Arg.(*mergedelete.Argument)
+		if mergeArg.AddAffectedRows {
+			c.addAffectedRows(mergeArg.AffectedRows)
+		}
 		return nil
 	case Remote:
 		defer c.fillAnalyzeInfo()
@@ -1453,7 +1456,8 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 				Op: vm.MergeDelete,
 				Arg: mergedelete.NewArgument().
 					WithDelSource(arg.DeleteCtx.Source).
-					WithPartitionSources(arg.DeleteCtx.PartitionSources),
+					WithPartitionSources(arg.DeleteCtx.PartitionSources).
+					WithAddAffectedRows(arg.DeleteCtx.AddAffectedRows),
 			})
 			rs.Magic = MergeDelete
 			ss = []*Scope{rs}
