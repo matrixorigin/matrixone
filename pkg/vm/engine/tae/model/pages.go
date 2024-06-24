@@ -49,12 +49,14 @@ func SetBlockRead(rd BlockRead) {
 	rdOnce.Do(func() {
 		RD = rd
 	})
+	logutil.Infof("[TransferHashPage] RD init %v", RD != nil)
 }
 
 func SetFileService(fs fileservice.FileService) {
 	fsOnce.Do(func() {
 		FS = fs
 	})
+	logutil.Infof("[TransferHashPage] FS init %v", FS != nil)
 }
 
 type TransferHashPageParams struct {
@@ -253,7 +255,7 @@ func (page *TransferHashPage) loadTable() {
 
 	v2.TransferRowHitCounter.Add(float64(len(page.hashmap)))
 
-	page.isPersisted = true
+	page.isPersisted = false
 
 	go func(page *TransferHashPage) {
 		time.Sleep(page.params.TTL)
