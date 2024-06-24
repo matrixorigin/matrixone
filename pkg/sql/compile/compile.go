@@ -3192,29 +3192,25 @@ func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scop
 		Arg: arg,
 	})
 
-	outData, err := newFuzzyCheck(n)
+	fuzzyCheck, err := newFuzzyCheck(n)
 	if err != nil {
 		return nil, err
 	}
-	c.fuzzys = append(c.fuzzys, outData)
+	c.fuzzys = append(c.fuzzys, fuzzyCheck)
+
 	// wrap the collision key into c.fuzzy, for more information,
 	// please refer fuzzyCheck.go
-	rs.appendInstruction(vm.Instruction{
-		Op: vm.Output,
-		Arg: output.NewArgument().
-			WithFunc(
-				func(bat *batch.Batch) error {
-					if bat == nil || bat.IsEmpty() {
-						return nil
-					}
-					// the batch will contain the key that fuzzyCheck
-					if err := outData.fill(c.ctx, bat); err != nil {
-						return err
-					}
+	arg.Callback = func(bat *batch.Batch) error {
+		if bat == nil || bat.IsEmpty() {
+			return nil
+		}
+		// the batch will contain the key that fuzzyCheck
+		if err := fuzzyCheck.fill(c.ctx, bat); err != nil {
+			return err
+		}
 
-					return nil
-				}),
-	})
+		return nil
+	}
 
 	return []*Scope{rs}, nil
 }
