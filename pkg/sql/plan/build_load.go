@@ -31,6 +31,72 @@ const (
 	LoadParallelMinSize = 1 << 20
 )
 
+func getNormalExternalProject(stmt *tree.Load, ctx CompilerContext, tableDef *TableDef, tblName string) ([]*Expr, map[string]int32, *TableDef, error) {
+	var externalProject []*Expr
+	colToIndex := make(map[string]int32, 0)
+	for i, col := range tableDef.Cols {
+		if col.Name != catalog.FakePrimaryKeyColName {
+			colExpr := &plan.Expr{
+				Typ: tableDef.Cols[i].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						ColPos: int32(i),
+						Name:   tblName + "." + tableDef.Cols[i].Name,
+					},
+				},
+			}
+			externalProject = append(externalProject, colExpr)
+			colToIndex[tableDef.Cols[i].Name] = int32(i)
+		}
+	}
+	return externalProject, colToIndex, tableDef, nil
+}
+
+func getExternalWithColListProject(stmt *tree.Load, ctx CompilerContext, tableDef *TableDef, tblName string) ([]*Expr, map[string]int32, *TableDef, error) {
+	var externalProject []*Expr
+	colToIndex := make(map[string]int32, 0)
+	var newCols []*ColDef
+
+	newTableDef := DeepCopyTableDef(tableDef, true)
+	for i, col := range stmt.Param.Tail.ColumnList {
+		switch realCol := col.(type) {
+		case *tree.UnresolvedName:
+			colName := realCol.ColName()
+			if _, ok := newTableDef.Name2ColIndex[colName]; !ok {
+				return nil, nil, nil, moerr.NewInternalError(ctx.GetContext(), "column '%s' does not exist", colName)
+			}
+			tbColIdx := newTableDef.Name2ColIndex[colName]
+			colExpr := &plan.Expr{
+				Typ: newTableDef.Cols[tbColIdx].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						ColPos: int32(i),
+						Name:   tblName + "." + colName,
+					},
+				},
+			}
+			externalProject = append(externalProject, colExpr)
+			colToIndex[colName] = int32(i)
+			newCols = append(newCols, newTableDef.Cols[tbColIdx])
+		case *tree.VarExpr:
+			//NOTE:variable like '@abc' will be passed by.
+		default:
+			return nil, nil, nil, moerr.NewInternalError(ctx.GetContext(), "unsupported column type %v", realCol)
+		}
+	}
+
+	newTableDef.Cols = newCols
+	return externalProject, colToIndex, newTableDef, nil
+}
+
+func getExternalProject(stmt *tree.Load, ctx CompilerContext, tableDef *TableDef, tblName string) ([]*Expr, map[string]int32, *TableDef, error) {
+	if len(stmt.Param.Tail.ColumnList) == 0 {
+		return getNormalExternalProject(stmt, ctx, tableDef, tblName)
+	} else {
+		return getExternalWithColListProject(stmt, ctx, tableDef, tblName)
+	}
+}
+
 func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan, error) {
 	start := time.Now()
 	defer func() {
@@ -55,20 +121,16 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	objRef := tblInfo.objRef[0]
 
 	tableDef.Name2ColIndex = map[string]int32{}
-	var externalProject []*Expr
-	for i := 0; i < len(tableDef.Cols); i++ {
-		idx := int32(i)
-		tableDef.Name2ColIndex[tableDef.Cols[i].Name] = idx
-		colExpr := &plan.Expr{
-			Typ: tableDef.Cols[i].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					ColPos: idx,
-					Name:   tblName + "." + tableDef.Cols[i].Name,
-				},
-			},
+	for i, col := range tableDef.Cols {
+		if col.Name != catalog.FakePrimaryKeyColName {
+			tableDef.Name2ColIndex[col.Name] = int32(i)
 		}
-		externalProject = append(externalProject, colExpr)
+	}
+	originTableDef := tableDef
+	// load with columnlist will copy a new tableDef
+	externalProject, colToIndex, tableDef, err := getExternalProject(stmt, ctx, tableDef, tblName)
+	if err != nil {
+		return nil, err
 	}
 
 	if err := checkNullMap(stmt, tableDef.Cols, ctx); err != nil {
@@ -79,7 +141,6 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		stmt.Param.Parallel = false
 	}
 	stmt.Param.LoadFile = true
-	columnList := stmt.Param.Tail.ColumnList
 	stmt.Param.Tail.ColumnList = nil
 	if stmt.Param.ScanType != tree.INLINE {
 		json_byte, err := json.Marshal(stmt.Param)
@@ -134,7 +195,9 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		NodeType: plan.Node_PROJECT,
 		Stats:    &plan.Stats{},
 	}
-	ifExistAutoPkCol, err := getProjectNode(stmt, ctx, projectNode, tableDef, columnList)
+
+	ifExistAutoPkCol, err := getProjectNode(stmt, ctx, projectNode, originTableDef, colToIndex)
+
 	if err != nil {
 		return nil, err
 	}
@@ -142,7 +205,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		stmt.Param.Parallel = false
 	}
 	if stmt.Param.Parallel && (getCompressType(stmt.Param, fileName) != tree.NOCOMPRESS || stmt.Local) {
-		projectNode.ProjectList = makeCastExpr(stmt, fileName, tableDef)
+		projectNode.ProjectList = makeCastExpr(stmt, fileName, originTableDef)
 	}
 	lastNodeId = builder.appendNode(projectNode, bindCtx)
 	builder.qry.LoadTag = true
@@ -152,7 +215,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		builder,
 		bindCtx,
 		lastNodeId,
-		tableDef,
+		originTableDef,
 		true,
 		false,
 		-1,
@@ -163,7 +226,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	}
 
 	// append hidden column to tableDef
-	newTableDef := DeepCopyTableDef(tableDef, true)
+	newTableDef := DeepCopyTableDef(originTableDef, true)
 	err = buildInsertPlans(ctx, builder, bindCtx, nil, objRef, newTableDef, lastNodeId, ifExistAutoPkCol, nil, nil)
 	if err != nil {
 		return nil, err
@@ -233,36 +296,12 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 	return param.Filepath, nil
 }
 
-func getProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, tableDef *TableDef, columnList []tree.LoadColumn) (bool, error) {
+func getProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, tableDef *TableDef, colToIndex map[string]int32) (bool, error) {
 	tblName := string(stmt.Table.ObjectName)
-	colToIndex := make(map[string]int32, 0)
 	ifExistAutoPkCol := false
-	if len(columnList) == 0 {
-		for i := 0; i < len(tableDef.Cols); i++ {
-			colToIndex[tableDef.Cols[i].Name] = int32(i)
-		}
-	} else {
-		for i, col := range columnList {
-			switch realCol := col.(type) {
-			case *tree.UnresolvedName:
-				colName := realCol.ColName()
-				if _, ok := tableDef.Name2ColIndex[colName]; !ok {
-					return ifExistAutoPkCol, moerr.NewInternalError(ctx.GetContext(), "column '%s' does not exist", realCol.ColNameOrigin())
-				}
-				colToIndex[colName] = int32(i)
-			case *tree.VarExpr:
-				//NOTE:variable like '@abc' will be passed by.
-			default:
-				return ifExistAutoPkCol, moerr.NewInternalError(ctx.GetContext(), "unsupported column type %v", realCol)
-			}
-		}
-		lastColIdx := len(tableDef.Cols) - 1
-		if lastColIdx >= 0 && tableDef.Cols[lastColIdx].Name == catalog.FakePrimaryKeyColName {
-			colToIndex[catalog.FakePrimaryKeyColName] = int32(lastColIdx)
-		}
-	}
 	node.ProjectList = make([]*plan.Expr, len(tableDef.Cols))
 	var tmp *plan.Expr
+
 	for i := 0; i < len(tableDef.Cols); i++ {
 		if colListId, ok := colToIndex[tableDef.Cols[i].Name]; ok {
 			tmp = &plan.Expr{
@@ -277,16 +316,13 @@ func getProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, table
 			node.ProjectList[i] = tmp
 			continue
 		}
-		if tableDef.Cols[i].Default.Expr == nil || tableDef.Cols[i].Default.NullAbility {
-			tmp = makePlan2NullConstExprWithType()
-		} else {
-			tmp = &plan.Expr{
-				Typ:  tableDef.Cols[i].Default.Expr.Typ,
-				Expr: tableDef.Cols[i].Default.Expr.Expr,
-			}
-		}
-		node.ProjectList[i] = tmp
 
+		defExpr, err := getDefaultExpr(ctx.GetContext(), tableDef.Cols[i])
+		if err != nil {
+			return false, err
+		}
+
+		node.ProjectList[i] = defExpr
 		if tableDef.Cols[i].Typ.AutoIncr && tableDef.Cols[i].Name == tableDef.Pkey.PkeyColName {
 			ifExistAutoPkCol = true
 		}
