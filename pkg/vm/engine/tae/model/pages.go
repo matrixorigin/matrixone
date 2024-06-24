@@ -196,20 +196,10 @@ func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) 
 	return
 }
 
-func toProtoRowid(rowid [24]byte) api.RowId {
-	return api.RowId{Id: rowid[:]}
-}
-
-func fromProtoRowid(protoRowid api.RowId) [24]byte {
-	var rowid [24]byte
-	copy(rowid[:], protoRowid.Id)
-	return rowid
-}
-
 func (page *TransferHashPage) Marshal() []byte {
-	m := make(map[uint32]api.RowId)
+	m := make(map[uint32][]byte)
 	for k, v := range page.hashmap {
-		m[k] = toProtoRowid(v)
+		m[k] = v[:]
 	}
 	mapping := &api.HashPageMap{M: m}
 	data, _ := proto.Marshal(mapping)
@@ -224,7 +214,9 @@ func (page *TransferHashPage) Unmarshal(data []byte) error {
 	}
 
 	for key, value := range mapping.M {
-		page.hashmap[key] = fromProtoRowid(value)
+		var v [24]byte
+		copy(v[:], value)
+		page.hashmap[key] = v
 	}
 	return nil
 }
