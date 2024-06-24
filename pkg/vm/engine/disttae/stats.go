@@ -367,13 +367,13 @@ func (gs *GlobalStats) waitLogtailUpdated(tid uint64) {
 }
 
 func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
-	// wait until the table's logtail has been updated.
-	gs.waitLogtailUpdated(key.TableID)
-
 	ts, ok := gs.statsUpdated.Load(key)
 	if ok && time.Since(ts.(time.Time)) < MinUpdateInterval {
 		return
 	}
+
+	// wait until the table's logtail has been updated.
+	gs.waitLogtailUpdated(key.TableID)
 
 	// updated is used to mark that the stats info is updated.
 	var updated bool
@@ -400,7 +400,6 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 		// update the time to current time only if the stats is not nil.
 		if updated {
 			gs.mu.statsInfoMap[key] = stats
-			gs.statsUpdated.Store(key, time.Now())
 		} else if _, ok := gs.mu.statsInfoMap[key]; !ok {
 			gs.mu.statsInfoMap[key] = nil
 		}
@@ -440,6 +439,10 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 		return
 	}
 
+	// The update time of the table key should be updated just before
+	// trying to update stats.
+	gs.statsUpdated.Store(key, time.Now())
+
 	// the time used to init stats info is not need to be too precise.
 	now := timestamp.Timestamp{PhysicalTime: time.Now().UnixNano()}
 	req := newUpdateStatsRequest(
@@ -452,7 +455,7 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 		stats,
 	)
 	if err := UpdateStats(gs.ctx, req); err != nil {
-		logutil.Errorf("failed to init stats info for table %v", key)
+		logutil.Errorf("failed to init stats info for table %v, err: %v", key, err)
 		return
 	}
 	updated = true
