@@ -241,7 +241,7 @@ func (entry *flushTableTailEntry) PrepareRollback() (err error) {
 	logutil.Warnf("[FlushTabletail] FT task %d rollback", entry.taskID)
 	// remove transfer page
 	for _, id := range entry.pageIds {
-		_ = entry.rt.TransferTable.DeletePage(id)
+		entry.rt.TransferTable.DeletePage(id)
 	}
 
 	// why not clean TranDel?
