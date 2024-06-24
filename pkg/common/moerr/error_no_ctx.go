@@ -286,6 +286,10 @@ func NewPrevCheckpointNotFinished() *Error {
 	return newError(Context(), ErrPrevCheckpointNotFinished)
 }
 
+func NewCantDelGCCheckerNoCtx() *Error {
+	return newError(Context(), ErrCantDelGCChecker)
+}
+
 func NewNotFoundNoCtx() *Error {
 	return newError(Context(), ErrNotFound)
 }

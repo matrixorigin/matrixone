@@ -19,36 +19,36 @@ import (
 	"testing"
 )
 
-func TestPureGoClassAllocator(t *testing.T) {
+func TestSyncPoolAllocator(t *testing.T) {
 	testAllocator(t, func() Allocator {
 		return NewShardedAllocator(
 			runtime.GOMAXPROCS(0),
 			func() Allocator {
-				return NewPureGoClassAllocator(256 * MB)
+				return NewClassAllocator(NewFixedSizeSyncPoolAllocator)
 			},
 		)
 	})
 }
 
-func BenchmarkPureGoClassAllocator(b *testing.B) {
+func BenchmarkSyncPoolAllocator(b *testing.B) {
 	for _, n := range benchNs {
 		benchmarkAllocator(b, func() Allocator {
 			return NewShardedAllocator(
 				runtime.GOMAXPROCS(0),
 				func() Allocator {
-					return NewPureGoClassAllocator(256 * MB)
+					return NewClassAllocator(NewFixedSizeSyncPoolAllocator)
 				},
 			)
 		}, n)
 	}
 }
 
-func FuzzPureGoClassAllocator(f *testing.F) {
+func FuzzSyncPoolAllocator(f *testing.F) {
 	fuzzAllocator(f, func() Allocator {
 		return NewShardedAllocator(
 			runtime.GOMAXPROCS(0),
 			func() Allocator {
-				return NewPureGoClassAllocator(256 * MB)
+				return NewClassAllocator(NewFixedSizeSyncPoolAllocator)
 			},
 		)
 	})

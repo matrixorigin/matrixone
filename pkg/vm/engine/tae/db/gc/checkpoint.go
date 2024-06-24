@@ -79,7 +79,7 @@ type checkpointCleaner struct {
 	// checker is to check whether the checkpoint can be consumed
 	checker struct {
 		sync.RWMutex
-		extras []func(item any) bool
+		extras map[string]func(item any) bool
 	}
 
 	// delWorker is a worker that deletes s3‘s objects or local
@@ -118,6 +118,7 @@ func NewCheckpointCleaner(
 	cleaner.snapshotMeta = logtail.NewSnapshotMeta()
 	cleaner.option.enableGC = true
 	cleaner.mPool = common.DebugAllocator
+	cleaner.checker.extras = make(map[string]func(item any) bool)
 	return cleaner
 }
 
@@ -911,10 +912,24 @@ func (c *checkpointCleaner) checkExtras(item any) bool {
 	return true
 }
 
-func (c *checkpointCleaner) AddChecker(checker func(item any) bool) {
+// AddChecker add&update a checker to the cleaner，return the number of checkers
+// key is the unique identifier of the checker
+func (c *checkpointCleaner) AddChecker(checker func(item any) bool, key string) int {
 	c.checker.Lock()
 	defer c.checker.Unlock()
-	c.checker.extras = append(c.checker.extras, checker)
+	c.checker.extras[key] = checker
+	return len(c.checker.extras)
+}
+
+// RemoveChecker remove a checker from the cleaner，return true if the checker is removed successfully
+func (c *checkpointCleaner) RemoveChecker(key string) error {
+	c.checker.Lock()
+	defer c.checker.Unlock()
+	if len(c.checker.extras) == 1 {
+		return moerr.NewCantDelGCCheckerNoCtx()
+	}
+	delete(c.checker.extras, key)
+	return nil
 }
 
 func (c *checkpointCleaner) createNewInput(

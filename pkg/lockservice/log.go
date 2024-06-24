@@ -369,6 +369,13 @@ func logPingFailed(
 	}
 }
 
+func logCanLockOnService() {
+	logger := getWithSkipLogger()
+	if logger.Enabled(zap.InfoLevel) {
+		logger.Error("if lock on service")
+	}
+}
+
 func logLocalBindsInvalid() {
 	logger := getWithSkipLogger()
 	logger.Error("all local lock table invalid")
@@ -475,6 +482,35 @@ func logWaitersAdded(
 	}
 }
 
+func logBindsMove(
+	binds []pb.LockTable) {
+	logger := getWithSkipLogger()
+	if logger.Enabled(zap.InfoLevel) {
+		logger.Info("binds move",
+			bindsArrayField("binds", binds))
+	}
+}
+
+func logStatus(
+	status pb.Status) {
+	logger := getWithSkipLogger()
+	if logger.Enabled(zap.InfoLevel) {
+		logger.Info("service status",
+			zap.String("status", status.String()))
+	}
+}
+
+func logStatusChange(
+	from pb.Status,
+	to pb.Status) {
+	logger := getWithSkipLogger()
+	if logger.Enabled(zap.InfoLevel) {
+		logger.Info("service status change",
+			zap.String("from", from.String()),
+			zap.String("to", to.String()))
+	}
+}
+
 func logWaiterGetNotify(
 	w *waiter,
 	v notifyValue) {
@@ -578,6 +614,19 @@ func bytesArrayField(name string, values [][]byte) zap.Field {
 }
 
 func waitTxnArrayField(name string, values []pb.WaitTxn) zap.Field {
+	var buffer bytes.Buffer
+	buffer.WriteString("[")
+	for idx, w := range values {
+		buffer.WriteString(w.DebugString())
+		if idx != len(values)-1 {
+			buffer.WriteString(",")
+		}
+	}
+	buffer.WriteString("]")
+	return zap.String(name, buffer.String())
+}
+
+func bindsArrayField(name string, values []pb.LockTable) zap.Field {
 	var buffer bytes.Buffer
 	buffer.WriteString("[")
 	for idx, w := range values {

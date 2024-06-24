@@ -97,6 +97,12 @@ type Handler interface {
 		req *db.Checkpoint,
 		resp *apipb.SyncLogTailResp,
 	) (func(), error)
+	HandleDisableCheckpoint(
+		ctx context.Context,
+		meta txn.TxnMeta,
+		req *db.Checkpoint,
+		resp *apipb.SyncLogTailResp,
+	) (func(), error)
 	HandleInspectTN(
 		ctx context.Context,
 		meta txn.TxnMeta,
@@ -138,4 +144,10 @@ type Handler interface {
 		req *db.InterceptCommit,
 		resp *apipb.SyncLogTailResp,
 	) (func(), error)
+	HandleDiskCleaner(
+		ctx context.Context,
+		meta txn.TxnMeta,
+		req *db.DiskCleaner,
+		resp *apipb.SyncLogTailResp,
+	) (cb func(), err error)
 }

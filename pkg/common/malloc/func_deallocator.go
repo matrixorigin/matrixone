@@ -20,13 +20,13 @@ type FuncDeallocator func(ptr unsafe.Pointer)
 
 var _ Deallocator = FuncDeallocator(nil)
 
-func (f FuncDeallocator) Deallocate(ptr unsafe.Pointer) {
+func (f FuncDeallocator) Deallocate(ptr unsafe.Pointer, hints Hints) {
 	f(ptr)
 }
 
 type argumentedFuncDeallocator[T any] struct {
 	argument T
-	fn       func(unsafe.Pointer, T)
+	fn       func(unsafe.Pointer, Hints, T)
 }
 
 func (a *argumentedFuncDeallocator[T]) SetArgument(arg T) {
@@ -35,6 +35,6 @@ func (a *argumentedFuncDeallocator[T]) SetArgument(arg T) {
 
 var _ Deallocator = &argumentedFuncDeallocator[int]{}
 
-func (a *argumentedFuncDeallocator[T]) Deallocate(ptr unsafe.Pointer) {
-	a.fn(ptr, a.argument)
+func (a *argumentedFuncDeallocator[T]) Deallocate(ptr unsafe.Pointer, hints Hints) {
+	a.fn(ptr, hints, a.argument)
 }

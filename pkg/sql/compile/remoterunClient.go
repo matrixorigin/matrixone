@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"go.uber.org/zap"
 	"sync/atomic"
@@ -77,7 +78,7 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 	sender.safeToClose = false
 	sender.alreadyClose = false
 	err = receiveMessageFromCnServer(c, s, sender)
-	return nil, nil
+	return sender, nil
 }
 
 func prepareRemoteRunSendingData(sqlStr string, s *Scope) (scopeData []byte, processData []byte, err error) {
@@ -216,6 +217,8 @@ func newMessageSenderOnClient(
 	if sender.receiveCh == nil {
 		sender.receiveCh, err = sender.streamSender.Receive()
 	}
+
+	v2.PipelineMessageSenderCounter.Inc()
 	return sender, err
 }
 
@@ -416,8 +419,7 @@ func (sender *messageSenderOnClient) close() {
 	if sender.ctxCancel != nil {
 		sender.ctxCancel()
 	}
-	if sender.alreadyClose {
-		return
-	}
 	_ = sender.streamSender.Close(true)
+
+	v2.PipelineMessageSenderCounter.Desc()
 }

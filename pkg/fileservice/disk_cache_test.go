@@ -117,6 +117,7 @@ func TestDiskCache(t *testing.T) {
 		assert.Equal(t, []byte("a"), bs)
 		assert.False(t, vec.Entries[1].done)
 		assert.False(t, vec.Entries[2].done)
+		vec.Release()
 	}
 	testRead(cache)
 
@@ -259,6 +260,7 @@ func TestDiskCacheFileCache(t *testing.T) {
 	assert.Equal(t, []byte("fo"), readVector.Entries[0].Data)
 	assert.Equal(t, []byte("ob"), readVector.Entries[1].Data)
 	assert.Equal(t, []byte("ar"), readVector.Entries[2].Data)
+	readVector.Release()
 
 }
 
