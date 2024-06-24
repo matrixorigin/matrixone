@@ -128,7 +128,7 @@ SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME   
 create snapshot cluster_sp for cluster;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-cluster_sp    2024-06-24 08:05:06.078393    cluster            
+cluster_sp    2024-06-24 08:47:05.296059    cluster            
 drop database if exists snapshot_read;
 drop database if exists test_snapshot_restore;
 restore account acc01 database snapshot_read from snapshot cluster_sp;
@@ -475,15 +475,13 @@ SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME   
 create snapshot cluster_sp for cluster;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-cluster_sp    2024-06-24 08:05:08.290473    cluster            
+cluster_sp    2024-06-24 08:47:06.779439    cluster            
 drop database if exists Payroll;
 drop database if exists Projects;
 drop database if exists Company;
 restore account acc01 database Company from snapshot cluster_sp;
 restore account acc01 database Projects from snapshot cluster_sp;
-no such table projects.projects
 restore account acc01 database Payroll from snapshot cluster_sp;
-no such table payroll.projects
 select * from Company.Departments;
 departmentid    name    managerid
 1    Research and Development    null
@@ -549,17 +547,53 @@ performancereviewid    employeeid    reviewdate    reviewerid
 5    5    2020-05-05    6
 6    6    2020-06-06    1
 select * from Projects.Projects;
-invalid database projects
+projectid    name    description    departmentid
+1    Project 1    Description 1    1
+2    Project 2    Description 2    2
+3    Project 3    Description 3    3
+4    Project 4    Description 4    4
+5    Project 5    Description 5    5
+6    Project 6    Description 6    6
 select * from Projects.ProjectMembers;
-invalid database projects
+projectid    employeeid
+1    1
+2    2
+3    3
+4    4
+5    5
+6    6
 select * from Projects.ProjectManagers;
-invalid database projects
+projectid    employeeid
+1    1
+2    2
+3    3
+4    4
+5    5
+6    6
 select * from Payroll.Salaries;
-invalid database payroll
+employeeid    monthlysalary
+1    10000.00
+2    20000.00
+3    30000.00
+4    40000.00
+5    50000.00
+6    60000.00
 select * from Payroll.ProjectBonuses;
-invalid database payroll
+projectid    employeeid    bonus
+1    1    1000.00
+2    2    2000.00
+3    3    3000.00
+4    4    4000.00
+5    5    5000.00
+6    6    6000.00
 select * from Payroll.DepartmentBudgets;
-invalid database payroll
+departmentid    budget
+1    100000.00
+2    200000.00
+3    300000.00
+4    400000.00
+5    500000.00
+6    600000.00
 drop database if exists Payroll;
 drop database if exists Projects;
 drop database if exists Company;
@@ -887,15 +921,13 @@ SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME   
 create snapshot account_sp for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-account_sp    2024-06-24 08:05:09.813439    account    acc01        
+account_sp    2024-06-24 08:47:08.426224    account    acc01        
 drop database if exists Payroll;
 drop database if exists Projects;
 drop database if exists Company;
 restore account acc01 database Company from snapshot account_sp;
 restore account acc01 database Projects from snapshot account_sp;
-no such table projects.projects
 restore account acc01 database Payroll from snapshot account_sp;
-no such table payroll.projects
 select * from Company.Departments;
 departmentid    name    managerid
 1    Research and Development    null
@@ -961,17 +993,53 @@ performancereviewid    employeeid    reviewdate    reviewerid
 5    5    2020-05-05    6
 6    6    2020-06-06    1
 select * from Projects.Projects;
-invalid database projects
+projectid    name    description    departmentid
+1    Project 1    Description 1    1
+2    Project 2    Description 2    2
+3    Project 3    Description 3    3
+4    Project 4    Description 4    4
+5    Project 5    Description 5    5
+6    Project 6    Description 6    6
 select * from Projects.ProjectMembers;
-invalid database projects
+projectid    employeeid
+1    1
+2    2
+3    3
+4    4
+5    5
+6    6
 select * from Projects.ProjectManagers;
-invalid database projects
+projectid    employeeid
+1    1
+2    2
+3    3
+4    4
+5    5
+6    6
 select * from Payroll.Salaries;
-invalid database payroll
+employeeid    monthlysalary
+1    10000.00
+2    20000.00
+3    30000.00
+4    40000.00
+5    50000.00
+6    60000.00
 select * from Payroll.ProjectBonuses;
-invalid database payroll
+projectid    employeeid    bonus
+1    1    1000.00
+2    2    2000.00
+3    3    3000.00
+4    4    4000.00
+5    5    5000.00
+6    6    6000.00
 select * from Payroll.DepartmentBudgets;
-invalid database payroll
+departmentid    budget
+1    100000.00
+2    200000.00
+3    300000.00
+4    400000.00
+5    500000.00
+6    600000.00
 drop database if exists Payroll;
 drop database if exists Projects;
 drop database if exists Company;

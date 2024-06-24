@@ -1203,10 +1203,10 @@ func getTableInfoMap(
 			continue
 		}
 		if dbName != "" && dbName != d {
-			return
+			continue
 		}
 		if tblName != "" && tblName != t {
-			return
+			continue
 		}
 
 		if tblInfoMap[key], err = getTableInfo(ctx, bh, snapshotName, d, t); err != nil {
