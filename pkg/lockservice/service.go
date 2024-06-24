@@ -319,11 +319,11 @@ func (s *service) canLockOnServiceStatus(
 	if s.isStatus(pb.Status_ServiceLockEnable) {
 		return true
 	}
-	defer logCanLockOnService()
 	if opts.Sharding == pb.Sharding_ByRow {
 		tableID = shardingByRow(rows[0])
 	}
 	if !s.validGroupTable(opts.Group, tableID) {
+		logCanLockOnService(s.serviceID)
 		return false
 	}
 	if s.activeTxnHolder.hasActiveTxn(txnID) {
@@ -391,8 +391,8 @@ func (s *service) Close() error {
 func (s *service) setStatus(status pb.Status) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.mu.status = status
 	logStatusChange(s.mu.status, status)
+	s.mu.status = status
 }
 
 func (s *service) getStatus() pb.Status {
