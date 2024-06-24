@@ -6104,7 +6104,7 @@ func TestDoSetSecondaryRoleAll(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql := getSqlForgetUserRolesExpectPublicRole(publicRoleID, ses.GetTenantInfo().UserID)
+		sql := getSqlForgetUserRolesExpectPublicRole(publicRoleID, ses.GetTenantInfo().GetUserID())
 		mrs := newMrsForPasswordOfUser([][]interface{}{
 			{"6", "role5"},
 		})
@@ -6145,7 +6145,7 @@ func TestDoSetSecondaryRoleAll(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql := getSqlForgetUserRolesExpectPublicRole(publicRoleID, ses.GetTenantInfo().UserID)
+		sql := getSqlForgetUserRolesExpectPublicRole(publicRoleID, ses.GetTenantInfo().GetUserID())
 		mrs := newMrsForPasswordOfUser([][]interface{}{})
 		bh.sql2result[sql] = mrs
 

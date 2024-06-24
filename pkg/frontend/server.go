@@ -117,7 +117,7 @@ func setGlobalAicm(aicm *defines.AutoIncrCacheManager) {
 	globalAicm.Store(aicm)
 }
 
-func getGlobalAic() *defines.AutoIncrCacheManager {
+func getGlobalAicm() *defines.AutoIncrCacheManager {
 	if globalAicm.Load() != nil {
 		return globalAicm.Load().(*defines.AutoIncrCacheManager)
 	}
