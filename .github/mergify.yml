@@ -5,9 +5,6 @@ queue_rules:
   - name: release-1.2
     merge_conditions: []
     checks_timeout: 4h
-  - name: release-1.1
-    merge_conditions: []
-    checks_timeout: 4h
 
 pull_request_rules:
   - name: Automatic queue on approval for main
@@ -15,6 +12,7 @@ pull_request_rules:
       - "#changes-requested-reviews-by<=0"
       - label!=do-not-merge/wip
       - base=main
+      - approved-reviews-by=fengttt
     actions:
       queue:
         name: main
@@ -31,27 +29,10 @@ pull_request_rules:
       - "#changes-requested-reviews-by<=0"
       - label!=do-not-merge/wip
       - base=1.2-dev
-      - approved-reviews-by=fengttt
+      - approved-reviews-by=sukki37
     actions:
       queue:
         name: release-1.2
-        method: squash
-        commit_message_template: |
-          {{ title }} (#{{ number }})
-
-          {{ body.split("___\n\n### **PR Type**")[0] | trim | get_section("## What this PR does / why we need it:") }}
-
-          Approved by: @{{ approved_reviews_by | join(', @') }}
-
-  - name: Automatic queue on approval for release-1.1
-    conditions:
-      - "#changes-requested-reviews-by<=0"
-      - label!=do-not-merge/wip
-      - base=1.1-dev
-      - approved-reviews-by=fengttt
-    actions:
-      queue:
-        name: release-1.1
         method: squash
         commit_message_template: |
           {{ title }} (#{{ number }})
@@ -65,6 +46,21 @@ pull_request_rules:
       - created-at>=00:10 ago
     actions:
       update: 
+
+  - name: Auto Request Reviewer For main
+    conditions:
+      - base=main
+    actions:
+      request_reviews:
+        users:
+          - fengttt
+  - name: Auto Request Reviewer For 1.2-dev
+    conditions:
+      - base!=main
+    actions:
+      request_reviews:
+        users:
+          - sukki37
 
   - name: label for Bug
     conditions: 
