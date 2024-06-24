@@ -1011,31 +1011,25 @@ func handleExplainStmt(ses FeSession, execCtx *ExecCtx, stmt *tree.ExplainStmt) 
 	return doExplainStmt(execCtx.reqCtx, ses.(*Session), stmt)
 }
 
-func doPrepareStmt(ctx context.Context, ses *Session, st *tree.PrepareStmt, sql string, paramTypes []byte) (*PrepareStmt, error) {
-	preparePlan, err := buildPlan(ctx, ses, ses.GetTxnCompileCtx(), st)
+func doPrepareStmt(execCtx *ExecCtx, ses *Session, st *tree.PrepareStmt, sql string, paramTypes []byte) (*PrepareStmt, error) {
+	idx := strings.Index(strings.ToLower(sql[:(len(st.Name)+20)]), "from") + 5
+	originSql := strings.TrimLeft(sql[idx:], " ")
+	// fmt.Print(originSql)
+	prepareStmt, err := createPrepareStmt(execCtx, ses, originSql, st, st.Stmt)
 	if err != nil {
 		return nil, err
-	}
-
-	prepareStmt := &PrepareStmt{
-		Name:                preparePlan.GetDcl().GetPrepare().GetName(),
-		Sql:                 sql,
-		PreparePlan:         preparePlan,
-		PrepareStmt:         st.Stmt,
-		getFromSendLongData: make(map[int]struct{}),
 	}
 	if len(paramTypes) > 0 {
 		prepareStmt.ParamTypes = paramTypes
 	}
-	prepareStmt.InsertBat = ses.GetTxnCompileCtx().GetProcess().GetPrepareBatch()
-	err = ses.SetPrepareStmt(ctx, preparePlan.GetDcl().GetPrepare().GetName(), prepareStmt)
 
+	err = ses.SetPrepareStmt(execCtx.reqCtx, prepareStmt.Name, prepareStmt)
 	return prepareStmt, err
 }
 
 // handlePrepareStmt
-func handlePrepareStmt(ses FeSession, execCtx *ExecCtx, st *tree.PrepareStmt) (*PrepareStmt, error) {
-	return doPrepareStmt(execCtx.reqCtx, ses.(*Session), st, execCtx.sqlOfStmt, execCtx.executeParamTypes)
+func handlePrepareStmt(ses FeSession, execCtx *ExecCtx, st *tree.PrepareStmt, sql string) (*PrepareStmt, error) {
+	return doPrepareStmt(execCtx, ses.(*Session), st, sql, execCtx.executeParamTypes)
 }
 
 func doPrepareString(ses *Session, execCtx *ExecCtx, st *tree.PrepareString) (*PrepareStmt, error) {
@@ -1049,24 +1043,64 @@ func doPrepareString(ses *Session, execCtx *ExecCtx, st *tree.PrepareString) (*P
 		return nil, err
 	}
 
-	preparePlan, err := buildPlan(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), st)
+	prepareStmt, err := createPrepareStmt(execCtx, ses, st.Sql, st, stmts[0])
 	if err != nil {
 		return nil, err
 	}
-	prepareStmt := &PrepareStmt{
-		Name:        preparePlan.GetDcl().GetPrepare().GetName(),
-		Sql:         st.Sql,
-		PreparePlan: preparePlan,
-		PrepareStmt: stmts[0],
-	}
-	prepareStmt.InsertBat = ses.GetTxnCompileCtx().GetProcess().GetPrepareBatch()
-	err = ses.SetPrepareStmt(execCtx.reqCtx, preparePlan.GetDcl().GetPrepare().GetName(), prepareStmt)
+
+	err = ses.SetPrepareStmt(execCtx.reqCtx, prepareStmt.Name, prepareStmt)
 	return prepareStmt, err
 }
 
 // handlePrepareString
 func handlePrepareString(ses FeSession, execCtx *ExecCtx, st *tree.PrepareString) (*PrepareStmt, error) {
 	return doPrepareString(ses.(*Session), execCtx, st)
+}
+
+func createPrepareStmt(
+	execCtx *ExecCtx,
+	ses *Session,
+	originSQL string,
+	stmt tree.Statement,
+	saveStmt tree.Statement) (*PrepareStmt, error) {
+
+	preparePlan, err := buildPlan(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), stmt)
+	if err != nil {
+		return nil, err
+	}
+
+	var comp *compile.Compile
+	if _, ok := preparePlan.GetDcl().GetPrepare().Plan.Plan.(*plan.Plan_Query); ok {
+		//only DQL & DML will pre compile
+		comp, err = createCompile(execCtx, ses, ses.proc, originSQL, saveStmt, preparePlan.GetDcl().GetPrepare().Plan, ses.GetOutputCallback(execCtx), true)
+		if err != nil {
+			if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
+				return nil, err
+			}
+		}
+		// do not save ap query now()
+		if comp != nil && !comp.IsTpQuery() {
+			comp.Release()
+			comp = nil
+		}
+
+		// @xxx when refactor prepare finish, remove this code
+		if comp != nil {
+			comp.Release()
+			comp = nil
+		}
+	}
+
+	prepareStmt := &PrepareStmt{
+		Name:                preparePlan.GetDcl().GetPrepare().GetName(),
+		Sql:                 originSQL,
+		compile:             comp,
+		PreparePlan:         preparePlan,
+		PrepareStmt:         saveStmt,
+		getFromSendLongData: make(map[int]struct{}),
+	}
+	prepareStmt.InsertBat = ses.GetTxnCompileCtx().GetProcess().GetPrepareBatch()
+	return prepareStmt, nil
 }
 
 func doDeallocate(ses *Session, execCtx *ExecCtx, st *tree.Deallocate) error {
