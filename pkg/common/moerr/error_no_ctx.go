@@ -382,3 +382,7 @@ func NewReplicaNotFound(replica string) *Error {
 func NewReplicaNotMatch(current, received string) *Error {
 	return newError(Context(), ErrReplicaNotMatch, current, received)
 }
+
+func NewCantCompileForPrepareNoCtx() *Error {
+	return newError(Context(), ErrCantCompileForPrepare)
+}
