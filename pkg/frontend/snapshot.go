@@ -1354,7 +1354,7 @@ func mockInsertSnapshotRecord(ctx context.Context, bh BackgroundExec, snapshot *
 	}
 	snapshotId := snapshotUId.String()
 
-	snapshotName = snapshotId + snapshot.snapshotName + "_mock"
+	snapshotName = snapshotId + "_" + snapshot.snapshotName + "_mock"
 	sql, err := getSqlForCreateSnapshot(ctx,
 		snapshotId,
 		snapshotName,
