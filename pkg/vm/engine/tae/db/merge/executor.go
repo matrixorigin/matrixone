@@ -52,9 +52,11 @@ type MergeExecutor struct {
 	cnSched             CNMergeScheduler
 	memLimit            int
 	memUsing            int
+	transPageLimit      uint64
 	cpuPercent          float64
 	activeMergeBlkCount int32
 	activeEstimateBytes int64
+	roundMergeRows      uint64
 	taskConsume         struct {
 		sync.Mutex
 		o map[objectio.ObjectId]struct{}
@@ -76,11 +78,23 @@ func (e *MergeExecutor) setMemLimit(total uint64) {
 	} else {
 		e.memLimit = int(float64(total) * 0.9)
 	}
+
+	if e.memLimit > 200*common.Const1GBytes {
+		e.transPageLimit = uint64(e.memLimit / 25 * 2) // 8%
+	} else if e.memLimit > 100*common.Const1GBytes {
+		e.transPageLimit = uint64(e.memLimit / 25 * 3) // 12%
+	} else if e.memLimit > 40*common.Const1GBytes {
+		e.transPageLimit = uint64(e.memLimit / 25 * 4) // 16%
+	} else {
+		e.transPageLimit = math.MaxUint64 // no limit
+	}
+
 	logutil.Info(
 		"MergeExecutorMemoryInfo",
-		common.AnyField("memory-limit", common.HumanReadableBytes(int(containerMLimit))),
+		common.AnyField("container-limit", common.HumanReadableBytes(int(containerMLimit))),
 		common.AnyField("host-memory", common.HumanReadableBytes(int(total))),
 		common.AnyField("process-limit", common.HumanReadableBytes(e.memLimit)),
+		common.AnyField("transfer-page-limit", common.HumanReadableBytes(int(e.transPageLimit))),
 		common.AnyField("error", err),
 	)
 }
@@ -103,6 +117,7 @@ func (e *MergeExecutor) RefreshMemInfo() {
 	if percents, err := cpu.Percent(0, false); err == nil {
 		e.cpuPercent = percents[0]
 	}
+	e.roundMergeRows = 0
 }
 
 func (e *MergeExecutor) PrintStats() {
@@ -147,6 +162,9 @@ func (e *MergeExecutor) OnExecDone(v any) {
 }
 
 func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, mobjs []*catalog.ObjectEntry, kind TaskHostKind) {
+	if e.roundMergeRows*36 /*28 * 1.3 */ > e.transPageLimit/8 {
+		return
+	}
 	e.tableName = fmt.Sprintf("%v-%v", entry.ID, entry.GetLastestSchema().Name)
 
 	if ActiveCNObj.CheckOverlapOnCNActive(mobjs) {
@@ -216,6 +234,9 @@ func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, mobjs []*catalog.O
 			return
 		}
 		e.AddActiveTask(task.ID(), blkCnt, esize)
+		for _, obj := range mobjs {
+			e.roundMergeRows += uint64(obj.GetRemainingRows())
+		}
 		logMergeTask(e.tableName, task.ID(), mobjs, blkCnt, osize, esize)
 	}
 
@@ -229,6 +250,10 @@ func (e *MergeExecutor) MemAvailBytes() int {
 		avail = 0
 	}
 	return avail
+}
+
+func (e *MergeExecutor) TransferPageSizeLimit() uint64 {
+	return e.transPageLimit
 }
 
 func (e *MergeExecutor) CPUPercent() int64 {

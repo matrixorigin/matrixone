@@ -15,15 +15,15 @@
 package db
 
 import (
-	"sync/atomic"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	dto "github.com/prometheus/client_model/go"
 )
 
 type ScannerOp interface {
@@ -48,9 +48,7 @@ type MergeTaskBuilder struct {
 	tableRowCnt int
 	tableRowDel int
 
-	// concurrecy control
-	suspend    atomic.Bool
-	suspendCnt atomic.Int32
+	skipForTransPageLimit bool
 }
 
 func newMergeTaskBuilder(db *DB) *MergeTaskBuilder {
@@ -108,6 +106,16 @@ func (s *MergeTaskBuilder) PreExecute() error {
 			delete(s.mergingObjs, obj)
 		}
 	}
+	s.skipForTransPageLimit = false
+	m := &dto.Metric{}
+	v2.TaskMergeTransferPageLengthGauge.Write(m)
+	pagesize := m.GetGauge().GetValue() * 28 /*int32 + rowid(24b)*/ * 1.3 /*map inflationg factor*/
+	if pagesize > float64(s.executor.TransferPageSizeLimit()) {
+		logutil.Infof("[mergeblocks] skip merge scanning due to transfer page %s, limit %s",
+			common.HumanReadableBytes(int(pagesize)),
+			common.HumanReadableBytes(int(s.executor.TransferPageSizeLimit())))
+		s.skipForTransPageLimit = true
+	}
 	return nil
 }
 
@@ -116,27 +124,28 @@ func (s *MergeTaskBuilder) PostExecute() error {
 	return nil
 }
 func (s *MergeTaskBuilder) onDataBase(dbEntry *catalog.DBEntry) (err error) {
-	if s.suspend.Load() {
-		s.suspendCnt.Add(1)
-		return moerr.GetOkStopCurrRecur()
-	}
-	s.suspendCnt.Store(0)
 	if merge.StopMerge.Load() {
 		return moerr.GetOkStopCurrRecur()
 	}
 	if s.executor.MemAvailBytes() < 100*common.Const1MBytes {
 		return moerr.GetOkStopCurrRecur()
 	}
+
+	if s.skipForTransPageLimit {
+		return moerr.GetOkStopCurrRecur()
+	}
+
 	return
 }
 
 func (s *MergeTaskBuilder) onTable(tableEntry *catalog.TableEntry) (err error) {
-	if merge.StopMerge.Load() || s.suspend.Load() {
+	if merge.StopMerge.Load() {
 		return moerr.GetOkStopCurrRecur()
 	}
 	if !tableEntry.IsActive() {
 		return moerr.GetOkStopCurrRecur()
 	}
+
 	tableEntry.RLock()
 	// this table is creating or altering
 	if !tableEntry.IsCommittedLocked() {
