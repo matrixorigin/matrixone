@@ -323,7 +323,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	snapshotName := string(stmt.SnapShotName)
 	toAccountName := string(stmt.ToAccountName)
 
-	// check snapsho
+	// check snapshot
 	snapshot, err := getSnapshotByName(ctx, bh, snapshotName)
 	if err != nil {
 		return err
@@ -789,14 +789,10 @@ func recreateTable(
 		return
 	}
 
-	if len(tblInfo.createSql) != 0 {
-		// create table
-		getLogger().Info(fmt.Sprintf("[%s] start to create table: %v, create table sql: %s", snapshotName, tblInfo.tblName, tblInfo.createSql))
-		if err = bh.Exec(ctx, tblInfo.createSql); err != nil {
-			return
-		}
-	} else {
-		return moerr.NewInternalError(ctx, "database %s table %s create sql is empty", tblInfo.dbName, tblInfo.tblName)
+	// create table
+	getLogger().Info(fmt.Sprintf("[%s] start to create table: %v, create table sql: %s", snapshotName, tblInfo.tblName, tblInfo.createSql))
+	if err = bh.Exec(ctx, tblInfo.createSql); err != nil {
+		return
 	}
 
 	if curAccountId == toAccountId {
@@ -1358,7 +1354,7 @@ func mockInsertSnapshotRecord(ctx context.Context, bh BackgroundExec, snapshot *
 	}
 	snapshotId := snapshotUId.String()
 
-	snapshotName = snapshot.snapshotName + "_mock"
+	snapshotName = snapshotId + snapshot.snapshotName + "_mock"
 	sql, err := getSqlForCreateSnapshot(ctx,
 		snapshotId,
 		snapshotName,
