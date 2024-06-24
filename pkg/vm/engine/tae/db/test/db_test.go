@@ -9014,11 +9014,10 @@ func TestPersistTransferTable(t *testing.T) {
 	if model.RD == nil {
 		model.SetBlockRead(blockio.NewBlockRead())
 	}
-	//if model.FS == nil {
-	//	model.SetFileService(tae.Runtime.Fs.Service)
-	//}
+	if model.FS == nil {
+		model.SetFileService(tae.Runtime.Fs.Service)
+	}
 	page := model.NewTransferHashPage(&id1, now, false,
-		model.WithFileService(tae.Runtime.Fs.Service),
 		model.WithTTL(2*time.Second),
 	)
 	ids := make([]types.Rowid, 10)
@@ -9095,11 +9094,10 @@ func TestClearPersistTransferTable(t *testing.T) {
 	if model.RD == nil {
 		model.SetBlockRead(blockio.NewBlockRead())
 	}
-	//if model.FS == nil {
-	//	model.SetFileService(tae.Runtime.Fs.Service)
-	//}
+	if model.FS == nil {
+		model.SetFileService(tae.Runtime.Fs.Service)
+	}
 	page := model.NewTransferHashPage(&id1, now, false,
-		model.WithFileService(tae.Runtime.Fs.Service),
 		model.WithTTL(time.Second),
 		model.WithDiskTTL(2*time.Second),
 	)
