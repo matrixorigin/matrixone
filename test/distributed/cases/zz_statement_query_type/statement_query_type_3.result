@@ -6,7 +6,7 @@ select sleep(1), * from unnest('{"a":1}') as f    DQL    cloud_nonuser_sql
 drop table test_table    DDL    cloud_nonuser_sql
 truncate table test_table    DDL    cloud_nonuser_sql
 deallocate prepare s1    Other    cloud_nonuser_sql
-execute s1 using @a // prepare s1 from select * from test_table where col1=? ; set @a=2    Other    cloud_nonuser_sql
+execute s1 using @a // select * from test_table where col1=? ; set @a=2    Other    cloud_nonuser_sql
 set @a=2    Other    cloud_nonuser_sql
 prepare s1 from select * from test_table where col1=?    Other    cloud_nonuser_sql
 drop database db2    DDL    cloud_nonuser_sql
