@@ -91,3 +91,7 @@ func ParseEnumIndex(enumStr string, index uint16) (string, error) {
 	}
 	return elems[index-1], nil
 }
+
+func (e Enum) String() string {
+	return strconv.Itoa(int(e))
+}

@@ -530,6 +530,8 @@ func getValueInStr(value any) string {
 		return v.Format(0)
 	case types.Decimal128:
 		return v.Format(0)
+	case types.Enum:
+		return v.String()
 	default:
 		return ""
 	}
