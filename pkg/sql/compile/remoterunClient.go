@@ -424,10 +424,11 @@ func (sender *messageSenderOnClient) close() {
 	if sender.ctxCancel != nil {
 		sender.ctxCancel()
 	}
-	//if sender.alreadyClose {
-	//	return
-	//}
+	if sender.alreadyClose {
+		return
+	}
 	_ = sender.streamSender.Close(true)
+	sender.alreadyClose = true
 
 	v2.PipelineMessageSenderCounter.Desc()
 }
