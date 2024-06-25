@@ -375,7 +375,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		if err != nil {
 			return err
 		}
-		sp, err := mockInsertSnapshotRecord(ctx, bh, snapshot, int32(toAccountId), srcAccountName)
+		sp, err := mockInsertSnapshotRecord(ctx, bh, snapshot, uint64(toAccountId), srcAccountName)
 		if err != nil {
 			return err
 		}
@@ -1339,7 +1339,7 @@ func checkAndRestorePublicationRecord(
 	return
 }
 
-func mockInsertSnapshotRecord(ctx context.Context, bh BackgroundExec, snapshot *snapshotRecord, toAccountId int32, accountName string) (snapshotName string, err error) {
+func mockInsertSnapshotRecord(ctx context.Context, bh BackgroundExec, snapshot *snapshotRecord, toAccountId uint64, accountName string) (snapshotName string, err error) {
 	// mock snapshot id and snapshot name
 	snapshotUId, err := uuid.NewV7()
 	if err != nil {
@@ -1356,7 +1356,7 @@ func mockInsertSnapshotRecord(ctx context.Context, bh BackgroundExec, snapshot *
 		accountName,
 		"",
 		"",
-		uint64(toAccountId))
+		toAccountId)
 	if err != nil {
 		return
 	}
