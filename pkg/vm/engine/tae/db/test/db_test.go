@@ -9015,6 +9015,8 @@ func TestPersistTransferTable(t *testing.T) {
 		model.SetBlockRead(blockio.NewBlockRead())
 	}
 	model.FS = tae.Runtime.Fs.Service
+	model.Cleaner = &model.TransferPageCleaner{}
+	go model.Cleaner.Handler()
 	page := model.NewTransferHashPage(&id1, now, false,
 		model.WithTTL(2*time.Second),
 	)
@@ -9093,6 +9095,8 @@ func TestClearPersistTransferTable(t *testing.T) {
 		model.SetBlockRead(blockio.NewBlockRead())
 	}
 	model.FS = tae.Runtime.Fs.Service
+	model.Cleaner = &model.TransferPageCleaner{}
+	go model.Cleaner.Handler()
 	page := model.NewTransferHashPage(&id1, now, false,
 		model.WithTTL(time.Second),
 		model.WithDiskTTL(2*time.Second),
