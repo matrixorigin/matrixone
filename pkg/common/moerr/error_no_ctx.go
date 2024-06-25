@@ -266,8 +266,8 @@ func NewTAENeedRetryNoCtx() *Error {
 	return newError(Context(), ErrTAENeedRetry)
 }
 
-func NewTxnStaleNoCtx() *Error {
-	return newError(Context(), ErrTxnStale)
+func NewTxnStaleNoCtx(msg string) *Error {
+	return newError(Context(), ErrTxnStale, msg)
 }
 
 func NewWaiterPausedNoCtx() *Error {
@@ -381,4 +381,8 @@ func NewReplicaNotFound(replica string) *Error {
 
 func NewReplicaNotMatch(current, received string) *Error {
 	return newError(Context(), ErrReplicaNotMatch, current, received)
+}
+
+func NewCantCompileForPrepareNoCtx() *Error {
+	return newError(Context(), ErrCantCompileForPrepare)
 }

@@ -125,6 +125,7 @@ func (txn *Transaction) WriteBatch(
 		if tableId != catalog.MO_DATABASE_ID &&
 			tableId != catalog.MO_TABLES_ID && tableId != catalog.MO_COLUMNS_ID {
 			txn.workspaceSize += uint64(bat.Size())
+			txn.insertCount += bat.RowCount()
 		}
 	}
 	e := Entry{
@@ -392,8 +393,19 @@ func (txn *Transaction) checkDup() error {
 func (txn *Transaction) dumpBatchLocked(offset int) error {
 	var size uint64
 	var pkCount int
-	if txn.workspaceSize < WorkspaceThreshold {
-		return nil
+
+	//offset < 0 indicates commit.
+	if offset < 0 {
+		//if txn.workspaceSize < WorkspaceThreshold {
+		//	return nil
+		//}
+		if txn.workspaceSize < WorkspaceThreshold && txn.insertCount < InsertEntryThreshold {
+			return nil
+		}
+	} else {
+		if txn.workspaceSize < WorkspaceThreshold {
+			return nil
+		}
 	}
 
 	dumpAll := offset < 0
@@ -816,6 +828,7 @@ func (txn *Transaction) mergeTxnWorkspaceLocked() error {
 	if len(txn.batchSelectList) > 0 {
 		for _, e := range txn.writes {
 			if sels, ok := txn.batchSelectList[e.bat]; ok {
+				txn.insertCount -= e.bat.RowCount() - len(sels)
 				e.bat.Shrink(sels, false)
 				delete(txn.batchSelectList, e.bat)
 			}

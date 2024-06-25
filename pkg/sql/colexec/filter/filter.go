@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -38,9 +39,19 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	arg.ctr = new(container)
+	var filterExpr *plan.Expr
 
-	filterList := colexec.SplitAndExprs([]*plan.Expr{arg.E})
-	arg.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, filterList)
+	if arg.exeExpr == nil {
+		if arg.E != nil {
+			filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, arg.E, proc, true)
+		}
+	} else {
+		filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, arg.exeExpr, proc, true)
+	}
+	if err != nil {
+		return err
+	}
+	arg.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{filterExpr}))
 	return err
 }
 
@@ -61,21 +72,21 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() {
 		return result, nil
 	}
-	if arg.buf != nil {
-		proc.PutBatch(arg.buf)
-		arg.buf = nil
+	if arg.ctr.buf != nil {
+		proc.PutBatch(arg.ctr.buf)
+		arg.ctr.buf = nil
 	}
-	arg.buf = result.Batch
+	arg.ctr.buf = result.Batch
 
-	anal.Input(arg.buf, arg.GetIsFirst())
+	anal.Input(arg.ctr.buf, arg.GetIsFirst())
 
 	var sels []int64
 	for i := range arg.ctr.executors {
-		if arg.buf.IsEmpty() {
+		if arg.ctr.buf.IsEmpty() {
 			break
 		}
 
-		vec, err := arg.ctr.executors[i].Eval(proc, []*batch.Batch{arg.buf})
+		vec, err := arg.ctr.executors[i].Eval(proc, []*batch.Batch{arg.ctr.buf}, nil)
 		if err != nil {
 			result.Batch = nil
 			return result, err
@@ -93,11 +104,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		if vec.IsConst() {
 			v, null := bs.GetValue(0)
 			if null || !v {
-				arg.buf, err = tryDupBatch(proc, arg.buf)
+				arg.ctr.buf, err = tryDupBatch(proc, arg.ctr.buf)
 				if err != nil {
 					return result, err
 				}
-				arg.buf.Shrink(nil, false)
+				arg.ctr.buf.Shrink(nil, false)
 			}
 		} else {
 			if sels == nil {
@@ -121,11 +132,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 					}
 				}
 			}
-			arg.buf, err = tryDupBatch(proc, arg.buf)
+			arg.ctr.buf, err = tryDupBatch(proc, arg.ctr.buf)
 			if err != nil {
 				return result, err
 			}
-			arg.buf.Shrink(sels, false)
+			arg.ctr.buf.Shrink(sels, false)
 		}
 	}
 
@@ -138,11 +149,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	if arg.IsEnd {
 		result.Batch = nil
 	} else {
-		anal.Output(arg.buf, arg.GetIsLast())
-		if arg.buf == result.Batch {
-			arg.buf = nil
+		anal.Output(arg.ctr.buf, arg.GetIsLast())
+		if arg.ctr.buf == result.Batch {
+			arg.ctr.buf = nil
 		} else {
-			result.Batch = arg.buf
+			result.Batch = arg.ctr.buf
 		}
 	}
 	return result, nil

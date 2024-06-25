@@ -19,6 +19,8 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shufflebuild"
 
@@ -496,6 +498,12 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.PkTyp = t.PkTyp
 		arg.BuildIdx = t.BuildIdx
 		res.Arg = arg
+	case vm.TableScan:
+		arg := table_scan.NewArgument()
+		res.Arg = arg
+	case vm.ValueScan:
+		arg := value_scan.NewArgument()
+		res.Arg = arg
 	default:
 		panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceIns.Op))
 	}
@@ -559,13 +567,23 @@ func constructFuzzyFilter(n, tableScan, sinkScan *plan.Node) *fuzzyfilter.Argume
 	arg := fuzzyfilter.NewArgument()
 	arg.PkName = pkName
 	arg.PkTyp = pkTyp
+	arg.IfInsertFromUnique = n.IfInsertFromUnique
 
-	if tableScan.Stats.Outcnt < sinkScan.Stats.Outcnt {
-		arg.BuildIdx = 0 // build on tableScan
-		arg.N = sinkScan.Stats.Outcnt + tableScan.Stats.Outcnt
+	if (tableScan.Stats.Cost / sinkScan.Stats.Cost) < 0.3 {
+		// build on tableScan, because the existing data is significantly less than the data to be inserted
+		// this will happend
+		arg.BuildIdx = 0
+		if arg.IfInsertFromUnique {
+			// probe on sinkScan with test
+			arg.N = tableScan.Stats.Cost
+		} else {
+			// probe on sinkScan with test and add
+			arg.N = sinkScan.Stats.Cost + tableScan.Stats.Cost
+		}
 	} else {
-		arg.BuildIdx = 1 // build on sinkScan
-		arg.N = sinkScan.Stats.Outcnt
+		// build on sinkScan, as tableScan can guarantee uniqueness, probe on tableScan with test
+		arg.BuildIdx = 1
+		arg.N = sinkScan.Stats.Cost
 	}
 
 	// currently can not build runtime filter on table scan and probe it on sink scan
@@ -1185,7 +1203,7 @@ func constructDeleteDispatchAndLocal(
 	rs[currentIdx].NodeInfo = ss[currentIdx].NodeInfo
 	rs[currentIdx].Magic = Remote
 	rs[currentIdx].PreScopes = append(rs[currentIdx].PreScopes, ss[currentIdx])
-	rs[currentIdx].Proc = process.NewWithAnalyze(c.proc, c.ctx, len(ss), c.anal.analInfos)
+	rs[currentIdx].Proc = process.NewFromProc(c.proc, c.ctx, len(ss))
 	rs[currentIdx].RemoteReceivRegInfos = make([]RemoteReceivRegInfo, 0, len(ss)-1)
 
 	// use arg.RemoteRegs to know the uuid,
@@ -1910,6 +1928,14 @@ func constructJoinCondition(expr *plan.Expr, proc *process.Process) (*plan.Expr,
 		return e.F.Args[1], e.F.Args[0]
 	}
 	return e.F.Args[0], e.F.Args[1]
+}
+
+func constructTableScan() *table_scan.Argument {
+	return table_scan.NewArgument()
+}
+
+func constructValueScan() *value_scan.Argument {
+	return value_scan.NewArgument()
 }
 
 func extraJoinConditions(exprs []*plan.Expr) (*plan.Expr, []*plan.Expr) {

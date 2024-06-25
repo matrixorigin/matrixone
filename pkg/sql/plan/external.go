@@ -211,6 +211,11 @@ func getExternalStats(node *plan.Node, builder *QueryBuilder) *Stats {
 		cost += float64(fileSize[i])
 	}
 
+	//special handle for query result
+	if strings.HasPrefix(param.Filepath, "SHARED:/query_result/") {
+		return DefaultStats()
+	}
+
 	//read one line
 	fs, readPath, err := GetForETLWithType(param, param.Filepath)
 	if err != nil {

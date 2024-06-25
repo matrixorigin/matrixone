@@ -35,7 +35,6 @@ import (
 )
 
 func metadataScanPrepare(proc *process.Process, arg *Argument) (err error) {
-	arg.ctr = new(container)
 	arg.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Args)
 
 	for i := range arg.Attrs {
@@ -61,11 +60,11 @@ func metadataScan(_ int, proc *process.Process, arg *Argument, result *vm.CallRe
 		return true, nil
 	}
 
-	source, err = arg.ctr.executorsForArgs[0].Eval(proc, []*batch.Batch{bat})
+	source, err = arg.ctr.executorsForArgs[0].Eval(proc, []*batch.Batch{bat}, nil)
 	if err != nil {
 		return false, err
 	}
-	col, err = arg.ctr.executorsForArgs[1].Eval(proc, []*batch.Batch{bat})
+	col, err = arg.ctr.executorsForArgs[1].Eval(proc, []*batch.Batch{bat}, nil)
 	if err != nil {
 		return false, err
 	}

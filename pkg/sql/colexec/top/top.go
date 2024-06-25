@@ -53,7 +53,7 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	if err != nil {
 		return err
 	}
-	vec, err := arg.ctr.limitExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch})
+	vec, err := arg.ctr.limitExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 	if err != nil {
 		return err
 	}
@@ -148,7 +148,7 @@ func (ctr *container) build(ap *Argument, bat *batch.Batch, proc *process.Proces
 	ctr.n = len(bat.Vecs)
 	ctr.poses = ctr.poses[:0]
 	for i := range ap.Fs {
-		vec, err := ctr.executorsForOrderColumn[i].Eval(proc, []*batch.Batch{bat})
+		vec, err := ctr.executorsForOrderColumn[i].Eval(proc, []*batch.Batch{bat}, nil)
 		if err != nil {
 			return err
 		}

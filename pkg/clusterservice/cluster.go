@@ -342,6 +342,7 @@ func newCNService(cn logpb.CNStore) metadata.CNService {
 		WorkState:              cn.WorkState,
 		Labels:                 cn.Labels,
 		QueryAddress:           cn.QueryAddress,
+		CommitID:               cn.CommitID,
 	}
 }
 

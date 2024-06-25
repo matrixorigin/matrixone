@@ -15,8 +15,9 @@
 package disttae
 
 import (
-	"github.com/stretchr/testify/require"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 // should ensure that subscribe and unsubscribe methods are effective.
@@ -40,7 +41,7 @@ func TestSubscribedTable(t *testing.T) {
 		subscribeRecord.setTableSubscribe(tbl.db, tbl.tb)
 	}
 	require.Equal(t, 4, len(subscribeRecord.m))
-	require.Equal(t, true, subscribeRecord.getTableSubscribe(tbls[0].db, tbls[0].tb))
+	require.Equal(t, true, subscribeRecord.isSubscribed(tbls[0].db, tbls[0].tb))
 	for _, tbl := range tbls {
 		subscribeRecord.setTableUnsubscribe(tbl.db, tbl.tb)
 	}

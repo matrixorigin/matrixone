@@ -16,7 +16,6 @@ package proxy
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/util"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
@@ -24,8 +23,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 	"github.com/matrixorigin/matrixone/pkg/version"
+	"go.uber.org/zap"
 )
 
 var statsFamilyName = "proxy counter"
@@ -113,7 +114,13 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 
 // Start starts the proxy server.
 func (s *Server) Start() error {
-	return s.app.Start()
+	err := s.app.Start()
+	if err != nil {
+		s.runtime.Logger().Error("proxy server start failed", zap.Error(err))
+	} else {
+		s.runtime.Logger().Info("proxy server started")
+	}
+	return err
 }
 
 // Close closes the proxy server.

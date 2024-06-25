@@ -27,7 +27,6 @@ import (
 )
 
 func metaScanPrepare(proc *process.Process, arg *Argument) (err error) {
-	arg.ctr = new(container)
 	arg.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Args)
 	return err
 }
@@ -47,7 +46,7 @@ func metaScanCall(_ int, proc *process.Process, arg *Argument, result *vm.CallRe
 		return true, nil
 	}
 
-	v, err := arg.ctr.executorsForArgs[0].Eval(proc, []*batch.Batch{bat})
+	v, err := arg.ctr.executorsForArgs[0].Eval(proc, []*batch.Batch{bat}, nil)
 	if err != nil {
 		return false, err
 	}

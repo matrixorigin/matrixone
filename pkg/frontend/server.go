@@ -314,6 +314,15 @@ var globalRtMgr atomic.Value
 var globalPu atomic.Value
 var globalAicm atomic.Value
 var moServerStarted atomic.Bool
+var globalSessionAlloc atomic.Value
+
+func getGlobalSessionAlloc() *SessionAllocator {
+	return globalSessionAlloc.Load().(*SessionAllocator)
+}
+
+func setGlobalSessionAlloc(s *SessionAllocator) {
+	globalSessionAlloc.Store(s)
+}
 
 func setGlobalRtMgr(rtMgr *RoutineManager) {
 	globalRtMgr.Store(rtMgr)
@@ -359,7 +368,7 @@ func NewMOServer(
 ) *MOServer {
 	setGlobalPu(pu)
 	setGlobalAicm(aicm)
-
+	setGlobalSessionAlloc(NewSessionAllocator(pu))
 	rm, err := NewRoutineManager(ctx)
 	if err != nil {
 		logutil.Panicf("start server failed with %+v", err)

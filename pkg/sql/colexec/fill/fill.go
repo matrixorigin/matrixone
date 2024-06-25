@@ -63,7 +63,7 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 			if err != nil {
 				return err
 			}
-			ctr.valVecs[i], err = exe.EvalWithoutResultReusing(proc, []*batch.Batch{b})
+			ctr.valVecs[i], err = exe.EvalWithoutResultReusing(proc, []*batch.Batch{b}, nil)
 			if err != nil {
 				exe.Free()
 				return err
@@ -374,7 +374,7 @@ func processLinearCol(ctr *container, proc *process.Process, idx int) error {
 				return err
 			}
 			b.SetRowCount(1)
-			ctr.valVecs[idx], err = ctr.exes[idx].EvalWithoutResultReusing(proc, []*batch.Batch{b})
+			ctr.valVecs[idx], err = ctr.exes[idx].EvalWithoutResultReusing(proc, []*batch.Batch{b}, nil)
 			if err != nil {
 				return err
 			}

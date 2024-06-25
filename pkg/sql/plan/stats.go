@@ -208,7 +208,7 @@ func UpdateStatsInfo(info *InfoFromZoneMap, tableDef *plan.TableDef, s *pb.Stats
 
 		if info.ShuffleRanges[i] != nil {
 			if s.MinValMap[colName] != s.MaxValMap[colName] &&
-				s.TableCnt > HashMapSizeForShuffle &&
+				s.TableCnt > threshHoldForRangeShuffle &&
 				info.ColumnNDVs[i] >= ShuffleThreshHoldOfNDV &&
 				!util.JudgeIsCompositeClusterByColumn(colName) &&
 				colName != catalog.CPrimaryKeyColName {
@@ -595,7 +595,7 @@ func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableD
 	}
 	col := extractColRefInFilter(expr)
 	if col != nil {
-		blocksel := calcBlockSelectivityUsingShuffleRange(s.ShuffleRangeMap[col.Name], expr.Selectivity)
+		blocksel := calcBlockSelectivityUsingShuffleRange(s.ShuffleRangeMap[col.Name], expr)
 		switch GetSortOrder(tableDef, col.ColPos) {
 		case 0:
 			blocksel = math.Min(blocksel, 0.2)
@@ -883,6 +883,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.Outcnt = childStats.Outcnt
 			node.Stats.Cost = childStats.Outcnt
 			node.Stats.Selectivity = childStats.Selectivity
+			node.Stats.BlockNum = childStats.BlockNum
 		}
 	}
 
@@ -1016,11 +1017,18 @@ func recalcStatsByRuntimeFilter(scanNode *plan.Node, joinNode *plan.Node, builde
 		return
 	}
 
-	if joinNode.JoinType == plan.Node_INDEX {
+	if joinNode.JoinType == plan.Node_INDEX || joinNode.NodeType == plan.Node_FUZZY_FILTER {
 		scanNode.Stats.Outcnt = builder.qry.Nodes[joinNode.Children[1]].Stats.Outcnt
+		if scanNode.Stats.Outcnt > scanNode.Stats.TableCnt {
+			scanNode.Stats.Outcnt = scanNode.Stats.TableCnt
+		}
 		scanNode.Stats.BlockNum = int32(scanNode.Stats.Outcnt/3) + 1
-		scanNode.Stats.Cost = float64(scanNode.Stats.BlockNum * DefaultBlockMaxRows)
-		scanNode.Stats.Selectivity = builder.qry.Nodes[joinNode.Children[1]].Stats.Selectivity
+		scanNode.Stats.Cost = float64(scanNode.Stats.BlockNum) * DefaultBlockMaxRows
+		if scanNode.Stats.Cost > scanNode.Stats.TableCnt {
+			scanNode.Stats.Cost = scanNode.Stats.TableCnt
+			scanNode.Stats.BlockNum = int32(scanNode.Stats.TableCnt / DefaultBlockMaxRows)
+		}
+		scanNode.Stats.Selectivity = scanNode.Stats.Outcnt / scanNode.Stats.TableCnt
 		return
 	}
 	runtimeFilterSel := builder.qry.Nodes[joinNode.Children[1]].Stats.Selectivity
@@ -1265,14 +1273,30 @@ func orSelectivity(s1, s2 float64) float64 {
 	}
 }
 
+func HasShuffleInPlan(qry *plan.Query) bool {
+	for _, node := range qry.GetNodes() {
+		if node.NodeType != plan.Node_TABLE_SCAN && node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle {
+			return true
+		}
+	}
+	return false
+}
+
 func GetExecType(qry *plan.Query) ExecType {
 	ret := ExecTypeTP
 	for _, node := range qry.GetNodes() {
+		switch node.NodeType {
+		case plan.Node_RECURSIVE_CTE, plan.Node_RECURSIVE_SCAN:
+			ret = ExecTypeAP_ONECN
+		}
 		stats := node.Stats
 		if stats == nil || stats.BlockNum > int32(BlockThresholdForOneCN) || stats.Cost > float64(costThresholdForOneCN) {
 			return ExecTypeAP_MULTICN
 		}
 		if stats.BlockNum > blockThresholdForTpQuery || stats.Cost > costThresholdForTpQuery {
+			ret = ExecTypeAP_ONECN
+		}
+		if node.NodeType != plan.Node_TABLE_SCAN && stats.HashmapStats != nil && stats.HashmapStats.Shuffle {
 			ret = ExecTypeAP_ONECN
 		}
 	}
@@ -1341,8 +1365,13 @@ func DeepCopyStats(stats *plan.Stats) *plan.Stats {
 	}
 }
 
-func calcBlockSelectivityUsingShuffleRange(s *pb.ShuffleRange, sel float64) float64 {
+func calcBlockSelectivityUsingShuffleRange(s *pb.ShuffleRange, expr *plan.Expr) float64 {
+	sel := expr.Selectivity
 	if s == nil {
+		if expr.GetF().Func.ObjName == "isnull" || expr.GetF().Func.ObjName == "is_null" {
+			//speicial handle for isnull
+			return sel
+		}
 		if sel <= 0.01 {
 			return sel * 100
 		} else {

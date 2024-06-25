@@ -19,9 +19,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
-
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"time"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -30,6 +28,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -49,7 +49,7 @@ type BlockT[T common.IRef] interface {
 	GetID() *common.ID
 }
 
-func DefaultTOmbstoneFactory(meta *catalog.ObjectEntry) data.Tombstone {
+func DefaultTombstoneFactory(meta *catalog.ObjectEntry) data.Tombstone {
 	return updates.NewObjectMVCCHandle(meta)
 }
 
@@ -110,10 +110,10 @@ func (blk *baseObject) tryGetMVCC() *updates.ObjectMVCCHandle {
 	return tombstone.(*updates.ObjectMVCCHandle)
 }
 func (blk *baseObject) getOrCreateMVCC() *updates.ObjectMVCCHandle {
-	return blk.meta.GetTable().GetOrCreateTombstone(blk.meta, DefaultTOmbstoneFactory).(*updates.ObjectMVCCHandle)
+	return blk.meta.GetTable().GetOrCreateTombstone(blk.meta, DefaultTombstoneFactory).(*updates.ObjectMVCCHandle)
 }
 
-func (blk *baseObject) GCInMemeoryDeletesByTSForTest(ts types.TS) {
+func (blk *baseObject) GCInMemoryDeletesByTSForTest(ts types.TS) {
 	blk.Lock()
 	defer blk.Unlock()
 	mvcc := blk.tryGetMVCC()
@@ -493,6 +493,13 @@ func (blk *baseObject) foreachPersistedDeletes(
 	deletes, persistedByCN, deltalocCommitTS, visible, release, err := loadFn()
 	if deletes == nil || err != nil {
 		return
+	}
+	if v := ctx.Value(common.RecorderKey{}); v != nil {
+		recorder := v.(*common.DeletesCollectRecorder)
+		inst := time.Now()
+		defer func() {
+			recorder.BisectCost = time.Since(inst)
+		}()
 	}
 	defer release()
 	defer deletes.Close()
@@ -903,6 +910,12 @@ func (blk *baseObject) CollectDeleteInRangeByBlock(
 	start, end types.TS,
 	withAborted bool,
 	mp *mpool.MPool) (*containers.Batch, error) {
+	var recorder *common.DeletesCollectRecorder
+	var inst time.Time
+	if v := ctx.Value(common.RecorderKey{}); v != nil {
+		recorder = v.(*common.DeletesCollectRecorder)
+		inst = time.Now()
+	}
 	deletes, minTS, _, err := blk.inMemoryCollectDeleteInRange(
 		ctx,
 		blkID,
@@ -911,6 +924,9 @@ func (blk *baseObject) CollectDeleteInRangeByBlock(
 		withAborted,
 		mp,
 	)
+	if recorder != nil {
+		recorder.MemCost = time.Since(inst)
+	}
 	if err != nil {
 		if deletes != nil {
 			deletes.Close()

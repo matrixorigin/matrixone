@@ -58,7 +58,8 @@ var (
 	defaultRpcMaxMsgSize              = 1024 * mpool.KB
 	defaultRPCStreamPoisonTime        = 5 * time.Second
 	defaultLogtailCollectInterval     = 2 * time.Millisecond
-	defaultLogtailResponseSendTimeout = 10 * time.Second
+	defaultLogtailResponseSendTimeout = time.Minute
+	defaultPullWorkerPoolSize         = 50
 
 	storageDir     = "storage"
 	defaultDataDir = "./mo-data"
@@ -145,6 +146,7 @@ type Config struct {
 		LogtailRPCStreamPoisonTime toml.Duration `toml:"logtail-rpc-stream-poison-time"`
 		LogtailCollectInterval     toml.Duration `toml:"logtail-collect-interval"`
 		LogtailResponseSendTimeout toml.Duration `toml:"logtail-response-send-timeout"`
+		PullWorkerPoolSize         toml.ByteSize `toml:"pull-worker-pool-size"`
 	}
 
 	// Txn transactions configuration
@@ -275,6 +277,9 @@ func (c *Config) Validate() error {
 	if c.LogtailServer.LogtailResponseSendTimeout.Duration <= 0 {
 		c.LogtailServer.LogtailResponseSendTimeout.Duration = defaultLogtailResponseSendTimeout
 	}
+	if c.LogtailServer.PullWorkerPoolSize <= 0 {
+		c.LogtailServer.PullWorkerPoolSize = toml.ByteSize(defaultPullWorkerPoolSize)
+	}
 	if c.Cluster.RefreshInterval.Duration == 0 {
 		c.Cluster.RefreshInterval.Duration = time.Second * 10
 	}
@@ -383,6 +388,9 @@ func (c *Config) SetDefaultValue() {
 	}
 	if c.LogtailServer.LogtailResponseSendTimeout.Duration <= 0 {
 		c.LogtailServer.LogtailResponseSendTimeout.Duration = defaultLogtailResponseSendTimeout
+	}
+	if c.LogtailServer.PullWorkerPoolSize <= 0 {
+		c.LogtailServer.PullWorkerPoolSize = toml.ByteSize(defaultPullWorkerPoolSize)
 	}
 	if c.Cluster.RefreshInterval.Duration == 0 {
 		c.Cluster.RefreshInterval.Duration = time.Second * 10

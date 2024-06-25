@@ -18,11 +18,9 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -120,16 +118,16 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 /*
 opt3 : As mentioned before, you should think of fuzzy as a special kind of join, which also has a Build phase and a Probe phase.
 
-The previous pseudo-code has no problem with correctness, but the memory overhead in some scenarios can be significant, especially when the sink scan has much LARGER data than the table scan.
-
-	Therefore, build stage also needs to be built on smaller children.
+The previous pseudo-code has no problem with correctness, but the memory overhead in some scenarios can be significant,
+especially when the sink scan has much LARGER data than the table scan.
+Therefore, build stage also needs to be built on smaller children.
 
 # Flow of optimized pseudo-code
-
 if Stats(Table Scan) > Stats(Sink Scan)
 
 	Build on Sink scan
 		Test and Add
+		-> can be optimized to Add if the sinkScan data can guarantee uniqueness
 	Probe on Table scan
 		Test
 
@@ -139,6 +137,7 @@ else
 		Add
 	Probe on Sink scan
 		Test and Add
+		-> can be optimized to Test if the sinkScan data can guarantee uniqueness
 */
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
@@ -214,7 +213,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				result.Batch = ctr.rbat
 				result.Status = vm.ExecStop
 				ctr.state = End
-				return result, nil
+				if err := arg.Callback(ctr.rbat); err != nil {
+					return result, err
+				} else {
+					return result, nil
+				}
 			}
 
 			if bat.IsEmpty() {
@@ -244,81 +247,47 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 // utils functions
 
 func (arg *Argument) handleBuild(proc *process.Process, pkCol *vector.Vector) error {
-	ctr := arg.ctr
 	buildOnSink := arg.ifBuildOnSink()
 
-	if buildOnSink {
-		if ctr.roaringFilter != nil {
-			idx, dupVal := ctr.roaringFilter.testAndAddFunc(ctr.roaringFilter, pkCol)
-			if idx == -1 {
-				return nil
-			} else {
-				return moerr.NewDuplicateEntry(proc.Ctx, valueToString(dupVal), arg.PkName)
-			}
+	if buildOnSink { // build fuzzy on sink scan
+		if arg.IfInsertFromUnique {
+			arg.add(pkCol)
 		} else {
-			ctr.bloomFilter.TestAndAdd(pkCol, func(exist bool, i int) {
-				if exist {
-					if ctr.collisionCnt < maxCheckDupCount {
-						arg.appendCollisionKey(proc, i, pkCol)
-						return
-					}
-					logutil.Warnf("too many collision for fuzzy filter")
-				}
-			})
+			// The data source of sink scan cannot ensure whether the data itself is duplicated
+			err := arg.testAndAdd(proc, pkCol)
+			if err != nil {
+				return err
+			}
 		}
 	} else { // build on table scan
-		if ctr.roaringFilter != nil {
-			ctr.roaringFilter.addFunc(ctr.roaringFilter, pkCol)
-		} else {
-			ctr.bloomFilter.Add(pkCol)
-		}
+		arg.add(pkCol)
 	}
 
 	return nil
 }
 
 func (arg *Argument) handleProbe(proc *process.Process, pkCol *vector.Vector) error {
-	ctr := arg.ctr
 	buildOnSink := arg.ifBuildOnSink()
+	probeOnSink := !buildOnSink
 
-	if buildOnSink {
-		if ctr.roaringFilter != nil { // probe on table scan
-			idx, dupVal := ctr.roaringFilter.testFunc(ctr.roaringFilter, pkCol)
-			if idx == -1 {
-				return nil
-			} else {
-				return moerr.NewDuplicateEntry(proc.Ctx, valueToString(dupVal), arg.PkName)
+	if probeOnSink {
+		if arg.IfInsertFromUnique {
+			err := arg.test(proc, pkCol)
+			if err != nil {
+				return err
 			}
 		} else {
-			ctr.bloomFilter.Test(pkCol, func(exist bool, i int) {
-				if exist {
-					if ctr.collisionCnt < maxCheckDupCount {
-						arg.appendCollisionKey(proc, i, pkCol)
-					}
-				}
-			})
+			err := arg.testAndAdd(proc, pkCol)
+			if err != nil {
+				return err
+			}
 		}
-	} else { // probe on sink scan
-		if ctr.roaringFilter != nil {
-			idx, dupVal := ctr.roaringFilter.testAndAddFunc(ctr.roaringFilter, pkCol)
-			if idx == -1 {
-				return nil
-			} else {
-				return moerr.NewDuplicateEntry(proc.Ctx, valueToString(dupVal), arg.PkName)
-			}
-		} else {
-			ctr.bloomFilter.TestAndAdd(pkCol, func(exist bool, i int) {
-				if exist {
-					if ctr.collisionCnt < maxCheckDupCount {
-						arg.appendCollisionKey(proc, i, pkCol)
-						return
-					}
-					logutil.Warnf("too many collision for fuzzy filter")
-				}
-			})
+	} else { // probe on table scan
+		err := arg.test(proc, pkCol)
+		if err != nil {
+			return err
 		}
 	}
-
 	return nil
 }
 

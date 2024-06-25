@@ -23,7 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func PrefixEq(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func PrefixEq(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	if parameters[1].AllNull() {
 		result.GetResultVector().GetNulls().AddRange(0, uint64(length))
 		return nil
@@ -63,7 +63,7 @@ func PrefixEq(parameters []*vector.Vector, result vector.FunctionResultWrapper, 
 	return nil
 }
 
-func PrefixBetween(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func PrefixBetween(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	ivec := parameters[0]
 	lval := parameters[1].GetBytesAt(0)
 	rval := parameters[2].GetBytesAt(0)
@@ -99,7 +99,7 @@ func PrefixBetween(parameters []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
-func PrefixIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func PrefixIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	lvec := parameters[0]
 	rvec := parameters[1]
 	res := vector.MustFixedCol[bool](result.GetResultVector())

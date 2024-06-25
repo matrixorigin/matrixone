@@ -28,9 +28,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -97,6 +99,51 @@ func (s *Scope) release() {
 	reuse.Free[Scope](s, nil)
 }
 
+func (s *Scope) Reset(c *Compile) error {
+	err := s.resetForReuse(c)
+	if err != nil {
+		return err
+	}
+	for _, scope := range s.PreScopes {
+		err := scope.Reset(c)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Scope) resetForReuse(c *Compile) (err error) {
+	if s.Proc != nil {
+		newctx, cancel := context.WithCancel(c.ctx)
+		s.Proc.SetPrepareBatch(c.proc.GetPrepareBatch())
+		s.Proc.SetPrepareExprList(c.proc.GetPrepareExprList())
+		s.Proc.SetPrepareParams(c.proc.GetPrepareParams())
+		s.Proc.TxnClient = c.proc.TxnClient
+		s.Proc.TxnOperator = c.proc.TxnOperator
+		s.Proc.SessionInfo = c.proc.SessionInfo
+		s.Proc.UnixTime = c.proc.UnixTime
+		s.Proc.LastInsertID = c.proc.LastInsertID
+		s.Proc.MessageBoard = c.proc.MessageBoard
+		s.Proc.Ctx = newctx
+		s.Proc.Cancel = cancel
+	}
+	for _, ins := range s.Instructions {
+		if ins.Op == vm.Output {
+			ins.Arg.(*output.Argument).Func = c.fill
+		}
+	}
+	if s.DataSource != nil {
+		if s.DataSource.isConst {
+			s.DataSource.Bat = nil
+		} else {
+			s.DataSource.Rel = nil
+			s.DataSource.R = nil
+		}
+	}
+	return nil
+}
+
 func (s *Scope) initDataSource(c *Compile) (err error) {
 	if s.DataSource == nil {
 		return nil
@@ -105,11 +152,16 @@ func (s *Scope) initDataSource(c *Compile) (err error) {
 		if s.DataSource.Bat != nil {
 			return
 		}
-		bat, err := constructValueScanBatch(s.Proc.Ctx, c.proc, s.DataSource.node)
-		if err != nil {
-			return err
+
+		if len(s.Instructions) > 0 && s.Instructions[0].Op == vm.ValueScan {
+			if s.DataSource.node.NodeType == plan.Node_VALUE_SCAN {
+				bat, err := constructValueScanBatch(s.Proc.Ctx, c.proc, s.DataSource.node)
+				if err != nil {
+					return err
+				}
+				s.DataSource.Bat = bat
+			}
 		}
-		s.DataSource.Bat = bat
 	} else {
 		if s.DataSource.TableDef != nil {
 			return nil
@@ -135,27 +187,20 @@ func (s *Scope) Run(c *Compile) (err error) {
 	}()
 
 	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
-	// DataSource == nil specify the empty scan
-	if s.DataSource == nil {
-		p = pipeline.New(0, nil, s.Instructions, s.Reg)
-		if _, err = p.ConstRun(nil, s.Proc); err != nil {
-			return err
-		}
+
+	id := uint64(0)
+	if s.DataSource.TableDef != nil {
+		id = s.DataSource.TableDef.TblId
+	}
+	p = pipeline.New(id, s.DataSource.Attributes, s.Instructions, s.Reg)
+	if s.DataSource.isConst {
+		_, err = p.ConstRun(s.DataSource.Bat, s.Proc)
 	} else {
-		id := uint64(0)
-		if s.DataSource.TableDef != nil {
-			id = s.DataSource.TableDef.TblId
+		var tag int32
+		if s.DataSource.node != nil && len(s.DataSource.node.RecvMsgList) > 0 {
+			tag = s.DataSource.node.RecvMsgList[0].MsgTag
 		}
-		p = pipeline.New(id, s.DataSource.Attributes, s.Instructions, s.Reg)
-		if s.DataSource.isConst {
-			_, err = p.ConstRun(s.DataSource.Bat, s.Proc)
-		} else {
-			var tag int32
-			if s.DataSource.node != nil && len(s.DataSource.node.RecvMsgList) > 0 {
-				tag = s.DataSource.node.RecvMsgList[0].MsgTag
-			}
-			_, err = p.Run(s.DataSource.R, tag, s.Proc)
-		}
+		_, err = p.Run(s.DataSource.R, tag, s.Proc)
 	}
 
 	select {
@@ -391,7 +436,7 @@ func buildJoinParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	for i := 0; i < mcpu; i++ {
 		ss[i] = newScope(Merge)
 		ss[i].NodeInfo = s.NodeInfo
-		ss[i].Proc = process.NewWithAnalyze(s.Proc, s.Proc.Ctx, 2, c.anal.Nodes())
+		ss[i].Proc = process.NewFromProc(s.Proc, s.Proc.Ctx, 2)
 		ss[i].Proc.Reg.MergeReceivers[1].Ch = make(chan *process.RegisterMessage, 10)
 	}
 	probeScope, buildScope := c.newJoinProbeScope(s, ss), c.newJoinBuildScope(s, ss)
@@ -447,7 +492,7 @@ func buildLoadParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		ss[i].DataSource = &Source{
 			isConst: true,
 		}
-		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
+		ss[i].Proc = process.NewFromProc(s.Proc, c.ctx, 0)
 		if err := ss[i].initDataSource(c); err != nil {
 			return nil, err
 		}
@@ -504,7 +549,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 
 		readers, err = c.e.NewBlockReader(
 			ctx, scanUsedCpuNumber,
-			s.DataSource.Timestamp, s.DataSource.FilterExpr, s.NodeInfo.Data, s.DataSource.TableDef, c.proc)
+			s.DataSource.Timestamp, s.DataSource.FilterExpr, nil, s.NodeInfo.Data, s.DataSource.TableDef, c.proc)
 		if err != nil {
 			return nil, err
 		}
@@ -704,7 +749,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 			Attributes:   s.DataSource.Attributes,
 			AccountId:    s.DataSource.AccountId,
 		}
-		readerScopes[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
+		readerScopes[i].Proc = process.NewFromProc(s.Proc, c.ctx, 0)
 		readerScopes[i].TxnOffset = s.TxnOffset
 	}
 
@@ -786,7 +831,11 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		isFilterOnPK := s.DataSource.TableDef.Pkey != nil && col.Name == s.DataSource.TableDef.Pkey.PkeyColName
 		if !isFilterOnPK {
 			// put expr in filter instruction
-			ins := s.Instructions[0]
+			idx := 0
+			if _, ok := s.Instructions[0].Arg.(*table_scan.Argument); ok {
+				idx = 1
+			}
+			ins := s.Instructions[idx]
 			arg, ok := ins.Arg.(*filter.Argument)
 			if !ok {
 				panic("missing instruction for runtime filter!")
@@ -795,7 +844,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 			if arg.E != nil {
 				newExprList = append(newExprList, arg.E)
 			}
-			arg.E = colexec.RewriteFilterExprList(newExprList)
+			arg.SetExeExpr(colexec.RewriteFilterExprList(newExprList))
 		}
 	}
 
