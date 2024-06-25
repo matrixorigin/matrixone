@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
@@ -94,6 +95,51 @@ func (s *Scope) release() {
 		s.Instructions[i].Arg = nil
 	}
 	reuse.Free[Scope](s, nil)
+}
+
+func (s *Scope) Reset(c *Compile) error {
+	err := s.resetForReuse(c)
+	if err != nil {
+		return err
+	}
+	for _, scope := range s.PreScopes {
+		err := scope.Reset(c)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Scope) resetForReuse(c *Compile) (err error) {
+	if s.Proc != nil {
+		newctx, cancel := context.WithCancel(c.ctx)
+		s.Proc.SetPrepareBatch(c.proc.GetPrepareBatch())
+		s.Proc.SetPrepareExprList(c.proc.GetPrepareExprList())
+		s.Proc.SetPrepareParams(c.proc.GetPrepareParams())
+		s.Proc.TxnClient = c.proc.TxnClient
+		s.Proc.TxnOperator = c.proc.TxnOperator
+		s.Proc.SessionInfo = c.proc.SessionInfo
+		s.Proc.UnixTime = c.proc.UnixTime
+		s.Proc.LastInsertID = c.proc.LastInsertID
+		s.Proc.MessageBoard = c.proc.MessageBoard
+		s.Proc.Ctx = newctx
+		s.Proc.Cancel = cancel
+	}
+	for _, ins := range s.Instructions {
+		if ins.Op == vm.Output {
+			ins.Arg.(*output.Argument).Func = c.fill
+		}
+	}
+	if s.DataSource != nil {
+		if s.DataSource.isConst {
+			s.DataSource.Bat = nil
+		} else {
+			s.DataSource.Rel = nil
+			s.DataSource.R = nil
+		}
+	}
+	return nil
 }
 
 func (s *Scope) initDataSource(c *Compile) (err error) {

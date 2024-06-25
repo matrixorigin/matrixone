@@ -61,6 +61,7 @@ type Argument struct {
 	PkName             string
 	PkTyp              plan.Type
 	BuildIdx           int
+	Callback           func(bat *batch.Batch) error
 	IfInsertFromUnique bool
 
 	RuntimeFilterSpec *plan.RuntimeFilterSpec
