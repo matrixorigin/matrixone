@@ -1340,13 +1340,6 @@ func checkAndRestorePublicationRecord(
 }
 
 func mockInsertSnapshotRecord(ctx context.Context, bh BackgroundExec, snapshot *snapshotRecord, toAccountId int32, accountName string) (snapshotName string, err error) {
-	if err = bh.Exec(ctx, "begin;"); err != nil {
-		return
-	}
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-
 	// mock snapshot id and snapshot name
 	snapshotUId, err := uuid.NewV7()
 	if err != nil {
@@ -1371,27 +1364,13 @@ func mockInsertSnapshotRecord(ctx context.Context, bh BackgroundExec, snapshot *
 	if err = bh.Exec(ctx, sql); err != nil {
 		return
 	}
-
-	if err != nil {
-		return
-	}
-
 	return
 }
 
 func mockDeleteSnapshotRecord(ctx context.Context, bh BackgroundExec, snapshot *snapshotRecord, snapshotName string) (err error) {
-	if err = bh.Exec(ctx, "begin;"); err != nil {
-		return
-	}
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
 	sql := getSqlForDropSnapshot(snapshotName)
 	getLogger().Info(fmt.Sprintf("[%s] mock delete snapshot record sql: %s", snapshot.snapshotName, sql))
 	if err = bh.Exec(ctx, sql); err != nil {
-		return
-	}
-	if err != nil {
 		return
 	}
 	return
