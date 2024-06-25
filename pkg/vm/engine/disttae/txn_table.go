@@ -709,7 +709,7 @@ func (tbl *txnTable) rangesOnePart(
 	}
 
 	if dirtyBlks == nil {
-		tbl.collectDirtyBlocks(state, uncommittedObjects, txnOffset)
+		dirtyBlks = tbl.collectDirtyBlocks(state, uncommittedObjects, txnOffset)
 	}
 
 	// for dynamic parameter, substitute param ref and const fold cast expression here to improve performance
