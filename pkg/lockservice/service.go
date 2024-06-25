@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/list"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"go.uber.org/zap"
 )
 
 // WithWait setup wait func to wait some condition ready
