@@ -51,9 +51,7 @@ type MOServer struct {
 	wg      sync.WaitGroup
 	running bool
 
-	pu     *config.ParameterUnit
-	logger *zap.Logger
-
+	pu        *config.ParameterUnit
 	listeners []net.Listener
 }
 
@@ -104,7 +102,7 @@ func (mo *MOServer) Stop() error {
 		return errors[0]
 	}
 
-	mo.logger.Debug("application listener closed")
+	logutil.Debug("application listener closed")
 	mo.wg.Wait()
 
 	for s := range mo.rm.clients {
@@ -112,14 +110,14 @@ func (mo *MOServer) Stop() error {
 			return err
 		}
 	}
-	mo.logger.Debug("application stopped")
+	logutil.Debug("application stopped")
 	return nil
 }
 
 func (mo *MOServer) startListener() {
-	mo.logger.Debug("mo server accept loop started")
+	logutil.Debug("mo server accept loop started")
 	defer func() {
-		mo.logger.Debug("mo server accept loop stopped")
+		logutil.Debug("mo server accept loop stopped")
 	}()
 
 	for _, listener := range mo.listeners {
@@ -160,7 +158,7 @@ func (mo *MOServer) handleConn(conn net.Conn) {
 	rs, err := NewIOSession(conn, mo.pu)
 	if err != nil {
 		mo.rm.Closed(rs)
-		mo.logger.Error("NewIOSession error", zap.Error(err))
+		logutil.Error("NewIOSession error", zap.Error(err))
 		return
 	}
 	mo.rm.Created(rs)
@@ -168,7 +166,7 @@ func (mo *MOServer) handleConn(conn net.Conn) {
 
 	if err != nil {
 		mo.rm.Closed(rs)
-		mo.logger.Error("HandShake error", zap.Error(err))
+		logutil.Error("HandShake error", zap.Error(err))
 		return
 	}
 	mo.handleLoop(rs)
@@ -177,11 +175,11 @@ func (mo *MOServer) handleConn(conn net.Conn) {
 func (mo *MOServer) handleLoop(rs *Conn) {
 	defer func() {
 		if err := rs.Close(); err != nil {
-			mo.logger.Error("close session failed", zap.Error(err))
+			logutil.Error("close session failed", zap.Error(err))
 		}
 	}()
 	if err := mo.handleMessage(rs); err != nil {
-		mo.logger.Error("handle session failed", zap.Error(err))
+		logutil.Error("handle session failed", zap.Error(err))
 	}
 }
 
@@ -208,7 +206,7 @@ func (mo *MOServer) handshake(rs *Conn) error {
 	err = protocol.WriteHandshake()
 
 	if err != nil {
-		mo.logger.Error(
+		logutil.Error(
 			"Failed to handshake with server, quitting routine...",
 			zap.Error(err))
 		routine.killConnection(true)
@@ -395,7 +393,6 @@ func NewMOServer(
 		rm:          rm,
 		readTimeout: pu.SV.SessionTimeout.Duration,
 		pu:          pu,
-		logger:      logutil.GetGlobalLogger(),
 	}
 	listenerTcp, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -438,6 +435,10 @@ func (mo *MOServer) handleRequest(rs *Conn) error {
 	}()
 	msg, err = rs.Read()
 	if err != nil {
+		if err == io.EOF {
+			return err
+		}
+
 		logutil.Error("session read failed",
 			zap.Error(err))
 		return err

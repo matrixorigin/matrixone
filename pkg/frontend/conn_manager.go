@@ -91,10 +91,17 @@ func (c *Conn) UseConn(conn net.Conn) {
 	c.conn = conn
 }
 func (c *Conn) Disconnect() error {
+	if c.connected == false {
+		return nil
+	}
 	return c.closeConn()
 }
 
 func (c *Conn) Close() error {
+	if c.connected == false {
+		return nil
+	}
+
 	err := c.closeConn()
 	if err != nil {
 		return err
