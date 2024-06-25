@@ -19,7 +19,7 @@ func TestMySQLProtocolRead(t *testing.T) {
 		panic(err)
 	}
 	pu := config.NewParameterUnit(sv, nil, nil, nil)
-	cm := NewIOSession(client, pu)
+	cm, err := NewIOSession(client, pu)
 	convey.Convey("read big packet succ", t, func() {
 		exceptPayload := make([]byte, 0)
 		go func() {
