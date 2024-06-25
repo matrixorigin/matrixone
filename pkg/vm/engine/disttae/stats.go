@@ -372,11 +372,6 @@ func (gs *GlobalStats) waitLogtailUpdated(tid uint64) {
 var count atomic.Int32
 
 func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
-	ts, ok := gs.statsUpdated.Load(key)
-	if ok && time.Since(ts.(time.Time)) < MinUpdateInterval {
-		return
-	}
-
 	// wait until the table's logtail has been updated.
 	gs.waitLogtailUpdated(key.TableID)
 
@@ -402,7 +397,6 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 			})
 		}
 
-		// update the time to current time only if the stats is not nil.
 		if updated {
 			gs.mu.statsInfoMap[key] = stats
 		} else if _, ok := gs.mu.statsInfoMap[key]; !ok {
@@ -444,9 +438,15 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 		return
 	}
 
+	// Protect the update progress.
+	ts, ok := gs.statsUpdated.Load(key)
+	if ok && time.Since(ts.(time.Time)) < MinUpdateInterval {
+		return
+	}
 	// The update time of the table key should be updated just before
 	// trying to update stats.
 	gs.statsUpdated.Store(key, time.Now())
+
 	start := time.Now()
 
 	logutil.Errorf("stats start update %+v", key)
