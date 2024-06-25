@@ -15,11 +15,11 @@
 package model
 
 import (
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
@@ -116,22 +116,16 @@ func (table *TransferTable[T]) AddPage(page T) (dup bool) {
 	return
 }
 
-func (table *TransferTable[T]) DeletePage(id *common.ID) (deleted bool) {
+func (table *TransferTable[T]) DeletePage(id *common.ID) {
 	table.Lock()
 	defer table.Unlock()
-	if _, deleted = table.pages[*id]; !deleted {
+	if _, ok := table.pages[*id]; !ok {
 		return
 	}
+	cnt := table.pages[*id].Val.Length()
 	delete(table.pages, *id)
 
-	// to pass ut
-	if len(table.pages) == 0 || table.pages[*id] == nil {
-		return
-	}
-
-	cnt := table.pages[*id].Val.Length()
 	v2.TaskMergeTransferPageLengthGauge.Sub(float64(cnt))
-	return
 }
 
 func (table *TransferTable[T]) Close() {
