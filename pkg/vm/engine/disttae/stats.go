@@ -17,10 +17,12 @@ package disttae
 import (
 	"context"
 	"math"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -246,14 +248,18 @@ func (gs *GlobalStats) consumeWorker(ctx context.Context) {
 }
 
 func (gs *GlobalStats) updateWorker(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
+	for i := 0; i < runtime.NumCPU(); i++ {
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
 
-		case key := <-gs.updateC:
-			go gs.updateTableStats(key)
-		}
+				case key := <-gs.updateC:
+					gs.updateTableStats(key)
+				}
+			}
+		}()
 	}
 }
 
@@ -311,6 +317,11 @@ func (gs *GlobalStats) notifyLogtailUpdate(tid uint64) {
 }
 
 func (gs *GlobalStats) waitLogtailUpdated(tid uint64) {
+	// If the tid is less than reserved, return immediately.
+	if tid < catalog.MO_RESERVED_MAX {
+		return
+	}
+
 	// checkUpdated is a function used to check if the table's
 	// first logtail has been received. Return true means that
 	// the first logtail has already been received by the CN server.
