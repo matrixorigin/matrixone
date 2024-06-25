@@ -1257,7 +1257,7 @@ func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMess
 				message.NeedNotReply = false
 				message.Uuid = uuid
 
-				if errSend := sender.streamSender.Send(s.Proc.Ctx, message); errSend != nil {
+				if errSend := sender.streamSender.Send(sender.ctx, message); errSend != nil {
 					closeWithError(errSend, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
 					return
 				}
