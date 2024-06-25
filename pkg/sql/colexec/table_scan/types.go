@@ -25,17 +25,18 @@ import (
 
 var _ vm.Operator = new(Argument)
 
+type container struct {
+	maxAllocSize int
+	orderBy      []*plan.OrderBySpec
+	buf          *batch.Batch
+	msgReceiver  *process.MessageReceiver
+}
 type Argument struct {
-	msgReceiver    *process.MessageReceiver
+	ctr            *container
 	TopValueMsgTag int32
-	OrderBy        []*plan.OrderBySpec
 	Reader         engine.Reader
 	Attrs          []string
 	TableID        uint64
-
-	buf *batch.Batch
-
-	maxAllocSize int
 
 	vm.OperatorBase
 }
@@ -76,14 +77,17 @@ func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if arg.buf != nil {
-		arg.buf.Clean(proc.Mp())
-		arg.buf = nil
+	if arg.ctr != nil {
+		if arg.ctr.buf != nil {
+			arg.ctr.buf.Clean(proc.Mp())
+			arg.ctr.buf = nil
+		}
+		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+		anal.Alloc(int64(arg.ctr.maxAllocSize))
+		if arg.ctr.msgReceiver != nil {
+			arg.ctr.msgReceiver.Free()
+			arg.ctr.msgReceiver = nil
+		}
+		arg.ctr = nil
 	}
-
-	if arg.msgReceiver != nil {
-		arg.msgReceiver.Free()
-	}
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
-	anal.Alloc(int64(arg.maxAllocSize))
 }

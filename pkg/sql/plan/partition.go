@@ -17,10 +17,10 @@ package plan
 import (
 	"context"
 	"fmt"
-	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
 	"go/constant"
 	"strings"
 
+	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -110,9 +110,9 @@ func (p *partitionExprChecker) extractColumns(ctx context.Context, _ *plan.Table
 		return nil
 	}
 
-	colInfo := findColumnByName(columnNameExpr.Parts[0], p.tableInfo)
+	colInfo := findColumnByName(columnNameExpr.ColName(), p.tableInfo)
 	if colInfo == nil {
-		return moerr.NewBadFieldError(ctx, columnNameExpr.Parts[0], "partition function")
+		return moerr.NewBadFieldError(ctx, columnNameExpr.ColNameOrigin(), "partition function")
 	}
 
 	p.columns = append(p.columns, colInfo)
@@ -360,13 +360,13 @@ func getPrimaryKeyAndUniqueKey(defs tree.TableDefs) (primaryKeys []*tree.Unresol
 // This method is used to generate partition ast for key partition and hash partition
 // For example: abs (hash_value (col3))% 4
 func genPartitionAst(exprs tree.Exprs, partNum int64) tree.Expr {
-	hashFuncName := tree.SetUnresolvedName(strings.ToLower("hash_value"))
+	hashFuncName := tree.NewUnresolvedColName("hash_value")
 	hashfuncExpr := &tree.FuncExpr{
 		Func:  tree.FuncName2ResolvableFunctionReference(hashFuncName),
 		Exprs: exprs,
 	}
 
-	absFuncName := tree.SetUnresolvedName(strings.ToLower("abs"))
+	absFuncName := tree.NewUnresolvedColName("abs")
 	absFuncExpr := &tree.FuncExpr{
 		Func:  tree.FuncName2ResolvableFunctionReference(absFuncName),
 		Exprs: tree.Exprs{hashfuncExpr},

@@ -30,6 +30,7 @@ type container struct {
 	colexec.ReceiverOperator
 	seen          uint64
 	limit         uint64
+	buf           *batch.Batch
 	limitExecutor colexec.ExpressionExecutor
 }
 
@@ -38,7 +39,6 @@ type Argument struct {
 	Limit *plan.Expr
 	// ctr stores the attributes needn't do Serialization work
 	ctr *container
-	buf *batch.Batch
 	vm.OperatorBase
 }
 
@@ -89,10 +89,11 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 			arg.ctr.limitExecutor.Free()
 			arg.ctr.limitExecutor = nil
 		}
+		if arg.ctr.buf != nil {
+			arg.ctr.buf.Clean(proc.Mp())
+			arg.ctr.buf = nil
+		}
 		arg.ctr = nil
 	}
-	if arg.buf != nil {
-		arg.buf.Clean(proc.Mp())
-		arg.buf = nil
-	}
+
 }
