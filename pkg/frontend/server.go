@@ -405,6 +405,12 @@ func (mo *MOServer) handleMessage(rs *Conn) error {
 	for {
 		err := mo.handleRequest(rs)
 		if err != nil {
+			if err == io.EOF {
+				return nil
+			}
+
+			logutil.Error("session read failed",
+				zap.Error(err))
 			return err
 		}
 	}
@@ -418,10 +424,6 @@ func (mo *MOServer) handleRequest(rs *Conn) error {
 	}()
 	msg, err = rs.Read()
 	if err != nil {
-		if err == io.EOF {
-			return nil
-		}
-
 		logutil.Error("session read failed",
 			zap.Error(err))
 		return err
