@@ -110,6 +110,9 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 	// generate a new pipeline to send data in local.
 	// value_scan -> connector / dispatch -> next pipeline.
 	fakeValueScanOperator := value_scan.NewArgument()
+	if err := fakeValueScanOperator.Prepare(s.Proc); err != nil {
+		return err
+	}
 	defer func() {
 		fakeValueScanOperator.Release()
 	}()
