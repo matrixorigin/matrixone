@@ -1677,6 +1677,9 @@ func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) 
 	}
 	//for S3 delete
 	if name != catalog.Row_ID {
+		logutil.Infof("xxxx table:%s, txn:%s, deletes flush to S3",
+			tbl.tableName,
+			tbl.db.op.Txn().DebugString())
 		return tbl.EnhanceDelete(bat, name)
 	}
 	bat = tbl.getTxn().deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
