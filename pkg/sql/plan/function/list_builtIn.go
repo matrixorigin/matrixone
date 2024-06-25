@@ -5546,7 +5546,7 @@ var supportedOthersBuiltIns = []FuncNew{
 				volatile:        true,
 				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint16.ToType()
+					return types.T_enum.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return CastValueToIndex
@@ -5569,7 +5569,7 @@ var supportedOthersBuiltIns = []FuncNew{
 				volatile:        true,
 				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint16.ToType()
+					return types.T_enum.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return CastIndexValueToIndex
