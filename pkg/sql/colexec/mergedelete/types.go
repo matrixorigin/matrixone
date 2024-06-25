@@ -24,7 +24,8 @@ import (
 var _ vm.Operator = new(Argument)
 
 type Argument struct {
-	AffectedRows uint64
+	AddAffectedRows bool
+	AffectedRows    uint64
 	// 1. single table's delete (main table)
 	DelSource engine.Relation
 	// 2. partition sub tables
@@ -65,6 +66,11 @@ func (arg *Argument) WithDelSource(delSource engine.Relation) *Argument {
 
 func (arg *Argument) WithPartitionSources(partitionSources []engine.Relation) *Argument {
 	arg.PartitionSources = partitionSources
+	return arg
+}
+
+func (arg *Argument) WithAddAffectedRows(addAffectedRows bool) *Argument {
+	arg.AddAffectedRows = addAffectedRows
 	return arg
 }
 
