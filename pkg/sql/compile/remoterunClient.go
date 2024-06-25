@@ -33,6 +33,10 @@ import (
 	"time"
 )
 
+// MaxRpcTime is a default timeout time to rpc context if user never set this deadline.
+// this is just a number I casually wrote, the purpose of doing this is that any message sent through rpc need a clear deadline.
+const MaxRpcTime = time.Hour * 24
+
 // remoteRun sends a scope to remote node for running.
 // and keep receiving the back results.
 //
@@ -207,7 +211,7 @@ func newMessageSenderOnClient(
 	}
 
 	if _, ok := ctx.Deadline(); !ok {
-		sender.ctx, sender.ctxCancel = context.WithTimeout(ctx, time.Second*10000)
+		sender.ctx, sender.ctxCancel = context.WithTimeout(ctx, MaxRpcTime)
 	} else {
 		sender.ctx = ctx
 	}
