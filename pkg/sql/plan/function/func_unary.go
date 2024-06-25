@@ -16,8 +16,11 @@ package function
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/md5"
 	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -1053,6 +1056,84 @@ func octFloat[T constraints.Float](xs T) (types.Decimal128, error) {
 		}
 	}
 	return res, nil
+}
+
+// encode function encrypts a string, returns a binary string of the same length of the original string.
+// https://dev.mysql.com/doc/refman/5.7/en/encryption-functions.html#function_encode
+func encodeToBytes(data []byte, key []byte, null bool, rs *vector.FunctionResult[types.Varlena]) error {
+	if null {
+		return rs.AppendMustNullForBytesResult()
+	}
+
+	hashedKey := sha256.Sum256(key)
+	block, err := aes.NewCipher(hashedKey[:])
+	if err != nil {
+		fmt.Printf("Error creating cipher: %v\n", err)
+		return rs.AppendMustNullForBytesResult()
+	}
+
+	ciphertext := make([]byte, len(data))
+	stream := cipher.NewCFBEncrypter(block, hashedKey[:block.BlockSize()])
+	stream.XORKeyStream(ciphertext, data)
+
+	return rs.AppendMustBytesValue(ciphertext)
+}
+
+func Encode(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	source := vector.GenerateFunctionStrParameter(parameters[0])
+	key := vector.GenerateFunctionStrParameter(parameters[1])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		data, nullData := source.GetStrValue(i)
+		keyData, nullKey := key.GetStrValue(i)
+		if err := encodeToBytes(data, keyData, nullData || nullKey, rs); err != nil {
+			fmt.Printf("Error encoding row %d: %v\n", i, err)
+			return err
+		}
+	}
+
+	return nil
+}
+
+// decode function decodes an encoded string and returns the original string
+// https://dev.mysql.com/doc/refman/5.7/en/encryption-functions.html#function_decode
+func decodeFromBytes(data []byte, key []byte, null bool, rs *vector.FunctionResult[types.Varlena]) error {
+	if null {
+		return rs.AppendMustNullForBytesResult()
+	}
+
+	hashedKey := sha256.Sum256(key)
+	block, err := aes.NewCipher(hashedKey[:])
+	if err != nil {
+		fmt.Printf("Error creating cipher: %v\n", err)
+		return rs.AppendMustNullForBytesResult()
+	}
+
+	plaintext := make([]byte, len(data))
+	stream := cipher.NewCFBDecrypter(block, hashedKey[:block.BlockSize()])
+	stream.XORKeyStream(plaintext, data)
+
+	return rs.AppendMustBytesValue(plaintext)
+}
+
+func Decode(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	source := vector.GenerateFunctionStrParameter(parameters[0])
+	key := vector.GenerateFunctionStrParameter(parameters[1])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		data, nullData := source.GetStrValue(i)
+		keyData, nullKey := key.GetStrValue(i)
+		if err := decodeFromBytes(data, keyData, nullData || nullKey, rs); err != nil {
+			fmt.Printf("Error decoding row %d: %v\n", i, err)
+			return err
+		}
+	}
+
+	return nil
 }
 
 func DateToMonth(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
