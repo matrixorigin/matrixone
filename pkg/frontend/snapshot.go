@@ -362,6 +362,14 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		return moerr.NewInternalError(ctx, "can't restore db: %v", dbName)
 	}
 
+	// restore as a txn
+	if err = bh.Exec(ctx, "begin;"); err != nil {
+		return err
+	}
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+
 	if snapshot.level == tree.RESTORELEVELCLUSTER.String() && len(srcAccountName) != 0 {
 		toAccountId, err = getAccountId(ctx, bh, srcAccountName)
 		if err != nil {
@@ -376,14 +384,6 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 			err = mockDeleteSnapshotRecord(ctx, bh, snapshot, sp)
 		}()
 	}
-
-	// restore as a txn
-	if err = bh.Exec(ctx, "begin;"); err != nil {
-		return err
-	}
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
 
 	// drop foreign key related tables first
 	if err = deleteCurFkTables(ctx, bh, dbName, tblName, toAccountId); err != nil {
