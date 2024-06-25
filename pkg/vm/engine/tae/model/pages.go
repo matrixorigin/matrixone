@@ -320,10 +320,11 @@ func (c *TransferPageCleaner) Handler() {
 				delPages = append(delPages, e)
 			}
 		}
-		c.latch.Unlock()
 		for _, e := range delPages {
 			c.pages.Remove(e)
 		}
+		c.latch.Unlock()
+
 		for e := c.persistedPages.Front(); e != nil; e = e.Next() {
 			page := e.Value.(*transferPage)
 			if time.Since(page.page.bornTS) > page.page.params.DiskTTL {
