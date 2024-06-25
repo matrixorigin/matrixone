@@ -157,9 +157,14 @@ func (mo *MOServer) startAccept(listener net.Listener) {
 	}
 }
 func (mo *MOServer) handleConn(conn net.Conn) {
-	rs := NewIOSession(conn, mo.pu)
+	rs, err := NewIOSession(conn, mo.pu)
+	if err != nil {
+		mo.rm.Closed(rs)
+		mo.logger.Error("NewIOSession error", zap.Error(err))
+		return
+	}
 	mo.rm.Created(rs)
-	err := mo.handshake(rs)
+	err = mo.handshake(rs)
 
 	if err != nil {
 		mo.rm.Closed(rs)

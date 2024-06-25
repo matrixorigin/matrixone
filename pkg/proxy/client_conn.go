@@ -209,7 +209,11 @@ func newClientConn(
 		EnableTls: cfg.TLSEnabled,
 	}
 	fp.SetDefaultValues()
-	c.mysqlProto = frontend.NewMysqlClientProtocol(c.connID, frontend.NewIOSession(c.RawConn(), nil), 0, &fp)
+	ios, err := frontend.NewIOSession(c.RawConn(), nil)
+	if err != nil {
+		return nil, err
+	}
+	c.mysqlProto = frontend.NewMysqlClientProtocol(c.connID, ios, 0, &fp)
 	if cfg.TLSEnabled {
 		tlsConfig, err := frontend.ConstructTLSConfig(
 			ctx, cfg.TLSCAFile, cfg.TLSCertFile, cfg.TLSKeyFile)

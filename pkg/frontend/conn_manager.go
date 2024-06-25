@@ -20,6 +20,20 @@ type Allocator interface {
 	// Free free the allocated memory
 	Free([]byte)
 }
+type SessionConn interface {
+	ID() uint64
+	RawConn() net.Conn
+	UseConn(net.Conn)
+	Disconnect() error
+	Close() error
+	Read() ([]byte, error)
+	Append(...byte) error
+	BeginPacket() error
+	FinishedPacket() error
+	Flush() error
+	Write([]byte) error
+	RemoteAddress() string
+}
 
 type Conn struct {
 	id                    uint64
@@ -37,11 +51,11 @@ type Conn struct {
 	packetLength          int
 	maxBytesToFlush       int
 	timeout               time.Duration
-	allocator             Allocator
+	allocator             *SessionAllocator
 }
 
 // NewIOSession create a new io session
-func NewIOSession(conn net.Conn, pu *config.ParameterUnit) *Conn {
+func NewIOSession(conn net.Conn, pu *config.ParameterUnit) (*Conn, error) {
 
 	bio := &Conn{
 		conn:            conn,
@@ -53,10 +67,16 @@ func NewIOSession(conn net.Conn, pu *config.ParameterUnit) *Conn {
 		timeout:         pu.SV.SessionTimeout.Duration,
 		maxBytesToFlush: fixBufferSize,
 	}
-	bio.fixBuf = bio.allocator.Alloc(fixBufferSize)
+	var err error
+	bio.fixBuf, err = bio.allocator.Alloc(fixBufferSize)
+
+	if err != nil {
+		return nil, err
+	}
+
 	bio.curHeader = bio.fixBuf[:HeaderLengthOfTheProtocol]
 	bio.curBuf = bio.fixBuf
-	return bio
+	return bio, err
 }
 
 func (c *Conn) ID() uint64 {
@@ -139,7 +159,11 @@ func (c *Conn) Read() ([]byte, error) {
 	for _, payload := range payloads {
 		totalLength += len(payload)
 	}
-	finalPayload := c.allocator.Alloc(totalLength)
+	finalPayload, err := c.allocator.Alloc(totalLength)
+
+	if err != nil {
+		return nil, err
+	}
 
 	copyIndex := 0
 	for _, payload := range payloads {
@@ -156,7 +180,10 @@ func (c *Conn) ReadOnePayload(packetLength int) ([]byte, error) {
 	var err error
 
 	if packetLength > fixBufferSize {
-		buf = c.allocator.Alloc(packetLength)
+		buf, err = c.allocator.Alloc(packetLength)
+		if err != nil {
+			return nil, err
+		}
 		defer c.allocator.Free(buf)
 	} else {
 		buf = c.fixBuf
@@ -166,7 +193,12 @@ func (c *Conn) ReadOnePayload(packetLength int) ([]byte, error) {
 		return nil, err
 	}
 
-	payload := c.allocator.Alloc(packetLength)
+	payload, err := c.allocator.Alloc(packetLength)
+
+	if err != nil {
+		return nil, err
+	}
+
 	copy(payload, buf[:packetLength])
 	return payload, nil
 }
@@ -196,7 +228,8 @@ func (c *Conn) ReadFromConn(buf []byte) (int, error) {
 	return n, err
 }
 
-func (c *Conn) Append(elems ...byte) {
+func (c *Conn) Append(elems ...byte) error {
+	var err error
 	cutIndex := 0
 	for {
 		remainPacketLength := int(MaxPayloadSize) - c.bufferLength
@@ -204,31 +237,44 @@ func (c *Conn) Append(elems ...byte) {
 			break
 		}
 
-		c.AppendPart(elems[cutIndex:remainPacketLength])
-		err := c.FinishedPacket()
+		err = c.AppendPart(elems[cutIndex:remainPacketLength])
 		if err != nil {
-			panic(err)
+			return err
+		}
+		err = c.FinishedPacket()
+		if err != nil {
+			return err
 		}
 		cutIndex += remainPacketLength
 	}
 
-	c.AppendPart(elems)
+	err = c.AppendPart(elems)
+	if err != nil {
+		return err
+	}
+	return err
 }
 
-func (c *Conn) AppendPart(elems []byte) {
+func (c *Conn) AppendPart(elems []byte) error {
 	var buf []byte
-	remainBuf := fixBufferSize - c.writeIndex
-	remainBuf = Max(0, remainBuf)
+	var err error
+	remainBuf := len(c.curBuf) - c.writeIndex
 	if len(elems) > remainBuf {
 		if remainBuf > 0 {
 			copy(c.curBuf[c.writeIndex:], elems[:remainBuf])
 		}
 
 		if len(elems)-remainBuf < fixBufferSize {
-			buf = c.allocator.Alloc(fixBufferSize)
+			buf, err = c.allocator.Alloc(fixBufferSize)
+			if err != nil {
+				return err
+			}
 
 		} else {
-			buf = c.allocator.Alloc(len(elems) - remainBuf)
+			buf, err = c.allocator.Alloc(len(elems) - remainBuf)
+			if err != nil {
+				return err
+			}
 		}
 
 		copy(buf, elems[remainBuf:])
@@ -242,11 +288,21 @@ func (c *Conn) AppendPart(elems []byte) {
 	}
 	c.bufferLength += len(elems)
 	c.packetLength += len(elems)
-	return
+	return err
 }
-func (c *Conn) BeginPacket() {
+func (c *Conn) BeginPacket() error {
+	if len(c.curBuf)-c.writeIndex < HeaderLengthOfTheProtocol {
+		buf, err := c.allocator.Alloc(fixBufferSize)
+		if err != nil {
+			return err
+		}
+		c.dynamicBuf.PushBack(buf)
+		c.curBuf = buf
+	}
+
 	c.curHeader = c.curBuf[c.writeIndex : c.writeIndex+HeaderLengthOfTheProtocol]
 	c.writeIndex += HeaderLengthOfTheProtocol
+	return nil
 }
 
 func (c *Conn) FinishedPacket() error {

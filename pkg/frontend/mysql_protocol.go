@@ -2163,12 +2163,15 @@ func (mp *MysqlProtocolImpl) appendNullBitMap(mrs *MysqlResultSet, columnsLength
 
 // the server convert every row of the result set into the format that mysql protocol needs
 func (mp *MysqlProtocolImpl) appendResultSetBinaryRow(mrs *MysqlResultSet, rowIdx uint64) error {
-	mp.tcpConn.BeginPacket()
+	err := mp.tcpConn.BeginPacket()
+	if err != nil {
+		return err
+	}
 	mp.append(defines.OKHeader) // append OkHeader
 
 	columnsLength := mrs.GetColumnCount()
 	// get null buffer
-	err := mp.appendNullBitMap(mrs, columnsLength, rowIdx)
+	err = mp.appendNullBitMap(mrs, columnsLength, rowIdx)
 	if err != nil {
 		return err
 	}
@@ -2328,7 +2331,10 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow(mrs *MysqlResultSet, rowId
 
 // the server convert every row of the result set into the format that mysql protocol needs
 func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint64) error {
-	mp.tcpConn.BeginPacket()
+	err := mp.tcpConn.BeginPacket()
+	if err != nil {
+		return err
+	}
 	for i := uint64(0); i < mrs.GetColumnCount(); i++ {
 		column, err := mrs.GetColumn(mp.ctx, i)
 		if err != nil {
@@ -2476,7 +2482,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint6
 			return moerr.NewInternalError(mp.ctx, "unsupported column type %d ", mysqlColumn.ColumnType())
 		}
 	}
-	err := mp.tcpConn.FinishedPacket()
+	err = mp.tcpConn.FinishedPacket()
 	if err != nil {
 		return err
 	}
@@ -2554,8 +2560,9 @@ func (mp *MysqlProtocolImpl) flushIfFull() error {
 	return nil
 }
 
-func (mp *MysqlProtocolImpl) append(elems ...byte) {
-	mp.tcpConn.Append(elems...)
+func (mp *MysqlProtocolImpl) append(elems ...byte) error {
+	err := mp.tcpConn.Append(elems...)
+	return err
 }
 
 func (mp *MysqlProtocolImpl) appendDatetime(dt types.Datetime) {
