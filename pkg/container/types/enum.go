@@ -81,12 +81,12 @@ func parseEnumValue(elems []string, number uint16) (Enum, error) {
 }
 
 // ParseEnumIndex return item value with index.
-func ParseEnumIndex(enumStr string, index uint16) (string, error) {
+func ParseEnumIndex(enumStr string, index Enum) (string, error) {
 	if len(enumStr) == 0 {
 		return "", moerr.NewInternalErrorNoCtx("parse MySQL enum failed: enum type length err %d", len(enumStr))
 	}
 	elems := strings.Split(enumStr, ",")
-	if index == 0 || index > uint16(len(elems)) {
+	if index == 0 || index > Enum(len(elems)) {
 		return "", moerr.NewInternalErrorNoCtx("parse MySQL enum failed: index %d overflow enum boundary [1, %d]", index, len(elems))
 	}
 	return elems[index-1], nil

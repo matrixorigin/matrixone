@@ -584,7 +584,7 @@ var (
 func CastIndexToValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	typeEnums := vector.GenerateFunctionStrParameter(ivecs[0])
-	indexs := vector.GenerateFunctionFixedTypeParameter[uint16](ivecs[1])
+	indexs := vector.GenerateFunctionFixedTypeParameter[types.Enum](ivecs[1])
 
 	for i := uint64(0); i < uint64(length); i++ {
 		typeEnum, typeEnumNull := typeEnums.GetStrValue(i)
