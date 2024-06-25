@@ -42,13 +42,13 @@ var (
 )
 
 var (
-	transferDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+	transferDurationGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: "mo",
 		Subsystem: "transfer",
 		Name:      "duration",
 		Help:      "The duration of transfer.",
 	}, []string{"type"})
 
-	TransferDurationMemoryHistogram = transferDurationHistogram.WithLabelValues("memory")
-	TransferDurationDiskHistogram   = transferDurationHistogram.WithLabelValues("disk")
+	TransferDurationMemoryGauge = transferDurationGauge.WithLabelValues("memory")
+	TransferDurationDiskGauge   = transferDurationGauge.WithLabelValues("disk")
 )

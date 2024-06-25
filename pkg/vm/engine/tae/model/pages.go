@@ -152,6 +152,8 @@ func (page *TransferHashPage) Pin() *common.PinnedItem[*TransferHashPage] {
 }
 
 func (page *TransferHashPage) Train(from uint32, to types.Rowid) {
+	page.latch.Lock()
+	defer page.latch.Unlock()
 	page.hashmap[from] = to
 	v2.TransferRowTotalCounter.Inc()
 }
@@ -168,7 +170,7 @@ func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) 
 		page.loadTable()
 		v2.TransferDiskHitCounter.Inc()
 		diskDuration := time.Since(diskStart)
-		v2.TransferDurationDiskHistogram.Observe(diskDuration.Seconds())
+		v2.TransferDurationDiskGauge.Set(1000 * diskDuration.Seconds())
 	} else {
 		v2.TransferMemoryHitCounter.Inc()
 	}
@@ -178,7 +180,7 @@ func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) 
 	memstart := time.Now()
 	dest, ok = page.hashmap[from]
 	memduration := time.Since(memstart)
-	v2.TransferDurationMemoryHistogram.Observe(memduration.Seconds())
+	v2.TransferDurationMemoryGauge.Set(1000 * memduration.Seconds())
 
 	var str string
 	if ok {

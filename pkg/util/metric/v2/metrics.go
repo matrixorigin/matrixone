@@ -193,7 +193,7 @@ func initPipelineMetrics() {
 func initTransferMetrics() {
 	registry.MustRegister(transferHitCounter)
 	registry.MustRegister(transferRowCounter)
-	registry.MustRegister(transferDurationHistogram)
+	registry.MustRegister(transferDurationGauge)
 }
 
 func getDurationBuckets() []float64 {
