@@ -94,8 +94,10 @@ func (c *Conn) Close() error {
 func (c *Conn) Read() ([]byte, error) {
 	payloads := make([][]byte, 0)
 	defer func() {
-		for _, payload := range payloads {
-			c.allocator.Free(payload)
+		if payloads != nil {
+			for _, payload := range payloads {
+				c.allocator.Free(payload)
+			}
 		}
 	}()
 	var err error
@@ -143,6 +145,7 @@ func (c *Conn) Read() ([]byte, error) {
 	for _, payload := range payloads {
 		copy(finalPayload[copyIndex:], payload)
 		c.allocator.Free(payload)
+		payloads = nil
 		copyIndex += len(payload)
 	}
 	return finalPayload, nil

@@ -211,8 +211,11 @@ func (mo *MOServer) handshake(rs *Conn) error {
 	}
 
 	ses.Debugf(rm.getCtx(), "have sent handshake packet to connection %s", rs.RemoteAddress())
-
-	payload, err := rs.Read()
+	var payload []byte
+	payload, err = rs.Read()
+	defer func() {
+		rs.allocator.Free(payload)
+	}()
 	if err != nil {
 		return err
 	}
