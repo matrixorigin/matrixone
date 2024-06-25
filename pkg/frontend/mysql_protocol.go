@@ -2157,7 +2157,10 @@ func (mp *MysqlProtocolImpl) appendNullBitMap(mrs *MysqlResultSet, columnsLength
 			continue
 		}
 	}
-	mp.append(buffer...)
+	err := mp.append(buffer...)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -2167,8 +2170,10 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow(mrs *MysqlResultSet, rowId
 	if err != nil {
 		return err
 	}
-	mp.append(defines.OKHeader) // append OkHeader
-
+	err = mp.append(defines.OKHeader) // append OkHeader
+	if err != nil {
+		return err
+	}
 	columnsLength := mrs.GetColumnCount()
 	// get null buffer
 	err = mp.appendNullBitMap(mrs, columnsLength, rowIdx)
