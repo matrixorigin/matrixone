@@ -46,6 +46,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+var _ plan2.CompilerContext = &TxnCompilerContext{}
+
 type TxnCompilerContext struct {
 	dbName               string
 	buildAlterView       bool
@@ -59,7 +61,13 @@ type TxnCompilerContext struct {
 	mu      sync.Mutex
 }
 
-var _ plan2.CompilerContext = &TxnCompilerContext{}
+func (tcc *TxnCompilerContext) GetLowerCaseTableNames() int64 {
+	lower := int64(0)
+	if val, err := tcc.execCtx.ses.GetSessionSysVar("lower_case_table_names"); err != nil {
+		lower = val.(int64)
+	}
+	return lower
+}
 
 func (tcc *TxnCompilerContext) SetExecCtx(execCtx *ExecCtx) {
 	tcc.mu.Lock()
@@ -92,7 +100,7 @@ func (tcc *TxnCompilerContext) SetSnapshot(snapshot *plan2.Snapshot) {
 }
 
 func (tcc *TxnCompilerContext) ReplacePlan(execPlan *plan.Execute) (*plan.Plan, tree.Statement, error) {
-	p, st, _, err := replacePlan(tcc.execCtx.reqCtx, tcc.execCtx.ses.(*Session), tcc.tcw.(*TxnComputationWrapper), execPlan)
+	_, p, st, _, err := replacePlan(tcc.execCtx.reqCtx, tcc.execCtx.ses.(*Session), tcc.tcw.(*TxnComputationWrapper), execPlan)
 	return p, st, err
 }
 

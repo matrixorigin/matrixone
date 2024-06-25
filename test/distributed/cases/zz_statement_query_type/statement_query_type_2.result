@@ -14,7 +14,7 @@ show create table test_01    Other    cloud_user_sql
 create table test_01(a int, b varchar)    DDL    cloud_user_sql
 drop table if exists test_01    DDL    cloud_user_sql
 deallocate prepare s1    Other    cloud_user_sql
-execute s1 using @a // prepare s1 from select * from test_table where col1=? ; set @a=2    Other    cloud_user_sql
+execute s1 using @a // select * from test_table where col1=? ; set @a=2    Other    cloud_user_sql
 set @a=2    Other    cloud_user_sql
 prepare s1 from select * from test_table where col1=?    Other    cloud_user_sql
 select * from unnest('{"a":1}') as f    DQL    cloud_user_sql

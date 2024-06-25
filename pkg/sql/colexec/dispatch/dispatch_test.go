@@ -129,15 +129,15 @@ func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 }
 
 func resetChildren(arg *Argument, bats []*batch.Batch) {
+	valueScanArg := &value_scan.Argument{
+		Batchs: bats,
+	}
+	valueScanArg.Prepare(nil)
 	if len(arg.Children) == 0 {
-		arg.AppendChild(&value_scan.Argument{
-			Batchs: bats,
-		})
+		arg.AppendChild(valueScanArg)
 
 	} else {
 		arg.Children = arg.Children[:0]
-		arg.AppendChild(&value_scan.Argument{
-			Batchs: bats,
-		})
+		arg.AppendChild(valueScanArg)
 	}
 }

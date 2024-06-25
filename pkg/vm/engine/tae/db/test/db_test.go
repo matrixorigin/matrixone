@@ -4305,7 +4305,7 @@ func TestCollectDelete(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	blkdata.GCInMemeoryDeletesByTSForTest(p3)
+	blkdata.GCInMemoryDeletesByTSForTest(p3)
 
 	batch, _, err = blkdata.CollectDeleteInRange(context.Background(), p1.Next(), p3, true, common.DefaultAllocator)
 	assert.NoError(t, err)
@@ -8088,7 +8088,7 @@ func TestGCInMemoryDeletesByTS(t *testing.T) {
 				assert.NoError(t, err)
 				assert.NoError(t, txn.Commit(context.Background()))
 
-				blkData.GCInMemeoryDeletesByTSForTest(ts)
+				blkData.GCInMemoryDeletesByTSForTest(ts)
 			}
 			i++
 		}

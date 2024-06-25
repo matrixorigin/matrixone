@@ -168,7 +168,7 @@ func (gs *GlobalStats) ShouldUpdate(key pb.StatsInfoKey, entryNum int64) bool {
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
 	info, ok := gs.mu.statsInfoMap[key]
-	if ok && info != nil && info.BlockNumber > entryNum {
+	if ok && info != nil && info.BlockNumber-entryNum > 64 {
 		return false
 	}
 	return true
@@ -308,26 +308,55 @@ func (gs *GlobalStats) notifyLogtailUpdate(tid uint64) {
 }
 
 func (gs *GlobalStats) waitLogtailUpdated(tid uint64) {
-	gs.logtailUpdate.mu.Lock()
-	_, ok := gs.logtailUpdate.mu.updated[tid]
-	gs.logtailUpdate.mu.Unlock()
-	if ok {
+	// checkUpdated is a function used to check if the table's
+	// first logtail has been received. Return true means that
+	// the first logtail has already been received by the CN server.
+	checkUpdated := func() bool {
+		gs.logtailUpdate.mu.Lock()
+		defer gs.logtailUpdate.mu.Unlock()
+		_, ok := gs.logtailUpdate.mu.updated[tid]
+		return ok
+	}
+
+	// just return if the logtail of the table already received.
+	if checkUpdated() {
 		return
 	}
+
+	// There are three ways to break out of the select:
+	//   1. context done
+	//   2. interval checking, whose init interval is 10ms and max interval is 5s
+	//   3. logtail update notify, to check if it is the required table.
+	initCheckInterval := time.Millisecond * 10
+	maxCheckInterval := time.Second * 5
+	checkInterval := initCheckInterval
+	timer := time.NewTimer(checkInterval)
+	defer timer.Stop()
+
 	var done bool
 	for {
 		if done {
 			return
 		}
-		gs.logtailUpdate.mu.Lock()
-		_, ok := gs.logtailUpdate.mu.updated[tid]
-		gs.logtailUpdate.mu.Unlock()
-		if ok {
+		if checkUpdated() {
 			return
 		}
 		select {
 		case <-gs.ctx.Done():
 			return
+
+		case <-timer.C:
+			if checkUpdated() {
+				return
+			}
+			// Increase the check interval to reduce the CPU usage.
+			// The max interval is 5s, means we check the logtail of
+			// the table every 5s at last.
+			checkInterval = checkInterval * 2
+			if checkInterval > maxCheckInterval {
+				checkInterval = maxCheckInterval
+			}
+			timer.Reset(checkInterval)
 
 		case i := <-gs.logtailUpdate.c:
 			if i == tid {

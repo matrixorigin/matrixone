@@ -118,9 +118,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal.Start()
 	defer anal.Stop()
 
-	if arg.buf != nil {
-		proc.PutBatch(arg.buf)
-		arg.buf = nil
+	if arg.ctr.buf != nil {
+		proc.PutBatch(arg.ctr.buf)
+		arg.ctr.buf = nil
 	}
 
 	// real work starts here.
@@ -135,7 +135,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	if bat == nil {
 		result.Batch, lastErr = ctr.samplePool.Result(true)
 		anal.Output(result.Batch, arg.GetIsLast())
-		arg.buf = result.Batch
+		arg.ctr.buf = result.Batch
 		result.Status = vm.ExecStop
 		ctr.workDone = true
 		return result, lastErr
@@ -168,7 +168,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		result.Batch, err = ctr.samplePool.Result(false)
 	}
 	anal.Output(result.Batch, arg.GetIsLast())
-	arg.buf = result.Batch
+	arg.ctr.buf = result.Batch
 	return result, err
 }
 

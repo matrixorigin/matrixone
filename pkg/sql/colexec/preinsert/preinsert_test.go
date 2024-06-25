@@ -71,6 +71,7 @@ func TestPreInsertNormal(t *testing.T) {
 	}
 	batch1.SetRowCount(3)
 	argument1 := Argument{
+		ctr:        &container{},
 		SchemaName: "testDb",
 		TableDef: &plan.TableDef{
 			Cols: []*plan.ColDef{
@@ -145,6 +146,7 @@ func TestPreInsertNullCheck(t *testing.T) {
 	}
 	batch2.SetRowCount(3)
 	argument2 := Argument{
+		ctr:        &container{},
 		SchemaName: "testDb",
 		Attrs:      []string{"int64_column_primary"},
 		TableDef: &plan.TableDef{
@@ -173,10 +175,12 @@ func TestPreInsertNullCheck(t *testing.T) {
 }
 
 func resetChildren(arg *Argument, bat *batch.Batch) {
+	valueScanArg := &value_scan.Argument{
+		Batchs: []*batch.Batch{bat},
+	}
+	valueScanArg.Prepare(nil)
 	arg.SetChildren(
 		[]vm.Operator{
-			&value_scan.Argument{
-				Batchs: []*batch.Batch{bat},
-			},
+			valueScanArg,
 		})
 }

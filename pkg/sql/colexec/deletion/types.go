@@ -68,9 +68,13 @@ type container struct {
 	pool           *BatchPool
 	// debug_len      uint32
 
-	state vm.CtrState
+	state            vm.CtrState
+	resBat           *batch.Batch
+	source           engine.Relation
+	partitionSources []engine.Relation // Align array index with the partition number
 }
 type Argument struct {
+	ctr          *container
 	DeleteCtx    *DeleteCtx
 	affectedRows uint64
 
@@ -80,11 +84,6 @@ type Argument struct {
 	RemoteDelete bool
 	IBucket      uint32
 	Nbucket      uint32
-	ctr          *container
-
-	resBat           *batch.Batch
-	source           engine.Relation
-	partitionSources []engine.Relation // Align array index with the partition number
 
 	vm.OperatorBase
 }
@@ -163,16 +162,17 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 			arg.ctr.partitionId_blockId_deltaLoc = nil
 			arg.ctr.blockId_type = nil
 			arg.ctr.pool = nil
-
-			arg.ctr = nil
 		}
 	}
-	if arg.resBat != nil {
-		arg.resBat.Clean(proc.Mp())
-		arg.resBat = nil
+	if arg.ctr != nil {
+		if arg.ctr.resBat != nil {
+			arg.ctr.resBat.Clean(proc.Mp())
+			arg.ctr.resBat = nil
+		}
+		arg.ctr.partitionSources = nil
+		arg.ctr.source = nil
+		arg.ctr = nil
 	}
-	arg.partitionSources = nil
-	arg.source = nil
 }
 
 func (arg *Argument) AffectedRows() uint64 {
@@ -182,7 +182,7 @@ func (arg *Argument) AffectedRows() uint64 {
 func (arg *Argument) SplitBatch(proc *process.Process, srcBat *batch.Batch) error {
 	delCtx := arg.DeleteCtx
 	// If the target table is a partition table, group and split the batch data
-	if len(arg.partitionSources) > 0 {
+	if len(arg.ctr.partitionSources) > 0 {
 		delBatches, err := colexec.GroupByPartitionForDelete(proc, srcBat, delCtx.RowIdIdx, delCtx.PartitionIndexInBatch, len(delCtx.PartitionTableIDs), delCtx.PrimaryKeyIdx)
 		if err != nil {
 			return err

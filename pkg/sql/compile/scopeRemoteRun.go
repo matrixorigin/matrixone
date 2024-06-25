@@ -286,6 +286,7 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 	lastArg.SetInfo(info)
 	lastArg.AppendChild(valueScanOperator)
 	for {
+		valueScanOperator.Prepare(s.Proc)
 		bat, end, err = sender.receiveBatch()
 		if err != nil {
 			return err
@@ -630,7 +631,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		s.NodeInfo.Data = []byte(p.Node.Payload)
 		s.NodeInfo.Header = objectio.DecodeInfoHeader(p.Node.Type)
 	}
-	s.Proc = process.NewWithAnalyze(proc, proc.Ctx, int(p.ChildrenCount), analNodes)
+	s.Proc = process.NewFromProc(proc, proc.Ctx, int(p.ChildrenCount))
 	{
 		for i := range s.Proc.Reg.MergeReceivers {
 			ctx.regs[s.Proc.Reg.MergeReceivers[i]] = int32(i)
@@ -728,10 +729,11 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *fuzzyfilter.Argument:
 		in.FuzzyFilter = &pipeline.FuzzyFilter{
-			N:        float32(t.N),
-			PkName:   t.PkName,
-			PkTyp:    t.PkTyp,
-			BuildIdx: int32(t.BuildIdx),
+			N:                  float32(t.N),
+			PkName:             t.PkName,
+			PkTyp:              t.PkTyp,
+			BuildIdx:           int32(t.BuildIdx),
+			IfInsertFromUnique: t.IfInsertFromUnique,
 		}
 	case *preinsert.Argument:
 		in.PreInsert = &pipeline.PreInsert{
@@ -1153,6 +1155,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.N = float64(t.N)
 		arg.PkName = t.PkName
 		arg.PkTyp = t.PkTyp
+		arg.IfInsertFromUnique = t.IfInsertFromUnique
 		v.Arg = arg
 	case vm.Anti:
 		t := opr.GetAnti()
