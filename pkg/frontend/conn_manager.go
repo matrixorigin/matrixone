@@ -386,9 +386,11 @@ func (c *Conn) Write(payload []byte) error {
 
 	var err error
 
-	err = c.Flush()
-	if err != nil {
-		return err
+	if payload[0] != 0xFF {
+		err = c.Flush()
+		if err != nil {
+			return err
+		}
 	}
 
 	var header [4]byte
