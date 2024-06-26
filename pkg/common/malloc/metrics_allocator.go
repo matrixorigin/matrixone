@@ -15,32 +15,27 @@
 package malloc
 
 import (
-	"sync"
-	"unsafe"
-
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 type MetricsAllocator struct {
-	upstream Allocator
-	funcPool sync.Pool
+	upstream        Allocator
+	deallocatorPool *ClosureDeallocatorPool[metricsDeallocatorArgs]
+}
+
+type metricsDeallocatorArgs struct {
+	size uint64
 }
 
 func NewMetricsAllocator(upstream Allocator) *MetricsAllocator {
-	ret := &MetricsAllocator{
+	return &MetricsAllocator{
 		upstream: upstream,
+		deallocatorPool: NewClosureDeallocatorPool(
+			func(hints Hints, args metricsDeallocatorArgs) {
+				metric.MallocCounterFreeBytes.Add(float64(args.size))
+			},
+		),
 	}
-	ret.funcPool = sync.Pool{
-		New: func() any {
-			argumented := new(argumentedFuncDeallocator[uint64])
-			argumented.fn = func(_ unsafe.Pointer, hints Hints, size uint64) {
-				metric.MallocCounterFreeBytes.Add(float64(size))
-				ret.funcPool.Put(argumented)
-			}
-			return argumented
-		},
-	}
-	return ret
 }
 
 type AllocateInfo struct {
@@ -50,13 +45,17 @@ type AllocateInfo struct {
 
 var _ Allocator = new(MetricsAllocator)
 
-func (m *MetricsAllocator) Allocate(size uint64, hints Hints) (unsafe.Pointer, Deallocator, error) {
+func (m *MetricsAllocator) Allocate(size uint64, hints Hints) ([]byte, Deallocator, error) {
 	ptr, dec, err := m.upstream.Allocate(size, hints)
 	if err != nil {
 		return nil, nil, err
 	}
 	metric.MallocCounterAllocateBytes.Add(float64(size))
-	fn := m.funcPool.Get().(*argumentedFuncDeallocator[uint64])
-	fn.SetArgument(size)
-	return ptr, ChainDeallocator(dec, fn), nil
+
+	return ptr, ChainDeallocator(
+		dec,
+		m.deallocatorPool.Get(metricsDeallocatorArgs{
+			size: size,
+		}),
+	), nil
 }
