@@ -17,14 +17,21 @@ package fileservice
 import (
 	"errors"
 	"io"
+	"net"
 	"strings"
 )
 
 func IsRetryableError(err error) bool {
-	// Is error
+	// unexpected EOF
 	if errors.Is(err, io.ErrUnexpectedEOF) {
 		return true
 	}
+
+	// net timeout
+	if e, ok := err.(net.Error); ok && e.Timeout() {
+		return true
+	}
+
 	str := err.Error()
 	// match exact string
 	switch str {
@@ -43,6 +50,7 @@ func IsRetryableError(err error) bool {
 		strings.Contains(str, "use of closed network connection") {
 		return true
 	}
+
 	return false
 }
 
