@@ -9016,11 +9016,9 @@ func TestPersistTransferTable(t *testing.T) {
 	}
 	model.FS = tae.Runtime.Fs.Service
 	model.Cleaner = &model.TransferPageCleaner{
-		Pages:          make(chan *model.TransferPage, 1000000),
-		PersistedPages: make(chan *model.TransferPage, 1000000),
+		Pages: make(chan *model.TransferPage, 1000000),
 	}
 	go model.Cleaner.Handler()
-	go model.Cleaner.DiskHandler()
 	page := model.NewTransferHashPage(&id1, now, false,
 		model.WithTTL(time.Second),
 	)
@@ -9066,7 +9064,7 @@ func TestPersistTransferTable(t *testing.T) {
 
 	page.SetLocation(location)
 
-	time.Sleep(3 * time.Second)
+	time.Sleep(2 * time.Second)
 	assert.True(t, page.IsPersist() == 1)
 	for i := 0; i < 10; i++ {
 		id, ok := page.Transfer(uint32(i))
@@ -9076,6 +9074,8 @@ func TestPersistTransferTable(t *testing.T) {
 }
 
 func TestClearPersistTransferTable(t *testing.T) {
+	duration := time.Second
+	model.TestDuration.Store(&duration)
 	ctx := context.Background()
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
@@ -9100,11 +9100,10 @@ func TestClearPersistTransferTable(t *testing.T) {
 	}
 	model.FS = tae.Runtime.Fs.Service
 	model.Cleaner = &model.TransferPageCleaner{
-		Pages:          make(chan *model.TransferPage, 1000000),
-		PersistedPages: make(chan *model.TransferPage, 1000000),
+		Pages: make(chan *model.TransferPage, 1000000),
 	}
 	go model.Cleaner.Handler()
-	go model.Cleaner.DiskHandler()
+
 	page := model.NewTransferHashPage(&id1, now, false,
 		model.WithTTL(time.Second),
 		model.WithDiskTTL(2*time.Second),
@@ -9115,6 +9114,7 @@ func TestClearPersistTransferTable(t *testing.T) {
 		page.Train(uint32(i), rowID)
 		ids[i] = rowID
 	}
+	tae.Runtime.TransferTable.AddPage(page)
 
 	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
 	var writer *blockio.BlockWriter
@@ -9151,7 +9151,7 @@ func TestClearPersistTransferTable(t *testing.T) {
 
 	page.SetLocation(location)
 
-	time.Sleep(3 * time.Second)
+	time.Sleep(2 * time.Second)
 	assert.True(t, page.IsPersist() == 0)
 	for i := 0; i < 10; i++ {
 		_, ok := page.Transfer(uint32(i))

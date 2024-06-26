@@ -150,6 +150,15 @@ func (page *TransferHashPage) Pin() *common.PinnedItem[*TransferHashPage] {
 	}
 }
 
+func (page *TransferHashPage) Clean() bool {
+	if time.Since(page.bornTS) > page.params.DiskTTL {
+		return false
+	}
+
+	page.clearPersistTable()
+	return true
+}
+
 func (page *TransferHashPage) Train(from uint32, to types.Rowid) {
 	page.hashmap.M[from] = to[:]
 	v2.TransferRowTotalCounter.Inc()
@@ -249,8 +258,7 @@ func (page *TransferHashPage) IsPersist() int32 {
 }
 
 type TransferPageCleaner struct {
-	Pages          chan *TransferPage
-	PersistedPages chan *TransferPage
+	Pages chan *TransferPage
 }
 
 type TransferPage struct {
@@ -266,11 +274,9 @@ var (
 func getCleaner() *TransferPageCleaner {
 	once.Do(func() {
 		Cleaner = &TransferPageCleaner{
-			Pages:          make(chan *TransferPage, 1000000),
-			PersistedPages: make(chan *TransferPage, 1000000),
+			Pages: make(chan *TransferPage, 1000000),
 		}
 		go Cleaner.Handler()
-		go Cleaner.DiskHandler()
 	})
 	return Cleaner
 }
@@ -286,16 +292,5 @@ func (c *TransferPageCleaner) Handler() {
 			time.Sleep(page.page.params.TTL - time.Since(page.ts))
 		}
 		page.page.clearTable()
-		c.PersistedPages <- page
-	}
-}
-
-func (c *TransferPageCleaner) DiskHandler() {
-	for {
-		page := <-c.PersistedPages
-		if time.Since(page.page.bornTS) < page.page.params.DiskTTL {
-			time.Sleep(page.page.params.DiskTTL - time.Since(page.page.bornTS))
-		}
-		page.page.clearPersistTable()
 	}
 }

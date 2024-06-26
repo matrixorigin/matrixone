@@ -17,6 +17,7 @@ package model
 import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -29,6 +30,7 @@ type PageT[T common.IRef] interface {
 	TTL(time.Time, time.Duration) bool
 	ID() *common.ID
 	Length() int
+	Clean() bool
 }
 
 type TransferTable[T PageT[T]] struct {
@@ -38,10 +40,12 @@ type TransferTable[T PageT[T]] struct {
 }
 
 func NewTransferTable[T PageT[T]](ttl time.Duration) *TransferTable[T] {
-	return &TransferTable[T]{
+	table := &TransferTable[T]{
 		ttl:   ttl,
 		pages: make(map[common.ID]*common.PinnedItem[T]),
 	}
+	go table.Clean()
+	return table
 }
 
 func (table *TransferTable[T]) Pin(id common.ID) (pinned *common.PinnedItem[T], err error) {
@@ -141,4 +145,24 @@ func (table *TransferTable[T]) Close() {
 		item.Close()
 	}
 	table.pages = make(map[common.ID]*common.PinnedItem[T])
+}
+
+var (
+	duration     = 10 * time.Minute
+	TestDuration atomic.Pointer[time.Duration]
+)
+
+func (table *TransferTable[T]) Clean() {
+	for {
+		table.RLock()
+		for _, item := range table.pages {
+			item.Item().Clean()
+		}
+		table.RUnlock()
+		if TestDuration.Load() != nil {
+			time.Sleep(*TestDuration.Load())
+		} else {
+			time.Sleep(duration)
+		}
+	}
 }
