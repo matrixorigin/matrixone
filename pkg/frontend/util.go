@@ -917,6 +917,19 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 			if err != nil {
 				return nil, nil, err
 			}
+		case types.T_enum:
+			vData := make([]types.Enum, cnt)
+			for rowIdx, row := range rows {
+				if row[colIdx] == nil {
+					nsp.Add(uint64(rowIdx))
+					continue
+				}
+				vData[rowIdx] = row[colIdx].(types.Enum)
+			}
+			err := vector.AppendFixedList[types.Enum](bat.Vecs[colIdx], vData, nil, pool)
+			if err != nil {
+				return nil, nil, err
+			}
 		default:
 			return nil, nil, moerr.NewInternalErrorNoCtx("unsupported type %d", typ.Oid)
 		}

@@ -120,7 +120,7 @@ func extractRowFromVector(ctx context.Context, ses FeSession, vec *vector.Vector
 	case types.T_TS:
 		row[i] = vector.GetFixedAt[types.TS](vec, rowIndex)
 	case types.T_enum:
-		row[i] = copyBytes(vec.GetBytesAt(rowIndex), true)
+		row[i] = vector.GetFixedAt[types.Enum](vec, rowIndex)
 	default:
 		ses.Error(ctx,
 			"Failed to extract row from vector, unsupported type",

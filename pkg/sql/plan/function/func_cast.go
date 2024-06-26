@@ -1750,6 +1750,9 @@ func enumToOthers(ctx context.Context,
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return enumToStr(ctx, source, rs, length, selectList)
+	case types.T_enum:
+		rs := vector.MustFunctionResult[types.Enum](result)
+		return rs.DupFromParameter(source, length)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from enum to %s", toType.String()))
 }

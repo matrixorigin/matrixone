@@ -16,6 +16,7 @@ package aggexec
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -92,6 +93,10 @@ func newMultiAggFuncExecRetFixed(
 		return e
 	case types.T_timestamp:
 		e := &multiAggFuncExec1[types.Timestamp]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_enum:
+		e := &multiAggFuncExec1[types.Enum]{}
 		e.init(mg, info, impl)
 		return e
 	}

@@ -357,6 +357,9 @@ func (arg *Argument) getTopValue() ([]byte, bool) {
 	case types.T_decimal128:
 		v := vector.GetFixedAt[types.Decimal128](vec, x)
 		return types.EncodeDecimal128(&v), true
+	case types.T_enum:
+		v := vector.GetFixedAt[types.Enum](vec, x)
+		return types.EncodeEnum(&v), true
 	}
 	return nil, false
 }

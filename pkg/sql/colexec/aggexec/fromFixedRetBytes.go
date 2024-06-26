@@ -16,6 +16,7 @@ package aggexec
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -185,6 +186,11 @@ func newSingleAggFuncExec2NewVersion(
 
 	case types.T_uuid:
 		e := &singleAggFuncExecNew2[types.Uuid]{}
+		e.init(mg, info, impl)
+		return e
+
+	case types.T_enum:
+		e := &singleAggFuncExecNew2[types.Enum]{}
 		e.init(mg, info, impl)
 		return e
 	}

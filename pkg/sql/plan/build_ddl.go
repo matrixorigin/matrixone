@@ -211,7 +211,7 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select) ([]*ColDef, error) 
 			// enum
 			if e.F.Func.ObjName == moEnumCastIndexToValueFun {
 				// cast_index_to_value('apple,banana,orange', cast(col_name as T_uint16))
-				colRef := e.F.Args[1].Expr.(*plan.Expr_F).F.Args[0].Expr.(*plan.Expr_Col).Col
+				colRef := e.F.Args[1].Expr.(*plan.Expr_Col).Col
 				tblName, colName := getTblAndColName(colRef.RelPos, colRef.ColPos)
 				if binding, ok := bindCtx.bindingByTable[tblName]; ok {
 					typ = binding.types[binding.colIdByName[colName]]
