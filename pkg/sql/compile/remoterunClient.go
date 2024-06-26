@@ -348,18 +348,23 @@ func (sender *messageSenderOnClient) waitingTheStopResponse() {
 
 	// wait an EndMessage response.
 	for {
-		val, ok := <-sender.receiveCh
-		if !ok || val == nil {
-			sender.safeToClose = true
-			sender.alreadyClose = true
-			return
-		}
+		select {
+		case val, ok := <-sender.receiveCh:
+			if !ok || val == nil {
+				sender.safeToClose = true
+				sender.alreadyClose = true
+				return
+			}
 
-		message := val.(*pipeline.Message)
+			message := val.(*pipeline.Message)
 
-		if message.IsEndMessage() || len(message.GetErr()) > 0 {
-			sender.safeToClose = true
-			// in fact, we should deal the cost analysis information here.
+			if message.IsEndMessage() || len(message.GetErr()) > 0 {
+				sender.safeToClose = true
+				// in fact, we should deal the cost analysis information here.
+				return
+			}
+
+		case <-maxWaitingTime.Done():
 			return
 		}
 	}
