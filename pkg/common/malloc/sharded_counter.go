@@ -14,6 +14,8 @@
 
 package malloc
 
+import "golang.org/x/sys/cpu"
+
 type AtomicInteger[T any] interface {
 	Add(T) T
 	Load() T
@@ -27,7 +29,12 @@ type ShardedCounter[T CounterInteger, A any, P interface {
 	*A
 	AtomicInteger[T]
 }] struct {
-	shards []A
+	shards []shardedCounterShard[A]
+}
+
+type shardedCounterShard[T any] struct {
+	value T
+	_     cpu.CacheLinePad
 }
 
 func NewShardedCounter[T CounterInteger, A any, P interface {
@@ -35,7 +42,7 @@ func NewShardedCounter[T CounterInteger, A any, P interface {
 	AtomicInteger[T]
 }](shards int) *ShardedCounter[T, A, P] {
 	return &ShardedCounter[T, A, P]{
-		shards: make([]A, shards),
+		shards: make([]shardedCounterShard[A], shards),
 	}
 }
 
@@ -43,12 +50,12 @@ func (s *ShardedCounter[T, A, P]) Add(v T) {
 	pid := runtime_procPin()
 	runtime_procUnpin()
 	shard := pid % len(s.shards)
-	P(&s.shards[shard]).Add(v)
+	P(&s.shards[shard].value).Add(v)
 }
 
 func (s *ShardedCounter[T, A, P]) Load() (ret T) {
 	for i := 0; i < len(s.shards); i++ {
-		ret += P(&s.shards[i]).Load()
+		ret += P(&s.shards[i].value).Load()
 	}
 	return ret
 }

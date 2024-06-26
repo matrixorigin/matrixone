@@ -19,7 +19,6 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-	"unsafe"
 )
 
 func TestCheckedAllocator(t *testing.T) {
@@ -42,7 +41,7 @@ func TestCheckedAllocator(t *testing.T) {
 		}
 		// comment the following line to trigger a missing-free panic
 		// this panic will be raised in SetFinalizer func so it's not recoverable and not testable
-		dec.Deallocate(ptr, NoHints)
+		dec.Deallocate(NoHints)
 		_ = ptr
 		_ = dec
 		runtime.GC()
@@ -64,12 +63,12 @@ func TestCheckedAllocator(t *testing.T) {
 			NewClassAllocator(NewFixedSizeMmapAllocator),
 			1,
 		)
-		ptr, dec, err := allocator.Allocate(42, NoHints)
+		_, dec, err := allocator.Allocate(42, NoHints)
 		if err != nil {
 			t.Fatal(err)
 		}
-		dec.Deallocate(ptr, NoHints)
-		dec.Deallocate(ptr, NoHints)
+		dec.Deallocate(NoHints)
+		dec.Deallocate(NoHints)
 	})
 
 	// use after free
@@ -78,15 +77,14 @@ func TestCheckedAllocator(t *testing.T) {
 			NewClassAllocator(NewFixedSizeMmapAllocator),
 			1,
 		)
-		ptr, dec, err := allocator.Allocate(42, NoHints)
+		slice, dec, err := allocator.Allocate(42, NoHints)
 		if err != nil {
 			t.Fatal(err)
 		}
-		slice := unsafe.Slice((*byte)(ptr), 42)
 		for i := range slice {
 			slice[i] = byte(i)
 		}
-		dec.Deallocate(ptr, NoHints)
+		dec.Deallocate(NoHints)
 		// zero or segfault
 		//for i := range slice {
 		//	if slice[i] != 0 {

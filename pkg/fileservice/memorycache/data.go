@@ -16,7 +16,6 @@ package memorycache
 
 import (
 	"sync/atomic"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -29,7 +28,6 @@ type Data struct {
 	// reference counta for the Data, the Data is free
 	// when the reference count is 0
 	ref         refcnt
-	ptr         unsafe.Pointer
 	deallocator malloc.Deallocator
 	globalSize  *atomic.Int64
 }
@@ -50,12 +48,11 @@ func newData(
 		globalSize: globalSize,
 	}
 	var err error
-	data.ptr, data.deallocator, err = allocator.Allocate(uint64(size), malloc.NoHints)
+	data.buf, data.deallocator, err = allocator.Allocate(uint64(size), malloc.NoHints)
 	if err != nil {
 		panic(err)
 	}
 	metric.FSMallocLiveObjectsMemoryCache.Inc()
-	data.buf = unsafe.Slice((*byte)(data.ptr), size)
 	data.ref.init(1)
 	return data
 }
@@ -63,7 +60,7 @@ func newData(
 func (d *Data) free() {
 	d.globalSize.Add(-int64(d.size))
 	d.buf = nil
-	d.deallocator.Deallocate(d.ptr, malloc.NoHints)
+	d.deallocator.Deallocate(malloc.NoHints)
 	metric.FSMallocLiveObjectsMemoryCache.Dec()
 }
 

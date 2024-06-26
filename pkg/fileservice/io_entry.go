@@ -20,7 +20,6 @@ import (
 	"io"
 	"os"
 	"time"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
@@ -96,22 +95,22 @@ func CacheOriginalData(r io.Reader, data []byte, allocator CacheDataAllocator) (
 
 func (i *IOEntry) prepareData() (finally func(err *error)) {
 	if cap(i.Data) < int(i.Size) {
-		ptr, dec, err := getMallocAllocator().Allocate(uint64(i.Size), malloc.NoHints)
+		slice, dec, err := getMallocAllocator().Allocate(uint64(i.Size), malloc.NoHints)
 		if err != nil {
 			panic(err)
 		}
 		metric.FSMallocLiveObjectsIOEntryData.Inc()
-		i.Data = unsafe.Slice((*byte)(ptr), i.Size)
+		i.Data = slice
 		if i.releaseData != nil {
 			i.releaseData()
 		}
 		i.releaseData = func() {
-			dec.Deallocate(ptr, malloc.NoHints)
+			dec.Deallocate(malloc.NoHints)
 			metric.FSMallocLiveObjectsIOEntryData.Dec()
 		}
 		finally = func(err *error) {
 			if err != nil && *err != nil {
-				dec.Deallocate(ptr, malloc.NoHints)
+				dec.Deallocate(malloc.NoHints)
 				metric.FSMallocLiveObjectsIOEntryData.Dec()
 			}
 		}

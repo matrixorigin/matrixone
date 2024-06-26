@@ -14,8 +14,6 @@
 
 package malloc
 
-import "unsafe"
-
 type FixedSizeAllocator interface {
-	Allocate(hint Hints) (unsafe.Pointer, Deallocator, error)
+	Allocate(hint Hints) ([]byte, Deallocator, error)
 }
