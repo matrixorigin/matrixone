@@ -16,9 +16,10 @@ package agg
 
 import (
 	"bytes"
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
-	"math"
 )
 
 func RegisterMax2(id int64) {
@@ -133,6 +134,13 @@ func RegisterMax2(id int64) {
 		nil,
 		aggMaxInitResult[bool],
 		aggMaxOfBoolFill, aggMaxOfBoolFills, aggMaxOfBoolMerge, nil)
+
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_enum.ToType(), MaxReturnType, true),
+		nil,
+		nil,
+		aggMaxInitResult[types.Enum],
+		aggMaxFill[types.Enum], aggMaxFills[types.Enum], aggMaxMerge[types.Enum], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
 		aggexec.MakeSingleColumnAggInformation(id, types.T_uuid.ToType(), MaxReturnType, true),
