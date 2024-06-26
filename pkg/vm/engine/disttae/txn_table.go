@@ -876,7 +876,7 @@ func (tbl *txnTable) rangesOnePart(
 				blk.EntryState = obj.EntryState
 				blk.CommitTs = obj.CommitTS
 				if obj.HasDeltaLoc {
-					deltaLoc, commitTs, ok := state.GetBockDeltaLoc(blk.BlockID)
+					deltaLoc, commitTs, ok := state.GetBlockDeltaLoc(blk.BlockID)
 					if ok {
 						blk.DeltaLoc = deltaLoc
 						blk.CommitTs = commitTs
@@ -2181,7 +2181,7 @@ func (tbl *txnTable) PKPersistedBetween(
 					blk.EntryState = obj.EntryState
 					blk.CommitTs = obj.CommitTS
 					if obj.HasDeltaLoc {
-						deltaLoc, commitTs, ok := p.GetBockDeltaLoc(blk.BlockID)
+						deltaLoc, commitTs, ok := p.GetBlockDeltaLoc(blk.BlockID)
 						if ok {
 							blk.DeltaLoc = deltaLoc
 							blk.CommitTs = commitTs
@@ -2353,7 +2353,7 @@ func (tbl *txnTable) transferDeletes(
 						SegmentID:  *obj.ObjectShortName().Segmentid(),
 					}
 					if obj.HasDeltaLoc {
-						deltaLoc, commitTs, ok := state.GetBockDeltaLoc(blkInfo.BlockID)
+						deltaLoc, commitTs, ok := state.GetBlockDeltaLoc(blkInfo.BlockID)
 						if ok {
 							blkInfo.DeltaLoc = deltaLoc
 							blkInfo.CommitTs = commitTs
