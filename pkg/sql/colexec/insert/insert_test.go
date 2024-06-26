@@ -102,6 +102,7 @@ func TestInsertOperator(t *testing.T) {
 	// require.NoError(t, err)
 	_, err := argument1.Call(proc)
 	require.NoError(t, err)
+	require.Equal(t, uint64(3), argument1.affectedRows)
 	// result := argument1.InsertCtx.Rel.(*mockRelation).result
 	// require.Equal(t, result.Batch, batch.EmptyBatch)
 
