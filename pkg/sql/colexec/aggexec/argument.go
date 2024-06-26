@@ -94,6 +94,8 @@ func newArgumentOfMultiAgg1[ret types.FixedSizeTExceptStrType](paramType types.T
 		return &mArg1Fixed[ret, types.Datetime]{}
 	case types.T_time:
 		return &mArg1Fixed[ret, types.Time]{}
+	case types.T_enum:
+		return &mArg1Fixed[ret, types.Enum]{}
 	case types.T_timestamp:
 		return &mArg1Fixed[ret, types.Timestamp]{}
 	}
@@ -138,6 +140,8 @@ func newArgumentOfMultiAgg2(paramType types.Type) mArg2 {
 		return &mArg2Fixed[types.Datetime]{}
 	case types.T_time:
 		return &mArg2Fixed[types.Time]{}
+	case types.T_enum:
+		return &mArg2Fixed[types.Enum]{}
 	case types.T_timestamp:
 		return &mArg2Fixed[types.Timestamp]{}
 	}

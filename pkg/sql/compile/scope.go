@@ -842,7 +842,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 			}
 			newExprList := []*plan.Expr{newExpr}
 			if arg.E != nil {
-				newExprList = append(newExprList, arg.E)
+				newExprList = append(newExprList, plan2.DeepCopyExpr(arg.E))
 			}
 			arg.SetExeExpr(colexec.RewriteFilterExprList(newExprList))
 		}
