@@ -256,12 +256,18 @@ func fillInstructionsForPipeline(s *Scope, ctx *scopeContext, p *pipeline.Pipeli
 		}
 	}
 	// Instructions
-	p.InstructionList = make([]*pipeline.Instruction, len(s.Instructions))
-	for i := range p.InstructionList {
-		if ctxId, p.InstructionList[i], err = convertToPipelineInstruction(&s.Instructions[i], ctx, ctxId); err != nil {
-			return ctxId, err
+	var ins *pipeline.Instruction
+	err = vm.HandleAllOp(s.RootOp, func(parentOp vm.Operator, op vm.Operator) error {
+		if ctxId, ins, err = convertToPipelineInstruction(op, ctx, ctxId); err != nil {
+			return err
 		}
+		p.InstructionList = append(p.InstructionList, ins)
+		return nil
+	})
+	if err != nil {
+		return ctxId, err
 	}
+
 	return ctxId, nil
 }
 
@@ -383,11 +389,12 @@ func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline,
 			return err
 		}
 	}
-	s.Instructions = make([]vm.Instruction, len(p.InstructionList))
-	for i := range s.Instructions {
-		if s.Instructions[i], err = convertToVmInstruction(p.InstructionList[i], ctx, eng); err != nil {
+	for i := range p.InstructionList {
+		ins, err := convertToVmInstruction(p.InstructionList[i], ctx, eng)
+		if err != nil {
 			return err
 		}
+		s.appendInstruction(ins)
 	}
 	if s.isShuffle() {
 		for _, rr := range s.Proc.Reg.MergeReceivers {
@@ -399,19 +406,20 @@ func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline,
 
 // convert vm.Instruction to pipeline.Instruction
 // todo: bad design, need to be refactored. and please refer to how sample operator do.
-func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId int32) (int32, *pipeline.Instruction, error) {
+func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32) (int32, *pipeline.Instruction, error) {
+	opBase := op.GetOperatorBase()
 	in := &pipeline.Instruction{
-		Op:      int32(opr.Op),
-		Idx:     int32(opr.Idx),
-		IsFirst: opr.IsFirst,
-		IsLast:  opr.IsLast,
+		Op:      int32(opBase.Op),
+		Idx:     int32(opBase.Idx),
+		IsFirst: opBase.IsFirst,
+		IsLast:  opBase.IsLast,
 
-		CnAddr:      opr.CnAddr,
-		OperatorId:  opr.OperatorID,
-		ParallelId:  opr.ParallelID,
-		MaxParallel: opr.MaxParallel,
+		CnAddr:      opBase.CnAddr,
+		OperatorId:  opBase.OperatorID,
+		ParallelId:  opBase.ParallelID,
+		MaxParallel: opBase.MaxParallel,
 	}
-	switch t := opr.Arg.(type) {
+	switch t := op.(type) {
 	case *insert.Argument:
 		in.Insert = &pipeline.Insert{
 			ToWriteS3:           t.ToWriteS3,
@@ -777,7 +785,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 	case *value_scan.Argument:
 		in.ValueScan = &pipeline.ValueScan{}
 	default:
-		return -1, nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", opr.Op))
+		return -1, nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", opBase.Op))
 	}
 	return ctxId, in, nil
 }

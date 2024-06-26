@@ -38,6 +38,30 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 )
 
+func checkSrcOpsWithDst(srcRoot vm.Operator, dstRoot vm.Operator) bool {
+	if srcRoot == nil && dstRoot == nil {
+		return true
+	}
+	if srcRoot == nil || dstRoot == nil {
+		return false
+	}
+	if srcRoot.GetOperatorBase().Op != dstRoot.GetOperatorBase().Op {
+		return false
+	}
+	srcNumChildren := srcRoot.GetOperatorBase().NumChildren()
+	dstNumChildren := dstRoot.GetOperatorBase().NumChildren()
+	if srcNumChildren != dstNumChildren {
+		return false
+	}
+	for i := 0; i < srcNumChildren; i++ {
+		res := checkSrcOpsWithDst(srcRoot.GetOperatorBase().GetChildren(i), dstRoot.GetOperatorBase().GetChildren(i))
+		if !res {
+			return false
+		}
+	}
+	return true
+}
+
 func TestScopeSerialization(t *testing.T) {
 	testCases := []string{
 		"select 1",
@@ -56,11 +80,8 @@ func TestScopeSerialization(t *testing.T) {
 		require.NoError(t, errDecode)
 
 		// Just do simple check
-		require.Equal(t, len(sourceScope.PreScopes), len(targetScope.PreScopes), fmt.Sprintf("related SQL is '%s'", testCases[i]))
-		require.Equal(t, len(sourceScope.Instructions), len(targetScope.Instructions), fmt.Sprintf("related SQL is '%s'", testCases[i]))
-		for j := 0; j < len(sourceScope.Instructions); j++ {
-			require.Equal(t, sourceScope.Instructions[j].Op, targetScope.Instructions[j].Op)
-		}
+		require.Equal(t, checkSrcOpsWithDst(sourceScope.RootOp, targetScope.RootOp), true, fmt.Sprintf("related SQL is '%s'", testCases[i]))
+
 		if sourceScope.DataSource == nil {
 			require.Nil(t, targetScope.DataSource)
 		} else {
@@ -99,8 +120,9 @@ func generateScopeCases(t *testing.T, testCases []string) []*Scope {
 		})
 		require.NoError(t1, err)
 		// ignore the last operator if it's output
-		if c.scope[0].Instructions[len(c.scope[0].Instructions)-1].Op == vm.Output {
-			c.scope[0].Instructions = c.scope[0].Instructions[:len(c.scope[0].Instructions)-1]
+		//todo 这里lastop需要release不
+		if c.scope[0].RootOp.GetOperatorBase().Op == vm.Output {
+			c.scope[0].RootOp = c.scope[0].RootOp.GetOperatorBase().GetChildren(0)
 		}
 		return c.scope[0]
 	}
