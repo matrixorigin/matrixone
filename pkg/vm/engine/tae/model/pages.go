@@ -16,7 +16,6 @@ package model
 
 import (
 	"bytes"
-	"container/list"
 	"context"
 	"fmt"
 	"github.com/gogo/protobuf/proto"
@@ -250,12 +249,11 @@ func (page *TransferHashPage) IsPersist() int32 {
 }
 
 type TransferPageCleaner struct {
-	latch          sync.Mutex
-	pages          list.List
-	persistedPages list.List
+	Pages          chan *TransferPage
+	PersistedPages chan *TransferPage
 }
 
-type transferPage struct {
+type TransferPage struct {
 	page *TransferHashPage
 	ts   time.Time
 }
@@ -267,49 +265,38 @@ var (
 
 func getCleaner() *TransferPageCleaner {
 	once.Do(func() {
-		Cleaner = &TransferPageCleaner{}
+		Cleaner = &TransferPageCleaner{
+			Pages:          make(chan *TransferPage, 1000000),
+			PersistedPages: make(chan *TransferPage, 1000000),
+		}
 		go Cleaner.Handler()
+		go Cleaner.DiskHandler()
 	})
 	return Cleaner
 }
 
 func (c *TransferPageCleaner) addPage(page *TransferHashPage) {
-	c.latch.Lock()
-	defer c.latch.Unlock()
-	c.pages.PushBack(&transferPage{page: page, ts: time.Now()})
-	logutil.Infof("add page %v len %v", page, c.pages.Len())
+	c.Pages <- &TransferPage{page: page, ts: time.Now()}
 }
 
 func (c *TransferPageCleaner) Handler() {
 	for {
-		c.latch.Lock()
-
-		var delPages []*list.Element
-		for e := c.pages.Front(); e != nil; e = e.Next() {
-			page := e.Value.(*transferPage)
-			if time.Since(page.ts) > page.page.params.TTL {
-				logutil.Infof("clean page %v", page)
-				page.page.clearTable()
-				c.persistedPages.PushBack(page)
-				delPages = append(delPages, e)
-			}
+		page := <-c.Pages
+		if time.Since(page.ts) < page.page.params.TTL {
+			time.Sleep(page.page.params.TTL - time.Since(page.ts))
 		}
-		for _, e := range delPages {
-			c.pages.Remove(e)
-		}
-		c.latch.Unlock()
-
-		for e := c.persistedPages.Front(); e != nil; e = e.Next() {
-			page := e.Value.(*transferPage)
-			if time.Since(page.page.bornTS) > page.page.params.DiskTTL {
-				page.page.clearPersistTable()
-				delPages = append(delPages, e)
-			}
-		}
-		for _, e := range delPages {
-			c.persistedPages.Remove(e)
-		}
-		time.Sleep(time.Second)
+		fmt.Printf("clean page %v\n", page)
+		page.page.clearTable()
+		c.PersistedPages <- page
 	}
+}
 
+func (c *TransferPageCleaner) DiskHandler() {
+	for {
+		page := <-c.PersistedPages
+		if time.Since(page.page.bornTS) < page.page.params.DiskTTL {
+			time.Sleep(page.page.params.DiskTTL - time.Since(page.page.bornTS))
+		}
+		page.page.clearPersistTable()
+	}
 }

@@ -9015,10 +9015,14 @@ func TestPersistTransferTable(t *testing.T) {
 		model.SetBlockRead(blockio.NewBlockRead())
 	}
 	model.FS = tae.Runtime.Fs.Service
-	model.Cleaner = &model.TransferPageCleaner{}
+	model.Cleaner = &model.TransferPageCleaner{
+		Pages:          make(chan *model.TransferPage, 1000000),
+		PersistedPages: make(chan *model.TransferPage, 1000000),
+	}
 	go model.Cleaner.Handler()
+	go model.Cleaner.DiskHandler()
 	page := model.NewTransferHashPage(&id1, now, false,
-		model.WithTTL(2*time.Second),
+		model.WithTTL(time.Second),
 	)
 	ids := make([]types.Rowid, 10)
 	for i := 0; i < 10; i++ {
@@ -9095,8 +9099,12 @@ func TestClearPersistTransferTable(t *testing.T) {
 		model.SetBlockRead(blockio.NewBlockRead())
 	}
 	model.FS = tae.Runtime.Fs.Service
-	model.Cleaner = &model.TransferPageCleaner{}
+	model.Cleaner = &model.TransferPageCleaner{
+		Pages:          make(chan *model.TransferPage, 1000000),
+		PersistedPages: make(chan *model.TransferPage, 1000000),
+	}
 	go model.Cleaner.Handler()
+	go model.Cleaner.DiskHandler()
 	page := model.NewTransferHashPage(&id1, now, false,
 		model.WithTTL(time.Second),
 		model.WithDiskTTL(2*time.Second),
