@@ -285,7 +285,6 @@ func (c *TransferPageCleaner) Handler() {
 		if time.Since(page.ts) < page.page.params.TTL {
 			time.Sleep(page.page.params.TTL - time.Since(page.ts))
 		}
-		fmt.Printf("clean page %v\n", page)
 		page.page.clearTable()
 		c.PersistedPages <- page
 	}
