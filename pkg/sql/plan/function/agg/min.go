@@ -16,9 +16,10 @@ package agg
 
 import (
 	"bytes"
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
-	"math"
 )
 
 func RegisterMin2(id int64) {
@@ -133,6 +134,13 @@ func RegisterMin2(id int64) {
 		nil,
 		aggMinInitResult[bool],
 		aggMinOfBoolFill, aggMinOfBoolFills, aggMinOfBoolMerge, nil)
+
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_enum.ToType(), MinReturnType, true),
+		nil,
+		nil,
+		aggMinInitResult[types.Enum],
+		aggMinFill[types.Enum], aggMinFills[types.Enum], aggMinMerge[types.Enum], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
 		aggexec.MakeSingleColumnAggInformation(id, types.T_uuid.ToType(), MinReturnType, true),
