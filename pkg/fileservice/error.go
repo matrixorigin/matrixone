@@ -39,6 +39,7 @@ func IsRetryableError(err error) bool {
 		strings.Contains(str, "dial tcp: lookup") ||
 		strings.Contains(str, "i/o timeout") ||
 		strings.Contains(str, "write: broken pipe") ||
+		strings.Contains(str, "TLS handshake timeout") ||
 		strings.Contains(str, "use of closed network connection") {
 		return true
 	}
