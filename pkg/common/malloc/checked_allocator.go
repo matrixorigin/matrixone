@@ -17,15 +17,14 @@ package malloc
 import (
 	"fmt"
 	"runtime"
-	"sync"
 	"sync/atomic"
 	"unsafe"
 )
 
 type CheckedAllocator struct {
-	upstream Allocator
-	fraction uint32
-	funcPool sync.Pool
+	upstream        Allocator
+	fraction        uint32
+	deallocatorPool *ClosureDeallocatorPool[checkedAllocatorArgs]
 }
 
 type checkedAllocatorArgs struct {
@@ -33,43 +32,38 @@ type checkedAllocatorArgs struct {
 	deallocator Deallocator
 	stackID     uint64
 	size        uint64
+	ptr         unsafe.Pointer
 }
 
 func NewCheckedAllocator(upstream Allocator, fraction uint32) *CheckedAllocator {
-	ret := &CheckedAllocator{
+	return &CheckedAllocator{
 		upstream: upstream,
 		fraction: fraction,
-	}
 
-	ret.funcPool = sync.Pool{
-		New: func() any {
-			argumented := new(argumentedFuncDeallocator[checkedAllocatorArgs])
-			argumented.fn = func(ptr unsafe.Pointer, hints Hints, args checkedAllocatorArgs) {
+		deallocatorPool: NewClosureDeallocatorPool(
+			func(hints Hints, args checkedAllocatorArgs) {
 
 				if !args.deallocated.CompareAndSwap(false, true) {
 					panic(fmt.Sprintf(
 						"double free: address %p, size %v, allocated at %s",
-						ptr,
+						args.ptr,
 						args.size,
 						stackInfo(args.stackID),
 					))
 				}
 
 				hints |= DoNotReuse
-				args.deallocator.Deallocate(ptr, hints)
+				args.deallocator.Deallocate(hints)
 
-				ret.funcPool.Put(argumented)
-			}
-			return argumented
-		},
+			},
+		),
 	}
 
-	return ret
 }
 
 var _ Allocator = new(CheckedAllocator)
 
-func (c *CheckedAllocator) Allocate(size uint64, hints Hints) (unsafe.Pointer, Deallocator, error) {
+func (c *CheckedAllocator) Allocate(size uint64, hints Hints) ([]byte, Deallocator, error) {
 	ptr, dec, err := c.upstream.Allocate(size, hints)
 	if err != nil {
 		return nil, nil, err
@@ -92,12 +86,13 @@ func (c *CheckedAllocator) Allocate(size uint64, hints Hints) (unsafe.Pointer, D
 		}
 	})
 
-	fn := c.funcPool.Get().(*argumentedFuncDeallocator[checkedAllocatorArgs])
-	fn.SetArgument(checkedAllocatorArgs{
+	dec = c.deallocatorPool.Get(checkedAllocatorArgs{
 		deallocated: deallocated,
 		deallocator: dec,
 		stackID:     stackID,
 		size:        size,
+		ptr:         unsafe.Pointer(unsafe.SliceData(ptr)),
 	})
-	return ptr, fn, nil
+
+	return ptr, dec, nil
 }
