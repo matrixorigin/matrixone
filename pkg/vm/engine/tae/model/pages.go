@@ -84,7 +84,7 @@ type TransferHashPage struct {
 	common.RefHelper
 	bornTS      time.Time
 	id          *common.ID // not include blk offset
-	hashmap     map[uint32]types.Rowid
+	hashmap     api.HashPageMap
 	loc         objectio.Location
 	params      TransferHashPageParams
 	isTransient bool
@@ -103,7 +103,7 @@ func NewTransferHashPage(id *common.ID, ts time.Time, isTransient bool, opts ...
 	page := &TransferHashPage{
 		bornTS:      ts,
 		id:          id,
-		hashmap:     make(map[uint32]types.Rowid),
+		hashmap:     api.HashPageMap{M: make(map[uint32][]byte)},
 		params:      params,
 		isTransient: isTransient,
 		isPersisted: false,
@@ -128,11 +128,11 @@ func (page *TransferHashPage) TTL(now time.Time, ttl time.Duration) bool {
 
 func (page *TransferHashPage) Close() {
 	logutil.Debugf("Closing %s", page.String())
-	page.hashmap = make(map[uint32]types.Rowid)
+	page.hashmap = api.HashPageMap{M: make(map[uint32][]byte)}
 }
 
 func (page *TransferHashPage) Length() int {
-	return len(page.hashmap)
+	return len(page.hashmap.M)
 }
 
 func (page *TransferHashPage) String() string {
@@ -140,7 +140,7 @@ func (page *TransferHashPage) String() string {
 	_, _ = w.WriteString(fmt.Sprintf("hashpage[%s][%s][Len=%d]",
 		page.id.BlockString(),
 		page.bornTS.String(),
-		len(page.hashmap)))
+		len(page.hashmap.M)))
 	return w.String()
 }
 
@@ -154,7 +154,7 @@ func (page *TransferHashPage) Pin() *common.PinnedItem[*TransferHashPage] {
 func (page *TransferHashPage) Train(from uint32, to types.Rowid) {
 	page.latch.Lock()
 	defer page.latch.Unlock()
-	page.hashmap[from] = to
+	page.hashmap.M[from] = to[:]
 	v2.TransferRowTotalCounter.Inc()
 }
 
@@ -178,7 +178,9 @@ func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) 
 	page.latch.Unlock()
 
 	memstart := time.Now()
-	dest, ok = page.hashmap[from]
+	var m []byte
+	m, ok = page.hashmap.M[from]
+	dest = types.Rowid(m)
 	memduration := time.Since(memstart)
 	v2.TransferDurationMemoryGauge.Set(1000 * memduration.Seconds())
 
@@ -193,28 +195,13 @@ func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) 
 }
 
 func (page *TransferHashPage) Marshal() []byte {
-	m := make(map[uint32][]byte)
-	for k, v := range page.hashmap {
-		m[k] = v[:]
-	}
-	mapping := &api.HashPageMap{M: m}
-	data, _ := proto.Marshal(mapping)
+	data, _ := proto.Marshal(&page.hashmap)
 	return data
 }
 
 func (page *TransferHashPage) Unmarshal(data []byte) error {
-	var mapping api.HashPageMap
-	err := proto.Unmarshal(data, &mapping)
-	if err != nil {
-		return err
-	}
-
-	for key, value := range mapping.M {
-		var v [24]byte
-		copy(v[:], value)
-		page.hashmap[key] = v
-	}
-	return nil
+	err := proto.Unmarshal(data, &page.hashmap)
+	return err
 }
 
 func (page *TransferHashPage) SetLocation(location objectio.Location) {
@@ -227,7 +214,7 @@ func (page *TransferHashPage) clearTable() {
 	page.latch.Lock()
 	defer page.latch.Unlock()
 	logutil.Infof("[TransferHashPage] clear hash table")
-	clear(page.hashmap)
+	clear(page.hashmap.M)
 	page.isPersisted = true
 }
 
@@ -252,7 +239,7 @@ func (page *TransferHashPage) loadTable() {
 		return
 	}
 
-	v2.TransferRowHitCounter.Add(float64(len(page.hashmap)))
+	v2.TransferRowHitCounter.Add(float64(len(page.hashmap.M)))
 
 	page.isPersisted = false
 
