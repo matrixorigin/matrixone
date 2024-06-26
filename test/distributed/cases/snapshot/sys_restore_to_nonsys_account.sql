@@ -1,4 +1,3 @@
--- @bvt:issue#16709
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
 
@@ -369,4 +368,3 @@ drop database test01;
 -- @session
 
 drop account acc01;
--- @bvt:issue
