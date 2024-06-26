@@ -27,7 +27,10 @@ type SessionConn interface {
 	Write([]byte) error
 	RemoteAddress() string
 }
-
+type ListBlock struct {
+	data       []byte
+	writeIndex int
+}
 type Conn struct {
 	id                    uint64
 	conn                  net.Conn
@@ -36,15 +39,14 @@ type Conn struct {
 	sequenceId            uint8
 	header                [4]byte
 	// static buffer block
-	fixBuf []byte
+	fixBuf *ListBlock
 	// dynamic buffer block is organized by a list
 	dynamicBuf *list.List
 	// current block pointer being written
-	curBuf []byte
+	curBuf *ListBlock
 	// current packet header pointer
 	curHeader []byte
 	// current block write pointer
-	writeIndex int
 	// buffer data size, used to check maxBytesToFlush
 	bufferLength int
 	// packet data size, used to count header
@@ -62,19 +64,20 @@ func NewIOSession(conn net.Conn, pu *config.ParameterUnit) (*Conn, error) {
 		localAddr:       conn.RemoteAddr().String(),
 		remoteAddr:      conn.LocalAddr().String(),
 		connected:       true,
+		fixBuf:          &ListBlock{},
 		dynamicBuf:      list.New(),
 		allocator:       NewSessionAllocator(pu),
 		timeout:         pu.SV.SessionTimeout.Duration,
 		maxBytesToFlush: int(pu.SV.MaxBytesInOutbufToFlush * 1024),
 	}
 	var err error
-	c.fixBuf, err = c.allocator.Alloc(fixBufferSize)
+	c.fixBuf.data, err = c.allocator.Alloc(fixBufferSize)
 
 	if err != nil {
 		return nil, err
 	}
 
-	c.curHeader = c.fixBuf[:HeaderLengthOfTheProtocol]
+	c.curHeader = c.fixBuf.data[:HeaderLengthOfTheProtocol]
 	c.curBuf = c.fixBuf
 	return c, err
 }
@@ -109,7 +112,7 @@ func (c *Conn) Close() error {
 	c.connected = false
 
 	// Free all allocated memory
-	c.allocator.Free(c.fixBuf)
+	c.allocator.Free(c.fixBuf.data)
 	for e := c.dynamicBuf.Front(); e != nil; e = e.Next() {
 		c.allocator.Free(e.Value.([]byte))
 	}
@@ -195,7 +198,7 @@ func (c *Conn) ReadOnePayload(packetLength int) ([]byte, error) {
 		}
 		defer c.allocator.Free(buf)
 	} else {
-		buf = c.fixBuf
+		buf = c.fixBuf.data
 	}
 	err = c.ReadBytes(buf[:packetLength], packetLength)
 	if err != nil {
@@ -240,28 +243,36 @@ func (c *Conn) ReadFromConn(buf []byte) (int, error) {
 // Append Add bytes to buffer
 func (c *Conn) Append(elems ...byte) error {
 	var err error
-	cutIndex := 0
-	for {
-		// if bufferLength > 16MB, split packet
-		remainPacketLength := int(MaxPayloadSize) - c.bufferLength
-		if len(elems[cutIndex:]) <= remainPacketLength {
-			break
-		}
 
-		err = c.AppendPart(elems[cutIndex:remainPacketLength])
+	cutIndex := 0
+	for cutIndex < len(elems) {
+		// if bufferLength > 16MB, split packet
+		remainPacketSpace := int(MaxPayloadSize) - c.packetLength
+		writeLength := Min(remainPacketSpace, len(elems[cutIndex:]))
+		err = c.AppendPart(elems[cutIndex : cutIndex+writeLength])
 		if err != nil {
 			return err
 		}
+		if c.bufferLength == int(MaxPayloadSize) {
+			err = c.FinishedPacket()
+			if err != nil {
+				return err
+			}
+
+			err = c.BeginPacket()
+			if err != nil {
+				return err
+			}
+		}
+
+		cutIndex += writeLength
+	}
+
+	if c.bufferLength == 0 {
 		err = c.FinishedPacket()
 		if err != nil {
 			return err
 		}
-		cutIndex += remainPacketLength
-	}
-
-	err = c.AppendPart(elems)
-	if err != nil {
-		return err
 	}
 	return err
 }
@@ -269,33 +280,34 @@ func (c *Conn) Append(elems ...byte) error {
 func (c *Conn) AppendPart(elems []byte) error {
 	var buf []byte
 	var err error
-	remainBuf := len(c.curBuf) - c.writeIndex
-	if len(elems) > remainBuf {
-		if remainBuf > 0 {
-			copy(c.curBuf[c.writeIndex:], elems[:remainBuf])
+	curBufRemainSpace := len(c.curBuf.data) - c.curBuf.writeIndex
+	if len(elems) > curBufRemainSpace {
+		if curBufRemainSpace > 0 {
+			copy(c.curBuf.data[c.curBuf.writeIndex:], elems[:curBufRemainSpace])
+			c.curBuf.writeIndex += curBufRemainSpace
+		}
+		curElemsRemainSpace := len(elems) - curBufRemainSpace
+
+		allocLength := Max(fixBufferSize, curElemsRemainSpace)
+		if allocLength%fixBufferSize != 0 {
+			allocLength += fixBufferSize - allocLength%fixBufferSize
 		}
 
-		if len(elems)-remainBuf < fixBufferSize {
-			buf, err = c.allocator.Alloc(fixBufferSize)
-			if err != nil {
-				return err
-			}
-
-		} else {
-			buf, err = c.allocator.Alloc(len(elems) - remainBuf)
-			if err != nil {
-				return err
-			}
+		buf, err = c.allocator.Alloc(allocLength)
+		if err != nil {
+			return err
 		}
 
-		copy(buf, elems[remainBuf:])
-		c.dynamicBuf.PushBack(buf)
-		c.writeIndex = len(elems) - remainBuf
-		c.curBuf = buf
+		copy(buf, elems[curBufRemainSpace:])
+		newBlock := &ListBlock{}
+		newBlock.data = buf
+		newBlock.writeIndex = curElemsRemainSpace
+		c.dynamicBuf.PushBack(newBlock)
+		c.curBuf = newBlock
 
 	} else {
-		copy(c.curBuf[c.writeIndex:], elems)
-		c.writeIndex += len(elems)
+		copy(c.curBuf.data[c.curBuf.writeIndex:], elems)
+		c.curBuf.writeIndex += len(elems)
 	}
 	c.bufferLength += len(elems)
 	c.packetLength += len(elems)
@@ -304,17 +316,19 @@ func (c *Conn) AppendPart(elems []byte) error {
 
 // BeginPacket Reserve Header in the buffer
 func (c *Conn) BeginPacket() error {
-	if len(c.curBuf)-c.writeIndex < HeaderLengthOfTheProtocol {
+	if len(c.curBuf.data)-c.curBuf.writeIndex < HeaderLengthOfTheProtocol {
 		buf, err := c.allocator.Alloc(fixBufferSize)
 		if err != nil {
 			return err
 		}
-		c.dynamicBuf.PushBack(buf)
-		c.curBuf = buf
+		newBlock := &ListBlock{}
+		newBlock.data = buf
+		c.dynamicBuf.PushBack(newBlock)
+		c.curBuf = newBlock
 	}
-
-	c.curHeader = c.curBuf[c.writeIndex : c.writeIndex+HeaderLengthOfTheProtocol]
-	c.writeIndex += HeaderLengthOfTheProtocol
+	c.curHeader = c.curBuf.data[c.curBuf.writeIndex : c.curBuf.writeIndex+HeaderLengthOfTheProtocol]
+	c.curBuf.writeIndex += HeaderLengthOfTheProtocol
+	c.bufferLength += HeaderLengthOfTheProtocol
 	return nil
 }
 
@@ -350,34 +364,23 @@ func (c *Conn) Flush() error {
 	}
 	var err error
 	defer c.Reset()
-	if c.dynamicBuf.Len() == 0 {
-		err = c.WriteToConn(c.fixBuf[:c.writeIndex])
-		if err != nil {
-			return err
-		}
-	} else {
-		err = c.WriteToConn(c.fixBuf)
-		if err != nil {
-			return err
-		}
-		for c.dynamicBuf.Len() > 0 {
-			node := c.dynamicBuf.Front()
-			data := node.Value.([]byte)
-			if node.Next() == nil {
-				err = c.WriteToConn(data[:c.writeIndex])
-				if err != nil {
-					return err
-				}
-			} else {
-				err = c.WriteToConn(data)
-				if err != nil {
-					return err
-				}
-			}
-			c.allocator.Free(node.Value.([]byte))
-			c.dynamicBuf.Remove(node)
-		}
+
+	err = c.WriteToConn(c.fixBuf.data[:c.fixBuf.writeIndex])
+	if err != nil {
+		return err
 	}
+
+	for c.dynamicBuf.Len() > 0 {
+		node := c.dynamicBuf.Front()
+		block := node.Value.(*ListBlock)
+		err = c.WriteToConn(block.data[:block.writeIndex])
+		if err != nil {
+			return err
+		}
+		c.allocator.Free(block.data)
+		c.dynamicBuf.Remove(node)
+	}
+
 	return err
 
 }
@@ -438,11 +441,10 @@ func (c *Conn) closeConn() error {
 func (c *Conn) Reset() {
 	c.bufferLength = 0
 	c.packetLength = 0
-	c.writeIndex = 0
-	c.curHeader = c.fixBuf[:HeaderLengthOfTheProtocol]
 	c.curBuf = c.fixBuf
+	c.fixBuf.writeIndex = 0
 	for node := c.dynamicBuf.Front(); node != nil; node = node.Next() {
-		c.allocator.Free(node.Value.([]byte))
+		c.allocator.Free(node.Value.(*ListBlock).data)
 	}
 	c.dynamicBuf.Init()
 
