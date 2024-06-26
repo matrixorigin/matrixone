@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -673,8 +674,11 @@ func ConstructPKFilters(tableDef *plan.TableDef, dbName string,
 	return
 }
 
+// TODO(ghs) workaround for special tables, remove later
+var specialPattern *regexp.Regexp = regexp.MustCompile(`mo_tables|mo_database|_mo_columns`)
+
 func constructBasePKFilter(expr *plan.Expr, tblDef *plan.TableDef, proc *process.Process) (filter BasePKFilter) {
-	if expr == nil {
+	if expr == nil || specialPattern.MatchString(tblDef.Name) {
 		return
 	}
 
