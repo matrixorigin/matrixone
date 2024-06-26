@@ -219,17 +219,15 @@ func (c *Conn) ReadBytes(buf []byte, Length int) error {
 	var err error
 	var n int
 	var readLength int
-	for {
+	for readLength < Length {
 		n, err = c.ReadFromConn(buf[readLength:])
 		if err != nil {
 			return err
 		}
 		readLength += n
 
-		if readLength == Length {
-			return nil
-		}
 	}
+	return err
 }
 func (c *Conn) ReadFromConn(buf []byte) (int, error) {
 	err := c.conn.SetReadDeadline(time.Now().Add(c.timeout))
@@ -253,7 +251,7 @@ func (c *Conn) Append(elems ...byte) error {
 		if err != nil {
 			return err
 		}
-		if c.bufferLength == int(MaxPayloadSize) {
+		if c.packetLength == int(MaxPayloadSize) {
 			err = c.FinishedPacket()
 			if err != nil {
 				return err
@@ -268,12 +266,6 @@ func (c *Conn) Append(elems ...byte) error {
 		cutIndex += writeLength
 	}
 
-	if c.bufferLength == 0 {
-		err = c.FinishedPacket()
-		if err != nil {
-			return err
-		}
-	}
 	return err
 }
 
