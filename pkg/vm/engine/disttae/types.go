@@ -460,7 +460,8 @@ func (txn *Transaction) gcObjs(start int) error {
 	objsToGC := make(map[string]struct{})
 	var objsName []string
 	for i := start; i < len(txn.writes); i++ {
-		if txn.writes[i].bat == nil {
+		if txn.writes[i].bat == nil ||
+			txn.writes[i].bat.RowCount() == 0 {
 			continue
 		}
 		//1. Remove blocks from txn.cnBlkId_Pos lazily till txn commits or rollback.
