@@ -675,6 +675,7 @@ SELECT 10.0 + CAST('aaa' AS decimal);
 SELECT CAST('101010101001' AS decimal);
 SELECT CAST('10101010010101010101010101' AS decimal(26));
 SELECT CAST('0101010' AS decimal);
+SELECT CAST('' AS decimal);
 
 DROP TABLE IF EXISTS decimal20;
 CREATE TABLE decimal20(v varchar(40), tt tinytext, t text, mt mediumtext, lt longtext);

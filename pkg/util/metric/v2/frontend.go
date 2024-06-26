@@ -56,4 +56,40 @@ var (
 		}, []string{"label"})
 	StartHandleRequestCounter = requestCounter.WithLabelValues("start-handle")
 	EndHandleRequestCounter   = requestCounter.WithLabelValues("end-handle")
+
+	resolveDurationHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "frontend",
+			Name:      "resolve_duration",
+			Help:      "Bucketed histogram of txnCompilerContext.Resolve duration.",
+			Buckets:   getDurationBuckets(),
+		}, []string{"label"})
+
+	TotalResolveDurationHistogram   = resolveDurationHistogram.WithLabelValues("total-resolve")
+	EnsureDatabaseDurationHistogram = resolveDurationHistogram.WithLabelValues("ensure-database")
+	GetSubMetaDurationHistogram     = resolveDurationHistogram.WithLabelValues("get-sub-meta")
+	CheckSubValidDurationHistogram  = resolveDurationHistogram.WithLabelValues("check-sub-valid")
+	GetRelationDurationHistogram    = resolveDurationHistogram.WithLabelValues("get-relation")
+	OpenDBDurationHistogram         = resolveDurationHistogram.WithLabelValues("open-db")
+	OpenTableDurationHistogram      = resolveDurationHistogram.WithLabelValues("open-table")
+	GetTmpTableDurationHistogram    = resolveDurationHistogram.WithLabelValues("get-tmp-table")
+
+	createAccountDurationHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "frontend",
+			Name:      "create_account_duration",
+			Help:      "Bucketed histogram of Create Account duration.",
+			Buckets:   getDurationBuckets(),
+		}, []string{"label"})
+
+	TotalCreateDurationHistogram              = createAccountDurationHistogram.WithLabelValues("total-create")
+	Step1DurationHistogram                    = createAccountDurationHistogram.WithLabelValues("step1")
+	Step2DurationHistogram                    = createAccountDurationHistogram.WithLabelValues("step2")
+	CreateTablesInMoCatalogDurationHistogram  = createAccountDurationHistogram.WithLabelValues("create-tables-in-mo-catalog")
+	ExecDDL1DurationHistogram                 = createAccountDurationHistogram.WithLabelValues("exec-ddl1")
+	InitData1DurationHistogram                = createAccountDurationHistogram.WithLabelValues("init-data1")
+	CreateTablesInSystemDurationHistogram     = createAccountDurationHistogram.WithLabelValues("create-tables-in-system")
+	CreateTablesInInfoSchemaDurationHistogram = createAccountDurationHistogram.WithLabelValues("create-tables-in-info-schema")
 )

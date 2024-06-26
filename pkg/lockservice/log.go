@@ -369,10 +369,12 @@ func logPingFailed(
 	}
 }
 
-func logCanLockOnService() {
+func logCanLockOnService(
+	serviceID string) {
 	logger := getWithSkipLogger()
 	if logger.Enabled(zap.InfoLevel) {
-		logger.Error("if lock on service")
+		logger.Error("if lock on service",
+			zap.String("serviceID", serviceID))
 	}
 }
 
@@ -496,6 +498,19 @@ func logStatus(
 	logger := getWithSkipLogger()
 	if logger.Enabled(zap.InfoLevel) {
 		logger.Info("service status",
+			zap.String("status", status.String()))
+	}
+}
+
+func logServiceStatus(
+	info string,
+	serviceID string,
+	status pb.Status) {
+	logger := getWithSkipLogger()
+	if logger.Enabled(zap.InfoLevel) {
+		logger.Info("service status",
+			zap.String("info", info),
+			zap.String("serviceID", serviceID),
 			zap.String("status", status.String()))
 	}
 }

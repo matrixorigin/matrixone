@@ -12,7 +12,6 @@ pull_request_rules:
       - "#changes-requested-reviews-by<=0"
       - label!=do-not-merge/wip
       - base=main
-      - approved-reviews-by=fengttt
     actions:
       queue:
         name: main
@@ -47,13 +46,6 @@ pull_request_rules:
     actions:
       update: 
 
-  - name: Auto Request Reviewer For main
-    conditions:
-      - base=main
-    actions:
-      request_reviews:
-        users:
-          - fengttt
   - name: Auto Request Reviewer For 1.2-dev
     conditions:
       - base!=main
