@@ -100,6 +100,8 @@ func (entry *mergeObjectsEntry) prepareTransferPage() {
 		pages := make([]*model.TransferHashPage, 0, obj.BlockCnt())
 		var writer *blockio.BlockWriter
 		writer, _ = blockio.NewBlockWriterNew(entry.rt.Fs.Service, name, 0, nil)
+		var duration time.Duration
+		start := time.Now()
 		for j := 0; j < obj.BlockCnt(); j++ {
 			if len(entry.transMappings.Mappings[k].M) == 0 {
 				k++
@@ -126,6 +128,7 @@ func (entry *mergeObjectsEntry) prepareTransferPage() {
 				page.Train(uint32(srcRow), *objectio.NewRowid(blkID, uint32(dst.RowIdx)))
 			}
 
+			start = time.Now()
 			data := page.Pin().Val.Marshal()
 			t := types.T_varchar.ToType()
 			vw := entry.rt.VectorPool.Transient.GetVector(&t)
@@ -144,17 +147,21 @@ func (entry *mergeObjectsEntry) prepareTransferPage() {
 			if err != nil {
 				return
 			}
+			duration += time.Since(start)
 
 			entry.pageIds = append(entry.pageIds, id)
 			_ = entry.rt.TransferTable.AddPage(page)
 			pages = append(pages, page)
 			k++
 		}
+		start = time.Now()
 		var blocks []objectio.BlockObject
 		blocks, _, err := writer.Sync(context.Background())
 		if err != nil {
 			return
 		}
+		duration += time.Since(start)
+		v2.TransferPageMergeDurationHistogram.Observe(duration.Seconds())
 
 		for i, blk := range blocks {
 			location := blockio.EncodeLocation(

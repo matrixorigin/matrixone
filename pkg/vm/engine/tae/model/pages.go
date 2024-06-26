@@ -170,7 +170,7 @@ func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) 
 		page.loadTable()
 		v2.TransferDiskHitCounter.Inc()
 		diskDuration := time.Since(diskStart)
-		v2.TransferDurationDiskGauge.Set(1000 * diskDuration.Seconds())
+		v2.TransferDurationDiskHistogram.Observe(1000 * diskDuration.Seconds())
 	} else {
 		v2.TransferMemoryHitCounter.Inc()
 	}
@@ -183,7 +183,7 @@ func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) 
 		dest = types.Rowid(m)
 	}
 	memduration := time.Since(memstart)
-	v2.TransferDurationMemoryGauge.Set(1000 * memduration.Seconds())
+	v2.TransferDurationMemoryHistogram.Observe(1000 * memduration.Seconds())
 
 	var str string
 	if ok {
@@ -288,6 +288,7 @@ func (c *TransferPageCleaner) addPage(page *TransferHashPage) {
 func (c *TransferPageCleaner) Handler() {
 	for {
 		page := <-c.Pages
+		v2.TransferPageInChannelHistogram.Observe(float64(len(c.Pages)))
 		if time.Since(page.ts) < page.page.params.TTL {
 			time.Sleep(page.page.params.TTL - time.Since(page.ts))
 		}

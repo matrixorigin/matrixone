@@ -129,6 +129,8 @@ func (entry *flushTableTailEntry) addTransferPages() {
 	pages := make([]*model.TransferHashPage, 0, len(entry.transMappings.Mappings))
 	var writer *blockio.BlockWriter
 	writer, _ = blockio.NewBlockWriterNew(entry.rt.Fs.Service, name, 0, nil)
+	var duration time.Duration
+	start := time.Now()
 	for i, mcontainer := range entry.transMappings.Mappings {
 		m := mcontainer.M
 		if len(m) == 0 {
@@ -148,6 +150,7 @@ func (entry *flushTableTailEntry) addTransferPages() {
 			page.Train(uint32(srcRow), *objectio.NewRowid(blkid, uint32(dst.RowIdx)))
 		}
 
+		start = time.Now()
 		data := page.Pin().Val.Marshal()
 		t := types.T_varchar.ToType()
 		vw := entry.rt.VectorPool.Transient.GetVector(&t)
@@ -166,16 +169,20 @@ func (entry *flushTableTailEntry) addTransferPages() {
 		if err != nil {
 			return
 		}
+		duration += time.Since(start)
 
 		entry.rt.TransferTable.AddPage(page)
 		pages = append(pages, page)
 	}
 
+	start = time.Now()
 	var blocks []objectio.BlockObject
 	blocks, _, err := writer.Sync(context.Background())
 	if err != nil {
 		return
 	}
+	duration += time.Since(start)
+	v2.TransferPageFlushDurationHistogram.Observe(duration.Seconds())
 
 	for i, blk := range blocks {
 		location := blockio.EncodeLocation(

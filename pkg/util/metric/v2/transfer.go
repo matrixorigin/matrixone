@@ -42,13 +42,34 @@ var (
 )
 
 var (
-	transferDurationGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+	transferDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: "mo",
 		Subsystem: "transfer",
 		Name:      "duration",
 		Help:      "The duration of transfer.",
 	}, []string{"type"})
 
-	TransferDurationMemoryGauge = transferDurationGauge.WithLabelValues("memory")
-	TransferDurationDiskGauge   = transferDurationGauge.WithLabelValues("disk")
+	TransferDurationMemoryHistogram = transferDurationHistogram.WithLabelValues("memory")
+	TransferDurationDiskHistogram   = transferDurationHistogram.WithLabelValues("disk")
+)
+
+var (
+	TransferPageInChannelHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace: "mo",
+		Subsystem: "transfer",
+		Name:      "page_in_channel",
+		Help:      "The number of page in channel.",
+	})
+)
+
+var (
+	transferPageWriteDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: "mo",
+		Subsystem: "transfer",
+		Name:      "page_write_duration",
+		Help:      "The duration of transfer.",
+	}, []string{"type"})
+
+	TransferPageFlushDurationHistogram = transferPageWriteDurationHistogram.WithLabelValues("flush")
+	TransferPageMergeDurationHistogram = transferPageWriteDurationHistogram.WithLabelValues("merge")
 )
