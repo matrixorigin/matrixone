@@ -331,7 +331,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	if snapshot == nil {
 		return moerr.NewInternalError(ctx, "snapshot %s does not exist", snapshotName)
 	}
-	if snapshot.accountName != srcAccountName {
+	if snapshot.accountName != srcAccountName && snapshot.level != tree.RESTORELEVELCLUSTER.String() {
 		return moerr.NewInternalError(ctx, "accountName(%v) does not match snapshot.accountName(%v)", srcAccountName, snapshot.accountName)
 	}
 
@@ -360,6 +360,21 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 
 	if needSkipDb(dbName) {
 		return moerr.NewInternalError(ctx, "can't restore db: %v", dbName)
+	}
+
+	if snapshot.level == tree.RESTORELEVELCLUSTER.String() && len(srcAccountName) != 0 {
+		toAccountId, err = getAccountId(ctx, bh, srcAccountName)
+		if err != nil {
+			return err
+		}
+		sp, err := mockInsertSnapshotRecord(ctx, bh, snapshot, uint64(toAccountId), srcAccountName)
+		if err != nil {
+			return err
+		}
+		snapshotName = sp
+		defer func() {
+			err = mockDeleteSnapshotRecord(ctx, bh, snapshot, sp)
+		}()
 	}
 
 	// restore as a txn
@@ -416,6 +431,10 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		if err = restoreViews(ctx, ses, bh, snapshotName, viewMap, toAccountId); err != nil {
 			return
 		}
+	}
+
+	if err != nil {
+		return
 	}
 
 	// checks if the given context has been canceled.
@@ -1184,10 +1203,10 @@ func getTableInfoMap(
 			continue
 		}
 		if dbName != "" && dbName != d {
-			return
+			continue
 		}
 		if tblName != "" && tblName != t {
-			return
+			continue
 		}
 
 		if tblInfoMap[key], err = getTableInfo(ctx, bh, snapshotName, d, t); err != nil {
@@ -1316,6 +1335,64 @@ func checkAndRestorePublicationRecord(
 				}
 			}
 		}
+	}
+	return
+}
+
+func mockInsertSnapshotRecord(ctx context.Context, bh BackgroundExec, snapshot *snapshotRecord, toAccountId uint64, accountName string) (snapshotName string, err error) {
+	err = bh.Exec(ctx, "begin;")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+	if err != nil {
+		return
+	}
+	// mock snapshot id and snapshot name
+	snapshotUId, err := uuid.NewV7()
+	if err != nil {
+		return
+	}
+	snapshotId := snapshotUId.String()
+
+	snapshotName = snapshotId + "_" + snapshot.snapshotName + "_mock"
+	sql, err := getSqlForCreateSnapshot(ctx,
+		snapshotId,
+		snapshotName,
+		snapshot.ts,
+		tree.SNAPSHOTLEVELACCOUNT.String(),
+		accountName,
+		"",
+		"",
+		toAccountId)
+	if err != nil {
+		return
+	}
+	getLogger().Info(fmt.Sprintf("[%s] mock insert snapshot record sql: %s", snapshot.snapshotName, sql))
+	if err = bh.Exec(ctx, sql); err != nil {
+		return
+	}
+
+	if err != nil {
+		return
+	}
+	return
+}
+
+func mockDeleteSnapshotRecord(ctx context.Context, bh BackgroundExec, snapshot *snapshotRecord, snapshotName string) (err error) {
+	err = bh.Exec(ctx, "begin;")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+	if err != nil {
+		return
+	}
+	sql := getSqlForDropSnapshot(snapshotName)
+	getLogger().Info(fmt.Sprintf("[%s] mock delete snapshot record sql: %s", snapshot.snapshotName, sql))
+	if err = bh.Exec(ctx, sql); err != nil {
+		return
+	}
+	if err != nil {
+		return
 	}
 	return
 }

@@ -537,8 +537,6 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			if col != nil {
 				if _, ok := fromUniqueCols[col.Name]; ok {
 					ifInsertFromUniqueColMap[column] = true
-				} else {
-					ifInsertFromUniqueColMap[column] = false
 				}
 			}
 		}

@@ -127,11 +127,11 @@ func WriteBytes(b []byte, w io.Writer) (n int64, err error) {
 
 func ReadString(r io.Reader) (str string, n int64, err error) {
 	strLen := uint32(0)
-	if _, err = r.Read(types.EncodeUint32(&strLen)); err != nil {
+	if _, err = io.ReadFull(r, types.EncodeUint32(&strLen)); err != nil {
 		return
 	}
 	buf := make([]byte, strLen)
-	if _, err = r.Read(buf); err != nil {
+	if _, err = io.ReadFull(r, buf); err != nil {
 		return
 	}
 	str = string(buf)
@@ -141,11 +141,11 @@ func ReadString(r io.Reader) (str string, n int64, err error) {
 
 func ReadBytes(r io.Reader) (buf []byte, n int64, err error) {
 	strLen := uint32(0)
-	if _, err = r.Read(types.EncodeUint32(&strLen)); err != nil {
+	if _, err = io.ReadFull(r, types.EncodeUint32(&strLen)); err != nil {
 		return
 	}
 	buf = make([]byte, strLen)
-	if _, err = r.Read(buf); err != nil {
+	if _, err = io.ReadFull(r, buf); err != nil {
 		return
 	}
 	n = 4 + int64(strLen)
