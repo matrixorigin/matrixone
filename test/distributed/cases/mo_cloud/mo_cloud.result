@@ -697,7 +697,7 @@ triggers    0    0    accountadmin
 engines    0    0    accountadmin
 routines    0    0    accountadmin
 parameters    0    0    accountadmin
-keywords    747    45171    accountadmin
+keywords    747    44820    accountadmin
 schema_privileges    0    0    accountadmin
 table_privileges    0    0    accountadmin
 column_privileges    0    0    accountadmin

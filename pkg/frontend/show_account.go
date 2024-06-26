@@ -61,8 +61,7 @@ const (
 		"		mo_catalog.mo_database AS md" +
 		"	ON " +
 		"		mt.account_id = md.account_id AND" +
-		"		mt.relkind IN ('v','e','r','cluster') AND" +
-		"		md.dat_type != 'subscription'" +
+		"		mt.relkind IN ('v','e','r','cluster') " +
 		"	GROUP BY" +
 		"		mt.account_id" +
 		")," +
