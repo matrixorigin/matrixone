@@ -83,8 +83,9 @@ type Pipeline struct {
 	// attrs, column list.
 	attrs []string
 	// orders to be executed
-	instructions vm.Instructions
-	reg          *process.WaitRegister
+	// instructions vm.Instructions
+	rootOp vm.Operator
+	reg    *process.WaitRegister
 }
 
 // Cleanup do memory release work for whole pipeline.
@@ -107,7 +108,8 @@ func (p *Pipeline) Cleanup(proc *process.Process, pipelineFailed bool, err error
 	// }
 
 	// clean operator hold memory.
-	for i := range p.instructions {
-		p.instructions[i].Arg.Free(proc, pipelineFailed, err)
-	}
+	vm.HandleAllOp(p.rootOp, func(aprentOp vm.Operator, op vm.Operator) error {
+		op.Free(proc, pipelineFailed, err)
+		return nil
+	})
 }
