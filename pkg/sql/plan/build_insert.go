@@ -846,7 +846,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 			if err != nil {
 				return nil, err
 			}
-			vec.InplaceSort()
+			vec.InplaceSortAndCompact()
 			data, err := vec.MarshalBinary()
 			if err != nil {
 				return nil, err
