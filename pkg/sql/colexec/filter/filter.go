@@ -43,10 +43,10 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 
 	if arg.exeExpr == nil {
 		if arg.E != nil {
-			filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, arg.E, proc, true)
+			filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(arg.E), proc, true)
 		}
 	} else {
-		filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, arg.exeExpr, proc, true)
+		filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(arg.exeExpr), proc, true)
 	}
 	if err != nil {
 		return err

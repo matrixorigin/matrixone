@@ -2393,12 +2393,7 @@ func (c *Compile) compileRestrict(n *plan.Node, ss []*Scope) []*Scope {
 		return ss
 	}
 	currentFirstFlag := c.anal.isFirst
-	// for dynamic parameter, substitute param ref and const fold cast expression here to improve performance
-	newFilters, err := plan2.ConstandFoldList(n.FilterList, c.proc, false)
-	if err != nil {
-		newFilters = n.FilterList
-	}
-	filterExpr := colexec.RewriteFilterExprList(newFilters)
+	filterExpr := colexec.RewriteFilterExprList(plan2.DeepCopyExprList(n.FilterList))
 	for i := range ss {
 		ss[i].appendInstruction(vm.Instruction{
 			Op:      vm.Filter,
