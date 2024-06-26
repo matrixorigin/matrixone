@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go/constant"
 	"slices"
 	"strconv"
@@ -26,12 +25,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -2329,7 +2328,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			if ctx.recSelect {
 				return 0, moerr.NewParseError(builder.GetContext(), "not support group by in recursive cte: '%v'", tree.String(&clause.GroupBy, dialect.MYSQL))
 			}
-			groupBinder := NewGroupBinder(builder, ctx)
+			groupBinder := NewGroupBinder(builder, ctx, selectList)
 			for _, group := range clause.GroupBy {
 				group, err = ctx.qualifyColumnNames(group, AliasAfterColumn)
 				if err != nil {
