@@ -335,44 +335,31 @@ func (sender *messageSenderOnClient) waitingTheStopResponse() {
 		return
 	}
 
-	// send a stop sending message to message-receiver.
-	if err := sender.streamSender.Send(sender.ctx, generateStopSendingMessage(sender.streamSender.ID())); err != nil {
-		return
-	}
-
-	// waiting the response, so that we can close the stream safely.
-	receiveChan, err := sender.streamSender.Receive()
-	if err != nil {
-		return
-	}
-
-	// half minute is a very long time to wait an EndMessage response.
-	// todo: remove this waiting time is better, but I am scared if it will hung sometimes.
+	// cannot use sender.ctx here, because ctx maybe done.
 	maxWaitingTime, cancel := context.WithTimeout(context.TODO(), 30*time.Second)
+	defer cancel()
+
+	// send a stop sending message to message-receiver.
+	if err := sender.streamSender.Send(
+		maxWaitingTime,
+		generateStopSendingMessage(sender.streamSender.ID())); err != nil {
+		return
+	}
+
+	// wait an EndMessage response.
 	for {
-		select {
-		case val, getOK := <-receiveChan:
-			receiverDone := !getOK || val == nil
-			if receiverDone {
-				sender.safeToClose = true
-				sender.alreadyClose = true
-				cancel()
-				return
-			}
+		val, ok := <-sender.receiveCh
+		if !ok || val == nil {
+			sender.safeToClose = true
+			sender.alreadyClose = true
+			return
+		}
 
-			message := val.(*pipeline.Message)
+		message := val.(*pipeline.Message)
 
-			if message.IsEndMessage() || len(message.GetErr()) > 0 {
-				sender.safeToClose = true
-				// in fact, we should deal the cost analysis information here.
-				cancel()
-				return
-			}
-
-			continue
-
-		case <-maxWaitingTime.Done():
-			cancel()
+		if message.IsEndMessage() || len(message.GetErr()) > 0 {
+			sender.safeToClose = true
+			// in fact, we should deal the cost analysis information here.
 			return
 		}
 	}
@@ -428,7 +415,6 @@ func (sender *messageSenderOnClient) close() {
 		return
 	}
 	_ = sender.streamSender.Close(true)
-	sender.alreadyClose = true
 
 	v2.PipelineMessageSenderCounter.Desc()
 }
