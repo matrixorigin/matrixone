@@ -196,6 +196,7 @@ func initTransferMetrics() {
 	registry.MustRegister(transferDurationHistogram)
 	registry.MustRegister(transferPageWriteDurationHistogram)
 	registry.MustRegister(TransferPageInChannelHistogram)
+	registry.MustRegister(TransferPageSinceBornDurationHistogram)
 }
 
 func getDurationBuckets() []float64 {

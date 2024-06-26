@@ -73,3 +73,12 @@ var (
 	TransferPageFlushDurationHistogram = transferPageWriteDurationHistogram.WithLabelValues("flush")
 	TransferPageMergeDurationHistogram = transferPageWriteDurationHistogram.WithLabelValues("merge")
 )
+
+var (
+	TransferPageSinceBornDurationHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace: "mo",
+		Subsystem: "transfer",
+		Name:      "duration_since_born",
+		Help:      "The duration of transfer.",
+	})
+)

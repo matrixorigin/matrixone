@@ -165,6 +165,7 @@ func (page *TransferHashPage) Train(from uint32, to types.Rowid) {
 }
 
 func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) {
+	v2.TransferPageSinceBornDurationHistogram.Observe(time.Since(page.bornTS).Seconds())
 	if atomic.LoadInt32(&page.isPersisted) == 1 {
 		diskStart := time.Now()
 		page.loadTable()
