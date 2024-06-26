@@ -362,14 +362,6 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		return moerr.NewInternalError(ctx, "can't restore db: %v", dbName)
 	}
 
-	// restore as a txn
-	if err = bh.Exec(ctx, "begin;"); err != nil {
-		return err
-	}
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-
 	if snapshot.level == tree.RESTORELEVELCLUSTER.String() && len(srcAccountName) != 0 {
 		toAccountId, err = getAccountId(ctx, bh, srcAccountName)
 		if err != nil {
@@ -384,6 +376,14 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 			err = mockDeleteSnapshotRecord(ctx, bh, snapshot, sp)
 		}()
 	}
+
+	// restore as a txn
+	if err = bh.Exec(ctx, "begin;"); err != nil {
+		return err
+	}
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
 
 	// drop foreign key related tables first
 	if err = deleteCurFkTables(ctx, bh, dbName, tblName, toAccountId); err != nil {
@@ -1340,6 +1340,13 @@ func checkAndRestorePublicationRecord(
 }
 
 func mockInsertSnapshotRecord(ctx context.Context, bh BackgroundExec, snapshot *snapshotRecord, toAccountId uint64, accountName string) (snapshotName string, err error) {
+	err = bh.Exec(ctx, "begin;")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+	if err != nil {
+		return
+	}
 	// mock snapshot id and snapshot name
 	snapshotUId, err := uuid.NewV7()
 	if err != nil {
@@ -1364,13 +1371,27 @@ func mockInsertSnapshotRecord(ctx context.Context, bh BackgroundExec, snapshot *
 	if err = bh.Exec(ctx, sql); err != nil {
 		return
 	}
+
+	if err != nil {
+		return
+	}
 	return
 }
 
 func mockDeleteSnapshotRecord(ctx context.Context, bh BackgroundExec, snapshot *snapshotRecord, snapshotName string) (err error) {
+	err = bh.Exec(ctx, "begin;")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+	if err != nil {
+		return
+	}
 	sql := getSqlForDropSnapshot(snapshotName)
 	getLogger().Info(fmt.Sprintf("[%s] mock delete snapshot record sql: %s", snapshot.snapshotName, sql))
 	if err = bh.Exec(ctx, sql); err != nil {
+		return
+	}
+	if err != nil {
 		return
 	}
 	return
