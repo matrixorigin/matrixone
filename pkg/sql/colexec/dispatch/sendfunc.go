@@ -16,13 +16,13 @@ package dispatch
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"sync/atomic"
 
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -93,9 +93,21 @@ func sendToAllRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) 
 		if errEncode != nil {
 			return false, errEncode
 		}
-		for _, r := range ap.ctr.remoteReceivers {
-			if err := sendBatchToClientSession(proc.Ctx, encodeData, r); err != nil {
+
+		for i := 0; i < len(ap.ctr.remoteReceivers); i++ {
+			remove, err := sendBatchToClientSession(proc.Ctx, encodeData, ap.ctr.remoteReceivers[i])
+			if err != nil {
 				return false, err
+			}
+
+			if remove {
+				ap.ctr.remoteReceivers = append(ap.ctr.remoteReceivers[:i], ap.ctr.remoteReceivers[i+1:]...)
+				ap.ctr.remoteRegsCnt--
+				ap.ctr.aliveRegCnt--
+				if ap.ctr.remoteRegsCnt == 0 {
+					return true, nil
+				}
+				i--
 			}
 		}
 	}
@@ -133,8 +145,14 @@ func sendBatToIndex(ap *Argument, proc *process.Process, bat *batch.Batch, regIn
 					err = errEncode
 					break
 				}
-				if err = sendBatchToClientSession(proc.Ctx, encodeData, r); err != nil {
+				if remove, errSend := sendBatchToClientSession(proc.Ctx, encodeData, r); errSend != nil {
+					err = errSend
 					break
+				} else {
+					if remove {
+						err = moerr.NewInternalError(proc.Ctx, "dispatch remote receiver has been closed.")
+						break
+					}
 				}
 			}
 		}
@@ -196,8 +214,12 @@ func sendBatToMultiMatchedReg(ap *Argument, proc *process.Process, bat *batch.Ba
 				if errEncode != nil {
 					return errEncode
 				}
-				if err := sendBatchToClientSession(proc.Ctx, encodeData, r); err != nil {
+				if remove, err := sendBatchToClientSession(proc.Ctx, encodeData, r); err != nil {
 					return err
+				} else {
+					if remove {
+						return moerr.NewInternalError(proc.Ctx, "dispatch remote receiver has been closed.")
+					}
 				}
 			}
 		}
@@ -296,8 +318,10 @@ func sendToAnyRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) 
 		regIdx := ap.ctr.sendCnt % ap.ctr.remoteRegsCnt
 		reg := ap.ctr.remoteReceivers[regIdx]
 
-		if err := sendBatchToClientSession(proc.Ctx, encodeData, reg); err != nil {
-			if moerr.IsMoErrCode(err, moerr.ErrStreamClosed) {
+		if remove, err := sendBatchToClientSession(proc.Ctx, encodeData, reg); err != nil {
+			return false, err
+		} else {
+			if remove {
 				ap.ctr.remoteReceivers = append(ap.ctr.remoteReceivers[:regIdx], ap.ctr.remoteReceivers[regIdx+1:]...)
 				ap.ctr.remoteRegsCnt--
 				ap.ctr.aliveRegCnt--
@@ -306,10 +330,9 @@ func sendToAnyRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) 
 				}
 				ap.ctr.sendCnt++
 				continue
-			} else {
-				return false, err
 			}
 		}
+
 		ap.ctr.sendCnt++
 		return false, nil
 	}
@@ -342,7 +365,14 @@ func sendToAnyFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool,
 
 }
 
-func sendBatchToClientSession(ctx context.Context, encodeBatData []byte, wcs process.WrapCs) error {
+func sendBatchToClientSession(ctx context.Context, encodeBatData []byte, wcs *process.WrapCs) (receiverSafeDone bool, err error) {
+	wcs.Lock()
+	defer wcs.Unlock()
+
+	if wcs.ReceiverDone {
+		return true, nil
+	}
+
 	if len(encodeBatData) <= maxMessageSizeToMoRpc {
 		msg := cnclient.AcquireMessage()
 		{
@@ -351,10 +381,10 @@ func sendBatchToClientSession(ctx context.Context, encodeBatData []byte, wcs pro
 			msg.Cmd = pipeline.Method_BatchMessage
 			msg.Sid = pipeline.Status_Last
 		}
-		if err := wcs.Cs.Write(ctx, msg); err != nil {
-			return err
+		if err = wcs.Cs.Write(ctx, msg); err != nil {
+			return false, err
 		}
-		return nil
+		return false, nil
 	}
 
 	start := 0
@@ -373,12 +403,12 @@ func sendBatchToClientSession(ctx context.Context, encodeBatData []byte, wcs pro
 			msg.Sid = sid
 		}
 
-		if err := wcs.Cs.Write(ctx, msg); err != nil {
-			return err
+		if err = wcs.Cs.Write(ctx, msg); err != nil {
+			return false, err
 		}
 		start = end
 	}
-	return nil
+	return false, nil
 }
 
 // success count is always no greater than refcnt

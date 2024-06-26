@@ -129,7 +129,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 			return nil
 		}
 
-		infoToDispatchOperator := process.WrapCs{
+		infoToDispatchOperator := &process.WrapCs{
 			MsgId: receiver.messageId,
 			Uid:   receiver.messageUuid,
 			Cs:    receiver.clientSession,
@@ -395,7 +395,7 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 		proc.AnalInfos[i] = reuse.Alloc[process.AnalyzeInfo](nil)
 		proc.AnalInfos[i].NodeId = pHelper.analysisNodeList[i]
 	}
-	proc.DispatchNotifyCh = make(chan process.WrapCs)
+	proc.DispatchNotifyCh = make(chan *process.WrapCs)
 	{
 		txn := proc.TxnOperator.Txn()
 		txnId := txn.GetID()

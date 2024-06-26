@@ -364,7 +364,7 @@ type Process struct {
 
 	LoadLocalReader *io.PipeReader
 
-	DispatchNotifyCh chan WrapCs
+	DispatchNotifyCh chan *WrapCs
 
 	Aicm *defines.AutoIncrCacheManager
 
@@ -401,10 +401,12 @@ type sqlHelper interface {
 }
 
 type WrapCs struct {
-	MsgId uint64
-	Uid   uuid.UUID
-	Cs    morpc.ClientSession
-	Err   chan error
+	sync.RWMutex
+	ReceiverDone bool
+	MsgId        uint64
+	Uid          uuid.UUID
+	Cs           morpc.ClientSession
+	Err          chan error
 }
 
 func (proc *Process) SetStmtProfile(sp *StmtProfile) {
