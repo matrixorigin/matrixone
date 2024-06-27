@@ -894,6 +894,9 @@ func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Ex
 				defaultVal := val.Defaultval
 				veccol := vector.MustFixedCol[bool](vec)
 				veccol[i] = defaultVal
+			case *plan.Literal_EnumVal:
+				veccol := vector.MustFixedCol[types.Enum](vec)
+				veccol[i] = types.Enum(val.EnumVal)
 			default:
 				return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("const expression %v", t.GetValue()))
 			}
@@ -1379,7 +1382,7 @@ func GetExprZoneMap(
 				}
 				zmRes := zms[args[0].AuxId]
 				for i := 1; i < len(args); i++ {
-					if res, ok = zmRes.And(zms[args[1].AuxId]); !ok {
+					if res, ok = zmRes.And(zms[args[i].AuxId]); !ok {
 						zmRes.Reset()
 						break
 					} else {
@@ -1394,7 +1397,7 @@ func GetExprZoneMap(
 				}
 				zmRes := zms[args[0].AuxId]
 				for i := 1; i < len(args); i++ {
-					if res, ok = zmRes.Or(zms[args[1].AuxId]); !ok {
+					if res, ok = zmRes.Or(zms[args[i].AuxId]); !ok {
 						zmRes.Reset()
 						break
 					} else {

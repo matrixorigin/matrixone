@@ -5,9 +5,6 @@ queue_rules:
   - name: release-1.2
     merge_conditions: []
     checks_timeout: 4h
-  - name: release-1.1
-    merge_conditions: []
-    checks_timeout: 4h
 
 pull_request_rules:
   - name: Automatic queue on approval for main
@@ -43,36 +40,19 @@ pull_request_rules:
 
           Approved by: @{{ approved_reviews_by | join(', @') }}
 
-  - name: Automatic queue on approval for release-1.1
+  - name: Auto update branch
     conditions:
-      - "#changes-requested-reviews-by<=0"
-      - label!=do-not-merge/wip
-      - base=1.1-dev
-      - approved-reviews-by=sukki37
+      - created-at>=00:10 ago
     actions:
-      queue:
-        name: release-1.1
-        method: squash
-        commit_message_template: |
-          {{ title }} (#{{ number }})
+      update: 
 
-          {{ body.split("___\n\n### **PR Type**")[0] | trim | get_section("## What this PR does / why we need it:") }}
-
-          Approved by: @{{ approved_reviews_by | join(', @') }}
-
-  - name: Auto Request Reviewer
+  - name: Auto Request Reviewer For 1.2-dev
     conditions:
       - base!=main
     actions:
       request_reviews:
         users:
           - sukki37
-
-  - name: Auto update branch
-    conditions:
-      - created-at>=00:10 ago
-    actions:
-      update: 
 
   - name: label for Bug
     conditions: 

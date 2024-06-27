@@ -213,7 +213,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				result.Batch = ctr.rbat
 				result.Status = vm.ExecStop
 				ctr.state = End
-				return result, nil
+				if err := arg.Callback(ctr.rbat); err != nil {
+					return result, err
+				} else {
+					return result, nil
+				}
 			}
 
 			if bat.IsEmpty() {
