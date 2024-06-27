@@ -225,12 +225,12 @@ func doComQueryInBack(backSes *backSession, execCtx *ExecCtx,
 		getGlobalPu().HAKeeperClient,
 		getGlobalPu().UdfService,
 		getGlobalAic())
-	proc.Id = backSes.getNextProcessId()
-	proc.Lim.Size = getGlobalPu().SV.ProcessLimitationSize
-	proc.Lim.BatchRows = getGlobalPu().SV.ProcessLimitationBatchRows
-	proc.Lim.MaxMsgSize = getGlobalPu().SV.MaxMessageSize
-	proc.Lim.PartitionRows = getGlobalPu().SV.ProcessLimitationPartitionRows
-	proc.SessionInfo = process.SessionInfo{
+	proc.Base.Id = backSes.getNextProcessId()
+	proc.Base.Lim.Size = getGlobalPu().SV.ProcessLimitationSize
+	proc.Base.Lim.BatchRows = getGlobalPu().SV.ProcessLimitationBatchRows
+	proc.Base.Lim.MaxMsgSize = getGlobalPu().SV.MaxMessageSize
+	proc.Base.Lim.PartitionRows = getGlobalPu().SV.ProcessLimitationPartitionRows
+	proc.Base.SessionInfo = process.SessionInfo{
 		User:          backSes.respr.GetStr(USERNAME),
 		Host:          getGlobalPu().SV.Host,
 		Database:      backSes.respr.GetStr(DBNAME),
@@ -243,14 +243,14 @@ func doComQueryInBack(backSes *backSession, execCtx *ExecCtx,
 	proc.SetResolveVariableFunc(backSes.txnCompileCtx.ResolveVariable)
 	//!!!does not init sequence in the background exec
 	if backSes.tenant != nil {
-		proc.SessionInfo.Account = backSes.tenant.GetTenant()
-		proc.SessionInfo.AccountId = backSes.tenant.GetTenantID()
-		proc.SessionInfo.Role = backSes.tenant.GetDefaultRole()
-		proc.SessionInfo.RoleId = backSes.tenant.GetDefaultRoleID()
-		proc.SessionInfo.UserId = backSes.tenant.GetUserID()
+		proc.Base.SessionInfo.Account = backSes.tenant.GetTenant()
+		proc.Base.SessionInfo.AccountId = backSes.tenant.GetTenantID()
+		proc.Base.SessionInfo.Role = backSes.tenant.GetDefaultRole()
+		proc.Base.SessionInfo.RoleId = backSes.tenant.GetDefaultRoleID()
+		proc.Base.SessionInfo.UserId = backSes.tenant.GetUserID()
 
 		if len(backSes.tenant.GetVersion()) != 0 {
-			proc.SessionInfo.Version = backSes.tenant.GetVersion()
+			proc.Base.SessionInfo.Version = backSes.tenant.GetVersion()
 		}
 		userNameOnly = backSes.tenant.GetUser()
 	} else {
@@ -259,9 +259,9 @@ func doComQueryInBack(backSes *backSession, execCtx *ExecCtx,
 		if retErr != nil {
 			return retErr
 		}
-		proc.SessionInfo.AccountId = accountId
-		proc.SessionInfo.UserId = defines.GetUserId(execCtx.reqCtx)
-		proc.SessionInfo.RoleId = defines.GetRoleId(execCtx.reqCtx)
+		proc.Base.SessionInfo.AccountId = accountId
+		proc.Base.SessionInfo.UserId = defines.GetUserId(execCtx.reqCtx)
+		proc.Base.SessionInfo.RoleId = defines.GetRoleId(execCtx.reqCtx)
 	}
 	var span trace.Span
 	execCtx.reqCtx, span = trace.Start(execCtx.reqCtx, "backExec.doComQueryInBack",
@@ -269,7 +269,7 @@ func doComQueryInBack(backSes *backSession, execCtx *ExecCtx,
 	defer span.End()
 	execCtx.input = input
 
-	proc.SessionInfo.User = userNameOnly
+	proc.Base.SessionInfo.User = userNameOnly
 	cws, err := GetComputationWrapperInBack(execCtx, backSes.respr.GetStr(DBNAME),
 		input,
 		backSes.respr.GetStr(USERNAME),

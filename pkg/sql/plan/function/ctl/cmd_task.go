@@ -64,7 +64,7 @@ func handleTask(proc *process.Process,
 		}, nil
 	case getUser:
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		state, err := proc.Hakeeper.GetClusterState(ctx)
+		state, err := proc.GetHaKeeper().GetClusterState(ctx)
 		cancel()
 		if err != nil {
 			return Result{Method: TaskMethod, Data: "failed to get cluster state"}, err
@@ -78,7 +78,7 @@ func handleTask(proc *process.Process,
 	if err != nil {
 		return Result{}, err
 	}
-	resp, err := transferTaskToCN(proc.QueryClient, target, taskCode)
+	resp, err := transferTaskToCN(proc.GetQueryClient(), target, taskCode)
 	if err != nil {
 		return Result{}, err
 	}
