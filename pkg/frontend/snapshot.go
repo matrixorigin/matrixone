@@ -1431,7 +1431,7 @@ func restoreAccountUsingClusterSnapshot(ctx context.Context, ses *Session, bh Ba
 		return err
 	}
 	// get foreign key table infos
-	fkTableMap, err = getTableInfoMap(ctx, bh, newSnapshot, "", "t", sortedFkTbls)
+	fkTableMap, err = getTableInfoMap(ctx, bh, newSnapshot, "", "", sortedFkTbls)
 	if err != nil {
 		return err
 	}
