@@ -20,7 +20,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"go.uber.org/zap"
 )
@@ -123,11 +123,7 @@ func (c Config) NewClient(
 		WithCodecMaxBodySize(int(c.MaxMessageSize)))
 	codecOpts = append(codecOpts, c.CodecOptions...)
 	if c.EnableCompress {
-		mp, err := mpool.NewMPool(name, 0, mpool.NoFixed)
-		if err != nil {
-			return nil, err
-		}
-		codecOpts = append(codecOpts, WithCodecEnableCompress(mp))
+		codecOpts = append(codecOpts, WithCodecEnableCompress(malloc.GetDefault(nil)))
 	}
 
 	codec := NewMessageCodec(
@@ -152,11 +148,7 @@ func (c Config) NewServer(
 		WithCodecMaxBodySize(int(c.MaxMessageSize)))
 	codecOpts = append(codecOpts, c.CodecOptions...)
 	if c.EnableCompress {
-		mp, err := mpool.NewMPool(name, 0, mpool.NoFixed)
-		if err != nil {
-			return nil, err
-		}
-		codecOpts = append(codecOpts, WithCodecEnableCompress(mp))
+		codecOpts = append(codecOpts, WithCodecEnableCompress(malloc.GetDefault(nil)))
 	}
 	opts = append(opts,
 		WithServerLogger(logger.Named(name)),
