@@ -15,7 +15,6 @@
 package disttae
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"strconv"
@@ -205,11 +204,6 @@ func (tbl *txnTable) Rows(ctx context.Context) (uint64, error) {
 }
 
 func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error) {
-	var buf bytes.Buffer
-	defer func() {
-		logutil.Info("txnTable.Size", zap.String("", buf.String()))
-	}()
-
 	ts := types.TimestampToTS(tbl.db.op.SnapshotTS())
 	part, err := tbl.getPartitionState(ctx)
 	if err != nil {
@@ -232,7 +226,6 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 		return 0, moerr.NewInvalidInput(ctx, "bad input column name %v", columnName)
 	}
 
-	buf.WriteString("workspace: ")
 	deletes := make(map[types.Rowid]struct{})
 	tbl.getTxn().forEachTableWrites(
 		tbl.db.databaseId,
@@ -244,7 +237,6 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 					if _, ok := neededCols[s]; ok {
 						delta := uint64(entry.bat.Vecs[i].Size())
 						szInPart += delta
-						buf.WriteString(fmt.Sprintf("(I)%s-%d; ", s, delta))
 					}
 				}
 			} else {
@@ -262,20 +254,11 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 					vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
 					for _, v := range vs {
 						deletes[v] = struct{}{}
-						buf.WriteString(fmt.Sprintf("(D)%s; ", v.String()))
 					}
 				}
 			}
 			return
 		})
-
-	// Different rows may belong to same batch. So we have
-	// to record the batch which we have already handled to avoid
-	// repetitive computation
-	handled := make(map[*batch.Batch]struct{})
-	// Calculate the in mem size
-	// TODO: It might includ some deleted row size
-	buf.WriteString("\npartition rows: ")
 
 	iter := part.NewRowsIter(ts, nil, false)
 	defer func() { _ = iter.Close() }()
@@ -284,24 +267,15 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 		if _, ok := deletes[entry.RowID]; ok {
 			continue
 		}
-		if _, ok := handled[entry.Batch]; ok {
-			continue
-		}
+
 		for i, s := range entry.Batch.Attrs {
 			if _, ok := neededCols[s]; ok {
-				delta := uint64(entry.Batch.Vecs[i].Size())
+				delta := uint64(entry.Batch.Vecs[i].Size() / entry.Batch.Vecs[i].Length())
 				szInPart += delta
-				buf.WriteString(fmt.Sprintf("%s-%d; ", s, entry.Batch.Vecs[i].Size()))
 			}
 		}
-		handled[entry.Batch] = struct{}{}
 	}
 
-	//s := e.Stats(ctx, pb.StatsInfoKey{
-	//	DatabaseID: tbl.db.databaseId,
-	//	TableID:    tbl.tableId,
-	//}, true)
-	buf.WriteString("\nstats: ")
 	s, _ := tbl.Stats(ctx, true)
 	if s == nil {
 		return szInPart, nil
@@ -311,14 +285,13 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 		for _, z := range s.SizeMap {
 			ret += z
 		}
-		buf.WriteString(fmt.Sprintf("%d\n", ret))
 		return ret + szInPart, nil
 	}
 	sz, ok := s.SizeMap[columnName]
 	if !ok {
 		return 0, moerr.NewInvalidInput(ctx, "bad input column name %v", columnName)
 	}
-	buf.WriteString(fmt.Sprintf("%d\n", sz))
+
 	return sz + szInPart, nil
 }
 
@@ -769,7 +742,7 @@ func (tbl *txnTable) rangesOnePart(
 	}
 
 	if dirtyBlks == nil {
-		tbl.collectDirtyBlocks(state, uncommittedObjects, txnOffset)
+		dirtyBlks = tbl.collectDirtyBlocks(state, uncommittedObjects, txnOffset)
 	}
 
 	// for dynamic parameter, substitute param ref and const fold cast expression here to improve performance
