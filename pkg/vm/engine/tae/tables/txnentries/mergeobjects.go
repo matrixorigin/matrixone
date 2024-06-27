@@ -101,7 +101,7 @@ func (entry *mergeObjectsEntry) prepareTransferPage() {
 		var writer *blockio.BlockWriter
 		writer, _ = blockio.NewBlockWriterNew(entry.rt.Fs.Service, name, 0, nil)
 		var duration time.Duration
-		start := time.Now()
+		var start time.Time
 		for j := 0; j < obj.BlockCnt(); j++ {
 			if len(entry.transMappings.Mappings[k].M) == 0 {
 				k++

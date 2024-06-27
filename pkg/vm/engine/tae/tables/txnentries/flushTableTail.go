@@ -130,7 +130,7 @@ func (entry *flushTableTailEntry) addTransferPages() {
 	var writer *blockio.BlockWriter
 	writer, _ = blockio.NewBlockWriterNew(entry.rt.Fs.Service, name, 0, nil)
 	var duration time.Duration
-	start := time.Now()
+	var start time.Time
 	for i, mcontainer := range entry.transMappings.Mappings {
 		m := mcontainer.M
 		if len(m) == 0 {
