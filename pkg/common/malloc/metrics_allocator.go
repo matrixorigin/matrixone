@@ -31,7 +31,7 @@ func NewMetricsAllocator(upstream Allocator) *MetricsAllocator {
 	return &MetricsAllocator{
 		upstream: upstream,
 		deallocatorPool: NewClosureDeallocatorPool(
-			func(hints Hints, args metricsDeallocatorArgs) {
+			func(hints Hints, args *metricsDeallocatorArgs) {
 				metric.MallocCounterFreeBytes.Add(float64(args.size))
 			},
 		),

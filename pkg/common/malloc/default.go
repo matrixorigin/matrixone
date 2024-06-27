@@ -33,11 +33,12 @@ func GetDefault(defaultConfig *Config) Allocator {
 	return defaultAllocator
 }
 
-func newDefault(config *Config) (allocator Allocator) {
+func newDefault(delta *Config) (allocator Allocator) {
+
 	// config
-	if config == nil {
-		c := *defaultConfig.Load()
-		config = &c
+	config := *defaultConfig.Load()
+	if delta != nil {
+		config = patchConfig(config, *delta)
 	}
 
 	// debug
