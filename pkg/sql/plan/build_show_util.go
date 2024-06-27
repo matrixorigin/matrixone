@@ -49,14 +49,17 @@ func ConstructCreateTableSQL(tableObjRef *plan.ObjectRef, tableDef *plan.TableDe
 	var pkDefs []string
 	isClusterTable := util.TableIsClusterTable(tableDef.TableType)
 
-	colIdToName := make(map[uint64]string)
+	// col.Name -> col.OriginName
+	colOriginNameMap := make(map[string]string)
+	colIdToOriginName := make(map[uint64]string)
 	for _, col := range tableDef.Cols {
 		if col.Hidden {
 			continue
 		}
-		colName := col.Name
-		colIdToName[col.ColId] = col.Name
-		if colName == catalog.Row_ID {
+		colNameOrigin := col.GetUserInputName()
+		colOriginNameMap[col.Name] = colNameOrigin
+		colIdToOriginName[col.ColId] = colNameOrigin
+		if colNameOrigin == catalog.Row_ID {
 			continue
 		}
 		//the non-sys account skips the column account_id of the cluster table
@@ -64,13 +67,13 @@ func ConstructCreateTableSQL(tableObjRef *plan.ObjectRef, tableDef *plan.TableDe
 		if err != nil {
 			return "", err
 		}
-		if util.IsClusterTableAttribute(colName) &&
+		if util.IsClusterTableAttribute(colNameOrigin) &&
 			isClusterTable &&
 			accountId != catalog.System_Account {
 			continue
 		}
 
-		if util.IsClusterTableAttribute(colName) &&
+		if util.IsClusterTableAttribute(colNameOrigin) &&
 			isClusterTable &&
 			accountId == catalog.System_Account &&
 			!snapshot.TS.Equal(timestamp.Timestamp{}) {
@@ -87,7 +90,7 @@ func ConstructCreateTableSQL(tableObjRef *plan.ObjectRef, tableDef *plan.TableDe
 		}
 
 		typeStr := FormatColType(col.Typ)
-		fmt.Fprintf(buf, "  `%s` %s", formatStr(colName), typeStr)
+		fmt.Fprintf(buf, "  `%s` %s", formatStr(colNameOrigin), typeStr)
 
 		//-------------------------------------------------------------------------------------------------------------
 		if col.Typ.AutoIncr {
@@ -121,7 +124,7 @@ func ConstructCreateTableSQL(tableObjRef *plan.ObjectRef, tableDef *plan.TableDe
 		createStr += buf.String()
 		rowCount++
 		if col.Primary {
-			pkDefs = append(pkDefs, colName)
+			pkDefs = append(pkDefs, col.Name)
 		}
 	}
 
@@ -133,13 +136,13 @@ func ConstructCreateTableSQL(tableObjRef *plan.ObjectRef, tableDef *plan.TableDe
 	if len(pkDefs) != 0 {
 		pkStr := "  PRIMARY KEY ("
 		for i, def := range pkDefs {
+			def = colOriginNameMap[def]
 			if i == len(pkDefs)-1 {
-				pkStr += fmt.Sprintf("`%s`", formatStr(def))
+				pkStr += fmt.Sprintf("`%s`)", formatStr(def))
 			} else {
 				pkStr += fmt.Sprintf("`%s`,", formatStr(def))
 			}
 		}
-		pkStr += ")"
 		if rowCount != 0 {
 			createStr += ",\n"
 		}
@@ -178,6 +181,7 @@ func ConstructCreateTableSQL(tableObjRef *plan.ObjectRef, tableDef *plan.TableDe
 					indexStr += ","
 				}
 
+				part = colOriginNameMap[part]
 				indexStr += fmt.Sprintf("`%s`", formatStr(part))
 				i++
 			}
@@ -211,9 +215,9 @@ func ConstructCreateTableSQL(tableObjRef *plan.ObjectRef, tableDef *plan.TableDe
 			dedupFkName.Insert(fk.Name)
 		}
 
-		colNames := make([]string, len(fk.Cols))
+		colOriginNames := make([]string, len(fk.Cols))
 		for i, colId := range fk.Cols {
-			colNames[i] = colIdToName[colId]
+			colOriginNames[i] = colIdToOriginName[colId]
 		}
 
 		var fkTableDef *TableDef
@@ -232,29 +236,28 @@ func ConstructCreateTableSQL(tableObjRef *plan.ObjectRef, tableDef *plan.TableDe
 
 		// fkTable may not exist in snapshot restoration
 		if fkTableObjRef == nil || fkTableDef == nil {
-			return "", moerr.NewInternalErrorNoCtx("can't find fkTable from fk %s.(%s) {%s}", tableDef.Name, strings.Join(colNames, ","), snapshot.String())
+			return "", moerr.NewInternalErrorNoCtx("can't find fkTable from fk %s.(%s) {%s}", tableDef.Name, strings.Join(colOriginNames, ","), snapshot.String())
 		}
 
-		fkColIdToName := make(map[uint64]string)
+		fkColIdToOriginName := make(map[uint64]string)
 		for _, col := range fkTableDef.Cols {
-			fkColIdToName[col.ColId] = col.Name
+			fkColIdToOriginName[col.ColId] = col.GetUserInputName()
 		}
-		fkColNames := make([]string, len(fk.ForeignCols))
+		fkColOriginNames := make([]string, len(fk.ForeignCols))
 		for i, colId := range fk.ForeignCols {
-			fkColNames[i] = fkColIdToName[colId]
+			fkColOriginNames[i] = fkColIdToOriginName[colId]
 		}
 
 		if rowCount != 0 {
 			createStr += ",\n"
 		}
 
-		if tableObjRef.SchemaName == fkTableObjRef.SchemaName {
-			createStr += fmt.Sprintf("  CONSTRAINT `%s` FOREIGN KEY (`%s`) REFERENCES `%s` (`%s`) ON DELETE %s ON UPDATE %s",
-				formatStr(fk.Name), strings.Join(colNames, "`,`"), formatStr(fkTableDef.Name), strings.Join(fkColNames, "`,`"), fk.OnDelete.String(), fk.OnUpdate.String())
-		} else {
-			createStr += fmt.Sprintf("  CONSTRAINT `%s` FOREIGN KEY (`%s`) REFERENCES `%s`.`%s` (`%s`) ON DELETE %s ON UPDATE %s",
-				formatStr(fk.Name), strings.Join(colNames, "`,`"), formatStr(fkTableObjRef.SchemaName), formatStr(fkTableDef.Name), strings.Join(fkColNames, "`,`"), fk.OnDelete.String(), fk.OnUpdate.String())
+		refDbTblName := fmt.Sprintf("`%s`", formatStr(fkTableDef.Name))
+		if tableObjRef.SchemaName != fkTableObjRef.SchemaName {
+			refDbTblName = fmt.Sprintf("`%s`.`%s`", formatStr(fkTableObjRef.SchemaName), formatStr(fkTableDef.Name))
 		}
+		createStr += fmt.Sprintf("  CONSTRAINT `%s` FOREIGN KEY (`%s`) REFERENCES %s (`%s`) ON DELETE %s ON UPDATE %s",
+			formatStr(fk.Name), strings.Join(colOriginNames, "`,`"), refDbTblName, strings.Join(fkColOriginNames, "`,`"), fk.OnDelete.String(), fk.OnUpdate.String())
 	}
 
 	if rowCount != 0 {

@@ -1064,10 +1064,12 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 		name2index := make(map[string]int32)
 		for _, def := range tbl.defs {
 			if attr, ok := def.(*engine.AttributeDef); ok {
-				name2index[attr.Attr.Name] = i
+				name := strings.ToLower(attr.Attr.Name)
+				name2index[name] = i
 				cols = append(cols, &plan.ColDef{
-					ColId: attr.Attr.ID,
-					Name:  attr.Attr.Name,
+					ColId:      attr.Attr.ID,
+					Name:       name,
+					OriginName: attr.Attr.Name,
 					Typ: plan.Type{
 						Id:          int32(attr.Attr.Type.Oid),
 						Width:       attr.Attr.Type.Width,
@@ -1087,7 +1089,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 				})
 				if attr.Attr.ClusterBy {
 					clusterByDef = &plan.ClusterByDef{
-						Name: attr.Attr.Name,
+						Name: name,
 					}
 				}
 				if attr.Attr.Name == catalog.Row_ID {
@@ -1919,7 +1921,7 @@ func (tbl *txnTable) newReader(
 
 	seqnumMp := make(map[string]int)
 	for _, coldef := range tbl.tableDef.Cols {
-		seqnumMp[coldef.Name] = int(coldef.Seqnum)
+		seqnumMp[coldef.GetUserInputName()] = int(coldef.Seqnum)
 	}
 
 	mp := make(map[string]types.Type)

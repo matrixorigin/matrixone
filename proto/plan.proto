@@ -265,6 +265,8 @@ message ColDef {
 
 	string tbl_name = 17;
 	string db_name = 18;
+	// get origin_name by ColDef.GetUserInputName()
+	string origin_name = 19;
 }
 
 message Default {

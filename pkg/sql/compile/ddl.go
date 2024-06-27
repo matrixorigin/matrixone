@@ -598,9 +598,10 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 		case *plan.AlterTable_Action_AddColumn:
 			alterKinds = append(alterKinds, api.AlterKind_AddColumn)
 			col := &plan.ColDef{
-				Name: act.AddColumn.Name,
-				Alg:  plan.CompressType_Lz4,
-				Typ:  act.AddColumn.Type,
+				Name:       strings.ToLower(act.AddColumn.Name),
+				OriginName: act.AddColumn.Name,
+				Alg:        plan.CompressType_Lz4,
+				Typ:        act.AddColumn.Type,
 			}
 			var pos int32
 			cols, pos, err = getAddColPos(cols, col, act.AddColumn.PreName, act.AddColumn.Pos)
@@ -956,7 +957,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		var colNameToId = make(map[string]uint64)
 		for _, def := range newTableDef {
 			if attr, ok := def.(*engine.AttributeDef); ok {
-				colNameToId[attr.Attr.Name] = attr.Attr.ID
+				colNameToId[strings.ToLower(attr.Attr.Name)] = attr.Attr.ID
 			}
 		}
 		//old colId -> colName
@@ -1105,7 +1106,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		var colNameToId = make(map[string]uint64)
 		for _, def := range newTableDef {
 			if attr, ok := def.(*engine.AttributeDef); ok {
-				colNameToId[attr.Attr.Name] = attr.Attr.ID
+				colNameToId[strings.ToLower(attr.Attr.Name)] = attr.Attr.ID
 			}
 		}
 		//1.1 update the column id of the column names in this table.
@@ -2401,7 +2402,7 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 		colTyp := col.GetTyp()
 		exeCols[i] = &engine.AttributeDef{
 			Attr: engine.Attribute{
-				Name:          col.Name,
+				Name:          col.GetUserInputName(),
 				Alg:           alg,
 				Type:          types.New(types.T(colTyp.GetId()), colTyp.GetWidth(), colTyp.GetScale()),
 				Default:       planCols[i].GetDefault(),

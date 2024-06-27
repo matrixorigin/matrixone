@@ -40,7 +40,7 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	arg.types = make([]types.Type, len(arg.TblDef.Cols))
 	arg.Configs = make(map[string]interface{})
 	for i, col := range arg.TblDef.Cols {
-		arg.attrs[i] = col.Name
+		arg.attrs[i] = col.GetUserInputName()
 		arg.types[i] = types.Type{
 			Oid:   types.T(col.Typ.Id),
 			Scale: col.Typ.Scale,

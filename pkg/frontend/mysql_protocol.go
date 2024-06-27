@@ -704,6 +704,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 	for i := 0; i < numColumns; i++ {
 		column := new(MysqlColumn)
 		column.SetName(columns[i].Name)
+		column.SetOrgName(columns[i].GetUserInputName())
 
 		err = convertEngineTypeToMysqlType(ctx, types.T(columns[i].Typ.Id), column)
 		if err != nil {
