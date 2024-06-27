@@ -1984,8 +1984,9 @@ func (mp *MysqlProtocolImpl) SendEOFPacketIf(warnings, status uint16) error {
 	//If the CLIENT_DEPRECATE_EOF client capabilities flag is not set, EOF_Packet
 	if mp.capability&CLIENT_DEPRECATE_EOF == 0 {
 		return mp.sendEOFPacket(warnings, status)
+	} else {
+		return mp.tcpConn.Flush()
 	}
-	return nil
 }
 
 // the OK or EOF packet
@@ -2103,7 +2104,7 @@ func (mp *MysqlProtocolImpl) SendColumnDefinitionPacket(ctx context.Context, col
 		data = mp.makeColumnDefinition41Payload(mysqlColumn, cmd)
 	}
 
-	return mp.writePackets(data)
+	return mp.appendPacket(data)
 }
 
 // SendColumnCountPacket makes the column count packet
@@ -2111,8 +2112,7 @@ func (mp *MysqlProtocolImpl) SendColumnCountPacket(count uint64) error {
 	data := make([]byte, HeaderOffset+20)
 	pos := HeaderOffset
 	pos = mp.writeIntLenEnc(data, pos, count)
-
-	return mp.writePackets(data[:pos])
+	return mp.appendPacket(data[:pos])
 }
 
 func (mp *MysqlProtocolImpl) sendColumns(ctx context.Context, mrs *MysqlResultSet, cmd int, warnings, status uint16) error {
@@ -2166,7 +2166,7 @@ func (mp *MysqlProtocolImpl) appendNullBitMap(mrs *MysqlResultSet, columnsLength
 
 // the server convert every row of the result set into the format that mysql protocol needs
 func (mp *MysqlProtocolImpl) appendResultSetBinaryRow(mrs *MysqlResultSet, rowIdx uint64) error {
-	err := mp.tcpConn.BeginPacket()
+	err := mp.beginPacket()
 	if err != nil {
 		return err
 	}
@@ -2327,7 +2327,7 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow(mrs *MysqlResultSet, rowId
 		}
 	}
 
-	err = mp.tcpConn.FinishedPacket()
+	err = mp.finishedPacket()
 	if err != nil {
 		return err
 	}
@@ -2336,7 +2336,7 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow(mrs *MysqlResultSet, rowId
 
 // the server convert every row of the result set into the format that mysql protocol needs
 func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint64) error {
-	err := mp.tcpConn.BeginPacket()
+	err := mp.beginPacket()
 	if err != nil {
 		return err
 	}
@@ -2487,7 +2487,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint6
 			return moerr.NewInternalError(mp.ctx, "unsupported column type %d ", mysqlColumn.ColumnType())
 		}
 	}
-	err = mp.tcpConn.FinishedPacket()
+	err = mp.finishedPacket()
 	if err != nil {
 		return err
 	}
@@ -2548,6 +2548,15 @@ func (mp *MysqlProtocolImpl) WriteResultSetRow(mrs *MysqlResultSet, cnt uint64) 
 
 	return err
 }
+func (mp *MysqlProtocolImpl) beginPacket() error {
+	err := mp.tcpConn.BeginPacket()
+	return err
+}
+
+func (mp *MysqlProtocolImpl) finishedPacket() error {
+	err := mp.tcpConn.FinishedPacket()
+	return err
+}
 
 // flushOutBuffer the data in the outbuf into the network
 func (mp *MysqlProtocolImpl) flushIfFull() error {
@@ -2561,6 +2570,24 @@ func (mp *MysqlProtocolImpl) flushIfFull() error {
 			return err
 		}
 		mp.resetFlushOutBuffer()
+	}
+	return nil
+}
+
+func (mp *MysqlProtocolImpl) appendPacket(payload []byte) error {
+	err := mp.beginPacket()
+	if err != nil {
+		return err
+	}
+
+	err = mp.append(payload...)
+	if err != nil {
+		return err
+	}
+
+	err = mp.finishedPacket()
+	if err != nil {
+		return err
 	}
 	return nil
 }
