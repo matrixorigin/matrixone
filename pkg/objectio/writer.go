@@ -74,8 +74,6 @@ const (
 
 const ObjectSizeLimit = 3 * mpool.GB
 
-var ErrObjectSizeLimit = moerr.NewInternalErrorNoCtx("objectio: object size exceeds the limit")
-
 func newObjectWriterSpecialV1(wt WriterType, fileName string, fs fileservice.FileService) (*objectWriterV1, error) {
 	var name ObjectName
 	object := NewObject(fileName, fs)
@@ -408,10 +406,10 @@ func (w *objectWriterV1) writerBlocks(blocks []blockData) error {
 			}
 			w.buffer.Write(block.data[idx])
 			size += uint64(len(block.data[idx]))
-			if size > ObjectSizeLimit {
-				return ErrObjectSizeLimit
-			}
 		}
+	}
+	if size > ObjectSizeLimit {
+		return moerr.NewErrTooLargeObjectSizeNoCtx(size)
 	}
 	return nil
 }
