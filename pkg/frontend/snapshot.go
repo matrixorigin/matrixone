@@ -1392,6 +1392,17 @@ func restoreToCluster(ctx context.Context, ses *Session, bh BackgroundExec, snap
 		getLogger().Info(fmt.Sprintf("[%s] cluster restore start to restore account: %v, account id: %d", snapshotName, account.accountName, account.accountId))
 		toAccountId := account.accountId
 
+		sp := snapshotName
+		{
+			sp, err := insertSnapshotRecord(ctx, bh, snapshotName, snapshotTs, toAccountId, account.accountName)
+			if err != nil {
+				return err
+			}
+			defer func() {
+				err = deleteSnapshotRecord(ctx, bh, snapshotName, sp)
+			}()
+		}
+
 		// pre restore account
 		// drop foreign key related tables first
 		if err = deleteCurFkTables(ctx, bh, "", "", uint32(toAccountId)); err != nil {
@@ -1400,12 +1411,12 @@ func restoreToCluster(ctx context.Context, ses *Session, bh BackgroundExec, snap
 		// get topo sorted tables with foreign key
 		var sortedFkTbls []string
 		var fkTableMap map[string]*tableInfo
-		sortedFkTbls, err = fkTablesTopoSort(ctx, bh, snapshotName, "", "")
+		sortedFkTbls, err = fkTablesTopoSort(ctx, bh, sp, "", "")
 		if err != nil {
 			return
 		}
 		// get foreign key table infos
-		fkTableMap, err = getTableInfoMap(ctx, bh, snapshotName, "", "t", sortedFkTbls)
+		fkTableMap, err = getTableInfoMap(ctx, bh, sp, "", "t", sortedFkTbls)
 		if err != nil {
 			return
 		}
@@ -1414,18 +1425,18 @@ func restoreToCluster(ctx context.Context, ses *Session, bh BackgroundExec, snap
 		viewMap := make(map[string]*tableInfo)
 
 		// restore to account
-		if err = restoreToAccount(ctx, bh, snapshotName, uint32(toAccountId), fkTableMap, viewMap, snapshotTs); err != nil {
+		if err = restoreToAccount(ctx, bh, sp, uint32(toAccountId), fkTableMap, viewMap, snapshotTs); err != nil {
 			return
 		}
 
 		if len(fkTableMap) > 0 {
-			if err = restoreTablesWithFk(ctx, bh, snapshotName, sortedFkTbls, fkTableMap, uint32(toAccountId), snapshotTs); err != nil {
+			if err = restoreTablesWithFk(ctx, bh, sp, sortedFkTbls, fkTableMap, uint32(toAccountId), snapshotTs); err != nil {
 				return
 			}
 		}
 
 		if len(viewMap) > 0 {
-			if err = restoreViews(ctx, ses, bh, snapshotName, viewMap, uint32(toAccountId)); err != nil {
+			if err = restoreViews(ctx, ses, bh, sp, viewMap, uint32(toAccountId)); err != nil {
 				return
 			}
 		}
@@ -1508,6 +1519,43 @@ func getDropAccounts(ctx context.Context, bh BackgroundExec, snapshotName string
 		if err = bh.Exec(ctx, fmt.Sprintf(dropAccountFmt, account)); err != nil {
 			return
 		}
+	}
+	return
+}
+
+func insertSnapshotRecord(ctx context.Context, bh BackgroundExec, spName string, spTs int64, toAccountId uint64, accountName string) (snapshotName string, err error) {
+	// mock snapshot id and snapshot name
+	snapshotUId, err := uuid.NewV7()
+	if err != nil {
+		return
+	}
+	snapshotId := snapshotUId.String()
+
+	snapshotName = snapshotId + "_" + spName + "_mock"
+	sql, err := getSqlForCreateSnapshot(ctx,
+		snapshotId,
+		snapshotName,
+		spTs,
+		tree.SNAPSHOTLEVELACCOUNT.String(),
+		accountName,
+		"",
+		"",
+		toAccountId)
+	if err != nil {
+		return
+	}
+	getLogger().Info(fmt.Sprintf("[%s] mock insert snapshot record sql: %s", spName, sql))
+	if err = bh.Exec(ctx, sql); err != nil {
+		return
+	}
+	return
+}
+
+func deleteSnapshotRecord(ctx context.Context, bh BackgroundExec, spName string, snapshotName string) (err error) {
+	sql := getSqlForDropSnapshot(snapshotName)
+	getLogger().Info(fmt.Sprintf("[%s] mock delete snapshot record sql: %s", spName, sql))
+	if err = bh.Exec(ctx, sql); err != nil {
+		return
 	}
 	return
 }
