@@ -49,7 +49,6 @@ func init() {
 	initProxyMetrics()
 	initFrontendMetrics()
 	initPipelineMetrics()
-	initTransferMetrics()
 
 	registry.MustRegister(HeartbeatHistogram)
 	registry.MustRegister(HeartbeatFailureCounter)
@@ -74,7 +73,13 @@ func initTaskMetrics() {
 	registry.MustRegister(taskGeneratedStuffCounter)
 	registry.MustRegister(taskSelectivityCounter)
 
-	registry.MustRegister(TaskMergeTransferPageLengthGauge)
+	registry.MustRegister(transferPageHitHistogram)
+	registry.MustRegister(transferLatencyHistogram)
+	registry.MustRegister(transferPageWriteLatencyHistogram)
+	registry.MustRegister(TransferPageRowHistogram)
+	registry.MustRegister(TransferPagesInChannelHistogram)
+	registry.MustRegister(TransferPageSinceBornDurationHistogram)
+	registry.MustRegister(TaskMergeTransferPageSizeGauge)
 
 	registry.MustRegister(TaskStorageUsageCacheMemUsedGauge)
 }
@@ -188,15 +193,6 @@ func initFrontendMetrics() {
 
 func initPipelineMetrics() {
 	registry.MustRegister(PipelineServerDurationHistogram)
-}
-
-func initTransferMetrics() {
-	registry.MustRegister(transferHitCounter)
-	registry.MustRegister(transferRowCounter)
-	registry.MustRegister(transferDurationHistogram)
-	registry.MustRegister(transferPageWriteDurationHistogram)
-	registry.MustRegister(TransferPageInChannelHistogram)
-	registry.MustRegister(TransferPageSinceBornDurationHistogram)
 }
 
 func getDurationBuckets() []float64 {

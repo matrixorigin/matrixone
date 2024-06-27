@@ -93,7 +93,7 @@ type TransferHashPage struct {
 
 func NewTransferHashPage(id *common.ID, ts time.Time, isTransient bool, opts ...Option) *TransferHashPage {
 	params := TransferHashPageParams{
-		TTL:     10 * time.Second,
+		TTL:     5 * time.Second,
 		DiskTTL: 10 * time.Minute,
 	}
 	for _, opt := range opts {
@@ -166,7 +166,7 @@ func (page *TransferHashPage) Train(from uint32, to types.Rowid) {
 	page.latch.Lock()
 	defer page.latch.Unlock()
 	page.hashmap.M[from] = to[:]
-	v2.TransferRowTotalCounter.Inc()
+	v2.TransferPageRowHistogram.Observe(1)
 }
 
 func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) {
@@ -174,13 +174,13 @@ func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) 
 	if atomic.LoadInt32(&page.isPersisted) == 1 {
 		diskStart := time.Now()
 		page.loadTable()
-		v2.TransferDiskHitCounter.Inc()
+		v2.TransferPageDiskHitHistogram.Observe(1)
 		diskDuration := time.Since(diskStart)
-		v2.TransferDurationDiskHistogram.Observe(1000 * diskDuration.Seconds())
+		v2.TransferDiskLatencyHistogram.Observe(1000 * diskDuration.Seconds())
 	} else {
-		v2.TransferMemoryHitCounter.Inc()
+		v2.TransferPageMemHitHistogram.Observe(1)
 	}
-	v2.TransferTotalHitCounter.Inc()
+	v2.TransferPageTotalHitHistogram.Observe(1)
 
 	memstart := time.Now()
 	var m []byte
@@ -191,7 +191,7 @@ func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) 
 		dest = types.Rowid(m)
 	}
 	memduration := time.Since(memstart)
-	v2.TransferDurationMemoryHistogram.Observe(1000 * memduration.Seconds())
+	v2.TransferMemLatencyHistogram.Observe(1000 * memduration.Seconds())
 
 	var str string
 	if ok {
@@ -224,6 +224,7 @@ func (page *TransferHashPage) SetLocation(location objectio.Location) {
 func (page *TransferHashPage) clearTable() {
 	logutil.Infof("[TransferHashPage] clear hash table")
 	atomic.StoreInt32(&page.isPersisted, 1)
+	v2.TaskMergeTransferPageSizeGauge.Sub(float64(page.Length()))
 	page.latch.Lock()
 	clear(page.hashmap.M)
 	page.latch.Unlock()
@@ -250,7 +251,7 @@ func (page *TransferHashPage) loadTable() {
 		return
 	}
 
-	v2.TransferRowHitCounter.Add(float64(page.Length()))
+	v2.TaskMergeTransferPageSizeGauge.Add(float64(page.Length()))
 
 	atomic.StoreInt32(&page.isPersisted, 0)
 
@@ -302,7 +303,7 @@ func (c *TransferPageCleaner) addPage(page *TransferHashPage) {
 func (c *TransferPageCleaner) Handler() {
 	for {
 		page := <-c.Pages
-		v2.TransferPageInChannelHistogram.Observe(float64(len(c.Pages)))
+		v2.TransferPagesInChannelHistogram.Observe(float64(len(c.Pages)))
 		if time.Since(page.ts) < page.page.params.TTL {
 			time.Sleep(page.page.params.TTL - time.Since(page.ts))
 		}

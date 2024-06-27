@@ -161,7 +161,7 @@ func (entry *mergeObjectsEntry) prepareTransferPage() {
 			return
 		}
 		duration += time.Since(start)
-		v2.TransferPageMergeDurationHistogram.Observe(duration.Seconds())
+		v2.TransferPageMergeLatencyHistogram.Observe(duration.Seconds())
 
 		for i, blk := range blocks {
 			location := blockio.EncodeLocation(

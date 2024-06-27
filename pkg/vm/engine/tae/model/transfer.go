@@ -92,7 +92,6 @@ func (table *TransferTable[T]) executeTTL(items []*common.PinnedItem[T]) {
 		pinned.Close()
 	}
 
-	v2.TaskMergeTransferPageLengthGauge.Sub(float64(cnt))
 }
 
 func (table *TransferTable[T]) RunTTL(now time.Time) {
@@ -116,7 +115,7 @@ func (table *TransferTable[T]) AddPage(page T) (dup bool) {
 	}
 	table.pages[id] = pinned
 
-	v2.TaskMergeTransferPageLengthGauge.Add(float64(page.Length()))
+	v2.TaskMergeTransferPageSizeGauge.Add(float64(page.Length()))
 	return
 }
 
@@ -133,8 +132,6 @@ func (table *TransferTable[T]) DeletePage(id *common.ID) (deleted bool) {
 		return
 	}
 
-	cnt := table.pages[*id].Val.Length()
-	v2.TaskMergeTransferPageLengthGauge.Sub(float64(cnt))
 	return
 }
 

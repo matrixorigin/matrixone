@@ -182,7 +182,7 @@ func (entry *flushTableTailEntry) addTransferPages() {
 		return
 	}
 	duration += time.Since(start)
-	v2.TransferPageFlushDurationHistogram.Observe(duration.Seconds())
+	v2.TransferPageFlushLatencyHistogram.Observe(duration.Seconds())
 
 	for i, blk := range blocks {
 		location := blockio.EncodeLocation(
