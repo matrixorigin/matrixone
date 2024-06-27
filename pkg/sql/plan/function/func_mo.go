@@ -530,6 +530,8 @@ func getValueInStr(value any) string {
 		return v.Format(0)
 	case types.Decimal128:
 		return v.Format(0)
+	case types.Enum:
+		return v.String()
 	default:
 		return ""
 	}
@@ -577,11 +579,12 @@ var (
 	}
 )
 
+// enum("a","b","c") -> CastIndexToValue(1) -> "a"
 // CastIndexToValue returns enum type index according to the value
 func CastIndexToValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	typeEnums := vector.GenerateFunctionStrParameter(ivecs[0])
-	indexs := vector.GenerateFunctionFixedTypeParameter[uint16](ivecs[1])
+	indexs := vector.GenerateFunctionFixedTypeParameter[types.Enum](ivecs[1])
 
 	for i := uint64(0); i < uint64(length); i++ {
 		typeEnum, typeEnumNull := typeEnums.GetStrValue(i)
@@ -607,9 +610,10 @@ func CastIndexToValue(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	return nil
 }
 
+// enum("a","b","c") -> CastValueToIndex("a") -> 1
 // CastValueToIndex returns enum type index according to the value
 func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	rs := vector.MustFunctionResult[uint16](result)
+	rs := vector.MustFunctionResult[types.Enum](result)
 	typeEnums := vector.GenerateFunctionStrParameter(ivecs[0])
 	enumValues := vector.GenerateFunctionStrParameter(ivecs[1])
 
@@ -624,7 +628,7 @@ func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 			typeEnumVal := functionUtil.QuickBytesToStr(typeEnum)
 			enumStr := functionUtil.QuickBytesToStr(enumValue)
 
-			var index uint16
+			var index types.Enum
 			index, err := types.ParseEnum(typeEnumVal, enumStr)
 			if err != nil {
 				return err
@@ -638,9 +642,10 @@ func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	return nil
 }
 
+// enum("a","b","c") -> CastIndexValueToIndex(1) -> 1
 // CastIndexValueToIndex returns enum type index according to the index value
 func CastIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	rs := vector.MustFunctionResult[uint16](result)
+	rs := vector.MustFunctionResult[types.Enum](result)
 	typeEnums := vector.GenerateFunctionStrParameter(ivecs[0])
 	enumIndexValues := vector.GenerateFunctionFixedTypeParameter[uint16](ivecs[1])
 
@@ -653,7 +658,7 @@ func CastIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultW
 			}
 		} else {
 			typeEnumVal := functionUtil.QuickBytesToStr(typeEnum)
-			var index uint16
+			var index types.Enum
 
 			index, err := types.ParseEnumValue(typeEnumVal, enumValueIndex)
 			if err != nil {
