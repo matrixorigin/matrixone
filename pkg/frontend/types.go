@@ -264,11 +264,11 @@ func NewSessionAllocator(pu *config.ParameterUnit) *SessionAllocator {
 }
 
 func (s *SessionAllocator) Alloc(capacity int) ([]byte, error) {
-	return s.allocator.Allocate(uint64(capacity), malloc.NoHints)
+	return s.allocator.Allocate(uint64(capacity), malloc.NoClear)
 }
 
 func (s SessionAllocator) Free(bs []byte) {
-	s.allocator.Deallocate(bs, malloc.NoHints)
+	s.allocator.Deallocate(bs, malloc.NoClear)
 }
 
 var _ FeSession = &Session{}
