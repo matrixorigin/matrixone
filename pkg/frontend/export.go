@@ -512,8 +512,8 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 				val := vector.GetFixedAt[types.Blockid](vec, i)
 				writeByte = appendBytes(writeByte, []byte(val.String()), symbol[j], closeby, flag[j])
 			case types.T_enum:
-				val := vector.GetFixedAt[types.Blockid](vec, i)
-				writeByte = appendBytes(writeByte, []byte(val.String()), symbol[j], closeby, flag[j])
+				val := vector.GetFixedAt[types.Enum](vec, i).String()
+				writeByte = appendBytes(writeByte, []byte(val), symbol[j], closeby, flag[j])
 			default:
 				ses.Error(ctx,
 					"Failed to construct byte due to unsupported type",
@@ -718,6 +718,14 @@ func exportDataToCSVFile(oq *ExportConfig) error {
 				return err
 			}
 		case defines.MYSQL_TYPE_UUID:
+			value, err := oq.mrs.GetString(oq.ctx, 0, i)
+			if err != nil {
+				return err
+			}
+			if err = formatOutputString(oq, []byte(value), symbol[i], closeby, flag[i]); err != nil {
+				return err
+			}
+		case defines.MYSQL_TYPE_ENUM:
 			value, err := oq.mrs.GetString(oq.ctx, 0, i)
 			if err != nil {
 				return err

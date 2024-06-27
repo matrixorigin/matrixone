@@ -286,7 +286,10 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.Filter:
 		t := sourceIns.Arg.(*filter.Argument)
 		arg := filter.NewArgument()
-		arg.E = t.E
+		arg.E = t.GetExeExpr()
+		if arg.E == nil {
+			arg.E = t.E
+		}
 		res.Arg = arg
 	case vm.Semi:
 		t := sourceIns.Arg.(*semi.Argument)
