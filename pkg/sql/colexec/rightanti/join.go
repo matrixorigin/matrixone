@@ -192,16 +192,16 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 		if !ap.IsMerger {
 			ap.Channel <- ctr.matched
 			return true, nil
-		}
-
-		cnt := 1
-		for v := range ap.Channel {
-			ctr.matched.Or(v)
-			cnt++
-			if cnt == int(ap.NumCPU) {
-				close(ap.Channel)
-				break
+		} else {
+			for cnt := 1; cnt < int(ap.NumCPU); cnt++ {
+				v := ctr.ReceiveBitmapFromChannel(ap.Channel)
+				if v != nil {
+					ctr.matched.Or(v)
+				} else {
+					return true, nil
+				}
 			}
+			close(ap.Channel)
 		}
 	}
 

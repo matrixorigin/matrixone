@@ -1503,6 +1503,10 @@ func buildInsertPlansWithRelatedHiddenTable(
 		}
 	}
 
+	if stmt != nil && stmt.IsRestore {
+		checkInsertPkDupForHiddenIndexTable = false
+	}
+
 	return makeOneInsertPlan(ctx, builder, bindCtx, objRef, tableDef,
 		updateColLength, sourceStep, addAffectedRows, isFkRecursionCall, updatePkCol,
 		pkFilterExprs, partitionExpr, ifExistAutoPkCol, checkInsertPkDupForHiddenIndexTable,

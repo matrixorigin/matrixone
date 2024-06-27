@@ -18,6 +18,7 @@ import (
 	"reflect"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -223,4 +224,16 @@ func (r *ReceiverOperator) selectFromAllReg() (int, *process.RegisterMessage, bo
 		r.DisableChosen(chosen)
 	}
 	return chosen, msg, ok
+}
+
+func (r *ReceiverOperator) ReceiveBitmapFromChannel(ch chan *bitmap.Bitmap) *bitmap.Bitmap {
+	select {
+	case <-r.proc.Ctx.Done():
+		return nil
+	case bm, ok := <-ch:
+		if !ok {
+			return nil
+		}
+		return bm
+	}
 }

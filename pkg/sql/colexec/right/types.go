@@ -132,17 +132,8 @@ func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
-		if !ctr.handledLast {
-			if arg.NumCPU > 0 {
-				if arg.IsMerger {
-					for i := uint64(1); i < arg.NumCPU; i++ {
-						<-arg.Channel
-					}
-				} else {
-					arg.Channel <- ctr.matched
-				}
-			}
-			ctr.handledLast = true
+		if !ctr.handledLast && arg.NumCPU > 1 && !arg.IsMerger {
+			arg.Channel <- nil
 		}
 		ctr.cleanBatch(proc)
 		ctr.cleanHashMap()

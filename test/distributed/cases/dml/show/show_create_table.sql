@@ -128,4 +128,8 @@ b char(10) DEFAULT NULL
 desc t5;
 show create table t5;
 -----------------------------------------------------------------------------------------------------
+create external table extable1(n1 int)infile{"filepath"='$resources/external_table_file/extable.csv'} ;
+desc extable1;
+show create table extable1;
+-----------------------------------------------------------------------------------------------------
 drop database if exists db1;
