@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"os"
 	"testing"
 	"time"
@@ -216,7 +217,7 @@ func newTestCase(sql string, t *testing.T) compileTestCase {
 func TestCompileShouldReturnCtxError(t *testing.T) {
 	{
 		c := reuse.Alloc[Compile](nil)
-		c.proc = &process.Process{}
+		c.proc = testutil.NewProcessWithMPool(mpool.MustNewZero())
 		ctx, cancel := context.WithTimeout(context.TODO(), 100*time.Millisecond)
 		c.proc.Ctx = ctx
 		time.Sleep(time.Second)
@@ -227,7 +228,7 @@ func TestCompileShouldReturnCtxError(t *testing.T) {
 
 	{
 		c := reuse.Alloc[Compile](nil)
-		c.proc = &process.Process{}
+		c.proc = testutil.NewProcessWithMPool(mpool.MustNewZero())
 		ctx, cancel := context.WithTimeout(context.TODO(), 500*time.Millisecond)
 		c.proc.Ctx = ctx
 		cancel()

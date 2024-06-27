@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"io"
 	"testing"
 	"time"
@@ -761,7 +762,7 @@ func Test_GetComputationWrapper(t *testing.T) {
 	convey.Convey("GetComputationWrapper succ", t, func() {
 		db, sql, user := "T", "SHOW TABLES", "root"
 		var eng engine.Engine
-		proc := &process.Process{}
+		proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
 
 		sysVars := make(map[string]interface{})
 		for name, sysVar := range gSysVarsDefs {
