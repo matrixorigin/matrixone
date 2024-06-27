@@ -69,6 +69,7 @@ func TestHandleGetProtocolVersion(t *testing.T) {
 func TestHandleSetProtocolVersion(t *testing.T) {
 	trace.InitMOCtledSpan()
 	proc := new(process.Process)
+	proc.Base = &process.BaseProcess{}
 	id := uuid.New().String()
 	addr := "127.0.0.1:7777"
 	initRuntime([]string{id}, []string{addr})
