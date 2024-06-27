@@ -91,7 +91,7 @@ func TestCall(t *testing.T) {
 	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 
 	proc := testutil.NewProc()
-	proc.TxnClient = txnClient
+	proc.Base.TxnClient = txnClient
 	proc.Ctx = ctx
 	proc.TxnOperator = txnOperator
 
