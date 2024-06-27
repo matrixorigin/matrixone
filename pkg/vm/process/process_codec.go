@@ -50,7 +50,7 @@ func (proc *Process) BuildProcessInfo(
 			return procInfo, err
 		}
 		procInfo.AccountId = accountId
-		snapshot, err := proc.TxnOperator.Snapshot()
+		snapshot, err := proc.GetTxnOperator().Snapshot()
 		if err != nil {
 			return procInfo, err
 		}

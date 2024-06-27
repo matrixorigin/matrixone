@@ -67,7 +67,7 @@ func TestNormalDeletion(t *testing.T) {
 	proc := testutil.NewProc()
 	proc.Base.TxnClient = txnClient
 	proc.Ctx = ctx
-	proc.TxnOperator = txnOperator
+	proc.Base.TxnOperator = txnOperator
 
 	arg := Argument{
 		DeleteCtx: &DeleteCtx{

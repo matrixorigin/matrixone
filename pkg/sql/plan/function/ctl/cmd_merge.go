@@ -147,8 +147,8 @@ func handleMerge() handleFunc {
 			return nil, nil
 		},
 		func(tnShardID uint64, parameter string, proc *process.Process) (payload []byte, err error) {
-			txnOp := proc.TxnOperator
-			if proc.TxnOperator == nil {
+			txnOp := proc.GetTxnOperator()
+			if txnOp == nil {
 				return nil, moerr.NewInternalError(proc.Ctx, "handleFlush: txn operator is nil")
 			}
 			a, err := parseArgs(parameter)

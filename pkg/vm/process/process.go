@@ -82,11 +82,11 @@ func New(
 		Hakeeper:       hakeeper,
 		UdfService:     udfService,
 		logger:         util.GetLogger(), // TODO: set by input
+		TxnOperator:    txnOperator,
 	}
 	return &Process{
-		Ctx:         ctx,
-		TxnOperator: txnOperator,
-		Base:        baseProcess,
+		Ctx:  ctx,
+		Base: baseProcess,
 	}
 }
 
@@ -106,8 +106,6 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 		}
 	}
 	proc.DispatchNotifyCh = make(chan WrapCs)
-	proc.TxnOperator = p.TxnOperator
-	proc.CloneTxnOperator = p.CloneTxnOperator
 	return proc
 }
 

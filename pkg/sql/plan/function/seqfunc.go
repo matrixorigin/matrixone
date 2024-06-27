@@ -53,7 +53,7 @@ func Nextval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 
 	// Here is the transaction
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-	txn := proc.TxnOperator
+	txn := proc.GetTxnOperator()
 	if txn == nil {
 		return moerr.NewInternalError(proc.Ctx, "Nextval: txn operator is nil")
 	}
@@ -281,7 +281,7 @@ func Setval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 
 	// Txn
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-	txn := proc.TxnOperator
+	txn := proc.GetTxnOperator()
 	if txn == nil {
 		return moerr.NewInternalError(proc.Ctx, "Setval: txn operator is nil")
 	}
@@ -431,7 +431,7 @@ func Currval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 
 	// Here is the transaction
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-	txn := proc.TxnOperator
+	txn := proc.GetTxnOperator()
 	if txn == nil {
 		return moerr.NewInternalError(proc.Ctx, "Currval: txn operator is nil")
 	}

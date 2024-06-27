@@ -2294,7 +2294,7 @@ func executeStmtWithTxn(ses FeSession,
 
 		txnOp := ses.GetTxnHandler().GetTxn()
 		//refresh proc txnOp
-		execCtx.proc.TxnOperator = txnOp
+		execCtx.proc.Base.TxnOperator = txnOp
 
 		err = dispatchStmt(ses, execCtx)
 	}
@@ -2367,7 +2367,7 @@ func executeStmtWithWorkspace(ses FeSession,
 	ses.SetStaticTxnInfo(makeCompactTxnInfo(txnOp))
 
 	//refresh proc txnOp
-	execCtx.proc.TxnOperator = txnOp
+	execCtx.proc.Base.TxnOperator = txnOp
 
 	err = disttae.CheckTxnIsValid(txnOp)
 	if err != nil {

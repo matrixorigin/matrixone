@@ -542,9 +542,9 @@ func builtInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWr
 		sql := fmt.Sprintf("delete from `%s`.`%s` where `%s` < %q",
 			tbl.Database, tbl.Table, tbl.TimestampColumn.Name, dateStr)
 		opts := executor.Options{}.WithDatabase(tbl.Database).
-			WithTxn(proc.TxnOperator).
+			WithTxn(proc.GetTxnOperator()).
 			WithTimeZone(proc.GetSessionInfo().TimeZone)
-		if proc.TxnOperator != nil {
+		if proc.GetTxnOperator() != nil {
 			opts = opts.WithDisableIncrStatement() // this option always with WithTxn()
 		}
 		res, err := exec.Exec(proc.Ctx, sql, opts)

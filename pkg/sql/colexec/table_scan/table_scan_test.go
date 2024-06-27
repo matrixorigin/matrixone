@@ -93,7 +93,7 @@ func TestCall(t *testing.T) {
 	proc := testutil.NewProc()
 	proc.Base.TxnClient = txnClient
 	proc.Ctx = ctx
-	proc.TxnOperator = txnOperator
+	proc.Base.TxnOperator = txnOperator
 
 	reader := mock_frontend.NewMockReader(ctrl)
 	reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, attrs []string, expr *plan.Expr, b, c interface{}) (*batch.Batch, error) {

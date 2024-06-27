@@ -91,7 +91,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	txnOp := proc.TxnOperator
+	txnOp := proc.GetTxnOperator()
 	if !txnOp.Txn().IsPessimistic() {
 		return arg.GetChildren(0).Call(proc)
 	}
@@ -204,7 +204,7 @@ func performLock(
 	arg *Argument) error {
 	needRetry := false
 	for idx, target := range arg.targets {
-		if proc.TxnOperator.LockSkipped(target.tableID, target.mode) {
+		if proc.GetTxnOperator().LockSkipped(target.tableID, target.mode) {
 			return nil
 		}
 		getLogger().Debug("lock",
@@ -297,7 +297,7 @@ func LockTable(
 	tableID uint64,
 	pkType types.Type,
 	changeDef bool) error {
-	txnOp := proc.TxnOperator
+	txnOp := proc.GetTxnOperator()
 	if !txnOp.Txn().IsPessimistic() {
 		return nil
 	}
@@ -341,7 +341,7 @@ func LockRows(
 	sharding lock.Sharding,
 	group uint32,
 ) error {
-	txnOp := proc.TxnOperator
+	txnOp := proc.GetTxnOperator()
 	if !txnOp.Txn().IsPessimistic() {
 		return nil
 	}
@@ -390,7 +390,7 @@ func doLock(
 	vec *vector.Vector,
 	pkType types.Type,
 	opts LockOptions) (bool, bool, timestamp.Timestamp, error) {
-	txnOp := proc.TxnOperator
+	txnOp := proc.GetTxnOperator()
 	txnClient := proc.Base.TxnClient
 	lockService := proc.GetLockService()
 
@@ -542,7 +542,7 @@ func doLock(
 
 		if changed {
 			trace.GetService().TxnNoConflictChanged(
-				proc.TxnOperator,
+				proc.GetTxnOperator(),
 				tableID,
 				lockedTS,
 				newSnapshotTS)
@@ -581,7 +581,7 @@ func doLock(
 	snapshotTS = result.Timestamp.Next()
 
 	trace.GetService().TxnConflictChanged(
-		proc.TxnOperator,
+		proc.GetTxnOperator(),
 		tableID,
 		snapshotTS)
 	if err := txnOp.UpdateSnapshot(ctx, snapshotTS); err != nil {
@@ -908,7 +908,7 @@ func hasNewVersionInRange(
 
 	if rel == nil {
 		var err error
-		txnOp := proc.TxnOperator
+		txnOp := proc.GetTxnOperator()
 		_, _, rel, err = eng.GetRelationById(proc.Ctx, txnOp, tableID)
 		if err != nil {
 			if strings.Contains(err.Error(), "can not find table by id") {
