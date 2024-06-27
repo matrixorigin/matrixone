@@ -69,6 +69,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, nil
 	}
 	bat := result.Batch
+
 	anal.Input(bat, arg.GetIsFirst())
 
 	if arg.ctr.buf != nil {

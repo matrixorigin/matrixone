@@ -64,7 +64,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		anal.Stop()
 
 		cost := time.Since(start)
-
 		trace.GetService().AddTxnDurationAction(
 			txnOp,
 			client.TableScanEvent,
@@ -76,13 +75,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}()
 
 	result := vm.NewCallResult()
-	//select {
-	//case <-proc.Ctx.Done():
-	//	result.Batch = nil
-	//	result.Status = vm.ExecStop
-	//	return result, proc.Ctx.Err()
-	//default:
-	//}
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		e = err
 		return vm.CancelResult, err

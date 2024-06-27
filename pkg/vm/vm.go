@@ -55,8 +55,6 @@ func setAnalyzeInfo(ins Instructions, proc *process.Process) {
 		switch ins[i].Op {
 		case Output:
 			ins[i].Idx = -1
-		case TableScan:
-			ins[i].Idx = ins[i+1].Idx
 		}
 	}
 
