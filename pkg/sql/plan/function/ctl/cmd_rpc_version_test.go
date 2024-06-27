@@ -47,6 +47,7 @@ func TestHandleGetProtocolVersion(t *testing.T) {
 	require.NoError(t, err)
 
 	arguments.proc = new(process.Process)
+	arguments.proc.Base = &process.BaseProcess{}
 	arguments.proc.Base.QueryClient = qt
 	arguments.service = cn
 

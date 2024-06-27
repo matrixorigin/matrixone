@@ -211,6 +211,7 @@ func Test_EncodeProcessInfo(t *testing.T) {
 func Test_refactorScope(t *testing.T) {
 	ctx := context.TODO()
 	proc := &process.Process{}
+	proc.Base = &process.BaseProcess{}
 
 	s := reuse.Alloc[Scope](nil)
 	s.Proc = proc
