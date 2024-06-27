@@ -235,7 +235,7 @@ func performLock(
 			DefaultLockOptions(arg.ctr.rt.parker).
 				WithLockMode(lock.LockMode_Exclusive).
 				WithFetchLockRowsFunc(arg.ctr.rt.fetchers[idx]).
-				WithMaxBytesPerLock(int(proc.LockService.GetConfig().MaxLockRowCount)).
+				WithMaxBytesPerLock(int(proc.GetLockService().GetConfig().MaxLockRowCount)).
 				WithFilterRows(target.filter, filterCols).
 				WithLockTable(target.lockTable, target.changeDef).
 				WithHasNewVersionInRangeFunc(arg.ctr.rt.hasNewVersionInRange),
@@ -256,7 +256,7 @@ func performLock(
 		}
 
 		// refreshTS is last commit ts + 1, because we need see the committed data.
-		if proc.TxnClient.RefreshExpressionEnabled() &&
+		if proc.Base.TxnClient.RefreshExpressionEnabled() &&
 			target.refreshTimestampIndexInBatch != -1 {
 			vec := bat.GetVector(target.refreshTimestampIndexInBatch)
 			ts := types.BuildTS(refreshTS.PhysicalTime, refreshTS.LogicalTime)
@@ -391,8 +391,8 @@ func doLock(
 	pkType types.Type,
 	opts LockOptions) (bool, bool, timestamp.Timestamp, error) {
 	txnOp := proc.TxnOperator
-	txnClient := proc.TxnClient
-	lockService := proc.LockService
+	txnClient := proc.Base.TxnClient
+	lockService := proc.GetLockService()
 
 	if !txnOp.Txn().IsPessimistic() {
 		return false, false, timestamp.Timestamp{}, nil
@@ -441,7 +441,7 @@ func doLock(
 	txn := txnOp.Txn()
 	options := lock.LockOptions{
 		Granularity:     g,
-		Policy:          proc.WaitPolicy,
+		Policy:          proc.GetWaitPolicy(),
 		Mode:            opts.mode,
 		TableDefChanged: opts.changeDef,
 		Sharding:        opts.sharding,
