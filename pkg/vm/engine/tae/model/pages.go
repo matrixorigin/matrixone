@@ -81,6 +81,7 @@ func WithDiskTTL(diskTTL time.Duration) Option {
 
 type TransferHashPage struct {
 	common.RefHelper
+	latch       sync.RWMutex
 	bornTS      time.Time
 	id          *common.ID // not include blk offset
 	hashmap     api.HashPageMap
@@ -131,6 +132,8 @@ func (page *TransferHashPage) Close() {
 }
 
 func (page *TransferHashPage) Length() int {
+	page.latch.RLock()
+	defer page.latch.RUnlock()
 	return len(page.hashmap.M)
 }
 
@@ -139,7 +142,7 @@ func (page *TransferHashPage) String() string {
 	_, _ = w.WriteString(fmt.Sprintf("hashpage[%s][%s][Len=%d]",
 		page.id.BlockString(),
 		page.bornTS.String(),
-		len(page.hashmap.M)))
+		page.Length()))
 	return w.String()
 }
 
@@ -160,6 +163,8 @@ func (page *TransferHashPage) Clean() bool {
 }
 
 func (page *TransferHashPage) Train(from uint32, to types.Rowid) {
+	page.latch.Lock()
+	defer page.latch.Unlock()
 	page.hashmap.M[from] = to[:]
 	v2.TransferRowTotalCounter.Inc()
 }
@@ -179,7 +184,9 @@ func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) 
 
 	memstart := time.Now()
 	var m []byte
+	page.latch.RLock()
 	m, ok = page.hashmap.M[from]
+	page.latch.RUnlock()
 	if ok {
 		dest = types.Rowid(m)
 	}
@@ -197,11 +204,15 @@ func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) 
 }
 
 func (page *TransferHashPage) Marshal() []byte {
+	page.latch.RLock()
+	defer page.latch.RUnlock()
 	data, _ := proto.Marshal(&page.hashmap)
 	return data
 }
 
 func (page *TransferHashPage) Unmarshal(data []byte) error {
+	page.latch.Lock()
+	defer page.latch.Unlock()
 	err := proto.Unmarshal(data, &page.hashmap)
 	return err
 }
@@ -212,8 +223,10 @@ func (page *TransferHashPage) SetLocation(location objectio.Location) {
 
 func (page *TransferHashPage) clearTable() {
 	logutil.Infof("[TransferHashPage] clear hash table")
-	clear(page.hashmap.M)
 	atomic.StoreInt32(&page.isPersisted, 1)
+	page.latch.Lock()
+	clear(page.hashmap.M)
+	page.latch.Unlock()
 }
 
 func (page *TransferHashPage) loadTable() {
@@ -237,7 +250,7 @@ func (page *TransferHashPage) loadTable() {
 		return
 	}
 
-	v2.TransferRowHitCounter.Add(float64(len(page.hashmap.M)))
+	v2.TransferRowHitCounter.Add(float64(page.Length()))
 
 	atomic.StoreInt32(&page.isPersisted, 0)
 
