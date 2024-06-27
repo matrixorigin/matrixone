@@ -190,7 +190,7 @@ func getExternalStats(node *plan.Node, builder *QueryBuilder) *Stats {
 		}
 	}
 
-	param.FileService = builder.compCtx.GetProcess().FileService
+	param.FileService = builder.compCtx.GetProcess().GetFileService()
 	param.Ctx = builder.compCtx.GetProcess().Ctx
 	_, spanReadDir := trace.Start(param.Ctx, "ReCalcNodeStats.ReadDir")
 	fileList, fileSize, err := ReadDir(param)

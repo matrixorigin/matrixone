@@ -61,7 +61,7 @@ func TestInsertOperator(t *testing.T) {
 	}).AnyTimes()
 
 	proc := testutil.NewProc()
-	proc.TxnClient = txnClient
+	proc.Base.TxnClient = txnClient
 	proc.Ctx = ctx
 	batch1 := &batch.Batch{
 		Vecs: []*vector.Vector{
