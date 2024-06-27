@@ -24,25 +24,30 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
 // ConstructCreateTableSQL used to build CREATE Table statement
-func ConstructCreateTableSQL(tableObjRef *plan.ObjectRef, tableDef *plan.TableDef, snapshot Snapshot, ctx CompilerContext) (string, error) {
+func ConstructCreateTableSQL(ctx CompilerContext, tableObjRef *plan.ObjectRef, tableDef *plan.TableDef, snapshot Snapshot, useDbName bool) (string, error) {
 	var err error
 	var createStr string
 
 	tblName := tableDef.Name
+	schemaName := tableDef.DbName
+	dbTblName := fmt.Sprintf("`%s`", formatStr(tblName))
+	if useDbName {
+		dbTblName = fmt.Sprintf("`%s`.`%s`", formatStr(schemaName), formatStr(tblName))
+	}
+
 	if tableDef.TableType == catalog.SystemOrdinaryRel {
-		createStr = fmt.Sprintf("CREATE TABLE `%s` (", formatStr(tblName))
+		createStr = fmt.Sprintf("CREATE TABLE %s (", dbTblName)
 	} else if tableDef.TableType == catalog.SystemExternalRel {
-		createStr = fmt.Sprintf("CREATE EXTERNAL TABLE `%s` (", formatStr(tblName))
+		createStr = fmt.Sprintf("CREATE EXTERNAL TABLE %s (", dbTblName)
 	} else if tableDef.TableType == catalog.SystemClusterRel {
-		createStr = fmt.Sprintf("CREATE CLUSTER TABLE `%s` (", formatStr(tblName))
+		createStr = fmt.Sprintf("CREATE CLUSTER TABLE %s (", dbTblName)
 	} else if tblName == catalog.MO_DATABASE || tblName == catalog.MO_TABLES || tblName == catalog.MO_COLUMNS {
-		createStr = fmt.Sprintf("CREATE TABLE `%s` (", formatStr(tblName))
+		createStr = fmt.Sprintf("CREATE TABLE %s (", dbTblName)
 	}
 
 	rowCount := 0
@@ -67,16 +72,9 @@ func ConstructCreateTableSQL(tableObjRef *plan.ObjectRef, tableDef *plan.TableDe
 		if err != nil {
 			return "", err
 		}
-		if util.IsClusterTableAttribute(colNameOrigin) &&
-			isClusterTable &&
-			accountId != catalog.System_Account {
-			continue
-		}
 
-		if util.IsClusterTableAttribute(colNameOrigin) &&
-			isClusterTable &&
-			accountId == catalog.System_Account &&
-			!snapshot.TS.Equal(timestamp.Timestamp{}) {
+		if util.IsClusterTableAttribute(colNameOrigin) && isClusterTable &&
+			(accountId != catalog.System_Account || !IsSnapshotValid(&snapshot)) {
 			continue
 		}
 
@@ -386,7 +384,19 @@ func ConstructCreateTableSQL(tableObjRef *plan.ObjectRef, tableDef *plan.TableDe
 		}
 		buf.WriteRune(ch)
 	}
-	return buf.String(), nil
+
+	sql := buf.String()
+	stmt, err := getRewriteSQLStmt(ctx, sql)
+	defer func() {
+		if stmt != nil {
+			stmt.Free()
+		}
+	}()
+
+	if err != nil {
+		return "", err
+	}
+	return sql, nil
 }
 
 // FormatColType Get the formatted description of the column type.
