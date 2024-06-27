@@ -479,7 +479,7 @@ func (proc *Process) Debugf(ctx context.Context, msg string, args ...any) {
 func appendSessionField(fields []zap.Field, proc *Process) []zap.Field {
 	if proc != nil {
 		fields = append(fields, logutil.SessionIdField(uuid.UUID(proc.Base.SessionInfo.SessionId).String()))
-		if p := proc.Base.StmtProfile; p != nil {
+		if p := proc.GetStmtProfile(); p != nil {
 			fields = append(fields, logutil.StatementIdField(uuid.UUID(p.stmtId).String()))
 			fields = append(fields, logutil.TxnIdField(hex.EncodeToString(p.txnId[:])))
 		}

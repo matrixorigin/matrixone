@@ -395,7 +395,7 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 	c := reuse.Alloc[Compile](nil)
 	c.proc = proc
 	c.e = cnInfo.storeEngine
-	c.MessageBoard = c.MessageBoard.SetMultiCN(c.GetMessageCenter(), c.proc.Base.StmtProfile.GetStmtId())
+	c.MessageBoard = c.MessageBoard.SetMultiCN(c.GetMessageCenter(), c.proc.GetStmtProfile().GetStmtId())
 	c.proc.Base.MessageBoard = c.MessageBoard
 	c.anal = newAnaylze()
 	c.anal.analInfos = proc.Base.AnalInfos

@@ -41,9 +41,9 @@ func (proc *Process) BuildProcessInfo(
 		proc.Error(proc.Ctx, "empty plan", zap.String("sql", sql))
 	}
 	{
-		procInfo.Id = proc.Base.Id
+		procInfo.Id = proc.QueryId()
 		procInfo.Sql = sql
-		procInfo.Lim = convertToPipelineLimitation(proc.Base.Lim)
+		procInfo.Lim = convertToPipelineLimitation(proc.GetLim())
 		procInfo.UnixTime = proc.Base.UnixTime
 		accountId, err := defines.GetAccountId(proc.Ctx)
 		if err != nil {
@@ -78,8 +78,8 @@ func (proc *Process) BuildProcessInfo(
 		}
 	}
 	{ // log info
-		stmtId := proc.Base.StmtProfile.GetStmtId()
-		txnId := proc.Base.StmtProfile.GetTxnId()
+		stmtId := proc.GetStmtProfile().GetStmtId()
+		txnId := proc.GetStmtProfile().GetTxnId()
 		procInfo.SessionLogger = pipeline.SessionLoggerInfo{
 			SessId:   proc.Base.SessionInfo.SessionId[:],
 			StmtId:   stmtId[:],
