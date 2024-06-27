@@ -1,3 +1,4 @@
+-- @bvt:issue#16940
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
 drop account if exists acc02;
@@ -576,3 +577,4 @@ show databases like 'snapshot_read';
 show databases like 'test_snapshot_restore';
 -- @ignore:1
 show snapshots;
+-- @bvt:issue

@@ -1410,6 +1410,13 @@ func restoreAccountUsingCluster(ctx context.Context, ses *Session, bh Background
 		}
 	}()
 
+	// get snapshot record
+	_, err = getSnapshotByName(ctx, bh, newSnapshot)
+	if err != nil {
+		return err
+	}
+	getLogger().Info(fmt.Sprintf("[%s] create snapshot %s success", snapshotName, newSnapshot))
+
 	// pre restore account
 	// drop foreign key related tables first
 	if err = deleteCurFkTables(ctx, bh, "", "", uint32(toAccountId)); err != nil {
