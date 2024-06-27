@@ -1312,15 +1312,15 @@ func buildInsertPlansWithRelatedHiddenTable(
 					uniqueCols := make([]*plan.ColDef, len(indexdef.Parts))
 					uniqueColsMap := make(map[string]int)
 
-					if len(indexdef.Parts) == 1 {
-						if insertFromUnique, exists := ifInsertFromUniqueColMap[indexdef.Parts[0]]; exists {
-							ifInsertFromUnique = insertFromUnique
+					for i, n := range indexdef.Parts {
+						uniqueColsMap[n] = i
+
+						if _, exists := ifInsertFromUniqueColMap[n]; exists {
+							ifInsertFromUnique = true
+							break
 						}
 					}
 
-					for i, n := range indexdef.Parts {
-						uniqueColsMap[n] = i
-					}
 					for _, c := range tableDef.Cols { // sort
 						if i, ok := uniqueColsMap[c.Name]; ok {
 							uniqueCols[i] = c
@@ -1495,11 +1495,16 @@ func buildInsertPlansWithRelatedHiddenTable(
 
 	ifInsertFromUnique := false
 	if tableDef.Pkey != nil && ifInsertFromUniqueColMap != nil {
-		if tableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName && tableDef.Pkey.PkeyColName != catalog.CPrimaryKeyColName {
-			if insertFromUnique, exists := ifInsertFromUniqueColMap[tableDef.Pkey.PkeyColName]; exists {
-				ifInsertFromUnique = insertFromUnique
+		for _, colName := range tableDef.Pkey.Names {
+			if _, exists := ifInsertFromUniqueColMap[colName]; exists {
+				ifInsertFromUnique = true
+				break
 			}
 		}
+	}
+
+	if stmt != nil && stmt.IsRestore {
+		checkInsertPkDupForHiddenIndexTable = false
 	}
 
 	return makeOneInsertPlan(ctx, builder, bindCtx, objRef, tableDef,
