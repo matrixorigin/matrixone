@@ -40,8 +40,8 @@ func handleFlush() handleFunc {
 			if len(parameters) == 0 || len(parameters) > 3 {
 				return nil, moerr.NewInternalErrorNoCtx("handleFlush: expected \"TableId\" or \"DbName.TableName[.AccountId]\" ")
 			}
-			txnOp := proc.TxnOperator
-			if proc.TxnOperator == nil {
+			txnOp := proc.GetTxnOperator()
+			if txnOp == nil {
 				return nil, moerr.NewInternalError(proc.Ctx, "handleFlush: txn operator is nil")
 			}
 
@@ -65,7 +65,7 @@ func handleFlush() handleFunc {
 				proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(accId))
 			}
 
-			database, err := proc.SessionInfo.StorageEngine.Database(proc.Ctx, parameters[0], txnOp)
+			database, err := proc.GetSessionInfo().StorageEngine.Database(proc.Ctx, parameters[0], txnOp)
 			if err != nil {
 				return nil, err
 			}

@@ -82,7 +82,7 @@ func newCNMergeTask(
 	for i := 0; i < len(tbl.tableDef.Cols)-1; i++ {
 		attrs = append(attrs, tbl.tableDef.Cols[i].Name)
 	}
-	fs := proc.FileService
+	fs := proc.Base.FileService
 
 	blkCnts := make([]int, len(targets))
 	blkIters := make([]*StatsBlkIter, len(targets))

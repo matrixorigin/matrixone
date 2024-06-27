@@ -116,15 +116,7 @@ func (s *Scope) Reset(c *Compile) error {
 func (s *Scope) resetForReuse(c *Compile) (err error) {
 	if s.Proc != nil {
 		newctx, cancel := context.WithCancel(c.ctx)
-		s.Proc.SetPrepareBatch(c.proc.GetPrepareBatch())
-		s.Proc.SetPrepareExprList(c.proc.GetPrepareExprList())
-		s.Proc.SetPrepareParams(c.proc.GetPrepareParams())
-		s.Proc.TxnClient = c.proc.TxnClient
-		s.Proc.TxnOperator = c.proc.TxnOperator
-		s.Proc.SessionInfo = c.proc.SessionInfo
-		s.Proc.UnixTime = c.proc.UnixTime
-		s.Proc.LastInsertID = c.proc.LastInsertID
-		s.Proc.MessageBoard = c.proc.MessageBoard
+		s.Proc.Base = c.proc.Base
 		s.Proc.Ctx = newctx
 		s.Proc.Cancel = cancel
 	}
@@ -599,14 +591,14 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		//  I kept the old codes here without any modify. I don't know if there is one `GetRelation(txn, scanNode, scheme, table)`
 		{
 			n := s.DataSource.node
-			txnOp := s.Proc.TxnOperator
+			txnOp := s.Proc.GetTxnOperator()
 			if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
 				if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
-					n.ScanSnapshot.TS.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
+					n.ScanSnapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
 					if c.proc.GetCloneTxnOperator() != nil {
 						txnOp = c.proc.GetCloneTxnOperator()
 					} else {
-						txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanSnapshot.TS)
+						txnOp = c.proc.GetTxnOperator().CloneSnapshotOp(*n.ScanSnapshot.TS)
 						c.proc.SetCloneTxnOperator(txnOp)
 					}
 
@@ -623,7 +615,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 			rel, err = db.Relation(ctx, s.DataSource.RelationName, c.proc)
 			if err != nil {
 				var e error // avoid contamination of error messages
-				db, e = c.e.Database(ctx, defines.TEMPORARY_DBNAME, s.Proc.TxnOperator)
+				db, e = c.e.Database(ctx, defines.TEMPORARY_DBNAME, s.Proc.GetTxnOperator())
 				if e != nil {
 					return nil, e
 				}
@@ -1212,7 +1204,7 @@ func (s *Scope) notifyAndReceiveFromRemote(wg *sync.WaitGroup, errChan chan erro
 				streamSender, errStream := cnclient.GetStreamSender(fromAddr)
 				if errStream != nil {
 					s.Proc.Errorf(s.Proc.Ctx, "Failed to get stream sender txnID=%s, err=%v",
-						s.Proc.TxnOperator.Txn().DebugString(), errStream)
+						s.Proc.GetTxnOperator().Txn().DebugString(), errStream)
 					closeWithError(errStream, s.Proc.Reg.MergeReceivers[receiverIdx])
 					return
 				}

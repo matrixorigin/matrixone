@@ -191,7 +191,7 @@ func handleSyncCommit(
 	service serviceType,
 	parameter string,
 	sender requestSender) (Result, error) {
-	qt := proc.QueryClient
+	qt := proc.GetQueryClient()
 	mc := clusterservice.GetMOCluster()
 	var addrs []string
 	mc.GetCNService(

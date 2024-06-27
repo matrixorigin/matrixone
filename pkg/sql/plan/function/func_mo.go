@@ -54,10 +54,10 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 
 	// XXX WTF
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-	if proc.TxnOperator == nil {
+	if proc.GetTxnOperator() == nil {
 		return moerr.NewInternalError(proc.Ctx, "MoTableRows: txn operator is nil")
 	}
-	txn := proc.TxnOperator
+	txn := proc.GetTxnOperator()
 
 	var ok bool
 	// XXX old code starts a new transaction.   why?
@@ -169,10 +169,10 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 	tbls := vector.GenerateFunctionStrParameter(ivecs[1])
 
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-	if proc.TxnOperator == nil {
+	if proc.GetTxnOperator() == nil {
 		return moerr.NewInternalError(proc.Ctx, "MoTableSize: txn operator is nil")
 	}
-	txn := proc.TxnOperator
+	txn := proc.GetTxnOperator()
 
 	var ok bool
 	// XXX old code starts a new transaction.   why?
@@ -359,10 +359,10 @@ func MoTableColMin(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 
 func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	e, ok := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-	if !ok || proc.TxnOperator == nil {
+	if !ok || proc.GetTxnOperator() == nil {
 		return moerr.NewInternalError(proc.Ctx, "MoTableColMaxMin: txn operator is nil")
 	}
-	txn := proc.TxnOperator
+	txn := proc.GetTxnOperator()
 
 	dbNames := vector.GenerateFunctionStrParameter(parameters[0])
 	tableNames := vector.GenerateFunctionStrParameter(parameters[1])
@@ -414,7 +414,7 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 			if db.IsSubscription(ctx) {
 				// get sub info
 				var sub *plan.SubscriptionMeta
-				if sub, err = proc.SessionInfo.SqlHelper.GetSubscriptionMeta(dbStr); err != nil {
+				if sub, err = proc.GetSessionInfo().SqlHelper.GetSubscriptionMeta(dbStr); err != nil {
 					return err
 				}
 

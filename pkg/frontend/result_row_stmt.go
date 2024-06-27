@@ -209,7 +209,7 @@ func (resper *MysqlResp) respStreamResultRow(ses *Session,
 
 	switch statement := execCtx.stmt.(type) {
 	case *tree.Select:
-		if len(execCtx.proc.SessionInfo.SeqAddValues) != 0 {
+		if len(execCtx.proc.GetSessionInfo().SeqAddValues) != 0 {
 			ses.AddSeqValues(execCtx.proc)
 		}
 		ses.SetSeqLastValue(execCtx.proc)

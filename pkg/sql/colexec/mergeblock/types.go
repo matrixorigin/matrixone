@@ -167,7 +167,7 @@ func splitObjectStats(arg *Argument, proc *process.Process,
 	// construct the object stats from block info here.
 	needLoad := bat.Attrs[len(bat.Attrs)-1] != catalog.ObjectMeta_ObjectStats
 
-	fs, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
+	fs, err := fileservice.Get[fileservice.FileService](proc.Base.FileService, defines.SharedFileServiceName)
 	if err != nil {
 		logutil.Error("get fs failed when split object stats. ", zap.Error(err))
 		return err

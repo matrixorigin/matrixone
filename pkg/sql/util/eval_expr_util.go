@@ -360,7 +360,7 @@ func setInsertValueTimeStamp(proc *process.Process, numVal *tree.NumVal, vec *ve
 			var val types.Timestamp
 			zone := time.Local
 			if proc != nil {
-				zone = proc.SessionInfo.TimeZone
+				zone = proc.GetSessionInfo().TimeZone
 			}
 			val, err = types.ParseTimestamp(zone, s, typ.Scale)
 			if err != nil {

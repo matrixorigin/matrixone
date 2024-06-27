@@ -94,7 +94,7 @@ func TestBuild(t *testing.T) {
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
 		tc.arg.Free(tc.proc, false, nil)
 		tc.proc.FreeVectors()
-		tc.proc.MessageBoard = tc.proc.MessageBoard.Reset()
+		tc.proc.Base.MessageBoard = tc.proc.Base.MessageBoard.Reset()
 	}
 }
 
@@ -150,7 +150,7 @@ func newTestCase(flgs []bool, ts []types.Type, cs []*plan.Expr) buildTestCase {
 		Ctx: ctx,
 		Ch:  make(chan *process.RegisterMessage, 10),
 	}
-	proc.MessageBoard = process.NewMessageBoard()
+	proc.Base.MessageBoard = process.NewMessageBoard()
 	return buildTestCase{
 		types:  ts,
 		flgs:   flgs,

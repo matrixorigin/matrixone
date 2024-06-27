@@ -147,8 +147,8 @@ func handleMerge() handleFunc {
 			return nil, nil
 		},
 		func(tnShardID uint64, parameter string, proc *process.Process) (payload []byte, err error) {
-			txnOp := proc.TxnOperator
-			if proc.TxnOperator == nil {
+			txnOp := proc.GetTxnOperator()
+			if txnOp == nil {
 				return nil, moerr.NewInternalError(proc.Ctx, "handleFlush: txn operator is nil")
 			}
 			a, err := parseArgs(parameter)
@@ -179,14 +179,14 @@ func handleMerge() handleFunc {
 			var rel engine.Relation
 			tblId, err1 := strconv.ParseUint(a.tbl, 10, 64)
 			if err1 == nil {
-				_, _, rel, err = proc.SessionInfo.StorageEngine.GetRelationById(proc.Ctx, txnOp, tblId)
+				_, _, rel, err = proc.GetSessionInfo().StorageEngine.GetRelationById(proc.Ctx, txnOp, tblId)
 				if err != nil {
 					logutil.Errorf("mergeblocks err on cn, tblId %d, err %s", tblId, err.Error())
 					return nil, err
 				}
 			} else {
 				var database engine.Database
-				database, err = proc.SessionInfo.StorageEngine.Database(proc.Ctx, a.db, txnOp)
+				database, err = proc.GetSessionInfo().StorageEngine.Database(proc.Ctx, a.db, txnOp)
 				if err != nil {
 					logutil.Errorf("mergeblocks err on cn, db %s, err %s", a.db, err.Error())
 					return nil, err
@@ -200,7 +200,7 @@ func handleMerge() handleFunc {
 
 			entry, err := rel.MergeObjects(proc.Ctx, a.objs, a.filter, uint32(a.targetObjSize))
 			if err != nil {
-				merge.CleanUpUselessFiles(entry, proc.FileService)
+				merge.CleanUpUselessFiles(entry, proc.GetFileService())
 				return nil, err
 			}
 			payload, err = entry.MarshalBinary()

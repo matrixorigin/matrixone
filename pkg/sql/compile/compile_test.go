@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"os"
 	"testing"
 	"time"
@@ -136,8 +137,8 @@ func TestCompile(t *testing.T) {
 	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
 	txnCli, txnOp := newTestTxnClientAndOp(ctrl)
 	for _, tc := range tcs {
-		tc.proc.TxnClient = txnCli
-		tc.proc.TxnOperator = txnOp
+		tc.proc.Base.TxnClient = txnCli
+		tc.proc.Base.TxnOperator = txnOp
 		tc.proc.Ctx = ctx
 		c := NewCompile("test", "test", tc.sql, "", "", ctx, tc.e, tc.proc, tc.stmt, false, nil, time.Now())
 		err := c.Compile(ctx, tc.pn, testPrint)
@@ -152,7 +153,7 @@ func TestCompile(t *testing.T) {
 		//Sometimes it is 0.
 		//Sometimes it is 24.
 		//require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
-		tc.proc.SessionInfo.Buf.Free()
+		tc.proc.GetSessionInfo().Buf.Free()
 	}
 }
 
@@ -165,8 +166,8 @@ func TestCompileWithFaults(t *testing.T) {
 	tc := newTestCase("select * from R join S on R.uid = S.uid", t)
 	ctrl := gomock.NewController(t)
 	txnCli, txnOp := newTestTxnClientAndOp(ctrl)
-	tc.proc.TxnClient = txnCli
-	tc.proc.TxnOperator = txnOp
+	tc.proc.Base.TxnClient = txnCli
+	tc.proc.Base.TxnOperator = txnOp
 	tc.proc.Ctx = ctx
 	c := NewCompile("test", "test", tc.sql, "", "", ctx, tc.e, tc.proc, nil, false, nil, time.Now())
 	err := c.Compile(ctx, tc.pn, testPrint)
@@ -195,7 +196,7 @@ func newTestTxnClientAndOp(ctrl *gomock.Controller) (client.TxnClient, client.Tx
 
 func newTestCase(sql string, t *testing.T) compileTestCase {
 	proc := testutil.NewProcess()
-	proc.SessionInfo.Buf = buffer.New()
+	proc.GetSessionInfo().Buf = buffer.New()
 	e, _, compilerCtx := testengine.New(defines.AttachAccountId(context.Background(), catalog.System_Account))
 	stmts, err := mysql.Parse(compilerCtx.GetContext(), sql, 1)
 	require.NoError(t, err)
@@ -216,7 +217,7 @@ func newTestCase(sql string, t *testing.T) compileTestCase {
 func TestCompileShouldReturnCtxError(t *testing.T) {
 	{
 		c := reuse.Alloc[Compile](nil)
-		c.proc = &process.Process{}
+		c.proc = testutil.NewProcessWithMPool(mpool.MustNewZero())
 		ctx, cancel := context.WithTimeout(context.TODO(), 100*time.Millisecond)
 		c.proc.Ctx = ctx
 		time.Sleep(time.Second)
@@ -227,7 +228,7 @@ func TestCompileShouldReturnCtxError(t *testing.T) {
 
 	{
 		c := reuse.Alloc[Compile](nil)
-		c.proc = &process.Process{}
+		c.proc = testutil.NewProcessWithMPool(mpool.MustNewZero())
 		ctx, cancel := context.WithTimeout(context.TODO(), 500*time.Millisecond)
 		c.proc.Ctx = ctx
 		cancel()

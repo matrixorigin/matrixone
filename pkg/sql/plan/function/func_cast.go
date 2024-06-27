@@ -1274,7 +1274,7 @@ func dateToOthers(proc *process.Process,
 	case types.T_timestamp:
 		zone := time.Local
 		if proc != nil {
-			zone = proc.SessionInfo.TimeZone
+			zone = proc.GetSessionInfo().TimeZone
 		}
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return dateToTimestamp(source, rs, length, zone)
@@ -1302,7 +1302,7 @@ func datetimeToOthers(proc *process.Process,
 	case types.T_timestamp:
 		zone := time.Local
 		if proc != nil {
-			zone = proc.SessionInfo.TimeZone
+			zone = proc.GetSessionInfo().TimeZone
 		}
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return datetimeToTimestamp(source, rs, length, zone)
@@ -1336,7 +1336,7 @@ func timestampToOthers(proc *process.Process,
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
 	zone := time.Local
 	if proc != nil {
-		zone = proc.SessionInfo.TimeZone
+		zone = proc.GetSessionInfo().TimeZone
 	}
 
 	switch toType.Oid {
@@ -1643,7 +1643,7 @@ func strTypeToOthers(proc *process.Process,
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		zone := time.Local
 		if proc != nil {
-			zone = proc.SessionInfo.TimeZone
+			zone = proc.GetSessionInfo().TimeZone
 		}
 		return strToTimestamp(source, rs, zone, length, selectList)
 	case types.T_char, types.T_varchar, types.T_text,

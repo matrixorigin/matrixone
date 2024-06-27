@@ -104,7 +104,7 @@ func ApplyRuntimeFilters(
 	}()
 
 	errCtx := errutil.ContextWithNoReport(ctx, true)
-	fs, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
+	fs, err := fileservice.Get[fileservice.FileService](proc.Base.FileService, defines.SharedFileServiceName)
 	if err != nil {
 		return nil, err
 	}

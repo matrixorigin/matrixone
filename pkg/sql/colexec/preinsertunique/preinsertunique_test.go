@@ -51,7 +51,7 @@ func TestPreInsertUnique(t *testing.T) {
 	}).AnyTimes()
 
 	proc := testutil.NewProc()
-	proc.TxnClient = txnClient
+	proc.Base.TxnClient = txnClient
 	proc.Ctx = ctx
 	// create table t1(
 	// col1 int primary key,

@@ -18,10 +18,11 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"strconv"
 	"strings"
 	"time"
+
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -237,7 +238,7 @@ func getLocks(proc *process.Process) ([]*query.GetLockInfoResponse, error) {
 		})
 
 	genRequest := func() *query.Request {
-		req := proc.QueryClient.NewRequest(query.CmdMethod_GetLockInfo)
+		req := proc.GetQueryClient().NewRequest(query.CmdMethod_GetLockInfo)
 		req.GetLockInfoRequest = &query.GetLockInfoRequest{}
 		return req
 	}
@@ -250,7 +251,7 @@ func getLocks(proc *process.Process) ([]*query.GetLockInfoResponse, error) {
 		}
 	}
 
-	err = requestMultipleCn(proc.Ctx, nodes, proc.QueryClient, genRequest, handleValidResponse, nil)
+	err = requestMultipleCn(proc.Ctx, nodes, proc.Base.QueryClient, genRequest, handleValidResponse, nil)
 	return rsps, err
 }
 
@@ -269,12 +270,12 @@ func moConfigurationsCall(_ int, proc *process.Process, arg *Argument, result *v
 	switch arg.ctr.state {
 	case dataProducing:
 
-		if proc.Hakeeper == nil {
+		if proc.Base.Hakeeper == nil {
 			return false, moerr.NewInternalError(proc.Ctx, "hakeeper is nil")
 		}
 
 		//get cluster details
-		details, err := proc.Hakeeper.GetClusterDetails(proc.Ctx)
+		details, err := proc.Base.Hakeeper.GetClusterDetails(proc.Ctx)
 		if err != nil {
 			return false, err
 		}
@@ -587,7 +588,7 @@ func getTxns(proc *process.Process) ([]*query.GetTxnInfoResponse, error) {
 		})
 
 	genRequest := func() *query.Request {
-		req := proc.QueryClient.NewRequest(query.CmdMethod_GetTxnInfo)
+		req := proc.Base.QueryClient.NewRequest(query.CmdMethod_GetTxnInfo)
 		req.GetTxnInfoRequest = &query.GetTxnInfoRequest{}
 		return req
 	}
@@ -600,7 +601,7 @@ func getTxns(proc *process.Process) ([]*query.GetTxnInfoResponse, error) {
 		}
 	}
 
-	err = requestMultipleCn(proc.Ctx, nodes, proc.QueryClient, genRequest, handleValidResponse, nil)
+	err = requestMultipleCn(proc.Ctx, nodes, proc.Base.QueryClient, genRequest, handleValidResponse, nil)
 	return rsps, err
 }
 
@@ -715,7 +716,7 @@ func getCacheStats(proc *process.Process) ([]*query.GetCacheInfoResponse, error)
 	})
 
 	genRequest := func() *query.Request {
-		req := proc.QueryClient.NewRequest(query.CmdMethod_GetCacheInfo)
+		req := proc.Base.QueryClient.NewRequest(query.CmdMethod_GetCacheInfo)
 		req.GetCacheInfoRequest = &query.GetCacheInfoRequest{}
 		return req
 	}
@@ -728,7 +729,7 @@ func getCacheStats(proc *process.Process) ([]*query.GetCacheInfoResponse, error)
 		}
 	}
 
-	err = requestMultipleCn(proc.Ctx, nodes, proc.QueryClient, genRequest, handleValidResponse, nil)
+	err = requestMultipleCn(proc.Ctx, nodes, proc.Base.QueryClient, genRequest, handleValidResponse, nil)
 	return rsps, err
 }
 

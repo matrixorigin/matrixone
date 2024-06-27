@@ -91,7 +91,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	txnOp := proc.TxnOperator
+	txnOp := proc.GetTxnOperator()
 	if !txnOp.Txn().IsPessimistic() {
 		return arg.GetChildren(0).Call(proc)
 	}
@@ -204,7 +204,7 @@ func performLock(
 	arg *Argument) error {
 	needRetry := false
 	for idx, target := range arg.targets {
-		if proc.TxnOperator.LockSkipped(target.tableID, target.mode) {
+		if proc.GetTxnOperator().LockSkipped(target.tableID, target.mode) {
 			return nil
 		}
 		getLogger().Debug("lock",
@@ -235,7 +235,7 @@ func performLock(
 			DefaultLockOptions(arg.ctr.rt.parker).
 				WithLockMode(lock.LockMode_Exclusive).
 				WithFetchLockRowsFunc(arg.ctr.rt.fetchers[idx]).
-				WithMaxBytesPerLock(int(proc.LockService.GetConfig().MaxLockRowCount)).
+				WithMaxBytesPerLock(int(proc.GetLockService().GetConfig().MaxLockRowCount)).
 				WithFilterRows(target.filter, filterCols).
 				WithLockTable(target.lockTable, target.changeDef).
 				WithHasNewVersionInRangeFunc(arg.ctr.rt.hasNewVersionInRange),
@@ -256,7 +256,7 @@ func performLock(
 		}
 
 		// refreshTS is last commit ts + 1, because we need see the committed data.
-		if proc.TxnClient.RefreshExpressionEnabled() &&
+		if proc.Base.TxnClient.RefreshExpressionEnabled() &&
 			target.refreshTimestampIndexInBatch != -1 {
 			vec := bat.GetVector(target.refreshTimestampIndexInBatch)
 			ts := types.BuildTS(refreshTS.PhysicalTime, refreshTS.LogicalTime)
@@ -297,7 +297,7 @@ func LockTable(
 	tableID uint64,
 	pkType types.Type,
 	changeDef bool) error {
-	txnOp := proc.TxnOperator
+	txnOp := proc.GetTxnOperator()
 	if !txnOp.Txn().IsPessimistic() {
 		return nil
 	}
@@ -341,7 +341,7 @@ func LockRows(
 	sharding lock.Sharding,
 	group uint32,
 ) error {
-	txnOp := proc.TxnOperator
+	txnOp := proc.GetTxnOperator()
 	if !txnOp.Txn().IsPessimistic() {
 		return nil
 	}
@@ -390,9 +390,9 @@ func doLock(
 	vec *vector.Vector,
 	pkType types.Type,
 	opts LockOptions) (bool, bool, timestamp.Timestamp, error) {
-	txnOp := proc.TxnOperator
-	txnClient := proc.TxnClient
-	lockService := proc.LockService
+	txnOp := proc.GetTxnOperator()
+	txnClient := proc.Base.TxnClient
+	lockService := proc.GetLockService()
 
 	if !txnOp.Txn().IsPessimistic() {
 		return false, false, timestamp.Timestamp{}, nil
@@ -441,7 +441,7 @@ func doLock(
 	txn := txnOp.Txn()
 	options := lock.LockOptions{
 		Granularity:     g,
-		Policy:          proc.WaitPolicy,
+		Policy:          proc.GetWaitPolicy(),
 		Mode:            opts.mode,
 		TableDefChanged: opts.changeDef,
 		Sharding:        opts.sharding,
@@ -542,7 +542,7 @@ func doLock(
 
 		if changed {
 			trace.GetService().TxnNoConflictChanged(
-				proc.TxnOperator,
+				proc.GetTxnOperator(),
 				tableID,
 				lockedTS,
 				newSnapshotTS)
@@ -581,7 +581,7 @@ func doLock(
 	snapshotTS = result.Timestamp.Next()
 
 	trace.GetService().TxnConflictChanged(
-		proc.TxnOperator,
+		proc.GetTxnOperator(),
 		tableID,
 		snapshotTS)
 	if err := txnOp.UpdateSnapshot(ctx, snapshotTS); err != nil {
@@ -908,7 +908,7 @@ func hasNewVersionInRange(
 
 	if rel == nil {
 		var err error
-		txnOp := proc.TxnOperator
+		txnOp := proc.GetTxnOperator()
 		_, _, rel, err = eng.GetRelationById(proc.Ctx, txnOp, tableID)
 		if err != nil {
 			if strings.Contains(err.Error(), "can not find table by id") {

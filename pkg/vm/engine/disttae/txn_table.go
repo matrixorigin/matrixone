@@ -298,7 +298,7 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 	var meta objectio.ObjectDataMeta
 	var objMeta objectio.ObjectMeta
 	fs, err := fileservice.Get[fileservice.FileService](
-		tbl.getTxn().proc.FileService,
+		tbl.getTxn().proc.Base.FileService,
 		defines.SharedFileServiceName)
 	if err != nil {
 		return nil, nil, err
@@ -377,7 +377,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 	}
 
 	fs, err := fileservice.Get[fileservice.FileService](
-		tbl.getTxn().proc.FileService,
+		tbl.getTxn().proc.Base.FileService,
 		defines.SharedFileServiceName)
 	if err != nil {
 		return nil, err
@@ -2245,7 +2245,7 @@ func (tbl *txnTable) transferDeletes(
 
 	{
 		fs, err := fileservice.Get[fileservice.FileService](
-			tbl.proc.Load().FileService,
+			tbl.proc.Load().GetFileService(),
 			defines.SharedFileServiceName)
 		if err != nil {
 			return err

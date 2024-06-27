@@ -135,7 +135,7 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		setFPrints(fPrintTxnOp, execCtx.ses.GetFPrints())
 		if execCtx.runResult, err = execCtx.runner.Run(0); err != nil {
 			if loadLocalErrGroup != nil { // release resources
-				err2 := execCtx.proc.LoadLocalReader.Close()
+				err2 := execCtx.proc.Base.LoadLocalReader.Close()
 				if err2 != nil {
 					ses.Error(execCtx.reqCtx,
 						"processLoadLocal goroutine failed",
@@ -181,7 +181,7 @@ func (resper *MysqlResp) respStatus(ses *Session,
 	switch st := execCtx.stmt.(type) {
 	case *tree.Select:
 		//select ... into ...
-		if len(execCtx.proc.SessionInfo.SeqAddValues) != 0 {
+		if len(execCtx.proc.GetSessionInfo().SeqAddValues) != 0 {
 			ses.AddSeqValues(execCtx.proc)
 		}
 		ses.SetSeqLastValue(execCtx.proc)
@@ -224,7 +224,7 @@ func (resper *MysqlResp) respStatus(ses *Session,
 			return nil
 		}
 		res := setResponse(ses, execCtx.isLastStmt, rspLen)
-		if len(execCtx.proc.SessionInfo.SeqDeleteKeys) != 0 {
+		if len(execCtx.proc.GetSessionInfo().SeqDeleteKeys) != 0 {
 			ses.DeleteSeqValues(execCtx.proc)
 		}
 		_ = doGrantPrivilegeImplicitly(execCtx.reqCtx, ses, st)
@@ -242,7 +242,7 @@ func (resper *MysqlResp) respStatus(ses *Session,
 	default:
 		res := setResponse(ses, execCtx.isLastStmt, rspLen)
 
-		if len(execCtx.proc.SessionInfo.SeqDeleteKeys) != 0 {
+		if len(execCtx.proc.GetSessionInfo().SeqDeleteKeys) != 0 {
 			ses.DeleteSeqValues(execCtx.proc)
 		}
 
@@ -267,7 +267,7 @@ func (resper *MysqlResp) respStatus(ses *Session,
 			_ = deleteRecordToMoMysqlCompatbilityMode(execCtx.reqCtx, ses, execCtx.stmt)
 			_ = doRevokePrivilegeImplicitly(execCtx.reqCtx, ses, st)
 			err = doDropFunctionWithDB(execCtx.reqCtx, ses, execCtx.stmt, func(path string) error {
-				return execCtx.proc.FileService.Delete(execCtx.reqCtx, path)
+				return execCtx.proc.Base.FileService.Delete(execCtx.reqCtx, path)
 			})
 		case *tree.Load:
 			if st.Local && execCtx.isIssue3482 {

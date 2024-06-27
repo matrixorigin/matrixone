@@ -28,9 +28,9 @@ func handleInspectTN() handleFunc {
 		func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {
 			return types.Encode(&db.InspectTN{
 				AccessInfo: db.AccessInfo{
-					AccountID: proc.SessionInfo.AccountId,
-					UserID:    proc.SessionInfo.UserId,
-					RoleID:    proc.SessionInfo.RoleId,
+					AccountID: proc.GetSessionInfo().AccountId,
+					UserID:    proc.GetSessionInfo().UserId,
+					RoleID:    proc.GetSessionInfo().RoleId,
 				},
 				Operation: parameter,
 			})

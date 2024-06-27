@@ -47,7 +47,8 @@ func TestHandleGetProtocolVersion(t *testing.T) {
 	require.NoError(t, err)
 
 	arguments.proc = new(process.Process)
-	arguments.proc.QueryClient = qt
+	arguments.proc.Base = &process.BaseProcess{}
+	arguments.proc.Base.QueryClient = qt
 	arguments.service = cn
 
 	err = qs.Start()
@@ -68,6 +69,7 @@ func TestHandleGetProtocolVersion(t *testing.T) {
 func TestHandleSetProtocolVersion(t *testing.T) {
 	trace.InitMOCtledSpan()
 	proc := new(process.Process)
+	proc.Base = &process.BaseProcess{}
 	id := uuid.New().String()
 	addr := "127.0.0.1:7777"
 	initRuntime([]string{id}, []string{addr})
@@ -76,7 +78,7 @@ func TestHandleSetProtocolVersion(t *testing.T) {
 	require.NoError(t, err)
 	qt, err := qclient.NewQueryClient(id, morpc.Config{})
 	require.NoError(t, err)
-	proc.QueryClient = qt
+	proc.Base.QueryClient = qt
 
 	cases := []struct {
 		service serviceType

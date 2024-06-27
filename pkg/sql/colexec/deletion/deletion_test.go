@@ -65,9 +65,9 @@ func TestNormalDeletion(t *testing.T) {
 	relation := mock_frontend.NewMockRelation(ctrl)
 	relation.EXPECT().Delete(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	proc := testutil.NewProc()
-	proc.TxnClient = txnClient
+	proc.Base.TxnClient = txnClient
 	proc.Ctx = ctx
-	proc.TxnOperator = txnOperator
+	proc.Base.TxnOperator = txnOperator
 
 	arg := Argument{
 		DeleteCtx: &DeleteCtx{

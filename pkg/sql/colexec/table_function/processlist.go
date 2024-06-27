@@ -48,7 +48,7 @@ func processlistPrepare(proc *process.Process, arg *Argument) error {
 func processlist(_ int, proc *process.Process, arg *Argument, result *vm.CallResult) (bool, error) {
 	switch arg.ctr.state {
 	case dataProducing:
-		sessions, err := fetchSessions(proc.Ctx, proc.SessionInfo.Account, proc.QueryClient)
+		sessions, err := fetchSessions(proc.Ctx, proc.GetSessionInfo().Account, proc.Base.QueryClient)
 		if err != nil {
 			return false, err
 		}

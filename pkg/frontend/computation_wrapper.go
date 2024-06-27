@@ -409,7 +409,7 @@ func createCompile(
 		addr = getGlobalPu().ClusterNodes[0].Addr
 	}
 	proc.Ctx = execCtx.reqCtx
-	proc.FileService = getGlobalPu().FileService
+	proc.Base.FileService = getGlobalPu().FileService
 
 	var tenant string
 	tInfo := ses.GetTenantInfo()

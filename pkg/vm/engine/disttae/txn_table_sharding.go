@@ -290,7 +290,7 @@ func newTxnTableWithItem(
 // 	}
 
 // 	db := &txnDatabase{
-// 		op:           proc.TxnOperator,
+// 		op:           proc.GetTxnOperator(),
 // 		databaseName: param.TxnTable.DatabaseName,
 // 		databaseId:   param.TxnTable.DatabaseID,
 // 	}
