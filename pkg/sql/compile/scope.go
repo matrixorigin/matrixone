@@ -116,15 +116,9 @@ func (s *Scope) Reset(c *Compile) error {
 func (s *Scope) resetForReuse(c *Compile) (err error) {
 	if s.Proc != nil {
 		newctx, cancel := context.WithCancel(c.ctx)
-		s.Proc.SetPrepareBatch(c.proc.GetPrepareBatch())
-		s.Proc.SetPrepareExprList(c.proc.GetPrepareExprList())
-		s.Proc.SetPrepareParams(c.proc.GetPrepareParams())
-		s.Proc.TxnClient = c.proc.TxnClient
+		s.Proc.Base = c.proc.Base
 		s.Proc.TxnOperator = c.proc.TxnOperator
-		s.Proc.SessionInfo = c.proc.SessionInfo
-		s.Proc.UnixTime = c.proc.UnixTime
-		s.Proc.LastInsertID = c.proc.LastInsertID
-		s.Proc.MessageBoard = c.proc.MessageBoard
+		s.Proc.CloneTxnOperator = c.proc.CloneTxnOperator
 		s.Proc.Ctx = newctx
 		s.Proc.Cancel = cancel
 	}
