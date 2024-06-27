@@ -111,7 +111,7 @@ func CnServerMessageHandler(
 		if err == nil {
 			<-receiver.connectionCtx.Done()
 		}
-		colexec.Get().RemoveRunningPipeline(receiver.clientSession, receiver.messageId)
+		colexec.Get().RemoveRelatedPipeline(receiver.clientSession, receiver.messageId)
 	}
 	return err
 }
@@ -124,10 +124,6 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		if err != nil || dispatchProc == nil {
 			return err
 		}
-		if cancel := colexec.Get().RecordRunningPipeline(receiver.clientSession, receiver.messageId, dispatchProc, true); cancel {
-			dispatchProc.Cancel()
-			return nil
-		}
 
 		infoToDispatchOperator := &process.WrapCs{
 			ReceiverDone: false,
@@ -136,6 +132,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 			Cs:           receiver.clientSession,
 			Err:          make(chan error, 1),
 		}
+		colexec.Get().RecordDispatchPipeline(receiver.clientSession, receiver.messageId, infoToDispatchOperator)
 
 		// todo : the timeout should be removed.
 		//		but I keep it here because I don't know whether it will cause hung sometimes.
@@ -172,11 +169,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		if errBuildCompile != nil {
 			return errBuildCompile
 		}
-
-		if cancel := colexec.Get().RecordRunningPipeline(receiver.clientSession, receiver.messageId, runCompile.proc, false); cancel {
-			runCompile.proc.Cancel()
-			return nil
-		}
+		colexec.Get().RecordBuiltPipeline(receiver.clientSession, receiver.messageId, runCompile.proc)
 
 		// decode and running the pipeline.
 		s, err := decodeScope(receiver.scopeData, runCompile.proc, true, runCompile.e)
@@ -219,7 +212,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		return err
 
 	case pipeline.Method_StopSending:
-		colexec.Get().CancelRunningPipeline(receiver.clientSession, receiver.messageId)
+		colexec.Get().CancelPipelineSending(receiver.clientSession, receiver.messageId)
 
 	default:
 		panic(fmt.Sprintf("unknown pipeline message type %d.", receiver.messageTyp))

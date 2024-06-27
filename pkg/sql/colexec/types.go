@@ -61,14 +61,7 @@ type Server struct {
 type RunningPipelineMapForRemoteNode struct {
 	sync.Mutex
 
-	fromRpcClientToRunningPipeline map[rpcClientItem]tempBugItem
-
 	fromRpcClientToRelatedPipeline map[rpcClientItem]runningPipelineInfo
-}
-
-type tempBugItem struct {
-	isDispatch bool
-	proc       *process.Process
 }
 
 type rpcClientItem struct {
@@ -98,61 +91,6 @@ func (info *runningPipelineInfo) cancelPipeline() {
 	} else {
 		info.runningProc.Cancel()
 	}
-}
-
-func (srv *Server) RecordRunningPipeline(session morpc.ClientSession, id uint64, proc *process.Process, isDispatch bool) (queryCancel bool) {
-	srv.receivedRunningPipeline.Lock()
-	defer srv.receivedRunningPipeline.Unlock()
-
-	item := rpcClientItem{
-		tcp: session,
-		id:  id,
-	}
-
-	// CancelRunningPipeline was called before, this query has been canceled.
-	if _, ok := srv.receivedRunningPipeline.fromRpcClientToRunningPipeline[item]; ok {
-		delete(srv.receivedRunningPipeline.fromRpcClientToRunningPipeline, item)
-		return true
-	}
-
-	srv.receivedRunningPipeline.fromRpcClientToRunningPipeline[item] = tempBugItem{
-		isDispatch: isDispatch,
-		proc:       proc,
-	}
-	return false
-}
-
-func (srv *Server) CancelRunningPipeline(session morpc.ClientSession, id uint64) {
-	srv.receivedRunningPipeline.Lock()
-	defer srv.receivedRunningPipeline.Unlock()
-
-	item := rpcClientItem{
-		tcp: session,
-		id:  id,
-	}
-
-	v, ok := srv.receivedRunningPipeline.fromRpcClientToRunningPipeline[item]
-	if ok {
-		if !v.isDispatch {
-			v.proc.Cancel()
-		}
-		delete(srv.receivedRunningPipeline.fromRpcClientToRunningPipeline, item)
-	} else {
-		// indicate that this query was canceled. once anyone want to start this query, should just return.
-		srv.receivedRunningPipeline.fromRpcClientToRunningPipeline[item] = tempBugItem{}
-	}
-}
-
-func (srv *Server) RemoveRunningPipeline(session morpc.ClientSession, id uint64) {
-	srv.receivedRunningPipeline.Lock()
-	defer srv.receivedRunningPipeline.Unlock()
-
-	item := rpcClientItem{
-		tcp: session,
-		id:  id,
-	}
-
-	delete(srv.receivedRunningPipeline.fromRpcClientToRunningPipeline, item)
 }
 
 type uuidProcMapItem struct {
