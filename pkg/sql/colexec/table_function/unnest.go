@@ -83,8 +83,6 @@ func unnestPrepare(proc *process.Process, arg *Argument) error {
 		return err
 	}
 	arg.Params = dt
-
-	arg.ctr = new(container)
 	arg.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Args)
 	return err
 }
@@ -170,8 +168,8 @@ func handle(jsonVec *vector.Vector, path *bytejson.Path, outer bool, param *unne
 	rbat = batch.NewWithSize(len(arg.Attrs))
 	rbat.Attrs = arg.Attrs
 	rbat.Cnt = 1
-	for i := range arg.retSchema {
-		rbat.Vecs[i] = proc.GetVector(arg.retSchema[i])
+	for i := range arg.ctr.retSchema {
+		rbat.Vecs[i] = proc.GetVector(arg.ctr.retSchema[i])
 	}
 
 	if jsonVec.IsConst() {

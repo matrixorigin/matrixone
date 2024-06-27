@@ -34,17 +34,18 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 
 func (arg *Argument) Prepare(proc *process.Process) error {
 	var err error
-	if arg.offsetExecutor == nil {
-		arg.offsetExecutor, err = colexec.NewExpressionExecutor(proc, arg.OffsetExpr)
+	arg.ctr = new(container)
+	if arg.ctr.offsetExecutor == nil {
+		arg.ctr.offsetExecutor, err = colexec.NewExpressionExecutor(proc, arg.OffsetExpr)
 		if err != nil {
 			return err
 		}
 	}
-	vec, err := arg.offsetExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+	vec, err := arg.ctr.offsetExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 	if err != nil {
 		return err
 	}
-	arg.offset = uint64(vector.MustFixedCol[uint64](vec)[0])
+	arg.ctr.offset = uint64(vector.MustFixedCol[uint64](vec)[0])
 
 	return nil
 }
@@ -67,19 +68,19 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	defer anal.Stop()
 	anal.Input(bat, arg.GetIsFirst())
 
-	if arg.Seen > arg.offset {
+	if arg.ctr.seen > arg.ctr.offset {
 		return result, nil
 	}
 	length := bat.RowCount()
-	if arg.Seen+uint64(length) > arg.offset {
-		sels := newSels(int64(arg.offset-arg.Seen), int64(length)-int64(arg.offset-arg.Seen), proc)
-		arg.Seen += uint64(length)
+	if arg.ctr.seen+uint64(length) > arg.ctr.offset {
+		sels := newSels(int64(arg.ctr.offset-arg.ctr.seen), int64(length)-int64(arg.ctr.offset-arg.ctr.seen), proc)
+		arg.ctr.seen += uint64(length)
 		bat.Shrink(sels, false)
 		proc.Mp().PutSels(sels)
 		result.Batch = bat
 		return result, nil
 	}
-	arg.Seen += uint64(length)
+	arg.ctr.seen += uint64(length)
 	result.Batch = batch.EmptyBatch
 	return result, nil
 }

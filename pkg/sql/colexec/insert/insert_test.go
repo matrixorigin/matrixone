@@ -102,6 +102,7 @@ func TestInsertOperator(t *testing.T) {
 	// require.NoError(t, err)
 	_, err := argument1.Call(proc)
 	require.NoError(t, err)
+	require.Equal(t, uint64(3), argument1.affectedRows)
 	// result := argument1.InsertCtx.Rel.(*mockRelation).result
 	// require.Equal(t, result.Batch, batch.EmptyBatch)
 
@@ -112,11 +113,13 @@ func TestInsertOperator(t *testing.T) {
 }
 
 func resetChildren(arg *Argument, bat *batch.Batch) {
+	valueScanArg := &value_scan.Argument{
+		Batchs: []*batch.Batch{bat},
+	}
+	valueScanArg.Prepare(nil)
 	arg.SetChildren(
 		[]vm.Operator{
-			&value_scan.Argument{
-				Batchs: []*batch.Batch{bat},
-			},
+			valueScanArg,
 		})
 
 	arg.ctr.state = vm.Build

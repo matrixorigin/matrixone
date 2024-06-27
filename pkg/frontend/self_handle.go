@@ -67,7 +67,7 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 	case *tree.PrepareStmt:
 		ses.EnterFPrint(13)
 		defer ses.ExitFPrint(13)
-		execCtx.prepareStmt, err = handlePrepareStmt(ses, execCtx, st)
+		execCtx.prepareStmt, err = handlePrepareStmt(ses, execCtx, st, execCtx.sqlOfStmt)
 		if err != nil {
 			return
 		}

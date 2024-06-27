@@ -16,10 +16,12 @@ package fuzzyfilter
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -55,10 +57,12 @@ type Argument struct {
 	ctr *container
 
 	// Estimates of the number of data items obtained from statistical information
-	N        float64
-	PkName   string
-	PkTyp    plan.Type
-	BuildIdx int
+	N                  float64
+	PkName             string
+	PkTyp              plan.Type
+	BuildIdx           int
+	Callback           func(bat *batch.Batch) error
+	IfInsertFromUnique bool
 
 	RuntimeFilterSpec *plan.RuntimeFilterSpec
 	vm.OperatorBase
@@ -126,6 +130,59 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 	}
 
 	arg.ctr.FreeAllReg()
+}
+
+func (arg *Argument) add(pkCol *vector.Vector) {
+	ctr := arg.ctr
+	if ctr.roaringFilter != nil {
+		ctr.roaringFilter.addFunc(ctr.roaringFilter, pkCol)
+	} else {
+		ctr.bloomFilter.Add(pkCol)
+	}
+}
+
+func (arg *Argument) test(proc *process.Process, pkCol *vector.Vector) error {
+	ctr := arg.ctr
+	if ctr.roaringFilter != nil {
+		idx, dupVal := ctr.roaringFilter.testFunc(ctr.roaringFilter, pkCol)
+		if idx == -1 {
+			return nil
+		} else {
+			return moerr.NewDuplicateEntry(proc.Ctx, valueToString(dupVal), arg.PkName)
+		}
+	} else {
+		ctr.bloomFilter.Test(pkCol, func(exist bool, i int) {
+			if exist {
+				if ctr.collisionCnt < maxCheckDupCount {
+					arg.appendCollisionKey(proc, i, pkCol)
+				}
+			}
+		})
+	}
+	return nil
+}
+
+func (arg *Argument) testAndAdd(proc *process.Process, pkCol *vector.Vector) error {
+	ctr := arg.ctr
+	if ctr.roaringFilter != nil {
+		idx, dupVal := ctr.roaringFilter.testAndAddFunc(ctr.roaringFilter, pkCol)
+		if idx == -1 {
+			return nil
+		} else {
+			return moerr.NewDuplicateEntry(proc.Ctx, valueToString(dupVal), arg.PkName)
+		}
+	} else {
+		ctr.bloomFilter.TestAndAdd(pkCol, func(exist bool, i int) {
+			if exist {
+				if ctr.collisionCnt < maxCheckDupCount {
+					arg.appendCollisionKey(proc, i, pkCol)
+					return
+				}
+				logutil.Debugf("too many collision for fuzzy filter")
+			}
+		})
+	}
+	return nil
 }
 
 func IfCanUseRoaringFilter(t types.T) bool {

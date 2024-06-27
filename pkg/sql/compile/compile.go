@@ -106,6 +106,8 @@ const (
 var (
 	ncpu           = runtime.GOMAXPROCS(0)
 	ctxCancelError = context.Canceled.Error()
+
+	cantCompileForPrepareErr = moerr.NewCantCompileForPrepareNoCtx()
 )
 
 // NewCompile is used to new an object of compile
@@ -171,11 +173,21 @@ func (c *Compile) GetMessageCenter() *process.MessageCenter {
 	return nil
 }
 
-func (c *Compile) Reset(startAt time.Time) {
+func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch) error, sql string) {
+	c.proc = proc
+	c.fill = fill
+	c.sql = sql
+	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, c.counterSet)
+	c.ctx = c.proc.Ctx
+	c.proc.Ctx = context.WithValue(c.proc.Ctx, defines.EngineKey{}, c.e)
 	c.affectRows.Store(0)
 
 	for _, info := range c.anal.analInfos {
 		info.Reset()
+	}
+
+	for _, s := range c.scope {
+		s.Reset(c)
 	}
 
 	c.MessageBoard = c.MessageBoard.Reset()
@@ -185,6 +197,9 @@ func (c *Compile) Reset(startAt time.Time) {
 		f.reset()
 	}
 	c.startAt = startAt
+	if c.proc.TxnOperator != nil {
+		c.proc.TxnOperator.GetWorkspace().UpdateSnapshotWriteOffset()
+	}
 }
 
 func (c *Compile) clear() {
@@ -220,6 +235,7 @@ func (c *Compile) clear() {
 	c.needLockMeta = false
 	c.isInternal = false
 	c.lastAllocID = 0
+	c.isPrepare = false
 
 	for k := range c.metaTables {
 		delete(c.metaTables, k)
@@ -647,6 +663,10 @@ func (c *Compile) IsTpQuery() bool {
 	return c.execType == plan2.ExecTypeTP
 }
 
+func (c *Compile) SetIsPrepare(isPrepare bool) {
+	c.isPrepare = isPrepare
+}
+
 /*
 func (c *Compile) printPipeline() {
 	if c.IsTpQuery() {
@@ -724,7 +744,7 @@ func (c *Compile) runOnce() error {
 	for _, f := range c.fuzzys {
 		if f != nil && f.cnt > 0 {
 			if f.cnt > 10 {
-				c.proc.Warnf(c.ctx, "fuzzy filter cnt is %d, may be too high", f.cnt)
+				c.proc.Debugf(c.ctx, "double check dup for `%s`.`%s`:collision cnt is %d, may be too high", f.db, f.tbl, f.cnt)
 			}
 			err = f.backgroundSQLCheck(c)
 			if err != nil {
@@ -1024,6 +1044,10 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 		c.removeUnavailableCN()
 		// sort by addr to get fixed order of CN list
 		sort.Slice(c.cnList, func(i, j int) bool { return c.cnList[i].Addr < c.cnList[j].Addr })
+	}
+
+	if c.isPrepare && c.IsTpQuery() {
+		return nil, cantCompileForPrepareErr
 	}
 
 	c.initAnalyze(qry)
@@ -1734,7 +1758,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		}
 		rs := newScope(Merge)
 		rs.NodeInfo = getEngineNode(c)
-		rs.Proc = process.NewWithAnalyze(c.proc, c.ctx, 1, c.anal.Nodes())
+		rs.Proc = process.NewFromProc(c.proc, c.ctx, 1)
 		rs.Instructions = []vm.Instruction{{Op: vm.Merge, Arg: merge.NewArgument().WithSinkScan(true)}}
 		for _, r := range receivers {
 			r.Ctx = rs.Proc.Ctx
@@ -1752,7 +1776,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		}
 		rs := newScope(Merge)
 		rs.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
-		rs.Proc = process.NewWithAnalyze(c.proc, c.ctx, len(receivers), c.anal.Nodes())
+		rs.Proc = process.NewFromProc(c.proc, c.ctx, len(receivers))
 		rs.Instructions = []vm.Instruction{{Op: vm.MergeRecursive, Arg: mergerecursive.NewArgument()}}
 
 		for _, r := range receivers {
@@ -1771,7 +1795,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		}
 		rs := newScope(Merge)
 		rs.NodeInfo = getEngineNode(c)
-		rs.Proc = process.NewWithAnalyze(c.proc, c.ctx, len(receivers), c.anal.Nodes())
+		rs.Proc = process.NewFromProc(c.proc, c.ctx, len(receivers))
 		rs.Instructions = []vm.Instruction{{Op: vm.MergeCTE, Arg: mergecte.NewArgument()}}
 
 		for _, r := range receivers {
@@ -1828,7 +1852,7 @@ func (c *Compile) constructScopeForExternal(addr string, parallel bool) *Scope {
 	}
 	ds.NodeInfo = getEngineNode(c)
 	ds.NodeInfo.Addr = addr
-	ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
+	ds.Proc = process.NewFromProc(c.proc, c.ctx, 0)
 	c.proc.LoadTag = c.anal.qry.LoadTag
 	ds.Proc.LoadTag = true
 	ds.DataSource = &Source{isConst: true}
@@ -1837,7 +1861,7 @@ func (c *Compile) constructScopeForExternal(addr string, parallel bool) *Scope {
 
 func (c *Compile) constructLoadMergeScope() *Scope {
 	ds := newScope(Merge)
-	ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 1, c.anal.Nodes())
+	ds.Proc = process.NewFromProc(c.proc, c.ctx, 1)
 	ds.Proc.LoadTag = true
 	ds.appendInstruction(vm.Instruction{
 		Op:      vm.Merge,
@@ -1871,7 +1895,7 @@ func (c *Compile) compileSourceScan(ctx context.Context, n *plan.Node) ([]*Scope
 	for i := range ss {
 		ss[i] = newScope(Normal)
 		ss[i].NodeInfo = getEngineNode(c)
-		ss[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
+		ss[i].Proc = process.NewFromProc(c.proc, c.ctx, 0)
 		ss[i].appendInstruction(vm.Instruction{
 			Op:      vm.Source,
 			Idx:     c.anal.curr,
@@ -1905,6 +1929,9 @@ func calculatePartitions(start, end, n int64) [][2]int64 {
 }
 
 func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope, error) {
+	if c.isPrepare {
+		return nil, cantCompileForPrepareErr
+	}
 	ctx, span := trace.Start(ctx, "compileExternScan")
 	defer span.End()
 	start := time.Now()
@@ -2023,7 +2050,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 			IsFirst: c.anal.isFirst,
 			Arg:     constructValueScan(),
 		})
-		ret.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
+		ret.Proc = process.NewFromProc(c.proc, c.ctx, 0)
 
 		return []*Scope{ret}, nil
 	}
@@ -2202,7 +2229,7 @@ func (c *Compile) compileValueScan(n *plan.Node) ([]*Scope, error) {
 	ds := newScope(Normal)
 	ds.DataSource = &Source{isConst: true, node: n}
 	ds.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
-	ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
+	ds.Proc = process.NewFromProc(c.proc, c.ctx, 0)
 
 	ds.appendInstruction(vm.Instruction{
 		Op:      vm.ValueScan,
@@ -2247,7 +2274,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) (*Sco
 		IsFirst: c.anal.isFirst,
 		Arg:     constructTableScan(),
 	})
-	s.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
+	s.Proc = process.NewFromProc(c.proc, c.ctx, 0)
 	return s, nil
 }
 
@@ -2366,12 +2393,7 @@ func (c *Compile) compileRestrict(n *plan.Node, ss []*Scope) []*Scope {
 		return ss
 	}
 	currentFirstFlag := c.anal.isFirst
-	// for dynamic parameter, substitute param ref and const fold cast expression here to improve performance
-	newFilters, err := plan2.ConstandFoldList(n.FilterList, c.proc, true)
-	if err != nil {
-		newFilters = n.FilterList
-	}
-	filterExpr := colexec.RewriteFilterExprList(newFilters)
+	filterExpr := colexec.RewriteFilterExprList(plan2.DeepCopyExprList(n.FilterList))
 	for i := range ss {
 		ss[i].appendInstruction(vm.Instruction{
 			Op:      vm.Filter,
@@ -3165,29 +3187,25 @@ func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scop
 		Arg: arg,
 	})
 
-	outData, err := newFuzzyCheck(n)
+	fuzzyCheck, err := newFuzzyCheck(n)
 	if err != nil {
 		return nil, err
 	}
-	c.fuzzys = append(c.fuzzys, outData)
+	c.fuzzys = append(c.fuzzys, fuzzyCheck)
+
 	// wrap the collision key into c.fuzzy, for more information,
 	// please refer fuzzyCheck.go
-	rs.appendInstruction(vm.Instruction{
-		Op: vm.Output,
-		Arg: output.NewArgument().
-			WithFunc(
-				func(bat *batch.Batch) error {
-					if bat == nil || bat.IsEmpty() {
-						return nil
-					}
-					// the batch will contain the key that fuzzyCheck
-					if err := outData.fill(c.ctx, bat); err != nil {
-						return err
-					}
+	arg.Callback = func(bat *batch.Batch) error {
+		if bat == nil || bat.IsEmpty() {
+			return nil
+		}
+		// the batch will contain the key that fuzzyCheck
+		if err := fuzzyCheck.fill(c.ctx, bat); err != nil {
+			return err
+		}
 
-					return nil
-				}),
-	})
+		return nil
+	}
 
 	return []*Scope{rs}, nil
 }
@@ -3516,7 +3534,7 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 		}
 		cnt++
 	}
-	rs.Proc = process.NewWithAnalyze(c.proc, c.ctx, cnt, c.anal.Nodes())
+	rs.Proc = process.NewFromProc(c.proc, c.ctx, cnt)
 	if len(ss) > 0 {
 		rs.Proc.LoadTag = ss[0].Proc.LoadTag
 	}
@@ -3604,7 +3622,7 @@ func (c *Compile) newScopeListWithNode(mcpu, childrenCount int, addr string) []*
 		ss[i].Magic = Remote
 		ss[i].NodeInfo.Addr = addr
 		ss[i].NodeInfo.Mcpu = 1 // ss is already the mcpu length so we don't need to parallel it
-		ss[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, childrenCount, c.anal.Nodes())
+		ss[i].Proc = process.NewFromProc(c.proc, c.ctx, childrenCount)
 		ss[i].appendInstruction(vm.Instruction{
 			Op:      vm.Merge,
 			Idx:     c.anal.curr,
@@ -3641,7 +3659,7 @@ func (c *Compile) newScopeListForRightJoin(childrenCount int, bIdx int, leftScop
 	ss := make([]*Scope, 1)
 	ss[0] = newScope(Remote)
 	ss[0].IsJoin = true
-	ss[0].Proc = process.NewWithAnalyze(c.proc, c.ctx, childrenCount, c.anal.Nodes())
+	ss[0].Proc = process.NewFromProc(c.proc, c.ctx, childrenCount)
 	ss[0].NodeInfo = engine.Node{Addr: c.addr, Mcpu: c.generateCPUNumber(ncpu, maxCpuNum)}
 	ss[0].BuildIdx = bIdx
 	return ss
@@ -3694,7 +3712,7 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 			idx = i
 		}
 		rs[i].PreScopes = []*Scope{probeScopes[i]}
-		rs[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, 2, c.anal.Nodes())
+		rs[i].Proc = process.NewFromProc(c.proc, c.ctx, 2)
 		probeScopes[i].appendInstruction(vm.Instruction{
 			Op: vm.Connector,
 			Arg: connector.NewArgument().
@@ -3738,7 +3756,7 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 			ss[i].IsJoin = true
 			ss[i].NodeInfo.Addr = n.Addr
 			ss[i].NodeInfo.Mcpu = 1
-			ss[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, sum, c.anal.Nodes())
+			ss[i].Proc = process.NewFromProc(c.proc, c.ctx, sum)
 			ss[i].BuildIdx = lnum
 			ss[i].ShuffleCnt = dop
 			for _, rr := range ss[i].Proc.Reg.MergeReceivers {
@@ -3815,7 +3833,7 @@ func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 		IsFirst: true,
 		Arg:     merge.NewArgument(),
 	})
-	rs.Proc = process.NewWithAnalyze(s.Proc, s.Proc.Ctx, s.BuildIdx, c.anal.Nodes())
+	rs.Proc = process.NewFromProc(s.Proc, s.Proc.Ctx, s.BuildIdx)
 	for i := 0; i < s.BuildIdx; i++ {
 		regTransplant(s, rs, i, i)
 	}
@@ -3846,7 +3864,7 @@ func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 	rs := newScope(Merge)
 	buildLen := len(s.Proc.Reg.MergeReceivers) - s.BuildIdx
-	rs.Proc = process.NewWithAnalyze(s.Proc, s.Proc.Ctx, buildLen, c.anal.Nodes())
+	rs.Proc = process.NewFromProc(s.Proc, s.Proc.Ctx, buildLen)
 	for i := 0; i < buildLen; i++ {
 		regTransplant(s, rs, i+s.BuildIdx, i)
 	}
@@ -4110,6 +4128,9 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	}
 
 	if c.determinExpandRanges(n) {
+		if c.isPrepare {
+			return nil, nil, nil, cantCompileForPrepareErr
+		}
 		db, err = c.e.Database(ctx, n.ObjRef.SchemaName, txnOp)
 		if err != nil {
 			return nil, nil, nil, err

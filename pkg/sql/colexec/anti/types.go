@@ -61,6 +61,8 @@ type container struct {
 	mp *hashmap.JoinMap
 
 	maxAllocSize int64
+	bat          *batch.Batch
+	lastrow      int
 }
 
 type Argument struct {
@@ -71,8 +73,6 @@ type Argument struct {
 	Conditions         [][]*plan.Expr
 	HashOnPK           bool
 	IsShuffle          bool
-	bat                *batch.Batch
-	lastrow            int
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 
 	vm.OperatorBase
@@ -124,6 +124,8 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 
 		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 		anal.Alloc(ctr.maxAllocSize)
+
+		arg.ctr.lastrow = 0
 
 		arg.ctr = nil
 	}
