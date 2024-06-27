@@ -83,12 +83,12 @@ func setAnalyzeInfo(ins Instructions, proc *process.Process) {
 			}
 
 			if isMinor {
-				if info.Idx >= 0 && info.Idx < len(proc.AnalInfos) {
+				if info.Idx >= 0 && info.Idx < len(proc.Base.AnalInfos) {
 					info.ParallelMajor = false
 					if pidx, ok := idxMapMinor[info.Idx]; ok {
 						info.ParallelIdx = pidx
 					} else {
-						pidx = proc.AnalInfos[info.Idx].AddNewParallel(false)
+						pidx = proc.Base.AnalInfos[info.Idx].AddNewParallel(false)
 						idxMapMinor[info.Idx] = pidx
 						info.ParallelIdx = pidx
 					}
@@ -99,11 +99,11 @@ func setAnalyzeInfo(ins Instructions, proc *process.Process) {
 
 		case TableScan, External, Order, Window, Group, Join, LoopJoin, Left, LoopLeft, Single, LoopSingle, Semi, RightSemi, LoopSemi, Anti, RightAnti, LoopAnti, Mark, LoopMark, Product, ProductL2:
 			info.ParallelMajor = true
-			if info.Idx >= 0 && info.Idx < len(proc.AnalInfos) {
+			if info.Idx >= 0 && info.Idx < len(proc.Base.AnalInfos) {
 				if pidx, ok := idxMapMajor[info.Idx]; ok {
 					info.ParallelIdx = pidx
 				} else {
-					pidx = proc.AnalInfos[info.Idx].AddNewParallel(true)
+					pidx = proc.Base.AnalInfos[info.Idx].AddNewParallel(true)
 					idxMapMajor[info.Idx] = pidx
 					info.ParallelIdx = pidx
 				}

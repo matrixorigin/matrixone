@@ -216,7 +216,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	}
 
 	stm.Account = tenant.GetTenant()
-	stm.RoleId = proc.SessionInfo.RoleId
+	stm.RoleId = proc.GetSessionInfo().RoleId
 	stm.User = tenant.GetUser()
 	stm.Host = ses.respr.GetStr(PEER)
 	stm.Database = ses.respr.GetStr(DBNAME)
@@ -1341,7 +1341,7 @@ func handleCreateFunction(ses FeSession, execCtx *ExecCtx, cf *tree.CreateFuncti
 
 func handleDropFunction(ses FeSession, execCtx *ExecCtx, df *tree.DropFunction, proc *process.Process) error {
 	return doDropFunction(execCtx.reqCtx, ses.(*Session), df, func(path string) error {
-		return proc.FileService.Delete(execCtx.reqCtx, path)
+		return proc.Base.FileService.Delete(execCtx.reqCtx, path)
 	})
 }
 func handleCreateProcedure(ses FeSession, execCtx *ExecCtx, cp *tree.CreateProcedure) error {
@@ -1782,7 +1782,7 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 	var ret *plan2.Plan
 	var err error
 
-	txnOp := ctx.GetProcess().TxnOperator
+	txnOp := ctx.GetProcess().GetTxnOperator()
 	start := time.Now()
 	seq := uint64(0)
 	if txnOp != nil {
@@ -2152,7 +2152,7 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	ses.CountPayload(len(packet.Payload))
 
 	skipWrite := false
-	// If inner error occurs(unexpected or expected(ctrl-c)), proc.LoadLocalReader will be closed.
+	// If inner error occurs(unexpected or expected(ctrl-c)), proc.Base.LoadLocalReader will be closed.
 	// Then write will return error, but we need to read the rest of the data and not write it to pipe.
 	// So we need a flag[skipWrite] to tell us whether we need to write the data to pipe.
 	// https://github.com/matrixorigin/matrixone/issues/6665#issuecomment-1422236478
@@ -2294,7 +2294,7 @@ func executeStmtWithTxn(ses FeSession,
 
 		txnOp := ses.GetTxnHandler().GetTxn()
 		//refresh proc txnOp
-		execCtx.proc.TxnOperator = txnOp
+		execCtx.proc.Base.TxnOperator = txnOp
 
 		err = dispatchStmt(ses, execCtx)
 	}
@@ -2367,7 +2367,7 @@ func executeStmtWithWorkspace(ses FeSession,
 	ses.SetStaticTxnInfo(makeCompactTxnInfo(txnOp))
 
 	//refresh proc txnOp
-	execCtx.proc.TxnOperator = txnOp
+	execCtx.proc.Base.TxnOperator = txnOp
 
 	err = disttae.CheckTxnIsValid(txnOp)
 	if err != nil {
@@ -2552,7 +2552,7 @@ func executeStmt(ses *Session,
 		ses.SetData(nil)
 	case *tree.Load:
 		if st.Local {
-			execCtx.proc.LoadLocalReader, execCtx.loadLocalWriter = io.Pipe()
+			execCtx.proc.Base.LoadLocalReader, execCtx.loadLocalWriter = io.Pipe()
 		}
 	case *tree.ShowGrants:
 		if len(st.Username) == 0 {
@@ -2657,12 +2657,12 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 	proc.CopyVectorPool(ses.proc)
 	proc.CopyValueScanBatch(ses.proc)
-	proc.Id = ses.getNextProcessId()
-	proc.Lim.Size = getGlobalPu().SV.ProcessLimitationSize
-	proc.Lim.BatchRows = getGlobalPu().SV.ProcessLimitationBatchRows
-	proc.Lim.MaxMsgSize = getGlobalPu().SV.MaxMessageSize
-	proc.Lim.PartitionRows = getGlobalPu().SV.ProcessLimitationPartitionRows
-	proc.SessionInfo = process.SessionInfo{
+	proc.Base.Id = ses.getNextProcessId()
+	proc.Base.Lim.Size = getGlobalPu().SV.ProcessLimitationSize
+	proc.Base.Lim.BatchRows = getGlobalPu().SV.ProcessLimitationBatchRows
+	proc.Base.Lim.MaxMsgSize = getGlobalPu().SV.MaxMessageSize
+	proc.Base.Lim.PartitionRows = getGlobalPu().SV.ProcessLimitationPartitionRows
+	proc.Base.SessionInfo = process.SessionInfo{
 		User:                 ses.GetUserName(),
 		Host:                 getGlobalPu().SV.Host,
 		ConnectionID:         uint64(resper.GetU32(CONNID)),
@@ -2683,14 +2683,14 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	// Deep copy the map, takes some memory.
 	ses.CopySeqToProc(proc)
 	if ses.GetTenantInfo() != nil {
-		proc.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
-		proc.SessionInfo.AccountId = ses.GetTenantInfo().GetTenantID()
-		proc.SessionInfo.Role = ses.GetTenantInfo().GetDefaultRole()
-		proc.SessionInfo.RoleId = ses.GetTenantInfo().GetDefaultRoleID()
-		proc.SessionInfo.UserId = ses.GetTenantInfo().GetUserID()
+		proc.Base.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
+		proc.Base.SessionInfo.AccountId = ses.GetTenantInfo().GetTenantID()
+		proc.Base.SessionInfo.Role = ses.GetTenantInfo().GetDefaultRole()
+		proc.Base.SessionInfo.RoleId = ses.GetTenantInfo().GetDefaultRoleID()
+		proc.Base.SessionInfo.UserId = ses.GetTenantInfo().GetUserID()
 
 		if len(ses.GetTenantInfo().GetVersion()) != 0 {
-			proc.SessionInfo.Version = ses.GetTenantInfo().GetVersion()
+			proc.Base.SessionInfo.Version = ses.GetTenantInfo().GetVersion()
 		}
 		userNameOnly = ses.GetTenantInfo().GetUser()
 	} else {
@@ -2699,17 +2699,17 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		if retErr != nil {
 			return retErr
 		}
-		proc.SessionInfo.AccountId = accountId
-		proc.SessionInfo.UserId = defines.GetUserId(execCtx.reqCtx)
-		proc.SessionInfo.RoleId = defines.GetRoleId(execCtx.reqCtx)
+		proc.Base.SessionInfo.AccountId = accountId
+		proc.Base.SessionInfo.UserId = defines.GetUserId(execCtx.reqCtx)
+		proc.Base.SessionInfo.RoleId = defines.GetRoleId(execCtx.reqCtx)
 	}
 	var span trace.Span
 	execCtx.reqCtx, span = trace.Start(execCtx.reqCtx, "doComQuery",
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End()
 
-	proc.SessionInfo.User = userNameOnly
-	proc.SessionInfo.QueryId = ses.getQueryId(input.isInternal())
+	proc.Base.SessionInfo.User = userNameOnly
+	proc.Base.SessionInfo.QueryId = ses.getQueryId(input.isInternal())
 
 	statsInfo := statistic.StatsInfo{ParseStartTime: beginInstant}
 	execCtx.reqCtx = statistic.ContextWithStatsInfo(execCtx.reqCtx, &statsInfo)
@@ -2821,9 +2821,9 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		}
 
 		// update UnixTime for new query, which is used for now() / CURRENT_TIMESTAMP
-		proc.UnixTime = time.Now().UnixNano()
+		proc.Base.UnixTime = time.Now().UnixNano()
 		if ses.proc != nil {
-			ses.proc.UnixTime = proc.UnixTime
+			ses.proc.Base.UnixTime = proc.Base.UnixTime
 		}
 		execCtx.stmt = stmt
 		execCtx.isLastStmt = i >= len(cws)-1

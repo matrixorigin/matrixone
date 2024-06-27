@@ -17,12 +17,14 @@ package compile
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func Test_panic(t *testing.T) {
@@ -72,7 +74,7 @@ func TestCompilerContext_Database(t *testing.T) {
 	engine.EXPECT().Database(nil, "", nil).Return(database, nil).Times(2)
 
 	c := &compilerContext{
-		proc:   &process.Process{},
+		proc:   testutil.NewProcessWithMPool(mpool.MustNewZero()),
 		engine: engine,
 	}
 
