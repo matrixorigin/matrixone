@@ -61,7 +61,14 @@ type Server struct {
 type RunningPipelineMapForRemoteNode struct {
 	sync.Mutex
 
-	fromRpcClientToRunningPipeline map[rpcClientItem]*process.Process
+	fromRpcClientToRunningPipeline map[rpcClientItem]tempBugItem
+
+	fromRpcClientToRelatedPipeline map[rpcClientItem]runningPipelineInfo
+}
+
+type tempBugItem struct {
+	isDispatch bool
+	proc       *process.Process
 }
 
 type rpcClientItem struct {
@@ -72,7 +79,28 @@ type rpcClientItem struct {
 	id uint64
 }
 
-func (srv *Server) RecordRunningPipeline(session morpc.ClientSession, id uint64, proc *process.Process) (queryCancel bool) {
+type runningPipelineInfo struct {
+	alreadyDone bool
+	runningProc *process.Process
+
+	isDispatch bool
+	receiver   *process.WrapCs
+}
+
+func (info *runningPipelineInfo) cancelPipeline() {
+	// If this was a pipeline responsible for distributing data, we cannot end this
+	// because we are just one of the receivers.
+	if info.isDispatch {
+		info.receiver.Lock()
+		info.receiver.ReceiverDone = true
+		info.receiver.Unlock()
+
+	} else {
+		info.runningProc.Cancel()
+	}
+}
+
+func (srv *Server) RecordRunningPipeline(session morpc.ClientSession, id uint64, proc *process.Process, isDispatch bool) (queryCancel bool) {
 	srv.receivedRunningPipeline.Lock()
 	defer srv.receivedRunningPipeline.Unlock()
 
@@ -87,7 +115,10 @@ func (srv *Server) RecordRunningPipeline(session morpc.ClientSession, id uint64,
 		return true
 	}
 
-	srv.receivedRunningPipeline.fromRpcClientToRunningPipeline[item] = proc
+	srv.receivedRunningPipeline.fromRpcClientToRunningPipeline[item] = tempBugItem{
+		isDispatch: isDispatch,
+		proc:       proc,
+	}
 	return false
 }
 
@@ -100,13 +131,15 @@ func (srv *Server) CancelRunningPipeline(session morpc.ClientSession, id uint64)
 		id:  id,
 	}
 
-	p, ok := srv.receivedRunningPipeline.fromRpcClientToRunningPipeline[item]
+	v, ok := srv.receivedRunningPipeline.fromRpcClientToRunningPipeline[item]
 	if ok {
-		p.Cancel()
+		if !v.isDispatch {
+			v.proc.Cancel()
+		}
 		delete(srv.receivedRunningPipeline.fromRpcClientToRunningPipeline, item)
 	} else {
 		// indicate that this query was canceled. once anyone want to start this query, should just return.
-		srv.receivedRunningPipeline.fromRpcClientToRunningPipeline[item] = nil
+		srv.receivedRunningPipeline.fromRpcClientToRunningPipeline[item] = tempBugItem{}
 	}
 }
 

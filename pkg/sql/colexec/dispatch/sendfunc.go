@@ -370,6 +370,7 @@ func sendBatchToClientSession(ctx context.Context, encodeBatData []byte, wcs *pr
 	defer wcs.Unlock()
 
 	if wcs.ReceiverDone {
+		wcs.Err <- nil
 		return true, nil
 	}
 

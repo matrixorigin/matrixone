@@ -124,16 +124,17 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		if err != nil || dispatchProc == nil {
 			return err
 		}
-		if cancel := colexec.Get().RecordRunningPipeline(receiver.clientSession, receiver.messageId, dispatchProc); cancel {
+		if cancel := colexec.Get().RecordRunningPipeline(receiver.clientSession, receiver.messageId, dispatchProc, true); cancel {
 			dispatchProc.Cancel()
 			return nil
 		}
 
 		infoToDispatchOperator := &process.WrapCs{
-			MsgId: receiver.messageId,
-			Uid:   receiver.messageUuid,
-			Cs:    receiver.clientSession,
-			Err:   make(chan error, 1),
+			ReceiverDone: false,
+			MsgId:        receiver.messageId,
+			Uid:          receiver.messageUuid,
+			Cs:           receiver.clientSession,
+			Err:          make(chan error, 1),
 		}
 
 		// todo : the timeout should be removed.
@@ -172,7 +173,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 			return errBuildCompile
 		}
 
-		if cancel := colexec.Get().RecordRunningPipeline(receiver.clientSession, receiver.messageId, runCompile.proc); cancel {
+		if cancel := colexec.Get().RecordRunningPipeline(receiver.clientSession, receiver.messageId, runCompile.proc, false); cancel {
 			runCompile.proc.Cancel()
 			return nil
 		}
