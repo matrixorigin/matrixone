@@ -19,6 +19,8 @@ import (
 	"sort"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -40,7 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 // -----------------------------------------------------------------
@@ -565,7 +566,7 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 	r.table.getTxn().forEachTableWrites(
 		r.table.db.databaseId,
 		r.table.tableId,
-		txnOffset, func(entry Entry) {
+		txnOffset, func(entry Entry) (err error) {
 			if entry.isGeneratedByTruncate() {
 				return
 			}
@@ -578,6 +579,7 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 					}
 				}
 			}
+			return
 		})
 	//load deletes from txn.deletedBlocks.
 	txn := r.table.getTxn()

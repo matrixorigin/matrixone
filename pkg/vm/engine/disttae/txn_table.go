@@ -153,7 +153,7 @@ func (tbl *txnTable) Rows(ctx context.Context) (uint64, error) {
 		tbl.db.databaseId,
 		tbl.tableId,
 		tbl.getTxn().GetSnapshotWriteOffset(),
-		func(entry Entry) {
+		func(entry Entry) (err error) {
 			if entry.typ == INSERT || entry.typ == INSERT_TXN {
 				rows = rows + uint64(entry.bat.RowCount())
 			} else {
@@ -176,6 +176,7 @@ func (tbl *txnTable) Rows(ctx context.Context) (uint64, error) {
 					}
 				}
 			}
+			return
 		})
 
 	ts := types.TimestampToTS(tbl.db.op.SnapshotTS())
@@ -237,7 +238,7 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 		tbl.db.databaseId,
 		tbl.tableId,
 		tbl.getTxn().GetSnapshotWriteOffset(),
-		func(entry Entry) {
+		func(entry Entry) (err error) {
 			if entry.typ == INSERT || entry.typ == INSERT_TXN {
 				for i, s := range entry.bat.Attrs {
 					if _, ok := neededCols[s]; ok {
@@ -265,6 +266,7 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 					}
 				}
 			}
+			return
 		})
 
 	// Different rows may belong to same batch. So we have
@@ -935,7 +937,7 @@ func (tbl *txnTable) collectUnCommittedObjects(txnOffset int) []objectio.ObjectS
 		tbl.db.databaseId,
 		tbl.tableId,
 		txnOffset,
-		func(entry Entry) {
+		func(entry Entry) (err error) {
 			stats := objectio.ObjectStats{}
 			if entry.bat == nil || entry.bat.IsEmpty() {
 				return
@@ -952,6 +954,7 @@ func (tbl *txnTable) collectUnCommittedObjects(txnOffset int) []objectio.ObjectS
 				stats.UnMarshal(entry.bat.Vecs[1].GetBytesAt(i))
 				unCommittedObjects = append(unCommittedObjects, stats)
 			}
+			return
 		})
 
 	return unCommittedObjects
@@ -997,7 +1000,7 @@ func (tbl *txnTable) collectDirtyBlocks(
 		tbl.db.databaseId,
 		tbl.tableId,
 		txnOffset,
-		func(entry Entry) {
+		func(entry Entry) (err error) {
 			// the CN workspace can only handle `INSERT` and `DELETE` operations. Other operations will be skipped,
 			// TODO Adjustments will be made here in the future
 			if entry.typ == DELETE || entry.typ == DELETE_TXN {
@@ -1014,6 +1017,7 @@ func (tbl *txnTable) collectDirtyBlocks(
 					}
 				}
 			}
+			return
 		})
 
 	return dirtyBlks
@@ -2309,7 +2313,8 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(
 		keysVector)
 }
 
-// TODO::refactor in next PR
+// transferDeletes transfer deletes from the old block to the new block.
+// Notice that it only be called at the start of executing statement or commiting a txn.
 func (tbl *txnTable) transferDeletes(
 	ctx context.Context,
 	state *logtailreplay.PartitionState,
@@ -2368,9 +2373,10 @@ func (tbl *txnTable) transferDeletes(
 		}
 	}
 
-	for _, entry := range tbl.getTxn().writes {
-		if entry.isGeneratedByTruncate() || entry.tableId != tbl.tableId {
-			continue
+	//transfer deletes in memory.
+	tbl.getTxn().forEachTableWrites(tbl.db.databaseId, tbl.tableId, 0, func(entry Entry) (err error) {
+		if entry.isGeneratedByTruncate() {
+			return
 		}
 		if (entry.typ == DELETE || entry.typ == DELETE_TXN) && entry.fileName == "" {
 			pkVec := entry.bat.GetVector(1)
@@ -2405,8 +2411,49 @@ func (tbl *txnTable) transferDeletes(
 				return moerr.NewInternalErrorNoCtx("transfer deletes failed")
 			}
 		}
+		return
+	})
+
+	//transfer deletes on S3
+	tbl.getTxn().blockId_tn_delete_metaLoc_batch.RLock()
+	defer tbl.getTxn().blockId_tn_delete_metaLoc_batch.RUnlock()
+
+	//toTransferBlks := make(map[types.Blockid]bool)
+	toTransferLocs := make(map[types.Blockid][]objectio.Location)
+	for blk, bats := range tbl.getTxn().blockId_tn_delete_metaLoc_batch.data {
+		if _, ok := deleteObjs[*objectio.ShortName(&blk)]; !ok {
+			continue
+		}
+		//toTransferBlks[blk] = true
+		for _, bat := range bats {
+			vs := vector.MustStrCol(bat.GetVector(0))
+			for _, metalLoc := range vs {
+				location, err := blockio.EncodeLocationFromString(metalLoc)
+				if err != nil {
+					return err
+				}
+				toTransferLocs[blk] = append(toTransferLocs[blk], location)
+			}
+
+		}
 	}
+	targetBlks, err := tbl.transferPersistedDelsParallel(ctx, toTransferLocs, blks)
+	if err != nil {
+		return err
+	}
+	//TODO::
+	//delete the block to be transferred from the map ,and add the target block to the map.
+	// delete the batch in txn.writes.
+	//gc the old tombstone objects.
+
 	return nil
+}
+
+func (tbl *txnTable) transferPersistedDelsParallel(
+	ctx context.Context,
+	locs map[types.Blockid][]objectio.Location,
+	candidates []objectio.BlockInfo) (newLocs map[types.Blockid][]objectio.Location, err error) {
+
 }
 
 func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,

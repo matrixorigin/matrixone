@@ -82,7 +82,7 @@ func (p *PartitionReader) prepare() error {
 		}
 
 		p.table.getTxn().forEachTableWrites(p.table.db.databaseId, p.table.tableId,
-			txnOffset, func(entry Entry) {
+			txnOffset, func(entry Entry) (err error) {
 				if entry.typ == INSERT || entry.typ == INSERT_TXN {
 					if entry.bat == nil || entry.bat.IsEmpty() {
 						return
@@ -112,6 +112,7 @@ func (p *PartitionReader) prepare() error {
 						deletes[v] = 0
 					}
 				}
+				return
 			})
 		//deletes maybe comes from PartitionState.rows, PartitionReader need to skip them;
 		// so, here only load deletes which don't belong to PartitionState.blks.

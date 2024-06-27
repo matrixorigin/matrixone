@@ -941,12 +941,11 @@ func (txn *Transaction) hasUncommittedDeletesOnBlock(id *types.Blockid) bool {
 	return txn.deletedBlocks.hasDeletes(id)
 }
 
-// TODO:: refactor in next PR, to make it more efficient and include persisted deletes in S3
 func (txn *Transaction) forEachTableHasDeletesLocked(f func(tbl *txnTable) error) error {
 	tables := make(map[uint64]*txnTable)
 	for i := 0; i < len(txn.writes); i++ {
 		e := txn.writes[i]
-		if e.typ != DELETE || e.fileName != "" {
+		if e.typ != DELETE {
 			continue
 		}
 		if _, ok := tables[e.tableId]; ok {
@@ -970,7 +969,7 @@ func (txn *Transaction) forEachTableHasDeletesLocked(f func(tbl *txnTable) error
 	return nil
 }
 
-func (txn *Transaction) forEachTableWrites(databaseId uint64, tableId uint64, offset int, f func(Entry)) {
+func (txn *Transaction) forEachTableWrites(databaseId uint64, tableId uint64, offset int, f func(Entry) error) error {
 	txn.Lock()
 	defer txn.Unlock()
 	for i := 0; i < offset; i++ {
@@ -981,8 +980,11 @@ func (txn *Transaction) forEachTableWrites(databaseId uint64, tableId uint64, of
 		if e.tableId != tableId {
 			continue
 		}
-		f(e)
+		if err := f(e); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 // getCachedTable returns the cached table in this transaction if it exists, nil otherwise.
