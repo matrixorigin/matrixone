@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"go.uber.org/zap"
 	"math"
 	"sync"
@@ -70,6 +71,10 @@ const (
 	WriterGC
 	WriterETL
 )
+
+const ObjectSizeLimit = 3 * mpool.GB
+
+var ErrObjectSizeLimit = moerr.NewInternalErrorNoCtx("objectio: object size exceeds the limit")
 
 func newObjectWriterSpecialV1(wt WriterType, fileName string, fs fileservice.FileService) (*objectWriterV1, error) {
 	var name ObjectName
@@ -391,16 +396,25 @@ func (w *objectWriterV1) getMaxIndex(blocks []blockData) uint16 {
 	return uint16(maxIndex)
 }
 
-func (w *objectWriterV1) writerBlocks(blocks []blockData) {
+// writerBlocks writes blocks to object file
+// If the compressed data exceeds 3G,
+// an error of limited writing is returned
+func (w *objectWriterV1) writerBlocks(blocks []blockData) error {
 	maxIndex := w.getMaxIndex(blocks)
+	size := uint64(0)
 	for idx := uint16(0); idx < maxIndex; idx++ {
 		for _, block := range blocks {
 			if block.meta.BlockHeader().ColumnCount() <= idx {
 				continue
 			}
 			w.buffer.Write(block.data[idx])
+			size += uint64(len(block.data[idx]))
+			if size > ObjectSizeLimit {
+				return ErrObjectSizeLimit
+			}
 		}
 	}
+	return nil
 }
 
 func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([]BlockObject, error) {
@@ -499,7 +513,10 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 
 	// writer data
 	for i := range w.blocks {
-		w.writerBlocks(w.blocks[i])
+		err = w.writerBlocks(w.blocks[i])
+		if err != nil {
+			return nil, err
+		}
 	}
 	// writer bloom filter
 	for i := range bloomFilterDatas {
