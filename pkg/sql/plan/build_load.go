@@ -134,7 +134,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		NodeType: plan.Node_PROJECT,
 		Stats:    &plan.Stats{},
 	}
-	ifExistAutoPkCol, err := getProjectNode(stmt, ctx, projectNode, tableDef, columnList)
+	skipDupCheckForAutoPk, err := getProjectNode(stmt, ctx, projectNode, tableDef, columnList)
 	if err != nil {
 		return nil, err
 	}
@@ -164,7 +164,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 
 	// append hidden column to tableDef
 	newTableDef := DeepCopyTableDef(tableDef, true)
-	err = buildInsertPlans(ctx, builder, bindCtx, nil, objRef, newTableDef, lastNodeId, ifExistAutoPkCol, nil, nil)
+	err = buildInsertPlans(ctx, builder, bindCtx, nil, objRef, newTableDef, lastNodeId, skipDupCheckForAutoPk, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -236,7 +236,7 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 func getProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, tableDef *TableDef, columnList []tree.LoadColumn) (bool, error) {
 	tblName := string(stmt.Table.ObjectName)
 	colToIndex := make(map[string]int32, 0)
-	ifExistAutoPkCol := false
+	skipDupCheckForAutoPk := false
 	if len(columnList) == 0 {
 		for i := 0; i < len(tableDef.Cols); i++ {
 			colToIndex[tableDef.Cols[i].Name] = int32(i)
@@ -247,13 +247,13 @@ func getProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, table
 			case *tree.UnresolvedName:
 				colName := realCol.ColName()
 				if _, ok := tableDef.Name2ColIndex[colName]; !ok {
-					return ifExistAutoPkCol, moerr.NewInternalError(ctx.GetContext(), "column '%s' does not exist", realCol.ColNameOrigin())
+					return skipDupCheckForAutoPk, moerr.NewInternalError(ctx.GetContext(), "column '%s' does not exist", realCol.ColNameOrigin())
 				}
 				colToIndex[colName] = int32(i)
 			case *tree.VarExpr:
 				//NOTE:variable like '@abc' will be passed by.
 			default:
-				return ifExistAutoPkCol, moerr.NewInternalError(ctx.GetContext(), "unsupported column type %v", realCol)
+				return skipDupCheckForAutoPk, moerr.NewInternalError(ctx.GetContext(), "unsupported column type %v", realCol)
 			}
 		}
 		lastColIdx := len(tableDef.Cols) - 1
@@ -288,11 +288,10 @@ func getProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, table
 		node.ProjectList[i] = tmp
 
 		if tableDef.Cols[i].Typ.AutoIncr && tableDef.Cols[i].Name == tableDef.Pkey.PkeyColName {
-			ifExistAutoPkCol = true
+			skipDupCheckForAutoPk = true
 		}
 	}
-
-	return ifExistAutoPkCol, nil
+	return skipDupCheckForAutoPk, nil
 }
 
 func InitNullMap(param *tree.ExternParam, ctx CompilerContext) error {

@@ -166,6 +166,10 @@ func (c *CompilerContext) DatabaseExists(name string, snapshot plan.Snapshot) bo
 	return err == nil
 }
 
+func (c *CompilerContext) GetDbLevelConfig(dbName string, varName string) (string, error) {
+	return "", nil
+}
+
 func (c *CompilerContext) GetDatabaseId(dbName string, snapshot plan.Snapshot) (uint64, error) {
 	ctx := c.GetContext()
 	txnOpt := c.txnOp

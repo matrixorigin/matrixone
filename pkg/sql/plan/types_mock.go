@@ -250,6 +250,10 @@ func (m *MockCompilerContext2) GetRootSql() string {
 	return ret0
 }
 
+func (m *MockCompilerContext2) GetDbLevelConfig(dbName, varName string) (string, error) {
+	return "", nil
+}
+
 // GetRootSql indicates an expected call of GetRootSql.
 func (mr *MockCompilerContext2MockRecorder) GetRootSql() *gomock.Call {
 	mr.mock.ctrl.T.Helper()

@@ -384,6 +384,9 @@ type Process struct {
 	logger *log.MOLogger
 
 	CloneTxnOperator client.TxnOperator
+
+	// Insert value generate by incrservice
+	AutoPkGenByIncrService bool
 }
 
 type vectorPool struct {

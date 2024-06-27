@@ -90,6 +90,8 @@ type CompilerContext interface {
 	ResolveUdf(name string, args []*Expr) (*function.Udf, error)
 	// get the definition of primary key
 	GetPrimaryKeyDef(dbName string, tableName string, snapshot Snapshot) []*ColDef
+	// get the configuration of the database
+	GetDbLevelConfig(dbName string, varName string) (string, error)
 	// get needed info for stats by table
 	Stats(obj *ObjectRef, snapshot Snapshot) (*pb.StatsInfo, error)
 	// get origin sql string of the root

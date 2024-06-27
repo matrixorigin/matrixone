@@ -109,6 +109,7 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	proc.LoadTag = p.LoadTag
 	proc.MessageBoard = p.MessageBoard
 	proc.StmtProfile = p.StmtProfile
+	proc.AutoPkGenByIncrService = p.AutoPkGenByIncrService
 
 	proc.prepareParams = p.prepareParams
 	proc.resolveVariableFunc = p.resolveVariableFunc
