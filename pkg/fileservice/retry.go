@@ -15,11 +15,18 @@
 package fileservice
 
 import (
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
 )
 
-const maxRetryAttemps = 128
+const (
+	maxRetryAttemps      = 128
+	maxRetryInterval     = time.Second * 1
+	initialRetryInterval = time.Millisecond * 10
+	retryIntervalFactor  = 1.5
+)
 
 func DoWithRetry[T any](
 	what string,
@@ -28,12 +35,20 @@ func DoWithRetry[T any](
 	isRetryable func(error) bool,
 ) (res T, err error) {
 	defer catch(&err)
+
 	numRetries := 0
+	sleep := initialRetryInterval
+
 	for {
 		res, err = fn()
 		if err != nil {
 			if isRetryable(err) {
 				maxAttemps--
+
+				if sleep < maxRetryInterval {
+					sleep = time.Duration(float64(sleep) * retryIntervalFactor)
+				}
+				time.Sleep(sleep)
 
 				numRetries++
 				if numRetries%5 == 0 {
