@@ -111,7 +111,7 @@ func runPythonUdf(parameters []*vector.Vector, result vector.FunctionResultWrapp
 	}
 
 	// run
-	response, err := proc.UdfService.Run(proc.Ctx, request, reader)
+	response, err := proc.Base.UdfService.Run(proc.Ctx, request, reader)
 	if err != nil {
 		return err
 	}

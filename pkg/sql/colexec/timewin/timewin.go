@@ -466,13 +466,13 @@ func (ctr *container) nextWindow(ap *Argument, proc *process.Process) error {
 	case types.T_timestamp:
 		ctr.start = ctr.nextStart
 
-		nextStart, err := doTimestampAdd(proc.SessionInfo.TimeZone, types.Timestamp(ctr.start), m.Val, m.Typ)
+		nextStart, err := doTimestampAdd(proc.GetSessionInfo().TimeZone, types.Timestamp(ctr.start), m.Val, m.Typ)
 		if err != nil {
 			return err
 		}
 		ctr.nextStart = int64(nextStart)
 
-		end, err := doTimestampAdd(proc.SessionInfo.TimeZone, types.Timestamp(ctr.start), ap.Interval.Val, ap.Interval.Typ)
+		end, err := doTimestampAdd(proc.GetSessionInfo().TimeZone, types.Timestamp(ctr.start), ap.Interval.Val, ap.Interval.Typ)
 		if err != nil {
 			return err
 		}
@@ -534,11 +534,11 @@ func (ctr *container) firstWindow(ap *Argument, proc *process.Process) (err erro
 	case types.T_timestamp:
 		ts := vector.MustFixedCol[types.Timestamp](vec)[0]
 
-		itv, err := doTimestampAdd(proc.SessionInfo.TimeZone, ts, ap.Interval.Val, ap.Interval.Typ)
+		itv, err := doTimestampAdd(proc.GetSessionInfo().TimeZone, ts, ap.Interval.Val, ap.Interval.Typ)
 		if err != nil {
 			return err
 		}
-		sld, err := doTimestampAdd(proc.SessionInfo.TimeZone, ts, m.Val, m.Typ)
+		sld, err := doTimestampAdd(proc.GetSessionInfo().TimeZone, ts, m.Val, m.Typ)
 		if err != nil {
 			return err
 		}
@@ -546,19 +546,19 @@ func (ctr *container) firstWindow(ap *Argument, proc *process.Process) (err erro
 			return moerr.NewInvalidInput(proc.Ctx, "sliding value should be smaller than the interval value")
 		}
 
-		start, err := roundTimestamp(proc.SessionInfo.TimeZone, ts, ap.Interval.Val, ap.Interval.Typ, proc)
+		start, err := roundTimestamp(proc.GetSessionInfo().TimeZone, ts, ap.Interval.Val, ap.Interval.Typ, proc)
 		if err != nil {
 			return err
 		}
 		ctr.start = int64(start)
 
-		nextStart, err := doTimestampAdd(proc.SessionInfo.TimeZone, start, m.Val, m.Typ)
+		nextStart, err := doTimestampAdd(proc.GetSessionInfo().TimeZone, start, m.Val, m.Typ)
 		if err != nil {
 			return err
 		}
 		ctr.nextStart = int64(nextStart)
 
-		end, err := doTimestampAdd(proc.SessionInfo.TimeZone, start, ap.Interval.Val, ap.Interval.Typ)
+		end, err := doTimestampAdd(proc.GetSessionInfo().TimeZone, start, ap.Interval.Val, ap.Interval.Typ)
 		if err != nil {
 			return err
 		}
