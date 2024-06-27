@@ -89,7 +89,10 @@ func metaCacheSize() int64 {
 	if total < 32*mpool.GB {
 		return 1 * mpool.GB
 	}
-	return 2 * mpool.GB
+	if total < 48*mpool.GB {
+		return 2 * mpool.GB
+	}
+	return 4 * mpool.GB
 }
 
 func shardMetaCacheKey(key mataCacheKey) uint8 {
@@ -200,7 +203,7 @@ func LoadBFWithMeta(
 		return v, nil
 	}
 	extent := meta.BlockHeader().BFExtent()
-	bf, err := ReadBloomFilter(ctx, location.Name().String(), &extent, fileservice.SkipMemoryCache|fileservice.SkipFullFilePreloads, fs)
+	bf, err := ReadBloomFilter(ctx, location.Name().String(), &extent, fileservice.SkipFullFilePreloads, fs)
 	if err != nil {
 		return nil, err
 	}
@@ -218,7 +221,7 @@ func FastLoadObjectMeta(
 	extent := location.Extent()
 	name := location.Name()
 	var metaReadPolicy fileservice.Policy
-	metaReadPolicy = fileservice.SkipMemoryCache
+	// metaReadPolicy = fileservice.SkipMemoryCache
 	metaReadPolicy |= fileservice.SkipFullFilePreloads
 	return LoadObjectMetaByExtent(ctx, &name, &extent, prefetch, metaReadPolicy, fs)
 }
