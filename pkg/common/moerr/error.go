@@ -280,6 +280,9 @@ const (
 	ErrReplicaNotFound uint16 = 21101
 	ErrReplicaNotMatch uint16 = 21102
 
+	// Group 12: The error code that rarely appears
+	ErrTooLargeObjectSize uint16 = 22001
+
 	// ErrEnd, the max value of MOErrorCode
 	ErrEnd uint16 = 65535
 )
@@ -504,6 +507,9 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	// Group 11: sharding
 	ErrReplicaNotFound: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "cannot find the shard replica %s"},
 	ErrReplicaNotMatch: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "shard replica not match current %s, received %s"},
+
+	// Group 12: The error code that rarely appears
+	ErrTooLargeObjectSize: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "objectio: too large object size %d"},
 
 	// Group End: max value of MOErrorCode
 	ErrEnd: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: end of errcode code"},
