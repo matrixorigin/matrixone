@@ -30,7 +30,6 @@ type Argument struct {
 	E       *plan.Expr
 	exeExpr *plan.Expr
 	IsEnd   bool
-	buf     *batch.Batch
 
 	vm.OperatorBase
 }
@@ -67,11 +66,16 @@ func (arg *Argument) Release() {
 }
 
 type container struct {
+	buf       *batch.Batch
 	executors []colexec.ExpressionExecutor
 }
 
 func (arg *Argument) SetExeExpr(e *plan.Expr) {
 	arg.exeExpr = e
+}
+
+func (arg *Argument) GetExeExpr() *plan.Expr {
+	return arg.exeExpr
 }
 
 func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {

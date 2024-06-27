@@ -37,6 +37,7 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(_ *proc) error {
+	arg.ctr = new(container)
 	return nil
 }
 
@@ -58,61 +59,61 @@ func (arg *Argument) Call(proc *proc) (vm.CallResult, error) {
 	}
 	bat := result.Batch
 
-	if arg.buf != nil {
-		proc.PutBatch(arg.buf)
-		arg.buf = nil
+	if arg.ctr.buf != nil {
+		proc.PutBatch(arg.ctr.buf)
+		arg.ctr.buf = nil
 	}
 
-	arg.buf = batch.NewWithSize(len(arg.Attrs))
+	arg.ctr.buf = batch.NewWithSize(len(arg.Attrs))
 	// keep shuffleIDX unchanged
-	arg.buf.ShuffleIDX = bat.ShuffleIDX
-	arg.buf.Attrs = make([]string, 0, len(arg.Attrs))
+	arg.ctr.buf.ShuffleIDX = bat.ShuffleIDX
+	arg.ctr.buf.Attrs = make([]string, 0, len(arg.Attrs))
 	for idx := range arg.Attrs {
-		arg.buf.Attrs = append(arg.buf.Attrs, arg.Attrs[idx])
+		arg.ctr.buf.Attrs = append(arg.ctr.buf.Attrs, arg.Attrs[idx])
 		srcVec := bat.Vecs[idx]
 		vec := proc.GetVector(*srcVec.GetType())
 		if err := vector.GetUnionAllFunction(*srcVec.GetType(), proc.Mp())(vec, srcVec); err != nil {
 			vec.Free(proc.Mp())
 			return result, err
 		}
-		arg.buf.SetVector(int32(idx), vec)
+		arg.ctr.buf.SetVector(int32(idx), vec)
 	}
-	arg.buf.AddRowCount(bat.RowCount())
+	arg.ctr.buf.AddRowCount(bat.RowCount())
 
 	if arg.HasAutoCol {
-		err := genAutoIncrCol(arg.buf, proc, arg)
+		err := genAutoIncrCol(arg.ctr.buf, proc, arg)
 		if err != nil {
 			return result, err
 		}
 	}
 	// check new rows not null
-	err = colexec.BatchDataNotNullCheck(arg.buf, arg.TableDef, proc.Ctx)
+	err = colexec.BatchDataNotNullCheck(arg.ctr.buf, arg.TableDef, proc.Ctx)
 	if err != nil {
 		return result, err
 	}
 
 	// calculate the composite primary key column and append the result vector to batch
-	err = genCompositePrimaryKey(arg.buf, proc, arg.TableDef)
+	err = genCompositePrimaryKey(arg.ctr.buf, proc, arg.TableDef)
 	if err != nil {
 		return result, err
 	}
-	err = genClusterBy(arg.buf, proc, arg.TableDef)
+	err = genClusterBy(arg.ctr.buf, proc, arg.TableDef)
 	if err != nil {
 		return result, err
 	}
 	if arg.IsUpdate {
 		idx := len(bat.Vecs) - 1
-		arg.buf.Attrs = append(arg.buf.Attrs, catalog.Row_ID)
+		arg.ctr.buf.Attrs = append(arg.ctr.buf.Attrs, catalog.Row_ID)
 		rowIdVec := proc.GetVector(*bat.GetVector(int32(idx)).GetType())
 		err = rowIdVec.UnionBatch(bat.Vecs[idx], 0, bat.Vecs[idx].Length(), nil, proc.Mp())
 		if err != nil {
 			rowIdVec.Free(proc.Mp())
 			return result, err
 		}
-		arg.buf.Vecs = append(arg.buf.Vecs, rowIdVec)
+		arg.ctr.buf.Vecs = append(arg.ctr.buf.Vecs, rowIdVec)
 	}
 
-	result.Batch = arg.buf
+	result.Batch = arg.ctr.buf
 	return result, nil
 }
 

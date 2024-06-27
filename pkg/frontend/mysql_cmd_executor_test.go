@@ -828,7 +828,7 @@ func Test_HandlePrepareStmt(t *testing.T) {
 
 	runTestHandle("handlePrepareStmt", t, func(ses *Session) error {
 		stmt := stmt.(*tree.PrepareStmt)
-		_, err := handlePrepareStmt(ses, ec, stmt)
+		_, err := handlePrepareStmt(ses, ec, stmt, "Prepare stmt1 from select 1, 2")
 		return err
 	})
 }

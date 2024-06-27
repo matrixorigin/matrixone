@@ -3217,6 +3217,7 @@ func maybeCreateAutoIncrement(
 	if len(cols) == 0 {
 		return nil
 	}
+
 	return incrservice.GetAutoIncrementService(ctx).Create(
 		ctx,
 		def.TblId,

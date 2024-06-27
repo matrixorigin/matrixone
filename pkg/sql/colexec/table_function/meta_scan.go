@@ -27,7 +27,6 @@ import (
 )
 
 func metaScanPrepare(proc *process.Process, arg *Argument) (err error) {
-	arg.ctr = new(container)
 	arg.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Args)
 	return err
 }

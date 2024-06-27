@@ -33,6 +33,7 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {
+	arg.ctr = new(container)
 	ref := arg.Ref
 	eng := arg.Engine
 	partitionNames := arg.PartitionTableNames
@@ -40,8 +41,8 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	if err != nil {
 		return err
 	}
-	arg.delSource = rel
-	arg.partitionSources = partitionRels
+	arg.ctr.delSource = rel
+	arg.ctr.partitionSources = partitionRels
 	return nil
 }
 
@@ -79,7 +80,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	typs := vector.MustFixedCol[int8](bat.GetVector(2))
 
 	// If the target table is a partition table, Traverse partition subtables for separate processing
-	if len(ap.partitionSources) > 0 {
+	if len(ap.ctr.partitionSources) > 0 {
 		partitionIdxs := vector.MustFixedCol[int32](bat.GetVector(3))
 		for i := 0; i < bat.RowCount(); i++ {
 			name = fmt.Sprintf("%s|%d", blkIds[i].UnsafeGetString(area0), typs[i])
@@ -89,7 +90,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			bat.Cnt = 1
 			pIndex := partitionIdxs[i]
-			err = ap.partitionSources[pIndex].Delete(proc.Ctx, bat, name)
+			err = ap.ctr.partitionSources[pIndex].Delete(proc.Ctx, bat, name)
 			if err != nil {
 				return result, err
 			}
@@ -103,7 +104,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 			bat.Cnt = 1
-			err = ap.delSource.Delete(proc.Ctx, bat, name)
+			err = ap.ctr.delSource.Delete(proc.Ctx, bat, name)
 			if err != nil {
 				return result, err
 			}
