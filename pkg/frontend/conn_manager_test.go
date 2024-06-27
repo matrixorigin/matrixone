@@ -2,11 +2,11 @@ package frontend
 
 import (
 	"encoding/binary"
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/smartystreets/goconvey/convey"
 	"math/rand"
 	"net"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -85,7 +85,7 @@ func TestMySQLProtocolRead(t *testing.T) {
 			actualPayload = append(actualPayload, data)
 		}
 		convey.So(err, convey.ShouldBeNil)
-		convey.So(actualPayload, convey.ShouldResemble, exceptPayload)
+		convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
 	})
 
 	convey.Convey("read small packet > 1MB", t, func() {
@@ -125,7 +125,7 @@ func TestMySQLProtocolRead(t *testing.T) {
 			actualPayload = append(actualPayload, data)
 		}
 		convey.So(err, convey.ShouldBeNil)
-		convey.So(actualPayload, convey.ShouldResemble, exceptPayload)
+		convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
 	})
 
 	convey.Convey("read big packet", t, func() {
@@ -167,7 +167,7 @@ func TestMySQLProtocolRead(t *testing.T) {
 			t.Fatalf("Failed to read payload: %v", err)
 		}
 		convey.So(err, convey.ShouldBeNil)
-		convey.So(actualPayload, convey.ShouldResemble, exceptPayload)
+		convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
 	})
 
 	convey.Convey("read big packet, the last package size is equal to 16MB", t, func() {
@@ -214,7 +214,7 @@ func TestMySQLProtocolRead(t *testing.T) {
 			t.Fatalf("Failed to read payload: %v", err)
 		}
 		convey.So(err, convey.ShouldBeNil)
-		convey.So(actualPayload, convey.ShouldResemble, exceptPayload)
+		convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
 	})
 }
 
@@ -276,7 +276,7 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 		}
 		remain, err := hasData(server)
 		convey.So(err, convey.ShouldBeNil)
-		convey.So(actualPayload, convey.ShouldResemble, exceptPayload)
+		convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
 		convey.So(remain, convey.ShouldBeFalse)
 
 	})
@@ -331,7 +331,7 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 			}
 			remain, err := hasData(server)
 			convey.So(err, convey.ShouldBeNil)
-			convey.So(actualPayload, convey.ShouldResemble, exceptPayload)
+			convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
 			convey.So(remain, convey.ShouldBeFalse)
 		})
 		convey.Convey("big field size", func() {
@@ -382,7 +382,7 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 			}
 			remain, err := hasData(server)
 			convey.So(err, convey.ShouldBeNil)
-			convey.So(actualPayload, convey.ShouldResemble, exceptPayload)
+			convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
 			convey.So(remain, convey.ShouldBeFalse)
 		})
 	})
@@ -437,7 +437,7 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 			}
 			remain, err := hasData(server)
 			convey.So(err, convey.ShouldBeNil)
-			convey.So(actualPayload, convey.ShouldResemble, exceptPayload)
+			convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
 			convey.So(remain, convey.ShouldBeFalse)
 		})
 
@@ -489,7 +489,7 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 			}
 			remain, err := hasData(server)
 			convey.So(err, convey.ShouldBeNil)
-			convey.So(actualPayload, convey.ShouldResemble, exceptPayload)
+			convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
 			convey.So(remain, convey.ShouldBeFalse)
 		})
 
@@ -549,7 +549,7 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 			}
 			remain, err := hasData(server)
 			convey.So(err, convey.ShouldBeNil)
-			convey.So(actualPayload, convey.ShouldResemble, exceptPayload)
+			convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
 			convey.So(remain, convey.ShouldBeFalse)
 		})
 
@@ -602,8 +602,7 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 			}
 			remain, err := hasData(server)
 			convey.So(err, convey.ShouldBeNil)
-			fmt.Println(len(actualPayload))
-			convey.So(actualPayload, convey.ShouldResemble, exceptPayload)
+			convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
 			convey.So(remain, convey.ShouldBeFalse)
 		})
 	})
