@@ -123,7 +123,7 @@ type MessageReceiver struct {
 }
 
 func (proc *Process) SendMessage(m Message) {
-	mb := proc.MessageBoard
+	mb := proc.Base.MessageBoard
 	if m.GetReceiverAddr().CnAddr == CURRENTCN { // message for current CN
 		mb.RwMutex.Lock()
 		mb.Messages = append(mb.Messages, &m)
@@ -146,7 +146,7 @@ func (proc *Process) NewMessageReceiver(tags []int32, addr MessageAddress) *Mess
 	return &MessageReceiver{
 		tags: tags,
 		addr: &addr,
-		mb:   proc.MessageBoard,
+		mb:   proc.Base.MessageBoard,
 	}
 }
 

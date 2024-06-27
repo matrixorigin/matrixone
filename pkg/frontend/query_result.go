@@ -199,7 +199,7 @@ func saveMeta(ctx context.Context, ses *Session) error {
 		QueryId:       ses.GetStmtId(),
 		Statement:     ses.GetSql(),
 		AccountId:     ses.GetTenantInfo().GetTenantID(),
-		RoleId:        ses.proc.SessionInfo.RoleId,
+		RoleId:        ses.proc.GetSessionInfo().RoleId,
 		ResultPath:    buf.String(),
 		CreateTime:    types.UnixToTimestamp(ses.createdTime.Unix()),
 		ResultSize:    ses.curResultSize,
