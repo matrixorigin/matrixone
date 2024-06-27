@@ -454,7 +454,7 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 
 				// BUG: if user drop the col and add it back with the same name within the same txn, the result will be wrong.
 				for j := range tableColumns {
-					if tableColumns[j].Name == columnStr {
+					if strings.EqualFold(tableColumns[j].Name, columnStr) {
 						strval := getValueInStr(tValues[j][minMaxIdx])
 						if err = rs.AppendMustBytesValue(functionUtil.QuickStrToBytes(strval)); err != nil {
 							return err

@@ -607,7 +607,7 @@ func constructPreInsert(ns []*plan.Node, n *plan.Node, eg engine.Engine, proc *p
 		if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
 			continue
 		}
-		attrs = append(attrs, col.Name)
+		attrs = append(attrs, col.GetUserInputName())
 	}
 
 	ctx := proc.Ctx
@@ -697,7 +697,7 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 	var attrs []string
 	for _, col := range oldCtx.TableDef.Cols {
 		if col.Name != catalog.Row_ID {
-			attrs = append(attrs, col.Name)
+			attrs = append(attrs, col.GetUserInputName())
 		}
 	}
 	originRel, _, err := getRel(ctx, proc, eg, oldCtx.Ref, nil)

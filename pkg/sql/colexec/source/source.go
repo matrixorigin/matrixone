@@ -41,7 +41,7 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	p.types = make([]types.Type, len(p.TblDef.Cols))
 	p.Configs = make(map[string]interface{})
 	for i, col := range p.TblDef.Cols {
-		p.attrs[i] = col.Name
+		p.attrs[i] = col.GetUserInputName()
 		p.types[i] = types.Type{
 			Oid:   types.T(col.Typ.Id),
 			Scale: col.Typ.Scale,

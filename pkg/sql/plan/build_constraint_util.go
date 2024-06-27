@@ -442,10 +442,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		return false, nil, moerr.NewInvalidInput(builder.GetContext(), "insert has unknown select statement")
 	}
 
-	err = builder.addBinding(info.rootId, tree.AliasClause{
-		Alias: derivedTableName,
-	}, bindCtx)
-	if err != nil {
+	if err = builder.addBinding(info.rootId, tree.AliasClause{Alias: derivedTableName}, bindCtx); err != nil {
 		return false, nil, err
 	}
 

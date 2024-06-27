@@ -573,16 +573,16 @@ func initAlterTableContext(originTableDef *TableDef, copyTableDef *TableDef, sch
 		if coldef.Hidden {
 			continue
 		}
+
 		alterTblColMap[coldef.Name] = selectExpr{
 			sexprType: columnName,
 			sexprStr:  coldef.Name,
 		}
 
-		if !coldef.Hidden {
-			changTblColIdMap[coldef.ColId] = &plan.ColDef{
-				ColId: UnKnownColId,
-				Name:  coldef.Name,
-			}
+		changTblColIdMap[coldef.ColId] = &plan.ColDef{
+			ColId:      UnKnownColId,
+			Name:       coldef.Name,
+			OriginName: coldef.OriginName,
 		}
 	}
 	return &AlterTableContext{

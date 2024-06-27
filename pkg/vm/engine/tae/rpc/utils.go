@@ -51,7 +51,7 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, 
 	for _, def := range defs {
 		switch defVal := def.(type) {
 		case *engine.AttributeDef:
-			if pkeyColName == defVal.Attr.Name {
+			if strings.EqualFold(pkeyColName, defVal.Attr.Name) {
 				if err = schema.AppendSortColWithAttribute(defVal.Attr, 0, true); err != nil {
 					return
 				}
