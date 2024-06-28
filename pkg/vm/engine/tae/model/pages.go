@@ -35,6 +35,7 @@ import (
 
 type HashPageTable = TransferTable[*TransferHashPage]
 
+// BlockRead Using blockio directly will cause cycle import
 type BlockRead interface {
 	LoadTableByBlock(loc objectio.Location, fs fileservice.FileService) (bat *batch.Batch, release func(), err error)
 }
@@ -50,14 +51,12 @@ func SetBlockRead(rd BlockRead) {
 	rdOnce.Do(func() {
 		RD = rd
 	})
-	logutil.Infof("[TransferHashPage] RD init %v", RD != nil)
 }
 
 func SetFileService(fs fileservice.FileService) {
 	fsOnce.Do(func() {
 		FS = fs
 	})
-	logutil.Infof("[TransferHashPage] FS %v", FS)
 }
 
 type TransferHashPageParams struct {
@@ -88,7 +87,7 @@ type TransferHashPage struct {
 	loc         atomic.Pointer[objectio.Location]
 	params      TransferHashPageParams
 	isTransient bool
-	isPersisted int32
+	isPersisted int32 // 0 in memory, 1 on disk
 }
 
 func NewTransferHashPage(id *common.ID, ts time.Time, isTransient bool, opts ...Option) *TransferHashPage {
@@ -176,13 +175,13 @@ func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) 
 		page.loadTable()
 		v2.TransferPageDiskHitHistogram.Observe(1)
 		diskDuration := time.Since(diskStart)
-		v2.TransferDiskLatencyHistogram.Observe(1000 * diskDuration.Seconds())
+		v2.TransferDiskLatencyHistogram.Observe(diskDuration.Seconds())
 	} else {
 		v2.TransferPageMemHitHistogram.Observe(1)
 	}
 	v2.TransferPageTotalHitHistogram.Observe(1)
 
-	memstart := time.Now()
+	memStart := time.Now()
 	var m []byte
 	page.latch.RLock()
 	m, ok = page.hashmap.M[from]
@@ -190,16 +189,8 @@ func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) 
 	if ok {
 		dest = types.Rowid(m)
 	}
-	memduration := time.Since(memstart)
-	v2.TransferMemLatencyHistogram.Observe(1000 * memduration.Seconds())
-
-	var str string
-	if ok {
-		str = "succeeded"
-	} else {
-		str = "failed"
-	}
-	logutil.Infof("[TransferHashPage] get transfer %v", str)
+	memDuration := time.Since(memStart)
+	v2.TransferMemLatencyHistogram.Observe(memDuration.Seconds())
 	return
 }
 
@@ -222,7 +213,6 @@ func (page *TransferHashPage) SetLocation(location objectio.Location) {
 }
 
 func (page *TransferHashPage) clearTable() {
-	logutil.Infof("[TransferHashPage] clear hash table")
 	atomic.StoreInt32(&page.isPersisted, 1)
 	v2.TaskMergeTransferPageSizeGauge.Sub(float64(page.Length()))
 	page.latch.Lock()
@@ -231,12 +221,9 @@ func (page *TransferHashPage) clearTable() {
 }
 
 func (page *TransferHashPage) loadTable() {
-	logutil.Infof("[TransferHashPage] load persist table, objectname: %v", page.loc.Load().Name().String())
 	if page.loc.Load() == nil {
 		return
 	}
-
-	logutil.Infof("[TransferHashPage] loc %v, rd %v, fs %v", page.loc.Load().Name().String(), RD, FS)
 
 	var bat *batch.Batch
 	var release func()
@@ -264,7 +251,6 @@ func (page *TransferHashPage) clearPersistTable() {
 		return
 	}
 	atomic.StoreInt32(&page.isPersisted, 0)
-	logutil.Infof("[TransferHashPage] clear persist table, objectname: %v", page.loc.Load().Name().String())
 	FS.Delete(context.Background(), page.loc.Load().Name().String())
 }
 
@@ -300,6 +286,7 @@ func (c *TransferPageCleaner) addPage(page *TransferHashPage) {
 	c.Pages <- &TransferPage{page: page, ts: time.Now()}
 }
 
+// Handler clean up the hash table in memory
 func (c *TransferPageCleaner) Handler() {
 	for {
 		page := <-c.Pages

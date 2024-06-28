@@ -149,6 +149,7 @@ var (
 	TestDuration atomic.Pointer[time.Duration]
 )
 
+// Clean Clear the hash table on disk regularly
 func (table *TransferTable[T]) Clean() {
 	for {
 		table.RLock()
