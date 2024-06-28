@@ -255,6 +255,8 @@ type Transaction struct {
 	pkCount              int
 
 	adjustCount int
+
+	haveDDL bool
 }
 
 type Pos struct {

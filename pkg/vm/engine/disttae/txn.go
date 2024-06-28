@@ -1096,6 +1096,7 @@ func (txn *Transaction) delTransaction() {
 	txn.deletedTableMap = nil
 	txn.blockId_tn_delete_metaLoc_batch.data = nil
 	txn.deletedBlocks = nil
+	txn.haveDDL = false
 	segmentnames := make([]objectio.Segmentid, 0, len(txn.cnBlkId_Pos)+1)
 	segmentnames = append(segmentnames, txn.segId)
 	for blkId := range txn.cnBlkId_Pos {
@@ -1242,4 +1243,16 @@ func (txn *Transaction) CloneSnapshotWS() client.Workspace {
 
 func (txn *Transaction) BindTxnOp(op client.TxnOperator) {
 	txn.op = op
+}
+
+func (txn *Transaction) SetHaveDDL(flag bool) {
+	txn.Lock()
+	defer txn.Unlock()
+	txn.haveDDL = flag
+}
+
+func (txn *Transaction) GetHaveDDL() bool {
+	txn.Lock()
+	defer txn.Unlock()
+	return txn.haveDDL
 }

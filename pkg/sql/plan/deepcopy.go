@@ -486,7 +486,6 @@ func DeepCopyTableDef(table *plan.TableDef, withCols bool) *plan.TableDef {
 		IsTemporary:    table.IsTemporary,
 		AutoIncrOffset: table.AutoIncrOffset,
 		DbName:         table.DbName,
-		CreateInTx:     table.CreateInTx,
 	}
 
 	copy(newTable.RefChildTbls, table.RefChildTbls)

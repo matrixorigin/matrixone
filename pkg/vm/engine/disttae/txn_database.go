@@ -479,9 +479,7 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 	tbl.defs = defs
 	tbl.tableName = name
 	tbl.tableId = tableId
-	// tbl.GetTableDef(ctx)
-	tblDef := tbl.GetTableDef(ctx)
-	tblDef.CreateInTx = true
+	tbl.GetTableDef(ctx)
 	key := genTableKey(accountId, name, db.databaseId)
 	db.getTxn().addCreateTable(key, tbl)
 	//CORNER CASE

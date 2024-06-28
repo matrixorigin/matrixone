@@ -519,6 +519,9 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 			err,
 		)
 		v2.TxnStatementExecuteDurationHistogram.Observe(cost.Seconds())
+		if _, ok := c.pn.Plan.(*plan.Plan_Ddl); ok {
+			c.proc.GetTxnOperator().GetWorkspace().SetHaveDDL(true)
+		}
 	}()
 
 	for _, s := range c.scope {
@@ -1033,13 +1036,9 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 	}()
 
 	c.execType = plan2.GetExecType(c.pn.GetQuery())
-
-	c.initAnalyze(qry)
-	// deal with sink scan first.
-	for i := len(qry.Steps) - 1; i >= 0; i-- {
-		err := c.compileSinkScan(qry, qry.Steps[i])
-		if err != nil {
-			return nil, err
+	if c.execType == plan2.ExecTypeAP_MULTICN {
+		if c.proc.GetTxnOperator().GetWorkspace().GetHaveDDL() {
+			c.execType = plan2.ExecTypeAP_ONECN
 		}
 	}
 
@@ -1058,6 +1057,15 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 
 	if c.isPrepare && c.IsTpQuery() {
 		return nil, cantCompileForPrepareErr
+	}
+
+	c.initAnalyze(qry)
+	// deal with sink scan first.
+	for i := len(qry.Steps) - 1; i >= 0; i-- {
+		err := c.compileSinkScan(qry, qry.Steps[i])
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	steps := make([]*Scope, 0, len(qry.Steps))
@@ -1107,11 +1115,6 @@ func (c *Compile) compileSinkScan(qry *plan.Query, nodeId int32) error {
 				}
 			}
 			c.appendStepRegs(s, nodeId, wr)
-		}
-	}
-	if n.TableDef != nil && n.TableDef.CreateInTx {
-		if c.execType == plan2.ExecTypeAP_MULTICN {
-			c.execType = plan2.ExecTypeAP_ONECN
 		}
 	}
 	return nil
