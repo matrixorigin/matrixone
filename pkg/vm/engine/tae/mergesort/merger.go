@@ -65,7 +65,7 @@ type merger[T any] struct {
 	mustColFunc func(*vector.Vector) []T
 
 	totalRowCnt   uint32
-	totalSize     uint32
+	totalSize     uint64
 	rowPerBlk     uint32
 	blkPerObj     uint16
 	rowSize       uint32
@@ -74,17 +74,17 @@ type merger[T any] struct {
 
 func newMerger[T any](host MergeTaskHost, lessFunc sort.LessFunc[T], sortKeyPos int, mustColFunc func(*vector.Vector) []T) Merger {
 	size := host.GetObjectCnt()
+	rowSizeU64 := host.GetTotalSize() / uint64(host.GetTotalRowCnt())
 	m := &merger[T]{
-		host:       host,
-		objCnt:     size,
-		bats:       make([]releasableBatch, size),
-		rowIdx:     make([]int64, size),
-		cols:       make([][]T, size),
-		deletes:    make([]*nulls.Nulls, size),
-		nulls:      make([]*nulls.Nulls, size),
-		heap:       newHeapSlice[T](size, lessFunc),
-		sortKeyIdx: sortKeyPos,
-
+		host:             host,
+		objCnt:           size,
+		bats:             make([]releasableBatch, size),
+		rowIdx:           make([]int64, size),
+		cols:             make([][]T, size),
+		deletes:          make([]*nulls.Nulls, size),
+		nulls:            make([]*nulls.Nulls, size),
+		heap:             newHeapSlice[T](size, lessFunc),
+		sortKeyIdx:       sortKeyPos,
 		accObjBlkCnts:    host.GetAccBlkCnts(),
 		objBlkCnts:       host.GetBlkCnts(),
 		rowPerBlk:        host.GetBlockMaxRows(),
@@ -95,7 +95,7 @@ func newMerger[T any](host MergeTaskHost, lessFunc sort.LessFunc[T], sortKeyPos 
 		loadedObjBlkCnts: make([]int, size),
 		mustColFunc:      mustColFunc,
 	}
-	m.rowSize = m.totalSize / m.totalRowCnt
+	m.rowSize = uint32(rowSizeU64)
 	totalBlkCnt := 0
 	for _, cnt := range m.objBlkCnts {
 		totalBlkCnt += cnt

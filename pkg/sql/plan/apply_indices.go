@@ -798,6 +798,7 @@ END0:
 		col.ColPos = 0
 
 		var idxFilter *plan.Expr
+		estimateExprSelectivity(expr, builder)
 		if idxDef.Unique {
 			idxFilter = expr
 		} else {
@@ -814,6 +815,7 @@ END0:
 				idxFilter, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_between", fn.Args)
 			}
 		}
+		idxFilter.Selectivity = expr.Selectivity
 
 		idxTableNodeID := builder.appendNode(&plan.Node{
 			NodeType:     plan.Node_TABLE_SCAN,

@@ -33,10 +33,10 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 		}
 		initTransferMapping(host.GetCommitEntry(), totalBlkCnt)
 	}
-
+	rowSizeU64 := host.GetTotalSize() / uint64(host.GetTotalRowCnt())
 	stats := mergeStats{
 		totalRowCnt:   host.GetTotalRowCnt(),
-		rowSize:       host.GetTotalSize() / host.GetTotalRowCnt(),
+		rowSize:       uint32(rowSizeU64),
 		targetObjSize: host.GetTargetObjSize(),
 		blkPerObj:     host.GetObjectMaxBlocks(),
 	}
