@@ -18,6 +18,7 @@ import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	txnClient "github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"sync"
 )
 
@@ -91,10 +92,16 @@ func InitCompileService() *ServiceOfCompile {
 	return srv
 }
 
-func (srv *ServiceOfCompile) getCompile(ctx context.Context) *Compile {
-	queryContext, queryCancel := context.WithCancel(ctx)
+func (srv *ServiceOfCompile) getCompile(
+	proc *process.Process) *Compile {
+	// make sure the process has a cancel function.
+	if proc.Cancel == nil {
+		proc.Ctx, proc.Cancel = context.WithCancel(proc.Ctx)
+	}
+
 	runningCompile := reuse.Alloc[Compile](nil)
-	runningCompile.ctx = queryContext
+	runningCompile.ctx = proc.Ctx
+	runningCompile.proc = proc
 
 	if runningCompile.queryStatus == nil {
 		runningCompile.queryStatus = newQueryDoneWaiter()
@@ -105,7 +112,7 @@ func (srv *ServiceOfCompile) getCompile(ctx context.Context) *Compile {
 	srv.Lock()
 	srv.aliveCompiles[runningCompile] = compileAdditionalInformation{
 		mustReturnError: nil,
-		queryCancel:     queryCancel,
+		queryCancel:     proc.Cancel,
 	}
 	srv.Unlock()
 
