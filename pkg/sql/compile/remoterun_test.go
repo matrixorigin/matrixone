@@ -91,36 +91,43 @@ func Test_EncodeProcessInfo(t *testing.T) {
 	txnOperator.EXPECT().Snapshot().AnyTimes()
 
 	a := reuse.Alloc[process.AnalyzeInfo](nil)
-	proc := &process.Process{
-		Id:          "1",
-		Lim:         process.Limitation{},
-		UnixTime:    1000000,
-		Ctx:         defines.AttachAccountId(context.TODO(), catalog.System_Account),
-		TxnOperator: txnOperator,
-		AnalInfos:   []*process.AnalyzeInfo{a},
-		SessionInfo: process.SessionInfo{
-			Account:        "",
-			User:           "",
-			Host:           "",
-			Role:           "",
-			ConnectionID:   0,
-			AccountId:      0,
-			RoleId:         0,
-			UserId:         0,
-			LastInsertID:   0,
-			Database:       "",
-			Version:        "",
-			TimeZone:       time.Local,
-			StorageEngine:  nil,
-			QueryId:        nil,
-			ResultColTypes: nil,
-			SeqCurValues:   nil,
-			SeqDeleteKeys:  nil,
-			SeqAddValues:   nil,
-			SeqLastValue:   nil,
-			SqlHelper:      nil,
-		},
+	proc := process.New(defines.AttachAccountId(context.TODO(), catalog.System_Account),
+		nil,
+		nil,
+		txnOperator,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil)
+	proc.Base.Id = "1"
+	proc.Base.Lim = process.Limitation{}
+	proc.Base.UnixTime = 1000000
+	proc.Base.AnalInfos = []*process.AnalyzeInfo{a}
+	proc.Base.SessionInfo = process.SessionInfo{
+		Account:        "",
+		User:           "",
+		Host:           "",
+		Role:           "",
+		ConnectionID:   0,
+		AccountId:      0,
+		RoleId:         0,
+		UserId:         0,
+		LastInsertID:   0,
+		Database:       "",
+		Version:        "",
+		TimeZone:       time.Local,
+		StorageEngine:  nil,
+		QueryId:        nil,
+		ResultColTypes: nil,
+		SeqCurValues:   nil,
+		SeqDeleteKeys:  nil,
+		SeqAddValues:   nil,
+		SeqLastValue:   nil,
+		SqlHelper:      nil,
 	}
+
 	_, err := encodeProcessInfo(proc, "")
 	require.Nil(t, err)
 }
@@ -128,6 +135,7 @@ func Test_EncodeProcessInfo(t *testing.T) {
 func Test_refactorScope(t *testing.T) {
 	ctx := context.TODO()
 	proc := &process.Process{}
+	proc.Base = &process.BaseProcess{}
 
 	s := reuse.Alloc[Scope](nil)
 	s.Proc = proc

@@ -113,7 +113,7 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 		regs:   make(map[*process.WaitRegister]int32),
 	}
 	ctx.root = ctx
-	s, err := generateScope(proc, p, ctx, proc.AnalInfos, isRemote)
+	s, err := generateScope(proc, p, ctx, proc.Base.AnalInfos, isRemote)
 	if err != nil {
 		return nil, err
 	}
@@ -662,7 +662,10 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 	case *projection.Argument:
 		in.ProjectList = t.Es
 	case *filter.Argument:
-		in.Filter = t.E
+		in.Filter = t.GetExeExpr()
+		if in.Filter == nil {
+			in.Filter = t.E
+		}
 	case *semi.Argument:
 		in.SemiJoin = &pipeline.SemiJoin{
 			Result:                 t.Result,

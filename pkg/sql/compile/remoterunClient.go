@@ -66,7 +66,7 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 	sender, err = newMessageSenderOnClient(s.Proc.Ctx, s.NodeInfo.Addr, s.Proc.Mp(), c.anal)
 	if err != nil {
 		c.proc.Errorf(s.Proc.Ctx, "Failed to newMessageSenderOnClient sql=%s, txnID=%s, err=%v",
-			c.sql, c.proc.TxnOperator.Txn().DebugString(), err)
+			c.sql, c.proc.GetTxnOperator().Txn().DebugString(), err)
 
 		return nil, err
 	}

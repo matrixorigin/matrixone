@@ -18,21 +18,27 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
+	"time"
+
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
+
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+
+	"github.com/matrixorigin/matrixone/pkg/logservice"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
-	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
@@ -40,8 +46,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
-	"runtime"
-	"time"
 )
 
 // CnServerMessageHandler receive and deal the message from cn-client.
@@ -182,7 +186,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		defer func() {
 			runCompile.proc.FreeVectors()
 			runCompile.proc.CleanValueScanBatchs()
-			runCompile.proc.AnalInfos = nil
+			runCompile.proc.Base.AnalInfos = nil
 			runCompile.anal.analInfos = nil
 
 			runCompile.Release()
@@ -191,22 +195,22 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		err = s.ParallelRun(runCompile)
 		if err == nil {
 			// record the number of s3 requests
-			runCompile.proc.AnalInfos[runCompile.anal.curr].S3IOInputCount += runCompile.counterSet.FileService.S3.Put.Load()
-			runCompile.proc.AnalInfos[runCompile.anal.curr].S3IOInputCount += runCompile.counterSet.FileService.S3.List.Load()
-			runCompile.proc.AnalInfos[runCompile.anal.curr].S3IOOutputCount += runCompile.counterSet.FileService.S3.Head.Load()
-			runCompile.proc.AnalInfos[runCompile.anal.curr].S3IOOutputCount += runCompile.counterSet.FileService.S3.Get.Load()
-			runCompile.proc.AnalInfos[runCompile.anal.curr].S3IOOutputCount += runCompile.counterSet.FileService.S3.Delete.Load()
-			runCompile.proc.AnalInfos[runCompile.anal.curr].S3IOOutputCount += runCompile.counterSet.FileService.S3.DeleteMulti.Load()
+			runCompile.proc.Base.AnalInfos[runCompile.anal.curr].S3IOInputCount += runCompile.counterSet.FileService.S3.Put.Load()
+			runCompile.proc.Base.AnalInfos[runCompile.anal.curr].S3IOInputCount += runCompile.counterSet.FileService.S3.List.Load()
+			runCompile.proc.Base.AnalInfos[runCompile.anal.curr].S3IOOutputCount += runCompile.counterSet.FileService.S3.Head.Load()
+			runCompile.proc.Base.AnalInfos[runCompile.anal.curr].S3IOOutputCount += runCompile.counterSet.FileService.S3.Get.Load()
+			runCompile.proc.Base.AnalInfos[runCompile.anal.curr].S3IOOutputCount += runCompile.counterSet.FileService.S3.Delete.Load()
+			runCompile.proc.Base.AnalInfos[runCompile.anal.curr].S3IOOutputCount += runCompile.counterSet.FileService.S3.DeleteMulti.Load()
 
-			receiver.finalAnalysisInfo = runCompile.proc.AnalInfos
+			receiver.finalAnalysisInfo = runCompile.proc.Base.AnalInfos
 		} else {
 			// there are 3 situations to release analyzeInfo
 			// 1 is free analyzeInfo of Local CN when release analyze
 			// 2 is free analyzeInfo of remote CN before transfer back
 			// 3 is free analyzeInfo of remote CN when errors happen before transfer back
 			// this is situation 3
-			for i := range runCompile.proc.AnalInfos {
-				reuse.Free[process.AnalyzeInfo](runCompile.proc.AnalInfos[i], nil)
+			for i := range runCompile.proc.Base.AnalInfos {
+				reuse.Free[process.AnalyzeInfo](runCompile.proc.Base.AnalInfos[i], nil)
 			}
 		}
 		return err
@@ -379,29 +383,30 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 		cnInfo.udfService,
 		cnInfo.aicm)
 	proc.Cancel = runningCancel
-	proc.UnixTime = pHelper.unixTime
-	proc.Id = pHelper.id
-	proc.Lim = pHelper.lim
-	proc.SessionInfo = pHelper.sessionInfo
-	proc.SessionInfo.StorageEngine = cnInfo.storeEngine
-	proc.AnalInfos = make([]*process.AnalyzeInfo, len(pHelper.analysisNodeList))
-	for i := range proc.AnalInfos {
-		proc.AnalInfos[i] = reuse.Alloc[process.AnalyzeInfo](nil)
-		proc.AnalInfos[i].NodeId = pHelper.analysisNodeList[i]
+	proc.Base.UnixTime = pHelper.unixTime
+	proc.Base.Id = pHelper.id
+	proc.Base.Lim = pHelper.lim
+	proc.Base.SessionInfo = pHelper.sessionInfo
+	proc.Base.SessionInfo.StorageEngine = cnInfo.storeEngine
+	proc.Base.AnalInfos = make([]*process.AnalyzeInfo, len(pHelper.analysisNodeList))
+	for i := range proc.Base.AnalInfos {
+		proc.Base.AnalInfos[i] = reuse.Alloc[process.AnalyzeInfo](nil)
+		proc.Base.AnalInfos[i].NodeId = pHelper.analysisNodeList[i]
 	}
 	proc.DispatchNotifyCh = make(chan *process.WrapCs)
 	{
-		txn := proc.TxnOperator.Txn()
+		txn := proc.GetTxnOperator().Txn()
 		txnId := txn.GetID()
-		proc.StmtProfile = process.NewStmtProfile(uuid.UUID(txnId), pHelper.StmtId)
+		proc.Base.StmtProfile = process.NewStmtProfile(uuid.UUID(txnId), pHelper.StmtId)
 	}
 
 	c := reuse.Alloc[Compile](nil)
 	c.proc = proc
-	c.proc.MessageBoard = c.MessageBoard
 	c.e = cnInfo.storeEngine
+	c.MessageBoard = c.MessageBoard.SetMultiCN(c.GetMessageCenter(), c.proc.GetStmtProfile().GetStmtId())
+	c.proc.Base.MessageBoard = c.MessageBoard
 	c.anal = newAnaylze()
-	c.anal.analInfos = proc.AnalInfos
+	c.anal.analInfos = proc.Base.AnalInfos
 	c.addr = receiver.cnInformation.cnAddr
 	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, c.counterSet)
 	c.ctx = defines.AttachAccountId(c.proc.Ctx, pHelper.accountId)

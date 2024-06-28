@@ -16,11 +16,9 @@ package rightsemi
 
 import (
 	"bytes"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -193,33 +191,18 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 
 	if ap.NumCPU > 1 {
 		if !ap.IsMerger {
-
-			sendStart := time.Now()
 			ap.Channel <- ctr.matched
-			analyze.WaitStop(sendStart)
-
 			return true, nil
 		} else {
-			cnt := 1
-
-			receiveStart := time.Now()
-
-			// The original code didn't handle the context correctly and would cause the system to HUNG!
-			for completed := true; completed; {
-				select {
-				case <-proc.Ctx.Done():
-					return true, moerr.NewInternalError(proc.Ctx, "query has been closed early")
-				case v := <-ap.Channel:
+			for cnt := 1; cnt < int(ap.NumCPU); cnt++ {
+				v := ctr.ReceiveBitmapFromChannel(ap.Channel)
+				if v != nil {
 					ctr.matched.Or(v)
-					cnt++
-					if cnt == int(ap.NumCPU) {
-						close(ap.Channel)
-						completed = false
-					}
+				} else {
+					return true, nil
 				}
 			}
-			analyze.WaitStop(receiveStart)
-
+			close(ap.Channel)
 		}
 	}
 

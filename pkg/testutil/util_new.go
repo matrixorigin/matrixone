@@ -68,11 +68,11 @@ func NewProcessWithMPool(mp *mpool.MPool) *process.Process {
 		nil,
 		nil,
 	)
-	proc.Lim.Size = 1 << 20
-	proc.Lim.BatchRows = 1 << 20
-	proc.Lim.BatchSize = 1 << 20
-	proc.Lim.ReaderSize = 1 << 20
-	proc.SessionInfo.TimeZone = time.Local
+	proc.Base.Lim.Size = 1 << 20
+	proc.Base.Lim.BatchRows = 1 << 20
+	proc.Base.Lim.BatchSize = 1 << 20
+	proc.Base.Lim.ReaderSize = 1 << 20
+	proc.Base.SessionInfo.TimeZone = time.Local
 	return proc
 }
 
@@ -758,6 +758,30 @@ func NewTimeVector(n int, typ types.Type, m *mpool.MPool, random bool, vs []stri
 			v = rand.Int()
 		}
 		if err := vector.AppendFixed(vec, types.Time(v), false, m); err != nil {
+			vec.Free(m)
+			return nil
+		}
+	}
+	return vec
+}
+
+func NewEnumVector(n int, typ types.Type, m *mpool.MPool, random bool, vs []uint16) *vector.Vector {
+	vec := vector.NewVec(typ)
+	if vs != nil {
+		for i := range vs {
+			if err := vector.AppendFixed(vec, types.Enum(vs[i]), false, m); err != nil {
+				vec.Free(m)
+				return nil
+			}
+		}
+		return vec
+	}
+	for i := 1; i <= n; i++ {
+		v := i
+		if random {
+			v = rand.Int()
+		}
+		if err := vector.AppendFixed(vec, types.Enum(v), false, m); err != nil {
 			vec.Free(m)
 			return nil
 		}

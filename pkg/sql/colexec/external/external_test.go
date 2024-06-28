@@ -60,7 +60,7 @@ var (
 
 func newTestCase(format, jsondata string) externalTestCase {
 	proc := testutil.NewProcess()
-	proc.FileService = testutil.NewFS()
+	proc.Base.FileService = testutil.NewFS()
 	ctx, cancel := context.WithCancel(context.Background())
 	return externalTestCase{
 		proc:  proc,
@@ -117,7 +117,7 @@ func Test_Prepare(t *testing.T) {
 					Option: defaultOption,
 				},
 				ExParam: tree.ExParam{
-					FileService: tcs.proc.FileService,
+					FileService: tcs.proc.Base.FileService,
 					JsonData:    tcs.jsondata,
 					Ctx:         context.Background(),
 				},
@@ -185,7 +185,7 @@ func Test_Call(t *testing.T) {
 					Format: tcs.format,
 				},
 				ExParam: tree.ExParam{
-					FileService: tcs.proc.FileService,
+					FileService: tcs.proc.Base.FileService,
 					JsonData:    tcs.jsondata,
 					Ctx:         context.Background(),
 				},

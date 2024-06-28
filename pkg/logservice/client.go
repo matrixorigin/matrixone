@@ -24,9 +24,9 @@ import (
 
 	"github.com/cockroachdb/errors"
 	"github.com/lni/dragonboat/v4"
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -554,11 +554,7 @@ func getRPCClient(
 		morpc.WithCodecEnableChecksum(),
 		morpc.WithCodecMaxBodySize(maxMessageSize))
 	if enableCompress {
-		mp, err := mpool.NewMPool("log_rpc_client", 0, mpool.NoFixed)
-		if err != nil {
-			return nil, err
-		}
-		codecOpts = append(codecOpts, morpc.WithCodecEnableCompress(mp))
+		codecOpts = append(codecOpts, morpc.WithCodecEnableCompress(malloc.GetDefault(nil)))
 	}
 
 	// we set connection timeout to a constant value so if ctx's deadline is much
