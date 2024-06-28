@@ -389,7 +389,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		return moerr.NewInternalError(ctx, "can't restore db: %v", dbName)
 	}
 
-	if snapshot.level == tree.RESTORELEVELCLUSTER.String() && len(srcAccountName) != 0 {
+	if snapshot.level == tree.RESTORELEVELCLUSTER.String() && len(srcAccountName) != 0 && srcAccountName != sysAccountName {
 		toAccountId, err = getAccountId(ctx, bh, srcAccountName)
 		if err != nil {
 			return err
@@ -473,7 +473,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		return
 	}
 
-	if snapshot.level == tree.RESTORELEVELCLUSTER.String() && len(srcAccountName) != 0 {
+	if snapshot.level == tree.RESTORELEVELCLUSTER.String() && len(srcAccountName) != 0 && srcAccountName != sysAccountName {
 		deleteSnapshotRecord(ctx, bh, snapshot.snapshotName, snapshotName)
 	}
 
@@ -740,7 +740,7 @@ func restoreViews(
 	snapshotName string,
 	viewMap map[string]*tableInfo,
 	toAccountId uint32) error {
-	snapshot, err := doResolveSnapshotWithSnapshotName(ctx, ses, snapshotName)
+	snapshot, err := getSnapshotPlanWithSharedBh(ctx, bh, snapshotName)
 	if err != nil {
 		return err
 	}
@@ -1405,18 +1405,20 @@ func restoreToCluster(ctx context.Context, ses *Session, bh BackgroundExec, snap
 }
 
 func restoreAccountUsingClusterSnapshot(ctx context.Context, ses *Session, bh BackgroundExec, snapshotName string, snapshotTs int64, account accountRecord) (err error) {
-	var newSnapshot string
+	newSnapshot := snapshotName
 	toAccountId := account.accountId
 
-	newSnapshot, err = insertSnapshotRecord(ctx, bh, snapshotName, snapshotTs, toAccountId, account.accountName)
-	if err != nil {
-		return err
-	}
-	defer func() {
+	if account.accountId != 0 {
+		newSnapshot, err = insertSnapshotRecord(ctx, bh, snapshotName, snapshotTs, toAccountId, account.accountName)
 		if err != nil {
-			deleteSnapshotRecord(ctx, bh, snapshotName, newSnapshot)
+			return err
 		}
-	}()
+		defer func() {
+			if err != nil {
+				deleteSnapshotRecord(ctx, bh, snapshotName, newSnapshot)
+			}
+		}()
+	}
 
 	// pre restore account
 	// drop foreign key related tables first
@@ -1456,7 +1458,9 @@ func restoreAccountUsingClusterSnapshot(ctx context.Context, ses *Session, bh Ba
 		}
 	}
 
-	deleteSnapshotRecord(ctx, bh, snapshotName, newSnapshot)
+	if account.accountId != 0 {
+		deleteSnapshotRecord(ctx, bh, snapshotName, newSnapshot)
+	}
 
 	// checks if the given context has been canceled.
 	if err = CancelCheck(ctx); err != nil {
@@ -1579,4 +1583,29 @@ func deleteSnapshotRecord(ctx context.Context, bh BackgroundExec, spName string,
 		return err
 	}
 	return
+}
+
+func getSnapshotPlanWithSharedBh(ctx context.Context, bh BackgroundExec, snapshotName string) (snapshot *pbplan.Snapshot, err error) {
+	var record *snapshotRecord
+	if record, err = getSnapshotByName(ctx, bh, snapshotName); err != nil {
+		return
+	}
+
+	if record == nil {
+		err = moerr.NewInternalError(ctx, "snapshot %s does not exist", snapshotName)
+		return
+	}
+
+	var accountId uint32
+	if accountId, err = getAccountId(ctx, bh, record.accountName); err != nil {
+		return
+	}
+
+	return &pbplan.Snapshot{
+		TS: &timestamp.Timestamp{PhysicalTime: record.ts},
+		Tenant: &pbplan.SnapshotTenant{
+			TenantName: record.accountName,
+			TenantID:   accountId,
+		},
+	}, nil
 }
