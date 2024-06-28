@@ -20,7 +20,7 @@ import (
 
 type ClosureDeallocator[T any] struct {
 	argument T
-	fn       func(Hints, T)
+	fn       func(Hints, *T)
 }
 
 func (a *ClosureDeallocator[T]) SetArgument(arg T) {
@@ -30,7 +30,7 @@ func (a *ClosureDeallocator[T]) SetArgument(arg T) {
 var _ Deallocator = &ClosureDeallocator[int]{}
 
 func (a *ClosureDeallocator[T]) Deallocate(hints Hints) {
-	a.fn(hints, a.argument)
+	a.fn(hints, &a.argument)
 }
 
 type ClosureDeallocatorPool[T any] struct {
@@ -38,13 +38,13 @@ type ClosureDeallocatorPool[T any] struct {
 }
 
 func NewClosureDeallocatorPool[T any](
-	deallocateFunc func(Hints, T),
+	deallocateFunc func(Hints, *T),
 ) *ClosureDeallocatorPool[T] {
 	ret := new(ClosureDeallocatorPool[T])
 
 	ret.pool.New = func() any {
 		closure := new(ClosureDeallocator[T])
-		closure.fn = func(hints Hints, args T) {
+		closure.fn = func(hints Hints, args *T) {
 			deallocateFunc(hints, args)
 			ret.pool.Put(closure)
 		}

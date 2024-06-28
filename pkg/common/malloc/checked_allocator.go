@@ -28,33 +28,38 @@ type CheckedAllocator struct {
 }
 
 type checkedAllocatorArgs struct {
-	deallocated *atomic.Bool
-	deallocator Deallocator
-	stackID     uint64
-	size        uint64
-	ptr         unsafe.Pointer
+	deallocated  *atomic.Bool
+	deallocator  Deallocator
+	stacktraceID StacktraceID
+	size         uint64
+	ptr          unsafe.Pointer
 }
 
-func NewCheckedAllocator(upstream Allocator, fraction uint32) *CheckedAllocator {
+func NewCheckedAllocator(
+	upstream Allocator,
+	fraction uint32,
+) *CheckedAllocator {
 	return &CheckedAllocator{
 		upstream: upstream,
 		fraction: fraction,
 
 		deallocatorPool: NewClosureDeallocatorPool(
-			func(hints Hints, args checkedAllocatorArgs) {
+			func(hints Hints, args *checkedAllocatorArgs) {
 
-				if !args.deallocated.CompareAndSwap(false, true) {
+				if args.deallocated == nil || !args.deallocated.CompareAndSwap(false, true) {
 					panic(fmt.Sprintf(
 						"double free: address %p, size %v, allocated at %s",
 						args.ptr,
 						args.size,
-						stackInfo(args.stackID),
+						args.stacktraceID,
 					))
 				}
 
 				hints |= DoNotReuse
 				args.deallocator.Deallocate(hints)
 
+				// unref to allow finalizer
+				args.deallocated = nil
 			},
 		),
 	}
@@ -73,7 +78,7 @@ func (c *CheckedAllocator) Allocate(size uint64, hints Hints) ([]byte, Deallocat
 		return ptr, dec, nil
 	}
 
-	stackID := getStacktraceID(0)
+	stacktraceID := GetStacktraceID(0)
 	deallocated := new(atomic.Bool) // this will not be GC until deallocator is called
 	runtime.SetFinalizer(deallocated, func(deallocated *atomic.Bool) {
 		if !deallocated.Load() {
@@ -81,17 +86,17 @@ func (c *CheckedAllocator) Allocate(size uint64, hints Hints) ([]byte, Deallocat
 				"missing free: address %p, size %v, allocated at %s",
 				ptr,
 				size,
-				stackInfo(stackID),
+				stacktraceID,
 			))
 		}
 	})
 
 	dec = c.deallocatorPool.Get(checkedAllocatorArgs{
-		deallocated: deallocated,
-		deallocator: dec,
-		stackID:     stackID,
-		size:        size,
-		ptr:         unsafe.Pointer(unsafe.SliceData(ptr)),
+		deallocated:  deallocated,
+		deallocator:  dec,
+		stacktraceID: stacktraceID,
+		size:         size,
+		ptr:          unsafe.Pointer(unsafe.SliceData(ptr)),
 	})
 
 	return ptr, dec, nil

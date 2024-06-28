@@ -17,11 +17,24 @@ package malloc
 import (
 	"sync"
 	"unsafe"
+
+	"golang.org/x/sys/cpu"
 )
 
 type ManagedAllocator struct {
 	upstream Allocator
-	inUse    [256]sync.Map // ptr -> Deallocator
+	inUse    [256]managedAllocatorShard
+}
+
+type managedAllocatorShard struct {
+	sync.Mutex
+	items []managedAllocatorItem
+	_     cpu.CacheLinePad
+}
+
+type managedAllocatorItem struct {
+	ptr         unsafe.Pointer
+	deallocator Deallocator
 }
 
 func NewManagedAllocator(
@@ -39,17 +52,38 @@ func (m *ManagedAllocator) Allocate(size uint64, hints Hints) ([]byte, error) {
 	}
 	ptr := unsafe.Pointer(unsafe.SliceData(slice))
 	shard := &m.inUse[hashPointer(uintptr(ptr))]
-	shard.Store(ptr, dec)
+	shard.allocate(ptr, dec)
 	return slice, nil
 }
 
 func (m *ManagedAllocator) Deallocate(slice []byte, hints Hints) {
 	ptr := unsafe.Pointer(unsafe.SliceData(slice))
-	v, ok := m.inUse[hashPointer(uintptr(ptr))].LoadAndDelete(ptr)
-	if !ok {
-		panic("bad pointer")
+	shard := &m.inUse[hashPointer(uintptr(ptr))]
+	shard.deallocate(ptr, hints)
+}
+
+func (m *managedAllocatorShard) allocate(ptr unsafe.Pointer, deallocator Deallocator) {
+	m.Lock()
+	defer m.Unlock()
+	m.items = append(m.items, managedAllocatorItem{
+		ptr:         ptr,
+		deallocator: deallocator,
+	})
+}
+
+func (m *managedAllocatorShard) deallocate(ptr unsafe.Pointer, hints Hints) {
+	m.Lock()
+	defer m.Unlock()
+	for i := 0; i < len(m.items); i++ {
+		if m.items[i].ptr == ptr {
+			// found
+			m.items[i].deallocator.Deallocate(hints)
+			m.items[i] = m.items[len(m.items)-1]
+			m.items = m.items[:len(m.items)-1]
+			return
+		}
 	}
-	v.(Deallocator).Deallocate(hints)
+	panic("bad pointer")
 }
 
 func hashPointer(ptr uintptr) uint8 {
