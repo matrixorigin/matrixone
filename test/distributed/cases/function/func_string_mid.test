@@ -76,6 +76,7 @@ select mid('abc', cast(2 as unsigned int));
 #数据类型
 create table t1(f1 varchar(255));
 insert into t1 values ("123"),("456");
+select mid(f1,1,1) from t1 group by mid(f1,1,1);
 select mid(f1,1,1) from t1 group by 1;
 drop table t1;
 

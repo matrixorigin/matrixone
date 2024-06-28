@@ -154,48 +154,48 @@ a
 7
 3
 select * from t3 where a >= some (select b from t2 group by 1);
-SQL syntax error: column "t2.b" must appear in the GROUP BY clause or be used in an aggregate function
+a
+6
+7
+3
 select * from t3 where NULL >= any (select b from t2);
 a
 select * from t3 where NULL >= any (select b from t2 group by 1);
-SQL syntax error: column "t2.b" must appear in the GROUP BY clause or be used in an aggregate function
+a
 select * from t3 where NULL >= some (select b from t2);
 a
 select * from t3 where NULL >= some (select b from t2 group by 1);
-SQL syntax error: column "t2.b" must appear in the GROUP BY clause or be used in an aggregate function
+a
 create view v1 as select * from t3 where a >= some (select b from t2);
 create view v2 as select * from t3 where a >= some (select b from t2 group by 1);
-SQL syntax error: column "t2.b" must appear in the GROUP BY clause or be used in an aggregate function
 create view v3 as select * from t3 where NULL >= any (select b from t2);
 create view v4 as select * from t3 where NULL >= any (select b from t2 group by 1);
-SQL syntax error: column "t2.b" must appear in the GROUP BY clause or be used in an aggregate function
 create view v5 as select * from t3 where NULL >= some (select b from t2);
 create view v6 as select * from t3 where NULL >= some (select b from t2 group by 1);
-SQL syntax error: column "t2.b" must appear in the GROUP BY clause or be used in an aggregate function
 select * from v1;
 a
 6
 7
 3
 select * from v2;
-SQL parser error: table "v2" does not exist
+a
+6
+7
+3
 select * from v3;
 a
 select * from v4;
-SQL parser error: table "v4" does not exist
+a
 select * from v5;
 a
 select * from v6;
-SQL parser error: table "v6" does not exist
+a
 drop view v1;
 drop view v2;
-invalid view 'view-subquery-with-any.v2'
 drop view v3;
 drop view v4;
-invalid view 'view-subquery-with-any.v4'
 drop view v5;
 drop view v6;
-invalid view 'view-subquery-with-any.v6'
 DROP TABLE IF EXISTS t1;
 DROP TABLE IF EXISTS t2;
 DROP TABLE IF EXISTS t3;

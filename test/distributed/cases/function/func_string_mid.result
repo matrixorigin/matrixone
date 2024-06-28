@@ -162,8 +162,14 @@ mid(abc, cast(2 as int unsigned))
 bc
 create table t1(f1 varchar(255));
 insert into t1 values ("123"),("456");
+select mid(f1,1,1) from t1 group by mid(f1,1,1);
+mid(f1, 1, 1)
+1
+4
 select mid(f1,1,1) from t1 group by 1;
-SQL syntax error: column "t1.f1" must appear in the GROUP BY clause or be used in an aggregate function
+mid(f1, 1, 1)
+1
+4
 drop table t1;
 SELECT '1' IN ('1', MID(-9223372036854775809, 1));
 1 in (1, mid(-9223372036854775809, 1))

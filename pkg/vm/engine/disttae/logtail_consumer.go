@@ -343,10 +343,8 @@ func (c *PushClient) subscribeTable(
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	//TODO::remove the lock of subscriber.
-	case b := <-c.subscriber.requestLock:
+	default:
 		err := c.subscriber.sendSubscribe(ctx, tblId)
-		c.subscriber.requestLock <- b
 		if err != nil {
 			return err
 		}
@@ -618,11 +616,14 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 
 // UnsubscribeTable implements the LogtailEngine interface.
 func (c *PushClient) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) error {
-	if !c.receivedLogTailTime.ready.Load() {
-		return moerr.NewInternalError(ctx, "%s cannot unsubscribe table %d-%d as logtail client is not ready", logTag, dbID, tbID)
-	}
 	if c.subscriber == nil {
 		return moerr.NewInternalError(ctx, "%s cannot unsubscribe table %d-%d as subscriber not initialized", logTag, dbID, tbID)
+	}
+	if !c.subscriber.ready.Load() {
+		return moerr.NewInternalError(ctx, "%s cannot unsubscribe table %d-%d as logtail subscriber is not ready", logTag, dbID, tbID)
+	}
+	if !c.receivedLogTailTime.ready.Load() {
+		return moerr.NewInternalError(ctx, "%s cannot unsubscribe table %d-%d as logtail client is not ready", logTag, dbID, tbID)
 	}
 	if ifShouldNotDistribute(dbID, tbID) {
 		return moerr.NewInternalError(ctx, "%s cannot unsubscribe table %d-%d as table ID is not allowed", logTag, dbID, tbID)
@@ -660,7 +661,7 @@ func (c *PushClient) unusedTableGCTicker(ctx context.Context) {
 				return
 
 			case <-ticker.C:
-				if !c.subscriber.ready {
+				if !c.subscriber.ready.Load() {
 					continue
 				}
 				if c.subscriber == nil {
@@ -669,13 +670,10 @@ func (c *PushClient) unusedTableGCTicker(ctx context.Context) {
 			}
 			shouldClean := time.Now().Add(-unsubscribeTimer)
 
-			// lock the subscriber and subscribed map.
-			//TODO::remove the lock of subscriber.
-			b := <-c.subscriber.requestLock
+			// lock the subscribed map.
 			c.subscribed.mutex.Lock()
 			func() {
 				defer func() {
-					c.subscriber.requestLock <- b
 					c.subscribed.mutex.Unlock()
 				}()
 
@@ -775,9 +773,13 @@ func (c *PushClient) toSubIfUnsubscribed(ctx context.Context, dbId, tblId uint64
 	defer c.subscribed.mutex.Unlock()
 	_, ok := c.subscribed.m[SubTableID{DatabaseID: dbId, TableID: tblId}]
 	if !ok {
+		if !c.subscriber.ready.Load() {
+			return Unsubscribed, moerr.NewInternalError(ctx, "log tail subscriber is not ready")
+		}
 		c.subscribed.m[SubTableID{DatabaseID: dbId, TableID: tblId}] = SubTableStatus{
 			SubState: Subscribing,
 		}
+
 		if err := c.subscribeTable(ctx, api.TableID{DbId: dbId, TbId: tblId}); err != nil {
 			//restore the table status.
 			delete(c.subscribed.m, SubTableID{DatabaseID: dbId, TableID: tblId})
@@ -864,6 +866,9 @@ func (c *PushClient) subOrUnsubscribed(ctx context.Context, dbId, tblId uint64) 
 		}
 	}
 	//table is unsubscribed
+	if !c.subscriber.ready.Load() {
+		return true, Unsubscribed, moerr.NewInternalError(ctx, "log tail subscriber is not ready")
+	}
 	c.subscribed.m[SubTableID{DatabaseID: dbId, TableID: tblId}] = SubTableStatus{
 		SubState: Subscribing,
 	}
@@ -887,7 +892,10 @@ func (c *PushClient) unsubscribedOrSubscribing(ctx context.Context, dbId, tblId 
 			return false, v.SubState, nil
 		}
 	}
-
+	//table is unsubscribed
+	if !c.subscriber.ready.Load() {
+		return true, Unsubscribed, moerr.NewInternalError(ctx, "log tail subscriber is not ready")
+	}
 	c.subscribed.m[SubTableID{DatabaseID: dbId, TableID: tblId}] = SubTableStatus{
 		SubState: Subscribing,
 	}
@@ -978,9 +986,8 @@ type logTailSubscriber struct {
 	rpcStream     morpc.Stream
 	logTailClient *service.LogtailClient
 
-	ready bool
+	ready atomic.Bool
 
-	requestLock     chan bool
 	sendSubscribe   func(context.Context, api.TableID) error
 	sendUnSubscribe func(context.Context, api.TableID) error
 }
@@ -1058,24 +1065,19 @@ func (s *logTailSubscriber) init(serviceAddr string) (err error) {
 
 	s.sendSubscribe = s.subscribeTable
 	s.sendUnSubscribe = s.unSubscribeTable
-	if s.requestLock == nil {
-		s.requestLock = make(chan bool, 1)
-		s.ready = false
-	}
+	s.ready.Store(false)
 	return nil
 }
 
 func (s *logTailSubscriber) setReady() {
-	if !s.ready && s.requestLock != nil {
-		s.requestLock <- true
-		s.ready = true
+	if !s.ready.Load() {
+		s.ready.Store(true)
 	}
 }
 
 func (s *logTailSubscriber) setNotReady() {
-	if s.ready && s.requestLock != nil {
-		<-s.requestLock
-		s.ready = false
+	if s.ready.Load() {
+		s.ready.Store(false)
 	}
 }
 

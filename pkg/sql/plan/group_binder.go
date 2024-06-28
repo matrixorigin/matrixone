@@ -15,23 +15,43 @@
 package plan
 
 import (
+	"go/constant"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func NewGroupBinder(builder *QueryBuilder, ctx *BindContext) *GroupBinder {
+func NewGroupBinder(builder *QueryBuilder, ctx *BindContext, selectList tree.SelectExprs) *GroupBinder {
 	b := &GroupBinder{}
 	b.sysCtx = builder.GetContext()
 	b.builder = builder
 	b.ctx = ctx
 	b.impl = b
+	b.selectList = selectList
 
 	return b
 }
 
 func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
+	if isRoot {
+		if numVal, ok := astExpr.(*tree.NumVal); ok {
+			switch numVal.Value.Kind() {
+			case constant.Int:
+				colPos, _ := constant.Int64Val(numVal.Value)
+				if colPos < 1 || int(colPos) > len(b.selectList) {
+					return nil, moerr.NewSyntaxError(b.GetContext(), "GROUP BY position %v is not in select list", colPos)
+				}
+
+				astExpr = b.selectList[colPos-1].Expr
+
+			default:
+				return nil, moerr.NewSyntaxError(b.GetContext(), "non-integer constant in GROUP BY")
+			}
+		}
+	}
+
 	expr, err := b.baseBindExpr(astExpr, depth, isRoot)
 	if err != nil {
 		return nil, err
