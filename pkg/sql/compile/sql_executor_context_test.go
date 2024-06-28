@@ -69,9 +69,9 @@ func Test_panic(t *testing.T) {
 func TestCompilerContext_Database(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	database := mock_frontend.NewMockDatabase(ctrl)
-	database.EXPECT().GetDatabaseId(nil).Return("1")
+	database.EXPECT().GetDatabaseId(gomock.Any()).Return("1")
 	engine := mock_frontend.NewMockEngine(ctrl)
-	engine.EXPECT().Database(nil, "", nil).Return(database, nil).Times(2)
+	engine.EXPECT().Database(gomock.Any(), "", nil).Return(database, nil).Times(2)
 
 	c := &compilerContext{
 		proc:   testutil.NewProcessWithMPool(mpool.MustNewZero()),
