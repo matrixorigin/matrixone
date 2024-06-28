@@ -72,7 +72,7 @@ var (
 
 	getRestoreAccountsFmt = "select account_name, account_id from mo_catalog.mo_account where account_name in (select account_name from mo_catalog.mo_account {MO_TS = %d }) ORDER BY account_id ASC;"
 
-	getDropAccountFmt = "select account_name from mo_catalog.mo_account where account_name not in (select account_name from mo_catalog.mo_account {MO_TS = %d });"
+	//getDropAccountFmt = "select account_name from mo_catalog.mo_account where account_name not in (select account_name from mo_catalog.mo_account {MO_TS = %d });"
 
 	//restoreDropAccountFmt = "insert into mo_catalog.mo_account select * from mo_catalog.mo_account {MO_TS = %d } where account_name not in (select account_name from mo_catalog.mo_account);"
 
@@ -80,7 +80,7 @@ var (
 
 	//restoreAccountFmt = "insert into mo_catalog.mo_account select * from mo_catalog.mo_account {MO_TS = %d } where account_id != '0';"
 
-	dropAccountFmt = "drop account if exists %s;"
+	//dropAccountFmt = "drop account if exists %s;"
 
 	skipDbs = []string{"mysql", "system", "system_metrics", "mo_task", "mo_debug", "information_schema", moCatalog}
 
