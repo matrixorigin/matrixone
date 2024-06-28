@@ -57,6 +57,13 @@ type compileAdditionalInformation struct {
 	queryDone queryDoneWaiter
 }
 
+// kill one query and block until it was completed.
+func (info *compileAdditionalInformation) kill(errResult error) {
+	info.queryCancel()
+	info.queryDone.checkCompleted()
+	info.mustReturnError = errResult
+}
+
 type queryDoneWaiter chan bool
 
 func newQueryDoneWaiter() queryDoneWaiter {
@@ -146,14 +153,7 @@ func (srv *ServiceOfCompile) ResumeService() {
 }
 
 func (srv *ServiceOfCompile) KillAllQueriesWithError(err error) {
-	// cancel all the running compiles.
 	for _, v := range srv.aliveCompiles {
-		v.queryCancel()
-	}
-
-	// waiting for all running ends.
-	for _, v := range srv.aliveCompiles {
-		v.queryDone.checkCompleted()
-		v.mustReturnError = err
+		v.kill(err)
 	}
 }
