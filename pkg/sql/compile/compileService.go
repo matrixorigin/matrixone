@@ -121,8 +121,6 @@ func (srv *ServiceOfCompile) getCompile(
 }
 
 func (srv *ServiceOfCompile) putCompile(c *Compile) (mustReturnError bool, err error) {
-	mustReturnError, err = false, nil
-
 	c.queryStatus.noticeQueryCompleted()
 
 	srv.Lock()
