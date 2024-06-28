@@ -121,6 +121,7 @@ func (c *Conn) Close() error {
 	return nil
 }
 
+// Read reads the complete packet including process the > 16MB packet. return the payload
 func (c *Conn) Read() ([]byte, error) {
 	// Requests > 16MB
 	payloads := make([][]byte, 0)
@@ -187,6 +188,7 @@ func (c *Conn) Read() ([]byte, error) {
 	return finalPayload, nil
 }
 
+// ReadOnePayload allocates memory for a payload and reads it
 func (c *Conn) ReadOnePayload(packetLength int) ([]byte, error) {
 	var buf []byte
 	var err error
@@ -215,6 +217,7 @@ func (c *Conn) ReadOnePayload(packetLength int) ([]byte, error) {
 	return payload, nil
 }
 
+// ReadBytes reads specified bytes from the network
 func (c *Conn) ReadBytes(buf []byte, Length int) error {
 	var err error
 	var n int
@@ -229,6 +232,9 @@ func (c *Conn) ReadBytes(buf []byte, Length int) error {
 	}
 	return err
 }
+
+// ReadFromConn is the base method for receiving from network, calling net.Conn.Read().
+// The maximum read length is len(buf)
 func (c *Conn) ReadFromConn(buf []byte) (int, error) {
 	err := c.conn.SetReadDeadline(time.Now().Add(c.timeout))
 	if err != nil {
@@ -269,6 +275,7 @@ func (c *Conn) Append(elems ...byte) error {
 	return err
 }
 
+// AppendPart is the base method of adding bytes to buffer
 func (c *Conn) AppendPart(elems []byte) error {
 	var buf []byte
 	var err error
@@ -407,6 +414,7 @@ func (c *Conn) Write(payload []byte) error {
 	return nil
 }
 
+// WriteToConn is the base method for write data to network, calling net.Conn.Write().
 func (c *Conn) WriteToConn(buf []byte) error {
 	sendlength := 0
 	for sendlength != len(buf) {
