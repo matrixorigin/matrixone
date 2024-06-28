@@ -50,7 +50,7 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 	c.proc.Ctx, span = trace.Start(c.proc.Ctx, "CreateDatabase")
 	defer span.End()
 	dbName := s.Plan.GetDdl().GetCreateDatabase().GetDatabase()
-	if _, err := c.e.Database(c.proc.Ctx, dbName, c.proc.TxnOperator); err == nil {
+	if _, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator()); err == nil {
 		if s.Plan.GetDdl().GetCreateDatabase().GetIfNotExists() {
 			return nil
 		}
@@ -67,12 +67,12 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 		datType = catalog.SystemDBTypeSubscription
 	}
 	ctx = context.WithValue(ctx, defines.DatTypKey{}, datType)
-	return c.e.Create(ctx, dbName, c.proc.TxnOperator)
+	return c.e.Create(ctx, dbName, c.proc.GetTxnOperator())
 }
 
 func (s *Scope) DropDatabase(c *Compile) error {
 	dbName := s.Plan.GetDdl().GetDropDatabase().GetDatabase()
-	if _, err := c.e.Database(c.proc.Ctx, dbName, c.proc.TxnOperator); err != nil {
+	if _, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator()); err != nil {
 		if s.Plan.GetDdl().GetDropDatabase().GetIfExists() {
 			return nil
 		}
@@ -97,7 +97,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		return err
 	}
 
-	err = c.e.Delete(c.proc.Ctx, dbName, c.proc.TxnOperator)
+	err = c.e.Delete(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		return err
 	}
@@ -125,7 +125,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 }
 
 func (s *Scope) removeFkeysRelationships(c *Compile, dbName string) error {
-	database, err := c.e.Database(c.proc.Ctx, dbName, c.proc.TxnOperator)
+	database, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		return err
 	}
@@ -150,7 +150,7 @@ func (s *Scope) removeFkeysRelationships(c *Compile, dbName string) error {
 				continue
 			}
 
-			_, _, parentTable, err := c.e.GetRelationById(c.proc.Ctx, c.proc.TxnOperator, fkey.ForeignTbl)
+			_, _, parentTable, err := c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), fkey.ForeignTbl)
 			if err != nil {
 				return err
 			}
@@ -164,7 +164,7 @@ func (s *Scope) removeFkeysRelationships(c *Compile, dbName string) error {
 			if childId == 0 {
 				continue
 			}
-			_, _, childTable, err := c.e.GetRelationById(c.proc.Ctx, c.proc.TxnOperator, childId)
+			_, _, childTable, err := c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), childId)
 			if err != nil {
 				return err
 			}
@@ -184,7 +184,7 @@ func (s *Scope) AlterView(c *Compile) error {
 	dbName := c.db
 	tblName := qry.GetTableDef().GetName()
 
-	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.TxnOperator)
+	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		if qry.GetIfExists() {
 			return nil
@@ -267,7 +267,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 
 	tblName := qry.GetTableDef().GetName()
 
-	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.TxnOperator)
+	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		return err
 	}
@@ -285,7 +285,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 		return err
 	}
 
-	if c.proc.TxnOperator.Txn().IsPessimistic() {
+	if c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		var retryErr error
 		// 1. lock origin table metadata in catalog
 		if err = lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
@@ -741,7 +741,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			//fk self refer
 			fkRelation = rel
 		} else {
-			_, _, fkRelation, err = c.e.GetRelationById(c.proc.Ctx, c.proc.TxnOperator, fkTblId)
+			_, _, fkRelation, err = c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), fkTblId)
 			if err != nil {
 				return err
 			}
@@ -763,7 +763,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				return err
 			}
 		} else {
-			_, _, fkRelation, err := c.e.GetRelationById(c.proc.Ctx, c.proc.TxnOperator, fkTblId)
+			_, _, fkRelation, err := c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), fkTblId)
 			if err != nil {
 				return err
 			}
@@ -786,7 +786,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		c.proc.Info(c.proc.Ctx, "createTable",
 			zap.String("databaseName", c.db),
 			zap.String("tableName", qry.GetTableDef().GetName()),
-			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+			zap.String("txnID", c.proc.GetTxnOperator().Txn().DebugString()),
 		)
 	}
 
@@ -807,7 +807,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 	tblName := qry.GetTableDef().GetName()
 
-	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.TxnOperator)
+	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		if dbName == "" {
 			// TODO: debug for #11917
@@ -815,7 +815,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 				c.proc.Info(c.proc.Ctx, "createTable",
 					zap.String("databaseName", c.db),
 					zap.String("tableName", qry.GetTableDef().GetName()),
-					zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+					zap.String("txnID", c.proc.GetTxnOperator().Txn().DebugString()),
 				)
 			}
 			return moerr.NewNoDB(c.proc.Ctx)
@@ -825,7 +825,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 			c.proc.Info(c.proc.Ctx, "createTable no exist",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
-				zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+				zap.String("txnID", c.proc.GetTxnOperator().Txn().DebugString()),
 			)
 		}
 		return err
@@ -837,7 +837,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 				c.proc.Info(c.proc.Ctx, "createTable no exist",
 					zap.String("databaseName", c.db),
 					zap.String("tableName", qry.GetTableDef().GetName()),
-					zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+					zap.String("txnID", c.proc.GetTxnOperator().Txn().DebugString()),
 				)
 			}
 			return nil
@@ -852,7 +852,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 
 	// check in EntireEngine.TempEngine, notice that TempEngine may not init
-	tmpDBSource, err := c.e.Database(c.proc.Ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
+	tmpDBSource, err := c.e.Database(c.proc.Ctx, defines.TEMPORARY_DBNAME, c.proc.GetTxnOperator())
 	if err == nil {
 		if _, err := tmpDBSource.Relation(c.proc.Ctx, engine.GetTempTableName(dbName, tblName), nil); err == nil {
 			if qry.GetIfNotExists() {
@@ -889,7 +889,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		c.proc.Info(c.proc.Ctx, "createTable ok",
 			zap.String("databaseName", c.db),
 			zap.String("tableName", qry.GetTableDef().GetName()),
-			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+			zap.String("txnID", c.proc.GetTxnOperator().Txn().DebugString()),
 		)
 	}
 
@@ -1044,7 +1044,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 				}
 				continue
 			}
-			fkDbSource, err := c.e.Database(c.proc.Ctx, fkDbName, c.proc.TxnOperator)
+			fkDbSource, err := c.e.Database(c.proc.Ctx, fkDbName, c.proc.GetTxnOperator())
 			if err != nil {
 				c.proc.Info(c.proc.Ctx, "createTable",
 					zap.String("databaseName", c.db),
@@ -1139,7 +1139,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 			}
 
 			// add the fk def into the child table
-			childDb, err := c.e.Database(c.proc.Ctx, info.Db, c.proc.TxnOperator)
+			childDb, err := c.e.Database(c.proc.Ctx, info.Db, c.proc.GetTxnOperator())
 			if err != nil {
 				c.proc.Info(c.proc.Ctx, "createTable",
 					zap.String("databaseName", c.db),
@@ -1289,7 +1289,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		c.proc.Ctx,
 		dbSource,
 		qry.GetTableDef(),
-		c.proc.TxnOperator,
+		c.proc.GetTxnOperator(),
 		nil,
 	)
 	if err != nil {
@@ -1303,7 +1303,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 	return shardservice.GetService().Create(
 		c.proc.Ctx,
 		qry.GetTableDef().TblId,
-		c.proc.TxnOperator,
+		c.proc.GetTxnOperator(),
 	)
 }
 
@@ -1329,7 +1329,7 @@ func (s *Scope) CreateView(c *Compile) error {
 	if qry.GetDatabase() != "" {
 		dbName = qry.GetDatabase()
 	}
-	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.TxnOperator)
+	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		if dbName == "" {
 			return moerr.NewNoDB(c.proc.Ctx)
@@ -1364,7 +1364,7 @@ func (s *Scope) CreateView(c *Compile) error {
 	}
 
 	// check in EntireEngine.TempEngine, notice that TempEngine may not init
-	tmpDBSource, err := c.e.Database(c.proc.Ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
+	tmpDBSource, err := c.e.Database(c.proc.Ctx, defines.TEMPORARY_DBNAME, c.proc.GetTxnOperator())
 	if err == nil {
 		if _, err = tmpDBSource.Relation(c.proc.Ctx, engine.GetTempTableName(dbName, viewName), nil); err == nil {
 			if qry.GetIfNotExists() {
@@ -1435,7 +1435,7 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 	}
 
 	// check in EntireEngine.TempEngine
-	tmpDBSource, err := c.e.Database(c.proc.Ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
+	tmpDBSource, err := c.e.Database(c.proc.Ctx, defines.TEMPORARY_DBNAME, c.proc.GetTxnOperator())
 	if err != nil {
 		return err
 	}
@@ -1448,7 +1448,7 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 	}
 
 	// check in EntireEngine.Engine
-	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.TxnOperator)
+	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		return err
 	}
@@ -1485,7 +1485,7 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 		c.proc.Ctx,
 		tmpDBSource,
 		qry.GetTableDef(),
-		c.proc.TxnOperator,
+		c.proc.GetTxnOperator(),
 		func() string {
 			return engine.GetTempTableName(dbName, tblName)
 		})
@@ -1507,7 +1507,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		}
 	}
 
-	d, err := c.e.Database(c.proc.Ctx, qry.Database, c.proc.TxnOperator)
+	d, err := c.e.Database(c.proc.Ctx, qry.Database, c.proc.GetTxnOperator())
 	if err != nil {
 		return err
 	}
@@ -1673,7 +1673,7 @@ func (s *Scope) handleVectorIvfFlatIndex(c *Compile, indexDefs map[string]*plan.
 
 func (s *Scope) DropIndex(c *Compile) error {
 	qry := s.Plan.GetDdl().GetDropIndex()
-	d, err := c.e.Database(c.proc.Ctx, qry.Database, c.proc.TxnOperator)
+	d, err := c.e.Database(c.proc.Ctx, qry.Database, c.proc.GetTxnOperator())
 	if err != nil {
 		return err
 	}
@@ -1908,14 +1908,14 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	keepAutoIncrement := false
 	affectedRows := uint64(0)
 
-	dbSource, err = c.e.Database(c.proc.Ctx, dbName, c.proc.TxnOperator)
+	dbSource, err = c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		return err
 	}
 
 	if rel, err = dbSource.Relation(c.proc.Ctx, tblName, nil); err != nil {
 		var e error // avoid contamination of error messages
-		dbSource, e = c.e.Database(c.proc.Ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
+		dbSource, e = c.e.Database(c.proc.Ctx, defines.TEMPORARY_DBNAME, c.proc.GetTxnOperator())
 		if e != nil {
 			return err
 		}
@@ -1926,7 +1926,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		isTemp = true
 	}
 
-	if !isTemp && c.proc.TxnOperator.Txn().IsPessimistic() {
+	if !isTemp && c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		var err error
 		if e := lockMoTable(c, dbName, tblName, lock.LockMode_Shared); e != nil {
 			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
@@ -1996,7 +1996,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 
 	// update tableDef of foreign key's table with new table id
 	for _, ftblId := range tqry.ForeignTbl {
-		_, _, fkRelation, err := c.e.GetRelationById(c.proc.Ctx, c.proc.TxnOperator, ftblId)
+		_, _, fkRelation, err := c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), ftblId)
 		if err != nil {
 			return err
 		}
@@ -2041,7 +2041,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 			oldId,
 			newId,
 			keepAutoIncrement,
-			c.proc.TxnOperator)
+			c.proc.GetTxnOperator())
 		if err != nil {
 			return err
 		}
@@ -2064,7 +2064,7 @@ func (s *Scope) DropSequence(c *Compile) error {
 	var err error
 
 	tblName := qry.GetTable()
-	dbSource, err = c.e.Database(c.proc.Ctx, dbName, c.proc.TxnOperator)
+	dbSource, err = c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		if qry.GetIfExists() {
 			return nil
@@ -2085,7 +2085,7 @@ func (s *Scope) DropSequence(c *Compile) error {
 	}
 
 	// Delete the stored session value.
-	c.proc.SessionInfo.SeqDeleteKeys = append(c.proc.SessionInfo.SeqDeleteKeys, rel.GetTableID(c.proc.Ctx))
+	c.proc.GetSessionInfo().SeqDeleteKeys = append(c.proc.GetSessionInfo().SeqDeleteKeys, rel.GetTableID(c.proc.Ctx))
 
 	return dbSource.Delete(c.proc.Ctx, tblName)
 }
@@ -2106,7 +2106,7 @@ func (s *Scope) DropTable(c *Compile) error {
 
 	tblId := qry.GetTableId()
 
-	dbSource, err = c.e.Database(c.proc.Ctx, dbName, c.proc.TxnOperator)
+	dbSource, err = c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		if qry.GetIfExists() {
 			return nil
@@ -2116,7 +2116,7 @@ func (s *Scope) DropTable(c *Compile) error {
 
 	if rel, err = dbSource.Relation(c.proc.Ctx, tblName, nil); err != nil {
 		var e error // avoid contamination of error messages
-		dbSource, e = c.e.Database(c.proc.Ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
+		dbSource, e = c.e.Database(c.proc.Ctx, defines.TEMPORARY_DBNAME, c.proc.GetTxnOperator())
 		if dbSource == nil && qry.GetIfExists() {
 			return nil
 		} else if e != nil {
@@ -2133,7 +2133,7 @@ func (s *Scope) DropTable(c *Compile) error {
 		isTemp = true
 	}
 
-	if !isTemp && !isView && !isSource && c.proc.TxnOperator.Txn().IsPessimistic() {
+	if !isTemp && !isView && !isSource && c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		var err error
 		if e := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); e != nil {
 			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
@@ -2170,7 +2170,7 @@ func (s *Scope) DropTable(c *Compile) error {
 			//fk self refer
 			continue
 		}
-		_, _, fkRelation, err := c.e.GetRelationById(c.proc.Ctx, c.proc.TxnOperator, fkTblId)
+		_, _, fkRelation, err := c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), fkTblId)
 		if err != nil {
 			return err
 		}
@@ -2186,7 +2186,7 @@ func (s *Scope) DropTable(c *Compile) error {
 		if childTblId == 0 {
 			continue
 		}
-		_, _, childRelation, err := c.e.GetRelationById(c.proc.Ctx, c.proc.TxnOperator, childTblId)
+		_, _, childRelation, err := c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), childTblId)
 		if err != nil {
 			return err
 		}
@@ -2248,7 +2248,7 @@ func (s *Scope) DropTable(c *Compile) error {
 				err := incrservice.GetAutoIncrementService(c.proc.Ctx).Delete(
 					c.proc.Ctx,
 					rel.GetTableID(c.proc.Ctx),
-					c.proc.TxnOperator)
+					c.proc.GetTxnOperator())
 				if err != nil {
 					return err
 				}
@@ -2257,7 +2257,7 @@ func (s *Scope) DropTable(c *Compile) error {
 			if err := shardservice.GetService().Delete(
 				c.proc.Ctx,
 				rel.GetTableID(c.proc.Ctx),
-				c.proc.TxnOperator,
+				c.proc.GetTxnOperator(),
 			); err != nil {
 				return err
 			}
@@ -2294,7 +2294,7 @@ func (s *Scope) DropTable(c *Compile) error {
 				err := incrservice.GetAutoIncrementService(c.proc.Ctx).Delete(
 					c.proc.Ctx,
 					rel.GetTableID(c.proc.Ctx),
-					c.proc.TxnOperator)
+					c.proc.GetTxnOperator())
 				if err != nil {
 					return err
 				}
@@ -2303,7 +2303,7 @@ func (s *Scope) DropTable(c *Compile) error {
 			if err := shardservice.GetService().Delete(
 				c.proc.Ctx,
 				rel.GetTableID(c.proc.Ctx),
-				c.proc.TxnOperator,
+				c.proc.GetTxnOperator(),
 			); err != nil {
 				return err
 			}
@@ -2437,7 +2437,7 @@ func (s *Scope) CreateSequence(c *Compile) error {
 	}
 	tblName := qry.GetTableDef().GetName()
 
-	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.TxnOperator)
+	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		if dbName == "" {
 			return moerr.NewNoDB(c.proc.Ctx)
@@ -2503,7 +2503,7 @@ func (s *Scope) AlterSequence(c *Compile) error {
 	}
 	tblName := qry.GetTableDef().GetName()
 
-	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.TxnOperator)
+	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		if dbName == "" {
 			return moerr.NewNoDB(c.proc.Ctx)
@@ -2514,7 +2514,7 @@ func (s *Scope) AlterSequence(c *Compile) error {
 	if rel, err := dbSource.Relation(c.proc.Ctx, tblName, nil); err == nil {
 		// sequence table exists
 		// get pre sequence table row values
-		values, err = c.proc.SessionInfo.SqlHelper.ExecSql(fmt.Sprintf("select * from `%s`.`%s`", dbName, tblName))
+		values, err = c.proc.GetSessionInfo().SqlHelper.ExecSql(fmt.Sprintf("select * from `%s`.`%s`", dbName, tblName))
 		if err != nil {
 			return err
 		}
@@ -2524,7 +2524,7 @@ func (s *Scope) AlterSequence(c *Compile) error {
 
 		// get pre curval
 
-		curval = c.proc.SessionInfo.SeqCurValues[rel.GetTableID(c.proc.Ctx)]
+		curval = c.proc.GetSessionInfo().SeqCurValues[rel.GetTableID(c.proc.Ctx)]
 		// dorp the pre sequence
 		err = c.runSql(fmt.Sprintf("drop sequence %s", tblName))
 		if err != nil {
@@ -3152,7 +3152,7 @@ func lockTable(
 		return doLockTable(eng, proc, rel, defChanged)
 	}
 
-	dbSource, err := eng.Database(ctx, dbName, proc.TxnOperator)
+	dbSource, err := eng.Database(ctx, dbName, proc.GetTxnOperator())
 	if err != nil {
 		return err
 	}
@@ -3226,7 +3226,7 @@ func maybeCreateAutoIncrement(
 }
 
 func getRelFromMoCatalog(c *Compile, tblName string) (engine.Relation, error) {
-	dbSource, err := c.e.Database(c.proc.Ctx, catalog.MO_CATALOG, c.proc.TxnOperator)
+	dbSource, err := c.e.Database(c.proc.Ctx, catalog.MO_CATALOG, c.proc.GetTxnOperator())
 	if err != nil {
 		return nil, err
 	}
@@ -3278,12 +3278,12 @@ func lockMoDatabase(c *Compile, dbName string) error {
 	if err != nil {
 		return err
 	}
-	vec, err := getLockVector(c.proc, c.proc.SessionInfo.AccountId, []string{dbName})
+	vec, err := getLockVector(c.proc, c.proc.GetSessionInfo().AccountId, []string{dbName})
 	if err != nil {
 		return err
 	}
 	defer vec.Free(c.proc.Mp())
-	if err := lockRows(c.e, c.proc, dbRel, vec, lock.LockMode_Exclusive, lock.Sharding_ByRow, c.proc.SessionInfo.AccountId); err != nil {
+	if err := lockRows(c.e, c.proc, dbRel, vec, lock.LockMode_Exclusive, lock.Sharding_ByRow, c.proc.GetSessionInfo().AccountId); err != nil {
 		return err
 	}
 	return nil
@@ -3298,13 +3298,13 @@ func lockMoTable(
 	if err != nil {
 		return err
 	}
-	vec, err := getLockVector(c.proc, c.proc.SessionInfo.AccountId, []string{dbName, tblName})
+	vec, err := getLockVector(c.proc, c.proc.GetSessionInfo().AccountId, []string{dbName, tblName})
 	if err != nil {
 		return err
 	}
 	defer vec.Free(c.proc.Mp())
 
-	if err := lockRows(c.e, c.proc, dbRel, vec, lockMode, lock.Sharding_ByRow, c.proc.SessionInfo.AccountId); err != nil {
+	if err := lockRows(c.e, c.proc, dbRel, vec, lockMode, lock.Sharding_ByRow, c.proc.GetSessionInfo().AccountId); err != nil {
 		return err
 	}
 	return nil
