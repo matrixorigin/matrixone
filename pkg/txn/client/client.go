@@ -599,9 +599,9 @@ func (client *txnClient) AbortAllRunningTxn() {
 		// the newer timestamp from logtail consumer.
 		client.timestampWaiter.Pause()
 	}
-	client.mu.Unlock()
-
 	runningPipelines.KillAllQueriesWithError(nil)
+
+	client.mu.Unlock()
 	runningPipelines.ResumeService()
 
 	for _, op := range ops {
