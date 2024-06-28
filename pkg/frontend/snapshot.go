@@ -76,9 +76,9 @@ var (
 
 	//restoreDropAccountFmt = "insert into mo_catalog.mo_account select * from mo_catalog.mo_account {MO_TS = %d } where account_name not in (select account_name from mo_catalog.mo_account);"
 
-	deleteAccountFmt = "delete from mo_catalog.mo_account where account_id != '0';"
+	//deleteAccountFmt = "delete from mo_catalog.mo_account where account_id != '0';"
 
-	restoreAccountFmt = "insert into mo_catalog.mo_account select * from mo_catalog.mo_account {MO_TS = %d } where account_id != '0';"
+	//restoreAccountFmt = "insert into mo_catalog.mo_account select * from mo_catalog.mo_account {MO_TS = %d } where account_id != '0';"
 
 	dropAccountFmt = "drop account if exists %s;"
 
@@ -1382,10 +1382,10 @@ func restoreToCluster(ctx context.Context, ses *Session, bh BackgroundExec, snap
 	getLogger().Info(fmt.Sprintf("[%s] start to restore cluster, restore timestamp: %d", snapshotName, snapshotTs))
 
 	// drop accounts
-	err = getDropAccounts(ctx, bh, snapshotName, snapshotTs)
-	if err != nil {
-		return err
-	}
+	// err = getDropAccounts(ctx, bh, snapshotName, snapshotTs)
+	// if err != nil {
+	// 	return err
+	// }
 
 	// get restore accounts
 	accounts, err := getRestoreAccounts(ctx, bh, snapshotName, snapshotTs)
@@ -1502,57 +1502,57 @@ func getRestoreAccounts(ctx context.Context, bh BackgroundExec, snapshotName str
 	return
 }
 
-func getDropAccounts(ctx context.Context, bh BackgroundExec, snapshotName string, snapshotTs int64) (err error) {
-	getLogger().Info(fmt.Sprintf("[%s] start to get drop accounts", snapshotName))
-	var erArray []ExecResult
+// func getDropAccounts(ctx context.Context, bh BackgroundExec, snapshotName string, snapshotTs int64) (err error) {
+// 	getLogger().Info(fmt.Sprintf("[%s] start to get drop accounts", snapshotName))
+// 	var erArray []ExecResult
 
-	sql := fmt.Sprintf(getDropAccountFmt, snapshotTs)
-	getLogger().Info(fmt.Sprintf("[%s] get drop accounts sql: %s", snapshotName, sql))
-	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		return err
-	}
+// 	sql := fmt.Sprintf(getDropAccountFmt, snapshotTs)
+// 	getLogger().Info(fmt.Sprintf("[%s] get drop accounts sql: %s", snapshotName, sql))
+// 	bh.ClearExecResultSet()
+// 	err = bh.Exec(ctx, sql)
+// 	if err != nil {
+// 		return err
+// 	}
 
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		return err
-	}
+// 	erArray, err = getResultSet(ctx, bh)
+// 	if err != nil {
+// 		return err
+// 	}
 
-	dropAccounts := make([]string, 0)
-	if execResultArrayHasData(erArray) {
-		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-			var account string
-			if account, err = erArray[0].GetString(ctx, i, 0); err != nil {
-				return err
-			}
-			dropAccounts = append(dropAccounts, account)
-		}
-	}
+// 	dropAccounts := make([]string, 0)
+// 	if execResultArrayHasData(erArray) {
+// 		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+// 			var account string
+// 			if account, err = erArray[0].GetString(ctx, i, 0); err != nil {
+// 				return err
+// 			}
+// 			dropAccounts = append(dropAccounts, account)
+// 		}
+// 	}
 
-	for _, account := range dropAccounts {
-		getLogger().Info(fmt.Sprintf("[%s]start to  drop account: %v", snapshotName, account))
-		if err = bh.Exec(ctx, fmt.Sprintf(dropAccountFmt, account)); err != nil {
-			return err
-		}
-	}
+// 	for _, account := range dropAccounts {
+// 		getLogger().Info(fmt.Sprintf("[%s]start to  drop account: %v", snapshotName, account))
+// 		if err = bh.Exec(ctx, fmt.Sprintf(dropAccountFmt, account)); err != nil {
+// 			return err
+// 		}
+// 	}
 
-	// restore droped account
-	// deleteCurAccountSql := deleteAccountFmt
-	// getLogger().Info(fmt.Sprintf("[%s] start to delete account: %v", snapshotName, snapshotTs))
-	// if err = bh.Exec(ctx, deleteCurAccountSql); err != nil {
-	// 	return err
-	// }
+// 	// restore droped account
+// 	deleteCurAccountSql := deleteAccountFmt
+// 	getLogger().Info(fmt.Sprintf("[%s] start to delete account: %v", snapshotName, snapshotTs))
+// 	if err = bh.Exec(ctx, deleteCurAccountSql); err != nil {
+// 		return err
+// 	}
 
-	// // restore mo_accounts
-	// restoreAccountSql := fmt.Sprintf(restoreAccountFmt, snapshotTs)
-	// getLogger().Info(fmt.Sprintf("[%s] start to restore mo_accounts: %v", snapshotName, snapshotTs))
-	// if err = bh.Exec(ctx, restoreAccountSql); err != nil {
-	// 	return err
-	// }
+// 	// restore mo_accounts
+// 	restoreAccountSql := fmt.Sprintf(restoreAccountFmt, snapshotTs)
+// 	getLogger().Info(fmt.Sprintf("[%s] start to restore mo_accounts: %v", snapshotName, snapshotTs))
+// 	if err = bh.Exec(ctx, restoreAccountSql); err != nil {
+// 		return err
+// 	}
 
-	return
-}
+// 	return
+// }
 
 func insertSnapshotRecord(ctx context.Context, bh BackgroundExec, spName string, spTs int64, toAccountId uint64, accountName string) (snapshotName string, err error) {
 	// mock snapshot id and snapshot name
