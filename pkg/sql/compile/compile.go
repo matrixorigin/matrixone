@@ -1033,6 +1033,16 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 	}()
 
 	c.execType = plan2.GetExecType(c.pn.GetQuery())
+
+	c.initAnalyze(qry)
+	// deal with sink scan first.
+	for i := len(qry.Steps) - 1; i >= 0; i-- {
+		err := c.compileSinkScan(qry, qry.Steps[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	n := getEngineNode(c)
 	if c.execType == plan2.ExecTypeTP || c.execType == plan2.ExecTypeAP_ONECN {
 		c.cnList = engine.Nodes{n}
@@ -1048,16 +1058,6 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 
 	if c.isPrepare && c.IsTpQuery() {
 		return nil, cantCompileForPrepareErr
-	}
-
-	c.initAnalyze(qry)
-
-	// deal with sink scan first.
-	for i := len(qry.Steps) - 1; i >= 0; i-- {
-		err := c.compileSinkScan(qry, qry.Steps[i])
-		if err != nil {
-			return nil, err
-		}
 	}
 
 	steps := make([]*Scope, 0, len(qry.Steps))
@@ -1107,6 +1107,11 @@ func (c *Compile) compileSinkScan(qry *plan.Query, nodeId int32) error {
 				}
 			}
 			c.appendStepRegs(s, nodeId, wr)
+		}
+	}
+	if n.TableDef != nil && n.TableDef.CreateInTx {
+		if c.execType == plan2.ExecTypeAP_MULTICN {
+			c.execType = plan2.ExecTypeAP_ONECN
 		}
 	}
 	return nil

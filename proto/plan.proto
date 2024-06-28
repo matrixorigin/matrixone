@@ -456,6 +456,7 @@ message TableDef {
 	bool is_dynamic = 31;
 
 	string db_name = 32;
+	bool create_in_tx = 33;
 }
 
 message TableFunction{
