@@ -22,6 +22,7 @@ type MetricsAllocator struct {
 	upstream        Allocator
 	deallocatorPool *ClosureDeallocatorPool[metricsDeallocatorArgs]
 	allocateCounter prometheus.Counter
+	inuseGauge      prometheus.Gauge
 }
 
 type metricsDeallocatorArgs struct {
@@ -32,14 +33,20 @@ func NewMetricsAllocator(
 	upstream Allocator,
 	allocateCounter prometheus.Counter,
 	deallocateCounter prometheus.Counter,
+	inuseGauge prometheus.Gauge,
 ) *MetricsAllocator {
 	return &MetricsAllocator{
 		upstream:        upstream,
 		allocateCounter: allocateCounter,
+		inuseGauge:      inuseGauge,
+
 		deallocatorPool: NewClosureDeallocatorPool(
 			func(hints Hints, args *metricsDeallocatorArgs) {
 				if deallocateCounter != nil {
 					deallocateCounter.Add(float64(args.size))
+				}
+				if inuseGauge != nil {
+					inuseGauge.Add(-float64(args.size))
 				}
 			},
 		),
@@ -60,6 +67,9 @@ func (m *MetricsAllocator) Allocate(size uint64, hints Hints) ([]byte, Deallocat
 	}
 	if m.allocateCounter != nil {
 		m.allocateCounter.Add(float64(size))
+	}
+	if m.inuseGauge != nil {
+		m.inuseGauge.Add(float64(size))
 	}
 
 	return ptr, ChainDeallocator(
