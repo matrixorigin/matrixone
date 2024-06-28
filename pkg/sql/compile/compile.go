@@ -1035,12 +1035,7 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		v2.TxnStatementCompileQueryHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	c.execType = plan2.GetExecType(c.pn.GetQuery())
-	if c.execType == plan2.ExecTypeAP_MULTICN {
-		if c.proc.GetTxnOperator().GetWorkspace().GetHaveDDL() {
-			c.execType = plan2.ExecTypeAP_ONECN
-		}
-	}
+	c.execType = plan2.GetExecType(c.pn.GetQuery(), c.proc.GetTxnOperator().GetWorkspace().GetHaveDDL())
 
 	n := getEngineNode(c)
 	if c.execType == plan2.ExecTypeTP || c.execType == plan2.ExecTypeAP_ONECN {
