@@ -1117,7 +1117,7 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 			}
 		}
 
-		if cannotFold {
+		if cannotFold || !varAndParamIsConst {
 			return expr, nil
 		}
 

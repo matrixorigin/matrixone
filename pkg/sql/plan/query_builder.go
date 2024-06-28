@@ -1434,21 +1434,13 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.skipStats = builder.canSkipStats()
 		builder.rewriteDistinctToAGG(rootID)
 		builder.rewriteEffectlessAggToProject(rootID)
-		rootID, _ = builder.pushdownFilters(rootID, nil, false)
-		builder.mergeFiltersOnCompositeKey(rootID)
-		err := foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID)
-		if err != nil {
-			return nil, err
-		}
-		builder.optimizeDateFormatExpr(rootID)
-
+		builder.optimizeFilters(rootID)
 		builder.pushdownLimitToTableScan(rootID)
 
 		colRefCnt := make(map[[2]int32]int)
 		builder.countColRefs(rootID, colRefCnt)
 		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, colRefCnt)
 
-		rewriteFilterListByStats(builder.GetContext(), rootID, builder)
 		ReCalcNodeStats(rootID, builder, true, true, true)
 		builder.determineBuildAndProbeSide(rootID, true)
 		determineHashOnPK(rootID, builder)
@@ -1482,7 +1474,6 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 
 		builder.partitionPrune(rootID)
 
-		builder.optimizeLikeExpr(rootID)
 		rootID = builder.applyIndices(rootID, colRefCnt, make(map[[2]int32]*plan.Expr))
 		ReCalcNodeStats(rootID, builder, true, false, true)
 

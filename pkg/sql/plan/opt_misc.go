@@ -874,3 +874,13 @@ func (builder *QueryBuilder) parseOptimizeHints() {
 		handleOptimizerHints(kvs[i], builder)
 	}
 }
+
+func (builder *QueryBuilder) optimizeFilters(rootID int32) int32 {
+	rootID, _ = builder.pushdownFilters(rootID, nil, false)
+	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID)
+	builder.optimizeDateFormatExpr(rootID)
+	builder.optimizeLikeExpr(rootID)
+	builder.mergeFiltersOnCompositeKey(rootID)
+	rewriteFilterListByStats(builder.GetContext(), rootID, builder)
+	return rootID
+}
