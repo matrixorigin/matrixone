@@ -210,7 +210,7 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 			return err
 		}
 		s = appendWriteBackOperator(c, s)
-		s.SetContextRecursively(c.ctx)
+		s.SetContextRecursively(c.proc.Ctx)
 
 		err = s.ParallelRun(c)
 		if err == nil {
@@ -273,7 +273,7 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 			arg.Children = oldChild
 		}()
 	default:
-		return moerr.NewInvalidInput(c.ctx, "last operator should only be connector or dispatcher")
+		return moerr.NewInvalidInput(c.proc.Ctx, "last operator should only be connector or dispatcher")
 	}
 
 	// can not reuse
@@ -315,7 +315,7 @@ func (s *Scope) remoteRun(c *Compile) (err error) {
 	defer func() {
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(s.Proc.Ctx, e)
-			c.proc.Error(c.ctx, "panic in scope remoteRun",
+			c.proc.Error(c.proc.Ctx, "panic in scope remoteRun",
 				zap.String("sql", c.sql),
 				zap.String("error", err.Error()))
 		}
@@ -331,7 +331,7 @@ func (s *Scope) remoteRun(c *Compile) (err error) {
 			return err
 		}
 	} else {
-		return moerr.NewInvalidInput(c.ctx, "last operator should only be connector or dispatcher")
+		return moerr.NewInvalidInput(c.proc.Ctx, "last operator should only be connector or dispatcher")
 	}
 
 	for _, ins := range s.Instructions[lastIdx+1:] {
