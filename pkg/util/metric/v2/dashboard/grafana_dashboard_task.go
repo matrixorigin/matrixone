@@ -65,7 +65,7 @@ func (c *DashboardCreator) initTaskMergeTransferPageRow() dashboard.Option {
 				c.by,
 				c.getMetricWithFilter(`mo_task_transfer_page_row_sum`, ""),
 			)},
-			[]string{""},
+			[]string{"count"},
 			timeseries.Span(3),
 		),
 		c.getTimeSeries(
@@ -75,7 +75,7 @@ func (c *DashboardCreator) initTaskMergeTransferPageRow() dashboard.Option {
 				c.by,
 				c.getMetricWithFilter(`mo_task_transfer_page_hit_count_sum`, `type="total"`),
 			)},
-			[]string{""},
+			[]string{"count"},
 			timeseries.Span(3),
 		),
 		c.getTimeSeries(
@@ -85,7 +85,7 @@ func (c *DashboardCreator) initTaskMergeTransferPageRow() dashboard.Option {
 				c.by,
 				c.getMetricWithFilter(`mo_task_transfer_page_in_channel_sum`, ""),
 			)},
-			[]string{""},
+			[]string{"count"},
 			timeseries.Span(3),
 		),
 		c.getPercentHist(
