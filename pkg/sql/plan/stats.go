@@ -1002,8 +1002,10 @@ func foldTableScanFilters(proc *process.Process, qry *Query, nodeId int32, foldI
 	node := qry.Nodes[nodeId]
 	if node.NodeType == plan.Node_TABLE_SCAN && len(node.FilterList) > 0 {
 		for i, e := range node.FilterList {
-			foldedExpr, _ := ConstantFold(batch.EmptyForConstFoldBatch, e, proc, false, foldInExpr)
-			node.FilterList[i] = foldedExpr
+			foldedExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, e, proc, false, foldInExpr)
+			if err == nil && foldedExpr != nil {
+				node.FilterList[i] = foldedExpr
+			}
 		}
 	}
 	for _, childId := range node.Children {
