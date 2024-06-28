@@ -60,7 +60,7 @@ func NewFixedSizeMmapAllocator(
 		buffer2: make(chan unsafe.Pointer, buffer2Cap),
 
 		deallocatorPool: NewClosureDeallocatorPool(
-			func(hints Hints, args fixedSizeMmapDeallocatorArgs) {
+			func(hints Hints, args *fixedSizeMmapDeallocatorArgs) {
 
 				if hints&DoNotReuse > 0 {
 					if err := unix.Munmap(

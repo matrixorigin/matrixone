@@ -89,7 +89,7 @@ func NewProfileAllocator(
 		fraction: fraction,
 
 		deallocatorPool: NewClosureDeallocatorPool(
-			func(hints Hints, args profileDeallocateArgs) {
+			func(hints Hints, args *profileDeallocateArgs) {
 				args.values.InuseBytes.Add(int64(-args.size))
 				args.values.InuseObjects.Add(-1)
 			},

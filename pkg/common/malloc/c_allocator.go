@@ -32,7 +32,7 @@ type cDeallocatorArgs struct {
 func NewCAllocator() *CAllocator {
 	return &CAllocator{
 		deallocatorPool: NewClosureDeallocatorPool(
-			func(hints Hints, args cDeallocatorArgs) {
+			func(hints Hints, args *cDeallocatorArgs) {
 				C.free(args.ptr)
 			},
 		),
