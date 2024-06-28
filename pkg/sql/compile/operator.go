@@ -41,7 +41,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
@@ -421,7 +420,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.Offset = t.Offset
 		arg.Configs = t.Configs
 		res.Arg = arg
-	case vm.Connector:
+		/* 	case vm.Connector:
 		ok := false
 		if regMap != nil {
 			arg := connector.NewArgument()
@@ -430,7 +429,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 				panic("nonexistent wait register")
 			}
 			res.Arg = arg
-		}
+		} */
 	case vm.Shuffle:
 		sourceArg := sourceIns.Arg.(*shuffle.Argument)
 		arg := shuffle.NewArgument()
@@ -443,7 +442,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.ShuffleRangeUint64 = sourceArg.ShuffleRangeUint64
 		arg.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(sourceArg.RuntimeFilterSpec)
 		res.Arg = arg
-	case vm.Dispatch:
+		/* 	case vm.Dispatch:
 		ok := false
 		if regMap != nil {
 			sourceArg := sourceIns.Arg.(*dispatch.Argument)
@@ -463,7 +462,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 				arg.RemoteRegs[j] = sourceArg.RemoteRegs[j]
 			}
 			res.Arg = arg
-		}
+		} */
 	case vm.Insert:
 		t := sourceIns.Arg.(*insert.Argument)
 		arg := insert.NewArgument()
