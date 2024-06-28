@@ -1009,7 +1009,6 @@ func foldTableScanFilters(proc *process.Process, qry *Query, nodeId int32, foldI
 	for _, childId := range node.Children {
 		foldTableScanFilters(proc, qry, childId, foldInExpr)
 	}
-	return
 }
 
 func recalcStatsByRuntimeFilter(scanNode *plan.Node, joinNode *plan.Node, builder *QueryBuilder) {

@@ -1117,7 +1117,7 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 			}
 		}
 
-		if cannotFold {
+		if cannotFold || !foldInExpr {
 			return expr, nil
 		}
 
@@ -1162,7 +1162,7 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 	}
 	isVec := false
 	for i := range fn.Args {
-		foldExpr, errFold := ConstantFold(bat, fn.Args[i], proc, varAndParamIsConst, true)
+		foldExpr, errFold := ConstantFold(bat, fn.Args[i], proc, varAndParamIsConst, foldInExpr)
 		if errFold != nil {
 			return nil, errFold
 		}
