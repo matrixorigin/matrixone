@@ -22,7 +22,7 @@ import (
 )
 
 type Config struct {
-	// !! REMEMBER TO CHANGE SetDefaultConfig WHEN ADDING FIELDS
+	// !! REMEMBER TO CHANGE patchConfig WHEN ADDING FIELDS
 
 	// Allocator controls which allocator to use
 	Allocator *string `toml:"allocator"`
@@ -52,12 +52,7 @@ var defaultConfig = func() *atomic.Pointer[Config] {
 	return ret
 }()
 
-func SetDefaultConfig(delta Config) {
-
-	// read
-	config := *defaultConfig.Load()
-
-	// set
+func patchConfig(config Config, delta Config) Config {
 	if delta.CheckFraction != nil {
 		config.CheckFraction = delta.CheckFraction
 	}
@@ -70,8 +65,12 @@ func SetDefaultConfig(delta Config) {
 	if delta.Allocator != nil {
 		config.Allocator = delta.Allocator
 	}
+	return config
+}
 
-	// update
+func SetDefaultConfig(delta Config) {
+	config := *defaultConfig.Load()
+	config = patchConfig(config, delta)
 	defaultConfig.Store(&config)
 	logutil.Info("malloc: set default config", zap.Any("config", delta))
 }
