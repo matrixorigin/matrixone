@@ -1405,10 +1405,9 @@ func restoreToCluster(ctx context.Context, ses *Session, bh BackgroundExec, snap
 }
 
 func restoreAccountUsingClusterSnapshot(ctx context.Context, ses *Session, bh BackgroundExec, snapshotName string, snapshotTs int64, account accountRecord) (err error) {
-	newSnapshot := snapshotName
 	toAccountId := account.accountId
 
-	newSnapshot, err = insertSnapshotRecord(ctx, bh, snapshotName, snapshotTs, toAccountId, account.accountName)
+	newSnapshot, err := insertSnapshotRecord(ctx, bh, snapshotName, snapshotTs, toAccountId, account.accountName)
 	if err != nil {
 		return err
 	}
