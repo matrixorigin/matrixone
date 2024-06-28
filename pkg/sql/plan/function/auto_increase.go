@@ -43,7 +43,7 @@ func builtInInternalAutoIncrement(parameters []*vector.Vector, result vector.Fun
 		dbName := functionUtil.QuickBytesToStr(s1)
 		tableName := functionUtil.QuickBytesToStr(s2)
 
-		database, err := eng.Database(proc.Ctx, dbName, proc.TxnOperator)
+		database, err := eng.Database(proc.Ctx, dbName, proc.GetTxnOperator())
 		if err != nil {
 			return moerr.NewInvalidInput(proc.Ctx, "Database '%s' does not exist", dbName)
 		}

@@ -292,11 +292,11 @@ func (exec *txnExecutor) Exec(
 		exec.s.us,
 		exec.s.aicm,
 	)
-	proc.WaitPolicy = statementOption.WaitPolicy()
+	proc.Base.WaitPolicy = statementOption.WaitPolicy()
 	proc.SetVectorPoolSize(0)
-	proc.SessionInfo.TimeZone = exec.opts.GetTimeZone()
-	proc.SessionInfo.Buf = exec.s.buf
-	proc.SessionInfo.StorageEngine = exec.s.eng
+	proc.Base.SessionInfo.TimeZone = exec.opts.GetTimeZone()
+	proc.Base.SessionInfo.Buf = exec.s.buf
+	proc.Base.SessionInfo.StorageEngine = exec.s.eng
 	defer func() {
 		proc.CleanValueScanBatchs()
 		proc.FreeVectors()
@@ -388,8 +388,8 @@ func (exec *txnExecutor) LockTable(table string) error {
 		exec.s.aicm,
 	)
 	proc.SetVectorPoolSize(0)
-	proc.SessionInfo.TimeZone = exec.opts.GetTimeZone()
-	proc.SessionInfo.Buf = exec.s.buf
+	proc.Base.SessionInfo.TimeZone = exec.opts.GetTimeZone()
+	proc.Base.SessionInfo.Buf = exec.s.buf
 	defer func() {
 		proc.CleanValueScanBatchs()
 		proc.FreeVectors()
