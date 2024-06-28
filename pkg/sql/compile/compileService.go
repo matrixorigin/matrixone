@@ -113,6 +113,7 @@ func (srv *ServiceOfCompile) getCompile(
 	srv.aliveCompiles[runningCompile] = compileAdditionalInformation{
 		mustReturnError: nil,
 		queryCancel:     proc.Cancel,
+		queryDone:       runningCompile.queryStatus,
 	}
 	srv.Unlock()
 
@@ -136,6 +137,13 @@ func (srv *ServiceOfCompile) putCompile(c *Compile) (mustReturnError bool, err e
 	reuse.Free[Compile](c, nil)
 
 	return err != nil, err
+}
+
+func (srv *ServiceOfCompile) aliveCompile() int {
+	srv.Lock()
+	defer srv.Unlock()
+
+	return len(srv.aliveCompiles)
 }
 
 func (srv *ServiceOfCompile) PauseService() {
