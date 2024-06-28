@@ -389,7 +389,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		return moerr.NewInternalError(ctx, "can't restore db: %v", dbName)
 	}
 
-	if snapshot.level == tree.RESTORELEVELCLUSTER.String() && len(srcAccountName) != 0 && srcAccountName != sysAccountName {
+	if snapshot.level == tree.RESTORELEVELCLUSTER.String() && len(srcAccountName) != 0 {
 		toAccountId, err = getAccountId(ctx, bh, srcAccountName)
 		if err != nil {
 			return err
@@ -473,7 +473,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		return
 	}
 
-	if snapshot.level == tree.RESTORELEVELCLUSTER.String() && len(srcAccountName) != 0 && srcAccountName != sysAccountName {
+	if snapshot.level == tree.RESTORELEVELCLUSTER.String() && len(srcAccountName) != 0 {
 		deleteSnapshotRecord(ctx, bh, snapshot.snapshotName, snapshotName)
 	}
 
@@ -1408,17 +1408,15 @@ func restoreAccountUsingClusterSnapshot(ctx context.Context, ses *Session, bh Ba
 	newSnapshot := snapshotName
 	toAccountId := account.accountId
 
-	if account.accountId != 0 {
-		newSnapshot, err = insertSnapshotRecord(ctx, bh, snapshotName, snapshotTs, toAccountId, account.accountName)
-		if err != nil {
-			return err
-		}
-		defer func() {
-			if err != nil {
-				deleteSnapshotRecord(ctx, bh, snapshotName, newSnapshot)
-			}
-		}()
+	newSnapshot, err = insertSnapshotRecord(ctx, bh, snapshotName, snapshotTs, toAccountId, account.accountName)
+	if err != nil {
+		return err
 	}
+	defer func() {
+		if err != nil {
+			deleteSnapshotRecord(ctx, bh, snapshotName, newSnapshot)
+		}
+	}()
 
 	// pre restore account
 	// drop foreign key related tables first
@@ -1458,9 +1456,7 @@ func restoreAccountUsingClusterSnapshot(ctx context.Context, ses *Session, bh Ba
 		}
 	}
 
-	if account.accountId != 0 {
-		deleteSnapshotRecord(ctx, bh, snapshotName, newSnapshot)
-	}
+	deleteSnapshotRecord(ctx, bh, snapshotName, newSnapshot)
 
 	// checks if the given context has been canceled.
 	if err = CancelCheck(ctx); err != nil {
