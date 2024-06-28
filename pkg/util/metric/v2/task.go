@@ -41,6 +41,13 @@ var (
 	TaskShowAccountsGetUsageDurationHistogram      = taskShortDurationHistogram.WithLabelValues("show_accounts_get_storage_usage")
 	TaskShowAccountsTotalDurationHistogram         = taskShortDurationHistogram.WithLabelValues("show_accounts_total_duration")
 
+	TransferPageFlushLatencyHistogram = taskShortDurationHistogram.WithLabelValues("transfer_page_flush_latency")
+	TransferPageMergeLatencyHistogram = taskShortDurationHistogram.WithLabelValues("transfer_page_merge_latency")
+
+	TransferMemLatencyHistogram            = taskShortDurationHistogram.WithLabelValues("transfer_mem_latency")
+	TransferDiskLatencyHistogram           = taskShortDurationHistogram.WithLabelValues("transfer_disk_latency")
+	TransferPageSinceBornDurationHistogram = taskShortDurationHistogram.WithLabelValues("transfer_page_since_born_duration")
+
 	taskLongDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "mo",
@@ -154,43 +161,10 @@ var (
 )
 
 var (
-	transferLatencyHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Namespace: "mo",
-		Subsystem: "task",
-		Name:      "transfer_latency",
-		Help:      "The total latency of transfer in seconds.",
-	}, []string{"type"})
-
-	TransferMemLatencyHistogram  = transferLatencyHistogram.WithLabelValues("memory")
-	TransferDiskLatencyHistogram = transferLatencyHistogram.WithLabelValues("disk")
-)
-
-var (
 	TransferPagesInChannelHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Namespace: "mo",
 		Subsystem: "task",
 		Name:      "transfer_page_in_channel",
 		Help:      "The number of page in channel.",
-	})
-)
-
-var (
-	transferPageWriteLatencyHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Namespace: "mo",
-		Subsystem: "task",
-		Name:      "transfer_page_write_latency",
-		Help:      "The total latency of transfer write in seconds.",
-	}, []string{"type"})
-
-	TransferPageFlushLatencyHistogram = transferPageWriteLatencyHistogram.WithLabelValues("flush")
-	TransferPageMergeLatencyHistogram = transferPageWriteLatencyHistogram.WithLabelValues("merge")
-)
-
-var (
-	TransferPageSinceBornDurationHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
-		Namespace: "mo",
-		Subsystem: "task",
-		Name:      "transfer_duration_since_born",
-		Help:      "The duration of transfer.",
 	})
 )
