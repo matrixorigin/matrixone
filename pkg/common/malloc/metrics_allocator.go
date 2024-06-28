@@ -15,24 +15,32 @@
 package malloc
 
 import (
-	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 type MetricsAllocator struct {
 	upstream        Allocator
 	deallocatorPool *ClosureDeallocatorPool[metricsDeallocatorArgs]
+	allocateCounter prometheus.Counter
 }
 
 type metricsDeallocatorArgs struct {
 	size uint64
 }
 
-func NewMetricsAllocator(upstream Allocator) *MetricsAllocator {
+func NewMetricsAllocator(
+	upstream Allocator,
+	allocateCounter prometheus.Counter,
+	deallocateCounter prometheus.Counter,
+) *MetricsAllocator {
 	return &MetricsAllocator{
-		upstream: upstream,
+		upstream:        upstream,
+		allocateCounter: allocateCounter,
 		deallocatorPool: NewClosureDeallocatorPool(
 			func(hints Hints, args *metricsDeallocatorArgs) {
-				metric.MallocCounterFreeBytes.Add(float64(args.size))
+				if deallocateCounter != nil {
+					deallocateCounter.Add(float64(args.size))
+				}
 			},
 		),
 	}
@@ -50,7 +58,9 @@ func (m *MetricsAllocator) Allocate(size uint64, hints Hints) ([]byte, Deallocat
 	if err != nil {
 		return nil, nil, err
 	}
-	metric.MallocCounterAllocateBytes.Add(float64(size))
+	if m.allocateCounter != nil {
+		m.allocateCounter.Add(float64(size))
+	}
 
 	return ptr, ChainDeallocator(
 		dec,

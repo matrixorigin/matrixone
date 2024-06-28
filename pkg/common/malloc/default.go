@@ -20,6 +20,8 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 var defaultAllocator Allocator
@@ -79,7 +81,11 @@ func newDefault(delta *Config) (allocator Allocator) {
 		// c allocator
 		allocator = NewCAllocator()
 		if config.EnableMetrics != nil && *config.EnableMetrics {
-			allocator = NewMetricsAllocator(allocator)
+			allocator = NewMetricsAllocator(
+				allocator,
+				metric.MallocCounterAllocateBytes,
+				metric.MallocCounterFreeBytes,
+			)
 		}
 		return allocator
 
@@ -91,7 +97,11 @@ func newDefault(delta *Config) (allocator Allocator) {
 				var ret Allocator
 				ret = NewClassAllocator(NewFixedSizeSyncPoolAllocator)
 				if config.EnableMetrics != nil && *config.EnableMetrics {
-					ret = NewMetricsAllocator(ret)
+					ret = NewMetricsAllocator(
+						ret,
+						metric.MallocCounterAllocateBytes,
+						metric.MallocCounterFreeBytes,
+					)
 				}
 				return ret
 			},
@@ -105,7 +115,11 @@ func newDefault(delta *Config) (allocator Allocator) {
 				var ret Allocator
 				ret = NewClassAllocator(NewFixedSizeMmapAllocator)
 				if config.EnableMetrics != nil && *config.EnableMetrics {
-					ret = NewMetricsAllocator(ret)
+					ret = NewMetricsAllocator(
+						ret,
+						metric.MallocCounterAllocateBytes,
+						metric.MallocCounterFreeBytes,
+					)
 				}
 				return ret
 			},
