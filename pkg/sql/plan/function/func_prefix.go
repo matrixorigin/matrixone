@@ -123,7 +123,7 @@ func (op *implPrefixIn) init(rvec *vector.Vector) {
 	op.vals = op.vals[:vlen]
 }
 
-func (op *implPrefixIn) doPrefixIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func (op *implPrefixIn) doPrefixIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	if !op.ready {
 		op.init(parameters[1])
 	}
