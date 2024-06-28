@@ -42,10 +42,7 @@ type ReceiveInfo struct {
 	Uuid     uuid.UUID
 }
 
-// Server used to support cn2s3 directly, for more info, refer to docs about it
 type Server struct {
-	sync.Mutex
-
 	hakeeper      logservice.CNHAKeeperClient
 	uuidCsChanMap UuidProcMap
 	//txn's local segments.
