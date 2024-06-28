@@ -74,7 +74,11 @@ var (
 
 	getDropAccountFmt = "select account_name from mo_catalog.mo_account where account_name not in (select account_name from mo_catalog.mo_account {MO_TS = %d });"
 
-	restoreDropAccountFmt = "insert into mo_catalog.mo_account select * from mo_catalog.mo_account {MO_TS = %d } where account_name not in (select account_name from mo_catalog.mo_account);"
+	//restoreDropAccountFmt = "insert into mo_catalog.mo_account select * from mo_catalog.mo_account {MO_TS = %d } where account_name not in (select account_name from mo_catalog.mo_account);"
+
+	deleteAccountFmt = "delete from mo_catalog.mo_account where account_id != '0';"
+
+	restoreAccountFmt = "insert into mo_catalog.mo_account select * from mo_catalog.mo_account {MO_TS = %d } where account_id != '0';"
 
 	dropAccountFmt = "drop account if exists %s;"
 
@@ -1534,11 +1538,18 @@ func getDropAccounts(ctx context.Context, bh BackgroundExec, snapshotName string
 	}
 
 	// restore droped account
-	restoreDropAccountSql := fmt.Sprintf(restoreDropAccountFmt, snapshotTs)
-	getLogger().Info(fmt.Sprintf("[%s] start to restore droped account: %v", snapshotName, restoreDropAccountSql))
-	if err = bh.Exec(ctx, restoreDropAccountSql); err != nil {
-		return err
-	}
+	// deleteCurAccountSql := deleteAccountFmt
+	// getLogger().Info(fmt.Sprintf("[%s] start to delete account: %v", snapshotName, snapshotTs))
+	// if err = bh.Exec(ctx, deleteCurAccountSql); err != nil {
+	// 	return err
+	// }
+
+	// // restore mo_accounts
+	// restoreAccountSql := fmt.Sprintf(restoreAccountFmt, snapshotTs)
+	// getLogger().Info(fmt.Sprintf("[%s] start to restore mo_accounts: %v", snapshotName, snapshotTs))
+	// if err = bh.Exec(ctx, restoreAccountSql); err != nil {
+	// 	return err
+	// }
 
 	return
 }
