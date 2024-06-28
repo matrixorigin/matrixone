@@ -1440,8 +1440,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		colRefCnt := make(map[[2]int32]int)
 		builder.countColRefs(rootID, colRefCnt)
 		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, colRefCnt)
-
-		ReCalcNodeStats(rootID, builder, true, true, true)
+		ReCalcNodeStats(rootID, builder, true, false, true)
 		builder.determineBuildAndProbeSide(rootID, true)
 		determineHashOnPK(rootID, builder)
 		tagCnt := make(map[int32]int)
