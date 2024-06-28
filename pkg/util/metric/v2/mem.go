@@ -78,6 +78,12 @@ var (
 		},
 		[]string{"type"},
 	)
-	MallocCounterAllocateBytes = mallocCounter.WithLabelValues("allocate")
-	MallocCounterFreeBytes     = mallocCounter.WithLabelValues("free")
+	MallocCounterAllocateBytes            = mallocCounter.WithLabelValues("allocate")
+	MallocCounterFreeBytes                = mallocCounter.WithLabelValues("free")
+	MallocCounterMemoryCacheAllocateBytes = mallocCounter.WithLabelValues("memory-cache-allocate")
+	MallocCounterMemoryCacheFreeBytes     = mallocCounter.WithLabelValues("memory-cache-free")
+	MallocCounterIOAllocateBytes          = mallocCounter.WithLabelValues("io-allocate")
+	MallocCounterIOFreeBytes              = mallocCounter.WithLabelValues("io-free")
+	MallocCounterBytesAllocateBytes       = mallocCounter.WithLabelValues("bytes-allocate")
+	MallocCounterBytesFreeBytes           = mallocCounter.WithLabelValues("bytes-free")
 )
