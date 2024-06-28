@@ -719,7 +719,7 @@ func (d *DefaultPkgReader) Get(ctx context.Context, path string) (io.ReadCloser,
 	errGroup = new(errgroup.Group)
 	errGroup.Go(func() error {
 		defer writer.Close()
-		return d.Proc.FileService.Read(ctx, ioVector)
+		return d.Proc.GetFileService().Read(ctx, ioVector)
 	})
 
 	return reader, nil
