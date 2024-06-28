@@ -38,7 +38,7 @@ func newTrackInfo() *trackInfo {
 	}
 }
 
-func (t *LeaksTracker) allocate(id uint64) {
+func (t *LeaksTracker) allocate(id StacktraceID) {
 	v, ok := t.infos.Load(id)
 	if ok {
 		info := v.(*trackInfo)
@@ -50,7 +50,7 @@ func (t *LeaksTracker) allocate(id uint64) {
 	v.(*trackInfo).allocate.Add(1)
 }
 
-func (t *LeaksTracker) deallocate(id uint64) {
+func (t *LeaksTracker) deallocate(id StacktraceID) {
 	v, ok := t.infos.Load(id)
 	if ok {
 		info := v.(*trackInfo)
@@ -64,16 +64,16 @@ func (t *LeaksTracker) deallocate(id uint64) {
 
 func (t *LeaksTracker) ReportLeaks(w io.Writer) (leaks bool) {
 	t.infos.Range(func(k, v any) bool {
-		stacktraceID := k.(uint64)
+		stacktraceID := k.(StacktraceID)
 		info := v.(*trackInfo)
 
 		allocate := info.allocate.Load()
 		deallocate := info.deallocate.Load()
 		if allocate > deallocate {
-			fmt.Fprintf(w, "missing free: %s\n", stackInfo(stacktraceID))
+			fmt.Fprintf(w, "missing free: %s\n", stacktraceID)
 			leaks = true
 		} else if deallocate > allocate {
-			fmt.Fprintf(w, "excessive free: %s\n", stackInfo(stacktraceID))
+			fmt.Fprintf(w, "excessive free: %s\n", stacktraceID)
 			leaks = true
 		}
 
