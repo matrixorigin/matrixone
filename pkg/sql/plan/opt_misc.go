@@ -613,7 +613,7 @@ func makeBetweenExprFromDateFormat(equalFunc *plan.Function, dateformatFunc *pla
 	if err != nil {
 		return nil
 	}
-	begin, err = ConstantFold(batch.EmptyForConstFoldBatch, begin, builder.compCtx.GetProcess(), false)
+	begin, err = ConstantFold(batch.EmptyForConstFoldBatch, begin, builder.compCtx.GetProcess(), false, true)
 	if err != nil {
 		return nil
 	}
@@ -877,10 +877,11 @@ func (builder *QueryBuilder) parseOptimizeHints() {
 
 func (builder *QueryBuilder) optimizeFilters(rootID int32) int32 {
 	rootID, _ = builder.pushdownFilters(rootID, nil, false)
-	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID)
+	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID, false)
+	builder.mergeFiltersOnCompositeKey(rootID)
+	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID, true)
 	builder.optimizeDateFormatExpr(rootID)
 	builder.optimizeLikeExpr(rootID)
-	builder.mergeFiltersOnCompositeKey(rootID)
 	rewriteFilterListByStats(builder.GetContext(), rootID, builder)
 	return rootID
 }

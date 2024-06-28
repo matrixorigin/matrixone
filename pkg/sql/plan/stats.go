@@ -901,7 +901,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		limitExpr := DeepCopyExpr(node.Limit)
 		if _, ok := limitExpr.Expr.(*plan.Expr_F); ok {
 			if !hasParam(limitExpr) {
-				limitExpr, _ = ConstantFold(batch.EmptyForConstFoldBatch, limitExpr, builder.compCtx.GetProcess(), true)
+				limitExpr, _ = ConstantFold(batch.EmptyForConstFoldBatch, limitExpr, builder.compCtx.GetProcess(), true, true)
 			}
 		}
 		if cExpr, ok := limitExpr.Expr.(*plan.Expr_Lit); ok {
@@ -998,16 +998,16 @@ func getCost(start *Expr, end *Expr, step *Expr) (float64, bool) {
 	return ret, true
 }
 
-func foldTableScanFilters(proc *process.Process, qry *Query, nodeId int32) {
+func foldTableScanFilters(proc *process.Process, qry *Query, nodeId int32, foldInExpr bool) {
 	node := qry.Nodes[nodeId]
 	if node.NodeType == plan.Node_TABLE_SCAN && len(node.FilterList) > 0 {
 		for i, e := range node.FilterList {
-			foldedExpr, _ := ConstantFold(batch.EmptyForConstFoldBatch, e, proc, false)
+			foldedExpr, _ := ConstantFold(batch.EmptyForConstFoldBatch, e, proc, false, foldInExpr)
 			node.FilterList[i] = foldedExpr
 		}
 	}
 	for _, childId := range node.Children {
-		foldTableScanFilters(proc, qry, childId)
+		foldTableScanFilters(proc, qry, childId, foldInExpr)
 	}
 	return
 }
