@@ -16,11 +16,8 @@ package function
 
 import (
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/md5"
 	"crypto/sha1"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -1058,25 +1055,124 @@ func octFloat[T constraints.Float](xs T) (types.Decimal128, error) {
 	return res, nil
 }
 
+// data structs for encoding and decoding
+type randStruct struct {
+	seed1       uint32
+	seed2       uint32
+	maxValue    uint32
+	maxValueDbl float64
+}
+
+type sqlCrypt struct {
+	rand    randStruct
+	orgRand randStruct
+
+	decodeBuff [256]byte
+	encodeBuff [256]byte
+	shift      uint32
+}
+
+// helper funcs for encoding and decoding
+func (rs *randStruct) randomInit(password []byte, length int) {
+	var nr, add, nr2, tmp uint32
+	nr = 1345345333
+	add = 7
+	nr2 = 0x12345671
+
+	for i := 0; i < length; i++ {
+		pswChar := password[i]
+		if pswChar == ' ' || pswChar == '\t' {
+			continue
+		}
+		tmp = uint32(pswChar)
+		nr ^= (((nr & 63) + add) * tmp) + (nr << 8)
+		nr2 += (nr2 << 8) ^ nr
+		add += tmp
+	}
+
+	seed1 := nr & ((uint32(1) << 31) - uint32(1))
+	seed2 := nr2 & ((uint32(1) << 31) - uint32(1))
+
+	rs.maxValue = 0x3FFFFFFF
+	rs.maxValueDbl = float64(rs.maxValue)
+	rs.seed1 = seed1 % rs.maxValue
+	rs.seed2 = seed2 % rs.maxValue
+}
+
+func (rs *randStruct) myRand() float64 {
+	rs.seed1 = (rs.seed1*3 + rs.seed2) % rs.maxValue
+	rs.seed2 = (rs.seed1 + rs.seed2 + 33) % rs.maxValue
+	return float64(rs.seed1) / rs.maxValueDbl
+}
+
+func (sc *sqlCrypt) init(password []byte, length int) {
+	sc.rand.randomInit(password, length)
+	for i := 0; i <= 255; i++ {
+		sc.decodeBuff[i] = byte(i)
+	}
+	for i := 0; i <= 255; i++ {
+		idx := uint32(sc.rand.myRand() * 255.0)
+		a := sc.decodeBuff[idx]
+		sc.decodeBuff[idx] = sc.decodeBuff[i]
+		sc.decodeBuff[i] = a
+	}
+
+	for i := 0; i <= 255; i++ {
+		sc.encodeBuff[sc.decodeBuff[i]] = byte(i)
+	}
+	sc.orgRand = sc.rand
+	sc.shift = 0
+}
+
+func (sc *sqlCrypt) encode(str []byte, length int) {
+	for i := 0; i < length; i++ {
+		sc.shift ^= uint32(sc.rand.myRand() * 255.0)
+		idx := uint32(str[i])
+		str[i] = sc.encodeBuff[idx] ^ byte(sc.shift)
+		sc.shift ^= idx
+	}
+}
+
+func (sc *sqlCrypt) decode(str []byte, length int) {
+	for i := 0; i < length; i++ {
+		sc.shift ^= uint32(sc.rand.myRand() * 255.0)
+		idx := uint32(str[i] ^ byte(sc.shift))
+		str[i] = sc.decodeBuff[idx]
+		sc.shift ^= uint32(str[i])
+	}
+}
+
 // encode function encrypts a string, returns a binary string of the same length of the original string.
 // https://dev.mysql.com/doc/refman/5.7/en/encryption-functions.html#function_encode
+func SQLEncode(data []byte, key []byte) ([]byte, error) {
+	var sc sqlCrypt
+
+	sc.init(key, len(key))
+	sc.encode(data, len(data))
+
+	return data, nil
+}
+
+func SQLDecode(data []byte, key []byte) ([]byte, error) {
+	var sc sqlCrypt
+
+	sc.init(key, len(key))
+	sc.decode(data, len(data))
+
+	return data, nil
+}
+
 func encodeToBytes(data []byte, key []byte, null bool, rs *vector.FunctionResult[types.Varlena]) error {
 	if null {
 		return rs.AppendMustNullForBytesResult()
 	}
 
-	hashedKey := sha256.Sum256(key)
-	block, err := aes.NewCipher(hashedKey[:])
+	encodeData, err := SQLEncode(data, key)
 	if err != nil {
-		fmt.Printf("Error creating cipher: %v\n", err)
+		fmt.Printf("Error encoding data: %v\n", err)
 		return rs.AppendMustNullForBytesResult()
 	}
-
-	ciphertext := make([]byte, len(data))
-	stream := cipher.NewCFBEncrypter(block, hashedKey[:block.BlockSize()])
-	stream.XORKeyStream(ciphertext, data)
-
-	return rs.AppendMustBytesValue(ciphertext)
+	return rs.AppendMustBytesValue(encodeData)
 }
 
 func Encode(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -1103,19 +1199,11 @@ func decodeFromBytes(data []byte, key []byte, null bool, rs *vector.FunctionResu
 	if null {
 		return rs.AppendMustNullForBytesResult()
 	}
-
-	hashedKey := sha256.Sum256(key)
-	block, err := aes.NewCipher(hashedKey[:])
+	decodeData, err := SQLDecode(data, key)
 	if err != nil {
-		fmt.Printf("Error creating cipher: %v\n", err)
 		return rs.AppendMustNullForBytesResult()
 	}
-
-	plaintext := make([]byte, len(data))
-	stream := cipher.NewCFBDecrypter(block, hashedKey[:block.BlockSize()])
-	stream.XORKeyStream(plaintext, data)
-
-	return rs.AppendMustBytesValue(plaintext)
+	return rs.AppendMustBytesValue(decodeData)
 }
 
 func Decode(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
