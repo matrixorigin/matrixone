@@ -257,6 +257,11 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 		return nil, nil, err
 	}
 
+	start := time.Now()
+	defer func() {
+		v2.GetRelationDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
 	ses := tcc.GetSession()
 	txn := tcc.GetTxnHandler().GetTxn()
 	tempCtx := tcc.execCtx.reqCtx
@@ -291,6 +296,8 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 		tempCtx = defines.AttachAccountId(tempCtx, uint32(sysAccountID))
 	}
 
+	start1 := time.Now()
+
 	//open database
 	db, err := tcc.GetTxnHandler().GetStorage().Database(tempCtx, dbName, txn)
 	if err != nil {
@@ -301,11 +308,15 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 		return nil, nil, err
 	}
 
+	v2.OpenDBDurationHistogram.Observe(time.Since(start1).Seconds())
+
 	// tableNames, err := db.Relations(ctx)
 	// if err != nil {
 	// 	return nil, nil, err
 	// }
 	// logDebugf(ses.GetDebugString(), "dbName %v tableNames %v", dbName, tableNames)
+
+	start2 := time.Now()
 
 	//open table
 	table, err := db.Relation(tempCtx, tableName, nil)
@@ -321,10 +332,17 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 			table = tmpTable
 		}
 	}
+
+	v2.OpenTableDurationHistogram.Observe(time.Since(start2).Seconds())
+
 	return tempCtx, table, nil
 }
 
 func (tcc *TxnCompilerContext) getTmpRelation(ctx context.Context, tableName string) (engine.Relation, error) {
+	start := time.Now()
+	defer func() {
+		v2.GetTmpTableDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 	e := tcc.execCtx.ses.GetTxnHandler().GetStorage()
 	txn := tcc.execCtx.ses.GetTxnHandler().GetTxn()
 	db, err := e.Database(ctx, defines.TEMPORARY_DBNAME, txn)
@@ -339,6 +357,10 @@ func (tcc *TxnCompilerContext) getTmpRelation(ctx context.Context, tableName str
 }
 
 func (tcc *TxnCompilerContext) ensureDatabaseIsNotEmpty(dbName string, checkSub bool, snapshot plan2.Snapshot) (string, *plan.SubscriptionMeta, error) {
+	start := time.Now()
+	defer func() {
+		v2.EnsureDatabaseDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 	if len(dbName) == 0 {
 		dbName = tcc.DefaultDatabase()
 	}
@@ -409,7 +431,9 @@ func (tcc *TxnCompilerContext) ResolveSubscriptionTableById(tableId uint64, pubm
 func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot plan2.Snapshot) (*plan2.ObjectRef, *plan2.TableDef) {
 	start := time.Now()
 	defer func() {
-		v2.TxnStatementResolveDurationHistogram.Observe(time.Since(start).Seconds())
+		end := time.Since(start).Seconds()
+		v2.TxnStatementResolveDurationHistogram.Observe(end)
+		v2.TotalResolveDurationHistogram.Observe(end)
 	}()
 
 	// In order to be compatible with various GUI clients and BI tools, lower case db and table name if it's a mysql system table
@@ -840,9 +864,9 @@ func (tcc *TxnCompilerContext) GetProcess() *process.Process {
 func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, string, error) {
 	proc := tcc.execCtx.proc
 	// get file size
-	path := catalog.BuildQueryResultMetaPath(proc.SessionInfo.Account, uuid)
+	path := catalog.BuildQueryResultMetaPath(proc.GetSessionInfo().Account, uuid)
 	// read meta's meta
-	reader, err := blockio.NewFileReader(proc.FileService, path)
+	reader, err := blockio.NewFileReader(proc.Base.FileService, path)
 	if err != nil {
 		return nil, "", err
 	}
@@ -853,7 +877,7 @@ func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, 
 	bats, release, err := reader.LoadAllColumns(tcc.execCtx.reqCtx, idxs, common.DefaultAllocator)
 	if err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-			return nil, "", moerr.NewResultFileNotFound(tcc.execCtx.reqCtx, makeResultMetaPath(proc.SessionInfo.Account, uuid))
+			return nil, "", moerr.NewResultFileNotFound(tcc.execCtx.reqCtx, makeResultMetaPath(proc.Base.SessionInfo.Account, uuid))
 		}
 		return nil, "", err
 	}
@@ -878,7 +902,10 @@ func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, 
 func (tcc *TxnCompilerContext) GetSubscriptionMeta(dbName string, snapshot plan2.Snapshot) (*plan.SubscriptionMeta, error) {
 	tempCtx := tcc.execCtx.reqCtx
 	txn := tcc.GetTxnHandler().GetTxn()
-
+	start := time.Now()
+	defer func() {
+		v2.GetSubMetaDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 	if plan2.IsSnapshotValid(&snapshot) && snapshot.TS.Less(txn.Txn().SnapshotTS) {
 		txn = txn.CloneSnapshotOp(*snapshot.TS)
 

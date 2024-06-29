@@ -201,7 +201,7 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 		// decode and rewrite the scope.
 		s, err := decodeScope(receiver.scopeData, c.proc, true, c.e)
 		defer func() {
-			c.proc.AnalInfos = nil
+			c.proc.Base.AnalInfos = nil
 			c.anal.analInfos = nil
 			c.Release()
 			s.release()
@@ -210,27 +210,27 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 			return err
 		}
 		s = appendWriteBackOperator(c, s)
-		s.SetContextRecursively(c.ctx)
+		s.SetContextRecursively(c.proc.Ctx)
 
 		err = s.ParallelRun(c)
 		if err == nil {
 			// record the number of s3 requests
-			c.proc.AnalInfos[c.anal.curr].S3IOInputCount += c.counterSet.FileService.S3.Put.Load()
-			c.proc.AnalInfos[c.anal.curr].S3IOInputCount += c.counterSet.FileService.S3.List.Load()
-			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.counterSet.FileService.S3.Head.Load()
-			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.counterSet.FileService.S3.Get.Load()
-			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.counterSet.FileService.S3.Delete.Load()
-			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.counterSet.FileService.S3.DeleteMulti.Load()
+			c.proc.Base.AnalInfos[c.anal.curr].S3IOInputCount += c.counterSet.FileService.S3.Put.Load()
+			c.proc.Base.AnalInfos[c.anal.curr].S3IOInputCount += c.counterSet.FileService.S3.List.Load()
+			c.proc.Base.AnalInfos[c.anal.curr].S3IOOutputCount += c.counterSet.FileService.S3.Head.Load()
+			c.proc.Base.AnalInfos[c.anal.curr].S3IOOutputCount += c.counterSet.FileService.S3.Get.Load()
+			c.proc.Base.AnalInfos[c.anal.curr].S3IOOutputCount += c.counterSet.FileService.S3.Delete.Load()
+			c.proc.Base.AnalInfos[c.anal.curr].S3IOOutputCount += c.counterSet.FileService.S3.DeleteMulti.Load()
 
-			receiver.finalAnalysisInfo = c.proc.AnalInfos
+			receiver.finalAnalysisInfo = c.proc.Base.AnalInfos
 		} else {
 			// there are 3 situations to release analyzeInfo
 			// 1 is free analyzeInfo of Local CN when release analyze
 			// 2 is free analyzeInfo of remote CN before transfer back
 			// 3 is free analyzeInfo of remote CN when errors happen before transfer back
 			// this is situation 3
-			for i := range c.proc.AnalInfos {
-				reuse.Free[process.AnalyzeInfo](c.proc.AnalInfos[i], nil)
+			for i := range c.proc.Base.AnalInfos {
+				reuse.Free[process.AnalyzeInfo](c.proc.Base.AnalInfos[i], nil)
 			}
 		}
 		c.proc.FreeVectors()
@@ -273,7 +273,7 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 			arg.Children = oldChild
 		}()
 	default:
-		return moerr.NewInvalidInput(c.ctx, "last operator should only be connector or dispatcher")
+		return moerr.NewInvalidInput(c.proc.Ctx, "last operator should only be connector or dispatcher")
 	}
 
 	// can not reuse
@@ -315,7 +315,7 @@ func (s *Scope) remoteRun(c *Compile) (err error) {
 	defer func() {
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(s.Proc.Ctx, e)
-			c.proc.Error(c.ctx, "panic in scope remoteRun",
+			c.proc.Error(c.proc.Ctx, "panic in scope remoteRun",
 				zap.String("sql", c.sql),
 				zap.String("error", err.Error()))
 		}
@@ -331,7 +331,7 @@ func (s *Scope) remoteRun(c *Compile) (err error) {
 			return err
 		}
 	} else {
-		return moerr.NewInvalidInput(c.ctx, "last operator should only be connector or dispatcher")
+		return moerr.NewInvalidInput(c.proc.Ctx, "last operator should only be connector or dispatcher")
 	}
 
 	for _, ins := range s.Instructions[lastIdx+1:] {
@@ -351,13 +351,13 @@ func (s *Scope) remoteRun(c *Compile) (err error) {
 		return errEncodeProc
 	}
 
-	c.MessageBoard.SetMultiCN(c.GetMessageCenter(), c.proc.StmtProfile.GetStmtId())
+	c.MessageBoard.SetMultiCN(c.GetMessageCenter(), c.proc.GetStmtProfile().GetStmtId())
 
 	// new sender and do send work.
 	sender, err := newMessageSenderOnClient(s.Proc.Ctx, c, s.NodeInfo.Addr)
 	if err != nil {
 		c.proc.Errorf(s.Proc.Ctx, "Failed to newMessageSenderOnClient sql=%s, txnID=%s, err=%v",
-			c.sql, c.proc.TxnOperator.Txn().DebugString(), err)
+			c.sql, c.proc.GetTxnOperator().Txn().DebugString(), err)
 		return err
 	}
 	defer sender.close()
@@ -392,7 +392,7 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 		regs:   make(map[*process.WaitRegister]int32),
 	}
 	ctx.root = ctx
-	s, err := generateScope(proc, p, ctx, proc.AnalInfos, isRemote)
+	s, err := generateScope(proc, p, ctx, proc.Base.AnalInfos, isRemote)
 	if err != nil {
 		return nil, err
 	}
@@ -941,7 +941,10 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 	case *projection.Argument:
 		in.ProjectList = t.Es
 	case *filter.Argument:
-		in.Filter = t.E
+		in.Filter = t.GetExeExpr()
+		if in.Filter == nil {
+			in.Filter = t.E
+		}
 	case *semi.Argument:
 		in.SemiJoin = &pipeline.SemiJoin{
 			Result:                 t.Result,

@@ -15,32 +15,42 @@
 package malloc
 
 import (
-	"sync"
-	"unsafe"
-
-	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 type MetricsAllocator struct {
-	upstream Allocator
-	funcPool sync.Pool
+	upstream        Allocator
+	deallocatorPool *ClosureDeallocatorPool[metricsDeallocatorArgs]
+	allocateCounter prometheus.Counter
+	inuseGauge      prometheus.Gauge
 }
 
-func NewMetricsAllocator(upstream Allocator) *MetricsAllocator {
-	ret := &MetricsAllocator{
-		upstream: upstream,
+type metricsDeallocatorArgs struct {
+	size uint64
+}
+
+func NewMetricsAllocator(
+	upstream Allocator,
+	allocateCounter prometheus.Counter,
+	deallocateCounter prometheus.Counter,
+	inuseGauge prometheus.Gauge,
+) *MetricsAllocator {
+	return &MetricsAllocator{
+		upstream:        upstream,
+		allocateCounter: allocateCounter,
+		inuseGauge:      inuseGauge,
+
+		deallocatorPool: NewClosureDeallocatorPool(
+			func(hints Hints, args *metricsDeallocatorArgs) {
+				if deallocateCounter != nil {
+					deallocateCounter.Add(float64(args.size))
+				}
+				if inuseGauge != nil {
+					inuseGauge.Add(-float64(args.size))
+				}
+			},
+		),
 	}
-	ret.funcPool = sync.Pool{
-		New: func() any {
-			argumented := new(argumentedFuncDeallocator[uint64])
-			argumented.fn = func(_ unsafe.Pointer, hints Hints, size uint64) {
-				metric.MallocCounterFreeBytes.Add(float64(size))
-				ret.funcPool.Put(argumented)
-			}
-			return argumented
-		},
-	}
-	return ret
 }
 
 type AllocateInfo struct {
@@ -50,13 +60,22 @@ type AllocateInfo struct {
 
 var _ Allocator = new(MetricsAllocator)
 
-func (m *MetricsAllocator) Allocate(size uint64, hints Hints) (unsafe.Pointer, Deallocator, error) {
+func (m *MetricsAllocator) Allocate(size uint64, hints Hints) ([]byte, Deallocator, error) {
 	ptr, dec, err := m.upstream.Allocate(size, hints)
 	if err != nil {
 		return nil, nil, err
 	}
-	metric.MallocCounterAllocateBytes.Add(float64(size))
-	fn := m.funcPool.Get().(*argumentedFuncDeallocator[uint64])
-	fn.SetArgument(size)
-	return ptr, ChainDeallocator(dec, fn), nil
+	if m.allocateCounter != nil {
+		m.allocateCounter.Add(float64(size))
+	}
+	if m.inuseGauge != nil {
+		m.inuseGauge.Add(float64(size))
+	}
+
+	return ptr, ChainDeallocator(
+		dec,
+		m.deallocatorPool.Get(metricsDeallocatorArgs{
+			size: size,
+		}),
+	), nil
 }

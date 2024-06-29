@@ -150,10 +150,10 @@ func (c *compilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, strin
 
 func (c *compilerContext) DatabaseExists(name string, snapshot plan.Snapshot) bool {
 	ctx := c.GetContext()
-	txnOpt := c.proc.TxnOperator
+	txnOpt := c.proc.GetTxnOperator()
 
-	if plan.IsSnapshotValid(&snapshot) && snapshot.TS.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
-		txnOpt = c.proc.TxnOperator.CloneSnapshotOp(*snapshot.TS)
+	if plan.IsSnapshotValid(&snapshot) && snapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
+		txnOpt = c.proc.GetTxnOperator().CloneSnapshotOp(*snapshot.TS)
 
 		if snapshot.Tenant != nil {
 			ctx = context.WithValue(ctx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)
@@ -170,10 +170,10 @@ func (c *compilerContext) DatabaseExists(name string, snapshot plan.Snapshot) bo
 
 func (c *compilerContext) GetDatabaseId(dbName string, snapshot plan.Snapshot) (uint64, error) {
 	ctx := c.GetContext()
-	txnOpt := c.proc.TxnOperator
+	txnOpt := c.proc.GetTxnOperator()
 
-	if plan.IsSnapshotValid(&snapshot) && snapshot.TS.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
-		txnOpt = c.proc.TxnOperator.CloneSnapshotOp(*snapshot.TS)
+	if plan.IsSnapshotValid(&snapshot) && snapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
+		txnOpt = c.proc.GetTxnOperator().CloneSnapshotOp(*snapshot.TS)
 
 		if snapshot.Tenant != nil {
 			ctx = context.WithValue(ctx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)
@@ -257,19 +257,19 @@ func (c *compilerContext) GetUserName() string {
 }
 
 func (c *compilerContext) GetAccountId() (uint32, error) {
-	return defines.GetAccountId(c.ctx)
+	return defines.GetAccountId(c.proc.Ctx)
 }
 
 func (c *compilerContext) GetContext() context.Context {
-	return c.ctx
+	return c.proc.Ctx
 }
 
 func (c *compilerContext) ResolveById(tableId uint64, snapshot plan.Snapshot) (objRef *plan.ObjectRef, tableDef *plan.TableDef) {
 	ctx := c.GetContext()
-	txnOpt := c.proc.TxnOperator
+	txnOpt := c.proc.GetTxnOperator()
 
-	if plan.IsSnapshotValid(&snapshot) && snapshot.TS.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
-		txnOpt = c.proc.TxnOperator.CloneSnapshotOp(*snapshot.TS)
+	if plan.IsSnapshotValid(&snapshot) && snapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
+		txnOpt = c.proc.GetTxnOperator().CloneSnapshotOp(*snapshot.TS)
 
 		if snapshot.Tenant != nil {
 			ctx = context.WithValue(ctx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)
@@ -340,10 +340,10 @@ func (c *compilerContext) getRelation(
 	}
 
 	ctx := c.GetContext()
-	txnOpt := c.proc.TxnOperator
+	txnOpt := c.proc.GetTxnOperator()
 
-	if plan.IsSnapshotValid(&snapshot) && snapshot.TS.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
-		txnOpt = c.proc.TxnOperator.CloneSnapshotOp(*snapshot.TS)
+	if plan.IsSnapshotValid(&snapshot) && snapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
+		txnOpt = c.proc.GetTxnOperator().CloneSnapshotOp(*snapshot.TS)
 
 		if snapshot.Tenant != nil {
 			ctx = context.WithValue(ctx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)

@@ -217,12 +217,6 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 			}
 		})
 
-	// Different rows may belong to same batch. So we have
-	// to record the batch which we have already handled to avoid
-	// repetitive computation
-	handled := make(map[*batch.Batch]struct{})
-	// Calculate the in mem size
-	// TODO: It might includ some deleted row size
 	iter := part.NewRowsIter(ts, nil, false)
 	defer func() { _ = iter.Close() }()
 	for iter.Next() {
@@ -230,21 +224,14 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 		if _, ok := deletes[entry.RowID]; ok {
 			continue
 		}
-		if _, ok := handled[entry.Batch]; ok {
-			continue
-		}
+
 		for i, s := range entry.Batch.Attrs {
 			if _, ok := neededCols[s]; ok {
-				szInPart += uint64(entry.Batch.Vecs[i].Size())
+				szInPart += uint64(entry.Batch.Vecs[i].Size() / entry.Batch.Vecs[i].Length())
 			}
 		}
-		handled[entry.Batch] = struct{}{}
 	}
 
-	//s := e.Stats(ctx, pb.StatsInfoKey{
-	//	DatabaseID: tbl.db.databaseId,
-	//	TableID:    tbl.tableId,
-	//}, true)
 	s, _ := tbl.Stats(ctx, true)
 	if s == nil {
 		return szInPart, nil
@@ -311,7 +298,7 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 	var meta objectio.ObjectDataMeta
 	var objMeta objectio.ObjectMeta
 	fs, err := fileservice.Get[fileservice.FileService](
-		tbl.getTxn().proc.FileService,
+		tbl.getTxn().proc.Base.FileService,
 		defines.SharedFileServiceName)
 	if err != nil {
 		return nil, nil, err
@@ -390,7 +377,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 	}
 
 	fs, err := fileservice.Get[fileservice.FileService](
-		tbl.getTxn().proc.FileService,
+		tbl.getTxn().proc.Base.FileService,
 		defines.SharedFileServiceName)
 	if err != nil {
 		return nil, err
@@ -2258,7 +2245,7 @@ func (tbl *txnTable) transferDeletes(
 
 	{
 		fs, err := fileservice.Get[fileservice.FileService](
-			tbl.proc.Load().FileService,
+			tbl.proc.Load().GetFileService(),
 			defines.SharedFileServiceName)
 		if err != nil {
 			return err
