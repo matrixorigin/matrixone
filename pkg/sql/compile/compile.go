@@ -520,7 +520,7 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 		)
 		v2.TxnStatementExecuteDurationHistogram.Observe(cost.Seconds())
 		if _, ok := c.pn.Plan.(*plan.Plan_Ddl); ok {
-			c.proc.GetTxnOperator().GetWorkspace().SetHaveDDL(true)
+			c.setHaveDDL(true)
 		}
 	}()
 
@@ -1035,7 +1035,7 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		v2.TxnStatementCompileQueryHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	c.execType = plan2.GetExecType(c.pn.GetQuery(), c.proc.GetTxnOperator().GetWorkspace().GetHaveDDL())
+	c.execType = plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL())
 
 	n := getEngineNode(c)
 	if c.execType == plan2.ExecTypeTP || c.execType == plan2.ExecTypeAP_ONECN {
@@ -5051,4 +5051,19 @@ func getEngineNode(c *Compile) engine.Node {
 	} else {
 		return engine.Node{Addr: c.addr, Mcpu: ncpu}
 	}
+}
+
+func (c *Compile) setHaveDDL(haveDDL bool) {
+	txn := c.proc.GetTxnOperator()
+	if txn != nil && txn.GetWorkspace() != nil {
+		txn.GetWorkspace().SetHaveDDL(haveDDL)
+	}
+}
+
+func (c *Compile) getHaveDDL() bool {
+	txn := c.proc.GetTxnOperator()
+	if txn != nil && txn.GetWorkspace() != nil {
+		return txn.GetWorkspace().GetHaveDDL()
+	}
+	return false
 }

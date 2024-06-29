@@ -156,11 +156,11 @@ func (t *testWorkspace) BindTxnOp(op client.TxnOperator) {
 }
 
 func (t *testWorkspace) SetHaveDDL(flag bool) {
-	panic("implement me")
+	//TODO implement me
 }
 
 func (t *testWorkspace) GetHaveDDL() bool {
-	panic("implement me")
+	return false
 }
 
 func TestWorkspace(t *testing.T) {
