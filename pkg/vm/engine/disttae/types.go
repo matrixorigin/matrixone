@@ -256,7 +256,7 @@ type Transaction struct {
 
 	adjustCount int
 
-	haveDDL bool
+	haveDDL atomic.Bool
 }
 
 type Pos struct {
