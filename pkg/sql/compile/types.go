@@ -183,6 +183,7 @@ type scopeContext struct {
 	regs     map[*process.WaitRegister]int32
 }
 
+// 建议将结构体命名为分析模块 AnalyzeModule
 // anaylze information
 type anaylze struct {
 	// curr is the current index of plan
@@ -211,6 +212,15 @@ func (a anaylze) TypeName() string {
 func newAnaylze() *anaylze {
 	return reuse.Alloc[anaylze](nil)
 }
+
+// 新的初始化方法，仅供参考
+//func NewAnalyzeModule(size int) *AnalyzeModule {
+//	anals := make([]*AnalyzeInfo, size)
+//	for i := range anals {
+//		anals[i] = &AnalyzeInfo{NodeId: int32(i)}
+//	}
+//	return &AnalyzeModule{analInfos: anals}
+//}
 
 func (a *anaylze) release() {
 	// there are 3 situations to release analyzeInfo
