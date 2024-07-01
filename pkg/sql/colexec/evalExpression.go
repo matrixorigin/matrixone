@@ -1382,7 +1382,7 @@ func GetExprZoneMap(
 				}
 				zmRes := zms[args[0].AuxId]
 				for i := 1; i < len(args); i++ {
-					if res, ok = zmRes.And(zms[args[i].AuxId]); !ok {
+					if res, ok = zmRes.And(zms[args[1].AuxId]); !ok {
 						zmRes.Reset()
 						break
 					} else {
@@ -1397,7 +1397,7 @@ func GetExprZoneMap(
 				}
 				zmRes := zms[args[0].AuxId]
 				for i := 1; i < len(args); i++ {
-					if res, ok = zmRes.Or(zms[args[i].AuxId]); !ok {
+					if res, ok = zmRes.Or(zms[args[1].AuxId]); !ok {
 						zmRes.Reset()
 						break
 					} else {
