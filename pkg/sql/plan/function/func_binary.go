@@ -2724,6 +2724,13 @@ func MakeDate(
 			}
 
 			resDt := types.MakeDate(int32(year), 1, day)
+
+			if resDt.Year() > 9999 {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+			}
+
 			if err := rs.AppendBytes([]byte(resDt.String()), false); err != nil {
 				return err
 			}
