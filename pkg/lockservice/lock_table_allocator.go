@@ -38,6 +38,7 @@ type lockTableAllocator struct {
 	server          Server
 	client          Client
 	ctl             sync.Map // lock service id -> *commitCtl
+	version         uint64
 	mu              struct {
 		sync.RWMutex
 		services   map[string]*serviceBinds
@@ -78,6 +79,7 @@ func NewLockTableAllocator(
 			stopper.WithLogger(logger.RawLogger().Named(tag))),
 		keepBindTimeout: keepBindTimeout,
 		client:          rpcClient,
+		version:         uint64(time.Now().UnixNano()),
 	}
 	la.mu.lockTables = make(map[uint32]map[uint64]pb.LockTable)
 	la.mu.services = make(map[string]*serviceBinds)
@@ -94,7 +96,7 @@ func NewLockTableAllocator(
 	}
 
 	la.initServer(cfg)
-	logLockAllocatorStartSucc()
+	logLockAllocatorStartSucc(la.version)
 
 	return la
 }
@@ -433,7 +435,7 @@ func (l *lockTableAllocator) createBindLocked(
 		Table:       tableID,
 		OriginTable: originTableID,
 		ServiceID:   binds.serviceID,
-		Version:     1,
+		Version:     l.version,
 		Valid:       true,
 		Sharding:    sharding,
 		Group:       group,
