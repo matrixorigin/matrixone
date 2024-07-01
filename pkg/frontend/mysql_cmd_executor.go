@@ -2124,7 +2124,6 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	var msg interface{}
 	msg, err = mysqlRrWr.Read()
 	if err != nil {
-		mysqlRrWr.SetU8(SEQUENCEID, mysqlRrWr.GetU8(SEQUENCEID)+1)
 		if errors.Is(err, errorInvalidLength0) {
 			return nil
 		}
@@ -2136,7 +2135,6 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 
 	payload, ok := msg.([]byte)
 	if !ok {
-		mysqlRrWr.SetU8(SEQUENCEID, mysqlRrWr.GetU8(SEQUENCEID)+1)
 		err = moerr.NewInvalidInput(execCtx.reqCtx, "invalid payload")
 		return
 	}

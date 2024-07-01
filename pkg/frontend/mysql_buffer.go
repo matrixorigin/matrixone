@@ -52,8 +52,10 @@ type Conn struct {
 	// packet data size, used to count header
 	packetLength    int
 	maxBytesToFlush int
+	packetInBuf     int
 	timeout         time.Duration
 	allocator       *SessionAllocator
+	ses             *Session
 }
 
 // NewIOSession create a new io session
@@ -125,14 +127,22 @@ func (c *Conn) Close() error {
 func (c *Conn) Read() ([]byte, error) {
 	// Requests > 16MB
 	payloads := make([][]byte, 0)
-	defer func() {
+	var finalPayload []byte
+	var err error
+	defer func(err error) {
+
 		if payloads != nil {
 			for _, payload := range payloads {
 				c.allocator.Free(payload)
 			}
 		}
-	}()
-	var err error
+
+		if err != nil {
+			c.allocator.Free(finalPayload)
+		}
+
+	}(err)
+
 	for {
 		if !c.connected {
 			return nil, moerr.NewInternalError(moerr.Context(), "The IOSession connection has been closed")
@@ -161,7 +171,8 @@ func (c *Conn) Read() ([]byte, error) {
 		}
 
 		if len(payloads) == 0 {
-			return payload, err
+			finalPayload = payload
+			return payload, nil
 		} else {
 			payloads = append(payloads, payload)
 			break
@@ -172,7 +183,8 @@ func (c *Conn) Read() ([]byte, error) {
 	for _, payload := range payloads {
 		totalLength += len(payload)
 	}
-	finalPayload, err := c.allocator.Alloc(totalLength)
+
+	finalPayload, err = c.allocator.Alloc(totalLength)
 
 	if err != nil {
 		return nil, err
@@ -181,39 +193,28 @@ func (c *Conn) Read() ([]byte, error) {
 	copyIndex := 0
 	for _, payload := range payloads {
 		copy(finalPayload[copyIndex:], payload)
-		c.allocator.Free(payload)
 		copyIndex += len(payload)
 	}
-	payloads = nil
 	return finalPayload, nil
 }
 
 // ReadOnePayload allocates memory for a payload and reads it
 func (c *Conn) ReadOnePayload(packetLength int) ([]byte, error) {
-	var buf []byte
 	var err error
-
-	if packetLength > fixBufferSize {
-		buf, err = c.allocator.Alloc(packetLength)
+	var payload []byte
+	defer func(err error) {
 		if err != nil {
-			return nil, err
+			c.allocator.Free(payload)
 		}
-		defer c.allocator.Free(buf)
-	} else {
-		buf = c.fixBuf.data
-	}
-	err = c.ReadBytes(buf[:packetLength], packetLength)
+	}(err)
+
+	payload, err = c.allocator.Alloc(packetLength)
+
+	err = c.ReadBytes(payload, packetLength)
 	if err != nil {
 		return nil, err
 	}
 
-	payload, err := c.allocator.Alloc(packetLength)
-
-	if err != nil {
-		return nil, err
-	}
-
-	copy(payload, buf[:packetLength])
 	return payload, nil
 }
 
@@ -236,10 +237,14 @@ func (c *Conn) ReadBytes(buf []byte, Length int) error {
 // ReadFromConn is the base method for receiving from network, calling net.Conn.Read().
 // The maximum read length is len(buf)
 func (c *Conn) ReadFromConn(buf []byte) (int, error) {
-	err := c.conn.SetReadDeadline(time.Now().Add(c.timeout))
-	if err != nil {
-		return 0, err
+	var err error
+	if c.timeout > 0 {
+		err = c.conn.SetReadDeadline(time.Now().Add(c.timeout))
+		if err != nil {
+			return 0, err
+		}
 	}
+
 	n, err := c.conn.Read(buf)
 	return n, err
 }
@@ -277,7 +282,7 @@ func (c *Conn) Append(elems ...byte) error {
 
 // AppendPart is the base method of adding bytes to buffer
 func (c *Conn) AppendPart(elems []byte) error {
-	var buf []byte
+
 	var err error
 	curBufRemainSpace := len(c.curBuf.data) - c.curBuf.writeIndex
 	if len(elems) > curBufRemainSpace {
@@ -292,18 +297,12 @@ func (c *Conn) AppendPart(elems []byte) error {
 			allocLength += fixBufferSize - allocLength%fixBufferSize
 		}
 
-		buf, err = c.allocator.Alloc(allocLength)
+		err = c.PushNewBlock(allocLength)
 		if err != nil {
 			return err
 		}
-
-		copy(buf, elems[curBufRemainSpace:])
-		newBlock := &ListBlock{}
-		newBlock.data = buf
-		newBlock.writeIndex = curElemsRemainSpace
-		c.dynamicBuf.PushBack(newBlock)
-		c.curBuf = newBlock
-
+		copy(c.curBuf.data[c.curBuf.writeIndex:], elems[curBufRemainSpace:])
+		c.curBuf.writeIndex += len(elems[curBufRemainSpace:])
 	} else {
 		copy(c.curBuf.data[c.curBuf.writeIndex:], elems)
 		c.curBuf.writeIndex += len(elems)
@@ -313,26 +312,51 @@ func (c *Conn) AppendPart(elems []byte) error {
 	return err
 }
 
+// PushNewBlock allocates memory and push it into the dynamic buffer
+func (c *Conn) PushNewBlock(allocLength int) error {
+
+	var err error
+	var buf []byte
+
+	defer func(err error) {
+		if err != nil {
+			c.allocator.Free(buf)
+		} else {
+			newBlock := &ListBlock{}
+			newBlock.data = buf
+			c.dynamicBuf.PushBack(newBlock)
+			c.curBuf = newBlock
+		}
+	}(err)
+
+	buf, err = c.allocator.Alloc(allocLength)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // BeginPacket Reserve Header in the buffer
 func (c *Conn) BeginPacket() error {
 	if len(c.curBuf.data)-c.curBuf.writeIndex < HeaderLengthOfTheProtocol {
-		buf, err := c.allocator.Alloc(fixBufferSize)
+		err := c.PushNewBlock(fixBufferSize)
 		if err != nil {
 			return err
 		}
-		newBlock := &ListBlock{}
-		newBlock.data = buf
-		c.dynamicBuf.PushBack(newBlock)
-		c.curBuf = newBlock
 	}
 	c.curHeader = c.curBuf.data[c.curBuf.writeIndex : c.curBuf.writeIndex+HeaderLengthOfTheProtocol]
 	c.curBuf.writeIndex += HeaderLengthOfTheProtocol
 	c.bufferLength += HeaderLengthOfTheProtocol
+	c.packetInBuf += 1
 	return nil
 }
 
 // FinishedPacket Fill in the header and flush if buffer full
 func (c *Conn) FinishedPacket() error {
+	if c.bufferLength < 0 {
+		return moerr.NewInternalError(moerr.Context(), "buffer length must >= 0")
+	}
 	binary.LittleEndian.PutUint32(c.curHeader, uint32(c.packetLength))
 	c.curHeader[3] = c.sequenceId
 	c.sequenceId += 1
@@ -363,25 +387,20 @@ func (c *Conn) Flush() error {
 	}
 	var err error
 	defer c.Reset()
-
 	err = c.WriteToConn(c.fixBuf.data[:c.fixBuf.writeIndex])
 	if err != nil {
 		return err
 	}
 
-	for c.dynamicBuf.Len() > 0 {
-		node := c.dynamicBuf.Front()
+	for node := c.dynamicBuf.Front(); node != nil; node = node.Next() {
 		block := node.Value.(*ListBlock)
 		err = c.WriteToConn(block.data[:block.writeIndex])
 		if err != nil {
 			return err
 		}
-		c.allocator.Free(block.data)
-		c.dynamicBuf.Remove(node)
 	}
-
+	c.ses.CountPacket(int64(c.packetInBuf))
 	return err
-
 }
 
 // Write Only OK, EOF, ERROR needs to be sent immediately
@@ -411,6 +430,7 @@ func (c *Conn) Write(payload []byte) error {
 	if err != nil {
 		return err
 	}
+	c.ses.CountPacket(1)
 	return nil
 }
 

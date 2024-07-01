@@ -516,11 +516,11 @@ func (mp *MysqlProtocolImpl) SetCapability(cap uint32) {
 }
 
 func (mp *MysqlProtocolImpl) AddSequenceId(a uint8) {
-	mp.sequenceId.Add(uint32(a))
+	mp.tcpConn.sequenceId += a
 }
 
 func (mp *MysqlProtocolImpl) SetSequenceID(value uint8) {
-	mp.sequenceId.Store(uint32(value))
+	mp.tcpConn.sequenceId = value
 }
 
 func (mp *MysqlProtocolImpl) GetDatabaseName() string {
@@ -622,6 +622,7 @@ func (mp *MysqlProtocolImpl) SetSession(ses *Session) {
 	mp.m.Lock()
 	defer mp.m.Unlock()
 	mp.ses = ses
+	mp.tcpConn.ses = ses
 }
 
 // handshake response 41
@@ -1842,7 +1843,6 @@ func (mp *MysqlProtocolImpl) negotiateAuthenticationMethod(ctx context.Context) 
 		return nil, moerr.NewInternalError(ctx, "packet is null")
 	}
 
-	mp.AddSequenceId(1)
 	return data, nil
 }
 

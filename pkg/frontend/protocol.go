@@ -290,5 +290,5 @@ func (mp *MysqlProtocolImpl) EnableAutoFlush() {
 }
 
 func (mp *MysqlProtocolImpl) Flush() error {
-	return nil
+	return mp.tcpConn.Flush()
 }

@@ -190,7 +190,8 @@ func Test_ConnectionCount(t *testing.T) {
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 	// A mock autoincrcache manager.
-	setGlobalAicm(&defines.AutoIncrCacheManager{})
+	acim := &defines.AutoIncrCacheManager{}
+	setGlobalAicm(acim)
 	rm, _ := NewRoutineManager(ctx)
 	setGlobalRtMgr(rm)
 
@@ -200,7 +201,7 @@ func Test_ConnectionCount(t *testing.T) {
 	//running server
 	go func() {
 		defer wg.Done()
-		echoServer(getGlobalRtMgr().Handler, getGlobalRtMgr(), NewSqlCodec())
+		startTestServer(ctx, "127.0.0.1:6001", pu, acim)
 	}()
 
 	cCounter := metric.ConnectionCounter(sysAccountName)

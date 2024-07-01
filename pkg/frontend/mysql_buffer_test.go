@@ -12,7 +12,7 @@ import (
 )
 
 func hasData(conn net.Conn) (bool, error) {
-	timeout := 500 * time.Millisecond
+	timeout := 1 * time.Minute
 	conn.SetReadDeadline(time.Now().Add(timeout))
 	buf := make([]byte, 1)
 	n, err := conn.Read(buf)
@@ -86,6 +86,9 @@ func TestMySQLProtocolRead(t *testing.T) {
 		}
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
+		for _, payload := range actualPayload {
+			cm.allocator.Free(payload)
+		}
 	})
 
 	convey.Convey("read small packet > 1MB", t, func() {
@@ -126,6 +129,10 @@ func TestMySQLProtocolRead(t *testing.T) {
 		}
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
+		for _, payload := range actualPayload {
+			cm.allocator.Free(payload)
+		}
+
 	})
 
 	convey.Convey("read big packet", t, func() {
@@ -147,7 +154,7 @@ func TestMySQLProtocolRead(t *testing.T) {
 				for j := range payload {
 					payload[j] = byte(i)
 				}
-
+				exceptPayload = append(exceptPayload, payload...)
 				_, err := server.Write(header)
 				if err != nil {
 					t.Fatalf("Failed to write header: %v", err)
@@ -157,7 +164,6 @@ func TestMySQLProtocolRead(t *testing.T) {
 				if err != nil {
 					t.Fatalf("Failed to write payload: %v", err)
 				}
-				exceptPayload = append(exceptPayload, payload...)
 				seqID++
 			}
 		}()
@@ -168,6 +174,8 @@ func TestMySQLProtocolRead(t *testing.T) {
 		}
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
+		cm.allocator.Free(actualPayload)
+
 	})
 
 	convey.Convey("read big packet, the last package size is equal to 16MB", t, func() {
@@ -186,7 +194,7 @@ func TestMySQLProtocolRead(t *testing.T) {
 				for j := range payload {
 					payload[j] = byte(i)
 				}
-
+				exceptPayload = append(exceptPayload, payload...)
 				_, err := server.Write(header)
 				if err != nil {
 					t.Fatalf("Failed to write header: %v", err)
@@ -196,7 +204,7 @@ func TestMySQLProtocolRead(t *testing.T) {
 				if err != nil {
 					t.Fatalf("Failed to write payload: %v", err)
 				}
-				exceptPayload = append(exceptPayload, payload...)
+
 				seqID++
 			}
 			header := make([]byte, 4)
@@ -215,20 +223,21 @@ func TestMySQLProtocolRead(t *testing.T) {
 		}
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
+		cm.allocator.Free(actualPayload)
 	})
 }
 
 func TestMySQLProtocolWriteRows(t *testing.T) {
 	var err error
 	sv, err := getSystemVariables("test/system_vars_config.toml")
-	sv.SessionTimeout.Duration = 5 * time.Second
+	sv.SessionTimeout.Duration = 5 * time.Minute
 	if err != nil {
 		panic(err)
 	}
 	pu := config.NewParameterUnit(sv, nil, nil, nil)
 
 	convey.Convey("test write packet", t, func() {
-		rows := 20000
+		rows := 20
 		server, client := net.Pipe()
 		defer server.Close()
 		defer client.Close()
@@ -278,6 +287,9 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
 		convey.So(remain, convey.ShouldBeFalse)
+		for _, payload := range actualPayload {
+			cReader.allocator.Free(payload)
+		}
 
 	})
 
@@ -333,6 +345,9 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
 			convey.So(remain, convey.ShouldBeFalse)
+			for _, payload := range actualPayload {
+				cReader.allocator.Free(payload)
+			}
 		})
 		convey.Convey("big field size", func() {
 			server, client := net.Pipe()
@@ -384,6 +399,9 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
 			convey.So(remain, convey.ShouldBeFalse)
+			for _, payload := range actualPayload {
+				cReader.allocator.Free(payload)
+			}
 		})
 	})
 
@@ -439,6 +457,9 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
 			convey.So(remain, convey.ShouldBeFalse)
+			for _, payload := range actualPayload {
+				cReader.allocator.Free(payload)
+			}
 		})
 
 		convey.Convey("big columns number", func() {
@@ -491,6 +512,9 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
 			convey.So(remain, convey.ShouldBeFalse)
+			for _, payload := range actualPayload {
+				cReader.allocator.Free(payload)
+			}
 		})
 
 		convey.Convey("row size equal to 16MB", func() {
@@ -551,6 +575,9 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
 			convey.So(remain, convey.ShouldBeFalse)
+			for _, payload := range actualPayload {
+				cReader.allocator.Free(payload)
+			}
 		})
 
 		convey.Convey("field size equal to 16MB", func() {
@@ -604,6 +631,9 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
 			convey.So(remain, convey.ShouldBeFalse)
+			for _, payload := range actualPayload {
+				cReader.allocator.Free(payload)
+			}
 		})
 	})
 

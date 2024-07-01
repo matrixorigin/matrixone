@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"testing"
 
 	"github.com/prashantv/gostub"
@@ -36,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -54,6 +54,11 @@ func newLocalETLFS(t *testing.T, fsName string) fileservice.FileService {
 }
 
 func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	go startConsumeRead(serverConn)
+
 	var err error
 	var testPool *mpool.MPool
 	//parameter
@@ -70,11 +75,8 @@ func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
 	pu.FileService = newLocalETLFS(t, defines.SharedFileServiceName)
 	setGlobalPu(pu)
 	//io session
-	ioses := mock_frontend.NewMockIOSession(ctrl)
-	ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
-	ioses.EXPECT().Ref().AnyTimes()
-	ioses.EXPECT().Disconnect().AnyTimes()
+
+	ioses, err := NewIOSession(clientConn, pu)
 	proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
 	testutil.SetupAutoIncrService()

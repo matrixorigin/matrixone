@@ -46,10 +46,10 @@ type MOServer struct {
 	uaddr       string
 	rm          *RoutineManager
 	readTimeout time.Duration
-
-	mu      sync.RWMutex
-	wg      sync.WaitGroup
-	running bool
+	handler     func(*Conn, []byte) error
+	mu          sync.RWMutex
+	wg          sync.WaitGroup
+	running     bool
 
 	pu        *config.ParameterUnit
 	listeners []net.Listener
@@ -397,6 +397,7 @@ func NewMOServer(
 		rm:          rm,
 		readTimeout: pu.SV.SessionTimeout.Duration,
 		pu:          pu,
+		handler:     rm.Handler,
 	}
 	listenerTcp, err := net.Listen("tcp", addr)
 	if err != nil {
