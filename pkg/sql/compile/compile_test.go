@@ -17,10 +17,11 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"os"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 
@@ -129,6 +130,13 @@ func (w *Ws) CloneSnapshotWS() client.Workspace {
 }
 
 func (w *Ws) BindTxnOp(op client.TxnOperator) {
+}
+
+func (w *Ws) SetHaveDDL(flag bool) {
+}
+
+func (w *Ws) GetHaveDDL() bool {
+	return false
 }
 
 func TestCompile(t *testing.T) {
