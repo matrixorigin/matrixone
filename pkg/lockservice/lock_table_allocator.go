@@ -201,6 +201,10 @@ func (l *lockTableAllocator) GetLatest(groupID uint32, tableID uint64) pb.LockTa
 	return pb.LockTable{}
 }
 
+func (l *lockTableAllocator) GetVersion() uint64 {
+	return l.version
+}
+
 func (l *lockTableAllocator) setRestartService(serviceID string) {
 	b := l.getServiceBindsWithoutPrefix(serviceID)
 	if b == nil {
