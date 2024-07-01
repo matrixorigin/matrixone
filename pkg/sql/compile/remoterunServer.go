@@ -405,8 +405,7 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 		proc.StmtProfile = process.NewStmtProfile(uuid.UUID(txnId), pHelper.StmtId)
 	}
 
-	c := reuse.Alloc[Compile](nil)
-	c.proc = proc
+	c := GetCompileService().getCompile(proc)
 	c.proc.MessageBoard = c.MessageBoard
 	c.e = cnInfo.storeEngine
 	c.anal = newAnaylze()
