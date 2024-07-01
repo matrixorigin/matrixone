@@ -652,19 +652,19 @@ func constructPreInsert(ns []*plan.Node, n *plan.Node, eg engine.Engine, proc *p
 	return arg, nil
 }
 
-func constructPreInsertUk(n *plan.Node, proc *process.Process) (*preinsertunique.Argument, error) {
+func constructPreInsertUk(n *plan.Node, proc *process.Process) *preinsertunique.Argument {
 	preCtx := n.PreInsertUkCtx
 	arg := preinsertunique.NewArgument()
 	arg.Ctx = proc.Ctx
 	arg.PreInsertCtx = preCtx
-	return arg, nil
+	return arg
 }
 
-func constructPreInsertSk(n *plan.Node, proc *process.Process) (*preinsertsecondaryindex.Argument, error) {
+func constructPreInsertSk(n *plan.Node, proc *process.Process) *preinsertsecondaryindex.Argument {
 	arg := preinsertsecondaryindex.NewArgument()
 	arg.Ctx = proc.Ctx
 	arg.PreInsertCtx = n.PreInsertSkCtx
-	return arg, nil
+	return arg
 }
 
 func constructLockOp(n *plan.Node, eng engine.Engine) (*lockop.Argument, error) {

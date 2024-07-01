@@ -183,13 +183,30 @@ type scopeContext struct {
 	regs     map[*process.WaitRegister]int32
 }
 
-// anaylze information
+// anaylze information analyze
 type anaylze struct {
 	// curr is the current index of plan
 	curr      int
 	isFirst   bool
 	qry       *plan.Query
 	analInfos []*process.AnalyzeInfo
+}
+
+// FetchAndResetFirst safely gets the value of isFirst and then resets it to false.
+func (a *anaylze) FetchAndResetFirst() bool {
+	if a.isFirst {
+		a.isFirst = false
+		return true
+	}
+	return false
+}
+
+func (a *anaylze) FetchFirst() bool {
+	return a.isFirst
+}
+
+func (a *anaylze) SetFirst(flag bool) {
+	a.isFirst = flag
 }
 
 func (a *anaylze) S3IOInputCount(idx int, count int64) {

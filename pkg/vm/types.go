@@ -128,6 +128,10 @@ type Instruction struct {
 	MaxParallel int32
 }
 
+const (
+	IgnoreIdx = -100 // Node统计输出输出不能以connect, dispatch, merge为基准
+)
+
 type Operator interface {
 	// Free release all the memory allocated from mPool in an operator.
 	// pipelineFailed marks the process status of the pipeline when the method is called.
