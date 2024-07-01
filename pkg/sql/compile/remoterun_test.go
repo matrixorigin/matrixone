@@ -141,8 +141,8 @@ func Test_refactorScope(t *testing.T) {
 	s.Proc = proc
 	c := reuse.Alloc[Compile](nil)
 	c.anal = newAnaylze()
-	c.ctx = ctx
 	c.proc = proc
+	c.proc.Ctx = ctx
 	rs := appendWriteBackOperator(c, s)
 	require.Equal(t, rs.Instructions[1].Idx, -1)
 }

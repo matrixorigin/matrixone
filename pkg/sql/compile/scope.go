@@ -113,7 +113,7 @@ func (s *Scope) Reset(c *Compile) error {
 
 func (s *Scope) resetForReuse(c *Compile) (err error) {
 	if s.Proc != nil {
-		newctx, cancel := context.WithCancel(c.ctx)
+		newctx, cancel := context.WithCancel(c.proc.Ctx)
 		s.Proc.Base = c.proc.Base
 		s.Proc.Ctx = newctx
 		s.Proc.Cancel = cancel
@@ -145,7 +145,7 @@ func (s *Scope) initDataSource(c *Compile) (err error) {
 
 		if len(s.Instructions) > 0 && s.Instructions[0].Op == vm.ValueScan {
 			if s.DataSource.node.NodeType == plan.Node_VALUE_SCAN {
-				bat, err := constructValueScanBatch(s.Proc.Ctx, c.proc, s.DataSource.node)
+				bat, err := constructValueScanBatch(c.proc, s.DataSource.node)
 				if err != nil {
 					return err
 				}
@@ -167,7 +167,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 	defer func() {
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(s.Proc.Ctx, e)
-			c.proc.Error(c.ctx, "panic in scope run",
+			c.proc.Error(c.proc.Ctx, "panic in scope run",
 				zap.String("sql", c.sql),
 				zap.String("error", err.Error()))
 		}
@@ -261,7 +261,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 			case Parallel:
 				preScopeResultReceiveChan <- scope.ParallelRun(c)
 			default:
-				preScopeResultReceiveChan <- moerr.NewInternalError(c.ctx, "unexpected scope Magic %d", scope.Magic)
+				preScopeResultReceiveChan <- moerr.NewInternalError(c.proc.Ctx, "unexpected scope Magic %d", scope.Magic)
 			}
 		})
 		if errSubmit != nil {
@@ -382,7 +382,7 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 	defer func() {
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(s.Proc.Ctx, e)
-			c.proc.Error(c.ctx, "panic in scope run",
+			c.proc.Error(c.proc.Ctx, "panic in scope run",
 				zap.String("sql", c.sql),
 				zap.String("error", err.Error()))
 		}
@@ -509,7 +509,7 @@ func buildLoadParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		ss[i].DataSource = &Source{
 			isConst: true,
 		}
-		ss[i].Proc = process.NewFromProc(s.Proc, c.ctx, 0)
+		ss[i].Proc = process.NewFromProc(s.Proc, c.proc.Ctx, 0)
 		if err := ss[i].initDataSource(c); err != nil {
 			return nil, err
 		}
@@ -530,7 +530,7 @@ func buildLoadParallelRun(s *Scope, c *Compile) (*Scope, error) {
 func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	// unexpected case.
 	if s.IsRemote && len(s.DataSource.OrderBy) > 0 {
-		return nil, moerr.NewInternalError(c.ctx, "ordered scan cannot run in remote.")
+		return nil, moerr.NewInternalError(c.proc.Ctx, "ordered scan cannot run in remote.")
 	}
 
 	// receive runtime filter and optimized the datasource.
@@ -551,8 +551,8 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 
 	// If this was a remote-run pipeline. Reader should be generated from Engine.
 	case s.IsRemote:
-		// this cannot use c.ctx directly, please refer to `default case`.
-		ctx := c.ctx
+		// this cannot use c.proc.Ctx directly, please refer to `default case`.
+		ctx := c.proc.Ctx
 		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
 			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 		}
@@ -587,7 +587,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 			scanUsedCpuNumber = 1
 		}
 
-		readers, err = s.DataSource.Rel.NewReader(c.ctx,
+		readers, err = s.DataSource.Rel.NewReader(c.proc.Ctx,
 			scanUsedCpuNumber,
 			s.DataSource.FilterExpr,
 			s.NodeInfo.Data,
@@ -600,10 +600,10 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	// Should get relation first to generate Reader.
 	// FIXME:: s.NodeInfo.Rel == nil, partition table? -- this is an old comment, I just do a copy here.
 	default:
-		// This cannot modify the c.ctx here, but I don't know why.
+		// This cannot modify the c.proc.Ctx here, but I don't know why.
 		// Maybe there are some account related things stores in the context (using the context.WithValue),
 		// and modify action will change the account.
-		ctx := c.ctx
+		ctx := c.proc.Ctx
 
 		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
 			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
@@ -751,7 +751,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	}
 
 	if len(s.DataSource.OrderBy) > 0 {
-		return nil, moerr.NewInternalError(c.ctx, "ordered scan must run in only one parallel.")
+		return nil, moerr.NewInternalError(c.proc.Ctx, "ordered scan must run in only one parallel.")
 	}
 
 	// return a pipeline which merge result from scanUsedCpuNumber scan.
@@ -766,7 +766,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 			Attributes:   s.DataSource.Attributes,
 			AccountId:    s.DataSource.AccountId,
 		}
-		readerScopes[i].Proc = process.NewFromProc(s.Proc, c.ctx, 0)
+		readerScopes[i].Proc = process.NewFromProc(s.Proc, c.proc.Ctx, 0)
 		readerScopes[i].TxnOffset = s.TxnOffset
 	}
 
@@ -818,7 +818,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 					s.DataSource.FilterExpr = plan2.MakeFalseExpr()
 					return nil
 				case process.RuntimeFilter_IN:
-					inExpr := plan2.MakeInExpr(c.ctx, spec.Expr, msg.Card, msg.Data, spec.MatchPrefix)
+					inExpr := plan2.MakeInExpr(c.proc.Ctx, spec.Expr, msg.Card, msg.Data, spec.MatchPrefix)
 					inExprList = append(inExprList, inExpr)
 
 					// TODO: implement BETWEEN expression
@@ -884,7 +884,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		s.NodeInfo.NeedExpandRanges = false
 
 	} else if len(inExprList) > 0 {
-		s.NodeInfo.Data, err = ApplyRuntimeFilters(c.ctx, s.Proc, s.DataSource.TableDef, s.NodeInfo.Data, exprs, filters)
+		s.NodeInfo.Data, err = ApplyRuntimeFilters(c.proc.Ctx, s.Proc, s.DataSource.TableDef, s.NodeInfo.Data, exprs, filters)
 		if err != nil {
 			return err
 		}
