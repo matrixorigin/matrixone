@@ -631,7 +631,9 @@ func (rb *remoteBackend) fetch(messages []*Future, maxFetchCount int) ([]*Future
 		// If the connect needs to be reset, then all futures in the waiting response state will never
 		// get the response and need to be notified of an error immediately.
 		rb.makeAllWaitingFutureFailed()
-		rb.handleResetConn()
+		if err := rb.handleResetConn(); err != nil {
+			return nil, true
+		}
 	case <-rb.stopWriteC:
 		return rb.fetchN(messages, math.MaxInt), true
 	}
@@ -687,11 +689,13 @@ func (rb *remoteBackend) makeAllWaitingFutureFailed() {
 	}
 }
 
-func (rb *remoteBackend) handleResetConn() {
+func (rb *remoteBackend) handleResetConn() error {
 	if err := rb.resetConn(); err != nil {
 		rb.logger.Error("fail to reset backend connection", zap.Error(err))
 		rb.inactive()
+		return err
 	}
+	return nil
 }
 
 func (rb *remoteBackend) doClose() {
