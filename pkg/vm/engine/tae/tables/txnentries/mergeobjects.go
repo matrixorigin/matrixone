@@ -103,13 +103,10 @@ func (entry *mergeObjectsEntry) prepareTransferPage() {
 		var duration time.Duration
 		var start time.Time
 		for j := 0; j < obj.BlockCnt(); j++ {
-			if len(entry.transMappings.Mappings[k].M) == 0 {
-				k++
+			m := entry.transMappings.Mappings[k].M
+			k++
+			if len(m) == 0 {
 				continue
-			}
-			mapping := entry.transMappings.Mappings[k].M
-			if len(mapping) == 0 {
-				panic("cannot tranfer empty block")
 			}
 			tblEntry := obj.GetTable()
 			isTransient := !tblEntry.GetLastestSchema().HasPK()
@@ -121,8 +118,8 @@ func (entry *mergeObjectsEntry) prepareTransferPage() {
 			if model.FS == nil {
 				model.SetFileService(entry.rt.Fs.Service)
 			}
-			page := model.NewTransferHashPage(id, time.Now(), isTransient)
-			for srcRow, dst := range mapping {
+			page := model.NewTransferHashPage(id, time.Now(), len(m), isTransient)
+			for srcRow, dst := range m {
 				objID := entry.createdObjs[dst.ObjIdx].ID
 				blkID := objectio.NewBlockidWithObjectID(&objID, uint16(dst.BlkIdx))
 				page.Train(uint32(srcRow), *objectio.NewRowid(blkID, uint32(dst.RowIdx)))

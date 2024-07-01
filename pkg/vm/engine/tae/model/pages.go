@@ -90,7 +90,7 @@ type TransferHashPage struct {
 	isPersisted int32 // 0 in memory, 1 on disk
 }
 
-func NewTransferHashPage(id *common.ID, ts time.Time, isTransient bool, opts ...Option) *TransferHashPage {
+func NewTransferHashPage(id *common.ID, ts time.Time, pageSize int, isTransient bool, opts ...Option) *TransferHashPage {
 	params := TransferHashPageParams{
 		TTL:     5 * time.Second,
 		DiskTTL: 10 * time.Minute,
@@ -102,7 +102,7 @@ func NewTransferHashPage(id *common.ID, ts time.Time, isTransient bool, opts ...
 	page := &TransferHashPage{
 		bornTS:      ts,
 		id:          id,
-		hashmap:     api.HashPageMap{M: make(map[uint32][]byte)},
+		hashmap:     api.HashPageMap{M: make(map[uint32][]byte, pageSize)},
 		params:      params,
 		isTransient: isTransient,
 		isPersisted: 0,
@@ -213,6 +213,9 @@ func (page *TransferHashPage) SetLocation(location objectio.Location) {
 }
 
 func (page *TransferHashPage) clearTable() {
+	if atomic.LoadInt32(&page.isPersisted) == 1 {
+		return
+	}
 	atomic.StoreInt32(&page.isPersisted, 1)
 	v2.TaskMergeTransferPageSizeGauge.Sub(float64(page.Length()))
 	page.latch.Lock()
