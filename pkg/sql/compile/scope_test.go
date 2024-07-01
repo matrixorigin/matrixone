@@ -20,8 +20,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -33,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil/testengine"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"github.com/stretchr/testify/require"
 )
 
 func TestScopeSerialization(t *testing.T) {
@@ -77,7 +79,11 @@ func generateScopeCases(t *testing.T, testCases []string) []*Scope {
 	// getScope method generate and return the scope of a SQL string.
 	getScope := func(t1 *testing.T, sql string) *Scope {
 		proc := testutil.NewProcess()
-		proc.SessionInfo.Buf = buffer.New()
+		proc.Base.SessionInfo.Buf = buffer.New()
+		ctrl := gomock.NewController(t)
+		txnCli, txnOp := newTestTxnClientAndOp(ctrl)
+		proc.Base.TxnClient = txnCli
+		proc.Base.TxnOperator = txnOp
 		e, _, compilerCtx := testengine.New(defines.AttachAccountId(context.Background(), catalog.System_Account))
 		opt := plan2.NewBaseOptimizer(compilerCtx)
 		ctx := compilerCtx.GetContext()
@@ -86,7 +92,7 @@ func generateScopeCases(t *testing.T, testCases []string) []*Scope {
 		qry, err := opt.Optimize(stmts[0], false)
 		require.NoError(t1, err)
 		proc.Ctx = ctx
-		c := NewCompile("test", "test", sql, "", "", context.Background(), e, proc, nil, false, nil, time.Now())
+		c := NewCompile("test", "test", sql, "", "", ctx, e, proc, nil, false, nil, time.Now())
 		qry.Nodes[0].Stats.Cost = 10000000 // to hint this is ap query for unit test
 		err = c.Compile(ctx, &plan.Plan{Plan: &plan.Plan_Query{Query: qry}}, func(batch *batch.Batch) error {
 			return nil

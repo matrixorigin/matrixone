@@ -76,7 +76,7 @@ func metadataScan(_ int, proc *process.Process, arg *Argument, result *vm.CallRe
 	}
 
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-	db, err := e.Database(proc.Ctx, dbname, proc.TxnOperator)
+	db, err := e.Database(proc.Ctx, dbname, proc.GetTxnOperator())
 	if err != nil {
 		return false, moerr.NewInternalError(proc.Ctx, "get database failed in metadata scan")
 	}

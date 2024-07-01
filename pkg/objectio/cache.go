@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 	"sync"
 
 	"github.com/cespare/xxhash/v2"
@@ -150,6 +152,11 @@ func LoadObjectMetaByExtent(
 		// 	metaCacheHitStats.Record(1, 1)
 		// }
 		return
+	}
+	if extent.Length() == 0 {
+		logutil.Warn("[LoadObjectMetaByExtent]",
+			zap.String("name", name.String()),
+			zap.String("extent", extent.String()))
 	}
 	if v, err = ReadExtent(ctx, name.String(), extent, policy, fs, constructorFactory); err != nil {
 		return

@@ -1154,7 +1154,7 @@ func newTmpProcess() *process.Process {
 
 func newProcessWithMPool(mp *mpool.MPool) *process.Process {
 	process := testutil.NewProcessWithMPool(mp)
-	process.SessionInfo.TimeZone = time.FixedZone("UTC0", 0)
+	process.Base.SessionInfo.TimeZone = time.FixedZone("UTC0", 0)
 	return process
 }
 
