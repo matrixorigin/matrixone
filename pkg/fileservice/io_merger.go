@@ -23,15 +23,16 @@ import (
 	"go.uber.org/zap"
 )
 
+// IOMerger merges multiple I/O requests to single one
+type IOMerger struct {
+	flying sync.Map // IOMergeKey -> chan struct{}
+}
+
 type IOMergeKey struct {
 	Path   string
 	Offset int64
 	End    int64
 	Policy Policy
-}
-
-type IOMerger struct {
-	flying sync.Map // IOMergeKey -> chan struct{}
 }
 
 func NewIOMerger() *IOMerger {
