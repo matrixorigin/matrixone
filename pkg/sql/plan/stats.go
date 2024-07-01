@@ -503,17 +503,26 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder) float64 {
 		case ">", "<", ">=", "<=", "between":
 			ret = estimateNonEqualitySelectivity(expr, funcName, builder)
 		case "and":
-			sel1 := estimateExprSelectivity(exprImpl.F.Args[0], builder)
-			sel2 := estimateExprSelectivity(exprImpl.F.Args[1], builder)
-			if canMergeToBetweenAnd(exprImpl.F.Args[0], exprImpl.F.Args[1]) && (sel1+sel2) > 1 {
-				ret = sel1 + sel2 - 1
+			ret = estimateExprSelectivity(exprImpl.F.Args[0], builder)
+			if len(exprImpl.F.Args) == 2 {
+				sel2 := estimateExprSelectivity(exprImpl.F.Args[1], builder)
+				if canMergeToBetweenAnd(exprImpl.F.Args[0], exprImpl.F.Args[1]) && (ret+sel2) > 1 {
+					ret = ret + sel2 - 1
+				} else {
+					ret = andSelectivity(ret, sel2)
+				}
 			} else {
-				ret = andSelectivity(sel1, sel2)
+				for i := 1; i < len(exprImpl.F.Args); i++ {
+					sel2 := estimateExprSelectivity(exprImpl.F.Args[i], builder)
+					ret = andSelectivity(ret, sel2)
+				}
 			}
 		case "or":
-			sel1 := estimateExprSelectivity(exprImpl.F.Args[0], builder)
-			sel2 := estimateExprSelectivity(exprImpl.F.Args[1], builder)
-			ret = orSelectivity(sel1, sel2)
+			ret = estimateExprSelectivity(exprImpl.F.Args[0], builder)
+			for i := 1; i < len(exprImpl.F.Args); i++ {
+				sel2 := estimateExprSelectivity(exprImpl.F.Args[i], builder)
+				ret = orSelectivity(ret, sel2)
+			}
 		case "not":
 			ret = 1 - estimateExprSelectivity(exprImpl.F.Args[0], builder)
 		case "like":
@@ -883,6 +892,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.Outcnt = childStats.Outcnt
 			node.Stats.Cost = childStats.Outcnt
 			node.Stats.Selectivity = childStats.Selectivity
+			node.Stats.BlockNum = childStats.BlockNum
 		}
 	}
 
@@ -1016,11 +1026,18 @@ func recalcStatsByRuntimeFilter(scanNode *plan.Node, joinNode *plan.Node, builde
 		return
 	}
 
-	if joinNode.JoinType == plan.Node_INDEX {
+	if joinNode.JoinType == plan.Node_INDEX || joinNode.NodeType == plan.Node_FUZZY_FILTER {
 		scanNode.Stats.Outcnt = builder.qry.Nodes[joinNode.Children[1]].Stats.Outcnt
+		if scanNode.Stats.Outcnt > scanNode.Stats.TableCnt {
+			scanNode.Stats.Outcnt = scanNode.Stats.TableCnt
+		}
 		scanNode.Stats.BlockNum = int32(scanNode.Stats.Outcnt/3) + 1
-		scanNode.Stats.Cost = float64(scanNode.Stats.BlockNum * DefaultBlockMaxRows)
-		scanNode.Stats.Selectivity = builder.qry.Nodes[joinNode.Children[1]].Stats.Selectivity
+		scanNode.Stats.Cost = float64(scanNode.Stats.BlockNum) * DefaultBlockMaxRows
+		if scanNode.Stats.Cost > scanNode.Stats.TableCnt {
+			scanNode.Stats.Cost = scanNode.Stats.TableCnt
+			scanNode.Stats.BlockNum = int32(scanNode.Stats.TableCnt / DefaultBlockMaxRows)
+		}
+		scanNode.Stats.Selectivity = scanNode.Stats.Outcnt / scanNode.Stats.TableCnt
 		return
 	}
 	runtimeFilterSel := builder.qry.Nodes[joinNode.Children[1]].Stats.Selectivity

@@ -23,9 +23,12 @@ import (
 
 var _ vm.Operator = new(Argument)
 
+type container struct {
+	idx int
+}
 type Argument struct {
+	ctr    *container
 	Batchs []*batch.Batch
-	idx    int
 
 	vm.OperatorBase
 }
@@ -72,5 +75,8 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		}
 	}
 	arg.Batchs = nil
-	arg.idx = 0
+	if arg.ctr != nil {
+		arg.ctr.idx = 0
+		arg.ctr = nil
+	}
 }

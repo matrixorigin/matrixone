@@ -38,20 +38,20 @@ type container struct {
 	colexec.ReceiverOperator
 
 	state   int
+	lastrow int
 	bat     *batch.Batch
 	rbat    *batch.Batch
 	joinBat *batch.Batch
+	buf     *batch.Batch
 	expr    colexec.ExpressionExecutor
 	cfs     []func(*vector.Vector, *vector.Vector, int64, int) error
 }
 
 type Argument struct {
-	ctr     *container
-	Result  []int32
-	Cond    *plan.Expr
-	Typs    []types.Type
-	bat     *batch.Batch
-	lastrow int
+	ctr    *container
+	Result []int32
+	Cond   *plan.Expr
+	Typs   []types.Type
 	vm.OperatorBase
 }
 
@@ -95,6 +95,11 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		ctr.cleanBatch(proc.Mp())
 		ctr.cleanExprExecutor()
 		ctr.FreeAllReg()
+		//if arg.ctr.buf != nil {
+		//proc.PutBatch(arg.ctr.buf)
+		//arg.ctr.buf = nil
+		//}
+		arg.ctr.lastrow = 0
 		arg.ctr = nil
 	}
 }

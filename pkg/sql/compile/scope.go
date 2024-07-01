@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
@@ -96,6 +97,43 @@ func (s *Scope) release() {
 		s.Instructions[i].Arg = nil
 	}
 	reuse.Free[Scope](s, nil)
+}
+
+func (s *Scope) Reset(c *Compile) error {
+	err := s.resetForReuse(c)
+	if err != nil {
+		return err
+	}
+	for _, scope := range s.PreScopes {
+		err := scope.Reset(c)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Scope) resetForReuse(c *Compile) (err error) {
+	if s.Proc != nil {
+		newctx, cancel := context.WithCancel(c.ctx)
+		s.Proc.Base = c.proc.Base
+		s.Proc.Ctx = newctx
+		s.Proc.Cancel = cancel
+	}
+	for _, ins := range s.Instructions {
+		if ins.Op == vm.Output {
+			ins.Arg.(*output.Argument).Func = c.fill
+		}
+	}
+	if s.DataSource != nil {
+		if s.DataSource.isConst {
+			s.DataSource.Bat = nil
+		} else {
+			s.DataSource.Rel = nil
+			s.DataSource.R = nil
+		}
+	}
+	return nil
 }
 
 func (s *Scope) initDataSource(c *Compile) (err error) {
@@ -553,14 +591,14 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		//  I kept the old codes here without any modify. I don't know if there is one `GetRelation(txn, scanNode, scheme, table)`
 		{
 			n := s.DataSource.node
-			txnOp := s.Proc.TxnOperator
+			txnOp := s.Proc.GetTxnOperator()
 			if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
 				if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
-					n.ScanSnapshot.TS.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
+					n.ScanSnapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
 					if c.proc.GetCloneTxnOperator() != nil {
 						txnOp = c.proc.GetCloneTxnOperator()
 					} else {
-						txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanSnapshot.TS)
+						txnOp = c.proc.GetTxnOperator().CloneSnapshotOp(*n.ScanSnapshot.TS)
 						c.proc.SetCloneTxnOperator(txnOp)
 					}
 
@@ -577,7 +615,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 			rel, err = db.Relation(ctx, s.DataSource.RelationName, c.proc)
 			if err != nil {
 				var e error // avoid contamination of error messages
-				db, e = c.e.Database(ctx, defines.TEMPORARY_DBNAME, s.Proc.TxnOperator)
+				db, e = c.e.Database(ctx, defines.TEMPORARY_DBNAME, s.Proc.GetTxnOperator())
 				if e != nil {
 					return nil, e
 				}
@@ -796,7 +834,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 			}
 			newExprList := []*plan.Expr{newExpr}
 			if arg.E != nil {
-				newExprList = append(newExprList, arg.E)
+				newExprList = append(newExprList, plan2.DeepCopyExpr(arg.E))
 			}
 			arg.SetExeExpr(colexec.RewriteFilterExprList(newExprList))
 		}
@@ -1166,7 +1204,7 @@ func (s *Scope) notifyAndReceiveFromRemote(wg *sync.WaitGroup, errChan chan erro
 				streamSender, errStream := cnclient.GetStreamSender(fromAddr)
 				if errStream != nil {
 					s.Proc.Errorf(s.Proc.Ctx, "Failed to get stream sender txnID=%s, err=%v",
-						s.Proc.TxnOperator.Txn().DebugString(), errStream)
+						s.Proc.GetTxnOperator().Txn().DebugString(), errStream)
 					closeWithError(errStream, s.Proc.Reg.MergeReceivers[receiverIdx])
 					return
 				}

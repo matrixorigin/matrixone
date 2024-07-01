@@ -1246,6 +1246,8 @@ func Test_convertRowsIntoBatch(t *testing.T) {
 				row[j] = types.Datetime(0)
 			case defines.MYSQL_TYPE_TIMESTAMP:
 				row[j] = types.Timestamp(0)
+			case defines.MYSQL_TYPE_ENUM:
+				row[j] = types.Enum(1)
 			default:
 				assert.True(t, false)
 			}
@@ -1282,9 +1284,18 @@ func Test_convertRowsIntoBatch(t *testing.T) {
 			case types.T_timestamp:
 				assert.Equal(t, mrs.Data[i][j].(types.Timestamp).String2(time.UTC, 0), row[j])
 				continue
+			case types.T_enum:
+				assert.Equal(t, mrs.Data[i][j].(types.Enum), row[j])
+				continue
 			}
 			assert.Equal(t, mrs.Data[i][j], row[j])
 		}
 
 	}
+}
+
+func Test_issue3482(t *testing.T) {
+	s := issue3482SqlPrefix + " "
+	ui := UserInput{sql: s}
+	assert.True(t, ui.isIssue3482Sql())
 }

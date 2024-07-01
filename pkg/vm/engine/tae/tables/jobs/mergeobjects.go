@@ -368,10 +368,10 @@ func HandleMergeEntryInTxn(txn txnif.AsyncTxn, entry *api.MergeCommitEntry, rt *
 	return createdObjs, nil
 }
 
-func (task *mergeObjectsTask) GetTotalSize() uint32 {
-	totalSize := uint32(0)
+func (task *mergeObjectsTask) GetTotalSize() uint64 {
+	totalSize := uint64(0)
 	for _, obj := range task.mergedObjs {
-		totalSize += uint32(obj.GetOriginSize())
+		totalSize += uint64(obj.GetOriginSize())
 	}
 	return totalSize
 }

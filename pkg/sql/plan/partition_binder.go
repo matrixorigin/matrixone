@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"strings"
 )
 
 func NewPartitionBinder(builder *QueryBuilder, ctx *BindContext) *PartitionBinder {
@@ -93,9 +92,9 @@ func (p *PartitionBinder) BindExpr(expr tree.Expr, i int32, b bool) (*plan.Expr,
 		if !ok {
 			return nil, moerr.NewNYI(p.GetContext(), "invalid function expr '%v'", exprImpl)
 		}
-		funcName := strings.ToLower(funcRef.Parts[0])
+		funcName := funcRef.ColName()
 		if !functionIsSupported(funcName) {
-			return nil, moerr.NewInvalidInput(p.GetContext(), "function %s is not allowed in the partition expression", funcName)
+			return nil, moerr.NewInvalidInput(p.GetContext(), "function %s is not allowed in the partition expression", funcRef.ColNameOrigin())
 		}
 	}
 	return p.baseBindExpr(expr, i, b)

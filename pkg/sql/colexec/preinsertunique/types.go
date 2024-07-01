@@ -17,11 +17,11 @@ package preinsertunique
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -29,12 +29,15 @@ import (
 
 var _ vm.Operator = new(Argument)
 
+type container struct {
+	buf *batch.Batch
+}
 type Argument struct {
+	ctr          *container
 	Ctx          context.Context
 	PreInsertCtx *plan.PreInsertUkCtx
 
 	packers util.PackerList
-	buf     *batch.Batch
 
 	vm.OperatorBase
 }
@@ -75,8 +78,13 @@ func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if arg.buf != nil {
-		arg.buf.Clean(proc.Mp())
+	if arg.ctr != nil {
+		if arg.ctr.buf != nil {
+			arg.ctr.buf.Clean(proc.Mp())
+			arg.ctr.buf = nil
+		}
+		arg.ctr = nil
 	}
+
 	arg.packers.Free()
 }

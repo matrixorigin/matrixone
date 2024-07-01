@@ -18,3 +18,8 @@ where (information_schema.REFERENTIAL_CONSTRAINTS.CONSTRAINT_SCHEMA in ('plat_co
 order by information_schema.KEY_COLUMN_USAGE.CONSTRAINT_SCHEMA asc,
          information_schema.KEY_COLUMN_USAGE.CONSTRAINT_NAME asc,
          information_schema.KEY_COLUMN_USAGE.ORDINAL_POSITION asc;
+
+select table_catalog, table_schema, table_name, table_type, engine
+from information_schema.tables
+where table_schema = 'mo_catalog' and table_type = 'BASE TABLE'
+order by table_name;

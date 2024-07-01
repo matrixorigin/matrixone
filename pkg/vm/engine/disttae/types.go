@@ -460,7 +460,8 @@ func (txn *Transaction) gcObjs(start int) error {
 	objsToGC := make(map[string]struct{})
 	var objsName []string
 	for i := start; i < len(txn.writes); i++ {
-		if txn.writes[i].bat == nil {
+		if txn.writes[i].bat == nil ||
+			txn.writes[i].bat.RowCount() == 0 {
 			continue
 		}
 		//1. Remove blocks from txn.cnBlkId_Pos lazily till txn commits or rollback.
@@ -576,7 +577,7 @@ func (txn *Transaction) GetSQLCount() uint64 {
 // 2. not first sql
 func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) error {
 	needResetSnapshot := false
-	newTimes := txn.proc.TxnClient.GetSyncLatestCommitTSTimes()
+	newTimes := txn.proc.Base.TxnClient.GetSyncLatestCommitTSTimes()
 	if newTimes > txn.syncCommittedTSCount {
 		txn.syncCommittedTSCount = newTimes
 		needResetSnapshot = true

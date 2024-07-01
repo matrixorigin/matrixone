@@ -33,9 +33,10 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	arg.OrderBy = arg.Reader.GetOrderBy()
+	arg.ctr = new(container)
+	arg.ctr.orderBy = arg.Reader.GetOrderBy()
 	if arg.TopValueMsgTag > 0 {
-		arg.msgReceiver = proc.NewMessageReceiver([]int32{arg.TopValueMsgTag}, arg.GetAddress())
+		arg.ctr.msgReceiver = proc.NewMessageReceiver([]int32{arg.TopValueMsgTag}, arg.GetAddress())
 	}
 	return nil
 }
@@ -43,7 +44,7 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	var e error
 	start := time.Now()
-	txnOp := proc.TxnOperator
+	txnOp := proc.GetTxnOperator()
 	seq := uint64(0)
 	if txnOp != nil {
 		seq = txnOp.NextSequence()
@@ -87,15 +88,15 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	if arg.buf != nil {
-		proc.PutBatch(arg.buf)
-		arg.buf = nil
+	if arg.ctr.buf != nil {
+		proc.PutBatch(arg.ctr.buf)
+		arg.ctr.buf = nil
 	}
 
 	for {
 		// receive topvalue message
-		if arg.msgReceiver != nil {
-			msgs, _ := arg.msgReceiver.ReceiveMessage(false, proc.Ctx)
+		if arg.ctr.msgReceiver != nil {
+			msgs, _ := arg.ctr.msgReceiver.ReceiveMessage(false, proc.Ctx)
 			for i := range msgs {
 				msg, ok := msgs[i].(process.TopValueMessage)
 				if !ok {
@@ -123,8 +124,8 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 
 		trace.GetService().TxnRead(
-			proc.TxnOperator,
-			proc.TxnOperator.Txn().SnapshotTS,
+			proc.GetTxnOperator(),
+			proc.GetTxnOperator().Txn().SnapshotTS,
 			arg.TableID,
 			arg.Attrs,
 			bat)
@@ -133,12 +134,12 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		anal.InputBlock()
 		anal.S3IOByte(bat)
 		batSize := bat.Size()
-		arg.maxAllocSize = max(arg.maxAllocSize, batSize)
+		arg.ctr.maxAllocSize = max(arg.ctr.maxAllocSize, batSize)
 
-		arg.buf = bat
+		arg.ctr.buf = bat
 		break
 	}
 
-	result.Batch = arg.buf
+	result.Batch = arg.ctr.buf
 	return result, nil
 }
