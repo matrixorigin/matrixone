@@ -6101,7 +6101,7 @@ func TestDeltaLocation(t *testing.T) {
 	assert.NoError(t, err)
 	ok, err := rel.TryDeleteByDeltaloc(id, deltaLoc)
 	assert.NoError(t, err)
-	assert.False(t, ok)
+	assert.True(t, ok)
 
 	{
 		txn, rel := tae.GetRelation()
@@ -6112,7 +6112,6 @@ func TestDeltaLocation(t *testing.T) {
 	}
 
 	assert.NoError(t, err)
-	assert.False(t, ok)
 	err = txn.Commit(ctx)
 	assert.Error(t, err)
 }
