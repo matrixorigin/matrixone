@@ -155,6 +155,14 @@ func (t *testWorkspace) BindTxnOp(op client.TxnOperator) {
 	panic("implement me")
 }
 
+func (t *testWorkspace) SetHaveDDL(flag bool) {
+	//TODO implement me
+}
+
+func (t *testWorkspace) GetHaveDDL() bool {
+	return false
+}
+
 func TestWorkspace(t *testing.T) {
 	convey.Convey("no panic", t, func() {
 		convey.So(

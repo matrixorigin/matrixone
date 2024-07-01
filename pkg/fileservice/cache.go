@@ -132,7 +132,7 @@ var _defaultCacheDataAllocator CacheDataAllocator
 func GetDefaultCacheDataAllocator() CacheDataAllocator {
 	initDefaultCacheDataAllocator.Do(func() {
 		_defaultCacheDataAllocator = &bytesAllocator{
-			allocator: getMallocAllocator(),
+			allocator: getBytesAllocator(),
 		}
 	})
 	return _defaultCacheDataAllocator

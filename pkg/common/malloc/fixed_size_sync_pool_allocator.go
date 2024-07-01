@@ -40,7 +40,7 @@ func NewFixedSizeSyncPoolAllocator(size uint64) (ret *fixedSizeSyncPoolAllocator
 		},
 
 		deallocatorPool: NewClosureDeallocatorPool(
-			func(hint Hints, args fixedSizeSyncPoolDeallocatorArgs) {
+			func(hint Hints, args *fixedSizeSyncPoolDeallocatorArgs) {
 				if hint&DoNotReuse > 0 {
 					return
 				}
