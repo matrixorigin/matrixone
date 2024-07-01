@@ -109,20 +109,20 @@ func NewTransferHashPage(id *common.ID, ts time.Time, pageSize int, isTransient 
 	}
 	page.OnZeroCB = page.Close
 
-	cl := getCleaner()
-	cl.addPage(page)
-
 	return page
 }
 
 func (page *TransferHashPage) ID() *common.ID    { return page.id }
 func (page *TransferHashPage) BornTS() time.Time { return page.bornTS }
 
-func (page *TransferHashPage) TTL(now time.Time, ttl time.Duration) bool {
-	if page.isTransient {
-		ttl /= 2
+func (page *TransferHashPage) TTL() uint8 {
+	if time.Now().After(page.bornTS.Add(page.params.DiskTTL)) {
+		return 2
 	}
-	return now.After(page.bornTS.Add(ttl))
+	if time.Now().After(page.bornTS.Add(page.params.TTL)) {
+		return 1
+	}
+	return 0
 }
 
 func (page *TransferHashPage) Close() {
@@ -152,13 +152,11 @@ func (page *TransferHashPage) Pin() *common.PinnedItem[*TransferHashPage] {
 	}
 }
 
-func (page *TransferHashPage) Clean() bool {
-	if time.Since(page.bornTS) > page.params.DiskTTL {
-		return false
+func (page *TransferHashPage) Clear() {
+	page.ClearTable()
+	if time.Now().After(page.bornTS.Add(page.params.DiskTTL)) {
+		page.ClearPersistTable()
 	}
-
-	page.clearPersistTable()
-	return true
 }
 
 func (page *TransferHashPage) Train(from uint32, to types.Rowid) {
@@ -212,7 +210,7 @@ func (page *TransferHashPage) SetLocation(location objectio.Location) {
 	page.loc.Store(&location)
 }
 
-func (page *TransferHashPage) clearTable() {
+func (page *TransferHashPage) ClearTable() {
 	if atomic.LoadInt32(&page.isPersisted) == 1 {
 		return
 	}
@@ -244,59 +242,15 @@ func (page *TransferHashPage) loadTable() {
 	v2.TaskMergeTransferPageSizeGauge.Add(float64(page.Length()))
 
 	atomic.StoreInt32(&page.isPersisted, 0)
-
-	cl := getCleaner()
-	cl.addPage(page)
 }
 
-func (page *TransferHashPage) clearPersistTable() {
-	if atomic.LoadInt32(&page.isPersisted) == 0 {
+func (page *TransferHashPage) ClearPersistTable() {
+	if page.loc.Load() == nil {
 		return
 	}
-	atomic.StoreInt32(&page.isPersisted, 0)
 	FS.Delete(context.Background(), page.loc.Load().Name().String())
 }
 
 func (page *TransferHashPage) IsPersist() int32 {
 	return atomic.LoadInt32(&page.isPersisted)
-}
-
-type TransferPageCleaner struct {
-	Pages chan *TransferPage
-}
-
-type TransferPage struct {
-	page *TransferHashPage
-	ts   time.Time
-}
-
-var (
-	Cleaner *TransferPageCleaner
-	once    sync.Once
-)
-
-func getCleaner() *TransferPageCleaner {
-	once.Do(func() {
-		Cleaner = &TransferPageCleaner{
-			Pages: make(chan *TransferPage, 1000000),
-		}
-		go Cleaner.Handler()
-	})
-	return Cleaner
-}
-
-func (c *TransferPageCleaner) addPage(page *TransferHashPage) {
-	c.Pages <- &TransferPage{page: page, ts: time.Now()}
-}
-
-// Handler clean up the hash table in memory
-func (c *TransferPageCleaner) Handler() {
-	for {
-		page := <-c.Pages
-		v2.TransferPagesInChannelHistogram.Observe(float64(len(c.Pages)))
-		if time.Since(page.ts) < page.page.params.TTL {
-			time.Sleep(page.page.params.TTL - time.Since(page.ts))
-		}
-		page.page.clearTable()
-	}
 }

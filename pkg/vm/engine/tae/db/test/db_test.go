@@ -9002,11 +9002,7 @@ func TestPersistTransferTable(t *testing.T) {
 	tae.BindSchema(schema)
 	testutil.CreateRelation(t, tae.DB, "db", schema, true)
 
-	ttl := time.Minute
-	table := model.NewTransferTable[*model.TransferHashPage](ttl)
-	defer table.Close()
 	sid := objectio.NewSegmentid()
-
 	id1 := common.ID{BlockID: *objectio.NewBlockid(sid, 1, 0)}
 	id2 := common.ID{BlockID: *objectio.NewBlockid(sid, 2, 0)}
 
@@ -9015,10 +9011,6 @@ func TestPersistTransferTable(t *testing.T) {
 		model.SetBlockRead(blockio.NewBlockRead())
 	}
 	model.FS = tae.Runtime.Fs.Service
-	model.Cleaner = &model.TransferPageCleaner{
-		Pages: make(chan *model.TransferPage, 1000000),
-	}
-	go model.Cleaner.Handler()
 	page := model.NewTransferHashPage(&id1, now, 10, false,
 		model.WithTTL(time.Second),
 	)
@@ -9028,6 +9020,7 @@ func TestPersistTransferTable(t *testing.T) {
 		page.Train(uint32(i), rowID)
 		ids[i] = rowID
 	}
+	tae.Runtime.TransferTable.AddPage(page)
 
 	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
 	var writer *blockio.BlockWriter
@@ -9065,6 +9058,7 @@ func TestPersistTransferTable(t *testing.T) {
 	page.SetLocation(location)
 
 	time.Sleep(2 * time.Second)
+	tae.Runtime.TransferTable.RunTTL(time.Now())
 	assert.True(t, page.IsPersist() == 1)
 	for i := 0; i < 10; i++ {
 		id, ok := page.Transfer(uint32(i))
@@ -9074,8 +9068,6 @@ func TestPersistTransferTable(t *testing.T) {
 }
 
 func TestClearPersistTransferTable(t *testing.T) {
-	duration := time.Second
-	model.TestDuration.Store(&duration)
 	ctx := context.Background()
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
@@ -9086,9 +9078,6 @@ func TestClearPersistTransferTable(t *testing.T) {
 	tae.BindSchema(schema)
 	testutil.CreateRelation(t, tae.DB, "db", schema, true)
 
-	ttl := time.Minute
-	table := model.NewTransferTable[*model.TransferHashPage](ttl)
-	defer table.Close()
 	sid := objectio.NewSegmentid()
 
 	id1 := common.ID{BlockID: *objectio.NewBlockid(sid, 1, 0)}
@@ -9099,10 +9088,6 @@ func TestClearPersistTransferTable(t *testing.T) {
 		model.SetBlockRead(blockio.NewBlockRead())
 	}
 	model.FS = tae.Runtime.Fs.Service
-	model.Cleaner = &model.TransferPageCleaner{
-		Pages: make(chan *model.TransferPage, 1000000),
-	}
-	go model.Cleaner.Handler()
 
 	page := model.NewTransferHashPage(&id1, now, 10, false,
 		model.WithTTL(time.Second),
@@ -9151,10 +9136,8 @@ func TestClearPersistTransferTable(t *testing.T) {
 
 	page.SetLocation(location)
 
+	tae.Runtime.TransferTable.RunTTL(time.Now())
 	time.Sleep(2 * time.Second)
-	assert.True(t, page.IsPersist() == 0)
-	for i := 0; i < 10; i++ {
-		_, ok := page.Transfer(uint32(i))
-		assert.False(t, ok)
-	}
+	_, err = tae.Runtime.TransferTable.Pin(*page.ID())
+	assert.Equal(t, err, moerr.GetOkExpectedEOB())
 }

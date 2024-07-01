@@ -102,7 +102,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		CNMergeSched: merge.NewTaskServiceGetter(opts.TaskServiceGetter),
 	}
 	fs := objectio.NewObjectFS(opts.Fs, serviceDir)
-	transferTable := model.NewTransferTable[*model.TransferHashPage](db.Opts.TransferTableTTL)
+	transferTable := model.NewTransferTable[*model.TransferHashPage]()
 
 	switch opts.LogStoreT {
 	case options.LogstoreBatchStore:

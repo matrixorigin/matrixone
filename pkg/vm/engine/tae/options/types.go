@@ -38,6 +38,7 @@ const (
 
 	DefaultScannerInterval              = time.Second * 5
 	DefaultCheckpointFlushInterval      = time.Minute
+	DefaultCheckpointTransferInterval   = time.Second * 5
 	DefaultCheckpointMinCount           = int64(100)
 	DefaultCheckpointIncremetalInterval = time.Minute
 	DefaultCheckpointGlobalMinCount     = 10

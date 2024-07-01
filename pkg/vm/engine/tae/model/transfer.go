@@ -17,7 +17,6 @@ package model
 import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -27,24 +26,21 @@ import (
 type PageT[T common.IRef] interface {
 	common.IRef
 	Pin() *common.PinnedItem[T]
-	TTL(time.Time, time.Duration) bool
+	TTL() uint8 // 0 skip, 1 clear memory, 2 clear disk
 	ID() *common.ID
 	Length() int
-	Clean() bool
+	Clear()
 }
 
 type TransferTable[T PageT[T]] struct {
 	sync.RWMutex
-	ttl   time.Duration
 	pages map[common.ID]*common.PinnedItem[T]
 }
 
-func NewTransferTable[T PageT[T]](ttl time.Duration) *TransferTable[T] {
+func NewTransferTable[T PageT[T]]() *TransferTable[T] {
 	table := &TransferTable[T]{
-		ttl:   ttl,
 		pages: make(map[common.ID]*common.PinnedItem[T]),
 	}
-	go table.Clean()
 	return table
 }
 
@@ -59,44 +55,46 @@ func (table *TransferTable[T]) Pin(id common.ID) (pinned *common.PinnedItem[T], 
 	}
 	return
 }
+
 func (table *TransferTable[T]) Len() int {
 	table.RLock()
 	defer table.RUnlock()
 	return len(table.pages)
 }
-func (table *TransferTable[T]) prepareTTL(now time.Time) (items []*common.PinnedItem[T]) {
+
+func (table *TransferTable[T]) prepareTTL() (mem, disk []*common.PinnedItem[T]) {
 	table.RLock()
 	defer table.RUnlock()
 	for _, page := range table.pages {
-		if page.Item().TTL(now, table.ttl) {
-			items = append(items, page)
+		st := page.Item().TTL()
+		if st == 1 {
+			mem = append(mem, page)
+		} else if st == 2 {
+			disk = append(disk, page)
 		}
 	}
 	return
 }
 
-func (table *TransferTable[T]) executeTTL(items []*common.PinnedItem[T]) {
-	if len(items) == 0 {
-		return
+func (table *TransferTable[T]) executeTTL(mem, disk []*common.PinnedItem[T]) {
+	for _, page := range mem {
+		page.Val.Clear()
 	}
 
-	cnt := 0
-
 	table.Lock()
-	for _, pinned := range items {
-		cnt += pinned.Val.Length()
+	for _, pinned := range disk {
 		delete(table.pages, *pinned.Item().ID())
 	}
 	table.Unlock()
-	for _, pinned := range items {
+	for _, pinned := range disk {
+		pinned.Val.Clear()
 		pinned.Close()
 	}
-
 }
 
 func (table *TransferTable[T]) RunTTL(now time.Time) {
-	items := table.prepareTTL(now)
-	table.executeTTL(items)
+	mem, disk := table.prepareTTL()
+	table.executeTTL(mem, disk)
 }
 
 func (table *TransferTable[T]) AddPage(page T) (dup bool) {
@@ -142,25 +140,4 @@ func (table *TransferTable[T]) Close() {
 		item.Close()
 	}
 	table.pages = make(map[common.ID]*common.PinnedItem[T])
-}
-
-var (
-	duration     = 10 * time.Minute
-	TestDuration atomic.Pointer[time.Duration]
-)
-
-// Clean Clear the hash table on disk regularly
-func (table *TransferTable[T]) Clean() {
-	for {
-		table.RLock()
-		for _, item := range table.pages {
-			item.Item().Clean()
-		}
-		table.RUnlock()
-		if TestDuration.Load() != nil {
-			time.Sleep(*TestDuration.Load())
-		} else {
-			time.Sleep(duration)
-		}
-	}
 }
