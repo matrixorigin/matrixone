@@ -528,8 +528,8 @@ func (a *AwsSDKv2) getObject(ctx context.Context, min *int64, max *int64, params
 	}, a.perfCounterSets...)
 	r, err := newRetryableReader(
 		func(offset int64) (io.ReadCloser, error) {
-			LogEvent(ctx, "newRetryableReader new reader begin, offset %v", offset)
-			defer LogEvent(ctx, "newRetryableReader new reader end")
+			LogEvent(ctx, str_retryable_reader_new_reader_begin, offset)
+			defer LogEvent(ctx, str_retryable_reader_new_reader_end)
 			var rang string
 			if max != nil {
 				rang = fmt.Sprintf("bytes=%d-%d", offset, *max)
@@ -540,8 +540,8 @@ func (a *AwsSDKv2) getObject(ctx context.Context, min *int64, max *int64, params
 			output, err := DoWithRetry(
 				"s3 get object",
 				func() (*s3.GetObjectOutput, error) {
-					LogEvent(ctx, "AwsSDKv2 GetObject begin")
-					defer LogEvent(ctx, "AwsSDKv2 GetObject end")
+					LogEvent(ctx, str_awssdkv2_get_object_begin)
+					defer LogEvent(ctx, str_awssdkv2_get_object_end)
 					return a.client.GetObject(ctx, params, optFns...)
 				},
 				maxRetryAttemps,
