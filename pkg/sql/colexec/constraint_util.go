@@ -195,7 +195,7 @@ func BatchDataNotNullCheck(tmpBat *batch.Batch, tableDef *plan.TableDef, ctx con
 }
 
 func getRelationByObjRef(ctx context.Context, proc *process.Process, eg engine.Engine, ref *plan.ObjectRef) (engine.Relation, error) {
-	dbSource, err := eg.Database(ctx, ref.SchemaName, proc.TxnOperator)
+	dbSource, err := eg.Database(ctx, ref.SchemaName, proc.GetTxnOperator())
 	if err != nil {
 		return nil, err
 	}
@@ -205,7 +205,7 @@ func getRelationByObjRef(ctx context.Context, proc *process.Process, eg engine.E
 	}
 
 	// try to get temporary table
-	dbSource, err = eg.Database(ctx, defines.TEMPORARY_DBNAME, proc.TxnOperator)
+	dbSource, err = eg.Database(ctx, defines.TEMPORARY_DBNAME, proc.GetTxnOperator())
 	if err != nil {
 		return nil, moerr.NewNoSuchTable(ctx, ref.SchemaName, ref.ObjName)
 	}
@@ -228,7 +228,7 @@ func GetRelAndPartitionRelsByObjRef(
 	if len(partitionTableNames) > 0 {
 		var dbSource engine.Database
 		var tmpRel engine.Relation
-		dbSource, err = eng.Database(proc.Ctx, ref.SchemaName, proc.TxnOperator)
+		dbSource, err = eng.Database(proc.Ctx, ref.SchemaName, proc.GetTxnOperator())
 		if err != nil {
 			return
 		}

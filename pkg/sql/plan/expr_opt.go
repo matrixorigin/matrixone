@@ -15,7 +15,9 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 func (builder *QueryBuilder) mergeFiltersOnCompositeKey(nodeID int32) {
@@ -88,7 +90,7 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 					continue
 				}
 
-				if subFn.Func.ObjName == "=" {
+				if subFn.Func.ObjName == "=" || subFn.Func.ObjName == "in" {
 					if numParts > 1 {
 						newArgs := builder.doMergeFiltersOnCompositeKey(tableDef, tableTag, subExpr)
 						subExpr = newArgs[0]
@@ -124,15 +126,14 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 
 				switch mergedFn.Func.ObjName {
 				case "=":
-					inArg := mergedFn.Args[1]
-					if inArg.GetF() != nil && inArg.GetF().Func.ObjName == "cast" {
-						inArg = inArg.GetF().Args[0]
-					}
-					inArgs = append(inArgs, inArg)
+					inArgs = append(inArgs, mergedFn.Args[1])
 
 				case "prefix_eq":
 					inArgs = append(inArgs, mergedFn.Args[1])
 					pkFnName = "prefix_in"
+
+				case "in":
+					inArgs = append(inArgs, mergedFn.Args[1].GetList().List...)
 
 				default:
 					newOrArgs = append(newOrArgs, subExpr)
@@ -143,7 +144,14 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 				newOrArgs = append(newOrArgs, firstEquiExpr)
 			} else if len(inArgs) > 1 {
 				leftExpr := firstEquiExpr.GetF().Args[0]
-				inExpr, _ := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), pkFnName, []*plan.Expr{
+				leftType := makeTypeByPlan2Expr(leftExpr)
+				argsType := []types.Type{leftType, leftType}
+				fGet, _ := function.GetFunctionByName(builder.GetContext(), pkFnName, argsType)
+
+				funcID := fGet.GetEncodedOverloadID()
+				returnType := fGet.GetReturnType()
+				exprType := makePlan2Type(&returnType)
+				args := []*plan.Expr{
 					leftExpr,
 					{
 						Typ: leftExpr.Typ,
@@ -153,7 +161,17 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 							},
 						},
 					},
-				})
+				}
+				exprType.NotNullable = function.DeduceNotNullable(funcID, args)
+				inExpr := &plan.Expr{
+					Typ: exprType,
+					Expr: &plan.Expr_F{
+						F: &plan.Function{
+							Func: getFunctionObjRef(funcID, pkFnName),
+							Args: args,
+						},
+					},
+				}
 
 				newOrArgs = append(newOrArgs, inExpr)
 			}

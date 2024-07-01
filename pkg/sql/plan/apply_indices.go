@@ -798,6 +798,7 @@ END0:
 		col.ColPos = 0
 
 		var idxFilter *plan.Expr
+		estimateExprSelectivity(expr, builder)
 		if idxDef.Unique {
 			idxFilter = expr
 		} else {
@@ -814,6 +815,7 @@ END0:
 				idxFilter, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_between", fn.Args)
 			}
 		}
+		idxFilter.Selectivity = expr.Selectivity
 
 		idxTableNodeID := builder.appendNode(&plan.Node{
 			NodeType:     plan.Node_TABLE_SCAN,
@@ -885,6 +887,10 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 	//----------------------------------------------------------------------
 
 	rightChild := builder.qry.Nodes[node.Children[1]]
+
+	if rightChild.Stats.Selectivity > 0.5 {
+		return nodeID
+	}
 
 	if rightChild.Stats.Outcnt > float64(GetInFilterCardLimitOnPK(leftChild.Stats.TableCnt)) || rightChild.Stats.Outcnt > leftChild.Stats.Cost*0.1 {
 		return nodeID

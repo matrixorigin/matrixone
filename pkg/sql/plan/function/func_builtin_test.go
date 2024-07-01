@@ -29,7 +29,7 @@ import (
 
 func Test_BuiltIn_CurrentSessionInfo(t *testing.T) {
 	proc := testutil.NewProcess()
-	proc.SessionInfo = process.SessionInfo{
+	proc.Base.SessionInfo = process.SessionInfo{
 		User:      "test_user1",
 		UserId:    135,
 		Account:   "test_account2",

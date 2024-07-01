@@ -29,7 +29,7 @@ import (
 )
 
 var MoCtlTNCmdSender = func(ctx context.Context, proc *process.Process, requests []txn.CNOpRequest) ([]txn.CNOpResponse, error) {
-	txnOp := proc.TxnOperator
+	txnOp := proc.GetTxnOperator()
 	if txnOp == nil {
 		return nil, moerr.NewInternalError(ctx, "ctl: txn operator is nil")
 	}

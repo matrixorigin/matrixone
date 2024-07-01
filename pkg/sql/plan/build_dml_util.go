@@ -1503,6 +1503,10 @@ func buildInsertPlansWithRelatedHiddenTable(
 		}
 	}
 
+	if stmt != nil && stmt.IsRestore {
+		checkInsertPkDupForHiddenIndexTable = false
+	}
+
 	return makeOneInsertPlan(ctx, builder, bindCtx, objRef, tableDef,
 		updateColLength, sourceStep, addAffectedRows, isFkRecursionCall, updatePkCol,
 		pkFilterExprs, partitionExpr, ifExistAutoPkCol, checkInsertPkDupForHiddenIndexTable,
@@ -3800,10 +3804,10 @@ func runSql(ctx CompilerContext, sql string) (executor.Result, error) {
 		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
 		// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
 		WithDisableIncrStatement().
-		WithTxn(proc.TxnOperator).
-		WithDatabase(proc.SessionInfo.Database).
-		WithTimeZone(proc.SessionInfo.TimeZone).
-		WithAccountID(proc.SessionInfo.AccountId)
+		WithTxn(proc.GetTxnOperator()).
+		WithDatabase(proc.GetSessionInfo().Database).
+		WithTimeZone(proc.GetSessionInfo().TimeZone).
+		WithAccountID(proc.GetSessionInfo().AccountId)
 	return exec.Exec(proc.Ctx, sql, opts)
 }
 

@@ -946,7 +946,7 @@ func TimestampAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
 
 	return opBinaryFixedFixedToFixedWithErrorCheck[types.Timestamp, int64, types.Timestamp](ivecs, result, proc, length, func(v1 types.Timestamp, v2 int64) (types.Timestamp, error) {
-		return doTimestampAdd(proc.SessionInfo.TimeZone, v1, v2, iTyp)
+		return doTimestampAdd(proc.GetSessionInfo().TimeZone, v1, v2, iTyp)
 	}, selectList)
 }
 
@@ -1606,7 +1606,7 @@ func TimestampSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
 
 	return opBinaryFixedFixedToFixedWithErrorCheck[types.Timestamp, int64, types.Timestamp](ivecs, result, proc, length, func(v1 types.Timestamp, v2 int64) (types.Timestamp, error) {
-		return doTimestampSub(proc.SessionInfo.TimeZone, v1, v2, iTyp)
+		return doTimestampSub(proc.GetSessionInfo().TimeZone, v1, v2, iTyp)
 	}, selectList)
 }
 
@@ -1824,7 +1824,7 @@ func FromUnixTimeInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 				return err
 			}
 		} else {
-			if err = rs.Append(types.DatetimeFromUnix(proc.SessionInfo.TimeZone, v), false); err != nil {
+			if err = rs.Append(types.DatetimeFromUnix(proc.GetSessionInfo().TimeZone, v), false); err != nil {
 				return err
 			}
 		}
@@ -1845,7 +1845,7 @@ func FromUnixTimeUint64(ivecs []*vector.Vector, result vector.FunctionResultWrap
 				return err
 			}
 		} else {
-			if err = rs.Append(types.DatetimeFromUnix(proc.SessionInfo.TimeZone, int64(v)), false); err != nil {
+			if err = rs.Append(types.DatetimeFromUnix(proc.GetSessionInfo().TimeZone, int64(v)), false); err != nil {
 				return err
 			}
 		}
@@ -1874,7 +1874,7 @@ func FromUnixTimeFloat64(ivecs []*vector.Vector, result vector.FunctionResultWra
 			}
 		} else {
 			x, y := splitDecimalToIntAndFrac(v)
-			if err = rs.Append(types.DatetimeFromUnixWithNsec(proc.SessionInfo.TimeZone, x, y), false); err != nil {
+			if err = rs.Append(types.DatetimeFromUnixWithNsec(proc.GetSessionInfo().TimeZone, x, y), false); err != nil {
 				return err
 			}
 		}
@@ -1902,7 +1902,7 @@ func FromUnixTimeInt64Format(ivecs []*vector.Vector, result vector.FunctionResul
 			}
 		} else {
 			buf.Reset()
-			r := types.DatetimeFromUnix(proc.SessionInfo.TimeZone, v)
+			r := types.DatetimeFromUnix(proc.GetSessionInfo().TimeZone, v)
 			if err = datetimeFormat(proc.Ctx, r, f, &buf); err != nil {
 				return err
 			}
@@ -1934,7 +1934,7 @@ func FromUnixTimeUint64Format(ivecs []*vector.Vector, result vector.FunctionResu
 			}
 		} else {
 			buf.Reset()
-			r := types.DatetimeFromUnix(proc.SessionInfo.TimeZone, int64(v))
+			r := types.DatetimeFromUnix(proc.GetSessionInfo().TimeZone, int64(v))
 			if err = datetimeFormat(proc.Ctx, r, f, &buf); err != nil {
 				return err
 			}
@@ -1967,7 +1967,7 @@ func FromUnixTimeFloat64Format(ivecs []*vector.Vector, result vector.FunctionRes
 		} else {
 			buf.Reset()
 			x, y := splitDecimalToIntAndFrac(v)
-			r := types.DatetimeFromUnixWithNsec(proc.SessionInfo.TimeZone, x, y)
+			r := types.DatetimeFromUnixWithNsec(proc.GetSessionInfo().TimeZone, x, y)
 			if err = datetimeFormat(proc.Ctx, r, f, &buf); err != nil {
 				return err
 			}

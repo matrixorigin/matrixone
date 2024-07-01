@@ -46,7 +46,7 @@ import (
 // reCheckifNeedLockWholeTable checks if the whole table needs to be locked based on the last node's statistics.
 // It returns true if the out count of the last node is greater than the maximum lock count, otherwise it returns false.
 func reCheckifNeedLockWholeTable(builder *QueryBuilder) {
-	lockService := builder.compCtx.GetProcess().LockService
+	lockService := builder.compCtx.GetProcess().Base.LockService
 	if lockService == nil {
 		// MockCompilerContext
 		return
@@ -288,7 +288,7 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Pro
 	}
 
 	// try to calculate default value, return err if fails
-	newExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(defaultExpr), proc, false)
+	newExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(defaultExpr), proc, false, true)
 	if err != nil {
 		return nil, err
 	}
