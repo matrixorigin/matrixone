@@ -6271,6 +6271,27 @@ var supportedOthersBuiltIns = []FuncNew{
 			},
 		},
 	},
+
+	// function `LAST_DAY`
+	{
+		functionId: LAST_DAY,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return LASTDAY
+				},
+			},
+		},
+	},
 }
 
 func MoCtl(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) (err error) {

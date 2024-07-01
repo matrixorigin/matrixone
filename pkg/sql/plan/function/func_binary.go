@@ -2655,6 +2655,40 @@ func TimestampDiff(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 	return nil
 }
 
+func LASTDAY(
+	ivecs []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	_ *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+) error {
+	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetStrValue(i)
+		if null1 {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			dt, err := types.ParseDateCast(functionUtil.QuickBytesToStr(v1))
+			if err != nil {
+				return err
+			}
+			year := dt.Year()
+			month := dt.Month()
+
+			lastDay := types.LastDay(int32(year), month)
+			resDt := types.DateFromCalendar(int32(year), month, lastDay)
+			if err := rs.AppendBytes([]byte(resDt.String()), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func Replace(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionStrParameter(ivecs[1])
