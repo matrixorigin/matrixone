@@ -837,8 +837,8 @@ message Node {
 	bool ifInsertFromUnique = 55;
 
 	//for message
-	repeated msgHeader send_msg_list = 56;
-	repeated msgHeader recv_msg_list = 57;
+	repeated msgHeader send_msg_list = 56 [(gogoproto.nullable) = false];
+	repeated msgHeader recv_msg_list = 57 [(gogoproto.nullable) = false];
 
 	Snapshot scan_snapshot = 58;
 
