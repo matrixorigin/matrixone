@@ -23,6 +23,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -33,7 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil/testengine"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"github.com/stretchr/testify/require"
 )
 
 func TestScopeSerialization(t *testing.T) {
@@ -86,7 +87,7 @@ func generateScopeCases(t *testing.T, testCases []string) []*Scope {
 		qry, err := opt.Optimize(stmts[0], false)
 		require.NoError(t1, err)
 		proc.Ctx = ctx
-		c := NewCompile("test", "test", sql, "", "", context.Background(), e, proc, nil, false, nil, time.Now())
+		c := NewCompile("test", "test", sql, "", "", ctx, e, proc, nil, false, nil, time.Now())
 		err = c.Compile(ctx, &plan.Plan{Plan: &plan.Plan_Query{Query: qry}}, func(batch *batch.Batch) error {
 			return nil
 		})
