@@ -2395,20 +2395,22 @@ func (tbl *txnTable) transferDeletes(
 	defer tbl.getTxn().blockId_tn_delete_metaLoc_batch.RUnlock()
 
 	toTransferLocs := make(map[types.Blockid][]objectio.Location)
-	toTransferObjs := make(map[string]struct{})
+	ObjsToGC := make(map[string]struct{})
+	locsToTransfer := make(map[string]struct{})
 	for blk, bats := range tbl.getTxn().blockId_tn_delete_metaLoc_batch.data {
 		if _, ok := deleteObjs[*objectio.ShortName(&blk)]; !ok {
 			continue
 		}
 		for _, bat := range bats {
 			vs := vector.MustStrCol(bat.GetVector(0))
-			for _, metalLoc := range vs {
-				location, err := blockio.EncodeLocationFromString(metalLoc)
+			for _, loc := range vs {
+				location, err := blockio.EncodeLocationFromString(loc)
 				if err != nil {
 					return err
 				}
 				toTransferLocs[blk] = append(toTransferLocs[blk], location)
-				toTransferObjs[location.Name().String()] = struct{}{}
+				locsToTransfer[loc] = struct{}{}
+				ObjsToGC[location.Name().String()] = struct{}{}
 			}
 
 		}
@@ -2429,7 +2431,6 @@ func (tbl *txnTable) transferDeletes(
 	}
 
 	objsToGC := make(map[string]struct{})
-	var objsNameToGC []string
 	for i := 0; i < len(tbl.getTxn().writes); i++ {
 		e := tbl.getTxn().writes[i]
 		if e.databaseId != tbl.db.databaseId || e.tableId != tbl.tableId {
@@ -2443,12 +2444,12 @@ func (tbl *txnTable) transferDeletes(
 				if err != nil {
 					return err
 				}
-				if _, ok := toTransferObjs[loc.Name().String()]; ok {
-					if _, ok := objsToGC[loc.Name().String()]; !ok {
-						objsToGC[loc.Name().String()] = struct{}{}
-						objsNameToGC = append(objsNameToGC, loc.Name().String())
-					}
+				if _, ok := locsToTransfer[locStr]; ok {
 					bat.Shrink([]int64{int64(i)}, true)
+				} else {
+					if _, ok := objsToGC[loc.Name().String()]; ok {
+						delete(objsToGC, loc.Name().String())
+					}
 				}
 			}
 			if bat.RowCount() == 0 {
@@ -2456,7 +2457,11 @@ func (tbl *txnTable) transferDeletes(
 			}
 		}
 	}
-	//gc the old tombstone objects.
+	//gc the tombstone objects.
+	var objsNameToGC []string
+	for objName := range ObjsToGC {
+		objsNameToGC = append(objsNameToGC, objName)
+	}
 	tbl.getTxn().gcObjsAsync(objsNameToGC)
 	return nil
 }
@@ -2621,6 +2626,16 @@ func (tbl *txnTable) transferPersistedDeletesParallel(
 				logutil.Errorf("transferDeletesScheduler.Schedule failed, err:%v", err)
 				return nil, err
 			}
+		}
+		//wait the result of flush jobs.
+		for _, job := range flushJobs {
+			ret := job.WaitDone()
+			if ret.Err != nil {
+				logutil.Errorf("flush deletes failed, err:%v", ret.Err)
+				return nil, ret.Err
+			}
+			//TODO::merge results
+
 		}
 
 	}
