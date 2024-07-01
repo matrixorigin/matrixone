@@ -178,7 +178,7 @@ For other installation types, please refer to [MatrixOne installation](https://d
 
 - **Building from source**
 
-1. Install Go (version 1.23 is required)
+1. Install Go (version 1.22 is required)
 
     Click <a href="https://go.dev/doc/install" target="_blank">Go Download and install</a> to enter its official documentation, and follow the installation steps to complete the **Go** installation.
 
