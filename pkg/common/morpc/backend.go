@@ -444,7 +444,6 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 
 	defer func() {
 		rb.makeAllWritesDoneWithClosed()
-		close(rb.writeC)
 	}()
 
 	// fatal if panic
@@ -701,6 +700,7 @@ func (rb *remoteBackend) handleResetConn() error {
 func (rb *remoteBackend) doClose() {
 	rb.closeOnce.Do(func() {
 		close(rb.resetConnC)
+		close(rb.writeC)
 		rb.closeConn(false)
 		// TODO: re create when reconnect
 		rb.conn = nil
