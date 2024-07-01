@@ -2395,7 +2395,7 @@ func (tbl *txnTable) transferDeletes(
 	defer tbl.getTxn().blockId_tn_delete_metaLoc_batch.RUnlock()
 
 	toTransferLocs := make(map[types.Blockid][]objectio.Location)
-	ObjsToGC := make(map[string]struct{})
+	objsToGC := make(map[string]struct{})
 	locsToTransfer := make(map[string]struct{})
 	for blk, bats := range tbl.getTxn().blockId_tn_delete_metaLoc_batch.data {
 		if _, ok := deleteObjs[*objectio.ShortName(&blk)]; !ok {
@@ -2410,7 +2410,7 @@ func (tbl *txnTable) transferDeletes(
 				}
 				toTransferLocs[blk] = append(toTransferLocs[blk], location)
 				locsToTransfer[loc] = struct{}{}
-				ObjsToGC[location.Name().String()] = struct{}{}
+				objsToGC[location.Name().String()] = struct{}{}
 			}
 
 		}
@@ -2422,15 +2422,20 @@ func (tbl *txnTable) transferDeletes(
 	if err != nil {
 		return err
 	}
+
+	for blk, bat := range targetBlks {
+		fileName := "uncommitted-tombstones"
+		if err := tbl.getTxn().WriteFile(DELETE, tbl.accountId, tbl.db.databaseId, tbl.tableId,
+			tbl.db.databaseName, tbl.tableName, fileName, bat, tbl.getTxn().tnStores[0]); err != nil {
+			return err
+		}
+		tbl.getTxn().blockId_tn_delete_metaLoc_batch.data[blk] = []*batch.Batch{bat}
+	}
+
 	//delete the block to be transferred from the map ,and add the target block to the map.
 	for blk := range toTransferLocs {
 		delete(tbl.getTxn().blockId_tn_delete_metaLoc_batch.data, blk)
 	}
-	for blk, bats := range targetBlks {
-		tbl.getTxn().blockId_tn_delete_metaLoc_batch.data[blk] = bats
-	}
-
-	objsToGC := make(map[string]struct{})
 	for i := 0; i < len(tbl.getTxn().writes); i++ {
 		e := tbl.getTxn().writes[i]
 		if e.databaseId != tbl.db.databaseId || e.tableId != tbl.tableId {
@@ -2459,7 +2464,7 @@ func (tbl *txnTable) transferDeletes(
 	}
 	//gc the tombstone objects.
 	var objsNameToGC []string
-	for objName := range ObjsToGC {
+	for objName := range objsToGC {
 		objsNameToGC = append(objsNameToGC, objName)
 	}
 	tbl.getTxn().gcObjsAsync(objsNameToGC)
@@ -2469,8 +2474,13 @@ func (tbl *txnTable) transferDeletes(
 func (tbl *txnTable) transferPersistedDeletesParallel(
 	ctx context.Context,
 	srcLocs map[types.Blockid][]objectio.Location,
-	candidates []objectio.BlockInfo) (newLocs map[types.Blockid][]*batch.Batch, err error) {
-
+	candidates []objectio.BlockInfo) (newLocs map[types.Blockid]*batch.Batch, err error) {
+	defer func() {
+		if err != nil {
+			//TODO::gc the created objects if failed.
+		}
+	}()
+	newLocs = make(map[types.Blockid]*batch.Batch)
 	getTransJob := func(
 		ctx context.Context,
 		jobNum int32,
@@ -2528,10 +2538,10 @@ func (tbl *txnTable) transferPersistedDeletesParallel(
 		return job
 	}
 
+	//build transfer jobs
 	var jobNum int32
 	cnt := 0
 	mp := make(map[int32]map[types.Blockid][]objectio.Location)
-	var transferJobs []*tasks.Job
 	for blk, locs := range srcLocs {
 		if cnt%100 == 0 {
 			jobNum++
@@ -2542,6 +2552,7 @@ func (tbl *txnTable) transferPersistedDeletesParallel(
 		mp[jobNum][blk] = locs
 		cnt++
 	}
+	transferJobs := make([]*tasks.Job, 0, len(mp))
 	for job, locs := range mp {
 		transferJobs = append(transferJobs, getTransJob(ctx, job, locs))
 	}
@@ -2597,14 +2608,49 @@ func (tbl *txnTable) transferPersistedDeletesParallel(
 			jobID := spew.Sprintf("FlushDeletes_%d", jobNum)
 			job.Init(ctx, jobID, tasks.JTAny,
 				func(ctx context.Context) *tasks.JobResult {
-					return nil
+					blkDelLocs := make(map[types.Blockid]*batch.Batch)
+					s3writer := &colexec.S3Writer{}
+					s3writer.SetSortIdx(-1)
+					_, err = s3writer.GenerateWriter(tbl.getTxn().proc)
+					if err != nil {
+						return &tasks.JobResult{Err: err}
+					}
+					var blkIDs []types.Blockid
+					for bid, bat := range bats {
+						err = s3writer.WriteBlock(bat, objectio.SchemaTombstone)
+						if err != nil {
+							return &tasks.JobResult{Err: err}
+						}
+						blkIDs = append(blkIDs, bid)
+						bat.Clean(tbl.getTxn().proc.Mp())
+
+					}
+					blkInfos, _, err := s3writer.WriteEndBlocks(tbl.getTxn().proc)
+					if err != nil {
+						return &tasks.JobResult{Err: err}
+					}
+					for i, blkInfo := range blkInfos {
+						if _, ok := blkDelLocs[blkIDs[i]]; !ok {
+							bat := batch.New(false, []string{catalog.BlockMeta_DeltaLoc})
+							bat.SetVector(0, tbl.getTxn().proc.GetVector(types.T_text.ToType()))
+							blkDelLocs[blkIDs[i]] = bat
+						}
+						bat := blkDelLocs[blkIDs[i]]
+						vector.AppendBytes(
+							bat.GetVector(0),
+							[]byte(blkInfo.MetaLocation().String()),
+							false,
+							tbl.getTxn().proc.GetMPool())
+					}
+					return &tasks.JobResult{Err: nil, Res: blkDelLocs}
 				})
 			return job
 		}
+
+		//build flush jobs
 		var jobNum int32
 		cnt := 0
 		mp := make(map[int32]map[types.Blockid]*batch.Batch)
-		var flushJobs []*tasks.Job
 		for bid, bat := range res {
 			if cnt%100 == 0 {
 				jobNum++
@@ -2615,6 +2661,7 @@ func (tbl *txnTable) transferPersistedDeletesParallel(
 			mp[jobNum][bid] = bat
 			cnt++
 		}
+		flushJobs := make([]*tasks.Job, 0, len(mp))
 		for job, bats := range mp {
 			flushJobs = append(flushJobs, getFlushJob(ctx, job, bats))
 		}
@@ -2634,10 +2681,12 @@ func (tbl *txnTable) transferPersistedDeletesParallel(
 				logutil.Errorf("flush deletes failed, err:%v", ret.Err)
 				return nil, ret.Err
 			}
-			//TODO::merge results
-
+			bats := ret.Res.(map[types.Blockid]*batch.Batch)
+			//merge the result.
+			for bid, bat := range bats {
+				newLocs[bid] = bat
+			}
 		}
-
 	}
 	return
 }
