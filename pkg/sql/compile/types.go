@@ -247,6 +247,9 @@ type Compile struct {
 	sql       string
 	originSQL string
 
+	// queryStatus is a structure to record query has done.
+	queryStatus queryDoneWaiter
+
 	anal *anaylze
 	// e db engine instance.
 	e   engine.Engine
