@@ -172,6 +172,10 @@ func (o *OperatorBase) AppendChild(child Operator) {
 	o.Children = append(o.Children, child)
 }
 
+func (o *OperatorBase) SetChild(child Operator, idx int) {
+	o.Children[idx] = child
+}
+
 func (o *OperatorBase) SetChildren(children []Operator) {
 	o.Children = children
 }
@@ -184,20 +188,40 @@ func (o *OperatorBase) GetCnAddr() string {
 	return o.CnAddr
 }
 
+func (o *OperatorBase) SetCnAddr(cnAddr string) {
+	o.CnAddr = cnAddr
+}
+
 func (o *OperatorBase) GetOperatorID() int32 {
 	return o.OperatorID
+}
+
+func (o *OperatorBase) SetOperatorID(operatorID int32) {
+	o.OperatorID = operatorID
 }
 
 func (o *OperatorBase) GetParalleID() int32 {
 	return o.ParallelID
 }
 
+func (o *OperatorBase) SetParalleID(paralledID int32) {
+	o.ParallelID = paralledID
+}
+
 func (o *OperatorBase) GetMaxParallel() int32 {
 	return o.MaxParallel
 }
 
+func (o *OperatorBase) SetMaxParallel(maxParallel int32) {
+	o.MaxParallel = maxParallel
+}
+
 func (o *OperatorBase) GetIdx() int {
 	return o.Idx
+}
+
+func (o *OperatorBase) SetIdx(idx int) {
+	o.Idx = idx
 }
 
 func (o *OperatorBase) GetParallelIdx() int {
@@ -212,8 +236,24 @@ func (o *OperatorBase) GetIsFirst() bool {
 	return o.IsFirst
 }
 
+func (o *OperatorBase) SetIsFirst(isFirst bool) {
+	o.IsFirst = isFirst
+}
+
 func (o *OperatorBase) GetIsLast() bool {
 	return o.IsLast
+}
+
+func (o *OperatorBase) SetIsLast(isLast bool) {
+	o.IsLast = isLast
+}
+
+func (o *OperatorBase) GetOpType() OpType {
+	return o.Op
+}
+
+func (o *OperatorBase) SetOpType(opType OpType) {
+	o.Op = opType
 }
 
 var CancelResult = CallResult{
@@ -264,6 +304,7 @@ func NewCallResult() CallResult {
 }
 
 type OperatorInfo struct {
+	Op            OpType // Op specified the operator code of an instruction.
 	Idx           int
 	ParallelIdx   int
 	ParallelMajor bool
@@ -286,8 +327,8 @@ func (info OperatorInfo) GetAddress() process.MessageAddress {
 
 type Instructions []Instruction
 
-func (ins *Instruction) IsBrokenNode() bool {
-	switch ins.Op {
+func (o *OperatorBase) IsBrokenNode() bool {
+	switch o.Op {
 	case Order, MergeOrder, Partition:
 		return true
 	case Limit, MergeLimit:
@@ -310,11 +351,67 @@ func (ins *Instruction) IsBrokenNode() bool {
 	return false
 }
 
-func (ins *Instruction) CannotRemote() bool {
+func (info *OperatorInfo) CannotRemote() bool {
 	// todo: I think we should add more operators here.
-	return ins.Op == LockOp
+	return info.Op == LockOp
 }
 
 type ModificationArgument interface {
 	AffectedRows() uint64
+}
+
+func doHandleAllOp(parentOp Operator, op Operator, opHandle func(parentOp Operator, op Operator) error) (err error) {
+	if op == nil {
+		return nil
+	}
+	numChildren := op.GetOperatorBase().NumChildren()
+
+	for i := 0; i < numChildren; i++ {
+		if err := doHandleAllOp(op, op.GetOperatorBase().GetChildren(i), opHandle); err != nil {
+			return err
+		}
+	}
+	return opHandle(parentOp, op)
+}
+
+func HandleAllOp(rootOp Operator, opHandle func(parentOp Operator, op Operator) error) (err error) {
+	return doHandleAllOp(nil, rootOp, opHandle)
+}
+
+func HandleLeafOp(parentOp Operator, op Operator, opHandle func(leafOpParent Operator, leafOp Operator) error) (err error) {
+	if op == nil {
+		return nil
+	}
+	numChildren := op.GetOperatorBase().NumChildren()
+	if numChildren == 0 {
+		return opHandle(parentOp, op)
+	}
+	for i := 0; i < numChildren; i++ {
+		if err := HandleLeafOp(op, op.GetOperatorBase().GetChildren(i), opHandle); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// suppose that the op tree is like a list, only one leaf child
+func GetLeafOp(op Operator) Operator {
+	if op == nil {
+		return nil
+	}
+	if op.GetOperatorBase().NumChildren() == 0 {
+		return op
+	}
+	return GetLeafOp(op.GetOperatorBase().GetChildren(0))
+}
+
+// suppose that the op tree is like a list, only one leaf child
+func GetLeafOpParent(parentOp Operator, op Operator) Operator {
+	if op == nil {
+		return nil
+	}
+	if op.GetOperatorBase().NumChildren() == 0 {
+		return parentOp
+	}
+	return GetLeafOpParent(op, op.GetOperatorBase().GetChildren(0))
 }
