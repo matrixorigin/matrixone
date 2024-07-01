@@ -35,8 +35,9 @@ import (
 )
 
 var (
-	stateRunning = int32(0)
-	stateStopped = int32(1)
+	stateRunning  = int32(0)
+	stateStopping = int32(1)
+	stateStopped  = int32(2)
 
 	backendClosed  = moerr.NewBackendClosedNoCtx()
 	messageSkipped = moerr.NewInvalidStateNoCtx("request is skipped")
@@ -327,7 +328,7 @@ func (rb *remoteBackend) NewStream(unlockAfterClose bool) (Stream, error) {
 	rb.stateMu.RLock()
 	defer rb.stateMu.RUnlock()
 
-	if rb.stateMu.state == stateStopped {
+	if rb.stateMu.state != stateRunning {
 		return nil, backendClosed
 	}
 
@@ -350,7 +351,7 @@ func (rb *remoteBackend) doSend(f *Future) error {
 
 	for {
 		rb.stateMu.RLock()
-		if rb.stateMu.state == stateStopped {
+		if rb.stateMu.state != stateRunning {
 			rb.stateMu.RUnlock()
 			return backendClosed
 		}
@@ -432,6 +433,12 @@ func (rb *remoteBackend) inactive() {
 	rb.atomic.lastActiveTime.Store(time.Time{})
 }
 
+func (rb *remoteBackend) changeToStopping() {
+	rb.stateMu.Lock()
+	defer rb.stateMu.Unlock()
+	rb.stateMu.state = stateStopping
+}
+
 func (rb *remoteBackend) writeLoop(ctx context.Context) {
 	rb.logger.Debug("write loop started")
 	defer func() {
@@ -444,6 +451,7 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 
 	defer func() {
 		rb.makeAllWritesDoneWithClosed()
+		close(rb.writeC)
 	}()
 
 	// fatal if panic
@@ -631,6 +639,7 @@ func (rb *remoteBackend) fetch(messages []*Future, maxFetchCount int) ([]*Future
 		// get the response and need to be notified of an error immediately.
 		rb.makeAllWaitingFutureFailed()
 		if err := rb.handleResetConn(); err != nil {
+			rb.changeToStopping()
 			return nil, true
 		}
 	case <-rb.stopWriteC:
@@ -700,7 +709,6 @@ func (rb *remoteBackend) handleResetConn() error {
 func (rb *remoteBackend) doClose() {
 	rb.closeOnce.Do(func() {
 		close(rb.resetConnC)
-		close(rb.writeC)
 		rb.closeConn(false)
 		// TODO: re create when reconnect
 		rb.conn = nil
