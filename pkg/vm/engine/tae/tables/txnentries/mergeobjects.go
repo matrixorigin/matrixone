@@ -149,7 +149,6 @@ func (entry *mergeObjectsEntry) prepareTransferPage() {
 			entry.pageIds = append(entry.pageIds, id)
 			_ = entry.rt.TransferTable.AddPage(page)
 			pages = append(pages, page)
-			k++
 		}
 		start = time.Now()
 		var blocks []objectio.BlockObject

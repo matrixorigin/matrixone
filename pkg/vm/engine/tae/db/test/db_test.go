@@ -9019,7 +9019,7 @@ func TestPersistTransferTable(t *testing.T) {
 		Pages: make(chan *model.TransferPage, 1000000),
 	}
 	go model.Cleaner.Handler()
-	page := model.NewTransferHashPage(&id1, now, false,
+	page := model.NewTransferHashPage(&id1, now, 10, false,
 		model.WithTTL(time.Second),
 	)
 	ids := make([]types.Rowid, 10)
@@ -9104,7 +9104,7 @@ func TestClearPersistTransferTable(t *testing.T) {
 	}
 	go model.Cleaner.Handler()
 
-	page := model.NewTransferHashPage(&id1, now, false,
+	page := model.NewTransferHashPage(&id1, now, 10, false,
 		model.WithTTL(time.Second),
 		model.WithDiskTTL(2*time.Second),
 	)
