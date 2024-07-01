@@ -519,6 +519,9 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 			err,
 		)
 		v2.TxnStatementExecuteDurationHistogram.Observe(cost.Seconds())
+		if _, ok := c.pn.Plan.(*plan.Plan_Ddl); ok {
+			c.setHaveDDL(true)
+		}
 	}()
 
 	for _, s := range c.scope {
@@ -1032,7 +1035,8 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		v2.TxnStatementCompileQueryHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	c.execType = plan2.GetExecType(c.pn.GetQuery())
+	c.execType = plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL())
+
 	n := getEngineNode(c)
 	if c.execType == plan2.ExecTypeTP || c.execType == plan2.ExecTypeAP_ONECN {
 		c.cnList = engine.Nodes{n}
@@ -1051,7 +1055,6 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	}
 
 	c.initAnalyze(qry)
-
 	// deal with sink scan first.
 	for i := len(qry.Steps) - 1; i >= 0; i-- {
 		err := c.compileSinkScan(qry, qry.Steps[i])
@@ -5048,4 +5051,19 @@ func getEngineNode(c *Compile) engine.Node {
 	} else {
 		return engine.Node{Addr: c.addr, Mcpu: ncpu}
 	}
+}
+
+func (c *Compile) setHaveDDL(haveDDL bool) {
+	txn := c.proc.GetTxnOperator()
+	if txn != nil && txn.GetWorkspace() != nil {
+		txn.GetWorkspace().SetHaveDDL(haveDDL)
+	}
+}
+
+func (c *Compile) getHaveDDL() bool {
+	txn := c.proc.GetTxnOperator()
+	if txn != nil && txn.GetWorkspace() != nil {
+		return txn.GetWorkspace().GetHaveDDL()
+	}
+	return false
 }

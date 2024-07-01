@@ -363,7 +363,7 @@ Table    Create Table
 droppri02    CREATE TABLE `droppri02` (\n  `col1` INT NOT NULL AUTO_INCREMENT,\n  `col2` DECIMAL(38,0) NOT NULL,\n  `col3` CHAR(1) NOT NULL,\n  `col4` VARCHAR(65535) NOT NULL,\n  `col5` FLOAT DEFAULT NULL,\n  PRIMARY KEY (`col1`,`col2`,`col3`)\n)
 show columns from droppri02;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    NO    PRI    null        
+col1    INT(32)    NO    PRI    null    auto_increment    
 col2    DECIMAL(38)    NO    PRI    null        
 col3    CHAR(1)    NO    PRI    null        
 col4    VARCHAR(65535)    NO        null        
@@ -374,7 +374,7 @@ Table    Create Table
 droppri02    CREATE TABLE `droppri02` (\n  `col1` INT NOT NULL AUTO_INCREMENT,\n  `col2` DECIMAL(38,0) NOT NULL,\n  `col3` CHAR(1) NOT NULL,\n  `col4` VARCHAR(65535) NOT NULL,\n  `col5` FLOAT DEFAULT NULL\n)
 show columns from droppri02;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    NO        null        
+col1    INT(32)    NO        null    auto_increment    
 col2    DECIMAL(38)    NO        null        
 col3    CHAR(1)    NO        null        
 col4    VARCHAR(65535)    NO        null        
@@ -518,3 +518,15 @@ col1
 100
 200
 drop table table01;
+drop table if exists t1;
+create table t1(a int primary key, b int);
+insert into t1 select result ,result from generate_series(1, 20000000) g;
+alter table t1 drop primary key;
+begin;
+create table t2(a int, b int);
+insert into t2 select a,b from t1;
+select count(*) from t2;
+count(*)
+20000000
+drop table t2;
+commit;
