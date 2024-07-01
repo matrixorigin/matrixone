@@ -176,7 +176,7 @@ MatrixOne 目前支持 Linux 及 MacOS 系统，您可以通过源码安装，�
 
 - 源码部署
 
-1. 搭建 Go 语言环境(至少需要 1.23 版本)
+1. 搭建 Go 语言环境(至少需要 1.22 版本)
 
 点击 <a href="https://go.dev/doc/install" target="_blank">Go Download and install</a> 入到 **Go** 的官方文档，按照官方指导安装步骤完成 **Go** 语言的安装。
 
