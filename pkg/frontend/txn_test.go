@@ -49,12 +49,13 @@ type testWorkspace struct {
 
 func (txn *testWorkspace) UpdateSnapshotWriteOffset() {
 	//TODO implement me
-	panic("implement me")
+	// panic("implement me")
 }
 
 func (txn *testWorkspace) GetSnapshotWriteOffset() int {
 	//TODO implement me
-	panic("implement me")
+	// panic("implement me")
+	return 0
 }
 
 func newTestWorkspace() *testWorkspace {
@@ -152,6 +153,14 @@ func (t *testWorkspace) CloneSnapshotWS() client.Workspace {
 func (t *testWorkspace) BindTxnOp(op client.TxnOperator) {
 	//TODO implement me
 	panic("implement me")
+}
+
+func (t *testWorkspace) SetHaveDDL(flag bool) {
+	//TODO implement me
+}
+
+func (t *testWorkspace) GetHaveDDL() bool {
+	return false
 }
 
 func TestWorkspace(t *testing.T) {

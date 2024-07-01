@@ -31,12 +31,12 @@ func TestData(t *testing.T) {
 	// test refs
 	require.Equal(t, int32(1), d.refs())
 	// test Buf
-	buf := d.Buf()
+	buf := d.Bytes()
 	buf[0] = 1
-	require.Equal(t, byte(1), d.Buf()[0])
+	require.Equal(t, byte(1), d.Bytes()[0])
 	// test Truncate
 	d.Slice(0)
-	require.Equal(t, 0, len(d.Buf()))
+	require.Equal(t, 0, len(d.Bytes()))
 	// test acquire
 	d.acquire()
 	require.Equal(t, int32(2), d.refs())
@@ -45,7 +45,4 @@ func TestData(t *testing.T) {
 	require.Equal(t, int32(1), d.refs())
 	d.Release()
 	require.Equal(t, int64(0), size.Load())
-	// boundary test
-	d = newData(allocator, 0, &size)
-	require.Equal(t, (*Data)(nil), d)
 }

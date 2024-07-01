@@ -33,7 +33,7 @@ func handleGetProtocolVersion(proc *process.Process,
 	service serviceType,
 	parameter string,
 	sender requestSender) (Result, error) {
-	qt := proc.QueryClient
+	qt := proc.GetQueryClient()
 	mc := clusterservice.GetMOCluster()
 	var addrs []string
 	var nodeIds []string
@@ -99,7 +99,7 @@ func handleSetProtocolVersion(proc *process.Process,
 	service serviceType,
 	parameter string,
 	sender requestSender) (Result, error) {
-	qt := proc.QueryClient
+	qt := proc.GetQueryClient()
 	targets, version, err := checkProtocolParameter(parameter)
 	if err != nil {
 		return Result{}, err

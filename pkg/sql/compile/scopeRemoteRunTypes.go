@@ -17,11 +17,12 @@ package compile
 import (
 	"context"
 	"fmt"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"hash/crc32"
 	"runtime"
 	"sync/atomic"
 	"time"
+
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 
@@ -374,33 +375,33 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 		cnInfo.hakeeper,
 		cnInfo.udfService,
 		cnInfo.aicm)
-	proc.UnixTime = pHelper.unixTime
-	proc.Id = pHelper.id
-	proc.Lim = pHelper.lim
-	proc.SessionInfo = pHelper.sessionInfo
-	proc.SessionInfo.StorageEngine = cnInfo.storeEngine
-	proc.AnalInfos = make([]*process.AnalyzeInfo, len(pHelper.analysisNodeList))
-	for i := range proc.AnalInfos {
-		proc.AnalInfos[i] = reuse.Alloc[process.AnalyzeInfo](nil)
-		proc.AnalInfos[i].NodeId = pHelper.analysisNodeList[i]
+	proc.Base.UnixTime = pHelper.unixTime
+	proc.Base.Id = pHelper.id
+	proc.Base.Lim = pHelper.lim
+	proc.Base.SessionInfo = pHelper.sessionInfo
+	proc.Base.SessionInfo.StorageEngine = cnInfo.storeEngine
+	proc.Base.AnalInfos = make([]*process.AnalyzeInfo, len(pHelper.analysisNodeList))
+	for i := range proc.Base.AnalInfos {
+		proc.Base.AnalInfos[i] = reuse.Alloc[process.AnalyzeInfo](nil)
+		proc.Base.AnalInfos[i].NodeId = pHelper.analysisNodeList[i]
 	}
 	proc.DispatchNotifyCh = make(chan process.WrapCs)
 	{
-		txn := proc.TxnOperator.Txn()
+		txn := proc.GetTxnOperator().Txn()
 		txnId := txn.GetID()
-		proc.StmtProfile = process.NewStmtProfile(uuid.UUID(txnId), pHelper.StmtId)
+		proc.Base.StmtProfile = process.NewStmtProfile(uuid.UUID(txnId), pHelper.StmtId)
 	}
 
 	c := reuse.Alloc[Compile](nil)
 	c.proc = proc
 	c.e = cnInfo.storeEngine
-	c.MessageBoard = c.MessageBoard.SetMultiCN(c.GetMessageCenter(), c.proc.StmtProfile.GetStmtId())
-	c.proc.MessageBoard = c.MessageBoard
+	c.MessageBoard = c.MessageBoard.SetMultiCN(c.GetMessageCenter(), c.proc.GetStmtProfile().GetStmtId())
+	c.proc.Base.MessageBoard = c.MessageBoard
 	c.anal = newAnaylze()
-	c.anal.analInfos = proc.AnalInfos
+	c.anal.analInfos = proc.Base.AnalInfos
 	c.addr = receiver.cnInformation.cnAddr
 	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, c.counterSet)
-	c.ctx = defines.AttachAccountId(c.proc.Ctx, pHelper.accountId)
+	c.proc.Ctx = defines.AttachAccountId(c.proc.Ctx, pHelper.accountId)
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.fill = func(b *batch.Batch) error {
 		return receiver.sendBatch(b)

@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"strings"
 )
 
 func NewSetVarBinder(builder *QueryBuilder, ctx *BindContext) *SetBinder {
@@ -49,9 +48,9 @@ func (s *SetBinder) BindExpr(expr tree.Expr, i int32, b bool) (*plan.Expr, error
 		if !ok {
 			return nil, moerr.NewNYI(s.GetContext(), "invalid function expr '%v'", exprImpl)
 		}
-		funcName := strings.ToLower(funcRef.Parts[0])
+		funcName := funcRef.ColName()
 		if _, ok := funcNeedsTxn[funcName]; ok {
-			return nil, moerr.NewInvalidInput(s.GetContext(), "function %s is not allowed in the set expression", funcName)
+			return nil, moerr.NewInvalidInput(s.GetContext(), "function %s is not allowed in the set expression", funcRef.ColNameOrigin())
 		}
 	}
 	return s.baseBindExpr(expr, i, b)

@@ -94,13 +94,13 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 			tmpScope := b.GetContext().Value(defines.VarScopeKey{}).(*[]map[string]interface{})
 			for i := len(*tmpScope) - 1; i >= 0; i-- {
 				curScope := (*tmpScope)[i]
-				if _, ok := curScope[strings.ToLower(exprImpl.Parts[0])]; ok {
+				if _, ok := curScope[exprImpl.ColName()]; ok {
 					typ := types.T_text.ToType()
 					expr = &Expr{
 						Typ: makePlan2Type(&typ),
 						Expr: &plan.Expr_V{
 							V: &plan.VarRef{
-								Name:   exprImpl.Parts[0],
+								Name:   exprImpl.ColName(),
 								System: false,
 								Global: false,
 							},
@@ -283,12 +283,11 @@ const (
 
 func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (expr *plan.Expr, err error) {
 	if b.ctx == nil {
-		return nil, moerr.NewInvalidInput(b.GetContext(), "ambiguous column reference '%v'", astExpr.Parts[0])
+		return nil, moerr.NewInvalidInput(b.GetContext(), "ambiguous column reference '%v'", astExpr.ColNameOrigin())
 	}
-	astStr := tree.String(astExpr, dialect.MYSQL)
 
-	col := astExpr.Parts[0]
-	table := astExpr.Parts[1]
+	col := astExpr.ColName()
+	table := astExpr.TblName()
 	name := tree.String(astExpr, dialect.MYSQL)
 
 	if b.ctx.timeTag > 0 && (col == TimeWindowStart || col == TimeWindowEnd) {
@@ -303,7 +302,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 				},
 			},
 		}
-		b.ctx.timeByAst[astStr] = colPos
+		b.ctx.timeByAst[name] = colPos
 		b.ctx.times = append(b.ctx.times, expr)
 		return
 	}
@@ -949,7 +948,7 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 	if !ok {
 		return nil, moerr.NewNYI(b.GetContext(), "function expr '%v'", astExpr)
 	}
-	funcName := funcRef.Parts[0]
+	funcName := funcRef.ColName()
 
 	if function.GetFunctionIsAggregateByName(funcName) && astExpr.WindowSpec == nil {
 		if b.ctx.timeTag > 0 {
@@ -1209,7 +1208,7 @@ func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name s
 	switch retExpr.GetF().GetFunc().GetObjName() {
 	case "+", "-", "*", "/", "unary_minus", "unary_plus", "unary_tilde", "cast", "serial", "serial_full":
 		if proc != nil {
-			tmpexpr, _ := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(retExpr), proc, false)
+			tmpexpr, _ := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(retExpr), proc, false, true)
 			if tmpexpr != nil {
 				retExpr = tmpexpr
 			}
@@ -1221,7 +1220,7 @@ func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name s
 		}
 
 		fnArgs := retExpr.GetF().Args
-		arg1, err := ConstantFold(batch.EmptyForConstFoldBatch, fnArgs[1], proc, false)
+		arg1, err := ConstantFold(batch.EmptyForConstFoldBatch, fnArgs[1], proc, false, true)
 		if err != nil {
 			goto between_fallback
 		}
@@ -1232,7 +1231,7 @@ func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name s
 			goto between_fallback
 		}
 
-		arg2, err := ConstantFold(batch.EmptyForConstFoldBatch, fnArgs[2], proc, false)
+		arg2, err := ConstantFold(batch.EmptyForConstFoldBatch, fnArgs[2], proc, false, true)
 		if err != nil {
 			goto between_fallback
 		}
@@ -1244,13 +1243,13 @@ func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name s
 		}
 
 		rangeCheckFn, _ := BindFuncExprImplByPlanExpr(ctx, "<=", []*plan.Expr{arg1, arg2})
-		rangeCheckRes, _ := ConstantFold(batch.EmptyForConstFoldBatch, rangeCheckFn, proc, false)
+		rangeCheckRes, _ := ConstantFold(batch.EmptyForConstFoldBatch, rangeCheckFn, proc, false, true)
 		rangeCheckVal := rangeCheckRes.GetLit()
 		if rangeCheckVal == nil || !rangeCheckVal.GetBval() {
 			goto between_fallback
 		}
 
-		retExpr, _ = ConstantFold(batch.EmptyForConstFoldBatch, retExpr, proc, false)
+		retExpr, _ = ConstantFold(batch.EmptyForConstFoldBatch, retExpr, proc, false, true)
 	}
 
 	return retExpr, nil
@@ -1270,7 +1269,7 @@ between_fallback:
 	if err != nil {
 		return nil, err
 	}
-	retExpr, err = ConstantFold(batch.EmptyForConstFoldBatch, retExpr, proc, false)
+	retExpr, err = ConstantFold(batch.EmptyForConstFoldBatch, retExpr, proc, false, true)
 	if err != nil {
 		return nil, err
 	}

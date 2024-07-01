@@ -34,6 +34,7 @@ import (
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/fagongzi/goetty/v2"
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
@@ -215,7 +216,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	}
 
 	stm.Account = tenant.GetTenant()
-	stm.RoleId = proc.SessionInfo.RoleId
+	stm.RoleId = proc.GetSessionInfo().RoleId
 	stm.User = tenant.GetUser()
 	stm.Host = ses.respr.GetStr(PEER)
 	stm.Database = ses.respr.GetStr(DBNAME)
@@ -406,8 +407,12 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 		}
 		roleId := row[17].(uint32)
 		// role name
-		if row[18], err = getRoleName(roleId); err != nil {
-			return err
+		if tableName == catalog.MO_DATABASE || tableName == catalog.MO_TABLES || tableName == catalog.MO_COLUMNS {
+			row[18] = moAdminRoleName
+		} else {
+			if row[18], err = getRoleName(roleId); err != nil {
+				return err
+			}
 		}
 		mrs.AddRow(row)
 	}
@@ -992,9 +997,14 @@ func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt)
 
 	//2. fill the result set
 	//column
+	txnHaveDDL := false
+	ws := ses.proc.GetTxnOperator().GetWorkspace()
+	if ws != nil {
+		txnHaveDDL = ws.GetHaveDDL()
+	}
 	col1 := new(MysqlColumn)
 	col1.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
-	col1.SetName(plan2.GetPlanTitle(explainQuery.QueryPlan))
+	col1.SetName(plan2.GetPlanTitle(explainQuery.QueryPlan, txnHaveDDL))
 
 	mrs := ses.GetMysqlResultSet()
 	mrs.AddColumn(col1)
@@ -1011,31 +1021,25 @@ func handleExplainStmt(ses FeSession, execCtx *ExecCtx, stmt *tree.ExplainStmt) 
 	return doExplainStmt(execCtx.reqCtx, ses.(*Session), stmt)
 }
 
-func doPrepareStmt(ctx context.Context, ses *Session, st *tree.PrepareStmt, sql string, paramTypes []byte) (*PrepareStmt, error) {
-	preparePlan, err := buildPlan(ctx, ses, ses.GetTxnCompileCtx(), st)
+func doPrepareStmt(execCtx *ExecCtx, ses *Session, st *tree.PrepareStmt, sql string, paramTypes []byte) (*PrepareStmt, error) {
+	idx := strings.Index(strings.ToLower(sql[:(len(st.Name)+20)]), "from") + 5
+	originSql := strings.TrimLeft(sql[idx:], " ")
+	// fmt.Print(originSql)
+	prepareStmt, err := createPrepareStmt(execCtx, ses, originSql, st, st.Stmt)
 	if err != nil {
 		return nil, err
-	}
-
-	prepareStmt := &PrepareStmt{
-		Name:                preparePlan.GetDcl().GetPrepare().GetName(),
-		Sql:                 sql,
-		PreparePlan:         preparePlan,
-		PrepareStmt:         st.Stmt,
-		getFromSendLongData: make(map[int]struct{}),
 	}
 	if len(paramTypes) > 0 {
 		prepareStmt.ParamTypes = paramTypes
 	}
-	prepareStmt.InsertBat = ses.GetTxnCompileCtx().GetProcess().GetPrepareBatch()
-	err = ses.SetPrepareStmt(ctx, preparePlan.GetDcl().GetPrepare().GetName(), prepareStmt)
 
+	err = ses.SetPrepareStmt(execCtx.reqCtx, prepareStmt.Name, prepareStmt)
 	return prepareStmt, err
 }
 
 // handlePrepareStmt
-func handlePrepareStmt(ses FeSession, execCtx *ExecCtx, st *tree.PrepareStmt) (*PrepareStmt, error) {
-	return doPrepareStmt(execCtx.reqCtx, ses.(*Session), st, execCtx.sqlOfStmt, execCtx.executeParamTypes)
+func handlePrepareStmt(ses FeSession, execCtx *ExecCtx, st *tree.PrepareStmt, sql string) (*PrepareStmt, error) {
+	return doPrepareStmt(execCtx, ses.(*Session), st, sql, execCtx.executeParamTypes)
 }
 
 func doPrepareString(ses *Session, execCtx *ExecCtx, st *tree.PrepareString) (*PrepareStmt, error) {
@@ -1049,24 +1053,64 @@ func doPrepareString(ses *Session, execCtx *ExecCtx, st *tree.PrepareString) (*P
 		return nil, err
 	}
 
-	preparePlan, err := buildPlan(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), st)
+	prepareStmt, err := createPrepareStmt(execCtx, ses, st.Sql, st, stmts[0])
 	if err != nil {
 		return nil, err
 	}
-	prepareStmt := &PrepareStmt{
-		Name:        preparePlan.GetDcl().GetPrepare().GetName(),
-		Sql:         st.Sql,
-		PreparePlan: preparePlan,
-		PrepareStmt: stmts[0],
-	}
-	prepareStmt.InsertBat = ses.GetTxnCompileCtx().GetProcess().GetPrepareBatch()
-	err = ses.SetPrepareStmt(execCtx.reqCtx, preparePlan.GetDcl().GetPrepare().GetName(), prepareStmt)
+
+	err = ses.SetPrepareStmt(execCtx.reqCtx, prepareStmt.Name, prepareStmt)
 	return prepareStmt, err
 }
 
 // handlePrepareString
 func handlePrepareString(ses FeSession, execCtx *ExecCtx, st *tree.PrepareString) (*PrepareStmt, error) {
 	return doPrepareString(ses.(*Session), execCtx, st)
+}
+
+func createPrepareStmt(
+	execCtx *ExecCtx,
+	ses *Session,
+	originSQL string,
+	stmt tree.Statement,
+	saveStmt tree.Statement) (*PrepareStmt, error) {
+
+	preparePlan, err := buildPlan(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), stmt)
+	if err != nil {
+		return nil, err
+	}
+
+	var comp *compile.Compile
+	if _, ok := preparePlan.GetDcl().GetPrepare().Plan.Plan.(*plan.Plan_Query); ok {
+		//only DQL & DML will pre compile
+		comp, err = createCompile(execCtx, ses, ses.proc, originSQL, saveStmt, preparePlan.GetDcl().GetPrepare().Plan, ses.GetOutputCallback(execCtx), true)
+		if err != nil {
+			if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
+				return nil, err
+			}
+		}
+		// do not save ap query now()
+		if comp != nil && !comp.IsTpQuery() {
+			comp.Release()
+			comp = nil
+		}
+
+		// @xxx when refactor prepare finish, remove this code
+		if comp != nil {
+			comp.Release()
+			comp = nil
+		}
+	}
+
+	prepareStmt := &PrepareStmt{
+		Name:                preparePlan.GetDcl().GetPrepare().GetName(),
+		Sql:                 originSQL,
+		compile:             comp,
+		PreparePlan:         preparePlan,
+		PrepareStmt:         saveStmt,
+		getFromSendLongData: make(map[int]struct{}),
+	}
+	prepareStmt.InsertBat = ses.GetTxnCompileCtx().GetProcess().GetPrepareBatch()
+	return prepareStmt, nil
 }
 
 func doDeallocate(ses *Session, execCtx *ExecCtx, st *tree.Deallocate) error {
@@ -1302,7 +1346,7 @@ func handleCreateFunction(ses FeSession, execCtx *ExecCtx, cf *tree.CreateFuncti
 
 func handleDropFunction(ses FeSession, execCtx *ExecCtx, df *tree.DropFunction, proc *process.Process) error {
 	return doDropFunction(execCtx.reqCtx, ses.(*Session), df, func(path string) error {
-		return proc.FileService.Delete(execCtx.reqCtx, path)
+		return proc.Base.FileService.Delete(execCtx.reqCtx, path)
 	})
 }
 func handleCreateProcedure(ses FeSession, execCtx *ExecCtx, cp *tree.CreateProcedure) error {
@@ -1743,7 +1787,7 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 	var ret *plan2.Plan
 	var err error
 
-	txnOp := ctx.GetProcess().TxnOperator
+	txnOp := ctx.GetProcess().GetTxnOperator()
 	start := time.Now()
 	seq := uint64(0)
 	if txnOp != nil {
@@ -2113,7 +2157,7 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	ses.CountPayload(len(packet.Payload))
 
 	skipWrite := false
-	// If inner error occurs(unexpected or expected(ctrl-c)), proc.LoadLocalReader will be closed.
+	// If inner error occurs(unexpected or expected(ctrl-c)), proc.Base.LoadLocalReader will be closed.
 	// Then write will return error, but we need to read the rest of the data and not write it to pipe.
 	// So we need a flag[skipWrite] to tell us whether we need to write the data to pipe.
 	// https://github.com/matrixorigin/matrixone/issues/6665#issuecomment-1422236478
@@ -2255,7 +2299,7 @@ func executeStmtWithTxn(ses FeSession,
 
 		txnOp := ses.GetTxnHandler().GetTxn()
 		//refresh proc txnOp
-		execCtx.proc.TxnOperator = txnOp
+		execCtx.proc.Base.TxnOperator = txnOp
 
 		err = dispatchStmt(ses, execCtx)
 	}
@@ -2328,7 +2372,7 @@ func executeStmtWithWorkspace(ses FeSession,
 	ses.SetStaticTxnInfo(makeCompactTxnInfo(txnOp))
 
 	//refresh proc txnOp
-	execCtx.proc.TxnOperator = txnOp
+	execCtx.proc.Base.TxnOperator = txnOp
 
 	err = disttae.CheckTxnIsValid(txnOp)
 	if err != nil {
@@ -2513,7 +2557,7 @@ func executeStmt(ses *Session,
 		ses.SetData(nil)
 	case *tree.Load:
 		if st.Local {
-			execCtx.proc.LoadLocalReader, execCtx.loadLocalWriter = io.Pipe()
+			execCtx.proc.Base.LoadLocalReader, execCtx.loadLocalWriter = io.Pipe()
 		}
 	case *tree.ShowGrants:
 		if len(st.Username) == 0 {
@@ -2618,12 +2662,12 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 	proc.CopyVectorPool(ses.proc)
 	proc.CopyValueScanBatch(ses.proc)
-	proc.Id = ses.getNextProcessId()
-	proc.Lim.Size = getGlobalPu().SV.ProcessLimitationSize
-	proc.Lim.BatchRows = getGlobalPu().SV.ProcessLimitationBatchRows
-	proc.Lim.MaxMsgSize = getGlobalPu().SV.MaxMessageSize
-	proc.Lim.PartitionRows = getGlobalPu().SV.ProcessLimitationPartitionRows
-	proc.SessionInfo = process.SessionInfo{
+	proc.Base.Id = ses.getNextProcessId()
+	proc.Base.Lim.Size = getGlobalPu().SV.ProcessLimitationSize
+	proc.Base.Lim.BatchRows = getGlobalPu().SV.ProcessLimitationBatchRows
+	proc.Base.Lim.MaxMsgSize = getGlobalPu().SV.MaxMessageSize
+	proc.Base.Lim.PartitionRows = getGlobalPu().SV.ProcessLimitationPartitionRows
+	proc.Base.SessionInfo = process.SessionInfo{
 		User:                 ses.GetUserName(),
 		Host:                 getGlobalPu().SV.Host,
 		ConnectionID:         uint64(resper.GetU32(CONNID)),
@@ -2644,14 +2688,14 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	// Deep copy the map, takes some memory.
 	ses.CopySeqToProc(proc)
 	if ses.GetTenantInfo() != nil {
-		proc.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
-		proc.SessionInfo.AccountId = ses.GetTenantInfo().GetTenantID()
-		proc.SessionInfo.Role = ses.GetTenantInfo().GetDefaultRole()
-		proc.SessionInfo.RoleId = ses.GetTenantInfo().GetDefaultRoleID()
-		proc.SessionInfo.UserId = ses.GetTenantInfo().GetUserID()
+		proc.Base.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
+		proc.Base.SessionInfo.AccountId = ses.GetTenantInfo().GetTenantID()
+		proc.Base.SessionInfo.Role = ses.GetTenantInfo().GetDefaultRole()
+		proc.Base.SessionInfo.RoleId = ses.GetTenantInfo().GetDefaultRoleID()
+		proc.Base.SessionInfo.UserId = ses.GetTenantInfo().GetUserID()
 
 		if len(ses.GetTenantInfo().GetVersion()) != 0 {
-			proc.SessionInfo.Version = ses.GetTenantInfo().GetVersion()
+			proc.Base.SessionInfo.Version = ses.GetTenantInfo().GetVersion()
 		}
 		userNameOnly = ses.GetTenantInfo().GetUser()
 	} else {
@@ -2660,17 +2704,17 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		if retErr != nil {
 			return retErr
 		}
-		proc.SessionInfo.AccountId = accountId
-		proc.SessionInfo.UserId = defines.GetUserId(execCtx.reqCtx)
-		proc.SessionInfo.RoleId = defines.GetRoleId(execCtx.reqCtx)
+		proc.Base.SessionInfo.AccountId = accountId
+		proc.Base.SessionInfo.UserId = defines.GetUserId(execCtx.reqCtx)
+		proc.Base.SessionInfo.RoleId = defines.GetRoleId(execCtx.reqCtx)
 	}
 	var span trace.Span
 	execCtx.reqCtx, span = trace.Start(execCtx.reqCtx, "doComQuery",
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End()
 
-	proc.SessionInfo.User = userNameOnly
-	proc.SessionInfo.QueryId = ses.getQueryId(input.isInternal())
+	proc.Base.SessionInfo.User = userNameOnly
+	proc.Base.SessionInfo.QueryId = ses.getQueryId(input.isInternal())
 
 	statsInfo := statistic.StatsInfo{ParseStartTime: beginInstant}
 	execCtx.reqCtx = statistic.ContextWithStatsInfo(execCtx.reqCtx, &statsInfo)
@@ -2782,9 +2826,9 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		}
 
 		// update UnixTime for new query, which is used for now() / CURRENT_TIMESTAMP
-		proc.UnixTime = time.Now().UnixNano()
+		proc.Base.UnixTime = time.Now().UnixNano()
 		if ses.proc != nil {
-			ses.proc.UnixTime = proc.UnixTime
+			ses.proc.Base.UnixTime = proc.Base.UnixTime
 		}
 		execCtx.stmt = stmt
 		execCtx.isLastStmt = i >= len(cws)-1
