@@ -2691,7 +2691,7 @@ func MakeDate(
 
 			resDt := types.MakeDate(int32(year), 1, day)
 
-			if resDt.Year() > 9999 {
+			if resDt.Year() > 9999 || resDt == types.Date(0) {
 				if err := rs.AppendBytes(nil, true); err != nil {
 					return err
 				}
