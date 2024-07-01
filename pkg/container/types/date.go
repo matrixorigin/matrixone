@@ -766,3 +766,19 @@ func (d Date) DaysSinceUnixEpoch() int32 {
 func GetUnixEpochSecs() int64 {
 	return unixEpochMicroSecs
 }
+
+func MakeDate(year int32, month uint8, day int64) Date {
+	// Compute days since the absolute epoch.
+	d := daysSinceEpoch(year - 1)
+
+	// Add in days before this month.
+	d += int32(daysBefore[month-1])
+	if isLeap(year) && month >= 3 {
+		d++ // February 29
+	}
+
+	// Add in days before today.
+	d += int32(day - 1)
+
+	return Date(d)
+}
