@@ -426,20 +426,7 @@ func createCompile(
 			retCompile = nil
 		}
 	}()
-	retCompile = compile.NewCompile(
-		addr,
-		ses.GetDatabaseName(),
-		ses.GetSql(),
-		tenant,
-		ses.GetUserName(),
-		execCtx.reqCtx,
-		ses.GetTxnHandler().GetStorage(),
-		proc,
-		stmt,
-		ses.GetIsInternal(),
-		deepcopy.Copy(ses.getCNLabels()).(map[string]string),
-		getStatementStartAt(execCtx.reqCtx),
-	)
+	retCompile = compile.NewCompile(addr, ses.GetDatabaseName(), ses.GetSql(), tenant, ses.GetUserName(), ses.GetTxnHandler().GetStorage(), proc, stmt, ses.GetIsInternal(), deepcopy.Copy(ses.getCNLabels()).(map[string]string), getStatementStartAt(execCtx.reqCtx))
 	retCompile.SetIsPrepare(isPrepare)
 	retCompile.SetBuildPlanFunc(func() (*plan2.Plan, error) {
 		plan, err := buildPlan(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), stmt)
