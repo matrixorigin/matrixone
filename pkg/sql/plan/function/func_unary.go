@@ -1151,14 +1151,14 @@ func SQLEncode(data []byte, key []byte) ([]byte, error) {
 	sc.encode(data, len(data))
 
 	// new changes about hex
-	stringdata := string(data)
-	decodedStringData, err := hex.DecodeString(stringdata)
+	//stringdata := string(data)
+	//decodedStringData, err := hex.DecodeString(stringdata)
+	//
+	//if err != nil {
+	//	return nil, err
+	//}
 
-	if err != nil {
-		return nil, err
-	}
-
-	return decodedStringData, nil
+	return data, nil
 }
 
 func SQLDecode(data []byte, key []byte) ([]byte, error) {

@@ -2960,6 +2960,62 @@ func initDecodeTestCase() []tcTemp {
 	return testInputs
 }
 
+func TestEncode(t *testing.T) {
+	testCases := initEncodeTestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Encode)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initEncodeTestCase() []tcTemp {
+	regularCases := []struct {
+		info  string
+		data  []string
+		keys  []string
+		wants []string
+	}{
+		{
+			info: "test decode - simple text",
+			data: []string{
+				"abcde",
+			},
+			keys: []string{
+				"12345",
+			},
+			wants: []string{
+				"325F62B63147732B21",
+			},
+		},
+	}
+
+	var testInputs = make([]tcTemp, 0, len(regularCases))
+	for _, c := range regularCases {
+		realWants := make([]string, len(c.wants))
+		for i, want := range c.wants {
+			bytes, err := hex.DecodeString(want)
+			if err != nil {
+				fmt.Printf("decode string error: %v", err)
+			}
+
+			realWants[i] = string(bytes)
+		}
+		testInputs = append(testInputs, tcTemp{
+			info: c.info,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), c.data, []bool{}),
+				NewFunctionTestInput(types.T_varchar.ToType(), c.keys, []bool{}),
+			},
+			expect: NewFunctionTestResult(types.T_blob.ToType(), false, realWants, []bool{}),
+		})
+	}
+
+	return testInputs
+}
+
 // Month
 
 func initDateToMonthTestCase() []tcTemp {
