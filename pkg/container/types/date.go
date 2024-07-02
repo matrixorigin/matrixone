@@ -767,7 +767,7 @@ func GetUnixEpochSecs() int64 {
 	return unixEpochMicroSecs
 }
 
-func MakeDate(year int32, month uint8, day int64) Date {
+func MakeDate(year int32, month uint8, day int32) Date {
 	// Compute days since the absolute epoch.
 	d := daysSinceEpoch(year - 1)
 
@@ -778,7 +778,7 @@ func MakeDate(year int32, month uint8, day int64) Date {
 	}
 
 	// Add in days before today.
-	d += int32(day - 1)
+	d += day - 1
 
 	return Date(d)
 }
