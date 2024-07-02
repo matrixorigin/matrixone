@@ -1166,7 +1166,6 @@ func Encode(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 		data, nullData := source.GetStrValue(i)
 		keyData, nullKey := key.GetStrValue(i)
 		if err := encodeToBytes(data, keyData, nullData || nullKey, rs); err != nil {
-			fmt.Printf("Error encoding row %d: %v\n", i, err)
 			return err
 		}
 	}
@@ -1196,7 +1195,6 @@ func Decode(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 		data, nullData := source.GetStrValue(i)
 		keyData, nullKey := key.GetStrValue(i)
 		if err := decodeFromBytes(data, keyData, nullData || nullKey, rs); err != nil {
-			fmt.Printf("Error decoding row %d: %v\n", i, err)
 			return err
 		}
 	}
