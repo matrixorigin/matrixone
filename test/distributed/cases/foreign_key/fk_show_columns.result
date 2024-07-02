@@ -59,18 +59,18 @@ attr_seqnum    SMALLINT UNSIGNED(0)    YES        null
 attr_enum    VARCHAR(65535)    YES        null        
 desc	mo_catalog.mo_account                 ;
 Field    Type    Null    Key    Default    Extra    Comment
-account_id    INT(32)    NO    PRI    null        
+account_id    INT(32)    NO    PRI    null    auto_increment    
 account_name    VARCHAR(300)    YES    UNI    null        
 admin_name    VARCHAR(300)    YES        null        
 status    VARCHAR(300)    YES        null        
 created_time    TIMESTAMP(0)    YES        null        
 comments    VARCHAR(256)    YES        null        
-version    BIGINT UNSIGNED(64)    YES        null        
+version    BIGINT UNSIGNED(64)    YES        null    auto_increment    
 suspended_time    TIMESTAMP(0)    YES        null        
 create_version    VARCHAR(50)    YES        '1.2.0'        
 desc	mo_catalog.mo_user                    ;
 Field    Type    Null    Key    Default    Extra    Comment
-user_id    INT(32)    NO    PRI    null        
+user_id    INT(32)    NO    PRI    null    auto_increment    
 user_host    VARCHAR(100)    YES        null        
 user_name    VARCHAR(300)    YES    UNI    null        
 authentication_string    VARCHAR(100)    YES        null        
@@ -83,7 +83,7 @@ owner    INT(32)    YES        null
 default_role    INT(32)    YES        null        
 desc	mo_catalog.mo_role                    ;
 Field    Type    Null    Key    Default    Extra    Comment
-role_id    INT(32)    NO    PRI    null        
+role_id    INT(32)    NO    PRI    null    auto_increment    
 role_name    VARCHAR(300)    YES    UNI    null        
 creator    INT(32)    YES        null        
 owner    INT(32)    YES        null        
@@ -117,7 +117,7 @@ granted_time    TIMESTAMP(0)    YES        null
 with_grant_option    BOOL(0)    YES        null        
 desc	mo_catalog.mo_user_defined_function   ;
 Field    Type    Null    Key    Default    Extra    Comment
-function_id    INT(32)    NO    PRI    null        
+function_id    INT(32)    NO    PRI    null    auto_increment    
 name    VARCHAR(100)    YES    UNI    null        
 owner    INT UNSIGNED(32)    YES        null        
 args    JSON(0)    YES        null        
@@ -136,7 +136,7 @@ collation_connection    VARCHAR(64)    YES        null
 database_collation    VARCHAR(64)    YES        null        
 desc	mo_catalog.mo_stored_procedure        ;
 Field    Type    Null    Key    Default    Extra    Comment
-proc_id    INT(32)    NO    PRI    null        
+proc_id    INT(32)    NO    PRI    null    auto_increment    
 name    VARCHAR(100)    YES    UNI    null        
 creator    INT UNSIGNED(32)    YES        null        
 args    TEXT(0)    YES        null        
@@ -153,7 +153,7 @@ collation_connection    VARCHAR(64)    YES        null
 database_collation    VARCHAR(64)    YES        null        
 desc	mo_catalog.mo_mysql_compatibility_mode;
 Field    Type    Null    Key    Default    Extra    Comment
-configuration_id    INT(32)    NO    PRI    null        
+configuration_id    INT(32)    NO    PRI    null    auto_increment    
 account_id    INT(32)    YES        null        
 account_name    VARCHAR(300)    YES        null        
 dat_name    VARCHAR(5000)    YES        null        
@@ -211,7 +211,7 @@ creator    INT UNSIGNED(32)    YES        null
 comment    TEXT(0)    YES        null        
 desc	mo_catalog.mo_stages                  ;
 Field    Type    Null    Key    Default    Extra    Comment
-stage_id    INT UNSIGNED(32)    NO    PRI    null        
+stage_id    INT UNSIGNED(32)    NO    PRI    null    auto_increment    
 stage_name    VARCHAR(64)    YES    UNI    null        
 url    TEXT(0)    YES        null        
 stage_credentials    TEXT(0)    YES        null        
@@ -377,18 +377,18 @@ attr_seqnum    SMALLINT UNSIGNED(0)    YES        null
 attr_enum    VARCHAR(65535)    YES        null        
 show columns from	mo_catalog.mo_account                 ;
 Field    Type    Null    Key    Default    Extra    Comment
-account_id    INT(32)    NO    PRI    null        
+account_id    INT(32)    NO    PRI    null    auto_increment    
 account_name    VARCHAR(300)    YES    UNI    null        
 admin_name    VARCHAR(300)    YES        null        
 status    VARCHAR(300)    YES        null        
 created_time    TIMESTAMP(0)    YES        null        
 comments    VARCHAR(256)    YES        null        
-version    BIGINT UNSIGNED(64)    YES        null        
+version    BIGINT UNSIGNED(64)    YES        null    auto_increment    
 suspended_time    TIMESTAMP(0)    YES        null        
 create_version    VARCHAR(50)    YES        '1.2.0'        
 show columns from	mo_catalog.mo_user                    ;
 Field    Type    Null    Key    Default    Extra    Comment
-user_id    INT(32)    NO    PRI    null        
+user_id    INT(32)    NO    PRI    null    auto_increment    
 user_host    VARCHAR(100)    YES        null        
 user_name    VARCHAR(300)    YES    UNI    null        
 authentication_string    VARCHAR(100)    YES        null        
@@ -401,7 +401,7 @@ owner    INT(32)    YES        null
 default_role    INT(32)    YES        null        
 show columns from	mo_catalog.mo_role                    ;
 Field    Type    Null    Key    Default    Extra    Comment
-role_id    INT(32)    NO    PRI    null        
+role_id    INT(32)    NO    PRI    null    auto_increment    
 role_name    VARCHAR(300)    YES    UNI    null        
 creator    INT(32)    YES        null        
 owner    INT(32)    YES        null        
@@ -435,7 +435,7 @@ granted_time    TIMESTAMP(0)    YES        null
 with_grant_option    BOOL(0)    YES        null        
 show columns from	mo_catalog.mo_user_defined_function   ;
 Field    Type    Null    Key    Default    Extra    Comment
-function_id    INT(32)    NO    PRI    null        
+function_id    INT(32)    NO    PRI    null    auto_increment    
 name    VARCHAR(100)    YES    UNI    null        
 owner    INT UNSIGNED(32)    YES        null        
 args    JSON(0)    YES        null        
@@ -454,7 +454,7 @@ collation_connection    VARCHAR(64)    YES        null
 database_collation    VARCHAR(64)    YES        null        
 show columns from	mo_catalog.mo_stored_procedure        ;
 Field    Type    Null    Key    Default    Extra    Comment
-proc_id    INT(32)    NO    PRI    null        
+proc_id    INT(32)    NO    PRI    null    auto_increment    
 name    VARCHAR(100)    YES    UNI    null        
 creator    INT UNSIGNED(32)    YES        null        
 args    TEXT(0)    YES        null        
@@ -471,7 +471,7 @@ collation_connection    VARCHAR(64)    YES        null
 database_collation    VARCHAR(64)    YES        null        
 show columns from	mo_catalog.mo_mysql_compatibility_mode;
 Field    Type    Null    Key    Default    Extra    Comment
-configuration_id    INT(32)    NO    PRI    null        
+configuration_id    INT(32)    NO    PRI    null    auto_increment    
 account_id    INT(32)    YES        null        
 account_name    VARCHAR(300)    YES        null        
 dat_name    VARCHAR(5000)    YES        null        
@@ -529,7 +529,7 @@ creator    INT UNSIGNED(32)    YES        null
 comment    TEXT(0)    YES        null        
 show columns from	mo_catalog.mo_stages                  ;
 Field    Type    Null    Key    Default    Extra    Comment
-stage_id    INT UNSIGNED(32)    NO    PRI    null        
+stage_id    INT UNSIGNED(32)    NO    PRI    null    auto_increment    
 stage_name    VARCHAR(64)    YES    UNI    null        
 url    TEXT(0)    YES        null        
 stage_credentials    TEXT(0)    YES        null        
@@ -697,7 +697,7 @@ desc	mo_catalog.mo_account                 ;
 no such table mo_catalog.mo_account
 desc	mo_catalog.mo_user                    ;
 Field    Type    Null    Key    Default    Extra    Comment
-user_id    INT(32)    NO    PRI    null        
+user_id    INT(32)    NO    PRI    null    auto_increment    
 user_host    VARCHAR(100)    YES        null        
 user_name    VARCHAR(300)    YES    UNI    null        
 authentication_string    VARCHAR(100)    YES        null        
@@ -710,7 +710,7 @@ owner    INT(32)    YES        null
 default_role    INT(32)    YES        null        
 desc	mo_catalog.mo_role                    ;
 Field    Type    Null    Key    Default    Extra    Comment
-role_id    INT(32)    NO    PRI    null        
+role_id    INT(32)    NO    PRI    null    auto_increment    
 role_name    VARCHAR(300)    YES    UNI    null        
 creator    INT(32)    YES        null        
 owner    INT(32)    YES        null        
@@ -744,7 +744,7 @@ granted_time    TIMESTAMP(0)    YES        null
 with_grant_option    BOOL(0)    YES        null        
 desc	mo_catalog.mo_user_defined_function   ;
 Field    Type    Null    Key    Default    Extra    Comment
-function_id    INT(32)    NO    PRI    null        
+function_id    INT(32)    NO    PRI    null    auto_increment    
 name    VARCHAR(100)    YES    UNI    null        
 owner    INT UNSIGNED(32)    YES        null        
 args    JSON(0)    YES        null        
@@ -763,7 +763,7 @@ collation_connection    VARCHAR(64)    YES        null
 database_collation    VARCHAR(64)    YES        null        
 desc	mo_catalog.mo_stored_procedure        ;
 Field    Type    Null    Key    Default    Extra    Comment
-proc_id    INT(32)    NO    PRI    null        
+proc_id    INT(32)    NO    PRI    null    auto_increment    
 name    VARCHAR(100)    YES    UNI    null        
 creator    INT UNSIGNED(32)    YES        null        
 args    TEXT(0)    YES        null        
@@ -780,7 +780,7 @@ collation_connection    VARCHAR(64)    YES        null
 database_collation    VARCHAR(64)    YES        null        
 desc	mo_catalog.mo_mysql_compatibility_mode;
 Field    Type    Null    Key    Default    Extra    Comment
-configuration_id    INT(32)    NO    PRI    null        
+configuration_id    INT(32)    NO    PRI    null    auto_increment    
 account_id    INT(32)    YES        null        
 account_name    VARCHAR(300)    YES        null        
 dat_name    VARCHAR(5000)    YES        null        
@@ -838,7 +838,7 @@ creator    INT UNSIGNED(32)    YES        null
 comment    TEXT(0)    YES        null        
 desc	mo_catalog.mo_stages                  ;
 Field    Type    Null    Key    Default    Extra    Comment
-stage_id    INT UNSIGNED(32)    NO    PRI    null        
+stage_id    INT UNSIGNED(32)    NO    PRI    null    auto_increment    
 stage_name    VARCHAR(64)    YES    UNI    null        
 url    TEXT(0)    YES        null        
 stage_credentials    TEXT(0)    YES        null        
@@ -886,7 +886,7 @@ lock_status    VARCHAR(65535)    YES        null
 lock_wait    VARCHAR(65535)    YES        null        
 desc	mo_catalog.mo_variables               ;
 Field    Type    Null    Key    Default    Extra    Comment
-configuration_id    INT(32)    NO        null        
+configuration_id    INT(32)    NO        null    auto_increment    
 account_id    INT(32)    YES        null        
 account_name    VARCHAR(300)    YES        null        
 dat_name    VARCHAR(5000)    YES        null        
@@ -1006,7 +1006,7 @@ show columns from	mo_catalog.mo_account                 ;
 no such table mo_catalog.mo_account
 show columns from	mo_catalog.mo_user                    ;
 Field    Type    Null    Key    Default    Extra    Comment
-user_id    INT(32)    NO    PRI    null        
+user_id    INT(32)    NO    PRI    null    auto_increment    
 user_host    VARCHAR(100)    YES        null        
 user_name    VARCHAR(300)    YES    UNI    null        
 authentication_string    VARCHAR(100)    YES        null        
@@ -1019,7 +1019,7 @@ owner    INT(32)    YES        null
 default_role    INT(32)    YES        null        
 show columns from	mo_catalog.mo_role                    ;
 Field    Type    Null    Key    Default    Extra    Comment
-role_id    INT(32)    NO    PRI    null        
+role_id    INT(32)    NO    PRI    null    auto_increment    
 role_name    VARCHAR(300)    YES    UNI    null        
 creator    INT(32)    YES        null        
 owner    INT(32)    YES        null        
@@ -1053,7 +1053,7 @@ granted_time    TIMESTAMP(0)    YES        null
 with_grant_option    BOOL(0)    YES        null        
 show columns from	mo_catalog.mo_user_defined_function   ;
 Field    Type    Null    Key    Default    Extra    Comment
-function_id    INT(32)    NO    PRI    null        
+function_id    INT(32)    NO    PRI    null    auto_increment    
 name    VARCHAR(100)    YES    UNI    null        
 owner    INT UNSIGNED(32)    YES        null        
 args    JSON(0)    YES        null        
@@ -1072,7 +1072,7 @@ collation_connection    VARCHAR(64)    YES        null
 database_collation    VARCHAR(64)    YES        null        
 show columns from	mo_catalog.mo_stored_procedure        ;
 Field    Type    Null    Key    Default    Extra    Comment
-proc_id    INT(32)    NO    PRI    null        
+proc_id    INT(32)    NO    PRI    null    auto_increment    
 name    VARCHAR(100)    YES    UNI    null        
 creator    INT UNSIGNED(32)    YES        null        
 args    TEXT(0)    YES        null        
@@ -1089,7 +1089,7 @@ collation_connection    VARCHAR(64)    YES        null
 database_collation    VARCHAR(64)    YES        null        
 show columns from	mo_catalog.mo_mysql_compatibility_mode;
 Field    Type    Null    Key    Default    Extra    Comment
-configuration_id    INT(32)    NO    PRI    null        
+configuration_id    INT(32)    NO    PRI    null    auto_increment    
 account_id    INT(32)    YES        null        
 account_name    VARCHAR(300)    YES        null        
 dat_name    VARCHAR(5000)    YES        null        
@@ -1147,7 +1147,7 @@ creator    INT UNSIGNED(32)    YES        null
 comment    TEXT(0)    YES        null        
 show columns from	mo_catalog.mo_stages                  ;
 Field    Type    Null    Key    Default    Extra    Comment
-stage_id    INT UNSIGNED(32)    NO    PRI    null        
+stage_id    INT UNSIGNED(32)    NO    PRI    null    auto_increment    
 stage_name    VARCHAR(64)    YES    UNI    null        
 url    TEXT(0)    YES        null        
 stage_credentials    TEXT(0)    YES        null        
@@ -1195,7 +1195,7 @@ lock_status    VARCHAR(65535)    YES        null
 lock_wait    VARCHAR(65535)    YES        null        
 show columns from	mo_catalog.mo_variables               ;
 Field    Type    Null    Key    Default    Extra    Comment
-configuration_id    INT(32)    NO        null        
+configuration_id    INT(32)    NO        null    auto_increment    
 account_id    INT(32)    YES        null        
 account_name    VARCHAR(300)    YES        null        
 dat_name    VARCHAR(5000)    YES        null        

@@ -312,6 +312,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	}
 	moSchema["mo_tables"] = &Schema{
 		cols: []col{
+			{"rel_id", types.T_uint64, false, 64, 0},
 			{"reldatabase", types.T_varchar, false, 50, 0},
 			{"relname", types.T_varchar, false, 50, 0},
 			{"relkind", types.T_varchar, false, 50, 0},
