@@ -23,7 +23,7 @@ explain select * from t1 where c2 like '1_';
 QUERY PLAN
 Project
   ->  Table Scan on d1.t1
-        Filter Cond: (t1.c2 like '1_'), prefix_eq(t1.c2, '1')
+        Filter Cond: prefix_eq(t1.c2, '1'), (t1.c2 like '1_')
         Block Filter Cond: prefix_eq(t1.c2, '1')
 select * from t1 where c2 like '1_';
 c1    c2    c3
@@ -41,7 +41,7 @@ explain select * from t1 where c2 like '1_2';
 QUERY PLAN
 Project
   ->  Table Scan on d1.t1
-        Filter Cond: (t1.c2 like '1_2'), prefix_eq(t1.c2, '1')
+        Filter Cond: prefix_eq(t1.c2, '1'), (t1.c2 like '1_2')
         Block Filter Cond: prefix_eq(t1.c2, '1')
 select * from t1 where c2 like '1_2';
 c1    c2    c3
@@ -67,7 +67,7 @@ explain select * from t1 where c2 like '1_2%3';
 QUERY PLAN
 Project
   ->  Table Scan on d1.t1
-        Filter Cond: (t1.c2 like '1_2%3'), prefix_eq(t1.c2, '1')
+        Filter Cond: prefix_eq(t1.c2, '1'), (t1.c2 like '1_2%3')
         Block Filter Cond: prefix_eq(t1.c2, '1')
 select count(*) from t1 where c2 like '1_2%3';
 count(*)
