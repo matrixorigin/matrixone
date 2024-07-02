@@ -19,7 +19,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"math/rand"
 	"reflect"
 	"strings"
@@ -27,6 +26,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 
@@ -9009,7 +9010,7 @@ func TestPersistTransferTable(t *testing.T) {
 
 	now := time.Now()
 	if model.RD == nil {
-		model.SetBlockRead(blockio.NewBlockRead())
+		panic("boom")
 	}
 	model.FS = tae.Runtime.Fs.Service
 	page := model.NewTransferHashPage(&id1, now, 10, false,
@@ -9086,7 +9087,7 @@ func TestClearPersistTransferTable(t *testing.T) {
 
 	now := time.Now()
 	if model.RD == nil {
-		model.SetBlockRead(blockio.NewBlockRead())
+		panic("boom")
 	}
 	model.FS = tae.Runtime.Fs.Service
 
