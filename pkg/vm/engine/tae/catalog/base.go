@@ -215,6 +215,14 @@ func (be *BaseEntryImpl[T]) HasDropCommittedLocked() bool {
 	return un.HasDropCommitted()
 }
 
+func (be *BaseEntryImpl[T]) HasDropIntentLocked() bool {
+	un := be.GetLatestNodeLocked()
+	if un == nil {
+		return false
+	}
+	return un.HasDropIntent()
+}
+
 func (be *BaseEntryImpl[T]) ensureVisibleAndNotDropped(txn txnif.TxnReader) bool {
 	visible, dropped := be.GetVisibilityLocked(txn)
 	if !visible {
