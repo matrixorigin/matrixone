@@ -275,6 +275,9 @@ const (
 	ErrKeyAlreadyExists uint16 = 21001
 	ErrArenaFull        uint16 = 21002
 
+	// Group 11: The error code that rarely appears
+	ErrTooLargeObjectSize uint16 = 22001
+
 	// ErrEnd, the max value of MOErrorCode
 	ErrEnd uint16 = 65535
 )
@@ -494,6 +497,9 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	// Group 10: skip list
 	ErrKeyAlreadyExists: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "record with this key already exists"},
 	ErrArenaFull:        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "allocation failed because arena is full"},
+
+	// Group 11: The error code that rarely appears
+	ErrTooLargeObjectSize: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "objectio: too large object size %d"},
 
 	// Group End: max value of MOErrorCode
 	ErrEnd: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: end of errcode code"},

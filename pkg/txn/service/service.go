@@ -104,7 +104,9 @@ func (s *service) Start() error {
 	if err := s.storage.Start(); err != nil {
 		return err
 	}
+	s.logger.Info("start txn recovery")
 	s.startRecovery()
+	s.logger.Info("end txn recovery")
 	return nil
 }
 
