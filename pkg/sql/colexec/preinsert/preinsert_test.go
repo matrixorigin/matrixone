@@ -57,8 +57,8 @@ func TestPreInsertNormal(t *testing.T) {
 	}).AnyTimes()
 
 	proc := testutil.NewProc()
-	proc.TxnClient = txnClient
-	proc.SessionInfo.StorageEngine = eng
+	proc.Base.TxnClient = txnClient
+	proc.Base.SessionInfo.StorageEngine = eng
 	batch1 := &batch.Batch{
 		Vecs: []*vector.Vector{
 			testutil.MakeInt64Vector([]int64{1, 2, 0}, []uint64{3}),
@@ -134,9 +134,9 @@ func TestPreInsertNullCheck(t *testing.T) {
 	}).AnyTimes()
 
 	proc := testutil.NewProc()
-	proc.TxnClient = txnClient
+	proc.Base.TxnClient = txnClient
 	proc.Ctx = ctx
-	proc.SessionInfo.StorageEngine = eng
+	proc.Base.SessionInfo.StorageEngine = eng
 	batch2 := &batch.Batch{
 		Vecs: []*vector.Vector{
 			testutil.MakeInt64Vector([]int64{1, 2, 0}, []uint64{2}),

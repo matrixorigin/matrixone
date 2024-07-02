@@ -560,7 +560,7 @@ func (txn *Transaction) getTable(
 		id,
 	)
 
-	database, err := txn.engine.Database(ctx, dbName, txn.proc.TxnOperator)
+	database, err := txn.engine.Database(ctx, dbName, txn.proc.GetTxnOperator())
 	if err != nil {
 		return nil, err
 	}
@@ -1096,6 +1096,7 @@ func (txn *Transaction) delTransaction() {
 	txn.deletedTableMap = nil
 	txn.blockId_tn_delete_metaLoc_batch.data = nil
 	txn.deletedBlocks = nil
+	txn.haveDDL.Store(false)
 	segmentnames := make([]objectio.Segmentid, 0, len(txn.cnBlkId_Pos)+1)
 	segmentnames = append(segmentnames, txn.segId)
 	for blkId := range txn.cnBlkId_Pos {
@@ -1242,4 +1243,12 @@ func (txn *Transaction) CloneSnapshotWS() client.Workspace {
 
 func (txn *Transaction) BindTxnOp(op client.TxnOperator) {
 	txn.op = op
+}
+
+func (txn *Transaction) SetHaveDDL(haveDDL bool) {
+	txn.haveDDL.Store(haveDDL)
+}
+
+func (txn *Transaction) GetHaveDDL() bool {
+	return txn.haveDDL.Load()
 }
