@@ -31,6 +31,58 @@ const (
 	LoadParallelMinSize = 1 << 20
 )
 
+func getExternalProject(stmt *tree.Load, ctx CompilerContext, tableDef *TableDef, tblName string) ([]*Expr, map[string]int32, []string, error) {
+	var externalProject []*Expr
+	colToIndex := make(map[string]int32, 0)
+	var insertColList []string
+	if len(stmt.Param.Tail.ColumnList) == 0 {
+		for i, col := range tableDef.Cols {
+			if col.Name != catalog.FakePrimaryKeyColName {
+				colExpr := &plan.Expr{
+					Typ: tableDef.Cols[i].Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							ColPos: int32(i),
+							Name:   tblName + "." + tableDef.Cols[i].Name,
+						},
+					},
+				}
+				externalProject = append(externalProject, colExpr)
+				colToIndex[tableDef.Cols[i].Name] = int32(i)
+				insertColList = append(insertColList, tableDef.Cols[i].Name)
+			}
+		}
+	} else {
+		for i, col := range stmt.Param.Tail.ColumnList {
+			switch realCol := col.(type) {
+			case *tree.UnresolvedName:
+				colName := realCol.ColName()
+				if _, ok := tableDef.Name2ColIndex[colName]; !ok {
+					return nil, nil, nil, moerr.NewInternalError(ctx.GetContext(), "column '%s' does not exist", colName)
+				}
+				tbColIdx := tableDef.Name2ColIndex[colName]
+				colExpr := &plan.Expr{
+					Typ: tableDef.Cols[tbColIdx].Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							ColPos: int32(i),
+							Name:   tblName + "." + colName,
+						},
+					},
+				}
+				externalProject = append(externalProject, colExpr)
+				colToIndex[colName] = int32(i)
+				insertColList = append(insertColList, colName)
+			case *tree.VarExpr:
+				//NOTE:variable like '@abc' will be passed by.
+			default:
+				return nil, nil, nil, moerr.NewInternalError(ctx.GetContext(), "unsupported column type %v", realCol)
+			}
+		}
+	}
+	return externalProject, colToIndex, insertColList, nil
+}
+
 func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan, error) {
 	start := time.Now()
 	defer func() {
@@ -55,20 +107,14 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	objRef := tblInfo.objRef[0]
 
 	tableDef.Name2ColIndex = map[string]int32{}
-	var externalProject []*Expr
-	for i := 0; i < len(tableDef.Cols); i++ {
-		idx := int32(i)
-		tableDef.Name2ColIndex[tableDef.Cols[i].Name] = idx
-		colExpr := &plan.Expr{
-			Typ: tableDef.Cols[i].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					ColPos: idx,
-					Name:   tblName + "." + tableDef.Cols[i].Name,
-				},
-			},
+	for i, col := range tableDef.Cols {
+		if col.Name != catalog.FakePrimaryKeyColName {
+			tableDef.Name2ColIndex[col.Name] = int32(i)
 		}
-		externalProject = append(externalProject, colExpr)
+	}
+	externalProject, colToIndex, insertColList, err := getExternalProject(stmt, ctx, tableDef, tblName)
+	if err != nil {
+		return nil, err
 	}
 
 	if err := checkNullMap(stmt, tableDef.Cols, ctx); err != nil {
@@ -79,7 +125,6 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		stmt.Param.Parallel = false
 	}
 	stmt.Param.LoadFile = true
-	columnList := stmt.Param.Tail.ColumnList
 	stmt.Param.Tail.ColumnList = nil
 	if stmt.Param.ScanType != tree.INLINE {
 		json_byte, err := json.Marshal(stmt.Param)
@@ -117,14 +162,15 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		ObjRef:      objRef,
 		TableDef:    tableDef,
 		ExternScan: &plan.ExternScan{
-			Type:         int32(stmt.Param.ScanType),
-			Data:         stmt.Param.Data,
-			Format:       stmt.Param.Format,
-			IgnoredLines: uint64(stmt.Param.Tail.IgnoredLines),
-			EnclosedBy:   enclosedBy,
-			Terminated:   terminated,
-			EscapedBy:    escapedBy,
-			JsonType:     stmt.Param.JsonData,
+			Type:          int32(stmt.Param.ScanType),
+			Data:          stmt.Param.Data,
+			Format:        stmt.Param.Format,
+			IgnoredLines:  uint64(stmt.Param.Tail.IgnoredLines),
+			EnclosedBy:    enclosedBy,
+			Terminated:    terminated,
+			EscapedBy:     escapedBy,
+			JsonType:      stmt.Param.JsonData,
+			InsertColList: insertColList,
 		},
 	}
 	lastNodeId := builder.appendNode(externalScanNode, bindCtx)
@@ -134,7 +180,9 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		NodeType: plan.Node_PROJECT,
 		Stats:    &plan.Stats{},
 	}
-	ifExistAutoPkCol, err := getProjectNode(stmt, ctx, projectNode, tableDef, columnList)
+
+	ifExistAutoPkCol, err := getProjectNode(stmt, ctx, projectNode, tableDef, colToIndex)
+
 	if err != nil {
 		return nil, err
 	}
@@ -233,36 +281,12 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 	return param.Filepath, nil
 }
 
-func getProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, tableDef *TableDef, columnList []tree.LoadColumn) (bool, error) {
+func getProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, tableDef *TableDef, colToIndex map[string]int32) (bool, error) {
 	tblName := string(stmt.Table.ObjectName)
-	colToIndex := make(map[string]int32, 0)
 	ifExistAutoPkCol := false
-	if len(columnList) == 0 {
-		for i := 0; i < len(tableDef.Cols); i++ {
-			colToIndex[tableDef.Cols[i].Name] = int32(i)
-		}
-	} else {
-		for i, col := range columnList {
-			switch realCol := col.(type) {
-			case *tree.UnresolvedName:
-				colName := realCol.ColName()
-				if _, ok := tableDef.Name2ColIndex[colName]; !ok {
-					return ifExistAutoPkCol, moerr.NewInternalError(ctx.GetContext(), "column '%s' does not exist", realCol.ColNameOrigin())
-				}
-				colToIndex[colName] = int32(i)
-			case *tree.VarExpr:
-				//NOTE:variable like '@abc' will be passed by.
-			default:
-				return ifExistAutoPkCol, moerr.NewInternalError(ctx.GetContext(), "unsupported column type %v", realCol)
-			}
-		}
-		lastColIdx := len(tableDef.Cols) - 1
-		if lastColIdx >= 0 && tableDef.Cols[lastColIdx].Name == catalog.FakePrimaryKeyColName {
-			colToIndex[catalog.FakePrimaryKeyColName] = int32(lastColIdx)
-		}
-	}
 	node.ProjectList = make([]*plan.Expr, len(tableDef.Cols))
 	var tmp *plan.Expr
+
 	for i := 0; i < len(tableDef.Cols); i++ {
 		if colListId, ok := colToIndex[tableDef.Cols[i].Name]; ok {
 			tmp = &plan.Expr{
@@ -277,16 +301,13 @@ func getProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, table
 			node.ProjectList[i] = tmp
 			continue
 		}
-		if tableDef.Cols[i].Default.Expr == nil || tableDef.Cols[i].Default.NullAbility {
-			tmp = makePlan2NullConstExprWithType()
-		} else {
-			tmp = &plan.Expr{
-				Typ:  tableDef.Cols[i].Default.Expr.Typ,
-				Expr: tableDef.Cols[i].Default.Expr.Expr,
-			}
-		}
-		node.ProjectList[i] = tmp
 
+		defExpr, err := getDefaultExpr(ctx.GetContext(), tableDef.Cols[i])
+		if err != nil {
+			return false, err
+		}
+
+		node.ProjectList[i] = defExpr
 		if tableDef.Cols[i].Typ.AutoIncr && tableDef.Cols[i].Name == tableDef.Pkey.PkeyColName {
 			ifExistAutoPkCol = true
 		}

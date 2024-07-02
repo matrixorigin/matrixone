@@ -149,16 +149,17 @@ type ExternParam struct {
 }
 
 type ExParamConst struct {
-	Init         bool
-	ScanType     int
-	FileSize     int64
-	Filepath     string
-	CompressType string
-	Format       string
-	Option       []string
-	Data         string
-	Tail         *TailParameter
-	StageName    Identifier
+	Init          bool
+	ScanType      int
+	FileSize      int64
+	Filepath      string
+	CompressType  string
+	Format        string
+	Option        []string
+	Data          string
+	Tail          *TailParameter
+	StageName     Identifier
+	InsertColList []string
 }
 
 type ExParam struct {

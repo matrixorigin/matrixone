@@ -726,14 +726,20 @@ func constructProjection(n *plan.Node) *projection.Argument {
 }
 
 func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Context, fileList []string, FileSize []int64, fileOffset []*pipeline.FileOffset) *external.Argument {
-	attrs := make([]string, len(n.TableDef.Cols))
-	for j, col := range n.TableDef.Cols {
-		attrs[j] = col.Name
+	if param.InsertColList == nil {
+		var attrs []string
+		for _, col := range n.TableDef.Cols {
+			if !col.Hidden {
+				attrs = append(attrs, col.Name)
+			}
+		}
+		param.InsertColList = attrs
 	}
+
 	return external.NewArgument().WithEs(
 		&external.ExternalParam{
 			ExParamConst: external.ExParamConst{
-				Attrs:           attrs,
+				Attrs:           param.InsertColList,
 				Cols:            n.TableDef.Cols,
 				Extern:          param,
 				Name2ColIndex:   n.TableDef.Name2ColIndex,
