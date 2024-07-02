@@ -1144,24 +1144,6 @@ func (sc *sqlCrypt) decode(str []byte, length int) {
 
 // encode function encrypts a string, returns a binary string of the same length of the original string.
 // https://dev.mysql.com/doc/refman/5.7/en/encryption-functions.html#function_encode
-//func SQLEncode(data []byte, key []byte) ([]byte, error) {
-//	var sc sqlCrypt
-//
-//	sc.init(key, len(key))
-//	sc.encode(data, len(data))
-//
-//	return data, nil
-//}
-
-//func SQLDecode(data []byte, key []byte) ([]byte, error) {
-//	var sc sqlCrypt
-//
-//	sc.init(key, len(key))
-//	sc.decode(data, len(data))
-//
-//	return data, nil
-//}
-
 func encodeToBytes(data []byte, key []byte, null bool, rs *vector.FunctionResult[types.Varlena]) error {
 	if null {
 		return rs.AppendMustNullForBytesResult()
@@ -1171,12 +1153,6 @@ func encodeToBytes(data []byte, key []byte, null bool, rs *vector.FunctionResult
 	sc.init(key, len(key))
 	sc.encode(data, len(data))
 
-	//encodeData, err := SQLEncode(data, key)
-
-	//if err != nil {
-	//	fmt.Printf("Error encoding data: %v\n", err)
-	//	return rs.AppendMustNullForBytesResult()
-	//}
 	return rs.AppendMustBytesValue(data)
 }
 
@@ -1207,10 +1183,6 @@ func decodeFromBytes(data []byte, key []byte, null bool, rs *vector.FunctionResu
 	var sc sqlCrypt
 	sc.init(key, len(key))
 	sc.decode(data, len(data))
-	//decodeData, err := SQLDecode(data, key)
-	//if err != nil {
-	//	return rs.AppendMustNullForBytesResult()
-	//}
 	return rs.AppendMustBytesValue(data)
 }
 
