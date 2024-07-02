@@ -165,7 +165,7 @@ func GetOneBlockMeta(rel handle.Relation) *catalog.ObjectEntry {
 
 func GetAllBlockMetas(rel handle.Relation) (metas []*catalog.ObjectEntry) {
 	it := rel.MakeObjectIt()
-	for ; it.Valid(); it.Next() {
+	for it.Next() {
 		blk := it.GetObject()
 		metas = append(metas, blk.GetMeta().(*catalog.ObjectEntry))
 	}
@@ -218,7 +218,7 @@ func ForEachColumnView(rel handle.Relation, colIdx int, fn func(view *containers
 func ForEachObject(rel handle.Relation, fn func(obj handle.Object) error) {
 	it := rel.MakeObjectIt()
 	var err error
-	for it.Valid() {
+	for it.Next() {
 		obj := it.GetObject()
 		defer obj.Close()
 		if err = fn(obj); err != nil {
@@ -228,7 +228,6 @@ func ForEachObject(rel handle.Relation, fn func(obj handle.Object) error) {
 				panic(err)
 			}
 		}
-		it.Next()
 	}
 }
 
@@ -265,11 +264,10 @@ func CompactBlocks(t *testing.T, tenantID uint32, e *db.DB, dbName string, schem
 
 	var metas []*catalog.ObjectEntry
 	it := rel.MakeObjectIt()
-	for it.Valid() {
+	for it.Next() {
 		blk := it.GetObject()
 		meta := blk.GetMeta().(*catalog.ObjectEntry)
 		metas = append(metas, meta)
-		it.Next()
 	}
 	_ = txn.Commit(context.Background())
 	if len(metas) == 0 {
@@ -303,12 +301,11 @@ func MergeBlocks(t *testing.T, tenantID uint32, e *db.DB, dbName string, schema 
 
 	var objs []*catalog.ObjectEntry
 	objIt := rel.MakeObjectIt()
-	for objIt.Valid() {
+	for objIt.Next() {
 		obj := objIt.GetObject().GetMeta().(*catalog.ObjectEntry)
 		if !obj.IsAppendable() {
 			objs = append(objs, obj)
 		}
-		objIt.Next()
 	}
 	_ = txn.Commit(context.Background())
 	metas := make([]*catalog.ObjectEntry, 0)

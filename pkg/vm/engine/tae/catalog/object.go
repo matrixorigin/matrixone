@@ -563,7 +563,18 @@ func (entry *ObjectEntry) AsCommonID() *common.ID {
 	id.SetObjectID(&entry.ID)
 	return id
 }
-
+func (entry *ObjectEntry) GetLatestCommittedNode() *ObjectEntry {
+	objs := entry.list.GetAllNodes(&entry.ID)
+	if len(objs) == 0 {
+		return nil
+	}
+	for i := len(objs) - 1; i >= 0; i-- {
+		if objs[i].IsCommitted() {
+			return objs[i]
+		}
+	}
+	return nil
+}
 func (entry *ObjectEntry) GetCatalog() *Catalog { return entry.table.db.catalog }
 
 func (entry *ObjectEntry) PrepareRollback() (err error) {

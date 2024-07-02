@@ -55,7 +55,7 @@ func TestHiddenWithPK1(t *testing.T) {
 	{
 		offsets := make([]uint32, 0)
 		it := rel.MakeObjectIt()
-		for it.Valid() {
+		for it.Next() {
 			blk := it.GetObject()
 			view, err := blk.GetColumnDataById(context.Background(), 0, schema.PhyAddrKey.Idx, common.DefaultAllocator)
 			assert.NoError(t, err)
@@ -69,7 +69,6 @@ func TestHiddenWithPK1(t *testing.T) {
 				offsets = append(offsets, offset)
 				return
 			}, nil)
-			it.Next()
 		}
 		// sort.Slice(offsets, func(i, j int) bool { return offsets[i] < offsets[j] })
 		// assert.Equal(t, []uint32{0, 1, 2, 3}, offsets)
@@ -120,7 +119,7 @@ func TestHiddenWithPK1(t *testing.T) {
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
 	{
 		it := rel.MakeObjectIt()
-		for it.Valid() {
+		for it.Next() {
 			blk := it.GetObject()
 			for j := 0; j < blk.BlkCnt(); j++ {
 				view, err := blk.GetColumnDataByName(context.Background(), uint16(j), catalog.PhyAddrColumnName, common.DefaultAllocator)
@@ -149,7 +148,6 @@ func TestHiddenWithPK1(t *testing.T) {
 					}
 				}
 			}
-			it.Next()
 		}
 	}
 
@@ -163,7 +161,7 @@ func TestHiddenWithPK1(t *testing.T) {
 	{
 		it := rel.MakeObjectIt()
 		objIdx := -1
-		for it.Valid() {
+		for it.Next() {
 			blk := it.GetObject()
 			objIdx++
 			for j := 0; j < blk.BlkCnt(); j++ {
@@ -194,7 +192,6 @@ func TestHiddenWithPK1(t *testing.T) {
 				}
 
 			}
-			it.Next()
 		}
 	}
 
@@ -307,7 +304,7 @@ func TestHidden2(t *testing.T) {
 	{
 		it := rel.MakeObjectIt()
 		rows := 0
-		for it.Valid() {
+		for it.Next() {
 			blk := it.GetObject()
 			for j := 0; j < blk.BlkCnt(); j++ {
 				hidden, err := blk.GetColumnDataById(context.Background(), uint16(j), schema.PhyAddrKey.Idx, common.DefaultAllocator)
@@ -316,7 +313,6 @@ func TestHidden2(t *testing.T) {
 				hidden.ApplyDeletes()
 				rows += hidden.Length()
 			}
-			it.Next()
 		}
 		assert.Equal(t, 26, rows)
 	}

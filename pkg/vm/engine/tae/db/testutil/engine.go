@@ -230,7 +230,7 @@ func (e *TestEngine) DeleteAll(skipConflict bool) error {
 	schema := rel.GetMeta().(*catalog.TableEntry).GetLastestSchemaLocked()
 	pkName := schema.GetPrimaryKey().Name
 	it := rel.MakeObjectIt()
-	for it.Valid() {
+	for it.Next() {
 		blk := it.GetObject()
 		defer blk.Close()
 		blkCnt := uint16(blk.BlkCnt())
@@ -246,7 +246,6 @@ func (e *TestEngine) DeleteAll(skipConflict bool) error {
 			err = rel.DeleteByPhyAddrKeys(view.GetData(), pkView.GetData())
 			assert.NoError(e.t, err)
 		}
-		it.Next()
 	}
 	// CheckAllColRowsByScan(e.t, rel, 0, true)
 	err := txn.Commit(context.Background())
@@ -782,37 +781,35 @@ func (e *TestEngine) CheckCollectDeleteInRange() {
 func (e *TestEngine) CheckObjectInfo(onlyCheckName bool) {
 	p := &catalog.LoopProcessor{}
 	p.ObjectFn = func(se *catalog.ObjectEntry) error {
-		se.LoopChainLocked(func(node *catalog.MVCCNode[*catalog.ObjectMVCCNode]) bool {
-			if se.GetTable().GetDB().ID == pkgcatalog.MO_CATALOG_ID {
-				return true
-			}
-			flushed := true
-			if se.IsAppendable() && !node.HasDropCommitted() {
-				flushed = false
-			}
-			if onlyCheckName || !flushed {
-				assert.Equal(e.t, objectio.BuildObjectNameWithObjectID(&se.ID),
-					node.BaseNode.ObjectStats.ObjectLocation().Name(),
-					"load %v, get %v",
-					se.ID.String(),
-					node.BaseNode.ObjectStats.String())
-				if flushed {
-					stats, err := se.LoadObjectInfoWithTxnTS(node.Start)
-					assert.NoError(e.t, err)
-					assert.Equal(e.t, stats.ObjectLocation().Extent(),
-						node.BaseNode.ObjectStats.ObjectLocation().Extent(),
-						"load %v, get %v",
-						stats.String(),
-						node.BaseNode.ObjectStats.String())
-
-				}
-			} else {
-				stats, err := se.LoadObjectInfoWithTxnTS(node.Start)
+		if se.GetTable().GetDB().ID == pkgcatalog.MO_CATALOG_ID {
+			return nil
+		}
+		flushed := true
+		lastNode := se.GetLatestNode()
+		if se.IsAppendable() && lastNode != nil && !lastNode.HasDropCommitted() {
+			flushed = false
+		}
+		if onlyCheckName || !flushed {
+			assert.Equal(e.t, objectio.BuildObjectNameWithObjectID(&se.ID),
+				se.ObjectStats.ObjectLocation().Name(),
+				"load %v, get %v",
+				se.ID.String(),
+				se.ObjectStats.String())
+			if flushed {
+				stats, err := se.LoadObjectInfoWithTxnTS(se.Start)
 				assert.NoError(e.t, err)
-				assert.Equal(e.t, stats, node.BaseNode.ObjectStats, "load %v, get %v", stats.String(), node.BaseNode.ObjectStats.String())
+				assert.Equal(e.t, stats.ObjectLocation().Extent(),
+					se.ObjectStats.ObjectLocation().Extent(),
+					"load %v, get %v",
+					stats.String(),
+					se.ObjectStats.String())
+
 			}
-			return true
-		})
+		} else {
+			stats, err := se.LoadObjectInfoWithTxnTS(se.Start)
+			assert.NoError(e.t, err)
+			assert.Equal(e.t, stats, se.ObjectStats, "load %v, get %v", stats.String(), se.ObjectStats.String())
+		}
 		return nil
 	}
 	err := e.Catalog.RecurLoop(p)
