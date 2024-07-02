@@ -169,7 +169,7 @@ func (t *cnMergeTask) LoadNextBatch(ctx context.Context, objIdx uint32) (*batch.
 		blk.EntryState = obj.EntryState
 		blk.CommitTs = obj.CommitTS
 		if obj.HasDeltaLoc {
-			deltaLoc, commitTs, ok := t.state.GetBlockDeltaLoc(blk.BlockID)
+			deltaLoc, commitTs, ok := t.state.GetBockDeltaLoc(blk.BlockID)
 			if ok {
 				blk.DeltaLoc = deltaLoc
 				blk.CommitTs = commitTs
