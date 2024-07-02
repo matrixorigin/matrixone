@@ -1150,7 +1150,15 @@ func SQLEncode(data []byte, key []byte) ([]byte, error) {
 	sc.init(key, len(key))
 	sc.encode(data, len(data))
 
-	return data, nil
+	// new changes about hex
+	stringdata := string(data)
+	decodedStringData, err := hex.DecodeString(stringdata)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return decodedStringData, nil
 }
 
 func SQLDecode(data []byte, key []byte) ([]byte, error) {
