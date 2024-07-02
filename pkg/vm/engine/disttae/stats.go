@@ -17,9 +17,12 @@ package disttae
 import (
 	"context"
 	"math"
+	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -213,8 +216,10 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 			// as possible.
 			gs.triggerUpdate(key)
 
+			logutil.Errorf("get stats before wait %+v", key)
 			// Wait until stats info of the key is updated.
 			gs.mu.cond.Wait()
+			logutil.Errorf("get stats after wait %+v", key)
 
 			info, ok = gs.mu.statsInfoMap[key]
 		}
@@ -243,14 +248,18 @@ func (gs *GlobalStats) consumeWorker(ctx context.Context) {
 }
 
 func (gs *GlobalStats) updateWorker(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
+	for i := 0; i < runtime.NumCPU(); i++ {
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
 
-		case key := <-gs.updateC:
-			go gs.updateTableStats(key)
-		}
+				case key := <-gs.updateC:
+					gs.updateTableStats(key)
+				}
+			}
+		}()
 	}
 }
 
@@ -308,6 +317,11 @@ func (gs *GlobalStats) notifyLogtailUpdate(tid uint64) {
 }
 
 func (gs *GlobalStats) waitLogtailUpdated(tid uint64) {
+	// If the tid is less than reserved, return immediately.
+	if tid < catalog.MO_RESERVED_MAX {
+		return
+	}
+
 	// checkUpdated is a function used to check if the table's
 	// first logtail has been received. Return true means that
 	// the first logtail has already been received by the CN server.
@@ -366,14 +380,11 @@ func (gs *GlobalStats) waitLogtailUpdated(tid uint64) {
 	}
 }
 
+var count atomic.Int32
+
 func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 	// wait until the table's logtail has been updated.
 	gs.waitLogtailUpdated(key.TableID)
-
-	ts, ok := gs.statsUpdated.Load(key)
-	if ok && time.Since(ts.(time.Time)) < MinUpdateInterval {
-		return
-	}
 
 	// updated is used to mark that the stats info is updated.
 	var updated bool
@@ -397,10 +408,8 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 			})
 		}
 
-		// update the time to current time only if the stats is not nil.
 		if updated {
 			gs.mu.statsInfoMap[key] = stats
-			gs.statsUpdated.Store(key, time.Now())
 		} else if _, ok := gs.mu.statsInfoMap[key]; !ok {
 			gs.mu.statsInfoMap[key] = nil
 		}
@@ -440,6 +449,18 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 		return
 	}
 
+	// Protect the update progress.
+	ts, ok := gs.statsUpdated.Load(key)
+	if ok && time.Since(ts.(time.Time)) < MinUpdateInterval {
+		return
+	}
+	// The update time of the table key should be updated just before
+	// trying to update stats.
+	gs.statsUpdated.Store(key, time.Now())
+
+	start := time.Now()
+
+	logutil.Errorf("stats start update %+v", key)
 	// the time used to init stats info is not need to be too precise.
 	now := timestamp.Timestamp{PhysicalTime: time.Now().UnixNano()}
 	req := newUpdateStatsRequest(
@@ -451,10 +472,13 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 		approxObjectNum,
 		stats,
 	)
+	count.Add(1)
 	if err := UpdateStats(gs.ctx, req); err != nil {
-		logutil.Errorf("failed to init stats info for table %v", key)
+		logutil.Errorf("failed to init stats info for table %v, err: %v", key, err)
 		return
 	}
+	count.Add(-1)
+	logutil.Errorf("stats update duration %+v, %v, count %d", key, time.Since(start), count.Load())
 	updated = true
 }
 
