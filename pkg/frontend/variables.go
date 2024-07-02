@@ -957,15 +957,13 @@ type GlobalSysVarsMgr struct {
 func (m *GlobalSysVarsMgr) Get(accountId uint32, ses *Session, ctx context.Context) (*SystemVariables, error) {
 	m.Lock()
 	defer m.Unlock()
-	// get from gSysVarsDefs && table if absent
-	if m.accountsGlobalSysVarsMap[accountId] == nil {
-		sysVars, err := ses.getGlobalSysVars(ctx)
-		if err != nil {
-			return nil, err
-		}
 
-		m.accountsGlobalSysVarsMap[accountId] = &SystemVariables{sysVars: sysVars}
+	sysVars, err := ses.getGlobalSysVars(ctx)
+	if err != nil {
+		return nil, err
 	}
+
+	m.accountsGlobalSysVarsMap[accountId] = &SystemVariables{sysVars: sysVars}
 	return m.accountsGlobalSysVarsMap[accountId], nil
 }
 
@@ -3509,14 +3507,6 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableBoolType("experimental_master_index"),
-		Default:           int64(0),
-	},
-	"refresh_global_sys_vars_mgr": {
-		Name:              "refresh_global_sys_vars_mgr",
-		Scope:             ScopeBoth,
-		Dynamic:           true,
-		SetVarHintApplies: false,
-		Type:              InitSystemVariableBoolType("refresh_global_sys_vars_mgr"),
 		Default:           int64(0),
 	},
 }
