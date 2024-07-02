@@ -691,6 +691,11 @@ func (d *DeltalocChain) PrepareCommit() (err error) {
 	node := d.GetLatestNodeLocked()
 	if node.BaseNode.NeedCheckDeleteChainWhenCommit {
 		if found, _ := d.mvcc.GetDeleteChain().HasDeleteIntentsPreparedInLocked(node.Start, node.Txn.GetPrepareTS()); found {
+			logutil.Infof("retry delete, there're new deletes in obj %v", d.mvcc.meta.ID.String())
+			return txnif.ErrTxnNeedRetry
+		}
+		if d.mvcc.meta.HasDropIntentLocked() {
+			logutil.Infof("retry delete, obj %v is soft deleted", d.mvcc.meta.ID.String())
 			return txnif.ErrTxnNeedRetry
 		}
 	}
