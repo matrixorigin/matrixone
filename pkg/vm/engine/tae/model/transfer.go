@@ -19,6 +19,7 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"sync"
+	"time"
 )
 
 type PageT[T common.IRef] interface {
@@ -91,8 +92,10 @@ func (table *TransferTable[T]) executeTTL(mem, disk []*common.PinnedItem[T]) {
 }
 
 func (table *TransferTable[T]) RunTTL() {
+	now := time.Now()
 	mem, disk := table.prepareTTL()
 	table.executeTTL(mem, disk)
+	v2.TransferTableRunTTLDurationHistogram.Observe(time.Since(now).Seconds())
 }
 
 func (table *TransferTable[T]) AddPage(page T) (dup bool) {

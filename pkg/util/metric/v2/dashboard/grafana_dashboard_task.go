@@ -78,14 +78,11 @@ func (c *DashboardCreator) initTaskMergeTransferPageRow() dashboard.Option {
 			[]string{"count"},
 			timeseries.Span(3),
 		),
-		c.getTimeSeries(
-			"Transfer page in channel",
-			[]string{fmt.Sprintf(
-				"sum by (%s) (increase(%s[$interval]))",
-				c.by,
-				c.getMetricWithFilter(`mo_task_transfer_page_in_channel_sum`, ""),
-			)},
-			[]string{"count"},
+		c.getPercentHist(
+			"Transfer run ttl duration",
+			c.getMetricWithFilter(`mo_task_short_duration_seconds_bucket`, `type="transfer_table_run_ttl_duration"`),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			SpanNulls(true),
 			timeseries.Span(3),
 		),
 		c.getPercentHist(
