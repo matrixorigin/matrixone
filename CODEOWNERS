@@ -138,6 +138,25 @@
 /pkg/sql/plan @ouyuanning @aunjgr @badboynt1
 /pkg/sql/plan/function @m-schen
 /pkg/sql/plan/explain @ouyuanning @aunjgr @badboynt1 @qingxinhome
+/pkg/sql/colexec/indexjoin @aunjgr @badboynt1
+/pkg/sql/colexec/intersect @aunjgr @badboynt1
+/pkg/sql/colexec/intersectall @aunjgr @badboynt1
+/pkg/sql/colexec/loopanti @aunjgr @badboynt1
+/pkg/sql/colexec/loopjoin @aunjgr @badboynt1
+/pkg/sql/colexec/loopleft @aunjgr @badboynt1
+/pkg/sql/colexec/loopmark @aunjgr @badboynt1
+/pkg/sql/colexec/loopsingle @aunjgr @badboynt1
+/pkg/sql/colexec/right @aunjgr @badboynt1
+/pkg/sql/colexec/rightanti @aunjgr @badboynt1
+/pkg/sql/colexec/rightsemi @aunjgr @badboynt1
+/pkg/sql/colexec/anti @aunjgr @badboynt1
+/pkg/sql/colexec/single @aunjgr @badboynt1
+/pkg/sql/colexec/mark @aunjgr @badboynt1
+/pkg/sql/colexec/semi @aunjgr @badboynt1
+/pkg/sql/colexec/join @aunjgr @badboynt1
+/pkg/sql/colexec/left @aunjgr @badboynt1
+/pkg/sql/colexec/shuffle @badboynt1
+/pkg/sql/colexec/shufflebuild @badboynt1
 
 # pkg/taskservice
 /pkg/taskservice @zhangxu19830126
