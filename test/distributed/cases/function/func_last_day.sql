@@ -27,3 +27,8 @@ SELECT LAST_DAY(hire_date) from employees;
 SELECT LAST_DAY(DATE_SUB(hire_date, INTERVAL 1 MONTH)) from employees AS last_day_of_previous_month;
 
 drop database abc;
+
+SELECT LAST_DAY("2017-02-10 09:34:00");
+SELECT LAST_DAY('2003-02-05');
+SELECT LAST_DAY('2004-02-05');
+SELECT LAST_DAY('2004-01-01 01:01:01');

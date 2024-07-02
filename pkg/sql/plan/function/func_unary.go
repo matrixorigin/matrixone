@@ -1552,7 +1552,9 @@ func LastDay(
 		} else {
 			dt, err := types.ParseDateCast(functionUtil.QuickBytesToStr(v1))
 			if err != nil {
-				return err
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
 			}
 			year := dt.Year()
 			month := dt.Month()
