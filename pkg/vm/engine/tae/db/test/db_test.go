@@ -17,6 +17,7 @@ package test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"math/rand"
@@ -9136,8 +9137,8 @@ func TestClearPersistTransferTable(t *testing.T) {
 
 	page.SetLocation(location)
 
-	tae.Runtime.TransferTable.RunTTL()
 	time.Sleep(2 * time.Second)
+	tae.Runtime.TransferTable.RunTTL()
 	_, err = tae.Runtime.TransferTable.Pin(*page.ID())
-	assert.Equal(t, err, moerr.GetOkExpectedEOB())
+	assert.True(t, errors.Is(err, moerr.GetOkExpectedEOB()))
 }

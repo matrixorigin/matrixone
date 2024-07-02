@@ -112,12 +112,8 @@ func (entry *mergeObjectsEntry) prepareTransferPage() {
 			isTransient := !tblEntry.GetLastestSchema().HasPK()
 			id := obj.AsCommonID()
 			id.SetBlockOffset(uint16(j))
-			if model.RD == nil {
-				model.SetBlockRead(blockio.NewBlockRead())
-			}
-			if model.FS == nil {
-				model.SetFileService(entry.rt.Fs.Service)
-			}
+			model.SetBlockRead(blockio.NewBlockRead())
+			model.SetFileService(entry.rt.Fs.Service)
 			page := model.NewTransferHashPage(id, time.Now(), len(m), isTransient)
 			for srcRow, dst := range m {
 				objID := entry.createdObjs[dst.ObjIdx].ID
