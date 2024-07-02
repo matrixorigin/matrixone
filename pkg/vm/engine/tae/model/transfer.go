@@ -72,9 +72,7 @@ func (table *TransferTable[T]) prepareTTL() (mem, disk []*common.PinnedItem[T]) 
 			disk = append(disk, page)
 		}
 	}
-	for _, page := range table.deletedPages {
-		disk = append(disk, page)
-	}
+	disk = append(disk, table.deletedPages...)
 	table.RUnlock()
 	table.Lock()
 	defer table.Unlock()
