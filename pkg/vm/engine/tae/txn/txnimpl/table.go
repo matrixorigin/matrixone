@@ -166,7 +166,7 @@ func (tbl *txnTable) TransferDeleteIntent(
 		panic(err)
 	}
 	ts := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-	if err = readWriteConfilictCheck(entry.BaseEntryImpl, ts); err == nil {
+	if err = readWriteConfilictCheck(entry, ts); err == nil {
 		return
 	}
 	err = nil
@@ -860,7 +860,7 @@ func (tbl *txnTable) GetByFilter(ctx context.Context, filter *handle.Filter) (id
 	}
 	h := newRelation(tbl)
 	blockIt := h.MakeObjectIt()
-	for blockIt.Valid() {
+	for blockIt.Next() {
 		h := blockIt.GetObject()
 		defer h.Close()
 		if h.IsUncommitted() {
@@ -874,7 +874,6 @@ func (tbl *txnTable) GetByFilter(ctx context.Context, filter *handle.Filter) (id
 			id.SetBlockOffset(blkID)
 			break
 		}
-		blockIt.Next()
 	}
 	if err == nil && id == nil {
 		err = moerr.NewNotFoundNoCtx()
@@ -1094,7 +1093,7 @@ func (tbl *txnTable) DedupSnapByPK(ctx context.Context, keys containers.Vector, 
 		bf   objectio.BloomFilter
 	)
 	maxBlockID := &types.Blockid{}
-	for it.Valid() {
+	for it.Next() {
 		objH := it.GetObject()
 		obj := objH.GetMeta().(*catalog.ObjectEntry)
 		objH.Close()
@@ -1104,11 +1103,9 @@ func (tbl *txnTable) DedupSnapByPK(ctx context.Context, keys containers.Vector, 
 		}
 		objData := obj.GetObjectData()
 		if objData == nil {
-			it.Next()
 			continue
 		}
 		if dedupAfterSnapshotTS && objData.CoarseCheckAllRowsCommittedBefore(tbl.store.txn.GetSnapshotTS()) {
-			it.Next()
 			continue
 		}
 		var rowmask *roaring.Bitmap
@@ -1125,7 +1122,6 @@ func (tbl *txnTable) DedupSnapByPK(ctx context.Context, keys containers.Vector, 
 			if skip, err = tbl.quickSkipThisObject(ctx, keysZM, obj); err != nil {
 				return
 			} else if skip {
-				it.Next()
 				continue
 			}
 		}
@@ -1154,7 +1150,6 @@ func (tbl *txnTable) DedupSnapByPK(ctx context.Context, keys containers.Vector, 
 			// logutil.Infof("%s, %s, %v", obj.String(), rowmask, err)
 			return
 		}
-		it.Next()
 	}
 	tbl.updateDedupedObjectHintAndBlockID(maxObjectHint, maxBlockID)
 	return
@@ -1169,7 +1164,7 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 	maxBlockID := &types.Blockid{}
 	for i, loc := range metaLocs {
 		it := newObjectItOnSnap(tbl)
-		for it.Valid() {
+		for it.Next() {
 			obj := it.GetObject().GetMeta().(*catalog.ObjectEntry)
 			ObjectHint := obj.SortHint
 			if ObjectHint > maxObjectHint {
@@ -1177,7 +1172,6 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 			}
 			objData := obj.GetObjectData()
 			if objData == nil {
-				it.Next()
 				continue
 			}
 
@@ -1186,7 +1180,6 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 			// if true, skip this block's deduplication
 			if dedupAfterSnapshotTS &&
 				objData.CoarseCheckAllRowsCommittedBefore(tbl.store.txn.GetSnapshotTS()) {
-				it.Next()
 				continue
 			}
 
@@ -1234,7 +1227,6 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 				loaded[i].Close()
 				return
 			}
-			it.Next()
 		}
 		if v, ok := loaded[i]; ok {
 			v.Close()
@@ -1252,13 +1244,15 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector, pksZM index.ZM) (err error) {
 	moprobe.WithRegion(context.Background(), moprobe.TxnTableDoPrecommitDedupByPK, func() {
 		objIt := tbl.entry.MakeObjectIt(false)
-		for objIt.Valid() {
-			obj := objIt.Get().GetPayload()
+		for objIt.Next() {
+			obj := objIt.Item()
+			if !obj.IsCommitted() {
+				continue
+			}
 			if obj.SortHint < tbl.dedupedObjectHint {
 				break
 			}
 			{
-				obj.RLock()
 				//FIXME:: Why need to wait committing here? waiting had happened at Dedup.
 				//needwait, txnToWait := obj.NeedWaitCommitting(tbl.store.txn.GetStartTS())
 				//if needwait {
@@ -1266,10 +1260,8 @@ func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector, pksZM index.ZM)
 				//	txnToWait.GetTxnState(true)
 				//	obj.RLock()
 				//}
-				shouldSkip := obj.HasDropCommittedLocked() || obj.IsCreatingOrAborted()
-				obj.RUnlock()
+				shouldSkip := obj.HasDropCommitted()
 				if shouldSkip {
-					objIt.Next()
 					continue
 				}
 			}
@@ -1297,7 +1289,6 @@ func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector, pksZM index.ZM)
 			); err != nil {
 				return
 			}
-			objIt.Next()
 		}
 	})
 	return
@@ -1307,13 +1298,15 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, node InsertNode
 	objIt := tbl.entry.MakeObjectIt(false)
 	var pks containers.Vector
 	//loaded := false
-	for objIt.Valid() {
-		obj := objIt.Get().GetPayload()
+	for objIt.Next() {
+		obj := objIt.Item()
+		if !obj.IsCommitted() {
+			continue
+		}
 		if obj.SortHint < tbl.dedupedObjectHint {
 			break
 		}
 		{
-			obj.RLock()
 			//FIXME:: Why need to wait committing here? waiting had happened at Dedup.
 			//needwait, txnToWait := obj.NeedWaitCommitting(tbl.store.txn.GetStartTS())
 			//if needwait {
@@ -1321,10 +1314,8 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, node InsertNode
 			//	txnToWait.GetTxnState(true)
 			//	obj.RLock()
 			//}
-			shouldSkip := obj.HasDropCommittedLocked() || obj.IsCreatingOrAborted()
-			obj.RUnlock()
+			shouldSkip := obj.HasDropCommitted()
 			if shouldSkip {
-				objIt.Next()
 				continue
 			}
 		}
@@ -1364,7 +1355,6 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, node InsertNode
 		); err != nil {
 			return err
 		}
-		objIt.Next()
 	}
 	return
 }

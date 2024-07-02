@@ -117,9 +117,7 @@ func (obj *aobject) PrepareCompact() bool {
 	obj.FreezeAppend()
 	obj.freezelock.Unlock()
 
-	obj.meta.RLock()
-	defer obj.meta.RUnlock()
-	droppedCommitted := obj.meta.HasDropCommittedLocked()
+	droppedCommitted := obj.GetObjMeta().HasDropCommitted()
 
 	if droppedCommitted {
 		if !obj.meta.PrepareCompactLocked() {
@@ -372,13 +370,12 @@ func (obj *aobject) CollectAppendInRange(
 }
 
 func (obj *aobject) estimateRawScore() (score int, dropped bool, err error) {
-	if obj.meta.HasDropCommitted() && !obj.meta.InMemoryDeletesExisted() {
+	meta := obj.GetObjMeta()
+	if meta.HasDropCommitted() && !meta.InMemoryDeletesExisted() {
 		dropped = true
 		return
 	}
-	obj.meta.RLock()
-	atLeastOneCommitted := obj.meta.HasCommittedNodeLocked()
-	obj.meta.RUnlock()
+	atLeastOneCommitted := meta.ObjectState >= catalog.ObjectState_Create_ApplyCommit
 	if !atLeastOneCommitted {
 		score = 1
 		return
@@ -391,12 +388,10 @@ func (obj *aobject) estimateRawScore() (score int, dropped bool, err error) {
 	}
 
 	changesCnt := uint32(0)
-	obj.meta.RLock()
 	objectMVCC := obj.tryGetMVCC()
 	if objectMVCC != nil {
-		changesCnt = objectMVCC.GetChangeIntentionCntLocked()
+		changesCnt = objectMVCC.GetChangeIntentionCnt()
 	}
-	obj.meta.RUnlock()
 	if changesCnt == 0 && rows == 0 {
 		score = 0
 	} else {
@@ -461,8 +456,7 @@ func (obj *aobject) EstimateMemSize() (int, int) {
 
 func (obj *aobject) GetRowsOnReplay() uint64 {
 	rows := uint64(obj.appendMVCC.GetTotalRow())
-	fileRows := uint64(obj.meta.GetLatestCommittedNodeLocked().
-		BaseNode.ObjectStats.Rows())
+	fileRows := uint64(obj.meta.ObjectStats.Rows())
 	if rows > fileRows {
 		return rows
 	}

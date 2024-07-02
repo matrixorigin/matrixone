@@ -402,16 +402,17 @@ func (c *objectPruneArg) Run() error {
 
 	selectedObjs := make([]*catalog.ObjectEntry, 0, 64)
 
-	for ; it.Valid(); it.Next() {
-		obj := it.Get().GetPayload()
+	for it.Next() {
+		obj := it.Item()
+		if obj.ObjectState != catalog.ObjectState_Create_ApplyCommit {
+			continue
+		}
 		if !obj.IsActive() || obj.IsAppendable() {
 			continue
 		}
 		total++
 
-		obj.RLock()
-		createTs := obj.GetCreatedAtLocked()
-		obj.RUnlock()
+		createTs := obj.GetCreatedAt()
 		if createTs.GreaterEq(&ago) {
 			continue
 		}
@@ -420,7 +421,7 @@ func (c *objectPruneArg) Run() error {
 			continue
 		}
 		selected++
-		selectedObjs = append(selectedObjs, obj)
+		selectedObjs = append(selectedObjs, &obj)
 		stat := obj.GetObjectStats()
 		rw := int(stat.Rows())
 		sz := int(stat.OriginSize())

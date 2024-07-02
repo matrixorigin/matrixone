@@ -122,9 +122,7 @@ func (obj *object) GetColumnDataById(
 	)
 }
 func (obj *object) CoarseCheckAllRowsCommittedBefore(ts types.TS) bool {
-	obj.meta.RLock()
-	defer obj.meta.RUnlock()
-	creatTS := obj.meta.GetCreatedAtLocked()
+	creatTS := obj.meta.GetCreatedAt()
 	return creatTS.Less(&ts)
 }
 
@@ -190,7 +188,7 @@ func (obj *object) estimateRawScore() (score int, dropped bool) {
 	obj.RLock()
 	objectMVCC := obj.tryGetMVCC()
 	if objectMVCC != nil {
-		changeCnt = objectMVCC.GetChangeIntentionCntLocked()
+		changeCnt = objectMVCC.GetChangeIntentionCnt()
 	}
 	obj.RUnlock()
 	if changeCnt == 0 {
@@ -302,7 +300,6 @@ func (obj *object) EstimateMemSize() (int, int) {
 }
 
 func (obj *object) GetRowsOnReplay() uint64 {
-	fileRows := uint64(obj.meta.GetLatestCommittedNodeLocked().
-		BaseNode.ObjectStats.Rows())
+	fileRows := uint64(obj.meta.ObjectStats.Rows())
 	return fileRows
 }

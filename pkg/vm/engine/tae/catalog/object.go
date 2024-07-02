@@ -30,21 +30,43 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
 type ObjectDataFactory = func(meta *ObjectEntry) data.Object
 type TombstoneFactory = func(meta *ObjectEntry) data.Tombstone
 type ObjectEntry struct {
+	list   *ObjectList
 	ID     types.Objectid
 	blkCnt int
-	*BaseEntryImpl[*ObjectMVCCNode]
+	ObjectMVCCNode
+	EntryMVCCNode
+	txnbase.TxnMVCCNode
 	table *TableEntry
-	*ObjectNode
-	objData data.Object
+	ObjectNode
+	objData     data.Object
+	ObjectState uint8
 
 	HasPrintedPrepareComapct bool
 }
 
+func (entry *ObjectEntry) ClonePreparedInRange(start, end types.TS) []*MVCCNode[*ObjectMVCCNode] {
+	if !entry.IsCommitted() {
+		return nil
+	}
+	in, _ := entry.PreparedIn(start, end)
+	if !in {
+		return nil
+	}
+	return []*MVCCNode[*ObjectMVCCNode]{
+		{
+			BaseNode:      &entry.ObjectMVCCNode,
+			EntryMVCCNode: &entry.EntryMVCCNode,
+			TxnMVCCNode:   &entry.TxnMVCCNode}}
+}
+func (entry *ObjectEntry) GetDeleteAt() types.TS {
+	return entry.DeletedAt
+}
 func (entry *ObjectEntry) GetLoaded() bool {
 	stats := entry.GetObjectStats()
 	return stats.Rows() != 0
@@ -77,6 +99,22 @@ func (entry *ObjectEntry) GetCompSize() int {
 	stats := entry.GetObjectStats()
 	return int(stats.Size())
 }
+func (entry *ObjectEntry) GetDropEntry() (dropped *ObjectEntry, isNewNode bool, err error) {
+	panic("todo")
+}
+func (entry *ObjectEntry) DeleteBefore(ts types.TS) bool {
+	panic("todo")
+}
+func (entry *ObjectEntry) GetLatestNode() *ObjectEntry {
+	panic("todo")
+}
+func (entry *ObjectEntry) NeedWaitCommitting(ts types.TS) (bool, txnif.TxnReader) {
+	panic("todo")
+}
+func (entry *ObjectEntry) ApplyCommit(string) error  { panic("todo") }
+func (entry *ObjectEntry) ApplyRollback() error      { panic("todo") }
+func (entry *ObjectEntry) PrepareCommit() error      { panic("todo") }
+func (entry *ObjectEntry) MakdCommand() txnif.TxnCmd { panic("todo") }
 func (entry *ObjectEntry) IsDeletesFlushedBefore(ts types.TS) bool {
 	entry.RLock()
 	defer entry.RUnlock()
@@ -371,13 +409,15 @@ func (entry *ObjectEntry) GetInMemoryObjectInfo() *ObjectMVCCNode {
 	return entry.BaseEntryImpl.GetLatestCommittedNodeLocked().BaseNode
 }
 
-func (entry *ObjectEntry) Less(b *ObjectEntry) int {
-	if entry.SortHint < b.SortHint {
-		return -1
-	} else if entry.SortHint > b.SortHint {
-		return 1
+func (entry *ObjectEntry) Less(b *ObjectEntry) bool {
+	cmp := bytes.Compare(entry.ID[:], entry.ID[:])
+	if cmp < 0 {
+		return true
 	}
-	return 0
+	if cmp > 0 {
+		return false
+	}
+	return entry.ObjectState < entry.ObjectState
 }
 
 func (entry *ObjectEntry) UpdateObjectInfo(txn txnif.TxnReader, stats *objectio.ObjectStats) (isNewNode bool, err error) {

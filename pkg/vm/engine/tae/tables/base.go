@@ -76,7 +76,7 @@ func newBaseObject(
 		appendMVCC: updates.NewAppendMVCCHandle(meta),
 	}
 	blk.appendMVCC.SetAppendListener(blk.OnApplyAppend)
-	blk.RWMutex = meta.RWMutex
+	blk.RWMutex = blk.appendMVCC.RWMutex
 	return blk
 }
 
@@ -781,7 +781,9 @@ func (blk *baseObject) RangeDelete(
 	node.RangeDeleteLocked(start, end, pk, common.MutMemAllocator)
 	return
 }
-
+func (blk *baseObject) GetObjMeta() *catalog.ObjectEntry {
+	panic("todo")
+}
 func (blk *baseObject) TryDeleteByDeltaloc(
 	txn txnif.AsyncTxn,
 	blkID uint16,

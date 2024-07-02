@@ -16,6 +16,7 @@ package txnimpl
 
 import (
 	"context"
+	"github.com/tidwall/btree"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -59,7 +60,7 @@ type txnObject struct {
 
 type ObjectIt struct {
 	sync.RWMutex
-	linkIt *common.GenericSortedDListIt[*catalog.ObjectEntry]
+	linkIt btree.IterG[catalog.ObjectEntry]
 	curr   *catalog.ObjectEntry
 	table  *txnTable
 	err    error
@@ -77,53 +78,26 @@ func newObjectItOnSnap(table *txnTable) handle.ObjectIt {
 	}
 	var err error
 	var ok bool
-	for it.linkIt.Valid() {
-		curr := it.linkIt.Get().GetPayload()
-		curr.RLock()
-		ok, err = curr.IsVisibleWithLock(it.table.store.txn, curr.RWMutex)
+	for it.linkIt.Next() {
+		curr := it.linkIt.Item()
+		ok = curr.IsVisible(it.table.store.txn)
 		if err != nil {
-			curr.RUnlock()
 			it.err = err
 			return it
 		}
 		if ok {
-			curr.RUnlock()
-			it.curr = curr
+			it.curr = &curr
 			break
 		}
-		curr.RUnlock()
-		it.linkIt.Next()
 	}
 	return it
 }
 
 func newObjectIt(table *txnTable) handle.ObjectIt {
-	it := &ObjectIt{
-		linkIt: table.entry.MakeObjectIt(true),
-		table:  table,
-	}
-	var err error
-	var ok bool
-	for it.linkIt.Valid() {
-		curr := it.linkIt.Get().GetPayload()
-		curr.RLock()
-		ok, err = curr.IsVisibleWithLock(it.table.store.txn, curr.RWMutex)
-		if err != nil {
-			curr.RUnlock()
-			it.err = err
-			return it
-		}
-		if ok {
-			curr.RUnlock()
-			it.curr = curr
-			break
-		}
-		curr.RUnlock()
-		it.linkIt.Next()
-	}
+	it := newObjectItOnSnap(table)
 	if table.tableSpace != nil {
 		cit := &composedObjectIt{
-			ObjectIt:    it,
+			ObjectIt:    it.(*ObjectIt),
 			uncommitted: table.tableSpace.entry,
 		}
 		return cit
@@ -134,36 +108,21 @@ func newObjectIt(table *txnTable) handle.ObjectIt {
 func (it *ObjectIt) Close() error { return nil }
 
 func (it *ObjectIt) GetError() error { return it.err }
-func (it *ObjectIt) Valid() bool {
-	if it.err != nil {
-		return false
-	}
-	return it.linkIt.Valid()
-}
 
-func (it *ObjectIt) Next() {
-	var err error
+func (it *ObjectIt) Next() bool {
 	var valid bool
 	for {
-		it.linkIt.Next()
-		node := it.linkIt.Get()
-		if node == nil {
-			it.curr = nil
-			break
+		if !it.linkIt.Next() {
+			return false
 		}
-		entry := node.GetPayload()
-		entry.RLock()
-		valid, err = entry.IsVisibleWithLock(it.table.store.txn, entry.RWMutex)
-		entry.RUnlock()
-		if err != nil {
-			it.err = err
-			break
-		}
+		entry := it.linkIt.Item()
+		valid = entry.IsVisible(it.table.store.txn)
 		if valid {
-			it.curr = entry
-			break
+			it.curr = &entry
+			return true
 		}
 	}
+	return false
 }
 
 func (it *ObjectIt) GetObject() handle.Object {
@@ -180,22 +139,12 @@ func (cit *composedObjectIt) GetObject() handle.Object {
 	return cit.ObjectIt.GetObject()
 }
 
-func (cit *composedObjectIt) Valid() bool {
-	if cit.err != nil {
-		return false
-	}
-	if cit.uncommitted != nil {
-		return true
-	}
-	return cit.ObjectIt.Valid()
-}
-
-func (cit *composedObjectIt) Next() {
+func (cit *composedObjectIt) Next() bool {
 	if cit.uncommitted != nil {
 		cit.uncommitted = nil
-		return
+		return true
 	}
-	cit.ObjectIt.Next()
+	return cit.ObjectIt.Next()
 }
 
 func newObject(table *txnTable, meta *catalog.ObjectEntry) *txnObject {

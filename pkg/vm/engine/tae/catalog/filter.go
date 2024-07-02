@@ -14,11 +14,11 @@
 
 package catalog
 
-func ActiveWithNoTxnFilter(be *BaseEntryImpl[*ObjectMVCCNode]) bool {
+func ActiveWithNoTxnFilter(be *ObjectEntry) bool {
 	return !be.HasDropCommittedLocked() && !be.IsCreatingOrAborted()
 }
 
-func ActiveObjectWithNoTxnFilter(be *BaseEntryImpl[*ObjectMVCCNode]) bool {
+func ActiveObjectWithNoTxnFilter(be *ObjectEntry) bool {
 	return !be.HasDropCommittedLocked() && !be.IsCreatingOrAborted()
 }
 

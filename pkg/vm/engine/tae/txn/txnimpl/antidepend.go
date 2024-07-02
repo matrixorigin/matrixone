@@ -27,20 +27,16 @@ import (
 
 var ErrRWConflict = moerr.NewTxnRWConflictNoCtx()
 
-func readWriteConfilictCheck[T catalog.BaseNode[T]](entry *catalog.BaseEntryImpl[T], ts types.TS) (err error) {
-	entry.RLock()
-	defer entry.RUnlock()
-	needWait, txnToWait := entry.GetLatestNodeLocked().NeedWaitCommitting(ts)
+func readWriteConfilictCheck(entry *catalog.ObjectEntry, ts types.TS) (err error) {
+	needWait, txnToWait := entry.GetLatestNode().NeedWaitCommitting(ts)
 	// TODO:
 	// I don't think we need to wait here any more. `block` and `Object` are
 	// local metadata and never be involved in a 2PC txn. So a prepared `block`
 	// will never be rollbacked
 	if needWait {
-		entry.RUnlock()
 		txnToWait.GetTxnState(true)
-		entry.RLock()
 	}
-	if entry.DeleteBeforeLocked(ts) {
+	if entry.DeleteBefore(ts) {
 		err = ErrRWConflict
 	}
 	return
@@ -129,12 +125,12 @@ func (checker *warChecker) checkOne(id *common.ID, ts types.TS) (err error) {
 	if entry == nil {
 		return
 	}
-	return readWriteConfilictCheck(entry.BaseEntryImpl, ts)
+	return readWriteConfilictCheck(entry, ts)
 }
 
 func (checker *warChecker) checkAll(ts types.TS) (err error) {
 	for _, obj := range checker.readSet {
-		if err = readWriteConfilictCheck(obj.BaseEntryImpl, ts); err != nil {
+		if err = readWriteConfilictCheck(obj, ts); err != nil {
 			return
 		}
 	}

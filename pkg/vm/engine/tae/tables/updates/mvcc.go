@@ -63,7 +63,7 @@ type AppendMVCCHandle struct {
 
 func NewAppendMVCCHandle(meta *catalog.ObjectEntry) *AppendMVCCHandle {
 	node := &AppendMVCCHandle{
-		RWMutex: meta.RWMutex,
+		RWMutex: &sync.RWMutex{},
 		meta:    meta,
 		appends: txnbase.NewMVCCSlice(NewEmptyAppendNode, CompareAppendNode),
 	}
@@ -279,14 +279,18 @@ func (n *AppendMVCCHandle) PrepareCompact() bool {
 func (n *AppendMVCCHandle) GetLatestAppendPrepareTSLocked() types.TS {
 	return n.appends.GetUpdateNodeLocked().Prepare
 }
+func (n *AppendMVCCHandle) GetMeta() *catalog.ObjectEntry {
+	panic("todo")
+}
 
 // check if all appendnodes are committed.
 func (n *AppendMVCCHandle) allAppendsCommittedLocked() bool {
+	panic("todo")
 	if n.appends == nil {
 		logutil.Warnf("[MetadataCheck] appends mvcc is nil, obj %v, has dropped %v, deleted at %v",
-			n.meta.ID.String(),
-			n.meta.HasDropCommittedLocked(),
-			n.meta.GetDeleteAtLocked().ToString())
+			n.GetMeta().ID.String(),
+			n.GetMeta().HasDropCommitted(),
+			n.GetMeta().GetDeleteAt().ToString())
 		return false
 	}
 	return n.appends.IsCommitted()
@@ -358,7 +362,7 @@ type ObjectMVCCHandle struct {
 
 func NewObjectMVCCHandle(meta *catalog.ObjectEntry) *ObjectMVCCHandle {
 	node := &ObjectMVCCHandle{
-		RWMutex: meta.RWMutex,
+		RWMutex: &sync.RWMutex{},
 		meta:    meta,
 		deletes: make(map[uint16]*MVCCHandle),
 	}
@@ -393,7 +397,9 @@ func (n *ObjectMVCCHandle) GetDeletesListener() func(uint64, types.TS) error {
 	return n.deletesListener
 }
 
-func (n *ObjectMVCCHandle) GetChangeIntentionCntLocked() uint32 {
+func (n *ObjectMVCCHandle) GetChangeIntentionCnt() uint32 {
+	n.RLock()
+	defer n.RUnlock()
 	changes := uint32(0)
 	for _, deletes := range n.deletes {
 		changes += deletes.GetChangeIntentionCnt()
@@ -542,6 +548,7 @@ func (n *ObjectMVCCHandle) InMemoryDeletesExistedLocked() bool {
 	return false
 }
 func (n *ObjectMVCCHandle) GetObject() any {
+	panic("todo") // get last version in objlist
 	return n.meta
 }
 func (n *ObjectMVCCHandle) GetLatestDeltaloc(blkOffset uint16) objectio.Location {
