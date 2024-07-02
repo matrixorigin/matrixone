@@ -16,10 +16,11 @@ package compile
 
 import (
 	"context"
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	txnClient "github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"sync"
 )
 
 // todo: Move it to a CN level structure next day.
@@ -100,7 +101,6 @@ func (srv *ServiceOfCompile) getCompile(
 	}
 
 	runningCompile := reuse.Alloc[Compile](nil)
-	runningCompile.ctx = proc.Ctx
 	runningCompile.proc = proc
 
 	if runningCompile.queryStatus == nil {
