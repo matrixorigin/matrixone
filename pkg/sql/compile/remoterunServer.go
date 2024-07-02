@@ -401,8 +401,7 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 		proc.Base.StmtProfile = process.NewStmtProfile(uuid.UUID(txnId), pHelper.StmtId)
 	}
 
-	c := reuse.Alloc[Compile](nil)
-	c.proc = proc
+	c := GetCompileService().getCompile(proc)
 	c.e = cnInfo.storeEngine
 	c.MessageBoard = c.MessageBoard.SetMultiCN(c.GetMessageCenter(), c.proc.GetStmtProfile().GetStmtId())
 	c.proc.Base.MessageBoard = c.MessageBoard

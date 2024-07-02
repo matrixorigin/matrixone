@@ -432,7 +432,6 @@ func createCompile(
 		ses.GetSql(),
 		tenant,
 		ses.GetUserName(),
-		execCtx.reqCtx,
 		ses.GetTxnHandler().GetStorage(),
 		proc,
 		stmt,
