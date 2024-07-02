@@ -357,7 +357,16 @@ func (c *clientConn) handleKillQuery(e *killQueryEvent, resp chan<- []byte) erro
 	// Before connect to backend server, update the salt.
 	cn.salt = c.mysqlProto.GetSalt()
 
-	return c.connAndExec(cn, fmt.Sprintf("KILL QUERY %d", cn.connID), resp)
+	// And also update the connection ID.
+	cid, err := c.genConnID()
+	if err != nil {
+		c.log.Error("failed to generate conn ID for kill query", zap.Error(err))
+		c.sendErr(err, resp)
+		return err
+	}
+	cn.connID = cid
+
+	return c.connAndExec(cn, fmt.Sprintf("KILL QUERY %d", e.connID), resp)
 }
 
 // handleSetVar handles the set variable event.

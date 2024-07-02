@@ -198,11 +198,11 @@ func TestCommitWithLockTablesChanged(t *testing.T) {
 				tc.lockService = s
 
 				// table 1 hold bind same as lockservice, commit failed, will removed
-				tc.AddLockTable(lock.LockTable{Table: tableID1, ServiceID: s.GetServiceID(), Version: 1})
+				tc.AddLockTable(lock.LockTable{Table: tableID1, ServiceID: s.GetServiceID(), Version: lta.GetVersion()})
 				// table 2 hold stale bind with lockservice, cannot remove bind in lockservice
 				tc.AddLockTable(lock.LockTable{Table: tableID2, ServiceID: s.GetServiceID(), Version: 0})
 				// table 3 is valid
-				tc.AddLockTable(lock.LockTable{Table: tableID3, ServiceID: s.GetServiceID(), Version: 1})
+				tc.AddLockTable(lock.LockTable{Table: tableID3, ServiceID: s.GetServiceID(), Version: lta.GetVersion()})
 
 				tc.mu.txn.TNShards = append(tc.mu.txn.TNShards, metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}})
 				err = tc.Commit(ctx)

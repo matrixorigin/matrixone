@@ -1410,7 +1410,7 @@ var supportedStringBuiltIns = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return PrefixIn
+					return newImplPrefixIn().doPrefixIn
 				},
 			},
 		},

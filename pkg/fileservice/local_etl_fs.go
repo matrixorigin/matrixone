@@ -241,6 +241,9 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 				if err != nil {
 					return err
 				}
+				if cacheData == nil {
+					panic("ToCacheData returns nil cache data")
+				}
 				vector.Entries[i].CachedData = cacheData
 				if entry.Size > 0 && counter.Load() != entry.Size {
 					return moerr.NewUnexpectedEOFNoCtx(path.File)
@@ -290,6 +293,9 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 						cacheData, err := entry.ToCacheData(buf, buf.Bytes(), GetDefaultCacheDataAllocator())
 						if err != nil {
 							return err
+						}
+						if cacheData != nil {
+							panic("ToCacheData returns nil cache data")
 						}
 						vector.Entries[i].CachedData = cacheData
 						return nil

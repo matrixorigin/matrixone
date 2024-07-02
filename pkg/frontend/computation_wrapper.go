@@ -268,20 +268,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch) erro
 	stats := statistic.StatsInfoFromContext(execCtx.reqCtx)
 	stats.CompileStart()
 	defer stats.CompileEnd()
-	cwft.compile = compile.NewCompile(
-		addr,
-		cwft.ses.GetDatabaseName(),
-		cwft.ses.GetSql(),
-		tenant,
-		cwft.ses.GetUserName(),
-		execCtx.reqCtx,
-		cwft.ses.GetTxnHandler().GetStorage(),
-		cwft.proc,
-		cwft.stmt,
-		cwft.ses.GetIsInternal(),
-		deepcopy.Copy(cwft.ses.getCNLabels()).(map[string]string),
-		getStatementStartAt(execCtx.reqCtx),
-	)
+	cwft.compile = compile.NewCompile(addr, cwft.ses.GetDatabaseName(), cwft.ses.GetSql(), tenant, cwft.ses.GetUserName(), cwft.ses.GetTxnHandler().GetStorage(), cwft.proc, cwft.stmt, cwft.ses.GetIsInternal(), deepcopy.Copy(cwft.ses.getCNLabels()).(map[string]string), getStatementStartAt(execCtx.reqCtx))
 	defer func() {
 		if err != nil {
 			cwft.compile.Release()
