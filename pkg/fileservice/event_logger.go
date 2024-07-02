@@ -28,14 +28,21 @@ import (
 type eventLogger struct {
 	begin  time.Time
 	mu     sync.Mutex
-	buf    *strings.Builder
+	events *[]event
 	closed bool
+}
+
+type event struct {
+	time  time.Duration
+	ev    stringRef
+	args  []any
+	_args [16]any
 }
 
 func newEventLogger() *eventLogger {
 	return &eventLogger{
-		begin: time.Now(),
-		buf:   stringsBuilderPool.Get().(*strings.Builder),
+		begin:  time.Now(),
+		events: eventsPool.Get().(*[]event),
 	}
 }
 
@@ -52,30 +59,27 @@ func WithEventLogger(ctx context.Context) context.Context {
 	return ctx
 }
 
-func LogEvent(ctx context.Context, ev string, args ...any) {
+func LogEvent(ctx context.Context, ev stringRef, args ...any) {
 	v := ctx.Value(EventLoggerKey)
 	if v == nil {
 		return
 	}
 	logger := v.(*eventLogger)
-	if len(args) > 0 {
-		logger.emit(fmt.Sprintf(ev, args...))
-	} else {
-		logger.emit(ev)
-	}
+	logger.emit(ev, args...)
 }
 
-func (e *eventLogger) emit(ev string) {
+func (e *eventLogger) emit(ev stringRef, args ...any) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closed {
 		return
 	}
-	e.buf.WriteString("<")
-	e.buf.WriteString(time.Since(e.begin).String())
-	e.buf.WriteString(" ")
-	e.buf.WriteString(ev)
-	e.buf.WriteString("> ")
+	*e.events = append(*e.events, event{})
+	last := &((*e.events)[len(*e.events)-1])
+	last.time = time.Since(e.begin)
+	last.ev = ev
+	last.args = last._args[:0]
+	last.args = append(last.args, args...)
 }
 
 func LogSlowEvent(ctx context.Context, threshold time.Duration) {
@@ -84,20 +88,48 @@ func LogSlowEvent(ctx context.Context, threshold time.Duration) {
 		return
 	}
 	logger := v.(*eventLogger)
+
 	logger.mu.Lock()
 	defer func() {
-		logger.buf.Reset()
-		stringsBuilderPool.Put(logger.buf)
-		logger.buf = nil
+		*logger.events = (*logger.events)[:0]
+		eventsPool.Put(logger.events)
+		logger.events = nil
 		logger.closed = true
 		logger.mu.Unlock()
 	}()
+
 	if time.Since(logger.begin) < threshold {
 		return
 	}
+
+	buf := stringsBuilderPool.Get().(*strings.Builder)
+	defer func() {
+		buf.Reset()
+		stringsBuilderPool.Put(buf)
+	}()
+
+	for _, ev := range *logger.events {
+		buf.WriteString("<")
+		buf.WriteString(ev.time.String())
+		buf.WriteString(" ")
+		buf.WriteString(ev.ev.String())
+		for _, arg := range ev.args {
+			buf.WriteString(" ")
+			fmt.Fprintf(buf, "%+v", arg)
+		}
+		buf.WriteString("> ")
+	}
+
 	logutil.Info("slow event",
-		zap.String("events", logger.buf.String()),
+		zap.String("events", buf.String()),
 	)
+}
+
+var eventsPool = sync.Pool{
+	New: func() any {
+		slice := make([]event, 0, 32)
+		return &slice
+	},
 }
 
 var stringsBuilderPool = sync.Pool{
