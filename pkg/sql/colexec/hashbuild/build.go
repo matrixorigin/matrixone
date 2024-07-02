@@ -16,9 +16,10 @@ package hashbuild
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"runtime"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
