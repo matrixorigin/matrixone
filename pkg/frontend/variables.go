@@ -963,7 +963,11 @@ func (m *GlobalSysVarsMgr) Get(accountId uint32, ses *Session, ctx context.Conte
 		return nil, err
 	}
 
-	m.accountsGlobalSysVarsMap[accountId] = &SystemVariables{sysVars: sysVars}
+	if _, ok := m.accountsGlobalSysVarsMap[accountId]; ok {
+		m.accountsGlobalSysVarsMap[accountId].sysVars = sysVars
+	} else {
+		m.accountsGlobalSysVarsMap[accountId] = &SystemVariables{sysVars: sysVars}
+	}
 	return m.accountsGlobalSysVarsMap[accountId], nil
 }
 

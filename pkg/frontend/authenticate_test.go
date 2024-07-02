@@ -6643,13 +6643,9 @@ func TestSetGlobalSysVar(t *testing.T) {
 		convey.So(value, convey.ShouldEqual, 0)
 
 		// new session, both GetSession/GlobalSysVar equal 0
-		sql = getSqlForGetSystemVariablesWithAccount(sysAccountID)
-		mrs = newMrsForSystemVariablesOfAccount([][]interface{}{
-			{"autocommit", "0"},
-		})
-		bh.sql2result[sql] = mrs
-
 		ses2 := newSes(nil, ctrl)
+		ses2.sesSysVars.sysVars["autocommit"] = 0
+		ses2.gSysVars.sysVars["autocommit"] = 0
 		value, err = ses2.GetSessionSysVar("autocommit")
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(value, convey.ShouldEqual, 0)
