@@ -1252,11 +1252,6 @@ func evalLiteralExpr(expr *plan.Literal, oid types.T) (canEval bool, val any) {
 	return
 }
 
-type PKFilters struct {
-	inMemPKFilter     memPKFilter
-	blockReadPKFilter blockio.BlockReadFilter
-}
-
 // return canEval, isNull, isVec, evaledVal
 func getPkValueByExpr(
 	expr *plan.Expr,
