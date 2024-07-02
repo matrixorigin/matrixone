@@ -353,7 +353,7 @@ func (ip *internalProtocol) WritePrepareResponse(ctx context.Context, stmt *Prep
 	return nil
 }
 
-func (ip *internalProtocol) Read() (interface{}, error) {
+func (ip *internalProtocol) Read() ([]byte, error) {
 	//TODO implement me
 	panic("implement me")
 }

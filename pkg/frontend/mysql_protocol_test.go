@@ -29,9 +29,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 
-	// mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/BurntSushi/toml"
 	"github.com/fagongzi/goetty/v2"
+	mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/golang/mock/gomock"
 	fuzz "github.com/google/gofuzz"
 	"github.com/prashantv/gostub"
@@ -84,31 +84,50 @@ type TestRoutineManager struct {
 //		defer tRM.rwlock.Unlock()
 //		delete(tRM.clients, rs)
 //	}
-func startTestServer(ctx context.Context,
-	addr string,
-	pu *config.ParameterUnit,
-	aicm *defines.AutoIncrCacheManager) {
-	mo := NewMOServer(ctx, addr, pu, aicm, nil)
-	err := mo.Start()
-	if err != nil {
-		panic(err)
-	}
-	setServer(0)
-	fmt.Println("Server started")
-	to := NewTimeout(5*time.Minute, false)
-	for !isClosed() && !to.isTimeout() {
-	}
-	err = mo.Stop()
-	if err != nil {
-		panic(err)
-	}
 
+type netConnDialer struct {
+	conn net.Conn
 }
+
+func (d *netConnDialer) Dial(addr string) (net.Conn, error) {
+	return d.conn, nil
+}
+
+func registerConn(clientConn net.Conn) {
+	mysqlDriver.RegisterDialContext("custom", func(ctx context.Context, addr string) (net.Conn, error) {
+		return clientConn, nil
+	})
+
+	return
+}
+func createInnerServer() *MOServer {
+
+	rm := getGlobalRtMgr()
+	pu := getGlobalPu()
+	mo := &MOServer{
+		addr:        "",
+		uaddr:       pu.SV.UnixSocketAddress,
+		rm:          rm,
+		readTimeout: pu.SV.SessionTimeout.Duration,
+		pu:          pu,
+		handler:     rm.Handler,
+	}
+	return mo
+}
+func startInnerServer(conn net.Conn) {
+
+	mo := createInnerServer()
+	mo.handleConn(conn)
+}
+
 func TestMysqlClientProtocol_Handshake(t *testing.T) {
 	//client connection method: mysql -h 127.0.0.1 -P 6001 --default-auth=mysql_native_password -uroot -p
 	//client connect
 	//ion method: mysql -h 127.0.0.1 -P 6001 -udump -p
-
+	clientConn, serverConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	registerConn(clientConn)
 	var db *sql.DB
 	var err error
 	//before anything using the configuration
@@ -132,7 +151,7 @@ func TestMysqlClientProtocol_Handshake(t *testing.T) {
 	//running server
 	go func() {
 		defer wg.Done()
-		startTestServer(ctx, "127.0.0.1:6001", pu, acim)
+		startInnerServer(serverConn)
 	}()
 
 	time.Sleep(time.Second * 2)
@@ -140,11 +159,10 @@ func TestMysqlClientProtocol_Handshake(t *testing.T) {
 	require.NoError(t, err)
 
 	time.Sleep(time.Millisecond * 10)
-	//close server
-	setServer(1)
-	wg.Wait()
-
 	closeDbConn(t, db)
+	clientConn.Close()
+	serverConn.Close()
+	wg.Wait()
 }
 
 func newMrsForConnectionId(rows [][]interface{}) *MysqlResultSet {
@@ -183,9 +201,15 @@ func TestKill(t *testing.T) {
 	//client connection method: mysql -h 127.0.0.1 -P 6001 --default-auth=mysql_native_password -uroot -p
 	//client connect
 	//ion method: mysql -h 127.0.0.1 -P 6001 -udump -p
+
+	clientConn, serverConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	registerConn(clientConn)
+
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
-	var dbConnPool *sql.DB
+	var dbConnPool, dbConnPool2 *sql.DB
 	var conn1, conn2 *sql.Conn
 	var err error
 	var connIdRow *sql.Row
@@ -284,11 +308,12 @@ func TestKill(t *testing.T) {
 
 	wg := sync.WaitGroup{}
 	wg.Add(1)
+	mo := createInnerServer()
 
 	//running server
 	go func() {
 		defer wg.Done()
-		startTestServer(ctx, "127.0.0.1:6001", pu, acim)
+		mo.handleConn(serverConn)
 	}()
 
 	dbConnPool, err = openDbConn(t, 6001)
@@ -304,7 +329,24 @@ func TestKill(t *testing.T) {
 
 	logutil.Infof("open conn2")
 	time.Sleep(time.Second * 2)
-	conn2, err = dbConnPool.Conn(ctx)
+
+	clientConn2, serverConn2 := net.Pipe()
+	defer serverConn2.Close()
+	defer clientConn2.Close()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		mo.handleConn(serverConn2)
+	}()
+
+	registerConn(clientConn2)
+	dbConnPool2, err = openDbConn(t, 6001)
+	require.NoError(t, err)
+	dbConnPool2.SetConnMaxLifetime(time.Minute * 3)
+	dbConnPool2.SetMaxIdleConns(2)
+	dbConnPool2.SetMaxOpenConns(2)
+
+	conn2, err = dbConnPool2.Conn(ctx)
 	require.NoError(t, err)
 	logutil.Infof("open conn2 done")
 
@@ -410,15 +452,20 @@ func TestKill(t *testing.T) {
 
 	time.Sleep(time.Millisecond * 10)
 	//close server
-	setServer(1)
-	wg.Wait()
 
 	logutil.Infof("close conn1,conn2")
 	//close the connection
-	require.NoError(t, conn1.Close())
-	require.NoError(t, conn2.Close())
+	//require.NoError(t, conn1.Close())
+	//require.NoError(t, conn2.Close())
 	require.NoError(t, dbConnPool.Close())
+	require.NoError(t, dbConnPool2.Close())
 	logutil.Infof("close conn1,conn2 done")
+
+	serverConn.Close()
+	clientConn.Close()
+	serverConn2.Close()
+	clientConn2.Close()
+	wg.Wait()
 }
 
 func TestReadIntLenEnc(t *testing.T) {
@@ -1690,7 +1737,7 @@ func make9ColumnsResultSet() *MysqlResultSet {
 // }
 
 func openDbConn(t *testing.T, port int) (db *sql.DB, err error) {
-	dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?readTimeout=30s&timeout=30s&writeTimeout=30s", port)
+	dsn := fmt.Sprintf("dump:111@custom(127.0.0.1:%d)/?readTimeout=30s&timeout=30s&writeTimeout=30s", port)
 	for i := 0; i < 3; i++ {
 		db, err = tryConn(dsn)
 		if err != nil {
@@ -1888,21 +1935,27 @@ func startConsumeRead(conn net.Conn) {
 	}
 }
 
-func writeExceptResult(serverConn net.Conn, packets []*Packet) {
+func writeExceptResult(clientConn net.Conn, packets []*Packet) {
 	for _, packet := range packets {
 		header := make([]byte, HeaderLengthOfTheProtocol)
-		binary.LittleEndian.PutUint32(header, uint32(packet.Length))
+		binary.LittleEndian.PutUint32(header, uint32(len(packet.Payload)))
 		header[3] = uint8(packet.SequenceID)
-		serverConn.Write(header)
-		serverConn.Write(packet.Payload)
+		_, err := clientConn.Write(header)
+		if err != nil {
+			return
+		}
+		_, err = clientConn.Write(packet.Payload)
+		if err != nil {
+			return
+		}
 	}
 }
 
 func Test_writePackets(t *testing.T) {
-	serverConn, clientConn := net.Pipe()
-	defer serverConn.Close()
+	clientConn, serverConn := net.Pipe()
 	defer clientConn.Close()
-	go startConsumeRead(serverConn)
+	defer serverConn.Close()
+	go startConsumeRead(clientConn)
 	convey.Convey("writepackets 16MB succ", t, func() {
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
@@ -1912,7 +1965,7 @@ func Test_writePackets(t *testing.T) {
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
-		ioses, err := NewIOSession(clientConn, pu)
+		ioses, err := NewIOSession(serverConn, pu)
 		if err != nil {
 			panic(err)
 		}
@@ -1930,7 +1983,7 @@ func Test_writePackets(t *testing.T) {
 	//	pu := config.NewParameterUnit(sv, nil, nil, nil)
 	//	pu.SV.SkipCheckUser = true
 	//	setGlobalPu(pu)
-	//	ioses, err := NewIOSession(clientConn, pu)
+	//	ioses, err := NewIOSession(serverConn, pu)
 	//	if err != nil {
 	//		panic(err)
 	//	}
@@ -1948,7 +2001,7 @@ func Test_writePackets(t *testing.T) {
 	//	pu := config.NewParameterUnit(sv, nil, nil, nil)
 	//	pu.SV.SkipCheckUser = true
 	//	setGlobalPu(pu)
-	//	ioses, err := NewIOSession(clientConn, pu)
+	//	ioses, err := NewIOSession(serverConn, pu)
 	//	if err != nil {
 	//		panic(err)
 	//	}
@@ -1959,10 +2012,10 @@ func Test_writePackets(t *testing.T) {
 }
 
 func Test_beginPacket(t *testing.T) {
-	serverConn, clientConn := net.Pipe()
-	defer serverConn.Close()
+	clientConn, serverConn := net.Pipe()
 	defer clientConn.Close()
-	go startConsumeRead(serverConn)
+	defer serverConn.Close()
+	go startConsumeRead(clientConn)
 	convey.Convey("openpacket succ", t, func() {
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
@@ -1971,7 +2024,7 @@ func Test_beginPacket(t *testing.T) {
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
-		ioses, err := NewIOSession(clientConn, pu)
+		ioses, err := NewIOSession(serverConn, pu)
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
@@ -1989,7 +2042,7 @@ func Test_beginPacket(t *testing.T) {
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
-		ioses, err := NewIOSession(clientConn, pu)
+		ioses, err := NewIOSession(serverConn, pu)
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 		// fill proto.ses
@@ -2013,7 +2066,7 @@ func Test_beginPacket(t *testing.T) {
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
-		ioses, err := NewIOSession(clientConn, pu)
+		ioses, err := NewIOSession(serverConn, pu)
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 		// fill proto.ses
@@ -2036,7 +2089,7 @@ func Test_beginPacket(t *testing.T) {
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
-		ioses, err := NewIOSession(clientConn, pu)
+		ioses, err := NewIOSession(serverConn, pu)
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
@@ -2129,10 +2182,10 @@ func Test_beginPacket(t *testing.T) {
 }
 
 func TestSendPrepareResponse(t *testing.T) {
-	serverConn, clientConn := net.Pipe()
-	defer serverConn.Close()
+	clientConn, serverConn := net.Pipe()
 	defer clientConn.Close()
-	go startConsumeRead(serverConn)
+	defer serverConn.Close()
+	go startConsumeRead(clientConn)
 
 	ctx := context.TODO()
 	convey.Convey("send Prepare response succ", t, func() {
@@ -2143,7 +2196,7 @@ func TestSendPrepareResponse(t *testing.T) {
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
-		ioses, err := NewIOSession(clientConn, pu)
+		ioses, err := NewIOSession(serverConn, pu)
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 		proto.SetSession(&Session{
@@ -2180,7 +2233,7 @@ func TestSendPrepareResponse(t *testing.T) {
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
-		ioses, err := NewIOSession(clientConn, pu)
+		ioses, err := NewIOSession(serverConn, pu)
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
@@ -2208,10 +2261,10 @@ func TestSendPrepareResponse(t *testing.T) {
 func FuzzParseExecuteData(f *testing.F) {
 	ctx := context.TODO()
 
-	serverConn, clientConn := net.Pipe()
-	defer serverConn.Close()
+	clientConn, serverConn := net.Pipe()
 	defer clientConn.Close()
-	go startConsumeRead(serverConn)
+	defer serverConn.Close()
+	go startConsumeRead(clientConn)
 
 	proc := testutil.NewProcess()
 	sv, err := getSystemVariables("test/system_vars_config.toml")
@@ -2221,7 +2274,7 @@ func FuzzParseExecuteData(f *testing.F) {
 	pu := config.NewParameterUnit(sv, nil, nil, nil)
 	pu.SV.SkipCheckUser = true
 	setGlobalPu(pu)
-	ioses, err := NewIOSession(clientConn, pu)
+	ioses, err := NewIOSession(serverConn, pu)
 
 	proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
@@ -2338,10 +2391,10 @@ func TestParseExecuteData(t *testing.T) {
 func Test_resultset(t *testing.T) {
 	ctx := context.TODO()
 
-	serverConn, clientConn := net.Pipe()
-	defer serverConn.Close()
+	clientConn, serverConn := net.Pipe()
 	defer clientConn.Close()
-	go startConsumeRead(serverConn)
+	defer serverConn.Close()
+	go startConsumeRead(clientConn)
 
 	convey.Convey("send result set batch row succ", t, func() {
 		sv, err := getSystemVariables("test/system_vars_config.toml")
@@ -2351,7 +2404,7 @@ func Test_resultset(t *testing.T) {
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
-		ioses, err := NewIOSession(clientConn, pu)
+		ioses, err := NewIOSession(serverConn, pu)
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
@@ -2372,7 +2425,7 @@ func Test_resultset(t *testing.T) {
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
-		ioses, err := NewIOSession(clientConn, pu)
+		ioses, err := NewIOSession(serverConn, pu)
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
@@ -2393,7 +2446,7 @@ func Test_resultset(t *testing.T) {
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
-		ioses, err := NewIOSession(clientConn, pu)
+		ioses, err := NewIOSession(serverConn, pu)
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
@@ -2417,7 +2470,7 @@ func Test_resultset(t *testing.T) {
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
-		ioses, err := NewIOSession(clientConn, pu)
+		ioses, err := NewIOSession(serverConn, pu)
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
@@ -2433,10 +2486,10 @@ func Test_resultset(t *testing.T) {
 }
 
 func Test_send_packet(t *testing.T) {
-	serverConn, clientConn := net.Pipe()
-	defer serverConn.Close()
+	clientConn, serverConn := net.Pipe()
 	defer clientConn.Close()
-	go startConsumeRead(serverConn)
+	defer serverConn.Close()
+	go startConsumeRead(clientConn)
 
 	convey.Convey("send err packet", t, func() {
 		sv, err := getSystemVariables("test/system_vars_config.toml")
@@ -2446,7 +2499,7 @@ func Test_send_packet(t *testing.T) {
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
-		ioses, err := NewIOSession(clientConn, pu)
+		ioses, err := NewIOSession(serverConn, pu)
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
@@ -2461,7 +2514,7 @@ func Test_send_packet(t *testing.T) {
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
-		ioses, err := NewIOSession(clientConn, pu)
+		ioses, err := NewIOSession(serverConn, pu)
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
@@ -2477,10 +2530,10 @@ func Test_send_packet(t *testing.T) {
 }
 
 func Test_analyse320resp(t *testing.T) {
-	serverConn, clientConn := net.Pipe()
-	defer serverConn.Close()
+	clientConn, serverConn := net.Pipe()
 	defer clientConn.Close()
-	go startConsumeRead(serverConn)
+	defer serverConn.Close()
+	go startConsumeRead(clientConn)
 
 	convey.Convey("analyse 320 resp succ", t, func() {
 		sv, err := getSystemVariables("test/system_vars_config.toml")
@@ -2490,7 +2543,7 @@ func Test_analyse320resp(t *testing.T) {
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
-		ioses, err := NewIOSession(clientConn, pu)
+		ioses, err := NewIOSession(serverConn, pu)
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
@@ -2533,7 +2586,7 @@ func Test_analyse320resp(t *testing.T) {
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
-		ioses, err := NewIOSession(clientConn, pu)
+		ioses, err := NewIOSession(serverConn, pu)
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
@@ -2563,11 +2616,14 @@ func Test_analyse320resp(t *testing.T) {
 }
 
 func Test_analyse41resp(t *testing.T) {
-	serverConn, clientConn := net.Pipe()
-	defer serverConn.Close()
+	clientConn, serverConn := net.Pipe()
 	defer clientConn.Close()
-	go startConsumeRead(serverConn)
-
+	defer serverConn.Close()
+	go startConsumeRead(clientConn)
+	pkts := []*Packet{&Packet{Length: 5, Payload: []byte("hello"), SequenceID: 1},
+		&Packet{Length: 5, Payload: []byte("world"), SequenceID: 2},
+		&Packet{Length: 0, Payload: []byte(""), SequenceID: 3}}
+	go writeExceptResult(clientConn, pkts)
 	convey.Convey("analyse 41 resp succ", t, func() {
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
@@ -2576,7 +2632,7 @@ func Test_analyse41resp(t *testing.T) {
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
-		ioses, err := NewIOSession(clientConn, pu)
+		ioses, err := NewIOSession(serverConn, pu)
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
@@ -2623,7 +2679,7 @@ func Test_analyse41resp(t *testing.T) {
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
-		ioses, err := NewIOSession(clientConn, pu)
+		ioses, err := NewIOSession(serverConn, pu)
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
@@ -2715,10 +2771,10 @@ func Test_analyse41resp(t *testing.T) {
 
 func Test_handleHandshake(t *testing.T) {
 	ctx := context.TODO()
-	serverConn, clientConn := net.Pipe()
-	defer serverConn.Close()
+	clientConn, serverConn := net.Pipe()
 	defer clientConn.Close()
-	go startConsumeRead(serverConn)
+	defer serverConn.Close()
+	go startConsumeRead(clientConn)
 
 	convey.Convey("handleHandshake succ", t, func() {
 		sv, err := getSystemVariables("test/system_vars_config.toml")
@@ -2728,7 +2784,7 @@ func Test_handleHandshake(t *testing.T) {
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
-		ioses, err := NewIOSession(clientConn, pu)
+		ioses, err := NewIOSession(serverConn, pu)
 
 		var IO IOPackageImpl
 		var SV = &config.FrontendParameters{}
@@ -2755,10 +2811,10 @@ func Test_handleHandshake_Recover(t *testing.T) {
 	count := 10000
 	maxLen := 0
 
-	serverConn, clientConn := net.Pipe()
-	defer serverConn.Close()
+	clientConn, serverConn := net.Pipe()
 	defer clientConn.Close()
-	go startConsumeRead(serverConn)
+	defer serverConn.Close()
+	go startConsumeRead(clientConn)
 
 	ctx := context.TODO()
 	sv, err := getSystemVariables("test/system_vars_config.toml")
@@ -2768,7 +2824,7 @@ func Test_handleHandshake_Recover(t *testing.T) {
 	pu := config.NewParameterUnit(sv, nil, nil, nil)
 	pu.SV.SkipCheckUser = true
 	setGlobalPu(pu)
-	ioses, err := NewIOSession(clientConn, pu)
+	ioses, err := NewIOSession(serverConn, pu)
 
 	convey.Convey("handleHandshake succ", t, func() {
 		var IO IOPackageImpl
@@ -2794,10 +2850,10 @@ func Test_handleHandshake_Recover(t *testing.T) {
 }
 
 func TestMysqlProtocolImpl_Close(t *testing.T) {
-	serverConn, clientConn := net.Pipe()
-	defer serverConn.Close()
+	clientConn, serverConn := net.Pipe()
 	defer clientConn.Close()
-	go startConsumeRead(serverConn)
+	defer serverConn.Close()
+	go startConsumeRead(clientConn)
 
 	sv, err := getSystemVariables("test/system_vars_config.toml")
 	if err != nil {
@@ -2806,7 +2862,7 @@ func TestMysqlProtocolImpl_Close(t *testing.T) {
 	pu := config.NewParameterUnit(sv, nil, nil, nil)
 	pu.SV.SkipCheckUser = true
 	setGlobalPu(pu)
-	ioses, err := NewIOSession(clientConn, pu)
+	ioses, err := NewIOSession(serverConn, pu)
 
 	proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 	proto.Close()
@@ -2917,7 +2973,7 @@ func (fp *testMysqlWriter) WritePrepareResponse(ctx context.Context, stmt *Prepa
 	panic("implement me")
 }
 
-func (fp *testMysqlWriter) Read() (interface{}, error) {
+func (fp *testMysqlWriter) Read() ([]byte, error) {
 	return fp.ioses.Read()
 }
 

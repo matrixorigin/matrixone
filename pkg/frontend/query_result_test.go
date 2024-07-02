@@ -54,10 +54,10 @@ func newLocalETLFS(t *testing.T, fsName string) fileservice.FileService {
 }
 
 func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
-	serverConn, clientConn := net.Pipe()
-	defer serverConn.Close()
+	clientConn, serverConn := net.Pipe()
 	defer clientConn.Close()
-	go startConsumeRead(serverConn)
+	defer serverConn.Close()
+	go startConsumeRead(clientConn)
 
 	var err error
 	var testPool *mpool.MPool
@@ -76,7 +76,7 @@ func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
 	setGlobalPu(pu)
 	//io session
 
-	ioses, err := NewIOSession(clientConn, pu)
+	ioses, err := NewIOSession(serverConn, pu)
 	proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
 	testutil.SetupAutoIncrService()

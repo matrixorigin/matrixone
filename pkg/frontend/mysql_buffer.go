@@ -74,7 +74,6 @@ func NewIOSession(conn net.Conn, pu *config.ParameterUnit) (*Conn, error) {
 	}
 	var err error
 	c.fixBuf.data, err = c.allocator.Alloc(fixBufferSize)
-
 	if err != nil {
 		return nil, err
 	}
@@ -129,7 +128,7 @@ func (c *Conn) Read() ([]byte, error) {
 	payloads := make([][]byte, 0)
 	var finalPayload []byte
 	var err error
-	defer func(err error) {
+	defer func(finalPayload []byte, payloads [][]byte, err error) {
 
 		if payloads != nil {
 			for _, payload := range payloads {
@@ -141,7 +140,7 @@ func (c *Conn) Read() ([]byte, error) {
 			c.allocator.Free(finalPayload)
 		}
 
-	}(err)
+	}(finalPayload, payloads, err)
 
 	for {
 		if !c.connected {
@@ -185,7 +184,6 @@ func (c *Conn) Read() ([]byte, error) {
 	}
 
 	finalPayload, err = c.allocator.Alloc(totalLength)
-
 	if err != nil {
 		return nil, err
 	}
@@ -202,13 +200,16 @@ func (c *Conn) Read() ([]byte, error) {
 func (c *Conn) ReadOnePayload(packetLength int) ([]byte, error) {
 	var err error
 	var payload []byte
-	defer func(err error) {
+	defer func(payload []byte, err error) {
 		if err != nil {
 			c.allocator.Free(payload)
 		}
-	}(err)
+	}(payload, err)
 
 	payload, err = c.allocator.Alloc(packetLength)
+	if err != nil {
+		return nil, err
+	}
 
 	err = c.ReadBytes(payload, packetLength)
 	if err != nil {
@@ -224,7 +225,7 @@ func (c *Conn) ReadBytes(buf []byte, Length int) error {
 	var n int
 	var readLength int
 	for readLength < Length {
-		n, err = c.ReadFromConn(buf[readLength:])
+		n, err = c.ReadFromConn(buf[readLength:Length])
 		if err != nil {
 			return err
 		}
@@ -246,13 +247,20 @@ func (c *Conn) ReadFromConn(buf []byte) (int, error) {
 	}
 
 	n, err := c.conn.Read(buf)
-	return n, err
+	if err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 // Append Add bytes to buffer
 func (c *Conn) Append(elems ...byte) error {
 	var err error
-
+	defer func(err error) {
+		if err != nil {
+			c.Reset()
+		}
+	}(err)
 	cutIndex := 0
 	for cutIndex < len(elems) {
 		// if bufferLength > 16MB, split packet
@@ -318,22 +326,20 @@ func (c *Conn) PushNewBlock(allocLength int) error {
 	var err error
 	var buf []byte
 
-	defer func(err error) {
+	defer func(buf []byte, err error) {
 		if err != nil {
 			c.allocator.Free(buf)
-		} else {
-			newBlock := &ListBlock{}
-			newBlock.data = buf
-			c.dynamicBuf.PushBack(newBlock)
-			c.curBuf = newBlock
 		}
-	}(err)
+	}(buf, err)
 
 	buf, err = c.allocator.Alloc(allocLength)
 	if err != nil {
 		return err
 	}
-
+	newBlock := &ListBlock{}
+	newBlock.data = buf
+	c.dynamicBuf.PushBack(newBlock)
+	c.curBuf = newBlock
 	return nil
 }
 
@@ -436,13 +442,13 @@ func (c *Conn) Write(payload []byte) error {
 
 // WriteToConn is the base method for write data to network, calling net.Conn.Write().
 func (c *Conn) WriteToConn(buf []byte) error {
-	sendlength := 0
-	for sendlength != len(buf) {
-		n, err := c.conn.Write(buf[sendlength:])
-		sendlength += n
+	sendLength := 0
+	for sendLength < len(buf) {
+		n, err := c.conn.Write(buf[sendLength:])
 		if err != nil {
 			return err
 		}
+		sendLength += n
 	}
 	return nil
 }

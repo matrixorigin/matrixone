@@ -2121,8 +2121,7 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 		return
 	}
 	start := time.Now()
-	var msg interface{}
-	msg, err = mysqlRrWr.Read()
+	payload, err := mysqlRrWr.Read()
 	if err != nil {
 		if errors.Is(err, errorInvalidLength0) {
 			return nil
@@ -2130,12 +2129,6 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 		if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
 			err = moerr.NewInvalidInput(execCtx.reqCtx, "cannot read '%s' from client,please check the file path, user privilege and if client start with --local-infile", param.Filepath)
 		}
-		return
-	}
-
-	payload, ok := msg.([]byte)
-	if !ok {
-		err = moerr.NewInvalidInput(execCtx.reqCtx, "invalid payload")
 		return
 	}
 
@@ -2160,10 +2153,11 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 			zap.String("path", param.Filepath),
 			zap.Error(err))
 	}
+
 	epoch, printEvery, minReadTime, maxReadTime, minWriteTime, maxWriteTime := uint64(0), uint64(1024*60), 24*time.Hour, time.Nanosecond, 24*time.Hour, time.Nanosecond
 	for {
 		readStart := time.Now()
-		msg, err = mysqlRrWr.Read()
+		payload, err = mysqlRrWr.Read()
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
 				err = nil
@@ -2176,11 +2170,6 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 		}
 		if readTime < minReadTime {
 			minReadTime = readTime
-		}
-		payload, ok = msg.([]byte)
-		if !ok {
-			err = moerr.NewInvalidInput(execCtx.reqCtx, "invalid packet")
-			break
 		}
 		if len(payload) == 0 {
 			break

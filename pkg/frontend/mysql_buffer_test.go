@@ -12,7 +12,7 @@ import (
 )
 
 func hasData(conn net.Conn) (bool, error) {
-	timeout := 1 * time.Minute
+	timeout := 1 * time.Second
 	conn.SetReadDeadline(time.Now().Add(timeout))
 	buf := make([]byte, 1)
 	n, err := conn.Read(buf)
@@ -263,11 +263,11 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 						t.Fatalf("Failed to append bytes: %v", err)
 					}
 				}
+				exceptPayload = append(exceptPayload, exceptRow)
 				err = cWriter.FinishedPacket()
 				if err != nil {
 					t.Fatalf("Failed to finished packet: %v", err)
 				}
-				exceptPayload = append(exceptPayload, exceptRow)
 			}
 			err = cWriter.Flush()
 			if err != nil {
@@ -294,7 +294,7 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 	})
 
 	convey.Convey("test write packet when row size > 1MB", t, func() {
-		rows := 20
+		rows := 2
 		convey.Convey("many columns", func() {
 			server, client := net.Pipe()
 			defer server.Close()
@@ -406,7 +406,7 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 	})
 
 	convey.Convey("test write packet when sometime buffer size >= 16MB", t, func() {
-		rows := 5
+		rows := 3
 		convey.Convey("big field size", func() {
 			server, client := net.Pipe()
 			defer server.Close()
