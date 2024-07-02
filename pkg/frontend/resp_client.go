@@ -94,7 +94,9 @@ func (resper *MysqlResp) GetStr(id PropertyID) string {
 	return resper.mysqlRrWr.GetStr(id)
 }
 
-func (resper *MysqlResp) SetU32(PropertyID, uint32) {}
+func (resper *MysqlResp) SetU32(id PropertyID, v uint32) {
+	resper.mysqlRrWr.SetU32(id, v)
+}
 
 func (resper *MysqlResp) GetU32(id PropertyID) uint32 {
 	return resper.mysqlRrWr.GetU32(id)

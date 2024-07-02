@@ -554,6 +554,12 @@ func NewSession(connCtx context.Context, proto MysqlRrWr, mp *mpool.MPool) *Sess
 	return ses
 }
 
+// ReserveConnAndClose closes the session with the connection is reserved.
+func (ses *Session) ReserveConnAndClose() {
+	ses.ReserveConn()
+	ses.Close()
+}
+
 func (ses *Session) Close() {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -1048,6 +1054,13 @@ func (ses *Session) GetConnectionID() uint32 {
 	return 0
 }
 
+func (ses *Session) SetConnectionID(v uint32) {
+	protocol := ses.GetResponser()
+	if protocol != nil {
+		ses.GetResponser().SetU32(CONNID, v)
+	}
+}
+
 func (ses *Session) skipAuthForSpecialUser() bool {
 	if ses.GetTenantInfo() != nil {
 		ok, _, _ := isSpecialUser(ses.GetTenantInfo().GetUser())
@@ -1483,6 +1496,53 @@ func (ses *Session) SetSessionRoutineStatus(status string) error {
 		err = moerr.NewInternalErrorNoCtx("SetSessionRoutineStatus have invalid status : %s", status)
 	}
 	return err
+}
+
+// reset resets the ses instance and copy some fields of prev, then
+// close the prev.
+func (ses *Session) reset(prev *Session) error {
+	if ses == nil || prev == nil {
+		return nil
+	}
+	// update information in the new session.
+	ses.tenant = prev.tenant.Copy()
+	ses.accountId = prev.accountId
+	ses.label = make(map[string]string, len(prev.label))
+	for k, v := range prev.label {
+		ses.label[k] = v
+	}
+	*ses.timeZone = *prev.timeZone
+	ses.uuid = prev.uuid
+	ses.fromRealUser = prev.fromRealUser
+	ses.rm = prev.rm
+	ses.rt = prev.rt
+	ses.requestLabel = make(map[string]string, len(prev.requestLabel))
+	for k, v := range prev.requestLabel {
+		ses.requestLabel[k] = v
+	}
+	ses.connType = prev.connType
+	ses.timestampMap = make(map[TS]time.Time, len(prev.timestampMap))
+	for k, v := range prev.timestampMap {
+		ses.timestampMap[k] = v
+	}
+	ses.fromProxy = prev.fromProxy
+	ses.clientAddr = prev.clientAddr
+	ses.proxyAddr = prev.proxyAddr
+
+	// rollback the transactions in the old session.
+	tempExecCtx := ExecCtx{
+		ses:    prev,
+		txnOpt: FeTxnOption{byRollback: true},
+	}
+	err := prev.GetTxnHandler().Rollback(&tempExecCtx)
+	if err != nil {
+		prev.Error(tempExecCtx.reqCtx, "failed to rollback txn",
+			zap.Error(err))
+		return err
+	}
+	// close the previous session.
+	prev.ReserveConnAndClose()
+	return nil
 }
 
 func checkPlanIsInsertValues(proc *process.Process,

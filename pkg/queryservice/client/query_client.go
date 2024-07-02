@@ -46,6 +46,7 @@ var methodVersions = map[pb.CmdMethod]int64{
 	pb.CmdMethod_CoreDumpConfig:        defines.MORPCMinVersion,
 	pb.CmdMethod_MigrateConnFrom:       defines.MORPCVersion1,
 	pb.CmdMethod_MigrateConnTo:         defines.MORPCVersion1,
+	pb.CmdMethod_ResetSession:          defines.MORPCVersion1,
 }
 
 type queryClient struct {

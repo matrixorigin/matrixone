@@ -481,6 +481,37 @@ func (rt *Routine) migrateConnectionFrom(resp *query.MigrateConnFromResponse) er
 	return nil
 }
 
+func (rt *Routine) resetSession(baseServiceID string, resp *query.ResetSessionResponse) error {
+	// retrieve the old session.
+	oldSession := rt.getSession()
+
+	// create a new session with a new context.
+	cancelCtx := rt.getCancelRoutineCtx()
+	cancelCtx = context.WithValue(cancelCtx, defines.NodeIDKey{}, baseServiceID)
+
+	// before create new session, we should reset the database on the protocol.
+	rt.getProtocol().SetStr(DBNAME, "")
+
+	newSession := NewSession(cancelCtx, rt.getProtocol(), nil)
+
+	// reset the old and new session.
+	if err := newSession.reset(oldSession); err != nil {
+		return err
+	}
+
+	// some cleanups in the routine.
+	rt.killQuery(false, "")
+
+	// reset the new session in other instances.
+	rt.protocol.Reset(newSession)
+	rt.setSession(newSession)
+
+	// update the password filed in response.
+	resp.AuthString = []byte(rt.protocol.GetStr(AuthString))
+
+	return nil
+}
+
 func NewRoutine(ctx context.Context, protocol MysqlRrWr, parameters *config.FrontendParameters, rs goetty.IOSession) *Routine {
 	ctx = trace.Generate(ctx) // fill span{trace_id} in ctx
 	cancelRoutineCtx, cancelRoutineFunc := context.WithCancel(ctx)
