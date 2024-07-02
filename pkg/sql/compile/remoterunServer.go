@@ -18,7 +18,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
+	"time"
+
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -39,9 +44,6 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
-	"runtime"
-	"time"
 )
 
 // CnServerMessageHandler receive and deal the message from cn-client.
@@ -184,7 +186,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 			return err
 		}
 		s = appendWriteBackOperator(runCompile, s)
-		s.SetContextRecursively(runCompile.ctx)
+		s.SetContextRecursively(runCompile.proc.Ctx)
 
 		defer func() {
 			runCompile.proc.FreeVectors()
@@ -410,7 +412,7 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	c.anal.analInfos = proc.AnalInfos
 	c.addr = receiver.cnInformation.cnAddr
 	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, c.counterSet)
-	c.ctx = defines.AttachAccountId(c.ctx, pHelper.accountId)
+	c.proc.Ctx = defines.AttachAccountId(c.proc.Ctx, pHelper.accountId)
 
 	// a method to send back.
 	c.fill = func(b *batch.Batch) error {
