@@ -15,6 +15,7 @@
 package colexec
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"reflect"
 	"sync"
 
@@ -49,6 +50,47 @@ type Server struct {
 	uuidCsChanMap UuidProcMap
 	//txn's local segments.
 	cnSegmentMap CnSegmentMap
+
+	receivedRunningPipeline RunningPipelineMapForRemoteNode
+}
+
+// RunningPipelineMapForRemoteNode
+// is a map to record which pipeline was built for a remote node.
+// these pipelines will send data to a remote node,
+// we record them for a better control for their lives.
+type RunningPipelineMapForRemoteNode struct {
+	sync.Mutex
+
+	fromRpcClientToRelatedPipeline map[rpcClientItem]runningPipelineInfo
+}
+
+type rpcClientItem struct {
+	// connection.
+	tcp morpc.ClientSession
+
+	// stream id.
+	id uint64
+}
+
+type runningPipelineInfo struct {
+	alreadyDone bool
+	runningProc *process.Process
+
+	isDispatch bool
+	receiver   *process.WrapCs
+}
+
+func (info *runningPipelineInfo) cancelPipeline() {
+	// If this was a pipeline responsible for distributing data, we cannot end this
+	// because we are just one of the receivers.
+	if info.isDispatch {
+		info.receiver.Lock()
+		info.receiver.ReceiverDone = true
+		info.receiver.Unlock()
+
+	} else {
+		info.runningProc.Cancel()
+	}
 }
 
 type uuidProcMapItem struct {
