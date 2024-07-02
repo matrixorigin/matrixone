@@ -2326,7 +2326,7 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	var filterExpr *plan.Expr
 	if len(n.FilterList) > 0 {
 		filterExpr = colexec.RewriteFilterExprList(n.FilterList)
-		filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(filterExpr), c.proc, true)
+		filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(filterExpr), c.proc, true, true)
 		if err != nil {
 			return err
 		}
