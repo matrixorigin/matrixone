@@ -15,12 +15,10 @@
 package model
 
 import (
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"sync"
-	"time"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"sync"
 )
 
 type PageT[T common.IRef] interface {
@@ -92,7 +90,7 @@ func (table *TransferTable[T]) executeTTL(mem, disk []*common.PinnedItem[T]) {
 	}
 }
 
-func (table *TransferTable[T]) RunTTL(now time.Time) {
+func (table *TransferTable[T]) RunTTL() {
 	mem, disk := table.prepareTTL()
 	table.executeTTL(mem, disk)
 }

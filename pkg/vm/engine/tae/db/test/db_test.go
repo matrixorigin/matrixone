@@ -9058,7 +9058,7 @@ func TestPersistTransferTable(t *testing.T) {
 	page.SetLocation(location)
 
 	time.Sleep(2 * time.Second)
-	tae.Runtime.TransferTable.RunTTL(time.Now())
+	tae.Runtime.TransferTable.RunTTL()
 	assert.True(t, page.IsPersist() == 1)
 	for i := 0; i < 10; i++ {
 		id, ok := page.Transfer(uint32(i))
@@ -9136,7 +9136,7 @@ func TestClearPersistTransferTable(t *testing.T) {
 
 	page.SetLocation(location)
 
-	tae.Runtime.TransferTable.RunTTL(time.Now())
+	tae.Runtime.TransferTable.RunTTL()
 	time.Sleep(2 * time.Second)
 	_, err = tae.Runtime.TransferTable.Pin(*page.ID())
 	assert.Equal(t, err, moerr.GetOkExpectedEOB())

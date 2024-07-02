@@ -45,7 +45,6 @@ func TestTransferPage(t *testing.T) {
 	pinned.Close()
 	assert.Zero(t, memo1.RefCount())
 
-	ttl := time.Millisecond * 10
 	now := time.Now()
 	memo2 := NewTransferHashPage(&src, now, 10, false)
 	defer memo2.Close()
@@ -55,8 +54,7 @@ func TestTransferPage(t *testing.T) {
 		memo2.Train(uint32(i), *objectio.NewRowid(&dest.BlockID, uint32(i)))
 	}
 
-	assert.False(t, memo2.TTL(now.Add(ttl-time.Duration(1)), ttl))
-	assert.True(t, memo2.TTL(now.Add(ttl+time.Duration(1)), ttl))
+	assert.True(t, memo2.TTL() == 0)
 
 	for i := 0; i < 10; i++ {
 		rowID, ok := memo2.Transfer(uint32(i))
@@ -68,8 +66,7 @@ func TestTransferPage(t *testing.T) {
 }
 
 func TestTransferTable(t *testing.T) {
-	ttl := time.Minute
-	table := NewTransferTable[*TransferHashPage](ttl)
+	table := NewTransferTable[*TransferHashPage]()
 	defer table.Close()
 	sid := objectio.NewSegmentid()
 
@@ -77,7 +74,9 @@ func TestTransferTable(t *testing.T) {
 	id2 := common.ID{BlockID: *objectio.NewBlockid(sid, 2, 0)}
 
 	now := time.Now()
-	page1 := NewTransferHashPage(&id1, now, 10, false)
+	page1 := NewTransferHashPage(&id1, now, 10, false,
+		WithDiskTTL(2*time.Second),
+	)
 	for i := 0; i < 10; i++ {
 		rowID := *objectio.NewRowid(&id2.BlockID, uint32(i))
 		page1.Train(uint32(i), rowID)
@@ -94,9 +93,10 @@ func TestTransferTable(t *testing.T) {
 
 	assert.Equal(t, int64(2), pinned.Item().RefCount())
 
-	table.RunTTL(now.Add(ttl - time.Duration(1)))
+	table.RunTTL()
 	assert.Equal(t, 1, table.Len())
-	table.RunTTL(now.Add(ttl + time.Duration(1)))
+	time.Sleep(2 * time.Second)
+	table.RunTTL()
 	assert.Equal(t, 0, table.Len())
 
 	assert.Equal(t, int64(1), pinned.Item().RefCount())
