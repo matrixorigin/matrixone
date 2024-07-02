@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"io"
 	"net"
 	"testing"
@@ -780,7 +781,7 @@ func Test_GetComputationWrapper(t *testing.T) {
 	convey.Convey("GetComputationWrapper succ", t, func() {
 		db, sql, user := "T", "SHOW TABLES", "root"
 		var eng engine.Engine
-		proc := &process.Process{}
+		proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
 
 		sysVars := make(map[string]interface{})
 		for name, sysVar := range gSysVarsDefs {
@@ -1085,7 +1086,7 @@ func TestProcessLoadLocal(t *testing.T) {
 		}
 		proc := testutil.NewProc()
 		var writer *io.PipeWriter
-		proc.LoadLocalReader, writer = io.Pipe()
+		proc.Base.LoadLocalReader, writer = io.Pipe()
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 		clientConn, serverConn := net.Pipe()
@@ -1117,7 +1118,7 @@ func TestProcessLoadLocal(t *testing.T) {
 		go func(buf []byte) {
 			tmp := buf
 			for {
-				n, err := proc.LoadLocalReader.Read(tmp)
+				n, err := proc.Base.LoadLocalReader.Read(tmp)
 				if err != nil {
 					break
 				}
@@ -1298,7 +1299,8 @@ func Test_RecordParseErrorStatement(t *testing.T) {
 	ses := newTestSession(t, ctrl)
 
 	proc := &process.Process{
-		Ctx: context.TODO(),
+		Base: &process.BaseProcess{},
+		Ctx:  context.TODO(),
 	}
 
 	motrace.GetTracerProvider().SetEnable(true)

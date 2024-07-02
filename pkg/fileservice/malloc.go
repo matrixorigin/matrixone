@@ -18,17 +18,63 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
-var initMallocAllocatorOnce sync.Once
+// delay initialization of global allocator
+// ugly, but we tend to read malloc config from files instead of env vars
+var getDefaultAllocator = func() func() malloc.Allocator {
+	var allocator malloc.Allocator
+	var initOnce sync.Once
+	return func() malloc.Allocator {
+		initOnce.Do(func() {
+			allocator = malloc.GetDefault(nil)
+		})
+		return allocator
+	}
+}()
 
-var _mallocAllocator malloc.Allocator
+var getMemoryCacheAllocator = func() func() malloc.Allocator {
+	var allocator malloc.Allocator
+	var initOnce sync.Once
+	return func() malloc.Allocator {
+		initOnce.Do(func() {
+			allocator = malloc.NewMetricsAllocator(
+				getDefaultAllocator(),
+				metric.MallocCounterMemoryCacheAllocateBytes,
+				metric.MallocGaugeMemoryCacheInuseBytes,
+			)
+		})
+		return allocator
+	}
+}()
 
-func getMallocAllocator() malloc.Allocator {
-	// delay initialization of global allocator
-	// ugly, but we tend to read malloc config from files instead of env vars
-	initMallocAllocatorOnce.Do(func() {
-		_mallocAllocator = malloc.GetDefault(nil)
-	})
-	return _mallocAllocator
-}
+var getBytesAllocator = func() func() malloc.Allocator {
+	var allocator malloc.Allocator
+	var initOnce sync.Once
+	return func() malloc.Allocator {
+		initOnce.Do(func() {
+			allocator = malloc.NewMetricsAllocator(
+				getDefaultAllocator(),
+				metric.MallocCounterBytesAllocateBytes,
+				metric.MallocGaugeBytesInuseBytes,
+			)
+		})
+		return allocator
+	}
+}()
+
+var getIOAllocator = func() func() malloc.Allocator {
+	var allocator malloc.Allocator
+	var initOnce sync.Once
+	return func() malloc.Allocator {
+		initOnce.Do(func() {
+			allocator = malloc.NewMetricsAllocator(
+				getDefaultAllocator(),
+				metric.MallocCounterIOAllocateBytes,
+				metric.MallocGaugeIOInuseBytes,
+			)
+		})
+		return allocator
+	}
+}()

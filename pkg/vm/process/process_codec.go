@@ -37,54 +37,54 @@ func (proc *Process) BuildProcessInfo(
 	sql string,
 ) (pipeline.ProcessInfo, error) {
 	procInfo := pipeline.ProcessInfo{}
-	if len(proc.AnalInfos) == 0 {
+	if len(proc.Base.AnalInfos) == 0 {
 		proc.Error(proc.Ctx, "empty plan", zap.String("sql", sql))
 	}
 	{
-		procInfo.Id = proc.Id
+		procInfo.Id = proc.QueryId()
 		procInfo.Sql = sql
-		procInfo.Lim = convertToPipelineLimitation(proc.Lim)
-		procInfo.UnixTime = proc.UnixTime
+		procInfo.Lim = convertToPipelineLimitation(proc.GetLim())
+		procInfo.UnixTime = proc.Base.UnixTime
 		accountId, err := defines.GetAccountId(proc.Ctx)
 		if err != nil {
 			return procInfo, err
 		}
 		procInfo.AccountId = accountId
-		snapshot, err := proc.TxnOperator.Snapshot()
+		snapshot, err := proc.GetTxnOperator().Snapshot()
 		if err != nil {
 			return procInfo, err
 		}
 		procInfo.Snapshot = snapshot
-		procInfo.AnalysisNodeList = make([]int32, len(proc.AnalInfos))
+		procInfo.AnalysisNodeList = make([]int32, len(proc.Base.AnalInfos))
 		for i := range procInfo.AnalysisNodeList {
-			procInfo.AnalysisNodeList[i] = proc.AnalInfos[i].NodeId
+			procInfo.AnalysisNodeList[i] = proc.Base.AnalInfos[i].NodeId
 		}
 	}
 	{ // session info
-		timeBytes, err := time.Time{}.In(proc.SessionInfo.TimeZone).MarshalBinary()
+		timeBytes, err := time.Time{}.In(proc.Base.SessionInfo.TimeZone).MarshalBinary()
 		if err != nil {
 			return procInfo, err
 		}
 
 		procInfo.SessionInfo = pipeline.SessionInfo{
-			User:         proc.SessionInfo.GetUser(),
-			Host:         proc.SessionInfo.GetHost(),
-			Role:         proc.SessionInfo.GetRole(),
-			ConnectionId: proc.SessionInfo.GetConnectionID(),
-			Database:     proc.SessionInfo.GetDatabase(),
-			Version:      proc.SessionInfo.GetVersion(),
+			User:         proc.Base.SessionInfo.GetUser(),
+			Host:         proc.Base.SessionInfo.GetHost(),
+			Role:         proc.Base.SessionInfo.GetRole(),
+			ConnectionId: proc.Base.SessionInfo.GetConnectionID(),
+			Database:     proc.Base.SessionInfo.GetDatabase(),
+			Version:      proc.Base.SessionInfo.GetVersion(),
 			TimeZone:     timeBytes,
-			QueryId:      proc.SessionInfo.QueryId,
+			QueryId:      proc.Base.SessionInfo.QueryId,
 		}
 	}
 	{ // log info
-		stmtId := proc.StmtProfile.GetStmtId()
-		txnId := proc.StmtProfile.GetTxnId()
+		stmtId := proc.GetStmtProfile().GetStmtId()
+		txnId := proc.GetStmtProfile().GetTxnId()
 		procInfo.SessionLogger = pipeline.SessionLoggerInfo{
-			SessId:   proc.SessionInfo.SessionId[:],
+			SessId:   proc.Base.SessionInfo.SessionId[:],
 			StmtId:   stmtId[:],
 			TxnId:    txnId[:],
-			LogLevel: zapLogLevel2EnumLogLevel(proc.SessionInfo.LogLevel),
+			LogLevel: zapLogLevel2EnumLogLevel(proc.Base.SessionInfo.LogLevel),
 		}
 	}
 	return procInfo, nil
@@ -183,11 +183,11 @@ func (c *codecService) Decode(
 		c.udfService,
 		nil,
 	)
-	proc.UnixTime = value.UnixTime
-	proc.Id = value.Id
-	proc.Lim = ConvertToProcessLimitation(value.Lim)
-	proc.SessionInfo = sessionInfo
-	proc.SessionInfo.StorageEngine = c.engine
+	proc.Base.UnixTime = value.UnixTime
+	proc.Base.Id = value.Id
+	proc.Base.Lim = ConvertToProcessLimitation(value.Lim)
+	proc.Base.SessionInfo = sessionInfo
+	proc.Base.SessionInfo.StorageEngine = c.engine
 	return proc, nil
 }
 

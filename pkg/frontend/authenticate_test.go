@@ -5867,8 +5867,8 @@ func Test_doInterpretCall(t *testing.T) {
 		priv := determinePrivilegeSetOfStatement(call)
 		ses := newSes(priv, ctrl)
 		proc := testutil.NewProcess()
-		proc.FileService = getGlobalPu().FileService
-		proc.SessionInfo = process.SessionInfo{Account: sysAccountName}
+		proc.Base.FileService = getGlobalPu().FileService
+		proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
 		ses.GetTxnCompileCtx().execCtx = &ExecCtx{
 			proc: proc,
 		}
@@ -5909,8 +5909,8 @@ func Test_doInterpretCall(t *testing.T) {
 		priv := determinePrivilegeSetOfStatement(call)
 		ses := newSes(priv, ctrl)
 		proc := testutil.NewProcess()
-		proc.FileService = getGlobalPu().FileService
-		proc.SessionInfo = process.SessionInfo{Account: sysAccountName}
+		proc.Base.FileService = getGlobalPu().FileService
+		proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
 		ses.SetDatabaseName("procedure_test")
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
@@ -5961,8 +5961,8 @@ func Test_doInterpretCall(t *testing.T) {
 		priv := determinePrivilegeSetOfStatement(call)
 		ses := newSes(priv, ctrl)
 		proc := testutil.NewProcess()
-		proc.FileService = getGlobalPu().FileService
-		proc.SessionInfo = process.SessionInfo{Account: sysAccountName}
+		proc.Base.FileService = getGlobalPu().FileService
+		proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
 		ses.SetDatabaseName("procedure_test")
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
@@ -8810,11 +8810,11 @@ func TestCheckSubscriptionValid(t *testing.T) {
 	ses.rm = rm
 
 	proc := testutil.NewProcess()
-	proc.FileService = getGlobalPu().FileService
+	proc.Base.FileService = getGlobalPu().FileService
 	ses.GetTxnCompileCtx().execCtx = &ExecCtx{
 		proc: proc,
 	}
-	ses.GetTxnCompileCtx().GetProcess().SessionInfo = process.SessionInfo{Account: sysAccountName}
+	ses.GetTxnCompileCtx().GetProcess().Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
 
 	columns := [][]Column{
 		{
@@ -11077,7 +11077,7 @@ func TestUpload(t *testing.T) {
 
 		fs, err := fileservice.NewLocalFS(context.TODO(), defines.SharedFileServiceName, t.TempDir(), fileservice.DisabledCacheConfig, nil)
 		convey.So(err, convey.ShouldBeNil)
-		proc.FileService = fs
+		proc.Base.FileService = fs
 
 		//parameter
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
@@ -11466,7 +11466,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
 		ses.proc = testutil.NewProc()
-		ses.proc.TxnOperator = txnOperator
+		ses.proc.Base.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
@@ -11527,7 +11527,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
 		ses.proc = testutil.NewProc()
-		ses.proc.TxnOperator = txnOperator
+		ses.proc.Base.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
@@ -11588,7 +11588,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
 		ses.proc = testutil.NewProc()
-		ses.proc.TxnOperator = txnOperator
+		ses.proc.Base.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
@@ -11653,7 +11653,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
 		ses.proc = testutil.NewProc()
-		ses.proc.TxnOperator = txnOperator
+		ses.proc.Base.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
@@ -11718,7 +11718,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
 		ses.proc = testutil.NewProc()
-		ses.proc.TxnOperator = txnOperator
+		ses.proc.Base.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
@@ -11784,7 +11784,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
 		ses.proc = testutil.NewProc()
-		ses.proc.TxnOperator = txnOperator
+		ses.proc.Base.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
@@ -11850,7 +11850,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
 		ses.proc = testutil.NewProc()
-		ses.proc.TxnOperator = txnOperator
+		ses.proc.Base.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
