@@ -87,7 +87,6 @@ func newCNMergeTask(
 	blkCnts := make([]int, len(targets))
 	blkIters := make([]*StatsBlkIter, len(targets))
 	for i, objInfo := range targets {
-		objInfo := objInfo
 		blkCnts[i] = int(objInfo.BlkCnt())
 
 		loc := objInfo.ObjectLocation()
