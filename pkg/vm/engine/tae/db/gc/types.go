@@ -66,6 +66,16 @@ const (
 	GCAttrVersion    = "version"
 )
 
+const (
+	AddChecker    = "add_checker"
+	RemoveChecker = "remove_checker"
+)
+
+const (
+	CheckerKeyTTL   = "ttl"
+	CheckerKeyMinTS = "min_ts"
+)
+
 var (
 	BlockSchemaAttr = []string{
 		GCAttrObjectName,
@@ -143,7 +153,8 @@ type Cleaner interface {
 	Replay() error
 	Process()
 	TryGC() error
-	AddChecker(checker func(item any) bool)
+	AddChecker(checker func(item any) bool, key string) int
+	RemoveChecker(key string) error
 	GetMaxConsumed() *checkpoint.CheckpointEntry
 	Stop()
 	// for test

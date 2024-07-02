@@ -84,8 +84,7 @@ func newDefault(delta *Config) (allocator Allocator) {
 			allocator = NewMetricsAllocator(
 				allocator,
 				metric.MallocCounterAllocateBytes,
-				metric.MallocCounterFreeBytes,
-				metric.MallocCounterInuseBytes,
+				metric.MallocGaugeInuseBytes,
 			)
 		}
 		return allocator
@@ -101,8 +100,7 @@ func newDefault(delta *Config) (allocator Allocator) {
 					ret = NewMetricsAllocator(
 						ret,
 						metric.MallocCounterAllocateBytes,
-						metric.MallocCounterFreeBytes,
-						metric.MallocCounterInuseBytes,
+						metric.MallocGaugeInuseBytes,
 					)
 				}
 				return ret
@@ -120,8 +118,7 @@ func newDefault(delta *Config) (allocator Allocator) {
 					ret = NewMetricsAllocator(
 						ret,
 						metric.MallocCounterAllocateBytes,
-						metric.MallocCounterFreeBytes,
-						metric.MallocCounterInuseBytes,
+						metric.MallocGaugeInuseBytes,
 					)
 				}
 				return ret

@@ -292,11 +292,7 @@ func (c *client) getBackendLocked(backend string, lock bool) (Backend, error) {
 		return nil, moerr.NewClientClosedNoCtx()
 	}
 	defer func() {
-		n := 0
-		for _, backends := range c.mu.backends {
-			n += len(backends)
-		}
-		c.metrics.poolSizeGauge.Set(float64(n))
+		c.updatePoolSizeMetricsLocked()
 	}()
 
 	lockedCnt := 0
@@ -429,6 +425,8 @@ func (c *client) doRemoveInactive(remote string) {
 		newBackends = append(newBackends, backend)
 	}
 	c.mu.backends[remote] = newBackends
+
+	c.updatePoolSizeMetricsLocked()
 }
 
 func (c *client) closeIdleBackends() {
@@ -446,6 +444,7 @@ func (c *client) closeIdleBackends() {
 		}
 		c.mu.backends[k] = newBackends
 	}
+	c.updatePoolSizeMetricsLocked()
 	c.mu.Unlock()
 
 	for _, b := range idleBackends {
@@ -523,6 +522,14 @@ func (c *client) doCreate(backend string) (Backend, error) {
 
 func (c *client) canCreateLocked(backend string) bool {
 	return len(c.mu.backends[backend]) < c.options.maxBackendsPerHost
+}
+
+func (c *client) updatePoolSizeMetricsLocked() {
+	n := 0
+	for _, backends := range c.mu.backends {
+		n += len(backends)
+	}
+	c.metrics.poolSizeGauge.Set(float64(n))
 }
 
 type op struct {

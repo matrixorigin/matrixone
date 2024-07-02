@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	"github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -110,7 +111,7 @@ func NewAwsSDKv2(
 	// options for s3 client
 	s3Options := []func(*s3.Options){
 		func(opts *s3.Options) {
-			opts.Retryer = new(aws.NopRetryer)
+			opts.Retryer = newAWSRetryer()
 		},
 	}
 
@@ -681,4 +682,44 @@ func (o ObjectStorageArguments) credentialsProviderForAwsSDKv2(
 	}
 
 	return
+}
+
+type awsRetryer struct {
+	upstream aws.Retryer
+}
+
+func newAWSRetryer() aws.Retryer {
+	retryer := aws.Retryer(retry.NewStandard())
+	return &awsRetryer{
+		upstream: retryer,
+	}
+}
+
+var _ aws.Retryer = new(awsRetryer)
+
+func (a *awsRetryer) GetInitialToken() (releaseToken func(error) error) {
+	return a.upstream.GetInitialToken()
+}
+
+func (a *awsRetryer) GetRetryToken(ctx context.Context, opErr error) (releaseToken func(error) error, err error) {
+	return a.upstream.GetRetryToken(ctx, opErr)
+}
+
+func (a *awsRetryer) IsErrorRetryable(err error) (ret bool) {
+	defer func() {
+		if ret {
+			logutil.Info("file service retry",
+				zap.Error(err),
+			)
+		}
+	}()
+	return a.upstream.IsErrorRetryable(err)
+}
+
+func (a *awsRetryer) MaxAttempts() int {
+	return a.upstream.MaxAttempts()
+}
+
+func (a *awsRetryer) RetryDelay(attempt int, opErr error) (time.Duration, error) {
+	return a.upstream.RetryDelay(attempt, opErr)
 }

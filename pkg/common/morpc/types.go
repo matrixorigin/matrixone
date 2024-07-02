@@ -105,6 +105,8 @@ type RPCClient interface {
 type ClientSession interface {
 	// Close close the client session
 	Close() error
+	// SessionCtx get the session context, if session is closed the context will be canceled.
+	SessionCtx() context.Context
 	// Write writing the response message to the client.
 	Write(ctx context.Context, response Message) error
 	// AsyncWrite only put message into write queue, and return immediately.

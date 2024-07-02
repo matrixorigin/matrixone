@@ -185,6 +185,9 @@ type LockTableAllocator interface {
 
 	// GetLatest get latest lock table bind
 	GetLatest(groupID uint32, tableID uint64) pb.LockTable
+
+	// GetVersion get latest version
+	GetVersion() uint64
 }
 
 // LockTableKeeper is used to keep a heartbeat with the LockTableAllocator to keep the

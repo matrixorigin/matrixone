@@ -33,14 +33,6 @@ func (m *Message) SetSid(sid Status) {
 	m.Sid = sid
 }
 
-func (m *Message) SetCheckSum(sum uint32) {
-	m.Checksum = sum
-}
-
-func (m *Message) SetSequence(s uint64) {
-	m.Sequence = s
-}
-
 func (m *Message) SetMoError(ctx context.Context, err error) {
 	m.Err = EncodedMessageError(ctx, err)
 }
@@ -126,16 +118,4 @@ func EncodedMessageError(ctx context.Context, err error) []byte {
 		errData, _ = moerr.ConvertGoError(ctx, err).(*moerr.Error).MarshalBinary()
 	}
 	return errData
-}
-
-func GetMessageErrorInfo(m *Message) error {
-	errData := m.GetErr()
-	if len(errData) > 0 {
-		err := &moerr.Error{}
-		if errUnmarshal := err.UnmarshalBinary(errData); errUnmarshal != nil {
-			return errUnmarshal
-		}
-		return err
-	}
-	return nil
 }
