@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -257,23 +258,44 @@ func (s *sqlStore) UpdateMinValue(
 	return nil
 }
 
-func (s *sqlStore) Delete(
-	ctx context.Context,
-	tableID uint64) error {
+func (s *sqlStore) Delete(ctx context.Context, tableID uint64) error {
 	opts := executor.Options{}.
 		WithDatabase(database).
 		WithEnableTrace().
 		WithWaitCommittedLogApplied()
-	res, err := s.exec.Exec(
-		ctx,
-		fmt.Sprintf("delete from %s where table_id = %d",
-			incrTableName, tableID),
+
+	return s.exec.ExecTxn(ctx,
+		func(txn executor.TxnExecutor) error {
+			var tenantId uint32
+			tenantId, err := defines.GetAccountId(ctx)
+			if err != nil {
+				return err
+			}
+
+			sql := fmt.Sprintf("select account_name from mo_catalog.mo_account where account_id = %d", tenantId)
+			newCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+			res, err := s.exec.Exec(newCtx, sql, opts)
+			if err != nil {
+				return err
+			}
+			var rowCount int
+			res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+				rowCount += rows
+				return true
+			})
+			if rowCount == 0 {
+				res.Close()
+				return nil
+			}
+			res, err = s.exec.Exec(
+				ctx,
+				fmt.Sprintf("delete from %s where table_id = %d",
+					incrTableName, tableID),
+				opts)
+			res.Close()
+			return err
+		},
 		opts)
-	if err != nil {
-		return err
-	}
-	defer res.Close()
-	return nil
 }
 
 func (s *sqlStore) GetColumns(
