@@ -25,8 +25,6 @@ set global lower_case_table_names = 0;
 -- @session
 
 -- @session:id=2&user=a1:admin1&password=test123
-# make sure get the newest value
-set refresh_global_sys_vars_mgr = 1;
 # it's 0 now
 select @@lower_case_table_names;
 
@@ -48,8 +46,6 @@ drop database test;
 -- @session
 
 -- @session:id=3&user=a1:admin1&password=test123
-# make sure get the newest value
-set refresh_global_sys_vars_mgr = 1;
 # it's 0 now
 select @@lower_case_table_names;
 
@@ -65,8 +61,6 @@ set global lower_case_table_names = 1;
 -- @session
 
 -- @session:id=4&user=a1:admin1&password=test123
-# make sure get the newest value
-set refresh_global_sys_vars_mgr = 1;
 # it's 1 now
 select @@lower_case_table_names;
 
