@@ -1,0 +1,306 @@
+select jq('{"foo": 128}', '.foo');
+jq({"foo": 128}, .foo)
+128
+select try_jq('{"foo": 128}', '.foo');
+try_jq({"foo": 128}, .foo)
+128
+select jq('{"a": {"b": 42}}', '.a.b');
+jq({"a": {"b": 42}}, .a.b)
+42
+select try_jq('{"a": {"b": 42}}', '.a.b');
+try_jq({"a": {"b": 42}}, .a.b)
+42
+select jq(null, '.foo');
+jq(null, .foo)
+null
+select try_jq(null, '.foo');
+try_jq(null, .foo)
+null
+select jq('{"a": {"b": 42}}', null);
+jq({"a": {"b": 42}}, null)
+null
+select try_jq('{"a": {"b": 42}}', null);
+try_jq({"a": {"b": 42}}, null)
+null
+select jq('{"id": "sample", "10": {"b": 42}}', '{(.id): .["10"].b}');
+jq({"id": "sample", "10": {"b": 42}}, {(.id): .["10"].b})
+{"sample":42}
+select jq('[{"id":1},{"id":2},{"id":3}]', '.[] | .id');
+jq([{"id":1},{"id":2},{"id":3}], .[] | .id)
+123
+select jq('{"a":1, "b":2}', '.a += 1 | .b *= 2');
+jq({"a":1, "b":2}, .a += 1 | .b *= 2)
+{"a":2,"b":4}
+select jq('{"a":1} [2] 3', '. as {$a} ?// [$a] ?// $a | $a');
+invalid character '[' after top-level value
+select jq('{"foo": 4722366482869645213696}', '.foo');
+jq({"foo": 4722366482869645213696}, .foo)
+4.722366482869645e+21
+select jq('1', 'def fact($n): if $n < 1 then 1 else $n * fact($n - 1) end; fact(50)');
+jq(1, def fact($n): if $n < 1 then 1 else $n * fact($n - 1) end; fact(50))
+30414093201713378043612608166064768844377641568960512000000000000
+select jq('[1, 2, 3]', '.foo & .bar');
+unexpected token "&"
+select try_jq('[1, 2, 3]', '.foo & .bar');
+try_jq([1, 2, 3], .foo & .bar)
+null
+select jq('{"foo": {bar: []} }', '.');
+invalid character 'b' looking for beginning of object key string
+select try_jq('{"foo": {bar: []} }', '.');
+try_jq({"foo": {bar: []} }, .)
+null
+select jq($$
+{
+"a": 2
+}$$, '.a');
+jq(\n{\n"a": 2\n}, .a)
+2
+select jq('', '.');
+unexpected end of JSON input
+select try_jq('', '.');
+try_jq(, .)
+null
+select jq('1', '');
+missing query (try ".")
+select try_jq('1', '');
+try_jq(1, )
+null
+select jq('{"foo::bar": "zoo"}', '.["foo::bar"]');
+jq({"foo::bar": "zoo"}, .["foo::bar"])
+"zoo"
+select jq('{"foo::bar": "zoo"}', '.foo::bar');
+unexpected token ":"
+select try_jq('{"foo::bar": "zoo"}', '.foo::bar');
+try_jq({"foo::bar": "zoo"}, .foo::bar)
+null
+select jq('["a", "b", "c", "d", "e"]', '.[2:4]');
+jq(["a", "b", "c", "d", "e"], .[2:4])
+["c","d"]
+select jq('["a", "b", "c", "d", "e"]', '.[:3]');
+jq(["a", "b", "c", "d", "e"], .[:3])
+["a","b","c"]
+select jq('["a", "b", "c", "d", "e"]', '.[-2:]');
+jq(["a", "b", "c", "d", "e"], .[-2:])
+["d","e"]
+select jq('["a", "b", "c", "d", "e"]', '.[]');
+jq(["a", "b", "c", "d", "e"], .[])
+"a""b""c""d""e"
+select jq('[]', '.[]');
+jq([], .[])
+
+select jq('{"foo": ["a", "b", "c", "d", "e"]}', '.foo[]');
+jq({"foo": ["a", "b", "c", "d", "e"]}, .foo[])
+"a""b""c""d""e"
+select jq('{"a":1, "b":2}', '.[]');
+jq({"a":1, "b":2}, .[])
+12
+select jq('{"a":1, "b":2}', '.a, .b');
+jq({"a":1, "b":2}, .a, .b)
+12
+select jq('["a", "b", "c", "d", "e"]', '.[4,2]');
+jq(["a", "b", "c", "d", "e"], .[4,2])
+"e""c"
+select jq('{"a": 1, "b": [2, 3]}', '[.a, .b[]]');
+jq({"a": 1, "b": [2, 3]}, [.a, .b[]])
+[1,2,3]
+select jq('[1, 2, 3]', '[ .[] | . * 2]');
+jq([1, 2, 3], [ .[] | . * 2])
+[2,4,6]
+select jq('{"a":1, "b":2}', '{aa: .a, bb: .b}');
+jq({"a":1, "b":2}, {aa: .a, bb: .b})
+{"aa":1,"bb":2}
+select jq('{"user":"stedolan","titles":["JQ Primer", "More JQ"]}', '{user, title: .titles[]}');
+jq({"user":"stedolan","titles":["JQ Primer", "More JQ"]}, {user, title: .titles[]})
+{"title":"JQ Primer","user":"stedolan"}{"title":"More JQ","user":"stedolan"}
+select jq('[[{"a":1}]]', '.. | .a');
+expected an object but got: array ([[{"a":1}]])
+select jq('{"a":1, "b":2}', '.a + .b');
+jq({"a":1, "b":2}, .a + .b)
+3
+select jq('{"a":1, "b":2}', '.a + null');
+jq({"a":1, "b":2}, .a + null)
+1
+select jq('{"a":1, "b":2}', '. + {c: 3}');
+jq({"a":1, "b":2}, . + {c: 3})
+{"a":1,"b":2,"c":3}
+select jq('{"a":1, "b":2}', '. + {a: 3, c: 3}');
+jq({"a":1, "b":2}, . + {a: 3, c: 3})
+{"a":3,"b":2,"c":3}
+select jq('0', 'if . == 0 then "zero" elif . == 1 then "one" else "many" end');
+jq(0, if . == 0 then "zero" elif . == 1 then "one" else "many" end)
+"zero"
+select jq('1', 'if . == 0 then "zero" elif . == 1 then "one" else "many" end');
+jq(1, if . == 0 then "zero" elif . == 1 then "one" else "many" end)
+"one"
+select jq('2', 'if . == 0 then "zero" elif . == 1 then "one" else "many" end');
+jq(2, if . == 0 then "zero" elif . == 1 then "one" else "many" end)
+"many"
+select jq('[{}, true, {"a":1}]', '[.[]|try .a]');
+jq([{}, true, {"a":1}], [.[]|try .a])
+[null,1]
+select jq('[{}, true, {"a":1}]', '[.[]|.a?]');
+jq([{}, true, {"a":1}], [.[]|.a?])
+[null,1]
+select jq('[{}, true, {"a":1}]', '[.[]|try .a catch ". is not an object"]');
+jq([{}, true, {"a":1}], [.[]|try .a catch ". is not an object"])
+[null,". is not an object",1]
+select jq('[1, 2, 3]', 'reduce .[] as $item (0; + $item)');
+jq([1, 2, 3], reduce .[] as $item (0; + $item))
+3
+select jq('[1, 2, 3]', 'foreach .[] as $item(0; . + $item; [$item, . * 2])');
+jq([1, 2, 3], foreach .[] as $item(0; . + $item; [$item, . * 2]))
+[1,2][2,6][3,12]
+create table jqt(id int, data varchar(255), jq varchar(255));
+insert into jqt values
+(1, '{"foo": 128}', '.foo'),
+(2, '{"foo": 128}', '.foo'),
+(3, '{"a": {"b": 42}}', '.a.b'),
+(4, '{"a": {"b": 42}}', '.a.b'),
+(5, null, '.foo'),
+(6, '{"a": {"b": 42}}', null),
+(7, '{"id": "sample", "10": {"b": 42}}', '{(.id): .["10"].b}'),
+(8, '[{"id":1},{"id":2},{"id":3}]', '.[] | .id'),
+(9, '{"a":1, "b":2}', '.a += 1 | .b *= 2'),
+(10, '{"a":1} [2] 3', '. as {$a} ?// [$a] ?// $a | $a'),
+(11, '{"foo": 4722366482869645213696}', '.foo'),
+(12, '1', 'def fact($n): if $n < 1 then 1 else $n * fact($n - 1) end; fact(50)')
+;
+insert into jqt values
+(100, '[1, 2, 3]', '.foo & .bar'),
+(101, '[1, 2, 3]', '.foo & .bar'),
+(102, '{"foo": {bar: []} }', '.'),
+(103, '{"foo": {bar: []} }', '.');
+insert into jqt values
+(200, '{"a":1, "b":2}', '.a + .b'),
+(201, '{"a":1, "b":2}', '.a + null'),
+(202, '{"a":1, "b":2}', '. + {c: 3}'),
+(203, '{"a":1, "b":2}', '. + {a: 3, c: 3}'),
+(204, '0', 'if . == 0 then "zero" elif . == 1 then "one" else "many" end'),
+(205, '1', 'if . == 0 then "zero" elif . == 1 then "one" else "many" end'),
+(206, '2', 'if . == 0 then "zero" elif . == 1 then "one" else "many" end'),
+(207, '[{}, true, {"a":1}]', '[.[]|try .a]'),
+(208, '[{}, true, {"a":1}]', '[.[]|.a?]'),
+(209, '[{}, true, {"a":1}]', '[.[]|try .a catch ". is not an object"]')
+;
+select count(*) from jqt;
+count(*)
+26
+select id, jq(data, '.') from jqt;
+invalid character '[' after top-level value
+select id, jq(data, '.') from jqt where id < 100;
+invalid character '[' after top-level value
+select id, try_jq(data, '.') from jqt;
+id    try_jq(data, .)
+1    {"foo":128}
+2    {"foo":128}
+3    {"a":{"b":42}}
+4    {"a":{"b":42}}
+5    null
+6    {"a":{"b":42}}
+7    {"10":{"b":42},"id":"sample"}
+8    [{"id":1},{"id":2},{"id":3}]
+9    {"a":1,"b":2}
+10    null
+11    {"foo":4.722366482869645e+21}
+12    1
+100    [1,2,3]
+101    [1,2,3]
+102    null
+103    null
+200    {"a":1,"b":2}
+201    {"a":1,"b":2}
+202    {"a":1,"b":2}
+203    {"a":1,"b":2}
+204    0
+205    1
+206    2
+207    [{},true,{"a":1}]
+208    [{},true,{"a":1}]
+209    [{},true,{"a":1}]
+select id, jq(null, jq) from jqt;
+id    jq(null, jq)
+1    null
+2    null
+3    null
+4    null
+5    null
+6    null
+7    null
+8    null
+9    null
+10    null
+11    null
+12    null
+100    null
+101    null
+102    null
+103    null
+200    null
+201    null
+202    null
+203    null
+204    null
+205    null
+206    null
+207    null
+208    null
+209    null
+select id, jq(data, null) from jqt;
+id    jq(data, null)
+1    null
+2    null
+3    null
+4    null
+5    null
+6    null
+7    null
+8    null
+9    null
+10    null
+11    null
+12    null
+100    null
+101    null
+102    null
+103    null
+200    null
+201    null
+202    null
+203    null
+204    null
+205    null
+206    null
+207    null
+208    null
+209    null
+select id, jq(data, jq) from jqt;
+invalid character '[' after top-level value
+select id, try_jq(data, jq) from jqt;
+id    try_jq(data, jq)
+1    128
+2    128
+3    42
+4    42
+5    null
+6    null
+7    {"sample":42}
+8    123
+9    {"a":2,"b":4}
+10    null
+11    4.722366482869645e+21
+12    30414093201713378043612608166064768844377641568960512000000000000
+100    null
+101    null
+102    null
+103    null
+200    3
+201    1
+202    {"a":1,"b":2,"c":3}
+203    {"a":3,"b":2,"c":3}
+204    "zero"
+205    "one"
+206    "many"
+207    [null,1]
+208    [null,1]
+209    [null,". is not an object",1]
+drop table jqt;

@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -455,6 +456,22 @@ func (fr *FunctionResult[T]) AppendMustBytesValue(val []byte) error {
 func (fr *FunctionResult[T]) AppendMustNullForBytesResult() error {
 	var v T
 	return appendOneFixed(fr.vec, v, true, fr.mp)
+}
+
+func (fr *FunctionResult[T]) AddNullRange(start, end uint64) {
+	fr.vec.nsp.AddRange(start, end)
+}
+
+func (fr *FunctionResult[T]) AddNullAt(idx uint64) {
+	fr.vec.nsp.Add(idx)
+}
+
+func (fr *FunctionResult[T]) AddNulls(ns *nulls.Nulls) {
+	fr.vec.nsp.Or(ns)
+}
+
+func (fr *FunctionResult[T]) GetNullAt(idx uint64) bool {
+	return fr.vec.nsp.Contains(idx)
 }
 
 func (fr *FunctionResult[T]) GetType() types.Type {

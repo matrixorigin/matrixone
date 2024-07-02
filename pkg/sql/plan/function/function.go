@@ -497,13 +497,22 @@ type FunctionSelectList struct {
 }
 
 func (selectList *FunctionSelectList) ShouldEvalAllRow() bool {
+	if selectList == nil {
+		return true
+	}
 	return !selectList.AnyNull
 }
 
 func (selectList *FunctionSelectList) IgnoreAllRow() bool {
+	if selectList == nil {
+		return false
+	}
 	return selectList.AllNull
 }
 
 func (selectList *FunctionSelectList) Contains(row uint64) bool {
+	if selectList == nil {
+		return false
+	}
 	return !selectList.SelectList[row]
 }

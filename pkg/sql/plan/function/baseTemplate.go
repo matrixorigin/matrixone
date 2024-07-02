@@ -2353,33 +2353,32 @@ func opBinaryStrStrToFixedWithErrorCheck[Tr types.FixedSizeTExceptStrType](
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
 	rs := vector.MustFunctionResult[Tr](result)
-	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedCol[Tr](rsVec)
+	rss := vector.MustFixedCol[Tr](rs.GetResultVector())
 
 	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
-	rsNull := rsVec.GetNulls()
 	rsAnyNull := false
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.AddNullRange(0, uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
 			for i := range selectList.SelectList {
 				if selectList.Contains(uint64(i)) {
-					rsNull.Add(uint64(i))
+					rs.AddNullAt(uint64(i))
 				}
 			}
 		}
 	}
+
 	if c1 && c2 {
 		v1, null1 := p1.GetStrValue(0)
 		v2, null2 := p2.GetStrValue(0)
 		ifNull := null1 || null2
 		if ifNull {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.AddNullRange(0, uint64(length))
 		} else {
 			r, err := fn(functionUtil.QuickBytesToStr(v1), functionUtil.QuickBytesToStr(v2))
 			if err != nil {
@@ -2397,14 +2396,14 @@ func opBinaryStrStrToFixedWithErrorCheck[Tr types.FixedSizeTExceptStrType](
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.AddNullRange(0, uint64(length))
 		} else {
 			x := functionUtil.QuickBytesToStr(v1)
 			if p2.WithAnyNullValue() || rsAnyNull {
-				nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
+				rs.AddNulls(parameters[1].GetNulls())
 				rowCount := uint64(length)
 				for i := uint64(0); i < rowCount; i++ {
-					if rsNull.Contains(i) {
+					if rs.GetNullAt(i) {
 						continue
 					}
 					v2, _ := p2.GetStrValue(i)
@@ -2430,14 +2429,14 @@ func opBinaryStrStrToFixedWithErrorCheck[Tr types.FixedSizeTExceptStrType](
 	if c2 {
 		v2, null2 := p2.GetStrValue(0)
 		if null2 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.AddNullRange(0, uint64(length))
 		} else {
 			y := functionUtil.QuickBytesToStr(v2)
 			if p1.WithAnyNullValue() || rsAnyNull {
-				nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
+				rs.AddNulls(parameters[0].GetNulls())
 				rowCount := uint64(length)
 				for i := uint64(0); i < rowCount; i++ {
-					if rsNull.Contains(i) {
+					if rs.GetNullAt(i) {
 						continue
 					}
 					v1, _ := p1.GetStrValue(i)
@@ -2462,11 +2461,11 @@ func opBinaryStrStrToFixedWithErrorCheck[Tr types.FixedSizeTExceptStrType](
 
 	// basic case.
 	if p1.WithAnyNullValue() || p2.WithAnyNullValue() || rsAnyNull {
-		nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
-		nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
+		rs.AddNulls(parameters[0].GetNulls())
+		rs.AddNulls(parameters[1].GetNulls())
 		rowCount := uint64(length)
 		for i := uint64(0); i < rowCount; i++ {
-			if rsNull.Contains(i) {
+			if rs.GetNullAt(i) {
 				continue
 			}
 			v1, _ := p1.GetStrValue(i)
