@@ -16,6 +16,7 @@ package hashbuild
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"runtime"
 	"sync/atomic"
 
@@ -225,6 +226,7 @@ func (ctr *container) buildHashmap(ap *Argument, proc *process.Process) error {
 	if ap.HashOnPK {
 		// if hash on primary key, prealloc hashmap size to the count of batch
 		if ctr.keyWidth <= 8 {
+			logutil.Infof("prealloc batch size %v", ctr.inputBatchRowCount)
 			err = ctr.intHashMap.PreAlloc(uint64(ctr.inputBatchRowCount), proc.Mp())
 		} else {
 			err = ctr.strHashMap.PreAlloc(uint64(ctr.inputBatchRowCount), proc.Mp())
