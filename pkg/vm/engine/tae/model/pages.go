@@ -152,9 +152,9 @@ func (page *TransferHashPage) Pin() *common.PinnedItem[*TransferHashPage] {
 	}
 }
 
-func (page *TransferHashPage) Clear() {
+func (page *TransferHashPage) Clear(clearDisk bool) {
 	page.ClearTable()
-	if time.Now().After(page.bornTS.Add(page.params.DiskTTL)) {
+	if clearDisk {
 		page.ClearPersistTable()
 	}
 }

@@ -28,12 +28,13 @@ type PageT[T common.IRef] interface {
 	TTL() uint8 // 0 skip, 1 clear memory, 2 clear disk
 	ID() *common.ID
 	Length() int
-	Clear()
+	Clear(clearDisk bool)
 }
 
 type TransferTable[T PageT[T]] struct {
 	sync.RWMutex
-	pages map[common.ID]*common.PinnedItem[T]
+	pages        map[common.ID]*common.PinnedItem[T]
+	deletedPages []*common.PinnedItem[T]
 }
 
 func NewTransferTable[T PageT[T]]() *TransferTable[T] {
@@ -63,7 +64,6 @@ func (table *TransferTable[T]) Len() int {
 
 func (table *TransferTable[T]) prepareTTL() (mem, disk []*common.PinnedItem[T]) {
 	table.RLock()
-	defer table.RUnlock()
 	for _, page := range table.pages {
 		st := page.Item().TTL()
 		if st == 1 {
@@ -72,12 +72,19 @@ func (table *TransferTable[T]) prepareTTL() (mem, disk []*common.PinnedItem[T]) 
 			disk = append(disk, page)
 		}
 	}
+	for _, page := range table.deletedPages {
+		disk = append(disk, page)
+	}
+	table.RUnlock()
+	table.Lock()
+	defer table.Unlock()
+	table.deletedPages = make([]*common.PinnedItem[T], 0)
 	return
 }
 
 func (table *TransferTable[T]) executeTTL(mem, disk []*common.PinnedItem[T]) {
 	for _, page := range mem {
-		page.Val.Clear()
+		page.Val.Clear(false)
 	}
 
 	table.Lock()
@@ -86,7 +93,7 @@ func (table *TransferTable[T]) executeTTL(mem, disk []*common.PinnedItem[T]) {
 	}
 	table.Unlock()
 	for _, pinned := range disk {
-		pinned.Val.Clear()
+		pinned.Val.Clear(true)
 		pinned.Close()
 	}
 }
@@ -124,6 +131,7 @@ func (table *TransferTable[T]) DeletePage(id *common.ID) (deleted bool) {
 	if _, deleted = table.pages[*id]; !deleted {
 		return
 	}
+	table.deletedPages = append(table.deletedPages, table.pages[*id])
 	delete(table.pages, *id)
 
 	// to pass ut
