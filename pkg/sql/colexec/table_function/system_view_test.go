@@ -346,7 +346,7 @@ func Test_gettingInfo(t *testing.T) {
 			assert.Equal(t, bat.Attrs[1], "used")
 			assert.Equal(t, bat.Attrs[2], "hit_ratio")
 
-			assert.Equal(t, vector.MustStrCol(bat.GetVector(0))[0], "mock_cache")
+			assert.Equal(t, vector.InefficientMustStrCol(bat.GetVector(0))[0], "mock_cache")
 			assert.Equal(t, vector.MustFixedCol[uint64](bat.GetVector(1))[0], uint64(0))
 
 		})
@@ -399,7 +399,7 @@ func Test_gettingInfo(t *testing.T) {
 			assert.Equal(t, len(bat.Attrs), 1)
 			assert.Equal(t, bat.Attrs[0], "user_txn")
 
-			assert.Equal(t, vector.MustStrCol(bat.GetVector(0))[0], "true")
+			assert.Equal(t, vector.InefficientMustStrCol(bat.GetVector(0))[0], "true")
 		})
 	}
 
@@ -453,9 +453,9 @@ func Test_gettingInfo(t *testing.T) {
 			assert.Equal(t, bat.Attrs[1], "lock_key")
 			assert.Equal(t, bat.Attrs[2], "lock_mode")
 
-			assert.Equal(t, vector.MustStrCol(bat.GetVector(0))[0], "1000")
-			assert.Equal(t, vector.MustStrCol(bat.GetVector(1))[0], "range")
-			assert.Equal(t, vector.MustStrCol(bat.GetVector(2))[0], "Exclusive")
+			assert.Equal(t, vector.InefficientMustStrCol(bat.GetVector(0))[0], "1000")
+			assert.Equal(t, vector.InefficientMustStrCol(bat.GetVector(1))[0], "range")
+			assert.Equal(t, vector.InefficientMustStrCol(bat.GetVector(2))[0], "Exclusive")
 		})
 	}
 }
@@ -613,9 +613,9 @@ func Test_moConfigurationsCall(t *testing.T) {
 			assert.Equal(t, bat.Attrs[2], "default_value")
 
 			for i := 0; i < 4; i++ {
-				assert.Equal(t, vector.MustStrCol(bat.GetVector(0))[i], "xxxx")
-				assert.Equal(t, vector.MustStrCol(bat.GetVector(1))[i], "123")
-				assert.Equal(t, vector.MustStrCol(bat.GetVector(2))[i], "0")
+				assert.Equal(t, vector.InefficientMustStrCol(bat.GetVector(0))[i], "xxxx")
+				assert.Equal(t, vector.InefficientMustStrCol(bat.GetVector(1))[i], "123")
+				assert.Equal(t, vector.InefficientMustStrCol(bat.GetVector(2))[i], "0")
 			}
 		})
 	}

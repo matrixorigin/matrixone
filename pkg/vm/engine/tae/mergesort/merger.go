@@ -312,7 +312,7 @@ func mergeObjs(ctx context.Context, mergeHost MergeTaskHost, sortKeyPos int) err
 	var merger Merger
 	typ := mergeHost.GetSortKeyType()
 	if typ.IsVarlen() {
-		merger = newMerger(mergeHost, sort.GenericLess[string], sortKeyPos, vector.MustStrCol)
+		merger = newMerger(mergeHost, sort.GenericLess[string], sortKeyPos, vector.InefficientMustStrCol)
 	} else {
 		switch typ.Oid {
 		case types.T_bool:

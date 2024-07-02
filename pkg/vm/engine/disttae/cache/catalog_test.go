@@ -47,7 +47,7 @@ func TestGC(t *testing.T) {
 	})
 	{
 		timestamps := vector.MustFixedCol[types.TS](dbBat.GetVector(MO_TIMESTAMP_IDX))
-		names := vector.MustStrCol(dbBat.GetVector(catalog.MO_DATABASE_DAT_NAME_IDX + MO_OFF))
+		names := vector.InefficientMustStrCol(dbBat.GetVector(catalog.MO_DATABASE_DAT_NAME_IDX + MO_OFF))
 		accounts := vector.MustFixedCol[uint32](dbBat.GetVector(catalog.MO_DATABASE_ACCOUNT_ID_IDX + MO_OFF))
 		key := new(DatabaseItem)
 		for i, account := range accounts {
@@ -62,7 +62,7 @@ func TestGC(t *testing.T) {
 
 		timestamps := vector.MustFixedCol[types.TS](tblBat.GetVector(MO_TIMESTAMP_IDX))
 		accounts := vector.MustFixedCol[uint32](tblBat.GetVector(catalog.MO_TABLES_ACCOUNT_ID_IDX + MO_OFF))
-		names := vector.MustStrCol(tblBat.GetVector(catalog.MO_TABLES_REL_NAME_IDX + MO_OFF))
+		names := vector.InefficientMustStrCol(tblBat.GetVector(catalog.MO_TABLES_REL_NAME_IDX + MO_OFF))
 		databaseIds := vector.MustFixedCol[uint64](tblBat.GetVector(catalog.MO_TABLES_RELDATABASE_ID_IDX + MO_OFF))
 		key := new(TableItem)
 		for i, account := range accounts {
@@ -159,7 +159,7 @@ func TestDatabaseCache(t *testing.T) {
 	bat := newTestDatabaseBatch(mp)
 	cc.InsertDatabase(bat)
 	timestamps := vector.MustFixedCol[types.TS](bat.GetVector(MO_TIMESTAMP_IDX))
-	names := vector.MustStrCol(bat.GetVector(catalog.MO_DATABASE_DAT_NAME_IDX + MO_OFF))
+	names := vector.InefficientMustStrCol(bat.GetVector(catalog.MO_DATABASE_DAT_NAME_IDX + MO_OFF))
 	accounts := vector.MustFixedCol[uint32](bat.GetVector(catalog.MO_DATABASE_ACCOUNT_ID_IDX + MO_OFF))
 	key := new(DatabaseItem)
 	// test get
@@ -197,7 +197,7 @@ func TestTableInsert(t *testing.T) {
 	cc.InsertColumns(colBat)
 	timestamps := vector.MustFixedCol[types.TS](bat.GetVector(MO_TIMESTAMP_IDX))
 	accounts := vector.MustFixedCol[uint32](bat.GetVector(catalog.MO_TABLES_ACCOUNT_ID_IDX + MO_OFF))
-	names := vector.MustStrCol(bat.GetVector(catalog.MO_TABLES_REL_NAME_IDX + MO_OFF))
+	names := vector.InefficientMustStrCol(bat.GetVector(catalog.MO_TABLES_REL_NAME_IDX + MO_OFF))
 	databaseIds := vector.MustFixedCol[uint64](bat.GetVector(catalog.MO_TABLES_RELDATABASE_ID_IDX + MO_OFF))
 	key := new(TableItem)
 	// test get
@@ -253,7 +253,7 @@ func newTestColumnBatch(t *testing.T, ibat *batch.Batch, mp *mpool.MPool) *batch
 	typs = append(typs, catalog.MoColumnsTypes...)
 	timestamps := vector.MustFixedCol[types.TS](ibat.GetVector(MO_TIMESTAMP_IDX))
 	accounts := vector.MustFixedCol[uint32](ibat.GetVector(catalog.MO_TABLES_ACCOUNT_ID_IDX + MO_OFF))
-	names := vector.MustBytesCol(ibat.GetVector(catalog.MO_TABLES_REL_NAME_IDX + MO_OFF))
+	names := vector.InefficientMustBytesCol(ibat.GetVector(catalog.MO_TABLES_REL_NAME_IDX + MO_OFF))
 	ids := vector.MustFixedCol[uint64](ibat.GetVector(catalog.MO_TABLES_REL_ID_IDX + MO_OFF))
 	databaseIds := vector.MustFixedCol[uint64](ibat.GetVector(catalog.MO_TABLES_RELDATABASE_ID_IDX + MO_OFF))
 	bat := batch.NewWithSize(len(typs))

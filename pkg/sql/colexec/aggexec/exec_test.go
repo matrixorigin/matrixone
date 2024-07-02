@@ -349,7 +349,7 @@ func TestGroupConcatExec(t *testing.T) {
 		{
 			require.NotNil(t, v)
 			require.Equal(t, 1, v.Length())
-			bs := vector.MustStrCol(v)
+			bs := vector.InefficientMustStrCol(v)
 			require.Equal(t, 1, len(bs))
 			require.Equal(t, "ad,bc,cb,da", bs[0])
 		}

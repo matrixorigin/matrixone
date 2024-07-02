@@ -439,9 +439,9 @@ func TestShrink(t *testing.T) {
 		err := AppendBytesList(v, [][]byte{[]byte("1"), []byte("2"), []byte("3"), []byte("4")}, nil, mp)
 		require.NoError(t, err)
 		v.Shrink([]int64{1, 2}, false)
-		vs := MustStrCol(v)
+		vs := InefficientMustStrCol(v)
 		require.Equal(t, []string{"2", "3"}, vs)
-		require.Equal(t, [][]byte{[]byte("2"), []byte("3")}, MustBytesCol(v))
+		require.Equal(t, [][]byte{[]byte("2"), []byte("3")}, InefficientMustBytesCol(v))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -706,9 +706,9 @@ func TestShuffle(t *testing.T) {
 		err := AppendBytesList(v, [][]byte{[]byte("1"), []byte("2"), []byte("3"), []byte("4")}, nil, mp)
 		require.NoError(t, err)
 		v.Shuffle([]int64{1, 2}, mp)
-		vs := MustStrCol(v)
+		vs := InefficientMustStrCol(v)
 		require.Equal(t, []string{"2", "3"}, vs)
-		require.Equal(t, [][]byte{[]byte("2"), []byte("3")}, MustBytesCol(v))
+		require.Equal(t, [][]byte{[]byte("2"), []byte("3")}, InefficientMustBytesCol(v))
 		require.Equal(t, "[2 3]", v.String())
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -906,7 +906,7 @@ func TestCopy(t *testing.T) {
 		}, nil, mp)
 		err := v.Copy(w, 2, 0, mp)
 		require.NoError(t, err)
-		require.Equal(t, MustStrCol(v), MustStrCol(w))
+		require.Equal(t, InefficientMustStrCol(v), InefficientMustStrCol(w))
 		v.Free(mp)
 		w.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -1341,11 +1341,11 @@ func TestStrMarshalAndUnMarshal(t *testing.T) {
 	w := new(Vector)
 	err = w.UnmarshalBinary(data)
 	require.NoError(t, err)
-	require.Equal(t, MustStrCol(v), MustStrCol(w))
+	require.Equal(t, InefficientMustStrCol(v), InefficientMustStrCol(w))
 	w = new(Vector)
 	err = w.UnmarshalBinaryWithCopy(data, mp)
 	require.NoError(t, err)
-	require.Equal(t, MustStrCol(v), MustStrCol(w))
+	require.Equal(t, InefficientMustStrCol(v), InefficientMustStrCol(w))
 	v.Free(mp)
 	w.Free(mp)
 	require.Equal(t, int64(0), mp.CurrNB())
@@ -1705,7 +1705,7 @@ func TestSetFunction(t *testing.T) {
 		sf := GetConstSetFunction(types.T_text.ToType(), mp)
 		err = sf(w, v, 1, 1)
 		require.NoError(t, err)
-		ws := MustStrCol(w)
+		ws := InefficientMustStrCol(w)
 		require.Equal(t, []string{"2"}, ws)
 		v.Free(mp)
 		w.Free(mp)
@@ -1800,7 +1800,7 @@ func TestSetFunction2(t *testing.T) {
 		{
 			err = sf(w, v, 0, 1)
 			require.NoError(t, err)
-			ws := MustBytesCol(w)
+			ws := InefficientMustBytesCol(w)
 			require.Equal(t, "a", string(ws[0]))
 		}
 		// set to const null
@@ -1813,7 +1813,7 @@ func TestSetFunction2(t *testing.T) {
 		{
 			err = sf(w, v, 1, 1)
 			require.NoError(t, err)
-			ws := MustBytesCol(w)
+			ws := InefficientMustBytesCol(w)
 			require.Equal(t, "abcdefabcdefabcdefabcdef12345", string(ws[0]))
 		}
 		// set to const null
