@@ -1,0 +1,22 @@
+drop table if exists dual;
+create table dual;
+create table dual(a int);
+insert into dual values (1);
+select * from dual;
+select * from `dual`;
+select * from dual.dual;
+select * from dual.`dual`;
+drop table if exists dual;
+
+drop database if exists `testdual`;
+create database `testdual`;
+use `testdual`;
+create table dual;
+create table dual(a int);
+insert into dual values (1);
+select * from dual;
+select * from `dual`;
+select * from `testdual`.dual;
+select * from `testdual`.`dual`;
+drop table if exists dual;
+drop database if exists `testdual`;
