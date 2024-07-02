@@ -2120,49 +2120,25 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	if err != nil {
 		return
 	}
+	var payload []byte
+	var skipWrite bool
+	skipWrite = false
+
 	start := time.Now()
-	payload, err := mysqlRrWr.Read()
-	if err != nil {
-		if errors.Is(err, errorInvalidLength0) {
-			return nil
-		}
-		if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
-			err = moerr.NewInvalidInput(execCtx.reqCtx, "cannot read '%s' from client,please check the file path, user privilege and if client start with --local-infile", param.Filepath)
-		}
-		return
-	}
-
-	//empty packet means the file is over.
-	length := len(payload)
-	if length == 0 {
-		return
-	}
-	ses.CountPayload(len(payload))
-
-	skipWrite := false
-	// If inner error occurs(unexpected or expected(ctrl-c)), proc.LoadLocalReader will be closed.
-	// Then write will return error, but we need to read the rest of the data and not write it to pipe.
-	// So we need a flag[skipWrite] to tell us whether we need to write the data to pipe.
-	// https://github.com/matrixorigin/matrixone/issues/6665#issuecomment-1422236478
-
-	_, err = writer.Write(payload)
-	if err != nil {
-		skipWrite = true // next, we just need read the rest of the data,no need to write it to pipe.
-		ses.Errorf(execCtx.reqCtx,
-			"Failed to load local file",
-			zap.String("path", param.Filepath),
-			zap.Error(err))
-	}
-
 	epoch, printEvery, minReadTime, maxReadTime, minWriteTime, maxWriteTime := uint64(0), uint64(1024*60), 24*time.Hour, time.Nanosecond, 24*time.Hour, time.Nanosecond
-	for {
+
+	readThenWrite := func() error {
+		defer mysqlRrWr.Free(payload)
 		readStart := time.Now()
 		payload, err = mysqlRrWr.Read()
 		if err != nil {
-			if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
-				err = nil
+			if errors.Is(err, errorInvalidLength0) {
+				return nil
 			}
-			break
+			if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
+				err = moerr.NewInvalidInput(execCtx.reqCtx, "cannot read '%s' from client,please check the file path, user privilege and if client start with --local-infile", param.Filepath)
+			}
+			return err
 		}
 		readTime := time.Since(readStart)
 		if readTime > maxReadTime {
@@ -2171,12 +2147,18 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 		if readTime < minReadTime {
 			minReadTime = readTime
 		}
-		if len(payload) == 0 {
-			break
+
+		//empty packet means the file is over.
+		length := len(payload)
+		if length == 0 {
+			return errorInvalidLength0
 		}
-		//seq = uint8(packet.SequenceID + 1)
-		//mysqlRrWr.SetU8(SEQUENCEID, seq)
 		ses.CountPayload(len(payload))
+
+		// If inner error occurs(unexpected or expected(ctrl-c)), proc.LoadLocalReader will be closed.
+		// Then write will return error, but we need to read the rest of the data and not write it to pipe.
+		// So we need a flag[skipWrite] to tell us whether we need to write the data to pipe.
+		// https://github.com/matrixorigin/matrixone/issues/6665#issuecomment-1422236478
 
 		writeStart := time.Now()
 		if !skipWrite {
@@ -2197,6 +2179,28 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 				minWriteTime = writeTime
 			}
 		}
+		return err
+	}
+
+	err = readThenWrite()
+	if err != nil {
+		if errors.Is(err, errorInvalidLength0) {
+			return nil
+		}
+		return err
+	}
+
+	for {
+		err = readThenWrite()
+
+		if err != nil {
+			if errors.Is(err, errorInvalidLength0) {
+				err = nil
+				break
+			}
+			return err
+		}
+
 		if epoch%printEvery == 0 {
 			if execCtx.isIssue3482 {
 				ses.Infof(execCtx.reqCtx, "load local '%s', epoch: %d, skipWrite: %v, minReadTime: %s, maxReadTime: %s, minWriteTime: %s, maxWriteTime: %s,\n", param.Filepath, epoch, skipWrite, minReadTime.String(), maxReadTime.String(), minWriteTime.String(), maxWriteTime.String())
@@ -2205,6 +2209,7 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 		}
 		epoch += 1
 	}
+
 	if execCtx.isIssue3482 {
 		ses.Infof(execCtx.reqCtx, "load local '%s', read&write all data from client cost: %s\n", param.Filepath, time.Since(start))
 	}

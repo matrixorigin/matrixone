@@ -495,6 +495,10 @@ func (mp *MysqlProtocolImpl) Read() ([]byte, error) {
 	return mp.tcpConn.Read()
 }
 
+func (mp *MysqlProtocolImpl) Free(buf []byte) {
+	mp.tcpConn.allocator.Free(buf)
+}
+
 func (mp *MysqlProtocolImpl) GetSession() *Session {
 	mp.m.Lock()
 	defer mp.m.Unlock()

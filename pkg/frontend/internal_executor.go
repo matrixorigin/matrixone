@@ -358,6 +358,11 @@ func (ip *internalProtocol) Read() ([]byte, error) {
 	panic("implement me")
 }
 
+func (ip *internalProtocol) Free(buf []byte) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (ip *internalProtocol) UpdateCtx(ctx context.Context) {
 
 }

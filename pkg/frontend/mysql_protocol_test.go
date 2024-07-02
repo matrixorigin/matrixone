@@ -2977,6 +2977,10 @@ func (fp *testMysqlWriter) Read() ([]byte, error) {
 	return fp.ioses.Read()
 }
 
+func (fp *testMysqlWriter) Free(buf []byte) {
+	fp.ioses.allocator.Free(buf)
+}
+
 func (fp *testMysqlWriter) UpdateCtx(ctx context.Context) {
 
 }
