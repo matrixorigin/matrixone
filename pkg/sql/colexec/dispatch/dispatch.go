@@ -202,7 +202,7 @@ func (arg *Argument) waitRemoteRegsReady(proc *process.Process) (bool, error) {
 func (arg *Argument) prepareRemote(proc *process.Process) error {
 	arg.ctr.prepared = false
 	arg.ctr.isRemote = true
-	arg.ctr.remoteReceivers = make([]process.WrapCs, 0, arg.ctr.remoteRegsCnt)
+	arg.ctr.remoteReceivers = make([]*process.WrapCs, 0, arg.ctr.remoteRegsCnt)
 	arg.ctr.remoteToIdx = make(map[uuid.UUID]int)
 	for i, rr := range arg.RemoteRegs {
 		if arg.FuncId == ShuffleToAllFunc {
