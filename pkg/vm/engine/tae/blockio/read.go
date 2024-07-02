@@ -17,7 +17,6 @@ package blockio
 import (
 	"context"
 	"math"
-	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -31,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"go.uber.org/zap"
 )
 
@@ -675,21 +675,13 @@ func FindIntervalForBlock(rowids []types.Rowid, id *types.Blockid) (start int, e
 	return
 }
 
-type BlockReadImpl struct{}
-
-var (
-	instance *BlockReadImpl
-	once     sync.Once
-)
-
-func (blk *BlockReadImpl) LoadTableByBlock(loc objectio.Location, fs fileservice.FileService) (bat *batch.Batch, release func(), err error) {
-	bat, release, err = LoadTombstoneColumns(context.Background(), []uint16{0}, nil, fs, loc, nil)
-	return bat, release, err
+func init() {
+	model.RD = BlockReadImpl{}
 }
 
-func NewBlockRead() *BlockReadImpl {
-	once.Do(func() {
-		instance = &BlockReadImpl{}
-	})
-	return instance
+type BlockReadImpl struct{}
+
+func (blk BlockReadImpl) LoadTableByBlock(loc objectio.Location, fs fileservice.FileService) (bat *batch.Batch, release func(), err error) {
+	bat, release, err = LoadTombstoneColumns(context.Background(), []uint16{0}, nil, fs, loc, nil)
+	return bat, release, err
 }

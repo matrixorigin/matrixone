@@ -18,18 +18,18 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/gogo/protobuf/proto"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
@@ -43,15 +43,8 @@ type BlockRead interface {
 var (
 	RD     BlockRead
 	FS     fileservice.FileService
-	rdOnce sync.Once
 	fsOnce sync.Once
 )
-
-func SetBlockRead(rd BlockRead) {
-	rdOnce.Do(func() {
-		RD = rd
-	})
-}
 
 func SetFileService(fs fileservice.FileService) {
 	fsOnce.Do(func() {
