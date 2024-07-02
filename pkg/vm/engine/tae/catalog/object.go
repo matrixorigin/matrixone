@@ -124,27 +124,30 @@ func (entry *ObjectEntry) Clone() *ObjectEntry {
 	return obj
 }
 func (entry *ObjectEntry) GetDropEntry(txn txnif.TxnReader) (dropped *ObjectEntry, isNewNode bool) {
-	if entry.Txn != nil && txn.GetID() == entry.Txn.GetID() {
-		dropped.ObjectState = ObjectState_Delete_Active
-		dropped.DeletedAt = txnif.UncommitTS
-		return
-	}
-	isNewNode = true
 	dropped = entry.Clone()
 	dropped.ObjectState = ObjectState_Delete_Active
 	dropped.DeletedAt = txnif.UncommitTS
+	if entry.Txn != nil && txn.GetID() == entry.Txn.GetID() {
+		return
+	}
+	isNewNode = true
 	dropped.Txn = txn
 	return
 }
 func (entry *ObjectEntry) GetUpdateEntry(txn txnif.TxnReader, stats *objectio.ObjectStats) (dropped *ObjectEntry, isNewNode bool) {
+	dropped = entry.Clone()
+	dropped.ObjectStats = *stats
 	if entry.Txn != nil && txn.GetID() == entry.Txn.GetID() {
-		dropped.ObjectStats = *stats
 		return
 	}
 	isNewNode = true
-	dropped = entry.Clone()
-	dropped.ObjectStats = *stats
 	dropped.Txn = txn
+	return
+}
+
+func (entry *ObjectEntry) GetSortedEntry() (sorted *ObjectEntry) {
+	sorted = entry.Clone()
+	sorted.sorted = true
 	return
 }
 func (entry *ObjectEntry) DeleteBefore(ts types.TS) bool {
@@ -163,13 +166,16 @@ func (entry *ObjectEntry) ApplyCommit(tid string) error {
 	if lastNode == nil {
 		panic("logic error")
 	}
+	if lastNode.ID != entry.ID {
+		panic("logic error")
+	}
 	var newNode *ObjectEntry
 	switch lastNode.ObjectState {
 	case ObjectState_Create_PrepareCommit:
-		newNode := entry.Clone()
+		newNode = entry.Clone()
 		newNode.ObjectState = ObjectState_Create_ApplyCommit
 	case ObjectState_Delete_PrepareCommit:
-		newNode := entry.Clone()
+		newNode = entry.Clone()
 		newNode.ObjectState = ObjectState_Create_ApplyCommit
 	default:
 		panic(fmt.Sprintf("invalid object state %v", lastNode.ObjectState))
@@ -197,11 +203,11 @@ func (entry *ObjectEntry) PrepareCommit() error {
 	var newNode *ObjectEntry
 	switch lastNode.ObjectState {
 	case ObjectState_Create_Active:
-		newNode := entry.Clone()
+		newNode = entry.Clone()
 		newNode.ObjectState = ObjectState_Create_PrepareCommit
 	case ObjectState_Delete_Active:
-		newNode := entry.Clone()
-		newNode.ObjectState = ObjectState_Create_PrepareCommit
+		newNode = entry.Clone()
+		newNode.ObjectState = ObjectState_Delete_PrepareCommit
 	default:
 		panic(fmt.Sprintf("invalid object state %v", lastNode.ObjectState))
 	}
@@ -444,14 +450,14 @@ func (entry *ObjectEntry) LoadObjectInfoForLastNode() (stats objectio.ObjectStat
 }
 
 func (entry *ObjectEntry) Less(b *ObjectEntry) bool {
-	cmp := bytes.Compare(entry.ID[:], entry.ID[:])
+	cmp := bytes.Compare(entry.ID[:], b.ID[:])
 	if cmp < 0 {
 		return true
 	}
 	if cmp > 0 {
 		return false
 	}
-	return entry.ObjectState < entry.ObjectState
+	return entry.ObjectState < b.ObjectState
 }
 
 func (entry *ObjectEntry) UpdateObjectInfo(txn txnif.TxnReader, stats *objectio.ObjectStats) (isNewNode bool, err error) {
@@ -538,7 +544,7 @@ func (entry *ObjectEntry) IsAppendable() bool {
 }
 
 func (entry *ObjectEntry) SetSorted() {
-	panic("todo: set when create")
+	entry.list.SetSorted(&entry.ID)
 }
 
 func (entry *ObjectEntry) IsSorted() bool {

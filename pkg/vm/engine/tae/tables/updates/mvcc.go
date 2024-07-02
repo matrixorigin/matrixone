@@ -285,12 +285,12 @@ func (n *AppendMVCCHandle) GetMeta() *catalog.ObjectEntry {
 
 // check if all appendnodes are committed.
 func (n *AppendMVCCHandle) allAppendsCommittedLocked() bool {
-	panic("todo")
 	if n.appends == nil {
+		meta := n.GetMeta()
 		logutil.Warnf("[MetadataCheck] appends mvcc is nil, obj %v, has dropped %v, deleted at %v",
-			n.GetMeta().ID.String(),
-			n.GetMeta().HasDropCommitted(),
-			n.GetMeta().GetDeleteAt().ToString())
+			meta.ID.String(),
+			meta.HasDropCommitted(),
+			meta.GetDeleteAt().ToString())
 		return false
 	}
 	return n.appends.IsCommitted()

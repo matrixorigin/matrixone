@@ -39,9 +39,13 @@ type ObjectList struct {
 }
 
 func NewObjectList() *ObjectList {
+	opts := btree.Options{
+		Degree:  64,
+		NoLocks: true,
+	}
 	return &ObjectList{
 		RWMutex: &sync.RWMutex{},
-		BTreeG:  btree.NewBTreeG((*ObjectEntry).Less),
+		BTreeG:  btree.NewBTreeGOptions((*ObjectEntry).Less, opts),
 	}
 }
 
@@ -85,6 +89,10 @@ func (l *ObjectList) GetAllNodes(objID *objectio.ObjectId) []*ObjectEntry {
 	if !ok {
 		return nil
 	}
+	obj := it.Item()
+	if obj.ID != *objID {
+		return nil
+	}
 	ret := []*ObjectEntry{it.Item()}
 	for it.Next() {
 		obj := it.Item()
@@ -123,9 +131,7 @@ func (l *ObjectList) DropObjectByID(id *objectio.ObjectId, txn txnif.TxnReader) 
 		return nil, false, err
 	}
 	droppedObj, isNew = obj.GetDropEntry(txn)
-	if isNew {
-		l.Insert(droppedObj)
-	}
+	l.Set(droppedObj)
 	return
 }
 
@@ -145,8 +151,19 @@ func (l *ObjectList) UpdateObjectInfo(id *objectio.ObjectId, txn txnif.TxnReader
 		return false, err
 	}
 	newObj, isNew := obj.GetUpdateEntry(txn, stats)
-	if isNew {
-		l.Insert(newObj)
+	l.Set(newObj)
+	return
+}
+
+func (l *ObjectList) SetSorted(id *objectio.ObjectId) {
+	l.Lock()
+	defer l.Unlock()
+	objs := l.GetAllNodes(id)
+	if len(objs) == 0 {
+		panic("logic error")
 	}
+	obj := objs[len(objs)-1]
+	newObj := obj.GetSortedEntry()
+	l.Set(newObj)
 	return
 }

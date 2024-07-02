@@ -782,7 +782,7 @@ func (blk *baseObject) RangeDelete(
 	return
 }
 func (blk *baseObject) GetObjMeta() *catalog.ObjectEntry {
-	panic("todo")
+	return blk.meta.GetLatestNode()
 }
 func (blk *baseObject) TryDeleteByDeltaloc(
 	txn txnif.AsyncTxn,
