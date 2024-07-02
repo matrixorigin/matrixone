@@ -138,4 +138,10 @@ type Handler interface {
 		req *db.InterceptCommit,
 		resp *apipb.SyncLogTailResp,
 	) (func(), error)
+	HandleDiskCleaner(
+		ctx context.Context,
+		meta txn.TxnMeta,
+		req *db.DiskCleaner,
+		resp *apipb.SyncLogTailResp,
+	) (cb func(), err error)
 }

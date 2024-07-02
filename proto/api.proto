@@ -41,6 +41,7 @@ enum OpCode {
     OpGlobalCheckpoint = 2009;
     OpInterceptCommit  = 2010;
     OpCommitMerge      = 2011;
+    OpDiskDiskCleaner   = 2012;
 }
 
 // TNPingRequest ping request
