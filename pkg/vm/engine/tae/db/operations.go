@@ -59,6 +59,20 @@ func (m *FlushTable) UnmarshalBinary(data []byte) error {
 	return m.Unmarshal(data)
 }
 
+type DiskCleaner struct {
+	Op    string
+	Key   string
+	Value string
+}
+
+func (m *DiskCleaner) MarshalBinary() ([]byte, error) {
+	return m.Marshal()
+}
+
+func (m *DiskCleaner) UnmarshalBinary(data []byte) error {
+	return m.Unmarshal(data)
+}
+
 type Checkpoint struct {
 	FlushDuration time.Duration
 }
