@@ -194,8 +194,8 @@ func (s *MergeTaskBuilder) onTable(tableEntry *catalog.TableEntry) (err error) {
 	rate := float64(deltaLocRows) / float64(tblRows)
 	if !math.IsNaN(rate) {
 		logutil.Infof(
-			"[DeltaLoc Merge] tbl: %s, rows: %d, deltaLoc: %d, deltaLocRows: %d, rate: %f",
-			s.name, tblRows, distinctDeltaLocs, deltaLocRows, rate)
+			"[DeltaLoc Merge] tblId: %s(%d), rows: %d, deltaLoc: %d, deltaLocRows: %d, rate: %f",
+			s.name, s.tid, tblRows, distinctDeltaLocs, deltaLocRows, rate)
 	}
 	return
 }
@@ -208,7 +208,8 @@ func (s *MergeTaskBuilder) onPostTable(tableEntry *catalog.TableEntry) (err erro
 	}
 	// delObjs := s.ObjectHelper.finish()
 
-	mobjs, kind := s.objPolicy.Revise(s.executor.CPUPercent(), int64(s.executor.MemAvailBytes()), true)
+	mobjs, kind := s.objPolicy.Revise(s.executor.CPUPercent(), int64(s.executor.MemAvailBytes()),
+		merge.DeltaLocMerge.Load())
 	if len(mobjs) > 1 {
 		s.executor.ExecuteFor(tableEntry, mobjs, kind)
 	}
@@ -227,12 +228,12 @@ func (s *MergeTaskBuilder) onObject(objectEntry *catalog.ObjectEntry) (err error
 	// Rows will check objectStat, and if not loaded, it will load it.
 	remainingRows := objectEntry.GetRemainingRows()
 	deltaLocRows := s.objDeltaLocRowCnt[objectEntry]
-	if deltaLocRows > uint32(remainingRows) {
+	if merge.DeltaLocMerge.Load() && deltaLocRows > uint32(remainingRows) {
 		deltaLocCnt := s.objDeltaLocCnt[objectEntry]
 		rate := float64(deltaLocRows) / float64(remainingRows)
 		logutil.Infof(
-			"[DeltaLoc Merge] tbl: %s, obj: %s, deltaLoc: %d, rows: %d, deltaLocRows: %d, rate: %f",
-			s.name, objectEntry.String(), deltaLocCnt, remainingRows, deltaLocRows, rate)
+			"[DeltaLoc Merge] tblId: %s(%d), obj: %s, deltaLoc: %d, rows: %d, deltaLocRows: %d, rate: %f",
+			s.name, s.tid, objectEntry.ID.String(), deltaLocCnt, remainingRows, deltaLocRows, rate)
 		s.objPolicy.OnObject(objectEntry, true)
 	} else {
 		s.objPolicy.OnObject(objectEntry, false)
