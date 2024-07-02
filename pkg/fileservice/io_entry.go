@@ -44,12 +44,15 @@ func (i *IOEntry) setCachedData(ctx context.Context) error {
 		i.allocator = GetDefaultCacheDataAllocator()
 	}
 	LogEvent(ctx, "ToCacheData begin")
-	bs, err := i.ToCacheData(bytes.NewReader(i.Data), i.Data, i.allocator)
+	cacheData, err := i.ToCacheData(bytes.NewReader(i.Data), i.Data, i.allocator)
 	LogEvent(ctx, "ToCacheData end")
 	if err != nil {
 		return err
 	}
-	i.CachedData = bs
+	if cacheData == nil {
+		panic("ToCacheData returns nil cache data")
+	}
+	i.CachedData = cacheData
 	return nil
 }
 

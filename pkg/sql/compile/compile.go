@@ -104,24 +104,13 @@ var (
 )
 
 // NewCompile is used to new an object of compile
-func NewCompile(
-	addr, db, sql, tenant, uid string,
-	ctx context.Context,
-	e engine.Engine,
-	proc *process.Process,
-	stmt tree.Statement,
-	isInternal bool,
-	cnLabel map[string]string,
-	startAt time.Time,
-) *Compile {
-	c := reuse.Alloc[Compile](nil)
+func NewCompile(addr, db, sql, tenant, uid string, e engine.Engine, proc *process.Process, stmt tree.Statement, isInternal bool, cnLabel map[string]string, startAt time.Time) *Compile {
+	c := GetCompileService().getCompile(proc)
 	c.e = e
 	c.db = db
-	c.ctx = ctx
 	c.tenant = tenant
 	c.uid = uid
 	c.sql = sql
-	c.proc = proc
 	c.proc.MessageBoard = c.MessageBoard
 	c.stmt = stmt
 	c.addr = addr
@@ -145,7 +134,7 @@ func (c *Compile) Release() {
 	if c == nil {
 		return
 	}
-	reuse.Free[Compile](c, nil)
+	_, _ = GetCompileService().putCompile(c)
 }
 
 func (c Compile) TypeName() string {
@@ -582,7 +571,7 @@ func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 	// improved to refresh expression in the future.
 
 	var e error
-	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.proc.Ctx, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
+	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
 	defer func() {
 		if e != nil {
 			runC.Release()
@@ -2337,7 +2326,7 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	var filterExpr *plan.Expr
 	if len(n.FilterList) > 0 {
 		filterExpr = colexec.RewriteFilterExprList(n.FilterList)
-		filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(filterExpr), c.proc, true)
+		filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(filterExpr), c.proc, true, true)
 		if err != nil {
 			return err
 		}

@@ -260,7 +260,7 @@ func TestLockWithBindIsStale(t *testing.T) {
 
 			checkBind(
 				t,
-				pb.LockTable{ServiceID: l1.serviceID, Version: 2, Table: table, OriginTable: table, Valid: true},
+				pb.LockTable{ServiceID: l1.serviceID, Version: alloc.version + 1, Table: table, OriginTable: table, Valid: true},
 				l2)
 		},
 	)
@@ -281,7 +281,7 @@ func TestUnlockWithBindIsStable(t *testing.T) {
 
 			checkBind(
 				t,
-				pb.LockTable{ServiceID: l1.serviceID, Version: 2, Table: table, OriginTable: table, Valid: true},
+				pb.LockTable{ServiceID: l1.serviceID, Version: alloc.version + 1, Table: table, OriginTable: table, Valid: true},
 				l2)
 		},
 	)
@@ -304,7 +304,7 @@ func TestGetLockWithBindIsStable(t *testing.T) {
 
 			checkBind(
 				t,
-				pb.LockTable{ServiceID: l1.serviceID, Version: 2, Table: table, OriginTable: table, Valid: true},
+				pb.LockTable{ServiceID: l1.serviceID, Version: alloc.version + 1, Table: table, OriginTable: table, Valid: true},
 				l2)
 		},
 	)
@@ -403,7 +403,7 @@ func TestLockWithBindNotFound(t *testing.T) {
 			table uint64) {
 
 			// change l2's bind to s3, no bind in s3
-			l2.handleBindChanged(pb.LockTable{Table: table, ServiceID: "s3", Valid: true, Version: 1})
+			l2.handleBindChanged(pb.LockTable{Table: table, ServiceID: "s3", Valid: true, Version: alloc.version + 1})
 
 			txnID2 := []byte("txn2")
 			_, err := l2.Lock(ctx, table, [][]byte{{3}}, txnID2, pb.LockOptions{
@@ -415,7 +415,7 @@ func TestLockWithBindNotFound(t *testing.T) {
 
 			checkBind(
 				t,
-				pb.LockTable{ServiceID: l1.serviceID, Version: 1, Table: table, OriginTable: table, Valid: true},
+				pb.LockTable{ServiceID: l1.serviceID, Version: alloc.version, Table: table, OriginTable: table, Valid: true},
 				l2)
 		},
 	)
@@ -432,14 +432,14 @@ func TestUnlockWithBindNotFound(t *testing.T) {
 			table uint64) {
 
 			// change l2's bind to s3, no bind in s3
-			l2.handleBindChanged(pb.LockTable{Table: table, ServiceID: "s3", Valid: true, Version: 1})
+			l2.handleBindChanged(pb.LockTable{Table: table, ServiceID: "s3", Valid: true, Version: alloc.version})
 
 			txnID2 := []byte("txn2")
 			l2.Unlock(ctx, txnID2, timestamp.Timestamp{})
 
 			checkBind(
 				t,
-				pb.LockTable{ServiceID: l1.serviceID, Version: 1, Table: table, OriginTable: table, Valid: true},
+				pb.LockTable{ServiceID: l1.serviceID, Version: alloc.version, Table: table, OriginTable: table, Valid: true},
 				l2)
 		},
 	)
@@ -456,7 +456,7 @@ func TestGetLockWithBindNotFound(t *testing.T) {
 			table uint64) {
 
 			// change l2's bind to s3, no bind in s3
-			l2.handleBindChanged(pb.LockTable{Table: table, ServiceID: "s3", Valid: true, Version: 1})
+			l2.handleBindChanged(pb.LockTable{Table: table, ServiceID: "s3", Valid: true, Version: alloc.version})
 
 			txnID2 := []byte("txn2")
 			lt, err := l2.getLockTable(0, table)
@@ -465,7 +465,7 @@ func TestGetLockWithBindNotFound(t *testing.T) {
 
 			checkBind(
 				t,
-				pb.LockTable{ServiceID: l1.serviceID, Version: 1, Table: table, OriginTable: table, Valid: true},
+				pb.LockTable{ServiceID: l1.serviceID, Version: alloc.version, Table: table, OriginTable: table, Valid: true},
 				l2)
 		},
 	)
