@@ -217,7 +217,7 @@ func (page *TransferHashPage) ClearTable() {
 	atomic.StoreInt32(&page.isPersisted, 1)
 	v2.TaskMergeTransferPageSizeGauge.Sub(float64(page.Length()))
 	page.latch.Lock()
-	clear(page.hashmap.M)
+	page.hashmap.M = make(map[uint32][]byte)
 	page.latch.Unlock()
 }
 
