@@ -23,6 +23,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/davecgh/go-spew/spew"
 	"go.uber.org/zap"
 
 	"github.com/docker/go-units"
@@ -56,6 +57,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -152,7 +154,7 @@ func (tbl *txnTable) Rows(ctx context.Context) (uint64, error) {
 		tbl.db.databaseId,
 		tbl.tableId,
 		tbl.getTxn().GetSnapshotWriteOffset(),
-		func(entry Entry) {
+		func(entry Entry) (err error) {
 			if entry.typ == INSERT || entry.typ == INSERT_TXN {
 				rows = rows + uint64(entry.bat.RowCount())
 			} else {
@@ -175,6 +177,7 @@ func (tbl *txnTable) Rows(ctx context.Context) (uint64, error) {
 					}
 				}
 			}
+			return
 		})
 
 	ts := types.TimestampToTS(tbl.db.op.SnapshotTS())
@@ -230,7 +233,7 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 		tbl.db.databaseId,
 		tbl.tableId,
 		tbl.getTxn().GetSnapshotWriteOffset(),
-		func(entry Entry) {
+		func(entry Entry) (err error) {
 			if entry.typ == INSERT || entry.typ == INSERT_TXN {
 				for i, s := range entry.bat.Attrs {
 					if _, ok := neededCols[s]; ok {
@@ -256,6 +259,7 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 					}
 				}
 			}
+			return
 		})
 
 	iter := part.NewRowsIter(ts, nil, false)
@@ -908,7 +912,7 @@ func (tbl *txnTable) collectUnCommittedObjects(txnOffset int) []objectio.ObjectS
 		tbl.db.databaseId,
 		tbl.tableId,
 		txnOffset,
-		func(entry Entry) {
+		func(entry Entry) (err error) {
 			stats := objectio.ObjectStats{}
 			if entry.bat == nil || entry.bat.IsEmpty() {
 				return
@@ -925,6 +929,7 @@ func (tbl *txnTable) collectUnCommittedObjects(txnOffset int) []objectio.ObjectS
 				stats.UnMarshal(entry.bat.Vecs[1].GetBytesAt(i))
 				unCommittedObjects = append(unCommittedObjects, stats)
 			}
+			return
 		})
 
 	return unCommittedObjects
@@ -970,7 +975,7 @@ func (tbl *txnTable) collectDirtyBlocks(
 		tbl.db.databaseId,
 		tbl.tableId,
 		txnOffset,
-		func(entry Entry) {
+		func(entry Entry) (err error) {
 			// the CN workspace can only handle `INSERT` and `DELETE` operations. Other operations will be skipped,
 			// TODO Adjustments will be made here in the future
 			if entry.typ == DELETE || entry.typ == DELETE_TXN {
@@ -987,6 +992,7 @@ func (tbl *txnTable) collectDirtyBlocks(
 					}
 				}
 			}
+			return
 		})
 
 	return dirtyBlks
@@ -1650,6 +1656,9 @@ func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) 
 	}
 	//for S3 delete
 	if name != catalog.Row_ID {
+		logutil.Infof("xxxx table:%s, txn:%s, deletes flush to S3",
+			tbl.tableName,
+			tbl.db.op.Txn().DebugString())
 		return tbl.EnhanceDelete(bat, name)
 	}
 	bat = tbl.getTxn().deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
@@ -2279,7 +2288,8 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(
 		keysVector)
 }
 
-// TODO::refactor in next PR
+// transferDeletes transfer deletes from the old block to the new block.
+// Notice that it only be called at the start of executing statement or commiting a txn.
 func (tbl *txnTable) transferDeletes(
 	ctx context.Context,
 	state *logtailreplay.PartitionState,
@@ -2338,45 +2348,347 @@ func (tbl *txnTable) transferDeletes(
 		}
 	}
 
-	for _, entry := range tbl.getTxn().writes {
-		if entry.isGeneratedByTruncate() || entry.tableId != tbl.tableId {
+	//transfer deletes in memory.
+	tbl.getTxn().forEachTableWrites(tbl.db.databaseId, tbl.tableId, 0,
+		func(entry Entry) (err error) {
+			if entry.isGeneratedByTruncate() {
+				return
+			}
+			if (entry.typ == DELETE || entry.typ == DELETE_TXN) && entry.fileName == "" {
+				pkVec := entry.bat.GetVector(1)
+				rowids := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+				beTransfered := 0
+				toTransfer := 0
+				for i, rowid := range rowids {
+					blkid, _ := rowid.Decode()
+					if _, ok := deleteObjs[*objectio.ShortName(&blkid)]; ok {
+						toTransfer++
+						newId, ok, err := tbl.readNewRowid(pkVec, i, blks)
+						if err != nil {
+							return err
+						}
+						if ok {
+							newBlockID, _ := newId.Decode()
+							trace.GetService().ApplyTransferRowID(
+								tbl.db.op.Txn().ID,
+								tbl.tableId,
+								rowids[i][:],
+								newId[:],
+								blkid[:],
+								newBlockID[:],
+								pkVec,
+								i)
+							rowids[i] = newId
+							beTransfered++
+						}
+					}
+				}
+				if beTransfered != toTransfer {
+					return moerr.NewInternalErrorNoCtx("transfer deletes failed")
+				}
+			}
+			return
+		})
+
+	//transfer deletes on S3
+	tbl.getTxn().blockId_tn_delete_metaLoc_batch.RLock()
+	defer tbl.getTxn().blockId_tn_delete_metaLoc_batch.RUnlock()
+
+	toTransferLocs := make(map[types.Blockid][]objectio.Location)
+	objsToGC := make(map[string]struct{})
+	locsToTransfer := make(map[string]struct{})
+	for blk, bats := range tbl.getTxn().blockId_tn_delete_metaLoc_batch.data {
+		if _, ok := deleteObjs[*objectio.ShortName(&blk)]; !ok {
 			continue
 		}
-		if (entry.typ == DELETE || entry.typ == DELETE_TXN) && entry.fileName == "" {
-			pkVec := entry.bat.GetVector(1)
-			rowids := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
-			beTransfered := 0
-			toTransfer := 0
-			for i, rowid := range rowids {
-				blkid, _ := rowid.Decode()
-				if _, ok := deleteObjs[*objectio.ShortName(&blkid)]; ok {
-					toTransfer++
-					newId, ok, err := tbl.readNewRowid(pkVec, i, blks)
-					if err != nil {
-						return err
-					}
-					if ok {
-						newBlockID, _ := newId.Decode()
-						trace.GetService().ApplyTransferRowID(
-							tbl.db.op.Txn().ID,
-							tbl.tableId,
-							rowids[i][:],
-							newId[:],
-							blkid[:],
-							newBlockID[:],
-							pkVec,
-							i)
-						rowids[i] = newId
-						beTransfered++
+		for _, bat := range bats {
+			vs := vector.MustStrCol(bat.GetVector(0))
+			for _, loc := range vs {
+				location, err := blockio.EncodeLocationFromString(loc)
+				if err != nil {
+					return err
+				}
+				toTransferLocs[blk] = append(toTransferLocs[blk], location)
+				locsToTransfer[loc] = struct{}{}
+				objsToGC[location.Name().String()] = struct{}{}
+			}
+
+		}
+	}
+	if len(toTransferLocs) == 0 {
+		return nil
+	}
+	targetBlks, err := tbl.transferPersistedDeletesParallel(ctx, toTransferLocs, blks)
+	if err != nil {
+		return err
+	}
+
+	for blk, bat := range targetBlks {
+		fileName := "uncommitted-tombstones"
+		if err := tbl.getTxn().WriteFile(DELETE, tbl.accountId, tbl.db.databaseId, tbl.tableId,
+			tbl.db.databaseName, tbl.tableName, fileName, bat, tbl.getTxn().tnStores[0]); err != nil {
+			return err
+		}
+		tbl.getTxn().blockId_tn_delete_metaLoc_batch.data[blk] = []*batch.Batch{bat}
+	}
+
+	//delete the block to be transferred from the map ,and add the target block to the map.
+	for blk := range toTransferLocs {
+		delete(tbl.getTxn().blockId_tn_delete_metaLoc_batch.data, blk)
+	}
+	for i := 0; i < len(tbl.getTxn().writes); i++ {
+		e := tbl.getTxn().writes[i]
+		if e.databaseId != tbl.db.databaseId || e.tableId != tbl.tableId {
+			continue
+		}
+		if e.typ == DELETE && e.fileName != "" {
+			bat := tbl.getTxn().writes[i].bat
+			vs := vector.MustStrCol(bat.GetVector(0))
+			for i, locStr := range vs {
+				loc, err := blockio.EncodeLocationFromString(locStr)
+				if err != nil {
+					return err
+				}
+				if _, ok := locsToTransfer[locStr]; ok {
+					bat.Shrink([]int64{int64(i)}, true)
+				} else {
+					if _, ok := objsToGC[loc.Name().String()]; ok {
+						delete(objsToGC, loc.Name().String())
 					}
 				}
 			}
-			if beTransfered != toTransfer {
-				return moerr.NewInternalErrorNoCtx("transfer deletes failed")
+			if bat.RowCount() == 0 {
+				tbl.getTxn().writes[i].bat = nil
 			}
 		}
 	}
+	//gc the tombstone objects.
+	var objsNameToGC []string
+	for objName := range objsToGC {
+		objsNameToGC = append(objsNameToGC, objName)
+	}
+	tbl.getTxn().gcObjsAsync(objsNameToGC)
 	return nil
+}
+
+func (tbl *txnTable) transferPersistedDeletesParallel(
+	ctx context.Context,
+	srcLocs map[types.Blockid][]objectio.Location,
+	candidates []objectio.BlockInfo) (newLocs map[types.Blockid]*batch.Batch, err error) {
+	defer func() {
+		if err != nil {
+			//TODO::gc the created objects if failed.
+		}
+	}()
+	newLocs = make(map[types.Blockid]*batch.Batch)
+	getTransJob := func(
+		ctx context.Context,
+		jobNum int32,
+		srcLocs map[types.Blockid][]objectio.Location) *tasks.Job {
+		job := new(tasks.Job)
+		jobID := spew.Sprintf("transferDeletes_%d", jobNum)
+		job.Init(ctx, jobID, tasks.JTAny,
+			func(ctx context.Context) *tasks.JobResult {
+				var res *batch.Batch
+				for _, locs := range srcLocs {
+					for _, loc := range locs {
+						pkBat, release, err := blockio.LoadTombstoneColumns(
+							ctx,
+							[]uint16{1},
+							nil,
+							tbl.getTxn().engine.fs,
+							loc,
+							tbl.getTxn().proc.GetMPool())
+						if err != nil {
+							return &tasks.JobResult{Err: err}
+						}
+						defer release()
+
+						pkVec := pkBat.GetVector(0)
+
+						if res == nil {
+							res = batch.New(false, []string{catalog.Row_ID, "pk"})
+							res.SetVector(0, tbl.getTxn().proc.GetVector(types.T_Rowid.ToType()))
+							res.SetVector(1, tbl.getTxn().proc.GetVector(*pkVec.GetType()))
+						}
+						if err := vector.GetUnionAllFunction(
+							*res.GetVector(1).GetType(),
+							tbl.getTxn().proc.Mp())(res.GetVector(1), pkVec); err != nil {
+							res.Clean(tbl.getTxn().proc.Mp())
+							return &tasks.JobResult{Err: err}
+						}
+
+						for i := 0; i < pkVec.Length(); i++ {
+							newRowID, ok, err := tbl.readNewRowid(pkVec, i, candidates)
+							if err != nil {
+								res.Clean(tbl.getTxn().proc.Mp())
+								return &tasks.JobResult{Err: err}
+							}
+							if !ok {
+								res.Clean(tbl.getTxn().proc.Mp())
+								return &tasks.JobResult{Err: moerr.NewInternalErrorNoCtx("transfer deletes failed")}
+							}
+							vector.AppendFixed(res.GetVector(0), newRowID, false, tbl.getTxn().proc.Mp())
+						}
+
+					}
+				}
+				return &tasks.JobResult{Err: nil, Res: res}
+			})
+		return job
+	}
+
+	//build transfer jobs
+	var jobNum int32
+	cnt := 0
+	mp := make(map[int32]map[types.Blockid][]objectio.Location)
+	for blk, locs := range srcLocs {
+		if cnt%100 == 0 {
+			jobNum++
+			cnt = 0
+			blkLocs := make(map[types.Blockid][]objectio.Location)
+			mp[jobNum] = blkLocs
+		}
+		mp[jobNum][blk] = locs
+		cnt++
+	}
+	transferJobs := make([]*tasks.Job, 0, len(mp))
+	for job, locs := range mp {
+		transferJobs = append(transferJobs, getTransJob(ctx, job, locs))
+	}
+
+	//Schedule the transfer-deletes jobs
+	for _, job := range transferJobs {
+		err := tbl.getTxn().engine.jobScheduler.Schedule(job)
+		if err != nil {
+			logutil.Errorf("transferDeletesScheduler.Schedule failed, err:%v", err)
+			return nil, err
+		}
+	}
+	//wait result.
+	res := make(map[types.Blockid]*batch.Batch)
+	for _, job := range transferJobs {
+		ret := job.WaitDone()
+		if ret.Err != nil {
+			logutil.Errorf("transfer deletes failed, err:%v", ret.Err)
+			return nil, ret.Err
+		}
+		//group by block ID.
+		srcBat := ret.Res.(*batch.Batch)
+		for i := 0; i < srcBat.RowCount(); i++ {
+			rowIDs := vector.MustFixedCol[types.Rowid](srcBat.GetVector(0))
+			bid := rowIDs[i].CloneBlockID()
+			if _, ok := res[bid]; !ok {
+				bat := batch.New(false, []string{catalog.Row_ID, "pk"})
+				bat.SetVector(0, tbl.getTxn().proc.GetVector(types.T_Rowid.ToType()))
+				bat.SetVector(1, tbl.getTxn().proc.GetVector(*srcBat.GetVector(1).GetType()))
+				res[bid] = bat
+			}
+			if err := vector.GetUnionOneFunction(
+				*srcBat.GetVector(1).GetType(),
+				tbl.getTxn().proc.Mp())(
+				res[bid].GetVector(1),
+				srcBat.GetVector(1), int64(i)); err != nil {
+				logutil.Errorf("transfer deletes failed, err:%v", err)
+				srcBat.Clean(tbl.getTxn().proc.Mp())
+				return nil, err
+			}
+			vector.AppendFixed(res[bid].GetVector(0), rowIDs[i], false, tbl.getTxn().proc.Mp())
+		}
+		srcBat.Clean(tbl.getTxn().proc.Mp())
+	}
+
+	//flush into S3
+	{
+		getFlushJob := func(
+			ctx context.Context,
+			jobNum int32,
+			bats map[types.Blockid]*batch.Batch) *tasks.Job {
+			job := new(tasks.Job)
+			jobID := spew.Sprintf("FlushDeletes_%d", jobNum)
+			job.Init(ctx, jobID, tasks.JTAny,
+				func(ctx context.Context) *tasks.JobResult {
+					blkDelLocs := make(map[types.Blockid]*batch.Batch)
+					s3writer := &colexec.S3Writer{}
+					s3writer.SetSortIdx(-1)
+					_, err = s3writer.GenerateWriter(tbl.getTxn().proc)
+					if err != nil {
+						return &tasks.JobResult{Err: err}
+					}
+					var blkIDs []types.Blockid
+					for bid, bat := range bats {
+						err = s3writer.WriteBlock(bat, objectio.SchemaTombstone)
+						if err != nil {
+							return &tasks.JobResult{Err: err}
+						}
+						blkIDs = append(blkIDs, bid)
+						bat.Clean(tbl.getTxn().proc.Mp())
+
+					}
+					blkInfos, _, err := s3writer.WriteEndBlocks(tbl.getTxn().proc)
+					if err != nil {
+						return &tasks.JobResult{Err: err}
+					}
+					for i, blkInfo := range blkInfos {
+						if _, ok := blkDelLocs[blkIDs[i]]; !ok {
+							bat := batch.New(false, []string{catalog.BlockMeta_DeltaLoc})
+							bat.SetVector(0, tbl.getTxn().proc.GetVector(types.T_text.ToType()))
+							blkDelLocs[blkIDs[i]] = bat
+						}
+						bat := blkDelLocs[blkIDs[i]]
+						vector.AppendBytes(
+							bat.GetVector(0),
+							[]byte(blkInfo.MetaLocation().String()),
+							false,
+							tbl.getTxn().proc.GetMPool())
+					}
+					return &tasks.JobResult{Err: nil, Res: blkDelLocs}
+				})
+			return job
+		}
+
+		//build flush jobs
+		var jobNum int32
+		cnt := 0
+		mp := make(map[int32]map[types.Blockid]*batch.Batch)
+		for bid, bat := range res {
+			if cnt%100 == 0 {
+				jobNum++
+				cnt = 0
+				bats := make(map[types.Blockid]*batch.Batch)
+				mp[jobNum] = bats
+			}
+			mp[jobNum][bid] = bat
+			cnt++
+		}
+		flushJobs := make([]*tasks.Job, 0, len(mp))
+		for job, bats := range mp {
+			flushJobs = append(flushJobs, getFlushJob(ctx, job, bats))
+		}
+
+		//Schedule the flush jobs
+		for _, job := range flushJobs {
+			err := tbl.getTxn().engine.jobScheduler.Schedule(job)
+			if err != nil {
+				logutil.Errorf("transferDeletesScheduler.Schedule failed, err:%v", err)
+				return nil, err
+			}
+		}
+		//wait the result of flush jobs.
+		for _, job := range flushJobs {
+			ret := job.WaitDone()
+			if ret.Err != nil {
+				logutil.Errorf("flush deletes failed, err:%v", ret.Err)
+				return nil, ret.Err
+			}
+			bats := ret.Res.(map[types.Blockid]*batch.Batch)
+			//merge the result.
+			for bid, bat := range bats {
+				newLocs[bid] = bat
+			}
+		}
+	}
+	return
 }
 
 func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
