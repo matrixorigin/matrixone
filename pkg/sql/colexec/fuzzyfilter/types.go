@@ -16,10 +16,12 @@ package fuzzyfilter
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -35,14 +37,9 @@ const (
 	End
 )
 
-type Argument struct {
+type container struct {
 	state int
 	colexec.ReceiverOperator
-
-	// Estimates of the number of data items obtained from statistical information
-	N      float64
-	PkName string
-	PkTyp  plan.Type
 
 	bloomFilter   *bloomfilter.BloomFilter
 	roaringFilter *roaringFilter
@@ -54,7 +51,19 @@ type Argument struct {
 
 	// about runtime filter
 	pass2RuntimeFilter *vector.Vector
-	RuntimeFilterSpec  *plan.RuntimeFilterSpec
+}
+
+type Argument struct {
+	ctr *container
+
+	// Estimates of the number of data items obtained from statistical information
+	N                  float64
+	PkName             string
+	PkTyp              plan.Type
+	BuildIdx           int
+	IfInsertFromUnique bool
+
+	RuntimeFilterSpec *plan.RuntimeFilterSpec
 	vm.OperatorBase
 }
 
@@ -89,25 +98,90 @@ func (arg *Argument) Release() {
 	}
 }
 
+func (arg *Argument) ifBuildOnSink() bool {
+	return arg.BuildIdx == 1
+}
+
+func (arg *Argument) getProbeIdx() int {
+	return 1 - arg.BuildIdx
+}
+
+func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	arg.Free(proc, pipelineFailed, err)
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	proc.FinalizeRuntimeFilter(arg.RuntimeFilterSpec)
-	if arg.bloomFilter != nil {
-		arg.bloomFilter.Clean()
-		arg.bloomFilter = nil
+	if arg.ctr.bloomFilter != nil {
+		arg.ctr.bloomFilter.Clean()
+		arg.ctr.bloomFilter = nil
 	}
-	if arg.roaringFilter != nil {
-		arg.roaringFilter = nil
+	if arg.ctr.roaringFilter != nil {
+		arg.ctr.roaringFilter = nil
 	}
-	if arg.rbat != nil {
-		arg.rbat.Clean(proc.GetMPool())
-		arg.rbat = nil
+	if arg.ctr.rbat != nil {
+		arg.ctr.rbat.Clean(proc.GetMPool())
+		arg.ctr.rbat = nil
 	}
-	if arg.pass2RuntimeFilter != nil {
-		arg.pass2RuntimeFilter.Free(proc.GetMPool())
-		arg.pass2RuntimeFilter = nil
+	if arg.ctr.pass2RuntimeFilter != nil {
+		arg.ctr.pass2RuntimeFilter.Free(proc.GetMPool())
+		arg.ctr.pass2RuntimeFilter = nil
 	}
 
-	arg.FreeAllReg()
+	arg.ctr.FreeAllReg()
+}
+
+func (arg *Argument) add(pkCol *vector.Vector) {
+	ctr := arg.ctr
+	if ctr.roaringFilter != nil {
+		ctr.roaringFilter.addFunc(ctr.roaringFilter, pkCol)
+	} else {
+		ctr.bloomFilter.Add(pkCol)
+	}
+}
+
+func (arg *Argument) test(proc *process.Process, pkCol *vector.Vector) error {
+	ctr := arg.ctr
+	if ctr.roaringFilter != nil {
+		idx, dupVal := ctr.roaringFilter.testFunc(ctr.roaringFilter, pkCol)
+		if idx == -1 {
+			return nil
+		} else {
+			return moerr.NewDuplicateEntry(proc.Ctx, valueToString(dupVal), arg.PkName)
+		}
+	} else {
+		ctr.bloomFilter.Test(pkCol, func(exist bool, i int) {
+			if exist {
+				if ctr.collisionCnt < maxCheckDupCount {
+					arg.appendCollisionKey(proc, i, pkCol)
+				}
+			}
+		})
+	}
+	return nil
+}
+
+func (arg *Argument) testAndAdd(proc *process.Process, pkCol *vector.Vector) error {
+	ctr := arg.ctr
+	if ctr.roaringFilter != nil {
+		idx, dupVal := ctr.roaringFilter.testAndAddFunc(ctr.roaringFilter, pkCol)
+		if idx == -1 {
+			return nil
+		} else {
+			return moerr.NewDuplicateEntry(proc.Ctx, valueToString(dupVal), arg.PkName)
+		}
+	} else {
+		ctr.bloomFilter.TestAndAdd(pkCol, func(exist bool, i int) {
+			if exist {
+				if ctr.collisionCnt < maxCheckDupCount {
+					arg.appendCollisionKey(proc, i, pkCol)
+					return
+				}
+				logutil.Debugf("too many collision for fuzzy filter")
+			}
+		})
+	}
+	return nil
 }
 
 func IfCanUseRoaringFilter(t types.T) bool {

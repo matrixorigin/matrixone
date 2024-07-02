@@ -29,7 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func describeMessage(m *plan.MsgHeader, buf *bytes.Buffer) {
+func describeMessage(m plan.MsgHeader, buf *bytes.Buffer) {
 	buf.WriteString("[tag ")
 	fmt.Fprintf(buf, "%d", m.MsgTag)
 	buf.WriteString(" , type ")

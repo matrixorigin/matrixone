@@ -667,16 +667,14 @@ func (c *Compile) runOnce() error {
 	}
 
 	// fuzzy filter not sure whether this insert / load obey duplicate constraints, need double check
-	if len(c.fuzzys) > 0 {
-		for _, f := range c.fuzzys {
-			if f != nil && f.cnt > 0 {
-				if f.cnt > 10 {
-					c.proc.Warnf(c.ctx, "fuzzy filter cnt is %d, may be too high", f.cnt)
-				}
-				err = f.backgroundSQLCheck(c)
-				if err != nil {
-					return err
-				}
+	for _, f := range c.fuzzys {
+		if f != nil && f.cnt > 0 {
+			if f.cnt > 10 {
+				c.proc.Debugf(c.ctx, "double check dup for `%s`.`%s`:collision cnt is %d, may be too high", f.db, f.tbl, f.cnt)
+			}
+			err = f.backgroundSQLCheck(c)
+			if err != nil {
+				return err
 			}
 		}
 	}
@@ -2979,7 +2977,7 @@ func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scop
 
 	rs.Instructions[0].Idx = c.anal.curr
 
-	arg := constructFuzzyFilter(c, n, ns[n.Children[1]])
+	arg := constructFuzzyFilter(n, ns[n.Children[0]], ns[n.Children[1]])
 
 	rs.appendInstruction(vm.Instruction{
 		Op:  vm.FuzzyFilter,

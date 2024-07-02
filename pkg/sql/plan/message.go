@@ -80,7 +80,7 @@ func (builder *QueryBuilder) handleMessgaeFromTopToScan(nodeID int32) {
 	}
 
 	msgTag := builder.genNewMsgTag()
-	msgHeader := &plan.MsgHeader{MsgTag: msgTag, MsgType: int32(process.MsgTopValue)}
+	msgHeader := plan.MsgHeader{MsgTag: msgTag, MsgType: int32(process.MsgTopValue)}
 	node.SendMsgList = append(node.SendMsgList, msgHeader)
 	scanNode.RecvMsgList = append(scanNode.RecvMsgList, msgHeader)
 	scanNode.OrderBy = append(scanNode.OrderBy, DeepCopyOrderBy(node.OrderBy[0]))
