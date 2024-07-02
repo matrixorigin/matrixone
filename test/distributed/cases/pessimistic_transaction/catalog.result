@@ -109,7 +109,7 @@ lock_content    VARCHAR(65535)    YES        null
 lock_mode    VARCHAR(65535)    YES        null        
 desc mo_variables;
 Field    Type    Null    Key    Default    Extra    Comment
-configuration_id    INT(32)    NO        null        
+configuration_id    INT(32)    NO        null    auto_increment    
 account_id    INT(32)    YES        null        
 account_name    VARCHAR(300)    YES        null        
 dat_name    VARCHAR(5000)    YES        null        

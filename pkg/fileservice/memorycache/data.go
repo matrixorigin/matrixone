@@ -23,8 +23,8 @@ import (
 
 // Data is a reference counted byte buffer
 type Data struct {
-	size int
-	buf  []byte
+	size  int
+	bytes []byte
 	// reference counta for the Data, the Data is free
 	// when the reference count is 0
 	ref         refcnt
@@ -39,18 +39,17 @@ func newData(
 	size int,
 	globalSize *atomic.Int64,
 ) *Data {
-	if size == 0 {
-		return nil
-	}
 	globalSize.Add(int64(size))
 	data := &Data{
 		size:       size,
 		globalSize: globalSize,
 	}
-	var err error
-	data.buf, data.deallocator, err = allocator.Allocate(uint64(size), malloc.NoHints)
-	if err != nil {
-		panic(err)
+	if size > 0 {
+		var err error
+		data.bytes, data.deallocator, err = allocator.Allocate(uint64(size), malloc.NoHints)
+		if err != nil {
+			panic(err)
+		}
 	}
 	metric.FSMallocLiveObjectsMemoryCache.Inc()
 	data.ref.init(1)
@@ -59,28 +58,19 @@ func newData(
 
 func (d *Data) free() {
 	d.globalSize.Add(-int64(d.size))
-	d.buf = nil
-	d.deallocator.Deallocate(malloc.NoHints)
+	d.bytes = nil
+	if d.deallocator != nil {
+		d.deallocator.Deallocate(malloc.NoHints)
+	}
 	metric.FSMallocLiveObjectsMemoryCache.Dec()
 }
 
 func (d *Data) Bytes() []byte {
-	if d == nil {
-		return nil
-	}
-	return d.Buf()
-}
-
-// Buf returns the underlying buffer of the Data
-func (d *Data) Buf() []byte {
-	if d == nil {
-		return nil
-	}
-	return d.buf
+	return d.bytes
 }
 
 func (d *Data) Slice(n int) CacheData {
-	d.buf = d.buf[:n]
+	d.bytes = d.bytes[:n]
 	return d
 }
 
@@ -93,7 +83,7 @@ func (d *Data) acquire() {
 }
 
 func (d *Data) Release() {
-	if d != nil && d.ref.release() {
+	if d.ref.release() {
 		d.free()
 	}
 }

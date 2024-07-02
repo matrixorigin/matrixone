@@ -355,7 +355,7 @@ primary key(empno, ename)
 );
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-empno    INT UNSIGNED(32)    NO    PRI    null        
+empno    INT UNSIGNED(32)    NO    PRI    null    auto_increment    
 ename    VARCHAR(15)    NO    PRI    null        
 job    VARCHAR(10)    YES        null        
 mgr    INT UNSIGNED(32)    YES        null        
@@ -443,7 +443,7 @@ a    b    c    d
 alter table t1 modify a int auto_increment;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
+a    INT(32)    NO    PRI    null    auto_increment    
 b    VARCHAR(15)    NO        null        
 c    DATE(0)    YES        null        
 d    DECIMAL(7)    YES        null        
@@ -457,7 +457,7 @@ a    b    c    d
 alter table t1 modify d decimal(6,2);
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
+a    INT(32)    NO    PRI    null    auto_increment    
 b    VARCHAR(15)    NO        null        
 c    DATE(0)    YES        null        
 d    DECIMAL(6)    YES        null        
@@ -515,7 +515,7 @@ Cannot change column 'deptno': used in a foreign key constraint 'c1'
 alter table emp modify deptno varchar(25);
 desc emp;
 Field    Type    Null    Key    Default    Extra    Comment
-empno    INT UNSIGNED(32)    NO    PRI    null        
+empno    INT UNSIGNED(32)    NO    PRI    null    auto_increment    
 ename    VARCHAR(15)    YES        null        
 job    VARCHAR(10)    YES        null        
 mgr    INT UNSIGNED(32)    YES        null        

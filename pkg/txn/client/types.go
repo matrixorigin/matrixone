@@ -265,6 +265,9 @@ type Workspace interface {
 	CloneSnapshotWS() Workspace
 
 	BindTxnOp(op TxnOperator)
+
+	SetHaveDDL(flag bool)
+	GetHaveDDL() bool
 }
 
 // TxnOverview txn overview include meta and status

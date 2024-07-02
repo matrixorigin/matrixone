@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 
@@ -79,6 +80,10 @@ func generateScopeCases(t *testing.T, testCases []string) []*Scope {
 	getScope := func(t1 *testing.T, sql string) *Scope {
 		proc := testutil.NewProcess()
 		proc.Base.SessionInfo.Buf = buffer.New()
+		ctrl := gomock.NewController(t)
+		txnCli, txnOp := newTestTxnClientAndOp(ctrl)
+		proc.Base.TxnClient = txnCli
+		proc.Base.TxnOperator = txnOp
 		e, _, compilerCtx := testengine.New(defines.AttachAccountId(context.Background(), catalog.System_Account))
 		opt := plan2.NewBaseOptimizer(compilerCtx)
 		ctx := compilerCtx.GetContext()

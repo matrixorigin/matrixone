@@ -997,9 +997,14 @@ func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt)
 
 	//2. fill the result set
 	//column
+	txnHaveDDL := false
+	ws := ses.proc.GetTxnOperator().GetWorkspace()
+	if ws != nil {
+		txnHaveDDL = ws.GetHaveDDL()
+	}
 	col1 := new(MysqlColumn)
 	col1.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
-	col1.SetName(plan2.GetPlanTitle(explainQuery.QueryPlan))
+	col1.SetName(plan2.GetPlanTitle(explainQuery.QueryPlan, txnHaveDDL))
 
 	mrs := ses.GetMysqlResultSet()
 	mrs.AddColumn(col1)

@@ -40,6 +40,13 @@ message FlushTable {
     uint64 TableID              = 3;
 }
 
+message DiskCleaner{
+    option (gogoproto.typedecl) = false;
+    string Op                   = 1;
+    string Key                  = 2;
+    string Value                = 3;
+}
+
 message Checkpoint {
     option (gogoproto.typedecl) = false;
     int64 FlushDuration         = 1 [(gogoproto.casttype) = "time.Duration"];
