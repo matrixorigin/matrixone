@@ -421,7 +421,7 @@ func (c *objectPruneArg) Run() error {
 			continue
 		}
 		selected++
-		selectedObjs = append(selectedObjs, &obj)
+		selectedObjs = append(selectedObjs, obj)
 		stat := obj.GetObjectStats()
 		rw := int(stat.Rows())
 		sz := int(stat.OriginSize())

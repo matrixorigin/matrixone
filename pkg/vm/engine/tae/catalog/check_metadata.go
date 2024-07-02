@@ -15,12 +15,12 @@
 package catalog
 
 import (
-	"time"
+	// "time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
+	// "github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	// "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
 func (catalog *Catalog) CheckMetadata() {
@@ -44,61 +44,62 @@ func (catalog *Catalog) checkTombstone(t data.Tombstone) error {
 	return nil
 }
 func (catalog *Catalog) checkObject(o *ObjectEntry) error {
-	o.RLock()
-	defer o.RUnlock()
-	if o.Depth() > 2 {
-		logutil.Warnf("[MetadataCheck] object mvcc link is too long, depth %d, obj %v", o.Depth(), o.PPStringLocked(3, 0, ""))
-	}
-	if o.IsAppendable() && o.HasDropCommittedLocked() {
-		if o.GetLatestNodeLocked().BaseNode.IsEmpty() {
-			logutil.Warnf("[MetadataCheck] object should have stats, obj %v", o.PPStringLocked(3, 0, ""))
-		}
-	}
-	if !o.IsAppendable() && !o.IsCreatingOrAborted() {
-		if o.GetLatestNodeLocked().BaseNode.IsEmpty() {
-			logutil.Warnf("[MetadataCheck] object should have stats, obj %v", o.PPStringLocked(3, 0, ""))
-		}
-	}
-	if !o.IsAppendable() && !o.IsCreatingOrAborted() {
-		if o.GetLatestNodeLocked().BaseNode.IsEmpty() {
-			logutil.Warnf("[MetadataCheck] object should have stats, obj %v", o.PPStringLocked(3, 0, ""))
-		}
-	}
-	if !catalog.gcTS.IsEmpty() {
-		if o.HasDropCommittedLocked() && o.DeleteBeforeLocked(catalog.gcTS) && !o.InMemoryDeletesExistedLocked() {
-			logutil.Warnf("[MetadataCheck] object should not exist, gcTS %v, obj %v", catalog.gcTS.ToString(), o.PPStringLocked(3, 0, ""))
-		}
-	}
+	// JXM TODO
+	// o.RLock()
+	// defer o.RUnlock()
+	// if o.Depth() > 2 {
+	// 	logutil.Warnf("[MetadataCheck] object mvcc link is too long, depth %d, obj %v", o.Depth(), o.PPStringLocked(3, 0, ""))
+	// }
+	// if o.IsAppendable() && o.HasDropCommittedLocked() {
+	// 	if o.GetLatestNodeLocked().BaseNode.IsEmpty() {
+	// 		logutil.Warnf("[MetadataCheck] object should have stats, obj %v", o.PPStringLocked(3, 0, ""))
+	// 	}
+	// }
+	// if !o.IsAppendable() && !o.IsCreatingOrAborted() {
+	// 	if o.GetLatestNodeLocked().BaseNode.IsEmpty() {
+	// 		logutil.Warnf("[MetadataCheck] object should have stats, obj %v", o.PPStringLocked(3, 0, ""))
+	// 	}
+	// }
+	// if !o.IsAppendable() && !o.IsCreatingOrAborted() {
+	// 	if o.GetLatestNodeLocked().BaseNode.IsEmpty() {
+	// 		logutil.Warnf("[MetadataCheck] object should have stats, obj %v", o.PPStringLocked(3, 0, ""))
+	// 	}
+	// }
+	// if !catalog.gcTS.IsEmpty() {
+	// 	if o.HasDropCommittedLocked() && o.DeleteBeforeLocked(catalog.gcTS) && !o.InMemoryDeletesExistedLocked() {
+	// 		logutil.Warnf("[MetadataCheck] object should not exist, gcTS %v, obj %v", catalog.gcTS.ToString(), o.PPStringLocked(3, 0, ""))
+	// 	}
+	// }
 
-	duration := time.Minute * 10
-	ts := types.BuildTS(time.Now().UTC().UnixNano()-duration.Nanoseconds(), 0)
-	if o.HasDropCommittedLocked() && o.DeleteBeforeLocked(ts) {
-		if o.InMemoryDeletesExistedLocked() {
-			logutil.Warnf("[MetadataCheck] object has in memory deletes %v after deleted, obj %v, tombstone %v",
-				duration,
-				o.PPStringLocked(3, 0, ""),
-				o.GetTable().TryGetTombstone(o.ID).StringLocked(3, 0, ""))
-		}
-	}
+	// duration := time.Minute * 10
+	// ts := types.BuildTS(time.Now().UTC().UnixNano()-duration.Nanoseconds(), 0)
+	// if o.HasDropCommittedLocked() && o.DeleteBeforeLocked(ts) {
+	// 	if o.InMemoryDeletesExistedLocked() {
+	// 		logutil.Warnf("[MetadataCheck] object has in memory deletes %v after deleted, obj %v, tombstone %v",
+	// 			duration,
+	// 			o.PPStringLocked(3, 0, ""),
+	// 			o.GetTable().TryGetTombstone(o.ID).StringLocked(3, 0, ""))
+	// 	}
+	// }
 
-	lastNode := o.GetLatestNodeLocked()
-	if lastNode == nil {
-		logutil.Warnf("[MetadataCheck] object MVCC Chain is empty, obj %v", o.ID.String())
-	} else {
-		duration := time.Minute * 10
-		ts := types.BuildTS(time.Now().UTC().UnixNano()-duration.Nanoseconds(), 0)
-		if !lastNode.IsCommitted() {
-			if lastNode.Start.Less(&ts) {
-				logutil.Warnf("[MetadataCheck] object MVCC Node hasn't committed %v after it starts, obj %v",
-					duration,
-					o.PPStringLocked(3, 0, ""))
-			}
-		} else {
-			if lastNode.End.Equal(&txnif.UncommitTS) || lastNode.Prepare.Equal(&txnif.UncommitTS) {
-				logutil.Warnf("[MetadataCheck] object MVCC Node hasn't committed but node.Txn is nil, obj %v",
-					o.PPStringLocked(3, 0, ""))
-			}
-		}
-	}
+	// lastNode := o.GetLatestNodeLocked()
+	// if lastNode == nil {
+	// 	logutil.Warnf("[MetadataCheck] object MVCC Chain is empty, obj %v", o.ID.String())
+	// } else {
+	// 	duration := time.Minute * 10
+	// 	ts := types.BuildTS(time.Now().UTC().UnixNano()-duration.Nanoseconds(), 0)
+	// 	if !lastNode.IsCommitted() {
+	// 		if lastNode.Start.Less(&ts) {
+	// 			logutil.Warnf("[MetadataCheck] object MVCC Node hasn't committed %v after it starts, obj %v",
+	// 				duration,
+	// 				o.PPStringLocked(3, 0, ""))
+	// 		}
+	// 	} else {
+	// 		if lastNode.End.Equal(&txnif.UncommitTS) || lastNode.Prepare.Equal(&txnif.UncommitTS) {
+	// 			logutil.Warnf("[MetadataCheck] object MVCC Node hasn't committed but node.Txn is nil, obj %v",
+	// 				o.PPStringLocked(3, 0, ""))
+	// 		}
+	// 	}
+	// }
 	return nil
 }

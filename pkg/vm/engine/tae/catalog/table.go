@@ -181,7 +181,7 @@ func (entry *TableEntry) GetDeleteList() *btree.BTreeG[DeleteEntry] {
 }
 func (entry *TableEntry) TryGetTombstone(oid objectio.ObjectId) data.Tombstone {
 	pivot := DeleteEntry{ObjectID: oid}
-	tombstone, ok := entry.deleteList.Get(pivot)
+	tombstone, ok := entry.deleteList.Copy().Get(pivot)
 	if !ok {
 		return nil
 	}
@@ -190,7 +190,7 @@ func (entry *TableEntry) TryGetTombstone(oid objectio.ObjectId) data.Tombstone {
 
 func (entry *TableEntry) GetOrCreateTombstone(obj *ObjectEntry, factory TombstoneFactory) data.Tombstone {
 	pivot := DeleteEntry{ObjectID: obj.ID}
-	delete, ok := entry.deleteList.Get(pivot)
+	delete, ok := entry.deleteList.Copy().Get(pivot)
 	if ok {
 		return delete.Tombstone
 	}
@@ -226,7 +226,7 @@ func (entry *TableEntry) GetObjectByID(id *types.Objectid) (obj *ObjectEntry, er
 	return entry.link.Copy().GetObjectByID(id)
 }
 
-func (entry *TableEntry) MakeObjectIt(reverse bool) btree.IterG[ObjectEntry] {
+func (entry *TableEntry) MakeObjectIt(reverse bool) btree.IterG[*ObjectEntry] {
 	return entry.link.Copy().Iter()
 }
 
@@ -256,7 +256,7 @@ func (entry *TableEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	return newTableCmd(id, cmdType, entry), nil
 }
 func (entry *TableEntry) AddEntryLocked(obj *ObjectEntry) {
-	entry.link.Insert(*obj)
+	entry.link.Insert(obj)
 }
 
 func (entry *TableEntry) deleteEntryLocked(objectEntry *ObjectEntry) error {
@@ -463,7 +463,7 @@ func (entry *TableEntry) LastAppendableObject() (obj *ObjectEntry) {
 		itObj := it.Item()
 		dropped := itObj.HasDropCommitted()
 		if itObj.IsAppendable() && !dropped {
-			obj = &itObj
+			obj = itObj
 			break
 		}
 		it.Next()
@@ -487,14 +487,14 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 	objIt := entry.MakeObjectIt(true)
 	for objIt.Next() {
 		objectEntry := objIt.Item()
-		if err := processor.OnObject(&objectEntry); err != nil {
+		if err := processor.OnObject(objectEntry); err != nil {
 			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 				objIt.Next()
 				continue
 			}
 			return err
 		}
-		if err := processor.OnPostObject(&objectEntry); err != nil {
+		if err := processor.OnPostObject(objectEntry); err != nil {
 			return err
 		}
 		objIt.Next()
@@ -510,12 +510,7 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 }
 
 func (entry *TableEntry) DropObjectEntry(id *types.Objectid, txn txnif.AsyncTxn) (deleted *ObjectEntry, err error) {
-	obj, err := entry.GetObjectByID(id)
-	if err != nil {
-		return
-	}
-	dropped, isNewNode, err := obj.GetDropEntry()
-	entry.link.Insert(*dropped)
+	obj, isNewNode, err := entry.link.DropObjectByID(id, txn)
 	if err == nil && isNewNode {
 		deleted = obj
 	}

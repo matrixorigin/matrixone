@@ -61,11 +61,10 @@ func TestCatalog1(t *testing.T) {
 		_, rel = testutil.GetDefaultRelation(t, db, schema.Name)
 		it := rel.MakeObjectIt()
 		cnt := 0
-		for it.Valid() {
+		for it.Next() {
 			object := it.GetObject()
 			cnt++
 			t.Log(object.GetMeta().(*catalog.ObjectEntry).String())
-			it.Next()
 		}
 		assert.Equal(t, 1, cnt)
 	}

@@ -60,7 +60,7 @@ type txnObject struct {
 
 type ObjectIt struct {
 	sync.RWMutex
-	linkIt btree.IterG[catalog.ObjectEntry]
+	linkIt btree.IterG[*catalog.ObjectEntry]
 	curr   *catalog.ObjectEntry
 	table  *txnTable
 	err    error
@@ -75,20 +75,6 @@ func newObjectItOnSnap(table *txnTable) handle.ObjectIt {
 	it := &ObjectIt{
 		linkIt: table.entry.MakeObjectIt(true),
 		table:  table,
-	}
-	var err error
-	var ok bool
-	for it.linkIt.Next() {
-		curr := it.linkIt.Item()
-		ok = curr.IsVisible(it.table.store.txn)
-		if err != nil {
-			it.err = err
-			return it
-		}
-		if ok {
-			it.curr = &curr
-			break
-		}
 	}
 	return it
 }
@@ -118,11 +104,10 @@ func (it *ObjectIt) Next() bool {
 		entry := it.linkIt.Item()
 		valid = entry.IsVisible(it.table.store.txn)
 		if valid {
-			it.curr = &entry
+			it.curr = entry
 			return true
 		}
 	}
-	return false
 }
 
 func (it *ObjectIt) GetObject() handle.Object {

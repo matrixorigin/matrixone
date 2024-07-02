@@ -153,11 +153,10 @@ func (c *checker) Check() error {
 		for itTable.Valid() {
 			table := itTable.Get().GetPayload()
 			itObject := table.MakeObjectIt(true)
-			for itObject.Valid() {
-				objectEntry := itObject.Get().GetPayload()
+			for itObject.Next() {
+				objectEntry := itObject.Item()
 				stats := objectEntry.GetObjectStats()
 				delete(allObjects, stats.ObjectName().String())
-				itObject.Next()
 			}
 			it2 := table.GetDeleteList().Items()
 			for _, itt := range it2 {

@@ -14,12 +14,8 @@
 
 package catalog
 
-func ActiveWithNoTxnFilter(be *ObjectEntry) bool {
-	return !be.HasDropCommittedLocked() && !be.IsCreatingOrAborted()
-}
-
 func ActiveObjectWithNoTxnFilter(be *ObjectEntry) bool {
-	return !be.HasDropCommittedLocked() && !be.IsCreatingOrAborted()
+	return !be.HasDropCommitted()
 }
 
 func AppendableBlkFilter(be *ObjectEntry) bool {

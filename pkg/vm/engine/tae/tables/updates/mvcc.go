@@ -432,7 +432,9 @@ func (n *ObjectMVCCHandle) GetDeltaPersistedTSLocked() types.TS {
 	return persisted
 }
 
-func (n *ObjectMVCCHandle) GetDeltaCommitedTSLocked() types.TS {
+func (n *ObjectMVCCHandle) GetDeltaCommitedTS() types.TS {
+	n.RLock()
+	defer n.RUnlock()
 	commitTS := types.TS{}
 	for _, deletes := range n.deletes {
 		ts := deletes.getDeltaCommittedTSLocked()
@@ -538,6 +540,11 @@ func (n *ObjectMVCCHandle) ReplayDeltaLoc(vMVCCNode any, blkID uint16) {
 	mvccNode := vMVCCNode.(*catalog.MVCCNode[*catalog.MetadataMVCCNode])
 	mvcc := n.GetOrCreateDeleteChainLocked(blkID)
 	mvcc.ReplayDeltaLoc(mvccNode)
+}
+func (n *ObjectMVCCHandle) InMemoryDeletesExisted() bool {
+	n.RLock()
+	defer n.RUnlock()
+	return n.InMemoryDeletesExistedLocked()
 }
 func (n *ObjectMVCCHandle) InMemoryDeletesExistedLocked() bool {
 	for _, deletes := range n.deletes {
