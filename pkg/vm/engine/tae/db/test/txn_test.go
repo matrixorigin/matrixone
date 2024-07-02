@@ -242,7 +242,7 @@ func (c *APP1Client) CheckBound() {
 func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint32, count uint64, err error) {
 	rel, _ := c.DB.GetRelationByName(repertory.Name)
 	blockIt := rel.MakeObjectIt()
-	var view *containers.ColumnView
+	var view *containers.Batch
 	found := false
 	for blockIt.Valid() {
 		blk := blockIt.GetObject()
@@ -252,12 +252,12 @@ func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint3
 				return
 			}
 			defer view.Close()
-			_ = view.GetData().Foreach(func(v any, _ bool, row int) (err error) {
+			_ = view.Vecs[0].Foreach(func(v any, _ bool, row int) (err error) {
 				pk := v.(uint64)
 				if pk != goodId {
 					return
 				}
-				if view.DeleteMask.Contains(uint64(row)) {
+				if view.Deletes.Contains(uint64(row)) {
 					return
 				}
 				id = blk.Fingerprint()
@@ -553,7 +553,7 @@ func TestWarehouse(t *testing.T) {
 		it := rel.MakeObjectIt()
 		blk := it.GetObject()
 		view, _ := blk.GetColumnDataById(context.Background(), 0, 1, common.DefaultAllocator)
-		t.Log(view.GetData().String())
+		t.Log(view.String())
 		defer view.Close()
 		testutil.CheckAllColRowsByScan(t, rel, 20, false)
 		_ = txn.Commit(context.Background())

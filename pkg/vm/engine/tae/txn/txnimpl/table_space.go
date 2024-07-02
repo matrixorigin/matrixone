@@ -479,7 +479,7 @@ func (space *tableSpace) GetColumnDataByIds(
 	obj *catalog.ObjectEntry,
 	colIdxes []int,
 	mp *mpool.MPool,
-) (view *containers.BlockView, err error) {
+) (view *containers.Batch, err error) {
 	n := space.nodes[0]
 	return n.GetColumnDataByIds(colIdxes, mp)
 }
@@ -489,7 +489,7 @@ func (space *tableSpace) GetColumnDataById(
 	obj *catalog.ObjectEntry,
 	colIdx int,
 	mp *mpool.MPool,
-) (view *containers.ColumnView, err error) {
+) (view *containers.Batch, err error) {
 	n := space.nodes[0]
 	return n.GetColumnDataById(ctx, colIdx, mp)
 }
