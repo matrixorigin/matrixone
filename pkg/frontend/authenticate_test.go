@@ -8206,27 +8206,6 @@ func newMrsForPrivilegeWGO(rows [][]interface{}) *MysqlResultSet {
 	return mrs
 }
 
-func newMrsForSystemVariablesOfAccount(rows [][]interface{}) *MysqlResultSet {
-	mrs := &MysqlResultSet{}
-
-	col1 := &MysqlColumn{}
-	col1.SetName("variable_name")
-	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-
-	col2 := &MysqlColumn{}
-	col2.SetName("variable_value")
-	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-
-	mrs.AddColumn(col1)
-	mrs.AddColumn(col2)
-
-	for _, row := range rows {
-		mrs.AddRow(row)
-	}
-
-	return mrs
-}
-
 func newMrsForSystemVariableNameOfAccount(rows [][]interface{}) *MysqlResultSet {
 	mrs := &MysqlResultSet{}
 
