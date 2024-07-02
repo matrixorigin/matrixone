@@ -165,7 +165,7 @@ func (lpb *listPartitionBuilder) buildEvalPartitionExpression(ctx context.Contex
 		if err != nil {
 			return err
 		}
-		partitionExpression, err = ConstantFold(batch.EmptyForConstFoldBatch, partitionExpression, proc, false)
+		partitionExpression, err = ConstantFold(batch.EmptyForConstFoldBatch, partitionExpression, proc, false, true)
 		if err != nil {
 			return err
 		}
@@ -192,7 +192,7 @@ func (lpb *listPartitionBuilder) buildEvalPartitionExpression(ctx context.Contex
 		if err != nil {
 			return err
 		}
-		partitionExpression, err = ConstantFold(batch.EmptyForConstFoldBatch, partitionExpression, proc, false)
+		partitionExpression, err = ConstantFold(batch.EmptyForConstFoldBatch, partitionExpression, proc, false, true)
 		if err != nil {
 			return err
 		}
