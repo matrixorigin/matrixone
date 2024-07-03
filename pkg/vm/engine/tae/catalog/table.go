@@ -256,6 +256,7 @@ func (entry *TableEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	return newTableCmd(id, cmdType, entry), nil
 }
 func (entry *TableEntry) AddEntryLocked(obj *ObjectEntry) {
+	obj.list = entry.link
 	entry.link.Set(obj)
 }
 
@@ -493,7 +494,6 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 		objectEntry := objIt.Item()
 		if err := processor.OnObject(objectEntry); err != nil {
 			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
-				objIt.Next()
 				continue
 			}
 			return err
@@ -501,7 +501,6 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 		if err := processor.OnPostObject(objectEntry); err != nil {
 			return err
 		}
-		objIt.Next()
 	}
 	tombstones := entry.deleteList.Copy().Items()
 	for _, deletes := range tombstones {

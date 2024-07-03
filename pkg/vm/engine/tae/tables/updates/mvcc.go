@@ -416,6 +416,14 @@ func (n *ObjectMVCCHandle) IsDeletedLocked(
 	return deletes.IsDeletedLocked(row, txn)
 }
 
+func (n *ObjectMVCCHandle) IsDeleted(
+	row uint32, txn txnif.TxnReader, blkID uint16,
+) (bool, error) {
+	n.RLock()
+	defer n.RUnlock()
+	return n.IsDeletedLocked(row, txn, blkID)
+}
+
 func (n *ObjectMVCCHandle) UpgradeAllDeleteChain() {
 	for _, deletes := range n.deletes {
 		deletes.upgradeDeleteChain()
@@ -507,6 +515,11 @@ func (n *ObjectMVCCHandle) StringBlkLocked(level common.PPLevel, depth int, pref
 	}
 	return s
 }
+func (n *ObjectMVCCHandle) StringBlk(level common.PPLevel, depth int, prefix string, blkid int) string {
+	n.RLock()
+	defer n.RUnlock()
+	return n.StringBlkLocked(level, depth, prefix, blkid)
+}
 
 func (n *ObjectMVCCHandle) GetDeleteCnt() uint32 {
 	cnt := uint32(0)
@@ -555,7 +568,6 @@ func (n *ObjectMVCCHandle) InMemoryDeletesExistedLocked() bool {
 	return false
 }
 func (n *ObjectMVCCHandle) GetObject() any {
-	panic("todo") // get last version in objlist
 	return n.meta
 }
 func (n *ObjectMVCCHandle) GetLatestDeltaloc(blkOffset uint16) objectio.Location {

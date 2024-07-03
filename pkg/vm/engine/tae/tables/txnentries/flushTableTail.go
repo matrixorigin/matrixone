@@ -103,7 +103,7 @@ func NewFlushTableTailEntry(
 
 	if entry.transMappings != nil {
 		if entry.createdBlkHandles != nil {
-			entry.delTbls = make([]*model.TransDels, entry.createdBlkHandles.GetMeta().(*catalog.ObjectEntry).BlockCnt())
+			entry.delTbls = make([]*model.TransDels, entry.createdBlkHandles.GetMeta().(*catalog.ObjectEntry).GetLatestNode().BlockCnt())
 			entry.nextRoundDirties = make(map[*catalog.ObjectEntry]struct{})
 			// collect deletes phase 1
 			entry.collectTs = rt.Now()

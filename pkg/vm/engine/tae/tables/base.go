@@ -79,6 +79,9 @@ func newBaseObject(
 	blk.RWMutex = blk.appendMVCC.RWMutex
 	return blk
 }
+func (blk *baseObject) UpdateMeta(meta any) {
+	blk.meta = meta.(*catalog.ObjectEntry)
+}
 
 func (blk *baseObject) OnApplyAppend(n txnif.AppendNode) (err error) {
 	blk.meta.GetTable().AddRows(
@@ -782,7 +785,7 @@ func (blk *baseObject) RangeDelete(
 	return
 }
 func (blk *baseObject) GetObjMeta() *catalog.ObjectEntry {
-	return blk.meta.GetLatestNode()
+	return blk.meta
 }
 func (blk *baseObject) TryDeleteByDeltaloc(
 	txn txnif.AsyncTxn,
@@ -811,9 +814,9 @@ func (blk *baseObject) PPString(level common.PPLevel, depth int, prefix string, 
 		}
 		if mvcc := blk.tryGetMVCC(); mvcc != nil {
 			if blkid >= 0 {
-				deletestr = mvcc.StringBlkLocked(level, 0, "", blkid)
+				deletestr = mvcc.StringBlk(level, 0, "", blkid)
 			} else {
-				deletestr = mvcc.StringLocked(level, 0, "")
+				deletestr = mvcc.String(level, 0, "")
 			}
 		}
 		blk.RUnlock()

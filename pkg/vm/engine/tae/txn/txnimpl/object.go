@@ -91,9 +91,10 @@ func newObjectIt(table *txnTable) handle.ObjectIt {
 	return it
 }
 
-func (it *ObjectIt) Close() error { 
+func (it *ObjectIt) Close() error {
 	it.linkIt.Release()
-	return nil }
+	return nil
+}
 
 func (it *ObjectIt) GetError() error { return it.err }
 
@@ -104,7 +105,7 @@ func (it *ObjectIt) Next() bool {
 			return false
 		}
 		entry := it.linkIt.Item()
-		valid = entry.GetLastMVCCNode().IsVisible(it.table.store.txn)
+		valid = entry.IsVisible(it.table.store.txn)
 		if valid {
 			it.curr = entry
 			return true
@@ -120,14 +121,12 @@ func (it *ObjectIt) GetObject() handle.Object {
 }
 
 func (cit *composedObjectIt) GetObject() handle.Object {
-	if cit.uncommitted != nil {
-		return newObject(cit.table, cit.uncommitted)
-	}
 	return cit.ObjectIt.GetObject()
 }
 
 func (cit *composedObjectIt) Next() bool {
 	if cit.uncommitted != nil {
+		cit.curr = cit.uncommitted
 		cit.uncommitted = nil
 		return true
 	}

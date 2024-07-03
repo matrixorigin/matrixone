@@ -132,6 +132,7 @@ func (h *txnRelation) SimplePPString(level common.PPLevel) string {
 		return s
 	}
 	it := h.MakeObjectIt()
+	defer it.Close()
 	for it.Next() {
 		object := it.GetObject()
 		defer object.Close()

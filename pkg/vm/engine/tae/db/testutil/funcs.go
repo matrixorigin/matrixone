@@ -155,11 +155,15 @@ func GetDefaultRelation(t *testing.T, e *db.DB, name string) (txn txnif.AsyncTxn
 
 func GetOneObject(rel handle.Relation) handle.Object {
 	it := rel.MakeObjectIt()
+	it.Next()
+	defer it.Close()
 	return it.GetObject()
 }
 
 func GetOneBlockMeta(rel handle.Relation) *catalog.ObjectEntry {
 	it := rel.MakeObjectIt()
+	defer it.Close()
+	it.Next()
 	return it.GetObject().GetMeta().(*catalog.ObjectEntry)
 }
 
@@ -169,6 +173,7 @@ func GetAllBlockMetas(rel handle.Relation) (metas []*catalog.ObjectEntry) {
 		blk := it.GetObject()
 		metas = append(metas, blk.GetMeta().(*catalog.ObjectEntry))
 	}
+	it.Close()
 	return
 }
 

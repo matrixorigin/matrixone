@@ -158,7 +158,7 @@ type Object interface {
 	GetFs() *objectio.ObjectFS
 	FreezeAppend()
 	UpdateDeltaLoc(txn txnif.TxnReader, blkID uint16, deltaLoc objectio.Location) (bool, txnif.TxnEntry, error)
-
+	UpdateMeta(meta any)
 	Close()
 }
 

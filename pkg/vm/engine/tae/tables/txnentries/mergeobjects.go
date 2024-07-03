@@ -59,8 +59,9 @@ func NewMergeObjectsEntry(
 	rt *dbutils.Runtime,
 ) (*mergeObjectsEntry, error) {
 	totalCreatedBlkCnt := 0
-	for _, obj := range createdObjs {
-		totalCreatedBlkCnt += obj.BlockCnt()
+	for i, obj := range createdObjs {
+		createdObjs[i] = obj.GetLatestNode()
+		totalCreatedBlkCnt += createdObjs[i].BlockCnt()
 	}
 	entry := &mergeObjectsEntry{
 		txn:           txn,

@@ -136,9 +136,10 @@ func NewObjectInfoWithObjectStats(stats *objectio.ObjectStats) *ObjectMVCCNode {
 }
 
 func (e *ObjectMVCCNode) CloneAll() *ObjectMVCCNode {
-	return &ObjectMVCCNode{
+	obj := &ObjectMVCCNode{
 		ObjectStats: *e.ObjectStats.Clone(),
 	}
+	return obj
 }
 func (e *ObjectMVCCNode) CloneData() *ObjectMVCCNode {
 	return &ObjectMVCCNode{

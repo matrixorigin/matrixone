@@ -202,7 +202,7 @@ func newObjectCmd(id uint32, cmdType uint16, entry *ObjectEntry) *EntryCommand[*
 	impl := &EntryCommand[*ObjectMVCCNode, *ObjectNode]{
 		ID:       entry.AsCommonID(),
 		cmdType:  cmdType,
-		mvccNode: entry.GetLastMVCCNode(),
+		mvccNode: entry.GetLatestNode().GetLastMVCCNode(),
 		node:     &entry.ObjectNode,
 	}
 	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(id, impl)

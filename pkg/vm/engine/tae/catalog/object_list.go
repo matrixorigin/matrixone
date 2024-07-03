@@ -111,11 +111,10 @@ func (l *ObjectList) GetLastestNode(objID *objectio.ObjectId) *ObjectEntry {
 }
 
 func (l *ObjectList) DropObjectByID(id *objectio.ObjectId, txn txnif.TxnReader) (droppedObj *ObjectEntry, isNew bool, err error) {
-	objs := l.GetAllNodes(id)
-	if len(objs) == 0 {
-		return nil, false, moerr.GetOkExpectedEOB()
+	obj, err := l.GetObjectByID(id)
+	if err != nil {
+		return
 	}
-	obj := objs[len(objs)-1]
 	if obj.HasDropIntent() {
 		return nil, false, moerr.GetOkExpectedEOB()
 	}
@@ -130,7 +129,7 @@ func (l *ObjectList) DropObjectByID(id *objectio.ObjectId, txn txnif.TxnReader) 
 		return nil, false, err
 	}
 	droppedObj, isNew = obj.GetDropEntry(txn)
-	l.Set(droppedObj)
+	l.Update(droppedObj, obj)
 	return
 }
 func (l *ObjectList) Set(object *ObjectEntry) {
@@ -167,14 +166,7 @@ func (l *ObjectList) Delete(obj *ObjectEntry) {
 		panic("concurrent mutation")
 	}
 }
-func (l *ObjectList) UpdateObjectInfo(id *objectio.ObjectId, txn txnif.TxnReader, stats *objectio.ObjectStats) (isNew bool, err error) {
-	l.Lock()
-	defer l.Unlock()
-	objs := l.GetAllNodes(id)
-	if len(objs) == 0 {
-		return false, moerr.GetOkExpectedEOB()
-	}
-	obj := objs[len(objs)-1]
+func (l *ObjectList) UpdateObjectInfo(obj *ObjectEntry, txn txnif.TxnReader, stats *objectio.ObjectStats) (isNew bool, err error) {
 	needWait, txnToWait := obj.GetLastMVCCNode().NeedWaitCommitting(txn.GetStartTS())
 	if needWait {
 		txnToWait.GetTxnState(true)
@@ -188,8 +180,6 @@ func (l *ObjectList) UpdateObjectInfo(id *objectio.ObjectId, txn txnif.TxnReader
 }
 
 func (l *ObjectList) SetSorted(id *objectio.ObjectId) {
-	l.Lock()
-	defer l.Unlock()
 	objs := l.GetAllNodes(id)
 	if len(objs) == 0 {
 		panic("logic error")

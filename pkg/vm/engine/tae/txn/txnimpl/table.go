@@ -860,11 +860,11 @@ func (tbl *txnTable) GetByFilter(ctx context.Context, filter *handle.Filter) (id
 	}
 	h := newRelation(tbl)
 	blockIt := h.MakeObjectIt()
+	defer blockIt.Close()
 	for blockIt.Next() {
 		h := blockIt.GetObject()
 		defer h.Close()
 		if h.IsUncommitted() {
-			blockIt.Next()
 			continue
 		}
 		var blkID uint16
