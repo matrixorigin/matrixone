@@ -703,8 +703,8 @@ func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Times
 	var blockReadPKFilter blockio.BlockReadFilter
 	if filter == nil {
 		// remote block reader
-		basePKFilter := constructBasePKFilter(expr, tblDef, proc.(*process.Process))
-		blockReadPKFilter = constructBlockReadPKFilter(tblDef.Pkey.PkeyColName, basePKFilter)
+		basePKFilter := newBasePKFilter(expr, tblDef, proc.(*process.Process))
+		blockReadPKFilter = newBlockReadPKFilter(tblDef.Pkey.PkeyColName, basePKFilter)
 		//fmt.Println("remote filter: ", basePKFilter.String(), blockReadPKFilter)
 	}
 
