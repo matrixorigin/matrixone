@@ -7,11 +7,13 @@ SELECT MAKEDATE(YEAR(NOW()), DAY(LAST_DAY(NOW())));
 -- @ignore:0
 SELECT DATE_SUB(MAKEDATE(YEAR(CURDATE()), 1), INTERVAL 1 DAY) AS LastDayOfYear;
 
+-- @bvt:issue#3626
 SELECT '生日快乐！' AS message, MAKEDATE(1990, 100) AS birthday; 
 SELECT
     YEAR(NOW()) - YEAR(MAKEDATE(YEAR(NOW()), 1)) AS years_passed,
     DAY(NOW()) AS days_into_year
 FROM DUAL;
+-- @bvt:issue
 
 SELECT IF(MAKEDATE(YEAR(NOW()), 366) < NOW(), '闰年', '平年') AS leap_year_status;
 
