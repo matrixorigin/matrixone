@@ -3169,8 +3169,7 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 
 	case plan.ShuffleMethod_Reshuffle:
 
-		dop := plan2.GetShuffleDop()
-		parent, children := c.newScopeListForShuffleGroup(1, dop)
+		parent, children := c.newScopeListForShuffleGroup(1)
 		// saving the last operator of all children to make sure the connector setting in
 		// the right place
 		lastOperator := make([]vm.Instruction, 0, len(children))
@@ -3222,8 +3221,7 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 
 		return parent
 	default:
-		dop := plan2.GetShuffleDop()
-		parent, children := c.newScopeListForShuffleGroup(validScopeCount(ss), dop)
+		parent, children := c.newScopeListForShuffleGroup(validScopeCount(ss))
 		c.constructShuffleAndDispatch(ss, children, n)
 
 		// saving the last operator of all children to make sure the connector setting in
@@ -3375,14 +3373,14 @@ func (c *Compile) newScopeList(childrenCount int, blocks int) []*Scope {
 	return ss
 }
 
-func (c *Compile) newScopeListForShuffleGroup(childrenCount int, blocks int) ([]*Scope, []*Scope) {
+func (c *Compile) newScopeListForShuffleGroup(childrenCount int) ([]*Scope, []*Scope) {
 	parent := make([]*Scope, 0, len(c.cnList))
 	children := make([]*Scope, 0, len(c.cnList))
 
 	currentFirstFlag := c.anal.isFirst
 	for _, n := range c.cnList {
 		c.anal.isFirst = currentFirstFlag
-		scopes := c.newScopeListWithNode(c.generateCPUNumber(n.Mcpu, blocks), childrenCount, n.Addr)
+		scopes := c.newScopeListWithNode(plan2.GetShuffleDop(n.Mcpu), childrenCount, n.Addr)
 		for _, s := range scopes {
 			for _, rr := range s.Proc.Reg.MergeReceivers {
 				rr.Ch = make(chan *process.RegisterMessage, shuffleChannelBufferSize)
@@ -3522,13 +3520,13 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 	children := make([]*Scope, 0, len(c.cnList))
 	lnum := len(left)
 	sum := lnum + len(right)
-	for _, n := range c.cnList {
-		dop := c.generateCPUNumber(n.Mcpu, plan2.GetShuffleDop())
+	for _, cn := range c.cnList {
+		dop := plan2.GetShuffleDop(cn.Mcpu)
 		ss := make([]*Scope, dop)
 		for i := range ss {
 			ss[i] = newScope(Remote)
 			ss[i].IsJoin = true
-			ss[i].NodeInfo.Addr = n.Addr
+			ss[i].NodeInfo.Addr = cn.Addr
 			ss[i].NodeInfo.Mcpu = 1
 			ss[i].Proc = process.NewWithAnalyze(c.proc, c.proc.Ctx, sum, c.anal.Nodes())
 			ss[i].BuildIdx = lnum
@@ -3538,7 +3536,7 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 			}
 		}
 		children = append(children, ss...)
-		parent = append(parent, c.newMergeRemoteScope(ss, n))
+		parent = append(parent, c.newMergeRemoteScope(ss, cn))
 	}
 
 	currentFirstFlag := c.anal.isFirst
