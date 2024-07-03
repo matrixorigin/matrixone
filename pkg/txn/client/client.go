@@ -596,7 +596,6 @@ func (client *txnClient) AbortAllRunningTxn() {
 	}
 	waitOps := append(([]*txnOperator)(nil), client.mu.waitActiveTxns...)
 	client.mu.waitActiveTxns = client.mu.waitActiveTxns[:0]
-	client.mu.Unlock()
 
 	if client.timestampWaiter != nil {
 		// Cancel all waiters, means that all waiters do not need to wait for
