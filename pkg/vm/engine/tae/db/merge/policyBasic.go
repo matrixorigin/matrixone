@@ -236,15 +236,15 @@ func (o *basic) GetConfig(tbl *catalog.TableEntry) any {
 	return r
 }
 
-func (o *basic) Revise(cpu, mem int64, largeFirst bool) ([]*catalog.ObjectEntry, TaskHostKind) {
+func (o *basic) Revise(cpu, mem int64, littleFirst bool) ([]*catalog.ObjectEntry, TaskHostKind) {
 	objs := o.objHeap.finish()
-	if largeFirst {
+	if littleFirst {
 		slices.SortFunc(objs, func(a, b *catalog.ObjectEntry) int {
-			return -cmp.Compare(a.GetRemainingRows(), b.GetRemainingRows())
+			return cmp.Compare(a.GetRemainingRows(), b.GetRemainingRows())
 		})
 	} else {
 		slices.SortFunc(objs, func(a, b *catalog.ObjectEntry) int {
-			return cmp.Compare(a.GetRemainingRows(), b.GetRemainingRows())
+			return -cmp.Compare(a.GetRemainingRows(), b.GetRemainingRows())
 		})
 	}
 
