@@ -114,12 +114,8 @@ func (m *multiObjPolicy) Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHos
 	return revisedObj, TaskHostDN
 }
 
-func (m *multiObjPolicy) Clear() {
+func (m *multiObjPolicy) ResetForTable(*catalog.TableEntry) {
 	m.objects = m.objects[:0]
-}
-
-func (m *multiObjPolicy) ObjCnt() int {
-	return len(m.objects)
 }
 
 type entrySet struct {
@@ -206,16 +202,8 @@ func (m *multiObjPolicy) controlMem(objs []*catalog.ObjectEntry, mem int64) []*c
 	}
 
 	needPopout := func(ss []*catalog.ObjectEntry) bool {
-		osize, esize, _ := estimateMergeConsume(ss)
-		if esize > int(2*mem/3) {
-			return true
-		}
-
-		if len(ss) < 2 {
-			return false
-		}
-		// make object averaged size
-		return osize > m.config.maxOSizeMergedObjs
+		_, esize, _ := estimateMergeConsume(ss)
+		return esize > int(2*mem/3)
 	}
 	for needPopout(objs) {
 		objs = objs[:len(objs)-1]

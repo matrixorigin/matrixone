@@ -90,7 +90,7 @@ func (m *Scheduler) resetForTable(entry *catalog.TableEntry) {
 		m.tableRowCnt = 0
 		m.tableRowDel = 0
 	}
-	m.policies[m.run].Clear()
+	m.policies[m.run].ResetForTable(entry)
 }
 
 func (m *Scheduler) PreExecute() error {
@@ -130,19 +130,9 @@ func (m *Scheduler) OnObject(objectEntry *catalog.ObjectEntry) error {
 		return moerr.GetOkStopCurrRecur()
 	}
 
-	objectEntry.RLock()
-	// Skip uncommitted entries
-	// TODO: consider the case: add metaloc, is it possible to see a constructing object?
-	if !objectEntry.IsCommittedLocked() || !catalog.ActiveObjectWithNoTxnFilter(objectEntry.BaseEntryImpl) {
-		objectEntry.RUnlock()
+	if !objectValid(objectEntry) {
 		return moerr.GetOkStopCurrRecur()
 	}
-
-	if objectEntry.IsAppendable() {
-		objectEntry.RUnlock()
-		return moerr.GetOkStopCurrRecur()
-	}
-	objectEntry.RUnlock()
 
 	// Rows will check objectStat, and if not loaded, it will load it.
 	rows, err := objectEntry.GetObjectData().Rows()
@@ -157,4 +147,19 @@ func (m *Scheduler) OnObject(objectEntry *catalog.ObjectEntry) error {
 	m.tableRowDel += dels
 	m.policies[m.run].OnObject(objectEntry)
 	return nil
+}
+
+func objectValid(objectEntry *catalog.ObjectEntry) bool {
+	objectEntry.RLock()
+	defer objectEntry.RUnlock()
+	// Skip uncommitted entries
+	// TODO: consider the case: add metaloc, is it possible to see a constructing object?
+	if !objectEntry.IsCommittedLocked() || !catalog.ActiveObjectWithNoTxnFilter(objectEntry.BaseEntryImpl) {
+		return false
+	}
+
+	if objectEntry.IsAppendable() {
+		return false
+	}
+	return true
 }

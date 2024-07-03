@@ -20,7 +20,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"sort"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -239,8 +238,8 @@ func (o *basic) GetConfig(tbl *catalog.TableEntry) any {
 
 func (o *basic) Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind) {
 	objs := o.objHeap.finish()
-	sort.Slice(objs, func(i, j int) bool {
-		return objs[i].GetRemainingRows() < objs[j].GetRemainingRows()
+	slices.SortFunc(objs, func(a, b *catalog.ObjectEntry) int {
+		return cmp.Compare(a.GetOriginSize(), b.GetRemainingRows())
 	})
 
 	isStandalone := common.IsStandaloneBoost.Load()

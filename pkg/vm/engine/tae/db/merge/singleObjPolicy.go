@@ -19,7 +19,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -48,10 +48,12 @@ func (s *singleObjConfig) adjust() {
 }
 
 type singleObjPolicy struct {
-	config  *singleObjConfig
-	objects []*catalog.ObjectEntry
+	config *singleObjConfig
 
-	threshold types.TS
+	tableEntry       *catalog.TableEntry
+	distinctDeltaLoc map[string]struct{}
+
+	objects []*catalog.ObjectEntry
 }
 
 func newSingleObjPolicy(config *singleObjConfig) *singleObjPolicy {
@@ -61,35 +63,43 @@ func newSingleObjPolicy(config *singleObjConfig) *singleObjPolicy {
 	config.adjust()
 
 	s := &singleObjPolicy{
-		config:  config,
-		objects: make([]*catalog.ObjectEntry, 0, config.maxObjs),
+		config:           config,
+		distinctDeltaLoc: make(map[string]struct{}),
+		objects:          make([]*catalog.ObjectEntry, 0, config.maxObjs),
 	}
-	s.refreshTimeThreshold()
 	return s
 }
 
-func (s *singleObjPolicy) refreshTimeThreshold() {
-	s.threshold = types.BuildTS(time.Now().Add(-s.config.oldDeleteThreshold).UnixNano(), 0)
-}
-
 func (s *singleObjPolicy) OnObject(obj *catalog.ObjectEntry) {
-	dels := obj.GetObjectData().GetTotalChanges()
-	obj.RLock()
-	createAt := obj.GetCreatedAtLocked()
-	obj.RUnlock()
-	iscandidate := func() bool {
+	tombstone := s.tableEntry.TryGetTombstone(obj.ID)
+	if tombstone == nil {
+		return
+	}
+
+	deltaLocRows := uint32(0)
+
+	for j := range obj.BlockCnt() {
+		deltaLoc := tombstone.GetLatestDeltaloc(uint16(j))
+		if deltaLoc == nil || deltaLoc.IsEmpty() {
+			continue
+		}
+		if _, ok := s.distinctDeltaLoc[util.UnsafeBytesToString(deltaLoc)]; !ok {
+			s.distinctDeltaLoc[util.UnsafeBytesToString(deltaLoc)] = struct{}{}
+			deltaLocRows += deltaLoc.Rows()
+		}
+	}
+
+	isCandidate := func() bool {
 		// object with a lot of holes
+		dels := obj.GetObjectData().GetTotalChanges()
 		if dels > s.config.minDeletes && dels > obj.GetRows()/2 {
 			return true
 		}
 		// if deletes is older than now-oldDeleteThreshold, then merge it.
-		if dels > s.config.minDeletes && createAt.Less(&s.threshold) {
-			return true
-		}
-		return false
+		return deltaLocRows > uint32(obj.GetRemainingRows())
 	}
 
-	if iscandidate() && len(s.objects) < s.config.maxObjs {
+	if isCandidate() && len(s.objects) < s.config.maxObjs {
 		s.objects = append(s.objects, obj)
 	}
 }
@@ -139,13 +149,10 @@ func (s *singleObjPolicy) Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHo
 	return schedDN()
 }
 
-func (s *singleObjPolicy) Clear() {
+func (s *singleObjPolicy) ResetForTable(tableEntry *catalog.TableEntry) {
+	s.tableEntry = tableEntry
 	s.objects = s.objects[:0]
-	s.refreshTimeThreshold()
-}
-
-func (s *singleObjPolicy) ObjCnt() int {
-	return len(s.objects)
+	clear(s.distinctDeltaLoc)
 }
 
 func (s *singleObjPolicy) controlMem(objs []*catalog.ObjectEntry, mem int64) []*catalog.ObjectEntry {

@@ -209,9 +209,8 @@ type Policy interface {
 
 type policy interface {
 	Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind)
-	OnObject(obj *catalog.ObjectEntry)
-	Clear()
-	ObjCnt() int
+	OnObject(*catalog.ObjectEntry)
+	ResetForTable(*catalog.TableEntry)
 }
 
 func NewUpdatePolicyReq(c *BasicPolicyConfig) *api.AlterTableReq {
