@@ -573,21 +573,39 @@ func (client *txnClient) Resume() {
 	}
 }
 
+// NodeRunningPipelineManager to avoid packages import cycles.
+type NodeRunningPipelineManager interface {
+	PauseService()
+	KillAllQueriesWithError(err error)
+	ResumeService()
+}
+
+var runningPipelines NodeRunningPipelineManager
+
+func SetRunningPipelineManagement(m NodeRunningPipelineManager) {
+	runningPipelines = m
+}
+
 func (client *txnClient) AbortAllRunningTxn() {
 	client.mu.Lock()
+	runningPipelines.PauseService()
+
 	ops := make([]*txnOperator, 0, len(client.mu.activeTxns))
 	for _, op := range client.mu.activeTxns {
 		ops = append(ops, op)
 	}
 	waitOps := append(([]*txnOperator)(nil), client.mu.waitActiveTxns...)
 	client.mu.waitActiveTxns = client.mu.waitActiveTxns[:0]
-	client.mu.Unlock()
 
 	if client.timestampWaiter != nil {
 		// Cancel all waiters, means that all waiters do not need to wait for
 		// the newer timestamp from logtail consumer.
 		client.timestampWaiter.Pause()
 	}
+	runningPipelines.KillAllQueriesWithError(nil)
+
+	client.mu.Unlock()
+	runningPipelines.ResumeService()
 
 	for _, op := range ops {
 		op.cannotCleanWorkspace = true

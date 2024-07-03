@@ -113,7 +113,6 @@ var (
 // NewCompile is used to new an object of compile
 func NewCompile(
 	addr, db, sql, tenant, uid string,
-	ctx context.Context,
 	e engine.Engine,
 	proc *process.Process,
 	stmt tree.Statement,
@@ -121,15 +120,13 @@ func NewCompile(
 	cnLabel map[string]string,
 	startAt time.Time,
 ) *Compile {
-	c := reuse.Alloc[Compile](nil)
+	c := GetCompileService().getCompile(proc)
+
 	c.e = e
 	c.db = db
-
 	c.tenant = tenant
 	c.uid = uid
 	c.sql = sql
-	c.proc = proc
-	c.proc.Ctx = ctx
 	c.proc.Base.MessageBoard = c.MessageBoard
 	c.stmt = stmt
 	c.addr = addr
@@ -153,7 +150,7 @@ func (c *Compile) Release() {
 	if c == nil {
 		return
 	}
-	reuse.Free[Compile](c, nil)
+	_, _ = GetCompileService().putCompile(c)
 }
 
 func (c Compile) TypeName() string {
@@ -629,7 +626,7 @@ func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 	// improved to refresh expression in the future.
 
 	var e error
-	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.proc.Ctx, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
+	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
 	defer func() {
 		if e != nil {
 			runC.Release()
