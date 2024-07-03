@@ -448,7 +448,10 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 
 }
 
-func GetShuffleDop() (dop int) {
+func GetShuffleDop(cpunum int) (dop int) {
+	if cpunum < MAXShuffleDOP {
+		return cpunum
+	}
 	return MAXShuffleDOP
 }
 

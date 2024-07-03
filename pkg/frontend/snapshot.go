@@ -393,12 +393,22 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		return moerr.NewInternalError(ctx, "can't restore db: %v", dbName)
 	}
 
+	// restore as a txn
+	if err = bh.Exec(ctx, "begin;"); err != nil {
+		return err
+	}
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+
 	if snapshot.level == tree.RESTORELEVELCLUSTER.String() && len(srcAccountName) != 0 {
 		toAccountId, err = getAccountId(ctx, bh, srcAccountName)
 		if err != nil {
 			return err
 		}
-		sp, err := insertSnapshotRecord(ctx, bh, snapshot.snapshotName, snapshot.ts, uint64(toAccountId), srcAccountName)
+
+		var sp string
+		sp, err = insertSnapshotRecord(ctx, bh, snapshot.snapshotName, snapshot.ts, uint64(toAccountId), srcAccountName)
 		if err != nil {
 			return err
 		}
@@ -409,14 +419,6 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 			}
 		}()
 	}
-
-	// restore as a txn
-	if err = bh.Exec(ctx, "begin;"); err != nil {
-		return err
-	}
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
 
 	// restore cluster
 	if stmt.Level == tree.RESTORELEVELCLUSTER {
@@ -478,7 +480,10 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	}
 
 	if snapshot.level == tree.RESTORELEVELCLUSTER.String() && len(srcAccountName) != 0 {
-		deleteSnapshotRecord(ctx, bh, snapshot.snapshotName, snapshotName)
+		err = deleteSnapshotRecord(ctx, bh, snapshot.snapshotName, snapshotName)
+		if err != nil {
+			return err
+		}
 	}
 
 	// checks if the given context has been canceled.
@@ -1388,7 +1393,8 @@ func restoreToCluster(ctx context.Context, ses *Session, bh BackgroundExec, snap
 	// }
 
 	// get restore accounts
-	accounts, err := getRestoreAccounts(ctx, bh, snapshotName, snapshotTs)
+	var accounts []accountRecord
+	accounts, err = getRestoreAccounts(ctx, bh, snapshotName, snapshotTs)
 	if err != nil {
 		return err
 	}
@@ -1563,7 +1569,8 @@ func insertSnapshotRecord(ctx context.Context, bh BackgroundExec, spName string,
 	snapshotId := snapshotUId.String()
 
 	snapshotName = snapshotId + "_" + spName + "_mock"
-	sql, err := getSqlForCreateSnapshot(ctx,
+	var sql string
+	sql, err = getSqlForCreateSnapshot(ctx,
 		snapshotId,
 		snapshotName,
 		spTs,

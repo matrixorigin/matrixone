@@ -397,11 +397,12 @@ func (e *Engine) getOrCreateSnapPart(
 	ts types.TS) (*logtailreplay.Partition, error) {
 
 	//check whether the latest partition is available for reuse.
-	if err := tbl.updateLogtail(ctx); err == nil {
-		if p := e.getOrCreateLatestPart(tbl.db.databaseId, tbl.tableId); p.CanServe(ts) {
-			return p, nil
-		}
-	}
+	// if the snapshot-read's ts is too old , subscribing table maybe timeout.
+	//if err := tbl.updateLogtail(ctx); err == nil {
+	//	if p := e.getOrCreateLatestPart(tbl.db.databaseId, tbl.tableId); p.CanServe(ts) {
+	//		return p, nil
+	//	}
+	//}
 
 	//check whether the snapshot partitions are available for reuse.
 	e.mu.Lock()

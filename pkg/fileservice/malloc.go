@@ -42,8 +42,7 @@ var getMemoryCacheAllocator = func() func() malloc.Allocator {
 			allocator = malloc.NewMetricsAllocator(
 				getDefaultAllocator(),
 				metric.MallocCounterMemoryCacheAllocateBytes,
-				metric.MallocCounterMemoryCacheFreeBytes,
-				metric.MallocCounterMemoryCacheInuseBytes,
+				metric.MallocGaugeMemoryCacheInuseBytes,
 			)
 		})
 		return allocator
@@ -58,8 +57,7 @@ var getBytesAllocator = func() func() malloc.Allocator {
 			allocator = malloc.NewMetricsAllocator(
 				getDefaultAllocator(),
 				metric.MallocCounterBytesAllocateBytes,
-				metric.MallocCounterBytesFreeBytes,
-				metric.MallocCounterBytesInuseBytes,
+				metric.MallocGaugeBytesInuseBytes,
 			)
 		})
 		return allocator
@@ -74,8 +72,7 @@ var getIOAllocator = func() func() malloc.Allocator {
 			allocator = malloc.NewMetricsAllocator(
 				getDefaultAllocator(),
 				metric.MallocCounterIOAllocateBytes,
-				metric.MallocCounterIOFreeBytes,
-				metric.MallocCounterIOInuseBytes,
+				metric.MallocGaugeIOInuseBytes,
 			)
 		})
 		return allocator

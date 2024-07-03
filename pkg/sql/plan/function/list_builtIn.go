@@ -4751,6 +4751,57 @@ var supportedControlBuiltIns = []FuncNew{
 			},
 		},
 	},
+
+	// function `LAST_DAY`
+	{
+		functionId: LAST_DAY,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return LastDay
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_char},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return LastDay
+				},
+			},
+		},
+	},
+
+	// function `MAKEDATE`
+	{
+		functionId: MAKEDATE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return MakeDate
+				},
+			},
+		},
+	},
 }
 
 var supportedOthersBuiltIns = []FuncNew{
