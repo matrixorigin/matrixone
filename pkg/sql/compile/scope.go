@@ -153,7 +153,7 @@ func (s *Scope) initDataSource(c *Compile) (err error) {
 			}
 		}
 	} else {
-		if s.DataSource.TableDef != nil {
+		if s.DataSource.Rel != nil {
 			return nil
 		}
 		return c.compileTableScanDataSource(s)
@@ -172,7 +172,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 				zap.String("error", err.Error()))
 		}
 		if p != nil {
-			p.Cleanup(s.Proc, err != nil, err)
+			p.Cleanup(s.Proc, err != nil, c.isPrepare, err)
 		}
 	}()
 
@@ -300,11 +300,11 @@ func (s *Scope) MergeRun(c *Compile) error {
 		select {
 		case <-s.Proc.Ctx.Done():
 		default:
-			p.Cleanup(s.Proc, true, err)
+			p.Cleanup(s.Proc, true, c.isPrepare, err)
 			return err
 		}
 	}
-	p.Cleanup(s.Proc, false, nil)
+	p.Cleanup(s.Proc, false, c.isPrepare, nil)
 
 	// receive and check error from pre-scopes and remote scopes.
 	preScopeCount := len(s.PreScopes)
@@ -361,11 +361,11 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	case <-s.Proc.Ctx.Done():
 		// this clean-up action shouldn't be called before context check.
 		// because the clean-up action will cancel the context, and error will be suppressed.
-		p.Cleanup(s.Proc, err != nil, err)
+		p.Cleanup(s.Proc, err != nil, c.isPrepare, err)
 		runErr = nil
 
 	default:
-		p.Cleanup(s.Proc, err != nil, err)
+		p.Cleanup(s.Proc, err != nil, c.isPrepare, err)
 	}
 
 	// sender should be closed after cleanup (tell the children-pipeline that query was done).
@@ -390,7 +390,7 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 		// if codes run here, it means some error happens during build the parallel scope.
 		// we should do clean work for source-scope to avoid receiver hung.
 		if parallelScope == nil {
-			pipeline.NewMerge(s.Instructions, s.Reg).Cleanup(s.Proc, true, err)
+			pipeline.NewMerge(s.Instructions, s.Reg).Cleanup(s.Proc, true, c.isPrepare, err)
 		}
 	}()
 
