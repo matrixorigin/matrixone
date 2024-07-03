@@ -953,29 +953,17 @@ func (c *Compile) getCNList() (engine.Nodes, error) {
 		return cnList, nil
 	}
 	cnID := c.proc.QueryClient.ServiceID()
-	needAppendCurrentCN := true
 	for _, node := range cnList {
 		if node.Id == cnID {
-			needAppendCurrentCN = false
-			break
+			return cnList, nil
 		}
 	}
-	if needAppendCurrentCN {
-		cnList = append(cnList, engine.Node{
-			Id:   cnID,
-			Addr: c.addr,
-			Mcpu: ncpu,
-		})
-	}
+	cnList = append(cnList, engine.Node{
+		Id:   cnID,
+		Addr: c.addr,
+		Mcpu: ncpu,
+	})
 
-	//When DDL statement has been executed within a transaction, force the use of a single CN
-	if c.getHaveDDL() {
-		for _, node := range cnList {
-			if node.Id == cnID {
-				return []engine.Node{node}, nil
-			}
-		}
-	}
 	return cnList, nil
 }
 
@@ -989,6 +977,18 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	c.cnList, err = c.getCNList()
 	if err != nil {
 		return nil, err
+	}
+	//When DDL statement has been executed within a transaction, force the use of a single CN
+	if c.getHaveDDL() {
+		if c.proc != nil && c.proc.QueryClient != nil {
+			cnID := c.proc.QueryClient.ServiceID()
+			for _, node := range c.cnList {
+				if node.Id == cnID {
+					c.cnList = []engine.Node{node}
+					break
+				}
+			}
+		}
 	}
 	// sort by addr to get fixed order of CN list
 	sort.Slice(c.cnList, func(i, j int) bool { return c.cnList[i].Addr < c.cnList[j].Addr })
