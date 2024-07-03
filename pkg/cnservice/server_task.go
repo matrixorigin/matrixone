@@ -273,11 +273,11 @@ func (s *service) registerExecutorsLocked() {
 				stats := objectio.ObjectStats(b)
 				objs[i] = stats.ObjectName().String()
 			}
-			sql := fmt.Sprintf("select mo_ctl('DN', 'MERGEOBJECTS', '%s.%s:%s')",
-				mergeTask.DbName, mergeTask.TableName, strings.Join(objs, ","))
+			sql := fmt.Sprintf("select mo_ctl('DN', 'MERGEOBJECTS', '.%d.%d:%s')",
+				mergeTask.TblId, mergeTask.AccountId, strings.Join(objs, ","))
 			ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 			defer cancel()
-			opts := executor.Options{}.WithAccountID(mergeTask.AccountId).WithWaitCommittedLogApplied()
+			opts := executor.Options{}.WithWaitCommittedLogApplied()
 			_, err = s.sqlExecutor.Exec(ctx, sql, opts)
 			return err
 		},

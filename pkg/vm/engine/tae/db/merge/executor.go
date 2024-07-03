@@ -23,12 +23,11 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/KimMachineGun/automemlimit/memlimit"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-
-	"github.com/KimMachineGun/automemlimit/memlimit"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
@@ -37,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/mem"
+	"go.uber.org/zap"
 )
 
 type activeTaskStats map[uint64]struct {
@@ -105,7 +105,7 @@ func (e *MergeExecutor) PrintStats() {
 	}
 
 	logutil.Infof(
-		"Mergeblocks avail mem: %v(%v reserved), active mergeing size: %v, active merging blk cnt: %d",
+		"[Mergeblocks] avail mem: %v(%v reserved), active mergeing size: %v, active merging blk cnt: %d",
 		common.HumanReadableBytes(e.memAvail),
 		common.HumanReadableBytes(e.memSpare),
 		common.HumanReadableBytes(int(e.activeEstimateBytes.Load())), cnt,
@@ -158,7 +158,7 @@ func (e *MergeExecutor) ExecuteSingleObjMerge(entry *catalog.TableEntry, mobjs [
 		task, err := e.rt.Scheduler.ScheduleMultiScopedTxnTaskWithObserver(nil, tasks.DataCompactionTask, []common.ID{*obj.AsCommonID()}, factory, e)
 		if err != nil {
 			if !errors.Is(err, tasks.ErrScheduleScopeConflict) {
-				logutil.Infof("[Mergeblocks] Schedule error info=%v", err)
+				logutil.Info("[Mergeblocks] Schedule error", zap.Error(err))
 			}
 			return
 		}
@@ -208,7 +208,7 @@ func (e *MergeExecutor) ExecuteMultiObjMerge(entry *catalog.TableEntry, mobjs []
 			ActiveCNObj.AddActiveCNObj(mobjs)
 			logMergeTask(e.tableName, math.MaxUint64, mobjs, blkCnt, osize, esize)
 		} else {
-			logutil.Warnf("mergeblocks send to cn error: %v", err)
+			logutil.Error("[Mergeblocks] Send to cn error", zap.Error(err))
 			return
 		}
 	} else {
@@ -224,7 +224,7 @@ func (e *MergeExecutor) ExecuteMultiObjMerge(entry *catalog.TableEntry, mobjs []
 		task, err := e.rt.Scheduler.ScheduleMultiScopedTxnTaskWithObserver(nil, tasks.DataCompactionTask, scopes, factory, e)
 		if err != nil {
 			if !errors.Is(err, tasks.ErrScheduleScopeConflict) {
-				logutil.Infof("[Mergeblocks] Schedule error info=%v", err)
+				logutil.Info("[Mergeblocks] Schedule error", zap.Error(err))
 			}
 			return
 		}
