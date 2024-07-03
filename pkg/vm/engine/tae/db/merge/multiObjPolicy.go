@@ -26,8 +26,7 @@ import (
 )
 
 type multiObjConfig struct {
-	maxObjs            int
-	maxOSizeMergedObjs int
+	maxObjs int
 }
 
 type multiObjPolicy struct {
@@ -37,10 +36,7 @@ type multiObjPolicy struct {
 
 func (m *multiObjConfig) adjust() {
 	if m.maxObjs == 0 {
-		m.maxObjs = common.DefaultMaxMergeObjN
-	}
-	if m.maxOSizeMergedObjs == 0 {
-		m.maxOSizeMergedObjs = common.DefaultMaxOsizeObjMB * common.Const1MBytes
+		m.maxObjs = common.DefaultMaxMergeObjN / 2
 	}
 }
 
