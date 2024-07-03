@@ -542,6 +542,7 @@ func TestAddObjsWithMetaLoc(t *testing.T) {
 		blkMeta1 := it.GetObject().GetMeta().(*catalog.ObjectEntry)
 		it.Next()
 		blkMeta2 := it.GetObject().GetMeta().(*catalog.ObjectEntry)
+		it.Close()
 
 		task1, err := jobs.NewFlushTableTailTask(tasks.WaitableCtx, txn, []*catalog.ObjectEntry{blkMeta1, blkMeta2}, db.Runtime, txn.GetStartTS())
 		assert.NoError(t, err)
@@ -794,6 +795,7 @@ func TestFlushTableMergeOrder(t *testing.T) {
 
 			}
 		}
+		it.Close()
 		require.NoError(t, txn.Commit(context.Background()))
 	}
 
@@ -1124,6 +1126,7 @@ func TestFlushTabletail(t *testing.T) {
 				i++
 			}
 		}
+		it.Close()
 		require.Equal(t, 87, total)
 		require.NoError(t, txn.Commit(context.Background()))
 	}
@@ -1162,6 +1165,7 @@ func TestFlushTabletail(t *testing.T) {
 				i++
 			}
 		}
+		it.Close()
 		require.Equal(t, 87, total)
 		require.NoError(t, txn.Commit(context.Background()))
 	}
@@ -1293,6 +1297,7 @@ func TestMVCC1(t *testing.T) {
 			assert.Equal(t, bats[0].Vecs[0].Length(), view.Length())
 		}
 	}
+	it.Close()
 }
 
 // 1. Txn1 create db, relation and append 10 rows. committed -- PASS

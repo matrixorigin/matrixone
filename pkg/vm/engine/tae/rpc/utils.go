@@ -354,6 +354,7 @@ func traverseCatalogForNewAccounts(c *catalog.Catalog, memo *logtail.TNUsageMemo
 					insUsage.Size += uint64(objEntry.GetCompSize())
 				}
 			}
+			objIt.Release()
 
 			if insUsage.Size > 0 {
 				memo.UpdateNewAccCache(insUsage, false)

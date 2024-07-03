@@ -440,6 +440,7 @@ func (c *objectPruneArg) Run() error {
 		}
 		totalS += sz
 	}
+	it.Release()
 
 	if selected == 0 {
 		c.ctx.resp.Payload = []byte(fmt.Sprintf(

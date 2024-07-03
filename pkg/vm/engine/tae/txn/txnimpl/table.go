@@ -1082,6 +1082,7 @@ func (tbl *txnTable) DedupSnapByPK(ctx context.Context, keys containers.Vector, 
 	r := trace.StartRegion(ctx, "DedupSnapByPK")
 	defer r.End()
 	it := newObjectItOnSnap(tbl)
+	defer it.Close()
 	maxObjectHint := uint64(0)
 	pkType := keys.GetType()
 	keysZM := index.NewZM(pkType.Oid, pkType.Scale)
@@ -1227,6 +1228,7 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 				loaded[i].Close()
 				return
 			}
+			it.Close()
 		}
 		if v, ok := loaded[i]; ok {
 			v.Close()
@@ -1244,6 +1246,7 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector, pksZM index.ZM) (err error) {
 	moprobe.WithRegion(context.Background(), moprobe.TxnTableDoPrecommitDedupByPK, func() {
 		objIt := tbl.entry.MakeObjectIt(false)
+		defer objIt.Release()
 		for objIt.Next() {
 			obj := objIt.Item()
 			if !obj.IsCommitted() {
@@ -1296,6 +1299,7 @@ func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector, pksZM index.ZM)
 
 func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, node InsertNode) (err error) {
 	objIt := tbl.entry.MakeObjectIt(false)
+	defer objIt.Release()
 	var pks containers.Vector
 	//loaded := false
 	for objIt.Next() {

@@ -223,11 +223,11 @@ func (entry *TableEntry) RemoveRows(delta uint64) uint64 {
 }
 
 func (entry *TableEntry) GetObjectByID(id *types.Objectid) (obj *ObjectEntry, err error) {
-	return entry.link.Copy().GetObjectByID(id)
+	return entry.link.GetObjectByID(id)
 }
 
 func (entry *TableEntry) MakeObjectIt(reverse bool) btree.IterG[*ObjectEntry] {
-	return entry.link.Copy().Iter()
+	return entry.link.tree.Load().Iter()
 }
 
 func (entry *TableEntry) CreateObject(
@@ -256,7 +256,7 @@ func (entry *TableEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	return newTableCmd(id, cmdType, entry), nil
 }
 func (entry *TableEntry) AddEntryLocked(obj *ObjectEntry) {
-	entry.link.Insert(obj)
+	entry.link.Set(obj)
 }
 
 func (entry *TableEntry) deleteEntryLocked(objectEntry *ObjectEntry) error {
@@ -326,6 +326,7 @@ func (entry *TableEntry) PPString(level common.PPLevel, depth int, prefix string
 		return w.String()
 	}
 	it := entry.MakeObjectIt(true)
+	defer it.Release()
 	for it.Next() {
 		objectEntry := it.Item()
 		_ = w.WriteByte('\n')
@@ -356,6 +357,7 @@ type TableStat struct {
 func (entry *TableEntry) ObjectStats(level common.PPLevel, start, end int) (stat TableStat, w bytes.Buffer) {
 
 	it := entry.MakeObjectIt(true)
+	defer it.Release()
 	zonemapKind := common.ZonemapPrintKindNormal
 	if schema := entry.GetLastestSchemaLocked(); schema.HasSortKey() && strings.HasPrefix(schema.GetSingleSortKey().Name, "__") {
 		zonemapKind = common.ZonemapPrintKindCompose
@@ -459,6 +461,7 @@ func (entry *TableEntry) GetTableData() data.Table { return entry.tableData }
 
 func (entry *TableEntry) LastAppendableObject() (obj *ObjectEntry) {
 	it := entry.MakeObjectIt(false)
+	defer it.Release()
 	for it.Next() {
 		itObj := it.Item()
 		dropped := itObj.HasDropCommitted()
@@ -485,6 +488,7 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 		}
 	}()
 	objIt := entry.MakeObjectIt(true)
+	defer objIt.Release()
 	for objIt.Next() {
 		objectEntry := objIt.Item()
 		if err := processor.OnObject(objectEntry); err != nil {

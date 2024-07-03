@@ -91,7 +91,9 @@ func newObjectIt(table *txnTable) handle.ObjectIt {
 	return it
 }
 
-func (it *ObjectIt) Close() error { return nil }
+func (it *ObjectIt) Close() error { 
+	it.linkIt.Release()
+	return nil }
 
 func (it *ObjectIt) GetError() error { return it.err }
 

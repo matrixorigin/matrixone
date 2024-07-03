@@ -185,7 +185,7 @@ func (entry *ObjectEntry) DeleteBefore(ts types.TS) bool {
 	return deleteTS.Less(&ts)
 }
 func (entry *ObjectEntry) GetLatestNode() *ObjectEntry {
-	return entry.list.Copy().GetLastestNode(&entry.ID)
+	return entry.list.GetLastestNode(&entry.ID)
 }
 func (entry *ObjectEntry) ApplyCommit(tid string) error {
 	entry.list.Lock()
@@ -212,8 +212,7 @@ func (entry *ObjectEntry) ApplyCommit(tid string) error {
 	if err != nil {
 		return err
 	}
-	entry.list.Insert(newNode)
-	entry.list.Delete(lastNode)
+	entry.list.Update(newNode, lastNode)
 	return nil
 }
 func (entry *ObjectEntry) ApplyRollback() error { panic("not support") }
@@ -239,8 +238,7 @@ func (entry *ObjectEntry) PrepareCommit() error {
 	if err != nil {
 		return err
 	}
-	entry.list.Insert(newNode)
-	entry.list.Delete(lastNode)
+	entry.list.Update(newNode, lastNode)
 	return nil
 }
 func (entry *ObjectEntry) IsDeletesFlushedBefore(ts types.TS) bool {
@@ -756,6 +754,7 @@ func (entry *ObjectEntry) PrintPrepareCompactDebugLog() {
 		s = fmt.Sprintf("%s txn is %x.", s, lastNode.Txn.GetID())
 	}
 	it := entry.GetTable().MakeObjectIt(false)
+	defer it.Release()
 	for it.Next() {
 		obj := it.Item()
 		if obj.CreateNode.Start.Equal(&startTS) || (obj.DeleteNode != nil && obj.DeleteNode.Start.Equal(&startTS)) {

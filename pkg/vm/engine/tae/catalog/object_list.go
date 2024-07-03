@@ -16,6 +16,7 @@ package catalog
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -35,7 +36,7 @@ const (
 
 type ObjectList struct {
 	*sync.RWMutex
-	*btree.BTreeG[*ObjectEntry]
+	tree atomic.Pointer[btree.BTreeG[*ObjectEntry]]
 }
 
 func NewObjectList() *ObjectList {
@@ -43,20 +44,12 @@ func NewObjectList() *ObjectList {
 		Degree:  64,
 		NoLocks: true,
 	}
-	return &ObjectList{
+	tree := btree.NewBTreeGOptions((*ObjectEntry).Less, opts)
+	list := &ObjectList{
 		RWMutex: &sync.RWMutex{},
-		BTreeG:  btree.NewBTreeGOptions((*ObjectEntry).Less, opts),
 	}
-}
-
-func (l *ObjectList) Copy() *ObjectList {
-	// if l.RWMutex != nil {
-	l.RLock()
-	defer l.RUnlock()
-	// }
-	return &ObjectList{
-		BTreeG: l.BTreeG.Copy(),
-	}
+	list.tree.Store(tree)
+	return list
 }
 
 func (l *ObjectList) GetObjectByID(id *types.Objectid) (obj *ObjectEntry, err error) {
@@ -67,20 +60,25 @@ func (l *ObjectList) GetObjectByID(id *types.Objectid) (obj *ObjectEntry, err er
 	return
 }
 
-func (l *ObjectList) Insert(obj *ObjectEntry) {
-	l.Set(obj)
-}
-
 func (l *ObjectList) deleteEntryLocked(obj *objectio.ObjectId) error {
+	l.Lock()
+	defer l.Unlock()
+	oldTree := l.tree.Load()
+	newTree := oldTree.Copy()
 	objs := l.GetAllNodes(obj)
 	for _, obj := range objs {
-		l.Delete(obj)
+		newTree.Delete(obj)
+	}
+	ok := l.tree.CompareAndSwap(oldTree, newTree)
+	if !ok {
+		panic("concurrent mutation")
 	}
 	return nil
 }
 
 func (l *ObjectList) GetAllNodes(objID *objectio.ObjectId) []*ObjectEntry {
-	it := l.Iter()
+	it := l.tree.Load().Iter()
+	defer it.Release()
 	key := &ObjectEntry{
 		ID:          *objID,
 		ObjectState: ObjectState_Create_Active,
@@ -113,8 +111,6 @@ func (l *ObjectList) GetLastestNode(objID *objectio.ObjectId) *ObjectEntry {
 }
 
 func (l *ObjectList) DropObjectByID(id *objectio.ObjectId, txn txnif.TxnReader) (droppedObj *ObjectEntry, isNew bool, err error) {
-	l.Lock()
-	defer l.Unlock()
 	objs := l.GetAllNodes(id)
 	if len(objs) == 0 {
 		return nil, false, moerr.GetOkExpectedEOB()
@@ -137,7 +133,40 @@ func (l *ObjectList) DropObjectByID(id *objectio.ObjectId, txn txnif.TxnReader) 
 	l.Set(droppedObj)
 	return
 }
-
+func (l *ObjectList) Set(object *ObjectEntry) {
+	l.Lock()
+	defer l.Unlock()
+	oldTree := l.tree.Load()
+	newTree := oldTree.Copy()
+	newTree.Set(object)
+	ok := l.tree.CompareAndSwap(oldTree, newTree)
+	if !ok {
+		panic("concurrent mutation")
+	}
+}
+func (l *ObjectList) Update(new, old *ObjectEntry) {
+	l.Lock()
+	defer l.Unlock()
+	oldTree := l.tree.Load()
+	newTree := oldTree.Copy()
+	newTree.Set(new)
+	newTree.Delete(old)
+	ok := l.tree.CompareAndSwap(oldTree, newTree)
+	if !ok {
+		panic("concurrent mutation")
+	}
+}
+func (l *ObjectList) Delete(obj *ObjectEntry) {
+	l.Lock()
+	defer l.Unlock()
+	oldTree := l.tree.Load()
+	newTree := oldTree.Copy()
+	newTree.Delete(obj)
+	ok := l.tree.CompareAndSwap(oldTree, newTree)
+	if !ok {
+		panic("concurrent mutation")
+	}
+}
 func (l *ObjectList) UpdateObjectInfo(id *objectio.ObjectId, txn txnif.TxnReader, stats *objectio.ObjectStats) (isNew bool, err error) {
 	l.Lock()
 	defer l.Unlock()

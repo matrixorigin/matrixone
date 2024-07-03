@@ -66,6 +66,7 @@ func TestCatalog1(t *testing.T) {
 			cnt++
 			t.Log(object.GetMeta().(*catalog.ObjectEntry).String())
 		}
+		it.Close()
 		assert.Equal(t, 1, cnt)
 	}
 }
