@@ -3918,14 +3918,14 @@ func regTransplant(source, target *Scope, sourceIdx, targetIdx int) {
 }
 
 func (c *Compile) generateCPUNumber(cpunum, blocks int) int {
-	if cpunum <= 0 || blocks <= 0 || c.IsTpQuery() {
+	if cpunum <= 0 || blocks <= 16 || c.IsTpQuery() {
 		return 1
 	}
-
-	if cpunum <= blocks {
-		return cpunum
+	ret := blocks/16 + 1
+	if ret < cpunum {
+		return ret
 	}
-	return blocks
+	return cpunum
 }
 
 func (c *Compile) initAnalyze(qry *plan.Query) {
