@@ -27,6 +27,25 @@ type SessionConn interface {
 	Write([]byte) error
 	RemoteAddress() string
 }
+
+type BufferAllocator struct {
+	allocator *SessionAllocator
+}
+
+func (ba *BufferAllocator) Alloc(size int) ([]byte, error) {
+	if size == 0 {
+		return nil, nil
+	}
+	return ba.allocator.Alloc(size)
+}
+
+func (ba *BufferAllocator) Free(buf []byte) {
+	if buf == nil {
+		return
+	}
+	ba.allocator.Free(buf)
+}
+
 type ListBlock struct {
 	data       []byte
 	writeIndex int
@@ -54,7 +73,7 @@ type Conn struct {
 	maxBytesToFlush int
 	packetInBuf     int
 	timeout         time.Duration
-	allocator       *SessionAllocator
+	allocator       *BufferAllocator
 	ses             *Session
 }
 
@@ -68,7 +87,7 @@ func NewIOSession(conn net.Conn, pu *config.ParameterUnit) (*Conn, error) {
 		connected:       true,
 		fixBuf:          &ListBlock{},
 		dynamicBuf:      list.New(),
-		allocator:       NewSessionAllocator(pu),
+		allocator:       &BufferAllocator{NewSessionAllocator(pu)},
 		timeout:         pu.SV.SessionTimeout.Duration,
 		maxBytesToFlush: int(pu.SV.MaxBytesInOutbufToFlush * 1024),
 	}
@@ -98,7 +117,7 @@ func (c *Conn) Disconnect() error {
 	if c.connected == false {
 		return nil
 	}
-	return c.closeConn()
+	return c.Close()
 }
 
 func (c *Conn) Close() error {
@@ -182,8 +201,10 @@ func (c *Conn) Read() ([]byte, error) {
 	for _, payload := range payloads {
 		totalLength += len(payload)
 	}
+	if totalLength > 0 {
+		finalPayload, err = c.allocator.Alloc(totalLength)
+	}
 
-	finalPayload, err = c.allocator.Alloc(totalLength)
 	if err != nil {
 		return nil, err
 	}
@@ -205,6 +226,10 @@ func (c *Conn) ReadOnePayload(packetLength int) ([]byte, error) {
 			c.allocator.Free(payload)
 		}
 	}(payload, err)
+
+	if packetLength == 0 {
+		return nil, nil
+	}
 
 	payload, err = c.allocator.Alloc(packetLength)
 	if err != nil {

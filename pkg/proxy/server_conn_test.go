@@ -229,11 +229,16 @@ func (s *testCNServer) Start() error {
 				cid := baseConnID.Add(1)
 				c := goetty.NewIOSession(goetty.WithSessionCodec(frontend.NewSqlCodec()),
 					goetty.WithSessionConn(uint64(cid), conn))
+				pu := config.NewParameterUnit(&fp, nil, nil, nil)
+				ios, err := frontend.NewIOSession(c.RawConn(), pu)
+				if err != nil {
+					return err
+				}
 				h := &testHandler{
 					connID: cid,
 					conn:   c,
 					mysqlProto: frontend.NewMysqlClientProtocol(
-						cid, c, 0, &fp),
+						cid, ios, 0, &fp),
 					sessionVars: make(map[string]string),
 					labels:      make(map[string]string),
 					server:      s,

@@ -2699,6 +2699,10 @@ func (mp *MysqlProtocolImpl) WriteResultSetRow(mrs *MysqlResultSet, cnt uint64) 
 
 	return err
 }
+func (mp *MysqlProtocolImpl) UseConn(conn net.Conn) {
+	mp.tcpConn.UseConn(conn)
+}
+
 func (mp *MysqlProtocolImpl) beginPacket() error {
 	err := mp.tcpConn.BeginPacket()
 	return err
