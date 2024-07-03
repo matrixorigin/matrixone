@@ -28,7 +28,7 @@ import (
 var ErrRWConflict = moerr.NewTxnRWConflictNoCtx()
 
 func readWriteConfilictCheck(entry *catalog.ObjectEntry, ts types.TS) (err error) {
-	needWait, txnToWait := entry.GetLatestNode().NeedWaitCommitting(ts)
+	needWait, txnToWait := entry.GetLatestNode().GetLastMVCCNode().NeedWaitCommitting(ts)
 	// TODO:
 	// I don't think we need to wait here any more. `block` and `Object` are
 	// local metadata and never be involved in a 2PC txn. So a prepared `block`

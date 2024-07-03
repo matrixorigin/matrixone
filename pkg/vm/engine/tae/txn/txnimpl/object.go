@@ -102,7 +102,7 @@ func (it *ObjectIt) Next() bool {
 			return false
 		}
 		entry := it.linkIt.Item()
-		valid = entry.IsVisible(it.table.store.txn)
+		valid = entry.GetLastMVCCNode().IsVisible(it.table.store.txn)
 		if valid {
 			it.curr = entry
 			return true

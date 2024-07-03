@@ -396,6 +396,7 @@ func (un *TxnMVCCNode) CloneAll() *TxnMVCCNode {
 	n.Start = un.Start
 	n.Prepare = un.Prepare
 	n.End = un.End
+	n.Txn = un.Txn
 	return n
 }
 

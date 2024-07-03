@@ -200,14 +200,10 @@ func NewDeltalocCmd(id uint32, cmdType uint16, commonID *common.ID, baseEntry *B
 
 func newObjectCmd(id uint32, cmdType uint16, entry *ObjectEntry) *EntryCommand[*ObjectMVCCNode, *ObjectNode] {
 	impl := &EntryCommand[*ObjectMVCCNode, *ObjectNode]{
-		ID:      entry.AsCommonID(),
-		cmdType: cmdType,
-		mvccNode: &MVCCNode[*ObjectMVCCNode]{
-			BaseNode:      &entry.ObjectMVCCNode,
-			EntryMVCCNode: &entry.EntryMVCCNode,
-			TxnMVCCNode:   &entry.TxnMVCCNode,
-		},
-		node: &entry.ObjectNode,
+		ID:       entry.AsCommonID(),
+		cmdType:  cmdType,
+		mvccNode: entry.GetLastMVCCNode(),
+		node:     &entry.ObjectNode,
 	}
 	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(id, impl)
 	return impl

@@ -505,16 +505,23 @@ func (b *TableLogtailRespBuilder) VisitObj(e *catalog.ObjectEntry) error {
 	}
 }
 func (b *TableLogtailRespBuilder) visitObjMeta(e *catalog.ObjectEntry) (bool, error) {
-	if e.IsAppendable() && e.ObjectMVCCNode.IsEmpty() {
+	mvccNodes := e.ClonePreparedInRange(b.start, b.end)
+	if len(mvccNodes) == 0 {
 		return false, nil
 	}
-	visitObject(b.objectMetaBatch, e, false, types.TS{})
-	return b.skipObjectData(e), nil
+
+	for _, node := range mvccNodes {
+		if e.IsAppendable() && node.BaseNode.IsEmpty() {
+			continue
+		}
+		visitObject(b.objectMetaBatch, e, node, false, types.TS{})
+	}
+	return b.skipObjectData(e, mvccNodes[len(mvccNodes)-1]), nil
 }
-func (b *TableLogtailRespBuilder) skipObjectData(e *catalog.ObjectEntry) bool {
+func (b *TableLogtailRespBuilder) skipObjectData(e *catalog.ObjectEntry, lastMVCCNode *catalog.MVCCNode[*catalog.ObjectMVCCNode]) bool {
 	if e.IsAppendable() {
 		// appendable block has been flushed, no need to collect data
-		return !e.ObjectMVCCNode.IsEmpty()
+		return !lastMVCCNode.BaseNode.IsEmpty()
 	} else {
 		return true
 	}
@@ -538,23 +545,23 @@ func (b *TableLogtailRespBuilder) visitObjData(e *catalog.ObjectEntry) error {
 	}
 	return nil
 }
-func visitObject(batch *containers.Batch, entry *catalog.ObjectEntry, push bool, committs types.TS) {
+func visitObject(batch *containers.Batch, entry *catalog.ObjectEntry, node *catalog.MVCCNode[*catalog.ObjectMVCCNode], push bool, committs types.TS) {
 	batch.GetVectorByName(catalog.AttrRowID).Append(objectio.HackObjid2Rowid(&entry.ID), false)
 	if push {
 		batch.GetVectorByName(catalog.AttrCommitTs).Append(committs, false)
 	} else {
-		batch.GetVectorByName(catalog.AttrCommitTs).Append(entry.TxnMVCCNode.End, false)
+		batch.GetVectorByName(catalog.AttrCommitTs).Append(node.TxnMVCCNode.End, false)
 	}
-	entry.ObjectMVCCNode.AppendTuple(&entry.ID, batch)
+	node.BaseNode.AppendTuple(&entry.ID, batch)
 	if push {
-		entry.TxnMVCCNode.AppendTupleWithCommitTS(batch, committs)
+		node.TxnMVCCNode.AppendTupleWithCommitTS(batch, committs)
 	} else {
-		entry.TxnMVCCNode.AppendTuple(batch)
+		node.TxnMVCCNode.AppendTuple(batch)
 	}
 	if push {
-		entry.EntryMVCCNode.AppendTupleWithCommitTS(batch, committs)
+		node.EntryMVCCNode.AppendTupleWithCommitTS(batch, committs)
 	} else {
-		entry.EntryMVCCNode.AppendTuple(batch)
+		node.EntryMVCCNode.AppendTuple(batch)
 	}
 	batch.GetVectorByName(SnapshotAttr_DBID).Append(entry.GetTable().GetDB().ID, false)
 	batch.GetVectorByName(SnapshotAttr_TID).Append(entry.GetTable().ID, false)

@@ -456,7 +456,8 @@ func (obj *aobject) EstimateMemSize() (int, int) {
 
 func (obj *aobject) GetRowsOnReplay() uint64 {
 	rows := uint64(obj.appendMVCC.GetTotalRow())
-	fileRows := uint64(obj.meta.ObjectStats.Rows())
+	stats := obj.meta.GetObjectStats()
+	fileRows := uint64(stats.Rows())
 	if rows > fileRows {
 		return rows
 	}

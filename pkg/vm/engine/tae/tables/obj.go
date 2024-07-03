@@ -300,6 +300,7 @@ func (obj *object) EstimateMemSize() (int, int) {
 }
 
 func (obj *object) GetRowsOnReplay() uint64 {
-	fileRows := uint64(obj.meta.ObjectStats.Rows())
+	stats := obj.meta.GetObjectStats()
+	fileRows := uint64(stats.Rows())
 	return fileRows
 }

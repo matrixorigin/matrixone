@@ -123,11 +123,14 @@ func (l *ObjectList) DropObjectByID(id *objectio.ObjectId, txn txnif.TxnReader) 
 	if obj.HasDropIntent() {
 		return nil, false, moerr.GetOkExpectedEOB()
 	}
-	needWait, txnToWait := obj.NeedWaitCommitting(txn.GetStartTS())
+	if obj.DeleteNode != nil {
+		panic("logic error")
+	}
+	needWait, txnToWait := obj.CreateNode.NeedWaitCommitting(txn.GetStartTS())
 	if needWait {
 		txnToWait.GetTxnState(true)
 	}
-	if err := obj.CheckConflict(txn); err != nil {
+	if err := obj.CreateNode.CheckConflict(txn); err != nil {
 		return nil, false, err
 	}
 	droppedObj, isNew = obj.GetDropEntry(txn)
@@ -143,11 +146,11 @@ func (l *ObjectList) UpdateObjectInfo(id *objectio.ObjectId, txn txnif.TxnReader
 		return false, moerr.GetOkExpectedEOB()
 	}
 	obj := objs[len(objs)-1]
-	needWait, txnToWait := obj.NeedWaitCommitting(txn.GetStartTS())
+	needWait, txnToWait := obj.GetLastMVCCNode().NeedWaitCommitting(txn.GetStartTS())
 	if needWait {
 		txnToWait.GetTxnState(true)
 	}
-	if err := obj.CheckConflict(txn); err != nil {
+	if err := obj.GetLastMVCCNode().CheckConflict(txn); err != nil {
 		return false, err
 	}
 	newObj, isNew := obj.GetUpdateEntry(txn, stats)

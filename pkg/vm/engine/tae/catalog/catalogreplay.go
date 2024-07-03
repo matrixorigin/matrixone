@@ -14,6 +14,8 @@
 package catalog
 
 import (
+	"fmt"
+
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -363,14 +365,23 @@ func (catalog *Catalog) onReplayUpdateObject(
 		logutil.Info(catalog.SimplePPString(3))
 		panic(err)
 	}
-	obj := NewReplayObjectEntry()
-	obj.ID = *cmd.ID.ObjectID()
-	obj.table = rel
-	obj.ObjectNode = *cmd.node
-	obj.EntryMVCCNode = *cmd.mvccNode.EntryMVCCNode
-	obj.ObjectMVCCNode = *cmd.mvccNode.BaseNode
-	obj.TxnMVCCNode = *cmd.mvccNode.TxnMVCCNode
-	rel.AddEntryLocked(obj)
+	var obj *ObjectEntry
+	if cmd.mvccNode.CreatedAt.Equal(&txnif.UncommitTS) {
+		obj = NewReplayObjectEntry()
+		obj.ID = *cmd.ID.ObjectID()
+		obj.table = rel
+		obj.ObjectNode = *cmd.node
+		obj.CreateNode = cmd.mvccNode
+		rel.AddEntryLocked(obj)
+	}
+	if cmd.mvccNode.DeletedAt.Equal(&txnif.UncommitTS) {
+		obj, err = rel.GetObjectByID(cmd.ID.ObjectID())
+		if err != nil {
+			panic(fmt.Sprintf("obj %v not existed, table:\n%v", cmd.ID.String(), rel.StringWithLevel(3)))
+		}
+		obj.DeleteNode = cmd.mvccNode
+	}
+
 	if obj.objData == nil {
 		obj.objData = dataFactory.MakeObjectFactory()(obj)
 	} else {
@@ -419,18 +430,34 @@ func (catalog *Catalog) onReplayCheckpointObject(
 		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
 	}
-	obj := NewReplayObjectEntry()
-	obj.ID = *objid
-	obj.table = rel
-	obj.ObjectNode = ObjectNode{
-		state:    state,
-		sorted:   state == ES_NotAppendable,
-		SortHint: catalog.NextObject(),
+	var obj *ObjectEntry
+	if entryNode.CreatedAt.Equal(&txnNode.End) {
+		obj = NewReplayObjectEntry()
+		obj.ID = *objid
+		obj.table = rel
+		obj.ObjectNode = ObjectNode{
+			state:    state,
+			sorted:   state == ES_NotAppendable,
+			SortHint: catalog.NextObject(),
+		}
+		obj.CreateNode = &MVCCNode[*ObjectMVCCNode]{
+			EntryMVCCNode: entryNode,
+			BaseNode:      objNode,
+			TxnMVCCNode:   txnNode,
+		}
+		rel.AddEntryLocked(obj)
 	}
-	obj.EntryMVCCNode = *entryNode
-	obj.ObjectMVCCNode = *objNode
-	obj.TxnMVCCNode = *txnNode
-	rel.AddEntryLocked(obj)
+	if entryNode.DeletedAt.Equal(&txnNode.End) {
+		obj, err = rel.GetObjectByID(objid)
+		if err != nil {
+			panic(fmt.Sprintf("obj %v not existed, table:\n%v", objid.String(), rel.StringWithLevel(3)))
+		}
+		obj.DeleteNode = &MVCCNode[*ObjectMVCCNode]{
+			EntryMVCCNode: entryNode,
+			BaseNode:      objNode,
+			TxnMVCCNode:   txnNode,
+		}
+	}
 	if obj.objData == nil {
 		obj.objData = dataFactory.MakeObjectFactory()(obj)
 	} else {

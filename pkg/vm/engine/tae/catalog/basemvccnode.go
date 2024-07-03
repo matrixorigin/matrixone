@@ -193,6 +193,9 @@ func CompareBaseNode[T BaseNode[T]](e, o *MVCCNode[T]) int {
 }
 
 func (e *MVCCNode[T]) CloneAll() *MVCCNode[T] {
+	if e == nil {
+		return nil
+	}
 	node := &MVCCNode[T]{
 		EntryMVCCNode: e.EntryMVCCNode.Clone(),
 		TxnMVCCNode:   e.TxnMVCCNode.CloneAll(),
