@@ -1262,6 +1262,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		createTable.CreateAsSelectSql = insertSqlBuilder.String()
 	}
 
+	//table must have one visible column
+	if len(createTable.TableDef.Cols) == 0 {
+		return moerr.NewTableMustHaveVisibleColumn(ctx.GetContext())
+	}
+
 	//add cluster table attribute
 	if stmt.IsClusterTable {
 		if _, ok := colMap[util.GetClusterTableAttributeName()]; ok {

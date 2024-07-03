@@ -448,7 +448,10 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 
 }
 
-func GetShuffleDop() (dop int) {
+func GetShuffleDop(cpunum int) (dop int) {
+	if cpunum < MAXShuffleDOP {
+		return cpunum
+	}
 	return MAXShuffleDOP
 }
 
@@ -564,4 +567,16 @@ func shouldUseShuffleRanges(s *pb.ShuffleRange) []float64 {
 		return nil
 	}
 	return s.Result
+}
+
+func IsShuffleChildren(n *plan.Node, ns []*plan.Node) bool {
+	switch n.NodeType {
+	case plan.Node_JOIN:
+		if n.Stats.HashmapStats.Shuffle {
+			return true
+		}
+	case plan.Node_FILTER:
+		return IsShuffleChildren(ns[n.Children[0]], ns)
+	}
+	return false
 }
