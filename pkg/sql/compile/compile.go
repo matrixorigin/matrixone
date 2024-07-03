@@ -3763,7 +3763,7 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 		}
 		children = append(children, ss...)
 		if !single {
-			parent = append(parent, c.newMergeRemoteScope(ss, n))
+			parent = append(parent, c.newMergeRemoteScope(ss, cn))
 		}
 	}
 
