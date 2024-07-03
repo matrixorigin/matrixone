@@ -135,7 +135,14 @@ func TestNewTxnWithSnapshotTS(t *testing.T) {
 	assert.Equal(t, txn.TxnStatus_Active, txnMeta.Status)
 }
 
+type fakeRunningPipelinesManager struct{}
+
+func (m *fakeRunningPipelinesManager) PauseService()                   {}
+func (m *fakeRunningPipelinesManager) KillAllQueriesWithError(_ error) {}
+func (m *fakeRunningPipelinesManager) ResumeService()                  {}
+
 func TestTxnClientAbortAllRunningTxn(t *testing.T) {
+	SetRunningPipelineManagement(&fakeRunningPipelinesManager{})
 	rt := runtime.NewRuntime(metadata.ServiceType_CN, "",
 		logutil.GetPanicLogger(),
 		runtime.WithClock(clock.NewHLCClock(func() int64 {
