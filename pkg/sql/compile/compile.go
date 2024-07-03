@@ -463,6 +463,9 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 			err,
 		)
 		v2.TxnStatementExecuteDurationHistogram.Observe(cost.Seconds())
+		if _, ok := c.pn.Plan.(*plan.Plan_Ddl); ok {
+			c.setHaveDDL(true)
+		}
 	}()
 
 	for _, s := range c.scope {
@@ -945,22 +948,34 @@ func (c *Compile) getCNList() (engine.Nodes, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	// We should always make sure the current CN is contained in the cn list.
 	if c.proc == nil || c.proc.QueryClient == nil {
 		return cnList, nil
 	}
 	cnID := c.proc.QueryClient.ServiceID()
+	needAppendCurrentCN := true
 	for _, node := range cnList {
 		if node.Id == cnID {
-			return cnList, nil
+			needAppendCurrentCN = false
+			break
 		}
 	}
-	cnList = append(cnList, engine.Node{
-		Id:   cnID,
-		Addr: c.addr,
-		Mcpu: ncpu,
-	})
+	if needAppendCurrentCN {
+		cnList = append(cnList, engine.Node{
+			Id:   cnID,
+			Addr: c.addr,
+			Mcpu: ncpu,
+		})
+	}
+
+	//When DDL statement has been executed within a transaction, force the use of a single CN
+	if c.getHaveDDL() {
+		for _, node := range cnList {
+			if node.Id == cnID {
+				return []engine.Node{node}, nil
+			}
+		}
+	}
 	return cnList, nil
 }
 
@@ -4771,6 +4786,21 @@ func (c *Compile) SetOriginSQL(sql string) {
 
 func (c *Compile) SetBuildPlanFunc(buildPlanFunc func() (*plan2.Plan, error)) {
 	c.buildPlanFunc = buildPlanFunc
+}
+
+func (c *Compile) setHaveDDL(haveDDL bool) {
+	txn := c.proc.TxnOperator
+	if txn != nil && txn.GetWorkspace() != nil {
+		txn.GetWorkspace().SetHaveDDL(haveDDL)
+	}
+}
+
+func (c *Compile) getHaveDDL() bool {
+	txn := c.proc.TxnOperator
+	if txn != nil && txn.GetWorkspace() != nil {
+		return txn.GetWorkspace().GetHaveDDL()
+	}
+	return false
 }
 
 // detectFkSelfRefer checks if foreign key self refer confirmed
