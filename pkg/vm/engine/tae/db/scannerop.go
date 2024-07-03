@@ -184,3 +184,7 @@ func (s *MergeTaskBuilder) onObject(objectEntry *catalog.ObjectEntry) (err error
 	objectEntry.RLock()
 	return
 }
+
+func (s *MergeTaskBuilder) onPostObject(obj *catalog.ObjectEntry) (err error) {
+	return nil
+}

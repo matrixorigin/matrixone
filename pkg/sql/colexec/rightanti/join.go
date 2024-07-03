@@ -86,7 +86,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			bat := msg.Batch
 			if bat == nil {
 				ctr.state = SendLast
-				arg.rbat = nil
+				arg.ctr.buf = nil
 				continue
 			}
 			if bat.IsEmpty() {
@@ -106,8 +106,8 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			continue
 
 		case SendLast:
-			if arg.rbat == nil {
-				arg.lastpos = 0
+			if arg.ctr.buf == nil {
+				arg.ctr.lastpos = 0
 				setNil, err := ctr.sendLast(arg, proc, analyze, arg.GetIsFirst(), arg.GetIsLast())
 				if err != nil {
 					return result, err
@@ -117,12 +117,12 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 				continue
 			} else {
-				if arg.lastpos >= len(arg.rbat) {
+				if arg.ctr.lastpos >= len(arg.ctr.buf) {
 					ctr.state = End
 					continue
 				}
-				result.Batch = arg.rbat[arg.lastpos]
-				arg.lastpos++
+				result.Batch = arg.ctr.buf[arg.ctr.lastpos]
+				arg.ctr.lastpos++
 				return result, nil
 			}
 
@@ -192,16 +192,16 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 		if !ap.IsMerger {
 			ap.Channel <- ctr.matched
 			return true, nil
-		}
-
-		cnt := 1
-		for v := range ap.Channel {
-			ctr.matched.Or(v)
-			cnt++
-			if cnt == int(ap.NumCPU) {
-				close(ap.Channel)
-				break
+		} else {
+			for cnt := 1; cnt < int(ap.NumCPU); cnt++ {
+				v := ctr.ReceiveBitmapFromChannel(ap.Channel)
+				if v != nil {
+					ctr.matched.Or(v)
+				} else {
+					return true, nil
+				}
 			}
+			close(ap.Channel)
 		}
 	}
 
@@ -234,15 +234,15 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 		}
 		ctr.rbat.AddRowCount(len(sels))
 		analyze.Output(ctr.rbat, isLast)
-		ap.rbat = []*batch.Batch{ctr.rbat}
+		ap.ctr.buf = []*batch.Batch{ctr.rbat}
 		return false, nil
 	} else {
 		n := (len(sels)-1)/colexec.DefaultBatchSize + 1
-		ap.rbat = make([]*batch.Batch, n)
-		for k := range ap.rbat {
-			ap.rbat[k] = batch.NewWithSize(len(ap.Result))
+		ap.ctr.buf = make([]*batch.Batch, n)
+		for k := range ap.ctr.buf {
+			ap.ctr.buf[k] = batch.NewWithSize(len(ap.Result))
 			for i, pos := range ap.Result {
-				ap.rbat[k].Vecs[i] = proc.GetVector(ap.RightTypes[pos])
+				ap.ctr.buf[k].Vecs[i] = proc.GetVector(ap.RightTypes[pos])
 			}
 			var newsels []int32
 			if (k+1)*colexec.DefaultBatchSize <= len(sels) {
@@ -253,13 +253,13 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 			for j, pos := range ap.Result {
 				for _, sel := range newsels {
 					idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
-					if err := ap.rbat[k].Vecs[j].UnionOne(ctr.batches[idx1].Vecs[pos], int64(idx2), proc.Mp()); err != nil {
+					if err := ap.ctr.buf[k].Vecs[j].UnionOne(ctr.batches[idx1].Vecs[pos], int64(idx2), proc.Mp()); err != nil {
 						return false, err
 					}
 				}
 			}
-			ap.rbat[k].SetRowCount(len(newsels))
-			analyze.Output(ap.rbat[k], isLast)
+			ap.ctr.buf[k].SetRowCount(len(newsels))
+			analyze.Output(ap.ctr.buf[k], isLast)
 		}
 		return false, nil
 	}

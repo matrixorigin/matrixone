@@ -44,7 +44,8 @@ type evalVector struct {
 type container struct {
 	colexec.ReceiverOperator
 
-	state int
+	state   int
+	lastpos int
 
 	inBuckets []uint8
 
@@ -71,6 +72,8 @@ type container struct {
 
 	tmpBatches []*batch.Batch // for reuse
 
+	buf []*batch.Batch
+
 	maxAllocSize int64
 }
 
@@ -80,13 +83,11 @@ type Argument struct {
 	RightTypes []types.Type
 	Cond       *plan.Expr
 	Conditions [][]*plan.Expr
-	rbat       []*batch.Batch
-	lastpos    int
 
-	IsMerger bool
-	Channel  chan *bitmap.Bitmap
-	NumCPU   uint64
+	Channel chan *bitmap.Bitmap
+	NumCPU  uint64
 
+	IsMerger           bool
 	HashOnPK           bool
 	IsShuffle          bool
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
@@ -132,17 +133,8 @@ func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
-		if !ctr.handledLast {
-			if arg.NumCPU > 0 {
-				if arg.IsMerger {
-					for i := uint64(1); i < arg.NumCPU; i++ {
-						<-arg.Channel
-					}
-				} else {
-					arg.Channel <- ctr.matched
-				}
-			}
-			ctr.handledLast = true
+		if !ctr.handledLast && arg.NumCPU > 1 && !arg.IsMerger {
+			arg.Channel <- nil
 		}
 		ctr.cleanBatch(proc)
 		ctr.cleanEvalVectors()
@@ -170,6 +162,7 @@ func (ctr *container) cleanBatch(proc *process.Process) {
 		proc.PutBatch(ctr.batches[i])
 	}
 	ctr.batches = nil
+
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil

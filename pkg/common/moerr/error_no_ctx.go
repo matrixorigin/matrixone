@@ -286,6 +286,10 @@ func NewPrevCheckpointNotFinished() *Error {
 	return newError(Context(), ErrPrevCheckpointNotFinished)
 }
 
+func NewCantDelGCCheckerNoCtx() *Error {
+	return newError(Context(), ErrCantDelGCChecker)
+}
+
 func NewNotFoundNoCtx() *Error {
 	return newError(Context(), ErrNotFound)
 }
@@ -371,6 +375,10 @@ func NewKeyAlreadyExistsNoCtx() *Error {
 	return newError(Context(), ErrKeyAlreadyExists)
 }
 
+func NewErrTooLargeObjectSizeNoCtx(option uint64) *Error {
+	return newError(Context(), ErrTooLargeObjectSize, option)
+}
+
 func NewArenaFullNoCtx() *Error {
 	return newError(Context(), ErrArenaFull)
 }
@@ -381,4 +389,8 @@ func NewReplicaNotFound(replica string) *Error {
 
 func NewReplicaNotMatch(current, received string) *Error {
 	return newError(Context(), ErrReplicaNotMatch, current, received)
+}
+
+func NewCantCompileForPrepareNoCtx() *Error {
+	return newError(Context(), ErrCantCompileForPrepare)
 }

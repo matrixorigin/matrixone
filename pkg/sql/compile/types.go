@@ -15,7 +15,6 @@
 package compile
 
 import (
-	"context"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -251,8 +250,8 @@ type Compile struct {
 
 	anal *anaylze
 	// e db engine instance.
-	e   engine.Engine
-	ctx context.Context
+	e engine.Engine
+
 	// proc stores the execution context.
 	proc *process.Process
 	// TxnOffset read starting offset position within the transaction during the execute current statement
@@ -287,6 +286,8 @@ type Compile struct {
 	disableRetry bool
 
 	lastAllocID int32
+
+	isPrepare bool
 }
 
 type RemoteReceivRegInfo struct {

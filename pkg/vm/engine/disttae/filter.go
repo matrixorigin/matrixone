@@ -329,212 +329,192 @@ func CompileFilterExpr(
 	case *plan.Expr_F:
 		switch exprImpl.F.Func.ObjName {
 		case "or":
-			leftFastOp, leftLoadOp, leftObjectOp, leftBlockOp, leftSeekOp, leftCan, leftHSH := CompileFilterExpr(
-				exprImpl.F.Args[0], proc, tableDef, fs,
-			)
-			if !leftCan {
-				return nil, nil, nil, nil, nil, false, false
-			}
-			rightFastOp, rightLoadOp, rightObjectOp, rightBlockOp, rightSeekOp, rightCan, rightHSH := CompileFilterExpr(
-				exprImpl.F.Args[1], proc, tableDef, fs,
-			)
-			if !rightCan {
-				return nil, nil, nil, nil, nil, false, false
-			}
-			highSelectivityHint = leftHSH && rightHSH
+			highSelectivityHint = true
+			fastOps := make([]FastFilterOp, len(exprImpl.F.Args))
+			loadOps := make([]LoadOp, len(exprImpl.F.Args))
+			objectOps := make([]ObjectFilterOp, len(exprImpl.F.Args))
+			blockOps := make([]BlockFilterOp, len(exprImpl.F.Args))
+			seekOps := make([]SeekFirstBlockOp, len(exprImpl.F.Args))
 
-			if leftFastOp != nil || rightFastOp != nil {
-				fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
-					if leftFastOp != nil {
-						if ok, err := leftFastOp(obj); ok || err != nil {
-							return ok, err
-						}
-					}
-					if rightFastOp != nil {
-						return rightFastOp(obj)
-					}
-					return true, nil
-				}
-			}
-			if leftLoadOp != nil || rightLoadOp != nil {
-				loadOp = func(
-					ctx context.Context,
-					obj objectio.ObjectStats,
-					inMeta objectio.ObjectMeta,
-					inBF objectio.BloomFilter,
-				) (meta objectio.ObjectMeta, bf objectio.BloomFilter, err error) {
-					if leftLoadOp != nil {
-						if meta, bf, err = leftLoadOp(ctx, obj, inMeta, inBF); err != nil {
-							return
-						}
-						inMeta = meta
-						inBF = bf
-					}
-					if rightLoadOp != nil {
-						meta, bf, err = rightLoadOp(ctx, obj, inMeta, inBF)
-					}
-					return
-				}
-			}
-			if leftObjectOp != nil || rightLoadOp != nil {
-				objectFilterOp = func(meta objectio.ObjectMeta, bf objectio.BloomFilter) (bool, error) {
-					if leftObjectOp != nil {
-						if ok, err := leftObjectOp(meta, bf); ok || err != nil {
-							return ok, err
-						}
-					}
-					if rightObjectOp != nil {
-						return rightObjectOp(meta, bf)
-					}
-					return true, nil
+			for idx := range exprImpl.F.Args {
+				op1, op2, op3, op4, op5, can, hsh := CompileFilterExpr(exprImpl.F.Args[idx], proc, tableDef, fs)
+				if !can {
+					return nil, nil, nil, nil, nil, false, false
 				}
 
+				fastOps = append(fastOps, op1)
+				loadOps = append(loadOps, op2)
+				objectOps = append(objectOps, op3)
+				blockOps = append(blockOps, op4)
+				seekOps = append(seekOps, op5)
+
+				highSelectivityHint = highSelectivityHint && hsh
 			}
-			if leftBlockOp != nil || rightBlockOp != nil {
-				blockFilterOp = func(
-					blkIdx int, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
-				) (bool, bool, error) {
-					can := true
-					ok := false
-					if leftBlockOp != nil {
-						if thisCan, thisOK, err := leftBlockOp(blkIdx, blkMeta, bf); err != nil {
-							return false, false, err
-						} else {
-							ok = ok || thisOK
-							can = can && thisCan
-						}
+
+			fastFilterOp = func(stats objectio.ObjectStats) (bool, error) {
+				for idx := range fastOps {
+					if fastOps[idx] == nil {
+						continue
 					}
-					if rightBlockOp != nil {
-						if thisCan, thisOK, err := rightBlockOp(blkIdx, blkMeta, bf); err != nil {
-							return false, false, err
-						} else {
-							ok = ok || thisOK
-							can = can && thisCan
-						}
+					if ok, err := fastOps[idx](stats); ok || err != nil {
+						return ok, err
 					}
-					return can, ok, nil
 				}
+				return true, nil
 			}
-			if leftSeekOp != nil || rightBlockOp != nil {
-				seekOp = func(meta objectio.ObjectDataMeta) int {
-					var pos int
-					if leftSeekOp != nil {
-						pos = leftSeekOp(meta)
+
+			loadOp = func(ctx context.Context, stats objectio.ObjectStats, inMeta objectio.ObjectMeta, inBF objectio.BloomFilter) (
+				meta objectio.ObjectMeta, bf objectio.BloomFilter, err error) {
+				for idx := range loadOps {
+					if loadOps[idx] == nil {
+						continue
 					}
-					if rightSeekOp != nil {
-						pos2 := rightSeekOp(meta)
-						if pos2 < pos {
-							pos = pos2
-						}
+					if meta, bf, err = loadOps[idx](ctx, stats, inMeta, inBF); err != nil {
+						return
 					}
-					return pos
+					inMeta = meta
+					inBF = bf
 				}
+				return
 			}
+
+			objectFilterOp = func(meta objectio.ObjectMeta, bf objectio.BloomFilter) (bool, error) {
+				for idx := range objectOps {
+					if objectOps[idx] == nil {
+						continue
+					}
+
+					if ok, err := objectOps[idx](meta, bf); ok || err != nil {
+						return ok, err
+					}
+				}
+				return true, nil
+			}
+
+			blockFilterOp = func(blkIdx int, blkMeta objectio.BlockObject, bf objectio.BloomFilter) (bool, bool, error) {
+				can := true
+				ok := false
+				for idx := range blockOps {
+					if blockOps[idx] == nil {
+						continue
+					}
+
+					if thisCan, thisOk, err := blockOps[idx](blkIdx, blkMeta, bf); err != nil {
+						return false, false, err
+					} else {
+						ok = ok || thisOk
+						can = can && thisCan
+					}
+				}
+				return can, ok, nil
+			}
+
+			seekOp = func(meta objectio.ObjectDataMeta) int {
+				var pos int
+				for idx := range seekOps {
+					if seekOps[idx] == nil {
+						continue
+					}
+					pp := seekOps[idx](meta)
+					pos = min(pos, pp)
+				}
+				return pos
+			}
+
 		case "and":
-			leftFastOp, leftLoadOp, leftObjectOp, leftBlockOp, leftSeekOp, leftCan, leftHSH := CompileFilterExpr(
-				exprImpl.F.Args[0], proc, tableDef, fs,
-			)
-			if !leftCan {
-				return nil, nil, nil, nil, nil, false, false
-			}
-			rightFastOp, rightLoadOp, rightObjectOp, rightBlockOp, rightSeekOp, rightCan, rightHSH := CompileFilterExpr(
-				exprImpl.F.Args[1], proc, tableDef, fs,
-			)
-			if !rightCan {
-				return nil, nil, nil, nil, nil, false, false
-			}
-			highSelectivityHint = leftHSH || rightHSH
+			highSelectivityHint = true
+			fastOps := make([]FastFilterOp, len(exprImpl.F.Args))
+			loadOps := make([]LoadOp, len(exprImpl.F.Args))
+			objectOps := make([]ObjectFilterOp, len(exprImpl.F.Args))
+			blockOps := make([]BlockFilterOp, len(exprImpl.F.Args))
+			seekOps := make([]SeekFirstBlockOp, len(exprImpl.F.Args))
 
-			if leftFastOp != nil || rightFastOp != nil {
-				fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
-					if leftFastOp != nil {
-						if ok, err := leftFastOp(obj); !ok || err != nil {
-							return ok, err
-						}
-					}
-					if rightFastOp != nil {
-						return rightFastOp(obj)
-					}
-					return true, nil
-				}
-			}
-			if leftLoadOp != nil || rightLoadOp != nil {
-				loadOp = func(
-					ctx context.Context,
-					obj objectio.ObjectStats,
-					inMeta objectio.ObjectMeta,
-					inBF objectio.BloomFilter,
-				) (meta objectio.ObjectMeta, bf objectio.BloomFilter, err error) {
-					if leftLoadOp != nil {
-						if meta, bf, err = leftLoadOp(ctx, obj, inMeta, inBF); err != nil {
-							return
-						}
-						inMeta = meta
-						inBF = bf
-					}
-					if rightLoadOp != nil {
-						meta, bf, err = rightLoadOp(ctx, obj, inMeta, inBF)
-					}
-					return
-				}
-			}
-			if leftObjectOp != nil || rightLoadOp != nil {
-				objectFilterOp = func(meta objectio.ObjectMeta, bf objectio.BloomFilter) (bool, error) {
-					if leftObjectOp != nil {
-						if ok, err := leftObjectOp(meta, bf); !ok || err != nil {
-							return ok, err
-						}
-					}
-					if rightObjectOp != nil {
-						return rightObjectOp(meta, bf)
-					}
-					return true, nil
+			for idx := range exprImpl.F.Args {
+				op1, op2, op3, op4, op5, can, hsh := CompileFilterExpr(exprImpl.F.Args[idx], proc, tableDef, fs)
+				if !can {
+					return nil, nil, nil, nil, nil, false, false
 				}
 
+				fastOps = append(fastOps, op1)
+				loadOps = append(loadOps, op2)
+				objectOps = append(objectOps, op3)
+				blockOps = append(blockOps, op4)
+				seekOps = append(seekOps, op5)
+
+				highSelectivityHint = highSelectivityHint || hsh
 			}
-			if leftBlockOp != nil || rightBlockOp != nil {
-				blockFilterOp = func(
-					blkIdx int, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
-				) (bool, bool, error) {
-					ok := true
-					if leftBlockOp != nil {
-						if thisCan, thisOK, err := leftBlockOp(blkIdx, blkMeta, bf); err != nil {
-							return false, false, err
-						} else {
-							if thisCan {
-								return true, false, nil
-							}
-							ok = ok && thisOK
-						}
+
+			fastFilterOp = func(stats objectio.ObjectStats) (bool, error) {
+				for idx := range fastOps {
+					if fastOps[idx] == nil {
+						continue
 					}
-					if rightBlockOp != nil {
-						if thisCan, thisOK, err := rightBlockOp(blkIdx, blkMeta, bf); err != nil {
-							return false, false, err
-						} else {
-							if thisCan {
-								return true, false, nil
-							}
-							ok = ok && thisOK
-						}
+					if ok, err := fastOps[idx](stats); !ok || err != nil {
+						return ok, err
 					}
-					return false, ok, nil
 				}
+				return true, nil
 			}
-			if leftSeekOp != nil || rightSeekOp != nil {
-				seekOp = func(meta objectio.ObjectDataMeta) int {
-					var pos int
-					if leftSeekOp != nil {
-						pos = leftSeekOp(meta)
+
+			loadOp = func(ctx context.Context, stats objectio.ObjectStats, inMeta objectio.ObjectMeta, inBF objectio.BloomFilter) (
+				meta objectio.ObjectMeta, bf objectio.BloomFilter, err error) {
+				for idx := range loadOps {
+					if loadOps[idx] == nil {
+						continue
 					}
-					if rightSeekOp != nil {
-						pos2 := rightSeekOp(meta)
-						if pos2 < pos {
-							pos = pos2
-						}
+					if meta, bf, err = loadOps[idx](ctx, stats, inMeta, inBF); err != nil {
+						return
 					}
-					return pos
+					inMeta = meta
+					inBF = bf
 				}
+				return
 			}
+
+			objectFilterOp = func(meta objectio.ObjectMeta, bf objectio.BloomFilter) (bool, error) {
+				for idx := range objectOps {
+					if objectOps[idx] == nil {
+						continue
+					}
+
+					if ok, err := objectOps[idx](meta, bf); !ok || err != nil {
+						return ok, err
+					}
+				}
+				return true, nil
+			}
+
+			blockFilterOp = func(blkIdx int, blkMeta objectio.BlockObject, bf objectio.BloomFilter) (bool, bool, error) {
+				ok := true
+				for idx := range blockOps {
+					if blockOps[idx] == nil {
+						continue
+					}
+
+					if thisCan, thisOk, err := blockOps[idx](blkIdx, blkMeta, bf); err != nil {
+						return false, false, err
+					} else {
+						if thisCan {
+							return true, false, nil
+						}
+						ok = ok && thisOk
+					}
+				}
+				return false, ok, nil
+			}
+
+			seekOp = func(meta objectio.ObjectDataMeta) int {
+				var pos int
+				for idx := range seekOps {
+					if seekOps[idx] == nil {
+						continue
+					}
+					pp := seekOps[idx](meta)
+					pos = min(pos, pp)
+				}
+				return pos
+			}
+
 		case "<=":
 			colExpr, vals, ok := mustColConstValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
 			if !ok {

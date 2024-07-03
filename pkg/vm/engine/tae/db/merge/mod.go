@@ -35,6 +35,7 @@ import (
 )
 
 var StopMerge atomic.Bool
+var DeltaLocMerge atomic.Bool
 
 type CNMergeScheduler interface {
 	SendMergeTask(ctx context.Context, task *api.MergeTaskEntry) error

@@ -38,6 +38,7 @@ type lockTableAllocator struct {
 	server          Server
 	client          Client
 	ctl             sync.Map // lock service id -> *commitCtl
+	version         uint64
 	mu              struct {
 		sync.RWMutex
 		services   map[string]*serviceBinds
@@ -78,6 +79,7 @@ func NewLockTableAllocator(
 			stopper.WithLogger(logger.RawLogger().Named(tag))),
 		keepBindTimeout: keepBindTimeout,
 		client:          rpcClient,
+		version:         uint64(time.Now().UnixNano()),
 	}
 	la.mu.lockTables = make(map[uint32]map[uint64]pb.LockTable)
 	la.mu.services = make(map[string]*serviceBinds)
@@ -94,7 +96,7 @@ func NewLockTableAllocator(
 	}
 
 	la.initServer(cfg)
-	logLockAllocatorStartSucc()
+	logLockAllocatorStartSucc(la.version)
 
 	return la
 }
@@ -199,6 +201,10 @@ func (l *lockTableAllocator) GetLatest(groupID uint32, tableID uint64) pb.LockTa
 	return pb.LockTable{}
 }
 
+func (l *lockTableAllocator) GetVersion() uint64 {
+	return l.version
+}
+
 func (l *lockTableAllocator) setRestartService(serviceID string) {
 	b := l.getServiceBindsWithoutPrefix(serviceID)
 	if b == nil {
@@ -206,6 +212,9 @@ func (l *lockTableAllocator) setRestartService(serviceID string) {
 			zap.String("serviceID", serviceID))
 		return
 	}
+	logServiceStatus("set restart lock service",
+		serviceID,
+		b.getStatus())
 	b.setStatus(pb.Status_ServiceLockWaiting)
 }
 
@@ -219,7 +228,8 @@ func (l *lockTableAllocator) remainTxnInService(serviceID string) int32 {
 	txnIDs := b.getTxnIds()
 	getLogger().Error("remain txn in restart service",
 		bytesArrayField("txnIDs", txnIDs),
-		zap.String("serviceID", serviceID))
+		zap.String("serviceID", serviceID),
+		zap.String("status", b.getStatus().String()))
 
 	c := len(txnIDs)
 	if c == 0 {
@@ -229,7 +239,8 @@ func (l *lockTableAllocator) remainTxnInService(serviceID string) int32 {
 			// -1 means can not get right remain txn in restart lock service
 			c = -1
 			getLogger().Error("can not get right remain txn in restart lock service",
-				zap.String("serviceID", serviceID))
+				zap.String("serviceID", serviceID),
+				zap.String("status", b.getStatus().String()))
 		}
 
 	}
@@ -253,6 +264,9 @@ func (l *lockTableAllocator) canRestartService(serviceID string) bool {
 			zap.String("serviceID", serviceID))
 		return true
 	}
+	logServiceStatus("can restart lock service",
+		serviceID,
+		b.getStatus())
 	return b.isStatus(pb.Status_ServiceCanRestart)
 }
 
@@ -305,6 +319,9 @@ func (l *lockTableAllocator) disableGroupTables(groupTables []pb.LockTable, b *s
 			l.getLockTablesLocked(t.Group)[t.Table] = old
 			delete(b.groupTables[t.Group], t.Table)
 		}
+	}
+	if len(groupTables) > 0 {
+		logBindsMove(groupTables)
 	}
 }
 
@@ -422,7 +439,7 @@ func (l *lockTableAllocator) createBindLocked(
 		Table:       tableID,
 		OriginTable: originTableID,
 		ServiceID:   binds.serviceID,
-		Version:     1,
+		Version:     l.version,
 		Valid:       true,
 		Sharding:    sharding,
 		Group:       group,
@@ -607,9 +624,16 @@ func (b *serviceBinds) isStatus(status pb.Status) bool {
 	return b.status == status
 }
 
+func (b *serviceBinds) getStatus() pb.Status {
+	b.RLock()
+	defer b.RUnlock()
+	return b.status
+}
+
 func (b *serviceBinds) setStatus(status pb.Status) {
 	b.Lock()
 	defer b.Unlock()
+	logStatusChange(b.status, status)
 	b.status = status
 }
 
@@ -749,8 +773,14 @@ func (l *lockTableAllocator) handleKeepLockTableBind(
 	}
 	b := l.getServiceBinds(req.KeepLockTableBind.ServiceID)
 	if b.isStatus(pb.Status_ServiceLockEnable) {
-		writeResponse(ctx, cancel, resp, nil, cs)
-		return
+		if req.KeepLockTableBind.Status != pb.Status_ServiceLockEnable {
+			getLogger().Error("tn has abnormal lock service status",
+				zap.String("serviceID", b.serviceID),
+				zap.String("status", req.KeepLockTableBind.Status.String()))
+		} else {
+			writeResponse(ctx, cancel, resp, nil, cs)
+			return
+		}
 	}
 	b.setTxnIds(req.KeepLockTableBind.TxnIDs)
 	switch req.KeepLockTableBind.Status {

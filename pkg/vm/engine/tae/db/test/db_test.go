@@ -4305,7 +4305,7 @@ func TestCollectDelete(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	blkdata.GCInMemeoryDeletesByTSForTest(p3)
+	blkdata.GCInMemoryDeletesByTSForTest(p3)
 
 	batch, _, err = blkdata.CollectDeleteInRange(context.Background(), p1.Next(), p3, true, common.DefaultAllocator)
 	assert.NoError(t, err)
@@ -6067,6 +6067,53 @@ func TestAlterRenameTbl(t *testing.T) {
 	dbentry = db.GetMeta().(*catalog.DBEntry)
 	t.Log(dbentry.PrettyNameIndex())
 	require.NoError(t, txn.Commit(context.Background()))
+}
+
+func TestDeltaLocation(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(2, 0)
+	schema.Name = "t1"
+	schema.BlockMaxRows = 10
+	schema.ObjectMaxBlocks = 2
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 10)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+
+	tae.CompactBlocks(false)
+
+	txn, rel := tae.GetRelation()
+
+	v0 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+	filter := handle.NewEQFilter(v0)
+	id, offset, err := rel.GetByFilter(context.Background(), filter)
+	assert.NoError(t, err)
+	obj, err := rel.GetMeta().(*catalog.TableEntry).GetObjectByID(id.ObjectID())
+	assert.NoError(t, err)
+	_, blkOffset := id.BlockID.Offsets()
+	deltaLoc, err := testutil.MockCNDeleteInS3(tae.Runtime.Fs, obj.GetObjectData(), blkOffset, schema, txn, []uint32{offset})
+	assert.NoError(t, err)
+	ok, err := rel.TryDeleteByDeltaloc(id, deltaLoc)
+	assert.NoError(t, err)
+	assert.True(t, ok)
+
+	{
+		txn, rel := tae.GetRelation()
+		objID := rel.MakeObjectIt().GetObject().GetID()
+		rel.SoftDeleteObject(objID)
+		txn.Commit(ctx)
+		t.Log(tae.Catalog.SimplePPString(3))
+	}
+
+	assert.NoError(t, err)
+	err = txn.Commit(ctx)
+	assert.Error(t, err)
 }
 
 func TestAlterRenameTbl2(t *testing.T) {
@@ -8088,7 +8135,7 @@ func TestGCInMemoryDeletesByTS(t *testing.T) {
 				assert.NoError(t, err)
 				assert.NoError(t, txn.Commit(context.Background()))
 
-				blkData.GCInMemeoryDeletesByTSForTest(ts)
+				blkData.GCInMemoryDeletesByTSForTest(ts)
 			}
 			i++
 		}

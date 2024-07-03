@@ -217,12 +217,6 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 			}
 		})
 
-	// Different rows may belong to same batch. So we have
-	// to record the batch which we have already handled to avoid
-	// repetitive computation
-	handled := make(map[*batch.Batch]struct{})
-	// Calculate the in mem size
-	// TODO: It might includ some deleted row size
 	iter := part.NewRowsIter(ts, nil, false)
 	defer func() { _ = iter.Close() }()
 	for iter.Next() {
@@ -230,21 +224,14 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 		if _, ok := deletes[entry.RowID]; ok {
 			continue
 		}
-		if _, ok := handled[entry.Batch]; ok {
-			continue
-		}
+
 		for i, s := range entry.Batch.Attrs {
 			if _, ok := neededCols[s]; ok {
-				szInPart += uint64(entry.Batch.Vecs[i].Size())
+				szInPart += uint64(entry.Batch.Vecs[i].Size() / entry.Batch.Vecs[i].Length())
 			}
 		}
-		handled[entry.Batch] = struct{}{}
 	}
 
-	//s := e.Stats(ctx, pb.StatsInfoKey{
-	//	DatabaseID: tbl.db.databaseId,
-	//	TableID:    tbl.tableId,
-	//}, true)
 	s, _ := tbl.Stats(ctx, true)
 	if s == nil {
 		return szInPart, nil
@@ -311,7 +298,7 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 	var meta objectio.ObjectDataMeta
 	var objMeta objectio.ObjectMeta
 	fs, err := fileservice.Get[fileservice.FileService](
-		tbl.getTxn().proc.FileService,
+		tbl.getTxn().proc.Base.FileService,
 		defines.SharedFileServiceName)
 	if err != nil {
 		return nil, nil, err
@@ -390,7 +377,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 	}
 
 	fs, err := fileservice.Get[fileservice.FileService](
-		tbl.getTxn().proc.FileService,
+		tbl.getTxn().proc.Base.FileService,
 		defines.SharedFileServiceName)
 	if err != nil {
 		return nil, err
@@ -1685,17 +1672,36 @@ func (tbl *txnTable) NewReader(
 		return nil, err
 	}
 
-	pkFilters := ConstructPKFilters(tbl.tableDef, tbl.db.databaseName, ts, state, expr, tbl.proc.Load(), txn.engine.packerPool)
+	proc := tbl.proc.Load()
+
+	baseFilter := newBasePKFilter(
+		expr,
+		tbl.tableDef,
+		proc,
+	)
+
+	memFilter := newMemPKFilter(
+		tbl.tableDef,
+		ts,
+		state,
+		txn.engine.packerPool,
+		baseFilter,
+	)
+
+	blockFilter := newBlockReadPKFilter(
+		tbl.tableDef.Pkey.PkeyColName,
+		baseFilter,
+	)
 
 	blkArray := objectio.BlockInfoSlice(ranges)
-	if !pkFilters.inMemPKFilter.isValid || plan2.IsFalseExpr(expr) {
+	if !memFilter.isValid || plan2.IsFalseExpr(expr) {
 		return []engine.Reader{new(emptyReader)}, nil
 	}
 	if blkArray.Len() == 0 {
-		return tbl.newMergeReader(ctx, num, expr, pkFilters, nil, txnOffset)
+		return tbl.newMergeReader(ctx, num, expr, memFilter, blockFilter, nil, txnOffset)
 	}
 	if blkArray.Len() == 1 && engine.IsMemtable(blkArray.GetBytes(0)) {
-		return tbl.newMergeReader(ctx, num, expr, pkFilters, nil, txnOffset)
+		return tbl.newMergeReader(ctx, num, expr, memFilter, blockFilter, nil, txnOffset)
 	}
 	if blkArray.Len() > 1 && engine.IsMemtable(blkArray.GetBytes(0)) {
 		rds := make([]engine.Reader, num)
@@ -1712,7 +1718,7 @@ func (tbl *txnTable) NewReader(
 			}
 			dirtyBlks = append(dirtyBlks, blkInfo)
 		}
-		rds0, err := tbl.newMergeReader(ctx, num, expr, pkFilters, dirtyBlks, txnOffset)
+		rds0, err := tbl.newMergeReader(ctx, num, expr, memFilter, blockFilter, dirtyBlks, txnOffset)
 		if err != nil {
 			return nil, err
 		}
@@ -1721,7 +1727,7 @@ func (tbl *txnTable) NewReader(
 		}
 
 		if len(cleanBlks) > 0 {
-			rds0, err = tbl.newBlockReader(ctx, num, expr, pkFilters.blockReadPKFilter, cleanBlks, tbl.proc.Load(), orderedScan)
+			rds0, err = tbl.newBlockReader(ctx, num, expr, blockFilter, cleanBlks, tbl.proc.Load(), orderedScan)
 			if err != nil {
 				return nil, err
 			}
@@ -1739,14 +1745,15 @@ func (tbl *txnTable) NewReader(
 	for i := 0; i < blkArray.Len(); i++ {
 		blkInfos = append(blkInfos, blkArray.Get(i))
 	}
-	return tbl.newBlockReader(ctx, num, expr, pkFilters.blockReadPKFilter, blkInfos, tbl.proc.Load(), orderedScan)
+	return tbl.newBlockReader(ctx, num, expr, blockFilter, blkInfos, tbl.proc.Load(), orderedScan)
 }
 
 func (tbl *txnTable) newMergeReader(
 	ctx context.Context,
 	num int,
 	expr *plan.Expr,
-	pkFilter PKFilters,
+	memFilter memPKFilter,
+	blockFilter blockio.BlockReadFilter,
 	dirtyBlks []*objectio.BlockInfo,
 	txnOffset int, // Transaction writes offset used to specify the starting position for reading data.
 ) ([]engine.Reader, error) {
@@ -1755,7 +1762,8 @@ func (tbl *txnTable) newMergeReader(
 	rds0, err := tbl.newReader(
 		ctx,
 		num,
-		pkFilter,
+		memFilter,
+		blockFilter,
 		expr,
 		dirtyBlks,
 		txnOffset)
@@ -1838,7 +1846,8 @@ func (tbl *txnTable) newBlockReader(
 func (tbl *txnTable) newReader(
 	ctx context.Context,
 	readerNumber int,
-	pkFilter PKFilters,
+	memFilter memPKFilter,
+	blockFilter blockio.BlockReadFilter,
 	expr *plan.Expr,
 	dirtyBlks []*objectio.BlockInfo,
 	txnOffset int, // Transaction writes offset used to specify the starting position for reading data.
@@ -1868,14 +1877,12 @@ func (tbl *txnTable) newReader(
 	partReader := &PartitionReader{
 		table:     tbl,
 		txnOffset: txnOffset,
-		iter:      pkFilter.inMemPKFilter.iter,
+		iter:      memFilter.iter,
 		seqnumMp:  seqnumMp,
 		typsMap:   mp,
 	}
 
-	//tbl.Lock()
 	proc := tbl.proc.Load()
-	//tbl.Unlock()
 
 	readers[0] = partReader
 
@@ -1886,7 +1893,8 @@ func (tbl *txnTable) newReader(
 				newBlockMergeReader(
 					ctx,
 					tbl,
-					pkFilter,
+					memFilter,
+					blockFilter,
 					ts,
 					[]*objectio.BlockInfo{dirtyBlks[i]},
 					expr,
@@ -1904,7 +1912,8 @@ func (tbl *txnTable) newReader(
 			readers[i+1] = newBlockMergeReader(
 				ctx,
 				tbl,
-				pkFilter,
+				memFilter,
+				blockFilter,
 				ts,
 				[]*objectio.BlockInfo{dirtyBlks[i]},
 				expr,
@@ -1926,7 +1935,7 @@ func (tbl *txnTable) newReader(
 		ts,
 		readerNumber-1,
 		expr,
-		pkFilter.blockReadPKFilter,
+		blockFilter,
 		proc)
 	objInfos, steps := groupBlocksToObjects(dirtyBlks, readerNumber-1)
 	blockReaders = distributeBlocksToBlockReaders(
@@ -1940,7 +1949,7 @@ func (tbl *txnTable) newReader(
 			blockReader: blockReaders[i],
 			table:       tbl,
 			txnOffset:   txnOffset,
-			pkFilter:    pkFilter.inMemPKFilter,
+			pkFilter:    memFilter,
 			deletaLocs:  make(map[string][]objectio.Location),
 		}
 		readers[i+1] = bmr
@@ -2152,8 +2161,8 @@ func (tbl *txnTable) PKPersistedBetween(
 			bytes,
 			false)
 
-		basePKFilter := constructBasePKFilter(inExpr, tbl.tableDef, tbl.proc.Load())
-		blockReadPKFilter := constructBlockReadPKFilter(tbl.tableDef.Pkey.PkeyColName, basePKFilter)
+		basePKFilter := newBasePKFilter(inExpr, tbl.tableDef, tbl.proc.Load())
+		blockReadPKFilter := newBlockReadPKFilter(tbl.tableDef.Pkey.PkeyColName, basePKFilter)
 
 		return blockReadPKFilter.SortedSearchFunc
 	}
@@ -2258,7 +2267,7 @@ func (tbl *txnTable) transferDeletes(
 
 	{
 		fs, err := fileservice.Get[fileservice.FileService](
-			tbl.proc.Load().FileService,
+			tbl.proc.Load().GetFileService(),
 			defines.SharedFileServiceName)
 		if err != nil {
 			return err

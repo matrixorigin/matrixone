@@ -111,12 +111,7 @@ func NewAwsSDKv2(
 	// options for s3 client
 	s3Options := []func(*s3.Options){
 		func(opts *s3.Options) {
-
-			opts.Retryer = retry.NewStandard(func(o *retry.StandardOptions) {
-				o.MaxAttempts = maxRetryAttemps
-				o.RateLimiter = noOpRateLimit{}
-			})
-
+			opts.Retryer = newAWSRetryer()
 		},
 	}
 
@@ -533,6 +528,8 @@ func (a *AwsSDKv2) getObject(ctx context.Context, min *int64, max *int64, params
 	}, a.perfCounterSets...)
 	r, err := newRetryableReader(
 		func(offset int64) (io.ReadCloser, error) {
+			LogEvent(ctx, "newRetryableReader new reader begin, offset %v", offset)
+			defer LogEvent(ctx, "newRetryableReader new reader end")
 			var rang string
 			if max != nil {
 				rang = fmt.Sprintf("bytes=%d-%d", offset, *max)
@@ -543,6 +540,8 @@ func (a *AwsSDKv2) getObject(ctx context.Context, min *int64, max *int64, params
 			output, err := DoWithRetry(
 				"s3 get object",
 				func() (*s3.GetObjectOutput, error) {
+					LogEvent(ctx, "AwsSDKv2 GetObject begin")
+					defer LogEvent(ctx, "AwsSDKv2 GetObject end")
 					return a.client.GetObject(ctx, params, optFns...)
 				},
 				maxRetryAttemps,
@@ -606,15 +605,6 @@ func (a *AwsSDKv2) mapError(err error, path string) error {
 	}
 	return err
 }
-
-// from https://github.com/aws/aws-sdk-go-v2/issues/543
-type noOpRateLimit struct{}
-
-func (noOpRateLimit) AddTokens(uint) error { return nil }
-func (noOpRateLimit) GetToken(context.Context, uint) (func() error, error) {
-	return noOpToken, nil
-}
-func noOpToken() error { return nil }
 
 func (o ObjectStorageArguments) credentialsProviderForAwsSDKv2(
 	ctx context.Context,
@@ -692,4 +682,44 @@ func (o ObjectStorageArguments) credentialsProviderForAwsSDKv2(
 	}
 
 	return
+}
+
+type awsRetryer struct {
+	upstream aws.Retryer
+}
+
+func newAWSRetryer() aws.Retryer {
+	retryer := aws.Retryer(retry.NewStandard())
+	return &awsRetryer{
+		upstream: retryer,
+	}
+}
+
+var _ aws.Retryer = new(awsRetryer)
+
+func (a *awsRetryer) GetInitialToken() (releaseToken func(error) error) {
+	return a.upstream.GetInitialToken()
+}
+
+func (a *awsRetryer) GetRetryToken(ctx context.Context, opErr error) (releaseToken func(error) error, err error) {
+	return a.upstream.GetRetryToken(ctx, opErr)
+}
+
+func (a *awsRetryer) IsErrorRetryable(err error) (ret bool) {
+	defer func() {
+		if ret {
+			logutil.Info("file service retry",
+				zap.Error(err),
+			)
+		}
+	}()
+	return a.upstream.IsErrorRetryable(err)
+}
+
+func (a *awsRetryer) MaxAttempts() int {
+	return a.upstream.MaxAttempts()
+}
+
+func (a *awsRetryer) RetryDelay(attempt int, opErr error) (time.Duration, error) {
+	return a.upstream.RetryDelay(attempt, opErr)
 }

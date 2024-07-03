@@ -21,9 +21,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -31,6 +28,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -50,7 +49,7 @@ type BlockT[T common.IRef] interface {
 	GetID() *common.ID
 }
 
-func DefaultTOmbstoneFactory(meta *catalog.ObjectEntry) data.Tombstone {
+func DefaultTombstoneFactory(meta *catalog.ObjectEntry) data.Tombstone {
 	return updates.NewObjectMVCCHandle(meta)
 }
 
@@ -111,10 +110,10 @@ func (blk *baseObject) tryGetMVCC() *updates.ObjectMVCCHandle {
 	return tombstone.(*updates.ObjectMVCCHandle)
 }
 func (blk *baseObject) getOrCreateMVCC() *updates.ObjectMVCCHandle {
-	return blk.meta.GetTable().GetOrCreateTombstone(blk.meta, DefaultTOmbstoneFactory).(*updates.ObjectMVCCHandle)
+	return blk.meta.GetTable().GetOrCreateTombstone(blk.meta, DefaultTombstoneFactory).(*updates.ObjectMVCCHandle)
 }
 
-func (blk *baseObject) GCInMemeoryDeletesByTSForTest(ts types.TS) {
+func (blk *baseObject) GCInMemoryDeletesByTSForTest(ts types.TS) {
 	blk.Lock()
 	defer blk.Unlock()
 	mvcc := blk.tryGetMVCC()
@@ -792,6 +791,9 @@ func (blk *baseObject) TryDeleteByDeltaloc(
 	}
 	blk.Lock()
 	defer blk.Unlock()
+	if blk.meta.HasDropIntentLocked() {
+		return
+	}
 	blkMVCC := blk.getOrCreateMVCC().GetOrCreateDeleteChainLocked(blkID)
 	return blkMVCC.TryDeleteByDeltalocLocked(txn, deltaLoc, true)
 }

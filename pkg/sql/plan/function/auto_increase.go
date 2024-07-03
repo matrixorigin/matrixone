@@ -43,7 +43,7 @@ func builtInInternalAutoIncrement(parameters []*vector.Vector, result vector.Fun
 		dbName := functionUtil.QuickBytesToStr(s1)
 		tableName := functionUtil.QuickBytesToStr(s2)
 
-		database, err := eng.Database(proc.Ctx, dbName, proc.TxnOperator)
+		database, err := eng.Database(proc.Ctx, dbName, proc.GetTxnOperator())
 		if err != nil {
 			return moerr.NewInvalidInput(proc.Ctx, "Database '%s' does not exist", dbName)
 		}
@@ -56,7 +56,7 @@ func builtInInternalAutoIncrement(parameters []*vector.Vector, result vector.Fun
 		if err != nil {
 			return err
 		}
-		autoIncrCol := getTableAutoIncrCol(engineDefs, tableName)
+		autoIncrCol := getTableAutoIncrCol(engineDefs)
 		if autoIncrCol != "" {
 			autoIncrement, err := getCurrentValue(
 				proc.Ctx,
@@ -77,16 +77,19 @@ func builtInInternalAutoIncrement(parameters []*vector.Vector, result vector.Fun
 	return nil
 }
 
-func getTableAutoIncrCol(
-	engineDefs []engine.TableDef,
-	tableName string) string {
+func getTableAutoIncrCol(engineDefs []engine.TableDef) string {
+	autoIncrCol := ""
 	for _, def := range engineDefs {
+		if _, ok := def.(*engine.ViewDef); ok {
+			return ""
+		}
+
 		// FIXME: more than one auto cols??
 		if attr, ok := def.(*engine.AttributeDef); ok && attr.Attr.AutoIncrement {
-			return attr.Attr.Name
+			autoIncrCol = attr.Attr.Name
 		}
 	}
-	return ""
+	return autoIncrCol
 }
 
 func getCurrentValue(

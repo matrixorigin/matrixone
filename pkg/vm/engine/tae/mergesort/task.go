@@ -54,7 +54,7 @@ type MergeTaskHost interface {
 	GetAccBlkCnts() []int
 	GetSortKeyType() types.Type
 	LoadNextBatch(ctx context.Context, objIdx uint32) (*batch.Batch, *nulls.Nulls, func(), error)
-	GetTotalSize() uint32
+	GetTotalSize() uint64 // total size of all objects, definitely there are cases where the size exceeds 4G, so use uint64
 	GetTotalRowCnt() uint32
 	GetBlockMaxRows() uint32
 	GetObjectMaxBlocks() uint16
@@ -112,7 +112,7 @@ func DoMergeAndWrite(
 	mergehost MergeTaskHost,
 ) (err error) {
 	now := time.Now()
-	/*out args, keep the transfer infomation*/
+	/*out args, keep the transfer information*/
 	commitEntry := mergehost.GetCommitEntry()
 	fromObjsDesc := ""
 	fromSize := uint32(0)
@@ -122,20 +122,18 @@ func DoMergeAndWrite(
 		fromSize += obj.OriginSize()
 	}
 	tableDesc := fmt.Sprintf("%v-%v", commitEntry.TblId, commitEntry.TableName)
-	logutil.Info("[Start] Mergeblocks",
+	logutil.Info("[MERGE-START] ",
 		zap.String("table", tableDesc),
 		zap.String("on", mergehost.HostHintName()),
 		zap.String("txn-start-ts", commitEntry.StartTs.DebugString()),
 		zap.String("from-objs", fromObjsDesc),
 		zap.String("from-size", units.BytesSize(float64(fromSize))),
 	)
-	phaseDesc := "prepare data"
 	defer func() {
 		if err != nil {
-			logutil.Error("[DoneWithErr] Mergeblocks",
+			logutil.Error("[MERGE-DONE-ERROR] ",
 				zap.String("table", tableDesc),
 				zap.Error(err),
-				zap.String("phase", phaseDesc),
 			)
 		}
 	}()
@@ -146,7 +144,7 @@ func DoMergeAndWrite(
 	}
 
 	if hasSortKey {
-		if err := mergeObjs(ctx, mergehost, sortkeyPos); err != nil {
+		if err = mergeObjs(ctx, mergehost, sortkeyPos); err != nil {
 			return err
 		}
 	} else {
@@ -165,7 +163,7 @@ func DoMergeAndWrite(
 			obj.Rows())
 	}
 
-	logutil.Info("[Done] Mergeblocks",
+	logutil.Info("[MERGE-DONE] ",
 		zap.String("table", tableDesc),
 		zap.String("on", mergehost.HostHintName()),
 		zap.String("txn-start-ts", commitEntry.StartTs.DebugString()),
@@ -205,7 +203,7 @@ func AddSortPhaseMapping(b *api.BlkTransferBooking, idx int, originRowCnt int, m
 		}
 		// mapping sortedVec[i] = originalVec[sortMapping[i]]
 		// transpose it, originalVec[sortMapping[i]] = sortedVec[i]
-		// [9 4 8 5 2 6 0 7 3 1](orignVec)  -> [6 9 4 8 1 3 5 7 2 0](sortedVec)
+		// [9 4 8 5 2 6 0 7 3 1](originalVec)  -> [6 9 4 8 1 3 5 7 2 0](sortedVec)
 		// [0 1 2 3 4 5 6 7 8 9](sortedVec) -> [0 1 2 3 4 5 6 7 8 9](originalVec)
 		// TODO: use a more efficient way to transpose, in place
 		transposedMapping := make([]int64, len(mapping))

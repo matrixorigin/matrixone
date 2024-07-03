@@ -75,19 +75,19 @@ func doUnsubscribeTable(proc *process.Process, uuid string, dbID, tbID uint64) e
 	var err error
 	clusterservice.GetMOCluster().GetCNService(clusterservice.NewServiceIDSelector(uuid),
 		func(cn metadata.CNService) bool {
-			request := proc.QueryClient.NewRequest(query.CmdMethod_UnsubscribeTable)
+			request := proc.GetQueryClient().NewRequest(query.CmdMethod_UnsubscribeTable)
 			request.UnsubscribeTable = &query.UnsubscribeTableRequest{
 				DatabaseID: dbID,
 				TableID:    tbID,
 			}
 			ctx, cancel := context.WithTimeout(proc.Ctx, time.Second*3)
 			defer cancel()
-			resp, err := proc.QueryClient.SendMessage(ctx, cn.QueryAddress, request)
+			resp, err := proc.GetQueryClient().SendMessage(ctx, cn.QueryAddress, request)
 			if err != nil {
 				return false
 			}
 			if resp != nil {
-				proc.QueryClient.Release(resp)
+				proc.GetQueryClient().Release(resp)
 			}
 			return true
 		})

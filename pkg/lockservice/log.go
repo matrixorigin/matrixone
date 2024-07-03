@@ -314,16 +314,18 @@ func logAbortDeadLock(
 func logLockServiceStartSucc(
 	serviceID string) {
 	logger := getWithSkipLogger()
-	if logger.Enabled(zap.ErrorLevel) {
+	if logger.Enabled(zap.InfoLevel) {
 		logger.Info("lock service start successfully",
 			zap.String("serviceID", serviceID))
 	}
 }
 
-func logLockAllocatorStartSucc() {
+func logLockAllocatorStartSucc(
+	version uint64) {
 	logger := getWithSkipLogger()
-	if logger.Enabled(zap.ErrorLevel) {
-		logger.Info("lock allocator start successfully")
+	if logger.Enabled(zap.InfoLevel) {
+		logger.Info("lock allocator start successfully",
+			zap.Uint64("version", version))
 	}
 }
 
@@ -366,6 +368,15 @@ func logPingFailed(
 		logger.Error("failed to ping lock service",
 			zap.String("serviceID", serviceID),
 			zap.Error(err))
+	}
+}
+
+func logCanLockOnService(
+	serviceID string) {
+	logger := getWithSkipLogger()
+	if logger.Enabled(zap.InfoLevel) {
+		logger.Error("if lock on service",
+			zap.String("serviceID", serviceID))
 	}
 }
 
@@ -475,6 +486,48 @@ func logWaitersAdded(
 	}
 }
 
+func logBindsMove(
+	binds []pb.LockTable) {
+	logger := getWithSkipLogger()
+	if logger.Enabled(zap.InfoLevel) {
+		logger.Info("binds move",
+			bindsArrayField("binds", binds))
+	}
+}
+
+func logStatus(
+	status pb.Status) {
+	logger := getWithSkipLogger()
+	if logger.Enabled(zap.InfoLevel) {
+		logger.Info("service status",
+			zap.String("status", status.String()))
+	}
+}
+
+func logServiceStatus(
+	info string,
+	serviceID string,
+	status pb.Status) {
+	logger := getWithSkipLogger()
+	if logger.Enabled(zap.InfoLevel) {
+		logger.Info("service status",
+			zap.String("info", info),
+			zap.String("serviceID", serviceID),
+			zap.String("status", status.String()))
+	}
+}
+
+func logStatusChange(
+	from pb.Status,
+	to pb.Status) {
+	logger := getWithSkipLogger()
+	if logger.Enabled(zap.InfoLevel) {
+		logger.Info("service status change",
+			zap.String("from", from.String()),
+			zap.String("to", to.String()))
+	}
+}
+
 func logWaiterGetNotify(
 	w *waiter,
 	v notifyValue) {
@@ -578,6 +631,19 @@ func bytesArrayField(name string, values [][]byte) zap.Field {
 }
 
 func waitTxnArrayField(name string, values []pb.WaitTxn) zap.Field {
+	var buffer bytes.Buffer
+	buffer.WriteString("[")
+	for idx, w := range values {
+		buffer.WriteString(w.DebugString())
+		if idx != len(values)-1 {
+			buffer.WriteString(",")
+		}
+	}
+	buffer.WriteString("]")
+	return zap.String(name, buffer.String())
+}
+
+func bindsArrayField(name string, values []pb.LockTable) zap.Field {
 	var buffer bytes.Buffer
 	buffer.WriteString("[")
 	for idx, w := range values {

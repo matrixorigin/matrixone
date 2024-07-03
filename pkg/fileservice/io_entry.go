@@ -16,19 +16,21 @@ package fileservice
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"os"
 	"time"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
-func (i *IOEntry) setCachedData() error {
+func (i *IOEntry) setCachedData(ctx context.Context) error {
+	LogEvent(ctx, "setCachedData begin")
 	t0 := time.Now()
 	defer func() {
+		LogEvent(ctx, "setCachedData end")
 		metric.FSReadDurationSetCachedData.Observe(time.Since(t0).Seconds())
 	}()
 	if i.ToCacheData == nil {
@@ -40,15 +42,20 @@ func (i *IOEntry) setCachedData() error {
 	if i.allocator == nil {
 		i.allocator = GetDefaultCacheDataAllocator()
 	}
-	bs, err := i.ToCacheData(bytes.NewReader(i.Data), i.Data, i.allocator)
+	LogEvent(ctx, "ToCacheData begin")
+	cacheData, err := i.ToCacheData(bytes.NewReader(i.Data), i.Data, i.allocator)
+	LogEvent(ctx, "ToCacheData end")
 	if err != nil {
 		return err
 	}
-	i.CachedData = bs
+	if cacheData == nil {
+		panic("ToCacheData returns nil cache data")
+	}
+	i.CachedData = cacheData
 	return nil
 }
 
-func (i *IOEntry) ReadFromOSFile(file *os.File) (err error) {
+func (i *IOEntry) ReadFromOSFile(ctx context.Context, file *os.File) (err error) {
 	finally := i.prepareData()
 	defer finally(&err)
 	r := io.LimitReader(file, i.Size)
@@ -68,7 +75,7 @@ func (i *IOEntry) ReadFromOSFile(file *os.File) (err error) {
 	if i.ReadCloserForRead != nil {
 		*i.ReadCloserForRead = io.NopCloser(bytes.NewReader(i.Data))
 	}
-	if err := i.setCachedData(); err != nil {
+	if err := i.setCachedData(ctx); err != nil {
 		return err
 	}
 
@@ -91,22 +98,22 @@ func CacheOriginalData(r io.Reader, data []byte, allocator CacheDataAllocator) (
 
 func (i *IOEntry) prepareData() (finally func(err *error)) {
 	if cap(i.Data) < int(i.Size) {
-		ptr, dec, err := getMallocAllocator().Allocate(uint64(i.Size), malloc.NoHints)
+		slice, dec, err := getIOAllocator().Allocate(uint64(i.Size), malloc.NoHints)
 		if err != nil {
 			panic(err)
 		}
 		metric.FSMallocLiveObjectsIOEntryData.Inc()
-		i.Data = unsafe.Slice((*byte)(ptr), i.Size)
+		i.Data = slice
 		if i.releaseData != nil {
 			i.releaseData()
 		}
 		i.releaseData = func() {
-			dec.Deallocate(ptr, malloc.NoHints)
+			dec.Deallocate(malloc.NoHints)
 			metric.FSMallocLiveObjectsIOEntryData.Dec()
 		}
 		finally = func(err *error) {
 			if err != nil && *err != nil {
-				dec.Deallocate(ptr, malloc.NoHints)
+				dec.Deallocate(malloc.NoHints)
 				metric.FSMallocLiveObjectsIOEntryData.Dec()
 			}
 		}

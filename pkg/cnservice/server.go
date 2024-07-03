@@ -406,6 +406,13 @@ func (s *service) handleRequest(
 	value morpc.RPCMessage,
 	_ uint64,
 	cs morpc.ClientSession) error {
+
+	// the following comment is not related to my PR, but I suddenly saw this piece of code.
+	// so I wrote it, hoping it can help future developers understand what this is doing.
+	//
+	// I'm not sure, but I think that's a logic to handle that
+	// once an encoded-pipeline message was too large, it will be cut as multiple messages for sending.
+	// and these codes keep receiving them, and then rebuild them as a big message.
 	req := value.Message
 	msg, ok := req.(*pipeline.Message)
 	if !ok {
@@ -423,11 +430,13 @@ func (s *service) handleRequest(
 		}
 	}
 
+	// start a goroutine to handle one received message.
 	go func() {
 		defer value.Cancel()
 		s.pipelines.counter.Add(1)
 		defer s.pipelines.counter.Add(-1)
-		s.requestHandler(ctx,
+
+		err := s.requestHandler(ctx,
 			s.pipelineServiceServiceAddr(),
 			req,
 			cs,
@@ -440,6 +449,11 @@ func (s *service) handleRequest(
 			s._txnClient,
 			s.aicm,
 			s.acquireMessage)
+		if err != nil {
+			logutil.Infof("error occurred while handling the pipeline message, "+
+				"msg is %v, error is %v",
+				req, err)
+		}
 	}()
 	return nil
 }
@@ -786,7 +800,6 @@ func handleWaitingNextMsg(ctx context.Context, message morpc.Message, cs morpc.C
 func handleAssemblePipeline(ctx context.Context, message morpc.Message, cs morpc.ClientSession) error {
 	var data []byte
 
-	cnt := uint64(0)
 	cache, err := cs.CreateCache(ctx, message.GetID())
 	if err != nil {
 		return err
@@ -800,10 +813,6 @@ func handleAssemblePipeline(ctx context.Context, message morpc.Message, cs morpc
 			cache.Close()
 			break
 		}
-		if cnt != msg.(*pipeline.Message).GetSequence() {
-			return moerr.NewInternalErrorNoCtx("Pipeline packages passed by morpc are out of order")
-		}
-		cnt++
 		data = append(data, msg.(*pipeline.Message).GetData()...)
 	}
 	msg := message.(*pipeline.Message)
@@ -826,7 +835,10 @@ func (s *service) initInternalSQlExecutor(mp *mpool.MPool) {
 }
 
 func (s *service) initIncrService() {
-	store, err := incrservice.NewSQLStore(s.sqlExecutor)
+	store, err := incrservice.NewSQLStore(
+		s.sqlExecutor,
+		s.lockService,
+	)
 	if err != nil {
 		panic(err)
 	}

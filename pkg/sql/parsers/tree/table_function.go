@@ -27,8 +27,7 @@ func (t *TableFunction) Format(ctx *FmtCtx) {
 }
 
 func (t TableFunction) Id() string {
-	_, _, name := t.Func.Func.FunctionReference.(*UnresolvedName).GetNames()
-	return name
+	return t.Func.Func.FunctionReference.(*UnresolvedName).ColName()
 }
 
 func (t *TableFunction) GetStatementType() string { return "Table Function" }

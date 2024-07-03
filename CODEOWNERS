@@ -46,10 +46,7 @@
 
 /pkg/clusterservice @volgariver6
 
-
-
-
-# pkg/common
+# pkg/common @fengttt
 /pkg/common @zhangxu19830126
 /pkg/common/mpool @m-schen
 /pkg/common/malloc @reusee
@@ -71,7 +68,7 @@
 /pkg/compress @aunjgr
 
 # pkg/config
-/pkg/config @daviszhen
+/pkg/config @daviszhen @fengttt
 
 # pkg/container
 /pkg/container @XuPeng-SH
@@ -81,10 +78,10 @@
 /pkg/defines @daviszhen
 
 # pkg/tnservice
-/pkg/tnservice @zhangxu19830126
+/pkg/tnservice @zhangxu19830126 @XuPeng-SH
 
 # pkg/fileservice
-/pkg/fileservice @reusee
+/pkg/fileservice @reusee @fengttt
 
 # pkg/frontend @daviszhen
 /pkg/frontend @daviszhen @qingxinhome
@@ -98,7 +95,7 @@
 # pkg/lockservice
 /pkg/lockservice @zhangxu19830126
 
-# pkg/fileservice
+# pkg/shardservice 
 /pkg/shardservice @zhangxu19830126
 
 # pkg/logservice
@@ -189,7 +186,7 @@
 
 /pkg/stream @fengttt
 
-/pkg/udf @aylei @daviszhen
+/pkg/udf @aylei @daviszhen @fengttt
 
 /pkg/version @zhangxu19830126
 

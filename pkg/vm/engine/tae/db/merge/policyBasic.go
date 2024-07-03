@@ -16,8 +16,10 @@ package merge
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"sync"
 
@@ -131,9 +133,7 @@ func (o *customConfigProvider) String() string {
 	for k := range o.configs {
 		keys = append(keys, k)
 	}
-	sort.Slice(keys, func(i, j int) bool {
-		return keys[i] < keys[j]
-	})
+	slices.SortFunc(keys, func(a, b uint64) int { return cmp.Compare(a, b) })
 	buf := bytes.Buffer{}
 	buf.WriteString("customConfigProvider: ")
 	for _, k := range keys {
@@ -176,8 +176,8 @@ func (o *basic) OnObject(obj *catalog.ObjectEntry) {
 	rowsLeftOnObj := obj.GetRemainingRows()
 	osize := obj.GetOriginSize()
 
-	iscandidate := func() bool {
-		// objext with a lot of holes
+	isCandidate := func() bool {
+		// object with a lot of holes
 		if rowsLeftOnObj < obj.GetRows()/2 {
 			return true
 		}
@@ -192,7 +192,7 @@ func (o *basic) OnObject(obj *catalog.ObjectEntry) {
 		return false
 	}
 
-	if iscandidate() {
+	if isCandidate() {
 		o.objHeap.pushWithCap(&mItem[*catalog.ObjectEntry]{
 			row:   rowsLeftOnObj,
 			entry: obj,
@@ -327,16 +327,12 @@ func (o *basic) controlMem(objs []*catalog.ObjectEntry, mem int64) []*catalog.Ob
 	}
 
 	needPopout := func(ss []*catalog.ObjectEntry) bool {
-		osize, esize, _ := estimateMergeConsume(ss)
-		if esize > int(2*mem/3) {
-			return true
-		}
-
 		if len(ss) <= 2 {
 			return false
 		}
-		// make object averaged size
-		return osize > int(o.config.MaxOsizeMergedObj)
+
+		_, esize, _ := estimateMergeConsume(ss)
+		return esize > int(2*mem/3)
 	}
 	for needPopout(objs) {
 		objs = objs[:len(objs)-1]
