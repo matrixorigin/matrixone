@@ -1225,11 +1225,6 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		}
 	}
 
-	//table must have one visible column
-	if len(colMap) == 0 {
-		return moerr.NewTableMustHaveVisibleColumn(ctx.GetContext())
-	}
-
 	if stmt.IsAsSelect {
 		// add as select cols
 		for _, col := range asSelectCols {
@@ -1265,6 +1260,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		insertSqlBuilder.WriteString(fmt.Sprintf(" from (%s)", fmtCtx.String()))
 
 		createTable.CreateAsSelectSql = insertSqlBuilder.String()
+	}
+
+	//table must have one visible column
+	if len(createTable.TableDef.Cols) == 0 {
+		return moerr.NewTableMustHaveVisibleColumn(ctx.GetContext())
 	}
 
 	//add cluster table attribute
