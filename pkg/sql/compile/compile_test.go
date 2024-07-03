@@ -130,6 +130,13 @@ func (w *Ws) CloneSnapshotWS() client.Workspace {
 func (w *Ws) BindTxnOp(op client.TxnOperator) {
 }
 
+func (w *Ws) SetHaveDDL(flag bool) {
+}
+
+func (w *Ws) GetHaveDDL() bool {
+	return false
+}
+
 func TestCompile(t *testing.T) {
 	cnclient.NewCNClient("test", new(cnclient.ClientConfig))
 	ctrl := gomock.NewController(t)
