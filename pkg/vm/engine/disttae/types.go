@@ -797,7 +797,7 @@ type blockMergeReader struct {
 	*blockReader
 	table     *txnTable
 	txnOffset int // Transaction writes offset used to specify the starting position for reading data.
-	pkFilter  InMemPKFilter
+	pkFilter  memPKFilter
 	//for perfetch deletes
 	loaded     bool
 	pkidx      int
