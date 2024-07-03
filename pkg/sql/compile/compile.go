@@ -3362,28 +3362,22 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 
 	switch n.Stats.HashmapStats.ShuffleMethod {
 	case plan.ShuffleMethod_Reuse:
-
 		for i := range ss {
-			// saving the last operator of all children to make sure the connector setting in
-			// the right place
 			children := ss[i].PreScopes
-			lastOperator := make([]vm.Instruction, 0, len(children))
 			for j := range children {
+				// saving the last operator of all children to make sure the connector setting in
+				// the right place
 				ilen := len(children[j].Instructions) - 1
-				lastOperator = append(lastOperator, children[j].Instructions[ilen])
+				lastOperator := children[j].Instructions[ilen]
 				children[j].Instructions = children[j].Instructions[:ilen]
-			}
-
-			children[i].appendInstruction(vm.Instruction{
-				Op:      vm.Group,
-				Idx:     c.anal.curr,
-				IsFirst: c.anal.isFirst,
-				Arg:     constructGroup(c.proc.Ctx, n, ns[n.Children[0]], true, len(ss), c.proc),
-			})
-
-			// recovery the children's last operator
-			for j := range children {
-				children[i].appendInstruction(lastOperator[j])
+				children[j].appendInstruction(vm.Instruction{
+					Op:      vm.Group,
+					Idx:     c.anal.curr,
+					IsFirst: c.anal.isFirst,
+					Arg:     constructGroup(c.proc.Ctx, n, ns[n.Children[0]], true, len(ss), c.proc),
+				})
+				// recovery the children's last operator
+				children[j].appendInstruction(lastOperator)
 			}
 		}
 		ss = c.compileProjection(n, c.compileRestrict(n, ss))
