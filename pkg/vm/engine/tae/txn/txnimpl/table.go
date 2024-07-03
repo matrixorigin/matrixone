@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"github.com/RoaringBitmap/roaring"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/moprobe"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -42,7 +44,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
-	"go.uber.org/zap"
 )
 
 var (
@@ -285,21 +286,6 @@ func (tbl *txnTable) recurTransferDelete(
 		}
 		memo[blockID] = page2
 	}
-
-	rowID, ok = page2.Item().Transfer(offset)
-	if !ok {
-		err := moerr.NewTxnWWConflictNoCtx(0, "")
-		msg := fmt.Sprintf("table-%d blk-%d delete row-%d depth-%d",
-			newID.TableID,
-			newID.BlockID,
-			offset,
-			depth)
-		logutil.Warnf("[ts=%s]TransferDeleteNode: %v",
-			tbl.store.txn.GetStartTS().ToString(),
-			msg)
-		return err
-	}
-	blockID, offset = rowID.Decode()
 	newID = &common.ID{
 		DbID:    id.DbID,
 		TableID: id.TableID,
@@ -347,7 +333,7 @@ func (tbl *txnTable) TransferDeleteRows(
 	memo := make(map[types.Blockid]*common.PinnedItem[*model.TransferHashPage])
 	common.DoIfInfoEnabled(func() {
 		logutil.Info("[Start]",
-			common.AnyField("txn-start-ts", tbl.store.txn.GetStartTS().ToString()),
+			common.AnyField("txn-ctx", tbl.store.txn.Repr()),
 			common.OperationField("transfer-deletes"),
 			common.OperandField(id.BlockString()),
 			common.AnyField("phase", phase))
@@ -355,7 +341,7 @@ func (tbl *txnTable) TransferDeleteRows(
 	defer func() {
 		common.DoIfInfoEnabled(func() {
 			logutil.Info("[End]",
-				common.AnyField("txn-start-ts", tbl.store.txn.GetStartTS().ToString()),
+				common.AnyField("txn-ctx", tbl.store.txn.Repr()),
 				common.OperationField("transfer-deletes"),
 				common.OperandField(id.BlockString()),
 				common.AnyField("phase", phase),
