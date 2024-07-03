@@ -3,8 +3,11 @@ package frontend
 import (
 	"container/list"
 	"encoding/binary"
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"net"
 	"time"
 )
@@ -28,21 +31,24 @@ type SessionConn interface {
 	RemoteAddress() string
 }
 
+func NewBufferAllocator(pu *config.ParameterUnit) *BufferAllocator {
+	pool, err := mpool.NewMPool("frontend-goetty-pool-cn-level", pu.SV.GuestMmuLimitation, mpool.NoFixed)
+	if err != nil {
+		panic(err)
+	}
+	ret := &BufferAllocator{allocator: pool}
+	return ret
+}
+
 type BufferAllocator struct {
-	allocator *SessionAllocator
+	allocator *mpool.MPool
 }
 
 func (ba *BufferAllocator) Alloc(size int) ([]byte, error) {
-	if size == 0 {
-		return nil, nil
-	}
 	return ba.allocator.Alloc(size)
 }
 
 func (ba *BufferAllocator) Free(buf []byte) {
-	if buf == nil {
-		return
-	}
 	ba.allocator.Free(buf)
 }
 
@@ -79,6 +85,11 @@ type Conn struct {
 
 // NewIOSession create a new io session
 func NewIOSession(conn net.Conn, pu *config.ParameterUnit) (*Conn, error) {
+	allocator, ok := globalBufferAlloc.Load().(*BufferAllocator)
+	if !ok {
+		setGlobalBufferAlloc(NewBufferAllocator(pu))
+	}
+	allocator = getGlobalBufferAlloc()
 
 	c := &Conn{
 		conn:            conn,
@@ -87,7 +98,7 @@ func NewIOSession(conn net.Conn, pu *config.ParameterUnit) (*Conn, error) {
 		connected:       true,
 		fixBuf:          &ListBlock{},
 		dynamicBuf:      list.New(),
-		allocator:       &BufferAllocator{NewSessionAllocator(pu)},
+		allocator:       allocator,
 		timeout:         pu.SV.SessionTimeout.Duration,
 		maxBytesToFlush: int(pu.SV.MaxBytesInOutbufToFlush * 1024),
 	}
@@ -117,7 +128,7 @@ func (c *Conn) Disconnect() error {
 	if c.connected == false {
 		return nil
 	}
-	return c.Close()
+	return c.closeConn()
 }
 
 func (c *Conn) Close() error {
@@ -419,6 +430,7 @@ func (c *Conn) Flush() error {
 	var err error
 	defer c.Reset()
 	err = c.WriteToConn(c.fixBuf.data[:c.fixBuf.writeIndex])
+	logutil.Info(fmt.Sprintf("write result is:%s", string(c.fixBuf.data[:c.fixBuf.writeIndex])))
 	if err != nil {
 		return err
 	}
@@ -431,6 +443,7 @@ func (c *Conn) Flush() error {
 		}
 	}
 	c.ses.CountPacket(int64(c.packetInBuf))
+	c.packetInBuf = 0
 	return err
 }
 
@@ -496,6 +509,7 @@ func (c *Conn) Reset() {
 	c.packetLength = 0
 	c.curBuf = c.fixBuf
 	c.fixBuf.writeIndex = 0
+	logutil.Info("write index set 0")
 	for node := c.dynamicBuf.Front(); node != nil; node = node.Next() {
 		c.allocator.Free(node.Value.(*ListBlock).data)
 	}

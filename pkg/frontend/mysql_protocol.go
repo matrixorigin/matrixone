@@ -2680,13 +2680,13 @@ func (mp *MysqlProtocolImpl) WriteResultSetRow(mrs *MysqlResultSet, cnt uint64) 
 	//make rows into the batch
 	for i := uint64(0); i < cnt; i++ {
 		//begin1 := time.Now()
+		logutil.Info("begin append to buffer")
 		if useBinaryRow {
 			err = mp.appendResultSetBinaryRow(mrs, i)
 		} else {
 			err = mp.appendResultSetTextRow(mrs, i)
 		}
-		//mp.makeTime += time.Since(begin1)
-
+		logutil.Info(fmt.Sprintf("finished append buffer, now buffer :%s", string(mp.tcpConn.fixBuf.data[:mp.tcpConn.fixBuf.writeIndex])))
 		if err != nil {
 			//ERR_Packet in case of error
 			err1 := mp.sendErrPacket(moerr.ER_UNKNOWN_ERROR, DefaultMySQLState, err.Error())

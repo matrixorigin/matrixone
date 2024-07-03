@@ -322,6 +322,7 @@ var globalPu atomic.Value
 var globalAicm atomic.Value
 var moServerStarted atomic.Bool
 var globalSessionAlloc atomic.Value
+var globalBufferAlloc atomic.Value
 
 func getGlobalSessionAlloc() *SessionAllocator {
 	return globalSessionAlloc.Load().(*SessionAllocator)
@@ -329,6 +330,15 @@ func getGlobalSessionAlloc() *SessionAllocator {
 
 func setGlobalSessionAlloc(s *SessionAllocator) {
 	globalSessionAlloc.Store(s)
+}
+
+func getGlobalBufferAlloc() *BufferAllocator {
+
+	return globalBufferAlloc.Load().(*BufferAllocator)
+}
+
+func setGlobalBufferAlloc(b *BufferAllocator) {
+	globalBufferAlloc.Store(b)
 }
 
 func setGlobalRtMgr(rtMgr *RoutineManager) {
@@ -376,6 +386,7 @@ func NewMOServer(
 	setGlobalPu(pu)
 	setGlobalAicm(aicm)
 	setGlobalSessionAlloc(NewSessionAllocator(pu))
+	setGlobalBufferAlloc(NewBufferAllocator(pu))
 	rm, err := NewRoutineManager(ctx)
 	if err != nil {
 		logutil.Panicf("start server failed with %+v", err)
