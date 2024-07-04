@@ -15,7 +15,6 @@
 package db
 
 import (
-	"math"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -177,13 +176,6 @@ func (s *MergeTaskBuilder) onTable(tableEntry *catalog.TableEntry) (err error) {
 				distinctDeltaLocs++
 			}
 		}
-	}
-
-	rate := float64(deltaLocRows) / float64(tblRows)
-	if !math.IsNaN(rate) {
-		logutil.Infof(
-			"[DeltaLoc Merge] tblId: %s(%d), rows: %d, deltaLoc: %d, deltaLocRows: %d, rate: %f",
-			s.name, s.tid, tblRows, distinctDeltaLocs, deltaLocRows, rate)
 	}
 	return
 }
