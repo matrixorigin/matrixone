@@ -1538,9 +1538,8 @@ func updatePartitionOfPush(
 	if lazyLoad {
 		if len(tl.CkpLocation) > 0 {
 			t0 = time.Now()
-			//TODO::
 			ckpStart, ckpEnd = parseCkpDuration(tl)
-			if !ckpStart.IsEmpty() && !ckpEnd.IsEmpty() {
+			if !ckpStart.IsEmpty() || !ckpEnd.IsEmpty() {
 				state.CacheCkpDuration(ckpStart, ckpEnd, partition)
 			}
 			state.AppendCheckpoint(tl.CkpLocation, partition)
