@@ -23,6 +23,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
+func isDynamicParam(expr *plan.Expr) bool {
+	switch expr.Expr.(type) {
+	case *plan.Expr_P, *plan.Expr_V:
+		return true
+	}
+	return false
+}
+
 func isRuntimeConstExpr(expr *plan.Expr) bool {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Vec, *plan.Expr_T:
