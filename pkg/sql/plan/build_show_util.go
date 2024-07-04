@@ -321,8 +321,8 @@ func ConstructCreateTableSQL(ctx CompilerContext, tableDef *plan.TableDef, snaps
 				return "", nil, err
 			}
 		}
-
-		createStr += fmt.Sprintf(" INFILE{'FILEPATH'='%s','COMPRESSION'='%s','FORMAT'='%s','JSONDATA'='%s'}", param.Filepath, param.CompressType, param.Format, param.JsonData)
+		// hide file path
+		createStr += fmt.Sprintf(" INFILE{'FILEPATH'='','COMPRESSION'='%s','FORMAT'='%s','JSONDATA'='%s'}", param.CompressType, param.Format, param.JsonData)
 
 		fields := ""
 		if param.Tail != nil && param.Tail.Fields != nil {
