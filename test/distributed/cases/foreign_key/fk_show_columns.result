@@ -121,7 +121,7 @@ function_id    INT(32)    NO    PRI    null    auto_increment
 name    VARCHAR(100)    YES    UNI    null        
 owner    INT UNSIGNED(32)    YES        null        
 args    JSON(0)    YES        null        
-rettype    VARCHAR(20)    YES        null        
+retType    VARCHAR(20)    YES        null        
 body    TEXT(0)    YES        null        
 language    VARCHAR(20)    YES        null        
 db    VARCHAR(100)    YES        null        
@@ -439,7 +439,7 @@ function_id    INT(32)    NO    PRI    null    auto_increment
 name    VARCHAR(100)    YES    UNI    null        
 owner    INT UNSIGNED(32)    YES        null        
 args    JSON(0)    YES        null        
-rettype    VARCHAR(20)    YES        null        
+retType    VARCHAR(20)    YES        null        
 body    TEXT(0)    YES        null        
 language    VARCHAR(20)    YES        null        
 db    VARCHAR(100)    YES        null        
@@ -748,7 +748,7 @@ function_id    INT(32)    NO    PRI    null    auto_increment
 name    VARCHAR(100)    YES    UNI    null        
 owner    INT UNSIGNED(32)    YES        null        
 args    JSON(0)    YES        null        
-rettype    VARCHAR(20)    YES        null        
+retType    VARCHAR(20)    YES        null        
 body    TEXT(0)    YES        null        
 language    VARCHAR(20)    YES        null        
 db    VARCHAR(100)    YES        null        
@@ -1057,7 +1057,7 @@ function_id    INT(32)    NO    PRI    null    auto_increment
 name    VARCHAR(100)    YES    UNI    null        
 owner    INT UNSIGNED(32)    YES        null        
 args    JSON(0)    YES        null        
-rettype    VARCHAR(20)    YES        null        
+retType    VARCHAR(20)    YES        null        
 body    TEXT(0)    YES        null        
 language    VARCHAR(20)    YES        null        
 db    VARCHAR(100)    YES        null        

@@ -483,7 +483,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 
 			//1. build and update constraint def
 			for _, indexDef := range indexTableDef.Indexes {
-				insertSql, err := makeInsertSingleIndexSQL(c.e, c.proc, databaseId, tblId, indexDef)
+				insertSql, err := makeInsertSingleIndexSQL(c.e, c.proc, databaseId, tblId, indexDef, tableDef)
 				if err != nil {
 					return err
 				}
@@ -868,7 +868,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 	}
 
-	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
+	if err = lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
 		c.proc.Info(c.proc.Ctx, "createTable",
 			zap.String("databaseName", c.db),
 			zap.String("tableName", qry.GetTableDef().GetName()),
@@ -877,7 +877,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		return err
 	}
 
-	if err := dbSource.Create(context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
+	if err = dbSource.Create(context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
 		c.proc.Info(c.proc.Ctx, "createTable",
 			zap.String("databaseName", c.db),
 			zap.String("tableName", qry.GetTableDef().GetName()),
@@ -995,8 +995,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 					//colName -> new colId
 					newDef.ForeignCols[j] = colNameToId[colName]
 				}
-			} else {
-				copy(newDef.ForeignCols, fkey.ForeignCols)
 			}
 
 			//refresh child table column id
@@ -1519,6 +1517,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		return err
 	}
 	tableId := r.GetTableID(c.proc.Ctx)
+	tableDef := r.GetTableDef(c.proc.Ctx)
 
 	originalTableDef := plan2.DeepCopyTableDef(qry.TableDef, true)
 	indexInfo := qry.GetIndex() // IndexInfo is named same as planner's IndexInfo
@@ -1588,7 +1587,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 
 	// generate inserts into mo_indexes metadata
 	for _, indexDef := range indexTableDef.Indexes {
-		sql, err := makeInsertSingleIndexSQL(c.e, c.proc, databaseId, tableId, indexDef)
+		sql, err := makeInsertSingleIndexSQL(c.e, c.proc, databaseId, tableId, indexDef, tableDef)
 		if err != nil {
 			return err
 		}

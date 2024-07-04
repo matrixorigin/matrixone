@@ -1198,6 +1198,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			Version:       tbl.version,
 		}
 	}
+	tbl.tableDef.DbName = tbl.db.databaseName
 	return tbl.tableDef
 }
 

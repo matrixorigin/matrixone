@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -81,6 +82,7 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string, blkCnt int) {
 	mixin.columns.pkPos = -1
 	mixin.columns.indexOfFirstSortedColumn = -1
 	for i, column := range cols {
+		column = strings.ToLower(column)
 		if column == catalog.Row_ID {
 			mixin.columns.seqnums[i] = objectio.SEQNUM_ROWID
 			mixin.columns.colTypes[i] = objectio.RowidType

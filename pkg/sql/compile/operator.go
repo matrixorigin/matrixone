@@ -728,7 +728,7 @@ func constructProjection(n *plan.Node) *projection.Argument {
 func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Context, fileList []string, FileSize []int64, fileOffset []*pipeline.FileOffset) *external.Argument {
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
-		attrs[j] = col.Name
+		attrs[j] = col.GetUserInputName()
 	}
 	return external.NewArgument().WithEs(
 		&external.ExternalParam{
@@ -765,7 +765,7 @@ func constructStream(n *plan.Node, p [2]int64) *source.Argument {
 func constructTableFunction(n *plan.Node) *table_function.Argument {
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
-		attrs[j] = col.Name
+		attrs[j] = col.GetUserInputName()
 	}
 	arg := table_function.NewArgument()
 	arg.Attrs = attrs

@@ -248,7 +248,7 @@ func checkUniqueKeyPartType(ctx context.Context, colType plan.Type, columnName s
 func checkAddColumWithUniqueKey(ctx context.Context, tableDef *TableDef, uniKey *tree.UniqueIndex) (*plan.IndexDef, error) {
 	indexName := uniKey.GetIndexName()
 	if strings.EqualFold(indexName, PrimaryKeyName) {
-		return nil, moerr.NewErrWrongNameForIndex(ctx, uniKey.GetIndexName())
+		return nil, moerr.NewErrWrongNameForIndex(ctx, indexName)
 	}
 
 	indexTableName, err := util.BuildIndexTableName(ctx, true)
@@ -258,7 +258,7 @@ func checkAddColumWithUniqueKey(ctx context.Context, tableDef *TableDef, uniKey 
 
 	indexParts := make([]string, 0)
 	for _, keyPart := range uniKey.KeyParts {
-		name := keyPart.ColName.ColNameOrigin()
+		name := keyPart.ColName.ColName()
 		indexParts = append(indexParts, name)
 	}
 	if len(indexParts) > MaxKeyParts {

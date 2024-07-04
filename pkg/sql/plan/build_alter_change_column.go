@@ -248,7 +248,7 @@ func buildChangeColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTa
 
 	if alterPlan.CopyTableDef.Pkey != nil {
 		for _, partCol := range alterPlan.CopyTableDef.Pkey.Names {
-			if partCol == newCol.Name {
+			if partCol == newColName {
 				newCol.Default.NullAbility = false
 				newCol.NotNull = true
 				break

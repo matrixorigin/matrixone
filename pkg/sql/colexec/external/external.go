@@ -1294,7 +1294,7 @@ func getFieldFromLine(line []csvparser.Field, colIdx int, param *ExternalParam) 
 	if catalog.ContainExternalHidenCol(param.Attrs[colIdx]) {
 		return csvparser.Field{Val: param.Fileparam.Filepath}
 	}
-	return line[param.Name2ColIndex[param.Attrs[colIdx]]]
+	return line[param.Name2ColIndex[strings.ToLower(param.Attrs[colIdx])]]
 }
 
 func getOneRowData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam, mp *mpool.MPool) error {

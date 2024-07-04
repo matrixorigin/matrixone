@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"go/constant"
@@ -95,7 +96,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		}()
 	}
 
-	tableObjRef, tableDef := ctx.Resolve(dbName, tblName, *snapshot)
+	_, tableDef := ctx.Resolve(dbName, tblName, *snapshot)
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
@@ -113,13 +114,23 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		return buildShowCreateView(newStmt, ctx)
 	}
 
-	ddlStr, err := ConstructCreateTableSQL(tableObjRef, tableDef, *snapshot, ctx)
+	ddlStr, _, err := ConstructCreateTableSQL(ctx, tableDef, *snapshot, false)
 	if err != nil {
 		return nil, err
 	}
 
+	var buf bytes.Buffer
+	for i, ch := range ddlStr {
+		// escape double quote, for the sql pattern below
+		if ch == '"' {
+			if i == 0 || ddlStr[i-1] != '\\' {
+				buf.WriteRune('"')
+			}
+		}
+		buf.WriteRune(ch)
+	}
 	sql := "select \"%s\" as `Table`, \"%s\" as `Create Table`"
-	sql = fmt.Sprintf(sql, tblName, ddlStr)
+	sql = fmt.Sprintf(sql, tblName, buf.String())
 
 	return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATETABLE)
 }
@@ -470,6 +481,7 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	if err != nil {
 		return nil, err
 	}
+
 	dbName, err := databaseIsValid(getSuitableDBName(stmt.Table.GetDBName(), stmt.DBName), ctx, Snapshot{TS: &timestamp.Timestamp{}})
 	if err != nil {
 		return nil, err
@@ -480,6 +492,18 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
+
+	colIdToOriginName := make(map[uint64]string)
+	colNameToOriginName := make(map[string]string)
+	for _, col := range tableDef.Cols {
+		if col.Hidden {
+			continue
+		}
+		colNameOrigin := col.GetUserInputName()
+		colIdToOriginName[col.ColId] = colNameOrigin
+		colNameToOriginName[col.Name] = colNameOrigin
+	}
+
 	var sub *SubscriptionMeta
 	if obj.PubInfo != nil {
 		dbName = obj.SchemaName
@@ -492,6 +516,7 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 			ctx.SetQueryingSubscription(nil)
 		}()
 	}
+
 	var keyStr string
 	if dbName == catalog.MO_CATALOG && tblName == catalog.MO_DATABASE {
 		keyStr = "case when col.attname = '" + catalog.SystemDBAttr_ID + "' then 'PRI' else '' END as `Key`"
@@ -504,38 +529,33 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 			keyStr += "case"
 			if tableDef.Pkey != nil {
 				for _, name := range tableDef.Pkey.Names {
+					name = colNameToOriginName[name]
 					keyStr += " when col.attname = "
 					keyStr += "'" + name + "'"
 					keyStr += " then 'PRI'"
 				}
 			}
 			if len(tableDef.Fkeys) != 0 {
-				colIdToName := make(map[uint64]string)
-				for _, col := range tableDef.Cols {
-					if col.Hidden {
-						continue
-					}
-					colIdToName[col.ColId] = col.Name
-				}
 				for _, fk := range tableDef.Fkeys {
 					for _, colId := range fk.Cols {
 						keyStr += " when col.attname = "
-						keyStr += "'" + colIdToName[colId] + "'"
+						keyStr += "'" + colIdToOriginName[colId] + "'"
 						keyStr += " then 'MUL'"
 					}
 				}
 			}
 			if tableDef.Indexes != nil {
-				for _, indexdef := range tableDef.Indexes {
-					name := indexdef.Parts[0]
-					if indexdef.Unique {
-						if isPrimaryKey(tableDef, indexdef.Parts) {
-							for _, name := range indexdef.Parts {
+				for _, indexDef := range tableDef.Indexes {
+					name := colNameToOriginName[indexDef.Parts[0]]
+					if indexDef.Unique {
+						if isPrimaryKey(tableDef, indexDef.Parts) {
+							for _, name = range indexDef.Parts {
+								name = colNameToOriginName[name]
 								keyStr += " when col.attname = "
 								keyStr += "'" + name + "'"
 								keyStr += " then 'PRI'"
 							}
-						} else if isMultiplePriKey(indexdef) {
+						} else if isMultiplePriKey(indexDef) {
 							keyStr += " when col.attname = "
 							keyStr += "'" + name + "'"
 							keyStr += " then 'MUL'"
@@ -755,12 +775,14 @@ func buildShowTriggers(stmt *tree.ShowTarget, ctx CompilerContext) (*Plan, error
 }
 
 func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
-	dbName, err := databaseIsValid(getSuitableDBName(stmt.TableName.GetDBName(), stmt.DbName), ctx, Snapshot{TS: &timestamp.Timestamp{}})
+	snapshot := Snapshot{TS: &timestamp.Timestamp{}}
+	dbName, err := databaseIsValid(getSuitableDBName(stmt.TableName.GetDBName(), stmt.DbName), ctx, snapshot)
 	if err != nil {
 		return nil, err
 	}
+
 	tblName := stmt.TableName.GetTableName()
-	obj, tableDef := ctx.Resolve(dbName, tblName, Snapshot{TS: &timestamp.Timestamp{}})
+	obj, tableDef := ctx.Resolve(dbName, tblName, snapshot)
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
