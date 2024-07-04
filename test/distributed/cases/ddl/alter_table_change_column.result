@@ -451,7 +451,7 @@ a    b    c    d
 alter table t1 change a x int auto_increment;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-x    INT(32)    NO    PRI    null        
+x    INT(32)    NO    PRI    null    auto_increment    
 b    VARCHAR(15)    NO        null        
 c    DATE(0)    YES        null        
 d    DECIMAL(7)    YES        null        
@@ -465,7 +465,7 @@ x    b    c    d
 alter table t1 change d y decimal(6,2);
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-x    INT(32)    NO    PRI    null        
+x    INT(32)    NO    PRI    null    auto_increment    
 b    VARCHAR(15)    NO        null        
 c    DATE(0)    YES        null        
 y    DECIMAL(6)    YES        null        
@@ -575,7 +575,7 @@ Cannot change column 'deptno': used in a foreign key constraint 'c1'
 alter table emp change deptno deptno varchar(25);
 desc emp;
 Field    Type    Null    Key    Default    Extra    Comment
-empno    INT UNSIGNED(32)    NO    PRI    null        
+empno    INT UNSIGNED(32)    NO    PRI    null    auto_increment    
 ename    VARCHAR(15)    YES        null        
 job    VARCHAR(10)    YES        null        
 mgr    INT UNSIGNED(32)    YES        null        
@@ -602,7 +602,7 @@ empno    ename    job    mgr    hiredate    sal    comm    deptno
 alter table emp change deptno deptId varchar(25);
 desc emp;
 Field    Type    Null    Key    Default    Extra    Comment
-empno    INT UNSIGNED(32)    NO    PRI    null        
+empno    INT UNSIGNED(32)    NO    PRI    null    auto_increment    
 ename    VARCHAR(15)    YES        null        
 job    VARCHAR(10)    YES        null        
 mgr    INT UNSIGNED(32)    YES        null        

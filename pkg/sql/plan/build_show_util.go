@@ -325,39 +325,43 @@ func ConstructCreateTableSQL(ctx CompilerContext, tableDef *plan.TableDef, snaps
 		createStr += fmt.Sprintf(" INFILE{'FILEPATH'='','COMPRESSION'='%s','FORMAT'='%s','JSONDATA'='%s'}", param.CompressType, param.Format, param.JsonData)
 
 		fields := ""
-		if param.Tail.Fields.Terminated != nil {
-			if param.Tail.Fields.Terminated.Value == "" {
-				fields += " TERMINATED BY \"\""
-			} else {
-				fields += fmt.Sprintf(" TERMINATED BY '%s'", param.Tail.Fields.Terminated.Value)
+		if param.Tail != nil && param.Tail.Fields != nil {
+			if param.Tail.Fields.Terminated != nil {
+				if param.Tail.Fields.Terminated.Value == "" {
+					fields += " TERMINATED BY \"\""
+				} else {
+					fields += fmt.Sprintf(" TERMINATED BY '%s'", param.Tail.Fields.Terminated.Value)
+				}
 			}
-		}
 
-		escape := func(value byte) string {
-			if value == byte(0) {
-				return ""
-			} else if value == byte('\\') {
-				return "\\\\"
+			escape := func(value byte) string {
+				if value == byte(0) {
+					return ""
+				} else if value == byte('\\') {
+					return "\\\\"
+				}
+				return fmt.Sprintf("%c", value)
 			}
-			return fmt.Sprintf("%c", value)
-		}
 
-		if param.Tail.Fields.EnclosedBy != nil {
-			fields += " ENCLOSED BY '" + escape(param.Tail.Fields.EnclosedBy.Value) + "'"
-		}
-		if param.Tail.Fields.EscapedBy != nil {
-			fields += " ESCAPED BY '" + escape(param.Tail.Fields.EscapedBy.Value) + "'"
+			if param.Tail.Fields.EnclosedBy != nil {
+				fields += " ENCLOSED BY '" + escape(param.Tail.Fields.EnclosedBy.Value) + "'"
+			}
+			if param.Tail.Fields.EscapedBy != nil {
+				fields += " ESCAPED BY '" + escape(param.Tail.Fields.EscapedBy.Value) + "'"
+			}
 		}
 
 		line := ""
-		if param.Tail.Lines.StartingBy != "" {
-			line += fmt.Sprintf(" STARTING BY '%s'", param.Tail.Lines.StartingBy)
-		}
-		if param.Tail.Lines.TerminatedBy != nil {
-			if param.Tail.Lines.TerminatedBy.Value == "\n" || param.Tail.Lines.TerminatedBy.Value == "\r\n" {
-				line += " TERMINATED BY '\\\\n'"
-			} else {
-				line += fmt.Sprintf(" TERMINATED BY '%s'", param.Tail.Lines.TerminatedBy)
+		if param.Tail != nil && param.Tail.Lines != nil {
+			if param.Tail.Lines.StartingBy != "" {
+				line += fmt.Sprintf(" STARTING BY '%s'", param.Tail.Lines.StartingBy)
+			}
+			if param.Tail.Lines.TerminatedBy != nil {
+				if param.Tail.Lines.TerminatedBy.Value == "\n" || param.Tail.Lines.TerminatedBy.Value == "\r\n" {
+					line += " TERMINATED BY '\\\\n'"
+				} else {
+					line += fmt.Sprintf(" TERMINATED BY '%s'", param.Tail.Lines.TerminatedBy)
+				}
 			}
 		}
 
@@ -370,7 +374,7 @@ func ConstructCreateTableSQL(ctx CompilerContext, tableDef *plan.TableDef, snaps
 			createStr += line
 		}
 
-		if param.Tail.IgnoredLines > 0 {
+		if param.Tail != nil && param.Tail.IgnoredLines > 0 {
 			createStr += fmt.Sprintf(" IGNORE %d LINES", param.Tail.IgnoredLines)
 		}
 	}

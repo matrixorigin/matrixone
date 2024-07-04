@@ -248,11 +248,11 @@ func (c *compilerContext) GetUserName() string {
 }
 
 func (c *compilerContext) GetAccountId() (uint32, error) {
-	return defines.GetAccountId(c.ctx)
+	return defines.GetAccountId(c.proc.Ctx)
 }
 
 func (c *compilerContext) GetContext() context.Context {
-	return c.ctx
+	return c.proc.Ctx
 }
 
 func (c *compilerContext) ResolveById(tableId uint64, snapshot plan.Snapshot) (objRef *plan.ObjectRef, tableDef *plan.TableDef) {
