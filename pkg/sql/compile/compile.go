@@ -2469,11 +2469,11 @@ func (c *Compile) compileUnionAll(ss []*Scope, children []*Scope) []*Scope {
 	return []*Scope{rs}
 }
 
-func (c *Compile) compileJoin(node, left, right *plan.Node, ss, children []*Scope) []*Scope {
+func (c *Compile) compileJoin(node, left, right *plan.Node, ns []*plan.Node, ss, children []*Scope) []*Scope {
 	if node.Stats.HashmapStats.Shuffle {
 		return c.compileShuffleJoin(node, left, right, ss, children)
 	}
-	return c.compileBroadcastJoin(node, left, right, ss, children)
+	return c.compileBroadcastJoin(node, left, right, ns, ss, children)
 }
 
 func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights []*Scope) []*Scope {
@@ -2584,8 +2584,7 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 	return children
 }
 
-
-func (c *Compile) compileBroadcastJoin(node, left, right *plan.Node, ns []*plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
+func (c *Compile) compileBroadcastJoin(node, left, right *plan.Node, ns []*plan.Node, ss, children []*Scope) []*Scope {
 	var rs []*Scope
 	isEq := plan2.IsEquiJoin2(node.OnList)
 
@@ -2600,7 +2599,7 @@ func (c *Compile) compileBroadcastJoin(node, left, right *plan.Node, ns []*plan.
 	}
 
 	if plan2.IsShuffleChildren(left, ns) {
-		probeScopes = c.mergeShuffleJoinScopeList(probeScopes)
+		ss = c.mergeShuffleJoinScopeList(ss)
 	}
 
 	switch node.JoinType {
