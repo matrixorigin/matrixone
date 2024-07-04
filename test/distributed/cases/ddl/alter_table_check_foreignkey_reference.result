@@ -147,7 +147,7 @@ alter table dept change deptno deptId int unsigned after dname;
 desc dept;
 Field    Type    Null    Key    Default    Extra    Comment
 dname    VARCHAR(15)    YES        null        部门名称
-deptid    INT UNSIGNED(32)    NO    PRI    null        
+deptId    INT UNSIGNED(32)    NO    PRI    null        
 loc    VARCHAR(50)    YES        null        部门所在位置
 INSERT INTO emp VALUES (7990,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,100);
 internal error: Cannot add or update a child row: a foreign key constraint fails

@@ -692,13 +692,46 @@ func buildCreateSequence(stmt *tree.CreateSequence, ctx CompilerContext) (*Plan,
 
 func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error) {
 	if stmt.IsAsLike {
-		newStmt, err := rewriteForCreateTableLike(stmt, ctx)
+		var err error
+		oldTable := stmt.LikeTableName
+		newTable := stmt.Table
+		tblName := formatStr(string(oldTable.ObjectName))
+		dbName := formatStr(string(oldTable.SchemaName))
+
+		snapshot := &Snapshot{TS: &timestamp.Timestamp{}}
+		if dbName, err = databaseIsValid(getSuitableDBName(dbName, ""), ctx, *snapshot); err != nil {
+			return nil, err
+		}
+
+		// check if the database is a subscription
+		sub, err := ctx.GetSubscriptionMeta(dbName, *snapshot)
+		if err != nil {
+			return nil, err
+		}
+		if sub != nil {
+			ctx.SetQueryingSubscription(sub)
+			defer func() {
+				ctx.SetQueryingSubscription(nil)
+			}()
+		}
+
+		_, tableDef := ctx.Resolve(dbName, tblName, *snapshot)
+		if tableDef == nil {
+			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
+		}
+		if tableDef.TableType == catalog.SystemViewRel || tableDef.TableType == catalog.SystemExternalRel || tableDef.TableType == catalog.SystemClusterRel {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "%s.%s is not BASE TABLE", dbName, tblName)
+		}
+		tableDef.Name = string(newTable.ObjectName)
+
+		_, newStmt, err := ConstructCreateTableSQL(ctx, tableDef, *snapshot, false)
 		if err != nil {
 			return nil, err
 		}
 		if stmtLike, ok := newStmt.(*tree.CreateTable); ok {
 			return buildCreateTable(stmtLike, ctx)
 		}
+
 		return nil, moerr.NewInternalError(ctx.GetContext(), "rewrite for create table like failed")
 	}
 
@@ -2840,6 +2873,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		switch opt := option.(type) {
 		case *tree.AlterOptionDrop:
 			alterTableDrop := new(plan.AlterTableDrop)
+			// lower case
 			constraintName := string(opt.Name)
 			if constraintNameAreWhiteSpaces(constraintName) {
 				return nil, moerr.NewInternalError(ctx.GetContext(), "Can't DROP '%s'; check that column/key exists", constraintName)

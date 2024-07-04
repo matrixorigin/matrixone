@@ -189,7 +189,7 @@ func buildTestShowCreateTable(sql string) (string, error) {
 	}
 
 	snapshot := Snapshot{TS: &timestamp.Timestamp{}}
-	showSQL, err := ConstructCreateTableSQL(nil, tableDef, snapshot, &mock.ctxt)
+	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, snapshot, false)
 	if err != nil {
 		return "", err
 	}

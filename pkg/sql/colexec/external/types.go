@@ -48,25 +48,28 @@ type ExternalParam struct {
 }
 
 type ExParamConst struct {
-	IgnoreLine      int
-	IgnoreLineTag   int
-	ParallelLoad    bool
-	maxBatchSize    uint64
-	Idx             int
-	CreateSql       string
-	Close           byte
-	Attrs           []string
+	IgnoreLine    int
+	IgnoreLineTag int
+	ParallelLoad  bool
+	maxBatchSize  uint64
+	Idx           int
+	CreateSql     string
+	Close         byte
+	// origin case
+	Attrs []string
+	// lower case
 	Cols            []*plan.ColDef
 	FileList        []string
 	FileSize        []int64
 	FileOffset      []int64
 	FileOffsetTotal []*pipeline.FileOffset
-	Name2ColIndex   map[string]int32
-	Ctx             context.Context
-	Extern          *tree.ExternParam
-	tableDef        *plan.TableDef
-	ClusterTable    *plan.ClusterTable
-	TblName         string // for debug moc3421
+	// lower case
+	Name2ColIndex map[string]int32
+	Ctx           context.Context
+	Extern        *tree.ExternParam
+	tableDef      *plan.TableDef
+	ClusterTable  *plan.ClusterTable
+	TblName       string // for debug moc3421
 }
 
 type ExParam struct {

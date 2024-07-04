@@ -379,6 +379,7 @@ func (t *Table) GetTableDef(ctx context.Context) *plan.TableDef {
 		Indexes:      indexes,
 		Version:      schemaVersion,
 		IsTemporary:  t.GetEngineType() == engine.Memory,
+		DbName:       t.databaseName,
 	}
 	return tableDef
 }

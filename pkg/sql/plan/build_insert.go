@@ -190,11 +190,11 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 			if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
 				continue
 			}
-			attrs = append(attrs, col.Name)
+			attrs = append(attrs, col.GetUserInputName())
 			insertColCount++
 		}
 		for _, col := range tableDef.Cols {
-			attrs = append(attrs, col.Name)
+			attrs = append(attrs, col.GetUserInputName())
 		}
 		attrs = append(attrs, catalog.Row_ID)
 		uniqueColWithIdx := GetUniqueColAndIdxFromTableDef(tableDef)

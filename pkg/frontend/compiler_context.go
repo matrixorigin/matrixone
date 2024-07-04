@@ -431,7 +431,6 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 	if tableDef.IsTemporary {
 		tableDef.Name = tableName
 	}
-	tableDef.DbName = dbName
 
 	// convert
 	var subscriptionName string
@@ -727,7 +726,7 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string,
 	priDefs := make([]*plan2.ColDef, 0, len(priKeys))
 	for _, key := range priKeys {
 		priDefs = append(priDefs, &plan2.ColDef{
-			Name: strings.ToLower(key.Name) ,
+			Name:       strings.ToLower(key.Name),
 			OriginName: key.Name,
 			Typ: plan2.Type{
 				Id:    int32(key.Type.Oid),
