@@ -1967,7 +1967,7 @@ func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, s
 		ses.SetPrivilege(determinePrivilegeSetOfStatement(stmt))
 
 		if ses.getRoutine() != nil && ses.getRoutine().isRestricted() {
-			logutil.Infof("account %d routine %d is restricted, can not execute the statement %s", ses.GetAccountId(), ses.getRoutine().getConnectionID(), stmt.String())
+			logutil.Infof("account %d routine %d is restricted, can not execute the statement", ses.GetAccountId(), ses.getRoutine().getConnectionID())
 		}
 
 		// can or not execute in retricted status
