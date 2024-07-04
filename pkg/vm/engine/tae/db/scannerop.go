@@ -44,7 +44,7 @@ type MergeTaskBuilder struct {
 	distinctDeltaLocs map[string]struct{}
 
 	objPolicy   merge.Policy
-	executor    *merge.MergeExecutor
+	executor    *merge.Executor
 	tableRowCnt int
 	tableRowDel int
 
@@ -199,7 +199,7 @@ func (s *MergeTaskBuilder) onPostTable(tableEntry *catalog.TableEntry) (err erro
 	mobjs, kind := s.objPolicy.Revise(s.executor.CPUPercent(), int64(s.executor.MemAvailBytes()),
 		merge.DisableDeltaLocMerge.Load())
 	if len(mobjs) > 1 {
-		s.executor.ExecuteFor(tableEntry, mobjs, kind)
+		s.executor.ExecuteMultiObjMerge(tableEntry, mobjs, kind)
 	}
 	return
 }
