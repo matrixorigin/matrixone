@@ -14663,7 +14663,7 @@ yydefault:
 //line mysql_sql.y:4391
 		{
 			tblName := yylex.(*Lexer).GetDbOrTblName(yyDollar[1].cstrUnion().Origin())
-			prefix := tree.ObjectNamePrefix{ExplicitSchema: true}
+			prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
 			yyLOCAL = tree.NewTableName(tree.Identifier(tblName), prefix, nil)
 		}
 		yyVAL.union = yyLOCAL
