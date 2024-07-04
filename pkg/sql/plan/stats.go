@@ -461,10 +461,11 @@ func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *Q
 	//check strict filter, otherwise can not estimate outcnt by min/max val
 	col, litType, literals, colFnName, hasDynamicParam := extractColRefAndLiteralsInFilter(expr)
 	if hasDynamicParam {
-		if colFnName == "between" {
-			return 0.001
+		// assume dynamic parameter always has low selectivity
+		if funcName == "between" {
+			return 0.0001
 		} else {
-			return 0.1
+			return 0.01
 		}
 	}
 	if col != nil && len(literals) > 0 {
