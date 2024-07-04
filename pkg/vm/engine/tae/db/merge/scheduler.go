@@ -25,7 +25,7 @@ import (
 
 type Scheduler struct {
 	tid      uint64
-	executor *MergeExecutor
+	executor *Executor
 
 	run      int
 	policies [2]policy
@@ -90,12 +90,15 @@ func (m *Scheduler) resetForTable(entry *catalog.TableEntry) {
 		m.tableRowCnt = 0
 		m.tableRowDel = 0
 	}
-	m.policies[m.run].ResetForTable(entry)
+	m.policies[m.run].resetForTable(entry)
 }
 
 func (m *Scheduler) PreExecute() error {
 	logutil.Infof("[Mergeblocks] Start Run %d", m.run)
 	m.executor.RefreshMemInfo()
+	for _, p := range m.policies {
+		p.preExecute()
+	}
 	return nil
 }
 
@@ -112,13 +115,13 @@ func (m *Scheduler) OnPostTable(tableEntry *catalog.TableEntry) (err error) {
 
 	tableEntry.Stats.AddRowStat(m.tableRowCnt, m.tableRowDel)
 	// for multi-object run. determine which objects to merge based on all objects.
-	mobjs, kind := m.policies[m.run].Revise(m.executor.CPUPercent(), int64(m.executor.MemAvailBytes()))
+	mobjs, kind := m.policies[m.run].revise(m.executor.CPUPercent(), int64(m.executor.MemAvailBytes()))
 	if len(mobjs) == 0 {
 		return
 	}
 
 	if m.run == 0 {
-		m.executor.ExecuteSingleObjMerge(tableEntry, mobjs, kind)
+		m.executor.ExecuteSingleObjMerge(tableEntry, mobjs)
 	} else {
 		m.executor.ExecuteMultiObjMerge(tableEntry, mobjs, kind)
 	}
@@ -145,7 +148,7 @@ func (m *Scheduler) OnObject(objectEntry *catalog.ObjectEntry) error {
 	objectEntry.SetRemainingRows(rows - dels)
 	m.tableRowCnt += rows
 	m.tableRowDel += dels
-	m.policies[m.run].OnObject(objectEntry)
+	m.policies[m.run].onObject(objectEntry)
 	return nil
 }
 

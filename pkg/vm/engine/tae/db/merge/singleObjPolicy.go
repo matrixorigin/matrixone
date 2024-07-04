@@ -70,7 +70,7 @@ func newSingleObjPolicy(config *singleObjConfig) *singleObjPolicy {
 	return s
 }
 
-func (s *singleObjPolicy) OnObject(obj *catalog.ObjectEntry) {
+func (s *singleObjPolicy) onObject(obj *catalog.ObjectEntry) {
 	tombstone := s.tableEntry.TryGetTombstone(obj.ID)
 	if tombstone == nil {
 		return
@@ -104,79 +104,29 @@ func (s *singleObjPolicy) OnObject(obj *catalog.ObjectEntry) {
 	}
 }
 
-func (s *singleObjPolicy) Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind) {
+func (s *singleObjPolicy) revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind) {
 	slices.SortFunc(s.objects, func(a, b *catalog.ObjectEntry) int {
 		return cmp.Compare(a.GetRemainingRows(), b.GetRemainingRows())
 	})
 
-	isStandalone := common.IsStandaloneBoost.Load()
-	mergeOnDNIfStandalone := !common.ShouldStandaloneCNTakeOver.Load()
-
-	dnobjs := s.controlMem(s.objects, mem)
+	dnobjs := controlMem(s.objects, mem)
 	dnosize, _, _ := estimateMergeConsume(dnobjs)
 
-	schedDN := func() ([]*catalog.ObjectEntry, TaskHostKind) {
-		if cpu > 85 {
-			if dnosize > 25*common.Const1MBytes {
-				logutil.Infof("mergeblocks skip big merge for high level cpu usage, %d", cpu)
-				return nil, TaskHostDN
-			}
+	if cpu > 85 {
+		if dnosize > 25*common.Const1MBytes {
+			logutil.Infof("mergeblocks skip big merge for high level cpu usage, %d", cpu)
+			return nil, TaskHostDN
 		}
-		revisedObjs := make([]*catalog.ObjectEntry, len(dnobjs))
-		copy(revisedObjs, dnobjs)
-		return revisedObjs, TaskHostDN
 	}
-
-	schedCN := func() ([]*catalog.ObjectEntry, TaskHostKind) {
-		cnobjs := s.controlMem(s.objects, int64(common.RuntimeCNMergeMemControl.Load()))
-		revisedObjs := make([]*catalog.ObjectEntry, len(cnobjs))
-		copy(revisedObjs, cnobjs)
-		return revisedObjs, TaskHostDN
-	}
-
-	if isStandalone && mergeOnDNIfStandalone {
-		return schedDN()
-	}
-
-	// CNs come into the picture in two cases:
-	// 1.cluster deployed
-	// 2.standalone deployed but it's asked to merge on cn
-	if common.RuntimeCNTakeOverAll.Load() || dnosize > int(common.RuntimeMinCNMergeSize.Load()) {
-		return schedCN()
-	}
-
-	// CNs don't take over the task, leave it on dn.
-	return schedDN()
+	revisedObjs := make([]*catalog.ObjectEntry, len(dnobjs))
+	copy(revisedObjs, dnobjs)
+	return revisedObjs, TaskHostDN
 }
 
-func (s *singleObjPolicy) ResetForTable(tableEntry *catalog.TableEntry) {
+func (s *singleObjPolicy) resetForTable(tableEntry *catalog.TableEntry) {
 	s.tableEntry = tableEntry
 	s.objects = s.objects[:0]
 	clear(s.distinctDeltaLoc)
 }
 
-func (s *singleObjPolicy) controlMem(objs []*catalog.ObjectEntry, mem int64) []*catalog.ObjectEntry {
-	if mem > constMaxMemCap {
-		mem = constMaxMemCap
-	}
-
-	needPopout := func(ss []*catalog.ObjectEntry) bool {
-		osize, esize, _ := estimateMergeConsume(ss)
-		if esize > int(2*mem/3) {
-			return true
-		}
-
-		if len(ss) == 0 {
-			return false
-		}
-		// make object averaged size
-		return osize > s.config.maxOSizeMergedObjs
-	}
-	for needPopout(objs) {
-		objs = objs[:len(objs)-1]
-	}
-
-	return objs
-}
-
-func (s *singleObjPolicy) OnPostTable() {}
+func (s *singleObjPolicy) preExecute() {}

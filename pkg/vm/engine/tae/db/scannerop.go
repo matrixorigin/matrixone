@@ -38,7 +38,7 @@ type MergeTaskBuilder struct {
 	tbl  *catalog.TableEntry
 
 	objPolicy   merge.Policy
-	executor    *merge.MergeExecutor
+	executor    *merge.Executor
 	tableRowCnt int
 	tableRowDel int
 

@@ -127,3 +127,31 @@ func estimateSingleObjMergeConsume(m *catalog.ObjectEntry) (origSize, estSize, c
 	compSize = int(float64(compSize) * factor)
 	return
 }
+
+func controlMem(objs []*catalog.ObjectEntry, mem int64) []*catalog.ObjectEntry {
+	if mem > constMaxMemCap {
+		mem = constMaxMemCap
+	}
+	n := 0
+	rows, merged := 0, 0
+	origSize := 0
+	for _, m := range objs {
+		n++
+		rows += m.GetRows()
+		merged += m.GetRemainingRows()
+		origSize += m.GetOriginSize()
+
+		// by test experience, full 8192 rows batch will expand to (6~8)x memory consumption.
+		// the ExpansionRate will be moderated by the actual row number after applying deletes
+		factor := float64(merged) / float64(rows)
+		rate := float64(constMergeExpansionRate) * factor
+		if rate < 2 {
+			rate = 2
+		}
+		if estSize := int(float64(origSize) * rate); estSize > int(2*mem/3) {
+			break
+		}
+	}
+
+	return objs[:n]
+}

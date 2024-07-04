@@ -44,8 +44,8 @@ type activeTaskStats map[uint64]struct {
 	estBytes int
 }
 
-// MergeExecutor consider resources to decide to merge or not.
-type MergeExecutor struct {
+// Executor consider resources to decide to merge or not.
+type Executor struct {
 	tableName           string
 	rt                  *dbutils.Runtime
 	cnSched             CNMergeScheduler
@@ -61,14 +61,14 @@ type MergeExecutor struct {
 	}
 }
 
-func NewMergeExecutor(rt *dbutils.Runtime, sched CNMergeScheduler) *MergeExecutor {
-	return &MergeExecutor{
+func NewMergeExecutor(rt *dbutils.Runtime, sched CNMergeScheduler) *Executor {
+	return &Executor{
 		rt:      rt,
 		cnSched: sched,
 	}
 }
 
-func (e *MergeExecutor) setSpareMem(total uint64) {
+func (e *Executor) setSpareMem(total uint64) {
 	containerMLimit, err := memlimit.FromCgroup()
 	logutil.Infof("[Mergeblocks] constainer memory limit %v, host mem %v, err %v",
 		common.HumanReadableBytes(int(containerMLimit)),
@@ -86,7 +86,7 @@ func (e *MergeExecutor) setSpareMem(total uint64) {
 	}
 }
 
-func (e *MergeExecutor) RefreshMemInfo() {
+func (e *Executor) RefreshMemInfo() {
 	if stats, err := mem.VirtualMemory(); err == nil {
 		e.memAvail = int(stats.Available)
 		if e.memSpare == 0 {
@@ -98,7 +98,7 @@ func (e *MergeExecutor) RefreshMemInfo() {
 	}
 }
 
-func (e *MergeExecutor) PrintStats() {
+func (e *Executor) PrintStats() {
 	cnt := e.activeMergeBlkCount.Load()
 	if cnt == 0 && e.MemAvailBytes() > 512*common.Const1MBytes {
 		return
@@ -112,7 +112,7 @@ func (e *MergeExecutor) PrintStats() {
 	)
 }
 
-func (e *MergeExecutor) AddActiveTask(taskId uint64, blkn, esize int) {
+func (e *Executor) AddActiveTask(taskId uint64, blkn, esize int) {
 	e.activeEstimateBytes.Add(int64(esize))
 	e.activeMergeBlkCount.Add(int32(blkn))
 	e.taskConsume.Lock()
@@ -126,7 +126,7 @@ func (e *MergeExecutor) AddActiveTask(taskId uint64, blkn, esize int) {
 	e.taskConsume.Unlock()
 }
 
-func (e *MergeExecutor) OnExecDone(v any) {
+func (e *Executor) OnExecDone(v any) {
 	task := v.(tasks.MScopedTask)
 
 	e.taskConsume.Lock()
@@ -138,7 +138,7 @@ func (e *MergeExecutor) OnExecDone(v any) {
 	e.activeEstimateBytes.Add(-int64(stat.estBytes))
 }
 
-func (e *MergeExecutor) ExecuteSingleObjMerge(entry *catalog.TableEntry, mobjs []*catalog.ObjectEntry, kind TaskHostKind) {
+func (e *Executor) ExecuteSingleObjMerge(entry *catalog.TableEntry, mobjs []*catalog.ObjectEntry) {
 	e.tableName = fmt.Sprintf("%v-%v", entry.ID, entry.GetLastestSchema().Name)
 
 	if ActiveCNObj.CheckOverlapOnCNActive(mobjs) {
@@ -169,7 +169,7 @@ func (e *MergeExecutor) ExecuteSingleObjMerge(entry *catalog.TableEntry, mobjs [
 	entry.Stats.AddMerge(osize, len(mobjs), blkCnt)
 }
 
-func (e *MergeExecutor) ExecuteMultiObjMerge(entry *catalog.TableEntry, mobjs []*catalog.ObjectEntry, kind TaskHostKind) {
+func (e *Executor) ExecuteMultiObjMerge(entry *catalog.TableEntry, mobjs []*catalog.ObjectEntry, kind TaskHostKind) {
 	e.tableName = fmt.Sprintf("%v-%v", entry.ID, entry.GetLastestSchema().Name)
 
 	if ActiveCNObj.CheckOverlapOnCNActive(mobjs) {
@@ -235,7 +235,7 @@ func (e *MergeExecutor) ExecuteMultiObjMerge(entry *catalog.TableEntry, mobjs []
 	entry.Stats.AddMerge(osize, len(mobjs), blkCnt)
 }
 
-func (e *MergeExecutor) MemAvailBytes() int {
+func (e *Executor) MemAvailBytes() int {
 	merging := int(e.activeEstimateBytes.Load())
 	avail := e.memAvail - e.memSpare - merging
 	if avail < 0 {
@@ -244,7 +244,7 @@ func (e *MergeExecutor) MemAvailBytes() int {
 	return avail
 }
 
-func (e *MergeExecutor) CPUPercent() int64 {
+func (e *Executor) CPUPercent() int64 {
 	return int64(e.cpuPercent)
 }
 

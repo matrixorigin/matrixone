@@ -30,8 +30,9 @@ type multiObjConfig struct {
 }
 
 type multiObjPolicy struct {
-	config  *multiObjConfig
-	objects []*catalog.ObjectEntry
+	config      *multiObjConfig
+	objects     []*catalog.ObjectEntry
+	mergingObjs map[*catalog.ObjectEntry]struct{}
 }
 
 func (m *multiObjConfig) adjust() {
@@ -46,24 +47,31 @@ func newMultiObjPolicy(config *multiObjConfig) *multiObjPolicy {
 	}
 	config.adjust()
 	return &multiObjPolicy{
-		config:  config,
-		objects: make([]*catalog.ObjectEntry, 0, config.maxObjs),
+		config:      config,
+		objects:     make([]*catalog.ObjectEntry, 0, config.maxObjs),
+		mergingObjs: make(map[*catalog.ObjectEntry]struct{}),
 	}
 }
 
-func (m *multiObjPolicy) OnObject(obj *catalog.ObjectEntry) {
+func (m *multiObjPolicy) onObject(obj *catalog.ObjectEntry) {
+	if _, ok := m.mergingObjs[obj]; ok {
+		return
+	}
 	if len(m.objects) < m.config.maxObjs {
 		m.objects = append(m.objects, obj)
 	}
 }
 
-func (m *multiObjPolicy) Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind) {
+func (m *multiObjPolicy) revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind) {
 	if len(m.objects) < 2 || cpu > 90 {
 		return nil, TaskHostDN
 	}
 	if !m.objects[0].GetSortKeyZonemap().IsInited() {
 		revisedObj := make([]*catalog.ObjectEntry, m.config.maxObjs)
 		n := copy(revisedObj, m.objects)
+		for _, obj := range revisedObj[:n] {
+			m.mergingObjs[obj] = struct{}{}
+		}
 		return revisedObj[:n], TaskHostDN
 	}
 
@@ -101,17 +109,28 @@ func (m *multiObjPolicy) Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHos
 		m.objects = set.entries[:m.config.maxObjs]
 	}
 	m.objects = set.entries
-	objs := m.controlMem(m.objects, mem)
+	objs := controlMem(m.objects, mem)
 	if len(objs) < 2 {
 		return nil, TaskHostDN
 	}
 	revisedObj := make([]*catalog.ObjectEntry, len(objs))
 	copy(revisedObj, objs)
+	for _, obj := range revisedObj {
+		m.mergingObjs[obj] = struct{}{}
+	}
 	return revisedObj, TaskHostDN
 }
 
-func (m *multiObjPolicy) ResetForTable(*catalog.TableEntry) {
+func (m *multiObjPolicy) resetForTable(*catalog.TableEntry) {
 	m.objects = m.objects[:0]
+}
+
+func (m *multiObjPolicy) preExecute() {
+	for obj := range m.mergingObjs {
+		if !objectValid(obj) {
+			delete(m.mergingObjs, obj)
+		}
+	}
 }
 
 type entrySet struct {
@@ -190,20 +209,4 @@ func minValue(t types.T) any {
 	default:
 		panic(fmt.Sprintf("unsupported type: %v", t))
 	}
-}
-
-func (m *multiObjPolicy) controlMem(objs []*catalog.ObjectEntry, mem int64) []*catalog.ObjectEntry {
-	if mem > constMaxMemCap {
-		mem = constMaxMemCap
-	}
-
-	needPopout := func(ss []*catalog.ObjectEntry) bool {
-		_, esize, _ := estimateMergeConsume(ss)
-		return esize > int(2*mem/3)
-	}
-	for needPopout(objs) {
-		objs = objs[:len(objs)-1]
-	}
-
-	return objs
 }
