@@ -85,8 +85,8 @@ type InsertCtx struct {
 	// insert data into Rel.
 	Engine                engine.Engine
 	Ref                   *plan.ObjectRef
-	AddAffectedRows       bool // for hidden table, should not update affect Rows
-	Attrs                 []string
+	AddAffectedRows       bool     // for hidden table, should not update affect Rows
+	Attrs                 []string // letter case: origin
 	PartitionTableIDs     []uint64 // Align array index with the partition number
 	PartitionTableNames   []string // Align array index with the partition number
 	PartitionIndexInBatch int      // The array index position of the partition expression column

@@ -47,6 +47,8 @@ type Argument struct {
 	// Source       engine.Relation
 	// UniqueSource []engine.Relation
 	// Ref          *plan.ObjectRef
+
+	// letter case: origin
 	Attrs              []string
 	InsertColCount     int32
 	UniqueColCheckExpr []*plan.Expr
