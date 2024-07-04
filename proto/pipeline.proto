@@ -481,6 +481,7 @@ message ProcessInfo {
   SessionInfo session_info = 7 [(gogoproto.nullable) = false];
   repeated int32 analysis_node_list = 8;
   SessionLoggerInfo session_logger = 9 [(gogoproto.nullable) = false];
+  bytes prepare_params = 10;
 }
 
 message SessionInfo {

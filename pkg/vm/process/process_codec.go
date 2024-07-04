@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -58,6 +59,13 @@ func (proc *Process) BuildProcessInfo(
 		procInfo.AnalysisNodeList = make([]int32, len(proc.Base.AnalInfos))
 		for i := range procInfo.AnalysisNodeList {
 			procInfo.AnalysisNodeList[i] = proc.Base.AnalInfos[i].NodeId
+		}
+		vec := proc.GetPrepareParams()
+		if vec != nil {
+			procInfo.PrepareParams, err = vec.MarshalBinary()
+			if err != nil {
+				return procInfo, err
+			}
 		}
 	}
 	{ // session info
@@ -188,6 +196,13 @@ func (c *codecService) Decode(
 	proc.Base.Lim = ConvertToProcessLimitation(value.Lim)
 	proc.Base.SessionInfo = sessionInfo
 	proc.Base.SessionInfo.StorageEngine = c.engine
+	if value.PrepareParams != nil {
+		proc.Base.prepareParams = &vector.Vector{}
+		err = proc.Base.prepareParams.UnmarshalBinary(value.PrepareParams)
+		if err != nil {
+			return nil, err
+		}
+	}
 	return proc, nil
 }
 
