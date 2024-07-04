@@ -161,6 +161,8 @@ const (
 	ErrDuplicateKeyName                         uint16 = 20470
 	ErrFKNoReferencedRow2                       uint16 = 20471
 	ErrBlobCantHaveDefault                      uint16 = 20472
+	ErrCantCompileForPrepare                    uint16 = 20473
+	ErrTableMustHaveAVisibleColumn              uint16 = 20474
 
 	// Group 5: rpc timeout
 	// ErrRPCTimeout rpc timeout
@@ -403,6 +405,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrDuplicateKeyName:                         {ER_DUP_KEYNAME, []string{MySQLDefaultSqlState}, "Duplicate foreign key constraint name '%-.192s'"},
 	ErrFKNoReferencedRow2:                       {ER_NO_REFERENCED_ROW_2, []string{"23000"}, "Cannot add or update a child row: a foreign key constraint fails"},
 	ErrBlobCantHaveDefault:                      {ER_BLOB_CANT_HAVE_DEFAULT, []string{MySQLDefaultSqlState}, "BLOB, TEXT, GEOMETRY or JSON column '%-.192s' can't have a default value"},
+	ErrTableMustHaveAVisibleColumn:              {ER_TABLE_MUST_HAVE_A_VISIBLE_COLUMN, []string{MySQLDefaultSqlState}, "A table must have at least one visible column."},
 
 	// Group 5: rpc timeout
 	ErrRPCTimeout:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
@@ -1401,6 +1404,14 @@ func NewErrFKNoReferencedRow2(ctx context.Context) *Error {
 
 func NewErrBlobCantHaveDefault(ctx context.Context, arg any) *Error {
 	return newError(ctx, ErrBlobCantHaveDefault, arg)
+}
+
+func NewCantCompileForPrepare(ctx context.Context) *Error {
+	return newError(ctx, ErrCantCompileForPrepare)
+}
+
+func NewTableMustHaveVisibleColumn(ctx context.Context) *Error {
+	return newError(ctx, ErrTableMustHaveAVisibleColumn)
 }
 
 var contextFunc atomic.Value
