@@ -16,6 +16,7 @@ package lockservice
 
 import (
 	"context"
+	"errors"
 	"hash/crc32"
 	"hash/crc64"
 	"sync"
@@ -1425,6 +1426,49 @@ func TestReLockSuccWithLockTableBindChanged(t *testing.T) {
 				option)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
 
+		},
+		nil,
+	)
+}
+
+func TestIssue3654(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1", "s2"},
+		time.Second*1,
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Nanosecond)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+				RetryWait:   int64(time.Second),
+			}
+
+			_, err := l1.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+
+			_, err = l2.Lock(
+				ctx,
+				0,
+				[][]byte{{2}},
+				[]byte("txn2"),
+				option)
+			if err != nil {
+				require.True(t, errors.Is(err, context.DeadlineExceeded))
+			}
 		},
 		nil,
 	)
