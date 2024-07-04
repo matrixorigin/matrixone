@@ -371,7 +371,7 @@ func (rm *RoutineManager) Handler(rs *Conn, msg []byte) error {
 	ses := routine.getSession()
 
 	req := ToRequest(payload)
-	logutil.Info(fmt.Sprintf("read query is:%s", string(req.data.([]byte))))
+	//logutil.Info(fmt.Sprintf("read query is:%s", string(req.data.([]byte))))
 	//handle request
 	err = routine.handleRequest(req)
 	if err != nil {

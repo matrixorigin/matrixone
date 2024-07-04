@@ -3,11 +3,9 @@ package frontend
 import (
 	"container/list"
 	"encoding/binary"
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"net"
 	"time"
 )
@@ -430,7 +428,7 @@ func (c *Conn) Flush() error {
 	var err error
 	defer c.Reset()
 	err = c.WriteToConn(c.fixBuf.data[:c.fixBuf.writeIndex])
-	logutil.Info(fmt.Sprintf("write result is:%s", string(c.fixBuf.data[:c.fixBuf.writeIndex])))
+	//logutil.Info(fmt.Sprintf("write result is:%s", string(c.fixBuf.data[:c.fixBuf.writeIndex])))
 	if err != nil {
 		return err
 	}
@@ -509,7 +507,7 @@ func (c *Conn) Reset() {
 	c.packetLength = 0
 	c.curBuf = c.fixBuf
 	c.fixBuf.writeIndex = 0
-	logutil.Info("write index set 0")
+	//logutil.Info("write index set 0")
 	for node := c.dynamicBuf.Front(); node != nil; node = node.Next() {
 		c.allocator.Free(node.Value.(*ListBlock).data)
 	}
