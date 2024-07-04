@@ -464,9 +464,18 @@ func (entry *ObjectEntry) BlockCnt() int {
 	return entry.blkCnt
 }
 
-func (entry *ObjectEntry) getBlockCntFromStats() (blkCnt uint32) {
-	entry.RLock()
-	defer entry.RUnlock()
+func (entry *ObjectEntry) BlockCntLocked() int {
+	if entry.IsAppendable() {
+		return 1
+	}
+	cnt := entry.getBlockCntFromStatsLocked()
+	if cnt != 0 {
+		return int(cnt)
+	}
+	return entry.blkCnt
+}
+
+func (entry *ObjectEntry) getBlockCntFromStatsLocked() (blkCnt uint32) {
 	node := entry.GetLatestNodeLocked()
 	if node == nil {
 		return
@@ -475,6 +484,11 @@ func (entry *ObjectEntry) getBlockCntFromStats() (blkCnt uint32) {
 		return
 	}
 	return node.BaseNode.ObjectStats.BlkCnt()
+}
+func (entry *ObjectEntry) getBlockCntFromStats() (blkCnt uint32) {
+	entry.RLock()
+	defer entry.RUnlock()
+	return entry.getBlockCntFromStatsLocked()
 }
 
 func (entry *ObjectEntry) tryUpdateBlockCnt(cnt int) {

@@ -160,11 +160,13 @@ func (s *MergeTaskBuilder) onTable(tableEntry *catalog.TableEntry) (err error) {
 		s.tableRowDel += dels
 		tblRows += rows - dels
 
+		objectEntry.RLock()
 		tombstone := tableEntry.TryGetTombstone(objectEntry.ID)
 		if tombstone == nil {
+			objectEntry.RUnlock()
 			continue
 		}
-		for j := range objectEntry.BlockCnt() {
+		for j := range objectEntry.BlockCntLocked() {
 			deltaLoc := tombstone.GetLatestDeltaloc(uint16(j))
 			if deltaLoc == nil || deltaLoc.IsEmpty() {
 				continue
@@ -177,6 +179,7 @@ func (s *MergeTaskBuilder) onTable(tableEntry *catalog.TableEntry) (err error) {
 				distinctDeltaLocs++
 			}
 		}
+		objectEntry.RUnlock()
 	}
 
 	rate := float64(deltaLocRows) / float64(tblRows)
