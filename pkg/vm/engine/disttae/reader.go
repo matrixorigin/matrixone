@@ -425,7 +425,8 @@ func (r *blockReader) gatherStats(lastNumRead, lastNumHit int64) {
 func newBlockMergeReader(
 	ctx context.Context,
 	txnTable *txnTable,
-	pkFilter PKFilters,
+	memFilter memPKFilter,
+	blockFilter blockio.BlockReadFilter,
 	ts timestamp.Timestamp,
 	dirtyBlks []*objectio.BlockInfo,
 	filterExpr *plan.Expr,
@@ -442,11 +443,11 @@ func newBlockMergeReader(
 			ts,
 			dirtyBlks,
 			filterExpr,
-			pkFilter.blockReadPKFilter,
+			blockFilter,
 			fs,
 			proc,
 		),
-		pkFilter:   pkFilter.inMemPKFilter,
+		pkFilter:   memFilter,
 		deletaLocs: make(map[string][]objectio.Location),
 	}
 	return r
