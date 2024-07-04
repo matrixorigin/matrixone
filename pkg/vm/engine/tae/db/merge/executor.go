@@ -154,16 +154,11 @@ func (e *MergeExecutor) OnExecDone(v any) {
 	atomic.AddInt64(&e.activeEstimateBytes, -int64(stat.estBytes))
 }
 
-func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, policy Policy) {
+func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, mobjs []*catalog.ObjectEntry, kind TaskHostKind) {
 	if e.roundMergeRows*36 /*28 * 1.3 */ > e.transPageLimit/8 {
 		return
 	}
 	e.tableName = fmt.Sprintf("%v-%v", entry.ID, entry.GetLastestSchema().Name)
-
-	mobjs, kind := policy.Revise(e.CPUPercent(), int64(e.MemAvailBytes()))
-	if len(mobjs) < 2 {
-		return
-	}
 
 	if ActiveCNObj.CheckOverlapOnCNActive(mobjs) {
 		return
