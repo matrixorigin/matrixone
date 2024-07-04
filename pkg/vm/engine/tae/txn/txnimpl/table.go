@@ -1245,13 +1245,10 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 //     TODO::it would be used to do deduplication with the logtail.
 func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector, pksZM index.ZM) (err error) {
 	moprobe.WithRegion(context.Background(), moprobe.TxnTableDoPrecommitDedupByPK, func() {
-		objIt := tbl.entry.MakeObjectIt(false)
+		objIt := tbl.entry.MakeObjectIt(true)
 		defer objIt.Release()
-		for objIt.Next() {
+		for ok := objIt.Last(); ok; ok = objIt.Prev() {
 			obj := objIt.Item()
-			if !obj.IsCommitted() {
-				continue
-			}
 			if obj.SortHint < tbl.dedupedObjectHint {
 				break
 			}
@@ -1302,7 +1299,7 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, node InsertNode
 	defer objIt.Release()
 	var pks containers.Vector
 	//loaded := false
-	for objIt.Next() {
+	for ok := objIt.Last(); ok; ok = objIt.Prev() {
 		obj := objIt.Item()
 		if !obj.IsCommitted() {
 			continue

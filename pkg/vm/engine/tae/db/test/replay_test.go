@@ -425,8 +425,7 @@ func TestReplay2(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = e.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	blkIterator := rel.MakeObjectIt()
-	blk := blkIterator.GetObject().GetMeta().(*catalog.ObjectEntry)
+	blk := testutil.GetOneBlockMeta(rel)
 	obj, err := rel.GetObject(&blk.ID)
 	assert.Nil(t, err)
 	err = rel.SoftDeleteObject(obj.GetID())
@@ -619,8 +618,7 @@ func TestReplayTableRows(t *testing.T) {
 	err = tbl.Append(context.Background(), bats[0])
 	assert.Nil(t, err)
 	rows += 1600
-	blkIterator := tbl.MakeObjectIt()
-	blkID := blkIterator.GetObject().Fingerprint()
+	blkID := testutil.GetOneObject(tbl).Fingerprint()
 	err = tbl.RangeDelete(blkID, 0, 99, handle.DT_Normal)
 	assert.Nil(t, err)
 	rows -= 100
@@ -635,8 +633,7 @@ func TestReplayTableRows(t *testing.T) {
 	err = tbl.Append(context.Background(), bats[1])
 	assert.Nil(t, err)
 	rows += 1600
-	blkIterator = tbl.MakeObjectIt()
-	blkID = blkIterator.GetObject().Fingerprint()
+	blkID = testutil.GetOneObject(tbl).Fingerprint()
 	err = tbl.RangeDelete(blkID, 0, 99, handle.DT_Normal)
 	assert.Nil(t, err)
 	rows -= 100

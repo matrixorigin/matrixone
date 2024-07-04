@@ -464,14 +464,13 @@ func (entry *TableEntry) GetTableData() data.Table { return entry.tableData }
 func (entry *TableEntry) LastAppendableObject() (obj *ObjectEntry) {
 	it := entry.MakeObjectIt(false)
 	defer it.Release()
-	for it.Next() {
+	for ok := it.Last(); ok; ok = it.Prev() {
 		itObj := it.Item()
 		dropped := itObj.HasDropCommitted()
 		if itObj.IsAppendable() && !dropped {
 			obj = itObj
 			break
 		}
-		it.Next()
 	}
 	return obj
 }

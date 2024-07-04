@@ -173,6 +173,7 @@ func TestTxn1(t *testing.T) {
 			objCnt++
 			blkCnt += uint32(objIt.GetObject().BlkCnt())
 		}
+		objIt.Close()
 		assert.Equal(t, expectObjCnt, objCnt)
 		assert.Equal(t, expectBlkCnt, blkCnt)
 	}
@@ -422,6 +423,7 @@ func TestTxn6(t *testing.T) {
 					assert.Equal(t, bats[0].Length()-1, view.ApplyDeletes().Length())
 				}
 			}
+			it.Close()
 		}
 	}
 }
@@ -476,12 +478,12 @@ func TestFlushAblkMerge(t *testing.T) {
 			meta := blk.GetMeta().(*catalog.ObjectEntry)
 			blks = append(blks, meta)
 		}
+		it.Close()
 		{
 			txn, _ := db.StartTxn(nil)
 			database, _ := txn.GetDatabase("db")
 			rel, _ := database.GetRelationByName(schema.Name)
-			it := rel.MakeObjectIt()
-			blk := it.GetObject()
+			blk := testutil.GetOneObject(rel)
 			err := blk.RangeDelete(0, 4, 4, handle.DT_Normal, common.DefaultAllocator)
 			assert.Nil(t, err)
 			assert.Nil(t, txn.Commit(context.Background()))
@@ -521,6 +523,7 @@ func TestFlushAblkMerge(t *testing.T) {
 
 			}
 		}
+		it.Close()
 	}
 	// testutils.WaitExpect(1000, func() bool {
 	// 	return db.Wal.GetPenddingCnt() == 0
@@ -617,6 +620,7 @@ func TestCompaction1(t *testing.T) {
 				assert.True(t, blk.GetMeta().(*catalog.ObjectEntry).GetObjectData().IsAppendable())
 			}
 		}
+		it.Close()
 	}
 	{
 		txn, _ := db.StartTxn(nil)
@@ -640,6 +644,7 @@ func TestCompaction1(t *testing.T) {
 				assert.False(t, blk.GetMeta().(*catalog.ObjectEntry).GetObjectData().IsAppendable())
 			}
 		}
+		it.Close()
 	}
 }
 
@@ -688,6 +693,7 @@ func TestCompaction2(t *testing.T) {
 				assert.False(t, blk.GetMeta().(*catalog.ObjectEntry).GetObjectData().IsAppendable())
 			}
 		}
+		it.Close()
 	}
 	{
 		txn, _ := db.TxnMgr.StartTxn(nil)
@@ -704,6 +710,7 @@ func TestCompaction2(t *testing.T) {
 				assert.False(t, blk.GetMeta().(*catalog.ObjectEntry).GetObjectData().IsAppendable())
 			}
 		}
+		it.Close()
 	}
 }
 

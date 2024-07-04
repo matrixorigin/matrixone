@@ -276,6 +276,7 @@ func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint3
 			}
 		}
 	}
+	blockIt.Close()
 	err = moerr.NewNotFoundNoCtx()
 	return
 }
@@ -549,8 +550,7 @@ func TestWarehouse(t *testing.T) {
 		txn, _ = db.StartTxn(nil)
 		rel, err := GetWarehouseRelation("test", txn)
 		assert.Nil(t, err)
-		it := rel.MakeObjectIt()
-		blk := it.GetObject()
+		blk := testutil.GetOneObject(rel)
 		view, _ := blk.GetColumnDataById(context.Background(), 0, 1, common.DefaultAllocator)
 		t.Log(view.GetData().String())
 		defer view.Close()
