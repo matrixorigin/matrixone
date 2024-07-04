@@ -149,6 +149,11 @@ func (c *DashboardCreator) Create() error {
 	if err := c.initShardingDashboard(); err != nil {
 		return err
 	}
+
+	if err := c.initPipelineDashBoard(); err != nil {
+		return err
+	}
+
 	return nil
 }
 

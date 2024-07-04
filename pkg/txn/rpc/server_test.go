@@ -212,6 +212,10 @@ func (cs *testClientSession) Close() error {
 	return nil
 }
 
+func (cs *testClientSession) SessionCtx() context.Context {
+	return nil
+}
+
 func (cs *testClientSession) Write(ctx context.Context, response morpc.Message) error {
 	cs.c <- response
 	return nil

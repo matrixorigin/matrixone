@@ -105,7 +105,7 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 			Ch:  make(chan *RegisterMessage, 1),
 		}
 	}
-	proc.DispatchNotifyCh = make(chan WrapCs)
+	proc.DispatchNotifyCh = make(chan *WrapCs)
 	return proc
 }
 

@@ -49,6 +49,9 @@ func NewServer(client logservice.CNHAKeeperClient) *Server {
 		hakeeper:      client,
 		uuidCsChanMap: UuidProcMap{mp: make(map[uuid.UUID]uuidProcMapItem, 1024)},
 		cnSegmentMap:  CnSegmentMap{mp: make(map[objectio.Segmentid]int32, 1024)},
+		receivedRunningPipeline: RunningPipelineMapForRemoteNode{
+			fromRpcClientToRelatedPipeline: make(map[rpcClientItem]runningPipelineInfo, 1024),
+		},
 	}
 	Set(s)
 	return s
