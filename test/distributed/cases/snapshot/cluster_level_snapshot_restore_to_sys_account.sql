@@ -205,9 +205,6 @@ select count(*) from mo_catalog.mo_tables{snapshot = 'sp04'} where reldatabase =
 -- @ignore:0,6,7
 select * from mo_catalog.mo_database{snapshot = 'sp04'} where datname = 'test03';
 select attname from mo_catalog.mo_columns{snapshot = 'sp04'} where att_database = 'test03';
-
-drop snapshot if exists sp04;
-create snapshot sp04 for cluster;
 -- @ignore:1
 show snapshots where snapshot_name = 'sp04';
 
@@ -524,7 +521,7 @@ insert into table01 values (2);
 drop database if exists db06;
 create database db06;
 use db06;
-create table table01(col1 int unique index );
+create table table01(col1 int auto_increment );
 insert into table01 values (1);
 insert into table01 values (2);
 select * from db04.table01;
@@ -602,7 +599,6 @@ show snapshots;
 drop snapshot sp14;
 drop snapshot sp15;
 drop database db07;
-drop database db08;
 
 
 

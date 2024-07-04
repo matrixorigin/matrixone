@@ -150,22 +150,10 @@ count(*)
 2
 select * from mo_catalog.mo_database{snapshot = 'sp02'} where datname = 'test02';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-282863    test02    def    create database test02    0    1    2024-07-04 11:38:07    0    
+272543    test02    def    create database test02    0    1    2024-07-04 15:01:24    0    
 select * from mo_catalog.mo_database{snapshot = 'sp02'} where datname = 'mo_catalog';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-1    mo_catalog    mo_catalog        0    0    2024-07-04 11:32:23    0    
-select attname from mo_catalog.mo_columns{snapshot = 'sp02'} where att_database = 'test02';
-attname
-__mo_fake_pk_col
-__mo_rowid
-col1
-col2
-__mo_fake_pk_col
-__mo_rowid
-col1
-col2
-col3
-col4
+1    mo_catalog    mo_catalog        0    0    2024-07-04 14:52:23    0    
 use mo_catalog;
 insert into cluster01 values(100,2,0);
 insert into cluster01 values(200,3,0);
@@ -274,16 +262,29 @@ aff01    CREATE TABLE `aff01` (\n  `empno` INT UNSIGNED NOT NULL AUTO_INCREMENT 
 drop snapshot if exists sp04;
 create snapshot sp04 for cluster;
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp04'} where reldatabase = 'test03';
-internal error: find 0 snapshot records by name(sp04), expect only 1
+count(*)
+2
 select * from mo_catalog.mo_database{snapshot = 'sp04'} where datname = 'test03';
-internal error: find 0 snapshot records by name(sp04), expect only 1
+dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
+272565    test03    def    create database test03    0    1    2024-07-04 15:01:26    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp04'} where att_database = 'test03';
-internal error: find 0 snapshot records by name(sp04), expect only 1
-drop snapshot if exists sp04;
-create snapshot sp04 for cluster;
+attname
+__mo_rowid
+deptno
+dname
+loc
+__mo_rowid
+comm
+deptno
+empno
+ename
+hiredate
+job
+mgr
+sal
 show snapshots where snapshot_name = 'sp04';
 snapshot_name    timestamp    snapshot_level    account_name    database_name    table_name
-sp04    2024-07-04 03:38:09.271796    cluster            
+sp04    2024-07-04 07:01:27.076714    cluster            
 select * from aff01{snapshot = 'sp04'};
 empno    ename    job    mgr    hiredate    sal    comm    deptno
 7369    SMITH    CLERK    7902    1980-12-17    800.00    null    20
@@ -519,8 +520,8 @@ drop snapshot if exists sp08;
 create snapshot sp08 for cluster;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp08    2024-07-04 03:38:12.619158    cluster            
-sp07    2024-07-04 03:38:12.497405    cluster            
+sp08    2024-07-04 07:01:30.21821    cluster            
+sp07    2024-07-04 07:01:30.12682    cluster            
 restore account sys from snapshot sp08;
 select * from table02;
 col1    col2
@@ -569,8 +570,8 @@ drop snapshot if exists sp10;
 create snapshot sp10 for cluster;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp10    2024-07-04 03:38:13.692732    cluster            
-sp09    2024-07-04 03:38:13.565195    cluster            
+sp10    2024-07-04 07:01:31.315687    cluster            
+sp09    2024-07-04 07:01:31.20414    cluster            
 restore account sys from snapshot sp09;
 select * from table02;
 col1    col2
@@ -821,12 +822,9 @@ insert into table01 values (2);
 drop database if exists db06;
 create database db06;
 use db06;
-create table table01(col1 int unique index );
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 42 near " index );";
+create table table01(col1 int auto_increment );
 insert into table01 values (1);
-no such table db06.table01
 insert into table01 values (2);
-no such table db06.table01
 select * from db04.table01;
 col1
 1
@@ -836,7 +834,9 @@ col1
 1
 2
 select * from db06.table01;
-SQL parser error: table "table01" does not exist
+col1
+1
+2
 drop snapshot if exists sp13;
 create snapshot sp13 for cluster;
 insert into db04.table01 values (200);
@@ -874,9 +874,12 @@ col1
 400
 use db06;
 select count(*) from db06.table01;
-SQL parser error: table "table01" does not exist
+count(*)
+2
 select * from db06.table01;
-SQL parser error: table "table01" does not exist
+col1
+1
+2
 drop snapshot sp13;
 drop database db04;
 drop database db05;
@@ -940,13 +943,11 @@ select * from table01;
 SQL parser error: table "table01" does not exist
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp15    2024-07-04 03:38:21.132664    cluster            
-sp14    2024-07-04 03:38:20.929729    cluster            
+sp15    2024-07-04 07:01:38.547747    cluster            
+sp14    2024-07-04 07:01:38.321344    cluster            
 drop snapshot sp14;
 drop snapshot sp15;
 drop database db07;
-drop database db08;
-Can't drop database 'db08'; database doesn't exist
 drop database if exists db08;
 create database db08;
 use db08;
@@ -1043,7 +1044,7 @@ emp_no    birth_date    first_name    last_name    gender    hire_date
 9002    1981-02-20    ALLEN    SALESMAN    F    2008-02-20
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp16    2024-07-04 03:38:30.898885    cluster            
+sp16    2024-07-04 07:01:42.962877    cluster            
 drop database db09;
 drop database db10;
 drop snapshot sp16;
@@ -1119,7 +1120,7 @@ count(*)
 1
 select * from mo_catalog.mo_database{snapshot = 'sp18'} where datname = 'db11';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-283142    db11    def    create database db11    0    1    2024-07-04 11:38:35    0    
+272823    db11    def    create database db11    0    1    2024-07-04 15:01:53    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp18'} where att_database = 'db11';
 attname
 __mo_rowid
