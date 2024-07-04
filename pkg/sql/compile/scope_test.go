@@ -17,6 +17,13 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"sync"
 	"testing"
 	"time"
 
@@ -198,4 +205,107 @@ func TestMessageSenderOnClientReceive(t *testing.T) {
 		_, err := sender.receiveMessage()
 		require.NotNil(t, err)
 	}
+}
+
+func TestNewParallelScope(t *testing.T) {
+	// function `newParallelScope` will dispatch one scope's work into n scopes.
+	testCompile := &Compile{
+		lock: &sync.RWMutex{},
+		proc: testutil.NewProcess(),
+	}
+
+	// 1. test (-> projection -> limit -> connector.)
+	{
+		scopeToParallel := generateScopeWithRootOperator(
+			testCompile.proc,
+			[]vm.OpType{vm.Projection, vm.Limit, vm.Connector})
+		ss := []*Scope{{}}
+
+		rs, err := newParallelScope(testCompile, scopeToParallel, ss)
+		require.NoError(t, err)
+		require.NoError(t, checkScopeWithExpectedList(rs, []vm.OpType{vm.MergeLimit, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.Projection, vm.Limit, vm.Connector}))
+	}
+
+	// 2. test (-> filter -> projection -> connector.)
+	{
+		scopeToParallel := generateScopeWithRootOperator(
+			testCompile.proc,
+			[]vm.OpType{vm.Filter, vm.Projection, vm.Connector})
+		ss := []*Scope{{}}
+
+		rs, err := newParallelScope(testCompile, scopeToParallel, ss)
+		require.NoError(t, err)
+		require.NoError(t, checkScopeWithExpectedList(rs, []vm.OpType{vm.Merge, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.Filter, vm.Projection, vm.Connector}))
+	}
+}
+
+func generateScopeWithRootOperator(proc *process.Process, operatorList []vm.OpType) *Scope {
+	simpleFakeArgument := func(id vm.OpType) vm.Operator {
+		switch id {
+		case vm.Projection:
+			return projection.NewArgument()
+		case vm.Limit:
+			return limit.NewArgument()
+		case vm.Connector:
+			return connector.NewArgument()
+		case vm.Filter:
+			return filter.NewArgument()
+		default:
+			panic("unsupported for ut.")
+		}
+	}
+
+	ret := &Scope{
+		Proc: proc,
+	}
+
+	for i := len(operatorList) - 1; i >= 0; i-- {
+		ret.appendInstruction(vm.Instruction{
+			Op:  operatorList[i],
+			Arg: simpleFakeArgument(operatorList[i]),
+		})
+	}
+	return ret
+}
+
+func checkScopeWithExpectedList(s *Scope, requiredOperator []vm.OpType) error {
+	resultOperators := getReverseList(s.RootOp)
+
+	if len(resultOperators) != len(requiredOperator) {
+		return moerr.NewInternalErrorNoCtx(fmt.Sprintf(
+			"required %d operators but get %d", len(requiredOperator), len(resultOperators)))
+	}
+
+	for i, expected := range requiredOperator {
+		if expected != resultOperators[i] {
+			return moerr.NewInternalErrorNoCtx(fmt.Sprintf(
+				"the %dth operator need %d but get %d",
+				i+1, expected, resultOperators[i]))
+		}
+	}
+
+	return nil
+}
+
+func getReverseList(rootOp vm.Operator) []vm.OpType {
+	return getReverseList2(rootOp, nil)
+}
+
+func getReverseList2(rootOp vm.Operator, stack []vm.OpType) []vm.OpType {
+	if rootOp == nil {
+		return stack
+	}
+	base := rootOp.GetOperatorBase()
+	if base == nil {
+		panic("unexpected to get an empty base.")
+	}
+
+	if len(base.Children) > 0 {
+		stack = getReverseList2(base.GetChildren(0), stack)
+	}
+
+	stack = append(stack, base.Op)
+	return stack
 }

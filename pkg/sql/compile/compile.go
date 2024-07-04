@@ -2607,8 +2607,7 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 		for i := range children {
 			children[i].appendOperator(lastOperator[i])
 		}
-		}()
-	}
+	}()
 
 	switch node.JoinType {
 	case plan.Node_INNER:
