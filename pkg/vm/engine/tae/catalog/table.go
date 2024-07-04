@@ -257,6 +257,7 @@ func (entry *TableEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 }
 func (entry *TableEntry) AddEntryLocked(obj *ObjectEntry) {
 	obj.list = entry.link
+	entry.link.sortHint_objectID[obj.ID] = obj.SortHint
 	entry.link.Set(obj)
 }
 

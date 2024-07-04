@@ -36,7 +36,8 @@ const (
 
 type ObjectList struct {
 	*sync.RWMutex
-	tree atomic.Pointer[btree.BTreeG[*ObjectEntry]]
+	sortHint_objectID map[objectio.ObjectId]uint64
+	tree              atomic.Pointer[btree.BTreeG[*ObjectEntry]]
 }
 
 func NewObjectList() *ObjectList {
@@ -46,7 +47,8 @@ func NewObjectList() *ObjectList {
 	}
 	tree := btree.NewBTreeGOptions((*ObjectEntry).Less, opts)
 	list := &ObjectList{
-		RWMutex: &sync.RWMutex{},
+		RWMutex:           &sync.RWMutex{},
+		sortHint_objectID: make(map[types.Objectid]uint64),
 	}
 	list.tree.Store(tree)
 	return list
@@ -79,11 +81,16 @@ func (l *ObjectList) deleteEntryLocked(obj *objectio.ObjectId) error {
 func (l *ObjectList) GetAllNodes(objID *objectio.ObjectId) []*ObjectEntry {
 	it := l.tree.Load().Iter()
 	defer it.Release()
+	hint, ok := l.sortHint_objectID[*objID]
+	if !ok {
+		panic("logic error")
+		// return nil
+	}
 	key := &ObjectEntry{
-		ID:          *objID,
+		ObjectNode:  ObjectNode{SortHint: hint},
 		ObjectState: ObjectState_Create_Active,
 	}
-	ok := it.Seek(key)
+	ok = it.Seek(key)
 	if !ok {
 		return nil
 	}

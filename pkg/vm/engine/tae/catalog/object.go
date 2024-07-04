@@ -477,12 +477,8 @@ func (entry *ObjectEntry) LoadObjectInfoForLastNode() (stats objectio.ObjectStat
 }
 
 func (entry *ObjectEntry) Less(b *ObjectEntry) bool {
-	cmp := bytes.Compare(entry.ID[:], b.ID[:])
-	if cmp < 0 {
-		return true
-	}
-	if cmp > 0 {
-		return false
+	if entry.SortHint != b.SortHint {
+		return entry.SortHint < b.SortHint
 	}
 	return entry.ObjectState < b.ObjectState
 }
