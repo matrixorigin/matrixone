@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -117,6 +118,10 @@ func newCNMergeTask(
 		targetObjSize: targetObjSize,
 		doTransfer:    !strings.Contains(tbl.comment, catalog.MO_COMMENT_NO_DEL_HINT),
 	}, nil
+}
+
+func (t *cnMergeTask) Name() string {
+	return fmt.Sprintf("[MT-%d]%d-%s", t.host.tableId, t.host.tableName)
 }
 
 func (t *cnMergeTask) DoTransfer() bool {
