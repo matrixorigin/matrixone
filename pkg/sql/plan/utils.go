@@ -589,7 +589,7 @@ func extractColRefAndLiteralsInFilter(expr *plan.Expr) (col *ColRef, litType typ
 		return
 	}
 	for i := range fn.Args {
-		if isDynamicParam(fn.Args[i]) {
+		if containsDynamicParam(fn.Args[i]) {
 			hasDynamicParam = true
 			break
 		}

@@ -23,10 +23,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
-func isDynamicParam(expr *plan.Expr) bool {
-	switch expr.Expr.(type) {
+func containsDynamicParam(expr *plan.Expr) bool {
+	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_P, *plan.Expr_V:
 		return true
+	case *plan.Expr_F:
+		for _, subExpr := range exprImpl.F.Args {
+			if containsDynamicParam(subExpr) {
+				return true
+			}
+		}
 	}
 	return false
 }
