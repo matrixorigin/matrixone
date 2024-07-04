@@ -160,13 +160,18 @@ drop procedure if exists test_if_hit_if;
 drop procedure if exists test_if_hit_elseif_first_elseif;
 drop database if exists procedure_test;
 
-
+-- @ignore:0
+select user_id,user_name,authentication_string from mo_catalog.mo_user;
+-- @ignore:0,1
+select role_id,user_id from mo_catalog.mo_user_grant;
 -- user
-create user u_a identified by 'a111', u_b identified by 'b111' default role public lock;
-create user if not exists u_a identified by 'a111', u_b identified by 'b111' default role public lock;
-create user u_c identified by 'a111', u_d identified by 'b111';
+create user u_a identified by 'a111', u_b identified by 'b111';
+create user u_c identified by 'c111', u_d identified by 'd111';
 -- @ignore:1
-select user_name,authentication_string from mo_catalog.mo_user;
+-- @ignore:0
+select user_id,user_name,authentication_string from mo_catalog.mo_user;
+-- @ignore:0,1
+select role_id,user_id from mo_catalog.mo_user_grant;
 
 create snapshot snapshot1 for account sys;
 -- @ignore:1
@@ -174,7 +179,10 @@ show snapshots;
 drop user if exists u_a, u_b, u_d;
 alter user u_c identified by 'c111111';
 -- @ignore:1
-select user_name,authentication_string from mo_catalog.mo_user;
+-- @ignore:0
+select user_id,user_name,authentication_string from mo_catalog.mo_user;
+-- @ignore:0,1
+select role_id,user_id from mo_catalog.mo_user_grant;
 
 create snapshot snapshot2 for account sys;
 -- @ignore:1
@@ -184,13 +192,19 @@ restore account sys from snapshot snapshot1;
 -- @ignore:1
 show snapshots;
 -- @ignore:1
-select user_name,authentication_string from mo_catalog.mo_user;
+-- @ignore:0
+select user_id,user_name,authentication_string from mo_catalog.mo_user;
+-- @ignore:0,1
+select role_id,user_id from mo_catalog.mo_user_grant;
 
 restore account sys from snapshot snapshot2;
 -- @ignore:1
 show snapshots;
 -- @ignore:1
-select user_name,authentication_string from mo_catalog.mo_user;
+-- @ignore:0
+select user_id,user_name,authentication_string from mo_catalog.mo_user;
+-- @ignore:0,1
+select role_id,user_id from mo_catalog.mo_user_grant;
 
 drop snapshot snapshot1;
 drop snapshot snapshot2;
@@ -198,6 +212,10 @@ drop snapshot snapshot2;
 show snapshots;
 
 drop user if exists u_a, u_b, u_c, u_d;
+-- @ignore:0
+select user_id,user_name,authentication_string from mo_catalog.mo_user;
+-- @ignore:0,1
+select role_id,user_id from mo_catalog.mo_user_grant;
 
 -- normal account restore itself
 drop account if exists acc01;

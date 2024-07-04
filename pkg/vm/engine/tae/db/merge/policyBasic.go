@@ -171,7 +171,7 @@ func NewBasicPolicy() Policy {
 }
 
 // impl Policy for Basic
-func (o *basic) OnObject(obj *catalog.ObjectEntry) {
+func (o *basic) OnObject(obj *catalog.ObjectEntry, force bool) {
 	rowsLeftOnObj := obj.GetRemainingRows()
 	osize := obj.GetOriginSize()
 
@@ -191,7 +191,7 @@ func (o *basic) OnObject(obj *catalog.ObjectEntry) {
 		return false
 	}
 
-	if isCandidate() {
+	if force || isCandidate() {
 		o.objHeap.pushWithCap(&mItem[*catalog.ObjectEntry]{
 			row:   rowsLeftOnObj,
 			entry: obj,
@@ -236,11 +236,17 @@ func (o *basic) GetConfig(tbl *catalog.TableEntry) any {
 	return r
 }
 
-func (o *basic) Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind) {
+func (o *basic) Revise(cpu, mem int64, littleFirst bool) ([]*catalog.ObjectEntry, TaskHostKind) {
 	objs := o.objHeap.finish()
-	slices.SortFunc(objs, func(a, b *catalog.ObjectEntry) int {
-		return cmp.Compare(a.GetOriginSize(), b.GetRemainingRows())
-	})
+	if littleFirst {
+		slices.SortFunc(objs, func(a, b *catalog.ObjectEntry) int {
+			return cmp.Compare(a.GetRemainingRows(), b.GetRemainingRows())
+		})
+	} else {
+		slices.SortFunc(objs, func(a, b *catalog.ObjectEntry) int {
+			return -cmp.Compare(a.GetRemainingRows(), b.GetRemainingRows())
+		})
+	}
 
 	isStandalone := common.IsStandaloneBoost.Load()
 	mergeOnDNIfStandalone := !common.ShouldStandaloneCNTakeOver.Load()

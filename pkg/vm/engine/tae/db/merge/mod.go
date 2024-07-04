@@ -35,7 +35,7 @@ import (
 )
 
 var StopMerge atomic.Bool
-var DeltaLocMerge atomic.Bool
+var DisableDeltaLocMerge atomic.Bool
 
 type CNMergeScheduler interface {
 	SendMergeTask(ctx context.Context, task *api.MergeTaskEntry) error
@@ -91,7 +91,7 @@ type activeEntry struct {
 	insertAt time.Time
 }
 
-var ActiveCNObj = ActiveCNObjMap{
+var ActiveCNObj ActiveCNObjMap = ActiveCNObjMap{
 	o: make(map[objectio.ObjectId]activeEntry),
 }
 
@@ -193,14 +193,15 @@ func CleanUpUselessFiles(entry *api.MergeCommitEntry, fs fileservice.FileService
 }
 
 const (
+	constMergeMinBlks       = 5
 	constMergeExpansionRate = 6
 	constMaxMemCap          = 4 * constMergeExpansionRate * common.Const1GBytes // max orginal memory for a object
 	constSmallMergeGap      = 3 * time.Minute
 )
 
 type Policy interface {
-	OnObject(obj *catalog.ObjectEntry)
-	Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind)
+	OnObject(obj *catalog.ObjectEntry, force bool)
+	Revise(cpu, mem int64, littleFirst bool) ([]*catalog.ObjectEntry, TaskHostKind)
 	ResetForTable(*catalog.TableEntry)
 	SetConfig(*catalog.TableEntry, func() txnif.AsyncTxn, any)
 	GetConfig(*catalog.TableEntry) any
