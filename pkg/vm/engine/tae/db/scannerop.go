@@ -197,7 +197,7 @@ func (s *MergeTaskBuilder) onPostTable(tableEntry *catalog.TableEntry) (err erro
 	// delObjs := s.ObjectHelper.finish()
 
 	mobjs, kind := s.objPolicy.Revise(s.executor.CPUPercent(), int64(s.executor.MemAvailBytes()),
-		merge.DeltaLocMerge.Load())
+		merge.DisableDeltaLocMerge.Load())
 	if len(mobjs) > 1 {
 		s.executor.ExecuteFor(tableEntry, mobjs, kind)
 	}
@@ -216,7 +216,7 @@ func (s *MergeTaskBuilder) onObject(objectEntry *catalog.ObjectEntry) (err error
 	// Rows will check objectStat, and if not loaded, it will load it.
 	remainingRows := objectEntry.GetRemainingRows()
 	deltaLocRows := s.objDeltaLocRowCnt[objectEntry]
-	if merge.DeltaLocMerge.Load() && deltaLocRows > uint32(remainingRows) {
+	if !merge.DisableDeltaLocMerge.Load() && deltaLocRows > uint32(remainingRows) {
 		deltaLocCnt := s.objDeltaLocCnt[objectEntry]
 		rate := float64(deltaLocRows) / float64(remainingRows)
 		logutil.Infof(
