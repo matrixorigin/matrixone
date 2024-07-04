@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	dto "github.com/prometheus/client_model/go"
-	"math"
 )
 
 type ScannerOp interface {
@@ -190,13 +189,6 @@ func (s *MergeTaskBuilder) onTable(tableEntry *catalog.TableEntry) (err error) {
 			}
 		}
 	}
-
-	rate := float64(deltaLocRows) / float64(tblRows)
-	if !math.IsNaN(rate) {
-		logutil.Infof(
-			"[DeltaLoc Merge] tblId: %s(%d), rows: %d, deltaLoc: %d, deltaLocRows: %d, rate: %f",
-			s.name, s.tid, tblRows, distinctDeltaLocs, deltaLocRows, rate)
-	}
 	return
 }
 
@@ -209,7 +201,7 @@ func (s *MergeTaskBuilder) onPostTable(tableEntry *catalog.TableEntry) (err erro
 	// delObjs := s.ObjectHelper.finish()
 
 	mobjs, kind := s.objPolicy.Revise(s.executor.CPUPercent(), int64(s.executor.MemAvailBytes()),
-		merge.DeltaLocMerge.Load())
+		merge.DisableDeltaLocMerge.Load())
 	if len(mobjs) > 1 {
 		s.executor.ExecuteFor(tableEntry, mobjs, kind)
 	}
@@ -228,7 +220,7 @@ func (s *MergeTaskBuilder) onObject(objectEntry *catalog.ObjectEntry) (err error
 	// Rows will check objectStat, and if not loaded, it will load it.
 	remainingRows := objectEntry.GetRemainingRows()
 	deltaLocRows := s.objDeltaLocRowCnt[objectEntry]
-	if merge.DeltaLocMerge.Load() && deltaLocRows > uint32(remainingRows) {
+	if !merge.DisableDeltaLocMerge.Load() && deltaLocRows > uint32(remainingRows) {
 		deltaLocCnt := s.objDeltaLocCnt[objectEntry]
 		rate := float64(deltaLocRows) / float64(remainingRows)
 		logutil.Infof(
