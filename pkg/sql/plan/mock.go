@@ -898,6 +898,9 @@ func (m *MockCompilerContext) Resolve(dbName string, tableName string, snapshot 
 			}
 		}
 	}
+	if tableDef != nil {
+		tableDef.DbName = dbName
+	}
 	return m.objects[name], tableDef
 }
 
