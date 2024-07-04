@@ -2955,7 +2955,8 @@ func (m *ResultColDef) GetResultCols() []*ColDef {
 }
 
 type ColDef struct {
-	ColId    uint64       `protobuf:"varint,1,opt,name=col_id,json=colId,proto3" json:"col_id,omitempty"`
+	ColId uint64 `protobuf:"varint,1,opt,name=col_id,json=colId,proto3" json:"col_id,omitempty"`
+	// letter case: lower
 	Name     string       `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	Hidden   bool         `protobuf:"varint,3,opt,name=hidden,proto3" json:"hidden,omitempty"`
 	Alg      CompressType `protobuf:"varint,4,opt,name=alg,proto3,enum=plan.CompressType" json:"alg,omitempty"`
@@ -2974,7 +2975,7 @@ type ColDef struct {
 	Header    string `protobuf:"bytes,16,opt,name=header,proto3" json:"header,omitempty"`
 	TblName   string `protobuf:"bytes,17,opt,name=tbl_name,json=tblName,proto3" json:"tbl_name,omitempty"`
 	DbName    string `protobuf:"bytes,18,opt,name=db_name,json=dbName,proto3" json:"db_name,omitempty"`
-	// get origin_name by ColDef.GetUserInputName()
+	// get origin_name by ColDef.GetUserInputName(), letter case: origin
 	OriginName           string   `protobuf:"bytes,19,opt,name=origin_name,json=originName,proto3" json:"origin_name,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
@@ -3320,9 +3321,9 @@ type PrimaryKeyDef struct {
 	PkeyColId uint64 `protobuf:"varint,2,opt,name=pkey_col_id,json=pkeyColId,proto3" json:"pkey_col_id,omitempty"`
 	// currently not used
 	Option *IndexOption `protobuf:"bytes,3,opt,name=option,proto3" json:"option,omitempty"`
-	// Composed primary key column name: __mo_cpkey
+	// Composed primary key column name: __mo_cpkey, letter case: lower
 	PkeyColName string `protobuf:"bytes,4,opt,name=pkey_col_name,json=pkeyColName,proto3" json:"pkey_col_name,omitempty"`
-	// XXX: Deprecated and to be removed soon.
+	// XXX: Deprecated and to be removed soon. letter case: lower
 	Names []string `protobuf:"bytes,5,rep,name=names,proto3" json:"names,omitempty"`
 	// Composite primary key column definition
 	CompPkeyCol          *ColDef  `protobuf:"bytes,6,opt,name=comp_pkey_col,json=compPkeyCol,proto3" json:"comp_pkey_col,omitempty"`
@@ -3408,9 +3409,10 @@ func (m *PrimaryKeyDef) GetCompPkeyCol() *ColDef {
 
 type IndexDef struct {
 	// Generate UUID for each index, currently not used
-	IdxId     string `protobuf:"bytes,1,opt,name=idx_id,json=idxId,proto3" json:"idx_id,omitempty"`
+	IdxId string `protobuf:"bytes,1,opt,name=idx_id,json=idxId,proto3" json:"idx_id,omitempty"`
+	// letter case: lower
 	IndexName string `protobuf:"bytes,2,opt,name=index_name,json=indexName,proto3" json:"index_name,omitempty"`
-	// The constituent columns of the index
+	// The constituent columns of the index, letter case: lower
 	Parts          []string `protobuf:"bytes,3,rep,name=parts,proto3" json:"parts,omitempty"`
 	Unique         bool     `protobuf:"varint,4,opt,name=unique,proto3" json:"unique,omitempty"`
 	IndexTableName string   `protobuf:"bytes,5,opt,name=index_table_name,json=indexTableName,proto3" json:"index_table_name,omitempty"`
@@ -3545,6 +3547,7 @@ func (m *IndexDef) GetIndexAlgoParams() string {
 }
 
 type ForeignKeyDef struct {
+	// letter case: lower
 	Name string   `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	Cols []uint64 `protobuf:"varint,2,rep,packed,name=cols,proto3" json:"cols,omitempty"`
 	// Foreign key parent table Id
@@ -3690,7 +3693,7 @@ func (m *CheckDef) GetCheck() *Expr {
 }
 
 type ClusterByDef struct {
-	// XXX: Deprecated and to be removed soon.
+	// XXX: Deprecated and to be removed soon. letter case: lower ?
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// Composite cluster by column definition
 	CompCbkeyCol         *ColDef  `protobuf:"bytes,2,opt,name=comp_cbkey_col,json=compCbkeyCol,proto3" json:"comp_cbkey_col,omitempty"`
@@ -4078,7 +4081,8 @@ func (m *PartitionExpr) GetExprStr() string {
 }
 
 type PartitionColumns struct {
-	Columns              []*Expr  `protobuf:"bytes,1,rep,name=columns,proto3" json:"columns,omitempty"`
+	Columns []*Expr `protobuf:"bytes,1,rep,name=columns,proto3" json:"columns,omitempty"`
+	// letter case: lower ?
 	PartitionColumns     []string `protobuf:"bytes,2,rep,name=partition_columns,json=partitionColumns,proto3" json:"partition_columns,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
@@ -4293,17 +4297,18 @@ type TableDef struct {
 	Props        []*PropertyDef   `protobuf:"bytes,23,rep,name=props,proto3" json:"props,omitempty"`
 	ViewSql      *ViewDef         `protobuf:"bytes,24,opt,name=view_sql,json=viewSql,proto3" json:"view_sql,omitempty"`
 	// XXX: Deprecated and to be removed soon.
-	Defs                 []*TableDef_DefType `protobuf:"bytes,25,rep,name=defs,proto3" json:"defs,omitempty"`
-	Name2ColIndex        map[string]int32    `protobuf:"bytes,26,rep,name=name2col_index,json=name2colIndex,proto3" json:"name2col_index,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"varint,2,opt,name=value,proto3"`
-	IsLocked             bool                `protobuf:"varint,27,opt,name=isLocked,proto3" json:"isLocked,omitempty"`
-	TableLockType        TableLockType       `protobuf:"varint,28,opt,name=tableLockType,proto3,enum=plan.TableLockType" json:"tableLockType,omitempty"`
-	IsTemporary          bool                `protobuf:"varint,29,opt,name=is_temporary,json=isTemporary,proto3" json:"is_temporary,omitempty"`
-	AutoIncrOffset       uint64              `protobuf:"varint,30,opt,name=auto_incr_offset,json=autoIncrOffset,proto3" json:"auto_incr_offset,omitempty"`
-	IsDynamic            bool                `protobuf:"varint,31,opt,name=is_dynamic,json=isDynamic,proto3" json:"is_dynamic,omitempty"`
-	DbName               string              `protobuf:"bytes,32,opt,name=db_name,json=dbName,proto3" json:"db_name,omitempty"`
-	XXX_NoUnkeyedLiteral struct{}            `json:"-"`
-	XXX_unrecognized     []byte              `json:"-"`
-	XXX_sizecache        int32               `json:"-"`
+	Defs []*TableDef_DefType `protobuf:"bytes,25,rep,name=defs,proto3" json:"defs,omitempty"`
+	// letter case: lower
+	Name2ColIndex        map[string]int32 `protobuf:"bytes,26,rep,name=name2col_index,json=name2colIndex,proto3" json:"name2col_index,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"varint,2,opt,name=value,proto3"`
+	IsLocked             bool             `protobuf:"varint,27,opt,name=isLocked,proto3" json:"isLocked,omitempty"`
+	TableLockType        TableLockType    `protobuf:"varint,28,opt,name=tableLockType,proto3,enum=plan.TableLockType" json:"tableLockType,omitempty"`
+	IsTemporary          bool             `protobuf:"varint,29,opt,name=is_temporary,json=isTemporary,proto3" json:"is_temporary,omitempty"`
+	AutoIncrOffset       uint64           `protobuf:"varint,30,opt,name=auto_incr_offset,json=autoIncrOffset,proto3" json:"auto_incr_offset,omitempty"`
+	IsDynamic            bool             `protobuf:"varint,31,opt,name=is_dynamic,json=isDynamic,proto3" json:"is_dynamic,omitempty"`
+	DbName               string           `protobuf:"bytes,32,opt,name=db_name,json=dbName,proto3" json:"db_name,omitempty"`
+	XXX_NoUnkeyedLiteral struct{}         `json:"-"`
+	XXX_unrecognized     []byte           `json:"-"`
+	XXX_sizecache        int32            `json:"-"`
 }
 
 func (m *TableDef) Reset()         { *m = TableDef{} }
@@ -5385,6 +5390,7 @@ func (m *FrameBound) GetVal() *Expr {
 }
 
 type OnDuplicateKeyCtx struct {
+	// letter case: origin
 	Attrs                []string         `protobuf:"bytes,1,rep,name=attrs,proto3" json:"attrs,omitempty"`
 	InsertColCount       int32            `protobuf:"varint,2,opt,name=insert_col_count,json=insertColCount,proto3" json:"insert_col_count,omitempty"`
 	UniqueColCheckExpr   []*Expr          `protobuf:"bytes,3,rep,name=unique_col_check_expr,json=uniqueColCheckExpr,proto3" json:"unique_col_check_expr,omitempty"`
@@ -8559,6 +8565,7 @@ func (m *DropDatabase) GetCheckFKSql() string {
 }
 
 type FkColName struct {
+	// letter case: lower
 	Cols                 []string `protobuf:"bytes,1,rep,name=cols,proto3" json:"cols,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
@@ -8911,8 +8918,9 @@ func (m *AlterTableDrop) GetIndexTableName() string {
 }
 
 type AlterTableAddFk struct {
-	DbName               string         `protobuf:"bytes,1,opt,name=db_name,json=dbName,proto3" json:"db_name,omitempty"`
-	TableName            string         `protobuf:"bytes,2,opt,name=table_name,json=tableName,proto3" json:"table_name,omitempty"`
+	DbName    string `protobuf:"bytes,1,opt,name=db_name,json=dbName,proto3" json:"db_name,omitempty"`
+	TableName string `protobuf:"bytes,2,opt,name=table_name,json=tableName,proto3" json:"table_name,omitempty"`
+	// letter case: lower
 	Cols                 []string       `protobuf:"bytes,3,rep,name=cols,proto3" json:"cols,omitempty"`
 	Fkey                 *ForeignKeyDef `protobuf:"bytes,4,opt,name=fkey,proto3" json:"fkey,omitempty"`
 	XXX_NoUnkeyedLiteral struct{}       `json:"-"`

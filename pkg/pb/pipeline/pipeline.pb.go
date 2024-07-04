@@ -1590,6 +1590,7 @@ func (m *PreInsertSecondaryIndex) GetPreInsertSkCtx() *plan.PreInsertUkCtx {
 }
 
 type OnDuplicateKey struct {
+	// letter case: origin
 	Attrs                []string              `protobuf:"bytes,1,rep,name=attrs,proto3" json:"attrs,omitempty"`
 	InsertColCount       int32                 `protobuf:"varint,2,opt,name=insert_col_count,json=insertColCount,proto3" json:"insert_col_count,omitempty"`
 	UniqueColCheckExpr   []*plan.Expr          `protobuf:"bytes,3,rep,name=unique_col_check_expr,json=uniqueColCheckExpr,proto3" json:"unique_col_check_expr,omitempty"`

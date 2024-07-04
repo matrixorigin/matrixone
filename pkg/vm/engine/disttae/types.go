@@ -710,7 +710,7 @@ type column struct {
 	accountId  uint32
 	tableId    uint64
 	databaseId uint64
-	// column name
+	// column name, letter case: origin
 	name            string
 	tableName       string
 	databaseName    string

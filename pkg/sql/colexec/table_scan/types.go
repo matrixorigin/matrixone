@@ -30,8 +30,9 @@ type Argument struct {
 	TopValueMsgTag int32
 	OrderBy        []*plan.OrderBySpec
 	Reader         engine.Reader
-	Attrs          []string
-	TableID        uint64
+	// letter case: origin
+	Attrs   []string
+	TableID uint64
 
 	buf    *batch.Batch
 	tmpBuf *batch.Batch

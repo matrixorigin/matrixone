@@ -188,6 +188,7 @@ message PreInsertSecondaryIndex{
 }
 
 message OnDuplicateKey{
+  // letter case: origin
   repeated string attrs = 1;
   int32 insert_col_count = 2;
   repeated plan.Expr unique_col_check_expr = 3;

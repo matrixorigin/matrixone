@@ -55,9 +55,8 @@ type ExParamConst struct {
 	Idx           int
 	CreateSql     string
 	Close         byte
-	// origin case
-	Attrs []string
-	// lower case
+	// letter case: origin
+	Attrs           []string
 	Cols            []*plan.ColDef
 	FileList        []string
 	FileSize        []int64

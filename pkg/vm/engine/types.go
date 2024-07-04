@@ -53,7 +53,7 @@ type Attribute struct {
 	IsRowId bool
 	// Column ID
 	ID uint64
-	// Name name of attribute
+	// Name name of attribute, letter case: origin
 	Name string
 	// Alg compression algorithm
 	Alg compress.T

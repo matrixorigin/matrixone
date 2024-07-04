@@ -35,8 +35,9 @@ type Argument struct {
 	HasAutoCol bool
 	SchemaName string
 	TableDef   *pb.TableDef
-	Attrs      []string
-	IsUpdate   bool
+	// letter case: origin
+	Attrs    []string
+	IsUpdate bool
 
 	EstimatedRowCount int64
 
