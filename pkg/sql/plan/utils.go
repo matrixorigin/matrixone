@@ -563,8 +563,8 @@ func deduceNewFilterList(filters, onList []*plan.Expr) []*plan.Expr {
 }
 
 func canMergeToBetweenAnd(expr1, expr2 *plan.Expr) bool {
-	col1, _, _, _ := extractColRefAndLiteralsInFilter(expr1)
-	col2, _, _, _ := extractColRefAndLiteralsInFilter(expr2)
+	col1, _, _, _, _ := extractColRefAndLiteralsInFilter(expr1)
+	col2, _, _, _, _ := extractColRefAndLiteralsInFilter(expr2)
 	if col1 == nil || col2 == nil {
 		return false
 	}
@@ -583,10 +583,16 @@ func canMergeToBetweenAnd(expr1, expr2 *plan.Expr) bool {
 	return false
 }
 
-func extractColRefAndLiteralsInFilter(expr *plan.Expr) (col *ColRef, litType types.T, literals []*Const, colFnName string) {
+func extractColRefAndLiteralsInFilter(expr *plan.Expr) (col *ColRef, litType types.T, literals []*Const, colFnName string, hasDynamicParam bool) {
 	fn := expr.GetF()
 	if fn == nil || len(fn.Args) == 0 {
 		return
+	}
+	for i := range fn.Args {
+		if containsDynamicParam(fn.Args[i]) {
+			hasDynamicParam = true
+			break
+		}
 	}
 
 	col = fn.Args[0].GetCol()
