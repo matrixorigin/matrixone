@@ -375,6 +375,10 @@ func NewKeyAlreadyExistsNoCtx() *Error {
 	return newError(Context(), ErrKeyAlreadyExists)
 }
 
+func NewErrTooLargeObjectSizeNoCtx(option uint64) *Error {
+	return newError(Context(), ErrTooLargeObjectSize, option)
+}
+
 func NewArenaFullNoCtx() *Error {
 	return newError(Context(), ErrArenaFull)
 }

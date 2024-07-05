@@ -17,6 +17,7 @@ package jobs
 import (
 	"context"
 	"fmt"
+	"go.uber.org/zap"
 	"strings"
 	"time"
 
@@ -270,16 +271,17 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 	phaseDesc := ""
 	defer func() {
 		if err != nil {
-			logutil.Error("[DoneWithErr] Mergeblocks", common.OperationField(task.Name()),
-				common.AnyField("error", err),
-				common.AnyField("phase", phaseDesc),
+			logutil.Error("[MERGE-DONE-ERROR] ",
+				common.OperationField(task.Name()),
+				zap.String("phase", phaseDesc),
+				zap.Error(err),
 			)
 		}
 	}()
 
 	if time.Since(task.createAt) > time.Second*10 {
 		logutil.Warn("[Slow] Mergeblocks wait", common.OperationField(task.Name()),
-			common.AnyField("duration", time.Since(task.createAt)),
+			zap.Duration("duration", time.Since(task.createAt)),
 		)
 	}
 
@@ -368,10 +370,10 @@ func HandleMergeEntryInTxn(txn txnif.AsyncTxn, entry *api.MergeCommitEntry, rt *
 	return createdObjs, nil
 }
 
-func (task *mergeObjectsTask) GetTotalSize() uint32 {
-	totalSize := uint32(0)
+func (task *mergeObjectsTask) GetTotalSize() uint64 {
+	totalSize := uint64(0)
 	for _, obj := range task.mergedObjs {
-		totalSize += uint32(obj.GetOriginSize())
+		totalSize += uint64(obj.GetOriginSize())
 	}
 	return totalSize
 }

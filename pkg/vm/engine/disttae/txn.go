@@ -1232,3 +1232,11 @@ func (txn *Transaction) CloneSnapshotWS() client.Workspace {
 func (txn *Transaction) BindTxnOp(op client.TxnOperator) {
 	txn.op = op
 }
+
+func (txn *Transaction) SetHaveDDL(haveDDL bool) {
+	txn.haveDDL.Store(haveDDL)
+}
+
+func (txn *Transaction) GetHaveDDL() bool {
+	return txn.haveDDL.Load()
+}

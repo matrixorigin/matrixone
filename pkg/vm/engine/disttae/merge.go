@@ -87,7 +87,6 @@ func newCNMergeTask(
 	blkCnts := make([]int, len(targets))
 	blkIters := make([]*StatsBlkIter, len(targets))
 	for i, objInfo := range targets {
-		objInfo := objInfo
 		blkCnts[i] = int(objInfo.BlkCnt())
 
 		loc := objInfo.ObjectLocation()
@@ -170,7 +169,7 @@ func (t *cnMergeTask) LoadNextBatch(ctx context.Context, objIdx uint32) (*batch.
 		blk.EntryState = obj.EntryState
 		blk.CommitTs = obj.CommitTS
 		if obj.HasDeltaLoc {
-			deltaLoc, commitTs, ok := t.state.GetBockDeltaLoc(blk.BlockID)
+			deltaLoc, commitTs, ok := t.state.GetBlockDeltaLoc(blk.BlockID)
 			if ok {
 				blk.DeltaLoc = deltaLoc
 				blk.CommitTs = commitTs
@@ -200,10 +199,10 @@ func (t *cnMergeTask) GetMPool() *mpool.MPool {
 
 func (t *cnMergeTask) HostHintName() string { return "CN" }
 
-func (t *cnMergeTask) GetTotalSize() uint32 {
-	totalSize := uint32(0)
+func (t *cnMergeTask) GetTotalSize() uint64 {
+	totalSize := uint64(0)
 	for _, obj := range t.targets {
-		totalSize += obj.OriginSize()
+		totalSize += uint64(obj.OriginSize())
 	}
 	return totalSize
 }

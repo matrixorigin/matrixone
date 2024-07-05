@@ -85,7 +85,7 @@ func TestGetWithNoBind(t *testing.T) {
 		time.Hour,
 		func(a *lockTableAllocator) {
 			assert.Equal(t,
-				pb.LockTable{Valid: true, ServiceID: "s1", Table: 1, OriginTable: 1, Version: 1},
+				pb.LockTable{Valid: true, ServiceID: "s1", Table: 1, OriginTable: 1, Version: a.version},
 				a.Get("s1", 0, 1, 0, pb.Sharding_None))
 		})
 }
@@ -98,7 +98,7 @@ func TestGetWithAlreadyBind(t *testing.T) {
 			// register s1 first
 			a.Get("s1", 0, 1, 0, pb.Sharding_None)
 			assert.Equal(t,
-				pb.LockTable{Valid: true, ServiceID: "s1", Table: 1, OriginTable: 1, Version: 1},
+				pb.LockTable{Valid: true, ServiceID: "s1", Table: 1, OriginTable: 1, Version: a.version},
 				a.Get("s2", 0, 1, 0, pb.Sharding_None))
 		})
 }
@@ -112,7 +112,7 @@ func TestGetWithBindInvalid(t *testing.T) {
 			a.Get("s1", 0, 1, 0, pb.Sharding_None)
 			a.disableTableBinds(a.getServiceBinds("s1"))
 			assert.Equal(t,
-				pb.LockTable{Valid: true, ServiceID: "s2", Table: 1, OriginTable: 1, Version: 2},
+				pb.LockTable{Valid: true, ServiceID: "s2", Table: 1, OriginTable: 1, Version: a.version + 1},
 				a.Get("s2", 0, 1, 0, pb.Sharding_None))
 		})
 }
@@ -131,7 +131,7 @@ func TestGetWithBindAndServiceBothInvalid(t *testing.T) {
 			a.getServiceBinds("s2").disable()
 
 			assert.Equal(t,
-				pb.LockTable{Valid: false, ServiceID: "s1", Table: 1, OriginTable: 1, Version: 1},
+				pb.LockTable{Valid: false, ServiceID: "s1", Table: 1, OriginTable: 1, Version: a.version},
 				a.Get("s2", 0, 1, 0, pb.Sharding_None))
 		})
 }

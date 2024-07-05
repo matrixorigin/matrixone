@@ -254,6 +254,8 @@ type Transaction struct {
 	pkCount              int
 
 	adjustCount int
+
+	haveDDL atomic.Bool
 }
 
 type Pos struct {
