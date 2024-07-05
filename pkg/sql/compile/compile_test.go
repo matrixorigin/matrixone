@@ -148,7 +148,7 @@ func TestCompile(t *testing.T) {
 		tc.proc.Base.TxnClient = txnCli
 		tc.proc.Base.TxnOperator = txnOp
 		tc.proc.Ctx = ctx
-		c := NewCompile("test", "test", tc.sql, "", "", ctx, tc.e, tc.proc, tc.stmt, false, nil, time.Now())
+		c := NewCompile("test", "test", tc.sql, "", "", tc.e, tc.proc, tc.stmt, false, nil, time.Now())
 		err := c.Compile(ctx, tc.pn, testPrint)
 		require.NoError(t, err)
 		c.getAffectedRows()
@@ -177,7 +177,7 @@ func TestCompileWithFaults(t *testing.T) {
 	tc.proc.Base.TxnClient = txnCli
 	tc.proc.Base.TxnOperator = txnOp
 	tc.proc.Ctx = ctx
-	c := NewCompile("test", "test", tc.sql, "", "", ctx, tc.e, tc.proc, nil, false, nil, time.Now())
+	c := NewCompile("test", "test", tc.sql, "", "", tc.e, tc.proc, nil, false, nil, time.Now())
 	err := c.Compile(ctx, tc.pn, testPrint)
 	require.NoError(t, err)
 	c.getAffectedRows()
