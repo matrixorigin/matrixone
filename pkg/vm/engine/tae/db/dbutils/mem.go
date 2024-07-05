@@ -15,19 +15,14 @@
 package dbutils
 
 import (
-	"bytes"
-	"encoding/base64"
 	"fmt"
 	"runtime"
-	"runtime/debug"
-	"runtime/pprof"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/shirou/gopsutil/v3/mem"
-	"go.uber.org/zap"
 )
 
 func MakeDefaultSmallPool(name string) *containers.VectorPool {
@@ -106,30 +101,8 @@ func FormatMemStats(memstats runtime.MemStats) string {
 	)
 }
 
-var prevHeapInuse uint64
-
 func PrintMemStats() {
 	var memstats runtime.MemStats
 	runtime.ReadMemStats(&memstats)
-
-	// found a spike in heapInuse
-	if prevHeapInuse > 0 && memstats.HeapInuse > prevHeapInuse &&
-		memstats.HeapInuse-prevHeapInuse > common.Const1GBytes*10 {
-		heapp := pprof.Lookup("heap")
-		buf := &bytes.Buffer{}
-		heapp.WriteTo(buf, 0)
-		mlimit := debug.SetMemoryLimit(-1)
-		log := buf.Bytes()
-		chunkSize := 150 * 1024
-		for len(log) > chunkSize {
-			logutil.Info(base64.RawStdEncoding.EncodeToString(log[:chunkSize]))
-			log = log[chunkSize:]
-		}
-		logutil.Info(
-			base64.RawStdEncoding.EncodeToString(log),
-			zap.String("mlimit", common.HumanReadableBytes(int(mlimit))))
-	}
-
-	prevHeapInuse = memstats.HeapInuse
 	logutil.Infof("HeapInfo:%s", FormatMemStats(memstats))
 }
