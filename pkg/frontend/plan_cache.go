@@ -16,7 +16,8 @@ package frontend
 
 import (
 	"container/list"
-
+	"crypto/sha256"
+	"encoding/hex"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
@@ -56,8 +57,9 @@ func (pc *planCache) cache(sql string, stmts []tree.Statement, plans []*plan.Pla
 			return
 		}
 	}
-	element := pc.lruList.PushFront(&cachedPlan{sql: sql, stmts: stmts, plans: plans})
-	pc.cachePool[sql] = element
+	sql256 := pc.hashString(sql)
+	element := pc.lruList.PushFront(&cachedPlan{sql: sql256, stmts: stmts, plans: plans})
+	pc.cachePool[sql256] = element
 	if pc.lruList.Len() > pc.capacity {
 		toRemove := pc.lruList.Back()
 		toRemoveStmts := toRemove.Value.(*cachedPlan).stmts
@@ -75,7 +77,8 @@ func (pc *planCache) get(sql string) *cachedPlan {
 	if pc.cachePool == nil {
 		return nil
 	}
-	if element, ok := pc.cachePool[sql]; ok {
+	sql256 := pc.hashString(sql)
+	if element, ok := pc.cachePool[sql256]; ok {
 		pc.lruList.MoveToFront(element)
 		cp := element.Value.(*cachedPlan)
 		return cp
@@ -87,7 +90,8 @@ func (pc *planCache) isCached(sql string) bool {
 	if pc.cachePool == nil {
 		return false
 	}
-	_, isCached := pc.cachePool[sql]
+	sql256 := pc.hashString(sql)
+	_, isCached := pc.cachePool[sql256]
 	return isCached
 }
 
@@ -103,4 +107,10 @@ func (pc *planCache) clean() {
 	}
 	pc.lruList = nil
 	pc.cachePool = nil
+}
+
+func (pc *planCache) hashString(sql string) string {
+	hash := sha256.New()
+	hash.Write([]byte(sql))
+	return hex.EncodeToString(hash.Sum(nil))
 }
