@@ -497,12 +497,15 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 					R: r,
 					C: counter,
 				}
-				var bs memorycache.CacheData
-				bs, err = entry.ToCacheData(cr, nil, GetDefaultCacheDataAllocator())
+				var cacheData memorycache.CacheData
+				cacheData, err = entry.ToCacheData(cr, nil, GetDefaultCacheDataAllocator())
 				if err != nil {
 					return err
 				}
-				vector.Entries[i].CachedData = bs
+				if cacheData == nil {
+					panic("ToCacheData returns nil cache data")
+				}
+				vector.Entries[i].CachedData = cacheData
 				if entry.Size > 0 && counter.Load() != entry.Size {
 					return moerr.NewUnexpectedEOFNoCtx(path.File)
 				}
@@ -641,12 +644,15 @@ func (l *LocalFS) handleReadCloserForRead(
 			r: io.TeeReader(r, buf),
 			closeFunc: func() error {
 				defer file.Close()
-				var bs memorycache.CacheData
-				bs, err = entry.ToCacheData(buf, buf.Bytes(), GetDefaultCacheDataAllocator())
+				var cacheData memorycache.CacheData
+				cacheData, err = entry.ToCacheData(buf, buf.Bytes(), GetDefaultCacheDataAllocator())
 				if err != nil {
 					return err
 				}
-				vector.Entries[i].CachedData = bs
+				if cacheData == nil {
+					panic("ToCacheData returns nil cache data")
+				}
+				vector.Entries[i].CachedData = cacheData
 				return nil
 			},
 		}

@@ -1461,3 +1461,55 @@ func SHA1Func(
 		return []byte(hex.EncodeToString(sum[:]))
 	})
 }
+
+func LastDay(
+	ivecs []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	_ *process.Process,
+	length int,
+) error {
+	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetStrValue(i)
+		if null1 {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			day := functionUtil.QuickBytesToStr(v1)
+			var dt types.Date
+			var err error
+			var dtt types.Datetime
+			if len(day) < 14 {
+				dt, err = types.ParseDateCast(day)
+				if err != nil {
+					if err := rs.AppendBytes(nil, true); err != nil {
+						return err
+					}
+					continue
+				}
+			} else {
+				dtt, err = types.ParseDatetime(day, 6)
+				if err != nil {
+					if err := rs.AppendBytes(nil, true); err != nil {
+						return err
+					}
+					continue
+				}
+				dt = dtt.ToDate()
+			}
+
+			year := dt.Year()
+			month := dt.Month()
+
+			lastDay := types.LastDay(int32(year), month)
+			resDt := types.DateFromCalendar(int32(year), month, lastDay)
+			if err := rs.AppendBytes([]byte(resDt.String()), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}

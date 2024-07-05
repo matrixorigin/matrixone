@@ -60,13 +60,18 @@ func New(
 	hakeeper logservice.CNHAKeeperClient,
 	udfService udf.Service,
 	aicm *defines.AutoIncrCacheManager) *Process {
+
+	// process should always have a cancel context to help we close this query.
+	processCtx, processCancel := context.WithCancel(ctx)
+
 	return &Process{
 		mp:           m,
-		Ctx:          ctx,
+		Ctx:          processCtx,
+		Cancel:       processCancel,
 		TxnClient:    txnClient,
 		TxnOperator:  txnOperator,
 		FileService:  fileService,
-		IncrService:  incrservice.GetAutoIncrementService(ctx),
+		IncrService:  incrservice.GetAutoIncrementService(processCtx),
 		UnixTime:     time.Now().UnixNano(),
 		LastInsertID: new(uint64),
 		LockService:  lockService,
