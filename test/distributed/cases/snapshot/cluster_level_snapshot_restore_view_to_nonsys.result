@@ -41,7 +41,7 @@ col1    col2
 1    -321
 2    -1
 drop snapshot if exists sp100;
-create snapshot sp100 for account acc01;
+create snapshot sp100 for cluster;
 use test;
 delete from table01 where col1 = 1;
 select * from v01;
@@ -148,7 +148,7 @@ avg(sal)
 1366.66666667
 2758.33333333
 drop snapshot if exists sp02;
-create snapshot sp02 for account acc01;
+create snapshot sp02 for cluster;
 use test;
 drop view v04;
 select * from v04;
@@ -216,7 +216,7 @@ Alice    Johnson    Marketing
 Mark    Patterson    Sales
 David    Finley    Finance
 drop snapshot if exists sp05;
-create snapshot sp05 for account acc01;
+create snapshot sp05 for cluster;
 use test;
 drop table Employees;
 select * from EmployeeDepartmentView;
@@ -290,7 +290,7 @@ employee_id    first_name    last_name    department_name
 2    Jane    Smith    Engineering
 3    Bob    Johnson    HR
 drop snapshot if exists sp04;
-create snapshot sp04 for account acc01;
+create snapshot sp04 for cluster;
 use test;
 drop view employee_view;
 drop view department_view;
@@ -363,7 +363,7 @@ emp_no    birth_date    first_name    last_name    gender    hire_date
 9001    1980-12-17    SMITH    CLERK    F    2008-12-17
 9002    1981-02-20    ALLEN    SALESMAN    F    2008-02-20
 drop snapshot if exists sp05;
-create snapshot sp05 for account acc01;
+create snapshot sp05 for cluster;
 use test;
 insert into partition01 values (9003,'1999-02-20', 'BOB', 'DOCTOR', 'F', '2009-02-20');
 select * from view01;
@@ -372,7 +372,7 @@ emp_no    birth_date    first_name    last_name    gender    hire_date
 9002    1981-02-20    ALLEN    SALESMAN    F    2008-02-20
 9003    1999-02-20    BOB    DOCTOR    F    2009-02-20
 drop snapshot if exists sp06;
-create snapshot sp06 for account acc01;
+create snapshot sp06 for cluster;
 restore account acc01 from snapshot sp05;
 use test;
 select * from view01;
@@ -426,7 +426,7 @@ employeeid    employeename    salary    salaryrank
 1    Alice    70000.00    4
 4    David    65000.00    5
 drop snapshot if exists sp06;
-create snapshot sp06 for account acc01;
+create snapshot sp06 for cluster;
 drop database test01;
 select * from test01.EmployeeSalaryRanking;
 invalid database test01
@@ -499,7 +499,7 @@ Alice    Mathematics    Mr. Smith    2024-01-10
 Bob    Physics    Dr. Johnson    2024-01-15
 Charlie    Mathematics    Mr. Smith    2024-02-01
 drop snapshot if exists sp07;
-create snapshot sp07 for account acc01;
+create snapshot sp07 for cluster;
 use test02;
 drop table Enrollments;
 drop table students;
@@ -573,15 +573,45 @@ drop snapshot if exists sp10;
 create snapshot sp10 for account acc01;
 use test02;
 drop database test02;
+select * from test02.employees_view;
+invalid database test02
+select * from test02.employees_view{snapshot = 'sp10'};
+internal error: find 0 snapshot records by name(sp10), expect only 1
+select * from test02.employees_by_salary_view;
+invalid database test02
+select * from test02.employees_by_salary_view{snapshot = 'sp10'};
+internal error: find 0 snapshot records by name(sp10), expect only 1
 restore account acc01 from snapshot sp10;
 use test02;
+select * from test02.employees_view;
+id    name    department    salary    hire_date
+1    Job    Doct    10000.00    2000-10-10
+2    Mary    Farmer    10000.00    2012-10-10
+3    Lucy    Programmer    20000.00    2021-10-10
+select * from test02.employees_by_salary_view;
+name    salary
+Lucy    20000.00
+Job    10000.00
+Mary    10000.00
+select * from test02.employees_view{snapshot = 'sp10'};
+id    name    department    salary    hire_date
+1    Job    Doct    10000.00    2000-10-10
+2    Mary    Farmer    10000.00    2012-10-10
+3    Lucy    Programmer    20000.00    2021-10-10
+select * from test02.employees_by_salary_view{snapshot = 'sp10'};
+name    salary
+Lucy    20000.00
+Job    10000.00
+Mary    10000.00
 drop view if exists employees_view;
 drop view if exists it_employees_view;
 drop view if exists employees_by_department_view;
 drop view if exists employees_by_salary_view;
 drop view if exists avg_salary_per_department_view;
 drop table employees;
+no such table test02.employees
 drop database test02;
+Can't drop database 'test02'; database doesn't exist
 drop snapshot sp10;
 drop database if exists test03;
 drop database if exists test04;
@@ -637,7 +667,7 @@ employee_id    first_name    last_name    department_name
 2    Jane    Smith    Engineering
 3    Bob    Johnson    HR
 drop snapshot if exists sp100;
-create snapshot sp100 for account acc01;
+create snapshot sp100 for cluster;
 drop database test04;
 select * from test04.employee_view;
 invalid database test04
@@ -648,7 +678,7 @@ department_id    department_name
 select * from test05.employee_with_department_view;
 invalid database test04
 drop snapshot if exists sp101;
-create snapshot sp101 for account acc01;
+create snapshot sp101 for cluster;
 drop database test03;
 drop database test05;
 select * from test04.employee_view;

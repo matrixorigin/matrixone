@@ -543,7 +543,7 @@ group by department;
 -- @session
 
 drop snapshot if exists sp10;
-create snapshot sp10 for cluster;
+create snapshot sp10 for account acc01;
 
 -- @session:id=1&user=acc01:test_account&password=111
 use test02;
@@ -559,8 +559,10 @@ restore account acc01 from snapshot sp10;
 -- @session:id=1&user=acc01:test_account&password=111
 use test02;
 select * from test02.employees_view;
-select * from test02.employees_view{snapshot = 'sp10'};
 select * from test02.employees_by_salary_view;
+-- @session
+
+select * from test02.employees_view{snapshot = 'sp10'};
 select * from test02.employees_by_salary_view{snapshot = 'sp10'};
 
 drop view if exists employees_view;
