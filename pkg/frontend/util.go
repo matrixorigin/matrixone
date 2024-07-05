@@ -1098,7 +1098,11 @@ func (ui *UserInput) getSql() string {
 	return ui.sql
 }
 
-func (ui *UserInput) getHashedSql() string {
+func (ui *UserInput) generateHash() {
+	ui.hashedSql = hashString(ui.sql)
+}
+
+func (ui *UserInput) getHash() string {
 	return ui.hashedSql
 }
 
