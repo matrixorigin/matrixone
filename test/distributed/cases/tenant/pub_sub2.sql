@@ -103,3 +103,4 @@ drop publication if exists pub1;
 drop publication if exists pub1;
 
 drop database if exists sub1;
+set global enable_privilege_cache = on;
