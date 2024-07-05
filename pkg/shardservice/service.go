@@ -143,6 +143,10 @@ func (s *service) Close() error {
 	return s.remote.client.Close()
 }
 
+func (s *service) Config() Config {
+	return s.cfg
+}
+
 func (s *service) Create(
 	ctx context.Context,
 	table uint64,
@@ -210,6 +214,56 @@ func (s *service) Delete(
 	}
 
 	return nil
+}
+
+func (s *service) HasLocalReplica(
+	tableID, shardID uint64,
+) bool {
+	has := false
+	s.getReadCache().selectShards(
+		tableID,
+		func(
+			metadata pb.ShardsMetadata,
+			shard pb.TableShard,
+		) bool {
+			if shard.ShardID != shardID {
+				return true
+			}
+
+			for _, replica := range shard.Replicas {
+				has = s.isLocalReplica(replica)
+				if has {
+					break
+				}
+			}
+			return !has
+		},
+	)
+	return has
+}
+
+func (s *service) HasAllLocalReplicas(
+	tableID uint64,
+) bool {
+	total := 0
+	local := 0
+	s.getReadCache().selectShards(
+		tableID,
+		func(
+			metadata pb.ShardsMetadata,
+			shard pb.TableShard,
+		) bool {
+			total = int(metadata.ShardsCount)
+			for _, replica := range shard.Replicas {
+				s.isLocalReplica(replica)
+				local++
+				break
+			}
+
+			return true
+		},
+	)
+	return total > 0 && total == local
 }
 
 func (s *service) GetShardInfo(
@@ -793,6 +847,22 @@ func (c *readCache) selectReplicas(
 	}
 
 	sc.selectReplicas(apply)
+}
+
+func (c *readCache) selectShards(
+	tableID uint64,
+	apply func(pb.ShardsMetadata, pb.TableShard) bool,
+) {
+	sc, ok := c.shards[tableID]
+	if !ok {
+		panic("shards is empty")
+	}
+
+	for _, shard := range sc.shards {
+		if !apply(sc.metadata, shard) {
+			return
+		}
+	}
 }
 
 func (c *readCache) hasTableCache(
