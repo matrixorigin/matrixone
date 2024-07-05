@@ -2655,21 +2655,19 @@ func TimestampDiff(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 	return nil
 }
 
-func MakeDate(
+func MakeDateString(
 	ivecs []*vector.Vector,
 	result vector.FunctionResultWrapper,
 	_ *process.Process,
 	length int,
 	selectList *FunctionSelectList,
 ) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
-
+	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
+	p2 := vector.GenerateFunctionStrParameter(ivecs[1])
 	rs := vector.MustFunctionResult[types.Varlena](result)
-
 	for i := uint64(0); i < uint64(length); i++ {
-		year, null1 := p1.GetValue(i)
-		day, null2 := p2.GetValue(i)
+		yearStr, null1 := p1.GetStrValue(i)
+		dayStr, null2 := p2.GetStrValue(i)
 
 		if null1 || null2 {
 			if err := rs.AppendBytes(nil, true); err != nil {
@@ -2677,10 +2675,25 @@ func MakeDate(
 			}
 		} else {
 			// null
+			year, err := strconv.ParseInt(functionUtil.QuickBytesToStr(yearStr), 10, 64)
+			if err != nil {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+			day, err := strconv.ParseInt(functionUtil.QuickBytesToStr(dayStr), 10, 64)
+			if err != nil {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
 			if day <= 0 || year < 0 || year > 9999 {
 				if err := rs.AppendBytes(nil, true); err != nil {
 					return err
 				}
+				continue
 			}
 
 			if year < 70 {
@@ -2691,10 +2704,11 @@ func MakeDate(
 
 			resDt := types.MakeDate(int32(year), 1, int32(day))
 
-			if resDt.Year() > 9999 {
+			if resDt.Year() > 9999 || resDt <= 0 {
 				if err := rs.AppendBytes(nil, true); err != nil {
 					return err
 				}
+				continue
 			}
 
 			if err := rs.AppendBytes([]byte(resDt.String()), false); err != nil {
