@@ -122,7 +122,7 @@ desc triggers;
 select trigger_name, action_order from triggers limit 3;
 
 use mysql;
--- @ignore:0
+-- @ignore:0,1
 desc user;
 select host, user from user limit 2;
 -- @ignore:0

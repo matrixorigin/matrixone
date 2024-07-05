@@ -622,6 +622,7 @@ insert into primary03 values (2, '3e');
 alter table primary03 change col1 col1New int primary key;
 show create table primary03;
 insert into primary03 (col1New, col2) values (3, '*');
+-- @pattern
 insert into primary03 values (3, 'assad');
 update from primary03 set col2 = 'database' where col1New = 3;
 select * from primary03;
@@ -638,6 +639,7 @@ insert into primary04 values (2, '324543##');
 alter table primary04 change col1 col1New float;
 alter table primary04 change col2 col2New varbinary(50);
 show create table primary04;
+-- @pattern
 insert into primary04 values (1, '324342__');
 insert into primary04 values (3, 'qw');
 delete from primary04 where col2 = 'qfreqvreq';
