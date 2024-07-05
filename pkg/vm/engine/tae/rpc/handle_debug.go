@@ -18,11 +18,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 
 	"github.com/google/shlex"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -421,7 +422,7 @@ func (h *Handle) HandleCommitMerge(
 		}
 	}
 
-	_, err = jobs.HandleMergeEntryInTxn(txn, req, h.db.Runtime)
+	_, err = jobs.HandleMergeEntryInTxn(txn, txn.String(), req, h.db.Runtime)
 	if err != nil {
 		return
 	}
