@@ -273,7 +273,7 @@ func logMergeTask(name string, taskId uint64, merges []*catalog.ObjectEntry, blk
 		r := obj.GetRemainingRows()
 		size := obj.GetOriginSize()
 		rows += r
-		infoBuf.WriteString(fmt.Sprintf(" %d(%s)(%d)", r, common.ShortObjId(obj.ID), size))
+		infoBuf.WriteString(fmt.Sprintf(" %d(%s)(%s)", r, common.ShortObjId(obj.ID), common.HumanReadableBytes(size)))
 	}
 	platform := fmt.Sprintf("t%d", taskId)
 	if taskId == math.MaxUint64 {
