@@ -222,6 +222,12 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 	return info
 }
 
+func (gs *GlobalStats) RemoveTid(tid uint64) {
+	gs.logtailUpdate.mu.Lock()
+	defer gs.logtailUpdate.mu.Unlock()
+	delete(gs.logtailUpdate.mu.updated, tid)
+}
+
 func (gs *GlobalStats) enqueue(tail *logtail.TableLogtail) {
 	select {
 	case gs.tailC <- tail:
