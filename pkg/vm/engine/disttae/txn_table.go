@@ -1240,7 +1240,7 @@ func (tbl *txnTable) TableRenameInTxn(ctx context.Context, constraint [][]byte) 
 			panic("The table object in createMap should be the current table object")
 		}
 	} else if value, ok := tbl.db.getTxn().tableCache.tableMap.Load(key); ok {
-		table := value.(*txnTable)
+		table := value.(*txnTableDelegate).origin
 		id = table.tableId
 		rowid = table.rowid
 		rowids = table.rowids
@@ -1665,14 +1665,17 @@ func (tbl *txnTable) NewReader(
 	orderedScan bool,
 	txnOffset int,
 ) ([]engine.Reader, error) {
+	if plan2.IsFalseExpr(expr) {
+		return []engine.Reader{new(emptyReader)}, nil
+	}
+
+	proc := tbl.proc.Load()
 	txn := tbl.getTxn()
 	ts := txn.op.SnapshotTS()
 	state, err := tbl.getPartitionState(ctx)
 	if err != nil {
 		return nil, err
 	}
-
-	proc := tbl.proc.Load()
 
 	baseFilter := newBasePKFilter(
 		expr,
@@ -1694,7 +1697,7 @@ func (tbl *txnTable) NewReader(
 	)
 
 	blkArray := objectio.BlockInfoSlice(ranges)
-	if !memFilter.isValid || plan2.IsFalseExpr(expr) {
+	if !memFilter.isValid {
 		return []engine.Reader{new(emptyReader)}, nil
 	}
 	if blkArray.Len() == 0 {
@@ -1727,7 +1730,7 @@ func (tbl *txnTable) NewReader(
 		}
 
 		if len(cleanBlks) > 0 {
-			rds0, err = tbl.newBlockReader(ctx, num, expr, blockFilter, cleanBlks, tbl.proc.Load(), orderedScan)
+			rds0, err = tbl.newBlockReader(ctx, num, expr, blockFilter, cleanBlks, proc, orderedScan)
 			if err != nil {
 				return nil, err
 			}
@@ -1745,7 +1748,7 @@ func (tbl *txnTable) NewReader(
 	for i := 0; i < blkArray.Len(); i++ {
 		blkInfos = append(blkInfos, blkArray.Get(i))
 	}
-	return tbl.newBlockReader(ctx, num, expr, blockFilter, blkInfos, tbl.proc.Load(), orderedScan)
+	return tbl.newBlockReader(ctx, num, expr, blockFilter, blkInfos, proc, orderedScan)
 }
 
 func (tbl *txnTable) newMergeReader(
