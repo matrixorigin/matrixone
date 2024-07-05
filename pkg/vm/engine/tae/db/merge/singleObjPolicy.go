@@ -77,7 +77,6 @@ func (s *singleObjPolicy) onObject(obj *catalog.ObjectEntry) {
 	}
 
 	deltaLocRows := uint32(0)
-
 	for j := range obj.BlockCnt() {
 		deltaLoc := tombstone.GetLatestDeltaloc(uint16(j))
 		if deltaLoc == nil || deltaLoc.IsEmpty() {
@@ -92,11 +91,15 @@ func (s *singleObjPolicy) onObject(obj *catalog.ObjectEntry) {
 	isCandidate := func() bool {
 		// object with a lot of holes
 		dels := obj.GetObjectData().GetTotalChanges()
-		if dels > s.config.minDeletes && dels > obj.GetRows()/2 {
-			return true
+		if dels > s.config.minDeletes {
+			if dels > obj.GetRows()/2 {
+				return true
+			}
+			if deltaLocRows > uint32(obj.GetRemainingRows()) {
+				return true
+			}
 		}
-		// if deletes is older than now-oldDeleteThreshold, then merge it.
-		return deltaLocRows > uint32(obj.GetRemainingRows())
+		return false
 	}
 
 	if isCandidate() && len(s.objects) < s.config.maxObjs {
