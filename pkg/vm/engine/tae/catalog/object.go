@@ -153,7 +153,7 @@ func (entry *ObjectEntry) GetDropEntry(txn txnif.TxnReader) (dropped *ObjectEntr
 	dropped.ObjectState = ObjectState_Delete_Active
 	dropped.DeleteNode = dropped.CreateNode.CloneData()
 	dropped.DeleteNode.DeletedAt = txnif.UncommitTS
-	dropped.DeleteNode.Txn = txn
+	dropped.DeleteNode.TxnMVCCNode=txnbase.NewTxnMVCCNodeWithTxn(txn)
 	dropped.GetObjectData().UpdateMeta(dropped)
 	if entry.CreateNode.Txn != nil && txn.GetID() == entry.CreateNode.Txn.GetID() {
 		return
@@ -170,7 +170,7 @@ func (entry *ObjectEntry) GetUpdateEntry(txn txnif.TxnReader, stats *objectio.Ob
 		return
 	}
 	isNewNode = true
-	node.Txn = txn
+	dropped.DeleteNode.TxnMVCCNode=txnbase.NewTxnMVCCNodeWithTxn(txn)
 	return
 }
 
