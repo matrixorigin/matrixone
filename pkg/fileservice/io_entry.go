@@ -27,10 +27,10 @@ import (
 )
 
 func (i *IOEntry) setCachedData(ctx context.Context) error {
-	LogEvent(ctx, "setCachedData begin")
+	LogEvent(ctx, str_set_cache_data_begin)
 	t0 := time.Now()
 	defer func() {
-		LogEvent(ctx, "setCachedData end")
+		LogEvent(ctx, str_set_cache_data_end)
 		metric.FSReadDurationSetCachedData.Observe(time.Since(t0).Seconds())
 	}()
 	if i.ToCacheData == nil {
@@ -42,9 +42,9 @@ func (i *IOEntry) setCachedData(ctx context.Context) error {
 	if i.allocator == nil {
 		i.allocator = GetDefaultCacheDataAllocator()
 	}
-	LogEvent(ctx, "ToCacheData begin")
+	LogEvent(ctx, str_to_cache_data_begin)
 	cacheData, err := i.ToCacheData(bytes.NewReader(i.Data), i.Data, i.allocator)
-	LogEvent(ctx, "ToCacheData end")
+	LogEvent(ctx, str_to_cache_data_end)
 	if err != nil {
 		return err
 	}
