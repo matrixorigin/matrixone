@@ -394,11 +394,11 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	}
 
 	if snapshot.level == tree.RESTORELEVELCLUSTER.String() && len(srcAccountName) != 0 {
-		toAccountId, err = getAccountId(ctx, bh, srcAccountName)
+		srcAccountId, err := getAccountId(ctx, bh, srcAccountName)
 		if err != nil {
 			return err
 		}
-		sp, err := insertSnapshotRecord(ctx, bh, snapshot.snapshotName, snapshot.ts, uint64(toAccountId), srcAccountName)
+		sp, err := insertSnapshotRecord(ctx, bh, snapshot.snapshotName, snapshot.ts, uint64(srcAccountId), srcAccountName)
 		if err != nil {
 			return err
 		}
