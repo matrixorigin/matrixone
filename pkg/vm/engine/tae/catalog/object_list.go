@@ -139,9 +139,23 @@ func (l *ObjectList) DropObjectByID(id *objectio.ObjectId, txn txnif.TxnReader) 
 	l.Update(droppedObj, obj)
 	return
 }
-func (l *ObjectList) Set(object *ObjectEntry) {
+func (l *ObjectList) Set(object *ObjectEntry, registerSortHint bool) {
 	l.Lock()
 	defer l.Unlock()
+	if registerSortHint {
+		// todo remove it
+		for _, sortHint := range l.sortHint_objectID {
+			if sortHint == object.SortHint {
+				panic("logic error")
+			}
+		}
+		l.sortHint_objectID[object.ID] = object.SortHint
+	} else {
+		sortHint, ok := l.sortHint_objectID[object.ID]
+		if !ok || sortHint != object.SortHint {
+			panic("logic error")
+		}
+	}
 	oldTree := l.tree.Load()
 	newTree := oldTree.Copy()
 	newTree.Set(object)
@@ -182,7 +196,7 @@ func (l *ObjectList) UpdateObjectInfo(obj *ObjectEntry, txn txnif.TxnReader, sta
 		return false, err
 	}
 	newObj, isNew := obj.GetUpdateEntry(txn, stats)
-	l.Set(newObj)
+	l.Set(newObj, false)
 	return
 }
 
@@ -193,6 +207,6 @@ func (l *ObjectList) SetSorted(id *objectio.ObjectId) {
 	}
 	obj := objs[len(objs)-1]
 	newObj := obj.GetSortedEntry()
-	l.Set(newObj)
+	l.Set(newObj, false)
 	return
 }

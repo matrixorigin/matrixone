@@ -371,6 +371,7 @@ func (catalog *Catalog) onReplayUpdateObject(
 		obj.ID = *cmd.ID.ObjectID()
 		obj.table = rel
 		obj.ObjectNode = *cmd.node
+		obj.SortHint = catalog.NextObject()
 		obj.CreateNode = cmd.mvccNode
 		rel.AddEntryLocked(obj)
 	}
