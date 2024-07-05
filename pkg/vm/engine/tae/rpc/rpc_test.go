@@ -760,8 +760,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	hideCol, err := GetHideKeysOfTable(tbH)
 	assert.NoError(t, err)
 
-	it = tbH.MakeObjectIt()
-	blk := it.GetObject()
+	blk := testutil.GetOneObject(tbH)
 	cv, err := blk.GetColumnDataByName(context.Background(), 0, hideCol[0].Name, common.DefaultAllocator)
 	assert.NoError(t, err)
 	defer cv.Close()
@@ -1029,15 +1028,12 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 	// read row ids
 	hideCol, err := GetHideKeysOfTable(tbH)
 	assert.NoError(t, err)
-	it = tbH.MakeObjectIt()
-	cv, err := it.GetObject().GetColumnDataByName(context.Background(), 0, hideCol[0].Name, common.DefaultAllocator)
+	cv, err := testutil.GetOneObject(tbH).GetColumnDataByName(context.Background(), 0, hideCol[0].Name, common.DefaultAllocator)
 	assert.NoError(t, err)
 	defer cv.Close()
-	pk, err := it.GetObject().GetColumnDataByName(context.Background(), 0, schema.GetPrimaryKey().GetName(), common.DefaultAllocator)
+	pk, err := testutil.GetOneObject(tbH).GetColumnDataByName(context.Background(), 0, schema.GetPrimaryKey().GetName(), common.DefaultAllocator)
 	assert.NoError(t, err)
 	defer pk.Close()
-
-	_ = it.Close()
 
 	delBat := batch.New(true, []string{hideCol[0].Name, schema.GetPrimaryKey().GetName()})
 	delBat.Vecs[0] = cv.GetData().GetDownstreamVector()
@@ -1350,8 +1346,7 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 
 	hideCol, err := GetHideKeysOfTable(tbH)
 	assert.NoError(t, err)
-	it = tbH.MakeObjectIt()
-	v, err := it.GetObject().GetColumnDataByName(context.Background(), 0, hideCol[0].Name, common.DefaultAllocator)
+	v, err := testutil.GetOneObject(tbH).GetColumnDataByName(context.Background(), 0, hideCol[0].Name, common.DefaultAllocator)
 	assert.NoError(t, err)
 	defer v.Close()
 
@@ -1701,16 +1696,13 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		hideCol, err := GetHideKeysOfTable(tbH)
 		assert.NoError(t, err)
 
-		it := tbH.MakeObjectIt()
-		v, err := it.GetObject().GetColumnDataByName(context.Background(), 0, hideCol[0].Name, common.DefaultAllocator)
+		v, err := testutil.GetOneObject(tbH).GetColumnDataByName(context.Background(), 0, hideCol[0].Name, common.DefaultAllocator)
 		assert.NoError(t, err)
 		defer v.Close()
 
-		pk, err := it.GetObject().GetColumnDataByName(context.Background(), 0, schema.GetPrimaryKey().GetName(), common.DefaultAllocator)
+		pk, err := testutil.GetOneObject(tbH).GetColumnDataByName(context.Background(), 0, schema.GetPrimaryKey().GetName(), common.DefaultAllocator)
 		assert.NoError(t, err)
 		defer pk.Close()
-
-		_ = it.Close()
 
 		delBat = batch.New(true, []string{hideCol[0].Name, schema.GetPrimaryKey().GetName()})
 		delBat.Vecs[0] = v.GetData().GetDownstreamVector()

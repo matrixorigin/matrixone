@@ -361,8 +361,14 @@ type ObjectMVCCHandle struct {
 }
 
 func NewObjectMVCCHandle(meta *catalog.ObjectEntry) *ObjectMVCCHandle {
+	var rwMutex *sync.RWMutex
+	if meta.GetObjectData() != nil {
+		rwMutex = meta.GetObjectData().GetMutex()
+	} else {
+		rwMutex = &sync.RWMutex{}
+	}
 	node := &ObjectMVCCHandle{
-		RWMutex: meta.GetObjectData().GetMutex(),
+		RWMutex: rwMutex,
 		meta:    meta,
 		deletes: make(map[uint16]*MVCCHandle),
 	}
