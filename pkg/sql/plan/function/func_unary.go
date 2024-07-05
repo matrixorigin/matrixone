@@ -1560,6 +1560,7 @@ func LastDay(
 					if err := rs.AppendBytes(nil, true); err != nil {
 						return err
 					}
+					continue
 				}
 			} else {
 				dtt, err = types.ParseDatetime(day, 6)
@@ -1567,6 +1568,7 @@ func LastDay(
 					if err := rs.AppendBytes(nil, true); err != nil {
 						return err
 					}
+					continue
 				}
 				dt = dtt.ToDate()
 			}
