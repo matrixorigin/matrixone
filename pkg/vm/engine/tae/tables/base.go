@@ -816,7 +816,7 @@ func (blk *baseObject) PPString(level common.PPLevel, depth int, prefix string, 
 		}
 		if mvcc := blk.tryGetMVCC(); mvcc != nil {
 			if blkid >= 0 {
-				deletestr = mvcc.StringBlk(level, 0, "", blkid)
+				deletestr = mvcc.StringBlkLocked(level, 0, "", blkid)
 			} else {
 				deletestr = mvcc.String(level, 0, "")
 			}

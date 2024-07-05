@@ -369,7 +369,7 @@ func (node *memoryNode) GetRowByFilter(
 			return
 		}
 		var deleted bool
-		deleted, err = objMVCC.IsDeleted(row, txn, 0)
+		deleted, err = objMVCC.IsDeletedLocked(row, txn, 0)
 		if err != nil {
 			return
 		}

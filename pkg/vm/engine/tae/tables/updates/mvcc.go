@@ -414,14 +414,6 @@ func (n *ObjectMVCCHandle) IsDeletedLocked(
 	return deletes.IsDeletedLocked(row, txn)
 }
 
-func (n *ObjectMVCCHandle) IsDeleted(
-	row uint32, txn txnif.TxnReader, blkID uint16,
-) (bool, error) {
-	n.RLock()
-	defer n.RUnlock()
-	return n.IsDeletedLocked(row, txn, blkID)
-}
-
 func (n *ObjectMVCCHandle) UpgradeAllDeleteChain() {
 	for _, deletes := range n.deletes {
 		deletes.upgradeDeleteChain()
@@ -512,11 +504,6 @@ func (n *ObjectMVCCHandle) StringBlkLocked(level common.PPLevel, depth int, pref
 		s = fmt.Sprintf("%s%s", s, d.StringLocked(level, depth+1, prefix))
 	}
 	return s
-}
-func (n *ObjectMVCCHandle) StringBlk(level common.PPLevel, depth int, prefix string, blkid int) string {
-	n.RLock()
-	defer n.RUnlock()
-	return n.StringBlkLocked(level, depth, prefix, blkid)
 }
 
 func (n *ObjectMVCCHandle) GetDeleteCnt() uint32 {
