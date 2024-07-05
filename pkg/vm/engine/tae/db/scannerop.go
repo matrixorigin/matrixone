@@ -15,7 +15,6 @@
 package db
 
 import (
-	"math"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -42,6 +41,7 @@ type MergeTaskBuilder struct {
 	objDeltaLocCnt    map[*catalog.ObjectEntry]int
 	objDeltaLocRowCnt map[*catalog.ObjectEntry]uint32
 	distinctDeltaLocs map[string]struct{}
+	mergingObjs       map[*catalog.ObjectEntry]struct{}
 
 	objPolicy   merge.Policy
 	executor    *merge.MergeExecutor
@@ -62,6 +62,7 @@ func newMergeTaskBuilder(db *DB) *MergeTaskBuilder {
 		objDeltaLocRowCnt: make(map[*catalog.ObjectEntry]uint32),
 		distinctDeltaLocs: make(map[string]struct{}),
 		objDeltaLocCnt:    make(map[*catalog.ObjectEntry]int),
+		mergingObjs:       make(map[*catalog.ObjectEntry]struct{}),
 	}
 
 	op.DatabaseFn = op.onDataBase
@@ -102,6 +103,11 @@ func (s *MergeTaskBuilder) resetForTable(entry *catalog.TableEntry) {
 
 func (s *MergeTaskBuilder) PreExecute() error {
 	s.executor.RefreshMemInfo()
+	for obj := range s.mergingObjs {
+		if !objectValid(obj) {
+			delete(s.mergingObjs, obj)
+		}
+	}
 	return nil
 }
 
@@ -178,13 +184,6 @@ func (s *MergeTaskBuilder) onTable(tableEntry *catalog.TableEntry) (err error) {
 			}
 		}
 	}
-
-	rate := float64(deltaLocRows) / float64(tblRows)
-	if !math.IsNaN(rate) {
-		logutil.Infof(
-			"[DeltaLoc Merge] tblId: %s(%d), rows: %d, deltaLoc: %d, deltaLocRows: %d, rate: %f",
-			s.name, s.tid, tblRows, distinctDeltaLocs, deltaLocRows, rate)
-	}
 	return
 }
 
@@ -199,12 +198,18 @@ func (s *MergeTaskBuilder) onPostTable(tableEntry *catalog.TableEntry) (err erro
 	mobjs, kind := s.objPolicy.Revise(s.executor.CPUPercent(), int64(s.executor.MemAvailBytes()),
 		merge.DisableDeltaLocMerge.Load())
 	if len(mobjs) > 1 {
+		for _, m := range mobjs {
+			s.mergingObjs[m] = struct{}{}
+		}
 		s.executor.ExecuteFor(tableEntry, mobjs, kind)
 	}
 	return
 }
 
 func (s *MergeTaskBuilder) onObject(objectEntry *catalog.ObjectEntry) (err error) {
+	if _, ok := s.mergingObjs[objectEntry]; ok {
+		return moerr.GetOkStopCurrRecur()
+	}
 	if !objectEntry.IsActive() {
 		return moerr.GetOkStopCurrRecur()
 	}
