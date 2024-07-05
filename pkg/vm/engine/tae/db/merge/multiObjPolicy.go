@@ -30,9 +30,8 @@ type multiObjConfig struct {
 }
 
 type multiObjPolicy struct {
-	config      *multiObjConfig
-	objects     []*catalog.ObjectEntry
-	mergingObjs map[*catalog.ObjectEntry]struct{}
+	config  *multiObjConfig
+	objects []*catalog.ObjectEntry
 }
 
 func (m *multiObjConfig) adjust() {
@@ -47,16 +46,12 @@ func newMultiObjPolicy(config *multiObjConfig) *multiObjPolicy {
 	}
 	config.adjust()
 	return &multiObjPolicy{
-		config:      config,
-		objects:     make([]*catalog.ObjectEntry, 0, config.maxObjs),
-		mergingObjs: make(map[*catalog.ObjectEntry]struct{}),
+		config:  config,
+		objects: make([]*catalog.ObjectEntry, 0, config.maxObjs),
 	}
 }
 
 func (m *multiObjPolicy) onObject(obj *catalog.ObjectEntry) {
-	if _, ok := m.mergingObjs[obj]; ok {
-		return
-	}
 	m.objects = append(m.objects, obj)
 }
 
@@ -67,9 +62,6 @@ func (m *multiObjPolicy) revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHos
 	if !m.objects[0].GetSortKeyZonemap().IsInited() {
 		revisedObj := make([]*catalog.ObjectEntry, m.config.maxObjs)
 		n := copy(revisedObj, m.objects)
-		for _, obj := range revisedObj[:n] {
-			m.mergingObjs[obj] = struct{}{}
-		}
 		return revisedObj[:n], TaskHostDN
 	}
 
@@ -114,22 +106,11 @@ func (m *multiObjPolicy) revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHos
 	}
 	revisedObj := make([]*catalog.ObjectEntry, len(objs))
 	copy(revisedObj, objs)
-	for _, obj := range revisedObj {
-		m.mergingObjs[obj] = struct{}{}
-	}
 	return revisedObj, TaskHostDN
 }
 
 func (m *multiObjPolicy) resetForTable(*catalog.TableEntry) {
 	m.objects = m.objects[:0]
-}
-
-func (m *multiObjPolicy) preExecute() {
-	for obj := range m.mergingObjs {
-		if !objectValid(obj) {
-			delete(m.mergingObjs, obj)
-		}
-	}
 }
 
 type entrySet struct {

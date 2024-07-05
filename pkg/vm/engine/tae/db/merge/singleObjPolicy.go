@@ -128,5 +128,3 @@ func (s *singleObjPolicy) resetForTable(tableEntry *catalog.TableEntry) {
 	s.objects = s.objects[:0]
 	clear(s.distinctDeltaLoc)
 }
-
-func (s *singleObjPolicy) preExecute() {}

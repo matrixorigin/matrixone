@@ -211,8 +211,6 @@ type policy interface {
 	revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind)
 	onObject(*catalog.ObjectEntry)
 	resetForTable(*catalog.TableEntry)
-
-	preExecute()
 }
 
 func NewUpdatePolicyReq(c *BasicPolicyConfig) *api.AlterTableReq {
