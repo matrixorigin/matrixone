@@ -96,9 +96,10 @@ func (m *multiObjPolicy) revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHos
 		} else if len(set.entries) == 1 {
 			set.reset(t)
 			set.add(t, obj)
-		} else if set.size > common.DefaultMaxOsizeObjMB*common.Const1MBytes {
-			break
 		} else {
+			break
+		}
+		if set.size > common.DefaultMaxOsizeObjMB*common.Const1MBytes {
 			break
 		}
 	}
