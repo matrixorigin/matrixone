@@ -256,7 +256,7 @@ func (entry *TableEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	return newTableCmd(id, cmdType, entry), nil
 }
 func (entry *TableEntry) AddEntryLocked(obj *ObjectEntry) {
-	entry.link.Set(obj,true)
+	entry.link.Set(obj, true)
 }
 
 func (entry *TableEntry) deleteEntryLocked(objectEntry *ObjectEntry) error {

@@ -51,7 +51,7 @@ func newMemoryNode(object *baseObject) *memoryNode {
 	impl.object = object
 
 	// Get the lastest schema, it will not be modified, so just keep the pointer
-	schema := object.meta.GetSchemaLocked()
+	schema := object.meta.Load().GetSchemaLocked()
 	impl.writeSchema = schema
 	// impl.data = containers.BuildBatchWithPool(
 	// 	schema.AllNames(), schema.AllTypes(), 0, object.rt.VectorPool.Memtable,
@@ -85,7 +85,7 @@ func (node *memoryNode) initPKIndex(schema *catalog.Schema) {
 
 func (node *memoryNode) close() {
 	mvcc := node.object.appendMVCC
-	logutil.Debugf("Releasing Memorynode BLK-%s", node.object.meta.ID.String())
+	logutil.Debugf("Releasing Memorynode BLK-%s", node.object.meta.Load().ID.String())
 	if node.data != nil {
 		node.data.Close()
 		node.data = nil
@@ -297,7 +297,7 @@ func (node *memoryNode) PrepareAppend(rows uint32) (n uint32, err error) {
 func (node *memoryNode) FillPhyAddrColumn(startRow, length uint32) (err error) {
 	var col *vector.Vector
 	if col, err = objectio.ConstructRowidColumn(
-		objectio.NewBlockidWithObjectID(&node.object.meta.ID, 0),
+		objectio.NewBlockidWithObjectID(&node.object.meta.Load().ID, 0),
 		startRow,
 		length,
 		common.MutMemAllocator,
