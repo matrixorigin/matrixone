@@ -160,13 +160,13 @@ type Object interface {
 	FreezeAppend()
 	UpdateDeltaLoc(txn txnif.TxnReader, blkID uint16, deltaLoc objectio.Location) (bool, txnif.TxnEntry, error)
 	UpdateMeta(meta any)
-	GetMutex() *sync.RWMutex 
+	GetMutex() *sync.RWMutex
 	Close()
 }
 
 type Tombstone interface {
 	EstimateMemSizeLocked() (dsize int)
-	GetChangeIntentionCnt() uint32
+	GetChangeIntentionCntLocked() uint32
 	GetDeleteCnt() uint32
 	GetDeletesListener() func(uint64, types.TS) error
 	GetDeltaLocAndCommitTSByTxn(blkID uint16, txn txnif.TxnReader) (objectio.Location, types.TS)

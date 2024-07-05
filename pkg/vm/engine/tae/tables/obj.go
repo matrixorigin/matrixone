@@ -188,7 +188,7 @@ func (obj *object) estimateRawScore() (score int, dropped bool) {
 	obj.RLock()
 	objectMVCC := obj.tryGetMVCC()
 	if objectMVCC != nil {
-		changeCnt = objectMVCC.GetChangeIntentionCnt()
+		changeCnt = objectMVCC.GetChangeIntentionCntLocked()
 	}
 	obj.RUnlock()
 	if changeCnt == 0 {

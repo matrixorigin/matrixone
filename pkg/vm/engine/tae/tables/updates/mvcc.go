@@ -397,12 +397,10 @@ func (n *ObjectMVCCHandle) GetDeletesListener() func(uint64, types.TS) error {
 	return n.deletesListener
 }
 
-func (n *ObjectMVCCHandle) GetChangeIntentionCnt() uint32 {
-	n.RLock()
-	defer n.RUnlock()
+func (n *ObjectMVCCHandle) GetChangeIntentionCntLocked() uint32 {
 	changes := uint32(0)
 	for _, deletes := range n.deletes {
-		changes += deletes.GetChangeIntentionCnt()
+		changes += deletes.GetChangeIntentionCntLocked()
 	}
 	return changes
 }
@@ -852,9 +850,9 @@ func (n *MVCCHandle) DecChangeIntentionCnt() {
 	n.changes.Add(^uint32(0))
 }
 
-// GetChangeIntentionCnt returns the number of operation of delete, which is updated before commiting.
+// GetChangeIntentionCntLocked returns the number of operation of delete, which is updated before commiting.
 // Note: Now it is ** only ** used in checkpointe runner to check whether this block has any chance to be flushed
-func (n *MVCCHandle) GetChangeIntentionCnt() uint32 {
+func (n *MVCCHandle) GetChangeIntentionCntLocked() uint32 {
 	return n.changes.Load()
 }
 
