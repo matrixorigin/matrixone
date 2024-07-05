@@ -16,8 +16,8 @@ SELECT * FROM `mysql`.`tables_priv` LIMIT 0,1000;
 SELECT * FROM `mysql`.`user` LIMIT 0,1000;
 use mysql;
 show tables;
--- @ignore:0,1
-show columns from `user`;
+-- @ignore:0
+# show columns from `user`;
 -- @ignore:0
 show columns from `db`;
 -- @ignore:0
