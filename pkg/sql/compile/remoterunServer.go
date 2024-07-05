@@ -387,9 +387,6 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 		cnInfo.hakeeper,
 		cnInfo.udfService,
 		cnInfo.aicm)
-	if proc.Cancel != nil {
-		proc.Cancel()
-	}
 	proc.Ctx = runningCtx
 	proc.Cancel = runningCancel
 	proc.UnixTime = pHelper.unixTime
