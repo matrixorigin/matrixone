@@ -422,6 +422,7 @@ func createCompile(
 	defer stats.CompileEnd()
 	defer func() {
 		if err != nil && retCompile != nil {
+			retCompile.SetIsPrepare(false)
 			retCompile.Release()
 			retCompile = nil
 		}
