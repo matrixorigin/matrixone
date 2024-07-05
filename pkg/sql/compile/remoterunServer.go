@@ -529,7 +529,7 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 		analysisNodeList: procInfo.GetAnalysisNodeList(),
 	}
 	if procInfo.PrepareParams != nil {
-		result.prepareParams = &vector.Vector{}
+		result.prepareParams = vector.NewVecFromReuse()
 		err = result.prepareParams.UnmarshalBinary(procInfo.PrepareParams)
 		if err != nil {
 			return processHelper{}, err

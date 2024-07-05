@@ -197,7 +197,7 @@ func (c *codecService) Decode(
 	proc.Base.SessionInfo = sessionInfo
 	proc.Base.SessionInfo.StorageEngine = c.engine
 	if value.PrepareParams != nil {
-		proc.Base.prepareParams = &vector.Vector{}
+		proc.Base.prepareParams = vector.NewVecFromReuse()
 		err = proc.Base.prepareParams.UnmarshalBinary(value.PrepareParams)
 		if err != nil {
 			return nil, err
