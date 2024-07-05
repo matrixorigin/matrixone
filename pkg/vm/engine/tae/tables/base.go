@@ -79,6 +79,8 @@ func newBaseObject(
 	blk.RWMutex = blk.appendMVCC.RWMutex
 	return blk
 }
+
+func (blk *baseObject) GetMutex() *sync.RWMutex { return blk.RWMutex }
 func (blk *baseObject) UpdateMeta(meta any) {
 	blk.meta.Store(meta.(*catalog.ObjectEntry))
 }

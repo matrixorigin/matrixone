@@ -16,6 +16,7 @@ package data
 
 import (
 	"context"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -159,6 +160,7 @@ type Object interface {
 	FreezeAppend()
 	UpdateDeltaLoc(txn txnif.TxnReader, blkID uint16, deltaLoc objectio.Location) (bool, txnif.TxnEntry, error)
 	UpdateMeta(meta any)
+	GetMutex() *sync.RWMutex 
 	Close()
 }
 
