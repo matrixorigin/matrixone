@@ -143,8 +143,8 @@ func (entry *ObjectEntry) Clone() *ObjectEntry {
 			sorted:        entry.sorted,
 			remainingRows: entry.remainingRows,
 		},
-		objData:                  entry.objData,
-		ObjectState:              entry.ObjectState,
+		objData:     entry.objData,
+		ObjectState: entry.ObjectState,
 	}
 	return obj
 }
@@ -299,8 +299,9 @@ func NewObjectEntry(
 		ID:    *id,
 		table: table,
 		ObjectNode: ObjectNode{
-			state:    state,
-			SortHint: table.GetDB().catalog.NextObject(),
+			state:         state,
+			SortHint:      table.GetDB().catalog.NextObject(),
+			remainingRows: &common.FixedSampleIII[int]{},
 		},
 		CreateNode: &MVCCNode[*ObjectMVCCNode]{
 			EntryMVCCNode: &EntryMVCCNode{
@@ -329,9 +330,10 @@ func NewObjectEntryByMetaLocation(
 		ID:    *id,
 		table: table,
 		ObjectNode: ObjectNode{
-			state:    state,
-			sorted:   state == ES_NotAppendable,
-			SortHint: table.GetDB().catalog.NextObject(),
+			state:         state,
+			sorted:        state == ES_NotAppendable,
+			SortHint:      table.GetDB().catalog.NextObject(),
+			remainingRows: &common.FixedSampleIII[int]{},
 		},
 		CreateNode: &MVCCNode[*ObjectMVCCNode]{
 			EntryMVCCNode: &EntryMVCCNode{
@@ -358,8 +360,9 @@ func NewStandaloneObject(table *TableEntry, ts types.TS) *ObjectEntry {
 		ID:    *objectio.NewObjectid(),
 		table: table,
 		ObjectNode: ObjectNode{
-			state:   ES_Appendable,
-			IsLocal: true,
+			state:         ES_Appendable,
+			IsLocal:       true,
+			remainingRows: &common.FixedSampleIII[int]{},
 		},
 		CreateNode: &MVCCNode[*ObjectMVCCNode]{
 			EntryMVCCNode: &EntryMVCCNode{
@@ -764,8 +767,10 @@ func MockObjEntryWithTbl(tbl *TableEntry, size uint64) *ObjectEntry {
 	objectio.SetObjectStatsRowCnt(stats, uint32(1))
 	ts := types.BuildTS(time.Now().UnixNano(), 0)
 	e := &ObjectEntry{
-		table:      tbl,
-		ObjectNode: ObjectNode{},
+		table: tbl,
+		ObjectNode: ObjectNode{
+			remainingRows: &common.FixedSampleIII[int]{},
+		},
 		CreateNode: &MVCCNode[*ObjectMVCCNode]{
 			EntryMVCCNode: &EntryMVCCNode{
 				CreatedAt: ts,

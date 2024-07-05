@@ -373,6 +373,7 @@ func (catalog *Catalog) onReplayUpdateObject(
 		obj.ObjectNode = *cmd.node
 		obj.SortHint = catalog.NextObject()
 		obj.CreateNode = cmd.mvccNode
+		obj.remainingRows = &common.FixedSampleIII[int]{}
 		rel.AddEntryLocked(obj)
 	}
 	if cmd.mvccNode.DeletedAt.Equal(&txnif.UncommitTS) {
@@ -446,6 +447,7 @@ func (catalog *Catalog) onReplayCheckpointObject(
 			BaseNode:      objNode,
 			TxnMVCCNode:   txnNode,
 		}
+		obj.remainingRows = &common.FixedSampleIII[int]{}
 		rel.AddEntryLocked(obj)
 	}
 	if entryNode.DeletedAt.Equal(&txnNode.End) {

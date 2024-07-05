@@ -207,7 +207,7 @@ type ObjectNode struct {
 	SortHint uint64 // sort object by create time, make iteration on object determined
 	sorted   bool   // deprecated
 
-	remainingRows common.FixedSampleIII[int]
+	remainingRows *common.FixedSampleIII[int]
 }
 
 const (

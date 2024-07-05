@@ -220,7 +220,7 @@ func (blk *baseObject) fillInMemoryDeletesLocked(
 		return
 	}
 	chain := deleteHandle.GetDeleteChain()
-	deletes, err := chain.CollectDeletes(txn, rwlocker)
+	deletes, err := chain.CollectDeletesLocked(txn, rwlocker)
 	if err != nil || deletes.IsEmpty() {
 		return
 	}

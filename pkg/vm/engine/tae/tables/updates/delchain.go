@@ -367,11 +367,9 @@ func mergeDelete(mask *nulls.Bitmap, node *DeleteNode) {
 	}
 }
 
-func (chain *DeleteChain) CollectDeletes(
+func (chain *DeleteChain) CollectDeletesLocked(
 	txn txnif.TxnReader,
 	rwlocker *sync.RWMutex) (merged *nulls.Bitmap, err error) {
-	chain.RLock()
-	defer chain.RUnlock()
 	for {
 		needWaitFound := false
 		merged = chain.mask.Clone()
