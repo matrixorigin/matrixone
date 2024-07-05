@@ -260,7 +260,7 @@ func (entry *TableEntry) AddEntryLocked(obj *ObjectEntry) {
 }
 
 func (entry *TableEntry) deleteEntryLocked(objectEntry *ObjectEntry) error {
-	entry.link.deleteEntryLocked(&objectEntry.ID)
+	entry.link.deleteEntryLocked(objectEntry.SortHint)
 	return nil
 }
 

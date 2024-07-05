@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -36,7 +37,6 @@ import (
 type ObjectDataFactory = func(meta *ObjectEntry) data.Object
 type TombstoneFactory = func(meta *ObjectEntry) data.Tombstone
 type ObjectEntry struct {
-	list   *ObjectList
 	ID     types.Objectid
 	blkCnt int
 
@@ -48,7 +48,7 @@ type ObjectEntry struct {
 	objData     data.Object
 	ObjectState uint8
 
-	HasPrintedPrepareComapct bool
+	HasPrintedPrepareComapct atomic.Bool
 }
 
 func NewObjectMVCCNode() *MVCCNode[*ObjectMVCCNode] {
@@ -131,7 +131,6 @@ func (entry *ObjectEntry) GetLastMVCCNode() *MVCCNode[*ObjectMVCCNode] {
 }
 func (entry *ObjectEntry) Clone() *ObjectEntry {
 	obj := &ObjectEntry{
-		list:       entry.list,
 		ID:         entry.ID,
 		blkCnt:     entry.blkCnt,
 		CreateNode: entry.CreateNode.CloneAll(),
@@ -146,7 +145,6 @@ func (entry *ObjectEntry) Clone() *ObjectEntry {
 		},
 		objData:                  entry.objData,
 		ObjectState:              entry.ObjectState,
-		HasPrintedPrepareComapct: entry.HasPrintedPrepareComapct,
 	}
 	return obj
 }
@@ -190,10 +188,10 @@ func (entry *ObjectEntry) DeleteBefore(ts types.TS) bool {
 	return deleteTS.Less(&ts)
 }
 func (entry *ObjectEntry) GetLatestNode() *ObjectEntry {
-	return entry.list.GetLastestNode(&entry.ID)
+	return entry.table.link.GetLastestNode(entry.SortHint)
 }
 func (entry *ObjectEntry) ApplyCommit(tid string) error {
-	lastNode := entry.list.GetLastestNode(&entry.ID)
+	lastNode := entry.table.link.GetLastestNode(entry.SortHint)
 	if lastNode == nil {
 		panic("logic error")
 	}
@@ -216,12 +214,12 @@ func (entry *ObjectEntry) ApplyCommit(tid string) error {
 		return err
 	}
 	entry.objData.UpdateMeta(newNode)
-	entry.list.Update(newNode, lastNode)
+	entry.table.link.Update(newNode, lastNode)
 	return nil
 }
 func (entry *ObjectEntry) ApplyRollback() error { panic("not support") }
 func (entry *ObjectEntry) PrepareCommit() error {
-	lastNode := entry.list.GetLastestNode(&entry.ID)
+	lastNode := entry.table.link.GetLastestNode(entry.SortHint)
 	if lastNode == nil {
 		panic("logic error")
 	}
@@ -241,7 +239,7 @@ func (entry *ObjectEntry) PrepareCommit() error {
 		return err
 	}
 	entry.objData.UpdateMeta(newNode)
-	entry.list.Update(newNode, lastNode)
+	entry.table.link.Update(newNode, lastNode)
 	return nil
 }
 func (entry *ObjectEntry) IsDeletesFlushedBefore(ts types.TS) bool {
@@ -299,7 +297,6 @@ func NewObjectEntry(
 ) *ObjectEntry {
 	e := &ObjectEntry{
 		ID:    *id,
-		list:  table.link,
 		table: table,
 		ObjectNode: ObjectNode{
 			state:    state,
@@ -359,7 +356,6 @@ func NewReplayObjectEntry() *ObjectEntry {
 func NewStandaloneObject(table *TableEntry, ts types.TS) *ObjectEntry {
 	e := &ObjectEntry{
 		ID:    *objectio.NewObjectid(),
-		list:  table.link,
 		table: table,
 		ObjectNode: ObjectNode{
 			state:   ES_Appendable,
@@ -380,7 +376,6 @@ func NewStandaloneObject(table *TableEntry, ts types.TS) *ObjectEntry {
 func NewSysObjectEntry(table *TableEntry, id types.Uuid) *ObjectEntry {
 	e := &ObjectEntry{
 		table: table,
-		list:  table.link,
 		ObjectNode: ObjectNode{
 			state: ES_Appendable,
 		},
@@ -484,7 +479,7 @@ func (entry *ObjectEntry) Less(b *ObjectEntry) bool {
 }
 
 func (entry *ObjectEntry) UpdateObjectInfo(txn txnif.TxnReader, stats *objectio.ObjectStats) (isNewNode bool, err error) {
-	return entry.list.UpdateObjectInfo(entry, txn, stats)
+	return entry.table.link.UpdateObjectInfo(entry, txn, stats)
 }
 
 func (entry *ObjectEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
@@ -579,7 +574,7 @@ func (entry *ObjectEntry) IsAppendable() bool {
 }
 
 func (entry *ObjectEntry) SetSorted() {
-	entry.list.SetSorted(&entry.ID)
+	entry.table.link.SetSorted(entry.SortHint)
 }
 
 func (entry *ObjectEntry) IsSorted() bool {
@@ -617,13 +612,13 @@ func (entry *ObjectEntry) GetLatestCommittedNode() *MVCCNode[*ObjectMVCCNode] {
 func (entry *ObjectEntry) GetCatalog() *Catalog { return entry.table.db.catalog }
 
 func (entry *ObjectEntry) PrepareRollback() (err error) {
-	lastNode := entry.list.GetLastestNode(&entry.ID)
+	lastNode := entry.table.link.GetLastestNode(entry.SortHint)
 	if lastNode == nil {
 		panic("logic error")
 	}
 	switch lastNode.ObjectState {
 	case ObjectState_Create_Active:
-		entry.list.Delete(lastNode)
+		entry.table.link.Delete(lastNode)
 	case ObjectState_Delete_Active:
 		entry.DeleteNode = nil
 	default:
@@ -741,10 +736,10 @@ func (entry *ObjectEntry) CheckPrintPrepareCompactLocked() bool {
 }
 
 func (entry *ObjectEntry) PrintPrepareCompactDebugLog() {
-	if entry.HasPrintedPrepareComapct {
+	if entry.HasPrintedPrepareComapct.Load() {
 		return
 	}
-	entry.HasPrintedPrepareComapct = true
+	entry.HasPrintedPrepareComapct.Store(true)
 	s := fmt.Sprintf("prepare compact failed, obj %v", entry.PPString(3, 0, ""))
 	lastNode := entry.GetLastMVCCNode()
 	startTS := lastNode.GetStart()
@@ -769,7 +764,6 @@ func MockObjEntryWithTbl(tbl *TableEntry, size uint64) *ObjectEntry {
 	objectio.SetObjectStatsRowCnt(stats, uint32(1))
 	ts := types.BuildTS(time.Now().UnixNano(), 0)
 	e := &ObjectEntry{
-		list:       tbl.link,
 		table:      tbl,
 		ObjectNode: ObjectNode{},
 		CreateNode: &MVCCNode[*ObjectMVCCNode]{

@@ -54,20 +54,23 @@ func NewObjectList() *ObjectList {
 	return list
 }
 
-func (l *ObjectList) GetObjectByID(id *types.Objectid) (obj *ObjectEntry, err error) {
-	obj = l.GetLastestNode(id)
+func (l *ObjectList) GetObjectByID(objectID *objectio.ObjectId) (obj *ObjectEntry, err error) {
+	l.RLock()
+	sortHint := l.sortHint_objectID[*objectID]
+	l.RUnlock()
+	obj = l.GetLastestNode(sortHint)
 	if obj == nil {
 		err = moerr.GetOkExpectedEOB()
 	}
 	return
 }
 
-func (l *ObjectList) deleteEntryLocked(obj *objectio.ObjectId) error {
+func (l *ObjectList) deleteEntryLocked(sortHint uint64) error {
 	l.Lock()
 	defer l.Unlock()
 	oldTree := l.tree.Load()
 	newTree := oldTree.Copy()
-	objs := l.GetAllNodes(obj)
+	objs := l.GetAllNodes(sortHint)
 	for _, obj := range objs {
 		newTree.Delete(obj)
 	}
@@ -78,30 +81,25 @@ func (l *ObjectList) deleteEntryLocked(obj *objectio.ObjectId) error {
 	return nil
 }
 
-func (l *ObjectList) GetAllNodes(objID *objectio.ObjectId) []*ObjectEntry {
+func (l *ObjectList) GetAllNodes(sortHint uint64) []*ObjectEntry {
 	it := l.tree.Load().Iter()
 	defer it.Release()
-	hint, ok := l.sortHint_objectID[*objID]
-	if !ok {
-		panic("logic error")
-		// return nil
-	}
 	key := &ObjectEntry{
-		ObjectNode:  ObjectNode{SortHint: hint},
+		ObjectNode:  ObjectNode{SortHint: sortHint},
 		ObjectState: ObjectState_Create_Active,
 	}
-	ok = it.Seek(key)
+	ok := it.Seek(key)
 	if !ok {
 		return nil
 	}
 	obj := it.Item()
-	if obj.ID != *objID {
+	if obj.SortHint != sortHint {
 		return nil
 	}
 	ret := []*ObjectEntry{it.Item()}
 	for it.Next() {
 		obj := it.Item()
-		if obj.ID != *objID {
+		if obj.SortHint != sortHint {
 			break
 		}
 		ret = append(ret, obj)
@@ -109,16 +107,16 @@ func (l *ObjectList) GetAllNodes(objID *objectio.ObjectId) []*ObjectEntry {
 	return ret
 }
 
-func (l *ObjectList) GetLastestNode(objID *objectio.ObjectId) *ObjectEntry {
-	objs := l.GetAllNodes(objID)
+func (l *ObjectList) GetLastestNode(sortHint uint64) *ObjectEntry {
+	objs := l.GetAllNodes(sortHint)
 	if len(objs) == 0 {
 		return nil
 	}
 	return objs[len(objs)-1]
 }
 
-func (l *ObjectList) DropObjectByID(id *objectio.ObjectId, txn txnif.TxnReader) (droppedObj *ObjectEntry, isNew bool, err error) {
-	obj, err := l.GetObjectByID(id)
+func (l *ObjectList) DropObjectByID(objectID *objectio.ObjectId, txn txnif.TxnReader) (droppedObj *ObjectEntry, isNew bool, err error) {
+	obj, err := l.GetObjectByID(objectID)
 	if err != nil {
 		return
 	}
@@ -200,8 +198,8 @@ func (l *ObjectList) UpdateObjectInfo(obj *ObjectEntry, txn txnif.TxnReader, sta
 	return
 }
 
-func (l *ObjectList) SetSorted(id *objectio.ObjectId) {
-	objs := l.GetAllNodes(id)
+func (l *ObjectList) SetSorted(sortHint uint64) {
+	objs := l.GetAllNodes(sortHint)
 	if len(objs) == 0 {
 		panic("logic error")
 	}
