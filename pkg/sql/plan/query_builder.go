@@ -3303,7 +3303,29 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 	case *tree.TableName:
 		schema := string(tbl.SchemaName)
 		table := string(tbl.ObjectName)
-		if len(table) == 0 || table == "dual" { //special table name
+		if len(table) == 0 || len(schema) == 0 && table == "dual" { //special table name
+			//special dual cases.
+			//CORNER CASE 1:
+			//  create table `dual`(a int);
+			//	select * from dual;
+			//		mysql responses:  No tables used
+			//		mysql treats it as the placeholder
+			//		mo treats it also
+			//
+			//CORNER CASE 2: select * from `dual`;
+			//  create table `dual`(a int);
+			//	select * from `dual`;
+			//  	mysql responses: success.
+			//		mysql treats it as the normal table.
+			//		mo treats it also the placeholder.
+			//
+			//CORNER CASE 3:
+			//  create table `dual`(a int);
+			//	select * from db.dual;
+			//		mysql responses: success.
+			//  select * from icp.`dual`;
+			//		mysql responses: success.
+			//Within quote, the mysql treats the 'dual' as the normal table. mo also.
 			nodeID = builder.appendNode(&plan.Node{
 				NodeType: plan.Node_VALUE_SCAN,
 			}, ctx)

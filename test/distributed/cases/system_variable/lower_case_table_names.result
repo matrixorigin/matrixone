@@ -12,7 +12,7 @@ a
 2
 3
 select A from t1;
-a
+A
 1
 2
 3
@@ -22,7 +22,7 @@ a
 2
 3
 select A from T1;
-a
+A
 1
 2
 3
@@ -37,33 +37,32 @@ a
 2
 3
 select tmp.aA from (select a as Aa from t1) as tmp;
-aa
+aA
 1
 2
 3
 select tmp.Aa from (select a as Aa from t1) as tmp;
-aa
+Aa
 1
 2
 3
 select TMp.aA from (select a as Aa from t1) as tmp;
-aa
+aA
 1
 2
 3
 select TMp.Aa from (select a as Aa from t1) as tmp;
-aa
+Aa
 1
 2
 3
 set global lower_case_table_names = 0;
-set refresh_global_sys_vars_mgr = 1;
 select @@lower_case_table_names;
 @@lower_case_table_names
 0
 use test;
 select A from t1;
-a
+A
 1
 2
 3
@@ -82,12 +81,12 @@ a
 select TMP.a from t1 as tmp;
 invalid input: missing FROM-clause entry for table 'TMP'
 select tmp.aA from (select a as Aa from t1) as tmp;
-aa
+aA
 1
 2
 3
 select tmp.Aa from (select a as Aa from t1) as tmp;
-aa
+Aa
 1
 2
 3
@@ -96,7 +95,6 @@ invalid input: missing FROM-clause entry for table 'TMp'
 select TMp.Aa from (select a as Aa from t1) as tmp;
 invalid input: missing FROM-clause entry for table 'TMp'
 drop database test;
-set refresh_global_sys_vars_mgr = 1;
 select @@lower_case_table_names;
 @@lower_case_table_names
 0
@@ -110,7 +108,6 @@ a
 2
 3
 set global lower_case_table_names = 1;
-set refresh_global_sys_vars_mgr = 1;
 select @@lower_case_table_names;
 @@lower_case_table_names
 1
