@@ -2636,7 +2636,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	ses.SetShowStmtType(NotShowStatement)
 	resper := ses.GetResponser()
 	ses.SetSql(input.getSql())
-	input.generateHash()
+	input.genHash()
 
 	//the ses.GetUserName returns the user_name with the account_name.
 	//here,we only need the user_name.
