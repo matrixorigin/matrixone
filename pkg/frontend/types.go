@@ -235,6 +235,7 @@ func (prepareStmt *PrepareStmt) Close() {
 		}
 	}
 	if prepareStmt.compile != nil {
+		prepareStmt.compile.SetIsPrepare(false)
 		prepareStmt.compile.Release()
 		prepareStmt.compile = nil
 	}
