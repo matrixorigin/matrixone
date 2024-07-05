@@ -4792,12 +4792,12 @@ var supportedControlBuiltIns = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				args:       []types.T{types.T_int64, types.T_int64},
+				args:       []types.T{types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return MakeDate
+					return MakeDateString
 				},
 			},
 		},
