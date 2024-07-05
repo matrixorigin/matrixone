@@ -19,12 +19,9 @@ LastDayOfYear
 SELECT '生日快乐！' AS message, MAKEDATE(1990, 100) AS birthday;
 message    birthday
 生日快乐！    1990-04-10
-SELECT
-YEAR(NOW()) - YEAR(MAKEDATE(YEAR(NOW()), 1)) AS years_passed,
-DAY(NOW()) AS days_into_year
-FROM DUAL;
-years_passed    days_into_year
-0    2
+SELECT YEAR(NOW()) - YEAR(MAKEDATE(YEAR(NOW()), 1)) AS years_passed;
+years_passed
+0
 SELECT IF(MAKEDATE(YEAR(NOW()), 366) < NOW(), '闰年', '平年') AS leap_year_status;
 leap_year_status
 平年
@@ -77,3 +74,18 @@ MAKEDATE(2017, 100)
 SELECT MAKEDATE(2017, 366);
 MAKEDATE(2017, 366)
 2018-01-01
+SELECT MAKEDATE(YEAR(NOW()), -2);
+MAKEDATE(YEAR(NOW()), -2)
+null
+SELECT MAKEDATE(2024, 29131750000);
+MAKEDATE(2024, 29131750000)
+null
+SELECT MAKEDATE(29131750000111111111, 2024);
+MAKEDATE(29131750000111111111, 2024)
+null
+SELECT MAKEDATE('2x23', 321);
+MAKEDATE(2x23, 321)
+null
+SELECT MAKEDATE(2024, '');
+MAKEDATE(2024, )
+null
