@@ -25,7 +25,6 @@ import (
 
 	"github.com/KimMachineGun/automemlimit/memlimit"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -56,7 +55,6 @@ type Executor struct {
 	activeEstimateBytes atomic.Int64
 	taskConsume         struct {
 		sync.Mutex
-		o map[objectio.ObjectId]struct{}
 		m activeTaskStats
 	}
 }
@@ -148,10 +146,6 @@ func (e *Executor) ExecuteSingleObjMerge(entry *catalog.TableEntry, mobjs []*cat
 	osize, _, _ := estimateMergeConsume(mobjs)
 	blkCnt := 0
 	for _, obj := range mobjs {
-		blkCnt += obj.BlockCnt()
-	}
-
-	for _, obj := range mobjs {
 		factory := func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
 			return jobs.NewMergeObjectsTask(ctx, txn, []*catalog.ObjectEntry{obj}, e.rt, common.DefaultMaxOsizeObjMB*common.Const1MBytes)
 		}
@@ -165,6 +159,7 @@ func (e *Executor) ExecuteSingleObjMerge(entry *catalog.TableEntry, mobjs []*cat
 		singleOSize, singleESize, _ := estimateSingleObjMergeConsume(obj)
 		e.AddActiveTask(task.ID(), obj.BlockCnt(), singleESize)
 		logSingleObjMergeTask(e.tableName, task.ID(), obj, obj.BlockCnt(), singleOSize, singleESize)
+		blkCnt += obj.BlockCnt()
 	}
 	entry.Stats.AddMerge(osize, len(mobjs), blkCnt)
 }

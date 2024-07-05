@@ -57,9 +57,7 @@ func (m *multiObjPolicy) onObject(obj *catalog.ObjectEntry) {
 	if _, ok := m.mergingObjs[obj]; ok {
 		return
 	}
-	if len(m.objects) < m.config.maxObjs {
-		m.objects = append(m.objects, obj)
-	}
+	m.objects = append(m.objects, obj)
 }
 
 func (m *multiObjPolicy) revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind) {
@@ -93,7 +91,7 @@ func (m *multiObjPolicy) revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHos
 			set.add(t, obj)
 		} else if obj.GetOriginSize() < common.Const1MBytes {
 			set.add(t, obj)
-		} else if set.size < common.Const1MBytes {
+		} else if set.size < 10*common.Const1MBytes {
 			set.add(t, obj)
 		} else if len(set.entries) == 1 {
 			set.reset(t)
@@ -102,11 +100,9 @@ func (m *multiObjPolicy) revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHos
 			break
 		}
 	}
-	if set.size < 20*common.Const1MBytes && set.rows < 10000 {
-		return nil, TaskHostDN
-	}
+
 	if len(set.entries) > m.config.maxObjs {
-		m.objects = set.entries[:m.config.maxObjs]
+		set.entries = set.entries[:m.config.maxObjs]
 	}
 	m.objects = set.entries
 	objs := controlMem(m.objects, mem)
