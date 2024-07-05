@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -267,11 +268,12 @@ func logSingleObjMergeTask(name string, taskId uint64, obj *catalog.ObjectEntry,
 
 func logMergeTask(name string, taskId uint64, merges []*catalog.ObjectEntry, blkn, osize, esize int) {
 	rows := 0
-	infoBuf := &bytes.Buffer{}
+	var infoBuf strings.Builder
 	for _, obj := range merges {
 		r := obj.GetRemainingRows()
+		size := obj.GetOriginSize()
 		rows += r
-		infoBuf.WriteString(fmt.Sprintf(" %d(%s)", r, common.ShortObjId(obj.ID)))
+		infoBuf.WriteString(fmt.Sprintf(" %d(%s)(%d)", r, common.ShortObjId(obj.ID), size))
 	}
 	platform := fmt.Sprintf("t%d", taskId)
 	if taskId == math.MaxUint64 {
