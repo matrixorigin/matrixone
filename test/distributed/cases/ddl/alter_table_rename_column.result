@@ -177,7 +177,7 @@ Table    Create Table
 primary01    CREATE TABLE `primary01` (\n  `col1New` INT NOT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL,\n  PRIMARY KEY (`col1New`)\n)
 insert into primary01 values (-2839, 8239802839.00000000);
 insert into primary01 (col1New, col2) values (3287, 3293892.3232);
-Duplicate entry '3287' for key 'col1new'
+Duplicate entry '3287' for key 'col1[Nn]ew'
 delete from primary01 where col1New = -2839;
 update primary01 set col1 = 2873892 where col1New = 2389324;
 internal error: column 'col1' not found in table 

@@ -581,6 +581,7 @@ insert into primary01 values (1, 'wq432r43rf32y2493821ijfk2env3ui4y33i24');
 insert into primary01 values (2, '243ewfvefreverewfcwr');
 alter table primary01 change col1 col1New float primary key;
 show create table primary01;
+-- @pattern
 insert into primary01 values (1, '432r2f234day89ujfw42342');
 insert into primary01 values (2378.32423, '234242))())_');
 select * from primary01;

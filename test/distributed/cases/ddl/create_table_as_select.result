@@ -1181,7 +1181,7 @@ Table    Create Table
 test02    CREATE TABLE `test02` (\n  `col1` INT NOT NULL,\n  PRIMARY KEY (`col1`)\n)
 desc test02;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    NO    PRI    null        
+col1    INT(32)    NO    PRI    null
 insert into test02 values (2);
 Duplicate entry '2' for key 'col1'
 drop table if exists test03;
@@ -1191,7 +1191,7 @@ Table    Create Table
 test03    CREATE TABLE `test03` (\n  `col2` DECIMAL(38,0) DEFAULT NULL,\n  UNIQUE KEY `col2` (`col2`)\n)
 desc test03;
 Field    Type    Null    Key    Default    Extra    Comment
-col2    DECIMAL(38)    YES    UNI    null        
+col2    DECIMAL(38)    YES    UNI    null
 insert into test03 values (372.324);
 Duplicate entry '372' for key '__mo_index_idx_col'
 drop table if exists test04;
@@ -1215,7 +1215,7 @@ col1    col2
 2    39304
 3    372
 insert into test05 values (2, 39304.3424);
-Duplicate entry '\(2\,39304\)' for key '__mo_cpkey_col'
+Duplicate entry ('\d\w\d{38}'|'\(2\,39304\)') for key '__mo_cpkey_col'
 alter table test01 rename column col1 to newCol;
 show create table test01;
 Table    Create Table

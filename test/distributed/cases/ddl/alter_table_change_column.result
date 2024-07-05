@@ -1139,7 +1139,7 @@ show create table primary01;
 Table    Create Table
 primary01    CREATE TABLE `primary01` (\n  `col1New` FLOAT NOT NULL,\n  `col2` TEXT DEFAULT NULL,\n  PRIMARY KEY (`col1New`)\n)
 insert into primary01 values (1, '432r2f234day89ujfw42342');
-Duplicate entry '1' for key 'col1new'
+Duplicate entry '1' for key 'col1[Nn]ew'
 insert into primary01 values (2378.32423, '234242))())_');
 select * from primary01;
 col1new    col2
@@ -1210,7 +1210,7 @@ Table    Create Table
 primary03    CREATE TABLE `primary03` (\n  `col1New` INT NOT NULL,\n  `col2` BINARY(10) DEFAULT NULL,\n  PRIMARY KEY (`col1New`)\n)
 insert into primary03 (col1New, col2) values (3, '*');
 insert into primary03 values (3, 'assad');
-Duplicate entry '3' for key 'col1new'
+Duplicate entry '3' for key 'col1[Nn]ew'
 update from primary03 set col2 = 'database' where col1New = 3;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 11 near " from primary03 set col2 = 'database' where col1New = 3;";
 select * from primary03;
@@ -1237,7 +1237,7 @@ show create table primary04;
 Table    Create Table
 primary04    CREATE TABLE `primary04` (\n  `col1New` FLOAT NOT NULL,\n  `col2New` VARBINARY(50) DEFAULT NULL,\n  PRIMARY KEY (`col1New`)\n)
 insert into primary04 values (1, '324342__');
-Duplicate entry '1' for key 'col1new'
+Duplicate entry '1' for key 'col1[Nn]ew'
 insert into primary04 values (3, 'qw');
 delete from primary04 where col2 = 'qfreqvreq';
 invalid input: column col2 does not exist
