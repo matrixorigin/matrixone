@@ -17,8 +17,10 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"math/rand"
 	"os"
 	"runtime"
@@ -1082,6 +1084,7 @@ func skipClientQuit(info string) bool {
 // if the stmt is not nil, we neglect the sql.
 type UserInput struct {
 	sql           string
+	hashedSql     string
 	stmt          tree.Statement
 	sqlSourceType []string
 	isRestore     bool
@@ -1093,6 +1096,10 @@ type UserInput struct {
 
 func (ui *UserInput) getSql() string {
 	return ui.sql
+}
+
+func (ui *UserInput) getHashedSql() string {
+	return ui.hashedSql
 }
 
 // getStmt if the stmt is not nil, we neglect the sql.
@@ -1415,4 +1422,11 @@ func Copy[T any](src []T) []T {
 	dst := make([]T, len(src))
 	copy(dst, src)
 	return dst
+}
+
+func hashString(s string) string {
+	hash := sha256.New()
+	hash.Write(util.UnsafeStringToBytes(s))
+	hashBytes := hash.Sum(nil)
+	return hex.EncodeToString(hashBytes)
 }
