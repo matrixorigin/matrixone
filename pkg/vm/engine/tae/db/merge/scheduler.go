@@ -96,6 +96,7 @@ func (m *Scheduler) resetForTable(entry *catalog.TableEntry) {
 
 func (m *Scheduler) PreExecute() error {
 	logutil.Infof("[Mergeblocks] Start Run %d", m.run)
+	m.executor.RefreshMemInfo()
 	for _, p := range m.policies {
 		p.preExecute()
 	}
