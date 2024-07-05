@@ -40,59 +40,6 @@ procs_priv
 role_edges
 tables_priv
 user
-show columns from `user`;
-Field    Type    Null    Key    Default    Extra    Comment
-Host    CHAR(255)    NO    PRI    ''        
-User    CHAR(32)    NO    PRI    ''        
-Select_priv    VARCHAR(10)    NO        'N'        
-Insert_priv    VARCHAR(10)    NO        'N'        
-Update_priv    VARCHAR(10)    NO        'N'        
-Delete_priv    VARCHAR(10)    NO        'N'        
-Create_priv    VARCHAR(10)    NO        'N'        
-Drop_priv    VARCHAR(10)    NO        'N'        
-Reload_priv    VARCHAR(10)    NO        'N'        
-Shutdown_priv    VARCHAR(10)    NO        'N'        
-Process_priv    VARCHAR(10)    NO        'N'        
-File_priv    VARCHAR(10)    NO        'N'        
-Grant_priv    VARCHAR(10)    NO        'N'        
-References_priv    VARCHAR(10)    NO        'N'        
-Index_priv    VARCHAR(10)    NO        'N'        
-Alter_priv    VARCHAR(10)    NO        'N'        
-Show_db_priv    VARCHAR(10)    NO        'N'        
-Super_priv    VARCHAR(10)    NO        'N'        
-Create_tmp_table_priv    VARCHAR(10)    NO        'N'        
-Lock_tables_priv    VARCHAR(10)    NO        'N'        
-Execute_priv    VARCHAR(10)    NO        'N'        
-Repl_slave_priv    VARCHAR(10)    NO        'N'        
-Repl_client_priv    VARCHAR(10)    NO        'N'        
-Create_view_priv    VARCHAR(10)    NO        'N'        
-Show_view_priv    VARCHAR(10)    NO        'N'        
-Create_routine_priv    VARCHAR(10)    NO        'N'        
-Alter_routine_priv    VARCHAR(10)    NO        'N'        
-Create_user_priv    VARCHAR(10)    NO        'N'        
-Event_priv    VARCHAR(10)    NO        'N'        
-Trigger_priv    VARCHAR(10)    NO        'N'        
-Create_tablespace_priv    VARCHAR(10)    NO        'N'        
-ssl_type    VARCHAR(10)    NO        ''        
-ssl_cipher    BLOB(0)    NO        null        
-x509_issuer    BLOB(0)    NO        null        
-x509_subject    BLOB(0)    NO        null        
-max_questions    INT UNSIGNED(32)    NO        '0'        
-max_updates    INT UNSIGNED(32)    NO        '0'        
-max_connections    INT UNSIGNED(32)    NO        '0'        
-max_user_connections    INT UNSIGNED(32)    NO        '0'        
-plugin    CHAR(64)    NO        'caching_sha2_password'        
-authentication_string    TEXT(0)    YES        null        
-password_expired    VARCHAR(10)    NO        'N'        
-password_last_changed    TIMESTAMP(0)    YES        null        
-password_lifetime    SMALLINT UNSIGNED(16)    YES        null        
-account_locked    VARCHAR(10)    NO        'N'        
-Create_role_priv    VARCHAR(10)    NO        'N'        
-Drop_role_priv    VARCHAR(10)    NO        'N'        
-Password_reuse_history    SMALLINT UNSIGNED(16)    YES        null        
-Password_reuse_time    SMALLINT UNSIGNED(16)    YES        null        
-Password_require_current    VARCHAR(10)    YES        null        
-User_attributes    JSON(0)    YES        null        
 show columns from `db`;
 Field    Type    Null    Key    Default    Extra    Comment
 Host    CHAR(255)    NO    PRI    ''        
