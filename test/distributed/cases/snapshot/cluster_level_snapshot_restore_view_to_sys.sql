@@ -463,12 +463,16 @@ drop snapshot sp07;
 -- single table, multi table
 drop table if exists employees;
 create table employees (
-                           id INT PRIMARY KEY,
+                           id INT PRIMARY KEY auto_increment,
                            name VARCHAR(255),
                            department VARCHAR(255),
                            salary DECIMAL(10, 2),
                            hire_date DATE
 );
+insert into employees values (1, 'Job', 'Doct', 10000, '2000-10-10');
+insert into employees values (2, 'Mary', 'Farmer', 10000, '2012-10-10');
+insert into employees values (3, 'Lucy', 'Programmer', 20000, '2021-10-10');
+
 drop view if exists employees_view;
 drop view if exists it_employees_view;
 drop view if exists employees_by_department_view;
@@ -497,7 +501,16 @@ create snapshot sp10 for cluster;
 
 drop database test02;
 
+select * from test02.employees_view;
+select * from test02.employees_view{snapshot = 'sp10'};
+select * from test02.employees_by_salary_view;
+select * from test02.employees_by_salary_view{snapshot = 'sp10'};
+
 restore account sys from snapshot sp10;
+select * from test02.employees_view;
+select * from test02.employees_view{snapshot = 'sp10'};
+select * from test02.employees_by_salary_view;
+select * from test02.employees_by_salary_view{snapshot = 'sp10'};
 drop view if exists employees_view;
 drop view if exists it_employees_view;
 drop view if exists employees_by_department_view;

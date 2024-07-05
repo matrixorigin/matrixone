@@ -683,12 +683,15 @@ drop table Courses;
 drop snapshot sp07;
 drop table if exists employees;
 create table employees (
-id INT PRIMARY KEY,
+id INT PRIMARY KEY auto_increment,
 name VARCHAR(255),
 department VARCHAR(255),
 salary DECIMAL(10, 2),
 hire_date DATE
 );
+insert into employees values (1, 'Job', 'Doct', 10000, '2000-10-10');
+insert into employees values (2, 'Mary', 'Farmer', 10000, '2012-10-10');
+insert into employees values (3, 'Lucy', 'Programmer', 20000, '2021-10-10');
 drop view if exists employees_view;
 drop view if exists it_employees_view;
 drop view if exists employees_by_department_view;
@@ -711,7 +714,41 @@ group by department;
 drop snapshot if exists sp10;
 create snapshot sp10 for cluster;
 drop database test02;
+select * from test02.employees_view;
+invalid database test02
+select * from test02.employees_view{snapshot = 'sp10'};
+id    name    department    salary    hire_date
+1    Job    Doct    10000.00    2000-10-10
+2    Mary    Farmer    10000.00    2012-10-10
+3    Lucy    Programmer    20000.00    2021-10-10
+select * from test02.employees_by_salary_view;
+invalid database test02
+select * from test02.employees_by_salary_view{snapshot = 'sp10'};
+name    salary
+Lucy    20000.00
+Job    10000.00
+Mary    10000.00
 restore account sys from snapshot sp10;
+select * from test02.employees_view;
+id    name    department    salary    hire_date
+1    Job    Doct    10000.00    2000-10-10
+2    Mary    Farmer    10000.00    2012-10-10
+3    Lucy    Programmer    20000.00    2021-10-10
+select * from test02.employees_view{snapshot = 'sp10'};
+id    name    department    salary    hire_date
+1    Job    Doct    10000.00    2000-10-10
+2    Mary    Farmer    10000.00    2012-10-10
+3    Lucy    Programmer    20000.00    2021-10-10
+select * from test02.employees_by_salary_view;
+name    salary
+Lucy    20000.00
+Job    10000.00
+Mary    10000.00
+select * from test02.employees_by_salary_view{snapshot = 'sp10'};
+name    salary
+Lucy    20000.00
+Job    10000.00
+Mary    10000.00
 drop view if exists employees_view;
 drop view if exists it_employees_view;
 drop view if exists employees_by_department_view;
