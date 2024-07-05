@@ -402,7 +402,8 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	}()
 
 	if snapshot.level == tree.RESTORELEVELCLUSTER.String() && len(srcAccountName) != 0 {
-		srcAccountId, err := getAccountId(ctx, bh, srcAccountName)
+		var srcAccountId uint32
+		srcAccountId, err = getAccountId(ctx, bh, srcAccountName)
 		if err != nil {
 			return err
 		}
