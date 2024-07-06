@@ -2950,7 +2950,7 @@ func initDecodeTestCase() []tcTemp {
 		testInputs = append(testInputs, tcTemp{
 			info: c.info,
 			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(), c.data, []bool{}),
+				NewFunctionTestInput(types.T_blob.ToType(), c.data, []bool{}),
 				NewFunctionTestInput(types.T_varchar.ToType(), c.keys, []bool{}),
 			},
 			expect: NewFunctionTestResult(types.T_blob.ToType(), false, realWants, []bool{}),
