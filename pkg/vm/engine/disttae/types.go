@@ -707,6 +707,7 @@ type txnTable struct {
 	proc atomic.Pointer[process.Process]
 
 	createByStatementID int
+	enableLogFilterExpr atomic.Bool
 }
 
 type column struct {
