@@ -166,7 +166,6 @@ func (c *Compile) reset() {
 	c.originSQL = ""
 	c.anal = nil
 	c.e = nil
-	c.proc.Ctx = nil
 	c.proc = nil
 	c.cnList = c.cnList[:0]
 	c.stmt = nil
