@@ -339,8 +339,6 @@ type BaseProcess struct {
 	TxnClient           client.TxnClient
 	AnalInfos           []*AnalyzeInfo
 	SessionInfo         SessionInfo
-	Ctx                 context.Context
-	Cancel              context.CancelFunc
 	FileService         fileservice.FileService
 	LockService         lockservice.LockService
 	IncrService         incrservice.AutoIncrementService

@@ -32,11 +32,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
+	"go.uber.org/zap"
 )
 
 type mergeObjectsEntry struct {
 	sync.RWMutex
 	txn           txnif.AsyncTxn
+	taskName      string
 	relation      handle.Relation
 	droppedObjs   []*catalog.ObjectEntry
 	createdObjs   []*catalog.ObjectEntry
@@ -53,6 +55,7 @@ type mergeObjectsEntry struct {
 
 func NewMergeObjectsEntry(
 	txn txnif.AsyncTxn,
+	taskName string,
 	relation handle.Relation,
 	droppedObjs, createdObjs []*catalog.ObjectEntry,
 	transMappings *api.BlkTransferBooking,
@@ -70,6 +73,7 @@ func NewMergeObjectsEntry(
 		transMappings: transMappings,
 		skipTransfer:  transMappings == nil,
 		rt:            rt,
+		taskName:      taskName,
 	}
 
 	if !entry.skipTransfer && totalCreatedBlkCnt > 0 {
@@ -308,10 +312,14 @@ func (entry *mergeObjectsEntry) PrepareCommit() (err error) {
 		v2.TaskCommitMergeObjectsDurationHistogram.Observe(time.Since(inst).Seconds())
 	}()
 	if len(entry.createdObjs) == 0 || entry.skipTransfer {
-		logutil.Infof("mergeblocks commit %v, [%v,%v], no transfer",
-			entry.relation.ID(),
-			entry.txn.GetStartTS().ToString(),
-			entry.txn.GetCommitTS().ToString())
+		logutil.Info(
+			"[MERGE-PREPARE-COMMIT]",
+			zap.Uint64("table-id", entry.relation.ID()),
+			zap.Int("created-objs", len(entry.createdObjs)),
+			zap.Bool("skip-transfer", entry.skipTransfer),
+			zap.String("task", entry.taskName),
+			zap.String("commit-ts", entry.txn.GetPrepareTS().ToString()),
+		)
 		return
 	}
 
@@ -337,17 +345,30 @@ func (entry *mergeObjectsEntry) PrepareCommit() (err error) {
 			}
 		}
 	}
-	rest := time.Since(inst1)
-	logutil.Infof("mergeblocks commit %v, [%v,%v], trans %d on %d objects, %d in commit queue",
-		entry.relation.ID(),
-		entry.txn.GetStartTS().ToString(),
-		entry.txn.GetCommitTS().ToString(),
-		entry.transCntBeforeCommit+transCnt,
-		len(entry.nextRoundDirties),
-		transCnt,
+	total := time.Since(inst)
+	fields := make([]zap.Field, 0, 9)
+	fields = append(fields,
+		zap.Uint64("table-id", entry.relation.ID()),
+		zap.String("task", entry.taskName),
+		zap.Int("total-transfer", entry.transCntBeforeCommit+transCnt),
+		zap.Int("in-queue-transfer", transCnt),
+		zap.Int("objs", len(entry.nextRoundDirties)),
+		zap.Duration("total-cost", total),
+		zap.Duration("this-tran-cost", time.Since(inst1)),
+		zap.String("commit-ts", entry.txn.GetPrepareTS().ToString()),
 	)
-	if total := time.Since(inst); total > 300*time.Millisecond {
-		logutil.Infof("mergeblocks slow commit total %v, transfer: %v, rest %v", total, stat.String(), rest)
+
+	if total > 300*time.Millisecond {
+		fields = append(fields, zap.String("stat", stat.String()))
+		logutil.Info(
+			"[MERGE-PREPARE-COMMIT-SLOW]",
+			fields...,
+		)
+	} else {
+		logutil.Info(
+			"[MERGE-PREPARE-COMMIT]",
+			fields...,
+		)
 	}
 
 	return
