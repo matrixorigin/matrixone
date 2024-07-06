@@ -285,7 +285,7 @@ func (h *Handle) prefetchMetadata(_ context.Context, req *db.WriteReq) (int, err
 	logutil.Info(
 		"CN-COMMIT-S3",
 		zap.Int("table-id", int(req.TableID)),
-		zap.Int("table-name", int(req.TableName)),
+		zap.String("table-name", req.TableName),
 		zap.Int("obj-cnt", objCnt),
 	)
 	return objCnt, nil
