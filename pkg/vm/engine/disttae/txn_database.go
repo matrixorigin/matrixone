@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	txn2 "github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -181,7 +182,7 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 
 	rel := db.getTxn().getCachedTable(ctx, key)
 	if rel != nil {
-		rel.proc.Store(p)
+		rel.origin.proc.Store(p)
 		return rel, nil
 	}
 
@@ -219,11 +220,15 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		return nil, err
 	}
 
-	tbl := newTxnTableWithItem(
+	tbl, err := newTxnTable(
 		db,
 		item,
 		p,
+		shardservice.GetService(),
 	)
+	if err != nil {
+		return nil, err
+	}
 
 	db.getTxn().tableCache.tableMap.Store(key, tbl)
 	return tbl, nil
@@ -261,7 +266,7 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 			a table t1 there after commit.
 		*/
 	} else if v, ok := db.getTxn().tableCache.tableMap.Load(k); ok {
-		table := v.(*txnTable)
+		table := v.(*txnTableDelegate).origin
 		id = table.tableId
 		db.getTxn().tableCache.tableMap.Delete(k)
 		rowid = table.rowid
@@ -336,6 +341,9 @@ func (db *txnDatabase) Truncate(ctx context.Context, name string) (uint64, error
 	v, ok = db.getTxn().createMap.Load(k)
 	if !ok {
 		v, ok = db.getTxn().tableCache.tableMap.Load(k)
+		if ok {
+			v = v.(*txnTableDelegate).origin
+		}
 	}
 
 	if ok {
