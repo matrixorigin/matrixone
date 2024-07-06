@@ -1,0 +1,689 @@
+drop account if exists acc01;
+create account acc01 admin_name = 'test_account' identified by '111';
+drop account if exists acc02;
+create account acc02 admin_name = 'test_account' identified by '111';
+drop account if exists acc03;
+create account acc03 admin_name = 'test_account' identified by '111';
+drop database if exists acc_test01;
+create database acc_test01;
+use acc_test01;
+drop table if exists s3t;
+create table s3t (col1 int, col2 int, col3 int, primary key(col1, col2));
+insert into s3t select result, 2, 12 from generate_series(1, 30000, 1) g;
+select count(*) from s3t;
+count(*)
+30000
+select sum(col1) from s3t;
+sum(col1)
+450015000
+select avg(col1) from s3t;
+avg(col1)
+15000.5
+select count(col3) from s3t where col1 > 1000;
+count(col3)
+29000
+alter table s3t add column col4 int after col2;
+drop snapshot if exists sp01;
+create snapshot sp01 for cluster;
+show snapshots;
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+sp01    2024-07-04 08:02:33.937343    cluster            
+show snapshots;
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+insert into s3t values (300001, 34, 23, 1);
+select count(*) from s3t;
+count(*)
+30001
+select * from s3t where col1 = 23;
+col1    col2    col4    col3
+23    2    null    12
+restore account acc01 from snapshot sp01;
+show databases;
+Database
+acc_test01
+information_schema
+mo_catalog
+mysql
+system
+system_metrics
+use acc_test01;
+show tables;
+Tables_in_acc_test01
+s3t
+select sum(col1) from s3t;
+sum(col1)
+450015000
+select avg(col1) from s3t;
+avg(col1)
+15000.5
+select count(col3) from s3t where col1 > 1000;
+count(col3)
+29000
+select count(*) from s3t;
+count(*)
+30000
+alter table s3t drop column col4;
+drop snapshot if exists sp02;
+create snapshot sp02 for cluster;
+insert into s3t select result, 2, 12 from generate_series(30002, 60000, 1) g;
+select count(*) from s3t where col1 > 2000;
+count(*)
+57999
+select sum(col1) from s3t;
+sum(col1)
+1799999999
+select avg(col1) from s3t;
+avg(col1)
+30000.49999166653
+delete from s3t where col1 > 30000;
+restore account acc01 from snapshot sp02;
+select count(*) from s3t where col1 > 2000;
+count(*)
+28000
+select sum(col1) from s3t;
+sum(col1)
+450015000
+select avg(col1) from s3t;
+avg(col1)
+15000.5
+show create table s3t;
+Table    Create Table
+s3t    CREATE TABLE `s3t` (\n  `col1` INT NOT NULL,\n  `col2` INT NOT NULL,\n  `col3` INT DEFAULT NULL,\n  PRIMARY KEY (`col1`,`col2`)\n)
+restore account acc01 from snapshot sp01;
+show databases;
+Database
+acc_test01
+information_schema
+mo_catalog
+mysql
+system
+system_metrics
+use acc_test01;
+show tables;
+Tables_in_acc_test01
+s3t
+select sum(col1) from s3t;
+sum(col1)
+450015000
+select avg(col1) from s3t;
+avg(col1)
+15000.5
+select count(col3) from s3t where col1 > 1000;
+count(col3)
+29000
+select count(*) from s3t;
+count(*)
+30000
+show create table s3t;
+Table    Create Table
+s3t    CREATE TABLE `s3t` (\n  `col1` INT NOT NULL,\n  `col2` INT NOT NULL,\n  `col4` INT DEFAULT NULL,\n  `col3` INT DEFAULT NULL,\n  PRIMARY KEY (`col1`,`col2`)\n)
+drop snapshot sp01;
+drop snapshot sp02;
+drop database acc_test01;
+drop database if exists acc_test02;
+create database acc_test02;
+use acc_test02;
+drop table if exists pri01;
+create table pri01(
+deptno int unsigned comment '部门编号',
+dname varchar(15) comment '部门名称',
+loc varchar(50)  comment '部门所在位置',
+primary key(deptno)
+) comment='部门表';
+insert into pri01 values (10,'ACCOUNTING','NEW YORK');
+insert into pri01 values (20,'RESEARCH','DALLAS');
+insert into pri01 values (30,'SALES','CHICAGO');
+insert into pri01 values (40,'OPERATIONS','BOSTON');
+drop table if exists aff01;
+create table aff01(
+empno int unsigned auto_increment COMMENT '雇员编号',
+ename varchar(15) comment '雇员姓名',
+job varchar(10) comment '雇员职位',
+mgr int unsigned comment '雇员对应的领导的编号',
+hiredate date comment '雇员的雇佣日期',
+sal decimal(7,2) comment '雇员的基本工资',
+comm decimal(7,2) comment '奖金',
+deptno int unsigned comment '所在部门',
+primary key(empno),
+constraint `c1` foreign key (deptno) references pri01 (deptno)
+);
+insert into aff01 values (7369,'SMITH','CLERK',7902,'1980-12-17',800,NULL,20);
+insert into aff01 values (7499,'ALLEN','SALESMAN',7698,'1981-02-20',1600,300,30);
+insert into aff01 values (7521,'WARD','SALESMAN',7698,'1981-02-22',1250,500,30);
+insert into aff01 values (7566,'JONES','MANAGER',7839,'1981-04-02',2975,NULL,20);
+insert into aff01 values (7654,'MARTIN','SALESMAN',7698,'1981-09-28',1250,1400,30);
+insert into aff01 values (7698,'BLAKE','MANAGER',7839,'1981-05-01',2850,NULL,30);
+insert into aff01 values (7782,'CLARK','MANAGER',7839,'1981-06-09',2450,NULL,10);
+insert into aff01 values (7788,'SCOTT','ANALYST',7566,'0087-07-13',3000,NULL,20);
+insert into aff01 values (7839,'KING','PRESIDENT',NULL,'1981-11-17',5000,NULL,10);
+insert into aff01 values (7844,'TURNER','SALESMAN',7698,'1981-09-08',1500,0,30);
+insert into aff01 values (7876,'ADAMS','CLERK',7788,'0087-07-13',1100,NULL,20);
+insert into aff01 values (7900,'JAMES','CLERK',7698,'1981-12-03',950,NULL,30);
+insert into aff01 values (7902,'FORD','ANALYST',7566,'1981-12-03',3000,NULL,20);
+insert into aff01 values (7934,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,10);
+drop database if exists acc_test03;
+create database acc_test03;
+use acc_test03;
+drop table if exists table01;
+create table table01(col1 int primary key , col2 decimal, col3 char, col4 varchar(20), col5 text, col6 double);
+insert into table01 values (1, 2, 'a', '23eiojf', 'r23v324r23rer', 3923.324);
+insert into table01 values (2, 3, 'b', '32r32r', 'database', 1111111);
+create table table02 (col1 int unique key, col2 varchar(20));
+insert into table02 (col1, col2) values (133, 'database');
+create table table03(a INT primary key AUTO_INCREMENT, b INT, c INT);
+create table table04(a INT primary key AUTO_INCREMENT, b INT, c INT);
+insert into table03 values (1,1,1), (2,2,2);
+insert into table04 values (0,1,2), (2,3,4);
+drop database if exists acc_test04;
+create database acc_test04;
+use acc_test04;
+drop table if exists index03;
+create table index03 (
+emp_no      int             not null,
+birth_date  date            not null,
+first_name  varchar(14)     not null,
+last_name   varchar(16)     not null,
+gender      varchar(5)      not null,
+hire_date   date            not null,
+primary key (emp_no)
+) partition by range columns (emp_no)(
+partition p01 values less than (100001),
+partition p02 values less than (200001),
+partition p03 values less than (300001),
+partition p04 values less than (400001)
+);
+insert into index03 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-12-17'),
+(9002,'1981-02-20', 'ALLEN', 'SALESMAN', 'F', '2008-02-20');
+select count(*) from acc_test02.pri01;
+count(*)
+4
+select count(*) from acc_test02.aff01;
+count(*)
+14
+select * from acc_test02.pri01;
+deptno    dname    loc
+10    ACCOUNTING    NEW YORK
+20    RESEARCH    DALLAS
+30    SALES    CHICAGO
+40    OPERATIONS    BOSTON
+show create table acc_test02.pri01;
+Table    Create Table
+pri01    CREATE TABLE `pri01` (\n  `deptno` INT UNSIGNED NOT NULL COMMENT '部门编号',\n  `dname` VARCHAR(15) DEFAULT NULL COMMENT '部门名称',\n  `loc` VARCHAR(50) DEFAULT NULL COMMENT '部门所在位置',\n  PRIMARY KEY (`deptno`)\n) COMMENT='部门表'
+show create table acc_test02.aff01;
+Table    Create Table
+aff01    CREATE TABLE `aff01` (\n  `empno` INT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '雇员编号',\n  `ename` VARCHAR(15) DEFAULT NULL COMMENT '雇员姓名',\n  `job` VARCHAR(10) DEFAULT NULL COMMENT '雇员职位',\n  `mgr` INT UNSIGNED DEFAULT NULL COMMENT '雇员对应的领导的编号',\n  `hiredate` DATE DEFAULT NULL COMMENT '雇员的雇佣日期',\n  `sal` DECIMAL(7,2) DEFAULT NULL COMMENT '雇员的基本工资',\n  `comm` DECIMAL(7,2) DEFAULT NULL COMMENT '奖金',\n  `deptno` INT UNSIGNED DEFAULT NULL COMMENT '所在部门',\n  PRIMARY KEY (`empno`),\n  CONSTRAINT `c1` FOREIGN KEY (`deptno`) REFERENCES `pri01` (`deptno`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+select count(*) from acc_test03.table01;
+count(*)
+2
+select count(*) from acc_test03.table02;
+count(*)
+1
+select count(*) from acc_test03.table03;
+count(*)
+2
+select count(*) from acc_test03.table04;
+count(*)
+2
+show create table acc_test03.table01;
+Table    Create Table
+table01    CREATE TABLE `table01` (\n  `col1` INT NOT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL,\n  `col3` CHAR(1) DEFAULT NULL,\n  `col4` VARCHAR(20) DEFAULT NULL,\n  `col5` TEXT DEFAULT NULL,\n  `col6` DOUBLE DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+show create table acc_test03.table02;
+Table    Create Table
+table02    CREATE TABLE `table02` (\n  `col1` INT DEFAULT NULL,\n  `col2` VARCHAR(20) DEFAULT NULL,\n  UNIQUE KEY `col1` (`col1`)\n)
+show create table acc_test03.table03;
+Table    Create Table
+table03    CREATE TABLE `table03` (\n  `a` INT NOT NULL AUTO_INCREMENT,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
+show create table acc_test03.table04;
+Table    Create Table
+table04    CREATE TABLE `table04` (\n  `a` INT NOT NULL AUTO_INCREMENT,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
+select count(*) from acc_test04.index03;
+count(*)
+2
+show create table acc_test04.index03;
+Table    Create Table
+index03    CREATE TABLE `index03` (\n  `emp_no` INT NOT NULL,\n  `birth_date` DATE NOT NULL,\n  `first_name` VARCHAR(14) NOT NULL,\n  `last_name` VARCHAR(16) NOT NULL,\n  `gender` VARCHAR(5) NOT NULL,\n  `hire_date` DATE NOT NULL,\n  PRIMARY KEY (`emp_no`)\n) partition by range columns (emp_no) (partition p01 values less than (100001), partition p02 values less than (200001), partition p03 values less than (300001), partition p04 values less than (400001))
+drop snapshot if exists sp04;
+create snapshot sp04 for cluster;
+insert into acc_test02.pri01 values (50,'ACCOUNTING','NEW YORK');
+insert into acc_test02.aff01 values (7900,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,50);
+Duplicate entry '7900' for key 'empno'
+truncate table acc_test03.table01;
+drop table acc_test03.table02;
+delete from acc_test03.table03 where a = 1;
+update acc_test03.table04 set a = 10000 where a = 0;
+select count(*) from acc_test02.pri01;
+count(*)
+5
+select count(*) from acc_test02.aff01;
+count(*)
+14
+select * from acc_test03.table01;
+col1    col2    col3    col4    col5    col6
+select count(*) from acc_test03.table03;
+count(*)
+1
+select * from acc_test03.table04;
+a    b    c
+2    3    4
+10000    1    2
+show create table acc_test04.index03;
+Table    Create Table
+index03    CREATE TABLE `index03` (\n  `emp_no` INT NOT NULL,\n  `birth_date` DATE NOT NULL,\n  `first_name` VARCHAR(14) NOT NULL,\n  `last_name` VARCHAR(16) NOT NULL,\n  `gender` VARCHAR(5) NOT NULL,\n  `hire_date` DATE NOT NULL,\n  PRIMARY KEY (`emp_no`)\n) partition by range columns (emp_no) (partition p01 values less than (100001), partition p02 values less than (200001), partition p03 values less than (300001), partition p04 values less than (400001))
+restore account acc01 from snapshot sp04;
+show databases;
+Database
+acc_test02
+acc_test03
+acc_test04
+information_schema
+mo_catalog
+mysql
+system
+system_metrics
+select count(*) from acc_test02.pri01;
+count(*)
+4
+select count(*) from acc_test02.aff01;
+count(*)
+14
+select count(*) from acc_test03.table01;
+count(*)
+2
+select count(*) from acc_test03.table02;
+count(*)
+1
+select count(*) from acc_test03.table03;
+count(*)
+2
+select count(*) from acc_test03.table04;
+count(*)
+2
+select count(*) from acc_test03.table04;
+count(*)
+2
+drop database acc_test03;
+drop snapshot sp04;
+drop database acc_test02;
+Can't drop database 'acc_test02'; database doesn't exist
+drop database acc_test03;
+Can't drop database 'acc_test03'; database doesn't exist
+drop database if exists test01;
+create database test01;
+use test01;
+drop table if exists table01;
+create table table01(col1 int primary key , col2 decimal, col3 char, col4 varchar(20), col5 text, col6 double);
+insert into table01 values (1, 2, 'a', '23eiojf', 'r23v324r23rer', 3923.324);
+insert into table01 values (2, 3, 'b', '32r32r', 'database', 1111111);
+drop table if exists table02;
+create table table02 (col1 int unique key, col2 varchar(20));
+insert into table02 (col1, col2) values (133, 'database');
+drop snapshot if exists sp07;
+create snapshot sp07 for cluster;
+use test01;
+drop table table01;
+insert into table02 values(134, 'database');
+drop snapshot if exists sp08;
+create snapshot sp08 for cluster;
+show snapshots;
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+sp08    2024-07-04 08:02:40.632236    cluster            
+sp07    2024-07-04 08:02:40.526937    cluster            
+use test01;
+create table table03 (col1 int);
+insert into table03 values (1),(2);
+restore account acc01 from snapshot sp07;
+use test01;
+show tables;
+Tables_in_test01
+table01
+table02
+select * from table01;
+col1    col2    col3    col4    col5    col6
+1    2    a    23eiojf    r23v324r23rer    3923.324
+2    3    b    32r32r    database    1111111.0
+select * from table02;
+col1    col2
+133    database
+restore account acc01 from snapshot sp08;
+use test01;
+show tables;
+Tables_in_test01
+table02
+select * from table01;
+SQL parser error: table "table01" does not exist
+select * from table02;
+col1    col2
+133    database
+134    database
+show create table table02;
+Table    Create Table
+table02    CREATE TABLE `table02` (\n  `col1` INT DEFAULT NULL,\n  `col2` VARCHAR(20) DEFAULT NULL,\n  UNIQUE KEY `col1` (`col1`)\n)
+drop database test01;
+drop snapshot sp07;
+drop snapshot sp08;
+drop database if exists test02;
+create database test02;
+use test02;
+drop table if exists table01;
+create table table01(col1 int primary key , col2 decimal unique key, col3 char, col4 varchar(20), col5 text, col6 double);
+insert into table01 values (1, 2, 'a', '23eiojf', 'r23v324r23rer', 3923.324);
+insert into table01 values (2, 3, 'b', '32r32r', 'database', 1111111);
+drop table if exists table02;
+create table table02 (col1 int unique key, col2 varchar(20));
+insert into table02 (col1, col2) values (133, 'database');
+drop snapshot if exists sp09;
+create snapshot sp09 for cluster;
+use test02;
+drop table table01;
+insert into table02 values(134, 'database');
+alter table table02 add column new decimal after col2;
+drop snapshot if exists sp10;
+create snapshot sp10 for cluster;
+use test02;
+show create table table01;
+no such table test02.table01
+show create table table02;
+Table    Create Table
+table02    CREATE TABLE `table02` (\n  `col1` INT DEFAULT NULL,\n  `col2` VARCHAR(20) DEFAULT NULL,\n  `new` DECIMAL(38,0) DEFAULT NULL,\n  UNIQUE KEY `col1` (`col1`)\n)
+insert into table02 values(139, 'database', null);
+alter table table02 drop column new;
+restore account acc01 from snapshot sp10;
+use test02;
+show create table table01;
+no such table test02.table01
+show create table table02;
+Table    Create Table
+table02    CREATE TABLE `table02` (\n  `col1` INT DEFAULT NULL,\n  `col2` VARCHAR(20) DEFAULT NULL,\n  `new` DECIMAL(38,0) DEFAULT NULL,\n  UNIQUE KEY `col1` (`col1`)\n)
+select * from table02;
+col1    col2    new
+133    database    null
+134    database    null
+select * from table01;
+SQL parser error: table "table01" does not exist
+drop database test02;
+drop snapshot sp09;
+drop snapshot sp10;
+drop database if exists test01;
+create database test01;
+use test01;
+drop table if exists rs01;
+create table rs01 (col1 int, col2 decimal(6), col3 varchar(30));
+insert into rs01 values (1, null, 'database');
+insert into rs01 values (2, 38291.32132, 'database');
+insert into rs01 values (3, null, 'database management system');
+insert into rs01 values (4, 10, null);
+insert into rs01 values (1, -321.321, null);
+insert into rs01 values (2, -1, null);
+select count(*) from rs01;
+count(*)
+6
+drop snapshot if exists sp03;
+create snapshot sp03 for account acc01;
+use test01;
+delete from rs01 where col1 = 4;
+insert into rs01 values (10, -1, null);
+select count(*) from rs01;
+count(*)
+6
+restore account acc01 from snapshot sp03 to account sys;
+internal error: non-sys account's snapshot can't restore to sys account
+drop snapshot sp03;
+drop database test01;
+drop database if exists test01;
+create database test01;
+use test01;
+drop table if exists stu;
+create table stu (
+student_id INT AUTO_INCREMENT PRIMARY KEY,
+name VARCHAR(100) NOT NULL,
+email VARCHAR(100) UNIQUE NOT NULL
+);
+insert into stu values(1,'1241','213231@1312.com');
+insert into stu values(2,'2342wdrwe','2ew534231@1312.com');
+insert into stu values(3,'32r3','2534231@1312.com');
+drop database if exists test02;
+create database test02;
+use test02;
+drop table if exists t1;
+create table t1(col1 int auto_increment);
+insert into t1 values(1),(2),(3);
+drop database if exists test01;
+create database test01;
+use test01;
+drop table if exists table01;
+create table table01 (col1 int, col2 decimal(6), col3 varchar(30));
+insert into table01 values (1, null, 'database');
+insert into table01 values (2, 38291.32132, 'database');
+insert into table01 values (3, null, 'database management system');
+insert into table01 values (4, 10, null);
+insert into table01 values (1, -321.321, null);
+insert into table01 values (2, -1, null);
+select count(*) from table01;
+count(*)
+6
+drop database if exists db03;
+create database db03;
+use db03;
+drop table if exists ti1;
+drop table if exists tm1;
+drop table if exists ti2;
+drop table if exists tm2;
+create  table ti1(a INT not null, b INT, c INT);
+create  table tm1(a INT not null, b INT, c INT);
+create  table ti2(a INT primary key AUTO_INCREMENT, b INT, c INT);
+create  table tm2(a INT primary key AUTO_INCREMENT, b INT, c INT);
+show create table ti1;
+Table    Create Table
+ti1    CREATE TABLE `ti1` (\n  `a` INT NOT NULL,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL\n)
+show create table tm1;
+Table    Create Table
+tm1    CREATE TABLE `tm1` (\n  `a` INT NOT NULL,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL\n)
+show create table ti2;
+Table    Create Table
+ti2    CREATE TABLE `ti2` (\n  `a` INT NOT NULL AUTO_INCREMENT,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
+show create table tm2;
+Table    Create Table
+tm2    CREATE TABLE `tm2` (\n  `a` INT NOT NULL AUTO_INCREMENT,\n  `b` INT DEFAULT NULL,\n  `c` INT DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
+insert into ti1 values (1,1,1), (2,2,2);
+insert into ti2 values (1,1,1), (2,2,2);
+drop snapshot if exists clu01;
+create snapshot clu01 for cluster;
+drop database test01;
+drop database test01;
+drop database db03;
+restore account acc01 from snapshot clu01;
+restore account acc02 from snapshot clu01;
+restore account acc03 from snapshot clu01;
+show databases;
+Database
+acc_test02
+acc_test04
+information_schema
+mo_catalog
+mysql
+system
+system_metrics
+test01
+test02
+use test01;
+select * from stu;
+student_id    name    email
+1    1241    213231@1312.com
+2    2342wdrwe    2ew534231@1312.com
+3    32r3    2534231@1312.com
+use test02;
+select * from t1;
+col1
+1
+2
+3
+drop database test01;
+drop database test02;
+show databases;
+Database
+information_schema
+mo_catalog
+mysql
+system
+system_metrics
+test01
+use test01;
+show tables;
+Tables_in_test01
+table01
+select * from table01;
+col1    col2    col3
+1    null    database
+2    38291    database
+3    null    database management system
+4    10    null
+1    -321    null
+2    -1    null
+drop database test01;
+show databases;
+Database
+db03
+information_schema
+mo_catalog
+mysql
+system
+system_metrics
+use db03;
+show tables;
+Tables_in_db03
+ti1
+ti2
+tm1
+tm2
+drop database db03;
+drop snapshot clu01;
+drop database if exists db11;
+create database db11;
+use db11;
+drop table if exists pri01;
+create table pri01 (col1 int, col2 decimal);
+insert into pri01 (col1, col2) values (1,2378.328839842);
+insert into pri01 values (234, -3923.2342342);
+select * from pri01;
+col1    col2
+1    2378
+234    -3923
+drop table if exists aff01;
+create table aff01 (col1 int auto_increment);
+insert into aff01 values(1),(2),(3);
+drop snapshot if exists sp17;
+create snapshot sp17 for cluster;
+alter table pri01 add constraint primary key(col1);
+insert into pri01 values (23423, 32432543.3242);
+insert into pri01 values (234222, -3923.2342342);
+select count(*) from pri01;
+count(*)
+4
+drop snapshot if exists sp18;
+create snapshot sp18 for cluster;
+restore account acc01 database db11 table pri01 from snapshot sp17;
+show create table pri01;
+Table    Create Table
+pri01    CREATE TABLE `pri01` (\n  `col1` INT DEFAULT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL\n)
+select * from pri01;
+col1    col2
+1    2378
+234    -3923
+select count(*) from pri01;
+count(*)
+2
+restore account acc01 database db11 table pri01 from snapshot sp18;
+show create table pri01;
+Table    Create Table
+pri01    CREATE TABLE `pri01` (\n  `col1` INT NOT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+select * from pri01;
+col1    col2
+1    2378
+234    -3923
+23423    32432543
+234222    -3923
+select count(*) from pri01;
+count(*)
+4
+drop table aff01;
+restore account acc01 database db11 table aff01 from snapshot sp18;
+select * from aff01;
+col1
+1
+2
+3
+select count(*) from aff01;
+count(*)
+3
+insert into aff01 values(4);
+select * from aff01;
+col1
+1
+2
+3
+4
+drop database db11;
+drop snapshot sp17;
+drop snapshot sp18;
+drop database if exists test_fk;
+
+create database test_fk;
+
+use test_fk;
+
+CREATE TABLE Students (
+StudentID INT PRIMARY KEY,
+Name VARCHAR(100)
+);
+
+CREATE TABLE Courses (
+CourseID INT PRIMARY KEY,
+CourseName VARCHAR(100)
+);
+
+CREATE TABLE Enrollments (
+EnrollmentID INT PRIMARY KEY AUTO_INCREMENT,
+StudentID INT,
+CourseID INT,
+Grade CHAR(2),
+FOREIGN KEY (StudentID) REFERENCES Students(StudentID),
+FOREIGN KEY (CourseID) REFERENCES Courses(CourseID)
+);
+
+INSERT INTO Students (StudentID, Name) VALUES (1, 'Alice');
+
+INSERT INTO Students (StudentID, Name) VALUES (2, 'Bob');
+
+INSERT INTO Courses (CourseID, CourseName) VALUES (101, 'Mathematics');
+
+INSERT INTO Courses (CourseID, CourseName) VALUES (102, 'Physics');
+
+INSERT INTO Enrollments (StudentID, CourseID, Grade) VALUES (1, 101, 'A');
+
+INSERT INTO Enrollments (StudentID, CourseID, Grade) VALUES (1, 102, 'B');
+
+INSERT INTO Enrollments (StudentID, CourseID, Grade) VALUES (2, 101, 'B');
+
+drop snapshot if exists sp_fk;
+
+create snapshot sp_fk for account sys;
+
+restore account sys database test_fk table Students from snapshot sp_fk;
+
+restore account sys database test_fk table Courses from snapshot sp_fk;
+
+restore account sys database test_fk table Enrollments from snapshot sp_fk;
+
+show databases;
+
+select * from Students;
+
+select * from Courses;
+
+select * from Enrollments;
+
+drop snapshot sp_fk;
+
+drop account acc01;
+drop account acc02;
+drop account acc03;
