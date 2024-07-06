@@ -64,6 +64,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/profile"
 	"github.com/matrixorigin/matrixone/pkg/util/status"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -761,7 +762,9 @@ func (s *service) initShardService() {
 		runtime.ProcessLevelRuntime().Clock(),
 		s.sqlExecutor,
 		s.timestampWaiter,
-		nil,
+		map[int]shardservice.ReadFunc{
+			shardservice.ReadRows: disttae.HandleShardingReadRows,
+		},
 		s.storeEngine,
 	)
 	s.shardService = shardservice.NewService(
