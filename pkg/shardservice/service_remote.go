@@ -108,6 +108,7 @@ func (s *service) handleRemoteRead(
 	ctx context.Context,
 	req *pb.Request,
 	resp *pb.Response,
+	buffer *morpc.Buffer,
 ) error {
 	value, err := s.doRead(
 		ctx,
@@ -115,6 +116,7 @@ func (s *service) handleRemoteRead(
 		req.ShardRead.ReadAt,
 		int(req.ShardRead.Method),
 		req.ShardRead.Param,
+		buffer,
 	)
 	if err != nil {
 		return err
