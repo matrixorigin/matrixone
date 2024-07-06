@@ -31,3 +31,9 @@ MatrixOne
 SELECT DECODE(ENCODE('MatrixOne数据库', '数据库passwd12345667'), '数据库passwd12345667');
 DECODE(ENCODE(MatrixOne数据库, 数据库passwd12345667), 数据库passwd12345667)
 MatrixOne数据库
+SELECT HEX(ENCODE('MatrixOne数据库', '数据库passwd12345667'));
+HEX(ENCODE(MatrixOne数据库, 数据库passwd12345667))
+22644B0389B058594FF0D0E7E052555B99BB
+SELECT HEX(ENCODE('mytext','mykeystring'));
+HEX(ENCODE(mytext, mykeystring))
+223EBFA112C8

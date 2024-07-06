@@ -9,3 +9,5 @@ SELECT DECODE(ENCODE('分布式データベース', 'pass1234@#$%%^^&'), 'pass12
 SELECT DECODE(ENCODE('分布式データベース', '分布式7782734adgwy1242'), '分布式7782734adgwy1242');
 SELECT DECODE(ENCODE('MatrixOne', '密匙'), '密匙');
 SELECT DECODE(ENCODE('MatrixOne数据库', '数据库passwd12345667'), '数据库passwd12345667');
+SELECT HEX(ENCODE('MatrixOne数据库', '数据库passwd12345667'));
+SELECT HEX(ENCODE('mytext','mykeystring'));
