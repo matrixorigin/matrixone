@@ -1369,6 +1369,7 @@ func buildInsertPlansWithRelatedHiddenTable(
 				isFkRecursionCall := false
 				updatePkCol := true
 				ifExistAutoPkCol := false
+				needCheckPkDupForHiddenTable = true
 				var partitionExpr *Expr
 				err = makeOneInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef,
 					updateColLength, newSourceStep, addAffectedRows, isFkRecursionCall, updatePkCol,
