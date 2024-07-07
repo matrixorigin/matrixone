@@ -1544,7 +1544,7 @@ func makeOneInsertPlan(
 		return nil
 	}
 
-	if ifCheckPkDup && !ifExistAutoPkCol {
+	if ifCheckPkDup {
 		if err = appendPrimaryConstraintPlan(builder, bindCtx, tableDef, objRef, partitionExpr, pkFilterExprs,
 			indexSourceColTypes, sourceStep, updateColLength > 0, updatePkCol, ifInsertFromUnique, fuzzymessage); err != nil {
 			return err
