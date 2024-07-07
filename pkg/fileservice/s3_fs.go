@@ -169,6 +169,7 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 			*config.DiskPath,
 			int(*config.DiskCapacity),
 			s.perfCounterSets,
+			true,
 		)
 		if err != nil {
 			return err
