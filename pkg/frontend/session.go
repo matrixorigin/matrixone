@@ -127,8 +127,7 @@ type Session struct {
 	// this map is maintained at the session level to cache configuration results.
 	configs map[string]interface{}
 
-	prepareStmts map[string]*PrepareStmt
-	lastStmtId   uint32
+	lastStmtId uint32
 
 	priv *privilege
 
@@ -143,6 +142,7 @@ type Session struct {
 	mu   sync.Mutex
 	rwmu sync.RWMutex
 
+	prepareStmts map[string]*PrepareStmt
 	lastInsertID uint64
 
 	// tStmt is used only to record the StatementInfo

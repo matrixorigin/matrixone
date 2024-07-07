@@ -101,7 +101,8 @@ func (srv *ServiceOfCompile) getCompile(
 	}
 
 	runningCompile := reuse.Alloc[Compile](nil)
-	// runningCompile.AllocMsg = time.Now().String() + " : " + string(debug.Stack())
+	// allocMsg := time.Now().String() + " : " + string(debug.Stack())
+	runningCompile.MessageBoard = process.NewMessageBoard()
 	runningCompile.proc = proc
 
 	if runningCompile.queryStatus == nil {
@@ -134,7 +135,7 @@ func (srv *ServiceOfCompile) putCompile(c *Compile) (mustReturnError bool, err e
 	srv.Unlock()
 
 	if !c.isPrepare {
-		// c.FreeMsg = time.Now().String() + " : " + string(debug.Stack())
+		// freeMsg := time.Now().String() + " : session=" + c.SessionPtr + ":" + string(debug.Stack())
 		reuse.Free[Compile](c, nil)
 	}
 
