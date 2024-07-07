@@ -2348,38 +2348,42 @@ func Test_determineRevokePrivilege(t *testing.T) {
 	convey.Convey("revoke privilege [ObjectType: Table] AdminRole succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
-		var stmts []*tree.RevokePrivilege
+		// var stmts []*tree.RevokePrivilege
 
-		for _, stmt := range stmts {
-			priv := determinePrivilegeSetOfStatement(stmt)
-			ses := newSes(priv, ctrl)
+		// XXX FIXME: Go compiler is correct -- this test is busted.
+		// we are looping over nil.
+		// for _, stmt := range stmts {
+		// 	priv := determinePrivilegeSetOfStatement(stmt)
+		//	ses := newSes(priv, ctrl)
 
-			ok, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
-			convey.So(err, convey.ShouldBeNil)
-			convey.So(ok, convey.ShouldBeTrue)
-		}
+		//	ok, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		//	convey.So(err, convey.ShouldBeNil)
+		//	convey.So(ok, convey.ShouldBeTrue)
+		// }
 	})
 	convey.Convey("revoke privilege [ObjectType: Table] not AdminRole fail", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
-		var stmts []*tree.RevokePrivilege
+		// var stmts []*tree.RevokePrivilege
 
-		for _, stmt := range stmts {
-			priv := determinePrivilegeSetOfStatement(stmt)
-			ses := newSes(priv, ctrl)
-			ses.tenant = &TenantInfo{
-				Tenant:        "xxx",
-				User:          "xxx",
-				DefaultRole:   "xxx",
-				TenantID:      1001,
-				UserID:        1001,
-				DefaultRoleID: 1001,
-			}
+		// XXX FIXME: Go compiler is correct -- this test is busted.
+		// we are looping over nil.
+		// for _, stmt := range stmts {
+		// 	priv := determinePrivilegeSetOfStatement(stmt)
+		// 	ses := newSes(priv, ctrl)
+		// 	ses.tenant = &TenantInfo{
+		// 		Tenant:        "xxx",
+		// 		User:          "xxx",
+		// 		DefaultRole:   "xxx",
+		// 		TenantID:      1001,
+		// 		UserID:        1001,
+		// 		DefaultRoleID: 1001,
+		// 	}
 
-			ok, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
-			convey.So(err, convey.ShouldBeNil)
-			convey.So(ok, convey.ShouldBeFalse)
-		}
+		// 	ok, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		// 	convey.So(err, convey.ShouldBeNil)
+		// 	convey.So(ok, convey.ShouldBeFalse)
+		// }
 	})
 }
 
