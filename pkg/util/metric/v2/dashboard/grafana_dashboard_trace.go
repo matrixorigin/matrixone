@@ -32,6 +32,7 @@ func (c *DashboardCreator) initTraceDashboard() error {
 		c.withRowOptions(
 			c.initTraceDurationRow(),
 			c.initCUStatusRow(),
+			c.initTraceMoLoggerExportDataRow(),
 		)...)
 	if err != nil {
 		return err
@@ -65,6 +66,25 @@ func (c *DashboardCreator) initTraceDurationRow() dashboard.Option {
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3, 3},
 			axis.Unit("s"),
+			axis.Min(0))...,
+	)
+}
+
+func (c *DashboardCreator) initTraceMoLoggerExportDataRow() dashboard.Option {
+	return dashboard.Row(
+		"MOLogger Export Bytes",
+		c.getMultiHistogram(
+			[]string{
+				c.getMetricWithFilter(`mo_trace_mologger_export_data_bytes`, `type="sql"`),
+				c.getMetricWithFilter(`mo_trace_mologger_export_data_bytes`, `type="csv"`),
+			},
+			[]string{
+				"sql",
+				"csv",
+			},
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			[]float32{3, 3, 3, 3, 3},
+			axis.Unit("bytes"),
 			axis.Min(0))...,
 	)
 }
