@@ -2133,7 +2133,6 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	epoch, printEvery, minReadTime, maxReadTime, minWriteTime, maxWriteTime := uint64(0), uint64(1024*60), 24*time.Hour, time.Nanosecond, 24*time.Hour, time.Nanosecond
 
 	readThenWrite := func() error {
-		defer mysqlRrWr.Free(payload)
 		readStart := time.Now()
 		payload, err = mysqlRrWr.Read()
 		if err != nil {

@@ -160,10 +160,6 @@ func (c *Conn) Read() ([]byte, error) {
 			}
 		}
 
-		if err != nil {
-			c.allocator.Free(finalPayload)
-		}
-
 	}(finalPayload, payloads, err)
 
 	for {
@@ -194,7 +190,9 @@ func (c *Conn) Read() ([]byte, error) {
 		}
 
 		if len(payloads) == 0 {
-			finalPayload = payload
+			finalPayload = make([]byte, len(payload))
+			copy(finalPayload, payload)
+			c.allocator.Free(payload)
 			return payload, nil
 		} else {
 			payloads = append(payloads, payload)
@@ -207,11 +205,7 @@ func (c *Conn) Read() ([]byte, error) {
 		totalLength += len(payload)
 	}
 	if totalLength > 0 {
-		finalPayload, err = c.allocator.Alloc(totalLength)
-	}
-
-	if err != nil {
-		return nil, err
+		finalPayload = make([]byte, totalLength)
 	}
 
 	copyIndex := 0
