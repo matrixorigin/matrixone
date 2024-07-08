@@ -329,18 +329,11 @@ func (nsp *Nulls) ReadNoCopy(data []byte) error {
 	return nil
 }
 
-// XXX This API is foundementally broken.  Depends on empty or not
-// this shit may or may not modify nsp.
-func (nsp *Nulls) Or(m *Nulls) *Nulls {
-	if m.np.EmptyByFlag() {
-		return nsp
+// Or the m Nulls into nsp.
+func (nsp *Nulls) Or(m *Nulls) {
+	if !m.np.EmptyByFlag() {
+		nsp.np.Or(&m.np)
 	}
-	if nsp.np.EmptyByFlag() {
-		return m
-	}
-
-	nsp.np.Or(&m.np)
-	return nsp
 }
 
 func (nsp *Nulls) IsSame(m *Nulls) bool {
