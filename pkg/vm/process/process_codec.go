@@ -64,6 +64,8 @@ func (proc *Process) BuildProcessInfo(
 		vec := proc.GetPrepareParams()
 		if vec != nil {
 			procInfo.PrepareParams.Length = int64(vec.Length())
+			procInfo.PrepareParams.Data = make([]byte, len(procInfo.PrepareParams.GetData()), 0)
+			procInfo.PrepareParams.Data = append(procInfo.PrepareParams.Data, procInfo.PrepareParams.GetData()...)
 			procInfo.PrepareParams.Area = make([]byte, len(procInfo.PrepareParams.GetArea()), 0)
 			procInfo.PrepareParams.Area = append(procInfo.PrepareParams.Area, procInfo.PrepareParams.GetArea()...)
 			procInfo.PrepareParams.Nulls = make([]bool, procInfo.PrepareParams.Length)
@@ -203,7 +205,9 @@ func (c *codecService) Decode(
 	if value.PrepareParams.Length > 0 {
 		proc.Base.prepareParams = vector.NewVec(types.T_text.ToType())
 		proc.Base.prepareParams.SetLength(int(value.PrepareParams.Length))
+		proc.Base.prepareParams.SetData(value.PrepareParams.Data)
 		proc.Base.prepareParams.SetArea(value.PrepareParams.Area)
+		proc.Base.prepareParams.SetupColFromData()
 		for i := range value.PrepareParams.Nulls {
 			if value.PrepareParams.Nulls[i] {
 				proc.Base.prepareParams.GetNulls().Add(uint64(i))

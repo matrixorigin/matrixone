@@ -473,8 +473,9 @@ message ProcessLimitation {
 
 message PrepareParamInfo {
   int64 length = 1;
-  bytes area = 2;
-  repeated bool nulls = 3;
+  bytes data = 2;
+  bytes area = 3;
+  repeated bool nulls = 4;
 }
 
 message ProcessInfo {

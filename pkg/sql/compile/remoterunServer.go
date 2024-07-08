@@ -532,7 +532,9 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 	if procInfo.PrepareParams.Length > 0 {
 		result.prepareParams = vector.NewVec(types.T_text.ToType())
 		result.prepareParams.SetLength(int(procInfo.PrepareParams.Length))
+		result.prepareParams.SetData(procInfo.PrepareParams.Data)
 		result.prepareParams.SetArea(procInfo.PrepareParams.Area)
+		result.prepareParams.SetupColFromData()
 		for i := range procInfo.PrepareParams.Nulls {
 			if procInfo.PrepareParams.Nulls[i] {
 				result.prepareParams.GetNulls().Add(uint64(i))
