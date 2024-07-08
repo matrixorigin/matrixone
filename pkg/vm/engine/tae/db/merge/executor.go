@@ -171,6 +171,9 @@ func (e *Executor) ExecuteMultiObjMerge(entry *catalog.TableEntry, mobjs []*cata
 	if ActiveCNObj.CheckOverlapOnCNActive(mobjs) {
 		return
 	}
+	if e.activeMergeBlkCount.Load() > 300 {
+		return
+	}
 
 	osize, esize, _ := estimateMergeConsume(mobjs)
 	blkCnt := 0
