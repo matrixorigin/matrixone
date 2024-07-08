@@ -64,6 +64,7 @@ const (
 )
 
 var traceFilterExprInterval atomic.Uint64
+var traceFilterExprInterval2 atomic.Uint64
 
 var _ engine.Relation = new(txnTable)
 
@@ -587,7 +588,10 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr, txnOffset i
 	defer func() {
 		cost := time.Since(start)
 
-		var step uint64
+		var (
+			step, slowStep uint64
+		)
+
 		rangesLen := ranges.Len()
 		if rangesLen < 5 {
 			step = uint64(1)
@@ -596,14 +600,19 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr, txnOffset i
 		} else if rangesLen < 20 {
 			step = uint64(10)
 		} else {
-			step = uint64(0)
+			slowStep = uint64(1)
 		}
+		tbl.enableLogFilterExpr.Store(false)
 		if traceFilterExprInterval.Add(step) >= 500000 {
 			traceFilterExprInterval.Store(0)
 			tbl.enableLogFilterExpr.Store(true)
 		}
+		if traceFilterExprInterval2.Add(slowStep) >= 20 {
+			traceFilterExprInterval2.Store(0)
+			tbl.enableLogFilterExpr.Store(true)
+		}
 
-		if rangesLen >= 20 {
+		if rangesLen >= 50 {
 			tbl.enableLogFilterExpr.Store(true)
 		}
 
