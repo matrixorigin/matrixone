@@ -35,12 +35,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
+	"go.uber.org/zap"
 )
 
 type flushTableTailEntry struct {
 	txn txnif.AsyncTxn
 
-	taskID     uint64
+	taskName   string
 	tableEntry *catalog.TableEntry
 
 	transMappings      *api.BlkTransferBooking
@@ -69,7 +70,7 @@ type flushTableTailEntry struct {
 
 func NewFlushTableTailEntry(
 	txn txnif.AsyncTxn,
-	taskID uint64,
+	taskName string,
 	mapping *api.BlkTransferBooking,
 	tableEntry *catalog.TableEntry,
 	ablksMetas []*catalog.ObjectEntry,
@@ -86,7 +87,7 @@ func NewFlushTableTailEntry(
 
 	entry := &flushTableTailEntry{
 		txn:                txn,
-		taskID:             taskID,
+		taskName:           taskName,
 		transMappings:      mapping,
 		tableEntry:         tableEntry,
 		ablksMetas:         ablksMetas,
@@ -223,14 +224,13 @@ func (entry *flushTableTailEntry) PrepareCommit() error {
 	}
 
 	if aconflictCnt, totalTrans := len(entry.nextRoundDirties), trans+entry.transCntBeforeCommit; aconflictCnt > 0 || totalTrans > 0 {
-		logutil.Infof(
-			"[FlushTabletail] task %d ww (%s .. %s): on %d ablk, transfer %v rows, %d in commit queue",
-			entry.taskID,
-			entry.txn.GetStartTS().ToString(),
-			entry.txn.GetPrepareTS().ToString(),
-			aconflictCnt,
-			totalTrans,
-			trans,
+		logutil.Info(
+			"[FLUSH-PREPARE-COMMIT]",
+			zap.String("task", entry.taskName),
+			zap.String("commit-ts", entry.txn.GetPrepareTS().ToString()),
+			zap.Int("ablks", aconflictCnt),
+			zap.Int("transfer-rows", totalTrans),
+			zap.Int("in-queue-transfers", trans),
 		)
 	}
 	return nil
@@ -238,7 +238,10 @@ func (entry *flushTableTailEntry) PrepareCommit() error {
 
 // PrepareRollback remove transfer page and written files
 func (entry *flushTableTailEntry) PrepareRollback() (err error) {
-	logutil.Warnf("[FlushTabletail] FT task %d rollback", entry.taskID)
+	logutil.Warn(
+		"[FLUSH-PREPARE-ROLLBACK]",
+		zap.String("task", entry.taskName),
+	)
 	// remove transfer page
 	for _, id := range entry.pageIds {
 		entry.rt.TransferTable.DeletePage(id)
@@ -257,7 +260,11 @@ func (entry *flushTableTailEntry) PrepareRollback() (err error) {
 	ablkNames := make([]string, 0, len(entry.ablksMetas))
 	for _, blk := range entry.ablksMetas {
 		if !blk.HasPersistedData() {
-			logutil.Infof("[FlushTabletail] skip empty ablk %s when rollback", blk.ID.String())
+			logutil.Info(
+				"[FLUSH-PREPARE-ROLLBACK]",
+				zap.String("task", entry.taskName),
+				zap.String("extra-info", fmt.Sprintf("skip empty ablk %s when rollback", blk.ID.String())),
+			)
 			continue
 		}
 		seg := blk.ID.Segment()

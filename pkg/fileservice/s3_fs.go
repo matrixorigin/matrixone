@@ -107,6 +107,16 @@ func NewS3FS(
 
 	}
 
+	// limit number of concurrent operations
+	concurrency := args.Concurrency
+	if concurrency == 0 {
+		concurrency = 100
+	}
+	fs.storage = newObjectStorageSemaphore(
+		fs.storage,
+		concurrency,
+	)
+
 	if !noCache {
 		if err := fs.initCaches(ctx, cacheConfig); err != nil {
 			return nil, err

@@ -32,7 +32,7 @@ var (
 	readWriteTimeout    = time.Second * 20
 	maxIdleConns        = 100
 	maxIdleConnsPerHost = 100
-	maxConnsPerHost     = 1000
+	maxConnsPerHost     = 100
 	idleConnTimeout     = 180 * time.Second
 )
 

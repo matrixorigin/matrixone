@@ -558,7 +558,7 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 }
 func (txn *Transaction) resetSnapshot() error {
 	txn.tableCache.tableMap.Range(func(key, value interface{}) bool {
-		value.(*txnTable).resetSnapshot()
+		value.(*txnTableDelegate).origin.resetSnapshot()
 		return true
 	})
 	return nil
@@ -707,6 +707,7 @@ type txnTable struct {
 	proc atomic.Pointer[process.Process]
 
 	createByStatementID int
+	enableLogFilterExpr atomic.Bool
 }
 
 type column struct {
