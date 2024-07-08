@@ -16,15 +16,12 @@ package compile
 
 import (
 	"context"
-	"hash/crc32"
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 
@@ -33,8 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
 	"github.com/stretchr/testify/require"
 
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/common/morpc/mock_morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -43,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
@@ -91,112 +85,49 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func Test_receiveMessageFromCnServer(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	ctx := context.TODO()
-
-	streamSender := mock_morpc.NewMockStream(ctrl)
-	ch := make(chan morpc.Message)
-	streamSender.EXPECT().Receive().Return(ch, nil)
-	aggexec.RegisterGroupConcatAgg(0, ",")
-	agg0 := aggexec.MakeAgg(
-		testutil.NewProcess(), 0, false, []types.Type{types.T_varchar.ToType()}...)
-
-	bat := &batch.Batch{
-		Recursive:  0,
-		Ro:         false,
-		ShuffleIDX: 0,
-		Cnt:        1,
-		Attrs:      []string{"1"},
-		Vecs:       []*vector.Vector{vector.NewVec(types.T_int64.ToType())},
-		Aggs:       []aggexec.AggFuncExec{agg0},
-		AuxData:    nil,
-	}
-	bat.SetRowCount(1)
-	data, err := types.Encode(bat)
-	require.Nil(t, err)
-
-	go func() {
-		msg := &pipeline.Message{
-			Data: data,
-		}
-		msg.Checksum = crc32.ChecksumIEEE(data)
-		ch <- msg
-	}()
-
-	vp := process.New(
-		ctx,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil)
-	vp.AnalInfos = []*process.AnalyzeInfo{}
-	vp.Reg = process.Register{}
-	c := reuse.Alloc[Compile](nil)
-	c.proc = vp
-	s := reuse.Alloc[Scope](nil)
-	s.Proc = vp
-	sender := &messageSenderOnClient{
-		ctx:          ctx,
-		streamSender: streamSender,
-		c:            c,
-	}
-	ch2 := make(chan *process.RegisterMessage)
-	ctx2, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	lastInstruction := vm.Instruction{
-		Arg: &connector.Argument{
-			Reg: &process.WaitRegister{
-				Ctx: ctx2,
-				Ch:  ch2,
-			},
-		},
-	}
-	err = receiveMessageFromCnServer(c, s, sender, lastInstruction)
-	require.Nil(t, err)
-}
-
 func Test_EncodeProcessInfo(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOperator.EXPECT().Snapshot().AnyTimes()
 
 	a := reuse.Alloc[process.AnalyzeInfo](nil)
-	proc := &process.Process{
-		Id:          "1",
-		Lim:         process.Limitation{},
-		UnixTime:    1000000,
-		Ctx:         defines.AttachAccountId(context.TODO(), catalog.System_Account),
-		TxnOperator: txnOperator,
-		AnalInfos:   []*process.AnalyzeInfo{a},
-		SessionInfo: process.SessionInfo{
-			Account:        "",
-			User:           "",
-			Host:           "",
-			Role:           "",
-			ConnectionID:   0,
-			AccountId:      0,
-			RoleId:         0,
-			UserId:         0,
-			LastInsertID:   0,
-			Database:       "",
-			Version:        "",
-			TimeZone:       time.Local,
-			StorageEngine:  nil,
-			QueryId:        nil,
-			ResultColTypes: nil,
-			SeqCurValues:   nil,
-			SeqDeleteKeys:  nil,
-			SeqAddValues:   nil,
-			SeqLastValue:   nil,
-			SqlHelper:      nil,
-		},
+	proc := process.New(defines.AttachAccountId(context.TODO(), catalog.System_Account),
+		nil,
+		nil,
+		txnOperator,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil)
+	proc.Base.Id = "1"
+	proc.Base.Lim = process.Limitation{}
+	proc.Base.UnixTime = 1000000
+	proc.Base.AnalInfos = []*process.AnalyzeInfo{a}
+	proc.Base.SessionInfo = process.SessionInfo{
+		Account:        "",
+		User:           "",
+		Host:           "",
+		Role:           "",
+		ConnectionID:   0,
+		AccountId:      0,
+		RoleId:         0,
+		UserId:         0,
+		LastInsertID:   0,
+		Database:       "",
+		Version:        "",
+		TimeZone:       time.Local,
+		StorageEngine:  nil,
+		QueryId:        nil,
+		ResultColTypes: nil,
+		SeqCurValues:   nil,
+		SeqDeleteKeys:  nil,
+		SeqAddValues:   nil,
+		SeqLastValue:   nil,
+		SqlHelper:      nil,
 	}
+
 	_, err := encodeProcessInfo(proc, "")
 	require.Nil(t, err)
 }
@@ -204,13 +135,14 @@ func Test_EncodeProcessInfo(t *testing.T) {
 func Test_refactorScope(t *testing.T) {
 	ctx := context.TODO()
 	proc := &process.Process{}
+	proc.Base = &process.BaseProcess{}
 
 	s := reuse.Alloc[Scope](nil)
 	s.Proc = proc
 	c := reuse.Alloc[Compile](nil)
 	c.anal = newAnaylze()
-	c.ctx = ctx
 	c.proc = proc
+	c.proc.Ctx = ctx
 	rs := appendWriteBackOperator(c, s)
 	require.Equal(t, rs.Instructions[1].Idx, -1)
 }

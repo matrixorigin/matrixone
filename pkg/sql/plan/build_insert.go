@@ -846,7 +846,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 			if err != nil {
 				return nil, err
 			}
-			vec.InplaceSort()
+			vec.InplaceSortAndCompact()
 			data, err := vec.MarshalBinary()
 			if err != nil {
 				return nil, err
@@ -866,7 +866,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 		}
 	}
 
-	filterExpr, err = ConstantFold(batch.EmptyForConstFoldBatch, filterExpr, proc, false)
+	filterExpr, err = ConstantFold(batch.EmptyForConstFoldBatch, filterExpr, proc, false, true)
 	if err != nil {
 		return nil, nil
 	}

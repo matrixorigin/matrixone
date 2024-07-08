@@ -314,16 +314,18 @@ func logAbortDeadLock(
 func logLockServiceStartSucc(
 	serviceID string) {
 	logger := getWithSkipLogger()
-	if logger.Enabled(zap.ErrorLevel) {
+	if logger.Enabled(zap.InfoLevel) {
 		logger.Info("lock service start successfully",
 			zap.String("serviceID", serviceID))
 	}
 }
 
-func logLockAllocatorStartSucc() {
+func logLockAllocatorStartSucc(
+	version uint64) {
 	logger := getWithSkipLogger()
-	if logger.Enabled(zap.ErrorLevel) {
-		logger.Info("lock allocator start successfully")
+	if logger.Enabled(zap.InfoLevel) {
+		logger.Info("lock allocator start successfully",
+			zap.Uint64("version", version))
 	}
 }
 
@@ -369,10 +371,12 @@ func logPingFailed(
 	}
 }
 
-func logCanLockOnService() {
+func logCanLockOnService(
+	serviceID string) {
 	logger := getWithSkipLogger()
 	if logger.Enabled(zap.InfoLevel) {
-		logger.Error("if lock on service")
+		logger.Error("if lock on service",
+			zap.String("serviceID", serviceID))
 	}
 }
 
@@ -496,6 +500,19 @@ func logStatus(
 	logger := getWithSkipLogger()
 	if logger.Enabled(zap.InfoLevel) {
 		logger.Info("service status",
+			zap.String("status", status.String()))
+	}
+}
+
+func logServiceStatus(
+	info string,
+	serviceID string,
+	status pb.Status) {
+	logger := getWithSkipLogger()
+	if logger.Enabled(zap.InfoLevel) {
+		logger.Info("service status",
+			zap.String("info", info),
+			zap.String("serviceID", serviceID),
 			zap.String("status", status.String()))
 	}
 }

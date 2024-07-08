@@ -674,6 +674,46 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `jq`
+	{
+		functionId: JQ,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInJq().jq
+				},
+			},
+		},
+	},
+
+	// function `try_jq`
+	{
+		functionId: TRY_JQ,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInJq().tryJq
+				},
+			},
+		},
+	},
+
 	// function `left`
 	{
 		functionId: LEFT,
@@ -1410,7 +1450,7 @@ var supportedStringBuiltIns = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return PrefixIn
+					return newImplPrefixIn().doPrefixIn
 				},
 			},
 		},
@@ -4751,6 +4791,57 @@ var supportedControlBuiltIns = []FuncNew{
 			},
 		},
 	},
+
+	// function `LAST_DAY`
+	{
+		functionId: LAST_DAY,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return LastDay
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_char},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return LastDay
+				},
+			},
+		},
+	},
+
+	// function `MAKEDATE`
+	{
+		functionId: MAKEDATE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return MakeDateString
+				},
+			},
+		},
+	},
 }
 
 var supportedOthersBuiltIns = []FuncNew{
@@ -5519,7 +5610,7 @@ var supportedOthersBuiltIns = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId:      0,
-				args:            []types.T{types.T_varchar, types.T_uint16},
+				args:            []types.T{types.T_varchar, types.T_enum},
 				volatile:        true,
 				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
@@ -5546,7 +5637,7 @@ var supportedOthersBuiltIns = []FuncNew{
 				volatile:        true,
 				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint16.ToType()
+					return types.T_enum.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return CastValueToIndex
@@ -5569,7 +5660,7 @@ var supportedOthersBuiltIns = []FuncNew{
 				volatile:        true,
 				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint16.ToType()
+					return types.T_enum.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return CastIndexValueToIndex

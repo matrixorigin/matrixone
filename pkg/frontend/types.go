@@ -27,6 +27,7 @@ import (
 	"go.uber.org/zap/zapcore"
 
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -234,35 +235,44 @@ func (prepareStmt *PrepareStmt) Close() {
 		}
 	}
 	if prepareStmt.compile != nil {
+		prepareStmt.compile.SetIsPrepare(false)
 		prepareStmt.compile.Release()
 		prepareStmt.compile = nil
 	}
 	if prepareStmt.PrepareStmt != nil {
 		prepareStmt.PrepareStmt.Free()
 	}
+	if prepareStmt.ParamTypes != nil {
+		prepareStmt.PrepareStmt = nil
+	}
 }
 
 var _ buf.Allocator = &SessionAllocator{}
 
 type SessionAllocator struct {
-	mp *mpool.MPool
+	allocator *malloc.ManagedAllocator
 }
 
 func NewSessionAllocator(pu *config.ParameterUnit) *SessionAllocator {
-	pool, err := mpool.NewMPool("frontend-goetty-pool-cn-level", pu.SV.GuestMmuLimitation, mpool.NoFixed)
-	if err != nil {
-		panic(err)
+	allocator := malloc.NewManagedAllocator(
+		malloc.NewSizeBoundedAllocator(
+			malloc.GetDefault(nil),
+			uint64(pu.SV.GuestMmuLimitation),
+			nil,
+		),
+	)
+	ret := &SessionAllocator{
+		allocator: allocator,
 	}
-	ret := &SessionAllocator{mp: pool}
 	return ret
 }
 
 func (s *SessionAllocator) Alloc(capacity int) ([]byte, error) {
-	return s.mp.Alloc(capacity)
+	return s.allocator.Allocate(uint64(capacity), malloc.NoClear)
 }
 
 func (s SessionAllocator) Free(bs []byte) {
-	s.mp.Free(bs)
+	s.allocator.Deallocate(bs, malloc.NoClear)
 }
 
 var _ FeSession = &Session{}

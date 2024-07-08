@@ -1,0 +1,541 @@
+drop account if exists acc01;
+[unknown result because it is related to issue#17300]
+create account acc01 admin_name = 'test_account' identified by '111';
+[unknown result because it is related to issue#17300]
+drop account if exists acc02;
+[unknown result because it is related to issue#17300]
+create account acc02 admin_name = 'test_account' identified by '111';
+[unknown result because it is related to issue#17300]
+drop database if exists acc_test01;
+[unknown result because it is related to issue#17300]
+create database acc_test01;
+[unknown result because it is related to issue#17300]
+use acc_test01;
+[unknown result because it is related to issue#17300]
+drop table if exists s3t;
+[unknown result because it is related to issue#17300]
+create table s3t (col1 int, col2 int, col3 int, primary key(col1, col2));
+[unknown result because it is related to issue#17300]
+insert into s3t select result, 2, 12 from generate_series(1, 30000, 1) g;
+[unknown result because it is related to issue#17300]
+select count(*) from s3t;
+[unknown result because it is related to issue#17300]
+select sum(col1) from s3t;
+[unknown result because it is related to issue#17300]
+select avg(col1) from s3t;
+[unknown result because it is related to issue#17300]
+select count(col3) from s3t where col1 > 1000;
+[unknown result because it is related to issue#17300]
+alter table s3t add column col4 int after col2;
+[unknown result because it is related to issue#17300]
+drop snapshot if exists sp01;
+[unknown result because it is related to issue#17300]
+create snapshot sp01 for cluster;
+[unknown result because it is related to issue#17300]
+show snapshots;
+[unknown result because it is related to issue#17300]
+use acc_test01;
+[unknown result because it is related to issue#17300]
+insert into s3t values (300001, 34, 23, 1);
+[unknown result because it is related to issue#17300]
+select count(*) from s3t;
+[unknown result because it is related to issue#17300]
+select * from s3t where col1 = 23;
+[unknown result because it is related to issue#17300]
+restore account acc01 from snapshot sp01 to account acc02;
+[unknown result because it is related to issue#17300]
+show databases;
+[unknown result because it is related to issue#17300]
+use acc_test01;
+[unknown result because it is related to issue#17300]
+show tables;
+[unknown result because it is related to issue#17300]
+select count(*) from s3t;
+[unknown result because it is related to issue#17300]
+select sum(col1) from s3t;
+[unknown result because it is related to issue#17300]
+select avg(col1) from s3t;
+[unknown result because it is related to issue#17300]
+select count(col3) from s3t where col1 > 1000;
+[unknown result because it is related to issue#17300]
+use acc_test01;
+[unknown result because it is related to issue#17300]
+alter table s3t drop column col4;
+[unknown result because it is related to issue#17300]
+show create table s3t;
+[unknown result because it is related to issue#17300]
+drop snapshot if exists sp02;
+[unknown result because it is related to issue#17300]
+create snapshot sp02 for cluster;
+[unknown result because it is related to issue#17300]
+restore account acc01 from snapshot sp02 to account acc02;
+[unknown result because it is related to issue#17300]
+use acc_test01;
+[unknown result because it is related to issue#17300]
+show create table s3t;
+[unknown result because it is related to issue#17300]
+restore account acc01 from snapshot sp01 to account acc02;
+[unknown result because it is related to issue#17300]
+show databases;
+[unknown result because it is related to issue#17300]
+use acc_test01;
+[unknown result because it is related to issue#17300]
+show tables;
+[unknown result because it is related to issue#17300]
+select count(*) from s3t;
+[unknown result because it is related to issue#17300]
+select sum(col1) from s3t;
+[unknown result because it is related to issue#17300]
+select avg(col1) from s3t;
+[unknown result because it is related to issue#17300]
+select count(col3) from s3t where col1 > 1000;
+[unknown result because it is related to issue#17300]
+show create table s3t;
+[unknown result because it is related to issue#17300]
+drop database acc_test01;
+[unknown result because it is related to issue#17300]
+drop database acc_test01;
+[unknown result because it is related to issue#17300]
+drop snapshot sp01;
+[unknown result because it is related to issue#17300]
+drop snapshot sp02;
+[unknown result because it is related to issue#17300]
+drop database if exists acc_test02;
+[unknown result because it is related to issue#17300]
+create database acc_test02;
+[unknown result because it is related to issue#17300]
+use acc_test02;
+[unknown result because it is related to issue#17300]
+drop table if exists pri01;
+[unknown result because it is related to issue#17300]
+create table pri01(
+deptno int unsigned comment '部门编号',
+dname varchar(15) comment '部门名称',
+loc varchar(50)  comment '部门所在位置',
+primary key(deptno)
+) comment='部门表';
+[unknown result because it is related to issue#17300]
+insert into pri01 values (10,'ACCOUNTING','NEW YORK');
+[unknown result because it is related to issue#17300]
+insert into pri01 values (20,'RESEARCH','DALLAS');
+[unknown result because it is related to issue#17300]
+insert into pri01 values (30,'SALES','CHICAGO');
+[unknown result because it is related to issue#17300]
+insert into pri01 values (40,'OPERATIONS','BOSTON');
+[unknown result because it is related to issue#17300]
+select count(*) from pri01;
+[unknown result because it is related to issue#17300]
+drop table if exists aff01;
+[unknown result because it is related to issue#17300]
+create table aff01(
+empno int unsigned auto_increment COMMENT '雇员编号',
+ename varchar(15) comment '雇员姓名',
+job varchar(10) comment '雇员职位',
+mgr int unsigned comment '雇员对应的领导的编号',
+hiredate date comment '雇员的雇佣日期',
+sal decimal(7,2) comment '雇员的基本工资',
+comm decimal(7,2) comment '奖金',
+deptno int unsigned comment '所在部门',
+primary key(empno),
+constraint `c1` foreign key (deptno) references pri01 (deptno)
+);
+[unknown result because it is related to issue#17300]
+insert into aff01 values (7369,'SMITH','CLERK',7902,'1980-12-17',800,NULL,20);
+[unknown result because it is related to issue#17300]
+insert into aff01 values (7499,'ALLEN','SALESMAN',7698,'1981-02-20',1600,300,30);
+[unknown result because it is related to issue#17300]
+insert into aff01 values (7521,'WARD','SALESMAN',7698,'1981-02-22',1250,500,30);
+[unknown result because it is related to issue#17300]
+insert into aff01 values (7566,'JONES','MANAGER',7839,'1981-04-02',2975,NULL,20);
+[unknown result because it is related to issue#17300]
+insert into aff01 values (7654,'MARTIN','SALESMAN',7698,'1981-09-28',1250,1400,30);
+[unknown result because it is related to issue#17300]
+insert into aff01 values (7698,'BLAKE','MANAGER',7839,'1981-05-01',2850,NULL,30);
+[unknown result because it is related to issue#17300]
+insert into aff01 values (7782,'CLARK','MANAGER',7839,'1981-06-09',2450,NULL,10);
+[unknown result because it is related to issue#17300]
+insert into aff01 values (7788,'SCOTT','ANALYST',7566,'0087-07-13',3000,NULL,20);
+[unknown result because it is related to issue#17300]
+insert into aff01 values (7839,'KING','PRESIDENT',NULL,'1981-11-17',5000,NULL,10);
+[unknown result because it is related to issue#17300]
+insert into aff01 values (7844,'TURNER','SALESMAN',7698,'1981-09-08',1500,0,30);
+[unknown result because it is related to issue#17300]
+insert into aff01 values (7876,'ADAMS','CLERK',7788,'0087-07-13',1100,NULL,20);
+[unknown result because it is related to issue#17300]
+insert into aff01 values (7900,'JAMES','CLERK',7698,'1981-12-03',950,NULL,30);
+[unknown result because it is related to issue#17300]
+insert into aff01 values (7902,'FORD','ANALYST',7566,'1981-12-03',3000,NULL,20);
+[unknown result because it is related to issue#17300]
+insert into aff01 values (7934,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,10);
+[unknown result because it is related to issue#17300]
+select count(*) from aff01;
+[unknown result because it is related to issue#17300]
+drop database if exists acc_test03;
+[unknown result because it is related to issue#17300]
+create database acc_test03;
+[unknown result because it is related to issue#17300]
+use acc_test03;
+[unknown result because it is related to issue#17300]
+drop table if exists table01;
+[unknown result because it is related to issue#17300]
+create table table01(col1 int primary key , col2 decimal, col3 char, col4 varchar(20), col5 text, col6 double);
+[unknown result because it is related to issue#17300]
+insert into table01 values (1, 2, 'a', '23eiojf', 'r23v324r23rer', 3923.324);
+[unknown result because it is related to issue#17300]
+insert into table01 values (2, 3, 'b', '32r32r', 'database', 1111111);
+[unknown result because it is related to issue#17300]
+create table table02 (col1 int unique key, col2 varchar(20));
+[unknown result because it is related to issue#17300]
+insert into table02 (col1, col2) values (133, 'database');
+[unknown result because it is related to issue#17300]
+create table table03(a INT primary key AUTO_INCREMENT, b INT, c INT);
+[unknown result because it is related to issue#17300]
+create table table04(a INT primary key AUTO_INCREMENT, b INT, c INT);
+[unknown result because it is related to issue#17300]
+insert into table03 values (1,1,1), (2,2,2);
+[unknown result because it is related to issue#17300]
+insert into table04 values (0,1,2), (2,3,4);
+[unknown result because it is related to issue#17300]
+select count(*) from table01;
+[unknown result because it is related to issue#17300]
+select count(*) from table02;
+[unknown result because it is related to issue#17300]
+select count(*) from table03;
+[unknown result because it is related to issue#17300]
+select count(*) from table04;
+[unknown result because it is related to issue#17300]
+drop database if exists acc_test04;
+[unknown result because it is related to issue#17300]
+create database acc_test04;
+[unknown result because it is related to issue#17300]
+use acc_test04;
+[unknown result because it is related to issue#17300]
+drop table if exists index03;
+[unknown result because it is related to issue#17300]
+create table index03 (
+emp_no      int             not null,
+birth_date  date            not null,
+first_name  varchar(14)     not null,
+last_name   varchar(16)     not null,
+gender      varchar(5)      not null,
+hire_date   date            not null,
+primary key (emp_no)
+) partition by range columns (emp_no)(
+partition p01 values less than (100001),
+partition p02 values less than (200001),
+partition p03 values less than (300001),
+partition p04 values less than (400001)
+);
+[unknown result because it is related to issue#17300]
+insert into index03 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-12-17'),
+(9002,'1981-02-20', 'ALLEN', 'SALESMAN', 'F', '2008-02-20');
+[unknown result because it is related to issue#17300]
+select count(*) from acc_test02.pri01;
+[unknown result because it is related to issue#17300]
+select count(*) from acc_test02.aff01;
+[unknown result because it is related to issue#17300]
+select * from acc_test02.pri01;
+[unknown result because it is related to issue#17300]
+show create table acc_test02.pri01;
+[unknown result because it is related to issue#17300]
+show create table acc_test02.aff01;
+[unknown result because it is related to issue#17300]
+select count(*) from acc_test03.table01;
+[unknown result because it is related to issue#17300]
+select count(*) from acc_test03.table02;
+[unknown result because it is related to issue#17300]
+select count(*) from acc_test03.table03;
+[unknown result because it is related to issue#17300]
+select count(*) from acc_test03.table04;
+[unknown result because it is related to issue#17300]
+show create table acc_test03.table01;
+[unknown result because it is related to issue#17300]
+show create table acc_test03.table02;
+[unknown result because it is related to issue#17300]
+show create table acc_test03.table03;
+[unknown result because it is related to issue#17300]
+show create table acc_test03.table04;
+[unknown result because it is related to issue#17300]
+select count(*) from acc_test04.index03;
+[unknown result because it is related to issue#17300]
+show create table acc_test04.index03;
+[unknown result because it is related to issue#17300]
+drop snapshot if exists sp04;
+[unknown result because it is related to issue#17300]
+create snapshot sp04 for cluster;
+[unknown result because it is related to issue#17300]
+insert into acc_test02.pri01 values (50,'ACCOUNTING','NEW YORK');
+[unknown result because it is related to issue#17300]
+insert into acc_test02.aff01 values (9000,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,50);
+[unknown result because it is related to issue#17300]
+truncate table acc_test03.table01;
+[unknown result because it is related to issue#17300]
+drop table acc_test03.table02;
+[unknown result because it is related to issue#17300]
+delete from acc_test03.table03 where a = 1;
+[unknown result because it is related to issue#17300]
+update acc_test03.table04 set a = 6000 where a = 1;
+[unknown result because it is related to issue#17300]
+select count(*) from acc_test02.pri01;
+[unknown result because it is related to issue#17300]
+select count(*) from acc_test02.aff01;
+[unknown result because it is related to issue#17300]
+select * from acc_test03.table01;
+[unknown result because it is related to issue#17300]
+select count(*) from acc_test03.table03;
+[unknown result because it is related to issue#17300]
+select * from acc_test03.table04;
+[unknown result because it is related to issue#17300]
+show create table acc_test04.index03;
+[unknown result because it is related to issue#17300]
+restore account acc01 from snapshot sp04 to account acc02;
+[unknown result because it is related to issue#17300]
+show databases;
+[unknown result because it is related to issue#17300]
+select count(*) from acc_test02.pri01;
+[unknown result because it is related to issue#17300]
+select count(*) from acc_test02.aff01;
+[unknown result because it is related to issue#17300]
+select count(*) from acc_test03.table01;
+[unknown result because it is related to issue#17300]
+select count(*) from acc_test03.table02;
+[unknown result because it is related to issue#17300]
+select count(*) from acc_test03.table03;
+[unknown result because it is related to issue#17300]
+select count(*) from acc_test03.table04;
+[unknown result because it is related to issue#17300]
+select count(*) from acc_test03.table04;
+[unknown result because it is related to issue#17300]
+drop database acc_test03;
+[unknown result because it is related to issue#17300]
+drop snapshot sp04;
+[unknown result because it is related to issue#17300]
+drop database if exists test01;
+[unknown result because it is related to issue#17300]
+create database test01;
+[unknown result because it is related to issue#17300]
+use test01;
+[unknown result because it is related to issue#17300]
+drop table if exists table01;
+[unknown result because it is related to issue#17300]
+create table table01(col1 int primary key , col2 decimal, col3 char, col4 varchar(20), col5 text, col6 double);
+[unknown result because it is related to issue#17300]
+insert into table01 values (1, 2, 'a', '23eiojf', 'r23v324r23rer', 3923.324);
+[unknown result because it is related to issue#17300]
+insert into table01 values (2, 3, 'b', '32r32r', 'database', 1111111);
+[unknown result because it is related to issue#17300]
+drop table if exists table02;
+[unknown result because it is related to issue#17300]
+create table table02 (col1 int unique key, col2 varchar(20));
+[unknown result because it is related to issue#17300]
+insert into table02 (col1, col2) values (133, 'database');
+[unknown result because it is related to issue#17300]
+select * from table01;
+[unknown result because it is related to issue#17300]
+select * from table02;
+[unknown result because it is related to issue#17300]
+drop snapshot if exists sp07;
+[unknown result because it is related to issue#17300]
+create snapshot sp07 for cluster;
+[unknown result because it is related to issue#17300]
+use test01;
+[unknown result because it is related to issue#17300]
+drop table table01;
+[unknown result because it is related to issue#17300]
+insert into table02 values(134, 'database');
+[unknown result because it is related to issue#17300]
+drop snapshot if exists sp08;
+[unknown result because it is related to issue#17300]
+create snapshot sp08 for cluster;
+[unknown result because it is related to issue#17300]
+show snapshots;
+[unknown result because it is related to issue#17300]
+restore account acc01 from snapshot sp07 to account acc02;
+[unknown result because it is related to issue#17300]
+restore account acc01 from snapshot sp08 to account acc02;
+[unknown result because it is related to issue#17300]
+use test01;
+[unknown result because it is related to issue#17300]
+show tables;
+[unknown result because it is related to issue#17300]
+select * from table01;
+[unknown result because it is related to issue#17300]
+select * from table02;
+[unknown result because it is related to issue#17300]
+show create table table02;
+[unknown result because it is related to issue#17300]
+drop database test01;
+[unknown result because it is related to issue#17300]
+drop database test01;
+[unknown result because it is related to issue#17300]
+drop snapshot sp07;
+[unknown result because it is related to issue#17300]
+drop snapshot sp08;
+[unknown result because it is related to issue#17300]
+drop database if exists test02;
+[unknown result because it is related to issue#17300]
+create database test02;
+[unknown result because it is related to issue#17300]
+use test02;
+[unknown result because it is related to issue#17300]
+drop table if exists table01;
+[unknown result because it is related to issue#17300]
+create table table01(col1 int primary key , col2 decimal, col3 char, col4 varchar(20), col5 text, col6 double);
+[unknown result because it is related to issue#17300]
+insert into table01 values (1, 2, 'a', '23eiojf', 'r23v324r23rer', 3923.324);
+[unknown result because it is related to issue#17300]
+insert into table01 values (2, 3, 'b', '32r32r', 'database', 1111111);
+[unknown result because it is related to issue#17300]
+drop table if exists table02;
+[unknown result because it is related to issue#17300]
+create table table02 (col1 int unique key, col2 varchar(20));
+[unknown result because it is related to issue#17300]
+insert into table02 (col1, col2) values (133, 'database');
+[unknown result because it is related to issue#17300]
+select * from table01;
+[unknown result because it is related to issue#17300]
+select * from table02;
+[unknown result because it is related to issue#17300]
+drop snapshot if exists sp09;
+[unknown result because it is related to issue#17300]
+create snapshot sp09 for cluster;
+[unknown result because it is related to issue#17300]
+use test02;
+[unknown result because it is related to issue#17300]
+drop table table01;
+[unknown result because it is related to issue#17300]
+insert into table02 values(134, 'database');
+[unknown result because it is related to issue#17300]
+alter table table02 add column new decimal after col2;
+[unknown result because it is related to issue#17300]
+drop snapshot if exists sp10;
+[unknown result because it is related to issue#17300]
+create snapshot sp10 for cluster;
+[unknown result because it is related to issue#17300]
+restore account acc01 from snapshot sp10 to account acc02;
+[unknown result because it is related to issue#17300]
+use test02;
+[unknown result because it is related to issue#17300]
+show create table table01;
+[unknown result because it is related to issue#17300]
+show create table table02;
+[unknown result because it is related to issue#17300]
+select * from table02;
+[unknown result because it is related to issue#17300]
+select * from table01;
+[unknown result because it is related to issue#17300]
+restore account acc01 from snapshot sp09 to account acc02;
+[unknown result because it is related to issue#17300]
+drop database test02;
+[unknown result because it is related to issue#17300]
+drop snapshot sp09;
+[unknown result because it is related to issue#17300]
+drop snapshot sp10;
+[unknown result because it is related to issue#17300]
+drop database if exists test01;
+[unknown result because it is related to issue#17300]
+create database test01;
+[unknown result because it is related to issue#17300]
+use test01;
+[unknown result because it is related to issue#17300]
+drop table if exists rs01;
+[unknown result because it is related to issue#17300]
+create table rs01 (col1 int, col2 decimal(6), col3 varchar(30));
+[unknown result because it is related to issue#17300]
+insert into rs01 values (1, null, 'database');
+[unknown result because it is related to issue#17300]
+insert into rs01 values (2, 38291.32132, 'database');
+[unknown result because it is related to issue#17300]
+insert into rs01 values (3, null, 'database management system');
+[unknown result because it is related to issue#17300]
+insert into rs01 values (4, 10, null);
+[unknown result because it is related to issue#17300]
+insert into rs01 values (1, -321.321, null);
+[unknown result because it is related to issue#17300]
+insert into rs01 values (2, -1, null);
+[unknown result because it is related to issue#17300]
+select count(*) from rs01;
+[unknown result because it is related to issue#17300]
+drop snapshot if exists sp03;
+[unknown result because it is related to issue#17300]
+create snapshot sp03 for cluster;
+[unknown result because it is related to issue#17300]
+use test01;
+[unknown result because it is related to issue#17300]
+delete from rs01 where col1 = 4;
+[unknown result because it is related to issue#17300]
+insert into rs01 values (10, -1, null);
+[unknown result because it is related to issue#17300]
+select count(*) from rs01;
+[unknown result because it is related to issue#17300]
+restore account acc01 from snapshot sp03 to account sys;
+[unknown result because it is related to issue#17300]
+drop snapshot sp03;
+[unknown result because it is related to issue#17300]
+drop database test01;
+[unknown result because it is related to issue#17300]
+drop account acc01;
+[unknown result because it is related to issue#17300]
+drop account acc02;
+[unknown result because it is related to issue#17300]
+drop database if exists test_fk;
+[unknown result because it is related to issue#17294]
+create database test_fk;
+[unknown result because it is related to issue#17294]
+use test_fk;
+[unknown result because it is related to issue#17294]
+CREATE TABLE Students (
+StudentID INT PRIMARY KEY,
+Name VARCHAR(100)
+);
+[unknown result because it is related to issue#17294]
+CREATE TABLE Courses (
+CourseID INT PRIMARY KEY,
+CourseName VARCHAR(100)
+);
+[unknown result because it is related to issue#17294]
+CREATE TABLE Enrollments (
+EnrollmentID INT PRIMARY KEY AUTO_INCREMENT,
+StudentID INT,
+CourseID INT,
+Grade CHAR(2),
+FOREIGN KEY (StudentID) REFERENCES Students(StudentID),
+FOREIGN KEY (CourseID) REFERENCES Courses(CourseID)
+);
+[unknown result because it is related to issue#17294]
+INSERT INTO Students (StudentID, Name) VALUES (1, 'Alice');
+[unknown result because it is related to issue#17294]
+INSERT INTO Students (StudentID, Name) VALUES (2, 'Bob');
+[unknown result because it is related to issue#17294]
+INSERT INTO Courses (CourseID, CourseName) VALUES (101, 'Mathematics');
+[unknown result because it is related to issue#17294]
+INSERT INTO Courses (CourseID, CourseName) VALUES (102, 'Physics');
+[unknown result because it is related to issue#17294]
+INSERT INTO Enrollments (StudentID, CourseID, Grade) VALUES (1, 101, 'A');
+[unknown result because it is related to issue#17294]
+INSERT INTO Enrollments (StudentID, CourseID, Grade) VALUES (1, 102, 'B');
+[unknown result because it is related to issue#17294]
+INSERT INTO Enrollments (StudentID, CourseID, Grade) VALUES (2, 101, 'B');
+[unknown result because it is related to issue#17294]
+drop snapshot if exists sp_fk;
+[unknown result because it is related to issue#17294]
+create snapshot sp_fk for cluster;
+[unknown result because it is related to issue#17294]
+restore account acc01 database test_fk table Students from snapshot sp_fk to account acc02;
+[unknown result because it is related to issue#17294]
+restore account acc01 database test_fk table Courses from snapshot sp_fk to account acc02;
+[unknown result because it is related to issue#17294]
+restore account acc01 database test_fk table Enrollments from snapshot sp_fk to account acc02;
+[unknown result because it is related to issue#17294]
+show databases;
+[unknown result because it is related to issue#17294]
+select * from Students;
+[unknown result because it is related to issue#17294]
+select * from Courses;
+[unknown result because it is related to issue#17294]
+select * from Enrollments;
+[unknown result because it is related to issue#17294]
+drop snapshot sp_fk;
+[unknown result because it is related to issue#17294]
+drop database test_fk;
+[unknown result because it is related to issue#17294]

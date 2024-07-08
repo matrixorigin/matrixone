@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go/constant"
 	"slices"
 	"strconv"
@@ -32,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -70,7 +70,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 	}
 }
 
-func (builder *QueryBuilder) remapColRefForExpr(expr *Expr, colMap map[[2]int32][2]int32) error {
+func (builder *QueryBuilder) remapColRefForExpr(expr *Expr, colMap map[[2]int32][2]int32, remapInfo *RemapInfo) error {
 	switch ne := expr.Expr.(type) {
 	case *plan.Expr_Col:
 		mapID := [2]int32{ne.Col.RelPos, ne.Col.ColPos}
@@ -84,18 +84,18 @@ func (builder *QueryBuilder) remapColRefForExpr(expr *Expr, colMap map[[2]int32]
 				keys = append(keys, fmt.Sprintf("%v", k))
 			}
 			mapKeys := fmt.Sprintf("{ %s }", strings.Join(keys, ", "))
-			return moerr.NewParseError(builder.GetContext(), "can't find column %v in context's map %s", mapID, mapKeys)
+			return moerr.NewParseError(builder.GetContext(), "remapInfo %s ; can't find column %v in context's map %s", remapInfo.String(), mapID, mapKeys)
 		}
 
 	case *plan.Expr_F:
 		for _, arg := range ne.F.GetArgs() {
-			err := builder.remapColRefForExpr(arg, colMap)
+			err := builder.remapColRefForExpr(arg, colMap, remapInfo)
 			if err != nil {
 				return err
 			}
 		}
 	case *plan.Expr_W:
-		err := builder.remapColRefForExpr(ne.W.WindowFunc, colMap)
+		err := builder.remapColRefForExpr(ne.W.WindowFunc, colMap, remapInfo)
 		if err != nil {
 			return err
 		}
@@ -106,7 +106,7 @@ func (builder *QueryBuilder) remapColRefForExpr(expr *Expr, colMap map[[2]int32]
 		//	}
 		//}
 		for _, order := range ne.W.OrderBy {
-			err = builder.remapColRefForExpr(order.Expr, colMap)
+			err = builder.remapColRefForExpr(order.Expr, colMap, remapInfo)
 			if err != nil {
 				return err
 			}
@@ -125,6 +125,24 @@ func (m *ColRefRemapping) addColRef(colRef [2]int32) {
 	m.localToGlobal = append(m.localToGlobal, colRef)
 }
 
+func (m *ColRefRemapping) String() string {
+	if m == nil {
+		return "empty ColRefRemapping"
+	}
+	sb := strings.Builder{}
+	sb.WriteString("ColRefRemapping{")
+	sb.WriteString("globalToLocal")
+	for k, v := range m.globalToLocal {
+		sb.WriteString(fmt.Sprintf("[%v : %v]", k, v))
+	}
+	sb.WriteString("localToGlobal")
+	for k, v := range m.localToGlobal {
+		sb.WriteString(fmt.Sprintf("[%v : %v]", k, v))
+	}
+	sb.WriteString("}")
+	return sb.String()
+}
+
 func (builder *QueryBuilder) copyNode(ctx *BindContext, nodeId int32) int32 {
 	node := builder.qry.Nodes[nodeId]
 	newNode := DeepCopyNode(node)
@@ -141,6 +159,14 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 
 	remapping := &ColRefRemapping{
 		globalToLocal: make(map[[2]int32][2]int32),
+	}
+	remapInfo := RemapInfo{
+		step:       step,
+		node:       node,
+		colRefCnt:  colRefCnt,
+		colRefBool: colRefBool,
+		sinkColRef: sinkColRef,
+		remapping:  remapping,
 	}
 
 	switch node.NodeType {
@@ -174,9 +200,12 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 
 		node.TableDef = newTableDef
 
-		for _, expr := range node.FilterList {
+		remapInfo.tip = "FilterList"
+		remapInfo.interRemapping = internalRemapping
+		for idx, expr := range node.FilterList {
 			increaseRefCnt(expr, -1, colRefCnt)
-			err := builder.remapColRefForExpr(expr, internalRemapping.globalToLocal)
+			remapInfo.srcExprIdx = idx
+			err := builder.remapColRefForExpr(expr, internalRemapping.globalToLocal, &remapInfo)
 			if err != nil {
 				return nil, err
 			}
@@ -245,9 +274,12 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			return nil, err
 		}
 
-		for _, expr := range node.TblFuncExprList {
+		remapInfo.tip = "TblFuncExprList"
+		remapInfo.interRemapping = internalRemapping
+		for idx, expr := range node.TblFuncExprList {
 			increaseRefCnt(expr, -1, colRefCnt)
-			err = builder.remapColRefForExpr(expr, childMap.globalToLocal)
+			remapInfo.srcExprIdx = idx
+			err = builder.remapColRefForExpr(expr, childMap.globalToLocal, &remapInfo)
 			if err != nil {
 				return nil, err
 			}
@@ -293,26 +325,33 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 
 		node.TableDef = newTableDef
 
-		for _, expr := range node.FilterList {
+		remapInfo.tip = "FilterList"
+		remapInfo.interRemapping = internalRemapping
+		for idx, expr := range node.FilterList {
 			increaseRefCnt(expr, -1, colRefCnt)
-			err := builder.remapColRefForExpr(expr, internalRemapping.globalToLocal)
+			remapInfo.srcExprIdx = idx
+			err := builder.remapColRefForExpr(expr, internalRemapping.globalToLocal, &remapInfo)
 			if err != nil {
 				return nil, err
 			}
 		}
 
-		for _, expr := range node.BlockFilterList {
+		remapInfo.tip = "BlockFilterList"
+		for idx, expr := range node.BlockFilterList {
 			increaseRefCnt(expr, -1, colRefCnt)
-			err := builder.remapColRefForExpr(expr, internalRemapping.globalToLocal)
+			remapInfo.srcExprIdx = idx
+			err := builder.remapColRefForExpr(expr, internalRemapping.globalToLocal, &remapInfo)
 			if err != nil {
 				return nil, err
 			}
 		}
 
-		for _, rfSpec := range node.RuntimeFilterProbeList {
+		remapInfo.tip = "RuntimeFilterProbeList"
+		for idx, rfSpec := range node.RuntimeFilterProbeList {
 			if rfSpec.Expr != nil {
 				increaseRefCnt(rfSpec.Expr, -1, colRefCnt)
-				err := builder.remapColRefForExpr(rfSpec.Expr, internalRemapping.globalToLocal)
+				remapInfo.srcExprIdx = idx
+				err := builder.remapColRefForExpr(rfSpec.Expr, internalRemapping.globalToLocal, &remapInfo)
 				if err != nil {
 					return nil, err
 				}
@@ -410,9 +449,11 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			return nil, err
 		}
 
-		for _, expr := range node.ProjectList {
+		remapInfo.tip = "ProjectList"
+		for idx, expr := range node.ProjectList {
 			increaseRefCnt(expr, -1, colRefCnt)
-			err := builder.remapColRefForExpr(expr, internalMap)
+			remapInfo.srcExprIdx = idx
+			err := builder.remapColRefForExpr(expr, internalMap, &remapInfo)
 			if err != nil {
 				return nil, err
 			}
@@ -445,9 +486,11 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			internalMap[k] = [2]int32{1, v[1]}
 		}
 
-		for _, expr := range node.OnList {
+		remapInfo.tip = "OnList"
+		for idx, expr := range node.OnList {
 			increaseRefCnt(expr, -1, colRefCnt)
-			err := builder.remapColRefForExpr(expr, internalMap)
+			remapInfo.srcExprIdx = idx
+			err := builder.remapColRefForExpr(expr, internalMap, &remapInfo)
 			if err != nil {
 				return nil, err
 			}
@@ -556,9 +599,11 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			builder.remapHavingClause(expr, groupTag, aggregateTag, groupSize)
 		}
 
+		remapInfo.tip = "GroupBy"
 		for idx, expr := range node.GroupBy {
 			increaseRefCnt(expr, -1, colRefCnt)
-			err := builder.remapColRefForExpr(expr, childRemapping.globalToLocal)
+			remapInfo.srcExprIdx = idx
+			err := builder.remapColRefForExpr(expr, childRemapping.globalToLocal, &remapInfo)
 			if err != nil {
 				return nil, err
 			}
@@ -582,9 +627,11 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			})
 		}
 
+		remapInfo.tip = "AggList"
 		for idx, expr := range node.AggList {
 			increaseRefCnt(expr, -1, colRefCnt)
-			err := builder.remapColRefForExpr(expr, childRemapping.globalToLocal)
+			remapInfo.srcExprIdx = idx
+			err := builder.remapColRefForExpr(expr, childRemapping.globalToLocal, &remapInfo)
 			if err != nil {
 				return nil, err
 			}
@@ -673,10 +720,12 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			builder.remapHavingClause(expr, groupTag, sampleTag, int32(len(node.GroupBy)))
 		}
 
+		remapInfo.tip = "GroupBy"
 		// deal with group col and sample col.
 		for i, expr := range node.GroupBy {
 			increaseRefCnt(expr, -1, colRefCnt)
-			err = builder.remapColRefForExpr(expr, childRemapping.globalToLocal)
+			remapInfo.srcExprIdx = i
+			err = builder.remapColRefForExpr(expr, childRemapping.globalToLocal, &remapInfo)
 			if err != nil {
 				return nil, err
 			}
@@ -701,9 +750,11 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 		offsetSize := int32(len(node.GroupBy))
+		remapInfo.tip = "AggList"
 		for i, expr := range node.AggList {
 			increaseRefCnt(expr, -1, colRefCnt)
-			err = builder.remapColRefForExpr(expr, childRemapping.globalToLocal)
+			remapInfo.srcExprIdx = i
+			err = builder.remapColRefForExpr(expr, childRemapping.globalToLocal, &remapInfo)
 			if err != nil {
 				return nil, err
 			}
@@ -765,7 +816,9 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 		increaseRefCnt(node.OrderBy[0].Expr, -1, colRefCnt)
-		err = builder.remapColRefForExpr(node.OrderBy[0].Expr, childRemapping.globalToLocal)
+		remapInfo.tip = "OrderBy[0].Expr"
+		remapInfo.srcExprIdx = 0
+		err = builder.remapColRefForExpr(node.OrderBy[0].Expr, childRemapping.globalToLocal, &remapInfo)
 		if err != nil {
 			return nil, err
 		}
@@ -773,6 +826,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		idx := 0
 		var wstart, wend *plan.Expr
 		var i, j int
+		remapInfo.tip = "AggList"
 		for k, expr := range node.AggList {
 			if e, ok := expr.Expr.(*plan.Expr_Col); ok {
 				if e.Col.Name == TimeWindowStart {
@@ -786,7 +840,8 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				continue
 			}
 			increaseRefCnt(expr, -1, colRefCnt)
-			err = builder.remapColRefForExpr(expr, childRemapping.globalToLocal)
+			remapInfo.srcExprIdx = k
+			err = builder.remapColRefForExpr(expr, childRemapping.globalToLocal, &remapInfo)
 			if err != nil {
 				return nil, err
 			}
@@ -893,9 +948,11 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			builder.remapWindowClause(expr, windowTag, int32(l))
 		}
 
-		for _, expr := range node.WinSpecList {
+		remapInfo.tip = "WinSpecList"
+		for idx, expr := range node.WinSpecList {
 			increaseRefCnt(expr, -1, colRefCnt)
-			err = builder.remapColRefForExpr(expr, childRemapping.globalToLocal)
+			remapInfo.srcExprIdx = idx
+			err = builder.remapColRefForExpr(expr, childRemapping.globalToLocal, &remapInfo)
 			if err != nil {
 				return nil, err
 			}
@@ -968,9 +1025,11 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			return nil, err
 		}
 
-		for _, orderBy := range node.OrderBy {
+		remapInfo.tip = "OrderBy"
+		for idx, orderBy := range node.OrderBy {
 			increaseRefCnt(orderBy.Expr, -1, colRefCnt)
-			err := builder.remapColRefForExpr(orderBy.Expr, childRemapping.globalToLocal)
+			remapInfo.srcExprIdx = idx
+			err := builder.remapColRefForExpr(orderBy.Expr, childRemapping.globalToLocal, &remapInfo)
 			if err != nil {
 				return nil, err
 			}
@@ -1022,9 +1081,11 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			return nil, err
 		}
 
-		for _, expr := range node.FilterList {
+		remapInfo.tip = "FilterList"
+		for idx, expr := range node.FilterList {
 			increaseRefCnt(expr, -1, colRefCnt)
-			err := builder.remapColRefForExpr(expr, childRemapping.globalToLocal)
+			remapInfo.srcExprIdx = idx
+			err := builder.remapColRefForExpr(expr, childRemapping.globalToLocal, &remapInfo)
 			if err != nil {
 				return nil, err
 			}
@@ -1155,10 +1216,12 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 
 		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
 		var newProjList []*plan.Expr
-		for _, needed := range neededProj {
+		remapInfo.tip = "neededProj"
+		for idx, needed := range neededProj {
 			expr := node.ProjectList[needed]
 			increaseRefCnt(expr, -1, colRefCnt)
-			err := builder.remapColRefForExpr(expr, childRemapping.globalToLocal)
+			remapInfo.srcExprIdx = idx
+			err := builder.remapColRefForExpr(expr, childRemapping.globalToLocal, &remapInfo)
 			if err != nil {
 				return nil, err
 			}
@@ -1435,22 +1498,13 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.skipStats = builder.canSkipStats()
 		builder.rewriteDistinctToAGG(rootID)
 		builder.rewriteEffectlessAggToProject(rootID)
-		rootID, _ = builder.pushdownFilters(rootID, nil, false)
-		builder.mergeFiltersOnCompositeKey(rootID)
-		err := foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID)
-		if err != nil {
-			return nil, err
-		}
-		builder.optimizeDateFormatExpr(rootID)
-
+		rootID = builder.optimizeFilters(rootID)
 		builder.pushdownLimitToTableScan(rootID)
 
 		colRefCnt := make(map[[2]int32]int)
 		builder.countColRefs(rootID, colRefCnt)
 		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, colRefCnt)
-
-		rewriteFilterListByStats(builder.GetContext(), rootID, builder)
-		ReCalcNodeStats(rootID, builder, true, true, true)
+		ReCalcNodeStats(rootID, builder, true, false, true)
 		builder.determineBuildAndProbeSide(rootID, true)
 		determineHashOnPK(rootID, builder)
 		tagCnt := make(map[int32]int)
@@ -1483,7 +1537,6 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 
 		builder.partitionPrune(rootID)
 
-		builder.optimizeLikeExpr(rootID)
 		rootID = builder.applyIndices(rootID, colRefCnt, make(map[[2]int32]*plan.Expr))
 		ReCalcNodeStats(rootID, builder, true, false, true)
 
@@ -2329,7 +2382,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			if ctx.recSelect {
 				return 0, moerr.NewParseError(builder.GetContext(), "not support group by in recursive cte: '%v'", tree.String(&clause.GroupBy, dialect.MYSQL))
 			}
-			groupBinder := NewGroupBinder(builder, ctx)
+			groupBinder := NewGroupBinder(builder, ctx, selectList)
 			for _, group := range clause.GroupBy {
 				group, err = ctx.qualifyColumnNames(group, AliasAfterColumn)
 				if err != nil {
@@ -3250,7 +3303,29 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 	case *tree.TableName:
 		schema := string(tbl.SchemaName)
 		table := string(tbl.ObjectName)
-		if len(table) == 0 || table == "dual" { //special table name
+		if len(table) == 0 || len(schema) == 0 && table == "dual" { //special table name
+			//special dual cases.
+			//CORNER CASE 1:
+			//  create table `dual`(a int);
+			//	select * from dual;
+			//		mysql responses:  No tables used
+			//		mysql treats it as the placeholder
+			//		mo treats it also
+			//
+			//CORNER CASE 2: select * from `dual`;
+			//  create table `dual`(a int);
+			//	select * from `dual`;
+			//  	mysql responses: success.
+			//		mysql treats it as the normal table.
+			//		mo treats it also the placeholder.
+			//
+			//CORNER CASE 3:
+			//  create table `dual`(a int);
+			//	select * from db.dual;
+			//		mysql responses: success.
+			//  select * from icp.`dual`;
+			//		mysql responses: success.
+			//Within quote, the mysql treats the 'dual' as the normal table. mo also.
 			nodeID = builder.appendNode(&plan.Node{
 				NodeType: plan.Node_VALUE_SCAN,
 			}, ctx)

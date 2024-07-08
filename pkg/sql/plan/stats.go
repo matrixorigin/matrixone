@@ -457,8 +457,17 @@ func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *Q
 	if s == nil {
 		return 0.1
 	}
+
 	//check strict filter, otherwise can not estimate outcnt by min/max val
-	col, litType, literals, colFnName := extractColRefAndLiteralsInFilter(expr)
+	col, litType, literals, colFnName, hasDynamicParam := extractColRefAndLiteralsInFilter(expr)
+	if hasDynamicParam {
+		// assume dynamic parameter always has low selectivity
+		if funcName == "between" {
+			return 0.0001
+		} else {
+			return 0.01
+		}
+	}
 	if col != nil && len(literals) > 0 {
 		typ := types.T(s.DataTypeMap[col.Name])
 		if !(typ.IsInteger() || typ.IsDateRelate()) {
@@ -503,17 +512,26 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder) float64 {
 		case ">", "<", ">=", "<=", "between":
 			ret = estimateNonEqualitySelectivity(expr, funcName, builder)
 		case "and":
-			sel1 := estimateExprSelectivity(exprImpl.F.Args[0], builder)
-			sel2 := estimateExprSelectivity(exprImpl.F.Args[1], builder)
-			if canMergeToBetweenAnd(exprImpl.F.Args[0], exprImpl.F.Args[1]) && (sel1+sel2) > 1 {
-				ret = sel1 + sel2 - 1
+			ret = estimateExprSelectivity(exprImpl.F.Args[0], builder)
+			if len(exprImpl.F.Args) == 2 {
+				sel2 := estimateExprSelectivity(exprImpl.F.Args[1], builder)
+				if canMergeToBetweenAnd(exprImpl.F.Args[0], exprImpl.F.Args[1]) && (ret+sel2) > 1 {
+					ret = ret + sel2 - 1
+				} else {
+					ret = andSelectivity(ret, sel2)
+				}
 			} else {
-				ret = andSelectivity(sel1, sel2)
+				for i := 1; i < len(exprImpl.F.Args); i++ {
+					sel2 := estimateExprSelectivity(exprImpl.F.Args[i], builder)
+					ret = andSelectivity(ret, sel2)
+				}
 			}
 		case "or":
-			sel1 := estimateExprSelectivity(exprImpl.F.Args[0], builder)
-			sel2 := estimateExprSelectivity(exprImpl.F.Args[1], builder)
-			ret = orSelectivity(sel1, sel2)
+			ret = estimateExprSelectivity(exprImpl.F.Args[0], builder)
+			for i := 1; i < len(exprImpl.F.Args); i++ {
+				sel2 := estimateExprSelectivity(exprImpl.F.Args[i], builder)
+				ret = orSelectivity(ret, sel2)
+			}
 		case "not":
 			ret = 1 - estimateExprSelectivity(exprImpl.F.Args[0], builder)
 		case "like":
@@ -892,7 +910,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		limitExpr := DeepCopyExpr(node.Limit)
 		if _, ok := limitExpr.Expr.(*plan.Expr_F); ok {
 			if !hasParam(limitExpr) {
-				limitExpr, _ = ConstantFold(batch.EmptyForConstFoldBatch, limitExpr, builder.compCtx.GetProcess(), true)
+				limitExpr, _ = ConstantFold(batch.EmptyForConstFoldBatch, limitExpr, builder.compCtx.GetProcess(), true, true)
 			}
 		}
 		if cExpr, ok := limitExpr.Expr.(*plan.Expr_Lit); ok {
@@ -989,24 +1007,19 @@ func getCost(start *Expr, end *Expr, step *Expr) (float64, bool) {
 	return ret, true
 }
 
-func foldTableScanFilters(proc *process.Process, qry *Query, nodeId int32) error {
+func foldTableScanFilters(proc *process.Process, qry *Query, nodeId int32, foldInExpr bool) {
 	node := qry.Nodes[nodeId]
 	if node.NodeType == plan.Node_TABLE_SCAN && len(node.FilterList) > 0 {
 		for i, e := range node.FilterList {
-			foldedExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, e, proc, false)
-			if err != nil {
-				return err
+			foldedExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, e, proc, false, foldInExpr)
+			if err == nil && foldedExpr != nil {
+				node.FilterList[i] = foldedExpr
 			}
-			node.FilterList[i] = foldedExpr
 		}
 	}
 	for _, childId := range node.Children {
-		err := foldTableScanFilters(proc, qry, childId)
-		if err != nil {
-			return err
-		}
+		foldTableScanFilters(proc, qry, childId, foldInExpr)
 	}
-	return nil
 }
 
 func recalcStatsByRuntimeFilter(scanNode *plan.Node, joinNode *plan.Node, builder *QueryBuilder) {
@@ -1253,6 +1266,9 @@ func compareStats(stats1, stats2 *Stats) bool {
 }
 
 func andSelectivity(s1, s2 float64) float64 {
+	if s1 < s2 {
+		s1, s2 = s2, s1
+	}
 	if s1 > 0.15 || s2 > 0.15 || s1*s2 > 0.1 {
 		return s1 * s2
 	}
@@ -1261,6 +1277,9 @@ func andSelectivity(s1, s2 float64) float64 {
 
 func orSelectivity(s1, s2 float64) float64 {
 	var s float64
+	if s1 < s2 {
+		s1, s2 = s2, s1
+	}
 	if math.Abs(s1-s2) < 0.001 && s1 < 0.2 {
 		s = s1 + s2
 	} else {
@@ -1282,7 +1301,7 @@ func HasShuffleInPlan(qry *plan.Query) bool {
 	return false
 }
 
-func GetExecType(qry *plan.Query) ExecType {
+func GetExecType(qry *plan.Query, txnHaveDDL bool) ExecType {
 	ret := ExecTypeTP
 	for _, node := range qry.GetNodes() {
 		switch node.NodeType {
@@ -1291,7 +1310,9 @@ func GetExecType(qry *plan.Query) ExecType {
 		}
 		stats := node.Stats
 		if stats == nil || stats.BlockNum > int32(BlockThresholdForOneCN) || stats.Cost > float64(costThresholdForOneCN) {
-			return ExecTypeAP_MULTICN
+			if !txnHaveDDL {
+				return ExecTypeAP_MULTICN
+			}
 		}
 		if stats.BlockNum > blockThresholdForTpQuery || stats.Cost > costThresholdForTpQuery {
 			ret = ExecTypeAP_ONECN
@@ -1303,8 +1324,8 @@ func GetExecType(qry *plan.Query) ExecType {
 	return ret
 }
 
-func GetPlanTitle(qry *plan.Query) string {
-	switch GetExecType(qry) {
+func GetPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
+	switch GetExecType(qry, txnHaveDDL) {
 	case ExecTypeTP:
 		return "TP QURERY PLAN"
 	case ExecTypeAP_ONECN:

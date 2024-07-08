@@ -15,30 +15,20 @@
 package compile
 
 import (
-	"context"
-	"errors"
 	"fmt"
-	"time"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/lockservice"
-	"github.com/matrixorigin/matrixone/pkg/logservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
@@ -93,281 +83,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/udf"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
 )
-
-// CnServerMessageHandler is responsible for processing the cn-client message received at cn-server.
-// The message is always *pipeline.Message here. It's a byte array encoded by method encodeScope.
-func CnServerMessageHandler(
-	ctx context.Context,
-	cnAddr string,
-	message morpc.Message,
-	cs morpc.ClientSession,
-	storeEngine engine.Engine,
-	fileService fileservice.FileService,
-	lockService lockservice.LockService,
-	queryClient qclient.QueryClient,
-	hakeeper logservice.CNHAKeeperClient,
-	udfService udf.Service,
-	cli client.TxnClient,
-	aicm *defines.AutoIncrCacheManager,
-	messageAcquirer func() morpc.Message) (err error) {
-	defer func() {
-		if e := recover(); e != nil {
-			err = moerr.ConvertPanicError(ctx, e)
-			getLogger().Error("panic in cn message handler",
-				zap.String("error", err.Error()))
-			err = errors.Join(err, cs.Close())
-		}
-	}()
-	start := time.Now()
-	defer func() {
-		v2.PipelineServerDurationHistogram.Observe(time.Since(start).Seconds())
-	}()
-
-	msg, ok := message.(*pipeline.Message)
-	if !ok {
-		logutil.Errorf("cn server should receive *pipeline.Message, but get %v", message)
-		panic("cn server receive a message with unexpected type")
-	}
-
-	receiver := newMessageReceiverOnServer(ctx, cnAddr, msg,
-		cs, messageAcquirer, storeEngine, fileService, lockService, queryClient, hakeeper, udfService, cli, aicm)
-
-	// rebuild pipeline to run and send the query result back.
-	err = cnMessageHandle(&receiver)
-	if err != nil {
-		return receiver.sendError(err)
-	}
-	return receiver.sendEndMessage()
-}
-
-// cnMessageHandle deal the received message at cn-server.
-func cnMessageHandle(receiver *messageReceiverOnServer) error {
-	switch receiver.messageTyp {
-	case pipeline.Method_PrepareDoneNotifyMessage: // notify the dispatch executor
-		dispatchProc, err := receiver.GetProcByUuid(receiver.messageUuid)
-		if err != nil || dispatchProc == nil {
-			return err
-		}
-
-		infoToDispatchOperator := process.WrapCs{
-			MsgId: receiver.messageId,
-			Uid:   receiver.messageUuid,
-			Cs:    receiver.clientSession,
-			Err:   make(chan error, 1),
-		}
-
-		// todo : the timeout should be removed.
-		//		but I keep it here because I don't know whether it will cause hung sometimes.
-		timeLimit, cancel := context.WithTimeout(context.TODO(), HandleNotifyTimeout)
-
-		succeed := false
-		select {
-		case <-timeLimit.Done():
-			err = moerr.NewInternalError(receiver.ctx, "send notify msg to dispatch operator timeout")
-		case dispatchProc.DispatchNotifyCh <- infoToDispatchOperator:
-			succeed = true
-		case <-receiver.ctx.Done():
-		case <-dispatchProc.Ctx.Done():
-		}
-		cancel()
-
-		if err != nil || !succeed {
-			dispatchProc.Cancel()
-			return err
-		}
-
-		select {
-		case <-receiver.ctx.Done():
-			dispatchProc.Cancel()
-
-		// there is no need to check the dispatchProc.Ctx.Done() here.
-		// because we need to receive the error from dispatchProc.DispatchNotifyCh.
-		case err = <-infoToDispatchOperator.Err:
-		}
-		return err
-
-	case pipeline.Method_PipelineMessage:
-		c := receiver.newCompile()
-		// decode and rewrite the scope.
-		s, err := decodeScope(receiver.scopeData, c.proc, true, c.e)
-		defer func() {
-			c.proc.AnalInfos = nil
-			c.anal.analInfos = nil
-			c.Release()
-			s.release()
-		}()
-		if err != nil {
-			return err
-		}
-		s = appendWriteBackOperator(c, s)
-		s.SetContextRecursively(c.ctx)
-
-		err = s.ParallelRun(c)
-		if err == nil {
-			// record the number of s3 requests
-			c.proc.AnalInfos[c.anal.curr].S3IOInputCount += c.counterSet.FileService.S3.Put.Load()
-			c.proc.AnalInfos[c.anal.curr].S3IOInputCount += c.counterSet.FileService.S3.List.Load()
-			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.counterSet.FileService.S3.Head.Load()
-			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.counterSet.FileService.S3.Get.Load()
-			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.counterSet.FileService.S3.Delete.Load()
-			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.counterSet.FileService.S3.DeleteMulti.Load()
-
-			receiver.finalAnalysisInfo = c.proc.AnalInfos
-		} else {
-			// there are 3 situations to release analyzeInfo
-			// 1 is free analyzeInfo of Local CN when release analyze
-			// 2 is free analyzeInfo of remote CN before transfer back
-			// 3 is free analyzeInfo of remote CN when errors happen before transfer back
-			// this is situation 3
-			for i := range c.proc.AnalInfos {
-				reuse.Free[process.AnalyzeInfo](c.proc.AnalInfos[i], nil)
-			}
-		}
-		c.proc.FreeVectors()
-		c.proc.CleanValueScanBatchs()
-		return err
-
-	default:
-		return moerr.NewInternalError(receiver.ctx, "unknown message type")
-	}
-}
-
-// receiveMessageFromCnServer deal the back message from cn-server.
-func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnClient, lastInstruction vm.Instruction) error {
-	var bat *batch.Batch
-	var end bool
-	var err error
-
-	lastAnalyze := c.proc.GetAnalyze(lastInstruction.Idx, -1, false)
-	if sender.receiveCh == nil {
-		sender.receiveCh, err = sender.streamSender.Receive()
-		if err != nil {
-			return err
-		}
-	}
-
-	var lastArg vm.Operator
-	var oldChild []vm.Operator
-	switch arg := lastInstruction.Arg.(type) {
-	case *connector.Argument:
-		lastArg = arg
-		oldChild = arg.Children
-		arg.Children = nil
-		defer func() {
-			arg.Children = oldChild
-		}()
-	case *dispatch.Argument:
-		lastArg = arg
-		oldChild = arg.Children
-		defer func() {
-			arg.Children = oldChild
-		}()
-	default:
-		return moerr.NewInvalidInput(c.ctx, "last operator should only be connector or dispatcher")
-	}
-
-	// can not reuse
-	valueScanOperator := &value_scan.Argument{}
-	info := &vm.OperatorInfo{
-		Idx:     -1,
-		IsFirst: false,
-		IsLast:  false,
-	}
-	lastArg.SetInfo(info)
-	lastArg.AppendChild(valueScanOperator)
-	for {
-		valueScanOperator.Prepare(s.Proc)
-		bat, end, err = sender.receiveBatch()
-		if err != nil {
-			return err
-		}
-		if end {
-			return nil
-		}
-
-		lastAnalyze.Network(bat)
-		valueScanOperator.Batchs = append(valueScanOperator.Batchs, bat)
-		result, errCall := lastArg.Call(s.Proc)
-		if errCall != nil || result.Status == vm.ExecStop {
-			valueScanOperator.Free(s.Proc, false, errCall)
-			return errCall
-		}
-		valueScanOperator.Free(s.Proc, false, errCall)
-	}
-}
-
-// remoteRun sends a scope for remote running and receives the results.
-// The back result message is always *pipeline.Message contains three cases.
-// 1. Message with error information
-// 2. Message with an end flag and analysis result
-// 3. Batch Message with batch data
-func (s *Scope) remoteRun(c *Compile) (err error) {
-	defer func() {
-		if e := recover(); e != nil {
-			err = moerr.ConvertPanicError(s.Proc.Ctx, e)
-			c.proc.Error(c.ctx, "panic in scope remoteRun",
-				zap.String("sql", c.sql),
-				zap.String("error", err.Error()))
-		}
-	}()
-
-	// encode the scope but without the last operator.
-	// the last operator will be executed on the current node for receiving the result and send them to the next pipeline.
-	lastIdx := len(s.Instructions) - 1
-	lastInstruction := s.Instructions[lastIdx]
-
-	if lastInstruction.Op == vm.Connector || lastInstruction.Op == vm.Dispatch {
-		if err = lastInstruction.Arg.Prepare(s.Proc); err != nil {
-			return err
-		}
-	} else {
-		return moerr.NewInvalidInput(c.ctx, "last operator should only be connector or dispatcher")
-	}
-
-	for _, ins := range s.Instructions[lastIdx+1:] {
-		ins.Arg.Release()
-		ins.Arg = nil
-	}
-	s.Instructions = s.Instructions[:lastIdx]
-	sData, errEncode := encodeScope(s)
-	if errEncode != nil {
-		return errEncode
-	}
-	s.appendInstruction(lastInstruction)
-
-	// encode the process related information
-	pData, errEncodeProc := encodeProcessInfo(s.Proc, c.sql)
-	if errEncodeProc != nil {
-		return errEncodeProc
-	}
-
-	c.MessageBoard.SetMultiCN(c.GetMessageCenter(), c.proc.StmtProfile.GetStmtId())
-
-	// new sender and do send work.
-	sender, err := newMessageSenderOnClient(s.Proc.Ctx, c, s.NodeInfo.Addr)
-	if err != nil {
-		c.proc.Errorf(s.Proc.Ctx, "Failed to newMessageSenderOnClient sql=%s, txnID=%s, err=%v",
-			c.sql, c.proc.TxnOperator.Txn().DebugString(), err)
-		return err
-	}
-	defer sender.close()
-
-	if err = sender.send(sData, pData, pipeline.Method_PipelineMessage); err != nil {
-		return err
-	}
-	err = receiveMessageFromCnServer(c, s, sender, lastInstruction)
-	return err
-}
 
 // encodeScope generate a pipeline.Pipeline from Scope, encode pipeline, and returns.
 func encodeScope(s *Scope) ([]byte, error) {
@@ -392,7 +113,7 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 		regs:   make(map[*process.WaitRegister]int32),
 	}
 	ctx.root = ctx
-	s, err := generateScope(proc, p, ctx, proc.AnalInfos, isRemote)
+	s, err := generateScope(proc, p, ctx, proc.Base.AnalInfos, isRemote)
 	if err != nil {
 		return nil, err
 	}
@@ -941,7 +662,10 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 	case *projection.Argument:
 		in.ProjectList = t.Es
 	case *filter.Argument:
-		in.Filter = t.E
+		in.Filter = t.GetExeExpr()
+		if in.Filter == nil {
+			in.Filter = t.E
+		}
 	case *semi.Argument:
 		in.SemiJoin = &pipeline.SemiJoin{
 			Result:                 t.Result,

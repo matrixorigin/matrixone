@@ -409,7 +409,7 @@ func createCompile(
 		addr = getGlobalPu().ClusterNodes[0].Addr
 	}
 	proc.Ctx = execCtx.reqCtx
-	proc.FileService = getGlobalPu().FileService
+	proc.Base.FileService = getGlobalPu().FileService
 
 	var tenant string
 	tInfo := ses.GetTenantInfo()
@@ -422,6 +422,7 @@ func createCompile(
 	defer stats.CompileEnd()
 	defer func() {
 		if err != nil && retCompile != nil {
+			retCompile.SetIsPrepare(false)
 			retCompile.Release()
 			retCompile = nil
 		}
@@ -432,7 +433,6 @@ func createCompile(
 		ses.GetSql(),
 		tenant,
 		ses.GetUserName(),
-		execCtx.reqCtx,
 		ses.GetTxnHandler().GetStorage(),
 		proc,
 		stmt,

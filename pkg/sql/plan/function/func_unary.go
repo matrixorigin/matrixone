@@ -401,12 +401,12 @@ func BitLengthFunc(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 func CurrentDate(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	var err error
 
-	loc := proc.SessionInfo.TimeZone
+	loc := proc.GetSessionInfo().TimeZone
 	if loc == nil {
 		logutil.Warn("missing timezone in session info")
 		loc = time.Local
 	}
-	ts := types.UnixNanoToTimestamp(proc.UnixTime)
+	ts := types.UnixNanoToTimestamp(proc.GetUnixTime())
 	dateTimes := make([]types.Datetime, 1)
 	dateTimes, err = types.TimestampToDatetime(loc, []types.Timestamp{ts}, dateTimes)
 	if err != nil {
@@ -541,7 +541,7 @@ func LoadFile(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 		}
 		return nil
 	}
-	fs := proc.FileService
+	fs := proc.GetFileService()
 	r, err := ReadFromFile(string(Filepath), fs)
 	if err != nil {
 		return err
@@ -743,13 +743,13 @@ func Decimal128ToTime(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 
 func DateToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixed[types.Date, types.Timestamp](ivecs, result, proc, length, func(v types.Date) types.Timestamp {
-		return v.ToTimestamp(proc.SessionInfo.TimeZone)
+		return v.ToTimestamp(proc.GetSessionInfo().TimeZone)
 	}, selectList)
 }
 
 func DatetimeToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixed[types.Datetime, types.Timestamp](ivecs, result, proc, length, func(v types.Datetime) types.Timestamp {
-		return v.ToTimestamp(proc.SessionInfo.TimeZone)
+		return v.ToTimestamp(proc.GetSessionInfo().TimeZone)
 	}, selectList)
 }
 
@@ -761,7 +761,7 @@ func TimestampToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWr
 
 func DateStringToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryStrToFixedWithErrorCheck[types.Timestamp](ivecs, result, proc, length, func(v string) (types.Timestamp, error) {
-		val, err := types.ParseTimestamp(proc.SessionInfo.TimeZone, v, 6)
+		val, err := types.ParseTimestamp(proc.GetSessionInfo().TimeZone, v, 6)
 		if err != nil {
 			return 0, err
 		}
@@ -785,7 +785,7 @@ func Values(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 
 func TimestampToHour(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixed[types.Timestamp, uint8](ivecs, result, proc, length, func(v types.Timestamp) uint8 {
-		return uint8(v.ToDatetime(proc.SessionInfo.TimeZone).Hour())
+		return uint8(v.ToDatetime(proc.GetSessionInfo().TimeZone).Hour())
 	}, selectList)
 }
 
@@ -797,7 +797,7 @@ func DatetimeToHour(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 
 func TimestampToMinute(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixed[types.Timestamp, uint8](ivecs, result, proc, length, func(v types.Timestamp) uint8 {
-		return uint8(v.ToDatetime(proc.SessionInfo.TimeZone).Minute())
+		return uint8(v.ToDatetime(proc.GetSessionInfo().TimeZone).Minute())
 	}, selectList)
 }
 
@@ -809,7 +809,7 @@ func DatetimeToMinute(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 
 func TimestampToSecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixed[types.Timestamp, uint8](ivecs, result, proc, length, func(v types.Timestamp) uint8 {
-		return uint8(v.ToDatetime(proc.SessionInfo.TimeZone).Sec())
+		return uint8(v.ToDatetime(proc.GetSessionInfo().TimeZone).Sec())
 	}, selectList)
 }
 
@@ -832,21 +832,21 @@ func Binary(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 }
 
 func Charset(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	r := proc.SessionInfo.GetCharset()
+	r := proc.GetSessionInfo().GetCharset()
 	return opNoneParamToBytes(result, proc, length, func() []byte {
 		return functionUtil.QuickStrToBytes(r)
 	})
 }
 
 func Collation(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	r := proc.SessionInfo.GetCollation()
+	r := proc.GetSessionInfo().GetCollation()
 	return opNoneParamToBytes(result, proc, length, func() []byte {
 		return functionUtil.QuickStrToBytes(r)
 	})
 }
 
 func ConnectionID(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	r := proc.SessionInfo.ConnectionID
+	r := proc.GetSessionInfo().ConnectionID
 	return opNoneParamToFixed[uint64](result, proc, length, func() uint64 {
 		return r
 	})
@@ -1161,7 +1161,7 @@ func ICULIBVersion(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 
 func LastInsertID(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opNoneParamToFixed[uint64](result, proc, length, func() uint64 {
-		return proc.SessionInfo.LastInsertID
+		return proc.GetSessionInfo().LastInsertID
 	})
 }
 
@@ -1170,7 +1170,7 @@ func LastQueryIDWithoutParam(_ []*vector.Vector, result vector.FunctionResultWra
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	for i := uint64(0); i < uint64(length); i++ {
-		cnt := int64(len(proc.SessionInfo.QueryId))
+		cnt := int64(len(proc.GetSessionInfo().QueryId))
 		if cnt == 0 {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
@@ -1183,7 +1183,7 @@ func LastQueryIDWithoutParam(_ []*vector.Vector, result vector.FunctionResultWra
 			return err
 		}
 
-		if err = rs.AppendBytes(functionUtil.QuickStrToBytes(proc.SessionInfo.QueryId[idx]), false); err != nil {
+		if err = rs.AppendBytes(functionUtil.QuickStrToBytes(proc.GetSessionInfo().QueryId[idx]), false); err != nil {
 			return err
 		}
 	}
@@ -1215,7 +1215,7 @@ func LastQueryID(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 	// Validate: https://github.com/m-schen/matrixone/blob/9e8ef37e2a6f34873ceeb3c101ec9bb14a82a8a7/pkg/sql/plan/function/builtin/unary/infomation_function.go#L245
 	loc, _ := ivec.GetValue(0)
 	for i := uint64(0); i < uint64(length); i++ {
-		cnt := int64(len(proc.SessionInfo.QueryId))
+		cnt := int64(len(proc.GetSessionInfo().QueryId))
 		if cnt == 0 {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
@@ -1227,7 +1227,7 @@ func LastQueryID(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 			return err
 		}
 
-		if err = rs.AppendBytes(functionUtil.QuickStrToBytes(proc.SessionInfo.QueryId[idx]), false); err != nil {
+		if err = rs.AppendBytes(functionUtil.QuickStrToBytes(proc.GetSessionInfo().QueryId[idx]), false); err != nil {
 			return err
 		}
 	}
@@ -1248,7 +1248,7 @@ func RowCount(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 
 func User(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opNoneParamToBytes(result, proc, length, func() []byte {
-		return functionUtil.QuickStrToBytes(proc.SessionInfo.GetUserHost())
+		return functionUtil.QuickStrToBytes(proc.GetSessionInfo().GetUserHost())
 	})
 }
 
@@ -1358,7 +1358,7 @@ func Sleep[T uint64 | float64](ivecs []*vector.Vector, result vector.FunctionRes
 }
 
 func Version(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	versionStr := proc.SessionInfo.GetVersion()
+	versionStr := proc.GetSessionInfo().GetVersion()
 
 	return opNoneParamToBytes(result, proc, length, func() []byte {
 		return functionUtil.QuickStrToBytes(versionStr)
@@ -1531,4 +1531,57 @@ func SHA1Func(
 		sum := sha1.Sum(v)
 		return []byte(hex.EncodeToString(sum[:]))
 	}, selectList)
+}
+
+func LastDay(
+	ivecs []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	_ *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+) error {
+	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetStrValue(i)
+		if null1 {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			day := functionUtil.QuickBytesToStr(v1)
+			var dt types.Date
+			var err error
+			var dtt types.Datetime
+			if len(day) < 14 {
+				dt, err = types.ParseDateCast(day)
+				if err != nil {
+					if err := rs.AppendBytes(nil, true); err != nil {
+						return err
+					}
+					continue
+				}
+			} else {
+				dtt, err = types.ParseDatetime(day, 6)
+				if err != nil {
+					if err := rs.AppendBytes(nil, true); err != nil {
+						return err
+					}
+					continue
+				}
+				dt = dtt.ToDate()
+			}
+
+			year := dt.Year()
+			month := dt.Month()
+
+			lastDay := types.LastDay(int32(year), month)
+			resDt := types.DateFromCalendar(int32(year), month, lastDay)
+			if err := rs.AppendBytes([]byte(resDt.String()), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

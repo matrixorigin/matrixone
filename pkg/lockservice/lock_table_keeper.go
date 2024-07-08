@@ -16,6 +16,7 @@ package lockservice
 
 import (
 	"context"
+	"go.uber.org/zap"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -30,7 +31,6 @@ type lockTableKeeper struct {
 	keepLockTableBindInterval time.Duration
 	keepRemoteLockInterval    time.Duration
 	groupTables               *lockTableHolders
-	canDoKeep                 bool
 	service                   *service
 }
 
@@ -173,18 +173,6 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 		k.service.activeTxnHolder.empty() {
 		k.service.setStatus(pb.Status_ServiceUnLockSucc)
 	}
-	if !k.canDoKeep {
-		k.groupTables.iter(func(_ uint64, v lockTable) bool {
-			bind := v.getBind()
-			if bind.ServiceID == k.serviceID {
-				k.canDoKeep = true
-			}
-			return true
-		})
-	}
-	if !k.canDoKeep {
-		return
-	}
 
 	req := acquireRequest()
 	defer releaseRequest(req)
@@ -209,6 +197,12 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 	if resp.KeepLockTableBind.OK {
 		switch resp.KeepLockTableBind.Status {
 		case pb.Status_ServiceLockEnable:
+			if !k.service.isStatus(pb.Status_ServiceLockEnable) {
+				getLogger().Error("tn has abnormal lock service status",
+					zap.String("serviceID", k.serviceID),
+					zap.String("status", k.service.getStatus().String()))
+			}
+			return
 		case pb.Status_ServiceLockWaiting:
 			// maybe pb.Status_ServiceUnLockSucc
 			if k.service.isStatus(pb.Status_ServiceLockEnable) {

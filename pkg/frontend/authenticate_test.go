@@ -5869,8 +5869,8 @@ func Test_doInterpretCall(t *testing.T) {
 		priv := determinePrivilegeSetOfStatement(call)
 		ses := newSes(priv, ctrl)
 		proc := testutil.NewProcess()
-		proc.FileService = getGlobalPu().FileService
-		proc.SessionInfo = process.SessionInfo{Account: sysAccountName}
+		proc.Base.FileService = getGlobalPu().FileService
+		proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
 		ses.GetTxnCompileCtx().execCtx = &ExecCtx{
 			proc: proc,
 		}
@@ -5911,8 +5911,8 @@ func Test_doInterpretCall(t *testing.T) {
 		priv := determinePrivilegeSetOfStatement(call)
 		ses := newSes(priv, ctrl)
 		proc := testutil.NewProcess()
-		proc.FileService = getGlobalPu().FileService
-		proc.SessionInfo = process.SessionInfo{Account: sysAccountName}
+		proc.Base.FileService = getGlobalPu().FileService
+		proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
 		ses.SetDatabaseName("procedure_test")
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
@@ -5963,8 +5963,8 @@ func Test_doInterpretCall(t *testing.T) {
 		priv := determinePrivilegeSetOfStatement(call)
 		ses := newSes(priv, ctrl)
 		proc := testutil.NewProcess()
-		proc.FileService = getGlobalPu().FileService
-		proc.SessionInfo = process.SessionInfo{Account: sysAccountName}
+		proc.Base.FileService = getGlobalPu().FileService
+		proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
 		ses.SetDatabaseName("procedure_test")
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
@@ -6643,13 +6643,9 @@ func TestSetGlobalSysVar(t *testing.T) {
 		convey.So(value, convey.ShouldEqual, 0)
 
 		// new session, both GetSession/GlobalSysVar equal 0
-		sql = getSqlForGetSystemVariablesWithAccount(sysAccountID)
-		mrs = newMrsForSystemVariablesOfAccount([][]interface{}{
-			{"autocommit", "0"},
-		})
-		bh.sql2result[sql] = mrs
-
 		ses2 := newSes(nil, ctrl)
+		ses2.sesSysVars.sysVars["autocommit"] = 0
+		ses2.gSysVars.sysVars["autocommit"] = 0
 		value, err = ses2.GetSessionSysVar("autocommit")
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(value, convey.ShouldEqual, 0)
@@ -8210,27 +8206,6 @@ func newMrsForPrivilegeWGO(rows [][]interface{}) *MysqlResultSet {
 	return mrs
 }
 
-func newMrsForSystemVariablesOfAccount(rows [][]interface{}) *MysqlResultSet {
-	mrs := &MysqlResultSet{}
-
-	col1 := &MysqlColumn{}
-	col1.SetName("variable_name")
-	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-
-	col2 := &MysqlColumn{}
-	col2.SetName("variable_value")
-	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-
-	mrs.AddColumn(col1)
-	mrs.AddColumn(col2)
-
-	for _, row := range rows {
-		mrs.AddRow(row)
-	}
-
-	return mrs
-}
-
 func newMrsForSystemVariableNameOfAccount(rows [][]interface{}) *MysqlResultSet {
 	mrs := &MysqlResultSet{}
 
@@ -8808,11 +8783,11 @@ func TestCheckSubscriptionValid(t *testing.T) {
 	ses.rm = rm
 
 	proc := testutil.NewProcess()
-	proc.FileService = getGlobalPu().FileService
+	proc.Base.FileService = getGlobalPu().FileService
 	ses.GetTxnCompileCtx().execCtx = &ExecCtx{
 		proc: proc,
 	}
-	ses.GetTxnCompileCtx().GetProcess().SessionInfo = process.SessionInfo{Account: sysAccountName}
+	ses.GetTxnCompileCtx().GetProcess().Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
 
 	columns := [][]Column{
 		{
@@ -11082,7 +11057,7 @@ func TestUpload(t *testing.T) {
 		}
 		fs, err := fileservice.NewLocalFS(context.TODO(), defines.SharedFileServiceName, t.TempDir(), fileservice.DisabledCacheConfig, nil)
 		convey.So(err, convey.ShouldBeNil)
-		proc.FileService = fs
+		proc.Base.FileService = fs
 
 		//parameter
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
@@ -11465,7 +11440,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
 		ses.proc = testutil.NewProc()
-		ses.proc.TxnOperator = txnOperator
+		ses.proc.Base.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
@@ -11526,7 +11501,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
 		ses.proc = testutil.NewProc()
-		ses.proc.TxnOperator = txnOperator
+		ses.proc.Base.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
@@ -11587,7 +11562,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
 		ses.proc = testutil.NewProc()
-		ses.proc.TxnOperator = txnOperator
+		ses.proc.Base.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
@@ -11652,7 +11627,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
 		ses.proc = testutil.NewProc()
-		ses.proc.TxnOperator = txnOperator
+		ses.proc.Base.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
@@ -11717,7 +11692,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
 		ses.proc = testutil.NewProc()
-		ses.proc.TxnOperator = txnOperator
+		ses.proc.Base.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
@@ -11783,7 +11758,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
 		ses.proc = testutil.NewProc()
-		ses.proc.TxnOperator = txnOperator
+		ses.proc.Base.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
@@ -11849,7 +11824,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
 		ses.proc = testutil.NewProc()
-		ses.proc.TxnOperator = txnOperator
+		ses.proc.Base.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),

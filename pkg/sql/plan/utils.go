@@ -563,8 +563,8 @@ func deduceNewFilterList(filters, onList []*plan.Expr) []*plan.Expr {
 }
 
 func canMergeToBetweenAnd(expr1, expr2 *plan.Expr) bool {
-	col1, _, _, _ := extractColRefAndLiteralsInFilter(expr1)
-	col2, _, _, _ := extractColRefAndLiteralsInFilter(expr2)
+	col1, _, _, _, _ := extractColRefAndLiteralsInFilter(expr1)
+	col2, _, _, _, _ := extractColRefAndLiteralsInFilter(expr2)
 	if col1 == nil || col2 == nil {
 		return false
 	}
@@ -583,10 +583,16 @@ func canMergeToBetweenAnd(expr1, expr2 *plan.Expr) bool {
 	return false
 }
 
-func extractColRefAndLiteralsInFilter(expr *plan.Expr) (col *ColRef, litType types.T, literals []*Const, colFnName string) {
+func extractColRefAndLiteralsInFilter(expr *plan.Expr) (col *ColRef, litType types.T, literals []*Const, colFnName string, hasDynamicParam bool) {
 	fn := expr.GetF()
 	if fn == nil || len(fn.Args) == 0 {
 		return
+	}
+	for i := range fn.Args {
+		if containsDynamicParam(fn.Args[i]) {
+			hasDynamicParam = true
+			break
+		}
 	}
 
 	col = fn.Args[0].GetCol()
@@ -767,7 +773,7 @@ func combinePlanConjunction(ctx context.Context, exprs []*plan.Expr) (expr *plan
 func rejectsNull(filter *plan.Expr, proc *process.Process) bool {
 	filter = replaceColRefWithNull(DeepCopyExpr(filter))
 
-	filter, err := ConstantFold(batch.EmptyForConstFoldBatch, filter, proc, false)
+	filter, err := ConstantFold(batch.EmptyForConstFoldBatch, filter, proc, false, true)
 	if err != nil {
 		return false
 	}
@@ -966,7 +972,7 @@ func GetColumnsByExpr(
 
 func EvalFilterExpr(ctx context.Context, expr *plan.Expr, bat *batch.Batch, proc *process.Process) (bool, error) {
 	if len(bat.Vecs) == 0 { //that's constant expr
-		e, err := ConstantFold(bat, expr, proc, false)
+		e, err := ConstantFold(bat, expr, proc, false, true)
 		if err != nil {
 			return false, err
 		}
@@ -1086,7 +1092,7 @@ func GetSortOrder(tableDef *plan.TableDef, colPos int32) int {
 func ConstandFoldList(exprs []*plan.Expr, proc *process.Process, varAndParamIsConst bool) ([]*plan.Expr, error) {
 	newExprs := DeepCopyExprList(exprs)
 	for i := range newExprs {
-		foldedExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, newExprs[i], proc, varAndParamIsConst)
+		foldedExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, newExprs[i], proc, varAndParamIsConst, true)
 		if err != nil {
 			return nil, err
 		}
@@ -1097,7 +1103,7 @@ func ConstandFoldList(exprs []*plan.Expr, proc *process.Process, varAndParamIsCo
 	return newExprs, nil
 }
 
-func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varAndParamIsConst bool) (*plan.Expr, error) {
+func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varAndParamIsConst bool, foldInExpr bool) (*plan.Expr, error) {
 	if expr.Typ.Id == int32(types.T_interval) {
 		panic(moerr.NewInternalError(proc.Ctx, "not supported type INTERVAL"))
 	}
@@ -1107,7 +1113,7 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 		exprList := elist.List
 		cannotFold := false
 		for i := range exprList {
-			foldExpr, err := ConstantFold(bat, exprList[i], proc, varAndParamIsConst)
+			foldExpr, err := ConstantFold(bat, exprList[i], proc, varAndParamIsConst, foldInExpr)
 			if err != nil {
 				return nil, err
 			}
@@ -1117,7 +1123,7 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 			}
 		}
 
-		if cannotFold {
+		if cannotFold || !foldInExpr {
 			return expr, nil
 		}
 
@@ -1162,7 +1168,7 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 	}
 	isVec := false
 	for i := range fn.Args {
-		foldExpr, errFold := ConstantFold(bat, fn.Args[i], proc, varAndParamIsConst)
+		foldExpr, errFold := ConstantFold(bat, fn.Args[i], proc, varAndParamIsConst, foldInExpr)
 		if errFold != nil {
 			return nil, errFold
 		}
@@ -1798,6 +1804,8 @@ func doFormatExpr(expr *plan.Expr, out *bytes.Buffer, depth int) {
 		out.WriteString(fmt.Sprintf("%sExpr_P(%d)", prefix, t.P.Pos))
 	case *plan.Expr_T:
 		out.WriteString(fmt.Sprintf("%sExpr_T(%s)", prefix, t.T.String()))
+	case *plan.Expr_Vec:
+		out.WriteString(fmt.Sprintf("%sExpr_Vec(len=%d)", prefix, t.Vec.Len))
 	default:
 		out.WriteString(fmt.Sprintf("%sExpr_Unknown(%s)", prefix, expr.String()))
 	}

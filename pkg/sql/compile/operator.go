@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexjoin"
 
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -286,7 +287,10 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.Filter:
 		t := sourceIns.Arg.(*filter.Argument)
 		arg := filter.NewArgument()
-		arg.E = t.E
+		arg.E = t.GetExeExpr()
+		if arg.E == nil {
+			arg.E = t.E
+		}
 		res.Arg = arg
 	case vm.Semi:
 		t := sourceIns.Arg.(*semi.Argument)
@@ -613,14 +617,14 @@ func constructPreInsert(ns []*plan.Node, n *plan.Node, eg engine.Engine, proc *p
 	}
 
 	ctx := proc.Ctx
-	txnOp := proc.TxnOperator
+	txnOp := proc.GetTxnOperator()
 	if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
 		if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
-			n.ScanSnapshot.TS.Less(proc.TxnOperator.Txn().SnapshotTS) {
+			n.ScanSnapshot.TS.Less(proc.GetTxnOperator().Txn().SnapshotTS) {
 			if proc.GetCloneTxnOperator() != nil {
 				txnOp = proc.GetCloneTxnOperator()
 			} else {
-				txnOp = proc.TxnOperator.CloneSnapshotOp(*n.ScanSnapshot.TS)
+				txnOp = proc.GetTxnOperator().CloneSnapshotOp(*n.ScanSnapshot.TS)
 				proc.SetCloneTxnOperator(txnOp)
 			}
 
@@ -1203,7 +1207,7 @@ func constructDeleteDispatchAndLocal(
 	rs[currentIdx].NodeInfo = ss[currentIdx].NodeInfo
 	rs[currentIdx].Magic = Remote
 	rs[currentIdx].PreScopes = append(rs[currentIdx].PreScopes, ss[currentIdx])
-	rs[currentIdx].Proc = process.NewFromProc(c.proc, c.ctx, len(ss))
+	rs[currentIdx].Proc = process.NewFromProc(c.proc, c.proc.Ctx, len(ss))
 	rs[currentIdx].RemoteReceivRegInfos = make([]RemoteReceivRegInfo, 0, len(ss)-1)
 
 	// use arg.RemoteRegs to know the uuid,

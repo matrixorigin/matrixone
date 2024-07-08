@@ -511,7 +511,12 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 		blockInfo.Attrs = blockInfo.Attrs[lenVecs-2:]
 		blockInfo.SetRowCount(blockInfo.Vecs[0].Length())
 
-		table := tbl.(*txnTable)
+		var table *txnTable
+		if v, ok := tbl.(*txnTableDelegate); ok {
+			table = v.origin
+		} else {
+			table = tbl.(*txnTable)
+		}
 		fileName := objectio.DecodeBlockInfo(
 			blockInfo.Vecs[0].GetBytesAt(0)).
 			MetaLocation().Name().String()
@@ -560,7 +565,7 @@ func (txn *Transaction) getTable(
 		id,
 	)
 
-	database, err := txn.engine.Database(ctx, dbName, txn.proc.TxnOperator)
+	database, err := txn.engine.Database(ctx, dbName, txn.proc.GetTxnOperator())
 	if err != nil {
 		return nil, err
 	}
@@ -974,7 +979,13 @@ func (txn *Transaction) forEachTableHasDeletesLocked(f func(tbl *txnTable) error
 		if err != nil {
 			return err
 		}
-		tables[e.tableId] = rel.(*txnTable)
+
+		if v, ok := rel.(*txnTableDelegate); ok {
+			tables[e.tableId] = v.origin
+		} else {
+			tables[e.tableId] = rel.(*txnTable)
+		}
+
 	}
 	for _, tbl := range tables {
 		if err := f(tbl); err != nil {
@@ -1005,10 +1016,10 @@ func (txn *Transaction) forEachTableWrites(databaseId uint64, tableId uint64, of
 func (txn *Transaction) getCachedTable(
 	ctx context.Context,
 	k tableKey,
-) *txnTable {
-	var tbl *txnTable
+) *txnTableDelegate {
+	var tbl *txnTableDelegate
 	if v, ok := txn.tableCache.tableMap.Load(k); ok {
-		tbl = v.(*txnTable)
+		tbl = v.(*txnTableDelegate)
 
 		tblKey := cache.TableKey{
 			AccountId:  k.accountId,
@@ -1029,7 +1040,7 @@ func (txn *Transaction) getCachedTable(
 		}
 		val := catache.GetSchemaVersion(tblKey)
 		if val != nil {
-			if val.Ts.Greater(tbl.lastTS) && val.Version != tbl.version {
+			if val.Ts.Greater(tbl.origin.lastTS) && val.Version != tbl.origin.version {
 				txn.tableCache.tableMap.Delete(genTableKey(k.accountId, k.name, k.databaseId))
 				return nil
 			}
@@ -1096,6 +1107,7 @@ func (txn *Transaction) delTransaction() {
 	txn.deletedTableMap = nil
 	txn.blockId_tn_delete_metaLoc_batch.data = nil
 	txn.deletedBlocks = nil
+	txn.haveDDL.Store(false)
 	segmentnames := make([]objectio.Segmentid, 0, len(txn.cnBlkId_Pos)+1)
 	segmentnames = append(segmentnames, txn.segId)
 	for blkId := range txn.cnBlkId_Pos {
@@ -1242,4 +1254,12 @@ func (txn *Transaction) CloneSnapshotWS() client.Workspace {
 
 func (txn *Transaction) BindTxnOp(op client.TxnOperator) {
 	txn.op = op
+}
+
+func (txn *Transaction) SetHaveDDL(haveDDL bool) {
+	txn.haveDDL.Store(haveDDL)
+}
+
+func (txn *Transaction) GetHaveDDL() bool {
+	return txn.haveDDL.Load()
 }

@@ -17,8 +17,10 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"math/rand"
 	"os"
 	"runtime"
@@ -917,6 +919,19 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 			if err != nil {
 				return nil, nil, err
 			}
+		case types.T_enum:
+			vData := make([]types.Enum, cnt)
+			for rowIdx, row := range rows {
+				if row[colIdx] == nil {
+					nsp.Add(uint64(rowIdx))
+					continue
+				}
+				vData[rowIdx] = row[colIdx].(types.Enum)
+			}
+			err := vector.AppendFixedList[types.Enum](bat.Vecs[colIdx], vData, nil, pool)
+			if err != nil {
+				return nil, nil, err
+			}
 		default:
 			return nil, nil, moerr.NewInternalErrorNoCtx("unsupported type %d", typ.Oid)
 		}
@@ -1069,6 +1084,7 @@ func skipClientQuit(info string) bool {
 // if the stmt is not nil, we neglect the sql.
 type UserInput struct {
 	sql           string
+	hashedSql     string
 	stmt          tree.Statement
 	sqlSourceType []string
 	isRestore     bool
@@ -1080,6 +1096,14 @@ type UserInput struct {
 
 func (ui *UserInput) getSql() string {
 	return ui.sql
+}
+
+func (ui *UserInput) genHash() {
+	ui.hashedSql = hashString(ui.sql)
+}
+
+func (ui *UserInput) getHash() string {
+	return ui.hashedSql
 }
 
 // getStmt if the stmt is not nil, we neglect the sql.
@@ -1402,4 +1426,11 @@ func Copy[T any](src []T) []T {
 	dst := make([]T, len(src))
 	copy(dst, src)
 	return dst
+}
+
+func hashString(s string) string {
+	hash := sha256.New()
+	hash.Write(util.UnsafeStringToBytes(s))
+	hashBytes := hash.Sum(nil)
+	return hex.EncodeToString(hashBytes)
 }
