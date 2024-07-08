@@ -38,6 +38,10 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {
+	for i := range arg.LocalRegs {
+		arg.LocalRegs[i].CleanChannel(proc.GetMPool())
+	}
+
 	ctr := new(container)
 	arg.ctr = ctr
 	ctr.localRegsCnt = len(arg.LocalRegs)
