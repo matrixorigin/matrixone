@@ -197,6 +197,9 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	c.startAt = startAt
 	if c.proc.GetTxnOperator() != nil {
 		c.proc.GetTxnOperator().GetWorkspace().UpdateSnapshotWriteOffset()
+		c.TxnOffset = c.proc.GetTxnOperator().GetWorkspace().GetSnapshotWriteOffset()
+	} else {
+		c.TxnOffset = 0
 	}
 }
 
@@ -225,7 +228,6 @@ func (c *Compile) clear() {
 	c.originSQL = ""
 	c.anal = nil
 	c.e = nil
-	c.proc.Ctx = nil
 	c.proc = nil
 	c.cnList = c.cnList[:0]
 	c.stmt = nil
@@ -1047,7 +1049,7 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		sort.Slice(c.cnList, func(i, j int) bool { return c.cnList[i].Addr < c.cnList[j].Addr })
 	}
 
-	if c.isPrepare && c.IsTpQuery() {
+	if c.isPrepare && !c.IsTpQuery() {
 		return nil, cantCompileForPrepareErr
 	}
 

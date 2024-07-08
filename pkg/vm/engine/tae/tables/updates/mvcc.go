@@ -545,6 +545,8 @@ func (n *ObjectMVCCHandle) GetObject() any {
 	return n.meta
 }
 func (n *ObjectMVCCHandle) GetLatestDeltaloc(blkOffset uint16) objectio.Location {
+	n.RLock()
+	defer n.RUnlock()
 	mvcc := n.TryGetDeleteChain(blkOffset)
 	if mvcc == nil || mvcc.deltaloc == nil || mvcc.deltaloc.GetLatestNodeLocked() == nil {
 		return nil
