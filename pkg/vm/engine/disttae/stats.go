@@ -210,10 +210,17 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 				return nil
 			}
 
-			// If the trigger condition is not satisfied, the stats will not be updated
-			// for long time. So we trigger the update here to get the stats info as soon
-			// as possible.
-			gs.triggerUpdate(key, true)
+			func() {
+				// We force to trigger the update, which will hang when the channel
+				// is full. Another goroutine will fetch items from the channel
+				// which hold the lock, so we need to unlock it first.
+				gs.mu.Unlock()
+				defer gs.mu.Lock()
+				// If the trigger condition is not satisfied, the stats will not be updated
+				// for long time. So we trigger the update here to get the stats info as soon
+				// as possible.
+				gs.triggerUpdate(key, true)
+			}()
 
 			// Wait until stats info of the key is updated.
 			gs.mu.cond.Wait()
