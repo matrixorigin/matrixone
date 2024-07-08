@@ -42,6 +42,17 @@ var (
 			Name:      "negative_cu_total",
 			Help:      "Count of negative cu to backend",
 		}, []string{"type"})
+
+	traceMOLoggerExportDataHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "trace",
+			Name:      "mologger_export_data_bytes",
+			Help:      "Bucketed histogram of mo_logger exec sql bytes, or write bytes.",
+			Buckets:   prometheus.ExponentialBuckets(128, 2.0, 20),
+		}, []string{"type"})
+	TraceMOLoggerExportSqlHistogram = traceMOLoggerExportDataHistogram.WithLabelValues("sql")
+	TraceMOLoggerExportCsvHistogram = traceMOLoggerExportDataHistogram.WithLabelValues("csv")
 )
 
 func GetTraceNegativeCUCounter(typ string) prometheus.Counter {
