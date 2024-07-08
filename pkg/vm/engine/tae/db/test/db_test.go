@@ -2526,6 +2526,14 @@ func TestSegDelLogtail(t *testing.T) {
 	require.Equal(t, api.Entry_Insert, resp.Commands[1].EntryType)
 	require.True(t, strings.HasSuffix(resp.Commands[1].TableName, "obj"))
 	require.Equal(t, uint32(6), resp.Commands[1].Bat.Vecs[0].Len) /* 2 Objects (create) + 4 (update object info) */
+	// start ts should not be empty
+	startTSVec := resp.Commands[1].Bat.Vecs[9]
+	cnStartVec, err := vector.ProtoVectorToVector(startTSVec)
+	require.NoError(t, err)
+	startTSs := vector.MustFixedCol[types.TS](cnStartVec)
+	for _, ts := range startTSs {
+		require.False(t, ts.IsEmpty())
+	}
 
 	close()
 
@@ -8986,4 +8994,43 @@ func TestVisitTombstone(t *testing.T) {
 	t.Log(tae.Catalog.SimplePPString(3))
 	tae.Restart(context.Background())
 	t.Log(tae.Catalog.SimplePPString(3))
+}
+
+func TestDedupAndFlush(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	options.WithGlobalVersionInterval(time.Microsecond)(opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(2, 1)
+	schema.BlockMaxRows = 50
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
+
+	tae.CreateRelAndAppend(bat, true)
+
+	flushTxn, rel := tae.GetRelation()
+
+	obj := testutil.GetOneBlockMeta(rel)
+	task, err := jobs.NewFlushTableTailTask(nil, flushTxn, []*catalog.ObjectEntry{obj}, tae.Runtime, flushTxn.GetStartTS())
+	assert.NoError(t, err)
+	err = task.OnExec(ctx)
+	assert.NoError(t, err)
+
+	{
+		// mock update
+		txn, rel := tae.GetRelation()
+		v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+		filter := handle.NewEQFilter(v)
+		err := rel.DeleteByFilter(context.Background(), filter)
+		assert.NoError(t, err)
+		err = rel.Append(ctx, bat)
+		assert.NoError(t, err)
+		err = txn.Commit(context.Background())
+		assert.NoError(t, err)
+	}
+
+	assert.NoError(t, flushTxn.Commit(ctx))
 }
