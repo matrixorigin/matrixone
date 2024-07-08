@@ -64,10 +64,10 @@ func (proc *Process) BuildProcessInfo(
 		vec := proc.GetPrepareParams()
 		if vec != nil {
 			procInfo.PrepareParams.Length = int64(vec.Length())
-			procInfo.PrepareParams.Data = make([]byte, len(procInfo.PrepareParams.GetData()), 0)
-			procInfo.PrepareParams.Data = append(procInfo.PrepareParams.Data, procInfo.PrepareParams.GetData()...)
-			procInfo.PrepareParams.Area = make([]byte, len(procInfo.PrepareParams.GetArea()), 0)
-			procInfo.PrepareParams.Area = append(procInfo.PrepareParams.Area, procInfo.PrepareParams.GetArea()...)
+			procInfo.PrepareParams.Data = make([]byte, len(vec.GetData()), 0)
+			procInfo.PrepareParams.Data = append(procInfo.PrepareParams.Data, vec.GetData()...)
+			procInfo.PrepareParams.Area = make([]byte, len(vec.GetArea()), 0)
+			procInfo.PrepareParams.Area = append(procInfo.PrepareParams.Area, vec.GetArea()...)
 			procInfo.PrepareParams.Nulls = make([]bool, procInfo.PrepareParams.Length)
 			for i := range procInfo.PrepareParams.Nulls {
 				procInfo.PrepareParams.Nulls[i] = vec.GetNulls().Contains(uint64(i))
