@@ -17,9 +17,11 @@ package disttae
 import (
 	"context"
 	"math"
+	"runtime"
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -149,7 +151,7 @@ func NewGlobalStats(
 		ctx:                 ctx,
 		engine:              e,
 		tailC:               make(chan *logtail.TableLogtail, 10000),
-		updateC:             make(chan pb.StatsInfoKey, 1000),
+		updateC:             make(chan pb.StatsInfoKey, 3000),
 		logtailUpdate:       newLogtailUpdate(),
 		tableLogtailCounter: make(map[pb.StatsInfoKey]int64),
 		KeyRouter:           keyRouter,
@@ -208,10 +210,17 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 				return nil
 			}
 
-			// If the trigger condition is not satisfied, the stats will not be updated
-			// for long time. So we trigger the update here to get the stats info as soon
-			// as possible.
-			gs.triggerUpdate(key)
+			func() {
+				// We force to trigger the update, which will hang when the channel
+				// is full. Another goroutine will fetch items from the channel
+				// which hold the lock, so we need to unlock it first.
+				gs.mu.Unlock()
+				defer gs.mu.Lock()
+				// If the trigger condition is not satisfied, the stats will not be updated
+				// for long time. So we trigger the update here to get the stats info as soon
+				// as possible.
+				gs.triggerUpdate(key, true)
+			}()
 
 			// Wait until stats info of the key is updated.
 			gs.mu.cond.Wait()
@@ -220,6 +229,12 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 		}
 	}
 	return info
+}
+
+func (gs *GlobalStats) RemoveTid(tid uint64) {
+	gs.logtailUpdate.mu.Lock()
+	defer gs.logtailUpdate.mu.Unlock()
+	delete(gs.logtailUpdate.mu.updated, tid)
 }
 
 func (gs *GlobalStats) enqueue(tail *logtail.TableLogtail) {
@@ -243,22 +258,30 @@ func (gs *GlobalStats) consumeWorker(ctx context.Context) {
 }
 
 func (gs *GlobalStats) updateWorker(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
+	for i := 0; i < runtime.GOMAXPROCS(0); i++ {
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
 
-		case key := <-gs.updateC:
-			go gs.updateTableStats(key)
-		}
+				case key := <-gs.updateC:
+					gs.updateTableStats(key)
+				}
+			}
+		}()
 	}
 }
 
-func (gs *GlobalStats) triggerUpdate(key pb.StatsInfoKey) {
+func (gs *GlobalStats) triggerUpdate(key pb.StatsInfoKey, force bool) {
+	if force {
+		gs.updateC <- key
+		return
+	}
+
 	select {
 	case gs.updateC <- key:
 	default:
-		logutil.Errorf("the channel of update table is full")
 	}
 }
 
@@ -268,7 +291,7 @@ func (gs *GlobalStats) consumeLogtail(tail *logtail.TableLogtail) {
 		TableID:    tail.Table.TbId,
 	}
 	if len(tail.CkpLocation) > 0 {
-		gs.triggerUpdate(key)
+		gs.triggerUpdate(key, false)
 	} else if tail.Table != nil {
 		var triggered bool
 		for _, cmd := range tail.Commands {
@@ -276,7 +299,7 @@ func (gs *GlobalStats) consumeLogtail(tail *logtail.TableLogtail) {
 				logtailreplay.IsObjTable(cmd.TableName) ||
 				logtailreplay.IsMetaTable(cmd.TableName) {
 				triggered = true
-				gs.triggerUpdate(key)
+				gs.triggerUpdate(key, false)
 				break
 			}
 		}
@@ -287,7 +310,7 @@ func (gs *GlobalStats) consumeLogtail(tail *logtail.TableLogtail) {
 		}
 		if !triggered && gs.ShouldUpdate(key, gs.tableLogtailCounter[key]) {
 			gs.tableLogtailCounter[key] = 0
-			gs.triggerUpdate(key)
+			gs.triggerUpdate(key, false)
 		}
 	}
 }
@@ -308,6 +331,11 @@ func (gs *GlobalStats) notifyLogtailUpdate(tid uint64) {
 }
 
 func (gs *GlobalStats) waitLogtailUpdated(tid uint64) {
+	// If the tid is less than reserved, return immediately.
+	if tid < catalog.MO_RESERVED_MAX {
+		return
+	}
+
 	// checkUpdated is a function used to check if the table's
 	// first logtail has been received. Return true means that
 	// the first logtail has already been received by the CN server.
@@ -370,6 +398,7 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 	// wait until the table's logtail has been updated.
 	gs.waitLogtailUpdated(key.TableID)
 
+	// Protect the update progress.
 	ts, ok := gs.statsUpdated.Load(key)
 	if ok && time.Since(ts.(time.Time)) < MinUpdateInterval {
 		return
@@ -397,9 +426,10 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 			})
 		}
 
-		// update the time to current time only if the stats is not nil.
 		if updated {
 			gs.mu.statsInfoMap[key] = stats
+			// The update time of the table key should be updated just before
+			// trying to update stats.
 			gs.statsUpdated.Store(key, time.Now())
 		} else if _, ok := gs.mu.statsInfoMap[key]; !ok {
 			gs.mu.statsInfoMap[key] = nil
@@ -452,7 +482,7 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 		stats,
 	)
 	if err := UpdateStats(gs.ctx, req); err != nil {
-		logutil.Errorf("failed to init stats info for table %v", key)
+		logutil.Errorf("failed to init stats info for table %v, err: %v", key, err)
 		return
 	}
 	updated = true

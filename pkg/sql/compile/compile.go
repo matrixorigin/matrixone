@@ -111,7 +111,6 @@ var (
 // NewCompile is used to new an object of compile
 func NewCompile(
 	addr, db, sql, tenant, uid string,
-	ctx context.Context,
 	e engine.Engine,
 	proc *process.Process,
 	stmt tree.Statement,
@@ -119,15 +118,13 @@ func NewCompile(
 	cnLabel map[string]string,
 	startAt time.Time,
 ) *Compile {
-	c := reuse.Alloc[Compile](nil)
+	c := GetCompileService().getCompile(proc)
+
 	c.e = e
 	c.db = db
-
 	c.tenant = tenant
 	c.uid = uid
 	c.sql = sql
-	c.proc = proc
-	c.proc.Ctx = ctx
 	c.proc.Base.MessageBoard = c.MessageBoard
 	c.stmt = stmt
 	c.addr = addr
@@ -151,7 +148,7 @@ func (c *Compile) Release() {
 	if c == nil {
 		return
 	}
-	reuse.Free[Compile](c, nil)
+	_, _ = GetCompileService().putCompile(c)
 }
 
 func (c Compile) TypeName() string {
@@ -198,6 +195,9 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	c.startAt = startAt
 	if c.proc.GetTxnOperator() != nil {
 		c.proc.GetTxnOperator().GetWorkspace().UpdateSnapshotWriteOffset()
+		c.TxnOffset = c.proc.GetTxnOperator().GetWorkspace().GetSnapshotWriteOffset()
+	} else {
+		c.TxnOffset = 0
 	}
 }
 
@@ -226,7 +226,6 @@ func (c *Compile) clear() {
 	c.originSQL = ""
 	c.anal = nil
 	c.e = nil
-	c.proc.Ctx = nil
 	c.proc = nil
 	c.cnList = c.cnList[:0]
 	c.stmt = nil
@@ -632,7 +631,7 @@ func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 	// improved to refresh expression in the future.
 
 	var e error
-	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.proc.Ctx, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
+	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
 	defer func() {
 		if e != nil {
 			runC.Release()
@@ -1053,7 +1052,7 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		sort.Slice(c.cnList, func(i, j int) bool { return c.cnList[i].Addr < c.cnList[j].Addr })
 	}
 
-	if c.isPrepare && c.IsTpQuery() {
+	if c.isPrepare && !c.IsTpQuery() {
 		return nil, cantCompileForPrepareErr
 	}
 
@@ -1363,7 +1362,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		//c.setAnalyzeCurrent(right, curNodeIdx)
 		c.setAnalyzeCurrent(left, int(curNodeIdx))
 		c.setAnalyzeCurrent(right, int(curNodeIdx))
-		ss = c.compileSort(n, c.compileJoin(n, ns[n.Children[0]], ns[n.Children[1]], left, right))
+		ss = c.compileSort(n, c.compileJoin(n, ns[n.Children[0]], ns[n.Children[1]], ns, left, right))
 		return ss, nil
 	case plan.Node_SORT:
 		//curNodeIdx := c.anal.curNodeIdx
@@ -2613,11 +2612,11 @@ func (c *Compile) compileUnionAll(ss []*Scope, children []*Scope) []*Scope {
 	return []*Scope{rs}
 }
 
-func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
+func (c *Compile) compileJoin(node, left, right *plan.Node, ns []*plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
 	if node.Stats.HashmapStats.Shuffle {
 		return c.compileShuffleJoin(node, left, right, probeScopes, buildScopes)
 	}
-	rs := c.compileBroadcastJoin(node, left, right, probeScopes, buildScopes)
+	rs := c.compileBroadcastJoin(node, left, right, ns, probeScopes, buildScopes)
 	if c.IsTpQuery() {
 		//construct join build operator for tp join
 		buildScopes[0].appendInstruction(constructJoinBuildInstruction(c, rs[0].Instructions[0], false, false))
@@ -2744,7 +2743,7 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 	return children
 }
 
-func (c *Compile) compileBroadcastJoin(node, left, right *plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
+func (c *Compile) compileBroadcastJoin(node, left, right *plan.Node, ns []*plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
 	var rs []*Scope
 	isEq := plan2.IsEquiJoin2(node.OnList)
 
@@ -2756,6 +2755,10 @@ func (c *Compile) compileBroadcastJoin(node, left, right *plan.Node, probeScopes
 	leftTyps := make([]types.Type, len(left.ProjectList))
 	for i, expr := range left.ProjectList {
 		leftTyps[i] = dupType(&expr.Typ)
+	}
+
+	if plan2.IsShuffleChildren(left, ns) {
+		probeScopes = c.mergeShuffleJoinScopeList(probeScopes)
 	}
 
 	switch node.JoinType {
@@ -3456,8 +3459,7 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 
 	case plan.ShuffleMethod_Reshuffle:
 
-		dop := plan2.GetShuffleDop()
-		parent, children := c.newScopeListForShuffleGroup(1, dop)
+		parent, children := c.newScopeListForShuffleGroup(1)
 		// saving the last operator of all children to make sure the connector setting in
 		// the right place
 		lastOperator := make([]vm.Instruction, 0, len(children))
@@ -3509,8 +3511,7 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 
 		return parent
 	default:
-		dop := plan2.GetShuffleDop()
-		parent, children := c.newScopeListForShuffleGroup(validScopeCount(ss), dop)
+		parent, children := c.newScopeListForShuffleGroup(validScopeCount(ss))
 		c.constructShuffleAndDispatch(ss, children, n)
 
 		// saving the last operator of all children to make sure the connector setting in
@@ -3674,14 +3675,14 @@ func (c *Compile) newScopeListOnCurrentCN(childrenCount int, blocks int) []*Scop
 		return ss
 	}
 */
-func (c *Compile) newScopeListForShuffleGroup(childrenCount int, blocks int) ([]*Scope, []*Scope) {
+func (c *Compile) newScopeListForShuffleGroup(childrenCount int) ([]*Scope, []*Scope) {
 	parent := make([]*Scope, 0, len(c.cnList))
 	children := make([]*Scope, 0, len(c.cnList))
 
 	currentFirstFlag := c.anal.isFirst
 	for _, n := range c.cnList {
 		c.anal.isFirst = currentFirstFlag
-		scopes := c.newScopeListWithNode(c.generateCPUNumber(n.Mcpu, blocks), childrenCount, n.Addr)
+		scopes := c.newScopeListWithNode(plan2.GetShuffleDop(n.Mcpu), childrenCount, n.Addr)
 		for _, s := range scopes {
 			for _, rr := range s.Proc.Reg.MergeReceivers {
 				rr.Ch = make(chan *process.RegisterMessage, shuffleChannelBufferSize)
@@ -3817,6 +3818,19 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 	return rs
 }
 
+func (c *Compile) mergeShuffleJoinScopeList(child []*Scope) []*Scope {
+	lenCN := len(c.cnList)
+	dop := len(child) / lenCN
+	mergeScope := make([]*Scope, 0, lenCN)
+	for i, n := range c.cnList {
+		start := i * dop
+		end := start + dop
+		ss := child[start:end]
+		mergeScope = append(mergeScope, c.newMergeRemoteScope(ss, n))
+	}
+	return mergeScope
+}
+
 func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([]*Scope, []*Scope) {
 	single := len(c.cnList) <= 1
 	if single {
@@ -3827,13 +3841,13 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 	children := make([]*Scope, 0, len(c.cnList))
 	lnum := len(left)
 	sum := lnum + len(right)
-	for _, n := range c.cnList {
-		dop := c.generateCPUNumber(n.Mcpu, plan2.GetShuffleDop())
+	for _, cn := range c.cnList {
+		dop := plan2.GetShuffleDop(cn.Mcpu)
 		ss := make([]*Scope, dop)
 		for i := range ss {
 			ss[i] = newScope(Remote)
 			ss[i].IsJoin = true
-			ss[i].NodeInfo.Addr = n.Addr
+			ss[i].NodeInfo.Addr = cn.Addr
 			ss[i].NodeInfo.Mcpu = 1
 			ss[i].Proc = process.NewFromProc(c.proc, c.proc.Ctx, sum)
 			ss[i].BuildIdx = lnum
@@ -3844,7 +3858,7 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 		}
 		children = append(children, ss...)
 		if !single {
-			parent = append(parent, c.newMergeRemoteScope(ss, n))
+			parent = append(parent, c.newMergeRemoteScope(ss, cn))
 		}
 	}
 
@@ -3999,14 +4013,14 @@ func regTransplant(source, target *Scope, sourceIdx, targetIdx int) {
 }
 
 func (c *Compile) generateCPUNumber(cpunum, blocks int) int {
-	if cpunum <= 0 || blocks <= 0 || c.IsTpQuery() {
+	if cpunum <= 0 || blocks <= 16 || c.IsTpQuery() {
 		return 1
 	}
-
-	if cpunum <= blocks {
-		return cpunum
+	ret := blocks/16 + 1
+	if ret < cpunum {
+		return ret
 	}
-	return blocks
+	return cpunum
 }
 
 func (c *Compile) initAnalyze(qry *plan.Query) {

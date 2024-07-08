@@ -370,7 +370,7 @@ type Process struct {
 	Reg              Register
 	Ctx              context.Context
 	Cancel           context.CancelFunc
-	DispatchNotifyCh chan WrapCs
+	DispatchNotifyCh chan *WrapCs
 }
 
 type vectorPool struct {
@@ -388,10 +388,12 @@ type sqlHelper interface {
 }
 
 type WrapCs struct {
-	MsgId uint64
-	Uid   uuid.UUID
-	Cs    morpc.ClientSession
-	Err   chan error
+	sync.RWMutex
+	ReceiverDone bool
+	MsgId        uint64
+	Uid          uuid.UUID
+	Cs           morpc.ClientSession
+	Err          chan error
 }
 
 func (proc *Process) SetStmtProfile(sp *StmtProfile) {

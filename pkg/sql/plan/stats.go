@@ -457,8 +457,17 @@ func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *Q
 	if s == nil {
 		return 0.1
 	}
+
 	//check strict filter, otherwise can not estimate outcnt by min/max val
-	col, litType, literals, colFnName := extractColRefAndLiteralsInFilter(expr)
+	col, litType, literals, colFnName, hasDynamicParam := extractColRefAndLiteralsInFilter(expr)
+	if hasDynamicParam {
+		// assume dynamic parameter always has low selectivity
+		if funcName == "between" {
+			return 0.0001
+		} else {
+			return 0.01
+		}
+	}
 	if col != nil && len(literals) > 0 {
 		typ := types.T(s.DataTypeMap[col.Name])
 		if !(typ.IsInteger() || typ.IsDateRelate()) {

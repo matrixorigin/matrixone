@@ -1,0 +1,35 @@
+drop table if exists dual;
+create table dual;
+A table must have at least one visible column.
+create table dual(a int);
+insert into dual values (1);
+select * from dual;
+SQL parser error: No tables used
+select * from `dual`;
+SQL parser error: No tables used
+select * from dual.dual;
+a
+1
+select * from dual.`dual`;
+a
+1
+drop table if exists dual;
+drop database if exists `testdual`;
+create database `testdual`;
+use `testdual`;
+create table dual;
+A table must have at least one visible column.
+create table dual(a int);
+insert into dual values (1);
+select * from dual;
+SQL parser error: No tables used
+select * from `dual`;
+SQL parser error: No tables used
+select * from `testdual`.dual;
+a
+1
+select * from `testdual`.`dual`;
+a
+1
+drop table if exists dual;
+drop database if exists `testdual`;

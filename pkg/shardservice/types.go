@@ -62,9 +62,14 @@ type ShardServer interface {
 // ShardService is sharding service. Each CN node holds an instance of the
 // ShardService.
 type ShardService interface {
+	// GetConfig returns the configuration of the shard service.
+	Config() Config
 	// Read read data from shards.
 	Read(ctx context.Context, req ReadRequest, opts ReadOptions) error
-
+	// HasLocalReplica returns whether the shard has a local replica.
+	HasLocalReplica(tableID, shardID uint64) bool
+	// HasAllLocalReplicas returns whether all shards of the table have local replicas.
+	HasAllLocalReplicas(tableID uint64) bool
 	// GetShardInfo returns the metadata of the shards corresponding to the table.
 	GetShardInfo(table uint64) (uint64, pb.Policy, bool, error)
 	// Create creates table shards metadata in current txn. And create shard
