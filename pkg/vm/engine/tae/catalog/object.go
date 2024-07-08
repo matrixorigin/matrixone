@@ -623,7 +623,9 @@ func (entry *ObjectEntry) PrepareRollback() (err error) {
 	case ObjectState_Create_Active:
 		entry.table.link.Delete(lastNode)
 	case ObjectState_Delete_Active:
-		entry.DeleteNode = nil
+		newEntry := entry.Clone()
+		newEntry.DeleteNode = nil
+		entry.table.link.Update(newEntry, entry)
 	default:
 		panic(fmt.Sprintf("invalid object state %v", lastNode.ObjectState))
 	}
