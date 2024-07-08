@@ -91,7 +91,7 @@ func (m *multiObjPolicy) revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHos
 		} else {
 			break
 		}
-		if set.size > common.DefaultMaxOsizeObjMB*common.Const1MBytes {
+		if set.size > 2*common.DefaultMaxOsizeObjMB*common.Const1MBytes {
 			break
 		}
 	}
