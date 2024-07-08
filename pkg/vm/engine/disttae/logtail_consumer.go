@@ -93,6 +93,8 @@ const (
 	Subscribed
 	Unsubscribing
 	Unsubscribed
+
+	FakeLogtailServerAddress = "fake address for ut"
 )
 
 // PushClient is a structure responsible for all operations related to the log tail push model.
