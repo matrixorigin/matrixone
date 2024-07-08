@@ -18,8 +18,11 @@ import (
 	// "time"
 
 	// "github.com/matrixorigin/matrixone/pkg/container/types"
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	// "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
@@ -44,62 +47,247 @@ func (catalog *Catalog) checkTombstone(t data.Tombstone) error {
 	return nil
 }
 func (catalog *Catalog) checkObject(o *ObjectEntry) error {
-	// JXM TODO
-	// o.RLock()
-	// defer o.RUnlock()
-	// if o.Depth() > 2 {
-	// 	logutil.Warnf("[MetadataCheck] object mvcc link is too long, depth %d, obj %v", o.Depth(), o.PPStringLocked(3, 0, ""))
-	// }
-	// if o.IsAppendable() && o.HasDropCommittedLocked() {
-	// 	if o.GetLatestNodeLocked().BaseNode.IsEmpty() {
-	// 		logutil.Warnf("[MetadataCheck] object should have stats, obj %v", o.PPStringLocked(3, 0, ""))
-	// 	}
-	// }
-	// if !o.IsAppendable() && !o.IsCreatingOrAborted() {
-	// 	if o.GetLatestNodeLocked().BaseNode.IsEmpty() {
-	// 		logutil.Warnf("[MetadataCheck] object should have stats, obj %v", o.PPStringLocked(3, 0, ""))
-	// 	}
-	// }
-	// if !o.IsAppendable() && !o.IsCreatingOrAborted() {
-	// 	if o.GetLatestNodeLocked().BaseNode.IsEmpty() {
-	// 		logutil.Warnf("[MetadataCheck] object should have stats, obj %v", o.PPStringLocked(3, 0, ""))
-	// 	}
-	// }
-	// if !catalog.gcTS.IsEmpty() {
-	// 	if o.HasDropCommittedLocked() && o.DeleteBeforeLocked(catalog.gcTS) && !o.InMemoryDeletesExistedLocked() {
-	// 		logutil.Warnf("[MetadataCheck] object should not exist, gcTS %v, obj %v", catalog.gcTS.ToString(), o.PPStringLocked(3, 0, ""))
-	// 	}
-	// }
-
-	// duration := time.Minute * 10
-	// ts := types.BuildTS(time.Now().UTC().UnixNano()-duration.Nanoseconds(), 0)
-	// if o.HasDropCommittedLocked() && o.DeleteBeforeLocked(ts) {
-	// 	if o.InMemoryDeletesExistedLocked() {
-	// 		logutil.Warnf("[MetadataCheck] object has in memory deletes %v after deleted, obj %v, tombstone %v",
-	// 			duration,
-	// 			o.PPStringLocked(3, 0, ""),
-	// 			o.GetTable().TryGetTombstone(o.ID).StringLocked(3, 0, ""))
-	// 	}
-	// }
-
-	// lastNode := o.GetLatestNodeLocked()
-	// if lastNode == nil {
-	// 	logutil.Warnf("[MetadataCheck] object MVCC Chain is empty, obj %v", o.ID.String())
-	// } else {
-	// 	duration := time.Minute * 10
-	// 	ts := types.BuildTS(time.Now().UTC().UnixNano()-duration.Nanoseconds(), 0)
-	// 	if !lastNode.IsCommitted() {
-	// 		if lastNode.Start.Less(&ts) {
-	// 			logutil.Warnf("[MetadataCheck] object MVCC Node hasn't committed %v after it starts, obj %v",
-	// 				duration,
-	// 				o.PPStringLocked(3, 0, ""))
-	// 		}
-	// 	} else {
-	// 		if lastNode.End.Equal(&txnif.UncommitTS) || lastNode.Prepare.Equal(&txnif.UncommitTS) {
-	// 			logutil.Warnf("[MetadataCheck] object MVCC Node hasn't committed but node.Txn is nil, obj %v",
-	// 				o.PPStringLocked(3, 0, ""))
-	// 		}
-	// 	}
-	// }
+	switch o.ObjectState {
+	case ObjectState_Create_Active:
+		if o.CreateNode == nil {
+			logutil.Warnf("[MetadataCheck] object hasn't create node, obj %v", o.StringWithLevel(3))
+		}
+		if !o.CreateNode.CreatedAt.Equal(&txnif.UncommitTS) {
+			logutil.Warnf("[MetadataCheck] wrong create ts %v, obj %v", o.CreateNode.CreatedAt.ToString(), o.StringWithLevel(3))
+		}
+		if !o.CreateNode.DeletedAt.IsEmpty() {
+			logutil.Warnf("[MetadataCheck] wrong delete ts %v, obj %v", o.CreateNode.DeletedAt.ToString(), o.StringWithLevel(3))
+		}
+		if o.CreateNode.Start.IsEmpty() {
+			logutil.Warnf("[MetadataCheck] wrong start ts %v, obj %v", o.CreateNode.Start.ToString(), o.StringWithLevel(3))
+		}
+		if !o.CreateNode.Prepare.IsEmpty() {
+			logutil.Warnf("[MetadataCheck] wrong prepare ts %v, obj %v", o.CreateNode.Prepare.ToString(), o.StringWithLevel(3))
+		}
+		if !o.CreateNode.End.IsEmpty() {
+			logutil.Warnf("[MetadataCheck] wrong end ts %v, obj %v", o.CreateNode.End.ToString(), o.StringWithLevel(3))
+		}
+		if o.CreateNode.Txn == nil {
+			logutil.Warnf("[MetadataCheck] txn not existed, obj %v", o.StringWithLevel(3))
+		}
+		if o.IsAppendable() {
+			if !o.CreateNode.BaseNode.IsEmpty() {
+				logutil.Warnf("[MetadataCheck] wrong object stats %v, obj %v", o.CreateNode.BaseNode.String(), o.StringWithLevel(3))
+			}
+		} else {
+			if o.CreateNode.BaseNode.IsEmpty() {
+				logutil.Warnf("[MetadataCheck] wrong object stats %v, obj %v", o.CreateNode.BaseNode.String(), o.StringWithLevel(3))
+			}
+		}
+		if o.DeleteNode != nil {
+			logutil.Warnf("[MetadataCheck] creating object has delete node, obj %v", o.StringWithLevel(3))
+		}
+	case ObjectState_Create_PrepareCommit:
+		if o.CreateNode == nil {
+			logutil.Warnf("[MetadataCheck] object hasn't create node, obj %v", o.StringWithLevel(3))
+		}
+		if !o.CreateNode.CreatedAt.Equal(&txnif.UncommitTS) {
+			logutil.Warnf("[MetadataCheck] wrong create ts %v, obj %v", o.CreateNode.CreatedAt.ToString(), o.StringWithLevel(3))
+		}
+		if !o.CreateNode.DeletedAt.IsEmpty() {
+			logutil.Warnf("[MetadataCheck] wrong delete ts %v, obj %v", o.CreateNode.DeletedAt.ToString(), o.StringWithLevel(3))
+		}
+		if o.CreateNode.Start.IsEmpty() {
+			logutil.Warnf("[MetadataCheck] wrong start ts %v, obj %v", o.CreateNode.Start.ToString(), o.StringWithLevel(3))
+		}
+		if o.CreateNode.Prepare.IsEmpty() {
+			logutil.Warnf("[MetadataCheck] wrong prepare ts %v, obj %v", o.CreateNode.Prepare.ToString(), o.StringWithLevel(3))
+		}
+		if !o.CreateNode.End.IsEmpty() {
+			logutil.Warnf("[MetadataCheck] wrong end ts %v, obj %v", o.CreateNode.End.ToString(), o.StringWithLevel(3))
+		}
+		if o.CreateNode.Txn == nil {
+			logutil.Warnf("[MetadataCheck] txn not existed, obj %v", o.StringWithLevel(3))
+		}
+		if o.IsAppendable() {
+			if !o.CreateNode.BaseNode.IsEmpty() {
+				logutil.Warnf("[MetadataCheck] wrong object stats %v, obj %v", o.CreateNode.BaseNode.String(), o.StringWithLevel(3))
+			}
+		} else {
+			if o.CreateNode.BaseNode.IsEmpty() {
+				logutil.Warnf("[MetadataCheck] wrong object stats %v, obj %v", o.CreateNode.BaseNode.String(), o.StringWithLevel(3))
+			}
+		}
+		if o.DeleteNode != nil {
+			logutil.Warnf("[MetadataCheck] creating object has delete node, obj %v", o.StringWithLevel(3))
+		}
+	case ObjectState_Create_ApplyCommit:
+		if o.CreateNode == nil {
+			logutil.Warnf("[MetadataCheck] object hasn't create node, obj %v", o.StringWithLevel(3))
+		}
+		if !o.CreateNode.CreatedAt.Equal(&txnif.UncommitTS) {
+			logutil.Warnf("[MetadataCheck] wrong create ts %v, obj %v", o.CreateNode.CreatedAt.ToString(), o.StringWithLevel(3))
+		}
+		if !o.CreateNode.DeletedAt.IsEmpty() {
+			logutil.Warnf("[MetadataCheck] wrong delete ts %v, obj %v", o.CreateNode.DeletedAt.ToString(), o.StringWithLevel(3))
+		}
+		if o.CreateNode.Start.IsEmpty() {
+			logutil.Warnf("[MetadataCheck] wrong start ts %v, obj %v", o.CreateNode.Start.ToString(), o.StringWithLevel(3))
+		}
+		if o.CreateNode.Prepare.IsEmpty() {
+			logutil.Warnf("[MetadataCheck] wrong prepare ts %v, obj %v", o.CreateNode.Prepare.ToString(), o.StringWithLevel(3))
+		}
+		if o.CreateNode.End.IsEmpty() {
+			logutil.Warnf("[MetadataCheck] wrong end ts %v, obj %v", o.CreateNode.End.ToString(), o.StringWithLevel(3))
+		}
+		if o.CreateNode.Txn != nil {
+			logutil.Warnf("[MetadataCheck] txn not existed, obj %v", o.StringWithLevel(3))
+		}
+		if o.IsAppendable() {
+			if !o.CreateNode.BaseNode.IsEmpty() {
+				logutil.Warnf("[MetadataCheck] wrong object stats %v, obj %v", o.CreateNode.BaseNode.String(), o.StringWithLevel(3))
+			}
+		} else {
+			if o.CreateNode.BaseNode.IsEmpty() {
+				logutil.Warnf("[MetadataCheck] wrong object stats %v, obj %v", o.CreateNode.BaseNode.String(), o.StringWithLevel(3))
+			}
+		}
+		if o.DeleteNode != nil {
+			logutil.Warnf("[MetadataCheck] creating object has delete node, obj %v", o.StringWithLevel(3))
+		}
+	case ObjectState_Delete_Active:
+		if o.CreateNode == nil {
+			logutil.Warnf("[MetadataCheck] object hasn't create node, obj %v", o.StringWithLevel(3))
+		}
+		if !o.CreateNode.CreatedAt.Equal(&txnif.UncommitTS) {
+			logutil.Warnf("[MetadataCheck] wrong create ts %v, obj %v", o.CreateNode.CreatedAt.ToString(), o.StringWithLevel(3))
+		}
+		if !o.CreateNode.DeletedAt.IsEmpty() {
+			logutil.Warnf("[MetadataCheck] wrong delete ts %v, obj %v", o.CreateNode.DeletedAt.ToString(), o.StringWithLevel(3))
+		}
+		if o.CreateNode.Start.IsEmpty() {
+			logutil.Warnf("[MetadataCheck] wrong start ts %v, obj %v", o.CreateNode.Start.ToString(), o.StringWithLevel(3))
+		}
+		if o.CreateNode.Prepare.IsEmpty() {
+			logutil.Warnf("[MetadataCheck] wrong prepare ts %v, obj %v", o.CreateNode.Prepare.ToString(), o.StringWithLevel(3))
+		}
+		if !o.CreateNode.End.IsEmpty() {
+			logutil.Warnf("[MetadataCheck] wrong end ts %v, obj %v", o.CreateNode.End.ToString(), o.StringWithLevel(3))
+		}
+		if o.CreateNode.Txn == nil {
+			logutil.Warnf("[MetadataCheck] txn not existed, obj %v", o.StringWithLevel(3))
+		}
+		if o.IsAppendable() {
+			if !o.CreateNode.BaseNode.IsEmpty() {
+				logutil.Warnf("[MetadataCheck] wrong object stats %v, obj %v", o.CreateNode.BaseNode.String(), o.StringWithLevel(3))
+			}
+		} else {
+			if o.CreateNode.BaseNode.IsEmpty() {
+				logutil.Warnf("[MetadataCheck] wrong object stats %v, obj %v", o.CreateNode.BaseNode.String(), o.StringWithLevel(3))
+			}
+		}
+		if o.DeleteNode == nil {
+			logutil.Warnf("[MetadataCheck] object doesn't have delete node, obj %v", o.StringWithLevel(3))
+		}
+		if !o.DeleteNode.CreatedAt.Equal(&txnif.UncommitTS) {
+			logutil.Warnf("[MetadataCheck] wrong create ts %v, obj %v", o.CreateNode.CreatedAt.ToString(), o.StringWithLevel(3))
+		}
+		if !o.DeleteNode.DeletedAt.IsEmpty() {
+			logutil.Warnf("[MetadataCheck] wrong delete ts %v, obj %v", o.CreateNode.DeletedAt.ToString(), o.StringWithLevel(3))
+		}
+		if o.DeleteNode.Start.IsEmpty() {
+			logutil.Warnf("[MetadataCheck] wrong start ts %v, obj %v", o.CreateNode.Start.ToString(), o.StringWithLevel(3))
+		}
+		if o.DeleteNode.Prepare.IsEmpty() {
+			logutil.Warnf("[MetadataCheck] wrong prepare ts %v, obj %v", o.CreateNode.Prepare.ToString(), o.StringWithLevel(3))
+		}
+		if !o.DeleteNode.End.IsEmpty() {
+			logutil.Warnf("[MetadataCheck] wrong end ts %v, obj %v", o.CreateNode.End.ToString(), o.StringWithLevel(3))
+		}
+		if o.DeleteNode.Txn == nil {
+			logutil.Warnf("[MetadataCheck] txn not existed, obj %v", o.StringWithLevel(3))
+		}
+		if o.IsAppendable() {
+			if !o.DeleteNode.BaseNode.IsEmpty() {
+				logutil.Warnf("[MetadataCheck] wrong object stats %v, obj %v", o.CreateNode.BaseNode.String(), o.StringWithLevel(3))
+			}
+		} else {
+			if o.DeleteNode.BaseNode.IsEmpty() {
+				logutil.Warnf("[MetadataCheck] wrong object stats %v, obj %v", o.CreateNode.BaseNode.String(), o.StringWithLevel(3))
+			}
+		}
+	case ObjectState_Delete_PrepareCommit:
+	case ObjectState_Delete_ApplyCommit:
+	}
 	return nil
+}
+
+const (
+	State_Active = iota
+	State_PrepareCommit
+	State_ApplyCommit
+)
+
+func checkMVCCNode(node *MVCCNode[*ObjectMVCCNode], state int, create bool, appendable bool, o *ObjectEntry) {
+	if node == nil {
+		logutil.Warnf("[MetadataCheck] empty mvcc node, obj %v", o.StringWithLevel(3))
+	}
+	if create {
+		switch state {
+		case State_Active:
+			if !node.CreatedAt.Equal(&txnif.UncommitTS) {
+				logutil.Warnf("[MetadataCheck] wrong create ts %v, obj %v", o.CreateNode.CreatedAt.ToString(), o.StringWithLevel(3))
+			}
+		case State_PrepareCommit:
+			if !node.CreatedAt.Equal(&txnif.UncommitTS) {
+				logutil.Warnf("[MetadataCheck] wrong create ts %v, obj %v", o.CreateNode.CreatedAt.ToString(), o.StringWithLevel(3))
+			}
+		case State_ApplyCommit:
+			if node.CreatedAt.Equal(&txnif.UncommitTS) || node.CreatedAt.IsEmpty() {
+				logutil.Warnf("[MetadataCheck] wrong create ts %v, obj %v", o.CreateNode.CreatedAt.ToString(), o.StringWithLevel(3))
+			}
+		default:
+			panic(fmt.Sprintf("invalid state %v", state))
+		}
+	}
+	if !create {
+		if node.CreatedAt.Equal(&txnif.UncommitTS) || node.CreatedAt.IsEmpty() {
+			logutil.Warnf("[MetadataCheck] wrong create ts %v, obj %v", o.DeleteNode.DeletedAt.ToString(), o.StringWithLevel(3))
+		}
+		switch state {
+		case State_Active:
+			if !node.DeletedAt.Equal(&txnif.UncommitTS) {
+				logutil.Warnf("[MetadataCheck] wrong delete ts %v, obj %v", o.DeleteNode.CreatedAt.ToString(), o.StringWithLevel(3))
+			}
+		case State_PrepareCommit:
+			if !node.DeletedAt.Equal(&txnif.UncommitTS) {
+				logutil.Warnf("[MetadataCheck] wrong create ts %v, obj %v", o.DeleteNode.CreatedAt.ToString(), o.StringWithLevel(3))
+			}
+		case State_ApplyCommit:
+			if node.DeletedAt.Equal(&txnif.UncommitTS) || node.CreatedAt.IsEmpty() {
+				logutil.Warnf("[MetadataCheck] wrong create ts %v, obj %v", o.DeleteNode.CreatedAt.ToString(), o.StringWithLevel(3))
+			}
+		default:
+			panic(fmt.Sprintf("invalid state %v", state))
+		}
+	}
+	if !node.DeletedAt.IsEmpty() {
+		logutil.Warnf("[MetadataCheck] wrong delete ts %v, obj %v", o.CreateNode.DeletedAt.ToString(), o.StringWithLevel(3))
+	}
+	if node.Start.IsEmpty() {
+		logutil.Warnf("[MetadataCheck] wrong start ts %v, obj %v", o.CreateNode.Start.ToString(), o.StringWithLevel(3))
+	}
+	if node.Prepare.IsEmpty() {
+		logutil.Warnf("[MetadataCheck] wrong prepare ts %v, obj %v", o.CreateNode.Prepare.ToString(), o.StringWithLevel(3))
+	}
+	if !node.End.IsEmpty() {
+		logutil.Warnf("[MetadataCheck] wrong end ts %v, obj %v", o.CreateNode.End.ToString(), o.StringWithLevel(3))
+	}
+	if node.Txn == nil {
+		logutil.Warnf("[MetadataCheck] txn not existed, obj %v", o.StringWithLevel(3))
+	}
+	if appendable {
+		if !node.BaseNode.IsEmpty() {
+			logutil.Warnf("[MetadataCheck] wrong object stats %v, obj %v", o.CreateNode.BaseNode.String(), o.StringWithLevel(3))
+		}
+	} else {
+		if node.BaseNode.IsEmpty() {
+			logutil.Warnf("[MetadataCheck] wrong object stats %v, obj %v", o.CreateNode.BaseNode.String(), o.StringWithLevel(3))
+		}
+	}
 }
