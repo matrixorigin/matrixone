@@ -118,6 +118,11 @@ func (s *Scope) resetForReuse(c *Compile) (err error) {
 		s.Proc.Ctx = newctx
 		s.Proc.Cancel = cancel
 	}
+	for i := 0; i < len(s.Proc.Reg.MergeReceivers); i++ {
+		s.Proc.Reg.MergeReceivers[i].Ctx = s.Proc.Ctx
+		s.Proc.Reg.MergeReceivers[i].CleanChannel(s.Proc.GetMPool())
+	}
+
 	for _, ins := range s.Instructions {
 		if ins.Op == vm.Output {
 			ins.Arg.(*output.Argument).Func = c.fill
