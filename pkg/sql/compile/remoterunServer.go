@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -528,11 +529,14 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 		txnClient:        cli,
 		analysisNodeList: procInfo.GetAnalysisNodeList(),
 	}
-	if procInfo.PrepareParams != nil {
-		result.prepareParams = vector.NewVecFromReuse()
-		err = result.prepareParams.UnmarshalBinary(procInfo.PrepareParams)
-		if err != nil {
-			return processHelper{}, err
+	if procInfo.PrepareParams.Length > 0 {
+		result.prepareParams = vector.NewVec(types.T_text.ToType())
+		result.prepareParams.SetLength(int(procInfo.PrepareParams.Length))
+		result.prepareParams.SetArea(procInfo.PrepareParams.Area)
+		for i := range procInfo.PrepareParams.Nulls {
+			if procInfo.PrepareParams.Nulls[i] {
+				result.prepareParams.GetNulls().Add(uint64(i))
+			}
 		}
 	}
 	result.txnOperator, err = cli.NewWithSnapshot(procInfo.Snapshot)

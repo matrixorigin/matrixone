@@ -471,6 +471,12 @@ message ProcessLimitation {
   int64 reader_size = 5;
 }
 
+message PrepareParamInfo {
+  int64 length = 1;
+  bytes area = 2;
+  repeated bool nulls = 3;
+}
+
 message ProcessInfo {
   string id = 1;
   string sql = 2;
@@ -481,7 +487,7 @@ message ProcessInfo {
   SessionInfo session_info = 7 [(gogoproto.nullable) = false];
   repeated int32 analysis_node_list = 8;
   SessionLoggerInfo session_logger = 9 [(gogoproto.nullable) = false];
-  bytes prepare_params = 10;
+  PrepareParamInfo prepare_params = 10 [(gogoproto.nullable) = false];
 }
 
 message SessionInfo {

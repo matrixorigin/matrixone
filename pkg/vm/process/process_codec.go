@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -62,9 +63,11 @@ func (proc *Process) BuildProcessInfo(
 		}
 		vec := proc.GetPrepareParams()
 		if vec != nil {
-			procInfo.PrepareParams, err = vec.MarshalBinary()
-			if err != nil {
-				return procInfo, err
+			procInfo.PrepareParams.Length = int64(vec.Length())
+			procInfo.PrepareParams.Area = vec.GetArea()
+			procInfo.PrepareParams.Nulls = make([]bool, procInfo.PrepareParams.Length)
+			for i := range procInfo.PrepareParams.Nulls {
+				procInfo.PrepareParams.Nulls[i] = vec.GetNulls().Contains(uint64(i))
 			}
 		}
 	}
@@ -196,11 +199,14 @@ func (c *codecService) Decode(
 	proc.Base.Lim = ConvertToProcessLimitation(value.Lim)
 	proc.Base.SessionInfo = sessionInfo
 	proc.Base.SessionInfo.StorageEngine = c.engine
-	if value.PrepareParams != nil {
-		proc.Base.prepareParams = vector.NewVecFromReuse()
-		err = proc.Base.prepareParams.UnmarshalBinary(value.PrepareParams)
-		if err != nil {
-			return nil, err
+	if value.PrepareParams.Length > 0 {
+		proc.Base.prepareParams = vector.NewVec(types.T_text.ToType())
+		proc.Base.prepareParams.SetLength(int(value.PrepareParams.Length))
+		proc.Base.prepareParams.SetArea(value.PrepareParams.Area)
+		for i := range value.PrepareParams.Nulls {
+			if value.PrepareParams.Nulls[i] {
+				proc.Base.prepareParams.GetNulls().Add(uint64(i))
+			}
 		}
 	}
 	return proc, nil
