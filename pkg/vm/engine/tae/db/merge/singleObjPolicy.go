@@ -103,7 +103,7 @@ func (s *singleObjPolicy) onObject(obj *catalog.ObjectEntry) {
 	}
 
 	if isCandidate() && len(s.objects) < s.config.maxObjs {
-		s.objects = append(s.objects, obj)
+		//s.objects = append(s.objects, obj)
 	}
 }
 
