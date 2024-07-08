@@ -89,6 +89,7 @@ type SubscribeState int32
 const (
 	InvalidSubState SubscribeState = iota
 	Subscribing
+	SubRspReceived
 	Subscribed
 	Unsubscribing
 	Unsubscribed
@@ -280,21 +281,26 @@ func (c *PushClient) TryToSubscribeTable(
 	}
 
 	// state machine for subscribe table.
+	//Unsubscribed -> Subscribing -> SubRspReceived -> Subscribed-->Unsubscribing-->Unsubscribed
 	for {
 
 		switch state {
 
 		case Subscribing:
-			//wait for subscribe succeed or unsubscribed.
-			state, err = c.waitSubOrUnsubscribed(ctx, dbId, tblId)
+			//wait for the next possible state: subscribed or unsubscribed or unsubscribing or Subscribing
+			state, err = c.waitUntilSubscribingChanged(ctx, dbId, tblId)
 			if err != nil {
 				return err
 			}
-
+		case SubRspReceived:
+			state, err = c.consumeLatestCkp(ctx, dbId, tblId)
+			if err != nil {
+				return err
+			}
 		case Unsubscribing:
 			//need to wait for unsubscribe succeed for making the subscribe and unsubscribe execute in order,
 			// otherwise the partition state will leak log tails.
-			state, err = c.waitUnsubscribedOrSubscribing(ctx, dbId, tblId)
+			state, err = c.waitUntilUnsubscribingChanged(ctx, dbId, tblId)
 			if err != nil {
 				return err
 			}
@@ -303,7 +309,7 @@ func (c *PushClient) TryToSubscribeTable(
 			return nil
 
 		case Unsubscribed:
-			panic("Impossible tate")
+			panic("Impossible Path")
 
 		}
 
@@ -805,7 +811,12 @@ func (s *subscribedTable) isSubscribed(dbId, tblId uint64) bool {
 	return false
 }
 
-func (c *PushClient) waitSubOrUnsubscribed(ctx context.Context, dbId, tblId uint64) (SubscribeState, error) {
+// consumeLatestCkp consume the latest checkpoint of the table if not consumed, and return the latest partition state.
+func (c *PushClient) consumeLatestCkp(ctx context.Context, dbId, tblId uint64) (SubscribeState, error) {
+	return InvalidSubState, nil
+}
+
+func (c *PushClient) waitUntilSubscribingChanged(ctx context.Context, dbId, tblId uint64) (SubscribeState, error) {
 	ticker := time.NewTicker(periodToCheckTableSubscribeSucceed)
 	defer ticker.Stop()
 
@@ -829,7 +840,7 @@ func (c *PushClient) waitSubOrUnsubscribed(ctx context.Context, dbId, tblId uint
 }
 
 // waitUnsubscribed wait for table unsubscribe succeed and set the table status to subscribing.
-func (c *PushClient) waitUnsubscribedOrSubscribing(ctx context.Context, dbId, tblId uint64) (SubscribeState, error) {
+func (c *PushClient) waitUntilUnsubscribingChanged(ctx context.Context, dbId, tblId uint64) (SubscribeState, error) {
 	ticker := time.NewTicker(periodToCheckTableUnSubscribeSucceed)
 	defer ticker.Stop()
 

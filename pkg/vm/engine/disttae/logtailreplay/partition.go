@@ -248,8 +248,6 @@ func (p *Partition) Truncate(ctx context.Context, ids [2]uint64, ts types.TS) er
 
 	state.truncate(ids, ts)
 
-	//TODO::update partition's start and end
-
 	if !p.state.CompareAndSwap(curState, state) {
 		panic("concurrent mutation")
 	}
