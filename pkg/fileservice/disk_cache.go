@@ -51,6 +51,7 @@ func NewDiskCache(
 	path string,
 	capacity int,
 	perfCounterSets []*perfcounter.CounterSet,
+	asyncLoad bool,
 ) (ret *DiskCache, err error) {
 
 	err = os.MkdirAll(path, 0755)
@@ -80,21 +81,29 @@ func NewDiskCache(
 	ret.updatingPaths.Cond = sync.NewCond(new(sync.Mutex))
 	ret.updatingPaths.m = make(map[string]bool)
 
-	ret.loadCache()
+	if asyncLoad {
+		go ret.loadCache()
+	} else {
+		ret.loadCache()
+	}
 
 	return ret, nil
 }
 
 func (d *DiskCache) loadCache() {
 
+	var numFiles, numCacheFiles int
+
 	_ = filepath.WalkDir(d.path, func(path string, entry os.DirEntry, err error) error {
+		numFiles++
 		if err != nil {
 			return nil //ignore
 		}
 		if entry.IsDir() {
 			// try remove if empty. for cleaning old structure
 			if path != d.path {
-				os.Remove(path)
+				// os.Remove will not delete non-empty directory
+				_ = os.Remove(path)
 			}
 			return nil
 		}
@@ -107,9 +116,15 @@ func (d *DiskCache) loadCache() {
 		}
 
 		d.cache.Set(path, struct{}{}, int(fileSize(info)))
+		numCacheFiles++
 
 		return nil
 	})
+
+	logutil.Info("disk cache info loaded",
+		zap.Any("all files", numFiles),
+		zap.Any("cache files", numCacheFiles),
+	)
 
 }
 
