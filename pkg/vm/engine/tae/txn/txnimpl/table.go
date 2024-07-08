@@ -1260,7 +1260,7 @@ func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector, pksZM index.ZM)
 				//	txnToWait.GetTxnState(true)
 				//	obj.RLock()
 				//}
-				shouldSkip := obj.HasDropCommitted()
+				shouldSkip := obj.HasDropCommitted() || obj.IsCreatingOrAborted()
 				if shouldSkip {
 					continue
 				}
