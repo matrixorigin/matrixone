@@ -16,10 +16,11 @@ package compile
 
 import (
 	"context"
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	txnClient "github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"sync"
 )
 
 // todo: Move it to a CN level structure next day.
@@ -100,6 +101,7 @@ func (srv *ServiceOfCompile) getCompile(
 	}
 
 	runningCompile := reuse.Alloc[Compile](nil)
+	// runningCompile.AllocMsg = time.Now().String() + " : " + string(debug.Stack())
 	runningCompile.proc = proc
 
 	if runningCompile.queryStatus == nil {
@@ -131,7 +133,10 @@ func (srv *ServiceOfCompile) putCompile(c *Compile) (mustReturnError bool, err e
 	c.queryStatus.clear()
 	srv.Unlock()
 
-	reuse.Free[Compile](c, nil)
+	if !c.isPrepare {
+		// c.FreeMsg = time.Now().String() + " : " + string(debug.Stack())
+		reuse.Free[Compile](c, nil)
+	}
 
 	return err != nil, err
 }
