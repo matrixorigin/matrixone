@@ -354,7 +354,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	}
 
 	// default restore to src account
-	toAccountId, err := getAccountId(ctx, bh, snapshot.accountName)
+	toAccountId, err := getAccountId(ctx, bh, srcAccountName)
 	if err != nil {
 		return err
 	}
