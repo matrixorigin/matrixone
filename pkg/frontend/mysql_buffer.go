@@ -193,7 +193,7 @@ func (c *Conn) Read() ([]byte, error) {
 			finalPayload = make([]byte, len(payload))
 			copy(finalPayload, payload)
 			c.allocator.Free(payload)
-			return payload, nil
+			return finalPayload, nil
 		} else {
 			payloads = append(payloads, payload)
 			break

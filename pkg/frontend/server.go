@@ -218,9 +218,6 @@ func (mo *MOServer) handshake(rs *Conn) error {
 	for !protocol.GetBool(ESTABLISHED) {
 		var payload []byte
 		payload, err = rs.Read()
-		defer func() {
-			rs.allocator.Free(payload)
-		}()
 		if err != nil {
 			return err
 		}
@@ -376,7 +373,6 @@ func NewMOServer(
 	setGlobalPu(pu)
 	setGlobalAicm(aicm)
 	setGlobalSessionAlloc(NewSessionAllocator(pu))
-	setGlobalBufferAlloc(NewBufferAllocator(pu))
 	rm, err := NewRoutineManager(ctx)
 	if err != nil {
 		logutil.Panicf("start server failed with %+v", err)
@@ -436,9 +432,6 @@ func (mo *MOServer) handleMessage(rs *Conn) error {
 func (mo *MOServer) handleRequest(rs *Conn) error {
 	var msg []byte
 	var err error
-	defer func() {
-		rs.allocator.Free(msg)
-	}()
 	msg, err = rs.Read()
 	if err != nil {
 		if err == io.EOF {
