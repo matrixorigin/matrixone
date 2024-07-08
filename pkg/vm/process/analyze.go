@@ -159,3 +159,7 @@ func (a *analyze) AddInsertTime(t time.Time) {
 		atomic.AddInt64(&a.analInfo.InsertTime, int64(time.Since(t)))
 	}
 }
+
+func (a *analyze) GetAnalyzeInfo() *AnalyzeInfo {
+	return a.analInfo
+}

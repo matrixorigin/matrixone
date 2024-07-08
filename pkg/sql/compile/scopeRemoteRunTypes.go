@@ -228,7 +228,7 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 	}
 }
 
-func mergeAnalyseInfo(target *anaylze, ana *pipeline.AnalysisList) {
+func mergeAnalyseInfo(target *anaylzeModule, ana *pipeline.AnalysisList) {
 	source := ana.List
 	if len(target.analInfos) != len(source) {
 		return

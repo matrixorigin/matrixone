@@ -213,6 +213,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal.Start()
 	defer func() {
 		anal.Stop()
+		arg.OpStats.UpdateStats(anal.GetAnalyzeInfo())
 	}()
 
 	if ctr.state == vm.Build {

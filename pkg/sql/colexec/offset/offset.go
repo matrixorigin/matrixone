@@ -63,9 +63,14 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, nil
 	}
 	bat := result.Batch
+
 	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
-	defer anal.Stop()
+	defer func() {
+		anal.Stop()
+		arg.OpStats.UpdateStats(anal.GetAnalyzeInfo())
+	}()
+
 	anal.Input(bat, arg.GetIsFirst())
 
 	if arg.ctr.seen > arg.ctr.offset {

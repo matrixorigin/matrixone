@@ -215,12 +215,12 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 		err = s.ParallelRun(c)
 		if err == nil {
 			// record the number of s3 requests
-			c.proc.Base.AnalInfos[c.anal.curr].S3IOInputCount += c.counterSet.FileService.S3.Put.Load()
-			c.proc.Base.AnalInfos[c.anal.curr].S3IOInputCount += c.counterSet.FileService.S3.List.Load()
-			c.proc.Base.AnalInfos[c.anal.curr].S3IOOutputCount += c.counterSet.FileService.S3.Head.Load()
-			c.proc.Base.AnalInfos[c.anal.curr].S3IOOutputCount += c.counterSet.FileService.S3.Get.Load()
-			c.proc.Base.AnalInfos[c.anal.curr].S3IOOutputCount += c.counterSet.FileService.S3.Delete.Load()
-			c.proc.Base.AnalInfos[c.anal.curr].S3IOOutputCount += c.counterSet.FileService.S3.DeleteMulti.Load()
+			c.proc.Base.AnalInfos[c.anal.curNodeIdx].S3IOInputCount += c.counterSet.FileService.S3.Put.Load()
+			c.proc.Base.AnalInfos[c.anal.curNodeIdx].S3IOInputCount += c.counterSet.FileService.S3.List.Load()
+			c.proc.Base.AnalInfos[c.anal.curNodeIdx].S3IOOutputCount += c.counterSet.FileService.S3.Head.Load()
+			c.proc.Base.AnalInfos[c.anal.curNodeIdx].S3IOOutputCount += c.counterSet.FileService.S3.Get.Load()
+			c.proc.Base.AnalInfos[c.anal.curNodeIdx].S3IOOutputCount += c.counterSet.FileService.S3.Delete.Load()
+			c.proc.Base.AnalInfos[c.anal.curNodeIdx].S3IOOutputCount += c.counterSet.FileService.S3.DeleteMulti.Load()
 
 			receiver.finalAnalysisInfo = c.proc.Base.AnalInfos
 		} else {

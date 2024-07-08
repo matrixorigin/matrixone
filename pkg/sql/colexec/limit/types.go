@@ -58,7 +58,9 @@ func (arg Argument) TypeName() string {
 }
 
 func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+	alloc := reuse.Alloc[Argument](nil)
+	alloc.OpStats = process.NewOperatorStats("limit")
+	return alloc
 }
 
 func (arg *Argument) WithLimit(limit *plan.Expr) *Argument {

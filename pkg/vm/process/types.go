@@ -16,6 +16,7 @@ package process
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -67,6 +68,7 @@ type Analyze interface {
 	Network(*batch.Batch)
 	AddScanTime(t time.Time)
 	AddInsertTime(t time.Time)
+	GetAnalyzeInfo() *AnalyzeInfo
 }
 
 var (
@@ -588,4 +590,88 @@ func (a *AnalyzeInfo) AddSingleParallelTimeConsumed(major bool, parallelIdx int,
 			a.TimeConsumedArrayMinor[parallelIdx] += t
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+
+type OperatorStats struct {
+	OperatorName          string
+	CallCount             int
+	TotalTimeConsumed     int64
+	TotalWaitTimeConsumed int64
+	TotalMemorySize       int64
+	TotalInputRows        int64
+	TotalOutputRows       int64
+	TotalInputSize        int64
+	TotalInputBlocks      int64
+	TotalOutputSize       int64
+	TotalDiskIO           int64
+	TotalS3IOByte         int64
+	TotalS3InputCount     int64
+	TotalS3OutputCount    int64
+	TotalNetworkIO        int64
+	TotalScanTime         int64
+	TotalInsertTime       int64
+}
+
+func NewOperatorStats(operatorName string) *OperatorStats {
+	return &OperatorStats{
+		OperatorName: operatorName,
+	}
+}
+
+// UpdateStats Methods for updating statistical information
+func (ps *OperatorStats) UpdateStats(info *AnalyzeInfo) {
+	ps.CallCount++
+	if info == nil {
+		return
+	}
+	ps.TotalTimeConsumed += info.TimeConsumed
+	ps.TotalWaitTimeConsumed += info.WaitTimeConsumed
+	ps.TotalInputRows += info.InputRows
+	ps.TotalOutputRows += info.OutputRows
+	ps.TotalInputSize += info.InputSize
+	ps.TotalInputBlocks += info.InputBlocks
+	ps.TotalOutputSize += info.OutputSize
+	ps.TotalMemorySize += info.MemorySize
+	ps.TotalDiskIO += info.DiskIO
+	ps.TotalS3IOByte += info.S3IOByte
+	ps.TotalS3InputCount += info.S3IOInputCount
+	ps.TotalS3OutputCount += info.S3IOOutputCount
+	ps.TotalNetworkIO += info.NetworkIO
+	ps.TotalScanTime += info.ScanTime
+	ps.TotalInsertTime += info.InsertTime
+}
+
+func (ps *OperatorStats) String() string {
+	return fmt.Sprintf(" Call Count: %d, "+
+		"TimeConsumed: %d ms, "+
+		"WaitTimeConsumed: %d ms,"+
+		"InputRows: %d, "+
+		"OutputRows: %d, "+
+		"InputSize: %d bytes, "+
+		"InputBlocks: %d, "+
+		"OutputSize: %d bytes, "+
+		"MemorySize: %d bytes, "+
+		"DiskIO: %d bytes, "+
+		"S3IOByte: %d bytes, "+
+		"S3InputCount: %d, "+
+		"S3OutputCount: %d, "+
+		"NetworkIO: %d bytes, "+
+		"ScanTime: %d ms",
+		ps.CallCount,
+		ps.TotalTimeConsumed,
+		ps.TotalWaitTimeConsumed,
+		ps.TotalInputRows,
+		ps.TotalOutputRows,
+		ps.TotalInputSize,
+		ps.TotalInputBlocks,
+		ps.TotalOutputSize,
+		ps.TotalMemorySize,
+		ps.TotalDiskIO,
+		ps.TotalS3IOByte,
+		ps.TotalS3InputCount,
+		ps.TotalS3OutputCount,
+		ps.TotalNetworkIO,
+		ps.TotalScanTime)
 }

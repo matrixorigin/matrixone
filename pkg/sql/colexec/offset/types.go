@@ -58,7 +58,9 @@ func (arg Argument) TypeName() string {
 }
 
 func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+	alloc := reuse.Alloc[Argument](nil)
+	alloc.OpStats = process.NewOperatorStats("offset")
+	return alloc
 }
 
 func (arg *Argument) WithOffset(offset *plan.Expr) *Argument {

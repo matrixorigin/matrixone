@@ -85,7 +85,9 @@ func (arg Argument) TypeName() string {
 }
 
 func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+	alloc := reuse.Alloc[Argument](nil)
+	alloc.OpStats = process.NewOperatorStats("merge_group")
+	return alloc
 }
 
 func (arg *Argument) WithNeedEval(needEval bool) *Argument {

@@ -55,8 +55,8 @@ func setAnalyzeInfo(ins Instructions, proc *process.Process) {
 		switch ins[i].Op {
 		case Output:
 			ins[i].Idx = -1
-		case TableScan:
-			ins[i].Idx = ins[i+1].Idx
+			//case TableScan:
+			//	ins[i].Idx = ins[i+1].Idx
 		}
 	}
 
@@ -67,6 +67,7 @@ func setAnalyzeInfo(ins Instructions, proc *process.Process) {
 			Idx:     ins[i].Idx,
 			IsFirst: ins[i].IsFirst,
 			IsLast:  ins[i].IsLast,
+			OpStats: ins[i].Arg.GetOperatorBase().OpStats,
 
 			CnAddr:      ins[i].CnAddr,
 			OperatorID:  ins[i].OperatorID,
