@@ -19,42 +19,53 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
-func TNode(nodeType plan.Node_NodeType, children []*MatchPattern) *MatchPattern {
-	return TAny(children).With(&NodeMatcher{NodeType: nodeType})
+func TNode(nodeType plan.Node_NodeType, children ...*MatchPattern) *MatchPattern {
+	return TAny(children...).With(&NodeMatcher{NodeType: nodeType})
 }
 
 // TAny yields a pattern without designated node type
-func TAny(children []*MatchPattern) *MatchPattern {
+func TAny(children ...*MatchPattern) *MatchPattern {
 	return &MatchPattern{
 		Children: children,
 	}
 }
 
 // TAnyTree denotes children tree matches the patterns
-func TAnyTree(children []*MatchPattern) *MatchPattern {
-	return TAny(children).MatchAnyTree()
+func TAnyTree(children ...*MatchPattern) *MatchPattern {
+	return TAny(children...).MatchAnyTree()
 }
 
-func TAnyNot(nodeType plan.Node_NodeType,,children []*MatchPattern) *MatchPattern {
-	return TAny(children).With(&NodeMatcher{NodeType: nodeType,Not: true})
+func TAnyNot(nodeType plan.Node_NodeType, children ...*MatchPattern) *MatchPattern {
+	return TAny(children...).With(&NodeMatcher{NodeType: nodeType, Not: true})
 }
 
 func TTableScan(tableName string) *MatchPattern {
-	return TNode(plan.Node_TABLE_SCAN,nil).With(&TableScanMatcher{
+	return TNode(plan.Node_TABLE_SCAN, nil).With(&TableScanMatcher{
 		TableName: tableName,
 	})
 }
 
-func TTableScanWithColRef(tableName string,colRefs plan2.UnorderedMap[string,string]) *MatchPattern {
+func TTableScanWithColRef(tableName string, colRefs plan2.UnorderedMap[string, string]) *MatchPattern {
 	ret := TTableScan(tableName)
-	return ret.AddColRefs(tableName,colRefs)
+	return ret.AddColRefs(tableName, colRefs)
 }
 
-func TColumnRef(tableName,colName string)  RValueMatcher{
-	return &ColumnRef{TableName: tableName,ColumnName: colName}
+func TStrictTableScan(tableName string, colRefs plan2.UnorderedMap[string, string]) *MatchPattern {
+	ret := TTableScanWithColRef(tableName, colRefs)
+	newColRes := make([]RValueMatcher, 0)
+	for _, val := range colRefs {
+		newColRes = append(newColRes, TColumnRef(tableName, val))
+	}
+	return ret.WithExactAssignedOutputs(newColRes)
 }
 
-func TAggregate() *MatchPattern {}
+func TColumnRef(tableName, colName string) RValueMatcher {
+	return &ColumnRef{TableName: tableName, ColumnName: colName}
+}
+
+func TAggregate() *MatchPattern {
+	return nil
+}
 
 func (pattern *MatchPattern) With(matcher Matcher) *MatchPattern {
 	pattern.Matchers = append(pattern.Matchers, matcher)
@@ -66,15 +77,34 @@ func (pattern *MatchPattern) MatchAnyTree() *MatchPattern {
 	return pattern
 }
 
-func (pattern *MatchPattern) AddColRefs(name string, refs plan2.UnorderedMap[string, string])*MatchPattern {
+func (pattern *MatchPattern) AddColRefs(name string, refs plan2.UnorderedMap[string, string]) *MatchPattern {
 	for key, val := range refs {
-		pattern.WithAlias(key, TColumnRef(name,val))
+		pattern.WithAlias(key, TColumnRef(name, val))
 	}
 	return pattern
 }
 
-func (pattern *MatchPattern) WithAlias(alias string,matcher RValueMatcher) *MatchPattern {
-	pattern.Matchers = append(pattern.Matchers,&AliasMatcher{Alias: alias, Matcher: matcher})
+func (pattern *MatchPattern) WithAlias(alias string, matcher RValueMatcher) *MatchPattern {
+	pattern.Matchers = append(pattern.Matchers, &AliasMatcher{Alias: alias, Matcher: matcher})
 	return pattern
 }
 
+func (pattern *MatchPattern) WithExactAssignedOutputs(expectedAliases []RValueMatcher) *MatchPattern {
+	fun := func(builder *plan2.QueryBuilder, node *plan2.Node) []*plan2.ColDef {
+		ret := make([]*plan2.ColDef, 0)
+		//TODO:fix
+		return ret
+	}
+	pattern.Matchers = append(pattern.Matchers,
+		&AssignedSymbolsMatcher{
+			GetFunc:          fun,
+			ExpectedMatchers: expectedAliases,
+		},
+	)
+	return pattern
+}
+
+func (pattern *MatchPattern) WithOutputs(aliases ...string) *MatchPattern {
+	pattern.Matchers = append(pattern.Matchers, &OutputMatcher{Aliases: aliases})
+	return pattern
+}

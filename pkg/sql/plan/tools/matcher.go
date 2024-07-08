@@ -26,6 +26,9 @@ import (
 var _ Matcher = new(NodeMatcher)
 var _ Matcher = new(TableScanMatcher)
 var _ Matcher = new(AliasMatcher)
+var _ Matcher = new(SymbolsMatcher)
+var _ Matcher = new(AssignedSymbolsMatcher)
+var _ Matcher = new(OutputMatcher)
 
 type NodeMatcher struct {
 	NodeType plan.Node_NodeType
@@ -92,6 +95,52 @@ type ColumnRef struct {
 }
 
 func (matcher *ColumnRef) GetAssignedVar(node *plan.Node, aliases Aliases) *plan.ColDef {
+	//TODO implement me
+	panic("implement me")
+}
+
+type GetFunc func(*plan2.QueryBuilder, *plan2.Node) []*plan2.ColDef
+
+type SymbolsMatcher struct {
+	GetFunc         GetFunc
+	ExpectedAliases []string
+}
+
+func (matcher *SymbolsMatcher) SimpleMatch(node *plan.Node) bool {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (matcher *SymbolsMatcher) DeepMatch(ctx context.Context, node *plan.Node, aliases Aliases) (*MatchResult, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+type AssignedSymbolsMatcher struct {
+	GetFunc          GetFunc
+	ExpectedMatchers []RValueMatcher
+}
+
+func (matcher *AssignedSymbolsMatcher) SimpleMatch(node *plan.Node) bool {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (matcher *AssignedSymbolsMatcher) DeepMatch(ctx context.Context, node *plan.Node, aliases Aliases) (*MatchResult, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+type OutputMatcher struct {
+	Aliases []string
+}
+
+func (matcher *OutputMatcher) SimpleMatch(node *plan.Node) bool {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (matcher *OutputMatcher) DeepMatch(ctx context.Context, node *plan.Node, aliases Aliases) (*MatchResult, error) {
 	//TODO implement me
 	panic("implement me")
 }
