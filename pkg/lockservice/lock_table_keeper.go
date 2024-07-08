@@ -31,7 +31,6 @@ type lockTableKeeper struct {
 	keepLockTableBindInterval time.Duration
 	keepRemoteLockInterval    time.Duration
 	groupTables               *lockTableHolders
-	canDoKeep                 bool
 	service                   *service
 }
 
@@ -173,18 +172,6 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 	if k.service.isStatus(pb.Status_ServiceLockWaiting) &&
 		k.service.activeTxnHolder.empty() {
 		k.service.setStatus(pb.Status_ServiceUnLockSucc)
-	}
-	if !k.canDoKeep {
-		k.groupTables.iter(func(_ uint64, v lockTable) bool {
-			bind := v.getBind()
-			if bind.ServiceID == k.serviceID {
-				k.canDoKeep = true
-			}
-			return true
-		})
-	}
-	if !k.canDoKeep {
-		return
 	}
 
 	req := acquireRequest()
