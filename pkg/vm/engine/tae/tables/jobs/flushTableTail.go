@@ -729,8 +729,14 @@ func (task *flushTableTailTask) flushAllDeletesFromDelSrc(ctx context.Context) (
 		tbl = task.rel.GetMeta().(*catalog.TableEntry)
 		defer func() {
 			for _, v := range recorder.TempCache {
-				v.Bat = nil
-				v.Release()
+				if v.Bat != nil {
+					v.Bat = nil
+				}
+				// if CollectDeleteInRangeByBlock returns an error,
+				// which means the release func was probably not filled, just skip
+				if v.Release != nil {
+					v.Release()
+				}
 			}
 		}()
 	}
