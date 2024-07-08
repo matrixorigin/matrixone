@@ -2600,14 +2600,14 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 			rootOp.GetOperatorBase().SetChildren(nil)
 			lastOperator = append(lastOperator, rootOp)
 		}
-	}
 
-	defer func() {
-		// recovery the children's last operator
-		for i := range children {
-			children[i].appendOperator(lastOperator[i])
-		}
-	}()
+		defer func() {
+			// recovery the children's last operator
+			for i := range children {
+				children[i].appendOperator(lastOperator[i])
+			}
+		}()
+	}
 
 	switch node.JoinType {
 	case plan.Node_INNER:

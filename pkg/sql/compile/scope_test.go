@@ -17,15 +17,20 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/join"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -103,6 +108,44 @@ func TestScopeSerialization(t *testing.T) {
 
 }
 
+func checkScopeRoot(t *testing.T, s *Scope) {
+	require.NotEqual(t, nil, s.RootOp)
+	for i := range s.PreScopes {
+		checkScopeRoot(t, s.PreScopes[i])
+	}
+}
+
+func TestScopeSerialization2(t *testing.T) {
+	testCompile := &Compile{
+		lock: &sync.RWMutex{},
+		proc: testutil.NewProcess(),
+	}
+	var reg process.WaitRegister
+	testCompile.proc.Reg.MergeReceivers = []*process.WaitRegister{&reg}
+
+	// join->Shuffle->Dispatch
+	s := generateScopeWithRootOperator(
+		testCompile.proc,
+		[]vm.OpType{vm.Join, vm.Shuffle, vm.Dispatch})
+	s.IsEnd = true
+	//join->connector
+	s1 := generateScopeWithRootOperator(
+		testCompile.proc,
+		[]vm.OpType{vm.Join, vm.Connector})
+	s.PreScopes = []*Scope{s1}
+
+	// tablescan-> projection -> connector.)
+	s2 := generateScopeWithRootOperator(
+		testCompile.proc,
+		[]vm.OpType{vm.TableScan, vm.Projection, vm.Connector})
+	s.PreScopes[0].PreScopes = []*Scope{s2}
+	scopeData, err := encodeScope(s)
+	require.NoError(t, err)
+	scope, err := decodeScope(scopeData, testCompile.proc, true, nil)
+	require.NoError(t, err)
+	checkScopeRoot(t, scope)
+}
+
 func generateScopeCases(t *testing.T, testCases []string) []*Scope {
 	// getScope method generate and return the scope of a SQL string.
 	getScope := func(t1 *testing.T, sql string) *Scope {
@@ -127,7 +170,6 @@ func generateScopeCases(t *testing.T, testCases []string) []*Scope {
 		})
 		require.NoError(t1, err)
 		// ignore the last operator if it's output
-		//todo 这里lastop需要release不
 		if c.scope[0].RootOp.GetOperatorBase().Op == vm.Output {
 			c.scope[0].RootOp = c.scope[0].RootOp.GetOperatorBase().GetChildren(0)
 		}
@@ -214,6 +256,9 @@ func TestNewParallelScope(t *testing.T) {
 		proc: testutil.NewProcess(),
 	}
 
+	var reg process.WaitRegister
+	testCompile.proc.Reg.MergeReceivers = []*process.WaitRegister{&reg}
+
 	// 1. test (-> projection -> limit -> connector.)
 	{
 		scopeToParallel := generateScopeWithRootOperator(
@@ -249,9 +294,19 @@ func generateScopeWithRootOperator(proc *process.Process, operatorList []vm.OpTy
 		case vm.Limit:
 			return limit.NewArgument()
 		case vm.Connector:
-			return connector.NewArgument()
+			return connector.NewArgument().WithReg(proc.Reg.MergeReceivers[0])
 		case vm.Filter:
 			return filter.NewArgument()
+		case vm.Dispatch:
+			return dispatch.NewArgument()
+		case vm.Join:
+			arg := join.NewArgument()
+			arg.Conditions = [][]*plan.Expr{nil, nil}
+			return arg
+		case vm.Shuffle:
+			return shuffle.NewArgument()
+		case vm.TableScan:
+			return table_scan.NewArgument()
 		default:
 			panic("unsupported for ut.")
 		}
@@ -261,7 +316,7 @@ func generateScopeWithRootOperator(proc *process.Process, operatorList []vm.OpTy
 		Proc: proc,
 	}
 
-	for i := len(operatorList) - 1; i >= 0; i-- {
+	for i := 0; i < len(operatorList); i++ {
 		ret.appendInstruction(vm.Instruction{
 			Op:  operatorList[i],
 			Arg: simpleFakeArgument(operatorList[i]),

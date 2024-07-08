@@ -1064,12 +1064,10 @@ type notifyMessageResult struct {
 }
 
 func (s *Scope) appendOperator(op vm.Operator) {
-	if !s.IsEnd {
-		if s.RootOp != nil {
-			op.AppendChild(s.RootOp)
-		}
-		s.RootOp = op
+	if s.RootOp != nil {
+		op.AppendChild(s.RootOp)
 	}
+	s.RootOp = op
 }
 
 func (s *Scope) ReplaceLeafOp(dstLeafOp vm.Operator) {

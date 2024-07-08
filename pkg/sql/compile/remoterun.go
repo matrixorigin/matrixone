@@ -390,11 +390,11 @@ func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline,
 		}
 	}
 	for i := range p.InstructionList {
-		ins, err := convertToVmInstruction(p.InstructionList[i], ctx, eng)
+		ins, err := convertToVmOperator(p.InstructionList[i], ctx, eng)
 		if err != nil {
 			return err
 		}
-		s.appendInstruction(ins)
+		s.appendOperator(ins)
 	}
 	if s.isShuffle() {
 		for _, rr := range s.Proc.Reg.MergeReceivers {
@@ -791,19 +791,10 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 }
 
 // convert pipeline.Instruction to vm.Instruction
-func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng engine.Engine) (vm.Instruction, error) {
-	v := vm.Instruction{
-		Op:      vm.OpType(opr.Op),
-		Idx:     int(opr.Idx),
-		IsFirst: opr.IsFirst,
-		IsLast:  opr.IsLast,
+func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engine.Engine) (vm.Operator, error) {
+	var op vm.Operator
 
-		CnAddr:      opr.CnAddr,
-		OperatorID:  opr.OperatorId,
-		ParallelID:  opr.ParallelId,
-		MaxParallel: opr.MaxParallel,
-	}
-	switch v.Op {
+	switch vm.OpType(opr.Op) {
 	case vm.Deletion:
 		t := opr.GetDelete()
 		arg := deletion.NewArgument()
@@ -821,7 +812,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			AddAffectedRows:       t.AddAffectedRows,
 			PrimaryKeyIdx:         int(t.PrimaryKeyIdx),
 		}
-		v.Arg = arg
+		op = arg
 	case vm.Insert:
 		t := opr.GetInsert()
 		arg := insert.NewArgument()
@@ -835,7 +826,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			PartitionIndexInBatch: int(t.PartitionIdx),
 			TableDef:              t.TableDef,
 		}
-		v.Arg = arg
+		op = arg
 	case vm.PreInsert:
 		t := opr.GetPreInsert()
 		arg := preinsert.NewArgument()
@@ -845,7 +836,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.HasAutoCol = t.GetHasAutoCol()
 		arg.IsUpdate = t.GetIsUpdate()
 		arg.EstimatedRowCount = int64(t.GetEstimatedRowCount())
-		v.Arg = arg
+		op = arg
 	case vm.LockOp:
 		t := opr.GetLockOp()
 		lockArg := lockop.NewArgumentByEngine(eng)
@@ -859,17 +850,17 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 				lockArg.LockTable(target.TableId, target.ChangeDef)
 			}
 		}
-		v.Arg = lockArg
+		op = lockArg
 	case vm.PreInsertUnique:
 		t := opr.GetPreInsertUnique()
 		arg := preinsertunique.NewArgument()
 		arg.PreInsertCtx = t.GetPreInsertUkCtx()
-		v.Arg = arg
+		op = arg
 	case vm.PreInsertSecondaryIndex:
 		t := opr.GetPreInsertSecondaryIndex()
 		arg := preinsertsecondaryindex.NewArgument()
 		arg.PreInsertCtx = t.GetPreInsertSkCtx()
-		v.Arg = arg
+		op = arg
 	case vm.OnDuplicateKey:
 		t := opr.GetOnDuplicateKey()
 		arg := onduplicatekey.NewArgument()
@@ -880,7 +871,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.OnDuplicateIdx = t.OnDuplicateIdx
 		arg.OnDuplicateExpr = t.OnDuplicateExpr
 		arg.IsIgnore = t.IsIgnore
-		v.Arg = arg
+		op = arg
 	case vm.FuzzyFilter:
 		t := opr.GetFuzzyFilter()
 		arg := fuzzyfilter.NewArgument()
@@ -888,7 +879,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.PkName = t.PkName
 		arg.PkTyp = t.PkTyp
 		arg.IfInsertFromUnique = t.IfInsertFromUnique
-		v.Arg = arg
+		op = arg
 	case vm.Anti:
 		t := opr.GetAnti()
 		arg := anti.NewArgument()
@@ -901,7 +892,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.HashOnPK = t.HashOnPk
 		arg.IsShuffle = t.IsShuffle
 		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
-		v.Arg = arg
+		op = arg
 	case vm.Shuffle:
 		t := opr.GetShuffle()
 		arg := shuffle.NewArgument()
@@ -913,7 +904,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.ShuffleRangeInt64 = t.ShuffleRangesInt64
 		arg.ShuffleRangeUint64 = t.ShuffleRangesUint64
 		arg.RuntimeFilterSpec = t.RuntimeFilterSpec
-		v.Arg = arg
+		op = arg
 	case vm.Dispatch:
 		t := opr.GetDispatch()
 		regs := make([]*process.WaitRegister, len(t.LocalConnector))
@@ -925,7 +916,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			for i := range t.RemoteConnector {
 				uid, err := uuid.FromBytes(t.RemoteConnector[i].Uuid)
 				if err != nil {
-					return v, err
+					return op, err
 				}
 				n := colexec.ReceiveInfo{
 					NodeAddr: t.RemoteConnector[i].NodeAddr,
@@ -952,7 +943,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.ShuffleType = t.ShuffleType
 		arg.ShuffleRegIdxLocal = shuffleRegIdxLocal
 		arg.ShuffleRegIdxRemote = shuffleRegIdxRemote
-		v.Arg = arg
+		op = arg
 	case vm.Group:
 		t := opr.GetAgg()
 		arg := group.NewArgument()
@@ -962,9 +953,9 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.Exprs = t.Exprs
 		arg.Types = convertToTypes(t.Types)
 		arg.Aggs = convertToAggregates(t.Aggs)
-		v.Arg = arg
+		op = arg
 	case vm.Sample:
-		v.Arg = sample.GenerateFromPipelineOperator(opr)
+		op = sample.GenerateFromPipelineOperator(opr)
 
 	case vm.Join:
 		t := opr.GetJoin()
@@ -976,7 +967,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
 		arg.HashOnPK = t.HashOnPk
 		arg.IsShuffle = t.IsShuffle
-		v.Arg = arg
+		op = arg
 	case vm.Left:
 		t := opr.GetLeftJoin()
 		arg := left.NewArgument()
@@ -987,7 +978,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
 		arg.HashOnPK = t.HashOnPk
 		arg.IsShuffle = t.IsShuffle
-		v.Arg = arg
+		op = arg
 	case vm.Right:
 		t := opr.GetRightJoin()
 		arg := right.NewArgument()
@@ -999,7 +990,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
 		arg.HashOnPK = t.HashOnPk
 		arg.IsShuffle = t.IsShuffle
-		v.Arg = arg
+		op = arg
 	case vm.RightSemi:
 		t := opr.GetRightSemiJoin()
 		arg := rightsemi.NewArgument()
@@ -1010,7 +1001,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
 		arg.HashOnPK = t.HashOnPk
 		arg.IsShuffle = t.IsShuffle
-		v.Arg = arg
+		op = arg
 	case vm.RightAnti:
 		t := opr.GetRightAntiJoin()
 		arg := rightanti.NewArgument()
@@ -1021,86 +1012,86 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
 		arg.HashOnPK = t.HashOnPk
 		arg.IsShuffle = t.IsShuffle
-		v.Arg = arg
+		op = arg
 	case vm.Limit:
-		v.Arg = limit.NewArgument().WithLimit(opr.Limit)
+		op = limit.NewArgument().WithLimit(opr.Limit)
 	case vm.LoopAnti:
 		t := opr.GetAnti()
 		arg := loopanti.NewArgument()
 		arg.Result = t.Result
 		arg.Cond = t.Expr
 		arg.Typs = convertToTypes(t.Types)
-		v.Arg = arg
+		op = arg
 	case vm.LoopJoin:
 		t := opr.GetJoin()
 		arg := loopjoin.NewArgument()
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.Cond = t.Expr
 		arg.Typs = convertToTypes(t.Types)
-		v.Arg = arg
+		op = arg
 	case vm.LoopLeft:
 		t := opr.GetLeftJoin()
 		arg := loopleft.NewArgument()
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.Cond = t.Expr
 		arg.Typs = convertToTypes(t.Types)
-		v.Arg = arg
+		op = arg
 	case vm.LoopSemi:
 		t := opr.GetSemiJoin()
 		arg := loopsemi.NewArgument()
 		arg.Result = t.Result
 		arg.Cond = t.Expr
 		arg.Typs = convertToTypes(t.Types)
-		v.Arg = arg
+		op = arg
 	case vm.IndexJoin:
 		t := opr.GetIndexJoin()
 		arg := indexjoin.NewArgument()
 		arg.Result = t.Result
 		arg.Typs = convertToTypes(t.Types)
 		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
-		v.Arg = arg
+		op = arg
 	case vm.LoopSingle:
 		t := opr.GetSingleJoin()
 		arg := loopsingle.NewArgument()
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.Cond = t.Expr
 		arg.Typs = convertToTypes(t.Types)
-		v.Arg = arg
+		op = arg
 	case vm.LoopMark:
 		t := opr.GetMarkJoin()
 		arg := loopmark.NewArgument()
 		arg.Result = t.Result
 		arg.Cond = t.Expr
 		arg.Typs = convertToTypes(t.Types)
-		v.Arg = arg
+		op = arg
 	case vm.Offset:
-		v.Arg = offset.NewArgument().WithOffset(opr.Offset)
+		op = offset.NewArgument().WithOffset(opr.Offset)
 	case vm.Order:
 		arg := order.NewArgument()
 		arg.OrderBySpec = opr.OrderBy
-		v.Arg = arg
+		op = arg
 	case vm.Product:
 		t := opr.GetProduct()
 		arg := product.NewArgument()
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.Typs = convertToTypes(t.Types)
 		arg.IsShuffle = t.IsShuffle
-		v.Arg = arg
+		op = arg
 	case vm.ProductL2:
 		t := opr.GetProductL2()
 		arg := productl2.NewArgument()
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.Typs = convertToTypes(t.Types)
 		arg.OnExpr = t.Expr
-		v.Arg = arg
+		op = arg
 	case vm.Projection:
 		arg := projection.NewArgument()
 		arg.Es = opr.ProjectList
-		v.Arg = arg
+		op = arg
 	case vm.Filter:
 		arg := filter.NewArgument()
 		arg.E = opr.Filter
-		v.Arg = arg
+		op = arg
 	case vm.Semi:
 		t := opr.GetSemiJoin()
 		arg := semi.NewArgument()
@@ -1111,7 +1102,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
 		arg.HashOnPK = t.HashOnPk
 		arg.IsShuffle = t.IsShuffle
-		v.Arg = arg
+		op = arg
 	case vm.Single:
 		t := opr.GetSingleJoin()
 		arg := single.NewArgument()
@@ -1121,7 +1112,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.Conditions = [][]*plan.Expr{t.LeftCond, t.RightCond}
 		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
 		arg.HashOnPK = t.HashOnPk
-		v.Arg = arg
+		op = arg
 	case vm.Mark:
 		t := opr.GetMarkJoin()
 		arg := mark.NewArgument()
@@ -1131,46 +1122,43 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.Cond = t.Expr
 		arg.OnList = t.OnList
 		arg.HashOnPK = t.HashOnPk
-		v.Arg = arg
+		op = arg
 	case vm.Top:
-		v.Arg = top.NewArgument().
+		op = top.NewArgument().
 			WithLimit(opr.Limit).
 			WithFs(opr.OrderBy)
 	// should change next day?
 	case vm.Intersect:
-		arg := intersect.NewArgument()
-		v.Arg = arg
+		op = intersect.NewArgument()
 	case vm.IntersectAll:
-		arg := intersect.NewArgument()
-		v.Arg = arg
+		op = intersect.NewArgument()
 	case vm.Minus:
-		arg := minus.NewArgument()
-		v.Arg = arg
+		op = minus.NewArgument()
 	case vm.Connector:
 		t := opr.GetConnect()
-		v.Arg = connector.NewArgument().
+		op = connector.NewArgument().
 			WithReg(ctx.root.getRegister(t.PipelineId, t.ConnectorIndex))
 	case vm.Merge:
-		v.Arg = merge.NewArgument()
+		op = merge.NewArgument()
 	case vm.MergeRecursive:
-		v.Arg = mergerecursive.NewArgument()
+		op = mergerecursive.NewArgument()
 	case vm.MergeGroup:
 		arg := mergegroup.NewArgument()
 		arg.NeedEval = opr.Agg.NeedEval
-		v.Arg = arg
-		DecodeMergeGroup(v.Arg.(*mergegroup.Argument), opr.Agg)
+		op = arg
+		DecodeMergeGroup(op.(*mergegroup.Argument), opr.Agg)
 	case vm.MergeLimit:
-		v.Arg = mergelimit.NewArgument().WithLimit(opr.Limit)
+		op = mergelimit.NewArgument().WithLimit(opr.Limit)
 	case vm.MergeOffset:
-		v.Arg = mergeoffset.NewArgument().WithOffset(opr.Offset)
+		op = mergeoffset.NewArgument().WithOffset(opr.Offset)
 	case vm.MergeTop:
-		v.Arg = mergetop.NewArgument().
+		op = mergetop.NewArgument().
 			WithLimit(opr.Limit).
 			WithFs(opr.OrderBy)
 	case vm.MergeOrder:
 		arg := mergeorder.NewArgument()
 		arg.OrderBySpecs = opr.OrderBy
-		v.Arg = arg
+		op = arg
 	case vm.TableFunction:
 		arg := table_function.NewArgument()
 		arg.Attrs = opr.TableFunction.Attrs
@@ -1178,14 +1166,14 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.Args = opr.TableFunction.Args
 		arg.FuncName = opr.TableFunction.Name
 		arg.Params = opr.TableFunction.Params
-		v.Arg = arg
+		op = arg
 	case vm.External:
 		t := opr.GetExternalScan()
 		name2ColIndex := make(map[string]int32)
 		for _, n2i := range t.Name2ColIndex {
 			name2ColIndex[n2i.Name] = n2i.Index
 		}
-		v.Arg = external.NewArgument().WithEs(
+		op = external.NewArgument().WithEs(
 			&external.ExternalParam{
 				ExParamConst: external.ExParamConst{
 					Attrs:           t.Attrs,
@@ -1210,17 +1198,26 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.TblDef = t.TblDef
 		arg.Limit = t.Limit
 		arg.Offset = t.Offset
-		v.Arg = arg
+		op = arg
 	case vm.TableScan:
-		arg := table_scan.NewArgument()
-		v.Arg = arg
+		op = table_scan.NewArgument()
 	case vm.ValueScan:
-		arg := value_scan.NewArgument()
-		v.Arg = arg
+		op = value_scan.NewArgument()
 	default:
-		return v, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", opr.Op))
+		return op, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", opr.Op))
 	}
-	return v, nil
+	op.GetOperatorBase().SetInfo(&vm.OperatorInfo{
+		Op:      vm.OpType(opr.Op),
+		Idx:     int(opr.Idx),
+		IsFirst: opr.IsFirst,
+		IsLast:  opr.IsLast,
+
+		CnAddr:      opr.CnAddr,
+		OperatorID:  opr.OperatorId,
+		ParallelID:  opr.ParallelId,
+		MaxParallel: opr.MaxParallel,
+	})
+	return op, nil
 }
 
 // convert []types.Type to []*plan.Type

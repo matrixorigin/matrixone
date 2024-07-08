@@ -328,7 +328,7 @@ func Test_convertToVmInstruction(t *testing.T) {
 		{Op: int32(vm.Source), StreamScan: &pipeline.StreamScan{}},
 	}
 	for _, instruction := range instructions {
-		_, err := convertToVmInstruction(instruction, ctx, nil)
+		_, err := convertToVmOperator(instruction, ctx, nil)
 		require.Nil(t, err)
 	}
 }
