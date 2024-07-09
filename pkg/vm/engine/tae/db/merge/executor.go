@@ -109,7 +109,7 @@ func (e *Executor) PrintStats() {
 		"MergeExecutorMemoryStats",
 		common.AnyField("avail-mem", common.HumanReadableBytes(e.memAvail)),
 		common.AnyField("reserved-mem", common.HumanReadableBytes(e.memSpare)),
-		common.AnyField("inuse-mem", common.HumanReadableBytes(int(atomic.LoadInt64(&e.activeEstimateBytes)))),
+		common.AnyField("inuse-mem", common.HumanReadableBytes(int(e.activeEstimateBytes.Load()))),
 		common.AnyField("inuse-cnt", cnt),
 	)
 }
