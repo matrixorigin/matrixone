@@ -592,7 +592,7 @@ loop:
 					c.logger.Info("awakeBatch: timeout after 10 seconds")
 					v2.TraceCollectorGenerateDiscardDurationHistogram.Observe(time.Since(start).Seconds())
 					// fixme: do csv output, should NO discard case
-					v2.GetTraceCollectorDiscardCounter(req.typ()).Add(1)
+					v2.GetTraceCollectorDiscardCounter(req.typ()).Inc()
 				}
 				end := time.Now()
 				v2.TraceCollectorGenerateDelayDurationHistogram.Observe(end.Sub(startDelay).Seconds())

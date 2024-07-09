@@ -51,6 +51,22 @@ var (
 			Help:      "Count of negative cu to backend",
 		}, []string{"type"})
 
+	traceETLMergeCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "trace",
+			Name:      "etl_merge_total",
+			Help:      "Count of background task ETLMerge",
+		}, []string{"type"})
+	TraceETLMergeSuccessCounter = traceETLMergeCounter.WithLabelValues("success")
+	// TraceETLMergeExistCounter record already exist, against delete failed.
+	TraceETLMergeExistCounter        = traceETLMergeCounter.WithLabelValues("exist")
+	TraceETLMergeOpenFailedCounter   = traceETLMergeCounter.WithLabelValues("open_failed")
+	TraceETLMergeReadFailedCounter   = traceETLMergeCounter.WithLabelValues("read_failed")
+	TraceETLMergeParseFailedCounter  = traceETLMergeCounter.WithLabelValues("parse_failed")
+	TraceETLMergeWriteFailedCounter  = traceETLMergeCounter.WithLabelValues("write_failed")
+	TraceETLMergeDeleteFailedCounter = traceETLMergeCounter.WithLabelValues("delete_failed")
+
 	traceMOLoggerExportDataHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "mo",
