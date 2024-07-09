@@ -1382,6 +1382,39 @@ func TestLockSuccWithKeepBindTimeout(t *testing.T) {
 
 }
 
+func TestIssue3693(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1"},
+		time.Millisecond*200,
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+
+			alloc.registerService(l.serviceID, 0)
+
+			alloc.setRestartService("s1")
+			for {
+				if l.isStatus(pb.Status_ServiceLockWaiting) {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					panic("timeout bug")
+				default:
+				}
+			}
+		},
+		nil,
+	)
+
+}
+
 func TestReLockSuccWithLockTableBindChanged(t *testing.T) {
 	runLockServiceTestsWithLevel(
 		t,
