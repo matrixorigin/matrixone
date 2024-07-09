@@ -630,6 +630,7 @@ type service struct {
 	// udfService is used to handle non-sql udf
 	udfService       udf.Service
 	bootstrapService bootstrap.Service
+	incrservice      incrservice.AutoIncrementService
 
 	stopper *stopper.Stopper
 	aicm    *defines.AutoIncrCacheManager
