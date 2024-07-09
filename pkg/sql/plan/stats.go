@@ -213,6 +213,7 @@ func UpdateStatsInfo(info *InfoFromZoneMap, tableDef *plan.TableDef, s *pb.Stats
 				!util.JudgeIsCompositeClusterByColumn(colName) &&
 				colName != catalog.CPrimaryKeyColName {
 				info.ShuffleRanges[i].Eval()
+				info.ShuffleRanges[i].ReleaseUnused()
 				s.ShuffleRangeMap[colName] = info.ShuffleRanges[i]
 			}
 			info.ShuffleRanges[i] = nil
