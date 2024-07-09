@@ -1,3 +1,4 @@
+-- @bvt:issue#17402
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
 drop account if exists acc02;
@@ -375,6 +376,7 @@ show tables;
 -- @session:id=1&user=acc01:test_account&password=111
 drop database t1;
 drop database repub02;
+use procedure_test;
 drop procedure if exists test_if_hit_if;
 drop procedure if exists test_if_hit_elseif_first_elseif;
 drop publication pub02;
@@ -426,6 +428,8 @@ select count(*) from aff01;
 use mo_catalog;
 select * from t1;
 show tables;
+drop table t1;
+drop table t2;
 
 -- @session:id=1&user=acc01:test_account&password=111
 select * from repub01.aff01;
@@ -475,3 +479,9 @@ drop database test02;
 drop database udf_db;
 drop database udf_db2;
 -- @session
+
+drop account acc01;
+drop account acc02;
+drop account acc03;
+drop account acc04;
+-- @bvt:issue
