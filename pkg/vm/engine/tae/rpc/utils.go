@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"go.uber.org/zap"
 	"golang.org/x/exp/slices"
 )
 
@@ -280,6 +282,12 @@ func (h *Handle) prefetchMetadata(_ context.Context, req *db.WriteReq) (int, err
 			objectName = *loc.Name().Short()
 		}
 	}
+	logutil.Info(
+		"CN-COMMIT-S3",
+		zap.Int("table-id", int(req.TableID)),
+		zap.String("table-name", req.TableName),
+		zap.Int("obj-cnt", objCnt),
+	)
 	return objCnt, nil
 }
 
