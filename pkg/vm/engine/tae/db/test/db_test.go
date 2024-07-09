@@ -6101,7 +6101,7 @@ func TestDeltaLocation(t *testing.T) {
 
 	{
 		txn, rel := tae.GetRelation()
-		objID := rel.MakeObjectIt().GetObject().GetID()
+		objID := testutil.GetOneObject(rel).GetID()
 		rel.SoftDeleteObject(objID)
 		txn.Commit(ctx)
 		t.Log(tae.Catalog.SimplePPString(3))

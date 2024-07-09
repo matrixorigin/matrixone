@@ -149,8 +149,10 @@ func (s *MergeTaskBuilder) onTable(tableEntry *catalog.TableEntry) (err error) {
 	deltaLocRows := uint32(0)
 	distinctDeltaLocs := 0
 	tblRows := 0
-	for objIt := tableEntry.MakeObjectIt(true); objIt.Valid(); objIt.Next() {
-		objectEntry := objIt.Get().GetPayload()
+	objIt := tableEntry.MakeObjectIt(true)
+	defer objIt.Release()
+	for objIt.Next() {
+		objectEntry := objIt.Item()
 		if !objectValid(objectEntry) {
 			continue
 		}
@@ -239,9 +241,7 @@ func (s *MergeTaskBuilder) onPostObject(obj *catalog.ObjectEntry) (err error) {
 }
 
 func objectValid(objectEntry *catalog.ObjectEntry) bool {
-	objectEntry.RLock()
-	defer objectEntry.RUnlock()
-	if !objectEntry.IsCommittedLocked() || !catalog.ActiveObjectWithNoTxnFilter(objectEntry.BaseEntryImpl) {
+	if !objectEntry.IsCommitted() || !catalog.ActiveObjectWithNoTxnFilter(objectEntry) {
 		return false
 	}
 
