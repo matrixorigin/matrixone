@@ -74,23 +74,32 @@ select * from v03;
 SQL parser error: table "v03" does not exist
 restore account acc01 from snapshot sp100 to account acc02;
 use test;
-invalid database test
 show create view v01;
-not connect to a database
+View    Create View    character_set_client    collation_connection
+v01    create view v01 as select * from table01;    utf8mb4    utf8mb4_general_ci
 select * from v01;
-not connect to a database
+col1    col2    col3
+1    null    database
+2    38291    database
+3    null    database management system
+4    10    null
+1    -321    null
+2    -1    null
 show create view v02;
-not connect to a database
+View    Create View    character_set_client    collation_connection
+v02    create view v02 as select col1, col2 from table01;    utf8mb4    utf8mb4_general_ci
 select * from v02;
-not connect to a database
+col1    col2
+1    null
+2    38291
+3    null
+4    10
+1    -321
+2    -1
 drop view v01;
-not connect to a database
 drop view v02;
-not connect to a database
 drop table table01;
-not connect to a database
 drop database test;
-Can't drop database 'test'; database doesn't exist
 use test;
 drop view v02;
 drop table table01;
@@ -153,21 +162,21 @@ SQL parser error: table "v04" does not exist
 select * from v05;
 SQL parser error: table "v04" does not exist
 restore account acc01 from snapshot sp02  to account acc02;
-SQL parser error: table "table01" does not exist
 use test;
-invalid database test
 select * from v04;
-not connect to a database
+avg(sal)
+800.00000000
+1366.66666667
+2758.33333333
 select * from v05;
-not connect to a database
+avg(sal)
+800.00000000
+1366.66666667
+2758.33333333
 drop view v04;
-not connect to a database
 drop view v05;
-not connect to a database
 drop table aff01;
-not connect to a database
 drop table pri01;
-not connect to a database
 drop view v05;
 drop table aff01;
 drop table pri01;
@@ -222,26 +231,29 @@ drop table Employees;
 select * from EmployeeDepartmentView;
 SQL parser error: table "employees" does not exist
 restore account acc01 from snapshot sp05 to account acc02;
-SQL parser error: table "table01" does not exist
 use test;
-invalid database test
 select * from EmployeeDepartmentView;
-not connect to a database
+firstname    lastname    departmentname
+John    Doe    Human Resources
+Jane    Smith    Engineering
+Alice    Johnson    Marketing
+Mark    Patterson    Sales
+David    Finley    Finance
 drop view EmployeeDepartmentView;
 select * from EmployeeDepartmentView;
 SQL parser error: table "employeedepartmentview" does not exist
 restore account acc01 from snapshot sp05 to account acc02;
-SQL parser error: table "table01" does not exist
 use test;
-invalid database test
 select * from EmployeeDepartmentView;
-not connect to a database
+firstname    lastname    departmentname
+John    Doe    Human Resources
+Jane    Smith    Engineering
+Alice    Johnson    Marketing
+Mark    Patterson    Sales
+David    Finley    Finance
 drop view EmployeeDepartmentView;
-not connect to a database
 drop table Employees;
-not connect to a database
 drop table Departments;
-not connect to a database
 use test;
 drop table Departments;
 drop snapshot sp05;
@@ -296,41 +308,46 @@ drop view department_view;
 select * from employee_with_department_view;
 SQL parser error: table "employee_view" does not exist
 restore account acc01 from snapshot sp04 to account acc02;
-SQL parser error: table "table01" does not exist
 use test;
-invalid database test
 select * from employee_view;
-not connect to a database
+employee_id    first_name    last_name    department_id
+1    John    Doe    1
+2    Jane    Smith    2
+3    Bob    Johnson    1
 select * from department_view;
-not connect to a database
+department_id    department_name
+1    HR
+2    Engineering
 select * from employee_with_department_view;
-not connect to a database
+employee_id    first_name    last_name    department_name
+1    John    Doe    HR
+2    Jane    Smith    Engineering
+3    Bob    Johnson    HR
 drop table employees;
-not connect to a database
 truncate departments;
-no such table .departments
 select * from employee_view;
-not connect to a database
+SQL parser error: table "employees" does not exist
 restore account acc01 from snapshot sp04 to account acc02;
-SQL parser error: table "table01" does not exist
 use test;
-invalid database test
 select * from employee_view;
-not connect to a database
+employee_id    first_name    last_name    department_id
+1    John    Doe    1
+2    Jane    Smith    2
+3    Bob    Johnson    1
 select * from department_view;
-not connect to a database
+department_id    department_name
+1    HR
+2    Engineering
 select * from employee_with_department_view;
-not connect to a database
+employee_id    first_name    last_name    department_name
+1    John    Doe    HR
+2    Jane    Smith    Engineering
+3    Bob    Johnson    HR
 drop view employee_view;
-not connect to a database
 drop view department_view;
-not connect to a database
 drop view employee_with_department_view;
-not connect to a database
 drop table employees;
-not connect to a database
 drop table departments;
-not connect to a database
 drop table employees;
 drop table departments;
 drop view employee_with_department_view;
@@ -371,27 +388,25 @@ emp_no    birth_date    first_name    last_name    gender    hire_date
 drop snapshot if exists sp06;
 create snapshot sp06 for cluster;
 restore account acc01 from snapshot sp05 to account acc02;
-SQL parser error: table "table01" does not exist
 use test;
-invalid database test
 select * from view01;
-not connect to a database
+emp_no    birth_date    first_name    last_name    gender    hire_date
+9001    1980-12-17    SMITH    CLERK    F    2008-12-17
+9002    1981-02-20    ALLEN    SALESMAN    F    2008-02-20
 use test;
 drop table partition01;
 select * from view01;
 SQL parser error: table "partition01" does not exist
 restore account acc01 from snapshot sp06 to account acc02;
-SQL parser error: table "table01" does not exist
 use test;
-invalid database test
 select * from view01;
-not connect to a database
+emp_no    birth_date    first_name    last_name    gender    hire_date
+9001    1980-12-17    SMITH    CLERK    F    2008-12-17
+9002    1981-02-20    ALLEN    SALESMAN    F    2008-02-20
+9003    1999-02-20    BOB    DOCTOR    F    2009-02-20
 drop view view01;
-not connect to a database
 drop table partition01;
-not connect to a database
 drop database test;
-Can't drop database 'test'; database doesn't exist
 drop database test;
 drop snapshot sp06;
 drop snapshot sp05;
@@ -433,9 +448,13 @@ select * from test01.EmployeeSalaryRanking;
 invalid database test01
 restore account acc01 from snapshot sp06 to account acc02;
 select * from test01.EmployeeSalaryRanking;
-invalid database test01
+employeeid    employeename    salary    salaryrank
+3    Charlie    90000.00    1
+2    Bob    80000.00    2
+5    Eva    75000.00    3
+1    Alice    70000.00    4
+4    David    65000.00    5
 drop database test01;
-Can't drop database 'test01'; database doesn't exist
 drop snapshot sp06;
 drop database if exists test02;
 create database test02;
@@ -504,32 +523,32 @@ select * from StudentCoursesView;
 SQL parser error: table "students" does not exist
 restore account acc01 database test02 table students from snapshot sp07 to account acc02;
 use test02;
-invalid database test02
 select * from Students;
-not connect to a database
+studentid    name    grade
+1    Alice    3.50
+2    Bob    3.00
+3    Charlie    3.70
 select * from Enrollments;
-not connect to a database
+SQL parser error: table "enrollments" does not exist
 select * from StudentCoursesView;
-not connect to a database
+SQL parser error: table "studentcoursesview" does not exist
 restore account acc01 database test02 table Enrollments from snapshot sp07 to account acc02;
+no such table test02.courses
 use test02;
-invalid database test02
 select * from Enrollments;
-not connect to a database
+SQL parser error: table "enrollments" does not exist
 select * from StudentCoursesView;
-not connect to a database
+SQL parser error: table "studentcoursesview" does not exist
 show create view StudentCoursesView;
-not connect to a database
+invalid input: show view 'studentcoursesview' is not a valid view
 drop view StudentCoursesView;
-not connect to a database
+invalid view 'test02.studentcoursesview'
 drop table Enrollments;
-not connect to a database
+no such table test02.enrollments
 drop table students;
-not connect to a database
 drop table Courses;
-not connect to a database
+no such table test02.courses
 drop database test02;
-Can't drop database 'test02'; database doesn't exist
 drop database test02;
 drop snapshot sp07;
 drop database if exists test02;
@@ -568,31 +587,28 @@ use test02;
 drop database test02;
 restore account acc01 from snapshot sp10 to account acc02;
 use test02;
-invalid database test02
 show create view employees_view;
-not connect to a database
+View    Create View    character_set_client    collation_connection
+employees_view    create view employees_view AS SELECT * FROM employees;    utf8mb4    utf8mb4_general_ci
 show create view it_employees_view;
-not connect to a database
+View    Create View    character_set_client    collation_connection
+it_employees_view    create view it_employees_view AS SELECT * FROM employees WHERE department = 'IT';    utf8mb4    utf8mb4_general_ci
 show create view employees_by_department_view;
-not connect to a database
+View    Create View    character_set_client    collation_connection
+employees_by_department_view    create view employees_by_department_view AS\nselect name, department\nfrom employees\norder by department;    utf8mb4    utf8mb4_general_ci
 show create view employees_by_salary_view;
-not connect to a database
+View    Create View    character_set_client    collation_connection
+employees_by_salary_view    create view employees_by_salary_view AS\nselect name, salary\nfrom employees\norder by salary desc;    utf8mb4    utf8mb4_general_ci
 show create view avg_salary_per_department_view;
-not connect to a database
+View    Create View    character_set_client    collation_connection
+avg_salary_per_department_view    create view avg_salary_per_department_view AS\nselect department, avg(salary) as avg_salary\nfrom employees\ngroup by department;    utf8mb4    utf8mb4_general_ci
 drop view if exists employees_view;
-not connect to a database
 drop view if exists it_employees_view;
-not connect to a database
 drop view if exists employees_by_department_view;
-not connect to a database
 drop view if exists employees_by_salary_view;
-not connect to a database
 drop view if exists avg_salary_per_department_view;
-not connect to a database
 drop table employees;
-not connect to a database
 drop database test02;
-Can't drop database 'test02'; database doesn't exist
 drop snapshot sp10;
 drop database if exists test03;
 drop database if exists test04;
@@ -670,23 +686,25 @@ select * from test05.employee_with_department_view;
 invalid database test05
 restore account acc01 from snapshot sp100 to account acc02;
 select * from test04.employee_view;
-invalid database test04
+employee_id    first_name    last_name    department_id
+1    John    Doe    1
+2    Jane    Smith    2
+3    Bob    Johnson    1
 select * from test03.department_view;
-invalid database test03
+department_id    department_name
+1    HR
+2    Engineering
 select * from test05.employee_with_department_view;
-invalid database test05
+employee_id    first_name    last_name    department_name
+1    John    Doe    HR
+2    Jane    Smith    Engineering
+3    Bob    Johnson    HR
 drop view test03.department_view;
-invalid view 'test03.department_view'
 drop view test05.employee_with_department_view;
-invalid view 'test05.employee_with_department_view'
 drop database test04;
-Can't drop database 'test04'; database doesn't exist
 drop database test03;
-Can't drop database 'test03'; database doesn't exist
 drop database test05;
-Can't drop database 'test05'; database doesn't exist
 drop snapshot sp100;
 drop snapshot sp101;
 drop account acc01;
-internal error: can not drop database. It has been referenced by foreign keys
 drop account acc02;
