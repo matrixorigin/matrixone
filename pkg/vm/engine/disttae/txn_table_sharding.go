@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 
+	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -129,8 +130,37 @@ func (tbl *txnTableDelegate) Rows(
 		)
 	}
 
-	// TODO: forward
-	return 0, nil
+	rows := uint64(0)
+	request, err := tbl.getReadRequest(
+		shardservice.ReadRows,
+		func(resp []byte) {
+			rows += buf.Byte2Uint64(resp)
+		},
+	)
+	if err != nil {
+		return 0, err
+	}
+
+	shardID := uint64(0)
+	switch tbl.shard.policy {
+	case shard.Policy_Partition:
+		// Partition sharding only send to the current shard. The partition table id
+		// is the shard id
+		shardID = tbl.origin.tableId
+	default:
+		// otherwise, we need send to all shards
+	}
+
+	err = tbl.shard.service.Read(
+		ctx,
+		request,
+		shardservice.ReadOptions{}.Shard(shardID),
+	)
+	if err != nil {
+		return 0, err
+	}
+
+	return rows, nil
 }
 
 func (tbl *txnTableDelegate) Size(
@@ -386,39 +416,29 @@ func (tbl *txnTableDelegate) hasAllLocalReplicas() bool {
 	)
 }
 
-// func getTxnTable(
-// 	ctx context.Context,
-// 	param shard.ReadParam,
-// 	engine engine.Engine,
-// ) (*txnTable, error) {
-// 	// TODO: reduce mem allocate
-// 	proc, err := process.GetCodecService().Decode(
-// 		ctx,
-// 		param.Process,
-// 	)
-// 	if err != nil {
-// 		return nil, err
-// 	}
+func (tbl *txnTableDelegate) getReadRequest(
+	method int,
+	apply func([]byte),
+) (shardservice.ReadRequest, error) {
+	processInfo, err := tbl.origin.proc.Load().BuildProcessInfo(
+		tbl.origin.createSql,
+	)
+	if err != nil {
+		return shardservice.ReadRequest{}, err
+	}
 
-// 	db := &txnDatabase{
-// 		op:           proc.GetTxnOperator(),
-// 		databaseName: param.TxnTable.DatabaseName,
-// 		databaseId:   param.TxnTable.DatabaseID,
-// 	}
-
-// 	item, err := db.getTableItem(
-// 		ctx,
-// 		uint32(param.TxnTable.AccountID),
-// 		param.TxnTable.TableName,
-// 		engine.(*Engine),
-// 	)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-
-// 	return newTxnTableWithItem(
-// 		db,
-// 		item,
-// 		proc,
-// 	), nil
-// }
+	return shardservice.ReadRequest{
+		TableID: tbl.shard.tableID,
+		Method:  method,
+		Param: shard.ReadParam{
+			Process: processInfo,
+			TxnTable: shard.TxnTable{
+				DatabaseID:   tbl.origin.db.databaseId,
+				DatabaseName: tbl.origin.db.databaseName,
+				AccountID:    uint64(tbl.origin.accountId),
+				TableName:    tbl.origin.tableName,
+			},
+		},
+		Apply: apply,
+	}, nil
+}
