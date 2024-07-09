@@ -748,6 +748,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
 			node.Stats.Selectivity = selectivity_out
 		}
+		node.Stats.BlockNum = leftStats.BlockNum
 
 	case plan.Node_AGG:
 		if needResetHashMapStats {
@@ -780,6 +781,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.HashmapStats.HashmapSize = 1
 			node.Stats.Selectivity = 1
 		}
+		node.Stats.BlockNum = int32(childStats.Outcnt/DefaultBlockMaxRows) + 1
 
 	case plan.Node_UNION:
 		if needResetHashMapStats {
