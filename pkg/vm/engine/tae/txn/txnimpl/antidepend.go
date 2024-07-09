@@ -37,7 +37,7 @@ func readWriteConfilictCheck(entry *catalog.ObjectEntry, ts types.TS) (err error
 	if needWait {
 		txnToWait.GetTxnState(true)
 	}
-	if lastNode.DeleteBefore(ts) {
+	if lastNode.GetLatestNode().DeleteBefore(ts) {
 		err = ErrRWConflict
 	}
 	return
