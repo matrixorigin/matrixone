@@ -133,6 +133,15 @@ func (s *ShuffleRange) Update(zmmin float64, zmmax float64, rowCount int64, null
 	}
 }
 
+func (s *ShuffleRange) ReleaseUnused() {
+	s.Mins = nil
+	s.Maxs = nil
+	s.Rows = nil
+	s.Nulls = nil
+	s.Flags = nil
+	s.Tree = nil
+}
+
 func (s *ShuffleRange) Eval() {
 	k := DefaultEvalSize
 	if s.Sz == 0 {
