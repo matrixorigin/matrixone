@@ -79,10 +79,11 @@ func NewTestDisttaeEngine(ctx context.Context, mp *mpool.MPool,
 	de.Engine.PushClient().LogtailRPCClientFactory = rpcAgent.MockLogtailRPCClientFactory
 
 	go func() {
-		for {
+		done := false
+		for !done {
 			select {
 			case <-wait:
-				break
+				done = true
 			default:
 				de.timestampWaiter.NotifyLatestCommitTS(de.Now())
 				time.Sleep(time.Millisecond * 100)
@@ -138,7 +139,6 @@ func (de *TestDisttaeEngine) CountStar(ctx context.Context, databaseId, tableId 
 			latestAppliedTS := de.Engine.PushClient().LatestLogtailAppliedTime()
 			if latestAppliedTS.GreaterEq(ts) {
 				done = true
-				break
 			}
 		}
 	}
