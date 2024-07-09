@@ -30,9 +30,10 @@ func (c *DashboardCreator) initTraceDashboard() error {
 	build, err := dashboard.New(
 		"Trace Metrics",
 		c.withRowOptions(
-			c.initTraceDurationRow(),
-			c.initCUStatusRow(),
+			//c.initTraceDurationRow(),
+			c.initTraceCollectorOverviewRow(),
 			c.initTraceMoLoggerExportDataRow(),
+			c.initCUStatusRow(),
 		)...)
 	if err != nil {
 		return err
@@ -89,12 +90,99 @@ func (c *DashboardCreator) initTraceMoLoggerExportDataRow() dashboard.Option {
 	)
 }
 
+func (c *DashboardCreator) initTraceCollectorOverviewRow() dashboard.Option {
+
+	panelP99Cost := c.getMultiHistogram(
+		[]string{
+			c.getMetricWithFilter(`mo_trace_collector_duration_seconds_bucket`, `type="collect"`),
+			c.getMetricWithFilter(`mo_trace_collector_duration_seconds_bucket`, `type="generate_awake"`),
+			c.getMetricWithFilter(`mo_trace_collector_duration_seconds_bucket`, `type="generate_awake_discard"`),
+			c.getMetricWithFilter(`mo_trace_collector_duration_seconds_bucket`, `type="generate_delay"`),
+			c.getMetricWithFilter(`mo_trace_collector_duration_seconds_bucket`, `type="generate"`),
+			c.getMetricWithFilter(`mo_trace_collector_duration_seconds_bucket`, `type="generate_discard"`),
+			c.getMetricWithFilter(`mo_trace_collector_duration_seconds_bucket`, `type="export"`),
+		},
+		[]string{
+			"collect",
+			"generate_awake",
+			"generate_awake_discard",
+			"generate_delay",
+			"generate",
+			"generate_discard",
+			"export",
+		},
+		[]float64{0.99},
+		[]float32{3},
+		axis.Unit("s"),
+		axis.Min(0))
+
+	return dashboard.Row(
+		"Collector Overview",
+
+		c.withMultiGraph(
+			"rate (avg) - each instance",
+			3,
+			[]string{
+				`avg(rate(` + c.getMetricWithFilter("mo_trace_collector_duration_seconds_count", `type="collect"`) + `[$interval]))`,
+			},
+			[]string{
+				"collect",
+			}),
+
+		c.withMultiGraph(
+			"rate (sum)",
+			3,
+			[]string{
+				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_duration_seconds_count", `type="collect"`) + `[$interval]))`,
+			},
+			[]string{
+				"collect",
+			}),
+
+		c.withMultiGraph(
+			"rate (sum) - no collect",
+			3,
+			[]string{
+				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_duration_seconds_count", `type="generate_awake"`) + `[$interval]))`,
+				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_duration_seconds_count", `type="generate_awake_discard"`) + `[$interval]))`,
+				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_duration_seconds_count", `type="generate_delay"`) + `[$interval]))`,
+				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_duration_seconds_count", `type="generate"`) + `[$interval]))`,
+				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_duration_seconds_count", `type="generate_discard"`) + `[$interval]))`,
+				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_duration_seconds_count", `type="export"`) + `[$interval]))`,
+			},
+			[]string{
+				"generate_awake",
+				"generate_awake_discard",
+				"generate_delay",
+				"generate",
+				"generate_discard",
+				"export",
+			}),
+
+		panelP99Cost[0],
+
+		c.withMultiGraph(
+			"Discard Count",
+			12,
+			[]string{
+				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_discard_total", `type="statement_info"`) + `[$interval]))`,
+				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_discard_total", `type="rawlog"`) + `[$interval]))`,
+				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_discard_total", `type="metric"`) + `[$interval]))`,
+			},
+			[]string{
+				"statement_info",
+				"rawlog",
+				"metric",
+			}),
+	)
+}
+
 func (c *DashboardCreator) initCUStatusRow() dashboard.Option {
 	return dashboard.Row(
 		"CU Status",
 		c.withMultiGraph(
 			"Negative CU status",
-			4,
+			6,
 			[]string{
 				`sum(delta(` + c.getMetricWithFilter("mo_trace_negative_cu_total", "") + `[$interval])) by (type)`,
 			},

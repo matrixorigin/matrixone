@@ -35,6 +35,14 @@ var (
 	TraceCollectorGenerateDiscardDurationHistogram      = traceCollectorDurationHistogram.WithLabelValues("generate_discard")
 	TraceCollectorExportDurationHistogram               = traceCollectorDurationHistogram.WithLabelValues("export")
 
+	traceCollectorDiscardCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "trace",
+			Name:      "collector_discard_total",
+			Help:      "Count of trace collector discard total.",
+		}, []string{"type"})
+
 	traceNegativeCUCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "mo",
@@ -57,4 +65,8 @@ var (
 
 func GetTraceNegativeCUCounter(typ string) prometheus.Counter {
 	return traceNegativeCUCounter.WithLabelValues(typ)
+}
+
+func GetTraceCollectorDiscardCounter(typ string) prometheus.Counter {
+	return traceCollectorDiscardCounter.WithLabelValues(typ)
 }
