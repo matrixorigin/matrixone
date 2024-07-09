@@ -103,6 +103,13 @@ type GlobalStatsConfig struct {
 
 type GlobalStatsOption func(s *GlobalStats)
 
+// WithUpdateWorkerFactor set the update worker factor.
+func WithUpdateWorkerFactor(f int) GlobalStatsOption {
+	return func(s *GlobalStats) {
+		s.updateWorkerFactor = f
+	}
+}
+
 type GlobalStats struct {
 	ctx context.Context
 
@@ -138,6 +145,10 @@ type GlobalStats struct {
 		// statsInfoMap is the real stats info data.
 		statsInfoMap map[pb.StatsInfoKey]*pb.StatsInfo
 	}
+
+	// updateWorkerFactor is the times of CPU number of this node
+	// to start update worker. Default is 8.
+	updateWorkerFactor int
 
 	// KeyRouter is the router to decides which node should send to.
 	KeyRouter client.KeyRouter[pb.StatsInfoKey]
@@ -222,6 +233,11 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 				gs.triggerUpdate(key, true)
 			}()
 
+			info, ok = gs.mu.statsInfoMap[key]
+			if ok {
+				break
+			}
+
 			// Wait until stats info of the key is updated.
 			gs.mu.cond.Wait()
 
@@ -258,7 +274,7 @@ func (gs *GlobalStats) consumeWorker(ctx context.Context) {
 }
 
 func (gs *GlobalStats) updateWorker(ctx context.Context) {
-	for i := 0; i < runtime.GOMAXPROCS(0); i++ {
+	for i := 0; i < runtime.GOMAXPROCS(0)*gs.updateWorkerFactor; i++ {
 		go func() {
 			for {
 				select {
