@@ -465,7 +465,7 @@ func (s *store) initQueryCommandHandler() {
 	s.queryService.AddHandleFunc(query.CmdMethod_GetLatestBind, s.handleGetLatestBind, false)
 }
 
-func (s *store) handleGetCacheInfo(ctx context.Context, req *query.Request, resp *query.Response) error {
+func (s *store) handleGetCacheInfo(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
 	resp.GetCacheInfoResponse = new(query.GetCacheInfoResponse)
 	perfcounter.GetCacheStats(func(infos []*query.CacheInfo) {
 		for _, info := range infos {
@@ -478,7 +478,7 @@ func (s *store) handleGetCacheInfo(ctx context.Context, req *query.Request, resp
 	return nil
 }
 
-func (s *store) handleGetLatestBind(ctx context.Context, req *query.Request, resp *query.Response) error {
+func (s *store) handleGetLatestBind(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
 	resp.GetLatestBind = &query.GetLatestBindResponse{
 		Bind: s.lockTableAllocator.GetLatest(
 			req.GetLatestBind.GroupID,
