@@ -62,8 +62,10 @@ type handleFuncCtx[REQ, RESP MethodBasedMessage] struct {
 func (c *handleFuncCtx[REQ, RESP]) call(
 	ctx context.Context,
 	req REQ,
-	resp RESP) {
-	if err := c.handleFunc(ctx, req, resp); err != nil {
+	resp RESP,
+	buf *Buffer,
+) {
+	if err := c.handleFunc(ctx, req, resp, buf); err != nil {
 		resp.WrapError(err)
 	}
 	if getLogger().Enabled(zap.DebugLevel) {
@@ -159,10 +161,11 @@ func (s *methodBasedServer[REQ, RESP]) RegisterMethod(
 func (s *methodBasedServer[REQ, RESP]) Handle(
 	ctx context.Context,
 	req REQ,
+	buf *Buffer,
 ) RESP {
 	resp := s.pool.AcquireResponse()
 	if handlerCtx, ok := s.getHandleFunc(ctx, req, resp); ok {
-		handlerCtx.call(ctx, req, resp)
+		handlerCtx.call(ctx, req, resp, buf)
 	}
 	return resp
 }
@@ -196,8 +199,16 @@ func (s *methodBasedServer[REQ, RESP]) onMessage(
 				zap.Any("message", request))
 		}
 
+		buf := NewBuffer()
+		defer buf.Close()
+
 		defer s.pool.ReleaseRequest(req)
-		handlerCtx.call(ctx, req, resp)
+		handlerCtx.call(
+			ctx,
+			req,
+			resp,
+			buf,
+		)
 		return cs.Write(ctx, resp)
 	}
 
