@@ -9081,3 +9081,44 @@ func TestDedupAndFlush(t *testing.T) {
 
 	assert.NoError(t, flushTxn.Commit(ctx))
 }
+
+func TestTransferDeletes(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchema(2, 0)
+	schema.BlockMaxRows = 10
+	schema.ObjectMaxBlocks = 10
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 1)
+
+	tae.CreateRelAndAppend(bat, true)
+
+	txn, rel := testutil.GetDefaultRelation(t, tae.DB, schema.Name)
+	blkMetas := testutil.GetAllBlockMetas(rel)
+	task, err := jobs.NewFlushTableTailTask(tasks.WaitableCtx, txn, blkMetas, tae.DB.Runtime, types.MaxTs())
+	assert.NoError(t, err)
+	err = task.OnExec(ctx)
+	assert.NoError(t, err)
+
+	txn2, rel := tae.GetRelation()
+	filter := handle.NewEQFilter(bat.Vecs[0].Get(0))
+	assert.NoError(t, rel.UpdateByFilter(ctx, filter, 1, int32(3), false))
+	var wg sync.WaitGroup
+	txn.SetApplyCommitFn(func(at txnif.AsyncTxn) error {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			assert.NoError(t, txn2.PrePrepare(ctx))
+		}()
+		time.Sleep(time.Millisecond * 100)
+		return txn.GetStore().ApplyCommit()
+	})
+	assert.NoError(t, txn.Commit(ctx))
+	wg.Wait()
+}

@@ -205,7 +205,7 @@ func (entry *ObjectEntry) ApplyCommit(tid string) error {
 		newNode.ObjectState = ObjectState_Create_ApplyCommit
 	case ObjectState_Delete_PrepareCommit:
 		newNode = lastNode.Clone()
-		newNode.ObjectState = ObjectState_Create_ApplyCommit
+		newNode.ObjectState = ObjectState_Delete_ApplyCommit
 	default:
 		panic(fmt.Sprintf("invalid object state %v", lastNode.ObjectState))
 	}
