@@ -63,6 +63,9 @@ const (
 	AllColumns = "*"
 )
 
+var traceFilterExprInterval atomic.Uint64
+var traceFilterExprInterval2 atomic.Uint64
+
 var _ engine.Relation = new(txnTable)
 
 func (tbl *txnTable) getEngine() engine.Engine {
@@ -585,6 +588,45 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr, txnOffset i
 	defer func() {
 		cost := time.Since(start)
 
+		var (
+			step, slowStep uint64
+		)
+
+		rangesLen := ranges.Len()
+		if rangesLen < 5 {
+			step = uint64(1)
+		} else if rangesLen < 10 {
+			step = uint64(5)
+		} else if rangesLen < 20 {
+			step = uint64(10)
+		} else {
+			slowStep = uint64(1)
+		}
+		tbl.enableLogFilterExpr.Store(false)
+		if traceFilterExprInterval.Add(step) >= 500000 {
+			traceFilterExprInterval.Store(0)
+			tbl.enableLogFilterExpr.Store(true)
+		}
+		if traceFilterExprInterval2.Add(slowStep) >= 20 {
+			traceFilterExprInterval2.Store(0)
+			tbl.enableLogFilterExpr.Store(true)
+		}
+
+		if rangesLen >= 50 {
+			tbl.enableLogFilterExpr.Store(true)
+		}
+
+		if tbl.enableLogFilterExpr.Load() {
+			logutil.Info(
+				"TXN-FILTER-RANGE-LOG",
+				zap.String("name", tbl.tableDef.Name),
+				zap.String("exprs", plan2.FormatExprs(exprs)),
+				zap.Int("ranges-len", ranges.Len()),
+				zap.Uint64("tbl-id", tbl.tableId),
+				zap.String("txn", tbl.db.op.Txn().DebugString()),
+			)
+		}
+
 		trace.GetService().AddTxnAction(
 			tbl.db.op,
 			client.RangesEvent,
@@ -696,7 +738,7 @@ func (tbl *txnTable) rangesOnePart(
 	}
 
 	if dirtyBlks == nil {
-		tbl.collectDirtyBlocks(state, uncommittedObjects, txnOffset)
+		dirtyBlks = tbl.collectDirtyBlocks(state, uncommittedObjects, txnOffset)
 	}
 
 	// for dynamic parameter, substitute param ref and const fold cast expression here to improve performance
@@ -1667,6 +1709,20 @@ func (tbl *txnTable) NewReader(
 ) ([]engine.Reader, error) {
 	if plan2.IsFalseExpr(expr) {
 		return []engine.Reader{new(emptyReader)}, nil
+	}
+
+	if tbl.enableLogFilterExpr.Load() {
+		exprStr := "nil"
+		if expr != nil {
+			exprStr = plan2.FormatExpr(expr)
+		}
+		logutil.Info(
+			"TXN-FILTER-READER-LOG",
+			zap.String("name", tbl.tableDef.Name),
+			zap.String("expr", exprStr),
+			zap.Uint64("tbl-id", tbl.tableId),
+			zap.String("txn", tbl.db.op.Txn().DebugString()),
+		)
 	}
 
 	proc := tbl.proc.Load()

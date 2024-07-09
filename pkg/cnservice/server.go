@@ -845,14 +845,14 @@ func (s *service) initIncrService() {
 	if err != nil {
 		panic(err)
 	}
-	incrService := incrservice.NewIncrService(
+	s.incrservice = incrservice.NewIncrService(
 		s.cfg.UUID,
 		store,
 		s.cfg.AutoIncrement)
 	runtime.ProcessLevelRuntime().SetGlobalVariables(
 		runtime.AutoIncrementService,
-		incrService)
-	incrservice.SetAutoIncrementServiceByID(s.cfg.UUID, incrService)
+		s.incrservice)
+	incrservice.SetAutoIncrementServiceByID(s.cfg.UUID, s.incrservice)
 }
 
 func (s *service) bootstrap() error {
