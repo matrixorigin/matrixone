@@ -114,9 +114,6 @@ func NewMockLogtailAgent() *MockRPCAgent {
 
 func (a *MockRPCAgent) Close() {
 	a.cancel()
-	close(a.txnRequestChan)
-	close(a.txnResponseChan)
-	close(a.client.responseReceiver)
 	close(a.server.logtailRequestReceiver)
 	a.wg.Wait()
 }

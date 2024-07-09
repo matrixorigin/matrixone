@@ -44,7 +44,7 @@ func (cs *testClientSession) AsyncWrite(response morpc.Message) error { return n
 func (cs *testClientSession) CreateCache(ctx context.Context, cacheID uint64) (morpc.MessageCache, error) {
 	return nil, nil
 }
-func (cs *testClientSession) DeleteCache(cacheID uint64)                          { return }
+func (cs *testClientSession) DeleteCache(cacheID uint64)                          {}
 func (cs *testClientSession) GetCache(cacheID uint64) (morpc.MessageCache, error) { return nil, nil }
 func (cs *testClientSession) RemoteAddress() string                               { return "" }
 

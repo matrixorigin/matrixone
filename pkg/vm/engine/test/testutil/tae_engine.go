@@ -28,7 +28,6 @@ import (
 	taestorage "github.com/matrixorigin/matrixone/pkg/txn/storage/tae"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -36,10 +35,6 @@ import (
 )
 
 type TestTxnStorage struct {
-	t        *testing.T
-	schema   *catalog.Schema
-	tenantID uint32
-
 	taeHandler    *rpc.Handle
 	logtailServer *TestLogtailServer
 }
@@ -130,40 +125,33 @@ func (ts *TestTxnStorage) txnRequestListener(
 		}
 	}
 
-	for {
-		select {
-		case reqs, ok := <-txnRequestReceiver:
-			if !ok {
-				return
-			}
+	for reqs := range txnRequestReceiver {
+		for idx := range reqs.CommitRequest.Payload {
+			response := new(txn.TxnResponse)
+			req := reqs.CommitRequest.Payload[idx]
 
-			for idx := range reqs.CommitRequest.Payload {
-				response := new(txn.TxnResponse)
-				req := reqs.CommitRequest.Payload[idx]
-
-				_, err := ts.Write(ctx, req.Txn, req.CNRequest.OpCode, req.CNRequest.Payload)
-				if err != nil {
-					util.LogTxnWriteFailed(txn.TxnMeta{}, err)
-					response.TxnError = txn.WrapError(err, moerr.ErrTAEWrite)
-
-					if !sendResponse(response) {
-						logutil.Errorf("txnStorage.Write: send txn response failed: %v\n", response)
-						break
-					}
-				}
-
-				_, err = ts.Commit(ctx, req.Txn)
-				if err != nil {
-					response.TxnError = txn.WrapError(err, moerr.ErrTAECommit)
-				}
+			_, err := ts.Write(ctx, req.Txn, req.CNRequest.OpCode, req.CNRequest.Payload)
+			if err != nil {
+				util.LogTxnWriteFailed(txn.TxnMeta{}, err)
+				response.TxnError = txn.WrapError(err, moerr.ErrTAEWrite)
 
 				if !sendResponse(response) {
-					logutil.Errorf("txnStorage.Commit: send txn response failed: %v\n", response)
-				}
-
-				if err != nil {
+					logutil.Errorf("txnStorage.Write: send txn response failed: %v\n", response)
 					break
 				}
+			}
+
+			_, err = ts.Commit(ctx, req.Txn)
+			if err != nil {
+				response.TxnError = txn.WrapError(err, moerr.ErrTAECommit)
+			}
+
+			if !sendResponse(response) {
+				logutil.Errorf("txnStorage.Commit: send txn response failed: %v\n", response)
+			}
+
+			if err != nil {
+				break
 			}
 		}
 	}

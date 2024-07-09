@@ -16,11 +16,9 @@ package test
 
 import (
 	"context"
-	"strconv"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	testutil "github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
@@ -36,36 +34,14 @@ func Test_CreateDataBase(t *testing.T) {
 	ctx := context.Background()
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
-	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
-	require.Nil(t, err)
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(ctx)
+		rpcAgent.Close()
+	}()
 
-	rpcAgent := testutil.NewMockLogtailAgent()
-	defer rpcAgent.Close()
-
-	taeHandler, err := testutil.NewTestTAEEngine(ctx, "partition_state", t, rpcAgent, nil)
-	require.Nil(t, err)
-	defer taeHandler.Close(ctx)
-
-	disttaeEngine, err := testutil.NewTestDisttaeEngine(ctx, mp, taeHandler.GetDB().Runtime.Fs.Service, rpcAgent)
-	require.Nil(t, err)
-	defer disttaeEngine.Close(ctx)
-
-	txnOp, err := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Now())
-	require.Nil(t, err)
-
-	resp, databaseId := rpcAgent.CreateDatabase(ctx, databaseName, disttaeEngine.Engine, txnOp)
-	require.Nil(t, resp.TxnError)
-
-	db, err := disttaeEngine.Engine.Database(ctx, databaseName, txnOp)
-	require.Nil(t, err)
-	require.NotNil(t, db)
-
-	db.GetDatabaseId(ctx)
-	require.Equal(t, strconv.Itoa(int(databaseId)), db.GetDatabaseId(ctx))
-
-	dbEntry, err := taeHandler.GetDB().Catalog.GetDatabaseByID(databaseId)
-	require.Nil(t, err)
-	require.Equal(t, dbEntry.ID, databaseId)
+	testutil.CreateDatabase(ctx, databaseName, disttaeEngine, taeHandler, rpcAgent, t)
 
 }
 
@@ -82,70 +58,34 @@ func Test_InsertRows(t *testing.T) {
 	ctx := context.Background()
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
-	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
-	require.Nil(t, err)
+	disttaeEngine, taeHandler, rpcAgent, mp := testutil.CreateEngines(ctx, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(ctx)
+		rpcAgent.Close()
+	}()
 
-	rpcAgent := testutil.NewMockLogtailAgent()
-	defer rpcAgent.Close()
-
-	taeHandler, err := testutil.NewTestTAEEngine(ctx, "partition_state", t, rpcAgent, nil)
-	require.Nil(t, err)
-	defer taeHandler.Close(ctx)
-
-	disttaeEngine, err := testutil.NewTestDisttaeEngine(ctx, mp, taeHandler.GetDB().Runtime.Fs.Service, rpcAgent)
-	require.Nil(t, err)
-	defer disttaeEngine.Close(ctx)
-
-	txnOp, err := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Now())
-	require.Nil(t, err)
-
-	resp, databaseId := rpcAgent.CreateDatabase(ctx, databaseName, disttaeEngine.Engine, txnOp)
-	require.Nil(t, resp.TxnError)
-
-	db, err := disttaeEngine.Engine.Database(ctx, databaseName, txnOp)
-	require.Nil(t, err)
-	require.NotNil(t, db)
-
-	require.Equal(t, strconv.Itoa(int(databaseId)), db.GetDatabaseId(ctx))
-
-	dbEntry, err := taeHandler.GetDB().Catalog.GetDatabaseByID(databaseId)
-	require.Nil(t, err)
-	require.Equal(t, dbEntry.ID, databaseId)
+	dbHandler, dbEntry, txnOp := testutil.CreateDatabase(ctx, databaseName, disttaeEngine, taeHandler, rpcAgent, t)
+	databaseId = dbEntry.GetID()
 
 	schema := catalog2.MockSchemaAll(10, 0)
 	bat := catalog2.MockBatch(schema, 10)
 	schema.Name = tableName
 
-	err = txnOp.UpdateSnapshot(ctx, disttaeEngine.Now())
-	require.Nil(t, err)
+	var err error
 
-	resp, tableId = rpcAgent.CreateTable(ctx, db, schema, txnOp.SnapshotTS())
-	require.Nil(t, resp.TxnError)
+	tblHandler, _ := testutil.CreateTable(ctx, schema, dbHandler, dbEntry, rpcAgent, disttaeEngine.Now(), t)
+	tableId = tblHandler.GetTableID(ctx)
 
 	err = disttaeEngine.Engine.PushClient().TryToSubscribeTable(ctx, databaseId, tableId)
 	require.Nil(t, err)
 
-	entry, err := taeHandler.GetDB().Catalog.GetDatabaseByID(databaseId)
-	require.Nil(t, err)
-	require.Equal(t, entry.ID, databaseId)
-
-	tt, err := entry.GetTableEntryByID(tableId)
-	require.Nil(t, err)
-	require.Equal(t, tt.ID, tableId)
-
 	err = txnOp.UpdateSnapshot(ctx, disttaeEngine.Now())
 	require.Nil(t, err)
 
-	dbName, tblName, rel, err := disttaeEngine.Engine.GetRelationById(ctx, txnOp, uint64(tableId))
-	require.Nil(t, err)
-	require.Equal(t, dbName, databaseName)
-	require.Equal(t, tblName, tableName)
-
-	rpcAgent.Insert(ctx, accountId, rel, databaseName, bat, mp, txnOp.SnapshotTS())
-	require.Nil(t, resp.TxnError)
+	rpcAgent.Insert(ctx, accountId, tblHandler, databaseName, bat, mp, txnOp.SnapshotTS())
 
 	rows, err := disttaeEngine.CountStar(ctx, uint64(databaseId), uint64(tableId))
 	require.Nil(t, err)
 	require.Equal(t, rows, uint32(10))
-
 }

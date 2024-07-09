@@ -126,7 +126,7 @@ func (de *TestDisttaeEngine) CountStar(ctx context.Context, databaseId, tableId 
 	var state *logtailreplay.PartitionState
 	ts := de.Now()
 	ticker := time.NewTicker(time.Second)
-	ctx, cancel := context.WithTimeout(ctx, time.Second*15)
+	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
 	defer cancel()
 
 	done := false

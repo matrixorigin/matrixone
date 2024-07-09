@@ -15,13 +15,22 @@
 package testutil
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/user"
 	"path/filepath"
+	"strconv"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func GetDefaultTestPath(module string, t *testing.T) string {
@@ -45,4 +54,74 @@ func RemoveDefaultTestPath(module string, t *testing.T) {
 func InitTestEnv(module string, t *testing.T) string {
 	RemoveDefaultTestPath(module, t)
 	return MakeDefaultTestPath(module, t)
+}
+
+func CreateEngines(ctx context.Context, t *testing.T) (
+	disttaeEngine *TestDisttaeEngine, taeEngine *TestTxnStorage, rpcAgent *MockRPCAgent, mp *mpool.MPool) {
+
+	if v := ctx.Value(defines.TenantIDKey{}); v == nil {
+		panic("cannot find account id in ctx")
+	}
+
+	var err error
+
+	mp, err = mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.Nil(t, err)
+
+	rpcAgent = NewMockLogtailAgent()
+
+	taeEngine, err = NewTestTAEEngine(ctx, "partition_state", t, rpcAgent, nil)
+	require.Nil(t, err)
+
+	disttaeEngine, err = NewTestDisttaeEngine(ctx, mp, taeEngine.GetDB().Runtime.Fs.Service, rpcAgent)
+	require.Nil(t, err)
+
+	return
+}
+
+func CreateDatabase(ctx context.Context, databaseName string,
+	disttaeEngine *TestDisttaeEngine, taeEngine *TestTxnStorage, rpcAgent *MockRPCAgent, t *testing.T) (
+	dbHandler engine.Database, dbEntry *catalog2.DBEntry, txnOp client.TxnOperator) {
+
+	var err error
+
+	txnOp, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Now())
+	require.Nil(t, err)
+
+	resp, databaseId := rpcAgent.CreateDatabase(ctx, databaseName, disttaeEngine.Engine, txnOp)
+	require.Nil(t, resp.TxnError)
+
+	dbHandler, err = disttaeEngine.Engine.Database(ctx, databaseName, txnOp)
+	require.Nil(t, err)
+	require.NotNil(t, dbHandler)
+
+	require.Equal(t, strconv.Itoa(int(databaseId)), dbHandler.GetDatabaseId(ctx))
+
+	dbEntry, err = taeEngine.GetDB().Catalog.GetDatabaseByID(databaseId)
+	require.Nil(t, err)
+	require.Equal(t, dbEntry.ID, databaseId)
+
+	return
+}
+
+func CreateTable(ctx context.Context, schema *catalog2.Schema,
+	dbHandler engine.Database, dbEntry *catalog2.DBEntry, rpcAgent *MockRPCAgent,
+	snapshot timestamp.Timestamp, t *testing.T) (tblHandler engine.Relation, tblEntry *catalog2.TableEntry) {
+
+	resp, tableId := rpcAgent.CreateTable(ctx, dbHandler, schema, snapshot)
+	require.Nil(t, resp.TxnError)
+
+	var err error
+
+	tblEntry, err = dbEntry.GetTableEntryByID(tableId)
+	require.Nil(t, err)
+	require.Equal(t, tblEntry.ID, tableId)
+	require.Contains(t, tblEntry.GetFullName(), schema.Name)
+
+	tblHandler, err = dbHandler.Relation(ctx, schema.Name, nil)
+	require.Nil(t, err)
+	require.Equal(t, tblHandler.GetTableID(ctx), tableId)
+	require.Contains(t, tblHandler.GetTableName(), schema.Name)
+
+	return tblHandler, tblEntry
 }

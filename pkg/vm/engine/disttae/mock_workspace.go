@@ -37,14 +37,14 @@ import (
 )
 
 func cnCommitRequest(es []Entry, tn DNStore, snapshot timestamp.Timestamp) (*txn.TxnRequest, error) {
-	var apiEntry []*api.Entry
+	var apiEntry = make([]*api.Entry, len(es))
 
 	for idx := range es {
 		pe, err := toPBEntry(es[idx])
 		if err != nil {
 			return nil, err
 		}
-		apiEntry = append(apiEntry, pe)
+		apiEntry[idx] = pe
 	}
 
 	payload, err := types.Encode(&api.PrecommitWriteCmd{EntryList: apiEntry})
@@ -106,42 +106,42 @@ func MockGenRowId(tableId uint64) types.Rowid {
 	return types.DecodeFixed[types.Rowid](types.EncodeSlice(mockRowIdAllocator[:]))
 }
 
-func appendRowIdVec(tableId uint64, src *batch.Batch, m *mpool.MPool) (*batch.Batch, error) {
-	vec := vector.NewVec(types.T_Rowid.ToType())
-	MockIncrBlockId(tableId)
-	rowId := MockGenRowId(tableId)
-	if err := vector.AppendFixed(vec, rowId, false, m); err != nil {
-		vec.Free(m)
-		return nil, err
-	}
+//func appendRowIdVec(tableId uint64, src *batch.Batch, m *mpool.MPool) (*batch.Batch, error) {
+//	vec := vector.NewVec(types.T_Rowid.ToType())
+//	MockIncrBlockId(tableId)
+//	rowId := MockGenRowId(tableId)
+//	if err := vector.AppendFixed(vec, rowId, false, m); err != nil {
+//		vec.Free(m)
+//		return nil, err
+//	}
+//
+//	src.Vecs = append([]*vector.Vector{vec}, src.Vecs...)
+//	src.Attrs = append([]string{catalog.Row_ID}, src.Attrs...)
+//
+//	return src, nil
+//}
 
-	src.Vecs = append([]*vector.Vector{vec}, src.Vecs...)
-	src.Attrs = append([]string{catalog.Row_ID}, src.Attrs...)
+//func mockGenCreateDatabaseTuple(sql string, accountId, userId, roleId uint32,
+//	name string, databaseId uint64, typ string, m *mpool.MPool) (*batch.Batch, error) {
+//	bat, err := genCreateDatabaseTuple(sql, accountId, userId, roleId, name, databaseId, typ, m)
+//	if err != nil {
+//		return nil, err
+//	}
+//
+//	return appendRowIdVec(catalog.MO_DATABASE_ID, bat, m)
+//}
 
-	return src, nil
-}
-
-func mockGenCreateDatabaseTuple(sql string, accountId, userId, roleId uint32,
-	name string, databaseId uint64, typ string, m *mpool.MPool) (*batch.Batch, error) {
-	bat, err := genCreateDatabaseTuple(sql, accountId, userId, roleId, name, databaseId, typ, m)
-	if err != nil {
-		return nil, err
-	}
-
-	return appendRowIdVec(catalog.MO_DATABASE_ID, bat, m)
-}
-
-func mockGenCreateTableTuple(
-	tbl *txnTable, sql string, accountId, userId, roleId uint32, name string,
-	tableId uint64, databaseId uint64, databaseName string, m *mpool.MPool) (*batch.Batch, error) {
-	bat, err := genCreateTableTuple(tbl, sql, accountId, userId, roleId, name,
-		tableId, databaseId, databaseName, types.Rowid{}, false, m)
-	if err != nil {
-		return nil, err
-	}
-
-	return appendRowIdVec(catalog.MO_TABLES_ID, bat, m)
-}
+//func mockGenCreateTableTuple(
+//	tbl *txnTable, sql string, accountId, userId, roleId uint32, name string,
+//	tableId uint64, databaseId uint64, databaseName string, m *mpool.MPool) (*batch.Batch, error) {
+//	bat, err := genCreateTableTuple(tbl, sql, accountId, userId, roleId, name,
+//		tableId, databaseId, databaseName, types.Rowid{}, false, m)
+//	if err != nil {
+//		return nil, err
+//	}
+//
+//	return appendRowIdVec(catalog.MO_TABLES_ID, bat, m)
+//}
 
 func MockInsertRowsCommitRequest(
 	accountId uint32, databaseId uint64, databaseName string, tableId uint64,
@@ -249,7 +249,7 @@ func MockGenCreateDatabaseCommitRequest(ctx context.Context, e engine.Engine, op
 func MockGenCreateTableCommitRequest(ctx context.Context, schema *catalog2.Schema,
 	db engine.Database, snapshot timestamp.Timestamp) ([]*txn.TxnRequest, uint64, error) {
 
-	var defs []engine.TableDef
+	var defs = make([]engine.TableDef, 0)
 	for idx := range schema.ColDefs {
 		if schema.ColDefs[idx].Name == catalog.Row_ID {
 			continue
