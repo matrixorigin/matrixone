@@ -152,11 +152,13 @@ func (page *TransferHashPage) Clear(clearDisk bool) {
 	}
 }
 
-func (page *TransferHashPage) Train(from uint32, to types.Rowid) {
+func (page *TransferHashPage) Train(m map[uint32][]byte) {
 	page.latch.Lock()
 	defer page.latch.Unlock()
-	page.hashmap.M[from] = to[:]
-	v2.TransferPageRowHistogram.Observe(1)
+	for k, v := range m {
+		page.hashmap.M[k] = v
+	}
+	v2.TransferPageRowHistogram.Observe(float64(len(m)))
 }
 
 func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) {

@@ -9017,11 +9017,13 @@ func TestPersistTransferTable(t *testing.T) {
 		model.WithTTL(time.Second),
 	)
 	ids := make([]types.Rowid, 10)
+	m := make(map[uint32][]byte, 10)
 	for i := 0; i < 10; i++ {
 		rowID := *objectio.NewRowid(&id2.BlockID, uint32(i))
-		page.Train(uint32(i), rowID)
+		m[uint32(i)] = rowID[:]
 		ids[i] = rowID
 	}
+	page.Train(m)
 	tae.Runtime.TransferTable.AddPage(page)
 
 	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
@@ -9096,11 +9098,13 @@ func TestClearPersistTransferTable(t *testing.T) {
 		model.WithDiskTTL(2*time.Second),
 	)
 	ids := make([]types.Rowid, 10)
+	m := make(map[uint32][]byte, 10)
 	for i := 0; i < 10; i++ {
 		rowID := *objectio.NewRowid(&id2.BlockID, uint32(i))
-		page.Train(uint32(i), rowID)
+		m[uint32(i)] = rowID[:]
 		ids[i] = rowID
 	}
+	page.Train(m)
 	tae.Runtime.TransferTable.AddPage(page)
 
 	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)

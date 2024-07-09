@@ -36,9 +36,12 @@ func TestTransferPage(t *testing.T) {
 	memo1 := NewTransferHashPage(&src, time.Now(), 0, false)
 	assert.Zero(t, memo1.RefCount())
 
+	m := make(map[uint32][]byte, 10)
 	for i := 0; i < 10; i++ {
-		memo1.Train(uint32(i), *objectio.NewRowid(&dest.BlockID, uint32(i)))
+		rowID := *objectio.NewRowid(&dest.BlockID, uint32(i))
+		m[uint32(i)] = rowID[:]
 	}
+	memo1.Train(m)
 
 	pinned := memo1.Pin()
 	assert.Equal(t, int64(1), memo1.RefCount())
@@ -50,9 +53,12 @@ func TestTransferPage(t *testing.T) {
 	defer memo2.Close()
 	assert.Zero(t, memo2.RefCount())
 
+	m = make(map[uint32][]byte, 10)
 	for i := 0; i < 10; i++ {
-		memo2.Train(uint32(i), *objectio.NewRowid(&dest.BlockID, uint32(i)))
+		rowID := objectio.NewRowid(&dest.BlockID, uint32(i))
+		m[uint32(i)] = rowID[:]
 	}
+	memo2.Train(m)
 
 	assert.True(t, memo2.TTL() == 0)
 
@@ -77,10 +83,12 @@ func TestTransferTable(t *testing.T) {
 	page1 := NewTransferHashPage(&id1, now, 10, false,
 		WithDiskTTL(2*time.Second),
 	)
+	m := make(map[uint32][]byte, 10)
 	for i := 0; i < 10; i++ {
 		rowID := *objectio.NewRowid(&id2.BlockID, uint32(i))
-		page1.Train(uint32(i), rowID)
+		m[uint32(i)] = rowID[:]
 	}
+	page1.Train(m)
 
 	assert.False(t, table.AddPage(page1))
 	assert.True(t, table.AddPage(page1))

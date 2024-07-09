@@ -214,7 +214,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	cronJobs := []func(*gc.Manager){
 		gc.WithCronJob(
 			"clean-transfer-table",
-			opts.CheckpointCfg.FlushInterval,
+			opts.CheckpointCfg.TransferInterval,
 			func(_ context.Context) (err error) {
 				db.Runtime.PrintVectorPoolUsage()
 				db.Runtime.TransferDelsMap.Prune(opts.TransferTableTTL)

@@ -114,11 +114,14 @@ func (entry *mergeObjectsEntry) prepareTransferPage() {
 			id.SetBlockOffset(uint16(j))
 			model.SetFileService(entry.rt.Fs.Service)
 			page := model.NewTransferHashPage(id, time.Now(), len(m), isTransient)
+			mapping := make(map[uint32][]byte, 10)
 			for srcRow, dst := range m {
 				objID := entry.createdObjs[dst.ObjIdx].ID
 				blkID := objectio.NewBlockidWithObjectID(&objID, uint16(dst.BlkIdx))
-				page.Train(uint32(srcRow), *objectio.NewRowid(blkID, uint32(dst.RowIdx)))
+				rowID := objectio.NewRowid(blkID, uint32(dst.RowIdx))
+				mapping[uint32(srcRow)] = rowID[:]
 			}
+			page.Train(mapping)
 
 			start = time.Now()
 			data := page.Pin().Val.Marshal()
