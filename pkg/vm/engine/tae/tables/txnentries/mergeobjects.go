@@ -98,8 +98,8 @@ func (entry *mergeObjectsEntry) prepareTransferPage() {
 	for _, obj := range entry.droppedObjs {
 		name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
 		pages := make([]*model.TransferHashPage, 0, obj.BlockCnt())
-		var writer *blockio.BlockWriter
-		writer, _ = blockio.NewBlockWriterNew(entry.rt.Fs.Service, name, 0, nil)
+		var writer *objectio.ObjectWriter
+		writer, _ = objectio.NewObjectWriter(name, entry.rt.Fs.Service, 0, nil)
 		var duration time.Duration
 		var start time.Time
 		for j := 0; j < obj.BlockCnt(); j++ {
@@ -138,7 +138,7 @@ func (entry *mergeObjectsEntry) prepareTransferPage() {
 			bat := batch.New(true, []string{"mapping"})
 			bat.SetRowCount(vectorRowCnt)
 			bat.Vecs[0] = v
-			_, err = writer.WriteTombstoneBatch(bat)
+			_, err = writer.WriteTombstone(bat)
 			if err != nil {
 				return
 			}
@@ -150,7 +150,7 @@ func (entry *mergeObjectsEntry) prepareTransferPage() {
 		}
 		start = time.Now()
 		var blocks []objectio.BlockObject
-		blocks, _, err := writer.Sync(context.Background())
+		blocks, err := writer.WriteEnd(context.Background())
 		if err != nil {
 			return
 		}

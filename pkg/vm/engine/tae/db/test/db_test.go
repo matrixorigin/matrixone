@@ -9027,8 +9027,8 @@ func TestPersistTransferTable(t *testing.T) {
 	tae.Runtime.TransferTable.AddPage(page)
 
 	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
-	var writer *blockio.BlockWriter
-	writer, _ = blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, name, 0, nil)
+	var writer *objectio.ObjectWriter
+	writer, _ = objectio.NewObjectWriter(name, tae.Runtime.Fs.Service, 0, nil)
 	data := page.Pin().Val.Marshal()
 	ty := types.T_varchar.ToType()
 	vw := tae.Runtime.VectorPool.Transient.GetVector(&ty)
@@ -9043,12 +9043,12 @@ func TestPersistTransferTable(t *testing.T) {
 	bat := batch.New(true, []string{"mapping"})
 	bat.SetRowCount(vectorRowCnt)
 	bat.Vecs[0] = v
-	_, err = writer.WriteTombstoneBatch(bat)
+	_, err = writer.WriteTombstone(bat)
 	if err != nil {
 		return
 	}
 	var blocks []objectio.BlockObject
-	blocks, _, err = writer.Sync(context.Background())
+	blocks, err = writer.WriteEnd(context.Background())
 	if err != nil {
 		return
 	}
@@ -9108,8 +9108,8 @@ func TestClearPersistTransferTable(t *testing.T) {
 	tae.Runtime.TransferTable.AddPage(page)
 
 	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
-	var writer *blockio.BlockWriter
-	writer, _ = blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, name, 0, nil)
+	var writer *objectio.ObjectWriter
+	writer, _ = objectio.NewObjectWriter(name, tae.Runtime.Fs.Service, 0, nil)
 	data := page.Pin().Val.Marshal()
 	ty := types.T_varchar.ToType()
 	vw := tae.Runtime.VectorPool.Transient.GetVector(&ty)
@@ -9124,12 +9124,12 @@ func TestClearPersistTransferTable(t *testing.T) {
 	bat := batch.New(true, []string{"mapping"})
 	bat.SetRowCount(vectorRowCnt)
 	bat.Vecs[0] = v
-	_, err = writer.WriteTombstoneBatch(bat)
+	_, err = writer.WriteTombstone(bat)
 	if err != nil {
 		return
 	}
 	var blocks []objectio.BlockObject
-	blocks, _, err = writer.Sync(context.Background())
+	blocks, err = writer.WriteEnd(context.Background())
 	if err != nil {
 		return
 	}

@@ -127,8 +127,8 @@ func (entry *flushTableTailEntry) addTransferPages() {
 	isTransient := !entry.tableEntry.GetLastestSchemaLocked().HasPK()
 	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
 	pages := make([]*model.TransferHashPage, 0, len(entry.transMappings.Mappings))
-	var writer *blockio.BlockWriter
-	writer, _ = blockio.NewBlockWriterNew(entry.rt.Fs.Service, name, 0, nil)
+	var writer *objectio.ObjectWriter
+	writer, _ = objectio.NewObjectWriter(name, entry.rt.Fs.Service, 0, nil)
 	var duration time.Duration
 	var start time.Time
 	for i, mcontainer := range entry.transMappings.Mappings {
@@ -163,7 +163,7 @@ func (entry *flushTableTailEntry) addTransferPages() {
 		bat := batch.New(true, []string{"mapping"})
 		bat.SetRowCount(vectorRowCnt)
 		bat.Vecs[0] = v
-		_, err = writer.WriteTombstoneBatch(bat)
+		_, err = writer.WriteTombstone(bat)
 		if err != nil {
 			return
 		}
@@ -175,7 +175,7 @@ func (entry *flushTableTailEntry) addTransferPages() {
 
 	start = time.Now()
 	var blocks []objectio.BlockObject
-	blocks, _, err := writer.Sync(context.Background())
+	blocks, err := writer.WriteEnd(context.Background())
 	if err != nil {
 		return
 	}
