@@ -57,10 +57,10 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 	for i := 0; i < originalObjCnt; i++ {
 		loadedBlkCnt := 0
 		nextBatch, del, nextReleaseF, err := host.LoadNextBatch(ctx, uint32(i))
-		if buffer == nil {
-			buffer, releaseF = getSimilarBatch(nextBatch, int(maxRowCnt), host)
-		}
 		for err == nil {
+			if buffer == nil {
+				buffer, releaseF = getSimilarBatch(nextBatch, int(maxRowCnt), host)
+			}
 			loadedBlkCnt++
 			for j := 0; j < nextBatch.RowCount(); j++ {
 				if del.Contains(uint64(j)) {

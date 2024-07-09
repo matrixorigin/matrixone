@@ -38,7 +38,9 @@ func TestRPCSend(t *testing.T) {
 			h MethodBasedServer[*testMethodBasedMessage, *testMethodBasedMessage]) {
 			fn := func(
 				ctx context.Context,
-				req, resp *testMethodBasedMessage) error {
+				req, resp *testMethodBasedMessage,
+				buf *Buffer,
+			) error {
 				resp.payload = []byte{byte(req.method)}
 				return nil
 			}
@@ -80,7 +82,9 @@ func TestRequestCanBeFilter(t *testing.T) {
 			h MethodBasedServer[*testMethodBasedMessage, *testMethodBasedMessage]) {
 			fn := func(
 				ctx context.Context,
-				req, resp *testMethodBasedMessage) error {
+				req, resp *testMethodBasedMessage,
+				buf *Buffer,
+			) error {
 				resp.payload = []byte{byte(req.method)}
 				return nil
 			}

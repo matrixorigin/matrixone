@@ -191,7 +191,7 @@ func (c *testHAKeeperClient) GetClusterDetails(ctx context.Context) (logpb.Clust
 	return copied.(logpb.ClusterDetails), c.err
 }
 
-func mockHandleTraceSpan(ctx context.Context, req *query.Request, resp *query.Response) error {
+func mockHandleTraceSpan(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
 	resp.TraceSpanResponse = new(query.TraceSpanResponse)
 	resp.TraceSpanResponse.Resp = SelfProcess(
 		req.TraceSpanRequest.Cmd, req.TraceSpanRequest.Spans, req.TraceSpanRequest.Threshold)

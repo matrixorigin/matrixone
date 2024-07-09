@@ -64,6 +64,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/profile"
 	"github.com/matrixorigin/matrixone/pkg/util/status"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -761,7 +762,9 @@ func (s *service) initShardService() {
 		runtime.ProcessLevelRuntime().Clock(),
 		s.sqlExecutor,
 		s.timestampWaiter,
-		nil,
+		map[int]shardservice.ReadFunc{
+			shardservice.ReadRows: disttae.HandleShardingReadRows,
+		},
 		s.storeEngine,
 	)
 	s.shardService = shardservice.NewService(
@@ -842,14 +845,14 @@ func (s *service) initIncrService() {
 	if err != nil {
 		panic(err)
 	}
-	incrService := incrservice.NewIncrService(
+	s.incrservice = incrservice.NewIncrService(
 		s.cfg.UUID,
 		store,
 		s.cfg.AutoIncrement)
 	runtime.ProcessLevelRuntime().SetGlobalVariables(
 		runtime.AutoIncrementService,
-		incrService)
-	incrservice.SetAutoIncrementServiceByID(s.cfg.UUID, incrService)
+		s.incrservice)
+	incrservice.SetAutoIncrementServiceByID(s.cfg.UUID, s.incrservice)
 }
 
 func (s *service) bootstrap() error {
