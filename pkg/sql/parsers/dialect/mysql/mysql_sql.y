@@ -4373,7 +4373,7 @@ table_name_opt_wild:
     ident wild_opt
     {
         tblName := yylex.(*Lexer).GetDbOrTblName($1.Origin())
-        prefix := tree.ObjectNamePrefix{ExplicitSchema: true}
+        prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
         $$ = tree.NewTableName(tree.Identifier(tblName), prefix, nil)
     }
 |    ident '.' ident wild_opt
