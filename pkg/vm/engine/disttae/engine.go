@@ -67,7 +67,7 @@ func New(
 	cli client.TxnClient,
 	hakeeper logservice.CNHAKeeperClient,
 	keyRouter client2.KeyRouter[pb.StatsInfoKey],
-	threshold int,
+	updateWorkerFactor int,
 ) *Engine {
 	cluster := clusterservice.GetMOCluster()
 	services := cluster.GetAllTNServices()
@@ -120,7 +120,8 @@ func New(
 	}
 	e.gcPool = pool
 
-	e.globalStats = NewGlobalStats(ctx, e, keyRouter)
+	e.globalStats = NewGlobalStats(ctx, e, keyRouter,
+		WithUpdateWorkerFactor(updateWorkerFactor))
 
 	if err := e.init(ctx); err != nil {
 		panic(err)
