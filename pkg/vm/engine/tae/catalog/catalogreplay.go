@@ -140,7 +140,7 @@ func (catalog *Catalog) onReplayCreateDB(
 	}
 	_ = catalog.AddEntryLocked(db, nil, true)
 	un := &MVCCNode[*EmptyMVCCNode]{
-		EntryMVCCNode: &EntryMVCCNode{
+		EntryMVCCNode: EntryMVCCNode{
 			CreatedAt: txnNode.End,
 		},
 		TxnMVCCNode: txnNode,
@@ -163,7 +163,7 @@ func (catalog *Catalog) onReplayDeleteDB(dbid uint64, txnNode *txnbase.TxnMVCCNo
 	}
 	prev := db.MVCCChain.GetLatestNodeLocked()
 	un := &MVCCNode[*EmptyMVCCNode]{
-		EntryMVCCNode: &EntryMVCCNode{
+		EntryMVCCNode: EntryMVCCNode{
 			CreatedAt: db.GetCreatedAtLocked(),
 			DeletedAt: txnNode.End,
 		},
@@ -276,7 +276,7 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 		}
 		// alter table
 		un := &MVCCNode[*TableMVCCNode]{
-			EntryMVCCNode: &EntryMVCCNode{
+			EntryMVCCNode: EntryMVCCNode{
 				CreatedAt: tblCreatedAt,
 			},
 			TxnMVCCNode: txnNode,
@@ -308,7 +308,7 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 	tbl.tableData = dataFactory.MakeTableFactory()(tbl)
 	_ = db.AddEntryLocked(tbl, nil, true)
 	un := &MVCCNode[*TableMVCCNode]{
-		EntryMVCCNode: &EntryMVCCNode{
+		EntryMVCCNode: EntryMVCCNode{
 			CreatedAt: txnNode.End,
 		},
 		TxnMVCCNode: txnNode,
@@ -339,7 +339,7 @@ func (catalog *Catalog) onReplayDeleteTable(dbid, tid uint64, txnNode *txnbase.T
 	}
 	prev := tbl.MVCCChain.GetLatestCommittedNodeLocked()
 	un := &MVCCNode[*TableMVCCNode]{
-		EntryMVCCNode: &EntryMVCCNode{
+		EntryMVCCNode: EntryMVCCNode{
 			CreatedAt: prev.CreatedAt,
 			DeletedAt: txnNode.End,
 		},
@@ -443,7 +443,7 @@ func (catalog *Catalog) onReplayCheckpointObject(
 			SortHint: catalog.NextObject(),
 		}
 		obj.CreateNode = &MVCCNode[*ObjectMVCCNode]{
-			EntryMVCCNode: entryNode,
+			EntryMVCCNode: *entryNode,
 			BaseNode:      objNode,
 			TxnMVCCNode:   txnNode,
 		}
@@ -456,7 +456,7 @@ func (catalog *Catalog) onReplayCheckpointObject(
 			panic(fmt.Sprintf("obj %v not existed, table:\n%v", objid.String(), rel.StringWithLevel(3)))
 		}
 		obj.DeleteNode = &MVCCNode[*ObjectMVCCNode]{
-			EntryMVCCNode: entryNode,
+			EntryMVCCNode: *entryNode,
 			BaseNode:      objNode,
 			TxnMVCCNode:   txnNode,
 		}
@@ -559,7 +559,7 @@ func (catalog *Catalog) onReplayCreateBlock(
 		tombstone := rel.GetOrCreateTombstone(obj, dataFactory.MakeTombstoneFactory())
 		_, blkOffset := blkid.Offsets()
 		mvccNode := &MVCCNode[*MetadataMVCCNode]{
-			EntryMVCCNode: &EntryMVCCNode{},
+			EntryMVCCNode: EntryMVCCNode{},
 			TxnMVCCNode:   txnNode,
 			BaseNode: &MetadataMVCCNode{
 				DeltaLoc: deltaloc,

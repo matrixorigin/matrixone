@@ -280,7 +280,7 @@ func (n *AppendMVCCHandle) GetLatestAppendPrepareTSLocked() types.TS {
 	return n.appends.GetUpdateNodeLocked().Prepare
 }
 func (n *AppendMVCCHandle) GetMeta() *catalog.ObjectEntry {
-	panic("todo")
+	return n.meta
 }
 
 // check if all appendnodes are committed.
@@ -1198,7 +1198,7 @@ func (n *MVCCHandle) UpdateDeltaLocLocked(txn txnif.TxnReader, deltaloc objectio
 	}
 
 	node := &catalog.MVCCNode[*catalog.MetadataMVCCNode]{
-		EntryMVCCNode: &catalog.EntryMVCCNode{},
+		EntryMVCCNode: catalog.EntryMVCCNode{},
 		BaseNode:      baseNode,
 	}
 	node.TxnMVCCNode = txnbase.NewTxnMVCCNodeWithTxn(txn)

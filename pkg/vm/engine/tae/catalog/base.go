@@ -73,7 +73,7 @@ func (be *BaseEntryImpl[T]) PPString(level common.PPLevel, depth int, prefix str
 
 func (be *BaseEntryImpl[T]) CreateWithTS(ts types.TS, baseNode T) {
 	node := &MVCCNode[T]{
-		EntryMVCCNode: &EntryMVCCNode{
+		EntryMVCCNode: EntryMVCCNode{
 			CreatedAt: ts,
 		},
 		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTS(ts),
@@ -87,7 +87,7 @@ func (be *BaseEntryImpl[T]) CreateWithTxn(txn txnif.AsyncTxn, baseNode T) {
 		logutil.Warnf("unexpected txn is nil: %+v", stack.Callers(0))
 	}
 	node := &MVCCNode[T]{
-		EntryMVCCNode: &EntryMVCCNode{
+		EntryMVCCNode: EntryMVCCNode{
 			CreatedAt: txnif.UncommitTS,
 		},
 		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(txn),
@@ -99,7 +99,7 @@ func (be *BaseEntryImpl[T]) CreateWithTxn(txn txnif.AsyncTxn, baseNode T) {
 // used when replay
 func (be *BaseEntryImpl[T]) CreateWithStartAndEnd(start, end types.TS, baseNode T) {
 	node := &MVCCNode[T]{
-		EntryMVCCNode: &EntryMVCCNode{
+		EntryMVCCNode: EntryMVCCNode{
 			CreatedAt: end,
 		},
 		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithStartEnd(start, end),

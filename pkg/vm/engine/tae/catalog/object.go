@@ -53,7 +53,7 @@ type ObjectEntry struct {
 
 func NewObjectMVCCNode() *MVCCNode[*ObjectMVCCNode] {
 	return &MVCCNode[*ObjectMVCCNode]{
-		EntryMVCCNode: &EntryMVCCNode{},
+		EntryMVCCNode: EntryMVCCNode{},
 		BaseNode:      &ObjectMVCCNode{},
 		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
 	}
@@ -304,7 +304,7 @@ func NewObjectEntry(
 			remainingRows: &common.FixedSampleIII[int]{},
 		},
 		CreateNode: &MVCCNode[*ObjectMVCCNode]{
-			EntryMVCCNode: &EntryMVCCNode{
+			EntryMVCCNode: EntryMVCCNode{
 				CreatedAt: txnif.UncommitTS,
 			},
 			TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(txn),
@@ -336,7 +336,7 @@ func NewObjectEntryByMetaLocation(
 			remainingRows: &common.FixedSampleIII[int]{},
 		},
 		CreateNode: &MVCCNode[*ObjectMVCCNode]{
-			EntryMVCCNode: &EntryMVCCNode{
+			EntryMVCCNode: EntryMVCCNode{
 				CreatedAt: end,
 			},
 			TxnMVCCNode: txnbase.NewTxnMVCCNodeWithStartEnd(start, end),
@@ -365,7 +365,7 @@ func NewStandaloneObject(table *TableEntry, ts types.TS) *ObjectEntry {
 			remainingRows: &common.FixedSampleIII[int]{},
 		},
 		CreateNode: &MVCCNode[*ObjectMVCCNode]{
-			EntryMVCCNode: &EntryMVCCNode{
+			EntryMVCCNode: EntryMVCCNode{
 				CreatedAt: ts,
 			},
 			TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTS(ts),
@@ -383,7 +383,7 @@ func NewSysObjectEntry(table *TableEntry, id types.Uuid) *ObjectEntry {
 			state: ES_Appendable,
 		},
 		CreateNode: &MVCCNode[*ObjectMVCCNode]{
-			EntryMVCCNode: &EntryMVCCNode{
+			EntryMVCCNode: EntryMVCCNode{
 				CreatedAt: types.SystemDBTS,
 			},
 			TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTS(types.SystemDBTS),
@@ -780,7 +780,7 @@ func MockObjEntryWithTbl(tbl *TableEntry, size uint64) *ObjectEntry {
 			remainingRows: &common.FixedSampleIII[int]{},
 		},
 		CreateNode: &MVCCNode[*ObjectMVCCNode]{
-			EntryMVCCNode: &EntryMVCCNode{
+			EntryMVCCNode: EntryMVCCNode{
 				CreatedAt: ts,
 			},
 			TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTS(ts),
