@@ -145,7 +145,7 @@ func MockGenRowId(tableId uint64) types.Rowid {
 
 func MockInsertRowsCommitRequest(
 	accountId uint32, databaseId uint64, databaseName string, tableId uint64,
-	tableName string, bat *batch.Batch, m *mpool.MPool, snapshot timestamp.Timestamp) ([]*txn.TxnRequest, error) {
+	tableName string, bat *batch.Batch, m *mpool.MPool, snapshot timestamp.Timestamp) (*txn.TxnRequest, error) {
 
 	if bat.Attrs[0] != catalog.Row_ID {
 		rowIdVec := vector.NewVec(types.T_Rowid.ToType())
@@ -187,7 +187,7 @@ func MockInsertRowsCommitRequest(
 	}
 
 	req, err := cnCommitRequest([]Entry{e}, e.tnStore, snapshot)
-	return []*txn.TxnRequest{req}, err
+	return req, err
 }
 
 func MockInsertDataObjectsCommitRequest() {
@@ -203,7 +203,7 @@ func MockDeleteRowsCommitRequest() {
 }
 
 func MockGenCreateDatabaseCommitRequest(ctx context.Context, e engine.Engine, op client.TxnOperator,
-	databaseName string) ([]*txn.TxnRequest, uint64, error) {
+	databaseName string) (*txn.TxnRequest, uint64, error) {
 
 	err := e.Create(ctx, databaseName, op)
 	if err != nil {
@@ -243,11 +243,11 @@ func MockGenCreateDatabaseCommitRequest(ctx context.Context, e engine.Engine, op
 	op.GetWorkspace().(*Transaction).workspaceSize = 0
 	op.GetWorkspace().(*Transaction).writes = make([]Entry, 0)
 
-	return []*txn.TxnRequest{req}, val.(*txnDatabase).databaseId, nil
+	return req, val.(*txnDatabase).databaseId, nil
 }
 
 func MockGenCreateTableCommitRequest(ctx context.Context, schema *catalog2.Schema,
-	db engine.Database, snapshot timestamp.Timestamp) ([]*txn.TxnRequest, uint64, error) {
+	db engine.Database, snapshot timestamp.Timestamp) (*txn.TxnRequest, uint64, error) {
 
 	var defs = make([]engine.TableDef, 0)
 	for idx := range schema.ColDefs {
@@ -319,5 +319,5 @@ func MockGenCreateTableCommitRequest(ctx context.Context, schema *catalog2.Schem
 	db.(*txnDatabase).getTxn().workspaceSize = 0
 	db.(*txnDatabase).getTxn().writes = make([]Entry, 0)
 
-	return []*txn.TxnRequest{req}, txnTbl.(*txnTable).tableId, nil
+	return req, txnTbl.(*txnTable).tableId, nil
 }

@@ -210,26 +210,20 @@ func (s *MockRPCClientStream) Close(closeConn bool) error {
 }
 
 func (a *MockRPCAgent) writeAndCommitRequest(
-	ctx context.Context, commitReq []*txn.TxnRequest) (response *txn.TxnResponse) {
+	ctx context.Context, commitReq *txn.TxnRequest) (response *txn.TxnResponse) {
 
 	reqs := txn.TxnRequest{
 		Method: txn.TxnMethod_Commit,
 		Flag:   txn.SkipResponseFlag,
 		CommitRequest: &txn.TxnCommitRequest{
-			Payload:       commitReq,
+			Payload:       []*txn.TxnRequest{commitReq},
 			Disable1PCOpt: false,
 		}}
 
 	a.txnRequestChan <- reqs
 
-	for _ = range commitReq {
-		resp := <-a.txnResponseChan
-		if resp.TxnError != nil {
-			return &resp
-		}
-	}
-
-	return &txn.TxnResponse{}
+	resp := <-a.txnResponseChan
+	return &resp
 }
 
 func (a *MockRPCAgent) listenLogtailRequest() {

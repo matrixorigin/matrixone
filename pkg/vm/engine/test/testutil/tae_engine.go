@@ -126,33 +126,31 @@ func (ts *TestTxnStorage) txnRequestListener(
 	}
 
 	for reqs := range txnRequestReceiver {
-		for idx := range reqs.CommitRequest.Payload {
-			response := new(txn.TxnResponse)
-			req := reqs.CommitRequest.Payload[idx]
+		response := new(txn.TxnResponse)
+		req := reqs.CommitRequest.Payload[0]
 
-			_, err := ts.Write(ctx, req.Txn, req.CNRequest.OpCode, req.CNRequest.Payload)
-			if err != nil {
-				util.LogTxnWriteFailed(txn.TxnMeta{}, err)
-				response.TxnError = txn.WrapError(err, moerr.ErrTAEWrite)
-
-				if !sendResponse(response) {
-					logutil.Errorf("txnStorage.Write: send txn response failed: %v\n", response)
-					break
-				}
-			}
-
-			_, err = ts.Commit(ctx, req.Txn)
-			if err != nil {
-				response.TxnError = txn.WrapError(err, moerr.ErrTAECommit)
-			}
+		_, err := ts.Write(ctx, req.Txn, req.CNRequest.OpCode, req.CNRequest.Payload)
+		if err != nil {
+			util.LogTxnWriteFailed(txn.TxnMeta{}, err)
+			response.TxnError = txn.WrapError(err, moerr.ErrTAEWrite)
 
 			if !sendResponse(response) {
-				logutil.Errorf("txnStorage.Commit: send txn response failed: %v\n", response)
-			}
-
-			if err != nil {
+				logutil.Errorf("txnStorage.Write: send txn response failed: %v\n", response)
 				break
 			}
+		}
+
+		_, err = ts.Commit(ctx, req.Txn)
+		if err != nil {
+			response.TxnError = txn.WrapError(err, moerr.ErrTAECommit)
+		}
+
+		if !sendResponse(response) {
+			logutil.Errorf("txnStorage.Commit: send txn response failed: %v\n", response)
+		}
+
+		if err != nil {
+			break
 		}
 	}
 }
