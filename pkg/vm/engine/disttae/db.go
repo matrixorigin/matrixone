@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
@@ -506,9 +507,11 @@ func (e *Engine) GetOrCreateLatestPart(
 	return partition
 }
 
-func (e *Engine) lazyLoadLatestCkp(
+func (e *Engine) LazyLoadLatestCkp(
 	ctx context.Context,
-	tbl *txnTable) (*logtailreplay.Partition, error) {
+	tblHandler engine.Relation) (*logtailreplay.Partition, error) {
+	tbl := tblHandler.(*txnTable)
+
 	part := e.GetOrCreateLatestPart(tbl.db.databaseId, tbl.tableId)
 	cache := e.getLatestCatalogCache()
 

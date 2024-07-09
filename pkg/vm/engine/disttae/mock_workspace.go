@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"math"
 	"math/rand"
 	"time"
@@ -190,7 +191,43 @@ func MockInsertRowsCommitRequest(
 	return req, err
 }
 
-func MockInsertDataObjectsCommitRequest() {
+func MockInsertDataObjectsCommitRequest(tblHandler engine.Relation, bat *batch.Batch,
+	snapshot timestamp.Timestamp) (*txn.TxnRequest, error) {
+
+	table := tblHandler.(*txnTable)
+	if bat.Attrs[0] != catalog.BlockMeta_BlockInfo {
+		bat.Vecs[0].Free(table.proc.Load().Mp())
+		bat.Attrs = bat.Attrs[1:]
+		bat.Vecs = bat.Vecs[1:]
+	}
+
+	fileName := objectio.DecodeBlockInfo(bat.Vecs[0].GetBytesAt(0)).MetaLocation().Name().String()
+	err := table.getTxn().WriteFileLocked(
+		INSERT,
+		table.accountId,
+		table.db.databaseId,
+		table.tableId,
+		table.db.databaseName,
+		table.tableName,
+		fileName,
+		bat,
+		table.getTxn().tnStores[0],
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	workspace := table.getTxn().writes
+
+	req, err := cnCommitRequest(workspace, mockTnStore(), snapshot)
+	if err != nil {
+		return nil, err
+	}
+
+	table.getTxn().workspaceSize = 0
+	table.getTxn().writes = make([]Entry, 0)
+
+	return req, nil
 
 }
 
@@ -210,22 +247,9 @@ func MockGenCreateDatabaseCommitRequest(ctx context.Context, e engine.Engine, op
 		return nil, 0, err
 	}
 
-	tnStore := func() DNStore {
-		return metadata.TNService{
-			ServiceID:         uuid.NewString(),
-			TxnServiceAddress: "1",
-			Shards: []metadata.TNShard{
-				{
-					TNShardRecord: metadata.TNShardRecord{ShardID: 2},
-					ReplicaID:     rand.Uint64() % 0x11235,
-				},
-			},
-		}
-	}
-
 	workspace := op.GetWorkspace().(*Transaction).writes
 
-	req, err := cnCommitRequest(workspace, tnStore(), op.SnapshotTS())
+	req, err := cnCommitRequest(workspace, mockTnStore(), op.SnapshotTS())
 	if err != nil {
 		return nil, 0, err
 	}
@@ -296,22 +320,9 @@ func MockGenCreateTableCommitRequest(ctx context.Context, schema *catalog2.Schem
 		panic("txnTbl is nil")
 	}
 
-	tnStore := func() DNStore {
-		return metadata.TNService{
-			ServiceID:         uuid.NewString(),
-			TxnServiceAddress: "1",
-			Shards: []metadata.TNShard{
-				{
-					TNShardRecord: metadata.TNShardRecord{ShardID: 2},
-					ReplicaID:     rand.Uint64() % 0x11235,
-				},
-			},
-		}
-	}
-
 	workspace := db.(*txnDatabase).getTxn().writes
 
-	req, err := cnCommitRequest(workspace, tnStore(), snapshot)
+	req, err := cnCommitRequest(workspace, mockTnStore(), snapshot)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -320,4 +331,17 @@ func MockGenCreateTableCommitRequest(ctx context.Context, schema *catalog2.Schem
 	db.(*txnDatabase).getTxn().writes = make([]Entry, 0)
 
 	return req, txnTbl.(*txnTable).tableId, nil
+}
+
+func mockTnStore() DNStore {
+	return metadata.TNService{
+		ServiceID:         uuid.NewString(),
+		TxnServiceAddress: "1",
+		Shards: []metadata.TNShard{
+			{
+				TNShardRecord: metadata.TNShardRecord{ShardID: 2},
+				ReplicaID:     rand.Uint64() % 0x11235,
+			},
+		},
+	}
 }

@@ -36,7 +36,16 @@ type TxnOperation interface {
 	//DropDatabase()
 
 	//Select()
-	//Insert()
+	//InsertRows()
 	//Delete()
 	//Update()
+}
+
+type PartitionStateStats struct {
+	DataObjets, InmemRows, Blocks, Tombstones struct {
+		Visible, Invisible int
+	}
+
+	TotalVisibleRows int
+	CheckpointCnt    int
 }

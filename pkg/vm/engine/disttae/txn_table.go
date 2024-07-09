@@ -260,7 +260,7 @@ func ForeachVisibleDataObject(
 	fn func(index int, obj logtailreplay.ObjectEntry) error,
 	executor ConcurrentExecutor,
 ) (err error) {
-	iter, err := state.NewObjectsIter(ts)
+	iter, err := state.NewObjectsIter(ts, true)
 	if err != nil {
 		return err
 	}
@@ -2278,7 +2278,7 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(
 		return false,
 			moerr.NewInternalErrorNoCtx("primary key modification is not allowed in snapshot transaction")
 	}
-	part, err := tbl.getTxn().engine.lazyLoadLatestCkp(ctx, tbl)
+	part, err := tbl.getTxn().engine.LazyLoadLatestCkp(ctx, tbl)
 	if err != nil {
 		return false, err
 	}
@@ -2531,7 +2531,7 @@ func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.Objec
 		}
 	} else {
 		objInfos = make([]logtailreplay.ObjectInfo, 0, len(objstats))
-		iter, err := state.NewObjectsIter(snapshot)
+		iter, err := state.NewObjectsIter(snapshot, true)
 		if err != nil {
 			logutil.Errorf("txn: %s, error: %v", tbl.db.op.Txn().DebugString(), err)
 			return nil, err

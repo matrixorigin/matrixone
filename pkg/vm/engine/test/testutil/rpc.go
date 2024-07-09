@@ -16,6 +16,7 @@ package testutil
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"sync"
 	"sync/atomic"
 
@@ -75,7 +76,7 @@ func (a *MockRPCAgent) CreateTable(ctx context.Context, db engine.Database,
 	return a.writeAndCommitRequest(ctx, commitReq), tblId
 }
 
-func (a *MockRPCAgent) Insert(
+func (a *MockRPCAgent) InsertRows(
 	ctx context.Context, accountId uint32, txnTable engine.Relation, databaseName string,
 	inBat *containers.Batch, m *mpool.MPool, ts timestamp.Timestamp) (response *txn.TxnResponse) {
 
@@ -84,6 +85,17 @@ func (a *MockRPCAgent) Insert(
 	commitReq, err := disttae.MockInsertRowsCommitRequest(
 		accountId, txnTable.GetDBID(ctx), databaseName, txnTable.GetTableID(ctx), txnTable.GetTableName(), bat, m, ts)
 
+	if err != nil {
+		return &txn.TxnResponse{TxnError: txn.WrapError(err, 0)}
+	}
+
+	return a.writeAndCommitRequest(ctx, commitReq)
+}
+
+func (a *MockRPCAgent) InsertDataObject(ctx context.Context, tblHandler engine.Relation, bat *batch.Batch,
+	snapshot timestamp.Timestamp) (response *txn.TxnResponse) {
+
+	commitReq, err := disttae.MockInsertDataObjectsCommitRequest(tblHandler, bat, snapshot)
 	if err != nil {
 		return &txn.TxnResponse{TxnError: txn.WrapError(err, 0)}
 	}

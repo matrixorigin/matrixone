@@ -16,6 +16,7 @@ package testutil
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -123,8 +124,7 @@ func (de *TestDisttaeEngine) NewTxnOperator(ctx context.Context,
 	return op, err
 }
 
-func (de *TestDisttaeEngine) CountStar(ctx context.Context, databaseId, tableId uint64) (totalRows uint32, err error) {
-	var state *logtailreplay.PartitionState
+func (de *TestDisttaeEngine) waitLogtail(ctx context.Context) error {
 	ts := de.Now()
 	ticker := time.NewTicker(time.Second)
 	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
@@ -134,7 +134,7 @@ func (de *TestDisttaeEngine) CountStar(ctx context.Context, databaseId, tableId 
 	for !done {
 		select {
 		case <-ctx.Done():
-			return 0, moerr.NewInternalErrorNoCtx("wait partition state waterline timeout")
+			return moerr.NewInternalErrorNoCtx("wait partition state waterline timeout")
 		case <-ticker.C:
 			latestAppliedTS := de.Engine.PushClient().LatestLogtailAppliedTime()
 			if latestAppliedTS.GreaterEq(ts) {
@@ -143,17 +143,60 @@ func (de *TestDisttaeEngine) CountStar(ctx context.Context, databaseId, tableId 
 		}
 	}
 
-	state = de.Engine.GetOrCreateLatestPart(databaseId, tableId).Snapshot()
+	return nil
+}
 
-	err = disttae.ForeachSnapshotObjects(de.Now(), func(obj logtailreplay.ObjectInfo, isCommitted bool) error {
-		totalRows += obj.Rows()
+func (de *TestDisttaeEngine) countDataObjects(state *logtailreplay.PartitionState, ts types.TS) (
+	visibleCnt, invisibleCnt int, err error) {
+
+	iter, err := state.NewObjectsIter(ts, false)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	for iter.Next() {
+		item := iter.Entry()
+		if item.Visible(ts) {
+			visibleCnt++
+		} else {
+			invisibleCnt++
+		}
+	}
+
+	return
+}
+
+func (de *TestDisttaeEngine) countDataObjectBlock(state *logtailreplay.PartitionState,
+	ts types.TS) (visibleCnt, invisibleCnt int, err error) {
+
+	iter, err := state.NewObjectsIter(ts, false)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	for iter.Next() {
+		item := iter.Entry()
+		if item.Visible(ts) {
+			visibleCnt += int(item.BlkCnt())
+		} else {
+			invisibleCnt += int(item.BlkCnt())
+		}
+	}
+
+	return
+}
+
+func (de *TestDisttaeEngine) countStarAll(state *logtailreplay.PartitionState, ts types.TS) (totalRows int, err error) {
+	err = disttae.ForeachVisibleDataObject(state, types.TimestampToTS(de.Now()), func(obj logtailreplay.ObjectEntry) error {
+		totalRows += int(obj.Rows())
 		return nil
-	}, state)
+	})
+
 	if err != nil {
 		return 0, err
 	}
 
-	iter := state.NewRowsIter(types.TimestampToTS(ts), nil, false)
+	iter := state.NewRowsIter(ts, nil, false)
 	for iter.Next() {
 		totalRows++
 	}
@@ -167,6 +210,70 @@ func (de *TestDisttaeEngine) CountStar(ctx context.Context, databaseId, tableId 
 	return totalRows, nil
 }
 
+func (de *TestDisttaeEngine) countCheckpoint(state *logtailreplay.PartitionState, ts types.TS) (cnt int, err error) {
+	ckps := state.Checkpoints()
+	for idx := range ckps {
+		cnt += len(strings.Split(ckps[idx], ";")) / 2
+	}
+
+	return
+}
+
+func (de *TestDisttaeEngine) GetPartitionStateStats(ctx context.Context, databaseId, tableId uint64) (
+	stats PartitionStateStats, err error) {
+
+	if err = de.waitLogtail(ctx); err != nil {
+		return stats, err
+	}
+
+	var (
+		cnt1, cnt2 int
+		state      *logtailreplay.PartitionState
+	)
+
+	ts := types.TimestampToTS(de.Now())
+	state = de.Engine.GetOrCreateLatestPart(databaseId, tableId).Snapshot()
+
+	// data objects
+	{
+		if cnt1, cnt2, err = de.countDataObjects(state, ts); err != nil {
+			return
+		}
+
+		stats.DataObjets.Visible = cnt1
+		stats.DataObjets.Invisible = cnt2
+	}
+
+	// all visible rows
+	{
+		if cnt1, err = de.countStarAll(state, ts); err != nil {
+			return
+		}
+		stats.TotalVisibleRows = cnt1
+	}
+
+	// block cnt
+	{
+		if cnt1, cnt2, err = de.countDataObjectBlock(state, ts); err != nil {
+			return
+		}
+
+		stats.Blocks.Visible = cnt1
+		stats.Blocks.Invisible = cnt2
+	}
+
+	// ckp count
+	{
+		if cnt1, err = de.countCheckpoint(state, ts); err != nil {
+			return
+		}
+		stats.CheckpointCnt = cnt1
+	}
+
+	// tombstones
+	return
+}
+
 func (de *TestDisttaeEngine) GetTxnOperator() client.TxnOperator {
 	return de.txnOperator
 }
@@ -177,6 +284,7 @@ func (de *TestDisttaeEngine) Now() timestamp.Timestamp {
 
 func (de *TestDisttaeEngine) Close(ctx context.Context) {
 	de.timestampWaiter.Close()
+	de.txnClient.Close()
 	close(de.logtailReceiver)
 	de.cancel()
 	de.wg.Wait()
