@@ -188,6 +188,7 @@ func (p *Partition) ConsumeSnapCkps(
 	return nil
 }
 
+// ConsumeCheckpoints load and consumes all checkpoints in the partition, if consumed, it will return immediately.
 func (p *Partition) ConsumeCheckpoints(
 	ctx context.Context,
 	fn func(
