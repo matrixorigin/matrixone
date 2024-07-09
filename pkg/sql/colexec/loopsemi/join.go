@@ -24,34 +24,34 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "loop_semi"
+const opName = "loop_semi"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (loopSemi *LoopSemi) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": ⨝ ")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) error {
+func (loopSemi *LoopSemi) Prepare(proc *process.Process) error {
 	var err error
 
-	arg.ctr = new(container)
-	arg.ctr.InitReceiver(proc, false)
+	loopSemi.ctr = new(container)
+	loopSemi.ctr.InitReceiver(proc, false)
 
-	if arg.Cond != nil {
-		arg.ctr.expr, err = colexec.NewExpressionExecutor(proc, arg.Cond)
+	if loopSemi.Cond != nil {
+		loopSemi.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopSemi.Cond)
 	}
 	return err
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (loopSemi *LoopSemi) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze(loopSemi.GetIdx(), loopSemi.GetParallelIdx(), loopSemi.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
-	ctr := arg.ctr
+	ctr := loopSemi.ctr
 	result := vm.NewCallResult()
 	for {
 		switch ctr.state {
@@ -67,7 +67,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 		case Probe:
-			if arg.ctr.buf == nil {
+			if loopSemi.ctr.buf == nil {
 				msg := ctr.ReceiveFromSingleReg(0, anal)
 				if msg.Err != nil {
 					return result, msg.Err
@@ -86,14 +86,14 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 					proc.PutBatch(bat)
 					continue
 				}
-				arg.ctr.buf = bat
-				arg.ctr.lastrow = 0
+				loopSemi.ctr.buf = bat
+				loopSemi.ctr.lastrow = 0
 			}
 
-			err := ctr.probe(arg, proc, anal, arg.GetIsFirst(), arg.GetIsLast(), &result)
-			if arg.ctr.lastrow == 0 {
-				proc.PutBatch(arg.ctr.buf)
-				arg.ctr.buf = nil
+			err := ctr.probe(loopSemi, proc, anal, loopSemi.GetIsFirst(), loopSemi.GetIsLast(), &result)
+			if loopSemi.ctr.lastrow == 0 {
+				proc.PutBatch(loopSemi.ctr.buf)
+				loopSemi.ctr.buf = nil
 			}
 			return result, err
 
@@ -125,7 +125,7 @@ func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
 	return nil
 }
 
-func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
+func (ctr *container) probe(ap *LoopSemi, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
 	anal.Input(ap.ctr.buf, isFirst)
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)

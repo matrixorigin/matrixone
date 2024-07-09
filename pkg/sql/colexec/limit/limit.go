@@ -25,46 +25,46 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "limit"
+const opName = "limit"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
-	buf.WriteString(fmt.Sprintf("limit(%v)", arg.LimitExpr))
+func (limit *Limit) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
+	buf.WriteString(fmt.Sprintf("limit(%v)", limit.LimitExpr))
 }
 
-func (arg *Argument) Prepare(proc *process.Process) error {
+func (limit *Limit) Prepare(proc *process.Process) error {
 	var err error
-	arg.ctr = new(container)
-	if arg.ctr.limitExecutor == nil {
-		arg.ctr.limitExecutor, err = colexec.NewExpressionExecutor(proc, arg.LimitExpr)
+	limit.ctr = new(container)
+	if limit.ctr.limitExecutor == nil {
+		limit.ctr.limitExecutor, err = colexec.NewExpressionExecutor(proc, limit.LimitExpr)
 		if err != nil {
 			return err
 		}
 	}
-	vec, err := arg.ctr.limitExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+	vec, err := limit.ctr.limitExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 	if err != nil {
 		return err
 	}
-	arg.ctr.limit = uint64(vector.MustFixedCol[uint64](vec)[0])
+	limit.ctr.limit = uint64(vector.MustFixedCol[uint64](vec)[0])
 
 	return nil
 }
 
 // Call returning only the first n tuples from its input
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (limit *Limit) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
-	if arg.ctr.limit == 0 {
+	anal := proc.GetAnalyze(limit.GetIdx(), limit.GetParallelIdx(), limit.GetParallelMajor())
+	if limit.ctr.limit == 0 {
 		result := vm.NewCallResult()
 		result.Batch = nil
 		result.Status = vm.ExecStop
 		return result, nil
 	}
 
-	result, err := arg.GetChildren(0).Call(proc)
+	result, err := limit.GetChildren(0).Call(proc)
 	if err != nil {
 		return result, err
 	}
@@ -76,24 +76,24 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, nil
 	}
 	bat := result.Batch
-	anal.Input(bat, arg.GetIsFirst())
+	anal.Input(bat, limit.GetIsFirst())
 
-	if arg.ctr.seen >= arg.ctr.limit {
+	if limit.ctr.seen >= limit.ctr.limit {
 		result.Batch = nil
 		result.Status = vm.ExecStop
 		return result, nil
 	}
 	length := bat.RowCount()
-	newSeen := arg.ctr.seen + uint64(length)
-	if newSeen >= arg.ctr.limit { // limit - seen
-		batch.SetLength(bat, int(arg.ctr.limit-arg.ctr.seen))
-		arg.ctr.seen = newSeen
-		anal.Output(bat, arg.GetIsLast())
+	newSeen := limit.ctr.seen + uint64(length)
+	if newSeen >= limit.ctr.limit { // limit - seen
+		batch.SetLength(bat, int(limit.ctr.limit-limit.ctr.seen))
+		limit.ctr.seen = newSeen
+		anal.Output(bat, limit.GetIsLast())
 
 		result.Status = vm.ExecStop
 		return result, nil
 	}
-	anal.Output(bat, arg.GetIsLast())
-	arg.ctr.seen = newSeen
+	anal.Output(bat, limit.GetIsLast())
+	limit.ctr.seen = newSeen
 	return result, nil
 }
