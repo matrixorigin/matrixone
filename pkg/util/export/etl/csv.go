@@ -96,7 +96,12 @@ func (w *CSVWriter) GetContent() string {
 	return w.buf.String()
 }
 
-func (w *CSVWriter) GetContentLength() int { return w.buf.Len() }
+func (w *CSVWriter) GetContentLength() int {
+	if w.buf == nil {
+		return 0
+	}
+	return w.buf.Len()
+}
 
 func (w *CSVWriter) FlushAndClose() (int, error) {
 	defer w.releaseBuffer()
