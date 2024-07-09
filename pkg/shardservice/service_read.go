@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -110,9 +111,15 @@ func (s *service) Read(
 	v2.ReplicaLocalReadCounter.Add(float64(local))
 	v2.ReplicaRemoteReadCounter.Add(float64(remote))
 
+	var buffer *morpc.Buffer
 	for _, i := range selected.local {
 		if opts.adjust != nil {
 			opts.adjust(&selected.values[i])
+		}
+
+		if buffer == nil {
+			buffer = morpc.NewBuffer()
+			defer buffer.Close()
 		}
 
 		v, e := s.doRead(
@@ -121,6 +128,7 @@ func (s *service) Read(
 			opts.readAt,
 			req.Method,
 			req.Param,
+			buffer,
 		)
 		if e == nil {
 			req.Apply(v)
@@ -157,6 +165,7 @@ func (s *service) doRead(
 	readAt timestamp.Timestamp,
 	method int,
 	param pb.ReadParam,
+	buffer *morpc.Buffer,
 ) ([]byte, error) {
 	if err := s.validReplica(
 		shard,
@@ -178,5 +187,6 @@ func (s *service) doRead(
 		method,
 		param,
 		readAt,
+		buffer,
 	)
 }

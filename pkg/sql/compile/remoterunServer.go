@@ -18,9 +18,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"runtime"
 	"time"
+
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 
@@ -33,6 +34,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -263,6 +266,7 @@ type processHelper struct {
 	sessionInfo      process.SessionInfo
 	analysisNodeList []int32
 	StmtId           uuid.UUID
+	prepareParams    *vector.Vector
 }
 
 // messageReceiverOnServer supported a series methods to write back results.
@@ -390,6 +394,7 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	proc.Base.SessionInfo = pHelper.sessionInfo
 	proc.Base.SessionInfo.StorageEngine = cnInfo.storeEngine
 	proc.Base.AnalInfos = make([]*process.AnalyzeInfo, len(pHelper.analysisNodeList))
+	proc.SetPrepareParams(pHelper.prepareParams)
 	for i := range proc.Base.AnalInfos {
 		proc.Base.AnalInfos[i] = reuse.Alloc[process.AnalyzeInfo](nil)
 		proc.Base.AnalInfos[i].NodeId = pHelper.analysisNodeList[i]
@@ -523,6 +528,18 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 		accountId:        procInfo.AccountId,
 		txnClient:        cli,
 		analysisNodeList: procInfo.GetAnalysisNodeList(),
+	}
+	if procInfo.PrepareParams.Length > 0 {
+		result.prepareParams = vector.NewVec(types.T_text.ToType())
+		result.prepareParams.SetLength(int(procInfo.PrepareParams.Length))
+		result.prepareParams.SetData(procInfo.PrepareParams.Data)
+		result.prepareParams.SetArea(procInfo.PrepareParams.Area)
+		result.prepareParams.SetupColFromData()
+		for i := range procInfo.PrepareParams.Nulls {
+			if procInfo.PrepareParams.Nulls[i] {
+				result.prepareParams.GetNulls().Add(uint64(i))
+			}
+		}
 	}
 	result.txnOperator, err = cli.NewWithSnapshot(procInfo.Snapshot)
 	if err != nil {

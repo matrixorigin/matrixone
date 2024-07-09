@@ -20,6 +20,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -58,6 +60,18 @@ func (proc *Process) BuildProcessInfo(
 		procInfo.AnalysisNodeList = make([]int32, len(proc.Base.AnalInfos))
 		for i := range procInfo.AnalysisNodeList {
 			procInfo.AnalysisNodeList[i] = proc.Base.AnalInfos[i].NodeId
+		}
+		vec := proc.GetPrepareParams()
+		if vec != nil {
+			procInfo.PrepareParams.Length = int64(vec.Length())
+			procInfo.PrepareParams.Data = make([]byte, 0, len(vec.GetData()))
+			procInfo.PrepareParams.Data = append(procInfo.PrepareParams.Data, vec.GetData()...)
+			procInfo.PrepareParams.Area = make([]byte, 0, len(vec.GetArea()))
+			procInfo.PrepareParams.Area = append(procInfo.PrepareParams.Area, vec.GetArea()...)
+			procInfo.PrepareParams.Nulls = make([]bool, procInfo.PrepareParams.Length)
+			for i := range procInfo.PrepareParams.Nulls {
+				procInfo.PrepareParams.Nulls[i] = vec.GetNulls().Contains(uint64(i))
+			}
 		}
 	}
 	{ // session info
@@ -188,6 +202,18 @@ func (c *codecService) Decode(
 	proc.Base.Lim = ConvertToProcessLimitation(value.Lim)
 	proc.Base.SessionInfo = sessionInfo
 	proc.Base.SessionInfo.StorageEngine = c.engine
+	if value.PrepareParams.Length > 0 {
+		proc.Base.prepareParams = vector.NewVec(types.T_text.ToType())
+		proc.Base.prepareParams.SetLength(int(value.PrepareParams.Length))
+		proc.Base.prepareParams.SetData(value.PrepareParams.Data)
+		proc.Base.prepareParams.SetArea(value.PrepareParams.Area)
+		proc.Base.prepareParams.SetupColFromData()
+		for i := range value.PrepareParams.Nulls {
+			if value.PrepareParams.Nulls[i] {
+				proc.Base.prepareParams.GetNulls().Add(uint64(i))
+			}
+		}
+	}
 	return proc, nil
 }
 
