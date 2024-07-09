@@ -374,4 +374,11 @@ func (s *ShuffleRange) Eval() {
 			return
 		}
 	}
+	//release memory in shuffleRange
+	s.Mins = nil
+	s.Maxs = nil
+	s.Rows = nil
+	s.Nulls = nil
+	s.Flags = nil
+	s.Tree = nil
 }
