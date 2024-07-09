@@ -16,16 +16,14 @@ package test
 
 import (
 	"context"
-	"strconv"
-	"testing"
-	"time"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	testutil "github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
 	"github.com/stretchr/testify/require"
+	"strconv"
+	"testing"
 )
 
 func Test_CreateDataBase(t *testing.T) {
@@ -123,7 +121,7 @@ func Test_InsertRows(t *testing.T) {
 	resp, tableId = rpcAgent.CreateTable(ctx, db, schema, txnOp.SnapshotTS())
 	require.Nil(t, resp.TxnError)
 
-	err = disttaeEngine.Engine.PClient.TryToSubscribeTable(ctx, databaseId, tableId)
+	err = disttaeEngine.Engine.PushClient().TryToSubscribeTable(ctx, databaseId, tableId)
 	require.Nil(t, err)
 
 	entry, err := taeHandler.GetDB().Catalog.GetDatabaseByID(databaseId)
@@ -144,8 +142,6 @@ func Test_InsertRows(t *testing.T) {
 
 	rpcAgent.Insert(ctx, accountId, rel, databaseName, bat, mp, txnOp.SnapshotTS())
 	require.Nil(t, resp.TxnError)
-
-	time.Sleep(time.Second)
 
 	rows, err := disttaeEngine.CountStar(ctx, uint64(databaseId), uint64(tableId))
 	require.Nil(t, err)

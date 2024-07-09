@@ -29,6 +29,11 @@ type testClientSession struct {
 	tailReceiveQueue chan morpc.Message
 }
 
+func (cs *testClientSession) SessionCtx() context.Context {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (cs *testClientSession) Close() error { return nil }
 func (cs *testClientSession) Write(ctx context.Context, response morpc.Message) error {
 	cs.tailReceiveQueue <- response

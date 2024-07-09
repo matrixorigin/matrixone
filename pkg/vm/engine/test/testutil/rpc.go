@@ -10,7 +10,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	newdisttae "github.com/matrixorigin/matrixone/pkg/vm/engine/newdisttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
@@ -40,7 +40,7 @@ type MockRPCAgent struct {
 func (a *MockRPCAgent) CreateDatabase(ctx context.Context, databaseName string,
 	e engine.Engine, op client.TxnOperator) (response *txn.TxnResponse, dbId uint64) {
 
-	commitReq, dbId, err := newdisttae.MockGenCreateDatabaseCommitRequest(ctx, e, op, databaseName)
+	commitReq, dbId, err := disttae.MockGenCreateDatabaseCommitRequest(ctx, e, op, databaseName)
 	if err != nil {
 		return &txn.TxnResponse{TxnError: txn.WrapError(err, moerr.ErrTxnError)}, 0
 	}
@@ -51,7 +51,7 @@ func (a *MockRPCAgent) CreateDatabase(ctx context.Context, databaseName string,
 func (a *MockRPCAgent) CreateTable(ctx context.Context, db engine.Database,
 	schema *catalog.Schema, ts timestamp.Timestamp) (response *txn.TxnResponse, tableId uint64) {
 
-	commitReq, tblId, err := newdisttae.MockGenCreateTableCommitRequest(ctx, schema, db, ts)
+	commitReq, tblId, err := disttae.MockGenCreateTableCommitRequest(ctx, schema, db, ts)
 
 	if err != nil {
 		return &txn.TxnResponse{TxnError: txn.WrapError(err, 0)}, 0
@@ -66,7 +66,7 @@ func (a *MockRPCAgent) Insert(
 
 	bat := containers.ToCNBatch(inBat)
 
-	commitReq, err := newdisttae.MockInsertRowsCommitRequest(
+	commitReq, err := disttae.MockInsertRowsCommitRequest(
 		accountId, txnTable.GetDBID(ctx), databaseName, txnTable.GetTableID(ctx), txnTable.GetTableName(), bat, m, ts)
 
 	if err != nil {

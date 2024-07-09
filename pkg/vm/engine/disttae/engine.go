@@ -132,6 +132,7 @@ func New(
 		panic(err)
 	}
 
+	e.pClient.LogtailRPCClientFactory = DefaultNewRpcStreamToTnLogTailService
 	return e
 }
 

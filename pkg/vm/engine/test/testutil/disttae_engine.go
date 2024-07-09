@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -75,7 +76,7 @@ func NewTestDisttaeEngine(ctx context.Context, mp *mpool.MPool,
 	colexec.NewServer(hakeeper)
 
 	de.Engine = disttae.New(ctx, mp, fs, de.txnClient, hakeeper, nil, 0)
-	de.Engine.PClient.LogtailRPCClientFactory = rpcAgent.MockLogtailRPCClientFactory
+	de.Engine.PushClient().LogtailRPCClientFactory = rpcAgent.MockLogtailRPCClientFactory
 
 	go func() {
 		for {
@@ -122,19 +123,46 @@ func (de *TestDisttaeEngine) NewTxnOperator(ctx context.Context,
 }
 
 func (de *TestDisttaeEngine) CountStar(ctx context.Context, databaseId, tableId uint64) (totalRows uint32, err error) {
-	ts := types.TimestampToTS(de.Now())
-	state := de.Engine.GetOrCreateLatestPart(databaseId, tableId).Snapshot()
-	disttae.ForeachSnapshotObjects(de.Now(), func(obj logtailreplay.ObjectInfo, isCommitted bool) error {
+	var state *logtailreplay.PartitionState
+	ts := de.Now()
+	ticker := time.NewTicker(time.Second)
+	ctx, cancel := context.WithTimeout(ctx, time.Second*15)
+	defer cancel()
+
+	done := false
+	for !done {
+		select {
+		case <-ctx.Done():
+			return 0, moerr.NewInternalErrorNoCtx("wait partition state waterline timeout")
+		case <-ticker.C:
+			latestAppliedTS := de.Engine.PushClient().LatestLogtailAppliedTime()
+			if latestAppliedTS.GreaterEq(ts) {
+				done = true
+				break
+			}
+		}
+	}
+
+	state = de.Engine.GetOrCreateLatestPart(databaseId, tableId).Snapshot()
+
+	err = disttae.ForeachSnapshotObjects(de.Now(), func(obj logtailreplay.ObjectInfo, isCommitted bool) error {
 		totalRows += obj.Rows()
 		return nil
 	}, state)
+	if err != nil {
+		return 0, err
+	}
 
-	iter := state.NewRowsIter(ts, nil, false)
+	iter := state.NewRowsIter(types.TimestampToTS(ts), nil, false)
 	for iter.Next() {
 		totalRows++
 	}
 
-	iter.Close()
+	if err = iter.Close(); err != nil {
+		return 0, err
+	}
+
+	// how to get deletes?
 
 	return totalRows, nil
 }

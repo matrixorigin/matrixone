@@ -16,11 +16,11 @@ package testutil
 
 import (
 	"context"
-	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -113,7 +113,7 @@ func InitTestDB(ctx context.Context, moduleName string, t *testing.T, opts *opti
 			ckp := item.(*checkpoint.CheckpointEntry)
 			end := ckp.GetEnd()
 			return !end.GreaterEq(&minTS)
-		})
+		}, "testdb")
 
 	return handle
 }
@@ -131,11 +131,9 @@ func (ts *TestTxnStorage) txnRequestListener(
 	}
 
 	for {
-		fmt.Println("listen txn request")
 		select {
 		case reqs, ok := <-txnRequestReceiver:
 			if !ok {
-				fmt.Println("exit listener")
 				return
 			}
 
@@ -149,7 +147,7 @@ func (ts *TestTxnStorage) txnRequestListener(
 					response.TxnError = txn.WrapError(err, moerr.ErrTAEWrite)
 
 					if !sendResponse(response) {
-						fmt.Printf("txnStorage.Write: send txn response failed: %v\n", response)
+						logutil.Errorf("txnStorage.Write: send txn response failed: %v\n", response)
 						break
 					}
 				}
@@ -160,7 +158,7 @@ func (ts *TestTxnStorage) txnRequestListener(
 				}
 
 				if !sendResponse(response) {
-					fmt.Printf("txnStorage.Commit: send txn response failed: %v\n", response)
+					logutil.Errorf("txnStorage.Commit: send txn response failed: %v\n", response)
 				}
 
 				if err != nil {
