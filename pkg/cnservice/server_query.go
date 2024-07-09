@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -81,7 +82,7 @@ func (s *service) initQueryCommandHandler() {
 	s.queryService.AddHandleFunc(query.CmdMethod_GetReplicaCount, s.handleGetReplicaCount, false)
 }
 
-func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *query.Response) error {
+func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
 	if req == nil || req.KillConnRequest == nil {
 		return moerr.NewInternalError(ctx, "bad request")
 	}
@@ -98,7 +99,7 @@ func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *
 	return nil
 }
 
-func (s *service) handleAlterAccount(ctx context.Context, req *query.Request, resp *query.Response) error {
+func (s *service) handleAlterAccount(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
 	if req == nil || req.AlterAccountRequest == nil {
 		return moerr.NewInternalError(ctx, "bad request")
 	}
@@ -115,7 +116,7 @@ func (s *service) handleAlterAccount(ctx context.Context, req *query.Request, re
 	return nil
 }
 
-func (s *service) handleTraceSpan(ctx context.Context, req *query.Request, resp *query.Response) error {
+func (s *service) handleTraceSpan(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
 	resp.TraceSpanResponse = new(query.TraceSpanResponse)
 	resp.TraceSpanResponse.Resp = ctl.SelfProcess(
 		req.TraceSpanRequest.Cmd, req.TraceSpanRequest.Spans, req.TraceSpanRequest.Threshold)
@@ -123,7 +124,7 @@ func (s *service) handleTraceSpan(ctx context.Context, req *query.Request, resp 
 }
 
 // handleGetLockInfo sends the lock info on current cn to another cn that needs.
-func (s *service) handleGetLockInfo(ctx context.Context, req *query.Request, resp *query.Response) error {
+func (s *service) handleGetLockInfo(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
 	resp.GetLockInfoResponse = new(query.GetLockInfoResponse)
 
 	//get lock info from lock service in current cn
@@ -159,7 +160,7 @@ func (s *service) handleGetLockInfo(ctx context.Context, req *query.Request, res
 	return nil
 }
 
-func (s *service) handleGetTxnInfo(ctx context.Context, req *query.Request, resp *query.Response) error {
+func (s *service) handleGetTxnInfo(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
 	resp.GetTxnInfoResponse = new(query.GetTxnInfoResponse)
 	txns := make([]*query.TxnInfo, 0)
 
@@ -182,18 +183,18 @@ func (s *service) handleGetTxnInfo(ctx context.Context, req *query.Request, resp
 	return nil
 }
 
-func (s *service) handleSyncCommit(ctx context.Context, req *query.Request, resp *query.Response) error {
+func (s *service) handleSyncCommit(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
 	s._txnClient.SyncLatestCommitTS(req.SycnCommit.LatestCommitTS)
 	return nil
 }
 
-func (s *service) handleGetCommit(ctx context.Context, req *query.Request, resp *query.Response) error {
+func (s *service) handleGetCommit(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
 	resp.GetCommit = new(query.GetCommitResponse)
 	resp.GetCommit.CurrentCommitTS = s._txnClient.GetLatestCommitTS()
 	return nil
 }
 
-func (s *service) handleShowProcessList(ctx context.Context, req *query.Request, resp *query.Response) error {
+func (s *service) handleShowProcessList(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
 	if req.ShowProcessListRequest == nil {
 		return moerr.NewInternalError(ctx, "bad request")
 	}
@@ -209,7 +210,7 @@ func (s *service) handleShowProcessList(ctx context.Context, req *query.Request,
 	return nil
 }
 
-func (s *service) handleRunTask(ctx context.Context, req *query.Request, resp *query.Response) error {
+func (s *service) handleRunTask(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
 	if req.RunTask == nil {
 		return moerr.NewInternalError(ctx, "bad request")
 	}
@@ -306,7 +307,7 @@ func copyTxnInfo(src client.Lock) *query.TxnLockInfo {
 	return dst
 }
 
-func (s *service) handleGetCacheInfo(ctx context.Context, req *query.Request, resp *query.Response) error {
+func (s *service) handleGetCacheInfo(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
 	resp.GetCacheInfoResponse = new(query.GetCacheInfoResponse)
 
 	perfcounter.GetCacheStats(func(infos []*query.CacheInfo) {
@@ -323,7 +324,9 @@ func (s *service) handleGetCacheInfo(ctx context.Context, req *query.Request, re
 func (s *service) handleRemoveRemoteLockTable(
 	ctx context.Context,
 	req *query.Request,
-	resp *query.Response) error {
+	resp *query.Response,
+	_ *morpc.Buffer,
+) error {
 	removed, err := s.lockService.CloseRemoteLockTable(
 		req.RemoveRemoteLockTable.GroupID,
 		req.RemoveRemoteLockTable.TableID,
@@ -339,7 +342,7 @@ func (s *service) handleRemoveRemoteLockTable(
 	return nil
 }
 
-func (s *service) handleUnsubscribeTable(ctx context.Context, req *query.Request, resp *query.Response) error {
+func (s *service) handleUnsubscribeTable(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
 	if req.UnsubscribeTable == nil {
 		return moerr.NewInternalError(ctx, "bad request")
 	}
@@ -355,7 +358,7 @@ func (s *service) handleUnsubscribeTable(ctx context.Context, req *query.Request
 }
 
 // handleGetCacheData reads the cache data from the local data cache in fileservice.
-func (s *service) handleGetCacheData(ctx context.Context, req *query.Request, resp *query.Response) error {
+func (s *service) handleGetCacheData(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
 	sharedFS, err := fileservice.Get[fileservice.FileService](s.fileService, defines.SharedFileServiceName)
 	if err != nil {
 		return err
@@ -371,7 +374,7 @@ func (s *service) handleGetCacheData(ctx context.Context, req *query.Request, re
 	return nil
 }
 
-func (s *service) handleGetStatsInfo(ctx context.Context, req *query.Request, resp *query.Response) error {
+func (s *service) handleGetStatsInfo(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
 	if req.GetStatsInfoRequest == nil {
 		return moerr.NewInternalError(ctx, "bad request")
 	}
@@ -385,7 +388,7 @@ func (s *service) handleGetStatsInfo(ctx context.Context, req *query.Request, re
 
 // handleGetPipelineInfo handles the GetPipelineInfoRequest and respond with
 // the pipeline info in the server.
-func (s *service) handleGetPipelineInfo(ctx context.Context, req *query.Request, resp *query.Response) error {
+func (s *service) handleGetPipelineInfo(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
 	if req.GetPipelineInfoRequest == nil {
 		return moerr.NewInternalError(ctx, "bad request")
 	}
@@ -397,7 +400,7 @@ func (s *service) handleGetPipelineInfo(ctx context.Context, req *query.Request,
 }
 
 func (s *service) handleMigrateConnFrom(
-	ctx context.Context, req *query.Request, resp *query.Response,
+	ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer,
 ) error {
 	if req.MigrateConnFromRequest == nil {
 		return moerr.NewInternalError(ctx, "bad request")
@@ -412,7 +415,7 @@ func (s *service) handleMigrateConnFrom(
 }
 
 func (s *service) handleMigrateConnTo(
-	ctx context.Context, req *query.Request, resp *query.Response,
+	ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer,
 ) error {
 	if req.MigrateConnToRequest == nil {
 		return moerr.NewInternalError(ctx, "bad request")
@@ -437,6 +440,7 @@ func (s *service) handleReloadAutoIncrementCache(
 	ctx context.Context,
 	req *query.Request,
 	resp *query.Response,
+	_ *morpc.Buffer,
 ) error {
 	return s.incrservice.Reload(
 		ctx,
@@ -448,6 +452,7 @@ func (s *service) handleGetReplicaCount(
 	ctx context.Context,
 	req *query.Request,
 	resp *query.Response,
+	_ *morpc.Buffer,
 ) error {
 	resp.GetReplicaCount.Count = s.shardService.ReplicaCount()
 	return nil

@@ -60,7 +60,7 @@ func runTestWithQueryService(t *testing.T, cn metadata.CNService, fn func(qc qcl
 	qt, err := qclient.NewQueryClient(cn.ServiceID, morpc.Config{})
 	assert.NoError(t, err)
 
-	qs.AddHandleFunc(pb.CmdMethod_MigrateConnFrom, func(ctx context.Context, req *pb.Request, resp *pb.Response) error {
+	qs.AddHandleFunc(pb.CmdMethod_MigrateConnFrom, func(ctx context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
 		if req.MigrateConnFromRequest == nil {
 			return moerr.NewInternalError(ctx, "bad request")
 		}
@@ -69,7 +69,7 @@ func runTestWithQueryService(t *testing.T, cn metadata.CNService, fn func(qc qcl
 		}
 		return nil
 	}, false)
-	qs.AddHandleFunc(pb.CmdMethod_MigrateConnTo, func(ctx context.Context, req *pb.Request, resp *pb.Response) error {
+	qs.AddHandleFunc(pb.CmdMethod_MigrateConnTo, func(ctx context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
 		if req.MigrateConnToRequest == nil {
 			return moerr.NewInternalError(ctx, "bad request")
 		}
