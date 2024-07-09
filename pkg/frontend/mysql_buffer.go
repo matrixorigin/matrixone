@@ -152,7 +152,7 @@ func (c *Conn) Read() ([]byte, error) {
 	payloads := make([][]byte, 0)
 	var finalPayload []byte
 	var err error
-	defer func(finalPayload []byte, payloads [][]byte, err error) {
+	defer func(payloads [][]byte, err error) {
 
 		if payloads != nil {
 			for _, payload := range payloads {
@@ -160,7 +160,7 @@ func (c *Conn) Read() ([]byte, error) {
 			}
 		}
 
-	}(finalPayload, payloads, err)
+	}(payloads, err)
 
 	for {
 		if !c.connected {
