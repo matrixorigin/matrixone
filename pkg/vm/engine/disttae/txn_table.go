@@ -1966,6 +1966,9 @@ func (tbl *txnTable) getPartitionState(
 			if err != nil {
 				return nil, err
 			}
+			if ps == nil {
+				ps = tbl.getTxn().engine.getOrCreateLatestPart(tbl.db.databaseId, tbl.tableId).Snapshot()
+			}
 			tbl._partState.Store(ps)
 		}
 		return tbl._partState.Load(), nil

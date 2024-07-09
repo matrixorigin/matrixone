@@ -336,6 +336,8 @@ func (c *PushClient) toSubscribeTable(
 
 		case Subscribed:
 			//if table has been subscribed, return the ps.
+			logutil.Infof("%s subscribe tbl[db: %d, tbl: %d, %s] succeed",
+				logTag, tbl.db.databaseId, tbl.tableId, tbl.tableName)
 			return
 
 		case Unsubscribed:
@@ -1048,6 +1050,16 @@ func (c *PushClient) isNotUnsubscribing(ctx context.Context, dbId, tblId uint64)
 	return true, Subscribing, nil
 }
 
+func (s *subscribedTable) setTableSubscribed(dbId, tblId uint64) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	s.m[SubTableID{DatabaseID: dbId, TableID: tblId}] = SubTableStatus{
+		SubState:   Subscribed,
+		LatestTime: time.Now(),
+	}
+	logutil.Infof("%s subscribe tbl[db: %d, tbl: %d] succeed", logTag, dbId, tblId)
+}
+
 func (s *subscribedTable) setTableSubscribe(dbId, tblId uint64) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
@@ -1055,7 +1067,7 @@ func (s *subscribedTable) setTableSubscribe(dbId, tblId uint64) {
 		SubState:   SubRspReceived,
 		LatestTime: time.Now(),
 	}
-	logutil.Infof("%s subscribe tbl[db: %d, tbl: %d] succeed", logTag, dbId, tblId)
+	logutil.Infof("%s subscribe tbl[db: %d, tbl: %d] resp received", logTag, dbId, tblId)
 }
 
 func (s *subscribedTable) setTableUnsubscribe(dbId, tblId uint64) {
@@ -1372,7 +1384,7 @@ func dispatchSubscribeResponse(
 			c := e.getLatestCatalogCache()
 			c.UpdateDuration(types.TS{}, types.MaxTs())
 		}
-		e.pClient.subscribed.setTableSubscribe(tbl.DbId, tbl.TbId)
+		e.pClient.subscribed.setTableSubscribed(tbl.DbId, tbl.TbId)
 	} else {
 		routineIndex := tbl.TbId % consumerNumber
 		recRoutines[routineIndex].sendSubscribeResponse(ctx, response, receiveAt)
