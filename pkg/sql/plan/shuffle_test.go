@@ -183,6 +183,7 @@ func TestShuffleRange(t *testing.T) {
 	shufflerange.UpdateString([]byte("6000"), []byte("7000"), 1000, 1)
 	shufflerange.UpdateString([]byte("8000"), []byte("9000"), 1000, 1)
 	shufflerange.Eval()
+	shufflerange.ReleaseUnused()
 }
 
 func TestRangeShuffleSlice(t *testing.T) {
