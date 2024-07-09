@@ -35,7 +35,7 @@ type QueryService interface {
 	// Close closes the service.
 	Close() error
 	// AddHandleFunc add message handler.
-	AddHandleFunc(method pb.CmdMethod, h func(context.Context, *pb.Request, *pb.Response) error, async bool)
+	AddHandleFunc(method pb.CmdMethod, h func(context.Context, *pb.Request, *pb.Response, *morpc.Buffer) error, async bool)
 	// SetReleaseFunc sets the release handler.
 	SetReleaseFunc(resp *pb.Response, f func())
 }
@@ -89,7 +89,7 @@ func NewQueryService(serviceID string, address string, cfg morpc.Config) (QueryS
 }
 
 // AddHandleFunc implements the QueryService interface.
-func (s *queryService) AddHandleFunc(method pb.CmdMethod, h func(context.Context, *pb.Request, *pb.Response) error, async bool) {
+func (s *queryService) AddHandleFunc(method pb.CmdMethod, h func(context.Context, *pb.Request, *pb.Response, *morpc.Buffer) error, async bool) {
 	s.handler.RegisterMethod(uint32(method), h, async)
 }
 

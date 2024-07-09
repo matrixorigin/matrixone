@@ -130,7 +130,7 @@ func runTestWithTwoFileServices(t *testing.T, fn func(sf1 *cacheFs, sf2 *cacheFs
 		qs, err := queryservice.NewQueryService("", selfAddr, morpc.Config{})
 		assert.NoError(t, err)
 		qs.AddHandleFunc(query.CmdMethod_GetCacheData,
-			func(ctx context.Context, req *query.Request, resp *query.Response) error {
+			func(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
 				wr := &query.WrappedResponse{
 					Response: resp,
 				}
