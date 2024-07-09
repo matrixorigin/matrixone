@@ -33,7 +33,7 @@ func runBuildSelectByBinder(stmtType plan.Query_StatementType, ctx CompilerConte
 		v2.TxnStatementBuildSelectHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	builder := NewQueryBuilder(stmtType, ctx, isPrepareStmt, skipStats)
+	builder := NewQueryBuilder(stmtType, ctx, isPrepareStmt, true)
 	bindCtx := NewBindContext(builder, nil)
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()
@@ -46,6 +46,7 @@ func runBuildSelectByBinder(stmtType plan.Query_StatementType, ctx CompilerConte
 	ctx.SetViews(bindCtx.views)
 
 	builder.qry.Steps = append(builder.qry.Steps, rootId)
+	builder.skipStats = skipStats
 	query, err := builder.createQuery()
 	if err != nil {
 		return nil, err
