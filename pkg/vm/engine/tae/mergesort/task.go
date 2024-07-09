@@ -44,6 +44,7 @@ type DisposableVecPool interface {
 
 type MergeTaskHost interface {
 	DisposableVecPool
+	Name() string
 	HostHintName() string
 	GetCommitEntry() *api.MergeCommitEntry
 	PrepareNewWriter() *blockio.BlockWriter
@@ -107,31 +108,32 @@ func GetNewWriter(
 
 func DoMergeAndWrite(
 	ctx context.Context,
+	txnInfo string,
 	sortkeyPos int,
 	mergehost MergeTaskHost,
 ) (err error) {
 	now := time.Now()
-	/*out args, keep the transfer infomation*/
+	/*out args, keep the transfer information*/
 	commitEntry := mergehost.GetCommitEntry()
 	fromObjsDesc := ""
 	for _, o := range commitEntry.MergedObjs {
 		obj := objectio.ObjectStats(o)
 		fromObjsDesc = fmt.Sprintf("%s%s,", fromObjsDesc, common.ShortObjId(*obj.ObjectName().ObjectId()))
 	}
-	tableDesc := fmt.Sprintf("%v-%v", commitEntry.TblId, commitEntry.TableName)
-	logutil.Info("[Start] Mergeblocks",
-		zap.String("table", tableDesc),
-		zap.String("on", mergehost.HostHintName()),
-		zap.String("txn-start-ts", commitEntry.StartTs.DebugString()),
-		zap.String("from-objs", fromObjsDesc),
+	logutil.Info(
+		"[MERGE-START]",
+		zap.String("task", mergehost.Name()),
+		common.AnyField("txn-info", txnInfo),
+		common.AnyField("host", mergehost.HostHintName()),
+		common.AnyField("timestamp", commitEntry.StartTs.DebugString()),
+		common.AnyField("objs", fromObjsDesc),
 	)
-	phaseDesc := "prepare data"
 	defer func() {
 		if err != nil {
-			logutil.Error("[DoneWithErr] Mergeblocks",
-				zap.String("table", tableDesc),
+			logutil.Error(
+				"[MERGE-ERROR]",
+				zap.String("task", mergehost.Name()),
 				zap.Error(err),
-				zap.String("phase", phaseDesc),
 			)
 		}
 	}()
@@ -142,7 +144,7 @@ func DoMergeAndWrite(
 	}
 
 	if hasSortKey {
-		if err := mergeObjs(ctx, mergehost, sortkeyPos); err != nil {
+		if err = mergeObjs(ctx, mergehost, sortkeyPos); err != nil {
 			return err
 		}
 	} else {
@@ -160,13 +162,12 @@ func DoMergeAndWrite(
 			obj.Rows())
 	}
 
-	logutil.Info("[Done] Mergeblocks",
-		zap.String("table", tableDesc),
-		zap.String("on", mergehost.HostHintName()),
-		zap.String("txn-start-ts", commitEntry.StartTs.DebugString()),
-		zap.String("to-objs", toObjsDesc),
-		common.DurationField(time.Since(now)))
-
+	logutil.Info(
+		"[MERGE-END]",
+		zap.String("task", mergehost.Name()),
+		common.AnyField("to-objs", toObjsDesc),
+		common.DurationField(time.Since(now)),
+	)
 	return nil
 }
 
@@ -200,7 +201,7 @@ func AddSortPhaseMapping(b *api.BlkTransferBooking, idx int, originRowCnt int, m
 		}
 		// mapping sortedVec[i] = originalVec[sortMapping[i]]
 		// transpose it, originalVec[sortMapping[i]] = sortedVec[i]
-		// [9 4 8 5 2 6 0 7 3 1](orignVec)  -> [6 9 4 8 1 3 5 7 2 0](sortedVec)
+		// [9 4 8 5 2 6 0 7 3 1](originalVec)  -> [6 9 4 8 1 3 5 7 2 0](sortedVec)
 		// [0 1 2 3 4 5 6 7 8 9](sortedVec) -> [0 1 2 3 4 5 6 7 8 9](originalVec)
 		// TODO: use a more efficient way to transpose, in place
 		transposedMapping := make([]int64, len(mapping))

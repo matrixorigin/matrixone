@@ -798,6 +798,9 @@ func (blk *baseObject) TryDeleteByDeltaloc(
 	}
 	blk.Lock()
 	defer blk.Unlock()
+	if blk.meta.HasDropIntentLocked() {
+		return
+	}
 	blkMVCC := blk.getOrCreateMVCC().GetOrCreateDeleteChainLocked(blkID)
 	return blkMVCC.TryDeleteByDeltalocLocked(txn, deltaLoc, true)
 }

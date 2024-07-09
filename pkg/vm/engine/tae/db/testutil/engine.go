@@ -17,6 +17,7 @@ package testutil
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 	"strconv"
 	"strings"
 	"testing"
@@ -102,7 +103,7 @@ func (e *TestEngine) Restart(ctx context.Context) {
 			//logutil.Infof("min: %v, checkpoint: %v", min.ToString(), checkpoint.GetStart().ToString())
 			end := ckp.GetEnd()
 			return !end.GreaterEq(&min)
-		})
+		}, gc.CheckerKeyMinTS)
 	assert.NoError(e.t, err)
 }
 func (e *TestEngine) RestartDisableGC(ctx context.Context) {
@@ -118,7 +119,7 @@ func (e *TestEngine) RestartDisableGC(ctx context.Context) {
 			//logutil.Infof("min: %v, checkpoint: %v", min.ToString(), checkpoint.GetStart().ToString())
 			end := ckp.GetEnd()
 			return !end.GreaterEq(&min)
-		})
+		}, gc.CheckerKeyMinTS)
 	assert.NoError(e.t, err)
 }
 
@@ -378,7 +379,7 @@ func InitTestDBWithDir(
 			//logutil.Infof("min: %v, checkpoint: %v", min.ToString(), checkpoint.GetStart().ToString())
 			end := ckp.GetEnd()
 			return !end.GreaterEq(&min)
-		})
+		}, gc.CheckerKeyMinTS)
 	return db
 }
 
@@ -398,7 +399,7 @@ func InitTestDB(
 			//logutil.Infof("min: %v, checkpoint: %v", min.ToString(), checkpoint.GetStart().ToString())
 			end := ckp.GetEnd()
 			return !end.GreaterEq(&min)
-		})
+		}, gc.CheckerKeyMinTS)
 	return db
 }
 
