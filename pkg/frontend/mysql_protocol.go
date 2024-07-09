@@ -787,6 +787,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 
 	if numParams > 0 {
 		var nullBitmaps []byte
+		var paramTypes []byte
 		nullBitmapLen := (numParams + 7) >> 3
 		nullBitmaps, pos, ok = mp.readCountOfBytes(data, pos, nullBitmapLen)
 		if !ok {
@@ -799,7 +800,9 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 
 			// Just the first StmtExecute packet contain parameters type,
 			// we need save it for further use.
-			stmt.ParamTypes, pos, ok = mp.readCountOfBytes(data, pos, numParams<<1)
+			paramTypes, pos, ok = mp.readCountOfBytes(data, pos, numParams<<1)
+			stmt.ParamTypes = make([]byte, len(paramTypes))
+			copy(stmt.ParamTypes, paramTypes)
 			if !ok {
 				return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 			}

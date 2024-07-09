@@ -234,11 +234,15 @@ func (prepareStmt *PrepareStmt) Close() {
 		}
 	}
 	if prepareStmt.compile != nil {
+		prepareStmt.compile.SetIsPrepare(false)
 		prepareStmt.compile.Release()
 		prepareStmt.compile = nil
 	}
 	if prepareStmt.PrepareStmt != nil {
 		prepareStmt.PrepareStmt.Free()
+	}
+	if prepareStmt.ParamTypes != nil {
+		prepareStmt.PrepareStmt = nil
 	}
 }
 
