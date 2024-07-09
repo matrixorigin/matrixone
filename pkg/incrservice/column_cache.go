@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"go.uber.org/zap"
 	"golang.org/x/exp/constraints"
@@ -56,6 +57,7 @@ type columnCache struct {
 	concurrencyApply atomic.Uint64
 	allocateCount    atomic.Uint64
 	committed        bool
+	lastAllocateAt   timestamp.Timestamp
 }
 
 func newColumnCache(
@@ -366,11 +368,11 @@ func (col *columnCache) preAllocate(
 		col.col.ColName,
 		count,
 		txnOp,
-		func(from, to uint64, err error) {
+		func(from, to uint64, lastAllocateAt timestamp.Timestamp, err error) {
 			if err == nil {
-				col.applyAllocate(from, to, err)
+				col.applyAllocate(from, to, lastAllocateAt, err)
 			} else {
-				col.applyAllocate(0, 0, err)
+				col.applyAllocate(0, 0, timestamp.Timestamp{}, err)
 			}
 		})
 }
@@ -396,9 +398,10 @@ func (col *columnCache) allocateLocked(
 	}
 
 	var from, to uint64
+	var AllocateAt timestamp.Timestamp
 	var err error
 	for i := 0; i < maxRetryTimes; i++ {
-		from, to, err = col.allocator.allocate(
+		from, to, AllocateAt, err = col.allocator.allocate(
 			ctx,
 			tableID,
 			col.col.ColName,
@@ -414,7 +417,7 @@ func (col *columnCache) allocateLocked(
 			zap.Uint64("table", col.col.TableID),
 			zap.String("col", col.col.ColName))
 	}
-	col.applyAllocateLocked(from, to, err)
+	col.applyAllocateLocked(from, to, AllocateAt, err)
 	return err
 }
 
@@ -439,16 +442,18 @@ func (col *columnCache) maybeAllocate(ctx context.Context, tableID uint64, txnOp
 func (col *columnCache) applyAllocate(
 	from uint64,
 	to uint64,
+	AllocateAt timestamp.Timestamp,
 	err error) {
 	col.Lock()
 	defer col.Unlock()
 
-	col.applyAllocateLocked(from, to, err)
+	col.applyAllocateLocked(from, to, AllocateAt, err)
 }
 
 func (col *columnCache) applyAllocateLocked(
 	from uint64,
 	to uint64,
+	AllocateAt timestamp.Timestamp,
 	err error) {
 	if err != nil {
 		select {
@@ -459,6 +464,15 @@ func (col *columnCache) applyAllocateLocked(
 
 	if to > from {
 		col.ranges.add(from, to)
+		if col.ranges.minCanAdded < to {
+			if col.lastAllocateAt.IsEmpty() {
+				col.lastAllocateAt = AllocateAt
+			} else {
+				if col.lastAllocateAt.Less(AllocateAt) {
+					col.lastAllocateAt = AllocateAt
+				}
+			}
+		}
 		if col.logger.Enabled(zap.DebugLevel) {
 			col.logger.Debug("new range added",
 				zap.String("col", col.col.ColName),
