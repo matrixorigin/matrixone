@@ -95,8 +95,6 @@ func (s *memStore) GetColumns(
 	txnOp client.TxnOperator) ([]AutoColumn, error) {
 	s.Lock()
 	defer s.Unlock()
-	s.Lock()
-	defer s.Unlock()
 	m := s.caches
 	if txnOp != nil {
 		m = s.uncommitted[string(txnOp.Txn().ID)]
