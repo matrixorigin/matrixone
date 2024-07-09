@@ -200,7 +200,7 @@ func (mc *mockMOCluster) GetTNService(
 	selector clusterservice.Selector, apply func(metadata.TNService) bool) {
 }
 func (mc *mockMOCluster) GetAllTNServices() []metadata.TNService {
-	return []metadata.TNService{metadata.TNService{LogTailServiceAddress: disttae.FakeLogtailServerAddress}}
+	return []metadata.TNService{{LogTailServiceAddress: disttae.FakeLogtailServerAddress}}
 }
 func (mc *mockMOCluster) GetCNServiceWithoutWorkingState(
 	selector clusterservice.Selector, apply func(metadata.CNService) bool) {
