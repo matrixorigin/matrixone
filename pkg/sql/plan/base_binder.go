@@ -1228,7 +1228,9 @@ func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name s
 
 		lit0 := arg1.GetLit()
 		if arg1.Typ.Id == int32(types.T_any) || lit0 == nil {
-			goto between_fallback
+			if !containsDynamicParam(arg1) {
+				goto between_fallback
+			}
 		}
 
 		arg2, err := ConstantFold(batch.EmptyForConstFoldBatch, fnArgs[2], proc, false, true)
@@ -1237,16 +1239,20 @@ func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name s
 		}
 		fnArgs[2] = arg2
 
-		lit1 := arg1.GetLit()
-		if arg1.Typ.Id == int32(types.T_any) || lit1 == nil {
-			goto between_fallback
+		lit1 := arg2.GetLit()
+		if arg2.Typ.Id == int32(types.T_any) || lit1 == nil {
+			if !containsDynamicParam(arg2) {
+				goto between_fallback
+			}
 		}
 
 		rangeCheckFn, _ := BindFuncExprImplByPlanExpr(ctx, "<=", []*plan.Expr{arg1, arg2})
 		rangeCheckRes, _ := ConstantFold(batch.EmptyForConstFoldBatch, rangeCheckFn, proc, false, true)
 		rangeCheckVal := rangeCheckRes.GetLit()
 		if rangeCheckVal == nil || !rangeCheckVal.GetBval() {
-			goto between_fallback
+			if !containsDynamicParam(arg1) && !containsDynamicParam(arg2) {
+				goto between_fallback
+			}
 		}
 
 		retExpr, _ = ConstantFold(batch.EmptyForConstFoldBatch, retExpr, proc, false, true)
