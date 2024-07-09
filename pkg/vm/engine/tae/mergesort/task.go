@@ -45,6 +45,7 @@ type DisposableVecPool interface {
 
 type MergeTaskHost interface {
 	DisposableVecPool
+	Name() string
 	HostHintName() string
 	GetCommitEntry() *api.MergeCommitEntry
 	PrepareNewWriter() *blockio.BlockWriter
@@ -108,6 +109,7 @@ func GetNewWriter(
 
 func DoMergeAndWrite(
 	ctx context.Context,
+	txnInfo string,
 	sortkeyPos int,
 	mergehost MergeTaskHost,
 ) (err error) {
@@ -121,18 +123,20 @@ func DoMergeAndWrite(
 		fromObjsDesc += common.ShortObjId(*obj.ObjectName().ObjectId()) + ","
 		fromSize += obj.OriginSize()
 	}
-	tableDesc := fmt.Sprintf("%v-%v", commitEntry.TblId, commitEntry.TableName)
-	logutil.Info("[MERGE-START] ",
-		zap.String("table", tableDesc),
-		zap.String("on", mergehost.HostHintName()),
-		zap.String("txn-start-ts", commitEntry.StartTs.DebugString()),
+	logutil.Info(
+		"[MERGE-START]",
+		zap.String("task", mergehost.Name()),
+		common.AnyField("txn-info", txnInfo),
+		common.AnyField("host", mergehost.HostHintName()),
+		common.AnyField("timestamp", commitEntry.StartTs.DebugString()),
 		zap.String("from-objs", fromObjsDesc),
 		zap.String("from-size", units.BytesSize(float64(fromSize))),
 	)
 	defer func() {
 		if err != nil {
-			logutil.Error("[MERGE-DONE-ERROR] ",
-				zap.String("table", tableDesc),
+			logutil.Error(
+				"[MERGE-ERROR]",
+				zap.String("task", mergehost.Name()),
 				zap.Error(err),
 			)
 		}
@@ -163,13 +167,12 @@ func DoMergeAndWrite(
 			obj.Rows())
 	}
 
-	logutil.Info("[MERGE-DONE] ",
-		zap.String("table", tableDesc),
-		zap.String("on", mergehost.HostHintName()),
-		zap.String("txn-start-ts", commitEntry.StartTs.DebugString()),
-		zap.String("to-objs", toObjsDesc),
-		common.DurationField(time.Since(now)))
-
+	logutil.Info(
+		"[MERGE-END]",
+		zap.String("task", mergehost.Name()),
+		common.AnyField("to-objs", toObjsDesc),
+		common.DurationField(time.Since(now)),
+	)
 	return nil
 }
 

@@ -779,6 +779,10 @@ func (e *Engine) cleanMemoryTableWithTable(dbId, tblId uint64) {
 	// after we set it to empty, actually this part of memory was not immediately released.
 	// maybe a very old transaction still using that.
 	delete(e.partitions, [2]uint64{dbId, tblId})
+
+	//  When removing the PartitionState, you need to remove the tid in globalStats,
+	// When re-subscribing, globalStats will wait for the PartitionState to be consumed before updating the object state.
+	e.globalStats.RemoveTid(tblId)
 	logutil.Debugf("clean memory table of tbl[dbId: %d, tblId: %d]", dbId, tblId)
 }
 
