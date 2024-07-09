@@ -175,6 +175,7 @@ func TestShuffleRange(t *testing.T) {
 			shufflerange.Update(testcase[i].min[j], testcase[i].max[j], 1000, 1)
 		}
 		shufflerange.Eval()
+		shufflerange.ReleaseUnused()
 	}
 	shufflerange := NewShuffleRange(true)
 	shufflerange.UpdateString([]byte("0000"), []byte("1000"), 1000, 1)
