@@ -16,14 +16,15 @@ package test
 
 import (
 	"context"
+	"strconv"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	testutil "github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
 	"github.com/stretchr/testify/require"
-	"strconv"
-	"testing"
 )
 
 func Test_CreateDataBase(t *testing.T) {

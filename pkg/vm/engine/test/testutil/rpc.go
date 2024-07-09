@@ -2,10 +2,10 @@ package testutil
 
 import (
 	"context"
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -232,7 +232,7 @@ func (a *MockRPCAgent) listenLogtailRequest() {
 
 		case request, ok := <-a.server.logtailRequestReceiver:
 			if !ok {
-				fmt.Println("logtail request receiver closed")
+				logutil.Infof("logtail request receiver closed")
 				return
 			}
 
@@ -245,7 +245,7 @@ func (a *MockRPCAgent) listenLogtailRequest() {
 
 			err := a.server.msgHandler(a.ctx, rpcMsg, 0, session)
 			if err != nil {
-				fmt.Println("a.server.msgHandler failed", err)
+				logutil.Errorf("a.server.msgHandler failed: %v", err)
 				return
 			}
 		}

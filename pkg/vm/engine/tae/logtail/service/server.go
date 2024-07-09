@@ -16,10 +16,10 @@ package service
 
 import (
 	"context"
-	"github.com/fagongzi/goetty/v2"
 	"sync/atomic"
 	"time"
 
+	"github.com/fagongzi/goetty/v2"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
