@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
@@ -67,13 +68,13 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	arg.ctr = new(container)
 	arg.ctr.rt = &state{}
 	arg.ctr.rt.fetchers = make([]FetchLockRowsFunc, 0, len(arg.targets))
+	arg.ctr.rt.parker = types.NewPacker(proc.Mp())
+	arg.ctr.rt.step = stepLock
 	for idx := range arg.targets {
 		arg.ctr.rt.fetchers = append(arg.ctr.rt.fetchers,
 			GetFetchRowsFunc(arg.targets[idx].primaryColumnType))
 	}
-	arg.ctr.rt.parker = types.NewPacker(proc.Mp())
 	arg.ctr.rt.retryError = nil
-	arg.ctr.rt.step = stepLock
 	if arg.block {
 		arg.ctr.rt.InitReceiver(proc, true)
 	}
@@ -118,6 +119,10 @@ func callNonBlocking(
 	defer anal.Stop()
 
 	if result.Batch == nil {
+		err := lockTalbeIfLockCountIsZero(proc, arg)
+		if err != nil {
+			return result, err
+		}
 		return result, arg.ctr.rt.retryError
 	}
 	bat := result.Batch
@@ -125,6 +130,7 @@ func callNonBlocking(
 		return result, err
 	}
 
+	arg.ctr.rt.lockCount += int64(bat.RowCount())
 	if err := performLock(bat, proc, arg); err != nil {
 		return result, err
 	}
@@ -164,6 +170,7 @@ func callBlocking(
 				continue
 			}
 
+			arg.ctr.rt.lockCount += int64(bat.RowCount())
 			if err := performLock(bat, proc, arg); err != nil {
 				return result, err
 			}
@@ -193,6 +200,10 @@ func callBlocking(
 	if arg.ctr.rt.step == stepEnd {
 		result.Status = vm.ExecStop
 		arg.cleanCachedBatch(proc)
+		err := lockTalbeIfLockCountIsZero(proc, arg)
+		if err != nil {
+			return result, err
+		}
 		return result, arg.ctr.rt.retryError
 	}
 
@@ -716,6 +727,8 @@ func (arg *Argument) CopyToPipelineTarget() []*pipeline.LockTarget {
 			LockTable:          target.lockTable,
 			ChangeDef:          target.changeDef,
 			Mode:               target.mode,
+			LockRows:           plan.DeepCopyExpr(target.lockRows),
+			LockTableAtTheEnd:  target.lockTableAtTheEnd,
 		}
 	}
 	return targets
@@ -726,13 +739,17 @@ func (arg *Argument) AddLockTarget(
 	tableID uint64,
 	primaryColumnIndexInBatch int32,
 	primaryColumnType types.Type,
-	refreshTimestampIndexInBatch int32) *Argument {
+	refreshTimestampIndexInBatch int32,
+	lockRows *plan.Expr,
+	lockTableAtTheEnd bool) *Argument {
 	return arg.AddLockTargetWithMode(
 		tableID,
 		lock.LockMode_Exclusive,
 		primaryColumnIndexInBatch,
 		primaryColumnType,
-		refreshTimestampIndexInBatch)
+		refreshTimestampIndexInBatch,
+		lockRows,
+		lockTableAtTheEnd)
 }
 
 // AddLockTargetWithMode add lock target with lock mode
@@ -741,13 +758,17 @@ func (arg *Argument) AddLockTargetWithMode(
 	mode lock.LockMode,
 	primaryColumnIndexInBatch int32,
 	primaryColumnType types.Type,
-	refreshTimestampIndexInBatch int32) *Argument {
+	refreshTimestampIndexInBatch int32,
+	lockRows *plan.Expr,
+	lockTableAtTheEnd bool) *Argument {
 	arg.targets = append(arg.targets, lockTarget{
 		tableID:                      tableID,
 		primaryColumnIndexInBatch:    primaryColumnIndexInBatch,
 		primaryColumnType:            primaryColumnType,
 		refreshTimestampIndexInBatch: refreshTimestampIndexInBatch,
 		mode:                         mode,
+		lockRows:                     lockRows,
+		lockTableAtTheEnd:            lockTableAtTheEnd,
 	})
 	return arg
 }
@@ -793,6 +814,8 @@ func (arg *Argument) AddLockTargetWithPartition(
 	primaryColumnIndexInBatch int32,
 	primaryColumnType types.Type,
 	refreshTimestampIndexInBatch int32,
+	lockRows *plan.Expr,
+	lockTableAtTheEnd bool,
 	partitionTableIDMappingInBatch int32) *Argument {
 	return arg.AddLockTargetWithPartitionAndMode(
 		tableIDs,
@@ -800,6 +823,8 @@ func (arg *Argument) AddLockTargetWithPartition(
 		primaryColumnIndexInBatch,
 		primaryColumnType,
 		refreshTimestampIndexInBatch,
+		lockRows,
+		lockTableAtTheEnd,
 		partitionTableIDMappingInBatch)
 }
 
@@ -811,6 +836,8 @@ func (arg *Argument) AddLockTargetWithPartitionAndMode(
 	primaryColumnIndexInBatch int32,
 	primaryColumnType types.Type,
 	refreshTimestampIndexInBatch int32,
+	lockRows *plan.Expr,
+	lockTableAtTheEnd bool,
 	partitionTableIDMappingInBatch int32) *Argument {
 	if len(tableIDs) == 0 {
 		panic("invalid partition table ids")
@@ -822,6 +849,8 @@ func (arg *Argument) AddLockTargetWithPartitionAndMode(
 			primaryColumnIndexInBatch,
 			primaryColumnType,
 			refreshTimestampIndexInBatch,
+			lockRows,
+			lockTableAtTheEnd,
 		)
 	}
 
@@ -834,6 +863,8 @@ func (arg *Argument) AddLockTargetWithPartitionAndMode(
 			filter:                       getRowsFilter(tableID, tableIDs),
 			filterColIndexInBatch:        partitionTableIDMappingInBatch,
 			mode:                         mode,
+			lockRows:                     lockRows,
+			lockTableAtTheEnd:            lockTableAtTheEnd,
 		})
 	}
 	return arg
@@ -923,4 +954,53 @@ func hasNewVersionInRange(
 	fromTS := types.BuildTS(from.PhysicalTime, from.LogicalTime)
 	toTS := types.BuildTS(to.PhysicalTime, to.LogicalTime)
 	return rel.PrimaryKeysMayBeModified(proc.Ctx, fromTS, toTS, vec)
+}
+
+func lockTalbeIfLockCountIsZero(
+	proc *process.Process,
+	arg *Argument,
+) error {
+	rt := arg.ctr.rt
+	if rt.lockCount < 0 {
+		return nil
+	}
+	if rt.lockCount == 0 {
+		for idx := range arg.targets {
+			if !arg.targets[idx].lockTableAtTheEnd {
+				continue
+			}
+			if idx == 0 && arg.targets[idx].lockRows != nil {
+				vec, err := colexec.EvalExpressionOnce(proc, arg.targets[idx].lockRows, []*batch.Batch{batch.EmptyForConstFoldBatch})
+				if err != nil {
+					return err
+				}
+				defer func() {
+					vec.Free(proc.GetMPool())
+				}()
+
+				bat := batch.NewWithSize(int(arg.targets[idx].primaryColumnIndexInBatch) + 1)
+				bat.Vecs[arg.targets[idx].primaryColumnIndexInBatch] = vec
+				bat.SetRowCount(vec.Length())
+				rt.lockCount = int64(vec.Length())
+
+				err = performLock(bat, proc, arg)
+				if err != nil {
+					return err
+				} else if rt.retryError != nil {
+					if rt.defChanged {
+						rt.retryError = retryWithDefChangedError
+					}
+					return rt.retryError
+				}
+				return nil
+			}
+
+			err := LockTable(arg.engine, proc, arg.targets[idx].tableID, arg.targets[idx].primaryColumnType, false)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	rt.lockCount = -1 //only run lock table one time
+	return nil
 }

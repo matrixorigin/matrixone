@@ -171,6 +171,8 @@ message LockTarget {
   bool lock_table               = 6;
   bool ChangeDef               = 7;
   lock.LockMode Mode         = 8;
+  plan.Expr lock_rows         = 9;
+  bool lock_table_at_the_end = 10;
 }
 
 message LockOp {

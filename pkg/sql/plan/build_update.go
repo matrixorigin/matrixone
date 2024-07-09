@@ -51,6 +51,10 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 	if err != nil {
 		return nil, err
 	}
+	needLockTable, lockRowsExpr := checkLockTableOrRows(len(updatePlanCtxs) > 1, tblInfo.tableDefs[0], query)
+	if lockRowsExpr != nil {
+		updatePlanCtxs[0].lockRows = lockRowsExpr
+	}
 
 	// if len(updatePlanCtxs) == 1 && updatePlanCtxs[0].updatePkCol {
 	// 	pkFilterExpr := getPkFilterExpr(builder, lastNodeId, updatePlanCtxs[0], tblInfo.tableDefs[0])
@@ -69,6 +73,7 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 		upPlanCtx := updatePlanCtxs[i]
 		upPlanCtx.beginIdx = beginIdx
 		upPlanCtx.sourceStep = sourceStep
+		upPlanCtx.lockTable = needLockTable
 
 		updateBindCtx := NewBindContext(builder, nil)
 		beginIdx = beginIdx + upPlanCtx.updateColLength + len(tableDef.Cols)

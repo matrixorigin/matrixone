@@ -2287,6 +2287,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				Block:              true,
 				RefreshTsIdxInBat:  -1, //unsupport now
 				FilterColIdxInBat:  -1, //unsupport now
+				LockTableAtTheEnd:  getLockTableAtTheEnd(tableDef),
 			}
 			lockNode = &Node{
 				NodeType:    plan.Node_LOCK_OP,

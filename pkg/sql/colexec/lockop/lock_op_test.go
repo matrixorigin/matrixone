@@ -474,7 +474,7 @@ func runLockNonBlockingOpTest(
 				IsLast:  false,
 			}
 			for idx, table := range tables {
-				arg.AddLockTarget(table, offset, pkType, offset+1)
+				arg.AddLockTarget(table, offset, pkType, offset+1, nil, true)
 
 				vec := vector.NewVec(pkType)
 				vector.AppendFixedList(vec, values[idx], nil, proc.Mp())
@@ -509,7 +509,7 @@ func runLockBlockingOpTest(
 
 			pkType := types.New(types.T_int32, 0, 0)
 			tsType := types.New(types.T_TS, 0, 0)
-			arg := NewArgumentByEngine(nil).SetBlock(true).AddLockTarget(table, 0, pkType, 1)
+			arg := NewArgumentByEngine(nil).SetBlock(true).AddLockTarget(table, 0, pkType, 1, nil, true)
 
 			var batches []*batch.Batch
 			var batches2 []*batch.Batch
