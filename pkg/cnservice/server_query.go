@@ -440,6 +440,7 @@ func (s *service) handleReloadAutoIncrementCache(
 	ctx context.Context,
 	req *query.Request,
 	resp *query.Response,
+	_ *morpc.Buffer,
 ) error {
 	return s.incrservice.Reload(
 		ctx,
