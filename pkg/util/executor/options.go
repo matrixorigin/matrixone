@@ -176,3 +176,15 @@ func (opts Options) WithEnableTrace() Options {
 func (opts Options) EnableTrace() bool {
 	return opts.enableTrace
 }
+
+func (opts Options) WithLowerCaseTableNames(lower *int64) Options {
+	opts.lower = lower
+	return opts
+}
+
+func (opts Options) LowerCaseTableNames() int64 {
+	if opts.lower != nil {
+		return *opts.lower
+	}
+	return 1
+}

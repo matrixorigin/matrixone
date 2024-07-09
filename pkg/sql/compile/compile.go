@@ -4888,6 +4888,17 @@ func (c *Compile) runSqlWithResult(sql string) (executor.Result, error) {
 	if !ok {
 		panic("missing lock service")
 	}
+
+	// default 1
+	var lower int64 = 1
+	if resolveVariableFunc := c.proc.GetResolveVariableFunc(); resolveVariableFunc != nil {
+		lowerVar, err := resolveVariableFunc("lower_case_table_names", true, false)
+		if err != nil {
+			return executor.Result{}, err
+		}
+		lower = lowerVar.(int64)
+	}
+
 	exec := v.(executor.SQLExecutor)
 	opts := executor.Options{}.
 		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
@@ -4895,7 +4906,8 @@ func (c *Compile) runSqlWithResult(sql string) (executor.Result, error) {
 		WithDisableIncrStatement().
 		WithTxn(c.proc.GetTxnOperator()).
 		WithDatabase(c.db).
-		WithTimeZone(c.proc.GetSessionInfo().TimeZone)
+		WithTimeZone(c.proc.GetSessionInfo().TimeZone).
+		WithLowerCaseTableNames(&lower)
 	return exec.Exec(c.proc.Ctx, sql, opts)
 }
 
