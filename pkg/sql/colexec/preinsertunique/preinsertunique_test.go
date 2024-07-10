@@ -71,7 +71,7 @@ func TestPreInsertUnique(t *testing.T) {
 	}
 	testBatch.SetRowCount(3)
 
-	argument := Argument{
+	argument := PreInsertUnique{
 		ctr: &container{},
 		PreInsertCtx: &plan.PreInsertUkCtx{
 			Columns:  []int32{1},
@@ -94,8 +94,8 @@ func TestPreInsertUnique(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func resetChildren(arg *Argument, bat *batch.Batch) {
-	valueScanArg := &value_scan.Argument{
+func resetChildren(arg *PreInsertUnique, bat *batch.Batch) {
+	valueScanArg := &value_scan.ValueScan{
 		Batchs: []*batch.Batch{bat},
 	}
 	valueScanArg.Prepare(nil)

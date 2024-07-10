@@ -25,34 +25,34 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "loop_anti"
+const opName = "loop_anti"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (loopAnti *LoopAnti) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": loop anti join ")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) error {
+func (loopAnti *LoopAnti) Prepare(proc *process.Process) error {
 	var err error
 
-	arg.ctr = new(container)
-	arg.ctr.InitReceiver(proc, false)
+	loopAnti.ctr = new(container)
+	loopAnti.ctr.InitReceiver(proc, false)
 
-	if arg.Cond != nil {
-		arg.ctr.expr, err = colexec.NewExpressionExecutor(proc, arg.Cond)
+	if loopAnti.Cond != nil {
+		loopAnti.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopAnti.Cond)
 	}
 	return err
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (loopAnti *LoopAnti) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze(loopAnti.GetIdx(), loopAnti.GetParallelIdx(), loopAnti.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
-	ctr := arg.ctr
+	ctr := loopAnti.ctr
 	result := vm.NewCallResult()
 	for {
 		switch ctr.state {
@@ -64,32 +64,32 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Probe:
 			var err error
-			if arg.ctr.buf == nil {
+			if loopAnti.ctr.buf == nil {
 				msg := ctr.ReceiveFromSingleReg(0, anal)
 				if msg.Err != nil {
 					return result, msg.Err
 				}
-				arg.ctr.buf = msg.Batch
-				if arg.ctr.buf == nil {
+				loopAnti.ctr.buf = msg.Batch
+				if loopAnti.ctr.buf == nil {
 					ctr.state = End
 					continue
 				}
-				if arg.ctr.buf.RowCount() == 0 {
-					proc.PutBatch(arg.ctr.buf)
-					arg.ctr.buf = nil
+				if loopAnti.ctr.buf.RowCount() == 0 {
+					proc.PutBatch(loopAnti.ctr.buf)
+					loopAnti.ctr.buf = nil
 					continue
 				}
-				arg.ctr.lastrow = 0
+				loopAnti.ctr.lastrow = 0
 			}
 
 			if ctr.bat == nil || ctr.bat.RowCount() == 0 {
-				err = ctr.emptyProbe(arg, proc, anal, arg.GetIsFirst(), arg.GetIsLast(), &result)
+				err = ctr.emptyProbe(loopAnti, proc, anal, loopAnti.GetIsFirst(), loopAnti.GetIsLast(), &result)
 			} else {
-				err = ctr.probe(arg, proc, anal, arg.GetIsFirst(), arg.GetIsLast(), &result)
+				err = ctr.probe(loopAnti, proc, anal, loopAnti.GetIsFirst(), loopAnti.GetIsLast(), &result)
 			}
-			if arg.ctr.lastrow == 0 {
-				proc.PutBatch(arg.ctr.buf)
-				arg.ctr.buf = nil
+			if loopAnti.ctr.lastrow == 0 {
+				proc.PutBatch(loopAnti.ctr.buf)
+				loopAnti.ctr.buf = nil
 			}
 			return result, err
 		default:
@@ -120,7 +120,7 @@ func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
 	return nil
 }
 
-func (ctr *container) emptyProbe(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
+func (ctr *container) emptyProbe(ap *LoopAnti, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
 	anal.Input(ap.ctr.buf, isFirst)
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
@@ -143,7 +143,7 @@ func (ctr *container) emptyProbe(ap *Argument, proc *process.Process, anal proce
 	return nil
 }
 
-func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
+func (ctr *container) probe(ap *LoopAnti, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
 	anal.Input(ap.ctr.buf, isFirst)
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)

@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(LoopJoin)
 
 const (
 	Build = iota
@@ -47,7 +47,7 @@ type container struct {
 	cfs      []func(*vector.Vector, *vector.Vector, int64, int) error
 }
 
-type Argument struct {
+type LoopJoin struct {
 	ctr    *container
 	Cond   *plan.Expr
 	Result []colexec.ResultPos
@@ -55,48 +55,48 @@ type Argument struct {
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (loopJoin *LoopJoin) GetOperatorBase() *vm.OperatorBase {
+	return &loopJoin.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[LoopJoin](
+		func() *LoopJoin {
+			return &LoopJoin{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *LoopJoin) {
+			*a = LoopJoin{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[LoopJoin]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (loopJoin LoopJoin) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *LoopJoin {
+	return reuse.Alloc[LoopJoin](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (loopJoin *LoopJoin) Release() {
+	if loopJoin != nil {
+		reuse.Free[LoopJoin](loopJoin, nil)
 	}
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	arg.Free(proc, pipelineFailed, err)
+func (loopJoin *LoopJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	loopJoin.Free(proc, pipelineFailed, err)
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := arg.ctr
+func (loopJoin *LoopJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := loopJoin.ctr
 	if ctr != nil {
 		ctr.FreeAllReg()
 		ctr.cleanBatch(proc.Mp())
 		ctr.cleanExprExecutor()
-		arg.ctr = nil
+		loopJoin.ctr = nil
 	}
 }
 
