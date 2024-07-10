@@ -17,6 +17,9 @@ package compile
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -29,8 +32,6 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"go.uber.org/zap"
-	"sync/atomic"
-	"time"
 )
 
 // MaxRpcTime is a default timeout time to rpc context if user never set this deadline.
@@ -86,11 +87,15 @@ func prepareRemoteRunSendingData(sqlStr string, s *Scope) (scopeData []byte, pro
 	// Encode the Scope related.
 	// encode all operators in the scope except the last one.
 	// because we need to keep it local for receiving and sending batch to next pipeline.
-	LastIndex := len(s.Instructions) - 1
-	LastOperator := s.Instructions[LastIndex]
-	s.Instructions = s.Instructions[:LastIndex]
+	rootOp := s.RootOp
+	if rootOp.GetOperatorBase().NumChildren() == 0 {
+		s.RootOp = nil
+	} else {
+		s.RootOp = s.RootOp.GetOperatorBase().GetChildren(0)
+	}
+	rootOp.GetOperatorBase().SetChildren(nil)
 	defer func() {
-		s.Instructions = append(s.Instructions, LastOperator)
+		s.appendOperator(rootOp)
 	}()
 
 	if scopeData, err = encodeScope(s); err != nil {
@@ -117,9 +122,9 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 		fakeValueScanOperator.Release()
 	}()
 
-	LastOperator := s.Instructions[len(s.Instructions)-1]
-	lastAnalyze := c.proc.GetAnalyze(LastOperator.Idx, -1, false)
-	switch arg := LastOperator.Arg.(type) {
+	LastOperator := s.RootOp
+	lastAnalyze := c.proc.GetAnalyze(LastOperator.GetOperatorBase().GetIdx(), -1, false)
+	switch arg := LastOperator.(type) {
 	case *connector.Argument:
 		oldChildren := arg.Children
 		arg.Children = nil
@@ -138,11 +143,11 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 
 	default:
 		panic(
-			fmt.Sprintf("remote run pipeline has an unexpected operator [id = %d] at last.", LastOperator.Op))
+			fmt.Sprintf("remote run pipeline has an unexpected operator [id = %d] at last.", LastOperator.GetOperatorBase().Op))
 	}
 
 	// the last operator is responsible for distributing received data locally. Need Prepare here.
-	if err := LastOperator.Arg.Prepare(s.Proc); err != nil {
+	if err := LastOperator.Prepare(s.Proc); err != nil {
 		return err
 	}
 
@@ -162,7 +167,7 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 		lastAnalyze.Network(bat)
 		fakeValueScanOperator.Batchs = append(fakeValueScanOperator.Batchs, bat)
 
-		result, errCall := LastOperator.Arg.Call(s.Proc)
+		result, errCall := LastOperator.Call(s.Proc)
 		if errCall != nil || result.Status == vm.ExecStop {
 			return errCall
 		}
