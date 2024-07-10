@@ -112,20 +112,21 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 		panic(err)
 	}
 	pu := config.NewParameterUnit(sv, nil, nil, nil)
-
+	setGlobalSessionAlloc(NewSessionAllocator(pu))
 	convey.Convey("test write packet", t, func() {
 		rows := 20
 		server, client := net.Pipe()
 		defer server.Close()
 		defer client.Close()
-		cWriter, err := NewIOSession(client, pu)
-		cReader, err := NewIOSession(server, pu)
+		cWriter, _ := NewIOSession(client, pu)
+		cReader, _ := NewIOSession(server, pu)
 
 		exceptPayload := make([][]byte, 0)
 		actualPayload := make([][]byte, 0)
 		columns := rand.Intn(20) + 1
 		fieldSize := rand.Intn(20) + 1
 		go func() {
+			var err error
 			for i := 0; i < rows; i++ {
 				exceptRow := make([]byte, 0)
 				err = cWriter.BeginPacket()
@@ -153,6 +154,7 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 		}()
 
 		var data []byte
+		var err error
 		for i := 0; i < rows; i++ {
 			data, err = cReader.Read()
 			if err != nil {
