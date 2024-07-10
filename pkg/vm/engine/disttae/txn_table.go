@@ -2539,7 +2539,7 @@ func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.Objec
 		return nil, err
 	}
 
-	err = mergesort.DoMergeAndWrite(ctx, sortkeyPos, taskHost)
+	err = mergesort.DoMergeAndWrite(ctx, tbl.getTxn().op.Txn().DebugString(), sortkeyPos, taskHost)
 	if err != nil {
 		return nil, err
 	}
