@@ -210,10 +210,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.status {
 		case receiving:
-			result, err = arg.Children[0].Call(proc)
+			result, err = vm.ChildrenCall(arg.GetChildren(0), proc, anal)
 			if err != nil {
 				return result, err
 			}
+
 			if result.Batch == nil {
 				// if number of block is less than 2, no need to do merge sort.
 				ctr.status = normalSending
@@ -240,6 +241,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		case normalSending:
 			if len(ctr.batchList) == 0 {
 				result.Batch = nil
+				anal.Output(result.Batch, arg.GetIsLast())
 				result.Status = vm.ExecStop
 				return result, nil
 			}
@@ -249,6 +251,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.buf = ctr.batchList[0]
 				ctr.batchList[0] = nil
 				result.Batch = ctr.buf
+				anal.Output(result.Batch, arg.GetIsLast())
 				result.Status = vm.ExecStop
 				return result, nil
 			}
@@ -256,9 +259,12 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		case pickUpSending:
 			ok, err := ctr.pickAndSend(proc, &result)
 			if ok {
+				anal.Output(result.Batch, arg.GetIsLast())
 				result.Status = vm.ExecStop
 				return result, err
 			}
+
+			anal.Output(result.Batch, arg.GetIsLast())
 			result.Status = vm.ExecHasMore
 			return result, err
 		}
