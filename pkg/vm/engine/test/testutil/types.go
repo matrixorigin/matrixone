@@ -16,6 +16,7 @@ package testutil
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
@@ -36,6 +37,23 @@ type PartitionStateStats struct {
 	DataObjectsInvisible PObjectStats
 	InmemRows            PInmemRowsStats
 	CheckpointCnt        int
+
+	Details struct {
+		// 0: locations
+		// 1: versions
+		CheckpointLocs      [2][]string
+		DataObjectList      []logtailreplay.ObjectEntry
+		TombstoneObjectList []logtailreplay.ObjectEntry
+	}
+}
+
+func (s *PartitionStateStats) Summary() PartitionStateStats {
+	return PartitionStateStats{
+		DataObjectsVisible:   s.DataObjectsVisible,
+		DataObjectsInvisible: s.DataObjectsInvisible,
+		InmemRows:            s.InmemRows,
+		CheckpointCnt:        s.CheckpointCnt,
+	}
 }
 
 func (s *PartitionStateStats) String() string {

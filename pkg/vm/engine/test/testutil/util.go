@@ -79,42 +79,6 @@ func CreateEngines(ctx context.Context, opts TestOptions,
 	return
 }
 
-//func MockObjectStatsBatBySchema(tblDef *plan.TableDef, schema *catalog2.Schema,
-//	eachRowCnt, batCnt int, mp *mpool.MPool, t *testing.T) (statsBat *batch.Batch) {
-//
-//	offset := 0
-//	bats := make([]*batch.Batch, batCnt)
-//	for idx := range bats {
-//		ret := containers.MockBatchWithAttrsAndOffset(schema.Types(), schema.Attrs(), eachRowCnt, offset)
-//
-//		bat := containers.ToCNBatch(ret)
-//		bats[idx] = bat
-//
-//		offset += eachRowCnt
-//	}
-//
-//	proc := testutil2.NewProcessWithMPool(mp)
-//	s3Writer, err := colexec.AllocS3Writer(proc, tblDef)
-//	require.Nil(t, err)
-//
-//	s3Writer.InitBuffers(proc, bats[0])
-//
-//	for idx := range bats {
-//		s3Writer.Put(bats[idx], proc)
-//	}
-//
-//	err = s3Writer.SortAndFlush(proc)
-//	require.Nil(t, err)
-//
-//	statsBat = s3Writer.GetBlockInfoBat()
-//	require.Equal(t, statsBat.Attrs, []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats})
-//	require.Equal(t, statsBat.Vecs[0].Length(), 100)
-//	require.Equal(t, statsBat.Vecs[1].Length(), 100)
-//	require.Equal(t, statsBat.Vecs[2].Length(), 1)
-//
-//	return
-//}
-
 func GetDefaultTNShard() metadata.TNShard {
 	return metadata.TNShard{
 		TNShardRecord: metadata.TNShardRecord{

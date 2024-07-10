@@ -112,8 +112,7 @@ func Test_InsertRows(t *testing.T) {
 			CheckpointCnt:        0,
 		}
 
-		require.Equal(t, expect, stats)
+		require.Equal(t, expect, stats.Summary())
 
 	}
-
 }

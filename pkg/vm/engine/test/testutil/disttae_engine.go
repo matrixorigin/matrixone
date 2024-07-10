@@ -145,7 +145,7 @@ func (de *TestDisttaeEngine) waitLogtail(ctx context.Context) error {
 	return nil
 }
 
-func (de *TestDisttaeEngine) countDataObjects(state *logtailreplay.PartitionState,
+func (de *TestDisttaeEngine) analyzeDataObjects(state *logtailreplay.PartitionState,
 	stats *PartitionStateStats, ts types.TS) (err error) {
 
 	iter, err := state.NewObjectsIter(ts, false)
@@ -164,12 +164,13 @@ func (de *TestDisttaeEngine) countDataObjects(state *logtailreplay.PartitionStat
 			stats.DataObjectsInvisible.BlkCnt += int(item.BlkCnt())
 			stats.DataObjectsInvisible.RowCnt += int(item.Rows())
 		}
+		stats.Details.DataObjectList = append(stats.Details.DataObjectList, item)
 	}
 
 	return
 }
 
-func (de *TestDisttaeEngine) countInmemRows(state *logtailreplay.PartitionState,
+func (de *TestDisttaeEngine) analyzeInmemRows(state *logtailreplay.PartitionState,
 	stats *PartitionStateStats, ts types.TS) (err error) {
 
 	iter := state.NewRowsIter(ts, nil, false)
@@ -190,12 +191,17 @@ func (de *TestDisttaeEngine) countInmemRows(state *logtailreplay.PartitionState,
 	return
 }
 
-func (de *TestDisttaeEngine) countCheckpoint(state *logtailreplay.PartitionState,
+func (de *TestDisttaeEngine) analyzeCheckpoint(state *logtailreplay.PartitionState,
 	stats *PartitionStateStats, ts types.TS) (err error) {
 
 	ckps := state.Checkpoints()
-	for idx := range ckps {
-		stats.CheckpointCnt += len(strings.Split(ckps[idx], ";")) / 2
+	for x := range ckps {
+		locAndVersions := strings.Split(ckps[x], ";")
+		stats.CheckpointCnt += len(locAndVersions) / 2
+		for y := 0; y < len(locAndVersions); y += 2 {
+			stats.Details.CheckpointLocs[0] = append(stats.Details.CheckpointLocs[0], locAndVersions[y])
+			stats.Details.CheckpointLocs[1] = append(stats.Details.CheckpointLocs[1], locAndVersions[y+1])
+		}
 	}
 
 	return
@@ -216,17 +222,17 @@ func (de *TestDisttaeEngine) GetPartitionStateStats(ctx context.Context, databas
 	state = de.Engine.GetOrCreateLatestPart(databaseId, tableId).Snapshot()
 
 	// data objects
-	if err = de.countDataObjects(state, &stats, ts); err != nil {
+	if err = de.analyzeDataObjects(state, &stats, ts); err != nil {
 		return
 	}
 
 	// ckp count
-	if err = de.countCheckpoint(state, &stats, ts); err != nil {
+	if err = de.analyzeCheckpoint(state, &stats, ts); err != nil {
 		return
 	}
 
 	// in mem rows
-	if err = de.countInmemRows(state, &stats, ts); err != nil {
+	if err = de.analyzeInmemRows(state, &stats, ts); err != nil {
 		return
 	}
 

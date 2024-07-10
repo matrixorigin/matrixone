@@ -150,7 +150,7 @@ func Test_Append(t *testing.T) {
 			CheckpointCnt:        0,
 		}
 
-		require.Equal(t, expect, stats)
+		require.Equal(t, expect, stats.Summary())
 	}
 
 	// flush all aobj into one nobj
@@ -164,12 +164,16 @@ func Test_Append(t *testing.T) {
 		fmt.Println(stats.String())
 
 		expect := testutil.PartitionStateStats{
-			DataObjectsVisible:   testutil.PObjectStats{ObjCnt: 1, BlkCnt: int(expectBlkCnt), RowCnt: int(batchRows * cnt)},
-			DataObjectsInvisible: testutil.PObjectStats{ObjCnt: int(expectObjCnt), BlkCnt: int(expectBlkCnt), RowCnt: int(batchRows * cnt)},
-			InmemRows:            testutil.PInmemRowsStats{},
-			CheckpointCnt:        0,
+			DataObjectsVisible: testutil.PObjectStats{
+				ObjCnt: 1, BlkCnt: int(expectBlkCnt), RowCnt: int(batchRows * cnt),
+			},
+			DataObjectsInvisible: testutil.PObjectStats{
+				ObjCnt: int(expectObjCnt), BlkCnt: int(expectBlkCnt), RowCnt: int(batchRows * cnt),
+			},
+			InmemRows:     testutil.PInmemRowsStats{},
+			CheckpointCnt: 0,
 		}
 
-		require.Equal(t, expect, stats)
+		require.Equal(t, expect, stats.Summary())
 	}
 }
