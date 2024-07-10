@@ -1198,7 +1198,7 @@ func (n *MVCCHandle) UpdateDeltaLocLocked(txn txnif.TxnReader, deltaloc objectio
 	}
 
 	node := &catalog.MVCCNode[*catalog.MetadataMVCCNode]{
-		EntryMVCCNode: catalog.EntryMVCCNode{},
+		EntryMVCCNode: &catalog.EntryMVCCNode{},
 		BaseNode:      baseNode,
 	}
 	node.TxnMVCCNode = txnbase.NewTxnMVCCNodeWithTxn(txn)

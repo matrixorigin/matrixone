@@ -105,7 +105,7 @@ func (entry *ObjectEntry) Clone() *ObjectEntry {
 		ObjectMVCCNode: ObjectMVCCNode{
 			ObjectStats: *entry.ObjectStats.Clone(),
 		},
-		EntryMVCCNode: entry.EntryMVCCNode.Clone(),
+		EntryMVCCNode: *entry.EntryMVCCNode.Clone(),
 		CreateNode:    *entry.CreateNode.CloneAll(),
 		DeleteNode:    *entry.DeleteNode.CloneAll(),
 		table:         entry.table,
@@ -125,7 +125,7 @@ func (entry *ObjectEntry) GetCommandMVCCNode() *MVCCNode[*ObjectMVCCNode] {
 	return &MVCCNode[*ObjectMVCCNode]{
 		TxnMVCCNode:   entry.GetLastMVCCNode(),
 		BaseNode:      &entry.ObjectMVCCNode,
-		EntryMVCCNode: entry.EntryMVCCNode,
+		EntryMVCCNode: &entry.EntryMVCCNode,
 	}
 }
 func (entry *ObjectEntry) GetDropEntry(txn txnif.TxnReader) (dropped *ObjectEntry, isNewNode bool) {

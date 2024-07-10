@@ -665,7 +665,7 @@ func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, re
 
 func (entry *TableEntry) CreateWithTxnAndSchema(txn txnif.AsyncTxn, schema *Schema) {
 	node := &MVCCNode[*TableMVCCNode]{
-		EntryMVCCNode: EntryMVCCNode{
+		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: txnif.UncommitTS,
 		},
 		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(txn),

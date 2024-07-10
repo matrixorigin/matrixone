@@ -64,15 +64,15 @@ func (un EntryMVCCNode) IsCreating() bool {
 	return un.CreatedAt.Equal(&txnif.UncommitTS)
 }
 
-func (un EntryMVCCNode) Clone() EntryMVCCNode {
-	return EntryMVCCNode{
+func (un EntryMVCCNode) Clone() *EntryMVCCNode {
+	return &EntryMVCCNode{
 		CreatedAt: un.CreatedAt,
 		DeletedAt: un.DeletedAt,
 	}
 }
 
-func (un EntryMVCCNode) CloneData() EntryMVCCNode {
-	return EntryMVCCNode{
+func (un EntryMVCCNode) CloneData() *EntryMVCCNode {
+	return &EntryMVCCNode{
 		CreatedAt: un.CreatedAt,
 		DeletedAt: un.DeletedAt,
 	}
@@ -198,7 +198,7 @@ type BaseNode[T any] interface {
 }
 
 type MVCCNode[T BaseNode[T]] struct {
-	EntryMVCCNode
+	*EntryMVCCNode
 	*txnbase.TxnMVCCNode
 	BaseNode T
 }
@@ -206,7 +206,7 @@ type MVCCNode[T BaseNode[T]] struct {
 func NewEmptyMVCCNodeFactory[T BaseNode[T]](factory func() T) func() *MVCCNode[T] {
 	return func() *MVCCNode[T] {
 		return &MVCCNode[T]{
-			EntryMVCCNode: EntryMVCCNode{},
+			EntryMVCCNode: &EntryMVCCNode{},
 			TxnMVCCNode:   &txnbase.TxnMVCCNode{},
 			BaseNode:      factory(),
 		}
