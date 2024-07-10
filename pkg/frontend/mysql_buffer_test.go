@@ -81,12 +81,12 @@ func TestMySQLProtocolRead(t *testing.T) {
 				exceptPayload = append(exceptPayload, payload)
 				_, err := server.Write(header)
 				if err != nil {
-					t.Fatalf("Failed to write header: %v", err)
+					panic(err)
 				}
 
 				_, err = server.Write(payload)
 				if err != nil {
-					t.Fatalf("Failed to write payload: %v", err)
+					panic(err)
 				}
 			}
 		}()
@@ -124,12 +124,12 @@ func TestMySQLProtocolRead(t *testing.T) {
 				exceptPayload = append(exceptPayload, payload)
 				_, err := server.Write(header)
 				if err != nil {
-					t.Fatalf("Failed to write header: %v", err)
+					panic(err)
 				}
 
 				_, err = server.Write(payload)
 				if err != nil {
-					t.Fatalf("Failed to write payload: %v", err)
+					panic(err)
 				}
 			}
 		}()
@@ -171,12 +171,12 @@ func TestMySQLProtocolRead(t *testing.T) {
 				exceptPayload = append(exceptPayload, payload...)
 				_, err := server.Write(header)
 				if err != nil {
-					t.Fatalf("Failed to write header: %v", err)
+					panic(err)
 				}
 
 				_, err = server.Write(payload)
 				if err != nil {
-					t.Fatalf("Failed to write payload: %v", err)
+					panic(err)
 				}
 				seqID++
 			}
@@ -211,12 +211,12 @@ func TestMySQLProtocolRead(t *testing.T) {
 				exceptPayload = append(exceptPayload, payload...)
 				_, err := server.Write(header)
 				if err != nil {
-					t.Fatalf("Failed to write header: %v", err)
+					panic(err)
 				}
 
 				_, err = server.Write(payload)
 				if err != nil {
-					t.Fatalf("Failed to write payload: %v", err)
+					panic(err)
 				}
 
 				seqID++
@@ -227,7 +227,7 @@ func TestMySQLProtocolRead(t *testing.T) {
 			seqID += 1
 			_, err := server.Write(header)
 			if err != nil {
-				t.Fatalf("Failed to write header: %v", err)
+				panic(err)
 			}
 		}()
 
@@ -267,25 +267,25 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 				exceptRow := make([]byte, 0)
 				err = cWriter.BeginPacket()
 				if err != nil {
-					t.Fatalf("Failed to begin packet: %v", err)
+					panic(err)
 				}
 				for j := 0; j < columns; j++ {
 					field := generateRandomBytes(fieldSize)
 					exceptRow = append(exceptRow, field...)
 					err = cWriter.Append(field...)
 					if err != nil {
-						t.Fatalf("Failed to append bytes: %v", err)
+						panic(err)
 					}
 				}
 				exceptPayload = append(exceptPayload, exceptRow)
 				err = cWriter.FinishedPacket()
 				if err != nil {
-					t.Fatalf("Failed to finished packet: %v", err)
+					panic(err)
 				}
 			}
 			err = cWriter.Flush()
 			if err != nil {
-				t.Fatalf("Failed to flush packet: %v", err)
+				panic(err)
 			}
 		}()
 
@@ -293,7 +293,7 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 		for i := 0; i < rows; i++ {
 			data, err = cReader.Read()
 			if err != nil {
-				t.Fatalf("Failed to read packet: %v", err)
+				panic(err)
 			}
 			actualPayload = append(actualPayload, data)
 		}
@@ -325,25 +325,25 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 					exceptRow := make([]byte, 0)
 					err = cWriter.BeginPacket()
 					if err != nil {
-						t.Fatalf("Failed to begin packet: %v", err)
+						panic(err)
 					}
 					for j := 0; j < columns; j++ {
 						field := generateRandomBytes(fieldSize)
 						exceptRow = append(exceptRow, field...)
 						err = cWriter.Append(field...)
 						if err != nil {
-							t.Fatalf("Failed to append bytes: %v", err)
+							panic(err)
 						}
 					}
 					err = cWriter.FinishedPacket()
 					if err != nil {
-						t.Fatalf("Failed to finished packet: %v", err)
+						panic(err)
 					}
 					exceptPayload = append(exceptPayload, exceptRow)
 				}
 				err = cWriter.Flush()
 				if err != nil {
-					t.Fatalf("Failed to flush packet: %v", err)
+					panic(err)
 				}
 			}()
 			var data []byte
@@ -379,25 +379,25 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 					exceptRow := make([]byte, 0)
 					err = cWriter.BeginPacket()
 					if err != nil {
-						t.Fatalf("Failed to begin packet: %v", err)
+						panic(err)
 					}
 					for j := 0; j < columns; j++ {
 						field := generateRandomBytes(fieldSize)
 						exceptRow = append(exceptRow, field...)
 						err = cWriter.Append(field...)
 						if err != nil {
-							t.Fatalf("Failed to append bytes: %v", err)
+							panic(err)
 						}
 					}
 					err = cWriter.FinishedPacket()
 					if err != nil {
-						t.Fatalf("Failed to finished packet: %v", err)
+						panic(err)
 					}
 					exceptPayload = append(exceptPayload, exceptRow)
 				}
 				err = cWriter.Flush()
 				if err != nil {
-					t.Fatalf("Failed to flush packet: %v", err)
+					panic(err)
 				}
 			}()
 			var data []byte
@@ -437,25 +437,25 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 					exceptRow := make([]byte, 0)
 					err = cWriter.BeginPacket()
 					if err != nil {
-						t.Fatalf("Failed to begin packet: %v", err)
+						panic(err)
 					}
 					for j := 0; j < columns; j++ {
 						field := generateRandomBytes(fieldSize)
 						exceptRow = append(exceptRow, field...)
 						err = cWriter.Append(field...)
 						if err != nil {
-							t.Fatalf("Failed to append bytes: %v", err)
+							panic(err)
 						}
 					}
 					err = cWriter.FinishedPacket()
 					if err != nil {
-						t.Fatalf("Failed to finished packet: %v", err)
+						panic(err)
 					}
 					exceptPayload = append(exceptPayload, exceptRow)
 				}
 				err = cWriter.Flush()
 				if err != nil {
-					t.Fatalf("Failed to flush packet: %v", err)
+					panic(err)
 				}
 			}()
 			var data []byte
@@ -492,25 +492,25 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 					exceptRow := make([]byte, 0)
 					err = cWriter.BeginPacket()
 					if err != nil {
-						t.Fatalf("Failed to begin packet: %v", err)
+						panic(err)
 					}
 					for j := 0; j < columns; j++ {
 						field := generateRandomBytes(fieldSize)
 						exceptRow = append(exceptRow, field...)
 						err = cWriter.Append(field...)
 						if err != nil {
-							t.Fatalf("Failed to append bytes: %v", err)
+							panic(err)
 						}
 					}
 					err = cWriter.FinishedPacket()
 					if err != nil {
-						t.Fatalf("Failed to finished packet: %v", err)
+						panic(err)
 					}
 					exceptPayload = append(exceptPayload, exceptRow)
 				}
 				err = cWriter.Flush()
 				if err != nil {
-					t.Fatalf("Failed to flush packet: %v", err)
+					panic(err)
 				}
 			}()
 			var data []byte
@@ -547,14 +547,14 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 					exceptRow := make([]byte, 0)
 					err = cWriter.BeginPacket()
 					if err != nil {
-						t.Fatalf("Failed to begin packet: %v", err)
+						panic(err)
 					}
 					for j := 0; j < columns; j++ {
 						field := generateRandomBytes(fieldSize)
 						exceptRow = append(exceptRow, field...)
 						err = cWriter.Append(field...)
 						if err != nil {
-							t.Fatalf("Failed to append bytes: %v", err)
+							panic(err)
 						}
 					}
 
@@ -562,18 +562,18 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 					exceptRow = append(exceptRow, field...)
 					err = cWriter.Append(field...)
 					if err != nil {
-						t.Fatalf("Failed to append bytes: %v", err)
+						panic(err)
 					}
 
 					err = cWriter.FinishedPacket()
 					if err != nil {
-						t.Fatalf("Failed to finished packet: %v", err)
+						panic(err)
 					}
 					exceptPayload = append(exceptPayload, exceptRow)
 				}
 				err = cWriter.Flush()
 				if err != nil {
-					t.Fatalf("Failed to flush packet: %v", err)
+					panic(err)
 				}
 			}()
 			var data []byte
@@ -610,26 +610,26 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 					exceptRow := make([]byte, 0)
 					err = cWriter.BeginPacket()
 					if err != nil {
-						t.Fatalf("Failed to begin packet: %v", err)
+						panic(err)
 					}
 					for j := 0; j < columns; j++ {
 						field := generateRandomBytes(fieldSize)
 						exceptRow = append(exceptRow, field...)
 						err = cWriter.Append(field...)
 						if err != nil {
-							t.Fatalf("Failed to append bytes: %v", err)
+							panic(err)
 						}
 					}
 
 					err = cWriter.FinishedPacket()
 					if err != nil {
-						t.Fatalf("Failed to finished packet: %v", err)
+						panic(err)
 					}
 					exceptPayload = append(exceptPayload, exceptRow)
 				}
 				err = cWriter.Flush()
 				if err != nil {
-					t.Fatalf("Failed to flush packet: %v", err)
+					panic(err)
 				}
 			}()
 			var data []byte

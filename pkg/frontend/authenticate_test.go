@@ -11045,9 +11045,9 @@ func TestUpload(t *testing.T) {
 		defer clientConn.Close()
 		defer serverConn.Close()
 		go writeExceptResult(clientConn, []*Packet{
-			&Packet{Length: 5, Payload: []byte("def add(a, b):\n"), SequenceID: 1},
-			&Packet{Length: 5, Payload: []byte("  return a + b"), SequenceID: 2},
-			&Packet{Length: 0, Payload: []byte(""), SequenceID: 3},
+			{Length: 5, Payload: []byte("def add(a, b):\n"), SequenceID: 1},
+			{Length: 5, Payload: []byte("  return a + b"), SequenceID: 2},
+			{Length: 0, Payload: []byte(""), SequenceID: 3},
 		})
 
 		fs, err := fileservice.NewLocalFS(context.TODO(), defines.SharedFileServiceName, t.TempDir(), fileservice.DisabledCacheConfig, nil)

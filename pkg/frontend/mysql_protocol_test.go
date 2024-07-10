@@ -2620,9 +2620,9 @@ func Test_analyse41resp(t *testing.T) {
 	defer clientConn.Close()
 	defer serverConn.Close()
 	go startConsumeRead(clientConn)
-	pkts := []*Packet{&Packet{Length: 5, Payload: []byte("hello"), SequenceID: 1},
-		&Packet{Length: 5, Payload: []byte("world"), SequenceID: 2},
-		&Packet{Length: 0, Payload: []byte(""), SequenceID: 3}}
+	pkts := []*Packet{{Length: 5, Payload: []byte("hello"), SequenceID: 1},
+		{Length: 5, Payload: []byte("world"), SequenceID: 2},
+		{Length: 0, Payload: []byte(""), SequenceID: 3}}
 	go writeExceptResult(clientConn, pkts)
 	convey.Convey("analyse 41 resp succ", t, func() {
 		sv, err := getSystemVariables("test/system_vars_config.toml")

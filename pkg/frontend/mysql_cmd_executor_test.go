@@ -1092,9 +1092,9 @@ func TestProcessLoadLocal(t *testing.T) {
 		clientConn, serverConn := net.Pipe()
 		defer clientConn.Close()
 		defer serverConn.Close()
-		pkts := []*Packet{&Packet{Length: 5, Payload: []byte("hello"), SequenceID: 1},
-			&Packet{Length: 5, Payload: []byte("world"), SequenceID: 2},
-			&Packet{Length: 0, Payload: []byte(""), SequenceID: 3}}
+		pkts := []*Packet{{Length: 5, Payload: []byte("hello"), SequenceID: 1},
+			{Length: 5, Payload: []byte("world"), SequenceID: 2},
+			{Length: 0, Payload: []byte(""), SequenceID: 3}}
 		go writeExceptResult(clientConn, pkts)
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {

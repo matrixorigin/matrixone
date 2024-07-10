@@ -93,6 +93,7 @@ type Conn struct {
 
 // NewIOSession create a new io session
 func NewIOSession(conn net.Conn, pu *config.ParameterUnit) (*Conn, error) {
+	// just for ut
 	allocator, ok := globalSessionAlloc.Load().(*SessionAllocator)
 	if !ok {
 		allocator = NewSessionAllocator(pu)
@@ -106,7 +107,7 @@ func NewIOSession(conn net.Conn, pu *config.ParameterUnit) (*Conn, error) {
 		connected:       true,
 		fixBuf:          &ListBlock{},
 		dynamicBuf:      list.New(),
-		allocator:       &BufferAllocator{allocator: allocator},
+		allocator:       &BufferAllocator{allocator: getGlobalSessionAlloc()},
 		timeout:         pu.SV.SessionTimeout.Duration,
 		maxBytesToFlush: int(pu.SV.MaxBytesInOutbufToFlush * 1024),
 	}
@@ -133,14 +134,14 @@ func (c *Conn) UseConn(conn net.Conn) {
 	c.conn = conn
 }
 func (c *Conn) Disconnect() error {
-	if c.connected == false {
+	if !c.connected {
 		return nil
 	}
 	return c.closeConn()
 }
 
 func (c *Conn) Close() error {
-	if c.connected == false {
+	if !c.connected {
 		return nil
 	}
 
@@ -167,13 +168,9 @@ func (c *Conn) Read() ([]byte, error) {
 	var finalPayload []byte
 	var err error
 	defer func(payloads [][]byte, err error) {
-
-		if payloads != nil {
-			for _, payload := range payloads {
-				c.allocator.Free(payload)
-			}
+		for _, payload := range payloads {
+			c.allocator.Free(payload)
 		}
-
 	}(payloads, err)
 
 	for {
