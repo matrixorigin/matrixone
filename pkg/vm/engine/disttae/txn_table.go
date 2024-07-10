@@ -17,8 +17,10 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -262,13 +264,15 @@ func ForeachVisibleDataObject(
 	if err != nil {
 		return err
 	}
+	defer iter.Close()
+	ce := newConcurrentExecutor(runtime.GOMAXPROCS(0) * 8)
 	for iter.Next() {
 		entry := iter.Entry()
-		if err = fn(entry); err != nil {
-			break
-		}
+		ce.AppendTask(func() error {
+			return fn(entry)
+		})
 	}
-	iter.Close()
+	err = ce.Exec()
 	return
 }
 
@@ -306,12 +310,15 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 	if err != nil {
 		return nil, nil, err
 	}
+	var updateMu sync.Mutex
 	onObjFn := func(obj logtailreplay.ObjectEntry) error {
 		var err error
 		location := obj.Location()
 		if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 			return err
 		}
+		updateMu.Lock()
+		defer updateMu.Unlock()
 		meta = objMeta.MustDataMeta()
 		if inited {
 			for idx := range zms {
@@ -386,6 +393,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 		return nil, err
 	}
 	infoList := make([]*plan.MetadataScanInfo, 0, state.ApproxObjectsNum())
+	var updateMu sync.Mutex
 	onObjFn := func(obj logtailreplay.ObjectEntry) error {
 		createTs, err := obj.CreateTime.Marshal()
 		if err != nil {
@@ -420,6 +428,8 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 		if err != nil {
 			return err
 		}
+		updateMu.Lock()
+		defer updateMu.Unlock()
 		meta := objMeta.MustDataMeta()
 		rowCnt := int64(meta.BlockHeader().Rows())
 

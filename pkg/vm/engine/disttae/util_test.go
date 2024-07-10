@@ -1660,3 +1660,33 @@ func Test_ConstructBasePKFilter(t *testing.T) {
 
 	require.Zero(t, m.CurrNB())
 }
+
+func TestConcurrentExecutor_AppendTask(t *testing.T) {
+	ce := newConcurrentExecutor(10)
+	ta := func() error { return nil }
+	for i := 0; i < 10; i++ {
+		ce.AppendTask(ta)
+	}
+	require.Equal(t, 10, len(ce.(*concurrentExecutor).tasks))
+}
+
+func TestConcurrentExecutor_Exec(t *testing.T) {
+	ce := newConcurrentExecutor(10)
+	ta := func() error {
+		return nil
+	}
+	for i := 0; i < 20; i++ {
+		ce.AppendTask(ta)
+	}
+	err := ce.Exec()
+	require.NoError(t, err)
+
+	ta1 := func() error {
+		return context.DeadlineExceeded
+	}
+	for i := 0; i < 20; i++ {
+		ce.AppendTask(ta1)
+	}
+	err = ce.Exec()
+	require.Error(t, err)
+}

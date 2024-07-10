@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -1674,4 +1675,97 @@ func txnIsValid(txnOp client.TxnOperator) (*Transaction, error) {
 func CheckTxnIsValid(txnOp client.TxnOperator) (err error) {
 	_, err = txnIsValid(txnOp)
 	return err
+}
+
+// concurrentTask is the task that runs in the concurrent executor.
+type concurrentTask func() error
+
+// ConcurrentExecutor is an interface that runs tasks concurrently.
+type ConcurrentExecutor interface {
+	// AppendTask append the concurrent task to the exuecutor.
+	AppendTask(concurrentTask)
+	// Exec starts to run all tasks.
+	Exec() error
+}
+
+type concurrentExecutor struct {
+	wg sync.WaitGroup
+	// maxConcurrency is the max concurrency to run the tasks at the same time.
+	maxConcurrency int
+	// task contains all the tasks needed to run.
+	tasks []concurrentTask
+}
+
+func newConcurrentExecutor(max int) ConcurrentExecutor {
+	return &concurrentExecutor{
+		maxConcurrency: max,
+	}
+}
+
+// AppendTask implements the ConcurrentExecutor interface.
+func (e *concurrentExecutor) AppendTask(t concurrentTask) {
+	e.tasks = append(e.tasks, t)
+}
+
+func (e *concurrentExecutor) execByTask() error {
+	var firstErr error
+	var errMu sync.Mutex
+	sem := make(chan struct{}, e.maxConcurrency)
+	for _, task := range e.tasks {
+		e.wg.Add(1)
+		go func(ct concurrentTask) {
+			defer e.wg.Done()
+			sem <- struct{}{}
+			err := ct()
+			if err != nil {
+				logutil.Errorf("failed to execute task: %v", err)
+				errMu.Lock()
+				if firstErr == nil {
+					firstErr = err
+				}
+				errMu.Unlock()
+			}
+			<-sem
+		}(task)
+	}
+	e.wg.Wait()
+	return firstErr
+}
+
+func (e *concurrentExecutor) execByRoutine() error {
+	var firstErr error
+	var errMu sync.Mutex
+	taskCh := make(chan concurrentTask, len(e.tasks))
+
+	for i := 0; i < e.maxConcurrency; i++ {
+		go func() {
+			for task := range taskCh {
+				err := task()
+				if err != nil {
+					logutil.Errorf("failed to execute task: %v", err)
+					errMu.Lock()
+					if firstErr == nil {
+						firstErr = err
+					}
+					errMu.Unlock()
+				}
+				e.wg.Done()
+			}
+		}()
+	}
+	for _, task := range e.tasks {
+		e.wg.Add(1)
+		taskCh <- task
+	}
+	close(taskCh)
+	e.wg.Wait()
+	return firstErr
+}
+
+// Exec implements the ConcurrentExecutor interface.
+func (e *concurrentExecutor) Exec() error {
+	if len(e.tasks) < e.maxConcurrency {
+		return e.execByTask()
+	}
+	return e.execByRoutine()
 }
