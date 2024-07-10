@@ -384,7 +384,6 @@ func (rb *remoteBackend) Close() {
 		return
 	}
 	rb.stateMu.state = stateStopped
-	rb.stopWriteLoop()
 	rb.stateMu.Unlock()
 
 	rb.stopper.Stop()
@@ -708,6 +707,7 @@ func (rb *remoteBackend) handleResetConn() error {
 
 func (rb *remoteBackend) doClose() {
 	rb.closeOnce.Do(func() {
+		rb.stopWriteLoop()
 		close(rb.resetConnC)
 		rb.closeConn(false)
 		// TODO: re create when reconnect
