@@ -23,11 +23,9 @@ import (
 	"time"
 
 	"github.com/gogo/protobuf/proto"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -35,13 +33,7 @@ import (
 
 type HashPageTable = TransferTable[*TransferHashPage]
 
-// BlockRead Using blockio directly will cause cycle import
-type BlockRead interface {
-	LoadTableByBlock(loc objectio.Location, fs fileservice.FileService) (bat *batch.Batch, release func(), err error)
-}
-
 var (
-	RD     BlockRead
 	FS     fileservice.FileService
 	fsOnce sync.Once
 )
@@ -71,13 +63,19 @@ func WithDiskTTL(diskTTL time.Duration) Option {
 	}
 }
 
+type Path struct {
+	Name   string
+	Offset int64
+	Size   int64
+}
+
 type TransferHashPage struct {
 	common.RefHelper
 	latch       sync.RWMutex
 	bornTS      time.Time
 	id          *common.ID // not include blk offset
 	hashmap     api.HashPageMap
-	loc         atomic.Pointer[objectio.Location]
+	path        atomic.Pointer[Path]
 	params      TransferHashPageParams
 	isTransient bool
 	isPersisted int32 // 0 in memory, 1 on disk
@@ -202,8 +200,8 @@ func (page *TransferHashPage) Unmarshal(data []byte) error {
 	return err
 }
 
-func (page *TransferHashPage) SetLocation(location objectio.Location) {
-	page.loc.Store(&location)
+func (page *TransferHashPage) SetPath(path *Path) {
+	page.path.Store(path)
 }
 
 func (page *TransferHashPage) ClearTable() {
@@ -218,19 +216,29 @@ func (page *TransferHashPage) ClearTable() {
 }
 
 func (page *TransferHashPage) loadTable() {
-	if page.loc.Load() == nil {
+	if page.path.Load() == nil {
 		return
 	}
 
-	var bat *batch.Batch
-	var release func()
-	bat, release, err := RD.LoadTableByBlock(*page.loc.Load(), FS)
-	defer release()
+	path := page.path.Load()
+	name, offset, size := path.Name, path.Offset, path.Size
+
+	ioVector := fileservice.IOVector{
+		FilePath: name,
+		Entries:  make([]fileservice.IOEntry, 0),
+	}
+
+	entry := fileservice.IOEntry{
+		Offset: offset,
+		Size:   size,
+	}
+	ioVector.Entries = append(ioVector.Entries, entry)
+	err := FS.Read(context.Background(), &ioVector)
 	if err != nil {
-		logutil.Errorf("[TransferHashPage] load table failed, %v", err)
 		return
 	}
-	err = page.Unmarshal(bat.Vecs[0].GetBytesAt(0))
+
+	err = page.Unmarshal(ioVector.Entries[0].Data)
 	if err != nil {
 		return
 	}
@@ -241,10 +249,10 @@ func (page *TransferHashPage) loadTable() {
 }
 
 func (page *TransferHashPage) ClearPersistTable() {
-	if page.loc.Load() == nil {
+	if page.path.Load() == nil {
 		return
 	}
-	FS.Delete(context.Background(), page.loc.Load().Name().String())
+	FS.Delete(context.Background(), page.path.Load().Name)
 }
 
 func (page *TransferHashPage) IsPersist() int32 {

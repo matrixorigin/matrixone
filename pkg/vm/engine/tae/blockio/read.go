@@ -30,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"go.uber.org/zap"
 )
 
@@ -673,15 +672,4 @@ func FindIntervalForBlock(rowids []types.Rowid, id *types.Blockid) (start int, e
 	}
 	end = i
 	return
-}
-
-func init() {
-	model.RD = BlockReadImpl{}
-}
-
-type BlockReadImpl struct{}
-
-func (blk BlockReadImpl) LoadTableByBlock(loc objectio.Location, fs fileservice.FileService) (bat *batch.Batch, release func(), err error) {
-	bat, release, err = LoadTombstoneColumns(context.Background(), []uint16{0}, nil, fs, loc, nil)
-	return bat, release, err
 }

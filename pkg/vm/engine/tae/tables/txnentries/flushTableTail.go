@@ -21,14 +21,13 @@ import (
 	"io"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -128,8 +127,10 @@ func (entry *flushTableTailEntry) addTransferPages() {
 	isTransient := !entry.tableEntry.GetLastestSchemaLocked().HasPK()
 	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
 	pages := make([]*model.TransferHashPage, 0, len(entry.transMappings.Mappings))
-	var writer *objectio.ObjectWriter
-	writer, _ = objectio.NewObjectWriter(name, entry.rt.Fs.Service, 0, nil)
+	ioVector := fileservice.IOVector{
+		FilePath: name.String(),
+	}
+	model.SetFileService(entry.rt.Fs.Service)
 	var duration time.Duration
 	var start time.Time
 	for i, mcontainer := range entry.transMappings.Mappings {
@@ -139,9 +140,8 @@ func (entry *flushTableTailEntry) addTransferPages() {
 		}
 		id := entry.ablksHandles[i].Fingerprint()
 		entry.pageIds = append(entry.pageIds, id)
-		model.SetFileService(entry.rt.Fs.Service)
 		page := model.NewTransferHashPage(id, time.Now(), len(m), isTransient)
-		mapping := make(map[uint32][]byte, 10)
+		mapping := make(map[uint32][]byte, len(m))
 		for srcRow, dst := range m {
 			blkid := objectio.NewBlockidWithObjectID(entry.createdBlkHandles.GetID(), uint16(dst.BlkIdx))
 			rowID := objectio.NewRowid(blkid, uint32(dst.RowIdx))
@@ -150,21 +150,7 @@ func (entry *flushTableTailEntry) addTransferPages() {
 		page.Train(mapping)
 
 		start = time.Now()
-		data := page.Pin().Val.Marshal()
-		t := types.T_varchar.ToType()
-		vw := entry.rt.VectorPool.Transient.GetVector(&t)
-		v, releasev := vw.GetDownstreamVector(), vw.Close
-		defer releasev()
-		vectorRowCnt := 1
-		err := vector.AppendBytes(v, data, false, entry.rt.VectorPool.Transient.GetMPool())
-		if err != nil {
-			return
-		}
-
-		bat := batch.New(true, []string{"mapping"})
-		bat.SetRowCount(vectorRowCnt)
-		bat.Vecs[0] = v
-		_, err = writer.WriteTombstone(bat)
+		err := AddTransferPage(page, &ioVector)
 		if err != nil {
 			return
 		}
@@ -175,22 +161,12 @@ func (entry *flushTableTailEntry) addTransferPages() {
 	}
 
 	start = time.Now()
-	var blocks []objectio.BlockObject
-	blocks, err := writer.WriteEnd(context.Background())
+	err := WriteTransferPage(pages, ioVector, entry.rt.Fs.Service)
 	if err != nil {
 		return
 	}
 	duration += time.Since(start)
 	v2.TransferPageFlushLatencyHistogram.Observe(duration.Seconds())
-
-	for i, blk := range blocks {
-		location := blockio.EncodeLocation(
-			name,
-			blk.GetExtent(),
-			uint32(1),
-			blk.GetID())
-		pages[i].SetLocation(location)
-	}
 }
 
 // collectDelsAndTransfer collects deletes in flush process and moves them to the created obj

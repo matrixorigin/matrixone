@@ -65,10 +65,10 @@ func (table *TransferTable[T]) Len() int {
 func (table *TransferTable[T]) prepareTTL() (mem, disk []*common.PinnedItem[T]) {
 	table.RLock()
 	for _, page := range table.pages {
-		st := page.Item().TTL()
-		if st == 1 {
+		opt := page.Item().TTL()
+		if opt == 1 {
 			mem = append(mem, page)
-		} else if st == 2 {
+		} else if opt == 2 {
 			disk = append(disk, page)
 		}
 	}
@@ -131,11 +131,6 @@ func (table *TransferTable[T]) DeletePage(id *common.ID) (deleted bool) {
 	}
 	table.deletedPages = append(table.deletedPages, table.pages[*id])
 	delete(table.pages, *id)
-
-	// to pass ut
-	if len(table.pages) == 0 || table.pages[*id] == nil {
-		return
-	}
 
 	return
 }

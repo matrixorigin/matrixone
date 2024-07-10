@@ -9056,9 +9056,6 @@ func TestPersistTransferTable(t *testing.T) {
 	id2 := common.ID{BlockID: *objectio.NewBlockid(sid, 2, 0)}
 
 	now := time.Now()
-	if model.RD == nil {
-		panic("boom")
-	}
 	model.FS = tae.Runtime.Fs.Service
 	page := model.NewTransferHashPage(&id1, now, 10, false,
 		model.WithTTL(time.Second),
@@ -9074,39 +9071,29 @@ func TestPersistTransferTable(t *testing.T) {
 	tae.Runtime.TransferTable.AddPage(page)
 
 	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
-	var writer *objectio.ObjectWriter
-	writer, _ = objectio.NewObjectWriter(name, tae.Runtime.Fs.Service, 0, nil)
+	ioVector := fileservice.IOVector{
+		FilePath: name.String(),
+	}
+	offset := int64(0)
 	data := page.Pin().Val.Marshal()
-	ty := types.T_varchar.ToType()
-	vw := tae.Runtime.VectorPool.Transient.GetVector(&ty)
-	v, releasev := vw.GetDownstreamVector(), vw.Close
-	defer releasev()
-	vectorRowCnt := 1
-	err := vector.AppendBytes(v, data, false, tae.Runtime.VectorPool.Transient.GetMPool())
+	ioEntry := fileservice.IOEntry{
+		Offset: offset,
+		Size:   int64(len(data)),
+		Data:   data,
+	}
+	ioVector.Entries = append(ioVector.Entries, ioEntry)
+
+	err := tae.Runtime.Fs.Service.Write(context.Background(), ioVector)
 	if err != nil {
 		return
 	}
 
-	bat := batch.New(true, []string{"mapping"})
-	bat.SetRowCount(vectorRowCnt)
-	bat.Vecs[0] = v
-	_, err = writer.WriteTombstone(bat)
-	if err != nil {
-		return
+	path := model.Path{
+		Name:   ioVector.FilePath,
+		Offset: 0,
+		Size:   int64(len(data)),
 	}
-	var blocks []objectio.BlockObject
-	blocks, err = writer.WriteEnd(context.Background())
-	if err != nil {
-		return
-	}
-
-	location := blockio.EncodeLocation(
-		name,
-		blocks[0].GetExtent(),
-		uint32(1),
-		blocks[0].GetID())
-
-	page.SetLocation(location)
+	page.SetPath(&path)
 
 	time.Sleep(2 * time.Second)
 	tae.Runtime.TransferTable.RunTTL()
@@ -9135,9 +9122,6 @@ func TestClearPersistTransferTable(t *testing.T) {
 	id2 := common.ID{BlockID: *objectio.NewBlockid(sid, 2, 0)}
 
 	now := time.Now()
-	if model.RD == nil {
-		panic("boom")
-	}
 	model.FS = tae.Runtime.Fs.Service
 
 	page := model.NewTransferHashPage(&id1, now, 10, false,
@@ -9155,39 +9139,29 @@ func TestClearPersistTransferTable(t *testing.T) {
 	tae.Runtime.TransferTable.AddPage(page)
 
 	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
-	var writer *objectio.ObjectWriter
-	writer, _ = objectio.NewObjectWriter(name, tae.Runtime.Fs.Service, 0, nil)
+	ioVector := fileservice.IOVector{
+		FilePath: name.String(),
+	}
+	offset := int64(0)
 	data := page.Pin().Val.Marshal()
-	ty := types.T_varchar.ToType()
-	vw := tae.Runtime.VectorPool.Transient.GetVector(&ty)
-	v, releasev := vw.GetDownstreamVector(), vw.Close
-	defer releasev()
-	vectorRowCnt := 1
-	err := vector.AppendBytes(v, data, false, tae.Runtime.VectorPool.Transient.GetMPool())
+	ioEntry := fileservice.IOEntry{
+		Offset: offset,
+		Size:   int64(len(data)),
+		Data:   data,
+	}
+	ioVector.Entries = append(ioVector.Entries, ioEntry)
+
+	err := tae.Runtime.Fs.Service.Write(context.Background(), ioVector)
 	if err != nil {
 		return
 	}
 
-	bat := batch.New(true, []string{"mapping"})
-	bat.SetRowCount(vectorRowCnt)
-	bat.Vecs[0] = v
-	_, err = writer.WriteTombstone(bat)
-	if err != nil {
-		return
+	path := model.Path{
+		Name:   ioVector.FilePath,
+		Offset: 0,
+		Size:   int64(len(data)),
 	}
-	var blocks []objectio.BlockObject
-	blocks, err = writer.WriteEnd(context.Background())
-	if err != nil {
-		return
-	}
-
-	location := blockio.EncodeLocation(
-		name,
-		blocks[0].GetExtent(),
-		uint32(1),
-		blocks[0].GetID())
-
-	page.SetLocation(location)
+	page.SetPath(&path)
 
 	time.Sleep(2 * time.Second)
 	tae.Runtime.TransferTable.RunTTL()

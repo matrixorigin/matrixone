@@ -21,14 +21,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
@@ -99,11 +98,13 @@ func NewMergeObjectsEntry(
 
 func (entry *mergeObjectsEntry) prepareTransferPage() {
 	k := 0
+	model.SetFileService(entry.rt.Fs.Service)
 	for _, obj := range entry.droppedObjs {
 		name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
 		pages := make([]*model.TransferHashPage, 0, obj.BlockCnt())
-		var writer *objectio.ObjectWriter
-		writer, _ = objectio.NewObjectWriter(name, entry.rt.Fs.Service, 0, nil)
+		ioVector := fileservice.IOVector{
+			FilePath: name.String(),
+		}
 		var duration time.Duration
 		var start time.Time
 		for j := 0; j < obj.BlockCnt(); j++ {
@@ -116,9 +117,8 @@ func (entry *mergeObjectsEntry) prepareTransferPage() {
 			isTransient := !tblEntry.GetLastestSchema().HasPK()
 			id := obj.AsCommonID()
 			id.SetBlockOffset(uint16(j))
-			model.SetFileService(entry.rt.Fs.Service)
 			page := model.NewTransferHashPage(id, time.Now(), len(m), isTransient)
-			mapping := make(map[uint32][]byte, 10)
+			mapping := make(map[uint32][]byte, len(m))
 			for srcRow, dst := range m {
 				objID := entry.createdObjs[dst.ObjIdx].ID
 				blkID := objectio.NewBlockidWithObjectID(&objID, uint16(dst.BlkIdx))
@@ -128,21 +128,7 @@ func (entry *mergeObjectsEntry) prepareTransferPage() {
 			page.Train(mapping)
 
 			start = time.Now()
-			data := page.Pin().Val.Marshal()
-			t := types.T_varchar.ToType()
-			vw := entry.rt.VectorPool.Transient.GetVector(&t)
-			v, releasev := vw.GetDownstreamVector(), vw.Close
-			defer releasev()
-			vectorRowCnt := 1
-			err := vector.AppendBytes(v, data, false, entry.rt.VectorPool.Transient.GetMPool())
-			if err != nil {
-				return
-			}
-
-			bat := batch.New(true, []string{"mapping"})
-			bat.SetRowCount(vectorRowCnt)
-			bat.Vecs[0] = v
-			_, err = writer.WriteTombstone(bat)
+			err := AddTransferPage(page, &ioVector)
 			if err != nil {
 				return
 			}
@@ -152,23 +138,14 @@ func (entry *mergeObjectsEntry) prepareTransferPage() {
 			_ = entry.rt.TransferTable.AddPage(page)
 			pages = append(pages, page)
 		}
+
 		start = time.Now()
-		var blocks []objectio.BlockObject
-		blocks, err := writer.WriteEnd(context.Background())
+		err := WriteTransferPage(pages, ioVector, entry.rt.Fs.Service)
 		if err != nil {
 			return
 		}
 		duration += time.Since(start)
 		v2.TransferPageMergeLatencyHistogram.Observe(duration.Seconds())
-
-		for i, blk := range blocks {
-			location := blockio.EncodeLocation(
-				name,
-				blk.GetExtent(),
-				uint32(1),
-				blk.GetID())
-			pages[i].SetLocation(location)
-		}
 	}
 	if k != len(entry.transMappings.Mappings) {
 		panic(fmt.Sprintf("k %v, mapping %v", k, len(entry.transMappings.Mappings)))
@@ -425,4 +402,39 @@ func (entry *mergeObjectsEntry) PrepareCommit() (err error) {
 	}
 
 	return
+}
+
+func AddTransferPage(page *model.TransferHashPage, ioVector *fileservice.IOVector) error {
+	data := page.Pin().Val.Marshal()
+	le := len(ioVector.Entries)
+	offset := int64(0)
+	if le > 0 {
+		offset = ioVector.Entries[le-1].Offset +
+			ioVector.Entries[le-1].Size
+	}
+	ioEntry := fileservice.IOEntry{
+		Offset: offset,
+		Size:   int64(len(data)),
+		Data:   data,
+	}
+	ioVector.Entries = append(ioVector.Entries, ioEntry)
+
+	return nil
+}
+
+func WriteTransferPage(pages []*model.TransferHashPage, ioVector fileservice.IOVector, fs fileservice.FileService) error {
+	err := fs.Write(context.Background(), ioVector)
+	if err != nil {
+		return err
+	}
+	for i, page := range pages {
+		path := model.Path{
+			Name:   ioVector.FilePath,
+			Offset: ioVector.Entries[i].Offset,
+			Size:   ioVector.Entries[i].Size,
+		}
+		page.SetPath(&path)
+	}
+
+	return nil
 }
