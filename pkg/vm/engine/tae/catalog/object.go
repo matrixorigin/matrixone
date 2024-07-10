@@ -398,28 +398,6 @@ func (entry *ObjectEntry) GetObjectStats() (stats objectio.ObjectStats) {
 	return entry.ObjectStats
 }
 
-func (entry *ObjectEntry) CheckAndLoad() error {
-	s := entry.GetObjectStats()
-	if s.Rows() == 0 {
-		ins := time.Now()
-		defer func() {
-			v2.GetObjectStatsDurationHistogram.Observe(time.Since(ins).Seconds())
-		}()
-		_, err := entry.LoadObjectInfoForLastNode()
-		// logutil.Infof("yyyyyy loaded %v %v", common.ShortObjId(entry.ID), err)
-		return err
-	}
-	return nil
-}
-
-func (entry *ObjectEntry) LoadObjectInfoWithTxnTS(startTS types.TS) (objectio.ObjectStats, error) {
-	panic("not support")
-}
-
-func (entry *ObjectEntry) LoadObjectInfoForLastNode() (stats objectio.ObjectStats, err error) {
-	panic("not support")
-}
-
 func (entry *ObjectEntry) Less(b *ObjectEntry) bool {
 	if entry.SortHint != b.SortHint {
 		return entry.SortHint < b.SortHint
@@ -444,18 +422,6 @@ func (entry *ObjectEntry) PPString(level common.PPLevel, depth int, prefix strin
 	}
 	return w.String()
 }
-func (entry *ObjectEntry) PPStringLocked(level common.PPLevel, depth int, prefix string) string {
-	var w bytes.Buffer
-	_, _ = w.WriteString(fmt.Sprintf("%s%s%s", common.RepeatStr("\t", depth), prefix, entry.StringWithLevelLocked(level)))
-	if level == common.PPL0 {
-		return w.String()
-	}
-	return w.String()
-}
-
-func (entry *ObjectEntry) StringLocked() string {
-	return entry.StringWithLevelLocked(common.PPL1)
-}
 
 func (entry *ObjectEntry) Repr() string {
 	id := entry.AsCommonID()
@@ -463,21 +429,17 @@ func (entry *ObjectEntry) Repr() string {
 }
 
 func (entry *ObjectEntry) String() string {
-	return entry.StringLocked()
+	return entry.StringWithLevel(common.PPL1)
 }
 
 func (entry *ObjectEntry) StringWithLevel(level common.PPLevel) string {
-	return entry.StringWithLevelLocked(level)
-}
-
-func (entry *ObjectEntry) StringWithLevelLocked(level common.PPLevel) string {
 	if level <= common.PPL1 {
-		return fmt.Sprintf("[%s-%s]OBJ[%s][C@%s,D@%s]",
-			entry.state.Repr(), entry.ObjectNode.String(), entry.ID.String(), entry.GetCreatedAt().ToString(), entry.GetDeleteAt().ToString())
+		return fmt.Sprintf("[%s-%s]OBJ[%s]%v",
+			entry.state.Repr(), entry.ObjectNode.String(), entry.ID.String(), entry.EntryMVCCNode.String())
 	}
-	s := fmt.Sprintf("[%s-%s]OBJ[%s]%v%v\n", entry.state.Repr(), entry.ObjectNode.String(), entry.ID.String(), entry.EntryMVCCNode.String(), entry.ObjectMVCCNode.String())
+	s := fmt.Sprintf("[%s-%s]OBJ[%s]%v%v", entry.state.Repr(), entry.ObjectNode.String(), entry.ID.String(), entry.EntryMVCCNode.String(), entry.ObjectMVCCNode.String())
 	if !entry.DeleteNode.IsEmpty() {
-		s = fmt.Sprintf("%s -> %s\n", s, entry.DeleteNode.String())
+		s = fmt.Sprintf("%s -> %s", s, entry.DeleteNode.String())
 	}
 
 	s = fmt.Sprintf("%s -> %s", s, entry.CreateNode.String())
