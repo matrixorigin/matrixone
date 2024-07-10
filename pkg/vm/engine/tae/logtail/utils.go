@@ -3000,7 +3000,7 @@ func (collector *BaseCollector) fillObjectInfoBatch(entry *catalog.ObjectEntry, 
 			visitObject(collector.data.bats[TNObjectInfoIDX], entry, node, create, false, types.TS{})
 		} else {
 			if entry.IsAppendable() && entry.DeletedAt.IsEmpty() {
-				panic(fmt.Sprintf("logic error, object %v", entry.ID.String()))
+				panic(fmt.Sprintf("logic error, object %v", entry.ID().String()))
 			}
 			visitObject(collector.data.bats[ObjectInfoIDX], entry, node, create, false, types.TS{})
 		}

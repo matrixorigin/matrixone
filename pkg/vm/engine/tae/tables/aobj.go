@@ -135,7 +135,7 @@ func (obj *aobject) PrepareCompact() bool {
 		}
 		if !obj.appendMVCC.PrepareCompact() /* all appends are committed */ {
 			if obj.meta.Load().CheckPrintPrepareCompactLocked() {
-				logutil.Infof("obj %v, data prepare compact failed", obj.meta.Load().ID.String())
+				logutil.Infof("obj %v, data prepare compact failed", obj.meta.Load().ID().String())
 				if !obj.meta.Load().HasPrintedPrepareComapct.Load() {
 					obj.meta.Load().HasPrintedPrepareComapct.Store(true)
 					logutil.Infof("append MVCC %v", obj.appendMVCC.StringLocked())
@@ -146,7 +146,7 @@ func (obj *aobject) PrepareCompact() bool {
 	}
 	prepareCompact := obj.RefCount() == 0
 	if !prepareCompact && obj.meta.Load().CheckPrintPrepareCompactLocked() {
-		logutil.Infof("obj %v, data ref count is %d", obj.meta.Load().ID.String(), obj.RefCount())
+		logutil.Infof("obj %v, data ref count is %d", obj.meta.Load().ID().String(), obj.RefCount())
 	}
 	return prepareCompact
 }
@@ -329,7 +329,7 @@ func (obj *aobject) BatchDedup(
 ) (err error) {
 	defer func() {
 		if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
-			logutil.Debugf("BatchDedup obj-%s: %v", obj.meta.Load().ID.String(), err)
+			logutil.Debugf("BatchDedup obj-%s: %v", obj.meta.Load().ID().String(), err)
 		}
 	}()
 	node := obj.PinNode()

@@ -123,7 +123,7 @@ func (l *ObjectList) DropObjectByID(objectID *objectio.ObjectId, txn txnif.TxnRe
 	if obj.HasDropIntent() {
 		return nil, false, moerr.GetOkExpectedEOB()
 	}
-	if !obj.DeleteNode.IsEmpty(){
+	if !obj.DeleteNode.IsEmpty() {
 		panic("logic error")
 	}
 	needWait, txnToWait := obj.CreateNode.NeedWaitCommitting(txn.GetStartTS())
@@ -147,9 +147,9 @@ func (l *ObjectList) Set(object *ObjectEntry, registerSortHint bool) {
 				panic("logic error")
 			}
 		}
-		l.sortHint_objectID[object.ID] = object.SortHint
+		l.sortHint_objectID[*object.ID()] = object.SortHint
 	} else {
-		sortHint, ok := l.sortHint_objectID[object.ID]
+		sortHint, ok := l.sortHint_objectID[*object.ID()]
 		if !ok || sortHint != object.SortHint {
 			panic("logic error")
 		}

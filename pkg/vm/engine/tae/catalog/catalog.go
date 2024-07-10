@@ -165,7 +165,7 @@ func (catalog *Catalog) GCByTS(ctx context.Context, ts types.TS) {
 		needGC = needGC && obj.IsDeletesFlushedBefore(ts)
 		if needGC {
 			tbl := obj.table
-			tbl.GCTombstone(obj.ID)
+			tbl.GCTombstone(*obj.ID())
 		}
 		return nil
 	}

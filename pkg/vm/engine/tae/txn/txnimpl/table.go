@@ -473,7 +473,7 @@ func (tbl *txnTable) createObject(state catalog.EntryState, opts *objectio.Creat
 	}
 	obj = newObject(tbl, meta)
 	tbl.store.IncreateWriteCnt()
-	tbl.store.txn.GetMemo().AddObject(tbl.entry.GetDB().ID, tbl.entry.ID, &meta.ID)
+	tbl.store.txn.GetMemo().AddObject(tbl.entry.GetDB().ID, tbl.entry.ID, meta.ID())
 	tbl.txnEntries.Append(meta)
 	return
 }
@@ -770,7 +770,7 @@ func (tbl *txnTable) RangeDelete(
 			}
 		}
 	}()
-	if tbl.tableSpace != nil && id.ObjectID().Eq(tbl.tableSpace.entry.ID) {
+	if tbl.tableSpace != nil && id.ObjectID().Eq(*tbl.tableSpace.entry.ID()) {
 		err = tbl.RangeDeleteLocalRows(start, end)
 		return
 	}
@@ -877,7 +877,7 @@ func (tbl *txnTable) GetLocalValue(row uint32, col uint16) (v any, isNull bool, 
 }
 
 func (tbl *txnTable) GetValue(ctx context.Context, id *common.ID, row uint32, col uint16) (v any, isNull bool, err error) {
-	if tbl.tableSpace != nil && id.ObjectID().Eq(tbl.tableSpace.entry.ID) {
+	if tbl.tableSpace != nil && id.ObjectID().Eq(*tbl.tableSpace.entry.ID()) {
 		return tbl.tableSpace.GetValue(row, col)
 	}
 	meta, err := tbl.store.warChecker.CacheGet(
@@ -900,7 +900,7 @@ func (tbl *txnTable) UpdateObjectStats(id *common.ID, stats *objectio.ObjectStat
 	if err != nil {
 		return err
 	}
-	tbl.store.txn.GetMemo().AddObject(tbl.entry.GetDB().ID, tbl.entry.ID, &meta.ID)
+	tbl.store.txn.GetMemo().AddObject(tbl.entry.GetDB().ID, tbl.entry.ID, meta.ID())
 	if isNewNode {
 		tbl.txnEntries.Append(meta)
 	}
@@ -1256,7 +1256,7 @@ func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector, pksZM index.ZM)
 			objData := obj.GetObjectData()
 			var rowmask *roaring.Bitmap
 			if len(tbl.deleteNodes) > 0 {
-				if tbl.store.warChecker.HasConflict(obj.ID) {
+				if tbl.store.warChecker.HasConflict(*obj.ID()) {
 					continue
 				}
 				fp := obj.AsCommonID()
@@ -1323,7 +1323,7 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, node InsertNode
 		objData := obj.GetObjectData()
 		var rowmask *roaring.Bitmap
 		if len(tbl.deleteNodes) > 0 {
-			if tbl.store.warChecker.HasConflict(obj.ID) {
+			if tbl.store.warChecker.HasConflict(*obj.ID()) {
 				continue
 			}
 			fp := obj.AsCommonID()

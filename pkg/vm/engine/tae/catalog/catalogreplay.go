@@ -368,7 +368,6 @@ func (catalog *Catalog) onReplayUpdateObject(
 	var obj *ObjectEntry
 	if cmd.mvccNode.CreatedAt.Equal(&txnif.UncommitTS) {
 		obj = NewReplayObjectEntry()
-		obj.ID = *cmd.ID.ObjectID()
 		obj.table = rel
 		obj.ObjectNode = *cmd.node
 		obj.SortHint = catalog.NextObject()
@@ -445,7 +444,6 @@ func (catalog *Catalog) onReplayCheckpointObject(
 	var obj *ObjectEntry
 	if entryNode.CreatedAt.Equal(&txnNode.End) {
 		obj = NewReplayObjectEntry()
-		obj.ID = *objid
 		obj.table = rel
 		obj.ObjectNode = ObjectNode{
 			state:    state,

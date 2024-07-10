@@ -426,7 +426,7 @@ func TestReplay2(t *testing.T) {
 	rel, err = e.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
 	blk := testutil.GetOneBlockMeta(rel)
-	obj, err := rel.GetObject(&blk.ID)
+	obj, err := rel.GetObject(blk.ID())
 	assert.Nil(t, err)
 	err = rel.SoftDeleteObject(obj.GetID())
 	assert.Nil(t, err)

@@ -415,8 +415,7 @@ func TestNonAppendableBlock(t *testing.T) {
 		obj, err := rel.CreateNonAppendableObject(nil)
 		assert.Nil(t, err)
 		dataBlk := obj.GetMeta().(*catalog.ObjectEntry).GetObjectData()
-		sid := objectio.NewObjectid()
-		name := objectio.BuildObjectNameWithObjectID(sid)
+		name := objectio.BuildObjectNameWithObjectID(obj.GetID())
 		writer, err := blockio.NewBlockWriterNew(dataBlk.GetFs().Service, name, 0, nil)
 		assert.Nil(t, err)
 		_, err = writer.WriteBatch(containers.ToCNBatch(bat))
@@ -1220,7 +1219,7 @@ func TestRollback1(t *testing.T) {
 	assert.Equal(t, objCnt, 1)
 
 	txn, rel = testutil.GetDefaultRelation(t, db, schema.Name)
-	_, err = rel.GetObject(&objMeta.ID)
+	_, err = rel.GetObject(objMeta.ID())
 	assert.Nil(t, err)
 	err = tableMeta.RecurLoop(processor)
 	assert.Nil(t, err)
@@ -2636,7 +2635,7 @@ func TestMergeblocks2(t *testing.T) {
 		txn, rel = tae.GetRelation()
 
 		obj := testutil.GetOneObject(rel).GetMeta().(*catalog.ObjectEntry)
-		objHandle, err := rel.GetObject(&obj.ID)
+		objHandle, err := rel.GetObject(obj.ID())
 		assert.NoError(t, err)
 
 		objsToMerge := []*catalog.ObjectEntry{objHandle.GetMeta().(*catalog.ObjectEntry)}
@@ -2718,7 +2717,7 @@ func TestMergeBlocksIntoMultipleObjects(t *testing.T) {
 
 		txn, rel = tae.GetRelation()
 		obj := testutil.GetOneObject(rel).GetMeta().(*catalog.ObjectEntry)
-		objHandle, err := rel.GetObject(&obj.ID)
+		objHandle, err := rel.GetObject(obj.ID())
 		assert.NoError(t, err)
 
 		objsToMerge := []*catalog.ObjectEntry{objHandle.GetMeta().(*catalog.ObjectEntry)}
@@ -2745,11 +2744,11 @@ func TestMergeBlocksIntoMultipleObjects(t *testing.T) {
 		objIt := rel.MakeObjectIt()
 		objIt.Next()
 		obj1 := objIt.GetObject().GetMeta().(*catalog.ObjectEntry)
-		objHandle1, err := rel.GetObject(&obj1.ID)
+		objHandle1, err := rel.GetObject(obj1.ID())
 		assert.NoError(t, err)
 		objIt.Next()
 		obj2 := objIt.GetObject().GetMeta().(*catalog.ObjectEntry)
-		objHandle2, err := rel.GetObject(&obj2.ID)
+		objHandle2, err := rel.GetObject(obj2.ID())
 		assert.NoError(t, err)
 		objIt.Close()
 
@@ -2834,7 +2833,7 @@ func TestMergeEmptyBlocks(t *testing.T) {
 		txn, rel := tae.GetRelation()
 
 		obj := testutil.GetOneObject(rel).GetMeta().(*catalog.ObjectEntry)
-		objHandle, err := rel.GetObject(&obj.ID)
+		objHandle, err := rel.GetObject(obj.ID())
 		assert.NoError(t, err)
 
 		objsToMerge := []*catalog.ObjectEntry{objHandle.GetMeta().(*catalog.ObjectEntry)}
@@ -3920,9 +3919,9 @@ func TestLogtailBasic(t *testing.T) {
 			blkIt := tbl.MakeObjectIt()
 			for blkIt.Next() {
 				obj := blkIt.GetObject()
-				id := obj.GetMeta().(*catalog.ObjectEntry).ID
+				id := obj.GetMeta().(*catalog.ObjectEntry).ID()
 				for j := 0; j < obj.BlkCnt(); j++ {
-					blkID := objectio.NewBlockidWithObjectID(&id, uint16(j))
+					blkID := objectio.NewBlockidWithObjectID(id, uint16(j))
 					deleteRowIDs = append(deleteRowIDs, *objectio.NewRowid(blkID, 5))
 				}
 			}
@@ -4554,14 +4553,14 @@ func TestBlockRead(t *testing.T) {
 	tae.CompactBlocks(false)
 
 	objStats := blkEntry.GetLatestNode().ObjectMVCCNode
-	deltaloc := rel.GetMeta().(*catalog.TableEntry).TryGetTombstone(blkEntry.ID).GetLatestDeltaloc(0)
+	deltaloc := rel.GetMeta().(*catalog.TableEntry).TryGetTombstone(*blkEntry.ID()).GetLatestDeltaloc(0)
 	assert.False(t, objStats.IsEmpty())
 	assert.NotEmpty(t, deltaloc)
 
-	bid, sid := blkEntry.ID, blkEntry.ID
+	bid, sid := blkEntry.ID(), blkEntry.ID()
 
 	info := &objectio.BlockInfo{
-		BlockID:    *objectio.NewBlockidWithObjectID(&bid, 0),
+		BlockID:    *objectio.NewBlockidWithObjectID(bid, 0),
 		SegmentID:  *sid.Segment(),
 		EntryState: true,
 	}
@@ -4672,10 +4671,10 @@ func TestCompactDeltaBlk(t *testing.T) {
 		err = task.OnExec(context.Background())
 		assert.NoError(t, err)
 		assert.False(t, meta.GetLatestNode().ObjectMVCCNode.IsEmpty())
-		assert.False(t, rel.GetMeta().(*catalog.TableEntry).TryGetTombstone(meta.ID).GetLatestDeltaloc(0).IsEmpty())
+		assert.False(t, rel.GetMeta().(*catalog.TableEntry).TryGetTombstone(*meta.ID()).GetLatestDeltaloc(0).IsEmpty())
 		created := task.GetCreatedObjects().GetMeta().(*catalog.ObjectEntry)
 		assert.False(t, created.GetLatestNode().ObjectMVCCNode.IsEmpty())
-		assert.Nil(t, rel.GetMeta().(*catalog.TableEntry).TryGetTombstone(created.ID))
+		assert.Nil(t, rel.GetMeta().(*catalog.TableEntry).TryGetTombstone(*created.ID()))
 		err = txn.Commit(context.Background())
 		assert.Nil(t, err)
 		err = meta.GetTable().RemoveEntry(meta)
@@ -4708,10 +4707,10 @@ func TestCompactDeltaBlk(t *testing.T) {
 		assert.NoError(t, err)
 		t.Log(tae.Catalog.SimplePPString(3))
 		assert.True(t, !meta.ObjectMVCCNode.IsEmpty())
-		assert.True(t, !rel.GetMeta().(*catalog.TableEntry).TryGetTombstone(meta.ID).GetLatestDeltaloc(0).IsEmpty())
+		assert.True(t, !rel.GetMeta().(*catalog.TableEntry).TryGetTombstone(*meta.ID()).GetLatestDeltaloc(0).IsEmpty())
 		created := task.GetCreatedObjects()[0]
 		assert.False(t, created.GetLatestNode().ObjectMVCCNode.IsEmpty())
-		assert.Nil(t, rel.GetMeta().(*catalog.TableEntry).TryGetTombstone(created.ID))
+		assert.Nil(t, rel.GetMeta().(*catalog.TableEntry).TryGetTombstone(*created.ID()))
 		err = txn.Commit(context.Background())
 		assert.Nil(t, err)
 	}
@@ -5130,7 +5129,7 @@ func TestMergeBlocks3(t *testing.T) {
 	{
 		txn, rel := tae.GetRelation()
 		obj1 := testutil.GetOneObject(rel).GetMeta().(*catalog.ObjectEntry)
-		objHandle, err := rel.GetObject(&obj1.ID)
+		objHandle, err := rel.GetObject(obj1.ID())
 		require.NoError(t, err)
 
 		view, err := objHandle.GetColumnDataByName(context.Background(), 0, catalog.PhyAddrColumnName, common.DefaultAllocator)
@@ -8733,7 +8732,7 @@ func TestEstimateMemSize(t *testing.T) {
 		size1, ds1 := blk.GetObjectData().EstimateMemSize()
 		schema50rowSize = size1
 
-		blkID := objectio.NewBlockidWithObjectID(&blk.ID, 0)
+		blkID := objectio.NewBlockidWithObjectID(blk.ID(), 0)
 		err := rel.DeleteByPhyAddrKey(*objectio.NewRowid(blkID, 1))
 		require.NoError(t, err)
 		size2, ds2 := blk.GetObjectData().EstimateMemSize()
@@ -8757,7 +8756,7 @@ func TestEstimateMemSize(t *testing.T) {
 		blk := testutil.GetOneBlockMeta(rel)
 		size1, d1 := blk.GetObjectData().EstimateMemSize()
 
-		blkID := objectio.NewBlockidWithObjectID(&blk.ID, 0)
+		blkID := objectio.NewBlockidWithObjectID(blk.ID(), 0)
 		err := rel.DeleteByPhyAddrKey(*objectio.NewRowid(blkID, 1))
 		require.NoError(t, err)
 

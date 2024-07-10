@@ -549,14 +549,14 @@ func (b *TableLogtailRespBuilder) visitObjData(e *catalog.ObjectEntry) error {
 	return nil
 }
 func visitObject(batch *containers.Batch, entry *catalog.ObjectEntry, txnMVCCNode *txnbase.TxnMVCCNode, create bool, push bool, committs types.TS) {
-	batch.GetVectorByName(catalog.AttrRowID).Append(objectio.HackObjid2Rowid(&entry.ID), false)
+	batch.GetVectorByName(catalog.AttrRowID).Append(objectio.HackObjid2Rowid(entry.ID()), false)
 	if push {
 		batch.GetVectorByName(catalog.AttrCommitTs).Append(committs, false)
 	} else {
 		batch.GetVectorByName(catalog.AttrCommitTs).Append(txnMVCCNode.End, false)
 	}
 	empty := entry.IsAppendable() && create
-	entry.ObjectMVCCNode.AppendTuple(&entry.ID, batch, empty)
+	entry.ObjectMVCCNode.AppendTuple(entry.ID(), batch, empty)
 	if push {
 		txnMVCCNode.AppendTupleWithCommitTS(batch, committs)
 	} else {

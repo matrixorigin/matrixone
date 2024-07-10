@@ -182,7 +182,7 @@ func (obj *txnObject) RangeDelete(blkID uint16, start, end uint32, dt handle.Del
 }
 func (obj *txnObject) GetMeta() any           { return obj.entry }
 func (obj *txnObject) String() string         { return obj.entry.String() }
-func (obj *txnObject) GetID() *types.Objectid { return &obj.entry.ID }
+func (obj *txnObject) GetID() *types.Objectid { return obj.entry.ID() }
 func (obj *txnObject) BlkCnt() int            { return obj.entry.BlockCnt() }
 func (obj *txnObject) IsUncommitted() bool {
 	return obj.entry.IsLocal

@@ -319,7 +319,7 @@ func MergeBlocks(t *testing.T, tenantID uint32, e *db.DB, dbName string, schema 
 		txn.BindAccessInfo(tenantID, 0, 0)
 		db, _ = txn.GetDatabase(dbName)
 		rel, _ = db.GetRelationByName(schema.Name)
-		objHandle, err := rel.GetObject(&obj.ID)
+		objHandle, err := rel.GetObject(obj.ID())
 		if err != nil {
 			if skipConflict {
 				continue
@@ -365,7 +365,7 @@ func MockCNDeleteInS3(
 	view, err := obj.GetColumnDataById(context.Background(), txn, schema, blkOffset, pkDef.Idx, common.DefaultAllocator)
 	pkVec := containers.MakeVector(pkDef.Type, common.DefaultAllocator)
 	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
-	objID := &obj.GetMeta().(*catalog.ObjectEntry).ID
+	objID := obj.GetMeta().(*catalog.ObjectEntry).ID()
 	blkID := objectio.NewBlockidWithObjectID(objID, blkOffset)
 	if err != nil {
 		return

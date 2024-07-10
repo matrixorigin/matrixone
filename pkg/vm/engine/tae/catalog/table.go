@@ -189,7 +189,7 @@ func (entry *TableEntry) TryGetTombstone(oid objectio.ObjectId) data.Tombstone {
 }
 
 func (entry *TableEntry) GetOrCreateTombstone(obj *ObjectEntry, factory TombstoneFactory) data.Tombstone {
-	pivot := DeleteEntry{ObjectID: obj.ID}
+	pivot := DeleteEntry{ObjectID: *obj.ID()}
 	delete, ok := entry.deleteList.Copy().Get(pivot)
 	if ok {
 		return delete.Tombstone
@@ -395,7 +395,7 @@ func (entry *TableEntry) ObjectStats(level common.PPLevel, start, end int) (stat
 		}
 		if level > common.PPL0 {
 			_ = w.WriteByte('\n')
-			_, _ = w.WriteString(objectEntry.ID.String())
+			_, _ = w.WriteString(objectEntry.ID().String())
 			_ = w.WriteByte('\n')
 			_, _ = w.WriteString("    ")
 			_, _ = w.WriteString(objectEntry.StatsString(zonemapKind))

@@ -107,8 +107,8 @@ func (entry *mergeObjectsEntry) prepareTransferPage() {
 			id.SetBlockOffset(uint16(j))
 			page := model.NewTransferHashPage(id, time.Now(), len(m), isTransient)
 			for srcRow, dst := range m {
-				objID := entry.createdObjs[dst.ObjIdx].ID
-				blkID := objectio.NewBlockidWithObjectID(&objID, uint16(dst.BlkIdx))
+				objID := entry.createdObjs[dst.ObjIdx].ID()
+				blkID := objectio.NewBlockidWithObjectID(objID, uint16(dst.BlkIdx))
 				page.Train(uint32(srcRow), *objectio.NewRowid(blkID, uint32(dst.RowIdx)))
 			}
 			entry.pageIds = append(entry.pageIds, id)
@@ -219,16 +219,16 @@ func (entry *mergeObjectsEntry) transferObjectDeletes(
 			}
 			panic(fmt.Sprintf(
 				"%s-%d find no transfer mapping for row %d, mapping range (%d, %d)",
-				dropped.ID.String(), blkOffsetInObj, row, _min, _max))
+				dropped.ID().String(), blkOffsetInObj, row, _min, _max))
 		}
-		if entry.delTbls[entry.createdObjs[destpos.ObjIdx].ID] == nil {
-			entry.delTbls[entry.createdObjs[destpos.ObjIdx].ID] = make(map[uint16]struct{})
+		if entry.delTbls[*entry.createdObjs[destpos.ObjIdx].ID()] == nil {
+			entry.delTbls[*entry.createdObjs[destpos.ObjIdx].ID()] = make(map[uint16]struct{})
 		}
-		entry.delTbls[entry.createdObjs[destpos.ObjIdx].ID][uint16(destpos.BlkIdx)] = struct{}{}
-		blkID := objectio.NewBlockidWithObjectID(&entry.createdObjs[destpos.ObjIdx].ID, uint16(destpos.BlkIdx))
+		entry.delTbls[*entry.createdObjs[destpos.ObjIdx].ID()][uint16(destpos.BlkIdx)] = struct{}{}
+		blkID := objectio.NewBlockidWithObjectID(entry.createdObjs[destpos.ObjIdx].ID(), uint16(destpos.BlkIdx))
 		entry.rt.TransferDelsMap.SetDelsForBlk(*blkID, int(destpos.RowIdx), entry.txn.GetPrepareTS(), ts[i])
 		var targetObj handle.Object
-		targetObj, err = entry.relation.GetObject(&entry.createdObjs[destpos.ObjIdx].ID)
+		targetObj, err = entry.relation.GetObject(entry.createdObjs[destpos.ObjIdx].ID())
 		if err != nil {
 			return
 		}

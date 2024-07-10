@@ -104,15 +104,15 @@ func (checker *warChecker) cacheGet(id *objectio.ObjectId) *catalog.ObjectEntry 
 	return checker.cache[*id]
 }
 func (checker *warChecker) Cache(obj *catalog.ObjectEntry) {
-	checker.cache[obj.ID] = obj
+	checker.cache[*obj.ID()] = obj
 }
 
 func (checker *warChecker) Insert(obj *catalog.ObjectEntry) {
 	checker.Cache(obj)
-	if checker.HasConflict(obj.ID) {
+	if checker.HasConflict(*obj.ID()) {
 		panic(fmt.Sprintf("cannot add conflicted %s into readset", obj.String()))
 	}
-	checker.readSet[obj.ID] = obj
+	checker.readSet[*obj.ID()] = obj
 }
 
 func (checker *warChecker) checkOne(id *common.ID, ts types.TS) (err error) {

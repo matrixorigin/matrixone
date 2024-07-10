@@ -33,7 +33,7 @@ func (catalog *Catalog) CheckMetadata() {
 }
 func (catalog *Catalog) checkTombstone(t data.Tombstone) error {
 	obj := t.GetObject().(*ObjectEntry)
-	_, err := obj.GetTable().GetObjectByID(&obj.ID)
+	_, err := obj.GetTable().GetObjectByID(obj.ID())
 	if err != nil {
 		logutil.Warnf("[MetadataCheck] tombstone and object doesn't match, err %v, obj %v, tombstone %v",
 			err,

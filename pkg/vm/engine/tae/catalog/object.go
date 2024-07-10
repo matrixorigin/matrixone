@@ -36,9 +36,6 @@ import (
 type ObjectDataFactory = func(meta *ObjectEntry) data.Object
 type TombstoneFactory = func(meta *ObjectEntry) data.Tombstone
 type ObjectEntry struct {
-	ID     types.Objectid
-	blkCnt int
-
 	EntryMVCCNode
 	ObjectMVCCNode
 
@@ -53,6 +50,9 @@ type ObjectEntry struct {
 	HasPrintedPrepareComapct atomic.Bool
 }
 
+func (entry *ObjectEntry) ID() *objectio.ObjectId {
+	return entry.ObjectStats.ObjectName().ObjectId()
+}
 func (entry *ObjectEntry) GetDeleteAt() types.TS {
 	return entry.DeletedAt
 }
@@ -99,8 +99,6 @@ func (entry *ObjectEntry) GetLastMVCCNode() *txnbase.TxnMVCCNode {
 }
 func (entry *ObjectEntry) Clone() *ObjectEntry {
 	obj := &ObjectEntry{
-		ID:     entry.ID,
-		blkCnt: entry.blkCnt,
 		ObjectMVCCNode: ObjectMVCCNode{
 			ObjectStats: *entry.ObjectStats.Clone(),
 		},
@@ -173,9 +171,6 @@ func (entry *ObjectEntry) ApplyCommit(tid string) error {
 	if lastNode == nil {
 		panic("logic error")
 	}
-	if lastNode.ID != entry.ID {
-		panic("logic error")
-	}
 	var newNode *ObjectEntry
 	switch lastNode.ObjectState {
 	case ObjectState_Create_PrepareCommit:
@@ -225,7 +220,7 @@ func (entry *ObjectEntry) PrepareCommit() error {
 	return nil
 }
 func (entry *ObjectEntry) IsDeletesFlushedBefore(ts types.TS) bool {
-	tombstone := entry.GetTable().TryGetTombstone(entry.ID)
+	tombstone := entry.GetTable().TryGetTombstone(*entry.ID())
 	if tombstone == nil {
 		return true
 	}
@@ -256,7 +251,7 @@ func (entry *ObjectEntry) StatsString(zonemapKind common.ZonemapPrintKind) strin
 }
 
 func (entry *ObjectEntry) InMemoryDeletesExisted() bool {
-	tombstone := entry.GetTable().TryGetTombstone(entry.ID)
+	tombstone := entry.GetTable().TryGetTombstone(*entry.ID())
 	if tombstone != nil {
 		return tombstone.InMemoryDeletesExisted()
 	}
@@ -264,7 +259,7 @@ func (entry *ObjectEntry) InMemoryDeletesExisted() bool {
 }
 
 func (entry *ObjectEntry) InMemoryDeletesExistedLocked() bool {
-	tombstone := entry.GetTable().TryGetTombstone(entry.ID)
+	tombstone := entry.GetTable().TryGetTombstone(*entry.ID())
 	if tombstone != nil {
 		return tombstone.InMemoryDeletesExistedLocked()
 	}
@@ -278,7 +273,6 @@ func NewObjectEntry(
 	dataFactory ObjectDataFactory,
 ) *ObjectEntry {
 	e := &ObjectEntry{
-		ID:    *id,
 		table: table,
 		ObjectNode: ObjectNode{
 			state:         state,
@@ -307,7 +301,6 @@ func NewObjectEntryByMetaLocation(
 	dataFactory ObjectDataFactory,
 ) *ObjectEntry {
 	e := &ObjectEntry{
-		ID:    *id,
 		table: table,
 		ObjectNode: ObjectNode{
 			state:         state,
@@ -335,7 +328,6 @@ func NewReplayObjectEntry() *ObjectEntry {
 
 func NewStandaloneObject(table *TableEntry, ts types.TS) *ObjectEntry {
 	e := &ObjectEntry{
-		ID:    *objectio.NewObjectid(),
 		table: table,
 		ObjectNode: ObjectNode{
 			state:         ES_Appendable,
@@ -348,6 +340,7 @@ func NewStandaloneObject(table *TableEntry, ts types.TS) *ObjectEntry {
 		CreateNode:  *txnbase.NewTxnMVCCNodeWithTS(ts),
 		ObjectState: ObjectState_Create_ApplyCommit,
 	}
+	objectio.SetObjectStatsObjectName(&e.ObjectStats, objectio.BuildObjectNameWithObjectID(objectio.NewObjectid()))
 	return e
 }
 
@@ -374,7 +367,7 @@ func NewSysObjectEntry(table *TableEntry, id types.Uuid) *ObjectEntry {
 	} else {
 		panic("not supported")
 	}
-	e.ID = *bid.Object()
+	objectio.SetObjectStatsObjectName(&e.ObjectStats, objectio.BuildObjectNameWithObjectID(bid.Object()))
 	return e
 }
 
@@ -434,9 +427,9 @@ func (entry *ObjectEntry) String() string {
 func (entry *ObjectEntry) StringWithLevel(level common.PPLevel) string {
 	if level <= common.PPL1 {
 		return fmt.Sprintf("[%s-%s]OBJ[%s]%v",
-			entry.state.Repr(), entry.ObjectNode.String(), entry.ID.String(), entry.EntryMVCCNode.String())
+			entry.state.Repr(), entry.ObjectNode.String(), entry.ID().String(), entry.EntryMVCCNode.String())
 	}
-	s := fmt.Sprintf("[%s-%s]OBJ[%s]%v%v", entry.state.Repr(), entry.ObjectNode.String(), entry.ID.String(), entry.EntryMVCCNode.String(), entry.ObjectMVCCNode.String())
+	s := fmt.Sprintf("[%s-%s]OBJ[%s]%v%v", entry.state.Repr(), entry.ObjectNode.String(), entry.ID().String(), entry.EntryMVCCNode.String(), entry.ObjectMVCCNode.String())
 	if !entry.DeleteNode.IsEmpty() {
 		s = fmt.Sprintf("%s -> %s", s, entry.DeleteNode.String())
 	}
@@ -459,11 +452,7 @@ func (entry *ObjectEntry) BlockCnt() int {
 	if entry.IsAppendable() {
 		return 1
 	}
-	cnt := entry.getBlockCntFromStats()
-	if cnt != 0 {
-		return int(cnt)
-	}
-	return entry.blkCnt
+	return int(entry.getBlockCntFromStats())
 }
 
 func (entry *ObjectEntry) getBlockCntFromStats() (blkCnt uint32) {
@@ -471,12 +460,6 @@ func (entry *ObjectEntry) getBlockCntFromStats() (blkCnt uint32) {
 		return
 	}
 	return entry.ObjectStats.BlkCnt()
-}
-
-func (entry *ObjectEntry) tryUpdateBlockCnt(cnt int) {
-	if entry.blkCnt < cnt {
-		entry.blkCnt = cnt
-	}
 }
 
 func (entry *ObjectEntry) IsAppendable() bool {
@@ -498,7 +481,7 @@ func (entry *ObjectEntry) GetTable() *TableEntry {
 // GetNonAppendableBlockCnt Non-appendable Object only can contain non-appendable blocks;
 // Appendable Object can contain both of appendable blocks and non-appendable blocks
 func (entry *ObjectEntry) GetNonAppendableBlockCnt() int {
-	return entry.blkCnt
+	return entry.BlockCnt()
 }
 
 func (entry *ObjectEntry) AsCommonID() *common.ID {
@@ -506,7 +489,7 @@ func (entry *ObjectEntry) AsCommonID() *common.ID {
 		DbID:    entry.GetTable().GetDB().ID,
 		TableID: entry.GetTable().ID,
 	}
-	id.SetObjectID(&entry.ID)
+	id.SetObjectID(entry.ID())
 	return id
 }
 func (entry *ObjectEntry) IsCommitted() bool { return entry.GetLastMVCCNode().IsCommitted() }

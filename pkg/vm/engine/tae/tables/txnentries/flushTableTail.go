@@ -182,7 +182,7 @@ func (entry *flushTableTailEntry) collectDelsAndTransfer(from, to types.TS) (tra
 			row := rowid[i].GetRowOffset()
 			destpos, ok := mapping[int32(row)]
 			if !ok {
-				panic(fmt.Sprintf("%s find no transfer mapping for row %d", blk.ID.String(), row))
+				panic(fmt.Sprintf("%s find no transfer mapping for row %d", blk.ID().String(), row))
 			}
 			blkID := objectio.NewBlockidWithObjectID(entry.createdBlkHandles.GetID(), uint16(destpos.BlkIdx))
 			entry.delTbls[destpos.BlkIdx] = blkID
@@ -261,11 +261,11 @@ func (entry *flushTableTailEntry) PrepareRollback() (err error) {
 			logutil.Info(
 				"[FLUSH-PREPARE-ROLLBACK]",
 				zap.String("task", entry.taskName),
-				zap.String("extra-info", fmt.Sprintf("skip empty ablk %s when rollback", blk.ID.String())),
+				zap.String("extra-info", fmt.Sprintf("skip empty ablk %s when rollback", blk.ID().String())),
 			)
 			continue
 		}
-		seg := blk.ID.Segment()
+		seg := blk.ID().Segment()
 		name := objectio.BuildObjectName(seg, 0).String()
 		ablkNames = append(ablkNames, name)
 	}

@@ -132,7 +132,7 @@ func TestHiddenWithPK1(t *testing.T) {
 					rid := v.(types.Rowid)
 					bid, offset := rid.Decode()
 					// t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
-					expectedBid := objectio.NewBlockidWithObjectID(&meta.ID, uint16(j))
+					expectedBid := objectio.NewBlockidWithObjectID(meta.ID(), uint16(j))
 					assert.Equal(t, *expectedBid, bid, "expect %v, get %v", expectedBid.String(), bid.String())
 					offsets = append(offsets, offset)
 					return
@@ -176,7 +176,7 @@ func TestHiddenWithPK1(t *testing.T) {
 					rid := v.(types.Rowid)
 					bid, offset := rid.Decode()
 					// t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
-					assert.Equal(t, *objectio.NewBlockidWithObjectID(&meta.ID, uint16(j)), bid)
+					assert.Equal(t, *objectio.NewBlockidWithObjectID(meta.ID(), uint16(j)), bid)
 					offsets = append(offsets, offset)
 					return
 				}, nil)

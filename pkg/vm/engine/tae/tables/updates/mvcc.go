@@ -288,7 +288,7 @@ func (n *AppendMVCCHandle) allAppendsCommittedLocked() bool {
 	if n.appends == nil {
 		meta := n.GetMeta()
 		logutil.Warnf("[MetadataCheck] appends mvcc is nil, obj %v, has dropped %v, deleted at %v",
-			meta.ID.String(),
+			meta.ID().String(),
 			meta.HasDropCommitted(),
 			meta.GetDeleteAt().ToString())
 		return false
@@ -593,7 +593,7 @@ func (n *ObjectMVCCHandle) VisitDeletes(
 		nodes := mvcc.deltaloc.ClonePreparedInRangeLocked(start, end)
 		var skipData bool
 		if len(nodes) != 0 {
-			blkID := objectio.NewBlockidWithObjectID(&n.meta.ID, blkOffset)
+			blkID := objectio.NewBlockidWithObjectID(n.meta.ID(), blkOffset)
 			newest := nodes[len(nodes)-1]
 			if lastDeltaLoc {
 				VisitDeltaloc(deltalocBat, tnInsertBat, n.meta, blkID, newest, newest.End, newest.CreatedAt)
@@ -678,7 +678,7 @@ func VisitDeltaloc(bat, tnBatch *containers.Batch, object *catalog.ObjectEntry, 
 	bat.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Append([]byte(node.BaseNode.MetaLoc), false)
 	bat.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(node.BaseNode.DeltaLoc), false)
 	bat.GetVectorByName(pkgcatalog.BlockMeta_CommitTs).Append(commitTS, false)
-	bat.GetVectorByName(pkgcatalog.BlockMeta_SegmentID).Append(*object.ID.Segment(), false)
+	bat.GetVectorByName(pkgcatalog.BlockMeta_SegmentID).Append(*object.ID().Segment(), false)
 	bat.GetVectorByName(pkgcatalog.BlockMeta_MemTruncPoint).Append(node.Start, false)
 	bat.GetVectorByName(catalog.AttrCommitTs).Append(createTS, false)
 	bat.GetVectorByName(catalog.AttrRowID).Append(objectio.HackBlockid2Rowid(blkID), false)
@@ -710,11 +710,11 @@ func (d *DeltalocChain) PrepareCommit() (err error) {
 	node := d.GetLatestNodeLocked()
 	if node.BaseNode.NeedCheckDeleteChainWhenCommit {
 		if found, _ := d.mvcc.GetDeleteChain().HasDeleteIntentsPreparedInLocked(node.Start, node.Txn.GetPrepareTS()); found {
-			logutil.Infof("retry delete, there're new deletes in obj %v", d.mvcc.meta.ID.String())
+			logutil.Infof("retry delete, there're new deletes in obj %v", d.mvcc.meta.ID().String())
 			return txnif.ErrTxnNeedRetry
 		}
 		if d.mvcc.meta.HasDropIntent() {
-			logutil.Infof("retry delete, obj %v is soft deleted", d.mvcc.meta.ID.String())
+			logutil.Infof("retry delete, obj %v is soft deleted", d.mvcc.meta.ID().String())
 			return txnif.ErrTxnNeedRetry
 		}
 	}
@@ -741,7 +741,7 @@ func (d *DeltalocChain) PrepareRollback() error {
 	return err
 }
 func (d *DeltalocChain) GetBlockID() *objectio.Blockid {
-	return objectio.NewBlockidWithObjectID(&d.mvcc.meta.ID, d.mvcc.blkID)
+	return objectio.NewBlockidWithObjectID(d.mvcc.meta.ID(), d.mvcc.blkID)
 }
 func (d *DeltalocChain) GetMeta() *catalog.ObjectEntry { return d.mvcc.meta }
 
@@ -919,7 +919,7 @@ func (n *MVCCHandle) CollectDeleteLocked(
 		}
 		pkVec = containers.MakeVector(pkType, mp)
 		aborts = &nulls.Bitmap{}
-		id := objectio.NewBlockidWithObjectID(&n.meta.ID, n.blkID)
+		id := objectio.NewBlockidWithObjectID(n.meta.ID(), n.blkID)
 		n.deletes.LoopChainLocked(
 			func(node *DeleteNode) bool {
 				needWait, txn := node.NeedWaitCommitting(end.Next())
@@ -993,7 +993,7 @@ func (n *MVCCHandle) InMemoryCollectDeleteInRange(
 	// for deleteNode version less than 2, pk doesn't exist in memory
 	// collect pk by block.Foreach
 	if len(deletes) != 0 {
-		logutil.Infof("visit deletes: collect pk by load, obj is %v", n.meta.ID.String())
+		logutil.Infof("visit deletes: collect pk by load, obj is %v", n.meta.ID().String())
 		pkIdx := pkDef.Idx
 		data := n.meta.GetObjectData()
 		data.Foreach(ctx, schema, n.blkID, pkIdx, func(v any, isNull bool, row int) error {

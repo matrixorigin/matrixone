@@ -141,7 +141,7 @@ func (obj *object) BatchDedup(
 			logutil.Infof("BatchDedup %s (%v)obj-%s: %v",
 				obj.meta.Load().GetTable().GetLastestSchemaLocked().Name,
 				obj.IsAppendable(),
-				obj.meta.Load().ID.String(),
+				obj.meta.Load().ID().String(),
 				err)
 		}
 	}()

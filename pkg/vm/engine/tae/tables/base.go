@@ -108,7 +108,7 @@ func (blk *baseObject) PinNode() *Node {
 	return n
 }
 func (blk *baseObject) tryGetMVCC() *updates.ObjectMVCCHandle {
-	tombstone := blk.meta.Load().GetTable().TryGetTombstone(blk.meta.Load().ID)
+	tombstone := blk.meta.Load().GetTable().TryGetTombstone(*blk.meta.Load().ID())
 	if tombstone == nil {
 		return nil
 	}
@@ -276,7 +276,7 @@ func (blk *baseObject) LoadPersistedCommitTS(bid uint16) (vec containers.Vector,
 		return
 	}
 	if vectors[0].GetType().Oid != types.T_TS {
-		panic(fmt.Sprintf("%s: bad commits layout", blk.meta.Load().ID.String()))
+		panic(fmt.Sprintf("%s: bad commits layout", blk.meta.Load().ID().String()))
 	}
 	vec = vectors[0]
 	return
@@ -525,7 +525,7 @@ func (blk *baseObject) foreachPersistedDeletes(
 		commitTsVec := deletes.Vecs[1].GetDownstreamVector()
 		rowIdVec := deletes.Vecs[0].GetDownstreamVector()
 
-		rstart, rend := blockio.FindIntervalForBlock(vector.MustFixedCol[types.Rowid](rowIdVec), objectio.NewBlockidWithObjectID(&blk.meta.Load().ID, blkID))
+		rstart, rend := blockio.FindIntervalForBlock(vector.MustFixedCol[types.Rowid](rowIdVec), objectio.NewBlockidWithObjectID(blk.meta.Load().ID(), blkID))
 		for i := rstart; i < rend; i++ {
 			if skipAbort {
 				abort := vector.GetFixedAt[bool](abortVec, i)
@@ -808,7 +808,7 @@ func (blk *baseObject) TryDeleteByDeltaloc(
 func (blk *baseObject) PPString(level common.PPLevel, depth int, prefix string, blkid int) string {
 	rows, err := blk.Rows()
 	if err != nil {
-		logutil.Warnf("get object rows failed, obj: %v, err: %v", blk.meta.Load().ID.String(), err)
+		logutil.Warnf("get object rows failed, obj: %v, err: %v", blk.meta.Load().ID().String(), err)
 	}
 	s := fmt.Sprintf("%s | [Rows=%d]", blk.meta.Load().PPString(level, depth, prefix), rows)
 	if level >= common.PPL1 {
@@ -1077,7 +1077,7 @@ func (blk *baseObject) MutationInfo() string {
 	blk.RLock()
 	defer blk.RUnlock()
 	if err != nil {
-		logutil.Warnf("get object rows failed, obj: %v, err %v", blk.meta.Load().ID.String(), err)
+		logutil.Warnf("get object rows failed, obj: %v, err %v", blk.meta.Load().ID().String(), err)
 	}
 	objMVCC := blk.tryGetMVCC()
 	var deleteCnt uint32

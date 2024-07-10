@@ -85,7 +85,7 @@ func (node *memoryNode) initPKIndex(schema *catalog.Schema) {
 
 func (node *memoryNode) close() {
 	mvcc := node.object.appendMVCC
-	logutil.Debugf("Releasing Memorynode BLK-%s", node.object.meta.Load().ID.String())
+	logutil.Debugf("Releasing Memorynode BLK-%s", node.object.meta.Load().ID().String())
 	if node.data != nil {
 		node.data.Close()
 		node.data = nil
@@ -297,7 +297,7 @@ func (node *memoryNode) PrepareAppend(rows uint32) (n uint32, err error) {
 func (node *memoryNode) FillPhyAddrColumn(startRow, length uint32) (err error) {
 	var col *vector.Vector
 	if col, err = objectio.ConstructRowidColumn(
-		objectio.NewBlockidWithObjectID(&node.object.meta.Load().ID, 0),
+		objectio.NewBlockidWithObjectID(node.object.meta.Load().ID(), 0),
 		startRow,
 		length,
 		common.MutMemAllocator,

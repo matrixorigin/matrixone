@@ -392,16 +392,16 @@ func (chain *DeleteChain) CollectDeletesLocked(
 				} else {
 					ts := txn.GetStartTS()
 					rt := chain.mvcc.meta.GetObjectData().GetRuntime()
-					tsMapping := rt.TransferDelsMap.GetDelsForBlk(*objectio.NewBlockidWithObjectID(&chain.mvcc.meta.ID, chain.mvcc.blkID)).Mapping
+					tsMapping := rt.TransferDelsMap.GetDelsForBlk(*objectio.NewBlockidWithObjectID(chain.mvcc.meta.ID(), chain.mvcc.blkID)).Mapping
 					if tsMapping == nil {
-						logutil.Warnf("flushtabletail check special dels for %s, no tsMapping", chain.mvcc.meta.ID.String())
+						logutil.Warnf("flushtabletail check special dels for %s, no tsMapping", chain.mvcc.meta.ID().String())
 						return true
 					}
 					for it.HasNext() {
 						row := it.Next()
 						committs, ok := tsMapping[int(row)]
 						if !ok {
-							logutil.Errorf("flushtabletail check Transfer dels for %s row %d not in dels", chain.mvcc.meta.ID.String(), row)
+							logutil.Errorf("flushtabletail check Transfer dels for %s row %d not in dels", chain.mvcc.meta.ID().String(), row)
 							continue
 						}
 						// if the ts can't see the del, then remove it from merged

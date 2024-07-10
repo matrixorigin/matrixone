@@ -168,7 +168,7 @@ func (s *MergeTaskBuilder) onTable(tableEntry *catalog.TableEntry) (err error) {
 		s.tableRowDel += dels
 		tblRows += rows - dels
 
-		tombstone := tableEntry.TryGetTombstone(objectEntry.ID)
+		tombstone := tableEntry.TryGetTombstone(*objectEntry.ID())
 		if tombstone == nil {
 			continue
 		}
@@ -228,7 +228,7 @@ func (s *MergeTaskBuilder) onObject(objectEntry *catalog.ObjectEntry) (err error
 		rate := float64(deltaLocRows) / float64(remainingRows)
 		logutil.Infof(
 			"[DeltaLoc Merge] tblId: %s(%d), obj: %s, deltaLoc: %d, rows: %d, deltaLocRows: %d, rate: %f",
-			s.name, s.tid, objectEntry.ID.String(), deltaLocCnt, remainingRows, deltaLocRows, rate)
+			s.name, s.tid, objectEntry.ID().String(), deltaLocCnt, remainingRows, deltaLocRows, rate)
 		s.objPolicy.OnObject(objectEntry, true)
 	} else {
 		s.objPolicy.OnObject(objectEntry, false)
