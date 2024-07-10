@@ -68,7 +68,7 @@ func (s *service) initDistributedTAE(
 		client,
 		hakeeper,
 		s.gossipNode.StatsKeyRouter(),
-		s.cfg.LogtailUpdateStatsThreshold,
+		s.cfg.LogtailUpdateWorkerFactor,
 	)
 	pu.StorageEngine = s.storeEngine
 
