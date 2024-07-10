@@ -119,7 +119,7 @@ func (matcher *ColumnRef) String() string {
 	return fmt.Sprintf("Column %s:%s", matcher.TableName, matcher.ColumnName)
 }
 
-func (matcher *ColumnRef) GetAssignedVar(node *plan.Node, aliases plan.UnorderedMap[string, string]) *plan.ColDef {
+func (matcher *ColumnRef) GetAssignedVar(node *plan2.Node, aliases plan.UnorderedMap[string, string]) *SColDef {
 	if node.NodeType != plan2.Node_TABLE_SCAN {
 		return nil
 	}
@@ -130,15 +130,16 @@ func (matcher *ColumnRef) GetAssignedVar(node *plan.Node, aliases plan.Unordered
 
 	for _, col := range node.TableDef.Cols {
 		if col.Name == matcher.ColumnName {
-			return &plan.ColDef{
+			return &SColDef{
 				Name: col.Name,
+				Type: col.Typ,
 			}
 		}
 	}
 	return nil
 }
 
-type GetFunc func(*plan.QueryBuilder, *plan2.Node) []*plan2.ColDef
+type GetFunc func(*plan.QueryBuilder, *plan2.Node) []SColDef
 
 type SymbolsMatcher struct {
 	GetFunc         GetFunc
@@ -150,13 +151,28 @@ func (matcher *SymbolsMatcher) String() string {
 }
 
 func (matcher *SymbolsMatcher) SimpleMatch(node *plan.Node) bool {
-	//TODO implement me
-	panic("implement me")
+	matcher.GetFunc(nil, node)
+	return true
 }
 
 func (matcher *SymbolsMatcher) DeepMatch(ctx context.Context, node *plan.Node, aliases plan.UnorderedMap[string, string]) (*MatchResult, error) {
-	//TODO implement me
-	panic("implement me")
+	if !matcher.SimpleMatch(node) {
+		return FailMatched(), nil
+	}
+	realCols := matcher.GetFunc(nil, node)
+	realNames := make([]string, len(realCols))
+	for i, name := range realCols {
+		realNames[i] = name.Name
+	}
+
+	eNames := make([]string, 0)
+	for _, alias := range matcher.ExpectedAliases {
+		if ok, v := aliases.Find(alias); ok {
+			eNames = append(eNames, v)
+		}
+	}
+
+	return NewMatchResult(StringsEqual(realNames, eNames), nil), nil
 }
 
 type AssignedSymbolsMatcher struct {
@@ -169,13 +185,26 @@ func (matcher *AssignedSymbolsMatcher) String() string {
 }
 
 func (matcher *AssignedSymbolsMatcher) SimpleMatch(node *plan.Node) bool {
-	//TODO implement me
-	panic("implement me")
+	matcher.GetFunc(nil, node)
+	return true
 }
 
 func (matcher *AssignedSymbolsMatcher) DeepMatch(ctx context.Context, node *plan.Node, aliases plan.UnorderedMap[string, string]) (*MatchResult, error) {
-	//TODO implement me
-	panic("implement me")
+	if !matcher.SimpleMatch(node) {
+		return FailMatched(), nil
+	}
+	realCols := matcher.GetFunc(nil, node)
+
+	expectCols := make([]SColDef, 0)
+	for _, eMatcher := range matcher.ExpectedMatchers {
+		colDef := eMatcher.GetAssignedVar(node, aliases)
+		if colDef == nil {
+			return FailMatched(), nil
+		}
+		expectCols = append(expectCols, *colDef)
+	}
+
+	return NewMatchResult(SColDefsEqual(realCols, expectCols), nil), nil
 }
 
 type OutputMatcher struct {

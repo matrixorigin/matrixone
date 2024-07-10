@@ -16,7 +16,6 @@ package tools
 
 import (
 	"context"
-	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -32,7 +31,59 @@ func Test_output(t *testing.T) {
 				TColumnRef("lineitem", "l_orderkey"),
 			),
 		).WithOutputs("L_ORDERKEY")
-	fmt.Println(pattern)
 	err := AssertPlan(context.Background(), nil, "SELECT l_orderkey FROM lineitem", pattern)
+	assert.Nil(t, err)
+}
+
+func Test_outputTwoColumns(t *testing.T) {
+	p := TOutput([]string{"L_ORDERKEY", "L_ORDERKEY"},
+		TTableScan("lineitem",
+			NewStringMap(
+				NewStringPair("L_ORDERKEY", "l_orderkey"),
+			),
+		),
+	)
+	err := AssertPlan(context.Background(), nil, "SELECT l_orderkey, l_orderkey FROM lineitem", p)
+	assert.Nil(t, err)
+}
+
+func Test_outputTwoColumns2(t *testing.T) {
+	p := TOutput([]string{"L_ORDERKEY", "L_ORDERKEY"},
+		TTableScan("lineitem",
+			NewStringMap(
+				NewStringPair("L_ORDERKEY", "l_orderkey"),
+			),
+		),
+	)
+	err := AssertPlan(context.Background(), nil,
+		"SELECT l_extendedprice, l_orderkey, l_discount, l_orderkey, l_linenumber FROM lineitem", p)
+	assert.Nil(t, err)
+}
+
+func Test_strictOutput(t *testing.T) {
+	p := TStrictOutput([]string{"L_ORDERKEY", "L_EXTENDEDPRICE"},
+		TTableScan("lineitem",
+			NewStringMap(
+				NewStringPair("L_ORDERKEY", "l_orderkey"),
+				NewStringPair("L_EXTENDEDPRICE", "l_extendedprice"),
+			),
+		),
+	)
+	err := AssertPlan(context.Background(), nil,
+		"SELECT  l_orderkey, l_extendedprice FROM lineitem", p)
+	assert.Nil(t, err)
+}
+
+func Test_strictTableScan(t *testing.T) {
+	p := TOutput([]string{"L_ORDERKEY", "L_EXTENDEDPRICE"},
+		TStrictTableScan("lineitem",
+			NewStringMap(
+				NewStringPair("L_ORDERKEY", "l_orderkey"),
+				NewStringPair("L_EXTENDEDPRICE", "l_extendedprice"),
+			),
+		),
+	)
+	err := AssertPlan(context.Background(), nil,
+		"SELECT  l_orderkey, l_extendedprice FROM lineitem", p)
 	assert.Nil(t, err)
 }

@@ -16,6 +16,7 @@ package tools
 
 import (
 	"context"
+	"strings"
 
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -31,6 +32,26 @@ func NewMatchResult(isMatch bool, retAliases plan.UnorderedMap[string, string]) 
 		IsMatch:    isMatch,
 		RetAliases: retAliases,
 	}
+}
+
+func (mr *MatchResult) String() string {
+	sb := strings.Builder{}
+	if mr.IsMatch {
+		sb.WriteString("match")
+	} else {
+		sb.WriteString("no match")
+	}
+	if len(mr.RetAliases) > 0 {
+		sb.WriteString(" {")
+		for k, v := range mr.RetAliases {
+			sb.WriteString(k)
+			sb.WriteString(": ")
+			sb.WriteString(v)
+			sb.WriteString(",")
+		}
+		sb.WriteString("}")
+	}
+	return sb.String()
 }
 
 func Matched() *MatchResult {
@@ -61,8 +82,13 @@ type Matcher interface {
 	String() string
 }
 
+type SColDef struct {
+	Name string
+	Type plan2.Type
+}
+
 type RValueMatcher interface {
-	GetAssignedVar(*plan2.Node, plan.UnorderedMap[string, string]) *plan2.ColDef
+	GetAssignedVar(*plan2.Node, plan.UnorderedMap[string, string]) *SColDef
 	String() string
 }
 
@@ -82,4 +108,16 @@ type AssertConfig struct {
 
 type MatchingState struct {
 	Patterns []*MatchPattern
+}
+
+type StringPair struct {
+	Key   string
+	Value string
+}
+
+func NewStringPair(k, v string) StringPair {
+	return StringPair{
+		Key:   k,
+		Value: v,
+	}
 }

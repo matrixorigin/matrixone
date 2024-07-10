@@ -16,6 +16,8 @@ package tools
 
 import (
 	"context"
+	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -43,19 +45,19 @@ func TAnyNot(nodeType plan2.Node_NodeType, children ...*MatchPattern) *MatchPatt
 	return TAny(children...).With(&NodeMatcher{NodeType: nodeType, Not: true})
 }
 
-func TTableScan(tableName string) *MatchPattern {
-	return TNode(plan2.Node_TABLE_SCAN, nil).With(&TableScanMatcher{
+func TTableScanWithoutColRef(tableName string) *MatchPattern {
+	return TNode(plan2.Node_TABLE_SCAN).With(&TableScanMatcher{
 		TableName: tableName,
 	})
 }
 
-func TTableScanWithColRef(tableName string, colRefs plan.UnorderedMap[string, string]) *MatchPattern {
-	ret := TTableScan(tableName)
+func TTableScan(tableName string, colRefs plan.UnorderedMap[string, string]) *MatchPattern {
+	ret := TTableScanWithoutColRef(tableName)
 	return ret.AddColRefs(tableName, colRefs)
 }
 
 func TStrictTableScan(tableName string, colRefs plan.UnorderedMap[string, string]) *MatchPattern {
-	ret := TTableScanWithColRef(tableName, colRefs)
+	ret := TTableScan(tableName, colRefs)
 	newColRes := make([]RValueMatcher, 0)
 	for _, val := range colRefs {
 		newColRes = append(newColRes, TColumnRef(tableName, val))
@@ -69,6 +71,21 @@ func TColumnRef(tableName, colName string) RValueMatcher {
 
 func TAggregate() *MatchPattern {
 	return nil
+}
+
+func TOutput(outputs []string, child *MatchPattern) *MatchPattern {
+	res := TOutputWithoutOutputs(child)
+	res.WithOutputs(outputs...)
+	return res
+}
+
+func TOutputWithoutOutputs(child *MatchPattern) *MatchPattern {
+	return TNode(plan2.Node_PROJECT, child)
+}
+
+func TStrictOutput(outputs []string, child *MatchPattern) *MatchPattern {
+	ret := TOutput(outputs, child)
+	return ret.WithExactOutputs(outputs...)
 }
 
 func (pattern *MatchPattern) With(matcher Matcher) *MatchPattern {
@@ -94,9 +111,15 @@ func (pattern *MatchPattern) WithAlias(alias string, matcher RValueMatcher) *Mat
 }
 
 func (pattern *MatchPattern) WithExactAssignedOutputs(expectedAliases []RValueMatcher) *MatchPattern {
-	fun := func(builder *plan.QueryBuilder, node *plan2.Node) []*plan2.ColDef {
-		ret := make([]*plan2.ColDef, 0)
-		//TODO:fix
+	fun := func(builder *plan.QueryBuilder, node *plan2.Node) []SColDef {
+		ret := make([]SColDef, 0)
+		for _, expr := range node.ProjectList {
+			col := expr.GetCol()
+			ret = append(ret, SColDef{
+				Name: strings.Split(col.Name, ".")[1],
+				Type: expr.GetTyp(),
+			})
+		}
 		return ret
 	}
 	pattern.Matchers = append(pattern.Matchers,
@@ -113,11 +136,31 @@ func (pattern *MatchPattern) WithOutputs(aliases ...string) *MatchPattern {
 	return pattern
 }
 
+func (pattern *MatchPattern) WithExactOutputs(outputs ...string) *MatchPattern {
+	pattern.Matchers = append(pattern.Matchers,
+		&SymbolsMatcher{
+			GetFunc: func(builder *plan.QueryBuilder, node *plan2.Node) []SColDef {
+				plan.AssertFunc(node.NodeType == plan2.Node_PROJECT, "must be project node")
+				ret := make([]SColDef, 0)
+				for _, expr := range node.ProjectList {
+					col := expr.GetCol()
+					ret = append(ret, SColDef{
+						Name: strings.Split(col.Name, ".")[1],
+						Type: expr.GetTyp(),
+					})
+				}
+				return ret
+			},
+			ExpectedAliases: outputs,
+		})
+	return pattern
+}
+
 func (pattern *MatchPattern) IsEnd() bool {
 	return len(pattern.Children) == 0
 }
 
-func (pattern *MatchPattern) SimpleMatch(node *plan2.Node) []*MatchingState {
+func SimpleMatch(pattern *MatchPattern, node *plan2.Node) []*MatchingState {
 	states := make([]*MatchingState, 0)
 	if pattern.AnyTree {
 		childPatterns := make([]*MatchPattern, len(node.Children))
@@ -131,7 +174,7 @@ func (pattern *MatchPattern) SimpleMatch(node *plan2.Node) []*MatchingState {
 	}
 
 	if len(node.Children) == len(pattern.Children) &&
-		pattern.SimpleMatchMatchers(node) {
+		SimpleMatchMatchers(pattern, node) {
 		states = append(states, &MatchingState{
 			Patterns: pattern.Children,
 		})
@@ -139,7 +182,7 @@ func (pattern *MatchPattern) SimpleMatch(node *plan2.Node) []*MatchingState {
 	return states
 }
 
-func (pattern *MatchPattern) SimpleMatchMatchers(node *plan2.Node) bool {
+func SimpleMatchMatchers(pattern *MatchPattern, node *plan2.Node) bool {
 	for _, matcher := range pattern.Matchers {
 		if !matcher.SimpleMatch(node) {
 			return false
@@ -148,9 +191,10 @@ func (pattern *MatchPattern) SimpleMatchMatchers(node *plan2.Node) bool {
 	return true
 }
 
-func (pattern *MatchPattern) DeepMatch(
+func DeepMatch(
 	ctx context.Context,
 	node *plan2.Node,
+	pattern *MatchPattern,
 	aliases plan.UnorderedMap[string, string]) (*MatchResult, error) {
 	newAliases := make(plan.UnorderedMap[string, string])
 	for _, matcher := range pattern.Matchers {
@@ -227,6 +271,7 @@ func (state *MatchingState) IsEnd() bool {
 }
 
 func MatchSteps(ctx context.Context, query *plan2.Query, pattern *MatchPattern) (*MatchResult, error) {
+	fmt.Println(pattern)
 	for _, step := range query.Steps {
 		res, err := Match(ctx, query.Nodes, query.Nodes[step], pattern)
 		if err != nil {
@@ -240,7 +285,7 @@ func MatchSteps(ctx context.Context, query *plan2.Query, pattern *MatchPattern) 
 }
 
 func Match(ctx context.Context, nodes []*plan2.Node, node *plan2.Node, pattern *MatchPattern) (*MatchResult, error) {
-	states := pattern.SimpleMatch(node)
+	states := SimpleMatch(pattern, node)
 	if len(states) == 0 {
 		return FailMatched(), nil
 	}
@@ -260,7 +305,7 @@ func Match(ctx context.Context, nodes []*plan2.Node, node *plan2.Node, pattern *
 			continue
 		}
 
-		deepRes, err := pattern.DeepMatch(ctx, node, childRes.RetAliases)
+		deepRes, err := DeepMatch(ctx, node, pattern, childRes.RetAliases)
 		if err != nil {
 			return nil, err
 		}
@@ -313,7 +358,7 @@ func MatchLeaf(ctx context.Context,
 		if !state.IsEnd() {
 			continue
 		}
-		deepRes, err := pattern.DeepMatch(ctx, node, make(plan.UnorderedMap[string, string]))
+		deepRes, err := DeepMatch(ctx, node, pattern, make(plan.UnorderedMap[string, string]))
 		if err != nil {
 			return nil, err
 		}
@@ -364,4 +409,52 @@ func Insert(ctx context.Context, aliases plan.UnorderedMap[string, string], k, v
 	}
 	aliases.Insert(k, v)
 	return nil
+}
+
+func NewStringMap(pairs ...StringPair) plan.UnorderedMap[string, string] {
+	ret := make(plan.UnorderedMap[string, string])
+	for _, pair := range pairs {
+		ret[pair.Key] = pair.Value
+	}
+	return ret
+}
+
+func StringsEqual(a, b []string) bool {
+	alen := len(a)
+	blen := len(b)
+	if alen != blen {
+		return false
+	}
+	if alen == 0 {
+		return true
+	}
+	sort.Strings(a)
+	sort.Strings(b)
+	for i, s := range a {
+		if s != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func SColDefsEqual(a, b []SColDef) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	alen := len(a)
+	if alen == 0 {
+		return true
+	}
+	sort.Slice(a, func(i, j int) bool { return a[i].Name < a[j].Name })
+	sort.Slice(b, func(i, j int) bool { return b[i].Name < b[j].Name })
+	for i := 0; i < alen; i++ {
+		if a[i].Name != b[i].Name {
+			return false
+		}
+		if a[i].Type.Id != b[i].Type.Id {
+			return false
+		}
+	}
+	return true
 }
