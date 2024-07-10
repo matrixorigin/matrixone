@@ -23,29 +23,29 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "index"
+const opName = "index"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (indexJoin *IndexJoin) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": index join ")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	ap := arg
+func (indexJoin *IndexJoin) Prepare(proc *process.Process) (err error) {
+	ap := indexJoin
 	ap.ctr = new(container)
 	ap.ctr.InitReceiver(proc, false)
 	return err
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (indexJoin *IndexJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze(indexJoin.GetIdx(), indexJoin.GetParallelIdx(), indexJoin.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
-	ap := arg
+	ap := indexJoin
 	ctr := ap.ctr
 	result := vm.NewCallResult()
 	for {
@@ -66,11 +66,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				continue
 			}
 
-			if arg.ctr.buf != nil {
-				proc.PutBatch(arg.ctr.buf)
-				arg.ctr.buf = nil
+			if indexJoin.ctr.buf != nil {
+				proc.PutBatch(indexJoin.ctr.buf)
+				indexJoin.ctr.buf = nil
 			}
-			arg.ctr.buf = batch.NewWithSize(len(ap.Result))
+			indexJoin.ctr.buf = batch.NewWithSize(len(ap.Result))
 			for i, pos := range ap.Result {
 				srcVec := bat.Vecs[pos]
 				vec := proc.GetVector(*srcVec.GetType())
@@ -78,12 +78,12 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 					vec.Free(proc.Mp())
 					return result, err
 				}
-				arg.ctr.buf.SetVector(int32(i), vec)
+				indexJoin.ctr.buf.SetVector(int32(i), vec)
 			}
-			arg.ctr.buf.AddRowCount(bat.RowCount())
+			indexJoin.ctr.buf.AddRowCount(bat.RowCount())
 			proc.PutBatch(bat)
-			result.Batch = arg.ctr.buf
-			anal.Output(arg.ctr.buf, arg.GetIsLast())
+			result.Batch = indexJoin.ctr.buf
+			anal.Output(indexJoin.ctr.buf, indexJoin.GetIsLast())
 			return result, nil
 
 		default:

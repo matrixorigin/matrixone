@@ -26,39 +26,39 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "left"
+const opName = "left"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (leftJoin *LeftJoin) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": left join ")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	arg.ctr = new(container)
-	arg.ctr.InitReceiver(proc, false)
-	arg.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
-	arg.ctr.vecs = make([]*vector.Vector, len(arg.Conditions[0]))
+func (leftJoin *LeftJoin) Prepare(proc *process.Process) (err error) {
+	leftJoin.ctr = new(container)
+	leftJoin.ctr.InitReceiver(proc, false)
+	leftJoin.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
+	leftJoin.ctr.vecs = make([]*vector.Vector, len(leftJoin.Conditions[0]))
 
-	arg.ctr.evecs = make([]evalVector, len(arg.Conditions[0]))
-	for i := range arg.ctr.evecs {
-		arg.ctr.evecs[i].executor, err = colexec.NewExpressionExecutor(proc, arg.Conditions[0][i])
+	leftJoin.ctr.evecs = make([]evalVector, len(leftJoin.Conditions[0]))
+	for i := range leftJoin.ctr.evecs {
+		leftJoin.ctr.evecs[i].executor, err = colexec.NewExpressionExecutor(proc, leftJoin.Conditions[0][i])
 	}
 
-	if arg.Cond != nil {
-		arg.ctr.expr, err = colexec.NewExpressionExecutor(proc, arg.Cond)
+	if leftJoin.Cond != nil {
+		leftJoin.ctr.expr, err = colexec.NewExpressionExecutor(proc, leftJoin.Cond)
 	}
 	return err
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (leftJoin *LeftJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze(leftJoin.GetIdx(), leftJoin.GetParallelIdx(), leftJoin.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
-	ctr := arg.ctr
+	ctr := leftJoin.ctr
 	result := vm.NewCallResult()
 	for {
 		switch ctr.state {
@@ -69,7 +69,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			ctr.state = Probe
 
 		case Probe:
-			if arg.ctr.bat == nil {
+			if leftJoin.ctr.bat == nil {
 				msg := ctr.ReceiveFromSingleReg(0, anal)
 				if msg.Err != nil {
 					return result, msg.Err
@@ -84,24 +84,24 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 					proc.PutBatch(bat)
 					continue
 				}
-				arg.ctr.bat = bat
-				arg.ctr.lastrow = 0
+				leftJoin.ctr.bat = bat
+				leftJoin.ctr.lastrow = 0
 			}
 
-			startrow := arg.ctr.lastrow
+			startrow := leftJoin.ctr.lastrow
 			if ctr.mp == nil {
-				if err := ctr.emptyProbe(arg, proc, anal, arg.GetIsFirst(), arg.GetIsLast(), &result); err != nil {
+				if err := ctr.emptyProbe(leftJoin, proc, anal, leftJoin.GetIsFirst(), leftJoin.GetIsLast(), &result); err != nil {
 					return result, err
 				}
 			} else {
-				if err := ctr.probe(arg, proc, anal, arg.GetIsFirst(), arg.GetIsLast(), &result); err != nil {
+				if err := ctr.probe(leftJoin, proc, anal, leftJoin.GetIsFirst(), leftJoin.GetIsLast(), &result); err != nil {
 					return result, err
 				}
 			}
-			if arg.ctr.lastrow == 0 {
-				proc.PutBatch(arg.ctr.bat)
-				arg.ctr.bat = nil
-			} else if arg.ctr.lastrow == startrow {
+			if leftJoin.ctr.lastrow == 0 {
+				proc.PutBatch(leftJoin.ctr.bat)
+				leftJoin.ctr.bat = nil
+			} else if leftJoin.ctr.lastrow == startrow {
 				return result, moerr.NewInternalErrorNoCtx("left join hanging")
 			}
 			return result, nil
@@ -157,7 +157,7 @@ func (ctr *container) build(anal process.Analyze) error {
 	return ctr.receiveBatch(anal)
 }
 
-func (ctr *container) emptyProbe(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
+func (ctr *container) emptyProbe(ap *LeftJoin, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
 	anal.Input(ap.ctr.bat, isFirst)
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
@@ -187,7 +187,7 @@ func (ctr *container) emptyProbe(ap *Argument, proc *process.Process, anal proce
 	return nil
 }
 
-func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
+func (ctr *container) probe(ap *LeftJoin, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
 	anal.Input(ap.ctr.bat, isFirst)
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)

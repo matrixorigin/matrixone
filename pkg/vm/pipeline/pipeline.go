@@ -66,7 +66,7 @@ func (p *Pipeline) Run(r engine.Reader, topValueMsgTag int32, proc *process.Proc
 		}
 	}
 
-	if tableScanOperator, ok := vm.GetLeafOp(p.rootOp).(*table_scan.Argument); ok {
+	if tableScanOperator, ok := vm.GetLeafOp(p.rootOp).(*table_scan.TableScan); ok {
 		tableScanOperator.Reader = r
 		tableScanOperator.TopValueMsgTag = topValueMsgTag
 		tableScanOperator.Attrs = p.attrs
@@ -97,7 +97,7 @@ func (p *Pipeline) ConstRun(bat *batch.Batch, proc *process.Process) (end bool, 
 		}
 	}
 
-	if valueScanOperator, ok := vm.GetLeafOp(p.rootOp).(*value_scan.Argument); ok {
+	if valueScanOperator, ok := vm.GetLeafOp(p.rootOp).(*value_scan.ValueScan); ok {
 		pipelineInputBatches := []*batch.Batch{bat}
 		if bat != nil {
 			pipelineInputBatches = append(pipelineInputBatches, nil)

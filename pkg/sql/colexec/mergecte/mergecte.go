@@ -24,81 +24,81 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "merge_cte"
+const opName = "merge_cte"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (mergeCte *MergeCTE) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": merge cte ")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) error {
-	arg.ctr = new(container)
-	arg.ctr.InitReceiver(proc, true)
-	arg.ctr.nodeCnt = int32(len(proc.Reg.MergeReceivers)) - 1
-	arg.ctr.curNodeCnt = arg.ctr.nodeCnt
-	arg.ctr.status = sendInitial
+func (mergeCte *MergeCTE) Prepare(proc *process.Process) error {
+	mergeCte.ctr = new(container)
+	mergeCte.ctr.InitReceiver(proc, true)
+	mergeCte.ctr.nodeCnt = int32(len(proc.Reg.MergeReceivers)) - 1
+	mergeCte.ctr.curNodeCnt = mergeCte.ctr.nodeCnt
+	mergeCte.ctr.status = sendInitial
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (mergeCte *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze(mergeCte.GetIdx(), mergeCte.GetParallelIdx(), mergeCte.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 	var msg *process.RegisterMessage
 	result := vm.NewCallResult()
-	if arg.ctr.buf != nil {
-		proc.PutBatch(arg.ctr.buf)
-		arg.ctr.buf = nil
+	if mergeCte.ctr.buf != nil {
+		proc.PutBatch(mergeCte.ctr.buf)
+		mergeCte.ctr.buf = nil
 	}
-	switch arg.ctr.status {
+	switch mergeCte.ctr.status {
 	case sendInitial:
-		msg = arg.ctr.ReceiveFromSingleReg(0, anal)
+		msg = mergeCte.ctr.ReceiveFromSingleReg(0, anal)
 		if msg.Err != nil {
 			result.Status = vm.ExecStop
 			return result, msg.Err
 		}
-		arg.ctr.buf = msg.Batch
-		if arg.ctr.buf == nil {
-			arg.ctr.status = sendLastTag
+		mergeCte.ctr.buf = msg.Batch
+		if mergeCte.ctr.buf == nil {
+			mergeCte.ctr.status = sendLastTag
 		}
 		fallthrough
 	case sendLastTag:
-		if arg.ctr.status == sendLastTag {
-			arg.ctr.status = sendRecursive
-			arg.ctr.buf = makeRecursiveBatch(proc)
-			arg.ctr.RemoveChosen(1)
+		if mergeCte.ctr.status == sendLastTag {
+			mergeCte.ctr.status = sendRecursive
+			mergeCte.ctr.buf = makeRecursiveBatch(proc)
+			mergeCte.ctr.RemoveChosen(1)
 		}
 	case sendRecursive:
 		for {
-			msg = arg.ctr.ReceiveFromAllRegs(anal)
+			msg = mergeCte.ctr.ReceiveFromAllRegs(anal)
 			if msg.Batch == nil {
 				result.Batch = nil
 				result.Status = vm.ExecStop
 				return result, nil
 			}
-			arg.ctr.buf = msg.Batch
-			if !arg.ctr.buf.Last() {
+			mergeCte.ctr.buf = msg.Batch
+			if !mergeCte.ctr.buf.Last() {
 				break
 			}
 
-			arg.ctr.buf.SetLast()
-			arg.ctr.curNodeCnt--
-			if arg.ctr.curNodeCnt == 0 {
-				arg.ctr.curNodeCnt = arg.ctr.nodeCnt
+			mergeCte.ctr.buf.SetLast()
+			mergeCte.ctr.curNodeCnt--
+			if mergeCte.ctr.curNodeCnt == 0 {
+				mergeCte.ctr.curNodeCnt = mergeCte.ctr.nodeCnt
 				break
 			} else {
-				proc.PutBatch(arg.ctr.buf)
+				proc.PutBatch(mergeCte.ctr.buf)
 			}
 		}
 	}
 
-	anal.Input(arg.ctr.buf, arg.GetIsFirst())
-	anal.Output(arg.ctr.buf, arg.GetIsLast())
-	result.Batch = arg.ctr.buf
+	anal.Input(mergeCte.ctr.buf, mergeCte.GetIsFirst())
+	anal.Output(mergeCte.ctr.buf, mergeCte.GetIsLast())
+	result.Batch = mergeCte.ctr.buf
 	return result, nil
 }
 
