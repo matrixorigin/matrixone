@@ -117,4 +117,45 @@ SQL parser error: table "t1" does not exist
 select * from T1;
 SQL parser error: table "t1" does not exist
 drop database test;
+set global lower_case_table_names = 0;
+select @@lower_case_table_names;
+@@lower_case_table_names
+0
+show variables like "%lower%";
+Variable_name    Value
+lower_case_file_system    off
+lower_case_table_names    0
+create database if not exists test;
+use test;
+drop table if exists Tt;
+drop table if exists TT;
+create table Tt (Aa int);
+insert into Tt values (1), (2), (3);
+select Aa from Tt;
+Aa
+1
+2
+3
+create table TT (c1 int);
+show tables;
+Tables_in_test
+TT
+Tt
+alter table TT add column c2 int; -- should work
+alter table `TT` add column c3 int; -- should work as well
+select * from TT;
+c1    c2    c3
+select * from `TT`;
+c1    c2    c3
+select * from Tt;
+aa
+1
+2
+3
+select * from `Tt`;
+aa
+1
+2
+3
+drop database test;
 drop account a1;
