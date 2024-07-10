@@ -202,7 +202,12 @@ func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, mobjs []*catalog.O
 			ActiveCNObj.AddActiveCNObj(mobjs)
 			logMergeTask(e.tableName, math.MaxUint64, mobjs, blkCnt, osize, esize)
 		} else {
-			logutil.Warnf("mergeblocks send to cn error: %v", err)
+			logutil.Info(
+				"MergeExecutorError",
+				common.OperationField("send-cn-task"),
+				common.AnyField("task", fmt.Sprintf("table-%d-%s", cntask.TblId, cntask.TableName)),
+				common.AnyField("error", err),
+			)
 			return
 		}
 	} else {
@@ -218,7 +223,12 @@ func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, mobjs []*catalog.O
 		task, err := e.rt.Scheduler.ScheduleMultiScopedTxnTaskWithObserver(nil, tasks.DataCompactionTask, scopes, factory, e)
 		if err != nil {
 			if err != tasks.ErrScheduleScopeConflict {
-				logutil.Infof("[Mergeblocks] Schedule error info=%v", err)
+				logutil.Info(
+					"MergeExecutorError",
+					common.OperationField("schedule-merge-task"),
+					common.AnyField("error", err),
+					common.AnyField("task", task.Name()),
+				)
 			}
 			return
 		}
@@ -266,11 +276,16 @@ func logMergeTask(name string, taskId uint64, merges []*catalog.ObjectEntry, blk
 		v2.TaskDNMergeScheduledByCounter.Inc()
 		v2.TaskDNMergedSizeCounter.Add(float64(osize))
 	}
-	logutil.Infof(
-		"[Mergeblocks] Scheduled %v [%v|on%d,bn%d|%s,%s], merged(%v): %s", name,
-		platform, len(merges), blkn,
-		common.HumanReadableBytes(osize), common.HumanReadableBytes(esize),
-		rows,
-		infoBuf.String(),
+	logutil.Info(
+		"MergeExecutor",
+		common.OperationField("schedule-merge-task"),
+		common.AnyField("name", name),
+		common.AnyField("platform", platform),
+		common.AnyField("num-obj", len(merges)),
+		common.AnyField("num-blk", blkn),
+		common.AnyField("orig-size", common.HumanReadableBytes(osize)),
+		common.AnyField("est-size", common.HumanReadableBytes(esize)),
+		common.AnyField("rows", rows),
+		common.AnyField("info", infoBuf.String()),
 	)
 }
