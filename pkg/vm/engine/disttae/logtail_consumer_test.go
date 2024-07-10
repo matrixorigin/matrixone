@@ -29,6 +29,9 @@ func TestSubscribedTable(t *testing.T) {
 	subscribeRecord.m = make(map[SubTableID]SubTableStatus)
 	subscribeRecord.eng = &Engine{
 		partitions: make(map[[2]uint64]*logtailreplay.Partition),
+		globalStats: &GlobalStats{
+			logtailUpdate: newLogtailUpdate(),
+		},
 	}
 	require.Equal(t, 0, len(subscribeRecord.m))
 
