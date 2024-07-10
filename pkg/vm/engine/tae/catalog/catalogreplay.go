@@ -378,6 +378,7 @@ func (catalog *Catalog) onReplayUpdateObject(
 		cmd.mvccNode.EntryMVCCNode = &obj.EntryMVCCNode
 		obj.ObjectMVCCNode = *cmd.mvccNode.BaseNode
 		obj.remainingRows = &common.FixedSampleIII[int]{}
+		obj.ObjectState = ObjectState_Create_ApplyCommit
 		rel.AddEntryLocked(obj)
 	}
 	if cmd.mvccNode.DeletedAt.Equal(&txnif.UncommitTS) {
@@ -390,6 +391,7 @@ func (catalog *Catalog) onReplayUpdateObject(
 		obj.ObjectMVCCNode = *cmd.mvccNode.BaseNode
 		cmd.mvccNode.TxnMVCCNode = &obj.DeleteNode
 		cmd.mvccNode.EntryMVCCNode = &obj.EntryMVCCNode
+		obj.ObjectState = ObjectState_Delete_ApplyCommit
 	}
 
 	if obj.objData == nil {
@@ -454,6 +456,7 @@ func (catalog *Catalog) onReplayCheckpointObject(
 		obj.ObjectMVCCNode = *objNode
 		obj.CreateNode = *txnNode
 		obj.remainingRows = &common.FixedSampleIII[int]{}
+		obj.ObjectState = ObjectState_Create_ApplyCommit
 		rel.AddEntryLocked(obj)
 	}
 	if entryNode.DeletedAt.Equal(&txnNode.End) {
@@ -464,6 +467,7 @@ func (catalog *Catalog) onReplayCheckpointObject(
 		obj.EntryMVCCNode = *entryNode
 		obj.ObjectMVCCNode = *objNode
 		obj.DeleteNode = *txnNode
+		obj.ObjectState = ObjectState_Delete_ApplyCommit
 	}
 	if obj.objData == nil {
 		obj.objData = dataFactory.MakeObjectFactory()(obj)
