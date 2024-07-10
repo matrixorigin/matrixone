@@ -1068,7 +1068,7 @@ func (s *subscribedTable) setTableSubscribed(dbId, tblId uint64) {
 	logutil.Infof("%s subscribe tbl[db: %d, tbl: %d] succeed", logTag, dbId, tblId)
 }
 
-func (s *subscribedTable) setTableSubscribe(dbId, tblId uint64) {
+func (s *subscribedTable) setTableSubRspReceived(dbId, tblId uint64) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	s.m[SubTableID{DatabaseID: dbId, TableID: tblId}] = SubTableStatus{
@@ -1603,7 +1603,7 @@ func (cmd cmdToConsumeSub) action(ctx context.Context, e *Engine, ctrl *routineC
 	}
 	lt := response.GetLogtail()
 	tbl := lt.GetTable()
-	e.pClient.subscribed.setTableSubscribe(tbl.DbId, tbl.TbId)
+	e.pClient.subscribed.setTableSubRspReceived(tbl.DbId, tbl.TbId)
 	return nil
 }
 
