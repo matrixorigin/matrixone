@@ -106,18 +106,21 @@ func NewTransferHashPage(id *common.ID, ts time.Time, pageSize int, isTransient 
 func (page *TransferHashPage) ID() *common.ID    { return page.id }
 func (page *TransferHashPage) BornTS() time.Time { return page.bornTS }
 
-// 0 no need to clear
-// 1 clear memory hashmap
-// 2 clear disk hashmap
+const (
+	notClear    = uint8(0)
+	clearMemory = uint8(1)
+	clearDisk   = uint8(2)
+)
+
 func (page *TransferHashPage) TTL() uint8 {
 	now := time.Now()
 	if now.After(page.bornTS.Add(page.params.DiskTTL)) {
-		return 2
+		return clearDisk
 	}
 	if now.After(page.bornTS.Add(page.params.TTL)) {
-		return 1
+		return clearMemory
 	}
-	return 0
+	return notClear
 }
 
 func (page *TransferHashPage) Close() {

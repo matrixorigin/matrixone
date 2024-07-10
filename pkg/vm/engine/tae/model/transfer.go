@@ -66,9 +66,9 @@ func (table *TransferTable[T]) prepareTTL() (mem, disk []*common.PinnedItem[T]) 
 	table.RLock()
 	for _, page := range table.pages {
 		opt := page.Item().TTL()
-		if opt == 1 {
+		if opt == clearMemory {
 			mem = append(mem, page)
-		} else if opt == 2 {
+		} else if opt == clearDisk {
 			disk = append(disk, page)
 		}
 	}
