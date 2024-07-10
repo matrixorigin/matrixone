@@ -158,12 +158,15 @@ func (s *sqlExecutor) maybeWaitCommittedLogApplied(opts executor.Options) {
 func (s *sqlExecutor) getCompileContext(
 	ctx context.Context,
 	proc *process.Process,
-	db string) *compilerContext {
-	return newCompilerContext(
-		ctx,
-		db,
-		s.eng,
-		proc)
+	db string,
+	lower int64) *compilerContext {
+	return &compilerContext{
+		ctx:       ctx,
+		defaultDB: db,
+		engine:    s.eng,
+		proc:      proc,
+		lower:     lower,
+	}
 }
 
 func (s *sqlExecutor) adjustOptions(
@@ -255,7 +258,8 @@ func (exec *txnExecutor) Exec(
 	//-----------------------------------------------------------------------------------------
 
 	receiveAt := time.Now()
-	stmts, err := parsers.Parse(exec.ctx, dialect.MYSQL, sql, 1)
+	lower := exec.opts.LowerCaseTableNames()
+	stmts, err := parsers.Parse(exec.ctx, dialect.MYSQL, sql, lower)
 	defer func() {
 		for _, stmt := range stmts {
 			stmt.Free()
@@ -302,7 +306,7 @@ func (exec *txnExecutor) Exec(
 		proc.FreeVectors()
 	}()
 
-	compileContext := exec.s.getCompileContext(exec.ctx, proc, exec.getDatabase())
+	compileContext := exec.s.getCompileContext(exec.ctx, proc, exec.getDatabase(), lower)
 	compileContext.SetRootSql(sql)
 
 	pn, err := plan.BuildPlan(compileContext, stmts[0], false)
@@ -316,7 +320,7 @@ func (exec *txnExecutor) Exec(
 	c.disableRetry = exec.opts.DisableIncrStatement()
 	c.SetBuildPlanFunc(func() (*plan.Plan, error) {
 		return plan.BuildPlan(
-			exec.s.getCompileContext(exec.ctx, proc, exec.getDatabase()),
+			exec.s.getCompileContext(exec.ctx, proc, exec.getDatabase(), lower),
 			stmts[0], false)
 	})
 
