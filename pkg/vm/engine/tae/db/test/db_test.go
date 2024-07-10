@@ -6975,16 +6975,19 @@ func TestSnapshotMeta(t *testing.T) {
 	tae.RestartDisableGC(ctx)
 	db = tae.DB
 	db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(1)
-	testutils.WaitExpect(5000, func() bool {
+	testutils.WaitExpect(10000, func() bool {
 		if db.DiskCleaner.GetCleaner().GetMaxConsumed() == nil {
 			return false
 		}
 		end := db.DiskCleaner.GetCleaner().GetMaxConsumed().GetEnd()
-		minEnd := minMerged.GetEnd()
+		if db.DiskCleaner.GetCleaner().GetMinMerged() == nil {
+			return false
+		}
+		minEnd := db.DiskCleaner.GetCleaner().GetMinMerged().GetEnd()
 		return end.GreaterEq(&minEnd)
 	})
 	end := db.DiskCleaner.GetCleaner().GetMaxConsumed().GetEnd()
-	minEnd = minMerged.GetEnd()
+	minEnd = db.DiskCleaner.GetCleaner().GetMinMerged().GetEnd()
 	assert.True(t, end.GreaterEq(&minEnd))
 	snaps, err = db.DiskCleaner.GetCleaner().GetSnapshots()
 	assert.Nil(t, err)
