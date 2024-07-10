@@ -105,9 +105,9 @@ func (entry *ObjectEntry) Clone() *ObjectEntry {
 		ObjectMVCCNode: ObjectMVCCNode{
 			ObjectStats: *entry.ObjectStats.Clone(),
 		},
-		EntryMVCCNode: *entry.EntryMVCCNode.Clone(),
-		CreateNode:    *entry.CreateNode.CloneAll(),
-		DeleteNode:    *entry.DeleteNode.CloneAll(),
+		EntryMVCCNode: entry.EntryMVCCNode,
+		CreateNode:    entry.CreateNode,
+		DeleteNode:    entry.DeleteNode,
 		table:         entry.table,
 		ObjectNode: ObjectNode{
 			state:         entry.state,
