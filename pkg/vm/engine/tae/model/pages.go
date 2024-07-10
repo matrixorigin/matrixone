@@ -108,11 +108,15 @@ func NewTransferHashPage(id *common.ID, ts time.Time, pageSize int, isTransient 
 func (page *TransferHashPage) ID() *common.ID    { return page.id }
 func (page *TransferHashPage) BornTS() time.Time { return page.bornTS }
 
+// 0 no need to clear
+// 1 clear memory hashmap
+// 2 clear disk hashmap
 func (page *TransferHashPage) TTL() uint8 {
-	if time.Now().After(page.bornTS.Add(page.params.DiskTTL)) {
+	now := time.Now()
+	if now.After(page.bornTS.Add(page.params.DiskTTL)) {
 		return 2
 	}
-	if time.Now().After(page.bornTS.Add(page.params.TTL)) {
+	if now.After(page.bornTS.Add(page.params.TTL)) {
 		return 1
 	}
 	return 0
@@ -120,7 +124,7 @@ func (page *TransferHashPage) TTL() uint8 {
 
 func (page *TransferHashPage) Close() {
 	logutil.Debugf("Closing %s", page.String())
-	page.hashmap = api.HashPageMap{M: make(map[uint32][]byte)}
+	page.hashmap.M = make(map[uint32][]byte)
 }
 
 func (page *TransferHashPage) Length() int {
@@ -166,11 +170,8 @@ func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) 
 	if atomic.LoadInt32(&page.isPersisted) == 1 {
 		diskStart := time.Now()
 		page.loadTable()
-		v2.TransferPageDiskHitHistogram.Observe(1)
 		diskDuration := time.Since(diskStart)
 		v2.TransferDiskLatencyHistogram.Observe(diskDuration.Seconds())
-	} else {
-		v2.TransferPageMemHitHistogram.Observe(1)
 	}
 	v2.TransferPageTotalHitHistogram.Observe(1)
 

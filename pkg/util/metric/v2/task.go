@@ -147,8 +147,8 @@ var (
 		Help:      "The total number of transfer hit counter.",
 	}, []string{"type"})
 
-	TransferPageMemHitHistogram   = transferPageHitHistogram.WithLabelValues("memory")
-	TransferPageDiskHitHistogram  = transferPageHitHistogram.WithLabelValues("disk")
+	//TransferPageMemHitHistogram   = transferPageHitHistogram.WithLabelValues("memory")
+	//TransferPageDiskHitHistogram  = transferPageHitHistogram.WithLabelValues("disk")
 	TransferPageTotalHitHistogram = transferPageHitHistogram.WithLabelValues("total")
 )
 
