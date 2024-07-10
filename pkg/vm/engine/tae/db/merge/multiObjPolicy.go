@@ -15,6 +15,7 @@
 package merge
 
 import (
+	"cmp"
 	"fmt"
 	"math"
 	"slices"
@@ -75,7 +76,7 @@ func (m *multiObjPolicy) revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHos
 		}
 		return compute.CompareGeneric(zmA.GetMax(), zmB.GetMax(), t)
 	})
-
+	overlappingObjsSet := make([][]*catalog.ObjectEntry, 0)
 	set := entrySet{entries: make([]*catalog.ObjectEntry, 0), maxValue: minValue(t)}
 	for _, obj := range m.objects {
 		zm := obj.GetSortKeyZonemap()
@@ -89,24 +90,36 @@ func (m *multiObjPolicy) revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHos
 			set.reset(t)
 			set.add(t, obj)
 		} else {
-			break
+			objs := make([]*catalog.ObjectEntry, len(set.entries))
+			copy(objs, set.entries)
+			overlappingObjsSet = append(overlappingObjsSet, objs)
+			set.reset(t)
 		}
-		if set.size > 2*common.DefaultMaxOsizeObjMB*common.Const1MBytes {
-			break
-		}
+	}
+	if len(set.entries) > 0 {
+		objs := make([]*catalog.ObjectEntry, len(set.entries))
+		copy(objs, set.entries)
+		overlappingObjsSet = append(overlappingObjsSet, objs)
+		set.reset(t)
+	}
+	if len(overlappingObjsSet) == 0 {
+		return nil, TaskHostDN
 	}
 
-	if len(set.entries) > m.config.maxObjs {
-		set.entries = set.entries[:m.config.maxObjs]
+	slices.SortFunc(overlappingObjsSet, func(a, b []*catalog.ObjectEntry) int {
+		return cmp.Compare(len(a), len(b))
+	})
+
+	objs := overlappingObjsSet[len(overlappingObjsSet)-1]
+	if len(objs) > m.config.maxObjs {
+		objs = objs[:m.config.maxObjs]
 	}
-	m.objects = set.entries
-	objs := controlMem(m.objects, mem)
+	m.objects = objs
+	objs = controlMem(m.objects, mem)
 	if len(objs) < 2 {
 		return nil, TaskHostDN
 	}
-	revisedObj := make([]*catalog.ObjectEntry, len(objs))
-	copy(revisedObj, objs)
-	return revisedObj, TaskHostDN
+	return objs, TaskHostDN
 }
 
 func (m *multiObjPolicy) resetForTable(*catalog.TableEntry) {
@@ -117,20 +130,17 @@ type entrySet struct {
 	entries  []*catalog.ObjectEntry
 	maxValue any
 	size     int
-	rows     int
 }
 
 func (s *entrySet) reset(t types.T) {
 	s.entries = s.entries[:0]
 	s.maxValue = minValue(t)
 	s.size = 0
-	s.rows = 0
 }
 
 func (s *entrySet) add(t types.T, obj *catalog.ObjectEntry) {
 	s.entries = append(s.entries, obj)
 	s.size += obj.GetOriginSize()
-	s.rows += obj.GetRemainingRows()
 	zmMax := obj.GetSortKeyZonemap().GetMax()
 	if compute.CompareGeneric(s.maxValue, zmMax, t) < 0 {
 		s.maxValue = zmMax

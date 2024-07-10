@@ -32,8 +32,6 @@ type Scheduler struct {
 
 	tableRowCnt int
 	tableRowDel int
-
-	tables map[*catalog.TableEntry]struct{}
 }
 
 func NewScheduler(rt *dbutils.Runtime, scheduler CNMergeScheduler) *Scheduler {
@@ -43,7 +41,6 @@ func NewScheduler(rt *dbutils.Runtime, scheduler CNMergeScheduler) *Scheduler {
 			newSingleObjPolicy(nil),
 			newMultiObjPolicy(nil),
 		},
-		tables: make(map[*catalog.TableEntry]struct{}),
 	}
 }
 
@@ -71,11 +68,6 @@ func (m *Scheduler) OnDatabase(*catalog.DBEntry) error {
 
 func (m *Scheduler) OnTable(tableEntry *catalog.TableEntry) error {
 	if StopMerge.Load() {
-		return moerr.GetOkStopCurrRecur()
-	}
-
-	if _, ok := m.tables[tableEntry]; ok {
-		delete(m.tables, tableEntry)
 		return moerr.GetOkStopCurrRecur()
 	}
 
@@ -127,7 +119,6 @@ func (m *Scheduler) OnPostTable(tableEntry *catalog.TableEntry) (err error) {
 		return
 	}
 
-	m.tables[tableEntry] = struct{}{}
 	if m.run == 0 {
 		m.executor.ExecuteSingleObjMerge(tableEntry, mobjs)
 	} else {
