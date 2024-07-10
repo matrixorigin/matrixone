@@ -29,6 +29,7 @@ import (
 )
 
 const (
+	threshHoldForRightJoinShuffle   = 120000
 	threshHoldForRangeShuffle       = 240000
 	threshHoldForHybirdShuffle      = 4000000
 	threshHoldForHashShuffle        = 8000000
@@ -309,9 +310,16 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 		return
 	}
 
-	if n.Stats.HashmapStats.HashmapSize < threshHoldForRangeShuffle {
-		return
+	if n.BuildOnLeft {
+		if n.Stats.HashmapStats.HashmapSize < threshHoldForRightJoinShuffle {
+			return
+		}
+	} else {
+		if n.Stats.HashmapStats.HashmapSize < threshHoldForRangeShuffle {
+			return
+		}
 	}
+
 	idx := 0
 	if !builder.IsEquiJoin(n) {
 		return

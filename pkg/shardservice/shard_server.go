@@ -151,6 +151,7 @@ func (s *server) handleHeartbeat(
 	ctx context.Context,
 	req *pb.Request,
 	resp *pb.Response,
+	buffer *morpc.Buffer,
 ) error {
 	resp.Heartbeat.Operators = s.r.heartbeat(
 		req.Heartbeat.CN,
@@ -163,6 +164,7 @@ func (s *server) handleCreateShards(
 	ctx context.Context,
 	req *pb.Request,
 	resp *pb.Response,
+	buffer *morpc.Buffer,
 ) error {
 	id := req.CreateShards.ID
 	v := req.CreateShards.Metadata
@@ -181,6 +183,7 @@ func (s *server) handleDeleteShards(
 	ctx context.Context,
 	req *pb.Request,
 	resp *pb.Response,
+	buffer *morpc.Buffer,
 ) error {
 	id := req.DeleteShards.ID
 	s.r.delete(id)
@@ -191,6 +194,7 @@ func (s *server) handleGetShards(
 	ctx context.Context,
 	req *pb.Request,
 	resp *pb.Response,
+	buffer *morpc.Buffer,
 ) error {
 	shards := s.r.get(req.GetShards.ID)
 	if len(shards) == 0 {
@@ -208,6 +212,7 @@ func (s *server) handlePauseCN(
 	ctx context.Context,
 	req *pb.Request,
 	resp *pb.Response,
+	buffer *morpc.Buffer,
 ) error {
 	s.r.Lock()
 	defer s.r.Unlock()

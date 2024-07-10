@@ -537,6 +537,10 @@ func (l *lockTableAllocator) cleanCommitState(ctx context.Context) {
 				if !ok {
 					services = append(services, key.(string))
 				} else if time.Since(at) > removeDisconnectDuration {
+					c.states.Range(func(key, value any) bool {
+						logCleanCannotCommitTxn(key.(string), int(value.(ctlState)))
+						return true
+					})
 					l.ctl.Delete(key)
 				}
 				return true
@@ -555,6 +559,8 @@ func (l *lockTableAllocator) cleanCommitState(ctx context.Context) {
 						activeTxnMap[sid] = m
 					}
 				} else if !isRetryError(err) {
+					l.logger.Error("get cannot commit txn failed",
+						zap.String("serviceID", sid))
 					l.getCtl(sid).disconnect()
 				}
 			}
@@ -569,6 +575,7 @@ func (l *lockTableAllocator) cleanCommitState(ctx context.Context) {
 					c := value.(*commitCtl)
 					c.states.Range(func(key, value any) bool {
 						if _, ok := m[key.(string)]; !ok {
+							logCleanCannotCommitTxn(key.(string), int(value.(ctlState)))
 							c.states.Delete(key)
 						}
 						return true
