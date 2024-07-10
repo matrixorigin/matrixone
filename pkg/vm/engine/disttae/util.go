@@ -18,10 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"regexp"
-	"strings"
-	"sync"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -46,6 +42,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
+	"regexp"
+	"strings"
 )
 
 func compPkCol(colName string, pkName string) bool {
@@ -2605,88 +2603,51 @@ type concurrentTask func() error
 type ConcurrentExecutor interface {
 	// AppendTask append the concurrent task to the exuecutor.
 	AppendTask(concurrentTask)
-	// Exec starts to run all tasks.
-	Exec() error
+	// Run starts receive task to execute.
+	Run(context.Context)
+	// GetConcurrency returns the concurrency of this executor.
+	GetConcurrency() int
 }
 
 type concurrentExecutor struct {
-	wg sync.WaitGroup
-	// maxConcurrency is the max concurrency to run the tasks at the same time.
-	maxConcurrency int
+	// concurrency is the concurrency to run the tasks at the same time.
+	concurrency int
 	// task contains all the tasks needed to run.
-	tasks []concurrentTask
+	tasks chan concurrentTask
 }
 
-func newConcurrentExecutor(max int) ConcurrentExecutor {
+func newConcurrentExecutor(concurrency int) ConcurrentExecutor {
 	return &concurrentExecutor{
-		maxConcurrency: max,
+		concurrency: concurrency,
+		tasks:       make(chan concurrentTask, 2048),
 	}
 }
 
 // AppendTask implements the ConcurrentExecutor interface.
 func (e *concurrentExecutor) AppendTask(t concurrentTask) {
-	e.tasks = append(e.tasks, t)
+	e.tasks <- t
 }
 
-func (e *concurrentExecutor) execByTask() error {
-	var firstErr error
-	var errMu sync.Mutex
-	sem := make(chan struct{}, e.maxConcurrency)
-	for _, task := range e.tasks {
-		e.wg.Add(1)
-		go func(ct concurrentTask) {
-			defer e.wg.Done()
-			sem <- struct{}{}
-			err := ct()
-			if err != nil {
-				logutil.Errorf("failed to execute task: %v", err)
-				errMu.Lock()
-				if firstErr == nil {
-					firstErr = err
-				}
-				errMu.Unlock()
-			}
-			<-sem
-		}(task)
-	}
-	e.wg.Wait()
-	return firstErr
-}
-
-func (e *concurrentExecutor) execByRoutine() error {
-	var firstErr error
-	var errMu sync.Mutex
-	taskCh := make(chan concurrentTask, len(e.tasks))
-
-	for i := 0; i < e.maxConcurrency; i++ {
+// Run implements the ConcurrentExecutor interface.
+func (e *concurrentExecutor) Run(ctx context.Context) {
+	for i := 0; i < e.concurrency; i++ {
 		go func() {
-			for task := range taskCh {
-				err := task()
-				if err != nil {
-					logutil.Errorf("failed to execute task: %v", err)
-					errMu.Lock()
-					if firstErr == nil {
-						firstErr = err
+			for {
+				select {
+				case <-ctx.Done():
+					return
+
+				case t := <-e.tasks:
+					if err := t(); err != nil {
+						logutil.Errorf("failed to execute task: %v", err)
 					}
-					errMu.Unlock()
 				}
-				e.wg.Done()
 			}
 		}()
 	}
-	for _, task := range e.tasks {
-		e.wg.Add(1)
-		taskCh <- task
-	}
-	close(taskCh)
-	e.wg.Wait()
-	return firstErr
 }
 
-// Exec implements the ConcurrentExecutor interface.
-func (e *concurrentExecutor) Exec() error {
-	if len(e.tasks) < e.maxConcurrency {
-		return e.execByTask()
-	}
-	return e.execByRoutine()
+// GetConcurrency implements the ConcurrentExecutor interface.
+func (e *concurrentExecutor) GetConcurrency() int {
+	return e.concurrency
 }
