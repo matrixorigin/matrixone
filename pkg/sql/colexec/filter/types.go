@@ -23,9 +23,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(Filter)
 
-type Argument struct {
+type Filter struct {
 	ctr     *container
 	E       *plan.Expr
 	exeExpr *plan.Expr
@@ -34,34 +34,34 @@ type Argument struct {
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (filter *Filter) GetOperatorBase() *vm.OperatorBase {
+	return &filter.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[Filter](
+		func() *Filter {
+			return &Filter{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *Filter) {
+			*a = Filter{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[Filter]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (filter Filter) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *Filter {
+	return reuse.Alloc[Filter](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (filter *Filter) Release() {
+	if filter != nil {
+		reuse.Free[Filter](filter, nil)
 	}
 }
 
@@ -70,22 +70,22 @@ type container struct {
 	executors []colexec.ExpressionExecutor
 }
 
-func (arg *Argument) SetExeExpr(e *plan.Expr) {
-	arg.exeExpr = e
+func (filter *Filter) SetExeExpr(e *plan.Expr) {
+	filter.exeExpr = e
 }
 
-func (arg *Argument) GetExeExpr() *plan.Expr {
-	return arg.exeExpr
+func (filter *Filter) GetExeExpr() *plan.Expr {
+	return filter.exeExpr
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	arg.Free(proc, pipelineFailed, err)
+func (filter *Filter) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	filter.Free(proc, pipelineFailed, err)
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if arg.ctr != nil {
-		arg.ctr.cleanExecutor()
-		arg.ctr = nil
+func (filter *Filter) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if filter.ctr != nil {
+		filter.ctr.cleanExecutor()
+		filter.ctr = nil
 	}
 }
 

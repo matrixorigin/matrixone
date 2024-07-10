@@ -198,14 +198,14 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 			str := name
 			if id == vm.Connector {
 				var receiver = "unknown"
-				arg := op.(*connector.Argument)
+				arg := op.(*connector.Connector)
 				if receiverId, okk := mp[arg.Reg]; okk {
 					receiver = fmt.Sprintf("%d", receiverId)
 				}
 				str += fmt.Sprintf(" to MergeReceiver %s", receiver)
 			}
 			if id == vm.Dispatch {
-				arg := op.(*dispatch.Argument)
+				arg := op.(*dispatch.Dispatch)
 				chs := ""
 				for i := range arg.LocalRegs {
 					if i != 0 {

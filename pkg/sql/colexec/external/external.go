@@ -70,18 +70,18 @@ var (
 	STATEMENT_ACCOUNT = "account"
 )
 
-const argName = "external"
+const opName = "external"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (external *External) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": external output")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) error {
+func (external *External) Prepare(proc *process.Process) error {
 	_, span := trace.Start(proc.Ctx, "ExternalPrepare")
-	arg.ctr = new(container)
+	external.ctr = new(container)
 	defer span.End()
-	param := arg.Es
+	param := external.Es
 	if proc.GetLim().MaxMsgSize == 0 {
 		param.maxBatchSize = uint64(morpc.GetMessageSize())
 	} else {
@@ -133,7 +133,7 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
@@ -141,7 +141,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	t := time.Now()
 	ctx, span := trace.Start(proc.Ctx, "ExternalCall")
 	t1 := time.Now()
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze(external.GetIdx(), external.GetParallelIdx(), external.GetParallelMajor())
 	anal.Start()
 	defer func() {
 		anal.Stop()
@@ -149,11 +149,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		span.End()
 		v2.TxnStatementExternalScanDurationHistogram.Observe(time.Since(t).Seconds())
 	}()
-	anal.Input(nil, arg.GetIsFirst())
+	anal.Input(nil, external.GetIsFirst())
 
 	var err error
 	result := vm.NewCallResult()
-	param := arg.Es
+	param := external.Es
 	if param.Fileparam.End {
 		result.Status = vm.ExecStop
 		return result, nil
@@ -166,21 +166,21 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		param.Fileparam.Filepath = param.FileList[param.Fileparam.FileIndex]
 		param.Fileparam.FileIndex++
 	}
-	if arg.ctr.buf != nil {
-		proc.PutBatch(arg.ctr.buf)
-		arg.ctr.buf = nil
+	if external.ctr.buf != nil {
+		proc.PutBatch(external.ctr.buf)
+		external.ctr.buf = nil
 	}
-	arg.ctr.buf, err = scanFileData(ctx, param, proc)
+	external.ctr.buf, err = scanFileData(ctx, param, proc)
 	if err != nil {
 		param.Fileparam.End = true
 		return result, err
 	}
 
-	if arg.ctr.buf != nil {
-		anal.Output(arg.ctr.buf, arg.GetIsLast())
-		arg.ctr.maxAllocSize = max(arg.ctr.maxAllocSize, arg.ctr.buf.Size())
+	if external.ctr.buf != nil {
+		anal.Output(external.ctr.buf, external.GetIsLast())
+		external.ctr.maxAllocSize = max(external.ctr.maxAllocSize, external.ctr.buf.Size())
 	}
-	result.Batch = arg.ctr.buf
+	result.Batch = external.ctr.buf
 	if result.Batch != nil {
 		result.Batch.ShuffleIDX = int32(param.Idx)
 	}

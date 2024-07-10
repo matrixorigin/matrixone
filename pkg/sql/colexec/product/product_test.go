@@ -17,8 +17,9 @@ package product
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -38,13 +39,13 @@ const (
 
 // add unit tests for cases
 type productTestCase struct {
-	arg    *Argument
+	arg    *Product
 	flgs   []bool // flgs[i] == true: nullable
 	types  []types.Type
 	proc   *process.Process
 	cancel context.CancelFunc
-	barg   *hashbuild.Argument
-	marg   *merge.Argument
+	barg   *hashbuild.HashBuild
+	marg   *merge.Merge
 }
 
 var (
@@ -163,7 +164,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos) productTe
 		flgs:   flgs,
 		proc:   proc,
 		cancel: cancel,
-		arg: &Argument{
+		arg: &Product{
 			Typs:   ts,
 			Result: rp,
 			OperatorBase: vm.OperatorBase{
@@ -174,7 +175,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos) productTe
 				},
 			},
 		},
-		barg: &hashbuild.Argument{
+		barg: &hashbuild.HashBuild{
 			Typs:            ts,
 			NeedMergedBatch: true,
 			OperatorBase: vm.OperatorBase{
@@ -185,7 +186,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos) productTe
 				},
 			},
 		},
-		marg: &merge.Argument{},
+		marg: &merge.Merge{},
 	}
 }
 

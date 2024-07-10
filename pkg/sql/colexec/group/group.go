@@ -31,11 +31,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "group"
+const opName = "group"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
-	ap := arg
+func (group *Group) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
+	ap := group
 	buf.WriteString(": group([")
 	for i, expr := range ap.Exprs {
 		if i > 0 {
@@ -53,18 +53,18 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString("])")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	arg.ctr = new(container)
-	arg.ctr.inserted = make([]uint8, hashmap.UnitLimit)
-	arg.ctr.zInserted = make([]uint8, hashmap.UnitLimit)
+func (group *Group) Prepare(proc *process.Process) (err error) {
+	group.ctr = new(container)
+	group.ctr.inserted = make([]uint8, hashmap.UnitLimit)
+	group.ctr.zInserted = make([]uint8, hashmap.UnitLimit)
 
-	ctr := arg.ctr
+	ctr := group.ctr
 	ctr.state = vm.Build
 
 	// create executors for aggregation functions.
-	if len(arg.Aggs) > 0 {
-		ctr.aggVecs = make([]ExprEvalVector, len(arg.Aggs))
-		for i, ag := range arg.Aggs {
+	if len(group.Aggs) > 0 {
+		ctr.aggVecs = make([]ExprEvalVector, len(group.Aggs))
+		for i, ag := range group.Aggs {
 			expressions := ag.GetArgExpressions()
 			if ctr.aggVecs[i], err = MakeEvalVector(proc, expressions); err != nil {
 				return err
@@ -74,17 +74,17 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 
 	// create executors for group-by columns.
 	ctr.keyWidth = 0
-	if arg.Exprs != nil {
+	if group.Exprs != nil {
 		ctr.groupVecsNullable = false
-		ctr.groupVecs, err = MakeEvalVector(proc, arg.Exprs)
+		ctr.groupVecs, err = MakeEvalVector(proc, group.Exprs)
 		if err != nil {
 			return err
 		}
-		for _, gv := range arg.Exprs {
+		for _, gv := range group.Exprs {
 			ctr.groupVecsNullable = ctr.groupVecsNullable || (!gv.Typ.NotNullable)
 		}
 
-		for _, expr := range arg.Exprs {
+		for _, expr := range group.Exprs {
 			typ := expr.Typ
 			width := types.T(typ.Id).TypeLen()
 			if types.T(typ.Id).FixedLength() < 0 {
@@ -123,21 +123,21 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze(group.GetIdx(), group.GetParallelIdx(), group.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 
-	return arg.ctr.processGroupByAndAgg(arg, proc, anal, arg.GetIsFirst(), arg.GetIsLast())
+	return group.ctr.processGroupByAndAgg(group, proc, anal, group.GetIsFirst(), group.GetIsLast())
 }
 
 // compute the `agg(expression)List group by expressionList`.
 func (ctr *container) processGroupByAndAgg(
-	ap *Argument, proc *process.Process, anal process.Analyze, isFirst, isLast bool) (vm.CallResult, error) {
+	ap *Group, proc *process.Process, anal process.Analyze, isFirst, isLast bool) (vm.CallResult, error) {
 
 	for {
 		switch ctr.state {
@@ -231,8 +231,8 @@ func (ctr *container) processGroupByAndAgg(
 	}
 }
 
-func (ctr *container) generateAggStructures(proc *process.Process, arg *Argument) error {
-	for i, ag := range arg.Aggs {
+func (ctr *container) generateAggStructures(proc *process.Process, group *Group) error {
+	for i, ag := range group.Aggs {
 		ctr.bat.Aggs[i] = aggexec.MakeAgg(
 			proc,
 			ag.GetAggID(), ag.IsDistinct(), ctr.aggVecs[i].Typ...)
@@ -244,7 +244,7 @@ func (ctr *container) generateAggStructures(proc *process.Process, arg *Argument
 		}
 	}
 
-	if preAllocate := int(arg.PreAllocSize); preAllocate > 0 {
+	if preAllocate := int(group.PreAllocSize); preAllocate > 0 {
 		for _, ag := range ctr.bat.Aggs {
 			if err := ag.PreAllocateGroups(preAllocate); err != nil {
 				return err
@@ -359,7 +359,7 @@ func (ctr *container) batchFill(i int, n int, vals []uint64, hashRows uint64, pr
 
 func (ctr *container) evaluateAggAndGroupBy(
 	proc *process.Process, batList []*batch.Batch,
-	config *Argument) (err error) {
+	config *Group) (err error) {
 	// evaluate the agg.
 	for i := range ctr.aggVecs {
 		for j := range ctr.aggVecs[i].Executor {
@@ -402,7 +402,7 @@ func (ctr *container) getAggResult() ([]*vector.Vector, error) {
 
 // init the container.bat to store the final result of group-operator
 // init the hashmap.
-func (ctr *container) initResultAndHashTable(proc *process.Process, config *Argument) (err error) {
+func (ctr *container) initResultAndHashTable(proc *process.Process, config *Group) (err error) {
 	if ctr.bat != nil {
 		return nil
 	}
@@ -456,7 +456,7 @@ func (ctr *container) initResultAndHashTable(proc *process.Process, config *Argu
 	return nil
 }
 
-func (ctr *container) aggWithoutGroupByCannotEmptySet(proc *process.Process, config *Argument) (err error) {
+func (ctr *container) aggWithoutGroupByCannotEmptySet(proc *process.Process, config *Group) (err error) {
 	if len(ctr.groupVecs.Vec) != 0 {
 		return nil
 	}
