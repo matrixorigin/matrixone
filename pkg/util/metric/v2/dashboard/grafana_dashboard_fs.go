@@ -60,7 +60,7 @@ func (c *DashboardCreator) initFSOverviewRow() dashboard.Option {
 			[]string{
 				"s3",
 				"hit-mem",
-				"hit-dist",
+				"hit-disk",
 				"hit-remote",
 			}),
 

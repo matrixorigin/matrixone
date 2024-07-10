@@ -64,6 +64,7 @@ func setAnalyzeInfo(rootOp Operator, proc *process.Process) {
 	HandleAllOp(rootOp, func(parentOp Operator, op Operator) error {
 		opBase := op.GetOperatorBase()
 		info := &OperatorInfo{
+			Op:      opBase.Op,
 			Idx:     opBase.Idx,
 			IsFirst: opBase.IsFirst,
 			IsLast:  opBase.IsLast,
