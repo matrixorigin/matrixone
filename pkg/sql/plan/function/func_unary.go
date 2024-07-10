@@ -20,6 +20,7 @@ import (
 	"crypto/sha1"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"math"
@@ -47,6 +48,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
 	"github.com/matrixorigin/matrixone/pkg/version"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/tmc/langchaingo/llms/ollama"
 )
 
 func AbsUInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -974,6 +976,47 @@ func ChunkStringOp(parameters []*vector.Vector, result vector.FunctionResultWrap
 
 		resultStr := ChunkString(input, chunkType, int(size))
 		if err := rs.AppendMustBytesValue([]byte(resultStr)); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// Embedding function
+func EmbeddingOp(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	source := vector.GenerateFunctionStrParameter(parameters[0])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	llm, err := ollama.New(ollama.WithModel("llama3"))
+	if err != nil {
+		return err
+	}
+
+	ctx := context.Background()
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		inputBytes, nullInput := source.GetStrValue(i)
+		if nullInput {
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
+			continue
+		}
+
+		input := string(inputBytes)
+		embeddings, err := llm.CreateEmbedding(ctx, []string{input})
+		if err != nil {
+			return err
+		}
+
+		embeddingBytes, err := json.Marshal(embeddings[0])
+		if err != nil {
+			return err
+		}
+
+		if err := rs.AppendMustBytesValue(embeddingBytes); err != nil {
 			return err
 		}
 	}
