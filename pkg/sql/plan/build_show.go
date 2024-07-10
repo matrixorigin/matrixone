@@ -102,9 +102,9 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	if tableDef.TableType == catalog.SystemViewRel {
 		var newStmt *tree.ShowCreateView
 		if stmt.Name.NumParts == 1 {
-			newStmt = tree.NewShowCreateView(tree.SetUnresolvedObjectName(1, [3]string{tblName, "", ""}))
+			newStmt = tree.NewShowCreateView(tree.NewUnresolvedObjectName(tblName))
 		} else if stmt.Name.NumParts == 2 {
-			newStmt = tree.NewShowCreateView(tree.SetUnresolvedObjectName(2, [3]string{tblName, dbName, ""}))
+			newStmt = tree.NewShowCreateView(tree.NewUnresolvedObjectName(dbName, tblName))
 		}
 		if len(stmt.SnapshotName) > 0 {
 			newStmt.SnapshotName = stmt.SnapshotName
@@ -112,15 +112,6 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 
 		return buildShowCreateView(newStmt, ctx)
 	}
-
-	// sql := `
-	// 	SELECT *
-	// 		FROM %s.mo_tables mt JOIN %s.mo_columns mc
-	// 			ON mt.relname = mc.att_relname and mt.reldatabase=mc.att_database
-	// 	WHERE mt.reldatabase = '%s' AND mt.relname = '%s'
-	// `
-	// sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName)
-	// logutil.Info(sql)
 
 	ddlStr, err := ConstructCreateTableSQL(tableObjRef, tableDef, *snapshot, ctx)
 	if err != nil {
