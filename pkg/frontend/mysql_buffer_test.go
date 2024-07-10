@@ -217,7 +217,6 @@ func TestMySQLProtocolRead(t *testing.T) {
 			header := make([]byte, 4)
 			binary.LittleEndian.PutUint32(header[:4], 0)
 			header[3] = seqID
-			seqID += 1
 			_, err := server.Write(header)
 			if err != nil {
 				panic(err)

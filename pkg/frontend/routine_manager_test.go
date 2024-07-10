@@ -14,31 +14,23 @@
 
 package frontend
 
-import (
-	"context"
-	"fmt"
-	"github.com/BurntSushi/toml"
-	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-)
-
-func create_test_server() *MOServer {
-	//before anything using the configuration
-	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-	_, err := toml.DecodeFile("test/system_vars_config.toml", pu.SV)
-	if err != nil {
-		panic(err)
-	}
-	pu.SV.SetDefaultValues()
-	setGlobalPu(pu)
-
-	address := fmt.Sprintf("%s:%d", pu.SV.Host, pu.SV.Port)
-	moServerCtx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-
-	// A mock autoincrcache manager.
-	aicm := &defines.AutoIncrCacheManager{}
-	return NewMOServer(moServerCtx, address, pu, aicm, nil)
-}
+//func create_test_server() *MOServer {
+//	//before anything using the configuration
+//	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+//	_, err := toml.DecodeFile("test/system_vars_config.toml", pu.SV)
+//	if err != nil {
+//		panic(err)
+//	}
+//	pu.SV.SetDefaultValues()
+//	setGlobalPu(pu)
+//
+//	address := fmt.Sprintf("%s:%d", pu.SV.Host, pu.SV.Port)
+//	moServerCtx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+//
+//	// A mock autoincrcache manager.
+//	aicm := &defines.AutoIncrCacheManager{}
+//	return NewMOServer(moServerCtx, address, pu, aicm, nil)
+//}
 
 //func Test_Closed(t *testing.T) {
 //	mo := create_test_server()

@@ -30,7 +30,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/BurntSushi/toml"
-	"github.com/fagongzi/goetty/v2"
 	mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/golang/mock/gomock"
 	fuzz "github.com/google/gofuzz"
@@ -57,12 +56,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type TestRoutineManager struct {
-	rwlock  sync.Mutex
-	clients map[goetty.IOSession]*Routine
-
-	pu *config.ParameterUnit
-}
+//type TestRoutineManager struct {
+//	rwlock  sync.Mutex
+//	clients map[goetty.IOSession]*Routine
+//
+//	pu *config.ParameterUnit
+//}
 
 //	func (tRM *TestRoutineManager) Created(rs goetty.IOSession) {
 //		pro := NewMysqlClientProtocol(nextConnectionID(), rs, 1024, tRM.pu.SV)
@@ -85,20 +84,10 @@ type TestRoutineManager struct {
 //		delete(tRM.clients, rs)
 //	}
 
-type netConnDialer struct {
-	conn net.Conn
-}
-
-func (d *netConnDialer) Dial(addr string) (net.Conn, error) {
-	return d.conn, nil
-}
-
 func registerConn(clientConn net.Conn) {
 	mysqlDriver.RegisterDialContext("custom", func(ctx context.Context, addr string) (net.Conn, error) {
 		return clientConn, nil
 	})
-
-	return
 }
 func createInnerServer() *MOServer {
 

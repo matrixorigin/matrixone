@@ -304,12 +304,6 @@ func (mo *MOServer) handshake(rs *Conn) error {
 	return nil
 }
 
-func (mo *MOServer) isStarted() bool {
-	mo.mu.RLock()
-	defer mo.mu.RUnlock()
-	return mo.running
-}
-
 func nextConnectionID() uint32 {
 	return atomic.AddUint32(&initConnectionID, 1)
 }
@@ -383,11 +377,7 @@ func NewMOServer(
 		rm.setSessionMgr(baseService.SessionMgr())
 	}
 	// TODO asyncFlushBatch
-	addresses := []string{addr}
 	unixAddr := pu.SV.GetUnixSocketAddress()
-	if unixAddr != "" {
-		addresses = append(addresses, "unix://"+unixAddr)
-	}
 	mo := &MOServer{
 		addr:        addr,
 		uaddr:       pu.SV.UnixSocketAddress,

@@ -198,62 +198,6 @@ func (ds *debugStats) AddFlushBytes(b uint64) {
 	ds.writeBytes += b
 }
 
-/*
-rowHandler maintains the states in encoding the result row
-*/
-type rowHandler struct {
-	//the begin position of writing.
-	//the range [beginWriteIndex,beginWriteIndex+3]
-	//for the length and sequenceId of the mysql protocol packet
-	beginOffset int
-	//the bytes in the outbuffer
-	bytesInOutBuffer int
-	//when the number of bytes in the outbuffer exceeds the it,
-	//the outbuffer will be flushed.
-	untilBytesInOutbufToFlush int
-	//the count of the flush
-	flushCount int
-	//the bytes have been response
-	startOffsetInBuffer int
-}
-
-/*
-isInPacket means it is compositing a packet now
-*/
-func (rh *rowHandler) isInPacket() bool {
-	return rh.beginOffset >= 0
-}
-
-/*
-resetPacket reset the beginWriteIndex
-*/
-func (rh *rowHandler) resetPacket() {
-	rh.beginOffset = -1
-}
-
-/*
-resetFlushOutBuffer clears the bytesInOutBuffer
-*/
-func (rh *rowHandler) resetFlushOutBuffer() {
-	rh.bytesInOutBuffer = 0
-}
-
-/*
-resetFlushCount reset flushCount
-*/
-func (rh *rowHandler) resetFlushCount() {
-	rh.flushCount = 0
-}
-
-// resetStartOffset reset the startOffsetInBuffer
-// How rowHandler.resetStartOffset, debugStats.writeBytes and MysqlProtocolImpl.CalculateOutTrafficBytes work together ?
-// 0. init. call rowHandler.resetStartOffset at the beginning of query, record the beginning offset of the current buffer.
-// 1. batch write. inc debugStats.writeBytes and do resetFlushOutBuffer()
-// 2. last data. MysqlProtocolImpl.CalculateOutTrafficBytes() with debugStats.writeBytes, rowHandler.startOffsetInBuffer and rowHandler.bytesInOutBuffer
-func (rh *rowHandler) resetStartOffset() {
-	rh.startOffsetInBuffer = rh.bytesInOutBuffer
-}
-
 type MysqlProtocolImpl struct {
 	m sync.Mutex
 
@@ -2377,8 +2321,14 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow(mrs *MysqlResultSet, rowId
 				idx := strings.Index(value, ".")
 				if idx == -1 {
 					t, err = types.ParseTime(value, 0)
+					if err != nil {
+						return err
+					}
 				} else {
 					t, err = types.ParseTime(value, int32(len(value)-idx-1))
+					if err != nil {
+						return err
+					}
 				}
 				err = mp.appendTime(t)
 				if err != nil {
@@ -2394,8 +2344,14 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow(mrs *MysqlResultSet, rowId
 				idx := strings.Index(value, ".")
 				if idx == -1 {
 					dt, err = types.ParseDatetime(value, 0)
+					if err != nil {
+						return err
+					}
 				} else {
 					dt, err = types.ParseDatetime(value, int32(len(value)-idx-1))
+					if err != nil {
+						return err
+					}
 				}
 				err = mp.appendDatetime(dt)
 				if err != nil {
