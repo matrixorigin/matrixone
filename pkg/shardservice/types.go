@@ -156,6 +156,7 @@ const (
 	ReadRanges = 1
 	ReadStats  = 2
 	ReadRows   = 3
+	ReadSize   = 4
 )
 
 type ReadRequest struct {
