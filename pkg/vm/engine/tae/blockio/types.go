@@ -62,6 +62,14 @@ func EncodeGCMetadataFileName(dir, prefix string, start, end types.TS) string {
 	return fmt.Sprintf("%s/%s_%s_%s.%s", dir, prefix, start.ToString(), end.ToString(), GCFullExt)
 }
 
+func UpdateGCMetadataFileName(name string, start, end types.TS) string {
+	fileName := strings.Split(name, ".")
+	info := strings.Split(fileName[0], "_")
+	prefix := info[0]
+	ext := fileName[1]
+	return fmt.Sprintf("%s_%s_%s.%s", prefix, start.ToString(), end.ToString(), ext)
+}
+
 func DecodeCheckpointMetadataFileName(name string) (start, end types.TS) {
 	fileName := strings.Split(name, ".")
 	info := strings.Split(fileName[0], "_")
