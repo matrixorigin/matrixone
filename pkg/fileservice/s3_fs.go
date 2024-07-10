@@ -22,6 +22,7 @@ import (
 	"io"
 	"net/http/httptrace"
 	pathpkg "path"
+	"runtime"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -106,6 +107,16 @@ func NewS3FS(
 		}
 
 	}
+
+	// limit number of concurrent operations
+	concurrency := args.Concurrency
+	if concurrency == 0 {
+		concurrency = 100
+	}
+	fs.storage = newObjectStorageSemaphore(
+		fs.storage,
+		concurrency,
+	)
 
 	if !noCache {
 		if err := fs.initCaches(ctx, cacheConfig); err != nil {
@@ -791,10 +802,15 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 				if err != nil {
 					return err
 				}
-				*ptr = &readCloser{
+				ret := &readCloser{
 					r:         reader,
 					closeFunc: reader.Close,
 				}
+				// to avoid potential leaks
+				runtime.SetFinalizer(ret, func(_ *readCloser) {
+					_ = reader.Close() // ignore return
+				})
+				*ptr = ret
 			}
 		}
 

@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
@@ -313,6 +314,7 @@ func (s *storage) Read(
 	method int,
 	param pb.ReadParam,
 	ts timestamp.Timestamp,
+	buffer *morpc.Buffer,
 ) ([]byte, error) {
 	// TODO: implement this
 	return nil, nil

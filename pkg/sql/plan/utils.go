@@ -1804,6 +1804,8 @@ func doFormatExpr(expr *plan.Expr, out *bytes.Buffer, depth int) {
 		out.WriteString(fmt.Sprintf("%sExpr_P(%d)", prefix, t.P.Pos))
 	case *plan.Expr_T:
 		out.WriteString(fmt.Sprintf("%sExpr_T(%s)", prefix, t.T.String()))
+	case *plan.Expr_Vec:
+		out.WriteString(fmt.Sprintf("%sExpr_Vec(len=%d)", prefix, t.Vec.Len))
 	default:
 		out.WriteString(fmt.Sprintf("%sExpr_Unknown(%s)", prefix, expr.String()))
 	}

@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 
 	"github.com/fagongzi/goetty/v2/buf"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -189,6 +190,7 @@ func (s *MemShardStorage) Read(
 	method int,
 	param pb.ReadParam,
 	ts timestamp.Timestamp,
+	buffer *morpc.Buffer,
 ) ([]byte, error) {
 	s.RLock()
 	defer s.RUnlock()

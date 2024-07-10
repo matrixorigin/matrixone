@@ -104,6 +104,13 @@ type GlobalStatsConfig struct {
 
 type GlobalStatsOption func(s *GlobalStats)
 
+// WithUpdateWorkerFactor set the update worker factor.
+func WithUpdateWorkerFactor(f int) GlobalStatsOption {
+	return func(s *GlobalStats) {
+		s.updateWorkerFactor = f
+	}
+}
+
 type GlobalStats struct {
 	ctx context.Context
 
@@ -139,6 +146,10 @@ type GlobalStats struct {
 		// statsInfoMap is the real stats info data.
 		statsInfoMap map[pb.StatsInfoKey]*pb.StatsInfo
 	}
+
+	// updateWorkerFactor is the times of CPU number of this node
+	// to start update worker. Default is 8.
+	updateWorkerFactor int
 
 	// KeyRouter is the router to decides which node should send to.
 	KeyRouter client.KeyRouter[pb.StatsInfoKey]
@@ -210,10 +221,17 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 				return nil
 			}
 
-			// If the trigger condition is not satisfied, the stats will not be updated
-			// for long time. So we trigger the update here to get the stats info as soon
-			// as possible.
-			gs.triggerUpdate(key, true)
+			func() {
+				// We force to trigger the update, which will hang when the channel
+				// is full. Another goroutine will fetch items from the channel
+				// which hold the lock, so we need to unlock it first.
+				gs.mu.Unlock()
+				defer gs.mu.Lock()
+				// If the trigger condition is not satisfied, the stats will not be updated
+				// for long time. So we trigger the update here to get the stats info as soon
+				// as possible.
+				gs.triggerUpdate(key, true)
+			}()
 
 			// Wait until stats info of the key is updated.
 			gs.mu.cond.Wait()
@@ -251,7 +269,7 @@ func (gs *GlobalStats) consumeWorker(ctx context.Context) {
 }
 
 func (gs *GlobalStats) updateWorker(ctx context.Context) {
-	for i := 0; i < runtime.GOMAXPROCS(0); i++ {
+	for i := 0; i < runtime.GOMAXPROCS(0)*gs.updateWorkerFactor; i++ {
 		go func() {
 			for {
 				select {
