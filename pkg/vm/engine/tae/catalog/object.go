@@ -752,7 +752,7 @@ func (entry *ObjectEntry) GetMVCCNodeInRange(start, end types.TS) (nodes []*txnb
 		in, _ := entry.DeleteNode.PreparedIn(start, end)
 		if in {
 			if nodes == nil {
-				nodes = []*txnbase.TxnMVCCNode{&entry.CreateNode}
+				nodes = []*txnbase.TxnMVCCNode{&entry.DeleteNode}
 			} else {
 				nodes = append(nodes, &entry.DeleteNode)
 			}
