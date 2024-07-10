@@ -49,6 +49,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/version"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/tmc/langchaingo/llms/ollama"
+	"github.com/unidoc/unipdf/v3/common/license"
 )
 
 func AbsUInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -987,6 +988,11 @@ func ChunkStringOp(parameters []*vector.Vector, result vector.FunctionResultWrap
 func EmbeddingOp(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	source := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	err := license.SetMeteredKey(`8452a63b8734238bc4290d82fd5fed36c318458e6add293dd7be03b516d55448`)
+	if err != nil {
+		return err
+	}
 
 	llm, err := ollama.New(ollama.WithModel("llama3"))
 	if err != nil {
