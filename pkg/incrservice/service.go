@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -202,7 +201,7 @@ func (s *service) InsertValues(
 	bat *batch.Batch,
 	estimate int64,
 	eng engine.Engine,
-	currentTS timestamp.Timestamp,
+	txnOp client.TxnOperator,
 ) (uint64, error) {
 	tableID := tableDef.TblId
 	var pkMap map[string]struct{}
@@ -229,7 +228,7 @@ func (s *service) InsertValues(
 		estimate,
 		pkMap,
 		eng,
-		currentTS,
+		txnOp,
 	)
 }
 
