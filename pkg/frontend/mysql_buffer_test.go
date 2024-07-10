@@ -100,9 +100,6 @@ func TestMySQLProtocolRead(t *testing.T) {
 		}
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
-		for _, payload := range actualPayload {
-			cm.allocator.Free(payload)
-		}
 	})
 
 	convey.Convey("read small packet > 1MB", t, func() {
@@ -143,9 +140,6 @@ func TestMySQLProtocolRead(t *testing.T) {
 		}
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
-		for _, payload := range actualPayload {
-			cm.allocator.Free(payload)
-		}
 
 	})
 
@@ -188,7 +182,6 @@ func TestMySQLProtocolRead(t *testing.T) {
 		}
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
-		cm.allocator.Free(actualPayload)
 
 	})
 
@@ -237,7 +230,6 @@ func TestMySQLProtocolRead(t *testing.T) {
 		}
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
-		cm.allocator.Free(actualPayload)
 	})
 }
 
@@ -301,9 +293,6 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
 		convey.So(remain, convey.ShouldBeFalse)
-		for _, payload := range actualPayload {
-			cReader.allocator.Free(payload)
-		}
 
 	})
 
@@ -359,9 +348,6 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
 			convey.So(remain, convey.ShouldBeFalse)
-			for _, payload := range actualPayload {
-				cReader.allocator.Free(payload)
-			}
 		})
 		convey.Convey("big field size", func() {
 			server, client := net.Pipe()
@@ -413,9 +399,6 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
 			convey.So(remain, convey.ShouldBeFalse)
-			for _, payload := range actualPayload {
-				cReader.allocator.Free(payload)
-			}
 		})
 	})
 
@@ -471,9 +454,6 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
 			convey.So(remain, convey.ShouldBeFalse)
-			for _, payload := range actualPayload {
-				cReader.allocator.Free(payload)
-			}
 		})
 
 		convey.Convey("big columns number", func() {
@@ -526,9 +506,6 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
 			convey.So(remain, convey.ShouldBeFalse)
-			for _, payload := range actualPayload {
-				cReader.allocator.Free(payload)
-			}
 		})
 
 		convey.Convey("row size equal to 16MB", func() {
@@ -589,9 +566,6 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
 			convey.So(remain, convey.ShouldBeFalse)
-			for _, payload := range actualPayload {
-				cReader.allocator.Free(payload)
-			}
 		})
 
 		convey.Convey("field size equal to 16MB", func() {
@@ -645,9 +619,6 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
 			convey.So(remain, convey.ShouldBeFalse)
-			for _, payload := range actualPayload {
-				cReader.allocator.Free(payload)
-			}
 		})
 	})
 
