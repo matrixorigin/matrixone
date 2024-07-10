@@ -21,8 +21,11 @@ import (
 type MetricsAllocator struct {
 	upstream        Allocator
 	deallocatorPool *ClosureDeallocatorPool[metricsDeallocatorArgs]
-	allocateCounter prometheus.Counter
-	inuseGauge      prometheus.Gauge
+
+	allocateBytesCounter   prometheus.Counter
+	inuseBytesGauge        prometheus.Gauge
+	allocateObjectsCounter prometheus.Counter
+	inuseObjectsGauge      prometheus.Gauge
 }
 
 type metricsDeallocatorArgs struct {
@@ -31,18 +34,25 @@ type metricsDeallocatorArgs struct {
 
 func NewMetricsAllocator(
 	upstream Allocator,
-	allocateCounter prometheus.Counter,
-	inuseGauge prometheus.Gauge,
+	allocateBytesCounter prometheus.Counter,
+	inuseBytesGauge prometheus.Gauge,
+	allocateObjectsCounter prometheus.Counter,
+	inuseObjectsGauge prometheus.Gauge,
 ) *MetricsAllocator {
 	return &MetricsAllocator{
-		upstream:        upstream,
-		allocateCounter: allocateCounter,
-		inuseGauge:      inuseGauge,
+		upstream:               upstream,
+		allocateBytesCounter:   allocateBytesCounter,
+		inuseBytesGauge:        inuseBytesGauge,
+		allocateObjectsCounter: allocateObjectsCounter,
+		inuseObjectsGauge:      inuseObjectsGauge,
 
 		deallocatorPool: NewClosureDeallocatorPool(
 			func(hints Hints, args *metricsDeallocatorArgs) {
-				if inuseGauge != nil {
-					inuseGauge.Add(-float64(args.size))
+				if inuseBytesGauge != nil {
+					inuseBytesGauge.Add(-float64(args.size))
+				}
+				if inuseObjectsGauge != nil {
+					inuseObjectsGauge.Add(-1)
 				}
 			},
 		),
@@ -61,11 +71,17 @@ func (m *MetricsAllocator) Allocate(size uint64, hints Hints) ([]byte, Deallocat
 	if err != nil {
 		return nil, nil, err
 	}
-	if m.allocateCounter != nil {
-		m.allocateCounter.Add(float64(size))
+	if m.allocateBytesCounter != nil {
+		m.allocateBytesCounter.Add(float64(size))
 	}
-	if m.inuseGauge != nil {
-		m.inuseGauge.Add(float64(size))
+	if m.inuseBytesGauge != nil {
+		m.inuseBytesGauge.Add(float64(size))
+	}
+	if m.allocateObjectsCounter != nil {
+		m.allocateObjectsCounter.Add(1)
+	}
+	if m.inuseObjectsGauge != nil {
+		m.inuseObjectsGauge.Add(1)
 	}
 
 	return ptr, ChainDeallocator(
