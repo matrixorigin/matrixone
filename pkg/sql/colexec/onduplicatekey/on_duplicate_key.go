@@ -29,29 +29,29 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "on_duplicate_key"
+const opName = "on_duplicate_key"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (onDuplicatekey *OnDuplicatekey) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": processing on duplicate key before insert")
 }
 
-func (arg *Argument) Prepare(p *process.Process) error {
-	arg.ctr = &container{}
-	arg.ctr.InitReceiver(p, true)
+func (onDuplicatekey *OnDuplicatekey) Prepare(p *process.Process) error {
+	onDuplicatekey.ctr = &container{}
+	onDuplicatekey.ctr.InitReceiver(p, true)
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (onDuplicatekey *OnDuplicatekey) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze(onDuplicatekey.GetIdx(), onDuplicatekey.GetParallelIdx(), onDuplicatekey.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 
-	ctr := arg.ctr
+	ctr := onDuplicatekey.ctr
 	result := vm.NewCallResult()
 	var err error
 	for {
@@ -68,8 +68,8 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 					break
 				}
 				bat := msg.Batch
-				anal.Input(bat, arg.GetIsFirst())
-				err = resetInsertBatchForOnduplicateKey(proc, bat, arg)
+				anal.Input(bat, onDuplicatekey.GetIsFirst())
+				err = resetInsertBatchForOnduplicateKey(proc, bat, onDuplicatekey)
 				if err != nil {
 					bat.Clean(proc.Mp())
 					return result, err
@@ -80,7 +80,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Eval:
 			if ctr.rbat != nil {
-				anal.Output(ctr.rbat, arg.GetIsLast())
+				anal.Output(ctr.rbat, onDuplicatekey.GetIsLast())
 			}
 			result.Batch = ctr.rbat
 			ctr.state = End
@@ -94,7 +94,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch.Batch, insertArg *Argument) error {
+func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch.Batch, insertArg *OnDuplicatekey) error {
 	//get rowid vec index
 	rowIdIdx := int32(-1)
 	for _, idx := range insertArg.OnDuplicateIdx {

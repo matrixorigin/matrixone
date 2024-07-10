@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(SemiJoin)
 
 const (
 	Build = iota
@@ -67,7 +67,7 @@ type container struct {
 	maxAllocSize int64
 }
 
-type Argument struct {
+type SemiJoin struct {
 	ctr        *container
 	Result     []int32
 	Typs       []types.Type
@@ -81,43 +81,43 @@ type Argument struct {
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (semiJoin *SemiJoin) GetOperatorBase() *vm.OperatorBase {
+	return &semiJoin.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[SemiJoin](
+		func() *SemiJoin {
+			return &SemiJoin{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *SemiJoin) {
+			*a = SemiJoin{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[SemiJoin]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (semiJoin SemiJoin) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *SemiJoin {
+	return reuse.Alloc[SemiJoin](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (semiJoin *SemiJoin) Release() {
+	if semiJoin != nil {
+		reuse.Free[SemiJoin](semiJoin, nil)
 	}
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	arg.Free(proc, pipelineFailed, err)
+func (semiJoin *SemiJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	semiJoin.Free(proc, pipelineFailed, err)
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := arg.ctr
+func (semiJoin *SemiJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := semiJoin.ctr
 	if ctr != nil {
 		ctr.cleanBatch(proc)
 		ctr.cleanEvalVectors()
@@ -125,10 +125,10 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		ctr.cleanExprExecutor()
 		ctr.FreeAllReg()
 
-		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+		anal := proc.GetAnalyze(semiJoin.GetIdx(), semiJoin.GetParallelIdx(), semiJoin.GetParallelMajor())
 		anal.Alloc(ctr.maxAllocSize)
 
-		arg.ctr = nil
+		semiJoin.ctr = nil
 	}
 }
 
