@@ -16,29 +16,44 @@ package memorycache
 
 import (
 	"context"
+	"crypto/rand"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
-	cache "github.com/matrixorigin/matrixone/pkg/pb/query"
+	cachepb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/stretchr/testify/require"
 )
 
 func TestCache(t *testing.T) {
-	// test New with postSet, postGet, postEvict
-	c := NewCache(
-		100,
-		func(key cache.CacheKey, value CacheData) {},
-		func(key cache.CacheKey, value CacheData) {},
-		func(key cache.CacheKey, value CacheData) {},
+	ctx := context.Background()
+
+	cache := NewCache(
+		1<<30,
+		nil,
+		nil,
+		nil,
 		malloc.GetDefault(nil),
 	)
-	// test Alloc and Set
-	key := cache.CacheKey{Path: "x", Sz: 1}
-	data := c.Alloc(1)
-	err := c.Set(context.TODO(), key, data)
-	require.NoError(t, err)
-	// test Get
-	data2, ok := c.Get(context.TODO(), key)
-	require.True(t, ok)
-	require.Equal(t, data, data2)
+	defer cache.Flush()
+
+	for i := 1; i < 1024; i++ {
+		key := cachepb.CacheKey{
+			Path: fmt.Sprintf("%d", i),
+			Sz:   int64(i),
+		}
+
+		data := cache.Alloc(i)
+		rand.Read(data.Bytes())
+
+		err := cache.Set(ctx, key, data)
+		require.NoError(t, err)
+		data.Release()
+
+		data2, ok := cache.Get(ctx, key)
+		require.True(t, ok)
+		require.Equal(t, data.Bytes(), data2.Bytes())
+		data2.Release()
+	}
+
 }
