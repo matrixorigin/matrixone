@@ -273,7 +273,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		//eligible = eligible[:0]
 	}
 
-	for j, _ := range ap.Result {
+	for j := range ap.Result {
 		if err := ctr.rbat.Vecs[j].PreExtendArea(len(eligible), proc.Mp()); err != nil {
 			return err
 		}
