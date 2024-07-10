@@ -3660,7 +3660,7 @@ func (c *Compile) newScopeListForRightJoin(childrenCount int, bIdx int, leftScop
 	ss[0] = newScope(Remote)
 	ss[0].IsJoin = true
 	ss[0].Proc = process.NewFromProc(c.proc, c.proc.Ctx, childrenCount)
-	ss[0].NodeInfo = engine.Node{Addr: c.addr, Mcpu: c.generateCPUNumber(ncpu, maxCpuNum)}
+	ss[0].NodeInfo = engine.Node{Addr: c.addr, Mcpu: maxCpuNum}
 	ss[0].BuildIdx = bIdx
 	return ss
 }
