@@ -479,7 +479,7 @@ func TestCreateObject(t *testing.T) {
 	txn, _ := tae.StartTxn(nil)
 	db, err := txn.CreateDatabase("db", "", "")
 	assert.Nil(t, err)
-	rel, err := db.CreateRelation(schema)
+	_, err = db.CreateRelation(schema)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 

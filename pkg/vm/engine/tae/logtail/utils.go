@@ -1682,11 +1682,7 @@ func (data *CheckpointData) prepareMeta() {
 		}
 	}
 }
-func (data *CheckpointData) resetObjectMeta() {
-	for _, meta := range data.meta {
-		meta.tables[ObjectInfo] = nil
-	}
-}
+
 func (data *CheckpointData) updateTableMeta(tid uint64, metaIdx int, start, end int32) {
 	meta, ok := data.meta[tid]
 	if !ok {

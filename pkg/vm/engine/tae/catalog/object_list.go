@@ -206,5 +206,4 @@ func (l *ObjectList) SetSorted(sortHint uint64) {
 	obj := objs[len(objs)-1]
 	newObj := obj.GetSortedEntry()
 	l.Set(newObj, false)
-	return
 }
