@@ -34,7 +34,7 @@ const (
 
 // add unit tests for cases
 type mergeTestCase struct {
-	arg    *Argument
+	arg    *Merge
 	types  []types.Type
 	proc   *process.Process
 	cancel context.CancelFunc
@@ -127,7 +127,7 @@ func newTestCase() mergeTestCase {
 		types: []types.Type{
 			types.T_int8.ToType(),
 		},
-		arg:    new(Argument),
+		arg:    new(Merge),
 		cancel: cancel,
 	}
 	cases.arg.OperatorBase.OperatorInfo =

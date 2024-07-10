@@ -23,7 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(IntersectAll)
 
 type container struct {
 	colexec.ReceiverOperator
@@ -46,57 +46,57 @@ type container struct {
 	buf *batch.Batch
 }
 
-type Argument struct {
+type IntersectAll struct {
 	// execution container
 	ctr *container
 
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (intersectAll *IntersectAll) GetOperatorBase() *vm.OperatorBase {
+	return &intersectAll.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[IntersectAll](
+		func() *IntersectAll {
+			return &IntersectAll{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *IntersectAll) {
+			*a = IntersectAll{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[IntersectAll]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (intersectAll IntersectAll) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *IntersectAll {
+	return reuse.Alloc[IntersectAll](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (intersectAll *IntersectAll) Release() {
+	if intersectAll != nil {
+		reuse.Free[IntersectAll](intersectAll, nil)
 	}
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	arg.Free(proc, pipelineFailed, err)
+func (intersectAll *IntersectAll) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	intersectAll.Free(proc, pipelineFailed, err)
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := arg.ctr
+func (intersectAll *IntersectAll) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := intersectAll.ctr
 	if ctr != nil {
 		ctr.cleanHashMap()
 		if ctr.buf != nil {
 			ctr.buf.Clean(proc.Mp())
 			ctr.buf = nil
 		}
-		arg.ctr = nil
+		intersectAll.ctr = nil
 	}
 }
 

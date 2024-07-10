@@ -204,8 +204,7 @@ func (s *MergeTaskBuilder) onPostTable(tableEntry *catalog.TableEntry) (err erro
 	}
 	// delObjs := s.ObjectHelper.finish()
 
-	mobjs, kind := s.objPolicy.Revise(s.executor.CPUPercent(), int64(s.executor.MemAvailBytes()),
-		merge.DisableDeltaLocMerge.Load())
+	mobjs, kind := s.objPolicy.Revise(s.executor.CPUPercent(), int64(s.executor.MemAvailBytes()))
 	if len(mobjs) > 1 {
 		for _, m := range mobjs {
 			s.mergingObjs[m] = struct{}{}

@@ -401,7 +401,7 @@ func (c *Compile) run(s *Scope) error {
 		if err != nil {
 			return err
 		}
-		mergeArg := s.RootOp.(*mergedelete.Argument)
+		mergeArg := s.RootOp.(*mergedelete.MergeDelete)
 		if mergeArg.AddAffectedRows {
 			c.addAffectedRows(mergeArg.AffectedRows)
 		}
@@ -1433,7 +1433,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		}
 
 		n.NotCacheable = true
-		var arg *deletion.Argument
+		var arg *deletion.Deletion
 		arg, err = constructDeletion(n, c.e)
 		if err != nil {
 			return nil, err
@@ -1442,7 +1442,6 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		if n.Stats.Cost*float64(SingleLineSizeEstimate) >
 			float64(DistributedThreshold) &&
 			!arg.DeleteCtx.CanTruncate {
-			c.proc.Infof(c.proc.Ctx, "delete of '%s' write s3\n", c.sql)
 			rs := c.newDeleteMergeScope(arg, ss)
 			rs.appendInstruction(vm.Instruction{
 				Op: vm.MergeDelete,
@@ -1511,7 +1510,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		currentFirstFlag := c.anal.isFirst
 		for i := range ss {
 			if n.NodeType == plan.Node_PRE_INSERT_UK {
-				var preInsertUkArg *preinsertunique.Argument
+				var preInsertUkArg *preinsertunique.PreInsertUnique
 				preInsertUkArg, err = constructPreInsertUk(n, c.proc)
 				if err != nil {
 					return nil, err
@@ -1523,7 +1522,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 					Arg:     preInsertUkArg,
 				})
 			} else {
-				var preInsertSkArg *preinsertsecondaryindex.Argument
+				var preInsertSkArg *preinsertsecondaryindex.PreInsertSecIdx
 				preInsertSkArg, err = constructPreInsertSk(n, c.proc)
 				if err != nil {
 					return nil, err
@@ -1546,7 +1545,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		}
 		currentFirstFlag := c.anal.isFirst
 		for i := range ss {
-			var preInsertArg *preinsert.Argument
+			var preInsertArg *preinsert.PreInsert
 			preInsertArg, err = constructPreInsert(ns, n, c.e, c.proc)
 			if err != nil {
 				return nil, err
@@ -1576,7 +1575,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		if toWriteS3 {
 			c.proc.Debugf(c.proc.Ctx, "insert of '%s' write s3\n", c.sql)
 			if !haveSinkScanInPlan(ns, n.Children[0]) && len(ss) != 1 {
-				var insertArg *insert.Argument
+				var insertArg *insert.Insert
 				insertArg, err = constructInsert(n, c.e)
 				if err != nil {
 					return nil, err
@@ -1631,7 +1630,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 				}
 				dataScope.IsEnd = true
 				for i := range scopes {
-					var insertArg *insert.Argument
+					var insertArg *insert.Insert
 					insertArg, err = constructInsert(n, c.e)
 					if err != nil {
 						return nil, err
@@ -1645,7 +1644,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 					})
 				}
 
-				var insertArg *insert.Argument
+				var insertArg *insert.Insert
 				insertArg, err = constructInsert(n, c.e)
 				if err != nil {
 					return nil, err
@@ -1667,7 +1666,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 			}
 		} else {
 			for i := range ss {
-				var insertArg *insert.Argument
+				var insertArg *insert.Insert
 				insertArg, err = constructInsert(n, c.e)
 				if err != nil {
 					return nil, err
@@ -1714,7 +1713,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		}
 		currentFirstFlag := c.anal.isFirst
 		for i := range ss {
-			var lockOpArg *lockop.Argument
+			var lockOpArg *lockop.LockOp
 			lockOpArg, err = constructLockOp(n, c.e)
 			if err != nil {
 				return nil, err
@@ -3483,7 +3482,7 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 // CN, so we need to transfer the rows from the
 // the same block to one and the same CN to perform
 // the deletion operators.
-func (c *Compile) newDeleteMergeScope(arg *deletion.Argument, ss []*Scope) *Scope {
+func (c *Compile) newDeleteMergeScope(arg *deletion.Deletion, ss []*Scope) *Scope {
 	// Todo: implemet delete merge
 	ss2 := make([]*Scope, 0, len(ss))
 	// ends := make([]*Scope, 0, len(ss))
@@ -3660,7 +3659,7 @@ func (c *Compile) newScopeListForRightJoin(childrenCount int, bIdx int, leftScop
 	ss[0] = newScope(Remote)
 	ss[0].IsJoin = true
 	ss[0].Proc = process.NewFromProc(c.proc, c.proc.Ctx, childrenCount)
-	ss[0].NodeInfo = engine.Node{Addr: c.addr, Mcpu: c.generateCPUNumber(ncpu, maxCpuNum)}
+	ss[0].NodeInfo = engine.Node{Addr: c.addr, Mcpu: maxCpuNum}
 	ss[0].BuildIdx = bIdx
 	return ss
 }
@@ -4859,7 +4858,7 @@ func (s *Scope) affectedRows() uint64 {
 
 	for op != nil {
 		if arg, ok := op.(vm.ModificationArgument); ok {
-			if marg, ok := arg.(*mergeblock.Argument); ok {
+			if marg, ok := arg.(*mergeblock.MergeBlock); ok {
 				return marg.AffectedRows()
 			}
 			affectedRows += arg.AffectedRows()
@@ -4890,6 +4889,17 @@ func (c *Compile) runSqlWithResult(sql string) (executor.Result, error) {
 	if !ok {
 		panic("missing lock service")
 	}
+
+	// default 1
+	var lower int64 = 1
+	if resolveVariableFunc := c.proc.GetResolveVariableFunc(); resolveVariableFunc != nil {
+		lowerVar, err := resolveVariableFunc("lower_case_table_names", true, false)
+		if err != nil {
+			return executor.Result{}, err
+		}
+		lower = lowerVar.(int64)
+	}
+
 	exec := v.(executor.SQLExecutor)
 	opts := executor.Options{}.
 		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
@@ -4897,7 +4907,8 @@ func (c *Compile) runSqlWithResult(sql string) (executor.Result, error) {
 		WithDisableIncrStatement().
 		WithTxn(c.proc.GetTxnOperator()).
 		WithDatabase(c.db).
-		WithTimeZone(c.proc.GetSessionInfo().TimeZone)
+		WithTimeZone(c.proc.GetSessionInfo().TimeZone).
+		WithLowerCaseTableNames(&lower)
 	return exec.Exec(c.proc.Ctx, sql, opts)
 }
 
@@ -4937,7 +4948,7 @@ func evalRowsetData(proc *process.Process,
 	return nil
 }
 
-func (c *Compile) newInsertMergeScope(arg *insert.Argument, ss []*Scope) *Scope {
+func (c *Compile) newInsertMergeScope(arg *insert.Insert, ss []*Scope) *Scope {
 	// see errors.Join()
 	n := 0
 	for _, s := range ss {

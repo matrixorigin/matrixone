@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(LoopMark)
 
 const (
 	Build = iota
@@ -45,7 +45,7 @@ type container struct {
 	cfs     []func(*vector.Vector, *vector.Vector, int64, int) error
 }
 
-type Argument struct {
+type LoopMark struct {
 	ctr    *container
 	Cond   *plan.Expr
 	Typs   []types.Type
@@ -53,47 +53,47 @@ type Argument struct {
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (loopMark *LoopMark) GetOperatorBase() *vm.OperatorBase {
+	return &loopMark.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[LoopMark](
+		func() *LoopMark {
+			return &LoopMark{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *LoopMark) {
+			*a = LoopMark{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[LoopMark]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (loopMark LoopMark) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *LoopMark {
+	return reuse.Alloc[LoopMark](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (loopMark *LoopMark) Release() {
+	if loopMark != nil {
+		reuse.Free[LoopMark](loopMark, nil)
 	}
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	arg.Free(proc, pipelineFailed, err)
+func (loopMark *LoopMark) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	loopMark.Free(proc, pipelineFailed, err)
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if ctr := arg.ctr; ctr != nil {
+func (loopMark *LoopMark) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if ctr := loopMark.ctr; ctr != nil {
 		ctr.cleanBatch(proc.Mp())
 		ctr.cleanExprExecutor()
 		ctr.FreeAllReg()
-		arg.ctr = nil
+		loopMark.ctr = nil
 	}
 }
 

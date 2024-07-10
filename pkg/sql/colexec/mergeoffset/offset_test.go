@@ -37,7 +37,7 @@ const (
 
 // add unit tests for cases
 type offsetTestCase struct {
-	arg    *Argument
+	arg    *MergeOffset
 	types  []types.Type
 	proc   *process.Process
 	cancel context.CancelFunc
@@ -173,7 +173,7 @@ func newTestCase(offset uint64) offsetTestCase {
 		types: []types.Type{
 			types.T_int8.ToType(),
 		},
-		arg: &Argument{
+		arg: &MergeOffset{
 			Offset: plan.MakePlan2Uint64ConstExprWithType(offset),
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{

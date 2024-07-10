@@ -18,8 +18,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -39,8 +40,8 @@ const (
 
 // add unit tests for cases
 type orderTestCase struct {
-	arg    *Argument
-	marg   *merge.Argument
+	arg    *MergeOrder
+	marg   *merge.Merge
 	types  []types.Type
 	proc   *process.Process
 	cancel context.CancelFunc
@@ -203,7 +204,7 @@ func newTestCase(ts []types.Type, fs []*plan.OrderBySpec) orderTestCase {
 	return orderTestCase{
 		types: ts,
 		proc:  proc,
-		arg: &Argument{
+		arg: &MergeOrder{
 			OrderBySpecs: fs,
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
@@ -214,7 +215,7 @@ func newTestCase(ts []types.Type, fs []*plan.OrderBySpec) orderTestCase {
 			},
 		},
 		cancel: cancel,
-		marg:   &merge.Argument{},
+		marg:   &merge.Merge{},
 	}
 }
 

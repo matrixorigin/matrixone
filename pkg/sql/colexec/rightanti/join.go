@@ -27,42 +27,42 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "right_anti"
+const opName = "right_anti"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (rightAnti *RightAnti) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": right anti join ")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	arg.ctr = new(container)
-	arg.ctr.InitReceiver(proc, false)
-	arg.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
-	arg.ctr.vecs = make([]*vector.Vector, len(arg.Conditions[0]))
-	arg.ctr.evecs = make([]evalVector, len(arg.Conditions[0]))
-	for i := range arg.ctr.evecs {
-		arg.ctr.evecs[i].executor, err = colexec.NewExpressionExecutor(proc, arg.Conditions[0][i])
+func (rightAnti *RightAnti) Prepare(proc *process.Process) (err error) {
+	rightAnti.ctr = new(container)
+	rightAnti.ctr.InitReceiver(proc, false)
+	rightAnti.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
+	rightAnti.ctr.vecs = make([]*vector.Vector, len(rightAnti.Conditions[0]))
+	rightAnti.ctr.evecs = make([]evalVector, len(rightAnti.Conditions[0]))
+	for i := range rightAnti.ctr.evecs {
+		rightAnti.ctr.evecs[i].executor, err = colexec.NewExpressionExecutor(proc, rightAnti.Conditions[0][i])
 		if err != nil {
 			return err
 		}
 	}
-	if arg.Cond != nil {
-		arg.ctr.expr, err = colexec.NewExpressionExecutor(proc, arg.Cond)
+	if rightAnti.Cond != nil {
+		rightAnti.ctr.expr, err = colexec.NewExpressionExecutor(proc, rightAnti.Cond)
 	}
 
-	arg.ctr.tmpBatches = make([]*batch.Batch, 2)
+	rightAnti.ctr.tmpBatches = make([]*batch.Batch, 2)
 	return err
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (rightAnti *RightAnti) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	analyze := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	analyze := proc.GetAnalyze(rightAnti.GetIdx(), rightAnti.GetParallelIdx(), rightAnti.GetParallelMajor())
 	analyze.Start()
 	defer analyze.Stop()
-	ctr := arg.ctr
+	ctr := rightAnti.ctr
 	result := vm.NewCallResult()
 	for {
 		switch ctr.state {
@@ -72,7 +72,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			// for inner ,right and semi join, if hashmap is empty, we can finish this pipeline
 			// shuffle join can't stop early for this moment
-			if ctr.mp == nil && !arg.IsShuffle {
+			if ctr.mp == nil && !rightAnti.IsShuffle {
 				ctr.state = End
 			} else {
 				ctr.state = Probe
@@ -86,7 +86,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			bat := msg.Batch
 			if bat == nil {
 				ctr.state = SendLast
-				arg.ctr.buf = nil
+				rightAnti.ctr.buf = nil
 				continue
 			}
 			if bat.IsEmpty() {
@@ -99,16 +99,16 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				continue
 			}
 
-			if err := ctr.probe(bat, arg, proc, analyze, arg.GetIsFirst(), arg.GetIsLast()); err != nil {
+			if err := ctr.probe(bat, rightAnti, proc, analyze, rightAnti.GetIsFirst(), rightAnti.GetIsLast()); err != nil {
 				return result, err
 			}
 
 			continue
 
 		case SendLast:
-			if arg.ctr.buf == nil {
-				arg.ctr.lastpos = 0
-				setNil, err := ctr.sendLast(arg, proc, analyze, arg.GetIsFirst(), arg.GetIsLast())
+			if rightAnti.ctr.buf == nil {
+				rightAnti.ctr.lastpos = 0
+				setNil, err := ctr.sendLast(rightAnti, proc, analyze, rightAnti.GetIsFirst(), rightAnti.GetIsLast())
 				if err != nil {
 					return result, err
 				}
@@ -117,12 +117,12 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 				continue
 			} else {
-				if arg.ctr.lastpos >= len(arg.ctr.buf) {
+				if rightAnti.ctr.lastpos >= len(rightAnti.ctr.buf) {
 					ctr.state = End
 					continue
 				}
-				result.Batch = arg.ctr.buf[arg.ctr.lastpos]
-				arg.ctr.lastpos++
+				result.Batch = rightAnti.ctr.buf[rightAnti.ctr.lastpos]
+				rightAnti.ctr.lastpos++
 				return result, nil
 			}
 
@@ -181,7 +181,7 @@ func (ctr *container) build(anal process.Analyze) error {
 	return ctr.receiveBatch(anal)
 }
 
-func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze process.Analyze, _ bool, isLast bool) (bool, error) {
+func (ctr *container) sendLast(ap *RightAnti, proc *process.Process, analyze process.Analyze, _ bool, isLast bool) (bool, error) {
 	ctr.handledLast = true
 
 	if ctr.matched == nil {
@@ -266,7 +266,7 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 
 }
 
-func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, analyze process.Analyze, isFirst bool, _ bool) error {
+func (ctr *container) probe(bat *batch.Batch, ap *RightAnti, proc *process.Process, analyze process.Analyze, isFirst bool, _ bool) error {
 	defer proc.PutBatch(bat)
 	analyze.Input(bat, isFirst)
 
