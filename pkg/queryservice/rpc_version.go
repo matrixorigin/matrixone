@@ -18,11 +18,12 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 )
 
-func handleGetProtocolVersion(ctx context.Context, req *query.Request, resp *query.Response) error {
+func handleGetProtocolVersion(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
 	if req.GetProtocolVersion == nil {
 		return moerr.NewInternalError(ctx, "bad request")
 	}
@@ -37,7 +38,7 @@ func handleGetProtocolVersion(ctx context.Context, req *query.Request, resp *que
 	return nil
 }
 
-func handleSetProtocolVersion(ctx context.Context, req *query.Request, resp *query.Response) error {
+func handleSetProtocolVersion(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
 	if req.SetProtocolVersion == nil {
 		return moerr.NewInternalError(ctx, "bad request")
 	}
