@@ -33,6 +33,10 @@ func (leftJoin *LeftJoin) String(buf *bytes.Buffer) {
 	buf.WriteString(": left join ")
 }
 
+func (leftJoin *LeftJoin) OpType() vm.OpType {
+	return vm.Left
+}
+
 func (leftJoin *LeftJoin) Prepare(proc *process.Process) (err error) {
 	leftJoin.ctr = new(container)
 	leftJoin.ctr.InitReceiver(proc, false)

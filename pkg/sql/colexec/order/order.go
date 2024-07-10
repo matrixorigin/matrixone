@@ -171,6 +171,10 @@ func (order *Order) String(buf *bytes.Buffer) {
 	buf.WriteString("])")
 }
 
+func (order *Order) OpType() vm.OpType {
+	return vm.Order
+}
+
 func (order *Order) Prepare(proc *process.Process) (err error) {
 	order.ctr = new(container)
 	ctr := order.ctr

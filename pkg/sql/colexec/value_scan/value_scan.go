@@ -28,6 +28,10 @@ func (valueScan *ValueScan) String(buf *bytes.Buffer) {
 	buf.WriteString(": value_scan ")
 }
 
+func (valueScan *ValueScan) OpType() vm.OpType {
+	return vm.ValueScan
+}
+
 func (valueScan *ValueScan) Prepare(proc *process.Process) (err error) {
 	valueScan.ctr = new(container)
 	return nil

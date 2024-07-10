@@ -32,6 +32,10 @@ func (limit *Limit) String(buf *bytes.Buffer) {
 	buf.WriteString(fmt.Sprintf("limit(%v)", limit.LimitExpr))
 }
 
+func (limit *Limit) OpType() vm.OpType {
+	return vm.Limit
+}
+
 func (limit *Limit) Prepare(proc *process.Process) error {
 	var err error
 	limit.ctr = new(container)

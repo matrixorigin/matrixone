@@ -38,6 +38,10 @@ func (timeWin *TimeWin) String(buf *bytes.Buffer) {
 	buf.WriteString(": time window")
 }
 
+func (timeWin *TimeWin) OpType() vm.OpType {
+	return vm.TimeWin
+}
+
 func (timeWin *TimeWin) Prepare(proc *process.Process) (err error) {
 	timeWin.ctr = new(container)
 	ctr := timeWin.ctr
