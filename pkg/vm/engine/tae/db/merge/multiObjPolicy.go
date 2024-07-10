@@ -33,6 +33,8 @@ type multiObjConfig struct {
 type multiObjPolicy struct {
 	config  *multiObjConfig
 	objects []*catalog.ObjectEntry
+
+	overlappingObjsSet [][]*catalog.ObjectEntry
 }
 
 func (m *multiObjConfig) adjust() {
@@ -47,8 +49,9 @@ func newMultiObjPolicy(config *multiObjConfig) *multiObjPolicy {
 	}
 	config.adjust()
 	return &multiObjPolicy{
-		config:  config,
-		objects: make([]*catalog.ObjectEntry, 0, config.maxObjs),
+		config:             config,
+		objects:            make([]*catalog.ObjectEntry, 0, config.maxObjs),
+		overlappingObjsSet: make([][]*catalog.ObjectEntry, 0),
 	}
 }
 
@@ -76,7 +79,6 @@ func (m *multiObjPolicy) revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHos
 		}
 		return compute.CompareGeneric(zmA.GetMax(), zmB.GetMax(), t)
 	})
-	overlappingObjsSet := make([][]*catalog.ObjectEntry, 0)
 	set := entrySet{entries: make([]*catalog.ObjectEntry, 0), maxValue: minValue(t)}
 	for _, obj := range m.objects {
 		zm := obj.GetSortKeyZonemap()
@@ -86,31 +88,31 @@ func (m *multiObjPolicy) revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHos
 			set.add(t, obj)
 		} else if set.size < common.Const1MBytes {
 			set.add(t, obj)
-		} else if len(set.entries) == 1 {
+		} else if len(set.entries) < 2 {
 			set.reset(t)
 			set.add(t, obj)
 		} else {
 			objs := make([]*catalog.ObjectEntry, len(set.entries))
 			copy(objs, set.entries)
-			overlappingObjsSet = append(overlappingObjsSet, objs)
+			m.overlappingObjsSet = append(m.overlappingObjsSet, objs)
 			set.reset(t)
 		}
 	}
 	if len(set.entries) > 0 {
 		objs := make([]*catalog.ObjectEntry, len(set.entries))
 		copy(objs, set.entries)
-		overlappingObjsSet = append(overlappingObjsSet, objs)
+		m.overlappingObjsSet = append(m.overlappingObjsSet, objs)
 		set.reset(t)
 	}
-	if len(overlappingObjsSet) == 0 {
+	if len(m.overlappingObjsSet) == 0 {
 		return nil, TaskHostDN
 	}
 
-	slices.SortFunc(overlappingObjsSet, func(a, b []*catalog.ObjectEntry) int {
+	slices.SortFunc(m.overlappingObjsSet, func(a, b []*catalog.ObjectEntry) int {
 		return cmp.Compare(len(a), len(b))
 	})
 
-	objs := overlappingObjsSet[len(overlappingObjsSet)-1]
+	objs := m.overlappingObjsSet[len(m.overlappingObjsSet)-1]
 	if len(objs) > m.config.maxObjs {
 		objs = objs[:m.config.maxObjs]
 	}
@@ -124,6 +126,7 @@ func (m *multiObjPolicy) revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHos
 
 func (m *multiObjPolicy) resetForTable(*catalog.TableEntry) {
 	m.objects = m.objects[:0]
+	m.overlappingObjsSet = m.overlappingObjsSet[:0]
 }
 
 type entrySet struct {
