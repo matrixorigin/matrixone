@@ -9093,11 +9093,11 @@ func TestPersistTransferTable(t *testing.T) {
 		Offset: 0,
 		Size:   int64(len(data)),
 	}
-	page.SetPath(&path)
+	page.SetPath(path)
 
 	time.Sleep(2 * time.Second)
 	tae.Runtime.TransferTable.RunTTL()
-	assert.True(t, page.IsPersist() == 1)
+	assert.True(t, page.IsPersist())
 	for i := 0; i < 10; i++ {
 		id, ok := page.Transfer(uint32(i))
 		assert.True(t, ok)
@@ -9161,7 +9161,7 @@ func TestClearPersistTransferTable(t *testing.T) {
 		Offset: 0,
 		Size:   int64(len(data)),
 	}
-	page.SetPath(&path)
+	page.SetPath(path)
 
 	time.Sleep(2 * time.Second)
 	tae.Runtime.TransferTable.RunTTL()

@@ -433,7 +433,7 @@ func WriteTransferPage(pages []*model.TransferHashPage, ioVector fileservice.IOV
 			Offset: ioVector.Entries[i].Offset,
 			Size:   ioVector.Entries[i].Size,
 		}
-		page.SetPath(&path)
+		page.SetPath(path)
 	}
 
 	return nil

@@ -71,14 +71,12 @@ type Path struct {
 
 type TransferHashPage struct {
 	common.RefHelper
-	latch       sync.RWMutex
 	bornTS      time.Time
 	id          *common.ID // not include blk offset
-	hashmap     api.HashPageMap
-	path        atomic.Pointer[Path]
+	hashmap     atomic.Pointer[api.HashPageMap]
+	path        Path
 	params      TransferHashPageParams
 	isTransient bool
-	isPersisted int32 // 0 in memory, 1 on disk
 }
 
 func NewTransferHashPage(id *common.ID, ts time.Time, pageSize int, isTransient bool, opts ...Option) *TransferHashPage {
@@ -93,11 +91,12 @@ func NewTransferHashPage(id *common.ID, ts time.Time, pageSize int, isTransient 
 	page := &TransferHashPage{
 		bornTS:      ts,
 		id:          id,
-		hashmap:     api.HashPageMap{M: make(map[uint32][]byte, pageSize)},
 		params:      params,
 		isTransient: isTransient,
-		isPersisted: 0,
 	}
+
+	m := api.HashPageMap{M: make(map[uint32][]byte, pageSize)}
+	page.hashmap.Store(&m)
 	page.OnZeroCB = page.Close
 
 	return page
@@ -125,13 +124,15 @@ func (page *TransferHashPage) TTL() uint8 {
 
 func (page *TransferHashPage) Close() {
 	logutil.Debugf("Closing %s", page.String())
-	page.hashmap.M = make(map[uint32][]byte)
+	page.hashmap.Store(nil)
 }
 
 func (page *TransferHashPage) Length() int {
-	page.latch.RLock()
-	defer page.latch.RUnlock()
-	return len(page.hashmap.M)
+	m := page.hashmap.Load()
+	if m == nil {
+		return 0
+	}
+	return len(m.M)
 }
 
 func (page *TransferHashPage) String() string {
@@ -158,31 +159,34 @@ func (page *TransferHashPage) Clear(clearDisk bool) {
 }
 
 func (page *TransferHashPage) Train(m map[uint32][]byte) {
-	page.latch.Lock()
-	defer page.latch.Unlock()
-	for k, v := range m {
-		page.hashmap.M[k] = v
-	}
+	hashmap := api.HashPageMap{M: m}
+	page.hashmap.Store(&hashmap)
 	v2.TransferPageRowHistogram.Observe(float64(len(m)))
 }
 
 func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) {
 	v2.TransferPageSinceBornDurationHistogram.Observe(time.Since(page.bornTS).Seconds())
-	if atomic.LoadInt32(&page.isPersisted) == 1 {
+	var m *api.HashPageMap
+	if page.hashmap.Load() == nil {
 		diskStart := time.Now()
-		page.loadTable()
+		m = page.loadTable()
 		diskDuration := time.Since(diskStart)
 		v2.TransferDiskLatencyHistogram.Observe(diskDuration.Seconds())
 	}
 	v2.TransferPageTotalHitHistogram.Observe(1)
 
 	memStart := time.Now()
-	var m []byte
-	page.latch.RLock()
-	m, ok = page.hashmap.M[from]
-	page.latch.RUnlock()
+	var data []byte
+	if m == nil {
+		m = page.hashmap.Load()
+	}
+	if m == nil {
+		ok = false
+		return
+	}
+	data, ok = m.M[from]
 	if ok {
-		dest = types.Rowid(m)
+		dest = types.Rowid(data)
 	}
 	memDuration := time.Since(memStart)
 	v2.TransferMemLatencyHistogram.Observe(memDuration.Seconds())
@@ -190,40 +194,47 @@ func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) 
 }
 
 func (page *TransferHashPage) Marshal() []byte {
-	page.latch.RLock()
-	defer page.latch.RUnlock()
-	data, _ := proto.Marshal(&page.hashmap)
+	m := page.hashmap.Load()
+	if m == nil {
+		return nil
+	}
+	data, _ := proto.Marshal(m)
 	return data
 }
 
-func (page *TransferHashPage) Unmarshal(data []byte) error {
-	page.latch.Lock()
-	defer page.latch.Unlock()
-	err := proto.Unmarshal(data, &page.hashmap)
-	return err
+func (page *TransferHashPage) Unmarshal(data []byte) (*api.HashPageMap, error) {
+	if page.hashmap.Load() != nil {
+		return nil, nil
+	}
+	m := api.HashPageMap{}
+	err := proto.Unmarshal(data, &m)
+	if err != nil {
+		return nil, err
+	}
+	page.hashmap.Store(&m)
+	return &m, nil
 }
 
-func (page *TransferHashPage) SetPath(path *Path) {
-	page.path.Store(path)
+func (page *TransferHashPage) SetPath(path Path) {
+	page.path = path
 }
 
 func (page *TransferHashPage) ClearTable() {
-	if atomic.LoadInt32(&page.isPersisted) == 1 {
+	m := page.hashmap.Load()
+	if m == nil {
 		return
 	}
-	atomic.StoreInt32(&page.isPersisted, 1)
-	v2.TaskMergeTransferPageSizeGauge.Sub(float64(page.Length()))
-	page.latch.Lock()
-	page.hashmap.M = make(map[uint32][]byte)
-	page.latch.Unlock()
+
+	page.hashmap.Store(nil)
+	v2.TaskMergeTransferPageSizeGauge.Sub(float64(len(m.M)))
 }
 
-func (page *TransferHashPage) loadTable() {
-	if page.path.Load() == nil {
-		return
+func (page *TransferHashPage) loadTable() *api.HashPageMap {
+	if page.path.Name == "" {
+		return nil
 	}
 
-	path := page.path.Load()
+	path := page.path
 	name, offset, size := path.Name, path.Offset, path.Size
 
 	ioVector := fileservice.IOVector{
@@ -238,26 +249,26 @@ func (page *TransferHashPage) loadTable() {
 	ioVector.Entries = append(ioVector.Entries, entry)
 	err := FS.Read(context.Background(), &ioVector)
 	if err != nil {
-		return
+		return nil
 	}
 
-	err = page.Unmarshal(ioVector.Entries[0].Data)
-	if err != nil {
-		return
+	m, err2 := page.Unmarshal(ioVector.Entries[0].Data)
+	if err2 != nil {
+		return nil
 	}
 
+	logutil.Infof("load transfer page %v", page.String())
 	v2.TaskMergeTransferPageSizeGauge.Add(float64(page.Length()))
-
-	atomic.StoreInt32(&page.isPersisted, 0)
+	return m
 }
 
 func (page *TransferHashPage) ClearPersistTable() {
-	if page.path.Load() == nil {
+	if page.path.Name == "" {
 		return
 	}
-	FS.Delete(context.Background(), page.path.Load().Name)
+	FS.Delete(context.Background(), page.path.Name)
 }
 
-func (page *TransferHashPage) IsPersist() int32 {
-	return atomic.LoadInt32(&page.isPersisted)
+func (page *TransferHashPage) IsPersist() bool {
+	return page.hashmap.Load() == nil
 }
