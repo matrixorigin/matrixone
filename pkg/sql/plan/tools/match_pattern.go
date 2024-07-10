@@ -15,11 +15,15 @@
 package tools
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"context"
+	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
-func TNode(nodeType plan.Node_NodeType, children ...*MatchPattern) *MatchPattern {
+func TNode(nodeType plan2.Node_NodeType, children ...*MatchPattern) *MatchPattern {
 	return TAny(children...).With(&NodeMatcher{NodeType: nodeType})
 }
 
@@ -35,22 +39,22 @@ func TAnyTree(children ...*MatchPattern) *MatchPattern {
 	return TAny(children...).MatchAnyTree()
 }
 
-func TAnyNot(nodeType plan.Node_NodeType, children ...*MatchPattern) *MatchPattern {
+func TAnyNot(nodeType plan2.Node_NodeType, children ...*MatchPattern) *MatchPattern {
 	return TAny(children...).With(&NodeMatcher{NodeType: nodeType, Not: true})
 }
 
 func TTableScan(tableName string) *MatchPattern {
-	return TNode(plan.Node_TABLE_SCAN, nil).With(&TableScanMatcher{
+	return TNode(plan2.Node_TABLE_SCAN, nil).With(&TableScanMatcher{
 		TableName: tableName,
 	})
 }
 
-func TTableScanWithColRef(tableName string, colRefs plan2.UnorderedMap[string, string]) *MatchPattern {
+func TTableScanWithColRef(tableName string, colRefs plan.UnorderedMap[string, string]) *MatchPattern {
 	ret := TTableScan(tableName)
 	return ret.AddColRefs(tableName, colRefs)
 }
 
-func TStrictTableScan(tableName string, colRefs plan2.UnorderedMap[string, string]) *MatchPattern {
+func TStrictTableScan(tableName string, colRefs plan.UnorderedMap[string, string]) *MatchPattern {
 	ret := TTableScanWithColRef(tableName, colRefs)
 	newColRes := make([]RValueMatcher, 0)
 	for _, val := range colRefs {
@@ -77,7 +81,7 @@ func (pattern *MatchPattern) MatchAnyTree() *MatchPattern {
 	return pattern
 }
 
-func (pattern *MatchPattern) AddColRefs(name string, refs plan2.UnorderedMap[string, string]) *MatchPattern {
+func (pattern *MatchPattern) AddColRefs(name string, refs plan.UnorderedMap[string, string]) *MatchPattern {
 	for key, val := range refs {
 		pattern.WithAlias(key, TColumnRef(name, val))
 	}
@@ -90,7 +94,7 @@ func (pattern *MatchPattern) WithAlias(alias string, matcher RValueMatcher) *Mat
 }
 
 func (pattern *MatchPattern) WithExactAssignedOutputs(expectedAliases []RValueMatcher) *MatchPattern {
-	fun := func(builder *plan2.QueryBuilder, node *plan2.Node) []*plan2.ColDef {
+	fun := func(builder *plan.QueryBuilder, node *plan2.Node) []*plan2.ColDef {
 		ret := make([]*plan2.ColDef, 0)
 		//TODO:fix
 		return ret
@@ -107,4 +111,257 @@ func (pattern *MatchPattern) WithExactAssignedOutputs(expectedAliases []RValueMa
 func (pattern *MatchPattern) WithOutputs(aliases ...string) *MatchPattern {
 	pattern.Matchers = append(pattern.Matchers, &OutputMatcher{Aliases: aliases})
 	return pattern
+}
+
+func (pattern *MatchPattern) IsEnd() bool {
+	return len(pattern.Children) == 0
+}
+
+func (pattern *MatchPattern) SimpleMatch(node *plan2.Node) []*MatchingState {
+	states := make([]*MatchingState, 0)
+	if pattern.AnyTree {
+		childPatterns := make([]*MatchPattern, len(node.Children))
+		//TODO:fix me?
+		for i := 0; i < len(node.Children); i++ {
+			childPatterns[i] = pattern
+		}
+		states = append(states, &MatchingState{
+			Patterns: childPatterns,
+		})
+	}
+
+	if len(node.Children) == len(pattern.Children) &&
+		pattern.SimpleMatchMatchers(node) {
+		states = append(states, &MatchingState{
+			Patterns: pattern.Children,
+		})
+	}
+	return states
+}
+
+func (pattern *MatchPattern) SimpleMatchMatchers(node *plan2.Node) bool {
+	for _, matcher := range pattern.Matchers {
+		if !matcher.SimpleMatch(node) {
+			return false
+		}
+	}
+	return true
+}
+
+func (pattern *MatchPattern) DeepMatch(
+	ctx context.Context,
+	node *plan2.Node,
+	aliases plan.UnorderedMap[string, string]) (*MatchResult, error) {
+	newAliases := make(plan.UnorderedMap[string, string])
+	for _, matcher := range pattern.Matchers {
+		res, err := matcher.DeepMatch(ctx, node, aliases)
+		if err != nil {
+			return nil, err
+		}
+		if !res.IsMatch {
+			return res, nil
+		}
+
+		err = MergeAliases(ctx, newAliases, res.RetAliases)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return MatchedWithAliases(newAliases), nil
+}
+
+func (pattern *MatchPattern) String() string {
+	sb := strings.Builder{}
+	pattern.toString(&sb, 0)
+	return sb.String()
+}
+
+func (pattern *MatchPattern) toString(sb *strings.Builder, prefix int) {
+	sb.WriteString(strings.Repeat("    ", prefix))
+	sb.WriteString("- ")
+
+	if pattern.AnyTree {
+		sb.WriteString("anyTree")
+	} else {
+		sb.WriteString("node")
+	}
+
+	for _, matcher := range pattern.Matchers {
+		if _, ok := matcher.(*NodeMatcher); ok {
+			sb.WriteString("(")
+			sb.WriteString(matcher.String())
+			sb.WriteString(")")
+			break
+		}
+	}
+	sb.WriteString("\n")
+	has := false
+	for _, matcher := range pattern.Matchers {
+		if _, ok := matcher.(*NodeMatcher); !ok {
+			sb.WriteString(strings.Repeat("    ", prefix+1))
+			sb.WriteString(matcher.String())
+			sb.WriteString("\n")
+			has = true
+		} else if has {
+			sb.WriteString(strings.Repeat("    ", prefix+1))
+			sb.WriteString(matcher.String())
+			sb.WriteString("\n")
+		}
+	}
+
+	for _, child := range pattern.Children {
+		child.toString(sb, prefix+1)
+	}
+}
+
+func (state *MatchingState) IsEnd() bool {
+	if len(state.Patterns) == 0 {
+		return true
+	}
+	for _, pattern := range state.Patterns {
+		if !pattern.IsEnd() {
+			return false
+		}
+	}
+	return true
+}
+
+func MatchSteps(ctx context.Context, query *plan2.Query, pattern *MatchPattern) (*MatchResult, error) {
+	for _, step := range query.Steps {
+		res, err := Match(ctx, query.Nodes, query.Nodes[step], pattern)
+		if err != nil {
+			return nil, err
+		}
+		if !res.IsMatch {
+			return res, nil
+		}
+	}
+	return Matched(), nil
+}
+
+func Match(ctx context.Context, nodes []*plan2.Node, node *plan2.Node, pattern *MatchPattern) (*MatchResult, error) {
+	states := pattern.SimpleMatch(node)
+	if len(states) == 0 {
+		return FailMatched(), nil
+	}
+
+	//leaf node
+	if len(node.Children) == 0 {
+		return MatchLeaf(ctx, node, pattern, states)
+	}
+
+	res := FailMatched()
+	for _, state := range states {
+		childRes, err := MatchChildren(ctx, nodes, node, state)
+		if err != nil {
+			return nil, err
+		}
+		if !childRes.IsMatch {
+			continue
+		}
+
+		deepRes, err := pattern.DeepMatch(ctx, node, childRes.RetAliases)
+		if err != nil {
+			return nil, err
+		}
+		if deepRes.IsMatch {
+			if res.IsMatch {
+				return nil, moerr.NewInternalError(ctx, "multiple match")
+			}
+			mergedRes, err := MergeAliasesReturnNew(ctx, childRes.RetAliases, deepRes.RetAliases)
+			if err != nil {
+				return nil, err
+			}
+			res = MatchedWithAliases(mergedRes)
+		}
+	}
+
+	return res, nil
+}
+
+func MatchChildren(ctx context.Context,
+	nodes []*plan2.Node,
+	node *plan2.Node,
+	state *MatchingState) (*MatchResult, error) {
+	if len(node.Children) != len(state.Patterns) {
+		return nil, moerr.NewInternalError(ctx, "patterns count != children count")
+	}
+
+	resAliases := make(plan.UnorderedMap[string, string])
+	for i, child := range node.Children {
+		childRes, err := Match(ctx, nodes, nodes[child], state.Patterns[i])
+		if err != nil {
+			return nil, err
+		}
+		if !childRes.IsMatch {
+			return FailMatched(), nil
+		}
+		err = MergeAliases(ctx, resAliases, childRes.RetAliases)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return MatchedWithAliases(resAliases), nil
+}
+
+func MatchLeaf(ctx context.Context,
+	node *plan2.Node,
+	pattern *MatchPattern,
+	states []*MatchingState) (*MatchResult, error) {
+	res := FailMatched()
+	for _, state := range states {
+		if !state.IsEnd() {
+			continue
+		}
+		deepRes, err := pattern.DeepMatch(ctx, node, make(plan.UnorderedMap[string, string]))
+		if err != nil {
+			return nil, err
+		}
+		if deepRes.IsMatch {
+			if res.IsMatch {
+				return nil, moerr.NewInternalError(ctx, "multiple match on leaf node ")
+			}
+			res = deepRes
+		}
+	}
+	return res, nil
+}
+
+func MergeAliasesReturnNew(ctx context.Context,
+	aliases1, aliases2 plan.UnorderedMap[string, string]) (plan.UnorderedMap[string, string], error) {
+	ret := make(plan.UnorderedMap[string, string])
+	for k, v := range aliases1 {
+		ret.Insert(k, v)
+	}
+
+	//merge aliases2
+	for k, v := range aliases2 {
+		err := Insert(ctx, ret, k, v)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return ret, nil
+}
+
+func MergeAliases(ctx context.Context,
+	aliases1, aliases2 plan.UnorderedMap[string, string]) error {
+
+	//merge aliases2
+	for k, v := range aliases2 {
+		err := Insert(ctx, aliases1, k, v)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func Insert(ctx context.Context, aliases plan.UnorderedMap[string, string], k, v string) error {
+	ok, ev := aliases.Find(k)
+	if ok {
+		return moerr.NewInternalError(ctx, " %s -> %s already exists", k, ev)
+	}
+	aliases.Insert(k, v)
+	return nil
 }

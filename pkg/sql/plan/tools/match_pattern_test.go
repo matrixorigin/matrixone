@@ -15,6 +15,8 @@
 package tools
 
 import (
+	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -23,12 +25,14 @@ import (
 )
 
 func Test_output(t *testing.T) {
-	pattern := TNode(plan2.Node_PROJECT,
-		TNode(plan2.Node_TABLE_SCAN).WithAlias(
-			"ORDERKEY",
-			TColumnRef("lineitem", "orderkey"),
-		),
-	).WithOutputs("ORDERKEY")
-	_, err := Setup("SELECT orderkey FROM lineitem", pattern)
+	pattern :=
+		TNode(plan2.Node_PROJECT,
+			TNode(plan2.Node_TABLE_SCAN).WithAlias(
+				"L_ORDERKEY",
+				TColumnRef("lineitem", "l_orderkey"),
+			),
+		).WithOutputs("L_ORDERKEY")
+	fmt.Println(pattern)
+	err := AssertPlan(context.Background(), nil, "SELECT l_orderkey FROM lineitem", pattern)
 	assert.Nil(t, err)
 }

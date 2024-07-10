@@ -21,14 +21,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
-type Aliases plan.UnorderedMap[string, string]
-
 type MatchResult struct {
 	IsMatch    bool
-	RetAliases Aliases
+	RetAliases plan.UnorderedMap[string, string]
 }
 
-func NewMatchResult(isMatch bool, retAliases Aliases) *MatchResult {
+func NewMatchResult(isMatch bool, retAliases plan.UnorderedMap[string, string]) *MatchResult {
 	return &MatchResult{
 		IsMatch:    isMatch,
 		RetAliases: retAliases,
@@ -39,16 +37,33 @@ func Matched() *MatchResult {
 	return NewMatchResult(true, nil)
 }
 
+func MatchedWithAliases(aliases plan.UnorderedMap[string, string]) *MatchResult {
+	return NewMatchResult(true, aliases)
+}
+
+func MatchedWithAlias(alias, ref string) *MatchResult {
+	aliases := make(plan.UnorderedMap[string, string])
+	aliases.Insert(alias, ref)
+	return NewMatchResult(true, aliases)
+}
+
+func FailMatched() *MatchResult {
+	return NewMatchResult(false, nil)
+}
+
 type Matcher interface {
 	// SimpleMatch check the intuitive properties about Node like type, datatype, etc.
 	SimpleMatch(*plan2.Node) bool
 
 	// DeepMatch check the internal structure about Node
-	DeepMatch(context.Context, *plan2.Node, Aliases) (*MatchResult, error)
+	DeepMatch(context.Context, *plan2.Node, plan.UnorderedMap[string, string]) (*MatchResult, error)
+
+	String() string
 }
 
 type RValueMatcher interface {
-	GetAssignedVar(*plan2.Node, Aliases) *plan2.ColDef
+	GetAssignedVar(*plan2.Node, plan.UnorderedMap[string, string]) *plan2.ColDef
+	String() string
 }
 
 // MatchPattern denotes the structure pattern that the Plan
@@ -60,4 +75,11 @@ type MatchPattern struct {
 }
 
 type Domain struct {
+}
+
+type AssertConfig struct {
+}
+
+type MatchingState struct {
+	Patterns []*MatchPattern
 }
