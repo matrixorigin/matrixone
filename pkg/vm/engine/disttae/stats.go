@@ -18,6 +18,7 @@ import (
 	"context"
 	"math"
 	"runtime"
+	"sort"
 	"sync"
 	"time"
 
@@ -152,6 +153,8 @@ type GlobalStats struct {
 
 	// KeyRouter is the router to decides which node should send to.
 	KeyRouter client.KeyRouter[pb.StatsInfoKey]
+
+	concurrentExecutor ConcurrentExecutor
 }
 
 func NewGlobalStats(
@@ -172,6 +175,8 @@ func NewGlobalStats(
 	for _, opt := range opts {
 		opt(s)
 	}
+	s.concurrentExecutor = newConcurrentExecutor(runtime.GOMAXPROCS(0) * s.updateWorkerFactor * 4)
+	s.concurrentExecutor.Run(ctx)
 	go s.consumeWorker(ctx)
 	go s.updateWorker(ctx)
 	return s
@@ -511,7 +516,7 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 		approxObjectNum,
 		stats,
 	)
-	if err := UpdateStats(gs.ctx, req); err != nil {
+	if err := UpdateStats(gs.ctx, req, gs.concurrentExecutor); err != nil {
 		logutil.Errorf("failed to init stats info for table %v, err: %v", key, err)
 		return
 	}
@@ -610,7 +615,9 @@ func getMinMaxValueByFloat64(typ types.Type, buf []byte) float64 {
 }
 
 // get ndv, minval , maxval, datatype from zonemap. Retrieve all columns except for rowid, return accurate number of objects
-func updateInfoFromZoneMap(ctx context.Context, req *updateStatsRequest, info *plan2.InfoFromZoneMap) error {
+func updateInfoFromZoneMap(
+	ctx context.Context, req *updateStatsRequest, info *plan2.InfoFromZoneMap, executor ConcurrentExecutor,
+) error {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementUpdateInfoFromZonemapHistogram.Observe(time.Since(start).Seconds())
@@ -627,17 +634,34 @@ func updateInfoFromZoneMap(ctx context.Context, req *updateStatsRequest, info *p
 		return err
 	}
 
+	type metaWrapper struct {
+		meta     objectio.ObjectMeta
+		blkCount uint32
+		index    int
+	}
+
+	var metas []metaWrapper
 	var updateMu sync.Mutex
-	onObjFn := func(obj logtailreplay.ObjectEntry) error {
+	onObjFn := func(objIndex int, obj logtailreplay.ObjectEntry) error {
 		location := obj.Location()
 		if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 			return err
 		}
 		updateMu.Lock()
 		defer updateMu.Unlock()
+		metas = append(metas, metaWrapper{
+			meta:     objMeta,
+			blkCount: obj.BlkCnt(),
+			index:    objIndex,
+		})
+		return nil
+	}
+
+	mergeFn := func(objMetaW metaWrapper) {
+		objMeta = objMetaW.meta
 		meta = objMeta.MustDataMeta()
 		info.AccurateObjectNumber++
-		info.BlockNumber += int64(obj.BlkCnt())
+		info.BlockNumber += int64(objMetaW.blkCount)
 		info.TableCnt += float64(meta.BlockHeader().Rows())
 		if !init {
 			init = true
@@ -690,10 +714,22 @@ func updateInfoFromZoneMap(ctx context.Context, req *updateStatsRequest, info *p
 				}
 			}
 		}
-		return nil
 	}
-	if err = ForeachVisibleDataObject(req.partitionState, req.ts, onObjFn); err != nil {
+	if err = ForeachVisibleDataObject(
+		req.partitionState,
+		req.ts,
+		onObjFn,
+		executor,
+	); err != nil {
 		return err
+	}
+	if executor != nil {
+		sort.Slice(metas, func(i, j int) bool {
+			return metas[i].index < metas[j].index
+		})
+	}
+	for _, m := range metas {
+		mergeFn(m)
 	}
 
 	return nil
@@ -724,7 +760,9 @@ func adjustNDV(info *plan2.InfoFromZoneMap, tableDef *plan2.TableDef) {
 }
 
 // UpdateStats is the main function to calculate and update the stats for scan node.
-func UpdateStats(ctx context.Context, req *updateStatsRequest) error {
+func UpdateStats(
+	ctx context.Context, req *updateStatsRequest, executor ConcurrentExecutor,
+) error {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementUpdateStatsDurationHistogram.Observe(time.Since(start).Seconds())
@@ -740,11 +778,11 @@ func UpdateStats(ctx context.Context, req *updateStatsRequest) error {
 	if len(req.partitionsTableDef) > 0 {
 		for _, def := range req.partitionsTableDef {
 			req.tableDef = def
-			if err := updateInfoFromZoneMap(ctx, req, info); err != nil {
+			if err := updateInfoFromZoneMap(ctx, req, info, executor); err != nil {
 				return err
 			}
 		}
-	} else if err := updateInfoFromZoneMap(ctx, req, info); err != nil {
+	} else if err := updateInfoFromZoneMap(ctx, req, info, executor); err != nil {
 		return err
 	}
 	adjustNDV(info, baseTableDef)
