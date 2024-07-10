@@ -39,8 +39,8 @@ const (
 
 // add unit tests for cases
 type buildTestCase struct {
-	arg    *Argument
-	marg   *merge.Argument
+	arg    *ShuffleBuild
+	marg   *merge.Merge
 	flgs   []bool // flgs[i] == true: nullable
 	types  []types.Type
 	proc   *process.Process
@@ -156,7 +156,7 @@ func newTestCase(flgs []bool, ts []types.Type, cs []*plan.Expr) buildTestCase {
 		flgs:   flgs,
 		proc:   proc,
 		cancel: cancel,
-		arg: &Argument{
+		arg: &ShuffleBuild{
 			Typs:       ts,
 			Conditions: cs,
 			RuntimeFilterSpec: &plan.RuntimeFilterSpec{
@@ -174,7 +174,7 @@ func newTestCase(flgs []bool, ts []types.Type, cs []*plan.Expr) buildTestCase {
 				},
 			},
 		},
-		marg: &merge.Argument{},
+		marg: &merge.Merge{},
 	}
 }
 
