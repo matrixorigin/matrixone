@@ -37,6 +37,8 @@ type tableType string
 
 const view tableType = "VIEW"
 
+const clusterTable tableType = "CLUSTER TABLE"
+
 const (
 	PubDbName = "mo_pubs"
 )
@@ -544,6 +546,11 @@ func restoreToAccount(
 
 	for _, dbName := range dbNames {
 		if needSkipDb(dbName) {
+			if dbName == moCatalog {
+				if err = dropClusterTable(ctx, bh, "", toAccountId); err != nil {
+					return
+				}
+			}
 			getLogger().Info(fmt.Sprintf("[%s]skip drop db: %v", snapshotName, dbName))
 			continue
 		}
@@ -693,15 +700,10 @@ func restoreSystemDatabase(
 		return
 	}
 
-	curAccountId, err := defines.GetAccountId(ctx)
-	if err != nil {
-		return
-	}
-
 	for _, tblInfo := range tableInfos {
-		if needSkipTable(curAccountId, moCatalog, tblInfo.tblName) {
+		if needSkipSystemTable(toAccountId, tblInfo) {
 			// TODO skip tables which should not to be restored
-			getLogger().Info(fmt.Sprintf("[%s] skip restore system table: %v.%v", snapshotName, moCatalog, tblInfo.tblName))
+			getLogger().Info(fmt.Sprintf("[%s] skip restore system table: %v.%v, table type: %v", snapshotName, moCatalog, tblInfo.tblName, tblInfo.typ))
 			continue
 		}
 
@@ -714,6 +716,29 @@ func restoreSystemDatabase(
 
 		if err = recreateTable(ctx, bh, snapshotName, tblInfo, toAccountId, snapshotTs); err != nil {
 			return
+		}
+	}
+	return
+}
+
+func dropClusterTable(
+	ctx context.Context,
+	bh BackgroundExec,
+	snapshotName string,
+	toAccountId uint32) (err error) {
+	getLogger().Info(fmt.Sprintf("start to drop system table"))
+
+	tableInfos, err := getTableInfos(ctx, bh, snapshotName, moCatalog, "")
+	if err != nil {
+		return
+	}
+
+	for _, tblInfo := range tableInfos {
+		if toAccountId == 0 && tblInfo.typ == clusterTable {
+			getLogger().Info(fmt.Sprintf("[%s] start to drop system table: %v.%v", snapshotName, moCatalog, tblInfo.tblName))
+			if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists %s.%s", moCatalog, tblInfo.tblName)); err != nil {
+				return
+			}
 		}
 	}
 	return
@@ -878,6 +903,14 @@ func needSkipTable(accountId uint32, dbName string, tblName string) bool {
 		}
 	}
 	return false
+}
+
+func needSkipSystemTable(accountId uint32, tblinfo *tableInfo) bool {
+	if accountId == sysAccountID {
+		return tblinfo.dbName == moCatalog && needSkipTablesInMocatalog[tblinfo.tblName] == 1
+	} else {
+		return tblinfo.dbName == moCatalog && (tblinfo.typ == clusterTable || needSkipTablesInMocatalog[tblinfo.tblName] == 1)
+	}
 }
 
 func checkSnapShotExistOrNot(ctx context.Context, bh BackgroundExec, snapshotName string) (bool, error) {
@@ -1083,7 +1116,7 @@ func showFullTables(ctx context.Context, bh BackgroundExec, snapshotName string,
 	if len(snapshotName) > 0 {
 		sql += fmt.Sprintf(" {snapshot = '%s'}", snapshotName)
 	}
-	getLogger().Info(fmt.Sprintf("[%s] get table %v info sql: %s", snapshotName, tblName, sql))
+	getLogger().Info(fmt.Sprintf("[%s] show full table `%s.%s` sql: %s", snapshotName, dbName, tblName, sql))
 	// cols: table name, table type
 	colsList, err := getStringColsList(ctx, bh, sql, 0, 1)
 	if err != nil {
@@ -1098,11 +1131,12 @@ func showFullTables(ctx context.Context, bh BackgroundExec, snapshotName string,
 			typ:     tableType(cols[1]),
 		}
 	}
+	getLogger().Info(fmt.Sprintf("[%s] show full table `%s.%s`, get table number `%d`", snapshotName, dbName, tblName, len(ans)))
 	return ans, nil
 }
 
 func getTableInfos(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string, tblName string) ([]*tableInfo, error) {
-	getLogger().Info(fmt.Sprintf("[%s] start to get table info: %v", snapshotName, tblName))
+	getLogger().Info(fmt.Sprintf("[%s] start to get table info: datatabse `%s`, table `%s`", snapshotName, dbName, tblName))
 	tableInfos, err := showFullTables(ctx, bh, snapshotName, dbName, tblName)
 	if err != nil {
 		return nil, err
