@@ -764,6 +764,7 @@ func (s *service) initShardService() {
 		s.timestampWaiter,
 		map[int]shardservice.ReadFunc{
 			shardservice.ReadRows: disttae.HandleShardingReadRows,
+			shardservice.ReadSize: disttae.HandleShardingReadSize,
 		},
 		s.storeEngine,
 	)

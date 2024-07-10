@@ -131,8 +131,10 @@ func (tbl *txnTableDelegate) Rows(
 	}
 
 	rows := uint64(0)
-	request, err := tbl.getReadRequest(
+	err := tbl.forwardRead(
+		ctx,
 		shardservice.ReadRows,
+		func(param *shard.ReadParam) {},
 		func(resp []byte) {
 			rows += buf.Byte2Uint64(resp)
 		},
@@ -140,26 +142,6 @@ func (tbl *txnTableDelegate) Rows(
 	if err != nil {
 		return 0, err
 	}
-
-	shardID := uint64(0)
-	switch tbl.shard.policy {
-	case shard.Policy_Partition:
-		// Partition sharding only send to the current shard. The partition table id
-		// is the shard id
-		shardID = tbl.origin.tableId
-	default:
-		// otherwise, we need send to all shards
-	}
-
-	err = tbl.shard.service.Read(
-		ctx,
-		request,
-		shardservice.ReadOptions{}.Shard(shardID),
-	)
-	if err != nil {
-		return 0, err
-	}
-
 	return rows, nil
 }
 
@@ -174,8 +156,21 @@ func (tbl *txnTableDelegate) Size(
 		)
 	}
 
-	// TODO: forward
-	return 0, nil
+	size := uint64(0)
+	err := tbl.forwardRead(
+		ctx,
+		shardservice.ReadSize,
+		func(param *shard.ReadParam) {
+			param.SizeParam.ColumnName = columnName
+		},
+		func(resp []byte) {
+			size += buf.Byte2Uint64(resp)
+		},
+	)
+	if err != nil {
+		return 0, err
+	}
+	return size, nil
 }
 
 func (tbl *txnTableDelegate) Ranges(
@@ -441,4 +436,42 @@ func (tbl *txnTableDelegate) getReadRequest(
 		},
 		Apply: apply,
 	}, nil
+}
+
+func (tbl *txnTableDelegate) forwardRead(
+	ctx context.Context,
+	method int,
+	applyParam func(*shard.ReadParam),
+	apply func([]byte),
+) error {
+	request, err := tbl.getReadRequest(
+		method,
+		apply,
+	)
+	if err != nil {
+		return err
+	}
+
+	applyParam(&request.Param)
+
+	shardID := uint64(0)
+	switch tbl.shard.policy {
+	case shard.Policy_Partition:
+		// Partition sharding only send to the current shard. The partition table id
+		// is the shard id
+		shardID = tbl.origin.tableId
+	default:
+		// otherwise, we need send to all shards
+	}
+
+	err = tbl.shard.service.Read(
+		ctx,
+		request,
+		shardservice.ReadOptions{}.Shard(shardID),
+	)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
