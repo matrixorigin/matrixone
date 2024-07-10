@@ -144,7 +144,7 @@ func Test_refactorScope(t *testing.T) {
 	c.proc = proc
 	c.proc.Ctx = ctx
 	rs := appendWriteBackOperator(c, s)
-	require.Equal(t, rs.Instructions[1].Idx, -1)
+	require.Equal(t, vm.GetLeafOpParent(nil, rs.RootOp).GetOperatorBase().Idx, -1)
 }
 
 func Test_convertPipelineUuid(t *testing.T) {
@@ -174,172 +174,82 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 	exParam := external.ExParam{
 		Filter: &external.FilterParam{},
 	}
-	instructions := []*vm.Instruction{
-		{
-			Arg: &insert.Argument{
-				InsertCtx: &insert.InsertCtx{},
+	ops := []vm.Operator{
+		&insert.Argument{
+			InsertCtx: &insert.InsertCtx{},
+		},
+		&deletion.Argument{
+			DeleteCtx: &deletion.DeleteCtx{},
+		},
+		&onduplicatekey.Argument{},
+		&preinsert.Argument{},
+		&lockop.Argument{},
+		&preinsertunique.Argument{},
+		&anti.Argument{
+			Conditions: [][]*plan.Expr{nil, nil},
+		},
+		&shuffle.Argument{},
+		&dispatch.Argument{},
+		&group.Argument{},
+		&join.Argument{
+			Conditions: [][]*plan.Expr{nil, nil},
+		},
+		&left.Argument{
+			Conditions: [][]*plan.Expr{nil, nil},
+		},
+		&right.Argument{
+			Conditions: [][]*plan.Expr{nil, nil},
+		},
+		&rightsemi.Argument{
+			Conditions: [][]*plan.Expr{nil, nil},
+		},
+		&rightanti.Argument{
+			Conditions: [][]*plan.Expr{nil, nil},
+		},
+		&limit.Argument{},
+		&loopanti.Argument{},
+		&loopjoin.Argument{},
+		&loopleft.Argument{},
+		&loopsemi.Argument{},
+		&loopsingle.Argument{},
+		&loopmark.Argument{},
+		&offset.Argument{},
+		&order.Argument{},
+		&product.Argument{},
+		&projection.Argument{},
+		&filter.Argument{},
+		&semi.Argument{
+			Conditions: [][]*plan.Expr{nil, nil},
+		},
+		&single.Argument{
+			Conditions: [][]*plan.Expr{nil, nil},
+		},
+		&top.Argument{},
+		&intersect.Argument{},
+		&minus.Argument{},
+		&intersectall.Argument{},
+		&merge.Argument{},
+		&mergerecursive.Argument{},
+		&mergegroup.Argument{},
+		&mergelimit.Argument{},
+		&mergelimit.Argument{},
+		&mergeoffset.Argument{},
+		&mergetop.Argument{},
+		&mergeorder.Argument{},
+		&mark.Argument{
+			Conditions: [][]*plan.Expr{nil, nil},
+		},
+		&table_function.Argument{},
+		&external.Argument{
+			Es: &external.ExternalParam{
+				ExParam: exParam,
 			},
-		},
-		{
-			Arg: &deletion.Argument{
-				DeleteCtx: &deletion.DeleteCtx{},
-			},
-		},
-		{
-			Arg: &onduplicatekey.Argument{},
-		},
-		{
-			Arg: &preinsert.Argument{},
-		},
-		{
-			Arg: &lockop.Argument{},
-		},
-		{
-			Arg: &preinsertunique.Argument{},
-		},
-		{
-			Arg: &anti.Argument{
-				Conditions: [][]*plan.Expr{nil, nil},
-			},
-		},
-		{
-			Arg: &shuffle.Argument{},
-		},
-		{
-			Arg: &dispatch.Argument{},
-		},
-		{
-			Arg: &group.Argument{},
-		},
-		{
-			Arg: &join.Argument{
-				Conditions: [][]*plan.Expr{nil, nil},
-			},
-		},
-		{
-			Arg: &left.Argument{
-				Conditions: [][]*plan.Expr{nil, nil},
-			},
-		},
-		{
-			Arg: &right.Argument{
-				Conditions: [][]*plan.Expr{nil, nil},
-			},
-		},
-		{
-			Arg: &rightsemi.Argument{
-				Conditions: [][]*plan.Expr{nil, nil},
-			},
-		},
-		{
-			Arg: &rightanti.Argument{
-				Conditions: [][]*plan.Expr{nil, nil},
-			},
-		},
-		{
-			Arg: &limit.Argument{},
-		},
-		{
-			Arg: &loopanti.Argument{},
-		},
-		{
-			Arg: &loopjoin.Argument{},
-		},
-		{
-			Arg: &loopleft.Argument{},
-		},
-		{
-			Arg: &loopsemi.Argument{},
-		},
-		{
-			Arg: &loopsingle.Argument{},
-		},
-		{
-			Arg: &loopmark.Argument{},
-		},
-		{
-			Arg: &offset.Argument{},
-		},
-		{
-			Arg: &order.Argument{},
-		},
-		{
-			Arg: &product.Argument{},
-		},
-		{
-			Arg: &projection.Argument{},
-		},
-		{
-			Arg: &filter.Argument{},
-		},
-		{
-			Arg: &semi.Argument{
-				Conditions: [][]*plan.Expr{nil, nil},
-			},
-		},
-		{
-			Arg: &single.Argument{
-				Conditions: [][]*plan.Expr{nil, nil},
-			},
-		},
-		{
-			Arg: &top.Argument{},
-		},
-		{
-			Arg: &intersect.Argument{},
-		},
-		{
-			Arg: &minus.Argument{},
-		},
-		{
-			Arg: &intersectall.Argument{},
-		},
-		{
-			Arg: &merge.Argument{},
-		},
-		{
-			Arg: &mergerecursive.Argument{},
-		},
-		{
-			Arg: &mergegroup.Argument{},
-		},
-		{
-			Arg: &mergelimit.Argument{},
-		},
-		{
-			Arg: &mergeoffset.Argument{},
-		},
-		{
-			Arg: &mergetop.Argument{},
-		},
-		{
-			Arg: &mergeorder.Argument{},
-		},
-		//{
-		//	Arg: &connector.Argument{},
-		//},
-		{
-			Arg: &mark.Argument{
-				Conditions: [][]*plan.Expr{nil, nil},
-			},
-		},
-		{
-			Arg: &table_function.Argument{},
 		},
 		//hashbuild operator dont need to serialize
 		//{
 		//	Arg: &hashbuild.Argument{},
 		//},
-		{
-			Arg: &external.Argument{
-				Es: &external.ExternalParam{
-					ExParam: exParam,
-				},
-			},
-		},
-		{
-			Arg: &source.Argument{},
-		},
+		&source.Argument{},
 	}
 	ctx := &scopeContext{
 		id:       1,
@@ -351,8 +261,8 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 		pipe:     nil,
 		regs:     nil,
 	}
-	for _, instruction := range instructions {
-		_, _, err := convertToPipelineInstruction(instruction, ctx, 1)
+	for _, op := range ops {
+		_, _, err := convertToPipelineInstruction(op, ctx, 1)
 		require.Nil(t, err)
 	}
 }
@@ -418,7 +328,7 @@ func Test_convertToVmInstruction(t *testing.T) {
 		{Op: int32(vm.Source), StreamScan: &pipeline.StreamScan{}},
 	}
 	for _, instruction := range instructions {
-		_, err := convertToVmInstruction(instruction, ctx, nil)
+		_, err := convertToVmOperator(instruction, ctx, nil)
 		require.Nil(t, err)
 	}
 }
