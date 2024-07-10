@@ -473,7 +473,7 @@ func CopyGCDir(ctx context.Context, srcFs, dstFs fileservice.FileService, dir st
 			return nil, err
 		}
 		taeFileList = append(taeFileList, &taeFile{
-			path:     dir + string(os.PathSeparator) + metaFile.GetName(),
+			path:     dir + string(os.PathSeparator) + name,
 			size:     files[metaFile.GetIndex()].Size,
 			checksum: checksum,
 			needCopy: true,
