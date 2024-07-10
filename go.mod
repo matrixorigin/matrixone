@@ -65,7 +65,6 @@ require (
 	github.com/tidwall/btree v1.6.0
 	github.com/tidwall/pretty v1.2.1
 	github.com/tmc/langchaingo v0.1.12
-	github.com/unidoc/unipdf/v3 v3.60.0
 	go.uber.org/automaxprocs v1.5.3
 	go.uber.org/ratelimit v0.2.0
 	go.uber.org/zap v1.24.0

@@ -20,7 +20,6 @@ import (
 	"crypto/sha1"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"math"
@@ -49,7 +48,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/version"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/tmc/langchaingo/llms/ollama"
-	"github.com/unidoc/unipdf/v3/common/license"
 )
 
 func AbsUInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -989,11 +987,6 @@ func EmbeddingOp(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	source := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
-	err := license.SetMeteredKey(`8452a63b8734238bc4290d82fd5fed36c318458e6add293dd7be03b516d55448`)
-	if err != nil {
-		return err
-	}
-
 	llm, err := ollama.New(ollama.WithModel("llama3"))
 	if err != nil {
 		return err
@@ -1017,12 +1010,10 @@ func EmbeddingOp(parameters []*vector.Vector, result vector.FunctionResultWrappe
 			return err
 		}
 
-		embeddingBytes, err := json.Marshal(embeddings[0])
-		if err != nil {
-			return err
-		}
+		embeddingFloats := embeddings[0]
+		embeddingBytes := types.ArrayToBytes[float32](embeddingFloats)
 
-		if err := rs.AppendMustBytesValue(embeddingBytes); err != nil {
+		if err := rs.AppendBytes(embeddingBytes, false); err != nil {
 			return err
 		}
 	}
