@@ -3660,7 +3660,7 @@ func (c *Compile) newScopeListForRightJoin(childrenCount int, bIdx int, leftScop
 	ss[0] = newScope(Remote)
 	ss[0].IsJoin = true
 	ss[0].Proc = process.NewFromProc(c.proc, c.proc.Ctx, childrenCount)
-	ss[0].NodeInfo = engine.Node{Addr: c.addr, Mcpu: c.generateCPUNumber(ncpu, maxCpuNum)}
+	ss[0].NodeInfo = engine.Node{Addr: c.addr, Mcpu: maxCpuNum}
 	ss[0].BuildIdx = bIdx
 	return ss
 }
@@ -4890,6 +4890,17 @@ func (c *Compile) runSqlWithResult(sql string) (executor.Result, error) {
 	if !ok {
 		panic("missing lock service")
 	}
+
+	// default 1
+	var lower int64 = 1
+	if resolveVariableFunc := c.proc.GetResolveVariableFunc(); resolveVariableFunc != nil {
+		lowerVar, err := resolveVariableFunc("lower_case_table_names", true, false)
+		if err != nil {
+			return executor.Result{}, err
+		}
+		lower = lowerVar.(int64)
+	}
+
 	exec := v.(executor.SQLExecutor)
 	opts := executor.Options{}.
 		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
@@ -4897,7 +4908,8 @@ func (c *Compile) runSqlWithResult(sql string) (executor.Result, error) {
 		WithDisableIncrStatement().
 		WithTxn(c.proc.GetTxnOperator()).
 		WithDatabase(c.db).
-		WithTimeZone(c.proc.GetSessionInfo().TimeZone)
+		WithTimeZone(c.proc.GetSessionInfo().TimeZone).
+		WithLowerCaseTableNames(&lower)
 	return exec.Exec(c.proc.Ctx, sql, opts)
 }
 
