@@ -489,7 +489,7 @@ func TestCreateObject(t *testing.T) {
 
 	txn, _ = tae.StartTxn(nil)
 	db, _ = txn.GetDatabase("db")
-	rel, _ = db.GetRelationByName(schema.Name)
+	rel, _ := db.GetRelationByName(schema.Name)
 	_, err = rel.CreateNonAppendableObject(nil)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
