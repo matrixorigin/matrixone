@@ -935,6 +935,52 @@ func Unhex(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 	return nil
 }
 
+// CHUNK
+func ChunkString(input string, chunkType string, size int) string {
+	var chunks []string
+	if chunkType == "fixed_width" {
+		for i := 0; i < len(input); i += size {
+			end := i + size
+			if end > len(input) {
+				end = len(input)
+			}
+			chunks = append(chunks, `"`+input[i:end]+`"`)
+		}
+	}
+	return "[" + strings.Join(chunks, ", ") + "]"
+}
+
+func ChunkStringOp(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	source := vector.GenerateFunctionStrParameter(parameters[0])
+	chunkTypeParam := vector.GenerateFunctionStrParameter(parameters[1])
+	sizeParam := vector.GenerateFunctionFixedTypeParameter[int64](parameters[2])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		inputBytes, nullInput := source.GetStrValue(i)
+		chunkTypeBytes, nullChunkType := chunkTypeParam.GetStrValue(i)
+		size, nullSize := sizeParam.GetValue(i)
+
+		if nullInput || nullChunkType || nullSize {
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
+			continue
+		}
+
+		input := string(inputBytes)
+		chunkType := string(chunkTypeBytes)
+
+		resultStr := ChunkString(input, chunkType, int(size))
+		if err := rs.AppendMustBytesValue([]byte(resultStr)); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func Md5(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryBytesToBytes(parameters, result, proc, length, func(data []byte) []byte {
 		sum := md5.Sum(data)
