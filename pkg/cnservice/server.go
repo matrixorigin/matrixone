@@ -64,6 +64,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/profile"
 	"github.com/matrixorigin/matrixone/pkg/util/status"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -406,6 +407,13 @@ func (s *service) handleRequest(
 	value morpc.RPCMessage,
 	_ uint64,
 	cs morpc.ClientSession) error {
+
+	// the following comment is not related to my PR, but I suddenly saw this piece of code.
+	// so I wrote it, hoping it can help future developers understand what this is doing.
+	//
+	// I'm not sure, but I think that's a logic to handle that
+	// once an encoded-pipeline message was too large, it will be cut as multiple messages for sending.
+	// and these codes keep receiving them, and then rebuild them as a big message.
 	req := value.Message
 	msg, ok := req.(*pipeline.Message)
 	if !ok {
@@ -423,11 +431,13 @@ func (s *service) handleRequest(
 		}
 	}
 
+	// start a goroutine to handle one received message.
 	go func() {
 		defer value.Cancel()
 		s.pipelines.counter.Add(1)
 		defer s.pipelines.counter.Add(-1)
-		s.requestHandler(ctx,
+
+		err := s.requestHandler(ctx,
 			s.pipelineServiceServiceAddr(),
 			req,
 			cs,
@@ -440,6 +450,11 @@ func (s *service) handleRequest(
 			s._txnClient,
 			s.aicm,
 			s.acquireMessage)
+		if err != nil {
+			logutil.Infof("error occurred while handling the pipeline message, "+
+				"msg is %v, error is %v",
+				req, err)
+		}
 	}()
 	return nil
 }
@@ -747,7 +762,10 @@ func (s *service) initShardService() {
 		runtime.ProcessLevelRuntime().Clock(),
 		s.sqlExecutor,
 		s.timestampWaiter,
-		nil,
+		map[int]shardservice.ReadFunc{
+			shardservice.ReadRows: disttae.HandleShardingReadRows,
+			shardservice.ReadSize: disttae.HandleShardingReadSize,
+		},
 		s.storeEngine,
 	)
 	s.shardService = shardservice.NewService(
@@ -786,7 +804,6 @@ func handleWaitingNextMsg(ctx context.Context, message morpc.Message, cs morpc.C
 func handleAssemblePipeline(ctx context.Context, message morpc.Message, cs morpc.ClientSession) error {
 	var data []byte
 
-	cnt := uint64(0)
 	cache, err := cs.CreateCache(ctx, message.GetID())
 	if err != nil {
 		return err
@@ -800,10 +817,6 @@ func handleAssemblePipeline(ctx context.Context, message morpc.Message, cs morpc
 			cache.Close()
 			break
 		}
-		if cnt != msg.(*pipeline.Message).GetSequence() {
-			return moerr.NewInternalErrorNoCtx("Pipeline packages passed by morpc are out of order")
-		}
-		cnt++
 		data = append(data, msg.(*pipeline.Message).GetData()...)
 	}
 	msg := message.(*pipeline.Message)
@@ -833,14 +846,14 @@ func (s *service) initIncrService() {
 	if err != nil {
 		panic(err)
 	}
-	incrService := incrservice.NewIncrService(
+	s.incrservice = incrservice.NewIncrService(
 		s.cfg.UUID,
 		store,
 		s.cfg.AutoIncrement)
 	runtime.ProcessLevelRuntime().SetGlobalVariables(
 		runtime.AutoIncrementService,
-		incrService)
-	incrservice.SetAutoIncrementServiceByID(s.cfg.UUID, incrService)
+		s.incrservice)
+	incrservice.SetAutoIncrementServiceByID(s.cfg.UUID, s.incrservice)
 }
 
 func (s *service) bootstrap() error {

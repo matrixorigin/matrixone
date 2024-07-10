@@ -15,30 +15,20 @@
 package compile
 
 import (
-	"context"
-	"errors"
 	"fmt"
-	"time"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/lockservice"
-	"github.com/matrixorigin/matrixone/pkg/logservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
@@ -93,281 +83,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/udf"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
 )
-
-// CnServerMessageHandler is responsible for processing the cn-client message received at cn-server.
-// The message is always *pipeline.Message here. It's a byte array encoded by method encodeScope.
-func CnServerMessageHandler(
-	ctx context.Context,
-	cnAddr string,
-	message morpc.Message,
-	cs morpc.ClientSession,
-	storeEngine engine.Engine,
-	fileService fileservice.FileService,
-	lockService lockservice.LockService,
-	queryClient qclient.QueryClient,
-	hakeeper logservice.CNHAKeeperClient,
-	udfService udf.Service,
-	cli client.TxnClient,
-	aicm *defines.AutoIncrCacheManager,
-	messageAcquirer func() morpc.Message) (err error) {
-	defer func() {
-		if e := recover(); e != nil {
-			err = moerr.ConvertPanicError(ctx, e)
-			getLogger().Error("panic in cn message handler",
-				zap.String("error", err.Error()))
-			err = errors.Join(err, cs.Close())
-		}
-	}()
-	start := time.Now()
-	defer func() {
-		v2.PipelineServerDurationHistogram.Observe(time.Since(start).Seconds())
-	}()
-
-	msg, ok := message.(*pipeline.Message)
-	if !ok {
-		logutil.Errorf("cn server should receive *pipeline.Message, but get %v", message)
-		panic("cn server receive a message with unexpected type")
-	}
-
-	receiver := newMessageReceiverOnServer(ctx, cnAddr, msg,
-		cs, messageAcquirer, storeEngine, fileService, lockService, queryClient, hakeeper, udfService, cli, aicm)
-
-	// rebuild pipeline to run and send the query result back.
-	err = cnMessageHandle(&receiver)
-	if err != nil {
-		return receiver.sendError(err)
-	}
-	return receiver.sendEndMessage()
-}
-
-// cnMessageHandle deal the received message at cn-server.
-func cnMessageHandle(receiver *messageReceiverOnServer) error {
-	switch receiver.messageTyp {
-	case pipeline.Method_PrepareDoneNotifyMessage: // notify the dispatch executor
-		dispatchProc, err := receiver.GetProcByUuid(receiver.messageUuid)
-		if err != nil || dispatchProc == nil {
-			return err
-		}
-
-		infoToDispatchOperator := process.WrapCs{
-			MsgId: receiver.messageId,
-			Uid:   receiver.messageUuid,
-			Cs:    receiver.clientSession,
-			Err:   make(chan error, 1),
-		}
-
-		// todo : the timeout should be removed.
-		//		but I keep it here because I don't know whether it will cause hung sometimes.
-		timeLimit, cancel := context.WithTimeout(context.TODO(), HandleNotifyTimeout)
-
-		succeed := false
-		select {
-		case <-timeLimit.Done():
-			err = moerr.NewInternalError(receiver.ctx, "send notify msg to dispatch operator timeout")
-		case dispatchProc.DispatchNotifyCh <- infoToDispatchOperator:
-			succeed = true
-		case <-receiver.ctx.Done():
-		case <-dispatchProc.Ctx.Done():
-		}
-		cancel()
-
-		if err != nil || !succeed {
-			dispatchProc.Cancel()
-			return err
-		}
-
-		select {
-		case <-receiver.ctx.Done():
-			dispatchProc.Cancel()
-
-		// there is no need to check the dispatchProc.Ctx.Done() here.
-		// because we need to receive the error from dispatchProc.DispatchNotifyCh.
-		case err = <-infoToDispatchOperator.Err:
-		}
-		return err
-
-	case pipeline.Method_PipelineMessage:
-		c := receiver.newCompile()
-		// decode and rewrite the scope.
-		s, err := decodeScope(receiver.scopeData, c.proc, true, c.e)
-		defer func() {
-			c.proc.Base.AnalInfos = nil
-			c.anal.analInfos = nil
-			c.Release()
-			s.release()
-		}()
-		if err != nil {
-			return err
-		}
-		s = appendWriteBackOperator(c, s)
-		s.SetContextRecursively(c.ctx)
-
-		err = s.ParallelRun(c)
-		if err == nil {
-			// record the number of s3 requests
-			c.proc.Base.AnalInfos[c.anal.curr].S3IOInputCount += c.counterSet.FileService.S3.Put.Load()
-			c.proc.Base.AnalInfos[c.anal.curr].S3IOInputCount += c.counterSet.FileService.S3.List.Load()
-			c.proc.Base.AnalInfos[c.anal.curr].S3IOOutputCount += c.counterSet.FileService.S3.Head.Load()
-			c.proc.Base.AnalInfos[c.anal.curr].S3IOOutputCount += c.counterSet.FileService.S3.Get.Load()
-			c.proc.Base.AnalInfos[c.anal.curr].S3IOOutputCount += c.counterSet.FileService.S3.Delete.Load()
-			c.proc.Base.AnalInfos[c.anal.curr].S3IOOutputCount += c.counterSet.FileService.S3.DeleteMulti.Load()
-
-			receiver.finalAnalysisInfo = c.proc.Base.AnalInfos
-		} else {
-			// there are 3 situations to release analyzeInfo
-			// 1 is free analyzeInfo of Local CN when release analyze
-			// 2 is free analyzeInfo of remote CN before transfer back
-			// 3 is free analyzeInfo of remote CN when errors happen before transfer back
-			// this is situation 3
-			for i := range c.proc.Base.AnalInfos {
-				reuse.Free[process.AnalyzeInfo](c.proc.Base.AnalInfos[i], nil)
-			}
-		}
-		c.proc.FreeVectors()
-		c.proc.CleanValueScanBatchs()
-		return err
-
-	default:
-		return moerr.NewInternalError(receiver.ctx, "unknown message type")
-	}
-}
-
-// receiveMessageFromCnServer deal the back message from cn-server.
-func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnClient, lastInstruction vm.Instruction) error {
-	var bat *batch.Batch
-	var end bool
-	var err error
-
-	lastAnalyze := c.proc.GetAnalyze(lastInstruction.Idx, -1, false)
-	if sender.receiveCh == nil {
-		sender.receiveCh, err = sender.streamSender.Receive()
-		if err != nil {
-			return err
-		}
-	}
-
-	var lastArg vm.Operator
-	var oldChild []vm.Operator
-	switch arg := lastInstruction.Arg.(type) {
-	case *connector.Argument:
-		lastArg = arg
-		oldChild = arg.Children
-		arg.Children = nil
-		defer func() {
-			arg.Children = oldChild
-		}()
-	case *dispatch.Argument:
-		lastArg = arg
-		oldChild = arg.Children
-		defer func() {
-			arg.Children = oldChild
-		}()
-	default:
-		return moerr.NewInvalidInput(c.ctx, "last operator should only be connector or dispatcher")
-	}
-
-	// can not reuse
-	valueScanOperator := &value_scan.Argument{}
-	info := &vm.OperatorInfo{
-		Idx:     -1,
-		IsFirst: false,
-		IsLast:  false,
-	}
-	lastArg.SetInfo(info)
-	lastArg.AppendChild(valueScanOperator)
-	for {
-		valueScanOperator.Prepare(s.Proc)
-		bat, end, err = sender.receiveBatch()
-		if err != nil {
-			return err
-		}
-		if end {
-			return nil
-		}
-
-		lastAnalyze.Network(bat)
-		valueScanOperator.Batchs = append(valueScanOperator.Batchs, bat)
-		result, errCall := lastArg.Call(s.Proc)
-		if errCall != nil || result.Status == vm.ExecStop {
-			valueScanOperator.Free(s.Proc, false, errCall)
-			return errCall
-		}
-		valueScanOperator.Free(s.Proc, false, errCall)
-	}
-}
-
-// remoteRun sends a scope for remote running and receives the results.
-// The back result message is always *pipeline.Message contains three cases.
-// 1. Message with error information
-// 2. Message with an end flag and analysis result
-// 3. Batch Message with batch data
-func (s *Scope) remoteRun(c *Compile) (err error) {
-	defer func() {
-		if e := recover(); e != nil {
-			err = moerr.ConvertPanicError(s.Proc.Ctx, e)
-			c.proc.Error(c.ctx, "panic in scope remoteRun",
-				zap.String("sql", c.sql),
-				zap.String("error", err.Error()))
-		}
-	}()
-
-	// encode the scope but without the last operator.
-	// the last operator will be executed on the current node for receiving the result and send them to the next pipeline.
-	lastIdx := len(s.Instructions) - 1
-	lastInstruction := s.Instructions[lastIdx]
-
-	if lastInstruction.Op == vm.Connector || lastInstruction.Op == vm.Dispatch {
-		if err = lastInstruction.Arg.Prepare(s.Proc); err != nil {
-			return err
-		}
-	} else {
-		return moerr.NewInvalidInput(c.ctx, "last operator should only be connector or dispatcher")
-	}
-
-	for _, ins := range s.Instructions[lastIdx+1:] {
-		ins.Arg.Release()
-		ins.Arg = nil
-	}
-	s.Instructions = s.Instructions[:lastIdx]
-	sData, errEncode := encodeScope(s)
-	if errEncode != nil {
-		return errEncode
-	}
-	s.appendInstruction(lastInstruction)
-
-	// encode the process related information
-	pData, errEncodeProc := encodeProcessInfo(s.Proc, c.sql)
-	if errEncodeProc != nil {
-		return errEncodeProc
-	}
-
-	c.MessageBoard.SetMultiCN(c.GetMessageCenter(), c.proc.GetStmtProfile().GetStmtId())
-
-	// new sender and do send work.
-	sender, err := newMessageSenderOnClient(s.Proc.Ctx, c, s.NodeInfo.Addr)
-	if err != nil {
-		c.proc.Errorf(s.Proc.Ctx, "Failed to newMessageSenderOnClient sql=%s, txnID=%s, err=%v",
-			c.sql, c.proc.GetTxnOperator().Txn().DebugString(), err)
-		return err
-	}
-	defer sender.close()
-
-	if err = sender.send(sData, pData, pipeline.Method_PipelineMessage); err != nil {
-		return err
-	}
-	err = receiveMessageFromCnServer(c, s, sender, lastInstruction)
-	return err
-}
 
 // encodeScope generate a pipeline.Pipeline from Scope, encode pipeline, and returns.
 func encodeScope(s *Scope) ([]byte, error) {
@@ -535,12 +256,18 @@ func fillInstructionsForPipeline(s *Scope, ctx *scopeContext, p *pipeline.Pipeli
 		}
 	}
 	// Instructions
-	p.InstructionList = make([]*pipeline.Instruction, len(s.Instructions))
-	for i := range p.InstructionList {
-		if ctxId, p.InstructionList[i], err = convertToPipelineInstruction(&s.Instructions[i], ctx, ctxId); err != nil {
-			return ctxId, err
+	var ins *pipeline.Instruction
+	err = vm.HandleAllOp(s.RootOp, func(parentOp vm.Operator, op vm.Operator) error {
+		if ctxId, ins, err = convertToPipelineInstruction(op, ctx, ctxId); err != nil {
+			return err
 		}
+		p.InstructionList = append(p.InstructionList, ins)
+		return nil
+	})
+	if err != nil {
+		return ctxId, err
 	}
+
 	return ctxId, nil
 }
 
@@ -662,11 +389,12 @@ func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline,
 			return err
 		}
 	}
-	s.Instructions = make([]vm.Instruction, len(p.InstructionList))
-	for i := range s.Instructions {
-		if s.Instructions[i], err = convertToVmInstruction(p.InstructionList[i], ctx, eng); err != nil {
+	for i := range p.InstructionList {
+		ins, err := convertToVmOperator(p.InstructionList[i], ctx, eng)
+		if err != nil {
 			return err
 		}
+		s.appendOperator(ins)
 	}
 	if s.isShuffle() {
 		for _, rr := range s.Proc.Reg.MergeReceivers {
@@ -678,19 +406,20 @@ func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline,
 
 // convert vm.Instruction to pipeline.Instruction
 // todo: bad design, need to be refactored. and please refer to how sample operator do.
-func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId int32) (int32, *pipeline.Instruction, error) {
+func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32) (int32, *pipeline.Instruction, error) {
+	opBase := op.GetOperatorBase()
 	in := &pipeline.Instruction{
-		Op:      int32(opr.Op),
-		Idx:     int32(opr.Idx),
-		IsFirst: opr.IsFirst,
-		IsLast:  opr.IsLast,
+		Op:      int32(opBase.Op),
+		Idx:     int32(opBase.Idx),
+		IsFirst: opBase.IsFirst,
+		IsLast:  opBase.IsLast,
 
-		CnAddr:      opr.CnAddr,
-		OperatorId:  opr.OperatorID,
-		ParallelId:  opr.ParallelID,
-		MaxParallel: opr.MaxParallel,
+		CnAddr:      opBase.CnAddr,
+		OperatorId:  opBase.OperatorID,
+		ParallelId:  opBase.ParallelID,
+		MaxParallel: opBase.MaxParallel,
 	}
-	switch t := opr.Arg.(type) {
+	switch t := op.(type) {
 	case *insert.Argument:
 		in.Insert = &pipeline.Insert{
 			ToWriteS3:           t.ToWriteS3,
@@ -1056,25 +785,16 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 	case *value_scan.Argument:
 		in.ValueScan = &pipeline.ValueScan{}
 	default:
-		return -1, nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", opr.Op))
+		return -1, nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", opBase.Op))
 	}
 	return ctxId, in, nil
 }
 
 // convert pipeline.Instruction to vm.Instruction
-func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng engine.Engine) (vm.Instruction, error) {
-	v := vm.Instruction{
-		Op:      vm.OpType(opr.Op),
-		Idx:     int(opr.Idx),
-		IsFirst: opr.IsFirst,
-		IsLast:  opr.IsLast,
+func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engine.Engine) (vm.Operator, error) {
+	var op vm.Operator
 
-		CnAddr:      opr.CnAddr,
-		OperatorID:  opr.OperatorId,
-		ParallelID:  opr.ParallelId,
-		MaxParallel: opr.MaxParallel,
-	}
-	switch v.Op {
+	switch vm.OpType(opr.Op) {
 	case vm.Deletion:
 		t := opr.GetDelete()
 		arg := deletion.NewArgument()
@@ -1092,7 +812,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			AddAffectedRows:       t.AddAffectedRows,
 			PrimaryKeyIdx:         int(t.PrimaryKeyIdx),
 		}
-		v.Arg = arg
+		op = arg
 	case vm.Insert:
 		t := opr.GetInsert()
 		arg := insert.NewArgument()
@@ -1106,7 +826,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			PartitionIndexInBatch: int(t.PartitionIdx),
 			TableDef:              t.TableDef,
 		}
-		v.Arg = arg
+		op = arg
 	case vm.PreInsert:
 		t := opr.GetPreInsert()
 		arg := preinsert.NewArgument()
@@ -1116,7 +836,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.HasAutoCol = t.GetHasAutoCol()
 		arg.IsUpdate = t.GetIsUpdate()
 		arg.EstimatedRowCount = int64(t.GetEstimatedRowCount())
-		v.Arg = arg
+		op = arg
 	case vm.LockOp:
 		t := opr.GetLockOp()
 		lockArg := lockop.NewArgumentByEngine(eng)
@@ -1130,17 +850,17 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 				lockArg.LockTable(target.TableId, target.ChangeDef)
 			}
 		}
-		v.Arg = lockArg
+		op = lockArg
 	case vm.PreInsertUnique:
 		t := opr.GetPreInsertUnique()
 		arg := preinsertunique.NewArgument()
 		arg.PreInsertCtx = t.GetPreInsertUkCtx()
-		v.Arg = arg
+		op = arg
 	case vm.PreInsertSecondaryIndex:
 		t := opr.GetPreInsertSecondaryIndex()
 		arg := preinsertsecondaryindex.NewArgument()
 		arg.PreInsertCtx = t.GetPreInsertSkCtx()
-		v.Arg = arg
+		op = arg
 	case vm.OnDuplicateKey:
 		t := opr.GetOnDuplicateKey()
 		arg := onduplicatekey.NewArgument()
@@ -1151,7 +871,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.OnDuplicateIdx = t.OnDuplicateIdx
 		arg.OnDuplicateExpr = t.OnDuplicateExpr
 		arg.IsIgnore = t.IsIgnore
-		v.Arg = arg
+		op = arg
 	case vm.FuzzyFilter:
 		t := opr.GetFuzzyFilter()
 		arg := fuzzyfilter.NewArgument()
@@ -1159,7 +879,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.PkName = t.PkName
 		arg.PkTyp = t.PkTyp
 		arg.IfInsertFromUnique = t.IfInsertFromUnique
-		v.Arg = arg
+		op = arg
 	case vm.Anti:
 		t := opr.GetAnti()
 		arg := anti.NewArgument()
@@ -1172,7 +892,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.HashOnPK = t.HashOnPk
 		arg.IsShuffle = t.IsShuffle
 		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
-		v.Arg = arg
+		op = arg
 	case vm.Shuffle:
 		t := opr.GetShuffle()
 		arg := shuffle.NewArgument()
@@ -1184,7 +904,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.ShuffleRangeInt64 = t.ShuffleRangesInt64
 		arg.ShuffleRangeUint64 = t.ShuffleRangesUint64
 		arg.RuntimeFilterSpec = t.RuntimeFilterSpec
-		v.Arg = arg
+		op = arg
 	case vm.Dispatch:
 		t := opr.GetDispatch()
 		regs := make([]*process.WaitRegister, len(t.LocalConnector))
@@ -1196,7 +916,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			for i := range t.RemoteConnector {
 				uid, err := uuid.FromBytes(t.RemoteConnector[i].Uuid)
 				if err != nil {
-					return v, err
+					return op, err
 				}
 				n := colexec.ReceiveInfo{
 					NodeAddr: t.RemoteConnector[i].NodeAddr,
@@ -1223,7 +943,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.ShuffleType = t.ShuffleType
 		arg.ShuffleRegIdxLocal = shuffleRegIdxLocal
 		arg.ShuffleRegIdxRemote = shuffleRegIdxRemote
-		v.Arg = arg
+		op = arg
 	case vm.Group:
 		t := opr.GetAgg()
 		arg := group.NewArgument()
@@ -1233,9 +953,9 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.Exprs = t.Exprs
 		arg.Types = convertToTypes(t.Types)
 		arg.Aggs = convertToAggregates(t.Aggs)
-		v.Arg = arg
+		op = arg
 	case vm.Sample:
-		v.Arg = sample.GenerateFromPipelineOperator(opr)
+		op = sample.GenerateFromPipelineOperator(opr)
 
 	case vm.Join:
 		t := opr.GetJoin()
@@ -1247,7 +967,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
 		arg.HashOnPK = t.HashOnPk
 		arg.IsShuffle = t.IsShuffle
-		v.Arg = arg
+		op = arg
 	case vm.Left:
 		t := opr.GetLeftJoin()
 		arg := left.NewArgument()
@@ -1258,7 +978,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
 		arg.HashOnPK = t.HashOnPk
 		arg.IsShuffle = t.IsShuffle
-		v.Arg = arg
+		op = arg
 	case vm.Right:
 		t := opr.GetRightJoin()
 		arg := right.NewArgument()
@@ -1270,7 +990,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
 		arg.HashOnPK = t.HashOnPk
 		arg.IsShuffle = t.IsShuffle
-		v.Arg = arg
+		op = arg
 	case vm.RightSemi:
 		t := opr.GetRightSemiJoin()
 		arg := rightsemi.NewArgument()
@@ -1281,7 +1001,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
 		arg.HashOnPK = t.HashOnPk
 		arg.IsShuffle = t.IsShuffle
-		v.Arg = arg
+		op = arg
 	case vm.RightAnti:
 		t := opr.GetRightAntiJoin()
 		arg := rightanti.NewArgument()
@@ -1292,86 +1012,86 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
 		arg.HashOnPK = t.HashOnPk
 		arg.IsShuffle = t.IsShuffle
-		v.Arg = arg
+		op = arg
 	case vm.Limit:
-		v.Arg = limit.NewArgument().WithLimit(opr.Limit)
+		op = limit.NewArgument().WithLimit(opr.Limit)
 	case vm.LoopAnti:
 		t := opr.GetAnti()
 		arg := loopanti.NewArgument()
 		arg.Result = t.Result
 		arg.Cond = t.Expr
 		arg.Typs = convertToTypes(t.Types)
-		v.Arg = arg
+		op = arg
 	case vm.LoopJoin:
 		t := opr.GetJoin()
 		arg := loopjoin.NewArgument()
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.Cond = t.Expr
 		arg.Typs = convertToTypes(t.Types)
-		v.Arg = arg
+		op = arg
 	case vm.LoopLeft:
 		t := opr.GetLeftJoin()
 		arg := loopleft.NewArgument()
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.Cond = t.Expr
 		arg.Typs = convertToTypes(t.Types)
-		v.Arg = arg
+		op = arg
 	case vm.LoopSemi:
 		t := opr.GetSemiJoin()
 		arg := loopsemi.NewArgument()
 		arg.Result = t.Result
 		arg.Cond = t.Expr
 		arg.Typs = convertToTypes(t.Types)
-		v.Arg = arg
+		op = arg
 	case vm.IndexJoin:
 		t := opr.GetIndexJoin()
 		arg := indexjoin.NewArgument()
 		arg.Result = t.Result
 		arg.Typs = convertToTypes(t.Types)
 		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
-		v.Arg = arg
+		op = arg
 	case vm.LoopSingle:
 		t := opr.GetSingleJoin()
 		arg := loopsingle.NewArgument()
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.Cond = t.Expr
 		arg.Typs = convertToTypes(t.Types)
-		v.Arg = arg
+		op = arg
 	case vm.LoopMark:
 		t := opr.GetMarkJoin()
 		arg := loopmark.NewArgument()
 		arg.Result = t.Result
 		arg.Cond = t.Expr
 		arg.Typs = convertToTypes(t.Types)
-		v.Arg = arg
+		op = arg
 	case vm.Offset:
-		v.Arg = offset.NewArgument().WithOffset(opr.Offset)
+		op = offset.NewArgument().WithOffset(opr.Offset)
 	case vm.Order:
 		arg := order.NewArgument()
 		arg.OrderBySpec = opr.OrderBy
-		v.Arg = arg
+		op = arg
 	case vm.Product:
 		t := opr.GetProduct()
 		arg := product.NewArgument()
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.Typs = convertToTypes(t.Types)
 		arg.IsShuffle = t.IsShuffle
-		v.Arg = arg
+		op = arg
 	case vm.ProductL2:
 		t := opr.GetProductL2()
 		arg := productl2.NewArgument()
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.Typs = convertToTypes(t.Types)
 		arg.OnExpr = t.Expr
-		v.Arg = arg
+		op = arg
 	case vm.Projection:
 		arg := projection.NewArgument()
 		arg.Es = opr.ProjectList
-		v.Arg = arg
+		op = arg
 	case vm.Filter:
 		arg := filter.NewArgument()
 		arg.E = opr.Filter
-		v.Arg = arg
+		op = arg
 	case vm.Semi:
 		t := opr.GetSemiJoin()
 		arg := semi.NewArgument()
@@ -1382,7 +1102,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
 		arg.HashOnPK = t.HashOnPk
 		arg.IsShuffle = t.IsShuffle
-		v.Arg = arg
+		op = arg
 	case vm.Single:
 		t := opr.GetSingleJoin()
 		arg := single.NewArgument()
@@ -1392,7 +1112,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.Conditions = [][]*plan.Expr{t.LeftCond, t.RightCond}
 		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
 		arg.HashOnPK = t.HashOnPk
-		v.Arg = arg
+		op = arg
 	case vm.Mark:
 		t := opr.GetMarkJoin()
 		arg := mark.NewArgument()
@@ -1402,46 +1122,43 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.Cond = t.Expr
 		arg.OnList = t.OnList
 		arg.HashOnPK = t.HashOnPk
-		v.Arg = arg
+		op = arg
 	case vm.Top:
-		v.Arg = top.NewArgument().
+		op = top.NewArgument().
 			WithLimit(opr.Limit).
 			WithFs(opr.OrderBy)
 	// should change next day?
 	case vm.Intersect:
-		arg := intersect.NewArgument()
-		v.Arg = arg
+		op = intersect.NewArgument()
 	case vm.IntersectAll:
-		arg := intersect.NewArgument()
-		v.Arg = arg
+		op = intersect.NewArgument()
 	case vm.Minus:
-		arg := minus.NewArgument()
-		v.Arg = arg
+		op = minus.NewArgument()
 	case vm.Connector:
 		t := opr.GetConnect()
-		v.Arg = connector.NewArgument().
+		op = connector.NewArgument().
 			WithReg(ctx.root.getRegister(t.PipelineId, t.ConnectorIndex))
 	case vm.Merge:
-		v.Arg = merge.NewArgument()
+		op = merge.NewArgument()
 	case vm.MergeRecursive:
-		v.Arg = mergerecursive.NewArgument()
+		op = mergerecursive.NewArgument()
 	case vm.MergeGroup:
 		arg := mergegroup.NewArgument()
 		arg.NeedEval = opr.Agg.NeedEval
-		v.Arg = arg
-		DecodeMergeGroup(v.Arg.(*mergegroup.Argument), opr.Agg)
+		op = arg
+		DecodeMergeGroup(op.(*mergegroup.Argument), opr.Agg)
 	case vm.MergeLimit:
-		v.Arg = mergelimit.NewArgument().WithLimit(opr.Limit)
+		op = mergelimit.NewArgument().WithLimit(opr.Limit)
 	case vm.MergeOffset:
-		v.Arg = mergeoffset.NewArgument().WithOffset(opr.Offset)
+		op = mergeoffset.NewArgument().WithOffset(opr.Offset)
 	case vm.MergeTop:
-		v.Arg = mergetop.NewArgument().
+		op = mergetop.NewArgument().
 			WithLimit(opr.Limit).
 			WithFs(opr.OrderBy)
 	case vm.MergeOrder:
 		arg := mergeorder.NewArgument()
 		arg.OrderBySpecs = opr.OrderBy
-		v.Arg = arg
+		op = arg
 	case vm.TableFunction:
 		arg := table_function.NewArgument()
 		arg.Attrs = opr.TableFunction.Attrs
@@ -1449,14 +1166,14 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.Args = opr.TableFunction.Args
 		arg.FuncName = opr.TableFunction.Name
 		arg.Params = opr.TableFunction.Params
-		v.Arg = arg
+		op = arg
 	case vm.External:
 		t := opr.GetExternalScan()
 		name2ColIndex := make(map[string]int32)
 		for _, n2i := range t.Name2ColIndex {
 			name2ColIndex[n2i.Name] = n2i.Index
 		}
-		v.Arg = external.NewArgument().WithEs(
+		op = external.NewArgument().WithEs(
 			&external.ExternalParam{
 				ExParamConst: external.ExParamConst{
 					Attrs:           t.Attrs,
@@ -1481,17 +1198,26 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.TblDef = t.TblDef
 		arg.Limit = t.Limit
 		arg.Offset = t.Offset
-		v.Arg = arg
+		op = arg
 	case vm.TableScan:
-		arg := table_scan.NewArgument()
-		v.Arg = arg
+		op = table_scan.NewArgument()
 	case vm.ValueScan:
-		arg := value_scan.NewArgument()
-		v.Arg = arg
+		op = value_scan.NewArgument()
 	default:
-		return v, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", opr.Op))
+		return op, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", opr.Op))
 	}
-	return v, nil
+	op.GetOperatorBase().SetInfo(&vm.OperatorInfo{
+		Op:      vm.OpType(opr.Op),
+		Idx:     int(opr.Idx),
+		IsFirst: opr.IsFirst,
+		IsLast:  opr.IsLast,
+
+		CnAddr:      opr.CnAddr,
+		OperatorID:  opr.OperatorId,
+		ParallelID:  opr.ParallelId,
+		MaxParallel: opr.MaxParallel,
+	})
+	return op, nil
 }
 
 // convert []types.Type to []*plan.Type

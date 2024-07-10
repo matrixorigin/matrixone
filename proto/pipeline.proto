@@ -32,6 +32,7 @@ enum Method {
     PipelineMessage = 1;
     BatchMessage = 2;
     PrepareDoneNotifyMessage = 3;// for dispatch
+    StopSending = 4;
 }
 
 enum Status {
@@ -50,9 +51,7 @@ message Message {
   bytes   analyse = 6;
   uint64  id = 7;
   bytes   uuid = 8;
-  uint64  batch_cnt = 9;
-  uint32  checksum = 10;
-  uint64  sequence = 11;
+  bool    needNotReply = 9;
 }
 
 message Connector {
@@ -472,6 +471,13 @@ message ProcessLimitation {
   int64 reader_size = 5;
 }
 
+message PrepareParamInfo {
+  int64 length = 1;
+  bytes data = 2;
+  bytes area = 3;
+  repeated bool nulls = 4;
+}
+
 message ProcessInfo {
   string id = 1;
   string sql = 2;
@@ -482,6 +488,7 @@ message ProcessInfo {
   SessionInfo session_info = 7 [(gogoproto.nullable) = false];
   repeated int32 analysis_node_list = 8;
   SessionLoggerInfo session_logger = 9 [(gogoproto.nullable) = false];
+  PrepareParamInfo prepare_params = 10 [(gogoproto.nullable) = false];
 }
 
 message SessionInfo {

@@ -69,10 +69,12 @@ func NewMergeExecutor(rt *dbutils.Runtime, sched CNMergeScheduler) *MergeExecuto
 
 func (e *MergeExecutor) setSpareMem(total uint64) {
 	containerMLimit, err := memlimit.FromCgroup()
-	logutil.Infof("[Mergeblocks] constainer memory limit %v, host mem %v, err %v",
-		common.HumanReadableBytes(int(containerMLimit)),
-		common.HumanReadableBytes(int(total)),
-		err)
+	logutil.Info(
+		"MergeExecutorMemoryInfo",
+		common.AnyField("memory-limit", common.HumanReadableBytes(int(containerMLimit))),
+		common.AnyField("host-memory", common.HumanReadableBytes(int(total))),
+		common.AnyField("error", err),
+	)
 	tenth := int(float64(total) * 0.1)
 	limitdiff := 0
 	if containerMLimit > 0 {
@@ -103,11 +105,12 @@ func (e *MergeExecutor) PrintStats() {
 		return
 	}
 
-	logutil.Infof(
-		"Mergeblocks avail mem: %v(%v reserved), active mergeing size: %v, active merging blk cnt: %d",
-		common.HumanReadableBytes(e.memAvail),
-		common.HumanReadableBytes(e.memSpare),
-		common.HumanReadableBytes(int(atomic.LoadInt64(&e.activeEstimateBytes))), cnt,
+	logutil.Info(
+		"MergeExecutorMemoryStats",
+		common.AnyField("avail-mem", common.HumanReadableBytes(e.memAvail)),
+		common.AnyField("reserved-mem", common.HumanReadableBytes(e.memSpare)),
+		common.AnyField("inuse-mem", common.HumanReadableBytes(int(atomic.LoadInt64(&e.activeEstimateBytes)))),
+		common.AnyField("inuse-cnt", cnt),
 	)
 }
 
@@ -137,13 +140,8 @@ func (e *MergeExecutor) OnExecDone(v any) {
 	atomic.AddInt64(&e.activeEstimateBytes, -int64(stat.estBytes))
 }
 
-func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, policy Policy) {
+func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, mobjs []*catalog.ObjectEntry, kind TaskHostKind) {
 	e.tableName = fmt.Sprintf("%v-%v", entry.ID, entry.GetLastestSchema().Name)
-
-	mobjs, kind := policy.Revise(e.CPUPercent(), int64(e.MemAvailBytes()))
-	if len(mobjs) < 2 {
-		return
-	}
 
 	if ActiveCNObj.CheckOverlapOnCNActive(mobjs) {
 		return
@@ -181,7 +179,12 @@ func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, policy Policy) {
 			ActiveCNObj.AddActiveCNObj(mobjs)
 			logMergeTask(e.tableName, math.MaxUint64, mobjs, blkCnt, osize, esize)
 		} else {
-			logutil.Warnf("mergeblocks send to cn error: %v", err)
+			logutil.Info(
+				"MergeExecutorError",
+				common.OperationField("send-cn-task"),
+				common.AnyField("task", fmt.Sprintf("table-%d-%s", cntask.TblId, cntask.TableName)),
+				common.AnyField("error", err),
+			)
 			return
 		}
 	} else {
@@ -197,7 +200,12 @@ func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, policy Policy) {
 		task, err := e.rt.Scheduler.ScheduleMultiScopedTxnTaskWithObserver(nil, tasks.DataCompactionTask, scopes, factory, e)
 		if err != nil {
 			if err != tasks.ErrScheduleScopeConflict {
-				logutil.Infof("[Mergeblocks] Schedule error info=%v", err)
+				logutil.Info(
+					"MergeExecutorError",
+					common.OperationField("schedule-merge-task"),
+					common.AnyField("error", err),
+					common.AnyField("task", task.Name()),
+				)
 			}
 			return
 		}
@@ -238,11 +246,16 @@ func logMergeTask(name string, taskId uint64, merges []*catalog.ObjectEntry, blk
 		v2.TaskDNMergeScheduledByCounter.Inc()
 		v2.TaskDNMergedSizeCounter.Add(float64(osize))
 	}
-	logutil.Infof(
-		"[Mergeblocks] Scheduled %v [%v|on%d,bn%d|%s,%s], merged(%v): %s", name,
-		platform, len(merges), blkn,
-		common.HumanReadableBytes(osize), common.HumanReadableBytes(esize),
-		rows,
-		infoBuf.String(),
+	logutil.Info(
+		"MergeExecutor",
+		common.OperationField("schedule-merge-task"),
+		common.AnyField("name", name),
+		common.AnyField("platform", platform),
+		common.AnyField("num-obj", len(merges)),
+		common.AnyField("num-blk", blkn),
+		common.AnyField("orig-size", common.HumanReadableBytes(osize)),
+		common.AnyField("est-size", common.HumanReadableBytes(esize)),
+		common.AnyField("rows", rows),
+		common.AnyField("info", infoBuf.String()),
 	)
 }

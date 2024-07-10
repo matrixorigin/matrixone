@@ -74,6 +74,8 @@ type AutoIncrementService interface {
 	InsertValues(ctx context.Context, tableID uint64, bat *batch.Batch, estimate int64) (uint64, error)
 	// CurrentValue return current incr column value.
 	CurrentValue(ctx context.Context, tableID uint64, col string) (uint64, error)
+	// Reload reload auto increment cache.
+	Reload(ctx context.Context, tableID uint64) error
 	// Close close the auto increment service
 	Close()
 }
@@ -115,8 +117,8 @@ type incrTableCache interface {
 	columns() []AutoColumn
 	insertAutoValues(ctx context.Context, tableID uint64, bat *batch.Batch, estimate int64) (uint64, error)
 	currentValue(ctx context.Context, tableID uint64, col string) (uint64, error)
-	close() error
 	adjust(ctx context.Context, cols []AutoColumn) error
+	close() error
 }
 
 type valueAllocator interface {

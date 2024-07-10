@@ -42,7 +42,7 @@ func NewSizeBoundedAllocator(upstream Allocator, maxSize uint64, counter *atomic
 		counter:  counter,
 
 		deallocatorPool: NewClosureDeallocatorPool(
-			func(hints Hints, args sizeBoundedDeallocatorArgs) {
+			func(hints Hints, args *sizeBoundedDeallocatorArgs) {
 				ret.counter.Add(-args.size)
 			},
 		),

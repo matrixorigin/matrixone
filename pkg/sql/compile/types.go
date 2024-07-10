@@ -15,7 +15,6 @@
 package compile
 
 import (
-	"context"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -127,7 +126,8 @@ type Scope struct {
 	// TxnOffset represents the transaction's write offset, specifying the starting position for reading data.
 	TxnOffset int
 	// Instructions contains command list of this scope.
-	Instructions vm.Instructions
+	// Instructions vm.Instructions
+	RootOp vm.Operator
 	// Proc contains the execution context.
 	Proc *process.Process
 
@@ -140,6 +140,23 @@ type Scope struct {
 
 	PartialResults     []any
 	PartialResultTypes []types.T
+}
+
+func canScopeOpRemote(rootOp vm.Operator) bool {
+	if rootOp == nil {
+		return true
+	}
+	if rootOp.GetOperatorBase().CannotRemote() {
+		return false
+	}
+	numChildren := rootOp.GetOperatorBase().NumChildren()
+	for idx := 0; idx < numChildren; idx++ {
+		res := canScopeOpRemote(rootOp.GetOperatorBase().GetChildren(idx))
+		if !res {
+			return false
+		}
+	}
+	return true
 }
 
 // canRemote checks whether the current scope can be executed remotely.
@@ -158,11 +175,11 @@ func (s *Scope) canRemote(c *Compile, checkAddr bool) bool {
 	// some operators cannot be remote.
 	// todo: it is not a good way to check the operator type here.
 	//  cannot generate this remote pipeline if the operator type is not supported.
-	for _, op := range s.Instructions {
-		if op.CannotRemote() {
-			return false
-		}
+
+	if !canScopeOpRemote(s.RootOp) {
+		return false
 	}
+
 	for _, pre := range s.PreScopes {
 		if !pre.canRemote(c, false) {
 			return false
@@ -249,10 +266,13 @@ type Compile struct {
 	sql       string
 	originSQL string
 
+	// queryStatus is a structure to record query has done.
+	queryStatus queryDoneWaiter
+
 	anal *anaylze
 	// e db engine instance.
-	e   engine.Engine
-	ctx context.Context
+	e engine.Engine
+
 	// proc stores the execution context.
 	proc *process.Process
 	// TxnOffset read starting offset position within the transaction during the execute current statement

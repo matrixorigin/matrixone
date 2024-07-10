@@ -23,6 +23,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
+func containsDynamicParam(expr *plan.Expr) bool {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_P, *plan.Expr_V:
+		return true
+	case *plan.Expr_F:
+		for _, subExpr := range exprImpl.F.Args {
+			if containsDynamicParam(subExpr) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func isRuntimeConstExpr(expr *plan.Expr) bool {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Vec, *plan.Expr_T:
@@ -887,6 +901,10 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 	//----------------------------------------------------------------------
 
 	rightChild := builder.qry.Nodes[node.Children[1]]
+
+	if rightChild.Stats.Selectivity > 0.5 {
+		return nodeID
+	}
 
 	if rightChild.Stats.Outcnt > float64(GetInFilterCardLimitOnPK(leftChild.Stats.TableCnt)) || rightChild.Stats.Outcnt > leftChild.Stats.Cost*0.1 {
 		return nodeID

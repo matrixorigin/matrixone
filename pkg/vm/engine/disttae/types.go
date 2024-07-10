@@ -255,6 +255,8 @@ type Transaction struct {
 	pkCount              int
 
 	adjustCount int
+
+	haveDDL atomic.Bool
 }
 
 type Pos struct {
@@ -556,7 +558,7 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 }
 func (txn *Transaction) resetSnapshot() error {
 	txn.tableCache.tableMap.Range(func(key, value interface{}) bool {
-		value.(*txnTable).resetSnapshot()
+		value.(*txnTableDelegate).origin.resetSnapshot()
 		return true
 	})
 	return nil
@@ -705,6 +707,7 @@ type txnTable struct {
 	proc atomic.Pointer[process.Process]
 
 	createByStatementID int
+	enableLogFilterExpr atomic.Bool
 }
 
 type column struct {
@@ -795,7 +798,7 @@ type blockMergeReader struct {
 	*blockReader
 	table     *txnTable
 	txnOffset int // Transaction writes offset used to specify the starting position for reading data.
-	pkFilter  InMemPKFilter
+	pkFilter  memPKFilter
 	//for perfetch deletes
 	loaded     bool
 	pkidx      int

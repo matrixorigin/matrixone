@@ -310,7 +310,8 @@ func (exec *txnExecutor) Exec(
 		return executor.Result{}, err
 	}
 
-	c := NewCompile(exec.s.addr, exec.getDatabase(), sql, "", "", exec.ctx, exec.s.eng, proc, stmts[0], false, nil, receiveAt)
+	c := NewCompile(exec.s.addr, exec.getDatabase(), sql, "", "", exec.s.eng, proc, stmts[0], false, nil, receiveAt)
+	c.SetOriginSQL(sql)
 	defer c.Release()
 	c.disableRetry = exec.opts.DisableIncrStatement()
 	c.SetBuildPlanFunc(func() (*plan.Plan, error) {

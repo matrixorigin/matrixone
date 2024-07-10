@@ -17,10 +17,11 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"os"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 
@@ -131,6 +132,13 @@ func (w *Ws) CloneSnapshotWS() client.Workspace {
 func (w *Ws) BindTxnOp(op client.TxnOperator) {
 }
 
+func (w *Ws) SetHaveDDL(flag bool) {
+}
+
+func (w *Ws) GetHaveDDL() bool {
+	return false
+}
+
 func TestCompile(t *testing.T) {
 	cnclient.NewCNClient("test", new(cnclient.ClientConfig))
 	ctrl := gomock.NewController(t)
@@ -140,7 +148,7 @@ func TestCompile(t *testing.T) {
 		tc.proc.Base.TxnClient = txnCli
 		tc.proc.Base.TxnOperator = txnOp
 		tc.proc.Ctx = ctx
-		c := NewCompile("test", "test", tc.sql, "", "", ctx, tc.e, tc.proc, tc.stmt, false, nil, time.Now())
+		c := NewCompile("test", "test", tc.sql, "", "", tc.e, tc.proc, tc.stmt, false, nil, time.Now())
 		err := c.Compile(ctx, tc.pn, testPrint)
 		require.NoError(t, err)
 		c.getAffectedRows()
@@ -169,7 +177,7 @@ func TestCompileWithFaults(t *testing.T) {
 	tc.proc.Base.TxnClient = txnCli
 	tc.proc.Base.TxnOperator = txnOp
 	tc.proc.Ctx = ctx
-	c := NewCompile("test", "test", tc.sql, "", "", ctx, tc.e, tc.proc, nil, false, nil, time.Now())
+	c := NewCompile("test", "test", tc.sql, "", "", tc.e, tc.proc, nil, false, nil, time.Now())
 	err := c.Compile(ctx, tc.pn, testPrint)
 	require.NoError(t, err)
 	c.getAffectedRows()

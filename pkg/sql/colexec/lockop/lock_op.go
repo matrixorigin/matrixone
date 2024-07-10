@@ -17,6 +17,7 @@ package lockop
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -605,7 +606,9 @@ func canRetryLock(txn client.TxnOperator, err error) bool {
 		return true
 	}
 	if moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
-		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) {
+		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
+		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) ||
+		errors.Is(err, context.DeadlineExceeded) {
 		time.Sleep(defaultWaitTimeOnRetryLock)
 		return true
 	}

@@ -68,6 +68,7 @@ func NewCache(
 }
 
 func (c *Cache) Alloc(n int) CacheData {
+	c.l.EnsureNBytes(n)
 	data := newData(c.allocator, n, &c.size)
 	return data
 }

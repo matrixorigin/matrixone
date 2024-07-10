@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -36,21 +37,21 @@ type flushDeletesTask struct {
 	name   objectio.ObjectName
 	blocks []objectio.BlockObject
 
-	createAt time.Time
-	parentId uint64
+	createAt   time.Time
+	parentTask string
 }
 
 func NewFlushDeletesTask(
 	ctx *tasks.Context,
 	fs *objectio.ObjectFS,
 	delta *containers.Batch,
-	parentId uint64,
+	parentTask string,
 ) *flushDeletesTask {
 	task := &flushDeletesTask{
-		fs:       fs,
-		delta:    delta,
-		createAt: time.Now(),
-		parentId: parentId,
+		fs:         fs,
+		delta:      delta,
+		createAt:   time.Now(),
+		parentTask: parentTask,
 	}
 	task.BaseTask = tasks.NewBaseTask(task, tasks.IOTask, ctx)
 	return task
@@ -84,8 +85,14 @@ func (task *flushDeletesTask) Execute(ctx context.Context) error {
 
 	ioT := time.Since(inst)
 	if time.Since(task.createAt) > SlowFlushIOTask {
-		logutil.Infof("slowflush: task %d flushdeletes %v rows: wait %v, copy %v, io %v",
-			task.parentId, cnBatch.RowCount(), waitT, copyT, ioT)
+		logutil.Info(
+			"[FLUSH-SLOW-DEL]",
+			common.AnyField("rows", cnBatch.RowCount()),
+			common.AnyField("wait", waitT),
+			common.AnyField("copy", copyT),
+			common.AnyField("io", ioT),
+			zap.String("task", task.parentTask),
+		)
 	}
 
 	if v := ctx.Value(TestFlushBailoutPos2{}); v != nil {

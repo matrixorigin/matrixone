@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexjoin"
 
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -108,20 +109,21 @@ func init() {
 	constBat.SetRowCount(1)
 }
 
-func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]*process.WaitRegister, index int) vm.Instruction {
+func dupInstruction(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process.WaitRegister, index int) vm.Instruction {
+	srcOpBase := sourceOp.GetOperatorBase()
 	res := vm.Instruction{
-		Op:          sourceIns.Op,
-		Idx:         sourceIns.Idx,
-		IsFirst:     sourceIns.IsFirst,
-		IsLast:      sourceIns.IsLast,
-		CnAddr:      sourceIns.CnAddr,
-		OperatorID:  sourceIns.OperatorID,
-		MaxParallel: sourceIns.MaxParallel,
-		ParallelID:  sourceIns.ParallelID,
+		Op:          srcOpBase.Op,
+		Idx:         srcOpBase.Idx,
+		IsFirst:     srcOpBase.IsFirst,
+		IsLast:      srcOpBase.IsLast,
+		CnAddr:      srcOpBase.CnAddr,
+		OperatorID:  srcOpBase.OperatorID,
+		MaxParallel: srcOpBase.MaxParallel,
+		ParallelID:  srcOpBase.ParallelID,
 	}
-	switch sourceIns.Op {
+	switch srcOpBase.Op {
 	case vm.Anti:
-		t := sourceIns.Arg.(*anti.Argument)
+		t := sourceOp.(*anti.Argument)
 		arg := anti.NewArgument()
 		arg.Cond = t.Cond
 		arg.Typs = t.Typs
@@ -132,7 +134,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.RuntimeFilterSpecs = t.RuntimeFilterSpecs
 		res.Arg = arg
 	case vm.Group:
-		t := sourceIns.Arg.(*group.Argument)
+		t := sourceOp.(*group.Argument)
 		arg := group.NewArgument()
 		arg.IsShuffle = t.IsShuffle
 		arg.PreAllocSize = t.PreAllocSize
@@ -142,10 +144,10 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.Aggs = t.Aggs
 		res.Arg = arg
 	case vm.Sample:
-		t := sourceIns.Arg.(*sample.Argument)
+		t := sourceOp.(*sample.Argument)
 		res.Arg = t.SimpleDup()
 	case vm.Join:
-		t := sourceIns.Arg.(*join.Argument)
+		t := sourceOp.(*join.Argument)
 		arg := join.NewArgument()
 		arg.Result = t.Result
 		arg.Cond = t.Cond
@@ -156,7 +158,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.IsShuffle = t.IsShuffle
 		res.Arg = arg
 	case vm.Left:
-		t := sourceIns.Arg.(*left.Argument)
+		t := sourceOp.(*left.Argument)
 		arg := left.NewArgument()
 		arg.Cond = t.Cond
 		arg.Result = t.Result
@@ -167,7 +169,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.IsShuffle = t.IsShuffle
 		res.Arg = arg
 	case vm.Right:
-		t := sourceIns.Arg.(*right.Argument)
+		t := sourceOp.(*right.Argument)
 		arg := right.NewArgument()
 		arg.Cond = t.Cond
 		arg.Result = t.Result
@@ -179,7 +181,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.IsShuffle = t.IsShuffle
 		res.Arg = arg
 	case vm.RightSemi:
-		t := sourceIns.Arg.(*rightsemi.Argument)
+		t := sourceOp.(*rightsemi.Argument)
 		arg := rightsemi.NewArgument()
 		arg.Cond = t.Cond
 		arg.Result = t.Result
@@ -190,7 +192,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.IsShuffle = t.IsShuffle
 		res.Arg = arg
 	case vm.RightAnti:
-		t := sourceIns.Arg.(*rightanti.Argument)
+		t := sourceOp.(*rightanti.Argument)
 		arg := rightanti.NewArgument()
 		arg.Cond = t.Cond
 		arg.Result = t.Result
@@ -201,90 +203,90 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.IsShuffle = t.IsShuffle
 		res.Arg = arg
 	case vm.Limit:
-		t := sourceIns.Arg.(*limit.Argument)
+		t := sourceOp.(*limit.Argument)
 		arg := limit.NewArgument()
 		arg.LimitExpr = t.LimitExpr
 		res.Arg = arg
 	case vm.LoopAnti:
-		t := sourceIns.Arg.(*loopanti.Argument)
+		t := sourceOp.(*loopanti.Argument)
 		arg := loopanti.NewArgument()
 		arg.Result = t.Result
 		arg.Cond = t.Cond
 		arg.Typs = t.Typs
 		res.Arg = arg
 	case vm.LoopJoin:
-		t := sourceIns.Arg.(*loopjoin.Argument)
+		t := sourceOp.(*loopjoin.Argument)
 		arg := loopjoin.NewArgument()
 		arg.Result = t.Result
 		arg.Cond = t.Cond
 		arg.Typs = t.Typs
 		res.Arg = arg
 	case vm.IndexJoin:
-		t := sourceIns.Arg.(*indexjoin.Argument)
+		t := sourceOp.(*indexjoin.Argument)
 		arg := indexjoin.NewArgument()
 		arg.Result = t.Result
 		arg.Typs = t.Typs
 		arg.RuntimeFilterSpecs = t.RuntimeFilterSpecs
 		res.Arg = arg
 	case vm.LoopLeft:
-		t := sourceIns.Arg.(*loopleft.Argument)
+		t := sourceOp.(*loopleft.Argument)
 		arg := loopleft.NewArgument()
 		arg.Cond = t.Cond
 		arg.Typs = t.Typs
 		arg.Result = t.Result
 		res.Arg = arg
 	case vm.LoopSemi:
-		t := sourceIns.Arg.(*loopsemi.Argument)
+		t := sourceOp.(*loopsemi.Argument)
 		arg := loopsemi.NewArgument()
 		arg.Result = t.Result
 		arg.Cond = t.Cond
 		arg.Typs = t.Typs
 		res.Arg = arg
 	case vm.LoopSingle:
-		t := sourceIns.Arg.(*loopsingle.Argument)
+		t := sourceOp.(*loopsingle.Argument)
 		arg := loopsingle.NewArgument()
 		arg.Result = t.Result
 		arg.Cond = t.Cond
 		arg.Typs = t.Typs
 		res.Arg = arg
 	case vm.LoopMark:
-		t := sourceIns.Arg.(*loopmark.Argument)
+		t := sourceOp.(*loopmark.Argument)
 		arg := loopmark.NewArgument()
 		arg.Result = t.Result
 		arg.Cond = t.Cond
 		arg.Typs = t.Typs
 		res.Arg = arg
 	case vm.Offset:
-		t := sourceIns.Arg.(*offset.Argument)
+		t := sourceOp.(*offset.Argument)
 		arg := offset.NewArgument()
 		arg.OffsetExpr = t.OffsetExpr
 		res.Arg = arg
 	case vm.Order:
-		t := sourceIns.Arg.(*order.Argument)
+		t := sourceOp.(*order.Argument)
 		arg := order.NewArgument()
 		arg.OrderBySpec = t.OrderBySpec
 		res.Arg = arg
 	case vm.Product:
-		t := sourceIns.Arg.(*product.Argument)
+		t := sourceOp.(*product.Argument)
 		arg := product.NewArgument()
 		arg.Result = t.Result
 		arg.Typs = t.Typs
 		arg.IsShuffle = t.IsShuffle
 		res.Arg = arg
 	case vm.ProductL2:
-		t := sourceIns.Arg.(*productl2.Argument)
+		t := sourceOp.(*productl2.Argument)
 		arg := productl2.NewArgument()
 		arg.Result = t.Result
 		arg.Typs = t.Typs
 		arg.OnExpr = t.OnExpr
 		res.Arg = arg
 	case vm.Projection:
-		t := sourceIns.Arg.(*projection.Argument)
+		t := sourceOp.(*projection.Argument)
 		arg := projection.NewArgument()
 		arg.Es = t.Es
 		res.Arg = arg
 	case vm.Filter:
-		t := sourceIns.Arg.(*filter.Argument)
+		t := sourceOp.(*filter.Argument)
 		arg := filter.NewArgument()
 		arg.E = t.GetExeExpr()
 		if arg.E == nil {
@@ -292,7 +294,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		}
 		res.Arg = arg
 	case vm.Semi:
-		t := sourceIns.Arg.(*semi.Argument)
+		t := sourceOp.(*semi.Argument)
 		arg := semi.NewArgument()
 		arg.Result = t.Result
 		arg.Cond = t.Cond
@@ -303,7 +305,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.IsShuffle = t.IsShuffle
 		res.Arg = arg
 	case vm.Single:
-		t := sourceIns.Arg.(*single.Argument)
+		t := sourceOp.(*single.Argument)
 		arg := single.NewArgument()
 		arg.Result = t.Result
 		arg.Cond = t.Cond
@@ -313,7 +315,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.HashOnPK = t.HashOnPK
 		res.Arg = arg
 	case vm.Top:
-		t := sourceIns.Arg.(*top.Argument)
+		t := sourceOp.(*top.Argument)
 		arg := top.NewArgument()
 		arg.Limit = t.Limit
 		arg.TopValueTag = t.TopValueTag
@@ -329,7 +331,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg := intersectall.NewArgument()
 		res.Arg = arg
 	case vm.Merge:
-		t := sourceIns.Arg.(*merge.Argument)
+		t := sourceOp.(*merge.Argument)
 		arg := merge.NewArgument()
 		arg.SinkScan = t.SinkScan
 		res.Arg = arg
@@ -338,35 +340,35 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.MergeCTE:
 		res.Arg = mergecte.NewArgument()
 	case vm.MergeGroup:
-		t := sourceIns.Arg.(*mergegroup.Argument)
+		t := sourceOp.(*mergegroup.Argument)
 		arg := mergegroup.NewArgument()
 		arg.NeedEval = t.NeedEval
 		arg.PartialResults = t.PartialResults
 		arg.PartialResultTypes = t.PartialResultTypes
 		res.Arg = arg
 	case vm.MergeLimit:
-		t := sourceIns.Arg.(*mergelimit.Argument)
+		t := sourceOp.(*mergelimit.Argument)
 		arg := mergelimit.NewArgument()
 		arg.Limit = t.Limit
 		res.Arg = arg
 	case vm.MergeOffset:
-		t := sourceIns.Arg.(*mergeoffset.Argument)
+		t := sourceOp.(*mergeoffset.Argument)
 		arg := mergeoffset.NewArgument()
 		arg.Offset = t.Offset
 		res.Arg = arg
 	case vm.MergeTop:
-		t := sourceIns.Arg.(*mergetop.Argument)
+		t := sourceOp.(*mergetop.Argument)
 		arg := mergetop.NewArgument()
 		arg.Limit = t.Limit
 		arg.Fs = t.Fs
 		res.Arg = arg
 	case vm.MergeOrder:
-		t := sourceIns.Arg.(*mergeorder.Argument)
+		t := sourceOp.(*mergeorder.Argument)
 		arg := mergeorder.NewArgument()
 		arg.OrderBySpecs = t.OrderBySpecs
 		res.Arg = arg
 	case vm.Mark:
-		t := sourceIns.Arg.(*mark.Argument)
+		t := sourceOp.(*mark.Argument)
 		arg := mark.NewArgument()
 		arg.Result = t.Result
 		arg.Conditions = t.Conditions
@@ -376,7 +378,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.HashOnPK = t.HashOnPK
 		res.Arg = arg
 	case vm.TableFunction:
-		t := sourceIns.Arg.(*table_function.Argument)
+		t := sourceOp.(*table_function.Argument)
 		arg := table_function.NewArgument()
 		arg.FuncName = t.FuncName
 		arg.Args = t.Args
@@ -385,7 +387,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.Params = t.Params
 		res.Arg = arg
 	case vm.External:
-		t := sourceIns.Arg.(*external.Argument)
+		t := sourceOp.(*external.Argument)
 		res.Arg = external.NewArgument().WithEs(
 			&external.ExternalParam{
 				ExParamConst: external.ExParamConst{
@@ -413,7 +415,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			},
 		)
 	case vm.Source:
-		t := sourceIns.Arg.(*source.Argument)
+		t := sourceOp.(*source.Argument)
 		arg := source.NewArgument()
 		arg.TblDef = t.TblDef
 		arg.Limit = t.Limit
@@ -424,14 +426,14 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		ok := false
 		if regMap != nil {
 			arg := connector.NewArgument()
-			sourceReg := sourceIns.Arg.(*connector.Argument).Reg
+			sourceReg := sourceOp.(*connector.Argument).Reg
 			if arg.Reg, ok = regMap[sourceReg]; !ok {
 				panic("nonexistent wait register")
 			}
 			res.Arg = arg
 		}
 	case vm.Shuffle:
-		sourceArg := sourceIns.Arg.(*shuffle.Argument)
+		sourceArg := sourceOp.(*shuffle.Argument)
 		arg := shuffle.NewArgument()
 		arg.ShuffleType = sourceArg.ShuffleType
 		arg.ShuffleColIdx = sourceArg.ShuffleColIdx
@@ -445,7 +447,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.Dispatch:
 		ok := false
 		if regMap != nil {
-			sourceArg := sourceIns.Arg.(*dispatch.Argument)
+			sourceArg := sourceOp.(*dispatch.Argument)
 			arg := dispatch.NewArgument()
 			arg.IsSink = sourceArg.IsSink
 			arg.RecSink = sourceArg.RecSink
@@ -464,13 +466,13 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			res.Arg = arg
 		}
 	case vm.Insert:
-		t := sourceIns.Arg.(*insert.Argument)
+		t := sourceOp.(*insert.Argument)
 		arg := insert.NewArgument()
 		arg.InsertCtx = t.InsertCtx
 		arg.ToWriteS3 = t.ToWriteS3
 		res.Arg = arg
 	case vm.PreInsert:
-		t := sourceIns.Arg.(*preinsert.Argument)
+		t := sourceOp.(*preinsert.Argument)
 		arg := preinsert.NewArgument()
 		arg.SchemaName = t.SchemaName
 		arg.TableDef = t.TableDef
@@ -480,7 +482,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.EstimatedRowCount = t.EstimatedRowCount
 		res.Arg = arg
 	case vm.Deletion:
-		t := sourceIns.Arg.(*deletion.Argument)
+		t := sourceOp.(*deletion.Argument)
 		arg := deletion.NewArgument()
 		arg.IBucket = t.IBucket
 		arg.Nbucket = t.Nbucket
@@ -489,12 +491,13 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.SegmentMap = t.SegmentMap
 		res.Arg = arg
 	case vm.LockOp:
-		t := sourceIns.Arg.(*lockop.Argument)
+		t := sourceOp.(*lockop.Argument)
 		arg := lockop.NewArgument()
 		*arg = *t
+		arg.SetChildren(nil) // make sure res.arg.children is nil
 		res.Arg = arg
 	case vm.FuzzyFilter:
-		t := sourceIns.Arg.(*fuzzyfilter.Argument)
+		t := sourceOp.(*fuzzyfilter.Argument)
 		arg := fuzzyfilter.NewArgument()
 		arg.N = t.N
 		arg.PkName = t.PkName
@@ -508,7 +511,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg := value_scan.NewArgument()
 		res.Arg = arg
 	default:
-		panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceIns.Op))
+		panic(fmt.Sprintf("unexpected instruction type '%d' to dup", srcOpBase.Op))
 	}
 	return res
 }
@@ -1206,7 +1209,7 @@ func constructDeleteDispatchAndLocal(
 	rs[currentIdx].NodeInfo = ss[currentIdx].NodeInfo
 	rs[currentIdx].Magic = Remote
 	rs[currentIdx].PreScopes = append(rs[currentIdx].PreScopes, ss[currentIdx])
-	rs[currentIdx].Proc = process.NewFromProc(c.proc, c.ctx, len(ss))
+	rs[currentIdx].Proc = process.NewFromProc(c.proc, c.proc.Ctx, len(ss))
 	rs[currentIdx].RemoteReceivRegInfos = make([]RemoteReceivRegInfo, 0, len(ss)-1)
 
 	// use arg.RemoteRegs to know the uuid,
@@ -1531,17 +1534,17 @@ func constructLoopMark(n *plan.Node, typs []types.Type, proc *process.Process) *
 	return arg
 }
 
-func constructJoinBuildInstruction(c *Compile, in vm.Instruction, isDup bool, isShuffle bool) vm.Instruction {
-	switch in.Op {
+func constructJoinBuildOperator(c *Compile, op vm.Operator, isDup bool, isShuffle bool) vm.Instruction {
+	switch op.GetOperatorBase().Op {
 	case vm.IndexJoin:
-		arg := in.Arg.(*indexjoin.Argument)
+		arg := op.(*indexjoin.Argument)
 		ret := indexbuild.NewArgument()
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
 		}
 		return vm.Instruction{
 			Op:      vm.IndexBuild,
-			Idx:     in.Idx,
+			Idx:     op.GetOperatorBase().GetIdx(),
 			IsFirst: true,
 			Arg:     ret,
 		}
@@ -1549,28 +1552,28 @@ func constructJoinBuildInstruction(c *Compile, in vm.Instruction, isDup bool, is
 		if isShuffle {
 			return vm.Instruction{
 				Op:      vm.ShuffleBuild,
-				Idx:     in.Idx,
+				Idx:     op.GetOperatorBase().GetIdx(),
 				IsFirst: true,
-				Arg:     constructShuffleBuild(in, c.proc, isDup),
+				Arg:     constructShuffleBuild(op, c.proc, isDup),
 			}
 		}
 		return vm.Instruction{
 			Op:      vm.HashBuild,
-			Idx:     in.Idx,
+			Idx:     op.GetOperatorBase().GetIdx(),
 			IsFirst: true,
-			Arg:     constructHashBuild(in, c.proc, isDup),
+			Arg:     constructHashBuild(op, c.proc, isDup),
 		}
 	}
 }
 
-func constructHashBuild(in vm.Instruction, proc *process.Process, isDup bool) *hashbuild.Argument {
+func constructHashBuild(op vm.Operator, proc *process.Process, isDup bool) *hashbuild.Argument {
 	// XXX BUG
 	// relation index of arg.Conditions should be rewritten to 0 here.
 	ret := hashbuild.NewArgument()
 
-	switch in.Op {
+	switch op.GetOperatorBase().Op {
 	case vm.Anti:
-		arg := in.Arg.(*anti.Argument)
+		arg := op.(*anti.Argument)
 		ret.NeedHashMap = true
 		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
@@ -1585,7 +1588,7 @@ func constructHashBuild(in vm.Instruction, proc *process.Process, isDup bool) *h
 		}
 
 	case vm.Mark:
-		arg := in.Arg.(*mark.Argument)
+		arg := op.(*mark.Argument)
 		ret.NeedHashMap = true
 		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
@@ -1595,7 +1598,7 @@ func constructHashBuild(in vm.Instruction, proc *process.Process, isDup bool) *h
 		ret.NeedAllocateSels = true
 
 	case vm.Join:
-		arg := in.Arg.(*join.Argument)
+		arg := op.(*join.Argument)
 		ret.NeedHashMap = true
 		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
@@ -1620,7 +1623,7 @@ func constructHashBuild(in vm.Instruction, proc *process.Process, isDup bool) *h
 		}
 
 	case vm.Left:
-		arg := in.Arg.(*left.Argument)
+		arg := op.(*left.Argument)
 		ret.NeedHashMap = true
 		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
@@ -1633,7 +1636,7 @@ func constructHashBuild(in vm.Instruction, proc *process.Process, isDup bool) *h
 		}
 
 	case vm.Right:
-		arg := in.Arg.(*right.Argument)
+		arg := op.(*right.Argument)
 		ret.NeedHashMap = true
 		ret.Typs = arg.RightTypes
 		ret.Conditions = arg.Conditions[1]
@@ -1646,7 +1649,7 @@ func constructHashBuild(in vm.Instruction, proc *process.Process, isDup bool) *h
 		}
 
 	case vm.RightSemi:
-		arg := in.Arg.(*rightsemi.Argument)
+		arg := op.(*rightsemi.Argument)
 		ret.NeedHashMap = true
 		ret.Typs = arg.RightTypes
 		ret.Conditions = arg.Conditions[1]
@@ -1659,7 +1662,7 @@ func constructHashBuild(in vm.Instruction, proc *process.Process, isDup bool) *h
 		}
 
 	case vm.RightAnti:
-		arg := in.Arg.(*rightanti.Argument)
+		arg := op.(*rightanti.Argument)
 		ret.NeedHashMap = true
 		ret.Typs = arg.RightTypes
 		ret.Conditions = arg.Conditions[1]
@@ -1672,7 +1675,7 @@ func constructHashBuild(in vm.Instruction, proc *process.Process, isDup bool) *h
 		}
 
 	case vm.Semi:
-		arg := in.Arg.(*semi.Argument)
+		arg := op.(*semi.Argument)
 		ret.NeedHashMap = true
 		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
@@ -1690,7 +1693,7 @@ func constructHashBuild(in vm.Instruction, proc *process.Process, isDup bool) *h
 		}
 
 	case vm.Single:
-		arg := in.Arg.(*single.Argument)
+		arg := op.(*single.Argument)
 		ret.NeedHashMap = true
 		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
@@ -1702,21 +1705,21 @@ func constructHashBuild(in vm.Instruction, proc *process.Process, isDup bool) *h
 			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
 		}
 	case vm.Product:
-		arg := in.Arg.(*product.Argument)
+		arg := op.(*product.Argument)
 		ret.NeedHashMap = false
 		ret.Typs = arg.Typs
 		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.NeedAllocateSels = true
 	case vm.ProductL2:
-		arg := in.Arg.(*productl2.Argument)
+		arg := op.(*productl2.Argument)
 		ret.NeedHashMap = false
 		ret.Typs = arg.Typs
 		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.NeedAllocateSels = true
 	case vm.LoopAnti:
-		arg := in.Arg.(*loopanti.Argument)
+		arg := op.(*loopanti.Argument)
 		ret.NeedHashMap = false
 		ret.Typs = arg.Typs
 		ret.IsDup = isDup
@@ -1724,7 +1727,7 @@ func constructHashBuild(in vm.Instruction, proc *process.Process, isDup bool) *h
 		ret.NeedAllocateSels = true
 
 	case vm.LoopJoin:
-		arg := in.Arg.(*loopjoin.Argument)
+		arg := op.(*loopjoin.Argument)
 		ret.NeedHashMap = false
 		ret.Typs = arg.Typs
 		ret.IsDup = isDup
@@ -1732,7 +1735,7 @@ func constructHashBuild(in vm.Instruction, proc *process.Process, isDup bool) *h
 		ret.NeedAllocateSels = true
 
 	case vm.LoopLeft:
-		arg := in.Arg.(*loopleft.Argument)
+		arg := op.(*loopleft.Argument)
 		ret.NeedHashMap = false
 		ret.Typs = arg.Typs
 		ret.IsDup = isDup
@@ -1740,7 +1743,7 @@ func constructHashBuild(in vm.Instruction, proc *process.Process, isDup bool) *h
 		ret.NeedAllocateSels = true
 
 	case vm.LoopSemi:
-		arg := in.Arg.(*loopsemi.Argument)
+		arg := op.(*loopsemi.Argument)
 		ret.NeedHashMap = false
 		ret.Typs = arg.Typs
 		ret.IsDup = isDup
@@ -1748,7 +1751,7 @@ func constructHashBuild(in vm.Instruction, proc *process.Process, isDup bool) *h
 		ret.NeedAllocateSels = true
 
 	case vm.LoopSingle:
-		arg := in.Arg.(*loopsingle.Argument)
+		arg := op.(*loopsingle.Argument)
 		ret.NeedHashMap = false
 		ret.Typs = arg.Typs
 		ret.IsDup = isDup
@@ -1756,7 +1759,7 @@ func constructHashBuild(in vm.Instruction, proc *process.Process, isDup bool) *h
 		ret.NeedAllocateSels = true
 
 	case vm.LoopMark:
-		arg := in.Arg.(*loopmark.Argument)
+		arg := op.(*loopmark.Argument)
 		ret.NeedHashMap = false
 		ret.Typs = arg.Typs
 		ret.IsDup = isDup
@@ -1765,17 +1768,17 @@ func constructHashBuild(in vm.Instruction, proc *process.Process, isDup bool) *h
 
 	default:
 		ret.Release()
-		panic(moerr.NewInternalError(proc.Ctx, "unsupport join type '%v'", in.Op))
+		panic(moerr.NewInternalError(proc.Ctx, "unsupport join type '%v'", op.GetOperatorBase().Op))
 	}
 	return ret
 }
 
-func constructShuffleBuild(in vm.Instruction, proc *process.Process, isDup bool) *shufflebuild.Argument {
+func constructShuffleBuild(op vm.Operator, proc *process.Process, isDup bool) *shufflebuild.Argument {
 	ret := shufflebuild.NewArgument()
 
-	switch in.Op {
+	switch op.GetOperatorBase().Op {
 	case vm.Anti:
-		arg := in.Arg.(*anti.Argument)
+		arg := op.(*anti.Argument)
 		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
 		ret.IsDup = isDup
@@ -1792,7 +1795,7 @@ func constructShuffleBuild(in vm.Instruction, proc *process.Process, isDup bool)
 		}
 
 	case vm.Join:
-		arg := in.Arg.(*join.Argument)
+		arg := op.(*join.Argument)
 		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
 		ret.IsDup = isDup
@@ -1816,7 +1819,7 @@ func constructShuffleBuild(in vm.Instruction, proc *process.Process, isDup bool)
 		}
 
 	case vm.Left:
-		arg := in.Arg.(*left.Argument)
+		arg := op.(*left.Argument)
 		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
 		ret.IsDup = isDup
@@ -1828,7 +1831,7 @@ func constructShuffleBuild(in vm.Instruction, proc *process.Process, isDup bool)
 		}
 
 	case vm.Right:
-		arg := in.Arg.(*right.Argument)
+		arg := op.(*right.Argument)
 		ret.Typs = arg.RightTypes
 		ret.Conditions = arg.Conditions[1]
 		ret.IsDup = isDup
@@ -1840,7 +1843,7 @@ func constructShuffleBuild(in vm.Instruction, proc *process.Process, isDup bool)
 		}
 
 	case vm.RightSemi:
-		arg := in.Arg.(*rightsemi.Argument)
+		arg := op.(*rightsemi.Argument)
 		ret.Typs = arg.RightTypes
 		ret.Conditions = arg.Conditions[1]
 		ret.IsDup = isDup
@@ -1852,7 +1855,7 @@ func constructShuffleBuild(in vm.Instruction, proc *process.Process, isDup bool)
 		}
 
 	case vm.RightAnti:
-		arg := in.Arg.(*rightanti.Argument)
+		arg := op.(*rightanti.Argument)
 		ret.Typs = arg.RightTypes
 		ret.Conditions = arg.Conditions[1]
 		ret.IsDup = isDup
@@ -1864,7 +1867,7 @@ func constructShuffleBuild(in vm.Instruction, proc *process.Process, isDup bool)
 		}
 
 	case vm.Semi:
-		arg := in.Arg.(*semi.Argument)
+		arg := op.(*semi.Argument)
 		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
 		ret.IsDup = isDup
@@ -1882,7 +1885,7 @@ func constructShuffleBuild(in vm.Instruction, proc *process.Process, isDup bool)
 
 	default:
 		ret.Release()
-		panic(moerr.NewInternalError(proc.Ctx, "unsupported type for shuffle join: '%v'", in.Op))
+		panic(moerr.NewInternalError(proc.Ctx, "unsupported type for shuffle join: '%v'", op.GetOperatorBase().Op))
 	}
 	return ret
 }
