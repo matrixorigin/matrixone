@@ -118,11 +118,15 @@ func (arg *Argument) Call(proc *proc) (vm.CallResult, error) {
 }
 
 func genAutoIncrCol(bat *batch.Batch, proc *proc, arg *Argument) error {
+	eng := proc.Base.SessionInfo.StorageEngine
+	currentTs := proc.Base.TxnOperator.CreateTS()
 	lastInsertValue, err := proc.GetIncrService().InsertValues(
 		proc.Ctx,
-		arg.TableDef.TblId,
+		arg.TableDef,
 		bat,
 		arg.EstimatedRowCount,
+		eng,
+		currentTs,
 	)
 	if err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {

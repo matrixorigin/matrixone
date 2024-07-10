@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 // GetAutoIncrementService get increment service from process level runtime
@@ -72,7 +73,7 @@ type AutoIncrementService interface {
 	// delete operation is triggered.
 	Delete(ctx context.Context, tableID uint64, txn client.TxnOperator) error
 	// InsertValues insert auto columns values into bat.
-	InsertValues(ctx context.Context, tableID uint64, bat *batch.Batch, estimate int64) (uint64, error)
+	InsertValues(ctx context.Context, tableDef *plan.TableDef, bat *batch.Batch, estimate int64, eng engine.Engine, currentTs timestamp.Timestamp) (uint64, error)
 	// CurrentValue return current incr column value.
 	CurrentValue(ctx context.Context, tableID uint64, col string) (uint64, error)
 	// Reload reload auto increment cache.
@@ -116,7 +117,7 @@ type incrTableCache interface {
 	table() uint64
 	commit()
 	columns() []AutoColumn
-	insertAutoValues(ctx context.Context, tableID uint64, bat *batch.Batch, estimate int64) (uint64, error)
+	insertAutoValues(ctx context.Context, tableID uint64, bat *batch.Batch, estimate int64, pkMap map[string]struct{}, eng engine.Engine, currentTS timestamp.Timestamp) (uint64, error)
 	currentValue(ctx context.Context, tableID uint64, col string) (uint64, error)
 	adjust(ctx context.Context, cols []AutoColumn) error
 	close() error

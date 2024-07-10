@@ -21,13 +21,17 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"go.uber.org/zap"
 )
 
@@ -194,10 +198,24 @@ func (s *service) Delete(
 
 func (s *service) InsertValues(
 	ctx context.Context,
-	tableID uint64,
+	tableDef *plan.TableDef,
 	bat *batch.Batch,
 	estimate int64,
+	eng engine.Engine,
+	currentTS timestamp.Timestamp,
 ) (uint64, error) {
+	tableID := tableDef.TblId
+	var pkMap map[string]struct{}
+	if tableDef.IsTemporary || tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+		// 1. currently temporary table is supported by memory engine, this distinction should be removed after refactoring
+		// 2. for __mo_fake_pk_col, no need to check whether the user has manually specified the inserted value
+	} else {
+		pkMap = make(map[string]struct{})
+		for _, n := range tableDef.Pkey.Names {
+			pkMap[n] = struct{}{}
+		}
+	}
+
 	ts, err := s.getCommittedTableCache(
 		ctx,
 		tableID)
@@ -209,6 +227,9 @@ func (s *service) InsertValues(
 		tableID,
 		bat,
 		estimate,
+		pkMap,
+		eng,
+		currentTS,
 	)
 }
 
