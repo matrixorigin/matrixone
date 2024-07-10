@@ -394,7 +394,7 @@ func (e *Engine) getOrCreateSnapCatalogCache(
 func (e *Engine) getOrCreateSnapPart(
 	ctx context.Context,
 	tbl *txnTable,
-	ts types.TS) (*logtailreplay.Partition, error) {
+	ts types.TS) (*logtailreplay.PartitionState, error) {
 
 	//check whether the latest partition is available for reuse.
 	// if the snapshot-read's ts is too old , subscribing table maybe timeout.
@@ -420,7 +420,7 @@ func (e *Engine) getOrCreateSnapPart(
 	defer tblSnaps.Unlock()
 	for _, snap := range tblSnaps.snaps {
 		if snap.CanServe(ts) {
-			return snap, nil
+			return snap.Snapshot(), nil
 		}
 	}
 
@@ -471,17 +471,17 @@ func (e *Engine) getOrCreateSnapPart(
 	})
 	if snap.CanServe(ts) {
 		tblSnaps.snaps = append(tblSnaps.snaps, snap)
-		return snap, nil
+		return snap.Snapshot(), nil
 	}
 
 	start, end := snap.GetDuration()
 	//if has no checkpoints or ts > snap.end, use latest partition.
 	if snap.IsEmpty() || ts.Greater(&end) {
-		err := tbl.updateLogtail(ctx)
+		ps, err := tbl.tryToSubscribe(ctx)
 		if err != nil {
 			return nil, err
 		}
-		return e.getOrCreateLatestPart(tbl.db.databaseId, tbl.tableId), nil
+		return ps, nil
 	}
 	if ts.Less(&start) {
 		return nil, moerr.NewInternalErrorNoCtx(
