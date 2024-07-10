@@ -36,7 +36,6 @@ import (
 
 func Test_Append(t *testing.T) {
 	var (
-		err          error
 		opts         testutil.TestOptions
 		rel          handle.Relation
 		database     handle.Database
@@ -65,6 +64,7 @@ func Test_Append(t *testing.T) {
 	bats := bat.Split(20)
 
 	{
+		var err error
 		txn, _ := taeEngine.GetDB().StartTxn(nil)
 		database, err = txn.CreateDatabase(databaseName, "", "")
 		assert.Nil(t, err)
@@ -81,6 +81,8 @@ func Test_Append(t *testing.T) {
 	doAppend := func(b *containers.Batch) func() {
 		return func() {
 			defer wg.Done()
+
+			var err error
 			txn, _ := taeEngine.GetDB().StartTxn(nil)
 			database, _ = txn.GetDatabase(databaseName)
 			rel, err = database.GetRelationByName(schema.Name)

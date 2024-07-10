@@ -17,16 +17,16 @@ package test
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/stretchr/testify/require"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_InsertRows(t *testing.T) {
@@ -93,20 +93,6 @@ func Test_InsertRows(t *testing.T) {
 		}
 
 		require.Equal(t, expect, stats)
-
-		//require.Equal(t, int(0), stats.DataObjects.Visible.ObjCnt)
-		//require.Equal(t, int(0), stats.DataObjects.Invisible.ObjCnt)
-		//
-		//require.Equal(t, int(0), stats.DataObjects.Visible.RowCnt)
-		//require.Equal(t, int(0), stats.DataObjects.Invisible.RowCnt)
-		//
-		//require.Equal(t, int(10), stats.InmemRows.VisibleCnt)
-		//require.Equal(t, int(0), stats.InmemRows.InvisibleCnt)
-		//
-		//require.Equal(t, int(0), stats.CheckpointCnt)
-		//
-		//require.Equal(t, int(0), stats.DataObjects.Visible.BlkCnt)
-		//require.Equal(t, int(0), stats.DataObjects.Invisible.BlkCnt)
 	}
 
 	err = taeHandler.GetDB().FlushTable(ctx, accountId, rel.GetDBID(ctx), rel.GetTableID(ctx), types.TimestampToTS(disttaeEngine.Now()))

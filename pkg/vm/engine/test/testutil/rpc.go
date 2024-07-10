@@ -21,15 +21,12 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
 )
 
 type MockRPCAgent struct {
-	client          *MockLogtailRPCClient
-	server          *MockLogtailPRCServer
-	txnResponseChan chan txn.TxnResponse
-	txnRequestChan  chan txn.TxnRequest
+	client *MockLogtailRPCClient
+	server *MockLogtailPRCServer
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -42,9 +39,6 @@ func NewMockLogtailAgent() *MockRPCAgent {
 	la := new(MockRPCAgent)
 	la.client = new(MockLogtailRPCClient)
 	la.server = new(MockLogtailPRCServer)
-
-	la.txnResponseChan = make(chan txn.TxnResponse)
-	la.txnRequestChan = make(chan txn.TxnRequest)
 
 	la.client.responseReceiver = make(chan morpc.Message)
 	la.server.logtailRequestReceiver = make(chan morpc.Message)
@@ -154,23 +148,6 @@ func (s *MockRPCClientStream) Receive() (chan morpc.Message, error) {
 func (s *MockRPCClientStream) Close(closeConn bool) error {
 	//close(s.receiver)
 	return nil
-}
-
-func (a *MockRPCAgent) writeAndCommitRequest(
-	ctx context.Context, commitReq *txn.TxnRequest) (response *txn.TxnResponse) {
-
-	reqs := txn.TxnRequest{
-		Method: txn.TxnMethod_Commit,
-		Flag:   txn.SkipResponseFlag,
-		CommitRequest: &txn.TxnCommitRequest{
-			Payload:       []*txn.TxnRequest{commitReq},
-			Disable1PCOpt: false,
-		}}
-
-	a.txnRequestChan <- reqs
-
-	resp := <-a.txnResponseChan
-	return &resp
 }
 
 func (a *MockRPCAgent) listenLogtailRequest() {
