@@ -16,7 +16,9 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"strings"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -35,8 +37,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+var gTaskID atomic.Uint64
+
 type cnMergeTask struct {
-	host *txnTable
+	taskId uint64 // only unique in a process
+	host   *txnTable
 	// txn
 	snapshot types.TS // start ts, fixed
 	state    *logtailreplay.PartitionState
@@ -99,6 +104,7 @@ func newCNMergeTask(
 	}
 
 	return &cnMergeTask{
+		taskId:      gTaskID.Add(1),
 		host:        tbl,
 		snapshot:    snapshot,
 		state:       state,
@@ -117,6 +123,10 @@ func newCNMergeTask(
 		targetObjSize: targetObjSize,
 		doTransfer:    !strings.Contains(tbl.comment, catalog.MO_COMMENT_NO_DEL_HINT),
 	}, nil
+}
+
+func (t *cnMergeTask) Name() string {
+	return fmt.Sprintf("[MT-%d]%d-%s", t.taskId, t.host.tableId, t.host.tableName)
 }
 
 func (t *cnMergeTask) DoTransfer() bool {

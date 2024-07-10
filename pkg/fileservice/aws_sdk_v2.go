@@ -19,11 +19,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	gotrace "runtime/trace"
 	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/aws/ratelimit"
 	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	"github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -112,6 +114,7 @@ func NewAwsSDKv2(
 	s3Options := []func(*s3.Options){
 		func(opts *s3.Options) {
 			opts.Retryer = newAWSRetryer()
+			opts.HTTPClient = newHTTPClient(args)
 		},
 	}
 
@@ -528,6 +531,8 @@ func (a *AwsSDKv2) getObject(ctx context.Context, min *int64, max *int64, params
 	}, a.perfCounterSets...)
 	r, err := newRetryableReader(
 		func(offset int64) (io.ReadCloser, error) {
+			LogEvent(ctx, str_retryable_reader_new_reader_begin, offset)
+			defer LogEvent(ctx, str_retryable_reader_new_reader_end)
 			var rang string
 			if max != nil {
 				rang = fmt.Sprintf("bytes=%d-%d", offset, *max)
@@ -538,6 +543,8 @@ func (a *AwsSDKv2) getObject(ctx context.Context, min *int64, max *int64, params
 			output, err := DoWithRetry(
 				"s3 get object",
 				func() (*s3.GetObjectOutput, error) {
+					LogEvent(ctx, str_awssdkv2_get_object_begin)
+					defer LogEvent(ctx, str_awssdkv2_get_object_end)
 					return a.client.GetObject(ctx, params, optFns...)
 				},
 				maxRetryAttemps,
@@ -685,7 +692,13 @@ type awsRetryer struct {
 }
 
 func newAWSRetryer() aws.Retryer {
-	retryer := aws.Retryer(retry.NewStandard())
+	retryer := aws.Retryer(retry.NewStandard(
+		func(opts *retry.StandardOptions) {
+			opts.RateLimiter = ratelimit.NewTokenRateLimit(math.MaxInt)
+			opts.RetryCost = 1
+			opts.RetryTimeoutCost = 1
+		},
+	))
 	return &awsRetryer{
 		upstream: retryer,
 	}
