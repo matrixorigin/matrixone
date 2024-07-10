@@ -54,7 +54,7 @@ type TestDisttaeEngine struct {
 }
 
 func NewTestDisttaeEngine(ctx context.Context, mp *mpool.MPool,
-	fs fileservice.FileService, rpcAgent *MockRPCAgent) (*TestDisttaeEngine, error) {
+	fs fileservice.FileService, rpcAgent *MockRPCAgent, storage *TestTxnStorage) (*TestDisttaeEngine, error) {
 	de := new(TestDisttaeEngine)
 
 	de.logtailReceiver = make(chan morpc.Message)
@@ -67,9 +67,8 @@ func NewTestDisttaeEngine(ctx context.Context, mp *mpool.MPool,
 	wait := make(chan struct{})
 	de.timestampWaiter = client.NewTimestampWaiter()
 
-	de.txnClient = client.NewTxnClient(
-		&service.TestSender{},
-		client.WithTimestampWaiter(de.timestampWaiter))
+	txnSender := service.NewTestSender(storage)
+	de.txnClient = client.NewTxnClient(txnSender, client.WithTimestampWaiter(de.timestampWaiter))
 
 	de.txnClient.Resume()
 
@@ -146,74 +145,57 @@ func (de *TestDisttaeEngine) waitLogtail(ctx context.Context) error {
 	return nil
 }
 
-func (de *TestDisttaeEngine) countDataObjects(state *logtailreplay.PartitionState, ts types.TS) (
-	visibleCnt, invisibleCnt int, err error) {
+func (de *TestDisttaeEngine) countDataObjects(state *logtailreplay.PartitionState,
+	stats *PartitionStateStats, ts types.TS) (err error) {
 
 	iter, err := state.NewObjectsIter(ts, false)
 	if err != nil {
-		return 0, 0, err
+		return err
 	}
 
 	for iter.Next() {
 		item := iter.Entry()
 		if item.Visible(ts) {
-			visibleCnt++
+			stats.DataObjectsVisible.ObjCnt += 1
+			stats.DataObjectsVisible.BlkCnt += int(item.BlkCnt())
+			stats.DataObjectsVisible.RowCnt += int(item.Rows())
 		} else {
-			invisibleCnt++
+			stats.DataObjectsInvisible.ObjCnt += 1
+			stats.DataObjectsInvisible.BlkCnt += int(item.BlkCnt())
+			stats.DataObjectsInvisible.RowCnt += int(item.Rows())
 		}
 	}
 
 	return
 }
 
-func (de *TestDisttaeEngine) countDataObjectBlock(state *logtailreplay.PartitionState,
-	ts types.TS) (visibleCnt, invisibleCnt int, err error) {
-
-	iter, err := state.NewObjectsIter(ts, false)
-	if err != nil {
-		return 0, 0, err
-	}
-
-	for iter.Next() {
-		item := iter.Entry()
-		if item.Visible(ts) {
-			visibleCnt += int(item.BlkCnt())
-		} else {
-			invisibleCnt += int(item.BlkCnt())
-		}
-	}
-
-	return
-}
-
-func (de *TestDisttaeEngine) countStarAll(state *logtailreplay.PartitionState, ts types.TS) (totalRows int, err error) {
-	err = disttae.ForeachVisibleDataObject(state, types.TimestampToTS(de.Now()), func(obj logtailreplay.ObjectEntry) error {
-		totalRows += int(obj.Rows())
-		return nil
-	})
-
-	if err != nil {
-		return 0, err
-	}
+func (de *TestDisttaeEngine) countInmemRows(state *logtailreplay.PartitionState,
+	stats *PartitionStateStats, ts types.TS) (err error) {
 
 	iter := state.NewRowsIter(ts, nil, false)
 	for iter.Next() {
-		totalRows++
+		stats.InmemRows.VisibleCnt++
 	}
 
 	if err = iter.Close(); err != nil {
-		return 0, err
+		return
 	}
 
-	// how to get deletes?
+	iter = state.NewRowsIter(ts, nil, true)
+	for iter.Next() {
+		stats.InmemRows.InvisibleCnt++
+	}
 
-	return totalRows, nil
+	err = iter.Close()
+	return
 }
 
-func (de *TestDisttaeEngine) countCheckpoint(state *logtailreplay.PartitionState, ts types.TS) (cnt int, err error) {
+func (de *TestDisttaeEngine) countCheckpoint(state *logtailreplay.PartitionState,
+	stats *PartitionStateStats, ts types.TS) (err error) {
+
 	ckps := state.Checkpoints()
 	for idx := range ckps {
-		cnt += len(strings.Split(ckps[idx], ";")) / 2
+		stats.CheckpointCnt += len(strings.Split(ckps[idx], ";")) / 2
 	}
 
 	return
@@ -227,47 +209,25 @@ func (de *TestDisttaeEngine) GetPartitionStateStats(ctx context.Context, databas
 	}
 
 	var (
-		cnt1, cnt2 int
-		state      *logtailreplay.PartitionState
+		state *logtailreplay.PartitionState
 	)
 
 	ts := types.TimestampToTS(de.Now())
 	state = de.Engine.GetOrCreateLatestPart(databaseId, tableId).Snapshot()
 
 	// data objects
-	{
-		if cnt1, cnt2, err = de.countDataObjects(state, ts); err != nil {
-			return
-		}
-
-		stats.DataObjets.Visible = cnt1
-		stats.DataObjets.Invisible = cnt2
-	}
-
-	// all visible rows
-	{
-		if cnt1, err = de.countStarAll(state, ts); err != nil {
-			return
-		}
-		stats.TotalVisibleRows = cnt1
-	}
-
-	// block cnt
-	{
-		if cnt1, cnt2, err = de.countDataObjectBlock(state, ts); err != nil {
-			return
-		}
-
-		stats.Blocks.Visible = cnt1
-		stats.Blocks.Invisible = cnt2
+	if err = de.countDataObjects(state, &stats, ts); err != nil {
+		return
 	}
 
 	// ckp count
-	{
-		if cnt1, err = de.countCheckpoint(state, ts); err != nil {
-			return
-		}
-		stats.CheckpointCnt = cnt1
+	if err = de.countCheckpoint(state, &stats, ts); err != nil {
+		return
+	}
+
+	// in mem rows
+	if err = de.countInmemRows(state, &stats, ts); err != nil {
+		return
 	}
 
 	// tombstones
@@ -308,7 +268,10 @@ func (mc *mockMOCluster) GetTNService(
 	selector clusterservice.Selector, apply func(metadata.TNService) bool) {
 }
 func (mc *mockMOCluster) GetAllTNServices() []metadata.TNService {
-	return []metadata.TNService{{LogTailServiceAddress: disttae.FakeLogtailServerAddress}}
+	return []metadata.TNService{{
+		LogTailServiceAddress: disttae.FakeLogtailServerAddress,
+		Shards:                []metadata.TNShard{GetDefaultTNShard()},
+	}}
 }
 func (mc *mockMOCluster) GetCNServiceWithoutWorkingState(
 	selector clusterservice.Selector, apply func(metadata.CNService) bool) {

@@ -16,25 +16,14 @@ package testutil
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"sync"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
 )
-
-var _ TxnOperation = new(MockRPCAgent)
 
 type MockRPCAgent struct {
 	client          *MockLogtailRPCClient
@@ -47,60 +36,6 @@ type MockRPCAgent struct {
 	wg     sync.WaitGroup
 
 	sessions map[uint64]morpc.ClientSession
-}
-
-//func (a *MockRPCAgent) Now() timestamp.Timestamp {
-//	return timestamp.Timestamp{PhysicalTime: time.Now().UnixNano()}
-//}
-
-func (a *MockRPCAgent) CreateDatabase(ctx context.Context, databaseName string,
-	e engine.Engine, op client.TxnOperator) (response *txn.TxnResponse, dbId uint64) {
-
-	commitReq, dbId, err := disttae.MockGenCreateDatabaseCommitRequest(ctx, e, op, databaseName)
-	if err != nil {
-		return &txn.TxnResponse{TxnError: txn.WrapError(err, moerr.ErrTxnError)}, 0
-	}
-
-	return a.writeAndCommitRequest(ctx, commitReq), dbId
-}
-
-func (a *MockRPCAgent) CreateTable(ctx context.Context, db engine.Database,
-	schema *catalog.Schema, ts timestamp.Timestamp) (response *txn.TxnResponse, tableId uint64) {
-
-	commitReq, tblId, err := disttae.MockGenCreateTableCommitRequest(ctx, schema, db, ts)
-
-	if err != nil {
-		return &txn.TxnResponse{TxnError: txn.WrapError(err, 0)}, 0
-	}
-
-	return a.writeAndCommitRequest(ctx, commitReq), tblId
-}
-
-func (a *MockRPCAgent) InsertRows(
-	ctx context.Context, accountId uint32, txnTable engine.Relation, databaseName string,
-	inBat *containers.Batch, m *mpool.MPool, ts timestamp.Timestamp) (response *txn.TxnResponse) {
-
-	bat := containers.ToCNBatch(inBat)
-
-	commitReq, err := disttae.MockInsertRowsCommitRequest(
-		accountId, txnTable.GetDBID(ctx), databaseName, txnTable.GetTableID(ctx), txnTable.GetTableName(), bat, m, ts)
-
-	if err != nil {
-		return &txn.TxnResponse{TxnError: txn.WrapError(err, 0)}
-	}
-
-	return a.writeAndCommitRequest(ctx, commitReq)
-}
-
-func (a *MockRPCAgent) InsertDataObject(ctx context.Context, tblHandler engine.Relation, bat *batch.Batch,
-	snapshot timestamp.Timestamp) (response *txn.TxnResponse) {
-
-	commitReq, err := disttae.MockInsertDataObjectsCommitRequest(tblHandler, bat, snapshot)
-	if err != nil {
-		return &txn.TxnResponse{TxnError: txn.WrapError(err, 0)}
-	}
-
-	return a.writeAndCommitRequest(ctx, commitReq)
 }
 
 func NewMockLogtailAgent() *MockRPCAgent {

@@ -15,37 +15,38 @@
 package testutil
 
 import (
-	"context"
+	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
-type TxnOperation interface {
-	CreateDatabase(ctx context.Context, databaseName string, e engine.Engine,
-		op client.TxnOperator) (response *txn.TxnResponse, dbId uint64)
+type PObjectStats struct {
+	ObjCnt int
+	BlkCnt int
+	RowCnt int
+}
 
-	CreateTable(ctx context.Context, db engine.Database,
-		schema *catalog.Schema, ts timestamp.Timestamp) (response *txn.TxnResponse, tblId uint64)
-
-	//AlterTable()
-	//DropTable()
-	//DropDatabase()
-
-	//Select()
-	//InsertRows()
-	//Delete()
-	//Update()
+type PInmemRowsStats struct {
+	VisibleCnt   int
+	InvisibleCnt int
 }
 
 type PartitionStateStats struct {
-	DataObjets, InmemRows, Blocks, Tombstones struct {
-		Visible, Invisible int
-	}
+	DataObjectsVisible   PObjectStats
+	DataObjectsInvisible PObjectStats
+	InmemRows            PInmemRowsStats
+	CheckpointCnt        int
+}
 
-	TotalVisibleRows int
-	CheckpointCnt    int
+func (s *PartitionStateStats) String() string {
+	return fmt.Sprintf("dataObjects:{iobj-%d, iblk-%d, irow-%d; dobj-%d, dblk-%d, drow-%d};\n"+
+		"InmemRows:{visible-%d, invisible-%d};\ncheckpoint:{%d}",
+		s.DataObjectsVisible.ObjCnt, s.DataObjectsVisible.BlkCnt, s.DataObjectsVisible.RowCnt,
+		s.DataObjectsInvisible.ObjCnt, s.DataObjectsInvisible.BlkCnt, s.DataObjectsInvisible.RowCnt,
+		s.InmemRows.VisibleCnt, s.InmemRows.InvisibleCnt,
+		s.CheckpointCnt)
+}
+
+type TestOptions struct {
+	TaeEngineOptions *options.Options
 }

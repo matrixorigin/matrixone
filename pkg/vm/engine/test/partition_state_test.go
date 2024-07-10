@@ -16,282 +16,158 @@ package test
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	testutil "github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	testutil2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
+	"github.com/panjf2000/ants/v2"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func Test_CreateDataBase(t *testing.T) {
+func Test_Append(t *testing.T) {
 	var (
-		accountId    = catalog.System_Account
-		databaseName = "db1"
-	)
-
-	ctx := context.Background()
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
-
-	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, t)
-	defer func() {
-		disttaeEngine.Close(ctx)
-		taeHandler.Close(ctx)
-		rpcAgent.Close()
-	}()
-
-	testutil.CreateDatabaseOnly(ctx, databaseName, disttaeEngine, taeHandler, rpcAgent, t)
-
-}
-
-func Test_InsertRows(t *testing.T) {
-	var (
-		accountId  = catalog.System_Account
-		tableId    uint64
-		databaseId uint64
-
+		err          error
+		opts         testutil.TestOptions
+		rel          handle.Relation
+		database     handle.Database
+		accountId    = uint32(0)
 		tableName    = "test1"
 		databaseName = "db1"
 	)
 
-	ctx := context.Background()
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
-
-	disttaeEngine, taeHandler, rpcAgent, mp := testutil.CreateEngines(ctx, t)
+	// make sure that disabled all auto ckp and flush
+	opts.TaeEngineOptions = config.WithLongScanAndCKPOpts(nil)
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, accountId)
+	disttaeEngine, taeEngine, rpcAgent, _ := testutil.CreateEngines(ctx, opts, t)
 	defer func() {
 		disttaeEngine.Close(ctx)
-		taeHandler.Close(ctx)
+		taeEngine.Close(true)
 		rpcAgent.Close()
 	}()
 
-	dbHandler, dbEntry, txnOp := testutil.CreateDatabaseOnly(ctx, databaseName, disttaeEngine, taeHandler, rpcAgent, t)
-	databaseId = dbEntry.GetID()
-
-	schema := catalog2.MockSchemaAll(10, 0)
-	bat := catalog2.MockBatch(schema, 10)
+	schema := catalog.MockSchema(3, 2)
 	schema.Name = tableName
+	schema.BlockMaxRows = 10000
+	batchRows := schema.BlockMaxRows * 2 / 5
+	cnt := uint32(20)
+	bat := catalog.MockBatch(schema, int(batchRows*cnt))
+	defer bat.Close()
+	bats := bat.Split(20)
 
-	var err error
-
-	tblHandler, _ := testutil.CreateTableOnly(ctx, schema, dbHandler, dbEntry, rpcAgent, disttaeEngine.Now(), t)
-	tableId = tblHandler.GetTableID(ctx)
-
-	err = disttaeEngine.Engine.PushClient().TryToSubscribeTable(ctx, databaseId, tableId)
-	require.Nil(t, err)
-
-	err = txnOp.UpdateSnapshot(ctx, disttaeEngine.Now())
-	require.Nil(t, err)
-
-	rpcAgent.InsertRows(ctx, accountId, tblHandler, databaseName, bat, mp, txnOp.SnapshotTS())
-
-	stats, err := disttaeEngine.GetPartitionStateStats(ctx, uint64(databaseId), uint64(tableId))
-	require.Nil(t, err)
-	require.Equal(t, stats.TotalVisibleRows, uint32(10))
-}
-
-func Test_InsertDataObjects(t *testing.T) {
-	var (
-		accountId    = catalog.System_Account
-		tableName    = "test1"
-		databaseName = "db1"
-	)
-
-	ctx := context.Background()
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
-
-	disttaeEngine, taeHandler, rpcAgent, mp := testutil.CreateEngines(ctx, t)
-	defer func() {
-		disttaeEngine.Close(ctx)
-		taeHandler.Close(ctx)
-		rpcAgent.Close()
-	}()
-
-	schema := catalog2.MockSchemaAll(10, 0)
-	schema.Name = tableName
-
-	var (
-		err        error
-		tblHandler engine.Relation
-	)
-
-	_, _, tblHandler, _, _ = testutil.CreateDatabaseAndTable(
-		ctx, schema, databaseName, disttaeEngine, taeHandler, rpcAgent, t)
-
-	bat := testutil.MockObjectStatsBatBySchema(tblHandler.GetTableDef(ctx), schema, 8192, 100, mp, t)
-
-	resp := rpcAgent.InsertDataObject(ctx, tblHandler, bat, disttaeEngine.Now())
-	require.Nil(t, resp.TxnError)
-
-	err = disttaeEngine.Engine.PushClient().TryToSubscribeTable(ctx, tblHandler.GetDBID(ctx), tblHandler.GetTableID(ctx))
-	require.Nil(t, err)
-
-	stats, err := disttaeEngine.GetPartitionStateStats(ctx, tblHandler.GetDBID(ctx), tblHandler.GetTableID(ctx))
-	require.Nil(t, err)
-
-	require.Equal(t, stats.TotalVisibleRows, uint32(8192*100))
-
-	require.Equal(t, stats.Blocks.Visible, uint32(100))
-	require.Equal(t, stats.Blocks.Invisible, uint32(100))
-
-	require.Equal(t, stats.DataObjets.Visible, 1)
-	require.Equal(t, stats.DataObjets.Invisible, 1)
-}
-
-func Test_FlushCleanRows(t *testing.T) {
-	var (
-		accountId    = catalog.System_Account
-		tableName    = "test1"
-		databaseName = "db1"
-	)
-
-	ctx := context.Background()
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
-
-	disttaeEngine, taeHandler, rpcAgent, mp := testutil.CreateEngines(ctx, t)
-	defer func() {
-		disttaeEngine.Close(ctx)
-		taeHandler.Close(ctx)
-		rpcAgent.Close()
-	}()
-
-	schema := catalog2.MockSchemaAll(10, 0)
-	schema.Name = tableName
-	bat := catalog2.MockBatch(schema, 10)
-
-	var (
-		err        error
-		tblHandler engine.Relation
-		txnOp      client.TxnOperator
-	)
-
-	_, _, tblHandler, _, txnOp = testutil.CreateDatabaseAndTable(ctx, schema, databaseName, disttaeEngine, taeHandler, rpcAgent, t)
-
-	err = txnOp.UpdateSnapshot(ctx, disttaeEngine.Now())
-	require.Nil(t, err)
-
-	rpcAgent.InsertRows(ctx, accountId, tblHandler, databaseName, bat, mp, txnOp.SnapshotTS())
-
-	err = disttaeEngine.Engine.PushClient().TryToSubscribeTable(ctx, tblHandler.GetDBID(ctx), tblHandler.GetTableID(ctx))
-	require.Nil(t, err)
-
-	// before flush
 	{
-		stats, err := disttaeEngine.GetPartitionStateStats(ctx, tblHandler.GetDBID(ctx), tblHandler.GetTableID(ctx))
-		require.Nil(t, err)
+		txn, _ := taeEngine.GetDB().StartTxn(nil)
+		database, err = txn.CreateDatabase(databaseName, "", "")
+		assert.Nil(t, err)
 
-		require.Equal(t, stats.TotalVisibleRows, uint32(10))
+		_, err = database.CreateRelation(schema)
+		assert.Nil(t, err)
 
-		require.Equal(t, stats.DataObjets.Visible, 0)
-		require.Equal(t, stats.DataObjets.Invisible, 0)
+		err = txn.Commit(context.Background())
+		assert.Nil(t, err)
 	}
 
-	err = taeHandler.GetDB().FlushTable(ctx, accountId, tblHandler.GetDBID(ctx),
-		tblHandler.GetTableID(ctx), types.TimestampToTS(disttaeEngine.Now()))
-	require.Nil(t, err)
-
-	// after flush
-	{
-		stats, err := disttaeEngine.GetPartitionStateStats(ctx, tblHandler.GetDBID(ctx), tblHandler.GetTableID(ctx))
-		require.Nil(t, err)
-
-		require.Equal(t, stats.TotalVisibleRows, uint32(10))
-
-		require.Equal(t, stats.DataObjets.Visible, 1)
-		require.Equal(t, stats.DataObjets.Invisible, 1)
+	var wg sync.WaitGroup
+	now := time.Now()
+	doAppend := func(b *containers.Batch) func() {
+		return func() {
+			defer wg.Done()
+			txn, _ := taeEngine.GetDB().StartTxn(nil)
+			database, _ = txn.GetDatabase(databaseName)
+			rel, err = database.GetRelationByName(schema.Name)
+			assert.Nil(t, err)
+			err = rel.Append(context.Background(), b)
+			assert.Nil(t, err)
+			err = txn.Commit(context.Background())
+			assert.Nil(t, err)
+		}
 	}
-}
-
-func Test_ConsumeCheckpointLazy(t *testing.T) {
-	var (
-		accountId    = catalog.System_Account
-		tableName    = "test1"
-		databaseName = "db1"
-	)
-
-	ctx := context.Background()
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
-
-	disttaeEngine, taeHandler, rpcAgent, mp := testutil.CreateEngines(ctx, t)
-	defer func() {
-		disttaeEngine.Close(ctx)
-		taeHandler.Close(ctx)
-		rpcAgent.Close()
-	}()
-
-	var (
-		err        error
-		txnOp      client.TxnOperator
-		tblHandler engine.Relation
-	)
-
-	schema := catalog2.MockSchemaAll(10, 0)
-	schema.Name = tableName
-
-	_, _, tblHandler, _, txnOp = testutil.CreateDatabaseAndTable(
-		ctx, schema, databaseName, disttaeEngine, taeHandler, rpcAgent, t)
-
-	err = txnOp.UpdateSnapshot(ctx, disttaeEngine.Now())
-	require.Nil(t, err)
-
-	bat := catalog2.MockBatch(schema, 10)
-	resp := rpcAgent.InsertRows(ctx, accountId, tblHandler, databaseName, bat, mp, txnOp.SnapshotTS())
-	require.Nil(t, resp.TxnError)
-
-	// flush first to make sure the later checkpoint can contain all inserted data.
-	// otherwise, the later checkpoint could be empty
-	err = taeHandler.GetDB().FlushTable(ctx, accountId, tblHandler.GetDBID(ctx),
-		tblHandler.GetTableID(ctx), types.TimestampToTS(disttaeEngine.Now()))
-	require.Nil(t, err)
-
-	err = taeHandler.GetDB().ForceCheckpoint(ctx, types.TimestampToTS(disttaeEngine.Now()), time.Second*5)
-	require.Nil(t, err)
-
-	// before subscribe
-	{
-		stats, err := disttaeEngine.GetPartitionStateStats(ctx, tblHandler.GetDBID(ctx), tblHandler.GetTableID(ctx))
-		require.Nil(t, err)
-
-		require.Equal(t, stats.TotalVisibleRows, 0)
-
-		require.Equal(t, stats.DataObjets.Visible, 0)
-		require.Equal(t, stats.DataObjets.Invisible, 0)
+	p, err := ants.NewPool(4)
+	assert.Nil(t, err)
+	defer p.Release()
+	for _, toAppend := range bats {
+		wg.Add(1)
+		err = p.Submit(doAppend(toAppend))
+		assert.Nil(t, err)
 	}
 
-	err = disttaeEngine.Engine.PushClient().TryToSubscribeTable(ctx, tblHandler.GetDBID(ctx), tblHandler.GetTableID(ctx))
-	require.Nil(t, err)
+	wg.Wait()
 
-	// after subscribe
+	t.Logf("Append takes: %s", time.Since(now))
+	expectBlkCnt := (uint32(batchRows)*uint32(cnt)-1)/schema.BlockMaxRows + 1
+	expectObjCnt := expectBlkCnt
+
 	{
-		stats, err := disttaeEngine.GetPartitionStateStats(ctx, tblHandler.GetDBID(ctx), tblHandler.GetTableID(ctx))
-		require.Nil(t, err)
-
-		require.Equal(t, stats.TotalVisibleRows, 0)
-
-		require.Equal(t, stats.DataObjets.Visible, 0)
-		require.Equal(t, stats.DataObjets.Invisible, 0)
-
-		require.Equal(t, stats.CheckpointCnt, 1)
+		txn, _ := taeEngine.GetDB().StartTxn(nil)
+		database, _ = txn.GetDatabase(databaseName)
+		rel, _ = database.GetRelationByName(schema.Name)
+		_, err = rel.CreateObject()
+		assert.Nil(t, err)
+	}
+	{
+		txn, _ := taeEngine.GetDB().StartTxn(nil)
+		database, _ = txn.GetDatabase(databaseName)
+		rel, _ = database.GetRelationByName(schema.Name)
+		objIt := rel.MakeObjectIt()
+		objCnt := uint32(0)
+		blkCnt := uint32(0)
+		for objIt.Valid() {
+			objCnt++
+			blkCnt += uint32(objIt.GetObject().BlkCnt())
+			objIt.Next()
+		}
+		assert.Equal(t, expectObjCnt, objCnt)
+		assert.Equal(t, expectBlkCnt, blkCnt)
 	}
 
-	// lazy load checkpoint
+	t.Log(taeEngine.GetDB().Catalog.SimplePPString(common.PPL1))
+
+	err = disttaeEngine.Engine.TryToSubscribeTable(ctx, rel.ID(), database.GetID())
+	require.Nil(t, err)
+
+	// check partition state without flush
 	{
-		_, err = disttaeEngine.Engine.LazyLoadLatestCkp(ctx, tblHandler)
+		stats, err := disttaeEngine.GetPartitionStateStats(ctx, rel.ID(), database.GetID())
 		require.Nil(t, err)
 
-		stats, err := disttaeEngine.GetPartitionStateStats(ctx, tblHandler.GetDBID(ctx), tblHandler.GetTableID(ctx))
+		fmt.Println(stats.String())
+
+		expect := testutil.PartitionStateStats{
+			DataObjectsVisible:   testutil.PObjectStats{},
+			DataObjectsInvisible: testutil.PObjectStats{},
+			InmemRows:            testutil.PInmemRowsStats{VisibleCnt: int(batchRows * cnt)},
+			CheckpointCnt:        0,
+		}
+
+		require.Equal(t, expect, stats)
+	}
+
+	// flush all aobj into one nobj
+	testutil2.CompactBlocks(t, accountId, taeEngine.GetDB(), database.GetName(), schema, false)
+	require.Nil(t, err)
+	// check again after flush
+	{
+		stats, err := disttaeEngine.GetPartitionStateStats(ctx, rel.ID(), database.GetID())
 		require.Nil(t, err)
 
-		require.Equal(t, stats.InmemRows.Invisible+stats.InmemRows.Visible, 0)
-		require.Equal(t, stats.TotalVisibleRows, 10)
+		fmt.Println(stats.String())
 
-		require.Equal(t, stats.DataObjets.Visible, 1)
-		require.Equal(t, stats.DataObjets.Invisible, 1)
+		expect := testutil.PartitionStateStats{
+			DataObjectsVisible:   testutil.PObjectStats{ObjCnt: 1, BlkCnt: int(expectBlkCnt), RowCnt: int(batchRows * cnt)},
+			DataObjectsInvisible: testutil.PObjectStats{ObjCnt: int(expectObjCnt), BlkCnt: int(expectBlkCnt), RowCnt: int(batchRows * cnt)},
+			InmemRows:            testutil.PInmemRowsStats{},
+			CheckpointCnt:        0,
+		}
 
-		require.Equal(t, stats.CheckpointCnt, 0)
+		require.Equal(t, expect, stats)
 	}
 }
