@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 )
 
@@ -2970,52 +2971,21 @@ func (collector *GlobalCollector) VisitTable(entry *catalog.TableEntry) error {
 }
 
 func (collector *BaseCollector) visitObjectEntry(entry *catalog.ObjectEntry) error {
-	mvccNodes := entry.ClonePreparedInRange(collector.start, collector.end)
+	mvccNodes := entry.GetMVCCNodeInRange(collector.start, collector.end)
 	if len(mvccNodes) == 0 {
 		return nil
 	}
 
-	var needPrefetch bool
-	if !collector.skipLoadObjectStats {
-		needPrefetch = entry.NeedPrefetchObjectMetaForObjectInfo(mvccNodes)
+	err := collector.fillObjectInfoBatch(entry, mvccNodes)
+	if err != nil {
+		return err
 	}
-
-	if collector.isPrefetch {
-		if needPrefetch {
-			collector.Objects = append(collector.Objects, entry)
-		}
-	} else {
-		if needPrefetch {
-			collector.isPrefetch = true
-			logutil.Infof("checkpoint %v->%v, when try visit object, object %v need to load stats",
-				collector.start.ToString(),
-				collector.end.ToString(),
-				entry.ID.String())
-			if collector.data.bats[ObjectInfoIDX] != nil {
-				collector.data.bats[ObjectInfoIDX].Close()
-			}
-			if collector.data.bats[TNObjectInfoIDX] != nil {
-				collector.data.bats[TNObjectInfoIDX].Close()
-			}
-			collector.data.resetObjectMeta()
-			if collector.Objects == nil {
-				collector.Objects = make([]*catalog.ObjectEntry, 0)
-			}
-			collector.Objects = append(collector.Objects, entry)
-		} else {
-			err := collector.fillObjectInfoBatch(entry, mvccNodes)
-			if err != nil {
-				return err
-			}
-		}
-	}
-
 	return nil
 }
 func (collector *BaseCollector) loadObjectInfo() error {
 	panic("not support")
 }
-func (collector *BaseCollector) fillObjectInfoBatch(entry *catalog.ObjectEntry, mvccNodes []*catalog.MVCCNode[*catalog.ObjectMVCCNode]) error {
+func (collector *BaseCollector) fillObjectInfoBatch(entry *catalog.ObjectEntry, mvccNodes []*txnbase.TxnMVCCNode) error {
 	if len(mvccNodes) == 0 {
 		return nil
 	}
@@ -3025,18 +2995,19 @@ func (collector *BaseCollector) fillObjectInfoBatch(entry *catalog.ObjectEntry, 
 		if node.IsAborted() {
 			continue
 		}
-		if entry.IsAppendable() && node.BaseNode.IsEmpty() {
-			visitObject(collector.data.bats[TNObjectInfoIDX], entry, node, false, types.TS{})
+		create := node.End.Equal(&entry.CreatedAt)
+		if entry.IsAppendable() && create {
+			visitObject(collector.data.bats[TNObjectInfoIDX], entry, node, create, false, types.TS{})
 		} else {
-			if entry.IsAppendable() && node.DeletedAt.IsEmpty() {
+			if entry.IsAppendable() && entry.DeletedAt.IsEmpty() {
 				panic(fmt.Sprintf("logic error, object %v", entry.ID.String()))
 			}
-			visitObject(collector.data.bats[ObjectInfoIDX], entry, node, false, types.TS{})
+			visitObject(collector.data.bats[ObjectInfoIDX], entry, node, create, false, types.TS{})
 		}
 		objNode := node
 
 		// collect usage info
-		if objNode.HasDropCommitted() {
+		if !entry.DeletedAt.IsEmpty() && objNode.End.Equal(&entry.DeletedAt) {
 			// deleted and non-append, record into the usage del bat
 			if !entry.IsAppendable() && objNode.IsCommitted() {
 				collector.Usage.ObjDeletes = append(collector.Usage.ObjDeletes, entry)

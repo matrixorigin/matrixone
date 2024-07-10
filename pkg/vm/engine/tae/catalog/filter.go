@@ -27,18 +27,18 @@ func NonAppendableBlkFilter(be *ObjectEntry) bool {
 }
 
 type ComposedFilter struct {
-	CommitFilters []func(*BaseEntryImpl[*ObjectMVCCNode]) bool
+	CommitFilters []func(*ObjectEntry) bool
 	BlockFilters  []func(*ObjectEntry) bool
 }
 
 func NewComposedFilter() *ComposedFilter {
 	return &ComposedFilter{
-		CommitFilters: make([]func(*BaseEntryImpl[*ObjectMVCCNode]) bool, 0),
+		CommitFilters: make([]func(*ObjectEntry) bool, 0),
 		BlockFilters:  make([]func(*ObjectEntry) bool, 0),
 	}
 }
 
-func (filter *ComposedFilter) AddCommitFilter(f func(*BaseEntryImpl[*ObjectMVCCNode]) bool) {
+func (filter *ComposedFilter) AddCommitFilter(f func(*ObjectEntry) bool) {
 	filter.CommitFilters = append(filter.CommitFilters, f)
 }
 
@@ -46,7 +46,7 @@ func (filter *ComposedFilter) AddBlockFilter(f func(*ObjectEntry) bool) {
 	filter.BlockFilters = append(filter.BlockFilters, f)
 }
 
-func (filter *ComposedFilter) FilteCommit(be *BaseEntryImpl[*ObjectMVCCNode]) bool {
+func (filter *ComposedFilter) FilteCommit(be *ObjectEntry) bool {
 	ret := false
 	for _, f := range filter.CommitFilters {
 		if !f(be) {

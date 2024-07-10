@@ -123,7 +123,7 @@ func (l *ObjectList) DropObjectByID(objectID *objectio.ObjectId, txn txnif.TxnRe
 	if obj.HasDropIntent() {
 		return nil, false, moerr.GetOkExpectedEOB()
 	}
-	if obj.DeleteNode != nil {
+	if !obj.DeleteNode.IsEmpty(){
 		panic("logic error")
 	}
 	needWait, txnToWait := obj.CreateNode.NeedWaitCommitting(txn.GetStartTS())

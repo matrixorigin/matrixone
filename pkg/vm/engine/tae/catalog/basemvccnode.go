@@ -130,6 +130,31 @@ func (un EntryMVCCNode) AppendTuple(bat *containers.Batch) {
 	)
 }
 
+func (un EntryMVCCNode) AppendObjectTuple(bat *containers.Batch, create bool) {
+	startTSVec := bat.GetVectorByName(EntryNode_CreateAt)
+	vector.AppendFixed(
+		startTSVec.GetDownstreamVector(),
+		un.CreatedAt,
+		false,
+		startTSVec.GetAllocator(),
+	)
+	if create {
+		vector.AppendFixed(
+			bat.GetVectorByName(EntryNode_DeleteAt).GetDownstreamVector(),
+			types.TS{},
+			false,
+			startTSVec.GetAllocator(),
+		)
+		return
+	}
+	vector.AppendFixed(
+		bat.GetVectorByName(EntryNode_DeleteAt).GetDownstreamVector(),
+		un.DeletedAt,
+		false,
+		startTSVec.GetAllocator(),
+	)
+}
+
 func (un EntryMVCCNode) AppendTupleWithCommitTS(bat *containers.Batch, ts types.TS) {
 	startTSVec := bat.GetVectorByName(EntryNode_CreateAt)
 	createTS := un.CreatedAt

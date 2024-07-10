@@ -94,6 +94,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 	"go.uber.org/zap"
 )
@@ -505,23 +506,25 @@ func (b *TableLogtailRespBuilder) VisitObj(e *catalog.ObjectEntry) error {
 	}
 }
 func (b *TableLogtailRespBuilder) visitObjMeta(e *catalog.ObjectEntry) (bool, error) {
-	mvccNodes := e.ClonePreparedInRange(b.start, b.end)
+	mvccNodes := e.GetMVCCNodeInRange(b.start, b.end)
 	if len(mvccNodes) == 0 {
 		return false, nil
 	}
 
+	var objectMVCCNode *catalog.ObjectMVCCNode
 	for _, node := range mvccNodes {
-		if e.IsAppendable() && node.BaseNode.IsEmpty() {
+		if e.IsAppendable() && node.End.Equal(&e.CreatedAt) {
 			continue
 		}
-		visitObject(b.objectMetaBatch, e, node, false, types.TS{})
+		objectMVCCNode = &e.ObjectMVCCNode
+		visitObject(b.objectMetaBatch, e, node, node.End.Equal(&e.CreatedAt), false, types.TS{})
 	}
-	return b.skipObjectData(e, mvccNodes[len(mvccNodes)-1]), nil
+	return b.skipObjectData(e, objectMVCCNode), nil
 }
-func (b *TableLogtailRespBuilder) skipObjectData(e *catalog.ObjectEntry, lastMVCCNode *catalog.MVCCNode[*catalog.ObjectMVCCNode]) bool {
+func (b *TableLogtailRespBuilder) skipObjectData(e *catalog.ObjectEntry, objectMVCCNode *catalog.ObjectMVCCNode) bool {
 	if e.IsAppendable() {
 		// appendable block has been flushed, no need to collect data
-		return !lastMVCCNode.BaseNode.IsEmpty()
+		return objectMVCCNode != nil
 	} else {
 		return true
 	}
@@ -545,23 +548,24 @@ func (b *TableLogtailRespBuilder) visitObjData(e *catalog.ObjectEntry) error {
 	}
 	return nil
 }
-func visitObject(batch *containers.Batch, entry *catalog.ObjectEntry, node *catalog.MVCCNode[*catalog.ObjectMVCCNode], push bool, committs types.TS) {
+func visitObject(batch *containers.Batch, entry *catalog.ObjectEntry, txnMVCCNode *txnbase.TxnMVCCNode, create bool, push bool, committs types.TS) {
 	batch.GetVectorByName(catalog.AttrRowID).Append(objectio.HackObjid2Rowid(&entry.ID), false)
 	if push {
 		batch.GetVectorByName(catalog.AttrCommitTs).Append(committs, false)
 	} else {
-		batch.GetVectorByName(catalog.AttrCommitTs).Append(node.TxnMVCCNode.End, false)
+		batch.GetVectorByName(catalog.AttrCommitTs).Append(txnMVCCNode.End, false)
 	}
-	node.BaseNode.AppendTuple(&entry.ID, batch)
+	empty := entry.IsAppendable() && create
+	entry.ObjectMVCCNode.AppendTuple(&entry.ID, batch, empty)
 	if push {
-		node.TxnMVCCNode.AppendTupleWithCommitTS(batch, committs)
+		txnMVCCNode.AppendTupleWithCommitTS(batch, committs)
 	} else {
-		node.TxnMVCCNode.AppendTuple(batch)
+		txnMVCCNode.AppendTuple(batch)
 	}
 	if push {
-		node.EntryMVCCNode.AppendTupleWithCommitTS(batch, committs)
+		entry.EntryMVCCNode.AppendTupleWithCommitTS(batch, committs)
 	} else {
-		node.EntryMVCCNode.AppendTuple(batch)
+		entry.EntryMVCCNode.AppendObjectTuple(batch, create)
 	}
 	batch.GetVectorByName(SnapshotAttr_DBID).Append(entry.GetTable().GetDB().ID, false)
 	batch.GetVectorByName(SnapshotAttr_TID).Append(entry.GetTable().ID, false)

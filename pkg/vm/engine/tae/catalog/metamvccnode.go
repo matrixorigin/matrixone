@@ -186,9 +186,12 @@ func (e *ObjectMVCCNode) IsEmpty() bool {
 	return e.Size() == 0
 }
 
-func (e *ObjectMVCCNode) AppendTuple(sid *types.Objectid, batch *containers.Batch) {
-	if e == nil || e.IsEmpty() {
-		objectio.SetObjectStatsObjectName(&e.ObjectStats, objectio.BuildObjectNameWithObjectID(sid)) // when replay, sid is get from object name
+func (e *ObjectMVCCNode) AppendTuple(sid *types.Objectid, batch *containers.Batch, empty bool) {
+	if empty {
+		stats := objectio.NewObjectStats()
+		objectio.SetObjectStatsObjectName(stats, objectio.BuildObjectNameWithObjectID(sid)) // when replay, sid is get from object name
+		batch.GetVectorByName(ObjectAttr_ObjectStats).Append(stats[:], false)
+		return
 	}
 	batch.GetVectorByName(ObjectAttr_ObjectStats).Append(e.ObjectStats[:], false)
 }

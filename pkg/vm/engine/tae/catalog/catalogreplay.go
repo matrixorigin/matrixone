@@ -372,7 +372,10 @@ func (catalog *Catalog) onReplayUpdateObject(
 		obj.table = rel
 		obj.ObjectNode = *cmd.node
 		obj.SortHint = catalog.NextObject()
-		obj.CreateNode = cmd.mvccNode
+		obj.EntryMVCCNode = cmd.mvccNode.EntryMVCCNode
+		obj.CreateNode = *cmd.mvccNode.TxnMVCCNode
+		cmd.mvccNode.TxnMVCCNode = &obj.CreateNode
+		obj.ObjectMVCCNode = *cmd.mvccNode.BaseNode
 		obj.remainingRows = &common.FixedSampleIII[int]{}
 		rel.AddEntryLocked(obj)
 	}
@@ -381,7 +384,10 @@ func (catalog *Catalog) onReplayUpdateObject(
 		if err != nil {
 			panic(fmt.Sprintf("obj %v not existed, table:\n%v", cmd.ID.String(), rel.StringWithLevel(3)))
 		}
-		obj.DeleteNode = cmd.mvccNode
+		obj.EntryMVCCNode = cmd.mvccNode.EntryMVCCNode
+		obj.DeleteNode = *cmd.mvccNode.TxnMVCCNode
+		obj.ObjectMVCCNode = *cmd.mvccNode.BaseNode
+		cmd.mvccNode.TxnMVCCNode = &obj.DeleteNode
 	}
 
 	if obj.objData == nil {
@@ -442,11 +448,9 @@ func (catalog *Catalog) onReplayCheckpointObject(
 			sorted:   state == ES_NotAppendable,
 			SortHint: catalog.NextObject(),
 		}
-		obj.CreateNode = &MVCCNode[*ObjectMVCCNode]{
-			EntryMVCCNode: *entryNode,
-			BaseNode:      objNode,
-			TxnMVCCNode:   txnNode,
-		}
+		obj.EntryMVCCNode = *entryNode
+		obj.ObjectMVCCNode = *objNode
+		obj.CreateNode = *txnNode
 		obj.remainingRows = &common.FixedSampleIII[int]{}
 		rel.AddEntryLocked(obj)
 	}
@@ -455,11 +459,9 @@ func (catalog *Catalog) onReplayCheckpointObject(
 		if err != nil {
 			panic(fmt.Sprintf("obj %v not existed, table:\n%v", objid.String(), rel.StringWithLevel(3)))
 		}
-		obj.DeleteNode = &MVCCNode[*ObjectMVCCNode]{
-			EntryMVCCNode: *entryNode,
-			BaseNode:      objNode,
-			TxnMVCCNode:   txnNode,
-		}
+		obj.EntryMVCCNode = *entryNode
+		obj.ObjectMVCCNode = *objNode
+		obj.DeleteNode = *txnNode
 	}
 	if obj.objData == nil {
 		obj.objData = dataFactory.MakeObjectFactory()(obj)

@@ -71,7 +71,7 @@ func TestReplayCatalog1(t *testing.T) {
 				obj, err := rel.CreateNonAppendableObject(nil)
 				assert.Nil(t, err)
 				objMeta := obj.GetMeta().(*catalog.ObjectEntry)
-				baseNode := objMeta.GetLatestNode().GetLastMVCCNode().BaseNode
+				baseNode := objMeta.GetLatestNode().ObjectMVCCNode
 				err = objectio.SetObjectStatsSize(&baseNode.ObjectStats, 1)
 				assert.Nil(t, err)
 				err = objectio.SetObjectStatsRowCnt(&baseNode.ObjectStats, 1)
@@ -140,7 +140,7 @@ func TestReplayCatalog2(t *testing.T) {
 	obj, err := rel.CreateNonAppendableObject(nil)
 	assert.Nil(t, err)
 	objMeta := obj.GetMeta().(*catalog.ObjectEntry)
-	baseNode := objMeta.GetLatestNode().GetLastMVCCNode().BaseNode
+	baseNode := objMeta.GetLatestNode().ObjectMVCCNode
 	err = objectio.SetObjectStatsSize(&baseNode.ObjectStats, 1)
 	assert.Nil(t, err)
 	err = objectio.SetObjectStatsRowCnt(&baseNode.ObjectStats, 1)
@@ -431,7 +431,7 @@ func TestReplay2(t *testing.T) {
 	err = rel.SoftDeleteObject(obj.GetID())
 	assert.Nil(t, err)
 	objMeta := obj.GetMeta().(*catalog.ObjectEntry)
-	baseNode := objMeta.GetLatestNode().GetLastMVCCNode().BaseNode
+	baseNode := objMeta.GetLatestNode().ObjectMVCCNode
 	err = objectio.SetObjectStatsSize(&baseNode.ObjectStats, 1)
 	assert.Nil(t, err)
 	err = objectio.SetObjectStatsRowCnt(&baseNode.ObjectStats, 1)
@@ -1352,7 +1352,7 @@ func TestReplaySnapshots(t *testing.T) {
 	err = rel.SoftDeleteObject(obj.GetID())
 	assert.NoError(t, err)
 	objMeta := obj.GetMeta().(*catalog.ObjectEntry)
-	baseNode := objMeta.GetLatestNode().GetLastMVCCNode().BaseNode
+	baseNode := objMeta.GetLatestNode().ObjectMVCCNode
 	err = objectio.SetObjectStatsSize(&baseNode.ObjectStats, 1)
 	assert.Nil(t, err)
 	err = objectio.SetObjectStatsRowCnt(&baseNode.ObjectStats, 1)
