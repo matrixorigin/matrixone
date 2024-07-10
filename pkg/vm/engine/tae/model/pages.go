@@ -95,7 +95,7 @@ func NewTransferHashPage(id *common.ID, ts time.Time, pageSize int, isTransient 
 		isTransient: isTransient,
 	}
 
-	m := api.HashPageMap{M: make(map[uint32][]byte, pageSize)}
+	m := api.HashPageMap{M: make(map[uint32][]byte)}
 	page.hashmap.Store(&m)
 	page.OnZeroCB = page.Close
 
@@ -166,8 +166,8 @@ func (page *TransferHashPage) Train(m map[uint32][]byte) {
 
 func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) {
 	v2.TransferPageSinceBornDurationHistogram.Observe(time.Since(page.bornTS).Seconds())
-	var m *api.HashPageMap
-	if page.hashmap.Load() == nil {
+	m := page.hashmap.Load()
+	if m == nil {
 		diskStart := time.Now()
 		m = page.loadTable()
 		diskDuration := time.Since(diskStart)
@@ -177,9 +177,6 @@ func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) 
 
 	memStart := time.Now()
 	var data []byte
-	if m == nil {
-		m = page.hashmap.Load()
-	}
 	if m == nil {
 		ok = false
 		return
@@ -196,22 +193,18 @@ func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) 
 func (page *TransferHashPage) Marshal() []byte {
 	m := page.hashmap.Load()
 	if m == nil {
-		return nil
+		panic("empty hashmap")
 	}
 	data, _ := proto.Marshal(m)
 	return data
 }
 
 func (page *TransferHashPage) Unmarshal(data []byte) (*api.HashPageMap, error) {
-	if page.hashmap.Load() != nil {
-		return nil, nil
-	}
 	m := api.HashPageMap{}
 	err := proto.Unmarshal(data, &m)
 	if err != nil {
 		return nil, err
 	}
-	page.hashmap.Store(&m)
 	return &m, nil
 }
 
@@ -247,16 +240,24 @@ func (page *TransferHashPage) loadTable() *api.HashPageMap {
 		Size:   size,
 	}
 	ioVector.Entries = append(ioVector.Entries, entry)
+	m := page.hashmap.Load()
+	if m != nil {
+		return m
+	}
 	err := FS.Read(context.Background(), &ioVector)
 	if err != nil {
 		return nil
 	}
 
-	m, err2 := page.Unmarshal(ioVector.Entries[0].Data)
-	if err2 != nil {
+	m = page.hashmap.Load()
+	if m != nil {
+		return m
+	}
+	m, err = page.Unmarshal(ioVector.Entries[0].Data)
+	if err != nil {
 		return nil
 	}
-
+	page.hashmap.Store(m)
 	logutil.Infof("load transfer page %v", page.String())
 	v2.TaskMergeTransferPageSizeGauge.Add(float64(page.Length()))
 	return m
