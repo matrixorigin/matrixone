@@ -70,7 +70,7 @@ func TestPreInsertNormal(t *testing.T) {
 		Cnt: 1,
 	}
 	batch1.SetRowCount(3)
-	argument1 := Argument{
+	argument1 := PreInsert{
 		ctr:        &container{},
 		SchemaName: "testDb",
 		TableDef: &plan.TableDef{
@@ -145,7 +145,7 @@ func TestPreInsertNullCheck(t *testing.T) {
 		Cnt:   1,
 	}
 	batch2.SetRowCount(3)
-	argument2 := Argument{
+	argument2 := PreInsert{
 		ctr:        &container{},
 		SchemaName: "testDb",
 		Attrs:      []string{"int64_column_primary"},
@@ -174,8 +174,8 @@ func TestPreInsertNullCheck(t *testing.T) {
 	require.Error(t, err2, "should return error when insert null into primary key column")
 }
 
-func resetChildren(arg *Argument, bat *batch.Batch) {
-	valueScanArg := &value_scan.Argument{
+func resetChildren(arg *PreInsert, bat *batch.Batch) {
+	valueScanArg := &value_scan.ValueScan{
 		Batchs: []*batch.Batch{bat},
 	}
 	valueScanArg.Prepare(nil)

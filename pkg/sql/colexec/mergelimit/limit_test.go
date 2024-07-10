@@ -37,7 +37,7 @@ const (
 
 // add unit tests for cases
 type limitTestCase struct {
-	arg    *Argument
+	arg    *MergeLimit
 	types  []types.Type
 	proc   *process.Process
 	cancel context.CancelFunc
@@ -172,7 +172,7 @@ func newTestCase(limit uint64) limitTestCase {
 		types: []types.Type{
 			types.T_int8.ToType(),
 		},
-		arg: &Argument{
+		arg: &MergeLimit{
 			Limit: plan.MakePlan2Uint64ConstExprWithType(limit),
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{

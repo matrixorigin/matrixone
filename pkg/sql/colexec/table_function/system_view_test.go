@@ -296,7 +296,7 @@ func Test_gettingInfo(t *testing.T) {
 	type argsx struct {
 		in0  int
 		proc *process.Process
-		arg  *Argument
+		arg  *TableFunction
 	}
 	tests4 := []struct {
 		name    string
@@ -308,7 +308,7 @@ func Test_gettingInfo(t *testing.T) {
 			name: "",
 			args: argsx{
 				proc: testProc,
-				arg: &Argument{
+				arg: &TableFunction{
 					ctr: &container{
 						state:            dataProducing,
 						executorsForArgs: nil,
@@ -365,7 +365,7 @@ func Test_gettingInfo(t *testing.T) {
 			name: "",
 			args: argsx{
 				proc: testProc,
-				arg: &Argument{
+				arg: &TableFunction{
 					ctr: &container{
 						state:            dataProducing,
 						executorsForArgs: nil,
@@ -416,7 +416,7 @@ func Test_gettingInfo(t *testing.T) {
 			name: "",
 			args: argsx{
 				proc: testProc,
-				arg: &Argument{
+				arg: &TableFunction{
 					ctr: &container{
 						state:            dataProducing,
 						executorsForArgs: nil,
@@ -564,7 +564,7 @@ func Test_moConfigurationsCall(t *testing.T) {
 	type args struct {
 		in0  int
 		proc *process.Process
-		arg  *Argument
+		arg  *TableFunction
 	}
 	tests := []struct {
 		name    string
@@ -576,7 +576,7 @@ func Test_moConfigurationsCall(t *testing.T) {
 			name: "t1",
 			args: args{
 				proc: testProc,
-				arg: &Argument{
+				arg: &TableFunction{
 					ctr: &container{
 						state:            dataProducing,
 						executorsForArgs: nil,
