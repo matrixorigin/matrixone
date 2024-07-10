@@ -21,7 +21,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
@@ -204,17 +203,6 @@ func (s *service) InsertValues(
 	txnOp client.TxnOperator,
 ) (uint64, error) {
 	tableID := tableDef.TblId
-	var pkMap map[string]struct{}
-	if tableDef.IsTemporary || tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
-		// 1. currently temporary table is supported by memory engine, this distinction should be removed after refactoring
-		// 2. for __mo_fake_pk_col, no need to check whether the user has manually specified the inserted value
-	} else {
-		pkMap = make(map[string]struct{})
-		for _, n := range tableDef.Pkey.Names {
-			pkMap[n] = struct{}{}
-		}
-	}
-
 	ts, err := s.getCommittedTableCache(
 		ctx,
 		tableID)
@@ -223,10 +211,9 @@ func (s *service) InsertValues(
 	}
 	return ts.insertAutoValues(
 		ctx,
-		tableID,
+		tableDef,
 		bat,
 		estimate,
-		pkMap,
 		eng,
 		txnOp,
 	)

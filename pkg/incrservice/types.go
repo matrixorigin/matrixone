@@ -117,7 +117,7 @@ type incrTableCache interface {
 	table() uint64
 	commit()
 	columns() []AutoColumn
-	insertAutoValues(ctx context.Context, tableID uint64, bat *batch.Batch, estimate int64, pkMap map[string]struct{}, eng engine.Engine, txn client.TxnOperator) (uint64, error)
+	insertAutoValues(ctx context.Context, tableDef *plan.TableDef, bat *batch.Batch, estimate int64, eng engine.Engine, txn client.TxnOperator) (uint64, error)
 	currentValue(ctx context.Context, tableID uint64, col string) (uint64, error)
 	adjust(ctx context.Context, cols []AutoColumn) error
 	close() error

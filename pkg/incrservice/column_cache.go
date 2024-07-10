@@ -463,7 +463,6 @@ func (col *columnCache) applyAllocateLocked(
 	}
 
 	if to > from {
-		col.ranges.add(from, to)
 		if col.ranges.minCanAdded < to {
 			if col.lastAllocateAt.IsEmpty() {
 				col.lastAllocateAt = AllocateAt
@@ -473,6 +472,7 @@ func (col *columnCache) applyAllocateLocked(
 				}
 			}
 		}
+		col.ranges.add(from, to)
 		if col.logger.Enabled(zap.DebugLevel) {
 			col.logger.Debug("new range added",
 				zap.String("col", col.col.ColName),
