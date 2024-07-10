@@ -213,6 +213,7 @@ func UpdateStatsInfo(info *InfoFromZoneMap, tableDef *plan.TableDef, s *pb.Stats
 				!util.JudgeIsCompositeClusterByColumn(colName) &&
 				colName != catalog.CPrimaryKeyColName {
 				info.ShuffleRanges[i].Eval()
+				info.ShuffleRanges[i].ReleaseUnused()
 				s.ShuffleRangeMap[colName] = info.ShuffleRanges[i]
 			}
 			info.ShuffleRanges[i] = nil
@@ -748,6 +749,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
 			node.Stats.Selectivity = selectivity_out
 		}
+		node.Stats.BlockNum = leftStats.BlockNum
 
 	case plan.Node_AGG:
 		if needResetHashMapStats {
@@ -780,6 +782,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.HashmapStats.HashmapSize = 1
 			node.Stats.Selectivity = 1
 		}
+		node.Stats.BlockNum = int32(childStats.Outcnt/DefaultBlockMaxRows) + 1
 
 	case plan.Node_UNION:
 		if needResetHashMapStats {
@@ -1074,6 +1077,8 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	if scanSnapshot == nil {
 		scanSnapshot = &Snapshot{}
 	}
+
+	logutil.Infof("calc scan stats for table %v", node.TableDef.Name)
 
 	s, err := builder.compCtx.Stats(node.ObjRef, *scanSnapshot)
 	if err != nil || s == nil {
@@ -1411,26 +1416,44 @@ func (builder *QueryBuilder) canSkipStats() bool {
 		// if already set to true by other parts, just skip stats
 		return true
 	}
-	//for now ,only skip stats for select count(*) from xx
-	if len(builder.qry.Steps) != 1 || len(builder.qry.Nodes) != 3 {
-		return false
+	//skip stats for select count(*) from xx
+	if len(builder.qry.Steps) == 1 && len(builder.qry.Nodes) == 3 {
+		project := builder.qry.Nodes[builder.qry.Steps[0]]
+		if project.NodeType != plan.Node_PROJECT {
+			return false
+		}
+		agg := builder.qry.Nodes[project.Children[0]]
+		if agg.NodeType != plan.Node_AGG {
+			return false
+		}
+		if len(agg.AggList) != 1 || len(agg.GroupBy) != 0 {
+			return false
+		}
+		if agg.AggList[0].GetF() == nil || agg.AggList[0].GetF().Func.ObjName != "starcount" {
+			return false
+		}
+		scan := builder.qry.Nodes[agg.Children[0]]
+		return scan.NodeType == plan.Node_TABLE_SCAN
 	}
-	project := builder.qry.Nodes[builder.qry.Steps[0]]
-	if project.NodeType != plan.Node_PROJECT {
-		return false
+	//skip stats for select * from xx limit 0
+	if len(builder.qry.Steps) == 1 && len(builder.qry.Nodes) == 2 {
+		project := builder.qry.Nodes[builder.qry.Steps[0]]
+		if project.NodeType != plan.Node_PROJECT {
+			return false
+		}
+		scan := builder.qry.Nodes[project.Children[0]]
+		if scan.NodeType != plan.Node_TABLE_SCAN {
+			return false
+		}
+		if project.Limit != nil {
+			if cExpr, ok := project.Limit.Expr.(*plan.Expr_Lit); ok {
+				if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
+					return c.U64Val == 0
+				}
+			}
+		}
 	}
-	agg := builder.qry.Nodes[project.Children[0]]
-	if agg.NodeType != plan.Node_AGG {
-		return false
-	}
-	if len(agg.AggList) != 1 || len(agg.GroupBy) != 0 {
-		return false
-	}
-	if agg.AggList[0].GetF() == nil || agg.AggList[0].GetF().Func.ObjName != "starcount" {
-		return false
-	}
-	scan := builder.qry.Nodes[agg.Children[0]]
-	return scan.NodeType == plan.Node_TABLE_SCAN
+	return false
 }
 
 func (builder *QueryBuilder) hintQueryType() {

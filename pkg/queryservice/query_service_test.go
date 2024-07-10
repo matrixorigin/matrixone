@@ -171,7 +171,7 @@ func runTestWithQueryService(t *testing.T, cn metadata.CNService, fs fileservice
 	qt, err := client.NewQueryClient(cn.ServiceID, morpc.Config{})
 	assert.NoError(t, err)
 
-	qs.AddHandleFunc(pb.CmdMethod_ShowProcessList, func(ctx context.Context, req *pb.Request, resp *pb.Response) error {
+	qs.AddHandleFunc(pb.CmdMethod_ShowProcessList, func(ctx context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
 		if req.ShowProcessListRequest == nil {
 			return moerr.NewInternalError(ctx, "bad request")
 		}
@@ -190,21 +190,21 @@ func runTestWithQueryService(t *testing.T, cn metadata.CNService, fs fileservice
 		}
 		return nil
 	}, false)
-	qs.AddHandleFunc(pb.CmdMethod_KillConn, func(ctx context.Context, request *pb.Request, response *pb.Response) error {
+	qs.AddHandleFunc(pb.CmdMethod_KillConn, func(ctx context.Context, request *pb.Request, response *pb.Response, _ *morpc.Buffer) error {
 		response.KillConnResponse = &pb.KillConnResponse{Success: true}
 		return nil
 	}, false)
-	qs.AddHandleFunc(pb.CmdMethod_AlterAccount, func(ctx context.Context, request *pb.Request, response *pb.Response) error {
+	qs.AddHandleFunc(pb.CmdMethod_AlterAccount, func(ctx context.Context, request *pb.Request, response *pb.Response, _ *morpc.Buffer) error {
 		response.AlterAccountResponse = &pb.AlterAccountResponse{AlterSuccess: true}
 		return nil
 	}, false)
-	qs.AddHandleFunc(pb.CmdMethod_TraceSpan, func(ctx context.Context, request *pb.Request, resp *pb.Response) error {
+	qs.AddHandleFunc(pb.CmdMethod_TraceSpan, func(ctx context.Context, request *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
 		resp.TraceSpanResponse = &pb.TraceSpanResponse{
 			Resp: "echo",
 		}
 		return nil
 	}, false)
-	qs.AddHandleFunc(pb.CmdMethod_GetCacheInfo, func(ctx context.Context, request *pb.Request, resp *pb.Response) error {
+	qs.AddHandleFunc(pb.CmdMethod_GetCacheInfo, func(ctx context.Context, request *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
 		ci := &pb.CacheInfo{
 			NodeType:  cn.ServiceID,
 			NodeId:    "uuid",
@@ -215,7 +215,7 @@ func runTestWithQueryService(t *testing.T, cn metadata.CNService, fs fileservice
 		}
 		return nil
 	}, false)
-	qs.AddHandleFunc(pb.CmdMethod_GetTxnInfo, func(ctx context.Context, request *pb.Request, resp *pb.Response) error {
+	qs.AddHandleFunc(pb.CmdMethod_GetTxnInfo, func(ctx context.Context, request *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
 		ti := &pb.TxnInfo{
 			CreateAt:  time.Now(),
 			Meta:      nil,
@@ -228,7 +228,7 @@ func runTestWithQueryService(t *testing.T, cn metadata.CNService, fs fileservice
 		}
 		return nil
 	}, false)
-	qs.AddHandleFunc(pb.CmdMethod_GetLockInfo, func(ctx context.Context, request *pb.Request, resp *pb.Response) error {
+	qs.AddHandleFunc(pb.CmdMethod_GetLockInfo, func(ctx context.Context, request *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
 		li := &pb.LockInfo{
 			TableId:     100,
 			Keys:        nil,
@@ -245,7 +245,7 @@ func runTestWithQueryService(t *testing.T, cn metadata.CNService, fs fileservice
 	}, false)
 
 	qs.AddHandleFunc(pb.CmdMethod_GetCacheData,
-		func(ctx context.Context, req *pb.Request, resp *pb.Response) error {
+		func(ctx context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
 			wr := &pb.WrappedResponse{
 				Response: resp,
 			}
@@ -260,7 +260,7 @@ func runTestWithQueryService(t *testing.T, cn metadata.CNService, fs fileservice
 	)
 
 	qs.AddHandleFunc(pb.CmdMethod_GetStatsInfo,
-		func(ctx context.Context, req *pb.Request, resp *pb.Response) error {
+		func(ctx context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
 			resp.GetStatsInfoResponse = &pb.GetStatsInfoResponse{
 				StatsInfo: &statsinfo.StatsInfo{
 					TableCnt: 100,
