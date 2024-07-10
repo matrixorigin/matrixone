@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -101,53 +100,18 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	return typ
 }
 
-var CaseInsensitiveDbs = []string{"information_schema", "mysql"}
-
-func (l *Lexer) GetDbName(origin string) string {
-	lower := strings.ToLower(origin)
-
-	if slices.Contains(CaseInsensitiveDbs, lower) {
-		return lower
-	}
-
+func (l *Lexer) GetDbOrTblName(origin string) string {
 	if l.lower == 1 {
-		return lower
+		return strings.ToLower(origin)
 	}
-
 	return origin
 }
 
-func (l *Lexer) GetTblName(dbName, tblName string) string {
-	lowerDbName := strings.ToLower(dbName)
-	lowerTblName := strings.ToLower(tblName)
-
-	if slices.Contains(CaseInsensitiveDbs, lowerDbName) {
-		return lowerTblName
-	}
-
-	if l.lower == 1 {
-		return lowerTblName
-	}
-	return tblName
-}
-
-func (l *Lexer) GetDbNameCStr(origin string) *tree.CStr {
-	lower := strings.ToLower(origin)
-
-	if slices.Contains(CaseInsensitiveDbs, lower) {
-		return tree.NewCStr(origin, 1)
-	}
-
+func (l *Lexer) GetDbOrTblNameCStr(origin string) *tree.CStr {
 	return tree.NewCStr(origin, l.lower)
 }
 
-func (l *Lexer) GetTblNameCStr(dbName, tblName string) *tree.CStr {
-	if slices.Contains(CaseInsensitiveDbs, strings.ToLower(dbName)) {
-		return tree.NewCStr(tblName, 1)
-	}
-
-	return tree.NewCStr(tblName, l.lower)
-}
+var CaseInsensitiveDbs = []string{"information_schema", "mysql"}
 
 func (l *Lexer) Error(err string) {
 	errMsg := fmt.Sprintf("You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. %s", err)
