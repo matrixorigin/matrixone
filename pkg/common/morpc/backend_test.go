@@ -801,6 +801,14 @@ func TestIssue11838(t *testing.T) {
 	)
 }
 
+func TestCannotChangeStoppedToStopping(t *testing.T) {
+	b := &remoteBackend{}
+	b.stateMu.state = stateStopped
+
+	b.changeToStopping()
+	require.Equal(t, stateStopped, b.stateMu.state)
+}
+
 func testBackendSend(t *testing.T,
 	handleFunc func(goetty.IOSession, interface{}, uint64) error,
 	testFunc func(b *remoteBackend),
