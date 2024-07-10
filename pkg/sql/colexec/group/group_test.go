@@ -41,7 +41,7 @@ const (
 
 // add unit tests for cases
 type groupTestCase struct {
-	arg  *Argument
+	arg  *Group
 	flgs []bool // flgs[i] == true: nullable
 	proc *process.Process
 }
@@ -201,7 +201,7 @@ func newTestCase(flgs []bool, ts []types.Type, exprIdx []int, pos int32) groupTe
 	return groupTestCase{
 		flgs: flgs,
 		proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
-		arg: &Argument{
+		arg: &Group{
 			Exprs: exprs,
 			Types: ts,
 			Aggs:  aggs,
@@ -232,8 +232,8 @@ func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
 
-func resetChildren(arg *Argument, bats []*batch.Batch) {
-	valueScanArg := &value_scan.Argument{
+func resetChildren(arg *Group, bats []*batch.Batch) {
+	valueScanArg := &value_scan.ValueScan{
 		Batchs: bats,
 	}
 	valueScanArg.Prepare(nil)

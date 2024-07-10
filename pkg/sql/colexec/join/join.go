@@ -26,41 +26,41 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "join"
+const opName = "join"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (innerJoin *InnerJoin) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": inner join ")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	arg.ctr = new(container)
-	arg.ctr.InitReceiver(proc, false)
-	arg.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
-	arg.ctr.vecs = make([]*vector.Vector, len(arg.Conditions[0]))
-	arg.ctr.evecs = make([]evalVector, len(arg.Conditions[0]))
-	for i := range arg.ctr.evecs {
-		arg.ctr.evecs[i].executor, err = colexec.NewExpressionExecutor(proc, arg.Conditions[0][i])
+func (innerJoin *InnerJoin) Prepare(proc *process.Process) (err error) {
+	innerJoin.ctr = new(container)
+	innerJoin.ctr.InitReceiver(proc, false)
+	innerJoin.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
+	innerJoin.ctr.vecs = make([]*vector.Vector, len(innerJoin.Conditions[0]))
+	innerJoin.ctr.evecs = make([]evalVector, len(innerJoin.Conditions[0]))
+	for i := range innerJoin.ctr.evecs {
+		innerJoin.ctr.evecs[i].executor, err = colexec.NewExpressionExecutor(proc, innerJoin.Conditions[0][i])
 		if err != nil {
 			return err
 		}
 	}
 
-	if arg.Cond != nil {
-		arg.ctr.expr, err = colexec.NewExpressionExecutor(proc, arg.Cond)
+	if innerJoin.Cond != nil {
+		innerJoin.ctr.expr, err = colexec.NewExpressionExecutor(proc, innerJoin.Cond)
 	}
 	return err
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (innerJoin *InnerJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze(innerJoin.GetIdx(), innerJoin.GetParallelIdx(), innerJoin.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
-	ctr := arg.ctr
+	ctr := innerJoin.ctr
 	result := vm.NewCallResult()
 	for {
 		switch ctr.state {
@@ -68,7 +68,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			if err := ctr.build(anal); err != nil {
 				return result, err
 			}
-			if ctr.mp == nil && !arg.IsShuffle {
+			if ctr.mp == nil && !innerJoin.IsShuffle {
 				// for inner ,right and semi join, if hashmap is empty, we can finish this pipeline
 				// shuffle join can't stop early for this moment
 				ctr.state = End
@@ -76,7 +76,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.state = Probe
 			}
 		case Probe:
-			if arg.ctr.bat == nil {
+			if innerJoin.ctr.bat == nil {
 				msg := ctr.ReceiveFromSingleReg(0, anal)
 				if msg.Err != nil {
 					return result, msg.Err
@@ -98,18 +98,18 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 					proc.PutBatch(bat)
 					continue
 				}
-				arg.ctr.bat = bat
-				arg.ctr.lastrow = 0
+				innerJoin.ctr.bat = bat
+				innerJoin.ctr.lastrow = 0
 			}
 
-			startrow := arg.ctr.lastrow
-			if err := ctr.probe(arg, proc, anal, arg.GetIsFirst(), arg.GetIsLast(), &result); err != nil {
+			startrow := innerJoin.ctr.lastrow
+			if err := ctr.probe(innerJoin, proc, anal, innerJoin.GetIsFirst(), innerJoin.GetIsLast(), &result); err != nil {
 				return result, err
 			}
-			if arg.ctr.lastrow == 0 {
-				proc.PutBatch(arg.ctr.bat)
-				arg.ctr.bat = nil
-			} else if arg.ctr.lastrow == startrow {
+			if innerJoin.ctr.lastrow == 0 {
+				proc.PutBatch(innerJoin.ctr.bat)
+				innerJoin.ctr.bat = nil
+			} else if innerJoin.ctr.lastrow == startrow {
 				return result, moerr.NewInternalErrorNoCtx("inner join hanging")
 			}
 			return result, nil
@@ -165,7 +165,7 @@ func (ctr *container) build(anal process.Analyze) error {
 	return ctr.receiveBatch(anal)
 }
 
-func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
+func (ctr *container) probe(ap *InnerJoin, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
 
 	anal.Input(ap.ctr.bat, isFirst)
 	if ctr.rbat != nil {
@@ -277,7 +277,7 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 	return nil
 }
 
-func (ctr *container) evalApCondForOneSel(bat, rbat *batch.Batch, ap *Argument, proc *process.Process, row, sel int64) error {
+func (ctr *container) evalApCondForOneSel(bat, rbat *batch.Batch, ap *InnerJoin, proc *process.Process, row, sel int64) error {
 	if err := colexec.SetJoinBatchValues(ctr.joinBat1, bat, row,
 		1, ctr.cfs1); err != nil {
 		return err
