@@ -726,7 +726,7 @@ func dropClusterTable(
 	bh BackgroundExec,
 	snapshotName string,
 	toAccountId uint32) (err error) {
-	getLogger().Info(fmt.Sprintf("start to drop system table"))
+	getLogger().Info("start to drop cluster table")
 
 	tableInfos, err := getTableInfos(ctx, bh, snapshotName, moCatalog, "")
 	if err != nil {

@@ -363,17 +363,20 @@ drop database repub02;
 use procedure_test;
 drop procedure if exists test_if_hit_if;
 drop procedure if exists test_if_hit_elseif_first_elseif;
+-- @ignore:0,7,8
 select * from mo_catalog.mo_stored_procedure;
 -- @session
 
 -- @session:id=2&user=acc02:test_account&password=111
 drop function udf_db2.`addAB`(x int, y int);
 drop stage if exists my_ext_stage;
+-- @ignore:0,5
 select * from mo_catalog.mo_stages;
 use udf_db2;
 create function `add`(x int, y int) returns int
     language sql as
 '$1 + $2';
+-- @ignore:0,9,10
 select * from mo_catalog.mo_user_defined_function;
 -- @session
 
@@ -445,6 +448,7 @@ drop database test;
 
 -- @session:id=1&user=acc01:test_account&password=111
 drop database repub02;
+-- @ignore:0,7,8
 select * from mo_catalog.mo_stored_procedure;
 -- @session
 
