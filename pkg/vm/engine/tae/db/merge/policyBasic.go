@@ -86,16 +86,15 @@ func (o *customConfigProvider) GetConfig(tbl *catalog.TableEntry) *BasicPolicyCo
 			if cnSize == 0 {
 				cnSize = common.DefaultMinCNMergeSize * common.Const1MBytes
 			}
-			// if the values are smaller than default, it map old rows -> bytes size
+			// compatible codes: remap old rows -> default bytes size
 			minOsize := extra.MinOsizeQuailifed
-			if v := uint32(80 * 8192); minOsize < v {
-				minOsize = v
+			if minOsize < 80*8192 {
+				minOsize = common.DefaultMinOsizeQualifiedMB * common.Const1MBytes
 			}
 			maxOsize := extra.MaxOsizeMergedObj
-			if v := uint32(500 * 8192); maxOsize < v {
-				maxOsize = v
+			if maxOsize < 500*8192 {
+				maxOsize = common.DefaultMaxOsizeObjMB * common.Const1MBytes
 			}
-
 			p = &BasicPolicyConfig{
 				ObjectMinOsize:    minOsize,
 				MergeMaxOneRun:    int(extra.MaxObjOnerun),
