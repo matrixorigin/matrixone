@@ -22,9 +22,11 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fifocache"
@@ -91,6 +93,31 @@ func NewDiskCache(
 }
 
 func (d *DiskCache) loadCache() {
+	t0 := time.Now()
+
+	type Info struct {
+		Path  string
+		Entry os.DirEntry
+	}
+	works := make(chan Info)
+
+	numWorkers := runtime.NumCPU()
+	wg := new(sync.WaitGroup)
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for work := range works {
+
+				info, err := work.Entry.Info()
+				if err != nil {
+					continue // ignore
+				}
+
+				d.cache.Set(work.Path, struct{}{}, int(fileSize(info)))
+			}
+		}()
+	}
 
 	var numFiles, numCacheFiles int
 
@@ -110,20 +137,23 @@ func (d *DiskCache) loadCache() {
 		if !strings.HasSuffix(entry.Name(), cacheFileSuffix) {
 			return nil
 		}
-		info, err := entry.Info()
-		if err != nil {
-			return nil // ignore
-		}
 
-		d.cache.Set(path, struct{}{}, int(fileSize(info)))
 		numCacheFiles++
+		works <- Info{
+			Path:  path,
+			Entry: entry,
+		}
 
 		return nil
 	})
 
+	close(works)
+	wg.Wait()
+
 	logutil.Info("disk cache info loaded",
 		zap.Any("all files", numFiles),
 		zap.Any("cache files", numCacheFiles),
+		zap.Any("time", time.Since(t0)),
 	)
 
 }
