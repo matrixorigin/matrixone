@@ -118,6 +118,10 @@ func (tableFunction *TableFunction) String(buf *bytes.Buffer) {
 	buf.WriteString(tableFunction.FuncName)
 }
 
+func (tableFunction *TableFunction) OpType() vm.OpType {
+	return vm.TableFunction
+}
+
 func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 	tblArg := tableFunction
 	tblArg.ctr = new(container)

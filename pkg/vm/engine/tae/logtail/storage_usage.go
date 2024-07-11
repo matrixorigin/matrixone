@@ -1370,17 +1370,14 @@ func EliminateErrorsOnCache(c *catalog.Catalog, end types.TS) int {
 		}
 
 		// PXU TODO
-		if entry.IsAppendable() || !entry.IsCommittedLocked() {
+		if entry.IsAppendable() || !entry.IsCommitted() {
 			return nil
 		}
 
-		entry.Lock()
-		createTS := entry.GetCreatedAtLocked()
+		createTS := entry.GetCreatedAt()
 		if createTS.GreaterEq(&end) {
-			entry.Unlock()
 			return nil
 		}
-		entry.Unlock()
 
 		if entry.HasDropCommitted() {
 			collector.Usage.ObjDeletes = append(collector.Usage.ObjDeletes, entry)

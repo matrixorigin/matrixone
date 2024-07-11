@@ -188,12 +188,7 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 		s.Reset(c)
 	}
 
-	for _, v := range c.nodeRegs {
-		v.CleanChannel(c.proc.GetMPool())
-	}
-
-	c.MessageBoard.Reset()
-	c.MessageBoard = process.NewMessageBoard()
+	c.MessageBoard = c.MessageBoard.Reset()
 	c.counterSet.Reset()
 
 	for _, f := range c.fuzzys {
@@ -219,8 +214,7 @@ func (c *Compile) clear() {
 		c.fuzzys[i].release()
 	}
 
-	c.MessageBoard.Reset()
-	c.MessageBoard = nil
+	c.MessageBoard = c.MessageBoard.Reset()
 	c.fuzzys = c.fuzzys[:0]
 	c.scope = c.scope[:0]
 	c.pn = nil
@@ -1142,7 +1136,6 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) (*Scope
 		updateScopesLastFlag([]*Scope{rs})
 		c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
 		rs.appendInstruction(vm.Instruction{
-			Op: vm.Output,
 			Arg: output.NewArgument().
 				WithFunc(c.fill),
 		})
@@ -1450,7 +1443,6 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 			!arg.DeleteCtx.CanTruncate {
 			rs := c.newDeleteMergeScope(arg, ss)
 			rs.appendInstruction(vm.Instruction{
-				Op: vm.MergeDelete,
 				Arg: mergedelete.NewArgument().
 					WithObjectRef(arg.DeleteCtx.Ref).
 					WithParitionNames(arg.DeleteCtx.PartitionTableNames).
@@ -1470,7 +1462,6 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 			c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
 		}
 		rs.appendInstruction(vm.Instruction{
-			Op:  vm.Deletion,
 			Arg: arg,
 		})
 		ss = []*Scope{rs}
@@ -1487,7 +1478,6 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 
 		rs := c.newMergeScope(ss)
 		arg := constructOnduplicateKey(n, c.e)
-		arg.SetOpType(vm.OnDuplicateKey)
 		arg.SetIdx(c.anal.curr)
 		rs.ReplaceLeafOp(arg)
 
@@ -1522,7 +1512,6 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 					return nil, err
 				}
 				ss[i].appendInstruction(vm.Instruction{
-					Op:      vm.PreInsertUnique,
 					Idx:     c.anal.curr,
 					IsFirst: currentFirstFlag,
 					Arg:     preInsertUkArg,
@@ -1534,7 +1523,6 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 					return nil, err
 				}
 				ss[i].appendInstruction(vm.Instruction{
-					Op:      vm.PreInsertSecondaryIndex,
 					Idx:     c.anal.curr,
 					IsFirst: currentFirstFlag,
 					Arg:     preInsertSkArg,
@@ -1557,7 +1545,6 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 				return nil, err
 			}
 			ss[i].appendInstruction(vm.Instruction{
-				Op:      vm.PreInsert,
 				Idx:     c.anal.curr,
 				IsFirst: currentFirstFlag,
 				Arg:     preInsertArg,
@@ -1590,7 +1577,6 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 				rs := c.newInsertMergeScope(insertArg, ss)
 				rs.Magic = MergeInsert
 				rs.appendInstruction(vm.Instruction{
-					Op: vm.MergeBlock,
 					Arg: mergeblock.NewArgument().
 						WithEngine(c.e).
 						WithObjectRef(insertArg.InsertCtx.Ref).
@@ -1609,7 +1595,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 				regs := make([]*process.WaitRegister, 0, parallelSize)
 				for i := 0; i < parallelSize; i++ {
 					s := newScope(Merge)
-					s.appendInstruction(vm.Instruction{Op: vm.Merge, Arg: merge.NewArgument()})
+					s.appendInstruction(vm.Instruction{Arg: merge.NewArgument()})
 					scopes = append(scopes, s)
 					scopes[i].Proc = process.NewFromProc(c.proc, c.proc.Ctx, 1)
 					if c.anal.qry.LoadTag {
@@ -1625,12 +1611,10 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 					arg.FuncId = dispatch.ShuffleToAllFunc
 					arg.ShuffleType = plan2.ShuffleToLocalMatchedReg
 					dataScope.appendInstruction(vm.Instruction{
-						Op:  vm.Dispatch,
 						Arg: arg,
 					})
 				} else {
 					dataScope.appendInstruction(vm.Instruction{
-						Op:  vm.Dispatch,
 						Arg: constructDispatchLocal(false, false, false, regs),
 					})
 				}
@@ -1643,7 +1627,6 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 					}
 					insertArg.ToWriteS3 = true
 					scopes[i].appendInstruction(vm.Instruction{
-						Op:      vm.Insert,
 						Idx:     c.anal.curr,
 						IsFirst: currentFirstFlag,
 						Arg:     insertArg,
@@ -1660,7 +1643,6 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 				rs.PreScopes = append(rs.PreScopes, dataScope)
 				rs.Magic = MergeInsert
 				rs.appendInstruction(vm.Instruction{
-					Op: vm.MergeBlock,
 					Arg: mergeblock.NewArgument().
 						WithEngine(c.e).
 						WithObjectRef(insertArg.InsertCtx.Ref).
@@ -1678,7 +1660,6 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 					return nil, err
 				}
 				ss[i].appendInstruction(vm.Instruction{
-					Op:      vm.Insert,
 					Idx:     c.anal.curr,
 					IsFirst: currentFirstFlag,
 					Arg:     insertArg,
@@ -1725,7 +1706,6 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 				return nil, err
 			}
 			lockOpArg.SetBlock(block)
-			lockOpArg.Op = vm.LockOp
 			lockOpArg.Idx = c.anal.curr
 			lockOpArg.IsFirst = currentFirstFlag
 			if block {
@@ -1760,7 +1740,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		rs := newScope(Merge)
 		rs.NodeInfo = getEngineNode(c)
 		rs.Proc = process.NewFromProc(c.proc, c.proc.Ctx, 1)
-		rs.appendInstruction(vm.Instruction{Op: vm.Merge, Arg: merge.NewArgument().WithSinkScan(true)})
+		rs.appendInstruction(vm.Instruction{Arg: merge.NewArgument().WithSinkScan(true)})
 		for _, r := range receivers {
 			r.Ctx = rs.Proc.Ctx
 		}
@@ -1778,7 +1758,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		rs := newScope(Merge)
 		rs.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
 		rs.Proc = process.NewFromProc(c.proc, c.proc.Ctx, len(receivers))
-		rs.appendInstruction(vm.Instruction{Op: vm.MergeRecursive, Arg: mergerecursive.NewArgument()})
+		rs.appendInstruction(vm.Instruction{Arg: mergerecursive.NewArgument()})
 
 		for _, r := range receivers {
 			r.Ctx = rs.Proc.Ctx
@@ -1797,7 +1777,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		rs := newScope(Merge)
 		rs.NodeInfo = getEngineNode(c)
 		rs.Proc = process.NewFromProc(c.proc, c.proc.Ctx, len(receivers))
-		rs.appendInstruction(vm.Instruction{Op: vm.MergeCTE, Arg: mergecte.NewArgument()})
+		rs.appendInstruction(vm.Instruction{Arg: mergecte.NewArgument()})
 
 		for _, r := range receivers {
 			r.Ctx = rs.Proc.Ctx
@@ -1819,7 +1799,6 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 			rs = c.newMergeScope(ss)
 		}
 		rs.appendInstruction(vm.Instruction{
-			Op:  vm.Dispatch,
 			Arg: constructDispatchLocal(true, true, n.RecursiveSink, receivers),
 		})
 		ss = []*Scope{rs}
@@ -1865,7 +1844,6 @@ func (c *Compile) constructLoadMergeScope() *Scope {
 	ds.Proc = process.NewFromProc(c.proc, c.proc.Ctx, 1)
 	ds.Proc.Base.LoadTag = true
 	ds.appendInstruction(vm.Instruction{
-		Op:      vm.Merge,
 		Idx:     c.anal.curr,
 		IsFirst: c.anal.isFirst,
 		Arg:     merge.NewArgument(),
@@ -1898,7 +1876,6 @@ func (c *Compile) compileSourceScan(n *plan.Node) ([]*Scope, error) {
 		ss[i].NodeInfo = getEngineNode(c)
 		ss[i].Proc = process.NewFromProc(c.proc, c.proc.Ctx, 0)
 		ss[i].appendInstruction(vm.Instruction{
-			Op:      vm.Source,
 			Idx:     c.anal.curr,
 			IsFirst: c.anal.isFirst,
 			Arg:     constructStream(n, ps[i]),
@@ -2046,7 +2023,6 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 		ret := newScope(Normal)
 		ret.DataSource = &Source{isConst: true, node: n}
 		ret.appendInstruction(vm.Instruction{
-			Op:      vm.ValueScan,
 			Idx:     c.anal.curr,
 			IsFirst: c.anal.isFirst,
 			Arg:     constructValueScan(),
@@ -2128,7 +2104,6 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 			}
 		}
 		ss[i].appendInstruction(vm.Instruction{
-			Op:      vm.External,
 			Idx:     c.anal.curr,
 			IsFirst: c.anal.isFirst,
 			Arg:     constructExternal(n, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp),
@@ -2161,7 +2136,6 @@ func (c *Compile) compileExternValueScan(n *plan.Node, param *tree.ExternParam) 
 	}
 	s := c.constructScopeForExternal(c.addr, false)
 	s.appendInstruction(vm.Instruction{
-		Op:      vm.External,
 		Idx:     c.anal.curr,
 		IsFirst: c.anal.isFirst,
 		Arg:     constructExternal(n, param, c.proc.Ctx, nil, nil, nil),
@@ -2169,7 +2143,6 @@ func (c *Compile) compileExternValueScan(n *plan.Node, param *tree.ExternParam) 
 	_, arg := constructDispatchLocalAndRemote(0, ss, c.addr)
 	arg.FuncId = dispatch.SendToAnyLocalFunc
 	s.appendInstruction(vm.Instruction{
-		Op:  vm.Dispatch,
 		Arg: arg,
 	})
 	ss[0].PreScopes = append(ss[0].PreScopes, s)
@@ -2195,7 +2168,6 @@ func (c *Compile) compileExternScanParallel(n *plan.Node, param *tree.ExternPara
 	extern.Es.ParallelLoad = true
 	scope := c.constructScopeForExternal("", false)
 	scope.appendInstruction(vm.Instruction{
-		Op:      vm.External,
 		Idx:     c.anal.curr,
 		IsFirst: c.anal.isFirst,
 		Arg:     extern,
@@ -2203,7 +2175,6 @@ func (c *Compile) compileExternScanParallel(n *plan.Node, param *tree.ExternPara
 	_, arg := constructDispatchLocalAndRemote(0, ss, c.addr)
 	arg.FuncId = dispatch.SendToAnyLocalFunc
 	scope.appendInstruction(vm.Instruction{
-		Op:  vm.Dispatch,
 		Arg: arg,
 	})
 	ss[0].PreScopes = append(ss[0].PreScopes, scope)
@@ -2215,7 +2186,6 @@ func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
 		ss[i].appendInstruction(vm.Instruction{
-			Op:      vm.TableFunction,
 			Idx:     c.anal.curr,
 			IsFirst: currentFirstFlag,
 			Arg:     constructTableFunction(n),
@@ -2233,7 +2203,6 @@ func (c *Compile) compileValueScan(n *plan.Node) ([]*Scope, error) {
 	ds.Proc = process.NewFromProc(c.proc, c.proc.Ctx, 0)
 
 	ds.appendInstruction(vm.Instruction{
-		Op:      vm.ValueScan,
 		Idx:     c.anal.curr,
 		IsFirst: c.anal.isFirst,
 		Arg:     constructValueScan(),
@@ -2270,7 +2239,6 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) (*Sco
 	}
 
 	s.appendInstruction(vm.Instruction{
-		Op:      vm.TableScan,
 		Idx:     c.anal.curr,
 		IsFirst: c.anal.isFirst,
 		Arg:     constructTableScan(),
@@ -2397,7 +2365,6 @@ func (c *Compile) compileRestrict(n *plan.Node, ss []*Scope) []*Scope {
 	filterExpr := colexec.RewriteFilterExprList(plan2.DeepCopyExprList(n.FilterList))
 	for i := range ss {
 		ss[i].appendInstruction(vm.Instruction{
-			Op:      vm.Filter,
 			Idx:     c.anal.curr,
 			IsFirst: currentFirstFlag,
 			Arg:     constructRestrict(n, filterExpr),
@@ -2414,7 +2381,6 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
 		ss[i].appendInstruction(vm.Instruction{
-			Op:      vm.Projection,
 			Idx:     c.anal.curr,
 			IsFirst: currentFirstFlag,
 			Arg:     constructProjection(n),
@@ -2434,14 +2400,12 @@ func (c *Compile) compileTPUnion(n *plan.Node, ss []*Scope, children []*Scope) [
 		gn.GroupBy[i].Typ.NotNullable = false
 	}
 	rs[0].appendInstruction(vm.Instruction{
-		Op:  vm.Group,
 		Idx: c.anal.curr,
 		Arg: constructGroup(c.proc.Ctx, gn, n, true, 0, c.proc),
 	})
 
 	for i := range ss {
 		ss[i].appendInstruction(vm.Instruction{
-			Op: vm.Connector,
 			Arg: connector.NewArgument().
 				WithReg(rs[0].Proc.Reg.MergeReceivers[i]),
 		})
@@ -2465,7 +2429,6 @@ func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope) []*
 	idx := 0
 	for i := range rs {
 		rs[i].appendInstruction(vm.Instruction{
-			Op:  vm.Group,
 			Idx: c.anal.curr,
 			Arg: constructGroup(c.proc.Ctx, gn, n, true, 0, c.proc),
 		})
@@ -2475,7 +2438,6 @@ func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope) []*
 	}
 	mergeChildren := c.newMergeScope(ss)
 	mergeChildren.appendInstruction(vm.Instruction{
-		Op:  vm.Dispatch,
 		Arg: constructDispatch(0, rs, c.addr, n, false),
 	})
 	rs[idx].PreScopes = append(rs[idx].PreScopes, mergeChildren)
@@ -2486,29 +2448,24 @@ func (c *Compile) compileTpMinusAndIntersect(n *plan.Node, left []*Scope, right 
 	rs := c.newScopeListOnCurrentCN(2, int(n.Stats.BlockNum))
 	rs[0].PreScopes = append(rs[0].PreScopes, left[0], right[0])
 	left[0].appendInstruction(vm.Instruction{
-		Op: vm.Connector,
 		Arg: connector.NewArgument().
 			WithReg(rs[0].Proc.Reg.MergeReceivers[0]),
 	})
 	right[0].appendInstruction(vm.Instruction{
-		Op: vm.Connector,
 		Arg: connector.NewArgument().
 			WithReg(rs[0].Proc.Reg.MergeReceivers[1]),
 	})
 	switch nodeType {
 	case plan.Node_MINUS:
 		arg := minus.NewArgument()
-		arg.Op = vm.Minus
 		arg.Idx = c.anal.curr
 		rs[0].ReplaceLeafOp(arg)
 	case plan.Node_INTERSECT:
 		arg := intersect.NewArgument()
-		arg.Op = vm.Intersect
 		arg.Idx = c.anal.curr
 		rs[0].ReplaceLeafOp(arg)
 	case plan.Node_INTERSECT_ALL:
 		arg := intersectall.NewArgument()
-		arg.Op = vm.IntersectAll
 		arg.Idx = c.anal.curr
 		rs[0].ReplaceLeafOp(arg)
 	}
@@ -2525,21 +2482,18 @@ func (c *Compile) compileMinusAndIntersect(n *plan.Node, left []*Scope, right []
 	case plan.Node_MINUS:
 		for i := range rs {
 			arg := minus.NewArgument()
-			arg.Op = vm.Minus
 			arg.Idx = c.anal.curr
 			rs[i].ReplaceLeafOp(arg)
 		}
 	case plan.Node_INTERSECT:
 		for i := range rs {
 			arg := intersect.NewArgument()
-			arg.Op = vm.Intersect
 			arg.Idx = c.anal.curr
 			rs[i].ReplaceLeafOp(arg)
 		}
 	case plan.Node_INTERSECT_ALL:
 		for i := range rs {
 			arg := intersectall.NewArgument()
-			arg.Op = vm.IntersectAll
 			arg.Idx = c.anal.curr
 			rs[i].ReplaceLeafOp(arg)
 		}
@@ -2566,7 +2520,6 @@ func (c *Compile) compileJoin(node, left, right *plan.Node, ns []*plan.Node, pro
 			Ch:  make(chan *process.RegisterMessage, 1),
 		}
 		buildScopes[0].appendInstruction(vm.Instruction{
-			Op: vm.Connector,
 			Arg: connector.NewArgument().
 				WithReg(rs[0].Proc.Reg.MergeReceivers[1]),
 		})
@@ -2619,7 +2572,6 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 	case plan.Node_INNER:
 		for i := range children {
 			children[i].appendInstruction(vm.Instruction{
-				Op:  vm.Join,
 				Idx: c.anal.curr,
 				Arg: constructJoin(node, rightTyps, c.proc),
 			})
@@ -2629,7 +2581,6 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 		if node.BuildOnLeft {
 			for i := range children {
 				children[i].appendInstruction(vm.Instruction{
-					Op:  vm.RightAnti,
 					Idx: c.anal.curr,
 					Arg: constructRightAnti(node, rightTyps, c.proc),
 				})
@@ -2637,7 +2588,6 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 		} else {
 			for i := range children {
 				children[i].appendInstruction(vm.Instruction{
-					Op:  vm.Anti,
 					Idx: c.anal.curr,
 					Arg: constructAnti(node, rightTyps, c.proc),
 				})
@@ -2648,7 +2598,6 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 		if node.BuildOnLeft {
 			for i := range children {
 				children[i].appendInstruction(vm.Instruction{
-					Op:  vm.RightSemi,
 					Idx: c.anal.curr,
 					Arg: constructRightSemi(node, rightTyps, c.proc),
 				})
@@ -2656,7 +2605,6 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 		} else {
 			for i := range children {
 				children[i].appendInstruction(vm.Instruction{
-					Op:  vm.Semi,
 					Idx: c.anal.curr,
 					Arg: constructSemi(node, rightTyps, c.proc),
 				})
@@ -2666,7 +2614,6 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 	case plan.Node_LEFT:
 		for i := range children {
 			children[i].appendInstruction(vm.Instruction{
-				Op:  vm.Left,
 				Idx: c.anal.curr,
 				Arg: constructLeft(node, rightTyps, c.proc),
 			})
@@ -2675,7 +2622,6 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 	case plan.Node_RIGHT:
 		for i := range children {
 			children[i].appendInstruction(vm.Instruction{
-				Op:  vm.Right,
 				Idx: c.anal.curr,
 				Arg: constructRight(node, leftTyps, rightTyps, c.proc),
 			})
@@ -2714,7 +2660,6 @@ func (c *Compile) compileBroadcastJoin(node, left, right *plan.Node, ns []*plan.
 		if len(node.OnList) == 0 {
 			for i := range rs {
 				rs[i].appendInstruction(vm.Instruction{
-					Op:  vm.Product,
 					Idx: c.anal.curr,
 					Arg: constructProduct(node, rightTyps, c.proc),
 				})
@@ -2723,13 +2668,11 @@ func (c *Compile) compileBroadcastJoin(node, left, right *plan.Node, ns []*plan.
 			for i := range rs {
 				if isEq {
 					rs[i].appendInstruction(vm.Instruction{
-						Op:  vm.Join,
 						Idx: c.anal.curr,
 						Arg: constructJoin(node, rightTyps, c.proc),
 					})
 				} else {
 					rs[i].appendInstruction(vm.Instruction{
-						Op:  vm.LoopJoin,
 						Idx: c.anal.curr,
 						Arg: constructLoopJoin(node, rightTyps, c.proc),
 					})
@@ -2740,7 +2683,6 @@ func (c *Compile) compileBroadcastJoin(node, left, right *plan.Node, ns []*plan.
 		rs = c.newBroadcastJoinScopeList(probeScopes, buildScopes, node)
 		for i := range rs {
 			rs[i].appendInstruction(vm.Instruction{
-				Op:  vm.ProductL2,
 				Idx: c.anal.curr,
 				Arg: constructProductL2(node, rightTyps, c.proc),
 			})
@@ -2750,7 +2692,6 @@ func (c *Compile) compileBroadcastJoin(node, left, right *plan.Node, ns []*plan.
 		rs = c.newBroadcastJoinScopeList(probeScopes, buildScopes, node)
 		for i := range rs {
 			rs[i].appendInstruction(vm.Instruction{
-				Op:  vm.IndexJoin,
 				Idx: c.anal.curr,
 				Arg: constructIndexJoin(node, rightTyps, c.proc),
 			})
@@ -2766,7 +2707,6 @@ func (c *Compile) compileBroadcastJoin(node, left, right *plan.Node, ns []*plan.
 				}
 				for i := range rs {
 					rs[i].appendInstruction(vm.Instruction{
-						Op:  vm.RightSemi,
 						Idx: c.anal.curr,
 						Arg: constructRightSemi(node, rightTyps, c.proc),
 					})
@@ -2775,7 +2715,6 @@ func (c *Compile) compileBroadcastJoin(node, left, right *plan.Node, ns []*plan.
 				rs = c.newBroadcastJoinScopeList(probeScopes, buildScopes, node)
 				for i := range rs {
 					rs[i].appendInstruction(vm.Instruction{
-						Op:  vm.Semi,
 						Idx: c.anal.curr,
 						Arg: constructSemi(node, rightTyps, c.proc),
 					})
@@ -2785,7 +2724,6 @@ func (c *Compile) compileBroadcastJoin(node, left, right *plan.Node, ns []*plan.
 			rs = c.newBroadcastJoinScopeList(probeScopes, buildScopes, node)
 			for i := range rs {
 				rs[i].appendInstruction(vm.Instruction{
-					Op:  vm.LoopSemi,
 					Idx: c.anal.curr,
 					Arg: constructLoopSemi(node, rightTyps, c.proc),
 				})
@@ -2796,13 +2734,11 @@ func (c *Compile) compileBroadcastJoin(node, left, right *plan.Node, ns []*plan.
 		for i := range rs {
 			if isEq {
 				rs[i].appendInstruction(vm.Instruction{
-					Op:  vm.Left,
 					Idx: c.anal.curr,
 					Arg: constructLeft(node, rightTyps, c.proc),
 				})
 			} else {
 				rs[i].appendInstruction(vm.Instruction{
-					Op:  vm.LoopLeft,
 					Idx: c.anal.curr,
 					Arg: constructLoopLeft(node, rightTyps, c.proc),
 				})
@@ -2817,7 +2753,6 @@ func (c *Compile) compileBroadcastJoin(node, left, right *plan.Node, ns []*plan.
 			}
 			for i := range rs {
 				rs[i].appendInstruction(vm.Instruction{
-					Op:  vm.Right,
 					Idx: c.anal.curr,
 					Arg: constructRight(node, leftTyps, rightTyps, c.proc),
 				})
@@ -2830,13 +2765,11 @@ func (c *Compile) compileBroadcastJoin(node, left, right *plan.Node, ns []*plan.
 		for i := range rs {
 			if isEq {
 				rs[i].appendInstruction(vm.Instruction{
-					Op:  vm.Single,
 					Idx: c.anal.curr,
 					Arg: constructSingle(node, rightTyps, c.proc),
 				})
 			} else {
 				rs[i].appendInstruction(vm.Instruction{
-					Op:  vm.LoopSingle,
 					Idx: c.anal.curr,
 					Arg: constructLoopSingle(node, rightTyps, c.proc),
 				})
@@ -2852,7 +2785,6 @@ func (c *Compile) compileBroadcastJoin(node, left, right *plan.Node, ns []*plan.
 				}
 				for i := range rs {
 					rs[i].appendInstruction(vm.Instruction{
-						Op:  vm.RightAnti,
 						Idx: c.anal.curr,
 						Arg: constructRightAnti(node, rightTyps, c.proc),
 					})
@@ -2861,7 +2793,6 @@ func (c *Compile) compileBroadcastJoin(node, left, right *plan.Node, ns []*plan.
 				rs = c.newBroadcastJoinScopeList(probeScopes, buildScopes, node)
 				for i := range rs {
 					rs[i].appendInstruction(vm.Instruction{
-						Op:  vm.Anti,
 						Idx: c.anal.curr,
 						Arg: constructAnti(node, rightTyps, c.proc),
 					})
@@ -2871,7 +2802,6 @@ func (c *Compile) compileBroadcastJoin(node, left, right *plan.Node, ns []*plan.
 			rs = c.newBroadcastJoinScopeList(probeScopes, buildScopes, node)
 			for i := range rs {
 				rs[i].appendInstruction(vm.Instruction{
-					Op:  vm.LoopAnti,
 					Idx: c.anal.curr,
 					Arg: constructLoopAnti(node, rightTyps, c.proc),
 				})
@@ -2888,7 +2818,6 @@ func (c *Compile) compileBroadcastJoin(node, left, right *plan.Node, ns []*plan.
 			//	})
 			//} else {
 			rs[i].appendInstruction(vm.Instruction{
-				Op:  vm.LoopMark,
 				Idx: c.anal.curr,
 				Arg: constructLoopMark(node, rightTyps, c.proc),
 			})
@@ -2908,7 +2837,6 @@ func (c *Compile) compilePartition(n *plan.Node, ss []*Scope) []*Scope {
 			ss[i] = c.newMergeScope([]*Scope{ss[i]})
 		}
 		ss[i].appendInstruction(vm.Instruction{
-			Op:      vm.Order,
 			Idx:     c.anal.curr,
 			IsFirst: c.anal.isFirst,
 			Arg:     constructOrder(n),
@@ -2919,7 +2847,6 @@ func (c *Compile) compilePartition(n *plan.Node, ss []*Scope) []*Scope {
 	rs := c.newMergeScope(ss)
 
 	arg := constructPartition(n)
-	arg.Op = vm.Partition
 	arg.Idx = c.anal.curr
 	rs.ReplaceLeafOp(arg)
 	return []*Scope{rs}
@@ -2980,7 +2907,7 @@ func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 }
 
 func containBrokenNode2(op vm.Operator) bool {
-	if op.GetOperatorBase().IsBrokenNode() {
+	if vm.IsBrokenNode(op) {
 		return true
 	}
 	numChildren := op.GetOperatorBase().NumChildren()
@@ -3003,7 +2930,6 @@ func (c *Compile) compileTop(n *plan.Node, topN *plan.Expr, ss []*Scope) []*Scop
 	// use topN TO make scope.
 	if c.IsTpQuery() {
 		ss[0].appendInstruction(vm.Instruction{
-			Op:      vm.Top,
 			Idx:     c.anal.curr,
 			IsFirst: c.anal.isFirst,
 			Arg:     constructTop(n, topN),
@@ -3018,7 +2944,6 @@ func (c *Compile) compileTop(n *plan.Node, topN *plan.Expr, ss []*Scope) []*Scop
 			ss[i] = c.newMergeScope([]*Scope{ss[i]})
 		}
 		ss[i].appendInstruction(vm.Instruction{
-			Op:      vm.Top,
 			Idx:     c.anal.curr,
 			IsFirst: c.anal.isFirst,
 			Arg:     constructTop(n, topN),
@@ -3028,7 +2953,6 @@ func (c *Compile) compileTop(n *plan.Node, topN *plan.Expr, ss []*Scope) []*Scop
 
 	rs := c.newMergeScope(ss)
 	arg := constructMergeTop(n, topN)
-	arg.Op = vm.MergeTop
 	arg.Idx = c.anal.curr
 	rs.ReplaceLeafOp(arg)
 	return []*Scope{rs}
@@ -3037,13 +2961,11 @@ func (c *Compile) compileTop(n *plan.Node, topN *plan.Expr, ss []*Scope) []*Scop
 func (c *Compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
 	if c.IsTpQuery() {
 		ss[0].appendInstruction(vm.Instruction{
-			Op:      vm.Order,
 			Idx:     c.anal.curr,
 			IsFirst: c.anal.isFirst,
 			Arg:     constructOrder(n),
 		})
 		ss[0].appendInstruction(vm.Instruction{
-			Op:  vm.MergeOrder,
 			Idx: c.anal.curr,
 			Arg: constructMergeOrder(n),
 		})
@@ -3057,7 +2979,6 @@ func (c *Compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
 			ss[i] = c.newMergeScope([]*Scope{ss[i]})
 		}
 		ss[i].appendInstruction(vm.Instruction{
-			Op:      vm.Order,
 			Idx:     c.anal.curr,
 			IsFirst: c.anal.isFirst,
 			Arg:     constructOrder(n),
@@ -3066,7 +2987,6 @@ func (c *Compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
 	c.anal.isFirst = false
 	rs := c.newMergeScope(ss)
 	rs.appendInstruction(vm.Instruction{
-		Op:  vm.MergeOrder,
 		Idx: c.anal.curr,
 		Arg: constructMergeOrder(n),
 	})
@@ -3076,7 +2996,6 @@ func (c *Compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
 func (c *Compile) compileWin(n *plan.Node, ss []*Scope) []*Scope {
 	rs := c.newMergeScope(ss)
 	arg := constructWindow(c.proc.Ctx, n, c.proc)
-	arg.Op = vm.Window
 	arg.Idx = c.anal.curr
 	rs.ReplaceLeafOp(arg)
 
@@ -3086,7 +3005,6 @@ func (c *Compile) compileWin(n *plan.Node, ss []*Scope) []*Scope {
 func (c *Compile) compileTimeWin(n *plan.Node, ss []*Scope) []*Scope {
 	rs := c.newMergeScope(ss)
 	arg := constructTimeWindow(c.proc.Ctx, n)
-	arg.Op = vm.TimeWin
 	arg.Idx = c.anal.curr
 	rs.ReplaceLeafOp(arg)
 
@@ -3096,7 +3014,6 @@ func (c *Compile) compileTimeWin(n *plan.Node, ss []*Scope) []*Scope {
 func (c *Compile) compileFill(n *plan.Node, ss []*Scope) []*Scope {
 	rs := c.newMergeScope(ss)
 	arg := constructFill(n)
-	arg.Op = vm.Fill
 	arg.Idx = c.anal.curr
 	rs.ReplaceLeafOp(arg)
 
@@ -3106,7 +3023,6 @@ func (c *Compile) compileFill(n *plan.Node, ss []*Scope) []*Scope {
 func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
 	if c.IsTpQuery() {
 		ss[0].appendInstruction(vm.Instruction{
-			Op:      vm.Offset,
 			Idx:     c.anal.curr,
 			IsFirst: c.anal.isFirst,
 			Arg:     offset.NewArgument().WithOffset(n.Offset),
@@ -3124,7 +3040,6 @@ func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
 
 	rs := c.newMergeScope(ss)
 	arg := constructMergeOffset(n)
-	arg.Op = vm.MergeOffset
 	arg.Idx = c.anal.curr
 	rs.ReplaceLeafOp(arg)
 
@@ -3134,7 +3049,6 @@ func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
 func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 	if c.IsTpQuery() {
 		ss[0].appendInstruction(vm.Instruction{
-			Op:      vm.Limit,
 			Idx:     c.anal.curr,
 			IsFirst: c.anal.isFirst,
 			Arg:     constructLimit(n),
@@ -3149,7 +3063,6 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 			ss[i] = c.newMergeScope([]*Scope{ss[i]})
 		}
 		ss[i].appendInstruction(vm.Instruction{
-			Op:      vm.Limit,
 			Idx:     c.anal.curr,
 			IsFirst: c.anal.isFirst,
 			Arg:     constructLimit(n),
@@ -3159,7 +3072,6 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 
 	rs := c.newMergeScope(ss)
 	arg := constructMergeLimit(n)
-	arg.Op = vm.MergeLimit
 	arg.Idx = c.anal.curr
 	rs.ReplaceLeafOp(arg)
 
@@ -3184,7 +3096,6 @@ func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scop
 	arg := constructFuzzyFilter(n, ns[n.Children[0]], ns[n.Children[1]])
 
 	rs.appendInstruction(vm.Instruction{
-		Op:  vm.FuzzyFilter,
 		Idx: c.anal.curr,
 		Arg: arg,
 	})
@@ -3218,7 +3129,6 @@ func (c *Compile) compileSample(n *plan.Node, ss []*Scope) []*Scope {
 			ss[i] = c.newMergeScope([]*Scope{ss[i]})
 		}
 		ss[i].appendInstruction(vm.Instruction{
-			Op:      vm.Sample,
 			Idx:     c.anal.curr,
 			IsFirst: c.anal.isFirst,
 			Arg:     constructSample(n, len(ss) != 1),
@@ -3234,7 +3144,6 @@ func (c *Compile) compileSample(n *plan.Node, ss []*Scope) []*Scope {
 	// should sample again if sample by rows.
 	if n.SampleFunc.Rows != plan2.NotSampleByRows {
 		rs.appendInstruction(vm.Instruction{
-			Op:      vm.Sample,
 			Idx:     c.anal.curr,
 			IsFirst: c.anal.isFirst,
 			Arg:     sample.NewMergeSample(constructSample(n, true), false),
@@ -3245,7 +3154,6 @@ func (c *Compile) compileSample(n *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) compileTPGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
 	ss[0].appendInstruction(vm.Instruction{
-		Op:      vm.Group,
 		Idx:     c.anal.curr,
 		IsFirst: c.anal.isFirst,
 		Arg:     constructGroup(c.proc.Ctx, n, ns[n.Children[0]], true, 0, c.proc),
@@ -3277,7 +3185,6 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node, 
 		mergeToGroup := c.newMergeScope(ss)
 		mergeToGroup.appendInstruction(
 			vm.Instruction{
-				Op:      vm.Group,
 				Idx:     c.anal.curr,
 				IsFirst: c.anal.isFirst,
 				Arg:     constructGroup(c.proc.Ctx, n, ns[n.Children[0]], false, 0, c.proc),
@@ -3292,7 +3199,6 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node, 
 			ss[0].PartialResultTypes = nil
 		}
 
-		arg.Op = vm.MergeGroup
 		arg.Idx = c.anal.curr
 		rs.ReplaceLeafOp(arg)
 
@@ -3305,7 +3211,6 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node, 
 			ss[i] = c.newMergeScope([]*Scope{ss[i]})
 		}
 		ss[i].appendInstruction(vm.Instruction{
-			Op:      vm.Group,
 			Idx:     c.anal.curr,
 			IsFirst: c.anal.isFirst,
 			Arg:     constructGroup(c.proc.Ctx, n, ns[n.Children[0]], false, 0, c.proc),
@@ -3321,7 +3226,6 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node, 
 		ss[0].PartialResults = nil
 		ss[0].PartialResultTypes = nil
 	}
-	arg.Op = vm.MergeGroup
 	arg.Idx = c.anal.curr
 	rs.ReplaceLeafOp(arg)
 
@@ -3339,12 +3243,10 @@ func (c *Compile) constructShuffleAndDispatch(ss, children []*Scope, n *plan.Nod
 		}
 		if !ss[i].IsEnd {
 			ss[i].appendInstruction(vm.Instruction{
-				Op:  vm.Shuffle,
 				Arg: constructShuffleGroupArg(children, n),
 			})
 
 			ss[i].appendInstruction(vm.Instruction{
-				Op:  vm.Dispatch,
 				Arg: constructDispatch(j, children, ss[i].NodeInfo.Addr, n, false),
 			})
 			j++
@@ -3365,7 +3267,6 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 	case plan.ShuffleMethod_Reuse:
 		for i := range ss {
 			ss[i].appendInstruction(vm.Instruction{
-				Op:      vm.Group,
 				Idx:     c.anal.curr,
 				IsFirst: c.anal.isFirst,
 				Arg:     constructGroup(c.proc.Ctx, n, ns[n.Children[0]], true, len(ss), c.proc),
@@ -3393,7 +3294,6 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 
 		for i := range children {
 			children[i].appendInstruction(vm.Instruction{
-				Op:      vm.Group,
 				Idx:     c.anal.curr,
 				IsFirst: currentIsFirst,
 				Arg:     constructGroup(c.proc.Ctx, n, ns[n.Children[0]], true, len(children), c.proc),
@@ -3407,7 +3307,6 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 
 		for i := range ss {
 			ss[i].appendInstruction(vm.Instruction{
-				Op:      vm.Shuffle,
 				Idx:     c.anal.curr,
 				IsFirst: currentIsFirst,
 				Arg:     constructShuffleGroupArg(children, n),
@@ -3416,7 +3315,6 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 
 		mergeScopes := c.newMergeScope(ss)
 		mergeScopes.appendInstruction(vm.Instruction{
-			Op:      vm.Dispatch,
 			Idx:     c.anal.curr,
 			IsFirst: currentIsFirst,
 			Arg:     constructDispatch(0, children, c.addr, n, false),
@@ -3452,7 +3350,6 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 
 		for i := range children {
 			children[i].appendInstruction(vm.Instruction{
-				Op:      vm.Group,
 				Idx:     c.anal.curr,
 				IsFirst: currentIsFirst,
 				Arg:     constructGroup(c.proc.Ctx, n, ns[n.Children[0]], true, len(children), c.proc),
@@ -3515,7 +3412,6 @@ func (c *Compile) newDeleteMergeScope(arg *deletion.Deletion, ss []*Scope) *Scop
 		constructDeleteDispatchAndLocal(i, rs, ss2, uuids, c)
 	}
 
-	arg.Op = vm.Deletion
 	for i := range rs {
 		// use distributed delete
 		arg.RemoteDelete = true
@@ -3544,7 +3440,6 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 		rs.Proc.Base.LoadTag = ss[0].Proc.Base.LoadTag
 	}
 	rs.appendInstruction(vm.Instruction{
-		Op:      vm.Merge,
 		Idx:     c.anal.curr,
 		IsFirst: c.anal.isFirst,
 		Arg:     merge.NewArgument(),
@@ -3555,7 +3450,6 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 	for i := range ss {
 		if !ss[i].IsEnd {
 			ss[i].appendInstruction(vm.Instruction{
-				Op: vm.Connector,
 				Arg: connector.NewArgument().
 					WithReg(rs.Proc.Reg.MergeReceivers[j]),
 			})
@@ -3629,7 +3523,6 @@ func (c *Compile) newScopeListWithNode(mcpu, childrenCount int, addr string) []*
 		ss[i].NodeInfo.Mcpu = 1 // ss is already the mcpu length so we don't need to parallel it
 		ss[i].Proc = process.NewFromProc(c.proc, c.proc.Ctx, childrenCount)
 		ss[i].appendInstruction(vm.Instruction{
-			Op:      vm.Merge,
 			Idx:     c.anal.curr,
 			IsFirst: currentFirstFlag,
 			Arg:     merge.NewArgument(),
@@ -3675,7 +3568,6 @@ func (c *Compile) newJoinScopeListWithBucket(rs, left, right []*Scope, n *plan.N
 	// construct left
 	leftMerge := c.newMergeScope(left)
 	leftMerge.appendInstruction(vm.Instruction{
-		Op:  vm.Dispatch,
 		Arg: constructDispatch(0, rs, c.addr, n, false),
 	})
 	leftMerge.IsEnd = true
@@ -3684,7 +3576,6 @@ func (c *Compile) newJoinScopeListWithBucket(rs, left, right []*Scope, n *plan.N
 	c.anal.isFirst = currentFirstFlag
 	rightMerge := c.newMergeScope(right)
 	rightMerge.appendInstruction(vm.Instruction{
-		Op:  vm.Dispatch,
 		Arg: constructDispatch(1, rs, c.addr, n, false),
 	})
 	rightMerge.IsEnd = true
@@ -3719,7 +3610,6 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 		rs[i].PreScopes = []*Scope{probeScopes[i]}
 		rs[i].Proc = process.NewFromProc(c.proc, c.proc.Ctx, 2)
 		probeScopes[i].appendInstruction(vm.Instruction{
-			Op: vm.Connector,
 			Arg: connector.NewArgument().
 				WithReg(rs[i].Proc.Reg.MergeReceivers[0]),
 		})
@@ -3734,7 +3624,6 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 		mergeChildren := c.newMergeScope(buildScopes)
 
 		mergeChildren.appendInstruction(vm.Instruction{
-			Op:  vm.Dispatch,
 			Arg: constructDispatch(1, rs, c.addr, n, false),
 		})
 		mergeChildren.IsEnd = true
@@ -3790,12 +3679,10 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 	currentFirstFlag := c.anal.isFirst
 	for i, scp := range left {
 		scp.appendInstruction(vm.Instruction{
-			Op:  vm.Shuffle,
 			Idx: c.anal.curr,
 			Arg: constructShuffleJoinArg(children, n, true),
 		})
 		scp.appendInstruction(vm.Instruction{
-			Op:  vm.Dispatch,
 			Arg: constructDispatch(i, children, scp.NodeInfo.Addr, n, true),
 		})
 		scp.IsEnd = true
@@ -3817,12 +3704,10 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 	c.anal.isFirst = currentFirstFlag
 	for i, scp := range right {
 		scp.appendInstruction(vm.Instruction{
-			Op:  vm.Shuffle,
 			Idx: c.anal.curr,
 			Arg: constructShuffleJoinArg(children, n, false),
 		})
 		scp.appendInstruction(vm.Instruction{
-			Op:  vm.Dispatch,
 			Arg: constructDispatch(i+lnum, children, scp.NodeInfo.Addr, n, false),
 		})
 		scp.IsEnd = true
@@ -3846,7 +3731,6 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 	rs := newScope(Merge)
 	rs.appendInstruction(vm.Instruction{
-		Op:      vm.Merge,
 		Idx:     vm.GetLeafOp(s.RootOp).GetOperatorBase().GetIdx(),
 		IsFirst: true,
 		Arg:     merge.NewArgument(),
@@ -3862,7 +3746,6 @@ func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 			Ch:  make(chan *process.RegisterMessage, shuffleChannelBufferSize),
 		}
 		rs.appendInstruction(vm.Instruction{
-			Op: vm.Connector,
 			Arg: connector.NewArgument().
 				WithReg(s.Proc.Reg.MergeReceivers[0]),
 		})
@@ -3870,7 +3753,6 @@ func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 		s.BuildIdx = 1
 	} else {
 		rs.appendInstruction(vm.Instruction{
-			Op:  vm.Dispatch,
 			Arg: constructDispatchLocal(false, false, false, extraRegisters(ss, 0)),
 		})
 	}
@@ -3887,7 +3769,6 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 		regTransplant(s, rs, i+s.BuildIdx, i)
 	}
 	rs.appendInstruction(vm.Instruction{
-		Op:      vm.Merge,
 		Idx:     c.anal.curr,
 		IsFirst: c.anal.isFirst,
 		Arg:     merge.NewArgument(),
@@ -3900,14 +3781,12 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 			Ch:  make(chan *process.RegisterMessage, 1),
 		}
 		rs.appendInstruction(vm.Instruction{
-			Op: vm.Connector,
 			Arg: connector.NewArgument().
 				WithReg(s.Proc.Reg.MergeReceivers[s.BuildIdx]),
 		})
 		s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:s.BuildIdx+1]
 	} else {
 		rs.appendInstruction(vm.Instruction{
-			Op:  vm.Dispatch,
 			Arg: constructDispatchLocal(true, false, false, extraRegisters(ss, s.BuildIdx)),
 		})
 	}
@@ -4969,7 +4848,6 @@ func (c *Compile) newInsertMergeScope(arg *insert.Insert, ss []*Scope) *Scope {
 		}
 	}
 
-	arg.Op = vm.Insert
 	for i := range ss2 {
 		ss2[i].appendInstruction(dupInstruction(arg, nil, i))
 	}

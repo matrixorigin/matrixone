@@ -714,6 +714,46 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `wasm`
+	{
+		functionId: WASM,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInWasm().wasm
+				},
+			},
+		},
+	},
+
+	// function `try_wasm`
+	{
+		functionId: TRY_WASM,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInWasm().tryWasm
+				},
+			},
+		},
+	},
+
 	// function `left`
 	{
 		functionId: LEFT,
