@@ -268,7 +268,6 @@ func (page *TransferHashPage) ClearPersistTable() {
 	if page.path.Name == "" {
 		return
 	}
-	logutil.Infof("delete transfer page %v, name %v", page.String(), page.path.Name)
 	FS.Delete(context.Background(), page.path.Name)
 }
 
