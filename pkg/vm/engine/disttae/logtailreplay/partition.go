@@ -188,6 +188,7 @@ func (p *Partition) ConsumeSnapCkps(
 	return nil
 }
 
+// ConsumeCheckpoints load and consumes all checkpoints in the partition, if consumed, it will return immediately.
 func (p *Partition) ConsumeCheckpoints(
 	ctx context.Context,
 	fn func(
@@ -247,8 +248,6 @@ func (p *Partition) Truncate(ctx context.Context, ids [2]uint64, ts types.TS) er
 	state := curState.Copy()
 
 	state.truncate(ids, ts)
-
-	//TODO::update partition's start and end
 
 	if !p.state.CompareAndSwap(curState, state) {
 		panic("concurrent mutation")

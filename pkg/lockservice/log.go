@@ -504,6 +504,17 @@ func logStatus(
 	}
 }
 
+func logCleanCannotCommitTxn(
+	txnID string,
+	state int) {
+	logger := getWithSkipLogger()
+	if logger.Enabled(zap.InfoLevel) {
+		logger.Info("clean cannot commit txn",
+			zap.String("txnID", txnID),
+			zap.Int("state", state))
+	}
+}
+
 func logServiceStatus(
 	info string,
 	serviceID string,

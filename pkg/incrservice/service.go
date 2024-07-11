@@ -225,6 +225,27 @@ func (s *service) CurrentValue(
 	return ts.currentValue(ctx, tableID, col)
 }
 
+func (s *service) Reload(
+	ctx context.Context,
+	tableID uint64,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	c, ok := s.mu.tables[tableID]
+	if !ok {
+		return nil
+	}
+
+	if err := c.close(); err != nil {
+		return err
+	}
+
+	// drop cache, will be reloaded when next query
+	delete(s.mu.tables, tableID)
+	return nil
+}
+
 func (s *service) Close() {
 	s.stopper.Stop()
 
