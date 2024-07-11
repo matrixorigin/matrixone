@@ -18,27 +18,25 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/BurntSushi/toml"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/stretchr/testify/assert"
 	"go/constant"
+	"net"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/BurntSushi/toml"
-	"github.com/fagongzi/goetty/v2"
-	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/golang/mock/gomock"
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -7700,11 +7698,15 @@ func newSes(priv *privilege, ctrl *gomock.Controller) *Session {
 
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 	ctx = defines.AttachAccountId(ctx, 0)
-	ioses := mock_frontend.NewMockIOSession(ctrl)
-	ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
-	ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
-	ioses.EXPECT().Ref().AnyTimes()
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+	go startConsumeRead(clientConn)
+
+	ioses, err := NewIOSession(serverConn, pu)
+	if err != nil {
+		panic(err)
+	}
 	proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
 	ses := NewSession(ctx, proto, nil)
@@ -11038,23 +11040,16 @@ func TestUpload(t *testing.T) {
 	convey.Convey("call upload func", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
-		ioses := mock_frontend.NewMockIOSession(ctrl)
 		proc := testutil.NewProc()
-		cnt := 0
-		ioses.EXPECT().Read(gomock.Any()).DoAndReturn(func(options goetty.ReadOptions) (pkt any, err error) {
-			if cnt == 0 {
-				pkt = &Packet{Length: 5, Payload: []byte("def add(a, b):\n"), SequenceID: 1}
-			} else if cnt == 1 {
-				pkt = &Packet{Length: 5, Payload: []byte("  return a + b"), SequenceID: 2}
-			} else {
-				err = moerr.NewInvalidInput(context.TODO(), "length 0")
-			}
-			cnt++
-			return
-		}).AnyTimes()
-		proto := &testMysqlWriter{
-			ioses: ioses,
-		}
+		clientConn, serverConn := net.Pipe()
+		defer clientConn.Close()
+		defer serverConn.Close()
+		go writeExceptResult(clientConn, []*Packet{
+			{Length: 5, Payload: []byte("def add(a, b):\n"), SequenceID: 1},
+			{Length: 5, Payload: []byte("  return a + b"), SequenceID: 2},
+			{Length: 0, Payload: []byte(""), SequenceID: 3},
+		})
+
 		fs, err := fileservice.NewLocalFS(context.TODO(), defines.SharedFileServiceName, t.TempDir(), fileservice.DisabledCacheConfig, nil)
 		convey.So(err, convey.ShouldBeNil)
 		proc.Base.FileService = fs
@@ -11065,12 +11060,16 @@ func TestUpload(t *testing.T) {
 		assert.Nil(t, err)
 		pu.SV.SetDefaultValues()
 		pu.SV.SaveQueryResult = "on"
-		if err != nil {
-			assert.Nil(t, err)
-		}
 		//file service
 		pu.FileService = fs
 		setGlobalPu(pu)
+
+		ioses, err := NewIOSession(serverConn, pu)
+		assert.Nil(t, err)
+		proto := &testMysqlWriter{
+			ioses: ioses,
+		}
+
 		ses := &Session{
 			feSessionImpl: feSessionImpl{
 				respr: NewMysqlResp(proto),

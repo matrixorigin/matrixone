@@ -16,11 +16,16 @@ package frontend
 
 import (
 	"context"
+	"crypto/tls"
+	"fmt"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"io"
+	"net"
+	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/fagongzi/goetty/v2"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -39,9 +44,15 @@ var ConnIDAllocKey = "____server_conn_id"
 type MOServer struct {
 	addr        string
 	uaddr       string
-	app         goetty.NetApplication
 	rm          *RoutineManager
 	readTimeout time.Duration
+	handler     func(*Conn, []byte) error
+	mu          sync.RWMutex
+	wg          sync.WaitGroup
+	running     bool
+
+	pu        *config.ParameterUnit
+	listeners []net.Listener
 }
 
 // BaseService is an interface which indicates that the instance is
@@ -67,16 +78,230 @@ func (mo *MOServer) GetRoutineManager() *RoutineManager {
 
 func (mo *MOServer) Start() error {
 	logutil.Infof("Server Listening on : %s ", mo.addr)
-	err := mo.app.Start()
-	if err != nil {
-		return err
-	}
+	mo.startListener()
 	setMoServerStarted(true)
 	return nil
 }
 
 func (mo *MOServer) Stop() error {
-	return mo.app.Stop()
+	mo.mu.Lock()
+	if !mo.running {
+		mo.mu.Unlock()
+		return nil
+	}
+	mo.running = false
+	mo.mu.Unlock()
+
+	var errors []error
+	for _, listener := range mo.listeners {
+		if err := listener.Close(); err != nil {
+			errors = append(errors, err)
+		}
+	}
+	if len(errors) > 0 {
+		return errors[0]
+	}
+
+	logutil.Debug("application listener closed")
+	mo.wg.Wait()
+
+	for s := range mo.rm.clients {
+		if err := s.Close(); err != nil {
+			return err
+		}
+	}
+	logutil.Debug("application stopped")
+	return nil
+}
+
+func (mo *MOServer) startListener() {
+	logutil.Debug("mo server accept loop started")
+	defer func() {
+		logutil.Debug("mo server accept loop stopped")
+	}()
+
+	for _, listener := range mo.listeners {
+		mo.wg.Add(1)
+		go mo.startAccept(listener)
+	}
+}
+
+func (mo *MOServer) startAccept(listener net.Listener) {
+	defer mo.wg.Done()
+
+	var tempDelay time.Duration
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+
+			if ne, ok := err.(net.Error); ok && ne.Timeout() {
+				if tempDelay == 0 {
+					tempDelay = 5 * time.Millisecond
+				} else {
+					tempDelay *= 2
+				}
+				if max := 1 * time.Second; tempDelay > max {
+					tempDelay = max
+				}
+				time.Sleep(tempDelay)
+				continue
+			}
+			return
+		}
+		tempDelay = 0
+
+		go mo.handleConn(conn)
+
+	}
+}
+func (mo *MOServer) handleConn(conn net.Conn) {
+	rs, err := NewIOSession(conn, mo.pu)
+	if err != nil {
+		mo.rm.Closed(rs)
+		logutil.Error("NewIOSession error", zap.Error(err))
+		return
+	}
+	mo.rm.Created(rs)
+	err = mo.handshake(rs)
+
+	if err != nil {
+		mo.rm.Closed(rs)
+		logutil.Error("HandShake error", zap.Error(err))
+		return
+	}
+	mo.handleLoop(rs)
+}
+
+func (mo *MOServer) handleLoop(rs *Conn) {
+	defer func() {
+		if err := rs.Close(); err != nil {
+			logutil.Error("close session failed", zap.Error(err))
+		}
+	}()
+	if err := mo.handleMessage(rs); err != nil {
+		logutil.Error("handle session failed", zap.Error(err))
+	}
+}
+
+func (mo *MOServer) handshake(rs *Conn) error {
+	var err error
+	var isTlsHeader bool
+	rm := mo.rm
+	ctx, span := trace.Start(rm.getCtx(), "RoutineManager.Handler",
+		trace.WithKind(trace.SpanKindStatement))
+	defer span.End()
+
+	tempCtx, tempCancel := context.WithTimeout(ctx, getGlobalPu().SV.SessionTimeout.Duration)
+	defer tempCancel()
+
+	routine := rm.getRoutine(rs)
+	protocol := routine.getProtocol()
+
+	ses := routine.getSession()
+	ts := ses.timestampMap
+
+	ts[TSEstablishStart] = time.Now()
+	ses.Debugf(tempCtx, "HANDLE HANDSHAKE")
+
+	err = protocol.WriteHandshake()
+
+	if err != nil {
+		logutil.Error(
+			"Failed to handshake with server, quitting routine...",
+			zap.Error(err))
+		routine.killConnection(true)
+		return err
+	}
+
+	ses.Debugf(rm.getCtx(), "have sent handshake packet to connection %s", rs.RemoteAddress())
+
+	for !protocol.GetBool(ESTABLISHED) {
+		var payload []byte
+		payload, err = rs.Read()
+		if err != nil {
+			return err
+		}
+
+		if protocol.GetU32(CAPABILITY)&CLIENT_SSL != 0 && !protocol.GetBool(TLS_ESTABLISHED) {
+			ses.Debugf(tempCtx, "setup ssl")
+			isTlsHeader, err = protocol.HandleHandshake(tempCtx, payload)
+			if err != nil {
+				ses.Error(tempCtx,
+					"An error occurred",
+					zap.Error(err))
+				return err
+			}
+			if isTlsHeader {
+				ts[TSUpgradeTLSStart] = time.Now()
+				ses.Debugf(tempCtx, "upgrade to TLS")
+				// do upgradeTls
+				tlsConn := tls.Server(rs.RawConn(), rm.getTlsConfig())
+				ses.Debugf(tempCtx, "get TLS conn ok")
+				tlsCtx, cancelFun := context.WithTimeout(tempCtx, 20*time.Second)
+				if err = tlsConn.HandshakeContext(tlsCtx); err != nil {
+					ses.Error(tempCtx,
+						"Error occurred before cancel()",
+						zap.Error(err))
+					cancelFun()
+					ses.Error(tempCtx,
+						"Error occurred after cancel()",
+						zap.Error(err))
+					return err
+				}
+				cancelFun()
+				ses.Debugf(tempCtx, "TLS handshake ok")
+				rs.UseConn(tlsConn)
+				ses.Debugf(tempCtx, "TLS handshake finished")
+
+				// tls upgradeOk
+				protocol.SetBool(TLS_ESTABLISHED, true)
+				ts[TSUpgradeTLSEnd] = time.Now()
+				v2.UpgradeTLSDurationHistogram.Observe(ts[TSUpgradeTLSEnd].Sub(ts[TSUpgradeTLSStart]).Seconds())
+			} else {
+				// client don't ask server to upgrade TLS
+				if err := protocol.Authenticate(tempCtx); err != nil {
+					return err
+				}
+				protocol.SetBool(TLS_ESTABLISHED, true)
+				protocol.SetBool(ESTABLISHED, true)
+			}
+		} else {
+			ses.Debugf(tempCtx, "handleHandshake")
+			_, err = protocol.HandleHandshake(tempCtx, payload)
+			if err != nil {
+				ses.Error(tempCtx,
+					"Error occurred",
+					zap.Error(err))
+				return err
+			}
+			if err = protocol.Authenticate(tempCtx); err != nil {
+				return err
+			}
+			protocol.SetBool(ESTABLISHED, true)
+		}
+		ts[TSEstablishEnd] = time.Now()
+		v2.EstablishDurationHistogram.Observe(ts[TSEstablishEnd].Sub(ts[TSEstablishStart]).Seconds())
+		ses.Info(ctx, fmt.Sprintf("mo accept connection, time cost of Created: %s, Establish: %s, UpgradeTLS: %s, Authenticate: %s, SendErrPacket: %s, SendOKPacket: %s, CheckTenant: %s, CheckUser: %s, CheckRole: %s, CheckDbName: %s, InitGlobalSysVar: %s",
+			ts[TSCreatedEnd].Sub(ts[TSCreatedStart]).String(),
+			ts[TSEstablishEnd].Sub(ts[TSEstablishStart]).String(),
+			ts[TSUpgradeTLSEnd].Sub(ts[TSUpgradeTLSStart]).String(),
+			ts[TSAuthenticateEnd].Sub(ts[TSAuthenticateStart]).String(),
+			ts[TSSendErrPacketEnd].Sub(ts[TSSendErrPacketStart]).String(),
+			ts[TSSendOKPacketEnd].Sub(ts[TSSendOKPacketStart]).String(),
+			ts[TSCheckTenantEnd].Sub(ts[TSCheckTenantStart]).String(),
+			ts[TSCheckUserEnd].Sub(ts[TSCheckUserStart]).String(),
+			ts[TSCheckRoleEnd].Sub(ts[TSCheckRoleStart]).String(),
+			ts[TSCheckDbNameEnd].Sub(ts[TSCheckDbNameStart]).String(),
+			ts[TSInitGlobalSysVarEnd].Sub(ts[TSInitGlobalSysVarStart]).String()))
+
+		dbName := protocol.GetStr(DBNAME)
+		if dbName != "" {
+			ses.SetDatabaseName(dbName)
+		}
+		rm.sessionManager.AddSession(ses)
+	}
+
+	return nil
 }
 
 func nextConnectionID() uint32 {
@@ -142,7 +367,6 @@ func NewMOServer(
 	setGlobalPu(pu)
 	setGlobalAicm(aicm)
 	setGlobalSessionAlloc(NewSessionAllocator(pu))
-	codec := NewSqlCodec()
 	rm, err := NewRoutineManager(ctx)
 	if err != nil {
 		logutil.Panicf("start server failed with %+v", err)
@@ -153,43 +377,36 @@ func NewMOServer(
 		rm.setSessionMgr(baseService.SessionMgr())
 	}
 	// TODO asyncFlushBatch
-	addresses := []string{addr}
 	unixAddr := pu.SV.GetUnixSocketAddress()
-	if unixAddr != "" {
-		addresses = append(addresses, "unix://"+unixAddr)
-	}
 	mo := &MOServer{
 		addr:        addr,
 		uaddr:       pu.SV.UnixSocketAddress,
 		rm:          rm,
 		readTimeout: pu.SV.SessionTimeout.Duration,
+		pu:          pu,
+		handler:     rm.Handler,
 	}
-	app, err := goetty.NewApplicationWithListenAddress(
-		addresses,
-		rm.Handler,
-		goetty.WithAppLogger(logutil.GetGlobalLogger()),
-		goetty.WithAppHandleSessionFunc(mo.handleMessage),
-		goetty.WithAppSessionOptions(
-			goetty.WithSessionCodec(codec),
-			goetty.WithSessionLogger(logutil.GetGlobalLogger()),
-			goetty.WithSessionRWBUfferSize(DefaultRpcBufferSize, DefaultRpcBufferSize),
-			goetty.WithSessionAllocator(getGlobalSessionAlloc())),
-		goetty.WithAppSessionAware(rm),
-		//when the readTimeout expires the goetty will close the tcp connection.
-		goetty.WithReadTimeout(pu.SV.SessionTimeout.Duration))
+	listenerTcp, err := net.Listen("tcp", addr)
 	if err != nil {
 		logutil.Panicf("start server failed with %+v", err)
 	}
-	mo.app = app
+
+	listenerUnix, err := net.Listen("unix", unixAddr)
+	mo.listeners = append(mo.listeners, listenerTcp, listenerUnix)
+
+	if err != nil {
+		logutil.Panicf("start server failed with %+v", err)
+	}
+	if err != nil {
+		logutil.Panicf("start server failed with %+v", err)
+	}
 	return mo
 }
 
 // handleMessage receives the message from the client and executes it
-func (mo *MOServer) handleMessage(rs goetty.IOSession) error {
-	received := uint64(0)
-	option := goetty.ReadOptions{Timeout: mo.readTimeout}
+func (mo *MOServer) handleMessage(rs *Conn) error {
 	for {
-		msg, err := rs.Read(option)
+		err := mo.handleRequest(rs)
 		if err != nil {
 			if err == io.EOF {
 				return nil
@@ -199,17 +416,31 @@ func (mo *MOServer) handleMessage(rs goetty.IOSession) error {
 				zap.Error(err))
 			return err
 		}
+	}
+}
 
-		received++
-
-		err = mo.rm.Handler(rs, msg, received)
-		if err != nil {
-			if skipClientQuit(err.Error()) {
-				return nil
-			} else {
-				logutil.Error("session handle failed, close this session", zap.Error(err))
-			}
+func (mo *MOServer) handleRequest(rs *Conn) error {
+	var msg []byte
+	var err error
+	msg, err = rs.Read()
+	if err != nil {
+		if err == io.EOF {
 			return err
 		}
+
+		logutil.Error("session read failed",
+			zap.Error(err))
+		return err
 	}
+
+	err = mo.rm.Handler(rs, msg)
+	if err != nil {
+		if skipClientQuit(err.Error()) {
+			return nil
+		} else {
+			logutil.Error("session handle failed, close this session", zap.Error(err))
+		}
+		return err
+	}
+	return nil
 }
