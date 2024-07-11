@@ -572,6 +572,9 @@ func TestSession_Migrate(t *testing.T) {
 		})
 		ctx := defines.AttachAccountId(context.Background(), sysAccountID)
 		ioses, err := NewIOSession(serverConn, getGlobalPu())
+		if err != nil {
+			panic(err)
+		}
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 		session := NewSession(ctx, proto, nil)
 		session.tenant = &TenantInfo{
