@@ -22,11 +22,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
-func ScopeConflictCheck(oldScope, newScope *common.ID) (err error) {
+func scopeConflictCheck(oldScope, newScope *common.ID) (err error) {
 	if oldScope.TableID != newScope.TableID {
 		return
 	}
-	if !oldScope.SegmentID().Eq(*newScope.SegmentID()) &&
+	if !oldScope.ObjectID().Eq(*newScope.ObjectID()) &&
 		!objectio.IsEmptySegid(oldScope.SegmentID()) &&
 		!objectio.IsEmptySegid(newScope.SegmentID()) {
 		return
@@ -42,12 +42,12 @@ func ScopeConflictCheck(oldScope, newScope *common.ID) (err error) {
 type asyncJobDispatcher struct {
 	sync.RWMutex
 	*tasks.BaseDispatcher
-	actives map[common.ID]bool
+	actives map[common.ID]struct{}
 }
 
 func newAsyncJobDispatcher() *asyncJobDispatcher {
 	return &asyncJobDispatcher{
-		actives:        make(map[common.ID]bool),
+		actives:        make(map[common.ID]struct{}),
 		BaseDispatcher: tasks.NewBaseDispatcher(),
 	}
 }
@@ -55,7 +55,7 @@ func newAsyncJobDispatcher() *asyncJobDispatcher {
 func (dispatcher *asyncJobDispatcher) checkConflictLocked(scopes []common.ID) (err error) {
 	for active := range dispatcher.actives {
 		for _, scope := range scopes {
-			if err = ScopeConflictCheck(&active, &scope); err != nil {
+			if err = scopeConflictCheck(&active, &scope); err != nil {
 				return
 			}
 		}
@@ -81,7 +81,7 @@ func (dispatcher *asyncJobDispatcher) TryDispatch(task tasks.Task) (err error) {
 		return
 	}
 	for _, scope := range scopes {
-		dispatcher.actives[scope] = true
+		dispatcher.actives[scope] = struct{}{}
 	}
 	task.AddObserver(dispatcher)
 	dispatcher.Unlock()

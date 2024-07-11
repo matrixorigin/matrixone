@@ -120,7 +120,6 @@ func (e *Executor) addActiveTask(taskId uint64, tblEntry *catalog.TableEntry, bl
 	e.activeEstimateBytes.Add(int64(esize))
 	e.activeMergeBlkCount.Add(int32(blkn))
 	e.taskConsume.Lock()
-	defer e.taskConsume.Unlock()
 	if e.taskConsume.m == nil {
 		e.taskConsume.m = make(activeTaskStats)
 		e.taskConsume.t = make(map[*catalog.TableEntry]struct{})
@@ -131,6 +130,7 @@ func (e *Executor) addActiveTask(taskId uint64, tblEntry *catalog.TableEntry, bl
 		estBytes int
 	}{tblEntry, blkn, esize}
 	e.taskConsume.t[tblEntry] = struct{}{}
+	e.taskConsume.Unlock()
 }
 
 func (e *Executor) OnExecDone(v any) {
@@ -235,19 +235,17 @@ func (e *Executor) ExecuteMultiObjMerge(entry *catalog.TableEntry, mobjs []*cata
 		}
 
 		factory := func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
-			task, err := jobs.NewMergeObjectsTask(ctx, txn, mobjs, e.rt, common.DefaultMaxOsizeObjMB*common.Const1MBytes)
-			return task, err
+			return jobs.NewMergeObjectsTask(ctx, txn, mobjs, e.rt, common.DefaultMaxOsizeObjMB*common.Const1MBytes)
 		}
 		task, err := e.rt.Scheduler.ScheduleMultiScopedTxnTaskWithObserver(nil, tasks.DataCompactionTask, scopes, factory, e)
 		if err != nil {
-			if !errors.Is(err, tasks.ErrScheduleScopeConflict) {
-				logutil.Info(
-					"MergeExecutorError",
-					common.OperationField("schedule-merge-task"),
-					common.AnyField("error", err),
-					common.AnyField("task", task.Name()),
-				)
-			}
+			logutil.Info(
+				"MergeExecutorError",
+				common.OperationField("schedule-merge-task"),
+				common.AnyField("table", e.tableName),
+				common.AnyField("error", err),
+				common.AnyField("task", task.Name()),
+			)
 			return
 		}
 		e.addActiveTask(task.ID(), entry, blkCnt, esize)
