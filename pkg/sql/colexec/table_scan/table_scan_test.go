@@ -32,7 +32,7 @@ import (
 
 func TestString(t *testing.T) {
 	buf := new(bytes.Buffer)
-	arg := &Argument{}
+	arg := &TableScan{}
 	arg.String(buf)
 }
 
@@ -66,7 +66,7 @@ func TestPrepare(t *testing.T) {
 	}).AnyTimes()
 	reader.EXPECT().Close().Return(nil).AnyTimes()
 	reader.EXPECT().GetOrderBy().Return(nil).AnyTimes()
-	arg := &Argument{
+	arg := &TableScan{
 		Reader: reader,
 	}
 	proc := testutil.NewProc()
@@ -121,7 +121,7 @@ func TestCall(t *testing.T) {
 	}).AnyTimes()
 	reader.EXPECT().Close().Return(nil).AnyTimes()
 	reader.EXPECT().GetOrderBy().Return(nil).AnyTimes()
-	arg := &Argument{
+	arg := &TableScan{
 		Reader: reader,
 	}
 

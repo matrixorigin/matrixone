@@ -79,19 +79,19 @@ func getPointKey(li *query.LockInfo) []byte {
 	return []byte{}
 }
 
-func moLocksPrepare(proc *process.Process, arg *Argument) error {
-	arg.ctr.state = dataProducing
-	if len(arg.Args) > 0 {
+func moLocksPrepare(proc *process.Process, tableFunction *TableFunction) error {
+	tableFunction.ctr.state = dataProducing
+	if len(tableFunction.Args) > 0 {
 		return moerr.NewInvalidInput(proc.Ctx, "moConfigurations: no argument is required")
 	}
-	for i := range arg.Attrs {
-		arg.Attrs[i] = strings.ToUpper(arg.Attrs[i])
+	for i := range tableFunction.Attrs {
+		tableFunction.Attrs[i] = strings.ToUpper(tableFunction.Attrs[i])
 	}
 	return nil
 }
 
-func moLocksCall(_ int, proc *process.Process, arg *Argument, result *vm.CallResult) (bool, error) {
-	switch arg.ctr.state {
+func moLocksCall(_ int, proc *process.Process, tableFunction *TableFunction, result *vm.CallResult) (bool, error) {
+	switch tableFunction.ctr.state {
 	case dataProducing:
 
 		rsps, err := getLocks(proc)
@@ -100,8 +100,8 @@ func moLocksCall(_ int, proc *process.Process, arg *Argument, result *vm.CallRes
 		}
 
 		//alloc batch
-		bat := batch.NewWithSize(len(arg.Attrs))
-		for i, col := range arg.Attrs {
+		bat := batch.NewWithSize(len(tableFunction.Attrs))
+		for i, col := range tableFunction.Attrs {
 			col = strings.ToLower(col)
 			idx, ok := plan2.MoLocksColName2Index[col]
 			if !ok {
@@ -111,7 +111,7 @@ func moLocksCall(_ int, proc *process.Process, arg *Argument, result *vm.CallRes
 			tp := plan2.MoLocksColTypes[idx]
 			bat.Vecs[i] = proc.GetVector(tp)
 		}
-		bat.Attrs = arg.Attrs
+		bat.Attrs = tableFunction.Attrs
 
 		//fill batch from lock info
 		for _, rsp := range rsps {
@@ -170,14 +170,14 @@ func moLocksCall(_ int, proc *process.Process, arg *Argument, result *vm.CallRes
 
 				if hLen == 0 && wLen == 0 {
 					//one record
-					if err := fillLockRecord(proc, arg.Attrs, bat, record); err != nil {
+					if err := fillLockRecord(proc, tableFunction.Attrs, bat, record); err != nil {
 						return false, err
 					}
 				} else if hLen == 0 && wLen != 0 {
 					//wLen records
 					for j := 0; j < wLen; j++ {
 						record[plan2.MoLocksColTypeLockWait] = []byte(hex.EncodeToString(wList[j].GetTxnID()))
-						if err := fillLockRecord(proc, arg.Attrs, bat, record); err != nil {
+						if err := fillLockRecord(proc, tableFunction.Attrs, bat, record); err != nil {
 							return false, err
 						}
 					}
@@ -185,7 +185,7 @@ func moLocksCall(_ int, proc *process.Process, arg *Argument, result *vm.CallRes
 					//hLen records
 					for j := 0; j < hLen; j++ {
 						record[plan2.MoLocksColTypeTxnId] = []byte(hex.EncodeToString(hList[j].GetTxnID()))
-						if err := fillLockRecord(proc, arg.Attrs, bat, record); err != nil {
+						if err := fillLockRecord(proc, tableFunction.Attrs, bat, record); err != nil {
 							return false, err
 						}
 					}
@@ -195,7 +195,7 @@ func moLocksCall(_ int, proc *process.Process, arg *Argument, result *vm.CallRes
 						for k := 0; k < wLen; k++ {
 							record[plan2.MoLocksColTypeTxnId] = []byte(hex.EncodeToString(hList[j].GetTxnID()))
 							record[plan2.MoLocksColTypeLockWait] = []byte(hex.EncodeToString(wList[k].GetTxnID()))
-							if err := fillLockRecord(proc, arg.Attrs, bat, record); err != nil {
+							if err := fillLockRecord(proc, tableFunction.Attrs, bat, record); err != nil {
 								return false, err
 							}
 						}
@@ -206,14 +206,14 @@ func moLocksCall(_ int, proc *process.Process, arg *Argument, result *vm.CallRes
 
 		bat.SetRowCount(bat.Vecs[0].Length())
 		result.Batch = bat
-		arg.ctr.state = dataFinished
+		tableFunction.ctr.state = dataFinished
 		return false, nil
 
 	case dataFinished:
 		result.Batch = nil
 		return true, nil
 	default:
-		return false, moerr.NewInternalError(proc.Ctx, "unknown state %v", arg.ctr.state)
+		return false, moerr.NewInternalError(proc.Ctx, "unknown state %v", tableFunction.ctr.state)
 	}
 }
 
@@ -255,19 +255,19 @@ func getLocks(proc *process.Process) ([]*query.GetLockInfoResponse, error) {
 	return rsps, err
 }
 
-func moConfigurationsPrepare(proc *process.Process, arg *Argument) error {
-	arg.ctr.state = dataProducing
-	if len(arg.Args) > 0 {
+func moConfigurationsPrepare(proc *process.Process, tableFunction *TableFunction) error {
+	tableFunction.ctr.state = dataProducing
+	if len(tableFunction.Args) > 0 {
 		return moerr.NewInvalidInput(proc.Ctx, "moConfigurations: no argument is required")
 	}
-	for i := range arg.Attrs {
-		arg.Attrs[i] = strings.ToUpper(arg.Attrs[i])
+	for i := range tableFunction.Attrs {
+		tableFunction.Attrs[i] = strings.ToUpper(tableFunction.Attrs[i])
 	}
 	return nil
 }
 
-func moConfigurationsCall(_ int, proc *process.Process, arg *Argument, result *vm.CallResult) (bool, error) {
-	switch arg.ctr.state {
+func moConfigurationsCall(_ int, proc *process.Process, tableFunction *TableFunction, result *vm.CallResult) (bool, error) {
+	switch tableFunction.ctr.state {
 	case dataProducing:
 
 		if proc.Base.Hakeeper == nil {
@@ -281,8 +281,8 @@ func moConfigurationsCall(_ int, proc *process.Process, arg *Argument, result *v
 		}
 
 		//alloc batch
-		bat := batch.NewWithSize(len(arg.Attrs))
-		for i, col := range arg.Attrs {
+		bat := batch.NewWithSize(len(tableFunction.Attrs))
+		for i, col := range tableFunction.Attrs {
 			col = strings.ToLower(col)
 			idx, ok := plan2.MoConfigColName2Index[col]
 			if !ok {
@@ -292,14 +292,14 @@ func moConfigurationsCall(_ int, proc *process.Process, arg *Argument, result *v
 			tp := plan2.MoConfigColTypes[idx]
 			bat.Vecs[i] = proc.GetVector(tp)
 		}
-		bat.Attrs = arg.Attrs
+		bat.Attrs = tableFunction.Attrs
 
 		mp := proc.GetMPool()
 
 		//fill batch for cn
 		for _, cnStore := range details.GetCNStores() {
 			if cnStore.GetConfigData() != nil {
-				err = fillMapToBatch("cn", cnStore.GetUUID(), arg.Attrs, cnStore.GetConfigData().GetContent(), bat, mp)
+				err = fillMapToBatch("cn", cnStore.GetUUID(), tableFunction.Attrs, cnStore.GetConfigData().GetContent(), bat, mp)
 				if err != nil {
 					return false, err
 				}
@@ -309,7 +309,7 @@ func moConfigurationsCall(_ int, proc *process.Process, arg *Argument, result *v
 		//fill batch for tn
 		for _, tnStore := range details.GetTNStores() {
 			if tnStore.GetConfigData() != nil {
-				err = fillMapToBatch("tn", tnStore.GetUUID(), arg.Attrs, tnStore.GetConfigData().GetContent(), bat, mp)
+				err = fillMapToBatch("tn", tnStore.GetUUID(), tableFunction.Attrs, tnStore.GetConfigData().GetContent(), bat, mp)
 				if err != nil {
 					return false, err
 				}
@@ -319,7 +319,7 @@ func moConfigurationsCall(_ int, proc *process.Process, arg *Argument, result *v
 		//fill batch for log
 		for _, logStore := range details.GetLogStores() {
 			if logStore.GetConfigData() != nil {
-				err = fillMapToBatch("log", logStore.GetUUID(), arg.Attrs, logStore.GetConfigData().GetContent(), bat, mp)
+				err = fillMapToBatch("log", logStore.GetUUID(), tableFunction.Attrs, logStore.GetConfigData().GetContent(), bat, mp)
 				if err != nil {
 					return false, err
 				}
@@ -332,7 +332,7 @@ func moConfigurationsCall(_ int, proc *process.Process, arg *Argument, result *v
 				err = fillMapToBatch(
 					"proxy",
 					proxyStore.GetUUID(),
-					arg.Attrs,
+					tableFunction.Attrs,
 					proxyStore.GetConfigData().GetContent(),
 					bat,
 					mp,
@@ -345,14 +345,14 @@ func moConfigurationsCall(_ int, proc *process.Process, arg *Argument, result *v
 
 		bat.SetRowCount(bat.Vecs[0].Length())
 		result.Batch = bat
-		arg.ctr.state = dataFinished
+		tableFunction.ctr.state = dataFinished
 		return false, nil
 
 	case dataFinished:
 		result.Batch = nil
 		return true, nil
 	default:
-		return false, moerr.NewInternalError(proc.Ctx, "unknown state %v", arg.ctr.state)
+		return false, moerr.NewInternalError(proc.Ctx, "unknown state %v", tableFunction.ctr.state)
 	}
 }
 
@@ -392,13 +392,13 @@ func fillMapToBatch(nodeType, nodeId string, attrs []string, kvs map[string]*log
 	return err
 }
 
-func moTransactionsPrepare(proc *process.Process, arg *Argument) error {
-	arg.ctr.state = dataProducing
-	if len(arg.Args) > 0 {
+func moTransactionsPrepare(proc *process.Process, tableFunction *TableFunction) error {
+	tableFunction.ctr.state = dataProducing
+	if len(tableFunction.Args) > 0 {
 		return moerr.NewInvalidInput(proc.Ctx, "moTransactions: no argument is required")
 	}
-	for i := range arg.Attrs {
-		arg.Attrs[i] = strings.ToUpper(arg.Attrs[i])
+	for i := range tableFunction.Attrs {
+		tableFunction.Attrs[i] = strings.ToUpper(tableFunction.Attrs[i])
 	}
 	return nil
 }
@@ -424,8 +424,8 @@ func getPointContent(li *query.TxnLockInfo) []byte {
 	return []byte{}
 }
 
-func moTransactionsCall(_ int, proc *process.Process, arg *Argument, result *vm.CallResult) (bool, error) {
-	switch arg.ctr.state {
+func moTransactionsCall(_ int, proc *process.Process, tableFunction *TableFunction, result *vm.CallResult) (bool, error) {
+	switch tableFunction.ctr.state {
 	case dataProducing:
 
 		rsps, err := getTxns(proc)
@@ -434,8 +434,8 @@ func moTransactionsCall(_ int, proc *process.Process, arg *Argument, result *vm.
 		}
 
 		//alloc batch
-		bat := batch.NewWithSize(len(arg.Attrs))
-		for i, col := range arg.Attrs {
+		bat := batch.NewWithSize(len(tableFunction.Attrs))
+		for i, col := range tableFunction.Attrs {
 			col = strings.ToLower(col)
 			idx, ok := plan2.MoTransactionsColName2Index[col]
 			if !ok {
@@ -445,7 +445,7 @@ func moTransactionsCall(_ int, proc *process.Process, arg *Argument, result *vm.
 			tp := plan2.MoTransactionsColTypes[idx]
 			bat.Vecs[i] = proc.GetVector(tp)
 		}
-		bat.Attrs = arg.Attrs
+		bat.Attrs = tableFunction.Attrs
 		for _, rsp := range rsps {
 			if rsp == nil || len(rsp.TxnInfoList) == 0 {
 				continue
@@ -508,7 +508,7 @@ func moTransactionsCall(_ int, proc *process.Process, arg *Argument, result *vm.
 					record[plan2.MoTransactionsColTypeLockContent] = []byte{}
 					record[plan2.MoTransactionsColTypeLockMode] = []byte{}
 
-					if err := fillTxnRecord(proc, arg.Attrs, bat, record); err != nil {
+					if err := fillTxnRecord(proc, tableFunction.Attrs, bat, record); err != nil {
 						return false, err
 					}
 				} else {
@@ -546,7 +546,7 @@ func moTransactionsCall(_ int, proc *process.Process, arg *Argument, result *vm.
 						lockMode := options.GetMode().String()
 						record[plan2.MoTransactionsColTypeLockMode] = []byte(lockMode)
 
-						if err := fillTxnRecord(proc, arg.Attrs, bat, record); err != nil {
+						if err := fillTxnRecord(proc, tableFunction.Attrs, bat, record); err != nil {
 							return false, err
 						}
 					}
@@ -557,13 +557,13 @@ func moTransactionsCall(_ int, proc *process.Process, arg *Argument, result *vm.
 
 		bat.SetRowCount(bat.Vecs[0].Length())
 		result.Batch = bat
-		arg.ctr.state = dataFinished
+		tableFunction.ctr.state = dataFinished
 		return false, nil
 
 	case dataFinished:
 		return true, nil
 	default:
-		return false, moerr.NewInternalError(proc.Ctx, "unknown state %v", arg.ctr.state)
+		return false, moerr.NewInternalError(proc.Ctx, "unknown state %v", tableFunction.ctr.state)
 	}
 }
 
@@ -605,19 +605,19 @@ func getTxns(proc *process.Process) ([]*query.GetTxnInfoResponse, error) {
 	return rsps, err
 }
 
-func moCachePrepare(proc *process.Process, arg *Argument) error {
-	arg.ctr.state = dataProducing
-	if len(arg.Args) > 0 {
+func moCachePrepare(proc *process.Process, tableFunction *TableFunction) error {
+	tableFunction.ctr.state = dataProducing
+	if len(tableFunction.Args) > 0 {
 		return moerr.NewInvalidInput(proc.Ctx, "moCache: no argument is required")
 	}
-	for i := range arg.Attrs {
-		arg.Attrs[i] = strings.ToUpper(arg.Attrs[i])
+	for i := range tableFunction.Attrs {
+		tableFunction.Attrs[i] = strings.ToUpper(tableFunction.Attrs[i])
 	}
 	return nil
 }
 
-func moCacheCall(_ int, proc *process.Process, arg *Argument, result *vm.CallResult) (bool, error) {
-	switch arg.ctr.state {
+func moCacheCall(_ int, proc *process.Process, tableFunction *TableFunction, result *vm.CallResult) (bool, error) {
+	switch tableFunction.ctr.state {
 	case dataProducing:
 
 		rsps, err := getCacheStats(proc)
@@ -626,8 +626,8 @@ func moCacheCall(_ int, proc *process.Process, arg *Argument, result *vm.CallRes
 		}
 
 		//alloc batch
-		bat := batch.NewWithSize(len(arg.Attrs))
-		for i, col := range arg.Attrs {
+		bat := batch.NewWithSize(len(tableFunction.Attrs))
+		for i, col := range tableFunction.Attrs {
 			col = strings.ToLower(col)
 			idx, ok := plan2.MoCacheColName2Index[col]
 			if !ok {
@@ -637,7 +637,7 @@ func moCacheCall(_ int, proc *process.Process, arg *Argument, result *vm.CallRes
 			tp := plan2.MoCacheColTypes[idx]
 			bat.Vecs[i] = proc.GetVector(tp)
 		}
-		bat.Attrs = arg.Attrs
+		bat.Attrs = tableFunction.Attrs
 		for _, rsp := range rsps {
 			if rsp == nil || len(rsp.CacheInfoList) == 0 {
 				continue
@@ -648,7 +648,7 @@ func moCacheCall(_ int, proc *process.Process, arg *Argument, result *vm.CallRes
 					continue
 				}
 
-				if err = fillCacheRecord(proc, arg.Attrs, bat, cache); err != nil {
+				if err = fillCacheRecord(proc, tableFunction.Attrs, bat, cache); err != nil {
 					return false, err
 				}
 			}
@@ -656,14 +656,14 @@ func moCacheCall(_ int, proc *process.Process, arg *Argument, result *vm.CallRes
 
 		bat.SetRowCount(bat.Vecs[0].Length())
 		result.Batch = bat
-		arg.ctr.state = dataFinished
+		tableFunction.ctr.state = dataFinished
 		return false, nil
 
 	case dataFinished:
 		result.Batch = nil
 		return true, nil
 	default:
-		return false, moerr.NewInternalError(proc.Ctx, "unknown state %v", arg.ctr.state)
+		return false, moerr.NewInternalError(proc.Ctx, "unknown state %v", tableFunction.ctr.state)
 	}
 }
 

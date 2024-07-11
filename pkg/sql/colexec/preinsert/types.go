@@ -25,14 +25,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(PreInsert)
 
 type proc = process.Process
 
 type container struct {
 	buf *batch.Batch
 }
-type Argument struct {
+type PreInsert struct {
 	ctr *container
 	Ctx context.Context
 
@@ -47,48 +47,48 @@ type Argument struct {
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (preInsert *PreInsert) GetOperatorBase() *vm.OperatorBase {
+	return &preInsert.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[PreInsert](
+		func() *PreInsert {
+			return &PreInsert{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *PreInsert) {
+			*a = PreInsert{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[PreInsert]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (preInsert PreInsert) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *PreInsert {
+	return reuse.Alloc[PreInsert](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (preInsert *PreInsert) Release() {
+	if preInsert != nil {
+		reuse.Free[PreInsert](preInsert, nil)
 	}
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	arg.Free(proc, pipelineFailed, err)
+func (preInsert *PreInsert) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	preInsert.Free(proc, pipelineFailed, err)
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if arg.ctr != nil {
-		if arg.ctr.buf != nil {
-			arg.ctr.buf.Clean(proc.Mp())
-			arg.ctr = nil
+func (preInsert *PreInsert) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if preInsert.ctr != nil {
+		if preInsert.ctr.buf != nil {
+			preInsert.ctr.buf.Clean(proc.Mp())
+			preInsert.ctr = nil
 		}
-		arg.ctr = nil
+		preInsert.ctr = nil
 	}
 
 }

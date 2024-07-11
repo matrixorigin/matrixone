@@ -25,28 +25,28 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "merge_group"
+const opName = "merge_group"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (mergeGroup *MergeGroup) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": mergeroup()")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) error {
-	arg.ctr = new(container)
-	arg.ctr.InitReceiver(proc, true)
-	arg.ctr.inserted = make([]uint8, hashmap.UnitLimit)
-	arg.ctr.zInserted = make([]uint8, hashmap.UnitLimit)
+func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
+	mergeGroup.ctr = new(container)
+	mergeGroup.ctr.InitReceiver(proc, true)
+	mergeGroup.ctr.inserted = make([]uint8, hashmap.UnitLimit)
+	mergeGroup.ctr.zInserted = make([]uint8, hashmap.UnitLimit)
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	ctr := arg.ctr
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	ctr := mergeGroup.ctr
+	anal := proc.GetAnalyze(mergeGroup.GetIdx(), mergeGroup.GetParallelIdx(), mergeGroup.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 	result := vm.NewCallResult()
@@ -65,7 +65,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 					break
 				}
 				bat := msg.Batch
-				anal.Input(bat, arg.GetIsFirst())
+				anal.Input(bat, mergeGroup.GetIsFirst())
 				if err = ctr.process(bat, proc); err != nil {
 					bat.Clean(proc.Mp())
 					return result, err
@@ -75,10 +75,10 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Eval:
 			if ctr.bat != nil {
-				if arg.NeedEval {
+				if mergeGroup.NeedEval {
 					for i, agg := range ctr.bat.Aggs {
-						if len(arg.PartialResults) > i && arg.PartialResults[i] != nil {
-							if err := agg.SetExtraInformation(arg.PartialResults[i], 0); err != nil {
+						if len(mergeGroup.PartialResults) > i && mergeGroup.PartialResults[i] != nil {
+							if err := agg.SetExtraInformation(mergeGroup.PartialResults[i], 0); err != nil {
 								return result, err
 							}
 						}
@@ -97,7 +97,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 					}
 					ctr.bat.Aggs = nil
 				}
-				anal.Output(ctr.bat, arg.GetIsLast())
+				anal.Output(ctr.bat, mergeGroup.GetIsLast())
 				result.Batch = ctr.bat
 			}
 			ctr.state = End

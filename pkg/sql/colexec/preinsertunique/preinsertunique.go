@@ -33,28 +33,28 @@ const (
 	rowIdColPos
 )
 
-const argName = "pre_insert_unique"
+const opName = "pre_insert_unique"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (preInsertUnique *PreInsertUnique) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": pre processing insert unique key")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) error {
-	arg.ctr = new(container)
+func (preInsertUnique *PreInsertUnique) Prepare(proc *process.Process) error {
+	preInsertUnique.ctr = new(container)
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (preInsertUnique *PreInsertUnique) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	result, err := arg.GetChildren(0).Call(proc)
+	result, err := preInsertUnique.GetChildren(0).Call(proc)
 	if err != nil {
 		return result, err
 	}
-	analy := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	analy := proc.GetAnalyze(preInsertUnique.GetIdx(), preInsertUnique.GetParallelIdx(), preInsertUnique.GetParallelMajor())
 	analy.Start()
 	defer analy.Stop()
 
@@ -65,20 +65,20 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	var vec *vector.Vector
 	var bitMap *nulls.Nulls
 
-	uniqueColumnPos := arg.PreInsertCtx.Columns
-	pkPos := int(arg.PreInsertCtx.PkColumn)
+	uniqueColumnPos := preInsertUnique.PreInsertCtx.Columns
+	pkPos := int(preInsertUnique.PreInsertCtx.PkColumn)
 
-	if arg.ctr.buf != nil {
-		proc.PutBatch(arg.ctr.buf)
-		arg.ctr.buf = nil
+	if preInsertUnique.ctr.buf != nil {
+		proc.PutBatch(preInsertUnique.ctr.buf)
+		preInsertUnique.ctr.buf = nil
 	}
 	isUpdate := inputBat.Vecs[len(inputBat.Vecs)-1].GetType().Oid == types.T_Rowid
 	if isUpdate {
-		arg.ctr.buf = batch.NewWithSize(3)
-		arg.ctr.buf.Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName, catalog.Row_ID}
+		preInsertUnique.ctr.buf = batch.NewWithSize(3)
+		preInsertUnique.ctr.buf.Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName, catalog.Row_ID}
 	} else {
-		arg.ctr.buf = batch.NewWithSize(2)
-		arg.ctr.buf.Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName}
+		preInsertUnique.ctr.buf = batch.NewWithSize(2)
+		preInsertUnique.ctr.buf.Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName}
 	}
 
 	colCount := len(uniqueColumnPos)
@@ -94,27 +94,27 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		for vIdx, pIdx := range uniqueColumnPos {
 			vs[vIdx] = inputBat.Vecs[pIdx]
 		}
-		vec, bitMap, err = util.SerialWithCompacted(vs, proc, &arg.packers)
+		vec, bitMap, err = util.SerialWithCompacted(vs, proc, &preInsertUnique.packers)
 		if err != nil {
 			return result, err
 		}
 	}
-	arg.ctr.buf.SetVector(indexColPos, vec)
-	arg.ctr.buf.SetRowCount(vec.Length())
+	preInsertUnique.ctr.buf.SetVector(indexColPos, vec)
+	preInsertUnique.ctr.buf.SetRowCount(vec.Length())
 
 	vec, err = util.CompactPrimaryCol(inputBat.Vecs[pkPos], bitMap, proc)
 	if err != nil {
 		return result, err
 	}
-	arg.ctr.buf.SetVector(pkColPos, vec)
+	preInsertUnique.ctr.buf.SetVector(pkColPos, vec)
 
 	if isUpdate {
 		rowIdInBat := len(inputBat.Vecs) - 1
-		arg.ctr.buf.SetVector(rowIdColPos, proc.GetVector(*inputBat.Vecs[rowIdInBat].GetType()))
-		if err = arg.ctr.buf.Vecs[rowIdColPos].UnionBatch(inputBat.Vecs[rowIdInBat], 0, inputBat.Vecs[rowIdInBat].Length(), nil, proc.Mp()); err != nil {
+		preInsertUnique.ctr.buf.SetVector(rowIdColPos, proc.GetVector(*inputBat.Vecs[rowIdInBat].GetType()))
+		if err = preInsertUnique.ctr.buf.Vecs[rowIdColPos].UnionBatch(inputBat.Vecs[rowIdInBat], 0, inputBat.Vecs[rowIdInBat].Length(), nil, proc.Mp()); err != nil {
 			return result, err
 		}
 	}
-	result.Batch = arg.ctr.buf
+	result.Batch = preInsertUnique.ctr.buf
 	return result, nil
 }
