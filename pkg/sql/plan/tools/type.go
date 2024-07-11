@@ -88,7 +88,7 @@ type SColDef struct {
 }
 
 type RValueMatcher interface {
-	GetAssignedVar(*plan2.Node, plan.UnorderedMap[string, string]) *SColDef
+	GetAssignedVar(*plan2.Node, plan.UnorderedMap[string, string]) (*SColDef, error)
 	String() string
 }
 
@@ -117,6 +117,18 @@ type StringPair struct {
 
 func NewStringPair(k, v string) StringPair {
 	return StringPair{
+		Key:   k,
+		Value: v,
+	}
+}
+
+type AssignPair struct {
+	Key   string
+	Value *ExprMatcher
+}
+
+func NewAssignPair(k string, v *ExprMatcher) AssignPair {
+	return AssignPair{
 		Key:   k,
 		Value: v,
 	}

@@ -87,3 +87,50 @@ func Test_strictTableScan(t *testing.T) {
 		"SELECT  l_orderkey, l_extendedprice FROM lineitem", p)
 	assert.Nil(t, err)
 }
+
+func Test_constant(t *testing.T) {
+	//mo does not have the OUTPUT node
+	p :=
+		TOutput([]string{"L_ORDERKEY"},
+			TAnyTree(
+				TTableScan("lineitem",
+					NewStringMap(
+						NewStringPair("L_ORDERKEY", "l_orderkey"),
+					),
+				),
+			),
+		)
+	err := AssertPlan(context.Background(), nil,
+		"SELECT  l_orderkey, 2 FROM lineitem group by l_orderkey", p)
+	assert.Nil(t, err)
+}
+
+func Test_aliasConstant(t *testing.T) {
+	p :=
+		TProject(
+			NewAssignMap(NewAssignPair("TWO", TExpr("2"))),
+			TTableScan("lineitem",
+				NewStringMap(
+					NewStringPair("L_ORDERKEY", "l_orderkey"),
+				),
+			),
+		)
+	err := AssertPlan(context.Background(), nil,
+		"SELECT  l_orderkey, 2 FROM lineitem", p)
+	assert.Nil(t, err)
+}
+
+func Test_aliasExpr(t *testing.T) {
+	p :=
+		TProject(
+			NewAssignMap(NewAssignPair("EXPR", TExpr("1 + L_ORDERKEY"))),
+			TTableScan("lineitem",
+				NewStringMap(
+					NewStringPair("L_ORDERKEY", "l_orderkey"),
+				),
+			),
+		)
+	err := AssertPlan(context.Background(), nil,
+		"SELECT  l_orderkey, 1 + l_orderkey FROM lineitem", p)
+	assert.Nil(t, err)
+}

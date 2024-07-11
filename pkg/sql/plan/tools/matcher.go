@@ -21,6 +21,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
@@ -30,6 +33,9 @@ var _ Matcher = new(AliasMatcher)
 var _ Matcher = new(SymbolsMatcher)
 var _ Matcher = new(AssignedSymbolsMatcher)
 var _ Matcher = new(OutputMatcher)
+
+var _ RValueMatcher = new(ColumnRef)
+var _ RValueMatcher = new(ExprMatcher)
 
 type NodeMatcher struct {
 	NodeType plan2.Node_NodeType
@@ -91,7 +97,7 @@ type AliasMatcher struct {
 
 func (matcher *AliasMatcher) String() string {
 	if len(matcher.Alias) != 0 {
-		return fmt.Sprintf("bind %s -> %s", matcher.Alias, matcher.Matcher)
+		return fmt.Sprintf("bind %s -> %s", matcher.Alias, matcher.Matcher.String())
 	}
 	return fmt.Sprintf("bind %s", matcher.Matcher)
 }
@@ -101,14 +107,15 @@ func (matcher *AliasMatcher) SimpleMatch(node *plan.Node) bool {
 }
 
 func (matcher *AliasMatcher) DeepMatch(ctx context.Context, node *plan.Node, aliases plan.UnorderedMap[string, string]) (*MatchResult, error) {
-	colDef := matcher.Matcher.GetAssignedVar(node, aliases)
+	colDef, err := matcher.Matcher.GetAssignedVar(node, aliases)
+	if err != nil {
+		return nil, err
+	}
 	if colDef != nil && len(matcher.Alias) != 0 {
 		return MatchedWithAlias(matcher.Alias, colDef.Name), nil
 	}
 	return NewMatchResult(colDef != nil, nil), nil
 }
-
-var _ RValueMatcher = new(ColumnRef)
 
 type ColumnRef struct {
 	TableName  string
@@ -119,13 +126,13 @@ func (matcher *ColumnRef) String() string {
 	return fmt.Sprintf("Column %s:%s", matcher.TableName, matcher.ColumnName)
 }
 
-func (matcher *ColumnRef) GetAssignedVar(node *plan2.Node, aliases plan.UnorderedMap[string, string]) *SColDef {
+func (matcher *ColumnRef) GetAssignedVar(node *plan2.Node, aliases plan.UnorderedMap[string, string]) (*SColDef, error) {
 	if node.NodeType != plan2.Node_TABLE_SCAN {
-		return nil
+		return nil, nil
 	}
 
 	if matcher.TableName != node.TableDef.Name {
-		return nil
+		return nil, nil
 	}
 
 	for _, col := range node.TableDef.Cols {
@@ -133,10 +140,10 @@ func (matcher *ColumnRef) GetAssignedVar(node *plan2.Node, aliases plan.Unordere
 			return &SColDef{
 				Name: col.Name,
 				Type: col.Typ,
-			}
+			}, nil
 		}
 	}
-	return nil
+	return nil, nil
 }
 
 type GetFunc func(*plan.QueryBuilder, *plan2.Node) []SColDef
@@ -197,7 +204,10 @@ func (matcher *AssignedSymbolsMatcher) DeepMatch(ctx context.Context, node *plan
 
 	expectCols := make([]SColDef, 0)
 	for _, eMatcher := range matcher.ExpectedMatchers {
-		colDef := eMatcher.GetAssignedVar(node, aliases)
+		colDef, err := eMatcher.GetAssignedVar(node, aliases)
+		if err != nil {
+			return nil, err
+		}
 		if colDef == nil {
 			return FailMatched(), nil
 		}
@@ -243,4 +253,55 @@ func (matcher *OutputMatcher) DeepMatch(ctx context.Context, node *plan.Node, al
 		}
 	}
 	return Matched(), nil
+}
+
+type ExprMatcher struct {
+	Sql  string
+	Expr tree.SelectExpr
+}
+
+func NewExprMatcher(sql string) *ExprMatcher {
+	exSql := "select " + sql
+	one, err := parsers.ParseOne(context.Background(), dialect.MYSQL, exSql, 1)
+	if err != nil {
+		panic(err)
+	}
+	expr := one.(*tree.Select).Select.(*tree.SelectClause).Exprs[0]
+
+	return &ExprMatcher{
+		Sql:  sql,
+		Expr: expr,
+	}
+}
+
+func (matcher *ExprMatcher) GetAssignedVar(node *plan2.Node, alias plan.UnorderedMap[string, string]) (*SColDef, error) {
+	var res *SColDef
+	checkedExprs := make([]*plan2.Expr, 0)
+	for _, expr := range node.ProjectList {
+		eChecker := &ExprChecker{}
+		check, err := eChecker.Check(matcher.Expr.Expr, expr)
+		if err != nil {
+			return nil, err
+		}
+		if check {
+			res = &SColDef{
+				Name: expr.String(),
+				Type: expr.GetTyp(),
+			}
+			checkedExprs = append(checkedExprs, expr)
+		}
+	}
+
+	if len(checkedExprs) > 1 {
+		return nil, moerr.NewInternalError(context.Background(),
+			"expr %s matches multiple assignments",
+			matcher.Sql,
+		)
+	}
+
+	return res, nil
+}
+
+func (matcher *ExprMatcher) String() string {
+	return matcher.Sql
 }

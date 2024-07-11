@@ -88,6 +88,22 @@ func TStrictOutput(outputs []string, child *MatchPattern) *MatchPattern {
 	return ret.WithExactOutputs(outputs...)
 }
 
+func TProjectWithoutAssignments(child *MatchPattern) *MatchPattern {
+	return TNode(plan2.Node_PROJECT, child)
+}
+
+func TProject(assigns plan.UnorderedMap[string, *ExprMatcher], child *MatchPattern) *MatchPattern {
+	ret := TProjectWithoutAssignments(child)
+	for k, matcher := range assigns {
+		ret.WithAlias(k, matcher)
+	}
+	return ret
+}
+
+func TExpr(e string) *ExprMatcher {
+	return NewExprMatcher(e)
+}
+
 func (pattern *MatchPattern) With(matcher Matcher) *MatchPattern {
 	pattern.Matchers = append(pattern.Matchers, matcher)
 	return pattern
@@ -163,14 +179,19 @@ func (pattern *MatchPattern) IsEnd() bool {
 func SimpleMatch(pattern *MatchPattern, node *plan2.Node) []*MatchingState {
 	states := make([]*MatchingState, 0)
 	if pattern.AnyTree {
-		childPatterns := make([]*MatchPattern, len(node.Children))
-		//TODO:fix me?
-		for i := 0; i < len(node.Children); i++ {
-			childPatterns[i] = pattern
+		if len(node.Children) > 1 {
+			childPatterns := make([]*MatchPattern, len(node.Children))
+			for i := 0; i < len(node.Children); i++ {
+				childPatterns[i] = pattern
+			}
+			states = append(states, &MatchingState{
+				Patterns: childPatterns,
+			})
+		} else {
+			states = append(states, &MatchingState{
+				Patterns: []*MatchPattern{pattern},
+			})
 		}
-		states = append(states, &MatchingState{
-			Patterns: childPatterns,
-		})
 	}
 
 	if len(node.Children) == len(pattern.Children) &&
@@ -457,4 +478,12 @@ func SColDefsEqual(a, b []SColDef) bool {
 		}
 	}
 	return true
+}
+
+func NewAssignMap(pairs ...AssignPair) plan.UnorderedMap[string, *ExprMatcher] {
+	ret := make(plan.UnorderedMap[string, *ExprMatcher])
+	for _, pair := range pairs {
+		ret.Insert(pair.Key, pair.Value)
+	}
+	return ret
 }
