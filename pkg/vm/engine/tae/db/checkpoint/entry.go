@@ -318,3 +318,13 @@ func (m *MetaFile) GetEnd() types.TS {
 func (m *MetaFile) GetName() string {
 	return m.name
 }
+
+func NewMetaFile(index int, start, end types.TS, name string) *MetaFile {
+	return &MetaFile{
+		index: index,
+		start: start,
+		end:   end,
+		name:  name,
+	}
+
+}
