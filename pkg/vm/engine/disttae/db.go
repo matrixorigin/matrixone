@@ -510,7 +510,16 @@ func (e *Engine) GetOrCreateLatestPart(
 func (e *Engine) LazyLoadLatestCkp(
 	ctx context.Context,
 	tblHandler engine.Relation) (*logtailreplay.Partition, error) {
-	tbl := tblHandler.(*txnTable)
+
+	var (
+		ok  bool
+		tbl *txnTable
+	)
+
+	if tbl, ok = tblHandler.(*txnTable); !ok {
+		delegate := tblHandler.(*txnTableDelegate)
+		tbl = delegate.origin
+	}
 
 	part := e.GetOrCreateLatestPart(tbl.db.databaseId, tbl.tableId)
 	cache := e.getLatestCatalogCache()

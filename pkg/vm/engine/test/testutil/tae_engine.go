@@ -33,6 +33,8 @@ import (
 )
 
 type TestTxnStorage struct {
+	t             *testing.T
+	accountId     uint32
 	schema        *catalog.Schema
 	taeHandler    *rpc.Handle
 	logtailServer *TestLogtailServer
@@ -136,12 +138,12 @@ func NewTestTAEEngine(
 	}
 
 	tc := &TestTxnStorage{
+		t:             t,
 		taeHandler:    taeHandler,
 		logtailServer: logtailServer,
 	}
 
 	return tc, nil
-
 }
 
 func InitTestDB(ctx context.Context, moduleName string, t *testing.T, opts *options.Options) *rpc.Handle {

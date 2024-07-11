@@ -21,12 +21,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	testutil2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
 	"github.com/panjf2000/ants/v2"
@@ -84,10 +86,10 @@ func Test_Append(t *testing.T) {
 
 			var err error
 			txn, _ := taeEngine.GetDB().StartTxn(nil)
-			database, _ = txn.GetDatabase(databaseName)
-			rel, err = database.GetRelationByName(schema.Name)
+			tmpDB, _ := txn.GetDatabase(databaseName)
+			tmpRel, err := tmpDB.GetRelationByName(schema.Name)
 			assert.Nil(t, err)
-			err = rel.Append(context.Background(), b)
+			err = tmpRel.Append(context.Background(), b)
 			assert.Nil(t, err)
 			err = txn.Commit(context.Background())
 			assert.Nil(t, err)
@@ -155,7 +157,6 @@ func Test_Append(t *testing.T) {
 
 	// flush all aobj into one nobj
 	testutil2.CompactBlocks(t, accountId, taeEngine.GetDB(), database.GetName(), schema, false)
-	require.Nil(t, err)
 	// check again after flush
 	{
 		stats, err := disttaeEngine.GetPartitionStateStats(ctx, rel.ID(), database.GetID())
@@ -176,4 +177,111 @@ func Test_Append(t *testing.T) {
 
 		require.Equal(t, expect, stats.Summary())
 	}
+}
+
+func Test_Bug_CKPOverwrittenWAL(t *testing.T) {
+	t.Skip("not finished")
+	var (
+		txn          txnif.AsyncTxn
+		opts         testutil.TestOptions
+		rel          handle.Relation
+		database     handle.Database
+		accountId    = uint32(0)
+		tableName    = "test1"
+		databaseName = "db1"
+	)
+
+	// make sure that disabled all auto ckp and flush
+	opts.TaeEngineOptions = config.WithLongScanAndCKPOpts(nil)
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, accountId)
+	disttaeEngine, taeEngine, rpcAgent, _ := testutil.CreateEngines(ctx, opts, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeEngine.Close(true)
+		rpcAgent.Close()
+	}()
+
+	schema := catalog.MockSchemaAll(2, 0)
+	schema.Name = tableName
+	schema.BlockMaxRows = 20
+	schema.ObjectMaxBlocks = 2
+	taeEngine.BindSchema(schema)
+
+	bat := catalog.MockBatch(schema, 40)
+
+	var err error
+	{
+		txn, _ = taeEngine.GetDB().StartTxn(nil)
+		database, err = txn.CreateDatabase(databaseName, "", "")
+		require.Nil(t, err)
+
+		rel, err = database.CreateRelation(schema)
+		require.Nil(t, err)
+
+		err = rel.Append(ctx, bat)
+		require.Nil(t, err)
+
+		err = txn.Commit(context.Background())
+		require.Nil(t, err)
+	}
+
+	//ckpTS := types.TimestampToTS(disttaeEngine.Now())
+	err = taeEngine.GetDB().ForceCheckpoint(ctx, types.MaxTs(), time.Second)
+	require.Nil(t, err)
+
+	{
+		txn, _ = taeEngine.GetDB().StartTxn(nil)
+		database, err = txn.GetDatabase(databaseName)
+		rel, err = database.GetRelationByName(tableName)
+	}
+
+	// delete to generate delta loc
+	{
+		blkId := rel.MakeObjectIt().GetObject().GetMeta().(*catalog.ObjectEntry).AsCommonID()
+		require.Nil(t, rel.RangeDelete(blkId, 0, 0, handle.DT_Normal))
+		require.Nil(t, txn.Commit(context.Background()))
+		testutil2.CompactBlocks(t, accountId, taeEngine.GetDB(), databaseName, schema, false)
+	}
+
+	// check partition state without consume ckp
+	{
+		err = disttaeEngine.Engine.TryToSubscribeTable(ctx, rel.ID(), database.GetID())
+		require.Nil(t, err)
+
+		stats, err := disttaeEngine.GetPartitionStateStats(ctx, rel.ID(), database.GetID())
+		require.Nil(t, err)
+
+		fmt.Println(stats.String())
+
+		expected := testutil.PartitionStateStats{
+			DataObjectsVisible:   testutil.PObjectStats{ObjCnt: 1, BlkCnt: 2, RowCnt: 40},
+			DataObjectsInvisible: testutil.PObjectStats{ObjCnt: 2, BlkCnt: 2, RowCnt: 40},
+			InmemRows:            testutil.PInmemRowsStats{},
+			CheckpointCnt:        1,
+		}
+
+		require.Equal(t, expected, stats.Summary())
+	}
+
+	// consume ckp
+	{
+		txnOp, err := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Now())
+		require.Nil(t, err)
+
+		engineDB, err := disttaeEngine.Engine.Database(ctx, databaseName, txnOp)
+		require.Nil(t, err)
+
+		engineTbl, err := engineDB.Relation(ctx, tableName, nil)
+		require.Nil(t, err)
+
+		_, err = disttaeEngine.Engine.LazyLoadLatestCkp(ctx, engineTbl)
+		require.Nil(t, err)
+
+		stats, err := disttaeEngine.GetPartitionStateStats(ctx, rel.ID(), database.GetID())
+		require.Nil(t, err)
+
+		fmt.Println(stats.String())
+
+	}
+
 }
