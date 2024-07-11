@@ -100,11 +100,8 @@ func (entry *mergeObjectsEntry) prepareTransferPage() {
 	k := 0
 	model.SetFileService(entry.rt.Fs.Service)
 	for _, obj := range entry.droppedObjs {
-		name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+		ioVector := InitTransferPageIO()
 		pages := make([]*model.TransferHashPage, 0, obj.BlockCnt())
-		ioVector := fileservice.IOVector{
-			FilePath: name.String(),
-		}
 		var duration time.Duration
 		var start time.Time
 		for j := 0; j < obj.BlockCnt(); j++ {
@@ -128,7 +125,7 @@ func (entry *mergeObjectsEntry) prepareTransferPage() {
 			page.Train(mapping)
 
 			start = time.Now()
-			err := AddTransferPage(page, &ioVector)
+			err := AddTransferPage(page, ioVector)
 			if err != nil {
 				return
 			}
@@ -140,7 +137,7 @@ func (entry *mergeObjectsEntry) prepareTransferPage() {
 		}
 
 		start = time.Now()
-		err := WriteTransferPage(pages, ioVector, entry.rt.Fs.Service)
+		err := WriteTransferPage(pages, *ioVector, entry.rt.Fs.Service)
 		if err != nil {
 			return
 		}
@@ -402,6 +399,13 @@ func (entry *mergeObjectsEntry) PrepareCommit() (err error) {
 	}
 
 	return
+}
+
+func InitTransferPageIO() *fileservice.IOVector {
+	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+	return &fileservice.IOVector{
+		FilePath: "transfer-" + name.String(),
+	}
 }
 
 func AddTransferPage(page *model.TransferHashPage, ioVector *fileservice.IOVector) error {

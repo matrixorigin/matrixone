@@ -82,7 +82,7 @@ type TransferHashPage struct {
 func NewTransferHashPage(id *common.ID, ts time.Time, pageSize int, isTransient bool, opts ...Option) *TransferHashPage {
 	params := TransferHashPageParams{
 		TTL:     5 * time.Second,
-		DiskTTL: 10 * time.Minute,
+		DiskTTL: 3 * time.Minute,
 	}
 	for _, opt := range opts {
 		opt(&params)
@@ -268,6 +268,7 @@ func (page *TransferHashPage) ClearPersistTable() {
 	if page.path.Name == "" {
 		return
 	}
+	logutil.Infof("delete transfer page %v, name %v", page.String(), page.path.Name)
 	FS.Delete(context.Background(), page.path.Name)
 }
 

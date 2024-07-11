@@ -23,7 +23,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -125,11 +124,8 @@ func NewFlushTableTailEntry(
 // add transfer pages for dropped aobjects
 func (entry *flushTableTailEntry) addTransferPages() {
 	isTransient := !entry.tableEntry.GetLastestSchemaLocked().HasPK()
-	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+	ioVector := InitTransferPageIO()
 	pages := make([]*model.TransferHashPage, 0, len(entry.transMappings.Mappings))
-	ioVector := fileservice.IOVector{
-		FilePath: name.String(),
-	}
 	model.SetFileService(entry.rt.Fs.Service)
 	var duration time.Duration
 	var start time.Time
@@ -150,7 +146,7 @@ func (entry *flushTableTailEntry) addTransferPages() {
 		page.Train(mapping)
 
 		start = time.Now()
-		err := AddTransferPage(page, &ioVector)
+		err := AddTransferPage(page, ioVector)
 		if err != nil {
 			return
 		}
@@ -161,7 +157,7 @@ func (entry *flushTableTailEntry) addTransferPages() {
 	}
 
 	start = time.Now()
-	err := WriteTransferPage(pages, ioVector, entry.rt.Fs.Service)
+	err := WriteTransferPage(pages, *ioVector, entry.rt.Fs.Service)
 	if err != nil {
 		return
 	}
