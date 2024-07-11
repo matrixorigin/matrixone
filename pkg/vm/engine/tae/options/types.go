@@ -83,6 +83,7 @@ type Options struct {
 	LogStoreT        LogstoreType
 
 	Fs                fileservice.FileService                  `toml:"-"`
+	LocalFs           fileservice.FileService                  `toml:"-"`
 	Lc                logservicedriver.LogServiceClientFactory `toml:"-"`
 	Ctx               context.Context                          `toml:"-"`
 	Shard             metadata.TNShard                         `toml:"-"`

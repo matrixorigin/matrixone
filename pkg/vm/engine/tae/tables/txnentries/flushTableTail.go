@@ -126,7 +126,6 @@ func (entry *flushTableTailEntry) addTransferPages() {
 	isTransient := !entry.tableEntry.GetLastestSchemaLocked().HasPK()
 	ioVector := InitTransferPageIO()
 	pages := make([]*model.TransferHashPage, 0, len(entry.transMappings.Mappings))
-	model.SetFileService(entry.rt.Fs.Service)
 	var duration time.Duration
 	var start time.Time
 	for i, mcontainer := range entry.transMappings.Mappings {
@@ -157,7 +156,7 @@ func (entry *flushTableTailEntry) addTransferPages() {
 	}
 
 	start = time.Now()
-	err := WriteTransferPage(pages, *ioVector, entry.rt.Fs.Service)
+	err := WriteTransferPage(pages, *ioVector)
 	if err != nil {
 		return
 	}

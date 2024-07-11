@@ -93,6 +93,10 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		// TODO:fileservice needs to be passed in as a parameter
 		opts.Fs = objectio.TmpNewFileservice(ctx, path.Join(dirname, "data"))
 	}
+	if opts.LocalFs == nil {
+		opts.LocalFs = objectio.TmpNewFileservice(ctx, path.Join(dirname, "data"))
+	}
+	model.SetFileService(opts.LocalFs)
 
 	db = &DB{
 		Dir:          dirname,
