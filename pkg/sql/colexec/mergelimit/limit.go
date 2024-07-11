@@ -33,6 +33,10 @@ func (mergeLimit *MergeLimit) String(buf *bytes.Buffer) {
 	buf.WriteString(fmt.Sprintf("mergeLimit(%v)", ap.Limit))
 }
 
+func (mergeLimit *MergeLimit) OpType() vm.OpType {
+	return vm.MergeLimit
+}
+
 func (mergeLimit *MergeLimit) Prepare(proc *process.Process) error {
 	mergeLimit.ctr = new(container)
 	mergeLimit.ctr.seen = 0

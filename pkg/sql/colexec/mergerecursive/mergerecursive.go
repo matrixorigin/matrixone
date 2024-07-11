@@ -28,6 +28,10 @@ func (mergeRecursive *MergeRecursive) String(buf *bytes.Buffer) {
 	buf.WriteString(": merge recursive ")
 }
 
+func (mergeRecursive *MergeRecursive) OpType() vm.OpType {
+	return vm.MergeRecursive
+}
+
 func (mergeRecursive *MergeRecursive) Prepare(proc *process.Process) error {
 	mergeRecursive.ctr = new(container)
 	mergeRecursive.ctr.InitReceiver(proc, true)

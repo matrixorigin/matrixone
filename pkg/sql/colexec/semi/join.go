@@ -32,6 +32,10 @@ func (semiJoin *SemiJoin) String(buf *bytes.Buffer) {
 	buf.WriteString(": semi join ")
 }
 
+func (semiJoin *SemiJoin) OpType() vm.OpType {
+	return vm.Semi
+}
+
 func (semiJoin *SemiJoin) Prepare(proc *process.Process) (err error) {
 	semiJoin.ctr = new(container)
 	semiJoin.ctr.InitReceiver(proc, false)

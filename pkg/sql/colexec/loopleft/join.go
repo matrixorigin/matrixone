@@ -31,6 +31,10 @@ func (loopLeft *LoopLeft) String(buf *bytes.Buffer) {
 	buf.WriteString(": loop left join ")
 }
 
+func (loopLeft *LoopLeft) OpType() vm.OpType {
+	return vm.LoopLeft
+}
+
 func (loopLeft *LoopLeft) Prepare(proc *process.Process) error {
 	var err error
 

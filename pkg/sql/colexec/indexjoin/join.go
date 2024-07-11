@@ -30,6 +30,10 @@ func (indexJoin *IndexJoin) String(buf *bytes.Buffer) {
 	buf.WriteString(": index join ")
 }
 
+func (indexJoin *IndexJoin) OpType() vm.OpType {
+	return vm.IndexJoin
+}
+
 func (indexJoin *IndexJoin) Prepare(proc *process.Process) (err error) {
 	ap := indexJoin
 	ap.ctr = new(container)
