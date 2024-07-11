@@ -1661,6 +1661,8 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 			indexDef, tableDef, err = buildIvfFlatSecondaryIndexDef(ctx, indexInfo, colMap, pkeyName)
 		case tree.INDEX_TYPE_MASTER:
 			indexDef, tableDef, err = buildMasterSecondaryIndexDef(ctx, indexInfo, colMap, pkeyName)
+		case tree.INDEX_TYPE_LLM:
+			indexDef, tableDef, err = buildLlmSecondaryIndexDef(ctx, indexInfo, colMap, pkeyName)
 		default:
 			return moerr.NewInvalidInputNoCtx("unsupported index type: %s", indexInfo.KeyType.ToString())
 		}
@@ -1921,6 +1923,104 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		indexDef.IndexAlgoParams = ""
 	}
 	return []*plan.IndexDef{indexDef}, []*TableDef{tableDef}, nil
+}
+
+func buildLlmSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, pkeyName string) ([]*plan.IndexDef, []*TableDef, error) {
+	// 0. validate indexInfo and colMap
+	{
+		// only support 1 column index
+		if len(indexInfo.KeyParts) != 1 {
+			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "don't support multi column LLM index")
+		}
+
+		colName := indexInfo.KeyParts[0].ColName.ColName()
+		if _, ok := colMap[colName]; !ok {
+			return nil, nil, moerr.NewInvalidInput(ctx.GetContext(), "column '%s' is not exist", indexInfo.KeyParts[0].ColName.ColNameOrigin())
+		}
+	}
+
+	// init index and table definition slices
+	indexDefs := make([]*plan.IndexDef, 1)
+	tableDefs := make([]*TableDef, 1)
+
+	// 1. create LLM hidden table
+	{
+		// 1.a table consists of 3 columns: original primary key, chunk, embedding
+		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		tableDefs[0] = &TableDef{
+			Name:      indexTableName,
+			TableType: catalog.SystemSI_LLM_Table_Type,
+			Cols:      make([]*ColDef, 3),
+		}
+
+		// 1.b indexDef0 init
+		// Use primary key and chunk as two keys for index
+		// primary key ensures each chunked string can be associated back to the original table's data
+		// chunks facilitates querying of text fragments
+		// embedding are high-dimensional floating-point arrays, not suitable for direct key-value query
+
+		indexDefs[0], err = CreateIndexDef(indexInfo, indexTableName, catalog.SystemSI_LLM_Table_Type, []string{"original_tbl_pk", "chunk"}, false)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		// 1.c columns: primary key, chunk, embedding
+		tableDefs[0].Cols[0] = &ColDef{
+			Name: catalog.LLM_Index_Table_Primary_ColName,
+			Alg:  plan.CompressType_Lz4,
+			Typ: Type{
+				// TODO the types of primary key column?
+				Id:    int32(types.T_varchar),
+				Width: types.MaxVarcharLen,
+			},
+			Primary: true,
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+
+		tableDefs[0].Cols[1] = &ColDef{
+			Name: catalog.LLM_Index_Table_Chunk_ColName,
+			Alg:  plan.CompressType_Lz4,
+			Typ: Type{
+				Id:    int32(types.T_varchar),
+				Width: types.MaxVarcharLen,
+			},
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+
+		tableDefs[0].Cols[2] = &ColDef{
+			Name: catalog.LLM_Index_Table_Embedding_ColName,
+			Alg:  plan.CompressType_Lz4,
+			Typ: Type{
+				Id: int32(types.T_array_float32),
+				// Width: types.MaxVarcharLen,
+			},
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+
+		// 1.d set primary key definition
+		tableDefs[0].Pkey = &PrimaryKeyDef{
+			Names:       []string{catalog.LLM_Index_Table_Primary_ColName},
+			PkeyColName: catalog.LLM_Index_Table_Primary_ColName,
+		}
+	}
+
+	return indexDefs, tableDefs, nil
 }
 
 func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, pkeyName string) ([]*plan.IndexDef, []*TableDef, error) {
