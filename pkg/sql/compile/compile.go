@@ -188,7 +188,12 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 		s.Reset(c)
 	}
 
-	c.MessageBoard = c.MessageBoard.Reset()
+	for _, v := range c.nodeRegs {
+		v.CleanChannel(c.proc.GetMPool())
+	}
+
+	c.MessageBoard.Reset()
+	c.MessageBoard = process.NewMessageBoard()
 	c.counterSet.Reset()
 
 	for _, f := range c.fuzzys {
@@ -214,7 +219,8 @@ func (c *Compile) clear() {
 		c.fuzzys[i].release()
 	}
 
-	c.MessageBoard = c.MessageBoard.Reset()
+	c.MessageBoard.Reset()
+	c.MessageBoard = nil
 	c.fuzzys = c.fuzzys[:0]
 	c.scope = c.scope[:0]
 	c.pn = nil
@@ -1442,7 +1448,6 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		if n.Stats.Cost*float64(SingleLineSizeEstimate) >
 			float64(DistributedThreshold) &&
 			!arg.DeleteCtx.CanTruncate {
-			c.proc.Infof(c.proc.Ctx, "delete of '%s' write s3\n", c.sql)
 			rs := c.newDeleteMergeScope(arg, ss)
 			rs.appendInstruction(vm.Instruction{
 				Op: vm.MergeDelete,
