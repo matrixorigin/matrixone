@@ -16,6 +16,7 @@ package data
 
 import (
 	"context"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -158,7 +159,8 @@ type Object interface {
 	GetFs() *objectio.ObjectFS
 	FreezeAppend()
 	UpdateDeltaLoc(txn txnif.TxnReader, blkID uint16, deltaLoc objectio.Location) (bool, txnif.TxnEntry, error)
-
+	UpdateMeta(meta any)
+	GetMutex() *sync.RWMutex
 	Close()
 }
 
@@ -170,7 +172,7 @@ type Tombstone interface {
 	GetDeltaLocAndCommitTSByTxn(blkID uint16, txn txnif.TxnReader) (objectio.Location, types.TS)
 	GetDeltaLocAndCommitTS(blkID uint16) (objectio.Location, types.TS, types.TS)
 	GetDeltaPersistedTSLocked() types.TS
-	GetDeltaCommitedTSLocked() types.TS
+	GetDeltaCommitedTS() types.TS
 	// GetOrCreateDeleteChain(blkID uint16) *updates.MVCCHandle
 	HasDeleteIntentsPreparedIn(from types.TS, to types.TS) (found bool, isPersist bool)
 	HasInMemoryDeleteIntentsPreparedInByBlock(blockID uint16, from, to types.TS) (bool, bool)
@@ -185,6 +187,7 @@ type Tombstone interface {
 	ReplayDeltaLoc(any, uint16)
 	VisitDeletes(ctx context.Context, start, end types.TS, bat, tnBatch *containers.Batch, skipMemory, lastDeltaLoc bool) (*containers.Batch, int, int, error)
 	GetObject() any
+	InMemoryDeletesExisted() bool
 	InMemoryDeletesExistedLocked() bool
 	// for test
 	GetLatestDeltaloc(uint16) objectio.Location
