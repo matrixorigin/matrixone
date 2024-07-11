@@ -644,10 +644,6 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 				case process.RuntimeFilter_PASS:
 					continue
 				case process.RuntimeFilter_DROP:
-					// FIXME: Should give an empty "Data" and then early return
-					// s.NodeInfo.Data = nil
-					// s.NodeInfo.NeedExpandRanges = false
-					// s.DataSource.FilterExpr = plan2.MakeFalseExpr()
 					return nil
 				case process.RuntimeFilter_IN:
 					inExpr := plan2.MakeInExpr(c.proc.Ctx, spec.Expr, msg.Card, msg.Data, spec.MatchPrefix)
@@ -712,7 +708,6 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 			return err
 		}
 		s.NodeInfo.Data = append(s.NodeInfo.Data, ranges.GetAllBytes()...)
-		// s.NodeInfo.NeedExpandRanges = false
 
 	} else if len(inExprList) > 0 {
 		s.NodeInfo.Data, err = ApplyRuntimeFilters(c.proc.Ctx, s.Proc, s.DataSource.TableDef, s.NodeInfo.Data, exprs, filters)
