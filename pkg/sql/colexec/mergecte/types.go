@@ -45,8 +45,8 @@ type MergeCTE struct {
 	vm.OperatorBase
 }
 
-func (mergeCte *MergeCTE) GetOperatorBase() *vm.OperatorBase {
-	return &mergeCte.OperatorBase
+func (mergeCTE *MergeCTE) GetOperatorBase() *vm.OperatorBase {
+	return &mergeCTE.OperatorBase
 }
 
 func init() {
@@ -62,7 +62,7 @@ func init() {
 	)
 }
 
-func (mergeCte MergeCTE) TypeName() string {
+func (mergeCTE MergeCTE) TypeName() string {
 	return opName
 }
 
@@ -70,24 +70,24 @@ func NewArgument() *MergeCTE {
 	return reuse.Alloc[MergeCTE](nil)
 }
 
-func (mergeCte *MergeCTE) Release() {
-	if mergeCte != nil {
-		reuse.Free[MergeCTE](mergeCte, nil)
+func (mergeCTE *MergeCTE) Release() {
+	if mergeCTE != nil {
+		reuse.Free[MergeCTE](mergeCTE, nil)
 	}
 }
 
-func (mergeCte *MergeCTE) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	mergeCte.Free(proc, pipelineFailed, err)
+func (mergeCTE *MergeCTE) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	mergeCTE.Free(proc, pipelineFailed, err)
 }
 
-func (mergeCte *MergeCTE) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if mergeCte.ctr != nil {
-		mergeCte.ctr.FreeMergeTypeOperator(pipelineFailed)
-		if mergeCte.ctr.buf != nil {
-			mergeCte.ctr.buf.Clean(proc.Mp())
-			mergeCte.ctr.buf = nil
+func (mergeCTE *MergeCTE) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if mergeCTE.ctr != nil {
+		mergeCTE.ctr.FreeMergeTypeOperator(pipelineFailed)
+		if mergeCTE.ctr.buf != nil {
+			mergeCTE.ctr.buf.Clean(proc.Mp())
+			mergeCTE.ctr.buf = nil
 		}
-		mergeCte.ctr = nil
+		mergeCTE.ctr = nil
 	}
 
 }

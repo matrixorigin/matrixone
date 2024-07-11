@@ -33,6 +33,10 @@ func (singleJoin *SingleJoin) String(buf *bytes.Buffer) {
 	buf.WriteString(": single join ")
 }
 
+func (singleJoin *SingleJoin) OpType() vm.OpType {
+	return vm.Single
+}
+
 func (singleJoin *SingleJoin) Prepare(proc *process.Process) (err error) {
 	singleJoin.ctr = new(container)
 	singleJoin.ctr.InitReceiver(proc, false)

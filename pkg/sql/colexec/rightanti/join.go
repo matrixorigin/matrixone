@@ -34,6 +34,10 @@ func (rightAnti *RightAnti) String(buf *bytes.Buffer) {
 	buf.WriteString(": right anti join ")
 }
 
+func (rightAnti *RightAnti) OpType() vm.OpType {
+	return vm.RightAnti
+}
+
 func (rightAnti *RightAnti) Prepare(proc *process.Process) (err error) {
 	rightAnti.ctr = new(container)
 	rightAnti.ctr.InitReceiver(proc, false)

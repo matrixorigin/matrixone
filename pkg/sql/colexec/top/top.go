@@ -47,6 +47,10 @@ func (top *Top) String(buf *bytes.Buffer) {
 	buf.WriteString(fmt.Sprintf("], %v)", top.Limit))
 }
 
+func (top *Top) OpType() vm.OpType {
+	return vm.Top
+}
+
 func (top *Top) Prepare(proc *process.Process) (err error) {
 	top.ctr = new(container)
 	top.ctr.limitExecutor, err = colexec.NewExpressionExecutor(proc, top.Limit)

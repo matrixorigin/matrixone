@@ -35,6 +35,10 @@ func (shuffleBuild *ShuffleBuild) String(buf *bytes.Buffer) {
 	buf.WriteString(": shuffle build ")
 }
 
+func (shuffleBuild *ShuffleBuild) OpType() vm.OpType {
+	return vm.ShuffleBuild
+}
+
 func (shuffleBuild *ShuffleBuild) Prepare(proc *process.Process) (err error) {
 	if shuffleBuild.RuntimeFilterSpec == nil {
 		panic("there must be runtime filter in shuffle build!")

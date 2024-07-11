@@ -42,6 +42,10 @@ func (partition *Partition) String(buf *bytes.Buffer) {
 	buf.WriteString("])")
 }
 
+func (partition *Partition) OpType() vm.OpType {
+	return vm.Partition
+}
+
 func (partition *Partition) Prepare(proc *process.Process) (err error) {
 	partition.ctr = new(container)
 	ctr := partition.ctr

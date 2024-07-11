@@ -32,6 +32,10 @@ func (antiJoin *AntiJoin) String(buf *bytes.Buffer) {
 	buf.WriteString(": anti join ")
 }
 
+func (antiJoin *AntiJoin) OpType() vm.OpType {
+	return vm.Anti
+}
+
 func (antiJoin *AntiJoin) Prepare(proc *process.Process) (err error) {
 	antiJoin.ctr = new(container)
 	antiJoin.ctr.InitReceiver(proc, false)

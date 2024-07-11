@@ -40,6 +40,10 @@ func (preInsertUnique *PreInsertUnique) String(buf *bytes.Buffer) {
 	buf.WriteString(": pre processing insert unique key")
 }
 
+func (preInsertUnique *PreInsertUnique) OpType() vm.OpType {
+	return vm.PreInsertUnique
+}
+
 func (preInsertUnique *PreInsertUnique) Prepare(proc *process.Process) error {
 	preInsertUnique.ctr = new(container)
 	return nil

@@ -33,6 +33,10 @@ func (connector *Connector) Prepare(_ *process.Process) error {
 	return nil
 }
 
+func (connector *Connector) OpType() vm.OpType {
+	return vm.Connector
+}
+
 func (connector *Connector) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
