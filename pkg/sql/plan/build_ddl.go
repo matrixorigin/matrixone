@@ -1925,7 +1925,7 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 	return []*plan.IndexDef{indexDef}, []*TableDef{tableDef}, nil
 }
 
-// TODO need to pass 3 parameters, list 100, opt type L2, embedding model as argument - need to be done
+// TODO need to pass 3 parameters, list 100, op_type L2, embedding model as argument - need to be done
 func buildLlmSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, pkeyName string) ([]*plan.IndexDef, []*TableDef, error) {
 
 	indexParts := make([]string, 2)
