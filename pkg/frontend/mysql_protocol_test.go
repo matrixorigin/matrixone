@@ -26,15 +26,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
-	"go.uber.org/zap"
-
 	"github.com/BurntSushi/toml"
 	mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/golang/mock/gomock"
 	fuzz "github.com/google/gofuzz"
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -1702,11 +1700,13 @@ func openDbConn(t *testing.T, port int) (db *sql.DB, err error) {
 	for i := 0; i < 3; i++ {
 		db, err = tryConn(dsn)
 		if err != nil {
-			logger.Error("open conn failed.", zap.Error(err))
 			time.Sleep(time.Second)
 			continue
 		}
 		break
+	}
+	if err != nil {
+		panic(err)
 	}
 	return
 }
