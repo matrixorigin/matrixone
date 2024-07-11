@@ -35,6 +35,10 @@ func (insert *Insert) String(buf *bytes.Buffer) {
 	buf.WriteString(": insert")
 }
 
+func (insert *Insert) OpType() vm.OpType {
+	return vm.Insert
+}
+
 func (insert *Insert) Prepare(proc *process.Process) error {
 	insert.ctr = new(container)
 	insert.ctr.state = vm.Build

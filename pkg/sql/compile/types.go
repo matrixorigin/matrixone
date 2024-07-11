@@ -146,7 +146,7 @@ func canScopeOpRemote(rootOp vm.Operator) bool {
 	if rootOp == nil {
 		return true
 	}
-	if rootOp.GetOperatorBase().CannotRemote() {
+	if vm.CannotRemote(rootOp) {
 		return false
 	}
 	numChildren := rootOp.GetOperatorBase().NumChildren()

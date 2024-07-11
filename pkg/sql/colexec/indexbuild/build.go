@@ -30,6 +30,10 @@ func (indexBuild *IndexBuild) String(buf *bytes.Buffer) {
 	buf.WriteString(": index build ")
 }
 
+func (indexBuild *IndexBuild) OpType() vm.OpType {
+	return vm.IndexBuild
+}
+
 func (indexBuild *IndexBuild) Prepare(proc *process.Process) (err error) {
 	if indexBuild.RuntimeFilterSpec == nil {
 		panic("there must be runtime filter in index build!")

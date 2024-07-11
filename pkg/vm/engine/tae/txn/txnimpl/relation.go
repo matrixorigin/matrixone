@@ -132,11 +132,11 @@ func (h *txnRelation) SimplePPString(level common.PPLevel) string {
 		return s
 	}
 	it := h.MakeObjectIt()
-	for it.Valid() {
+	defer it.Close()
+	for it.Next() {
 		object := it.GetObject()
 		defer object.Close()
 		s = fmt.Sprintf("%s\n%s", s, object.String())
-		it.Next()
 	}
 	return s
 }

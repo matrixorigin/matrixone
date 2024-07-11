@@ -29,6 +29,10 @@ func (mergeBlock *MergeBlock) String(buf *bytes.Buffer) {
 	buf.WriteString(": MergeS3BlocksMetaLoc ")
 }
 
+func (mergeBlock *MergeBlock) OpType() vm.OpType {
+	return vm.MergeBlock
+}
+
 func (mergeBlock *MergeBlock) Prepare(proc *process.Process) error {
 	ap := mergeBlock
 	ap.container = new(Container)

@@ -28,6 +28,10 @@ func (output *Output) String(buf *bytes.Buffer) {
 	buf.WriteString(": sql output")
 }
 
+func (output *Output) OpType() vm.OpType {
+	return vm.Output
+}
+
 func (output *Output) Prepare(_ *process.Process) error {
 	return nil
 }

@@ -42,6 +42,10 @@ func (mergeTop *MergeTop) String(buf *bytes.Buffer) {
 	buf.WriteString(fmt.Sprintf("], %v)", mergeTop.Limit))
 }
 
+func (mergeTop *MergeTop) OpType() vm.OpType {
+	return vm.MergeTop
+}
+
 func (mergeTop *MergeTop) Prepare(proc *process.Process) (err error) {
 	mergeTop.ctr = new(container)
 	mergeTop.ctr.limitExecutor, err = colexec.NewExpressionExecutor(proc, mergeTop.Limit)

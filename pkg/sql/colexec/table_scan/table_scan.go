@@ -32,6 +32,10 @@ func (tableScan *TableScan) String(buf *bytes.Buffer) {
 	buf.WriteString(": table_scan ")
 }
 
+func (tableScan *TableScan) OpType() vm.OpType {
+	return vm.TableScan
+}
+
 func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 	tableScan.ctr = new(container)
 	tableScan.ctr.orderBy = tableScan.Reader.GetOrderBy()

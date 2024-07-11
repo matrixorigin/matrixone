@@ -36,6 +36,10 @@ func (preInsert *PreInsert) String(buf *bytes.Buffer) {
 	buf.WriteString(": pre processing insert")
 }
 
+func (preInsert *PreInsert) OpType() vm.OpType {
+	return vm.PreInsert
+}
+
 func (preInsert *PreInsert) Prepare(_ *proc) error {
 	preInsert.ctr = new(container)
 	return nil

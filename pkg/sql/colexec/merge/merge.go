@@ -29,6 +29,10 @@ func (merge *Merge) String(buf *bytes.Buffer) {
 	buf.WriteString(": union all ")
 }
 
+func (merge *Merge) OpType() vm.OpType {
+	return vm.Merge
+}
+
 func (merge *Merge) Prepare(proc *process.Process) error {
 	merge.ctr = new(container)
 	merge.ctr.InitReceiver(proc, true)

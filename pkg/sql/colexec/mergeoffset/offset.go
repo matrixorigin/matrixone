@@ -32,6 +32,10 @@ func (mergeOffset *MergeOffset) String(buf *bytes.Buffer) {
 	buf.WriteString(fmt.Sprintf("mergeOffset(%v)", mergeOffset.Offset))
 }
 
+func (mergeOffset *MergeOffset) OpType() vm.OpType {
+	return vm.MergeOffset
+}
+
 func (mergeOffset *MergeOffset) Prepare(proc *process.Process) error {
 	var err error
 	mergeOffset.ctr = new(container)

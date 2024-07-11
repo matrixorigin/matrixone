@@ -35,6 +35,10 @@ func (fill *Fill) String(buf *bytes.Buffer) {
 	buf.WriteString(": fill")
 }
 
+func (fill *Fill) OpType() vm.OpType {
+	return vm.Fill
+}
+
 func (fill *Fill) Prepare(proc *process.Process) (err error) {
 	fill.ctr = new(container)
 	ctr := fill.ctr
