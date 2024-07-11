@@ -42,8 +42,6 @@ const (
 type Request struct {
 	//the command type from the client
 	cmd CommandType
-	// sequence num
-	seq uint8
 	//the data from the client
 	data interface{}
 }

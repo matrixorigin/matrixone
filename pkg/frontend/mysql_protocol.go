@@ -270,8 +270,6 @@ type MysqlProtocolImpl struct {
 	SV *config.FrontendParameters
 
 	ses *Session
-
-	disableAutoFlush bool
 }
 
 func (mp *MysqlProtocolImpl) GetStr(id PropertyID) string {

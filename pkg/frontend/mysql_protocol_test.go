@@ -1986,7 +1986,7 @@ func Test_beginPacket(t *testing.T) {
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
-
+		convey.ShouldBeNil(err)
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
 		proto.beginPacket()
@@ -2004,7 +2004,7 @@ func Test_beginPacket(t *testing.T) {
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
-
+		convey.ShouldBeNil(err)
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 		// fill proto.ses
 		ses := NewSession(context.TODO(), proto, nil)
@@ -2051,7 +2051,7 @@ func Test_beginPacket(t *testing.T) {
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
-
+		convey.ShouldBeNil(err)
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
 		proto.tcpConn.maxBytesToFlush = 1024 * 1024 * 1024
@@ -2158,7 +2158,7 @@ func TestSendPrepareResponse(t *testing.T) {
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
-
+		convey.ShouldBeNil(err)
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 		proto.SetSession(&Session{
 			feSessionImpl: feSessionImpl{
@@ -2195,7 +2195,7 @@ func TestSendPrepareResponse(t *testing.T) {
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
-
+		convey.ShouldBeNil(err)
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
 		st := tree.NewPrepareString("stmt1", "select ?, 1")
@@ -2236,7 +2236,9 @@ func FuzzParseExecuteData(f *testing.F) {
 	pu.SV.SkipCheckUser = true
 	setGlobalPu(pu)
 	ioses, err := NewIOSession(serverConn, pu)
-
+	if err != nil {
+		f.Error(err)
+	}
 	proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
 	st := tree.NewPrepareString(tree.Identifier(getPrepareStmtName(1)), "select ?, 1")
@@ -2366,7 +2368,7 @@ func Test_resultset(t *testing.T) {
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
-
+		convey.ShouldBeNil(err)
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
 		ses := NewSession(ctx, proto, nil)
@@ -2408,7 +2410,7 @@ func Test_resultset(t *testing.T) {
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
-
+		convey.ShouldBeNil(err)
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
 		ses := NewSession(ctx, proto, nil)
@@ -2432,7 +2434,7 @@ func Test_resultset(t *testing.T) {
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
-
+		convey.ShouldBeNil(err)
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
 		ses := NewSession(ctx, proto, nil)
@@ -2461,7 +2463,7 @@ func Test_send_packet(t *testing.T) {
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
-
+		convey.ShouldBeNil(err)
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
 		err = proto.sendErrPacket(1, "fake state", "fake error")
@@ -2476,7 +2478,7 @@ func Test_send_packet(t *testing.T) {
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
-
+		convey.ShouldBeNil(err)
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
 		err = proto.sendEOFPacket(1, 0)
@@ -2505,7 +2507,7 @@ func Test_analyse320resp(t *testing.T) {
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
-
+		convey.ShouldBeNil(err)
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
 		var data []byte = nil
@@ -2548,7 +2550,7 @@ func Test_analyse320resp(t *testing.T) {
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
-
+		convey.ShouldBeNil(err)
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
 		type kase struct {
@@ -2594,7 +2596,7 @@ func Test_analyse41resp(t *testing.T) {
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
-
+		convey.ShouldBeNil(err)
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
 		var data []byte = nil
@@ -2641,7 +2643,7 @@ func Test_analyse41resp(t *testing.T) {
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
-
+		convey.ShouldBeNil(err)
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
 		type kase struct {
@@ -2746,7 +2748,7 @@ func Test_handleHandshake(t *testing.T) {
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
-
+		convey.ShouldBeNil(err)
 		var IO IOPackageImpl
 		var SV = &config.FrontendParameters{}
 		SV.SkipCheckUser = true
@@ -2786,7 +2788,9 @@ func Test_handleHandshake_Recover(t *testing.T) {
 	pu.SV.SkipCheckUser = true
 	setGlobalPu(pu)
 	ioses, err := NewIOSession(serverConn, pu)
-
+	if err != nil {
+		t.Error(err)
+	}
 	convey.Convey("handleHandshake succ", t, func() {
 		var IO IOPackageImpl
 		var SV = &config.FrontendParameters{}
@@ -2824,7 +2828,7 @@ func TestMysqlProtocolImpl_Close(t *testing.T) {
 	pu.SV.SkipCheckUser = true
 	setGlobalPu(pu)
 	ioses, err := NewIOSession(serverConn, pu)
-
+	convey.ShouldBeNil(err)
 	proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 	proto.Close()
 	assert.Nil(t, proto.GetSalt())
