@@ -1823,7 +1823,7 @@ func (c *Compile) compileLockOp(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 		block = n.LockTargets[0].Block
 	}
 	currentFirstFlag := c.anal.isFirst
-	var lockOpArg *lockop.Argument
+	var lockOpArg *lockop.LockOp
 	lockOpArg, err := constructLockOp(n, c.e)
 	if err != nil {
 		return nil, err

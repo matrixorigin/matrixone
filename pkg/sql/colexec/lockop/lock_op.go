@@ -202,7 +202,7 @@ func callBlocking(
 		if err != nil {
 			return result, err
 		}
-		return result, arg.ctr.rt.retryError
+		return result, lockOp.ctr.rt.retryError
 	}
 
 	panic("BUG")
