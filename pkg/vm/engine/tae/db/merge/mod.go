@@ -201,7 +201,7 @@ const (
 
 type Policy interface {
 	OnObject(obj *catalog.ObjectEntry, force bool)
-	Revise(cpu, mem int64, littleFirst bool) ([]*catalog.ObjectEntry, TaskHostKind)
+	Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind)
 	ResetForTable(*catalog.TableEntry)
 	SetConfig(*catalog.TableEntry, func() txnif.AsyncTxn, any)
 	GetConfig(*catalog.TableEntry) any

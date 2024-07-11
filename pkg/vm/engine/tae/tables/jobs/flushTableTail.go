@@ -158,6 +158,8 @@ func NewFlushTableTailTask(
 	}
 	task.schema = rel.Schema().(*catalog.Schema)
 
+	task.BaseTask = tasks.NewBaseTask(task, tasks.DataCompactionTask, ctx)
+
 	objSeen := make(map[*catalog.ObjectEntry]struct{})
 	for _, obj := range objs {
 		task.scopes = append(task.scopes, *obj.AsCommonID())
@@ -191,8 +193,6 @@ func NewFlushTableTailTask(
 	if task.doTransfer {
 		task.transMappings = mergesort.NewBlkTransferBooking(len(task.aObjHandles))
 	}
-
-	task.BaseTask = tasks.NewBaseTask(task, tasks.DataCompactionTask, ctx)
 
 	tblEntry := rel.GetMeta().(*catalog.TableEntry)
 	tblEntry.Stats.RLock()

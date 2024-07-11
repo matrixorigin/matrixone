@@ -58,7 +58,7 @@ func TestCallLockOpWithNoConflict(t *testing.T) {
 		t,
 		[]uint64{1},
 		[][]int32{{0, 1, 2}},
-		func(proc *process.Process, arg *Argument) {
+		func(proc *process.Process, arg *LockOp) {
 			require.NoError(t, arg.Prepare(proc))
 			arg.ctr.rt.hasNewVersionInRange = testFunc
 			result, err := arg.Call(proc)
@@ -81,7 +81,7 @@ func TestCallLockOpWithConflict(t *testing.T) {
 		t,
 		[]uint64{tableID},
 		[][]int32{{0, 1, 2}},
-		func(proc *process.Process, arg *Argument) {
+		func(proc *process.Process, arg *LockOp) {
 			require.NoError(t, arg.Prepare(proc))
 			arg.ctr.rt.hasNewVersionInRange = testFunc
 
@@ -123,7 +123,7 @@ func TestCallLockOpWithConflictWithRefreshNotEnabled(t *testing.T) {
 		t,
 		[]uint64{tableID},
 		[][]int32{{0, 1, 2}},
-		func(proc *process.Process, arg *Argument) {
+		func(proc *process.Process, arg *LockOp) {
 			require.NoError(t, arg.Prepare(proc))
 			arg.ctr.rt.hasNewVersionInRange = testFunc
 
@@ -141,7 +141,7 @@ func TestCallLockOpWithConflictWithRefreshNotEnabled(t *testing.T) {
 			c := make(chan struct{})
 			go func() {
 				defer close(c)
-				arg2 := &Argument{
+				arg2 := &LockOp{
 					ctr: &container{},
 					OperatorBase: vm.OperatorBase{
 						OperatorInfo: vm.OperatorInfo{
@@ -156,7 +156,7 @@ func TestCallLockOpWithConflictWithRefreshNotEnabled(t *testing.T) {
 				arg2.targets = arg.targets
 				arg2.Prepare(proc)
 				arg2.ctr.rt.hasNewVersionInRange = testFunc
-				valueScan := arg.GetChildren(0).(*value_scan.Argument)
+				valueScan := arg.GetChildren(0).(*value_scan.ValueScan)
 				resetChildren(arg2, valueScan.Batchs[0])
 				defer arg2.ctr.rt.parker.FreeMem()
 
@@ -181,7 +181,7 @@ func TestCallLockOpWithHasPrevCommit(t *testing.T) {
 		t,
 		[]uint64{tableID},
 		[][]int32{{0, 1, 2}},
-		func(proc *process.Process, arg *Argument) {
+		func(proc *process.Process, arg *LockOp) {
 			require.NoError(t, arg.Prepare(proc))
 			arg.ctr.rt.hasNewVersionInRange = testFunc
 
@@ -211,7 +211,7 @@ func TestCallLockOpWithHasPrevCommit(t *testing.T) {
 			c := make(chan struct{})
 			go func() {
 				defer close(c)
-				arg2 := &Argument{
+				arg2 := &LockOp{
 					ctr: &container{},
 					OperatorBase: vm.OperatorBase{
 						OperatorInfo: vm.OperatorInfo{
@@ -226,7 +226,7 @@ func TestCallLockOpWithHasPrevCommit(t *testing.T) {
 				arg2.targets = arg.targets
 				arg2.Prepare(proc)
 				arg2.ctr.rt.hasNewVersionInRange = testFunc
-				valueScan := arg.GetChildren(0).(*value_scan.Argument)
+				valueScan := arg.GetChildren(0).(*value_scan.ValueScan)
 				resetChildren(arg2, valueScan.Batchs[0])
 				defer arg2.ctr.rt.parker.FreeMem()
 
@@ -251,7 +251,7 @@ func TestCallLockOpWithHasPrevCommitLessMe(t *testing.T) {
 		t,
 		[]uint64{tableID},
 		[][]int32{{0, 1, 2}},
-		func(proc *process.Process, arg *Argument) {
+		func(proc *process.Process, arg *LockOp) {
 			require.NoError(t, arg.Prepare(proc))
 			arg.ctr.rt.hasNewVersionInRange = testFunc
 
@@ -281,7 +281,7 @@ func TestCallLockOpWithHasPrevCommitLessMe(t *testing.T) {
 			c := make(chan struct{})
 			go func() {
 				defer close(c)
-				arg2 := &Argument{
+				arg2 := &LockOp{
 					ctr: &container{},
 					OperatorBase: vm.OperatorBase{
 						OperatorInfo: vm.OperatorInfo{
@@ -296,7 +296,7 @@ func TestCallLockOpWithHasPrevCommitLessMe(t *testing.T) {
 				arg2.targets = arg.targets
 				arg2.Prepare(proc)
 				arg2.ctr.rt.hasNewVersionInRange = testFunc
-				valueScan := arg.GetChildren(0).(*value_scan.Argument)
+				valueScan := arg.GetChildren(0).(*value_scan.ValueScan)
 				resetChildren(arg2, valueScan.Batchs[0])
 				defer arg2.ctr.rt.parker.FreeMem()
 
@@ -325,7 +325,7 @@ func TestLockWithBlocking(t *testing.T) {
 		nil,
 		func(
 			proc *process.Process,
-			arg *Argument,
+			arg *LockOp,
 			idx int,
 			isFirst, isLast bool) (bool, error) {
 			arg.ctr.rt.hasNewVersionInRange = testFunc
@@ -346,7 +346,7 @@ func TestLockWithBlocking(t *testing.T) {
 			}
 			return end.Status == vm.ExecStop, nil
 		},
-		func(arg *Argument, proc *process.Process) {
+		func(arg *LockOp, proc *process.Process) {
 			arg.Free(proc, false, nil)
 			proc.FreeVectors()
 		},
@@ -386,7 +386,7 @@ func TestLockWithBlockingWithConflict(t *testing.T) {
 		},
 		func(
 			proc *process.Process,
-			arg *Argument,
+			arg *LockOp,
 			idx int,
 			isFirst, isLast bool) (bool, error) {
 			arg.ctr.rt.hasNewVersionInRange = testFunc
@@ -398,7 +398,7 @@ func TestLockWithBlockingWithConflict(t *testing.T) {
 			ok, err := arg.Call(proc)
 			return ok.Status == vm.ExecStop, err
 		},
-		func(arg *Argument, proc *process.Process) {
+		func(arg *LockOp, proc *process.Process) {
 			require.True(t, moerr.IsMoErrCode(arg.ctr.rt.retryError, moerr.ErrTxnNeedRetry))
 			for _, bat := range arg.ctr.rt.cachedBatches {
 				bat.Clean(proc.Mp())
@@ -426,7 +426,7 @@ func TestLockWithHasNewVersionInLockedTS(t *testing.T) {
 		t,
 		[]uint64{1},
 		[][]int32{{0, 1, 2}},
-		func(proc *process.Process, arg *Argument) {
+		func(proc *process.Process, arg *LockOp) {
 			require.NoError(t, arg.Prepare(proc))
 			arg.ctr.rt.hasNewVersionInRange = func(
 				proc *process.Process,
@@ -452,7 +452,7 @@ func runLockNonBlockingOpTest(
 	t *testing.T,
 	tables []uint64,
 	values [][]int32,
-	fn func(*process.Process, *Argument),
+	fn func(*process.Process, *LockOp),
 	opts ...client.TxnClientCreateOption) {
 	runLockOpTest(
 		t,
@@ -497,8 +497,8 @@ func runLockBlockingOpTest(
 	table uint64,
 	values [][]int32,
 	beforeFunc func(proc *process.Process),
-	fn func(proc *process.Process, arg *Argument, idx int, isFirst, isLast bool) (bool, error),
-	checkFunc func(*Argument, *process.Process),
+	fn func(proc *process.Process, arg *LockOp, idx int, isFirst, isLast bool) (bool, error),
+	checkFunc func(*LockOp, *process.Process),
 	opts ...client.TxnClientCreateOption) {
 	runLockOpTest(
 		t,
@@ -602,8 +602,8 @@ func runLockOpTest(
 	)
 }
 
-func resetChildren(arg *Argument, bat *batch.Batch) {
-	valueScanArg := &value_scan.Argument{
+func resetChildren(arg *LockOp, bat *batch.Batch) {
+	valueScanArg := &value_scan.ValueScan{
 		Batchs: []*batch.Batch{bat},
 	}
 	valueScanArg.Prepare(nil)

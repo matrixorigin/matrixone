@@ -16,38 +16,39 @@ package productl2
 
 import (
 	"bytes"
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"math"
 )
 
-const argName = "product_l2"
+const opName = "product_l2"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (productl2 *Productl2) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": product_l2 join ")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) error {
-	ap := arg
+func (productl2 *Productl2) Prepare(proc *process.Process) error {
+	ap := productl2
 	ap.ctr = new(container)
 	ap.ctr.InitReceiver(proc, false)
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze(productl2.GetIdx(), productl2.GetParallelIdx(), productl2.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
-	ap := arg
+	ap := productl2
 	ctr := ap.ctr
 	result := vm.NewCallResult()
 	for {
@@ -60,7 +61,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Probe:
 			if ctr.inBat != nil {
-				if err := ctr.probe(ap, proc, anal, arg.GetIsLast(), &result); err != nil {
+				if err := ctr.probe(ap, proc, anal, productl2.GetIsLast(), &result); err != nil {
 					return result, err
 				}
 				return result, nil
@@ -85,8 +86,8 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.inBat = nil
 				continue
 			}
-			anal.Input(ctr.inBat, arg.GetIsFirst())
-			if err := ctr.probe(ap, proc, anal, arg.GetIsLast(), &result); err != nil {
+			anal.Input(ctr.inBat, productl2.GetIsFirst())
+			if err := ctr.probe(ap, proc, anal, productl2.GetIsLast(), &result); err != nil {
 				return result, err
 			}
 			return result, nil
@@ -134,7 +135,7 @@ func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
 //	}
 //)
 
-func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.Analyze, isLast bool, result *vm.CallResult) error {
+func (ctr *container) probe(ap *Productl2, proc *process.Process, anal process.Analyze, isLast bool, result *vm.CallResult) error {
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
