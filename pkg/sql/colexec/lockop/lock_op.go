@@ -17,6 +17,7 @@ package lockop
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -493,6 +494,10 @@ func doLock(
 	}
 
 	if len(result.ConflictKey) > 0 {
+		if hex.EncodedLen(len(result.ConflictKey)) > 20000 {
+			msg := fmt.Sprintf("--------- key = %s, sql =%s", string(result.ConflictKey), proc.OriginSQL)
+			panic(msg)
+		}
 		trace.GetService().AddTxnActionInfo(
 			txnOp,
 			client.LockEvent,

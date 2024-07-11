@@ -369,6 +369,8 @@ type Process struct {
 	Ctx              context.Context
 	Cancel           context.CancelFunc
 	DispatchNotifyCh chan *WrapCs
+
+	OriginSQL string
 }
 
 type vectorPool struct {

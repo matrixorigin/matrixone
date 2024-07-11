@@ -5012,6 +5012,7 @@ func (c *Compile) fatalLog(retry int, err error) {
 
 func (c *Compile) SetOriginSQL(sql string) {
 	c.originSQL = sql
+	c.proc.OriginSQL = sql
 }
 
 func (c *Compile) SetBuildPlanFunc(buildPlanFunc func() (*plan2.Plan, error)) {
