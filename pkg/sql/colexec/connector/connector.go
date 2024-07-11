@@ -22,25 +22,28 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "connector"
+const opName = "connector"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (connector *Connector) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": pipe connector")
 }
 
-func (arg *Argument) Prepare(_ *process.Process) error {
+func (connector *Connector) Prepare(proc *process.Process) error {
+	if connector.Reg != nil {
+		connector.Reg.CleanChannel(proc.GetMPool())
+	}
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (connector *Connector) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	reg := arg.Reg
+	reg := connector.Reg
 
-	result, err := arg.Children[0].Call(proc)
+	result, err := connector.Children[0].Call(proc)
 	if err != nil {
 		return result, err
 	}

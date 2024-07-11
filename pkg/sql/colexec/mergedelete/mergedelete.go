@@ -25,42 +25,42 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "merge_delete"
+const opName = "merge_delete"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (mergeDelete *MergeDelete) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": MergeS3DeleteInfo ")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) error {
-	arg.ctr = new(container)
-	ref := arg.Ref
-	eng := arg.Engine
-	partitionNames := arg.PartitionTableNames
+func (mergeDelete *MergeDelete) Prepare(proc *process.Process) error {
+	mergeDelete.ctr = new(container)
+	ref := mergeDelete.Ref
+	eng := mergeDelete.Engine
+	partitionNames := mergeDelete.PartitionTableNames
 	rel, partitionRels, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, eng, ref, partitionNames)
 	if err != nil {
 		return err
 	}
-	arg.ctr.delSource = rel
-	arg.ctr.partitionSources = partitionRels
+	mergeDelete.ctr.delSource = rel
+	mergeDelete.ctr.partitionSources = partitionRels
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (mergeDelete *MergeDelete) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
 	var err error
 	var name string
-	ap := arg
+	ap := mergeDelete
 
-	result, err := arg.GetChildren(0).Call(proc)
+	result, err := mergeDelete.GetChildren(0).Call(proc)
 	if err != nil {
 		return result, err
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze(mergeDelete.GetIdx(), mergeDelete.GetParallelIdx(), mergeDelete.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 

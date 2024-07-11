@@ -22,6 +22,7 @@ import (
 	"io"
 	"net/http/httptrace"
 	pathpkg "path"
+	"runtime"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -169,6 +170,7 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 			*config.DiskPath,
 			int(*config.DiskCapacity),
 			s.perfCounterSets,
+			true,
 		)
 		if err != nil {
 			return err
@@ -801,10 +803,15 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 				if err != nil {
 					return err
 				}
-				*ptr = &readCloser{
+				ret := &readCloser{
 					r:         reader,
 					closeFunc: reader.Close,
 				}
+				// to avoid potential leaks
+				runtime.SetFinalizer(ret, func(_ *readCloser) {
+					_ = reader.Close() // ignore return
+				})
+				*ptr = ret
 			}
 		}
 
