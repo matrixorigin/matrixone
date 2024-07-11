@@ -130,6 +130,7 @@ func callNonBlocking(
 		return result, err
 	}
 
+	lockOp.ctr.rt.lockCount += int64(bat.RowCount())
 	if err := performLock(bat, proc, lockOp); err != nil {
 		return result, err
 	}
@@ -169,6 +170,7 @@ func callBlocking(
 				continue
 			}
 
+			lockOp.ctr.rt.lockCount += int64(bat.RowCount())
 			if err := performLock(bat, proc, lockOp); err != nil {
 				return result, err
 			}
@@ -726,7 +728,7 @@ func (lockOp *LockOp) CopyToPipelineTarget() []*pipeline.LockTarget {
 			ChangeDef:          target.changeDef,
 			Mode:               target.mode,
 			LockRows:           plan.DeepCopyExpr(target.lockRows),
-			LockTableAtTheEnd:  target.lockTableAtTheEnd,
+			// LockTableAtTheEnd:  target.lockTableAtTheEnd,
 		}
 	}
 	return targets
@@ -956,49 +958,54 @@ func hasNewVersionInRange(
 
 func lockTalbeIfLockCountIsZero(
 	proc *process.Process,
-	arg *LockOp,
+	lockOp *LockOp,
 ) error {
-	rt := arg.ctr.rt
-	if rt.lockCount < 0 {
+	rt := lockOp.ctr.rt
+	if rt.lockCount != 0 {
 		return nil
 	}
-	if rt.lockCount == 0 {
-		for idx := range arg.targets {
-			if !arg.targets[idx].lockTableAtTheEnd {
-				continue
-			}
-			if idx == 0 && arg.targets[idx].lockRows != nil {
-				vec, err := colexec.EvalExpressionOnce(proc, arg.targets[idx].lockRows, []*batch.Batch{batch.EmptyForConstFoldBatch})
-				if err != nil {
-					return err
-				}
-				defer func() {
-					vec.Free(proc.GetMPool())
-				}()
+	// do not support partition table
+	if len(lockOp.targets) != 1 {
+		return nil
+	}
+	idx := 0
+	if lockOp.targets[idx].lockTable {
+		return nil
+	}
+	// do not lock table or rows at the end for hidden table
+	if !lockOp.targets[idx].lockTableAtTheEnd {
+		return nil
+	}
+	if lockOp.targets[idx].lockRows != nil {
+		vec, err := colexec.EvalExpressionOnce(proc, lockOp.targets[idx].lockRows, []*batch.Batch{batch.EmptyForConstFoldBatch})
+		if err != nil {
+			return err
+		}
+		defer func() {
+			vec.Free(proc.GetMPool())
+		}()
 
-				bat := batch.NewWithSize(int(arg.targets[idx].primaryColumnIndexInBatch) + 1)
-				bat.Vecs[arg.targets[idx].primaryColumnIndexInBatch] = vec
-				bat.SetRowCount(vec.Length())
-				rt.lockCount = int64(vec.Length())
+		bat := batch.NewWithSize(int(lockOp.targets[idx].primaryColumnIndexInBatch) + 1)
+		bat.Vecs[lockOp.targets[idx].primaryColumnIndexInBatch] = vec
+		bat.SetRowCount(vec.Length())
+		rt.lockCount = int64(vec.Length())
 
-				err = performLock(bat, proc, arg)
-				if err != nil {
-					return err
-				} else if rt.retryError != nil {
-					if rt.defChanged {
-						rt.retryError = retryWithDefChangedError
-					}
-					return rt.retryError
-				}
-				return nil
+		err = performLock(bat, proc, lockOp)
+		if err != nil {
+			return err
+		} else if rt.retryError != nil {
+			if rt.defChanged {
+				rt.retryError = retryWithDefChangedError
 			}
-
-			err := LockTable(arg.engine, proc, arg.targets[idx].tableID, arg.targets[idx].primaryColumnType, false)
-			if err != nil {
-				return err
-			}
+			return rt.retryError
+		}
+	} else {
+		err := LockTable(lockOp.engine, proc, lockOp.targets[idx].tableID, lockOp.targets[idx].primaryColumnType, false)
+		if err != nil {
+			return err
 		}
 	}
+
 	rt.lockCount = -1 //only run lock table one time
 	return nil
 }
