@@ -38,6 +38,10 @@ func (dispatch *Dispatch) String(buf *bytes.Buffer) {
 }
 
 func (dispatch *Dispatch) Prepare(proc *process.Process) error {
+	for i := range dispatch.LocalRegs {
+		dispatch.LocalRegs[i].CleanChannel(proc.GetMPool())
+	}
+
 	ctr := new(container)
 	dispatch.ctr = ctr
 	ctr.localRegsCnt = len(dispatch.LocalRegs)
