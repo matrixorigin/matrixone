@@ -47,7 +47,7 @@ func TestSubscribedTable(t *testing.T) {
 	}
 	for _, tbl := range tbls {
 		subscribeRecord.setTableSubscribed(tbl.db, tbl.tb)
-		_ = subscribeRecord.eng.getOrCreateLatestPart(tbl.db, tbl.tb)
+		_ = subscribeRecord.eng.GetOrCreateLatestPart(tbl.db, tbl.tb)
 	}
 	require.Equal(t, 4, len(subscribeRecord.m))
 	require.Equal(t, true, subscribeRecord.isSubscribed(tbls[0].db, tbls[0].tb))
