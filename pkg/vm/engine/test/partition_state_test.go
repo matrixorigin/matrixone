@@ -21,7 +21,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -179,8 +178,7 @@ func Test_Append(t *testing.T) {
 	}
 }
 
-func Test_Bug_CKPOverwrittenWAL(t *testing.T) {
-	t.Skip("not finished")
+func Test_Bug_CheckpointInsertObjectOverwrittenMergeDeletedObject(t *testing.T) {
 	var (
 		txn          txnif.AsyncTxn
 		opts         testutil.TestOptions
@@ -207,7 +205,8 @@ func Test_Bug_CKPOverwrittenWAL(t *testing.T) {
 	schema.ObjectMaxBlocks = 2
 	taeEngine.BindSchema(schema)
 
-	bat := catalog.MockBatch(schema, 40)
+	rowsCnt := 40
+	bat := catalog.MockBatch(schema, rowsCnt)
 
 	var err error
 	{
@@ -225,10 +224,16 @@ func Test_Bug_CKPOverwrittenWAL(t *testing.T) {
 		require.Nil(t, err)
 	}
 
-	//ckpTS := types.TimestampToTS(disttaeEngine.Now())
-	err = taeEngine.GetDB().ForceCheckpoint(ctx, types.MaxTs(), time.Second)
-	require.Nil(t, err)
+	// checkpoint
+	{
+		// an obj recorded into ckp
+		testutil2.CompactBlocks(t, accountId, taeEngine.GetDB(), databaseName, schema, false)
+		txn, _ = taeEngine.GetDB().StartTxn(nil)
+		ts := txn.GetStartTS()
+		taeEngine.GetDB().ForceCheckpoint(ctx, ts.Next(), time.Second)
+	}
 
+	// delete to generate delta loc
 	{
 		txn, _ = taeEngine.GetDB().StartTxn(nil)
 		database, err = txn.GetDatabase(databaseName)
@@ -236,34 +241,25 @@ func Test_Bug_CKPOverwrittenWAL(t *testing.T) {
 
 		rel, err = database.GetRelationByName(tableName)
 		require.Nil(t, err)
+
+		// merge the obj into a new object
+		// the obj recorded in the ckp has been deleted
+		testutil2.CompactBlocks(t, accountId, taeEngine.GetDB(), databaseName, schema, false)
+		testutil2.MergeBlocks(t, accountId, taeEngine.GetDB(), databaseName, schema, false)
 	}
 
-	// delete to generate delta loc
-	{
-		blkId := rel.MakeObjectIt().GetObject().GetMeta().(*catalog.ObjectEntry).AsCommonID()
-		require.Nil(t, rel.RangeDelete(blkId, 0, 0, handle.DT_Normal))
-		require.Nil(t, txn.Commit(context.Background()))
-		testutil2.CompactBlocks(t, accountId, taeEngine.GetDB(), databaseName, schema, false)
-	}
+	err = disttaeEngine.Engine.TryToSubscribeTable(ctx, rel.ID(), database.GetID())
+	require.Nil(t, err)
 
 	// check partition state without consume ckp
 	{
-		err = disttaeEngine.Engine.TryToSubscribeTable(ctx, rel.ID(), database.GetID())
-		require.Nil(t, err)
-
 		stats, err := disttaeEngine.GetPartitionStateStats(ctx, rel.ID(), database.GetID())
 		require.Nil(t, err)
 
 		fmt.Println(stats.String())
-
-		expected := testutil.PartitionStateStats{
-			DataObjectsVisible:   testutil.PObjectStats{ObjCnt: 1, BlkCnt: 2, RowCnt: 40},
-			DataObjectsInvisible: testutil.PObjectStats{ObjCnt: 2, BlkCnt: 2, RowCnt: 40},
-			InmemRows:            testutil.PInmemRowsStats{},
-			CheckpointCnt:        1,
-		}
-
-		require.Equal(t, expected, stats.Summary())
+		// should only have one object
+		require.Equal(t, 1, stats.DataObjectsVisible.ObjCnt)
+		require.Equal(t, rowsCnt, stats.DataObjectsVisible.RowCnt)
 	}
 
 	// consume ckp
@@ -285,6 +281,9 @@ func Test_Bug_CKPOverwrittenWAL(t *testing.T) {
 
 		fmt.Println(stats.String())
 
+		// should only have one object
+		require.Equal(t, 1, stats.DataObjectsVisible.ObjCnt)
+		require.Equal(t, rowsCnt, stats.DataObjectsVisible.RowCnt)
 	}
 
 }

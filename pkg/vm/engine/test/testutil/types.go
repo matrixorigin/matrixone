@@ -17,6 +17,7 @@ package testutil
 import (
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
@@ -37,12 +38,16 @@ type PartitionStateStats struct {
 	DataObjectsInvisible PObjectStats
 	InmemRows            PInmemRowsStats
 	CheckpointCnt        int
+	DeltaLocationRowsCnt int
 
 	Details struct {
 		// 0: locations
 		// 1: versions
-		CheckpointLocs      [2][]string
-		DataObjectList      []logtailreplay.ObjectEntry
+		DeletedRows    []*batch.Batch
+		CheckpointLocs [2][]string
+		DataObjectList struct {
+			Visible, Invisible []logtailreplay.ObjectEntry
+		}
 		TombstoneObjectList []logtailreplay.ObjectEntry
 	}
 }
@@ -53,16 +58,20 @@ func (s *PartitionStateStats) Summary() PartitionStateStats {
 		DataObjectsInvisible: s.DataObjectsInvisible,
 		InmemRows:            s.InmemRows,
 		CheckpointCnt:        s.CheckpointCnt,
+		DeltaLocationRowsCnt: s.DeltaLocationRowsCnt,
 	}
 }
 
 func (s *PartitionStateStats) String() string {
 	return fmt.Sprintf("dataObjects:{iobj-%d, iblk-%d, irow-%d; dobj-%d, dblk-%d, drow-%d};\n"+
-		"InmemRows:{visible-%d, invisible-%d};\ncheckpoint:{%d}",
+		"InmemRows:{visible-%d, invisible-%d};\ncheckpoint:{%d};\ndeletes cnt in delta loc:{%d}\n"+
+		"visible objects:   %v\n"+
+		"invisible objects: %v\n",
 		s.DataObjectsVisible.ObjCnt, s.DataObjectsVisible.BlkCnt, s.DataObjectsVisible.RowCnt,
 		s.DataObjectsInvisible.ObjCnt, s.DataObjectsInvisible.BlkCnt, s.DataObjectsInvisible.RowCnt,
 		s.InmemRows.VisibleCnt, s.InmemRows.InvisibleCnt,
-		s.CheckpointCnt)
+		s.CheckpointCnt, s.DeltaLocationRowsCnt, s.Details.DataObjectList.Visible, s.Details.DataObjectList.Invisible)
+
 }
 
 type TestOptions struct {

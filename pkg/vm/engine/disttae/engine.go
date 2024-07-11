@@ -809,3 +809,7 @@ func (e *Engine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.
 func (e *Engine) GetMessageCenter() any {
 	return e.messageCenter
 }
+
+func (e *Engine) FS() fileservice.FileService {
+	return e.fs
+}

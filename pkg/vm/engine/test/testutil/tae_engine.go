@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/rpc"
 )
@@ -36,7 +37,8 @@ type TestTxnStorage struct {
 	t *testing.T
 	//accountId     uint32
 	schema        *catalog.Schema
-	taeHandler    *rpc.Handle
+	taeDelegate   *testutil.TestEngine
+	txnHandler    *rpc.Handle
 	logtailServer *TestLogtailServer
 }
 
@@ -45,15 +47,20 @@ func (ts *TestTxnStorage) BindSchema(schema *catalog.Schema) {
 }
 
 func (ts *TestTxnStorage) GetDB() *db.DB {
-	return ts.taeHandler.GetDB()
+	return ts.txnHandler.GetDB()
 }
 
 func (ts *TestTxnStorage) Shard() metadata.TNShard {
 	return GetDefaultTNShard()
 }
 
-func (ts *TestTxnStorage) Start() error             { return nil }
-func (ts *TestTxnStorage) Close(destroy bool) error { return nil }
+func (ts *TestTxnStorage) Start() error { return nil }
+func (ts *TestTxnStorage) Close(destroy bool) error {
+	err := ts.GetDB().Close()
+	blockio.Stop()
+	blockio.ResetPipeline()
+	return err
+}
 func (ts *TestTxnStorage) Read(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
 	return nil
 }
@@ -61,7 +68,7 @@ func (ts *TestTxnStorage) Write(ctx context.Context, request *txn.TxnRequest, re
 	req := request
 	switch req.CNRequest.OpCode {
 	case uint32(apipb.OpCode_OpPreCommit):
-		_, err = taestorage.HandleWrite(ctx, req.Txn, req.CNRequest.Payload, ts.taeHandler.HandlePreCommitWrite)
+		_, err = taestorage.HandleWrite(ctx, req.Txn, req.CNRequest.Payload, ts.txnHandler.HandlePreCommitWrite)
 		//response.TxnError = txn.WrapError(err, moerr.ErrTAEWrite)
 	default:
 		err = moerr.NewNotSupported(ctx, "unknown write op: %v", req.CNRequest.OpCode)
@@ -91,7 +98,7 @@ func (ts *TestTxnStorage) Commit(ctx context.Context, request *txn.TxnRequest, r
 
 	prepareResponse(request, response)
 
-	_, err := ts.taeHandler.HandleCommit(ctx, request.Txn)
+	_, err := ts.txnHandler.HandleCommit(ctx, request.Txn)
 	if err == nil {
 		response.Txn.Status = txn.TxnStatus_Committed
 	} else {
@@ -125,9 +132,9 @@ func NewTestTAEEngine(
 	rpcAgent *MockRPCAgent, opts *options.Options) (*TestTxnStorage, error) {
 
 	blockio.Start()
-	taeHandler := InitTestDB(ctx, moduleName, t, opts)
+	handle := InitTxnHandle(ctx, moduleName, t, opts)
 	logtailServer, err := NewMockLogtailServer(
-		ctx, taeHandler.GetDB(), defaultLogtailConfig(), runtime.DefaultRuntime(), rpcAgent.MockLogtailPRCServerFactory)
+		ctx, handle.GetDB(), defaultLogtailConfig(), runtime.DefaultRuntime(), rpcAgent.MockLogtailPRCServerFactory)
 	if err != nil {
 		return nil, err
 	}
@@ -139,14 +146,17 @@ func NewTestTAEEngine(
 
 	tc := &TestTxnStorage{
 		t:             t,
-		taeHandler:    taeHandler,
+		txnHandler:    handle,
 		logtailServer: logtailServer,
+		taeDelegate: &testutil.TestEngine{
+			DB: handle.GetDB(), T: t,
+		},
 	}
-
+	blockio.Start()
 	return tc, nil
 }
 
-func InitTestDB(ctx context.Context, moduleName string, t *testing.T, opts *options.Options) *rpc.Handle {
+func InitTxnHandle(ctx context.Context, moduleName string, t *testing.T, opts *options.Options) *rpc.Handle {
 	dir := InitTestEnv(moduleName, t)
 	handle := rpc.NewTAEHandle(ctx, dir, opts)
 	handle.GetDB().DiskCleaner.GetCleaner().AddChecker(

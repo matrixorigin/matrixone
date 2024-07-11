@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	logservice2 "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -39,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/service"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
 type TestDisttaeEngine struct {
@@ -159,12 +161,13 @@ func (de *TestDisttaeEngine) analyzeDataObjects(state *logtailreplay.PartitionSt
 			stats.DataObjectsVisible.ObjCnt += 1
 			stats.DataObjectsVisible.BlkCnt += int(item.BlkCnt())
 			stats.DataObjectsVisible.RowCnt += int(item.Rows())
+			stats.Details.DataObjectList.Visible = append(stats.Details.DataObjectList.Visible, item)
 		} else {
 			stats.DataObjectsInvisible.ObjCnt += 1
 			stats.DataObjectsInvisible.BlkCnt += int(item.BlkCnt())
 			stats.DataObjectsInvisible.RowCnt += int(item.Rows())
+			stats.Details.DataObjectList.Invisible = append(stats.Details.DataObjectList.Invisible, item)
 		}
-		stats.Details.DataObjectList = append(stats.Details.DataObjectList, item)
 	}
 
 	return
@@ -207,6 +210,39 @@ func (de *TestDisttaeEngine) analyzeCheckpoint(state *logtailreplay.PartitionSta
 	return
 }
 
+func (de *TestDisttaeEngine) analyzeTombstone(state *logtailreplay.PartitionState,
+	stats *PartitionStateStats, ts types.TS) (outErr error) {
+
+	iter, err := state.NewObjectsIter(ts, true)
+	if err != nil {
+		return nil
+	}
+
+	for iter.Next() {
+		disttae.ForeachBlkInObjStatsList(false, nil, func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
+			loc, _, ok := state.GetBockDeltaLoc(blk.BlockID)
+			if ok {
+				bat, _, release, err := blockio.ReadBlockDelete(context.Background(), loc[:], de.Engine.FS())
+				if err != nil {
+					outErr = err
+					return false
+				}
+				stats.DeltaLocationRowsCnt += bat.RowCount()
+				stats.Details.DeletedRows = append(stats.Details.DeletedRows, bat)
+
+				release()
+			}
+			return true
+		}, iter.Entry().ObjectStats)
+
+		if outErr != nil {
+			return
+		}
+	}
+
+	return
+}
+
 func (de *TestDisttaeEngine) GetPartitionStateStats(ctx context.Context, databaseId, tableId uint64) (
 	stats PartitionStateStats, err error) {
 
@@ -236,6 +272,9 @@ func (de *TestDisttaeEngine) GetPartitionStateStats(ctx context.Context, databas
 		return
 	}
 
+	if err = de.analyzeTombstone(state, &stats, ts); err != nil {
+		return
+	}
 	// tombstones
 	return
 }
