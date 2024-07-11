@@ -33,8 +33,8 @@ import (
 )
 
 type TestTxnStorage struct {
-	t             *testing.T
-	accountId     uint32
+	t *testing.T
+	//accountId     uint32
 	schema        *catalog.Schema
 	taeHandler    *rpc.Handle
 	logtailServer *TestLogtailServer

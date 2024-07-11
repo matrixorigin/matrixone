@@ -232,7 +232,10 @@ func Test_Bug_CKPOverwrittenWAL(t *testing.T) {
 	{
 		txn, _ = taeEngine.GetDB().StartTxn(nil)
 		database, err = txn.GetDatabase(databaseName)
+		require.Nil(t, err)
+
 		rel, err = database.GetRelationByName(tableName)
+		require.Nil(t, err)
 	}
 
 	// delete to generate delta loc
