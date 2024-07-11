@@ -2028,7 +2028,7 @@ func Test_beginPacket(t *testing.T) {
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
-
+		convey.ShouldBeNil(err)
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 		// fill proto.ses
 		ses := NewSession(context.TODO(), proto, nil)
@@ -2389,7 +2389,7 @@ func Test_resultset(t *testing.T) {
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
-
+		convey.ShouldBeNil(err)
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
 		ses := NewSession(ctx, proto, nil)

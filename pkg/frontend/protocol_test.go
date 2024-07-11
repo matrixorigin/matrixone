@@ -52,6 +52,7 @@ func Test_protocol(t *testing.T) {
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
 		io, err := NewIOSession(serverConn, pu)
+		convey.ShouldBeNil(err)
 		cpi.tcpConn = io
 
 		str1 := cpi.Peer()
@@ -79,7 +80,7 @@ func Test_SendResponse(t *testing.T) {
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
-
+		convey.ShouldBeNil(err)
 		mp := &MysqlProtocolImpl{}
 		mp.io = iopackage
 		mp.tcpConn = ioses
