@@ -34,7 +34,7 @@ const (
 
 // add unit tests for cases
 type outputTestCase struct {
-	arg   *Argument
+	arg   *Output
 	types []types.Type
 	proc  *process.Process
 }
@@ -54,7 +54,7 @@ func init() {
 			types: []types.Type{
 				types.T_int8.ToType(),
 			},
-			arg: &Argument{
+			arg: &Output{
 				Data: nil,
 				Func: sqlOutput,
 				OperatorBase: vm.OperatorBase{
@@ -120,8 +120,8 @@ func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
 
-func resetChildren(arg *Argument, bats []*batch.Batch) {
-	valueScanArg := &value_scan.Argument{
+func resetChildren(arg *Output, bats []*batch.Batch) {
+	valueScanArg := &value_scan.ValueScan{
 		Batchs: bats,
 	}
 	valueScanArg.Prepare(nil)

@@ -28,42 +28,42 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "right"
+const opName = "right"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (rightJoin *RightJoin) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": right join ")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	arg.ctr = new(container)
-	arg.ctr.InitReceiver(proc, false)
-	arg.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
-	arg.ctr.vecs = make([]*vector.Vector, len(arg.Conditions[0]))
+func (rightJoin *RightJoin) Prepare(proc *process.Process) (err error) {
+	rightJoin.ctr = new(container)
+	rightJoin.ctr.InitReceiver(proc, false)
+	rightJoin.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
+	rightJoin.ctr.vecs = make([]*vector.Vector, len(rightJoin.Conditions[0]))
 
-	arg.ctr.evecs = make([]evalVector, len(arg.Conditions[0]))
-	for i := range arg.Conditions[0] {
-		arg.ctr.evecs[i].executor, err = colexec.NewExpressionExecutor(proc, arg.Conditions[0][i])
+	rightJoin.ctr.evecs = make([]evalVector, len(rightJoin.Conditions[0]))
+	for i := range rightJoin.Conditions[0] {
+		rightJoin.ctr.evecs[i].executor, err = colexec.NewExpressionExecutor(proc, rightJoin.Conditions[0][i])
 		if err != nil {
 			return err
 		}
 	}
-	if arg.Cond != nil {
-		arg.ctr.expr, err = colexec.NewExpressionExecutor(proc, arg.Cond)
+	if rightJoin.Cond != nil {
+		rightJoin.ctr.expr, err = colexec.NewExpressionExecutor(proc, rightJoin.Cond)
 	}
-	arg.ctr.handledLast = false
+	rightJoin.ctr.handledLast = false
 	return err
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	analyze := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	analyze := proc.GetAnalyze(rightJoin.GetIdx(), rightJoin.GetParallelIdx(), rightJoin.GetParallelMajor())
 	analyze.Start()
 	defer analyze.Stop()
-	ctr := arg.ctr
+	ctr := rightJoin.ctr
 	result := vm.NewCallResult()
 	for {
 		switch ctr.state {
@@ -71,7 +71,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			if err := ctr.build(analyze); err != nil {
 				return result, err
 			}
-			if ctr.mp == nil && !arg.IsShuffle {
+			if ctr.mp == nil && !rightJoin.IsShuffle {
 				// for inner ,right and semi join, if hashmap is empty, we can finish this pipeline
 				// shuffle join can't stop early for this moment
 				ctr.state = End
@@ -80,7 +80,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 		case Probe:
-			if arg.ctr.buf == nil {
+			if rightJoin.ctr.buf == nil {
 				msg := ctr.ReceiveFromSingleReg(0, analyze)
 				if msg.Err != nil {
 					return result, msg.Err
@@ -89,7 +89,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 				if bat == nil {
 					ctr.state = SendLast
-					arg.rbat = nil
+					rightJoin.rbat = nil
 					continue
 				}
 				if bat.IsEmpty() {
@@ -100,24 +100,24 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 					proc.PutBatch(bat)
 					continue
 				}
-				arg.ctr.buf = bat
-				arg.ctr.lastpos = 0
+				rightJoin.ctr.buf = bat
+				rightJoin.ctr.lastpos = 0
 			}
 
-			startrow := arg.ctr.lastpos
-			if err := ctr.probe(arg, proc, analyze, arg.GetIsFirst(), arg.GetIsLast(), &result); err != nil {
+			startrow := rightJoin.ctr.lastpos
+			if err := ctr.probe(rightJoin, proc, analyze, rightJoin.GetIsFirst(), rightJoin.GetIsLast(), &result); err != nil {
 				return result, err
 			}
-			if arg.ctr.lastpos == 0 {
-				proc.PutBatch(arg.ctr.buf)
-				arg.ctr.buf = nil
-			} else if arg.ctr.lastpos == startrow {
+			if rightJoin.ctr.lastpos == 0 {
+				proc.PutBatch(rightJoin.ctr.buf)
+				rightJoin.ctr.buf = nil
+			} else if rightJoin.ctr.lastpos == startrow {
 				return result, moerr.NewInternalErrorNoCtx("right join hanging")
 			}
 			return result, nil
 
 		case SendLast:
-			setNil, err := ctr.sendLast(arg, proc, analyze, arg.GetIsFirst(), arg.GetIsLast(), &result)
+			setNil, err := ctr.sendLast(rightJoin, proc, analyze, rightJoin.GetIsFirst(), rightJoin.GetIsLast(), &result)
 			if err != nil {
 				return result, err
 			}
@@ -183,7 +183,7 @@ func (ctr *container) build(anal process.Analyze) error {
 	return ctr.receiveBatch(anal)
 }
 
-func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze process.Analyze, _ bool, isLast bool, result *vm.CallResult) (bool, error) {
+func (ctr *container) sendLast(ap *RightJoin, proc *process.Process, analyze process.Analyze, _ bool, isLast bool, result *vm.CallResult) (bool, error) {
 	ctr.handledLast = true
 
 	if ctr.matched == nil {
@@ -251,7 +251,7 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 	return false, nil
 }
 
-func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
+func (ctr *container) probe(ap *RightJoin, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
 	anal.Input(ap.ctr.buf, isFirst)
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)

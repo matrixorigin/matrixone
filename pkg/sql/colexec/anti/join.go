@@ -25,39 +25,39 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "anti"
+const opName = "anti"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (antiJoin *AntiJoin) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": anti join ")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	arg.ctr = new(container)
-	arg.ctr.InitReceiver(proc, false)
-	arg.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
+func (antiJoin *AntiJoin) Prepare(proc *process.Process) (err error) {
+	antiJoin.ctr = new(container)
+	antiJoin.ctr.InitReceiver(proc, false)
+	antiJoin.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
 
-	arg.ctr.vecs = make([]*vector.Vector, len(arg.Conditions[0]))
-	arg.ctr.executorForVecs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Conditions[0])
+	antiJoin.ctr.vecs = make([]*vector.Vector, len(antiJoin.Conditions[0]))
+	antiJoin.ctr.executorForVecs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, antiJoin.Conditions[0])
 	if err != nil {
 		return err
 	}
 
-	if arg.Cond != nil {
-		arg.ctr.expr, err = colexec.NewExpressionExecutor(proc, arg.Cond)
+	if antiJoin.Cond != nil {
+		antiJoin.ctr.expr, err = colexec.NewExpressionExecutor(proc, antiJoin.Cond)
 	}
 	return err
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (antiJoin *AntiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze(antiJoin.GetIdx(), antiJoin.GetParallelIdx(), antiJoin.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
-	ap := arg
+	ap := antiJoin
 	result := vm.NewCallResult()
 	ctr := ap.ctr
 	for {
@@ -93,10 +93,10 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			if ctr.mp == nil {
-				err := ctr.emptyProbe(ap, proc, anal, arg.GetIsFirst(), arg.GetIsLast(), &result)
+				err := ctr.emptyProbe(ap, proc, anal, antiJoin.GetIsFirst(), antiJoin.GetIsLast(), &result)
 				return result, err
 			} else {
-				err := ctr.probe(ap, proc, anal, arg.GetIsFirst(), arg.GetIsLast(), &result)
+				err := ctr.probe(ap, proc, anal, antiJoin.GetIsFirst(), antiJoin.GetIsLast(), &result)
 				if ap.ctr.lastrow == 0 {
 					proc.PutBatch(ap.ctr.bat)
 					ap.ctr.bat = nil
@@ -156,7 +156,7 @@ func (ctr *container) build(anal process.Analyze) error {
 	return ctr.receiveBatch(anal)
 }
 
-func (ctr *container) emptyProbe(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
+func (ctr *container) emptyProbe(ap *AntiJoin, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
 	anal.Input(ap.ctr.bat, isFirst)
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
@@ -197,7 +197,7 @@ func (ctr *container) emptyProbe(ap *Argument, proc *process.Process, anal proce
 	return nil
 }
 
-func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
+func (ctr *container) probe(ap *AntiJoin, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
 
 	anal.Input(ap.ctr.bat, isFirst)
 	if ctr.rbat != nil {
