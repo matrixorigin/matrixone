@@ -28,37 +28,37 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "fill"
+const opName = "fill"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (fill *Fill) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": fill")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	arg.ctr = new(container)
-	ctr := arg.ctr
+func (fill *Fill) Prepare(proc *process.Process) (err error) {
+	fill.ctr = new(container)
+	ctr := fill.ctr
 	ctr.InitReceiver(proc, true)
 
 	f := true
-	for i := len(arg.AggIds) - 1; i >= 0; i-- {
-		if arg.AggIds[i] == function.MAX || arg.AggIds[i] == function.MIN || arg.AggIds[i] == function.SUM || arg.AggIds[i] == function.AVG {
+	for i := len(fill.AggIds) - 1; i >= 0; i-- {
+		if fill.AggIds[i] == function.MAX || fill.AggIds[i] == function.MIN || fill.AggIds[i] == function.SUM || fill.AggIds[i] == function.AVG {
 			ctr.colIdx = i
 			f = false
 			break
 		}
 	}
 	if f {
-		arg.FillType = plan.Node_NONE
+		fill.FillType = plan.Node_NONE
 	}
 
-	switch arg.FillType {
+	switch fill.FillType {
 	case plan.Node_VALUE:
 		b := batch.NewWithSize(1)
 		b.SetVector(0, proc.GetVector(types.T_varchar.ToType()))
 		batch.SetLength(b, 1)
-		ctr.valVecs = make([]*vector.Vector, len(arg.FillVal))
-		for i, val := range arg.FillVal {
+		ctr.valVecs = make([]*vector.Vector, len(fill.FillVal))
+		for i, val := range fill.FillVal {
 			exe, err := colexec.NewExpressionExecutor(proc, val)
 			if err != nil {
 				return err
@@ -72,21 +72,21 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 		}
 		ctr.process = processValue
 	case plan.Node_PREV:
-		ctr.prevVecs = make([]*vector.Vector, arg.ColLen)
+		ctr.prevVecs = make([]*vector.Vector, fill.ColLen)
 		ctr.process = processPrev
 	case plan.Node_NEXT:
 		ctr.status = receiveBat
 		ctr.subStatus = findNull
 		ctr.process = processNext
 	case plan.Node_LINEAR:
-		for _, v := range arg.FillVal {
+		for _, v := range fill.FillVal {
 			resetColRef(v, 0)
 			exe, err := colexec.NewExpressionExecutor(proc, v)
 			if err != nil {
 				return err
 			}
 			ctr.exes = append(ctr.exes, exe)
-			ctr.valVecs = make([]*vector.Vector, len(arg.FillVal))
+			ctr.valVecs = make([]*vector.Vector, len(fill.FillVal))
 		}
 		ctr.process = processLinear
 	default:
@@ -96,17 +96,17 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (fill *Fill) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze(fill.GetIdx(), fill.GetParallelIdx(), fill.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
-	ctr := arg.ctr
+	ctr := fill.ctr
 
-	return ctr.process(ctr, arg, proc, anal)
+	return ctr.process(ctr, fill, proc, anal)
 }
 
 func resetColRef(expr *plan.Expr, idx int) {
@@ -122,7 +122,7 @@ func resetColRef(expr *plan.Expr, idx int) {
 	}
 }
 
-func processValue(ctr *container, ap *Argument, proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
+func processValue(ctr *container, ap *Fill, proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
 	var err error
 	result := vm.NewCallResult()
 	if ctr.buf != nil {
@@ -249,7 +249,7 @@ func processNextCol(ctr *container, idx int, proc *process.Process) error {
 	}
 }
 
-func processPrev(ctr *container, ap *Argument, proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
+func processPrev(ctr *container, ap *Fill, proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
 	var err error
 	result := vm.NewCallResult()
 	if ctr.buf != nil {
@@ -416,7 +416,7 @@ func processLinearCol(ctr *container, proc *process.Process, idx int) error {
 	}
 }
 
-func processNext(ctr *container, ap *Argument, proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
+func processNext(ctr *container, ap *Fill, proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
 	var err error
 	result := vm.NewCallResult()
 	if ctr.done {
@@ -457,7 +457,7 @@ func processNext(ctr *container, ap *Argument, proc *process.Process, anal proce
 	return result, nil
 }
 
-func processLinear(ctr *container, ap *Argument, proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
+func processLinear(ctr *container, ap *Fill, proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
 	var err error
 	result := vm.NewCallResult()
 	if ctr.done {
@@ -498,7 +498,7 @@ func processLinear(ctr *container, ap *Argument, proc *process.Process, anal pro
 	return result, nil
 }
 
-func processDefault(ctr *container, ap *Argument, proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
+func processDefault(ctr *container, ap *Fill, proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
 	result := vm.NewCallResult()
 	if ctr.buf != nil {
 		proc.PutBatch(ctr.buf)

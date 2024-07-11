@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/gossip"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -104,6 +103,13 @@ type GlobalStatsConfig struct {
 
 type GlobalStatsOption func(s *GlobalStats)
 
+// WithUpdateWorkerFactor set the update worker factor.
+func WithUpdateWorkerFactor(f int) GlobalStatsOption {
+	return func(s *GlobalStats) {
+		s.updateWorkerFactor = f
+	}
+}
+
 type GlobalStats struct {
 	ctx context.Context
 
@@ -117,10 +123,10 @@ type GlobalStats struct {
 
 	updateC chan pb.StatsInfoKey
 
-	// statsUpdated is used to control the frequency of updating stats info.
-	// It is not necessary to update stats info too frequently.
-	// It records the update time of the stats info key.
-	statsUpdated sync.Map
+	updatingMu struct {
+		sync.Mutex
+		updating map[pb.StatsInfoKey]struct{}
+	}
 
 	logtailUpdate *logtailUpdate
 
@@ -140,6 +146,10 @@ type GlobalStats struct {
 		statsInfoMap map[pb.StatsInfoKey]*pb.StatsInfo
 	}
 
+	// updateWorkerFactor is the times of CPU number of this node
+	// to start update worker. Default is 8.
+	updateWorkerFactor int
+
 	// KeyRouter is the router to decides which node should send to.
 	KeyRouter client.KeyRouter[pb.StatsInfoKey]
 }
@@ -156,6 +166,7 @@ func NewGlobalStats(
 		tableLogtailCounter: make(map[pb.StatsInfoKey]int64),
 		KeyRouter:           keyRouter,
 	}
+	s.updatingMu.updating = make(map[pb.StatsInfoKey]struct{})
 	s.mu.statsInfoMap = make(map[pb.StatsInfoKey]*pb.StatsInfo)
 	s.mu.cond = sync.NewCond(&s.mu)
 	for _, opt := range opts {
@@ -222,6 +233,11 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 				gs.triggerUpdate(key, true)
 			}()
 
+			info, ok = gs.mu.statsInfoMap[key]
+			if ok {
+				break
+			}
+
 			// Wait until stats info of the key is updated.
 			gs.mu.cond.Wait()
 
@@ -258,7 +274,7 @@ func (gs *GlobalStats) consumeWorker(ctx context.Context) {
 }
 
 func (gs *GlobalStats) updateWorker(ctx context.Context) {
-	for i := 0; i < runtime.GOMAXPROCS(0); i++ {
+	for i := 0; i < runtime.GOMAXPROCS(0)*gs.updateWorkerFactor; i++ {
 		go func() {
 			for {
 				select {
@@ -394,15 +410,30 @@ func (gs *GlobalStats) waitLogtailUpdated(tid uint64) {
 	}
 }
 
-func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
-	// wait until the table's logtail has been updated.
-	gs.waitLogtailUpdated(key.TableID)
+func (gs *GlobalStats) checkUpdating(key pb.StatsInfoKey) bool {
+	gs.updatingMu.Lock()
+	defer gs.updatingMu.Unlock()
+	_, ok := gs.updatingMu.updating[key]
+	if ok {
+		return true
+	}
+	gs.updatingMu.updating[key] = struct{}{}
+	return false
+}
 
-	// Protect the update progress.
-	ts, ok := gs.statsUpdated.Load(key)
-	if ok && time.Since(ts.(time.Time)) < MinUpdateInterval {
+func (gs *GlobalStats) removeUpdating(key pb.StatsInfoKey) {
+	gs.updatingMu.Lock()
+	defer gs.updatingMu.Unlock()
+	delete(gs.updatingMu.updating, key)
+}
+
+func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
+	if gs.checkUpdating(key) {
 		return
 	}
+
+	// wait until the table's logtail has been updated.
+	gs.waitLogtailUpdated(key.TableID)
 
 	// updated is used to mark that the stats info is updated.
 	var updated bool
@@ -414,29 +445,28 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 
 		// If it is the first time that the stats info is updated,
 		// send it to key router.
-		if _, ok := gs.statsUpdated.Load(key); !ok && gs.KeyRouter != nil && updated {
-			gs.KeyRouter.AddItem(gossip.CommonItem{
-				Operation: gossip.Operation_Set,
-				Key: &gossip.CommonItem_StatsInfoKey{
-					StatsInfoKey: &pb.StatsInfoKey{
-						DatabaseID: key.DatabaseID,
-						TableID:    key.TableID,
-					},
-				},
-			})
-		}
+		// if _, ok := gs.statsUpdating.Load(key); !ok && gs.KeyRouter != nil && updated {
+		//	gs.KeyRouter.AddItem(gossip.CommonItem{
+		//		Operation: gossip.Operation_Set,
+		//		Key: &gossip.CommonItem_StatsInfoKey{
+		//			StatsInfoKey: &pb.StatsInfoKey{
+		//				DatabaseID: key.DatabaseID,
+		//				TableID:    key.TableID,
+		//			},
+		//		},
+		//	})
+		// }
 
 		if updated {
 			gs.mu.statsInfoMap[key] = stats
-			// The update time of the table key should be updated just before
-			// trying to update stats.
-			gs.statsUpdated.Store(key, time.Now())
 		} else if _, ok := gs.mu.statsInfoMap[key]; !ok {
 			gs.mu.statsInfoMap[key] = nil
 		}
 
 		// Notify all the waiters to read the new stats info.
 		gs.mu.cond.Broadcast()
+
+		gs.removeUpdating(key)
 	}()
 
 	table := gs.engine.getLatestCatalogCache().GetTableById(key.DatabaseID, key.TableID)
