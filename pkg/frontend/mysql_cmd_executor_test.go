@@ -113,7 +113,7 @@ func Test_mce(t *testing.T) {
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
-
+		convey.So(err, convey.ShouldBeNil)
 		use_t := mock_frontend.NewMockComputationWrapper(ctrl)
 		use_t.EXPECT().GetUUID().Return(make([]byte, 16)).AnyTimes()
 		use_t.EXPECT().Clear().AnyTimes()
@@ -354,6 +354,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
+		convey.So(err, convey.ShouldBeNil)
 		pu, err = getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 		if err != nil {
 			t.Error(err)
@@ -408,7 +409,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
-
+		convey.So(err, convey.ShouldBeNil)
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
 		ses := NewSession(ctx, proto, nil)
@@ -488,7 +489,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
-
+		convey.So(err, convey.ShouldBeNil)
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
 		ses := NewSession(ctx, proto, nil)
@@ -564,7 +565,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
-
+		convey.So(err, convey.ShouldBeNil)
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
 		ses := NewSession(ctx, proto, nil)
@@ -741,7 +742,7 @@ func Test_handleShowVariables(t *testing.T) {
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
-
+		convey.So(err, convey.ShouldBeNil)
 		pu.StorageEngine = eng
 		pu.TxnClient = txnClient
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
@@ -826,7 +827,7 @@ func runTestHandle(funName string, t *testing.T, handleFun func(ses *Session) er
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
-
+		convey.So(err, convey.ShouldBeNil)
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
 		ses := NewSession(ctx, proto, nil)
@@ -932,7 +933,7 @@ func Test_CMD_FIELD_LIST(t *testing.T) {
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
-
+		convey.So(err, convey.ShouldBeNil)
 		pu.StorageEngine = eng
 		pu.TxnClient = txnClient
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
@@ -1104,7 +1105,7 @@ func TestProcessLoadLocal(t *testing.T) {
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
-
+		convey.So(err, convey.ShouldBeNil)
 		proto := &testMysqlWriter{
 			ioses: ioses,
 		}
@@ -1201,7 +1202,9 @@ func TestMysqlCmdExecutor_HandleShowBackendServers(t *testing.T) {
 	pu.SV.SkipCheckUser = true
 	setGlobalPu(pu)
 	ioses, err := NewIOSession(serverConn, pu)
-
+	if err != nil {
+		t.Error(err)
+	}
 	proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
 	ses := NewSession(ctx, proto, nil)
@@ -1423,7 +1426,7 @@ func Test_ExecRequest(t *testing.T) {
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
 		ioses, err := NewIOSession(serverConn, pu)
-
+		convey.So(err, convey.ShouldBeNil)
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
 		ses := NewSession(ctx, proto, nil)

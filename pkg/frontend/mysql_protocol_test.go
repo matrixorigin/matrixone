@@ -56,34 +56,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-//type TestRoutineManager struct {
-//	rwlock  sync.Mutex
-//	clients map[goetty.IOSession]*Routine
-//
-//	pu *config.ParameterUnit
-//}
-
-//	func (tRM *TestRoutineManager) Created(rs goetty.IOSession) {
-//		pro := NewMysqlClientProtocol(nextConnectionID(), rs, 1024, tRM.pu.SV)
-//		routine := NewRoutine(context.TODO(), pro, tRM.pu.SV, rs)
-//
-//		hsV10pkt := pro.makeHandshakeV10Payload()
-//		err := pro.writePackets(hsV10pkt)
-//		if err != nil {
-//			panic(err)
-//		}
-//
-//		tRM.rwlock.Lock()
-//		defer tRM.rwlock.Unlock()
-//		tRM.clients[rs] = routine
-//	}
-//
-//	func (tRM *TestRoutineManager) Closed(rs goetty.IOSession) {
-//		tRM.rwlock.Lock()
-//		defer tRM.rwlock.Unlock()
-//		delete(tRM.clients, rs)
-//	}
-
 func registerConn(clientConn net.Conn) {
 	mysqlDriver.RegisterDialContext("custom", func(ctx context.Context, addr string) (net.Conn, error) {
 		return clientConn, nil
@@ -2164,7 +2136,7 @@ func Test_beginPacket(t *testing.T) {
 			res := proto.tcpConn.bufferLength
 			convey.So(res, convey.ShouldEqual, len(want))
 
-			proto.Flush()
+			proto.flush()
 		}
 	})
 

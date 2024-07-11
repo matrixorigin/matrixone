@@ -94,9 +94,9 @@ type Conn struct {
 // NewIOSession create a new io session
 func NewIOSession(conn net.Conn, pu *config.ParameterUnit) (*Conn, error) {
 	// just for ut
-	allocator, ok := globalSessionAlloc.Load().(*SessionAllocator)
+	_, ok := globalSessionAlloc.Load().(*SessionAllocator)
 	if !ok {
-		allocator = NewSessionAllocator(pu)
+		allocator := NewSessionAllocator(pu)
 		setGlobalSessionAlloc(allocator)
 	}
 
@@ -156,7 +156,7 @@ func (c *Conn) Close() error {
 	for e := c.dynamicBuf.Front(); e != nil; e = e.Next() {
 		c.allocator.Free(e.Value.([]byte))
 	}
-
+	c.ses = nil
 	getGlobalRtMgr().Closed(c)
 	return nil
 }

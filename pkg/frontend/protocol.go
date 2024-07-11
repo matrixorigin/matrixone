@@ -280,15 +280,3 @@ func (mp *MysqlProtocolImpl) SendResponse(ctx context.Context, resp *Response) e
 		return moerr.NewInternalError(ctx, "unsupported response:%d ", resp.category)
 	}
 }
-
-func (mp *MysqlProtocolImpl) DisableAutoFlush() {
-	mp.disableAutoFlush = true
-}
-
-func (mp *MysqlProtocolImpl) EnableAutoFlush() {
-	mp.disableAutoFlush = false
-}
-
-func (mp *MysqlProtocolImpl) Flush() error {
-	return mp.tcpConn.Flush()
-}

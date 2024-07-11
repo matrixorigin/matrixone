@@ -554,6 +554,7 @@ func (mp *MysqlProtocolImpl) Close() {
 		mp.binaryNullBuffer = nil
 	}
 	mp.ses = nil
+	mp.tcpConn.ses = nil
 }
 
 func (mp *MysqlProtocolImpl) SetSession(ses *Session) {
@@ -2688,6 +2689,11 @@ func (mp *MysqlProtocolImpl) appendPacket(payload []byte) error {
 
 func (mp *MysqlProtocolImpl) append(elems ...byte) error {
 	err := mp.tcpConn.Append(elems...)
+	return err
+}
+
+func (mp *MysqlProtocolImpl) flush() error {
+	err := mp.tcpConn.Flush()
 	return err
 }
 

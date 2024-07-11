@@ -11060,14 +11060,12 @@ func TestUpload(t *testing.T) {
 		assert.Nil(t, err)
 		pu.SV.SetDefaultValues()
 		pu.SV.SaveQueryResult = "on"
-		if err != nil {
-			assert.Nil(t, err)
-		}
 		//file service
 		pu.FileService = fs
 		setGlobalPu(pu)
 
 		ioses, err := NewIOSession(serverConn, pu)
+		assert.Nil(t, err)
 		proto := &testMysqlWriter{
 			ioses: ioses,
 		}
