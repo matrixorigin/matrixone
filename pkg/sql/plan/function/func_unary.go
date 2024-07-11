@@ -1021,6 +1021,9 @@ func EmbeddingOp(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	return nil
 }
 
+// ASK
+// TODO need to be done
+
 func Md5(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryBytesToBytes(parameters, result, proc, length, func(data []byte) []byte {
 		sum := md5.Sum(data)

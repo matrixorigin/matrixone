@@ -2900,6 +2900,9 @@ var supportedMathBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `ask`
+	// TODO need to be done
+
 	// function `md5`
 	{
 		functionId: MD5,
