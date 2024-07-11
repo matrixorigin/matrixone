@@ -18,7 +18,6 @@ import (
 	"context"
 	"math"
 	"runtime"
-	"sort"
 	"sync"
 	"time"
 
@@ -722,11 +721,6 @@ func updateInfoFromZoneMap(
 		executor,
 	); err != nil {
 		return err
-	}
-	if executor != nil {
-		sort.Slice(metas, func(i, j int) bool {
-			return metas[i].index < metas[j].index
-		})
 	}
 	for _, m := range metas {
 		mergeFn(m)
