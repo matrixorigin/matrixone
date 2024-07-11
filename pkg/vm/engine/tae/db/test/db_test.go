@@ -7774,7 +7774,7 @@ func TestDedup2(t *testing.T) {
 		txn, rel := tae.GetRelation()
 		for j := 0; j <= i; j++ {
 			err := rel.Append(context.Background(), datas[j])
-			assert.Error(t, err)
+			assert.Error(t, err, "txn start at %v", txn.GetStartTS().ToString())
 		}
 		assert.NoError(t, txn.Commit(context.Background()))
 	}

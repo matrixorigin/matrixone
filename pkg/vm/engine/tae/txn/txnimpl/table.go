@@ -1092,7 +1092,7 @@ func (tbl *txnTable) DedupSnapByPK(ctx context.Context, keys containers.Vector, 
 		}
 		objData := obj.GetObjectData()
 		if objData == nil {
-			continue
+			panic(fmt.Sprintf("logic error, object %v", obj.StringWithLevel(3)))
 		}
 		if dedupAfterSnapshotTS && objData.CoarseCheckAllRowsCommittedBefore(tbl.store.txn.GetSnapshotTS()) {
 			continue
