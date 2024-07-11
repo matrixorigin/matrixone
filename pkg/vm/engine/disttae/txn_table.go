@@ -267,21 +267,13 @@ func ForeachVisibleDataObject(
 	defer iter.Close()
 	var i int
 	var wg sync.WaitGroup
-	var limiter chan struct{}
-	if executor != nil {
-		limiter = make(chan struct{}, executor.GetConcurrency())
-	}
 	for iter.Next() {
 		var j = i
 		entry := iter.Entry()
 		if executor != nil {
-			limiter <- struct{}{}
 			wg.Add(1)
 			executor.AppendTask(func() error {
-				defer func() {
-					wg.Done()
-					<-limiter
-				}()
+				defer wg.Done()
 				return fn(j, entry)
 			})
 		} else {
