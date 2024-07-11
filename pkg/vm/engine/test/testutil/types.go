@@ -16,8 +16,8 @@ package testutil
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 

@@ -401,6 +401,8 @@ func (c *PushClient) TryToSubscribeTable(
 		case Unsubscribed:
 			panic("Impossible Path")
 
+		case SubRspReceived:
+			return nil
 		}
 
 	}
@@ -938,7 +940,7 @@ func (c *PushClient) loadAndConsumeLatestCkp(
 	defer c.subscribed.mutex.Unlock()
 	v, exist := c.subscribed.m[SubTableID{DatabaseID: tbl.db.databaseId, TableID: tableId}]
 	if exist && (v.SubState == SubRspReceived || v.SubState == Subscribed) {
-		part, err := c.eng.lazyLoadLatestCkp(ctx, tbl)
+		part, err := c.eng.LazyLoadLatestCkp(ctx, tbl)
 		if err != nil {
 			return InvalidSubState, nil, err
 		}
