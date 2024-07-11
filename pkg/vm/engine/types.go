@@ -660,6 +660,10 @@ type Relation interface {
 	MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, policyName string, targetObjSize uint32) (*api.MergeCommitEntry, error)
 }
 
+// Tombstone is used to scan tombstones in memory or object for a table.
+type Tombstone interface {
+}
+
 type Reader interface {
 	Close() error
 	Read(context.Context, []string, *plan.Expr, *mpool.MPool, VectorPool) (*batch.Batch, error)

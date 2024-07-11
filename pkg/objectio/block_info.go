@@ -55,7 +55,9 @@ const (
 )
 
 type BlockInfo struct {
-	BlockID    types.Blockid
+	BlockID types.Blockid
+	//It's used to indicate whether the block is appendable block or non-appendable blk for reader.
+	// for appendable block, the data visibility in the block is determined by the commit ts and abort ts.
 	EntryState bool
 	Sorted     bool
 	MetaLoc    ObjectLocation

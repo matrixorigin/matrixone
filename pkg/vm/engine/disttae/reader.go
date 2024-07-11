@@ -19,6 +19,8 @@ import (
 	"sort"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -40,7 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 // -----------------------------------------------------------------
@@ -557,6 +558,7 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 	iter.Close()
 
 	txnOffset := r.txnOffset
+	//TODO:: remove the following code after refactor reader.
 	if r.table.db.op.IsSnapOp() {
 		txnOffset = r.table.getTxn().GetSnapshotWriteOffset()
 	}
@@ -677,5 +679,70 @@ func (r *mergeReader) Read(
 			return bat, nil
 		}
 	}
+	return nil, nil
+}
+
+// -----------------------------------------------------------------
+
+func newReaderInProgress(
+	ctx context.Context,
+	proc *process.Process, //it comes from transaction if reader run in local,otherwise it comes from remote compile.
+	tableDef *plan.TableDef,
+	ts timestamp.Timestamp,
+	expr *plan.Expr,
+	filter any, // it's valid when reader runs on remote side.
+	orderedScan bool, // it's valid when reader runs on local.
+	//txnOffset int, // it can be removed. it's different between normal reader and snapshot reader.
+
+	//use interface
+	uncommittedRows *batch.Batch, //data in memory
+	committedRows *batch.Batch, // data in memory
+	//FIXME:: use interface?
+	dataBlks []*objectio.BlockInfo, //data in disk, include committed and uncommitted blocks.
+
+	//in memory tombstones and tombstone objects in disk, which should be broadcast to each reader.
+	inMemTombstones engine.Tombstone, //tombstones in memory, include uncommitted and commited tombstones.
+	tombstoneObjs []*logtailreplay.ObjectInfo, //tombstones in disk, include commited and uncommitted tombstones.
+
+) *readerInProgress {
+
+	return &readerInProgress{}
+}
+
+func (r *readerInProgress) Close() error {
+	return nil
+}
+
+func (r *readerInProgress) SetOrderBy(orderby []*plan.OrderBySpec) {
+	r.OrderBy = orderby
+}
+
+func (r *readerInProgress) GetOrderBy() []*plan.OrderBySpec {
+	return r.OrderBy
+}
+
+func (r *readerInProgress) SetFilterZM(zm objectio.ZoneMap) {
+	if !r.filterZM.IsInited() {
+		r.filterZM = zm.Clone()
+		return
+	}
+	if r.desc && r.filterZM.CompareMax(zm) < 0 {
+		r.filterZM = zm.Clone()
+		return
+	}
+	if !r.desc && r.filterZM.CompareMin(zm) > 0 {
+		r.filterZM = zm.Clone()
+		return
+	}
+}
+
+func (r *readerInProgress) Read(
+	ctx context.Context,
+	cols []string,
+	expr *plan.Expr,
+	mp *mpool.MPool,
+	vp engine.VectorPool,
+) (*batch.Batch, error) {
+
 	return nil, nil
 }

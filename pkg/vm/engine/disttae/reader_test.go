@@ -19,9 +19,11 @@ import (
 	"math/rand"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	"github.com/stretchr/testify/require"
+	"github.com/matrixorigin/matrixone/pkg/txn/service"
 )
 
 func TestGatherStats(t *testing.T) {
@@ -54,4 +56,24 @@ func TestGatherStats(t *testing.T) {
 	hit, total = objectio.BlkReadStats.EntryCacheHitStats.Export()
 	require.Equal(t, hit, hitNum)
 	require.Equal(t, total, readNum)
+}
+
+func TestReaderInProgress(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r := newReaderInProgress(
+		ctx,
+		nil,
+		nil,
+		service.NewTestTimestamp(1),
+		nil,
+		nil,
+		true,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+	require.NotNil(t, r)
 }

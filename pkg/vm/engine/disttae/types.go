@@ -805,6 +805,16 @@ type blockMergeReader struct {
 	deletaLocs map[string][]objectio.Location
 }
 
+type readerInProgress struct {
+
+	// for ordered scan
+	desc     bool
+	blockZMS []index.ZM
+	OrderBy  []*plan.OrderBySpec
+	sorted   bool // blks need to be sorted by zonemap
+	filterZM objectio.ZoneMap
+}
+
 type mergeReader struct {
 	rds []engine.Reader
 }
