@@ -318,9 +318,9 @@ const (
 	SystemSI_LLM_Table_Type = "LLMTable"
 
 	// LLM index table columns
-	LLM_Index_Table_Primary_ColName   = "__mo_index_original_tbl_pk"
-	LLM_Index_Table_Chunk_ColName     = "__mo_index_chunk"
-	LLM_Index_Table_Embedding_ColName = "__mo_index_embedding"
+	LLM_Index_Table_Primary_ColName   = "original_tbl_pk"
+	LLM_Index_Table_Chunk_ColName     = "chunk"
+	LLM_Index_Table_Embedding_ColName = "embedding"
 )
 
 const (

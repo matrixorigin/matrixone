@@ -1927,6 +1927,9 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 
 // TODO need to pass 3 parameters, list 100, opt type L2, embedding model as argument - need to be done
 func buildLlmSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, pkeyName string) ([]*plan.IndexDef, []*TableDef, error) {
+
+	indexParts := make([]string, 2)
+
 	// 0. validate indexInfo and colMap
 	{
 		// only support 1 column index
@@ -1964,7 +1967,10 @@ func buildLlmSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMa
 		// chunks facilitates querying of text fragments
 		// embedding are high-dimensional floating-point arrays, not suitable for direct key-value query
 
-		indexDefs[0], err = CreateIndexDef(indexInfo, indexTableName, catalog.SystemSI_LLM_Table_Type, []string{"original_tbl_pk", "chunk"}, false)
+		indexParts[0] = catalog.LLM_Index_Table_Primary_ColName
+		indexParts[1] = catalog.LLM_Index_Table_Chunk_ColName
+
+		indexDefs[0], err = CreateIndexDef(indexInfo, indexTableName, catalog.SystemSI_LLM_Table_Type, indexParts, false)
 		if err != nil {
 			return nil, nil, err
 		}
