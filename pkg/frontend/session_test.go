@@ -247,7 +247,9 @@ func TestSession_TxnBegin(t *testing.T) {
 		pu.SV.SkipCheckUser = true
 		setGlobalPu(pu)
 		ioSes, err := NewIOSession(serverConn, pu)
-
+		if err != nil {
+			panic(err)
+		}
 		proto := NewMysqlClientProtocol(0, ioSes, 1024, sv)
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
@@ -313,7 +315,9 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		}
 
 		ioses, err := NewIOSession(serverConn, pu)
-
+		if err != nil {
+			t.Error(err)
+		}
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 		ctx := defines.AttachAccountId(context.Background(), sysAccountID)
 		session := NewSession(ctx, proto, nil)
@@ -397,6 +401,9 @@ func TestSession_GetTempTableStorage(t *testing.T) {
 			t.Error(err)
 		}
 		ioses, err := NewIOSession(serverConn, pu)
+		if err != nil {
+			t.Error(err)
+		}
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 		session := NewSession(context.Background(), proto, nil)
 		return session
@@ -426,6 +433,9 @@ func TestIfInitedTempEngine(t *testing.T) {
 			t.Error(err)
 		}
 		ioses, err := NewIOSession(serverConn, pu)
+		if err != nil {
+			t.Error(err)
+		}
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 		session := NewSession(context.Background(), proto, nil)
 		return session
@@ -454,6 +464,9 @@ func TestSetTempTableStorage(t *testing.T) {
 			t.Error(err)
 		}
 		ioses, err := NewIOSession(serverConn, pu)
+		if err != nil {
+			t.Error(err)
+		}
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 		session := NewSession(context.Background(), proto, nil)
 		return session

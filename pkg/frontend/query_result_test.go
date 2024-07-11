@@ -74,6 +74,7 @@ func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
 	//io session
 
 	ioses, err := NewIOSession(serverConn, pu)
+	assert.Nil(t, err)
 	proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
 	testutil.SetupAutoIncrService()
