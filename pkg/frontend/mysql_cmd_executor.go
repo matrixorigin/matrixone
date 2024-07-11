@@ -2101,6 +2101,50 @@ func canExecuteStatementInUncommittedTransaction(reqCtx context.Context, ses FeS
 	return nil
 }
 
+func readThenWrite(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, writer *io.PipeWriter, mysqlRrWr MysqlRrWr, skipWrite bool, epoch uint64) (error, bool, time.Duration, time.Duration) {
+	var readTime, writeTime time.Duration
+	readStart := time.Now()
+	payload, err := mysqlRrWr.Read()
+	if err != nil {
+		if errors.Is(err, errorInvalidLength0) {
+			return nil, skipWrite, readTime, writeTime
+		}
+		if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
+			err = moerr.NewInvalidInput(execCtx.reqCtx, "cannot read '%s' from client,please check the file path, user privilege and if client start with --local-infile", param.Filepath)
+		}
+		return err, skipWrite, readTime, writeTime
+	}
+	readTime = time.Since(readStart)
+
+	//empty packet means the file is over.
+	length := len(payload)
+	if length == 0 {
+		return errorInvalidLength0, skipWrite, readTime, writeTime
+	}
+	ses.CountPayload(len(payload))
+
+	// If inner error occurs(unexpected or expected(ctrl-c)), proc.Base.LoadLocalReader will be closed.
+	// Then write will return error, but we need to read the rest of the data and not write it to pipe.
+	// So we need a flag[skipWrite] to tell us whether we need to write the data to pipe.
+	// https://github.com/matrixorigin/matrixone/issues/6665#issuecomment-1422236478
+
+	writeStart := time.Now()
+	if !skipWrite {
+		_, err = writer.Write(payload)
+		if err != nil {
+			ses.Errorf(execCtx.reqCtx,
+				"Failed to load local file",
+				zap.String("path", param.Filepath),
+				zap.Uint64("epoch", epoch),
+				zap.Error(err))
+			skipWrite = true
+		}
+		writeTime = time.Since(writeStart)
+
+	}
+	return err, skipWrite, readTime, writeTime
+}
+
 // processLoadLocal executes the load data local.
 // load data local interaction: https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_com_query_response_local_infile_request.html
 func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, writer *io.PipeWriter) (err error) {
@@ -2119,26 +2163,43 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	if err != nil {
 		return
 	}
-	var payload []byte
 	var skipWrite bool
 	skipWrite = false
-
+	var readTime, writeTime time.Duration
 	start := time.Now()
 	epoch, printEvery, minReadTime, maxReadTime, minWriteTime, maxWriteTime := uint64(0), uint64(1024*60), 24*time.Hour, time.Nanosecond, 24*time.Hour, time.Nanosecond
 
-	readThenWrite := func() error {
-		readStart := time.Now()
-		payload, err = mysqlRrWr.Read()
+	err, skipWrite, readTime, writeTime = readThenWrite(ses, execCtx, param, writer, mysqlRrWr, skipWrite, epoch)
+	if err != nil {
+		if errors.Is(err, errorInvalidLength0) {
+			return nil
+		}
+		return err
+	}
+	if readTime > maxReadTime {
+		maxReadTime = readTime
+	}
+	if readTime < minReadTime {
+		minReadTime = readTime
+	}
+
+	if writeTime > maxWriteTime {
+		maxWriteTime = writeTime
+	}
+	if writeTime < minWriteTime {
+		minWriteTime = writeTime
+	}
+
+	for {
+		err, skipWrite, readTime, writeTime = readThenWrite(ses, execCtx, param, writer, mysqlRrWr, skipWrite, epoch)
 		if err != nil {
 			if errors.Is(err, errorInvalidLength0) {
-				return nil
-			}
-			if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
-				err = moerr.NewInvalidInput(execCtx.reqCtx, "cannot read '%s' from client,please check the file path, user privilege and if client start with --local-infile", param.Filepath)
+				err = nil
+				break
 			}
 			return err
 		}
-		readTime := time.Since(readStart)
+
 		if readTime > maxReadTime {
 			maxReadTime = readTime
 		}
@@ -2146,57 +2207,11 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 			minReadTime = readTime
 		}
 
-		//empty packet means the file is over.
-		length := len(payload)
-		if length == 0 {
-			return errorInvalidLength0
+		if writeTime > maxWriteTime {
+			maxWriteTime = writeTime
 		}
-		ses.CountPayload(len(payload))
-
-		// If inner error occurs(unexpected or expected(ctrl-c)), proc.Base.LoadLocalReader will be closed.
-		// Then write will return error, but we need to read the rest of the data and not write it to pipe.
-		// So we need a flag[skipWrite] to tell us whether we need to write the data to pipe.
-		// https://github.com/matrixorigin/matrixone/issues/6665#issuecomment-1422236478
-
-		writeStart := time.Now()
-		if !skipWrite {
-			_, err = writer.Write(payload)
-			if err != nil {
-				ses.Errorf(execCtx.reqCtx,
-					"Failed to load local file",
-					zap.String("path", param.Filepath),
-					zap.Uint64("epoch", epoch),
-					zap.Error(err))
-				skipWrite = true
-			}
-			writeTime := time.Since(writeStart)
-			if writeTime > maxWriteTime {
-				maxWriteTime = writeTime
-			}
-			if writeTime < minWriteTime {
-				minWriteTime = writeTime
-			}
-		}
-		return err
-	}
-
-	err = readThenWrite()
-	if err != nil {
-		if errors.Is(err, errorInvalidLength0) {
-			return nil
-		}
-		return err
-	}
-
-	for {
-		err = readThenWrite()
-
-		if err != nil {
-			if errors.Is(err, errorInvalidLength0) {
-				err = nil
-				break
-			}
-			return err
+		if writeTime < minWriteTime {
+			minWriteTime = writeTime
 		}
 
 		if epoch%printEvery == 0 {
