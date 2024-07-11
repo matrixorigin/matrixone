@@ -74,6 +74,11 @@ func (m *Scheduler) OnTable(tableEntry *catalog.TableEntry) error {
 	if !tableEntry.IsActive() {
 		return moerr.GetOkStopCurrRecur()
 	}
+
+	if m.executor.tableMerging(tableEntry) {
+		return moerr.GetOkStopCurrRecur()
+	}
+
 	tableEntry.RLock()
 	defer tableEntry.RUnlock()
 	// this table is creating or altering

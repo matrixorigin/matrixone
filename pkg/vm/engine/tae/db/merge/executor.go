@@ -40,6 +40,7 @@ import (
 )
 
 type activeTaskStats map[uint64]struct {
+	tblEntry *catalog.TableEntry
 	blk      int
 	estBytes int
 }
@@ -55,7 +56,8 @@ type Executor struct {
 	activeMergeBlkCount atomic.Int32
 	activeEstimateBytes atomic.Int64
 	taskConsume         struct {
-		sync.Mutex
+		sync.RWMutex
+		t map[*catalog.TableEntry]struct{}
 		m activeTaskStats
 	}
 }
@@ -114,18 +116,21 @@ func (e *Executor) PrintStats() {
 	)
 }
 
-func (e *Executor) AddActiveTask(taskId uint64, blkn, esize int) {
+func (e *Executor) addActiveTask(taskId uint64, tblEntry *catalog.TableEntry, blkn, esize int) {
 	e.activeEstimateBytes.Add(int64(esize))
 	e.activeMergeBlkCount.Add(int32(blkn))
 	e.taskConsume.Lock()
+	defer e.taskConsume.Unlock()
 	if e.taskConsume.m == nil {
 		e.taskConsume.m = make(activeTaskStats)
+		e.taskConsume.t = make(map[*catalog.TableEntry]struct{})
 	}
 	e.taskConsume.m[taskId] = struct {
+		tblEntry *catalog.TableEntry
 		blk      int
 		estBytes int
-	}{blkn, esize}
-	e.taskConsume.Unlock()
+	}{tblEntry, blkn, esize}
+	e.taskConsume.t[tblEntry] = struct{}{}
 }
 
 func (e *Executor) OnExecDone(v any) {
@@ -134,10 +139,18 @@ func (e *Executor) OnExecDone(v any) {
 	e.taskConsume.Lock()
 	stat := e.taskConsume.m[task.ID()]
 	delete(e.taskConsume.m, task.ID())
+	delete(e.taskConsume.t, stat.tblEntry)
 	e.taskConsume.Unlock()
 
 	e.activeMergeBlkCount.Add(-int32(stat.blk))
 	e.activeEstimateBytes.Add(-int64(stat.estBytes))
+}
+
+func (e *Executor) tableMerging(tblEntry *catalog.TableEntry) bool {
+	e.taskConsume.RLock()
+	defer e.taskConsume.RUnlock()
+	_, ok := e.taskConsume.t[tblEntry]
+	return ok
 }
 
 func (e *Executor) ExecuteSingleObjMerge(entry *catalog.TableEntry, mobjs []*catalog.ObjectEntry) {
@@ -161,7 +174,7 @@ func (e *Executor) ExecuteSingleObjMerge(entry *catalog.TableEntry, mobjs []*cat
 			return
 		}
 		singleOSize, singleESize, _ := estimateSingleObjMergeConsume(obj)
-		e.AddActiveTask(task.ID(), obj.BlockCnt(), singleESize)
+		e.addActiveTask(task.ID(), entry, obj.BlockCnt(), singleESize)
 		logSingleObjMergeTask(e.tableName, task.ID(), obj, obj.BlockCnt(), singleOSize, singleESize)
 		blkCnt += obj.BlockCnt()
 	}
@@ -237,7 +250,7 @@ func (e *Executor) ExecuteMultiObjMerge(entry *catalog.TableEntry, mobjs []*cata
 			}
 			return
 		}
-		e.AddActiveTask(task.ID(), blkCnt, esize)
+		e.addActiveTask(task.ID(), entry, blkCnt, esize)
 		logMergeTask(e.tableName, task.ID(), mobjs, blkCnt, osize, esize)
 	}
 
