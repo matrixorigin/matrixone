@@ -74,10 +74,10 @@ func (m *multiObjPolicy) revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHos
 	slices.SortFunc(m.objects, func(a, b *catalog.ObjectEntry) int {
 		zmA := a.GetSortKeyZonemap()
 		zmB := b.GetSortKeyZonemap()
-		if c := compute.CompareGeneric(zmA.GetMin(), zmB.GetMin(), t); c != 0 {
+		if c := zmA.CompareMin(zmB); c != 0 {
 			return c
 		}
-		return compute.CompareGeneric(zmA.GetMax(), zmB.GetMax(), t)
+		return zmA.CompareMax(zmB)
 	})
 	set := entrySet{entries: make([]*catalog.ObjectEntry, 0), maxValue: minValue(t)}
 	for _, obj := range m.objects {
@@ -132,6 +132,9 @@ func (m *multiObjPolicy) revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHos
 	})
 
 	objs := m.overlappingObjsSet[len(m.overlappingObjsSet)-1]
+	if len(objs) < 3 {
+		return nil, TaskHostDN
+	}
 	if len(objs) > m.config.maxObjs {
 		objs = objs[:m.config.maxObjs]
 	}
