@@ -82,21 +82,40 @@ func (m *multiObjPolicy) revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHos
 	set := entrySet{entries: make([]*catalog.ObjectEntry, 0), maxValue: minValue(t)}
 	for _, obj := range m.objects {
 		zm := obj.GetSortKeyZonemap()
-		if len(set.entries) == 0 || compute.CompareGeneric(set.maxValue, zm.GetMin(), t) > 0 {
+		if len(set.entries) == 0 {
 			set.add(t, obj)
-		} else if obj.GetOriginSize() < common.Const1MBytes {
-			set.add(t, obj)
-		} else if set.size < common.Const1MBytes {
-			set.add(t, obj)
-		} else if len(set.entries) < 2 {
-			set.reset(t)
-			set.add(t, obj)
-		} else {
+			continue
+		}
+		if obj.GetOriginSize()*3 < set.size || set.size < obj.GetOriginSize()/3 {
+			if len(set.entries) < 2 {
+				set.reset(t)
+				set.add(t, obj)
+				continue
+			}
 			objs := make([]*catalog.ObjectEntry, len(set.entries))
 			copy(objs, set.entries)
 			m.overlappingObjsSet = append(m.overlappingObjsSet, objs)
 			set.reset(t)
+			continue
 		}
+
+		if compute.CompareGeneric(set.maxValue, zm.GetMin(), t) > 0 {
+			set.add(t, obj)
+			continue
+		}
+		if set.size < common.Const1MBytes {
+			set.add(t, obj)
+			continue
+		}
+		if len(set.entries) < 2 {
+			set.reset(t)
+			set.add(t, obj)
+			continue
+		}
+		objs := make([]*catalog.ObjectEntry, len(set.entries))
+		copy(objs, set.entries)
+		m.overlappingObjsSet = append(m.overlappingObjsSet, objs)
+		set.reset(t)
 	}
 	if len(set.entries) > 0 {
 		objs := make([]*catalog.ObjectEntry, len(set.entries))
