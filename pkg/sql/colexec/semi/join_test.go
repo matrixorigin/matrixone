@@ -17,8 +17,9 @@ package semi
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -40,13 +41,13 @@ const (
 
 // add unit tests for cases
 type joinTestCase struct {
-	arg    *Argument
+	arg    *SemiJoin
 	flgs   []bool // flgs[i] == true: nullable
 	types  []types.Type
 	proc   *process.Process
 	cancel context.CancelFunc
-	barg   *hashbuild.Argument
-	marg   *merge.Argument
+	barg   *hashbuild.HashBuild
+	marg   *merge.Merge
 }
 
 var (
@@ -250,7 +251,7 @@ func newTestCase(m *mpool.MPool, flgs []bool, ts []types.Type, rp []int32, cs []
 		flgs:   flgs,
 		proc:   proc,
 		cancel: cancel,
-		arg: &Argument{
+		arg: &SemiJoin{
 			Typs:       ts,
 			Result:     rp,
 			Conditions: cs,
@@ -263,7 +264,7 @@ func newTestCase(m *mpool.MPool, flgs []bool, ts []types.Type, rp []int32, cs []
 				},
 			},
 		},
-		barg: &hashbuild.Argument{
+		barg: &hashbuild.HashBuild{
 			Typs:        ts,
 			NeedHashMap: true,
 			Conditions:  cs[1],
@@ -277,7 +278,7 @@ func newTestCase(m *mpool.MPool, flgs []bool, ts []types.Type, rp []int32, cs []
 			NeedAllocateSels: true,
 			NeedMergedBatch:  true,
 		},
-		marg: &merge.Argument{},
+		marg: &merge.Merge{},
 	}
 }
 

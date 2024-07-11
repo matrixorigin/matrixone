@@ -23,7 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(Source)
 
 const (
 	retrieve = 0
@@ -34,7 +34,7 @@ type container struct {
 	status int
 	buf    *batch.Batch
 }
-type Argument struct {
+type Source struct {
 	ctr    *container
 	TblDef *plan.TableDef
 	Offset int64
@@ -48,48 +48,48 @@ type Argument struct {
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (source *Source) GetOperatorBase() *vm.OperatorBase {
+	return &source.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[Source](
+		func() *Source {
+			return &Source{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *Source) {
+			*a = Source{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[Source]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (source Source) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *Source {
+	return reuse.Alloc[Source](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (source *Source) Release() {
+	if source != nil {
+		reuse.Free[Source](source, nil)
 	}
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	arg.Free(proc, pipelineFailed, err)
+func (source *Source) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	source.Free(proc, pipelineFailed, err)
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if arg.ctr != nil {
-		if arg.ctr.buf != nil {
-			arg.ctr.buf.Clean(proc.Mp())
-			arg.ctr.buf = nil
+func (source *Source) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if source.ctr != nil {
+		if source.ctr.buf != nil {
+			source.ctr.buf.Clean(proc.Mp())
+			source.ctr.buf = nil
 		}
-		arg.ctr = nil
+		source.ctr = nil
 	}
 
 }

@@ -17,8 +17,9 @@ package loopmark
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -39,13 +40,13 @@ const (
 
 // add unit tests for cases
 type joinTestCase struct {
-	arg    *Argument
+	arg    *LoopMark
 	flgs   []bool // flgs[i] == true: nullable
 	types  []types.Type
 	proc   *process.Process
 	cancel context.CancelFunc
-	barg   *hashbuild.Argument
-	marg   *merge.Argument
+	barg   *hashbuild.HashBuild
+	marg   *merge.Merge
 }
 
 var (
@@ -235,7 +236,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []int32) joinTestCase {
 		flgs:   flgs,
 		proc:   proc,
 		cancel: cancel,
-		arg: &Argument{
+		arg: &LoopMark{
 			Typs:   ts,
 			Cond:   cond,
 			Result: rp,
@@ -247,7 +248,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []int32) joinTestCase {
 				},
 			},
 		},
-		barg: &hashbuild.Argument{
+		barg: &hashbuild.HashBuild{
 			Typs: ts,
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
@@ -257,7 +258,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []int32) joinTestCase {
 				},
 			},
 		},
-		marg: &merge.Argument{},
+		marg: &merge.Merge{},
 	}
 }
 

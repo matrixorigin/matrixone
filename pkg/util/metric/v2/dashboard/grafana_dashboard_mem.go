@@ -115,10 +115,14 @@ func (c *DashboardCreator) initMallocRow() dashboard.Option {
 			[]string{
 				`sum(` + c.getMetricWithFilter("mo_mem_malloc_counter", `type="`+prefix+`allocate"`) + `)`,
 				`sum(` + c.getMetricWithFilter("mo_mem_malloc_gauge", `type="`+prefix+`inuse"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_mem_malloc_counter", `type="`+prefix+`allocate-objects"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_mem_malloc_gauge", `type="`+prefix+`inuse-objects"`) + `)`,
 			},
 			[]string{
-				prefix + "allocate",
-				prefix + "inuse",
+				prefix + "allocate bytes",
+				prefix + "inuse bytes",
+				prefix + "allocate objects",
+				prefix + "inuse objects",
 			},
 		)
 	}
