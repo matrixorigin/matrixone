@@ -188,7 +188,12 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 		s.Reset(c)
 	}
 
-	c.MessageBoard = c.MessageBoard.Reset()
+	for _, v := range c.nodeRegs {
+		v.CleanChannel(c.proc.GetMPool())
+	}
+
+	c.MessageBoard.Reset()
+	c.MessageBoard = process.NewMessageBoard()
 	c.counterSet.Reset()
 
 	for _, f := range c.fuzzys {
@@ -214,7 +219,8 @@ func (c *Compile) clear() {
 		c.fuzzys[i].release()
 	}
 
-	c.MessageBoard = c.MessageBoard.Reset()
+	c.MessageBoard.Reset()
+	c.MessageBoard = nil
 	c.fuzzys = c.fuzzys[:0]
 	c.scope = c.scope[:0]
 	c.pn = nil
