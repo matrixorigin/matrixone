@@ -41,13 +41,13 @@ const (
 
 // add unit tests for cases
 type antiTestCase struct {
-	arg    *Argument
+	arg    *AntiJoin
 	flgs   []bool // flgs[i] == true: nullable
 	types  []types.Type
 	proc   *process.Process
 	cancel context.CancelFunc
-	barg   *hashbuild.Argument
-	marg   *merge.Argument
+	barg   *hashbuild.HashBuild
+	marg   *merge.Merge
 }
 
 var (
@@ -276,7 +276,7 @@ func newTestCase(m *mpool.MPool, flgs []bool, ts []types.Type, rp []int32, cs []
 		flgs:   flgs,
 		proc:   proc,
 		cancel: cancel,
-		arg: &Argument{
+		arg: &AntiJoin{
 			Typs:       ts,
 			Result:     rp,
 			Conditions: cs,
@@ -289,7 +289,7 @@ func newTestCase(m *mpool.MPool, flgs []bool, ts []types.Type, rp []int32, cs []
 				},
 			},
 		},
-		barg: &hashbuild.Argument{
+		barg: &hashbuild.HashBuild{
 			Typs:        ts,
 			NeedHashMap: true,
 			Conditions:  cs[1],
@@ -303,7 +303,7 @@ func newTestCase(m *mpool.MPool, flgs []bool, ts []types.Type, rp []int32, cs []
 			NeedAllocateSels: true,
 			NeedMergedBatch:  true,
 		},
-		marg: &merge.Argument{},
+		marg: &merge.Merge{},
 	}
 }
 

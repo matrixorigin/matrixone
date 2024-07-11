@@ -28,7 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(FuzzyFilter)
 
 const (
 	Build = iota
@@ -53,7 +53,7 @@ type container struct {
 	pass2RuntimeFilter *vector.Vector
 }
 
-type Argument struct {
+type FuzzyFilter struct {
 	ctr *container
 
 	// Estimates of the number of data items obtained from statistical information
@@ -68,72 +68,72 @@ type Argument struct {
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (fuzzyFilter *FuzzyFilter) GetOperatorBase() *vm.OperatorBase {
+	return &fuzzyFilter.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[FuzzyFilter](
+		func() *FuzzyFilter {
+			return &FuzzyFilter{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *FuzzyFilter) {
+			*a = FuzzyFilter{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[FuzzyFilter]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (fuzzyFilter FuzzyFilter) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *FuzzyFilter {
+	return reuse.Alloc[FuzzyFilter](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (fuzzyFilter *FuzzyFilter) Release() {
+	if fuzzyFilter != nil {
+		reuse.Free[FuzzyFilter](fuzzyFilter, nil)
 	}
 }
 
-func (arg *Argument) ifBuildOnSink() bool {
-	return arg.BuildIdx == 1
+func (fuzzyFilter *FuzzyFilter) ifBuildOnSink() bool {
+	return fuzzyFilter.BuildIdx == 1
 }
 
-func (arg *Argument) getProbeIdx() int {
-	return 1 - arg.BuildIdx
+func (fuzzyFilter *FuzzyFilter) getProbeIdx() int {
+	return 1 - fuzzyFilter.BuildIdx
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	arg.Free(proc, pipelineFailed, err)
+func (fuzzyFilter *FuzzyFilter) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	fuzzyFilter.Free(proc, pipelineFailed, err)
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	proc.FinalizeRuntimeFilter(arg.RuntimeFilterSpec)
-	if arg.ctr.bloomFilter != nil {
-		arg.ctr.bloomFilter.Clean()
-		arg.ctr.bloomFilter = nil
+func (fuzzyFilter *FuzzyFilter) Free(proc *process.Process, pipelineFailed bool, err error) {
+	proc.FinalizeRuntimeFilter(fuzzyFilter.RuntimeFilterSpec)
+	if fuzzyFilter.ctr.bloomFilter != nil {
+		fuzzyFilter.ctr.bloomFilter.Clean()
+		fuzzyFilter.ctr.bloomFilter = nil
 	}
-	if arg.ctr.roaringFilter != nil {
-		arg.ctr.roaringFilter = nil
+	if fuzzyFilter.ctr.roaringFilter != nil {
+		fuzzyFilter.ctr.roaringFilter = nil
 	}
-	if arg.ctr.rbat != nil {
-		arg.ctr.rbat.Clean(proc.GetMPool())
-		arg.ctr.rbat = nil
+	if fuzzyFilter.ctr.rbat != nil {
+		fuzzyFilter.ctr.rbat.Clean(proc.GetMPool())
+		fuzzyFilter.ctr.rbat = nil
 	}
-	if arg.ctr.pass2RuntimeFilter != nil {
-		arg.ctr.pass2RuntimeFilter.Free(proc.GetMPool())
-		arg.ctr.pass2RuntimeFilter = nil
+	if fuzzyFilter.ctr.pass2RuntimeFilter != nil {
+		fuzzyFilter.ctr.pass2RuntimeFilter.Free(proc.GetMPool())
+		fuzzyFilter.ctr.pass2RuntimeFilter = nil
 	}
 
-	arg.ctr.FreeAllReg()
+	fuzzyFilter.ctr.FreeAllReg()
 }
 
-func (arg *Argument) add(pkCol *vector.Vector) {
-	ctr := arg.ctr
+func (fuzzyFilter *FuzzyFilter) add(pkCol *vector.Vector) {
+	ctr := fuzzyFilter.ctr
 	if ctr.roaringFilter != nil {
 		ctr.roaringFilter.addFunc(ctr.roaringFilter, pkCol)
 	} else {
@@ -141,20 +141,20 @@ func (arg *Argument) add(pkCol *vector.Vector) {
 	}
 }
 
-func (arg *Argument) test(proc *process.Process, pkCol *vector.Vector) error {
-	ctr := arg.ctr
+func (fuzzyFilter *FuzzyFilter) test(proc *process.Process, pkCol *vector.Vector) error {
+	ctr := fuzzyFilter.ctr
 	if ctr.roaringFilter != nil {
 		idx, dupVal := ctr.roaringFilter.testFunc(ctr.roaringFilter, pkCol)
 		if idx == -1 {
 			return nil
 		} else {
-			return moerr.NewDuplicateEntry(proc.Ctx, valueToString(dupVal), arg.PkName)
+			return moerr.NewDuplicateEntry(proc.Ctx, valueToString(dupVal), fuzzyFilter.PkName)
 		}
 	} else {
 		ctr.bloomFilter.Test(pkCol, func(exist bool, i int) {
 			if exist {
 				if ctr.collisionCnt < maxCheckDupCount {
-					arg.appendCollisionKey(proc, i, pkCol)
+					fuzzyFilter.appendCollisionKey(proc, i, pkCol)
 				}
 			}
 		})
@@ -162,20 +162,20 @@ func (arg *Argument) test(proc *process.Process, pkCol *vector.Vector) error {
 	return nil
 }
 
-func (arg *Argument) testAndAdd(proc *process.Process, pkCol *vector.Vector) error {
-	ctr := arg.ctr
+func (fuzzyFilter *FuzzyFilter) testAndAdd(proc *process.Process, pkCol *vector.Vector) error {
+	ctr := fuzzyFilter.ctr
 	if ctr.roaringFilter != nil {
 		idx, dupVal := ctr.roaringFilter.testAndAddFunc(ctr.roaringFilter, pkCol)
 		if idx == -1 {
 			return nil
 		} else {
-			return moerr.NewDuplicateEntry(proc.Ctx, valueToString(dupVal), arg.PkName)
+			return moerr.NewDuplicateEntry(proc.Ctx, valueToString(dupVal), fuzzyFilter.PkName)
 		}
 	} else {
 		ctr.bloomFilter.TestAndAdd(pkCol, func(exist bool, i int) {
 			if exist {
 				if ctr.collisionCnt < maxCheckDupCount {
-					arg.appendCollisionKey(proc, i, pkCol)
+					fuzzyFilter.appendCollisionKey(proc, i, pkCol)
 					return
 				}
 				logutil.Debugf("too many collision for fuzzy filter")

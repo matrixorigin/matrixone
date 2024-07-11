@@ -28,43 +28,43 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "merge_top"
+const opName = "merge_top"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (mergeTop *MergeTop) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": mergetop([")
-	for i, f := range arg.Fs {
+	for i, f := range mergeTop.Fs {
 		if i > 0 {
 			buf.WriteString(", ")
 		}
 		buf.WriteString(f.String())
 	}
-	buf.WriteString(fmt.Sprintf("], %v)", arg.Limit))
+	buf.WriteString(fmt.Sprintf("], %v)", mergeTop.Limit))
 }
 
-func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	arg.ctr = new(container)
-	arg.ctr.limitExecutor, err = colexec.NewExpressionExecutor(proc, arg.Limit)
+func (mergeTop *MergeTop) Prepare(proc *process.Process) (err error) {
+	mergeTop.ctr = new(container)
+	mergeTop.ctr.limitExecutor, err = colexec.NewExpressionExecutor(proc, mergeTop.Limit)
 	if err != nil {
 		return err
 	}
-	vec, err := arg.ctr.limitExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+	vec, err := mergeTop.ctr.limitExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 	if err != nil {
 		return err
 	}
-	arg.ctr.limit = vector.MustFixedCol[uint64](vec)[0]
-	arg.ctr.InitReceiver(proc, true)
-	if arg.ctr.limit > 1024 {
-		arg.ctr.sels = make([]int64, 0, 1024)
+	mergeTop.ctr.limit = vector.MustFixedCol[uint64](vec)[0]
+	mergeTop.ctr.InitReceiver(proc, true)
+	if mergeTop.ctr.limit > 1024 {
+		mergeTop.ctr.sels = make([]int64, 0, 1024)
 	} else {
-		arg.ctr.sels = make([]int64, 0, arg.ctr.limit)
+		mergeTop.ctr.sels = make([]int64, 0, mergeTop.ctr.limit)
 	}
-	arg.ctr.poses = make([]int32, 0, len(arg.Fs))
+	mergeTop.ctr.poses = make([]int32, 0, len(mergeTop.Fs))
 
-	ctr := arg.ctr
-	ctr.executorsForOrderList = make([]colexec.ExpressionExecutor, len(arg.Fs))
+	ctr := mergeTop.ctr
+	ctr.executorsForOrderList = make([]colexec.ExpressionExecutor, len(mergeTop.Fs))
 	for i := range ctr.executorsForOrderList {
-		ctr.executorsForOrderList[i], err = colexec.NewExpressionExecutor(proc, arg.Fs[i].Expr)
+		ctr.executorsForOrderList[i], err = colexec.NewExpressionExecutor(proc, mergeTop.Fs[i].Expr)
 		if err != nil {
 			return err
 		}
@@ -72,23 +72,23 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (mergeTop *MergeTop) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze(mergeTop.GetIdx(), mergeTop.GetParallelIdx(), mergeTop.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
-	ctr := arg.ctr
+	ctr := mergeTop.ctr
 	result := vm.NewCallResult()
-	if arg.ctr.limit == 0 {
+	if mergeTop.ctr.limit == 0 {
 		result.Batch = nil
 		result.Status = vm.ExecStop
 		return result, nil
 	}
 
-	if end, err := ctr.build(arg, proc, anal, arg.GetIsFirst()); err != nil {
+	if end, err := ctr.build(mergeTop, proc, anal, mergeTop.GetIsFirst()); err != nil {
 		return result, err
 	} else if end {
 		result.Status = vm.ExecStop
@@ -100,7 +100,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		result.Status = vm.ExecStop
 		return result, nil
 	}
-	err := ctr.eval(arg.ctr.limit, proc, anal, arg.GetIsLast(), &result)
+	err := ctr.eval(mergeTop.ctr.limit, proc, anal, mergeTop.GetIsLast(), &result)
 	if err == nil {
 		result.Status = vm.ExecStop
 		return result, nil
@@ -108,7 +108,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	return result, err
 }
 
-func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) (bool, error) {
+func (ctr *container) build(ap *MergeTop, proc *process.Process, anal process.Analyze, isFirst bool) (bool, error) {
 	for {
 		msg := ctr.ReceiveFromAllRegs(anal)
 		if msg.Err != nil {
