@@ -29,10 +29,7 @@ func (connector *Connector) String(buf *bytes.Buffer) {
 	buf.WriteString(": pipe connector")
 }
 
-func (connector *Connector) Prepare(proc *process.Process) error {
-	if connector.Reg != nil {
-		connector.Reg.CleanChannel(proc.GetMPool())
-	}
+func (connector *Connector) Prepare(_ *process.Process) error {
 	return nil
 }
 
