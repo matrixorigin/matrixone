@@ -494,27 +494,26 @@ func doLock(
 	}
 
 	if len(result.ConflictKey) > 0 {
-		if hex.EncodedLen(len(result.ConflictKey)) > 20000 {
-			msg := fmt.Sprintf("--------- key = %s, sql =%s", string(result.ConflictKey), proc.OriginSQL)
-			panic(msg)
-		}
-		trace.GetService().AddTxnActionInfo(
-			txnOp,
-			client.LockEvent,
-			seq,
-			tableID,
-			func(writer trace.Writer) {
-				writer.WriteHex(result.ConflictKey)
-				writer.WriteString(":")
-				writer.WriteHex(result.ConflictTxn)
-				writer.WriteString("/")
-				writer.WriteUint(uint64(result.Waiters))
-				if len(result.PrevWaiter) > 0 {
+		// remove this if xx after #17453 fixed
+		if hex.EncodedLen(len(result.ConflictKey)) < 16384 {
+			trace.GetService().AddTxnActionInfo(
+				txnOp,
+				client.LockEvent,
+				seq,
+				tableID,
+				func(writer trace.Writer) {
+					writer.WriteHex(result.ConflictKey)
+					writer.WriteString(":")
+					writer.WriteHex(result.ConflictTxn)
 					writer.WriteString("/")
-					writer.WriteHex(result.PrevWaiter)
-				}
-			},
-		)
+					writer.WriteUint(uint64(result.Waiters))
+					if len(result.PrevWaiter) > 0 {
+						writer.WriteString("/")
+						writer.WriteHex(result.PrevWaiter)
+					}
+				},
+			)
+		}
 	}
 
 	trace.GetService().AddTxnDurationAction(

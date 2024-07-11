@@ -98,7 +98,6 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	// reg and cancel
 	proc.Ctx = newctx
 	proc.Cancel = cancel
-	proc.OriginSQL = p.OriginSQL
 	proc.Reg.MergeReceivers = make([]*WaitRegister, regNumber)
 	for i := 0; i < regNumber; i++ {
 		proc.Reg.MergeReceivers[i] = &WaitRegister{
