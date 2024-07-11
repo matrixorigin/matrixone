@@ -139,11 +139,10 @@ func encodeProcessInfo(
 
 func appendWriteBackOperator(c *Compile, s *Scope) *Scope {
 	rs := c.newMergeScope([]*Scope{s})
-	rs.appendInstruction(vm.Instruction{
-		Idx: -1, // useless
-		Arg: output.NewArgument().
-			WithFunc(c.fill),
-	})
+	op := output.NewArgument().
+		WithFunc(c.fill)
+	op.SetIdx(-1)
+	rs.setRootOperator(op)
 	return rs
 }
 
@@ -393,7 +392,7 @@ func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline,
 		if err != nil {
 			return err
 		}
-		s.appendOperator(ins)
+		s.doSetRootOperator(ins)
 	}
 	if s.isShuffle() {
 		for _, rr := range s.Proc.Reg.MergeReceivers {
