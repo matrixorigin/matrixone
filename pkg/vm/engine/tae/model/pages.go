@@ -196,7 +196,7 @@ func (page *TransferHashPage) ClearTable() {
 	}
 
 	page.hashmap.Store(nil)
-	v2.TaskMergeTransferPageSizeGauge.Sub(float64(len(m.M)))
+	v2.TaskMergeTransferPageLengthGauge.Sub(float64(len(m.M)))
 	m.M = make(map[uint32][]byte)
 }
 
@@ -237,7 +237,7 @@ func (page *TransferHashPage) loadTable() *api.HashPageMap {
 	}
 	page.hashmap.Store(m)
 	logutil.Infof("load transfer page %v", page.String())
-	v2.TaskMergeTransferPageSizeGauge.Add(float64(page.Length()))
+	v2.TaskMergeTransferPageLengthGauge.Add(float64(page.Length()))
 	return m
 }
 

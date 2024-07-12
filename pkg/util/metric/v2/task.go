@@ -122,7 +122,7 @@ var (
 )
 
 var (
-	TaskMergeTransferPageSizeGauge = prometheus.NewGauge(
+	TaskMergeTransferPageLengthGauge = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "mo",
 			Subsystem: "task",

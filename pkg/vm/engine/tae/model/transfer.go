@@ -119,7 +119,7 @@ func (table *TransferTable[T]) AddPage(page T) (dup bool) {
 	}
 	table.pages[id] = pinned
 
-	v2.TaskMergeTransferPageSizeGauge.Add(float64(page.Length()))
+	v2.TaskMergeTransferPageLengthGauge.Add(float64(page.Length()))
 	return
 }
 
