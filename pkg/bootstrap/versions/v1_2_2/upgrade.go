@@ -122,7 +122,7 @@ var upg_mo_snapshots_to_varchar = versions.UpgradeEntry{
 			return false, err
 		}
 
-		if colInfo.ColType == "TIMESTAMP" {
+		if colInfo.ColType != "TIMESTAMP" {
 			return true, nil
 		}
 		return false, nil
@@ -140,7 +140,7 @@ var upg_mo_snapshots_to_bigint = versions.UpgradeEntry{
 			return false, err
 		}
 
-		if colInfo.ColType == "VARCHAR" {
+		if colInfo.ColType != "VARCHAR" {
 			return true, nil
 		}
 		return false, nil
