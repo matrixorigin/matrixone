@@ -22,15 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func (ins *Instruction) MarshalBinary() ([]byte, error) {
-	return nil, nil
-}
-
-func (ins *Instruction) UnmarshalBinary(_ []byte) error {
-	return nil
-}
-
-// String range instructions and call each operator's string function to show a query plan
+// call each operator's string function to show a query plan
 func String(rootOp Operator, buf *bytes.Buffer) {
 	HandleAllOp(rootOp, func(parentOp Operator, op Operator) error {
 		if op.GetOperatorBase().NumChildren() > 0 {
@@ -41,7 +33,7 @@ func String(rootOp Operator, buf *bytes.Buffer) {
 	})
 }
 
-// Prepare range instructions and do init work for each operator's argument by calling its prepare function
+// do init work for each operator by calling its prepare function
 func Prepare(op Operator, proc *process.Process) error {
 	return HandleAllOp(op, func(parentOp Operator, op Operator) error {
 		return op.Prepare(proc)
