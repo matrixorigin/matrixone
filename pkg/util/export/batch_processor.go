@@ -166,6 +166,9 @@ func (b *bufferHolder) Add(item batchpipe.HasName) {
 var _ generateReq = (*bufferGenerateReq)(nil)
 
 type bufferGenerateReq struct {
+	// itemName name of buffer's item
+	itemName string
+	// buffer keep content
 	buffer batchpipe.ItemBuffer[batchpipe.HasName, any]
 	// impl NewItemBatchHandler
 	b *bufferHolder
@@ -181,6 +184,8 @@ func (r *bufferGenerateReq) handle(buf *bytes.Buffer) (exportReq, error) {
 }
 
 func (r *bufferGenerateReq) callback(err error) {}
+
+func (r *bufferGenerateReq) typ() string { return r.itemName }
 
 var _ exportReq = (*bufferExportReq)(nil)
 
@@ -213,6 +218,8 @@ func (b *bufferHolder) getGenerateReq() generateReq {
 	req := &bufferGenerateReq{
 		buffer: b.buffer,
 		b:      b,
+		// impl generateReq.typ()
+		itemName: b.name,
 	}
 	b.buffer = nil
 	return req
@@ -517,6 +524,7 @@ loop:
 type generateReq interface {
 	handle(*bytes.Buffer) (exportReq, error)
 	callback(error)
+	typ() string
 }
 
 type exportReq interface {
@@ -583,6 +591,8 @@ loop:
 				case <-time.After(time.Second * 10):
 					c.logger.Info("awakeBatch: timeout after 10 seconds")
 					v2.TraceCollectorGenerateDiscardDurationHistogram.Observe(time.Since(start).Seconds())
+					// fixme: do csv output, should NO discard case
+					v2.GetTraceCollectorDiscardCounter(req.typ()).Inc()
 				}
 				end := time.Now()
 				v2.TraceCollectorGenerateDelayDurationHistogram.Observe(end.Sub(startDelay).Seconds())
