@@ -50,7 +50,7 @@ func Prepare(op Operator, proc *process.Process) error {
 
 func setAnalyzeInfo(rootOp Operator, proc *process.Process) {
 	HandleAllOp(rootOp, func(parentOp Operator, op Operator) error {
-		switch op.GetOperatorBase().Op {
+		switch op.OpType() {
 		case Output:
 			op.GetOperatorBase().SetIdx(-1)
 		case TableScan:
@@ -73,7 +73,7 @@ func setAnalyzeInfo(rootOp Operator, proc *process.Process) {
 			ParallelID:  opBase.ParallelID,
 			MaxParallel: opBase.MaxParallel,
 		}
-		opType := opBase.Op
+		opType := op.OpType()
 		switch opType {
 		case HashBuild, ShuffleBuild, IndexBuild, Filter, MergeGroup, MergeOrder:
 			isMinor := true

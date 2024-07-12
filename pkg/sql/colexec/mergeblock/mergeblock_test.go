@@ -111,7 +111,7 @@ func TestMergeBlock(t *testing.T) {
 	}
 	batch1.SetRowCount(3)
 
-	argument1 := Argument{
+	argument1 := MergeBlock{
 		container: &Container{
 			source: &mockRelation{},
 			mp:     make(map[int]*batch.Batch),
@@ -173,8 +173,8 @@ func TestMergeBlock(t *testing.T) {
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
 
-func resetChildren(arg *Argument, bat *batch.Batch) {
-	valueScanArg := &value_scan.Argument{
+func resetChildren(arg *MergeBlock, bat *batch.Batch) {
+	valueScanArg := &value_scan.ValueScan{
 		Batchs: []*batch.Batch{bat},
 	}
 	valueScanArg.Prepare(nil)
@@ -206,7 +206,7 @@ func mockBlockInfoBat(proc *process.Process, withStats bool) *batch.Batch {
 }
 
 func TestArgument_GetMetaLocBat(t *testing.T) {
-	arg := Argument{
+	arg := MergeBlock{
 		container: &Container{
 			source: &mockRelation{},
 			mp:     make(map[int]*batch.Batch),

@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(AntiJoin)
 
 const (
 	Build = iota
@@ -65,7 +65,7 @@ type container struct {
 	lastrow      int
 }
 
-type Argument struct {
+type AntiJoin struct {
 	ctr                *container
 	Result             []int32
 	Typs               []types.Type
@@ -78,43 +78,43 @@ type Argument struct {
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (antiJoin *AntiJoin) GetOperatorBase() *vm.OperatorBase {
+	return &antiJoin.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[AntiJoin](
+		func() *AntiJoin {
+			return &AntiJoin{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *AntiJoin) {
+			*a = AntiJoin{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[AntiJoin]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (antiJoin AntiJoin) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *AntiJoin {
+	return reuse.Alloc[AntiJoin](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (antiJoin *AntiJoin) Release() {
+	if antiJoin != nil {
+		reuse.Free[AntiJoin](antiJoin, nil)
 	}
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	arg.Free(proc, pipelineFailed, err)
+func (antiJoin *AntiJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	antiJoin.Free(proc, pipelineFailed, err)
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := arg.ctr
+func (antiJoin *AntiJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := antiJoin.ctr
 	if ctr != nil {
 		ctr.cleanBatch(proc)
 		ctr.cleanEvalVectors()
@@ -122,12 +122,12 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		ctr.cleanExprExecutor()
 		ctr.FreeAllReg()
 
-		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+		anal := proc.GetAnalyze(antiJoin.GetIdx(), antiJoin.GetParallelIdx(), antiJoin.GetParallelMajor())
 		anal.Alloc(ctr.maxAllocSize)
 
-		arg.ctr.lastrow = 0
+		antiJoin.ctr.lastrow = 0
 
-		arg.ctr = nil
+		antiJoin.ctr = nil
 	}
 }
 
