@@ -672,8 +672,8 @@ func constructPreInsertSk(n *plan.Node, proc *process.Process) (*preinsertsecond
 	return arg, nil
 }
 
-func constructLockOp(n *plan.Node, eng engine.Engine) (*lockop.LockOp, error) {
-	arg := lockop.NewArgumentByEngine(eng)
+func constructLockOp(n *plan.Node, c *Compile, block bool) *lockop.LockOp {
+	arg := lockop.NewArgumentByEngine(c.e)
 	for _, target := range n.LockTargets {
 		typ := plan2.MakeTypeByPlan2Type(target.PrimaryColTyp)
 		if target.IsPartitionTable {
@@ -694,7 +694,11 @@ func constructLockOp(n *plan.Node, eng engine.Engine) (*lockop.LockOp, error) {
 			}
 		}
 	}
-	return arg, nil
+	arg.SetBlock(block)
+	arg.Idx = c.anal.curr
+	arg.IsFirst = c.anal.isFirst
+
+	return arg
 }
 
 func constructInsert(n *plan.Node, eg engine.Engine) (*insert.Insert, error) {

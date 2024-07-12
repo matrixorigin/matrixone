@@ -1808,24 +1808,23 @@ func (c *Compile) compileLockOp(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 	if c.proc.Base.TxnOperator.Txn().IsPessimistic() {
 		block = n.LockTargets[0].Block
 	}
-	currentFirstFlag := c.anal.isFirst
-	var lockOpArg *lockop.LockOp
-	lockOpArg, err := constructLockOp(n, c.e)
-	if err != nil {
-		return nil, err
-	}
-	lockOpArg.SetBlock(block)
-	lockOpArg.Idx = c.anal.curr
-	lockOpArg.IsFirst = currentFirstFlag
-
 	if block {
+		lockOpArg := constructLockOp(n, c, block)
 		ss = []*Scope{c.newMergeScope(ss)}
 		lockOpArg.SetChildren(ss[0].RootOp.GetOperatorBase().Children)
 		ss[0].RootOp.Release()
 		ss[0].RootOp = lockOpArg
 	} else {
-		ss = []*Scope{c.newMergeScope(ss)}
-		ss[0].appendOperator(lockOpArg)
+		if len(n.LockTargets) > 1 || n.LockTargets[0].LockTable || !n.LockTargets[0].LockTableAtTheEnd || n.LockTargets[0].LockRows == nil {
+			for i := range ss {
+				lockOpArg := constructLockOp(n, c, block)
+				ss[i].appendOperator(lockOpArg)
+			}
+		} else {
+			lockOpArg := constructLockOp(n, c, block)
+			ss = []*Scope{c.newMergeScope(ss)}
+			ss[0].appendOperator(lockOpArg)
+		}
 	}
 	ss = c.compileProjection(n, ss)
 	return ss, nil
