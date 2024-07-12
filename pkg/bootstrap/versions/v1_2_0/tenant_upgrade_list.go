@@ -516,39 +516,3 @@ var upg_mo_pub = versions.UpgradeEntry{
 		return false, nil
 	},
 }
-
-var upg_mo_snapshots_to_varchar = versions.UpgradeEntry{
-	Schema:    catalog.MO_CATALOG,
-	TableName: catalog.MO_SNAPSHOTS,
-	UpgType:   versions.MODIFY_COLUMN,
-	UpgSql:    fmt.Sprintf("alter table %s.%s modify column %s varchar(100);", catalog.MO_CATALOG, catalog.MO_SNAPSHOTS, catalog.MO_SNAPSHOTS_TS),
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
-		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MO_SNAPSHOTS, catalog.MO_SNAPSHOTS_TS)
-		if err != nil {
-			return false, err
-		}
-
-		if colInfo.ColType == "timestamp" {
-			return true, nil
-		}
-		return false, nil
-	},
-}
-
-var upg_mo_snapshots_to_bigint = versions.UpgradeEntry{
-	Schema:    catalog.MO_CATALOG,
-	TableName: catalog.MO_SNAPSHOTS,
-	UpgType:   versions.MODIFY_COLUMN,
-	UpgSql:    fmt.Sprintf("alter table %s.%s modify column %s bigint;", catalog.MO_CATALOG, catalog.MO_SNAPSHOTS, catalog.MO_SNAPSHOTS_TS),
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
-		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MO_SNAPSHOTS, catalog.MO_SNAPSHOTS_TS)
-		if err != nil {
-			return false, err
-		}
-
-		if colInfo.ColType == "varchar" {
-			return true, nil
-		}
-		return false, nil
-	},
-}

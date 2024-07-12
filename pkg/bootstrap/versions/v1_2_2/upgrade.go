@@ -16,6 +16,7 @@ package v1_2_2
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"go.uber.org/zap"
@@ -27,7 +28,10 @@ import (
 )
 
 var clusterUpgEntries = []versions.UpgradeEntry{}
-var tenantUpgEntries = []versions.UpgradeEntry{}
+var tenantUpgEntries = []versions.UpgradeEntry{
+	upg_mo_snapshots_to_varchar,
+	upg_mo_snapshots_to_bigint,
+}
 
 var (
 	Handler = &versionHandle{
@@ -105,4 +109,40 @@ func (v *versionHandle) HandleClusterUpgrade(
 
 func (v *versionHandle) HandleCreateFrameworkDeps(txn executor.TxnExecutor) error {
 	return moerr.NewInternalErrorNoCtx("Only v1.2.0 can initialize upgrade framework, current version is:%s", Handler.metadata.Version)
+}
+
+var upg_mo_snapshots_to_varchar = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_SNAPSHOTS,
+	UpgType:   versions.MODIFY_COLUMN,
+	UpgSql:    fmt.Sprintf("alter table %s.%s modify column %s varchar(100);", catalog.MO_CATALOG, catalog.MO_SNAPSHOTS, catalog.MO_SNAPSHOTS_TS),
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MO_SNAPSHOTS, catalog.MO_SNAPSHOTS_TS)
+		if err != nil {
+			return false, err
+		}
+
+		if colInfo.ColType == "TIMESTAMP" {
+			return true, nil
+		}
+		return false, nil
+	},
+}
+
+var upg_mo_snapshots_to_bigint = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_SNAPSHOTS,
+	UpgType:   versions.MODIFY_COLUMN,
+	UpgSql:    fmt.Sprintf("alter table %s.%s modify column %s bigint;", catalog.MO_CATALOG, catalog.MO_SNAPSHOTS, catalog.MO_SNAPSHOTS_TS),
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MO_SNAPSHOTS, catalog.MO_SNAPSHOTS_TS)
+		if err != nil {
+			return false, err
+		}
+
+		if colInfo.ColType == "VARCHAR" {
+			return true, nil
+		}
+		return false, nil
+	},
 }
