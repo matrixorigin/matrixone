@@ -1396,7 +1396,6 @@ func storageUsageEliminateErrors(c *storageUsageHistoryArg) (err error) {
 }
 
 type transferArg struct {
-	ctx  *inspectContext
 	mem  int
 	disk int
 	show bool
