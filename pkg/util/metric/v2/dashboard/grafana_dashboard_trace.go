@@ -42,35 +42,6 @@ func (c *DashboardCreator) initTraceDashboard() error {
 	return err
 }
 
-func (c *DashboardCreator) initTraceDurationRow() dashboard.Option {
-	return dashboard.Row(
-		"Trace Collector duration",
-		c.getMultiHistogram(
-			[]string{
-				c.getMetricWithFilter(`mo_trace_collector_duration_seconds_bucket`, `type="collect"`),
-				c.getMetricWithFilter(`mo_trace_collector_duration_seconds_bucket`, `type="generate_awake"`),
-				c.getMetricWithFilter(`mo_trace_collector_duration_seconds_bucket`, `type="generate_awake_discard"`),
-				c.getMetricWithFilter(`mo_trace_collector_duration_seconds_bucket`, `type="generate_delay"`),
-				c.getMetricWithFilter(`mo_trace_collector_duration_seconds_bucket`, `type="generate"`),
-				c.getMetricWithFilter(`mo_trace_collector_duration_seconds_bucket`, `type="generate_discard"`),
-				c.getMetricWithFilter(`mo_trace_collector_duration_seconds_bucket`, `type="export"`),
-			},
-			[]string{
-				"collect",
-				"generate_awake",
-				"generate_awake_discard",
-				"generate_delay",
-				"generate",
-				"generate_discard",
-				"export",
-			},
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			[]float32{3, 3, 3, 3, 3},
-			axis.Unit("s"),
-			axis.Min(0))...,
-	)
-}
-
 func (c *DashboardCreator) initTraceMoLoggerExportDataRow() dashboard.Option {
 
 	panels := c.getMultiHistogram(
