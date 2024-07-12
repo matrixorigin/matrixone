@@ -9038,7 +9038,7 @@ func TestVisitTombstone(t *testing.T) {
 
 	tae.CompactBlocks(false)
 	t.Log(tae.Catalog.SimplePPString(3))
-	tae.ForceGlobalCheckpoint(ctx, ts1, time.Minute)
+	tae.ForceGlobalCheckpoint(ctx, ts1, time.Minute, 0)
 
 	t.Log(tae.Catalog.SimplePPString(3))
 	tae.Restart(context.Background())
@@ -9123,4 +9123,31 @@ func TestTransferDeletes(t *testing.T) {
 	})
 	assert.NoError(t, txn.Commit(ctx))
 	wg.Wait()
+}
+
+func TestGCKP(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchema(2, 0)
+	schema.BlockMaxRows = 10
+	schema.ObjectMaxBlocks = 10
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 1)
+
+	tae.CreateRelAndAppend(bat, true)
+
+	tae.DeleteAll(true)
+
+	tae.CompactBlocks(true)
+	time.Sleep(time.Millisecond * 200)
+
+	tae.ForceGlobalCheckpoint(ctx, tae.TxnMgr.Now(), time.Minute, time.Millisecond*100)
+	tae.Restart(ctx)
+	t.Log(tae.Catalog.SimplePPString(3))
 }
