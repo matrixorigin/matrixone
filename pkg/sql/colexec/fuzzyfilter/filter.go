@@ -76,6 +76,10 @@ func (fuzzyFilter *FuzzyFilter) String(buf *bytes.Buffer) {
 	buf.WriteString(": fuzzy check duplicate constraint")
 }
 
+func (fuzzyFilter *FuzzyFilter) OpType() vm.OpType {
+	return vm.FuzzyFilter
+}
+
 func (fuzzyFilter *FuzzyFilter) Prepare(proc *process.Process) (err error) {
 	ctr := new(container)
 	fuzzyFilter.ctr = ctr

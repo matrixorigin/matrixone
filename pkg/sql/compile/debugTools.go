@@ -192,7 +192,7 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 
 	// explain the operator information
 	showOperator := func(op vm.Operator, mp map[*process.WaitRegister]int) string {
-		id := op.GetOperatorBase().Op
+		id := op.OpType()
 		name, ok := debugInstructionNames[id]
 		if ok {
 			str := name

@@ -35,6 +35,10 @@ func (hashBuild *HashBuild) String(buf *bytes.Buffer) {
 	buf.WriteString(": hash build ")
 }
 
+func (hashBuild *HashBuild) OpType() vm.OpType {
+	return vm.HashBuild
+}
+
 func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
 	hashBuild.ctr = new(container)
 

@@ -30,6 +30,10 @@ func (intersect *Intersect) String(buf *bytes.Buffer) {
 	buf.WriteString(": intersect ")
 }
 
+func (intersect *Intersect) OpType() vm.OpType {
+	return vm.Intersect
+}
+
 func (intersect *Intersect) Prepare(proc *process.Process) error {
 	var err error
 

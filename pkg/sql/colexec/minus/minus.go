@@ -30,6 +30,10 @@ func (minus *Minus) String(buf *bytes.Buffer) {
 	buf.WriteString(": minus ")
 }
 
+func (minus *Minus) OpType() vm.OpType {
+	return vm.Minus
+}
+
 func (minus *Minus) Prepare(proc *process.Process) error {
 	var err error
 	{

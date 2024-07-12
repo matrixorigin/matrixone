@@ -32,6 +32,10 @@ func (loopAnti *LoopAnti) String(buf *bytes.Buffer) {
 	buf.WriteString(": loop anti join ")
 }
 
+func (loopAnti *LoopAnti) OpType() vm.OpType {
+	return vm.LoopAnti
+}
+
 func (loopAnti *LoopAnti) Prepare(proc *process.Process) error {
 	var err error
 

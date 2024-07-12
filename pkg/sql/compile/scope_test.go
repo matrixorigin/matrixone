@@ -57,7 +57,7 @@ func checkSrcOpsWithDst(srcRoot vm.Operator, dstRoot vm.Operator) bool {
 	if srcRoot == nil || dstRoot == nil {
 		return false
 	}
-	if srcRoot.GetOperatorBase().Op != dstRoot.GetOperatorBase().Op {
+	if srcRoot.OpType() != dstRoot.OpType() {
 		return false
 	}
 	srcNumChildren := srcRoot.GetOperatorBase().NumChildren()
@@ -170,7 +170,7 @@ func generateScopeCases(t *testing.T, testCases []string) []*Scope {
 		})
 		require.NoError(t1, err)
 		// ignore the last operator if it's output
-		if c.scope[0].RootOp.GetOperatorBase().Op == vm.Output {
+		if c.scope[0].RootOp.OpType() == vm.Output {
 			c.scope[0].RootOp = c.scope[0].RootOp.GetOperatorBase().GetChildren(0)
 		}
 		return c.scope[0]
@@ -318,7 +318,6 @@ func generateScopeWithRootOperator(proc *process.Process, operatorList []vm.OpTy
 
 	for i := 0; i < len(operatorList); i++ {
 		ret.appendInstruction(vm.Instruction{
-			Op:  operatorList[i],
 			Arg: simpleFakeArgument(operatorList[i]),
 		})
 	}
@@ -361,6 +360,6 @@ func getReverseList2(rootOp vm.Operator, stack []vm.OpType) []vm.OpType {
 		stack = getReverseList2(base.GetChildren(0), stack)
 	}
 
-	stack = append(stack, base.Op)
+	stack = append(stack, rootOp.OpType())
 	return stack
 }

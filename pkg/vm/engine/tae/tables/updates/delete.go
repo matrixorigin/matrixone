@@ -176,7 +176,7 @@ func (node *DeleteNode) IsDeletedLocked(row uint32) bool {
 }
 
 func (node *DeleteNode) GetBlockID() *objectio.Blockid {
-	return objectio.NewBlockidWithObjectID(&node.GetMeta().ID, node.chain.Load().mvcc.blkID)
+	return objectio.NewBlockidWithObjectID(node.GetMeta().ID(), node.chain.Load().mvcc.blkID)
 }
 
 func (node *DeleteNode) RangeDeleteLocked(
@@ -498,7 +498,7 @@ func (node *DeleteNode) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	return
 }
 func (node *DeleteNode) GetPrefix() []byte {
-	return objectio.NewBlockidWithObjectID(&node.GetMeta().ID, node.chain.Load().mvcc.blkID)[:]
+	return objectio.NewBlockidWithObjectID(node.GetMeta().ID(), node.chain.Load().mvcc.blkID)[:]
 }
 func (node *DeleteNode) PrepareRollback() (err error) {
 	node.chain.Load().mvcc.Lock()

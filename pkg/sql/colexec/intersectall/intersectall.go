@@ -36,6 +36,10 @@ func (intersectAll *IntersectAll) String(buf *bytes.Buffer) {
 	buf.WriteString(": intersect all ")
 }
 
+func (intersectAll *IntersectAll) OpType() vm.OpType {
+	return vm.IntersectAll
+}
+
 func (intersectAll *IntersectAll) Prepare(proc *process.Process) error {
 	var err error
 	intersectAll.ctr = new(container)

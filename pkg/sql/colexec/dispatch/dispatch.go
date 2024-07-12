@@ -37,6 +37,10 @@ func (dispatch *Dispatch) String(buf *bytes.Buffer) {
 	buf.WriteString(": dispatch")
 }
 
+func (dispatch *Dispatch) OpType() vm.OpType {
+	return vm.Dispatch
+}
+
 func (dispatch *Dispatch) Prepare(proc *process.Process) error {
 	for i := range dispatch.LocalRegs {
 		dispatch.LocalRegs[i].CleanChannel(proc.GetMPool())
