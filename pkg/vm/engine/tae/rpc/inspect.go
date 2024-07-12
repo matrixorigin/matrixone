@@ -41,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
 type inspectContext struct {
@@ -95,6 +96,9 @@ func initCommand(_ context.Context, inspectCtx *inspectContext) *cobra.Command {
 
 	objPrune := &objectPruneArg{}
 	rootCmd.AddCommand(objPrune.PrepareCommand())
+
+	transfer := &transferArg{}
+	rootCmd.AddCommand(transfer.PrepareCommand())
 
 	return rootCmd
 }
@@ -1388,5 +1392,46 @@ func storageUsageEliminateErrors(c *storageUsageHistoryArg) (err error) {
 	cnt := logtail.EliminateErrorsOnCache(c.ctx.db.Catalog, end)
 	c.ctx.out.Write([]byte(fmt.Sprintf("%d tables backed to the track. ", cnt)))
 
+	return nil
+}
+
+type transferArg struct {
+	ctx  *inspectContext
+	mem  int
+	disk int
+	show bool
+}
+
+func (c *transferArg) PrepareCommand() *cobra.Command {
+	transferCmd := &cobra.Command{
+		Use:   "transfer",
+		Short: "set transfer ttl",
+		Run:   RunFactory(c),
+	}
+	transferCmd.Flags().IntP("mem", "m", 5, "set transfer page memory ttl (s)")
+	transferCmd.Flags().IntP("disk", "d", 3, "set transfer page disk ttl (min)")
+	transferCmd.Flags().BoolP("show", "s", false, "show transfer ttl")
+
+	return transferCmd
+}
+
+func (c *transferArg) FromCommand(cmd *cobra.Command) (err error) {
+	c.mem, _ = cmd.Flags().GetInt("mem")
+	c.disk, _ = cmd.Flags().GetInt("disk")
+	c.show, _ = cmd.Flags().GetBool("show")
+	return nil
+}
+
+func (c *transferArg) String() string {
+	return fmt.Sprintf("transfer page ttl, mem:%v, disk:%v", model.TTL, model.DiskTTL)
+}
+
+func (c *transferArg) Run() error {
+	if c.show {
+		c.show = false
+		return nil
+	}
+	model.TTL = time.Duration(c.mem) * time.Second
+	model.DiskTTL = time.Duration(c.disk) * time.Minute
 	return nil
 }

@@ -44,24 +44,10 @@ func SetFileService(fs fileservice.FileService) {
 	})
 }
 
-type TransferHashPageParams struct {
-	TTL     time.Duration
-	DiskTTL time.Duration
-}
-
-type Option func(*TransferHashPageParams)
-
-func WithTTL(ttl time.Duration) Option {
-	return func(params *TransferHashPageParams) {
-		params.TTL = ttl
-	}
-}
-
-func WithDiskTTL(diskTTL time.Duration) Option {
-	return func(params *TransferHashPageParams) {
-		params.DiskTTL = diskTTL
-	}
-}
+var (
+	TTL     = 5 * time.Second
+	DiskTTL = 3 * time.Minute
+)
 
 type Path struct {
 	Name   string
@@ -75,23 +61,14 @@ type TransferHashPage struct {
 	id          *common.ID // not include blk offset
 	hashmap     atomic.Pointer[api.HashPageMap]
 	path        Path
-	params      TransferHashPageParams
 	isTransient bool
 }
 
-func NewTransferHashPage(id *common.ID, ts time.Time, pageSize int, isTransient bool, opts ...Option) *TransferHashPage {
-	params := TransferHashPageParams{
-		TTL:     5 * time.Second,
-		DiskTTL: 3 * time.Minute,
-	}
-	for _, opt := range opts {
-		opt(&params)
-	}
+func NewTransferHashPage(id *common.ID, ts time.Time, pageSize int, isTransient bool) *TransferHashPage {
 
 	page := &TransferHashPage{
 		bornTS:      ts,
 		id:          id,
-		params:      params,
 		isTransient: isTransient,
 	}
 
@@ -113,10 +90,10 @@ const (
 
 func (page *TransferHashPage) TTL() uint8 {
 	now := time.Now()
-	if now.After(page.bornTS.Add(page.params.DiskTTL)) {
+	if now.After(page.bornTS.Add(DiskTTL)) {
 		return clearDisk
 	}
-	if now.After(page.bornTS.Add(page.params.TTL)) {
+	if now.After(page.bornTS.Add(TTL)) {
 		return clearMemory
 	}
 	return notClear

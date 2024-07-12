@@ -9057,9 +9057,8 @@ func TestPersistTransferTable(t *testing.T) {
 
 	now := time.Now()
 	model.FS = tae.Runtime.Fs.Service
-	page := model.NewTransferHashPage(&id1, now, 10, false,
-		model.WithTTL(time.Second),
-	)
+	model.TTL = 2 * time.Second
+	page := model.NewTransferHashPage(&id1, now, 10, false)
 	ids := make([]types.Rowid, 10)
 	m := make(map[uint32][]byte, 10)
 	for i := 0; i < 10; i++ {
@@ -9123,11 +9122,9 @@ func TestClearPersistTransferTable(t *testing.T) {
 
 	now := time.Now()
 	model.FS = tae.Runtime.Fs.Service
-
-	page := model.NewTransferHashPage(&id1, now, 10, false,
-		model.WithTTL(time.Second),
-		model.WithDiskTTL(2*time.Second),
-	)
+	model.TTL = time.Second
+	model.DiskTTL = 2 * time.Second
+	page := model.NewTransferHashPage(&id1, now, 10, false)
 	ids := make([]types.Rowid, 10)
 	m := make(map[uint32][]byte, 10)
 	for i := 0; i < 10; i++ {
