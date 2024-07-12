@@ -97,6 +97,10 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		opts.LocalFs = objectio.TmpNewFileservice(ctx, path.Join(dirname, "data"))
 	}
 	model.SetFileService(opts.LocalFs)
+	list, _ := opts.LocalFs.List(ctx, "transfer")
+	for _, dir := range list {
+		opts.LocalFs.Delete(ctx, path.Join("transfer", dir.Name))
+	}
 
 	db = &DB{
 		Dir:          dirname,

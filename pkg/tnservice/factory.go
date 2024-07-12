@@ -16,9 +16,6 @@ package tnservice
 
 import (
 	"context"
-	"math"
-	"path"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -33,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"go.uber.org/zap"
+	"math"
 )
 
 var (
@@ -140,10 +138,6 @@ func (s *store) newTAEStorage(ctx context.Context, shard metadata.TNShard, facto
 	localFs, err2 := fileservice.Get[fileservice.FileService](s.fileService, defines.LocalFileServiceName)
 	if err2 != nil {
 		return nil, err2
-	}
-	list, _ := localFs.List(ctx, "transfer")
-	for _, dir := range list {
-		localFs.Delete(ctx, path.Join("transfer", dir.Name))
 	}
 
 	ckpcfg := &options.CheckpointCfg{
