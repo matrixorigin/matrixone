@@ -47,7 +47,6 @@ type activeTaskStats map[uint64]struct {
 
 // Executor consider resources to decide to merge or not.
 type Executor struct {
-	tableName           string
 	rt                  *dbutils.Runtime
 	cnSched             CNMergeScheduler
 	memAvail            int
@@ -154,7 +153,7 @@ func (e *Executor) tableMerging(tblEntry *catalog.TableEntry) bool {
 }
 
 func (e *Executor) ExecuteSingleObjMerge(entry *catalog.TableEntry, mobjs []*catalog.ObjectEntry) {
-	e.tableName = fmt.Sprintf("%v-%v", entry.ID, entry.GetLastestSchema().Name)
+	tableName := fmt.Sprintf("%v-%v", entry.ID, entry.GetLastestSchema().Name)
 
 	if ActiveCNObj.CheckOverlapOnCNActive(mobjs) {
 		return
@@ -175,14 +174,14 @@ func (e *Executor) ExecuteSingleObjMerge(entry *catalog.TableEntry, mobjs []*cat
 		}
 		singleOSize, singleESize, _ := estimateSingleObjMergeConsume(obj)
 		e.addActiveTask(task.ID(), entry, obj.BlockCnt(), singleESize)
-		logSingleObjMergeTask(e.tableName, task.ID(), obj, obj.BlockCnt(), singleOSize, singleESize)
+		logSingleObjMergeTask(tableName, task.ID(), obj, obj.BlockCnt(), singleOSize, singleESize)
 		blkCnt += obj.BlockCnt()
 	}
 	entry.Stats.AddMerge(osize, len(mobjs), blkCnt)
 }
 
 func (e *Executor) ExecuteMultiObjMerge(entry *catalog.TableEntry, mobjs []*catalog.ObjectEntry, kind TaskHostKind) {
-	e.tableName = fmt.Sprintf("%v-%v", entry.ID, entry.GetLastestSchema().Name)
+	tableName := fmt.Sprintf("%v-%v", entry.ID, entry.GetLastestSchema().Name)
 
 	if ActiveCNObj.CheckOverlapOnCNActive(mobjs) {
 		return
@@ -218,7 +217,7 @@ func (e *Executor) ExecuteMultiObjMerge(entry *catalog.TableEntry, mobjs []*cata
 		}
 		if err := e.cnSched.SendMergeTask(context.TODO(), cntask); err == nil {
 			ActiveCNObj.AddActiveCNObj(mobjs)
-			logMergeTask(e.tableName, math.MaxUint64, mobjs, blkCnt, osize, esize)
+			logMergeTask(tableName, math.MaxUint64, mobjs, blkCnt, osize, esize)
 		} else {
 			logutil.Info(
 				"MergeExecutorError",
@@ -239,17 +238,18 @@ func (e *Executor) ExecuteMultiObjMerge(entry *catalog.TableEntry, mobjs []*cata
 		}
 		task, err := e.rt.Scheduler.ScheduleMultiScopedTxnTaskWithObserver(nil, tasks.DataCompactionTask, scopes, factory, e)
 		if err != nil {
-			logutil.Info(
-				"MergeExecutorError",
-				common.OperationField("schedule-merge-task"),
-				common.AnyField("table", e.tableName),
-				common.AnyField("error", err),
-				common.AnyField("task", task.Name()),
-			)
+			if !errors.Is(err, tasks.ErrScheduleScopeConflict) {
+				logutil.Info(
+					"MergeExecutorError",
+					common.OperationField("schedule-merge-task"),
+					common.AnyField("error", err),
+					common.AnyField("task", task.Name()),
+				)
+			}
 			return
 		}
 		e.addActiveTask(task.ID(), entry, blkCnt, esize)
-		logMergeTask(e.tableName, task.ID(), mobjs, blkCnt, osize, esize)
+		logMergeTask(tableName, task.ID(), mobjs, blkCnt, osize, esize)
 	}
 
 	entry.Stats.AddMerge(osize, len(mobjs), blkCnt)

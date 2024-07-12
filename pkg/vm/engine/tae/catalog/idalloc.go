@@ -21,10 +21,10 @@ import (
 )
 
 type IDAlloctor struct {
-	dbAlloc  *common.IdAlloctor
-	tblAlloc *common.IdAlloctor
-	objAlloc *common.IdAlloctor
-	blkAlloc *common.IdAlloctor
+	dbAlloc  *common.IdAllocator
+	tblAlloc *common.IdAllocator
+	objAlloc *common.IdAllocator
+	blkAlloc *common.IdAllocator
 }
 
 func NewIDAllocator() *IDAlloctor {

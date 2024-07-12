@@ -27,6 +27,7 @@ import (
 var WaitableCtx = &Context{Waitable: true}
 
 type Context struct {
+	ID       uint64
 	DoneCB   ops.OpDoneCB
 	Waitable bool
 }
@@ -40,12 +41,17 @@ type BaseTask struct {
 	impl     Task
 	id       uint64
 	taskType TaskType
-	exec     func(Task) error
 }
 
 func NewBaseTask(impl Task, taskType TaskType, ctx *Context) *BaseTask {
+	var id uint64
+	if ctx == nil || ctx.ID == 0 {
+		id = NextTaskId()
+	} else {
+		id = ctx.ID
+	}
 	task := &BaseTask{
-		id:       NextTaskId(),
+		id:       id,
 		taskType: taskType,
 		impl:     impl,
 	}
@@ -70,21 +76,41 @@ func NewBaseTask(impl Task, taskType TaskType, ctx *Context) *BaseTask {
 	return task
 }
 
-func (task *BaseTask) onDone(_ base.IOp) {
+func NewBaseTaskWithGivenID(id uint64, impl Task, taskType TaskType, ctx *Context) *BaseTask {
+	task := &BaseTask{
+		id:       id,
+		taskType: taskType,
+		impl:     impl,
+	}
+	var doneCB ops.OpDoneCB
+	if ctx != nil {
+		if ctx.DoneCB == nil && !ctx.Waitable {
+			doneCB = task.onDone
+		}
+	} else {
+		doneCB = task.onDone
+	}
+	if impl == nil {
+		impl = task
+	}
+	task.Op = ops.Op{
+		Impl:   impl.(base.IOpInternal),
+		DoneCB: doneCB,
+	}
+	if doneCB == nil {
+		task.Op.ErrorC = make(chan error, 1)
+	}
+	return task
+}
+
+func (task *BaseTask) onDone(base.IOp) {
 	logutil.Debug("[Done]", common.OperationField(task.impl.Name()),
-		common.DurationField(time.Duration(task.GetExecutTime())),
+		common.DurationField(time.Duration(task.GetExecuteTime())),
 		common.ErrorField(task.Err))
 }
 func (task *BaseTask) Type() TaskType      { return task.taskType }
 func (task *BaseTask) Cancel() (err error) { panic("todo") }
 func (task *BaseTask) ID() uint64          { return task.id }
-func (task *BaseTask) Execute() (err error) {
-	if task.exec != nil {
-		return task.exec(task)
-	}
-	logutil.Debugf("Execute Task Type=%d, ID=%d", task.taskType, task.id)
-	return nil
-}
 func (task *BaseTask) Name() string {
 	return fmt.Sprintf("Task[ID=%d][T=%s]", task.id, TaskName(task.taskType))
 }

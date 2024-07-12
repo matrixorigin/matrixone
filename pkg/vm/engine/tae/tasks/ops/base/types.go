@@ -38,6 +38,6 @@ type IOp interface {
 	GetCreateTime() time.Time
 	GetStartTime() time.Time
 	GetEndTime() time.Time
-	GetExecutTime() int64
+	GetExecuteTime() int64
 	AddObserver(Observer)
 }

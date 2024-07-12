@@ -156,7 +156,7 @@ func (s *taskScheduler) Schedule(task tasks.Task) (err error) {
 	taskType := task.Type()
 	// if taskType == tasks.DataCompactionTask || taskType == tasks.GCTask {
 	if taskType == tasks.DataCompactionTask {
-		dispatcher := s.Dispatchers[task.Type()].(*asyncJobDispatcher)
+		dispatcher := s.Dispatchers[taskType].(*asyncJobDispatcher)
 		return dispatcher.TryDispatch(task)
 	}
 	return s.BaseScheduler.Schedule(task)

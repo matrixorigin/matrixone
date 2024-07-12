@@ -29,6 +29,7 @@ const (
 )
 
 var emptySegmentId types.Segmentid
+var emptyObjectId types.Objectid
 var emptyBlockId types.Blockid
 
 type ObjectId = types.Objectid
@@ -89,6 +90,10 @@ func ToSegmentId(blkID *Blockid) *Segmentid {
 
 func IsEmptySegid(id *Segmentid) bool {
 	return bytes.Equal(id[:], emptySegmentId[:])
+}
+
+func IsEmptyObjID(id *ObjectId) bool {
+	return bytes.Equal(id[:], emptyObjectId[:])
 }
 
 func IsEmptyBlkid(id *Blockid) bool {

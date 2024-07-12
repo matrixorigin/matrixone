@@ -90,10 +90,6 @@ func (op *Op) PostExecute() error {
 	return nil
 }
 
-func (op *Op) Execute() error {
-	return nil
-}
-
 func (op *Op) OnExec(ctx context.Context) error {
 	op.StartTime = time.Now()
 	err := op.Impl.PreExecute()
@@ -120,7 +116,7 @@ func (op *Op) GetEndTime() time.Time {
 	return op.EndTime
 }
 
-func (op *Op) GetExecutTime() int64 {
+func (op *Op) GetExecuteTime() int64 {
 	return op.EndTime.Sub(op.StartTime).Microseconds()
 }
 

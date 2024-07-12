@@ -53,7 +53,7 @@ type TaskScheduler interface {
 
 type BaseScheduler struct {
 	ops.OpWorker
-	idAlloc     *common.IdAlloctor
+	idAlloc     *common.IdAllocator
 	Dispatchers map[TaskType]Dispatcher
 }
 
