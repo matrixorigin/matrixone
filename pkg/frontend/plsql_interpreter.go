@@ -130,9 +130,6 @@ func (interpreter *Interpreter) GetSimpleExprValueWithSpVar(e tree.Expr) (interf
 		return nil, err
 	}
 	retExpr := retStmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
-	if err != nil {
-		return nil, err
-	}
 	return GetSimpleExprValue(interpreter.ctx, retExpr, interpreter.ses)
 }
 

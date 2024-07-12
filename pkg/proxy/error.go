@@ -95,6 +95,9 @@ func isConnEndErr(err error) bool {
 	if errors.Is(err, syscall.ECONNRESET) {
 		return true
 	}
+	if errors.Is(err, io.EOF) {
+		return true
+	}
 	return false
 }
 

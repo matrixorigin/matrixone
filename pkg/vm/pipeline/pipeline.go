@@ -26,26 +26,26 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func New(tableID uint64, attrs []string, ins vm.Instructions, reg *process.WaitRegister) *Pipeline {
+func New(tableID uint64, attrs []string, op vm.Operator, reg *process.WaitRegister) *Pipeline {
 	return &Pipeline{
-		reg:          reg,
-		instructions: ins,
-		attrs:        attrs,
-		tableID:      tableID,
+		reg:     reg,
+		rootOp:  op,
+		attrs:   attrs,
+		tableID: tableID,
 	}
 }
 
-func NewMerge(ins vm.Instructions, reg *process.WaitRegister) *Pipeline {
+func NewMerge(op vm.Operator, reg *process.WaitRegister) *Pipeline {
 	return &Pipeline{
-		reg:          reg,
-		instructions: ins,
+		reg:    reg,
+		rootOp: op,
 	}
 }
 
 func (p *Pipeline) String() string {
 	var buf bytes.Buffer
 
-	vm.String(p.instructions, &buf)
+	vm.String(p.rootOp, &buf)
 	return buf.String()
 }
 
@@ -66,18 +66,18 @@ func (p *Pipeline) Run(r engine.Reader, topValueMsgTag int32, proc *process.Proc
 		}
 	}
 
-	if tableScanOperator, ok := p.instructions[0].Arg.(*table_scan.Argument); ok {
+	if tableScanOperator, ok := vm.GetLeafOp(p.rootOp).(*table_scan.TableScan); ok {
 		tableScanOperator.Reader = r
 		tableScanOperator.TopValueMsgTag = topValueMsgTag
 		tableScanOperator.Attrs = p.attrs
 		tableScanOperator.TableID = p.tableID
 	}
 
-	if err = vm.Prepare(p.instructions, proc); err != nil {
+	if err = vm.Prepare(p.rootOp, proc); err != nil {
 		return false, err
 	}
 	for {
-		end, err = vm.Run(p.instructions, proc)
+		end, err = vm.Run(p.rootOp, proc)
 		if err != nil {
 			return end, err
 		}
@@ -97,7 +97,7 @@ func (p *Pipeline) ConstRun(bat *batch.Batch, proc *process.Process) (end bool, 
 		}
 	}
 
-	if valueScanOperator, ok := p.instructions[0].Arg.(*value_scan.Argument); ok {
+	if valueScanOperator, ok := vm.GetLeafOp(p.rootOp).(*value_scan.ValueScan); ok {
 		pipelineInputBatches := []*batch.Batch{bat}
 		if bat != nil {
 			pipelineInputBatches = append(pipelineInputBatches, nil)
@@ -105,12 +105,12 @@ func (p *Pipeline) ConstRun(bat *batch.Batch, proc *process.Process) (end bool, 
 		valueScanOperator.Batchs = pipelineInputBatches
 	}
 
-	if err = vm.Prepare(p.instructions, proc); err != nil {
+	if err = vm.Prepare(p.rootOp, proc); err != nil {
 		return false, err
 	}
 
 	for {
-		end, err = vm.Run(p.instructions, proc)
+		end, err = vm.Run(p.rootOp, proc)
 		if err != nil {
 			return end, err
 		}
@@ -129,11 +129,11 @@ func (p *Pipeline) MergeRun(proc *process.Process) (end bool, err error) {
 		}
 	}
 
-	if err = vm.Prepare(p.instructions, proc); err != nil {
+	if err = vm.Prepare(p.rootOp, proc); err != nil {
 		return false, err
 	}
 	for {
-		end, err = vm.Run(p.instructions, proc)
+		end, err = vm.Run(p.rootOp, proc)
 		if err != nil {
 			return end, err
 		}

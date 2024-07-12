@@ -415,8 +415,7 @@ func TestNonAppendableBlock(t *testing.T) {
 		obj, err := rel.CreateNonAppendableObject(nil)
 		assert.Nil(t, err)
 		dataBlk := obj.GetMeta().(*catalog.ObjectEntry).GetObjectData()
-		sid := objectio.NewObjectid()
-		name := objectio.BuildObjectNameWithObjectID(sid)
+		name := objectio.BuildObjectNameWithObjectID(obj.GetID())
 		writer, err := blockio.NewBlockWriterNew(dataBlk.GetFs().Service, name, 0, nil)
 		assert.Nil(t, err)
 		_, err = writer.WriteBatch(containers.ToCNBatch(bat))
@@ -480,16 +479,20 @@ func TestCreateObject(t *testing.T) {
 	txn, _ := tae.StartTxn(nil)
 	db, err := txn.CreateDatabase("db", "", "")
 	assert.Nil(t, err)
-	rel, err := db.CreateRelation(schema)
-	assert.Nil(t, err)
-	_, err = rel.CreateNonAppendableObject(nil)
+	_, err = db.CreateRelation(schema)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 
 	bat := catalog.MockBatch(schema, 5)
 	defer bat.Close()
-
 	testutil.AppendClosure(t, bat, schema.Name, tae, nil)()
+
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	rel, _ := db.GetRelationByName(schema.Name)
+	_, err = rel.CreateNonAppendableObject(nil)
+	assert.Nil(t, err)
+	assert.Nil(t, txn.Commit(context.Background()))
 
 	objCnt := 0
 	processor := new(catalog.LoopProcessor)
@@ -539,9 +542,11 @@ func TestAddObjsWithMetaLoc(t *testing.T) {
 	{
 		txn, rel := testutil.GetRelation(t, 0, db, "db", schema.Name)
 		it := rel.MakeObjectIt()
+		it.Next()
 		blkMeta1 := it.GetObject().GetMeta().(*catalog.ObjectEntry)
 		it.Next()
 		blkMeta2 := it.GetObject().GetMeta().(*catalog.ObjectEntry)
+		it.Close()
 
 		task1, err := jobs.NewFlushTableTailTask(tasks.WaitableCtx, txn, []*catalog.ObjectEntry{blkMeta1, blkMeta2}, db.Runtime, txn.GetStartTS())
 		assert.NoError(t, err)
@@ -549,13 +554,13 @@ func TestAddObjsWithMetaLoc(t *testing.T) {
 		err = task1.WaitDone(context.Background())
 		assert.NoError(t, err)
 		newBlockFp1 = task1.GetCreatedObjects().Fingerprint()
-		stats1 = task1.GetCreatedObjects().GetMeta().(*catalog.ObjectEntry).GetLatestNodeLocked().BaseNode.ObjectStats
+		stats1 = task1.GetCreatedObjects().GetMeta().(*catalog.ObjectEntry).GetLatestNode().GetObjectStats()
 		metaLoc1 = task1.GetCreatedObjects().GetMeta().(*catalog.ObjectEntry).GetLocation()
 		metaLoc1.SetID(0)
 		metaLoc1.SetRows(schema.BlockMaxRows)
 		newBlockFp2 = task1.GetCreatedObjects().Fingerprint()
 		newBlockFp2.SetBlockOffset(1)
-		stats2 = task1.GetCreatedObjects().GetMeta().(*catalog.ObjectEntry).GetLatestNodeLocked().BaseNode.ObjectStats
+		stats2 = task1.GetCreatedObjects().GetMeta().(*catalog.ObjectEntry).GetLatestNode().GetObjectStats()
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
 	//read new non-appendable block data and check
@@ -786,7 +791,7 @@ func TestFlushTableMergeOrder(t *testing.T) {
 	{
 		txn, rel := testutil.GetDefaultRelation(t, tae.DB, schema.Name)
 		it := rel.MakeObjectIt()
-		for ; it.Valid(); it.Next() {
+		for it.Next() {
 			blk := it.GetObject()
 			for i := 0; i < blk.BlkCnt(); i++ {
 				blk.RangeDelete(uint16(i), 0, 0, handle.DT_Normal, common.DefaultAllocator)
@@ -794,6 +799,7 @@ func TestFlushTableMergeOrder(t *testing.T) {
 
 			}
 		}
+		it.Close()
 		require.NoError(t, txn.Commit(context.Background()))
 	}
 
@@ -1107,7 +1113,8 @@ func TestFlushTabletail(t *testing.T) {
 		// 6 nablks has 87 rows
 		dels := []int{3, 2, 0, 0, 0, 2}
 		total := 0
-		for i := 0; it.Valid(); it.Next() {
+		i := 0
+		for it.Next() {
 			obj := it.GetObject()
 			for j := uint16(0); j < uint16(obj.BlkCnt()); j++ {
 				view, err := obj.GetColumnDataById(context.Background(), j, 2, common.DefaultAllocator)
@@ -1123,6 +1130,7 @@ func TestFlushTabletail(t *testing.T) {
 				i++
 			}
 		}
+		it.Close()
 		require.Equal(t, 87, total)
 		require.NoError(t, txn.Commit(context.Background()))
 	}
@@ -1140,7 +1148,8 @@ func TestFlushTabletail(t *testing.T) {
 		for i := 0; i < len(schema.ColDefs)-1; i++ {
 			idxs = append(idxs, i)
 		}
-		for i := 0; it.Valid(); it.Next() {
+		i := 0
+		for it.Next() {
 			obj := it.GetObject()
 			for j := uint16(0); j < uint16(obj.BlkCnt()); j++ {
 				views, err := obj.GetColumnDataByIds(context.Background(), j, idxs, common.DefaultAllocator)
@@ -1160,6 +1169,7 @@ func TestFlushTabletail(t *testing.T) {
 				i++
 			}
 		}
+		it.Close()
 		require.Equal(t, 87, total)
 		require.NoError(t, txn.Commit(context.Background()))
 	}
@@ -1209,7 +1219,7 @@ func TestRollback1(t *testing.T) {
 	assert.Equal(t, objCnt, 1)
 
 	txn, rel = testutil.GetDefaultRelation(t, db, schema.Name)
-	_, err = rel.GetObject(&objMeta.ID)
+	_, err = rel.GetObject(objMeta.ID())
 	assert.Nil(t, err)
 	err = tableMeta.RecurLoop(processor)
 	assert.Nil(t, err)
@@ -1277,7 +1287,7 @@ func TestMVCC1(t *testing.T) {
 	}
 
 	it := rel.MakeObjectIt()
-	for it.Valid() {
+	for it.Next() {
 		block := it.GetObject()
 		bid := block.Fingerprint()
 		_, targetBlkOffset := id.BlockID.Offsets()
@@ -1290,8 +1300,8 @@ func TestMVCC1(t *testing.T) {
 			t.Log(view.GetData().String())
 			assert.Equal(t, bats[0].Vecs[0].Length(), view.Length())
 		}
-		it.Next()
 	}
+	it.Close()
 }
 
 // 1. Txn1 create db, relation and append 10 rows. committed -- PASS
@@ -1338,14 +1348,13 @@ func TestMVCC2(t *testing.T) {
 	{
 		txn, rel := testutil.GetDefaultRelation(t, db, schema.Name)
 		it := rel.MakeObjectIt()
-		for it.Valid() {
+		for it.Next() {
 			obj := it.GetObject()
 			view, err := obj.GetColumnDataByName(context.Background(), 0, schema.GetSingleSortKey().Name, common.DefaultAllocator)
 			assert.Nil(t, err)
 			assert.Nil(t, view.DeleteMask)
 			assert.Equal(t, bats[1].Vecs[0].Length()*2-1, view.Length())
 			// TODO: exclude deleted rows when apply appends
-			it.Next()
 			view.Close()
 		}
 		assert.NoError(t, txn.Commit(context.Background()))
@@ -1383,7 +1392,7 @@ func TestUnload1(t *testing.T) {
 		txn, rel := testutil.GetDefaultRelation(t, db, schema.Name)
 		for i := 0; i < 10; i++ {
 			it := rel.MakeObjectIt()
-			for it.Valid() {
+			for it.Next() {
 				blk := it.GetObject()
 				for j := 0; j < blk.BlkCnt(); j++ {
 					view, err := blk.GetColumnDataByName(context.Background(), uint16(j), schema.GetSingleSortKey().Name, common.DefaultAllocator)
@@ -1391,7 +1400,6 @@ func TestUnload1(t *testing.T) {
 					defer view.Close()
 					assert.Equal(t, int(schema.BlockMaxRows), view.Length())
 				}
-				it.Next()
 			}
 		}
 		_ = txn.Commit(context.Background())
@@ -1695,7 +1703,7 @@ func TestSystemDB1(t *testing.T) {
 	table, err := db.GetRelationByName(pkgcatalog.MO_DATABASE)
 	assert.Nil(t, err)
 	it := table.MakeObjectIt()
-	for it.Valid() {
+	for it.Next() {
 		blk := it.GetObject()
 		view, err := blk.GetColumnDataByName(context.Background(), 0, pkgcatalog.SystemDBAttr_Name, common.DefaultAllocator)
 		assert.Nil(t, err)
@@ -1709,13 +1717,12 @@ func TestSystemDB1(t *testing.T) {
 		assert.Nil(t, err)
 		defer view.Close()
 		assert.Equal(t, 3, view.Length())
-		it.Next()
 	}
 
 	table, err = db.GetRelationByName(pkgcatalog.MO_TABLES)
 	assert.Nil(t, err)
 	it = table.MakeObjectIt()
-	for it.Valid() {
+	for it.Next() {
 		blk := it.GetObject()
 		view, err := blk.GetColumnDataByName(context.Background(), 0, pkgcatalog.SystemRelAttr_Name, common.DefaultAllocator)
 		assert.Nil(t, err)
@@ -1727,7 +1734,6 @@ func TestSystemDB1(t *testing.T) {
 		view, err = blk.GetColumnDataByName(context.Background(), 0, pkgcatalog.SystemRelAttr_Kind, common.DefaultAllocator)
 		assert.NoError(t, err)
 		defer view.Close()
-		it.Next()
 	}
 
 	table, err = db.GetRelationByName(pkgcatalog.MO_COLUMNS)
@@ -1738,7 +1744,7 @@ func TestSystemDB1(t *testing.T) {
 	// schema2 := table.GetMeta().(*catalog.TableEntry).GetSchema()
 	// bat := containers.BuildBatch(schema2.AllNames(), schema2.AllTypes(), schema2.AllNullables(), 0)
 	it = table.MakeObjectIt()
-	for it.Valid() {
+	for it.Next() {
 		blk := it.GetObject()
 		view, err := blk.GetColumnDataByName(context.Background(), 0, pkgcatalog.SystemColAttr_DBName, common.DefaultAllocator)
 		assert.NoError(t, err)
@@ -1769,7 +1775,6 @@ func TestSystemDB1(t *testing.T) {
 		assert.Nil(t, err)
 		defer view.Close()
 		t.Log(view.GetData().String())
-		it.Next()
 	}
 
 	for i := 0; i < bat.Vecs[0].Length(); i++ {
@@ -2049,7 +2054,7 @@ func TestADA(t *testing.T) {
 
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
 	it := rel.MakeObjectIt()
-	for it.Valid() {
+	for it.Next() {
 		blk := it.GetObject()
 		for j := 0; j < blk.BlkCnt(); j++ {
 			view, err := blk.GetColumnDataById(context.Background(), uint16(j), schema.GetSingleSortKeyIdx(), common.DefaultAllocator)
@@ -2059,7 +2064,6 @@ func TestADA(t *testing.T) {
 			assert.Equal(t, 3, view.DeleteMask.GetCardinality())
 
 		}
-		it.Next()
 	}
 	assert.NoError(t, txn.Commit(context.Background()))
 }
@@ -2361,6 +2365,7 @@ func TestReshapeBlocks(t *testing.T) {
 	rel, err := db.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
 	it := rel.MakeObjectIt()
+	it.Next()
 	blkID := it.GetObject().Fingerprint()
 	err = rel.RangeDelete(blkID, 5, 9, handle.DT_Normal)
 	assert.Nil(t, err)
@@ -2368,7 +2373,7 @@ func TestReshapeBlocks(t *testing.T) {
 
 	txn, err = tae.StartTxn(nil)
 	assert.Nil(t, err)
-	for it.Valid() {
+	for it.Next() {
 		testutil.CheckAllColRowsByScan(t, rel, bat.Length(), false)
 		obj := it.GetObject()
 		for j := 0; j < obj.BlkCnt(); j++ {
@@ -2377,7 +2382,6 @@ func TestReshapeBlocks(t *testing.T) {
 			defer col.Close()
 			t.Log(col)
 		}
-		it.Next()
 	}
 	assert.Nil(t, txn.Commit(context.Background()))
 
@@ -2392,7 +2396,7 @@ func TestReshapeBlocks(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, uint64(25), rel.GetMeta().(*catalog.TableEntry).GetRows())
 	it = rel.MakeObjectIt()
-	for it.Valid() {
+	for it.Next() {
 		testutil.CheckAllColRowsByScan(t, rel, bat.Length()-5, false)
 		obj := it.GetObject()
 		for j := 0; j < obj.BlkCnt(); j++ {
@@ -2401,7 +2405,6 @@ func TestReshapeBlocks(t *testing.T) {
 			defer col.Close()
 			t.Log(col)
 		}
-		it.Next()
 	}
 	assert.Nil(t, txn.Commit(context.Background()))
 }
@@ -2430,15 +2433,15 @@ func TestMergeBlocks(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err := db.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	it := rel.MakeObjectIt()
-	blkID := it.GetObject().Fingerprint()
+	blkID := testutil.GetOneObject(rel).Fingerprint()
 	err = rel.RangeDelete(blkID, 5, 9, handle.DT_Normal)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 
 	txn, err = tae.StartTxn(nil)
+	it := rel.MakeObjectIt()
 	assert.Nil(t, err)
-	for it.Valid() {
+	for it.Next() {
 		testutil.CheckAllColRowsByScan(t, rel, bat.Length(), false)
 		obj := it.GetObject()
 		for j := 0; j < obj.BlkCnt(); j++ {
@@ -2447,7 +2450,6 @@ func TestMergeBlocks(t *testing.T) {
 			defer col.Close()
 			t.Log(col)
 		}
-		it.Next()
 	}
 	assert.Nil(t, txn.Commit(context.Background()))
 
@@ -2462,7 +2464,7 @@ func TestMergeBlocks(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, uint64(25), rel.GetMeta().(*catalog.TableEntry).GetRows())
 	it = rel.MakeObjectIt()
-	for it.Valid() {
+	for it.Next() {
 		testutil.CheckAllColRowsByScan(t, rel, bat.Length()-5, false)
 		obj := it.GetObject()
 		for j := 0; j < obj.BlkCnt(); j++ {
@@ -2471,7 +2473,6 @@ func TestMergeBlocks(t *testing.T) {
 			defer col.Close()
 			t.Log(col)
 		}
-		it.Next()
 	}
 	assert.Nil(t, txn.Commit(context.Background()))
 }
@@ -2500,8 +2501,7 @@ func TestSegDelLogtail(t *testing.T) {
 	rel, err := db.GetRelationByName(schema.Name)
 	tid := rel.ID()
 	assert.Nil(t, err)
-	it := rel.MakeObjectIt()
-	blkID := it.GetObject().Fingerprint()
+	blkID := testutil.GetOneObject(rel).Fingerprint()
 	err = rel.RangeDelete(blkID, 5, 9, handle.DT_Normal)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
@@ -2525,6 +2525,14 @@ func TestSegDelLogtail(t *testing.T) {
 	require.Equal(t, api.Entry_Insert, resp.Commands[1].EntryType)
 	require.True(t, strings.HasSuffix(resp.Commands[1].TableName, "obj"))
 	require.Equal(t, uint32(6), resp.Commands[1].Bat.Vecs[0].Len) /* 2 Objects (create) + 4 (update object info) */
+	// start ts should not be empty
+	startTSVec := resp.Commands[1].Bat.Vecs[9]
+	cnStartVec, err := vector.ProtoVectorToVector(startTSVec)
+	require.NoError(t, err)
+	startTSs := vector.MustFixedCol[types.TS](cnStartVec)
+	for _, ts := range startTSs {
+		require.False(t, ts.IsEmpty())
+	}
 
 	close()
 
@@ -2626,9 +2634,8 @@ func TestMergeblocks2(t *testing.T) {
 
 		txn, rel = tae.GetRelation()
 
-		objIt := rel.MakeObjectIt()
-		obj := objIt.GetObject().GetMeta().(*catalog.ObjectEntry)
-		objHandle, err := rel.GetObject(&obj.ID)
+		obj := testutil.GetOneObject(rel).GetMeta().(*catalog.ObjectEntry)
+		objHandle, err := rel.GetObject(obj.ID())
 		assert.NoError(t, err)
 
 		objsToMerge := []*catalog.ObjectEntry{objHandle.GetMeta().(*catalog.ObjectEntry)}
@@ -2709,9 +2716,8 @@ func TestMergeBlocksIntoMultipleObjects(t *testing.T) {
 		t.Log("************split one object into two objects************")
 
 		txn, rel = tae.GetRelation()
-		objIt := rel.MakeObjectIt()
-		obj := objIt.GetObject().GetMeta().(*catalog.ObjectEntry)
-		objHandle, err := rel.GetObject(&obj.ID)
+		obj := testutil.GetOneObject(rel).GetMeta().(*catalog.ObjectEntry)
+		objHandle, err := rel.GetObject(obj.ID())
 		assert.NoError(t, err)
 
 		objsToMerge := []*catalog.ObjectEntry{objHandle.GetMeta().(*catalog.ObjectEntry)}
@@ -2724,11 +2730,10 @@ func TestMergeBlocksIntoMultipleObjects(t *testing.T) {
 	{
 		t.Log("************check del map************")
 		it := rel.MakeObjectIt()
-		for it.Valid() {
+		for it.Next() {
 			obj := it.GetObject()
 			assert.Nil(t, tae.Runtime.TransferDelsMap.GetDelsForBlk(*objectio.NewBlockidWithObjectID(obj.GetID(), 0)))
 			assert.Nil(t, tae.Runtime.TransferDelsMap.GetDelsForBlk(*objectio.NewBlockidWithObjectID(obj.GetID(), 1)))
-			it.Next()
 		}
 	}
 
@@ -2737,13 +2742,15 @@ func TestMergeBlocksIntoMultipleObjects(t *testing.T) {
 
 		txn, rel = tae.GetRelation()
 		objIt := rel.MakeObjectIt()
+		objIt.Next()
 		obj1 := objIt.GetObject().GetMeta().(*catalog.ObjectEntry)
-		objHandle1, err := rel.GetObject(&obj1.ID)
+		objHandle1, err := rel.GetObject(obj1.ID())
 		assert.NoError(t, err)
 		objIt.Next()
 		obj2 := objIt.GetObject().GetMeta().(*catalog.ObjectEntry)
-		objHandle2, err := rel.GetObject(&obj2.ID)
+		objHandle2, err := rel.GetObject(obj2.ID())
 		assert.NoError(t, err)
+		objIt.Close()
 
 		v := testutil.GetSingleSortKeyValue(bat, schema, 1)
 		filter := handle.NewEQFilter(v)
@@ -2770,7 +2777,7 @@ func TestMergeBlocksIntoMultipleObjects(t *testing.T) {
 			t.Log("************check del map again************")
 			_, rel = tae.GetRelation()
 			objCnt := 0
-			for it := rel.MakeObjectIt(); it.Valid(); it.Next() {
+			for it := rel.MakeObjectIt(); it.Next(); {
 				obj := it.GetObject()
 				if objCnt == 0 {
 					assert.NotNil(t, tae.Runtime.TransferDelsMap.GetDelsForBlk(*objectio.NewBlockidWithObjectID(obj.GetID(), 0)))
@@ -2825,9 +2832,8 @@ func TestMergeEmptyBlocks(t *testing.T) {
 
 		txn, rel := tae.GetRelation()
 
-		objIt := rel.MakeObjectIt()
-		obj := objIt.GetObject().GetMeta().(*catalog.ObjectEntry)
-		objHandle, err := rel.GetObject(&obj.ID)
+		obj := testutil.GetOneObject(rel).GetMeta().(*catalog.ObjectEntry)
+		objHandle, err := rel.GetObject(obj.ID())
 		assert.NoError(t, err)
 
 		objsToMerge := []*catalog.ObjectEntry{objHandle.GetMeta().(*catalog.ObjectEntry)}
@@ -3153,8 +3159,7 @@ func TestCompactBlk1(t *testing.T) {
 	{
 		t.Log("************compact************")
 		txn, rel = tae.GetRelation()
-		it := rel.MakeObjectIt()
-		blk := it.GetObject()
+		blk := testutil.GetOneObject(rel)
 		meta := blk.GetMeta().(*catalog.ObjectEntry)
 		task, err := jobs.NewFlushTableTailTask(nil, txn, []*catalog.ObjectEntry{meta}, tae.DB.Runtime, txn.GetStartTS())
 		assert.NoError(t, err)
@@ -3229,8 +3234,7 @@ func TestCompactBlk2(t *testing.T) {
 	testutil.CheckAllColRowsByScan(t, rel2, 4, true)
 
 	txn, rel = tae.GetRelation()
-	it := rel.MakeObjectIt()
-	blk := it.GetObject()
+	blk := testutil.GetOneObject(rel)
 	meta := blk.GetMeta().(*catalog.ObjectEntry)
 	task, err := jobs.NewFlushTableTailTask(nil, txn, []*catalog.ObjectEntry{meta}, tae.DB.Runtime, types.TS{})
 	assert.NoError(t, err)
@@ -3301,8 +3305,7 @@ func TestCompactblk3(t *testing.T) {
 	testutil.CheckAllColRowsByScan(t, rel2, 2, true)
 
 	txn, rel := tae.GetRelation()
-	it := rel.MakeObjectIt()
-	blk := it.GetObject()
+	blk := testutil.GetOneObject(rel)
 	meta := blk.GetMeta().(*catalog.ObjectEntry)
 	task, err := jobs.NewFlushTableTailTask(nil, txn, []*catalog.ObjectEntry{meta}, tae.DB.Runtime, txn.GetStartTS())
 	assert.NoError(t, err)
@@ -3367,8 +3370,7 @@ func TestImmutableIndexInAblk(t *testing.T) {
 	assert.Nil(t, txn2.Commit(context.Background()))
 
 	txn, rel = tae.GetRelation()
-	it := rel.MakeObjectIt()
-	blk := it.GetObject()
+	blk := testutil.GetOneObject(rel)
 	meta := blk.GetMeta().(*catalog.ObjectEntry)
 	task, err := jobs.NewFlushTableTailTask(nil, txn, []*catalog.ObjectEntry{meta}, tae.DB.Runtime, txn.GetStartTS())
 	assert.NoError(t, err)
@@ -3915,14 +3917,15 @@ func TestLogtailBasic(t *testing.T) {
 			db, _ := txn.GetDatabase("db")
 			tbl, _ := db.GetRelationByName("test")
 			blkIt := tbl.MakeObjectIt()
-			for ; blkIt.Valid(); blkIt.Next() {
+			for blkIt.Next() {
 				obj := blkIt.GetObject()
-				id := obj.GetMeta().(*catalog.ObjectEntry).ID
+				id := obj.GetMeta().(*catalog.ObjectEntry).ID()
 				for j := 0; j < obj.BlkCnt(); j++ {
-					blkID := objectio.NewBlockidWithObjectID(&id, uint16(j))
+					blkID := objectio.NewBlockidWithObjectID(id, uint16(j))
 					deleteRowIDs = append(deleteRowIDs, *objectio.NewRowid(blkID, 5))
 				}
 			}
+			blkIt.Close()
 			require.NoError(t, txn.Commit(context.Background()))
 		}
 
@@ -4158,8 +4161,7 @@ func TestCollectInsert(t *testing.T) {
 	t.Logf("p3= %v", p3.ToString())
 
 	_, rel = tae.GetRelation()
-	blkit := rel.MakeObjectIt()
-	blkdata := blkit.GetObject().GetMeta().(*catalog.ObjectEntry).GetObjectData()
+	blkdata := testutil.GetOneObject(rel).GetMeta().(*catalog.ObjectEntry).GetObjectData()
 
 	batch, err := blkdata.CollectAppendInRange(types.TS{}, p1, true, common.DefaultAllocator)
 	assert.NoError(t, err)
@@ -4211,8 +4213,7 @@ func TestCollectDelete(t *testing.T) {
 	tae.CreateRelAndAppend(bat, true)
 
 	_, rel := tae.GetRelation()
-	blkit := rel.MakeObjectIt()
-	blkID := blkit.GetObject().GetMeta().(*catalog.ObjectEntry).AsCommonID()
+	blkID := testutil.GetOneObject(rel).GetMeta().(*catalog.ObjectEntry).AsCommonID()
 
 	txn1, rel := tae.GetRelation()
 	assert.NoError(t, rel.RangeDelete(blkID, 0, 0, handle.DT_Normal))
@@ -4233,8 +4234,7 @@ func TestCollectDelete(t *testing.T) {
 	t.Logf("p3= %v", p3.ToString())
 
 	txn, rel := tae.GetRelation()
-	blkit = rel.MakeObjectIt()
-	blkhandle := blkit.GetObject()
+	blkhandle := testutil.GetOneObject(rel)
 	blkdata := blkhandle.GetMeta().(*catalog.ObjectEntry).GetObjectData()
 
 	batch, _, err := blkdata.CollectDeleteInRange(context.Background(), types.TS{}, p1, true, common.DefaultAllocator)
@@ -4535,8 +4535,7 @@ func TestBlockRead(t *testing.T) {
 	tae.CreateRelAndAppend(bat, true)
 
 	_, rel := tae.GetRelation()
-	blkit := rel.MakeObjectIt()
-	blkEntry := blkit.GetObject().GetMeta().(*catalog.ObjectEntry)
+	blkEntry := testutil.GetOneObject(rel).GetMeta().(*catalog.ObjectEntry)
 	blkID := blkEntry.AsCommonID()
 
 	beforeDel := tsAlloc.Alloc()
@@ -4553,15 +4552,15 @@ func TestBlockRead(t *testing.T) {
 
 	tae.CompactBlocks(false)
 
-	objStats := blkEntry.GetLatestCommittedNodeLocked().BaseNode
-	deltaloc := rel.GetMeta().(*catalog.TableEntry).TryGetTombstone(blkEntry.ID).GetLatestDeltaloc(0)
+	objStats := blkEntry.GetLatestNode().ObjectMVCCNode
+	deltaloc := rel.GetMeta().(*catalog.TableEntry).TryGetTombstone(*blkEntry.ID()).GetLatestDeltaloc(0)
 	assert.False(t, objStats.IsEmpty())
 	assert.NotEmpty(t, deltaloc)
 
-	bid, sid := blkEntry.ID, blkEntry.ID
+	bid, sid := blkEntry.ID(), blkEntry.ID()
 
 	info := &objectio.BlockInfo{
-		BlockID:    *objectio.NewBlockidWithObjectID(&bid, 0),
+		BlockID:    *objectio.NewBlockidWithObjectID(bid, 0),
 		SegmentID:  *sid.Segment(),
 		EntryState: true,
 	}
@@ -4665,18 +4664,17 @@ func TestCompactDeltaBlk(t *testing.T) {
 
 	{
 		txn, rel := tae.GetRelation()
-		it := rel.MakeObjectIt()
-		blk := it.GetObject()
+		blk := testutil.GetOneObject(rel)
 		meta := blk.GetMeta().(*catalog.ObjectEntry)
 		task, err := jobs.NewFlushTableTailTask(nil, txn, []*catalog.ObjectEntry{meta}, tae.DB.Runtime, txn.GetStartTS())
 		assert.NoError(t, err)
 		err = task.OnExec(context.Background())
 		assert.NoError(t, err)
-		assert.False(t, meta.GetLatestNodeLocked().BaseNode.IsEmpty())
-		assert.False(t, rel.GetMeta().(*catalog.TableEntry).TryGetTombstone(meta.ID).GetLatestDeltaloc(0).IsEmpty())
+		assert.False(t, meta.GetLatestNode().ObjectMVCCNode.IsEmpty())
+		assert.False(t, rel.GetMeta().(*catalog.TableEntry).TryGetTombstone(*meta.ID()).GetLatestDeltaloc(0).IsEmpty())
 		created := task.GetCreatedObjects().GetMeta().(*catalog.ObjectEntry)
-		assert.False(t, created.GetLatestNodeLocked().BaseNode.IsEmpty())
-		assert.Nil(t, rel.GetMeta().(*catalog.TableEntry).TryGetTombstone(created.ID))
+		assert.False(t, created.GetLatestNode().ObjectMVCCNode.IsEmpty())
+		assert.Nil(t, rel.GetMeta().(*catalog.TableEntry).TryGetTombstone(*created.ID()))
 		err = txn.Commit(context.Background())
 		assert.Nil(t, err)
 		err = meta.GetTable().RemoveEntry(meta)
@@ -4692,8 +4690,7 @@ func TestCompactDeltaBlk(t *testing.T) {
 	}
 	{
 		txn, rel := tae.GetRelation()
-		it := rel.MakeObjectIt()
-		blk := it.GetObject()
+		blk := testutil.GetOneObject(rel)
 		meta := blk.GetMeta().(*catalog.ObjectEntry)
 		assert.False(t, meta.IsAppendable())
 		task2, err := jobs.NewFlushTableTailTask(nil, txn, []*catalog.ObjectEntry{meta}, tae.DB.Runtime, txn.GetStartTS())
@@ -4709,11 +4706,11 @@ func TestCompactDeltaBlk(t *testing.T) {
 		err = task.OnExec(context.Background())
 		assert.NoError(t, err)
 		t.Log(tae.Catalog.SimplePPString(3))
-		assert.True(t, !meta.GetLatestCommittedNodeLocked().BaseNode.IsEmpty())
-		assert.True(t, !rel.GetMeta().(*catalog.TableEntry).TryGetTombstone(meta.ID).GetLatestDeltaloc(0).IsEmpty())
+		assert.True(t, !meta.ObjectMVCCNode.IsEmpty())
+		assert.True(t, !rel.GetMeta().(*catalog.TableEntry).TryGetTombstone(*meta.ID()).GetLatestDeltaloc(0).IsEmpty())
 		created := task.GetCreatedObjects()[0]
-		assert.False(t, created.GetLatestNodeLocked().BaseNode.IsEmpty())
-		assert.Nil(t, rel.GetMeta().(*catalog.TableEntry).TryGetTombstone(created.ID))
+		assert.False(t, created.GetLatestNode().ObjectMVCCNode.IsEmpty())
+		assert.Nil(t, rel.GetMeta().(*catalog.TableEntry).TryGetTombstone(*created.ID()))
 		err = txn.Commit(context.Background())
 		assert.Nil(t, err)
 	}
@@ -4762,11 +4759,11 @@ func TestFlushTable(t *testing.T) {
 
 	txn, rel := tae.GetRelation()
 	it := rel.MakeObjectIt()
-	for it.Valid() {
+	for it.Next() {
 		blk := it.GetObject().GetMeta().(*catalog.ObjectEntry)
 		assert.True(t, blk.HasPersistedData())
-		it.Next()
 	}
+	it.Close()
 	assert.NoError(t, txn.Commit(context.Background()))
 }
 
@@ -4941,7 +4938,7 @@ func TestDelete4(t *testing.T) {
 	scanFn := func() {
 		txn, rel := tae.GetRelation()
 		it := rel.MakeObjectIt()
-		for it.Valid() {
+		for it.Next() {
 			blk := it.GetObject()
 			for j := 0; j < blk.BlkCnt(); j++ {
 				view, err := blk.GetColumnDataById(context.Background(), uint16(j), 0, common.DefaultAllocator)
@@ -4952,8 +4949,8 @@ func TestDelete4(t *testing.T) {
 					t.Logf("block-%d, data=%s", j, logtail.ToStringTemplate(view.GetData(), -1))
 				}
 			}
-			it.Next()
 		}
+		it.Close()
 		txn.Commit(context.Background())
 	}
 
@@ -5007,8 +5004,7 @@ func TestGetActiveRow(t *testing.T) {
 	_, rel = tae.GetRelation()
 	{
 		txn2, rel2 := tae.GetRelation()
-		it := rel2.MakeObjectIt()
-		blk := it.GetObject().GetMeta().(*catalog.ObjectEntry)
+		blk := testutil.GetOneObject(rel2).GetMeta().(*catalog.ObjectEntry)
 		task, err := jobs.NewFlushTableTailTask(nil, txn2, []*catalog.ObjectEntry{blk}, tae.Runtime, txn2.GetStartTS())
 		assert.NoError(t, err)
 		err = task.OnExec(context.Background())
@@ -5132,9 +5128,8 @@ func TestMergeBlocks3(t *testing.T) {
 	// delete all rows in first blk in obj1 and the 5th,9th rows in blk2
 	{
 		txn, rel := tae.GetRelation()
-		objit := rel.MakeObjectIt()
-		obj1 := objit.GetObject().GetMeta().(*catalog.ObjectEntry)
-		objHandle, err := rel.GetObject(&obj1.ID)
+		obj1 := testutil.GetOneObject(rel).GetMeta().(*catalog.ObjectEntry)
+		objHandle, err := rel.GetObject(obj1.ID())
 		require.NoError(t, err)
 
 		view, err := objHandle.GetColumnDataByName(context.Background(), 0, catalog.PhyAddrColumnName, common.DefaultAllocator)
@@ -5165,8 +5160,7 @@ func TestMergeBlocks3(t *testing.T) {
 		mergetxn, relm := tae.GetRelation()
 
 		// merge first Object
-		objit := relm.MakeObjectIt()
-		obj1 := objit.GetObject().GetMeta().(*catalog.ObjectEntry)
+		obj1 := testutil.GetOneObject(relm).GetMeta().(*catalog.ObjectEntry)
 		require.NoError(t, err)
 
 		objsToMerge := []*catalog.ObjectEntry{obj1}
@@ -5366,7 +5360,7 @@ func TestMergeMemsize(t *testing.T) {
 		txn, rel := tae.GetRelation()
 		it := rel.MakeObjectIt()
 		blkcnt := 0
-		for ; it.Valid(); it.Next() {
+		for it.Next() {
 			obj := it.GetObject()
 			defer obj.Close()
 			meta := it.GetObject().GetMeta().(*catalog.ObjectEntry)
@@ -5375,6 +5369,7 @@ func TestMergeMemsize(t *testing.T) {
 			metas = append(metas, meta)
 
 		}
+		it.Next()
 		txn.Commit(ctx)
 		require.Equal(t, batCnt, blkcnt)
 	}
@@ -6105,7 +6100,7 @@ func TestDeltaLocation(t *testing.T) {
 
 	{
 		txn, rel := tae.GetRelation()
-		objID := rel.MakeObjectIt().GetObject().GetID()
+		objID := testutil.GetOneObject(rel).GetID()
 		rel.SoftDeleteObject(objID)
 		txn.Commit(ctx)
 		t.Log(tae.Catalog.SimplePPString(3))
@@ -6504,10 +6499,11 @@ func TestAlterColumnAndFreeze(t *testing.T) {
 	it := rel.MakeObjectIt()
 	cnt := 0
 	var id2 *common.ID
-	for ; it.Valid(); it.Next() {
+	for it.Next() {
 		cnt++
 		id2 = it.GetObject().Fingerprint()
 	}
+	it.Close()
 	require.Equal(t, 2, cnt) // 2 blocks because the first is freezed
 
 	for _, col := range rel.Schema().(*catalog.Schema).ColDefs {
@@ -6975,16 +6971,19 @@ func TestSnapshotMeta(t *testing.T) {
 	tae.RestartDisableGC(ctx)
 	db = tae.DB
 	db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(1)
-	testutils.WaitExpect(5000, func() bool {
+	testutils.WaitExpect(10000, func() bool {
 		if db.DiskCleaner.GetCleaner().GetMaxConsumed() == nil {
 			return false
 		}
 		end := db.DiskCleaner.GetCleaner().GetMaxConsumed().GetEnd()
-		minEnd := minMerged.GetEnd()
+		if db.DiskCleaner.GetCleaner().GetMinMerged() == nil {
+			return false
+		}
+		minEnd := db.DiskCleaner.GetCleaner().GetMinMerged().GetEnd()
 		return end.GreaterEq(&minEnd)
 	})
 	end := db.DiskCleaner.GetCleaner().GetMaxConsumed().GetEnd()
-	minEnd = minMerged.GetEnd()
+	minEnd = db.DiskCleaner.GetCleaner().GetMinMerged().GetEnd()
 	assert.True(t, end.GreaterEq(&minEnd))
 	snaps, err = db.DiskCleaner.GetCleaner().GetSnapshots()
 	assert.Nil(t, err)
@@ -7778,7 +7777,7 @@ func TestDedup2(t *testing.T) {
 		txn, rel := tae.GetRelation()
 		for j := 0; j <= i; j++ {
 			err := rel.Append(context.Background(), datas[j])
-			assert.Error(t, err)
+			assert.Error(t, err, "txn start at %v", txn.GetStartTS().ToString())
 		}
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
@@ -7922,6 +7921,19 @@ func TestDedupSnapshot2(t *testing.T) {
 	defer statsVec.Close()
 	statsVec.Append(writer.GetObjectStats()[objectio.SchemaData][:], false)
 
+	name2 := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
+	writer, err = blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, name2, 0, nil)
+	assert.Nil(t, err)
+	writer.SetPrimaryKey(3)
+	_, err = writer.WriteBatch(containers.ToCNBatch(data))
+	assert.Nil(t, err)
+	blocks, _, err = writer.Sync(context.Background())
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(blocks))
+	statsVec2 := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
+	defer statsVec2.Close()
+	statsVec2.Append(writer.GetObjectStats()[objectio.SchemaData][:], false)
+
 	txn, rel := tae.GetRelation()
 	err = rel.AddObjsWithMetaLoc(context.Background(), statsVec)
 	assert.NoError(t, err)
@@ -7931,7 +7943,7 @@ func TestDedupSnapshot2(t *testing.T) {
 	startTS := txn.GetStartTS()
 	txn.SetSnapshotTS(startTS.Next())
 	txn.SetDedupType(txnif.IncrementalDedup)
-	err = rel.AddObjsWithMetaLoc(context.Background(), statsVec)
+	err = rel.AddObjsWithMetaLoc(context.Background(), statsVec2)
 	assert.NoError(t, err)
 	_ = txn.Commit(context.Background())
 }
@@ -8088,8 +8100,7 @@ func TestGCInMemoryDeletesByTS(t *testing.T) {
 	tae.CreateRelAndAppend(bat, true)
 
 	txn, rel := tae.GetRelation()
-	blkit := rel.MakeObjectIt()
-	blkHandle := blkit.GetObject()
+	blkHandle := testutil.GetOneObject(rel)
 	blkMeta := blkHandle.GetMeta().(*catalog.ObjectEntry)
 	blkID := blkMeta.AsCommonID()
 	blkData := blkMeta.GetObjectData()
@@ -8129,8 +8140,7 @@ func TestGCInMemoryDeletesByTS(t *testing.T) {
 					uint32(batch.Length()),
 					blocks[0].GetID(),
 				)
-				blkit := rel.MakeObjectIt()
-				blkHandle := blkit.GetObject()
+				blkHandle := testutil.GetOneObject(rel)
 				err = blkHandle.UpdateDeltaLoc(0, deltaLoc)
 				assert.NoError(t, err)
 				assert.NoError(t, txn.Commit(context.Background()))
@@ -8235,8 +8245,7 @@ func TestReplayDeletes(t *testing.T) {
 	tae.CompactBlocks(false)
 	//deletes
 	txn, rel := tae.GetRelation()
-	blkIt := rel.MakeObjectIt()
-	blk := blkIt.GetObject()
+	blk := testutil.GetOneObject(rel)
 	blk.RangeDelete(0, 1, 49, handle.DT_Normal, common.DefaultAllocator)
 	assert.NoError(t, txn.Commit(context.Background()))
 	//the next blk to compact
@@ -8245,8 +8254,7 @@ func TestReplayDeletes(t *testing.T) {
 	tae.DoAppend(bats[2])
 	//compact nablk and its next blk
 	txn2, rel := tae.GetRelation()
-	blkIt = rel.MakeObjectIt()
-	blkEntry := blkIt.GetObject().GetMeta().(*catalog.ObjectEntry)
+	blkEntry := testutil.GetOneObject(rel).GetMeta().(*catalog.ObjectEntry)
 	txn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
 	task, err := jobs.NewFlushTableTailTask(nil, txn, []*catalog.ObjectEntry{blkEntry}, tae.Runtime, types.MaxTs())
@@ -8727,7 +8735,7 @@ func TestEstimateMemSize(t *testing.T) {
 		size1, ds1 := blk.GetObjectData().EstimateMemSize()
 		schema50rowSize = size1
 
-		blkID := objectio.NewBlockidWithObjectID(&blk.ID, 0)
+		blkID := objectio.NewBlockidWithObjectID(blk.ID(), 0)
 		err := rel.DeleteByPhyAddrKey(*objectio.NewRowid(blkID, 1))
 		require.NoError(t, err)
 		size2, ds2 := blk.GetObjectData().EstimateMemSize()
@@ -8751,7 +8759,7 @@ func TestEstimateMemSize(t *testing.T) {
 		blk := testutil.GetOneBlockMeta(rel)
 		size1, d1 := blk.GetObjectData().EstimateMemSize()
 
-		blkID := objectio.NewBlockidWithObjectID(&blk.ID, 0)
+		blkID := objectio.NewBlockidWithObjectID(blk.ID(), 0)
 		err := rel.DeleteByPhyAddrKey(*objectio.NewRowid(blkID, 1))
 		require.NoError(t, err)
 
@@ -8859,13 +8867,13 @@ func TestCollectDeletesInRange2(t *testing.T) {
 	tae.CompactBlocks(false)
 
 	txn, rel := tae.GetRelation()
-	blk := rel.MakeObjectIt().GetObject()
+	blk := testutil.GetOneObject(rel)
 	deltaLoc, err := testutil.MockCNDeleteInS3(tae.Runtime.Fs, blk.GetMeta().(*catalog.ObjectEntry).GetObjectData(), 0, schema, txn, []uint32{0, 1, 2, 3})
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	txn, rel = tae.GetRelation()
-	blk = rel.MakeObjectIt().GetObject()
+	blk = testutil.GetOneObject(rel)
 	ok, err := rel.TryDeleteByDeltaloc(blk.Fingerprint(), deltaLoc)
 	assert.True(t, ok)
 	assert.NoError(t, err)
@@ -8873,7 +8881,7 @@ func TestCollectDeletesInRange2(t *testing.T) {
 
 	t.Log(tae.Catalog.SimplePPString(3))
 	txn, rel = tae.GetRelation()
-	blk = rel.MakeObjectIt().GetObject()
+	blk = testutil.GetOneObject(rel)
 	deletes, _, err := blk.GetMeta().(*catalog.ObjectEntry).GetObjectData().CollectDeleteInRange(
 		context.Background(), types.TS{}, txn.GetStartTS(), true, common.DefaultAllocator,
 	)
@@ -8889,7 +8897,7 @@ func TestCollectDeletesInRange2(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	txn, rel = tae.GetRelation()
-	blk = rel.MakeObjectIt().GetObject()
+	blk = testutil.GetOneObject(rel)
 	deletes, _, err = blk.GetMeta().(*catalog.ObjectEntry).GetObjectData().CollectDeleteInRange(
 		context.Background(), types.TS{}, txn.GetStartTS(), true, common.DefaultAllocator,
 	)
@@ -9007,12 +9015,12 @@ func TestVisitTombstone(t *testing.T) {
 
 	txn, rel := tae.GetRelation()
 	it := rel.MakeObjectIt()
-	for it.Valid() {
+	for it.Next() {
 		blk := it.GetObject()
 		meta := blk.GetMeta().(*catalog.ObjectEntry)
 		metas = append(metas, meta)
-		it.Next()
 	}
+	it.Next()
 	_ = txn.Commit(context.Background())
 	if len(metas) == 0 {
 		return
@@ -9035,4 +9043,84 @@ func TestVisitTombstone(t *testing.T) {
 	t.Log(tae.Catalog.SimplePPString(3))
 	tae.Restart(context.Background())
 	t.Log(tae.Catalog.SimplePPString(3))
+}
+
+func TestDedupAndFlush(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	options.WithGlobalVersionInterval(time.Microsecond)(opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(2, 1)
+	schema.BlockMaxRows = 50
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
+
+	tae.CreateRelAndAppend(bat, true)
+
+	flushTxn, rel := tae.GetRelation()
+
+	obj := testutil.GetOneBlockMeta(rel)
+	task, err := jobs.NewFlushTableTailTask(nil, flushTxn, []*catalog.ObjectEntry{obj}, tae.Runtime, flushTxn.GetStartTS())
+	assert.NoError(t, err)
+	err = task.OnExec(ctx)
+	assert.NoError(t, err)
+
+	{
+		// mock update
+		txn, rel := tae.GetRelation()
+		v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+		filter := handle.NewEQFilter(v)
+		err := rel.DeleteByFilter(context.Background(), filter)
+		assert.NoError(t, err)
+		err = rel.Append(ctx, bat)
+		assert.NoError(t, err)
+		err = txn.Commit(context.Background())
+		assert.NoError(t, err)
+	}
+
+	assert.NoError(t, flushTxn.Commit(ctx))
+}
+
+func TestTransferDeletes(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchema(2, 0)
+	schema.BlockMaxRows = 10
+	schema.ObjectMaxBlocks = 10
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 1)
+
+	tae.CreateRelAndAppend(bat, true)
+
+	txn, rel := testutil.GetDefaultRelation(t, tae.DB, schema.Name)
+	blkMetas := testutil.GetAllBlockMetas(rel)
+	task, err := jobs.NewFlushTableTailTask(tasks.WaitableCtx, txn, blkMetas, tae.DB.Runtime, types.MaxTs())
+	assert.NoError(t, err)
+	err = task.OnExec(ctx)
+	assert.NoError(t, err)
+
+	txn2, rel := tae.GetRelation()
+	filter := handle.NewEQFilter(bat.Vecs[0].Get(0))
+	assert.NoError(t, rel.UpdateByFilter(ctx, filter, 1, int32(3), false))
+	var wg sync.WaitGroup
+	txn.SetApplyCommitFn(func(at txnif.AsyncTxn) error {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			assert.NoError(t, txn2.PrePrepare(ctx))
+		}()
+		time.Sleep(time.Millisecond * 100)
+		return txn.GetStore().ApplyCommit()
+	})
+	assert.NoError(t, txn.Commit(ctx))
+	wg.Wait()
 }
