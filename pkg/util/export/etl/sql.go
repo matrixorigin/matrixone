@@ -21,6 +21,7 @@ import (
 
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 
 	_ "github.com/go-sql-driver/mysql"
 )
@@ -48,6 +49,8 @@ func (sw *DefaultSqlWriter) GetContent() string {
 	return ""
 }
 
+func (sw *DefaultSqlWriter) GetContentLength() int { return 0 }
+
 func (sw *DefaultSqlWriter) WriteStrings(record []string) error {
 	return nil
 }
@@ -69,6 +72,7 @@ func (sw *DefaultSqlWriter) flushBuffer(force bool) (int, error) {
 	if err != nil {
 		sw.dumpBufferToCSV()
 	}
+	v2.TraceMOLoggerExportCsvHistogram.Observe(float64(sw.csvWriter.GetContentLength()))
 	_, err = sw.csvWriter.FlushAndClose()
 	return cnt, err
 }
