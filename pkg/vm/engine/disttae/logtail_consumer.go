@@ -93,6 +93,8 @@ const (
 	Subscribed
 	Unsubscribing
 	Unsubscribed
+
+	FakeLogtailServerAddress = "fake address for ut"
 )
 
 // PushClient is a structure responsible for all operations related to the log tail push model.
@@ -141,11 +143,17 @@ type PushClient struct {
 	consumeErrC chan error
 	receiver    []routineController
 	eng         *Engine
+
+	LogtailRPCClientFactory func(string, morpc.RPCClient) (morpc.RPCClient, morpc.Stream, error)
 }
 
 type State struct {
 	LatestTS  timestamp.Timestamp
 	SubTables map[SubTableID]SubTableStatus
+}
+
+func (c *PushClient) LatestLogtailAppliedTime() timestamp.Timestamp {
+	return c.receivedLogTailTime.getTimestamp()
 }
 
 func (c *PushClient) GetState() State {
@@ -228,7 +236,7 @@ func (c *PushClient) init(
 	}
 	c.initialized = true
 
-	return c.subscriber.init(serviceAddr)
+	return c.subscriber.init(serviceAddr, c.LogtailRPCClientFactory)
 }
 
 func (c *PushClient) validLogTailMustApplied(snapshotTS timestamp.Timestamp) {
@@ -393,6 +401,8 @@ func (c *PushClient) TryToSubscribeTable(
 		case Unsubscribed:
 			panic("Impossible Path")
 
+		case SubRspReceived:
+			return nil
 		}
 
 	}
@@ -874,7 +884,7 @@ func (c *PushClient) isSubscribed(dbId, oldId, newId uint64) (*logtailreplay.Par
 			SubState:   Subscribed,
 			LatestTime: time.Now(),
 		}
-		return c.eng.getOrCreateLatestPart(dbId, newId).Snapshot(), true
+		return c.eng.GetOrCreateLatestPart(dbId, newId).Snapshot(), true
 	}
 	return nil, false
 }
@@ -930,7 +940,7 @@ func (c *PushClient) loadAndConsumeLatestCkp(
 	defer c.subscribed.mutex.Unlock()
 	v, exist := c.subscribed.m[SubTableID{DatabaseID: tbl.db.databaseId, TableID: tableId}]
 	if exist && (v.SubState == SubRspReceived || v.SubState == Subscribed) {
-		part, err := c.eng.lazyLoadLatestCkp(ctx, tbl)
+		part, err := c.eng.LazyLoadLatestCkp(ctx, tbl)
 		if err != nil {
 			return InvalidSubState, nil, err
 		}
@@ -1165,8 +1175,9 @@ type logTailSubscriberResponse struct {
 
 // XXX generate a rpc client and new a stream.
 // we should hide these code into service's NewClient method next day.
-func (s *logTailSubscriber) newRpcStreamToTnLogTailService(serviceAddr string) error {
-	if s.rpcClient == nil {
+func DefaultNewRpcStreamToTnLogTailService(
+	serviceAddr string, rpcClient morpc.RPCClient) (morpc.RPCClient, morpc.Stream, error) {
+	if rpcClient == nil {
 		logger := logutil.GetGlobalLogger().Named("cn-log-tail-client")
 		codec := morpc.NewMessageCodec(func() morpc.Message {
 			return &service.LogtailResponseSegment{}
@@ -1184,26 +1195,21 @@ func (s *logTailSubscriber) newRpcStreamToTnLogTailService(serviceAddr string) e
 			morpc.WithClientLogger(logger),
 		)
 		if err != nil {
-			return err
+			return nil, nil, err
 		}
-		s.rpcClient = c
+		rpcClient = c
 	}
 
-	if s.rpcStream != nil {
-		s.rpcStream.Close(true)
-		s.rpcStream = nil
-	}
-
-	stream, err := s.rpcClient.NewStream(serviceAddr, true)
+	stream, err := rpcClient.NewStream(serviceAddr, true)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 
-	s.rpcStream = stream
-	return nil
+	return rpcClient, stream, nil
 }
 
-func (s *logTailSubscriber) init(serviceAddr string) (err error) {
+func (s *logTailSubscriber) init(serviceAddr string,
+	rpcStreamFactory func(string, morpc.RPCClient) (morpc.RPCClient, morpc.Stream, error)) (err error) {
 	// XXX we assume that we have only 1 tn now.
 	s.tnNodeID = 0
 
@@ -1215,9 +1221,18 @@ func (s *logTailSubscriber) init(serviceAddr string) (err error) {
 		s.logTailClient = nil
 	}
 
-	if err := s.newRpcStreamToTnLogTailService(serviceAddr); err != nil {
+	rpcClient, rpcStream, err := rpcStreamFactory(serviceAddr, s.rpcClient)
+	if err != nil {
 		return err
 	}
+
+	s.rpcClient = rpcClient
+	if s.rpcStream != nil {
+		s.rpcStream.Close(true)
+		s.rpcStream = nil
+	}
+
+	s.rpcStream = rpcStream
 
 	// new the log tail client.
 	s.logTailClient, err = service.NewLogtailClient(s.rpcStream, service.WithClientRequestPerSecond(maxSubscribeRequestPerSecond))
@@ -1279,7 +1294,7 @@ func (s *logTailSubscriber) receiveResponse(deadlineCtx context.Context) logTail
 func waitServerReady(addr string) {
 	dialTimeout := time.Second * 2
 	// If the logtail server is ready, just return and do not wait.
-	if address.RemoteAddressAvail(addr, dialTimeout) {
+	if address.RemoteAddressAvail(addr, dialTimeout) || addr == FakeLogtailServerAddress {
 		return
 	}
 
@@ -1387,7 +1402,7 @@ func dispatchSubscribeResponse(
 			return err
 		}
 		if len(lt.CkpLocation) == 0 {
-			p := e.getOrCreateLatestPart(tbl.DbId, tbl.TbId)
+			p := e.GetOrCreateLatestPart(tbl.DbId, tbl.TbId)
 			p.UpdateDuration(types.TS{}, types.MaxTs())
 			c := e.getLatestCatalogCache()
 			c.UpdateDuration(types.TS{}, types.MaxTs())
@@ -1668,7 +1683,7 @@ func updatePartitionOfPush(
 	dbId, tblId := tl.Table.GetDbId(), tl.Table.GetTbId()
 
 	t0 := time.Now()
-	partition := e.getOrCreateLatestPart(dbId, tblId)
+	partition := e.GetOrCreateLatestPart(dbId, tblId)
 	v2.LogtailUpdatePartitonGetPartitionDurationHistogram.Observe(time.Since(t0).Seconds())
 
 	t0 = time.Now()

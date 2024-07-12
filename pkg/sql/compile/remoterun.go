@@ -140,7 +140,6 @@ func encodeProcessInfo(
 func appendWriteBackOperator(c *Compile, s *Scope) *Scope {
 	rs := c.newMergeScope([]*Scope{s})
 	rs.appendInstruction(vm.Instruction{
-		Op:  vm.Output,
 		Idx: -1, // useless
 		Arg: output.NewArgument().
 			WithFunc(c.fill),
@@ -409,7 +408,7 @@ func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline,
 func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32) (int32, *pipeline.Instruction, error) {
 	opBase := op.GetOperatorBase()
 	in := &pipeline.Instruction{
-		Op:      int32(opBase.Op),
+		Op:      int32(op.OpType()),
 		Idx:     int32(opBase.Idx),
 		IsFirst: opBase.IsFirst,
 		IsLast:  opBase.IsLast,
@@ -785,7 +784,7 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 	case *value_scan.ValueScan:
 		in.ValueScan = &pipeline.ValueScan{}
 	default:
-		return -1, nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", opBase.Op))
+		return -1, nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", op.OpType()))
 	}
 	return ctxId, in, nil
 }
@@ -1207,7 +1206,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		return op, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", opr.Op))
 	}
 	op.GetOperatorBase().SetInfo(&vm.OperatorInfo{
-		Op:      vm.OpType(opr.Op),
 		Idx:     int(opr.Idx),
 		IsFirst: opr.IsFirst,
 		IsLast:  opr.IsLast,

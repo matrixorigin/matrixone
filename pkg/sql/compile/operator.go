@@ -112,7 +112,6 @@ func init() {
 func dupInstruction(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process.WaitRegister, index int) vm.Instruction {
 	srcOpBase := sourceOp.GetOperatorBase()
 	res := vm.Instruction{
-		Op:          srcOpBase.Op,
 		Idx:         srcOpBase.Idx,
 		IsFirst:     srcOpBase.IsFirst,
 		IsLast:      srcOpBase.IsLast,
@@ -121,7 +120,7 @@ func dupInstruction(sourceOp vm.Operator, regMap map[*process.WaitRegister]*proc
 		MaxParallel: srcOpBase.MaxParallel,
 		ParallelID:  srcOpBase.ParallelID,
 	}
-	switch srcOpBase.Op {
+	switch sourceOp.OpType() {
 	case vm.Anti:
 		t := sourceOp.(*anti.AntiJoin)
 		arg := anti.NewArgument()
@@ -511,7 +510,7 @@ func dupInstruction(sourceOp vm.Operator, regMap map[*process.WaitRegister]*proc
 		arg := value_scan.NewArgument()
 		res.Arg = arg
 	default:
-		panic(fmt.Sprintf("unexpected instruction type '%d' to dup", srcOpBase.Op))
+		panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceOp.OpType()))
 	}
 	return res
 }
@@ -1261,12 +1260,10 @@ func constructDeleteDispatchAndLocal(
 		rs[currentIdx].Proc.Reg.MergeReceivers[currentIdx])
 
 	ss[currentIdx].appendInstruction(vm.Instruction{
-		Op:  vm.Dispatch,
 		Arg: arg,
 	})
 	// add merge to recieve all batches
 	rs[currentIdx].appendInstruction(vm.Instruction{
-		Op:  vm.Merge,
 		Arg: merge.NewArgument(),
 	})
 }
@@ -1535,7 +1532,7 @@ func constructLoopMark(n *plan.Node, typs []types.Type, proc *process.Process) *
 }
 
 func constructJoinBuildOperator(c *Compile, op vm.Operator, isDup bool, isShuffle bool) vm.Instruction {
-	switch op.GetOperatorBase().Op {
+	switch op.OpType() {
 	case vm.IndexJoin:
 		arg := op.(*indexjoin.IndexJoin)
 		ret := indexbuild.NewArgument()
@@ -1543,7 +1540,6 @@ func constructJoinBuildOperator(c *Compile, op vm.Operator, isDup bool, isShuffl
 			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
 		}
 		return vm.Instruction{
-			Op:      vm.IndexBuild,
 			Idx:     op.GetOperatorBase().GetIdx(),
 			IsFirst: true,
 			Arg:     ret,
@@ -1551,14 +1547,12 @@ func constructJoinBuildOperator(c *Compile, op vm.Operator, isDup bool, isShuffl
 	default:
 		if isShuffle {
 			return vm.Instruction{
-				Op:      vm.ShuffleBuild,
 				Idx:     op.GetOperatorBase().GetIdx(),
 				IsFirst: true,
 				Arg:     constructShuffleBuild(op, c.proc, isDup),
 			}
 		}
 		return vm.Instruction{
-			Op:      vm.HashBuild,
 			Idx:     op.GetOperatorBase().GetIdx(),
 			IsFirst: true,
 			Arg:     constructHashBuild(op, c.proc, isDup),
@@ -1571,7 +1565,7 @@ func constructHashBuild(op vm.Operator, proc *process.Process, isDup bool) *hash
 	// relation index of arg.Conditions should be rewritten to 0 here.
 	ret := hashbuild.NewArgument()
 
-	switch op.GetOperatorBase().Op {
+	switch op.OpType() {
 	case vm.Anti:
 		arg := op.(*anti.AntiJoin)
 		ret.NeedHashMap = true
@@ -1768,7 +1762,7 @@ func constructHashBuild(op vm.Operator, proc *process.Process, isDup bool) *hash
 
 	default:
 		ret.Release()
-		panic(moerr.NewInternalError(proc.Ctx, "unsupport join type '%v'", op.GetOperatorBase().Op))
+		panic(moerr.NewInternalError(proc.Ctx, "unsupport join type '%v'", op.OpType()))
 	}
 	return ret
 }
@@ -1776,7 +1770,7 @@ func constructHashBuild(op vm.Operator, proc *process.Process, isDup bool) *hash
 func constructShuffleBuild(op vm.Operator, proc *process.Process, isDup bool) *shufflebuild.ShuffleBuild {
 	ret := shufflebuild.NewArgument()
 
-	switch op.GetOperatorBase().Op {
+	switch op.OpType() {
 	case vm.Anti:
 		arg := op.(*anti.AntiJoin)
 		ret.Typs = arg.Typs
@@ -1885,7 +1879,7 @@ func constructShuffleBuild(op vm.Operator, proc *process.Process, isDup bool) *s
 
 	default:
 		ret.Release()
-		panic(moerr.NewInternalError(proc.Ctx, "unsupported type for shuffle join: '%v'", op.GetOperatorBase().Op))
+		panic(moerr.NewInternalError(proc.Ctx, "unsupported type for shuffle join: '%v'", op.OpType()))
 	}
 	return ret
 }

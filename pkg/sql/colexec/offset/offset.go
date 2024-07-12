@@ -32,6 +32,10 @@ func (offset *Offset) String(buf *bytes.Buffer) {
 	buf.WriteString(fmt.Sprintf("offset(%v)", offset.OffsetExpr))
 }
 
+func (offset *Offset) OpType() vm.OpType {
+	return vm.Offset
+}
+
 func (offset *Offset) Prepare(proc *process.Process) error {
 	var err error
 	offset.ctr = new(container)

@@ -31,6 +31,10 @@ func (loopSemi *LoopSemi) String(buf *bytes.Buffer) {
 	buf.WriteString(": ⨝ ")
 }
 
+func (loopSemi *LoopSemi) OpType() vm.OpType {
+	return vm.LoopSemi
+}
+
 func (loopSemi *LoopSemi) Prepare(proc *process.Process) error {
 	var err error
 

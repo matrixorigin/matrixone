@@ -40,6 +40,10 @@ func (window *Window) String(buf *bytes.Buffer) {
 	buf.WriteString(": window")
 }
 
+func (window *Window) OpType() vm.OpType {
+	return vm.Window
+}
+
 func (window *Window) Prepare(proc *process.Process) (err error) {
 	window.ctr = new(container)
 	window.ctr.InitReceiver(proc, true)

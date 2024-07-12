@@ -111,8 +111,6 @@ const (
 
 // Instruction contains relational algebra
 type Instruction struct {
-	// Op specified the operator code of an instruction.
-	Op OpType
 	// Idx specified the analysis information index.
 	Idx int
 	// Arg contains the operand of this instruction.
@@ -138,6 +136,9 @@ type Operator interface {
 
 	// String returns the string representation of an operator.
 	String(buf *bytes.Buffer)
+
+	// OpType returns the OpType of an operator.
+	OpType() OpType
 
 	//Prepare prepares an operator for execution.
 	Prepare(proc *process.Process) error
@@ -248,14 +249,6 @@ func (o *OperatorBase) SetIsLast(isLast bool) {
 	o.IsLast = isLast
 }
 
-func (o *OperatorBase) GetOpType() OpType {
-	return o.Op
-}
-
-func (o *OperatorBase) SetOpType(opType OpType) {
-	o.Op = opType
-}
-
 var CancelResult = CallResult{
 	Status: ExecStop,
 }
@@ -304,7 +297,6 @@ func NewCallResult() CallResult {
 }
 
 type OperatorInfo struct {
-	Op            OpType // Op specified the operator code of an instruction.
 	Idx           int
 	ParallelIdx   int
 	ParallelMajor bool
@@ -327,8 +319,8 @@ func (info OperatorInfo) GetAddress() process.MessageAddress {
 
 type Instructions []Instruction
 
-func (o *OperatorBase) IsBrokenNode() bool {
-	switch o.Op {
+func IsBrokenNode(op Operator) bool {
+	switch op.OpType() {
 	case Order, MergeOrder, Partition:
 		return true
 	case Limit, MergeLimit:
@@ -351,9 +343,9 @@ func (o *OperatorBase) IsBrokenNode() bool {
 	return false
 }
 
-func (info *OperatorInfo) CannotRemote() bool {
+func CannotRemote(op Operator) bool {
 	// todo: I think we should add more operators here.
-	return info.Op == LockOp
+	return op.OpType() == LockOp
 }
 
 type ModificationArgument interface {

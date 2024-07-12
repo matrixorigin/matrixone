@@ -32,6 +32,10 @@ func (loopSingle *LoopSingle) String(buf *bytes.Buffer) {
 	buf.WriteString(": loop single join ")
 }
 
+func (loopSingle *LoopSingle) OpType() vm.OpType {
+	return vm.LoopSingle
+}
+
 func (loopSingle *LoopSingle) Prepare(proc *process.Process) error {
 	var err error
 

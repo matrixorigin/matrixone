@@ -53,6 +53,10 @@ func (deletion *Deletion) String(buf *bytes.Buffer) {
 	buf.WriteString(": delete rows")
 }
 
+func (deletion *Deletion) OpType() vm.OpType {
+	return vm.Deletion
+}
+
 func (deletion *Deletion) Prepare(proc *process.Process) error {
 	deletion.ctr = new(container)
 	if deletion.RemoteDelete {

@@ -40,6 +40,10 @@ func (preInsertSecIdx *PreInsertSecIdx) String(buf *bytes.Buffer) {
 	buf.WriteString(": pre processing insert secondary key")
 }
 
+func (preInsertSecIdx *PreInsertSecIdx) OpType() vm.OpType {
+	return vm.PreInsertSecondaryIndex
+}
+
 func (preInsertSecIdx *PreInsertSecIdx) Prepare(proc *process.Process) error {
 	preInsertSecIdx.ctr = new(container)
 	return nil
