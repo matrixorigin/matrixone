@@ -1804,12 +1804,12 @@ func (c *Compile) compileLockOp(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 		if len(n.LockTargets) > 1 || n.LockTargets[0].LockTable || !n.LockTargets[0].LockTableAtTheEnd || n.LockTargets[0].LockRows == nil {
 			for i := range ss {
 				lockOpArg := constructLockOp(n, c, block)
-				ss[i].appendOperator(lockOpArg)
+				ss[i].setRootOperator(lockOpArg)
 			}
 		} else {
 			lockOpArg := constructLockOp(n, c, block)
 			ss = []*Scope{c.newMergeScope(ss)}
-			ss[0].appendOperator(lockOpArg)
+			ss[0].setRootOperator(lockOpArg)
 		}
 	}
 	ss = c.compileProjection(n, ss)
