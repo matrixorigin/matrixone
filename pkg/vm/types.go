@@ -109,23 +109,6 @@ const (
 	ProductL2
 )
 
-// Instruction contains relational algebra
-type Instruction struct {
-	// Idx specified the analysis information index.
-	Idx int
-	// Arg contains the operand of this instruction.
-	Arg Operator
-
-	// flag for analyzeInfo record the row information
-	IsFirst bool
-	IsLast  bool
-
-	CnAddr      string
-	OperatorID  int32
-	ParallelID  int32
-	MaxParallel int32
-}
-
 type Operator interface {
 	// Free release all the memory allocated from mPool in an operator.
 	// pipelineFailed marks the process status of the pipeline when the method is called.
@@ -316,8 +299,6 @@ func (info OperatorInfo) GetAddress() process.MessageAddress {
 		ParallelID: info.ParallelID,
 	}
 }
-
-type Instructions []Instruction
 
 func IsBrokenNode(op Operator) bool {
 	switch op.OpType() {

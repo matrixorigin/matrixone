@@ -95,7 +95,7 @@ func prepareRemoteRunSendingData(sqlStr string, s *Scope) (scopeData []byte, pro
 	}
 	rootOp.GetOperatorBase().SetChildren(nil)
 	defer func() {
-		s.appendOperator(rootOp)
+		s.doSetRootOperator(rootOp)
 	}()
 
 	if scopeData, err = encodeScope(s); err != nil {
