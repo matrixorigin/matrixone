@@ -33,6 +33,10 @@ func (innerJoin *InnerJoin) String(buf *bytes.Buffer) {
 	buf.WriteString(": inner join ")
 }
 
+func (innerJoin *InnerJoin) OpType() vm.OpType {
+	return vm.Join
+}
+
 func (innerJoin *InnerJoin) Prepare(proc *process.Process) (err error) {
 	innerJoin.ctr = new(container)
 	innerJoin.ctr.InitReceiver(proc, false)

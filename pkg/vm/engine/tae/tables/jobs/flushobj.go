@@ -83,7 +83,7 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 		time.Sleep(time.Duration(rand.Intn(200)) * time.Millisecond)
 	}
 	waitT := time.Since(task.createAt)
-	seg := task.meta.ID.Segment()
+	seg := task.meta.ID().Segment()
 	name := objectio.BuildObjectName(seg, 0)
 	task.name = name
 	writer, err := blockio.NewBlockWriterNew(task.fs.Service, name, task.schemaVer, task.seqnums)
@@ -139,7 +139,7 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 		logutil.Info(
 			"[FLUSH-SLOW-OBJ]",
 			zap.String("task", task.partentTask),
-			common.AnyField("obj", task.meta.ID.ShortStringEx()),
+			common.AnyField("obj", task.meta.ID().ShortStringEx()),
 			common.AnyField("wait", waitT),
 			common.AnyField("copy", copyT),
 			common.AnyField("io", ioT),

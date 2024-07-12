@@ -34,6 +34,10 @@ func (shuffle *Shuffle) String(buf *bytes.Buffer) {
 	buf.WriteString(": shuffle")
 }
 
+func (shuffle *Shuffle) OpType() vm.OpType {
+	return vm.Shuffle
+}
+
 func (shuffle *Shuffle) Prepare(proc *process.Process) error {
 	shuffle.ctr = new(container)
 	if shuffle.RuntimeFilterSpec != nil {

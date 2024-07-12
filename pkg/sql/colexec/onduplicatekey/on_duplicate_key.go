@@ -36,6 +36,10 @@ func (onDuplicatekey *OnDuplicatekey) String(buf *bytes.Buffer) {
 	buf.WriteString(": processing on duplicate key before insert")
 }
 
+func (onDuplicatekey *OnDuplicatekey) OpType() vm.OpType {
+	return vm.OnDuplicateKey
+}
+
 func (onDuplicatekey *OnDuplicatekey) Prepare(p *process.Process) error {
 	onDuplicatekey.ctr = &container{}
 	onDuplicatekey.ctr.InitReceiver(p, true)

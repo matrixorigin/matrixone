@@ -49,7 +49,7 @@ func newAObject(
 ) *aobject {
 	obj := &aobject{}
 	obj.baseObject = newBaseObject(obj, meta, rt)
-	if obj.meta.HasDropCommitted() {
+	if obj.meta.Load().HasDropCommitted() {
 		pnode := newPersistedNode(obj.baseObject)
 		node := NewNode(pnode)
 		node.Ref()
@@ -82,7 +82,7 @@ func (obj *aobject) IsAppendable() bool {
 		return false
 	}
 	rows, _ := node.Rows()
-	return rows < obj.meta.GetSchema().BlockMaxRows
+	return rows < obj.meta.Load().GetSchema().BlockMaxRows
 }
 
 func (obj *aobject) PrepareCompactInfo() (result bool, reason string) {
@@ -91,8 +91,8 @@ func (obj *aobject) PrepareCompactInfo() (result bool, reason string) {
 		return
 	}
 	obj.FreezeAppend()
-	if !obj.meta.PrepareCompact() || !obj.appendMVCC.PrepareCompact() {
-		if !obj.meta.PrepareCompact() {
+	if !obj.meta.Load().PrepareCompact() || !obj.appendMVCC.PrepareCompact() {
+		if !obj.meta.Load().PrepareCompact() {
 			reason = "meta preparecomp false"
 		} else {
 			reason = "mvcc preparecomp false"
@@ -117,29 +117,27 @@ func (obj *aobject) PrepareCompact() bool {
 	obj.FreezeAppend()
 	obj.freezelock.Unlock()
 
-	obj.meta.RLock()
-	defer obj.meta.RUnlock()
-	droppedCommitted := obj.meta.HasDropCommittedLocked()
+	droppedCommitted := obj.GetObjMeta().HasDropCommitted()
 
 	if droppedCommitted {
-		if !obj.meta.PrepareCompactLocked() {
-			if obj.meta.CheckPrintPrepareCompactLocked() {
-				obj.meta.PrintPrepareCompactDebugLog()
+		if !obj.meta.Load().PrepareCompactLocked() {
+			if obj.meta.Load().CheckPrintPrepareCompactLocked() {
+				obj.meta.Load().PrintPrepareCompactDebugLog()
 			}
 			return false
 		}
 	} else {
-		if !obj.meta.PrepareCompactLocked() {
-			if obj.meta.CheckPrintPrepareCompactLocked() {
-				obj.meta.PrintPrepareCompactDebugLog()
+		if !obj.meta.Load().PrepareCompactLocked() {
+			if obj.meta.Load().CheckPrintPrepareCompactLocked() {
+				obj.meta.Load().PrintPrepareCompactDebugLog()
 			}
 			return false
 		}
-		if !obj.appendMVCC.PrepareCompactLocked() /* all appends are committed */ {
-			if obj.meta.CheckPrintPrepareCompactLocked() {
-				logutil.Infof("obj %v, data prepare compact failed", obj.meta.ID.String())
-				if !obj.meta.HasPrintedPrepareComapct {
-					obj.meta.HasPrintedPrepareComapct = true
+		if !obj.appendMVCC.PrepareCompact() /* all appends are committed */ {
+			if obj.meta.Load().CheckPrintPrepareCompactLocked() {
+				logutil.Infof("obj %v, data prepare compact failed", obj.meta.Load().ID().String())
+				if !obj.meta.Load().HasPrintedPrepareComapct.Load() {
+					obj.meta.Load().HasPrintedPrepareComapct.Store(true)
 					logutil.Infof("append MVCC %v", obj.appendMVCC.StringLocked())
 				}
 			}
@@ -147,8 +145,8 @@ func (obj *aobject) PrepareCompact() bool {
 		}
 	}
 	prepareCompact := obj.RefCount() == 0
-	if !prepareCompact && obj.meta.CheckPrintPrepareCompactLocked() {
-		logutil.Infof("obj %v, data ref count is %d", obj.meta.ID.String(), obj.RefCount())
+	if !prepareCompact && obj.meta.Load().CheckPrintPrepareCompactLocked() {
+		logutil.Infof("obj %v, data ref count is %d", obj.meta.Load().ID().String(), obj.RefCount())
 	}
 	return prepareCompact
 }
@@ -307,7 +305,7 @@ func (obj *aobject) GetByFilter(
 	if filter.Op != handle.FilterEq {
 		panic("logic error")
 	}
-	if obj.meta.GetSchema().SortKey == nil {
+	if obj.meta.Load().GetSchema().SortKey == nil {
 		rid := filter.Val.(types.Rowid)
 		offset = rid.GetRowOffset()
 		return
@@ -331,7 +329,7 @@ func (obj *aobject) BatchDedup(
 ) (err error) {
 	defer func() {
 		if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
-			logutil.Debugf("BatchDedup obj-%s: %v", obj.meta.ID.String(), err)
+			logutil.Debugf("BatchDedup obj-%s: %v", obj.meta.Load().ID().String(), err)
 		}
 	}()
 	node := obj.PinNode()
@@ -372,31 +370,30 @@ func (obj *aobject) CollectAppendInRange(
 }
 
 func (obj *aobject) estimateRawScore() (score int, dropped bool, err error) {
-	if obj.meta.HasDropCommitted() && !obj.meta.InMemoryDeletesExisted() {
+	meta := obj.GetObjMeta()
+	if meta.HasDropCommitted() && !meta.InMemoryDeletesExisted() {
 		dropped = true
 		return
 	}
-	obj.meta.RLock()
-	atLeastOneCommitted := obj.meta.HasCommittedNodeLocked()
-	obj.meta.RUnlock()
+	atLeastOneCommitted := meta.ObjectState >= catalog.ObjectState_Create_ApplyCommit
 	if !atLeastOneCommitted {
 		score = 1
 		return
 	}
 
 	rows, err := obj.Rows()
-	if rows == int(obj.meta.GetSchema().BlockMaxRows) {
+	if rows == int(obj.meta.Load().GetSchema().BlockMaxRows) {
 		score = 100
 		return
 	}
 
 	changesCnt := uint32(0)
-	obj.meta.RLock()
+	obj.RLock()
 	objectMVCC := obj.tryGetMVCC()
 	if objectMVCC != nil {
 		changesCnt = objectMVCC.GetChangeIntentionCntLocked()
 	}
-	obj.meta.RUnlock()
+	obj.RUnlock()
 	if changesCnt == 0 && rows == 0 {
 		score = 0
 	} else {
@@ -404,7 +401,7 @@ func (obj *aobject) estimateRawScore() (score int, dropped bool, err error) {
 	}
 
 	if score > 0 {
-		if _, terminated := obj.meta.GetTerminationTS(); terminated {
+		if _, terminated := obj.meta.Load().GetTerminationTS(); terminated {
 			score = 100
 		}
 	}
@@ -461,8 +458,8 @@ func (obj *aobject) EstimateMemSize() (int, int) {
 
 func (obj *aobject) GetRowsOnReplay() uint64 {
 	rows := uint64(obj.appendMVCC.GetTotalRow())
-	fileRows := uint64(obj.meta.GetLatestCommittedNodeLocked().
-		BaseNode.ObjectStats.Rows())
+	stats := obj.meta.Load().GetObjectStats()
+	fileRows := uint64(stats.Rows())
 	if rows > fileRows {
 		return rows
 	}

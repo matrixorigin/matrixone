@@ -178,6 +178,10 @@ func (mergeOrder *MergeOrder) String(buf *bytes.Buffer) {
 	buf.WriteString("])")
 }
 
+func (mergeOrder *MergeOrder) OpType() vm.OpType {
+	return vm.MergeOrder
+}
+
 func (mergeOrder *MergeOrder) Prepare(proc *process.Process) (err error) {
 	mergeOrder.ctr = new(container)
 	ctr := mergeOrder.ctr

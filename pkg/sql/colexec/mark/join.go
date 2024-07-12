@@ -35,6 +35,10 @@ func (markJoin *MarkJoin) String(buf *bytes.Buffer) {
 	buf.WriteString(": mark join ")
 }
 
+func (markJoin *MarkJoin) OpType() vm.OpType {
+	return vm.Mark
+}
+
 func (markJoin *MarkJoin) Prepare(proc *process.Process) error {
 	var err error
 	markJoin.ctr = new(container)

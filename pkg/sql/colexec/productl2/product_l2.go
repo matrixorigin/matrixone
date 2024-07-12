@@ -33,6 +33,10 @@ func (productl2 *Productl2) String(buf *bytes.Buffer) {
 	buf.WriteString(": product_l2 join ")
 }
 
+func (productl2 *Productl2) OpType() vm.OpType {
+	return vm.ProductL2
+}
+
 func (productl2 *Productl2) Prepare(proc *process.Process) error {
 	ap := productl2
 	ap.ctr = new(container)

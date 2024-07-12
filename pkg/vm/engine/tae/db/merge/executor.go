@@ -266,7 +266,7 @@ func logMergeTask(name string, taskId uint64, merges []*catalog.ObjectEntry, blk
 	for _, obj := range merges {
 		r := obj.GetRemainingRows()
 		rows += r
-		infoBuf.WriteString(fmt.Sprintf(" %d(%s)", r, common.ShortObjId(obj.ID)))
+		infoBuf.WriteString(fmt.Sprintf(" %d(%s)", r, common.ShortObjId(*obj.ID())))
 	}
 	platform := fmt.Sprintf("t%d", taskId)
 	if taskId == math.MaxUint64 {

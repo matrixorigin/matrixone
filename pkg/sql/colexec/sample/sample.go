@@ -58,6 +58,10 @@ func (sample *Sample) String(buf *bytes.Buffer) {
 	}
 }
 
+func (sample *Sample) OpType() vm.OpType {
+	return vm.Sample
+}
+
 func (sample *Sample) Prepare(proc *process.Process) (err error) {
 	sample.ctr = &container{
 		isGroupBy:     len(sample.GroupExprs) != 0,
