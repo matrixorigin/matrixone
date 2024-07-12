@@ -311,6 +311,10 @@ func (p *PartitionState) Copy() *PartitionState {
 	return &state
 }
 
+func (p *PartitionState) Checkpoints() []string {
+	return p.checkpoints
+}
+
 func (p *PartitionState) RowExists(rowID types.Rowid, ts types.TS) bool {
 	iter := p.rows.Iter()
 	defer iter.Release()
