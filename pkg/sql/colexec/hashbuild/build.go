@@ -178,7 +178,7 @@ func (ctr *container) mergeIntoBatches(src *batch.Batch, proc *process.Process) 
 func (ctr *container) collectBuildBatches(arg *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
 	var currentBatch *batch.Batch
 	for {
-		result, err := arg.Children[0].Call(proc)
+		result, err := vm.ChildrenCall(arg.GetChildren(0), proc, anal)
 		if err != nil {
 			return err
 		}
