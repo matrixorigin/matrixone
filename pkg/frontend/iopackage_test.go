@@ -15,20 +15,8 @@
 package frontend
 
 import (
-	"context"
-	"fmt"
-	"sync"
-	"sync/atomic"
-	"testing"
-	"time"
-
-	"github.com/fagongzi/goetty/v2"
-	"github.com/fagongzi/goetty/v2/codec"
-	"github.com/fagongzi/goetty/v2/codec/simple"
 	"github.com/smartystreets/goconvey/convey"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"testing"
 )
 
 func TestBasicIOPackage_WriteUint8(t *testing.T) {
@@ -223,113 +211,6 @@ func TestBasicIOPackage_ReadUint64(t *testing.T) {
 			break
 		}
 	}
-}
-
-var svrRun int32
-
-func isClosed() bool {
-	return atomic.LoadInt32(&svrRun) != 0
-}
-
-func setServer(val int32) {
-	atomic.StoreInt32(&svrRun, val)
-}
-
-func echoHandler(session goetty.IOSession, msg interface{}, received uint64) error {
-	value, ok := msg.(string)
-	if !ok {
-		return moerr.NewInternalError(context.TODO(), "convert to string failed")
-	}
-
-	err := session.Write(value, goetty.WriteOptions{Flush: true})
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func echoServer(handler func(goetty.IOSession, interface{}, uint64) error, aware goetty.IOSessionAware,
-	codec codec.Codec) {
-	echoServer, err := goetty.NewApplication("127.0.0.1:6001", handler,
-		goetty.WithAppSessionOptions(
-			goetty.WithSessionCodec(codec),
-			goetty.WithSessionLogger(logutil.GetGlobalLogger())),
-		goetty.WithAppSessionAware(aware))
-	if err != nil {
-		panic(err)
-	}
-	err = echoServer.Start()
-	if err != nil {
-		panic(err)
-	}
-	setServer(0)
-
-	fmt.Println("Server started")
-	to := NewTimeout(5*time.Minute, false)
-	for !isClosed() && !to.isTimeout() {
-	}
-	err = echoServer.Stop()
-	if err != nil {
-		return
-	}
-	fmt.Println("Server exited")
-}
-
-func echoClient() {
-	addrPort := "localhost:6001"
-	io := goetty.NewIOSession(goetty.WithSessionCodec(simple.NewStringCodec()))
-	err := io.Connect(addrPort, time.Second*3)
-	if err != nil {
-		fmt.Println("connect server failed.", err.Error())
-		return
-	}
-
-	alphabet := [10]string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}
-
-	for i := 0; i < 10; i++ {
-		err := io.Write(alphabet[i], goetty.WriteOptions{Flush: true})
-		if err != nil {
-			fmt.Println("client writes packet failed.", err.Error())
-			break
-		}
-		fmt.Printf("client writes %s.\n", alphabet[i])
-		data, err := io.Read(goetty.ReadOptions{})
-		if err != nil {
-			fmt.Println("client reads packet failed.", err.Error())
-			break
-		}
-		value, ok := data.(string)
-		if !ok {
-			fmt.Println("convert to string failed.")
-			break
-		}
-		fmt.Printf("client reads %s.\n", value)
-		if value != alphabet[i] {
-			fmt.Printf("echo failed. send %s but response %s\n", alphabet[i], value)
-			break
-		}
-	}
-	err = io.Close()
-	if err != nil {
-		return
-	}
-}
-
-func TestIOPackageImpl_ReadPacket(t *testing.T) {
-	wg := sync.WaitGroup{}
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		echoServer(echoHandler, nil, simple.NewStringCodec())
-	}()
-
-	to := NewTimeout(1*time.Minute, false)
-	for isClosed() && !to.isTimeout() {
-	}
-	time.Sleep(15 * time.Second)
-	echoClient()
-	setServer(1)
-	wg.Wait()
 }
 
 func Test_AppendUint(t *testing.T) {
