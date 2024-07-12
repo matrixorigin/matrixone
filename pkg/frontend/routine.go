@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/fagongzi/goetty/v2"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -480,7 +481,7 @@ func (rt *Routine) migrateConnectionFrom(resp *query.MigrateConnFromResponse) er
 	return nil
 }
 
-func NewRoutine(ctx context.Context, protocol MysqlRrWr, parameters *config.FrontendParameters) *Routine {
+func NewRoutine(ctx context.Context, protocol MysqlRrWr, parameters *config.FrontendParameters, rs goetty.IOSession) *Routine {
 	ctx = trace.Generate(ctx) // fill span{trace_id} in ctx
 	cancelRoutineCtx, cancelRoutineFunc := context.WithCancel(ctx)
 	ri := &Routine{

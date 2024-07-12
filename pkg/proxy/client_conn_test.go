@@ -363,7 +363,6 @@ func TestClientConn_ConnectToBackend(t *testing.T) {
 		require.True(t, ok)
 		require.NotNil(t, c)
 		c.conn.UseConn(local)
-		c.mysqlProto.UseConn(local)
 		require.Equal(t, "", string(cc.GetTenant()))
 
 		var wg sync.WaitGroup
@@ -494,7 +493,6 @@ func TestClientConn_SendErrToClient(t *testing.T) {
 	require.True(t, ok)
 	require.NotNil(t, c)
 	c.conn.UseConn(local)
-	c.mysqlProto.UseConn(local)
 	require.Equal(t, "", string(cc.GetTenant()))
 
 	var wg sync.WaitGroup

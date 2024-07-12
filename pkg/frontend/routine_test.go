@@ -18,7 +18,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"net"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -144,12 +143,6 @@ func Test_ConnectionCount(t *testing.T) {
 	//client connection method: mysql -h 127.0.0.1 -P 6001 --default-auth=mysql_native_password -uroot -p
 	//client connect
 	//ion method: mysql -h 127.0.0.1 -P 6001 -udump -p
-
-	clientConn, serverConn := net.Pipe()
-	defer serverConn.Close()
-	defer clientConn.Close()
-	registerConn(clientConn)
-
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	var conn1, conn2 *sql.DB
@@ -197,19 +190,17 @@ func Test_ConnectionCount(t *testing.T) {
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 	// A mock autoincrcache manager.
-	acim := &defines.AutoIncrCacheManager{}
-	setGlobalAicm(acim)
+	setGlobalAicm(&defines.AutoIncrCacheManager{})
 	rm, _ := NewRoutineManager(ctx)
 	setGlobalRtMgr(rm)
 
 	wg := sync.WaitGroup{}
 	wg.Add(1)
 
-	mo := createInnerServer()
 	//running server
 	go func() {
 		defer wg.Done()
-		mo.handleConn(serverConn)
+		echoServer(getGlobalRtMgr().Handler, getGlobalRtMgr(), NewSqlCodec())
 	}()
 
 	cCounter := metric.ConnectionCounter(sysAccountName)
@@ -218,17 +209,6 @@ func Test_ConnectionCount(t *testing.T) {
 	time.Sleep(time.Second * 2)
 	conn1, err = openDbConn(t, 6001)
 	require.NoError(t, err)
-
-	clientConn2, serverConn2 := net.Pipe()
-	defer serverConn2.Close()
-	defer clientConn2.Close()
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		mo.handleConn(serverConn2)
-	}()
-
-	registerConn(clientConn2)
 
 	time.Sleep(time.Second * 2)
 	conn2, err = openDbConn(t, 6001)
@@ -254,15 +234,11 @@ func Test_ConnectionCount(t *testing.T) {
 	assert.GreaterOrEqual(t, x.Gauge.GetValue(), float64(0))
 
 	time.Sleep(time.Millisecond * 10)
+	//close server
+	setServer(1)
+	wg.Wait()
 
 	//close the connection
 	closeDbConn(t, conn1)
 	closeDbConn(t, conn2)
-
-	//close server
-	clientConn.Close()
-	serverConn.Close()
-	clientConn2.Close()
-	serverConn2.Close()
-	wg.Wait()
 }

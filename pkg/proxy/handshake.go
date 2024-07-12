@@ -80,7 +80,6 @@ func (c *clientConn) upgradeToTLS() error {
 		return moerr.NewInternalError(ctx, "TSL handshake error: %v", err)
 	}
 	c.conn.UseConn(tlsConn)
-	c.mysqlProto.UseConn(tlsConn)
 	return nil
 }
 

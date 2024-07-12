@@ -17,7 +17,6 @@ package frontend
 import (
 	"context"
 	"math"
-	"net"
 	"testing"
 	"time"
 
@@ -234,22 +233,20 @@ func TestTxnHandler_RollbackTxn(t *testing.T) {
 
 func TestSession_TxnBegin(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
-	clientConn, serverConn := net.Pipe()
-	defer clientConn.Close()
-	defer serverConn.Close()
-	go startConsumeRead(clientConn)
 	genSession := func(ctrl *gomock.Controller) *Session {
+		ioSes := mock_frontend.NewMockIOSession(ctrl)
+		ioSes.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+		ioSes.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ioSes.EXPECT().RemoteAddress().Return("").AnyTimes()
+		ioSes.EXPECT().Ref().AnyTimes()
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
 		}
-		pu := config.NewParameterUnit(sv, nil, nil, nil)
-		pu.SV.SkipCheckUser = true
-		setGlobalPu(pu)
-		ioSes, err := NewIOSession(serverConn, pu)
-		if err != nil {
-			panic(err)
-		}
+		setGlobalPu(&config.ParameterUnit{
+			SV: sv,
+		})
+
 		proto := NewMysqlClientProtocol(0, ioSes, 1024, sv)
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
@@ -303,18 +300,13 @@ func TestSession_TxnBegin(t *testing.T) {
 }
 
 func TestSession_TxnCompilerContext(t *testing.T) {
-	clientConn, serverConn := net.Pipe()
-	defer clientConn.Close()
-	defer serverConn.Close()
-	go startConsumeRead(clientConn)
-
 	genSession := func(ctrl *gomock.Controller, pu *config.ParameterUnit) *Session {
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
+		ioses.EXPECT().Ref().AnyTimes()
 		sv, err := getSystemVariables("test/system_vars_config.toml")
-		if err != nil {
-			t.Error(err)
-		}
-
-		ioses, err := NewIOSession(serverConn, pu)
 		if err != nil {
 			t.Error(err)
 		}
@@ -390,17 +382,13 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 }
 
 func TestSession_GetTempTableStorage(t *testing.T) {
-	clientConn, serverConn := net.Pipe()
-	defer clientConn.Close()
-	defer serverConn.Close()
-	go startConsumeRead(clientConn)
-
 	genSession := func(ctrl *gomock.Controller, pu *config.ParameterUnit) *Session {
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
+		ioses.EXPECT().Ref().AnyTimes()
 		sv, err := getSystemVariables("test/system_vars_config.toml")
-		if err != nil {
-			t.Error(err)
-		}
-		ioses, err := NewIOSession(serverConn, pu)
 		if err != nil {
 			t.Error(err)
 		}
@@ -422,17 +410,13 @@ func TestSession_GetTempTableStorage(t *testing.T) {
 }
 
 func TestIfInitedTempEngine(t *testing.T) {
-	clientConn, serverConn := net.Pipe()
-	defer clientConn.Close()
-	defer serverConn.Close()
-	go startConsumeRead(clientConn)
-
 	genSession := func(ctrl *gomock.Controller, pu *config.ParameterUnit) *Session {
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
+		ioses.EXPECT().Ref().AnyTimes()
 		sv, err := getSystemVariables("test/system_vars_config.toml")
-		if err != nil {
-			t.Error(err)
-		}
-		ioses, err := NewIOSession(serverConn, pu)
 		if err != nil {
 			t.Error(err)
 		}
@@ -453,17 +437,13 @@ func TestIfInitedTempEngine(t *testing.T) {
 }
 
 func TestSetTempTableStorage(t *testing.T) {
-	clientConn, serverConn := net.Pipe()
-	defer clientConn.Close()
-	defer serverConn.Close()
-	go startConsumeRead(clientConn)
-
 	genSession := func(ctrl *gomock.Controller, pu *config.ParameterUnit) *Session {
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
+		ioses.EXPECT().Ref().AnyTimes()
 		sv, err := getSystemVariables("test/system_vars_config.toml")
-		if err != nil {
-			t.Error(err)
-		}
-		ioses, err := NewIOSession(serverConn, pu)
 		if err != nil {
 			t.Error(err)
 		}
@@ -522,18 +502,19 @@ func TestSession_updateTimeZone(t *testing.T) {
 }
 
 func TestSession_Migrate(t *testing.T) {
-	clientConn, serverConn := net.Pipe()
-	defer clientConn.Close()
-	defer serverConn.Close()
-	go startConsumeRead(clientConn)
-
 	genSession := func(ctrl *gomock.Controller) *Session {
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
+		ioses.EXPECT().Ref().AnyTimes()
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
 		}
 		sv.SkipCheckPrivilege = true
 		sv.SessionTimeout = toml.Duration{Duration: 10 * time.Second}
+		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
@@ -571,11 +552,6 @@ func TestSession_Migrate(t *testing.T) {
 			StorageEngine: eng,
 		})
 		ctx := defines.AttachAccountId(context.Background(), sysAccountID)
-		ioses, err := NewIOSession(serverConn, getGlobalPu())
-		if err != nil {
-			panic(err)
-		}
-		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 		session := NewSession(ctx, proto, nil)
 		session.tenant = &TenantInfo{
 			Tenant:   GetDefaultTenant(),

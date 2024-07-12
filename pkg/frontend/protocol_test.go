@@ -16,20 +16,19 @@ package frontend
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/config"
-	"net"
 	"testing"
 
+	"github.com/fagongzi/goetty/v2"
+	"github.com/fagongzi/goetty/v2/buf"
+	"github.com/fagongzi/goetty/v2/codec/simple"
 	"github.com/golang/mock/gomock"
 	"github.com/smartystreets/goconvey/convey"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 )
 
 func Test_protocol(t *testing.T) {
-	clientConn, serverConn := net.Pipe()
-	defer clientConn.Close()
-	defer serverConn.Close()
 	convey.Convey("test protocol.go succ", t, func() {
 		req := &Request{}
 		req.SetCmd(1)
@@ -43,50 +42,36 @@ func Test_protocol(t *testing.T) {
 		convey.So(res.GetCategory(), convey.ShouldEqual, 2)
 
 		cpi := &MysqlProtocolImpl{}
-
-		sv, err := getSystemVariables("test/system_vars_config.toml")
-		if err != nil {
-			t.Error(err)
-		}
-		pu := config.NewParameterUnit(sv, nil, nil, nil)
-		pu.SV.SkipCheckUser = true
-		setGlobalPu(pu)
-		io, err := NewIOSession(serverConn, pu)
-		convey.ShouldBeNil(err)
+		io := goetty.NewIOSession(goetty.WithSessionCodec(simple.NewStringCodec()))
 		cpi.tcpConn = io
 
 		str1 := cpi.Peer()
-		convey.So(str1, convey.ShouldEqual, "pipe")
+		convey.So(str1, convey.ShouldEqual, "")
 	})
 }
 
 func Test_SendResponse(t *testing.T) {
 	ctx := context.TODO()
-	clientConn, serverConn := net.Pipe()
-	defer clientConn.Close()
-	defer serverConn.Close()
-	go startConsumeRead(clientConn)
 	convey.Convey("SendResponse succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		iopackage := NewIOPackage(true)
+		iopackage := mock_frontend.NewMockIOPackage(ctrl)
+		iopackage.EXPECT().WriteUint8(gomock.Any(), gomock.Any(), gomock.Any()).Return(0).AnyTimes()
+		iopackage.EXPECT().WriteUint16(gomock.Any(), gomock.Any(), gomock.Any()).Return(0).AnyTimes()
+		iopackage.EXPECT().WriteUint32(gomock.Any(), gomock.Any(), gomock.Any()).Return(0).AnyTimes()
 
-		sv, err := getSystemVariables("test/system_vars_config.toml")
-		if err != nil {
-			t.Error(err)
-		}
-		pu := config.NewParameterUnit(sv, nil, nil, nil)
-		pu.SV.SkipCheckUser = true
-		setGlobalPu(pu)
-		ioses, err := NewIOSession(serverConn, pu)
-		convey.ShouldBeNil(err)
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().Flush(gomock.Any()).AnyTimes()
+
 		mp := &MysqlProtocolImpl{}
 		mp.io = iopackage
 		mp.tcpConn = ioses
 		resp := &Response{}
 		resp.category = EoFResponse
-		err = mp.SendResponse(ctx, resp)
+		err := mp.SendResponse(ctx, resp)
 		convey.So(err, convey.ShouldBeNil)
 
 		resp.SetData(moerr.NewInternalError(context.TODO(), ""))
