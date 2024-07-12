@@ -122,7 +122,7 @@ const (
 //			atomic.AddUint64(&all, uint64(len(nodes)))
 //		}
 //	}
-//	idAlloc := common.NewIdAlloctor(1)
+//	idAlloc := common.NewIdAllocator(1)
 //	for {
 //		id := idAlloc.Alloc()
 //		if id > 10 {
