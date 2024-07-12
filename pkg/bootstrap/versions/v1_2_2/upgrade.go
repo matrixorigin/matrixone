@@ -133,7 +133,7 @@ var upg_mo_snapshots_to_bigint = versions.UpgradeEntry{
 	Schema:    catalog.MO_CATALOG,
 	TableName: catalog.MO_SNAPSHOTS,
 	UpgType:   versions.MODIFY_COLUMN,
-	UpgSql:    fmt.Sprintf("alter table %s.%s modify column %s bigint;", catalog.MO_CATALOG, catalog.MO_SNAPSHOTS, catalog.MO_SNAPSHOTS_TS),
+	UpgSql:    fmt.Sprintf("alter table %s.%s modify column %s bigint unsigned;", catalog.MO_CATALOG, catalog.MO_SNAPSHOTS, catalog.MO_SNAPSHOTS_TS),
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MO_SNAPSHOTS, catalog.MO_SNAPSHOTS_TS)
 		if err != nil {
