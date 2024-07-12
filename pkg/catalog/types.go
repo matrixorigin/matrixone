@@ -136,6 +136,8 @@ const (
 
 	// MO_SNAPSHOTS
 	MO_SNAPSHOTS = "mo_snapshots"
+
+	MO_SNAPSHOTS_TS = "ts"
 )
 
 const (
