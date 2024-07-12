@@ -243,7 +243,10 @@ func (page *TransferHashPage) loadTable() *api.HashPageMap {
 	if m != nil {
 		return m
 	}
-	err := page.fs.Read(context.Background(), &ioVector)
+	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	err := page.fs.Read(ctx, &ioVector)
 	if err != nil {
 		return nil
 	}
@@ -266,7 +269,10 @@ func (page *TransferHashPage) ClearPersistTable() {
 	if page.path.Name == "" {
 		return
 	}
-	page.fs.Delete(context.Background(), page.path.Name)
+	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	page.fs.Delete(ctx, page.path.Name)
 }
 
 func (page *TransferHashPage) IsPersist() bool {

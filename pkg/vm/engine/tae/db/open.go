@@ -96,10 +96,6 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	if opts.LocalFs == nil {
 		opts.LocalFs = objectio.TmpNewFileservice(ctx, path.Join(dirname, "data"))
 	}
-	list, _ := opts.LocalFs.List(ctx, "transfer")
-	for _, dir := range list {
-		opts.LocalFs.Delete(ctx, path.Join("transfer", dir.Name))
-	}
 
 	db = &DB{
 		Dir:          dirname,
@@ -110,7 +106,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	}
 	fs := objectio.NewObjectFS(opts.Fs, serviceDir)
 	localFs := objectio.NewObjectFS(opts.LocalFs, serviceDir)
-	transferTable := model.NewTransferTable[*model.TransferHashPage]()
+	transferTable := model.NewTransferTable[*model.TransferHashPage](ctx, opts.LocalFs)
 
 	switch opts.LogStoreT {
 	case options.LogstoreBatchStore:

@@ -136,12 +136,7 @@ func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) {
 		}
 
 		start = time.Now()
-		err := WriteTransferPage(ctx, entry.rt.LocalFs.Service, pages, *ioVector)
-		if err != nil {
-			for _, page := range pages {
-				page.SetBornTS(page.BornTS().Add(time.Minute))
-			}
-		}
+		WriteTransferPage(ctx, entry.rt.LocalFs.Service, pages, *ioVector)
 		duration += time.Since(start)
 		v2.TransferPageMergeLatencyHistogram.Observe(duration.Seconds())
 	}
@@ -427,10 +422,15 @@ func AddTransferPage(page *model.TransferHashPage, ioVector *fileservice.IOVecto
 	return nil
 }
 
-func WriteTransferPage(ctx context.Context, fs fileservice.FileService, pages []*model.TransferHashPage, ioVector fileservice.IOVector) error {
+func WriteTransferPage(ctx context.Context, fs fileservice.FileService, pages []*model.TransferHashPage, ioVector fileservice.IOVector) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
 	err := fs.Write(ctx, ioVector)
 	if err != nil {
-		return err
+		for _, page := range pages {
+			page.SetBornTS(page.BornTS().Add(time.Minute))
+		}
+		logutil.Errorf("[TransferPage] write transfer page error, page count %v", len(pages))
 	}
 	for i, page := range pages {
 		path := model.Path{
@@ -440,5 +440,5 @@ func WriteTransferPage(ctx context.Context, fs fileservice.FileService, pages []
 		}
 		page.SetPath(path)
 	}
-	return nil
+	return
 }

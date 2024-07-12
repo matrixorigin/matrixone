@@ -15,9 +15,12 @@
 package model
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"path"
 	"sync"
 	"time"
 )
@@ -37,7 +40,13 @@ type TransferTable[T PageT[T]] struct {
 	deletedPages []*common.PinnedItem[T]
 }
 
-func NewTransferTable[T PageT[T]]() *TransferTable[T] {
+func NewTransferTable[T PageT[T]](ctx context.Context, fs fileservice.FileService) *TransferTable[T] {
+	list, _ := fs.List(ctx, "transfer")
+	for _, dir := range list {
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		cancel()
+		fs.Delete(ctx, path.Join("transfer", dir.Name))
+	}
 	table := &TransferTable[T]{
 		pages: make(map[common.ID]*common.PinnedItem[T]),
 	}
