@@ -33,6 +33,10 @@ func (rightSemi *RightSemi) String(buf *bytes.Buffer) {
 	buf.WriteString(": right semi join ")
 }
 
+func (rightSemi *RightSemi) OpType() vm.OpType {
+	return vm.RightSemi
+}
+
 func (rightSemi *RightSemi) Prepare(proc *process.Process) (err error) {
 	rightSemi.ctr = new(container)
 	rightSemi.ctr.InitReceiver(proc, false)

@@ -37,6 +37,10 @@ func (filter *Filter) String(buf *bytes.Buffer) {
 	buf.WriteString(fmt.Sprintf("filter(%s)", filter.E))
 }
 
+func (filter *Filter) OpType() vm.OpType {
+	return vm.Filter
+}
+
 func (filter *Filter) Prepare(proc *process.Process) (err error) {
 	filter.ctr = new(container)
 	var filterExpr *plan.Expr

@@ -108,7 +108,7 @@ func NewMergeObjectsTask(
 		return
 	}
 	for _, meta := range mergedObjs {
-		obj, err := task.rel.GetObject(&meta.ID)
+		obj, err := task.rel.GetObject(meta.ID())
 		if err != nil {
 			return nil, err
 		}

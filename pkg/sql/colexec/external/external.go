@@ -77,6 +77,10 @@ func (external *External) String(buf *bytes.Buffer) {
 	buf.WriteString(": external output")
 }
 
+func (external *External) OpType() vm.OpType {
+	return vm.External
+}
+
 func (external *External) Prepare(proc *process.Process) error {
 	_, span := trace.Start(proc.Ctx, "ExternalPrepare")
 	external.ctr = new(container)

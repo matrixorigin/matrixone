@@ -32,6 +32,10 @@ func (mergeDelete *MergeDelete) String(buf *bytes.Buffer) {
 	buf.WriteString(": MergeS3DeleteInfo ")
 }
 
+func (mergeDelete *MergeDelete) OpType() vm.OpType {
+	return vm.MergeDelete
+}
+
 func (mergeDelete *MergeDelete) Prepare(proc *process.Process) error {
 	mergeDelete.ctr = new(container)
 	ref := mergeDelete.Ref

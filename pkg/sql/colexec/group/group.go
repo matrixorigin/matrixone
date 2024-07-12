@@ -53,6 +53,10 @@ func (group *Group) String(buf *bytes.Buffer) {
 	buf.WriteString("])")
 }
 
+func (group *Group) OpType() vm.OpType {
+	return vm.Group
+}
+
 func (group *Group) Prepare(proc *process.Process) (err error) {
 	group.ctr = new(container)
 	group.ctr.inserted = make([]uint8, hashmap.UnitLimit)

@@ -31,6 +31,10 @@ func (product *Product) String(buf *bytes.Buffer) {
 	buf.WriteString(": cross join ")
 }
 
+func (product *Product) OpType() vm.OpType {
+	return vm.Product
+}
+
 func (product *Product) Prepare(proc *process.Process) error {
 	ap := product
 	ap.ctr = new(container)

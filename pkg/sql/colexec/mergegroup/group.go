@@ -32,6 +32,10 @@ func (mergeGroup *MergeGroup) String(buf *bytes.Buffer) {
 	buf.WriteString(": mergeroup()")
 }
 
+func (mergeGroup *MergeGroup) OpType() vm.OpType {
+	return vm.MergeGroup
+}
+
 func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 	mergeGroup.ctr = new(container)
 	mergeGroup.ctr.InitReceiver(proc, true)

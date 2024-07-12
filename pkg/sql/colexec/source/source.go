@@ -32,6 +32,10 @@ func (source *Source) String(buf *bytes.Buffer) {
 	buf.WriteString(": source scan")
 }
 
+func (source *Source) OpType() vm.OpType {
+	return vm.Source
+}
+
 func (source *Source) Prepare(proc *process.Process) error {
 	_, span := trace.Start(proc.Ctx, "SourcePrepare")
 	defer span.End()

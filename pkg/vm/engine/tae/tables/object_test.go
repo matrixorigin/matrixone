@@ -47,8 +47,8 @@ func TestGetActiveRow(t *testing.T) {
 	b := &baseObject{
 		RWMutex:    mvcc.RWMutex,
 		appendMVCC: mvcc,
-		meta:       obj,
 	}
+	b.meta.Store(obj)
 	mnode := &memoryNode{
 		object: b,
 	}
