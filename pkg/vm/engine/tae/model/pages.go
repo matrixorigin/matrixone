@@ -34,15 +34,10 @@ import (
 type HashPageTable = TransferTable[*TransferHashPage]
 
 var (
-	fs       fileservice.FileService
 	ttl      = 5 * time.Second
 	diskTTL  = 3 * time.Minute
 	ttlLatch sync.RWMutex
 )
-
-func SetFileService(f fileservice.FileService) {
-	fs = f
-}
 
 func SetTTL(t time.Duration) {
 	ttlLatch.Lock()
@@ -81,14 +76,20 @@ type TransferHashPage struct {
 	hashmap     atomic.Pointer[api.HashPageMap]
 	path        Path
 	isTransient bool
+	fs          fileservice.FileService
+	ttl         time.Duration
+	diskTTL     time.Duration
 }
 
-func NewTransferHashPage(id *common.ID, ts time.Time, pageSize int, isTransient bool) *TransferHashPage {
+func NewTransferHashPage(id *common.ID, ts time.Time, isTransient bool, fs fileservice.FileService, ttl, diskTTL time.Duration) *TransferHashPage {
 
 	page := &TransferHashPage{
 		bornTS:      ts,
 		id:          id,
 		isTransient: isTransient,
+		fs:          fs,
+		ttl:         ttl,
+		diskTTL:     diskTTL,
 	}
 
 	m := api.HashPageMap{M: make(map[uint32][]byte)}
@@ -110,10 +111,10 @@ const (
 
 func (page *TransferHashPage) TTL() uint8 {
 	now := time.Now()
-	if now.After(page.bornTS.Add(diskTTL)) {
+	if now.After(page.bornTS.Add(page.diskTTL)) {
 		return clearDisk
 	}
-	if now.After(page.bornTS.Add(ttl)) {
+	if now.After(page.bornTS.Add(page.ttl)) {
 		return clearMemory
 	}
 	return notClear
@@ -242,7 +243,7 @@ func (page *TransferHashPage) loadTable() *api.HashPageMap {
 	if m != nil {
 		return m
 	}
-	err := fs.Read(context.Background(), &ioVector)
+	err := page.fs.Read(context.Background(), &ioVector)
 	if err != nil {
 		return nil
 	}
@@ -265,17 +266,9 @@ func (page *TransferHashPage) ClearPersistTable() {
 	if page.path.Name == "" {
 		return
 	}
-	fs.Delete(context.Background(), page.path.Name)
+	page.fs.Delete(context.Background(), page.path.Name)
 }
 
 func (page *TransferHashPage) IsPersist() bool {
 	return page.hashmap.Load() == nil
-}
-
-func WriteTransferPage(ctx context.Context, ioVector fileservice.IOVector) error {
-	err := fs.Write(ctx, ioVector)
-	if err != nil {
-		return err
-	}
-	return nil
 }

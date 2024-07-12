@@ -113,7 +113,7 @@ func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) {
 			isTransient := !tblEntry.GetLastestSchema().HasPK()
 			id := obj.AsCommonID()
 			id.SetBlockOffset(uint16(j))
-			page := model.NewTransferHashPage(id, time.Now(), len(m), isTransient)
+			page := model.NewTransferHashPage(id, time.Now(), isTransient, entry.rt.LocalFs.Service, model.GetTTL(), model.GetDiskTTL())
 			mapping := make(map[uint32][]byte, len(m))
 			for srcRow, dst := range m {
 				objID := entry.createdObjs[dst.ObjIdx].ID()
@@ -136,7 +136,7 @@ func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) {
 		}
 
 		start = time.Now()
-		err := WriteTransferPage(ctx, pages, *ioVector)
+		err := WriteTransferPage(ctx, entry.rt.LocalFs.Service, pages, *ioVector)
 		if err != nil {
 			for _, page := range pages {
 				page.SetBornTS(page.BornTS().Add(time.Minute))
@@ -405,7 +405,7 @@ func (entry *mergeObjectsEntry) PrepareCommit() (err error) {
 func InitTransferPageIO() *fileservice.IOVector {
 	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
 	return &fileservice.IOVector{
-		FilePath: path.Join("transfer", name.String()),
+		FilePath: path.Join("transfer", "transfer-"+name.String()),
 	}
 }
 
@@ -427,8 +427,8 @@ func AddTransferPage(page *model.TransferHashPage, ioVector *fileservice.IOVecto
 	return nil
 }
 
-func WriteTransferPage(ctx context.Context, pages []*model.TransferHashPage, ioVector fileservice.IOVector) error {
-	err := model.WriteTransferPage(ctx, ioVector)
+func WriteTransferPage(ctx context.Context, fs fileservice.FileService, pages []*model.TransferHashPage, ioVector fileservice.IOVector) error {
+	err := fs.Write(ctx, ioVector)
 	if err != nil {
 		return err
 	}

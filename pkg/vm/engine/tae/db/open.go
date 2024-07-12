@@ -96,7 +96,6 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	if opts.LocalFs == nil {
 		opts.LocalFs = objectio.TmpNewFileservice(ctx, path.Join(dirname, "data"))
 	}
-	model.SetFileService(opts.LocalFs)
 	list, _ := opts.LocalFs.List(ctx, "transfer")
 	for _, dir := range list {
 		opts.LocalFs.Delete(ctx, path.Join("transfer", dir.Name))
@@ -110,6 +109,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		CNMergeSched: merge.NewTaskServiceGetter(opts.TaskServiceGetter),
 	}
 	fs := objectio.NewObjectFS(opts.Fs, serviceDir)
+	localFs := objectio.NewObjectFS(opts.LocalFs, serviceDir)
 	transferTable := model.NewTransferTable[*model.TransferHashPage]()
 
 	switch opts.LogStoreT {
@@ -122,6 +122,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	db.Runtime = dbutils.NewRuntime(
 		dbutils.WithRuntimeTransferTable(transferTable),
 		dbutils.WithRuntimeObjectFS(fs),
+		dbutils.WithRuntimeLocalFS(localFs),
 		dbutils.WithRuntimeSmallPool(dbutils.MakeDefaultSmallPool("small-vector-pool")),
 		dbutils.WithRuntimeTransientPool(dbutils.MakeDefaultTransientPool("trasient-vector-pool")),
 		dbutils.WithRuntimeScheduler(scheduler),

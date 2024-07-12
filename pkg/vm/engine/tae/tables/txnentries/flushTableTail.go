@@ -136,7 +136,7 @@ func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) {
 		}
 		id := entry.ablksHandles[i].Fingerprint()
 		entry.pageIds = append(entry.pageIds, id)
-		page := model.NewTransferHashPage(id, time.Now(), len(m), isTransient)
+		page := model.NewTransferHashPage(id, time.Now(), isTransient, entry.rt.LocalFs.Service, model.GetTTL(), model.GetDiskTTL())
 		mapping := make(map[uint32][]byte, len(m))
 		for srcRow, dst := range m {
 			blkid := objectio.NewBlockidWithObjectID(entry.createdBlkHandles.GetID(), uint16(dst.BlkIdx))
@@ -157,7 +157,7 @@ func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) {
 	}
 
 	start = time.Now()
-	err := WriteTransferPage(ctx, pages, *ioVector)
+	err := WriteTransferPage(ctx, entry.rt.LocalFs.Service, pages, *ioVector)
 	if err != nil {
 		for _, page := range pages {
 			page.SetBornTS(page.BornTS().Add(time.Minute))

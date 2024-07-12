@@ -15,6 +15,7 @@
 package model
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -33,7 +34,7 @@ func TestTransferPage(t *testing.T) {
 		BlockID: *objectio.NewBlockid(sid, 2, 0),
 	}
 
-	memo1 := NewTransferHashPage(&src, time.Now(), 0, false)
+	memo1 := NewTransferHashPage(&src, time.Now(), false, objectio.TmpNewFileservice(context.Background(), "data"), ttl, diskTTL)
 	assert.Zero(t, memo1.RefCount())
 
 	m := make(map[uint32][]byte, 10)
@@ -49,7 +50,7 @@ func TestTransferPage(t *testing.T) {
 	assert.Zero(t, memo1.RefCount())
 
 	now := time.Now()
-	memo2 := NewTransferHashPage(&src, now, 10, false)
+	memo2 := NewTransferHashPage(&src, now, false, objectio.TmpNewFileservice(context.Background(), "data"), ttl, diskTTL)
 	defer memo2.Close()
 	assert.Zero(t, memo2.RefCount())
 
@@ -80,8 +81,7 @@ func TestTransferTable(t *testing.T) {
 	id2 := common.ID{BlockID: *objectio.NewBlockid(sid, 2, 0)}
 
 	now := time.Now()
-	page1 := NewTransferHashPage(&id1, now, 10, false)
-	diskTTL = 2 * time.Second
+	page1 := NewTransferHashPage(&id1, now, false, objectio.TmpNewFileservice(context.Background(), "data"), ttl, 2*time.Second)
 	m := make(map[uint32][]byte, 10)
 	for i := 0; i < 10; i++ {
 		rowID := *objectio.NewRowid(&id2.BlockID, uint32(i))
