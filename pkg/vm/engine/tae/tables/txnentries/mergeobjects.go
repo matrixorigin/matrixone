@@ -440,5 +440,4 @@ func WriteTransferPage(ctx context.Context, fs fileservice.FileService, pages []
 		}
 		page.SetPath(path)
 	}
-	return
 }
