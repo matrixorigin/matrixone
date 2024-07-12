@@ -1424,7 +1424,7 @@ func (c *transferArg) FromCommand(cmd *cobra.Command) (err error) {
 }
 
 func (c *transferArg) String() string {
-	return fmt.Sprintf("transfer page ttl, mem:%v, disk:%v", model.TTL, model.DiskTTL)
+	return fmt.Sprintf("transfer page ttl, mem:%v, disk:%v", model.GetTTL(), model.GetDiskTTL())
 }
 
 func (c *transferArg) Run() error {
@@ -1432,7 +1432,7 @@ func (c *transferArg) Run() error {
 		c.show = false
 		return nil
 	}
-	model.TTL = time.Duration(c.mem) * time.Second
-	model.DiskTTL = time.Duration(c.disk) * time.Minute
+	model.SetTTL(time.Duration(c.mem) * time.Second)
+	model.SetDiskTTL(time.Duration(c.disk) * time.Minute)
 	return nil
 }

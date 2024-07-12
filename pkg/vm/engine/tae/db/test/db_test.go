@@ -9144,8 +9144,7 @@ func TestPersistTransferTable(t *testing.T) {
 	id2 := common.ID{BlockID: *objectio.NewBlockid(sid, 2, 0)}
 
 	now := time.Now()
-	model.FS = tae.Runtime.Fs.Service
-	model.TTL = 2 * time.Second
+	model.SetTTL(2 * time.Second)
 	page := model.NewTransferHashPage(&id1, now, 10, false)
 	ids := make([]types.Rowid, 10)
 	m := make(map[uint32][]byte, 10)
@@ -9209,9 +9208,8 @@ func TestClearPersistTransferTable(t *testing.T) {
 	id2 := common.ID{BlockID: *objectio.NewBlockid(sid, 2, 0)}
 
 	now := time.Now()
-	model.FS = tae.Runtime.Fs.Service
-	model.TTL = time.Second
-	model.DiskTTL = 2 * time.Second
+	model.SetTTL(time.Second)
+	model.SetDiskTTL(2 * time.Second)
 	page := model.NewTransferHashPage(&id1, now, 10, false)
 	ids := make([]types.Rowid, 10)
 	m := make(map[uint32][]byte, 10)

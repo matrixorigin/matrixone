@@ -69,6 +69,7 @@ type flushTableTailEntry struct {
 }
 
 func NewFlushTableTailEntry(
+	ctx context.Context,
 	txn txnif.AsyncTxn,
 	taskName string,
 	mapping *api.BlkTransferBooking,
@@ -115,14 +116,14 @@ func NewFlushTableTailEntry(
 			}
 		}
 		// prepare transfer pages
-		entry.addTransferPages()
+		entry.addTransferPages(ctx)
 	}
 
 	return entry, nil
 }
 
 // add transfer pages for dropped aobjects
-func (entry *flushTableTailEntry) addTransferPages() {
+func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) {
 	isTransient := !entry.tableEntry.GetLastestSchemaLocked().HasPK()
 	ioVector := InitTransferPageIO()
 	pages := make([]*model.TransferHashPage, 0, len(entry.transMappings.Mappings))
@@ -156,9 +157,11 @@ func (entry *flushTableTailEntry) addTransferPages() {
 	}
 
 	start = time.Now()
-	err := WriteTransferPage(pages, *ioVector)
+	err := WriteTransferPage(ctx, pages, *ioVector)
 	if err != nil {
-		return
+		for _, page := range pages {
+			page.SetBornTS(page.BornTS().Add(time.Minute))
+		}
 	}
 	duration += time.Since(start)
 	v2.TransferPageFlushLatencyHistogram.Observe(duration.Seconds())

@@ -34,20 +34,39 @@ import (
 type HashPageTable = TransferTable[*TransferHashPage]
 
 var (
-	FS     fileservice.FileService
-	fsOnce sync.Once
+	fs       fileservice.FileService
+	ttl      = 5 * time.Second
+	diskTTL  = 3 * time.Minute
+	ttlLatch sync.RWMutex
 )
 
-func SetFileService(fs fileservice.FileService) {
-	fsOnce.Do(func() {
-		FS = fs
-	})
+func SetFileService(f fileservice.FileService) {
+	fs = f
 }
 
-var (
-	TTL     = 5 * time.Second
-	DiskTTL = 3 * time.Minute
-)
+func SetTTL(t time.Duration) {
+	ttlLatch.Lock()
+	defer ttlLatch.Unlock()
+	ttl = t
+}
+
+func SetDiskTTL(t time.Duration) {
+	ttlLatch.Lock()
+	defer ttlLatch.Unlock()
+	diskTTL = t
+}
+
+func GetTTL() time.Duration {
+	ttlLatch.RLock()
+	defer ttlLatch.RUnlock()
+	return ttl
+}
+
+func GetDiskTTL() time.Duration {
+	ttlLatch.RLock()
+	defer ttlLatch.RUnlock()
+	return diskTTL
+}
 
 type Path struct {
 	Name   string
@@ -79,8 +98,9 @@ func NewTransferHashPage(id *common.ID, ts time.Time, pageSize int, isTransient 
 	return page
 }
 
-func (page *TransferHashPage) ID() *common.ID    { return page.id }
-func (page *TransferHashPage) BornTS() time.Time { return page.bornTS }
+func (page *TransferHashPage) ID() *common.ID         { return page.id }
+func (page *TransferHashPage) BornTS() time.Time      { return page.bornTS }
+func (page *TransferHashPage) SetBornTS(ts time.Time) { page.bornTS = ts }
 
 const (
 	notClear    = uint8(0)
@@ -90,10 +110,10 @@ const (
 
 func (page *TransferHashPage) TTL() uint8 {
 	now := time.Now()
-	if now.After(page.bornTS.Add(DiskTTL)) {
+	if now.After(page.bornTS.Add(diskTTL)) {
 		return clearDisk
 	}
-	if now.After(page.bornTS.Add(TTL)) {
+	if now.After(page.bornTS.Add(ttl)) {
 		return clearMemory
 	}
 	return notClear
@@ -222,7 +242,9 @@ func (page *TransferHashPage) loadTable() *api.HashPageMap {
 	if m != nil {
 		return m
 	}
-	err := FS.Read(context.Background(), &ioVector)
+	ctx := context.Background()
+	ctx, _ = context.WithTimeout(ctx, 5*time.Second)
+	err := fs.Read(context.Background(), &ioVector)
 	if err != nil {
 		return nil
 	}
@@ -245,9 +267,17 @@ func (page *TransferHashPage) ClearPersistTable() {
 	if page.path.Name == "" {
 		return
 	}
-	FS.Delete(context.Background(), page.path.Name)
+	fs.Delete(context.Background(), page.path.Name)
 }
 
 func (page *TransferHashPage) IsPersist() bool {
 	return page.hashmap.Load() == nil
+}
+
+func WriteTransferPage(ctx context.Context, ioVector fileservice.IOVector) error {
+	err := fs.Write(ctx, ioVector)
+	if err != nil {
+		return err
+	}
+	return nil
 }

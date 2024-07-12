@@ -57,6 +57,7 @@ type mergeObjectsEntry struct {
 }
 
 func NewMergeObjectsEntry(
+	ctx context.Context,
 	txn txnif.AsyncTxn,
 	taskName string,
 	relation handle.Relation,
@@ -90,12 +91,12 @@ func NewMergeObjectsEntry(
 		if err != nil {
 			return nil, err
 		}
-		entry.prepareTransferPage()
+		entry.prepareTransferPage(ctx)
 	}
 	return entry, nil
 }
 
-func (entry *mergeObjectsEntry) prepareTransferPage() {
+func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) {
 	k := 0
 	for _, obj := range entry.droppedObjs {
 		ioVector := InitTransferPageIO()
@@ -135,15 +136,17 @@ func (entry *mergeObjectsEntry) prepareTransferPage() {
 		}
 
 		start = time.Now()
-		err := WriteTransferPage(pages, *ioVector)
+		err := WriteTransferPage(ctx, pages, *ioVector)
 		if err != nil {
-			return
+			for _, page := range pages {
+				page.SetBornTS(page.BornTS().Add(time.Minute))
+			}
 		}
 		duration += time.Since(start)
 		v2.TransferPageMergeLatencyHistogram.Observe(duration.Seconds())
 	}
 	if k != len(entry.transMappings.Mappings) {
-		panic(fmt.Sprintf("k %v, mapping %v", k, len(entry.transMappings.Mappings)))
+		logutil.Fatal(fmt.Sprintf("k %v, mapping %v", k, len(entry.transMappings.Mappings)))
 	}
 }
 
@@ -424,8 +427,8 @@ func AddTransferPage(page *model.TransferHashPage, ioVector *fileservice.IOVecto
 	return nil
 }
 
-func WriteTransferPage(pages []*model.TransferHashPage, ioVector fileservice.IOVector) error {
-	err := model.FS.Write(context.Background(), ioVector)
+func WriteTransferPage(ctx context.Context, pages []*model.TransferHashPage, ioVector fileservice.IOVector) error {
+	err := model.WriteTransferPage(ctx, ioVector)
 	if err != nil {
 		return err
 	}
@@ -437,6 +440,5 @@ func WriteTransferPage(pages []*model.TransferHashPage, ioVector fileservice.IOV
 		}
 		page.SetPath(path)
 	}
-
 	return nil
 }

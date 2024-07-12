@@ -81,7 +81,7 @@ func TestTransferTable(t *testing.T) {
 
 	now := time.Now()
 	page1 := NewTransferHashPage(&id1, now, 10, false)
-	DiskTTL = 2 * time.Second
+	diskTTL = 2 * time.Second
 	m := make(map[uint32][]byte, 10)
 	for i := 0; i < 10; i++ {
 		rowID := *objectio.NewRowid(&id2.BlockID, uint32(i))
