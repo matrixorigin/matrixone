@@ -114,6 +114,14 @@ func TExpr(e string) *ExprMatcher {
 	return NewExprMatcher(e)
 }
 
+func TJoin(joinTyp plan2.Node_JoinType,
+	onConds []string,
+	filters []string,
+	left, right *MatchPattern) *MatchPattern {
+	return TNode(plan2.Node_JOIN, left, right).With(
+		NewJoinMatcher(joinTyp, onConds, filters))
+}
+
 func (pattern *MatchPattern) With(matcher Matcher) *MatchPattern {
 	pattern.Matchers = append(pattern.Matchers, matcher)
 	return pattern

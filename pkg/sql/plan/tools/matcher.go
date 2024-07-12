@@ -33,6 +33,7 @@ var _ Matcher = new(AliasMatcher)
 var _ Matcher = new(SymbolsMatcher)
 var _ Matcher = new(AssignedSymbolsMatcher)
 var _ Matcher = new(OutputMatcher)
+var _ Matcher = new(JoinMatcher)
 
 var _ RValueMatcher = new(ColumnRef)
 var _ RValueMatcher = new(ExprMatcher)
@@ -257,17 +258,11 @@ func (matcher *OutputMatcher) DeepMatch(ctx context.Context, node *plan.Node, al
 
 type ExprMatcher struct {
 	Sql  string
-	Expr tree.SelectExpr
+	Expr tree.Expr
 }
 
 func NewExprMatcher(sql string) *ExprMatcher {
-	exSql := "select " + sql
-	one, err := parsers.ParseOne(context.Background(), dialect.MYSQL, exSql, 1)
-	if err != nil {
-		panic(err)
-	}
-	expr := one.(*tree.Select).Select.(*tree.SelectClause).Exprs[0]
-
+	expr := parseSql(sql)
 	return &ExprMatcher{
 		Sql:  sql,
 		Expr: expr,
@@ -281,7 +276,7 @@ func (matcher *ExprMatcher) GetAssignedVar(node *plan2.Node, aliases plan.Unorde
 		eChecker := &ExprChecker{
 			Aliases: aliases,
 		}
-		check, err := eChecker.Check(matcher.Expr.Expr, expr)
+		check, err := eChecker.Check(matcher.Expr, expr)
 		if err != nil {
 			return nil, err
 		}
@@ -314,4 +309,87 @@ func (matcher *ExprMatcher) GetAssignedVar(node *plan2.Node, aliases plan.Unorde
 
 func (matcher *ExprMatcher) String() string {
 	return matcher.Sql
+}
+
+type JoinMatcher struct {
+	JoinTyp    plan2.Node_JoinType
+	OnCondsStr []string
+	OnConds    []tree.Expr
+	FiltersStr []string
+	Filters    []tree.Expr
+}
+
+func NewJoinMatcher(joinType plan2.Node_JoinType, conds []string, filters []string) *JoinMatcher {
+	ret := &JoinMatcher{
+		JoinTyp:    joinType,
+		OnCondsStr: conds,
+		FiltersStr: filters,
+	}
+	for _, cond := range conds {
+		ret.OnConds = append(ret.OnConds, parseSql(cond))
+	}
+
+	for _, filter := range filters {
+		ret.Filters = append(ret.Filters, parseSql(filter))
+	}
+	return ret
+}
+
+func (matcher *JoinMatcher) SimpleMatch(node *plan2.Node) bool {
+	return node.NodeType == plan2.Node_JOIN &&
+		node.JoinType == matcher.JoinTyp
+}
+
+func (matcher *JoinMatcher) DeepMatch(ctx context.Context, node *plan2.Node, aliases plan.UnorderedMap[string, string]) (*MatchResult, error) {
+	if !matcher.SimpleMatch(node) {
+		return FailMatched(), nil
+	}
+	if len(matcher.OnConds) != len(node.OnList) {
+		return FailMatched(), nil
+	}
+
+	if len(matcher.Filters) != len(node.FilterList) {
+		return FailMatched(), nil
+	}
+
+	for i, cond := range matcher.OnConds {
+		checker := ExprChecker{Aliases: aliases}
+		ok, err := checker.Check(cond, node.OnList[i])
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return FailMatched(), nil
+		}
+	}
+
+	for i, filter := range matcher.Filters {
+		checker := ExprChecker{Aliases: aliases}
+		ok, err := checker.Check(filter, node.OnList[i])
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return FailMatched(), nil
+		}
+	}
+	return Matched(), nil
+}
+
+func (matcher *JoinMatcher) String() string {
+	return fmt.Sprintf("JoinMatcher{%v}, OnConds:%v, Filters:%v",
+		matcher.JoinTyp,
+		matcher.OnCondsStr,
+		matcher.FiltersStr,
+	)
+}
+
+func parseSql(sql string) tree.Expr {
+	exSql := "select " + sql
+	one, err := parsers.ParseOne(context.Background(), dialect.MYSQL, exSql, 1)
+	if err != nil {
+		panic(err)
+	}
+	expr := one.(*tree.Select).Select.(*tree.SelectClause).Exprs[0]
+	return expr.Expr
 }

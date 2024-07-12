@@ -174,3 +174,83 @@ func Test_identityAlias(t *testing.T) {
 		"SELECT  l_orderkey, 1 + l_orderkey FROM lineitem", p)
 	assert.Nil(t, err)
 }
+
+func Test_tableScan(t *testing.T) {
+	p :=
+		TOutput(
+			[]string{
+				"L_ORDERKEY",
+			},
+			TTableScan("lineitem",
+				NewStringMap(
+					NewStringPair("L_ORDERKEY", "l_orderkey"),
+				),
+			),
+		)
+	err := AssertPlan(context.Background(), nil,
+		"SELECT  l_orderkey FROM lineitem", p)
+	assert.Nil(t, err)
+}
+
+func Test_joinMatcher(t *testing.T) {
+	p :=
+		TAnyTree(
+			TJoin(plan2.Node_INNER,
+				[]string{"LINEITEM_OK = ORDERS_OK"},
+				nil,
+				TTableScanWithoutColRef("lineitem").
+					WithAlias("LINEITEM_OK",
+						TColumnRef("lineitem", "l_orderkey")),
+
+				TTableScanWithoutColRef("orders").
+					WithAlias("ORDERS_OK",
+						TColumnRef("orders", "o_orderkey")),
+			),
+		)
+
+	err := AssertPlan(context.Background(), nil,
+		"SELECT o.o_orderkey FROM orders o, lineitem l WHERE l.l_orderkey = o.o_orderkey", p)
+	assert.Nil(t, err)
+}
+
+func Test_selfJoin(t *testing.T) {
+	p :=
+		TAnyTree(
+			TJoin(plan2.Node_INNER,
+				[]string{"L_ORDERS_OK = R_ORDERS_OK"},
+				nil,
+				TTableScanWithoutColRef("orders").
+					WithAlias("L_ORDERS_OK",
+						TColumnRef("orders", "o_orderkey")),
+
+				TTableScanWithoutColRef("orders").
+					WithAlias("R_ORDERS_OK",
+						TColumnRef("orders", "o_orderkey")),
+			),
+		)
+
+	err := AssertPlan(context.Background(), nil,
+		"SELECT l.o_orderkey FROM orders l, orders r WHERE l.o_orderkey = r.o_orderkey", p)
+	assert.Nil(t, err)
+}
+
+func Test_aggr(t *testing.T) {
+	p :=
+		TAnyTree(
+			TJoin(plan2.Node_INNER,
+				[]string{"L_ORDERS_OK = R_ORDERS_OK"},
+				nil,
+				TTableScanWithoutColRef("orders").
+					WithAlias("L_ORDERS_OK",
+						TColumnRef("orders", "o_orderkey")),
+
+				TTableScanWithoutColRef("orders").
+					WithAlias("R_ORDERS_OK",
+						TColumnRef("orders", "o_orderkey")),
+			),
+		)
+
+	err := AssertPlan(context.Background(), nil,
+		"SELECT COUNT(n_nationkey) FROM nation", p)
+	assert.Nil(t, err)
+}
