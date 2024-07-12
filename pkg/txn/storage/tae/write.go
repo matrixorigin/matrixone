@@ -30,13 +30,13 @@ func (s *taeStorage) Write(
 	payload []byte) (result []byte, err error) {
 	switch op {
 	case uint32(apipb.OpCode_OpPreCommit):
-		return handleWrite(ctx, txnMeta, payload, s.taeHandler.HandlePreCommitWrite)
+		return HandleWrite(ctx, txnMeta, payload, s.taeHandler.HandlePreCommitWrite)
 	default:
 		return nil, moerr.NewNotSupported(ctx, "unknown write op: %v", op)
 	}
 }
 
-func handleWrite[PReq unmashaler[Req], PResp mashaler[Resp], Req, Resp any](
+func HandleWrite[PReq unmashaler[Req], PResp mashaler[Resp], Req, Resp any](
 	ctx context.Context,
 	meta txn.TxnMeta,
 	payload []byte,

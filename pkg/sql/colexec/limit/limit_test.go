@@ -37,7 +37,7 @@ const (
 
 // add unit tests for cases
 type limitTestCase struct {
-	arg   *Argument
+	arg   *Limit
 	types []types.Type
 	proc  *process.Process
 }
@@ -53,7 +53,7 @@ func init() {
 			types: []types.Type{
 				types.T_int8.ToType(),
 			},
-			arg: &Argument{
+			arg: &Limit{
 				LimitExpr: plan2.MakePlan2Uint64ConstExprWithType(8),
 				OperatorBase: vm.OperatorBase{
 					OperatorInfo: vm.OperatorInfo{
@@ -69,7 +69,7 @@ func init() {
 			types: []types.Type{
 				types.T_int8.ToType(),
 			},
-			arg: &Argument{
+			arg: &Limit{
 				LimitExpr: plan2.MakePlan2Uint64ConstExprWithType(10),
 				OperatorBase: vm.OperatorBase{
 					OperatorInfo: vm.OperatorInfo{
@@ -85,7 +85,7 @@ func init() {
 			types: []types.Type{
 				types.T_int8.ToType(),
 			},
-			arg: &Argument{
+			arg: &Limit{
 				ctr: &container{
 					seen: 0,
 				},
@@ -155,7 +155,7 @@ func BenchmarkLimit(b *testing.B) {
 				types: []types.Type{
 					types.T_int8.ToType(),
 				},
-				arg: &Argument{
+				arg: &Limit{
 					LimitExpr: plan2.MakePlan2Int64ConstExprWithType(8),
 				},
 			},
@@ -182,8 +182,8 @@ func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
 
-func resetChildren(arg *Argument, bats []*batch.Batch) {
-	valueScanArg := &value_scan.Argument{
+func resetChildren(arg *Limit, bats []*batch.Batch) {
+	valueScanArg := &value_scan.ValueScan{
 		Batchs: bats,
 	}
 	valueScanArg.Prepare(nil)

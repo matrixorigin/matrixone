@@ -45,13 +45,13 @@ var (
 	retryWithDefChangedError = moerr.NewTxnNeedRetryWithDefChangedNoCtx()
 )
 
-const argName = "lock_op"
+const opName = "lock_op"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (lockOp *LockOp) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": lock-op(")
-	n := len(arg.targets) - 1
-	for idx, target := range arg.targets {
+	n := len(lockOp.targets) - 1
+	for idx, target := range lockOp.targets {
 		buf.WriteString(fmt.Sprintf("%d-%d-%d",
 			target.tableID,
 			target.primaryColumnIndexInBatch,
@@ -63,19 +63,23 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(")")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) error {
-	arg.ctr = new(container)
-	arg.ctr.rt = &state{}
-	arg.ctr.rt.fetchers = make([]FetchLockRowsFunc, 0, len(arg.targets))
-	for idx := range arg.targets {
-		arg.ctr.rt.fetchers = append(arg.ctr.rt.fetchers,
-			GetFetchRowsFunc(arg.targets[idx].primaryColumnType))
+func (lockOp *LockOp) OpType() vm.OpType {
+	return vm.LockOp
+}
+
+func (lockOp *LockOp) Prepare(proc *process.Process) error {
+	lockOp.ctr = new(container)
+	lockOp.ctr.rt = &state{}
+	lockOp.ctr.rt.fetchers = make([]FetchLockRowsFunc, 0, len(lockOp.targets))
+	for idx := range lockOp.targets {
+		lockOp.ctr.rt.fetchers = append(lockOp.ctr.rt.fetchers,
+			GetFetchRowsFunc(lockOp.targets[idx].primaryColumnType))
 	}
-	arg.ctr.rt.parker = types.NewPacker(proc.Mp())
-	arg.ctr.rt.retryError = nil
-	arg.ctr.rt.step = stepLock
-	if arg.block {
-		arg.ctr.rt.InitReceiver(proc, true)
+	lockOp.ctr.rt.parker = types.NewPacker(proc.Mp())
+	lockOp.ctr.rt.retryError = nil
+	lockOp.ctr.rt.step = stepLock
+	if lockOp.block {
+		lockOp.ctr.rt.InitReceiver(proc, true)
 	}
 	return nil
 }
@@ -87,45 +91,45 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 // concurrently modified by other transactions, a Timestamp column will be put on the output
 // vectors for querying the latest data, and subsequent op needs to check this column to check
 // whether the latest data needs to be read.
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (lockOp *LockOp) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
 	txnOp := proc.GetTxnOperator()
 	if !txnOp.Txn().IsPessimistic() {
-		return arg.GetChildren(0).Call(proc)
+		return lockOp.GetChildren(0).Call(proc)
 	}
 
-	if !arg.block {
-		return callNonBlocking(proc, arg)
+	if !lockOp.block {
+		return callNonBlocking(proc, lockOp)
 	}
 
-	return callBlocking(proc, arg, arg.GetIsFirst(), arg.GetIsLast())
+	return callBlocking(proc, lockOp, lockOp.GetIsFirst(), lockOp.GetIsLast())
 }
 
 func callNonBlocking(
 	proc *process.Process,
-	arg *Argument) (vm.CallResult, error) {
+	lockOp *LockOp) (vm.CallResult, error) {
 
-	result, err := arg.GetChildren(0).Call(proc)
+	result, err := lockOp.GetChildren(0).Call(proc)
 	if err != nil {
 		return result, err
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze(lockOp.GetIdx(), lockOp.GetParallelIdx(), lockOp.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 
 	if result.Batch == nil {
-		return result, arg.ctr.rt.retryError
+		return result, lockOp.ctr.rt.retryError
 	}
 	bat := result.Batch
 	if bat.IsEmpty() {
 		return result, err
 	}
 
-	if err := performLock(bat, proc, arg); err != nil {
+	if err := performLock(bat, proc, lockOp); err != nil {
 		return result, err
 	}
 
@@ -134,27 +138,27 @@ func callNonBlocking(
 
 func callBlocking(
 	proc *process.Process,
-	arg *Argument,
+	lockOp *LockOp,
 	isFirst bool,
 	_ bool) (vm.CallResult, error) {
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze(lockOp.GetIdx(), lockOp.GetParallelIdx(), lockOp.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 
 	result := vm.NewCallResult()
-	if arg.ctr.rt.step == stepLock {
+	if lockOp.ctr.rt.step == stepLock {
 		for {
-			bat, err := arg.getBatch(proc, anal, isFirst)
+			bat, err := lockOp.getBatch(proc, anal, isFirst)
 			if err != nil {
 				return result, err
 			}
 
 			// no input batch any more, means all lock performed.
 			if bat == nil {
-				arg.ctr.rt.step = stepDownstream
-				if len(arg.ctr.rt.cachedBatches) == 0 {
-					arg.ctr.rt.step = stepEnd
+				lockOp.ctr.rt.step = stepDownstream
+				if len(lockOp.ctr.rt.cachedBatches) == 0 {
+					lockOp.ctr.rt.step = stepEnd
 				}
 				break
 			}
@@ -164,36 +168,36 @@ func callBlocking(
 				continue
 			}
 
-			if err := performLock(bat, proc, arg); err != nil {
+			if err := performLock(bat, proc, lockOp); err != nil {
 				return result, err
 			}
 
 			// blocking lock node. Never pass the input batch into downstream operators before
 			// all lock are performed.
-			arg.ctr.rt.cachedBatches = append(arg.ctr.rt.cachedBatches, bat)
+			lockOp.ctr.rt.cachedBatches = append(lockOp.ctr.rt.cachedBatches, bat)
 		}
 	}
 
-	if arg.ctr.rt.step == stepDownstream {
-		if arg.ctr.rt.retryError != nil {
-			arg.ctr.rt.step = stepEnd
-			return result, arg.ctr.rt.retryError
+	if lockOp.ctr.rt.step == stepDownstream {
+		if lockOp.ctr.rt.retryError != nil {
+			lockOp.ctr.rt.step = stepEnd
+			return result, lockOp.ctr.rt.retryError
 		}
 
-		if len(arg.ctr.rt.cachedBatches) == 0 {
-			arg.ctr.rt.step = stepEnd
+		if len(lockOp.ctr.rt.cachedBatches) == 0 {
+			lockOp.ctr.rt.step = stepEnd
 		} else {
-			bat := arg.ctr.rt.cachedBatches[0]
-			arg.ctr.rt.cachedBatches = arg.ctr.rt.cachedBatches[1:]
+			bat := lockOp.ctr.rt.cachedBatches[0]
+			lockOp.ctr.rt.cachedBatches = lockOp.ctr.rt.cachedBatches[1:]
 			result.Batch = bat
 			return result, nil
 		}
 	}
 
-	if arg.ctr.rt.step == stepEnd {
+	if lockOp.ctr.rt.step == stepEnd {
 		result.Status = vm.ExecStop
-		arg.cleanCachedBatch(proc)
-		return result, arg.ctr.rt.retryError
+		lockOp.cleanCachedBatch(proc)
+		return result, lockOp.ctr.rt.retryError
 	}
 
 	panic("BUG")
@@ -202,9 +206,9 @@ func callBlocking(
 func performLock(
 	bat *batch.Batch,
 	proc *process.Process,
-	arg *Argument) error {
+	lockOp *LockOp) error {
 	needRetry := false
-	for idx, target := range arg.targets {
+	for idx, target := range lockOp.targets {
 		if proc.GetTxnOperator().LockSkipped(target.tableID, target.mode) {
 			return nil
 		}
@@ -227,19 +231,19 @@ func performLock(
 		}
 		locked, defChanged, refreshTS, err := doLock(
 			proc.Ctx,
-			arg.engine,
+			lockOp.engine,
 			nil,
 			target.tableID,
 			proc,
 			priVec,
 			target.primaryColumnType,
-			DefaultLockOptions(arg.ctr.rt.parker).
+			DefaultLockOptions(lockOp.ctr.rt.parker).
 				WithLockMode(lock.LockMode_Exclusive).
-				WithFetchLockRowsFunc(arg.ctr.rt.fetchers[idx]).
+				WithFetchLockRowsFunc(lockOp.ctr.rt.fetchers[idx]).
 				WithMaxBytesPerLock(int(proc.GetLockService().GetConfig().MaxLockRowCount)).
 				WithFilterRows(target.filter, filterCols).
 				WithLockTable(target.lockTable, target.changeDef).
-				WithHasNewVersionInRangeFunc(arg.ctr.rt.hasNewVersionInRange),
+				WithHasNewVersionInRangeFunc(lockOp.ctr.rt.hasNewVersionInRange),
 		)
 		if getLogger().Enabled(zap.DebugLevel) {
 			getLogger().Debug("lock result",
@@ -273,19 +277,19 @@ func performLock(
 		if !needRetry && !refreshTS.IsEmpty() {
 			needRetry = true
 		}
-		if !arg.ctr.rt.defChanged {
-			arg.ctr.rt.defChanged = defChanged
+		if !lockOp.ctr.rt.defChanged {
+			lockOp.ctr.rt.defChanged = defChanged
 		}
 	}
 	// when a transaction needs to operate on many data, there may be multiple conflicts on the
 	// data, and if you go to retry every time a conflict occurs, you will also encounter conflicts
 	// when you retry. We need to return the conflict after all the locks have been added successfully,
 	// so that the retry will definitely succeed because all the locks have been put.
-	if needRetry && arg.ctr.rt.retryError == nil {
-		arg.ctr.rt.retryError = retryError
+	if needRetry && lockOp.ctr.rt.retryError == nil {
+		lockOp.ctr.rt.retryError = retryError
 	}
-	if arg.ctr.rt.defChanged {
-		arg.ctr.rt.retryError = retryWithDefChangedError
+	if lockOp.ctr.rt.defChanged {
+		lockOp.ctr.rt.retryError = retryWithDefChangedError
 	}
 	return nil
 }
@@ -683,30 +687,30 @@ func (opts LockOptions) WithHasNewVersionInRangeFunc(fn hasNewVersionInRangeFunc
 }
 
 // NewArgument create new lock op argument.
-func NewArgumentByEngine(engine engine.Engine) *Argument {
-	arg := reuse.Alloc[Argument](nil)
-	arg.engine = engine
-	return arg
+func NewArgumentByEngine(engine engine.Engine) *LockOp {
+	lock := reuse.Alloc[LockOp](nil)
+	lock.engine = engine
+	return lock
 }
 
 // Block return if lock operator is a blocked node.
-func (arg *Argument) Block() bool {
-	return arg.block
+func (lockOp *LockOp) Block() bool {
+	return lockOp.block
 }
 
 // SetBlock set the lock op is blocked. If true lock op will block the current pipeline, and cache
 // all input batches. And wait for all the input's batch to be locked before outputting the cached batch
 // to the downstream operator. E.g. select for update, only we get all lock result, then select can be
 // performed, otherwise, if we need retry in RC mode, we may get wrong result.
-func (arg *Argument) SetBlock(block bool) *Argument {
-	arg.block = block
-	return arg
+func (lockOp *LockOp) SetBlock(block bool) *LockOp {
+	lockOp.block = block
+	return lockOp
 }
 
 // AddLockTarget add lock targets
-func (arg *Argument) CopyToPipelineTarget() []*pipeline.LockTarget {
-	targets := make([]*pipeline.LockTarget, len(arg.targets))
-	for i, target := range arg.targets {
+func (lockOp *LockOp) CopyToPipelineTarget() []*pipeline.LockTarget {
+	targets := make([]*pipeline.LockTarget, len(lockOp.targets))
+	for i, target := range lockOp.targets {
 		targets[i] = &pipeline.LockTarget{
 			TableId:            target.tableID,
 			PrimaryColIdxInBat: target.primaryColumnIndexInBatch,
@@ -722,12 +726,12 @@ func (arg *Argument) CopyToPipelineTarget() []*pipeline.LockTarget {
 }
 
 // AddLockTarget add lock target, LockMode_Exclusive will used
-func (arg *Argument) AddLockTarget(
+func (lockOp *LockOp) AddLockTarget(
 	tableID uint64,
 	primaryColumnIndexInBatch int32,
 	primaryColumnType types.Type,
-	refreshTimestampIndexInBatch int32) *Argument {
-	return arg.AddLockTargetWithMode(
+	refreshTimestampIndexInBatch int32) *LockOp {
+	return lockOp.AddLockTargetWithMode(
 		tableID,
 		lock.LockMode_Exclusive,
 		primaryColumnIndexInBatch,
@@ -736,27 +740,27 @@ func (arg *Argument) AddLockTarget(
 }
 
 // AddLockTargetWithMode add lock target with lock mode
-func (arg *Argument) AddLockTargetWithMode(
+func (lockOp *LockOp) AddLockTargetWithMode(
 	tableID uint64,
 	mode lock.LockMode,
 	primaryColumnIndexInBatch int32,
 	primaryColumnType types.Type,
-	refreshTimestampIndexInBatch int32) *Argument {
-	arg.targets = append(arg.targets, lockTarget{
+	refreshTimestampIndexInBatch int32) *LockOp {
+	lockOp.targets = append(lockOp.targets, lockTarget{
 		tableID:                      tableID,
 		primaryColumnIndexInBatch:    primaryColumnIndexInBatch,
 		primaryColumnType:            primaryColumnType,
 		refreshTimestampIndexInBatch: refreshTimestampIndexInBatch,
 		mode:                         mode,
 	})
-	return arg
+	return lockOp
 }
 
 // LockTable lock all table, used for delete, truncate and drop table
-func (arg *Argument) LockTable(
+func (lockOp *LockOp) LockTable(
 	tableID uint64,
-	changeDef bool) *Argument {
-	return arg.LockTableWithMode(
+	changeDef bool) *LockOp {
+	return lockOp.LockTableWithMode(
 		tableID,
 		lock.LockMode_Exclusive,
 		changeDef)
@@ -764,19 +768,19 @@ func (arg *Argument) LockTable(
 
 // LockTableWithMode is similar to LockTable, but with specify
 // lock mode
-func (arg *Argument) LockTableWithMode(
+func (lockOp *LockOp) LockTableWithMode(
 	tableID uint64,
 	mode lock.LockMode,
-	changeDef bool) *Argument {
-	for idx := range arg.targets {
-		if arg.targets[idx].tableID == tableID {
-			arg.targets[idx].lockTable = true
-			arg.targets[idx].changeDef = changeDef
-			arg.targets[idx].mode = mode
+	changeDef bool) *LockOp {
+	for idx := range lockOp.targets {
+		if lockOp.targets[idx].tableID == tableID {
+			lockOp.targets[idx].lockTable = true
+			lockOp.targets[idx].changeDef = changeDef
+			lockOp.targets[idx].mode = mode
 			break
 		}
 	}
-	return arg
+	return lockOp
 }
 
 // AddLockTargetWithPartition add lock targets for partition tables. Our partitioned table implementation
@@ -788,13 +792,13 @@ func (arg *Argument) LockTableWithMode(
 // attributed after calculation.
 //
 // partitionTableIDMappingInBatch: the ID index of the sub-table corresponding to the data. Index of tableIDs
-func (arg *Argument) AddLockTargetWithPartition(
+func (lockOp *LockOp) AddLockTargetWithPartition(
 	tableIDs []uint64,
 	primaryColumnIndexInBatch int32,
 	primaryColumnType types.Type,
 	refreshTimestampIndexInBatch int32,
-	partitionTableIDMappingInBatch int32) *Argument {
-	return arg.AddLockTargetWithPartitionAndMode(
+	partitionTableIDMappingInBatch int32) *LockOp {
+	return lockOp.AddLockTargetWithPartitionAndMode(
 		tableIDs,
 		lock.LockMode_Exclusive,
 		primaryColumnIndexInBatch,
@@ -805,20 +809,20 @@ func (arg *Argument) AddLockTargetWithPartition(
 
 // AddLockTargetWithPartitionAndMode is similar to AddLockTargetWithPartition, but you can specify
 // the lock mode
-func (arg *Argument) AddLockTargetWithPartitionAndMode(
+func (lockOp *LockOp) AddLockTargetWithPartitionAndMode(
 	tableIDs []uint64,
 	mode lock.LockMode,
 	primaryColumnIndexInBatch int32,
 	primaryColumnType types.Type,
 	refreshTimestampIndexInBatch int32,
-	partitionTableIDMappingInBatch int32) *Argument {
+	partitionTableIDMappingInBatch int32) *LockOp {
 	if len(tableIDs) == 0 {
 		panic("invalid partition table ids")
 	}
 
 	// only one partition table, process as normal table
 	if len(tableIDs) == 1 {
-		return arg.AddLockTarget(tableIDs[0],
+		return lockOp.AddLockTarget(tableIDs[0],
 			primaryColumnIndexInBatch,
 			primaryColumnType,
 			refreshTimestampIndexInBatch,
@@ -826,7 +830,7 @@ func (arg *Argument) AddLockTargetWithPartitionAndMode(
 	}
 
 	for _, tableID := range tableIDs {
-		arg.targets = append(arg.targets, lockTarget{
+		lockOp.targets = append(lockOp.targets, lockTarget{
 			tableID:                      tableID,
 			primaryColumnIndexInBatch:    primaryColumnIndexInBatch,
 			primaryColumnType:            primaryColumnType,
@@ -836,45 +840,45 @@ func (arg *Argument) AddLockTargetWithPartitionAndMode(
 			mode:                         mode,
 		})
 	}
-	return arg
+	return lockOp
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	arg.Free(proc, pipelineFailed, err)
+func (lockOp *LockOp) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	lockOp.Free(proc, pipelineFailed, err)
 }
 
 // Free free mem
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if arg.ctr != nil {
-		if arg.ctr.rt != nil {
-			if arg.ctr.rt.parker != nil {
-				arg.ctr.rt.parker.FreeMem()
+func (lockOp *LockOp) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if lockOp.ctr != nil {
+		if lockOp.ctr.rt != nil {
+			if lockOp.ctr.rt.parker != nil {
+				lockOp.ctr.rt.parker.FreeMem()
 			}
-			arg.ctr.rt.retryError = nil
-			arg.cleanCachedBatch(proc)
-			arg.ctr.rt.FreeMergeTypeOperator(pipelineFailed)
-			arg.ctr.rt = nil
+			lockOp.ctr.rt.retryError = nil
+			lockOp.cleanCachedBatch(proc)
+			lockOp.ctr.rt.FreeMergeTypeOperator(pipelineFailed)
+			lockOp.ctr.rt = nil
 		}
-		arg.ctr = nil
+		lockOp.ctr = nil
 	}
 
 }
 
-func (arg *Argument) cleanCachedBatch(_ *process.Process) {
+func (lockOp *LockOp) cleanCachedBatch(_ *process.Process) {
 	// do not need clean,  only set nil
 	// for _, bat := range arg.ctr.rt.cachedBatches {
 	// 	bat.Clean(proc.Mp())
 	// }
-	arg.ctr.rt.cachedBatches = nil
+	lockOp.ctr.rt.cachedBatches = nil
 }
 
-func (arg *Argument) getBatch(
+func (lockOp *LockOp) getBatch(
 	_ *process.Process,
 	anal process.Analyze,
 	isFirst bool) (*batch.Batch, error) {
-	fn := arg.ctr.rt.batchFetchFunc
+	fn := lockOp.ctr.rt.batchFetchFunc
 	if fn == nil {
-		fn = arg.ctr.rt.ReceiveFromAllRegs
+		fn = lockOp.ctr.rt.ReceiveFromAllRegs
 	}
 
 	msg := fn(anal)

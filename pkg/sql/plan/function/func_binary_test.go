@@ -3228,3 +3228,29 @@ func TestSplitPart(t *testing.T) {
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 }
+
+func Test_castBinaryArrayToInt(t *testing.T) {
+	testCases := []struct {
+		name   string
+		input  []uint8
+		expect int64
+	}{
+		{
+			name:   "test1",
+			input:  []uint8{7, 229},
+			expect: 2021,
+		},
+		{
+			name:   "test2",
+			input:  []uint8{8, 45},
+			expect: 2093,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := castBinaryArrayToInt(tc.input)
+			require.Equal(t, tc.expect, result)
+		})
+	}
+}

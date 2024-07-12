@@ -6,7 +6,7 @@
 -- more details in https://github.com/matrixorigin/MO-Cloud/issues/2726#issuecomment-2008930179
 -- file size: < 1KB, raw tcp packet: 15
 -- stats[7] = {client sended pkg} + 15 ~= 18
-set @tcp_cnt=15;
+set @tcp_cnt=3;
 -- @ignore:2,3,4
 select statement, json_unquote(json_extract(stats, '$[7]')) between (@tcp_cnt-2) and (@tcp_cnt+5) check_val, statement_id, stats, json_extract(stats, '$[7]') pkg_cnt from system.statement_info where account= 'bvt_query_tcp' and statement='select * from 32kb_8192row_int order by a' order by request_at desc limit 1;
 

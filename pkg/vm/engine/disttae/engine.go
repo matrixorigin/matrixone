@@ -67,7 +67,7 @@ func New(
 	cli client.TxnClient,
 	hakeeper logservice.CNHAKeeperClient,
 	keyRouter client2.KeyRouter[pb.StatsInfoKey],
-	threshold int,
+	updateWorkerFactor int,
 ) *Engine {
 	cluster := clusterservice.GetMOCluster()
 	services := cluster.GetAllTNServices()
@@ -120,7 +120,8 @@ func New(
 	}
 	e.gcPool = pool
 
-	e.globalStats = NewGlobalStats(ctx, e, keyRouter)
+	e.globalStats = NewGlobalStats(ctx, e, keyRouter,
+		WithUpdateWorkerFactor(updateWorkerFactor))
 
 	e.messageCenter = &process.MessageCenter{
 		StmtIDToBoard: make(map[uuid.UUID]*process.MessageBoard, 64),
@@ -131,6 +132,7 @@ func New(
 		panic(err)
 	}
 
+	e.pClient.LogtailRPCClientFactory = DefaultNewRpcStreamToTnLogTailService
 	return e
 }
 
@@ -806,4 +808,8 @@ func (e *Engine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.
 
 func (e *Engine) GetMessageCenter() any {
 	return e.messageCenter
+}
+
+func (e *Engine) FS() fileservice.FileService {
+	return e.fs
 }

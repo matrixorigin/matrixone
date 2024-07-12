@@ -42,7 +42,7 @@ func TestOperatorOpBitAndInt64Fn(t *testing.T) {
 	fcTC := NewFunctionTestCase(proc,
 		tc.inputs, tc.expect, operatorOpBitAndInt64Fn)
 	s, info := fcTC.Run()
-	require.True(t, s, info)
+	require.True(t, s, info, tc.info)
 }
 
 func TestOperatorOpBitOrInt64Fn(t *testing.T) {
@@ -65,7 +65,7 @@ func TestOperatorOpBitOrInt64Fn(t *testing.T) {
 	fcTC := NewFunctionTestCase(proc,
 		tc.inputs, tc.expect, operatorOpBitOrInt64Fn)
 	s, info := fcTC.Run()
-	require.True(t, s, info)
+	require.True(t, s, info, tc.info)
 }
 
 func TestOperatorOpBitXorInt64Fn(t *testing.T) {
@@ -88,7 +88,7 @@ func TestOperatorOpBitXorInt64Fn(t *testing.T) {
 	fcTC := NewFunctionTestCase(proc,
 		tc.inputs, tc.expect, operatorOpBitXorInt64Fn)
 	s, info := fcTC.Run()
-	require.True(t, s, info)
+	require.True(t, s, info, tc.info)
 }
 
 func TestOperatorOpBitRightShiftInt64Fn(t *testing.T) {
@@ -112,7 +112,7 @@ func TestOperatorOpBitRightShiftInt64Fn(t *testing.T) {
 	fcTC := NewFunctionTestCase(proc,
 		tc.inputs, tc.expect, operatorOpBitShiftRightInt64Fn)
 	s, info := fcTC.Run()
-	require.True(t, s, info)
+	require.True(t, s, info, tc.info)
 }
 
 func TestOperatorOpBitLeftShiftInt64Fn(t *testing.T) {
@@ -136,5 +136,5 @@ func TestOperatorOpBitLeftShiftInt64Fn(t *testing.T) {
 	fcTC := NewFunctionTestCase(proc,
 		tc.inputs, tc.expect, operatorOpBitShiftLeftInt64Fn)
 	s, info := fcTC.Run()
-	require.True(t, s, info)
+	require.True(t, s, info, tc.info)
 }
