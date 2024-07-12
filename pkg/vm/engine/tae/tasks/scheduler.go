@@ -53,14 +53,14 @@ type TaskScheduler interface {
 
 type BaseScheduler struct {
 	ops.OpWorker
-	idAlloc     *common.IdAlloctor
+	idAlloc     *common.IdAllocator
 	Dispatchers map[TaskType]Dispatcher
 }
 
 func NewBaseScheduler(ctx context.Context, name string) *BaseScheduler {
 	scheduler := &BaseScheduler{
 		OpWorker:    *ops.NewOpWorker(ctx, name),
-		idAlloc:     common.NewIdAlloctor(1),
+		idAlloc:     common.NewIdAllocator(1),
 		Dispatchers: make(map[TaskType]Dispatcher),
 	}
 	scheduler.ExecFunc = scheduler.doDispatch
