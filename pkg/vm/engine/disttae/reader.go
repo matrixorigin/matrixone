@@ -700,9 +700,10 @@ func newReaderInProgress(
 	//FIXME:: use interface?
 	dataBlks []*objectio.BlockInfo, //data in disk, include committed and uncommitted blocks.
 
-	//in memory tombstones and tombstone objects in disk, which should be broadcast to each reader.
-	inMemTombstones engine.Tombstone, //tombstones in memory, include uncommitted and commited tombstones.
-	tombstoneObjs []*logtailreplay.ObjectInfo, //tombstones in disk, include commited and uncommitted tombstones.
+	tombstones engine.Tombstone, //in memory tombstones and tombstone objects in disk, which should be broadcast to each reader.
+
+	//inMemTombstones engine.Tombstone, //tombstones in memory, include uncommitted and commited tombstones.
+	//tombstoneObjs []*logtailreplay.ObjectInfo, //tombstones in disk, include commited and uncommitted tombstones.
 
 ) *readerInProgress {
 
