@@ -480,7 +480,7 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 		return
 	}
 
-	partitionState := gs.engine.getOrCreateLatestPart(key.DatabaseID, key.TableID).Snapshot()
+	partitionState := gs.engine.GetOrCreateLatestPart(key.DatabaseID, key.TableID).Snapshot()
 	var partitionsTableDef []*plan2.TableDef
 	var approxObjectNum int64
 	if table.Partitioned > 0 {
@@ -492,7 +492,7 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 		for _, partitionTableName := range partitionInfo.PartitionTableNames {
 			partitionTable := gs.engine.getLatestCatalogCache().GetTableByName(key.DatabaseID, partitionTableName)
 			partitionsTableDef = append(partitionsTableDef, partitionTable.TableDef)
-			ps := gs.engine.getOrCreateLatestPart(key.DatabaseID, partitionTable.Id).Snapshot()
+			ps := gs.engine.GetOrCreateLatestPart(key.DatabaseID, partitionTable.Id).Snapshot()
 			approxObjectNum += int64(ps.ApproxObjectsNum())
 		}
 	} else {
