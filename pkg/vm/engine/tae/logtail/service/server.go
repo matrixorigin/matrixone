@@ -132,9 +132,38 @@ type LogtailServer struct {
 	stopper    *stopper.Stopper
 }
 
+func defaultRPCServerFactory(name string, address string, logtailServer *LogtailServer,
+	options ...morpc.ServerOption) (morpc.RPCServer, error) {
+
+	codecOpts := []morpc.CodecOption{
+		morpc.WithCodecMaxBodySize(int(logtailServer.cfg.RpcMaxMessageSize)),
+	}
+	if logtailServer.cfg.RpcEnableChecksum {
+		codecOpts = append(codecOpts, morpc.WithCodecEnableChecksum())
+	}
+	codec := morpc.NewMessageCodec(func() morpc.Message {
+		return logtailServer.pool.requests.Acquire()
+	}, codecOpts...)
+
+	rpc, err := morpc.NewRPCServer(LogtailServiceRPCName, address, codec,
+		morpc.WithServerLogger(logtailServer.logger.RawLogger()),
+		morpc.WithServerGoettyOptions(
+			goetty.WithSessionReleaseMsgFunc(func(v interface{}) {
+				msg := v.(morpc.RPCMessage)
+				if !msg.InternalMessage() {
+					logtailServer.pool.segments.Release(msg.Message.(*LogtailResponseSegment))
+				}
+			}),
+		),
+	)
+
+	return rpc, err
+}
+
 // NewLogtailServer initializes a server for logtail push model.
 func NewLogtailServer(
-	address string, cfg *options.LogtailServerCfg, logtailer taelogtail.Logtailer, rt runtime.Runtime, opts ...ServerOption,
+	address string, cfg *options.LogtailServerCfg, logtailer taelogtail.Logtailer, rt runtime.Runtime,
+	rpcServerFactory func(string, string, *LogtailServer, ...morpc.ServerOption) (morpc.RPCServer, error), opts ...ServerOption,
 ) (*LogtailServer, error) {
 	s := &LogtailServer{
 		rt:             rt,
@@ -167,27 +196,11 @@ func NewLogtailServer(
 
 	s.logger.Debug("max data chunk size for segment", zap.Int("value", s.maxChunkSize))
 
-	codecOpts := []morpc.CodecOption{
-		morpc.WithCodecMaxBodySize(int(s.cfg.RpcMaxMessageSize)),
+	if rpcServerFactory == nil {
+		rpcServerFactory = defaultRPCServerFactory
 	}
-	if s.cfg.RpcEnableChecksum {
-		codecOpts = append(codecOpts, morpc.WithCodecEnableChecksum())
-	}
-	codec := morpc.NewMessageCodec(func() morpc.Message {
-		return s.pool.requests.Acquire()
-	}, codecOpts...)
 
-	rpc, err := morpc.NewRPCServer(LogtailServiceRPCName, address, codec,
-		morpc.WithServerLogger(s.logger.RawLogger()),
-		morpc.WithServerGoettyOptions(
-			goetty.WithSessionReleaseMsgFunc(func(v interface{}) {
-				msg := v.(morpc.RPCMessage)
-				if !msg.InternalMessage() {
-					s.pool.segments.Release(msg.Message.(*LogtailResponseSegment))
-				}
-			}),
-		),
-	)
+	rpc, err := rpcServerFactory(LogtailServiceRPCName, address, s)
 	if err != nil {
 		return nil, err
 	}

@@ -244,7 +244,7 @@ func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint3
 	blockIt := rel.MakeObjectIt()
 	var view *containers.ColumnView
 	found := false
-	for blockIt.Valid() {
+	for blockIt.Next() {
 		blk := blockIt.GetObject()
 		for j := 0; j < blk.BlkCnt(); j++ {
 			view, err = blk.GetColumnDataByName(context.Background(), uint16(j), repertory.ColDefs[1].Name, common.DefaultAllocator)
@@ -275,8 +275,8 @@ func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint3
 				return
 			}
 		}
-		blockIt.Next()
 	}
+	blockIt.Close()
 	err = moerr.NewNotFoundNoCtx()
 	return
 }
@@ -550,8 +550,7 @@ func TestWarehouse(t *testing.T) {
 		txn, _ = db.StartTxn(nil)
 		rel, err := GetWarehouseRelation("test", txn)
 		assert.Nil(t, err)
-		it := rel.MakeObjectIt()
-		blk := it.GetObject()
+		blk := testutil.GetOneObject(rel)
 		view, _ := blk.GetColumnDataById(context.Background(), 0, 1, common.DefaultAllocator)
 		t.Log(view.GetData().String())
 		defer view.Close()

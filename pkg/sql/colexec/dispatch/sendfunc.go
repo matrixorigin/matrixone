@@ -16,8 +16,9 @@ package dispatch
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
@@ -30,7 +31,7 @@ import (
 )
 
 // common sender: send to all LocalReceiver
-func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
+func sendToAllLocalFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) (bool, error) {
 	var refCountAdd int64
 	var err error
 	if !ap.RecSink {
@@ -77,7 +78,7 @@ func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (
 }
 
 // common sender: send to all RemoteReceiver
-func sendToAllRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
+func sendToAllRemoteFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) (bool, error) {
 	if !ap.ctr.prepared {
 		end, err := ap.waitRemoteRegsReady(proc)
 		if err != nil {
@@ -115,7 +116,7 @@ func sendToAllRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) 
 	return false, nil
 }
 
-func sendBatToIndex(ap *Argument, proc *process.Process, bat *batch.Batch, regIndex uint32) (err error) {
+func sendBatToIndex(ap *Dispatch, proc *process.Process, bat *batch.Batch, regIndex uint32) (err error) {
 	for i, reg := range ap.LocalRegs {
 		batIndex := uint32(ap.ShuffleRegIdxLocal[i])
 		if regIndex == batIndex {
@@ -165,7 +166,7 @@ func sendBatToIndex(ap *Argument, proc *process.Process, bat *batch.Batch, regIn
 	return err
 }
 
-func sendBatToLocalMatchedReg(ap *Argument, proc *process.Process, bat *batch.Batch, regIndex uint32) error {
+func sendBatToLocalMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Batch, regIndex uint32) error {
 	localRegsCnt := uint32(ap.ctr.localRegsCnt)
 	for i, reg := range ap.LocalRegs {
 		batIndex := uint32(ap.ShuffleRegIdxLocal[i])
@@ -186,7 +187,7 @@ func sendBatToLocalMatchedReg(ap *Argument, proc *process.Process, bat *batch.Ba
 	return nil
 }
 
-func sendBatToMultiMatchedReg(ap *Argument, proc *process.Process, bat *batch.Batch, regIndex uint32) error {
+func sendBatToMultiMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Batch, regIndex uint32) error {
 	localRegsCnt := uint32(ap.ctr.localRegsCnt)
 	atomic.AddInt64(&bat.Cnt, 1)
 	defer atomic.AddInt64(&bat.Cnt, -1)
@@ -228,7 +229,7 @@ func sendBatToMultiMatchedReg(ap *Argument, proc *process.Process, bat *batch.Ba
 }
 
 // shuffle to all receiver (include LocalReceiver and RemoteReceiver)
-func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
+func shuffleToAllFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) (bool, error) {
 	if !ap.ctr.prepared {
 		end, err := ap.waitRemoteRegsReady(proc)
 		if err != nil {
@@ -251,7 +252,7 @@ func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bo
 }
 
 // send to all receiver (include LocalReceiver and RemoteReceiver)
-func sendToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
+func sendToAllFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) (bool, error) {
 	end, remoteErr := sendToAllRemoteFunc(bat, ap, proc)
 	if remoteErr != nil || end {
 		return end, remoteErr
@@ -263,7 +264,7 @@ func sendToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool,
 // common sender: send to any LocalReceiver
 // if the reg which you want to send to is closed
 // send it to next one.
-func sendToAnyLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
+func sendToAnyLocalFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) (bool, error) {
 	for {
 		sendto := ap.ctr.sendCnt % ap.ctr.localRegsCnt
 		reg := ap.LocalRegs[sendto]
@@ -289,7 +290,7 @@ func sendToAnyLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (
 // common sender: send to any RemoteReceiver
 // if the reg which you want to send to is closed
 // send it to next one.
-func sendToAnyRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
+func sendToAnyRemoteFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) (bool, error) {
 	if !ap.ctr.prepared {
 		end, err := ap.waitRemoteRegsReady(proc)
 		if err != nil {
@@ -339,7 +340,7 @@ func sendToAnyRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) 
 }
 
 // Make sure enter this function LocalReceiver and RemoteReceiver are both not equal 0
-func sendToAnyFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
+func sendToAnyFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) (bool, error) {
 	toLocal := (ap.ctr.sendCnt % ap.ctr.aliveRegCnt) < ap.ctr.localRegsCnt
 	if toLocal {
 		allclosed, err := sendToAnyLocalFunc(bat, ap, proc)

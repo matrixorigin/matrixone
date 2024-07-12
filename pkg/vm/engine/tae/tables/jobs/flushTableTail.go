@@ -158,11 +158,13 @@ func NewFlushTableTailTask(
 	}
 	task.schema = rel.Schema().(*catalog.Schema)
 
+	task.BaseTask = tasks.NewBaseTask(task, tasks.DataCompactionTask, ctx)
+
 	objSeen := make(map[*catalog.ObjectEntry]struct{})
 	for _, obj := range objs {
 		task.scopes = append(task.scopes, *obj.AsCommonID())
 		var hdl handle.Object
-		hdl, err = rel.GetObject(&obj.ID)
+		hdl, err = rel.GetObject(obj.ID())
 		if err != nil {
 			return
 		}
@@ -177,7 +179,7 @@ func NewFlushTableTailTask(
 				logutil.Info(
 					"[FLUSH-NEED-RETRY]",
 					zap.String("task", task.Name()),
-					common.AnyField("obj", obj.ID.String()),
+					common.AnyField("obj", obj.ID().String()),
 				)
 				return nil, txnif.ErrTxnNeedRetry
 			}
@@ -192,8 +194,6 @@ func NewFlushTableTailTask(
 		task.transMappings = mergesort.NewBlkTransferBooking(len(task.aObjHandles))
 	}
 
-	task.BaseTask = tasks.NewBaseTask(task, tasks.DataCompactionTask, ctx)
-
 	tblEntry := rel.GetMeta().(*catalog.TableEntry)
 	tblEntry.Stats.RLock()
 	defer tblEntry.Stats.RUnlock()
@@ -201,7 +201,7 @@ func NewFlushTableTailTask(
 	for _, obj := range tblEntry.DeletedDirties {
 		task.scopes = append(task.scopes, *obj.AsCommonID())
 		var hdl handle.Object
-		hdl, err = rel.GetObject(&obj.ID)
+		hdl, err = rel.GetObject(obj.ID())
 		if err != nil {
 			return
 		}
@@ -238,7 +238,7 @@ func (task *flushTableTailTask) MarshalLogObject(enc zapcore.ObjectEncoder) (err
 	enc.AddString("endTs", task.dirtyEndTs.ToString())
 	objs := ""
 	for _, obj := range task.aObjMetas {
-		objs = fmt.Sprintf("%s%s,", objs, obj.ID.ShortStringEx())
+		objs = fmt.Sprintf("%s%s,", objs, obj.ID().ShortStringEx())
 	}
 	enc.AddString("a-objs", objs)
 	// delsrc := ""
@@ -595,7 +595,7 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context) (err error) {
 	}
 	toObjectEntry := task.createdObjHandles.GetMeta().(*catalog.ObjectEntry)
 	toObjectEntry.SetSorted()
-	name := objectio.BuildObjectNameWithObjectID(&toObjectEntry.ID)
+	name := objectio.BuildObjectNameWithObjectID(toObjectEntry.ID())
 	writer, err := blockio.NewBlockWriterNew(task.rt.Fs.Service, name, schema.Version, seqnums)
 	if err != nil {
 		return err
@@ -761,7 +761,7 @@ func (task *flushTableTailTask) flushAllDeletesFromDelSrc(ctx context.Context) (
 		emptyDelObjs := &bitmap.Bitmap{}
 		emptyDelObjs.InitWithSize(int64(obj.BlockCnt()))
 		if enableDetailRecord {
-			tombstone = tbl.TryGetTombstone(obj.ID)
+			tombstone = tbl.TryGetTombstone(*obj.ID())
 		}
 		for j := 0; j < obj.BlockCnt(); j++ {
 			loopCnt++

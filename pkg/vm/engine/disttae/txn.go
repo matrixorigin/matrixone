@@ -308,27 +308,30 @@ func (txn *Transaction) checkDup() error {
 		if _, ok := txn.deletedTableMap.Load(tableKey); ok {
 			continue
 		}
-		if e.typ == INSERT || e.typ == INSERT_TXN {
-			if _, ok := tablesDef[e.tableId]; !ok {
-				tbl, err := txn.getTable(e.accountId, e.databaseName, e.tableName)
-				if err != nil {
-					return err
-				}
-				tablesDef[e.tableId] = tbl.GetTableDef(txn.proc.Ctx)
+		//build pk index for tables.
+		if _, ok := tablesDef[e.tableId]; !ok {
+			tbl, err := txn.getTable(e.accountId, e.databaseName, e.tableName)
+			if err != nil {
+				return err
 			}
-			tableDef := tablesDef[e.tableId]
-			if _, ok := pkIndex[e.tableId]; !ok {
-				for idx, colDef := range tableDef.Cols {
-					if colDef.Name == tableDef.Pkey.PkeyColName {
-						if colDef.Name == catalog.FakePrimaryKeyColName {
-							pkIndex[e.tableId] = -1
-						} else {
-							pkIndex[e.tableId] = idx
-						}
-						break
+			tablesDef[e.tableId] = tbl.GetTableDef(txn.proc.Ctx)
+		}
+		tableDef := tablesDef[e.tableId]
+		if _, ok := pkIndex[e.tableId]; !ok {
+			for idx, colDef := range tableDef.Cols {
+				if colDef.Name == tableDef.Pkey.PkeyColName {
+					if colDef.Name == catalog.FakePrimaryKeyColName ||
+						colDef.Name == catalog.CPrimaryKeyColName {
+						pkIndex[e.tableId] = -1
+					} else {
+						pkIndex[e.tableId] = idx
 					}
+					break
 				}
 			}
+		}
+
+		if e.typ == INSERT || e.typ == INSERT_TXN {
 			bat := e.bat
 			if index, ok := pkIndex[e.tableId]; ok && index != -1 {
 				if *bat.Vecs[0].GetType() == types.T_Rowid.ToType() {
@@ -365,22 +368,24 @@ func (txn *Transaction) checkDup() error {
 					e.databaseName, e.tableName)
 				continue
 			}
-			if _, ok := delPks[e.tableId]; !ok {
-				delPks[e.tableId] = make(map[any]bool)
-			}
-			if dup, pk := checkPKDup(
-				delPks[e.tableId],
-				e.bat.Vecs[1],
-				0,
-				e.bat.RowCount()); dup {
-				logutil.Errorf("txn:%s wants to delete duplicate primary key:%s in table:[%v-%v:%s-%s]",
-					hex.EncodeToString(txn.op.Txn().ID),
-					pk,
-					e.databaseId,
-					e.tableId,
-					e.databaseName,
-					e.tableName)
-				return moerr.NewDuplicateEntryNoCtx(pk, e.bat.Attrs[1])
+			if index, ok := pkIndex[e.tableId]; ok && index != -1 {
+				if _, ok := delPks[e.tableId]; !ok {
+					delPks[e.tableId] = make(map[any]bool)
+				}
+				if dup, pk := checkPKDup(
+					delPks[e.tableId],
+					e.bat.Vecs[1],
+					0,
+					e.bat.RowCount()); dup {
+					logutil.Errorf("txn:%s wants to delete duplicate primary key:%s in table:[%v-%v:%s-%s]",
+						hex.EncodeToString(txn.op.Txn().ID),
+						pk,
+						e.databaseId,
+						e.tableId,
+						e.databaseName,
+						e.tableName)
+					return moerr.NewDuplicateEntryNoCtx(pk, e.bat.Attrs[1])
+				}
 			}
 		}
 	}

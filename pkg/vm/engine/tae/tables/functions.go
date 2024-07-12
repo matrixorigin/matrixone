@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
@@ -158,12 +159,13 @@ func dedupNABlkBytesFunc(args ...any) func([]byte, bool, int) error {
 	vec, mask, def := parseNADedeupArgs(args...)
 	return func(v []byte, _ bool, row int) (err error) {
 		// logutil.Infof("row=%d,v=%v", row, v)
-		if _, existed := compute.GetOffsetOfBytes(
+		if rowOffset, existed := compute.GetOffsetOfBytes(
 			vec,
 			v,
 			mask,
 		); existed {
 			entry := common.TypeStringValue(*vec.GetType(), any(v), false)
+			logutil.Infof("Duplicate: row %d", rowOffset)
 			return moerr.NewDuplicateEntryNoCtx(entry, def.Name)
 		}
 		return

@@ -49,6 +49,34 @@ func HandleShardingReadRows(
 	return buffer.EncodeUint64(rows), nil
 }
 
+// HandleShardingReadSize handles sharding read size
+func HandleShardingReadSize(
+	ctx context.Context,
+	shard shard.TableShard,
+	engine engine.Engine,
+	param shard.ReadParam,
+	ts timestamp.Timestamp,
+	buffer *morpc.Buffer,
+) ([]byte, error) {
+	tbl, err := getTxnTable(
+		ctx,
+		param,
+		engine,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := tbl.Size(
+		ctx,
+		param.SizeParam.ColumnName,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return buffer.EncodeUint64(rows), nil
+}
+
 func getTxnTable(
 	ctx context.Context,
 	param shard.ReadParam,

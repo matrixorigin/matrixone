@@ -281,6 +281,9 @@ func BlockReadInner(
 			} else {
 				result.Vecs[i] = vp.GetVector(typ)
 			}
+			if err = result.Vecs[i].PreExtendArea(len(selectRows), mp); err != nil {
+				break
+			}
 			if err = result.Vecs[i].Union(col, selectRows, mp); err != nil {
 				break
 			}

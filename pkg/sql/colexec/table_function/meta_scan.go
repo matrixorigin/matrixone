@@ -26,12 +26,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func metaScanPrepare(proc *process.Process, arg *Argument) (err error) {
-	arg.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Args)
+func metaScanPrepare(proc *process.Process, tableFunction *TableFunction) (err error) {
+	tableFunction.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, tableFunction.Args)
 	return err
 }
 
-func metaScanCall(_ int, proc *process.Process, arg *Argument, result *vm.CallResult) (bool, error) {
+func metaScanCall(_ int, proc *process.Process, tableFunction *TableFunction, result *vm.CallResult) (bool, error) {
 	var (
 		err  error
 		rbat *batch.Batch
@@ -46,7 +46,7 @@ func metaScanCall(_ int, proc *process.Process, arg *Argument, result *vm.CallRe
 		return true, nil
 	}
 
-	v, err := arg.ctr.executorsForArgs[0].Eval(proc, []*batch.Batch{bat}, nil)
+	v, err := tableFunction.ctr.executorsForArgs[0].Eval(proc, []*batch.Batch{bat}, nil)
 	if err != nil {
 		return false, err
 	}
@@ -60,7 +60,7 @@ func metaScanCall(_ int, proc *process.Process, arg *Argument, result *vm.CallRe
 	}
 	var idxs []uint16
 	for i, name := range catalog.MetaColNames {
-		for _, attr := range arg.Attrs {
+		for _, attr := range tableFunction.Attrs {
 			if name == attr {
 				idxs = append(idxs, uint16(i))
 			}

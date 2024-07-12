@@ -27,20 +27,18 @@ import (
 
 var ErrRWConflict = moerr.NewTxnRWConflictNoCtx()
 
-func readWriteConfilictCheck[T catalog.BaseNode[T]](entry *catalog.BaseEntryImpl[T], ts types.TS) (err error) {
-	entry.RLock()
-	defer entry.RUnlock()
-	needWait, txnToWait := entry.GetLatestNodeLocked().NeedWaitCommitting(ts)
+func readWriteConfilictCheck(entry *catalog.ObjectEntry, ts types.TS) (err error) {
+	lastNode := entry.GetLatestNode()
+	needWait, txnToWait := lastNode.GetLastMVCCNode().NeedWaitCommitting(ts)
 	// TODO:
 	// I don't think we need to wait here any more. `block` and `Object` are
 	// local metadata and never be involved in a 2PC txn. So a prepared `block`
 	// will never be rollbacked
 	if needWait {
-		entry.RUnlock()
 		txnToWait.GetTxnState(true)
-		entry.RLock()
+		lastNode = entry.GetLatestNode()
 	}
-	if entry.DeleteBeforeLocked(ts) {
+	if lastNode.DeleteBefore(ts) {
 		err = ErrRWConflict
 	}
 	return
@@ -106,15 +104,15 @@ func (checker *warChecker) cacheGet(id *objectio.ObjectId) *catalog.ObjectEntry 
 	return checker.cache[*id]
 }
 func (checker *warChecker) Cache(obj *catalog.ObjectEntry) {
-	checker.cache[obj.ID] = obj
+	checker.cache[*obj.ID()] = obj
 }
 
 func (checker *warChecker) Insert(obj *catalog.ObjectEntry) {
 	checker.Cache(obj)
-	if checker.HasConflict(obj.ID) {
+	if checker.HasConflict(*obj.ID()) {
 		panic(fmt.Sprintf("cannot add conflicted %s into readset", obj.String()))
 	}
-	checker.readSet[obj.ID] = obj
+	checker.readSet[*obj.ID()] = obj
 }
 
 func (checker *warChecker) checkOne(id *common.ID, ts types.TS) (err error) {
@@ -129,12 +127,12 @@ func (checker *warChecker) checkOne(id *common.ID, ts types.TS) (err error) {
 	if entry == nil {
 		return
 	}
-	return readWriteConfilictCheck(entry.BaseEntryImpl, ts)
+	return readWriteConfilictCheck(entry, ts)
 }
 
 func (checker *warChecker) checkAll(ts types.TS) (err error) {
 	for _, obj := range checker.readSet {
-		if err = readWriteConfilictCheck(obj.BaseEntryImpl, ts); err != nil {
+		if err = readWriteConfilictCheck(obj, ts); err != nil {
 			return
 		}
 	}
