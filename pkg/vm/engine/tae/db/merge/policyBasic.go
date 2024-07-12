@@ -325,12 +325,15 @@ func (o *basic) controlMem(objs []*catalog.ObjectEntry, mem int64) []*catalog.Ob
 	}
 
 	needPopout := func(ss []*catalog.ObjectEntry) bool {
+		_, esize, _ := estimateMergeConsume(ss)
+		if esize > int(2*mem/3) {
+			return true
+		}
+
 		if len(ss) <= 2 {
 			return false
 		}
-
-		_, esize, _ := estimateMergeConsume(ss)
-		return esize > int(2*mem/3)
+		return false
 	}
 	for needPopout(objs) {
 		objs = objs[:len(objs)-1]
