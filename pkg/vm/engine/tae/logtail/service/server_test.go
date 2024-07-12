@@ -194,7 +194,7 @@ func startLogtailServer(
 
 	/* ---- construct logtail server ---- */
 	logtailServer, err := NewLogtailServer(
-		address, options.NewDefaultLogtailServerCfg(), logtailer, rt,
+		address, options.NewDefaultLogtailServerCfg(), logtailer, rt, nil,
 		WithServerCollectInterval(20*time.Millisecond),
 		WithServerSendTimeout(5*time.Second),
 		WithServerEnableChecksum(true),
