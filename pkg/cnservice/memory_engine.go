@@ -64,7 +64,7 @@ func (s *service) initMemoryEngineNonDist(
 	ctx context.Context,
 	pu *config.ParameterUnit,
 ) error {
-	ck := runtime.ProcessLevelRuntime().Clock()
+	ck := runtime.ServiceRuntime(s.cfg.UUID).Clock()
 	mp, err := mpool.NewMPool("cnservice_mem_engine_nondist", 0, mpool.NoFixed)
 	if err != nil {
 		return err
@@ -83,10 +83,14 @@ func (s *service) initMemoryEngineNonDist(
 		TxnServiceAddress: tnAddr,
 		Shards:            shards,
 	}}
-	cluster := clusterservice.NewMOCluster(nil, 0,
+	cluster := clusterservice.NewMOCluster(
+		s.cfg.UUID,
+		nil,
+		0,
 		clusterservice.WithDisableRefresh(),
-		clusterservice.WithServices(nil, tnServices))
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, cluster)
+		clusterservice.WithServices(nil, tnServices),
+	)
+	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(runtime.ClusterService, cluster)
 
 	storage, err := memorystorage.NewMemoryStorage(
 		mp,

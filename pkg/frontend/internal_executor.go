@@ -20,7 +20,6 @@ import (
 	"sync"
 
 	"github.com/fagongzi/goetty/v2"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -63,17 +62,23 @@ func applyOverride(sess *Session, opts ie.SessionOverrideOptions) {
 
 type internalExecutor struct {
 	sync.Mutex
+	service      string
 	proto        *internalProtocol
 	baseSessOpts ie.SessionOverrideOptions
 }
 
-func NewInternalExecutor() *internalExecutor {
-	return newIe()
+func NewInternalExecutor(
+	service string,
+) *internalExecutor {
+	return newIe(service)
 }
 
-func newIe() *internalExecutor {
+func newIe(
+	service string,
+) *internalExecutor {
 	proto := &internalProtocol{result: &internalExecResult{}}
 	ret := &internalExecutor{
+		service:      service,
 		proto:        proto,
 		baseSessOpts: ie.NewOptsBuilder().Finish(),
 	}
@@ -194,10 +199,10 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 	//
 	mp, err := mpool.NewMPool("internal_exec_cmd_session", getGlobalPu().SV.GuestMmuLimitation, mpool.NoFixed)
 	if err != nil {
-		getLogger().Fatal("internalExecutor cannot create mpool in newCmdSession")
+		getLogger(ie.service).Fatal("internalExecutor cannot create mpool in newCmdSession")
 		panic(err)
 	}
-	sess := NewSession(ctx, ie.proto, mp)
+	sess := NewSession(ctx, ie.service, ie.proto, mp)
 	sess.disableTrace = true
 
 	var t *TenantInfo
@@ -221,7 +226,7 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 	applyOverride(sess, opts)
 
 	//make sure init tasks can see the prev task's data
-	now, _ := runtime.ProcessLevelRuntime().Clock().Now()
+	now, _ := runtime.ServiceRuntime(ie.service).Clock().Now()
 	sess.lastCommitTS = now
 	return sess
 }

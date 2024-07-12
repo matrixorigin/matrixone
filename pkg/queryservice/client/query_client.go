@@ -68,7 +68,7 @@ type QueryClient interface {
 }
 
 func NewQueryClient(sid string, cfg morpc.Config) (QueryClient, error) {
-	rt := runtime.ProcessLevelRuntime()
+	rt := runtime.ServiceRuntime(sid)
 	if rt == nil {
 		rt = runtime.DefaultRuntime()
 	}
@@ -101,7 +101,7 @@ func (c *queryClient) SendMessage(ctx context.Context, address string, req *pb.R
 	if address == "" {
 		return nil, moerr.NewInternalError(ctx, "invalid CN query address %s", address)
 	}
-	if err := checkMethodVersion(ctx, req); err != nil {
+	if err := checkMethodVersion(ctx, c.serviceID, req); err != nil {
 		return nil, err
 	}
 	f, err := c.client.Send(ctx, address, req)
@@ -142,6 +142,6 @@ func (c *queryClient) unwrapResponseError(resp *pb.Response) (*pb.Response, erro
 	return resp, nil
 }
 
-func checkMethodVersion(ctx context.Context, req *pb.Request) error {
-	return runtime.CheckMethodVersion(ctx, methodVersions, req)
+func checkMethodVersion(ctx context.Context, service string, req *pb.Request) error {
+	return runtime.CheckMethodVersion(ctx, service, methodVersions, req)
 }

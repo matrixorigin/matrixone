@@ -25,9 +25,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
-
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -47,6 +44,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 var MaxPrepareNumberInOneSession int = 100000
@@ -106,6 +105,7 @@ const (
 type Session struct {
 	feSessionImpl
 
+	service    string
 	logger     *log.MOLogger
 	logLevel   zapcore.Level
 	loggerOnce sync.Once
@@ -474,14 +474,20 @@ func (e *errInfo) length() int {
 	return len(e.codes)
 }
 
-func NewSession(connCtx context.Context, proto MysqlRrWr, mp *mpool.MPool) *Session {
+func NewSession(
+	connCtx context.Context,
+	service string,
+	proto MysqlRrWr,
+	mp *mpool.MPool,
+) *Session {
 	//if the sharedTxnHandler exists,we use its txnCtx and txnOperator in this session.
 	//Currently, we only use the sharedTxnHandler in the background session.
 	var txnOp TxnOperator
 	var err error
-	txnHandler := InitTxnHandler(getGlobalPu().StorageEngine, connCtx, txnOp)
+	txnHandler := InitTxnHandler(service, getGlobalPu().StorageEngine, connCtx, txnOp)
 
 	ses := &Session{
+		service: service,
 		feSessionImpl: feSessionImpl{
 			pool:       mp,
 			txnHandler: txnHandler,
@@ -552,6 +558,10 @@ func NewSession(connCtx context.Context, proto MysqlRrWr, mp *mpool.MPool) *Sess
 		ss.Close()
 	})
 	return ses
+}
+
+func (ses *Session) GetService() string {
+	return ses.service
 }
 
 func (ses *Session) Close() {
@@ -1676,7 +1686,7 @@ func (ses *Session) GetLogLevel() zapcore.Level {
 func (ses *Session) initLogger() {
 	ses.loggerOnce.Do(func() {
 		if ses.logger == nil {
-			ses.logger = getLogger()
+			ses.logger = getLogger(ses.service)
 		}
 		config := logutil.GetDefaultConfig()
 		ses.logLevel = config.GetLevel().Level()

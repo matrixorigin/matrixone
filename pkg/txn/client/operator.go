@@ -24,8 +24,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -37,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"go.uber.org/zap"
 )
 
 var (
@@ -117,7 +116,7 @@ func WithTxnCreateBy(
 	sessionID string,
 	connectionID uint32) TxnOption {
 	return func(tc *txnOperator) {
-		tc.options.CN = runtime.ProcessLevelRuntime().ServiceUUID()
+		tc.options.CN = tc.sid
 		tc.options.SessionID = sessionID
 		tc.options.ConnectionID = connectionID
 		tc.options.AccountID = accountID
@@ -201,6 +200,7 @@ func WithBeginAutoCommit(begin, autocommit bool) TxnOption {
 }
 
 type txnOperator struct {
+	sid                  string
 	sender               rpc.TxnSender
 	waiter               *waiter
 	txnID                []byte
@@ -242,11 +242,16 @@ type txnOperator struct {
 }
 
 func newTxnOperator(
+	sid string,
 	clock clock.Clock,
 	sender rpc.TxnSender,
 	txnMeta txn.TxnMeta,
-	options ...TxnOption) *txnOperator {
-	tc := &txnOperator{sender: sender}
+	options ...TxnOption,
+) *txnOperator {
+	tc := &txnOperator{
+		sid:    sid,
+		sender: sender,
+	}
 	tc.mu.txn = txnMeta
 	tc.txnID = txnMeta.ID
 	tc.clock = clock
@@ -943,7 +948,7 @@ func (tc *txnOperator) handleErrorResponse(resp txn.TxnResponse) error {
 
 		if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) ||
 			moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
-			v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.EnableCheckInvalidRCErrors)
+			v, ok := runtime.ServiceRuntime(tc.sid).GetGlobalVariables(runtime.EnableCheckInvalidRCErrors)
 			if ok && v.(bool) {
 				util.GetLogger().Fatal("failed",
 					zap.Error(err),

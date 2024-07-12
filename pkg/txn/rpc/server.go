@@ -111,7 +111,8 @@ type server struct {
 func NewTxnServer(
 	address string,
 	rt runtime.Runtime,
-	opts ...ServerOption) (TxnServer, error) {
+	opts ...ServerOption,
+) (TxnServer, error) {
 	s := &server{
 		rt:       rt,
 		handlers: make(map[txn.TxnMethod]TxnRequestHandleFunc),
@@ -188,7 +189,8 @@ func (s *server) onMessage(
 	ctx context.Context,
 	msg morpc.RPCMessage,
 	sequence uint64,
-	cs morpc.ClientSession) error {
+	cs morpc.ClientSession,
+) error {
 	ctx, span := trace.Debug(ctx, "server.onMessage")
 	defer span.End()
 
@@ -201,7 +203,7 @@ func (s *server) onMessage(
 		msg.Cancel()
 		return nil
 	}
-	if err := checkMethodVersion(ctx, m); err != nil {
+	if err := checkMethodVersion(ctx, s.rt, m); err != nil {
 		s.releaseRequest(m)
 		msg.Cancel()
 		return err
@@ -298,6 +300,10 @@ func (r executor) exec() ([]byte, error) {
 	return txnID, err
 }
 
-func checkMethodVersion(ctx context.Context, req *txn.TxnRequest) error {
-	return runtime.CheckMethodVersion(ctx, methodVersions, req)
+func checkMethodVersion(
+	ctx context.Context,
+	rt runtime.Runtime,
+	req *txn.TxnRequest,
+) error {
+	return runtime.CheckMethodVersionWithRuntime(ctx, rt, methodVersions, req)
 }

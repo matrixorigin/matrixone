@@ -68,7 +68,7 @@ func New(
 		Ctx:          ctx,
 		TxnClient:    txnClient,
 		FileService:  fileService,
-		IncrService:  incrservice.GetAutoIncrementService(ctx),
+		IncrService:  incrservice.GetAutoIncrementService(lockService.GetConfig().ServiceID),
 		UnixTime:     time.Now().UnixNano(),
 		LastInsertID: new(uint64),
 		LockService:  lockService,

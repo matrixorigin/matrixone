@@ -38,11 +38,25 @@ func RunLockServicesForTest(
 ) {
 	defaultLazyCheckDuration.Store(time.Millisecond * 50)
 	testSockets := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntimeWithLevel(level))
 	services := make([]LockService, 0, len(serviceIDs))
 	cns := make([]metadata.CNService, 0, len(serviceIDs))
 	configs := make([]Config, 0, len(serviceIDs))
 	for _, v := range serviceIDs {
+		runtime.SetupServiceBasedRuntime(v, runtime.DefaultRuntimeWithLevel(level))
+		cluster := clusterservice.NewMOCluster(
+			v,
+			nil,
+			0,
+			clusterservice.WithDisableRefresh(),
+			clusterservice.WithServices(
+				cns,
+				[]metadata.TNService{
+					{
+						LockServiceAddress: testSockets,
+					},
+				}))
+		runtime.ServiceRuntime(v).SetGlobalVariables(runtime.ClusterService, cluster)
+
 		address := fmt.Sprintf("unix:///tmp/service-%d-%s.sock",
 			time.Now().Nanosecond(), v)
 		if err := os.RemoveAll(address[7:]); err != nil {
@@ -54,18 +68,6 @@ func RunLockServicesForTest(
 		})
 		configs = append(configs, Config{ServiceID: v, ListenAddress: address})
 	}
-	cluster := clusterservice.NewMOCluster(
-		nil,
-		0,
-		clusterservice.WithDisableRefresh(),
-		clusterservice.WithServices(
-			cns,
-			[]metadata.TNService{
-				{
-					LockServiceAddress: testSockets,
-				},
-			}))
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, cluster)
 
 	var removeDisconnectDuration time.Duration
 	for _, cfg := range configs {
@@ -76,9 +78,15 @@ func RunLockServicesForTest(
 		services = append(services,
 			NewLockService(cfg, opts...).(*service))
 	}
-	allocator := NewLockTableAllocator(testSockets, lockTableBindTimeout, morpc.Config{}, func(lta *lockTableAllocator) {
-		lta.options.removeDisconnectDuration = removeDisconnectDuration
-	})
+	allocator := NewLockTableAllocator(
+		"allocate",
+		testSockets,
+		lockTableBindTimeout,
+		morpc.Config{},
+		func(lta *lockTableAllocator) {
+			lta.options.removeDisconnectDuration = removeDisconnectDuration
+		},
+	)
 	fn(allocator.(*lockTableAllocator), services)
 
 	for _, s := range services {

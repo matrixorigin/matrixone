@@ -19,9 +19,8 @@ import (
 	"fmt"
 
 	"github.com/fagongzi/goetty/v2"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"go.uber.org/zap"
 )
 
 // Response Categories
@@ -177,7 +176,7 @@ func (mp *MysqlProtocolImpl) IsEstablished() bool {
 }
 
 func (mp *MysqlProtocolImpl) SetEstablished() {
-	getLogger().Debug("SWITCH ESTABLISHED to true", zap.String(ConnectionInfoKey, mp.GetDebugString()))
+	getLogger(mp.sid).Debug("SWITCH ESTABLISHED to true", zap.String(ConnectionInfoKey, mp.GetDebugString()))
 	mp.established.Store(true)
 }
 
@@ -186,7 +185,7 @@ func (mp *MysqlProtocolImpl) IsTlsEstablished() bool {
 }
 
 func (mp *MysqlProtocolImpl) SetTlsEstablished() {
-	getLogger().Debug("SWITCH TLS_ESTABLISHED to true", zap.String(ConnectionInfoKey, mp.GetDebugString()))
+	getLogger(mp.sid).Debug("SWITCH TLS_ESTABLISHED to true", zap.String(ConnectionInfoKey, mp.GetDebugString()))
 	mp.tlsEstablished.Store(true)
 }
 

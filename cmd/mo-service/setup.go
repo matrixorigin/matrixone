@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"go.uber.org/zap"
 )
@@ -45,7 +44,10 @@ var (
 	setupRuntimeOnce sync.Once
 )
 
-func setupProcessLevelRuntime(cfg *Config, stopper *stopper.Stopper) error {
+func setupProcessLevelRuntime(
+	cfg *Config,
+	stopper *stopper.Stopper,
+) error {
 	var e error
 	setupRuntimeOnce.Do(func() {
 		mpool.InitCap(int64(cfg.Limit.Memory))
@@ -54,21 +56,21 @@ func setupProcessLevelRuntime(cfg *Config, stopper *stopper.Stopper) error {
 			e = err
 			return
 		}
-		runtime.SetupProcessLevelRuntime(r)
+		runtime.SetupServiceBasedRuntime(cfg.mustGetServiceUUID(), r)
 	})
 	return e
 }
 
-func getRuntime(st metadata.ServiceType, cfg *Config, stopper *stopper.Stopper) (runtime.Runtime, error) {
-	switch st {
-	case metadata.ServiceType_TN:
-		return newRuntime(cfg, stopper)
-	default:
-		return runtime.ProcessLevelRuntime(), nil
-	}
+func mustGetRuntime(
+	cfg *Config,
+) runtime.Runtime {
+	return runtime.ServiceRuntime(cfg.mustGetServiceUUID())
 }
 
-func newRuntime(cfg *Config, stopper *stopper.Stopper) (runtime.Runtime, error) {
+func newRuntime(
+	cfg *Config,
+	stopper *stopper.Stopper,
+) (runtime.Runtime, error) {
 	clock, err := getClock(cfg, stopper)
 	if err != nil {
 		return nil, err
@@ -79,7 +81,8 @@ func newRuntime(cfg *Config, stopper *stopper.Stopper) (runtime.Runtime, error) 
 		return nil, err
 	}
 
-	return runtime.NewRuntime(cfg.mustGetServiceType(),
+	return runtime.NewRuntime(
+		cfg.mustGetServiceType(),
 		cfg.mustGetServiceUUID(),
 		logger,
 		runtime.WithClock(clock)), nil

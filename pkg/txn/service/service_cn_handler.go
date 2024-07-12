@@ -493,7 +493,7 @@ func (s *service) checkCNRequest(request *txn.TxnRequest) {
 
 func (s *service) waitClockTo(ts timestamp.Timestamp) {
 	for {
-		now, _ := runtime.ProcessLevelRuntime().Clock().Now()
+		now, _ := runtime.ServiceRuntime(s.sid).Clock().Now()
 		if now.GreaterEq(ts) {
 			return
 		}

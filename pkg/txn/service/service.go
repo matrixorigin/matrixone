@@ -37,6 +37,7 @@ import (
 var _ TxnService = (*service)(nil)
 
 type service struct {
+	sid       string
 	logger    *log.MOLogger
 	shard     metadata.TNShard
 	storage   storage.TxnStorage
@@ -66,12 +67,15 @@ type service struct {
 
 // NewTxnService create TxnService
 func NewTxnService(
+	sid string,
 	shard metadata.TNShard,
 	storage storage.TxnStorage,
 	sender rpc.TxnSender,
 	zombieTimeout time.Duration,
-	allocator lockservice.LockTableAllocator) TxnService {
+	allocator lockservice.LockTableAllocator,
+) TxnService {
 	s := &service{
+		sid:     sid,
 		logger:  util.GetLogger(),
 		shard:   shard,
 		sender:  sender,

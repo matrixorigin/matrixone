@@ -20,7 +20,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
@@ -861,7 +860,7 @@ func handleOptimizerHints(str string, builder *QueryBuilder) {
 }
 
 func (builder *QueryBuilder) parseOptimizeHints() {
-	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables("optimizer_hints")
+	v, ok := runtime.ServiceRuntime(builder.compCtx.GetProcess().Base.LockService.GetConfig().ServiceID).GetGlobalVariables("optimizer_hints")
 	if !ok {
 		return
 	}

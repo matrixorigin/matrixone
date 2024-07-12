@@ -25,7 +25,7 @@ import (
 )
 
 func (s *service) initRemote() {
-	s.remote.cluster = clusterservice.GetMOCluster()
+	s.remote.cluster = clusterservice.GetMOCluster(s.cfg.ServiceID)
 	s.remote.pool = morpc.NewMessagePool(
 		func() *pb.Request {
 			return &pb.Request{}

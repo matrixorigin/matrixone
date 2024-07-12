@@ -20,9 +20,6 @@ import (
 	"math"
 	"strings"
 
-	"go.uber.org/zap"
-	"golang.org/x/exp/constraints"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -43,6 +40,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
+	"golang.org/x/exp/constraints"
 )
 
 func (s *Scope) CreateDatabase(c *Compile) error {
@@ -1287,6 +1286,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 	err = maybeCreateAutoIncrement(
 		c.proc.Ctx,
+		c.proc.Base.LockService.GetConfig().ServiceID,
 		dbSource,
 		qry.GetTableDef(),
 		c.proc.GetTxnOperator(),
@@ -1300,7 +1300,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		return nil
 	}
 
-	return shardservice.GetService().Create(
+	return shardservice.GetService(c.proc.Base.LockService.GetConfig().ServiceID).Create(
 		c.proc.Ctx,
 		qry.GetTableDef().TblId,
 		c.proc.GetTxnOperator(),
@@ -1483,6 +1483,7 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 
 	return maybeCreateAutoIncrement(
 		c.proc.Ctx,
+		c.proc.Base.LockService.GetConfig().ServiceID,
 		tmpDBSource,
 		qry.GetTableDef(),
 		c.proc.GetTxnOperator(),
@@ -2036,7 +2037,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		}
 	}
 	if containAuto {
-		err = incrservice.GetAutoIncrementService(c.proc.Ctx).Reset(
+		err = incrservice.GetAutoIncrementService(c.proc.Base.LockService.GetConfig().ServiceID).Reset(
 			c.proc.Ctx,
 			oldId,
 			newId,
@@ -2245,7 +2246,7 @@ func (s *Scope) DropTable(c *Compile) error {
 				}
 			}
 			if containAuto {
-				err := incrservice.GetAutoIncrementService(c.proc.Ctx).Delete(
+				err := incrservice.GetAutoIncrementService(c.proc.Base.LockService.GetConfig().ServiceID).Delete(
 					c.proc.Ctx,
 					rel.GetTableID(c.proc.Ctx),
 					c.proc.GetTxnOperator())
@@ -2254,7 +2255,7 @@ func (s *Scope) DropTable(c *Compile) error {
 				}
 			}
 
-			if err := shardservice.GetService().Delete(
+			if err := shardservice.GetService(c.proc.Base.LockService.GetConfig().ServiceID).Delete(
 				c.proc.Ctx,
 				rel.GetTableID(c.proc.Ctx),
 				c.proc.GetTxnOperator(),
@@ -2291,7 +2292,7 @@ func (s *Scope) DropTable(c *Compile) error {
 			}
 			if containAuto {
 				// When drop table 'mo_catalog.mo_indexes', there is no need to delete the auto increment data
-				err := incrservice.GetAutoIncrementService(c.proc.Ctx).Delete(
+				err := incrservice.GetAutoIncrementService(c.proc.Base.LockService.GetConfig().ServiceID).Delete(
 					c.proc.Ctx,
 					rel.GetTableID(c.proc.Ctx),
 					c.proc.GetTxnOperator())
@@ -2300,7 +2301,7 @@ func (s *Scope) DropTable(c *Compile) error {
 				}
 			}
 
-			if err := shardservice.GetService().Delete(
+			if err := shardservice.GetService(c.proc.Base.LockService.GetConfig().ServiceID).Delete(
 				c.proc.Ctx,
 				rel.GetTableID(c.proc.Ctx),
 				c.proc.GetTxnOperator(),
@@ -3199,6 +3200,7 @@ func lockRows(
 
 func maybeCreateAutoIncrement(
 	ctx context.Context,
+	sid string,
 	db engine.Database,
 	def *plan.TableDef,
 	txnOp client.TxnOperator,
@@ -3218,7 +3220,7 @@ func maybeCreateAutoIncrement(
 		return nil
 	}
 
-	return incrservice.GetAutoIncrementService(ctx).Create(
+	return incrservice.GetAutoIncrementService(sid).Create(
 		ctx,
 		def.TblId,
 		cols,

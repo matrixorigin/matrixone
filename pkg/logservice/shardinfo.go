@@ -20,12 +20,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
 type ShardInfo struct {
@@ -38,7 +37,11 @@ type ShardInfo struct {
 // GetShardInfo is to be invoked when querying ShardInfo on a Log Service node.
 // address is usually the reverse proxy that randomly redirect the request to
 // a known Log Service node.
-func GetShardInfo(address string, shardID uint64) (ShardInfo, bool, error) {
+func GetShardInfo(
+	sid string,
+	address string,
+	shardID uint64,
+) (ShardInfo, bool, error) {
 	respPool := &sync.Pool{}
 	respPool.New = func() interface{} {
 		return &RPCResponse{pool: respPool}
@@ -47,6 +50,7 @@ func GetShardInfo(address string, shardID uint64) (ShardInfo, bool, error) {
 	defer cancel()
 	cc, err := getRPCClient(
 		ctx,
+		sid,
 		address,
 		respPool,
 		defaultMaxMessageSize,

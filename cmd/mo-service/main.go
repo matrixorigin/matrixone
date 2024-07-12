@@ -176,6 +176,11 @@ func startService(
 	if err := cfg.resolveGossipSeedAddresses(); err != nil {
 		return err
 	}
+	st, err := cfg.getServiceType()
+	if err != nil {
+		return err
+	}
+
 	setupProcessLevelRuntime(cfg, stopper)
 
 	malloc.SetDefaultConfig(cfg.Malloc)
@@ -183,16 +188,6 @@ func startService(
 	setupStatusServer(runtime.ProcessLevelRuntime())
 
 	goroutine.StartLeakCheck(stopper, cfg.Goroutine)
-
-	st, err := cfg.getServiceType()
-	if err != nil {
-		return err
-	}
-
-	uuid, err := getNodeUUID(ctx, st, cfg)
-	if err != nil {
-		return err
-	}
 
 	var gossipNode *gossip.Node
 	if st == metadata.ServiceType_CN {
@@ -211,7 +206,7 @@ func startService(
 		}
 	}
 
-	fs, err := cfg.createFileService(ctx, st, uuid)
+	fs, err := cfg.createFileService(ctx, st, cfg.mustGetServiceUUID())
 	if err != nil {
 		return err
 	}
@@ -220,14 +215,14 @@ func startService(
 	if err != nil {
 		return err
 	}
-	if err = initTraceMetric(ctx, st, cfg, stopper, etlFS, uuid); err != nil {
+	if err = initTraceMetric(ctx, st, cfg, stopper, etlFS, cfg.mustGetServiceUUID()); err != nil {
 		return err
 	}
 
 	if globalEtlFS == nil {
 		globalEtlFS = etlFS
 		globalServiceType = st.String()
-		globalNodeId = uuid
+		globalNodeId = cfg.mustGetServiceUUID()
 	}
 
 	switch st {
@@ -309,10 +304,6 @@ func startTNService(
 	if err := waitClusterCondition(cfg.HAKeeperClient, waitHAKeeperRunning); err != nil {
 		return err
 	}
-	r, err := getRuntime(metadata.ServiceType_TN, cfg, stopper)
-	if err != nil {
-		return err
-	}
 	serviceWG.Add(1)
 	return stopper.RunNamedTask("tn-service", func(ctx context.Context) {
 		defer serviceWG.Done()
@@ -323,7 +314,7 @@ func startTNService(
 		commonConfigKVMap, _ := dumpCommonConfig(*cfg)
 		s, err := tnservice.NewService(
 			&c,
-			r,
+			mustGetRuntime(cfg),
 			fileService,
 			shutdownC,
 			tnservice.WithConfigData(commonConfigKVMap))
@@ -351,7 +342,7 @@ func startLogService(
 	commonConfigKVMap, _ := dumpCommonConfig(*cfg)
 	s, err := logservice.NewService(lscfg, fileService,
 		shutdownC,
-		logservice.WithRuntime(runtime.ProcessLevelRuntime()),
+		logservice.WithRuntime(runtime.ServiceRuntime(lscfg.UUID)),
 		logservice.WithConfigData(commonConfigKVMap))
 	if err != nil {
 		panic(err)
@@ -387,7 +378,7 @@ func startProxyService(cfg *Config, stopper *stopper.Stopper) error {
 		s, err := proxy.NewServer(
 			ctx,
 			cfg.getProxyConfig(),
-			proxy.WithRuntime(runtime.ProcessLevelRuntime()),
+			proxy.WithRuntime(runtime.ServiceRuntime(cfg.getProxyConfig().UUID)),
 		)
 		if err != nil {
 			panic(err)
@@ -460,12 +451,12 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 	}
 
 	selector := clusterservice.NewSelector().SelectByLabel(SV.LabelSelector, clusterservice.Contain)
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.BackgroundCNSelector, selector)
+	mustGetRuntime(cfg).SetGlobalVariables(runtime.BackgroundCNSelector, selector)
 
 	if !SV.DisableTrace || !SV.DisableMetric {
 		writerFactory = export.GetWriterFactory(fs, UUID, nodeRole, !SV.DisableSqlWriter)
 		initWG.Add(1)
-		collector := export.NewMOCollector(ctx, export.WithOBCollectorConfig(&SV.OBCollectorConfig))
+		collector := export.NewMOCollector(ctx, cfg.mustGetServiceUUID(), export.WithOBCollectorConfig(&SV.OBCollectorConfig))
 		stopper.RunNamedTask("trace", func(ctx context.Context) {
 			err, act := motrace.InitWithConfig(ctx,
 				&SV,

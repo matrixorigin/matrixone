@@ -29,7 +29,7 @@ func handleCoreDump(proc *process.Process, service serviceType,
 	var addrs []string
 
 	qt := proc.GetQueryClient()
-	mc := clusterservice.GetMOCluster()
+	mc := clusterservice.GetMOCluster(proc.Base.LockService.GetConfig().ServiceID)
 	if service == cn {
 		mc.GetCNService(
 			clusterservice.NewSelector(),

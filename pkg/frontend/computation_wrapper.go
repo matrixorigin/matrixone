@@ -19,8 +19,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/mohae/deepcopy"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -32,12 +30,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/mohae/deepcopy"
 )
 
 var (
@@ -58,7 +56,11 @@ type TxnComputationWrapper struct {
 	paramVals []any
 }
 
-func InitTxnComputationWrapper(ses FeSession, stmt tree.Statement, proc *process.Process) *TxnComputationWrapper {
+func InitTxnComputationWrapper(
+	ses FeSession,
+	stmt tree.Statement,
+	proc *process.Process,
+) *TxnComputationWrapper {
 	uuid, _ := uuid.NewV7()
 	return &TxnComputationWrapper{
 		stmt: stmt,
@@ -169,11 +171,6 @@ func (cwft *TxnComputationWrapper) GetColumns(ctx context.Context) ([]interface{
 		columns[i] = c
 	}
 	return columns, err
-}
-
-func GetClock() clock.Clock {
-	rt := runtime.ProcessLevelRuntime()
-	return rt.Clock()
 }
 
 func (cwft *TxnComputationWrapper) GetServerStatus() uint16 {
@@ -457,7 +454,7 @@ func createCompile(
 	// check if it is necessary to initialize the temporary engine
 	if !ses.GetTxnHandler().HasTempEngine() && retCompile.NeedInitTempEngine() {
 		// 0. init memory-non-dist storage
-		err = ses.GetTxnHandler().CreateTempStorage(GetClock())
+		err = ses.GetTxnHandler().CreateTempStorage(runtime.ServiceRuntime(ses.GetService()).Clock())
 		if err != nil {
 			return
 		}

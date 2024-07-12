@@ -320,7 +320,16 @@ func (s *store) createReplica(shard metadata.TNShard) error {
 					continue
 				}
 
-				err = r.start(service.NewTxnService(shard, storage, s.sender, s.cfg.Txn.ZombieTimeout.Duration, s.lockTableAllocator))
+				err = r.start(
+					service.NewTxnService(
+						s.cfg.UUID,
+						shard,
+						storage,
+						s.sender,
+						s.cfg.Txn.ZombieTimeout.Duration,
+						s.lockTableAllocator,
+					),
+				)
 				if err != nil {
 					r.logger.Fatal("start DNShard failed",
 						zap.Error(err))
@@ -396,9 +405,11 @@ func (s *store) initClocker() error {
 
 func (s *store) initLockTableAllocator() error {
 	s.lockTableAllocator = lockservice.NewLockTableAllocator(
+		s.cfg.UUID,
 		s.lockServiceListenAddr(),
 		s.cfg.LockService.KeepBindTimeout.Duration,
-		s.cfg.RPC)
+		s.cfg.RPC,
+	)
 	return nil
 }
 
@@ -436,9 +447,12 @@ func (s *store) initHAKeeperClient() error {
 }
 
 func (s *store) initClusterService() {
-	s.moCluster = clusterservice.NewMOCluster(s.hakeeperClient,
-		s.cfg.Cluster.RefreshInterval.Duration)
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, s.moCluster)
+	s.moCluster = clusterservice.NewMOCluster(
+		s.cfg.UUID,
+		s.hakeeperClient,
+		s.cfg.Cluster.RefreshInterval.Duration,
+	)
+	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(runtime.ClusterService, s.moCluster)
 }
 
 // initQueryService
@@ -489,7 +503,7 @@ func (s *store) handleGetLatestBind(ctx context.Context, req *query.Request, res
 }
 
 func (s *store) setupStatusServer() {
-	ss, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.StatusServer)
+	ss, ok := runtime.ServiceRuntime(s.cfg.UUID).GetGlobalVariables(runtime.StatusServer)
 	if ok {
 		ss.(*status.Server).SetHAKeeperClient(s.hakeeperClient)
 	}

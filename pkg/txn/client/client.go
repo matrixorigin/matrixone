@@ -154,6 +154,7 @@ const (
 )
 
 type txnClient struct {
+	sid                        string
 	clock                      clock.Clock
 	sender                     rpc.TxnSender
 	generator                  TxnIDGenerator
@@ -223,10 +224,13 @@ func (client *txnClient) GetState() TxnState {
 
 // NewTxnClient create a txn client with TxnSender and Options
 func NewTxnClient(
+	sid string,
 	sender rpc.TxnSender,
-	options ...TxnClientCreateOption) TxnClient {
+	options ...TxnClientCreateOption,
+) TxnClient {
 	c := &txnClient{
-		clock:  runtime.ProcessLevelRuntime().Clock(),
+		sid:    sid,
+		clock:  runtime.ServiceRuntime(sid).Clock(),
 		sender: sender,
 	}
 	c.mu.state = paused
@@ -244,7 +248,7 @@ func (client *txnClient) adjust() {
 	if client.generator == nil {
 		client.generator = newUUIDTxnIDGenerator()
 	}
-	if runtime.ProcessLevelRuntime().Clock() == nil {
+	if runtime.ServiceRuntime(client.sid).Clock() == nil {
 		panic("txn clock not set")
 	}
 	if client.limiter == nil {
@@ -258,7 +262,8 @@ func (client *txnClient) adjust() {
 func (client *txnClient) New(
 	ctx context.Context,
 	minTS timestamp.Timestamp,
-	options ...TxnOption) (TxnOperator, error) {
+	options ...TxnOption,
+) (TxnOperator, error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnCreateTotalDurationHistogram.Observe(time.Since(start).Seconds())
@@ -283,10 +288,12 @@ func (client *txnClient) New(
 	}
 
 	op := newTxnOperator(
+		client.sid,
 		client.clock,
 		client.sender,
 		txnMeta,
-		options...)
+		options...,
+	)
 	op.timestampWaiter = client.timestampWaiter
 	op.AppendEventCallback(ClosedEvent,
 		client.updateLastCommitTS,
@@ -363,14 +370,14 @@ func (client *txnClient) WaitLogTailAppliedAt(
 }
 
 func (client *txnClient) getTxnIsolation() txn.TxnIsolation {
-	if v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.TxnIsolation); ok {
+	if v, ok := runtime.ServiceRuntime(client.sid).GetGlobalVariables(runtime.TxnIsolation); ok {
 		return v.(txn.TxnIsolation)
 	}
 	return txn.TxnIsolation_RC
 }
 
 func (client *txnClient) getTxnMode() txn.TxnMode {
-	if v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.TxnMode); ok {
+	if v, ok := runtime.ServiceRuntime(client.sid).GetGlobalVariables(runtime.TxnMode); ok {
 		return v.(txn.TxnMode)
 	}
 	return txn.TxnMode_Pessimistic

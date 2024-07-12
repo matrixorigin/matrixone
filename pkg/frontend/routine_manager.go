@@ -26,8 +26,6 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -37,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"go.uber.org/zap"
 )
 
 type RoutineManager struct {
@@ -245,7 +244,13 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 		logutil.Errorf("failed to get connection ID from HAKeeper: %v", err)
 		return
 	}
-	pro := NewMysqlClientProtocol(connID, rs, int(getGlobalPu().SV.MaxBytesInOutbufToFlush), getGlobalPu().SV)
+	pro := NewMysqlClientProtocol(
+		rm.baseService.ID(),
+		connID,
+		rs,
+		int(getGlobalPu().SV.MaxBytesInOutbufToFlush),
+		getGlobalPu().SV,
+	)
 	routine := NewRoutine(rm.getCtx(), pro, getGlobalPu().SV, rs)
 	v2.CreatedRoutineCounter.Inc()
 
@@ -257,7 +262,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	// XXX MPOOL pass in a nil mpool.
 	// XXX MPOOL can choose to use a Mid sized mpool, if, we know
 	// this mpool will be deleted.  Maybe in the following Closed method.
-	ses := NewSession(cancelCtx, routine.getProtocol(), nil)
+	ses := NewSession(cancelCtx, rm.baseService.ID(), routine.getProtocol(), nil)
 	ses.SetFromRealUser(true)
 	ses.setRoutineManager(rm)
 	ses.setRoutine(routine)

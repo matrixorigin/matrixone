@@ -43,7 +43,7 @@ func NewShardServer(
 	opts ...ServerOption,
 ) ShardServer {
 	cfg.Validate()
-	env := NewEnv(cfg.SelectCNLabel)
+	env := NewEnv(cfg.ServiceID, cfg.SelectCNLabel)
 	s := &server{
 		cfg: cfg,
 		env: env,
