@@ -78,12 +78,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze2(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor(), arg.GetOperatorBase().OpStats)
 	anal.Start()
-	defer func() {
-		anal.Stop()
-		arg.OpStats.UpdateStats(anal.GetAnalyzeInfo())
-	}()
+	defer anal.Stop()
 
 	result := vm.NewCallResult()
 	ap := arg
@@ -182,7 +179,7 @@ func (ctr *container) mergeIntoBatches(src *batch.Batch, proc *process.Process) 
 func (ctr *container) collectBuildBatches(arg *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
 	var currentBatch *batch.Batch
 	for {
-		result, err := arg.Children[0].Call(proc)
+		result, err := vm.ChildrenCall(arg.GetChildren(0), proc, anal)
 		if err != nil {
 			return err
 		}

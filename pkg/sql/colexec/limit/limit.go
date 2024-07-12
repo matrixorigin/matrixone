@@ -51,12 +51,13 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 }
 
 // Call returning only the first n tuples from its input
+// The `limit` operator is used to return a specified number of records from the query results.
+// Can limit the number of rows returned
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	if arg.ctr.limit == 0 {
 		result := vm.NewCallResult()
 		result.Batch = nil
@@ -69,11 +70,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, err
 	}
 
+	anal := proc.GetAnalyze2(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor(), arg.GetOperatorBase().OpStats)
 	anal.Start()
-	defer func() {
-		anal.Stop()
-		arg.OpStats.UpdateStats(anal.GetAnalyzeInfo())
-	}()
+	defer anal.Stop()
 
 	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() {
 		return result, nil

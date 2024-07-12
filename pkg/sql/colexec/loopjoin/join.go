@@ -47,10 +47,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
-
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	
+	anal := proc.GetAnalyze2(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor(), arg.GetOperatorBase().OpStats)
 	anal.Start()
 	defer anal.Stop()
+
 	ctr := arg.ctr
 	result := vm.NewCallResult()
 	var err error

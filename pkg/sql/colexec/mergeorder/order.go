@@ -202,18 +202,20 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	ctr := arg.ctr
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze2(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor(), arg.GetOperatorBase().OpStats)
 	anal.Start()
 	defer anal.Stop()
+
 	result := vm.NewCallResult()
 	var err error
 	for {
 		switch ctr.status {
 		case receiving:
-			result, err = arg.Children[0].Call(proc)
+			result, err = vm.ChildrenCall(arg.GetChildren(0), proc, anal)
 			if err != nil {
 				return result, err
 			}
+
 			if result.Batch == nil {
 				// if number of block is less than 2, no need to do merge sort.
 				ctr.status = normalSending

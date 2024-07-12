@@ -82,17 +82,35 @@ func (a *analyze) Stop() {
 		atomic.AddInt64(&a.analInfo.TimeConsumed, consumeTime)
 		a.analInfo.AddSingleParallelTimeConsumed(a.parallelMajor, a.parallelIdx, consumeTime)
 	}
+
+	if a.op != nil {
+		a.op.TotalWaitTimeConsumed += int64(a.wait / time.Nanosecond)
+		consumeTime := int64((time.Since(a.start) - a.wait - a.childrenCallDuration) / time.Nanosecond)
+		if consumeTime < 0 {
+			panic("Anyway, the time consumed by the operator cannot be less than 0")
+		}
+		a.op.TotalTimeConsumed += consumeTime
+		a.op.CallCount++
+	}
 }
 
 func (a *analyze) Alloc(size int64) {
 	if a.analInfo != nil {
 		atomic.AddInt64(&a.analInfo.MemorySize, size)
 	}
+
+	if a.op != nil {
+		a.op.TotalMemorySize += size
+	}
 }
 
 func (a *analyze) InputBlock() {
 	if a.analInfo != nil {
 		atomic.AddInt64(&a.analInfo.InputBlocks, 1)
+	}
+
+	if a.op != nil {
+		a.op.TotalInputBlocks += 1
 	}
 }
 
@@ -101,12 +119,22 @@ func (a *analyze) Input(bat *batch.Batch, isFirst bool) {
 		atomic.AddInt64(&a.analInfo.InputSize, int64(bat.Size()))
 		atomic.AddInt64(&a.analInfo.InputRows, int64(bat.RowCount()))
 	}
+
+	if a.op != nil {
+		a.op.TotalInputSize += int64(bat.Size())
+		a.op.TotalInputRows += int64(bat.RowCount())
+	}
 }
 
 func (a *analyze) Output(bat *batch.Batch, isLast bool) {
 	if a.analInfo != nil && bat != nil && isLast {
 		atomic.AddInt64(&a.analInfo.OutputSize, int64(bat.Size()))
 		atomic.AddInt64(&a.analInfo.OutputRows, int64(bat.RowCount()))
+	}
+
+	if a.op != nil {
+		a.op.TotalOutputSize += int64(bat.Size())
+		a.op.TotalOutputRows += int64(bat.RowCount())
 	}
 }
 
@@ -122,11 +150,19 @@ func (a *analyze) DiskIO(bat *batch.Batch) {
 	if a.analInfo != nil && bat != nil {
 		atomic.AddInt64(&a.analInfo.DiskIO, int64(bat.Size()))
 	}
+
+	if a.op != nil {
+		a.op.TotalDiskIO += int64(bat.Size())
+	}
 }
 
 func (a *analyze) S3IOByte(bat *batch.Batch) {
 	if a.analInfo != nil && bat != nil {
 		atomic.AddInt64(&a.analInfo.S3IOByte, int64(bat.Size()))
+	}
+
+	if a.op != nil {
+		a.op.TotalS3IOByte += int64(bat.Size())
 	}
 }
 
@@ -134,11 +170,20 @@ func (a *analyze) S3IOInputCount(count int) {
 	if a.analInfo != nil {
 		atomic.AddInt64(&a.analInfo.S3IOInputCount, int64(count))
 	}
+
+	if a.op != nil {
+		a.op.TotalS3InputCount += int64(count)
+	}
+
 }
 
 func (a *analyze) S3IOOutputCount(count int) {
 	if a.analInfo != nil {
 		atomic.AddInt64(&a.analInfo.S3IOOutputCount, int64(count))
+	}
+
+	if a.op != nil {
+		a.op.TotalS3OutputCount += int64(count)
 	}
 }
 
@@ -146,17 +191,29 @@ func (a *analyze) Network(bat *batch.Batch) {
 	if a.analInfo != nil && bat != nil {
 		atomic.AddInt64(&a.analInfo.NetworkIO, int64(bat.Size()))
 	}
+
+	if a.op != nil {
+		a.op.TotalNetworkIO += int64(bat.Size())
+	}
 }
 
 func (a *analyze) AddScanTime(t time.Time) {
 	if a.analInfo != nil {
 		atomic.AddInt64(&a.analInfo.ScanTime, int64(time.Since(t)))
 	}
+
+	if a.op != nil {
+		a.op.TotalScanTime += int64(time.Since(t))
+	}
 }
 
 func (a *analyze) AddInsertTime(t time.Time) {
 	if a.analInfo != nil {
 		atomic.AddInt64(&a.analInfo.InsertTime, int64(time.Since(t)))
+	}
+
+	if a.op != nil {
+		a.op.TotalInsertTime += int64(time.Since(t))
 	}
 }
 

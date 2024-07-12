@@ -43,9 +43,10 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze2(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor(), arg.GetOperatorBase().OpStats)
 	anal.Start()
 	defer anal.Stop()
+
 	result := vm.NewCallResult()
 	ctr := arg.ctr
 	for {
@@ -76,7 +77,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 func (ctr *container) collectBuildBatches(arg *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
 	var currentBatch *batch.Batch
 	for {
-		result, err := arg.Children[0].Call(proc)
+		result, err := vm.ChildrenCall(arg.GetChildren(0), proc, anal)
 		if err != nil {
 			return err
 		}
@@ -89,13 +90,16 @@ func (ctr *container) collectBuildBatches(arg *Argument, proc *process.Process, 
 			proc.PutBatch(currentBatch)
 			continue
 		}
+
 		anal.Input(currentBatch, isFirst)
-		// anal.Alloc(int64(currentBatch.Size())) @todo we need to redesin annalyze memory size
+		anal.Alloc(int64(currentBatch.Size()))
 		ctr.batch, err = ctr.batch.AppendWithCopy(proc.Ctx, proc.Mp(), currentBatch)
 		if err != nil {
 			return err
 		}
 		proc.PutBatch(currentBatch)
+
+		// If read index table data exceeds the UpperLimit, abandon reading data from index table
 		if ctr.batch.RowCount() > int(arg.RuntimeFilterSpec.UpperLimit) {
 			// for index build, can exit early
 			return nil

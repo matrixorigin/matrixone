@@ -87,12 +87,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	ap := arg
 	ctr := ap.ctr
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze2(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor(), arg.GetOperatorBase().OpStats)
 	anal.Start()
-	defer func() {
-		anal.Stop()
-		arg.OpStats.UpdateStats(anal.GetAnalyzeInfo())
-	}()
+	defer anal.Stop()
 
 	if arg.ctr.limit == 0 {
 		result := vm.NewCallResult()

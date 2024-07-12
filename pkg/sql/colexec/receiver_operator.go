@@ -83,7 +83,10 @@ func (r *ReceiverOperator) FreeSingleReg(regIdx int) {
 	w.CleanChannel(r.proc.GetMPool())
 }
 
-// You MUST Init ReceiverOperator with Merge-Type
+// ReceiveFromAllRegs selects and receives a message from all registered channels. if msg's batch is not nil
+// and not Empty, the msg will be processed Batch, And return the message. If msg's Batch is Empty, the method
+// releases msg Batch resources and continue waiting for the next message.
+// WARNING: You MUST Init ReceiverOperator with Merge-Type
 // if you want to use this function
 func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) *process.RegisterMessage {
 	for {
@@ -91,6 +94,8 @@ func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) *process.
 			return process.NormalEndRegisterMessage
 		}
 
+		// reflect.SelectCase performs a multiplexing selection operation, which can be blocked,
+		// Waiting time needs to be recorded
 		start := time.Now()
 		chosen, msg, ok := r.selectFromAllReg()
 		analyze.WaitStop(start)

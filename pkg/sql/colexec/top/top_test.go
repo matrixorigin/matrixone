@@ -134,6 +134,7 @@ func newTestCase(m *mpool.MPool, ts []types.Type, limit int64, fs []*plan.OrderB
 			Limit: plan2.MakePlan2Uint64ConstExprWithType(uint64(limit)),
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
+					OpStats: process.NewOperatorStats("top"),
 					Idx:     0,
 					IsFirst: false,
 					IsLast:  false,

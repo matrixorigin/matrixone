@@ -512,6 +512,7 @@ type analyze struct {
 	start                time.Time
 	wait                 time.Duration
 	analInfo             *AnalyzeInfo
+	op                   *OperatorStats
 	childrenCallDuration time.Duration
 }
 
@@ -645,6 +646,45 @@ func (ps *OperatorStats) UpdateStats(info *AnalyzeInfo) {
 	ps.TotalInsertTime += info.InsertTime
 }
 
+func (ps *OperatorStats) Reset() {
+	ps.CallCount = 0
+	ps.TotalTimeConsumed = 0
+	ps.TotalWaitTimeConsumed = 0
+	ps.TotalMemorySize = 0
+	ps.TotalInputRows = 0
+	ps.TotalOutputRows = 0
+	ps.TotalInputSize = 0
+	ps.TotalInputBlocks = 0
+	ps.TotalOutputSize = 0
+	ps.TotalDiskIO = 0
+	ps.TotalS3IOByte = 0
+	ps.TotalS3InputCount = 0
+	ps.TotalS3OutputCount = 0
+	ps.TotalNetworkIO = 0
+	ps.TotalScanTime = 0
+	ps.TotalInsertTime = 0
+}
+
+// Merge statistical information from another OperatorStats
+func (ps *OperatorStats) Merge(other *OperatorStats) {
+	ps.CallCount += other.CallCount
+	ps.TotalTimeConsumed += other.TotalTimeConsumed
+	ps.TotalWaitTimeConsumed += other.TotalWaitTimeConsumed
+	ps.TotalMemorySize += other.TotalMemorySize
+	ps.TotalInputRows += other.TotalInputRows
+	ps.TotalOutputRows += other.TotalOutputRows
+	ps.TotalInputSize += other.TotalInputSize
+	ps.TotalInputBlocks += other.TotalInputBlocks
+	ps.TotalOutputSize += other.TotalOutputSize
+	ps.TotalDiskIO += other.TotalDiskIO
+	ps.TotalS3IOByte += other.TotalS3IOByte
+	ps.TotalS3InputCount += other.TotalS3InputCount
+	ps.TotalS3OutputCount += other.TotalS3OutputCount
+	ps.TotalNetworkIO += other.TotalNetworkIO
+	ps.TotalScanTime += other.TotalScanTime
+	ps.TotalInsertTime += other.TotalInsertTime
+}
+
 func (ps *OperatorStats) String() string {
 	return fmt.Sprintf(" Call Count: %d, "+
 		"TimeConsumed: %d ms, "+
@@ -676,4 +716,11 @@ func (ps *OperatorStats) String() string {
 		ps.TotalS3OutputCount,
 		ps.TotalNetworkIO,
 		ps.TotalScanTime)
+}
+
+// AnalyzeLockWaitTime encapsulates the logic for recording the waiting time of the analyzer
+func AnalyzeLockWaitTime(analyze Analyze, start time.Time) {
+	if analyze != nil {
+		analyze.WaitStop(start)
+	}
 }
