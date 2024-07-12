@@ -242,8 +242,6 @@ func (page *TransferHashPage) loadTable() *api.HashPageMap {
 	if m != nil {
 		return m
 	}
-	ctx := context.Background()
-	ctx, _ = context.WithTimeout(ctx, 5*time.Second)
 	err := fs.Read(context.Background(), &ioVector)
 	if err != nil {
 		return nil
