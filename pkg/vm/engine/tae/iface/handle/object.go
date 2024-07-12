@@ -53,7 +53,7 @@ func NewEQFilter(v any) *Filter {
 }
 
 type ObjectIt interface {
-	Iterator
+	BtreeIterator
 	GetObject() Object
 }
 

@@ -125,7 +125,7 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 	LastOperator := s.RootOp
 	lastAnalyze := c.proc.GetAnalyze(LastOperator.GetOperatorBase().GetIdx(), -1, false)
 	switch arg := LastOperator.(type) {
-	case *connector.Argument:
+	case *connector.Connector:
 		oldChildren := arg.Children
 		arg.Children = nil
 		arg.AppendChild(fakeValueScanOperator)
@@ -133,7 +133,7 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 			arg.Children = oldChildren
 		}()
 
-	case *dispatch.Argument:
+	case *dispatch.Dispatch:
 		oldChildren := arg.Children
 		arg.Children = nil
 		arg.AppendChild(fakeValueScanOperator)
@@ -143,7 +143,7 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 
 	default:
 		panic(
-			fmt.Sprintf("remote run pipeline has an unexpected operator [id = %d] at last.", LastOperator.GetOperatorBase().Op))
+			fmt.Sprintf("remote run pipeline has an unexpected operator [id = %d] at last.", LastOperator.OpType()))
 	}
 
 	// the last operator is responsible for distributing received data locally. Need Prepare here.

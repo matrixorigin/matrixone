@@ -23,68 +23,68 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(Merge)
 
 type container struct {
 	buf *batch.Batch
 	colexec.ReceiverOperator
 }
 
-type Argument struct {
+type Merge struct {
 	ctr      *container
 	SinkScan bool
 
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (merge *Merge) GetOperatorBase() *vm.OperatorBase {
+	return &merge.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[Merge](
+		func() *Merge {
+			return &Merge{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *Merge) {
+			*a = Merge{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[Merge]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (merge Merge) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *Merge {
+	return reuse.Alloc[Merge](nil)
 }
 
-func (arg *Argument) WithSinkScan(sinkScan bool) *Argument {
-	arg.SinkScan = sinkScan
-	return arg
+func (merge *Merge) WithSinkScan(sinkScan bool) *Merge {
+	merge.SinkScan = sinkScan
+	return merge
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (merge *Merge) Release() {
+	if merge != nil {
+		reuse.Free[Merge](merge, nil)
 	}
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	arg.Free(proc, pipelineFailed, err)
+func (merge *Merge) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	merge.Free(proc, pipelineFailed, err)
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if arg.ctr != nil {
-		arg.ctr.FreeMergeTypeOperator(pipelineFailed)
-		if arg.ctr.buf != nil {
-			arg.ctr.buf.Clean(proc.Mp())
-			arg.ctr.buf = nil
+func (merge *Merge) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if merge.ctr != nil {
+		merge.ctr.FreeMergeTypeOperator(pipelineFailed)
+		if merge.ctr.buf != nil {
+			merge.ctr.buf.Clean(proc.Mp())
+			merge.ctr.buf = nil
 		}
-		arg.ctr = nil
+		merge.ctr = nil
 	}
 
 }

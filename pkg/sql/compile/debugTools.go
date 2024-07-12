@@ -192,20 +192,20 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 
 	// explain the operator information
 	showOperator := func(op vm.Operator, mp map[*process.WaitRegister]int) string {
-		id := op.GetOperatorBase().Op
+		id := op.OpType()
 		name, ok := debugInstructionNames[id]
 		if ok {
 			str := name
 			if id == vm.Connector {
 				var receiver = "unknown"
-				arg := op.(*connector.Argument)
+				arg := op.(*connector.Connector)
 				if receiverId, okk := mp[arg.Reg]; okk {
 					receiver = fmt.Sprintf("%d", receiverId)
 				}
 				str += fmt.Sprintf(" to MergeReceiver %s", receiver)
 			}
 			if id == vm.Dispatch {
-				arg := op.(*dispatch.Argument)
+				arg := op.(*dispatch.Dispatch)
 				chs := ""
 				for i := range arg.LocalRegs {
 					if i != 0 {
