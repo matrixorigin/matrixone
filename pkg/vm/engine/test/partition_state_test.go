@@ -123,11 +123,12 @@ func Test_Append(t *testing.T) {
 		objIt := rel.MakeObjectIt()
 		objCnt := uint32(0)
 		blkCnt := uint32(0)
-		for objIt.Valid() {
+		for objIt.Next() {
 			objCnt++
 			blkCnt += uint32(objIt.GetObject().BlkCnt())
-			objIt.Next()
 		}
+		objIt.Close()
+
 		assert.Equal(t, expectObjCnt, objCnt)
 		assert.Equal(t, expectBlkCnt, blkCnt)
 	}
