@@ -1815,7 +1815,6 @@ func (c *Compile) compileLockOp(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 		return nil, err
 	}
 	lockOpArg.SetBlock(block)
-	lockOpArg.Op = vm.LockOp
 	lockOpArg.Idx = c.anal.curr
 	lockOpArg.IsFirst = currentFirstFlag
 

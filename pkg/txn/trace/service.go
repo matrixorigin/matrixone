@@ -911,7 +911,12 @@ func (w writer) WriteHex(v []byte) {
 	if len(v) == 0 {
 		return
 	}
-	dst := w.dst[:hex.EncodedLen(len(v))]
+
+	n := hex.EncodedLen(len(v))
+	if n > len(w.dst) {
+		w.dst = make([]byte, n)
+	}
+	dst := w.dst[:n]
 	hex.Encode(dst, v)
 	w.buf.MustWrite(dst)
 }
