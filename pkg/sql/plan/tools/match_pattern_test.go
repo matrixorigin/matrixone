@@ -24,65 +24,69 @@ import (
 )
 
 func Test_output(t *testing.T) {
-	pattern :=
+	p :=
 		TNode(plan2.Node_PROJECT,
 			TNode(plan2.Node_TABLE_SCAN).WithAlias(
 				"L_ORDERKEY",
 				TColumnRef("lineitem", "l_orderkey"),
 			),
 		).WithOutputs("L_ORDERKEY")
-	err := AssertPlan(context.Background(), nil, "SELECT l_orderkey FROM lineitem", pattern)
+	err := AssertPlan(context.Background(), nil, "SELECT l_orderkey FROM lineitem", p)
 	assert.Nil(t, err)
 }
 
 func Test_outputTwoColumns(t *testing.T) {
-	p := TOutput([]string{"L_ORDERKEY", "L_ORDERKEY"},
-		TTableScan("lineitem",
-			NewStringMap(
-				NewStringPair("L_ORDERKEY", "l_orderkey"),
+	p :=
+		TOutput([]string{"L_ORDERKEY", "L_ORDERKEY"},
+			TTableScan("lineitem",
+				NewStringMap(
+					NewStringPair("L_ORDERKEY", "l_orderkey"),
+				),
 			),
-		),
-	)
+		)
 	err := AssertPlan(context.Background(), nil, "SELECT l_orderkey, l_orderkey FROM lineitem", p)
 	assert.Nil(t, err)
 }
 
 func Test_outputTwoColumns2(t *testing.T) {
-	p := TOutput([]string{"L_ORDERKEY", "L_ORDERKEY"},
-		TTableScan("lineitem",
-			NewStringMap(
-				NewStringPair("L_ORDERKEY", "l_orderkey"),
+	p :=
+		TOutput([]string{"L_ORDERKEY", "L_ORDERKEY"},
+			TTableScan("lineitem",
+				NewStringMap(
+					NewStringPair("L_ORDERKEY", "l_orderkey"),
+				),
 			),
-		),
-	)
+		)
 	err := AssertPlan(context.Background(), nil,
 		"SELECT l_extendedprice, l_orderkey, l_discount, l_orderkey, l_linenumber FROM lineitem", p)
 	assert.Nil(t, err)
 }
 
 func Test_strictOutput(t *testing.T) {
-	p := TStrictOutput([]string{"L_ORDERKEY", "L_EXTENDEDPRICE"},
-		TTableScan("lineitem",
-			NewStringMap(
-				NewStringPair("L_ORDERKEY", "l_orderkey"),
-				NewStringPair("L_EXTENDEDPRICE", "l_extendedprice"),
+	p :=
+		TStrictOutput([]string{"L_ORDERKEY", "L_EXTENDEDPRICE"},
+			TTableScan("lineitem",
+				NewStringMap(
+					NewStringPair("L_ORDERKEY", "l_orderkey"),
+					NewStringPair("L_EXTENDEDPRICE", "l_extendedprice"),
+				),
 			),
-		),
-	)
+		)
 	err := AssertPlan(context.Background(), nil,
 		"SELECT  l_orderkey, l_extendedprice FROM lineitem", p)
 	assert.Nil(t, err)
 }
 
 func Test_strictTableScan(t *testing.T) {
-	p := TOutput([]string{"L_ORDERKEY", "L_EXTENDEDPRICE"},
-		TStrictTableScan("lineitem",
-			NewStringMap(
-				NewStringPair("L_ORDERKEY", "l_orderkey"),
-				NewStringPair("L_EXTENDEDPRICE", "l_extendedprice"),
+	p :=
+		TOutput([]string{"L_ORDERKEY", "L_EXTENDEDPRICE"},
+			TStrictTableScan("lineitem",
+				NewStringMap(
+					NewStringPair("L_ORDERKEY", "l_orderkey"),
+					NewStringPair("L_EXTENDEDPRICE", "l_extendedprice"),
+				),
 			),
-		),
-	)
+		)
 	err := AssertPlan(context.Background(), nil,
 		"SELECT  l_orderkey, l_extendedprice FROM lineitem", p)
 	assert.Nil(t, err)
@@ -124,6 +128,42 @@ func Test_aliasExpr(t *testing.T) {
 	p :=
 		TProject(
 			NewAssignMap(NewAssignPair("EXPR", TExpr("1 + L_ORDERKEY"))),
+			TTableScan("lineitem",
+				NewStringMap(
+					NewStringPair("L_ORDERKEY", "l_orderkey"),
+				),
+			),
+		)
+	err := AssertPlan(context.Background(), nil,
+		"SELECT  l_orderkey, 1 + l_orderkey FROM lineitem", p)
+	assert.Nil(t, err)
+}
+
+func Test_strictProject(t *testing.T) {
+	p :=
+		TStrictProject(
+			NewAssignMap(
+				NewAssignPair("EXPR", TExpr("1 + L_ORDERKEY")),
+				NewAssignPair("L_ORDERKEY", TExpr("L_ORDERKEY")),
+			),
+			TTableScan("lineitem",
+				NewStringMap(
+					NewStringPair("L_ORDERKEY", "l_orderkey"),
+				),
+			),
+		)
+	err := AssertPlan(context.Background(), nil,
+		"SELECT  l_orderkey, 1 + l_orderkey FROM lineitem", p)
+	assert.Nil(t, err)
+}
+
+func Test_identityAlias(t *testing.T) {
+	p :=
+		TProject(
+			NewAssignMap(
+				NewAssignPair("L_ORDERKEY", TExpr("L_ORDERKEY")),
+				NewAssignPair("EXPR", TExpr("1 + L_ORDERKEY")),
+			),
 			TTableScan("lineitem",
 				NewStringMap(
 					NewStringPair("L_ORDERKEY", "l_orderkey"),

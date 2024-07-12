@@ -274,20 +274,30 @@ func NewExprMatcher(sql string) *ExprMatcher {
 	}
 }
 
-func (matcher *ExprMatcher) GetAssignedVar(node *plan2.Node, alias plan.UnorderedMap[string, string]) (*SColDef, error) {
+func (matcher *ExprMatcher) GetAssignedVar(node *plan2.Node, aliases plan.UnorderedMap[string, string]) (*SColDef, error) {
 	var res *SColDef
 	checkedExprs := make([]*plan2.Expr, 0)
 	for _, expr := range node.ProjectList {
-		eChecker := &ExprChecker{}
+		eChecker := &ExprChecker{
+			Aliases: aliases,
+		}
 		check, err := eChecker.Check(matcher.Expr.Expr, expr)
 		if err != nil {
 			return nil, err
 		}
 		if check {
-			res = &SColDef{
-				Name: expr.String(),
-				Type: expr.GetTyp(),
+			if expr.GetCol() != nil {
+				res = &SColDef{
+					Name: strings.Split(expr.GetCol().Name, ".")[1],
+					Type: expr.GetTyp(),
+				}
+			} else {
+				res = &SColDef{
+					Name: expr.String(),
+					Type: expr.GetTyp(),
+				}
 			}
+
 			checkedExprs = append(checkedExprs, expr)
 		}
 	}

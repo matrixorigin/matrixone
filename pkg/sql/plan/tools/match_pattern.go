@@ -100,6 +100,16 @@ func TProject(assigns plan.UnorderedMap[string, *ExprMatcher], child *MatchPatte
 	return ret
 }
 
+func TStrictProject(assigns plan.UnorderedMap[string, *ExprMatcher], child *MatchPattern) *MatchPattern {
+	ret := TProject(assigns, child)
+	matchers := make([]RValueMatcher, 0)
+	for _, matcher := range assigns {
+		matchers = append(matchers, matcher)
+	}
+
+	return ret.WithExactAssignedOutputs(matchers).WithExactAssignments(matchers)
+}
+
 func TExpr(e string) *ExprMatcher {
 	return NewExprMatcher(e)
 }
@@ -131,10 +141,45 @@ func (pattern *MatchPattern) WithExactAssignedOutputs(expectedAliases []RValueMa
 		ret := make([]SColDef, 0)
 		for _, expr := range node.ProjectList {
 			col := expr.GetCol()
-			ret = append(ret, SColDef{
-				Name: strings.Split(col.Name, ".")[1],
-				Type: expr.GetTyp(),
-			})
+			if col != nil {
+				ret = append(ret, SColDef{
+					Name: strings.Split(col.Name, ".")[1],
+					Type: expr.GetTyp(),
+				})
+			} else {
+				ret = append(ret, SColDef{
+					Name: expr.String(),
+					Type: expr.GetTyp(),
+				})
+			}
+		}
+		return ret
+	}
+	pattern.Matchers = append(pattern.Matchers,
+		&AssignedSymbolsMatcher{
+			GetFunc:          fun,
+			ExpectedMatchers: expectedAliases,
+		},
+	)
+	return pattern
+}
+
+func (pattern *MatchPattern) WithExactAssignments(expectedAliases []RValueMatcher) *MatchPattern {
+	fun := func(builder *plan.QueryBuilder, node *plan2.Node) []SColDef {
+		ret := make([]SColDef, 0)
+		for _, expr := range node.ProjectList {
+			col := expr.GetCol()
+			if col != nil {
+				ret = append(ret, SColDef{
+					Name: strings.Split(col.Name, ".")[1],
+					Type: expr.GetTyp(),
+				})
+			} else {
+				ret = append(ret, SColDef{
+					Name: expr.String(),
+					Type: expr.GetTyp(),
+				})
+			}
 		}
 		return ret
 	}
@@ -425,6 +470,9 @@ func MergeAliases(ctx context.Context,
 
 func Insert(ctx context.Context, aliases plan.UnorderedMap[string, string], k, v string) error {
 	ok, ev := aliases.Find(k)
+	if ok && ev == v {
+		return nil
+	}
 	if ok {
 		return moerr.NewInternalError(ctx, " %s -> %s already exists", k, ev)
 	}

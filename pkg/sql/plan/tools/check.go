@@ -17,6 +17,7 @@ package tools
 import (
 	"context"
 	"go/constant"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -24,6 +25,7 @@ import (
 )
 
 type ExprChecker struct {
+	Aliases plan2.UnorderedMap[string, string]
 }
 
 func (checker *ExprChecker) Check(astExpr tree.Expr, expr *plan2.Expr) (bool, error) {
@@ -46,6 +48,17 @@ func (checker *ExprChecker) Check(astExpr tree.Expr, expr *plan2.Expr) (bool, er
 			return false, nil
 		}
 		return checker.checkBinaryExpr(exprImpl, expr)
+	case *tree.UnresolvedName:
+		ok, eName := checker.Aliases.Find(exprImpl.ColNameOrigin())
+		if !ok {
+			return false, nil
+		}
+		colRef := expr.GetCol()
+		if colRef == nil {
+			return false, nil
+		}
+		aName := strings.Split(colRef.Name, ".")[1]
+		return eName == aName, nil
 	default:
 		return false, moerr.NewInternalError(context.Background(), "unsupport expr")
 	}
