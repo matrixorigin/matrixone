@@ -59,7 +59,7 @@ type DataFactory interface {
 }
 
 type Catalog struct {
-	*IDAlloctor
+	*IDAllocator
 	*sync.RWMutex
 
 	usageMemo any
@@ -72,11 +72,11 @@ type Catalog struct {
 
 func MockCatalog() *Catalog {
 	catalog := &Catalog{
-		RWMutex:    new(sync.RWMutex),
-		IDAlloctor: NewIDAllocator(),
-		entries:    make(map[uint64]*common.GenericDLNode[*DBEntry]),
-		nameNodes:  make(map[string]*nodeList[*DBEntry]),
-		link:       common.NewGenericSortedDList((*DBEntry).Less),
+		RWMutex:     new(sync.RWMutex),
+		IDAllocator: NewIDAllocator(),
+		entries:     make(map[uint64]*common.GenericDLNode[*DBEntry]),
+		nameNodes:   make(map[string]*nodeList[*DBEntry]),
+		link:        common.NewGenericSortedDList((*DBEntry).Less),
 	}
 	catalog.InitSystemDB()
 	return catalog
@@ -84,12 +84,12 @@ func MockCatalog() *Catalog {
 
 func OpenCatalog(usageMemo any) (*Catalog, error) {
 	catalog := &Catalog{
-		RWMutex:    new(sync.RWMutex),
-		IDAlloctor: NewIDAllocator(),
-		entries:    make(map[uint64]*common.GenericDLNode[*DBEntry]),
-		nameNodes:  make(map[string]*nodeList[*DBEntry]),
-		link:       common.NewGenericSortedDList((*DBEntry).Less),
-		usageMemo:  usageMemo,
+		RWMutex:     new(sync.RWMutex),
+		IDAllocator: NewIDAllocator(),
+		entries:     make(map[uint64]*common.GenericDLNode[*DBEntry]),
+		nameNodes:   make(map[string]*nodeList[*DBEntry]),
+		link:        common.NewGenericSortedDList((*DBEntry).Less),
+		usageMemo:   usageMemo,
 	}
 	catalog.InitSystemDB()
 	return catalog, nil
@@ -160,7 +160,7 @@ func (catalog *Catalog) GCByTS(ctx context.Context, ts types.TS) {
 		return nil
 	}
 	processor.TombstoneFn = func(t data.Tombstone) error {
-		obj := t.GetObject().(*ObjectEntry)
+		obj := t.GetObject().(*ObjectEntry).GetLatestNode()
 		needGC := obj.DeleteBefore(ts) && !obj.InMemoryDeletesExistedLocked()
 		needGC = needGC && obj.IsDeletesFlushedBefore(ts)
 		if needGC {
