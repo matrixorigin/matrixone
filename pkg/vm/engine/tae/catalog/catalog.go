@@ -160,7 +160,7 @@ func (catalog *Catalog) GCByTS(ctx context.Context, ts types.TS) {
 		return nil
 	}
 	processor.TombstoneFn = func(t data.Tombstone) error {
-		obj := t.GetObject().(*ObjectEntry)
+		obj := t.GetObject().(*ObjectEntry).GetLatestNode()
 		needGC := obj.DeleteBefore(ts) && !obj.InMemoryDeletesExistedLocked()
 		needGC = needGC && obj.IsDeletesFlushedBefore(ts)
 		if needGC {
