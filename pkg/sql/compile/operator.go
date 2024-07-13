@@ -109,9 +109,9 @@ func init() {
 	constBat.SetRowCount(1)
 }
 
-func dupInstruction(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process.WaitRegister, index int) vm.Instruction {
+func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process.WaitRegister, index int) vm.Operator {
 	srcOpBase := sourceOp.GetOperatorBase()
-	res := vm.Instruction{
+	info := vm.OperatorInfo{
 		Idx:         srcOpBase.Idx,
 		IsFirst:     srcOpBase.IsFirst,
 		IsLast:      srcOpBase.IsLast,
@@ -123,271 +123,312 @@ func dupInstruction(sourceOp vm.Operator, regMap map[*process.WaitRegister]*proc
 	switch sourceOp.OpType() {
 	case vm.Anti:
 		t := sourceOp.(*anti.AntiJoin)
-		arg := anti.NewArgument()
-		arg.Cond = t.Cond
-		arg.Typs = t.Typs
-		arg.Conditions = t.Conditions
-		arg.Result = t.Result
-		arg.HashOnPK = t.HashOnPK
-		arg.IsShuffle = t.IsShuffle
-		arg.RuntimeFilterSpecs = t.RuntimeFilterSpecs
-		res.Arg = arg
+		op := anti.NewArgument()
+		op.Cond = t.Cond
+		op.Typs = t.Typs
+		op.Conditions = t.Conditions
+		op.Result = t.Result
+		op.HashOnPK = t.HashOnPK
+		op.IsShuffle = t.IsShuffle
+		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
+		op.SetInfo(&info)
+		return op
 	case vm.Group:
 		t := sourceOp.(*group.Group)
-		arg := group.NewArgument()
-		arg.IsShuffle = t.IsShuffle
-		arg.PreAllocSize = t.PreAllocSize
-		arg.NeedEval = t.NeedEval
-		arg.Exprs = t.Exprs
-		arg.Types = t.Types
-		arg.Aggs = t.Aggs
-		res.Arg = arg
+		op := group.NewArgument()
+		op.IsShuffle = t.IsShuffle
+		op.PreAllocSize = t.PreAllocSize
+		op.NeedEval = t.NeedEval
+		op.Exprs = t.Exprs
+		op.Types = t.Types
+		op.Aggs = t.Aggs
+		op.SetInfo(&info)
+		return op
 	case vm.Sample:
 		t := sourceOp.(*sample.Sample)
-		res.Arg = t.SampleDup()
+		op := t.SampleDup()
+		op.SetInfo(&info)
+		return op
 	case vm.Join:
 		t := sourceOp.(*join.InnerJoin)
-		arg := join.NewArgument()
-		arg.Result = t.Result
-		arg.Cond = t.Cond
-		arg.Typs = t.Typs
-		arg.Conditions = t.Conditions
-		arg.RuntimeFilterSpecs = t.RuntimeFilterSpecs
-		arg.HashOnPK = t.HashOnPK
-		arg.IsShuffle = t.IsShuffle
-		res.Arg = arg
+		op := join.NewArgument()
+		op.Result = t.Result
+		op.Cond = t.Cond
+		op.Typs = t.Typs
+		op.Conditions = t.Conditions
+		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
+		op.HashOnPK = t.HashOnPK
+		op.IsShuffle = t.IsShuffle
+		op.SetInfo(&info)
+		return op
 	case vm.Left:
 		t := sourceOp.(*left.LeftJoin)
-		arg := left.NewArgument()
-		arg.Cond = t.Cond
-		arg.Result = t.Result
-		arg.Typs = t.Typs
-		arg.Conditions = t.Conditions
-		arg.RuntimeFilterSpecs = t.RuntimeFilterSpecs
-		arg.HashOnPK = t.HashOnPK
-		arg.IsShuffle = t.IsShuffle
-		res.Arg = arg
+		op := left.NewArgument()
+		op.Cond = t.Cond
+		op.Result = t.Result
+		op.Typs = t.Typs
+		op.Conditions = t.Conditions
+		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
+		op.HashOnPK = t.HashOnPK
+		op.IsShuffle = t.IsShuffle
+		op.SetInfo(&info)
+		return op
 	case vm.Right:
 		t := sourceOp.(*right.RightJoin)
-		arg := right.NewArgument()
-		arg.Cond = t.Cond
-		arg.Result = t.Result
-		arg.RightTypes = t.RightTypes
-		arg.LeftTypes = t.LeftTypes
-		arg.Conditions = t.Conditions
-		arg.RuntimeFilterSpecs = t.RuntimeFilterSpecs
-		arg.HashOnPK = t.HashOnPK
-		arg.IsShuffle = t.IsShuffle
-		res.Arg = arg
+		op := right.NewArgument()
+		op.Cond = t.Cond
+		op.Result = t.Result
+		op.RightTypes = t.RightTypes
+		op.LeftTypes = t.LeftTypes
+		op.Conditions = t.Conditions
+		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
+		op.HashOnPK = t.HashOnPK
+		op.IsShuffle = t.IsShuffle
+		op.SetInfo(&info)
+		return op
 	case vm.RightSemi:
 		t := sourceOp.(*rightsemi.RightSemi)
-		arg := rightsemi.NewArgument()
-		arg.Cond = t.Cond
-		arg.Result = t.Result
-		arg.RightTypes = t.RightTypes
-		arg.Conditions = t.Conditions
-		arg.RuntimeFilterSpecs = t.RuntimeFilterSpecs
-		arg.HashOnPK = t.HashOnPK
-		arg.IsShuffle = t.IsShuffle
-		res.Arg = arg
+		op := rightsemi.NewArgument()
+		op.Cond = t.Cond
+		op.Result = t.Result
+		op.RightTypes = t.RightTypes
+		op.Conditions = t.Conditions
+		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
+		op.HashOnPK = t.HashOnPK
+		op.IsShuffle = t.IsShuffle
+		op.SetInfo(&info)
+		return op
 	case vm.RightAnti:
 		t := sourceOp.(*rightanti.RightAnti)
-		arg := rightanti.NewArgument()
-		arg.Cond = t.Cond
-		arg.Result = t.Result
-		arg.RightTypes = t.RightTypes
-		arg.Conditions = t.Conditions
-		arg.RuntimeFilterSpecs = t.RuntimeFilterSpecs
-		arg.HashOnPK = t.HashOnPK
-		arg.IsShuffle = t.IsShuffle
-		res.Arg = arg
+		op := rightanti.NewArgument()
+		op.Cond = t.Cond
+		op.Result = t.Result
+		op.RightTypes = t.RightTypes
+		op.Conditions = t.Conditions
+		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
+		op.HashOnPK = t.HashOnPK
+		op.IsShuffle = t.IsShuffle
+		op.SetInfo(&info)
+		return op
 	case vm.Limit:
 		t := sourceOp.(*limit.Limit)
-		arg := limit.NewArgument()
-		arg.LimitExpr = t.LimitExpr
-		res.Arg = arg
+		op := limit.NewArgument()
+		op.LimitExpr = t.LimitExpr
+		op.SetInfo(&info)
+		return op
 	case vm.LoopAnti:
 		t := sourceOp.(*loopanti.LoopAnti)
-		arg := loopanti.NewArgument()
-		arg.Result = t.Result
-		arg.Cond = t.Cond
-		arg.Typs = t.Typs
-		res.Arg = arg
+		op := loopanti.NewArgument()
+		op.Result = t.Result
+		op.Cond = t.Cond
+		op.Typs = t.Typs
+		op.SetInfo(&info)
+		return op
 	case vm.LoopJoin:
 		t := sourceOp.(*loopjoin.LoopJoin)
-		arg := loopjoin.NewArgument()
-		arg.Result = t.Result
-		arg.Cond = t.Cond
-		arg.Typs = t.Typs
-		res.Arg = arg
+		op := loopjoin.NewArgument()
+		op.Result = t.Result
+		op.Cond = t.Cond
+		op.Typs = t.Typs
+		op.SetInfo(&info)
+		return op
 	case vm.IndexJoin:
 		t := sourceOp.(*indexjoin.IndexJoin)
-		arg := indexjoin.NewArgument()
-		arg.Result = t.Result
-		arg.Typs = t.Typs
-		arg.RuntimeFilterSpecs = t.RuntimeFilterSpecs
-		res.Arg = arg
+		op := indexjoin.NewArgument()
+		op.Result = t.Result
+		op.Typs = t.Typs
+		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
+		op.SetInfo(&info)
+		return op
 	case vm.LoopLeft:
 		t := sourceOp.(*loopleft.LoopLeft)
-		arg := loopleft.NewArgument()
-		arg.Cond = t.Cond
-		arg.Typs = t.Typs
-		arg.Result = t.Result
-		res.Arg = arg
+		op := loopleft.NewArgument()
+		op.Cond = t.Cond
+		op.Typs = t.Typs
+		op.Result = t.Result
+		op.SetInfo(&info)
+		return op
 	case vm.LoopSemi:
 		t := sourceOp.(*loopsemi.LoopSemi)
-		arg := loopsemi.NewArgument()
-		arg.Result = t.Result
-		arg.Cond = t.Cond
-		arg.Typs = t.Typs
-		res.Arg = arg
+		op := loopsemi.NewArgument()
+		op.Result = t.Result
+		op.Cond = t.Cond
+		op.Typs = t.Typs
+		op.SetInfo(&info)
+		return op
 	case vm.LoopSingle:
 		t := sourceOp.(*loopsingle.LoopSingle)
-		arg := loopsingle.NewArgument()
-		arg.Result = t.Result
-		arg.Cond = t.Cond
-		arg.Typs = t.Typs
-		res.Arg = arg
+		op := loopsingle.NewArgument()
+		op.Result = t.Result
+		op.Cond = t.Cond
+		op.Typs = t.Typs
+		op.SetInfo(&info)
+		return op
 	case vm.LoopMark:
 		t := sourceOp.(*loopmark.LoopMark)
-		arg := loopmark.NewArgument()
-		arg.Result = t.Result
-		arg.Cond = t.Cond
-		arg.Typs = t.Typs
-		res.Arg = arg
+		op := loopmark.NewArgument()
+		op.Result = t.Result
+		op.Cond = t.Cond
+		op.Typs = t.Typs
+		op.SetInfo(&info)
+		return op
 	case vm.Offset:
 		t := sourceOp.(*offset.Offset)
-		arg := offset.NewArgument()
-		arg.OffsetExpr = t.OffsetExpr
-		res.Arg = arg
+		op := offset.NewArgument()
+		op.OffsetExpr = t.OffsetExpr
+		op.SetInfo(&info)
+		return op
 	case vm.Order:
 		t := sourceOp.(*order.Order)
-		arg := order.NewArgument()
-		arg.OrderBySpec = t.OrderBySpec
-		res.Arg = arg
+		op := order.NewArgument()
+		op.OrderBySpec = t.OrderBySpec
+		op.SetInfo(&info)
+		return op
 	case vm.Product:
 		t := sourceOp.(*product.Product)
-		arg := product.NewArgument()
-		arg.Result = t.Result
-		arg.Typs = t.Typs
-		arg.IsShuffle = t.IsShuffle
-		res.Arg = arg
+		op := product.NewArgument()
+		op.Result = t.Result
+		op.Typs = t.Typs
+		op.IsShuffle = t.IsShuffle
+		op.SetInfo(&info)
+		return op
 	case vm.ProductL2:
 		t := sourceOp.(*productl2.Productl2)
-		arg := productl2.NewArgument()
-		arg.Result = t.Result
-		arg.Typs = t.Typs
-		arg.OnExpr = t.OnExpr
-		res.Arg = arg
+		op := productl2.NewArgument()
+		op.Result = t.Result
+		op.Typs = t.Typs
+		op.OnExpr = t.OnExpr
+		op.SetInfo(&info)
+		return op
 	case vm.Projection:
 		t := sourceOp.(*projection.Projection)
-		arg := projection.NewArgument()
-		arg.Es = t.Es
-		res.Arg = arg
+		op := projection.NewArgument()
+		op.Es = t.Es
+		op.SetInfo(&info)
+		return op
 	case vm.Filter:
 		t := sourceOp.(*filter.Filter)
-		arg := filter.NewArgument()
-		arg.E = t.GetExeExpr()
-		if arg.E == nil {
-			arg.E = t.E
+		op := filter.NewArgument()
+		op.E = t.GetExeExpr()
+		if op.E == nil {
+			op.E = t.E
 		}
-		res.Arg = arg
+		op.SetInfo(&info)
+		return op
 	case vm.Semi:
 		t := sourceOp.(*semi.SemiJoin)
-		arg := semi.NewArgument()
-		arg.Result = t.Result
-		arg.Cond = t.Cond
-		arg.Typs = t.Typs
-		arg.Conditions = t.Conditions
-		arg.RuntimeFilterSpecs = t.RuntimeFilterSpecs
-		arg.HashOnPK = t.HashOnPK
-		arg.IsShuffle = t.IsShuffle
-		res.Arg = arg
+		op := semi.NewArgument()
+		op.Result = t.Result
+		op.Cond = t.Cond
+		op.Typs = t.Typs
+		op.Conditions = t.Conditions
+		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
+		op.HashOnPK = t.HashOnPK
+		op.IsShuffle = t.IsShuffle
+		op.SetInfo(&info)
+		return op
 	case vm.Single:
 		t := sourceOp.(*single.SingleJoin)
-		arg := single.NewArgument()
-		arg.Result = t.Result
-		arg.Cond = t.Cond
-		arg.Typs = t.Typs
-		arg.Conditions = t.Conditions
-		arg.RuntimeFilterSpecs = t.RuntimeFilterSpecs
-		arg.HashOnPK = t.HashOnPK
-		res.Arg = arg
+		op := single.NewArgument()
+		op.Result = t.Result
+		op.Cond = t.Cond
+		op.Typs = t.Typs
+		op.Conditions = t.Conditions
+		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
+		op.HashOnPK = t.HashOnPK
+		op.SetInfo(&info)
+		return op
 	case vm.Top:
 		t := sourceOp.(*top.Top)
-		arg := top.NewArgument()
-		arg.Limit = t.Limit
-		arg.TopValueTag = t.TopValueTag
-		arg.Fs = t.Fs
-		res.Arg = arg
+		op := top.NewArgument()
+		op.Limit = t.Limit
+		op.TopValueTag = t.TopValueTag
+		op.Fs = t.Fs
+		op.SetInfo(&info)
+		return op
 	case vm.Intersect:
-		arg := intersect.NewArgument()
-		res.Arg = arg
+		op := intersect.NewArgument()
+		op.SetInfo(&info)
+		return op
 	case vm.Minus: // 2
-		arg := minus.NewArgument()
-		res.Arg = arg
+		op := minus.NewArgument()
+		op.SetInfo(&info)
+		return op
 	case vm.IntersectAll:
-		arg := intersectall.NewArgument()
-		res.Arg = arg
+		op := intersectall.NewArgument()
+		op.SetInfo(&info)
+		return op
 	case vm.Merge:
 		t := sourceOp.(*merge.Merge)
-		arg := merge.NewArgument()
-		arg.SinkScan = t.SinkScan
-		res.Arg = arg
+		op := merge.NewArgument()
+		op.SinkScan = t.SinkScan
+		op.SetInfo(&info)
+		return op
 	case vm.MergeRecursive:
-		res.Arg = mergerecursive.NewArgument()
+		op := mergerecursive.NewArgument()
+		op.SetInfo(&info)
+		return op
 	case vm.MergeCTE:
-		res.Arg = mergecte.NewArgument()
+		op := mergecte.NewArgument()
+		op.SetInfo(&info)
+		return op
 	case vm.MergeGroup:
 		t := sourceOp.(*mergegroup.MergeGroup)
-		arg := mergegroup.NewArgument()
-		arg.NeedEval = t.NeedEval
-		arg.PartialResults = t.PartialResults
-		arg.PartialResultTypes = t.PartialResultTypes
-		res.Arg = arg
+		op := mergegroup.NewArgument()
+		op.NeedEval = t.NeedEval
+		op.PartialResults = t.PartialResults
+		op.PartialResultTypes = t.PartialResultTypes
+		op.SetInfo(&info)
+		return op
 	case vm.MergeLimit:
 		t := sourceOp.(*mergelimit.MergeLimit)
-		arg := mergelimit.NewArgument()
-		arg.Limit = t.Limit
-		res.Arg = arg
+		op := mergelimit.NewArgument()
+		op.Limit = t.Limit
+		op.SetInfo(&info)
+		return op
 	case vm.MergeOffset:
 		t := sourceOp.(*mergeoffset.MergeOffset)
-		arg := mergeoffset.NewArgument()
-		arg.Offset = t.Offset
-		res.Arg = arg
+		op := mergeoffset.NewArgument()
+		op.Offset = t.Offset
+		op.SetInfo(&info)
+		return op
 	case vm.MergeTop:
 		t := sourceOp.(*mergetop.MergeTop)
-		arg := mergetop.NewArgument()
-		arg.Limit = t.Limit
-		arg.Fs = t.Fs
-		res.Arg = arg
+		op := mergetop.NewArgument()
+		op.Limit = t.Limit
+		op.Fs = t.Fs
+		op.SetInfo(&info)
+		return op
 	case vm.MergeOrder:
 		t := sourceOp.(*mergeorder.MergeOrder)
-		arg := mergeorder.NewArgument()
-		arg.OrderBySpecs = t.OrderBySpecs
-		res.Arg = arg
+		op := mergeorder.NewArgument()
+		op.OrderBySpecs = t.OrderBySpecs
+		op.SetInfo(&info)
+		return op
 	case vm.Mark:
 		t := sourceOp.(*mark.MarkJoin)
-		arg := mark.NewArgument()
-		arg.Result = t.Result
-		arg.Conditions = t.Conditions
-		arg.Typs = t.Typs
-		arg.Cond = t.Cond
-		arg.OnList = t.OnList
-		arg.HashOnPK = t.HashOnPK
-		res.Arg = arg
+		op := mark.NewArgument()
+		op.Result = t.Result
+		op.Conditions = t.Conditions
+		op.Typs = t.Typs
+		op.Cond = t.Cond
+		op.OnList = t.OnList
+		op.HashOnPK = t.HashOnPK
+		op.SetInfo(&info)
+		return op
 	case vm.TableFunction:
 		t := sourceOp.(*table_function.TableFunction)
-		arg := table_function.NewArgument()
-		arg.FuncName = t.FuncName
-		arg.Args = t.Args
-		arg.Rets = t.Rets
-		arg.Attrs = t.Attrs
-		arg.Params = t.Params
-		res.Arg = arg
+		op := table_function.NewArgument()
+		op.FuncName = t.FuncName
+		op.Args = t.Args
+		op.Rets = t.Rets
+		op.Attrs = t.Attrs
+		op.Params = t.Params
+		op.SetInfo(&info)
+		return op
 	case vm.External:
 		t := sourceOp.(*external.External)
-		res.Arg = external.NewArgument().WithEs(
+		op := external.NewArgument().WithEs(
 			&external.ExternalParam{
 				ExParamConst: external.ExParamConst{
 					Attrs:           t.Es.Attrs,
@@ -413,113 +454,126 @@ func dupInstruction(sourceOp vm.Operator, regMap map[*process.WaitRegister]*proc
 				},
 			},
 		)
+		op.SetInfo(&info)
+		return op
 	case vm.Source:
 		t := sourceOp.(*source.Source)
-		arg := source.NewArgument()
-		arg.TblDef = t.TblDef
-		arg.Limit = t.Limit
-		arg.Offset = t.Offset
-		arg.Configs = t.Configs
-		res.Arg = arg
+		op := source.NewArgument()
+		op.TblDef = t.TblDef
+		op.Limit = t.Limit
+		op.Offset = t.Offset
+		op.Configs = t.Configs
+		op.SetInfo(&info)
+		return op
 	case vm.Connector:
 		ok := false
 		if regMap != nil {
-			arg := connector.NewArgument()
+			op := connector.NewArgument()
 			sourceReg := sourceOp.(*connector.Connector).Reg
-			if arg.Reg, ok = regMap[sourceReg]; !ok {
+			if op.Reg, ok = regMap[sourceReg]; !ok {
 				panic("nonexistent wait register")
 			}
-			res.Arg = arg
+			op.SetInfo(&info)
+			return op
 		}
 	case vm.Shuffle:
 		sourceArg := sourceOp.(*shuffle.Shuffle)
-		arg := shuffle.NewArgument()
-		arg.ShuffleType = sourceArg.ShuffleType
-		arg.ShuffleColIdx = sourceArg.ShuffleColIdx
-		arg.ShuffleColMax = sourceArg.ShuffleColMax
-		arg.ShuffleColMin = sourceArg.ShuffleColMin
-		arg.AliveRegCnt = sourceArg.AliveRegCnt
-		arg.ShuffleRangeInt64 = sourceArg.ShuffleRangeInt64
-		arg.ShuffleRangeUint64 = sourceArg.ShuffleRangeUint64
-		arg.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(sourceArg.RuntimeFilterSpec)
-		res.Arg = arg
+		op := shuffle.NewArgument()
+		op.ShuffleType = sourceArg.ShuffleType
+		op.ShuffleColIdx = sourceArg.ShuffleColIdx
+		op.ShuffleColMax = sourceArg.ShuffleColMax
+		op.ShuffleColMin = sourceArg.ShuffleColMin
+		op.AliveRegCnt = sourceArg.AliveRegCnt
+		op.ShuffleRangeInt64 = sourceArg.ShuffleRangeInt64
+		op.ShuffleRangeUint64 = sourceArg.ShuffleRangeUint64
+		op.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(sourceArg.RuntimeFilterSpec)
+		op.SetInfo(&info)
+		return op
 	case vm.Dispatch:
 		ok := false
 		if regMap != nil {
 			sourceArg := sourceOp.(*dispatch.Dispatch)
-			arg := dispatch.NewArgument()
-			arg.IsSink = sourceArg.IsSink
-			arg.RecSink = sourceArg.RecSink
-			arg.FuncId = sourceArg.FuncId
-			arg.LocalRegs = make([]*process.WaitRegister, len(sourceArg.LocalRegs))
-			arg.RemoteRegs = make([]colexec.ReceiveInfo, len(sourceArg.RemoteRegs))
-			for j := range arg.LocalRegs {
+			op := dispatch.NewArgument()
+			op.IsSink = sourceArg.IsSink
+			op.RecSink = sourceArg.RecSink
+			op.FuncId = sourceArg.FuncId
+			op.LocalRegs = make([]*process.WaitRegister, len(sourceArg.LocalRegs))
+			op.RemoteRegs = make([]colexec.ReceiveInfo, len(sourceArg.RemoteRegs))
+			for j := range op.LocalRegs {
 				sourceReg := sourceArg.LocalRegs[j]
-				if arg.LocalRegs[j], ok = regMap[sourceReg]; !ok {
+				if op.LocalRegs[j], ok = regMap[sourceReg]; !ok {
 					panic("nonexistent wait register")
 				}
 			}
-			for j := range arg.RemoteRegs {
-				arg.RemoteRegs[j] = sourceArg.RemoteRegs[j]
+			for j := range op.RemoteRegs {
+				op.RemoteRegs[j] = sourceArg.RemoteRegs[j]
 			}
-			res.Arg = arg
+			op.SetInfo(&info)
+			return op
 		}
 	case vm.Insert:
 		t := sourceOp.(*insert.Insert)
-		arg := insert.NewArgument()
-		arg.InsertCtx = t.InsertCtx
-		arg.ToWriteS3 = t.ToWriteS3
-		res.Arg = arg
+		op := insert.NewArgument()
+		op.InsertCtx = t.InsertCtx
+		op.ToWriteS3 = t.ToWriteS3
+		op.SetInfo(&info)
+		return op
 	case vm.PreInsert:
 		t := sourceOp.(*preinsert.PreInsert)
-		arg := preinsert.NewArgument()
-		arg.SchemaName = t.SchemaName
-		arg.TableDef = t.TableDef
-		arg.Attrs = t.Attrs
-		arg.IsUpdate = t.IsUpdate
-		arg.HasAutoCol = t.HasAutoCol
-		arg.EstimatedRowCount = t.EstimatedRowCount
-		res.Arg = arg
+		op := preinsert.NewArgument()
+		op.SchemaName = t.SchemaName
+		op.TableDef = t.TableDef
+		op.Attrs = t.Attrs
+		op.IsUpdate = t.IsUpdate
+		op.HasAutoCol = t.HasAutoCol
+		op.EstimatedRowCount = t.EstimatedRowCount
+		op.SetInfo(&info)
+		return op
 	case vm.Deletion:
 		t := sourceOp.(*deletion.Deletion)
-		arg := deletion.NewArgument()
-		arg.IBucket = t.IBucket
-		arg.Nbucket = t.Nbucket
-		arg.DeleteCtx = t.DeleteCtx
-		arg.RemoteDelete = t.RemoteDelete
-		arg.SegmentMap = t.SegmentMap
-		res.Arg = arg
+		op := deletion.NewArgument()
+		op.IBucket = t.IBucket
+		op.Nbucket = t.Nbucket
+		op.DeleteCtx = t.DeleteCtx
+		op.RemoteDelete = t.RemoteDelete
+		op.SegmentMap = t.SegmentMap
+		op.SetInfo(&info)
+		return op
 	case vm.LockOp:
 		t := sourceOp.(*lockop.LockOp)
-		arg := lockop.NewArgument()
-		*arg = *t
-		arg.SetChildren(nil) // make sure res.arg.children is nil
-		res.Arg = arg
+		op := lockop.NewArgument()
+		*op = *t
+		op.SetChildren(nil) // make sure res.arg.children is nil
+		op.SetInfo(&info)
+		return op
 	case vm.FuzzyFilter:
 		t := sourceOp.(*fuzzyfilter.FuzzyFilter)
-		arg := fuzzyfilter.NewArgument()
-		arg.N = t.N
-		arg.PkName = t.PkName
-		arg.PkTyp = t.PkTyp
-		arg.BuildIdx = t.BuildIdx
-		res.Arg = arg
+		op := fuzzyfilter.NewArgument()
+		op.N = t.N
+		op.PkName = t.PkName
+		op.PkTyp = t.PkTyp
+		op.BuildIdx = t.BuildIdx
+		op.SetInfo(&info)
+		return op
 	case vm.TableScan:
-		arg := table_scan.NewArgument()
-		res.Arg = arg
+		op := table_scan.NewArgument()
+		op.SetInfo(&info)
+		return op
 	case vm.ValueScan:
-		arg := value_scan.NewArgument()
-		res.Arg = arg
+		op := value_scan.NewArgument()
+		op.SetInfo(&info)
+		return op
 	default:
 		panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceOp.OpType()))
 	}
-	return res
+	return nil
 }
 
 func constructRestrict(n *plan.Node, filterExpr *plan2.Expr) *filter.Filter {
-	arg := filter.NewArgument()
-	arg.E = filterExpr
-	arg.IsEnd = n.IsEnd
-	return arg
+	op := filter.NewArgument()
+	op.E = filterExpr
+	op.IsEnd = n.IsEnd
+	return op
 }
 
 func constructDeletion(n *plan.Node, eg engine.Engine) (*deletion.Deletion, error) {
@@ -536,23 +590,23 @@ func constructDeletion(n *plan.Node, eg engine.Engine) (*deletion.Deletion, erro
 		Engine:                eg,
 	}
 
-	arg := deletion.NewArgument()
-	arg.DeleteCtx = delCtx
-	return arg, nil
+	op := deletion.NewArgument()
+	op.DeleteCtx = delCtx
+	return op, nil
 }
 
 func constructOnduplicateKey(n *plan.Node, eg engine.Engine) *onduplicatekey.OnDuplicatekey {
 	oldCtx := n.OnDuplicateKey
-	arg := onduplicatekey.NewArgument()
-	arg.Engine = eg
-	arg.OnDuplicateIdx = oldCtx.OnDuplicateIdx
-	arg.OnDuplicateExpr = oldCtx.OnDuplicateExpr
-	arg.Attrs = oldCtx.Attrs
-	arg.InsertColCount = oldCtx.InsertColCount
-	arg.UniqueCols = oldCtx.UniqueCols
-	arg.UniqueColCheckExpr = oldCtx.UniqueColCheckExpr
-	arg.IsIgnore = oldCtx.IsIgnore
-	return arg
+	op := onduplicatekey.NewArgument()
+	op.Engine = eg
+	op.OnDuplicateIdx = oldCtx.OnDuplicateIdx
+	op.OnDuplicateExpr = oldCtx.OnDuplicateExpr
+	op.Attrs = oldCtx.Attrs
+	op.InsertColCount = oldCtx.InsertColCount
+	op.UniqueCols = oldCtx.UniqueCols
+	op.UniqueColCheckExpr = oldCtx.UniqueColCheckExpr
+	op.IsIgnore = oldCtx.IsIgnore
+	return op
 }
 
 func constructFuzzyFilter(n, tableScan, sinkScan *plan.Node) *fuzzyfilter.FuzzyFilter {
@@ -569,39 +623,39 @@ func constructFuzzyFilter(n, tableScan, sinkScan *plan.Node) *fuzzyfilter.FuzzyF
 		}
 	}
 
-	arg := fuzzyfilter.NewArgument()
-	arg.PkName = pkName
-	arg.PkTyp = pkTyp
-	arg.IfInsertFromUnique = n.IfInsertFromUnique
+	op := fuzzyfilter.NewArgument()
+	op.PkName = pkName
+	op.PkTyp = pkTyp
+	op.IfInsertFromUnique = n.IfInsertFromUnique
 
 	if (tableScan.Stats.Cost / sinkScan.Stats.Cost) < 0.3 {
 		// build on tableScan, because the existing data is significantly less than the data to be inserted
 		// this will happend
-		arg.BuildIdx = 0
-		if arg.IfInsertFromUnique {
+		op.BuildIdx = 0
+		if op.IfInsertFromUnique {
 			// probe on sinkScan with test
-			arg.N = tableScan.Stats.Cost
+			op.N = tableScan.Stats.Cost
 		} else {
 			// probe on sinkScan with test and add
-			arg.N = sinkScan.Stats.Cost + tableScan.Stats.Cost
+			op.N = sinkScan.Stats.Cost + tableScan.Stats.Cost
 		}
 	} else {
 		// build on sinkScan, as tableScan can guarantee uniqueness, probe on tableScan with test
-		arg.BuildIdx = 1
-		arg.N = sinkScan.Stats.Cost
+		op.BuildIdx = 1
+		op.N = sinkScan.Stats.Cost
 	}
 
 	// currently can not build runtime filter on table scan and probe it on sink scan
 	// so only use runtime filter when build on sink scan
-	if arg.BuildIdx == 1 {
+	if op.BuildIdx == 1 {
 		if len(n.RuntimeFilterBuildList) > 0 {
-			arg.RuntimeFilterSpec = n.RuntimeFilterBuildList[0]
+			op.RuntimeFilterSpec = n.RuntimeFilterBuildList[0]
 		}
 	} else {
 		tableScan.RuntimeFilterProbeList = nil
 		n.RuntimeFilterBuildList = nil
 	}
-	return arg
+	return op
 }
 
 func constructPreInsert(ns []*plan.Node, n *plan.Node, eg engine.Engine, proc *process.Process) (*preinsert.PreInsert, error) {
@@ -645,31 +699,31 @@ func constructPreInsert(ns []*plan.Node, n *plan.Node, eg engine.Engine, proc *p
 		}
 	}
 
-	arg := preinsert.NewArgument()
-	arg.Ctx = proc.Ctx
-	arg.HasAutoCol = preCtx.HasAutoCol
-	arg.SchemaName = schemaName
-	arg.TableDef = preCtx.TableDef
-	arg.Attrs = attrs
-	arg.IsUpdate = preCtx.IsUpdate
-	arg.EstimatedRowCount = int64(ns[n.Children[0]].Stats.Outcnt)
+	op := preinsert.NewArgument()
+	op.Ctx = proc.Ctx
+	op.HasAutoCol = preCtx.HasAutoCol
+	op.SchemaName = schemaName
+	op.TableDef = preCtx.TableDef
+	op.Attrs = attrs
+	op.IsUpdate = preCtx.IsUpdate
+	op.EstimatedRowCount = int64(ns[n.Children[0]].Stats.Outcnt)
 
-	return arg, nil
+	return op, nil
 }
 
 func constructPreInsertUk(n *plan.Node, proc *process.Process) (*preinsertunique.PreInsertUnique, error) {
 	preCtx := n.PreInsertUkCtx
-	arg := preinsertunique.NewArgument()
-	arg.Ctx = proc.Ctx
-	arg.PreInsertCtx = preCtx
-	return arg, nil
+	op := preinsertunique.NewArgument()
+	op.Ctx = proc.Ctx
+	op.PreInsertCtx = preCtx
+	return op, nil
 }
 
 func constructPreInsertSk(n *plan.Node, proc *process.Process) (*preinsertsecondaryindex.PreInsertSecIdx, error) {
-	arg := preinsertsecondaryindex.NewArgument()
-	arg.Ctx = proc.Ctx
-	arg.PreInsertCtx = n.PreInsertSkCtx
-	return arg, nil
+	op := preinsertsecondaryindex.NewArgument()
+	op.Ctx = proc.Ctx
+	op.PreInsertCtx = n.PreInsertSkCtx
+	return op, nil
 }
 
 func constructLockOp(n *plan.Node, eng engine.Engine) (*lockop.LockOp, error) {
@@ -1201,8 +1255,8 @@ func constructDeleteDispatchAndLocal(
 	ss []*Scope,
 	uuids []uuid.UUID,
 	c *Compile) {
-	arg := dispatch.NewArgument()
-	arg.RemoteRegs = make([]colexec.ReceiveInfo, 0, len(ss)-1)
+	op := dispatch.NewArgument()
+	op.RemoteRegs = make([]colexec.ReceiveInfo, 0, len(ss)-1)
 	// rs is used to get batch from dispatch operator (include
 	// local batch)
 	rs[currentIdx].NodeInfo = ss[currentIdx].NodeInfo
@@ -1229,8 +1283,8 @@ func constructDeleteDispatchAndLocal(
 		if i != currentIdx {
 			// just use this uuid in dispatch, we need to
 			// use it in the prepare func (store the map [uuid -> proc.DispatchNotifyCh])
-			arg.RemoteRegs = append(
-				arg.RemoteRegs,
+			op.RemoteRegs = append(
+				op.RemoteRegs,
 				colexec.ReceiveInfo{
 					Uuid:     uuids[i],
 					NodeAddr: ss[i].NodeInfo.Addr,
@@ -1249,23 +1303,19 @@ func constructDeleteDispatchAndLocal(
 				})
 		}
 	}
-	if len(arg.RemoteRegs) == 0 {
-		arg.FuncId = dispatch.SendToAllLocalFunc
+	if len(op.RemoteRegs) == 0 {
+		op.FuncId = dispatch.SendToAllLocalFunc
 	} else {
-		arg.FuncId = dispatch.SendToAllFunc
+		op.FuncId = dispatch.SendToAllFunc
 	}
 
-	arg.LocalRegs = append(
-		arg.LocalRegs,
+	op.LocalRegs = append(
+		op.LocalRegs,
 		rs[currentIdx].Proc.Reg.MergeReceivers[currentIdx])
 
-	ss[currentIdx].appendInstruction(vm.Instruction{
-		Arg: arg,
-	})
+	ss[currentIdx].setRootOperator(op)
 	// add merge to recieve all batches
-	rs[currentIdx].appendInstruction(vm.Instruction{
-		Arg: merge.NewArgument(),
-	})
+	rs[currentIdx].setRootOperator(merge.NewArgument())
 }
 
 // This function do not setting funcId.
@@ -1531,32 +1581,28 @@ func constructLoopMark(n *plan.Node, typs []types.Type, proc *process.Process) *
 	return arg
 }
 
-func constructJoinBuildOperator(c *Compile, op vm.Operator, isDup bool, isShuffle bool) vm.Instruction {
+func constructJoinBuildOperator(c *Compile, op vm.Operator, isDup bool, isShuffle bool) vm.Operator {
 	switch op.OpType() {
 	case vm.IndexJoin:
-		arg := op.(*indexjoin.IndexJoin)
+		indexJoin := op.(*indexjoin.IndexJoin)
 		ret := indexbuild.NewArgument()
-		if len(arg.RuntimeFilterSpecs) > 0 {
-			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
+		if len(indexJoin.RuntimeFilterSpecs) > 0 {
+			ret.RuntimeFilterSpec = indexJoin.RuntimeFilterSpecs[0]
 		}
-		return vm.Instruction{
-			Idx:     op.GetOperatorBase().GetIdx(),
-			IsFirst: true,
-			Arg:     ret,
-		}
+		ret.SetIdx(indexJoin.Idx)
+		ret.SetIsFirst(true)
+		return ret
 	default:
 		if isShuffle {
-			return vm.Instruction{
-				Idx:     op.GetOperatorBase().GetIdx(),
-				IsFirst: true,
-				Arg:     constructShuffleBuild(op, c.proc, isDup),
-			}
+			res := constructShuffleBuild(op, c.proc, isDup)
+			res.SetIdx(op.GetOperatorBase().GetIdx())
+			res.SetIsFirst(true)
+			return res
 		}
-		return vm.Instruction{
-			Idx:     op.GetOperatorBase().GetIdx(),
-			IsFirst: true,
-			Arg:     constructHashBuild(op, c.proc, isDup),
-		}
+		res := constructHashBuild(op, c.proc, isDup)
+		res.SetIdx(op.GetOperatorBase().GetIdx())
+		res.SetIsFirst(true)
+		return res
 	}
 }
 

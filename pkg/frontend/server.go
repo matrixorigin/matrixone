@@ -390,15 +390,13 @@ func NewMOServer(
 	if err != nil {
 		logutil.Panicf("start server failed with %+v", err)
 	}
-
-	listenerUnix, err := net.Listen("unix", unixAddr)
-	mo.listeners = append(mo.listeners, listenerTcp, listenerUnix)
-
-	if err != nil {
-		logutil.Panicf("start server failed with %+v", err)
-	}
-	if err != nil {
-		logutil.Panicf("start server failed with %+v", err)
+	mo.listeners = append(mo.listeners, listenerTcp)
+	if unixAddr != "" {
+		listenerUnix, err := net.Listen("unix", unixAddr)
+		if err != nil {
+			logutil.Panicf("start server failed with %+v", err)
+		}
+		mo.listeners = append(mo.listeners, listenerUnix)
 	}
 	return mo
 }
