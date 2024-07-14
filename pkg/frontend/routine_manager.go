@@ -123,6 +123,7 @@ func (ar *AccountRoutineManager) AlterRoutineStatue(tenantID int64, status strin
 	if rts, ok := ar.accountId2Routine[tenantID]; ok {
 		for rt := range rts {
 			if status == "restricted" {
+				logutil.Infof("[set restricted] alter routine, set account id %d, connection id %d restricted", tenantID, rt.getConnectionID())
 				rt.setResricted(true)
 			} else {
 				rt.setResricted(false)
