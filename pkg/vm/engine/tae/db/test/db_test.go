@@ -9151,3 +9151,34 @@ func TestGCKP(t *testing.T) {
 	tae.Restart(ctx)
 	t.Log(tae.Catalog.SimplePPString(3))
 }
+
+func TestCKPCollectObject(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchema(2, 0)
+	schema.BlockMaxRows = 10
+	schema.ObjectMaxBlocks = 10
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 1)
+
+	tae.CreateRelAndAppend(bat, true)
+
+	txn, rel := tae.GetRelation()
+	blkMeta1 := testutil.GetOneBlockMeta(rel)
+	task1, err := jobs.NewFlushTableTailTask(tasks.WaitableCtx, txn, []*catalog.ObjectEntry{blkMeta1}, tae.Runtime, txn.GetStartTS())
+	assert.NoError(t, err)
+	assert.NoError(t, task1.Execute(ctx))
+
+	collector := logtail.NewIncrementalCollector(types.TS{}, tae.TxnMgr.Now(), true)
+	assert.NoError(t, tae.Catalog.RecurLoop(collector))
+	ckpData := collector.OrphanData()
+	objBatch := ckpData.GetTNObjectBatchs()
+	assert.Equal(t, 4, objBatch.Length())
+	assert.NoError(t, txn.Commit(ctx))
+}
