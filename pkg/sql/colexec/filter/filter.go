@@ -45,10 +45,12 @@ func (filter *Filter) Prepare(proc *process.Process) (err error) {
 	filter.ctr = new(container)
 	var filterExpr *plan.Expr
 
+	if filter.exeExpr == nil && filter.E == nil {
+		return nil
+	}
+
 	if filter.exeExpr == nil {
-		if filter.E != nil {
-			filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(filter.E), proc, true, true)
-		}
+		filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(filter.E), proc, true, true)
 	} else {
 		filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(filter.exeExpr), proc, true, true)
 	}
@@ -73,7 +75,7 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 	anal.Start()
 	defer anal.Stop()
 
-	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() {
+	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() || len(filter.ctr.executors) == 0 {
 		return result, nil
 	}
 	if filter.ctr.buf != nil {

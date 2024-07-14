@@ -95,6 +95,8 @@ func newBatch(batchSize int, typs []types.Type, pool *mpool.MPool) *batch.Batch 
 
 func (w *TAEWriter) GetContent() string { return "" }
 
+func (w *TAEWriter) GetContentLength() int { return 0 }
+
 // WriteStrings implement ETLWriter
 func (w *TAEWriter) WriteStrings(Line []string) error {
 	var elems = make([]table.ColumnField, len(w.columnsTypes))

@@ -520,7 +520,6 @@ drop snapshot sp103;
 
 
 
--- @bvt:issue#17308
 -- restore to new account
 drop account if exists acc03;
 create account acc03 admin_name = 'test_account' identified by '111';
@@ -579,12 +578,10 @@ drop database test03;
 -- @session
 drop snapshot sp104;
 drop snapshot sp105;
--- @bvt:issue
 
 
 
 
--- @bvt:issue#17308
 -- restore to new account
 drop account if exists acc03;
 create account acc03 admin_name = 'test_account' identified by '111';
@@ -643,7 +640,6 @@ drop publication pub10;
 drop database test04;
 -- @session
 drop snapshot sp105;
--- @bvt:issue
 
 drop account acc01;
 drop account acc02;
