@@ -34,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
 type PartitionState struct {
@@ -477,9 +476,9 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 			p.objectIndexByTS.Set(e)
 		}
 		//prefetch the object meta
-		if err := blockio.PrefetchMeta(fs, objEntry.Location()); err != nil {
-			logutil.Errorf("prefetch object meta failed. %v", err)
-		}
+		// if err := blockio.PrefetchMeta(fs, objEntry.Location()); err != nil {
+		// 	logutil.Errorf("prefetch object meta failed. %v", err)
+		// }
 
 		p.dataObjects.Set(objEntry)
 		{
