@@ -176,20 +176,25 @@ func (de *TestDisttaeEngine) analyzeDataObjects(state *logtailreplay.PartitionSt
 func (de *TestDisttaeEngine) analyzeInmemRows(state *logtailreplay.PartitionState,
 	stats *PartitionStateStats, ts types.TS) (err error) {
 
+	distinct := make(map[objectio.Blockid]struct{})
 	iter := state.NewRowsIter(ts, nil, false)
 	for iter.Next() {
 		stats.InmemRows.VisibleCnt++
+		distinct[iter.Entry().BlockID] = struct{}{}
 	}
 
+	stats.InmemRows.VisibleDistinctBlockCnt += len(distinct)
 	if err = iter.Close(); err != nil {
 		return
 	}
 
+	distinct = make(map[objectio.Blockid]struct{})
 	iter = state.NewRowsIter(ts, nil, true)
 	for iter.Next() {
+		distinct[iter.Entry().BlockID] = struct{}{}
 		stats.InmemRows.InvisibleCnt++
 	}
-
+	stats.InmemRows.InvisibleDistinctBlockCnt += len(distinct)
 	err = iter.Close()
 	return
 }
@@ -238,6 +243,13 @@ func (de *TestDisttaeEngine) analyzeTombstone(state *logtailreplay.PartitionStat
 		if outErr != nil {
 			return
 		}
+	}
+
+	stats.Details.DirtyBlocks = make(map[types.Blockid]struct{})
+	iter2 := state.NewDirtyBlocksIter()
+	for iter2.Next() {
+		item := iter2.Entry()
+		stats.Details.DirtyBlocks[item] = struct{}{}
 	}
 
 	return

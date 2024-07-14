@@ -234,7 +234,6 @@ func Test_Bug_CheckpointInsertObjectOverwrittenMergeDeletedObject(t *testing.T) 
 		taeEngine.GetDB().ForceCheckpoint(ctx, ts.Next(), time.Second)
 	}
 
-	// delete to generate delta loc
 	{
 		txn, _ = taeEngine.GetDB().StartTxn(nil)
 		database, err = txn.GetDatabase(databaseName)
@@ -285,6 +284,125 @@ func Test_Bug_CheckpointInsertObjectOverwrittenMergeDeletedObject(t *testing.T) 
 		// should only have one object
 		require.Equal(t, 1, stats.DataObjectsVisible.ObjCnt)
 		require.Equal(t, rowsCnt, stats.DataObjectsVisible.RowCnt)
+	}
+
+}
+
+func Test_Bug_WrongCleanDirtyBlock(t *testing.T) {
+	var (
+		txn          txnif.AsyncTxn
+		opts         testutil.TestOptions
+		rel          handle.Relation
+		database     handle.Database
+		accountId    = uint32(0)
+		tableName    = "test1"
+		databaseName = "db1"
+	)
+
+	// make sure that disabled all auto ckp and flush
+	opts.TaeEngineOptions = config.WithLongScanAndCKPOpts(nil)
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, accountId)
+	disttaeEngine, taeEngine, rpcAgent, _ := testutil.CreateEngines(ctx, opts, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeEngine.Close(true)
+		rpcAgent.Close()
+	}()
+
+	// one object, two blocks
+
+	schema := catalog.MockSchemaAll(2, 0)
+	schema.Name = tableName
+	schema.BlockMaxRows = 20
+	schema.ObjectMaxBlocks = 2
+	taeEngine.BindSchema(schema)
+
+	rowsCnt := 40
+	bat := catalog.MockBatch(schema, rowsCnt)
+
+	var err error
+	{
+		txn, _ = taeEngine.GetDB().StartTxn(nil)
+		database, err = txn.CreateDatabase(databaseName, "", "")
+		require.Nil(t, err)
+
+		rel, err = database.CreateRelation(schema)
+		require.Nil(t, err)
+
+		err = rel.Append(ctx, bat)
+		require.Nil(t, err)
+
+		err = txn.Commit(context.Background())
+		require.Nil(t, err)
+	}
+
+	err = disttaeEngine.Engine.TryToSubscribeTable(ctx, rel.ID(), database.GetID())
+	require.Nil(t, err)
+
+	{
+		stats, err := disttaeEngine.GetPartitionStateStats(ctx, rel.ID(), database.GetID())
+		require.Nil(t, err)
+
+		fmt.Println(stats.String())
+		require.Equal(t, 40, stats.InmemRows.VisibleCnt)
+		require.Equal(t, 2, stats.InmemRows.VisibleDistinctBlockCnt)
+	}
+
+	{
+		// flush all aobj into one nobj
+		testutil2.CompactBlocks(t, accountId, taeEngine.GetDB(), databaseName, schema, false)
+
+		txn, _ = taeEngine.GetDB().StartTxn(nil)
+		database, _ = txn.GetDatabase(databaseName)
+		rel, _ = database.GetRelationByName(schema.Name)
+
+		//iter := rel.MakeObjectIt()
+		//iter.Next()
+		//blkId := iter.GetObject().GetMeta().(*catalog.ObjectEntry).AsCommonID()
+		//
+		//rel.Update(blkId, 0, 0, 0x1, false)
+		//require.Nil(t, iter.Close())
+		v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(3)
+		filter := handle.NewEQFilter(v)
+		err := rel.UpdateByFilter(context.Background(), filter, 3, int64(2222), false)
+		require.Nil(t, err)
+
+		assert.Nil(t, txn.Commit(context.Background()))
+	}
+
+	{
+
+		//txn, _ = taeEngine.GetDB().StartTxn(nil)
+		//database, _ = txn.GetDatabase(databaseName)
+		//rel, _ = database.GetRelationByName(schema.Name)
+		//
+		//iter := rel.MakeObjectIt()
+		//iter.Next()
+		//firstBlkId := iter.GetObject().GetMeta().(*catalog.ObjectEntry).AsCommonID()
+		//err = rel.RangeDelete(firstBlkId, 0, 18, handle.DT_Normal)
+		//assert.Nil(t, err)
+		//
+		//iter.Next()
+		//secondBlkId := objectio.BuildObjectBlockid(iter.GetObject().GetMeta().(*catalog.ObjectEntry).ObjectName(), 1)
+		//err = rel.RangeDelete(&common.ID{
+		//	TableID: rel.ID(),
+		//	DbID:    database.GetID(),
+		//	BlockID: *secondBlkId,
+		//}, 0, 0, handle.DT_Normal)
+		//
+		//require.Nil(t, iter.Close())
+		//assert.Nil(t, txn.Commit(context.Background()))
+	}
+
+	{
+		stats, err := disttaeEngine.GetPartitionStateStats(ctx, rel.ID(), database.GetID())
+		require.Nil(t, err)
+
+		fmt.Println(stats.Details.DirtyBlocks)
+		//
+		fmt.Println(stats.String())
+		require.Equal(t, 20, stats.InmemRows.InvisibleCnt)
+		require.Equal(t, 1, stats.InmemRows.VisibleDistinctBlockCnt)
 	}
 
 }
