@@ -12,28 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fileservice
+package v1_2_2
 
 import (
-	"context"
-	"testing"
-	"time"
+	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 )
 
-func TestEventLogger(t *testing.T) {
-	ctx := context.Background()
-	ctx = WithEventLogger(ctx)
-	LogEvent(ctx, str_to_cache_data_begin, 1)
-	LogEvent(ctx, str_to_cache_data_end, 2, 3)
-	LogSlowEvent(ctx, time.Nanosecond)
+var (
+	logger *log.MOLogger
+	once   sync.Once
+)
+
+func getLogger() *log.MOLogger {
+	once.Do(initLogger)
+	return logger
 }
 
-func BenchmarkEventLogger(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		ctx := context.Background()
-		ctx = WithEventLogger(ctx)
-		LogEvent(ctx, str_to_cache_data_begin, 1)
-		LogEvent(ctx, str_to_cache_data_end, 2, 3)
-		LogSlowEvent(ctx, time.Hour)
+func initLogger() {
+	rt := runtime.ProcessLevelRuntime()
+	if rt == nil {
+		rt = runtime.DefaultRuntime()
 	}
+	logger = rt.Logger()
 }

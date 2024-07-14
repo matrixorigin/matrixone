@@ -35,6 +35,7 @@ import (
 )
 
 var StopMerge atomic.Bool
+var DisableDeltaLocMerge atomic.Bool
 
 type CNMergeScheduler interface {
 	SendMergeTask(ctx context.Context, task *api.MergeTaskEntry) error
@@ -199,7 +200,7 @@ const (
 )
 
 type Policy interface {
-	OnObject(obj *catalog.ObjectEntry)
+	OnObject(obj *catalog.ObjectEntry, force bool)
 	Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind)
 	ResetForTable(*catalog.TableEntry)
 	SetConfig(*catalog.TableEntry, func() txnif.AsyncTxn, any)

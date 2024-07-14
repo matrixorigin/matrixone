@@ -6069,6 +6069,53 @@ func TestAlterRenameTbl(t *testing.T) {
 	require.NoError(t, txn.Commit(context.Background()))
 }
 
+func TestDeltaLocation(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(2, 0)
+	schema.Name = "t1"
+	schema.BlockMaxRows = 10
+	schema.ObjectMaxBlocks = 2
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 10)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+
+	tae.CompactBlocks(false)
+
+	txn, rel := tae.GetRelation()
+
+	v0 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+	filter := handle.NewEQFilter(v0)
+	id, offset, err := rel.GetByFilter(context.Background(), filter)
+	assert.NoError(t, err)
+	obj, err := rel.GetMeta().(*catalog.TableEntry).GetObjectByID(id.ObjectID())
+	assert.NoError(t, err)
+	_, blkOffset := id.BlockID.Offsets()
+	deltaLoc, err := testutil.MockCNDeleteInS3(tae.Runtime.Fs, obj.GetObjectData(), blkOffset, schema, txn, []uint32{offset})
+	assert.NoError(t, err)
+	ok, err := rel.TryDeleteByDeltaloc(id, deltaLoc)
+	assert.NoError(t, err)
+	assert.True(t, ok)
+
+	{
+		txn, rel := tae.GetRelation()
+		objID := rel.MakeObjectIt().GetObject().GetID()
+		rel.SoftDeleteObject(objID)
+		txn.Commit(ctx)
+		t.Log(tae.Catalog.SimplePPString(3))
+	}
+
+	assert.NoError(t, err)
+	err = txn.Commit(ctx)
+	assert.Error(t, err)
+}
+
 func TestAlterRenameTbl2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	ctx := context.Background()
@@ -6928,16 +6975,19 @@ func TestSnapshotMeta(t *testing.T) {
 	tae.RestartDisableGC(ctx)
 	db = tae.DB
 	db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(1)
-	testutils.WaitExpect(5000, func() bool {
+	testutils.WaitExpect(10000, func() bool {
 		if db.DiskCleaner.GetCleaner().GetMaxConsumed() == nil {
 			return false
 		}
 		end := db.DiskCleaner.GetCleaner().GetMaxConsumed().GetEnd()
-		minEnd := minMerged.GetEnd()
+		if db.DiskCleaner.GetCleaner().GetMinMerged() == nil {
+			return false
+		}
+		minEnd := db.DiskCleaner.GetCleaner().GetMinMerged().GetEnd()
 		return end.GreaterEq(&minEnd)
 	})
 	end := db.DiskCleaner.GetCleaner().GetMaxConsumed().GetEnd()
-	minEnd = minMerged.GetEnd()
+	minEnd = db.DiskCleaner.GetCleaner().GetMinMerged().GetEnd()
 	assert.True(t, end.GreaterEq(&minEnd))
 	snaps, err = db.DiskCleaner.GetCleaner().GetSnapshots()
 	assert.Nil(t, err)

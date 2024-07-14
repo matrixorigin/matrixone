@@ -120,6 +120,11 @@ func RegisterAnyValue2(id int64) {
 		nil, nil, nil,
 		aggAnyValueFill[types.Rowid], aggAnyValueFills[types.Rowid], aggAnyValueMerge[types.Rowid], nil)
 
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_enum.ToType(), AnyValueReturnType, true),
+		nil, nil, nil,
+		aggAnyValueFill[types.Enum], aggAnyValueFills[types.Enum], aggAnyValueMerge[types.Enum], nil)
+
 	varLenList := []types.T{types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_binary, types.T_varbinary}
 	for _, t := range varLenList {
 		aggexec.RegisterAggFromBytesRetBytes(

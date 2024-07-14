@@ -354,6 +354,7 @@ type WhereBinder struct {
 
 type GroupBinder struct {
 	baseBinder
+	selectList tree.SelectExprs
 }
 
 type HavingBinder struct {

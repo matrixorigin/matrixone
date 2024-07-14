@@ -536,6 +536,8 @@ func (n *ObjectMVCCHandle) GetObject() any {
 	return n.meta
 }
 func (n *ObjectMVCCHandle) GetLatestDeltaloc(blkOffset uint16) objectio.Location {
+	n.RLock()
+	defer n.RUnlock()
 	mvcc := n.TryGetDeleteChain(blkOffset)
 	if mvcc == nil || mvcc.deltaloc == nil || mvcc.deltaloc.GetLatestNodeLocked() == nil {
 		return nil
@@ -555,7 +557,8 @@ func (n *ObjectMVCCHandle) VisitDeletes(
 	start, end types.TS,
 	deltalocBat *containers.Batch,
 	tnInsertBat *containers.Batch,
-	skipInMemory bool) (delBatch *containers.Batch, deltalocStart, deltalocEnd int, err error) {
+	skipInMemory, lastDeltaLoc bool,
+) (delBatch *containers.Batch, deltalocStart, deltalocEnd int, err error) {
 	n.RLock()
 	defer n.RUnlock()
 	deltalocStart = deltalocBat.Length()
@@ -565,10 +568,14 @@ func (n *ObjectMVCCHandle) VisitDeletes(
 		var skipData bool
 		if len(nodes) != 0 {
 			blkID := objectio.NewBlockidWithObjectID(&n.meta.ID, blkOffset)
-			for _, node := range nodes {
-				VisitDeltaloc(deltalocBat, tnInsertBat, n.meta, blkID, node, node.End, node.CreatedAt)
-			}
 			newest := nodes[len(nodes)-1]
+			if lastDeltaLoc {
+				VisitDeltaloc(deltalocBat, tnInsertBat, n.meta, blkID, newest, newest.End, newest.CreatedAt)
+			} else {
+				for _, node := range nodes {
+					VisitDeltaloc(deltalocBat, tnInsertBat, n.meta, blkID, node, node.End, node.CreatedAt)
+				}
+			}
 			// block has newer delta data on s3, no need to collect data
 			startTS := newest.GetStart()
 			skipData = startTS.GreaterEq(&end)
@@ -655,6 +662,11 @@ func (d *DeltalocChain) PrepareCommit() (err error) {
 	node := d.GetLatestNodeLocked()
 	if node.BaseNode.NeedCheckDeleteChainWhenCommit {
 		if found, _ := d.mvcc.GetDeleteChain().HasDeleteIntentsPreparedInLocked(node.Start, node.Txn.GetPrepareTS()); found {
+			logutil.Infof("retry delete, there're new deletes in obj %v", d.mvcc.meta.ID.String())
+			return txnif.ErrTxnNeedRetry
+		}
+		if d.mvcc.meta.HasDropIntentLocked() {
+			logutil.Infof("retry delete, obj %v is soft deleted", d.mvcc.meta.ID.String())
 			return txnif.ErrTxnNeedRetry
 		}
 	}
