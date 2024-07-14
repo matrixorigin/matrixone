@@ -1582,6 +1582,14 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 
 			return newExpr, nil
 		}
+	case "last_day":
+		if len(args) != 1 {
+			return nil, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
+		}
+	case "makedate":
+		if len(args) != 2 {
+			return nil, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
+		}
 	}
 
 	// get args(exprs) & types

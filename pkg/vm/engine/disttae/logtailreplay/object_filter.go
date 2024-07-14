@@ -20,7 +20,6 @@ import (
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 )
 
@@ -65,7 +64,6 @@ func (o *overlap) Filter(objs []ObjectInfo) []ObjectInfo {
 	}
 	o.t = objs[0].SortKeyZoneMap().GetType()
 	for _, obj := range objs {
-		obj := obj
 		o.intervals = append(o.intervals, entryInterval{
 			min:   obj.SortKeyZoneMap().GetMin(),
 			max:   obj.SortKeyZoneMap().GetMax(),
@@ -81,8 +79,6 @@ func (o *overlap) Filter(objs []ObjectInfo) []ObjectInfo {
 
 	set := entrySet{entries: make([]ObjectInfo, 0), maxValue: minValue(o.t)}
 	for _, interval := range o.intervals {
-		interval := interval
-		logutil.Infof("Mergeblocks %v %v", interval.min, interval.max)
 		if len(set.entries) == 0 || compute.CompareGeneric(set.maxValue, interval.min, o.t) > 0 {
 			set.add(o.t, interval)
 		} else if len(set.entries) == 1 {
