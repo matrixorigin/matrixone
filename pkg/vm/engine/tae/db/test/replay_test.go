@@ -1361,6 +1361,7 @@ func TestReplaySnapshots(t *testing.T) {
 	rel, err = db.GetRelationByName(schema.Name)
 	assert.NoError(t, err)
 	err = rel.SoftDeleteObject(obj.GetID())
+	assert.NoError(t, err)
 	obj, err = rel.GetObject(obj.GetID())
 	assert.Nil(t, err)
 	testutil.MockObjectStats(t, obj)
