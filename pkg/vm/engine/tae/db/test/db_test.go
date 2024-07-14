@@ -7478,6 +7478,7 @@ func TestGCCatalog1(t *testing.T) {
 	tb3, err = db2.GetRelationByName("tb2")
 	assert.NoError(t, err)
 	obj3, err = tb3.GetObject(obj3.GetID())
+	assert.NoError(t, err)
 	err = tb3.SoftDeleteObject(obj3.GetID())
 	testutil.MockObjectStats(t, obj3)
 	assert.NoError(t, err)
