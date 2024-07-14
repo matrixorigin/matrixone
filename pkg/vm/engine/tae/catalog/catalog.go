@@ -164,6 +164,7 @@ func (catalog *Catalog) GCByTS(ctx context.Context, ts types.TS) {
 		var needGC bool
 		if obj == nil {
 			needGC = true
+			obj = t.GetObject().(*ObjectEntry)
 		} else {
 			needGC = obj.DeleteBefore(ts) && !obj.InMemoryDeletesExistedLocked()
 			needGC = needGC && obj.IsDeletesFlushedBefore(ts)

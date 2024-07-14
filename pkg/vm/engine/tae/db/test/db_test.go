@@ -9188,3 +9188,28 @@ func TestCKPCollectObject(t *testing.T) {
 	assert.Equal(t, 4, objBatch.Length())
 	assert.NoError(t, txn.Commit(ctx))
 }
+
+func TestGCCatalog4(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchema(2, 0)
+	schema.BlockMaxRows = 10
+	schema.ObjectMaxBlocks = 10
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 1)
+
+	tae.CreateRelAndAppend(bat, true)
+
+	tae.DeleteAll(true)
+
+	tae.CompactBlocks(true)
+
+	tae.Catalog.GCByTS(ctx, tae.TxnMgr.Now())
+
+}
