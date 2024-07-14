@@ -63,9 +63,10 @@ func (rightAnti *RightAnti) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	analyze := proc.GetAnalyze(rightAnti.GetIdx(), rightAnti.GetParallelIdx(), rightAnti.GetParallelMajor())
+	analyze := proc.GetAnalyze2(rightAnti.GetIdx(), rightAnti.GetParallelIdx(), rightAnti.GetParallelMajor(), rightAnti.OpStats)
 	analyze.Start()
 	defer analyze.Stop()
+
 	ctr := rightAnti.ctr
 	result := vm.NewCallResult()
 	for {

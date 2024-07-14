@@ -56,9 +56,10 @@ func (loopLeft *LoopLeft) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(loopLeft.GetIdx(), loopLeft.GetParallelIdx(), loopLeft.GetParallelMajor())
+	anal := proc.GetAnalyze2(loopLeft.GetIdx(), loopLeft.GetParallelIdx(), loopLeft.GetParallelMajor(), loopLeft.OpStats)
 	anal.Start()
 	defer anal.Stop()
+
 	ctr := loopLeft.ctr
 	result := vm.NewCallResult()
 	var err error

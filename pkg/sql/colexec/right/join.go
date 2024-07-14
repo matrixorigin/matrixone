@@ -64,9 +64,10 @@ func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	analyze := proc.GetAnalyze(rightJoin.GetIdx(), rightJoin.GetParallelIdx(), rightJoin.GetParallelMajor())
+	analyze := proc.GetAnalyze2(rightJoin.GetIdx(), rightJoin.GetParallelIdx(), rightJoin.GetParallelMajor(), rightJoin.OpStats)
 	analyze.Start()
 	defer analyze.Stop()
+
 	ctr := rightJoin.ctr
 	result := vm.NewCallResult()
 	for {

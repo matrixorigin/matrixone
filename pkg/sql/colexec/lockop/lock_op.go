@@ -22,6 +22,8 @@ import (
 	"strings"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -37,7 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 var (
@@ -105,21 +106,21 @@ func (lockOp *LockOp) Call(proc *process.Process) (vm.CallResult, error) {
 		return callNonBlocking(proc, lockOp)
 	}
 
+	// Waring: Blocking only for `select for update` statement
 	return callBlocking(proc, lockOp, lockOp.GetIsFirst(), lockOp.GetIsLast())
 }
 
 func callNonBlocking(
 	proc *process.Process,
 	lockOp *LockOp) (vm.CallResult, error) {
+	anal := proc.GetAnalyze2(lockOp.GetIdx(), lockOp.GetParallelIdx(), lockOp.GetParallelMajor(), lockOp.OpStats)
+	anal.Start()
+	defer anal.Stop()
 
-	result, err := lockOp.GetChildren(0).Call(proc)
+	result, err := vm.ChildrenCall(lockOp.GetChildren(0), proc, anal)
 	if err != nil {
 		return result, err
 	}
-
-	anal := proc.GetAnalyze(lockOp.GetIdx(), lockOp.GetParallelIdx(), lockOp.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
 
 	if result.Batch == nil {
 		return result, lockOp.ctr.rt.retryError
@@ -129,7 +130,7 @@ func callNonBlocking(
 		return result, err
 	}
 
-	if err := performLock(bat, proc, lockOp); err != nil {
+	if err = performLock(bat, proc, lockOp, anal); err != nil {
 		return result, err
 	}
 
@@ -168,7 +169,7 @@ func callBlocking(
 				continue
 			}
 
-			if err := performLock(bat, proc, lockOp); err != nil {
+			if err = performLock(bat, proc, lockOp, anal); err != nil {
 				return result, err
 			}
 
@@ -206,7 +207,8 @@ func callBlocking(
 func performLock(
 	bat *batch.Batch,
 	proc *process.Process,
-	lockOp *LockOp) error {
+	lockOp *LockOp,
+	analyze process.Analyze) error {
 	needRetry := false
 	for idx, target := range lockOp.targets {
 		if proc.GetTxnOperator().LockSkipped(target.tableID, target.mode) {
@@ -232,6 +234,7 @@ func performLock(
 		locked, defChanged, refreshTS, err := doLock(
 			proc.Ctx,
 			lockOp.engine,
+			analyze,
 			nil,
 			target.tableID,
 			proc,
@@ -316,6 +319,7 @@ func LockTable(
 		proc.Ctx,
 		eng,
 		nil,
+		nil,
 		tableID,
 		proc,
 		nil,
@@ -363,6 +367,7 @@ func LockRows(
 	_, defChanged, refreshTS, err := doLock(
 		proc.Ctx,
 		eng,
+		nil,
 		rel,
 		tableID,
 		proc,
@@ -389,6 +394,7 @@ func LockRows(
 func doLock(
 	ctx context.Context,
 	eng engine.Engine,
+	analyze process.Analyze,
 	rel engine.Relation,
 	tableID uint64,
 	proc *process.Process,
@@ -465,6 +471,8 @@ func doLock(
 		}
 	}
 
+	//----------------------<<<<<<------------------------
+	start := time.Now()
 	key := txnOp.AddWaitLock(tableID, rows, options)
 	defer txnOp.RemoveWaitLock(key)
 
@@ -484,6 +492,9 @@ func doLock(
 	if err != nil {
 		return false, false, timestamp.Timestamp{}, err
 	}
+	// Record lock waiting time
+	process.AnalyzeLockWaitTime(analyze, start)
+	//-------------------->>>>>>>----------------------------
 
 	if len(result.ConflictKey) > 0 {
 		trace.GetService().AddTxnActionInfo(
@@ -528,17 +539,21 @@ func doLock(
 		!txnOp.IsRetry() &&
 		txnOp.Txn().IsRCIsolation() {
 
+		start = time.Now()
 		// wait last committed logtail applied
 		newSnapshotTS, err := txnClient.WaitLogTailAppliedAt(ctx, lockedTS)
 		if err != nil {
 			return false, false, timestamp.Timestamp{}, err
 		}
+		// Record logtail waiting time
+		process.AnalyzeLockWaitTime(analyze, start)
 
 		fn := opts.hasNewVersionInRangeFunc
 		if fn == nil {
 			fn = hasNewVersionInRange
 		}
 
+		// lock check conflict
 		// if [snapshotTS, newSnapshotTS] has been modified, need retry at new snapshot ts
 		changed, err := fn(proc, rel, tableID, eng, vec, snapshotTS, newSnapshotTS)
 		if err != nil {

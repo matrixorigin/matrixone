@@ -61,9 +61,10 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(semiJoin.GetIdx(), semiJoin.GetParallelIdx(), semiJoin.GetParallelMajor())
+	anal := proc.GetAnalyze2(semiJoin.GetIdx(), semiJoin.GetParallelIdx(), semiJoin.GetParallelMajor(), semiJoin.OpStats)
 	anal.Start()
 	defer anal.Stop()
+
 	ctr := semiJoin.ctr
 	result := vm.NewCallResult()
 	for {

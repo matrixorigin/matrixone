@@ -69,7 +69,7 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, err
 	}
 
-	anal := proc.GetAnalyze(filter.GetIdx(), filter.GetParallelIdx(), filter.GetParallelMajor())
+	anal := proc.GetAnalyze2(filter.GetIdx(), filter.GetParallelIdx(), filter.GetParallelMajor(), filter.OpStats)
 	anal.Start()
 	defer anal.Stop()
 

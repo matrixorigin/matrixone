@@ -45,8 +45,8 @@ func setAnalyzeInfo(rootOp Operator, proc *process.Process) {
 		switch op.OpType() {
 		case Output:
 			op.GetOperatorBase().SetIdx(-1)
-		case TableScan:
-			op.GetOperatorBase().SetIdx(parentOp.GetOperatorBase().Idx)
+			//case TableScan:
+			//	op.GetOperatorBase().SetIdx(parentOp.GetOperatorBase().Idx)
 		}
 		return nil
 	})
@@ -59,6 +59,7 @@ func setAnalyzeInfo(rootOp Operator, proc *process.Process) {
 			Idx:     opBase.Idx,
 			IsFirst: opBase.IsFirst,
 			IsLast:  opBase.IsLast,
+			OpStats: process.NewOperatorStats(op.OpType().String()),
 
 			CnAddr:      opBase.CnAddr,
 			OperatorID:  opBase.OperatorID,

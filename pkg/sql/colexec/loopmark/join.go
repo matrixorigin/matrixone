@@ -58,9 +58,10 @@ func (loopMark *LoopMark) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(loopMark.GetIdx(), loopMark.GetParallelIdx(), loopMark.GetParallelMajor())
+	anal := proc.GetAnalyze2(loopMark.GetIdx(), loopMark.GetParallelIdx(), loopMark.GetParallelMajor(), loopMark.OpStats)
 	anal.Start()
 	defer anal.Stop()
+
 	ctr := loopMark.ctr
 	result := vm.NewCallResult()
 	for {

@@ -48,6 +48,7 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.Anti:                    "anti",
 	vm.Single:                  "single",
 	vm.Mark:                    "mark",
+	vm.IndexJoin:               "index join",
 	vm.LoopJoin:                "loop join",
 	vm.LoopLeft:                "loop left",
 	vm.LoopSemi:                "loop semi",
@@ -195,7 +196,16 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 		id := op.OpType()
 		name, ok := debugInstructionNames[id]
 		if ok {
-			str := name
+			//str := name
+			str := fmt.Sprintf("%s (idx:%v, isFirst:%v, isLast:%v)",
+				name, op.GetOperatorBase().Idx,
+				op.GetOperatorBase().IsFirst,
+				op.GetOperatorBase().IsLast)
+
+			if op.GetOperatorBase().OpStats != nil {
+				str += op.GetOperatorBase().OpStats.String()
+			}
+
 			if id == vm.Connector {
 				var receiver = "unknown"
 				arg := op.(*connector.Connector)

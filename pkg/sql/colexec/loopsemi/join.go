@@ -52,9 +52,10 @@ func (loopSemi *LoopSemi) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(loopSemi.GetIdx(), loopSemi.GetParallelIdx(), loopSemi.GetParallelMajor())
+	anal := proc.GetAnalyze2(loopSemi.GetIdx(), loopSemi.GetParallelIdx(), loopSemi.GetParallelMajor(), loopSemi.OpStats)
 	anal.Start()
 	defer anal.Stop()
+
 	ctr := loopSemi.ctr
 	result := vm.NewCallResult()
 	for {

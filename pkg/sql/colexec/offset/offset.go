@@ -67,9 +67,11 @@ func (offset *Offset) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, nil
 	}
 	bat := result.Batch
-	anal := proc.GetAnalyze(offset.GetIdx(), offset.GetParallelIdx(), offset.GetParallelMajor())
+
+	anal := proc.GetAnalyze2(offset.GetIdx(), offset.GetParallelIdx(), offset.GetParallelMajor(), offset.OpStats)
 	anal.Start()
 	defer anal.Stop()
+
 	anal.Input(bat, offset.GetIsFirst())
 
 	if offset.ctr.seen > offset.ctr.offset {

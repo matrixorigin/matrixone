@@ -44,9 +44,10 @@ func (merge *Merge) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(merge.GetIdx(), merge.GetParallelIdx(), merge.GetParallelMajor())
+	anal := proc.GetAnalyze2(merge.GetIdx(), merge.GetParallelIdx(), merge.GetParallelMajor(), merge.OpStats)
 	anal.Start()
 	defer anal.Stop()
+
 	var msg *process.RegisterMessage
 	result := vm.NewCallResult()
 	if merge.ctr.buf != nil {

@@ -81,9 +81,10 @@ func (mergeTop *MergeTop) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(mergeTop.GetIdx(), mergeTop.GetParallelIdx(), mergeTop.GetParallelMajor())
+	anal := proc.GetAnalyze2(mergeTop.GetIdx(), mergeTop.GetParallelIdx(), mergeTop.GetParallelMajor(), mergeTop.OpStats)
 	anal.Start()
 	defer anal.Stop()
+
 	ctr := mergeTop.ctr
 	result := vm.NewCallResult()
 	if mergeTop.ctr.limit == 0 {

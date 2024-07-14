@@ -206,15 +206,16 @@ func (mergeOrder *MergeOrder) Call(proc *process.Process) (vm.CallResult, error)
 	}
 
 	ctr := mergeOrder.ctr
-	anal := proc.GetAnalyze(mergeOrder.GetIdx(), mergeOrder.GetParallelIdx(), mergeOrder.GetParallelMajor())
+	anal := proc.GetAnalyze2(mergeOrder.GetIdx(), mergeOrder.GetParallelIdx(), mergeOrder.GetParallelMajor(), mergeOrder.OpStats)
 	anal.Start()
 	defer anal.Stop()
+
 	result := vm.NewCallResult()
 	var err error
 	for {
 		switch ctr.status {
 		case receiving:
-			result, err = mergeOrder.Children[0].Call(proc)
+			result, err = vm.ChildrenCall(mergeOrder.GetChildren(0), proc, anal)
 			if err != nil {
 				return result, err
 			}

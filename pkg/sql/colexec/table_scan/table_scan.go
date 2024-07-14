@@ -62,7 +62,7 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		0,
 		nil)
 
-	anal := proc.GetAnalyze(tableScan.GetIdx(), tableScan.GetParallelIdx(), tableScan.GetParallelMajor())
+	anal := proc.GetAnalyze2(tableScan.GetIdx(), tableScan.GetParallelIdx(), tableScan.GetParallelMajor(), tableScan.OpStats)
 	anal.Start()
 	defer func() {
 		anal.Stop()
@@ -80,13 +80,6 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 	}()
 
 	result := vm.NewCallResult()
-	//select {
-	//case <-proc.Ctx.Done():
-	//	result.Batch = nil
-	//	result.Status = vm.ExecStop
-	//	return result, proc.Ctx.Err()
-	//default:
-	//}
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		e = err
 		return vm.CancelResult, err

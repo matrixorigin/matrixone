@@ -33,6 +33,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pierrec/lz4/v4"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -58,7 +60,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/pierrec/lz4/v4"
 )
 
 var (
@@ -145,7 +146,7 @@ func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 	t := time.Now()
 	ctx, span := trace.Start(proc.Ctx, "ExternalCall")
 	t1 := time.Now()
-	anal := proc.GetAnalyze(external.GetIdx(), external.GetParallelIdx(), external.GetParallelMajor())
+	anal := proc.GetAnalyze2(external.GetIdx(), external.GetParallelIdx(), external.GetParallelMajor(), external.GetOperatorBase().OpStats)
 	anal.Start()
 	defer func() {
 		anal.Stop()

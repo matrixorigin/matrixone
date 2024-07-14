@@ -58,9 +58,10 @@ func (antiJoin *AntiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(antiJoin.GetIdx(), antiJoin.GetParallelIdx(), antiJoin.GetParallelMajor())
+	anal := proc.GetAnalyze2(antiJoin.GetIdx(), antiJoin.GetParallelIdx(), antiJoin.GetParallelMajor(), antiJoin.OpStats)
 	anal.Start()
 	defer anal.Stop()
+
 	ap := antiJoin
 	result := vm.NewCallResult()
 	ctr := ap.ctr

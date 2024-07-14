@@ -20,6 +20,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -31,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"go.uber.org/zap"
 )
 
 // MaxRpcTime is a default timeout time to rpc context if user never set this deadline.
@@ -185,7 +186,7 @@ type messageSenderOnClient struct {
 	mp *mpool.MPool
 
 	// anal was used to merge remote-run's cost analysis information.
-	anal *anaylze
+	anal *anaylzeModule
 
 	// message sender and its data receiver.
 	streamSender morpc.Stream
@@ -203,7 +204,7 @@ type messageSenderOnClient struct {
 }
 
 func newMessageSenderOnClient(
-	ctx context.Context, toAddr string, mp *mpool.MPool, ana *anaylze) (*messageSenderOnClient, error) {
+	ctx context.Context, toAddr string, mp *mpool.MPool, ana *anaylzeModule) (*messageSenderOnClient, error) {
 
 	streamSender, err := cnclient.GetStreamSender(toAddr)
 	if err != nil {
@@ -390,7 +391,7 @@ func (sender *messageSenderOnClient) dealAnalysis(ana *pipeline.AnalysisList) {
 	mergeAnalyseInfo(sender.anal, ana)
 }
 
-func mergeAnalyseInfo(target *anaylze, ana *pipeline.AnalysisList) {
+func mergeAnalyseInfo(target *anaylzeModule, ana *pipeline.AnalysisList) {
 	source := ana.List
 	if len(target.analInfos) != len(source) {
 		return

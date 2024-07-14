@@ -52,9 +52,10 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(loopJoin.GetIdx(), loopJoin.GetParallelIdx(), loopJoin.GetParallelMajor())
+	anal := proc.GetAnalyze2(loopJoin.GetIdx(), loopJoin.GetParallelIdx(), loopJoin.GetParallelMajor(), loopJoin.OpStats)
 	anal.Start()
 	defer anal.Stop()
+
 	ctr := loopJoin.ctr
 	result := vm.NewCallResult()
 	var err error

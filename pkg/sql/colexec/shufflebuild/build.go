@@ -84,9 +84,10 @@ func (shuffleBuild *ShuffleBuild) Call(proc *process.Process) (vm.CallResult, er
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(shuffleBuild.GetIdx(), shuffleBuild.GetParallelIdx(), shuffleBuild.GetParallelMajor())
+	anal := proc.GetAnalyze2(shuffleBuild.GetIdx(), shuffleBuild.GetParallelIdx(), shuffleBuild.GetParallelMajor(), shuffleBuild.OpStats)
 	anal.Start()
 	defer anal.Stop()
+
 	result := vm.NewCallResult()
 	ap := shuffleBuild
 	ctr := ap.ctr
@@ -193,7 +194,7 @@ func (ctr *container) mergeIntoBatches(src *batch.Batch, proc *process.Process) 
 func (ctr *container) collectBuildBatches(shuffleBuild *ShuffleBuild, proc *process.Process, anal process.Analyze, isFirst bool) error {
 	var currentBatch *batch.Batch
 	for {
-		result, err := shuffleBuild.Children[0].Call(proc)
+		result, err := vm.ChildrenCall(shuffleBuild.Children[0], proc, anal)
 		if err != nil {
 			return err
 		}

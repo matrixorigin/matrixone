@@ -62,9 +62,10 @@ func (singleJoin *SingleJoin) Call(proc *process.Process) (vm.CallResult, error)
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(singleJoin.GetIdx(), singleJoin.GetParallelIdx(), singleJoin.GetParallelMajor())
+	anal := proc.GetAnalyze2(singleJoin.GetIdx(), singleJoin.GetParallelIdx(), singleJoin.GetParallelMajor(), singleJoin.OpStats)
 	anal.Start()
 	defer anal.Stop()
+
 	ctr := singleJoin.ctr
 	result := vm.NewCallResult()
 	for {

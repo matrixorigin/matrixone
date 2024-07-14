@@ -46,9 +46,10 @@ func (indexJoin *IndexJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(indexJoin.GetIdx(), indexJoin.GetParallelIdx(), indexJoin.GetParallelMajor())
+	anal := proc.GetAnalyze2(indexJoin.GetIdx(), indexJoin.GetParallelIdx(), indexJoin.GetParallelMajor(), indexJoin.OpStats)
 	anal.Start()
 	defer anal.Stop()
+
 	ap := indexJoin
 	ctr := ap.ctr
 	result := vm.NewCallResult()

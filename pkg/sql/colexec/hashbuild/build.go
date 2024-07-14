@@ -82,9 +82,10 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(hashBuild.GetIdx(), hashBuild.GetParallelIdx(), hashBuild.GetParallelMajor())
+	anal := proc.GetAnalyze2(hashBuild.GetIdx(), hashBuild.GetParallelIdx(), hashBuild.GetParallelMajor(), hashBuild.OpStats)
 	anal.Start()
 	defer anal.Stop()
+
 	result := vm.NewCallResult()
 	ap := hashBuild
 	ctr := ap.ctr
@@ -182,7 +183,7 @@ func (ctr *container) mergeIntoBatches(src *batch.Batch, proc *process.Process) 
 func (ctr *container) collectBuildBatches(hashBuild *HashBuild, proc *process.Process, anal process.Analyze, isFirst bool) error {
 	var currentBatch *batch.Batch
 	for {
-		result, err := hashBuild.Children[0].Call(proc)
+		result, err := vm.ChildrenCall(hashBuild.GetChildren(0), proc, anal)
 		if err != nil {
 			return err
 		}

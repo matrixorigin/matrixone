@@ -53,9 +53,10 @@ func (loopAnti *LoopAnti) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(loopAnti.GetIdx(), loopAnti.GetParallelIdx(), loopAnti.GetParallelMajor())
+	anal := proc.GetAnalyze2(loopAnti.GetIdx(), loopAnti.GetParallelIdx(), loopAnti.GetParallelMajor(), loopAnti.OpStats)
 	anal.Start()
 	defer anal.Stop()
+
 	ctr := loopAnti.ctr
 	result := vm.NewCallResult()
 	for {

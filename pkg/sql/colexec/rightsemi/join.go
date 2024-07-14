@@ -62,9 +62,10 @@ func (rightSemi *RightSemi) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	analyze := proc.GetAnalyze(rightSemi.GetIdx(), rightSemi.GetParallelIdx(), rightSemi.GetParallelMajor())
+	analyze := proc.GetAnalyze2(rightSemi.GetIdx(), rightSemi.GetParallelIdx(), rightSemi.GetParallelMajor(), rightSemi.OpStats)
 	analyze.Start()
 	defer analyze.Stop()
+
 	ctr := rightSemi.ctr
 	result := vm.NewCallResult()
 	var err error

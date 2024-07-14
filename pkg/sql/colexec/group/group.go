@@ -132,7 +132,7 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(group.GetIdx(), group.GetParallelIdx(), group.GetParallelMajor())
+	anal := proc.GetAnalyze2(group.GetIdx(), group.GetParallelIdx(), group.GetParallelMajor(), group.OpStats)
 	anal.Start()
 	defer anal.Stop()
 

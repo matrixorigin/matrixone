@@ -253,6 +253,24 @@ func (proc *Process) GetAnalyze(idx, parallelIdx int, parallelMajor bool) Analyz
 	return &analyze{analInfo: proc.Base.AnalInfos[idx], wait: 0, parallelIdx: parallelIdx, parallelMajor: parallelMajor}
 }
 
+func (proc *Process) GetAnalyze2(idx, parallelIdx int, parallelMajor bool, op *OperatorStats) Analyze {
+	if idx >= len(proc.Base.AnalInfos) || idx < 0 {
+		return &analyze{
+			analInfo:      nil,
+			parallelIdx:   parallelIdx,
+			parallelMajor: parallelMajor,
+			op:            op,
+		}
+	}
+	return &analyze{
+		analInfo:      proc.Base.AnalInfos[idx],
+		wait:          0,
+		parallelIdx:   parallelIdx,
+		parallelMajor: parallelMajor,
+		op:            op,
+	}
+}
+
 func (proc *Process) AllocVectorOfRows(typ types.Type, nele int, nsp *nulls.Nulls) (*vector.Vector, error) {
 	vec := proc.GetVector(typ)
 	err := vec.PreExtend(nele, proc.Mp())
@@ -327,6 +345,8 @@ func (proc *Process) AppendToFixedSizeFromOffset(dst *batch.Batch, src *batch.Ba
 	return dst, length, nil
 }
 
+// The PutBatch function is responsible for releasing or putting a batch (batch. Batch) object back into the pool.
+// This function is used to handle memory management and resource recycling.
 func (proc *Process) PutBatch(bat *batch.Batch) {
 	if bat == batch.EmptyBatch {
 		return

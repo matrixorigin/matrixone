@@ -57,9 +57,10 @@ func (loopSingle *LoopSingle) Call(proc *process.Process) (vm.CallResult, error)
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(loopSingle.GetIdx(), loopSingle.GetParallelIdx(), loopSingle.GetParallelMajor())
+	anal := proc.GetAnalyze2(loopSingle.GetIdx(), loopSingle.GetParallelIdx(), loopSingle.GetParallelMajor(), loopSingle.OpStats)
 	anal.Start()
 	defer anal.Stop()
+
 	ctr := loopSingle.ctr
 	result := vm.NewCallResult()
 	for {

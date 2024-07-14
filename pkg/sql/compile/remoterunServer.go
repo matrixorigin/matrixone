@@ -21,35 +21,32 @@ import (
 	"runtime"
 	"time"
 
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-
-	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
-
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
-
-	"github.com/matrixorigin/matrixone/pkg/logservice"
-
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 // CnServerMessageHandler receive and deal the message from cn-client.
@@ -199,12 +196,12 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		err = s.ParallelRun(runCompile)
 		if err == nil {
 			// record the number of s3 requests
-			runCompile.proc.Base.AnalInfos[runCompile.anal.curr].S3IOInputCount += runCompile.counterSet.FileService.S3.Put.Load()
-			runCompile.proc.Base.AnalInfos[runCompile.anal.curr].S3IOInputCount += runCompile.counterSet.FileService.S3.List.Load()
-			runCompile.proc.Base.AnalInfos[runCompile.anal.curr].S3IOOutputCount += runCompile.counterSet.FileService.S3.Head.Load()
-			runCompile.proc.Base.AnalInfos[runCompile.anal.curr].S3IOOutputCount += runCompile.counterSet.FileService.S3.Get.Load()
-			runCompile.proc.Base.AnalInfos[runCompile.anal.curr].S3IOOutputCount += runCompile.counterSet.FileService.S3.Delete.Load()
-			runCompile.proc.Base.AnalInfos[runCompile.anal.curr].S3IOOutputCount += runCompile.counterSet.FileService.S3.DeleteMulti.Load()
+			runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOInputCount += runCompile.counterSet.FileService.S3.Put.Load()
+			runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOInputCount += runCompile.counterSet.FileService.S3.List.Load()
+			runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOOutputCount += runCompile.counterSet.FileService.S3.Head.Load()
+			runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOOutputCount += runCompile.counterSet.FileService.S3.Get.Load()
+			runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOOutputCount += runCompile.counterSet.FileService.S3.Delete.Load()
+			runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOOutputCount += runCompile.counterSet.FileService.S3.DeleteMulti.Load()
 
 			receiver.finalAnalysisInfo = runCompile.proc.Base.AnalInfos
 		} else {

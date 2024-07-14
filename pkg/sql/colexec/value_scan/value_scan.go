@@ -43,14 +43,7 @@ func (valueScan *ValueScan) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	result := vm.NewCallResult()
-
-	//select {
-	//case <-proc.Ctx.Done():
-	//	result.Status = vm.ExecStop
-	//	return result, proc.Ctx.Err()
-	//default:
-	//}
-
+	
 	if valueScan.ctr.idx < len(valueScan.Batchs) {
 		result.Batch = valueScan.Batchs[valueScan.ctr.idx]
 		if valueScan.ctr.idx > 0 {

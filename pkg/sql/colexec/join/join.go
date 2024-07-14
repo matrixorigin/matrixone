@@ -61,9 +61,10 @@ func (innerJoin *InnerJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(innerJoin.GetIdx(), innerJoin.GetParallelIdx(), innerJoin.GetParallelMajor())
+	anal := proc.GetAnalyze2(innerJoin.GetIdx(), innerJoin.GetParallelIdx(), innerJoin.GetParallelMajor(), innerJoin.OpStats)
 	anal.Start()
 	defer anal.Stop()
+
 	ctr := innerJoin.ctr
 	result := vm.NewCallResult()
 	for {

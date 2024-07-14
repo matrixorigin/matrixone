@@ -61,7 +61,7 @@ func (mergeLimit *MergeLimit) Call(proc *process.Process) (vm.CallResult, error)
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(mergeLimit.GetIdx(), mergeLimit.GetParallelIdx(), mergeLimit.GetParallelMajor())
+	anal := proc.GetAnalyze2(mergeLimit.GetIdx(), mergeLimit.GetParallelIdx(), mergeLimit.GetParallelMajor(), mergeLimit.OpStats)
 	anal.Start()
 	defer anal.Stop()
 

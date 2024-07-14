@@ -212,13 +212,11 @@ func (order *Order) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	ctr := order.ctr
-	anal := proc.GetAnalyze(order.GetIdx(), order.GetParallelIdx(), order.GetParallelMajor())
+	anal := proc.GetAnalyze2(order.GetIdx(), order.GetParallelIdx(), order.GetParallelMajor(), order.OpStats)
 	anal.Start()
-	defer func() {
-		anal.Stop()
-	}()
+	defer anal.Stop()
 
+	ctr := order.ctr
 	if ctr.state == vm.Build {
 		for {
 			result, err := vm.ChildrenCall(order.GetChildren(0), proc, anal)

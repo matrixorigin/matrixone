@@ -49,10 +49,11 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 		return vm.CancelResult, err
 	}
 
-	ctr := mergeGroup.ctr
-	anal := proc.GetAnalyze(mergeGroup.GetIdx(), mergeGroup.GetParallelIdx(), mergeGroup.GetParallelMajor())
+	anal := proc.GetAnalyze2(mergeGroup.GetIdx(), mergeGroup.GetParallelIdx(), mergeGroup.GetParallelMajor(), mergeGroup.OpStats)
 	anal.Start()
 	defer anal.Stop()
+
+	ctr := mergeGroup.ctr
 	result := vm.NewCallResult()
 	var err error
 	for {

@@ -59,9 +59,10 @@ func (leftJoin *LeftJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(leftJoin.GetIdx(), leftJoin.GetParallelIdx(), leftJoin.GetParallelMajor())
+	anal := proc.GetAnalyze2(leftJoin.GetIdx(), leftJoin.GetParallelIdx(), leftJoin.GetParallelMajor(), leftJoin.OpStats)
 	anal.Start()
 	defer anal.Stop()
+
 	ctr := leftJoin.ctr
 	result := vm.NewCallResult()
 	for {

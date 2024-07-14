@@ -88,9 +88,10 @@ func (markJoin *MarkJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(markJoin.GetIdx(), markJoin.GetParallelIdx(), markJoin.GetParallelMajor())
+	anal := proc.GetAnalyze2(markJoin.GetIdx(), markJoin.GetParallelIdx(), markJoin.GetParallelMajor(), markJoin.OpStats)
 	anal.Start()
 	defer anal.Stop()
+
 	ctr := markJoin.ctr
 	result := vm.NewCallResult()
 	var err error

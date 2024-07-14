@@ -47,7 +47,7 @@ func (output *Output) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, err
 	}
 
-	anal := proc.GetAnalyze(output.GetIdx(), output.GetParallelIdx(), output.GetParallelMajor())
+	anal := proc.GetAnalyze2(output.GetIdx(), output.GetParallelIdx(), output.GetParallelMajor(), output.OpStats)
 	anal.Start()
 	defer anal.Stop()
 

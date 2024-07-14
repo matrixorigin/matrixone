@@ -61,7 +61,7 @@ func (mergeOffset *MergeOffset) Call(proc *process.Process) (vm.CallResult, erro
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(mergeOffset.GetIdx(), mergeOffset.GetParallelIdx(), mergeOffset.GetParallelMajor())
+	anal := proc.GetAnalyze2(mergeOffset.GetIdx(), mergeOffset.GetParallelIdx(), mergeOffset.GetParallelMajor(), mergeOffset.OpStats)
 	anal.Start()
 	defer anal.Stop()
 

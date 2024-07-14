@@ -19,17 +19,15 @@ import (
 	"container/heap"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/compare"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-
-	"github.com/matrixorigin/matrixone/pkg/compare"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -93,11 +91,9 @@ func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
 	ap := top
 	ctr := ap.ctr
 
-	anal := proc.GetAnalyze(top.GetIdx(), top.GetParallelIdx(), top.GetParallelMajor())
+	anal := proc.GetAnalyze2(top.GetIdx(), top.GetParallelIdx(), top.GetParallelMajor(), top.OpStats)
 	anal.Start()
-	defer func() {
-		anal.Stop()
-	}()
+	defer anal.Stop()
 
 	if top.ctr.limit == 0 {
 		result := vm.NewCallResult()
