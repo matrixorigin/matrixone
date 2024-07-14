@@ -177,6 +177,16 @@ func GetAllBlockMetas(rel handle.Relation) (metas []*catalog.ObjectEntry) {
 	return
 }
 
+func MockObjectStats(t *testing.T, obj handle.Object) {
+	objName := objectio.BuildObjectNameWithObjectID(obj.GetID())
+	location := objectio.MockLocation(objName)
+	stats := objectio.NewObjectStats()
+	objectio.SetObjectStatsLocation(stats, location)
+	objectio.SetObjectStatsSize(stats, 1)
+	err := obj.UpdateStats(*stats)
+	assert.Nil(t, err)
+}
+
 func CheckAllColRowsByScan(t *testing.T, rel handle.Relation, expectRows int, applyDelete bool) {
 	schema := rel.Schema().(*catalog.Schema)
 	for _, def := range schema.ColDefs {
