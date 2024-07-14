@@ -193,6 +193,9 @@ func (e *ObjectMVCCNode) AppendTuple(sid *types.Objectid, batch *containers.Batc
 		batch.GetVectorByName(ObjectAttr_ObjectStats).Append(stats[:], false)
 		return
 	}
+	if e.IsEmpty() {
+		panic("logic error")
+	}
 	batch.GetVectorByName(ObjectAttr_ObjectStats).Append(e.ObjectStats[:], false)
 }
 

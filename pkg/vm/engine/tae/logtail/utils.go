@@ -2993,12 +2993,12 @@ func (collector *BaseCollector) fillObjectInfoBatch(entry *catalog.ObjectEntry, 
 		}
 		create := node.End.Equal(&entry.CreatedAt)
 		if entry.IsAppendable() && create {
-			visitObject(collector.data.bats[TNObjectInfoIDX], entry, node, create, false, types.TS{})
+			visitObject(collector.data.bats[TNObjectInfoIDX], entry, node, create, false, types.TS{}, false)
 		} else {
 			if entry.IsAppendable() && entry.DeletedAt.IsEmpty() {
 				panic(fmt.Sprintf("logic error, object %v", entry.ID().String()))
 			}
-			visitObject(collector.data.bats[ObjectInfoIDX], entry, node, create, false, types.TS{})
+			visitObject(collector.data.bats[ObjectInfoIDX], entry, node, create, false, types.TS{}, true)
 		}
 		objNode := node
 
