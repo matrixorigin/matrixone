@@ -50,6 +50,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -6374,13 +6375,17 @@ func TestAlterFakePk(t *testing.T) {
 		// check non-exist column foreach
 		newSchema := obj.GetRelation().Schema()
 		blkdata := obj.GetMeta().(*catalog.ObjectEntry).GetObjectData()
-		sels := []uint32{1, 3}
+		sels := &nulls.Nulls{}
+		sels.Add(1)
+		sels.Add(3)
 		rows := make([]int, 0, 4)
-		blkdata.Foreach(context.Background(), newSchema, 0, 1 /*"add1" column*/, func(v any, isnull bool, row int) error {
+		view, err := blkdata.GetColumnDataById(ctx, txn, newSchema, 0, 1, common.DefaultAllocator)
+		view.GetData().Foreach(func(v any, isnull bool, row int) error {
 			require.True(t, true)
 			rows = append(rows, row)
 			return nil
-		}, sels, common.DefaultAllocator)
+		}, sels)
+		view.Close()
 		require.Equal(t, []int{1, 3}, rows)
 		require.NoError(t, err)
 		require.NoError(t, txn.Commit(context.Background()))
