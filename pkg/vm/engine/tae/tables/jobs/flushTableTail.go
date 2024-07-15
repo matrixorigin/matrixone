@@ -443,6 +443,20 @@ func (task *flushTableTailTask) prepareAObjSortedData(
 	totalRowCnt := views.Length()
 	bat.Deletes = views.Deletes.Clone()
 	task.aObjDeletesCnt += bat.Deletes.GetCardinality()
+	if views.Vecs[0] == nil {
+		for _, vec := range views.Vecs {
+			if vec != nil {
+				panic("logic error")
+			}
+		}
+	} else {
+		length := views.Vecs[0].Length()
+		for _, vec := range views.Vecs {
+			if vec.Length() != length {
+				panic(fmt.Sprintf("logic err, expect %d, get %d", length, vec.Length()))
+			}
+		}
+	}
 	for i, colidx := range idxs {
 		vec := views.Vecs[i]
 		if vec == nil {

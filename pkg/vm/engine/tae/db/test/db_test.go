@@ -1776,7 +1776,7 @@ func TestSystemDB1(t *testing.T) {
 		assert.Nil(t, err)
 		defer view.Close()
 		t.Log(view.Vecs[0].String())
-
+	}
 	for i := 0; i < bat.Vecs[0].Length(); i++ {
 		dbName := string(bat.Vecs[0].Get(i).([]byte))
 		relName := string(bat.Vecs[1].Get(i).([]byte))
