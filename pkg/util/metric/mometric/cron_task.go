@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
@@ -151,6 +152,7 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 			return ctx.Err()
 		case <-ticker.C:
 			logger.Info("start next round")
+			v2.TraceStorageUsageAllCounter.Inc()
 		}
 
 		if !IsEnable() {
@@ -248,6 +250,7 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 			return
 		case now = <-next.C:
 			logger.Debug("start check new account")
+			v2.TraceStorageUsageNewCounter.Inc()
 		}
 
 		// mysql> select * from mo_catalog.mo_account;
