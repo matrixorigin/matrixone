@@ -669,6 +669,16 @@ func (c *Compile) IsTpQuery() bool {
 	return c.execType == plan2.ExecTypeTP
 }
 
+func (c *Compile) IsSingleScope(ss []*Scope) bool {
+	if c.IsTpQuery() {
+		return true
+	}
+	if len(ss) > 1 {
+		return false
+	}
+	return ss[0].NodeInfo.Mcpu == 1
+}
+
 func (c *Compile) SetIsPrepare(isPrepare bool) {
 	c.isPrepare = isPrepare
 }
@@ -1458,7 +1468,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 			return ss, nil
 		}
 		rs := ss[0]
-		if len(ss) > 1 {
+		if !c.IsSingleScope(ss) {
 			rs = c.newMergeScope(ss)
 			rs.Magic = Merge
 			c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
@@ -1782,7 +1792,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 			return nil, err
 		}
 		rs := ss[0]
-		if len(ss) > 1 {
+		if !c.IsSingleScope(ss) {
 			rs = c.newMergeScope(ss)
 		}
 		rs.setRootOperator(constructDispatchLocal(true, true, n.RecursiveSink, receivers))
@@ -3016,13 +3026,13 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scope, right []*Scope) ([]*Scope, error) {
 	var l, r *Scope
-	if len(left) == 1 {
+	if c.IsSingleScope(left) {
 		l = left[0]
 	} else {
 		l = c.newMergeScope(left)
 	}
 
-	if len(right) == 1 {
+	if c.IsSingleScope(right) {
 		r = right[0]
 	} else {
 		r = c.newMergeScope(right)
@@ -3531,7 +3541,7 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 
 	// all join's first flag will setting in newLeftScope and newRightScope
 	// so we set it to false now
-	if len(buildScopes) == 1 {
+	if c.IsSingleScope(buildScopes) {
 		rs[0].PreScopes = append(rs[0].PreScopes, buildScopes[0])
 	} else {
 		c.anal.isFirst = false
