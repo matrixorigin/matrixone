@@ -85,12 +85,16 @@ const (
 	ColumnSize        = "size"         // result column in `show accounts`, or column in table mo_catalog.mo_account
 	ColumnCreatedTime = "created_time" // column in table mo_catalog.mo_account
 	ColumnStatus      = "status"       // column in table mo_catalog.mo_account
+
+	ColumnSnapshotSize = "snapshot_size" // result column in `show accounts`, or column in table mo_catalog.mo_account
 )
 
 var (
 	gUpdateStorageUsageInterval atomic.Int64
 	gCheckNewInterval           atomic.Int64
 	frontendServerStarted       func() bool
+
+	existSnapshotSize bool
 )
 
 func init() {
@@ -110,6 +114,7 @@ func GetUpdateStorageUsageInterval() time.Duration {
 func cleanStorageUsageMetric(logger *log.MOLogger, actor string) {
 	// clean metric data for next cron task.
 	metric.StorageUsageFactory.Reset()
+	metric.SnapshotUsageFactory.Reset()
 	logger.Info("clean storage usage metric", zap.String("actor", actor))
 }
 
@@ -191,9 +196,15 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 			if err != nil {
 				return err
 			}
-			logger.Debug("storage_usage", zap.String("account", account), zap.Float64("sizeMB", sizeMB))
+			snapshotSizeMB, err := result.Float64ValueByName(ctx, rowIdx, ColumnSnapshotSize)
+			if err != nil {
+				return err
+			}
+			logger.Debug("storage_usage", zap.String("account", account), zap.Float64("sizeMB", sizeMB),
+				zap.Float64("snapshot", snapshotSizeMB))
 
 			metric.StorageUsage(account).Set(sizeMB)
+			metric.SnapshotUsage(account).Set(snapshotSizeMB)
 		}
 
 		// next round
@@ -312,13 +323,20 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 				logger.Error("failed to fetch new account size", zap.Error(err), zap.String("account", account))
 				continue
 			}
+			snapshotSizeMB, err := showRet.Float64ValueByName(ctx, 0, ColumnSnapshotSize)
+			if err != nil {
+				logger.Error("failed to fetch new account snapshot size", zap.Error(err), zap.String("account", account))
+				continue
+			}
 			// done query.
 
 			// update new accounts metric
 			logger.Info("new account storage_usage", zap.String("account", account), zap.Float64("sizeMB", sizeMB),
+				zap.Float64("snapshot", snapshotSizeMB),
 				zap.String("created_time", createdTime))
 
 			metric.StorageUsage(account).Set(sizeMB)
+			metric.SnapshotUsage(account).Set(snapshotSizeMB)
 		}
 
 	nextL:
