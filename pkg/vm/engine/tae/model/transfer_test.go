@@ -74,7 +74,7 @@ func TestTransferPage(t *testing.T) {
 
 func TestTransferTable(t *testing.T) {
 	ctx := context.Background()
-	table := NewTransferTable[*TransferHashPage](ctx, objectio.TmpNewFileservice(ctx, "data"))
+	table, _ := NewTransferTable[*TransferHashPage](ctx, objectio.TmpNewFileservice(ctx, "data"))
 	defer table.Close()
 	sid := objectio.NewSegmentid()
 

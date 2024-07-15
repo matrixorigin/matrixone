@@ -17,6 +17,7 @@ package db
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"path"
 	"sync/atomic"
 	"time"
@@ -106,7 +107,10 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	}
 	fs := objectio.NewObjectFS(opts.Fs, serviceDir)
 	localFs := objectio.NewObjectFS(opts.LocalFs, serviceDir)
-	transferTable := model.NewTransferTable[*model.TransferHashPage](ctx, opts.LocalFs)
+	transferTable, e := model.NewTransferTable[*model.TransferHashPage](ctx, opts.LocalFs)
+	if e != nil {
+		panic(fmt.Sprintf("open-tae: model.NewTransferTable failed, %s", e))
+	}
 
 	switch opts.LogStoreT {
 	case options.LogstoreBatchStore:
