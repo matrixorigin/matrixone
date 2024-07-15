@@ -153,7 +153,14 @@ func (page *TransferHashPage) Pin() *common.PinnedItem[*TransferHashPage] {
 }
 
 func (page *TransferHashPage) Clear() {
-	page.ClearTable()
+	m := page.hashmap.Load()
+	if m == nil {
+		return
+	}
+
+	page.hashmap.Store(nil)
+	v2.TaskMergeTransferPageLengthGauge.Sub(float64(len(m.M)))
+	m.M = make(map[uint32][]byte)
 }
 
 func (page *TransferHashPage) Train(m map[uint32][]byte) {
@@ -208,17 +215,6 @@ func (page *TransferHashPage) Unmarshal(data []byte) (*api.HashPageMap, error) {
 
 func (page *TransferHashPage) SetPath(path Path) {
 	page.path = path
-}
-
-func (page *TransferHashPage) ClearTable() {
-	m := page.hashmap.Load()
-	if m == nil {
-		return
-	}
-
-	page.hashmap.Store(nil)
-	v2.TaskMergeTransferPageLengthGauge.Sub(float64(len(m.M)))
-	m.M = make(map[uint32][]byte)
 }
 
 func (page *TransferHashPage) loadTable() *api.HashPageMap {
