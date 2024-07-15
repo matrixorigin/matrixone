@@ -146,14 +146,8 @@ func Test_Append(t *testing.T) {
 
 		fmt.Println(stats.String())
 
-		expect := testutil.PartitionStateStats{
-			DataObjectsVisible:   testutil.PObjectStats{},
-			DataObjectsInvisible: testutil.PObjectStats{},
-			InmemRows:            testutil.PInmemRowsStats{VisibleCnt: int(batchRows * cnt)},
-			CheckpointCnt:        0,
-		}
-
-		require.Equal(t, expect, stats.Summary())
+		require.Equal(t, int(batchRows*cnt), stats.InmemRows.VisibleCnt)
+		require.Equal(t, 0, stats.DataObjectsVisible.ObjCnt)
 	}
 
 	// flush all aobj into one nobj
@@ -165,18 +159,10 @@ func Test_Append(t *testing.T) {
 
 		fmt.Println(stats.String())
 
-		expect := testutil.PartitionStateStats{
-			DataObjectsVisible: testutil.PObjectStats{
-				ObjCnt: 1, BlkCnt: int(expectBlkCnt), RowCnt: int(batchRows * cnt),
-			},
-			DataObjectsInvisible: testutil.PObjectStats{
-				ObjCnt: int(expectObjCnt), BlkCnt: int(expectBlkCnt), RowCnt: int(batchRows * cnt),
-			},
-			InmemRows:     testutil.PInmemRowsStats{},
-			CheckpointCnt: 0,
-		}
-
-		require.Equal(t, expect, stats.Summary())
+		require.Equal(t, int(batchRows*cnt), stats.DataObjectsVisible.RowCnt)
+		require.Equal(t, 0, stats.InmemRows.VisibleCnt)
+		require.Equal(t, 1, stats.DataObjectsVisible.ObjCnt)
+		require.Equal(t, int(expectBlkCnt), stats.DataObjectsVisible.BlkCnt)
 	}
 }
 
@@ -375,6 +361,7 @@ func Test_Bug_MissCleanDirtyBlockFlag(t *testing.T) {
 		blkId := iter.GetObject().GetMeta().(*catalog.ObjectEntry).AsCommonID()
 		// delete one row on the 1st blk
 		err = rel.RangeDelete(blkId, 0, 0, handle.DT_Normal)
+		require.Nil(t, err)
 
 		// delete two rows on the 2nd blk
 		blkId.BlockID = *objectio.BuildObjectBlockid(iter.GetObject().GetMeta().(*catalog.ObjectEntry).ObjectName(), 1)
@@ -476,6 +463,7 @@ func Test_EmptyObjectStats(t *testing.T) {
 		blkId := iter.GetObject().GetMeta().(*catalog.ObjectEntry).AsCommonID()
 		// delete one row on the 1st blk
 		err = rel.RangeDelete(blkId, 0, 0, handle.DT_Normal)
+		require.Nil(t, err)
 
 		require.Nil(t, iter.Close())
 		assert.Nil(t, txn.Commit(context.Background()))

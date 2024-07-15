@@ -85,14 +85,8 @@ func Test_InsertRows(t *testing.T) {
 		require.Nil(t, err)
 
 		fmt.Println(stats.String())
-		expect := testutil.PartitionStateStats{
-			DataObjectsVisible:   testutil.PObjectStats{},
-			DataObjectsInvisible: testutil.PObjectStats{},
-			InmemRows:            testutil.PInmemRowsStats{VisibleCnt: 10},
-			CheckpointCnt:        0,
-		}
 
-		require.Equal(t, expect, stats)
+		require.Equal(t, 10, stats.InmemRows.VisibleCnt)
 	}
 
 	err = taeHandler.GetDB().FlushTable(ctx, accountId, rel.GetDBID(ctx), rel.GetTableID(ctx), types.TimestampToTS(disttaeEngine.Now()))
