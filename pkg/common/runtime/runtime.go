@@ -203,3 +203,13 @@ func CheckMethodVersionWithRuntime[Req interface{ GetMethod() T }, T methodType]
 	}
 	return nil
 }
+
+// RunTest run runtime test.
+func RunTest(
+	sid string,
+	fn func(rt Runtime),
+) {
+	rt := DefaultRuntime()
+	SetupServiceBasedRuntime(sid, rt)
+	fn(rt)
+}

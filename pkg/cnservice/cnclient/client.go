@@ -22,7 +22,7 @@ import (
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 )
@@ -117,9 +117,11 @@ type ClientConfig struct {
 
 // TODO: Here it needs to be refactored together with Runtime
 func NewCNClient(
+	sid string,
 	localServiceAddress string,
-	cfg *ClientConfig) error {
-	logger := logutil.GetGlobalLogger().Named("cn-backend")
+	cfg *ClientConfig,
+) error {
+	logger := runtime.ServiceRuntime(sid).Logger().RawLogger().Named("cn-backend")
 
 	var err error
 	cfg.Fill()
@@ -135,8 +137,11 @@ func NewCNClient(
 	cli.localServiceAddress = localServiceAddress
 	cli.requestPool = &sync.Pool{New: func() any { return &pipeline.Message{} }}
 
-	codec := morpc.NewMessageCodec(cli.acquireMessage,
-		morpc.WithCodecMaxBodySize(int(cfg.RPC.MaxMessageSize)))
+	codec := morpc.NewMessageCodec(
+		sid,
+		cli.acquireMessage,
+		morpc.WithCodecMaxBodySize(int(cfg.RPC.MaxMessageSize)),
+	)
 	factory := morpc.NewGoettyBasedBackendFactory(codec,
 		morpc.WithBackendGoettyOptions(
 			goetty.WithSessionRWBUfferSize(cfg.ReadBufferSize, cfg.WriteBufferSize),

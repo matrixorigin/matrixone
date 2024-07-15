@@ -72,8 +72,14 @@ func getFileNames(ctx context.Context, retBytes [][][]byte) ([]string, error) {
 	return fileName, err
 }
 
-func BackupData(ctx context.Context, srcFs, dstFs fileservice.FileService, dir string, config *Config) error {
-	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.InternalSQLExecutor)
+func BackupData(
+	ctx context.Context,
+	sid string,
+	srcFs, dstFs fileservice.FileService,
+	dir string,
+	config *Config,
+) error {
+	v, ok := runtime.ServiceRuntime(sid).GetGlobalVariables(runtime.InternalSQLExecutor)
 	if !ok {
 		return moerr.NewNotSupported(ctx, "no implement sqlExecutor")
 	}
