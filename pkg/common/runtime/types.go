@@ -54,6 +54,8 @@ const (
 
 	// BackgroundCNSelector is the labels of the CN handing the background requests, including mo-logger, task-service.
 	BackgroundCNSelector = "background-cn-selector"
+
+	PipelineClient = "pipeline-client"
 )
 
 // Runtime contains the runtime environment for a MO service. Each CN/DN/LOG service
