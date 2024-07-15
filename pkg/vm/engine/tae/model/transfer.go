@@ -31,7 +31,7 @@ type PageT[T common.IRef] interface {
 	TTL() uint8 // 0 skip, 1 clear memory, 2 clear disk
 	ID() *common.ID
 	Length() int
-	Clear(clearDisk bool)
+	Clear()
 }
 
 type TransferTable[T PageT[T]] struct {
@@ -44,8 +44,8 @@ func NewTransferTable[T PageT[T]](ctx context.Context, fs fileservice.FileServic
 	list, _ := fs.List(ctx, "transfer")
 	for _, dir := range list {
 		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		cancel()
 		err := fs.Delete(ctx, path.Join("transfer", dir.Name))
+		cancel()
 		if err != nil {
 			return nil, err
 		}
@@ -94,7 +94,7 @@ func (table *TransferTable[T]) prepareTTL() (mem, disk []*common.PinnedItem[T]) 
 
 func (table *TransferTable[T]) executeTTL(mem, disk []*common.PinnedItem[T]) {
 	for _, page := range mem {
-		page.Val.Clear(false)
+		page.Val.Clear()
 	}
 
 	table.Lock()
@@ -103,7 +103,6 @@ func (table *TransferTable[T]) executeTTL(mem, disk []*common.PinnedItem[T]) {
 	}
 	table.Unlock()
 	for _, pinned := range disk {
-		pinned.Val.Clear(true)
 		pinned.Close()
 	}
 }

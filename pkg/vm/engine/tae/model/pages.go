@@ -124,6 +124,7 @@ func (page *TransferHashPage) TTL() uint8 {
 
 func (page *TransferHashPage) Close() {
 	logutil.Debugf("Closing %s", page.String())
+	page.ClearPersistTable()
 	page.hashmap.Store(nil)
 }
 
@@ -151,11 +152,8 @@ func (page *TransferHashPage) Pin() *common.PinnedItem[*TransferHashPage] {
 	}
 }
 
-func (page *TransferHashPage) Clear(clearDisk bool) {
+func (page *TransferHashPage) Clear() {
 	page.ClearTable()
-	if clearDisk {
-		page.ClearPersistTable()
-	}
 }
 
 func (page *TransferHashPage) Train(m map[uint32][]byte) {
