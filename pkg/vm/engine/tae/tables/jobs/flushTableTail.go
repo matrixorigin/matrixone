@@ -435,42 +435,20 @@ func (task *flushTableTailTask) prepareAObjSortedData(
 	}
 	obj := task.aObjHandles[objIdx]
 
-	views, err := obj.GetColumnDataByIds(ctx, 0, idxs, common.MergeAllocator)
+	loadedBat, err := obj.GetColumnDataByIds(ctx, 0, idxs, common.MergeAllocator)
 	if err != nil {
 		return
 	}
-	bat = containers.NewBatch()
-	totalRowCnt := views.Length()
-	bat.Deletes = views.Deletes.Clone()
-	task.aObjDeletesCnt += bat.Deletes.GetCardinality()
-	if views.Vecs[0] == nil {
-		for _, vec := range views.Vecs {
-			if vec != nil {
-				panic("logic error")
-			}
-		}
-	} else {
-		length := views.Vecs[0].Length()
-		for _, vec := range views.Vecs {
-			if vec.Length() != length {
-				panic(fmt.Sprintf("logic err, expect %d, get %d", length, vec.Length()))
-			}
-		}
-	}
-	for i, colidx := range idxs {
-		vec := views.Vecs[i]
-		if vec == nil {
+	for i := range idxs {
+		if vec := loadedBat.Vecs[i]; vec == nil || vec.Length() == 0 {
 			empty = true
+			loadedBat.Close()
 			return
 		}
-		if vec.Length() == 0 {
-			empty = true
-			vec.Close()
-			bat.Close()
-			return
-		}
-		bat.AddVector(task.schema.ColDefs[colidx].Name, vec.TryConvertConst())
 	}
+	totalRowCnt := loadedBat.Length()
+	task.aObjDeletesCnt += loadedBat.Deletes.GetCardinality()
+	bat = loadedBat
 
 	var sortMapping []int64
 	if sortKeyPos >= 0 {
