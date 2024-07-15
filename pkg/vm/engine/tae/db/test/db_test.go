@@ -17,6 +17,7 @@ package test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"reflect"
@@ -32,13 +33,13 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 
@@ -9213,4 +9214,125 @@ func TestGCCatalog4(t *testing.T) {
 
 	tae.Catalog.GCByTS(ctx, tae.TxnMgr.Now())
 
+}
+
+func TestPersistTransferTable(t *testing.T) {
+	ctx := context.Background()
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(13, 3)
+	schema.BlockMaxRows = 10
+	schema.ObjectMaxBlocks = 3
+	tae.BindSchema(schema)
+	testutil.CreateRelation(t, tae.DB, "db", schema, true)
+
+	sid := objectio.NewSegmentid()
+	id1 := common.ID{BlockID: *objectio.NewBlockid(sid, 1, 0)}
+	id2 := common.ID{BlockID: *objectio.NewBlockid(sid, 2, 0)}
+
+	now := time.Now()
+	page := model.NewTransferHashPage(&id1, now, false, tae.Runtime.LocalFs.Service, time.Second, time.Minute)
+	ids := make([]types.Rowid, 10)
+	m := make(map[uint32][]byte, 10)
+	for i := 0; i < 10; i++ {
+		rowID := *objectio.NewRowid(&id2.BlockID, uint32(i))
+		m[uint32(i)] = rowID[:]
+		ids[i] = rowID
+	}
+	page.Train(m)
+	tae.Runtime.TransferTable.AddPage(page)
+
+	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+	ioVector := fileservice.IOVector{
+		FilePath: name.String(),
+	}
+	offset := int64(0)
+	data := page.Marshal()
+	ioEntry := fileservice.IOEntry{
+		Offset: offset,
+		Size:   int64(len(data)),
+		Data:   data,
+	}
+	ioVector.Entries = append(ioVector.Entries, ioEntry)
+
+	err := tae.Runtime.Fs.Service.Write(context.Background(), ioVector)
+	if err != nil {
+		return
+	}
+
+	path := model.Path{
+		Name:   ioVector.FilePath,
+		Offset: 0,
+		Size:   int64(len(data)),
+	}
+	page.SetPath(path)
+
+	time.Sleep(2 * time.Second)
+	tae.Runtime.TransferTable.RunTTL()
+	assert.True(t, page.IsPersist())
+	for i := 0; i < 10; i++ {
+		id, ok := page.Transfer(uint32(i))
+		assert.True(t, ok)
+		assert.Equal(t, ids[i], id)
+	}
+}
+
+func TestClearPersistTransferTable(t *testing.T) {
+	ctx := context.Background()
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(13, 3)
+	schema.BlockMaxRows = 10
+	schema.ObjectMaxBlocks = 3
+	tae.BindSchema(schema)
+	testutil.CreateRelation(t, tae.DB, "db", schema, true)
+
+	sid := objectio.NewSegmentid()
+
+	id1 := common.ID{BlockID: *objectio.NewBlockid(sid, 1, 0)}
+	id2 := common.ID{BlockID: *objectio.NewBlockid(sid, 2, 0)}
+
+	now := time.Now()
+	page := model.NewTransferHashPage(&id1, now, false, tae.Runtime.LocalFs.Service, time.Second, 2*time.Second)
+	ids := make([]types.Rowid, 10)
+	m := make(map[uint32][]byte, 10)
+	for i := 0; i < 10; i++ {
+		rowID := *objectio.NewRowid(&id2.BlockID, uint32(i))
+		m[uint32(i)] = rowID[:]
+		ids[i] = rowID
+	}
+	page.Train(m)
+	tae.Runtime.TransferTable.AddPage(page)
+
+	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+	ioVector := fileservice.IOVector{
+		FilePath: name.String(),
+	}
+	offset := int64(0)
+	data := page.Marshal()
+	ioEntry := fileservice.IOEntry{
+		Offset: offset,
+		Size:   int64(len(data)),
+		Data:   data,
+	}
+	ioVector.Entries = append(ioVector.Entries, ioEntry)
+
+	err := tae.Runtime.Fs.Service.Write(context.Background(), ioVector)
+	if err != nil {
+		return
+	}
+
+	path := model.Path{
+		Name:   ioVector.FilePath,
+		Offset: 0,
+		Size:   int64(len(data)),
+	}
+	page.SetPath(path)
+
+	time.Sleep(2 * time.Second)
+	tae.Runtime.TransferTable.RunTTL()
+	_, err = tae.Runtime.TransferTable.Pin(*page.ID())
+	assert.True(t, errors.Is(err, moerr.GetOkExpectedEOB()))
 }
