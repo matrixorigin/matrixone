@@ -1557,7 +1557,7 @@ func ForeachSnapshotObjects(
 		return
 	}
 
-	iter, err := tableSnapshot.NewObjectsIter(types.TimestampToTS(ts))
+	iter, err := tableSnapshot.NewObjectsIter(types.TimestampToTS(ts), true)
 	if err != nil {
 		return
 	}
@@ -1674,4 +1674,60 @@ func txnIsValid(txnOp client.TxnOperator) (*Transaction, error) {
 func CheckTxnIsValid(txnOp client.TxnOperator) (err error) {
 	_, err = txnIsValid(txnOp)
 	return err
+}
+
+// concurrentTask is the task that runs in the concurrent executor.
+type concurrentTask func() error
+
+// ConcurrentExecutor is an interface that runs tasks concurrently.
+type ConcurrentExecutor interface {
+	// AppendTask append the concurrent task to the exuecutor.
+	AppendTask(concurrentTask)
+	// Run starts receive task to execute.
+	Run(context.Context)
+	// GetConcurrency returns the concurrency of this executor.
+	GetConcurrency() int
+}
+
+type concurrentExecutor struct {
+	// concurrency is the concurrency to run the tasks at the same time.
+	concurrency int
+	// task contains all the tasks needed to run.
+	tasks chan concurrentTask
+}
+
+func newConcurrentExecutor(concurrency int) ConcurrentExecutor {
+	return &concurrentExecutor{
+		concurrency: concurrency,
+		tasks:       make(chan concurrentTask, 2048),
+	}
+}
+
+// AppendTask implements the ConcurrentExecutor interface.
+func (e *concurrentExecutor) AppendTask(t concurrentTask) {
+	e.tasks <- t
+}
+
+// Run implements the ConcurrentExecutor interface.
+func (e *concurrentExecutor) Run(ctx context.Context) {
+	for i := 0; i < e.concurrency; i++ {
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+
+				case t := <-e.tasks:
+					if err := t(); err != nil {
+						logutil.Errorf("failed to execute task: %v", err)
+					}
+				}
+			}
+		}()
+	}
+}
+
+// GetConcurrency implements the ConcurrentExecutor interface.
+func (e *concurrentExecutor) GetConcurrency() int {
+	return e.concurrency
 }

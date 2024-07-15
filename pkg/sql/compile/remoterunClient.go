@@ -95,7 +95,7 @@ func prepareRemoteRunSendingData(sqlStr string, s *Scope) (scopeData []byte, pro
 	}
 	rootOp.GetOperatorBase().SetChildren(nil)
 	defer func() {
-		s.appendOperator(rootOp)
+		s.doSetRootOperator(rootOp)
 	}()
 
 	if scopeData, err = encodeScope(s); err != nil {
@@ -143,7 +143,7 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 
 	default:
 		panic(
-			fmt.Sprintf("remote run pipeline has an unexpected operator [id = %d] at last.", LastOperator.GetOperatorBase().Op))
+			fmt.Sprintf("remote run pipeline has an unexpected operator [id = %d] at last.", LastOperator.OpType()))
 	}
 
 	// the last operator is responsible for distributing received data locally. Need Prepare here.

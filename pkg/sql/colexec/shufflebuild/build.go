@@ -35,6 +35,10 @@ func (shuffleBuild *ShuffleBuild) String(buf *bytes.Buffer) {
 	buf.WriteString(": shuffle build ")
 }
 
+func (shuffleBuild *ShuffleBuild) OpType() vm.OpType {
+	return vm.ShuffleBuild
+}
+
 func (shuffleBuild *ShuffleBuild) Prepare(proc *process.Process) (err error) {
 	if shuffleBuild.RuntimeFilterSpec == nil {
 		panic("there must be runtime filter in shuffle build!")
@@ -83,6 +87,7 @@ func (shuffleBuild *ShuffleBuild) Call(proc *process.Process) (vm.CallResult, er
 	anal := proc.GetAnalyze(shuffleBuild.GetIdx(), shuffleBuild.GetParallelIdx(), shuffleBuild.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
+
 	result := vm.NewCallResult()
 	ap := shuffleBuild
 	ctr := ap.ctr
@@ -189,7 +194,7 @@ func (ctr *container) mergeIntoBatches(src *batch.Batch, proc *process.Process) 
 func (ctr *container) collectBuildBatches(shuffleBuild *ShuffleBuild, proc *process.Process, anal process.Analyze, isFirst bool) error {
 	var currentBatch *batch.Batch
 	for {
-		result, err := shuffleBuild.Children[0].Call(proc)
+		result, err := vm.ChildrenCall(shuffleBuild.Children[0], proc, anal)
 		if err != nil {
 			return err
 		}
@@ -208,6 +213,7 @@ func (ctr *container) collectBuildBatches(shuffleBuild *ShuffleBuild, proc *proc
 
 		anal.Input(currentBatch, isFirst)
 		anal.Alloc(int64(currentBatch.Size()))
+
 		ctr.inputBatchRowCount += currentBatch.RowCount()
 		err = ctr.mergeIntoBatches(currentBatch, proc)
 		if err != nil {

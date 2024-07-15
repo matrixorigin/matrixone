@@ -25,6 +25,7 @@ require (
 	github.com/docker/go-units v0.5.0
 	github.com/dolthub/maphash v0.1.0
 	github.com/elastic/gosigar v0.14.2
+	github.com/extism/go-sdk v1.3.0
 	github.com/fagongzi/goetty/v2 v2.0.3-0.20230628075727-26c9a2fd5fb8
 	github.com/fagongzi/util v0.0.0-20210923134909-bccc37b5040d
 	github.com/felixge/fgprof v0.9.3
@@ -85,6 +86,7 @@ require (
 	github.com/containerd/cgroups/v3 v3.0.1 // indirect
 	github.com/coreos/go-systemd/v22 v22.3.2 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/gobwas/glob v0.2.3 // indirect
 	github.com/godbus/dbus/v5 v5.0.4 // indirect
 	github.com/gosimple/slug v1.13.1 // indirect
 	github.com/gosimple/unidecode v1.0.1 // indirect
@@ -104,6 +106,7 @@ require (
 	github.com/rs/xid v1.5.0 // indirect
 	github.com/segmentio/encoding v0.3.6 // indirect
 	github.com/shoenig/go-m1cpu v0.1.6 // indirect
+	github.com/tetratelabs/wazero v1.7.3 // indirect
 	golang.org/x/crypto v0.21.0 // indirect
 	golang.org/x/text v0.14.0 // indirect
 	golang.org/x/time v0.3.0 // indirect

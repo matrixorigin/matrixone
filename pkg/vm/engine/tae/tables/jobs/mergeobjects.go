@@ -108,7 +108,7 @@ func NewMergeObjectsTask(
 		return
 	}
 	for _, meta := range mergedObjs {
-		obj, err := task.rel.GetObject(&meta.ID)
+		obj, err := task.rel.GetObject(meta.ID())
 		if err != nil {
 			return nil, err
 		}
@@ -302,7 +302,7 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 	}
 
 	phaseDesc = "2-HandleMergeEntryInTxn"
-	if task.createdBObjs, err = HandleMergeEntryInTxn(task.txn, task.Name(), task.commitEntry, task.rt); err != nil {
+	if task.createdBObjs, err = HandleMergeEntryInTxn(ctx, task.txn, task.Name(), task.commitEntry, task.rt); err != nil {
 		return err
 	}
 
@@ -312,7 +312,7 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 	return nil
 }
 
-func HandleMergeEntryInTxn(txn txnif.AsyncTxn, taskName string, entry *api.MergeCommitEntry, rt *dbutils.Runtime) ([]*catalog.ObjectEntry, error) {
+func HandleMergeEntryInTxn(ctx context.Context, txn txnif.AsyncTxn, taskName string, entry *api.MergeCommitEntry, rt *dbutils.Runtime) ([]*catalog.ObjectEntry, error) {
 	database, err := txn.GetDatabaseByID(entry.DbId)
 	if err != nil {
 		return nil, err
@@ -358,6 +358,7 @@ func HandleMergeEntryInTxn(txn txnif.AsyncTxn, taskName string, entry *api.Merge
 	}
 
 	txnEntry, err := txnentries.NewMergeObjectsEntry(
+		ctx,
 		txn,
 		taskName,
 		rel,

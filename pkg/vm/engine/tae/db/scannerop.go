@@ -158,8 +158,10 @@ func (s *MergeTaskBuilder) onTable(tableEntry *catalog.TableEntry) (err error) {
 	deltaLocRows := uint32(0)
 	distinctDeltaLocs := 0
 	tblRows := 0
-	for objIt := tableEntry.MakeObjectIt(true); objIt.Valid(); objIt.Next() {
-		objectEntry := objIt.Get().GetPayload()
+	objIt := tableEntry.MakeObjectIt(true)
+	defer objIt.Release()
+	for objIt.Next() {
+		objectEntry := objIt.Item()
 		if !objectValid(objectEntry) {
 			continue
 		}
@@ -175,7 +177,7 @@ func (s *MergeTaskBuilder) onTable(tableEntry *catalog.TableEntry) (err error) {
 		s.tableRowDel += dels
 		tblRows += rows - dels
 
-		tombstone := tableEntry.TryGetTombstone(objectEntry.ID)
+		tombstone := tableEntry.TryGetTombstone(*objectEntry.ID())
 		if tombstone == nil {
 			continue
 		}
@@ -234,7 +236,7 @@ func (s *MergeTaskBuilder) onObject(objectEntry *catalog.ObjectEntry) (err error
 		rate := float64(deltaLocRows) / float64(remainingRows)
 		logutil.Infof(
 			"[DeltaLoc Merge] tblId: %s(%d), obj: %s, deltaLoc: %d, rows: %d, deltaLocRows: %d, rate: %f",
-			s.name, s.tid, objectEntry.ID.String(), deltaLocCnt, remainingRows, deltaLocRows, rate)
+			s.name, s.tid, objectEntry.ID().String(), deltaLocCnt, remainingRows, deltaLocRows, rate)
 		s.objPolicy.OnObject(objectEntry, true)
 	} else {
 		s.objPolicy.OnObject(objectEntry, false)
@@ -247,9 +249,7 @@ func (s *MergeTaskBuilder) onPostObject(obj *catalog.ObjectEntry) (err error) {
 }
 
 func objectValid(objectEntry *catalog.ObjectEntry) bool {
-	objectEntry.RLock()
-	defer objectEntry.RUnlock()
-	if !objectEntry.IsCommittedLocked() || !catalog.ActiveObjectWithNoTxnFilter(objectEntry.BaseEntryImpl) {
+	if !objectEntry.IsCommitted() || !catalog.ActiveObjectWithNoTxnFilter(objectEntry) {
 		return false
 	}
 

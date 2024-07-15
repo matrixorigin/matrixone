@@ -123,13 +123,8 @@ func (s *Scope) resetForReuse(c *Compile) (err error) {
 		s.Proc.Cancel = cancel
 	}
 
-	for i := 0; i < len(s.Proc.Reg.MergeReceivers); i++ {
-		s.Proc.Reg.MergeReceivers[i].Ctx = s.Proc.Ctx
-		s.Proc.Reg.MergeReceivers[i].CleanChannel(s.Proc.GetMPool())
-	}
-
 	vm.HandleAllOp(s.RootOp, func(parentOp vm.Operator, op vm.Operator) error {
-		if op.GetOperatorBase().Op == vm.Output {
+		if op.OpType() == vm.Output {
 			op.(*output.Output).Func = c.fill
 		}
 		return nil
@@ -156,7 +151,7 @@ func (s *Scope) initDataSource(c *Compile) (err error) {
 		}
 
 		if err := vm.HandleLeafOp(nil, s.RootOp, func(leafOpParent vm.Operator, leafOp vm.Operator) error {
-			if leafOp.GetOperatorBase().GetOpType() == vm.ValueScan {
+			if leafOp.OpType() == vm.ValueScan {
 				if s.DataSource.node.NodeType == plan.Node_VALUE_SCAN {
 					bat, err := constructValueScanBatch(c.proc, s.DataSource.node)
 					if err != nil {
@@ -204,15 +199,6 @@ func (s *Scope) Run(c *Compile) (err error) {
 	if s.DataSource.isConst {
 		_, err = p.ConstRun(s.DataSource.Bat, s.Proc)
 	} else {
-		if s.DataSource.R == nil {
-			s.NodeInfo.Data = s.NodeInfo.Data[:0]
-			readers, _, err := s.getReaders(c, 1)
-			if err != nil {
-				return err
-			}
-			s.DataSource.R = readers[0]
-		}
-
 		var tag int32
 		if s.DataSource.node != nil && len(s.DataSource.node.RecvMsgList) > 0 {
 			tag = s.DataSource.node.RecvMsgList[0].MsgTag
@@ -644,6 +630,10 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 				case process.RuntimeFilter_PASS:
 					continue
 				case process.RuntimeFilter_DROP:
+					// FIXME: Should give an empty "Data" and then early return
+					s.NodeInfo.Data = nil
+					s.NodeInfo.NeedExpandRanges = false
+					s.DataSource.FilterExpr = plan2.MakeFalseExpr()
 					return nil
 				case process.RuntimeFilter_IN:
 					inExpr := plan2.MakeInExpr(c.proc.Ctx, spec.Expr, msg.Card, msg.Data, spec.MatchPrefix)
@@ -708,6 +698,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 			return err
 		}
 		s.NodeInfo.Data = append(s.NodeInfo.Data, ranges.GetAllBytes()...)
+		s.NodeInfo.NeedExpandRanges = false
 
 	} else if len(inExprList) > 0 {
 		s.NodeInfo.Data, err = ApplyRuntimeFilters(c.proc.Ctx, s.Proc, s.DataSource.TableDef, s.NodeInfo.Data, exprs, filters)
@@ -722,7 +713,7 @@ func (s *Scope) isShuffle() bool {
 	// the pipeline is merge->group->xxx
 	if s != nil && s.RootOp != nil && s.RootOp.GetOperatorBase().NumChildren() > 0 {
 		op := vm.GetLeafOpParent(nil, s.RootOp)
-		if op.GetOperatorBase().GetOpType() == vm.Group {
+		if op.OpType() == vm.Group {
 			return op.(*group.Group).IsShuffle
 		}
 	}
@@ -733,7 +724,7 @@ func (s *Scope) isRight() bool {
 	if s == nil {
 		return false
 	}
-	OpType := vm.GetLeafOp(s.RootOp).GetOperatorBase().GetOpType()
+	OpType := vm.GetLeafOp(s.RootOp).OpType()
 	return OpType == vm.Right || OpType == vm.RightSemi || OpType == vm.RightAnti
 }
 
@@ -751,8 +742,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 		if flg {
 			return nil
 		}
-		opBase := op.GetOperatorBase()
-		switch opBase.Op {
+		switch op.OpType() {
 		case vm.Top:
 			flg = true
 			arg := op.(*top.Top)
@@ -762,7 +752,6 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 				WithFs(arg.Fs).
 				WithLimit(arg.Limit)
 			newArg.SetInfo(&vm.OperatorInfo{
-				Op:          vm.MergeTop,
 				Idx:         arg.Idx,
 				CnAddr:      arg.CnAddr,
 				OperatorID:  c.allocOperatorID(),
@@ -778,16 +767,15 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 			for j := range ss {
 				newarg := top.NewArgument().WithFs(arg.Fs).WithLimit(arg.Limit)
 				newarg.TopValueTag = arg.TopValueTag
-				ss[j].appendInstruction(vm.Instruction{
-					Op:          vm.Top,
+				newarg.SetInfo(&vm.OperatorInfo{
 					Idx:         arg.Idx,
 					IsFirst:     arg.IsFirst,
-					Arg:         newarg,
 					CnAddr:      arg.CnAddr,
 					OperatorID:  arg.OperatorID,
 					MaxParallel: int32(len(ss)),
 					ParallelID:  int32(j),
 				})
+				ss[j].setRootOperator(newarg)
 			}
 			arg.Release()
 		// case vm.Order:
@@ -799,7 +787,6 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 			newArg := mergelimit.NewArgument().
 				WithLimit(arg.LimitExpr)
 			newArg.SetInfo(&vm.OperatorInfo{
-				Op:          vm.MergeLimit,
 				Idx:         arg.Idx,
 				CnAddr:      arg.CnAddr,
 				OperatorID:  c.allocOperatorID(),
@@ -813,18 +800,17 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 			}
 
 			for j := range ss {
-				ss[j].appendInstruction(vm.Instruction{
-					Op:      vm.Limit,
-					Idx:     arg.Idx,
-					IsFirst: arg.IsFirst,
-					Arg: limit.NewArgument().
-						WithLimit(arg.LimitExpr),
-
+				limitOp := limit.NewArgument().
+					WithLimit(arg.LimitExpr)
+				limitOp.SetInfo(&vm.OperatorInfo{
+					Idx:         arg.Idx,
+					IsFirst:     arg.IsFirst,
 					CnAddr:      arg.CnAddr,
 					OperatorID:  arg.OperatorID,
 					MaxParallel: int32(len(ss)),
 					ParallelID:  int32(j),
 				})
+				ss[j].setRootOperator(limitOp)
 			}
 			arg.Release()
 		case vm.Group:
@@ -838,7 +824,6 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 			newArg := mergegroup.NewArgument().
 				WithNeedEval(false)
 			newArg.SetInfo(&vm.OperatorInfo{
-				Op:          vm.MergeGroup,
 				Idx:         arg.Idx,
 				CnAddr:      arg.CnAddr,
 				OperatorID:  c.allocOperatorID(),
@@ -852,20 +837,19 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 			}
 
 			for j := range ss {
-				ss[j].appendInstruction(vm.Instruction{
-					Op:      vm.Group,
-					Idx:     arg.Idx,
-					IsFirst: arg.IsFirst,
-					Arg: group.NewArgument().
-						WithExprs(arg.Exprs).
-						WithTypes(arg.Types).
-						WithAggsNew(arg.Aggs),
-
+				groupOp := group.NewArgument().
+					WithExprs(arg.Exprs).
+					WithTypes(arg.Types).
+					WithAggsNew(arg.Aggs)
+				groupOp.SetInfo(&vm.OperatorInfo{
+					Idx:         arg.Idx,
+					IsFirst:     arg.IsFirst,
 					CnAddr:      arg.CnAddr,
 					OperatorID:  arg.OperatorID,
 					MaxParallel: int32(len(ss)),
 					ParallelID:  int32(j),
 				})
+				ss[j].setRootOperator(groupOp)
 			}
 			arg.Release()
 		case vm.Sample:
@@ -877,7 +861,6 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 				if arg.IsByPercent() {
 					newArg := merge.NewArgument()
 					newArg.SetInfo(&vm.OperatorInfo{
-						Op:          vm.Merge,
 						Idx:         arg.Idx,
 						CnAddr:      arg.CnAddr,
 						OperatorID:  c.allocOperatorID(),
@@ -893,7 +876,6 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 				} else {
 					tempArg := sample.NewMergeSample(arg, arg.NeedOutputRowSeen)
 					tempArg.SetInfo(&vm.OperatorInfo{
-						Op:          vm.Sample,
 						Idx:         arg.Idx,
 						IsFirst:     false,
 						CnAddr:      arg.CnAddr,
@@ -909,7 +891,6 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 
 					newArg := merge.NewArgument()
 					newArg.SetInfo(&vm.OperatorInfo{
-						Op:          vm.Merge,
 						Idx:         0,
 						CnAddr:      arg.CnAddr,
 						OperatorID:  c.allocOperatorID(),
@@ -920,17 +901,16 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 				}
 
 				for j := range ss {
-					ss[j].appendInstruction(vm.Instruction{
-						Op:      vm.Sample,
-						Idx:     arg.Idx,
-						IsFirst: arg.IsFirst,
-						Arg:     arg.SampleDup(),
-
+					sampleOp := arg.SampleDup()
+					sampleOp.SetInfo(&vm.OperatorInfo{
+						Idx:         arg.Idx,
+						IsFirst:     arg.IsFirst,
 						CnAddr:      arg.CnAddr,
 						OperatorID:  arg.OperatorID,
 						MaxParallel: int32(len(ss)),
 						ParallelID:  int32(j),
 					})
+					ss[j].setRootOperator(sampleOp)
 				}
 				arg.Release()
 			}
@@ -942,7 +922,6 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 			newArg := mergeoffset.NewArgument().
 				WithOffset(arg.OffsetExpr)
 			newArg.SetInfo(&vm.OperatorInfo{
-				Op:          vm.MergeOffset,
 				Idx:         arg.Idx,
 				CnAddr:      arg.CnAddr,
 				OperatorID:  c.allocOperatorID(),
@@ -956,18 +935,17 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 			}
 
 			for j := range ss {
-				ss[j].appendInstruction(vm.Instruction{
-					Op:      vm.Offset,
-					Idx:     arg.Idx,
-					IsFirst: arg.IsFirst,
-					Arg: offset.NewArgument().
-						WithOffset(arg.OffsetExpr),
-
+				offsetOp := offset.NewArgument().
+					WithOffset(arg.OffsetExpr)
+				offsetOp.SetInfo(&vm.OperatorInfo{
+					Idx:         arg.Idx,
+					IsFirst:     arg.IsFirst,
 					CnAddr:      arg.CnAddr,
 					OperatorID:  arg.OperatorID,
 					MaxParallel: int32(len(ss)),
 					ParallelID:  int32(j),
 				})
+				ss[j].setRootOperator(offsetOp)
 			}
 			arg.Release()
 		case vm.Output:
@@ -975,7 +953,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 		case vm.Dispatch:
 		default:
 			for j := range ss {
-				ss[j].appendInstruction(dupInstruction(op, nil, j))
+				ss[j].setRootOperator(dupOperator(op, nil, j))
 			}
 		}
 		return nil
@@ -983,7 +961,6 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 
 	if !flg {
 		newArg := merge.NewArgument()
-		newArg.Op = vm.Merge
 		leafOp := vm.GetLeafOp(s.RootOp)
 		newArg.Idx = leafOp.GetOperatorBase().Idx // TODO: remove it
 		newArg.CnAddr = leafOp.GetOperatorBase().CnAddr
@@ -1027,16 +1004,15 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 	j := 0
 	for i := range ss {
 		if !ss[i].IsEnd {
-			ss[i].appendInstruction(vm.Instruction{
-				Op: vm.Connector,
-				Arg: connector.NewArgument().
-					WithReg(s.Proc.Reg.MergeReceivers[j]),
-
+			connectorOp := connector.NewArgument().
+				WithReg(s.Proc.Reg.MergeReceivers[j])
+			connectorOp.SetInfo(&vm.OperatorInfo{
 				CnAddr:      vm.GetLeafOp(ss[i].RootOp).GetOperatorBase().CnAddr,
 				OperatorID:  c.allocOperatorID(),
 				ParallelID:  0,
 				MaxParallel: 1,
 			})
+			ss[i].doSetRootOperator(connectorOp)
 			j++
 		}
 	}
@@ -1044,23 +1020,16 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 	return s, nil
 }
 
-func (s *Scope) appendInstruction(in vm.Instruction) {
+func (s *Scope) doSetRootOperator(op vm.Operator) {
+	if s.RootOp != nil {
+		op.AppendChild(s.RootOp)
+	}
+	s.RootOp = op
+}
+
+func (s *Scope) setRootOperator(op vm.Operator) {
 	if !s.IsEnd {
-		opBase := in.Arg.GetOperatorBase()
-		opBase.SetInfo(&vm.OperatorInfo{
-			Op:          in.Op,
-			Idx:         in.Idx,
-			IsFirst:     in.IsFirst,
-			IsLast:      in.IsLast,
-			CnAddr:      in.CnAddr,
-			OperatorID:  in.OperatorID,
-			ParallelID:  in.ParallelID,
-			MaxParallel: in.MaxParallel,
-		})
-		if s.RootOp != nil {
-			in.Arg.AppendChild(s.RootOp)
-		}
-		s.RootOp = in.Arg
+		s.doSetRootOperator(op)
 	}
 }
 
@@ -1070,13 +1039,6 @@ func (s *Scope) appendInstruction(in vm.Instruction) {
 type notifyMessageResult struct {
 	sender *messageSenderOnClient
 	err    error
-}
-
-func (s *Scope) appendOperator(op vm.Operator) {
-	if s.RootOp != nil {
-		op.AppendChild(s.RootOp)
-	}
-	s.RootOp = op
 }
 
 func (s *Scope) ReplaceLeafOp(dstLeafOp vm.Operator) {

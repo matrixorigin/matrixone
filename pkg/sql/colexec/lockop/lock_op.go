@@ -63,6 +63,10 @@ func (lockOp *LockOp) String(buf *bytes.Buffer) {
 	buf.WriteString(")")
 }
 
+func (lockOp *LockOp) OpType() vm.OpType {
+	return vm.LockOp
+}
+
 func (lockOp *LockOp) Prepare(proc *process.Process) error {
 	lockOp.ctr = new(container)
 	lockOp.ctr.rt = &state{}

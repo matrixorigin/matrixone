@@ -155,21 +155,36 @@ func GetDefaultRelation(t *testing.T, e *db.DB, name string) (txn txnif.AsyncTxn
 
 func GetOneObject(rel handle.Relation) handle.Object {
 	it := rel.MakeObjectIt()
+	it.Next()
+	defer it.Close()
 	return it.GetObject()
 }
 
 func GetOneBlockMeta(rel handle.Relation) *catalog.ObjectEntry {
 	it := rel.MakeObjectIt()
+	defer it.Close()
+	it.Next()
 	return it.GetObject().GetMeta().(*catalog.ObjectEntry)
 }
 
 func GetAllBlockMetas(rel handle.Relation) (metas []*catalog.ObjectEntry) {
 	it := rel.MakeObjectIt()
-	for ; it.Valid(); it.Next() {
+	for it.Next() {
 		blk := it.GetObject()
 		metas = append(metas, blk.GetMeta().(*catalog.ObjectEntry))
 	}
+	it.Close()
 	return
+}
+
+func MockObjectStats(t *testing.T, obj handle.Object) {
+	objName := objectio.BuildObjectNameWithObjectID(obj.GetID())
+	location := objectio.MockLocation(objName)
+	stats := objectio.NewObjectStats()
+	objectio.SetObjectStatsLocation(stats, location)
+	objectio.SetObjectStatsSize(stats, 1)
+	err := obj.UpdateStats(*stats)
+	assert.Nil(t, err)
 }
 
 func CheckAllColRowsByScan(t *testing.T, rel handle.Relation, expectRows int, applyDelete bool) {
@@ -218,7 +233,7 @@ func ForEachColumnView(rel handle.Relation, colIdx int, fn func(view *containers
 func ForEachObject(rel handle.Relation, fn func(obj handle.Object) error) {
 	it := rel.MakeObjectIt()
 	var err error
-	for it.Valid() {
+	for it.Next() {
 		obj := it.GetObject()
 		defer obj.Close()
 		if err = fn(obj); err != nil {
@@ -228,7 +243,6 @@ func ForEachObject(rel handle.Relation, fn func(obj handle.Object) error) {
 				panic(err)
 			}
 		}
-		it.Next()
 	}
 }
 
@@ -265,11 +279,10 @@ func CompactBlocks(t *testing.T, tenantID uint32, e *db.DB, dbName string, schem
 
 	var metas []*catalog.ObjectEntry
 	it := rel.MakeObjectIt()
-	for it.Valid() {
+	for it.Next() {
 		blk := it.GetObject()
 		meta := blk.GetMeta().(*catalog.ObjectEntry)
 		metas = append(metas, meta)
-		it.Next()
 	}
 	_ = txn.Commit(context.Background())
 	if len(metas) == 0 {
@@ -303,12 +316,11 @@ func MergeBlocks(t *testing.T, tenantID uint32, e *db.DB, dbName string, schema 
 
 	var objs []*catalog.ObjectEntry
 	objIt := rel.MakeObjectIt()
-	for objIt.Valid() {
+	for objIt.Next() {
 		obj := objIt.GetObject().GetMeta().(*catalog.ObjectEntry)
 		if !obj.IsAppendable() {
 			objs = append(objs, obj)
 		}
-		objIt.Next()
 	}
 	_ = txn.Commit(context.Background())
 	metas := make([]*catalog.ObjectEntry, 0)
@@ -317,7 +329,7 @@ func MergeBlocks(t *testing.T, tenantID uint32, e *db.DB, dbName string, schema 
 		txn.BindAccessInfo(tenantID, 0, 0)
 		db, _ = txn.GetDatabase(dbName)
 		rel, _ = db.GetRelationByName(schema.Name)
-		objHandle, err := rel.GetObject(&obj.ID)
+		objHandle, err := rel.GetObject(obj.ID())
 		if err != nil {
 			if skipConflict {
 				continue
@@ -363,7 +375,7 @@ func MockCNDeleteInS3(
 	view, err := obj.GetColumnDataById(context.Background(), txn, schema, blkOffset, pkDef.Idx, common.DefaultAllocator)
 	pkVec := containers.MakeVector(pkDef.Type, common.DefaultAllocator)
 	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
-	objID := &obj.GetMeta().(*catalog.ObjectEntry).ID
+	objID := obj.GetMeta().(*catalog.ObjectEntry).ID()
 	blkID := objectio.NewBlockidWithObjectID(objID, blkOffset)
 	if err != nil {
 		return

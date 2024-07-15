@@ -19,8 +19,6 @@ import (
 	"math"
 	"sync"
 
-	"github.com/fagongzi/goetty/v2"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -355,7 +353,12 @@ func (ip *internalProtocol) WritePrepareResponse(ctx context.Context, stmt *Prep
 	return nil
 }
 
-func (ip *internalProtocol) Read(options goetty.ReadOptions) (interface{}, error) {
+func (ip *internalProtocol) Read() ([]byte, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (ip *internalProtocol) Free(buf []byte) {
 	//TODO implement me
 	panic("implement me")
 }

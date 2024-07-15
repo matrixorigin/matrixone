@@ -33,6 +33,10 @@ func (loopMark *LoopMark) String(buf *bytes.Buffer) {
 	buf.WriteString(": loop mark join ")
 }
 
+func (loopMark *LoopMark) OpType() vm.OpType {
+	return vm.LoopMark
+}
+
 func (loopMark *LoopMark) Prepare(proc *process.Process) error {
 	var err error
 

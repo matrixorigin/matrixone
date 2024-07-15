@@ -22,15 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func (ins *Instruction) MarshalBinary() ([]byte, error) {
-	return nil, nil
-}
-
-func (ins *Instruction) UnmarshalBinary(_ []byte) error {
-	return nil
-}
-
-// String range instructions and call each operator's string function to show a query plan
+// call each operator's string function to show a query plan
 func String(rootOp Operator, buf *bytes.Buffer) {
 	HandleAllOp(rootOp, func(parentOp Operator, op Operator) error {
 		if op.GetOperatorBase().NumChildren() > 0 {
@@ -41,7 +33,7 @@ func String(rootOp Operator, buf *bytes.Buffer) {
 	})
 }
 
-// Prepare range instructions and do init work for each operator's argument by calling its prepare function
+// do init work for each operator by calling its prepare function
 func Prepare(op Operator, proc *process.Process) error {
 	return HandleAllOp(op, func(parentOp Operator, op Operator) error {
 		return op.Prepare(proc)
@@ -50,7 +42,7 @@ func Prepare(op Operator, proc *process.Process) error {
 
 func setAnalyzeInfo(rootOp Operator, proc *process.Process) {
 	HandleAllOp(rootOp, func(parentOp Operator, op Operator) error {
-		switch op.GetOperatorBase().Op {
+		switch op.OpType() {
 		case Output:
 			op.GetOperatorBase().SetIdx(-1)
 		case TableScan:
@@ -64,7 +56,6 @@ func setAnalyzeInfo(rootOp Operator, proc *process.Process) {
 	HandleAllOp(rootOp, func(parentOp Operator, op Operator) error {
 		opBase := op.GetOperatorBase()
 		info := &OperatorInfo{
-			Op:      opBase.Op,
 			Idx:     opBase.Idx,
 			IsFirst: opBase.IsFirst,
 			IsLast:  opBase.IsLast,
@@ -74,7 +65,7 @@ func setAnalyzeInfo(rootOp Operator, proc *process.Process) {
 			ParallelID:  opBase.ParallelID,
 			MaxParallel: opBase.MaxParallel,
 		}
-		opType := opBase.Op
+		opType := op.OpType()
 		switch opType {
 		case HashBuild, ShuffleBuild, IndexBuild, Filter, MergeGroup, MergeOrder:
 			isMinor := true

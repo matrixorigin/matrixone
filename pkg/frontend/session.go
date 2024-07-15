@@ -127,7 +127,8 @@ type Session struct {
 	// this map is maintained at the session level to cache configuration results.
 	configs map[string]interface{}
 
-	lastStmtId uint32
+	prepareStmts map[string]*PrepareStmt
+	lastStmtId   uint32
 
 	priv *privilege
 
@@ -142,7 +143,6 @@ type Session struct {
 	mu   sync.Mutex
 	rwmu sync.RWMutex
 
-	prepareStmts map[string]*PrepareStmt
 	lastInsertID uint64
 
 	// tStmt is used only to record the StatementInfo
@@ -1277,7 +1277,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	}
 	//------------------------------------------------------------------------------------------------------------------
 	// record the id :routine pair in RoutineManager
-	ses.getRoutineManager().accountRoutine.recordRountine(tenantID, ses.getRoutine(), accountVersion)
+	ses.getRoutineManager().accountRoutine.recordRoutine(tenantID, ses.getRoutine(), accountVersion)
 	ses.Info(ctx, tenant.String())
 
 	return GetPassWord(pwd)

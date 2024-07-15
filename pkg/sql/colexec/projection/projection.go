@@ -39,6 +39,10 @@ func (projection *Projection) String(buf *bytes.Buffer) {
 	buf.WriteString(")")
 }
 
+func (projection *Projection) OpType() vm.OpType {
+	return vm.Projection
+}
+
 func (projection *Projection) Prepare(proc *process.Process) (err error) {
 	projection.ctr = new(container)
 	projection.ctr.projExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, projection.Es)

@@ -35,6 +35,10 @@ func (hashBuild *HashBuild) String(buf *bytes.Buffer) {
 	buf.WriteString(": hash build ")
 }
 
+func (hashBuild *HashBuild) OpType() vm.OpType {
+	return vm.HashBuild
+}
+
 func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
 	hashBuild.ctr = new(container)
 
@@ -178,7 +182,7 @@ func (ctr *container) mergeIntoBatches(src *batch.Batch, proc *process.Process) 
 func (ctr *container) collectBuildBatches(hashBuild *HashBuild, proc *process.Process, anal process.Analyze, isFirst bool) error {
 	var currentBatch *batch.Batch
 	for {
-		result, err := hashBuild.Children[0].Call(proc)
+		result, err := vm.ChildrenCall(hashBuild.GetChildren(0), proc, anal)
 		if err != nil {
 			return err
 		}

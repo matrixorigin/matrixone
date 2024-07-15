@@ -32,7 +32,6 @@ import (
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
-	"github.com/fagongzi/goetty/v2"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"go.uber.org/zap"
@@ -1086,6 +1085,13 @@ func createPrepareStmt(
 			comp.Release()
 			comp = nil
 		}
+
+		// @xxx when refactor prepare finish, remove this code
+		if comp != nil {
+			comp.SetIsPrepare(false)
+			comp.Release()
+			comp = nil
+		}
 	}
 
 	prepareStmt := &PrepareStmt{
@@ -2095,6 +2101,50 @@ func canExecuteStatementInUncommittedTransaction(reqCtx context.Context, ses FeS
 	return nil
 }
 
+func readThenWrite(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, writer *io.PipeWriter, mysqlRrWr MysqlRrWr, skipWrite bool, epoch uint64) (bool, time.Duration, time.Duration, error) {
+	var readTime, writeTime time.Duration
+	readStart := time.Now()
+	payload, err := mysqlRrWr.Read()
+	if err != nil {
+		if errors.Is(err, errorInvalidLength0) {
+			return skipWrite, readTime, writeTime, err
+		}
+		if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
+			err = moerr.NewInvalidInput(execCtx.reqCtx, "cannot read '%s' from client,please check the file path, user privilege and if client start with --local-infile", param.Filepath)
+		}
+		return skipWrite, readTime, writeTime, err
+	}
+	readTime = time.Since(readStart)
+
+	//empty packet means the file is over.
+	length := len(payload)
+	if length == 0 {
+		return skipWrite, readTime, writeTime, errorInvalidLength0
+	}
+	ses.CountPayload(len(payload))
+
+	// If inner error occurs(unexpected or expected(ctrl-c)), proc.Base.LoadLocalReader will be closed.
+	// Then write will return error, but we need to read the rest of the data and not write it to pipe.
+	// So we need a flag[skipWrite] to tell us whether we need to write the data to pipe.
+	// https://github.com/matrixorigin/matrixone/issues/6665#issuecomment-1422236478
+
+	writeStart := time.Now()
+	if !skipWrite {
+		_, err = writer.Write(payload)
+		if err != nil {
+			ses.Errorf(execCtx.reqCtx,
+				"Failed to load local file",
+				zap.String("path", param.Filepath),
+				zap.Uint64("epoch", epoch),
+				zap.Error(err))
+			skipWrite = true
+		}
+		writeTime = time.Since(writeStart)
+
+	}
+	return skipWrite, readTime, writeTime, err
+}
+
 // processLoadLocal executes the load data local.
 // load data local interaction: https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_com_query_response_local_infile_request.html
 func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, writer *io.PipeWriter) (err error) {
@@ -2113,104 +2163,57 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	if err != nil {
 		return
 	}
+	var skipWrite bool
+	skipWrite = false
+	var readTime, writeTime time.Duration
 	start := time.Now()
-	var msg interface{}
-	msg, err = mysqlRrWr.Read(goetty.ReadOptions{Timeout: getGlobalPu().SV.SessionTimeout.Duration})
+	epoch, printEvery, minReadTime, maxReadTime, minWriteTime, maxWriteTime := uint64(0), uint64(1024*60), 24*time.Hour, time.Nanosecond, 24*time.Hour, time.Nanosecond
+
+	skipWrite, readTime, writeTime, err = readThenWrite(ses, execCtx, param, writer, mysqlRrWr, skipWrite, epoch)
 	if err != nil {
-		mysqlRrWr.SetU8(SEQUENCEID, mysqlRrWr.GetU8(SEQUENCEID)+1)
 		if errors.Is(err, errorInvalidLength0) {
 			return nil
 		}
-		if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
-			err = moerr.NewInvalidInput(execCtx.reqCtx, "cannot read '%s' from client,please check the file path, user privilege and if client start with --local-infile", param.Filepath)
-		}
-		return
+		return err
+	}
+	if readTime > maxReadTime {
+		maxReadTime = readTime
+	}
+	if readTime < minReadTime {
+		minReadTime = readTime
 	}
 
-	packet, ok := msg.(*Packet)
-	if !ok {
-		mysqlRrWr.SetU8(SEQUENCEID, mysqlRrWr.GetU8(SEQUENCEID)+1)
-		err = moerr.NewInvalidInput(execCtx.reqCtx, "invalid packet")
-		return
+	if writeTime > maxWriteTime {
+		maxWriteTime = writeTime
+	}
+	if writeTime < minWriteTime {
+		minWriteTime = writeTime
 	}
 
-	mysqlRrWr.SetU8(SEQUENCEID, uint8(packet.SequenceID+1))
-	seq := uint8(packet.SequenceID + 1)
-	//empty packet means the file is over.
-	length := packet.Length
-	if length == 0 {
-		return
-	}
-	ses.CountPayload(len(packet.Payload))
-
-	skipWrite := false
-	// If inner error occurs(unexpected or expected(ctrl-c)), proc.Base.LoadLocalReader will be closed.
-	// Then write will return error, but we need to read the rest of the data and not write it to pipe.
-	// So we need a flag[skipWrite] to tell us whether we need to write the data to pipe.
-	// https://github.com/matrixorigin/matrixone/issues/6665#issuecomment-1422236478
-
-	_, err = writer.Write(packet.Payload)
-	if err != nil {
-		skipWrite = true // next, we just need read the rest of the data,no need to write it to pipe.
-		ses.Errorf(execCtx.reqCtx,
-			"Failed to load local file",
-			zap.String("path", param.Filepath),
-			zap.Error(err))
-	}
-	epoch, printEvery, minReadTime, maxReadTime, minWriteTime, maxWriteTime := uint64(0), uint64(1024*60), 24*time.Hour, time.Nanosecond, 24*time.Hour, time.Nanosecond
 	for {
-		readStart := time.Now()
-		msg, err = mysqlRrWr.Read(goetty.ReadOptions{Timeout: getGlobalPu().SV.SessionTimeout.Duration})
+		skipWrite, readTime, writeTime, err = readThenWrite(ses, execCtx, param, writer, mysqlRrWr, skipWrite, epoch)
 		if err != nil {
-			if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
-				seq += 1
-				mysqlRrWr.SetU8(SEQUENCEID, seq)
+			if errors.Is(err, errorInvalidLength0) {
 				err = nil
+				break
 			}
-			break
+			return err
 		}
-		readTime := time.Since(readStart)
+
 		if readTime > maxReadTime {
 			maxReadTime = readTime
 		}
 		if readTime < minReadTime {
 			minReadTime = readTime
 		}
-		packet, ok = msg.(*Packet)
-		if !ok {
-			err = moerr.NewInvalidInput(execCtx.reqCtx, "invalid packet")
-			seq += 1
-			mysqlRrWr.SetU8(SEQUENCEID, seq)
-			break
-		}
-		seq = uint8(packet.SequenceID + 1)
-		mysqlRrWr.SetU8(SEQUENCEID, seq)
-		ses.CountPayload(len(packet.Payload))
 
-		//empty packet means the file is over.
-		if packet.Length == 0 {
-			break
+		if writeTime > maxWriteTime {
+			maxWriteTime = writeTime
+		}
+		if writeTime < minWriteTime {
+			minWriteTime = writeTime
 		}
 
-		writeStart := time.Now()
-		if !skipWrite {
-			_, err = writer.Write(packet.Payload)
-			if err != nil {
-				ses.Errorf(execCtx.reqCtx,
-					"Failed to load local file",
-					zap.String("path", param.Filepath),
-					zap.Uint64("epoch", epoch),
-					zap.Error(err))
-				skipWrite = true
-			}
-			writeTime := time.Since(writeStart)
-			if writeTime > maxWriteTime {
-				maxWriteTime = writeTime
-			}
-			if writeTime < minWriteTime {
-				minWriteTime = writeTime
-			}
-		}
 		if epoch%printEvery == 0 {
 			if execCtx.isIssue3482 {
 				ses.Infof(execCtx.reqCtx, "load local '%s', epoch: %d, skipWrite: %v, minReadTime: %s, maxReadTime: %s, minWriteTime: %s, maxWriteTime: %s,\n", param.Filepath, epoch, skipWrite, minReadTime.String(), maxReadTime.String(), minWriteTime.String(), maxWriteTime.String())
@@ -2219,6 +2222,7 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 		}
 		epoch += 1
 	}
+
 	if execCtx.isIssue3482 {
 		ses.Infof(execCtx.reqCtx, "load local '%s', read&write all data from client cost: %s\n", param.Filepath, time.Since(start))
 	}
