@@ -713,7 +713,7 @@ func (d *DeltalocChain) PrepareCommit() (err error) {
 			logutil.Infof("retry delete, there're new deletes in obj %v", d.mvcc.meta.ID().String())
 			return txnif.ErrTxnNeedRetry
 		}
-		if d.mvcc.meta.HasDropIntent() {
+		if d.mvcc.meta.GetLatestNode().HasDropIntent() {
 			logutil.Infof("retry delete, obj %v is soft deleted", d.mvcc.meta.ID().String())
 			return txnif.ErrTxnNeedRetry
 		}

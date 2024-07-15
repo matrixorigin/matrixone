@@ -517,7 +517,7 @@ func (b *TableLogtailRespBuilder) visitObjMeta(e *catalog.ObjectEntry) (bool, er
 			continue
 		}
 		objectMVCCNode = &e.ObjectMVCCNode
-		visitObject(b.objectMetaBatch, e, node, node.End.Equal(&e.CreatedAt), false, types.TS{})
+		visitObject(b.objectMetaBatch, e, node, node.End.Equal(&e.CreatedAt), false, types.TS{}, true)
 	}
 	return b.skipObjectData(e, objectMVCCNode), nil
 }
@@ -548,7 +548,7 @@ func (b *TableLogtailRespBuilder) visitObjData(e *catalog.ObjectEntry) error {
 	}
 	return nil
 }
-func visitObject(batch *containers.Batch, entry *catalog.ObjectEntry, txnMVCCNode *txnbase.TxnMVCCNode, create bool, push bool, committs types.TS) {
+func visitObject(batch *containers.Batch, entry *catalog.ObjectEntry, txnMVCCNode *txnbase.TxnMVCCNode, create bool, push bool, committs types.TS, checkObjectstats bool) {
 	batch.GetVectorByName(catalog.AttrRowID).Append(objectio.HackObjid2Rowid(entry.ID()), false)
 	if push {
 		batch.GetVectorByName(catalog.AttrCommitTs).Append(committs, false)
@@ -556,6 +556,9 @@ func visitObject(batch *containers.Batch, entry *catalog.ObjectEntry, txnMVCCNod
 		batch.GetVectorByName(catalog.AttrCommitTs).Append(txnMVCCNode.End, false)
 	}
 	empty := entry.IsAppendable() && create
+	if checkObjectstats && empty {
+		panic("logic error")
+	}
 	entry.ObjectMVCCNode.AppendTuple(entry.ID(), batch, empty)
 	if push {
 		txnMVCCNode.AppendTupleWithCommitTS(batch, committs)
