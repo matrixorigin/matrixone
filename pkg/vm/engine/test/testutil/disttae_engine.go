@@ -16,6 +16,7 @@ package testutil
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -138,7 +139,7 @@ func (de *TestDisttaeEngine) waitLogtail(ctx context.Context) error {
 			return moerr.NewInternalErrorNoCtx("wait partition state waterline timeout")
 		case <-ticker.C:
 			latestAppliedTS := de.Engine.PushClient().LatestLogtailAppliedTime()
-			if latestAppliedTS.GreaterEq(ts) && de.Engine.PushClient().GetSubscriberState() {
+			if latestAppliedTS.GreaterEq(ts) && de.Engine.PushClient().IsSubscriberReady() {
 				done = true
 			}
 		}
@@ -250,6 +251,33 @@ func (de *TestDisttaeEngine) analyzeTombstone(state *logtailreplay.PartitionStat
 	for iter2.Next() {
 		item := iter2.Entry()
 		stats.Details.DirtyBlocks[item] = struct{}{}
+	}
+
+	return
+}
+
+func (de *TestDisttaeEngine) SubscribeTable(ctx context.Context, dbID, tbID uint64, setSubscribed bool) (err error) {
+	ticker := time.NewTicker(time.Second)
+	timeout := 5
+
+	for range ticker.C {
+		if timeout <= 0 {
+			logutil.Errorf("test disttae engine subscribe table err %v, timeout", err)
+			break
+		}
+
+		err = de.Engine.TryToSubscribeTable(ctx, dbID, tbID)
+		if err != nil {
+			timeout--
+			logutil.Errorf("test disttae engine subscribe table err %v, left trie %d", err, timeout)
+			continue
+		}
+
+		break
+	}
+
+	if err == nil && setSubscribed {
+		de.Engine.PushClient().SetSubscribeState(dbID, tbID, disttae.Subscribed)
 	}
 
 	return

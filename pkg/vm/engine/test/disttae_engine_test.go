@@ -76,7 +76,7 @@ func Test_InsertRows(t *testing.T) {
 	err = txn.Commit(ctx)
 	require.Nil(t, err)
 
-	err = disttaeEngine.Engine.TryToSubscribeTable(ctx, rel.GetDBID(ctx), rel.GetTableID(ctx))
+	err = disttaeEngine.SubscribeTable(ctx, rel.GetDBID(ctx), rel.GetTableID(ctx), false)
 	require.Nil(t, err)
 
 	// check partition state, before flush

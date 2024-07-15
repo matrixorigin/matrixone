@@ -169,7 +169,16 @@ func (c *PushClient) GetState() State {
 	}
 }
 
-func (c *PushClient) GetSubscriberState() bool {
+// Only used for ut
+func (c *PushClient) SetSubscribeState(dbId, tblId uint64, state SubscribeState) {
+	k := SubTableID{DatabaseID: dbId, TableID: tblId}
+	c.subscribed.m[k] = SubTableStatus{
+		SubState:   state,
+		LatestTime: time.Now(),
+	}
+}
+
+func (c *PushClient) IsSubscriberReady() bool {
 	return c.subscriber.ready.Load()
 }
 
