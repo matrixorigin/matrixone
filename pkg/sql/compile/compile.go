@@ -1141,8 +1141,8 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) (*Scope
 	case plan.Query_UPDATE:
 		return ss[0], nil
 	default:
-		if c.IsTpQuery() {
-			rs = ss[len(ss)-1]
+		if c.IsSingleScope(ss) {
+			rs = ss[0]
 		} else {
 			rs = c.newMergeScope(ss)
 		}
