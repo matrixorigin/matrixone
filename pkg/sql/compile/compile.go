@@ -2986,6 +2986,20 @@ func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
+	if cExpr, ok := n.Limit.Expr.(*plan.Expr_Lit); ok {
+		if cval, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
+			if cval.U64Val == 0 {
+				rs := newScope(Merge)
+				rs.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
+				op := constructLimit(n)
+				op.SetIdx(c.anal.curr)
+				op.SetIsFirst(c.anal.isFirst)
+				rs.setRootOperator(op)
+				return []*Scope{rs}
+			}
+		}
+	}
+
 	if c.IsTpQuery() {
 		op := constructLimit(n)
 		op.SetIdx(c.anal.curr)
