@@ -293,6 +293,7 @@ type RowWriter interface {
 	WriteRow(row *Row) error
 	// GetContent get buffer content
 	GetContent() string
+	GetContentLength() int
 	// FlushAndClose flush its buffer and close.
 	FlushAndClose() (int, error)
 }

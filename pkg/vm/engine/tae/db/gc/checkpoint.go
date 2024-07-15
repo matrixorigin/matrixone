@@ -79,7 +79,7 @@ type checkpointCleaner struct {
 	// checker is to check whether the checkpoint can be consumed
 	checker struct {
 		sync.RWMutex
-		extras []func(item any) bool
+		extras map[string]func(item any) bool
 	}
 
 	// delWorker is a worker that deletes s3‘s objects or local
@@ -118,6 +118,7 @@ func NewCheckpointCleaner(
 	cleaner.snapshotMeta = logtail.NewSnapshotMeta()
 	cleaner.option.enableGC = true
 	cleaner.mPool = common.DebugAllocator
+	cleaner.checker.extras = make(map[string]func(item any) bool)
 	return cleaner
 }
 
@@ -233,9 +234,12 @@ func (c *checkpointCleaner) Replay() error {
 	}
 	ckp := checkpoint.NewCheckpointEntry(maxConsumedStart, maxConsumedEnd, checkpoint.ET_Incremental)
 	c.updateMaxConsumed(ckp)
-	ckp = checkpoint.NewCheckpointEntry(minMergedStart, minMergedEnd, checkpoint.ET_Incremental)
-	c.updateMinMerged(ckp)
-
+	defer func() {
+		// Ensure that updateMinMerged is executed last, because minMergedEnd is not empty means that the replay is completed
+		// For UT
+		ckp = checkpoint.NewCheckpointEntry(minMergedStart, minMergedEnd, checkpoint.ET_Incremental)
+		c.updateMinMerged(ckp)
+	}()
 	if acctFile != "" {
 		err = c.snapshotMeta.ReadTableInfo(c.ctx, GCMetaDir+acctFile, c.fs.Service)
 		if err != nil {
@@ -245,7 +249,8 @@ func (c *checkpointCleaner) Replay() error {
 		//No account table information, it may be a new cluster or an upgraded cluster,
 		//and the table information needs to be initialized from the checkpoint
 		maxConsumed := c.maxConsumed.Load()
-		checkpointEntries, err := checkpoint.ListSnapshotCheckpoint(c.ctx, c.fs.Service, ckp.GetEnd(), 0, checkpoint.SpecifiedCheckpoint)
+		isConsumedGCkp := false
+		checkpointEntries, err := checkpoint.ListSnapshotCheckpoint(c.ctx, c.fs.Service, maxConsumed.GetEnd(), 0, checkpoint.SpecifiedCheckpoint)
 		if err != nil {
 			logutil.Warnf("list checkpoint failed, err[%v]", err)
 		}
@@ -258,6 +263,25 @@ func (c *checkpointCleaner) Replay() error {
 			if err != nil {
 				logutil.Warnf("load checkpoint data failed, err[%v]", err)
 				continue
+			}
+			if entry.GetType() == checkpoint.ET_Global {
+				isConsumedGCkp = true
+			}
+			c.snapshotMeta.InitTableInfo(ckpData)
+		}
+		if !isConsumedGCkp {
+			// The global checkpoint that Specified checkpoint depends on may have been GC,
+			// so we need to load a latest global checkpoint
+			entry := c.ckpClient.MaxGlobalCheckpoint()
+			if entry == nil {
+				logutil.Warnf("not found max global checkpoint!")
+				return nil
+			}
+			logutil.Infof("load max global checkpoint: %s, consumedEnd: %s", entry.String(), maxConsumed.String())
+			ckpData, err := c.collectCkpData(entry)
+			if err != nil {
+				logutil.Warnf("load max global checkpoint data failed, err[%v]", err)
+				return nil
 			}
 			c.snapshotMeta.InitTableInfo(ckpData)
 		}
@@ -911,10 +935,24 @@ func (c *checkpointCleaner) checkExtras(item any) bool {
 	return true
 }
 
-func (c *checkpointCleaner) AddChecker(checker func(item any) bool) {
+// AddChecker add&update a checker to the cleaner，return the number of checkers
+// key is the unique identifier of the checker
+func (c *checkpointCleaner) AddChecker(checker func(item any) bool, key string) int {
 	c.checker.Lock()
 	defer c.checker.Unlock()
-	c.checker.extras = append(c.checker.extras, checker)
+	c.checker.extras[key] = checker
+	return len(c.checker.extras)
+}
+
+// RemoveChecker remove a checker from the cleaner，return true if the checker is removed successfully
+func (c *checkpointCleaner) RemoveChecker(key string) error {
+	c.checker.Lock()
+	defer c.checker.Unlock()
+	if len(c.checker.extras) == 1 {
+		return moerr.NewCantDelGCCheckerNoCtx()
+	}
+	delete(c.checker.extras, key)
+	return nil
 }
 
 func (c *checkpointCleaner) createNewInput(

@@ -61,6 +61,7 @@ func initMemMetrics() {
 	registry.MustRegister(MemTotalCrossPoolFreeCounter)
 	registry.MustRegister(memMPoolHighWaterMarkGauge)
 	registry.MustRegister(mallocCounter)
+	registry.MustRegister(mallocGauge)
 }
 
 func initTaskMetrics() {
@@ -80,6 +81,7 @@ func initTaskMetrics() {
 
 func initFileServiceMetrics() {
 	registry.MustRegister(fsReadCounter)
+	registry.MustRegister(fsWriteCounter)
 	registry.MustRegister(S3ConnectCounter)
 	registry.MustRegister(S3DNSResolveCounter)
 
@@ -189,6 +191,7 @@ func initFrontendMetrics() {
 
 func initPipelineMetrics() {
 	registry.MustRegister(PipelineServerDurationHistogram)
+	registry.MustRegister(pipelineStreamCounter)
 }
 
 func getDurationBuckets() []float64 {

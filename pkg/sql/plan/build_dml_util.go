@@ -1369,6 +1369,7 @@ func buildInsertPlansWithRelatedHiddenTable(
 				isFkRecursionCall := false
 				updatePkCol := true
 				ifExistAutoPkCol := false
+				needCheckPkDupForHiddenTable = true
 				var partitionExpr *Expr
 				err = makeOneInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef,
 					updateColLength, newSourceStep, addAffectedRows, isFkRecursionCall, updatePkCol,
@@ -1544,7 +1545,7 @@ func makeOneInsertPlan(
 		return nil
 	}
 
-	if ifCheckPkDup && !ifExistAutoPkCol {
+	if ifCheckPkDup {
 		if err = appendPrimaryConstraintPlan(builder, bindCtx, tableDef, objRef, partitionExpr, pkFilterExprs,
 			indexSourceColTypes, sourceStep, updateColLength > 0, updatePkCol, ifInsertFromUnique, fuzzymessage); err != nil {
 			return err
@@ -3804,10 +3805,10 @@ func runSql(ctx CompilerContext, sql string) (executor.Result, error) {
 		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
 		// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
 		WithDisableIncrStatement().
-		WithTxn(proc.TxnOperator).
-		WithDatabase(proc.SessionInfo.Database).
-		WithTimeZone(proc.SessionInfo.TimeZone).
-		WithAccountID(proc.SessionInfo.AccountId)
+		WithTxn(proc.GetTxnOperator()).
+		WithDatabase(proc.GetSessionInfo().Database).
+		WithTimeZone(proc.GetSessionInfo().TimeZone).
+		WithAccountID(proc.GetSessionInfo().AccountId)
 	return exec.Exec(proc.Ctx, sql, opts)
 }
 

@@ -573,6 +573,10 @@ func (cs *clientSession) disconnected() {
 	}
 }
 
+func (cs *clientSession) SessionCtx() context.Context {
+	return cs.ctx
+}
+
 func (cs *clientSession) cleanSend() {
 	for {
 		select {

@@ -45,7 +45,7 @@ const (
 
 // add unit tests for cases
 type externalTestCase struct {
-	arg      *Argument
+	arg      *External
 	types    []types.Type
 	proc     *process.Process
 	cancel   context.CancelFunc
@@ -60,12 +60,12 @@ var (
 
 func newTestCase(format, jsondata string) externalTestCase {
 	proc := testutil.NewProcess()
-	proc.FileService = testutil.NewFS()
+	proc.Base.FileService = testutil.NewFS()
 	ctx, cancel := context.WithCancel(context.Background())
 	return externalTestCase{
 		proc:  proc,
 		types: []types.Type{types.T_int8.ToType()},
-		arg: &Argument{
+		arg: &External{
 			ctr: &container{},
 			Es: &ExternalParam{
 				ExParamConst: ExParamConst{
@@ -117,7 +117,7 @@ func Test_Prepare(t *testing.T) {
 					Option: defaultOption,
 				},
 				ExParam: tree.ExParam{
-					FileService: tcs.proc.FileService,
+					FileService: tcs.proc.Base.FileService,
 					JsonData:    tcs.jsondata,
 					Ctx:         context.Background(),
 				},
@@ -185,7 +185,7 @@ func Test_Call(t *testing.T) {
 					Format: tcs.format,
 				},
 				ExParam: tree.ExParam{
-					FileService: tcs.proc.FileService,
+					FileService: tcs.proc.Base.FileService,
 					JsonData:    tcs.jsondata,
 					Ctx:         context.Background(),
 				},

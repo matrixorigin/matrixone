@@ -322,68 +322,53 @@ func (sp *StmtProfile) GetStmtId() uuid.UUID {
 	return sp.stmtId
 }
 
-// Process contains context used in query execution
-// one or more pipeline will be generated for one query,
-// and one pipeline has one process instance.
-type Process struct {
+// the common part of process.
+// each query share only 1 instance of BaseProcess
+type BaseProcess struct {
 	StmtProfile *StmtProfile
 	// Id, query id.
-	Id  string
-	Reg Register
-	Lim Limitation
-
+	Id              string
+	Lim             Limitation
 	vp              *vectorPool
 	mp              *mpool.MPool
 	prepareBatch    *batch.Batch
 	prepareExprList any
-
-	valueScanBatch map[[16]byte]*batch.Batch
-
+	valueScanBatch  map[[16]byte]*batch.Batch
 	// unix timestamp
-	UnixTime int64
-
-	TxnClient client.TxnClient
-
-	TxnOperator client.TxnOperator
-
-	AnalInfos []*AnalyzeInfo
-
-	SessionInfo SessionInfo
-
-	Ctx context.Context
-
-	Cancel context.CancelFunc
-
-	FileService fileservice.FileService
-	LockService lockservice.LockService
-	IncrService incrservice.AutoIncrementService
-
-	LoadTag bool
-
-	LastInsertID *uint64
-
-	LoadLocalReader *io.PipeReader
-
-	DispatchNotifyCh chan WrapCs
-
-	Aicm *defines.AutoIncrCacheManager
-
+	UnixTime            int64
+	TxnClient           client.TxnClient
+	AnalInfos           []*AnalyzeInfo
+	SessionInfo         SessionInfo
+	Ctx                 context.Context
+	Cancel              context.CancelFunc
+	FileService         fileservice.FileService
+	LockService         lockservice.LockService
+	IncrService         incrservice.AutoIncrementService
+	LoadTag             bool
+	LastInsertID        *uint64
+	LoadLocalReader     *io.PipeReader
+	Aicm                *defines.AutoIncrCacheManager
 	resolveVariableFunc func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
 	prepareParams       *vector.Vector
+	QueryClient         qclient.QueryClient
+	Hakeeper            logservice.CNHAKeeperClient
+	UdfService          udf.Service
+	WaitPolicy          lock.WaitPolicy
+	MessageBoard        *MessageBoard
+	logger              *log.MOLogger
+	TxnOperator         client.TxnOperator
+	CloneTxnOperator    client.TxnOperator
+}
 
-	QueryClient qclient.QueryClient
-
-	Hakeeper logservice.CNHAKeeperClient
-
-	UdfService udf.Service
-
-	WaitPolicy lock.WaitPolicy
-
-	MessageBoard *MessageBoard
-
-	logger *log.MOLogger
-
-	CloneTxnOperator client.TxnOperator
+// Process contains context used in query execution
+// one or more pipeline will be generated for one query,
+// and one pipeline has one process instance.
+type Process struct {
+	Base             *BaseProcess
+	Reg              Register
+	Ctx              context.Context
+	Cancel           context.CancelFunc
+	DispatchNotifyCh chan *WrapCs
 }
 
 type vectorPool struct {
@@ -401,37 +386,39 @@ type sqlHelper interface {
 }
 
 type WrapCs struct {
-	MsgId uint64
-	Uid   uuid.UUID
-	Cs    morpc.ClientSession
-	Err   chan error
+	sync.RWMutex
+	ReceiverDone bool
+	MsgId        uint64
+	Uid          uuid.UUID
+	Cs           morpc.ClientSession
+	Err          chan error
 }
 
 func (proc *Process) SetStmtProfile(sp *StmtProfile) {
-	proc.StmtProfile = sp
+	proc.Base.StmtProfile = sp
 }
 
 func (proc *Process) GetStmtProfile() *StmtProfile {
-	if proc.StmtProfile != nil {
-		return proc.StmtProfile
+	if proc.Base.StmtProfile != nil {
+		return proc.Base.StmtProfile
 	}
 	return &StmtProfile{}
 }
 
 func (proc *Process) InitSeq() {
-	proc.SessionInfo.SeqCurValues = make(map[uint64]string)
-	proc.SessionInfo.SeqLastValue = make([]string, 1)
-	proc.SessionInfo.SeqLastValue[0] = ""
-	proc.SessionInfo.SeqAddValues = make(map[uint64]string)
-	proc.SessionInfo.SeqDeleteKeys = make([]uint64, 0)
+	proc.Base.SessionInfo.SeqCurValues = make(map[uint64]string)
+	proc.Base.SessionInfo.SeqLastValue = make([]string, 1)
+	proc.Base.SessionInfo.SeqLastValue[0] = ""
+	proc.Base.SessionInfo.SeqAddValues = make(map[uint64]string)
+	proc.Base.SessionInfo.SeqDeleteKeys = make([]uint64, 0)
 }
 
 func (proc *Process) SetValueScanBatch(key uuid.UUID, batch *batch.Batch) {
-	proc.valueScanBatch[key] = batch
+	proc.Base.valueScanBatch[key] = batch
 }
 
 func (proc *Process) GetValueScanBatch(key uuid.UUID) *batch.Batch {
-	bat, ok := proc.valueScanBatch[key]
+	bat, ok := proc.Base.valueScanBatch[key]
 	if ok {
 		bat.SetCnt(1000) // make sure this batch wouldn't be cleaned
 		return bat
@@ -441,76 +428,80 @@ func (proc *Process) GetValueScanBatch(key uuid.UUID) *batch.Batch {
 }
 
 func (proc *Process) CleanValueScanBatchs() {
-	for k, bat := range proc.valueScanBatch {
+	for k, bat := range proc.Base.valueScanBatch {
 		bat.SetCnt(1)
 		bat.Clean(proc.Mp())
-		delete(proc.valueScanBatch, k)
+		delete(proc.Base.valueScanBatch, k)
 	}
 }
 
 func (proc *Process) GetValueScanBatchs() []*batch.Batch {
 	var bats []*batch.Batch
 
-	for k, bat := range proc.valueScanBatch {
+	for k, bat := range proc.Base.valueScanBatch {
 		if bat != nil {
 			bats = append(bats, bat)
 		}
-		delete(proc.valueScanBatch, k)
+		delete(proc.Base.valueScanBatch, k)
 	}
 	return bats
 }
 
 func (proc *Process) GetPrepareParamsAt(i int) ([]byte, error) {
-	if i < 0 || i >= proc.prepareParams.Length() {
+	if i < 0 || i >= proc.Base.prepareParams.Length() {
 		return nil, moerr.NewInternalError(proc.Ctx, "get prepare params error, index %d not exists", i)
 	}
-	if proc.prepareParams.IsNull(uint64(i)) {
+	if proc.Base.prepareParams.IsNull(uint64(i)) {
 		return nil, nil
 	} else {
-		val := proc.prepareParams.GetRawBytesAt(i)
+		val := proc.Base.prepareParams.GetRawBytesAt(i)
 		return val, nil
 	}
 }
 
 func (proc *Process) SetResolveVariableFunc(f func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)) {
-	proc.resolveVariableFunc = f
+	proc.Base.resolveVariableFunc = f
 }
 
 func (proc *Process) GetResolveVariableFunc() func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
-	return proc.resolveVariableFunc
+	return proc.Base.resolveVariableFunc
 }
 
 func (proc *Process) SetLastInsertID(num uint64) {
-	if proc.LastInsertID != nil {
-		atomic.StoreUint64(proc.LastInsertID, num)
+	if proc.Base.LastInsertID != nil {
+		atomic.StoreUint64(proc.Base.LastInsertID, num)
 	}
 }
 
 func (proc *Process) GetSessionInfo() *SessionInfo {
-	return &proc.SessionInfo
+	return &proc.Base.SessionInfo
 }
 
 func (proc *Process) GetLastInsertID() uint64 {
-	if proc.LastInsertID != nil {
-		num := atomic.LoadUint64(proc.LastInsertID)
+	if proc.Base.LastInsertID != nil {
+		num := atomic.LoadUint64(proc.Base.LastInsertID)
 		return num
 	}
 	return 0
 }
 
 func (proc *Process) SetCacheForAutoCol(name string) {
-	aicm := proc.Aicm
+	aicm := proc.Base.Aicm
 	aicm.Mu.Lock()
 	defer aicm.Mu.Unlock()
 	aicm.AutoIncrCaches[name] = defines.AutoIncrCache{CurNum: 0, MaxNum: aicm.MaxSize, Step: 1}
 }
 
 func (proc *Process) SetCloneTxnOperator(op client.TxnOperator) {
-	proc.CloneTxnOperator = op
+	proc.Base.CloneTxnOperator = op
 }
 
 func (proc *Process) GetCloneTxnOperator() client.TxnOperator {
-	return proc.CloneTxnOperator
+	return proc.Base.CloneTxnOperator
+}
+
+func (proc *Process) GetTxnOperator() client.TxnOperator {
+	return proc.Base.TxnOperator
 }
 
 type analyze struct {

@@ -16,15 +16,12 @@ package compile
 
 import (
 	"context"
-	"hash/crc32"
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 
@@ -33,8 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
 	"github.com/stretchr/testify/require"
 
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/common/morpc/mock_morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -43,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
@@ -91,112 +85,49 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func Test_receiveMessageFromCnServer(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	ctx := context.TODO()
-
-	streamSender := mock_morpc.NewMockStream(ctrl)
-	ch := make(chan morpc.Message)
-	streamSender.EXPECT().Receive().Return(ch, nil)
-	aggexec.RegisterGroupConcatAgg(0, ",")
-	agg0 := aggexec.MakeAgg(
-		testutil.NewProcess(), 0, false, []types.Type{types.T_varchar.ToType()}...)
-
-	bat := &batch.Batch{
-		Recursive:  0,
-		Ro:         false,
-		ShuffleIDX: 0,
-		Cnt:        1,
-		Attrs:      []string{"1"},
-		Vecs:       []*vector.Vector{vector.NewVec(types.T_int64.ToType())},
-		Aggs:       []aggexec.AggFuncExec{agg0},
-		AuxData:    nil,
-	}
-	bat.SetRowCount(1)
-	data, err := types.Encode(bat)
-	require.Nil(t, err)
-
-	go func() {
-		msg := &pipeline.Message{
-			Data: data,
-		}
-		msg.Checksum = crc32.ChecksumIEEE(data)
-		ch <- msg
-	}()
-
-	vp := process.New(
-		ctx,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil)
-	vp.AnalInfos = []*process.AnalyzeInfo{}
-	vp.Reg = process.Register{}
-	c := reuse.Alloc[Compile](nil)
-	c.proc = vp
-	s := reuse.Alloc[Scope](nil)
-	s.Proc = vp
-	sender := &messageSenderOnClient{
-		ctx:          ctx,
-		streamSender: streamSender,
-		c:            c,
-	}
-	ch2 := make(chan *process.RegisterMessage)
-	ctx2, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	lastInstruction := vm.Instruction{
-		Arg: &connector.Argument{
-			Reg: &process.WaitRegister{
-				Ctx: ctx2,
-				Ch:  ch2,
-			},
-		},
-	}
-	err = receiveMessageFromCnServer(c, s, sender, lastInstruction)
-	require.Nil(t, err)
-}
-
 func Test_EncodeProcessInfo(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOperator.EXPECT().Snapshot().AnyTimes()
 
 	a := reuse.Alloc[process.AnalyzeInfo](nil)
-	proc := &process.Process{
-		Id:          "1",
-		Lim:         process.Limitation{},
-		UnixTime:    1000000,
-		Ctx:         defines.AttachAccountId(context.TODO(), catalog.System_Account),
-		TxnOperator: txnOperator,
-		AnalInfos:   []*process.AnalyzeInfo{a},
-		SessionInfo: process.SessionInfo{
-			Account:        "",
-			User:           "",
-			Host:           "",
-			Role:           "",
-			ConnectionID:   0,
-			AccountId:      0,
-			RoleId:         0,
-			UserId:         0,
-			LastInsertID:   0,
-			Database:       "",
-			Version:        "",
-			TimeZone:       time.Local,
-			StorageEngine:  nil,
-			QueryId:        nil,
-			ResultColTypes: nil,
-			SeqCurValues:   nil,
-			SeqDeleteKeys:  nil,
-			SeqAddValues:   nil,
-			SeqLastValue:   nil,
-			SqlHelper:      nil,
-		},
+	proc := process.New(defines.AttachAccountId(context.TODO(), catalog.System_Account),
+		nil,
+		nil,
+		txnOperator,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil)
+	proc.Base.Id = "1"
+	proc.Base.Lim = process.Limitation{}
+	proc.Base.UnixTime = 1000000
+	proc.Base.AnalInfos = []*process.AnalyzeInfo{a}
+	proc.Base.SessionInfo = process.SessionInfo{
+		Account:        "",
+		User:           "",
+		Host:           "",
+		Role:           "",
+		ConnectionID:   0,
+		AccountId:      0,
+		RoleId:         0,
+		UserId:         0,
+		LastInsertID:   0,
+		Database:       "",
+		Version:        "",
+		TimeZone:       time.Local,
+		StorageEngine:  nil,
+		QueryId:        nil,
+		ResultColTypes: nil,
+		SeqCurValues:   nil,
+		SeqDeleteKeys:  nil,
+		SeqAddValues:   nil,
+		SeqLastValue:   nil,
+		SqlHelper:      nil,
 	}
+
 	_, err := encodeProcessInfo(proc, "")
 	require.Nil(t, err)
 }
@@ -204,15 +135,16 @@ func Test_EncodeProcessInfo(t *testing.T) {
 func Test_refactorScope(t *testing.T) {
 	ctx := context.TODO()
 	proc := &process.Process{}
+	proc.Base = &process.BaseProcess{}
 
 	s := reuse.Alloc[Scope](nil)
 	s.Proc = proc
 	c := reuse.Alloc[Compile](nil)
 	c.anal = newAnaylze()
-	c.ctx = ctx
 	c.proc = proc
+	c.proc.Ctx = ctx
 	rs := appendWriteBackOperator(c, s)
-	require.Equal(t, rs.Instructions[1].Idx, -1)
+	require.Equal(t, vm.GetLeafOpParent(nil, rs.RootOp).GetOperatorBase().Idx, -1)
 }
 
 func Test_convertPipelineUuid(t *testing.T) {
@@ -242,172 +174,82 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 	exParam := external.ExParam{
 		Filter: &external.FilterParam{},
 	}
-	instructions := []*vm.Instruction{
-		{
-			Arg: &insert.Argument{
-				InsertCtx: &insert.InsertCtx{},
+	ops := []vm.Operator{
+		&insert.Insert{
+			InsertCtx: &insert.InsertCtx{},
+		},
+		&deletion.Deletion{
+			DeleteCtx: &deletion.DeleteCtx{},
+		},
+		&onduplicatekey.OnDuplicatekey{},
+		&preinsert.PreInsert{},
+		&lockop.LockOp{},
+		&preinsertunique.PreInsertUnique{},
+		&anti.AntiJoin{
+			Conditions: [][]*plan.Expr{nil, nil},
+		},
+		&shuffle.Shuffle{},
+		&dispatch.Dispatch{},
+		&group.Group{},
+		&join.InnerJoin{
+			Conditions: [][]*plan.Expr{nil, nil},
+		},
+		&left.LeftJoin{
+			Conditions: [][]*plan.Expr{nil, nil},
+		},
+		&right.RightJoin{
+			Conditions: [][]*plan.Expr{nil, nil},
+		},
+		&rightsemi.RightSemi{
+			Conditions: [][]*plan.Expr{nil, nil},
+		},
+		&rightanti.RightAnti{
+			Conditions: [][]*plan.Expr{nil, nil},
+		},
+		&limit.Limit{},
+		&loopanti.LoopAnti{},
+		&loopjoin.LoopJoin{},
+		&loopleft.LoopLeft{},
+		&loopsemi.LoopSemi{},
+		&loopsingle.LoopSingle{},
+		&loopmark.LoopMark{},
+		&offset.Offset{},
+		&order.Order{},
+		&product.Product{},
+		&projection.Projection{},
+		&filter.Filter{},
+		&semi.SemiJoin{
+			Conditions: [][]*plan.Expr{nil, nil},
+		},
+		&single.SingleJoin{
+			Conditions: [][]*plan.Expr{nil, nil},
+		},
+		&top.Top{},
+		&intersect.Intersect{},
+		&minus.Minus{},
+		&intersectall.IntersectAll{},
+		&merge.Merge{},
+		&mergerecursive.MergeRecursive{},
+		&mergegroup.MergeGroup{},
+		&mergelimit.MergeLimit{},
+		&mergelimit.MergeLimit{},
+		&mergeoffset.MergeOffset{},
+		&mergetop.MergeTop{},
+		&mergeorder.MergeOrder{},
+		&mark.MarkJoin{
+			Conditions: [][]*plan.Expr{nil, nil},
+		},
+		&table_function.TableFunction{},
+		&external.External{
+			Es: &external.ExternalParam{
+				ExParam: exParam,
 			},
-		},
-		{
-			Arg: &deletion.Argument{
-				DeleteCtx: &deletion.DeleteCtx{},
-			},
-		},
-		{
-			Arg: &onduplicatekey.Argument{},
-		},
-		{
-			Arg: &preinsert.Argument{},
-		},
-		{
-			Arg: &lockop.Argument{},
-		},
-		{
-			Arg: &preinsertunique.Argument{},
-		},
-		{
-			Arg: &anti.Argument{
-				Conditions: [][]*plan.Expr{nil, nil},
-			},
-		},
-		{
-			Arg: &shuffle.Argument{},
-		},
-		{
-			Arg: &dispatch.Argument{},
-		},
-		{
-			Arg: &group.Argument{},
-		},
-		{
-			Arg: &join.Argument{
-				Conditions: [][]*plan.Expr{nil, nil},
-			},
-		},
-		{
-			Arg: &left.Argument{
-				Conditions: [][]*plan.Expr{nil, nil},
-			},
-		},
-		{
-			Arg: &right.Argument{
-				Conditions: [][]*plan.Expr{nil, nil},
-			},
-		},
-		{
-			Arg: &rightsemi.Argument{
-				Conditions: [][]*plan.Expr{nil, nil},
-			},
-		},
-		{
-			Arg: &rightanti.Argument{
-				Conditions: [][]*plan.Expr{nil, nil},
-			},
-		},
-		{
-			Arg: &limit.Argument{},
-		},
-		{
-			Arg: &loopanti.Argument{},
-		},
-		{
-			Arg: &loopjoin.Argument{},
-		},
-		{
-			Arg: &loopleft.Argument{},
-		},
-		{
-			Arg: &loopsemi.Argument{},
-		},
-		{
-			Arg: &loopsingle.Argument{},
-		},
-		{
-			Arg: &loopmark.Argument{},
-		},
-		{
-			Arg: &offset.Argument{},
-		},
-		{
-			Arg: &order.Argument{},
-		},
-		{
-			Arg: &product.Argument{},
-		},
-		{
-			Arg: &projection.Argument{},
-		},
-		{
-			Arg: &filter.Argument{},
-		},
-		{
-			Arg: &semi.Argument{
-				Conditions: [][]*plan.Expr{nil, nil},
-			},
-		},
-		{
-			Arg: &single.Argument{
-				Conditions: [][]*plan.Expr{nil, nil},
-			},
-		},
-		{
-			Arg: &top.Argument{},
-		},
-		{
-			Arg: &intersect.Argument{},
-		},
-		{
-			Arg: &minus.Argument{},
-		},
-		{
-			Arg: &intersectall.Argument{},
-		},
-		{
-			Arg: &merge.Argument{},
-		},
-		{
-			Arg: &mergerecursive.Argument{},
-		},
-		{
-			Arg: &mergegroup.Argument{},
-		},
-		{
-			Arg: &mergelimit.Argument{},
-		},
-		{
-			Arg: &mergeoffset.Argument{},
-		},
-		{
-			Arg: &mergetop.Argument{},
-		},
-		{
-			Arg: &mergeorder.Argument{},
-		},
-		//{
-		//	Arg: &connector.Argument{},
-		//},
-		{
-			Arg: &mark.Argument{
-				Conditions: [][]*plan.Expr{nil, nil},
-			},
-		},
-		{
-			Arg: &table_function.Argument{},
 		},
 		//hashbuild operator dont need to serialize
 		//{
 		//	Arg: &hashbuild.Argument{},
 		//},
-		{
-			Arg: &external.Argument{
-				Es: &external.ExternalParam{
-					ExParam: exParam,
-				},
-			},
-		},
-		{
-			Arg: &source.Argument{},
-		},
+		&source.Source{},
 	}
 	ctx := &scopeContext{
 		id:       1,
@@ -419,8 +261,8 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 		pipe:     nil,
 		regs:     nil,
 	}
-	for _, instruction := range instructions {
-		_, _, err := convertToPipelineInstruction(instruction, ctx, 1)
+	for _, op := range ops {
+		_, _, err := convertToPipelineInstruction(op, ctx, 1)
 		require.Nil(t, err)
 	}
 }
@@ -486,7 +328,7 @@ func Test_convertToVmInstruction(t *testing.T) {
 		{Op: int32(vm.Source), StreamScan: &pipeline.StreamScan{}},
 	}
 	for _, instruction := range instructions {
-		_, err := convertToVmInstruction(instruction, ctx, nil)
+		_, err := convertToVmOperator(instruction, ctx, nil)
 		require.Nil(t, err)
 	}
 }

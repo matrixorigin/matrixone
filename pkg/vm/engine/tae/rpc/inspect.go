@@ -402,21 +402,22 @@ func (c *objectPruneArg) Run() error {
 
 	selectedObjs := make([]*catalog.ObjectEntry, 0, 64)
 
-	for ; it.Valid(); it.Next() {
-		obj := it.Get().GetPayload()
+	for it.Next() {
+		obj := it.Item()
+		if obj.ObjectState != catalog.ObjectState_Create_ApplyCommit {
+			continue
+		}
 		if !obj.IsActive() || obj.IsAppendable() {
 			continue
 		}
 		total++
 
-		obj.RLock()
-		createTs := obj.GetCreatedAtLocked()
-		obj.RUnlock()
+		createTs := obj.GetCreatedAt()
 		if createTs.GreaterEq(&ago) {
 			continue
 		}
 		stale++
-		if c.tbl.TryGetTombstone(obj.ID) != nil || obj.GetObjectData().GetTotalChanges() > 0 { // has deletes
+		if c.tbl.TryGetTombstone(*obj.ID()) != nil || obj.GetObjectData().GetTotalChanges() > 0 { // has deletes
 			continue
 		}
 		selected++
@@ -439,6 +440,7 @@ func (c *objectPruneArg) Run() error {
 		}
 		totalS += sz
 	}
+	it.Release()
 
 	if selected == 0 {
 		c.ctx.resp.Payload = []byte(fmt.Sprintf(
@@ -500,11 +502,11 @@ func (c *objectPruneArg) executePrune(objs []*catalog.ObjectEntry) error {
 	notfound := 0
 	w := &bytes.Buffer{}
 	for _, obj := range objs {
-		if err := tblHdl.SoftDeleteObject(&obj.ID); err != nil {
-			logutil.Errorf("objprune: del obj %s: %v", obj.ID.String(), err)
+		if err := tblHdl.SoftDeleteObject(obj.ID()); err != nil {
+			logutil.Errorf("objprune: del obj %s: %v", obj.ID().String(), err)
 			return err
 		}
-		w.WriteString(obj.ID.String())
+		w.WriteString(obj.ID().String())
 		w.WriteRune(',')
 	}
 	if err := txn.Commit(context.Background()); err != nil {
@@ -701,7 +703,7 @@ func (c *infoArg) String() string {
 	}
 
 	if c.obj != nil {
-		t = fmt.Sprintf("%s o-%s b-%d", t, c.obj.ID.String(), c.blkn)
+		t = fmt.Sprintf("%s o-%s b-%d", t, c.obj.ID().String(), c.blkn)
 	}
 
 	return fmt.Sprintf("info: %v", t)
@@ -719,7 +721,7 @@ func (c *infoArg) Run() error {
 		r, reason := c.obj.GetObjectData().PrepareCompactInfo()
 		rows, err := c.obj.GetObjectData().Rows()
 		if err != nil {
-			logutil.Warnf("get object rows failed, obj: %v, err %v", c.obj.ID.String(), err)
+			logutil.Warnf("get object rows failed, obj: %v, err %v", c.obj.ID().String(), err)
 		}
 		dels := c.obj.GetObjectData().GetTotalChanges()
 		b.WriteString(fmt.Sprintf("prepareCompact: %v, %q\n", r, reason))
@@ -754,6 +756,8 @@ type mergePolicyArg struct {
 	maxOsizeObject    int32
 	cnMinMergeSize    int32
 	hints             []api.MergeHint
+
+	disableDeltaLocMerge bool
 }
 
 func (c *mergePolicyArg) PrepareCommand() *cobra.Command {
@@ -768,6 +772,7 @@ func (c *mergePolicyArg) PrepareCommand() *cobra.Command {
 	policyCmd.Flags().Int32P("maxOsizeObject", "o", common.DefaultMaxOsizeObjMB, "merged objects' osize should be near maxOsizeObject(MB)")
 	policyCmd.Flags().Int32P("minCNMergeSize", "c", common.DefaultMinCNMergeSize, "Merge task whose memory occupation exceeds minCNMergeSize(MB) will be moved to CN")
 	policyCmd.Flags().Int32SliceP("mergeHints", "n", []int32{0}, "hints to merge the table")
+	policyCmd.Flags().BoolP("disableDeltaLocMerge", "d", merge.DisableDeltaLocMerge.Load(), "enable merging based on delta location")
 	return policyCmd
 }
 
@@ -783,6 +788,7 @@ func (c *mergePolicyArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.maxOsizeObject, _ = cmd.Flags().GetInt32("maxOsizeObject")
 	c.minOsizeQualified, _ = cmd.Flags().GetInt32("minOsizeQualified")
 	c.cnMinMergeSize, _ = cmd.Flags().GetInt32("minCNMergeSize")
+	c.disableDeltaLocMerge, _ = cmd.Flags().GetBool("disableDeltaLocMerge")
 	if c.maxOsizeObject > 2048 || c.minOsizeQualified > 2048 {
 		return moerr.NewInvalidInputNoCtx("maxOsizeObject or minOsizeQualified should be less than 2048")
 	}
@@ -811,6 +817,8 @@ func (c *mergePolicyArg) Run() error {
 	maxosize := uint32(c.maxOsizeObject * common.Const1MBytes)
 	minosize := uint32(c.minOsizeQualified * common.Const1MBytes)
 	cnsize := uint64(c.cnMinMergeSize) * common.Const1MBytes
+
+	merge.DisableDeltaLocMerge.Store(c.disableDeltaLocMerge)
 
 	if c.tbl == nil {
 		common.RuntimeMaxMergeObjN.Store(c.maxMergeObjN)

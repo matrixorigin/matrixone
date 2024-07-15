@@ -15,6 +15,19 @@
 package disttae
 
 import (
+	"context"
+
+	"github.com/fagongzi/goetty/v2/buf"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/shard"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/shardservice"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -50,264 +63,415 @@ func newTxnTableWithItem(
 	return tbl
 }
 
-// TODO: resume enable sharding. Avoid sca not used.
+type txnTableDelegate struct {
+	origin *txnTable
 
-// type txnTableDelegate struct {
-// 	ctx context.Context
-// 	raw *txnTable
-// }
+	// sharding info
+	shard struct {
+		service shardservice.ShardService
+		policy  shard.Policy
+		tableID uint64
+		is      bool
+	}
+}
 
-// func newTxnTable(
-// 	ctx context.Context,
-// 	key tableKey,
-// 	item cache.TableItem,
-// 	db *txnDatabase,
-// 	process *process.Process,
-// ) engine.Relation {
-// 	tbl := newTxnTableWithItem(
-// 		db,
-// 		item,
-// 		process,
-// 	)
-// 	db.getTxn().tableCache.tableMap.Store(key, tbl)
-// 	return &txnTableDelegate{
-// 		ctx: ctx,
-// 		raw: tbl,
-// 	}
-// }
+func newTxnTable(
+	db *txnDatabase,
+	item cache.TableItem,
+	process *process.Process,
+	service shardservice.ShardService,
+) (engine.Relation, error) {
+	tbl := &txnTableDelegate{
+		origin: newTxnTableWithItem(
+			db,
+			item,
+			process,
+		),
+	}
 
-// func (tbl *txnTableDelegate) Stats(
-// 	ctx context.Context,
-// 	sync bool,
-// ) (*pb.StatsInfo, error) {
-// 	// TODO: forward
-// 	return nil, nil
-// }
+	tbl.shard.service = service
+	tbl.shard.is = false
 
-// func (tbl *txnTableDelegate) Rows(
-// 	ctx context.Context,
-// ) (uint64, error) {
-// 	// TODO: forward
-// 	return 0, nil
-// }
+	if service.Config().Enable {
+		tableID, policy, is, err := service.GetShardInfo(item.Id)
+		if err != nil {
+			return nil, err
+		}
 
-// func (tbl *txnTableDelegate) Size(
-// 	ctx context.Context,
-// 	columnName string,
-// ) (uint64, error) {
-// 	// TODO: forward
-// 	return 0, nil
-// }
+		tbl.shard.is = is
+		tbl.shard.policy = policy
+		tbl.shard.tableID = tableID
+	}
 
-// func (tbl *txnTableDelegate) Ranges(
-// 	context.Context,
-// 	[]*plan.Expr,
-// 	int,
-// ) (engine.Ranges, error) {
-// 	// TODO: forward
-// 	return nil, nil
-// }
+	return tbl, nil
+}
 
-// func (tbl *txnTableDelegate) GetColumMetadataScanInfo(
-// 	ctx context.Context,
-// 	name string,
-// ) ([]*plan.MetadataScanInfo, error) {
-// 	// TODO: forward
-// 	return nil, nil
-// }
+func (tbl *txnTableDelegate) Stats(
+	ctx context.Context,
+	sync bool,
+) (*pb.StatsInfo, error) {
+	if tbl.isLocal() {
+		return tbl.origin.Stats(
+			ctx,
+			sync,
+		)
+	}
 
-// func (tbl *txnTableDelegate) ApproxObjectsNum(
-// 	ctx context.Context,
-// ) int {
-// 	// TODO: forward
-// 	return 0
-// }
+	// TODO: forward
+	return nil, nil
+}
 
-// func (tbl *txnTableDelegate) NewReader(
-// 	ctx context.Context,
-// 	num int,
-// 	expr *plan.Expr,
-// 	ranges []byte,
-// 	orderedScan bool,
-// 	txnOffset int,
-// ) ([]engine.Reader, error) {
-// 	// forward
-// 	return nil, nil
-// }
+func (tbl *txnTableDelegate) Rows(
+	ctx context.Context,
+) (uint64, error) {
+	if tbl.isLocal() {
+		return tbl.origin.Rows(
+			ctx,
+		)
+	}
 
-// func (tbl *txnTableDelegate) PrimaryKeysMayBeModified(
-// 	ctx context.Context,
-// 	from types.TS,
-// 	to types.TS,
-// 	keyVector *vector.Vector,
-// ) (bool, error) {
-// 	// TODO: forward
-// 	return false, nil
-// }
+	rows := uint64(0)
+	err := tbl.forwardRead(
+		ctx,
+		shardservice.ReadRows,
+		func(param *shard.ReadParam) {},
+		func(resp []byte) {
+			rows += buf.Byte2Uint64(resp)
+		},
+	)
+	if err != nil {
+		return 0, err
+	}
+	return rows, nil
+}
 
-// func (tbl *txnTableDelegate) MergeObjects(
-// 	ctx context.Context,
-// 	objstats []objectio.ObjectStats,
-// 	policyName string,
-// 	targetObjSize uint32,
-// ) (*api.MergeCommitEntry, error) {
-// 	// TODO: forward
-// 	return nil, nil
-// }
+func (tbl *txnTableDelegate) Size(
+	ctx context.Context,
+	columnName string,
+) (uint64, error) {
+	if tbl.isLocal() {
+		return tbl.origin.Size(
+			ctx,
+			columnName,
+		)
+	}
 
-// func (tbl *txnTableDelegate) TableDefs(
-// 	ctx context.Context,
-// ) ([]engine.TableDef, error) {
-// 	return tbl.raw.TableDefs(ctx)
-// }
+	size := uint64(0)
+	err := tbl.forwardRead(
+		ctx,
+		shardservice.ReadSize,
+		func(param *shard.ReadParam) {
+			param.SizeParam.ColumnName = columnName
+		},
+		func(resp []byte) {
+			size += buf.Byte2Uint64(resp)
+		},
+	)
+	if err != nil {
+		return 0, err
+	}
+	return size, nil
+}
 
-// func (tbl *txnTableDelegate) GetTableDef(
-// 	ctx context.Context,
-// ) *plan.TableDef {
-// 	return tbl.raw.GetTableDef(ctx)
-// }
+func (tbl *txnTableDelegate) Ranges(
+	ctx context.Context,
+	exprs []*plan.Expr,
+	n int,
+) (engine.Ranges, error) {
+	if tbl.isLocal() {
+		return tbl.origin.Ranges(
+			ctx,
+			exprs,
+			n,
+		)
+	}
 
-// func (tbl *txnTableDelegate) CopyTableDef(
-// 	ctx context.Context,
-// ) *plan.TableDef {
-// 	return tbl.raw.CopyTableDef(ctx)
-// }
+	// TODO: forward
+	return nil, nil
+}
 
-// func (tbl *txnTableDelegate) GetPrimaryKeys(
-// 	ctx context.Context,
-// ) ([]*engine.Attribute, error) {
-// 	return tbl.raw.GetPrimaryKeys(ctx)
-// }
+func (tbl *txnTableDelegate) GetColumMetadataScanInfo(
+	ctx context.Context,
+	name string,
+) ([]*plan.MetadataScanInfo, error) {
+	if tbl.isLocal() {
+		return tbl.origin.GetColumMetadataScanInfo(
+			ctx,
+			name,
+		)
+	}
 
-// func (tbl *txnTableDelegate) GetHideKeys(
-// 	ctx context.Context,
-// ) ([]*engine.Attribute, error) {
-// 	return tbl.raw.GetHideKeys(ctx)
-// }
+	// TODO: forward
+	return nil, nil
+}
 
-// func (tbl *txnTableDelegate) Write(
-// 	ctx context.Context,
-// 	bat *batch.Batch,
-// ) error {
-// 	return tbl.raw.Write(ctx, bat)
-// }
+func (tbl *txnTableDelegate) ApproxObjectsNum(
+	ctx context.Context,
+) int {
+	if tbl.isLocal() {
+		return tbl.origin.ApproxObjectsNum(
+			ctx,
+		)
+	}
 
-// func (tbl *txnTableDelegate) Update(
-// 	ctx context.Context,
-// 	bat *batch.Batch,
-// ) error {
-// 	return tbl.raw.Update(ctx, bat)
-// }
+	// TODO: forward
+	return 0
+}
 
-// func (tbl *txnTableDelegate) Delete(
-// 	ctx context.Context,
-// 	bat *batch.Batch,
-// 	name string,
-// ) error {
-// 	return tbl.raw.Delete(ctx, bat, name)
-// }
+func (tbl *txnTableDelegate) NewReader(
+	ctx context.Context,
+	num int,
+	expr *plan.Expr,
+	ranges []byte,
+	orderedScan bool,
+	txnOffset int,
+) ([]engine.Reader, error) {
+	if tbl.isLocal() {
+		return tbl.origin.NewReader(
+			ctx,
+			num,
+			expr,
+			ranges,
+			orderedScan,
+			txnOffset,
+		)
+	}
 
-// func (tbl *txnTableDelegate) AddTableDef(
-// 	ctx context.Context,
-// 	def engine.TableDef,
-// ) error {
-// 	return tbl.raw.AddTableDef(ctx, def)
-// }
+	// forward
+	return nil, nil
+}
 
-// func (tbl *txnTableDelegate) DelTableDef(
-// 	ctx context.Context,
-// 	def engine.TableDef,
-// ) error {
-// 	return tbl.raw.DelTableDef(ctx, def)
-// }
+func (tbl *txnTableDelegate) PrimaryKeysMayBeModified(
+	ctx context.Context,
+	from types.TS,
+	to types.TS,
+	keyVector *vector.Vector,
+) (bool, error) {
+	if tbl.isLocal() {
+		return tbl.origin.PrimaryKeysMayBeModified(
+			ctx,
+			from,
+			to,
+			keyVector,
+		)
+	}
 
-// func (tbl *txnTableDelegate) AlterTable(
-// 	ctx context.Context,
-// 	c *engine.ConstraintDef,
-// 	constraint [][]byte,
-// ) error {
-// 	return tbl.raw.AlterTable(ctx, c, constraint)
-// }
+	// TODO: forward
+	return false, nil
+}
 
-// func (tbl *txnTableDelegate) UpdateConstraint(
-// 	ctx context.Context,
-// 	c *engine.ConstraintDef,
-// ) error {
-// 	return tbl.raw.UpdateConstraint(ctx, c)
-// }
+func (tbl *txnTableDelegate) MergeObjects(
+	ctx context.Context,
+	objstats []objectio.ObjectStats,
+	policyName string,
+	targetObjSize uint32,
+) (*api.MergeCommitEntry, error) {
+	if tbl.isLocal() {
+		return tbl.origin.MergeObjects(
+			ctx,
+			objstats,
+			policyName,
+			targetObjSize,
+		)
+	}
 
-// func (tbl *txnTableDelegate) TableRenameInTxn(
-// 	ctx context.Context,
-// 	constraint [][]byte,
-// ) error {
-// 	return tbl.raw.TableRenameInTxn(ctx, constraint)
-// }
+	// TODO: forward
+	return nil, nil
+}
 
-// func (tbl *txnTableDelegate) GetTableID(
-// 	ctx context.Context,
-// ) uint64 {
-// 	return tbl.raw.GetTableID(ctx)
-// }
+func (tbl *txnTableDelegate) TableDefs(
+	ctx context.Context,
+) ([]engine.TableDef, error) {
+	return tbl.origin.TableDefs(ctx)
+}
 
-// func (tbl *txnTableDelegate) GetTableName() string {
-// 	return tbl.raw.GetTableName()
-// }
+func (tbl *txnTableDelegate) GetTableDef(
+	ctx context.Context,
+) *plan.TableDef {
+	return tbl.origin.GetTableDef(ctx)
+}
 
-// func (tbl *txnTableDelegate) GetDBID(
-// 	ctx context.Context,
-// ) uint64 {
-// 	return tbl.raw.GetDBID(ctx)
-// }
+func (tbl *txnTableDelegate) CopyTableDef(
+	ctx context.Context,
+) *plan.TableDef {
+	return tbl.origin.CopyTableDef(ctx)
+}
 
-// func (tbl *txnTableDelegate) TableColumns(
-// 	ctx context.Context,
-// ) ([]*engine.Attribute, error) {
-// 	return tbl.raw.TableColumns(ctx)
-// }
+func (tbl *txnTableDelegate) GetPrimaryKeys(
+	ctx context.Context,
+) ([]*engine.Attribute, error) {
+	return tbl.origin.GetPrimaryKeys(ctx)
+}
 
-// func (tbl *txnTableDelegate) MaxAndMinValues(
-// 	ctx context.Context,
-// ) ([][2]any, []uint8, error) {
-// 	return tbl.raw.MaxAndMinValues(ctx)
-// }
+func (tbl *txnTableDelegate) GetHideKeys(
+	ctx context.Context,
+) ([]*engine.Attribute, error) {
+	return tbl.origin.GetHideKeys(ctx)
+}
 
-// func (tbl *txnTableDelegate) GetEngineType() engine.EngineType {
-// 	return tbl.raw.GetEngineType()
-// }
+func (tbl *txnTableDelegate) Write(
+	ctx context.Context,
+	bat *batch.Batch,
+) error {
+	return tbl.origin.Write(ctx, bat)
+}
 
-// func getTxnTable(
-// 	ctx context.Context,
-// 	param shard.ReadParam,
-// 	engine engine.Engine,
-// ) (*txnTable, error) {
-// 	// TODO: reduce mem allocate
-// 	proc, err := process.GetCodecService().Decode(
-// 		ctx,
-// 		param.Process,
-// 	)
-// 	if err != nil {
-// 		return nil, err
-// 	}
+func (tbl *txnTableDelegate) Update(
+	ctx context.Context,
+	bat *batch.Batch,
+) error {
+	return tbl.origin.Update(ctx, bat)
+}
 
-// 	db := &txnDatabase{
-// 		op:           proc.TxnOperator,
-// 		databaseName: param.TxnTable.DatabaseName,
-// 		databaseId:   param.TxnTable.DatabaseID,
-// 	}
+func (tbl *txnTableDelegate) Delete(
+	ctx context.Context,
+	bat *batch.Batch,
+	name string,
+) error {
+	return tbl.origin.Delete(ctx, bat, name)
+}
 
-// 	item, err := db.getTableItem(
-// 		ctx,
-// 		uint32(param.TxnTable.AccountID),
-// 		param.TxnTable.TableName,
-// 		engine.(*Engine),
-// 	)
-// 	if err != nil {
-// 		return nil, err
-// 	}
+func (tbl *txnTableDelegate) AddTableDef(
+	ctx context.Context,
+	def engine.TableDef,
+) error {
+	return tbl.origin.AddTableDef(ctx, def)
+}
 
-// 	return newTxnTableWithItem(
-// 		db,
-// 		item,
-// 		proc,
-// 	), nil
-// }
+func (tbl *txnTableDelegate) DelTableDef(
+	ctx context.Context,
+	def engine.TableDef,
+) error {
+	return tbl.origin.DelTableDef(ctx, def)
+}
+
+func (tbl *txnTableDelegate) AlterTable(
+	ctx context.Context,
+	c *engine.ConstraintDef,
+	constraint [][]byte,
+) error {
+	return tbl.origin.AlterTable(ctx, c, constraint)
+}
+
+func (tbl *txnTableDelegate) UpdateConstraint(
+	ctx context.Context,
+	c *engine.ConstraintDef,
+) error {
+	return tbl.origin.UpdateConstraint(ctx, c)
+}
+
+func (tbl *txnTableDelegate) TableRenameInTxn(
+	ctx context.Context,
+	constraint [][]byte,
+) error {
+	return tbl.origin.TableRenameInTxn(ctx, constraint)
+}
+
+func (tbl *txnTableDelegate) GetTableID(
+	ctx context.Context,
+) uint64 {
+	return tbl.origin.GetTableID(ctx)
+}
+
+func (tbl *txnTableDelegate) GetTableName() string {
+	return tbl.origin.GetTableName()
+}
+
+func (tbl *txnTableDelegate) GetDBID(
+	ctx context.Context,
+) uint64 {
+	return tbl.origin.GetDBID(ctx)
+}
+
+func (tbl *txnTableDelegate) TableColumns(
+	ctx context.Context,
+) ([]*engine.Attribute, error) {
+	return tbl.origin.TableColumns(ctx)
+}
+
+func (tbl *txnTableDelegate) MaxAndMinValues(
+	ctx context.Context,
+) ([][2]any, []uint8, error) {
+	return tbl.origin.MaxAndMinValues(ctx)
+}
+
+func (tbl *txnTableDelegate) GetEngineType() engine.EngineType {
+	return tbl.origin.GetEngineType()
+}
+
+func (tbl *txnTableDelegate) isLocal() bool {
+	return !tbl.shard.service.Config().Enable || // sharding not enabled
+		!tbl.shard.is || // normal table
+		tbl.hasAllLocalReplicas() // all shard replicas on local
+}
+
+func (tbl *txnTableDelegate) hasAllLocalReplicas() bool {
+	return tbl.shard.service.HasAllLocalReplicas(
+		tbl.shard.tableID,
+	)
+}
+
+func (tbl *txnTableDelegate) getReadRequest(
+	method int,
+	apply func([]byte),
+) (shardservice.ReadRequest, error) {
+	processInfo, err := tbl.origin.proc.Load().BuildProcessInfo(
+		tbl.origin.createSql,
+	)
+	if err != nil {
+		return shardservice.ReadRequest{}, err
+	}
+
+	return shardservice.ReadRequest{
+		TableID: tbl.shard.tableID,
+		Method:  method,
+		Param: shard.ReadParam{
+			Process: processInfo,
+			TxnTable: shard.TxnTable{
+				DatabaseID:   tbl.origin.db.databaseId,
+				DatabaseName: tbl.origin.db.databaseName,
+				AccountID:    uint64(tbl.origin.accountId),
+				TableName:    tbl.origin.tableName,
+			},
+		},
+		Apply: apply,
+	}, nil
+}
+
+func (tbl *txnTableDelegate) forwardRead(
+	ctx context.Context,
+	method int,
+	applyParam func(*shard.ReadParam),
+	apply func([]byte),
+) error {
+	request, err := tbl.getReadRequest(
+		method,
+		apply,
+	)
+	if err != nil {
+		return err
+	}
+
+	applyParam(&request.Param)
+
+	shardID := uint64(0)
+	switch tbl.shard.policy {
+	case shard.Policy_Partition:
+		// Partition sharding only send to the current shard. The partition table id
+		// is the shard id
+		shardID = tbl.origin.tableId
+	default:
+		// otherwise, we need send to all shards
+	}
+
+	err = tbl.shard.service.Read(
+		ctx,
+		request,
+		shardservice.ReadOptions{}.Shard(shardID),
+	)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}

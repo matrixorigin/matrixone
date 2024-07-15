@@ -129,7 +129,7 @@ func (n *anode) Append(data *containers.Batch, offset uint32) (an uint32, err er
 
 func (n *anode) FillPhyAddrColumn(startRow, length uint32) (err error) {
 	col := n.table.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
-	blkID := objectio.NewBlockidWithObjectID(&n.meta.ID, 0)
+	blkID := objectio.NewBlockidWithObjectID(n.meta.ID(), 0)
 	if err = objectio.ConstructRowidColumnTo(
 		col.GetDownstreamVector(),
 		blkID, startRow, length,

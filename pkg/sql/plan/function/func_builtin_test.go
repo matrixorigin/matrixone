@@ -29,7 +29,7 @@ import (
 
 func Test_BuiltIn_CurrentSessionInfo(t *testing.T) {
 	proc := testutil.NewProcess()
-	proc.SessionInfo = process.SessionInfo{
+	proc.Base.SessionInfo = process.SessionInfo{
 		User:      "test_user1",
 		UserId:    135,
 		Account:   "test_account2",
@@ -331,19 +331,19 @@ func Test_BuiltIn_Serial(t *testing.T) {
 	p1 := vector.GenerateFunctionStrParameter(vec)
 	{
 		v, null := p1.GetStrValue(0)
-		require.False(t, null)
+		require.False(t, null, tc.info)
 		tuple, err := types.Unpack(v)
-		require.NoError(t, err)
-		require.Equal(t, input1[0], tuple[0])
-		require.Equal(t, input2[0], tuple[1])
+		require.NoError(t, err, tc.info)
+		require.Equal(t, input1[0], tuple[0], tc.info)
+		require.Equal(t, input2[0], tuple[1], tc.info)
 	}
 	{
 		v, null := p1.GetStrValue(1)
-		require.False(t, null)
+		require.False(t, null, tc.info)
 		tuple, err := types.Unpack(v)
-		require.NoError(t, err)
-		require.Equal(t, input1[1], tuple[0])
-		require.Equal(t, input2[1], tuple[1])
+		require.NoError(t, err, tc.info)
+		require.Equal(t, input1[1], tuple[0], tc.info)
+		require.Equal(t, input2[1], tuple[1], tc.info)
 	}
 }
 
@@ -372,37 +372,36 @@ func Test_BuiltIn_SerialFull(t *testing.T) {
 	p1 := vector.GenerateFunctionStrParameter(vec)
 	{
 		v, null := p1.GetStrValue(0)
-		require.False(t, null)
+		require.False(t, null, tc.info)
 		tuple, err := types.Unpack(v)
-		require.NoError(t, err)
-		require.Equal(t, nil, tuple[0]) // note: nulls are preserved
-		require.Equal(t, input2[0], tuple[1])
+		require.NoError(t, err, tc.info)
+		require.Equal(t, nil, tuple[0], tc.info) // note: nulls are preserved
+		require.Equal(t, input2[0], tuple[1], tc.info)
 	}
 	{
 		v, null := p1.GetStrValue(1)
-		require.False(t, null)
+		require.False(t, null, tc.info)
 		tuple, err := types.Unpack(v)
-		require.NoError(t, err)
-		require.Equal(t, input1[1], tuple[0])
-		require.Equal(t, nil, tuple[1]) // note: nulls are preserved
+		require.NoError(t, err, tc.info)
+		require.Equal(t, input1[1], tuple[0], tc.info)
+		require.Equal(t, nil, tuple[1], tc.info) // note: nulls are preserved
 	}
 	{
 		v, null := p1.GetStrValue(2)
-		require.False(t, null)
+		require.False(t, null, tc.info)
 		tuple, err := types.Unpack(v)
-		require.NoError(t, err)
-		require.Equal(t, nil, tuple[0]) // note: nulls are preserved
-		require.Equal(t, input2[2], tuple[1])
+		require.NoError(t, err, tc.info)
+		require.Equal(t, nil, tuple[0], tc.info) // note: nulls are preserved
+		require.Equal(t, input2[2], tuple[1], tc.info)
 	}
 	{
 		v, null := p1.GetStrValue(3)
-		require.False(t, null)
+		require.False(t, null, tc.info)
 		tuple, err := types.Unpack(v)
-		require.NoError(t, err)
-		require.Equal(t, nil, tuple[0]) // note: nulls are preserved
-		require.Equal(t, nil, tuple[1]) // note: nulls are preserved
+		require.NoError(t, err, tc.info)
+		require.Equal(t, nil, tuple[0], tc.info) // note: nulls are preserved
+		require.Equal(t, nil, tuple[1], tc.info) // note: nulls are preserved
 	}
-
 }
 
 func initSerialExtractTestCase() []tcTemp {

@@ -18,17 +18,12 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"testing"
-
-	"github.com/prashantv/gostub"
-
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 
 	"github.com/BurntSushi/toml"
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/assert"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -36,14 +31,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/prashantv/gostub"
+	"github.com/stretchr/testify/assert"
 )
 
 func newLocalETLFS(t *testing.T, fsName string) fileservice.FileService {
@@ -54,6 +51,11 @@ func newLocalETLFS(t *testing.T, fsName string) fileservice.FileService {
 }
 
 func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+	go startConsumeRead(clientConn)
+
 	var err error
 	var testPool *mpool.MPool
 	//parameter
@@ -70,11 +72,9 @@ func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
 	pu.FileService = newLocalETLFS(t, defines.SharedFileServiceName)
 	setGlobalPu(pu)
 	//io session
-	ioses := mock_frontend.NewMockIOSession(ctrl)
-	ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
-	ioses.EXPECT().Ref().AnyTimes()
-	ioses.EXPECT().Disconnect().AnyTimes()
+
+	ioses, err := NewIOSession(serverConn, pu)
+	assert.Nil(t, err)
 	proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
 	testutil.SetupAutoIncrService()
@@ -137,9 +137,9 @@ func Test_saveQueryResultMeta(t *testing.T) {
 	}
 	ses.SetTenantInfo(tenant)
 	proc := testutil.NewProcess()
-	proc.FileService = getGlobalPu().FileService
+	proc.Base.FileService = getGlobalPu().FileService
 
-	proc.SessionInfo = process.SessionInfo{Account: sysAccountName}
+	proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
 	ses.GetTxnCompileCtx().execCtx = &ExecCtx{
 		reqCtx: context.TODO(),
 		proc:   proc,

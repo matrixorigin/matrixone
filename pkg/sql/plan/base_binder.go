@@ -1208,7 +1208,7 @@ func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name s
 	switch retExpr.GetF().GetFunc().GetObjName() {
 	case "+", "-", "*", "/", "unary_minus", "unary_plus", "unary_tilde", "cast", "serial", "serial_full":
 		if proc != nil {
-			tmpexpr, _ := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(retExpr), proc, false)
+			tmpexpr, _ := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(retExpr), proc, false, true)
 			if tmpexpr != nil {
 				retExpr = tmpexpr
 			}
@@ -1220,7 +1220,7 @@ func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name s
 		}
 
 		fnArgs := retExpr.GetF().Args
-		arg1, err := ConstantFold(batch.EmptyForConstFoldBatch, fnArgs[1], proc, false)
+		arg1, err := ConstantFold(batch.EmptyForConstFoldBatch, fnArgs[1], proc, false, true)
 		if err != nil {
 			goto between_fallback
 		}
@@ -1228,28 +1228,34 @@ func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name s
 
 		lit0 := arg1.GetLit()
 		if arg1.Typ.Id == int32(types.T_any) || lit0 == nil {
-			goto between_fallback
+			if !containsDynamicParam(arg1) {
+				goto between_fallback
+			}
 		}
 
-		arg2, err := ConstantFold(batch.EmptyForConstFoldBatch, fnArgs[2], proc, false)
+		arg2, err := ConstantFold(batch.EmptyForConstFoldBatch, fnArgs[2], proc, false, true)
 		if err != nil {
 			goto between_fallback
 		}
 		fnArgs[2] = arg2
 
-		lit1 := arg1.GetLit()
-		if arg1.Typ.Id == int32(types.T_any) || lit1 == nil {
-			goto between_fallback
+		lit1 := arg2.GetLit()
+		if arg2.Typ.Id == int32(types.T_any) || lit1 == nil {
+			if !containsDynamicParam(arg2) {
+				goto between_fallback
+			}
 		}
 
 		rangeCheckFn, _ := BindFuncExprImplByPlanExpr(ctx, "<=", []*plan.Expr{arg1, arg2})
-		rangeCheckRes, _ := ConstantFold(batch.EmptyForConstFoldBatch, rangeCheckFn, proc, false)
+		rangeCheckRes, _ := ConstantFold(batch.EmptyForConstFoldBatch, rangeCheckFn, proc, false, true)
 		rangeCheckVal := rangeCheckRes.GetLit()
 		if rangeCheckVal == nil || !rangeCheckVal.GetBval() {
-			goto between_fallback
+			if !containsDynamicParam(arg1) && !containsDynamicParam(arg2) {
+				goto between_fallback
+			}
 		}
 
-		retExpr, _ = ConstantFold(batch.EmptyForConstFoldBatch, retExpr, proc, false)
+		retExpr, _ = ConstantFold(batch.EmptyForConstFoldBatch, retExpr, proc, false, true)
 	}
 
 	return retExpr, nil
@@ -1269,7 +1275,7 @@ between_fallback:
 	if err != nil {
 		return nil, err
 	}
-	retExpr, err = ConstantFold(batch.EmptyForConstFoldBatch, retExpr, proc, false)
+	retExpr, err = ConstantFold(batch.EmptyForConstFoldBatch, retExpr, proc, false, true)
 	if err != nil {
 		return nil, err
 	}
@@ -1581,6 +1587,14 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			}
 
 			return newExpr, nil
+		}
+	case "last_day":
+		if len(args) != 1 {
+			return nil, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
+		}
+	case "makedate":
+		if len(args) != 2 {
+			return nil, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
 		}
 	}
 

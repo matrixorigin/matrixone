@@ -32,7 +32,6 @@ import (
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
-	"github.com/fagongzi/goetty/v2"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"go.uber.org/zap"
@@ -216,7 +215,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	}
 
 	stm.Account = tenant.GetTenant()
-	stm.RoleId = proc.SessionInfo.RoleId
+	stm.RoleId = proc.GetSessionInfo().RoleId
 	stm.User = tenant.GetUser()
 	stm.Host = ses.respr.GetStr(PEER)
 	stm.Database = ses.respr.GetStr(DBNAME)
@@ -709,14 +708,6 @@ func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error
 				return err
 			}
 			runtime.ProcessLevelRuntime().SetGlobalVariables("runtime_filter_limit_bloom_filter", value)
-		} else if name == "refresh_global_sys_vars_mgr" {
-			// refresh the cache of current account in GSysVarsMgr, load the newest data from `mo_mysql_compatibility_mode` table
-			if value.(int64) == 1 {
-				GSysVarsMgr.Put(ses.GetAccountId(), nil)
-				if err = ses.InitSystemVariables(execCtx.reqCtx); err != nil {
-					return err
-				}
-			}
 		} else {
 			err = setVarFunc(assign.System, assign.Global, name, value, sql)
 			if err != nil {
@@ -997,9 +988,14 @@ func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt)
 
 	//2. fill the result set
 	//column
+	txnHaveDDL := false
+	ws := ses.proc.GetTxnOperator().GetWorkspace()
+	if ws != nil {
+		txnHaveDDL = ws.GetHaveDDL()
+	}
 	col1 := new(MysqlColumn)
 	col1.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
-	col1.SetName(plan2.GetPlanTitle(explainQuery.QueryPlan))
+	col1.SetName(plan2.GetPlanTitle(explainQuery.QueryPlan, txnHaveDDL))
 
 	mrs := ses.GetMysqlResultSet()
 	mrs.AddColumn(col1)
@@ -1085,12 +1081,14 @@ func createPrepareStmt(
 		}
 		// do not save ap query now()
 		if comp != nil && !comp.IsTpQuery() {
+			comp.SetIsPrepare(false)
 			comp.Release()
 			comp = nil
 		}
 
 		// @xxx when refactor prepare finish, remove this code
 		if comp != nil {
+			comp.SetIsPrepare(false)
 			comp.Release()
 			comp = nil
 		}
@@ -1341,7 +1339,7 @@ func handleCreateFunction(ses FeSession, execCtx *ExecCtx, cf *tree.CreateFuncti
 
 func handleDropFunction(ses FeSession, execCtx *ExecCtx, df *tree.DropFunction, proc *process.Process) error {
 	return doDropFunction(execCtx.reqCtx, ses.(*Session), df, func(path string) error {
-		return proc.FileService.Delete(execCtx.reqCtx, path)
+		return proc.Base.FileService.Delete(execCtx.reqCtx, path)
 	})
 }
 func handleCreateProcedure(ses FeSession, execCtx *ExecCtx, cp *tree.CreateProcedure) error {
@@ -1782,7 +1780,7 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 	var ret *plan2.Plan
 	var err error
 
-	txnOp := ctx.GetProcess().TxnOperator
+	txnOp := ctx.GetProcess().GetTxnOperator()
 	start := time.Now()
 	seq := uint64(0)
 	if txnOp != nil {
@@ -1936,7 +1934,7 @@ func checkModify(plan0 *plan.Plan, ses FeSession) bool {
 
 var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
 	var cws []ComputationWrapper = nil
-	if cached := ses.getCachedPlan(execCtx.input.getSql()); cached != nil {
+	if cached := ses.getCachedPlan(execCtx.input.getHash()); cached != nil {
 		for i, stmt := range cached.stmts {
 			tcw := InitTxnComputationWrapper(ses, stmt, proc)
 			tcw.plan = cached.plans[i]
@@ -2103,6 +2101,50 @@ func canExecuteStatementInUncommittedTransaction(reqCtx context.Context, ses FeS
 	return nil
 }
 
+func readThenWrite(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, writer *io.PipeWriter, mysqlRrWr MysqlRrWr, skipWrite bool, epoch uint64) (bool, time.Duration, time.Duration, error) {
+	var readTime, writeTime time.Duration
+	readStart := time.Now()
+	payload, err := mysqlRrWr.Read()
+	if err != nil {
+		if errors.Is(err, errorInvalidLength0) {
+			return skipWrite, readTime, writeTime, err
+		}
+		if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
+			err = moerr.NewInvalidInput(execCtx.reqCtx, "cannot read '%s' from client,please check the file path, user privilege and if client start with --local-infile", param.Filepath)
+		}
+		return skipWrite, readTime, writeTime, err
+	}
+	readTime = time.Since(readStart)
+
+	//empty packet means the file is over.
+	length := len(payload)
+	if length == 0 {
+		return skipWrite, readTime, writeTime, errorInvalidLength0
+	}
+	ses.CountPayload(len(payload))
+
+	// If inner error occurs(unexpected or expected(ctrl-c)), proc.Base.LoadLocalReader will be closed.
+	// Then write will return error, but we need to read the rest of the data and not write it to pipe.
+	// So we need a flag[skipWrite] to tell us whether we need to write the data to pipe.
+	// https://github.com/matrixorigin/matrixone/issues/6665#issuecomment-1422236478
+
+	writeStart := time.Now()
+	if !skipWrite {
+		_, err = writer.Write(payload)
+		if err != nil {
+			ses.Errorf(execCtx.reqCtx,
+				"Failed to load local file",
+				zap.String("path", param.Filepath),
+				zap.Uint64("epoch", epoch),
+				zap.Error(err))
+			skipWrite = true
+		}
+		writeTime = time.Since(writeStart)
+
+	}
+	return skipWrite, readTime, writeTime, err
+}
+
 // processLoadLocal executes the load data local.
 // load data local interaction: https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_com_query_response_local_infile_request.html
 func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, writer *io.PipeWriter) (err error) {
@@ -2121,104 +2163,57 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	if err != nil {
 		return
 	}
+	var skipWrite bool
+	skipWrite = false
+	var readTime, writeTime time.Duration
 	start := time.Now()
-	var msg interface{}
-	msg, err = mysqlRrWr.Read(goetty.ReadOptions{Timeout: getGlobalPu().SV.SessionTimeout.Duration})
+	epoch, printEvery, minReadTime, maxReadTime, minWriteTime, maxWriteTime := uint64(0), uint64(1024*60), 24*time.Hour, time.Nanosecond, 24*time.Hour, time.Nanosecond
+
+	skipWrite, readTime, writeTime, err = readThenWrite(ses, execCtx, param, writer, mysqlRrWr, skipWrite, epoch)
 	if err != nil {
-		mysqlRrWr.SetU8(SEQUENCEID, mysqlRrWr.GetU8(SEQUENCEID)+1)
 		if errors.Is(err, errorInvalidLength0) {
 			return nil
 		}
-		if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
-			err = moerr.NewInvalidInput(execCtx.reqCtx, "cannot read '%s' from client,please check the file path, user privilege and if client start with --local-infile", param.Filepath)
-		}
-		return
+		return err
+	}
+	if readTime > maxReadTime {
+		maxReadTime = readTime
+	}
+	if readTime < minReadTime {
+		minReadTime = readTime
 	}
 
-	packet, ok := msg.(*Packet)
-	if !ok {
-		mysqlRrWr.SetU8(SEQUENCEID, mysqlRrWr.GetU8(SEQUENCEID)+1)
-		err = moerr.NewInvalidInput(execCtx.reqCtx, "invalid packet")
-		return
+	if writeTime > maxWriteTime {
+		maxWriteTime = writeTime
+	}
+	if writeTime < minWriteTime {
+		minWriteTime = writeTime
 	}
 
-	mysqlRrWr.SetU8(SEQUENCEID, uint8(packet.SequenceID+1))
-	seq := uint8(packet.SequenceID + 1)
-	//empty packet means the file is over.
-	length := packet.Length
-	if length == 0 {
-		return
-	}
-	ses.CountPayload(len(packet.Payload))
-
-	skipWrite := false
-	// If inner error occurs(unexpected or expected(ctrl-c)), proc.LoadLocalReader will be closed.
-	// Then write will return error, but we need to read the rest of the data and not write it to pipe.
-	// So we need a flag[skipWrite] to tell us whether we need to write the data to pipe.
-	// https://github.com/matrixorigin/matrixone/issues/6665#issuecomment-1422236478
-
-	_, err = writer.Write(packet.Payload)
-	if err != nil {
-		skipWrite = true // next, we just need read the rest of the data,no need to write it to pipe.
-		ses.Errorf(execCtx.reqCtx,
-			"Failed to load local file",
-			zap.String("path", param.Filepath),
-			zap.Error(err))
-	}
-	epoch, printEvery, minReadTime, maxReadTime, minWriteTime, maxWriteTime := uint64(0), uint64(1024*60), 24*time.Hour, time.Nanosecond, 24*time.Hour, time.Nanosecond
 	for {
-		readStart := time.Now()
-		msg, err = mysqlRrWr.Read(goetty.ReadOptions{Timeout: getGlobalPu().SV.SessionTimeout.Duration})
+		skipWrite, readTime, writeTime, err = readThenWrite(ses, execCtx, param, writer, mysqlRrWr, skipWrite, epoch)
 		if err != nil {
-			if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
-				seq += 1
-				mysqlRrWr.SetU8(SEQUENCEID, seq)
+			if errors.Is(err, errorInvalidLength0) {
 				err = nil
+				break
 			}
-			break
+			return err
 		}
-		readTime := time.Since(readStart)
+
 		if readTime > maxReadTime {
 			maxReadTime = readTime
 		}
 		if readTime < minReadTime {
 			minReadTime = readTime
 		}
-		packet, ok = msg.(*Packet)
-		if !ok {
-			err = moerr.NewInvalidInput(execCtx.reqCtx, "invalid packet")
-			seq += 1
-			mysqlRrWr.SetU8(SEQUENCEID, seq)
-			break
-		}
-		seq = uint8(packet.SequenceID + 1)
-		mysqlRrWr.SetU8(SEQUENCEID, seq)
-		ses.CountPayload(len(packet.Payload))
 
-		//empty packet means the file is over.
-		if packet.Length == 0 {
-			break
+		if writeTime > maxWriteTime {
+			maxWriteTime = writeTime
+		}
+		if writeTime < minWriteTime {
+			minWriteTime = writeTime
 		}
 
-		writeStart := time.Now()
-		if !skipWrite {
-			_, err = writer.Write(packet.Payload)
-			if err != nil {
-				ses.Errorf(execCtx.reqCtx,
-					"Failed to load local file",
-					zap.String("path", param.Filepath),
-					zap.Uint64("epoch", epoch),
-					zap.Error(err))
-				skipWrite = true
-			}
-			writeTime := time.Since(writeStart)
-			if writeTime > maxWriteTime {
-				maxWriteTime = writeTime
-			}
-			if writeTime < minWriteTime {
-				minWriteTime = writeTime
-			}
-		}
 		if epoch%printEvery == 0 {
 			if execCtx.isIssue3482 {
 				ses.Infof(execCtx.reqCtx, "load local '%s', epoch: %d, skipWrite: %v, minReadTime: %s, maxReadTime: %s, minWriteTime: %s, maxWriteTime: %s,\n", param.Filepath, epoch, skipWrite, minReadTime.String(), maxReadTime.String(), minWriteTime.String(), maxWriteTime.String())
@@ -2227,6 +2222,7 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 		}
 		epoch += 1
 	}
+
 	if execCtx.isIssue3482 {
 		ses.Infof(execCtx.reqCtx, "load local '%s', read&write all data from client cost: %s\n", param.Filepath, time.Since(start))
 	}
@@ -2294,7 +2290,7 @@ func executeStmtWithTxn(ses FeSession,
 
 		txnOp := ses.GetTxnHandler().GetTxn()
 		//refresh proc txnOp
-		execCtx.proc.TxnOperator = txnOp
+		execCtx.proc.Base.TxnOperator = txnOp
 
 		err = dispatchStmt(ses, execCtx)
 	}
@@ -2367,7 +2363,7 @@ func executeStmtWithWorkspace(ses FeSession,
 	ses.SetStaticTxnInfo(makeCompactTxnInfo(txnOp))
 
 	//refresh proc txnOp
-	execCtx.proc.TxnOperator = txnOp
+	execCtx.proc.Base.TxnOperator = txnOp
 
 	err = disttae.CheckTxnIsValid(txnOp)
 	if err != nil {
@@ -2552,7 +2548,7 @@ func executeStmt(ses *Session,
 		ses.SetData(nil)
 	case *tree.Load:
 		if st.Local {
-			execCtx.proc.LoadLocalReader, execCtx.loadLocalWriter = io.Pipe()
+			execCtx.proc.Base.LoadLocalReader, execCtx.loadLocalWriter = io.Pipe()
 		}
 	case *tree.ShowGrants:
 		if len(st.Username) == 0 {
@@ -2639,6 +2635,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	ses.SetShowStmtType(NotShowStatement)
 	resper := ses.GetResponser()
 	ses.SetSql(input.getSql())
+	input.genHash()
 
 	//the ses.GetUserName returns the user_name with the account_name.
 	//here,we only need the user_name.
@@ -2657,12 +2654,12 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 	proc.CopyVectorPool(ses.proc)
 	proc.CopyValueScanBatch(ses.proc)
-	proc.Id = ses.getNextProcessId()
-	proc.Lim.Size = getGlobalPu().SV.ProcessLimitationSize
-	proc.Lim.BatchRows = getGlobalPu().SV.ProcessLimitationBatchRows
-	proc.Lim.MaxMsgSize = getGlobalPu().SV.MaxMessageSize
-	proc.Lim.PartitionRows = getGlobalPu().SV.ProcessLimitationPartitionRows
-	proc.SessionInfo = process.SessionInfo{
+	proc.Base.Id = ses.getNextProcessId()
+	proc.Base.Lim.Size = getGlobalPu().SV.ProcessLimitationSize
+	proc.Base.Lim.BatchRows = getGlobalPu().SV.ProcessLimitationBatchRows
+	proc.Base.Lim.MaxMsgSize = getGlobalPu().SV.MaxMessageSize
+	proc.Base.Lim.PartitionRows = getGlobalPu().SV.ProcessLimitationPartitionRows
+	proc.Base.SessionInfo = process.SessionInfo{
 		User:                 ses.GetUserName(),
 		Host:                 getGlobalPu().SV.Host,
 		ConnectionID:         uint64(resper.GetU32(CONNID)),
@@ -2683,14 +2680,14 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	// Deep copy the map, takes some memory.
 	ses.CopySeqToProc(proc)
 	if ses.GetTenantInfo() != nil {
-		proc.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
-		proc.SessionInfo.AccountId = ses.GetTenantInfo().GetTenantID()
-		proc.SessionInfo.Role = ses.GetTenantInfo().GetDefaultRole()
-		proc.SessionInfo.RoleId = ses.GetTenantInfo().GetDefaultRoleID()
-		proc.SessionInfo.UserId = ses.GetTenantInfo().GetUserID()
+		proc.Base.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
+		proc.Base.SessionInfo.AccountId = ses.GetTenantInfo().GetTenantID()
+		proc.Base.SessionInfo.Role = ses.GetTenantInfo().GetDefaultRole()
+		proc.Base.SessionInfo.RoleId = ses.GetTenantInfo().GetDefaultRoleID()
+		proc.Base.SessionInfo.UserId = ses.GetTenantInfo().GetUserID()
 
 		if len(ses.GetTenantInfo().GetVersion()) != 0 {
-			proc.SessionInfo.Version = ses.GetTenantInfo().GetVersion()
+			proc.Base.SessionInfo.Version = ses.GetTenantInfo().GetVersion()
 		}
 		userNameOnly = ses.GetTenantInfo().GetUser()
 	} else {
@@ -2699,17 +2696,17 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		if retErr != nil {
 			return retErr
 		}
-		proc.SessionInfo.AccountId = accountId
-		proc.SessionInfo.UserId = defines.GetUserId(execCtx.reqCtx)
-		proc.SessionInfo.RoleId = defines.GetRoleId(execCtx.reqCtx)
+		proc.Base.SessionInfo.AccountId = accountId
+		proc.Base.SessionInfo.UserId = defines.GetUserId(execCtx.reqCtx)
+		proc.Base.SessionInfo.RoleId = defines.GetRoleId(execCtx.reqCtx)
 	}
 	var span trace.Span
 	execCtx.reqCtx, span = trace.Start(execCtx.reqCtx, "doComQuery",
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End()
 
-	proc.SessionInfo.User = userNameOnly
-	proc.SessionInfo.QueryId = ses.getQueryId(input.isInternal())
+	proc.Base.SessionInfo.User = userNameOnly
+	proc.Base.SessionInfo.QueryId = ses.getQueryId(input.isInternal())
 
 	statsInfo := statistic.StatsInfo{ParseStartTime: beginInstant}
 	execCtx.reqCtx = statistic.ContextWithStatsInfo(execCtx.reqCtx, &statsInfo)
@@ -2821,9 +2818,9 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		}
 
 		// update UnixTime for new query, which is used for now() / CURRENT_TIMESTAMP
-		proc.UnixTime = time.Now().UnixNano()
+		proc.Base.UnixTime = time.Now().UnixNano()
 		if ses.proc != nil {
-			ses.proc.UnixTime = proc.UnixTime
+			ses.proc.Base.UnixTime = proc.Base.UnixTime
 		}
 		execCtx.stmt = stmt
 		execCtx.isLastStmt = i >= len(cws)-1
@@ -2844,7 +2841,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 	} // end of for
 
-	if canCache && !ses.isCached(input.getSql()) {
+	if canCache && !ses.isCached(input.getHash()) {
 		plans := make([]*plan.Plan, len(cws))
 		stmts := make([]tree.Statement, len(cws))
 		for i, cw := range cws {
@@ -2857,7 +2854,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 			cw.Clear()
 		}
 		Cached = true
-		ses.cachePlan(input.getSql(), stmts, plans)
+		ses.cachePlan(input.getHash(), stmts, plans)
 	}
 
 	return nil

@@ -39,8 +39,8 @@ const (
 
 // add unit tests for cases
 type buildTestCase struct {
-	arg    *Argument
-	marg   *merge.Argument
+	arg    *ShuffleBuild
+	marg   *merge.Merge
 	flgs   []bool // flgs[i] == true: nullable
 	types  []types.Type
 	proc   *process.Process
@@ -94,7 +94,7 @@ func TestBuild(t *testing.T) {
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
 		tc.arg.Free(tc.proc, false, nil)
 		tc.proc.FreeVectors()
-		tc.proc.MessageBoard = tc.proc.MessageBoard.Reset()
+		tc.proc.Base.MessageBoard = tc.proc.Base.MessageBoard.Reset()
 	}
 }
 
@@ -150,13 +150,13 @@ func newTestCase(flgs []bool, ts []types.Type, cs []*plan.Expr) buildTestCase {
 		Ctx: ctx,
 		Ch:  make(chan *process.RegisterMessage, 10),
 	}
-	proc.MessageBoard = process.NewMessageBoard()
+	proc.Base.MessageBoard = process.NewMessageBoard()
 	return buildTestCase{
 		types:  ts,
 		flgs:   flgs,
 		proc:   proc,
 		cancel: cancel,
-		arg: &Argument{
+		arg: &ShuffleBuild{
 			Typs:       ts,
 			Conditions: cs,
 			RuntimeFilterSpec: &plan.RuntimeFilterSpec{
@@ -174,7 +174,7 @@ func newTestCase(flgs []bool, ts []types.Type, cs []*plan.Expr) buildTestCase {
 				},
 			},
 		},
-		marg: &merge.Argument{},
+		marg: &merge.Merge{},
 	}
 }
 

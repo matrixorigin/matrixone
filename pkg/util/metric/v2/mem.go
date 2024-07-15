@@ -78,6 +78,30 @@ var (
 		},
 		[]string{"type"},
 	)
-	MallocCounterAllocateBytes = mallocCounter.WithLabelValues("allocate")
-	MallocCounterFreeBytes     = mallocCounter.WithLabelValues("free")
+	MallocCounterAllocateBytes              = mallocCounter.WithLabelValues("allocate")
+	MallocCounterMemoryCacheAllocateBytes   = mallocCounter.WithLabelValues("memory-cache-allocate")
+	MallocCounterIOAllocateBytes            = mallocCounter.WithLabelValues("io-allocate")
+	MallocCounterBytesAllocateBytes         = mallocCounter.WithLabelValues("bytes-allocate")
+	MallocCounterAllocateObjects            = mallocCounter.WithLabelValues("allocate-objects")
+	MallocCounterMemoryCacheAllocateObjects = mallocCounter.WithLabelValues("memory-cache-allocate-objects")
+	MallocCounterIOAllocateObjects          = mallocCounter.WithLabelValues("io-allocate-objects")
+	MallocCounterBytesAllocateObjects       = mallocCounter.WithLabelValues("bytes-allocate-objects")
+
+	mallocGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "mem",
+			Name:      "malloc_gauge",
+			Help:      "malloc gauge",
+		},
+		[]string{"type"},
+	)
+	MallocGaugeInuseBytes              = mallocGauge.WithLabelValues("inuse")
+	MallocGaugeMemoryCacheInuseBytes   = mallocGauge.WithLabelValues("memory-cache-inuse")
+	MallocGaugeIOInuseBytes            = mallocGauge.WithLabelValues("io-inuse")
+	MallocGaugeBytesInuseBytes         = mallocGauge.WithLabelValues("bytes-inuse")
+	MallocGaugeInuseObjects            = mallocGauge.WithLabelValues("inuse-objects")
+	MallocGaugeMemoryCacheInuseObjects = mallocGauge.WithLabelValues("memory-cache-inuse-objects")
+	MallocGaugeIOInuseObjects          = mallocGauge.WithLabelValues("io-inuse-objects")
+	MallocGaugeBytesInuseObjects       = mallocGauge.WithLabelValues("bytes-inuse-objects")
 )

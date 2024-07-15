@@ -20,9 +20,6 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -34,6 +31,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func makeColExprForTest(idx int32, typ types.T) *plan.Expr {
@@ -1036,7 +1035,7 @@ func Test_ConstructBasePKFilter(t *testing.T) {
 		return bb
 	}
 
-	filters := []BasePKFilter{
+	filters := []basePKFilter{
 		// "a=10",
 		{op: function.EQUAL, valid: true, lb: encodeVal(10)},
 		{valid: false},
@@ -1650,7 +1649,7 @@ func Test_ConstructBasePKFilter(t *testing.T) {
 			x := 0
 			x++
 		}
-		basePKFilter := constructBasePKFilter(expr, tableDef, proc)
+		basePKFilter := newBasePKFilter(expr, tableDef, proc)
 		require.Equal(t, filters[i].valid, basePKFilter.valid, exprStrings[i])
 		if filters[i].valid {
 			require.Equal(t, filters[i].op, basePKFilter.op, exprStrings[i])

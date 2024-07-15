@@ -32,7 +32,7 @@ import (
 
 func TestString(t *testing.T) {
 	buf := new(bytes.Buffer)
-	arg := &Argument{}
+	arg := &TableScan{}
 	arg.String(buf)
 }
 
@@ -66,7 +66,7 @@ func TestPrepare(t *testing.T) {
 	}).AnyTimes()
 	reader.EXPECT().Close().Return(nil).AnyTimes()
 	reader.EXPECT().GetOrderBy().Return(nil).AnyTimes()
-	arg := &Argument{
+	arg := &TableScan{
 		Reader: reader,
 	}
 	proc := testutil.NewProc()
@@ -91,9 +91,9 @@ func TestCall(t *testing.T) {
 	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 
 	proc := testutil.NewProc()
-	proc.TxnClient = txnClient
+	proc.Base.TxnClient = txnClient
 	proc.Ctx = ctx
-	proc.TxnOperator = txnOperator
+	proc.Base.TxnOperator = txnOperator
 
 	reader := mock_frontend.NewMockReader(ctrl)
 	reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, attrs []string, expr *plan.Expr, b, c interface{}) (*batch.Batch, error) {
@@ -121,7 +121,7 @@ func TestCall(t *testing.T) {
 	}).AnyTimes()
 	reader.EXPECT().Close().Return(nil).AnyTimes()
 	reader.EXPECT().GetOrderBy().Return(nil).AnyTimes()
-	arg := &Argument{
+	arg := &TableScan{
 		Reader: reader,
 	}
 

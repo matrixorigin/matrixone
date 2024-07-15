@@ -61,7 +61,7 @@ func TestInsertOperator(t *testing.T) {
 	}).AnyTimes()
 
 	proc := testutil.NewProc()
-	proc.TxnClient = txnClient
+	proc.Base.TxnClient = txnClient
 	proc.Ctx = ctx
 	batch1 := &batch.Batch{
 		Vecs: []*vector.Vector{
@@ -75,7 +75,7 @@ func TestInsertOperator(t *testing.T) {
 		Cnt:   1,
 	}
 	batch1.SetRowCount(3)
-	argument1 := Argument{
+	argument1 := Insert{
 		InsertCtx: &InsertCtx{
 			Ref: &plan.ObjectRef{
 				Obj:        0,
@@ -112,8 +112,8 @@ func TestInsertOperator(t *testing.T) {
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
 
-func resetChildren(arg *Argument, bat *batch.Batch) {
-	valueScanArg := &value_scan.Argument{
+func resetChildren(arg *Insert, bat *batch.Batch) {
+	valueScanArg := &value_scan.ValueScan{
 		Batchs: []*batch.Batch{bat},
 	}
 	valueScanArg.Prepare(nil)

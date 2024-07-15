@@ -194,10 +194,10 @@ func (space *tableSpace) prepareApplyANode(node *anode) error {
 		appender.UnlockFreeze()
 		/// ------- Attach AppendNode Successfully -----
 
-		objID := appender.GetMeta().(*catalog.ObjectEntry).ID
+		objID := appender.GetMeta().(*catalog.ObjectEntry).ID()
 		col := space.table.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
 		defer col.Close()
-		blkID := objectio.NewBlockidWithObjectID(&objID, 0)
+		blkID := objectio.NewBlockidWithObjectID(objID, 0)
 		if err = objectio.ConstructRowidColumnTo(
 			col.GetDownstreamVector(),
 			blkID,
@@ -245,7 +245,7 @@ func (space *tableSpace) prepareApplyObjectStats(stats objectio.ObjectStats) (er
 			return true
 		}
 		entry := space.nobj.GetMeta().(*catalog.ObjectEntry)
-		return !entry.ID.Eq(*sid)
+		return !entry.ID().Eq(*sid)
 	}
 
 	if shouldCreateNewObj() {

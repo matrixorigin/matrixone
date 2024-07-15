@@ -23,6 +23,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
+func containsDynamicParam(expr *plan.Expr) bool {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_P, *plan.Expr_V:
+		return true
+	case *plan.Expr_F:
+		for _, subExpr := range exprImpl.F.Args {
+			if containsDynamicParam(subExpr) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func isRuntimeConstExpr(expr *plan.Expr) bool {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Vec, *plan.Expr_T:
@@ -694,19 +708,17 @@ END0:
 			idxFilter.Selectivity = compositeFilterSel
 		}
 
-		idxTableNodeID := builder.appendNode(&plan.Node{
+		idxTableNode := &plan.Node{
 			NodeType:     plan.Node_TABLE_SCAN,
 			TableDef:     idxTableDef,
 			ObjRef:       idxObjRef,
 			ParentObjRef: DeepCopyObjectRef(node.ObjRef),
 			FilterList:   []*plan.Expr{idxFilter},
-			Limit:        node.Limit,
-			Offset:       node.Offset,
 			BindingTags:  []int32{idxTag},
 			ScanSnapshot: node.ScanSnapshot,
-		}, builder.ctxByNode[nodeID])
+		}
 
-		node.Limit, node.Offset = nil, nil
+		idxTableNodeID := builder.appendNode(idxTableNode, builder.ctxByNode[nodeID])
 
 		pkIdx := node.TableDef.Name2ColIndex[node.TableDef.Pkey.PkeyColName]
 		pkExpr := &plan.Expr{
@@ -731,12 +743,21 @@ END0:
 				},
 			},
 		})
-		joinNodeID := builder.appendNode(&plan.Node{
+
+		joinNode := &plan.Node{
 			NodeType: plan.Node_JOIN,
 			Children: []int32{nodeID, idxTableNodeID},
 			JoinType: plan.Node_INDEX,
 			OnList:   []*plan.Expr{joinCond},
-		}, builder.ctxByNode[nodeID])
+		}
+		joinNodeID := builder.appendNode(joinNode, builder.ctxByNode[nodeID])
+
+		if len(node.FilterList) == 0 {
+			idxTableNode.Limit, idxTableNode.Offset = node.Limit, node.Offset
+		} else {
+			joinNode.Limit, joinNode.Offset = node.Limit, node.Offset
+		}
+		node.Limit, node.Offset = nil, nil
 
 		return joinNodeID
 	}
@@ -798,6 +819,7 @@ END0:
 		col.ColPos = 0
 
 		var idxFilter *plan.Expr
+		estimateExprSelectivity(expr, builder)
 		if idxDef.Unique {
 			idxFilter = expr
 		} else {
@@ -814,20 +836,18 @@ END0:
 				idxFilter, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_between", fn.Args)
 			}
 		}
+		idxFilter.Selectivity = expr.Selectivity
 
-		idxTableNodeID := builder.appendNode(&plan.Node{
+		idxTableNode := &plan.Node{
 			NodeType:     plan.Node_TABLE_SCAN,
 			TableDef:     idxTableDef,
 			ObjRef:       idxObjRef,
 			ParentObjRef: DeepCopyObjectRef(node.ObjRef),
 			FilterList:   []*plan.Expr{idxFilter},
-			Limit:        node.Limit,
-			Offset:       node.Offset,
 			BindingTags:  []int32{idxTag},
 			ScanSnapshot: node.ScanSnapshot,
-		}, builder.ctxByNode[nodeID])
-
-		node.Limit, node.Offset = nil, nil
+		}
+		idxTableNodeID := builder.appendNode(idxTableNode, builder.ctxByNode[nodeID])
 
 		pkIdx := node.TableDef.Name2ColIndex[node.TableDef.Pkey.PkeyColName]
 		pkExpr := &plan.Expr{
@@ -852,12 +872,20 @@ END0:
 				},
 			},
 		})
-		joinNodeID := builder.appendNode(&plan.Node{
+		joinNode := &plan.Node{
 			NodeType: plan.Node_JOIN,
 			Children: []int32{nodeID, idxTableNodeID},
 			JoinType: plan.Node_INDEX,
 			OnList:   []*plan.Expr{joinCond},
-		}, builder.ctxByNode[nodeID])
+		}
+		joinNodeID := builder.appendNode(joinNode, builder.ctxByNode[nodeID])
+
+		if len(node.FilterList) == 0 {
+			idxTableNode.Limit, idxTableNode.Offset = node.Limit, node.Offset
+		} else {
+			joinNode.Limit, joinNode.Offset = node.Limit, node.Offset
+		}
+		node.Limit, node.Offset = nil, nil
 
 		return joinNodeID
 	}
@@ -885,6 +913,10 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 	//----------------------------------------------------------------------
 
 	rightChild := builder.qry.Nodes[node.Children[1]]
+
+	if rightChild.Stats.Selectivity > 0.5 {
+		return nodeID
+	}
 
 	if rightChild.Stats.Outcnt > float64(GetInFilterCardLimitOnPK(leftChild.Stats.TableCnt)) || rightChild.Stats.Outcnt > leftChild.Stats.Cost*0.1 {
 		return nodeID

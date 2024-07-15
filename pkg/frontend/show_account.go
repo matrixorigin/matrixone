@@ -158,10 +158,10 @@ func requestStorageUsage(ctx context.Context, ses *Session, accIds [][]int64) (r
 
 	// create a new proc for `handler`
 	proc := process.New(ctx, ses.proc.GetMPool(),
-		ses.proc.TxnClient, txnOperator,
-		ses.proc.FileService, ses.proc.LockService,
-		ses.proc.QueryClient, ses.proc.Hakeeper,
-		ses.proc.UdfService, ses.proc.Aicm,
+		ses.proc.Base.TxnClient, txnOperator,
+		ses.proc.Base.FileService, ses.proc.Base.LockService,
+		ses.proc.Base.QueryClient, ses.proc.Base.Hakeeper,
+		ses.proc.Base.UdfService, ses.proc.Base.Aicm,
 	)
 
 	handler := ctl.GetTNHandlerFunc(api.OpCode_OpStorageUsage, whichTN, payload, responseUnmarshaler)

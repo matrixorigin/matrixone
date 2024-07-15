@@ -180,12 +180,12 @@ func extend(v *Vector, rows int, m *mpool.MPool) error {
 			return err
 		}
 		v.data = ndata[:cap(ndata)]
-		v.setupColFromData()
+		v.setupFromData()
 	}
 	return nil
 }
 
-func (v *Vector) setupColFromData() {
+func (v *Vector) setupFromData() {
 	if v.GetType().IsVarlen() {
 		v.col.setFromVector(v)
 	} else {
@@ -283,7 +283,7 @@ func ProtoVectorToVector(vec api.Vector) (*Vector, error) {
 		return rvec, nil
 	}
 	rvec.data = vec.Data
-	rvec.setupColFromData()
+	rvec.setupFromData()
 	return rvec, nil
 }
 

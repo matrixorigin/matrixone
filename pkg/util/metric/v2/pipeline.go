@@ -25,4 +25,13 @@ var (
 			Help:      "Bucketed histogram of server processing duration seconds of pipeline.",
 			Buckets:   getDurationBuckets(),
 		})
+
+	pipelineStreamCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "pipeline",
+			Name:      "stream_connection",
+			Help:      "Total number of stream connections to send messages to other CN.",
+		}, []string{"type"})
+	PipelineMessageSenderCounter = pipelineStreamCounter.WithLabelValues("living")
 )

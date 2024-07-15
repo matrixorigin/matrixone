@@ -29,7 +29,7 @@ import (
 
 type minusTestCase struct {
 	proc   *process.Process
-	arg    *Argument
+	arg    *Minus
 	cancel context.CancelFunc
 }
 
@@ -94,7 +94,7 @@ func TestMinus(t *testing.T) {
 
 func newMinusTestCase(proc *process.Process) (minusTestCase, context.Context) {
 	ctx, cancel := context.WithCancel(context.Background())
-	arg := new(Argument)
+	arg := new(Minus)
 	arg.OperatorBase.OperatorInfo = vm.OperatorInfo{
 		Idx:     0,
 		IsFirst: false,

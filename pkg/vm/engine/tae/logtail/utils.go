@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 )
 
@@ -1681,11 +1682,7 @@ func (data *CheckpointData) prepareMeta() {
 		}
 	}
 }
-func (data *CheckpointData) resetObjectMeta() {
-	for _, meta := range data.meta {
-		meta.tables[ObjectInfo] = nil
-	}
-}
+
 func (data *CheckpointData) updateTableMeta(tid uint64, metaIdx int, start, end int32) {
 	meta, ok := data.meta[tid]
 	if !ok {
@@ -2970,103 +2967,21 @@ func (collector *GlobalCollector) VisitTable(entry *catalog.TableEntry) error {
 }
 
 func (collector *BaseCollector) visitObjectEntry(entry *catalog.ObjectEntry) error {
-	mvccNodes := entry.ClonePreparedInRange(collector.start, collector.end)
+	mvccNodes := entry.GetMVCCNodeInRange(collector.start, collector.end)
 	if len(mvccNodes) == 0 {
 		return nil
 	}
 
-	var needPrefetch bool
-	if !collector.skipLoadObjectStats {
-		needPrefetch = entry.NeedPrefetchObjectMetaForObjectInfo(mvccNodes)
+	err := collector.fillObjectInfoBatch(entry, mvccNodes)
+	if err != nil {
+		return err
 	}
-
-	if collector.isPrefetch {
-		if needPrefetch {
-			collector.Objects = append(collector.Objects, entry)
-		}
-	} else {
-		if needPrefetch {
-			collector.isPrefetch = true
-			logutil.Infof("checkpoint %v->%v, when try visit object, object %v need to load stats",
-				collector.start.ToString(),
-				collector.end.ToString(),
-				entry.ID.String())
-			if collector.data.bats[ObjectInfoIDX] != nil {
-				collector.data.bats[ObjectInfoIDX].Close()
-			}
-			if collector.data.bats[TNObjectInfoIDX] != nil {
-				collector.data.bats[TNObjectInfoIDX].Close()
-			}
-			collector.data.resetObjectMeta()
-			if collector.Objects == nil {
-				collector.Objects = make([]*catalog.ObjectEntry, 0)
-			}
-			collector.Objects = append(collector.Objects, entry)
-		} else {
-			entry.SetObjectStatsForPreviousNode(mvccNodes)
-			err := collector.fillObjectInfoBatch(entry, mvccNodes)
-			if err != nil {
-				return err
-			}
-		}
-	}
-
 	return nil
 }
 func (collector *BaseCollector) loadObjectInfo() error {
-	logutil.Infof("checkpoint %v->%v, start to load object meta, total %d objects",
-		collector.start.ToString(),
-		collector.end.ToString(),
-		len(collector.Objects))
-	t0 := time.Now()
-	batchCnt := 100
-	i := 0
-	for idx := 1; idx <= len(collector.Objects); idx++ {
-
-		obj := collector.Objects[idx-1]
-		blockio.PrefetchMeta(obj.GetObjectData().GetFs().Service, obj.GetLocation())
-
-		for idx%batchCnt == 0 && i < idx {
-			obj := collector.Objects[i]
-			mvccNodes := obj.ClonePreparedInRange(collector.start, collector.end)
-			for _, node := range mvccNodes {
-				if node.BaseNode.IsEmpty() {
-					stats, err := obj.LoadObjectInfoWithTxnTS(node.Start)
-					if err != nil {
-						return err
-					}
-					obj.Lock()
-					obj.SearchNodeLocked(node).BaseNode.ObjectStats = stats
-					obj.Unlock()
-				}
-
-			}
-			i++
-		}
-	}
-	for ; i < len(collector.Objects); i++ {
-		obj := collector.Objects[i]
-		mvccNodes := obj.ClonePreparedInRange(collector.start, collector.end)
-		for _, node := range mvccNodes {
-			if node.BaseNode.IsEmpty() {
-				stats, err := obj.LoadObjectInfoWithTxnTS(node.Start)
-				if err != nil {
-					return err
-				}
-				obj.Lock()
-				obj.SearchNodeLocked(node).BaseNode.ObjectStats = stats
-				obj.Unlock()
-			}
-		}
-	}
-	logutil.Infof("checkpoint %v->%v, load %d object meta takes %v",
-		collector.start.ToString(),
-		collector.end.ToString(),
-		len(collector.Objects),
-		time.Since(t0))
-	return nil
+	panic("not support")
 }
-func (collector *BaseCollector) fillObjectInfoBatch(entry *catalog.ObjectEntry, mvccNodes []*catalog.MVCCNode[*catalog.ObjectMVCCNode]) error {
+func (collector *BaseCollector) fillObjectInfoBatch(entry *catalog.ObjectEntry, mvccNodes []*txnbase.TxnMVCCNode) error {
 	if len(mvccNodes) == 0 {
 		return nil
 	}
@@ -3076,18 +2991,19 @@ func (collector *BaseCollector) fillObjectInfoBatch(entry *catalog.ObjectEntry, 
 		if node.IsAborted() {
 			continue
 		}
-		if entry.IsAppendable() && node.BaseNode.IsEmpty() {
-			visitObject(collector.data.bats[TNObjectInfoIDX], entry, node, false, types.TS{})
+		create := node.End.Equal(&entry.CreatedAt)
+		if entry.IsAppendable() && create {
+			visitObject(collector.data.bats[TNObjectInfoIDX], entry, node, create, false, types.TS{}, false)
 		} else {
-			if entry.IsAppendable() && node.DeletedAt.IsEmpty() {
-				panic(fmt.Sprintf("logic error, object %v", entry.ID.String()))
+			if entry.IsAppendable() && entry.DeletedAt.IsEmpty() {
+				panic(fmt.Sprintf("logic error, object %v", entry.ID().String()))
 			}
-			visitObject(collector.data.bats[ObjectInfoIDX], entry, node, false, types.TS{})
+			visitObject(collector.data.bats[ObjectInfoIDX], entry, node, create, false, types.TS{}, true)
 		}
 		objNode := node
 
 		// collect usage info
-		if objNode.HasDropCommitted() {
+		if !entry.DeletedAt.IsEmpty() && objNode.End.Equal(&entry.DeletedAt) {
 			// deleted and non-append, record into the usage del bat
 			if !entry.IsAppendable() && objNode.IsCommitted() {
 				collector.Usage.ObjDeletes = append(collector.Usage.ObjDeletes, entry)
@@ -3106,13 +3022,10 @@ func (collector *BaseCollector) fillObjectInfoBatch(entry *catalog.ObjectEntry, 
 }
 
 func (collector *BaseCollector) VisitObjForBackup(entry *catalog.ObjectEntry) (err error) {
-	entry.RLock()
-	createTS := entry.GetCreatedAtLocked()
+	createTS := entry.GetCreatedAt()
 	if createTS.Greater(&collector.start) {
-		entry.RUnlock()
 		return nil
 	}
-	entry.RUnlock()
 	return collector.visitObjectEntry(entry)
 }
 
@@ -3122,7 +3035,7 @@ func (collector *BaseCollector) VisitObj(entry *catalog.ObjectEntry) (err error)
 }
 
 func (collector *GlobalCollector) VisitObj(entry *catalog.ObjectEntry) error {
-	if collector.isEntryDeletedBeforeThreshold(entry.BaseEntryImpl) && !entry.InMemoryDeletesExisted() && entry.IsDeletesFlushedBefore(collector.versionThershold) {
+	if entry.DeleteBefore(collector.versionThershold) && !entry.InMemoryDeletesExisted() && entry.IsDeletesFlushedBefore(collector.versionThershold) {
 		return nil
 	}
 	if collector.isEntryDeletedBeforeThreshold(entry.GetTable().BaseEntryImpl) {
@@ -3136,7 +3049,13 @@ func (collector *GlobalCollector) VisitObj(entry *catalog.ObjectEntry) error {
 
 func (collector *BaseCollector) visitTombstone(entry data.Tombstone) {
 	// If ctx is used when collect in memory deletes.
-	_, start, end, err := entry.VisitDeletes(context.Background(), collector.start, collector.end, collector.data.bats[BLKMetaInsertIDX], collector.data.bats[BLKMetaInsertTxnIDX], true)
+	_, start, end, err := entry.VisitDeletes(
+		context.Background(),
+		collector.start,
+		collector.end,
+		collector.data.bats[BLKMetaInsertIDX],
+		collector.data.bats[BLKMetaInsertTxnIDX],
+		true, false)
 	if err != nil {
 		panic(err)
 	}
@@ -3160,9 +3079,24 @@ func (collector *BaseCollector) VisitTombstone(entry data.Tombstone) (err error)
 	return nil
 }
 
+func (collector *BaseCollector) VisitGlobalTombstone(entry data.Tombstone) (err error) {
+	_, start, end, err := entry.VisitDeletes(
+		context.Background(),
+		collector.start,
+		collector.end,
+		collector.data.bats[BLKMetaInsertIDX],
+		collector.data.bats[BLKMetaInsertTxnIDX],
+		true, true)
+	if err != nil {
+		panic(err)
+	}
+	collector.data.UpdateBlkMeta(entry.GetObject().(*catalog.ObjectEntry).GetTable().ID, int32(start), int32(end), 0, 0)
+	return nil
+}
+
 func (collector *GlobalCollector) VisitTombstone(entry data.Tombstone) error {
-	obj := entry.GetObject().(*catalog.ObjectEntry)
-	if collector.isEntryDeletedBeforeThreshold(obj.BaseEntryImpl) && !obj.InMemoryDeletesExisted() && obj.IsDeletesFlushedBefore(collector.versionThershold) {
+	obj := entry.GetObject().(*catalog.ObjectEntry).GetLatestNode()
+	if obj.DeleteBefore(collector.versionThershold) && !obj.InMemoryDeletesExisted() && obj.IsDeletesFlushedBefore(collector.versionThershold) {
 		return nil
 	}
 	if collector.isEntryDeletedBeforeThreshold(obj.GetTable().BaseEntryImpl) {
@@ -3171,7 +3105,7 @@ func (collector *GlobalCollector) VisitTombstone(entry data.Tombstone) error {
 	if collector.isEntryDeletedBeforeThreshold(obj.GetTable().GetDB().BaseEntryImpl) {
 		return nil
 	}
-	return collector.BaseCollector.VisitTombstone(entry)
+	return collector.BaseCollector.VisitGlobalTombstone(entry)
 }
 
 func (collector *BaseCollector) OrphanData() *CheckpointData {

@@ -351,13 +351,13 @@ func (ses *Session) getRoutine() *Routine {
 func (ses *Session) SetSeqLastValue(proc *process.Process) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	*ses.seqLastValue = proc.SessionInfo.SeqLastValue[0]
+	*ses.seqLastValue = proc.GetSessionInfo().SeqLastValue[0]
 }
 
 func (ses *Session) DeleteSeqValues(proc *process.Process) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	for _, k := range proc.SessionInfo.SeqDeleteKeys {
+	for _, k := range proc.GetSessionInfo().SeqDeleteKeys {
 		delete(ses.seqCurValues, k)
 	}
 }
@@ -365,7 +365,7 @@ func (ses *Session) DeleteSeqValues(proc *process.Process) {
 func (ses *Session) AddSeqValues(proc *process.Process) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	for k, v := range proc.SessionInfo.SeqAddValues {
+	for k, v := range proc.GetSessionInfo().SeqAddValues {
 		ses.seqCurValues[k] = v
 	}
 }
@@ -380,9 +380,9 @@ func (ses *Session) CopySeqToProc(proc *process.Process) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	for k, v := range ses.seqCurValues {
-		proc.SessionInfo.SeqCurValues[k] = v
+		proc.GetSessionInfo().SeqCurValues[k] = v
 	}
-	proc.SessionInfo.SeqLastValue[0] = *ses.seqLastValue
+	proc.GetSessionInfo().SeqLastValue[0] = *ses.seqLastValue
 }
 
 func (ses *Session) InheritSequenceData(other *Session) {
@@ -540,10 +540,10 @@ func NewSession(connCtx context.Context, proto MysqlRrWr, mp *mpool.MPool) *Sess
 		getGlobalPu().UdfService,
 		getGlobalAic())
 
-	ses.proc.Lim.Size = getGlobalPu().SV.ProcessLimitationSize
-	ses.proc.Lim.BatchRows = getGlobalPu().SV.ProcessLimitationBatchRows
-	ses.proc.Lim.MaxMsgSize = getGlobalPu().SV.MaxMessageSize
-	ses.proc.Lim.PartitionRows = getGlobalPu().SV.ProcessLimitationPartitionRows
+	ses.proc.Base.Lim.Size = getGlobalPu().SV.ProcessLimitationSize
+	ses.proc.Base.Lim.BatchRows = getGlobalPu().SV.ProcessLimitationBatchRows
+	ses.proc.Base.Lim.MaxMsgSize = getGlobalPu().SV.MaxMessageSize
+	ses.proc.Base.Lim.PartitionRows = getGlobalPu().SV.ProcessLimitationPartitionRows
 
 	ses.proc.SetStmtProfile(&ses.stmtProfile)
 	// ses.proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
@@ -1277,7 +1277,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	}
 	//------------------------------------------------------------------------------------------------------------------
 	// record the id :routine pair in RoutineManager
-	ses.getRoutineManager().accountRoutine.recordRountine(tenantID, ses.getRoutine(), accountVersion)
+	ses.getRoutineManager().accountRoutine.recordRoutine(tenantID, ses.getRoutine(), accountVersion)
 	ses.Info(ctx, tenant.String())
 
 	return GetPassWord(pwd)

@@ -58,20 +58,20 @@ func (obj *object) Init() (err error) {
 func (obj *object) OnApplyDelete(
 	deleted uint64,
 	ts types.TS) (err error) {
-	obj.meta.GetTable().RemoveRows(deleted)
+	obj.meta.Load().GetTable().RemoveRows(deleted)
 	return
 }
 
 func (obj *object) PrepareCompact() bool {
-	prepareCompact := obj.meta.PrepareCompact()
-	if !prepareCompact && obj.meta.CheckPrintPrepareCompact() {
-		obj.meta.PrintPrepareCompactDebugLog()
+	prepareCompact := obj.meta.Load().PrepareCompact()
+	if !prepareCompact && obj.meta.Load().CheckPrintPrepareCompact() {
+		obj.meta.Load().PrintPrepareCompactDebugLog()
 	}
 	return prepareCompact
 }
 
 func (obj *object) PrepareCompactInfo() (result bool, reason string) {
-	return obj.meta.PrepareCompact(), ""
+	return obj.meta.Load().PrepareCompact(), ""
 }
 
 func (obj *object) FreezeAppend() {}
@@ -122,9 +122,7 @@ func (obj *object) GetColumnDataById(
 	)
 }
 func (obj *object) CoarseCheckAllRowsCommittedBefore(ts types.TS) bool {
-	obj.meta.RLock()
-	defer obj.meta.RUnlock()
-	creatTS := obj.meta.GetCreatedAtLocked()
+	creatTS := obj.meta.Load().GetCreatedAt()
 	return creatTS.Less(&ts)
 }
 
@@ -141,9 +139,9 @@ func (obj *object) BatchDedup(
 	defer func() {
 		if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
 			logutil.Infof("BatchDedup %s (%v)obj-%s: %v",
-				obj.meta.GetTable().GetLastestSchemaLocked().Name,
+				obj.meta.Load().GetTable().GetLastestSchemaLocked().Name,
 				obj.IsAppendable(),
-				obj.meta.ID.String(),
+				obj.meta.Load().ID().String(),
 				err)
 		}
 	}()
@@ -182,7 +180,7 @@ func (obj *object) RunCalibration() (score int, err error) {
 }
 
 func (obj *object) estimateRawScore() (score int, dropped bool) {
-	if obj.meta.HasDropCommitted() && !obj.meta.InMemoryDeletesExisted() {
+	if obj.meta.Load().HasDropCommitted() && !obj.meta.Load().InMemoryDeletesExisted() {
 		dropped = true
 		return
 	}
@@ -204,7 +202,7 @@ func (obj *object) estimateRawScore() (score int, dropped bool) {
 	// If any delete found and the table or database of the object had
 	// been deleted. Force checkpoint the object
 	if score > 0 {
-		if _, terminated := obj.meta.GetTerminationTS(); terminated {
+		if _, terminated := obj.meta.Load().GetTerminationTS(); terminated {
 			score = 100
 		}
 	}
@@ -220,7 +218,7 @@ func (obj *object) GetByFilter(
 	if filter.Op != handle.FilterEq {
 		panic("logic error")
 	}
-	if obj.meta.GetSchema().SortKey == nil {
+	if obj.meta.Load().GetSchema().SortKey == nil {
 		rid := filter.Val.(types.Rowid)
 		offset = rid.GetRowOffset()
 		return
@@ -239,10 +237,10 @@ func (obj *object) getPersistedRowByFilter(
 	mp *mpool.MPool,
 ) (blkID uint16, offset uint32, err error) {
 	var sortKey containers.Vector
-	schema := obj.meta.GetSchema()
+	schema := obj.meta.Load().GetSchema()
 	idx := schema.GetSingleSortKeyIdx()
 	objMVCC := obj.tryGetMVCC()
-	for blkID = uint16(0); blkID < uint16(obj.meta.BlockCnt()); blkID++ {
+	for blkID = uint16(0); blkID < uint16(obj.meta.Load().BlockCnt()); blkID++ {
 		var ok bool
 		ok, err = pnode.ContainsKey(ctx, filter.Val, uint32(blkID))
 		if err != nil {
@@ -302,7 +300,7 @@ func (obj *object) EstimateMemSize() (int, int) {
 }
 
 func (obj *object) GetRowsOnReplay() uint64 {
-	fileRows := uint64(obj.meta.GetLatestCommittedNodeLocked().
-		BaseNode.ObjectStats.Rows())
+	stats := obj.meta.Load().GetObjectStats()
+	fileRows := uint64(stats.Rows())
 	return fileRows
 }

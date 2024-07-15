@@ -29,28 +29,32 @@ import (
 	"go.uber.org/zap"
 )
 
-const argName = "preinsert"
+const opName = "preinsert"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (preInsert *PreInsert) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": pre processing insert")
 }
 
-func (arg *Argument) Prepare(_ *proc) error {
-	arg.ctr = new(container)
+func (preInsert *PreInsert) OpType() vm.OpType {
+	return vm.PreInsert
+}
+
+func (preInsert *PreInsert) Prepare(_ *proc) error {
+	preInsert.ctr = new(container)
 	return nil
 }
 
-func (arg *Argument) Call(proc *proc) (vm.CallResult, error) {
+func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	result, err := arg.GetChildren(0).Call(proc)
+	result, err := preInsert.GetChildren(0).Call(proc)
 	if err != nil {
 		return result, err
 	}
-	analy := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	analy := proc.GetAnalyze(preInsert.GetIdx(), preInsert.GetParallelIdx(), preInsert.GetParallelMajor())
 	analy.Start()
 	defer analy.Stop()
 
@@ -59,75 +63,75 @@ func (arg *Argument) Call(proc *proc) (vm.CallResult, error) {
 	}
 	bat := result.Batch
 
-	if arg.ctr.buf != nil {
-		proc.PutBatch(arg.ctr.buf)
-		arg.ctr.buf = nil
+	if preInsert.ctr.buf != nil {
+		proc.PutBatch(preInsert.ctr.buf)
+		preInsert.ctr.buf = nil
 	}
 
-	arg.ctr.buf = batch.NewWithSize(len(arg.Attrs))
+	preInsert.ctr.buf = batch.NewWithSize(len(preInsert.Attrs))
 	// keep shuffleIDX unchanged
-	arg.ctr.buf.ShuffleIDX = bat.ShuffleIDX
-	arg.ctr.buf.Attrs = make([]string, 0, len(arg.Attrs))
-	for idx := range arg.Attrs {
-		arg.ctr.buf.Attrs = append(arg.ctr.buf.Attrs, arg.Attrs[idx])
+	preInsert.ctr.buf.ShuffleIDX = bat.ShuffleIDX
+	preInsert.ctr.buf.Attrs = make([]string, 0, len(preInsert.Attrs))
+	for idx := range preInsert.Attrs {
+		preInsert.ctr.buf.Attrs = append(preInsert.ctr.buf.Attrs, preInsert.Attrs[idx])
 		srcVec := bat.Vecs[idx]
 		vec := proc.GetVector(*srcVec.GetType())
 		if err := vector.GetUnionAllFunction(*srcVec.GetType(), proc.Mp())(vec, srcVec); err != nil {
 			vec.Free(proc.Mp())
 			return result, err
 		}
-		arg.ctr.buf.SetVector(int32(idx), vec)
+		preInsert.ctr.buf.SetVector(int32(idx), vec)
 	}
-	arg.ctr.buf.AddRowCount(bat.RowCount())
+	preInsert.ctr.buf.AddRowCount(bat.RowCount())
 
-	if arg.HasAutoCol {
-		err := genAutoIncrCol(arg.ctr.buf, proc, arg)
+	if preInsert.HasAutoCol {
+		err := genAutoIncrCol(preInsert.ctr.buf, proc, preInsert)
 		if err != nil {
 			return result, err
 		}
 	}
 	// check new rows not null
-	err = colexec.BatchDataNotNullCheck(arg.ctr.buf, arg.TableDef, proc.Ctx)
+	err = colexec.BatchDataNotNullCheck(preInsert.ctr.buf, preInsert.TableDef, proc.Ctx)
 	if err != nil {
 		return result, err
 	}
 
 	// calculate the composite primary key column and append the result vector to batch
-	err = genCompositePrimaryKey(arg.ctr.buf, proc, arg.TableDef)
+	err = genCompositePrimaryKey(preInsert.ctr.buf, proc, preInsert.TableDef)
 	if err != nil {
 		return result, err
 	}
-	err = genClusterBy(arg.ctr.buf, proc, arg.TableDef)
+	err = genClusterBy(preInsert.ctr.buf, proc, preInsert.TableDef)
 	if err != nil {
 		return result, err
 	}
-	if arg.IsUpdate {
+	if preInsert.IsUpdate {
 		idx := len(bat.Vecs) - 1
-		arg.ctr.buf.Attrs = append(arg.ctr.buf.Attrs, catalog.Row_ID)
+		preInsert.ctr.buf.Attrs = append(preInsert.ctr.buf.Attrs, catalog.Row_ID)
 		rowIdVec := proc.GetVector(*bat.GetVector(int32(idx)).GetType())
 		err = rowIdVec.UnionBatch(bat.Vecs[idx], 0, bat.Vecs[idx].Length(), nil, proc.Mp())
 		if err != nil {
 			rowIdVec.Free(proc.Mp())
 			return result, err
 		}
-		arg.ctr.buf.Vecs = append(arg.ctr.buf.Vecs, rowIdVec)
+		preInsert.ctr.buf.Vecs = append(preInsert.ctr.buf.Vecs, rowIdVec)
 	}
 
-	result.Batch = arg.ctr.buf
+	result.Batch = preInsert.ctr.buf
 	return result, nil
 }
 
-func genAutoIncrCol(bat *batch.Batch, proc *proc, arg *Argument) error {
-	lastInsertValue, err := proc.IncrService.InsertValues(
+func genAutoIncrCol(bat *batch.Batch, proc *proc, preInsert *PreInsert) error {
+	lastInsertValue, err := proc.GetIncrService().InsertValues(
 		proc.Ctx,
-		arg.TableDef.TblId,
+		preInsert.TableDef.TblId,
 		bat,
-		arg.EstimatedRowCount,
+		preInsert.EstimatedRowCount,
 	)
 	if err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
 			logutil.Error("insert auto increment column failed", zap.Error(err))
-			return moerr.NewNoSuchTableNoCtx(arg.SchemaName, arg.TableDef.Name)
+			return moerr.NewNoSuchTableNoCtx(preInsert.SchemaName, preInsert.TableDef.Name)
 		}
 		return err
 	}

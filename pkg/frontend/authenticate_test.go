@@ -18,27 +18,25 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/BurntSushi/toml"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/stretchr/testify/assert"
 	"go/constant"
+	"net"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/BurntSushi/toml"
-	"github.com/fagongzi/goetty/v2"
-	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/golang/mock/gomock"
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -2348,38 +2346,42 @@ func Test_determineRevokePrivilege(t *testing.T) {
 	convey.Convey("revoke privilege [ObjectType: Table] AdminRole succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
-		var stmts []*tree.RevokePrivilege
+		// var stmts []*tree.RevokePrivilege
 
-		for _, stmt := range stmts {
-			priv := determinePrivilegeSetOfStatement(stmt)
-			ses := newSes(priv, ctrl)
+		// XXX FIXME: Go compiler is correct -- this test is busted.
+		// we are looping over nil.
+		// for _, stmt := range stmts {
+		// 	priv := determinePrivilegeSetOfStatement(stmt)
+		//	ses := newSes(priv, ctrl)
 
-			ok, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
-			convey.So(err, convey.ShouldBeNil)
-			convey.So(ok, convey.ShouldBeTrue)
-		}
+		//	ok, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		//	convey.So(err, convey.ShouldBeNil)
+		//	convey.So(ok, convey.ShouldBeTrue)
+		// }
 	})
 	convey.Convey("revoke privilege [ObjectType: Table] not AdminRole fail", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
-		var stmts []*tree.RevokePrivilege
+		// var stmts []*tree.RevokePrivilege
 
-		for _, stmt := range stmts {
-			priv := determinePrivilegeSetOfStatement(stmt)
-			ses := newSes(priv, ctrl)
-			ses.tenant = &TenantInfo{
-				Tenant:        "xxx",
-				User:          "xxx",
-				DefaultRole:   "xxx",
-				TenantID:      1001,
-				UserID:        1001,
-				DefaultRoleID: 1001,
-			}
+		// XXX FIXME: Go compiler is correct -- this test is busted.
+		// we are looping over nil.
+		// for _, stmt := range stmts {
+		// 	priv := determinePrivilegeSetOfStatement(stmt)
+		// 	ses := newSes(priv, ctrl)
+		// 	ses.tenant = &TenantInfo{
+		// 		Tenant:        "xxx",
+		// 		User:          "xxx",
+		// 		DefaultRole:   "xxx",
+		// 		TenantID:      1001,
+		// 		UserID:        1001,
+		// 		DefaultRoleID: 1001,
+		// 	}
 
-			ok, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
-			convey.So(err, convey.ShouldBeNil)
-			convey.So(ok, convey.ShouldBeFalse)
-		}
+		// 	ok, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		// 	convey.So(err, convey.ShouldBeNil)
+		// 	convey.So(ok, convey.ShouldBeFalse)
+		// }
 	})
 }
 
@@ -5869,8 +5871,8 @@ func Test_doInterpretCall(t *testing.T) {
 		priv := determinePrivilegeSetOfStatement(call)
 		ses := newSes(priv, ctrl)
 		proc := testutil.NewProcess()
-		proc.FileService = getGlobalPu().FileService
-		proc.SessionInfo = process.SessionInfo{Account: sysAccountName}
+		proc.Base.FileService = getGlobalPu().FileService
+		proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
 		ses.GetTxnCompileCtx().execCtx = &ExecCtx{
 			proc: proc,
 		}
@@ -5911,8 +5913,8 @@ func Test_doInterpretCall(t *testing.T) {
 		priv := determinePrivilegeSetOfStatement(call)
 		ses := newSes(priv, ctrl)
 		proc := testutil.NewProcess()
-		proc.FileService = getGlobalPu().FileService
-		proc.SessionInfo = process.SessionInfo{Account: sysAccountName}
+		proc.Base.FileService = getGlobalPu().FileService
+		proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
 		ses.SetDatabaseName("procedure_test")
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
@@ -5963,8 +5965,8 @@ func Test_doInterpretCall(t *testing.T) {
 		priv := determinePrivilegeSetOfStatement(call)
 		ses := newSes(priv, ctrl)
 		proc := testutil.NewProcess()
-		proc.FileService = getGlobalPu().FileService
-		proc.SessionInfo = process.SessionInfo{Account: sysAccountName}
+		proc.Base.FileService = getGlobalPu().FileService
+		proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
 		ses.SetDatabaseName("procedure_test")
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
@@ -6643,13 +6645,9 @@ func TestSetGlobalSysVar(t *testing.T) {
 		convey.So(value, convey.ShouldEqual, 0)
 
 		// new session, both GetSession/GlobalSysVar equal 0
-		sql = getSqlForGetSystemVariablesWithAccount(sysAccountID)
-		mrs = newMrsForSystemVariablesOfAccount([][]interface{}{
-			{"autocommit", "0"},
-		})
-		bh.sql2result[sql] = mrs
-
 		ses2 := newSes(nil, ctrl)
+		ses2.sesSysVars.sysVars["autocommit"] = 0
+		ses2.gSysVars.sysVars["autocommit"] = 0
 		value, err = ses2.GetSessionSysVar("autocommit")
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(value, convey.ShouldEqual, 0)
@@ -7704,11 +7702,15 @@ func newSes(priv *privilege, ctrl *gomock.Controller) *Session {
 
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 	ctx = defines.AttachAccountId(ctx, 0)
-	ioses := mock_frontend.NewMockIOSession(ctrl)
-	ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
-	ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
-	ioses.EXPECT().Ref().AnyTimes()
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+	go startConsumeRead(clientConn)
+
+	ioses, err := NewIOSession(serverConn, pu)
+	if err != nil {
+		panic(err)
+	}
 	proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
 	ses := NewSession(ctx, proto, nil)
@@ -8202,27 +8204,6 @@ func newMrsForPrivilegeWGO(rows [][]interface{}) *MysqlResultSet {
 	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
 
 	mrs.AddColumn(col1)
-
-	for _, row := range rows {
-		mrs.AddRow(row)
-	}
-
-	return mrs
-}
-
-func newMrsForSystemVariablesOfAccount(rows [][]interface{}) *MysqlResultSet {
-	mrs := &MysqlResultSet{}
-
-	col1 := &MysqlColumn{}
-	col1.SetName("variable_name")
-	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-
-	col2 := &MysqlColumn{}
-	col2.SetName("variable_value")
-	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-
-	mrs.AddColumn(col1)
-	mrs.AddColumn(col2)
 
 	for _, row := range rows {
 		mrs.AddRow(row)
@@ -8808,11 +8789,11 @@ func TestCheckSubscriptionValid(t *testing.T) {
 	ses.rm = rm
 
 	proc := testutil.NewProcess()
-	proc.FileService = getGlobalPu().FileService
+	proc.Base.FileService = getGlobalPu().FileService
 	ses.GetTxnCompileCtx().execCtx = &ExecCtx{
 		proc: proc,
 	}
-	ses.GetTxnCompileCtx().GetProcess().SessionInfo = process.SessionInfo{Account: sysAccountName}
+	ses.GetTxnCompileCtx().GetProcess().Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
 
 	columns := [][]Column{
 		{
@@ -11063,26 +11044,19 @@ func TestUpload(t *testing.T) {
 	convey.Convey("call upload func", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
-		ioses := mock_frontend.NewMockIOSession(ctrl)
 		proc := testutil.NewProc()
-		cnt := 0
-		ioses.EXPECT().Read(gomock.Any()).DoAndReturn(func(options goetty.ReadOptions) (pkt any, err error) {
-			if cnt == 0 {
-				pkt = &Packet{Length: 5, Payload: []byte("def add(a, b):\n"), SequenceID: 1}
-			} else if cnt == 1 {
-				pkt = &Packet{Length: 5, Payload: []byte("  return a + b"), SequenceID: 2}
-			} else {
-				err = moerr.NewInvalidInput(context.TODO(), "length 0")
-			}
-			cnt++
-			return
-		}).AnyTimes()
-		proto := &testMysqlWriter{
-			ioses: ioses,
-		}
+		clientConn, serverConn := net.Pipe()
+		defer clientConn.Close()
+		defer serverConn.Close()
+		go writeExceptResult(clientConn, []*Packet{
+			{Length: 5, Payload: []byte("def add(a, b):\n"), SequenceID: 1},
+			{Length: 5, Payload: []byte("  return a + b"), SequenceID: 2},
+			{Length: 0, Payload: []byte(""), SequenceID: 3},
+		})
+
 		fs, err := fileservice.NewLocalFS(context.TODO(), defines.SharedFileServiceName, t.TempDir(), fileservice.DisabledCacheConfig, nil)
 		convey.So(err, convey.ShouldBeNil)
-		proc.FileService = fs
+		proc.Base.FileService = fs
 
 		//parameter
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
@@ -11090,12 +11064,16 @@ func TestUpload(t *testing.T) {
 		assert.Nil(t, err)
 		pu.SV.SetDefaultValues()
 		pu.SV.SaveQueryResult = "on"
-		if err != nil {
-			assert.Nil(t, err)
-		}
 		//file service
 		pu.FileService = fs
 		setGlobalPu(pu)
+
+		ioses, err := NewIOSession(serverConn, pu)
+		assert.Nil(t, err)
+		proto := &testMysqlWriter{
+			ioses: ioses,
+		}
+
 		ses := &Session{
 			feSessionImpl: feSessionImpl{
 				respr: NewMysqlResp(proto),
@@ -11465,7 +11443,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
 		ses.proc = testutil.NewProc()
-		ses.proc.TxnOperator = txnOperator
+		ses.proc.Base.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
@@ -11526,7 +11504,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
 		ses.proc = testutil.NewProc()
-		ses.proc.TxnOperator = txnOperator
+		ses.proc.Base.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
@@ -11587,7 +11565,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
 		ses.proc = testutil.NewProc()
-		ses.proc.TxnOperator = txnOperator
+		ses.proc.Base.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
@@ -11652,7 +11630,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
 		ses.proc = testutil.NewProc()
-		ses.proc.TxnOperator = txnOperator
+		ses.proc.Base.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
@@ -11717,7 +11695,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
 		ses.proc = testutil.NewProc()
-		ses.proc.TxnOperator = txnOperator
+		ses.proc.Base.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
@@ -11783,7 +11761,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
 		ses.proc = testutil.NewProc()
-		ses.proc.TxnOperator = txnOperator
+		ses.proc.Base.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
@@ -11849,7 +11827,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
 		ses.proc = testutil.NewProc()
-		ses.proc.TxnOperator = txnOperator
+		ses.proc.Base.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),

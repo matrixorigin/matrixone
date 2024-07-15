@@ -27,10 +27,10 @@ import (
 )
 
 func (i *IOEntry) setCachedData(ctx context.Context) error {
-	LogEvent(ctx, "setCachedData begin")
+	LogEvent(ctx, str_set_cache_data_begin)
 	t0 := time.Now()
 	defer func() {
-		LogEvent(ctx, "setCachedData end")
+		LogEvent(ctx, str_set_cache_data_end)
 		metric.FSReadDurationSetCachedData.Observe(time.Since(t0).Seconds())
 	}()
 	if i.ToCacheData == nil {
@@ -42,13 +42,16 @@ func (i *IOEntry) setCachedData(ctx context.Context) error {
 	if i.allocator == nil {
 		i.allocator = GetDefaultCacheDataAllocator()
 	}
-	LogEvent(ctx, "ToCacheData begin")
-	bs, err := i.ToCacheData(bytes.NewReader(i.Data), i.Data, i.allocator)
-	LogEvent(ctx, "ToCacheData end")
+	LogEvent(ctx, str_to_cache_data_begin)
+	cacheData, err := i.ToCacheData(bytes.NewReader(i.Data), i.Data, i.allocator)
+	LogEvent(ctx, str_to_cache_data_end)
 	if err != nil {
 		return err
 	}
-	i.CachedData = bs
+	if cacheData == nil {
+		panic("ToCacheData returns nil cache data")
+	}
+	i.CachedData = cacheData
 	return nil
 }
 
@@ -95,7 +98,7 @@ func CacheOriginalData(r io.Reader, data []byte, allocator CacheDataAllocator) (
 
 func (i *IOEntry) prepareData() (finally func(err *error)) {
 	if cap(i.Data) < int(i.Size) {
-		slice, dec, err := getMallocAllocator().Allocate(uint64(i.Size), malloc.NoHints)
+		slice, dec, err := getIOAllocator().Allocate(uint64(i.Size), malloc.NoHints)
 		if err != nil {
 			panic(err)
 		}

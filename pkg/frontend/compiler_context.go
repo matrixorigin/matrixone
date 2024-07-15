@@ -864,9 +864,9 @@ func (tcc *TxnCompilerContext) GetProcess() *process.Process {
 func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, string, error) {
 	proc := tcc.execCtx.proc
 	// get file size
-	path := catalog.BuildQueryResultMetaPath(proc.SessionInfo.Account, uuid)
+	path := catalog.BuildQueryResultMetaPath(proc.GetSessionInfo().Account, uuid)
 	// read meta's meta
-	reader, err := blockio.NewFileReader(proc.FileService, path)
+	reader, err := blockio.NewFileReader(proc.Base.FileService, path)
 	if err != nil {
 		return nil, "", err
 	}
@@ -877,7 +877,7 @@ func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, 
 	bats, release, err := reader.LoadAllColumns(tcc.execCtx.reqCtx, idxs, common.DefaultAllocator)
 	if err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-			return nil, "", moerr.NewResultFileNotFound(tcc.execCtx.reqCtx, makeResultMetaPath(proc.SessionInfo.Account, uuid))
+			return nil, "", moerr.NewResultFileNotFound(tcc.execCtx.reqCtx, makeResultMetaPath(proc.Base.SessionInfo.Account, uuid))
 		}
 		return nil, "", err
 	}
@@ -895,7 +895,7 @@ func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, 
 	}
 	// paths
 	vec = bats[0].Vecs[1]
-	str := vec.UnsafeGetStringAt(0)
+	str := vec.GetStringAt(0)
 	return r.ResultCols, str, nil
 }
 

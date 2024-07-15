@@ -158,12 +158,15 @@ func (s *sqlExecutor) maybeWaitCommittedLogApplied(opts executor.Options) {
 func (s *sqlExecutor) getCompileContext(
 	ctx context.Context,
 	proc *process.Process,
-	db string) *compilerContext {
-	return newCompilerContext(
-		ctx,
-		db,
-		s.eng,
-		proc)
+	db string,
+	lower int64) *compilerContext {
+	return &compilerContext{
+		ctx:       ctx,
+		defaultDB: db,
+		engine:    s.eng,
+		proc:      proc,
+		lower:     lower,
+	}
 }
 
 func (s *sqlExecutor) adjustOptions(
@@ -255,7 +258,8 @@ func (exec *txnExecutor) Exec(
 	//-----------------------------------------------------------------------------------------
 
 	receiveAt := time.Now()
-	stmts, err := parsers.Parse(exec.ctx, dialect.MYSQL, sql, 1)
+	lower := exec.opts.LowerCaseTableNames()
+	stmts, err := parsers.Parse(exec.ctx, dialect.MYSQL, sql, lower)
 	defer func() {
 		for _, stmt := range stmts {
 			stmt.Free()
@@ -292,17 +296,17 @@ func (exec *txnExecutor) Exec(
 		exec.s.us,
 		exec.s.aicm,
 	)
-	proc.WaitPolicy = statementOption.WaitPolicy()
+	proc.Base.WaitPolicy = statementOption.WaitPolicy()
 	proc.SetVectorPoolSize(0)
-	proc.SessionInfo.TimeZone = exec.opts.GetTimeZone()
-	proc.SessionInfo.Buf = exec.s.buf
-	proc.SessionInfo.StorageEngine = exec.s.eng
+	proc.Base.SessionInfo.TimeZone = exec.opts.GetTimeZone()
+	proc.Base.SessionInfo.Buf = exec.s.buf
+	proc.Base.SessionInfo.StorageEngine = exec.s.eng
 	defer func() {
 		proc.CleanValueScanBatchs()
 		proc.FreeVectors()
 	}()
 
-	compileContext := exec.s.getCompileContext(exec.ctx, proc, exec.getDatabase())
+	compileContext := exec.s.getCompileContext(exec.ctx, proc, exec.getDatabase(), lower)
 	compileContext.SetRootSql(sql)
 
 	pn, err := plan.BuildPlan(compileContext, stmts[0], false)
@@ -310,12 +314,13 @@ func (exec *txnExecutor) Exec(
 		return executor.Result{}, err
 	}
 
-	c := NewCompile(exec.s.addr, exec.getDatabase(), sql, "", "", exec.ctx, exec.s.eng, proc, stmts[0], false, nil, receiveAt)
+	c := NewCompile(exec.s.addr, exec.getDatabase(), sql, "", "", exec.s.eng, proc, stmts[0], false, nil, receiveAt)
+	c.SetOriginSQL(sql)
 	defer c.Release()
 	c.disableRetry = exec.opts.DisableIncrStatement()
 	c.SetBuildPlanFunc(func() (*plan.Plan, error) {
 		return plan.BuildPlan(
-			exec.s.getCompileContext(exec.ctx, proc, exec.getDatabase()),
+			exec.s.getCompileContext(exec.ctx, proc, exec.getDatabase(), lower),
 			stmts[0], false)
 	})
 
@@ -388,8 +393,8 @@ func (exec *txnExecutor) LockTable(table string) error {
 		exec.s.aicm,
 	)
 	proc.SetVectorPoolSize(0)
-	proc.SessionInfo.TimeZone = exec.opts.GetTimeZone()
-	proc.SessionInfo.Buf = exec.s.buf
+	proc.Base.SessionInfo.TimeZone = exec.opts.GetTimeZone()
+	proc.Base.SessionInfo.Buf = exec.s.buf
 	defer func() {
 		proc.CleanValueScanBatchs()
 		proc.FreeVectors()

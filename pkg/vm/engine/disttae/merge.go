@@ -16,7 +16,9 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"strings"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -35,8 +37,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+var gTaskID atomic.Uint64
+
 type cnMergeTask struct {
-	host *txnTable
+	taskId uint64 // only unique in a process
+	host   *txnTable
 	// txn
 	snapshot types.TS // start ts, fixed
 	state    *logtailreplay.PartitionState
@@ -82,12 +87,11 @@ func newCNMergeTask(
 	for i := 0; i < len(tbl.tableDef.Cols)-1; i++ {
 		attrs = append(attrs, tbl.tableDef.Cols[i].Name)
 	}
-	fs := proc.FileService
+	fs := proc.Base.FileService
 
 	blkCnts := make([]int, len(targets))
 	blkIters := make([]*StatsBlkIter, len(targets))
 	for i, objInfo := range targets {
-		objInfo := objInfo
 		blkCnts[i] = int(objInfo.BlkCnt())
 
 		loc := objInfo.ObjectLocation()
@@ -100,6 +104,7 @@ func newCNMergeTask(
 	}
 
 	return &cnMergeTask{
+		taskId:      gTaskID.Add(1),
 		host:        tbl,
 		snapshot:    snapshot,
 		state:       state,
@@ -118,6 +123,10 @@ func newCNMergeTask(
 		targetObjSize: targetObjSize,
 		doTransfer:    !strings.Contains(tbl.comment, catalog.MO_COMMENT_NO_DEL_HINT),
 	}, nil
+}
+
+func (t *cnMergeTask) Name() string {
+	return fmt.Sprintf("[MT-%d]%d-%s", t.taskId, t.host.tableId, t.host.tableName)
 }
 
 func (t *cnMergeTask) DoTransfer() bool {
@@ -200,10 +209,10 @@ func (t *cnMergeTask) GetMPool() *mpool.MPool {
 
 func (t *cnMergeTask) HostHintName() string { return "CN" }
 
-func (t *cnMergeTask) GetTotalSize() uint32 {
-	totalSize := uint32(0)
+func (t *cnMergeTask) GetTotalSize() uint64 {
+	totalSize := uint64(0)
 	for _, obj := range t.targets {
-		totalSize += obj.OriginSize()
+		totalSize += uint64(obj.OriginSize())
 	}
 	return totalSize
 }

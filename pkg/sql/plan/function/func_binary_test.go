@@ -1154,7 +1154,7 @@ func newTmpProcess() *process.Process {
 
 func newProcessWithMPool(mp *mpool.MPool) *process.Process {
 	process := testutil.NewProcessWithMPool(mp)
-	process.SessionInfo.TimeZone = time.FixedZone("UTC0", 0)
+	process.Base.SessionInfo.TimeZone = time.FixedZone("UTC0", 0)
 	return process
 }
 
@@ -3226,5 +3226,31 @@ func TestSplitPart(t *testing.T) {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, SplitPart)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func Test_castBinaryArrayToInt(t *testing.T) {
+	testCases := []struct {
+		name   string
+		input  []uint8
+		expect int64
+	}{
+		{
+			name:   "test1",
+			input:  []uint8{7, 229},
+			expect: 2021,
+		},
+		{
+			name:   "test2",
+			input:  []uint8{8, 45},
+			expect: 2093,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := castBinaryArrayToInt(tc.input)
+			require.Equal(t, tc.expect, result)
+		})
 	}
 }

@@ -61,6 +61,7 @@ type Options struct {
 	statementOptions        StatementOption
 	txnOpts                 []client.TxnOption
 	enableTrace             bool
+	lower                   *int64
 }
 
 // StatementOption statement execute option.

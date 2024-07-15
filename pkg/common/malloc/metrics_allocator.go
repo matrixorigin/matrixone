@@ -15,24 +15,45 @@
 package malloc
 
 import (
-	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 type MetricsAllocator struct {
 	upstream        Allocator
 	deallocatorPool *ClosureDeallocatorPool[metricsDeallocatorArgs]
+
+	allocateBytesCounter   prometheus.Counter
+	inuseBytesGauge        prometheus.Gauge
+	allocateObjectsCounter prometheus.Counter
+	inuseObjectsGauge      prometheus.Gauge
 }
 
 type metricsDeallocatorArgs struct {
 	size uint64
 }
 
-func NewMetricsAllocator(upstream Allocator) *MetricsAllocator {
+func NewMetricsAllocator(
+	upstream Allocator,
+	allocateBytesCounter prometheus.Counter,
+	inuseBytesGauge prometheus.Gauge,
+	allocateObjectsCounter prometheus.Counter,
+	inuseObjectsGauge prometheus.Gauge,
+) *MetricsAllocator {
 	return &MetricsAllocator{
-		upstream: upstream,
+		upstream:               upstream,
+		allocateBytesCounter:   allocateBytesCounter,
+		inuseBytesGauge:        inuseBytesGauge,
+		allocateObjectsCounter: allocateObjectsCounter,
+		inuseObjectsGauge:      inuseObjectsGauge,
+
 		deallocatorPool: NewClosureDeallocatorPool(
-			func(hints Hints, args metricsDeallocatorArgs) {
-				metric.MallocCounterFreeBytes.Add(float64(args.size))
+			func(hints Hints, args *metricsDeallocatorArgs) {
+				if inuseBytesGauge != nil {
+					inuseBytesGauge.Add(-float64(args.size))
+				}
+				if inuseObjectsGauge != nil {
+					inuseObjectsGauge.Add(-1)
+				}
 			},
 		),
 	}
@@ -50,7 +71,18 @@ func (m *MetricsAllocator) Allocate(size uint64, hints Hints) ([]byte, Deallocat
 	if err != nil {
 		return nil, nil, err
 	}
-	metric.MallocCounterAllocateBytes.Add(float64(size))
+	if m.allocateBytesCounter != nil {
+		m.allocateBytesCounter.Add(float64(size))
+	}
+	if m.inuseBytesGauge != nil {
+		m.inuseBytesGauge.Add(float64(size))
+	}
+	if m.allocateObjectsCounter != nil {
+		m.allocateObjectsCounter.Add(1)
+	}
+	if m.inuseObjectsGauge != nil {
+		m.inuseObjectsGauge.Add(1)
+	}
 
 	return ptr, ChainDeallocator(
 		dec,

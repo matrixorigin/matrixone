@@ -35,8 +35,9 @@ import (
 )
 
 var (
-	stateRunning = int32(0)
-	stateStopped = int32(1)
+	stateRunning  = int32(0)
+	stateStopping = int32(1)
+	stateStopped  = int32(2)
 
 	backendClosed  = moerr.NewBackendClosedNoCtx()
 	messageSkipped = moerr.NewInvalidStateNoCtx("request is skipped")
@@ -327,7 +328,7 @@ func (rb *remoteBackend) NewStream(unlockAfterClose bool) (Stream, error) {
 	rb.stateMu.RLock()
 	defer rb.stateMu.RUnlock()
 
-	if rb.stateMu.state == stateStopped {
+	if rb.stateMu.state != stateRunning {
 		return nil, backendClosed
 	}
 
@@ -350,7 +351,7 @@ func (rb *remoteBackend) doSend(f *Future) error {
 
 	for {
 		rb.stateMu.RLock()
-		if rb.stateMu.state == stateStopped {
+		if rb.stateMu.state != stateRunning {
 			rb.stateMu.RUnlock()
 			return backendClosed
 		}
@@ -430,6 +431,14 @@ func (rb *remoteBackend) active() {
 
 func (rb *remoteBackend) inactive() {
 	rb.atomic.lastActiveTime.Store(time.Time{})
+}
+
+func (rb *remoteBackend) changeToStopping() {
+	rb.stateMu.Lock()
+	defer rb.stateMu.Unlock()
+	if rb.stateMu.state == stateRunning {
+		rb.stateMu.state = stateStopping
+	}
 }
 
 func (rb *remoteBackend) writeLoop(ctx context.Context) {
@@ -631,7 +640,10 @@ func (rb *remoteBackend) fetch(messages []*Future, maxFetchCount int) ([]*Future
 		// If the connect needs to be reset, then all futures in the waiting response state will never
 		// get the response and need to be notified of an error immediately.
 		rb.makeAllWaitingFutureFailed()
-		rb.handleResetConn()
+		if err := rb.handleResetConn(); err != nil {
+			rb.changeToStopping()
+			return nil, true
+		}
 	case <-rb.stopWriteC:
 		return rb.fetchN(messages, math.MaxInt), true
 	}
@@ -687,11 +699,13 @@ func (rb *remoteBackend) makeAllWaitingFutureFailed() {
 	}
 }
 
-func (rb *remoteBackend) handleResetConn() {
+func (rb *remoteBackend) handleResetConn() error {
 	if err := rb.resetConn(); err != nil {
 		rb.logger.Error("fail to reset backend connection", zap.Error(err))
 		rb.inactive()
+		return err
 	}
+	return nil
 }
 
 func (rb *remoteBackend) doClose() {
