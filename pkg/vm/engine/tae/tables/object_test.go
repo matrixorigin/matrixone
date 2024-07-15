@@ -16,6 +16,7 @@ package tables
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -40,17 +41,20 @@ func TestGetActiveRow(t *testing.T) {
 	db, _ := c.CreateDBEntry("db", "", "", nil)
 	table, _ := db.CreateTableEntry(schema, nil, nil)
 	obj, _ := table.CreateObject(nil, catalog.ES_Appendable, nil, nil)
-	mvcc := updates.NewAppendMVCCHandle(obj)
+	mvcc := updates.NewAppendMVCCHandle(obj, &sync.RWMutex{})
 	// blk := &dataBlock{
 	// 	mvcc: mvcc,
 	// }
 	b := &baseObject{
-		RWMutex:    mvcc.RWMutex,
-		appendMVCC: mvcc,
+		RWMutex: mvcc.RWMutex,
+	}
+	aobj := &aobject{
+		baseObject: b,
 	}
 	b.meta.Store(obj)
 	mnode := &memoryNode{
-		object: b,
+		object:     aobj,
+		appendMVCC: mvcc,
 	}
 	blk := &aobject{baseObject: b}
 

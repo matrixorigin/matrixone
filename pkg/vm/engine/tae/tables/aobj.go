@@ -56,7 +56,7 @@ func newAObject(
 		obj.node.Store(node)
 		obj.FreezeAppend()
 	} else {
-		mnode := newMemoryNode(obj.baseObject)
+		mnode := newMemoryNode(obj)
 		node := NewNode(mnode)
 		node.Ref()
 		obj.node.Store(node)
@@ -70,6 +70,52 @@ func (obj *aobject) FreezeAppend() {
 
 func (obj *aobject) IsAppendFrozen() bool {
 	return obj.frozen.Load()
+}
+
+func (obj *aobject) CheckFlushTaskRetry(startts types.TS) bool {
+	if !obj.meta.Load().IsAppendable() {
+		panic("not support")
+	}
+	if obj.meta.Load().HasDropCommitted() {
+		panic("not support")
+	}
+	obj.RLock()
+	defer obj.RUnlock()
+	x := obj.getLastAppendMVCC().GetLatestAppendPrepareTSLocked()
+	return x.Greater(&startts)
+}
+func (obj *aobject) getLastAppendMVCC() *updates.AppendMVCCHandle {
+	return obj.PinNode().MustMNode().getappendMVCC()
+}
+func (obj *aobject) getAppendMVCC() *updates.AppendMVCCHandle {
+	return obj.PinNode().MustMNode().getappendMVCC()
+}
+func (obj *aobject) PPString(level common.PPLevel, depth int, prefix string, blkid int) string {
+	rows, err := obj.Rows()
+	if err != nil {
+		logutil.Warnf("get object rows failed, obj: %v, err: %v", obj.meta.Load().ID().String(), err)
+	}
+	s := fmt.Sprintf("%s | [Rows=%d]", obj.meta.Load().PPString(level, depth, prefix), rows)
+	if level >= common.PPL1 {
+		obj.RLock()
+		var appendstr, deletestr string
+		appendstr = obj.getLastAppendMVCC().StringLocked()
+		if mvcc := obj.tryGetMVCC(); mvcc != nil {
+			if blkid >= 0 {
+				deletestr = mvcc.StringBlkLocked(level, 0, "", blkid)
+			} else {
+				deletestr = mvcc.String(level, 0, "")
+			}
+		}
+		obj.RUnlock()
+		if appendstr != "" {
+			s = fmt.Sprintf("%s\n Appends: %s", s, appendstr)
+		}
+		if deletestr != "" {
+			s = fmt.Sprintf("%s\n Deletes: %s", s, deletestr)
+		}
+	}
+	return s
 }
 
 func (obj *aobject) IsAppendable() bool {
@@ -91,7 +137,7 @@ func (obj *aobject) PrepareCompactInfo() (result bool, reason string) {
 		return
 	}
 	obj.FreezeAppend()
-	if !obj.meta.Load().PrepareCompact() || !obj.appendMVCC.PrepareCompact() {
+	if !obj.meta.Load().PrepareCompact() || !obj.getLastAppendMVCC().PrepareCompact() {
 		if !obj.meta.Load().PrepareCompact() {
 			reason = "meta preparecomp false"
 		} else {
@@ -133,12 +179,12 @@ func (obj *aobject) PrepareCompact() bool {
 			}
 			return false
 		}
-		if !obj.appendMVCC.PrepareCompact() /* all appends are committed */ {
+		if !obj.getLastAppendMVCC().PrepareCompact() /* all appends are committed */ {
 			if obj.meta.Load().CheckPrintPrepareCompactLocked() {
 				logutil.Infof("obj %v, data prepare compact failed", obj.meta.Load().ID().String())
 				if !obj.meta.Load().HasPrintedPrepareComapct.Load() {
 					obj.meta.Load().HasPrintedPrepareComapct.Store(true)
-					logutil.Infof("append MVCC %v", obj.appendMVCC.StringLocked())
+					logutil.Infof("append MVCC %v", obj.getLastAppendMVCC().StringLocked())
 				}
 			}
 			return false
@@ -415,7 +461,7 @@ func (obj *aobject) RunCalibration() (score int, err error) {
 
 func (obj *aobject) OnReplayAppend(node txnif.AppendNode) (err error) {
 	an := node.(*updates.AppendNode)
-	obj.appendMVCC.OnReplayAppendNode(an)
+	obj.getAppendMVCC().OnReplayAppendNode(an)
 	return
 }
 
@@ -449,7 +495,7 @@ func (obj *aobject) EstimateMemSize() (int, int) {
 	if objMVCC != nil {
 		dsize = objMVCC.EstimateMemSizeLocked()
 	}
-	asize := obj.appendMVCC.EstimateMemSizeLocked()
+	asize := obj.getAppendMVCC().EstimateMemSizeLocked()
 	if !node.IsPersisted() {
 		asize += node.MustMNode().EstimateMemSize()
 	}
@@ -457,7 +503,7 @@ func (obj *aobject) EstimateMemSize() (int, int) {
 }
 
 func (obj *aobject) GetRowsOnReplay() uint64 {
-	rows := uint64(obj.appendMVCC.GetTotalRow())
+	rows := uint64(obj.getAppendMVCC().GetTotalRow())
 	stats := obj.meta.Load().GetObjectStats()
 	fileRows := uint64(stats.Rows())
 	if rows > fileRows {

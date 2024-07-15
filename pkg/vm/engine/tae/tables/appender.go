@@ -82,7 +82,7 @@ func (appender *objectAppender) PrepareAppend(
 	}
 	appender.obj.Lock()
 	defer appender.obj.Unlock()
-	node, created = appender.obj.appendMVCC.AddAppendNodeLocked(
+	node, created = appender.obj.getAppendMVCC().AddAppendNodeLocked(
 		txn,
 		appender.rows+appender.placeholder,
 		appender.placeholder+appender.rows+n)

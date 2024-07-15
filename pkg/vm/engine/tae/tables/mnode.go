@@ -38,21 +38,24 @@ var _ NodeT = (*memoryNode)(nil)
 
 type memoryNode struct {
 	common.RefHelper
-	object      *baseObject
+	object      *aobject
 	writeSchema *catalog.Schema
 	data        *containers.Batch
+	appendMVCC  *updates.AppendMVCCHandle
 
 	//index for primary key : Art tree + ZoneMap.
 	pkIndex *indexwrapper.MutIndex
 }
 
-func newMemoryNode(object *baseObject) *memoryNode {
+func newMemoryNode(object *aobject) *memoryNode {
 	impl := new(memoryNode)
 	impl.object = object
 
 	// Get the lastest schema, it will not be modified, so just keep the pointer
 	schema := object.meta.Load().GetSchemaLocked()
 	impl.writeSchema = schema
+	impl.appendMVCC = updates.NewAppendMVCCHandle(object.meta.Load(), object.RWMutex)
+	impl.appendMVCC.SetAppendListener(object.OnApplyAppend)
 	// impl.data = containers.BuildBatchWithPool(
 	// 	schema.AllNames(), schema.AllTypes(), 0, object.rt.VectorPool.Memtable,
 	// )
@@ -60,7 +63,9 @@ func newMemoryNode(object *baseObject) *memoryNode {
 	impl.OnZeroCB = impl.close
 	return impl
 }
-
+func (node *memoryNode) getappendMVCC() *updates.AppendMVCCHandle {
+	return node.appendMVCC
+}
 func (node *memoryNode) mustData() *containers.Batch {
 	if node.data != nil {
 		return node.data
@@ -84,7 +89,7 @@ func (node *memoryNode) initPKIndex(schema *catalog.Schema) {
 }
 
 func (node *memoryNode) close() {
-	mvcc := node.object.appendMVCC
+	mvcc := node.appendMVCC
 	logutil.Debugf("Releasing Memorynode BLK-%s", node.object.meta.Load().ID().String())
 	if node.data != nil {
 		node.data.Close()
@@ -343,7 +348,7 @@ func (node *memoryNode) GetRowByFilter(
 			node.object.RLock()
 		}
 	}
-	if anyWaitable := node.object.appendMVCC.CollectUncommittedANodesPreparedBefore(
+	if anyWaitable := node.appendMVCC.CollectUncommittedANodesPreparedBefore(
 		txn.GetStartTS(),
 		waitFn); anyWaitable {
 		rows, err = node.GetRowsByKey(filter.Val)
@@ -354,7 +359,7 @@ func (node *memoryNode) GetRowByFilter(
 
 	for i := len(rows) - 1; i >= 0; i-- {
 		row = rows[i]
-		appendnode := node.object.appendMVCC.GetAppendNodeByRow(row)
+		appendnode := node.appendMVCC.GetAppendNodeByRow(row)
 		needWait, waitTxn := appendnode.NeedWaitCommitting(txn.GetStartTS())
 		if needWait {
 			node.object.RUnlock()
@@ -419,7 +424,7 @@ func (node *memoryNode) checkConflictAndDupClosure(
 		if rowmask != nil && rowmask.Contains(row) {
 			return nil
 		}
-		appendnode := node.object.appendMVCC.GetAppendNodeByRow(row)
+		appendnode := node.appendMVCC.GetAppendNodeByRow(row)
 		var visible bool
 		if visible, err = node.checkConflictAandVisibility(
 			appendnode,
@@ -498,7 +503,7 @@ func (node *memoryNode) CollectAppendInRange(
 ) (batWithVer *containers.BatchWithVersion, err error) {
 	node.object.RLock()
 	minRow, maxRow, commitTSVec, abortVec, abortedMap :=
-		node.object.appendMVCC.CollectAppendLocked(start, end, mp)
+		node.appendMVCC.CollectAppendLocked(start, end, mp)
 	if commitTSVec == nil || abortVec == nil {
 		node.object.RUnlock()
 		return nil, nil
@@ -535,7 +540,7 @@ func (node *memoryNode) resolveInMemoryColumnDatas(
 ) (view *containers.BlockView, err error) {
 	node.object.RLock()
 	defer node.object.RUnlock()
-	maxRow, visible, deSels, err := node.object.appendMVCC.GetVisibleRowLocked(ctx, txn)
+	maxRow, visible, deSels, err := node.appendMVCC.GetVisibleRowLocked(ctx, txn)
 	if !visible || err != nil {
 		// blk.RUnlock()
 		return
@@ -576,7 +581,7 @@ func (node *memoryNode) resolveInMemoryColumnData(
 ) (view *containers.ColumnView, err error) {
 	node.object.RLock()
 	defer node.object.RUnlock()
-	maxRow, visible, deSels, err := node.object.appendMVCC.GetVisibleRowLocked(context.TODO(), txn)
+	maxRow, visible, deSels, err := node.appendMVCC.GetVisibleRowLocked(context.TODO(), txn)
 	if !visible || err != nil {
 		return
 	}
@@ -648,5 +653,5 @@ func (node *memoryNode) getInMemoryValue(
 func (node *memoryNode) allRowsCommittedBefore(ts types.TS) bool {
 	node.object.RLock()
 	defer node.object.RUnlock()
-	return node.object.appendMVCC.AllAppendsCommittedBefore(ts)
+	return node.appendMVCC.AllAppendsCommittedBefore(ts)
 }

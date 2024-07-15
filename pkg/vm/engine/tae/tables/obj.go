@@ -158,6 +158,9 @@ func (obj *object) BatchDedup(
 	)
 }
 
+func (blk *baseObject) CheckFlushTaskRetry(startts types.TS) bool {
+	panic("not support")
+}
 func (obj *object) GetValue(
 	ctx context.Context,
 	txn txnif.AsyncTxn,

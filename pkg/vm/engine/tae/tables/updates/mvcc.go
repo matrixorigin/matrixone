@@ -61,9 +61,9 @@ type AppendMVCCHandle struct {
 	appendListener func(txnif.AppendNode) error
 }
 
-func NewAppendMVCCHandle(meta *catalog.ObjectEntry) *AppendMVCCHandle {
+func NewAppendMVCCHandle(meta *catalog.ObjectEntry, mutex *sync.RWMutex) *AppendMVCCHandle {
 	node := &AppendMVCCHandle{
-		RWMutex: &sync.RWMutex{},
+		RWMutex: mutex,
 		meta:    meta,
 		appends: txnbase.NewMVCCSlice(NewEmptyAppendNode, CompareAppendNode),
 	}
