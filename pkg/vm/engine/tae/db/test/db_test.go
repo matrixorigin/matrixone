@@ -27,21 +27,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
-
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 
@@ -493,8 +491,9 @@ func TestCreateObject(t *testing.T) {
 	txn, _ = tae.StartTxn(nil)
 	db, _ = txn.GetDatabase("db")
 	rel, _ := db.GetRelationByName(schema.Name)
-	_, err = rel.CreateNonAppendableObject(nil)
+	obj, err := rel.CreateNonAppendableObject(nil)
 	assert.Nil(t, err)
+	testutil.MockObjectStats(t, obj)
 	assert.Nil(t, txn.Commit(context.Background()))
 
 	objCnt := 0
@@ -966,7 +965,7 @@ func TestFlushTableErrorHandle(t *testing.T) {
 		worker.SendOp(task)
 		err = task.WaitDone(ctx)
 		require.Error(t, err)
-		require.NoError(t, txn.Commit(context.Background()))
+		require.NoError(t, txn.Rollback(context.Background()))
 	}
 	for i := 0; i < 20; i++ {
 		createAndInsert()
@@ -7469,14 +7468,20 @@ func TestGCCatalog1(t *testing.T) {
 	assert.NoError(t, err)
 	tb3, err = db2.GetRelationByName("tb3")
 	assert.NoError(t, err)
+	obj4, err = tb3.GetObject(obj4.GetID())
+	assert.NoError(t, err)
 	err = tb3.SoftDeleteObject(obj4.GetID())
+	testutil.MockObjectStats(t, obj4)
 	assert.NoError(t, err)
 
 	db2, err = txn3.GetDatabase("db1")
 	assert.NoError(t, err)
 	tb3, err = db2.GetRelationByName("tb2")
 	assert.NoError(t, err)
+	obj3, err = tb3.GetObject(obj3.GetID())
+	assert.NoError(t, err)
 	err = tb3.SoftDeleteObject(obj3.GetID())
+	testutil.MockObjectStats(t, obj3)
 	assert.NoError(t, err)
 
 	err = txn3.Commit(context.Background())
@@ -9041,7 +9046,7 @@ func TestVisitTombstone(t *testing.T) {
 
 	tae.CompactBlocks(false)
 	t.Log(tae.Catalog.SimplePPString(3))
-	tae.ForceGlobalCheckpoint(ctx, ts1, time.Minute)
+	tae.ForceGlobalCheckpoint(ctx, ts1, time.Minute, 0)
 
 	t.Log(tae.Catalog.SimplePPString(3))
 	tae.Restart(context.Background())
@@ -9126,6 +9131,89 @@ func TestTransferDeletes(t *testing.T) {
 	})
 	assert.NoError(t, txn.Commit(ctx))
 	wg.Wait()
+}
+
+func TestGCKP(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchema(2, 0)
+	schema.BlockMaxRows = 10
+	schema.ObjectMaxBlocks = 10
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 1)
+
+	tae.CreateRelAndAppend(bat, true)
+
+	tae.DeleteAll(true)
+
+	tae.CompactBlocks(true)
+	time.Sleep(time.Millisecond * 200)
+
+	tae.ForceGlobalCheckpoint(ctx, tae.TxnMgr.Now(), time.Minute, time.Millisecond*100)
+	tae.Restart(ctx)
+	t.Log(tae.Catalog.SimplePPString(3))
+}
+
+func TestCKPCollectObject(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchema(2, 0)
+	schema.BlockMaxRows = 10
+	schema.ObjectMaxBlocks = 10
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 1)
+
+	tae.CreateRelAndAppend(bat, true)
+
+	txn, rel := tae.GetRelation()
+	blkMeta1 := testutil.GetOneBlockMeta(rel)
+	task1, err := jobs.NewFlushTableTailTask(tasks.WaitableCtx, txn, []*catalog.ObjectEntry{blkMeta1}, tae.Runtime, txn.GetStartTS())
+	assert.NoError(t, err)
+	assert.NoError(t, task1.Execute(ctx))
+
+	collector := logtail.NewIncrementalCollector(types.TS{}, tae.TxnMgr.Now(), true)
+	assert.NoError(t, tae.Catalog.RecurLoop(collector))
+	ckpData := collector.OrphanData()
+	objBatch := ckpData.GetTNObjectBatchs()
+	assert.Equal(t, 4, objBatch.Length())
+	assert.NoError(t, txn.Commit(ctx))
+}
+
+func TestGCCatalog4(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchema(2, 0)
+	schema.BlockMaxRows = 10
+	schema.ObjectMaxBlocks = 10
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 1)
+
+	tae.CreateRelAndAppend(bat, true)
+
+	tae.DeleteAll(true)
+
+	tae.CompactBlocks(true)
+
+	tae.Catalog.GCByTS(ctx, tae.TxnMgr.Now())
+
 }
 
 func TestPersistTransferTable(t *testing.T) {

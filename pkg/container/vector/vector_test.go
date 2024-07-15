@@ -28,7 +28,7 @@ func TestLength(t *testing.T) {
 	err := AppendFixedList(vec, []int8{0, 1, 2}, nil, mp)
 	require.NoError(t, err)
 	require.Equal(t, 3, vec.Length())
-	vec.SetLength(2)
+	vec.length = 2
 	require.Equal(t, 2, vec.Length())
 	vec.Free(mp)
 	require.Equal(t, int64(0), mp.CurrNB())
