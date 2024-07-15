@@ -3026,11 +3026,14 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scope, right []*Scope) ([]*Scope, error) {
 	var l, r *Scope
-	if c.IsTpQuery() {
+	if c.IsSingleScope(left) {
 		l = left[0]
-		r = right[0]
 	} else {
 		l = c.newMergeScope(left)
+	}
+	if c.IsSingleScope(right) {
+		r = right[0]
+	} else {
 		r = c.newMergeScope(right)
 	}
 	all := []*Scope{l, r}
