@@ -4107,5 +4107,8 @@ func IsForeignKeyChecksEnabled(ctx CompilerContext) (bool, error) {
 }
 
 func getLockTableAtTheEnd(tableDef *TableDef) bool {
+	if tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+		return false
+	}
 	return !strings.HasPrefix(tableDef.Name, catalog.IndexTableNamePrefix)
 }
