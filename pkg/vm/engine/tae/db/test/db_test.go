@@ -9248,7 +9248,7 @@ func TestPersistTransferTable(t *testing.T) {
 		FilePath: name.String(),
 	}
 	offset := int64(0)
-	data := page.Pin().Val.Marshal()
+	data := page.Marshal()
 	ioEntry := fileservice.IOEntry{
 		Offset: offset,
 		Size:   int64(len(data)),
@@ -9311,7 +9311,7 @@ func TestClearPersistTransferTable(t *testing.T) {
 		FilePath: name.String(),
 	}
 	offset := int64(0)
-	data := page.Pin().Val.Marshal()
+	data := page.Marshal()
 	ioEntry := fileservice.IOEntry{
 		Offset: offset,
 		Size:   int64(len(data)),

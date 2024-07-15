@@ -291,7 +291,7 @@ func InitTransferPageIO() *fileservice.IOVector {
 }
 
 func AddTransferPage(page *TransferHashPage, ioVector *fileservice.IOVector) error {
-	data := page.Pin().Val.Marshal()
+	data := page.Marshal()
 	le := len(ioVector.Entries)
 	offset := int64(0)
 	if le > 0 {
