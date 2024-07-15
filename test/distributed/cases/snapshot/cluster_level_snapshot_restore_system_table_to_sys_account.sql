@@ -488,3 +488,4 @@ drop snapshot sp01;
 drop role role_r1, role_r2, role_r3;
 drop user role_u1, role_u2, role_u3;
 set global enable_privilege_cache = on;
+-- @bvt:issue
