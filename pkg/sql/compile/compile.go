@@ -992,13 +992,13 @@ func isAvailable(client morpc.RPCClient, addr string) bool {
 }
 
 func (c *Compile) removeUnavailableCN() {
-	client := cnclient.GetRPCClient()
+	client := cnclient.GetPipelineClient()
 	if client == nil {
 		return
 	}
 	i := 0
 	for _, cn := range c.cnList {
-		if isSameCN(c.addr, cn.Addr) || isAvailable(client, cn.Addr) {
+		if isSameCN(c.addr, cn.Addr) || isAvailable(client.Raw(), cn.Addr) {
 			c.cnList[i] = cn
 			i++
 		}
@@ -1234,6 +1234,20 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(node, ss)))
 		return ss, nil
 	case plan.Node_TABLE_SCAN:
+		if n.Limit != nil {
+			if cExpr, ok := n.Limit.Expr.(*plan.Expr_Lit); ok {
+				if cval, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
+					if cval.U64Val == 0 {
+						// optimize for limit 0
+						rs := newScope(Merge)
+						rs.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
+						rs.Proc = process.NewFromProc(c.proc, c.proc.Ctx, 0)
+						return c.compileLimit(n, []*Scope{rs}), nil
+					}
+				}
+			}
+		}
+
 		c.appendMetaTables(n.ObjRef)
 		ss, err = c.compileTableScan(n)
 		if err != nil {

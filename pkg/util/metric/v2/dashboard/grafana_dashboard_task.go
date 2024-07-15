@@ -17,7 +17,6 @@ package dashboard
 import (
 	"context"
 	"fmt"
-
 	"github.com/K-Phoen/grabana/axis"
 	"github.com/K-Phoen/grabana/dashboard"
 	"github.com/K-Phoen/grabana/row"
@@ -52,12 +51,75 @@ func (c *DashboardCreator) initTaskDashboard() error {
 
 func (c *DashboardCreator) initTaskMergeTransferPageRow() dashboard.Option {
 	return dashboard.Row(
-		"Task Merge Transfer Page Size",
+		"Task Merge Transfer Page",
 		c.withGraph(
-			"Transfer Page Length",
+			"Transfer Page size",
 			12,
 			`sum(`+c.getMetricWithFilter("mo_task_merge_transfer_page_size", ``)+`)`+`* 28 * 1.3`,
-			"{{ "+c.by+" }}", axis.Unit("decbytes")),
+			"{{ "+c.by+" }}", axis.Unit("decbytes"),
+		),
+		c.getTimeSeries(
+			"Transfer page row count",
+			[]string{fmt.Sprintf(
+				"sum by (%s) (increase(%s[$interval]))",
+				c.by,
+				c.getMetricWithFilter(`mo_task_transfer_page_row_sum`, ""),
+			)},
+			[]string{"count"},
+			timeseries.Span(3),
+		),
+		c.getTimeSeries(
+			"Transfer page hit count",
+			[]string{fmt.Sprintf(
+				"sum by (%s) (increase(%s[$interval]))",
+				c.by,
+				c.getMetricWithFilter(`mo_task_transfer_page_hit_count_sum`, `type="total"`),
+			)},
+			[]string{"count"},
+			timeseries.Span(3),
+		),
+		c.getPercentHist(
+			"Transfer run ttl duration",
+			c.getMetricWithFilter(`mo_task_short_duration_seconds_bucket`, `type="transfer_table_run_ttl_duration"`),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			SpanNulls(true),
+			timeseries.Span(3),
+		),
+		c.getPercentHist(
+			"Transfer duration since born",
+			c.getMetricWithFilter(`mo_task_short_duration_seconds_bucket`, `type="transfer_page_since_born_duration"`),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			SpanNulls(true),
+			timeseries.Span(3),
+		),
+		c.getPercentHist(
+			"Transfer memory latency",
+			c.getMetricWithFilter(`mo_task_short_duration_seconds_bucket`, `type="transfer_mem_latency"`),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			SpanNulls(true),
+			timeseries.Span(3),
+		),
+		c.getPercentHist(
+			"Transfer disk latency",
+			c.getMetricWithFilter(`mo_task_short_duration_seconds_bucket`, `type="transfer_disk_latency"`),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			SpanNulls(true),
+			timeseries.Span(3),
+		),
+		c.getPercentHist(
+			"Transfer page write latency in flush",
+			c.getMetricWithFilter(`mo_task_short_duration_seconds_bucket`, `type="transfer_page_flush_latency"`),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			SpanNulls(true),
+			timeseries.Span(3),
+		),
+		c.getPercentHist(
+			"Transfer page write latency in merge",
+			c.getMetricWithFilter(`mo_task_short_duration_seconds_bucket`, `type="transfer_page_merge_latency"`),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			SpanNulls(true),
+			timeseries.Span(3),
+		),
 	)
 }
 
