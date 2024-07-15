@@ -169,6 +169,10 @@ func (c *PushClient) GetState() State {
 	}
 }
 
+func (c *PushClient) GetSubscriberState() bool {
+	return c.subscriber.ready.Load()
+}
+
 type connector struct {
 	first  atomic.Bool
 	signal chan struct{}

@@ -138,7 +138,7 @@ func (de *TestDisttaeEngine) waitLogtail(ctx context.Context) error {
 			return moerr.NewInternalErrorNoCtx("wait partition state waterline timeout")
 		case <-ticker.C:
 			latestAppliedTS := de.Engine.PushClient().LatestLogtailAppliedTime()
-			if latestAppliedTS.GreaterEq(ts) {
+			if latestAppliedTS.GreaterEq(ts) && de.Engine.PushClient().GetSubscriberState() {
 				done = true
 			}
 		}

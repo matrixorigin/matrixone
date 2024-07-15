@@ -17,6 +17,7 @@ package test
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"sync"
 	"testing"
 	"time"
@@ -288,7 +289,7 @@ func Test_Bug_CheckpointInsertObjectOverwrittenMergeDeletedObject(t *testing.T) 
 
 }
 
-func Test_Bug_WrongCleanDirtyBlock(t *testing.T) {
+func Test_Bug_MissCleanDirtyBlockFlag(t *testing.T) {
 	var (
 		txn          txnif.AsyncTxn
 		opts         testutil.TestOptions
@@ -311,7 +312,7 @@ func Test_Bug_WrongCleanDirtyBlock(t *testing.T) {
 
 	// one object, two blocks
 
-	schema := catalog.MockSchemaAll(2, 0)
+	schema := catalog.MockSchemaAll(3, 2)
 	schema.Name = tableName
 	schema.BlockMaxRows = 20
 	schema.ObjectMaxBlocks = 2
@@ -343,7 +344,7 @@ func Test_Bug_WrongCleanDirtyBlock(t *testing.T) {
 		stats, err := disttaeEngine.GetPartitionStateStats(ctx, rel.ID(), database.GetID())
 		require.Nil(t, err)
 
-		fmt.Println(stats.String())
+		fmt.Println(stats.String(), stats.Details.DirtyBlocks)
 		require.Equal(t, 40, stats.InmemRows.VisibleCnt)
 		require.Equal(t, 2, stats.InmemRows.VisibleDistinctBlockCnt)
 	}
@@ -352,57 +353,55 @@ func Test_Bug_WrongCleanDirtyBlock(t *testing.T) {
 		// flush all aobj into one nobj
 		testutil2.CompactBlocks(t, accountId, taeEngine.GetDB(), databaseName, schema, false)
 
+		stats, err := disttaeEngine.GetPartitionStateStats(ctx, rel.ID(), database.GetID())
+		require.Nil(t, err)
+
+		fmt.Println(stats.String(), stats.Details.DirtyBlocks)
+		require.Equal(t, 0, stats.InmemRows.VisibleCnt)
+		require.Equal(t, 1, stats.DataObjectsVisible.ObjCnt)
+		require.Equal(t, 2, stats.DataObjectsVisible.BlkCnt)
+		require.Equal(t, 40, stats.DataObjectsVisible.RowCnt)
+	}
+
+	{
 		txn, _ = taeEngine.GetDB().StartTxn(nil)
 		database, _ = txn.GetDatabase(databaseName)
 		rel, _ = database.GetRelationByName(schema.Name)
 
-		//iter := rel.MakeObjectIt()
-		//iter.Next()
-		//blkId := iter.GetObject().GetMeta().(*catalog.ObjectEntry).AsCommonID()
-		//
-		//rel.Update(blkId, 0, 0, 0x1, false)
-		//require.Nil(t, iter.Close())
-		v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(3)
-		filter := handle.NewEQFilter(v)
-		err := rel.UpdateByFilter(context.Background(), filter, 3, int64(2222), false)
-		require.Nil(t, err)
+		iter := rel.MakeObjectIt()
+		iter.Next()
+		blkId := iter.GetObject().GetMeta().(*catalog.ObjectEntry).AsCommonID()
+		// delete one row on the 1st blk
+		err = rel.RangeDelete(blkId, 0, 0, handle.DT_Normal)
 
+		// delete two rows on the 2nd blk
+		blkId.BlockID = *objectio.BuildObjectBlockid(iter.GetObject().GetMeta().(*catalog.ObjectEntry).ObjectName(), 1)
+		err = rel.RangeDelete(blkId, 0, 1, handle.DT_Normal)
+		assert.Nil(t, err)
+
+		require.Nil(t, iter.Close())
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
 
-	{
-
-		//txn, _ = taeEngine.GetDB().StartTxn(nil)
-		//database, _ = txn.GetDatabase(databaseName)
-		//rel, _ = database.GetRelationByName(schema.Name)
-		//
-		//iter := rel.MakeObjectIt()
-		//iter.Next()
-		//firstBlkId := iter.GetObject().GetMeta().(*catalog.ObjectEntry).AsCommonID()
-		//err = rel.RangeDelete(firstBlkId, 0, 18, handle.DT_Normal)
-		//assert.Nil(t, err)
-		//
-		//iter.Next()
-		//secondBlkId := objectio.BuildObjectBlockid(iter.GetObject().GetMeta().(*catalog.ObjectEntry).ObjectName(), 1)
-		//err = rel.RangeDelete(&common.ID{
-		//	TableID: rel.ID(),
-		//	DbID:    database.GetID(),
-		//	BlockID: *secondBlkId,
-		//}, 0, 0, handle.DT_Normal)
-		//
-		//require.Nil(t, iter.Close())
-		//assert.Nil(t, txn.Commit(context.Background()))
-	}
-
+	// push deletes to cn
 	{
 		stats, err := disttaeEngine.GetPartitionStateStats(ctx, rel.ID(), database.GetID())
 		require.Nil(t, err)
 
-		fmt.Println(stats.Details.DirtyBlocks)
-		//
-		fmt.Println(stats.String())
-		require.Equal(t, 20, stats.InmemRows.InvisibleCnt)
-		require.Equal(t, 1, stats.InmemRows.VisibleDistinctBlockCnt)
+		fmt.Println(stats.String(), stats.Details.DirtyBlocks)
+		require.Equal(t, 3, stats.InmemRows.InvisibleCnt)
+	}
+
+	// push dela loc to cn and gc the in-mem deletes
+	{
+		testutil2.CompactBlocks(t, accountId, taeEngine.GetDB(), databaseName, schema, false)
+
+		stats, err := disttaeEngine.GetPartitionStateStats(ctx, rel.ID(), database.GetID())
+		require.Nil(t, err)
+
+		fmt.Println(stats.String(), stats.Details.DirtyBlocks)
+		require.Equal(t, 0, stats.InmemRows.InvisibleCnt)
+		require.Equal(t, 0, len(stats.Details.DirtyBlocks))
 	}
 
 }
