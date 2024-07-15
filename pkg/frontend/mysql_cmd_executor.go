@@ -1103,7 +1103,11 @@ func createPrepareStmt(
 		getFromSendLongData: make(map[int]struct{}),
 	}
 	prepareStmt.InsertBat = ses.GetTxnCompileCtx().GetProcess().GetPrepareBatch()
-	prepareStmt.IsCloudNonuser = slices.Contains(execCtx.input.getSqlSourceTypes(), constant.CloudNoUserSql)
+
+	if execCtx.input != nil {
+		sqlSourceTypes := execCtx.input.getSqlSourceTypes()
+		prepareStmt.IsCloudNonuser = slices.Contains(sqlSourceTypes, constant.CloudNoUserSql)
+	}
 	return prepareStmt, nil
 }
 
