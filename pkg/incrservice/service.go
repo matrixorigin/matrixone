@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -196,13 +195,13 @@ func (s *service) Delete(
 
 func (s *service) InsertValues(
 	ctx context.Context,
-	tableDef *plan.TableDef,
+	tableID uint64,
 	bat *batch.Batch,
 	estimate int64,
 	eng engine.Engine,
 	txnOp client.TxnOperator,
+	pkSet map[string]struct{},
 ) (uint64, error) {
-	tableID := tableDef.TblId
 	ts, err := s.getCommittedTableCache(
 		ctx,
 		tableID)
@@ -211,11 +210,12 @@ func (s *service) InsertValues(
 	}
 	return ts.insertAutoValues(
 		ctx,
-		tableDef,
+		tableID,
 		bat,
 		estimate,
 		eng,
 		txnOp,
+		pkSet,
 	)
 }
 
