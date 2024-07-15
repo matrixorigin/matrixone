@@ -62,6 +62,9 @@ func (h *tableHandle) GetAppender() (appender data.ObjectAppender, err error) {
 			return
 		}
 		h.object = objEntry.GetObjectData().(*aobject)
+		if !h.object.IsAppendable(){
+			err = data.ErrAppendableObjectNotFound
+		}
 		h.appender, err = h.object.MakeAppender()
 		if err != nil {
 			panic(err)

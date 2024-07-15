@@ -16,6 +16,7 @@ package tables
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -657,13 +658,17 @@ func (node *memoryNode) allRowsCommittedBefore(ts types.TS) bool {
 var _ NodeT = (*objectMemoryNode)(nil)
 
 type objectMemoryNode struct {
+	obj *aobject
 	common.RefHelper
 	blkMemoryNodes []*memoryNode
+	writeSchema    *catalog.Schema
 }
 
 func newObjectMemoryNode(obj *aobject) *objectMemoryNode {
 	impl := &objectMemoryNode{
 		blkMemoryNodes: make([]*memoryNode, 0),
+		writeSchema:    obj.meta.Load().GetSchemaLocked(),
+		obj:            obj,
 	}
 	impl.OnZeroCB = impl.close
 	return impl
@@ -673,6 +678,21 @@ func (node *objectMemoryNode) close() {
 		n.close()
 	}
 }
+func (node *objectMemoryNode) getAppendableNode() *memoryNode {
+	if len(node.blkMemoryNodes) == 0 {
+		blkNode := node.registerNode()
+		return blkNode
+	}
+	blkNode := node.getLastNode()
+	row, err := blkNode.Rows()
+	if err != nil {
+		panic(err)
+	}
+	if row >= node.writeSchema.BlockMaxRows {
+		blkNode = node.registerNode()
+	}
+	return blkNode
+}
 func (node *objectMemoryNode) getLastNode() *memoryNode {
 	return node.blkMemoryNodes[len(node.blkMemoryNodes)-1]
 }
@@ -680,7 +700,15 @@ func (node *objectMemoryNode) getMemoryNode(blkID uint16) *memoryNode {
 	return node.blkMemoryNodes[blkID]
 }
 func (node *objectMemoryNode) IsPersisted() bool { return false }
-
+func (node *objectMemoryNode) getOrCreateNode(blkID uint16) *memoryNode {
+	if len(node.blkMemoryNodes) > int(blkID) {
+		return node.blkMemoryNodes[blkID]
+	}
+	if len(node.blkMemoryNodes) == int(blkID) {
+		return node.registerNode()
+	}
+	panic(fmt.Sprintf("invalid blkID, current blk count %d, blkID %d", len(node.blkMemoryNodes), blkID))
+}
 func (node *objectMemoryNode) PrepareAppend(rows uint32) (n uint32, err error) {
 	return node.getLastNode().PrepareAppend(rows)
 }
@@ -701,6 +729,30 @@ func (node *objectMemoryNode) GetValueByRow(blkID uint16, readSchema *catalog.Sc
 }
 func (node *objectMemoryNode) GetRowsByKey(blkID uint16, key any) (rows []uint32, err error) {
 	return node.getMemoryNode(blkID).GetRowsByKey(key)
+}
+func (node *objectMemoryNode) registerNode() *memoryNode {
+	if len(node.blkMemoryNodes) >= int(node.writeSchema.ObjectMaxBlocks) {
+		return nil
+	}
+	blkNode := newMemoryNode(node.obj, uint16(len(node.blkMemoryNodes)))
+	node.blkMemoryNodes = append(node.blkMemoryNodes, blkNode)
+	return blkNode
+}
+func (node *objectMemoryNode) IsAppendable() bool {
+	if len(node.blkMemoryNodes) == 0 {
+		newNode := node.registerNode()
+		return newNode != nil
+	}
+	lastNode := node.getLastNode()
+	rows, err := lastNode.Rows()
+	if err != nil {
+		panic(err)
+	}
+	if rows < node.writeSchema.BlockMaxRows {
+		return true
+	}
+	newNode := node.registerNode()
+	return newNode != nil
 }
 func (node *objectMemoryNode) BatchDedup(
 	ctx context.Context,
@@ -807,5 +859,5 @@ func (node *objectMemoryNode) resolveInMemoryColumnDatas(
 	return node.getMemoryNode(blkID).resolveInMemoryColumnDatas(ctx, txn, readSchema, colIdxes, skipDeletes, mp)
 }
 func (node *objectMemoryNode) getwrteSchema() *catalog.Schema {
-	return node.getLastNode().writeSchema
+	return node.writeSchema
 }

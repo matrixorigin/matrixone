@@ -84,11 +84,17 @@ func (obj *aobject) CheckFlushTaskRetry(startts types.TS) bool {
 	x := obj.getLastAppendMVCC().GetLatestAppendPrepareTSLocked()
 	return x.Greater(&startts)
 }
+func (obj *aobject) mustGetLastAppendMVCC() *updates.AppendMVCCHandle {
+	return obj.PinNode().MustMNode().getAppendableNode().appendMVCC
+}
 func (obj *aobject) getLastAppendMVCC() *updates.AppendMVCCHandle {
 	return obj.PinNode().MustMNode().getLastNode().appendMVCC
 }
 func (obj *aobject) getAppendMVCC(blkID uint16) *updates.AppendMVCCHandle {
 	return obj.PinNode().MustMNode().getMemoryNode(blkID).appendMVCC
+}
+func (obj *aobject) mustGetAppendMVCC(blkID uint16) *updates.AppendMVCCHandle {
+	return obj.PinNode().MustMNode().getOrCreateNode(blkID).appendMVCC
 }
 func (obj *aobject) PPString(level common.PPLevel, depth int, prefix string, blkid int) string {
 	rows, err := obj.Rows()
@@ -127,8 +133,7 @@ func (obj *aobject) IsAppendable() bool {
 	if node.IsPersisted() {
 		return false
 	}
-	rows, _ := node.Rows()
-	return rows < obj.meta.Load().GetSchema().BlockMaxRows
+	return node.MustMNode().IsAppendable()
 }
 
 func (obj *aobject) PrepareCompactInfo() (result bool, reason string) {
@@ -466,7 +471,7 @@ func (obj *aobject) RunCalibration() (score int, err error) {
 func (obj *aobject) OnReplayAppend(node txnif.AppendNode) (err error) {
 	an := node.(*updates.AppendNode)
 	blkID := an.GetID().GetBlockOffset()
-	obj.getAppendMVCC(blkID).OnReplayAppendNode(an)
+	obj.mustGetAppendMVCC(blkID).OnReplayAppendNode(an)
 	return
 }
 
