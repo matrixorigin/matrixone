@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -138,7 +139,7 @@ func (tbl *txnTable) stats(ctx context.Context) (*pb.StatsInfo, error) {
 		approxObjectNum,
 		stats,
 	)
-	if err := UpdateStats(ctx, req); err != nil {
+	if err := UpdateStats(ctx, req, nil); err != nil {
 		logutil.Errorf("failed to init stats info for table %d", tbl.tableId)
 		return nil, err
 	}
@@ -296,19 +297,35 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 func ForeachVisibleDataObject(
 	state *logtailreplay.PartitionState,
 	ts types.TS,
-	fn func(obj logtailreplay.ObjectEntry) error,
+	fn func(index int, obj logtailreplay.ObjectEntry) error,
+	executor ConcurrentExecutor,
 ) (err error) {
 	iter, err := state.NewObjectsIter(ts)
 	if err != nil {
 		return err
 	}
+	defer iter.Close()
+	var i int
+	var wg sync.WaitGroup
 	for iter.Next() {
+		var j = i
 		entry := iter.Entry()
-		if err = fn(entry); err != nil {
-			break
+		if executor != nil {
+			wg.Add(1)
+			executor.AppendTask(func() error {
+				defer wg.Done()
+				return fn(j, entry)
+			})
+		} else {
+			if err = fn(j, entry); err != nil {
+				break
+			}
 		}
+		i++
 	}
-	iter.Close()
+	if executor != nil {
+		wg.Wait()
+	}
 	return
 }
 
@@ -346,12 +363,15 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 	if err != nil {
 		return nil, nil, err
 	}
-	onObjFn := func(obj logtailreplay.ObjectEntry) error {
+	var updateMu sync.Mutex
+	onObjFn := func(_ int, obj logtailreplay.ObjectEntry) error {
 		var err error
 		location := obj.Location()
 		if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 			return err
 		}
+		updateMu.Lock()
+		defer updateMu.Unlock()
 		meta = objMeta.MustDataMeta()
 		if inited {
 			for idx := range zms {
@@ -376,7 +396,9 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 	if err = ForeachVisibleDataObject(
 		part,
 		types.TimestampToTS(tbl.db.op.SnapshotTS()),
-		onObjFn); err != nil {
+		onObjFn,
+		nil,
+	); err != nil {
 		return nil, nil, err
 	}
 
@@ -426,7 +448,8 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 		return nil, err
 	}
 	infoList := make([]*plan.MetadataScanInfo, 0, state.ApproxObjectsNum())
-	onObjFn := func(obj logtailreplay.ObjectEntry) error {
+	var updateMu sync.Mutex
+	onObjFn := func(_ int, obj logtailreplay.ObjectEntry) error {
 		createTs, err := obj.CreateTime.Marshal()
 		if err != nil {
 			return err
@@ -460,6 +483,8 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 		if err != nil {
 			return err
 		}
+		updateMu.Lock()
+		defer updateMu.Unlock()
 		meta := objMeta.MustDataMeta()
 		rowCnt := int64(meta.BlockHeader().Rows())
 
@@ -482,7 +507,12 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 		return nil
 	}
 
-	if err = ForeachVisibleDataObject(state, types.TimestampToTS(tbl.db.op.SnapshotTS()), onObjFn); err != nil {
+	if err = ForeachVisibleDataObject(
+		state,
+		types.TimestampToTS(tbl.db.op.SnapshotTS()),
+		onObjFn,
+		nil,
+	); err != nil {
 		return nil, err
 	}
 
@@ -849,7 +879,7 @@ func (tbl *txnTable) rangesOnePart(
 				blk.EntryState = obj.EntryState
 				blk.CommitTs = obj.CommitTS
 				if obj.HasDeltaLoc {
-					deltaLoc, commitTs, ok := state.GetBockDeltaLoc(blk.BlockID)
+					deltaLoc, commitTs, ok := state.GetBlockDeltaLoc(blk.BlockID)
 					if ok {
 						blk.DeltaLoc = deltaLoc
 						blk.CommitTs = commitTs
@@ -2154,7 +2184,7 @@ func (tbl *txnTable) PKPersistedBetween(
 					blk.EntryState = obj.EntryState
 					blk.CommitTs = obj.CommitTS
 					if obj.HasDeltaLoc {
-						deltaLoc, commitTs, ok := p.GetBockDeltaLoc(blk.BlockID)
+						deltaLoc, commitTs, ok := p.GetBlockDeltaLoc(blk.BlockID)
 						if ok {
 							blk.DeltaLoc = deltaLoc
 							blk.CommitTs = commitTs
@@ -2326,7 +2356,7 @@ func (tbl *txnTable) transferDeletes(
 						SegmentID:  *obj.ObjectShortName().Segmentid(),
 					}
 					if obj.HasDeltaLoc {
-						deltaLoc, commitTs, ok := state.GetBockDeltaLoc(blkInfo.BlockID)
+						deltaLoc, commitTs, ok := state.GetBlockDeltaLoc(blkInfo.BlockID)
 						if ok {
 							blkInfo.DeltaLoc = deltaLoc
 							blkInfo.CommitTs = commitTs
@@ -2539,7 +2569,7 @@ func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.Objec
 		return nil, err
 	}
 
-	err = mergesort.DoMergeAndWrite(ctx, sortkeyPos, taskHost)
+	err = mergesort.DoMergeAndWrite(ctx, tbl.getTxn().op.Txn().DebugString(), sortkeyPos, taskHost)
 	if err != nil {
 		return nil, err
 	}

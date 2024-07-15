@@ -754,6 +754,8 @@ type mergePolicyArg struct {
 	maxOsizeObject    int32
 	cnMinMergeSize    int32
 	hints             []api.MergeHint
+
+	disableDeltaLocMerge bool
 }
 
 func (c *mergePolicyArg) PrepareCommand() *cobra.Command {
@@ -768,6 +770,7 @@ func (c *mergePolicyArg) PrepareCommand() *cobra.Command {
 	policyCmd.Flags().Int32P("maxOsizeObject", "o", common.DefaultMaxOsizeObjMB, "merged objects' osize should be near maxOsizeObject(MB)")
 	policyCmd.Flags().Int32P("minCNMergeSize", "c", common.DefaultMinCNMergeSize, "Merge task whose memory occupation exceeds minCNMergeSize(MB) will be moved to CN")
 	policyCmd.Flags().Int32SliceP("mergeHints", "n", []int32{0}, "hints to merge the table")
+	policyCmd.Flags().BoolP("disableDeltaLocMerge", "d", merge.DisableDeltaLocMerge.Load(), "enable merging based on delta location")
 	return policyCmd
 }
 
@@ -783,6 +786,7 @@ func (c *mergePolicyArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.maxOsizeObject, _ = cmd.Flags().GetInt32("maxOsizeObject")
 	c.minOsizeQualified, _ = cmd.Flags().GetInt32("minOsizeQualified")
 	c.cnMinMergeSize, _ = cmd.Flags().GetInt32("minCNMergeSize")
+	c.disableDeltaLocMerge, _ = cmd.Flags().GetBool("disableDeltaLocMerge")
 	if c.maxOsizeObject > 2048 || c.minOsizeQualified > 2048 {
 		return moerr.NewInvalidInputNoCtx("maxOsizeObject or minOsizeQualified should be less than 2048")
 	}
@@ -811,6 +815,8 @@ func (c *mergePolicyArg) Run() error {
 	maxosize := uint32(c.maxOsizeObject * common.Const1MBytes)
 	minosize := uint32(c.minOsizeQualified * common.Const1MBytes)
 	cnsize := uint64(c.cnMinMergeSize) * common.Const1MBytes
+
+	merge.DisableDeltaLocMerge.Store(c.disableDeltaLocMerge)
 
 	if c.tbl == nil {
 		common.RuntimeMaxMergeObjN.Store(c.maxMergeObjN)

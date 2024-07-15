@@ -463,6 +463,9 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 			err,
 		)
 		v2.TxnStatementExecuteDurationHistogram.Observe(cost.Seconds())
+		if _, ok := c.pn.Plan.(*plan.Plan_Ddl); ok {
+			c.setHaveDDL(true)
+		}
 	}()
 
 	for _, s := range c.scope {
@@ -666,16 +669,14 @@ func (c *Compile) runOnce() error {
 	}
 
 	// fuzzy filter not sure whether this insert / load obey duplicate constraints, need double check
-	if len(c.fuzzys) > 0 {
-		for _, f := range c.fuzzys {
-			if f != nil && f.cnt > 0 {
-				if f.cnt > 10 {
-					c.proc.Warnf(c.proc.Ctx, "fuzzy filter cnt is %d, may be too high", f.cnt)
-				}
-				err = f.backgroundSQLCheck(c)
-				if err != nil {
-					return err
-				}
+	for _, f := range c.fuzzys {
+		if f != nil && f.cnt > 0 {
+			if f.cnt > 10 {
+				c.proc.Debugf(c.proc.Ctx, "double check dup for `%s`.`%s`:collision cnt is %d, may be too high", f.db, f.tbl, f.cnt)
+			}
+			err = f.backgroundSQLCheck(c)
+			if err != nil {
+				return err
 			}
 		}
 	}
@@ -945,7 +946,6 @@ func (c *Compile) getCNList() (engine.Nodes, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	// We should always make sure the current CN is contained in the cn list.
 	if c.proc == nil || c.proc.QueryClient == nil {
 		return cnList, nil
@@ -961,6 +961,7 @@ func (c *Compile) getCNList() (engine.Nodes, error) {
 		Addr: c.addr,
 		Mcpu: ncpu,
 	})
+
 	return cnList, nil
 }
 
@@ -974,6 +975,18 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	c.cnList, err = c.getCNList()
 	if err != nil {
 		return nil, err
+	}
+	//When DDL statement has been executed within a transaction, force the use of a single CN
+	if c.getHaveDDL() {
+		if c.proc != nil && c.proc.QueryClient != nil {
+			cnID := c.proc.QueryClient.ServiceID()
+			for _, node := range c.cnList {
+				if node.Id == cnID {
+					c.cnList = []engine.Node{node}
+					break
+				}
+			}
+		}
 	}
 	// sort by addr to get fixed order of CN list
 	sort.Slice(c.cnList, func(i, j int) bool { return c.cnList[i].Addr < c.cnList[j].Addr })
@@ -1334,7 +1347,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 			return nil, err
 		}
 		c.setAnalyzeCurrent(right, curr)
-		ss = c.compileSort(n, c.compileJoin(n, ns[n.Children[0]], ns[n.Children[1]], left, right))
+		ss = c.compileSort(n, c.compileJoin(n, ns[n.Children[0]], ns[n.Children[1]], ns, left, right))
 		return ss, nil
 	case plan.Node_SORT:
 		curr := c.anal.curr
@@ -1438,7 +1451,6 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		if n.Stats.GetCost()*float64(SingleLineSizeEstimate) >
 			float64(DistributedThreshold) &&
 			!arg.DeleteCtx.CanTruncate {
-			c.proc.Infof(c.proc.Ctx, "delete of '%s' write s3\n", c.sql)
 			rs := c.newDeleteMergeScope(arg, ss)
 			rs.Instructions = append(rs.Instructions, vm.Instruction{
 				Op: vm.MergeDelete,
@@ -2454,11 +2466,11 @@ func (c *Compile) compileUnionAll(ss []*Scope, children []*Scope) []*Scope {
 	return []*Scope{rs}
 }
 
-func (c *Compile) compileJoin(node, left, right *plan.Node, ss, children []*Scope) []*Scope {
+func (c *Compile) compileJoin(node, left, right *plan.Node, ns []*plan.Node, ss, children []*Scope) []*Scope {
 	if node.Stats.HashmapStats.Shuffle {
 		return c.compileShuffleJoin(node, left, right, ss, children)
 	}
-	return c.compileBroadcastJoin(node, left, right, ss, children)
+	return c.compileBroadcastJoin(node, left, right, ns, ss, children)
 }
 
 func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights []*Scope) []*Scope {
@@ -2478,19 +2490,21 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 	}
 
 	parent, children := c.newShuffleJoinScopeList(lefts, rights, node)
-	lastOperator := make([]vm.Instruction, 0, len(children))
-	for i := range children {
-		ilen := len(children[i].Instructions) - 1
-		lastOperator = append(lastOperator, children[i].Instructions[ilen])
-		children[i].Instructions = children[i].Instructions[:ilen]
-	}
-
-	defer func() {
-		// recovery the children's last operator
+	if parent != nil {
+		lastOperator := make([]vm.Instruction, 0, len(children))
 		for i := range children {
-			children[i].appendInstruction(lastOperator[i])
+			ilen := len(children[i].Instructions) - 1
+			lastOperator = append(lastOperator, children[i].Instructions[ilen])
+			children[i].Instructions = children[i].Instructions[:ilen]
 		}
-	}()
+
+		defer func() {
+			// recovery the children's last operator
+			for i := range children {
+				children[i].appendInstruction(lastOperator[i])
+			}
+		}()
+	}
 
 	switch node.JoinType {
 	case plan.Node_INNER:
@@ -2561,10 +2575,13 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 		panic(moerr.NewNYI(c.proc.Ctx, fmt.Sprintf("shuffle join do not support join type '%v'", node.JoinType)))
 	}
 
-	return parent
+	if parent != nil {
+		return parent
+	}
+	return children
 }
 
-func (c *Compile) compileBroadcastJoin(node, left, right *plan.Node, ss, children []*Scope) []*Scope {
+func (c *Compile) compileBroadcastJoin(node, left, right *plan.Node, ns []*plan.Node, ss, children []*Scope) []*Scope {
 	var rs []*Scope
 	isEq := plan2.IsEquiJoin2(node.OnList)
 
@@ -2576,6 +2593,10 @@ func (c *Compile) compileBroadcastJoin(node, left, right *plan.Node, ss, childre
 	leftTyps := make([]types.Type, len(left.ProjectList))
 	for i, expr := range left.ProjectList {
 		leftTyps[i] = dupType(&expr.Typ)
+	}
+
+	if plan2.IsShuffleChildren(left, ns) {
+		ss = c.mergeShuffleJoinScopeList(ss)
 	}
 
 	switch node.JoinType {
@@ -2978,7 +2999,7 @@ func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scop
 
 	rs.Instructions[0].Idx = c.anal.curr
 
-	arg := constructFuzzyFilter(c, n, ns[n.Children[1]])
+	arg := constructFuzzyFilter(n, ns[n.Children[0]], ns[n.Children[1]])
 
 	rs.appendInstruction(vm.Instruction{
 		Op:  vm.FuzzyFilter,
@@ -3169,8 +3190,7 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 
 	case plan.ShuffleMethod_Reshuffle:
 
-		dop := plan2.GetShuffleDop()
-		parent, children := c.newScopeListForShuffleGroup(1, dop)
+		parent, children := c.newScopeListForShuffleGroup(1)
 		// saving the last operator of all children to make sure the connector setting in
 		// the right place
 		lastOperator := make([]vm.Instruction, 0, len(children))
@@ -3222,8 +3242,7 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 
 		return parent
 	default:
-		dop := plan2.GetShuffleDop()
-		parent, children := c.newScopeListForShuffleGroup(validScopeCount(ss), dop)
+		parent, children := c.newScopeListForShuffleGroup(validScopeCount(ss))
 		c.constructShuffleAndDispatch(ss, children, n)
 
 		// saving the last operator of all children to make sure the connector setting in
@@ -3375,14 +3394,14 @@ func (c *Compile) newScopeList(childrenCount int, blocks int) []*Scope {
 	return ss
 }
 
-func (c *Compile) newScopeListForShuffleGroup(childrenCount int, blocks int) ([]*Scope, []*Scope) {
+func (c *Compile) newScopeListForShuffleGroup(childrenCount int) ([]*Scope, []*Scope) {
 	parent := make([]*Scope, 0, len(c.cnList))
 	children := make([]*Scope, 0, len(c.cnList))
 
 	currentFirstFlag := c.anal.isFirst
 	for _, n := range c.cnList {
 		c.anal.isFirst = currentFirstFlag
-		scopes := c.newScopeListWithNode(c.generateCPUNumber(n.Mcpu, blocks), childrenCount, n.Addr)
+		scopes := c.newScopeListWithNode(plan2.GetShuffleDop(n.Mcpu), childrenCount, n.Addr)
 		for _, s := range scopes {
 			for _, rr := range s.Proc.Reg.MergeReceivers {
 				rr.Ch = make(chan *process.RegisterMessage, shuffleChannelBufferSize)
@@ -3514,21 +3533,36 @@ func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope, n *p
 	return rs
 }
 
+func (c *Compile) mergeShuffleJoinScopeList(child []*Scope) []*Scope {
+	lenCN := len(c.cnList)
+	dop := len(child) / lenCN
+	mergeScope := make([]*Scope, 0, lenCN)
+	for i, n := range c.cnList {
+		start := i * dop
+		end := start + dop
+		ss := child[start:end]
+		mergeScope = append(mergeScope, c.newMergeRemoteScope(ss, n))
+	}
+	return mergeScope
+}
+
 func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([]*Scope, []*Scope) {
-	if len(c.cnList) <= 1 {
+	single := len(c.cnList) <= 1
+	if single {
 		n.Stats.HashmapStats.ShuffleTypeForMultiCN = plan.ShuffleTypeForMultiCN_Simple
 	}
-	parent := make([]*Scope, 0, len(c.cnList))
+
+	var parent []*Scope
 	children := make([]*Scope, 0, len(c.cnList))
 	lnum := len(left)
 	sum := lnum + len(right)
-	for _, n := range c.cnList {
-		dop := c.generateCPUNumber(n.Mcpu, plan2.GetShuffleDop())
+	for _, cn := range c.cnList {
+		dop := plan2.GetShuffleDop(cn.Mcpu)
 		ss := make([]*Scope, dop)
 		for i := range ss {
 			ss[i] = newScope(Remote)
 			ss[i].IsJoin = true
-			ss[i].NodeInfo.Addr = n.Addr
+			ss[i].NodeInfo.Addr = cn.Addr
 			ss[i].NodeInfo.Mcpu = 1
 			ss[i].Proc = process.NewWithAnalyze(c.proc, c.proc.Ctx, sum, c.anal.Nodes())
 			ss[i].BuildIdx = lnum
@@ -3538,7 +3572,9 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 			}
 		}
 		children = append(children, ss...)
-		parent = append(parent, c.newMergeRemoteScope(ss, n))
+		if !single {
+			parent = append(parent, c.newMergeRemoteScope(ss, cn))
+		}
 	}
 
 	currentFirstFlag := c.anal.isFirst
@@ -4660,6 +4696,17 @@ func (c *Compile) runSqlWithResult(sql string) (executor.Result, error) {
 	if !ok {
 		panic("missing lock service")
 	}
+
+	// default 1
+	var lower int64 = 1
+	if resolveVariableFunc := c.proc.GetResolveVariableFunc(); resolveVariableFunc != nil {
+		lowerVar, err := resolveVariableFunc("lower_case_table_names", true, false)
+		if err != nil {
+			return executor.Result{}, err
+		}
+		lower = lowerVar.(int64)
+	}
+
 	exec := v.(executor.SQLExecutor)
 	opts := executor.Options{}.
 		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
@@ -4667,7 +4714,8 @@ func (c *Compile) runSqlWithResult(sql string) (executor.Result, error) {
 		WithDisableIncrStatement().
 		WithTxn(c.proc.TxnOperator).
 		WithDatabase(c.db).
-		WithTimeZone(c.proc.SessionInfo.TimeZone)
+		WithTimeZone(c.proc.SessionInfo.TimeZone).
+		WithLowerCaseTableNames(&lower)
 	return exec.Exec(c.proc.Ctx, sql, opts)
 }
 
@@ -4771,6 +4819,21 @@ func (c *Compile) SetOriginSQL(sql string) {
 
 func (c *Compile) SetBuildPlanFunc(buildPlanFunc func() (*plan2.Plan, error)) {
 	c.buildPlanFunc = buildPlanFunc
+}
+
+func (c *Compile) setHaveDDL(haveDDL bool) {
+	txn := c.proc.TxnOperator
+	if txn != nil && txn.GetWorkspace() != nil {
+		txn.GetWorkspace().SetHaveDDL(haveDDL)
+	}
+}
+
+func (c *Compile) getHaveDDL() bool {
+	txn := c.proc.TxnOperator
+	if txn != nil && txn.GetWorkspace() != nil {
+		return txn.GetWorkspace().GetHaveDDL()
+	}
+	return false
 }
 
 // detectFkSelfRefer checks if foreign key self refer confirmed

@@ -436,7 +436,9 @@ func (rb *remoteBackend) inactive() {
 func (rb *remoteBackend) changeToStopping() {
 	rb.stateMu.Lock()
 	defer rb.stateMu.Unlock()
-	rb.stateMu.state = stateStopping
+	if rb.stateMu.state == stateRunning {
+		rb.stateMu.state = stateStopping
+	}
 }
 
 func (rb *remoteBackend) writeLoop(ctx context.Context) {
