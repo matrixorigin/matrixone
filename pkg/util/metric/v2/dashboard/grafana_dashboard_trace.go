@@ -33,6 +33,7 @@ func (c *DashboardCreator) initTraceDashboard() error {
 			//c.initTraceDurationRow(),
 			c.initTraceCollectorOverviewRow(),
 			c.initTraceMoLoggerExportDataRow(),
+			c.initCronTaskRow(),
 			c.initCUStatusRow(),
 		)...)
 	if err != nil {
@@ -191,6 +192,19 @@ func (c *DashboardCreator) initCUStatusRow() dashboard.Option {
 			6,
 			[]string{
 				`sum(delta(` + c.getMetricWithFilter("mo_trace_negative_cu_total", "") + `[$interval])) by (type)`,
+			},
+			[]string{"{{ type }}"}),
+	)
+}
+
+func (c *DashboardCreator) initCronTaskRow() dashboard.Option {
+	return dashboard.Row(
+		"CronTask StorageUsage",
+		c.withMultiGraph(
+			"Run Count",
+			3,
+			[]string{
+				`sum(delta(` + c.getMetricWithFilter("mo_trace_storage_usage_total", "") + `[$interval])) by (type)`,
 			},
 			[]string{"{{ type }}"}),
 	)
