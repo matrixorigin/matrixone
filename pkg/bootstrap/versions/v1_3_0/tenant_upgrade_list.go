@@ -25,7 +25,7 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 }
 
 const viewServerSnapshotUsage = "server_snapshot_usage"
-const viewServerSnapshotUsageDDL = "CREATE VIEW IF NOT EXISTS `system_metrics`.`server_storage_usage` as select `collecttime`, `value`, `node`, `role`, `account` from `system_metrics`.`metric` where `metric_name` = \"server_snapshot_usage\""
+const viewServerSnapshotUsageDDL = "CREATE VIEW IF NOT EXISTS `system_metrics`.`server_snapshot_usage` as select `collecttime`, `value`, `node`, `role`, `account` from `system_metrics`.`metric` where `metric_name` = \"server_snapshot_usage\""
 
 var upg_systemMetrics_server_snapshot_usage = versions.UpgradeEntry{
 	Schema:    catalog.MO_SYSTEM_METRICS,
