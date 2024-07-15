@@ -143,6 +143,8 @@ func NewFlushTableTailTask(
 		rt:         rt,
 		dirtyEndTs: dirtyEndTs,
 	}
+	task.BaseTask = tasks.NewBaseTask(task, tasks.DataCompactionTask, ctx)
+
 	meta := objs[0]
 	dbId := meta.GetTable().GetDB().ID
 	task.dbid = dbId
@@ -191,8 +193,6 @@ func NewFlushTableTailTask(
 	if task.doTransfer {
 		task.transMappings = mergesort.NewBlkTransferBooking(len(task.aObjHandles))
 	}
-
-	task.BaseTask = tasks.NewBaseTask(task, tasks.DataCompactionTask, ctx)
 
 	tblEntry := rel.GetMeta().(*catalog.TableEntry)
 	tblEntry.Stats.RLock()
