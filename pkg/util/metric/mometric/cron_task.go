@@ -93,8 +93,6 @@ var (
 	gUpdateStorageUsageInterval atomic.Int64
 	gCheckNewInterval           atomic.Int64
 	frontendServerStarted       func() bool
-
-	existSnapshotSize bool
 )
 
 func init() {
@@ -197,7 +195,7 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 				return err
 			}
 			snapshotSizeMB, err := result.Float64ValueByName(ctx, rowIdx, ColumnSnapshotSize)
-			if err != nil {
+			if err != nil && !isColumNotExistError(err) {
 				return err
 			}
 			logger.Debug("storage_usage", zap.String("account", account), zap.Float64("sizeMB", sizeMB),
@@ -324,7 +322,7 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 				continue
 			}
 			snapshotSizeMB, err := showRet.Float64ValueByName(ctx, 0, ColumnSnapshotSize)
-			if err != nil {
+			if err != nil && !isColumNotExistError(err) {
 				logger.Error("failed to fetch new account snapshot size", zap.Error(err), zap.String("account", account))
 				continue
 			}
@@ -344,4 +342,8 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 		next.Reset(GetStorageUsageCheckNewInterval())
 		logger.Debug("wait next round, check new account")
 	}
+}
+
+func isColumNotExistError(err error) bool {
+	return strings.Contains(err.Error(), "column name does not exist")
 }
