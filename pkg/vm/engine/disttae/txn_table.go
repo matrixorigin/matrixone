@@ -116,8 +116,13 @@ func (tbl *txnTable) stats(ctx context.Context) (*pb.StatsInfo, error) {
 			if err != nil {
 				return nil, err
 			}
-			partitionsTableDef = append(partitionsTableDef, partitionTable.(*txnTable).tableDef)
-			ps, err := partitionTable.(*txnTable).getPartitionState(ctx)
+			ptbl, ok := partitionTable.(*txnTable)
+			if !ok {
+				delegate := partitionTable.(*txnTableDelegate)
+				ptbl = delegate.origin
+			}
+			partitionsTableDef = append(partitionsTableDef, ptbl.tableDef)
+			ps, err := ptbl.getPartitionState(ctx)
 			if err != nil {
 				return nil, err
 			}
