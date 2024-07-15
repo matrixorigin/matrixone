@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
@@ -393,7 +394,7 @@ func (e *Engine) getOrCreateSnapCatalogCache(
 func (e *Engine) getOrCreateSnapPart(
 	ctx context.Context,
 	tbl *txnTable,
-	ts types.TS) (*logtailreplay.Partition, error) {
+	ts types.TS) (*logtailreplay.PartitionState, error) {
 
 	//check whether the latest partition is available for reuse.
 	// if the snapshot-read's ts is too old , subscribing table maybe timeout.
@@ -419,7 +420,7 @@ func (e *Engine) getOrCreateSnapPart(
 	defer tblSnaps.Unlock()
 	for _, snap := range tblSnaps.snaps {
 		if snap.CanServe(ts) {
-			return snap, nil
+			return snap.Snapshot(), nil
 		}
 	}
 
@@ -470,17 +471,17 @@ func (e *Engine) getOrCreateSnapPart(
 	})
 	if snap.CanServe(ts) {
 		tblSnaps.snaps = append(tblSnaps.snaps, snap)
-		return snap, nil
+		return snap.Snapshot(), nil
 	}
 
 	start, end := snap.GetDuration()
 	//if has no checkpoints or ts > snap.end, use latest partition.
 	if snap.IsEmpty() || ts.Greater(&end) {
-		err := tbl.updateLogtail(ctx)
+		ps, err := tbl.tryToSubscribe(ctx)
 		if err != nil {
 			return nil, err
 		}
-		return e.getOrCreateLatestPart(tbl.db.databaseId, tbl.tableId), nil
+		return ps, nil
 	}
 	if ts.Less(&start) {
 		return nil, moerr.NewInternalErrorNoCtx(
@@ -493,7 +494,7 @@ func (e *Engine) getOrCreateSnapPart(
 	panic("impossible path")
 }
 
-func (e *Engine) getOrCreateLatestPart(
+func (e *Engine) GetOrCreateLatestPart(
 	databaseId,
 	tableId uint64) *logtailreplay.Partition {
 	e.Lock()
@@ -506,10 +507,21 @@ func (e *Engine) getOrCreateLatestPart(
 	return partition
 }
 
-func (e *Engine) lazyLoadLatestCkp(
+func (e *Engine) LazyLoadLatestCkp(
 	ctx context.Context,
-	tbl *txnTable) (*logtailreplay.Partition, error) {
-	part := e.getOrCreateLatestPart(tbl.db.databaseId, tbl.tableId)
+	tblHandler engine.Relation) (*logtailreplay.Partition, error) {
+
+	var (
+		ok  bool
+		tbl *txnTable
+	)
+
+	if tbl, ok = tblHandler.(*txnTable); !ok {
+		delegate := tblHandler.(*txnTableDelegate)
+		tbl = delegate.origin
+	}
+
+	part := e.GetOrCreateLatestPart(tbl.db.databaseId, tbl.tableId)
 	cache := e.getLatestCatalogCache()
 
 	if err := part.ConsumeCheckpoints(

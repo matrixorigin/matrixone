@@ -179,7 +179,7 @@ func (h *Handle) HandleForceGlobalCheckpoint(
 
 	currTs := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 
-	err = h.db.ForceGlobalCheckpoint(ctx, currTs, timeout)
+	err = h.db.ForceGlobalCheckpoint(ctx, currTs, timeout, 0)
 	return nil, err
 }
 

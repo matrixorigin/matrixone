@@ -895,7 +895,7 @@ func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, 
 	}
 	// paths
 	vec = bats[0].Vecs[1]
-	str := vec.UnsafeGetStringAt(0)
+	str := vec.GetStringAt(0)
 	return r.ResultCols, str, nil
 }
 

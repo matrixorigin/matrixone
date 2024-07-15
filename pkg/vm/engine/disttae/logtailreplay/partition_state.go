@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/tidwall/btree"
 )
 
@@ -318,6 +317,10 @@ func (p *PartitionState) Copy() *PartitionState {
 	return &state
 }
 
+func (p *PartitionState) Checkpoints() []string {
+	return p.checkpoints
+}
+
 func (p *PartitionState) RowExists(rowID types.Rowid, ts types.TS) bool {
 	iter := p.rows.Iter()
 	defer iter.Release()
@@ -483,9 +486,9 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 			p.objectIndexByTS.Set(e)
 		}
 		//prefetch the object meta
-		if err := blockio.PrefetchMeta(fs, objEntry.Location()); err != nil {
-			logutil.Errorf("prefetch object meta failed. %v", err)
-		}
+		// if err := blockio.PrefetchMeta(fs, objEntry.Location()); err != nil {
+		// 	logutil.Errorf("prefetch object meta failed. %v", err)
+		// }
 
 		p.dataObjects.Set(objEntry)
 		{

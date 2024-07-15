@@ -421,7 +421,7 @@ func (c *Config) Validate() error {
 	}
 
 	if c.LogtailUpdateWorkerFactor == 0 {
-		c.LogtailUpdateWorkerFactor = 8
+		c.LogtailUpdateWorkerFactor = 4
 	}
 
 	if !metadata.ValidStateString(c.InitWorkState) {

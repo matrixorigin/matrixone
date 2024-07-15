@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"go.uber.org/zap"
 )
@@ -44,8 +43,6 @@ const (
 type Request struct {
 	//the command type from the client
 	cmd CommandType
-	// sequence num
-	seq uint8
 	//the data from the client
 	data interface{}
 }
@@ -212,7 +209,7 @@ func (mp *MysqlProtocolImpl) safeQuit() {
 	}
 }
 
-func (mp *MysqlProtocolImpl) GetTcpConnection() goetty.IOSession {
+func (mp *MysqlProtocolImpl) GetTcpConnection() *Conn {
 	return mp.tcpConn
 }
 
@@ -281,16 +278,4 @@ func (mp *MysqlProtocolImpl) SendResponse(ctx context.Context, resp *Response) e
 	default:
 		return moerr.NewInternalError(ctx, "unsupported response:%d ", resp.category)
 	}
-}
-
-func (mp *MysqlProtocolImpl) DisableAutoFlush() {
-	mp.disableAutoFlush = true
-}
-
-func (mp *MysqlProtocolImpl) EnableAutoFlush() {
-	mp.disableAutoFlush = false
-}
-
-func (mp *MysqlProtocolImpl) Flush() error {
-	return nil
 }
