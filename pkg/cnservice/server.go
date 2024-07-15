@@ -238,12 +238,14 @@ func NewService(
 	}
 
 	// TODO: global client need to refactor
-	err = cnclient.NewCNClient(
+	c, err := cnclient.NewPipelineClient(
 		srv.pipelineServiceServiceAddr(),
-		&cnclient.ClientConfig{RPC: cfg.RPC})
+		&cnclient.PipelineConfig{RPC: cfg.RPC})
 	if err != nil {
 		panic(err)
 	}
+	srv.pipelines.client = c
+	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.PipelineClient, c)
 	return srv, nil
 }
 
@@ -298,7 +300,11 @@ func (s *service) Close() error {
 			return err
 		}
 	}
-
+	if s.pipelines.client != nil {
+		if err := s.pipelines.client.Close(); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

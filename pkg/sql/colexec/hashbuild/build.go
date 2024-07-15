@@ -182,7 +182,7 @@ func (ctr *container) mergeIntoBatches(src *batch.Batch, proc *process.Process) 
 func (ctr *container) collectBuildBatches(hashBuild *HashBuild, proc *process.Process, anal process.Analyze, isFirst bool) error {
 	var currentBatch *batch.Batch
 	for {
-		result, err := hashBuild.Children[0].Call(proc)
+		result, err := vm.ChildrenCall(hashBuild.GetChildren(0), proc, anal)
 		if err != nil {
 			return err
 		}

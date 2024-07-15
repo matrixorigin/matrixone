@@ -989,13 +989,13 @@ func isAvailable(client morpc.RPCClient, addr string) bool {
 }
 
 func (c *Compile) removeUnavailableCN() {
-	client := cnclient.GetRPCClient()
+	client := cnclient.GetPipelineClient()
 	if client == nil {
 		return
 	}
 	i := 0
 	for _, cn := range c.cnList {
-		if isSameCN(c.addr, cn.Addr) || isAvailable(client, cn.Addr) {
+		if isSameCN(c.addr, cn.Addr) || isAvailable(client.Raw(), cn.Addr) {
 			c.cnList[i] = cn
 			i++
 		}

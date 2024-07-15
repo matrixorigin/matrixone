@@ -114,8 +114,13 @@ func (tbl *txnTable) stats(ctx context.Context) (*pb.StatsInfo, error) {
 			if err != nil {
 				return nil, err
 			}
-			partitionsTableDef = append(partitionsTableDef, partitionTable.(*txnTable).tableDef)
-			ps, err := partitionTable.(*txnTable).getPartitionState(ctx)
+			ptbl, ok := partitionTable.(*txnTable)
+			if !ok {
+				delegate := partitionTable.(*txnTableDelegate)
+				ptbl = delegate.origin
+			}
+			partitionsTableDef = append(partitionsTableDef, ptbl.tableDef)
+			ps, err := ptbl.getPartitionState(ctx)
 			if err != nil {
 				return nil, err
 			}
@@ -255,7 +260,7 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 func ForeachVisibleDataObject(
 	state *logtailreplay.PartitionState,
 	ts types.TS,
-	fn func(index int, obj logtailreplay.ObjectEntry) error,
+	fn func(obj logtailreplay.ObjectEntry) error,
 	executor ConcurrentExecutor,
 ) (err error) {
 	iter, err := state.NewObjectsIter(ts, true)
@@ -263,23 +268,20 @@ func ForeachVisibleDataObject(
 		return err
 	}
 	defer iter.Close()
-	var i int
 	var wg sync.WaitGroup
 	for iter.Next() {
-		var j = i
 		entry := iter.Entry()
 		if executor != nil {
 			wg.Add(1)
 			executor.AppendTask(func() error {
 				defer wg.Done()
-				return fn(j, entry)
+				return fn(entry)
 			})
 		} else {
-			if err = fn(j, entry); err != nil {
+			if err = fn(entry); err != nil {
 				break
 			}
 		}
-		i++
 	}
 	if executor != nil {
 		wg.Wait()
@@ -322,7 +324,7 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 		return nil, nil, err
 	}
 	var updateMu sync.Mutex
-	onObjFn := func(_ int, obj logtailreplay.ObjectEntry) error {
+	onObjFn := func(obj logtailreplay.ObjectEntry) error {
 		var err error
 		location := obj.Location()
 		if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
@@ -407,7 +409,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 	}
 	infoList := make([]*plan.MetadataScanInfo, 0, state.ApproxObjectsNum())
 	var updateMu sync.Mutex
-	onObjFn := func(_ int, obj logtailreplay.ObjectEntry) error {
+	onObjFn := func(obj logtailreplay.ObjectEntry) error {
 		createTs, err := obj.CreateTime.Marshal()
 		if err != nil {
 			return err
