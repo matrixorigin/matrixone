@@ -118,11 +118,20 @@ func NewS3FS(
 		concurrency,
 	)
 
+	// metrics
+	fs.storage = newObjectStorageMetrics(
+		fs.storage,
+		"s3",
+	)
+
+	// cache
 	if !noCache {
 		if err := fs.initCaches(ctx, cacheConfig); err != nil {
 			return nil, err
 		}
 	}
+
+	// allocator
 	if fs.memCache != nil {
 		fs.allocator = fs.memCache
 	} else {
@@ -321,7 +330,6 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	metric.FSWriteS3Counter.Add(float64(len(vector.Entries)))
 
 	tp := reuse.Alloc[tracePoint](nil)
 	defer reuse.Free(tp, nil)

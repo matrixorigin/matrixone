@@ -362,6 +362,7 @@ func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 	phaseDesc = "1-wait LogTxnEntry"
 	inst = time.Now()
 	txnEntry, err := txnentries.NewFlushTableTailEntry(
+		ctx,
 		task.txn,
 		task.Name(),
 		task.transMappings,
