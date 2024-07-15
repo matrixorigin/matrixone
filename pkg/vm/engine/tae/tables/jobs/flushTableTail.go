@@ -498,28 +498,28 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context) (err error) {
 
 	// read from aobjects
 	readedBats := make([]*containers.Batch, 0, len(task.aObjHandles))
-	for _, block := range task.aObjHandles {
-		err = block.Prefetch(readColIdxs)
-		if err != nil {
-			return
-		}
-	}
-
-	for i := range task.aObjHandles {
-		bat, empty, err := task.prepareAObjSortedData(ctx, i, readColIdxs, sortKeyPos)
-		if err != nil {
-			return err
-		}
-		if empty {
-			continue
-		}
-		readedBats = append(readedBats, bat)
-	}
 	defer func() {
 		for _, bat := range readedBats {
 			bat.Close()
 		}
 	}()
+	for _, block := range task.aObjHandles {
+		if err = block.Prefetch(readColIdxs); err != nil {
+			return
+		}
+	}
+
+	for i := range task.aObjHandles {
+		if bat, empty, err := task.prepareAObjSortedData(
+			ctx, i, readColIdxs, sortKeyPos,
+		); err != nil {
+			return err
+		} else if empty {
+			continue
+		} else {
+			readedBats = append(readedBats, bat)
+		}
+	}
 
 	// prepare merge
 	// toLayout describes the layout of the output batch, i.e. [8192, 8192, 8192, 4242]
