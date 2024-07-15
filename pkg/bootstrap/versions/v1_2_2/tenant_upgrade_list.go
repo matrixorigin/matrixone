@@ -16,6 +16,7 @@ package v1_2_2
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -30,7 +31,7 @@ var upg_mo_snapshots = versions.UpgradeEntry{
 	TableName: catalog.MO_SNAPSHOTS,
 	UpgType:   versions.MODIFY_COLUMN,
 	PreSql:    fmt.Sprintf("alter table %s.%s drop column ts;", catalog.MO_CATALOG, catalog.MO_SNAPSHOTS),
-	UpgSql:    fmt.Sprintf("alter table %s.%s add column ts bigint unsigned after sname", catalog.MO_CATALOG, catalog.MO_SNAPSHOTS),
+	UpgSql:    fmt.Sprintf("alter table %s.%s add column ts bigint after sname", catalog.MO_CATALOG, catalog.MO_SNAPSHOTS),
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MO_SNAPSHOTS, "ts")
 		if err != nil {
