@@ -214,10 +214,11 @@ func (mergeOrder *MergeOrder) Call(proc *process.Process) (vm.CallResult, error)
 	for {
 		switch ctr.status {
 		case receiving:
-			result, err = mergeOrder.Children[0].Call(proc)
+			result, err = vm.ChildrenCall(mergeOrder.GetChildren(0), proc, anal)
 			if err != nil {
 				return result, err
 			}
+
 			if result.Batch == nil {
 				// if number of block is less than 2, no need to do merge sort.
 				ctr.status = normalSending
