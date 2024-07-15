@@ -150,6 +150,9 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	if o.CheckpointCfg.FlushInterval <= 0 {
 		o.CheckpointCfg.FlushInterval = DefaultCheckpointFlushInterval
 	}
+	if o.CheckpointCfg.TransferInterval <= 0 {
+		o.CheckpointCfg.TransferInterval = DefaultCheckpointTransferInterval
+	}
 	if o.CheckpointCfg.IncrementalInterval <= 0 {
 		o.CheckpointCfg.IncrementalInterval = DefaultCheckpointIncremetalInterval
 	}
