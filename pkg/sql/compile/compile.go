@@ -1245,6 +1245,20 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(node, ss)))
 		return ss, nil
 	case plan.Node_TABLE_SCAN:
+		if n.Limit != nil {
+			if cExpr, ok := n.Limit.Expr.(*plan.Expr_Lit); ok {
+				if cval, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
+					if cval.U64Val == 0 {
+						// optimize for limit 0
+						rs := newScope(Merge)
+						rs.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
+						rs.Proc = process.NewFromProc(c.proc, c.proc.Ctx, 0)
+						return c.compileLimit(n, []*Scope{rs}), nil
+					}
+				}
+			}
+		}
+
 		c.appendMetaTables(n.ObjRef)
 		ss, err = c.compileTableScan(n)
 		if err != nil {
@@ -2967,22 +2981,6 @@ func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
-	if cExpr, ok := n.Limit.Expr.(*plan.Expr_Lit); ok {
-		if cval, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
-			if cval.U64Val == 0 {
-				rs := newScope(Merge)
-				rs.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
-				rs.appendInstruction(vm.Instruction{
-					Op:      vm.Limit,
-					Idx:     c.anal.curr,
-					IsFirst: c.anal.isFirst,
-					Arg:     constructLimit(n),
-				})
-				return []*Scope{rs}
-			}
-		}
-	}
-
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
 		c.anal.isFirst = currentFirstFlag
