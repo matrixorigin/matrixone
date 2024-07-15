@@ -2967,8 +2967,23 @@ func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
-	currentFirstFlag := c.anal.isFirst
+	if cExpr, ok := n.Limit.Expr.(*plan.Expr_Lit); ok {
+		if cval, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
+			if cval.U64Val == 0 {
+				rs := newScope(Merge)
+				rs.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
+				rs.appendInstruction(vm.Instruction{
+					Op:      vm.Limit,
+					Idx:     c.anal.curr,
+					IsFirst: c.anal.isFirst,
+					Arg:     constructLimit(n),
+				})
+				return []*Scope{rs}
+			}
+		}
+	}
 
+	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
 		c.anal.isFirst = currentFirstFlag
 		if containBrokenNode(ss[i]) {
