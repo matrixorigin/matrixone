@@ -359,7 +359,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 
 // RemoteRun send the scope to a remote node for execution.
 func (s *Scope) RemoteRun(c *Compile) error {
-	if !s.canRemote(c, true) || !cnclient.IsCNClientReady() {
+	if !s.canRemote(c, true) {
 		return s.ParallelRun(c)
 	}
 

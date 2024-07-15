@@ -140,7 +140,12 @@ func (w *Ws) GetHaveDDL() bool {
 }
 
 func TestCompile(t *testing.T) {
-	cnclient.NewCNClient("test", new(cnclient.ClientConfig))
+	c, err := cnclient.NewPipelineClient("test", &cnclient.PipelineConfig{})
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, c.Close())
+	}()
+
 	ctrl := gomock.NewController(t)
 	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
 	txnCli, txnOp := newTestTxnClientAndOp(ctrl)
@@ -169,7 +174,13 @@ func TestCompileWithFaults(t *testing.T) {
 	// Enable this line to trigger the Hung.
 	// fault.Enable()
 	var ctx = defines.AttachAccountId(context.Background(), catalog.System_Account)
-	cnclient.NewCNClient("test", new(cnclient.ClientConfig))
+
+	pc, err := cnclient.NewPipelineClient("test", &cnclient.PipelineConfig{})
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, pc.Close())
+	}()
+
 	fault.AddFaultPoint(ctx, "panic_in_batch_append", ":::", "panic", 0, "")
 	tc := newTestCase("select * from R join S on R.uid = S.uid", t)
 	ctrl := gomock.NewController(t)
@@ -178,7 +189,7 @@ func TestCompileWithFaults(t *testing.T) {
 	tc.proc.Base.TxnOperator = txnOp
 	tc.proc.Ctx = ctx
 	c := NewCompile("test", "test", tc.sql, "", "", tc.e, tc.proc, nil, false, nil, time.Now())
-	err := c.Compile(ctx, tc.pn, testPrint)
+	err = c.Compile(ctx, tc.pn, testPrint)
 	require.NoError(t, err)
 	c.getAffectedRows()
 	_, err = c.Run(0)
