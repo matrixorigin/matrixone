@@ -19,12 +19,9 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 type tableCache struct {
@@ -94,14 +91,19 @@ func (c *tableCache) getTxn() client.TxnOperator {
 	return c.mu.txnOp
 }
 
+func (c *tableCache) getLastAllocateTS(colName string) (timestamp.Timestamp, error) {
+	cc := c.getColumnCache(colName)
+	if cc == nil {
+		panic("column cache should not be nil, " + colName)
+	}
+	return cc.lastAllocateAt, nil
+}
+
 func (c *tableCache) insertAutoValues(
 	ctx context.Context,
 	tableID uint64,
 	bat *batch.Batch,
 	estimate int64,
-	eng engine.Engine,
-	currentTxn client.TxnOperator,
-	pkSet map[string]struct{},
 ) (uint64, error) {
 	lastInsert := uint64(0)
 	txnOp := c.getTxn()
@@ -118,36 +120,10 @@ func (c *tableCache) insertAutoValues(
 
 		rows := bat.RowCount()
 		vec := bat.GetVector(int32(col.ColIndex))
-		allFilledByIncrService := vec.AllNull()
 		if v, err := cc.insertAutoValues(ctx, tableID, vec, rows, txnOp); err != nil {
 			return 0, err
 		} else {
 			lastInsert = v
-		}
-
-		// when the user specifies the value at auto pk/unique col, allFilledByIncrService will by false,
-		// and there will be check for uniquess, so can skip below check
-		if !allFilledByIncrService {
-			continue
-		}
-
-		if pkSet != nil {
-			if _, ok := pkSet[col.ColName]; ok {
-				_, _, rel, err := eng.GetRelationById(ctx, currentTxn, tableID)
-				if err != nil {
-					return 0, err
-				}
-				fromTs := types.TimestampToTS(cc.lastAllocateAt)
-				toTs := types.TimestampToTS(currentTxn.SnapshotTS())
-				if mayChanged, err := rel.PrimaryKeysMayBeModified(ctx, fromTs, toTs, vec); err == nil {
-					if mayChanged {
-						logutil.Debugf("user may have manually specified the value to be inserted into the auto pk col before this transaction.")
-						return 0, moerr.NewTxnNeedRetry(ctx)
-					}
-				} else {
-					return 0, err
-				}
-			}
 		}
 	}
 	return lastInsert, nil

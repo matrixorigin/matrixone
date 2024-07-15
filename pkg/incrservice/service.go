@@ -26,9 +26,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"go.uber.org/zap"
 )
 
@@ -193,14 +193,30 @@ func (s *service) Delete(
 	return nil
 }
 
+func (s *service) GetLastAllocateTS(
+	ctx context.Context,
+	tableID uint64,
+	colName string,
+) (timestamp.Timestamp, error) {
+	tc, err := s.getCommittedTableCache(
+		ctx,
+		tableID)
+	if err != nil {
+		return timestamp.Timestamp{}, err
+	}
+	ts, err := tc.getLastAllocateTS(colName)
+	if err != nil {
+		return timestamp.Timestamp{}, err
+	}
+
+	return ts, nil
+}
+
 func (s *service) InsertValues(
 	ctx context.Context,
 	tableID uint64,
 	bat *batch.Batch,
 	estimate int64,
-	eng engine.Engine,
-	txnOp client.TxnOperator,
-	pkSet map[string]struct{},
 ) (uint64, error) {
 	ts, err := s.getCommittedTableCache(
 		ctx,
@@ -213,9 +229,6 @@ func (s *service) InsertValues(
 		tableID,
 		bat,
 		estimate,
-		eng,
-		txnOp,
-		pkSet,
 	)
 }
 
