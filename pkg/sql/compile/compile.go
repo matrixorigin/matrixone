@@ -3536,7 +3536,7 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 
 	// all join's first flag will setting in newLeftScope and newRightScope
 	// so we set it to false now
-	if c.IsSingleScope(buildScopes) {
+	if c.IsTpQuery() {
 		rs[0].PreScopes = append(rs[0].PreScopes, buildScopes[0])
 	} else {
 		c.anal.isFirst = false
