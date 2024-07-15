@@ -102,19 +102,16 @@ func (i *IOEntry) prepareData() (finally func(err *error)) {
 		if err != nil {
 			panic(err)
 		}
-		metric.FSMallocLiveObjectsIOEntryData.Inc()
 		i.Data = slice
 		if i.releaseData != nil {
 			i.releaseData()
 		}
 		i.releaseData = func() {
 			dec.Deallocate(malloc.NoHints)
-			metric.FSMallocLiveObjectsIOEntryData.Dec()
 		}
 		finally = func(err *error) {
 			if err != nil && *err != nil {
 				dec.Deallocate(malloc.NoHints)
-				metric.FSMallocLiveObjectsIOEntryData.Dec()
 			}
 		}
 
