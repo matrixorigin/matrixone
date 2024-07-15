@@ -501,7 +501,6 @@ begin;
 select * from su_04 where c2='kelly' for update;
 -- @session:id=1{
 use select_for_update;
--- @wait:0:commit
 delete from su_04 where c1=4;
 select * from su_04;
 -- @session}

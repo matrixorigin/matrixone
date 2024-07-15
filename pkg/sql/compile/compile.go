@@ -1794,25 +1794,21 @@ func (c *Compile) compileLockOp(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 	if c.proc.Base.TxnOperator.Txn().IsPessimistic() {
 		block = n.LockTargets[0].Block
 	}
-	if len(n.LockTargets) > 1 || n.LockTargets[0].LockTable || !n.LockTargets[0].LockTableAtTheEnd {
-		for i := range ss {
-			lockOpArg := constructLockOp(n, c, block)
-			if block {
-				lockOpArg.SetChildren(ss[i].RootOp.GetOperatorBase().Children)
-				ss[i].RootOp.Release()
-				ss[i].RootOp = lockOpArg
-			} else {
+	if block {
+		lockOpArg := constructLockOp(n, c, block)
+		//@todo: remove this merge for len(ss)==1 [need change lock_op operator]
+		ss = []*Scope{c.newMergeScope(ss)}
+		lockOpArg.SetChildren(ss[0].RootOp.GetOperatorBase().Children)
+		ss[0].RootOp.Release()
+		ss[0].RootOp = lockOpArg
+	} else {
+		if len(n.LockTargets) > 1 || !n.LockTargets[0].LockTableAtTheEnd || len(ss) == 1 {
+			for i := range ss {
+				lockOpArg := constructLockOp(n, c, block)
 				ss[i].doSetRootOperator(lockOpArg)
 			}
-		}
-	} else {
-		lockOpArg := constructLockOp(n, c, block)
-		if block {
-			ss = []*Scope{c.newMergeScope(ss)}
-			lockOpArg.SetChildren(ss[0].RootOp.GetOperatorBase().Children)
-			ss[0].RootOp.Release()
-			ss[0].RootOp = lockOpArg
 		} else {
+			lockOpArg := constructLockOp(n, c, block)
 			ss = []*Scope{c.newMergeScope(ss)}
 			ss[0].doSetRootOperator(lockOpArg)
 		}
