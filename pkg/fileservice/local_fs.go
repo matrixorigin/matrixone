@@ -23,7 +23,6 @@ import (
 	"os"
 	pathpkg "path"
 	"path/filepath"
-	gotrace "runtime/trace"
 	"sort"
 	"strings"
 	"sync"
@@ -150,6 +149,7 @@ func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
 				*config.DiskPath,
 				int(*config.DiskCapacity),
 				l.perfCounterSets,
+				true,
 			)
 			if err != nil {
 				return err
@@ -304,17 +304,6 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 
 	stats := statistic.StatsInfoFromContext(ctx)
 
-	startLock := time.Now()
-	_, task := gotrace.NewTask(ctx, "LocalFS.Read: wait io")
-	done, wait := l.ioMerger.Merge(vector.ioMergeKey())
-	if done != nil {
-		defer done()
-	} else {
-		wait()
-	}
-	task.End()
-	stats.AddLocalFSReadIOMergerTimeConsumption(time.Since(startLock))
-
 	allocator := l.allocator
 	if vector.Policy.Any(SkipMemoryCache) {
 		allocator = GetDefaultCacheDataAllocator()
@@ -325,11 +314,15 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 
 	for _, cache := range vector.Caches {
 		cache := cache
+
 		t0 := time.Now()
 		err := readCache(ctx, cache, vector)
 		metric.FSReadDurationReadVectorCache.Observe(time.Since(t0).Seconds())
 		if err != nil {
 			return err
+		}
+		if vector.allDone() {
+			return nil
 		}
 
 		defer func() {
@@ -342,13 +335,19 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 		}()
 	}
 
+read_memory_cache:
 	if l.memCache != nil {
+
 		t0 := time.Now()
 		err := readCache(ctx, l.memCache, vector)
 		metric.FSReadDurationReadMemoryCache.Observe(time.Since(t0).Seconds())
 		if err != nil {
 			return err
 		}
+		if vector.allDone() {
+			return nil
+		}
+
 		defer func() {
 			if err != nil {
 				return
@@ -364,13 +363,29 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 		stats.AddIOAccessTimeConsumption(time.Since(ioStart))
 	}()
 
+	startLock := time.Now()
+	done, wait := l.ioMerger.Merge(vector.ioMergeKey())
+	if done != nil {
+		stats.AddLocalFSReadIOMergerTimeConsumption(time.Since(startLock))
+		defer done()
+	} else {
+		wait()
+		stats.AddLocalFSReadIOMergerTimeConsumption(time.Since(startLock))
+		goto read_memory_cache
+	}
+
 	if l.diskCache != nil {
+
 		t0 := time.Now()
 		err := readCache(ctx, l.diskCache, vector)
 		metric.FSReadDurationReadDiskCache.Observe(time.Since(t0).Seconds())
 		if err != nil {
 			return err
 		}
+		if vector.allDone() {
+			return nil
+		}
+
 		defer func() {
 			if err != nil {
 				return
@@ -387,6 +402,9 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 		metric.FSReadDurationReadRemoteCache.Observe(time.Since(t0).Seconds())
 		if err != nil {
 			return err
+		}
+		if vector.allDone() {
+			return nil
 		}
 	}
 
@@ -410,20 +428,15 @@ func (l *LocalFS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 		return moerr.NewEmptyVectorNoCtx()
 	}
 
-	startLock := time.Now()
-	done, wait := l.ioMerger.Merge(vector.ioMergeKey())
-	if done != nil {
-		defer done()
-	} else {
-		wait()
-	}
-	statistic.StatsInfoFromContext(ctx).AddLocalFSReadCacheIOMergerTimeConsumption(time.Since(startLock))
-
 	for _, cache := range vector.Caches {
 		cache := cache
 		if err := readCache(ctx, cache, vector); err != nil {
 			return err
 		}
+		if vector.allDone() {
+			return nil
+		}
+
 		defer func() {
 			if err != nil {
 				return
@@ -435,6 +448,9 @@ func (l *LocalFS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 	if l.memCache != nil {
 		if err := readCache(ctx, l.memCache, vector); err != nil {
 			return err
+		}
+		if vector.allDone() {
+			return nil
 		}
 	}
 
@@ -497,12 +513,15 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 					R: r,
 					C: counter,
 				}
-				var bs memorycache.CacheData
-				bs, err = entry.ToCacheData(cr, nil, GetDefaultCacheDataAllocator())
+				var cacheData memorycache.CacheData
+				cacheData, err = entry.ToCacheData(cr, nil, GetDefaultCacheDataAllocator())
 				if err != nil {
 					return err
 				}
-				vector.Entries[i].CachedData = bs
+				if cacheData == nil {
+					panic("ToCacheData returns nil cache data")
+				}
+				vector.Entries[i].CachedData = cacheData
 				if entry.Size > 0 && counter.Load() != entry.Size {
 					return moerr.NewUnexpectedEOFNoCtx(path.File)
 				}
@@ -641,12 +660,15 @@ func (l *LocalFS) handleReadCloserForRead(
 			r: io.TeeReader(r, buf),
 			closeFunc: func() error {
 				defer file.Close()
-				var bs memorycache.CacheData
-				bs, err = entry.ToCacheData(buf, buf.Bytes(), GetDefaultCacheDataAllocator())
+				var cacheData memorycache.CacheData
+				cacheData, err = entry.ToCacheData(buf, buf.Bytes(), GetDefaultCacheDataAllocator())
 				if err != nil {
 					return err
 				}
-				vector.Entries[i].CachedData = bs
+				if cacheData == nil {
+					panic("ToCacheData returns nil cache data")
+				}
+				vector.Entries[i].CachedData = cacheData
 				return nil
 			},
 		}

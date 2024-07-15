@@ -17,15 +17,16 @@ package disttae
 import (
 	"context"
 	"math"
+	"runtime"
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/gossip"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -102,6 +103,13 @@ type GlobalStatsConfig struct {
 
 type GlobalStatsOption func(s *GlobalStats)
 
+// WithUpdateWorkerFactor set the update worker factor.
+func WithUpdateWorkerFactor(f int) GlobalStatsOption {
+	return func(s *GlobalStats) {
+		s.updateWorkerFactor = f
+	}
+}
+
 type GlobalStats struct {
 	ctx context.Context
 
@@ -115,10 +123,10 @@ type GlobalStats struct {
 
 	updateC chan pb.StatsInfoKey
 
-	// statsUpdated is used to control the frequency of updating stats info.
-	// It is not necessary to update stats info too frequently.
-	// It records the update time of the stats info key.
-	statsUpdated sync.Map
+	updatingMu struct {
+		sync.Mutex
+		updating map[pb.StatsInfoKey]struct{}
+	}
 
 	logtailUpdate *logtailUpdate
 
@@ -138,8 +146,14 @@ type GlobalStats struct {
 		statsInfoMap map[pb.StatsInfoKey]*pb.StatsInfo
 	}
 
+	// updateWorkerFactor is the times of CPU number of this node
+	// to start update worker. Default is 8.
+	updateWorkerFactor int
+
 	// KeyRouter is the router to decides which node should send to.
 	KeyRouter client.KeyRouter[pb.StatsInfoKey]
+
+	concurrentExecutor ConcurrentExecutor
 }
 
 func NewGlobalStats(
@@ -149,16 +163,19 @@ func NewGlobalStats(
 		ctx:                 ctx,
 		engine:              e,
 		tailC:               make(chan *logtail.TableLogtail, 10000),
-		updateC:             make(chan pb.StatsInfoKey, 1000),
+		updateC:             make(chan pb.StatsInfoKey, 3000),
 		logtailUpdate:       newLogtailUpdate(),
 		tableLogtailCounter: make(map[pb.StatsInfoKey]int64),
 		KeyRouter:           keyRouter,
 	}
+	s.updatingMu.updating = make(map[pb.StatsInfoKey]struct{})
 	s.mu.statsInfoMap = make(map[pb.StatsInfoKey]*pb.StatsInfo)
 	s.mu.cond = sync.NewCond(&s.mu)
 	for _, opt := range opts {
 		opt(s)
 	}
+	s.concurrentExecutor = newConcurrentExecutor(runtime.GOMAXPROCS(0) * s.updateWorkerFactor * 4)
+	s.concurrentExecutor.Run(ctx)
 	go s.consumeWorker(ctx)
 	go s.updateWorker(ctx)
 	return s
@@ -208,10 +225,22 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 				return nil
 			}
 
-			// If the trigger condition is not satisfied, the stats will not be updated
-			// for long time. So we trigger the update here to get the stats info as soon
-			// as possible.
-			gs.triggerUpdate(key)
+			func() {
+				// We force to trigger the update, which will hang when the channel
+				// is full. Another goroutine will fetch items from the channel
+				// which hold the lock, so we need to unlock it first.
+				gs.mu.Unlock()
+				defer gs.mu.Lock()
+				// If the trigger condition is not satisfied, the stats will not be updated
+				// for long time. So we trigger the update here to get the stats info as soon
+				// as possible.
+				gs.triggerUpdate(key, true)
+			}()
+
+			info, ok = gs.mu.statsInfoMap[key]
+			if ok {
+				break
+			}
 
 			// Wait until stats info of the key is updated.
 			gs.mu.cond.Wait()
@@ -220,6 +249,12 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 		}
 	}
 	return info
+}
+
+func (gs *GlobalStats) RemoveTid(tid uint64) {
+	gs.logtailUpdate.mu.Lock()
+	defer gs.logtailUpdate.mu.Unlock()
+	delete(gs.logtailUpdate.mu.updated, tid)
 }
 
 func (gs *GlobalStats) enqueue(tail *logtail.TableLogtail) {
@@ -243,22 +278,30 @@ func (gs *GlobalStats) consumeWorker(ctx context.Context) {
 }
 
 func (gs *GlobalStats) updateWorker(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
+	for i := 0; i < runtime.GOMAXPROCS(0)*gs.updateWorkerFactor; i++ {
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
 
-		case key := <-gs.updateC:
-			go gs.updateTableStats(key)
-		}
+				case key := <-gs.updateC:
+					gs.updateTableStats(key)
+				}
+			}
+		}()
 	}
 }
 
-func (gs *GlobalStats) triggerUpdate(key pb.StatsInfoKey) {
+func (gs *GlobalStats) triggerUpdate(key pb.StatsInfoKey, force bool) {
+	if force {
+		gs.updateC <- key
+		return
+	}
+
 	select {
 	case gs.updateC <- key:
 	default:
-		logutil.Errorf("the channel of update table is full")
 	}
 }
 
@@ -268,7 +311,7 @@ func (gs *GlobalStats) consumeLogtail(tail *logtail.TableLogtail) {
 		TableID:    tail.Table.TbId,
 	}
 	if len(tail.CkpLocation) > 0 {
-		gs.triggerUpdate(key)
+		gs.triggerUpdate(key, false)
 	} else if tail.Table != nil {
 		var triggered bool
 		for _, cmd := range tail.Commands {
@@ -276,7 +319,7 @@ func (gs *GlobalStats) consumeLogtail(tail *logtail.TableLogtail) {
 				logtailreplay.IsObjTable(cmd.TableName) ||
 				logtailreplay.IsMetaTable(cmd.TableName) {
 				triggered = true
-				gs.triggerUpdate(key)
+				gs.triggerUpdate(key, false)
 				break
 			}
 		}
@@ -287,7 +330,7 @@ func (gs *GlobalStats) consumeLogtail(tail *logtail.TableLogtail) {
 		}
 		if !triggered && gs.ShouldUpdate(key, gs.tableLogtailCounter[key]) {
 			gs.tableLogtailCounter[key] = 0
-			gs.triggerUpdate(key)
+			gs.triggerUpdate(key, false)
 		}
 	}
 }
@@ -308,6 +351,11 @@ func (gs *GlobalStats) notifyLogtailUpdate(tid uint64) {
 }
 
 func (gs *GlobalStats) waitLogtailUpdated(tid uint64) {
+	// If the tid is less than reserved, return immediately.
+	if tid < catalog.MO_RESERVED_MAX {
+		return
+	}
+
 	// checkUpdated is a function used to check if the table's
 	// first logtail has been received. Return true means that
 	// the first logtail has already been received by the CN server.
@@ -366,14 +414,30 @@ func (gs *GlobalStats) waitLogtailUpdated(tid uint64) {
 	}
 }
 
-func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
-	// wait until the table's logtail has been updated.
-	gs.waitLogtailUpdated(key.TableID)
+func (gs *GlobalStats) checkUpdating(key pb.StatsInfoKey) bool {
+	gs.updatingMu.Lock()
+	defer gs.updatingMu.Unlock()
+	_, ok := gs.updatingMu.updating[key]
+	if ok {
+		return true
+	}
+	gs.updatingMu.updating[key] = struct{}{}
+	return false
+}
 
-	ts, ok := gs.statsUpdated.Load(key)
-	if ok && time.Since(ts.(time.Time)) < MinUpdateInterval {
+func (gs *GlobalStats) removeUpdating(key pb.StatsInfoKey) {
+	gs.updatingMu.Lock()
+	defer gs.updatingMu.Unlock()
+	delete(gs.updatingMu.updating, key)
+}
+
+func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
+	if gs.checkUpdating(key) {
 		return
 	}
+
+	// wait until the table's logtail has been updated.
+	gs.waitLogtailUpdated(key.TableID)
 
 	// updated is used to mark that the stats info is updated.
 	var updated bool
@@ -385,28 +449,28 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 
 		// If it is the first time that the stats info is updated,
 		// send it to key router.
-		if _, ok := gs.statsUpdated.Load(key); !ok && gs.KeyRouter != nil && updated {
-			gs.KeyRouter.AddItem(gossip.CommonItem{
-				Operation: gossip.Operation_Set,
-				Key: &gossip.CommonItem_StatsInfoKey{
-					StatsInfoKey: &pb.StatsInfoKey{
-						DatabaseID: key.DatabaseID,
-						TableID:    key.TableID,
-					},
-				},
-			})
-		}
+		// if _, ok := gs.statsUpdating.Load(key); !ok && gs.KeyRouter != nil && updated {
+		//	gs.KeyRouter.AddItem(gossip.CommonItem{
+		//		Operation: gossip.Operation_Set,
+		//		Key: &gossip.CommonItem_StatsInfoKey{
+		//			StatsInfoKey: &pb.StatsInfoKey{
+		//				DatabaseID: key.DatabaseID,
+		//				TableID:    key.TableID,
+		//			},
+		//		},
+		//	})
+		// }
 
-		// update the time to current time only if the stats is not nil.
 		if updated {
 			gs.mu.statsInfoMap[key] = stats
-			gs.statsUpdated.Store(key, time.Now())
 		} else if _, ok := gs.mu.statsInfoMap[key]; !ok {
 			gs.mu.statsInfoMap[key] = nil
 		}
 
 		// Notify all the waiters to read the new stats info.
 		gs.mu.cond.Broadcast()
+
+		gs.removeUpdating(key)
 	}()
 
 	table := gs.engine.getLatestCatalogCache().GetTableById(key.DatabaseID, key.TableID)
@@ -451,8 +515,8 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 		approxObjectNum,
 		stats,
 	)
-	if err := UpdateStats(gs.ctx, req); err != nil {
-		logutil.Errorf("failed to init stats info for table %v", key)
+	if err := UpdateStats(gs.ctx, req, gs.concurrentExecutor); err != nil {
+		logutil.Errorf("failed to init stats info for table %v, err: %v", key, err)
 		return
 	}
 	updated = true
@@ -550,7 +614,9 @@ func getMinMaxValueByFloat64(typ types.Type, buf []byte) float64 {
 }
 
 // get ndv, minval , maxval, datatype from zonemap. Retrieve all columns except for rowid, return accurate number of objects
-func updateInfoFromZoneMap(ctx context.Context, req *updateStatsRequest, info *plan2.InfoFromZoneMap) error {
+func updateInfoFromZoneMap(
+	ctx context.Context, req *updateStatsRequest, info *plan2.InfoFromZoneMap, executor ConcurrentExecutor,
+) error {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementUpdateInfoFromZonemapHistogram.Observe(time.Since(start).Seconds())
@@ -567,14 +633,34 @@ func updateInfoFromZoneMap(ctx context.Context, req *updateStatsRequest, info *p
 		return err
 	}
 
-	onObjFn := func(obj logtailreplay.ObjectEntry) error {
+	type metaWrapper struct {
+		meta     objectio.ObjectMeta
+		blkCount uint32
+		index    int
+	}
+
+	var metas []metaWrapper
+	var updateMu sync.Mutex
+	onObjFn := func(objIndex int, obj logtailreplay.ObjectEntry) error {
 		location := obj.Location()
 		if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 			return err
 		}
+		updateMu.Lock()
+		defer updateMu.Unlock()
+		metas = append(metas, metaWrapper{
+			meta:     objMeta,
+			blkCount: obj.BlkCnt(),
+			index:    objIndex,
+		})
+		return nil
+	}
+
+	mergeFn := func(objMetaW metaWrapper) {
+		objMeta = objMetaW.meta
 		meta = objMeta.MustDataMeta()
 		info.AccurateObjectNumber++
-		info.BlockNumber += int64(obj.BlkCnt())
+		info.BlockNumber += int64(objMetaW.blkCount)
 		info.TableCnt += float64(meta.BlockHeader().Rows())
 		if !init {
 			init = true
@@ -627,10 +713,17 @@ func updateInfoFromZoneMap(ctx context.Context, req *updateStatsRequest, info *p
 				}
 			}
 		}
-		return nil
 	}
-	if err = ForeachVisibleDataObject(req.partitionState, req.ts, onObjFn); err != nil {
+	if err = ForeachVisibleDataObject(
+		req.partitionState,
+		req.ts,
+		onObjFn,
+		executor,
+	); err != nil {
 		return err
+	}
+	for _, m := range metas {
+		mergeFn(m)
 	}
 
 	return nil
@@ -661,7 +754,9 @@ func adjustNDV(info *plan2.InfoFromZoneMap, tableDef *plan2.TableDef) {
 }
 
 // UpdateStats is the main function to calculate and update the stats for scan node.
-func UpdateStats(ctx context.Context, req *updateStatsRequest) error {
+func UpdateStats(
+	ctx context.Context, req *updateStatsRequest, executor ConcurrentExecutor,
+) error {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementUpdateStatsDurationHistogram.Observe(time.Since(start).Seconds())
@@ -677,11 +772,11 @@ func UpdateStats(ctx context.Context, req *updateStatsRequest) error {
 	if len(req.partitionsTableDef) > 0 {
 		for _, def := range req.partitionsTableDef {
 			req.tableDef = def
-			if err := updateInfoFromZoneMap(ctx, req, info); err != nil {
+			if err := updateInfoFromZoneMap(ctx, req, info, executor); err != nil {
 				return err
 			}
 		}
-	} else if err := updateInfoFromZoneMap(ctx, req, info); err != nil {
+	} else if err := updateInfoFromZoneMap(ctx, req, info, executor); err != nil {
 		return err
 	}
 	adjustNDV(info, baseTableDef)

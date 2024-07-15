@@ -94,7 +94,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	}
 
 	bindCtx := NewBindContext(builder, nil)
-	ifExistAutoPkCol, insertWithoutUniqueKeyMap, err := initInsertStmt(builder, bindCtx, stmt, rewriteInfo)
+	ifExistAutoPkCol, insertWithoutUniqueKeyMap, ifInsertFromUniqueColMap, err := initInsertStmt(builder, bindCtx, stmt, rewriteInfo)
 	if err != nil {
 		return nil, err
 	}
@@ -301,7 +301,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 
 		query.StmtType = plan.Query_UPDATE
 	} else {
-		err = buildInsertPlans(ctx, builder, bindCtx, stmt, objRef, tableDef, rewriteInfo.rootId, ifExistAutoPkCol, insertWithoutUniqueKeyMap)
+		err = buildInsertPlans(ctx, builder, bindCtx, stmt, objRef, tableDef, rewriteInfo.rootId, ifExistAutoPkCol, insertWithoutUniqueKeyMap, ifInsertFromUniqueColMap)
 		if err != nil {
 			return nil, err
 		}
@@ -837,7 +837,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 			if err != nil {
 				return nil, err
 			}
-			vec.InplaceSort()
+			vec.InplaceSortAndCompact()
 			data, err := vec.MarshalBinary()
 			if err != nil {
 				return nil, err
@@ -857,7 +857,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 		}
 	}
 
-	filterExpr, err = ConstantFold(batch.EmptyForConstFoldBatch, filterExpr, proc, false)
+	filterExpr, err = ConstantFold(batch.EmptyForConstFoldBatch, filterExpr, proc, false, true)
 	if err != nil {
 		return nil, nil
 	}

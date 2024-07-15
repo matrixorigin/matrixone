@@ -31,8 +31,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -97,11 +99,23 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 			}
 		}
 	}
+
+	var isRestore bool
+	if _, ok := statements[0].(*tree.Insert); ok {
+		if strings.Contains(sql, "MO_TS =") {
+			isRestore = true
+		}
+	}
+
+	userInput := &UserInput{
+		sql:       sql,
+		isRestore: isRestore,
+	}
 	execCtx := ExecCtx{
 		reqCtx: ctx,
 		ses:    back.backSes,
 	}
-	return doComQueryInBack(back.backSes, &execCtx, &UserInput{sql: sql})
+	return doComQueryInBack(back.backSes, &execCtx, userInput)
 }
 
 func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uint32, toAccount uint32) error {
@@ -212,7 +226,7 @@ func doComQueryInBack(backSes *backSession, execCtx *ExecCtx,
 		getGlobalPu().QueryClient,
 		getGlobalPu().HAKeeperClient,
 		getGlobalPu().UdfService,
-		getGlobalAic())
+		getGlobalAicm())
 	proc.Id = backSes.getNextProcessId()
 	proc.Lim.Size = getGlobalPu().SV.ProcessLimitationSize
 	proc.Lim.BatchRows = getGlobalPu().SV.ProcessLimitationBatchRows
@@ -702,10 +716,6 @@ func (backSes *backSession) getNextProcessId() string {
 }
 
 func (backSes *backSession) cleanCache() {
-}
-
-func (backSes *backSession) GetUpstream() FeSession {
-	return backSes.upstream
 }
 
 func (backSes *backSession) getCNLabels() map[string]string {

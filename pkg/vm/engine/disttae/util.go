@@ -18,8 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"strings"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -44,6 +42,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
+	"regexp"
+	"strings"
 )
 
 func compPkCol(colName string, pkName string) bool {
@@ -674,8 +674,11 @@ func ConstructPKFilters(tableDef *plan.TableDef, dbName string,
 	return
 }
 
+// TODO(ghs) workaround for special tables, remove later
+var specialPattern *regexp.Regexp = regexp.MustCompile(`mo_tables|mo_database|_mo_columns`)
+
 func constructBasePKFilter(expr *plan.Expr, tblDef *plan.TableDef, proc *process.Process) (filter BasePKFilter) {
-	if expr == nil {
+	if expr == nil || specialPattern.MatchString(tblDef.Name) {
 		return
 	}
 
@@ -2591,4 +2594,60 @@ func txnIsValid(txnOp client.TxnOperator) (*Transaction, error) {
 func CheckTxnIsValid(txnOp client.TxnOperator) (err error) {
 	_, err = txnIsValid(txnOp)
 	return err
+}
+
+// concurrentTask is the task that runs in the concurrent executor.
+type concurrentTask func() error
+
+// ConcurrentExecutor is an interface that runs tasks concurrently.
+type ConcurrentExecutor interface {
+	// AppendTask append the concurrent task to the exuecutor.
+	AppendTask(concurrentTask)
+	// Run starts receive task to execute.
+	Run(context.Context)
+	// GetConcurrency returns the concurrency of this executor.
+	GetConcurrency() int
+}
+
+type concurrentExecutor struct {
+	// concurrency is the concurrency to run the tasks at the same time.
+	concurrency int
+	// task contains all the tasks needed to run.
+	tasks chan concurrentTask
+}
+
+func newConcurrentExecutor(concurrency int) ConcurrentExecutor {
+	return &concurrentExecutor{
+		concurrency: concurrency,
+		tasks:       make(chan concurrentTask, 2048),
+	}
+}
+
+// AppendTask implements the ConcurrentExecutor interface.
+func (e *concurrentExecutor) AppendTask(t concurrentTask) {
+	e.tasks <- t
+}
+
+// Run implements the ConcurrentExecutor interface.
+func (e *concurrentExecutor) Run(ctx context.Context) {
+	for i := 0; i < e.concurrency; i++ {
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+
+				case t := <-e.tasks:
+					if err := t(); err != nil {
+						logutil.Errorf("failed to execute task: %v", err)
+					}
+				}
+			}
+		}()
+	}
+}
+
+// GetConcurrency implements the ConcurrentExecutor interface.
+func (e *concurrentExecutor) GetConcurrency() int {
+	return e.concurrency
 }

@@ -57,6 +57,8 @@ var (
 	UnsubscribeTable      = "UNSUBSCRIBE_TABLE"
 
 	HandleTxnTrace = strings.ToUpper("txn-trace")
+
+	ReloadAutoIncrementCache = strings.ToUpper("reload-auto-increment-cache")
 )
 
 var (
@@ -96,6 +98,8 @@ var (
 		GetLatestBind:            handleGetLatestBind,
 		UnsubscribeTable:         handleUnsubscribeTable,
 		HandleTxnTrace:           handleTxnTrace,
+
+		ReloadAutoIncrementCache: handleReloadAutoIncrementCache,
 	}
 )
 

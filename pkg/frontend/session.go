@@ -24,6 +24,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -35,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/status"
@@ -237,7 +238,7 @@ type Session struct {
 }
 
 func (ses *Session) InitSystemVariables(ctx context.Context) (err error) {
-	if ses.gSysVars, err = GSysVarsMgr.Get(ses.GetTenantInfo().TenantID, ses, ctx); err != nil {
+	if ses.gSysVars, err = GSysVarsMgr.Get(ses.GetTenantInfo().GetTenantID(), ses, ctx); err != nil {
 		return
 	}
 	ses.sesSysVars = ses.gSysVars.Clone()
@@ -532,7 +533,7 @@ func NewSession(connCtx context.Context, proto MysqlRrWr, mp *mpool.MPool) *Sess
 		getGlobalPu().QueryClient,
 		getGlobalPu().HAKeeperClient,
 		getGlobalPu().UdfService,
-		getGlobalAic())
+		getGlobalAicm())
 
 	ses.proc.Lim.Size = getGlobalPu().SV.ProcessLimitationSize
 	ses.proc.Lim.BatchRows = getGlobalPu().SV.ProcessLimitationBatchRows
@@ -983,15 +984,6 @@ func (ses *Session) GetTxnInfo() string {
 	return meta.DebugString()
 }
 
-func (ses *Session) GetDatabaseName() string {
-	return ses.GetResponser().GetStr(DBNAME)
-}
-
-func (ses *Session) SetDatabaseName(db string) {
-	ses.GetResponser().SetStr(DBNAME, db)
-	ses.GetTxnCompileCtx().SetDatabase(db)
-}
-
 func (ses *Session) DatabaseNameIsEmpty() bool {
 	return len(ses.GetDatabaseName()) == 0
 }
@@ -1086,6 +1078,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	}
 
 	if strings.ToLower(accountStatus) == tree.AccountStatusRestricted.String() {
+		logutil.Infof("[set restricted] init session, init account id %d, connection id %d restricted", tenantID, ses.GetConnectionID())
 		ses.getRoutine().setResricted(true)
 	} else {
 		ses.getRoutine().setResricted(false)

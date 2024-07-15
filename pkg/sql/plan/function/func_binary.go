@@ -2621,6 +2621,75 @@ func TimestampDiff(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 	return nil
 }
 
+func MakeDateString(
+	ivecs []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	_ *process.Process,
+	length int,
+) error {
+	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
+	p2 := vector.GenerateFunctionStrParameter(ivecs[1])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		yearStr, null1 := p1.GetStrValue(i)
+		dayStr, null2 := p2.GetStrValue(i)
+
+		if null1 || null2 {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			// null
+			yearStrStr := functionUtil.QuickBytesToStr(yearStr)
+			year, err := strconv.ParseInt(yearStrStr, 10, 64)
+			if err != nil {
+				yearFloat, err := strconv.ParseFloat(yearStrStr, 64)
+				if err != nil {
+					year = castBinaryArrayToInt(yearStr)
+				} else {
+					year = int64(yearFloat)
+				}
+			}
+			day, err := strconv.ParseInt(functionUtil.QuickBytesToStr(dayStr), 10, 64)
+			if err != nil {
+				// parse as float64
+				dayFloat, err := strconv.ParseFloat(functionUtil.QuickBytesToStr(dayStr), 64)
+				if err != nil {
+					day = castBinaryArrayToInt(dayStr)
+				} else {
+					day = int64(dayFloat)
+				}
+			}
+			if day <= 0 || year < 0 || year > 9999 {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+
+			if year < 70 {
+				year += 2000
+			} else if year < 100 {
+				year += 1900
+			}
+
+			resDt := types.MakeDate(int32(year), 1, int32(day))
+
+			if resDt.Year() > 9999 || resDt <= 0 {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+
+			if err := rs.AppendBytes([]byte(resDt.String()), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func Replace(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionStrParameter(ivecs[1])
@@ -2904,4 +2973,12 @@ func CosineDistanceArray[T types.RealNumbers](ivecs []*vector.Vector, result vec
 		_v2 := types.BytesToArray[T](v2)
 		return moarray.CosineDistance[T](_v1, _v2)
 	})
+}
+
+func castBinaryArrayToInt(array []uint8) int64 {
+	var result int64
+	for i, value := range array {
+		result += int64(value) << uint(8*(len(array)-i-1))
+	}
+	return result
 }

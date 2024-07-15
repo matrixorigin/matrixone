@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexjoin"
 
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -505,6 +506,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.N = t.N
 		arg.PkName = t.PkName
 		arg.PkTyp = t.PkTyp
+		arg.BuildIdx = t.BuildIdx
 		res.Arg = arg
 	default:
 		panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceIns.Op))
@@ -573,7 +575,7 @@ func constructOnduplicateKey(n *plan.Node, eg engine.Engine) *onduplicatekey.Arg
 	return arg
 }
 
-func constructFuzzyFilter(c *Compile, n, right *plan.Node) *fuzzyfilter.Argument {
+func constructFuzzyFilter(n, tableScan, sinkScan *plan.Node) *fuzzyfilter.Argument {
 	pkName := n.TableDef.Pkey.PkeyColName
 	var pkTyp plan.Type
 	if pkName == catalog.CPrimaryKeyColName {
@@ -590,9 +592,34 @@ func constructFuzzyFilter(c *Compile, n, right *plan.Node) *fuzzyfilter.Argument
 	arg := fuzzyfilter.NewArgument()
 	arg.PkName = pkName
 	arg.PkTyp = pkTyp
-	arg.N = right.Stats.Outcnt
-	if len(n.RuntimeFilterBuildList) > 0 {
-		arg.RuntimeFilterSpec = n.RuntimeFilterBuildList[0]
+	arg.IfInsertFromUnique = n.IfInsertFromUnique
+
+	if (tableScan.Stats.Cost / sinkScan.Stats.Cost) < 0.3 {
+		// build on tableScan, because the existing data is significantly less than the data to be inserted
+		// this will happend
+		arg.BuildIdx = 0
+		if arg.IfInsertFromUnique {
+			// probe on sinkScan with test
+			arg.N = tableScan.Stats.Cost
+		} else {
+			// probe on sinkScan with test and add
+			arg.N = sinkScan.Stats.Cost + tableScan.Stats.Cost
+		}
+	} else {
+		// build on sinkScan, as tableScan can guarantee uniqueness, probe on tableScan with test
+		arg.BuildIdx = 1
+		arg.N = sinkScan.Stats.Cost
+	}
+
+	// currently can not build runtime filter on table scan and probe it on sink scan
+	// so only use runtime filter when build on sink scan
+	if arg.BuildIdx == 1 {
+		if len(n.RuntimeFilterBuildList) > 0 {
+			arg.RuntimeFilterSpec = n.RuntimeFilterBuildList[0]
+		}
+	} else {
+		tableScan.RuntimeFilterProbeList = nil
+		n.RuntimeFilterBuildList = nil
 	}
 	return arg
 }
@@ -1251,7 +1278,7 @@ func constructDeleteDispatchAndLocal(
 	rs[currentIdx].NodeInfo = ss[currentIdx].NodeInfo
 	rs[currentIdx].Magic = Remote
 	rs[currentIdx].PreScopes = append(rs[currentIdx].PreScopes, ss[currentIdx])
-	rs[currentIdx].Proc = process.NewWithAnalyze(c.proc, c.ctx, len(ss), c.anal.analInfos)
+	rs[currentIdx].Proc = process.NewWithAnalyze(c.proc, c.proc.Ctx, len(ss), c.anal.analInfos)
 	rs[currentIdx].RemoteReceivRegInfos = make([]RemoteReceivRegInfo, 0, len(ss)-1)
 
 	// use arg.RemoteRegs to know the uuid,

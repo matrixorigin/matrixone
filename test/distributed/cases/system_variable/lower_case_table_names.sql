@@ -25,8 +25,6 @@ set global lower_case_table_names = 0;
 -- @session
 
 -- @session:id=2&user=a1:admin1&password=test123
-# make sure get the newest value
-set refresh_global_sys_vars_mgr = 1;
 # it's 0 now
 select @@lower_case_table_names;
 
@@ -48,8 +46,6 @@ drop database test;
 -- @session
 
 -- @session:id=3&user=a1:admin1&password=test123
-# make sure get the newest value
-set refresh_global_sys_vars_mgr = 1;
 # it's 0 now
 select @@lower_case_table_names;
 
@@ -65,8 +61,6 @@ set global lower_case_table_names = 1;
 -- @session
 
 -- @session:id=4&user=a1:admin1&password=test123
-# make sure get the newest value
-set refresh_global_sys_vars_mgr = 1;
 # it's 1 now
 select @@lower_case_table_names;
 
@@ -77,6 +71,37 @@ select * from t1;
 select * from T1;
 
 # reset
+drop database test;
+-- @session
+
+
+## alter table with lower_case_table_names = 0
+-- @session:id=5&user=a1:admin1&password=test123
+# set to 0
+set global lower_case_table_names = 0;
+-- @session
+
+-- @session:id=6&user=a1:admin1&password=test123
+# it's 0 now
+select @@lower_case_table_names;
+show variables like "%lower%";
+
+create database if not exists test;
+use test;
+drop table if exists Tt;
+drop table if exists TT;
+create table Tt (Aa int);
+insert into Tt values (1), (2), (3);
+select Aa from Tt;
+create table TT (c1 int);
+show tables;
+alter table TT add column c2 int; -- should work
+alter table `TT` add column c3 int; -- should work as well
+select * from TT;
+select * from `TT`;
+select * from Tt;
+select * from `Tt`;
+
 drop database test;
 -- @session
 

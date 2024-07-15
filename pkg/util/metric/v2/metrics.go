@@ -80,6 +80,7 @@ func initTaskMetrics() {
 
 func initFileServiceMetrics() {
 	registry.MustRegister(fsReadCounter)
+	registry.MustRegister(fsWriteCounter)
 	registry.MustRegister(S3ConnectCounter)
 	registry.MustRegister(S3DNSResolveCounter)
 
@@ -183,6 +184,8 @@ func initFrontendMetrics() {
 	registry.MustRegister(acceptConnDurationHistogram)
 	registry.MustRegister(routineCounter)
 	registry.MustRegister(requestCounter)
+	registry.MustRegister(resolveDurationHistogram)
+	registry.MustRegister(createAccountDurationHistogram)
 }
 
 func initPipelineMetrics() {
