@@ -18,13 +18,11 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"path"
 	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -99,7 +97,7 @@ func NewMergeObjectsEntry(
 func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) {
 	k := 0
 	for _, obj := range entry.droppedObjs {
-		ioVector := InitTransferPageIO()
+		ioVector := model.InitTransferPageIO()
 		pages := make([]*model.TransferHashPage, 0, obj.BlockCnt())
 		var duration time.Duration
 		var start time.Time
@@ -124,7 +122,7 @@ func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) {
 			page.Train(mapping)
 
 			start = time.Now()
-			err := AddTransferPage(page, ioVector)
+			err := model.AddTransferPage(page, ioVector)
 			if err != nil {
 				return
 			}
@@ -136,7 +134,7 @@ func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) {
 		}
 
 		start = time.Now()
-		WriteTransferPage(ctx, entry.rt.LocalFs.Service, pages, *ioVector)
+		model.WriteTransferPage(ctx, entry.rt.LocalFs.Service, pages, *ioVector)
 		duration += time.Since(start)
 		v2.TransferPageMergeLatencyHistogram.Observe(duration.Seconds())
 	}
@@ -395,49 +393,4 @@ func (entry *mergeObjectsEntry) PrepareCommit() (err error) {
 	}
 
 	return
-}
-
-func InitTransferPageIO() *fileservice.IOVector {
-	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
-	return &fileservice.IOVector{
-		FilePath: path.Join("transfer", "transfer-"+name.String()),
-	}
-}
-
-func AddTransferPage(page *model.TransferHashPage, ioVector *fileservice.IOVector) error {
-	data := page.Pin().Val.Marshal()
-	le := len(ioVector.Entries)
-	offset := int64(0)
-	if le > 0 {
-		offset = ioVector.Entries[le-1].Offset +
-			ioVector.Entries[le-1].Size
-	}
-	ioEntry := fileservice.IOEntry{
-		Offset: offset,
-		Size:   int64(len(data)),
-		Data:   data,
-	}
-	ioVector.Entries = append(ioVector.Entries, ioEntry)
-
-	return nil
-}
-
-func WriteTransferPage(ctx context.Context, fs fileservice.FileService, pages []*model.TransferHashPage, ioVector fileservice.IOVector) {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	err := fs.Write(ctx, ioVector)
-	if err != nil {
-		for _, page := range pages {
-			page.SetBornTS(page.BornTS().Add(time.Minute))
-		}
-		logutil.Errorf("[TransferPage] write transfer page error, page count %v", len(pages))
-	}
-	for i, page := range pages {
-		path := model.Path{
-			Name:   ioVector.FilePath,
-			Offset: ioVector.Entries[i].Offset,
-			Size:   ioVector.Entries[i].Size,
-		}
-		page.SetPath(path)
-	}
 }

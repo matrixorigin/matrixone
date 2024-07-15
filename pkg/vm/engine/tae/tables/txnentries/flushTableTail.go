@@ -125,7 +125,7 @@ func NewFlushTableTailEntry(
 // add transfer pages for dropped aobjects
 func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) {
 	isTransient := !entry.tableEntry.GetLastestSchemaLocked().HasPK()
-	ioVector := InitTransferPageIO()
+	ioVector := model.InitTransferPageIO()
 	pages := make([]*model.TransferHashPage, 0, len(entry.transMappings.Mappings))
 	var duration time.Duration
 	var start time.Time
@@ -146,7 +146,7 @@ func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) {
 		page.Train(mapping)
 
 		start = time.Now()
-		err := AddTransferPage(page, ioVector)
+		err := model.AddTransferPage(page, ioVector)
 		if err != nil {
 			return
 		}
@@ -157,7 +157,7 @@ func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) {
 	}
 
 	start = time.Now()
-	WriteTransferPage(ctx, entry.rt.LocalFs.Service, pages, *ioVector)
+	model.WriteTransferPage(ctx, entry.rt.LocalFs.Service, pages, *ioVector)
 	duration += time.Since(start)
 	v2.TransferPageFlushLatencyHistogram.Observe(duration.Seconds())
 }
