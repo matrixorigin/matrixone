@@ -1,3 +1,4 @@
+-- @skip:issue#17509
 set global enable_privilege_cache = off;
 
 -- create udf, create snapshot, drop udf, restore
