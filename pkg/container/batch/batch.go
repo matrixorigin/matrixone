@@ -308,6 +308,9 @@ func (bat *Batch) PreExtend(m *mpool.MPool, rows int) error {
 	return nil
 }
 
+// AppendWithCopy is used to append data from batch `b` to another batch `bat`. The function
+// ensures that the batch structure is consistent and copies all vector data to the target batch.
+// WARING: this function will cause a memory allocation.
 func (bat *Batch) AppendWithCopy(ctx context.Context, mh *mpool.MPool, b *Batch) (*Batch, error) {
 	if bat == nil {
 		return b.Dup(mh)
