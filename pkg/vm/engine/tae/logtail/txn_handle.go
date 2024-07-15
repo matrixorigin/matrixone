@@ -111,21 +111,21 @@ func (b *TxnLogtailRespBuilder) CollectLogtail(txn txnif.AsyncTxn) (*[]logtail.T
 
 func (b *TxnLogtailRespBuilder) visitObject(iobj any) {
 	obj := iobj.(*catalog.ObjectEntry).GetLatestNode()
-	if obj.IsAppendable() && obj.ObjectMVCCNode.IsEmpty() {
+	if obj.IsAppendable() && obj.CreatedAt.Equal(&txnif.UncommitTS) {
 		return
 	}
 	if !obj.DeletedAt.Equal(&txnif.UncommitTS) {
 		if b.batches[objectInfoBatch] == nil {
 			b.batches[objectInfoBatch] = makeRespBatchFromSchema(ObjectInfoSchema, common.LogtailAllocator)
 		}
-		visitObject(b.batches[objectInfoBatch], obj, obj.GetLastMVCCNode(), true, true, b.txn.GetPrepareTS())
+		visitObject(b.batches[objectInfoBatch], obj, obj.GetLastMVCCNode(), true, true, b.txn.GetPrepareTS(), true)
 		return
 	}
 
 	if b.batches[objectInfoBatch] == nil {
 		b.batches[objectInfoBatch] = makeRespBatchFromSchema(ObjectInfoSchema, common.LogtailAllocator)
 	}
-	visitObject(b.batches[objectInfoBatch], obj, obj.GetLastMVCCNode(), false, true, b.txn.GetPrepareTS())
+	visitObject(b.batches[objectInfoBatch], obj, obj.GetLastMVCCNode(), false, true, b.txn.GetPrepareTS(), true)
 }
 
 func (b *TxnLogtailRespBuilder) visitDeltaloc(ideltalocChain any) {

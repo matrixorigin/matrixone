@@ -45,8 +45,8 @@ func TestCatalog1(t *testing.T) {
 	// relMeta := rel.GetMeta().(*catalog.TableEntry)
 	obj, err := rel.CreateNonAppendableObject(nil)
 	assert.Nil(t, err)
+	testutil.MockObjectStats(t, obj)
 	assert.Nil(t, txn.Commit(context.Background()))
-	t.Log(db.Catalog.SimplePPString(common.PPL1))
 
 	txn, rel = testutil.GetDefaultRelation(t, db, schema.Name)
 	sobj, err := rel.GetObject(obj.GetID())
