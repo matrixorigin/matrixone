@@ -1505,6 +1505,10 @@ func buildInsertPlansWithRelatedHiddenTable(
 		}
 	}
 
+	if stmt != nil && stmt.IsRestore {
+		checkInsertPkDupForHiddenIndexTable = false
+	}
+
 	ifInsertFromUnique := false
 	if tableDef.Pkey != nil && ifInsertFromUniqueColMap != nil {
 		for _, colName := range tableDef.Pkey.Names {
