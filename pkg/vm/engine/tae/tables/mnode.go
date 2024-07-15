@@ -34,33 +34,31 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 )
 
-var _ NodeT = (*memoryNode)(nil)
-
 type memoryNode struct {
-	common.RefHelper
 	object      *aobject
 	writeSchema *catalog.Schema
 	data        *containers.Batch
 	appendMVCC  *updates.AppendMVCCHandle
+	offset      uint16
 
 	//index for primary key : Art tree + ZoneMap.
 	pkIndex *indexwrapper.MutIndex
 }
 
-func newMemoryNode(object *aobject) *memoryNode {
+func newMemoryNode(object *aobject, offset uint16) *memoryNode {
 	impl := new(memoryNode)
 	impl.object = object
+	impl.offset = offset
 
 	// Get the lastest schema, it will not be modified, so just keep the pointer
 	schema := object.meta.Load().GetSchemaLocked()
 	impl.writeSchema = schema
-	impl.appendMVCC = updates.NewAppendMVCCHandle(object.meta.Load(), object.RWMutex)
+	impl.appendMVCC = updates.NewAppendMVCCHandle(object.meta.Load(), object.RWMutex, offset)
 	impl.appendMVCC.SetAppendListener(object.OnApplyAppend)
 	// impl.data = containers.BuildBatchWithPool(
 	// 	schema.AllNames(), schema.AllTypes(), 0, object.rt.VectorPool.Memtable,
 	// )
 	impl.initPKIndex(schema)
-	impl.OnZeroCB = impl.close
 	return impl
 }
 func (node *memoryNode) getappendMVCC() *updates.AppendMVCCHandle {
@@ -654,4 +652,160 @@ func (node *memoryNode) allRowsCommittedBefore(ts types.TS) bool {
 	node.object.RLock()
 	defer node.object.RUnlock()
 	return node.appendMVCC.AllAppendsCommittedBefore(ts)
+}
+
+var _ NodeT = (*objectMemoryNode)(nil)
+
+type objectMemoryNode struct {
+	common.RefHelper
+	blkMemoryNodes []*memoryNode
+}
+
+func newObjectMemoryNode(obj *aobject) *objectMemoryNode {
+	impl := &objectMemoryNode{
+		blkMemoryNodes: make([]*memoryNode, 0),
+	}
+	impl.OnZeroCB = impl.close
+	return impl
+}
+func (node *objectMemoryNode) close() {
+	for _, n := range node.blkMemoryNodes {
+		n.close()
+	}
+}
+func (node *objectMemoryNode) getLastNode() *memoryNode {
+	return node.blkMemoryNodes[len(node.blkMemoryNodes)-1]
+}
+func (node *objectMemoryNode) getMemoryNode(blkID uint16) *memoryNode {
+	return node.blkMemoryNodes[blkID]
+}
+func (node *objectMemoryNode) IsPersisted() bool { return false }
+
+func (node *objectMemoryNode) PrepareAppend(rows uint32) (n uint32, err error) {
+	return node.getLastNode().PrepareAppend(rows)
+}
+func (node *objectMemoryNode) ApplyAppend(
+	bat *containers.Batch,
+	txn txnif.AsyncTxn,
+) (from int, err error) {
+	return node.getLastNode().ApplyAppend(bat, txn)
+}
+func (node *objectMemoryNode) GetDataWindow(
+	blkID uint16, readSchema *catalog.Schema, colIdxes []int, from, to uint32, mp *mpool.MPool,
+) (bat *containers.Batch, err error) {
+	return node.getMemoryNode(blkID).GetDataWindow(readSchema, colIdxes, from, to, mp)
+}
+
+func (node *objectMemoryNode) GetValueByRow(blkID uint16, readSchema *catalog.Schema, row, col int) (v any, isNull bool) {
+	return node.getMemoryNode(blkID).GetValueByRow(readSchema, row, col)
+}
+func (node *objectMemoryNode) GetRowsByKey(blkID uint16, key any) (rows []uint32, err error) {
+	return node.getMemoryNode(blkID).GetRowsByKey(key)
+}
+func (node *objectMemoryNode) BatchDedup(
+	ctx context.Context,
+	txn txnif.TxnReader,
+	isCommitting bool,
+	keys containers.Vector,
+	keysZM index.ZM,
+	rowmask *roaring.Bitmap,
+	bf objectio.BloomFilter,
+) (err error) {
+	for _, node := range node.blkMemoryNodes {
+		err = node.BatchDedup(ctx, txn, isCommitting, keys, keysZM, rowmask, bf)
+		if err != nil {
+			return
+		}
+	}
+	return
+}
+func (node *objectMemoryNode) ContainsKey(ctx context.Context, key any, blkID uint32) (ok bool, err error) {
+	panic("todo")
+}
+
+func (node *objectMemoryNode) Rows() (uint32, error) {
+	total := uint32(0)
+	for _, node := range node.blkMemoryNodes {
+		row, err := node.Rows()
+		if err != nil {
+			return 0, err
+		}
+		total += row
+	}
+	return total, nil
+}
+
+func (node *objectMemoryNode) GetRowByFilter(ctx context.Context, txn txnif.TxnReader, filter *handle.Filter, mp *mpool.MPool) (bid uint16, row uint32, err error) {
+	for blkOffset, node := range node.blkMemoryNodes {
+		_, row, err = node.GetRowByFilter(ctx, txn, filter, mp)
+		if moerr.IsMoErrCode(err, moerr.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return
+		}
+		bid = uint16(blkOffset)
+		return
+	}
+	return 0, 0, moerr.NewNotFoundNoCtx()
+}
+func (node *objectMemoryNode) CollectAppendInRange(
+	start, end types.TS, withAborted bool, mp *mpool.MPool,
+) (batWithVer *containers.BatchWithVersion, err error) {
+	for _, blkNode := range node.blkMemoryNodes {
+		bat, err := blkNode.CollectAppendInRange(start, end, withAborted, mp)
+		if err != nil {
+			return nil, err
+		}
+		if batWithVer == nil {
+			batWithVer = bat
+		} else {
+			batWithVer.Batch.Extend(bat.Batch)
+			bat.Batch.Close()
+		}
+	}
+	return
+}
+func (node *objectMemoryNode) EstimateMemSize() int {
+	size := 0
+	for _, blkNode := range node.blkMemoryNodes {
+		size += blkNode.EstimateMemSize()
+	}
+	return size
+}
+func (node *objectMemoryNode) getInMemoryValue(
+	txn txnif.TxnReader,
+	readSchema *catalog.Schema,
+	blkID uint16,
+	row, col int,
+	mp *mpool.MPool,
+) (v any, isNull bool, err error) {
+	return node.getMemoryNode(blkID).getInMemoryValue(txn, readSchema, row, col, mp)
+}
+func (node *objectMemoryNode) resolveInMemoryColumnData(
+	blkID uint16,
+	txn txnif.TxnReader,
+	readSchema *catalog.Schema,
+	col int,
+	skipDeletes bool,
+	mp *mpool.MPool,
+) (view *containers.ColumnView, err error) {
+	return node.getMemoryNode(blkID).resolveInMemoryColumnData(txn, readSchema, col, skipDeletes, mp)
+}
+func (node *objectMemoryNode) allRowsCommittedBefore(ts types.TS) bool {
+	return node.getLastNode().allRowsCommittedBefore(ts)
+}
+func (node *objectMemoryNode) resolveInMemoryColumnDatas(
+	ctx context.Context,
+	blkID uint16,
+	txn txnif.TxnReader,
+	readSchema *catalog.Schema,
+	colIdxes []int,
+	skipDeletes bool,
+	mp *mpool.MPool,
+) (view *containers.BlockView, err error) {
+	return node.getMemoryNode(blkID).resolveInMemoryColumnDatas(ctx, txn, readSchema, colIdxes, skipDeletes, mp)
+}
+func (node *objectMemoryNode) getwrteSchema() *catalog.Schema {
+	return node.getLastNode().writeSchema
 }

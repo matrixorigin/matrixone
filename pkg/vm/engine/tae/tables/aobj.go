@@ -56,7 +56,7 @@ func newAObject(
 		obj.node.Store(node)
 		obj.FreezeAppend()
 	} else {
-		mnode := newMemoryNode(obj)
+		mnode := newObjectMemoryNode(obj)
 		node := NewNode(mnode)
 		node.Ref()
 		obj.node.Store(node)
@@ -85,10 +85,10 @@ func (obj *aobject) CheckFlushTaskRetry(startts types.TS) bool {
 	return x.Greater(&startts)
 }
 func (obj *aobject) getLastAppendMVCC() *updates.AppendMVCCHandle {
-	return obj.PinNode().MustMNode().getappendMVCC()
+	return obj.PinNode().MustMNode().getLastNode().appendMVCC
 }
-func (obj *aobject) getAppendMVCC() *updates.AppendMVCCHandle {
-	return obj.PinNode().MustMNode().getappendMVCC()
+func (obj *aobject) getAppendMVCC(blkID uint16) *updates.AppendMVCCHandle {
+	return obj.PinNode().MustMNode().getMemoryNode(blkID).appendMVCC
 }
 func (obj *aobject) PPString(level common.PPLevel, depth int, prefix string, blkid int) string {
 	rows, err := obj.Rows()
@@ -208,12 +208,13 @@ func (obj *aobject) GetColumnDataByIds(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
 	readSchema any,
-	_ uint16,
+	blkOffset uint16,
 	colIdxes []int,
 	mp *mpool.MPool,
 ) (view *containers.BlockView, err error) {
 	return obj.resolveColumnDatas(
 		ctx,
+		blkOffset,
 		txn,
 		readSchema.(*catalog.Schema),
 		colIdxes,
@@ -226,12 +227,13 @@ func (obj *aobject) GetColumnDataById(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
 	readSchema any,
-	_ uint16,
+	blkID uint16,
 	col int,
 	mp *mpool.MPool,
 ) (view *containers.ColumnView, err error) {
 	return obj.resolveColumnData(
 		ctx,
+		blkID,
 		txn,
 		readSchema.(*catalog.Schema),
 		col,
@@ -242,6 +244,7 @@ func (obj *aobject) GetColumnDataById(
 
 func (obj *aobject) resolveColumnDatas(
 	ctx context.Context,
+	blkOffset uint16,
 	txn txnif.TxnReader,
 	readSchema *catalog.Schema,
 	colIdxes []int,
@@ -253,7 +256,7 @@ func (obj *aobject) resolveColumnDatas(
 
 	if !node.IsPersisted() {
 		return node.MustMNode().resolveInMemoryColumnDatas(
-			ctx,
+			ctx, blkOffset,
 			txn, readSchema, colIdxes, skipDeletes, mp,
 		)
 	} else {
@@ -295,6 +298,7 @@ func (obj *aobject) CoarseCheckAllRowsCommittedBefore(ts types.TS) bool {
 
 func (obj *aobject) resolveColumnData(
 	ctx context.Context,
+	blkID uint16,
 	txn txnif.TxnReader,
 	readSchema *catalog.Schema,
 	col int,
@@ -306,7 +310,7 @@ func (obj *aobject) resolveColumnData(
 
 	if !node.IsPersisted() {
 		return node.MustMNode().resolveInMemoryColumnData(
-			txn, readSchema, col, skipDeletes, mp,
+			blkID, txn, readSchema, col, skipDeletes, mp,
 		)
 	} else {
 		return obj.ResolvePersistedColumnData(
@@ -325,7 +329,7 @@ func (obj *aobject) GetValue(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
 	readSchema any,
-	_ uint16,
+	blkID uint16,
 	row, col int,
 	mp *mpool.MPool,
 ) (v any, isNull bool, err error) {
@@ -333,7 +337,7 @@ func (obj *aobject) GetValue(
 	defer node.Unref()
 	schema := readSchema.(*catalog.Schema)
 	if !node.IsPersisted() {
-		return node.MustMNode().getInMemoryValue(txn, schema, row, col, mp)
+		return node.MustMNode().getInMemoryValue(txn, schema, blkID, row, col, mp)
 	} else {
 		return obj.getPersistedValue(
 			ctx, txn, schema, 0, row, col, true, mp,
@@ -461,7 +465,8 @@ func (obj *aobject) RunCalibration() (score int, err error) {
 
 func (obj *aobject) OnReplayAppend(node txnif.AppendNode) (err error) {
 	an := node.(*updates.AppendNode)
-	obj.getAppendMVCC().OnReplayAppendNode(an)
+	blkID := an.GetID().GetBlockOffset()
+	obj.getAppendMVCC(blkID).OnReplayAppendNode(an)
 	return
 }
 
@@ -495,7 +500,7 @@ func (obj *aobject) EstimateMemSize() (int, int) {
 	if objMVCC != nil {
 		dsize = objMVCC.EstimateMemSizeLocked()
 	}
-	asize := obj.getAppendMVCC().EstimateMemSizeLocked()
+	asize := 0
 	if !node.IsPersisted() {
 		asize += node.MustMNode().EstimateMemSize()
 	}
@@ -503,7 +508,11 @@ func (obj *aobject) EstimateMemSize() (int, int) {
 }
 
 func (obj *aobject) GetRowsOnReplay() uint64 {
-	rows := uint64(obj.getAppendMVCC().GetTotalRow())
+	appendRow, err := obj.node.Load().MustMNode().Rows()
+	if err != nil {
+		panic(err)
+	}
+	rows := uint64(appendRow)
 	stats := obj.meta.Load().GetObjectStats()
 	fileRows := uint64(stats.Rows())
 	if rows > fileRows {

@@ -126,15 +126,6 @@ type Object interface {
 
 	GetByFilter(ctx context.Context, txn txnif.AsyncTxn, filter *handle.Filter, mp *mpool.MPool) (uint16, uint32, error)
 	GetValue(ctx context.Context, txn txnif.AsyncTxn, readSchema any, blkID uint16, row, col int, mp *mpool.MPool) (any, bool, error)
-	Foreach(
-		ctx context.Context,
-		readSchema any,
-		blkID uint16,
-		colIdx int,
-		op func(v any, isNull bool, row int) error,
-		sels []uint32,
-		mp *mpool.MPool,
-	) error
 	PPString(level common.PPLevel, depth int, prefix string, blkid int) string
 	EstimateMemSize() (int, int)
 	GetRuntime() *dbutils.Runtime

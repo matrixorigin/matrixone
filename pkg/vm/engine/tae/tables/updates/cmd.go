@@ -125,6 +125,7 @@ func NewAppendCmd(id uint32, app *AppendNode) *UpdateCmd {
 		cmdType: IOET_WALTxnCommand_AppendNode,
 		dest:    app.mvcc.meta.AsCommonID(),
 	}
+	impl.dest.SetBlockOffset(app.mvcc.blkOffset)
 	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(id, impl)
 	return impl
 }

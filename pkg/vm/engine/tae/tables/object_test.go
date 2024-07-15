@@ -41,7 +41,7 @@ func TestGetActiveRow(t *testing.T) {
 	db, _ := c.CreateDBEntry("db", "", "", nil)
 	table, _ := db.CreateTableEntry(schema, nil, nil)
 	obj, _ := table.CreateObject(nil, catalog.ES_Appendable, nil, nil)
-	mvcc := updates.NewAppendMVCCHandle(obj, &sync.RWMutex{})
+	mvcc := updates.NewAppendMVCCHandle(obj, &sync.RWMutex{}, 0)
 	// blk := &dataBlock{
 	// 	mvcc: mvcc,
 	// }
@@ -56,10 +56,13 @@ func TestGetActiveRow(t *testing.T) {
 		object:     aobj,
 		appendMVCC: mvcc,
 	}
+	objectMemoryNode := &objectMemoryNode{
+		blkMemoryNodes: []*memoryNode{mnode},
+	}
 	blk := &aobject{baseObject: b}
 
-	mnode.Ref()
-	n := NewNode(mnode)
+	objectMemoryNode.Ref()
+	n := NewNode(objectMemoryNode)
 	blk.node.Store(n)
 
 	// appendnode1 [0,1)
@@ -81,7 +84,7 @@ func TestGetActiveRow(t *testing.T) {
 	idx := indexwrapper.NewMutIndex(types.T_int8.ToType())
 	err := idx.BatchUpsert(vec.GetDownstreamVector(), 0)
 	assert.NoError(t, err)
-	blk.node.Load().MustMNode().pkIndex = idx
+	blk.node.Load().MustMNode().getLastNode().pkIndex = idx
 
 	node := blk.node.Load().MustMNode()
 	// row, err := blk.GetActiveRow(int8(1), ts2)

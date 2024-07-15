@@ -116,7 +116,7 @@ func (node *persistedNode) Foreach(
 }
 
 func (node *persistedNode) GetDataWindow(
-	readSchema *catalog.Schema, colIdxes []int, from, to uint32, mp *mpool.MPool,
+	blkID uint16, readSchema *catalog.Schema, colIdxes []int, from, to uint32, mp *mpool.MPool,
 ) (bat *containers.Batch, err error) {
 	panic("to be implemented")
 }
@@ -134,11 +134,11 @@ func (node *persistedNode) ApplyAppend(
 	panic(moerr.NewInternalErrorNoCtx("not supported"))
 }
 
-func (node *persistedNode) GetValueByRow(_ *catalog.Schema, _, _ int) (v any, isNull bool) {
+func (node *persistedNode) GetValueByRow(_ uint16, _ *catalog.Schema, _, _ int) (v any, isNull bool) {
 	panic(moerr.NewInternalErrorNoCtx("todo"))
 }
 
-func (node *persistedNode) GetRowsByKey(key any) ([]uint32, error) {
+func (node *persistedNode) GetRowsByKey(blkid uint16, key any) ([]uint32, error) {
 	panic(moerr.NewInternalErrorNoCtx("todo"))
 }
 

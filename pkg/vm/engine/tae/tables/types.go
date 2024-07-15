@@ -41,11 +41,11 @@ type NodeT interface {
 	) (from int, err error)
 
 	GetDataWindow(
-		readSchema *catalog.Schema, colIdxes []int, from, to uint32, mp *mpool.MPool,
+		blkID uint16, readSchema *catalog.Schema, colIdxes []int, from, to uint32, mp *mpool.MPool,
 	) (bat *containers.Batch, err error)
 
-	GetValueByRow(readSchema *catalog.Schema, row, col int) (v any, isNull bool)
-	GetRowsByKey(key any) (rows []uint32, err error)
+	GetValueByRow(blkID uint16, readSchema *catalog.Schema, row, col int) (v any, isNull bool)
+	GetRowsByKey(blkID uint16, key any) (rows []uint32, err error)
 	BatchDedup(
 		ctx context.Context,
 		txn txnif.TxnReader,
@@ -75,8 +75,8 @@ func NewNode(node NodeT) *Node {
 	}
 }
 
-func (n *Node) MustMNode() *memoryNode {
-	return n.NodeT.(*memoryNode)
+func (n *Node) MustMNode() *objectMemoryNode {
+	return n.NodeT.(*objectMemoryNode)
 }
 
 func (n *Node) MustPNode() *persistedNode {

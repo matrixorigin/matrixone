@@ -64,7 +64,7 @@ func (appender *objectAppender) Close() {
 func (appender *objectAppender) IsSameColumns(other any) bool {
 	n := appender.obj.PinNode()
 	defer n.Unref()
-	return n.MustMNode().writeSchema.IsSameColumns(other.(*catalog.Schema))
+	return n.MustMNode().getwrteSchema().IsSameColumns(other.(*catalog.Schema))
 }
 
 func (appender *objectAppender) PrepareAppend(
@@ -82,7 +82,7 @@ func (appender *objectAppender) PrepareAppend(
 	}
 	appender.obj.Lock()
 	defer appender.obj.Unlock()
-	node, created = appender.obj.getAppendMVCC().AddAppendNodeLocked(
+	node, created = appender.obj.getLastAppendMVCC().AddAppendNodeLocked(
 		txn,
 		appender.rows+appender.placeholder,
 		appender.placeholder+appender.rows+n)
@@ -110,13 +110,13 @@ func (appender *objectAppender) ApplyAppend(
 	defer appender.obj.Unlock()
 	from, err = node.ApplyAppend(bat, txn)
 
-	schema := node.writeSchema
+	schema := node.getwrteSchema()
 	for _, colDef := range schema.ColDefs {
 		if colDef.IsPhyAddr() {
 			continue
 		}
 		if colDef.IsRealPrimary() && !schema.IsSecondaryIndexTable() {
-			if err = node.pkIndex.BatchUpsert(bat.Vecs[colDef.Idx].GetDownstreamVector(), from); err != nil {
+			if err = node.getLastNode().pkIndex.BatchUpsert(bat.Vecs[colDef.Idx].GetDownstreamVector(), from); err != nil {
 				panic(err)
 			}
 		}
