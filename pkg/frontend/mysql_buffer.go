@@ -16,10 +16,12 @@ package frontend
 
 import (
 	"container/list"
+	"context"
 	"encoding/binary"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"net"
+	"strings"
 	"time"
 )
 
@@ -160,18 +162,37 @@ func (c *Conn) Close() error {
 	getGlobalRtMgr().Closed(c)
 	return nil
 }
+func (c *Conn) CheckAllowedPacketSize(totalLength int) error {
+	var err error
+	allowedPacketSize, err := c.ses.GetSessionSysVar("max_allowed_packet")
+	if err != nil {
+		return err
+	}
+	if int64(totalLength) > allowedPacketSize.(int64) {
+		errMsg := moerr.MysqlErrorMsgRefer[moerr.ER_SERVER_NET_PACKET_TOO_LARGE]
+		err = c.ses.GetResponser().MysqlRrWr().WriteERR(errMsg.ErrorCode, strings.Join(errMsg.SqlStates, ","), errMsg.ErrorMsgOrFormat)
+		if err != nil {
+			return err
+		}
+		return moerr.NewInternalError(context.Background(), errMsg.ErrorMsgOrFormat)
+	}
+	return nil
+}
 
 // Read reads the complete packet including process the > 16MB packet. return the payload
 func (c *Conn) Read() ([]byte, error) {
 	// Requests > 16MB
 	payloads := make([][]byte, 0)
+	totalLength := 0
 	var finalPayload []byte
+	var payload []byte
 	var err error
-	defer func(payloads [][]byte, err error) {
-		for _, payload := range payloads {
-			c.allocator.Free(payload)
+	defer func(payloads [][]byte, payload []byte, err error) {
+		c.allocator.Free(payload)
+		for _, eachPayload := range payloads {
+			c.allocator.Free(eachPayload)
 		}
-	}(payloads, err)
+	}(payloads, payload, err)
 
 	for {
 		if !c.connected {
@@ -190,31 +211,42 @@ func (c *Conn) Read() ([]byte, error) {
 			break
 		}
 		// Read bytes based on packet length
-		payload, err := c.ReadOnePayload(packetLength)
+		payload, err = c.ReadOnePayload(packetLength)
 		if err != nil {
 			return nil, err
 		}
 
 		if uint32(packetLength) == MaxPayloadSize {
 			payloads = append(payloads, payload)
+			totalLength += len(payload)
+			payload = nil
+			err = c.CheckAllowedPacketSize(totalLength)
+			if err != nil {
+				return nil, err
+			}
 			continue
 		}
 
 		if len(payloads) == 0 {
+			err = c.CheckAllowedPacketSize(len(payload))
+			if err != nil {
+				return nil, err
+			}
 			finalPayload = make([]byte, len(payload))
 			copy(finalPayload, payload)
-			c.allocator.Free(payload)
 			return finalPayload, nil
 		} else {
 			payloads = append(payloads, payload)
+			totalLength += len(payload)
+			payload = nil
+			err = c.CheckAllowedPacketSize(totalLength)
+			if err != nil {
+				return nil, err
+			}
 			break
 		}
 	}
 
-	totalLength := 0
-	for _, payload := range payloads {
-		totalLength += len(payload)
-	}
 	if totalLength > 0 {
 		finalPayload = make([]byte, totalLength)
 	}
