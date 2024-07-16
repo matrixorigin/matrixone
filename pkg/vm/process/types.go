@@ -46,10 +46,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
-const (
-	VectorLimit = 32
-)
-
 // Analyze analyzes information for operator
 type Analyze interface {
 	Stop()
@@ -329,7 +325,7 @@ type BaseProcess struct {
 	// Id, query id.
 	Id              string
 	Lim             Limitation
-	vp              *vectorPool
+	vp              *cachedVectorPool
 	mp              *mpool.MPool
 	prepareBatch    *batch.Batch
 	prepareExprList any
@@ -339,8 +335,6 @@ type BaseProcess struct {
 	TxnClient           client.TxnClient
 	AnalInfos           []*AnalyzeInfo
 	SessionInfo         SessionInfo
-	Ctx                 context.Context
-	Cancel              context.CancelFunc
 	FileService         fileservice.FileService
 	LockService         lockservice.LockService
 	IncrService         incrservice.AutoIncrementService
@@ -369,14 +363,6 @@ type Process struct {
 	Ctx              context.Context
 	Cancel           context.CancelFunc
 	DispatchNotifyCh chan *WrapCs
-}
-
-type vectorPool struct {
-	sync.Mutex
-	vecs map[uint8][]*vector.Vector
-
-	// max vector count limit for each type in pool.
-	Limit int
 }
 
 type sqlHelper interface {
