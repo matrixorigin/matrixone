@@ -210,7 +210,6 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 
 			metric.StorageUsage(account).Set(sizeMB)
 			metric.SnapshotUsage(account).Set(snapshotSizeMB)
-			v2.GetTraceCheckStorageUsageNewIncCounter().Inc()
 		}
 
 		// next round
@@ -344,6 +343,7 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 
 			metric.StorageUsage(account).Set(sizeMB)
 			metric.SnapshotUsage(account).Set(snapshotSizeMB)
+			v2.GetTraceCheckStorageUsageNewIncCounter().Inc()
 		}
 
 	nextL:
