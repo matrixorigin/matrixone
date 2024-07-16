@@ -998,7 +998,6 @@ func lockTalbeIfLockCountIsZero(
 		bat := batch.NewWithSize(int(lockOp.targets[idx].primaryColumnIndexInBatch) + 1)
 		bat.Vecs[lockOp.targets[idx].primaryColumnIndexInBatch] = vec
 		bat.SetRowCount(vec.Length())
-		rt.lockCount = int64(vec.Length())
 
 		err = performLock(bat, proc, lockOp)
 		if err != nil {
@@ -1015,6 +1014,7 @@ func lockTalbeIfLockCountIsZero(
 			return err
 		}
 	}
+	rt.lockCount = 1
 
 	return nil
 }
