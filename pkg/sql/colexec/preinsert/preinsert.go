@@ -54,9 +54,10 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 	if err != nil {
 		return result, err
 	}
-	analy := proc.GetAnalyze(preInsert.GetIdx(), preInsert.GetParallelIdx(), preInsert.GetParallelMajor())
-	analy.Start()
-	defer analy.Stop()
+
+	anal := proc.GetAnalyze2(preInsert.GetIdx(), preInsert.GetParallelIdx(), preInsert.GetParallelMajor(), preInsert.OpStats)
+	anal.Start()
+	defer anal.Stop()
 
 	if result.Batch == nil || result.Batch.IsEmpty() {
 		return result, nil

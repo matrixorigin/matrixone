@@ -58,7 +58,8 @@ func (preInsertSecIdx *PreInsertSecIdx) Call(proc *process.Process) (vm.CallResu
 	if err != nil {
 		return result, err
 	}
-	analy := proc.GetAnalyze(preInsertSecIdx.GetIdx(), preInsertSecIdx.GetParallelIdx(), preInsertSecIdx.GetParallelMajor())
+
+	analy := proc.GetAnalyze2(preInsertSecIdx.GetIdx(), preInsertSecIdx.GetParallelIdx(), preInsertSecIdx.GetParallelMajor(), preInsertSecIdx.OpStats)
 	analy.Start()
 	defer analy.Stop()
 

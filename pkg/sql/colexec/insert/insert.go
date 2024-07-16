@@ -79,20 +79,21 @@ func (insert *Insert) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	defer analyze(proc, insert.GetIdx(), insert.GetParallelIdx(), insert.GetParallelMajor())()
+	anal := proc.GetAnalyze2(insert.GetIdx(), insert.GetParallelIdx(), insert.GetParallelMajor(), insert.OpStats)
+	anal.Start()
+	defer anal.Stop()
+
 	if insert.ToWriteS3 {
-		return insert.insert_s3(proc)
+		return insert.insert_s3(proc, anal)
 	}
-	return insert.insert_table(proc)
+	return insert.insert_table(proc, anal)
 }
 
-func (insert *Insert) insert_s3(proc *process.Process) (vm.CallResult, error) {
+func (insert *Insert) insert_s3(proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementInsertS3DurationHistogram.Observe(time.Since(start).Seconds())
 	}()
-
-	anal := proc.GetAnalyze(insert.GetIdx(), insert.GetParallelIdx(), insert.GetParallelMajor())
 
 	if insert.ctr.state == vm.Build {
 		for {
@@ -190,15 +191,12 @@ func (insert *Insert) insert_s3(proc *process.Process) (vm.CallResult, error) {
 	panic("bug")
 }
 
-func (insert *Insert) insert_table(proc *process.Process) (vm.CallResult, error) {
-
-	anal := proc.GetAnalyze(insert.GetIdx(), insert.GetParallelIdx(), insert.GetParallelMajor())
-
+func (insert *Insert) insert_table(proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
 	result, err := vm.ChildrenCall(insert.GetChildren(0), proc, anal)
-
 	if err != nil {
 		return result, err
 	}
+
 	if result.Batch == nil || result.Batch.IsEmpty() {
 		return result, nil
 	}

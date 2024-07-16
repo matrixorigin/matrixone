@@ -71,11 +71,11 @@ func resetAnalyzeInfo(a *AnalyzeInfo) {
 	a.TimeConsumedArrayMinor = a.TimeConsumedArrayMinor[:0]
 }
 
-func (a *analyze) Start() {
+func (a *operatorAnalyzer) Start() {
 	a.start = time.Now()
 }
 
-func (a *analyze) Stop() {
+func (a *operatorAnalyzer) Stop() {
 	if a.analInfo != nil {
 		atomic.AddInt64(&a.analInfo.WaitTimeConsumed, int64(a.wait/time.Nanosecond))
 		consumeTime := int64((time.Since(a.start) - a.wait - a.childrenCallDuration) / time.Nanosecond)
@@ -94,7 +94,7 @@ func (a *analyze) Stop() {
 	}
 }
 
-func (a *analyze) Alloc(size int64) {
+func (a *operatorAnalyzer) Alloc(size int64) {
 	if a.analInfo != nil {
 		atomic.AddInt64(&a.analInfo.MemorySize, size)
 	}
@@ -104,7 +104,7 @@ func (a *analyze) Alloc(size int64) {
 	}
 }
 
-func (a *analyze) InputBlock() {
+func (a *operatorAnalyzer) InputBlock() {
 	if a.analInfo != nil {
 		atomic.AddInt64(&a.analInfo.InputBlocks, 1)
 	}
@@ -114,7 +114,7 @@ func (a *analyze) InputBlock() {
 	}
 }
 
-func (a *analyze) Input(bat *batch.Batch, isFirst bool) {
+func (a *operatorAnalyzer) Input(bat *batch.Batch, isFirst bool) {
 	if a.analInfo != nil && bat != nil && isFirst {
 		atomic.AddInt64(&a.analInfo.InputSize, int64(bat.Size()))
 		atomic.AddInt64(&a.analInfo.InputRows, int64(bat.RowCount()))
@@ -126,7 +126,7 @@ func (a *analyze) Input(bat *batch.Batch, isFirst bool) {
 	}
 }
 
-func (a *analyze) Output(bat *batch.Batch, isLast bool) {
+func (a *operatorAnalyzer) Output(bat *batch.Batch, isLast bool) {
 	if a.analInfo != nil && bat != nil && isLast {
 		atomic.AddInt64(&a.analInfo.OutputSize, int64(bat.Size()))
 		atomic.AddInt64(&a.analInfo.OutputRows, int64(bat.RowCount()))
@@ -138,15 +138,15 @@ func (a *analyze) Output(bat *batch.Batch, isLast bool) {
 	}
 }
 
-func (a *analyze) WaitStop(start time.Time) {
+func (a *operatorAnalyzer) WaitStop(start time.Time) {
 	a.wait += time.Since(start)
 }
 
-func (a *analyze) ChildrenCallStop(start time.Time) {
+func (a *operatorAnalyzer) ChildrenCallStop(start time.Time) {
 	a.childrenCallDuration += time.Since(start)
 }
 
-func (a *analyze) DiskIO(bat *batch.Batch) {
+func (a *operatorAnalyzer) DiskIO(bat *batch.Batch) {
 	if a.analInfo != nil && bat != nil {
 		atomic.AddInt64(&a.analInfo.DiskIO, int64(bat.Size()))
 	}
@@ -156,7 +156,7 @@ func (a *analyze) DiskIO(bat *batch.Batch) {
 	}
 }
 
-func (a *analyze) S3IOByte(bat *batch.Batch) {
+func (a *operatorAnalyzer) S3IOByte(bat *batch.Batch) {
 	if a.analInfo != nil && bat != nil {
 		atomic.AddInt64(&a.analInfo.S3IOByte, int64(bat.Size()))
 	}
@@ -166,7 +166,7 @@ func (a *analyze) S3IOByte(bat *batch.Batch) {
 	}
 }
 
-func (a *analyze) S3IOInputCount(count int) {
+func (a *operatorAnalyzer) S3IOInputCount(count int) {
 	if a.analInfo != nil {
 		atomic.AddInt64(&a.analInfo.S3IOInputCount, int64(count))
 	}
@@ -177,7 +177,7 @@ func (a *analyze) S3IOInputCount(count int) {
 
 }
 
-func (a *analyze) S3IOOutputCount(count int) {
+func (a *operatorAnalyzer) S3IOOutputCount(count int) {
 	if a.analInfo != nil {
 		atomic.AddInt64(&a.analInfo.S3IOOutputCount, int64(count))
 	}
@@ -187,7 +187,7 @@ func (a *analyze) S3IOOutputCount(count int) {
 	}
 }
 
-func (a *analyze) Network(bat *batch.Batch) {
+func (a *operatorAnalyzer) Network(bat *batch.Batch) {
 	if a.analInfo != nil && bat != nil {
 		atomic.AddInt64(&a.analInfo.NetworkIO, int64(bat.Size()))
 	}
@@ -197,7 +197,7 @@ func (a *analyze) Network(bat *batch.Batch) {
 	}
 }
 
-func (a *analyze) AddScanTime(t time.Time) {
+func (a *operatorAnalyzer) AddScanTime(t time.Time) {
 	if a.analInfo != nil {
 		atomic.AddInt64(&a.analInfo.ScanTime, int64(time.Since(t)))
 	}
@@ -207,7 +207,7 @@ func (a *analyze) AddScanTime(t time.Time) {
 	}
 }
 
-func (a *analyze) AddInsertTime(t time.Time) {
+func (a *operatorAnalyzer) AddInsertTime(t time.Time) {
 	if a.analInfo != nil {
 		atomic.AddInt64(&a.analInfo.InsertTime, int64(time.Since(t)))
 	}
@@ -217,6 +217,6 @@ func (a *analyze) AddInsertTime(t time.Time) {
 	}
 }
 
-func (a *analyze) GetAnalyzeInfo() *AnalyzeInfo {
+func (a *operatorAnalyzer) GetAnalyzeInfo() *AnalyzeInfo {
 	return a.analInfo
 }

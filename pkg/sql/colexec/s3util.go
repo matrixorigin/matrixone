@@ -254,6 +254,7 @@ func (w *S3Writer) ResetBlockInfoBat(proc *process.Process) {
 //	}
 //}
 
+// Output Get the written S3 data's block metadata (block add and block attributes)
 func (w *S3Writer) Output(proc *process.Process, result *vm.CallResult) error {
 	bat := batch.NewWithSize(len(w.blockInfoBat.Attrs))
 	bat.SetAttributes(w.blockInfoBat.Attrs)

@@ -144,7 +144,11 @@ else
 		-> can be optimized to Test if the sinkScan data can guarantee uniqueness
 */
 func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, error) {
-	anal := proc.GetAnalyze(fuzzyFilter.GetIdx(), fuzzyFilter.GetParallelIdx(), fuzzyFilter.GetParallelMajor())
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
+
+	anal := proc.GetAnalyze2(fuzzyFilter.GetIdx(), fuzzyFilter.GetParallelIdx(), fuzzyFilter.GetParallelMajor(), fuzzyFilter.OpStats)
 	anal.Start()
 	defer anal.Stop()
 

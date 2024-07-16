@@ -58,7 +58,7 @@ func (preInsertUnique *PreInsertUnique) Call(proc *process.Process) (vm.CallResu
 	if err != nil {
 		return result, err
 	}
-	analy := proc.GetAnalyze(preInsertUnique.GetIdx(), preInsertUnique.GetParallelIdx(), preInsertUnique.GetParallelMajor())
+	analy := proc.GetAnalyze2(preInsertUnique.GetIdx(), preInsertUnique.GetParallelIdx(), preInsertUnique.GetParallelMajor(), preInsertUnique.OpStats)
 	analy.Start()
 	defer analy.Stop()
 

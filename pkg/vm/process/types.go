@@ -507,7 +507,7 @@ func (proc *Process) GetTxnOperator() client.TxnOperator {
 }
 
 // Operator Resource Analzyer
-type analyze struct {
+type operatorAnalyzer struct {
 	parallelMajor        bool
 	parallelIdx          int
 	start                time.Time
