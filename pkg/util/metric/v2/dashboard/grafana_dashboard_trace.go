@@ -45,6 +45,7 @@ func (c *DashboardCreator) initTraceDashboard() error {
 
 func (c *DashboardCreator) initTraceMoLoggerExportDataRow() dashboard.Option {
 
+	// export data bytes
 	panels := c.getMultiHistogram(
 		[]string{
 			c.getMetricWithFilter(`mo_trace_mologger_export_data_bytes_bucket`, `type="sql"`),
@@ -57,42 +58,49 @@ func (c *DashboardCreator) initTraceMoLoggerExportDataRow() dashboard.Option {
 		[]float64{0.50, 0.99},
 		[]float32{3, 3},
 		axis.Unit("bytes"),
-		axis.Min(0))
+		axis.Min(0),
+	)
 
+	// export files count
 	panels = append(panels, c.withMultiGraph(
-		"ETLMerge Success count",
+		"files",
+		3,
+		[]string{
+			`sum(delta(` + c.getMetricWithFilter("mo_trace_mologger_export_data_bytes_count", "") + `[$interval])) by (type)`,
+		},
+		[]string{
+			"{{type}}",
+		}),
+	)
+
+	// ETLMerge files count
+	panels = append(panels, c.withMultiGraph(
+		"ETLMerge files",
 		3,
 		[]string{
 			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", "") + `[$interval]))`,
 			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="success"`) + `[$interval]))`,
+			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="exist"`) + `[$interval]))`,
+			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="open_failed"`) + `[$interval]))`,
+			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="read_failed"`) + `[$interval]))`,
+			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="parse_failed"`) + `[$interval]))`,
+			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="write_failed"`) + `[$interval]))`,
+			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="delete_failed"`) + `[$interval]))`,
 		},
 		[]string{
 			"total",
 			"success",
+			"exist",
+			"open",
+			"read",
+			"parse",
+			"write",
+			"delete",
 		}),
-		c.withMultiGraph(
-			"ETLMerge Failed count",
-			3,
-			[]string{
-				`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="exist"`) + `[$interval]))`,
-				`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="open_failed"`) + `[$interval]))`,
-				`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="read_failed"`) + `[$interval]))`,
-				`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="parse_failed"`) + `[$interval]))`,
-				`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="write_failed"`) + `[$interval]))`,
-				`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="delete_failed"`) + `[$interval]))`,
-			},
-			[]string{
-				"exist",
-				"open",
-				"read",
-				"parse",
-				"write",
-				"delete",
-			}),
 	)
 
 	return dashboard.Row(
-		"MOLogger Export Bytes",
+		"MOLogger Export",
 		panels...,
 	)
 }
