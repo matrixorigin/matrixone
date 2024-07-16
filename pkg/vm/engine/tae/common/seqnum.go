@@ -36,7 +36,7 @@ type IdAllocator struct {
 	id atomic.Uint64
 }
 
-func NewIdAlloctor(from uint64) *IdAllocator {
+func NewIdAllocator(from uint64) *IdAllocator {
 	if from == 0 {
 		panic("should not be 0")
 	}

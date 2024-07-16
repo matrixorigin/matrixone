@@ -60,7 +60,7 @@ type BaseScheduler struct {
 func NewBaseScheduler(ctx context.Context, name string) *BaseScheduler {
 	scheduler := &BaseScheduler{
 		OpWorker:    *ops.NewOpWorker(ctx, name),
-		idAlloc:     common.NewIdAlloctor(1),
+		idAlloc:     common.NewIdAllocator(1),
 		Dispatchers: make(map[TaskType]Dispatcher),
 	}
 	scheduler.ExecFunc = scheduler.doDispatch

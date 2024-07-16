@@ -194,10 +194,10 @@ func (space *tableSpace) prepareApplyANode(node *anode) error {
 		appender.UnlockFreeze()
 		/// ------- Attach AppendNode Successfully -----
 
-		objID := appender.GetMeta().(*catalog.ObjectEntry).ID
+		objID := appender.GetMeta().(*catalog.ObjectEntry).ID()
 		col := space.table.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
 		defer col.Close()
-		blkID := objectio.NewBlockidWithObjectID(&objID, 0)
+		blkID := objectio.NewBlockidWithObjectID(objID, 0)
 		if err = objectio.ConstructRowidColumnTo(
 			col.GetDownstreamVector(),
 			blkID,
@@ -245,7 +245,7 @@ func (space *tableSpace) prepareApplyObjectStats(stats objectio.ObjectStats) (er
 			return true
 		}
 		entry := space.nobj.GetMeta().(*catalog.ObjectEntry)
-		return !entry.ID.Eq(*sid)
+		return !entry.ID().Eq(*sid)
 	}
 
 	if shouldCreateNewObj() {
@@ -479,7 +479,7 @@ func (space *tableSpace) GetColumnDataByIds(
 	obj *catalog.ObjectEntry,
 	colIdxes []int,
 	mp *mpool.MPool,
-) (view *containers.BlockView, err error) {
+) (view *containers.Batch, err error) {
 	n := space.nodes[0]
 	return n.GetColumnDataByIds(colIdxes, mp)
 }
@@ -489,7 +489,7 @@ func (space *tableSpace) GetColumnDataById(
 	obj *catalog.ObjectEntry,
 	colIdx int,
 	mp *mpool.MPool,
-) (view *containers.ColumnView, err error) {
+) (view *containers.Batch, err error) {
 	n := space.nodes[0]
 	return n.GetColumnDataById(ctx, colIdx, mp)
 }

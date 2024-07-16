@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(InnerJoin)
 
 const (
 	Build = iota
@@ -68,7 +68,7 @@ type container struct {
 	maxAllocSize int64
 }
 
-type Argument struct {
+type InnerJoin struct {
 	ctr        *container
 	Result     []colexec.ResultPos
 	Typs       []types.Type
@@ -82,43 +82,43 @@ type Argument struct {
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (innerJoin *InnerJoin) GetOperatorBase() *vm.OperatorBase {
+	return &innerJoin.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[InnerJoin](
+		func() *InnerJoin {
+			return &InnerJoin{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *InnerJoin) {
+			*a = InnerJoin{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[InnerJoin]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (innerJoin InnerJoin) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *InnerJoin {
+	return reuse.Alloc[InnerJoin](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (innerJoin *InnerJoin) Release() {
+	if innerJoin != nil {
+		reuse.Free[InnerJoin](innerJoin, nil)
 	}
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	arg.Free(proc, pipelineFailed, err)
+func (innerJoin *InnerJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	innerJoin.Free(proc, pipelineFailed, err)
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := arg.ctr
+func (innerJoin *InnerJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := innerJoin.ctr
 	if ctr != nil {
 		ctr.cleanBatch(proc)
 		ctr.cleanEvalVectors()
@@ -126,15 +126,15 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		ctr.cleanExprExecutor()
 		ctr.FreeAllReg()
 
-		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+		anal := proc.GetAnalyze(innerJoin.GetIdx(), innerJoin.GetParallelIdx(), innerJoin.GetParallelMajor())
 		anal.Alloc(ctr.maxAllocSize)
 
-		if arg.ctr.bat != nil {
-			proc.PutBatch(arg.ctr.bat)
-			arg.ctr.bat = nil
+		if innerJoin.ctr.bat != nil {
+			proc.PutBatch(innerJoin.ctr.bat)
+			innerJoin.ctr.bat = nil
 		}
-		arg.ctr.lastrow = 0
-		arg.ctr = nil
+		innerJoin.ctr.lastrow = 0
+		innerJoin.ctr = nil
 	}
 }
 

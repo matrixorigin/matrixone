@@ -67,10 +67,21 @@ func (t *TransDelsForBlks) GetDelsForBlk(blkid types.Blockid) *TransDels {
 	return t.dels[blkid]
 }
 
-func (t *TransDelsForBlks) SetDelsForBlk(blkid types.Blockid, dels *TransDels) {
+func (t *TransDelsForBlks) SetDelsForBlk(blkid types.Blockid, rowOffset int, endTS, ts types.TS) {
 	t.Lock()
 	defer t.Unlock()
-	t.dels[blkid] = dels
+	dels, ok := t.dels[blkid]
+	if !ok {
+		dels = NewTransDels(endTS)
+		t.dels[blkid] = dels
+	}
+	dels.Mapping[rowOffset] = ts
+}
+
+func (t *TransDelsForBlks) DeleteDelsForBlk(blkid types.Blockid) {
+	t.Lock()
+	defer t.Unlock()
+	delete(t.dels, blkid)
 }
 
 func (t *TransDelsForBlks) Prune(gap time.Duration) {

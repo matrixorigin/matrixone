@@ -122,7 +122,7 @@ const (
 //			atomic.AddUint64(&all, uint64(len(nodes)))
 //		}
 //	}
-//	idAlloc := common.NewIdAlloctor(1)
+//	idAlloc := common.NewIdAllocator(1)
 //	for {
 //		id := idAlloc.Alloc()
 //		if id > 10 {
@@ -622,11 +622,10 @@ func TestObject1(t *testing.T) {
 	assert.Nil(t, err)
 	objIt := rel.MakeObjectIt()
 	cnt := 0
-	for objIt.Valid() {
+	for objIt.Next() {
 		iobj := objIt.GetObject()
 		t.Log(iobj.String())
 		cnt++
-		objIt.Next()
 	}
 	assert.Equal(t, 1, cnt)
 
@@ -635,11 +634,10 @@ func TestObject1(t *testing.T) {
 
 	objIt = rel.MakeObjectIt()
 	cnt = 0
-	for objIt.Valid() {
+	for objIt.Next() {
 		iobj := objIt.GetObject()
 		t.Log(iobj.String())
 		cnt++
-		objIt.Next()
 	}
 	assert.Equal(t, 2, cnt)
 
@@ -648,11 +646,10 @@ func TestObject1(t *testing.T) {
 	rel, _ = db.GetRelationByName(schema.Name)
 	objIt = rel.MakeObjectIt()
 	cnt = 0
-	for objIt.Valid() {
+	for objIt.Next() {
 		iobj := objIt.GetObject()
 		t.Log(iobj.String())
 		cnt++
-		objIt.Next()
 	}
 	assert.Equal(t, 1, cnt)
 
@@ -661,11 +658,10 @@ func TestObject1(t *testing.T) {
 
 	objIt = rel.MakeObjectIt()
 	cnt = 0
-	for objIt.Valid() {
+	for objIt.Next() {
 		iobj := objIt.GetObject()
 		t.Log(iobj.String())
 		cnt++
-		objIt.Next()
 	}
 	assert.Equal(t, 1, cnt)
 }
@@ -692,10 +688,9 @@ func TestObject2(t *testing.T) {
 
 	it := rel.MakeObjectIt()
 	cnt := 0
-	for it.Valid() {
+	for it.Next() {
 		cnt++
 		// iobj := it.GetObject()
-		it.Next()
 	}
 	assert.Equal(t, objCnt, cnt)
 	// err := txn1.Commit()

@@ -41,42 +41,16 @@ type BaseTask struct {
 	impl     Task
 	id       uint64
 	taskType TaskType
+	exec     func(Task) error
 }
 
 func NewBaseTask(impl Task, taskType TaskType, ctx *Context) *BaseTask {
 	var id uint64
-	if ctx == nil || ctx.ID == 0 {
-		id = NextTaskId()
-	} else {
+	if ctx != nil && ctx.ID != 0 {
 		id = ctx.ID
-	}
-	task := &BaseTask{
-		id:       id,
-		taskType: taskType,
-		impl:     impl,
-	}
-	var doneCB ops.OpDoneCB
-	if ctx != nil {
-		if ctx.DoneCB == nil && !ctx.Waitable {
-			doneCB = task.onDone
-		}
 	} else {
-		doneCB = task.onDone
+		id = NextTaskId()
 	}
-	if impl == nil {
-		impl = task
-	}
-	task.Op = ops.Op{
-		Impl:   impl.(base.IOpInternal),
-		DoneCB: doneCB,
-	}
-	if doneCB == nil {
-		task.Op.ErrorC = make(chan error, 1)
-	}
-	return task
-}
-
-func NewBaseTaskWithGivenID(id uint64, impl Task, taskType TaskType, ctx *Context) *BaseTask {
 	task := &BaseTask{
 		id:       id,
 		taskType: taskType,
@@ -111,6 +85,13 @@ func (task *BaseTask) onDone(base.IOp) {
 func (task *BaseTask) Type() TaskType      { return task.taskType }
 func (task *BaseTask) Cancel() (err error) { panic("todo") }
 func (task *BaseTask) ID() uint64          { return task.id }
+func (task *BaseTask) Execute() (err error) {
+	if task.exec != nil {
+		return task.exec(task)
+	}
+	logutil.Debugf("Execute Task Type=%d, ID=%d", task.taskType, task.id)
+	return nil
+}
 func (task *BaseTask) Name() string {
 	return fmt.Sprintf("Task[ID=%d][T=%s]", task.id, TaskName(task.taskType))
 }

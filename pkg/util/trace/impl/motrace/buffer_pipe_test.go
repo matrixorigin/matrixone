@@ -97,7 +97,8 @@ func (w *dummyStringWriter) WriteRow(row *table.Row) error {
 func (w *dummyStringWriter) FlushAndClose() (int, error) {
 	return 0, nil
 }
-func (w *dummyStringWriter) GetContent() string { return "" }
+func (w *dummyStringWriter) GetContent() string    { return "" }
+func (w *dummyStringWriter) GetContentLength() int { return 0 }
 
 func (w *dummyStringWriter) Write(p []byte) (n int, err error) {
 	return fmt.Printf("dummyStringWriter: %s\n", p)

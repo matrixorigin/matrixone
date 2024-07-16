@@ -193,15 +193,15 @@ func checkSysExistsOrNotWithTxn(ctx context.Context, txn executor.TxnExecutor) (
 // GenSQLForInsertUpgradeAccountPrivilege generates SQL statements for inserting upgrade account permissions
 func GenSQLForInsertUpgradeAccountPrivilege() string {
 	entry := privilegeEntry{
-		privilegeId:       PrivilegeTypeUpgradeAccount,
-		privilegeLevel:    privilegeLevelStar,
-		objType:           objectTypeAccount,
-		objId:             objectIDAll,
-		withGrantOption:   false,
-		databaseName:      "",
-		tableName:         "",
-		privilegeEntryTyp: privilegeEntryTypeGeneral,
-		compound:          nil,
+		privilegeId:     PrivilegeTypeUpgradeAccount,
+		privilegeLevel:  privilegeLevelStar,
+		objType:         objectTypeAccount,
+		objId:           objectIDAll,
+		withGrantOption: false,
+		// databaseName:      "",
+		// tableName:         "",
+		// privilegeEntryTyp: privilegeEntryTypeGeneral,
+		// compound:          nil,
 	}
 	return fmt.Sprintf(initMoRolePrivFormat,
 		moAdminRoleID, moAdminRoleName,
@@ -214,15 +214,15 @@ func GenSQLForInsertUpgradeAccountPrivilege() string {
 // GenSQLForCheckUpgradeAccountPrivilegeExist generates an SQL statement to check for the existence of upgrade account permissions.
 func GenSQLForCheckUpgradeAccountPrivilegeExist() string {
 	entry := privilegeEntry{
-		privilegeId:       PrivilegeTypeUpgradeAccount,
-		privilegeLevel:    privilegeLevelStar,
-		objType:           objectTypeAccount,
-		objId:             objectIDAll,
-		withGrantOption:   false,
-		databaseName:      "",
-		tableName:         "",
-		privilegeEntryTyp: privilegeEntryTypeGeneral,
-		compound:          nil,
+		privilegeId:    PrivilegeTypeUpgradeAccount,
+		privilegeLevel: privilegeLevelStar,
+		objType:        objectTypeAccount,
+		objId:          objectIDAll,
+		// withGrantOption:   false,
+		// databaseName:      "",
+		// tableName:         "",
+		// privilegeEntryTyp: privilegeEntryTypeGeneral,
+		// compound:          nil,
 	}
 
 	sql := fmt.Sprintf("select * from mo_catalog.mo_role_privs where role_id = %d and obj_type = '%s' and obj_id = %d and privilege_id = %d and privilege_level = '%s'",

@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -270,9 +271,9 @@ type Config struct {
 
 	PythonUdfClient pythonservice.ClientConfig `toml:"python-udf-client"`
 
-	// LogtailUpdateStatsThreshold is the number that logtail entries received
-	// to trigger stats updating.
-	LogtailUpdateStatsThreshold int `toml:"logtail-update-stats-threshold"`
+	// LogtailUpdateWorkerFactor is the times of CPU number of this node
+	// to start update workers.
+	LogtailUpdateWorkerFactor int `toml:"logtail-update-worker-factor"`
 
 	// Whether to automatically upgrade when system startup
 	AutomaticUpgrade       bool `toml:"auto-upgrade"`
@@ -418,6 +419,10 @@ func (c *Config) Validate() error {
 		if c.ServiceHost == "" {
 			c.ServiceHost = defaultServiceHost
 		}
+	}
+
+	if c.LogtailUpdateWorkerFactor == 0 {
+		c.LogtailUpdateWorkerFactor = 4
 	}
 
 	if !metadata.ValidStateString(c.InitWorkState) {
@@ -656,6 +661,7 @@ type service struct {
 		// counter recording the total number of running pipelines,
 		// details are not recorded for simplicity as suggested by @nnsgmsone
 		counter atomic.Int64
+		client  cnclient.PipelineClient
 	}
 }
 

@@ -69,7 +69,7 @@ func TaskName(t TaskType) string {
 }
 
 func init() {
-	taskIdAllocator = common.NewIdAlloctor(1)
+	taskIdAllocator = common.NewIdAllocator(1)
 }
 
 type TxnTaskFactory = func(ctx *Context, txn txnif.AsyncTxn) (Task, error)

@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -36,7 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/mem"
-	"go.uber.org/zap"
+	"github.com/shirou/gopsutil/v3/process"
 )
 
 type activeTaskStats map[uint64]struct {
@@ -49,11 +50,13 @@ type activeTaskStats map[uint64]struct {
 type Executor struct {
 	rt                  *dbutils.Runtime
 	cnSched             CNMergeScheduler
-	memAvail            int
-	memSpare            int // 10% of total memory or container memory limit
+	memLimit            int
+	memUsing            int
+	transPageLimit      uint64
 	cpuPercent          float64
 	activeMergeBlkCount atomic.Int32
 	activeEstimateBytes atomic.Int64
+	roundMergeRows      uint64
 	taskConsume         struct {
 		sync.RWMutex
 		t map[*catalog.TableEntry]struct{}
@@ -68,36 +71,53 @@ func NewMergeExecutor(rt *dbutils.Runtime, sched CNMergeScheduler) *Executor {
 	}
 }
 
-func (e *Executor) setSpareMem(total uint64) {
+func (e *Executor) setMemLimit(total uint64) {
 	containerMLimit, err := memlimit.FromCgroup()
+	if containerMLimit > 0 && containerMLimit < total {
+		e.memLimit = int(float64(containerMLimit) * 0.9)
+	} else {
+		e.memLimit = int(float64(total) * 0.9)
+	}
+
+	if e.memLimit > 200*common.Const1GBytes {
+		e.transPageLimit = uint64(e.memLimit / 25 * 2) // 8%
+	} else if e.memLimit > 100*common.Const1GBytes {
+		e.transPageLimit = uint64(e.memLimit / 25 * 3) // 12%
+	} else if e.memLimit > 40*common.Const1GBytes {
+		e.transPageLimit = uint64(e.memLimit / 25 * 4) // 16%
+	} else {
+		e.transPageLimit = math.MaxUint64 // no limit
+	}
+
 	logutil.Info(
 		"MergeExecutorMemoryInfo",
-		common.AnyField("memory-limit", common.HumanReadableBytes(int(containerMLimit))),
+		common.AnyField("container-limit", common.HumanReadableBytes(int(containerMLimit))),
 		common.AnyField("host-memory", common.HumanReadableBytes(int(total))),
+		common.AnyField("process-limit", common.HumanReadableBytes(e.memLimit)),
+		common.AnyField("transfer-page-limit", common.HumanReadableBytes(int(e.transPageLimit))),
 		common.AnyField("error", err),
 	)
-	tenth := int(float64(total) * 0.1)
-	limitdiff := 0
-	if containerMLimit > 0 {
-		limitdiff = int(total - containerMLimit)
-	}
-	if limitdiff > tenth {
-		e.memSpare = limitdiff
-	} else {
-		e.memSpare = tenth
-	}
 }
 
+var proc *process.Process
+
 func (e *Executor) RefreshMemInfo() {
-	if stats, err := mem.VirtualMemory(); err == nil {
-		e.memAvail = int(stats.Available)
-		if e.memSpare == 0 {
-			e.setSpareMem(stats.Total)
+	if proc == nil {
+		proc, _ = process.NewProcess(int32(os.Getpid()))
+	} else if mem, err := proc.MemoryInfo(); err == nil {
+		e.memUsing = int(mem.RSS)
+	}
+
+	if e.memLimit == 0 {
+		if stats, err := mem.VirtualMemory(); err == nil {
+			e.setMemLimit(stats.Total)
 		}
 	}
+
 	if percents, err := cpu.Percent(0, false); err == nil {
 		e.cpuPercent = percents[0]
 	}
+	e.roundMergeRows = 0
 }
 
 func (e *Executor) PrintStats() {
@@ -108,9 +128,9 @@ func (e *Executor) PrintStats() {
 
 	logutil.Info(
 		"MergeExecutorMemoryStats",
-		common.AnyField("avail-mem", common.HumanReadableBytes(e.memAvail)),
-		common.AnyField("reserved-mem", common.HumanReadableBytes(e.memSpare)),
-		common.AnyField("inuse-mem", common.HumanReadableBytes(int(e.activeEstimateBytes.Load()))),
+		common.AnyField("process-limit", common.HumanReadableBytes(e.memLimit)),
+		common.AnyField("process-mem", common.HumanReadableBytes(e.memUsing)),
+		common.AnyField("inuse-mem", common.HumanReadableBytes(int(atomic.LoadInt64(&e.activeEstimateBytes)))),
 		common.AnyField("inuse-cnt", cnt),
 	)
 }
@@ -153,6 +173,9 @@ func (e *Executor) tableMerging(tblEntry *catalog.TableEntry) bool {
 }
 
 func (e *Executor) ExecuteSingleObjMerge(entry *catalog.TableEntry, mobjs []*catalog.ObjectEntry) {
+	if e.roundMergeRows*36 /*28 * 1.3 */ > e.transPageLimit/8 {
+		return
+	}
 	tableName := fmt.Sprintf("%v-%v", entry.ID, entry.GetLastestSchema().Name)
 
 	if ActiveCNObj.CheckOverlapOnCNActive(mobjs) {
@@ -249,6 +272,9 @@ func (e *Executor) ExecuteMultiObjMerge(entry *catalog.TableEntry, mobjs []*cata
 			return
 		}
 		e.addActiveTask(task.ID(), entry, blkCnt, esize)
+		for _, obj := range mobjs {
+			e.roundMergeRows += uint64(obj.GetRemainingRows())
+		}
 		logMergeTask(tableName, task.ID(), mobjs, blkCnt, osize, esize)
 	}
 
@@ -257,11 +283,15 @@ func (e *Executor) ExecuteMultiObjMerge(entry *catalog.TableEntry, mobjs []*cata
 
 func (e *Executor) MemAvailBytes() int {
 	merging := int(e.activeEstimateBytes.Load())
-	avail := e.memAvail - e.memSpare - merging
+	avail := e.memLimit - e.memUsing - merging
 	if avail < 0 {
 		avail = 0
 	}
 	return avail
+}
+
+func (e *Executor) TransferPageSizeLimit() uint64 {
+	return e.transPageLimit
 }
 
 func (e *Executor) CPUPercent() int64 {
@@ -297,7 +327,7 @@ func logMergeTask(name string, taskId uint64, merges []*catalog.ObjectEntry, blk
 		r := obj.GetRemainingRows()
 		size := obj.GetOriginSize()
 		rows += r
-		infoBuf.WriteString(fmt.Sprintf(" %d(%s)(%s)", r, common.ShortObjId(obj.ID), common.HumanReadableBytes(size)))
+		infoBuf.WriteString(fmt.Sprintf(" %d(%s)(%s)", r, common.ShortObjId(*obj.ID()), common.HumanReadableBytes(size)))
 	}
 	platform := fmt.Sprintf("t%d", taskId)
 	if taskId == math.MaxUint64 {

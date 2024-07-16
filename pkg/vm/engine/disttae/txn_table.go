@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -115,8 +116,13 @@ func (tbl *txnTable) stats(ctx context.Context) (*pb.StatsInfo, error) {
 			if err != nil {
 				return nil, err
 			}
-			partitionsTableDef = append(partitionsTableDef, partitionTable.(*txnTable).tableDef)
-			ps, err := partitionTable.(*txnTable).getPartitionState(ctx)
+			ptbl, ok := partitionTable.(*txnTable)
+			if !ok {
+				delegate := partitionTable.(*txnTableDelegate)
+				ptbl = delegate.origin
+			}
+			partitionsTableDef = append(partitionsTableDef, ptbl.tableDef)
+			ps, err := ptbl.getPartitionState(ctx)
 			if err != nil {
 				return nil, err
 			}
@@ -141,7 +147,7 @@ func (tbl *txnTable) stats(ctx context.Context) (*pb.StatsInfo, error) {
 		approxObjectNum,
 		stats,
 	)
-	if err := UpdateStats(ctx, req); err != nil {
+	if err := UpdateStats(ctx, req, nil); err != nil {
 		logutil.Errorf("failed to init stats info for table %d", tbl.tableId)
 		return nil, err
 	}
@@ -257,18 +263,31 @@ func ForeachVisibleDataObject(
 	state *logtailreplay.PartitionState,
 	ts types.TS,
 	fn func(obj logtailreplay.ObjectEntry) error,
+	executor ConcurrentExecutor,
 ) (err error) {
-	iter, err := state.NewObjectsIter(ts)
+	iter, err := state.NewObjectsIter(ts, true)
 	if err != nil {
 		return err
 	}
+	defer iter.Close()
+	var wg sync.WaitGroup
 	for iter.Next() {
 		entry := iter.Entry()
-		if err = fn(entry); err != nil {
-			break
+		if executor != nil {
+			wg.Add(1)
+			executor.AppendTask(func() error {
+				defer wg.Done()
+				return fn(entry)
+			})
+		} else {
+			if err = fn(entry); err != nil {
+				break
+			}
 		}
 	}
-	iter.Close()
+	if executor != nil {
+		wg.Wait()
+	}
 	return
 }
 
@@ -306,12 +325,15 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 	if err != nil {
 		return nil, nil, err
 	}
+	var updateMu sync.Mutex
 	onObjFn := func(obj logtailreplay.ObjectEntry) error {
 		var err error
 		location := obj.Location()
 		if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 			return err
 		}
+		updateMu.Lock()
+		defer updateMu.Unlock()
 		meta = objMeta.MustDataMeta()
 		if inited {
 			for idx := range zms {
@@ -336,7 +358,9 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 	if err = ForeachVisibleDataObject(
 		part,
 		types.TimestampToTS(tbl.db.op.SnapshotTS()),
-		onObjFn); err != nil {
+		onObjFn,
+		nil,
+	); err != nil {
 		return nil, nil, err
 	}
 
@@ -386,6 +410,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 		return nil, err
 	}
 	infoList := make([]*plan.MetadataScanInfo, 0, state.ApproxObjectsNum())
+	var updateMu sync.Mutex
 	onObjFn := func(obj logtailreplay.ObjectEntry) error {
 		createTs, err := obj.CreateTime.Marshal()
 		if err != nil {
@@ -420,6 +445,8 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 		if err != nil {
 			return err
 		}
+		updateMu.Lock()
+		defer updateMu.Unlock()
 		meta := objMeta.MustDataMeta()
 		rowCnt := int64(meta.BlockHeader().Rows())
 
@@ -442,7 +469,12 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 		return nil
 	}
 
-	if err = ForeachVisibleDataObject(state, types.TimestampToTS(tbl.db.op.SnapshotTS()), onObjFn); err != nil {
+	if err = ForeachVisibleDataObject(
+		state,
+		types.TimestampToTS(tbl.db.op.SnapshotTS()),
+		onObjFn,
+		nil,
+	); err != nil {
 		return nil, err
 	}
 
@@ -2021,30 +2053,33 @@ func (tbl *txnTable) getPartitionState(
 ) (*logtailreplay.PartitionState, error) {
 	if !tbl.db.op.IsSnapOp() {
 		if tbl._partState.Load() == nil {
-			if err := tbl.updateLogtail(ctx); err != nil {
+			ps, err := tbl.tryToSubscribe(ctx)
+			if err != nil {
 				return nil, err
 			}
-			tbl._partState.Store(tbl.getTxn().engine.
-				getOrCreateLatestPart(tbl.db.databaseId, tbl.tableId).Snapshot())
+			if ps == nil {
+				ps = tbl.getTxn().engine.GetOrCreateLatestPart(tbl.db.databaseId, tbl.tableId).Snapshot()
+			}
+			tbl._partState.Store(ps)
 		}
 		return tbl._partState.Load(), nil
 	}
 
 	// for snapshot txnOp
 	if tbl._partState.Load() == nil {
-		p, err := tbl.getTxn().engine.getOrCreateSnapPart(
+		ps, err := tbl.getTxn().engine.getOrCreateSnapPart(
 			ctx,
 			tbl,
 			types.TimestampToTS(tbl.db.op.Txn().SnapshotTS))
 		if err != nil {
 			return nil, err
 		}
-		tbl._partState.Store(p.Snapshot())
+		tbl._partState.Store(ps)
 	}
 	return tbl._partState.Load(), nil
 }
 
-func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
+func (tbl *txnTable) tryToSubscribe(ctx context.Context) (ps *logtailreplay.PartitionState, err error) {
 	defer func() {
 		if err == nil {
 			tbl.getTxn().engine.globalStats.notifyLogtailUpdate(tbl.tableId)
@@ -2054,51 +2089,14 @@ func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
 	// if the table is created in this txn, skip
 	accountId, err := defines.GetAccountId(ctx)
 	if err != nil {
-		return err
+		return
 	}
 	if _, created := tbl.getTxn().createMap.Load(
 		genTableKey(accountId, tbl.tableName, tbl.db.databaseId)); created {
 		return
 	}
 
-	tableId := tbl.tableId
-	/*
-		if the table is truncated once or more than once,
-		it is suitable to use the old table id to sync logtail.
-
-		CORNER CASE 1:
-		create table t1(a int);
-		begin;
-		truncate t1; //table id changed. there is no new table id in DN.
-		select count(*) from t1; // sync logtail for the new id failed.
-
-		CORNER CASE 2:
-		create table t1(a int);
-		begin;
-		select count(*) from t1; // sync logtail for the old succeeded.
-		truncate t1; //table id changed. there is no new table id in DN.
-		select count(*) from t1; // not sync logtail this time.
-
-		CORNER CASE 3:
-		create table t1(a int);
-		begin;
-		truncate t1; //table id changed. there is no new table id in DN.
-		truncate t1; //table id changed. there is no new table id in DN.
-		select count(*) from t1; // sync logtail for the new id failed.
-	*/
-	if tbl.oldTableId != 0 {
-		tableId = tbl.oldTableId
-	}
-
-	if err = tbl.getTxn().engine.UpdateOfPush(ctx, tbl.db.databaseId, tableId,
-		tbl.db.op.SnapshotTS()); err != nil {
-		return
-	}
-	if _, err = tbl.getTxn().engine.lazyLoadLatestCkp(ctx, tbl); err != nil {
-		return
-	}
-
-	return nil
+	return tbl.getTxn().engine.PushClient().toSubscribeTable(ctx, tbl)
 }
 
 func (tbl *txnTable) PKPersistedBetween(
@@ -2282,7 +2280,7 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(
 		return false,
 			moerr.NewInternalErrorNoCtx("primary key modification is not allowed in snapshot transaction")
 	}
-	part, err := tbl.getTxn().engine.lazyLoadLatestCkp(ctx, tbl)
+	part, err := tbl.getTxn().engine.LazyLoadLatestCkp(ctx, tbl)
 	if err != nil {
 		return false, err
 	}
@@ -2535,7 +2533,7 @@ func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.Objec
 		}
 	} else {
 		objInfos = make([]logtailreplay.ObjectInfo, 0, len(objstats))
-		iter, err := state.NewObjectsIter(snapshot)
+		iter, err := state.NewObjectsIter(snapshot, true)
 		if err != nil {
 			logutil.Errorf("txn: %s, error: %v", tbl.db.op.Txn().DebugString(), err)
 			return nil, err
