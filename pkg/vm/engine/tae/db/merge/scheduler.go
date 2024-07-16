@@ -28,7 +28,7 @@ type Scheduler struct {
 	executor *Executor
 
 	run      int
-	policies [2]policy
+	policies [1]policy
 
 	tableRowCnt int
 	tableRowDel int
@@ -37,8 +37,8 @@ type Scheduler struct {
 func NewScheduler(rt *dbutils.Runtime, scheduler CNMergeScheduler) *Scheduler {
 	return &Scheduler{
 		executor: NewMergeExecutor(rt, scheduler),
-		policies: [2]policy{
-			newSingleObjPolicy(nil),
+		policies: [1]policy{
+			//newSingleObjPolicy(nil),
 			newMultiObjPolicy(nil),
 		},
 	}
@@ -124,11 +124,11 @@ func (m *Scheduler) OnPostTable(tableEntry *catalog.TableEntry) (err error) {
 		return
 	}
 
-	if m.run == 0 {
-		m.executor.ExecuteSingleObjMerge(tableEntry, mobjs)
-	} else {
-		m.executor.ExecuteMultiObjMerge(tableEntry, mobjs, kind)
-	}
+	//if m.run == 0 {
+	//	m.executor.ExecuteSingleObjMerge(tableEntry, mobjs)
+	//} else {
+	m.executor.ExecuteMultiObjMerge(tableEntry, mobjs, kind)
+	//}
 	return
 }
 
