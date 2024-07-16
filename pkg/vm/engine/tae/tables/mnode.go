@@ -536,7 +536,7 @@ func (node *memoryNode) resolveInMemoryColumnDatas(
 	colIdxes []int,
 	skipDeletes bool,
 	mp *mpool.MPool,
-) (view *containers.BlockView, err error) {
+) (view *containers.Batch, err error) {
 	node.object.RLock()
 	defer node.object.RUnlock()
 	maxRow, visible, deSels, err := node.appendMVCC.GetVisibleRowLocked(ctx, txn)
@@ -548,23 +548,23 @@ func (node *memoryNode) resolveInMemoryColumnDatas(
 	if err != nil {
 		return
 	}
-	view = containers.NewBlockView()
+	view = containers.NewBatch()
 	for i, colIdx := range colIdxes {
-		view.SetData(colIdx, data.Vecs[i])
+		view.AddVector(readSchema.ColDefs[colIdx].Name, data.Vecs[i])
 	}
 	if skipDeletes {
 		return
 	}
 
-	err = node.object.fillInMemoryDeletesLocked(txn, 0, view.BaseView, node.object.RWMutex)
+	err = node.object.fillInMemoryDeletesLocked(txn, 0, &view.Deletes, node.object.RWMutex)
 	if err != nil {
 		return
 	}
 	if !deSels.IsEmpty() {
-		if view.DeleteMask != nil {
-			view.DeleteMask.Or(deSels)
+		if view.Deletes != nil {
+			view.Deletes.Or(deSels)
 		} else {
-			view.DeleteMask = deSels
+			view.Deletes = deSels
 		}
 	}
 	return
@@ -577,7 +577,7 @@ func (node *memoryNode) resolveInMemoryColumnData(
 	col int,
 	skipDeletes bool,
 	mp *mpool.MPool,
-) (view *containers.ColumnView, err error) {
+) (view *containers.Batch, err error) {
 	node.object.RLock()
 	defer node.object.RUnlock()
 	maxRow, visible, deSels, err := node.appendMVCC.GetVisibleRowLocked(context.TODO(), txn)
@@ -585,7 +585,7 @@ func (node *memoryNode) resolveInMemoryColumnData(
 		return
 	}
 
-	view = containers.NewColumnView(col)
+	view = containers.NewBatch()
 	var data containers.Vector
 	if data, err = node.GetColumnDataWindow(
 		readSchema,
@@ -596,20 +596,20 @@ func (node *memoryNode) resolveInMemoryColumnData(
 	); err != nil {
 		return
 	}
-	view.SetData(data)
+	view.AddVector(readSchema.ColDefs[col].Name, data)
 	if skipDeletes {
 		return
 	}
 
-	err = node.object.fillInMemoryDeletesLocked(txn, node.offset, view.BaseView, node.object.RWMutex)
+	err = node.object.fillInMemoryDeletesLocked(txn, node.offset, &view.Deletes, node.object.RWMutex)
 	if err != nil {
 		return
 	}
 	if deSels != nil && !deSels.IsEmpty() {
-		if view.DeleteMask != nil {
-			view.DeleteMask.Or(deSels)
+		if view.Deletes != nil {
+			view.Deletes.Or(deSels)
 		} else {
-			view.DeleteMask = deSels
+			view.Deletes = deSels
 		}
 	}
 
@@ -645,7 +645,10 @@ func (node *memoryNode) getInMemoryValue(
 		return
 	}
 	defer view.Close()
-	v, isNull = view.GetValue(row)
+	isNull = view.Vecs[0].IsNull(row)
+	if !isNull {
+		v = view.Vecs[0].Get(row)
+	}
 	return
 }
 
