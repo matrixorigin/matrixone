@@ -17,7 +17,6 @@ package lockop
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -498,27 +497,27 @@ func doLock(
 	}
 
 	if len(result.ConflictKey) > 0 {
-		n := hex.EncodedLen(len(result.ConflictKey))
+		// n := hex.EncodedLen(len(result.ConflictKey))
 		// for debug
-		if n < 20000 {
-			trace.GetService().AddTxnActionInfo(
-				txnOp,
-				client.LockEvent,
-				seq,
-				tableID,
-				func(writer trace.Writer) {
-					writer.WriteHex(result.ConflictKey)
-					writer.WriteString(":")
-					writer.WriteHex(result.ConflictTxn)
+		// if n < 20000 {
+		trace.GetService().AddTxnActionInfo(
+			txnOp,
+			client.LockEvent,
+			seq,
+			tableID,
+			func(writer trace.Writer) {
+				writer.WriteHex(result.ConflictKey)
+				writer.WriteString(":")
+				writer.WriteHex(result.ConflictTxn)
+				writer.WriteString("/")
+				writer.WriteUint(uint64(result.Waiters))
+				if len(result.PrevWaiter) > 0 {
 					writer.WriteString("/")
-					writer.WriteUint(uint64(result.Waiters))
-					if len(result.PrevWaiter) > 0 {
-						writer.WriteString("/")
-						writer.WriteHex(result.PrevWaiter)
-					}
-				},
-			)
-		}
+					writer.WriteHex(result.PrevWaiter)
+				}
+			},
+		)
+		// }
 	}
 
 	trace.GetService().AddTxnDurationAction(
