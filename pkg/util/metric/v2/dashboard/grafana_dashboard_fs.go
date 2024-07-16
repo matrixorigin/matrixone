@@ -31,6 +31,7 @@ func (c *DashboardCreator) initFileServiceDashboard() error {
 		"FileService Metrics",
 		c.withRowOptions(
 			c.initFSOverviewRow(),
+			c.initFSObjectStorageRow(),
 			c.initFSIOMergerDurationRow(),
 			c.initFSReadWriteDurationRow(),
 			c.initFSMallocRow(),
@@ -53,27 +54,17 @@ func (c *DashboardCreator) initFSOverviewRow() dashboard.Option {
 			6,
 			[]string{
 				`sum(rate(` + c.getMetricWithFilter("mo_fs_read_total", `type="s3"`) + `[$interval]))`,
+				`sum(rate(` + c.getMetricWithFilter("mo_fs_read_total", `type="local"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_fs_read_total", `type="hit-mem"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_fs_read_total", `type="hit-disk"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_fs_read_total", `type="hit-remote"`) + `[$interval]))`,
 			},
 			[]string{
 				"s3",
+				"local",
 				"hit-mem",
 				"hit-disk",
 				"hit-remote",
-			}),
-
-		c.withMultiGraph(
-			"S3 Write requests",
-			6,
-			[]string{
-				`sum(rate(` + c.getMetricWithFilter("mo_fs_write_total", `type="s3"`) + `[$interval]))`,
-				`sum(rate(` + c.getMetricWithFilter("mo_fs_write_total", `type="local"`) + `[$interval]))`,
-			},
-			[]string{
-				"s3",
-				"local",
 			}),
 	)
 }
@@ -225,5 +216,53 @@ func (c *DashboardCreator) initFSMallocRow() dashboard.Option {
 				"bytes",
 				"memory_cache",
 			}),
+	)
+}
+
+func (c *DashboardCreator) initFSObjectStorageRow() dashboard.Option {
+	return dashboard.Row(
+		"Object Storage",
+
+		c.withMultiGraph(
+			"s3 operations",
+			3,
+			[]string{
+				c.getMetricWithFilter("mo_fs_object_storage_operations", `name="s3",op="read"`),
+				c.getMetricWithFilter("mo_fs_object_storage_operations", `name="s3",op="write"`),
+				c.getMetricWithFilter("mo_fs_object_storage_operations", `name="s3",op="delete"`),
+				c.getMetricWithFilter("mo_fs_object_storage_operations", `name="s3",op="list"`),
+				c.getMetricWithFilter("mo_fs_object_storage_operations", `name="s3",op="exists"`),
+				c.getMetricWithFilter("mo_fs_object_storage_operations", `name="s3",op="stat"`),
+			},
+			[]string{
+				"read",
+				"write",
+				"delete",
+				"list",
+				"exists",
+				"stat",
+			},
+		),
+
+		c.withMultiGraph(
+			"s3 operations rate",
+			3,
+			[]string{
+				`rate(` + c.getMetricWithFilter("mo_fs_object_storage_operations", `name="s3",op="read"`) + `[$interval])`,
+				`rate(` + c.getMetricWithFilter("mo_fs_object_storage_operations", `name="s3",op="write"`) + `[$interval])`,
+				`rate(` + c.getMetricWithFilter("mo_fs_object_storage_operations", `name="s3",op="delete"`) + `[$interval])`,
+				`rate(` + c.getMetricWithFilter("mo_fs_object_storage_operations", `name="s3",op="list"`) + `[$interval])`,
+				`rate(` + c.getMetricWithFilter("mo_fs_object_storage_operations", `name="s3",op="exists"`) + `[$interval])`,
+				`rate(` + c.getMetricWithFilter("mo_fs_object_storage_operations", `name="s3",op="stat"`) + `[$interval])`,
+			},
+			[]string{
+				"read",
+				"write",
+				"delete",
+				"list",
+				"exists",
+				"stat",
+			},
+		),
 	)
 }

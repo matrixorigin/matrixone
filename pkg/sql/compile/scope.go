@@ -359,7 +359,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 
 // RemoteRun send the scope to a remote node for execution.
 func (s *Scope) RemoteRun(c *Compile) error {
-	if !s.canRemote(c, true) || !cnclient.IsCNClientReady() {
+	if !s.canRemote(c, true) {
 		return s.ParallelRun(c)
 	}
 
@@ -1131,11 +1131,7 @@ func receiveMsgAndForward(proc *process.Process, sender *messageSenderOnClient, 
 			return nil
 		}
 
-		if forwardCh == nil {
-			// used for delete.
-			// I don't know what is that.
-			proc.SetInputBatch(bat)
-		} else {
+		if forwardCh != nil {
 			msg := &process.RegisterMessage{Batch: bat}
 			select {
 			case <-proc.Ctx.Done():

@@ -36,7 +36,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
-	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -292,9 +291,6 @@ func startCNService(
 			}
 		}
 		if err := s.Close(); err != nil {
-			panic(err)
-		}
-		if err := cnclient.CloseCNClient(); err != nil {
 			panic(err)
 		}
 	})
