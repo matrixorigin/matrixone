@@ -1060,6 +1060,11 @@ func (blk *baseObject) CollectAppendInRange(
 ) (*containers.BatchWithVersion, error) {
 	return nil, nil
 }
+func (blk *baseObject) CollectAppendInRangeWithBlockID(
+	blkID uint16, start, end types.TS, withAborted bool, mp *mpool.MPool,
+) (*containers.BatchWithVersion, error) {
+	return nil, nil
+}
 
 func (blk *baseObject) UpdateDeltaLoc(txn txnif.TxnReader, blkID uint16, deltaLoc objectio.Location) (bool, txnif.TxnEntry, error) {
 	blk.Lock()

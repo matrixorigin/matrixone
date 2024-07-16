@@ -809,6 +809,11 @@ func (node *objectMemoryNode) CollectAppendInRange(
 	}
 	return
 }
+func (node *objectMemoryNode) CollectAppendInRangeWithBlockID(
+	blkOffset uint16, start, end types.TS, withAborted bool, mp *mpool.MPool,
+) (batWithVer *containers.BatchWithVersion, err error) {
+	return node.getMemoryNode(blkOffset).CollectAppendInRange(start, end, withAborted, mp)
+}
 func (node *objectMemoryNode) EstimateMemSize() int {
 	size := 0
 	for _, blkNode := range node.blkMemoryNodes {
@@ -832,7 +837,7 @@ func (node *objectMemoryNode) resolveInMemoryColumnData(
 	col int,
 	skipDeletes bool,
 	mp *mpool.MPool,
-) (view *containers.ColumnView, err error) {
+) (view *containers.Batch, err error) {
 	return node.getMemoryNode(blkID).resolveInMemoryColumnData(txn, readSchema, col, skipDeletes, mp)
 }
 func (node *objectMemoryNode) allRowsCommittedBefore(ts types.TS) bool {
@@ -846,7 +851,7 @@ func (node *objectMemoryNode) resolveInMemoryColumnDatas(
 	colIdxes []int,
 	skipDeletes bool,
 	mp *mpool.MPool,
-) (view *containers.BlockView, err error) {
+) (view *containers.Batch, err error) {
 	return node.getMemoryNode(blkID).resolveInMemoryColumnDatas(ctx, txn, readSchema, colIdxes, skipDeletes, mp)
 }
 func (node *objectMemoryNode) getwrteSchema() *catalog.Schema {

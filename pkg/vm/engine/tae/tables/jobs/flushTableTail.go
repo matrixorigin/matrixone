@@ -78,6 +78,8 @@ type flushTableTailTask struct {
 	aObjMetas         []*catalog.ObjectEntry
 	delSrcMetas       []*catalog.ObjectEntry
 	aObjHandles       []handle.Object
+	aObjBlockCounts   []uint16
+	aObjBlockOffsets  []uint16
 	delSrcHandles     []handle.Object
 	createdObjHandles handle.Object
 
@@ -161,6 +163,7 @@ func NewFlushTableTailTask(
 	task.BaseTask = tasks.NewBaseTask(task, tasks.DataCompactionTask, ctx)
 
 	objSeen := make(map[*catalog.ObjectEntry]struct{})
+	offset := uint16(0)
 	for _, obj := range objs {
 		task.scopes = append(task.scopes, *obj.AsCommonID())
 		var hdl handle.Object
@@ -175,6 +178,10 @@ func NewFlushTableTailTask(
 		if hdl.IsAppendable() && !obj.HasDropCommitted() {
 			task.aObjMetas = append(task.aObjMetas, obj)
 			task.aObjHandles = append(task.aObjHandles, hdl)
+			blkCount := obj.BlkCnt()
+			task.aObjBlockCounts = append(task.aObjBlockCounts, uint16(blkCount))
+			task.aObjBlockOffsets = append(task.aObjBlockCounts, offset)
+			offset += uint16(blkCount)
 			if obj.GetObjectData().CheckFlushTaskRetry(txn.GetStartTS()) {
 				logutil.Info(
 					"[FLUSH-NEED-RETRY]",
@@ -191,7 +198,7 @@ func NewFlushTableTailTask(
 
 	task.doTransfer = !strings.Contains(task.schema.Comment, pkgcatalog.MO_COMMENT_NO_DEL_HINT)
 	if task.doTransfer {
-		task.transMappings = mergesort.NewBlkTransferBooking(len(task.aObjHandles))
+		task.transMappings = mergesort.NewBlkTransferBooking(int(task.aObjBlockOffsets[len(task.aObjBlockOffsets)-1]))
 	}
 
 	tblEntry := rel.GetMeta().(*catalog.TableEntry)
@@ -371,6 +378,7 @@ func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 		task.delSrcMetas,
 		task.aObjHandles,
 		task.delSrcHandles,
+		task.aObjBlockOffsets,
 		task.createdObjHandles,
 		task.createdDeletesObjectName,
 		task.createdMergedObjectName,
@@ -425,7 +433,7 @@ func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 
 // prepareAObjSortedData read the data from appendable blocks, sort them if sort key exists
 func (task *flushTableTailTask) prepareAObjSortedData(
-	ctx context.Context, objIdx int, idxs []int, sortKeyPos int,
+	ctx context.Context, objIdx int, blkIdx uint16, idxs []int, sortKeyPos int,
 ) (bat *containers.Batch, empty bool, err error) {
 	if len(idxs) <= 0 {
 		logutil.Info(
@@ -436,7 +444,7 @@ func (task *flushTableTailTask) prepareAObjSortedData(
 	}
 	obj := task.aObjHandles[objIdx]
 
-	loadedBat, err := obj.GetColumnDataByIds(ctx, 0, idxs, common.MergeAllocator)
+	loadedBat, err := obj.GetColumnDataByIds(ctx, blkIdx, idxs, common.MergeAllocator)
 	if err != nil {
 		return
 	}
@@ -465,9 +473,12 @@ func (task *flushTableTailTask) prepareAObjSortedData(
 		}
 	}
 	if task.doTransfer {
-		mergesort.AddSortPhaseMapping(task.transMappings, objIdx, totalRowCnt, sortMapping)
+		mergesort.AddSortPhaseMapping(task.transMappings, task.getBlockOffset(objIdx, blkIdx), totalRowCnt, sortMapping)
 	}
 	return
+}
+func (task *flushTableTailTask) getBlockOffset(objIdx int, blkIdx uint16) int {
+	return int(task.aObjBlockOffsets[objIdx] + blkIdx)
 }
 
 // mergeAObjs merge the data from appendable blocks, and write the merged data to new block,
@@ -511,14 +522,16 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context) (err error) {
 	}
 
 	for i := range task.aObjHandles {
-		if bat, empty, err := task.prepareAObjSortedData(
-			ctx, i, readColIdxs, sortKeyPos,
-		); err != nil {
-			return err
-		} else if empty {
-			continue
-		} else {
-			readedBats = append(readedBats, bat)
+		for blkIdx := uint16(0); blkIdx < task.aObjBlockCounts[i]; blkIdx++ {
+			if bat, empty, err := task.prepareAObjSortedData(
+				ctx, i, blkIdx, readColIdxs, sortKeyPos,
+			); err != nil {
+				return err
+			} else if empty {
+				continue
+			} else {
+				readedBats = append(readedBats, bat)
+			}
 		}
 	}
 
@@ -635,32 +648,37 @@ func (task *flushTableTailTask) flushAObjsForSnapshot(ctx context.Context) (subt
 	subtasks = make([]*flushObjTask, len(task.aObjMetas))
 	// fire flush task
 	for i, obj := range task.aObjMetas {
-		var data, deletes *containers.Batch
+		var deletes *containers.Batch
 		var dataVer *containers.BatchWithVersion
+		data := make([]*containers.Batch, 0)
 		objData := obj.GetObjectData()
-		if dataVer, err = objData.CollectAppendInRange(
-			types.TS{}, task.txn.GetStartTS(), true, common.MergeAllocator,
-		); err != nil {
-			return
-		}
-		data = dataVer.Batch
-		if data == nil || data.Length() == 0 {
-			// the new appendable block might has no data when we flush the table, just skip it
-			// In previous impl, runner will only pass non-empty obj to NewCompactBlackTask
-			continue
+		for j := 0; j < obj.BlockCnt(); j++ {
+			if dataVer, err = objData.CollectAppendInRangeWithBlockID(
+				uint16(j), types.TS{}, task.txn.GetStartTS(), true, common.MergeAllocator,
+			); err != nil {
+				return
+			}
+			if dataVer.Batch == nil || dataVer.Batch.Length() == 0 {
+				panic("logic error")
+			}
+			data = append(data, dataVer.Batch)
 		}
 		// do not close data, leave that to wait phase
 		if deletes, _, err = objData.CollectDeleteInRange(
 			ctx, types.TS{}, task.txn.GetStartTS(), true, common.MergeAllocator,
 		); err != nil {
-			data.Close()
+			for _, batch := range data {
+				batch.Close()
+			}
 			return
 		}
 		if deletes != nil {
 			// make sure every batch in deltaloc object is sorted by rowid
 			_, err = mergesort.SortBlockColumns(deletes.Vecs, 0, task.rt.VectorPool.Transient)
 			if err != nil {
-				data.Close()
+				for _, batch := range data {
+					batch.Close()
+				}
 				deletes.Close()
 				return
 			}
@@ -912,7 +930,9 @@ func releaseFlushObjTasks(ftask *flushTableTailTask, subtasks []*flushObjTask, e
 	}
 	for _, subtask := range subtasks {
 		if subtask != nil && subtask.data != nil {
-			subtask.data.Close()
+			for _, bat := range subtask.data {
+				bat.Close()
+			}
 		}
 		if subtask != nil && subtask.delta != nil {
 			subtask.delta.Close()

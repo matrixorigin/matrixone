@@ -227,3 +227,9 @@ func (node *persistedNode) CollectAppendInRange(
 	// logtail should have sent metaloc
 	return nil, nil
 }
+
+func (node *persistedNode) CollectAppendInRangeWithBlockID(
+	blkOffset uint16, start, end types.TS, withAborted bool, mp *mpool.MPool,
+) (bat *containers.BatchWithVersion, err error) {
+	panic("not support")
+}

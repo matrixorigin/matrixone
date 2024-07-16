@@ -55,6 +55,7 @@ type flushTableTailEntry struct {
 	dirtyLen           int
 	rt                 *dbutils.Runtime
 	dirtyEndTs         types.TS
+	aobjOffsets        []uint16
 
 	// use TxnMgr.Now as collectTs to do the first collect deletes,
 	// which is a relief for the second try in the commit queue
@@ -78,6 +79,7 @@ func NewFlushTableTailEntry(
 	nblksMetas []*catalog.ObjectEntry,
 	ablksHandles []handle.Object,
 	nblksHandles []handle.Object,
+	aobjOffsets []uint16,
 	createdBlkHandles handle.Object,
 	createdDeletesFile string,
 	createdMergeFile string,
@@ -93,6 +95,7 @@ func NewFlushTableTailEntry(
 		tableEntry:         tableEntry,
 		ablksMetas:         ablksMetas,
 		delSrcMetas:        nblksMetas,
+		aobjOffsets:        aobjOffsets,
 		ablksHandles:       ablksHandles,
 		delSrcHandles:      nblksHandles,
 		createdBlkHandles:  createdBlkHandles,
@@ -121,6 +124,14 @@ func NewFlushTableTailEntry(
 
 	return entry, nil
 }
+func (entry *flushTableTailEntry) getObjectOffset(blkOffset int) (int, uint16) {
+	for i, offset := range entry.aobjOffsets {
+		if blkOffset < int(offset) {
+			return i, uint16(blkOffset) - offset
+		}
+	}
+	panic(fmt.Sprintf("invalid blk offset %d, %v", blkOffset, entry.aobjOffsets))
+}
 
 // add transfer pages for dropped aobjects
 func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) {
@@ -134,7 +145,9 @@ func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) {
 		if len(m) == 0 {
 			continue
 		}
-		id := entry.ablksHandles[i].Fingerprint()
+		objOffset, blkOffset := entry.getObjectOffset(i)
+		id := entry.ablksHandles[objOffset].Fingerprint()
+		id.SetBlockOffset(blkOffset)
 		entry.pageIds = append(entry.pageIds, id)
 		page := model.NewTransferHashPage(id, time.Now(), isTransient, entry.rt.LocalFs.Service, model.GetTTL(), model.GetDiskTTL())
 		mapping := make(map[uint32][]byte, len(m))

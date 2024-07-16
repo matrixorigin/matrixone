@@ -139,6 +139,7 @@ type Object interface {
 	GCInMemoryDeletesByTSForTest(types.TS)
 	UpgradeAllDeleteChain()
 	CollectAppendInRange(start, end types.TS, withAborted bool, mp *mpool.MPool) (*containers.BatchWithVersion, error)
+	CollectAppendInRangeWithBlockID(blkID uint16, start, end types.TS, withAborted bool, mp *mpool.MPool) (*containers.BatchWithVersion, error)
 	CollectDeleteInRange(ctx context.Context, start, end types.TS, withAborted bool, mp *mpool.MPool) (*containers.Batch, *bitmap.Bitmap, error)
 	CollectDeleteInRangeByBlock(ctx context.Context, blkID uint16, start, end types.TS, withAborted bool, mp *mpool.MPool) (*containers.Batch, error)
 	PersistedCollectDeleteInRange(

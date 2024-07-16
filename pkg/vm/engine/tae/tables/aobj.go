@@ -434,6 +434,17 @@ func (obj *aobject) CollectAppendInRange(
 	return node.CollectAppendInRange(start, end, withAborted, mp)
 }
 
+func (obj *aobject) CollectAppendInRangeWithBlockID(
+	blkID uint16,
+	start, end types.TS,
+	withAborted bool,
+	mp *mpool.MPool,
+) (*containers.BatchWithVersion, error) {
+	node := obj.PinNode()
+	defer node.Unref()
+	return node.CollectAppendInRangeWithBlockID(blkID, start, end, withAborted, mp)
+}
+
 func (obj *aobject) estimateRawScore() (score int, dropped bool, err error) {
 	meta := obj.GetObjMeta()
 	if meta.HasDropCommitted() && !meta.InMemoryDeletesExisted() {
