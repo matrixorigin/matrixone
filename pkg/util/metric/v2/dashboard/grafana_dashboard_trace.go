@@ -135,13 +135,13 @@ func (c *DashboardCreator) initTraceCollectorOverviewRow() dashboard.Option {
 		"Collector Overview",
 
 		c.withMultiGraph(
-			"rate (avg) - each instance",
+			"rate (avg) - each component",
 			3,
 			[]string{
-				`avg(rate(` + c.getMetricWithFilter("mo_trace_collector_duration_seconds_count", `type="collect"`) + `[$interval]))`,
+				`avg(rate(` + c.getMetricWithFilter("mo_trace_collector_duration_seconds_count", `type="collect"`) + `[$interval])) by (type, matrixorigin_io_component)`,
 			},
 			[]string{
-				"collect",
+				"",
 			}),
 
 		c.withMultiGraph(

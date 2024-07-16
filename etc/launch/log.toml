@@ -9,3 +9,5 @@ level = "info"
 check-fraction = 65536
 enable-metrics = true
 
+[observability]
+EnableMetricToProm = true
