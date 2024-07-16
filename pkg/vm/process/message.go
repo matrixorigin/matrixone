@@ -16,6 +16,7 @@ package process
 
 import (
 	"context"
+	"os"
 	"sync"
 	"time"
 
@@ -209,7 +210,8 @@ func (mr *MessageReceiver) ReceiveMessage(needBlock bool, ctx context.Context) (
 		}
 		select {
 		case <-ctxTimeout.Done():
-			logutil.Warnf("runtime filter time out")
+			logutil.Fatal("runtime filter time out")
+			os.Exit(0)
 		case <-mr.waiter:
 		case <-ctx.Done():
 			return result, true
