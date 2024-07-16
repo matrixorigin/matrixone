@@ -101,7 +101,6 @@ func (srv *ServiceOfCompile) getCompile(
 	}
 
 	runningCompile := reuse.Alloc[Compile](nil)
-	runningCompile.MessageBoard = process.NewMessageBoard()
 	runningCompile.proc = proc
 
 	if runningCompile.queryStatus == nil {

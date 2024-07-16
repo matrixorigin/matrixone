@@ -201,7 +201,7 @@ func (mr *MessageReceiver) ReceiveMessage(needBlock bool, ctx context.Context) (
 		mr.mb.Waiters = append(mr.mb.Waiters, mr.waiter)
 		mr.mb.RwMutex.Unlock()
 	}
-	ctxTimeout, cancelTimeout := context.WithTimeout(context.TODO(), 20*time.Second)
+	ctxTimeout, cancelTimeout := context.WithTimeout(context.TODO(), 30*time.Second)
 	defer cancelTimeout()
 	for {
 		result = mr.receiveMessageNonBlock()

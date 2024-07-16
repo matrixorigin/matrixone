@@ -195,8 +195,7 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 		v.CleanChannel(c.proc.GetMPool())
 	}
 
-	// c.MessageBoard.Reset()
-	c.MessageBoard = process.NewMessageBoard()
+	c.MessageBoard = c.MessageBoard.Reset()
 	c.counterSet.Reset()
 
 	for _, f := range c.fuzzys {
@@ -222,8 +221,7 @@ func (c *Compile) clear() {
 		c.fuzzys[i].release()
 	}
 
-	// c.MessageBoard.Reset()
-	// c.MessageBoard = nil
+	c.MessageBoard = c.MessageBoard.Reset()
 	c.fuzzys = c.fuzzys[:0]
 	c.scope = c.scope[:0]
 	c.pn = nil
@@ -2354,7 +2352,10 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	s.DataSource.SchemaName = n.ObjRef.SchemaName
 	s.DataSource.AccountId = n.ObjRef.GetPubInfo()
 	s.DataSource.FilterExpr = filterExpr
-	s.DataSource.RuntimeFilterSpecs = n.RuntimeFilterProbeList
+	s.DataSource.RuntimeFilterSpecs = make([]*plan.RuntimeFilterSpec, len(n.RuntimeFilterProbeList))
+	for i, rf := range n.RuntimeFilterProbeList {
+		s.DataSource.RuntimeFilterSpecs[i] = plan2.DeepCopyRuntimeFilterSpec(rf)
+	}
 	s.DataSource.OrderBy = n.OrderBy
 
 	return nil
