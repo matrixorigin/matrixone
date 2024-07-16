@@ -14,194 +14,196 @@
 
 package tree
 
-// func init() {
-// 	reuse.CreatePool[DropSnapShot](
-// 		func() *DropSnapShot { return &DropSnapShot{} },
-// 		func(d *DropSnapShot) { d.reset() },
-// 		reuse.DefaultOptions[DropSnapShot](), //.
-// 	) //WithEnableChecker()
-// }
+import "github.com/matrixorigin/matrixone/pkg/common/reuse"
 
-// type SnapshotLevel int
+func init() {
+	reuse.CreatePool[DropSnapShot](
+		func() *DropSnapShot { return &DropSnapShot{} },
+		func(d *DropSnapShot) { d.reset() },
+		reuse.DefaultOptions[DropSnapShot](), //.
+	) //WithEnableChecker()
+}
 
-// const (
-// 	SNAPSHOTLEVELCLUSTER SnapshotLevel = iota
-// 	SNAPSHOTLEVELACCOUNT
-// 	SNAPSHOTLEVELDATABASE
-// 	SNAPSHOTLEVELTABLE
-// )
+type SnapshotLevel int
 
-// func (s SnapshotLevel) String() string {
-// 	switch s {
-// 	case SNAPSHOTLEVELCLUSTER:
-// 		return "cluster"
-// 	case SNAPSHOTLEVELACCOUNT:
-// 		return "account"
-// 	case SNAPSHOTLEVELDATABASE:
-// 		return "database"
-// 	case SNAPSHOTLEVELTABLE:
-// 		return "table"
-// 	}
-// 	return "unknown"
-// }
+const (
+	SNAPSHOTLEVELCLUSTER SnapshotLevel = iota
+	SNAPSHOTLEVELACCOUNT
+	SNAPSHOTLEVELDATABASE
+	SNAPSHOTLEVELTABLE
+)
 
-// type SnapshotLevelType struct {
-// 	Level SnapshotLevel
-// }
+func (s SnapshotLevel) String() string {
+	switch s {
+	case SNAPSHOTLEVELCLUSTER:
+		return "cluster"
+	case SNAPSHOTLEVELACCOUNT:
+		return "account"
+	case SNAPSHOTLEVELDATABASE:
+		return "database"
+	case SNAPSHOTLEVELTABLE:
+		return "table"
+	}
+	return "unknown"
+}
 
-// func (node *SnapshotLevelType) Format(ctx *FmtCtx) {
-// 	ctx.WriteString(node.Level.String())
-// }
+type SnapshotLevelType struct {
+	Level SnapshotLevel
+}
 
-// type ObjectInfo struct {
-// 	SLevel  SnapshotLevelType // snapshot level
-// 	ObjName Identifier        // object name
-// }
+func (node *SnapshotLevelType) Format(ctx *FmtCtx) {
+	ctx.WriteString(node.Level.String())
+}
 
-// func (node *ObjectInfo) Format(ctx *FmtCtx) {
-// 	node.SLevel.Format(ctx)
-// 	ctx.WriteString(" ")
-// 	node.ObjName.Format(ctx)
-// }
+type ObjectInfo struct {
+	SLevel  SnapshotLevelType // snapshot level
+	ObjName Identifier        // object name
+}
 
-// type CreateSnapShot struct {
-// 	statementImpl
+func (node *ObjectInfo) Format(ctx *FmtCtx) {
+	node.SLevel.Format(ctx)
+	ctx.WriteString(" ")
+	node.ObjName.Format(ctx)
+}
 
-// 	IfNotExists bool
-// 	Name        Identifier // snapshot name
-// 	Object      ObjectInfo
-// }
+type CreateSnapShot struct {
+	statementImpl
 
-// func (node *CreateSnapShot) Format(ctx *FmtCtx) {
-// 	ctx.WriteString("create snapshot ")
-// 	if node.IfNotExists {
-// 		ctx.WriteString("if not exists ")
-// 	}
-// 	node.Name.Format(ctx)
-// 	ctx.WriteString(" for ")
-// 	node.Object.Format(ctx)
-// }
+	IfNotExists bool
+	Name        Identifier // snapshot name
+	Object      ObjectInfo
+}
 
-// func (node *CreateSnapShot) GetStatementType() string { return "Create Snapshot" }
+func (node *CreateSnapShot) Format(ctx *FmtCtx) {
+	ctx.WriteString("create snapshot ")
+	if node.IfNotExists {
+		ctx.WriteString("if not exists ")
+	}
+	node.Name.Format(ctx)
+	ctx.WriteString(" for ")
+	node.Object.Format(ctx)
+}
 
-// func (node *CreateSnapShot) GetQueryType() string { return QueryTypeOth }
+func (node *CreateSnapShot) GetStatementType() string { return "Create Snapshot" }
 
-// type DropSnapShot struct {
-// 	statementImpl
+func (node *CreateSnapShot) GetQueryType() string { return QueryTypeOth }
 
-// 	IfExists bool
-// 	Name     Identifier // snapshot name
-// }
+type DropSnapShot struct {
+	statementImpl
 
-// func (node *DropSnapShot) Free() { reuse.Free[DropSnapShot](node, nil) }
+	IfExists bool
+	Name     Identifier // snapshot name
+}
 
-// func (node *DropSnapShot) reset() { *node = DropSnapShot{} }
+func (node *DropSnapShot) Free() { reuse.Free[DropSnapShot](node, nil) }
 
-// func (node DropSnapShot) TypeName() string { return "tree.DropSnapShot" }
+func (node *DropSnapShot) reset() { *node = DropSnapShot{} }
 
-// func NewDropSnapShot(ifExists bool, Name Identifier) *DropSnapShot {
-// 	drop := reuse.Alloc[DropSnapShot](nil)
-// 	drop.IfExists = ifExists
-// 	drop.Name = Name
-// 	return drop
-// }
+func (node DropSnapShot) TypeName() string { return "tree.DropSnapShot" }
 
-// func (node *DropSnapShot) Format(ctx *FmtCtx) {
-// 	ctx.WriteString("drop snapshot ")
+func NewDropSnapShot(ifExists bool, Name Identifier) *DropSnapShot {
+	drop := reuse.Alloc[DropSnapShot](nil)
+	drop.IfExists = ifExists
+	drop.Name = Name
+	return drop
+}
 
-// 	if node.IfExists {
-// 		ctx.WriteString("if exists ")
-// 	}
+func (node *DropSnapShot) Format(ctx *FmtCtx) {
+	ctx.WriteString("drop snapshot ")
 
-// 	node.Name.Format(ctx)
-// }
+	if node.IfExists {
+		ctx.WriteString("if exists ")
+	}
 
-// func (node *DropSnapShot) GetStatementType() string { return "Drop Snapshot" }
+	node.Name.Format(ctx)
+}
 
-// func (node *DropSnapShot) GetQueryType() string { return QueryTypeOth }
+func (node *DropSnapShot) GetStatementType() string { return "Drop Snapshot" }
 
-// type ShowSnapShots struct {
-// 	statementImpl
-// 	Where *Where
-// }
+func (node *DropSnapShot) GetQueryType() string { return QueryTypeOth }
 
-// func (node *ShowSnapShots) Format(ctx *FmtCtx) {
-// 	ctx.WriteString("show snapshots")
-// 	if node.Where != nil {
-// 		ctx.WriteString(" ")
-// 		node.Where.Format(ctx)
-// 	}
-// }
+type ShowSnapShots struct {
+	statementImpl
+	Where *Where
+}
 
-// func (node *ShowSnapShots) GetStatementType() string { return "Show Snapshot" }
+func (node *ShowSnapShots) Format(ctx *FmtCtx) {
+	ctx.WriteString("show snapshots")
+	if node.Where != nil {
+		ctx.WriteString(" ")
+		node.Where.Format(ctx)
+	}
+}
 
-// func (node *ShowSnapShots) GetQueryType() string { return QueryTypeDQL }
+func (node *ShowSnapShots) GetStatementType() string { return "Show Snapshot" }
 
-// type RestoreLevel int
+func (node *ShowSnapShots) GetQueryType() string { return QueryTypeDQL }
 
-// const (
-// 	RESTORELEVELCLUSTER RestoreLevel = iota
-// 	RESTORELEVELACCOUNT
-// 	RESTORELEVELDATABASE
-// 	RESTORELEVELTABLE
-// )
+type RestoreLevel int
 
-// func (s RestoreLevel) String() string {
-// 	switch s {
-// 	case RESTORELEVELCLUSTER:
-// 		return "cluster"
-// 	case RESTORELEVELACCOUNT:
-// 		return "account"
-// 	case RESTORELEVELDATABASE:
-// 		return "database"
-// 	case RESTORELEVELTABLE:
-// 		return "table"
-// 	}
-// 	return "unknown"
-// }
+const (
+	RESTORELEVELCLUSTER RestoreLevel = iota
+	RESTORELEVELACCOUNT
+	RESTORELEVELDATABASE
+	RESTORELEVELTABLE
+)
 
-// type RestoreSnapShot struct {
-// 	statementImpl
+func (s RestoreLevel) String() string {
+	switch s {
+	case RESTORELEVELCLUSTER:
+		return "cluster"
+	case RESTORELEVELACCOUNT:
+		return "account"
+	case RESTORELEVELDATABASE:
+		return "database"
+	case RESTORELEVELTABLE:
+		return "table"
+	}
+	return "unknown"
+}
 
-// 	Level         RestoreLevel
-// 	AccountName   Identifier // account name
-// 	DatabaseName  Identifier // database name
-// 	TableName     Identifier // table name
-// 	SnapShotName  Identifier // snapshot name
-// 	ToAccountName Identifier // to account name
-// }
+type RestoreSnapShot struct {
+	statementImpl
 
-// func (node *RestoreSnapShot) Format(ctx *FmtCtx) {
-// 	ctx.WriteString("restore ")
-// 	switch node.Level {
-// 	case RESTORELEVELCLUSTER:
-// 		ctx.WriteString("cluster")
-// 	case RESTORELEVELACCOUNT:
-// 		ctx.WriteString("account ")
-// 		node.AccountName.Format(ctx)
-// 	case RESTORELEVELDATABASE:
-// 		ctx.WriteString("account ")
-// 		node.AccountName.Format(ctx)
-// 		ctx.WriteString(" database ")
-// 		node.DatabaseName.Format(ctx)
-// 	case RESTORELEVELTABLE:
-// 		ctx.WriteString("account ")
-// 		node.AccountName.Format(ctx)
-// 		ctx.WriteString(" database ")
-// 		node.DatabaseName.Format(ctx)
-// 		ctx.WriteString(" table ")
-// 		node.TableName.Format(ctx)
-// 	}
+	Level         RestoreLevel
+	AccountName   Identifier // account name
+	DatabaseName  Identifier // database name
+	TableName     Identifier // table name
+	SnapShotName  Identifier // snapshot name
+	ToAccountName Identifier // to account name
+}
 
-// 	ctx.WriteString(" from snapshot ")
-// 	node.SnapShotName.Format(ctx)
+func (node *RestoreSnapShot) Format(ctx *FmtCtx) {
+	ctx.WriteString("restore ")
+	switch node.Level {
+	case RESTORELEVELCLUSTER:
+		ctx.WriteString("cluster")
+	case RESTORELEVELACCOUNT:
+		ctx.WriteString("account ")
+		node.AccountName.Format(ctx)
+	case RESTORELEVELDATABASE:
+		ctx.WriteString("account ")
+		node.AccountName.Format(ctx)
+		ctx.WriteString(" database ")
+		node.DatabaseName.Format(ctx)
+	case RESTORELEVELTABLE:
+		ctx.WriteString("account ")
+		node.AccountName.Format(ctx)
+		ctx.WriteString(" database ")
+		node.DatabaseName.Format(ctx)
+		ctx.WriteString(" table ")
+		node.TableName.Format(ctx)
+	}
 
-// 	if len(node.ToAccountName) > 0 {
-// 		ctx.WriteString(" to account ")
-// 		node.ToAccountName.Format(ctx)
-// 	}
-// }
+	ctx.WriteString(" from snapshot ")
+	node.SnapShotName.Format(ctx)
 
-// func (node *RestoreSnapShot) GetStatementType() string { return "Restore Snapshot" }
+	if len(node.ToAccountName) > 0 {
+		ctx.WriteString(" to account ")
+		node.ToAccountName.Format(ctx)
+	}
+}
 
-// func (node *RestoreSnapShot) GetQueryType() string { return QueryTypeOth }
+func (node *RestoreSnapShot) GetStatementType() string { return "Restore Snapshot" }
+
+func (node *RestoreSnapShot) GetQueryType() string { return QueryTypeOth }

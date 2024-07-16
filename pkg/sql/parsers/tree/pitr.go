@@ -14,199 +14,42 @@
 
 package tree
 
-import "github.com/matrixorigin/matrixone/pkg/common/reuse"
+import (
+	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+)
 
 func init() {
-	reuse.CreatePool[DropSnapShot](
-		func() *DropSnapShot { return &DropSnapShot{} },
-		func(d *DropSnapShot) { d.reset() },
-		reuse.DefaultOptions[DropSnapShot](), //.
+	reuse.CreatePool[DropPitr](
+		func() *DropPitr { return &DropPitr{} },
+		func(d *DropPitr) { d.reset() },
+		reuse.DefaultOptions[DropPitr](), //.
 	) //WithEnableChecker()
 }
 
-type SnapshotLevel int
+type PitrLevel int
 
 const (
-	SNAPSHOTLEVELCLUSTER SnapshotLevel = iota
-	SNAPSHOTLEVELACCOUNT
-	SNAPSHOTLEVELDATABASE
-	SNAPSHOTLEVELTABLE
+	PITRLEVELCLUSTER PitrLevel = iota
+	PITRLEVELACCOUNT
+	PITRLEVELDATABASE
+	PITRLEVELTABLE
 )
 
-func (s SnapshotLevel) String() string {
+func (s PitrLevel) String() string {
 	switch s {
-	case SNAPSHOTLEVELCLUSTER:
+	case PITRLEVELCLUSTER:
 		return "cluster"
-	case SNAPSHOTLEVELACCOUNT:
+	case PITRLEVELACCOUNT:
 		return "account"
-	case SNAPSHOTLEVELDATABASE:
+	case PITRLEVELDATABASE:
 		return "database"
-	case SNAPSHOTLEVELTABLE:
+	case PITRLEVELTABLE:
 		return "table"
 	}
 	return "unknown"
 }
-
-type SnapshotLevelType struct {
-	Level SnapshotLevel
-}
-
-func (node *SnapshotLevelType) Format(ctx *FmtCtx) {
-	ctx.WriteString(node.Level.String())
-}
-
-type ObjectInfo struct {
-	SLevel  SnapshotLevelType // snapshot level
-	ObjName Identifier        // object name
-}
-
-func (node *ObjectInfo) Format(ctx *FmtCtx) {
-	node.SLevel.Format(ctx)
-	ctx.WriteString(" ")
-	node.ObjName.Format(ctx)
-}
-
-type CreateSnapShot struct {
-	statementImpl
-
-	IfNotExists bool
-	Name        Identifier // snapshot name
-	Object      ObjectInfo
-}
-
-func (node *CreateSnapShot) Format(ctx *FmtCtx) {
-	ctx.WriteString("create snapshot ")
-	if node.IfNotExists {
-		ctx.WriteString("if not exists ")
-	}
-	node.Name.Format(ctx)
-	ctx.WriteString(" for ")
-	node.Object.Format(ctx)
-}
-
-func (node *CreateSnapShot) GetStatementType() string { return "Create Snapshot" }
-
-func (node *CreateSnapShot) GetQueryType() string { return QueryTypeOth }
-
-type DropSnapShot struct {
-	statementImpl
-
-	IfExists bool
-	Name     Identifier // snapshot name
-}
-
-func (node *DropSnapShot) Free() { reuse.Free[DropSnapShot](node, nil) }
-
-func (node *DropSnapShot) reset() { *node = DropSnapShot{} }
-
-func (node DropSnapShot) TypeName() string { return "tree.DropSnapShot" }
-
-func NewDropSnapShot(ifExists bool, Name Identifier) *DropSnapShot {
-	drop := reuse.Alloc[DropSnapShot](nil)
-	drop.IfExists = ifExists
-	drop.Name = Name
-	return drop
-}
-
-func (node *DropSnapShot) Format(ctx *FmtCtx) {
-	ctx.WriteString("drop snapshot ")
-
-	if node.IfExists {
-		ctx.WriteString("if exists ")
-	}
-
-	node.Name.Format(ctx)
-}
-
-func (node *DropSnapShot) GetStatementType() string { return "Drop Snapshot" }
-
-func (node *DropSnapShot) GetQueryType() string { return QueryTypeOth }
-
-type ShowSnapShots struct {
-	statementImpl
-	Where *Where
-}
-
-func (node *ShowSnapShots) Format(ctx *FmtCtx) {
-	ctx.WriteString("show snapshots")
-	if node.Where != nil {
-		ctx.WriteString(" ")
-		node.Where.Format(ctx)
-	}
-}
-
-func (node *ShowSnapShots) GetStatementType() string { return "Show Snapshot" }
-
-func (node *ShowSnapShots) GetQueryType() string { return QueryTypeDQL }
-
-type RestoreLevel int
-
-const (
-	RESTORELEVELCLUSTER RestoreLevel = iota
-	RESTORELEVELACCOUNT
-	RESTORELEVELDATABASE
-	RESTORELEVELTABLE
-)
-
-func (s RestoreLevel) String() string {
-	switch s {
-	case RESTORELEVELCLUSTER:
-		return "cluster"
-	case RESTORELEVELACCOUNT:
-		return "account"
-	case RESTORELEVELDATABASE:
-		return "database"
-	case RESTORELEVELTABLE:
-		return "table"
-	}
-	return "unknown"
-}
-
-type RestoreSnapShot struct {
-	statementImpl
-
-	Level         RestoreLevel
-	AccountName   Identifier // account name
-	DatabaseName  Identifier // database name
-	TableName     Identifier // table name
-	SnapShotName  Identifier // snapshot name
-	ToAccountName Identifier // to account name
-}
-
-func (node *RestoreSnapShot) Format(ctx *FmtCtx) {
-	ctx.WriteString("restore ")
-	switch node.Level {
-	case RESTORELEVELCLUSTER:
-		ctx.WriteString("cluster")
-	case RESTORELEVELACCOUNT:
-		ctx.WriteString("account ")
-		node.AccountName.Format(ctx)
-	case RESTORELEVELDATABASE:
-		ctx.WriteString("account ")
-		node.AccountName.Format(ctx)
-		ctx.WriteString(" database ")
-		node.DatabaseName.Format(ctx)
-	case RESTORELEVELTABLE:
-		ctx.WriteString("account ")
-		node.AccountName.Format(ctx)
-		ctx.WriteString(" database ")
-		node.DatabaseName.Format(ctx)
-		ctx.WriteString(" table ")
-		node.TableName.Format(ctx)
-	}
-
-	ctx.WriteString(" from snapshot ")
-	node.SnapShotName.Format(ctx)
-
-	if len(node.ToAccountName) > 0 {
-		ctx.WriteString(" to account ")
-		node.ToAccountName.Format(ctx)
-	}
-}
-
-func (node *RestoreSnapShot) GetStatementType() string { return "Restore Snapshot" }
-
-func (node *RestoreSnapShot) GetQueryType() string { return QueryTypeOth }
 
 type ShowPitr struct {
 	statementImpl
@@ -230,3 +73,150 @@ type DropPitr struct {
 	IfExists bool
 	Name     Identifier // pitr name
 }
+
+func (node *DropPitr) Free() { reuse.Free[DropPitr](node, nil) }
+func (node *DropPitr) Format(ctx *FmtCtx) {
+	ctx.WriteString("drop pitr ")
+	if node.IfExists {
+		ctx.WriteString("if exists ")
+	}
+	node.Name.Format(ctx)
+}
+
+func (node *DropPitr) reset() { *node = DropPitr{} }
+
+func (node DropPitr) TypeName() string { return "tree.DropPitr" }
+
+func NewDropPitr(ifExists bool, Name Identifier) *DropPitr {
+	drop := reuse.Alloc[DropPitr](nil)
+	drop.IfExists = ifExists
+	drop.Name = Name
+	return drop
+}
+
+func (node *DropPitr) GetStatementType() string { return "Drop PITR" }
+func (node *DropPitr) GetQueryType() string     { return QueryTypeOth }
+
+type CreatePitr struct {
+	statementImpl
+
+	IfNotExists bool
+	Name        Identifier // pitr name
+
+	Level        PitrLevel  // pitr level
+	AccountName  Identifier // account name
+	DatabaseName Identifier // database name
+	TableName    Identifier // table name
+
+	PitrValue int64
+	PitrUnit  string
+}
+
+func (node *CreatePitr) Format(ctx *FmtCtx) {
+	ctx.WriteString("create pitr ")
+	if node.IfNotExists {
+		ctx.WriteString("if not exists ")
+	}
+
+	node.Name.Format(ctx)
+	ctx.WriteString(" for ")
+	switch node.Level {
+	case PITRLEVELCLUSTER:
+		ctx.WriteString("cluster")
+	case PITRLEVELACCOUNT:
+		if len(node.AccountName) != 0 {
+			ctx.WriteString("account ")
+			node.AccountName.Format(ctx)
+		} else {
+			ctx.WriteString("self account")
+
+		}
+	case PITRLEVELDATABASE:
+		ctx.WriteString("database ")
+		node.DatabaseName.Format(ctx)
+	case PITRLEVELTABLE:
+		ctx.WriteString("database ")
+		node.DatabaseName.Format(ctx)
+		ctx.WriteString(" table ")
+		node.TableName.Format(ctx)
+	}
+
+	ctx.WriteString(" range ")
+	ctx.WriteString(fmt.Sprintf("%v ", node.PitrValue))
+	ctx.WriteString(" ")
+	ctx.WriteString(node.PitrUnit)
+}
+
+func (node *CreatePitr) GetStatementType() string { return "Create PITR" }
+func (node *CreatePitr) GetQueryType() string     { return QueryTypeDDL }
+
+type AlterPitr struct {
+	statementImpl
+
+	IfExists bool
+	Name     Identifier // pitr name
+
+	PitrValue int64
+	PitrUnit  string
+}
+
+func (node *AlterPitr) Format(ctx *FmtCtx) {
+	ctx.WriteString("alter pitr ")
+	if node.IfExists {
+		ctx.WriteString("if exists ")
+	}
+	node.Name.Format(ctx)
+	ctx.WriteString(" range ")
+	ctx.WriteString(fmt.Sprintf("%v ", node.PitrValue))
+	ctx.WriteString(" ")
+	ctx.WriteString(node.PitrUnit)
+}
+
+func (node *AlterPitr) GetStatementType() string { return "Alter PITR" }
+func (node *AlterPitr) GetQueryType() string     { return QueryTypeOth }
+
+type RestorePitr struct {
+	statementImpl
+
+	IfExists bool
+	Name     Identifier // pitr name
+
+	Level RestoreLevel // restore level
+
+	AccountName  Identifier // account name
+	DatabaseName Identifier // database name
+	TableName    Identifier // table name
+}
+
+func (node *RestorePitr) Format(ctx *FmtCtx) {
+	ctx.WriteString("restore pitr ")
+	if node.IfExists {
+		ctx.WriteString("if exists ")
+	}
+
+	switch node.Level {
+	case RESTORELEVELCLUSTER:
+		ctx.WriteString("cluster")
+	case RESTORELEVELACCOUNT:
+		ctx.WriteString("account ")
+		node.AccountName.Format(ctx)
+	case RESTORELEVELDATABASE:
+		ctx.WriteString("account ")
+		node.AccountName.Format(ctx)
+		ctx.WriteString(" database ")
+		node.DatabaseName.Format(ctx)
+	case RESTORELEVELTABLE:
+		ctx.WriteString("account ")
+		node.AccountName.Format(ctx)
+		ctx.WriteString(" database ")
+		node.DatabaseName.Format(ctx)
+		ctx.WriteString(" table ")
+		node.TableName.Format(ctx)
+	}
+
+	ctx.WriteString(" from  pitr ")
+	node.Name.Format(ctx)
+}
+
+func (node *RestorePitr) GetStatementType() string { return "Restore PITR" }
+func (node *RestorePitr) GetQueryType() string     { return QueryTypeOth }
