@@ -71,7 +71,7 @@ func newSingleObjPolicy(config *singleObjConfig) *singleObjPolicy {
 }
 
 func (s *singleObjPolicy) onObject(obj *catalog.ObjectEntry) {
-	tombstone := s.tableEntry.TryGetTombstone(obj.ID)
+	tombstone := s.tableEntry.TryGetTombstone(*obj.ID())
 	if tombstone == nil {
 		return
 	}

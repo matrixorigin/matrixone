@@ -249,7 +249,7 @@ func (s *MergeTaskBuilder) onPostObject(obj *catalog.ObjectEntry) (err error) {
 }
 
 func objectValid(objectEntry *catalog.ObjectEntry) bool {
-	if !objectEntry.IsCommitted() || !catalog.ActiveObjectWithNoTxnFilter(objectEntry) {
+	if !objectEntry.IsCommitted() || objectEntry.HasDropCommitted() {
 		return false
 	}
 

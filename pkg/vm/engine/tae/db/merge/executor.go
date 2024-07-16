@@ -38,6 +38,7 @@ import (
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/mem"
 	"github.com/shirou/gopsutil/v3/process"
+	"go.uber.org/zap"
 )
 
 type activeTaskStats map[uint64]struct {
@@ -130,7 +131,7 @@ func (e *Executor) PrintStats() {
 		"MergeExecutorMemoryStats",
 		common.AnyField("process-limit", common.HumanReadableBytes(e.memLimit)),
 		common.AnyField("process-mem", common.HumanReadableBytes(e.memUsing)),
-		common.AnyField("inuse-mem", common.HumanReadableBytes(int(atomic.LoadInt64(&e.activeEstimateBytes)))),
+		common.AnyField("inuse-mem", common.HumanReadableBytes(int(e.activeEstimateBytes.Load()))),
 		common.AnyField("inuse-cnt", cnt),
 	)
 }
@@ -301,7 +302,7 @@ func (e *Executor) CPUPercent() int64 {
 func logSingleObjMergeTask(name string, taskId uint64, obj *catalog.ObjectEntry, blkn, osize, esize int) {
 	rows := obj.GetRemainingRows()
 	infoBuf := &bytes.Buffer{}
-	infoBuf.WriteString(fmt.Sprintf(" %d(%s)", rows, common.ShortObjId(obj.ID)))
+	infoBuf.WriteString(fmt.Sprintf(" %d(%s)", rows, common.ShortObjId(*obj.ID())))
 	platform := fmt.Sprintf("t%d", taskId)
 	if taskId == math.MaxUint64 {
 		platform = "CN"

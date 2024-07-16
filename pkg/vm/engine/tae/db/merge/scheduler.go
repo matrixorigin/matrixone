@@ -157,11 +157,9 @@ func (m *Scheduler) OnObject(objectEntry *catalog.ObjectEntry) error {
 }
 
 func objectValid(objectEntry *catalog.ObjectEntry) bool {
-	objectEntry.RLock()
-	defer objectEntry.RUnlock()
 	// Skip uncommitted entries
 	// TODO: consider the case: add metaloc, is it possible to see a constructing object?
-	if !objectEntry.IsCommittedLocked() || !catalog.ActiveObjectWithNoTxnFilter(objectEntry.BaseEntryImpl) {
+	if !objectEntry.IsCommitted() || objectEntry.HasDropCommitted() {
 		return false
 	}
 
