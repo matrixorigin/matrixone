@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
 func i82bool(v int8) bool {
@@ -855,6 +856,12 @@ func (s *Schema) Finalize(withoutPhyAddr bool) (err error) {
 	if s == nil {
 		err = moerr.NewConstraintViolationNoCtx("no schema")
 		return
+	}
+	if s.BlockMaxRows == 0 {
+		s.BlockMaxRows = options.DefaultBlockMaxRows
+	}
+	if s.ObjectMaxBlocks == 0 {
+		s.ObjectMaxBlocks = options.DefaultObjectPerSegment
 	}
 	if !withoutPhyAddr {
 		phyAddrDef := &ColDef{

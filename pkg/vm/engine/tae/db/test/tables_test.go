@@ -592,7 +592,7 @@ func TestCompaction1(t *testing.T) {
 
 	schema := catalog.MockSchemaAll(4, 2)
 	schema.BlockMaxRows = 20
-	schema.ObjectMaxBlocks = 4
+	schema.ObjectMaxBlocks = 1
 	cnt := uint32(2)
 	rows := schema.BlockMaxRows / 2 * cnt
 	bat := catalog.MockBatch(schema, int(rows))
@@ -614,7 +614,7 @@ func TestCompaction1(t *testing.T) {
 		for it.Next() {
 			blk := it.GetObject()
 			for j := 0; j < blk.BlkCnt(); j++ {
-				view, _ := blk.GetColumnDataById(context.Background(), uint16(3), 3, common.DefaultAllocator)
+				view, _ := blk.GetColumnDataById(context.Background(), uint16(j), 3, common.DefaultAllocator)
 				assert.NotNil(t, view)
 				view.Close()
 				assert.True(t, blk.GetMeta().(*catalog.ObjectEntry).GetObjectData().IsAppendable())
