@@ -170,26 +170,28 @@ func genAutoIncrCol(bat *batch.Batch, proc *proc, preInsert *PreInsert) error {
 		return err
 	}
 
-	if _, _, rel, err := eng.GetRelationById(proc.Ctx, currentTxn, tableID); err == nil {
-		for col, idx := range needReCheck {
-			vec := bat.GetVector(int32(idx))
-			from, err := proc.GetIncrService().GetLastAllocateTS(proc.Ctx, tableID, col)
-			if err != nil {
-				return err
-			}
-			fromTs := types.TimestampToTS(from)
-			toTs := types.TimestampToTS(proc.Base.TxnOperator.SnapshotTS())
-			if mayChanged, err := rel.PrimaryKeysMayBeModified(proc.Ctx, fromTs, toTs, vec); err == nil {
-				if mayChanged {
-					logutil.Debugf("user may have manually specified the value to be inserted into the auto pk col before this transaction.")
-					return moerr.NewTxnNeedRetry(proc.Ctx)
+	if len(needReCheck) > 0 {
+		if _, _, rel, err := eng.GetRelationById(proc.Ctx, currentTxn, tableID); err == nil {
+			for col, idx := range needReCheck {
+				vec := bat.GetVector(int32(idx))
+				from, err := proc.GetIncrService().GetLastAllocateTS(proc.Ctx, tableID, col)
+				if err != nil {
+					return err
 				}
-			} else {
-				return err
+				fromTs := types.TimestampToTS(from)
+				toTs := types.TimestampToTS(proc.Base.TxnOperator.SnapshotTS())
+				if mayChanged, err := rel.PrimaryKeysMayBeModified(proc.Ctx, fromTs, toTs, vec); err == nil {
+					if mayChanged {
+						logutil.Debugf("user may have manually specified the value to be inserted into the auto pk col before this transaction.")
+						return moerr.NewTxnNeedRetry(proc.Ctx)
+					}
+				} else {
+					return err
+				}
 			}
+		} else {
+			return err
 		}
-	} else {
-		return err
 	}
 
 	proc.SetLastInsertID(lastInsertValue)
