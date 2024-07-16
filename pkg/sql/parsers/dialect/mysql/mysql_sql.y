@@ -573,7 +573,7 @@ import (
 %type <tableDefs> table_elem_list_opt table_elem_list
 %type <tableDef> table_elem constaint_def constraint_elem index_def table_elem_2
 %type <tableName> table_name table_name_opt_wild
-%type <tableNames> table_name_list
+%type <tableNames> table_name_list alter_publication_table_opt
 %type <columnTableDef> column_def
 %type <columnType> mo_cast_type mysql_cast_type
 %type <columnType> column_type char_type spatial_type time_type numeric_type decimal_type int_type as_datatype_opt
@@ -6271,31 +6271,30 @@ create_user_stmt:
     }
 
 create_publication_stmt:
-    CREATE PUBLICATION not_exists_opt ident DATABASE ident alter_publication_accounts_opt comment_opt
+    CREATE PUBLICATION not_exists_opt ident DATABASE db_name alter_publication_accounts_opt comment_opt
     {
         var IfNotExists = $3
         var Name = tree.Identifier($4.Compare())
-        var Database = tree.Identifier($6.Compare())
-        var Table = tree.Identifier("")
+        var Database = tree.Identifier($6)
         var AccountsSet = $7
         var Comment = $8
         $$ = tree.NewCreatePublication(
             IfNotExists,
             Name,
             Database,
-            Table,
+            nil,
             AccountsSet,
             Comment,
         )
     }
-|   CREATE PUBLICATION not_exists_opt ident TABLE ident alter_publication_accounts_opt comment_opt
+|   CREATE PUBLICATION not_exists_opt ident DATABASE db_name TABLE table_name_list alter_publication_accounts_opt comment_opt
     {
         var IfNotExists = $3
         var Name = tree.Identifier($4.Compare())
-        var Database = tree.Identifier("")
-        var Table = tree.Identifier($6.Compare())
-        var AccountsSet = $7
-        var Comment = $8
+        var Database = tree.Identifier($6)
+        var Table = $8
+        var AccountsSet = $9
+        var Comment = $10
         $$ = tree.NewCreatePublication(
             IfNotExists,
             Name,
@@ -6437,14 +6436,15 @@ alter_stage_stmt:
 
 
 alter_publication_stmt:
-    ALTER PUBLICATION exists_opt ident alter_publication_accounts_opt alter_publication_db_name_opt comment_opt
+    ALTER PUBLICATION exists_opt ident alter_publication_accounts_opt alter_publication_db_name_opt alter_publication_table_opt comment_opt
     {
         var ifExists = $3
         var name = tree.Identifier($4.Compare())
         var accountsSet = $5
         var dbName = $6
-        var comment = $7
-        $$ = tree.NewAlterPublication(ifExists, name, accountsSet, dbName, comment)
+        var table = $7
+        var comment = $8
+        $$ = tree.NewAlterPublication(ifExists, name, accountsSet, dbName, table, comment)
     }
 
 alter_publication_accounts_opt:
@@ -6481,6 +6481,15 @@ alter_publication_db_name_opt:
 	    $$ = ""
     }
     | DATABASE db_name
+    {
+	    $$ = $2
+    }
+
+alter_publication_table_opt:
+    {
+	    $$ = nil
+    }
+    | TABLE table_name_list
     {
 	    $$ = $2
     }

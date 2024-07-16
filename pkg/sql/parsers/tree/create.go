@@ -5317,17 +5317,17 @@ type CreatePublication struct {
 	IfNotExists bool
 	Name        Identifier
 	Database    Identifier
-	Table       Identifier
+	Table       TableNames
 	AccountsSet *AccountsSetOption
 	Comment     string
 }
 
-func NewCreatePublication(ife bool, n Identifier, db Identifier, table Identifier, as *AccountsSetOption, c string) *CreatePublication {
+func NewCreatePublication(ife bool, n Identifier, db Identifier, tables TableNames, as *AccountsSetOption, c string) *CreatePublication {
 	cp := reuse.Alloc[CreatePublication](nil)
 	cp.IfNotExists = ife
 	cp.Name = n
 	cp.Database = db
-	cp.Table = table
+	cp.Table = tables
 	cp.AccountsSet = as
 	cp.Comment = c
 	return cp
@@ -5342,9 +5342,11 @@ func (node *CreatePublication) Format(ctx *FmtCtx) {
 	if node.Database != "" {
 		ctx.WriteString(" database ")
 		node.Database.Format(ctx)
-	} else {
-		ctx.WriteString(" table ")
-		node.Table.Format(ctx)
+
+		if len(node.Table) > 0 {
+			ctx.WriteString(" table ")
+			node.Table.Format(ctx)
+		}
 	}
 	if node.AccountsSet != nil && len(node.AccountsSet.SetAccounts) > 0 {
 		ctx.WriteString(" account ")
