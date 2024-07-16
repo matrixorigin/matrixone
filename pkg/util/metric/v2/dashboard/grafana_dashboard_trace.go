@@ -201,11 +201,24 @@ func (c *DashboardCreator) initCronTaskRow() dashboard.Option {
 	return dashboard.Row(
 		"CronTask StorageUsage",
 		c.withMultiGraph(
-			"Run Count",
+			"Check Count",
 			3,
 			[]string{
-				`sum(delta(` + c.getMetricWithFilter("mo_trace_check_storage_usage_total", "") + `[$interval])) by (type)`,
+				`sum(delta(` + c.getMetricWithFilter("mo_trace_check_storage_usage_total", `type="all"`) + `[$interval])) by (type)`,
+				`sum(delta(` + c.getMetricWithFilter("mo_trace_check_storage_usage_total", `type="new"`) + `[$interval])) by (type)`,
 			},
-			[]string{"{{ type }}"}),
+			[]string{
+				"check_all",
+				"check_new",
+			}),
+		c.withMultiGraph(
+			"New Account",
+			3,
+			[]string{
+				`sum(delta(` + c.getMetricWithFilter("mo_trace_check_storage_usage_total", `type="inc"`) + `[$interval])) by (type)`,
+			},
+			[]string{
+				"new_inc",
+			}),
 	)
 }

@@ -138,6 +138,11 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 		cleanStorageUsageMetric(logger, "CalculateStorageUsage")
 	}()
 
+	// init metric value
+	v2.GetTraceCheckStorageUsageAllCounter().Add(0)
+	v2.GetTraceCheckStorageUsageNewCounter().Add(0)
+	v2.GetTraceCheckStorageUsageNewIncCounter().Add(0)
+
 	// start background task to check new account
 	go checkNewAccountSize(ctx, logger, sqlExecutor)
 
