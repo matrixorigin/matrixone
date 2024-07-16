@@ -204,8 +204,8 @@ func (c *DashboardCreator) initCronTaskRow() dashboard.Option {
 			"Check Count",
 			3,
 			[]string{
-				`sum(delta(` + c.getMetricWithFilter("mo_trace_check_storage_usage_total", `type="all"`) + `[$interval])) by (type)`,
-				`sum(delta(` + c.getMetricWithFilter("mo_trace_check_storage_usage_total", `type="new"`) + `[$interval])) by (type)`,
+				`sum(delta(` + c.getMetricWithFilter("mo_trace_check_storage_usage_total", `type="all"`) + `[$interval:1m])) by (type)`,
+				`sum(delta(` + c.getMetricWithFilter("mo_trace_check_storage_usage_total", `type="new"`) + `[$interval:1m])) by (type)`,
 			},
 			[]string{
 				"check_all",
@@ -215,7 +215,7 @@ func (c *DashboardCreator) initCronTaskRow() dashboard.Option {
 			"New Account",
 			3,
 			[]string{
-				`sum(delta(` + c.getMetricWithFilter("mo_trace_check_storage_usage_total", `type="inc"`) + `[$interval])) by (type)`,
+				`sum(delta(` + c.getMetricWithFilter("mo_trace_check_storage_usage_total", `type="inc"`) + `[$interval:1m])) by (type)`,
 			},
 			[]string{
 				"new_inc",
