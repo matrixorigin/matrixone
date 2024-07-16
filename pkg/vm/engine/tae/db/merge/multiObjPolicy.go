@@ -138,8 +138,7 @@ func (m *multiObjPolicy) revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHos
 	if len(objs) > m.config.maxObjs {
 		objs = objs[:m.config.maxObjs]
 	}
-	m.objects = objs
-	objs = controlMem(m.objects, mem)
+	objs = controlMem(objs, mem)
 	if len(objs) < 2 {
 		return nil, TaskHostDN
 	}

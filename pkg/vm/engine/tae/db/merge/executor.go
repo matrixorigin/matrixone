@@ -253,7 +253,7 @@ func (e *Executor) ExecuteMultiObjMerge(entry *catalog.TableEntry, mobjs []*cata
 				logutil.Info(
 					"MergeExecutorError",
 					common.OperationField("schedule-merge-task"),
-					common.AnyField("error", err),
+					common.ErrorField(err),
 					common.AnyField("task", task.Name()),
 				)
 			}
