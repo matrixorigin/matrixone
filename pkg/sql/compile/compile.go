@@ -675,6 +675,16 @@ func (c *Compile) IsTpQuery() bool {
 	return c.execType == plan2.ExecTypeTP
 }
 
+func (c *Compile) IsSingleScope(ss []*Scope) bool {
+	if c.IsTpQuery() {
+		return true
+	}
+	if len(ss) > 1 {
+		return false
+	}
+	return ss[0].NodeInfo.Mcpu == 1
+}
+
 func (c *Compile) SetIsPrepare(isPrepare bool) {
 	c.isPrepare = isPrepare
 }
@@ -1137,8 +1147,8 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) (*Scope
 	case plan.Query_UPDATE:
 		return ss[0], nil
 	default:
-		if c.IsTpQuery() {
-			rs = ss[len(ss)-1]
+		if c.IsSingleScope(ss) {
+			rs = ss[0]
 		} else {
 			rs = c.newMergeScope(ss)
 		}
@@ -1297,7 +1307,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		defer groupInfo.Release()
 		anyDistinctAgg := groupInfo.AnyDistinctAgg()
 
-		if c.IsTpQuery() && ss[0].PartialResults == nil {
+		if c.IsSingleScope(ss) && ss[0].PartialResults == nil {
 			ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileTPGroup(n, ss, ns))))
 			return ss, nil
 		} else if !anyDistinctAgg && n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle {
@@ -1478,9 +1488,8 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 			return ss, nil
 		}
 		rs := ss[0]
-		if !c.IsTpQuery() {
+		if !c.IsSingleScope(ss) {
 			rs = c.newMergeScope(ss)
-			// updateScopesLastFlag([]*Scope{rs})
 			rs.Magic = Merge
 			c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
 		}
@@ -1803,7 +1812,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 			return nil, err
 		}
 		rs := ss[0]
-		if !c.IsTpQuery() {
+		if !c.IsSingleScope(ss) {
 			rs = c.newMergeScope(ss)
 		}
 		rs.setRootOperator(constructDispatchLocal(true, true, n.RecursiveSink, receivers))
@@ -2407,11 +2416,11 @@ func (c *Compile) compileTPUnion(n *plan.Node, ss []*Scope, children []*Scope) [
 	return rs
 }
 
-func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope) []*Scope {
-	if c.IsTpQuery() {
-		return c.compileTPUnion(n, ss, children)
+func (c *Compile) compileUnion(n *plan.Node, left []*Scope, right []*Scope) []*Scope {
+	if c.IsSingleScope(left) && c.IsSingleScope(right) {
+		return c.compileTPUnion(n, left, right)
 	}
-	ss = append(ss, children...)
+	left = append(left, right...)
 	rs := c.newScopeListOnCurrentCN(1, int(n.Stats.BlockNum))
 	gn := new(plan.Node)
 	gn.GroupBy = make([]*plan.Expr, len(n.ProjectList))
@@ -2428,7 +2437,7 @@ func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope) []*
 			idx = i
 		}
 	}
-	mergeChildren := c.newMergeScope(ss)
+	mergeChildren := c.newMergeScope(left)
 	mergeChildren.setRootOperator(constructDispatch(0, rs, c.addr, n, false))
 	rs[idx].PreScopes = append(rs[idx].PreScopes, mergeChildren)
 	return rs
@@ -2463,7 +2472,7 @@ func (c *Compile) compileTpMinusAndIntersect(n *plan.Node, left []*Scope, right 
 }
 
 func (c *Compile) compileMinusAndIntersect(n *plan.Node, left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
-	if c.IsTpQuery() {
+	if c.IsSingleScope(left) && c.IsSingleScope(right) {
 		return c.compileTpMinusAndIntersect(n, left, right, nodeType)
 	}
 	rs := c.newScopeListOnCurrentCN(2, int(n.Stats.BlockNum))
@@ -2893,7 +2902,7 @@ func containBrokenNode(s *Scope) bool {
 
 func (c *Compile) compileTop(n *plan.Node, topN *plan.Expr, ss []*Scope) []*Scope {
 	// use topN TO make scope.
-	if c.IsTpQuery() {
+	if c.IsSingleScope(ss) {
 		op := constructTop(n, topN)
 		op.SetIdx(c.anal.curr)
 		op.SetIsFirst(c.anal.isFirst)
@@ -2922,7 +2931,7 @@ func (c *Compile) compileTop(n *plan.Node, topN *plan.Expr, ss []*Scope) []*Scop
 }
 
 func (c *Compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
-	if c.IsTpQuery() {
+	if c.IsSingleScope(ss) {
 		order := constructOrder(n)
 		order.SetIdx(c.anal.curr)
 		order.SetIsFirst(c.anal.isFirst)
@@ -2981,7 +2990,7 @@ func (c *Compile) compileFill(n *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
-	if c.IsTpQuery() {
+	if c.IsSingleScope(ss) {
 		op := offset.NewArgument().WithOffset(n.Offset)
 		op.SetIdx(c.anal.curr)
 		op.SetIsFirst(c.anal.isFirst)
@@ -3006,7 +3015,7 @@ func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
-	if c.IsTpQuery() {
+	if c.IsSingleScope(ss) {
 		op := constructLimit(n)
 		op.SetIdx(c.anal.curr)
 		op.SetIsFirst(c.anal.isFirst)
@@ -3037,14 +3046,16 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scope, right []*Scope) ([]*Scope, error) {
 	var l, r *Scope
-	if c.IsTpQuery() {
+	if c.IsSingleScope(left) {
 		l = left[0]
-		r = right[0]
 	} else {
 		l = c.newMergeScope(left)
+	}
+	if c.IsSingleScope(right) {
+		r = right[0]
+	} else {
 		r = c.newMergeScope(right)
 	}
-
 	all := []*Scope{l, r}
 	rs := c.newMergeScope(all)
 
