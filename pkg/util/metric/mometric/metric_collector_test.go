@@ -172,6 +172,8 @@ func (w *dummyStringWriter) FlushAndClose() (int, error) {
 
 func (w *dummyStringWriter) GetContent() string { return "" }
 
+func (w *dummyStringWriter) GetContentLength() int { return 0 }
+
 func newDummyFSWriterFactory(csvCh chan string) table.WriterFactory {
 	return table.NewWriterFactoryGetter(
 		func(_ context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {

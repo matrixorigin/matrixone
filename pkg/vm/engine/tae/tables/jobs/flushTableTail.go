@@ -362,6 +362,7 @@ func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 	phaseDesc = "1-wait LogTxnEntry"
 	inst = time.Now()
 	txnEntry, err := txnentries.NewFlushTableTailEntry(
+		ctx,
 		task.txn,
 		task.Name(),
 		task.transMappings,
@@ -435,30 +436,20 @@ func (task *flushTableTailTask) prepareAObjSortedData(
 	}
 	obj := task.aObjHandles[objIdx]
 
-	views, err := obj.GetColumnDataByIds(ctx, 0, idxs, common.MergeAllocator)
+	loadedBat, err := obj.GetColumnDataByIds(ctx, 0, idxs, common.MergeAllocator)
 	if err != nil {
 		return
 	}
-	bat = containers.NewBatch()
-	totalRowCnt := views.Columns[0].Length()
-	bat.Deletes = views.DeleteMask.Clone()
-	task.aObjDeletesCnt += bat.Deletes.GetCardinality()
-	defer views.Close()
-	for i, colidx := range idxs {
-		colview := views.Columns[i]
-		if colview == nil {
+	for i := range idxs {
+		if vec := loadedBat.Vecs[i]; vec == nil || vec.Length() == 0 {
 			empty = true
+			loadedBat.Close()
 			return
 		}
-		vec := colview.Orphan()
-		if vec.Length() == 0 {
-			empty = true
-			vec.Close()
-			bat.Close()
-			return
-		}
-		bat.AddVector(task.schema.ColDefs[colidx].Name, vec.TryConvertConst())
 	}
+	totalRowCnt := loadedBat.Length()
+	task.aObjDeletesCnt += loadedBat.Deletes.GetCardinality()
+	bat = loadedBat
 
 	var sortMapping []int64
 	if sortKeyPos >= 0 {
@@ -508,28 +499,28 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context) (err error) {
 
 	// read from aobjects
 	readedBats := make([]*containers.Batch, 0, len(task.aObjHandles))
-	for _, block := range task.aObjHandles {
-		err = block.Prefetch(readColIdxs)
-		if err != nil {
-			return
-		}
-	}
-
-	for i := range task.aObjHandles {
-		bat, empty, err := task.prepareAObjSortedData(ctx, i, readColIdxs, sortKeyPos)
-		if err != nil {
-			return err
-		}
-		if empty {
-			continue
-		}
-		readedBats = append(readedBats, bat)
-	}
 	defer func() {
 		for _, bat := range readedBats {
 			bat.Close()
 		}
 	}()
+	for _, block := range task.aObjHandles {
+		if err = block.Prefetch(readColIdxs); err != nil {
+			return
+		}
+	}
+
+	for i := range task.aObjHandles {
+		if bat, empty, err := task.prepareAObjSortedData(
+			ctx, i, readColIdxs, sortKeyPos,
+		); err != nil {
+			return err
+		} else if empty {
+			continue
+		} else {
+			readedBats = append(readedBats, bat)
+		}
+	}
 
 	// prepare merge
 	// toLayout describes the layout of the output batch, i.e. [8192, 8192, 8192, 4242]
