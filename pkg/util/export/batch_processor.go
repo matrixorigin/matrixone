@@ -17,6 +17,7 @@ package export
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"runtime"
@@ -33,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/ring"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 
@@ -252,7 +254,7 @@ type MOCollector struct {
 	// buffers maintain working buffer for each type
 	buffers map[string]*bufferHolder
 	// awakeCollect handle collect signal
-	awakeCollect chan batchpipe.HasName
+	awakeQueue *ring.RingBuffer[batchpipe.HasName]
 	// awakeGenerate handle generate signal
 	awakeGenerate chan generateReq
 	// awakeBatch handle export signal
@@ -290,7 +292,7 @@ func NewMOCollector(ctx context.Context, opts ...MOCollectorOption) *MOCollector
 		ctx:            ctx,
 		logger:         morun.ProcessLevelRuntime().Logger().Named(LoggerNameMOCollector).With(logutil.Discardable()),
 		buffers:        make(map[string]*bufferHolder),
-		awakeCollect:   make(chan batchpipe.HasName, defaultQueueSize),
+		awakeQueue:     ring.NewRingBuffer[batchpipe.HasName](defaultQueueSize),
 		awakeGenerate:  make(chan generateReq, 16),
 		awakeBatch:     make(chan exportReq),
 		stopCh:         make(chan struct{}),
@@ -407,28 +409,39 @@ func (c *MOCollector) Register(name batchpipe.HasName, impl motrace.PipeImpl) {
 
 // Collect item in chan, if collector is stopped then return error
 func (c *MOCollector) Collect(ctx context.Context, item batchpipe.HasName) error {
-	select {
-	case <-c.stopCh:
-		c.stopDrop.Add(1)
-		ctx = errutil.ContextWithNoReport(ctx, true)
-		return moerr.NewInternalError(ctx, "MOCollector stopped")
-	case c.awakeCollect <- item:
-		return nil
+	for {
+		select {
+		case <-c.stopCh:
+			c.stopDrop.Add(1)
+			ctx = errutil.ContextWithNoReport(ctx, true)
+			return moerr.NewInternalError(ctx, "MOCollector stopped")
+		default:
+			ok, _ := c.awakeQueue.Offer(item)
+			if ok {
+				return nil
+			}
+			time.Sleep(time.Millisecond)
+		}
 	}
 }
 
 // DiscardableCollect implements motrace.DiscardableCollector
 // cooperate with logutil.Discardable() field
 func (c *MOCollector) DiscardableCollect(ctx context.Context, item batchpipe.HasName) error {
-	select {
-	case <-c.stopCh:
-		c.stopDrop.Add(1)
-		ctx = errutil.ContextWithNoReport(ctx, true)
-		return moerr.NewInternalError(ctx, "MOCollector stopped")
-	case c.awakeCollect <- item:
-		return nil
-	case <-time.After(discardCollectTimeout):
-		return nil
+	now := time.Now()
+	for {
+		select {
+		case <-c.stopCh:
+			c.stopDrop.Add(1)
+			ctx = errutil.ContextWithNoReport(ctx, true)
+			return moerr.NewInternalError(ctx, "MOCollector stopped")
+		default:
+			ok, _ := c.awakeQueue.Offer(item)
+			if ok || time.Since(now) > discardCollectTimeout {
+				return nil
+			}
+			time.Sleep(time.Millisecond)
+		}
 	}
 }
 
@@ -490,7 +503,17 @@ func (c *MOCollector) doCollect(idx int) {
 loop:
 	for {
 		select {
-		case i := <-c.awakeCollect:
+		default:
+			i, got, err := c.awakeQueue.Poll(time.Second)
+			if !got {
+				if errors.Is(err, ring.ErrDisposed) {
+					v2.TraceCollectorDisposedCounter.Inc()
+				}
+				if errors.Is(err, ring.ErrTimeout) {
+					v2.TraceCollectorTimeoutCounter.Inc()
+				}
+				continue
+			}
 			start := time.Now()
 			c.mux.RLock()
 			if buf, has := c.buffers[i.GetName()]; !has {
@@ -643,7 +666,7 @@ loop:
 			fields := make([]zap.Field, 0, 16)
 			fields = append(fields, zap.Int32("MaxBufferCnt", c.maxBufferCnt))
 			fields = append(fields, zap.Int32("TotalBufferCnt", c.bufferTotal.Load()))
-			fields = append(fields, zap.Int("QueueLength", len(c.awakeCollect)))
+			fields = append(fields, zap.Int("QueueLength", int(c.awakeQueue.Len())))
 			for _, b := range c.buffers {
 				fields = append(fields, zap.Int32(fmt.Sprintf("%sBufferCnt", b.name), b.bufferCnt.Load()))
 				fields = append(fields, zap.Int32(fmt.Sprintf("%sDiscardCnt", b.name), b.discardCnt.Load()))
@@ -660,8 +683,8 @@ func (c *MOCollector) Stop(graceful bool) error {
 	var err error
 	var buf = new(bytes.Buffer)
 	c.stopOnce.Do(func() {
-		for len(c.awakeCollect) > 0 && graceful {
-			c.logger.Debug(fmt.Sprintf("doCollect left %d job", len(c.awakeCollect)))
+		for c.awakeQueue.Len() > 0 && graceful {
+			c.logger.Debug(fmt.Sprintf("doCollect left %d job", c.awakeQueue.Len()))
 			time.Sleep(250 * time.Millisecond)
 		}
 		c.mux.Lock()

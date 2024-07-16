@@ -43,6 +43,16 @@ var (
 			Help:      "Count of trace collector discard total.",
 		}, []string{"type"})
 
+	traceCollectorStatusCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "trace",
+			Name:      "collector_status_total",
+			Help:      "Count of trace collector discard total.",
+		}, []string{"type"})
+	TraceCollectorDisposedCounter = traceCollectorStatusCounter.WithLabelValues("disposed")
+	TraceCollectorTimeoutCounter  = traceCollectorStatusCounter.WithLabelValues("timeout")
+
 	traceNegativeCUCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "mo",
