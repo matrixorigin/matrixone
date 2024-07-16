@@ -204,7 +204,7 @@ func (c *DashboardCreator) initCronTaskRow() dashboard.Option {
 			"Run Count",
 			3,
 			[]string{
-				`sum(delta(` + c.getMetricWithFilter("mo_trace_storage_usage_total", "") + `[$interval])) by (type)`,
+				`sum(delta(` + c.getMetricWithFilter("mo_trace_check_storage_usage_total", "") + `[$interval])) by (type)`,
 			},
 			[]string{"{{ type }}"}),
 	)

@@ -152,7 +152,7 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 			return ctx.Err()
 		case <-ticker.C:
 			logger.Info("start next round")
-			v2.TraceStorageUsageAllCounter.Inc()
+			v2.GetTraceCheckStorageUsageAllCounter().Inc()
 		}
 
 		if !IsEnable() {
@@ -205,6 +205,7 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 
 			metric.StorageUsage(account).Set(sizeMB)
 			metric.SnapshotUsage(account).Set(snapshotSizeMB)
+			v2.GetTraceCheckStorageUsageNewIncCounter().Inc()
 		}
 
 		// next round
@@ -250,7 +251,7 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 			return
 		case now = <-next.C:
 			logger.Debug("start check new account")
-			v2.TraceStorageUsageNewCounter.Inc()
+			v2.GetTraceCheckStorageUsageNewCounter().Inc()
 		}
 
 		// mysql> select * from mo_catalog.mo_account;
