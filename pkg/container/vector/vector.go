@@ -98,13 +98,31 @@ func (v *Vector) SetSorted(b bool) {
 	v.sorted = b
 }
 
+// Reset update vector's fields with a specific type.
+// we should redefine the value of capacity and values-ptr because of the possible change in type.
 func (v *Vector) Reset(typ types.Type) {
+	originOid := v.typ.Oid
 	v.typ = typ
+
 	v.class = FLAT
 	if v.area != nil {
 		v.area = v.area[:0]
 	}
 
+	v.length = 0
+	v.nsp.Reset()
+	v.sorted = false
+
+	v.capacity = cap(v.data) / v.typ.TypeSize()
+	if originOid != v.typ.Oid {
+		v.setupFromData()
+	}
+}
+
+func (v *Vector) ResetWithSameType() {
+	if v.area != nil {
+		v.area = v.area[:0]
+	}
 	v.length = 0
 	v.nsp.Reset()
 	v.sorted = false
