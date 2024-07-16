@@ -169,6 +169,19 @@ func (c *PushClient) GetState() State {
 	}
 }
 
+// Only used for ut
+func (c *PushClient) SetSubscribeState(dbId, tblId uint64, state SubscribeState) {
+	k := SubTableID{DatabaseID: dbId, TableID: tblId}
+	c.subscribed.m[k] = SubTableStatus{
+		SubState:   state,
+		LatestTime: time.Now(),
+	}
+}
+
+func (c *PushClient) IsSubscriberReady() bool {
+	return c.subscriber.ready.Load()
+}
+
 type connector struct {
 	first  atomic.Bool
 	signal chan struct{}

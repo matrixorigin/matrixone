@@ -16,8 +16,8 @@ package testutil
 
 import (
 	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
@@ -29,8 +29,10 @@ type PObjectStats struct {
 }
 
 type PInmemRowsStats struct {
-	VisibleCnt   int
-	InvisibleCnt int
+	VisibleCnt                int
+	InvisibleCnt              int
+	VisibleDistinctBlockCnt   int
+	InvisibleDistinctBlockCnt int
 }
 
 type PartitionStateStats struct {
@@ -49,6 +51,8 @@ type PartitionStateStats struct {
 			Visible, Invisible []logtailreplay.ObjectEntry
 		}
 		TombstoneObjectList []logtailreplay.ObjectEntry
+
+		DirtyBlocks map[types.Blockid]struct{}
 	}
 }
 
