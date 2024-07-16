@@ -26,6 +26,12 @@ func init() {
 		func(d *DropPitr) { d.reset() },
 		reuse.DefaultOptions[DropPitr](), //.
 	) //WithEnableChecker()
+
+	reuse.CreatePool[AlterPitr](
+		func() *AlterPitr { return &AlterPitr{} },
+		func(d *AlterPitr) { d.reset() },
+		reuse.DefaultOptions[AlterPitr](), //.
+	) //WithEnableChecker()
 }
 
 type PitrLevel int
@@ -170,6 +176,21 @@ func (node *AlterPitr) Format(ctx *FmtCtx) {
 	ctx.WriteString(fmt.Sprintf("%v ", node.PitrValue))
 	ctx.WriteString(" ")
 	ctx.WriteString(node.PitrUnit)
+}
+
+func (node *AlterPitr) Free() { reuse.Free[AlterPitr](node, nil) }
+
+func (node *AlterPitr) reset() { *node = AlterPitr{} }
+
+func (node AlterPitr) TypeName() string { return "tree.AlterPitr" }
+
+func NewAlterPitr(ifExists bool, Name Identifier, PitrValue int64, PitrUnit string) *AlterPitr {
+	alter := reuse.Alloc[AlterPitr](nil)
+	alter.IfExists = ifExists
+	alter.Name = Name
+	alter.PitrValue = PitrValue
+	alter.PitrUnit = PitrUnit
+	return alter
 }
 
 func (node *AlterPitr) GetStatementType() string { return "Alter PITR" }

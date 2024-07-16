@@ -3112,12 +3112,11 @@ alter_partition_option:
 alter_pitr_stmt:
     ALTER PITR exists_opt ident RANGE pitr_value STRING
     {
-        $$ = &tree.AlterPitr{
-            IfExists:$3,
-            Name: tree.Identifier($4.Compare()),
-            PitrValue: $6,
-            PitrUnit: $7,
-        }
+       var ifExists = $3
+       var name = tree.Identifier($4.Compare())
+       var pitrValue = $6
+       var pitrUnit = $7
+       $$ = tree.NewAlterPitr(ifExists, name, pitrValue, pitrUnit)
     }
 
 partition_option:
@@ -6603,8 +6602,8 @@ drop_pitr_stmt:
    DROP PITR exists_opt ident
    {
        var ifExists = $3
-        var name = tree.Identifier($4.Compare())
-        $$ = tree.NewDropPitr(ifExists, name)
+       var name = tree.Identifier($4.Compare())
+       $$ = tree.NewDropPitr(ifExists, name)
    }
 
 account_role_name:
