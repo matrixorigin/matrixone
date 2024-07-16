@@ -22,8 +22,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	"github.com/matrixorigin/matrixone/pkg/txn/service"
 )
 
 func TestGatherStats(t *testing.T) {
@@ -32,7 +32,7 @@ func TestGatherStats(t *testing.T) {
 	defer cancel()
 
 	r.ctx = ctx
-	r.ctx, _, _ = r.prepareGatherStats()
+	r.ctx, _, _ = prepareGatherStats(ctx)
 
 	hitNum, readNum := rand.Int63(), rand.Int63()
 	perfcounter.Update(r.ctx, func(c *perfcounter.CounterSet) {
@@ -42,7 +42,7 @@ func TestGatherStats(t *testing.T) {
 		c.FileService.Cache.Memory.Hit.Add(hitNum)
 	}, nil)
 
-	r.gatherStats(0, 0)
+	gatherStats(0, 0)
 
 	hit, total := objectio.BlkReadStats.BlkCacheHitStats.Export()
 	if hitNum < readNum {
@@ -65,14 +65,12 @@ func TestReaderInProgress(t *testing.T) {
 		ctx,
 		nil,
 		nil,
-		service.NewTestTimestamp(1),
 		nil,
 		nil,
-		true,
+		timestamp.Timestamp{},
 		nil,
-		nil,
-		nil,
-		nil,
+		false,
+		0,
 		nil,
 	)
 	require.NotNil(t, r)

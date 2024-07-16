@@ -761,6 +761,7 @@ type withFilterMixin struct {
 		seqnums  []uint16 // seqnums of the columns in the filter
 		colTypes []types.Type
 		hasNull  bool
+		record   bool
 	}
 
 	sels []int32
@@ -806,6 +807,22 @@ type blockMergeReader struct {
 }
 
 type readerInProgress struct {
+	withFilterMixin
+
+	source    DataSource
+	txnOffset int
+	ts        timestamp.Timestamp
+
+	//FIXME:: prefetch blocks in DataSource?
+	dontPrefetch bool
+	infos        [][]*objectio.BlockInfo
+	steps        []int
+	currentStep  int
+
+	memFilter memPKFilter
+	//blockFilter blockio.BlockReadFilter
+
+	scanType int
 
 	// for ordered scan
 	desc     bool

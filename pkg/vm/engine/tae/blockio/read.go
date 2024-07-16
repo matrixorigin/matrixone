@@ -19,6 +19,8 @@ import (
 	"math"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -30,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"go.uber.org/zap"
 )
 
 type ReadFilterSearchFuncType func([]*vector.Vector) []int32
@@ -40,6 +41,77 @@ type BlockReadFilter struct {
 	Valid              bool
 	SortedSearchFunc   ReadFilterSearchFuncType
 	UnSortedSearchFunc ReadFilterSearchFuncType
+}
+
+// ReadByFilter only read block data from storage by filter, don't apply deletes.
+func ReadDataByFilter(
+	ctx context.Context,
+	info *objectio.BlockInfoInProgress,
+	//inputDeletes []int64,
+	columns []uint16,
+	colTypes []types.Type,
+	ts types.TS,
+	searchFunc ReadFilterSearchFuncType,
+	fs fileservice.FileService,
+	mp *mpool.MPool,
+) (sels []int32, err error) {
+	bat, release, err := LoadColumns(ctx, columns, colTypes, fs, info.MetaLocation(), mp, fileservice.Policy(0))
+	if err != nil {
+		return
+	}
+	defer release()
+	//var deleteMask *nulls.Nulls
+
+	// merge persisted deletes
+	//if !info.DeltaLocation().IsEmpty() {
+	//	now := time.Now()
+	//	var persistedDeletes *batch.Batch
+	//	var persistedByCN bool
+	//	var release func()
+	//	// load from storage
+	//	if persistedDeletes, persistedByCN, release, err = ReadBlockDelete(ctx, info.DeltaLocation(), fs); err != nil {
+	//		return
+	//	}
+	//	defer release()
+	//	readcost := time.Since(now)
+	//	var rows *nulls.Nulls
+	//	var bisect time.Duration
+	//	if persistedByCN {
+	//		rows = EvalDeleteRowsByTimestampForDeletesPersistedByCN(persistedDeletes, ts, info.CommitTs)
+	//	} else {
+	//		nowx := time.Now()
+	//		rows = EvalDeleteRowsByTimestamp(persistedDeletes, ts, &info.BlockID)
+	//		bisect = time.Since(nowx)
+	//	}
+	//	if rows != nil {
+	//		deleteMask = rows
+	//	}
+	//	readtotal := time.Since(now)
+	//	RecordReadDel(readtotal, readcost, bisect)
+	//}
+
+	//if deleteMask == nil {
+	//	deleteMask = nulls.NewWithSize(len(inputDeletes))
+	//}
+
+	//// merge input deletes
+	//for _, row := range inputDeletes {
+	//	deleteMask.Add(uint64(row))
+	//}
+
+	sels = searchFunc(bat.Vecs)
+
+	// deslect deleted rows from sels
+	//if !deleteMask.IsEmpty() {
+	//	var rows []int32
+	//	for _, row := range sels {
+	//		if !deleteMask.Contains(uint64(row)) {
+	//			rows = append(rows, row)
+	//		}
+	//	}
+	//	sels = rows
+	//}
+	return
 }
 
 func ReadByFilter(
@@ -110,6 +182,78 @@ func ReadByFilter(
 		sels = rows
 	}
 	return
+}
+
+// BlockDataRead only read block data from storage, don't apply deletes.
+func BlockDataRead(
+	ctx context.Context,
+	info *objectio.BlockInfoInProgress,
+	//inputDeletes []int64,
+	columns []uint16,
+	colTypes []types.Type,
+	ts timestamp.Timestamp,
+	filterSeqnums []uint16,
+	filterColTypes []types.Type,
+	filter BlockReadFilter,
+	fs fileservice.FileService,
+	mp *mpool.MPool,
+	vp engine.VectorPool,
+	policy fileservice.Policy,
+) (*batch.Batch, error) {
+	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+		logutil.Debugf("read block %s, columns %v, types %v", info.BlockID.String(), columns, colTypes)
+	}
+
+	var (
+		sels []int32
+		err  error
+	)
+
+	var searchFunc ReadFilterSearchFuncType
+	if (filter.HasFakePK || !info.Sorted) && filter.UnSortedSearchFunc != nil {
+		searchFunc = filter.UnSortedSearchFunc
+	} else if info.Sorted && filter.SortedSearchFunc != nil {
+		searchFunc = filter.SortedSearchFunc
+	}
+
+	if searchFunc != nil {
+		if sels, err = ReadDataByFilter(
+			ctx, info, filterSeqnums, filterColTypes,
+			types.TimestampToTS(ts), searchFunc, fs, mp,
+		); err != nil {
+			return nil, err
+		}
+		v2.TaskSelReadFilterTotal.Inc()
+		if len(sels) == 0 {
+			RecordReadFilterSelectivity(1, 1)
+			v2.TaskSelReadFilterHit.Inc()
+		} else {
+			RecordReadFilterSelectivity(0, 1)
+		}
+
+		if len(sels) == 0 {
+			result := batch.NewWithSize(len(colTypes))
+			for i, typ := range colTypes {
+				if vp == nil {
+					result.Vecs[i] = vector.NewVec(typ)
+				} else {
+					result.Vecs[i] = vp.GetVector(typ)
+				}
+			}
+			return result, nil
+		}
+	}
+
+	columnBatch, err := BlockDataReadInner(
+		ctx, info, columns, colTypes,
+		types.TimestampToTS(ts), sels, fs, mp, vp, policy,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	columnBatch.SetRowCount(columnBatch.Vecs[0].Length())
+	return columnBatch, nil
 }
 
 // BlockRead read block data from storage and apply deletes according given timestamp. Caller make sure metaloc is not empty
@@ -222,6 +366,182 @@ func BlockCompactionRead(
 	}
 	result.SetRowCount(result.Vecs[0].Length())
 	return result, nil
+}
+
+// BlockDataReadInner only read data,don't apply deletes.
+func BlockDataReadInner(
+	ctx context.Context,
+	info *objectio.BlockInfoInProgress,
+	columns []uint16,
+	colTypes []types.Type,
+	ts types.TS,
+	selectRows []int32, // if selectRows is not empty, it was already filtered by filter
+	fs fileservice.FileService,
+	mp *mpool.MPool,
+	vp engine.VectorPool,
+	policy fileservice.Policy,
+) (result *batch.Batch, err error) {
+	var (
+		rowidPos    int
+		deletedRows []int64
+		deleteMask  nulls.Bitmap
+		loaded      *batch.Batch
+		release     func()
+	)
+
+	// read block data from storage specified by meta location
+	if loaded, rowidPos, deleteMask, release, err = readBlockDataInprogress(
+		ctx, columns, colTypes, info, ts, fs, mp, vp, policy,
+	); err != nil {
+		return
+	}
+	defer release()
+
+	// assemble result batch for return
+	result = batch.NewWithSize(len(loaded.Vecs))
+
+	if len(selectRows) > 0 {
+		// NOTE: it always goes here if there is a filter and the block is sorted
+		// and there are selected rows after applying the filter and delete mask
+
+		// build rowid column if needed
+		if rowidPos >= 0 {
+			if loaded.Vecs[rowidPos], err = buildRowidColumnInProgress(
+				info, selectRows, mp, vp,
+			); err != nil {
+				return
+			}
+		}
+
+		// assemble result batch only with selected rows
+		for i, col := range loaded.Vecs {
+			typ := *col.GetType()
+			if typ.Oid == types.T_Rowid {
+				result.Vecs[i] = col
+				continue
+			}
+			if vp == nil {
+				result.Vecs[i] = vector.NewVec(typ)
+			} else {
+				result.Vecs[i] = vp.GetVector(typ)
+			}
+			if err = result.Vecs[i].PreExtendArea(len(selectRows), mp); err != nil {
+				break
+			}
+			if err = result.Vecs[i].Union(col, selectRows, mp); err != nil {
+				break
+			}
+		}
+		if err != nil {
+			for _, col := range result.Vecs {
+				if col != nil {
+					col.Free(mp)
+				}
+			}
+		}
+		return
+	}
+
+	// read deletes from storage specified by delta location
+	//if !info.DeltaLocation().IsEmpty() {
+	//	var deletes *batch.Batch
+	//	var persistedByCN bool
+	//	var release func()
+	//	now := time.Now()
+	//	// load from storage
+	//	if deletes, persistedByCN, release, err = ReadBlockDelete(ctx, info.DeltaLocation(), fs); err != nil {
+	//		return
+	//	}
+	//	defer release()
+	//	readcost := time.Since(now)
+
+	//	// eval delete rows by timestamp
+	//	var rows *nulls.Nulls
+	//	var bisect time.Duration
+	//	if persistedByCN {
+	//		rows = EvalDeleteRowsByTimestampForDeletesPersistedByCN(deletes, ts, info.CommitTs)
+	//	} else {
+	//		nowx := time.Now()
+	//		rows = EvalDeleteRowsByTimestamp(deletes, ts, &info.BlockID)
+	//		bisect = time.Since(nowx)
+	//	}
+
+	//	// merge delete rows
+	//	deleteMask.Merge(rows)
+
+	//	readtotal := time.Since(now)
+	//	RecordReadDel(readtotal, readcost, bisect)
+
+	//	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+	//		logutil.Debugf(
+	//			"blockread %s read delete %d: base %s filter out %v\n",
+	//			info.BlockID.String(), deletes.RowCount(), ts.ToString(), deleteMask.Count())
+	//	}
+	//}
+
+	//// merge deletes from input
+	//// deletes from storage + deletes from input
+	//for _, row := range inputDeleteRows {
+	//	deleteMask.Add(uint64(row))
+	//}
+
+	// Note: it always goes here if no filter or the block is not sorted
+
+	// transform delete mask to deleted rows
+	// TODO: avoid this transformation
+	if !deleteMask.IsEmpty() {
+		deletedRows = deleteMask.ToI64Arrary()
+		// logutil.Debugf("deleted/length: %d/%d=%f",
+		// 	len(deletedRows),
+		// 	loaded.Vecs[0].Length(),
+		// 	float64(len(deletedRows))/float64(loaded.Vecs[0].Length()))
+	}
+
+	// build rowid column if needed
+	if rowidPos >= 0 {
+		if loaded.Vecs[rowidPos], err = buildRowidColumnInProgress(
+			info, nil, mp, vp,
+		); err != nil {
+			return
+		}
+	}
+
+	// assemble result batch
+	for i, col := range loaded.Vecs {
+		typ := *col.GetType()
+
+		if typ.Oid == types.T_Rowid {
+			// rowid is already allocted by the mpool, no need to create a new vector
+			result.Vecs[i] = col
+		} else {
+			// for other types, we need to create a new vector
+			if vp == nil {
+				result.Vecs[i] = vector.NewVec(typ)
+			} else {
+				result.Vecs[i] = vp.GetVector(typ)
+			}
+			// copy the data from loaded vector to result vector
+			// TODO: avoid this allocation and copy
+			if err = vector.GetUnionAllFunction(typ, mp)(result.Vecs[i], col); err != nil {
+				break
+			}
+		}
+
+		// shrink the vector by deleted rows
+		if len(deletedRows) > 0 {
+			result.Vecs[i].Shrink(deletedRows, true)
+		}
+	}
+
+	// if any error happens, free the result batch allocated
+	if err != nil {
+		for _, col := range result.Vecs {
+			if col != nil {
+				col.Free(mp)
+			}
+		}
+	}
+	return
 }
 
 func BlockReadInner(
@@ -420,6 +740,40 @@ func getRowsIdIndex(colIndexes []uint16, colTypes []types.Type) (int, []uint16, 
 	return idx, idxes, typs
 }
 
+func buildRowidColumnInProgress(
+	info *objectio.BlockInfoInProgress,
+	sels []int32,
+	m *mpool.MPool,
+	vp engine.VectorPool,
+) (col *vector.Vector, err error) {
+	if vp == nil {
+		col = vector.NewVec(objectio.RowidType)
+	} else {
+		col = vp.GetVector(objectio.RowidType)
+	}
+	if len(sels) == 0 {
+		err = objectio.ConstructRowidColumnTo(
+			col,
+			&info.BlockID,
+			0,
+			info.MetaLocation().Rows(),
+			m,
+		)
+	} else {
+		err = objectio.ConstructRowidColumnToWithSels(
+			col,
+			&info.BlockID,
+			sels,
+			m,
+		)
+	}
+	if err != nil {
+		col.Free(m)
+		col = nil
+	}
+	return
+}
+
 func buildRowidColumn(
 	info *objectio.BlockInfo,
 	sels []int32,
@@ -451,6 +805,76 @@ func buildRowidColumn(
 		col.Free(m)
 		col = nil
 	}
+	return
+}
+
+func readBlockDataInprogress(
+	ctx context.Context,
+	colIndexes []uint16,
+	colTypes []types.Type,
+	info *objectio.BlockInfoInProgress,
+	ts types.TS,
+	fs fileservice.FileService,
+	m *mpool.MPool,
+	vp engine.VectorPool,
+	policy fileservice.Policy,
+) (bat *batch.Batch, rowidPos int, deleteMask nulls.Bitmap, release func(), err error) {
+	rowidPos, idxes, typs := getRowsIdIndex(colIndexes, colTypes)
+
+	readColumns := func(cols []uint16) (result *batch.Batch, loaded *batch.Batch, err error) {
+		if len(cols) == 0 && rowidPos >= 0 {
+			// only read rowid column on non appendable block, return early
+			result = batch.NewWithSize(1)
+			// result.Vecs[0] = rowid
+			release = func() {}
+			return
+		}
+
+		if loaded, release, err = LoadColumns(ctx, cols, typs, fs, info.MetaLocation(), m, policy); err != nil {
+			return
+		}
+
+		colPos := 0
+		result = batch.NewWithSize(len(colTypes))
+		for i, typ := range colTypes {
+			if typ.Oid != types.T_Rowid {
+				result.Vecs[i] = loaded.Vecs[colPos]
+				colPos++
+			}
+		}
+		return
+	}
+
+	readABlkColumns := func(cols []uint16) (result *batch.Batch, deletes nulls.Bitmap, err error) {
+		var loaded *batch.Batch
+		// appendable block should be filtered by committs
+		cols = append(cols, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT) // committs, aborted
+
+		// no need to add typs, the two columns won't be generated
+		if result, loaded, err = readColumns(cols); err != nil {
+			return
+		}
+
+		t0 := time.Now()
+		aborts := vector.MustFixedCol[bool](loaded.Vecs[len(loaded.Vecs)-1])
+		commits := vector.MustFixedCol[types.TS](loaded.Vecs[len(loaded.Vecs)-2])
+		for i := 0; i < len(commits); i++ {
+			if aborts[i] || commits[i].Greater(&ts) {
+				deletes.Add(uint64(i))
+			}
+		}
+		logutil.Debugf(
+			"blockread %s scan filter cost %v: base %s filter out %v\n ",
+			info.BlockID.String(), time.Since(t0), ts.ToString(), deletes.Count())
+		return
+	}
+
+	if info.EntryState {
+		bat, deleteMask, err = readABlkColumns(idxes)
+	} else {
+		bat, _, err = readColumns(idxes)
+	}
+
 	return
 }
 

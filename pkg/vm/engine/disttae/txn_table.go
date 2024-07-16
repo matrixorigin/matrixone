@@ -1721,6 +1721,11 @@ func (tbl *txnTable) GetDBID(ctx context.Context) uint64 {
 	return tbl.db.databaseId
 }
 
+// local
+func (tbl *txnTable) BuildDataSource() {
+
+}
+
 // NewReader creates a new list of Readers to read data from the table.
 // Parameters:
 //   - ctx: Context used to control the lifecycle of the request.

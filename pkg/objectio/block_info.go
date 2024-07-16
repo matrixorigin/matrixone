@@ -54,6 +54,7 @@ const (
 	BlockInfoSize = int(unsafe.Sizeof(EmptyBlockInfo))
 )
 
+// BlockInfo TODO::It's deprecated, and will be removed.
 type BlockInfo struct {
 	BlockID types.Blockid
 	//It's used to indicate whether the block is appendable block or non-appendable blk for reader.
@@ -69,6 +70,24 @@ type BlockInfo struct {
 	//this block can be distributed to remote nodes.
 	CanRemote    bool
 	PartitionNum int
+}
+
+type BlockInfoInProgress struct {
+	BlockID types.Blockid
+	//It's used to indicate whether the block is appendable block or non-appendable blk for reader.
+	// for appendable block, the data visibility in the block is determined by the commit ts and abort ts.
+	EntryState bool
+	Sorted     bool
+	MetaLoc    ObjectLocation
+	CommitTs   types.TS
+}
+
+func (b *BlockInfoInProgress) MetaLocation() Location {
+	return b.MetaLoc[:]
+}
+
+func (b *BlockInfoInProgress) SetMetaLocation(metaLoc Location) {
+	b.MetaLoc = *(*[LocationLen]byte)(unsafe.Pointer(&metaLoc[0]))
 }
 
 func (b *BlockInfo) MetaLocation() Location {

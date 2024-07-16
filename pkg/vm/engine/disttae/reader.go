@@ -62,7 +62,7 @@ func (mixin *withFilterMixin) reset() {
 // call tryUpdate to update the seqnums
 // NOTE: here we assume the tryUpdate is always called with the same cols
 // for all blocks and it will only be updated once
-func (mixin *withFilterMixin) tryUpdateColumns(cols []string, blkCnt int) {
+func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 	if len(cols) == len(mixin.columns.seqnums) {
 		return
 	}
@@ -112,7 +112,7 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string, blkCnt int) {
 		mixin.filterState.colTypes = mixin.columns.colTypes[mixin.columns.pkPos : mixin.columns.pkPos+1]
 
 		// records how many blks one reader needs to read when having filter
-		objectio.BlkReadStats.BlksByReaderStats.Record(1, blkCnt)
+		//objectio.BlkReadStats.BlksByReaderStats.Record(1, blkCnt)
 	}
 }
 
@@ -329,7 +329,12 @@ func (r *blockReader) Read(
 
 	// try to update the columns
 	// the columns is only updated once for all blocks
-	r.tryUpdateColumns(cols, len(r.blks))
+	r.tryUpdateColumns(cols)
+	if !r.filterState.record {
+		// records how many blks one reader needs to read when having filter
+		objectio.BlkReadStats.BlksByReaderStats.Record(1, len(r.blks))
+		r.filterState.record = true
+	}
 
 	filter := r.withFilterMixin.filterState.filter
 
@@ -360,7 +365,7 @@ func (r *blockReader) Read(
 	if filter.Valid {
 		// try to store the blkReadStats CounterSet into ctx, so that
 		// it can record the mem cache hit stats when call MemCache.Read() later soon.
-		statsCtx, numRead, numHit = r.prepareGatherStats()
+		statsCtx, numRead, numHit = prepareGatherStats(r.ctx)
 	}
 
 	// read the block
@@ -382,7 +387,7 @@ func (r *blockReader) Read(
 
 	if filter.Valid {
 		// we collect mem cache hit related statistics info for blk read here
-		r.gatherStats(numRead, numHit)
+		gatherStats(numRead, numHit)
 	}
 
 	bat.SetAttributes(cols)
@@ -397,13 +402,13 @@ func (r *blockReader) Read(
 	return bat, nil
 }
 
-func (r *blockReader) prepareGatherStats() (context.Context, int64, int64) {
-	ctx := perfcounter.WithCounterSet(r.ctx, objectio.BlkReadStats.CounterSet)
+func prepareGatherStats(ctx context.Context) (context.Context, int64, int64) {
+	ctx = perfcounter.WithCounterSet(ctx, objectio.BlkReadStats.CounterSet)
 	return ctx, objectio.BlkReadStats.CounterSet.FileService.Cache.Read.Load(),
 		objectio.BlkReadStats.CounterSet.FileService.Cache.Hit.Load()
 }
 
-func (r *blockReader) gatherStats(lastNumRead, lastNumHit int64) {
+func gatherStats(lastNumRead, lastNumHit int64) {
 	numRead := objectio.BlkReadStats.CounterSet.FileService.Cache.Read.Load()
 	numHit := objectio.BlkReadStats.CounterSet.FileService.Cache.Hit.Load()
 
@@ -517,7 +522,7 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 	}
 	info := r.blks[0]
 
-	r.tryUpdateColumns(cols, len(r.blks))
+	//r.tryUpdateColumns(cols, len(r.blks))
 	// load deletes from txn.blockId_dn_delete_metaLoc_batch
 	err := r.table.LoadDeletesForBlock(info.BlockID, &r.buffer)
 	if err != nil {
@@ -687,27 +692,51 @@ func (r *mergeReader) Read(
 func newReaderInProgress(
 	ctx context.Context,
 	proc *process.Process, //it comes from transaction if reader run in local,otherwise it comes from remote compile.
+	fs fileservice.FileService, //it comes from engine.fs.
+	packerPool *fileservice.Pool[*types.Packer], //it comes from engine.packerPool.
 	tableDef *plan.TableDef,
 	ts timestamp.Timestamp,
 	expr *plan.Expr,
-	filter any, // it's valid when reader runs on remote side.
+	//filter any, // it's valid when reader runs on remote side.
 	orderedScan bool, // it's valid when reader runs on local.
-	//txnOffset int, // it can be removed. it's different between normal reader and snapshot reader.
-
-	//use interface
-	uncommittedRows *batch.Batch, //data in memory
-	committedRows *batch.Batch, // data in memory
-	//FIXME:: use interface?
-	dataBlks []*objectio.BlockInfo, //data in disk, include committed and uncommitted blocks.
-
-	tombstones engine.Tombstone, //in memory tombstones and tombstone objects in disk, which should be broadcast to each reader.
-
-	//inMemTombstones engine.Tombstone, //tombstones in memory, include uncommitted and commited tombstones.
-	//tombstoneObjs []*logtailreplay.ObjectInfo, //tombstones in disk, include commited and uncommitted tombstones.
-
+	txnOffset int, // it can be removed. it's different between normal reader and snapshot reader.
+	source DataSource,
 ) *readerInProgress {
 
-	return &readerInProgress{}
+	baseFilter := newBasePKFilter(
+		expr,
+		tableDef,
+		proc,
+	)
+	//TODO:: build mem pk filter.
+	//memFilter := newMemPKFilter(
+	//	tableDef,
+	//	ts,
+	//	state,
+	//	txn.engine.packerPool,
+	//	baseFilter,
+	//)
+
+	blockFilter := newBlockReadPKFilter(
+		tableDef.Pkey.PkeyColName,
+		baseFilter,
+	)
+
+	r := &readerInProgress{
+		withFilterMixin: withFilterMixin{
+			ctx:      ctx,
+			fs:       fs,
+			ts:       ts,
+			proc:     proc,
+			tableDef: tableDef,
+		},
+		source:    source,
+		txnOffset: txnOffset,
+		ts:        ts,
+	}
+	r.filterState.expr = expr
+	r.filterState.filter = blockFilter
+	return r
 }
 
 func (r *readerInProgress) Close() error {
@@ -745,5 +774,110 @@ func (r *readerInProgress) Read(
 	vp engine.VectorPool,
 ) (*batch.Batch, error) {
 
-	return nil, nil
+	start := time.Now()
+	defer func() {
+		v2.TxnBlockReaderDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
+	//// for ordered scan, sort blocklist by zonemap info, and then filter by zonemap
+	//if len(r.OrderBy) > 0 {
+	//	if !r.sorted {
+	//		r.desc = r.OrderBy[0].Flag&plan.OrderBySpec_DESC != 0
+	//		r.getBlockZMs()
+	//		r.sortBlockList()
+	//		r.sorted = true
+	//	}
+	//	i := 0
+	//	for i < len(r.blks) {
+	//		if r.needReadBlkByZM(i) {
+	//			break
+	//		}
+	//		i++
+	//	}
+	//	r.deleteFirstNBlocks(i)
+	//}
+
+	r.tryUpdateColumns(cols)
+
+	bat := batch.NewWithSize(len(cols))
+	bat.SetAttributes(cols)
+	for i := range cols {
+		if vp == nil {
+			bat.Vecs[i] = vector.NewVec(r.columns.colTypes[i])
+		} else {
+			bat.Vecs[i] = vp.GetVector(r.columns.colTypes[i])
+		}
+	}
+	blkInfo, state, err := r.source.Next(
+		ctx,
+		cols,
+		r.columns.colTypes,
+		r.columns.seqnums,
+		r.memFilter,
+		mp,
+		vp,
+		bat)
+
+	if err != nil {
+		return nil, err
+	}
+	if state == End {
+		return nil, nil
+	}
+	if state == InMem {
+		return bat, nil
+	}
+
+	//read block
+	filter := r.withFilterMixin.filterState.filter
+
+	statsCtx, numRead, numHit := r.ctx, int64(0), int64(0)
+	if filter.Valid {
+		// try to store the blkReadStats CounterSet into ctx, so that
+		// it can record the mem cache hit stats when call MemCache.Read() later soon.
+		statsCtx, numRead, numHit = prepareGatherStats(r.ctx)
+	}
+
+	var policy fileservice.Policy
+	if r.scanType == LARGE || r.scanType == NORMAL {
+		policy = fileservice.SkipMemoryCacheWrites
+	}
+
+	bat, err = blockio.BlockDataRead(
+		statsCtx, blkInfo, r.columns.seqnums, r.columns.colTypes, r.ts,
+		r.filterState.seqnums,
+		r.filterState.colTypes,
+		filter,
+		r.fs, mp, vp, policy,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if filter.Valid {
+		// we collect mem cache hit related statistics info for blk read here
+		gatherStats(numRead, numHit)
+	}
+
+	bat.SetAttributes(cols)
+
+	var sels []int64
+	if bat.RowCount() > 0 {
+		rowIDs := vector.MustFixedCol[types.Rowid](bat.Vecs[0])
+		bid := rowIDs[0].CloneBlockID()
+		if r.source.HasTombstones(bid) {
+			sels = r.source.ApplyTombstones(rowIDs)
+		}
+	}
+	bat.Shrink(sels, false)
+
+	if blkInfo.Sorted && r.columns.indexOfFirstSortedColumn != -1 {
+		bat.GetVector(int32(r.columns.indexOfFirstSortedColumn)).SetSorted(true)
+	}
+
+	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+		logutil.Debug(testutil.OperatorCatchBatch("block reader", bat))
+	}
+
+	return bat, nil
 }
