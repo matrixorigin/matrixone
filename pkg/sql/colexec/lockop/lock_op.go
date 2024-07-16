@@ -737,7 +737,7 @@ func (lockOp *LockOp) CopyToPipelineTarget() []*pipeline.LockTarget {
 			ChangeDef:          target.changeDef,
 			Mode:               target.mode,
 			LockRows:           plan.DeepCopyExpr(target.lockRows),
-			// LockTableAtTheEnd:  target.lockTableAtTheEnd,
+			LockTableAtTheEnd:  target.lockTableAtTheEnd,
 		}
 	}
 	return targets
@@ -893,6 +893,7 @@ func (lockOp *LockOp) Free(proc *process.Process, pipelineFailed bool, err error
 			lockOp.ctr.rt.retryError = nil
 			lockOp.cleanCachedBatch(proc)
 			lockOp.ctr.rt.FreeMergeTypeOperator(pipelineFailed)
+			lockOp.ctr.rt.lockCount = 0
 			lockOp.ctr.rt = nil
 		}
 		lockOp.ctr = nil
@@ -1015,6 +1016,5 @@ func lockTalbeIfLockCountIsZero(
 		}
 	}
 
-	rt.lockCount = -1 //only run lock table one time
 	return nil
 }
