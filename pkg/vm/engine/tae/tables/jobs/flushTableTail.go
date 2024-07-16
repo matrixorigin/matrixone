@@ -178,9 +178,9 @@ func NewFlushTableTailTask(
 		if hdl.IsAppendable() && !obj.HasDropCommitted() {
 			task.aObjMetas = append(task.aObjMetas, obj)
 			task.aObjHandles = append(task.aObjHandles, hdl)
-			blkCount := obj.BlkCnt()
+			blkCount := obj.BlockCnt()
 			task.aObjBlockCounts = append(task.aObjBlockCounts, uint16(blkCount))
-			task.aObjBlockOffsets = append(task.aObjBlockCounts, offset)
+			task.aObjBlockOffsets = append(task.aObjBlockOffsets, offset)
 			offset += uint16(blkCount)
 			if obj.GetObjectData().CheckFlushTaskRetry(txn.GetStartTS()) {
 				logutil.Info(
@@ -198,7 +198,12 @@ func NewFlushTableTailTask(
 
 	task.doTransfer = !strings.Contains(task.schema.Comment, pkgcatalog.MO_COMMENT_NO_DEL_HINT)
 	if task.doTransfer {
-		task.transMappings = mergesort.NewBlkTransferBooking(int(task.aObjBlockOffsets[len(task.aObjBlockOffsets)-1]))
+		blkCount := uint16(0)
+		if len(task.aObjBlockCounts) != 0 {
+			objCount := len(task.aObjBlockCounts)
+			blkCount = task.aObjBlockOffsets[objCount-1] + task.aObjBlockCounts[objCount-1]
+		}
+		task.transMappings = mergesort.NewBlkTransferBooking(int(blkCount))
 	}
 
 	tblEntry := rel.GetMeta().(*catalog.TableEntry)
@@ -656,6 +661,9 @@ func (task *flushTableTailTask) flushAObjsForSnapshot(ctx context.Context) (subt
 			if dataVer, err = objData.CollectAppendInRangeWithBlockID(
 				uint16(j), types.TS{}, task.txn.GetStartTS(), true, common.MergeAllocator,
 			); err != nil {
+				for _, batch := range data {
+					batch.Close()
+				}
 				return
 			}
 			if dataVer.Batch == nil || dataVer.Batch.Length() == 0 {
@@ -722,9 +730,9 @@ func (task *flushTableTailTask) waitFlushAObjForSnapshot(ctx context.Context, su
 		}
 		deltaLoc := blockio.EncodeLocation(
 			subtask.name,
-			subtask.blocks[1].GetExtent(),
+			subtask.blocks[len(subtask.data)].GetExtent(),
 			uint32(subtask.delta.Length()),
-			subtask.blocks[1].GetID())
+			subtask.blocks[len(subtask.data)].GetID())
 
 		if err = task.aObjHandles[i].UpdateDeltaLoc(0, deltaLoc); err != nil {
 			return err

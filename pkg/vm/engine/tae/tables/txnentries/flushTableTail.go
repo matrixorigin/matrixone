@@ -125,12 +125,14 @@ func NewFlushTableTailEntry(
 	return entry, nil
 }
 func (entry *flushTableTailEntry) getObjectOffset(blkOffset int) (int, uint16) {
+	prevOffset := 0
 	for i, offset := range entry.aobjOffsets {
 		if blkOffset < int(offset) {
-			return i, uint16(blkOffset) - offset
+			return i-1, uint16(blkOffset - prevOffset)
 		}
+		prevOffset = int(offset)
 	}
-	panic(fmt.Sprintf("invalid blk offset %d, %v", blkOffset, entry.aobjOffsets))
+	return len(entry.aobjOffsets) - 1, uint16(blkOffset - prevOffset)
 }
 
 // add transfer pages for dropped aobjects

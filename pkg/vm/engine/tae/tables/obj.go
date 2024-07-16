@@ -140,7 +140,7 @@ func (obj *object) BatchDedup(
 		if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
 			logutil.Infof("BatchDedup %s (%v)obj-%s: %v",
 				obj.meta.Load().GetTable().GetLastestSchemaLocked().Name,
-				obj.IsAppendable(),
+				obj.meta.Load().IsAppendable(),
 				obj.meta.Load().ID().String(),
 				err)
 		}

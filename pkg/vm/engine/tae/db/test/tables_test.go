@@ -68,6 +68,11 @@ func TestTables1(t *testing.T) {
 	assert.Nil(t, err)
 	t.Log(toAppend)
 
+	_, err = handle.GetAppender()
+	_, _, toAppend, err = appender.PrepareAppend(rows, nil)
+	assert.Equal(t, schema.BlockMaxRows, toAppend)
+	assert.Nil(t, err)
+
 	_, _, toAppend, err = appender.PrepareAppend(rows-toAppend, nil)
 	assert.Nil(t, err)
 	assert.Equal(t, uint32(0), toAppend)
@@ -84,15 +89,8 @@ func TestTables1(t *testing.T) {
 	assert.Equal(t, schema.BlockMaxRows, toAppend)
 
 	_, err = handle.GetAppender()
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrAppendableObjectNotFound))
-
-	obj, _ = rel.CreateObject()
-
-	id = obj.GetMeta().(*catalog.ObjectEntry).AsCommonID()
-	appender = handle.SetAppender(id)
-	_, _, toAppend, err = appender.PrepareAppend(rows-2*toAppend, nil)
 	assert.Nil(t, err)
-	assert.Equal(t, schema.BlockMaxRows, toAppend)
+
 	t.Log(db.Catalog.SimplePPString(common.PPL1))
 	err = txn.Rollback(context.Background())
 	assert.Nil(t, err)
@@ -152,7 +150,7 @@ func TestTxn1(t *testing.T) {
 	t.Logf("Append takes: %s", time.Since(now))
 	// expectBlkCnt := (uint32(batchRows)*uint32(batchCnt)*uint32(loopCnt)-1)/schema.BlockMaxRows + 1
 	expectBlkCnt := (uint32(batchRows)*uint32(cnt)-1)/schema.BlockMaxRows + 1
-	expectObjCnt := expectBlkCnt
+	expectObjCnt := uint32(1)
 	// t.Log(expectBlkCnt)
 	// t.Log(expectObjCnt)
 	{
@@ -593,7 +591,7 @@ func TestCompaction1(t *testing.T) {
 
 	schema := catalog.MockSchemaAll(4, 2)
 	schema.BlockMaxRows = 20
-	schema.ObjectMaxBlocks = 1
+	schema.ObjectMaxBlocks = 2
 	cnt := uint32(2)
 	rows := schema.BlockMaxRows / 2 * cnt
 	bat := catalog.MockBatch(schema, int(rows))
@@ -618,7 +616,7 @@ func TestCompaction1(t *testing.T) {
 				view, _ := blk.GetColumnDataById(context.Background(), uint16(j), 3, common.DefaultAllocator)
 				assert.NotNil(t, view)
 				view.Close()
-				assert.True(t, blk.GetMeta().(*catalog.ObjectEntry).GetObjectData().IsAppendable())
+				assert.True(t, blk.GetMeta().(*catalog.ObjectEntry).GetObjectData().IsAppendable(true))
 			}
 		}
 		it.Close()
@@ -642,7 +640,7 @@ func TestCompaction1(t *testing.T) {
 				view, _ := blk.GetColumnDataById(context.Background(), uint16(0), 3, common.DefaultAllocator)
 				assert.NotNil(t, view)
 				view.Close()
-				assert.False(t, blk.GetMeta().(*catalog.ObjectEntry).GetObjectData().IsAppendable())
+				assert.True(t, blk.GetMeta().(*catalog.ObjectEntry).GetObjectData().IsAppendable(true))
 			}
 		}
 		it.Close()
@@ -691,7 +689,7 @@ func TestCompaction2(t *testing.T) {
 				assert.NotNil(t, view)
 				view.Close()
 				assert.False(t, blk.GetMeta().(*catalog.ObjectEntry).IsAppendable())
-				assert.False(t, blk.GetMeta().(*catalog.ObjectEntry).GetObjectData().IsAppendable())
+				assert.False(t, blk.GetMeta().(*catalog.ObjectEntry).GetObjectData().IsAppendable(true))
 			}
 		}
 		it.Close()
@@ -708,7 +706,7 @@ func TestCompaction2(t *testing.T) {
 				assert.NotNil(t, view)
 				view.Close()
 				assert.False(t, blk.GetMeta().(*catalog.ObjectEntry).IsAppendable())
-				assert.False(t, blk.GetMeta().(*catalog.ObjectEntry).GetObjectData().IsAppendable())
+				assert.False(t, blk.GetMeta().(*catalog.ObjectEntry).GetObjectData().IsAppendable(true))
 			}
 		}
 		it.Close()

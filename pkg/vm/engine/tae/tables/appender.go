@@ -30,7 +30,7 @@ type objectAppender struct {
 func newAppender(aobj *aobject) *objectAppender {
 	appender := new(objectAppender)
 	appender.obj = aobj
-	rows, _ := aobj.Rows()
+	rows := aobj.LastBlockRows()
 	appender.rows = uint32(rows)
 	return appender
 }

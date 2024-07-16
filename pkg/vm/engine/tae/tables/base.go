@@ -1034,7 +1034,7 @@ func (blk *baseObject) GetTotalChanges() int {
 	return int(objMVCC.GetDeleteCnt())
 }
 
-func (blk *baseObject) IsAppendable() bool { return false }
+func (blk *baseObject) IsAppendable(bool) bool { return false }
 
 func (blk *baseObject) MutationInfo() string {
 	rows, err := blk.Rows()

@@ -128,7 +128,7 @@ func (obj *aobject) BlockCnt() int {
 	defer obj.RUnlock()
 	return obj.node.Load().MustMNode().blockCnt()
 }
-func (obj *aobject) IsAppendable() bool {
+func (obj *aobject) IsAppendable(checkBlkCount bool) bool {
 	if obj.IsAppendFrozen() {
 		return false
 	}
@@ -137,13 +137,29 @@ func (obj *aobject) IsAppendable() bool {
 	if node.IsPersisted() {
 		return false
 	}
+	if !checkBlkCount {
+		return true
+	}
 	return node.MustMNode().IsAppendable()
 }
 func (obj *aobject) GetNewBlock() {
-	newNode := obj.node.Load().MustMNode().registerNode()
+	obj.Lock()
+	defer obj.Unlock()
+	newNode := obj.node.Load().MustMNode().registerNodeLocked()
 	if newNode == nil {
 		panic("logic error")
 	}
+}
+
+func (obj *aobject) LastBlockRows() uint32 {
+	if obj.BlockCnt() == 0 {
+		return 0
+	}
+	row, err := obj.node.Load().MustMNode().getLastNode().Rows()
+	if err != nil {
+		panic(err)
+	}
+	return row
 }
 
 func (obj *aobject) PrepareCompactInfo() (result bool, reason string) {
@@ -355,7 +371,7 @@ func (obj *aobject) GetValue(
 		return node.MustMNode().getInMemoryValue(txn, schema, blkID, row, col, mp)
 	} else {
 		return obj.getPersistedValue(
-			ctx, txn, schema, 0, row, col, true, mp,
+			ctx, txn, schema, blkID, row, col, true, mp,
 		)
 	}
 }
@@ -378,7 +394,7 @@ func (obj *aobject) GetByFilter(
 
 	node := obj.PinNode()
 	defer node.Unref()
-	_, offset, err = node.GetRowByFilter(ctx, txn, filter, mp)
+	blkID, offset, err = node.GetRowByFilter(ctx, txn, filter, mp)
 	return
 }
 
@@ -506,7 +522,7 @@ func (obj *aobject) OnReplayAppendPayload(bat *containers.Batch, blkOffset uint1
 }
 
 func (obj *aobject) MakeAppender() (appender data.ObjectAppender, err error) {
-	if obj == nil {
+	if obj == nil || !obj.IsAppendable(false) {
 		err = moerr.GetOkExpectedEOB()
 		return
 	}

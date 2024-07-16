@@ -76,7 +76,7 @@ type Object interface {
 
 	GetRowsOnReplay() uint64
 	GetID() *common.ID
-	IsAppendable() bool
+	IsAppendable(bool) bool
 	PrepareCompact() bool
 	PrepareCompactInfo() (bool, string)
 	GetDeltaPersistedTS() types.TS

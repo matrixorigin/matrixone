@@ -301,7 +301,7 @@ func (node *memoryNode) PrepareAppend(rows uint32) (n uint32, err error) {
 func (node *memoryNode) FillPhyAddrColumn(startRow, length uint32) (err error) {
 	var col *vector.Vector
 	if col, err = objectio.ConstructRowidColumn(
-		objectio.NewBlockidWithObjectID(node.object.meta.Load().ID(), 0),
+		objectio.NewBlockidWithObjectID(node.object.meta.Load().ID(), node.offset),
 		startRow,
 		length,
 		common.MutMemAllocator,
@@ -373,7 +373,7 @@ func (node *memoryNode) GetRowByFilter(
 			return
 		}
 		var deleted bool
-		deleted, err = objMVCC.IsDeletedLocked(row, txn, 0)
+		deleted, err = objMVCC.IsDeletedLocked(row, txn, node.offset)
 		if err != nil {
 			return
 		}
@@ -439,7 +439,7 @@ func (node *memoryNode) checkConflictAndDupClosure(
 			*dupRow = row
 			return moerr.GetOkExpectedDup()
 		}
-		mvcc := objMVCC.TryGetDeleteChain(0)
+		mvcc := objMVCC.TryGetDeleteChain(node.offset)
 		if mvcc == nil {
 			*dupRow = row
 			return moerr.GetOkExpectedDup()
@@ -556,7 +556,7 @@ func (node *memoryNode) resolveInMemoryColumnDatas(
 		return
 	}
 
-	err = node.object.fillInMemoryDeletesLocked(txn, 0, &view.Deletes, node.object.RWMutex)
+	err = node.object.fillInMemoryDeletesLocked(txn, node.offset, &view.Deletes, node.object.RWMutex)
 	if err != nil {
 		return
 	}
@@ -627,7 +627,7 @@ func (node *memoryNode) getInMemoryValue(
 	deleted := false
 	objMVCC := node.object.tryGetMVCC()
 	if objMVCC != nil {
-		mvcc := objMVCC.TryGetDeleteChain(0)
+		mvcc := objMVCC.TryGetDeleteChain(node.offset)
 		if mvcc != nil {
 			deleted, err = mvcc.IsDeletedLocked(uint32(row), txn)
 		}
@@ -683,7 +683,7 @@ func (node *objectMemoryNode) close() {
 }
 func (node *objectMemoryNode) getAppendableNode() *memoryNode {
 	if len(node.blkMemoryNodes) == 0 {
-		blkNode := node.registerNode()
+		blkNode := node.registerNodeLocked()
 		return blkNode
 	}
 	blkNode := node.getLastNode()
@@ -692,7 +692,7 @@ func (node *objectMemoryNode) getAppendableNode() *memoryNode {
 		panic(err)
 	}
 	if row >= node.writeSchema.BlockMaxRows {
-		blkNode = node.registerNode()
+		blkNode = node.registerNodeLocked()
 	}
 	return blkNode
 }
@@ -708,7 +708,7 @@ func (node *objectMemoryNode) getOrCreateNode(blkID uint16) *memoryNode {
 		return node.blkMemoryNodes[blkID]
 	}
 	if len(node.blkMemoryNodes) == int(blkID) {
-		return node.registerNode()
+		return node.registerNodeLocked()
 	}
 	panic(fmt.Sprintf("invalid blkID, current blk count %d, blkID %d", len(node.blkMemoryNodes), blkID))
 }
@@ -734,7 +734,7 @@ func (node *objectMemoryNode) GetValueByRow(blkID uint16, readSchema *catalog.Sc
 func (node *objectMemoryNode) GetRowsByKey(blkID uint16, key any) (rows []uint32, err error) {
 	return node.getMemoryNode(blkID).GetRowsByKey(key)
 }
-func (node *objectMemoryNode) registerNode() *memoryNode {
+func (node *objectMemoryNode) registerNodeLocked() *memoryNode {
 	if len(node.blkMemoryNodes) >= int(node.writeSchema.ObjectMaxBlocks) {
 		return nil
 	}
@@ -742,6 +742,8 @@ func (node *objectMemoryNode) registerNode() *memoryNode {
 	node.blkMemoryNodes = append(node.blkMemoryNodes, blkNode)
 	return blkNode
 }
+// Only check block count.
+// Check rows in appender.
 func (node *objectMemoryNode) IsAppendable() bool {
 	return len(node.blkMemoryNodes) < int(node.writeSchema.ObjectMaxBlocks)
 }

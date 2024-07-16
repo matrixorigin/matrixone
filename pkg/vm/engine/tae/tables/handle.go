@@ -63,7 +63,7 @@ func (h *tableHandle) GetAppender() (appender data.ObjectAppender, err error) {
 			return
 		}
 		h.object = objEntry.GetObjectData().(*aobject)
-		if !h.object.IsAppendable() {
+		if !h.object.IsAppendable(true) {
 			err = data.ErrAppendableObjectNotFound
 			return
 		}
@@ -76,22 +76,22 @@ func (h *tableHandle) GetAppender() (appender data.ObjectAppender, err error) {
 
 	dropped := h.object.meta.Load().HasDropCommitted()
 	if !h.appender.IsAppendable() {
-		if !h.object.IsAppendable() || dropped {
+		if !h.object.IsAppendable(true) || dropped {
 			return h.ThrowAppenderAndErr()
 		}
 		h.object.Ref()
 		dropped = h.object.meta.Load().HasDropCommitted()
-		if !h.object.IsAppendable() || dropped {
+		if !h.object.IsAppendable(true) || dropped {
 			h.object.Unref()
 			return h.ThrowAppenderAndErr()
 		}
 		h.appender.GetNewBlock()
 	} else {
-		if dropped {
+		if !h.object.IsAppendable(false) || dropped {
 			return h.ThrowAppenderAndErr()
 		}
 		h.object.Ref()
-		if dropped {
+		if !h.object.IsAppendable(false) || dropped {
 			h.object.Unref()
 			return h.ThrowAppenderAndErr()
 		}

@@ -680,7 +680,7 @@ func TestAddObjsWithMetaLoc(t *testing.T) {
 			return
 		})
 		assert.True(t, cntOfobj == 1)
-		assert.True(t, cntOfAobj == 2)
+		assert.True(t, cntOfAobj == 1)
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
 }
@@ -2526,7 +2526,7 @@ func TestSegDelLogtail(t *testing.T) {
 
 	require.Equal(t, api.Entry_Insert, resp.Commands[1].EntryType)
 	require.True(t, strings.HasSuffix(resp.Commands[1].TableName, "obj"))
-	require.Equal(t, uint32(6), resp.Commands[1].Bat.Vecs[0].Len) /* 2 Objects (create) + 4 (update object info) */
+	require.Equal(t, uint32(4), resp.Commands[1].Bat.Vecs[0].Len) /* 2 Objects (create) + 2 (update object info) */
 	// start ts should not be empty
 	startTSVec := resp.Commands[1].Bat.Vecs[9]
 	cnStartVec, err := vector.ProtoVectorToVector(startTSVec)
@@ -2560,7 +2560,7 @@ func TestSegDelLogtail(t *testing.T) {
 		require.Equal(t, uint32(1), ins.Vecs[0].Len)    // 1 deltaloc, skip blks without deltaloc
 		require.Nil(t, del)                             // 0  del
 		require.Nil(t, cnins)                           // 0  del
-		require.Equal(t, uint32(6), segdel.Vecs[0].Len) // 2 create + 4 update
+		require.Equal(t, uint32(4), segdel.Vecs[0].Len) // 2 create + 2 update
 		require.Equal(t, 12, len(segdel.Vecs))
 	}
 	check()
@@ -3880,6 +3880,7 @@ func TestLogtailBasic(t *testing.T) {
 	schema := catalog.MockSchemaAll(2, -1)
 	schema.Name = "test"
 	schema.BlockMaxRows = 10
+	schema.ObjectMaxBlocks = 1
 	// craete 2 db and 2 tables
 	txn, _ := tae.StartTxn(nil)
 	todropdb, _ := txn.CreateDatabase("todrop", "", "")
@@ -6378,7 +6379,7 @@ func TestAlterFakePk(t *testing.T) {
 		sels.Add(3)
 		rows := make([]int, 0, 4)
 		view, err := blkdata.GetColumnDataById(ctx, txn, newSchema, 0, 1, common.DefaultAllocator)
-		view.GetData().Foreach(func(v any, isnull bool, row int) error {
+		view.Vecs[0].Foreach(func(v any, isnull bool, row int) error {
 			require.True(t, true)
 			rows = append(rows, row)
 			return nil

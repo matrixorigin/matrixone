@@ -65,7 +65,7 @@ type NodeT interface {
 		start, end types.TS, withAborted bool, mp *mpool.MPool,
 	) (batWithVer *containers.BatchWithVersion, err error)
 	CollectAppendInRangeWithBlockID(
-		blkOffset uint16,start, end types.TS, withAborted bool, mp *mpool.MPool,
+		blkOffset uint16, start, end types.TS, withAborted bool, mp *mpool.MPool,
 	) (batWithVer *containers.BatchWithVersion, err error)
 }
 
