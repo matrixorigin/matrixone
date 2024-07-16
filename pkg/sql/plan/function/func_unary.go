@@ -1070,6 +1070,8 @@ func generateInitializationVector(key []byte, length int) []byte {
 	return hash[:aes.BlockSize]
 }
 
+// encode function encrypts a string, returns a binary string of the same length of the original string.
+// https://dev.mysql.com/doc/refman/5.7/en/encryption-functions.html#function_encode
 func encodeByAES(plaintext []byte, key []byte, null bool, rs *vector.FunctionResult[types.Varlena]) error {
 	if null {
 		return rs.AppendMustNullForBytesResult()
@@ -1103,6 +1105,8 @@ func Encode(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 	return nil
 }
 
+// decode function decodes an encoded string and returns the original string
+// https://dev.mysql.com/doc/refman/5.7/en/encryption-functions.html#function_decode
 func decodeByAES(ciphertext []byte, key []byte, null bool, rs *vector.FunctionResult[types.Varlena]) error {
 	if null {
 		return rs.AppendMustNullForBytesResult()
