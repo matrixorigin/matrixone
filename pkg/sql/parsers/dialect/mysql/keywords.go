@@ -394,6 +394,7 @@ func init() {
 		"right":                      RIGHT,
 		"rlike":                      REGEXP,
 		"rollback":                   ROLLBACK,
+		"rollup":                     ROLLUP,
 		"role":                       ROLE,
 		"routine":                    ROUTINE,
 		"row":                        ROW,

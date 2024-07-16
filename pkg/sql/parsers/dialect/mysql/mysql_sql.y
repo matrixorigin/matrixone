@@ -78,7 +78,7 @@ import (
 
     from *tree.From
     where *tree.Where
-    groupBy tree.GroupBy
+    groupBy *tree.GroupBy
     aliasedTableExpr *tree.AliasedTableExpr
     direction tree.Direction
     nullsPosition tree.NullsPosition
@@ -270,7 +270,7 @@ import (
 %token <str> SELECT INSERT UPDATE DELETE FROM WHERE GROUP HAVING BY LIMIT OFFSET FOR CONNECT MANAGE GRANTS OWNERSHIP REFERENCE
 %nonassoc LOWER_THAN_SET
 %nonassoc <str> SET
-%token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC INTO DUPLICATE DEFAULT LOCK KEYS NULLS FIRST LAST AFTER
+%token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC INTO DUPLICATE DEFAULT LOCK KEYS NULLS FIRST LAST AFTER ROLLUP
 %token <str> INSTANT INPLACE COPY DISABLE ENABLE UNDEFINED MERGE TEMPTABLE DEFINER INVOKER SQL SECURITY CASCADED
 %token <str> VALUES
 %token <str> NEXT VALUE SHARE MODE
@@ -712,7 +712,7 @@ import (
 %type <lengthScaleOpt> float_length_opt decimal_length_opt
 %type <unsignedOpt> unsigned_opt header_opt parallel_opt strict_opt
 %type <zeroFillOpt> zero_fill_opt
-%type <boolVal> global_scope exists_opt distinct_opt temporary_opt cycle_opt drop_table_opt
+%type <boolVal> global_scope exists_opt distinct_opt temporary_opt cycle_opt drop_table_opt rollup_opt
 %type <item> pwd_expire clear_pwd_opt
 %type <str> name_confict distinct_keyword separator_opt kmeans_opt
 %type <insert> insert_data
@@ -5343,9 +5343,18 @@ group_by_opt:
     {
         $$ = nil
     }
-|   GROUP BY expression_list
+|   GROUP BY expression_list rollup_opt
     {
-        $$ = tree.GroupBy($3)
+        $$ = &tree.GroupBy{Exprs: $3, WithRollup: $4}
+    }
+
+rollup_opt:
+    {
+        $$ = false
+    }
+|   WITH ROLLUP
+    {
+        $$ = true
     }
 
 where_expression_opt:
