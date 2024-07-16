@@ -667,6 +667,16 @@ func (c *Compile) IsTpQuery() bool {
 	return c.execType == plan2.ExecTypeTP
 }
 
+func (c *Compile) IsSingleScope(ss []*Scope) bool {
+	if c.IsTpQuery() {
+		return true
+	}
+	if len(ss) > 1 {
+		return false
+	}
+	return ss[0].NodeInfo.Mcpu == 1
+}
+
 func (c *Compile) SetIsPrepare(isPrepare bool) {
 	c.isPrepare = isPrepare
 }
@@ -990,13 +1000,13 @@ func isAvailable(client morpc.RPCClient, addr string) bool {
 }
 
 func (c *Compile) removeUnavailableCN() {
-	client := cnclient.GetRPCClient()
+	client := cnclient.GetPipelineClient()
 	if client == nil {
 		return
 	}
 	i := 0
 	for _, cn := range c.cnList {
-		if isSameCN(c.addr, cn.Addr) || isAvailable(client, cn.Addr) {
+		if isSameCN(c.addr, cn.Addr) || isAvailable(client.Raw(), cn.Addr) {
 			c.cnList[i] = cn
 			i++
 		}
@@ -1129,8 +1139,8 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) (*Scope
 	case plan.Query_UPDATE:
 		return ss[0], nil
 	default:
-		if c.IsTpQuery() {
-			rs = ss[len(ss)-1]
+		if c.IsSingleScope(ss) {
+			rs = ss[0]
 		} else {
 			//c.setAnalyzeCurrent(ss, int(step))
 			rs = c.newMergeScope(ss)
@@ -1237,6 +1247,20 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(node, ss)))
 		return ss, nil
 	case plan.Node_TABLE_SCAN:
+		if n.Limit != nil {
+			if cExpr, ok := n.Limit.Expr.(*plan.Expr_Lit); ok {
+				if cval, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
+					if cval.U64Val == 0 {
+						// optimize for limit 0
+						rs := newScope(Merge)
+						rs.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
+						rs.Proc = process.NewFromProc(c.proc, c.proc.Ctx, 0)
+						return c.compileLimit(n, []*Scope{rs}), nil
+					}
+				}
+			}
+		}
+
 		c.appendMetaTables(n.ObjRef)
 
 		c.setAnalyzeCurrent(nil, int(curNodeIdx))
@@ -1286,7 +1310,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		anyDistinctAgg := groupInfo.AnyDistinctAgg()
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		if c.IsTpQuery() && ss[0].PartialResults == nil {
+		if c.IsSingleScope(ss) && ss[0].PartialResults == nil {
 			ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileTPGroup(n, ss, ns))))
 			return ss, nil
 		} else if !anyDistinctAgg && n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle {
@@ -1491,9 +1515,8 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 			return ss, nil
 		}
 		rs := ss[0]
-		if !c.IsTpQuery() {
+		if !c.IsSingleScope(ss) {
 			rs = c.newMergeScope(ss)
-			// updateScopesLastFlag([]*Scope{rs})
 			rs.Magic = Merge
 			c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curNodeIdx)
 		}
@@ -1821,7 +1844,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 			return nil, err
 		}
 		rs := ss[0]
-		if !c.IsTpQuery() {
+		if !c.IsSingleScope(ss) {
 			rs = c.newMergeScope(ss)
 		}
 		rs.setRootOperator(constructDispatchLocal(true, true, n.RecursiveSink, receivers))
@@ -2432,11 +2455,11 @@ func (c *Compile) compileTPUnion(n *plan.Node, ss []*Scope, children []*Scope) [
 	return rs
 }
 
-func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope) []*Scope {
-	if c.IsTpQuery() {
-		return c.compileTPUnion(n, ss, children)
+func (c *Compile) compileUnion(n *plan.Node, left []*Scope, right []*Scope) []*Scope {
+	if c.IsSingleScope(left) && c.IsSingleScope(right) {
+		return c.compileTPUnion(n, left, right)
 	}
-	ss = append(ss, children...)
+	left = append(left, right...)
 	rs := c.newScopeListOnCurrentCN(1, int(n.Stats.BlockNum))
 	gn := new(plan.Node)
 	gn.GroupBy = make([]*plan.Expr, len(n.ProjectList))
@@ -2453,7 +2476,7 @@ func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope) []*
 			idx = i
 		}
 	}
-	mergeChildren := c.newMergeScope(ss)
+	mergeChildren := c.newMergeScope(left)
 	mergeChildren.setRootOperator(constructDispatch(0, rs, c.addr, n, false))
 	rs[idx].PreScopes = append(rs[idx].PreScopes, mergeChildren)
 	return rs
@@ -2488,7 +2511,7 @@ func (c *Compile) compileTpMinusAndIntersect(n *plan.Node, left []*Scope, right 
 }
 
 func (c *Compile) compileMinusAndIntersect(n *plan.Node, left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
-	if c.IsTpQuery() {
+	if c.IsSingleScope(left) && c.IsSingleScope(right) {
 		return c.compileTpMinusAndIntersect(n, left, right, nodeType)
 	}
 	rs := c.newScopeListOnCurrentCN(2, int(n.Stats.BlockNum))
@@ -2918,7 +2941,7 @@ func containBrokenNode(s *Scope) bool {
 
 func (c *Compile) compileTop(n *plan.Node, topN *plan.Expr, ss []*Scope) []*Scope {
 	// use topN TO make scope.
-	if c.IsTpQuery() {
+	if c.IsSingleScope(ss) {
 		// tp语句 只有单并发, ss只有一个元素
 		currentFirstFlag := c.anal.isFirst
 		op := constructTop(n, topN)
@@ -2956,7 +2979,7 @@ func (c *Compile) compileTop(n *plan.Node, topN *plan.Expr, ss []*Scope) []*Scop
 }
 
 func (c *Compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
-	if c.IsTpQuery() {
+	if c.IsSingleScope(ss) {
 		order := constructOrder(n)
 		order.SetIdx(c.anal.curNodeIdx)
 		order.SetIsFirst(c.anal.isFirst)
@@ -3019,7 +3042,7 @@ func (c *Compile) compileFill(n *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
-	if c.IsTpQuery() {
+	if c.IsSingleScope(ss) {
 		// tp语句 只有单并发, ss只有一个元素
 		currentFirstFlag := c.anal.isFirst
 		op := offset.NewArgument().WithOffset(n.Offset)
@@ -3052,7 +3075,7 @@ func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
-	if c.IsTpQuery() {
+	if c.IsSingleScope(ss) {
 		// tp语句 只有单并发, ss只有一个元素
 		currentFirstFlag := c.anal.isFirst
 		op := constructLimit(n)
@@ -3090,14 +3113,16 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scope, right []*Scope) ([]*Scope, error) {
 	var l, r *Scope
-	if c.IsTpQuery() {
+	if c.IsSingleScope(left) {
 		l = left[0]
-		r = right[0]
 	} else {
 		l = c.newMergeScope(left)
+	}
+	if c.IsSingleScope(right) {
+		r = right[0]
+	} else {
 		r = c.newMergeScope(right)
 	}
-
 	all := []*Scope{l, r}
 	rs := c.newMergeScope(all)
 

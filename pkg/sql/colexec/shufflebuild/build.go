@@ -213,6 +213,7 @@ func (ctr *container) collectBuildBatches(shuffleBuild *ShuffleBuild, proc *proc
 
 		anal.Input(currentBatch, isFirst)
 		anal.Alloc(int64(currentBatch.Size()))
+
 		ctr.inputBatchRowCount += currentBatch.RowCount()
 		err = ctr.mergeIntoBatches(currentBatch, proc)
 		if err != nil {

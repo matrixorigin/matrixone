@@ -69,6 +69,7 @@ func TestReplayCatalog1(t *testing.T) {
 			objCnt := rand.Intn(5) + 1
 			for i := 0; i < objCnt; i++ {
 				obj, err := rel.CreateNonAppendableObject(nil)
+				testutil.MockObjectStats(t, obj)
 				assert.Nil(t, err)
 				objMeta := obj.GetMeta().(*catalog.ObjectEntry)
 				baseNode := objMeta.GetLatestNode().ObjectMVCCNode
@@ -138,6 +139,7 @@ func TestReplayCatalog2(t *testing.T) {
 	rel, err := e.CreateRelation(schema)
 	assert.Nil(t, err)
 	obj, err := rel.CreateNonAppendableObject(nil)
+	testutil.MockObjectStats(t, obj)
 	assert.Nil(t, err)
 	objMeta := obj.GetMeta().(*catalog.ObjectEntry)
 	baseNode := objMeta.GetLatestNode().ObjectMVCCNode
@@ -214,7 +216,8 @@ func TestReplayCatalog3(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err := e.CreateRelation(schema)
 	assert.Nil(t, err)
-	_, err = rel.CreateNonAppendableObject(nil)
+	obj, err := rel.CreateNonAppendableObject(nil)
+	testutil.MockObjectStats(t, obj)
 	assert.Nil(t, err)
 	_, err = e.CreateRelation(schema2)
 	assert.Nil(t, err)
@@ -244,7 +247,7 @@ func TestReplayCatalog3(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = e.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	obj, err := rel.CreateObject()
+	obj, err = rel.CreateObject()
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 
@@ -254,6 +257,10 @@ func TestReplayCatalog3(t *testing.T) {
 	rel, err = e.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
 	err = rel.SoftDeleteObject(obj.GetID())
+	assert.NoError(t, err)
+	obj, err = rel.GetObject(obj.GetID())
+	assert.Nil(t, err)
+	testutil.MockObjectStats(t, obj)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 
@@ -429,6 +436,10 @@ func TestReplay2(t *testing.T) {
 	obj, err := rel.GetObject(blk.ID())
 	assert.Nil(t, err)
 	err = rel.SoftDeleteObject(obj.GetID())
+	assert.NoError(t, err)
+	obj, err = rel.GetObject(obj.GetID())
+	assert.Nil(t, err)
+	testutil.MockObjectStats(t, obj)
 	assert.Nil(t, err)
 	objMeta := obj.GetMeta().(*catalog.ObjectEntry)
 	baseNode := objMeta.GetLatestNode().ObjectMVCCNode
@@ -1350,6 +1361,10 @@ func TestReplaySnapshots(t *testing.T) {
 	rel, err = db.GetRelationByName(schema.Name)
 	assert.NoError(t, err)
 	err = rel.SoftDeleteObject(obj.GetID())
+	assert.NoError(t, err)
+	obj, err = rel.GetObject(obj.GetID())
+	assert.Nil(t, err)
+	testutil.MockObjectStats(t, obj)
 	assert.NoError(t, err)
 	objMeta := obj.GetMeta().(*catalog.ObjectEntry)
 	baseNode := objMeta.GetLatestNode().ObjectMVCCNode

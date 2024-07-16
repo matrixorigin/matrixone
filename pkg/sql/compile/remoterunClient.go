@@ -206,7 +206,7 @@ type messageSenderOnClient struct {
 func newMessageSenderOnClient(
 	ctx context.Context, toAddr string, mp *mpool.MPool, ana *anaylzeModule) (*messageSenderOnClient, error) {
 
-	streamSender, err := cnclient.GetStreamSender(toAddr)
+	streamSender, err := cnclient.GetPipelineClient().NewStream(toAddr)
 	if err != nil {
 		return nil, err
 	}

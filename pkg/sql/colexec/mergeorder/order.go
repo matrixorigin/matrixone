@@ -219,6 +219,7 @@ func (mergeOrder *MergeOrder) Call(proc *process.Process) (vm.CallResult, error)
 			if err != nil {
 				return result, err
 			}
+
 			if result.Batch == nil {
 				// if number of block is less than 2, no need to do merge sort.
 				ctr.status = normalSending
