@@ -223,7 +223,7 @@ func (c *Compile) clear() {
 	}
 
 	// c.MessageBoard.Reset()
-	c.MessageBoard = nil
+	// c.MessageBoard = nil
 	c.fuzzys = c.fuzzys[:0]
 	c.scope = c.scope[:0]
 	c.pn = nil
