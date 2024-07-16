@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
@@ -724,6 +725,14 @@ func constructPreInsertSk(n *plan.Node, proc *process.Process) (*preinsertsecond
 	op.Ctx = proc.Ctx
 	op.PreInsertCtx = n.PreInsertSkCtx
 	return op, nil
+}
+
+func constructMergeblock(eg engine.Engine, insertArg *insert.Insert) *mergeblock.MergeBlock {
+	return mergeblock.NewArgument().
+		WithEngine(eg).
+		WithObjectRef(insertArg.InsertCtx.Ref).
+		WithParitionNames(insertArg.InsertCtx.PartitionTableNames).
+		WithAddAffectedRows(insertArg.InsertCtx.AddAffectedRows)
 }
 
 func constructLockOp(n *plan.Node, eng engine.Engine) (*lockop.LockOp, error) {
