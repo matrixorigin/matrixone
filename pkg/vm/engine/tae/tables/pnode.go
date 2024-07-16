@@ -192,8 +192,8 @@ func (node *persistedNode) GetRowByFilter(
 		defer commitTSVec.Close()
 
 		// Load persisted deletes
-		view := containers.NewColumnView(0)
-		if err = node.object.FillPersistedDeletes(ctx, blkID, txn, view.BaseView, mp); err != nil {
+		view := containers.NewBatch()
+		if err = node.object.FillPersistedDeletes(ctx, blkID, txn, &view.Deletes, mp); err != nil {
 			return
 		}
 

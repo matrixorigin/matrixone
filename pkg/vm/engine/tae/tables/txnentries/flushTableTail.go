@@ -69,6 +69,7 @@ type flushTableTailEntry struct {
 }
 
 func NewFlushTableTailEntry(
+	ctx context.Context,
 	txn txnif.AsyncTxn,
 	taskName string,
 	mapping *api.BlkTransferBooking,
@@ -115,15 +116,19 @@ func NewFlushTableTailEntry(
 			}
 		}
 		// prepare transfer pages
-		entry.addTransferPages()
+		entry.addTransferPages(ctx)
 	}
 
 	return entry, nil
 }
 
 // add transfer pages for dropped aobjects
-func (entry *flushTableTailEntry) addTransferPages() {
+func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) {
 	isTransient := !entry.tableEntry.GetLastestSchemaLocked().HasPK()
+	ioVector := model.InitTransferPageIO()
+	pages := make([]*model.TransferHashPage, 0, len(entry.transMappings.Mappings))
+	var duration time.Duration
+	var start time.Time
 	for i, mcontainer := range entry.transMappings.Mappings {
 		m := mcontainer.M
 		if len(m) == 0 {
@@ -131,13 +136,30 @@ func (entry *flushTableTailEntry) addTransferPages() {
 		}
 		id := entry.ablksHandles[i].Fingerprint()
 		entry.pageIds = append(entry.pageIds, id)
-		page := model.NewTransferHashPage(id, time.Now(), len(m), isTransient)
+		page := model.NewTransferHashPage(id, time.Now(), isTransient, entry.rt.LocalFs.Service, model.GetTTL(), model.GetDiskTTL())
+		mapping := make(map[uint32][]byte, len(m))
 		for srcRow, dst := range m {
 			blkid := objectio.NewBlockidWithObjectID(entry.createdBlkHandles.GetID(), uint16(dst.BlkIdx))
-			page.Train(uint32(srcRow), *objectio.NewRowid(blkid, uint32(dst.RowIdx)))
+			rowID := objectio.NewRowid(blkid, uint32(dst.RowIdx))
+			mapping[uint32(srcRow)] = rowID[:]
 		}
+		page.Train(mapping)
+
+		start = time.Now()
+		err := model.AddTransferPage(page, ioVector)
+		if err != nil {
+			return
+		}
+		duration += time.Since(start)
+
 		entry.rt.TransferTable.AddPage(page)
+		pages = append(pages, page)
 	}
+
+	start = time.Now()
+	model.WriteTransferPage(ctx, entry.rt.LocalFs.Service, pages, *ioVector)
+	duration += time.Since(start)
+	v2.TransferPageFlushLatencyHistogram.Observe(duration.Seconds())
 }
 
 // collectDelsAndTransfer collects deletes in flush process and moves them to the created obj
@@ -236,7 +258,7 @@ func (entry *flushTableTailEntry) PrepareRollback() (err error) {
 	)
 	// remove transfer page
 	for _, id := range entry.pageIds {
-		entry.rt.TransferTable.DeletePage(id)
+		_ = entry.rt.TransferTable.DeletePage(id)
 	}
 
 	for _, blkID := range entry.delTbls {
