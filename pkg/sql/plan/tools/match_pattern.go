@@ -69,10 +69,6 @@ func TColumnRef(tableName, colName string) RValueMatcher {
 	return &ColumnRef{TableName: tableName, ColumnName: colName}
 }
 
-func TAggregate() *MatchPattern {
-	return nil
-}
-
 func TOutput(outputs []string, child *MatchPattern) *MatchPattern {
 	res := TOutputWithoutOutputs(child)
 	res.WithOutputs(outputs...)
@@ -122,6 +118,15 @@ func TJoin(joinTyp plan2.Node_JoinType,
 		NewJoinMatcher(joinTyp, onConds, filters))
 }
 
+func TAggr(aggrs plan.UnorderedMap[string, *AggrFuncMatcher], children ...*MatchPattern) *MatchPattern {
+	ret := TNode(plan2.Node_AGG, children...)
+
+	for k, matcher := range aggrs {
+		ret.WithAlias(k, matcher)
+	}
+	return ret
+}
+
 func (pattern *MatchPattern) With(matcher Matcher) *MatchPattern {
 	pattern.Matchers = append(pattern.Matchers, matcher)
 	return pattern
@@ -145,17 +150,17 @@ func (pattern *MatchPattern) WithAlias(alias string, matcher RValueMatcher) *Mat
 }
 
 func (pattern *MatchPattern) WithExactAssignedOutputs(expectedAliases []RValueMatcher) *MatchPattern {
-	fun := func(builder *plan.QueryBuilder, node *plan2.Node) []SColDef {
-		ret := make([]SColDef, 0)
+	fun := func(builder *plan.QueryBuilder, node *plan2.Node) []VarRef {
+		ret := make([]VarRef, 0)
 		for _, expr := range node.ProjectList {
 			col := expr.GetCol()
 			if col != nil {
-				ret = append(ret, SColDef{
+				ret = append(ret, VarRef{
 					Name: strings.Split(col.Name, ".")[1],
 					Type: expr.GetTyp(),
 				})
 			} else {
-				ret = append(ret, SColDef{
+				ret = append(ret, VarRef{
 					Name: expr.String(),
 					Type: expr.GetTyp(),
 				})
@@ -173,17 +178,17 @@ func (pattern *MatchPattern) WithExactAssignedOutputs(expectedAliases []RValueMa
 }
 
 func (pattern *MatchPattern) WithExactAssignments(expectedAliases []RValueMatcher) *MatchPattern {
-	fun := func(builder *plan.QueryBuilder, node *plan2.Node) []SColDef {
-		ret := make([]SColDef, 0)
+	fun := func(builder *plan.QueryBuilder, node *plan2.Node) []VarRef {
+		ret := make([]VarRef, 0)
 		for _, expr := range node.ProjectList {
 			col := expr.GetCol()
 			if col != nil {
-				ret = append(ret, SColDef{
+				ret = append(ret, VarRef{
 					Name: strings.Split(col.Name, ".")[1],
 					Type: expr.GetTyp(),
 				})
 			} else {
-				ret = append(ret, SColDef{
+				ret = append(ret, VarRef{
 					Name: expr.String(),
 					Type: expr.GetTyp(),
 				})
@@ -208,12 +213,12 @@ func (pattern *MatchPattern) WithOutputs(aliases ...string) *MatchPattern {
 func (pattern *MatchPattern) WithExactOutputs(outputs ...string) *MatchPattern {
 	pattern.Matchers = append(pattern.Matchers,
 		&SymbolsMatcher{
-			GetFunc: func(builder *plan.QueryBuilder, node *plan2.Node) []SColDef {
+			GetFunc: func(builder *plan.QueryBuilder, node *plan2.Node) []VarRef {
 				plan.AssertFunc(node.NodeType == plan2.Node_PROJECT, "must be project node")
-				ret := make([]SColDef, 0)
+				ret := make([]VarRef, 0)
 				for _, expr := range node.ProjectList {
 					col := expr.GetCol()
-					ret = append(ret, SColDef{
+					ret = append(ret, VarRef{
 						Name: strings.Split(col.Name, ".")[1],
 						Type: expr.GetTyp(),
 					})
@@ -515,7 +520,7 @@ func StringsEqual(a, b []string) bool {
 	return true
 }
 
-func SColDefsEqual(a, b []SColDef) bool {
+func VarRefEqual(a, b []VarRef) bool {
 	if len(a) != len(b) {
 		return false
 	}
@@ -538,6 +543,14 @@ func SColDefsEqual(a, b []SColDef) bool {
 
 func NewAssignMap(pairs ...AssignPair) plan.UnorderedMap[string, *ExprMatcher] {
 	ret := make(plan.UnorderedMap[string, *ExprMatcher])
+	for _, pair := range pairs {
+		ret.Insert(pair.Key, pair.Value)
+	}
+	return ret
+}
+
+func NewAggrMap(pairs ...AggrPair) plan.UnorderedMap[string, *AggrFuncMatcher] {
+	ret := make(plan.UnorderedMap[string, *AggrFuncMatcher])
 	for _, pair := range pairs {
 		ret.Insert(pair.Key, pair.Value)
 	}

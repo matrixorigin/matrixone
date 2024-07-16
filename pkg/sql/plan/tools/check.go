@@ -54,6 +54,12 @@ func (checker *ExprChecker) Check(astExpr tree.Expr, expr *plan2.Expr) (bool, er
 			return false, nil
 		}
 		return checker.checkComparisonExpr(exprImpl, expr)
+	case *tree.FuncExpr:
+		fun := expr.GetF()
+		if fun == nil {
+			return false, nil
+		}
+		return checker.checkFuncExpr(exprImpl, expr)
 	case *tree.UnresolvedName:
 		ok, eName := checker.Aliases.Find(exprImpl.ColNameOrigin())
 		if !ok {
@@ -68,6 +74,26 @@ func (checker *ExprChecker) Check(astExpr tree.Expr, expr *plan2.Expr) (bool, er
 	default:
 		return false, moerr.NewInternalError(context.Background(), "unsupport expr")
 	}
+}
+
+func (checker *ExprChecker) checkFuncExpr(astExpr *tree.FuncExpr, expr *plan2.Expr) (bool, error) {
+	fun := expr.GetF()
+	if len(astExpr.Exprs) != len(fun.GetArgs()) {
+		return false, nil
+	}
+	if fun.GetFunc().ObjName != astExpr.FuncName.Compare() {
+		return false, nil
+	}
+	for i, arg := range astExpr.Exprs {
+		ret, err := checker.Check(arg, fun.GetArgs()[i])
+		if err != nil {
+			return false, err
+		}
+		if !ret {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func (checker *ExprChecker) checkBinaryExpr(astExpr *tree.BinaryExpr, expr *plan2.Expr) (bool, error) {

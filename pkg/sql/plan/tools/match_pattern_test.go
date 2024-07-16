@@ -236,21 +236,97 @@ func Test_selfJoin(t *testing.T) {
 
 func Test_aggr(t *testing.T) {
 	p :=
-		TAnyTree(
-			TJoin(plan2.Node_INNER,
-				[]string{"L_ORDERS_OK = R_ORDERS_OK"},
-				nil,
-				TTableScanWithoutColRef("orders").
-					WithAlias("L_ORDERS_OK",
-						TColumnRef("orders", "o_orderkey")),
-
-				TTableScanWithoutColRef("orders").
-					WithAlias("R_ORDERS_OK",
-						TColumnRef("orders", "o_orderkey")),
+		TOutput(
+			[]string{"COUNT"},
+			TAggr(
+				NewAggrMap(
+					NewAggrPair("COUNT", NewAggrFuncMatcher("COUNT(N_NATIONKEY)")),
+				),
+				TTableScan("nation",
+					NewStringMap(
+						NewStringPair("N_NATIONKEY", "n_nationkey"),
+					),
+				),
 			),
 		)
 
 	err := AssertPlan(context.Background(), nil,
 		"SELECT COUNT(n_nationkey) FROM nation", p)
 	assert.Nil(t, err)
+}
+
+func Test_aliasDoesNotExists(t *testing.T) {
+	p :=
+		TNode(plan2.Node_PROJECT,
+			TNode(plan2.Node_TABLE_SCAN).WithAlias("ORDERKEY",
+				TColumnRef("lineitem", "xxxxx")))
+
+	err := AssertPlan(context.Background(), nil,
+		"SELECT l_orderkey FROM lineitem", p)
+	assert.Error(t, err)
+}
+
+func Test_referAliasDoesNotExists(t *testing.T) {
+	p :=
+		TOutput([]string{"xxxx"},
+			TTableScan("lineitem",
+				NewStringMap(
+					NewStringPair("ORDERKEY", "l_orderkey"),
+				),
+			),
+		)
+
+	err := AssertPlan(context.Background(), nil,
+		"SELECT l_orderkey FROM lineitem", p)
+	assert.Error(t, err)
+}
+
+func Test_strictOutputExtraSymbols(t *testing.T) {
+	p :=
+		TStrictOutput([]string{"ORDERKEY"},
+			TTableScan("lineitem",
+				NewStringMap(
+					NewStringPair("ORDERKEY", "l_orderkey"),
+					NewStringPair("EXTENDEDPRICE", "l_extendedprice"),
+				),
+			),
+		)
+
+	err := AssertPlan(context.Background(), nil,
+		"SELECT l_orderkey, l_extendedprice FROM lineitem", p)
+	assert.Error(t, err)
+}
+
+func Test_strictTableScanExtraSymbols(t *testing.T) {
+	p :=
+		TOutput([]string{"ORDERKEY", "EXTENDEDPRICE"},
+			TStrictTableScan("lineitem",
+				NewStringMap(
+					NewStringPair("ORDERKEY", "l_orderkey"),
+				),
+			),
+		)
+
+	err := AssertPlan(context.Background(), nil,
+		"SELECT l_orderkey, l_extendedprice FROM lineitem", p)
+	assert.Error(t, err)
+}
+
+func Test_strictProjectExtraSymbols(t *testing.T) {
+	p :=
+		TStrictProject(
+			NewStringMap(
+				NewStringPair("ORDERKEY", "l_orderkey"),
+				NewStringPair("ORDERKEY", "l_orderkey"),
+			),
+			TTableScan("lineitem",
+				NewStringMap(
+					NewStringPair("ORDERKEY", "l_orderkey"),
+				),
+			),
+		)
+
+	err := AssertPlan(context.Background(), nil,
+		"SELECT l_discount, l_orderkey, 1 + l_orderkey FROM lineitem", p)
+	assert.Error(t, err)
 }

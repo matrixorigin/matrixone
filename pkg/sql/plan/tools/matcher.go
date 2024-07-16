@@ -37,6 +37,7 @@ var _ Matcher = new(JoinMatcher)
 
 var _ RValueMatcher = new(ColumnRef)
 var _ RValueMatcher = new(ExprMatcher)
+var _ RValueMatcher = new(AggrFuncMatcher)
 
 type NodeMatcher struct {
 	NodeType plan2.Node_NodeType
@@ -108,14 +109,14 @@ func (matcher *AliasMatcher) SimpleMatch(node *plan.Node) bool {
 }
 
 func (matcher *AliasMatcher) DeepMatch(ctx context.Context, node *plan.Node, aliases plan.UnorderedMap[string, string]) (*MatchResult, error) {
-	colDef, err := matcher.Matcher.GetAssignedVar(node, aliases)
+	varRef, err := matcher.Matcher.GetAssignedVar(node, aliases)
 	if err != nil {
 		return nil, err
 	}
-	if colDef != nil && len(matcher.Alias) != 0 {
-		return MatchedWithAlias(matcher.Alias, colDef.Name), nil
+	if varRef != nil && len(matcher.Alias) != 0 {
+		return MatchedWithAlias(matcher.Alias, varRef.Name), nil
 	}
-	return NewMatchResult(colDef != nil, nil), nil
+	return NewMatchResult(varRef != nil, nil), nil
 }
 
 type ColumnRef struct {
@@ -127,7 +128,7 @@ func (matcher *ColumnRef) String() string {
 	return fmt.Sprintf("Column %s:%s", matcher.TableName, matcher.ColumnName)
 }
 
-func (matcher *ColumnRef) GetAssignedVar(node *plan2.Node, aliases plan.UnorderedMap[string, string]) (*SColDef, error) {
+func (matcher *ColumnRef) GetAssignedVar(node *plan2.Node, aliases plan.UnorderedMap[string, string]) (*VarRef, error) {
 	if node.NodeType != plan2.Node_TABLE_SCAN {
 		return nil, nil
 	}
@@ -138,7 +139,7 @@ func (matcher *ColumnRef) GetAssignedVar(node *plan2.Node, aliases plan.Unordere
 
 	for _, col := range node.TableDef.Cols {
 		if col.Name == matcher.ColumnName {
-			return &SColDef{
+			return &VarRef{
 				Name: col.Name,
 				Type: col.Typ,
 			}, nil
@@ -147,7 +148,7 @@ func (matcher *ColumnRef) GetAssignedVar(node *plan2.Node, aliases plan.Unordere
 	return nil, nil
 }
 
-type GetFunc func(*plan.QueryBuilder, *plan2.Node) []SColDef
+type GetFunc func(*plan.QueryBuilder, *plan2.Node) []VarRef
 
 type SymbolsMatcher struct {
 	GetFunc         GetFunc
@@ -203,19 +204,19 @@ func (matcher *AssignedSymbolsMatcher) DeepMatch(ctx context.Context, node *plan
 	}
 	realCols := matcher.GetFunc(nil, node)
 
-	expectCols := make([]SColDef, 0)
+	expectCols := make([]VarRef, 0)
 	for _, eMatcher := range matcher.ExpectedMatchers {
-		colDef, err := eMatcher.GetAssignedVar(node, aliases)
+		varRef, err := eMatcher.GetAssignedVar(node, aliases)
 		if err != nil {
 			return nil, err
 		}
-		if colDef == nil {
+		if varRef == nil {
 			return FailMatched(), nil
 		}
-		expectCols = append(expectCols, *colDef)
+		expectCols = append(expectCols, *varRef)
 	}
 
-	return NewMatchResult(SColDefsEqual(realCols, expectCols), nil), nil
+	return NewMatchResult(VarRefEqual(realCols, expectCols), nil), nil
 }
 
 type OutputMatcher struct {
@@ -239,14 +240,18 @@ func (matcher *OutputMatcher) DeepMatch(ctx context.Context, node *plan.Node, al
 		found := false
 		for _, projExpr := range node.ProjectList {
 			name := projExpr.GetCol().Name
-			names := strings.Split(name, ".")
-			if len(names) != 2 {
-				return FailMatched(), moerr.NewInternalError(ctx, "special name %s ", name)
-			}
-			colName := names[1]
-			if ref == colName {
-				found = true
-				break
+			if strings.Contains(name, "(") {
+				found = strings.HasPrefix(strings.ToLower(name), ref)
+			} else {
+				names := strings.Split(name, ".")
+				if len(names) != 2 {
+					return FailMatched(), moerr.NewInternalError(ctx, "special name %s ", name)
+				}
+				colName := names[1]
+				if ref == colName {
+					found = true
+					break
+				}
 			}
 		}
 		if !found {
@@ -269,8 +274,8 @@ func NewExprMatcher(sql string) *ExprMatcher {
 	}
 }
 
-func (matcher *ExprMatcher) GetAssignedVar(node *plan2.Node, aliases plan.UnorderedMap[string, string]) (*SColDef, error) {
-	var res *SColDef
+func (matcher *ExprMatcher) GetAssignedVar(node *plan2.Node, aliases plan.UnorderedMap[string, string]) (*VarRef, error) {
+	var res *VarRef
 	checkedExprs := make([]*plan2.Expr, 0)
 	for _, expr := range node.ProjectList {
 		eChecker := &ExprChecker{
@@ -282,12 +287,12 @@ func (matcher *ExprMatcher) GetAssignedVar(node *plan2.Node, aliases plan.Unorde
 		}
 		if check {
 			if expr.GetCol() != nil {
-				res = &SColDef{
+				res = &VarRef{
 					Name: strings.Split(expr.GetCol().Name, ".")[1],
 					Type: expr.GetTyp(),
 				}
 			} else {
-				res = &SColDef{
+				res = &VarRef{
 					Name: expr.String(),
 					Type: expr.GetTyp(),
 				}
@@ -392,4 +397,56 @@ func parseSql(sql string) tree.Expr {
 	}
 	expr := one.(*tree.Select).Select.(*tree.SelectClause).Exprs[0]
 	return expr.Expr
+}
+
+type AggrFuncMatcher struct {
+	Aggr    tree.Expr
+	AggrStr string
+}
+
+func NewAggrFuncMatcher(s string) *AggrFuncMatcher {
+	ret := &AggrFuncMatcher{
+		Aggr:    parseSql(s),
+		AggrStr: s,
+	}
+
+	return ret
+}
+
+func (matcher *AggrFuncMatcher) GetAssignedVar(node *plan2.Node, aliases plan.UnorderedMap[string, string]) (*VarRef, error) {
+	if node.NodeType != plan2.Node_AGG {
+		return nil, nil
+	}
+	var res *VarRef
+
+	for _, expr := range node.AggList {
+		eChecker := &ExprChecker{
+			Aliases: aliases,
+		}
+		check, err := eChecker.Check(matcher.Aggr, expr)
+		if err != nil {
+			return nil, err
+		}
+		if check {
+			if expr.GetF() != nil {
+				res = &VarRef{
+					Name: expr.GetF().GetFunc().ObjName,
+					Type: expr.GetTyp(),
+				}
+			} else {
+				res = &VarRef{
+					Name: expr.String(),
+					Type: expr.GetTyp(),
+				}
+			}
+		}
+	}
+	return res, nil
+}
+
+func (matcher *AggrFuncMatcher) String() string {
+	return matcher.AggrStr
+}
+
+type ValuesMatcher struct {
 }
