@@ -3002,11 +3002,11 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_CLOSE, ses.GetTxnHandler().GetServerStatus(), err)
 		}
+		prefix := ""
 		if preStmt.IsCloudNonuser {
-			sql = fmt.Sprintf("/* cloud_nonuser */deallocate prepare %s", stmtName)
-		} else {
-			sql = fmt.Sprintf("deallocate prepare %s", stmtName)
+			prefix = "/* cloud_nonuser */"
 		}
+		sql = fmt.Sprintf("%sdeallocate prepare %s", prefix, stmtName)
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(sql))
 
 		err = doComQuery(ses, execCtx, &UserInput{sql: sql})
@@ -3024,11 +3024,11 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_CLOSE, ses.GetTxnHandler().GetServerStatus(), err)
 		}
+		prefix := ""
 		if preStmt.IsCloudNonuser {
-			sql = fmt.Sprintf("/* cloud_nonuser */reset prepare %s", stmtName)
-		} else {
-			sql = fmt.Sprintf("reset prepare %s", stmtName)
+			prefix = "/* cloud_nonuser */"
 		}
+		sql = fmt.Sprintf("%sreset prepare %s", prefix, stmtName)
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(sql))
 		err = doComQuery(ses, execCtx, &UserInput{sql: sql})
 		if err != nil {
@@ -3065,11 +3065,11 @@ func parseStmtExecute(reqCtx context.Context, ses *Session, data []byte) (string
 	}
 
 	var sql string
+	prefix := ""
 	if preStmt.IsCloudNonuser {
-		sql = fmt.Sprintf("/* cloud_nonuser */execute %s", stmtName)
-	} else {
-		sql = fmt.Sprintf("execute %s", stmtName)
+		prefix = "/* cloud_nonuser */"
 	}
+	sql = fmt.Sprintf("%sexecute %s", prefix, stmtName)
 
 	ses.Debug(reqCtx, "query trace", logutil.QueryField(sql))
 	err = ses.GetResponser().MysqlRrWr().ParseExecuteData(reqCtx, ses.GetTxnCompileCtx().GetProcess(), preStmt, data, pos)
@@ -3095,11 +3095,11 @@ func parseStmtSendLongData(reqCtx context.Context, ses *Session, data []byte) er
 	}
 
 	var sql string
+	prefix := ""
 	if preStmt.IsCloudNonuser {
-		sql = fmt.Sprintf("/* cloud_nonuser */send long data for stmt %s", stmtName)
-	} else {
-		sql = fmt.Sprintf("send long data for stmt %s", stmtName)
+		prefix = "/* cloud_nonuser */"
 	}
+	sql = fmt.Sprintf("%ssend long data for stmt %s", prefix, stmtName)
 
 	ses.Debug(reqCtx, "query trace", logutil.QueryField(sql))
 
