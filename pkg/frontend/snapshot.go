@@ -118,7 +118,8 @@ var (
 		"mo_transactions":   1,
 		"mo_cache":          1,
 
-		"mo_snapshots": 1,
+		catalog.MO_SNAPSHOTS: 1,
+		catalog.MO_PITR:      1,
 	}
 )
 
@@ -165,7 +166,7 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 	var sql string
 	var objId uint64
 
-	// check create stage priv
+	// check create snapshot priv
 	err = doCheckRole(ctx, ses)
 	if err != nil {
 		return err
@@ -181,13 +182,6 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 		return err
 	}
 
-	// check create snapshot priv
-
-	// 1.only admin can create tenant level snapshot
-	err = doCheckRole(ctx, ses)
-	if err != nil {
-		return err
-	}
 	// 2.only sys can create cluster level snapshot
 	tenantInfo := ses.GetTenantInfo()
 	currentAccount := tenantInfo.GetTenant()
@@ -286,6 +280,68 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 	// insert record to the system table
 
 	return err
+}
+
+func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) error {
+	var err error
+	var pitrLevel tree.PitrLevel
+	var pitrForAccount string
+	var pitrName string
+	var pitrExist bool
+	var pitrId string
+	var databaseName string
+	var tableName string
+	var sql string
+	var objId uint64
+
+	// check create pitr priv
+	err = doCheckRole(ctx, ses)
+	if err != nil {
+		return err
+	}
+
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+	err = bh.Exec(ctx, "begin;")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+	if err != nil {
+		return err
+	}
+
+	// 2.only sys can create cluster level pitr
+	tenantInfo := ses.GetTenantInfo()
+	currentAccount := tenantInfo.GetTenant()
+	pitrLevel = stmt.Level
+	if pitrLevel == tree.PITRLEVELCLUSTER && currentAccount != sysAccountName {
+		return moerr.NewInternalError(ctx, "only sys tenant can create cluster level pitr")
+	}
+
+	// 3.only sys can create tenant level pitr for other tenant
+	if pitrLevel == tree.PITRLEVELACCOUNT {
+		if len(stmt.AccountName) > 0 && currentAccount != sysAccountName {
+			return moerr.NewInternalError(ctx, "only sys tenant can create tenant level pitr for other tenant")
+		}
+	}
+
+	// check pitr exists or not
+	pitrName = string(stmt.Name)
+	pitrExist, err = checkPitrExistOrNot(ctx, bh, pitrName)
+	if err != nil {
+		return err
+	}
+	if pitrExist {
+		if !stmt.IfNotExists {
+			return moerr.NewInternalError(ctx, "pitr %s already exists", pitrName)
+		} else {
+			return nil
+		}
+	}
+
+	// insert record to the system table
+	
+
 }
 
 func doDropSnapshot(ctx context.Context, ses *Session, stmt *tree.DropSnapShot) (err error) {
@@ -938,6 +994,31 @@ func checkSnapShotExistOrNot(ctx context.Context, bh BackgroundExec, snapshotNam
 	return false, nil
 }
 
+func checkPitrExistOrNot(ctx context.Context, bh BackgroundExec, pitrName string) (bool, error) {
+	var sql string
+	var erArray []ExecResult
+	var err error
+	sql, err = getSqlForCheckPitr(ctx, pitrName)
+	if err != nil {
+		return false, err
+	}
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return false, err
+	}
+
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		return false, err
+	}
+
+	if execResultArrayHasData(erArray) {
+		return true, nil
+	}
+	return false, nil
+}
+
 func getSnapshotRecords(ctx context.Context, bh BackgroundExec, sql string) ([]*snapshotRecord, error) {
 	var erArray []ExecResult
 	var err error
@@ -1037,6 +1118,14 @@ func getSqlForCheckSnapshot(ctx context.Context, snapshot string) (string, error
 		return "", err
 	}
 	return fmt.Sprintf(checkSnapshotFormat, snapshot), nil
+}
+
+func getSqlForCheckPitr(ctx context.Context, pitr string) (string, error) {
+	err := inputNameIsInvalid(ctx, pitr)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(checkPitrFormat, pitr), nil
 }
 
 func getSqlForGetSnapshotTsWithSnapshotName(ctx context.Context, snapshot string) (string, error) {

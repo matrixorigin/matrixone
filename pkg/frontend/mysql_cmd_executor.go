@@ -1166,6 +1166,26 @@ func handleRestoreSnapshot(ses *Session, execCtx *ExecCtx, rs *tree.RestoreSnapS
 	return doRestoreSnapshot(execCtx.reqCtx, ses, rs)
 }
 
+func handleCreatePitr(ses *Session, execCtx *ExecCtx, cp *tree.CreatePitr) error {
+	//return doCreatePitr(execCtx.reqCtx, ses, cp)
+	return nil
+}
+
+func handleDropPitr(ses *Session, execCtx *ExecCtx, dp *tree.DropPitr) error {
+	//return doDropPitr(execCtx.reqCtx, ses, dp)
+	return nil
+}
+
+func handleAlterPitr(ses *Session, execCtx *ExecCtx, ap *tree.AlterPitr) error {
+	//return doAlterPitr(execCtx.reqCtx, ses, ap)
+	return nil
+}
+
+func handleRestorePitr(ses *Session, execCtx *ExecCtx, rp *tree.RestorePitr) error {
+	//return doRestorePitr(execCtx.reqCtx, ses, rp)
+	return nil
+}
+
 // handleCreateAccount creates a new user-level tenant in the context of the tenant SYS
 // which has been initialized.
 func handleCreateAccount(ses FeSession, execCtx *ExecCtx, ca *tree.CreateAccount, proc *process.Process) error {

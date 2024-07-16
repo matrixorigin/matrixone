@@ -905,6 +905,7 @@ var (
 		"mo_transactions":             0,
 		"mo_cache":                    0,
 		"mo_snapshots":                0,
+		"mo_pitr":                     0,
 	}
 	sysAccountTables = map[string]struct{}{
 		catalog.MOVersionTable:       {},
@@ -938,6 +939,7 @@ var (
 		"mo_cache":                    0,
 		"mo_foreign_keys":             0,
 		"mo_snapshots":                0,
+		"mo_pitr":                     0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = MoCatalogMoAutoIncrTableDDL
@@ -970,6 +972,7 @@ var (
 		MoCatalogMoVariablesDDL,
 		MoCatalogMoTransactionsDDL,
 		MoCatalogMoCacheDDL,
+		MoCatalogMoPitrDDL,
 	}
 
 	//drop tables for the tenant
@@ -989,6 +992,7 @@ var (
 		`drop view if exists mo_catalog.mo_transactions;`,
 		`drop view if exists mo_catalog.mo_cache;`,
 		`drop table if exists mo_catalog.mo_snapshots;`,
+		`drop table if exists mo_catalog.mo_pitr;`,
 	}
 	dropMoMysqlCompatibilityModeSql = `drop table if exists mo_catalog.mo_mysql_compatibility_mode;`
 	dropMoPubsSql                   = `drop table if exists mo_catalog.mo_pubs;`
@@ -5894,7 +5898,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.ValuesStatement:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeValues, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
-	case *tree.ShowSnapShots:
+	case *tree.ShowSnapShots, *tree.ShowPitr:
 		typs = append(typs, PrivilegeTypeAccountAll)
 		objType = objectTypeDatabase
 		kind = privilegeKindNone
@@ -5903,6 +5907,10 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeDatabase
 		kind = privilegeKindNone
 	case *tree.RestoreSnapShot:
+		typs = append(typs, PrivilegeTypeAccountAll)
+		objType = objectTypeDatabase
+		kind = privilegeKindNone
+	case *tree.CreatePitr, *tree.DropPitr, *tree.AlterPitr, *tree.RestorePitr:
 		typs = append(typs, PrivilegeTypeAccountAll)
 		objType = objectTypeDatabase
 		kind = privilegeKindNone
