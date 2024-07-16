@@ -17,8 +17,10 @@ package process
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 const ALLCN = "ALLCN"
@@ -198,12 +200,16 @@ func (mr *MessageReceiver) ReceiveMessage(needBlock bool, ctx context.Context) (
 		mr.mb.Waiters = append(mr.mb.Waiters, mr.waiter)
 		mr.mb.RwMutex.Unlock()
 	}
+	ctxTimeout, cancelTimeout := context.WithTimeout(context.TODO(), 20*time.Second)
+	defer cancelTimeout()
 	for {
 		result = mr.receiveMessageNonBlock()
 		if len(result) > 0 {
 			break
 		}
 		select {
+		case <-ctxTimeout.Done():
+			logutil.Warnf("runtime filter time out")
 		case <-mr.waiter:
 		case <-ctx.Done():
 			return result, true
