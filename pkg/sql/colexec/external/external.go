@@ -868,8 +868,8 @@ func checkLineValid(param *ExternalParam, proc *process.Process, line []csvparse
 			}
 			return nil
 		}
-		if len(line) != getRealAttrCnt(param.Attrs, param.Cols) {
-			if len(line) != len(param.Attrs)+1 {
+		if len(line) != len(param.TbColToDataCol) {
+			if len(line) != len(param.TbColToDataCol)+1 {
 				return moerr.NewInvalidInput(proc.Ctx, "the data of row %d contained is not equal to input columns", rowIdx+1)
 			}
 			field := line[len(line)-1]
@@ -1315,21 +1315,20 @@ func getNullFlag(nullMap map[string]([]string), attr, field string) bool {
 	return false
 }
 
-func getFieldFromLine(line []csvparser.Field, colIdx int, param *ExternalParam) csvparser.Field {
-	if catalog.ContainExternalHidenCol(param.Attrs[colIdx]) {
+func getFieldFromLine(line []csvparser.Field, colName string, param *ExternalParam) csvparser.Field {
+	if catalog.ContainExternalHidenCol(colName) {
 		return csvparser.Field{Val: param.Fileparam.Filepath}
 	}
 	if param.Extern.ExtTab {
-		return line[param.Name2ColIndex[param.Attrs[colIdx]]]
-	} else {
-		return line[colIdx]
+		return line[param.Name2ColIndex[colName]]
 	}
+	return line[param.TbColToDataCol[colName]]
 }
 
 func getOneRowData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam, mp *mpool.MPool) error {
 	var buf bytes.Buffer
 
-	for colIdx := range param.Attrs {
+	for colIdx, colName := range param.Attrs {
 		vec := bat.Vecs[colIdx]
 
 		if param.Cols[colIdx].Hidden {
@@ -1337,7 +1336,7 @@ func getOneRowData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *
 			continue
 		}
 
-		field := getFieldFromLine(line, int(colIdx), param)
+		field := getFieldFromLine(line, colName, param)
 		id := types.T(param.Cols[colIdx].Typ.Id)
 		if id != types.T_char && id != types.T_varchar && id != types.T_json &&
 			id != types.T_binary && id != types.T_varbinary && id != types.T_blob && id != types.T_text {

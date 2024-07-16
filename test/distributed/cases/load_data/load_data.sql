@@ -341,6 +341,12 @@ delete from load_data_t1;
 load data inline format='csv', data=$XXX$ XiAn,26 $XXX$ into table load_data_t1 fields terminated by ',' lines terminated by '\r\n' (city,age);
 select * from load_data_t1;
 delete from load_data_t1;
+load data inline format='csv', data=$XXX$ zhangsan, XiAn,26 $XXX$ into table load_data_t1 fields terminated by ',' lines terminated by '\r\n' (@name, city,age);
+select * from load_data_t1;
+delete from load_data_t1;
+load data inline format='csv', data=$XXX$ zhangsan, XiAn,26 $XXX$ into table load_data_t1 fields terminated by ',' lines terminated by '\r\n' (@aa, city,age);
+select * from load_data_t1;
+delete from load_data_t1;
 load data inline format='csv', data=$XXX$ zhangsan, XiAn,26 $XXX$ into table load_data_t1 fields terminated by ',' lines terminated by '\r\n' (city,age);
 load data inline format='csv', data=$XXX$ zhangsan $XXX$ into table load_data_t1 fields terminated by ',' lines terminated by '\r\n' (city,age);
 drop table load_data_t1;
@@ -380,3 +386,15 @@ LOAD DATA infile '$resources/load_data/test_columnlist_02.csv' into table load_d
 LOAD DATA infile '$resources/load_data/test_columnlist_03.csv' into table load_data_t3 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (col1, col3);
 select * from load_data_t3 order by id;
 drop table load_data_t3;
+
+drop table if exists load_data_t4;
+create table load_data_t4(col1 int default 22, col2 int);
+LOAD DATA infile '$resources/load_data/test_columnlist_03.csv' into table load_data_t4 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (col1, @col2);
+select * from load_data_t4;
+delete from load_data_t4;
+LOAD DATA infile '$resources/load_data/test_columnlist_03.csv' into table load_data_t4 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (@col1, col2);
+select * from load_data_t4;
+delete from load_data_t4;
+
+LOAD DATA infile '$resources/load_data/test_columnlist_04.csv' into table load_data_t4 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (@col1, col2);
+drop table load_data_t4;

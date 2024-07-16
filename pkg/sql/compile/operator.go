@@ -440,6 +440,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 					FileSize:        t.Es.FileSize,
 					FileOffsetTotal: t.Es.FileOffsetTotal,
 					Extern:          t.Es.Extern,
+					TbColToDataCol:  t.Es.TbColToDataCol,
 				},
 				ExParam: external.ExParam{
 					Filter: &external.FilterParam{
@@ -789,6 +790,10 @@ func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Contex
 		}
 	}
 
+	var tbColToDataCol map[string]int32
+	if n.ExternScan != nil {
+		tbColToDataCol = n.ExternScan.TbColToDataCol
+	}
 	return external.NewArgument().WithEs(
 		&external.ExternalParam{
 			ExParamConst: external.ExParamConst{
@@ -796,6 +801,7 @@ func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Contex
 				Cols:            n.TableDef.Cols,
 				Extern:          param,
 				Name2ColIndex:   n.TableDef.Name2ColIndex,
+				TbColToDataCol:  tbColToDataCol,
 				FileOffsetTotal: fileOffset,
 				CreateSql:       n.TableDef.Createsql,
 				Ctx:             ctx,

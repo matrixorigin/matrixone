@@ -31,7 +31,7 @@ const (
 	LoadParallelMinSize = 1 << 20
 )
 
-func getNormalExternalProject(stmt *tree.Load, ctx CompilerContext, tableDef *TableDef, tblName string) ([]*Expr, map[string]int32, *TableDef, error) {
+func getNormalExternalProject(stmt *tree.Load, ctx CompilerContext, tableDef *TableDef, tblName string) ([]*Expr, map[string]int32, map[string]int32, *TableDef, error) {
 	var externalProject []*Expr
 	colToIndex := make(map[string]int32, 0)
 	for i, col := range tableDef.Cols {
@@ -46,50 +46,56 @@ func getNormalExternalProject(stmt *tree.Load, ctx CompilerContext, tableDef *Ta
 				},
 			}
 			externalProject = append(externalProject, colExpr)
-			colToIndex[tableDef.Cols[i].Name] = int32(i)
+			colToIndex[col.Name] = int32(i)
 		}
 	}
-	return externalProject, colToIndex, tableDef, nil
+	return externalProject, colToIndex, colToIndex, tableDef, nil
 }
 
-func getExternalWithColListProject(stmt *tree.Load, ctx CompilerContext, tableDef *TableDef, tblName string) ([]*Expr, map[string]int32, *TableDef, error) {
+func getExternalWithColListProject(stmt *tree.Load, ctx CompilerContext, tableDef *TableDef, tblName string) ([]*Expr, map[string]int32, map[string]int32, *TableDef, error) {
 	var externalProject []*Expr
 	colToIndex := make(map[string]int32, 0)
+	tbColToDataCol := make(map[string]int32, 0)
 	var newCols []*ColDef
 
 	newTableDef := DeepCopyTableDef(tableDef, true)
+	colPos := 0
 	for i, col := range stmt.Param.Tail.ColumnList {
 		switch realCol := col.(type) {
 		case *tree.UnresolvedName:
 			colName := realCol.ColName()
 			if _, ok := newTableDef.Name2ColIndex[colName]; !ok {
-				return nil, nil, nil, moerr.NewInternalError(ctx.GetContext(), "column '%s' does not exist", colName)
+				return nil, nil, nil, nil, moerr.NewInternalError(ctx.GetContext(), "column '%s' does not exist", colName)
 			}
 			tbColIdx := newTableDef.Name2ColIndex[colName]
 			colExpr := &plan.Expr{
 				Typ: newTableDef.Cols[tbColIdx].Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
-						ColPos: int32(i),
+						ColPos: int32(colPos),
 						Name:   tblName + "." + colName,
 					},
 				},
 			}
 			externalProject = append(externalProject, colExpr)
-			colToIndex[colName] = int32(i)
+			colToIndex[colName] = int32(colPos)
+			colPos++
+			tbColToDataCol[colName] = int32(i)
 			newCols = append(newCols, newTableDef.Cols[tbColIdx])
 		case *tree.VarExpr:
 			//NOTE:variable like '@abc' will be passed by.
+			name := realCol.Name
+			tbColToDataCol[name] = -1 // when in external call, can use len of the map to check load data row whether valid
 		default:
-			return nil, nil, nil, moerr.NewInternalError(ctx.GetContext(), "unsupported column type %v", realCol)
+			return nil, nil, nil, nil, moerr.NewInternalError(ctx.GetContext(), "unsupported column type %v", realCol)
 		}
 	}
 
 	newTableDef.Cols = newCols
-	return externalProject, colToIndex, newTableDef, nil
+	return externalProject, colToIndex, tbColToDataCol, newTableDef, nil
 }
 
-func getExternalProject(stmt *tree.Load, ctx CompilerContext, tableDef *TableDef, tblName string) ([]*Expr, map[string]int32, *TableDef, error) {
+func getExternalProject(stmt *tree.Load, ctx CompilerContext, tableDef *TableDef, tblName string) ([]*Expr, map[string]int32, map[string]int32, *TableDef, error) {
 	if len(stmt.Param.Tail.ColumnList) == 0 {
 		return getNormalExternalProject(stmt, ctx, tableDef, tblName)
 	} else {
@@ -128,7 +134,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	}
 	originTableDef := tableDef
 	// load with columnlist will copy a new tableDef
-	externalProject, colToIndex, tableDef, err := getExternalProject(stmt, ctx, tableDef, tblName)
+	externalProject, colToIndex, tbColToDataCol, tableDef, err := getExternalProject(stmt, ctx, tableDef, tblName)
 	if err != nil {
 		return nil, err
 	}
@@ -178,14 +184,15 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		ObjRef:      objRef,
 		TableDef:    tableDef,
 		ExternScan: &plan.ExternScan{
-			Type:         int32(stmt.Param.ScanType),
-			Data:         stmt.Param.Data,
-			Format:       stmt.Param.Format,
-			IgnoredLines: uint64(stmt.Param.Tail.IgnoredLines),
-			EnclosedBy:   enclosedBy,
-			Terminated:   terminated,
-			EscapedBy:    escapedBy,
-			JsonType:     stmt.Param.JsonData,
+			Type:           int32(stmt.Param.ScanType),
+			Data:           stmt.Param.Data,
+			Format:         stmt.Param.Format,
+			IgnoredLines:   uint64(stmt.Param.Tail.IgnoredLines),
+			EnclosedBy:     enclosedBy,
+			Terminated:     terminated,
+			EscapedBy:      escapedBy,
+			JsonType:       stmt.Param.JsonData,
+			TbColToDataCol: tbColToDataCol,
 		},
 	}
 	lastNodeId := builder.appendNode(externalScanNode, bindCtx)
