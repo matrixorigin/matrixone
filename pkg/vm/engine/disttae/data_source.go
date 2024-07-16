@@ -20,7 +20,7 @@ const (
 
 type DataSource interface {
 	Next(ctx context.Context, cols []string, types []types.Type, seqnums []uint16,
-		memFilter memPKFilter, mp *mpool.MPool, vp engine.VectorPool, bat *batch.Batch) (*objectio.BlockInfoInProgress, DataState, error)
+		memFilter memPKFilter, txnOffset int, mp *mpool.MPool, vp engine.VectorPool, bat *batch.Batch) (*objectio.BlockInfoInProgress, DataState, error)
 
 	HasTombstones(bid types.Blockid) bool
 

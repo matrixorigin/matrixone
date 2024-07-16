@@ -814,6 +814,7 @@ func (r *readerInProgress) Read(
 		r.columns.colTypes,
 		r.columns.seqnums,
 		r.memFilter,
+		r.txnOffset,
 		mp,
 		vp,
 		bat)
