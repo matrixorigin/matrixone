@@ -38,6 +38,7 @@ type NodeT interface {
 	ApplyAppend(
 		bat *containers.Batch,
 		txn txnif.AsyncTxn,
+		blkOffset uint16,
 	) (from int, err error)
 
 	GetDataWindow(

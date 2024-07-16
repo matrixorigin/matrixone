@@ -1011,13 +1011,15 @@ func (blk *baseObject) OnReplayAppend(_ txnif.AppendNode) (err error) {
 	panic("not supported")
 }
 
-func (blk *baseObject) OnReplayAppendPayload(_ *containers.Batch) (err error) {
+func (blk *baseObject) OnReplayAppendPayload(_ *containers.Batch, _ uint16) (err error) {
 	panic("not supported")
 }
 
 func (blk *baseObject) MakeAppender() (appender data.ObjectAppender, err error) {
 	panic("not supported")
 }
+
+func (blk *baseObject) BlockCnt() int { panic("not support") }
 
 func (blk *baseObject) GetTotalChanges() int {
 	blk.RLock()

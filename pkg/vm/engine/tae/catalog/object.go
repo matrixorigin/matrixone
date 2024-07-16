@@ -449,8 +449,8 @@ func (entry *ObjectEntry) IsVisible(txn txnif.TxnReader) bool {
 	return entry.CreateNode.IsVisible(txn)
 }
 func (entry *ObjectEntry) BlockCnt() int {
-	if entry.IsAppendable() {
-		return 1
+	if entry.ObjectMVCCNode.IsEmpty() {
+		return entry.objData.BlockCnt()
 	}
 	return int(entry.getBlockCntFromStats())
 }

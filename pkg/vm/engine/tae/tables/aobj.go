@@ -123,7 +123,11 @@ func (obj *aobject) PPString(level common.PPLevel, depth int, prefix string, blk
 	}
 	return s
 }
-
+func (obj *aobject) BlockCnt() int {
+	obj.RLock()
+	defer obj.RUnlock()
+	return obj.node.Load().MustMNode().blockCnt()
+}
 func (obj *aobject) IsAppendable() bool {
 	if obj.IsAppendFrozen() {
 		return false
@@ -134,6 +138,12 @@ func (obj *aobject) IsAppendable() bool {
 		return false
 	}
 	return node.MustMNode().IsAppendable()
+}
+func (obj *aobject) GetNewBlock() {
+	newNode := obj.node.Load().MustMNode().registerNode()
+	if newNode == nil {
+		panic("logic error")
+	}
 }
 
 func (obj *aobject) PrepareCompactInfo() (result bool, reason string) {
@@ -475,12 +485,12 @@ func (obj *aobject) OnReplayAppend(node txnif.AppendNode) (err error) {
 	return
 }
 
-func (obj *aobject) OnReplayAppendPayload(bat *containers.Batch) (err error) {
+func (obj *aobject) OnReplayAppendPayload(bat *containers.Batch, blkOffset uint16) (err error) {
 	appender, err := obj.MakeAppender()
 	if err != nil {
 		return
 	}
-	_, err = appender.ReplayAppend(bat, nil)
+	_, err = appender.ReplayAppend(bat, blkOffset, nil)
 	return
 }
 

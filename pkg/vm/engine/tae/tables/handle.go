@@ -43,6 +43,7 @@ func (h *tableHandle) SetAppender(id *common.ID) (appender data.ObjectAppender) 
 	h.object = objMeta.GetObjectData().(*aobject)
 	h.appender, _ = h.object.MakeAppender()
 	h.object.Ref()
+	h.appender.GetNewBlock()
 	return h.appender
 }
 
@@ -62,25 +63,38 @@ func (h *tableHandle) GetAppender() (appender data.ObjectAppender, err error) {
 			return
 		}
 		h.object = objEntry.GetObjectData().(*aobject)
-		if !h.object.IsAppendable(){
+		if !h.object.IsAppendable() {
 			err = data.ErrAppendableObjectNotFound
+			return
 		}
 		h.appender, err = h.object.MakeAppender()
+		h.appender.GetNewBlock()
 		if err != nil {
 			panic(err)
 		}
 	}
 
 	dropped := h.object.meta.Load().HasDropCommitted()
-	if !h.appender.IsAppendable() || !h.object.IsAppendable() || dropped {
-		return h.ThrowAppenderAndErr()
-	}
-	h.object.Ref()
-	// Similar to optimistic locking
-	dropped = h.object.meta.Load().HasDropCommitted()
-	if !h.appender.IsAppendable() || !h.object.IsAppendable() || dropped {
-		h.object.Unref()
-		return h.ThrowAppenderAndErr()
+	if !h.appender.IsAppendable() {
+		if !h.object.IsAppendable() || dropped {
+			return h.ThrowAppenderAndErr()
+		}
+		h.object.Ref()
+		dropped = h.object.meta.Load().HasDropCommitted()
+		if !h.object.IsAppendable() || dropped {
+			h.object.Unref()
+			return h.ThrowAppenderAndErr()
+		}
+		h.appender.GetNewBlock()
+	} else {
+		if dropped {
+			return h.ThrowAppenderAndErr()
+		}
+		h.object.Ref()
+		if dropped {
+			h.object.Unref()
+			return h.ThrowAppenderAndErr()
+		}
 	}
 	appender = h.appender
 	return

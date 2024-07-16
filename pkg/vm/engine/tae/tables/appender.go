@@ -34,7 +34,11 @@ func newAppender(aobj *aobject) *objectAppender {
 	appender.rows = uint32(rows)
 	return appender
 }
-
+func (appender *objectAppender) GetNewBlock() {
+	appender.placeholder = 0
+	appender.rows = 0
+	appender.obj.GetNewBlock()
+}
 func (appender *objectAppender) GetMeta() any {
 	return appender.obj.meta.Load()
 }
@@ -91,8 +95,9 @@ func (appender *objectAppender) PrepareAppend(
 }
 func (appender *objectAppender) ReplayAppend(
 	bat *containers.Batch,
+	blkOffset uint16,
 	txn txnif.AsyncTxn) (from int, err error) {
-	if from, err = appender.ApplyAppend(bat, txn); err != nil {
+	if from, err = appender.ApplyAppend(bat, blkOffset, txn); err != nil {
 		return
 	}
 	// TODO: Remove ReplayAppend
@@ -101,6 +106,7 @@ func (appender *objectAppender) ReplayAppend(
 }
 func (appender *objectAppender) ApplyAppend(
 	bat *containers.Batch,
+	blkOffset uint16,
 	txn txnif.AsyncTxn) (from int, err error) {
 	n := appender.obj.PinNode()
 	defer n.Unref()
@@ -108,7 +114,7 @@ func (appender *objectAppender) ApplyAppend(
 	node := n.MustMNode()
 	appender.obj.Lock()
 	defer appender.obj.Unlock()
-	from, err = node.ApplyAppend(bat, txn)
+	from, err = node.ApplyAppend(bat, txn, blkOffset)
 
 	schema := node.getwrteSchema()
 	for _, colDef := range schema.ColDefs {
@@ -116,7 +122,7 @@ func (appender *objectAppender) ApplyAppend(
 			continue
 		}
 		if colDef.IsRealPrimary() && !schema.IsSecondaryIndexTable() {
-			if err = node.getLastNode().pkIndex.BatchUpsert(bat.Vecs[colDef.Idx].GetDownstreamVector(), from); err != nil {
+			if err = node.getMemoryNode(blkOffset).pkIndex.BatchUpsert(bat.Vecs[colDef.Idx].GetDownstreamVector(), from); err != nil {
 				panic(err)
 			}
 		}

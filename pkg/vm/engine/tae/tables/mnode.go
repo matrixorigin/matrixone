@@ -601,7 +601,7 @@ func (node *memoryNode) resolveInMemoryColumnData(
 		return
 	}
 
-	err = node.object.fillInMemoryDeletesLocked(txn, 0, view.BaseView, node.object.RWMutex)
+	err = node.object.fillInMemoryDeletesLocked(txn, node.offset, view.BaseView, node.object.RWMutex)
 	if err != nil {
 		return
 	}
@@ -715,8 +715,9 @@ func (node *objectMemoryNode) PrepareAppend(rows uint32) (n uint32, err error) {
 func (node *objectMemoryNode) ApplyAppend(
 	bat *containers.Batch,
 	txn txnif.AsyncTxn,
+	blkOffset uint16,
 ) (from int, err error) {
-	return node.getLastNode().ApplyAppend(bat, txn)
+	return node.getOrCreateNode(blkOffset).ApplyAppend(bat, txn)
 }
 func (node *objectMemoryNode) GetDataWindow(
 	blkID uint16, readSchema *catalog.Schema, colIdxes []int, from, to uint32, mp *mpool.MPool,
@@ -739,20 +740,7 @@ func (node *objectMemoryNode) registerNode() *memoryNode {
 	return blkNode
 }
 func (node *objectMemoryNode) IsAppendable() bool {
-	if len(node.blkMemoryNodes) == 0 {
-		newNode := node.registerNode()
-		return newNode != nil
-	}
-	lastNode := node.getLastNode()
-	rows, err := lastNode.Rows()
-	if err != nil {
-		panic(err)
-	}
-	if rows < node.writeSchema.BlockMaxRows {
-		return true
-	}
-	newNode := node.registerNode()
-	return newNode != nil
+	return len(node.blkMemoryNodes) < int(node.writeSchema.ObjectMaxBlocks)
 }
 func (node *objectMemoryNode) BatchDedup(
 	ctx context.Context,
@@ -860,4 +848,7 @@ func (node *objectMemoryNode) resolveInMemoryColumnDatas(
 }
 func (node *objectMemoryNode) getwrteSchema() *catalog.Schema {
 	return node.writeSchema
+}
+func (node *objectMemoryNode) blockCnt() int {
+	return len(node.blkMemoryNodes)
 }

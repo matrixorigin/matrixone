@@ -283,6 +283,7 @@ func (c *UpdateCmd) ReadFrom(r io.Reader) (n int64, err error) {
 		n, err = c.delete.ReadFrom(r)
 	case IOET_WALTxnCommand_AppendNode:
 		n, err = c.append.ReadFrom(r)
+		c.append.id.SetBlockOffset(c.dest.GetBlockOffset())
 	}
 	n += 4 + common.IDSize
 	return

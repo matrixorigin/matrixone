@@ -130,6 +130,7 @@ func (node *persistedNode) PrepareAppend(rows uint32) (n uint32, err error) {
 func (node *persistedNode) ApplyAppend(
 	_ *containers.Batch,
 	_ txnif.AsyncTxn,
+	_ uint16,
 ) (from int, err error) {
 	panic(moerr.NewInternalErrorNoCtx("not supported"))
 }

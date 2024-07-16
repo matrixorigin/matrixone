@@ -51,10 +51,13 @@ type ObjectAppender interface {
 		txn txnif.AsyncTxn) (
 		node txnif.AppendNode, created bool, n uint32, err error)
 	ApplyAppend(bat *containers.Batch,
+		blkOffset uint16,
 		txn txnif.AsyncTxn,
 	) (int, error)
 	IsAppendable() bool
+	GetNewBlock()
 	ReplayAppend(bat *containers.Batch,
+		blkOffset uint16,
 		txn txnif.AsyncTxn) (int, error)
 	Close()
 }
@@ -62,7 +65,7 @@ type ObjectAppender interface {
 type ObjectReplayer interface {
 	OnReplayDelete(blkID uint16, node txnif.DeleteNode) (err error)
 	OnReplayAppend(node txnif.AppendNode) (err error)
-	OnReplayAppendPayload(bat *containers.Batch) (err error)
+	OnReplayAppendPayload(bat *containers.Batch, blkOffset uint16) (err error)
 }
 
 type Object interface {
@@ -78,6 +81,7 @@ type Object interface {
 	PrepareCompactInfo() (bool, string)
 	GetDeltaPersistedTS() types.TS
 
+	BlockCnt() int
 	Rows() (int, error)
 	CheckFlushTaskRetry(startts types.TS) bool
 
