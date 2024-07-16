@@ -72,15 +72,15 @@ func (a *allocator) allocate(
 		txnOp,
 		func(
 			v1, v2 uint64,
-			AllocateAt timestamp.Timestamp,
+			allocatedAt timestamp.Timestamp,
 			e error) {
 			from.Store(v1)
 			to.Store(v2)
 			if e != nil {
 				err2.Store(e)
 			}
-			if !AllocateAt.IsEmpty() {
-				lastAllocateAt = AllocateAt //TODO : check if this is correct
+			if !allocatedAt.IsEmpty() {
+				lastAllocateAt = allocatedAt //TODO : check if this is correct
 			}
 			close(c)
 		})

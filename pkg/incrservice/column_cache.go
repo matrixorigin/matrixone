@@ -398,10 +398,10 @@ func (col *columnCache) allocateLocked(
 	}
 
 	var from, to uint64
-	var AllocateAt timestamp.Timestamp
+	var allocateAt timestamp.Timestamp
 	var err error
 	for i := 0; i < maxRetryTimes; i++ {
-		from, to, AllocateAt, err = col.allocator.allocate(
+		from, to, allocateAt, err = col.allocator.allocate(
 			ctx,
 			tableID,
 			col.col.ColName,
@@ -417,7 +417,7 @@ func (col *columnCache) allocateLocked(
 			zap.Uint64("table", col.col.TableID),
 			zap.String("col", col.col.ColName))
 	}
-	col.applyAllocateLocked(from, to, AllocateAt, err)
+	col.applyAllocateLocked(from, to, allocateAt, err)
 	return err
 }
 
@@ -442,18 +442,18 @@ func (col *columnCache) maybeAllocate(ctx context.Context, tableID uint64, txnOp
 func (col *columnCache) applyAllocate(
 	from uint64,
 	to uint64,
-	AllocateAt timestamp.Timestamp,
+	allocateAt timestamp.Timestamp,
 	err error) {
 	col.Lock()
 	defer col.Unlock()
 
-	col.applyAllocateLocked(from, to, AllocateAt, err)
+	col.applyAllocateLocked(from, to, allocateAt, err)
 }
 
 func (col *columnCache) applyAllocateLocked(
 	from uint64,
 	to uint64,
-	AllocateAt timestamp.Timestamp,
+	allocateAt timestamp.Timestamp,
 	err error) {
 	if err != nil {
 		select {
@@ -465,10 +465,10 @@ func (col *columnCache) applyAllocateLocked(
 	if to > from {
 		if col.ranges.minCanAdded < to {
 			if col.lastAllocateAt.IsEmpty() {
-				col.lastAllocateAt = AllocateAt
+				col.lastAllocateAt = allocateAt
 			} else {
-				if col.lastAllocateAt.Less(AllocateAt) {
-					col.lastAllocateAt = AllocateAt
+				if col.lastAllocateAt.Less(allocateAt) {
+					col.lastAllocateAt = allocateAt
 				}
 			}
 		}

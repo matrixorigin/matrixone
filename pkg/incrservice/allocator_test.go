@@ -171,7 +171,7 @@ func TestAsyncAlloc(t *testing.T) {
 					c.key,
 					c.count,
 					nil,
-					func(from, to uint64, AllocateAt timestamp.Timestamp, err error) {
+					func(from, to uint64, allocateAt timestamp.Timestamp, err error) {
 						defer wg.Done()
 						require.NoError(t, err)
 						require.Equal(t, c.expectFrom, from)
