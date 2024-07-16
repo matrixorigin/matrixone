@@ -883,7 +883,11 @@ func (txn *Transaction) compactionBlksLocked() error {
 			return err
 		}
 		//TODO::do parallel compaction for table
-		tbl := rel.(*txnTable)
+		tbl, ok := rel.(*txnTable)
+		if !ok {
+			delegate := rel.(*txnTableDelegate)
+			tbl = delegate.origin
+		}
 		createdBlks, stats, err := tbl.compaction(blks)
 		if err != nil {
 			return err

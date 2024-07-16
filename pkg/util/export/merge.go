@@ -28,6 +28,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -342,6 +343,7 @@ func (m *Merge) doMergeFiles(ctx context.Context, files []*FileMeta) error {
 		// open reader
 		reader, err := newETLReader(ctx, m.table, m.fs, fp.FilePath, fp.FileSize, m.mp)
 		if err != nil {
+			v2.TraceETLMergeOpenFailedCounter.Inc()
 			m.logger.Error(fmt.Sprintf("merge file meet read failed: %v", err))
 			return err
 		}
@@ -354,6 +356,7 @@ func (m *Merge) doMergeFiles(ctx context.Context, files []*FileMeta) error {
 		var existed bool
 		firstLine, err := reader.ReadLine()
 		if err != nil {
+			v2.TraceETLMergeReadFailedCounter.Inc()
 			m.logger.Error("failed to read the first line of the file",
 				logutil.PathField(fp.FilePath), zap.Error(err))
 			return err
@@ -361,6 +364,7 @@ func (m *Merge) doMergeFiles(ctx context.Context, files []*FileMeta) error {
 
 		if firstLine != nil {
 			if err = row.ParseRow(firstLine); err != nil {
+				v2.TraceETLMergeParseFailedCounter.Inc()
 				m.logger.Error("parse first ETL row failed",
 					logutil.TableField(m.table.GetIdentify()),
 					logutil.PathField(fp.FilePath),
@@ -383,6 +387,8 @@ func (m *Merge) doMergeFiles(ctx context.Context, files []*FileMeta) error {
 			// Process the first line since it doesn't exist in the database
 			if !existed {
 				cacheFileData.Put(row)
+			} else {
+				v2.TraceETLMergeExistCounter.Inc()
 			}
 		}
 
@@ -392,6 +398,7 @@ func (m *Merge) doMergeFiles(ctx context.Context, files []*FileMeta) error {
 			line, err = reader.ReadLine()
 			for ; line != nil && err == nil; line, err = reader.ReadLine() {
 				if err = row.ParseRow(line); err != nil {
+					v2.TraceETLMergeParseFailedCounter.Inc()
 					m.logger.Error("parse ETL rows failed",
 						logutil.TableField(m.table.GetIdentify()),
 						logutil.PathField(fp.FilePath),
@@ -403,6 +410,7 @@ func (m *Merge) doMergeFiles(ctx context.Context, files []*FileMeta) error {
 				cacheFileData.Put(row)
 			}
 			if err != nil {
+				v2.TraceETLMergeReadFailedCounter.Inc()
 				m.logger.Warn("failed to read file",
 					logutil.PathField(fp.FilePath), zap.Error(err))
 				return err
@@ -412,17 +420,24 @@ func (m *Merge) doMergeFiles(ctx context.Context, files []*FileMeta) error {
 		// sql insert
 		if cacheFileData.Size() > 0 {
 			if err = cacheFileData.Flush(m.table); err != nil {
+				v2.TraceETLMergeWriteFailedCounter.Inc()
+				m.logger.Warn("failed do write",
+					logutil.PathField(fp.FilePath), zap.Error(err))
 				return err
 			}
 			cacheFileData.Reset()
 		}
 		// delete empty file or file already uploaded
+		// 2 situation: 1) record exist; 2) reset after Flush.
 		if cacheFileData.Size() == 0 {
 			if err = m.fs.Delete(ctx, fp.FilePath); err != nil {
-				m.logger.Warn("failed to delete file", zap.Error(err))
+				v2.TraceETLMergeDeleteFailedCounter.Inc()
+				m.logger.Warn("failed to delete file",
+					logutil.PathField(fp.FilePath), zap.Error(err))
 				return err
 			}
 		}
+		v2.TraceETLMergeSuccessCounter.Inc()
 		return nil
 	}
 	var err error

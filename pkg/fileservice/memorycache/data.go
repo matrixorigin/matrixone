@@ -18,7 +18,6 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
-	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 // Data is a reference counted byte buffer
@@ -51,7 +50,6 @@ func newData(
 			panic(err)
 		}
 	}
-	metric.FSMallocLiveObjectsMemoryCache.Inc()
 	data.ref.init(1)
 	return data
 }
@@ -62,7 +60,6 @@ func (d *Data) free() {
 	if d.deallocator != nil {
 		d.deallocator.Deallocate(malloc.NoHints)
 	}
-	metric.FSMallocLiveObjectsMemoryCache.Dec()
 }
 
 func (d *Data) Bytes() []byte {
