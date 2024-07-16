@@ -75,8 +75,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergedelete"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertsecondaryindex"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -1530,35 +1528,22 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		}
 		c.setAnalyzeCurrent(right, curr)
 		return c.compileFuzzyFilter(n, ns, left, right)
-	case plan.Node_PRE_INSERT_UK, plan.Node_PRE_INSERT_SK:
+	case plan.Node_PRE_INSERT_UK:
 		curr := c.anal.curr
 		ss, err = c.compilePlanScope(step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
-		currentFirstFlag := c.anal.isFirst
-		for i := range ss {
-			if n.NodeType == plan.Node_PRE_INSERT_UK {
-				var preInsertUkArg *preinsertunique.PreInsertUnique
-				preInsertUkArg, err = constructPreInsertUk(n, c.proc)
-				if err != nil {
-					return nil, err
-				}
-				preInsertUkArg.SetIdx(c.anal.curr)
-				preInsertUkArg.SetIsFirst(currentFirstFlag)
-				ss[i].setRootOperator(preInsertUkArg)
-			} else {
-				var preInsertSkArg *preinsertsecondaryindex.PreInsertSecIdx
-				preInsertSkArg, err = constructPreInsertSk(n, c.proc)
-				if err != nil {
-					return nil, err
-				}
-
-				preInsertSkArg.SetIdx(c.anal.curr)
-				preInsertSkArg.SetIsFirst(currentFirstFlag)
-				ss[i].setRootOperator(preInsertSkArg)
-			}
+		ss = c.compilePreInsertUk(n, ss)
+		c.setAnalyzeCurrent(ss, curr)
+		return ss, nil
+	case plan.Node_PRE_INSERT_SK:
+		curr := c.anal.curr
+		ss, err = c.compilePlanScope(step, n.Children[0], ns)
+		if err != nil {
+			return nil, err
 		}
+		ss = c.compilePreInsertSK(n, ss)
 		c.setAnalyzeCurrent(ss, curr)
 		return ss, nil
 	case plan.Node_PRE_INSERT:
@@ -3354,6 +3339,36 @@ func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*
 		}
 	}
 	return ss, nil
+}
+
+func (c *Compile) compilePreInsertUk(n *plan.Node, ss []*Scope) []*Scope {
+	currentFirstFlag := c.anal.isFirst
+	defer func() {
+		c.anal.isFirst = false
+	}()
+
+	for i := range ss {
+		preInsertUkArg := constructPreInsertUk(n, c.proc)
+		preInsertUkArg.SetIdx(c.anal.curr)
+		preInsertUkArg.SetIsFirst(currentFirstFlag)
+		ss[i].setRootOperator(preInsertUkArg)
+	}
+	return ss
+}
+
+func (c *Compile) compilePreInsertSK(n *plan.Node, ss []*Scope) []*Scope {
+	currentFirstFlag := c.anal.isFirst
+	defer func() {
+		c.anal.isFirst = false
+	}()
+
+	for i := range ss {
+		preInsertSkArg := constructPreInsertSk(n, c.proc)
+		preInsertSkArg.SetIdx(c.anal.curr)
+		preInsertSkArg.SetIsFirst(currentFirstFlag)
+		ss[i].setRootOperator(preInsertSkArg)
+	}
+	return ss
 }
 
 // DeleteMergeScope need to assure this:

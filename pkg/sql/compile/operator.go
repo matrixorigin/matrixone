@@ -712,19 +712,19 @@ func constructPreInsert(ns []*plan.Node, n *plan.Node, eg engine.Engine, proc *p
 	return op, nil
 }
 
-func constructPreInsertUk(n *plan.Node, proc *process.Process) (*preinsertunique.PreInsertUnique, error) {
+func constructPreInsertUk(n *plan.Node, proc *process.Process) *preinsertunique.PreInsertUnique {
 	preCtx := n.PreInsertUkCtx
 	op := preinsertunique.NewArgument()
 	op.Ctx = proc.Ctx
 	op.PreInsertCtx = preCtx
-	return op, nil
+	return op
 }
 
-func constructPreInsertSk(n *plan.Node, proc *process.Process) (*preinsertsecondaryindex.PreInsertSecIdx, error) {
+func constructPreInsertSk(n *plan.Node, proc *process.Process) *preinsertsecondaryindex.PreInsertSecIdx {
 	op := preinsertsecondaryindex.NewArgument()
 	op.Ctx = proc.Ctx
 	op.PreInsertCtx = n.PreInsertSkCtx
-	return op, nil
+	return op
 }
 
 func constructMergeblock(eg engine.Engine, insertArg *insert.Insert) *mergeblock.MergeBlock {
