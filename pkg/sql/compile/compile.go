@@ -545,7 +545,9 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	var retryTimes int
 	releaseRunC := func() {
 		if runC != c {
-			_, _ = GetCompileService().endService(runC)
+			if runC != nil {
+				_, _ = GetCompileService().endService(runC)
+			}
 			runC.Release()
 		}
 	}
