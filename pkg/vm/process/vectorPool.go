@@ -35,6 +35,9 @@ const (
 
 // cachedVectorPool is a session-level attribute that is used to store a batch of vectors for reuse.
 // It provides external methods such as getVector, putVector and free.
+//
+// It should be noted that "poolCapacity" refers to the size of each type of pool, not the total size.
+//
 // todo: in the future, it should be considered to use the size of memory as the capacity.
 // todo: session-level pool seems to be somewhat redundant.
 type cachedVectorPool struct {
@@ -84,7 +87,7 @@ func (vp *cachedVectorPool) putVectorIntoPool(vec *vector.Vector) bool {
 	if vectorCannotPut(vec) {
 		return false
 	}
-	if len(vec.GetArea()) > 0 {
+	if cap(vec.GetArea()) > 0 {
 		return putToSpecificPool(vec, poolWithArea)
 	}
 	return putToSpecificPool(vec, poolWithoutArea)
@@ -122,6 +125,20 @@ func (vp *cachedVectorPool) getVectorFromPool(typ types.Type) *vector.Vector {
 	vp.Unlock()
 
 	return result
+}
+
+func (vp *cachedVectorPool) memorySize() int64 {
+	vp.Lock()
+	defer vp.Unlock()
+
+	total := int64(0)
+	for _, v := range vp.pool[poolWithoutArea] {
+		total += int64(v.Allocated())
+	}
+	for _, v := range vp.pool[poolWithArea] {
+		total += int64(v.Allocated())
+	}
+	return total
 }
 
 func (vp *cachedVectorPool) modifyCapacity(vectorNumber int, mp *mpool.MPool) {
