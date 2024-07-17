@@ -159,10 +159,13 @@ func TestReadWithSpecialShard(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			fn(s1, 1, newTestTimestamp(2), s1v1)
-			fn(s1, 2, newTestTimestamp(3), s2v2)
-			fn(s2, 1, newTestTimestamp(2), s1v1)
-			fn(s2, 2, newTestTimestamp(3), s2v2)
+			shard1 := s1.getAllocatedShards()[0].ShardID
+			shard2 := s2.getAllocatedShards()[0].ShardID
+
+			fn(s1, shard1, newTestTimestamp(2), s1v1)
+			fn(s1, shard2, newTestTimestamp(3), s2v2)
+			fn(s2, shard1, newTestTimestamp(2), s1v1)
+			fn(s2, shard2, newTestTimestamp(3), s2v2)
 		},
 		nil,
 	)

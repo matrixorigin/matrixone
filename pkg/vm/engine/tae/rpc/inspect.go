@@ -41,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
 type inspectContext struct {
@@ -95,6 +96,9 @@ func initCommand(_ context.Context, inspectCtx *inspectContext) *cobra.Command {
 
 	objPrune := &objectPruneArg{}
 	rootCmd.AddCommand(objPrune.PrepareCommand())
+
+	transfer := &transferArg{}
+	rootCmd.AddCommand(transfer.PrepareCommand())
 
 	return rootCmd
 }
@@ -402,21 +406,22 @@ func (c *objectPruneArg) Run() error {
 
 	selectedObjs := make([]*catalog.ObjectEntry, 0, 64)
 
-	for ; it.Valid(); it.Next() {
-		obj := it.Get().GetPayload()
+	for it.Next() {
+		obj := it.Item()
+		if obj.ObjectState != catalog.ObjectState_Create_ApplyCommit {
+			continue
+		}
 		if !obj.IsActive() || obj.IsAppendable() {
 			continue
 		}
 		total++
 
-		obj.RLock()
-		createTs := obj.GetCreatedAtLocked()
-		obj.RUnlock()
+		createTs := obj.GetCreatedAt()
 		if createTs.GreaterEq(&ago) {
 			continue
 		}
 		stale++
-		if c.tbl.TryGetTombstone(obj.ID) != nil || obj.GetObjectData().GetTotalChanges() > 0 { // has deletes
+		if c.tbl.TryGetTombstone(*obj.ID()) != nil || obj.GetObjectData().GetTotalChanges() > 0 { // has deletes
 			continue
 		}
 		selected++
@@ -439,6 +444,7 @@ func (c *objectPruneArg) Run() error {
 		}
 		totalS += sz
 	}
+	it.Release()
 
 	if selected == 0 {
 		c.ctx.resp.Payload = []byte(fmt.Sprintf(
@@ -500,11 +506,11 @@ func (c *objectPruneArg) executePrune(objs []*catalog.ObjectEntry) error {
 	notfound := 0
 	w := &bytes.Buffer{}
 	for _, obj := range objs {
-		if err := tblHdl.SoftDeleteObject(&obj.ID); err != nil {
-			logutil.Errorf("objprune: del obj %s: %v", obj.ID.String(), err)
+		if err := tblHdl.SoftDeleteObject(obj.ID()); err != nil {
+			logutil.Errorf("objprune: del obj %s: %v", obj.ID().String(), err)
 			return err
 		}
-		w.WriteString(obj.ID.String())
+		w.WriteString(obj.ID().String())
 		w.WriteRune(',')
 	}
 	if err := txn.Commit(context.Background()); err != nil {
@@ -701,7 +707,7 @@ func (c *infoArg) String() string {
 	}
 
 	if c.obj != nil {
-		t = fmt.Sprintf("%s o-%s b-%d", t, c.obj.ID.String(), c.blkn)
+		t = fmt.Sprintf("%s o-%s b-%d", t, c.obj.ID().String(), c.blkn)
 	}
 
 	return fmt.Sprintf("info: %v", t)
@@ -719,7 +725,7 @@ func (c *infoArg) Run() error {
 		r, reason := c.obj.GetObjectData().PrepareCompactInfo()
 		rows, err := c.obj.GetObjectData().Rows()
 		if err != nil {
-			logutil.Warnf("get object rows failed, obj: %v, err %v", c.obj.ID.String(), err)
+			logutil.Warnf("get object rows failed, obj: %v, err %v", c.obj.ID().String(), err)
 		}
 		dels := c.obj.GetObjectData().GetTotalChanges()
 		b.WriteString(fmt.Sprintf("prepareCompact: %v, %q\n", r, reason))
@@ -1388,5 +1394,45 @@ func storageUsageEliminateErrors(c *storageUsageHistoryArg) (err error) {
 	cnt := logtail.EliminateErrorsOnCache(c.ctx.db.Catalog, end)
 	c.ctx.out.Write([]byte(fmt.Sprintf("%d tables backed to the track. ", cnt)))
 
+	return nil
+}
+
+type transferArg struct {
+	mem  int
+	disk int
+	show bool
+}
+
+func (c *transferArg) PrepareCommand() *cobra.Command {
+	transferCmd := &cobra.Command{
+		Use:   "transfer",
+		Short: "set transfer ttl",
+		Run:   RunFactory(c),
+	}
+	transferCmd.Flags().IntP("mem", "m", 5, "set transfer page memory ttl (s)")
+	transferCmd.Flags().IntP("disk", "d", 3, "set transfer page disk ttl (min)")
+	transferCmd.Flags().BoolP("show", "s", false, "show transfer ttl")
+
+	return transferCmd
+}
+
+func (c *transferArg) FromCommand(cmd *cobra.Command) (err error) {
+	c.mem, _ = cmd.Flags().GetInt("mem")
+	c.disk, _ = cmd.Flags().GetInt("disk")
+	c.show, _ = cmd.Flags().GetBool("show")
+	return nil
+}
+
+func (c *transferArg) String() string {
+	return fmt.Sprintf("transfer page ttl, mem:%v, disk:%v", model.GetTTL(), model.GetDiskTTL())
+}
+
+func (c *transferArg) Run() error {
+	if c.show {
+		c.show = false
+		return nil
+	}
+	model.SetTTL(time.Duration(c.mem) * time.Second)
+	model.SetDiskTTL(time.Duration(c.disk) * time.Minute)
 	return nil
 }

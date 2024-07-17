@@ -67,7 +67,7 @@ func New(
 	cli client.TxnClient,
 	hakeeper logservice.CNHAKeeperClient,
 	keyRouter client2.KeyRouter[pb.StatsInfoKey],
-	threshold int,
+	updateWorkerFactor int,
 ) *Engine {
 	cluster := clusterservice.GetMOCluster()
 	services := cluster.GetAllTNServices()
@@ -120,7 +120,8 @@ func New(
 	}
 	e.gcPool = pool
 
-	e.globalStats = NewGlobalStats(ctx, e, keyRouter)
+	e.globalStats = NewGlobalStats(ctx, e, keyRouter,
+		WithUpdateWorkerFactor(updateWorkerFactor))
 
 	e.messageCenter = &process.MessageCenter{
 		StmtIDToBoard: make(map[uuid.UUID]*process.MessageBoard, 64),
@@ -131,6 +132,7 @@ func New(
 		panic(err)
 	}
 
+	e.pClient.LogtailRPCClientFactory = DefaultNewRpcStreamToTnLogTailService
 	return e
 }
 
@@ -779,6 +781,10 @@ func (e *Engine) cleanMemoryTableWithTable(dbId, tblId uint64) {
 	// after we set it to empty, actually this part of memory was not immediately released.
 	// maybe a very old transaction still using that.
 	delete(e.partitions, [2]uint64{dbId, tblId})
+
+	//  When removing the PartitionState, you need to remove the tid in globalStats,
+	// When re-subscribing, globalStats will wait for the PartitionState to be consumed before updating the object state.
+	e.globalStats.RemoveTid(tblId)
 	logutil.Debugf("clean memory table of tbl[dbId: %d, tblId: %d]", dbId, tblId)
 }
 
@@ -802,4 +808,8 @@ func (e *Engine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.
 
 func (e *Engine) GetMessageCenter() any {
 	return e.messageCenter
+}
+
+func (e *Engine) FS() fileservice.FileService {
+	return e.fs
 }

@@ -20,7 +20,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fagongzi/goetty/v2"
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -235,11 +234,15 @@ func (prepareStmt *PrepareStmt) Close() {
 		}
 	}
 	if prepareStmt.compile != nil {
+		prepareStmt.compile.SetIsPrepare(false)
 		prepareStmt.compile.Release()
 		prepareStmt.compile = nil
 	}
 	if prepareStmt.PrepareStmt != nil {
 		prepareStmt.PrepareStmt.Free()
+	}
+	if prepareStmt.ParamTypes != nil {
+		prepareStmt.PrepareStmt = nil
 	}
 }
 
@@ -935,7 +938,8 @@ type MediaWriter interface {
 type MysqlReader interface {
 	MediaReader
 	Property
-	Read(options goetty.ReadOptions) (interface{}, error)
+	Read() ([]byte, error)
+	Free(buf []byte)
 	HandleHandshake(ctx context.Context, payload []byte) (bool, error)
 	Authenticate(ctx context.Context) error
 	ParseSendLongData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error

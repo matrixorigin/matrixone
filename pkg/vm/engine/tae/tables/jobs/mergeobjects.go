@@ -108,7 +108,7 @@ func NewMergeObjectsTask(
 		return
 	}
 	for _, meta := range mergedObjs {
-		obj, err := task.rel.GetObject(&meta.ID)
+		obj, err := task.rel.GetObject(meta.ID())
 		if err != nil {
 			return nil, err
 		}
@@ -188,7 +188,7 @@ func (task *mergeObjectsTask) LoadNextBatch(ctx context.Context, objIdx uint32) 
 		return nil, nil, nil, mergesort.ErrNoMoreBlocks
 	}
 	var err error
-	var view *containers.BlockView
+	var view *containers.Batch
 	releaseF := func() {
 		if view != nil {
 			view.Close()
@@ -205,17 +205,17 @@ func (task *mergeObjectsTask) LoadNextBatch(ctx context.Context, objIdx uint32) 
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	if len(task.attrs) != len(view.Columns) {
-		panic(fmt.Sprintf("mismatch %v, %v, %v", task.attrs, len(task.attrs), len(view.Columns)))
+	if len(task.attrs) != len(view.Vecs) {
+		panic(fmt.Sprintf("mismatch %v, %v, %v", task.attrs, len(task.attrs), len(view.Vecs)))
 	}
 	task.nMergedBlk[objIdx]++
 
 	bat := batch.New(true, task.attrs)
-	for i, col := range view.Columns {
-		bat.Vecs[i] = col.GetData().GetDownstreamVector()
+	for i, col := range view.Vecs {
+		bat.Vecs[i] = col.GetDownstreamVector()
 	}
-	bat.SetRowCount(view.Columns[0].Length())
-	return bat, view.DeleteMask, releaseF, nil
+	bat.SetRowCount(view.Vecs[0].Length())
+	return bat, view.Deletes, releaseF, nil
 }
 
 func (task *mergeObjectsTask) GetCommitEntry() *api.MergeCommitEntry {
@@ -267,12 +267,16 @@ func (task *mergeObjectsTask) DoTransfer() bool {
 	return task.doTransfer
 }
 
+func (task *mergeObjectsTask) Name() string {
+	return fmt.Sprintf("[MT-%d]-%d-%s", task.ID(), task.rel.ID(), task.schema.Name)
+}
+
 func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 	phaseDesc := ""
 	defer func() {
 		if err != nil {
-			logutil.Error("[MERGE-DONE-ERROR] ",
-				common.OperationField(task.Name()),
+			logutil.Error("[MERGE-ERR]",
+				zap.String("task", task.Name()),
 				zap.String("phase", phaseDesc),
 				zap.Error(err),
 			)
@@ -280,8 +284,10 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 	}()
 
 	if time.Since(task.createAt) > time.Second*10 {
-		logutil.Warn("[Slow] Mergeblocks wait", common.OperationField(task.Name()),
-			zap.Duration("duration", time.Since(task.createAt)),
+		logutil.Warn(
+			"[MERGE-SLOW-SCHED]",
+			zap.String("task", task.Name()),
+			common.AnyField("duration", time.Since(task.createAt)),
 		)
 	}
 
@@ -291,12 +297,12 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 		sortkeyPos = schema.GetSingleSortKeyIdx()
 	}
 	phaseDesc = "1-DoMergeAndWrite"
-	if err = mergesort.DoMergeAndWrite(ctx, sortkeyPos, task); err != nil {
+	if err = mergesort.DoMergeAndWrite(ctx, task.txn.String(), sortkeyPos, task); err != nil {
 		return err
 	}
 
 	phaseDesc = "2-HandleMergeEntryInTxn"
-	if task.createdBObjs, err = HandleMergeEntryInTxn(task.txn, task.commitEntry, task.rt); err != nil {
+	if task.createdBObjs, err = HandleMergeEntryInTxn(ctx, task.txn, task.Name(), task.commitEntry, task.rt); err != nil {
 		return err
 	}
 
@@ -306,7 +312,7 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 	return nil
 }
 
-func HandleMergeEntryInTxn(txn txnif.AsyncTxn, entry *api.MergeCommitEntry, rt *dbutils.Runtime) ([]*catalog.ObjectEntry, error) {
+func HandleMergeEntryInTxn(ctx context.Context, txn txnif.AsyncTxn, taskName string, entry *api.MergeCommitEntry, rt *dbutils.Runtime) ([]*catalog.ObjectEntry, error) {
 	database, err := txn.GetDatabaseByID(entry.DbId)
 	if err != nil {
 		return nil, err
@@ -352,7 +358,9 @@ func HandleMergeEntryInTxn(txn txnif.AsyncTxn, entry *api.MergeCommitEntry, rt *
 	}
 
 	txnEntry, err := txnentries.NewMergeObjectsEntry(
+		ctx,
 		txn,
+		taskName,
 		rel,
 		mergedObjs,
 		createdObjs,

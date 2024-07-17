@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2021-2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,33 +12,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package hashmap
+package morpc
 
 import (
-	"testing"
-
-	"github.com/dolthub/maphash"
-	"github.com/stretchr/testify/require"
+	"github.com/fagongzi/goetty/v2/buf"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 )
 
-func TestHashmap(t *testing.T) {
-	m := New[int, int](0)
-	hasher := maphash.NewHasher[int]()
-	for i := 0; i < 1000; i++ {
-		v := new(int)
-		*v = i
-		m.Set(hasher.Hash(i), i, v)
-	}
-	// test Len
-	require.Equal(t, 1000, m.Len())
-	// test Get
-	for i := 0; i < 1000; i++ {
-		v, ok := m.Get(hasher.Hash(i), i)
-		require.Equal(t, true, ok)
-		require.Equal(t, i, *v)
-	}
-	// test Delete
-	m.Delete(0, 0)
-	_, ok := m.Get(0, 0)
-	require.Equal(t, false, ok)
+var (
+	buffSize = 1024 * 64
+)
+
+func init() {
+	reuse.CreatePool(
+		func() *Buffer {
+			return &Buffer{
+				buf: buf.NewByteBuf(buffSize),
+			}
+		},
+		func(l *Buffer) {
+			l.reset()
+		},
+		reuse.DefaultOptions[Buffer]().
+			WithReleaseFunc(
+				func(l *Buffer) {
+					l.buf.Close()
+				}).
+			WithEnableChecker(),
+	)
 }

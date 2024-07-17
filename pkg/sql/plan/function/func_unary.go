@@ -1550,12 +1550,29 @@ func LastDay(
 				return err
 			}
 		} else {
-			dt, err := types.ParseDateCast(functionUtil.QuickBytesToStr(v1))
-			if err != nil {
-				if err := rs.AppendBytes(nil, true); err != nil {
-					return err
+			day := functionUtil.QuickBytesToStr(v1)
+			var dt types.Date
+			var err error
+			var dtt types.Datetime
+			if len(day) < 14 {
+				dt, err = types.ParseDateCast(day)
+				if err != nil {
+					if err := rs.AppendBytes(nil, true); err != nil {
+						return err
+					}
+					continue
 				}
+			} else {
+				dtt, err = types.ParseDatetime(day, 6)
+				if err != nil {
+					if err := rs.AppendBytes(nil, true); err != nil {
+						return err
+					}
+					continue
+				}
+				dt = dtt.ToDate()
 			}
+
 			year := dt.Year()
 			month := dt.Month()
 

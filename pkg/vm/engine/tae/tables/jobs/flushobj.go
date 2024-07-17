@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -43,8 +44,8 @@ type flushObjTask struct {
 	stat      objectio.ObjectStats
 	isAObj    bool
 
-	createAt      time.Time
-	partentTaskId uint64
+	createAt    time.Time
+	partentTask string
 
 	Stats objectio.ObjectStats
 }
@@ -58,18 +59,18 @@ func NewFlushObjTask(
 	data *containers.Batch,
 	delta *containers.Batch,
 	isAObj bool,
-	parentId uint64,
+	parentTask string,
 ) *flushObjTask {
 	task := &flushObjTask{
-		schemaVer:     schemaVer,
-		seqnums:       seqnums,
-		data:          data,
-		meta:          meta,
-		fs:            fs,
-		delta:         delta,
-		isAObj:        isAObj,
-		createAt:      time.Now(),
-		partentTaskId: parentId,
+		schemaVer:   schemaVer,
+		seqnums:     seqnums,
+		data:        data,
+		meta:        meta,
+		fs:          fs,
+		delta:       delta,
+		isAObj:      isAObj,
+		createAt:    time.Now(),
+		partentTask: parentTask,
 	}
 	task.BaseTask = tasks.NewBaseTask(task, tasks.IOTask, ctx)
 	return task
@@ -82,7 +83,7 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 		time.Sleep(time.Duration(rand.Intn(200)) * time.Millisecond)
 	}
 	waitT := time.Since(task.createAt)
-	seg := task.meta.ID.Segment()
+	seg := task.meta.ID().Segment()
 	name := objectio.BuildObjectName(seg, 0)
 	task.name = name
 	writer, err := blockio.NewBlockWriterNew(task.fs.Service, name, task.schemaVer, task.seqnums)
@@ -135,8 +136,16 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 		if task.delta != nil {
 			drow = task.delta.Length()
 		}
-		logutil.Infof("slowflush: task %d flushobj %s(%d,%d): wait %v, copy %v, io %v\n",
-			task.partentTaskId, task.meta.ID.ShortStringEx(), irow, drow, waitT, copyT, ioT)
+		logutil.Info(
+			"[FLUSH-SLOW-OBJ]",
+			zap.String("task", task.partentTask),
+			common.AnyField("obj", task.meta.ID().ShortStringEx()),
+			common.AnyField("wait", waitT),
+			common.AnyField("copy", copyT),
+			common.AnyField("io", ioT),
+			common.AnyField("data-rows", irow),
+			common.AnyField("delete-rows", drow),
+		)
 	}
 	task.Stats = writer.GetObjectStats()[objectio.SchemaData]
 

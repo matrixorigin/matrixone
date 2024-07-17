@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
@@ -98,9 +99,16 @@ func (s *storage) Get(
 				return err
 			}
 
+			// For partition table, the origin table id is the shard table id, and
+			// the partition table id is the shard id.
+			//
+			// For normal table, the origin table id is the shard table id, and the
+			// shard id is a int value that calculated by the shard policy.
+			//
+			// Metadata is not found by the special table id means the table is not
+			// sharding table or is a partition table. We need use the table id as
+			// shard id to get sharding metadata.
 			if metadata.IsEmpty() {
-				// maybe the shard table is partition, and the table id is the
-				// shard id.
 				v, err := getTableIDByShardID(
 					table,
 					pb.Policy_Partition.String(),
@@ -217,6 +225,10 @@ func (s *storage) Create(
 		func(
 			txn executor.TxnExecutor,
 		) error {
+			// Currently we only support partition policy.
+			// If the current table is a non partition
+			// table, we should not create sharding metadata
+			// for the current table.
 			partitions, err := readPartitionIDs(
 				table,
 				txn,
@@ -302,6 +314,7 @@ func (s *storage) Read(
 	method int,
 	param pb.ReadParam,
 	ts timestamp.Timestamp,
+	buffer *morpc.Buffer,
 ) ([]byte, error) {
 	// TODO: implement this
 	return nil, nil

@@ -142,6 +142,28 @@ func NewSnapshotMeta() *SnapshotMeta {
 	}
 }
 
+func (sm *SnapshotMeta) CopyObjectsLocked() map[uint64]map[objectio.Segmentid]*objectInfo {
+	objects := make(map[uint64]map[objectio.Segmentid]*objectInfo)
+	for k, v := range sm.objects {
+		objects[k] = make(map[objectio.Segmentid]*objectInfo)
+		for kk, vv := range v {
+			objects[k][kk] = vv
+		}
+	}
+	return objects
+}
+
+func (sm *SnapshotMeta) CopyTablesLocked() map[uint32]map[uint64]*TableInfo {
+	tables := make(map[uint32]map[uint64]*TableInfo)
+	for k, v := range sm.tables {
+		tables[k] = make(map[uint64]*TableInfo)
+		for kk, vv := range v {
+			tables[k][kk] = vv
+		}
+	}
+	return tables
+}
+
 func (sm *SnapshotMeta) updateTableInfo(data *CheckpointData) {
 	insTable, insTableTxn, _, _, delTableTxn := data.GetTblBatchs()
 	insAccIDs := vector.MustFixedCol[uint32](insTable.GetVectorByName(catalog2.SystemColAttr_AccID).GetDownstreamVector())
@@ -281,7 +303,8 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileServ
 		logutil.Infof("[GetSnapshot] cost %v", time.Since(now))
 	}()
 	sm.RLock()
-	objects := sm.objects
+	objects := sm.CopyObjectsLocked()
+	tables := sm.CopyTablesLocked()
 	sm.RUnlock()
 	snapshotList := make(map[uint32]containers.Vector)
 	idxes := []uint16{ColTS, ColLevel, ColObjId}
@@ -321,7 +344,7 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileServ
 					acct := acctList[r]
 					snapshotType := typeList[r]
 					if snapshotType == SnapshotTypeCluster {
-						for account := range sm.tables {
+						for account := range tables {
 							if snapshotList[account] == nil {
 								snapshotList[account] = containers.MakeVector(types.T_TS.ToType(), mp)
 							}
@@ -492,6 +515,8 @@ func (sm *SnapshotMeta) SaveTableInfo(name string, fs fileservice.FileService) (
 }
 
 func (sm *SnapshotMeta) RebuildTableInfo(ins *containers.Batch) {
+	sm.Lock()
+	defer sm.Unlock()
 	insTIDs := vector.MustFixedCol[uint64](ins.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
 	insAccIDs := vector.MustFixedCol[uint32](ins.GetVectorByName(catalog2.SystemColAttr_AccID).GetDownstreamVector())
 	insDBIDs := vector.MustFixedCol[uint64](ins.GetVectorByName(catalog2.SystemRelAttr_DBID).GetDownstreamVector())
@@ -519,6 +544,8 @@ func (sm *SnapshotMeta) RebuildTableInfo(ins *containers.Batch) {
 }
 
 func (sm *SnapshotMeta) RebuildTid(ins *containers.Batch) {
+	sm.Lock()
+	defer sm.Unlock()
 	insTIDs := vector.MustFixedCol[uint64](ins.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
 	accIDs := vector.MustFixedCol[uint32](ins.GetVectorByName(catalog2.SystemColAttr_AccID).GetDownstreamVector())
 	if ins.Length() < 1 {

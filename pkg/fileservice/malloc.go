@@ -21,28 +21,17 @@ import (
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
-// delay initialization of global allocator
-// ugly, but we tend to read malloc config from files instead of env vars
-var getDefaultAllocator = func() func() malloc.Allocator {
-	var allocator malloc.Allocator
-	var initOnce sync.Once
-	return func() malloc.Allocator {
-		initOnce.Do(func() {
-			allocator = malloc.GetDefault(nil)
-		})
-		return allocator
-	}
-}()
-
 var getMemoryCacheAllocator = func() func() malloc.Allocator {
 	var allocator malloc.Allocator
 	var initOnce sync.Once
 	return func() malloc.Allocator {
 		initOnce.Do(func() {
 			allocator = malloc.NewMetricsAllocator(
-				getDefaultAllocator(),
+				malloc.GetDefault(nil),
 				metric.MallocCounterMemoryCacheAllocateBytes,
 				metric.MallocGaugeMemoryCacheInuseBytes,
+				metric.MallocCounterMemoryCacheAllocateObjects,
+				metric.MallocGaugeMemoryCacheInuseObjects,
 			)
 		})
 		return allocator
@@ -55,9 +44,11 @@ var getBytesAllocator = func() func() malloc.Allocator {
 	return func() malloc.Allocator {
 		initOnce.Do(func() {
 			allocator = malloc.NewMetricsAllocator(
-				getDefaultAllocator(),
+				malloc.GetDefault(nil),
 				metric.MallocCounterBytesAllocateBytes,
 				metric.MallocGaugeBytesInuseBytes,
+				metric.MallocCounterBytesAllocateObjects,
+				metric.MallocGaugeBytesInuseObjects,
 			)
 		})
 		return allocator
@@ -70,9 +61,11 @@ var getIOAllocator = func() func() malloc.Allocator {
 	return func() malloc.Allocator {
 		initOnce.Do(func() {
 			allocator = malloc.NewMetricsAllocator(
-				getDefaultAllocator(),
+				malloc.GetDefault(nil),
 				metric.MallocCounterIOAllocateBytes,
 				metric.MallocGaugeIOInuseBytes,
+				metric.MallocCounterIOAllocateObjects,
+				metric.MallocGaugeIOInuseObjects,
 			)
 		})
 		return allocator

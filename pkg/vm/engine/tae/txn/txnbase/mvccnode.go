@@ -114,6 +114,16 @@ func (un *TxnMVCCNode) IsVisible(txn txnif.TxnReader) (visible bool) {
 	return false
 
 }
+func (un *TxnMVCCNode) Reset() {
+	un.Start = types.TS{}
+	un.Prepare = types.TS{}
+	un.End = types.TS{}
+	un.Aborted = false
+	un.Txn = nil
+}
+func (un *TxnMVCCNode) IsEmpty() bool {
+	return un.Start.IsEmpty()
+}
 
 // Check whether is mvcc node is visible to ts
 // Make sure all the relevant prepared txns should be committed|rollbacked
@@ -396,6 +406,7 @@ func (un *TxnMVCCNode) CloneAll() *TxnMVCCNode {
 	n.Start = un.Start
 	n.Prepare = un.Prepare
 	n.End = un.End
+	n.Txn = un.Txn
 	return n
 }
 

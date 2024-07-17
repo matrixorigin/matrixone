@@ -308,27 +308,30 @@ func (txn *Transaction) checkDup() error {
 		if _, ok := txn.deletedTableMap.Load(tableKey); ok {
 			continue
 		}
-		if e.typ == INSERT || e.typ == INSERT_TXN {
-			if _, ok := tablesDef[e.tableId]; !ok {
-				tbl, err := txn.getTable(e.accountId, e.databaseName, e.tableName)
-				if err != nil {
-					return err
-				}
-				tablesDef[e.tableId] = tbl.GetTableDef(txn.proc.Ctx)
+		//build pk index for tables.
+		if _, ok := tablesDef[e.tableId]; !ok {
+			tbl, err := txn.getTable(e.accountId, e.databaseName, e.tableName)
+			if err != nil {
+				return err
 			}
-			tableDef := tablesDef[e.tableId]
-			if _, ok := pkIndex[e.tableId]; !ok {
-				for idx, colDef := range tableDef.Cols {
-					if colDef.Name == tableDef.Pkey.PkeyColName {
-						if colDef.Name == catalog.FakePrimaryKeyColName {
-							pkIndex[e.tableId] = -1
-						} else {
-							pkIndex[e.tableId] = idx
-						}
-						break
+			tablesDef[e.tableId] = tbl.GetTableDef(txn.proc.Ctx)
+		}
+		tableDef := tablesDef[e.tableId]
+		if _, ok := pkIndex[e.tableId]; !ok {
+			for idx, colDef := range tableDef.Cols {
+				if colDef.Name == tableDef.Pkey.PkeyColName {
+					if colDef.Name == catalog.FakePrimaryKeyColName ||
+						colDef.Name == catalog.CPrimaryKeyColName {
+						pkIndex[e.tableId] = -1
+					} else {
+						pkIndex[e.tableId] = idx
 					}
+					break
 				}
 			}
+		}
+
+		if e.typ == INSERT || e.typ == INSERT_TXN {
 			bat := e.bat
 			if index, ok := pkIndex[e.tableId]; ok && index != -1 {
 				if *bat.Vecs[0].GetType() == types.T_Rowid.ToType() {
@@ -365,22 +368,24 @@ func (txn *Transaction) checkDup() error {
 					e.databaseName, e.tableName)
 				continue
 			}
-			if _, ok := delPks[e.tableId]; !ok {
-				delPks[e.tableId] = make(map[any]bool)
-			}
-			if dup, pk := checkPKDup(
-				delPks[e.tableId],
-				e.bat.Vecs[1],
-				0,
-				e.bat.RowCount()); dup {
-				logutil.Errorf("txn:%s wants to delete duplicate primary key:%s in table:[%v-%v:%s-%s]",
-					hex.EncodeToString(txn.op.Txn().ID),
-					pk,
-					e.databaseId,
-					e.tableId,
-					e.databaseName,
-					e.tableName)
-				return moerr.NewDuplicateEntryNoCtx(pk, e.bat.Attrs[1])
+			if index, ok := pkIndex[e.tableId]; ok && index != -1 {
+				if _, ok := delPks[e.tableId]; !ok {
+					delPks[e.tableId] = make(map[any]bool)
+				}
+				if dup, pk := checkPKDup(
+					delPks[e.tableId],
+					e.bat.Vecs[1],
+					0,
+					e.bat.RowCount()); dup {
+					logutil.Errorf("txn:%s wants to delete duplicate primary key:%s in table:[%v-%v:%s-%s]",
+						hex.EncodeToString(txn.op.Txn().ID),
+						pk,
+						e.databaseId,
+						e.tableId,
+						e.databaseName,
+						e.tableName)
+					return moerr.NewDuplicateEntryNoCtx(pk, e.bat.Attrs[1])
+				}
 			}
 		}
 	}
@@ -511,7 +516,12 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 		blockInfo.Attrs = blockInfo.Attrs[lenVecs-2:]
 		blockInfo.SetRowCount(blockInfo.Vecs[0].Length())
 
-		table := tbl.(*txnTable)
+		var table *txnTable
+		if v, ok := tbl.(*txnTableDelegate); ok {
+			table = v.origin
+		} else {
+			table = tbl.(*txnTable)
+		}
 		fileName := objectio.DecodeBlockInfo(
 			blockInfo.Vecs[0].GetBytesAt(0)).
 			MetaLocation().Name().String()
@@ -873,7 +883,11 @@ func (txn *Transaction) compactionBlksLocked() error {
 			return err
 		}
 		//TODO::do parallel compaction for table
-		tbl := rel.(*txnTable)
+		tbl, ok := rel.(*txnTable)
+		if !ok {
+			delegate := rel.(*txnTableDelegate)
+			tbl = delegate.origin
+		}
 		createdBlks, stats, err := tbl.compaction(blks)
 		if err != nil {
 			return err
@@ -974,7 +988,13 @@ func (txn *Transaction) forEachTableHasDeletesLocked(f func(tbl *txnTable) error
 		if err != nil {
 			return err
 		}
-		tables[e.tableId] = rel.(*txnTable)
+
+		if v, ok := rel.(*txnTableDelegate); ok {
+			tables[e.tableId] = v.origin
+		} else {
+			tables[e.tableId] = rel.(*txnTable)
+		}
+
 	}
 	for _, tbl := range tables {
 		if err := f(tbl); err != nil {
@@ -1005,10 +1025,10 @@ func (txn *Transaction) forEachTableWrites(databaseId uint64, tableId uint64, of
 func (txn *Transaction) getCachedTable(
 	ctx context.Context,
 	k tableKey,
-) *txnTable {
-	var tbl *txnTable
+) *txnTableDelegate {
+	var tbl *txnTableDelegate
 	if v, ok := txn.tableCache.tableMap.Load(k); ok {
-		tbl = v.(*txnTable)
+		tbl = v.(*txnTableDelegate)
 
 		tblKey := cache.TableKey{
 			AccountId:  k.accountId,
@@ -1029,7 +1049,7 @@ func (txn *Transaction) getCachedTable(
 		}
 		val := catache.GetSchemaVersion(tblKey)
 		if val != nil {
-			if val.Ts.Greater(tbl.lastTS) && val.Version != tbl.version {
+			if val.Ts.Greater(tbl.origin.lastTS) && val.Version != tbl.origin.version {
 				txn.tableCache.tableMap.Delete(genTableKey(k.accountId, k.name, k.databaseId))
 				return nil
 			}

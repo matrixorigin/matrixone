@@ -96,11 +96,6 @@ type WaitRegister struct {
 
 // Register used in execution pipeline and shared with all operators of the same pipeline.
 type Register struct {
-	// Ss, temporarily stores the row number list in the execution of operators,
-	// and it can be reused in the future execution.
-	Ss [][]int64
-	// InputBatch, stores the result of the previous operator.
-	InputBatch *batch.Batch
 	// MergeReceivers, receives result of multi previous operators from other pipelines
 	// e.g. merge operator.
 	MergeReceivers []*WaitRegister

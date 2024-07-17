@@ -167,7 +167,7 @@ func (tbl *txnTable) TransferDeleteIntent(
 		panic(err)
 	}
 	ts := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-	if err = readWriteConfilictCheck(entry.BaseEntryImpl, ts); err == nil {
+	if err = readWriteConfilictCheck(entry, ts); err == nil {
 		return
 	}
 	err = nil
@@ -267,13 +267,15 @@ func (tbl *txnTable) recurTransferDelete(
 			return err
 		}
 		common.DoIfInfoEnabled(func() {
-			logutil.Infof("depth-%d %s transfer delete from blk-%s row-%d to blk-%s row-%d",
+			logutil.Infof("depth-%d %s transfer delete from blk-%s row-%d to blk-%s row-%d, txn %x, val %v",
 				depth,
 				tbl.schema.Name,
 				id.BlockID.String(),
 				row,
 				blockID.String(),
-				offset)
+				offset,
+				tbl.store.txn.GetID(),
+				pk.Get(0))
 		})
 		return nil
 	}
@@ -471,7 +473,7 @@ func (tbl *txnTable) createObject(state catalog.EntryState, opts *objectio.Creat
 	}
 	obj = newObject(tbl, meta)
 	tbl.store.IncreateWriteCnt()
-	tbl.store.txn.GetMemo().AddObject(tbl.entry.GetDB().ID, tbl.entry.ID, &meta.ID)
+	tbl.store.txn.GetMemo().AddObject(tbl.entry.GetDB().ID, tbl.entry.ID, meta.ID())
 	tbl.txnEntries.Append(meta)
 	return
 }
@@ -768,7 +770,7 @@ func (tbl *txnTable) RangeDelete(
 			}
 		}
 	}()
-	if tbl.tableSpace != nil && id.ObjectID().Eq(tbl.tableSpace.entry.ID) {
+	if tbl.tableSpace != nil && id.ObjectID().Eq(*tbl.tableSpace.entry.ID()) {
 		err = tbl.RangeDeleteLocalRows(start, end)
 		return
 	}
@@ -846,11 +848,11 @@ func (tbl *txnTable) GetByFilter(ctx context.Context, filter *handle.Filter) (id
 	}
 	h := newRelation(tbl)
 	blockIt := h.MakeObjectIt()
-	for blockIt.Valid() {
+	defer blockIt.Close()
+	for blockIt.Next() {
 		h := blockIt.GetObject()
 		defer h.Close()
 		if h.IsUncommitted() {
-			blockIt.Next()
 			continue
 		}
 		var blkID uint16
@@ -860,7 +862,6 @@ func (tbl *txnTable) GetByFilter(ctx context.Context, filter *handle.Filter) (id
 			id.SetBlockOffset(blkID)
 			break
 		}
-		blockIt.Next()
 	}
 	if err == nil && id == nil {
 		err = moerr.NewNotFoundNoCtx()
@@ -876,7 +877,7 @@ func (tbl *txnTable) GetLocalValue(row uint32, col uint16) (v any, isNull bool, 
 }
 
 func (tbl *txnTable) GetValue(ctx context.Context, id *common.ID, row uint32, col uint16) (v any, isNull bool, err error) {
-	if tbl.tableSpace != nil && id.ObjectID().Eq(tbl.tableSpace.entry.ID) {
+	if tbl.tableSpace != nil && id.ObjectID().Eq(*tbl.tableSpace.entry.ID()) {
 		return tbl.tableSpace.GetValue(row, col)
 	}
 	meta, err := tbl.store.warChecker.CacheGet(
@@ -899,7 +900,7 @@ func (tbl *txnTable) UpdateObjectStats(id *common.ID, stats *objectio.ObjectStat
 	if err != nil {
 		return err
 	}
-	tbl.store.txn.GetMemo().AddObject(tbl.entry.GetDB().ID, tbl.entry.ID, &meta.ID)
+	tbl.store.txn.GetMemo().AddObject(tbl.entry.GetDB().ID, tbl.entry.ID, meta.ID())
 	if isNewNode {
 		tbl.txnEntries.Append(meta)
 	}
@@ -1069,6 +1070,7 @@ func (tbl *txnTable) DedupSnapByPK(ctx context.Context, keys containers.Vector, 
 	r := trace.StartRegion(ctx, "DedupSnapByPK")
 	defer r.End()
 	it := newObjectItOnSnap(tbl)
+	defer it.Close()
 	maxObjectHint := uint64(0)
 	pkType := keys.GetType()
 	keysZM := index.NewZM(pkType.Oid, pkType.Scale)
@@ -1080,7 +1082,7 @@ func (tbl *txnTable) DedupSnapByPK(ctx context.Context, keys containers.Vector, 
 		bf   objectio.BloomFilter
 	)
 	maxBlockID := &types.Blockid{}
-	for it.Valid() {
+	for it.Next() {
 		objH := it.GetObject()
 		obj := objH.GetMeta().(*catalog.ObjectEntry)
 		objH.Close()
@@ -1090,11 +1092,9 @@ func (tbl *txnTable) DedupSnapByPK(ctx context.Context, keys containers.Vector, 
 		}
 		objData := obj.GetObjectData()
 		if objData == nil {
-			it.Next()
-			continue
+			panic(fmt.Sprintf("logic error, object %v", obj.StringWithLevel(3)))
 		}
 		if dedupAfterSnapshotTS && objData.CoarseCheckAllRowsCommittedBefore(tbl.store.txn.GetSnapshotTS()) {
-			it.Next()
 			continue
 		}
 		var rowmask *roaring.Bitmap
@@ -1111,7 +1111,6 @@ func (tbl *txnTable) DedupSnapByPK(ctx context.Context, keys containers.Vector, 
 			if skip, err = tbl.quickSkipThisObject(ctx, keysZM, obj); err != nil {
 				return
 			} else if skip {
-				it.Next()
 				continue
 			}
 		}
@@ -1140,7 +1139,6 @@ func (tbl *txnTable) DedupSnapByPK(ctx context.Context, keys containers.Vector, 
 			// logutil.Infof("%s, %s, %v", obj.String(), rowmask, err)
 			return
 		}
-		it.Next()
 	}
 	tbl.updateDedupedObjectHintAndBlockID(maxObjectHint, maxBlockID)
 	return
@@ -1155,7 +1153,7 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 	maxBlockID := &types.Blockid{}
 	for i, loc := range metaLocs {
 		it := newObjectItOnSnap(tbl)
-		for it.Valid() {
+		for it.Next() {
 			obj := it.GetObject().GetMeta().(*catalog.ObjectEntry)
 			ObjectHint := obj.SortHint
 			if ObjectHint > maxObjectHint {
@@ -1163,7 +1161,6 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 			}
 			objData := obj.GetObjectData()
 			if objData == nil {
-				it.Next()
 				continue
 			}
 
@@ -1172,7 +1169,6 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 			// if true, skip this block's deduplication
 			if dedupAfterSnapshotTS &&
 				objData.CoarseCheckAllRowsCommittedBefore(tbl.store.txn.GetSnapshotTS()) {
-				it.Next()
 				continue
 			}
 
@@ -1220,7 +1216,7 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 				loaded[i].Close()
 				return
 			}
-			it.Next()
+			it.Close()
 		}
 		if v, ok := loaded[i]; ok {
 			v.Close()
@@ -1237,14 +1233,14 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 //     TODO::it would be used to do deduplication with the logtail.
 func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector, pksZM index.ZM) (err error) {
 	moprobe.WithRegion(context.Background(), moprobe.TxnTableDoPrecommitDedupByPK, func() {
-		objIt := tbl.entry.MakeObjectIt(false)
-		for objIt.Valid() {
-			obj := objIt.Get().GetPayload()
+		objIt := tbl.entry.MakeObjectIt(true)
+		defer objIt.Release()
+		for ok := objIt.Last(); ok; ok = objIt.Prev() {
+			obj := objIt.Item()
 			if obj.SortHint < tbl.dedupedObjectHint {
 				break
 			}
 			{
-				obj.RLock()
 				//FIXME:: Why need to wait committing here? waiting had happened at Dedup.
 				//needwait, txnToWait := obj.NeedWaitCommitting(tbl.store.txn.GetStartTS())
 				//if needwait {
@@ -1252,17 +1248,15 @@ func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector, pksZM index.ZM)
 				//	txnToWait.GetTxnState(true)
 				//	obj.RLock()
 				//}
-				shouldSkip := obj.HasDropCommittedLocked() || obj.IsCreatingOrAborted()
-				obj.RUnlock()
+				shouldSkip := obj.HasDropCommitted() || obj.IsCreatingOrAborted()
 				if shouldSkip {
-					objIt.Next()
 					continue
 				}
 			}
 			objData := obj.GetObjectData()
 			var rowmask *roaring.Bitmap
 			if len(tbl.deleteNodes) > 0 {
-				if tbl.store.warChecker.HasConflict(obj.ID) {
+				if tbl.store.warChecker.HasConflict(*obj.ID()) {
 					continue
 				}
 				fp := obj.AsCommonID()
@@ -1283,7 +1277,6 @@ func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector, pksZM index.ZM)
 			); err != nil {
 				return
 			}
-			objIt.Next()
 		}
 	})
 	return
@@ -1291,15 +1284,18 @@ func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector, pksZM index.ZM)
 
 func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, node InsertNode) (err error) {
 	objIt := tbl.entry.MakeObjectIt(false)
+	defer objIt.Release()
 	var pks containers.Vector
 	//loaded := false
-	for objIt.Valid() {
-		obj := objIt.Get().GetPayload()
+	for ok := objIt.Last(); ok; ok = objIt.Prev() {
+		obj := objIt.Item()
+		if !obj.IsCommitted() {
+			continue
+		}
 		if obj.SortHint < tbl.dedupedObjectHint {
 			break
 		}
 		{
-			obj.RLock()
 			//FIXME:: Why need to wait committing here? waiting had happened at Dedup.
 			//needwait, txnToWait := obj.NeedWaitCommitting(tbl.store.txn.GetStartTS())
 			//if needwait {
@@ -1307,10 +1303,8 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, node InsertNode
 			//	txnToWait.GetTxnState(true)
 			//	obj.RLock()
 			//}
-			shouldSkip := obj.HasDropCommittedLocked() || obj.IsCreatingOrAborted()
-			obj.RUnlock()
+			shouldSkip := obj.HasDropCommitted()
 			if shouldSkip {
-				objIt.Next()
 				continue
 			}
 		}
@@ -1321,15 +1315,15 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, node InsertNode
 			if err != nil {
 				return err
 			}
-			colV.ApplyDeletes()
-			pks = colV.Orphan()
+			colV.Compact()
+			pks = colV.Vecs[0]
 			defer pks.Close()
 		}
 		err = nil
 		objData := obj.GetObjectData()
 		var rowmask *roaring.Bitmap
 		if len(tbl.deleteNodes) > 0 {
-			if tbl.store.warChecker.HasConflict(obj.ID) {
+			if tbl.store.warChecker.HasConflict(*obj.ID()) {
 				continue
 			}
 			fp := obj.AsCommonID()
@@ -1350,7 +1344,6 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, node InsertNode
 		); err != nil {
 			return err
 		}
-		objIt.Next()
 	}
 	return
 }
