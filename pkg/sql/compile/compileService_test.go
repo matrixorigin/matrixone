@@ -16,11 +16,12 @@ package compile
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/stretchr/testify/require"
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/stretchr/testify/require"
 )
 
 func generateRunningProc(n int) []*process.Process {
@@ -53,7 +54,7 @@ func TestCompileService(t *testing.T) {
 			<-cc.proc.Ctx.Done()
 
 			doneRoutine.Add(1)
-			_, _ = service.putCompile(cc)
+			service.putCompile(cc)
 			wg.Done()
 		}(c)
 	}

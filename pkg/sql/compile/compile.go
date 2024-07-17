@@ -153,7 +153,7 @@ func (c *Compile) Release() {
 	if c == nil {
 		return
 	}
-	_, _ = GetCompileService().putCompile(c)
+	GetCompileService().putCompile(c)
 }
 
 func (c Compile) TypeName() string {
@@ -529,6 +529,10 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	for _, s := range c.scope {
 		s.SetOperatorInfoRecursively(c.allocOperatorID)
 	}
+	GetCompileService().startService(c)
+	defer func() {
+		_, _ = GetCompileService().endService(c)
+	}()
 
 	if c.proc.GetTxnOperator() != nil {
 		writeOffset = uint64(c.proc.GetTxnOperator().GetWorkspace().GetSnapshotWriteOffset())
@@ -541,6 +545,7 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	var retryTimes int
 	releaseRunC := func() {
 		if runC != c {
+			_, _ = GetCompileService().endService(runC)
 			runC.Release()
 		}
 	}
@@ -649,7 +654,7 @@ func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 	if e = runC.Compile(c.proc.Ctx, c.pn, c.fill); e != nil {
 		return nil, e
 	}
-
+	GetCompileService().startService(runC)
 	return runC, nil
 }
 
