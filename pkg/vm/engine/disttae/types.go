@@ -16,13 +16,10 @@ package disttae
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/reader_datasource"
 	"math"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/panjf2000/ants/v2"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -48,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/panjf2000/ants/v2"
 )
 
 const (
@@ -822,7 +820,7 @@ type blockMergeReader struct {
 type readerInProgress struct {
 	withFilterMixin
 
-	source    reader_datasource.DataSource
+	source    DataSource
 	txnOffset int
 	ts        timestamp.Timestamp
 

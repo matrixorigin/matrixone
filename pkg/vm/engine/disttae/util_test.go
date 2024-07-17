@@ -17,6 +17,7 @@ package disttae
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/pkFilters"
 	"math/rand"
 	"testing"
 
@@ -1649,7 +1650,7 @@ func Test_ConstructBasePKFilter(t *testing.T) {
 			x := 0
 			x++
 		}
-		basePKFilter := newBasePKFilter(expr, tableDef, proc)
+		basePKFilter := pkFilters.newBasePKFilter(expr, tableDef, proc)
 		require.Equal(t, filters[i].valid, basePKFilter.valid, exprStrings[i])
 		if filters[i].valid {
 			require.Equal(t, filters[i].op, basePKFilter.op, exprStrings[i])

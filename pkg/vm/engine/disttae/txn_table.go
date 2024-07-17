@@ -1790,7 +1790,7 @@ func (tbl *txnTable) NewReader(
 	)
 
 	blkArray := objectio.BlockInfoSlice(ranges)
-	if !memFilter.isValid {
+	if !memFilter.IsValid {
 		return []engine.Reader{new(emptyReader)}, nil
 	}
 	if blkArray.Len() == 0 {
@@ -1848,7 +1848,7 @@ func (tbl *txnTable) newMergeReader(
 	ctx context.Context,
 	num int,
 	expr *plan.Expr,
-	memFilter MemPKFilter,
+	memFilter memPKFilter,
 	blockFilter blockio.BlockReadFilter,
 	dirtyBlks []*objectio.BlockInfo,
 	txnOffset int, // Transaction writes offset used to specify the starting position for reading data.
@@ -1942,7 +1942,7 @@ func (tbl *txnTable) newBlockReader(
 func (tbl *txnTable) newReader(
 	ctx context.Context,
 	readerNumber int,
-	memFilter MemPKFilter,
+	memFilter memPKFilter,
 	blockFilter blockio.BlockReadFilter,
 	expr *plan.Expr,
 	dirtyBlks []*objectio.BlockInfo,
@@ -1973,7 +1973,7 @@ func (tbl *txnTable) newReader(
 	partReader := &PartitionReader{
 		table:     tbl,
 		txnOffset: txnOffset,
-		iter:      memFilter.iter,
+		iter:      memFilter.Iter,
 		seqnumMp:  seqnumMp,
 		typsMap:   mp,
 	}

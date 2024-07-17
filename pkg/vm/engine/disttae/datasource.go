@@ -1,7 +1,23 @@
-package reader_datasource
+// Copyright 2021-2024 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//	http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package disttae
 
 import (
 	"context"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -11,10 +27,29 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
+
+type DataState uint8
+
+const (
+	InMem DataState = iota
+	Persisted
+	End
+)
+
+type DataSource interface {
+	Next(ctx context.Context, cols []string, types []types.Type, seqNums []uint16,
+		memFilter MemPKFilterInProgress, txnOffset int, mp *mpool.MPool,
+		vp engine.VectorPool, bat *batch.Batch) (*objectio.BlockInfoInProgress, DataState, error)
+
+	HasTombstones(bid types.Blockid) bool
+
+	// ApplyTombstones Apply tombstones into rows.
+	ApplyTombstones(rows []types.Rowid) ([]int64, error)
+}
 
 // local data source
 
@@ -42,7 +77,7 @@ func NewLocalDataSource(
 	ranges []*objectio.BlockInfoInProgress,
 	pState *logtailreplay.PartitionState,
 	unCommittedS3DeletesBat map[types.Blockid][]*batch.Batch,
-	unCommittedInmemWrites []disttae.Entry) (source LocalDataSource, err error) {
+	unCommittedInmemWrites []Entry) (source LocalDataSource, err error) {
 
 	source.fs = fs
 	source.ctx = ctx
@@ -128,7 +163,7 @@ func (ls *LocalDataSource) ApplyTombstones(rows []types.Rowid) (sel []int64, err
 
 func (ls *LocalDataSource) Next(
 	ctx context.Context, cols []string, types []types.Type, seqNums []uint16,
-	memFilter disttae.MemPKFilterInProgress, txnOffset int, mp *mpool.MPool, vp engine.VectorPool,
+	memFilter MemPKFilterInProgress, txnOffset int, mp *mpool.MPool, vp engine.VectorPool,
 	bat *batch.Batch) (*objectio.BlockInfoInProgress, DataState, error) {
 
 	switch ls.iteratePhase {
@@ -154,7 +189,7 @@ func (ls *LocalDataSource) Next(
 
 func (ls *LocalDataSource) iterateInMemData(
 	ctx context.Context, cols []string, colTypes []types.Type,
-	seqNums []uint16, memFilter disttae.MemPKFilterInProgress, bat *batch.Batch,
+	seqNums []uint16, memFilter MemPKFilterInProgress, bat *batch.Batch,
 	mp *mpool.MPool, vp engine.VectorPool) error {
 
 	defer func() {
@@ -218,7 +253,7 @@ func (ls *LocalDataSource) filterInMemUncommittedInserts(mp *mpool.MPool, bat *b
 
 func (ls *LocalDataSource) filterInMemCommittedInserts(
 	colTypes []types.Type, seqNums []uint16,
-	memFilter disttae.MemPKFilterInProgress, mp *mpool.MPool, bat *batch.Batch) error {
+	memFilter MemPKFilterInProgress, mp *mpool.MPool, bat *batch.Batch) error {
 
 	var (
 		err          error
@@ -289,4 +324,128 @@ func (ls *LocalDataSource) filterInMemCommittedInserts(
 	bat.SetRowCount(int(appendedRows))
 
 	return nil
+}
+
+func loadAllUncommittedS3Deletes(
+	ctx context.Context,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+	dest *map[types.Rowid]struct{},
+	unCommittedS3DeletesBat map[types.Blockid][]*batch.Batch) error {
+
+	for _, bats := range unCommittedS3DeletesBat {
+		for _, bat := range bats {
+			vs, area := vector.MustVarlenaRawData(bat.GetVector(0))
+
+			for i := range vs {
+				location, err := blockio.EncodeLocationFromString(vs[i].UnsafeGetString(area))
+				if err != nil {
+					return err
+				}
+
+				rowIdBat, release, err := blockio.LoadColumns(ctx, []uint16{0}, nil, fs, location, mp, fileservice.Policy(0))
+				if err != nil {
+					release()
+					return err
+				}
+
+				rowIds := vector.MustFixedCol[types.Rowid](rowIdBat.GetVector(0))
+				for _, rowId := range rowIds {
+					(*dest)[rowId] = struct{}{}
+				}
+
+				release()
+			}
+		}
+	}
+
+	return nil
+}
+
+func extractAllInsertAndDeletesFromWorkspace(
+	databaseId, tableId uint64,
+	destInserts *[]*batch.Batch,
+	destDeletes *map[types.Rowid]struct{},
+	unCommittedInmemWrites []Entry) error {
+
+	for _, entry := range unCommittedInmemWrites {
+		if entry.DatabaseId() != databaseId || entry.TableId() != tableId {
+			continue
+		}
+
+		if entry.IsGeneratedByTruncate() {
+			continue
+		}
+
+		if (entry.Type() == DELETE || entry.Type() == DELETE_TXN) && entry.FileName() == "" {
+			vs := vector.MustFixedCol[types.Rowid](entry.Bat().GetVector(0))
+			for _, v := range vs {
+				(*destDeletes)[v] = struct{}{}
+			}
+		}
+	}
+
+	for _, entry := range unCommittedInmemWrites {
+		if entry.DatabaseId() != databaseId || entry.TableId() != tableId {
+			continue
+		}
+
+		if entry.IsGeneratedByTruncate() {
+			continue
+		}
+
+		if entry.Type() == INSERT || entry.Type() == INSERT_TXN {
+			if entry.Bat() == nil || entry.Bat().IsEmpty() || entry.Bat().Attrs[0] == catalog.BlockMeta_MetaLoc {
+				continue
+			}
+
+			*destInserts = append(*destInserts, entry.Bat())
+		}
+	}
+
+	return nil
+}
+
+func loadBlockDeletesByDeltaLoc(
+	ctx context.Context, fs fileservice.FileService,
+	blockId types.Blockid, deltaLoc objectio.ObjectLocation,
+	snapshotTS, blockCommitTS types.TS) (deleteMask *nulls.Nulls, err error) {
+
+	var (
+		rows             *nulls.Nulls
+		bisect           time.Duration
+		release          func()
+		persistedByCN    bool
+		persistedDeletes *batch.Batch
+	)
+
+	location := objectio.Location(deltaLoc[:])
+
+	if !location.IsEmpty() {
+		t1 := time.Now()
+
+		if persistedDeletes, persistedByCN, release, err = blockio.ReadBlockDelete(ctx, location, fs); err != nil {
+			return nil, err
+		}
+		defer release()
+
+		readCost := time.Since(t1)
+
+		if persistedByCN {
+			rows = blockio.EvalDeleteRowsByTimestampForDeletesPersistedByCN(persistedDeletes, snapshotTS, blockCommitTS)
+		} else {
+			t2 := time.Now()
+			rows = blockio.EvalDeleteRowsByTimestamp(persistedDeletes, snapshotTS, &blockId)
+			bisect = time.Since(t2)
+		}
+
+		if rows != nil {
+			deleteMask = rows
+		}
+
+		readTotal := time.Since(t1)
+		blockio.RecordReadDel(readTotal, readCost, bisect)
+	}
+
+	return deleteMask, nil
 }

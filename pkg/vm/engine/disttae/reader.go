@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/reader_datasource"
 	"sort"
 	"time"
 
@@ -432,7 +431,7 @@ func gatherStats(lastNumRead, lastNumHit int64) {
 func newBlockMergeReader(
 	ctx context.Context,
 	txnTable *txnTable,
-	memFilter MemPKFilter,
+	memFilter memPKFilter,
 	blockFilter blockio.BlockReadFilter,
 	ts timestamp.Timestamp,
 	dirtyBlks []*objectio.BlockInfo,
@@ -701,7 +700,7 @@ func newReaderInProgress(
 	//filter any, // it's valid when reader runs on remote side.
 	orderedScan bool, // it's valid when reader runs on local.
 	txnOffset int, // it can be removed. it's different between normal reader and snapshot reader.
-	source reader_datasource.DataSource,
+	source DataSource,
 ) *readerInProgress {
 
 	baseFilter := newBasePKFilter(
@@ -823,10 +822,10 @@ func (r *readerInProgress) Read(
 	if err != nil {
 		return nil, err
 	}
-	if state == reader_datasource.End {
+	if state == End {
 		return nil, nil
 	}
-	if state == reader_datasource.InMem {
+	if state == InMem {
 		return bat, nil
 	}
 
