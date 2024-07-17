@@ -17,6 +17,14 @@ package malloc
 import "testing"
 
 func TestReadOnlyAllocator(t *testing.T) {
+	testAllocator(t, func() Allocator {
+		return NewReadOnlyAllocator(
+			NewClassAllocator(
+				NewFixedSizeMmapAllocator,
+			),
+		)
+	})
+
 	allocator := NewReadOnlyAllocator(
 		NewClassAllocator(
 			NewFixedSizeMmapAllocator,
@@ -37,4 +45,26 @@ func TestReadOnlyAllocator(t *testing.T) {
 
 	// this will trigger a memory fault
 	//slice[0] = 1
+}
+
+func BenchmarkReadOnlyAllocator(b *testing.B) {
+	for _, n := range benchNs {
+		benchmarkAllocator(b, func() Allocator {
+			return NewReadOnlyAllocator(
+				NewClassAllocator(
+					NewFixedSizeMmapAllocator,
+				),
+			)
+		}, n)
+	}
+}
+
+func FuzzReadOnlyAllocator(f *testing.F) {
+	fuzzAllocator(f, func() Allocator {
+		return NewReadOnlyAllocator(
+			NewClassAllocator(
+				NewFixedSizeMmapAllocator,
+			),
+		)
+	})
 }
