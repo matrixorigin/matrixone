@@ -610,3 +610,23 @@ func (node *UpgradeStatement) StmtKind() StmtKind {
 func (node *RestoreSnapShot) StmtKind() StmtKind {
 	return frontendStatusTyp
 }
+
+func (node *CreatePitr) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (node *AlterPitr) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (node *RestorePitr) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (node *ShowPitr) StmtKind() StmtKind {
+	return defaultResRowTyp
+}
+
+func (node *DropPitr) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
