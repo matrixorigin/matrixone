@@ -28,15 +28,21 @@ const defaultVectorPoolSize = 8
 const defaultMaxVectorItemSize = 8192 * 64
 
 const (
+	// pool index.
 	poolWithoutArea = 0
 	poolWithArea    = 1
 )
 
 // cachedVectorPool is a session-level attribute that is used to store a batch of vectors for reuse.
 // It provides external methods such as getVector, putVector and free.
+// todo: in the future, it should be considered to use the size of memory as the capacity.
+// todo: session-level pool seems to be somewhat redundant.
 type cachedVectorPool struct {
 	sync.Mutex
 	poolCapacity int
+
+	//memoryCapacity int
+
 	// pool[0] stores vector without area.
 	// pool[1] stores vector with area.
 	pool [2][]*vector.Vector
@@ -63,7 +69,7 @@ func vectorCannotPut(vec *vector.Vector) bool {
 }
 
 func (vp *cachedVectorPool) putVectorIntoPool(vec *vector.Vector) bool {
-	// put vector in order.
+	// put into specific pool.
 	putToSpecificPool := func(v *vector.Vector, idx int) bool {
 		vp.Lock()
 		defer vp.Unlock()
