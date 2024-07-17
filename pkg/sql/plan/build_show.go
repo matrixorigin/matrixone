@@ -899,12 +899,13 @@ func buildShowSnapShots(stmt *tree.ShowSnapShots, ctx CompilerContext) (*Plan, e
 
 func buildShowPitr(stmt *tree.ShowPitr, ctx CompilerContext) (*Plan, error) {
 	ddlType := plan.DataDefinition_SHOW_TARGET
-	sql := fmt.Sprintf("SELECT pitr_name as `PITR_NAME`, create_time  as `CREATED_TIME`, modified_time as MODIFIED_TIME, level as `PITR_LEVEL`, account_name as `ACCOUNT_NAME`, database_name as `DATABASE_NAME`, table_name as `TABLE_NAME`, pitr_length as `PITR_LENGTH`, pitr_unit  as `PITR_UNIT` FROM %s.mo_pitr ORDER BY create_time DESC", MO_CATALOG_DB_NAME)
-
 	curAccountId, err := ctx.GetAccountId()
 	if err != nil {
 		return nil, err
 	}
+
+	sql := fmt.Sprintf("SELECT pitr_name as `PITR_NAME`, create_time  as `CREATED_TIME`, modified_time as MODIFIED_TIME, level as `PITR_LEVEL`, account_name as `ACCOUNT_NAME`, database_name as `DATABASE_NAME`, table_name as `TABLE_NAME`, pitr_length as `PITR_LENGTH`, pitr_unit  as `PITR_UNIT` FROM %s.mo_pitr where create_account = %d ORDER BY create_time DESC", MO_CATALOG_DB_NAME, curAccountId)
+
 	newCtx := ctx.GetContext()
 	if curAccountId != catalog.System_Account {
 		newCtx = context.WithValue(newCtx, defines.TenantIDKey{}, catalog.System_Account)

@@ -43,11 +43,11 @@ var (
 		pitr_length,
 		pitr_unit ) values ('%s', '%s', %d, '%s', '%s', '%s', %d, '%s', '%s', '%s', %d, %d, '%s');`
 
-	checkPitrFormat = `select pitr_id from mo_catalog.mo_pitr where pitr_name = "%s" order by pitr_id;`
+	checkPitrFormat = `select pitr_id from mo_catalog.mo_pitr where pitr_name = "%s" and create_account = %d order by pitr_id;`
 
-	dropPitrFormat = `delete from mo_catalog.mo_pitr where pitr_name = '%s' order by pitr_id;`
+	dropPitrFormat = `delete from mo_catalog.mo_pitr where pitr_name = '%s' and create_account = %d order by pitr_id;`
 
-	alterPitrFormat = `update mo_catalog.mo_pitr set pitr_length = %d, pitr_unit = '%s' where pitr_name = '%s';`
+	alterPitrFormat = `update mo_catalog.mo_pitr set pitr_length = %d, pitr_unit = '%s' where pitr_name = '%s' and create_account = %d;`
 )
 
 func getSqlForCreatePitr(ctx context.Context, pitrId, pitrName string, createAcc uint64, createTime, modifitedTime string, level string, accountId uint64, accountName, databaseName, tableName string, objectId uint64, pitrLength uint8, pitrValue string) (string, error) {
@@ -58,27 +58,27 @@ func getSqlForCreatePitr(ctx context.Context, pitrId, pitrName string, createAcc
 	return fmt.Sprintf(insertIntoMoPitr, pitrId, pitrName, createAcc, createTime, modifitedTime, level, accountId, accountName, databaseName, tableName, objectId, pitrLength, pitrValue), nil
 }
 
-func getSqlForCheckPitr(ctx context.Context, pitr string) (string, error) {
+func getSqlForCheckPitr(ctx context.Context, pitr string, accountId uint64) (string, error) {
 	err := inputNameIsInvalid(ctx, pitr)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf(checkPitrFormat, pitr), nil
+	return fmt.Sprintf(checkPitrFormat, pitr, accountId), nil
 }
 
-func getSqlForDropPitr(pitrName string) string {
-	return fmt.Sprintf(dropPitrFormat, pitrName)
+func getSqlForDropPitr(pitrName string, accountId uint64) string {
+	return fmt.Sprintf(dropPitrFormat, pitrName, accountId)
 }
 
-func getSqlForAlterPitr(pitrName string, pitrLength uint8, pitrUnit string) string {
-	return fmt.Sprintf(alterPitrFormat, pitrName, pitrLength, pitrUnit)
+func getSqlForAlterPitr(pitrName string, pitrLength uint8, pitrUnit string, accountId uint64) string {
+	return fmt.Sprintf(alterPitrFormat, pitrLength, pitrUnit, pitrName, accountId)
 }
 
 func checkPitrExistOrNot(ctx context.Context, bh BackgroundExec, pitrName string, accountId uint64) (bool, error) {
 	var sql string
 	var erArray []ExecResult
 	var err error
-	sql, err = getSqlForCheckPitr(ctx, pitrName)
+	sql, err = getSqlForCheckPitr(ctx, pitrName, accountId)
 	if err != nil {
 		return false, err
 	}
@@ -450,7 +450,7 @@ func doDropPitr(ctx context.Context, ses *Session, stmt *tree.DropPitr) (err err
 			return err
 		}
 	} else {
-		sql = getSqlForDropPitr(string(stmt.Name))
+		sql = getSqlForDropPitr(string(stmt.Name), uint64(tenantInfo.GetTenantID()))
 		if tenantInfo.GetTenant() != sysAccountName {
 			ctx = defines.AttachAccountId(ctx, sysAccountID)
 			defer func() {
@@ -513,7 +513,7 @@ func doAlterPitr(ctx context.Context, ses *Session, stmt *tree.AlterPitr) (err e
 			return err
 		}
 	} else {
-		sql = getSqlForAlterPitr(string(stmt.Name), uint8(stmt.PitrValue), pitrUnit)
+		sql = getSqlForAlterPitr(string(stmt.Name), uint8(stmt.PitrValue), pitrUnit, uint64(tenantInfo.GetTenantID()))
 
 		if tenantInfo.GetTenant() != sysAccountName {
 			ctx = defines.AttachAccountId(ctx, sysAccountID)
