@@ -183,7 +183,7 @@ func (ls *LocalDataSource) Next(
 			return nil, InMem, err
 
 		case Persisted:
-			if ls.cursor <= len(ls.ranges) {
+			if ls.cursor < len(ls.ranges) {
 				ls.cursor++
 				return ls.ranges[ls.cursor-1], Persisted, nil
 			}
