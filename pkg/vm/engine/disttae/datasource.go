@@ -137,9 +137,12 @@ func (ls *LocalDataSource) ApplyTombstones(rows []types.Rowid) (sel []int64, err
 	deltaLoc, commitTS, ok := ls.pState.GetBockDeltaLoc(blockId)
 	if ok {
 		persistedDeletes, err = loadBlockDeletesByDeltaLoc(ls.ctx, ls.fs, blockId, deltaLoc, ls.snapshotTS, commitTS)
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	var left []types.Rowid
+	left := make([]types.Rowid, 0)
 
 	for _, row := range rows {
 		if _, ok = ls.unCommittedS3Deletes[row]; ok {
@@ -168,25 +171,30 @@ func (ls *LocalDataSource) Next(
 	memFilter MemPKFilterInProgress, txnOffset int, mp *mpool.MPool, vp engine.VectorPool,
 	bat *batch.Batch) (*objectio.BlockInfoInProgress, DataState, error) {
 
-	switch ls.iteratePhase {
-	case InMem:
-		err := ls.iterateInMemData(ctx, cols, types, seqNums, memFilter, bat, mp, vp)
-		return nil, InMem, err
+	for {
+		switch ls.iteratePhase {
+		case InMem:
+			err := ls.iterateInMemData(ctx, cols, types, seqNums, memFilter, bat, mp, vp)
+			if bat.RowCount() == 0 && err == nil {
+				ls.iteratePhase = Persisted
+				continue
+			}
 
-	case Persisted:
-		if ls.cursor <= len(ls.ranges) {
-			ls.cursor++
-			return ls.ranges[ls.cursor-1], Persisted, nil
+			return nil, InMem, err
+
+		case Persisted:
+			if ls.cursor < len(ls.ranges) {
+				ls.cursor++
+				return ls.ranges[ls.cursor-1], Persisted, nil
+			}
+
+			ls.iteratePhase = End
+			continue
+
+		case End:
+			return nil, ls.iteratePhase, nil
 		}
-
-		ls.iteratePhase = End
-		return nil, Persisted, nil
-
-	case End:
-		return nil, ls.iteratePhase, nil
 	}
-
-	return nil, End, nil
 }
 
 func (ls *LocalDataSource) iterateInMemData(
