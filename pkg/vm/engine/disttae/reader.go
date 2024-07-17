@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/reader_datasource"
 	"sort"
 	"time"
 
@@ -431,7 +432,7 @@ func gatherStats(lastNumRead, lastNumHit int64) {
 func newBlockMergeReader(
 	ctx context.Context,
 	txnTable *txnTable,
-	memFilter memPKFilter,
+	memFilter MemPKFilter,
 	blockFilter blockio.BlockReadFilter,
 	ts timestamp.Timestamp,
 	dirtyBlks []*objectio.BlockInfo,
@@ -574,7 +575,7 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 		r.table.db.databaseId,
 		r.table.tableId,
 		txnOffset, func(entry Entry) {
-			if entry.isGeneratedByTruncate() {
+			if entry.IsGeneratedByTruncate() {
 				return
 			}
 			if (entry.typ == DELETE || entry.typ == DELETE_TXN) && entry.fileName == "" {
@@ -700,7 +701,7 @@ func newReaderInProgress(
 	//filter any, // it's valid when reader runs on remote side.
 	orderedScan bool, // it's valid when reader runs on local.
 	txnOffset int, // it can be removed. it's different between normal reader and snapshot reader.
-	source DataSource,
+	source reader_datasource.DataSource,
 ) *readerInProgress {
 
 	baseFilter := newBasePKFilter(
@@ -708,14 +709,13 @@ func newReaderInProgress(
 		tableDef,
 		proc,
 	)
-	//TODO:: build mem pk filter.
-	//memFilter := newMemPKFilter(
-	//	tableDef,
-	//	ts,
-	//	state,
-	//	txn.engine.packerPool,
-	//	baseFilter,
-	//)
+
+	memFilter := newMemPKFilterInProgress(
+		tableDef,
+		ts,
+		packerPool,
+		baseFilter,
+	)
 
 	blockFilter := newBlockReadPKFilter(
 		tableDef.Pkey.PkeyColName,
@@ -730,6 +730,7 @@ func newReaderInProgress(
 			proc:     proc,
 			tableDef: tableDef,
 		},
+		memFilter: memFilter,
 		source:    source,
 		txnOffset: txnOffset,
 		ts:        ts,
@@ -822,10 +823,10 @@ func (r *readerInProgress) Read(
 	if err != nil {
 		return nil, err
 	}
-	if state == End {
+	if state == reader_datasource.End {
 		return nil, nil
 	}
-	if state == InMem {
+	if state == reader_datasource.InMem {
 		return bat, nil
 	}
 
@@ -867,7 +868,10 @@ func (r *readerInProgress) Read(
 		rowIDs := vector.MustFixedCol[types.Rowid](bat.Vecs[0])
 		bid := rowIDs[0].CloneBlockID()
 		if r.source.HasTombstones(bid) {
-			sels = r.source.ApplyTombstones(rowIDs)
+			sels, err = r.source.ApplyTombstones(rowIDs)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 	bat.Shrink(sels, false)

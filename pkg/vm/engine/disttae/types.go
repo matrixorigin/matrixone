@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/reader_datasource"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -623,8 +624,20 @@ type Entry struct {
 	truncate bool
 }
 
-// isGeneratedByTruncate denotes the entry is yielded by the truncate operation.
-func (e *Entry) isGeneratedByTruncate() bool {
+func (e *Entry) DatabaseId() uint64 {
+	return e.databaseId
+}
+
+func (e *Entry) TableId() uint64 {
+	return e.tableId
+}
+
+func (e *Entry) Type() int         { return e.typ }
+func (e *Entry) FileName() string  { return e.fileName }
+func (e *Entry) Bat() *batch.Batch { return e.bat }
+
+// IsGeneratedByTruncate denotes the entry is yielded by the truncate operation.
+func (e *Entry) IsGeneratedByTruncate() bool {
 	return e.typ == DELETE &&
 		e.databaseId == catalog.MO_CATALOG_ID &&
 		e.tableId == catalog.MO_TABLES_ID &&
@@ -809,7 +822,7 @@ type blockMergeReader struct {
 type readerInProgress struct {
 	withFilterMixin
 
-	source    DataSource
+	source    reader_datasource.DataSource
 	txnOffset int
 	ts        timestamp.Timestamp
 
@@ -819,7 +832,7 @@ type readerInProgress struct {
 	steps        []int
 	currentStep  int
 
-	memFilter memPKFilter
+	memFilter MemPKFilterInProgress
 	//blockFilter blockio.BlockReadFilter
 
 	scanType int

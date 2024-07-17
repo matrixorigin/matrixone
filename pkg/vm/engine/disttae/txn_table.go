@@ -1004,7 +1004,7 @@ func (tbl *txnTable) collectDirtyBlocks(
 			// the CN workspace can only handle `INSERT` and `DELETE` operations. Other operations will be skipped,
 			// TODO Adjustments will be made here in the future
 			if entry.typ == DELETE || entry.typ == DELETE_TXN {
-				if entry.isGeneratedByTruncate() {
+				if entry.IsGeneratedByTruncate() {
 					return
 				}
 				//deletes in tbl.writes maybe comes from PartitionState.rows or PartitionState.blocks.
@@ -1848,7 +1848,7 @@ func (tbl *txnTable) newMergeReader(
 	ctx context.Context,
 	num int,
 	expr *plan.Expr,
-	memFilter memPKFilter,
+	memFilter MemPKFilter,
 	blockFilter blockio.BlockReadFilter,
 	dirtyBlks []*objectio.BlockInfo,
 	txnOffset int, // Transaction writes offset used to specify the starting position for reading data.
@@ -1942,7 +1942,7 @@ func (tbl *txnTable) newBlockReader(
 func (tbl *txnTable) newReader(
 	ctx context.Context,
 	readerNumber int,
-	memFilter memPKFilter,
+	memFilter MemPKFilter,
 	blockFilter blockio.BlockReadFilter,
 	expr *plan.Expr,
 	dirtyBlks []*objectio.BlockInfo,
@@ -2379,7 +2379,7 @@ func (tbl *txnTable) transferDeletes(
 	}
 
 	for _, entry := range tbl.getTxn().writes {
-		if entry.isGeneratedByTruncate() || entry.tableId != tbl.tableId {
+		if entry.IsGeneratedByTruncate() || entry.tableId != tbl.tableId {
 			continue
 		}
 		if (entry.typ == DELETE || entry.typ == DELETE_TXN) && entry.fileName == "" {
