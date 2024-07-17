@@ -179,6 +179,37 @@ func (c *Conn) CheckAllowedPacketSize(totalLength int) error {
 	return nil
 }
 
+// ReadLoadLocalPacket just for processLoadLocal, not merge 16MB packets
+func (c *Conn) ReadLoadLocalPacket() ([]byte, error) {
+	var finalPayload []byte
+	var payload []byte
+	var err error
+
+	if !c.connected {
+		return nil, moerr.NewInternalError(moerr.Context(), "The IOSession connection has been closed")
+	}
+	var packetLength int
+	err = c.ReadBytes(c.header[:], HeaderLengthOfTheProtocol)
+	if err != nil {
+		return nil, err
+	}
+	packetLength = int(uint32(c.header[0]) | uint32(c.header[1])<<8 | uint32(c.header[2])<<16)
+	sequenceId := c.header[3]
+	c.sequenceId = sequenceId + 1
+
+	if packetLength == 0 {
+		return finalPayload, nil
+	}
+	// Read bytes based on packet length
+	payload, err = c.ReadOnePayload(packetLength)
+	if err != nil {
+		return nil, err
+	}
+	finalPayload = make([]byte, len(payload))
+	copy(finalPayload, payload)
+	return finalPayload, nil
+}
+
 // Read reads the complete packet including process the > 16MB packet. return the payload
 func (c *Conn) Read() ([]byte, error) {
 	// Requests > 16MB
