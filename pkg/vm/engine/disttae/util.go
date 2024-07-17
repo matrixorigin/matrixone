@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"strings"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -41,7 +43,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 func compPkCol(colName string, pkName string) bool {
@@ -1371,6 +1372,37 @@ func ForeachBlkInObjStatsList(
 	}
 }
 
+func ForeachBlkInObjStatsListInProgress(
+	next bool,
+	dataMeta objectio.ObjectDataMeta,
+	onBlock func(blk objectio.BlockInfoInProgress, blkMeta objectio.BlockObject) bool,
+	objects ...objectio.ObjectStats,
+) {
+	stop := false
+	objCnt := len(objects)
+
+	for idx := 0; idx < objCnt && !stop; idx++ {
+		iter := NewStatsBlkIter(&objects[idx], dataMeta)
+		pos := uint32(0)
+		for iter.Next() {
+			blk := iter.EntryInProgress()
+			var meta objectio.BlockObject
+			if !dataMeta.IsEmpty() {
+				meta = dataMeta.GetBlockMeta(pos)
+			}
+			pos++
+			if !onBlock(blk, meta) {
+				stop = true
+				break
+			}
+		}
+
+		if stop && next {
+			stop = false
+		}
+	}
+}
+
 type StatsBlkIter struct {
 	name       objectio.ObjectName
 	extent     objectio.Extent
@@ -1422,6 +1454,28 @@ func (i *StatsBlkIter) Entry() objectio.BlockInfo {
 		BlockID:   *objectio.BuildObjectBlockid(i.name, uint16(i.cur)),
 		SegmentID: i.name.SegmentId(),
 		MetaLoc:   objectio.ObjectLocation(loc),
+	}
+	return blk
+}
+
+func (i *StatsBlkIter) EntryInProgress() objectio.BlockInfoInProgress {
+	if i.cur == -1 {
+		i.cur = 0
+	}
+
+	// assume that all blks have DefaultBlockMaxRows, except the last one
+	if i.meta.IsEmpty() {
+		if i.cur == int(i.blkCnt-1) {
+			i.curBlkRows = i.totalRows - i.accRows
+		}
+	} else {
+		i.curBlkRows = i.meta.GetBlockMeta(uint32(i.cur)).GetRows()
+	}
+
+	loc := objectio.BuildLocation(i.name, i.extent, i.curBlkRows, uint16(i.cur))
+	blk := objectio.BlockInfoInProgress{
+		BlockID: *objectio.BuildObjectBlockid(i.name, uint16(i.cur)),
+		MetaLoc: objectio.ObjectLocation(loc),
 	}
 	return blk
 }

@@ -601,6 +601,107 @@ func (tbl *txnTable) resetSnapshot() {
 	tbl._partState.Store(nil)
 }
 
+func (tbl *txnTable) RangesInProgress(ctx context.Context, exprs []*plan.Expr, txnOffset int) (ranges engine.Ranges, err error) {
+	start := time.Now()
+	seq := tbl.db.op.NextSequence()
+	trace.GetService().AddTxnDurationAction(
+		tbl.db.op,
+		client.RangesEvent,
+		seq,
+		tbl.tableId,
+		0,
+		nil)
+
+	defer func() {
+		cost := time.Since(start)
+
+		var (
+			step, slowStep uint64
+		)
+
+		rangesLen := ranges.Len()
+		if rangesLen < 5 {
+			step = uint64(1)
+		} else if rangesLen < 10 {
+			step = uint64(5)
+		} else if rangesLen < 20 {
+			step = uint64(10)
+		} else {
+			slowStep = uint64(1)
+		}
+		tbl.enableLogFilterExpr.Store(false)
+		if traceFilterExprInterval.Add(step) >= 500000 {
+			traceFilterExprInterval.Store(0)
+			tbl.enableLogFilterExpr.Store(true)
+		}
+		if traceFilterExprInterval2.Add(slowStep) >= 20 {
+			traceFilterExprInterval2.Store(0)
+			tbl.enableLogFilterExpr.Store(true)
+		}
+
+		if rangesLen >= 50 {
+			tbl.enableLogFilterExpr.Store(true)
+		}
+
+		if tbl.enableLogFilterExpr.Load() {
+			logutil.Info(
+				"TXN-FILTER-RANGE-LOG",
+				zap.String("name", tbl.tableDef.Name),
+				zap.String("exprs", plan2.FormatExprs(exprs)),
+				zap.Int("ranges-len", ranges.Len()),
+				zap.Uint64("tbl-id", tbl.tableId),
+				zap.String("txn", tbl.db.op.Txn().DebugString()),
+			)
+		}
+
+		trace.GetService().AddTxnAction(
+			tbl.db.op,
+			client.RangesEvent,
+			seq,
+			tbl.tableId,
+			int64(ranges.Len()),
+			"blocks",
+			err)
+
+		trace.GetService().AddTxnDurationAction(
+			tbl.db.op,
+			client.RangesEvent,
+			seq,
+			tbl.tableId,
+			cost,
+			err)
+
+		v2.TxnTableRangeDurationHistogram.Observe(cost.Seconds())
+		if err != nil {
+			logutil.Errorf("txn: %s, error: %v", tbl.db.op.Txn().DebugString(), err)
+		}
+	}()
+
+	var blocks objectio.BlockInfoSliceInProgress
+	ranges = &blocks
+
+	// get the table's snapshot
+	var part *logtailreplay.PartitionState
+	if part, err = tbl.getPartitionState(ctx); err != nil {
+		return
+	}
+
+	blocks.AppendBlockInfo(objectio.EmptyBlockInfoInProgress)
+
+	if err = tbl.rangesOnePartInProgress(
+		ctx,
+		part,
+		tbl.GetTableDef(ctx),
+		exprs,
+		&blocks,
+		tbl.proc.Load(),
+		txnOffset,
+	); err != nil {
+		return
+	}
+	return
+}
+
 // Ranges returns all unmodified blocks from the table.
 // Parameters:
 //   - ctx: Context used to control the lifecycle of the request.
@@ -703,6 +804,192 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr, txnOffset i
 		txnOffset,
 	); err != nil {
 		return
+	}
+	return
+}
+
+func (tbl *txnTable) rangesOnePartInProgress(
+	ctx context.Context,
+	state *logtailreplay.PartitionState, // snapshot state of this transaction
+	tableDef *plan.TableDef, // table definition (schema)
+	exprs []*plan.Expr, // filter expression
+	outBlocks *objectio.BlockInfoSliceInProgress, // output marshaled block list after filtering
+	proc *process.Process, // process of this transaction
+	txnOffset int,
+) (err error) {
+	var done bool
+	// collect dirty blocks lazily
+	//var dirtyBlks map[types.Blockid]struct{}
+	uncommittedObjects := tbl.collectUnCommittedObjects(txnOffset)
+
+	if done, err = TryFastFilterBlocksInProgress(
+		ctx,
+		tbl,
+		txnOffset,
+		tbl.db.op.SnapshotTS(),
+		tbl.tableDef,
+		exprs,
+		state,
+		uncommittedObjects,
+		outBlocks,
+		tbl.getTxn().engine.fs,
+		tbl.proc.Load(),
+	); err != nil {
+		return err
+	} else if done {
+		return nil
+	}
+
+	if slowPathCounter.Add(1) >= 1000 {
+		slowPathCounter.Store(0)
+		logutil.Info(
+			"SLOW-RANGES:",
+			zap.String("table", tbl.tableDef.Name),
+			zap.String("exprs", plan2.FormatExprs(exprs)),
+		)
+	}
+
+	//if dirtyBlks == nil {
+	//	dirtyBlks = tbl.collectDirtyBlocks(state, uncommittedObjects, txnOffset)
+	//}
+
+	// for dynamic parameter, substitute param ref and const fold cast expression here to improve performance
+	newExprs, err := plan2.ConstandFoldList(exprs, tbl.proc.Load(), true)
+	if err == nil {
+		exprs = newExprs
+	}
+
+	var (
+		objMeta    objectio.ObjectMeta
+		zms        []objectio.ZoneMap
+		vecs       []*vector.Vector
+		skipObj    bool
+		auxIdCnt   int32
+		loadObjCnt uint32
+		s3BlkCnt   uint32
+	)
+
+	defer func() {
+		for i := range vecs {
+			if vecs[i] != nil {
+				vecs[i].Free(proc.Mp())
+			}
+		}
+	}()
+
+	// check if expr is monotonic, if not, we can skip evaluating expr for each block
+	for _, expr := range exprs {
+		auxIdCnt += plan2.AssignAuxIdForExpr(expr, auxIdCnt)
+	}
+
+	columnMap := make(map[int]int)
+	if auxIdCnt > 0 {
+		zms = make([]objectio.ZoneMap, auxIdCnt)
+		vecs = make([]*vector.Vector, auxIdCnt)
+		plan2.GetColumnMapByExprs(exprs, tableDef, columnMap)
+	}
+
+	errCtx := errutil.ContextWithNoReport(ctx, true)
+
+	//hasDeletes := len(dirtyBlks) > 0
+
+	if err = ForeachSnapshotObjects(
+		tbl.db.op.SnapshotTS(),
+		func(obj logtailreplay.ObjectInfo, isCommitted bool) (err2 error) {
+			var meta objectio.ObjectDataMeta
+			skipObj = false
+
+			s3BlkCnt += obj.BlkCnt()
+			if auxIdCnt > 0 {
+				location := obj.ObjectLocation()
+				loadObjCnt++
+				if objMeta, err2 = objectio.FastLoadObjectMeta(
+					errCtx, &location, false, tbl.getTxn().engine.fs,
+				); err2 != nil {
+					return
+				}
+
+				meta = objMeta.MustDataMeta()
+				// here we only eval expr on the object meta if it has more than one blocks
+				if meta.BlockCount() > 2 {
+					for _, expr := range exprs {
+						if !colexec.EvaluateFilterByZoneMap(
+							errCtx, proc, expr, meta, columnMap, zms, vecs,
+						) {
+							skipObj = true
+							break
+						}
+					}
+				}
+			}
+			if skipObj {
+				return
+			}
+
+			if obj.Rows() == 0 && meta.IsEmpty() {
+				loadObjCnt++
+				location := obj.ObjectLocation()
+				if objMeta, err2 = objectio.FastLoadObjectMeta(
+					errCtx, &location, false, tbl.getTxn().engine.fs,
+				); err2 != nil {
+					return
+				}
+				meta = objMeta.MustDataMeta()
+			}
+
+			ForeachBlkInObjStatsListInProgress(true, meta, func(blk objectio.BlockInfoInProgress, blkMeta objectio.BlockObject) bool {
+				skipBlk := false
+
+				if auxIdCnt > 0 {
+					// eval filter expr on the block
+					for _, expr := range exprs {
+						if !colexec.EvaluateFilterByZoneMap(errCtx, proc, expr, blkMeta, columnMap, zms, vecs) {
+							skipBlk = true
+							break
+						}
+					}
+
+					// if the block is not needed, skip it
+					if skipBlk {
+						return true
+					}
+				}
+
+				blk.Sorted = obj.Sorted
+				blk.EntryState = obj.EntryState
+				blk.CommitTs = obj.CommitTS
+
+				if obj.HasDeltaLoc {
+					_, commitTs, ok := state.GetBockDeltaLoc(blk.BlockID)
+					if ok {
+						//blk.DeltaLoc = deltaLoc
+						blk.CommitTs = commitTs
+					}
+				}
+
+				outBlocks.AppendBlockInfo(blk)
+
+				return true
+
+			},
+				obj.ObjectStats,
+			)
+			return
+		},
+		state,
+		uncommittedObjects...,
+	); err != nil {
+		return
+	}
+
+	bhit, btotal := outBlocks.Len()-1, int(s3BlkCnt)
+	v2.TaskSelBlockTotal.Add(float64(btotal))
+	v2.TaskSelBlockHit.Add(float64(btotal - bhit))
+	blockio.RecordBlockSelectivity(bhit, btotal)
+	if btotal > 0 {
+		v2.TxnRangesSlowPathLoadObjCntHistogram.Observe(float64(loadObjCnt))
+		v2.TxnRangesSlowPathSelectedBlockCntHistogram.Observe(float64(bhit))
+		v2.TxnRangesSlowPathBlockSelectivityHistogram.Observe(float64(bhit) / float64(btotal))
 	}
 	return
 }

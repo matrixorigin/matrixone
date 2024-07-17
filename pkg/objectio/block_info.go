@@ -48,29 +48,15 @@ func DecodeInfoHeader(h uint32) InfoHeader {
 var (
 	EmptyBlockInfo      = BlockInfo{}
 	EmptyBlockInfoBytes = EncodeBlockInfo(EmptyBlockInfo)
+
+	EmptyBlockInfoInProgress      = BlockInfoInProgress{}
+	EmptyBlockInfoInProgressBytes = EncodeBlockInfoInProgress(EmptyBlockInfoInProgress)
 )
 
 const (
-	BlockInfoSize = int(unsafe.Sizeof(EmptyBlockInfo))
+	BlockInfoSize           = int(unsafe.Sizeof(EmptyBlockInfo))
+	BlockInfoSizeInProgress = int(unsafe.Sizeof(EmptyBlockInfoInProgress))
 )
-
-// BlockInfo TODO::It's deprecated, and will be removed.
-type BlockInfo struct {
-	BlockID types.Blockid
-	//It's used to indicate whether the block is appendable block or non-appendable blk for reader.
-	// for appendable block, the data visibility in the block is determined by the commit ts and abort ts.
-	EntryState bool
-	Sorted     bool
-	MetaLoc    ObjectLocation
-	DeltaLoc   ObjectLocation
-	CommitTs   types.TS
-	SegmentID  types.Uuid
-
-	//TODO:: putting them here is a bad idea, remove
-	//this block can be distributed to remote nodes.
-	CanRemote    bool
-	PartitionNum int
-}
 
 type BlockInfoInProgress struct {
 	BlockID types.Blockid
@@ -88,6 +74,84 @@ func (b *BlockInfoInProgress) MetaLocation() Location {
 
 func (b *BlockInfoInProgress) SetMetaLocation(metaLoc Location) {
 	b.MetaLoc = *(*[LocationLen]byte)(unsafe.Pointer(&metaLoc[0]))
+}
+
+func EncodeBlockInfoInProgress(info BlockInfoInProgress) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(&info)), BlockInfoSizeInProgress)
+}
+
+func DecodeBlockInfoInProgress(buf []byte) *BlockInfoInProgress {
+	return (*BlockInfoInProgress)(unsafe.Pointer(&buf[0]))
+}
+
+type BlockInfoSliceInProgress []byte
+
+func (s *BlockInfoSliceInProgress) Get(i int) *BlockInfoInProgress {
+	return DecodeBlockInfoInProgress((*s)[i*BlockInfoSizeInProgress:])
+}
+
+func (s *BlockInfoSliceInProgress) GetBytes(i int) []byte {
+	return (*s)[i*BlockInfoSizeInProgress : (i+1)*BlockInfoSizeInProgress]
+}
+
+func (s *BlockInfoSliceInProgress) Set(i int, info *BlockInfoInProgress) {
+	copy((*s)[i*BlockInfoSizeInProgress:], EncodeBlockInfoInProgress(*info))
+}
+
+func (s *BlockInfoSliceInProgress) Len() int {
+	return len(*s) / BlockInfoSizeInProgress
+}
+
+func (s *BlockInfoSliceInProgress) Size() int {
+	return len(*s)
+}
+
+func (s *BlockInfoSliceInProgress) Slice(i, j int) []byte {
+	return (*s)[i*BlockInfoSizeInProgress : j*BlockInfoSizeInProgress]
+}
+
+func (s *BlockInfoSliceInProgress) Append(bs []byte) {
+	*s = append(*s, bs...)
+}
+
+func (s *BlockInfoSliceInProgress) AppendBlockInfo(info BlockInfoInProgress) {
+	*s = append(*s, EncodeBlockInfoInProgress(info)...)
+}
+
+func (s *BlockInfoSliceInProgress) SetBytes(bs []byte) {
+	*s = bs
+}
+
+func (s *BlockInfoSliceInProgress) GetAllBytes() []byte {
+	return *s
+}
+
+func (s *BlockInfoSliceInProgress) String() string {
+	var buf bytes.Buffer
+	buf.WriteString(fmt.Sprintf("BlockInfoSlice[Len=%d]:\n", s.Len()))
+	for i := 0; i < s.Len(); i++ {
+		buf.WriteString(s.Get(i).BlockID.String())
+		buf.WriteByte('\n')
+	}
+	return buf.String()
+}
+
+// BlockInfo TODO::It's deprecated, and will be removed.
+type BlockInfo struct {
+	BlockID types.Blockid
+	//It's used to indicate whether the block is appendable block or non-appendable blk for reader.
+	// for appendable block, the data visibility in the block is determined by the commit ts and abort ts.
+	EntryState bool
+	Sorted     bool
+	MetaLoc    ObjectLocation
+	DeltaLoc   ObjectLocation
+	CommitTs   types.TS
+	SegmentID  types.Uuid
+
+	//TODO:: putting them here is a bad idea, remove
+	//this block can be distributed to remote nodes.
+	CanRemote    bool
+	PartitionNum int
 }
 
 func (b *BlockInfo) MetaLocation() Location {

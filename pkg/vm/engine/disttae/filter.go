@@ -980,6 +980,214 @@ func CompileFilterExpr(
 	return
 }
 
+func TryFastFilterBlocksInProgress(
+	ctx context.Context,
+	tbl *txnTable,
+	txnOffset int, // Transaction writes offset used to specify the starting position for reading data.
+	snapshotTS timestamp.Timestamp,
+	tableDef *plan.TableDef,
+	exprs []*plan.Expr,
+	snapshot *logtailreplay.PartitionState,
+	uncommittedObjects []objectio.ObjectStats,
+	//dirtyBlocks *map[types.Blockid]struct{},
+	outBlocks *objectio.BlockInfoSliceInProgress,
+	fs fileservice.FileService,
+	proc *process.Process,
+) (ok bool, err error) {
+	fastFilterOp, loadOp, objectFilterOp, blockFilterOp, seekOp, ok, highSelectivityHint := CompileFilterExprs(exprs, proc, tableDef, fs)
+	if !ok {
+		return false, nil
+	}
+
+	err = ExecuteBlockFilterInProgress(
+		ctx,
+		tbl,
+		txnOffset,
+		snapshotTS,
+		fastFilterOp,
+		loadOp,
+		objectFilterOp,
+		blockFilterOp,
+		seekOp,
+		snapshot,
+		uncommittedObjects,
+		//dirtyBlocks,
+		outBlocks,
+		fs,
+		proc,
+		highSelectivityHint,
+	)
+	return true, err
+}
+
+func ExecuteBlockFilterInProgress(
+	ctx context.Context,
+	tbl *txnTable,
+	txnOffset int, // Transaction writes offset used to specify the starting position for reading data.
+	snapshotTS timestamp.Timestamp,
+	fastFilterOp FastFilterOp,
+	loadOp LoadOp,
+	objectFilterOp ObjectFilterOp,
+	blockFilterOp BlockFilterOp,
+	seekOp SeekFirstBlockOp,
+	snapshot *logtailreplay.PartitionState,
+	uncommittedObjects []objectio.ObjectStats,
+	outBlocks *objectio.BlockInfoSliceInProgress,
+	fs fileservice.FileService,
+	proc *process.Process,
+	highSelectivityHint bool,
+) (err error) {
+	var (
+		totalBlocks                    float64
+		loadHit                        float64
+		objFilterTotal, objFilterHit   float64
+		blkFilterTotal, blkFilterHit   float64
+		fastFilterTotal, fastFilterHit float64
+	)
+
+	defer func() {
+		v2.TxnRangesFastPathLoadObjCntHistogram.Observe(loadHit)
+		v2.TxnRangesFastPathSelectedBlockCntHistogram.Observe(float64(outBlocks.Len() - 1))
+		if fastFilterTotal > 0 {
+			v2.TxnRangesFastPathObjSortKeyZMapSelectivityHistogram.Observe(fastFilterHit / fastFilterTotal)
+		}
+		if objFilterTotal > 0 {
+			v2.TxnRangesFastPathObjColumnZMapSelectivityHistogram.Observe(objFilterHit / objFilterTotal)
+		}
+		if blkFilterTotal > 0 {
+			v2.TxnRangesFastPathBlkColumnZMapSelectivityHistogram.Observe(blkFilterHit / blkFilterTotal)
+		}
+		if totalBlocks > 0 {
+			v2.TxnRangesFastPathBlkTotalSelectivityHistogram.Observe(float64(outBlocks.Len()-1) / totalBlocks)
+		}
+	}()
+
+	//if !highSelectivityHint {
+	//*dirtyBlocks = tbl.collectDirtyBlocks(snapshot, uncommittedObjects, txnOffset)
+	//}
+
+	err = ForeachSnapshotObjects(
+		snapshotTS,
+		func(obj logtailreplay.ObjectInfo, isCommitted bool) (err2 error) {
+			var ok bool
+			objStats := obj.ObjectStats
+			totalBlocks += float64(objStats.BlkCnt())
+			if fastFilterOp != nil {
+				fastFilterTotal++
+				if ok, err2 = fastFilterOp(objStats); err2 != nil || !ok {
+					fastFilterHit++
+					return
+				}
+			}
+			var (
+				meta objectio.ObjectMeta
+				bf   objectio.BloomFilter
+			)
+			if loadOp != nil {
+				loadHit++
+				if meta, bf, err2 = loadOp(
+					ctx, objStats, meta, bf,
+				); err2 != nil {
+					return
+				}
+			}
+			if objectFilterOp != nil {
+				objFilterTotal++
+				if ok, err2 = objectFilterOp(meta, bf); err2 != nil || !ok {
+					objFilterHit++
+					return
+				}
+			}
+			var dataMeta objectio.ObjectDataMeta
+			if meta != nil {
+				dataMeta = meta.MustDataMeta()
+			}
+			var blockCnt int
+			if dataMeta != nil {
+				blockCnt = int(dataMeta.BlockCount())
+			} else {
+				blockCnt = int(objStats.BlkCnt())
+			}
+
+			name := objStats.ObjectName()
+			extent := objStats.Extent()
+
+			var pos int
+			if seekOp != nil {
+				pos = seekOp(dataMeta)
+			}
+
+			if objStats.Rows() == 0 {
+				logutil.Errorf("object stats has zero rows, isCommitted: %v, detail: %s",
+					isCommitted, obj.String())
+				util.EnableCoreDump()
+				util.CoreDump()
+			}
+
+			for ; pos < blockCnt; pos++ {
+				var blkMeta objectio.BlockObject
+				if dataMeta != nil && blockFilterOp != nil {
+					blkFilterTotal++
+					var (
+						quickBreak, ok2 bool
+					)
+					blkMeta = dataMeta.GetBlockMeta(uint32(pos))
+					if quickBreak, ok2, err2 = blockFilterOp(pos, blkMeta, bf); err2 != nil {
+						return
+
+					}
+					// skip the following block checks
+					if quickBreak {
+						blkFilterHit++
+						break
+					}
+					// skip this block
+					if !ok2 {
+						blkFilterHit++
+						continue
+					}
+				}
+				var rows uint32
+				if objRows := objStats.Rows(); objRows != 0 {
+					if pos < blockCnt-1 {
+						rows = options.DefaultBlockMaxRows
+					} else {
+						rows = objRows - options.DefaultBlockMaxRows*uint32(pos)
+					}
+				} else {
+					if blkMeta == nil {
+						blkMeta = dataMeta.GetBlockMeta(uint32(pos))
+					}
+					rows = blkMeta.GetRows()
+				}
+				loc := objectio.BuildLocation(name, extent, rows, uint16(pos))
+				blk := objectio.BlockInfoInProgress{
+					BlockID: *objectio.BuildObjectBlockid(name, uint16(pos)),
+					MetaLoc: objectio.ObjectLocation(loc),
+				}
+
+				blk.Sorted = obj.Sorted
+				blk.EntryState = obj.EntryState
+				blk.CommitTs = obj.CommitTS
+
+				if obj.HasDeltaLoc {
+					_, commitTs, ok := snapshot.GetBockDeltaLoc(blk.BlockID)
+					if ok {
+						//blk.DeltaLoc = deltaLoc
+						blk.CommitTs = commitTs
+					}
+				}
+
+				outBlocks.AppendBlockInfo(blk)
+			}
+			return
+		},
+		snapshot,
+		uncommittedObjects...,
+	)
+	return
+}
+
 func TryFastFilterBlocks(
 	ctx context.Context,
 	tbl *txnTable,
