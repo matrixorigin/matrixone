@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
@@ -107,7 +108,7 @@ func (s *memStore) Allocate(
 	tableID uint64,
 	key string,
 	count int,
-	txnOp client.TxnOperator) (uint64, uint64, error) {
+	txnOp client.TxnOperator) (uint64, uint64, timestamp.Timestamp, error) {
 	s.Lock()
 	defer s.Unlock()
 	m := s.caches
@@ -135,7 +136,7 @@ func (s *memStore) Allocate(
 	c.Offset = next
 	from, to := getNextRange(curr, next, int(c.Step))
 	time.Sleep(time.Millisecond * 10)
-	return from, to, nil
+	return from, to, timestamp.Timestamp{}, nil
 }
 
 func (s *memStore) UpdateMinValue(
