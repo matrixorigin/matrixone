@@ -176,7 +176,7 @@
 # pkg/util
 /pkg/util @zhangxu19830126
 /pkg/util/internalExecutor @aptend
-/pkg/util/metric @aptend
+/pkg/util/metric @aptend @xzxiong
 /pkg/util/toml @zhangxu19830126
 /pkg/util/trace @xzxiong
 /pkg/util/export @xzxiong
