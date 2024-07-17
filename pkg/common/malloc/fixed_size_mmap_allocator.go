@@ -36,7 +36,7 @@ type fixedSizeMmapAllocator struct {
 	// buffer2 buffers MADV_DONTNEED objects
 	buffer2 chan unsafe.Pointer
 
-	deallocatorPool *ClosureDeallocatorPool[fixedSizeMmapDeallocatorArgs]
+	deallocatorPool *ClosureDeallocatorPool[fixedSizeMmapDeallocatorArgs, *fixedSizeMmapDeallocatorArgs]
 }
 
 type fixedSizeMmapDeallocatorArgs struct {

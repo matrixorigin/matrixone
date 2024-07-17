@@ -24,7 +24,7 @@ import (
 type CheckedAllocator struct {
 	upstream        Allocator
 	fraction        uint32
-	deallocatorPool *ClosureDeallocatorPool[checkedAllocatorArgs]
+	deallocatorPool *ClosureDeallocatorPool[checkedAllocatorArgs, *checkedAllocatorArgs]
 }
 
 type checkedAllocatorArgs struct {

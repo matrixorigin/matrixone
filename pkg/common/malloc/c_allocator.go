@@ -22,7 +22,7 @@ import "unsafe"
 import "C"
 
 type CAllocator struct {
-	deallocatorPool *ClosureDeallocatorPool[cDeallocatorArgs]
+	deallocatorPool *ClosureDeallocatorPool[cDeallocatorArgs, *cDeallocatorArgs]
 }
 
 type cDeallocatorArgs struct {

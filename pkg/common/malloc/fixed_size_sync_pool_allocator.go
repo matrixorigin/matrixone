@@ -21,7 +21,7 @@ import (
 type fixedSizeSyncPoolAllocator struct {
 	size            uint64
 	pool            sync.Pool
-	deallocatorPool *ClosureDeallocatorPool[fixedSizeSyncPoolDeallocatorArgs]
+	deallocatorPool *ClosureDeallocatorPool[fixedSizeSyncPoolDeallocatorArgs, *fixedSizeSyncPoolDeallocatorArgs]
 }
 
 type fixedSizeSyncPoolDeallocatorArgs struct {

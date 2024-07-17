@@ -15,6 +15,7 @@
 package malloc
 
 import (
+	"sync"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -22,7 +23,7 @@ import (
 
 type ReadOnlyAllocator struct {
 	upstream        Allocator
-	deallocatorPool *ClosureDeallocatorPool[readOnlyDeallocatorArgs]
+	deallocatorPool *ClosureDeallocatorPool[readOnlyDeallocatorArgs, *readOnlyDeallocatorArgs]
 }
 
 type readOnlyDeallocatorArgs struct {
@@ -30,7 +31,7 @@ type readOnlyDeallocatorArgs struct {
 	frozen bool
 }
 
-func (r readOnlyDeallocatorArgs) As(trait Trait) bool {
+func (r *readOnlyDeallocatorArgs) As(trait Trait) bool {
 	if ptr, ok := trait.(*Freeze); ok {
 		*ptr = r.freeze
 		return true
@@ -80,14 +81,23 @@ func (r *ReadOnlyAllocator) Allocate(size uint64, hint Hints) ([]byte, Deallocat
 		return nil, nil, err
 	}
 
-	var args readOnlyDeallocatorArgs
-	if !dec.As(&args.info) {
+	info := mmapInfoPool.Get().(*MmapInfo)
+	defer mmapInfoPool.Put(info)
+	if !dec.As(info) {
 		// not mmap allocated
 		return bytes, dec, nil
 	}
 
 	return bytes, ChainDeallocator(
 		dec,
-		r.deallocatorPool.Get(args),
+		r.deallocatorPool.Get(readOnlyDeallocatorArgs{
+			info: *info,
+		}),
 	), nil
+}
+
+var mmapInfoPool = sync.Pool{
+	New: func() any {
+		return new(MmapInfo)
+	},
 }

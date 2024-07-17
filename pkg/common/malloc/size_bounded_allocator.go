@@ -24,7 +24,7 @@ type SizeBoundedAllocator struct {
 	upstream        Allocator
 	max             uint64
 	counter         *atomic.Uint64
-	deallocatorPool *ClosureDeallocatorPool[sizeBoundedDeallocatorArgs]
+	deallocatorPool *ClosureDeallocatorPool[sizeBoundedDeallocatorArgs, *sizeBoundedDeallocatorArgs]
 }
 
 type sizeBoundedDeallocatorArgs struct {

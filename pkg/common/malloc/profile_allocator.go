@@ -75,7 +75,7 @@ type ProfileAllocator struct {
 	upstream        Allocator
 	profiler        *Profiler[HeapSampleValues, *HeapSampleValues]
 	fraction        uint32
-	deallocatorPool *ClosureDeallocatorPool[profileDeallocateArgs]
+	deallocatorPool *ClosureDeallocatorPool[profileDeallocateArgs, *profileDeallocateArgs]
 }
 
 func NewProfileAllocator(

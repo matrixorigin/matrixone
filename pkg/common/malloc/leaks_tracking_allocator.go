@@ -16,7 +16,7 @@ package malloc
 
 type LeaksTrackingAllocator struct {
 	upstream        Allocator
-	deallocatorPool *ClosureDeallocatorPool[leaksTrackingDeallocatorArgs]
+	deallocatorPool *ClosureDeallocatorPool[leaksTrackingDeallocatorArgs, *leaksTrackingDeallocatorArgs]
 	tracker         *LeaksTracker
 }
 

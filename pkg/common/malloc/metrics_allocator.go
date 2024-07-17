@@ -20,7 +20,7 @@ import (
 
 type MetricsAllocator struct {
 	upstream        Allocator
-	deallocatorPool *ClosureDeallocatorPool[metricsDeallocatorArgs]
+	deallocatorPool *ClosureDeallocatorPool[metricsDeallocatorArgs, *metricsDeallocatorArgs]
 
 	allocateBytesCounter   prometheus.Counter
 	inuseBytesGauge        prometheus.Gauge
