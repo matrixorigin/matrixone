@@ -16,14 +16,15 @@ package disttae
 
 import (
 	"context"
+
 	"math/rand"
 	"testing"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGatherStats(t *testing.T) {
@@ -61,12 +62,17 @@ func TestGatherStats(t *testing.T) {
 func TestReaderInProgress(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	tblDef := plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{},
+	}
+
 	r := newReaderInProgress(
 		ctx,
 		nil,
 		nil,
 		nil,
-		nil,
+		&tblDef,
 		timestamp.Timestamp{},
 		nil,
 		false,
