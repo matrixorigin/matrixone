@@ -113,8 +113,8 @@ func (v *Vector) Reset(typ types.Type) {
 	v.nsp.Reset()
 	v.sorted = false
 
-	v.capacity = cap(v.data) / v.typ.TypeSize()
 	if originOid != v.typ.Oid {
+		v.col.reset()
 		v.setupFromData()
 	}
 }
