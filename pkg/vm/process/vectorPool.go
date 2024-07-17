@@ -22,7 +22,7 @@ import (
 )
 
 // defaultVectorPoolSize is the default pool capacity of vector pool for one query.
-const defaultVectorPoolSize = 8
+const defaultVectorPoolSize = 32
 
 // defaultMaxVectorItemSize is the max size of accepted item can enter the vector pool.
 const defaultMaxVectorItemSize = 8192 * 64
