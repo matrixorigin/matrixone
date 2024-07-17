@@ -279,7 +279,12 @@ func (ip *internalProtocol) GetBool(PropertyID) bool {
 }
 
 func (ip *internalProtocol) Write(execCtx *ExecCtx, bat *batch.Batch) error {
-	return fillResultSet(execCtx.reqCtx, bat, execCtx.ses, execCtx.ses.GetMysqlResultSet())
+	mrs := execCtx.ses.GetMysqlResultSet()
+	err := fillResultSet(execCtx.reqCtx, bat, execCtx.ses, mrs)
+	if err != nil {
+		return err
+	}
+	return ip.sendRows(mrs, uint64(bat.RowCount()))
 }
 
 func (ip *internalProtocol) WriteHandshake() error {
