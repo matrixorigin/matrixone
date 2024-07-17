@@ -50,10 +50,12 @@ func TestCompileService(t *testing.T) {
 		wg.Add(1)
 
 		c := service.getCompile(p)
+		service.startService(c)
 		go func(cc *Compile) {
 			<-cc.proc.Ctx.Done()
 
 			doneRoutine.Add(1)
+			service.endService(cc)
 			service.putCompile(cc)
 			wg.Done()
 		}(c)
