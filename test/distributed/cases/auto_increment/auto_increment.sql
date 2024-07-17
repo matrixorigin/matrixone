@@ -117,7 +117,7 @@ Drop table auto_increment09;
 
 
 -- auto_increment > 0 and the column constraint unique index
--- @bvt:issue#10834
+-- @bvt:issue#7889
 Drop table if exists auto_increment10;
 Create table auto_increment10(col1 int auto_increment, col2 int, unique index(col1)) auto_increment = 254;
 Insert into auto_increment10(col2) values(100);
@@ -220,7 +220,7 @@ Drop table auto_increment16;
 
 
 -- temporary table: auto_incerment = 0
--- @bvt:issue#10903
+-- @bvt:issue#7889
 drop table if exists auto_increment01;
 create temporary table auto_increment01(col1 int auto_increment primary key)auto_increment = 0;
 select * from auto_increment01;
@@ -248,7 +248,7 @@ Drop table auto_increment02;
 
 
 -- temporary table:auto_increment > 0 and have duplicate value
--- @bvt:issue#10903
+-- @bvt:issue#7889
 Drop table if exists auto_increment03;
 create temporary table auto_increment03(col1 int auto_increment primary key) auto_increment = 10000;
 Insert into auto_increment03 values();
@@ -262,7 +262,7 @@ Drop table auto_increment03;
 
 
 -- temporary table:auto_increment > 0 and col is primary key: check for duplicate primary keys
--- @bvt:issue#10903
+-- @bvt:issue#7889
 Drop table if exists auto_increment04;
 Create temporary table auto_increment04(col1 int primary key auto_increment) auto_increment = 10;
 insert into auto_increment04 values();
@@ -279,7 +279,7 @@ Drop table auto_increment04;
 
 
 -- temporary table:auto_increment > 0 and column constraint unique index
--- @bvt:issue#10834
+-- @bvt:issue#7889
 Drop table if exists auto_increment05;
 Create temporary table auto_increment05(col1 int unique key auto_increment) auto_increment = 10000;
 Insert into auto_increment05 values();
@@ -291,7 +291,7 @@ Insert into auto_increment05 values(10001);
 Insert into auto_increment05 values(10002);
 Select * from auto_increment05;
 Drop table auto_increment05;
--- @bvt:issue#10834
+-- @bvt:issue
 
 
 -- temporary table:auto_increment > 0 and test the threshold value of int unsigned
@@ -343,7 +343,7 @@ Drop table auto_increment09;
 
 
 -- temporary table:auto_increment > 0 and column constraint unique index
--- @bvt:issue#10834
+-- @bvt:issue#7889
 Drop table if exists auto_increment10;
 Create temporary table auto_increment10(col1 int auto_increment, col2 int, unique index(col1)) auto_increment = 3267183;
 Insert into auto_increment10(col2) values(100);
@@ -356,7 +356,7 @@ Drop table auto_increment10;
 
 
 -- temporary table:auto_increment > 0 and update/delete
--- @bvt:issue#10903
+-- @bvt:issue#7889
 Drop table if exists auto_increment11;
 Create temporary table auto_increment11(col1 int auto_increment primary key) auto_increment = 100;
 insert into auto_increment11 values();
@@ -365,8 +365,8 @@ Insert into auto_increment11 values();
 select last_insert_id();
 Select * from auto_increment11;
 Delete from auto_increment11 where col1 = 100;
--- @bvt:issue#10903
--- @bvt:issue#10834
+-- @bvt:issue
+-- @bvt:issue#7889
 Update auto_increment11 set col1 = 200 where col1 = 101;
 Select * from auto_increment11;
 Drop table auto_increment11;
@@ -418,7 +418,7 @@ Drop table auto_increment14;
 
 
 -- temporary: test one table more auto_increment columns
--- @bvt:issue#10903
+-- @bvt:issue#7889
 drop table if exists auto_increment15;
 create temporary table auto_increment15(
 a int primary key auto_increment,
