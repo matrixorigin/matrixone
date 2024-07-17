@@ -293,6 +293,7 @@ Drop table auto_increment05;
 
 
 -- temporary table:auto_increment > 0 and test the threshold value of int unsigned
+-- @bvt:issue#7889
 Drop table if exists auto_increment06;
 Create temporary table auto_increment06(col1 int unsigned auto_increment primary key) auto_increment = 2147483646;
 Insert into auto_increment06 values();
@@ -304,6 +305,7 @@ Insert into auto_increment06 values(10001);
 Insert into auto_increment06 values(10002);
 Select * from auto_increment06;
 Drop table auto_increment06;
+-- @bvt:issue
 
 
 -- auto_increment > 0 and test the threshold value of smallint unsigned
@@ -372,6 +374,7 @@ Drop table auto_increment11;
 
 
 -- temporary table:auto_increment > 0 and insert into table non-int type
+-- @bvt:issue#7889
 Drop table if exists auto_increment12;
 create temporary table auto_increment12(col1 int auto_increment primary key)auto_increment = 10;
 Insert into auto_increment12 values();
@@ -382,7 +385,7 @@ insert into auto_increment12 values();
 select last_insert_id();
 Select * from auto_increment12;
 Drop table auto_increment12;
-
+-- @bvt:issue
 
 -- temporary:auto_increment > 0 and truncate table, auto_increment columns whether it will be cleared.
 Drop table if exists auto_increment13;

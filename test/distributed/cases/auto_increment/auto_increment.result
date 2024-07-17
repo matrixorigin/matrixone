@@ -435,10 +435,15 @@ Select * from auto_increment05;
 Drop table auto_increment05;
 [unknown result because it is related to issue#10834]
 Drop table if exists auto_increment06;
+
 Create temporary table auto_increment06(col1 int unsigned auto_increment primary key) auto_increment = 2147483646;
+
 Insert into auto_increment06 values();
+
 Insert into auto_increment06 values();
+
 Insert into auto_increment06 values();
+
 select last_insert_id();
 last_insert_id()
 2147483648
@@ -448,7 +453,9 @@ col1
 2147483647
 2147483648
 Insert into auto_increment06 values(10001);
+
 Insert into auto_increment06 values(10002);
+
 Select * from auto_increment06;
 col1
 10001
@@ -457,6 +464,7 @@ col1
 2147483647
 2147483648
 Drop table auto_increment06;
+
 Drop table if exists auto_increment07;
 Create table auto_increment07(col1 smallint unsigned auto_increment primary key) auto_increment = 65534;
 Insert into auto_increment07 values();
@@ -540,15 +548,21 @@ Select * from auto_increment11;
 Drop table auto_increment11;
 [unknown result because it is related to issue#10834]
 Drop table if exists auto_increment12;
+
 create temporary table auto_increment12(col1 int auto_increment primary key)auto_increment = 10;
+
 Insert into auto_increment12 values();
+
 Insert into auto_increment12 values();
+
 Select * from auto_increment12;
 col1
 10
 11
 Insert into auto_increment12 values(16.898291);
+
 insert into auto_increment12 values();
+
 select last_insert_id();
 last_insert_id()
 17
@@ -559,6 +573,7 @@ col1
 16
 17
 Drop table auto_increment12;
+
 Drop table if exists auto_increment13;
 Create table auto_increment13(col1 int auto_increment primary key)auto_increment = 30000;
 Insert into auto_increment13 values();
