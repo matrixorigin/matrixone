@@ -1724,8 +1724,34 @@ func (tbl *txnTable) GetDBID(ctx context.Context) uint64 {
 }
 
 // local
-func (tbl *txnTable) BuildDataSource() {
+func (tbl *txnTable) BuildDataSource(
+	ctx context.Context,
+	ranges []*objectio.BlockInfoInProgress) (source DataSource, err error) {
 
+	proc := tbl.proc.Load()
+
+	state, err := tbl.getPartitionState(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	tbl.getTxn().blockId_tn_delete_metaLoc_batch.RLock()
+	defer tbl.getTxn().blockId_tn_delete_metaLoc_batch.RUnlock()
+
+	source, err = NewLocalDataSource(
+		ctx,
+		proc.Mp(),
+		types.TimestampToTS(tbl.getTxn().op.SnapshotTS()),
+		proc.GetFileService(),
+		tbl.db.databaseId,
+		tbl.tableId,
+		ranges,
+		state,
+		tbl.getTxn().blockId_tn_delete_metaLoc_batch.data,
+		tbl.getTxn().writes[:tbl.getTxn().snapshotWriteOffset],
+	)
+
+	return source, err
 }
 
 // NewReader creates a new list of Readers to read data from the table.

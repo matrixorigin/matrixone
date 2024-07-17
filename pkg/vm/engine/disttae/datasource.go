@@ -77,7 +77,9 @@ func NewLocalDataSource(
 	ranges []*objectio.BlockInfoInProgress,
 	pState *logtailreplay.PartitionState,
 	unCommittedS3DeletesBat map[types.Blockid][]*batch.Batch,
-	unCommittedInmemWrites []Entry) (source LocalDataSource, err error) {
+	unCommittedInmemWrites []Entry) (source *LocalDataSource, err error) {
+
+	source = &LocalDataSource{}
 
 	source.fs = fs
 	source.ctx = ctx
