@@ -144,7 +144,6 @@ Drop table auto_increment11;
 
 
 -- auto_increment > 0 and insert into table non-int type
--- @bvt:issue#10842
 Drop table if exists auto_increment12;
 create table auto_increment12(col1 int auto_increment primary key)auto_increment = 10;
 Insert into auto_increment12 values();
@@ -156,7 +155,6 @@ insert into auto_increment12 values();
 select last_insert_id();
 Select * from auto_increment12;
 Drop table auto_increment12;
--- @bvt:issue
 
 
 -- auto_increment > 0 and truncate table
@@ -374,7 +372,6 @@ Drop table auto_increment11;
 
 
 -- temporary table:auto_increment > 0 and insert into table non-int type
--- @bvt:issue#10842
 Drop table if exists auto_increment12;
 create temporary table auto_increment12(col1 int auto_increment primary key)auto_increment = 10;
 Insert into auto_increment12 values();
@@ -385,7 +382,6 @@ insert into auto_increment12 values();
 select last_insert_id();
 Select * from auto_increment12;
 Drop table auto_increment12;
--- @bvt:issue
 
 
 -- temporary:auto_increment > 0 and truncate table, auto_increment columns whether it will be cleared.
