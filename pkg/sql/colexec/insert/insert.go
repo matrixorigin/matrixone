@@ -81,7 +81,11 @@ func (insert *Insert) Call(proc *process.Process) (vm.CallResult, error) {
 
 	anal := proc.GetAnalyze2(insert.GetIdx(), insert.GetParallelIdx(), insert.GetParallelMajor(), insert.OpStats)
 	anal.Start()
-	defer anal.Stop()
+	t := time.Now()
+	defer func() {
+		anal.AddInsertTime(t)
+		anal.Stop()
+	}()
 
 	if insert.ToWriteS3 {
 		return insert.insert_s3(proc, anal)
@@ -269,14 +273,4 @@ func collectAndOutput(proc *process.Process, s3Writers []*colexec.S3Writer, resu
 	}
 	result.Batch = res
 	return
-}
-
-func analyze(proc *process.Process, idx int, parallelIdx int, parallelMajor bool) func() {
-	t := time.Now()
-	anal := proc.GetAnalyze(idx, parallelIdx, parallelMajor)
-	anal.Start()
-	return func() {
-		anal.Stop()
-		anal.AddInsertTime(t)
-	}
 }
