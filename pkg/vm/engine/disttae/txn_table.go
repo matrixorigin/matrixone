@@ -1004,7 +1004,7 @@ func (tbl *txnTable) collectDirtyBlocks(
 			// the CN workspace can only handle `INSERT` and `DELETE` operations. Other operations will be skipped,
 			// TODO Adjustments will be made here in the future
 			if entry.typ == DELETE || entry.typ == DELETE_TXN {
-				if entry.isGeneratedByTruncate() {
+				if entry.IsGeneratedByTruncate() {
 					return
 				}
 				//deletes in tbl.writes maybe comes from PartitionState.rows or PartitionState.blocks.
@@ -1724,8 +1724,34 @@ func (tbl *txnTable) GetDBID(ctx context.Context) uint64 {
 }
 
 // local
-func (tbl *txnTable) BuildDataSource() {
+func (tbl *txnTable) BuildDataSource(
+	ctx context.Context,
+	ranges []*objectio.BlockInfoInProgress) (source DataSource, err error) {
 
+	proc := tbl.proc.Load()
+
+	state, err := tbl.getPartitionState(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	tbl.getTxn().blockId_tn_delete_metaLoc_batch.RLock()
+	defer tbl.getTxn().blockId_tn_delete_metaLoc_batch.RUnlock()
+
+	source, err = NewLocalDataSource(
+		ctx,
+		proc.Mp(),
+		types.TimestampToTS(tbl.getTxn().op.SnapshotTS()),
+		proc.GetFileService(),
+		tbl.db.databaseId,
+		tbl.tableId,
+		ranges,
+		state,
+		tbl.getTxn().blockId_tn_delete_metaLoc_batch.data,
+		tbl.getTxn().writes[:tbl.getTxn().snapshotWriteOffset],
+	)
+
+	return source, err
 }
 
 // NewReader creates a new list of Readers to read data from the table.
@@ -1790,7 +1816,7 @@ func (tbl *txnTable) NewReader(
 	)
 
 	blkArray := objectio.BlockInfoSlice(ranges)
-	if !memFilter.isValid {
+	if !memFilter.IsValid {
 		return []engine.Reader{new(emptyReader)}, nil
 	}
 	if blkArray.Len() == 0 {
@@ -1973,7 +1999,7 @@ func (tbl *txnTable) newReader(
 	partReader := &PartitionReader{
 		table:     tbl,
 		txnOffset: txnOffset,
-		iter:      memFilter.iter,
+		iter:      memFilter.Iter,
 		seqnumMp:  seqnumMp,
 		typsMap:   mp,
 	}
@@ -2379,7 +2405,7 @@ func (tbl *txnTable) transferDeletes(
 	}
 
 	for _, entry := range tbl.getTxn().writes {
-		if entry.isGeneratedByTruncate() || entry.tableId != tbl.tableId {
+		if entry.IsGeneratedByTruncate() || entry.tableId != tbl.tableId {
 			continue
 		}
 		if (entry.typ == DELETE || entry.typ == DELETE_TXN) && entry.fileName == "" {

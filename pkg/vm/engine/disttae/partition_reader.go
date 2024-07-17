@@ -102,7 +102,7 @@ func (p *PartitionReader) prepare() error {
 						truncate t1; //txnDatabase.Truncate will DELETE mo_tables
 						show tables; // t1 must be shown
 					*/
-					if entry.isGeneratedByTruncate() {
+					if entry.IsGeneratedByTruncate() {
 						return
 					}
 					//deletes in txn.Write maybe comes from PartitionState.Rows ,

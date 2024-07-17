@@ -574,7 +574,7 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 		r.table.db.databaseId,
 		r.table.tableId,
 		txnOffset, func(entry Entry) {
-			if entry.isGeneratedByTruncate() {
+			if entry.IsGeneratedByTruncate() {
 				return
 			}
 			if (entry.typ == DELETE || entry.typ == DELETE_TXN) && entry.fileName == "" {
@@ -708,14 +708,13 @@ func newReaderInProgress(
 		tableDef,
 		proc,
 	)
-	//TODO:: build mem pk filter.
-	//memFilter := newMemPKFilter(
-	//	tableDef,
-	//	ts,
-	//	state,
-	//	txn.engine.packerPool,
-	//	baseFilter,
-	//)
+
+	memFilter := newMemPKFilterInProgress(
+		tableDef,
+		ts,
+		packerPool,
+		baseFilter,
+	)
 
 	blockFilter := newBlockReadPKFilter(
 		tableDef.Pkey.PkeyColName,
@@ -730,6 +729,7 @@ func newReaderInProgress(
 			proc:     proc,
 			tableDef: tableDef,
 		},
+		memFilter: memFilter,
 		source:    source,
 		txnOffset: txnOffset,
 		ts:        ts,
@@ -867,7 +867,10 @@ func (r *readerInProgress) Read(
 		rowIDs := vector.MustFixedCol[types.Rowid](bat.Vecs[0])
 		bid := rowIDs[0].CloneBlockID()
 		if r.source.HasTombstones(bid) {
-			sels = r.source.ApplyTombstones(rowIDs)
+			sels, err = r.source.ApplyTombstones(rowIDs)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 	bat.Shrink(sels, false)

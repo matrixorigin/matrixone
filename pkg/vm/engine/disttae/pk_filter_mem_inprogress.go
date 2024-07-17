@@ -27,32 +27,33 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 )
 
-type memPKFilter struct {
-	op             int
-	packed         [][]byte
-	isVec          bool
-	IsValid        bool
-	Iter           logtailreplay.RowsIter
-	delIterFactory func(blkId types.Blockid) logtailreplay.RowsIter
+type MemPKFilterInProgress struct {
+	op      int
+	packed  [][]byte
+	isVec   bool
+	isValid bool
+	TS      types.TS
+	Spec    logtailreplay.PrimaryKeyMatchSpec
 }
 
-func newMemPKFilter(
+func newMemPKFilterInProgress(
 	tableDef *plan.TableDef,
 	ts timestamp.Timestamp,
-	state *logtailreplay.PartitionState,
 	packerPool *fileservice.Pool[*types.Packer],
 	basePKFilter basePKFilter,
-) (filter memPKFilter) {
-	defer func() {
-		if filter.Iter == nil {
-			filter.IsValid = true
-			filter.Iter = state.NewRowsIter(
-				types.TimestampToTS(ts),
-				nil,
-				false,
-			)
-		}
-	}()
+) (filter MemPKFilterInProgress) {
+	//defer func() {
+	//	if filter.iter == nil {
+	//		filter.isValid = true
+	//		filter.iter = state.NewRowsIter(
+	//			types.TimestampToTS(ts),
+	//			nil,
+	//			false,
+	//		)
+	//	}
+	//}()
+
+	filter.TS = types.TimestampToTS(ts)
 
 	if tableDef.Pkey == nil || !basePKFilter.valid {
 		return
@@ -211,86 +212,53 @@ func newMemPKFilter(
 		return
 	}
 
-	filter.tryConstructPrimaryKeyIndexIter(ts, state)
+	filter.tryConstructPrimaryKeyIndexIterInProgress(ts)
 	return
 }
 
-func (f *memPKFilter) String() string {
+func (f *MemPKFilterInProgress) String() string {
 	var buf bytes.Buffer
 	buf.WriteString(
 		fmt.Sprintf("InMemPKFilter{op: %d, isVec: %v, isValid: %v, val: %v, data(len=%d)",
-			f.op, f.isVec, f.IsValid, f.packed, len(f.packed),
+			f.op, f.isVec, f.isValid, f.packed, len(f.packed),
 		))
 	return buf.String()
 }
 
-func (f *memPKFilter) SetNull() {
-	f.IsValid = false
+func (f *MemPKFilterInProgress) SetNull() {
+	f.isValid = false
 }
 
-func (f *memPKFilter) SetFullData(op int, isVec bool, val ...[]byte) {
+func (f *MemPKFilterInProgress) SetFullData(op int, isVec bool, val ...[]byte) {
 	f.packed = append(f.packed, val...)
 	f.op = op
 	f.isVec = isVec
-	f.IsValid = true
+	f.isValid = true
 }
 
-func (f *memPKFilter) tryConstructPrimaryKeyIndexIter(
-	ts timestamp.Timestamp,
-	state *logtailreplay.PartitionState) {
-	if !f.IsValid {
+func (f *MemPKFilterInProgress) tryConstructPrimaryKeyIndexIterInProgress(ts timestamp.Timestamp) {
+	if !f.isValid {
 		return
 	}
 
+	var spec logtailreplay.PrimaryKeyMatchSpec
+
 	switch f.op {
 	case function.EQUAL, function.PREFIX_EQ:
-		f.Iter = state.NewPrimaryKeyIter(
-			types.TimestampToTS(ts),
-			logtailreplay.Prefix(f.packed[0]),
-		)
-		f.delIterFactory = func(blkId types.Blockid) logtailreplay.RowsIter {
-			return state.NewPrimaryKeyDelIter(
-				types.TimestampToTS(ts),
-				logtailreplay.Prefix(f.packed[0]), blkId)
-		}
+		spec = logtailreplay.Prefix(f.packed[0])
 
 	case function.IN, function.PREFIX_IN:
 		// may be it's better to iterate rows instead.
 		if len(f.packed) > 128 {
 			return
 		}
-
-		f.Iter = state.NewPrimaryKeyIter(
-			types.TimestampToTS(ts),
-			logtailreplay.InKind(f.packed, f.op),
-		)
-		f.delIterFactory = func(blkId types.Blockid) logtailreplay.RowsIter {
-			return state.NewPrimaryKeyDelIter(
-				types.TimestampToTS(ts),
-				logtailreplay.InKind(f.packed, f.op), blkId)
-		}
+		spec = logtailreplay.InKind(f.packed, f.op)
 
 	case function.LESS_EQUAL, function.LESS_THAN:
-		f.Iter = state.NewPrimaryKeyIter(
-			types.TimestampToTS(ts),
-			logtailreplay.LessKind(f.packed[0], f.op == function.LESS_EQUAL),
-		)
-		f.delIterFactory = func(blkId types.Blockid) logtailreplay.RowsIter {
-			return state.NewPrimaryKeyDelIter(
-				types.TimestampToTS(ts),
-				logtailreplay.LessKind(f.packed[0], f.op == function.LESS_EQUAL), blkId)
-		}
+		spec = logtailreplay.LessKind(f.packed[0], f.op == function.LESS_EQUAL)
 
 	case function.GREAT_EQUAL, function.GREAT_THAN:
-		f.Iter = state.NewPrimaryKeyIter(
-			types.TimestampToTS(ts),
-			logtailreplay.GreatKind(f.packed[0], f.op == function.GREAT_EQUAL),
-		)
-		f.delIterFactory = func(blkId types.Blockid) logtailreplay.RowsIter {
-			return state.NewPrimaryKeyDelIter(
-				types.TimestampToTS(ts),
-				logtailreplay.GreatKind(f.packed[0], f.op == function.GREAT_EQUAL), blkId)
-		}
+		spec = logtailreplay.GreatKind(f.packed[0], f.op == function.GREAT_EQUAL)
 
 	case function.BETWEEN, rangeLeftOpen, rangeRightOpen, rangeBothOpen, function.PREFIX_BETWEEN:
 		var kind int
@@ -306,14 +274,9 @@ func (f *memPKFilter) tryConstructPrimaryKeyIndexIter(
 		case function.PREFIX_BETWEEN:
 			kind = 4
 		}
-		f.Iter = state.NewPrimaryKeyIter(
-			types.TimestampToTS(ts),
-			logtailreplay.BetweenKind(f.packed[0], f.packed[1], kind))
 
-		f.delIterFactory = func(blkId types.Blockid) logtailreplay.RowsIter {
-			return state.NewPrimaryKeyDelIter(
-				types.TimestampToTS(ts),
-				logtailreplay.BetweenKind(f.packed[0], f.packed[1], kind), blkId)
-		}
+		spec = logtailreplay.BetweenKind(f.packed[0], f.packed[1], kind)
 	}
+
+	f.Spec = spec
 }

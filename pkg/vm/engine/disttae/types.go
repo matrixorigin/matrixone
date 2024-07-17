@@ -21,8 +21,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/panjf2000/ants/v2"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -47,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/panjf2000/ants/v2"
 )
 
 const (
@@ -623,8 +622,20 @@ type Entry struct {
 	truncate bool
 }
 
-// isGeneratedByTruncate denotes the entry is yielded by the truncate operation.
-func (e *Entry) isGeneratedByTruncate() bool {
+func (e *Entry) DatabaseId() uint64 {
+	return e.databaseId
+}
+
+func (e *Entry) TableId() uint64 {
+	return e.tableId
+}
+
+func (e *Entry) Type() int         { return e.typ }
+func (e *Entry) FileName() string  { return e.fileName }
+func (e *Entry) Bat() *batch.Batch { return e.bat }
+
+// IsGeneratedByTruncate denotes the entry is yielded by the truncate operation.
+func (e *Entry) IsGeneratedByTruncate() bool {
 	return e.typ == DELETE &&
 		e.databaseId == catalog.MO_CATALOG_ID &&
 		e.tableId == catalog.MO_TABLES_ID &&
@@ -819,7 +830,7 @@ type readerInProgress struct {
 	steps        []int
 	currentStep  int
 
-	memFilter memPKFilter
+	memFilter MemPKFilterInProgress
 	//blockFilter blockio.BlockReadFilter
 
 	scanType int
