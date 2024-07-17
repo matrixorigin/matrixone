@@ -1723,8 +1723,7 @@ func (tbl *txnTable) GetDBID(ctx context.Context) uint64 {
 	return tbl.db.databaseId
 }
 
-// local
-func (tbl *txnTable) BuildDataSource(
+func (tbl *txnTable) BuildLocalDataSource(
 	ctx context.Context,
 	ranges []*objectio.BlockInfoInProgress) (source DataSource, err error) {
 
