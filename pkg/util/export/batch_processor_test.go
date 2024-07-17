@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/stack"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 
@@ -162,6 +163,8 @@ func (n *dummyPipeImpl) NewItemBatchHandler(ctx context.Context) func(any) {
 	}
 }
 
+func (n *dummyPipeImpl) NewAggregator(context.Context, string) table.Aggregator { return nil }
+
 var MOCollectorMux sync.Mutex
 
 func TestNewMOCollector(t *testing.T) {
@@ -222,10 +225,10 @@ func TestNewMOCollector_Stop(t *testing.T) {
 	for i := 0; i < N; i++ {
 		collector.Collect(ctx, newDummy(int64(i)))
 	}
-	length := len(collector.awakeCollect)
+	length := collector.awakeQueue.Len()
 	dropCnt := collector.stopDrop.Load()
 	t.Logf("channal len: %d, dropCnt: %d, totalElem: %d", length, dropCnt, N)
-	require.Equal(t, N, int(dropCnt)+length)
+	require.Equal(t, N, int(dropCnt)+int(length))
 }
 
 func TestNewMOCollector_BufferCnt(t *testing.T) {
@@ -379,12 +382,12 @@ func TestMOCollector_DiscardableCollect(t *testing.T) {
 	for i := 0; i < defaultQueueSize; i++ {
 		collector.Collect(ctx, elem)
 	}
-	require.Equal(t, defaultQueueSize, len(collector.awakeCollect))
+	require.Equal(t, defaultQueueSize, collector.awakeQueue.Len())
 
 	// check DisableStore will discard
 	now := time.Now()
 	collector.DiscardableCollect(ctx, elem)
-	require.Equal(t, defaultQueueSize, len(collector.awakeCollect))
+	require.Equal(t, defaultQueueSize, collector.awakeQueue.Len())
 	require.True(t, time.Since(now) > discardCollectTimeout)
 	t.Logf("DiscardableCollect accept")
 }
