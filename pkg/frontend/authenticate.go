@@ -905,12 +905,12 @@ var (
 		"mo_transactions":             0,
 		"mo_cache":                    0,
 		"mo_snapshots":                0,
-		"mo_pitr":                     0,
 	}
 	sysAccountTables = map[string]struct{}{
 		catalog.MOVersionTable:       {},
 		catalog.MOUpgradeTable:       {},
 		catalog.MOUpgradeTenantTable: {},
+		catalog.MO_PITR:              {},
 	}
 	//predefined tables of the database mo_catalog in every account
 	predefinedTables = map[string]int8{
@@ -939,7 +939,6 @@ var (
 		"mo_cache":                    0,
 		"mo_foreign_keys":             0,
 		"mo_snapshots":                0,
-		"mo_pitr":                     0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = MoCatalogMoAutoIncrTableDDL
@@ -972,7 +971,6 @@ var (
 		MoCatalogMoVariablesDDL,
 		MoCatalogMoTransactionsDDL,
 		MoCatalogMoCacheDDL,
-		MoCatalogMoPitrDDL,
 	}
 
 	//drop tables for the tenant

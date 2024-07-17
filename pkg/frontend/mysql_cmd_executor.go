@@ -1167,18 +1167,15 @@ func handleRestoreSnapshot(ses *Session, execCtx *ExecCtx, rs *tree.RestoreSnapS
 }
 
 func handleCreatePitr(ses *Session, execCtx *ExecCtx, cp *tree.CreatePitr) error {
-	//return doCreatePitr(execCtx.reqCtx, ses, cp)
-	return nil
+	return doCreatePitr(execCtx.reqCtx, ses, cp)
 }
 
 func handleDropPitr(ses *Session, execCtx *ExecCtx, dp *tree.DropPitr) error {
-	//return doDropPitr(execCtx.reqCtx, ses, dp)
-	return nil
+	return doDropPitr(execCtx.reqCtx, ses, dp)
 }
 
 func handleAlterPitr(ses *Session, execCtx *ExecCtx, ap *tree.AlterPitr) error {
-	//return doAlterPitr(execCtx.reqCtx, ses, ap)
-	return nil
+	return doAlterPitr(execCtx.reqCtx, ses, ap)
 }
 
 func handleRestorePitr(ses *Session, execCtx *ExecCtx, rp *tree.RestorePitr) error {

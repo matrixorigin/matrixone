@@ -170,6 +170,10 @@ func (tcc *TxnCompilerContext) GetContext() context.Context {
 	return tcc.execCtx.reqCtx
 }
 
+func (tcc *TxnCompilerContext) SetContext(ctx context.Context) {
+	tcc.execCtx.reqCtx = ctx
+}
+
 func (tcc *TxnCompilerContext) DatabaseExists(name string, snapshot plan2.Snapshot) bool {
 	var err error
 	tempCtx := tcc.execCtx.reqCtx
