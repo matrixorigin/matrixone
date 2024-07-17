@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -660,6 +661,7 @@ type service struct {
 		// counter recording the total number of running pipelines,
 		// details are not recorded for simplicity as suggested by @nnsgmsone
 		counter atomic.Int64
+		client  cnclient.PipelineClient
 	}
 }
 

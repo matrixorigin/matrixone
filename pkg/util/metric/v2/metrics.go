@@ -74,6 +74,8 @@ func initTaskMetrics() {
 	registry.MustRegister(taskGeneratedStuffCounter)
 	registry.MustRegister(taskSelectivityCounter)
 
+	registry.MustRegister(transferPageHitHistogram)
+	registry.MustRegister(TransferPageRowHistogram)
 	registry.MustRegister(TaskMergeTransferPageLengthGauge)
 
 	registry.MustRegister(TaskStorageUsageCacheMemUsedGauge)
@@ -81,7 +83,6 @@ func initTaskMetrics() {
 
 func initFileServiceMetrics() {
 	registry.MustRegister(fsReadCounter)
-	registry.MustRegister(fsWriteCounter)
 	registry.MustRegister(S3ConnectCounter)
 	registry.MustRegister(S3DNSResolveCounter)
 
@@ -91,8 +92,8 @@ func initFileServiceMetrics() {
 
 	registry.MustRegister(ioMergerCounter)
 	registry.MustRegister(ioMergerDuration)
-	registry.MustRegister(fsMallocLiveObjects)
 	registry.MustRegister(fsReadWriteDuration)
+	registry.MustRegister(FSObjectStorageOperations)
 }
 
 func initLogtailMetrics() {
