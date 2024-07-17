@@ -95,7 +95,7 @@ func prepareRemoteRunSendingData(sqlStr string, s *Scope) (scopeData []byte, pro
 	}
 	rootOp.GetOperatorBase().SetChildren(nil)
 	defer func() {
-		s.appendOperator(rootOp)
+		s.doSetRootOperator(rootOp)
 	}()
 
 	if scopeData, err = encodeScope(s); err != nil {
@@ -205,7 +205,7 @@ type messageSenderOnClient struct {
 func newMessageSenderOnClient(
 	ctx context.Context, toAddr string, mp *mpool.MPool, ana *anaylze) (*messageSenderOnClient, error) {
 
-	streamSender, err := cnclient.GetStreamSender(toAddr)
+	streamSender, err := cnclient.GetPipelineClient().NewStream(toAddr)
 	if err != nil {
 		return nil, err
 	}

@@ -88,7 +88,12 @@ func newServerConn(cn *CNServer, tun *tunnel, r *rebalancer, timeout time.Durati
 	}
 	fp := config.FrontendParameters{}
 	fp.SetDefaultValues()
-	s.mysqlProto = frontend.NewMysqlClientProtocol(s.connID, c, 0, &fp)
+	pu := config.NewParameterUnit(&fp, nil, nil, nil)
+	ios, err := frontend.NewIOSession(c.RawConn(), pu)
+	if err != nil {
+		return nil, err
+	}
+	s.mysqlProto = frontend.NewMysqlClientProtocol(s.connID, ios, 0, &fp)
 	return s, nil
 }
 

@@ -2993,12 +2993,12 @@ func (collector *BaseCollector) fillObjectInfoBatch(entry *catalog.ObjectEntry, 
 		}
 		create := node.End.Equal(&entry.CreatedAt)
 		if entry.IsAppendable() && create {
-			visitObject(collector.data.bats[TNObjectInfoIDX], entry, node, create, false, types.TS{})
+			visitObject(collector.data.bats[TNObjectInfoIDX], entry, node, create, false, types.TS{}, false)
 		} else {
 			if entry.IsAppendable() && entry.DeletedAt.IsEmpty() {
 				panic(fmt.Sprintf("logic error, object %v", entry.ID().String()))
 			}
-			visitObject(collector.data.bats[ObjectInfoIDX], entry, node, create, false, types.TS{})
+			visitObject(collector.data.bats[ObjectInfoIDX], entry, node, create, false, types.TS{}, true)
 		}
 		objNode := node
 
@@ -3030,9 +3030,6 @@ func (collector *BaseCollector) VisitObjForBackup(entry *catalog.ObjectEntry) (e
 }
 
 func (collector *BaseCollector) VisitObj(entry *catalog.ObjectEntry) (err error) {
-	if !entry.IsCommitted() {
-		return
-	}
 	collector.visitObjectEntry(entry)
 	return nil
 }
@@ -3098,7 +3095,7 @@ func (collector *BaseCollector) VisitGlobalTombstone(entry data.Tombstone) (err 
 }
 
 func (collector *GlobalCollector) VisitTombstone(entry data.Tombstone) error {
-	obj := entry.GetObject().(*catalog.ObjectEntry)
+	obj := entry.GetObject().(*catalog.ObjectEntry).GetLatestNode()
 	if obj.DeleteBefore(collector.versionThershold) && !obj.InMemoryDeletesExisted() && obj.IsDeletesFlushedBefore(collector.versionThershold) {
 		return nil
 	}

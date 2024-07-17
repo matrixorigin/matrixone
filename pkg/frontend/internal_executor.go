@@ -19,8 +19,6 @@ import (
 	"math"
 	"sync"
 
-	"github.com/fagongzi/goetty/v2"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -281,7 +279,12 @@ func (ip *internalProtocol) GetBool(PropertyID) bool {
 }
 
 func (ip *internalProtocol) Write(execCtx *ExecCtx, bat *batch.Batch) error {
-	return fillResultSet(execCtx.reqCtx, bat, execCtx.ses, execCtx.ses.GetMysqlResultSet())
+	mrs := execCtx.ses.GetMysqlResultSet()
+	err := fillResultSet(execCtx.reqCtx, bat, execCtx.ses, mrs)
+	if err != nil {
+		return err
+	}
+	return ip.sendRows(mrs, uint64(bat.RowCount()))
 }
 
 func (ip *internalProtocol) WriteHandshake() error {
@@ -355,7 +358,12 @@ func (ip *internalProtocol) WritePrepareResponse(ctx context.Context, stmt *Prep
 	return nil
 }
 
-func (ip *internalProtocol) Read(options goetty.ReadOptions) (interface{}, error) {
+func (ip *internalProtocol) Read() ([]byte, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (ip *internalProtocol) Free(buf []byte) {
 	//TODO implement me
 	panic("implement me")
 }

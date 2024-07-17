@@ -317,9 +317,7 @@ func generateScopeWithRootOperator(proc *process.Process, operatorList []vm.OpTy
 	}
 
 	for i := 0; i < len(operatorList); i++ {
-		ret.appendInstruction(vm.Instruction{
-			Arg: simpleFakeArgument(operatorList[i]),
-		})
+		ret.setRootOperator(simpleFakeArgument(operatorList[i]))
 	}
 	return ret
 }
