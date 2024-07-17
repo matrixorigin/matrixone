@@ -18,8 +18,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/util"
 	"slices"
+
+	"github.com/matrixorigin/matrixone/pkg/util"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -148,7 +149,7 @@ func ReadOneBlockWithMeta(
 ) (ioVec *fileservice.IOVector, err error) {
 	ioVec = &fileservice.IOVector{
 		FilePath: name,
-		Entries:  make([]fileservice.IOEntry, 0),
+		Entries:  make([]fileservice.IOEntry, 0, len(seqnums)),
 		Policy:   policy,
 	}
 
