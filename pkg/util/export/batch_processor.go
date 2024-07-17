@@ -72,6 +72,8 @@ type bufferHolder struct {
 	// trigger handle Reminder strategy
 	trigger *time.Timer
 
+	aggr table.Aggregator
+
 	mux sync.Mutex
 	// stopped mark
 	stopped bool
@@ -97,6 +99,7 @@ func newBufferHolder(ctx context.Context, name batchpipe.HasName, impl motrace.P
 	b.mux.Lock()
 	defer b.mux.Unlock()
 	b.trigger = time.AfterFunc(time.Hour, func() {})
+	b.aggr = impl.NewAggregator(ctx, b.name)
 	return b
 }
 
@@ -164,7 +167,16 @@ func (b *bufferHolder) Add(item batchpipe.HasName) {
 		b.buffer = b.getBuffer()
 	}
 
-	// TODO: handle aggr action.
+	if b.aggr != nil {
+		if i, ok := item.(table.Item); ok {
+			_, err := b.aggr.AddItem(i)
+			if err == nil {
+				// aggred, then return
+				i.Free()
+				return
+			}
+		}
+	}
 
 	buf := b.buffer
 	buf.Add(item)
@@ -228,6 +240,16 @@ func (b *bufferHolder) getGenerateReq() generateReq {
 	if b.buffer == nil || b.buffer.IsEmpty() {
 		return nil
 	}
+
+	// handle aggr
+	// fixme: handle now ? or run regular
+	end := time.Now().Truncate(b.aggr.GetWindow())
+	results := b.aggr.GetResultsBeforeWindow(end)
+	for _, res := range results {
+		b.buffer.Add(res)
+	}
+	// END> handle aggr
+
 	req := &bufferGenerateReq{
 		buffer: b.buffer,
 		b:      b,

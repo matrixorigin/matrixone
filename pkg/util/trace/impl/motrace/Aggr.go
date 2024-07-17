@@ -19,19 +19,16 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 )
-
-type Item interface {
-	Key(duration time.Duration) interface{}
-}
 
 type Aggregator struct {
 	ctx         context.Context
-	Grouped     map[interface{}]Item
+	Grouped     map[table.WindowKey]table.Item
 	WindowSize  time.Duration
-	NewItemFunc func(i Item, ctx context.Context) Item
-	UpdateFunc  func(ctx context.Context, existing, new Item)
-	FilterFunc  func(i Item) bool
+	NewItemFunc func(i table.Item, ctx context.Context) table.Item
+	UpdateFunc  func(ctx context.Context, existing, new table.Item)
+	FilterFunc  func(i table.Item) bool
 }
 
 type key int
@@ -40,11 +37,11 @@ const (
 	DurationKey key = iota
 )
 
-func NewAggregator(ctx context.Context, windowSize time.Duration, newItemFunc func(i Item, ctx context.Context) Item, updateFunc func(ctx context.Context, existing, new Item), filterFunc func(i Item) bool) *Aggregator {
+func NewAggregator(ctx context.Context, windowSize time.Duration, newItemFunc func(i table.Item, ctx context.Context) table.Item, updateFunc func(ctx context.Context, existing, new table.Item), filterFunc func(i table.Item) bool) *Aggregator {
 	ctx = context.WithValue(ctx, DurationKey, windowSize)
 	return &Aggregator{
 		ctx:         ctx,
-		Grouped:     make(map[interface{}]Item),
+		Grouped:     make(map[table.WindowKey]table.Item),
 		WindowSize:  windowSize,
 		NewItemFunc: newItemFunc,
 		UpdateFunc:  updateFunc,
@@ -62,12 +59,12 @@ func (a *Aggregator) Close() {
 		}
 	}
 	// clean up the Grouped map
-	a.Grouped = make(map[interface{}]Item)
+	a.Grouped = make(map[table.WindowKey]table.Item)
 	// release resources related to the context if necessary
 	a.ctx = nil
 }
 
-func (a *Aggregator) AddItem(i Item) (Item, error) {
+func (a *Aggregator) AddItem(i table.Item) (table.Item, error) {
 	if !a.FilterFunc(i) {
 		return i, ErrFilteredOut
 	}
@@ -83,10 +80,22 @@ func (a *Aggregator) AddItem(i Item) (Item, error) {
 	return nil, nil
 }
 
-func (a *Aggregator) GetResults() []Item {
-	results := make([]Item, 0, len(a.Grouped))
+func (a *Aggregator) GetResults() []table.Item {
+	results := make([]table.Item, 0, len(a.Grouped))
 	for _, group := range a.Grouped {
 		results = append(results, group)
+	}
+	return results
+}
+
+func (a *Aggregator) GetWindow() time.Duration { return a.WindowSize }
+
+func (a *Aggregator) GetResultsBeforeWindow(end time.Time) []table.Item {
+	results := make([]table.Item, 0, len(a.Grouped))
+	for key, group := range a.Grouped {
+		if key.Before(end) {
+			results = append(results, group)
+		}
 	}
 	return results
 }

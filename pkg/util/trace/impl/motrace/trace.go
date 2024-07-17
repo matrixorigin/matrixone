@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
@@ -266,7 +267,11 @@ func GetSQLExecutorFactory() func() ie.InternalExecutor {
 	return nil
 }
 
-type PipeImpl batchpipe.PipeImpl[batchpipe.HasName, any]
+type PipeImpl interface {
+	batchpipe.PipeImpl[batchpipe.HasName, any]
+	// NewAggregator get new aggr
+	NewAggregator(context.Context, string) table.Aggregator
+}
 
 type BatchProcessor interface {
 	Collect(context.Context, batchpipe.HasName) error

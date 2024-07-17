@@ -55,7 +55,7 @@ type batchETLHandler struct {
 	defaultOpts []BufferOption
 }
 
-func NewBufferPipe2CSVWorker(opt ...BufferOption) bp.PipeImpl[bp.HasName, any] {
+func NewBufferPipe2CSVWorker(opt ...BufferOption) PipeImpl {
 	return &batchETLHandler{opt}
 }
 
@@ -106,6 +106,26 @@ func (t batchETLHandler) NewItemBatchHandler(ctx context.Context) func(b any) {
 		}
 	}
 	return f
+}
+
+func (t batchETLHandler) NewAggregator(ctx context.Context, name string) table.Aggregator {
+	switch name {
+	case MOStatementType, SingleStatementTable.GetName():
+		return NewAggregator(
+			ctx,
+			GetTracerProvider().aggregationWindow,
+			StatementInfoNew,
+			StatementInfoUpdate,
+			StatementInfoFilter,
+		)
+	case MOErrorType:
+	case MOSpanType:
+	case MOLogType:
+	case MORawLogType:
+	default:
+		logutil.Warnf("batchETLHandler handle new type: %s", name)
+	}
+	return nil
 }
 
 type WriteFactoryConfig struct {
