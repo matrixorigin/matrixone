@@ -55,7 +55,7 @@ func newMemPKFilterInProgress(
 
 	filter.TS = types.TimestampToTS(ts)
 
-	if tableDef.Pkey == nil || !basePKFilter.valid {
+	if !basePKFilter.valid || tableDef.Pkey == nil {
 		return
 	}
 
