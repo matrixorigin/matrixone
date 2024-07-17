@@ -2200,32 +2200,3 @@ func Find[T ~string | ~int, S any](data map[T]S, val T) bool {
 	}
 	return false
 }
-
-type UnorderedMap[KT ~string | ~int, VT any] map[KT]VT
-
-func (umap UnorderedMap[KT, VT]) Insert(k KT, v VT) {
-	umap[k] = v
-}
-
-func (umap UnorderedMap[KT, VT]) Find(k KT) (ok bool, v VT) {
-	v, ok = umap[k]
-	return ok, v
-}
-
-func (umap UnorderedMap[KT, VT]) Count(k KT) int {
-	_, ok := umap[k]
-	if ok {
-		return 1
-	}
-	return 0
-}
-
-func (umap UnorderedMap[KT, VT]) Size() int {
-	return len(umap)
-}
-
-func AssertFunc(b bool, errInfo string) {
-	if !b {
-		panic(errInfo)
-	}
-}

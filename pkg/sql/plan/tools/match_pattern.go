@@ -16,8 +16,6 @@ package tools
 
 import (
 	"context"
-	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -51,12 +49,12 @@ func TTableScanWithoutColRef(tableName string) *MatchPattern {
 	})
 }
 
-func TTableScan(tableName string, colRefs plan.UnorderedMap[string, string]) *MatchPattern {
+func TTableScan(tableName string, colRefs UnorderedMap[string, string]) *MatchPattern {
 	ret := TTableScanWithoutColRef(tableName)
 	return ret.AddColRefs(tableName, colRefs)
 }
 
-func TStrictTableScan(tableName string, colRefs plan.UnorderedMap[string, string]) *MatchPattern {
+func TStrictTableScan(tableName string, colRefs UnorderedMap[string, string]) *MatchPattern {
 	ret := TTableScan(tableName, colRefs)
 	newColRes := make([]RValueMatcher, 0)
 	for _, val := range colRefs {
@@ -88,7 +86,7 @@ func TProjectWithoutAssignments(child *MatchPattern) *MatchPattern {
 	return TNode(plan2.Node_PROJECT, child)
 }
 
-func TProject(assigns plan.UnorderedMap[string, *ExprMatcher], child *MatchPattern) *MatchPattern {
+func TProject(assigns UnorderedMap[string, *ExprMatcher], child *MatchPattern) *MatchPattern {
 	ret := TProjectWithoutAssignments(child)
 	for k, matcher := range assigns {
 		ret.WithAlias(k, matcher)
@@ -96,7 +94,7 @@ func TProject(assigns plan.UnorderedMap[string, *ExprMatcher], child *MatchPatte
 	return ret
 }
 
-func TStrictProject(assigns plan.UnorderedMap[string, *ExprMatcher], child *MatchPattern) *MatchPattern {
+func TStrictProject(assigns UnorderedMap[string, *ExprMatcher], child *MatchPattern) *MatchPattern {
 	ret := TProject(assigns, child)
 	matchers := make([]RValueMatcher, 0)
 	for _, matcher := range assigns {
@@ -118,7 +116,7 @@ func TJoin(joinTyp plan2.Node_JoinType,
 		NewJoinMatcher(joinTyp, onConds, filters))
 }
 
-func TAggr(aggrs plan.UnorderedMap[string, *AggrFuncMatcher], children ...*MatchPattern) *MatchPattern {
+func TAggr(aggrs UnorderedMap[string, *AggrFuncMatcher], children ...*MatchPattern) *MatchPattern {
 	ret := TNode(plan2.Node_AGG, children...)
 
 	for k, matcher := range aggrs {
@@ -137,7 +135,7 @@ func (pattern *MatchPattern) MatchAnyTree() *MatchPattern {
 	return pattern
 }
 
-func (pattern *MatchPattern) AddColRefs(name string, refs plan.UnorderedMap[string, string]) *MatchPattern {
+func (pattern *MatchPattern) AddColRefs(name string, refs UnorderedMap[string, string]) *MatchPattern {
 	for key, val := range refs {
 		pattern.WithAlias(key, TColumnRef(name, val))
 	}
@@ -214,7 +212,7 @@ func (pattern *MatchPattern) WithExactOutputs(outputs ...string) *MatchPattern {
 	pattern.Matchers = append(pattern.Matchers,
 		&SymbolsMatcher{
 			GetFunc: func(builder *plan.QueryBuilder, node *plan2.Node) []VarRef {
-				plan.AssertFunc(node.NodeType == plan2.Node_PROJECT, "must be project node")
+				AssertFunc(node.NodeType == plan2.Node_PROJECT, "must be project node")
 				ret := make([]VarRef, 0)
 				for _, expr := range node.ProjectList {
 					col := expr.GetCol()
@@ -274,8 +272,8 @@ func DeepMatch(
 	ctx context.Context,
 	node *plan2.Node,
 	pattern *MatchPattern,
-	aliases plan.UnorderedMap[string, string]) (*MatchResult, error) {
-	newAliases := make(plan.UnorderedMap[string, string])
+	aliases UnorderedMap[string, string]) (*MatchResult, error) {
+	newAliases := make(UnorderedMap[string, string])
 	for _, matcher := range pattern.Matchers {
 		res, err := matcher.DeepMatch(ctx, node, aliases)
 		if err != nil {
@@ -350,17 +348,12 @@ func (state *MatchingState) IsEnd() bool {
 }
 
 func MatchSteps(ctx context.Context, query *plan2.Query, pattern *MatchPattern) (*MatchResult, error) {
-	fmt.Println(pattern)
-	for _, step := range query.Steps {
-		res, err := Match(ctx, query.Nodes, query.Nodes[step], pattern)
-		if err != nil {
-			return nil, err
-		}
-		if !res.IsMatch {
-			return res, nil
-		}
+	//fmt.Println(pattern)
+	res, err := Match(ctx, query.Nodes, query.Nodes[query.Steps[0]], pattern)
+	if err != nil {
+		return nil, err
 	}
-	return Matched(), nil
+	return res, nil
 }
 
 func Match(ctx context.Context, nodes []*plan2.Node, node *plan2.Node, pattern *MatchPattern) (*MatchResult, error) {
@@ -411,7 +404,7 @@ func MatchChildren(ctx context.Context,
 		return nil, moerr.NewInternalError(ctx, "patterns count != children count")
 	}
 
-	resAliases := make(plan.UnorderedMap[string, string])
+	resAliases := make(UnorderedMap[string, string])
 	for i, child := range node.Children {
 		childRes, err := Match(ctx, nodes, nodes[child], state.Patterns[i])
 		if err != nil {
@@ -437,7 +430,7 @@ func MatchLeaf(ctx context.Context,
 		if !state.IsEnd() {
 			continue
 		}
-		deepRes, err := DeepMatch(ctx, node, pattern, make(plan.UnorderedMap[string, string]))
+		deepRes, err := DeepMatch(ctx, node, pattern, make(UnorderedMap[string, string]))
 		if err != nil {
 			return nil, err
 		}
@@ -452,8 +445,8 @@ func MatchLeaf(ctx context.Context,
 }
 
 func MergeAliasesReturnNew(ctx context.Context,
-	aliases1, aliases2 plan.UnorderedMap[string, string]) (plan.UnorderedMap[string, string], error) {
-	ret := make(plan.UnorderedMap[string, string])
+	aliases1, aliases2 UnorderedMap[string, string]) (UnorderedMap[string, string], error) {
+	ret := make(UnorderedMap[string, string])
 	for k, v := range aliases1 {
 		ret.Insert(k, v)
 	}
@@ -469,7 +462,7 @@ func MergeAliasesReturnNew(ctx context.Context,
 }
 
 func MergeAliases(ctx context.Context,
-	aliases1, aliases2 plan.UnorderedMap[string, string]) error {
+	aliases1, aliases2 UnorderedMap[string, string]) error {
 
 	//merge aliases2
 	for k, v := range aliases2 {
@@ -481,7 +474,7 @@ func MergeAliases(ctx context.Context,
 	return nil
 }
 
-func Insert(ctx context.Context, aliases plan.UnorderedMap[string, string], k, v string) error {
+func Insert(ctx context.Context, aliases UnorderedMap[string, string], k, v string) error {
 	ok, ev := aliases.Find(k)
 	if ok && ev == v {
 		return nil
@@ -491,68 +484,4 @@ func Insert(ctx context.Context, aliases plan.UnorderedMap[string, string], k, v
 	}
 	aliases.Insert(k, v)
 	return nil
-}
-
-func NewStringMap(pairs ...StringPair) plan.UnorderedMap[string, string] {
-	ret := make(plan.UnorderedMap[string, string])
-	for _, pair := range pairs {
-		ret[pair.Key] = pair.Value
-	}
-	return ret
-}
-
-func StringsEqual(a, b []string) bool {
-	alen := len(a)
-	blen := len(b)
-	if alen != blen {
-		return false
-	}
-	if alen == 0 {
-		return true
-	}
-	sort.Strings(a)
-	sort.Strings(b)
-	for i, s := range a {
-		if s != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func VarRefEqual(a, b []VarRef) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	alen := len(a)
-	if alen == 0 {
-		return true
-	}
-	sort.Slice(a, func(i, j int) bool { return a[i].Name < a[j].Name })
-	sort.Slice(b, func(i, j int) bool { return b[i].Name < b[j].Name })
-	for i := 0; i < alen; i++ {
-		if a[i].Name != b[i].Name {
-			return false
-		}
-		if a[i].Type.Id != b[i].Type.Id {
-			return false
-		}
-	}
-	return true
-}
-
-func NewAssignMap(pairs ...AssignPair) plan.UnorderedMap[string, *ExprMatcher] {
-	ret := make(plan.UnorderedMap[string, *ExprMatcher])
-	for _, pair := range pairs {
-		ret.Insert(pair.Key, pair.Value)
-	}
-	return ret
-}
-
-func NewAggrMap(pairs ...AggrPair) plan.UnorderedMap[string, *AggrFuncMatcher] {
-	ret := make(plan.UnorderedMap[string, *AggrFuncMatcher])
-	for _, pair := range pairs {
-		ret.Insert(pair.Key, pair.Value)
-	}
-	return ret
 }

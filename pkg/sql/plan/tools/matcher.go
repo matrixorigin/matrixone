@@ -58,7 +58,7 @@ func (matcher *NodeMatcher) SimpleMatch(node *plan2.Node) bool {
 	return node.NodeType == matcher.NodeType
 }
 
-func (matcher *NodeMatcher) DeepMatch(ctx context.Context, node *plan.Node, aliases plan.UnorderedMap[string, string]) (*MatchResult, error) {
+func (matcher *NodeMatcher) DeepMatch(ctx context.Context, node *plan.Node, aliases UnorderedMap[string, string]) (*MatchResult, error) {
 	if !matcher.SimpleMatch(node) {
 		return nil, moerr.NewInternalError(ctx, "simple mach failed.")
 	}
@@ -67,7 +67,7 @@ func (matcher *NodeMatcher) DeepMatch(ctx context.Context, node *plan.Node, alia
 
 type TableScanMatcher struct {
 	TableName  string
-	Constraint plan.UnorderedMap[string, *Domain]
+	Constraint UnorderedMap[string, *Domain]
 }
 
 func (matcher *TableScanMatcher) String() string {
@@ -78,7 +78,7 @@ func (matcher *TableScanMatcher) SimpleMatch(node *plan.Node) bool {
 	return node.NodeType == plan2.Node_TABLE_SCAN
 }
 
-func (matcher *TableScanMatcher) DeepMatch(ctx context.Context, node *plan.Node, aliases plan.UnorderedMap[string, string]) (*MatchResult, error) {
+func (matcher *TableScanMatcher) DeepMatch(ctx context.Context, node *plan.Node, aliases UnorderedMap[string, string]) (*MatchResult, error) {
 	if !matcher.SimpleMatch(node) {
 		return nil, moerr.NewInternalError(ctx, "simple mach failed.")
 	}
@@ -87,7 +87,7 @@ func (matcher *TableScanMatcher) DeepMatch(ctx context.Context, node *plan.Node,
 		return nil, moerr.NewInternalError(ctx, "simple mach failed.")
 	}
 	if matcher.Constraint != nil {
-		panic("add constraint check")
+		return nil, moerr.NewInternalError(ctx, "add constraint check")
 	}
 	return Matched(), nil
 }
@@ -108,7 +108,7 @@ func (matcher *AliasMatcher) SimpleMatch(node *plan.Node) bool {
 	return true
 }
 
-func (matcher *AliasMatcher) DeepMatch(ctx context.Context, node *plan.Node, aliases plan.UnorderedMap[string, string]) (*MatchResult, error) {
+func (matcher *AliasMatcher) DeepMatch(ctx context.Context, node *plan.Node, aliases UnorderedMap[string, string]) (*MatchResult, error) {
 	varRef, err := matcher.Matcher.GetAssignedVar(node, aliases)
 	if err != nil {
 		return nil, err
@@ -128,7 +128,7 @@ func (matcher *ColumnRef) String() string {
 	return fmt.Sprintf("Column %s:%s", matcher.TableName, matcher.ColumnName)
 }
 
-func (matcher *ColumnRef) GetAssignedVar(node *plan2.Node, aliases plan.UnorderedMap[string, string]) (*VarRef, error) {
+func (matcher *ColumnRef) GetAssignedVar(node *plan2.Node, aliases UnorderedMap[string, string]) (*VarRef, error) {
 	if node.NodeType != plan2.Node_TABLE_SCAN {
 		return nil, nil
 	}
@@ -164,7 +164,7 @@ func (matcher *SymbolsMatcher) SimpleMatch(node *plan.Node) bool {
 	return true
 }
 
-func (matcher *SymbolsMatcher) DeepMatch(ctx context.Context, node *plan.Node, aliases plan.UnorderedMap[string, string]) (*MatchResult, error) {
+func (matcher *SymbolsMatcher) DeepMatch(ctx context.Context, node *plan.Node, aliases UnorderedMap[string, string]) (*MatchResult, error) {
 	if !matcher.SimpleMatch(node) {
 		return FailMatched(), nil
 	}
@@ -198,7 +198,7 @@ func (matcher *AssignedSymbolsMatcher) SimpleMatch(node *plan.Node) bool {
 	return true
 }
 
-func (matcher *AssignedSymbolsMatcher) DeepMatch(ctx context.Context, node *plan.Node, aliases plan.UnorderedMap[string, string]) (*MatchResult, error) {
+func (matcher *AssignedSymbolsMatcher) DeepMatch(ctx context.Context, node *plan.Node, aliases UnorderedMap[string, string]) (*MatchResult, error) {
 	if !matcher.SimpleMatch(node) {
 		return FailMatched(), nil
 	}
@@ -216,7 +216,7 @@ func (matcher *AssignedSymbolsMatcher) DeepMatch(ctx context.Context, node *plan
 		expectCols = append(expectCols, *varRef)
 	}
 
-	return NewMatchResult(VarRefEqual(realCols, expectCols), nil), nil
+	return NewMatchResult(VarRefsEqual(realCols, expectCols), nil), nil
 }
 
 type OutputMatcher struct {
@@ -231,7 +231,7 @@ func (matcher *OutputMatcher) SimpleMatch(node *plan.Node) bool {
 	return node.NodeType == plan2.Node_PROJECT
 }
 
-func (matcher *OutputMatcher) DeepMatch(ctx context.Context, node *plan.Node, aliases plan.UnorderedMap[string, string]) (*MatchResult, error) {
+func (matcher *OutputMatcher) DeepMatch(ctx context.Context, node *plan.Node, aliases UnorderedMap[string, string]) (*MatchResult, error) {
 	for _, alias := range matcher.Aliases {
 		ok, ref := aliases.Find(alias)
 		if !ok {
@@ -274,7 +274,7 @@ func NewExprMatcher(sql string) *ExprMatcher {
 	}
 }
 
-func (matcher *ExprMatcher) GetAssignedVar(node *plan2.Node, aliases plan.UnorderedMap[string, string]) (*VarRef, error) {
+func (matcher *ExprMatcher) GetAssignedVar(node *plan2.Node, aliases UnorderedMap[string, string]) (*VarRef, error) {
 	var res *VarRef
 	checkedExprs := make([]*plan2.Expr, 0)
 	for _, expr := range node.ProjectList {
@@ -345,7 +345,7 @@ func (matcher *JoinMatcher) SimpleMatch(node *plan2.Node) bool {
 		node.JoinType == matcher.JoinTyp
 }
 
-func (matcher *JoinMatcher) DeepMatch(ctx context.Context, node *plan2.Node, aliases plan.UnorderedMap[string, string]) (*MatchResult, error) {
+func (matcher *JoinMatcher) DeepMatch(ctx context.Context, node *plan2.Node, aliases UnorderedMap[string, string]) (*MatchResult, error) {
 	if !matcher.SimpleMatch(node) {
 		return FailMatched(), nil
 	}
@@ -413,7 +413,7 @@ func NewAggrFuncMatcher(s string) *AggrFuncMatcher {
 	return ret
 }
 
-func (matcher *AggrFuncMatcher) GetAssignedVar(node *plan2.Node, aliases plan.UnorderedMap[string, string]) (*VarRef, error) {
+func (matcher *AggrFuncMatcher) GetAssignedVar(node *plan2.Node, aliases UnorderedMap[string, string]) (*VarRef, error) {
 	if node.NodeType != plan2.Node_AGG {
 		return nil, nil
 	}

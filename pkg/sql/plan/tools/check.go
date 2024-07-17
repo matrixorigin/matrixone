@@ -25,7 +25,7 @@ import (
 )
 
 type ExprChecker struct {
-	Aliases plan2.UnorderedMap[string, string]
+	Aliases UnorderedMap[string, string]
 }
 
 func (checker *ExprChecker) Check(astExpr tree.Expr, expr *plan2.Expr) (bool, error) {

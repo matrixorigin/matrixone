@@ -31,7 +31,7 @@ func Test_output(t *testing.T) {
 				TColumnRef("lineitem", "l_orderkey"),
 			),
 		).WithOutputs("L_ORDERKEY")
-	err := AssertPlan(context.Background(), nil, "SELECT l_orderkey FROM lineitem", p)
+	err := AssertPlan(context.Background(), "SELECT l_orderkey FROM lineitem", p)
 	assert.Nil(t, err)
 }
 
@@ -44,7 +44,7 @@ func Test_outputTwoColumns(t *testing.T) {
 				),
 			),
 		)
-	err := AssertPlan(context.Background(), nil, "SELECT l_orderkey, l_orderkey FROM lineitem", p)
+	err := AssertPlan(context.Background(), "SELECT l_orderkey, l_orderkey FROM lineitem", p)
 	assert.Nil(t, err)
 }
 
@@ -57,8 +57,7 @@ func Test_outputTwoColumns2(t *testing.T) {
 				),
 			),
 		)
-	err := AssertPlan(context.Background(), nil,
-		"SELECT l_extendedprice, l_orderkey, l_discount, l_orderkey, l_linenumber FROM lineitem", p)
+	err := AssertPlan(context.Background(), "SELECT l_extendedprice, l_orderkey, l_discount, l_orderkey, l_linenumber FROM lineitem", p)
 	assert.Nil(t, err)
 }
 
@@ -72,8 +71,7 @@ func Test_strictOutput(t *testing.T) {
 				),
 			),
 		)
-	err := AssertPlan(context.Background(), nil,
-		"SELECT  l_orderkey, l_extendedprice FROM lineitem", p)
+	err := AssertPlan(context.Background(), "SELECT  l_orderkey, l_extendedprice FROM lineitem", p)
 	assert.Nil(t, err)
 }
 
@@ -87,8 +85,7 @@ func Test_strictTableScan(t *testing.T) {
 				),
 			),
 		)
-	err := AssertPlan(context.Background(), nil,
-		"SELECT  l_orderkey, l_extendedprice FROM lineitem", p)
+	err := AssertPlan(context.Background(), "SELECT  l_orderkey, l_extendedprice FROM lineitem", p)
 	assert.Nil(t, err)
 }
 
@@ -104,8 +101,7 @@ func Test_constant(t *testing.T) {
 				),
 			),
 		)
-	err := AssertPlan(context.Background(), nil,
-		"SELECT  l_orderkey, 2 FROM lineitem group by l_orderkey", p)
+	err := AssertPlan(context.Background(), "SELECT  l_orderkey, 2 FROM lineitem group by l_orderkey", p)
 	assert.Nil(t, err)
 }
 
@@ -119,8 +115,7 @@ func Test_aliasConstant(t *testing.T) {
 				),
 			),
 		)
-	err := AssertPlan(context.Background(), nil,
-		"SELECT  l_orderkey, 2 FROM lineitem", p)
+	err := AssertPlan(context.Background(), "SELECT  l_orderkey, 2 FROM lineitem", p)
 	assert.Nil(t, err)
 }
 
@@ -134,8 +129,7 @@ func Test_aliasExpr(t *testing.T) {
 				),
 			),
 		)
-	err := AssertPlan(context.Background(), nil,
-		"SELECT  l_orderkey, 1 + l_orderkey FROM lineitem", p)
+	err := AssertPlan(context.Background(), "SELECT  l_orderkey, 1 + l_orderkey FROM lineitem", p)
 	assert.Nil(t, err)
 }
 
@@ -152,8 +146,7 @@ func Test_strictProject(t *testing.T) {
 				),
 			),
 		)
-	err := AssertPlan(context.Background(), nil,
-		"SELECT  l_orderkey, 1 + l_orderkey FROM lineitem", p)
+	err := AssertPlan(context.Background(), "SELECT  l_orderkey, 1 + l_orderkey FROM lineitem", p)
 	assert.Nil(t, err)
 }
 
@@ -170,8 +163,7 @@ func Test_identityAlias(t *testing.T) {
 				),
 			),
 		)
-	err := AssertPlan(context.Background(), nil,
-		"SELECT  l_orderkey, 1 + l_orderkey FROM lineitem", p)
+	err := AssertPlan(context.Background(), "SELECT  l_orderkey, 1 + l_orderkey FROM lineitem", p)
 	assert.Nil(t, err)
 }
 
@@ -187,8 +179,7 @@ func Test_tableScan(t *testing.T) {
 				),
 			),
 		)
-	err := AssertPlan(context.Background(), nil,
-		"SELECT  l_orderkey FROM lineitem", p)
+	err := AssertPlan(context.Background(), "SELECT  l_orderkey FROM lineitem", p)
 	assert.Nil(t, err)
 }
 
@@ -208,8 +199,7 @@ func Test_joinMatcher(t *testing.T) {
 			),
 		)
 
-	err := AssertPlan(context.Background(), nil,
-		"SELECT o.o_orderkey FROM orders o, lineitem l WHERE l.l_orderkey = o.o_orderkey", p)
+	err := AssertPlan(context.Background(), "SELECT o.o_orderkey FROM orders o, lineitem l WHERE l.l_orderkey = o.o_orderkey", p)
 	assert.Nil(t, err)
 }
 
@@ -229,8 +219,7 @@ func Test_selfJoin(t *testing.T) {
 			),
 		)
 
-	err := AssertPlan(context.Background(), nil,
-		"SELECT l.o_orderkey FROM orders l, orders r WHERE l.o_orderkey = r.o_orderkey", p)
+	err := AssertPlan(context.Background(), "SELECT l.o_orderkey FROM orders l, orders r WHERE l.o_orderkey = r.o_orderkey", p)
 	assert.Nil(t, err)
 }
 
@@ -250,8 +239,7 @@ func Test_aggr(t *testing.T) {
 			),
 		)
 
-	err := AssertPlan(context.Background(), nil,
-		"SELECT COUNT(n_nationkey) FROM nation", p)
+	err := AssertPlan(context.Background(), "SELECT COUNT(n_nationkey) FROM nation", p)
 	assert.Nil(t, err)
 }
 
@@ -261,8 +249,7 @@ func Test_aliasDoesNotExists(t *testing.T) {
 			TNode(plan2.Node_TABLE_SCAN).WithAlias("ORDERKEY",
 				TColumnRef("lineitem", "xxxxx")))
 
-	err := AssertPlan(context.Background(), nil,
-		"SELECT l_orderkey FROM lineitem", p)
+	err := AssertPlan(context.Background(), "SELECT l_orderkey FROM lineitem", p)
 	assert.Error(t, err)
 }
 
@@ -276,8 +263,7 @@ func Test_referAliasDoesNotExists(t *testing.T) {
 			),
 		)
 
-	err := AssertPlan(context.Background(), nil,
-		"SELECT l_orderkey FROM lineitem", p)
+	err := AssertPlan(context.Background(), "SELECT l_orderkey FROM lineitem", p)
 	assert.Error(t, err)
 }
 
@@ -292,8 +278,7 @@ func Test_strictOutputExtraSymbols(t *testing.T) {
 			),
 		)
 
-	err := AssertPlan(context.Background(), nil,
-		"SELECT l_orderkey, l_extendedprice FROM lineitem", p)
+	err := AssertPlan(context.Background(), "SELECT l_orderkey, l_extendedprice FROM lineitem", p)
 	assert.Error(t, err)
 }
 
@@ -307,17 +292,16 @@ func Test_strictTableScanExtraSymbols(t *testing.T) {
 			),
 		)
 
-	err := AssertPlan(context.Background(), nil,
-		"SELECT l_orderkey, l_extendedprice FROM lineitem", p)
+	err := AssertPlan(context.Background(), "SELECT l_orderkey, l_extendedprice FROM lineitem", p)
 	assert.Error(t, err)
 }
 
 func Test_strictProjectExtraSymbols(t *testing.T) {
 	p :=
 		TStrictProject(
-			NewStringMap(
-				NewStringPair("ORDERKEY", "l_orderkey"),
-				NewStringPair("ORDERKEY", "l_orderkey"),
+			NewAssignMap(
+				NewAssignPair("ORDERKEY", TExpr("l_orderkey")),
+				NewAssignPair("EXPR", TExpr("1 + l_orderkey")),
 			),
 			TTableScan("lineitem",
 				NewStringMap(
@@ -326,7 +310,43 @@ func Test_strictProjectExtraSymbols(t *testing.T) {
 			),
 		)
 
-	err := AssertPlan(context.Background(), nil,
-		"SELECT l_discount, l_orderkey, 1 + l_orderkey FROM lineitem", p)
+	err := AssertPlan(context.Background(), "SELECT l_discount, l_orderkey, 1 + l_orderkey FROM lineitem", p)
+	assert.Error(t, err)
+}
+
+func Test_duplicateAliases(t *testing.T) {
+	p :=
+		TAnyTree(
+			TJoin(plan2.Node_INNER,
+				[]string{"ORDERS_OK", "LINEITEM_OK"},
+				nil,
+				TAnyTree(
+					TTableScanWithoutColRef("orders").WithAlias("ORDERS_OK",
+						TColumnRef("orders", "o_orderkey")),
+				),
+				TAnyTree(
+					TTableScanWithoutColRef("lineitem").WithAlias("ORDERS_OK",
+						TColumnRef("lineitem", "l_orderkey")),
+				),
+			),
+		)
+
+	err := AssertPlan(context.Background(), "SELECT o.o_orderkey FROM orders o, lineitem l WHERE l.l_orderkey = o.o_orderkey", p)
+	assert.Error(t, err)
+}
+
+func Test_projectLimit(t *testing.T) {
+	p :=
+		TProject(
+			NewAssignMap(
+				NewAssignPair("EXPR", TExpr("1 + X_ORDERKEY")),
+			),
+			TTableScan("lineitem",
+				NewStringMap(
+					NewStringPair("L_ORDERKEY", "l_orderkey"),
+				),
+			),
+		)
+	err := AssertPlan(context.Background(), "SELECT  1 + l_orderkey FROM lineitem", p)
 	assert.Error(t, err)
 }

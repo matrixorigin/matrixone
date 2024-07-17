@@ -19,15 +19,14 @@ import (
 	"strings"
 
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
 type MatchResult struct {
 	IsMatch    bool
-	RetAliases plan.UnorderedMap[string, string]
+	RetAliases UnorderedMap[string, string]
 }
 
-func NewMatchResult(isMatch bool, retAliases plan.UnorderedMap[string, string]) *MatchResult {
+func NewMatchResult(isMatch bool, retAliases UnorderedMap[string, string]) *MatchResult {
 	return &MatchResult{
 		IsMatch:    isMatch,
 		RetAliases: retAliases,
@@ -58,12 +57,12 @@ func Matched() *MatchResult {
 	return NewMatchResult(true, nil)
 }
 
-func MatchedWithAliases(aliases plan.UnorderedMap[string, string]) *MatchResult {
+func MatchedWithAliases(aliases UnorderedMap[string, string]) *MatchResult {
 	return NewMatchResult(true, aliases)
 }
 
 func MatchedWithAlias(alias, ref string) *MatchResult {
-	aliases := make(plan.UnorderedMap[string, string])
+	aliases := make(UnorderedMap[string, string])
 	aliases.Insert(alias, ref)
 	return NewMatchResult(true, aliases)
 }
@@ -77,7 +76,7 @@ type Matcher interface {
 	SimpleMatch(*plan2.Node) bool
 
 	// DeepMatch check the internal structure about Node
-	DeepMatch(context.Context, *plan2.Node, plan.UnorderedMap[string, string]) (*MatchResult, error)
+	DeepMatch(context.Context, *plan2.Node, UnorderedMap[string, string]) (*MatchResult, error)
 
 	String() string
 }
@@ -88,7 +87,7 @@ type VarRef struct {
 }
 
 type RValueMatcher interface {
-	GetAssignedVar(*plan2.Node, plan.UnorderedMap[string, string]) (*VarRef, error)
+	GetAssignedVar(*plan2.Node, UnorderedMap[string, string]) (*VarRef, error)
 	String() string
 }
 
@@ -110,10 +109,19 @@ type MatchingState struct {
 	Patterns []*MatchPattern
 }
 
-type StringPair struct {
-	Key   string
-	Value string
+type Pair[KT, VT any] struct {
+	Key   KT
+	Value VT
 }
+
+func NewPair[KT, VT any](k KT, v VT) Pair[KT, VT] {
+	return Pair[KT, VT]{
+		Key:   k,
+		Value: v,
+	}
+}
+
+type StringPair Pair[string, string]
 
 func NewStringPair(k, v string) StringPair {
 	return StringPair{
@@ -122,10 +130,7 @@ func NewStringPair(k, v string) StringPair {
 	}
 }
 
-type AssignPair struct {
-	Key   string
-	Value *ExprMatcher
-}
+type AssignPair Pair[string, *ExprMatcher]
 
 func NewAssignPair(k string, v *ExprMatcher) AssignPair {
 	return AssignPair{
@@ -134,10 +139,7 @@ func NewAssignPair(k string, v *ExprMatcher) AssignPair {
 	}
 }
 
-type AggrPair struct {
-	Key   string
-	Value *AggrFuncMatcher
-}
+type AggrPair Pair[string, *AggrFuncMatcher]
 
 func NewAggrPair(k string, v *AggrFuncMatcher) AggrPair {
 	return AggrPair{
