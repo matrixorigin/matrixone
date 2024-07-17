@@ -384,7 +384,7 @@ func (node *memoryNode) GetRowByFilter(
 	return 0, 0, moerr.NewNotFoundNoCtx()
 }
 
-func (node *memoryNode) BatchDedup(
+func (node *memoryNode) BatchDedupLocked(
 	ctx context.Context,
 	txn txnif.TxnReader,
 	isCommitting bool,
@@ -394,8 +394,6 @@ func (node *memoryNode) BatchDedup(
 	bf objectio.BloomFilter,
 ) (err error) {
 	var dupRow uint32
-	node.object.RLock()
-	defer node.object.RUnlock()
 	_, err = node.doBatchDedup(
 		ctx,
 		keys,
@@ -742,6 +740,7 @@ func (node *objectMemoryNode) registerNodeLocked() *memoryNode {
 	node.blkMemoryNodes = append(node.blkMemoryNodes, blkNode)
 	return blkNode
 }
+
 // Only check block count.
 // Check rows in appender.
 func (node *objectMemoryNode) IsAppendable() bool {
@@ -756,8 +755,10 @@ func (node *objectMemoryNode) BatchDedup(
 	rowmask *roaring.Bitmap,
 	bf objectio.BloomFilter,
 ) (err error) {
+	node.obj.RLock()
+	defer node.obj.RUnlock()
 	for _, node := range node.blkMemoryNodes {
-		err = node.BatchDedup(ctx, txn, isCommitting, keys, keysZM, rowmask, bf)
+		err = node.BatchDedupLocked(ctx, txn, isCommitting, keys, keysZM, rowmask, bf)
 		if err != nil {
 			return
 		}
