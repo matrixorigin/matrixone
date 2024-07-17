@@ -226,14 +226,6 @@ func (proc *Process) OperatorOutofMemory(size int64) bool {
 	return proc.Mp().Cap() < size
 }
 
-func (proc *Process) SetInputBatch(bat *batch.Batch) {
-	proc.Reg.InputBatch = bat
-}
-
-func (proc *Process) InputBatch() *batch.Batch {
-	return proc.Reg.InputBatch
-}
-
 func (proc *Process) ResetContextFromParent(parent context.Context) context.Context {
 	newctx, cancel := context.WithCancel(parent)
 
