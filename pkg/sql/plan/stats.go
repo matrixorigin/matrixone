@@ -301,6 +301,7 @@ func (builder *QueryBuilder) getColNdv(col *plan.ColRef) float64 {
 	if s == nil {
 		return -1
 	}
+	logutil.Infof("col %v ndv %v", col.Name, s.NdvMap[col.Name])
 	return s.NdvMap[col.Name]
 }
 
