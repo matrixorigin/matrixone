@@ -26,13 +26,17 @@ var getMemoryCacheAllocator = func() func() malloc.Allocator {
 	var initOnce sync.Once
 	return func() malloc.Allocator {
 		initOnce.Do(func() {
+			allocator = malloc.GetDefault(nil)
+			// with metrics
 			allocator = malloc.NewMetricsAllocator(
-				malloc.GetDefault(nil),
+				allocator,
 				metric.MallocCounterMemoryCacheAllocateBytes,
 				metric.MallocGaugeMemoryCacheInuseBytes,
 				metric.MallocCounterMemoryCacheAllocateObjects,
 				metric.MallocGaugeMemoryCacheInuseObjects,
 			)
+			// freezable
+			allocator = malloc.NewReadOnlyAllocator(allocator)
 		})
 		return allocator
 	}
@@ -43,13 +47,17 @@ var getBytesAllocator = func() func() malloc.Allocator {
 	var initOnce sync.Once
 	return func() malloc.Allocator {
 		initOnce.Do(func() {
+			allocator = malloc.GetDefault(nil)
+			// with metrics
 			allocator = malloc.NewMetricsAllocator(
-				malloc.GetDefault(nil),
+				allocator,
 				metric.MallocCounterBytesAllocateBytes,
 				metric.MallocGaugeBytesInuseBytes,
 				metric.MallocCounterBytesAllocateObjects,
 				metric.MallocGaugeBytesInuseObjects,
 			)
+			// freezable
+			allocator = malloc.NewReadOnlyAllocator(allocator)
 		})
 		return allocator
 	}
