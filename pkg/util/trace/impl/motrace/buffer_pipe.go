@@ -75,7 +75,7 @@ func (t batchETLHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, an
 	}
 	opts = append(opts, BufferWithGenBatchFunc(f), BufferWithType(name))
 	opts = append(opts, t.defaultOpts...)
-	return NewItemBuffer(opts...)
+	return NewContentBuffer(opts...)
 }
 
 // NewItemBatchHandler implement batchpipe.PipeImpl
@@ -214,12 +214,16 @@ var _ bp.ItemBuffer[bp.HasName, any] = &itemBuffer{}
 
 // buffer catch item, like trace/log/error, buffer
 type itemBuffer struct {
-	bp.Reminder   // see BufferWithReminder
-	buf           []IBuffer2SqlItem
-	mux           sync.Mutex
+	BufferConfig
+	buf  []IBuffer2SqlItem
+	mux  sync.Mutex
+	size int64 // default: 1 MB
+}
+
+type BufferConfig struct {
+	bp.Reminder          // see BufferWithReminder
 	bufferType    string // see BufferWithType
-	size          int64  // default: 1 MB
-	sizeThreshold int64  // see BufferWithSizeThreshold
+	sizeThreshold int    // see BufferWithSizeThreshold
 
 	filterItemFunc filterItemFunc
 	genBatchFunc   genBatchFunc
@@ -233,14 +237,16 @@ var noopGenBatchSQL = genBatchFunc(func(context.Context, []IBuffer2SqlItem, *byt
 
 func NewItemBuffer(opts ...BufferOption) *itemBuffer {
 	b := &itemBuffer{
-		Reminder:       bp.NewConstantClock(defaultClock),
-		buf:            make([]IBuffer2SqlItem, 0, 10240),
-		sizeThreshold:  10 * mpool.MB,
-		filterItemFunc: noopFilterItemFunc,
-		genBatchFunc:   noopGenBatchSQL,
+		buf: make([]IBuffer2SqlItem, 0, 10240),
+		BufferConfig: BufferConfig{
+			Reminder:       bp.NewConstantClock(defaultClock),
+			sizeThreshold:  10 * mpool.MB,
+			filterItemFunc: noopFilterItemFunc,
+			genBatchFunc:   noopGenBatchSQL,
+		},
 	}
 	for _, opt := range opts {
-		opt.apply(b)
+		opt.apply(&b.BufferConfig)
 	}
 	logutil.Debugf("NewItemBuffer, Reminder next: %v", b.Reminder.RemindNextAfter())
 	if b.genBatchFunc == nil || b.filterItemFunc == nil || b.Reminder == nil {
@@ -286,7 +292,7 @@ func (b *itemBuffer) isEmpty() bool {
 func (b *itemBuffer) ShouldFlush() bool {
 	b.mux.Lock()
 	defer b.mux.Unlock()
-	return b.size > b.sizeThreshold
+	return b.size > int64(b.sizeThreshold)
 }
 
 func (b *itemBuffer) Size() int64 {
@@ -311,42 +317,38 @@ func (b *itemBuffer) GetBatch(ctx context.Context, buf *bytes.Buffer) any {
 	return b.genBatchFunc(ctx, b.buf, buf, nil)
 }
 
-type BufferOption interface {
-	apply(*itemBuffer)
-}
+type BufferOption func(*BufferConfig)
 
-type buffer2SqlOptionFunc func(*itemBuffer)
-
-func (f buffer2SqlOptionFunc) apply(b *itemBuffer) {
+func (f BufferOption) apply(b *BufferConfig) {
 	f(b)
 }
 
 func BufferWithReminder(reminder bp.Reminder) BufferOption {
-	return buffer2SqlOptionFunc(func(b *itemBuffer) {
+	return BufferOption(func(b *BufferConfig) {
 		b.Reminder = reminder
 	})
 }
 
 func BufferWithType(name string) BufferOption {
-	return buffer2SqlOptionFunc(func(b *itemBuffer) {
+	return BufferOption(func(b *BufferConfig) {
 		b.bufferType = name
 	})
 }
 
 func BufferWithSizeThreshold(size int64) BufferOption {
-	return buffer2SqlOptionFunc(func(b *itemBuffer) {
-		b.sizeThreshold = size
+	return BufferOption(func(b *BufferConfig) {
+		b.sizeThreshold = int(size)
 	})
 }
 
 func BufferWithFilterItemFunc(f filterItemFunc) BufferOption {
-	return buffer2SqlOptionFunc(func(b *itemBuffer) {
+	return BufferOption(func(b *BufferConfig) {
 		b.filterItemFunc = f
 	})
 }
 
 func BufferWithGenBatchFunc(f genBatchFunc) BufferOption {
-	return buffer2SqlOptionFunc(func(b *itemBuffer) {
+	return BufferOption(func(b *BufferConfig) {
 		b.genBatchFunc = f
 	})
 }

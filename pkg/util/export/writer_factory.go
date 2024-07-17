@@ -81,7 +81,9 @@ func GetWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string, ena
 			}
 			cw := etl.NewCSVWriter(ctx, etl.NewFSWriter(ctx, fs, options...))
 			if enableSqlWriter {
-				return newWriter(ctx, etl.NewSqlWriter(ctx, tbl, cw))
+				// return newWriter(ctx, etl.NewSqlWriter(ctx, tbl, cw))
+				// new version
+				return newWriter(ctx, etl.NewContentWriter(ctx, tbl, cw))
 			} else {
 				return newWriter(ctx, cw)
 			}

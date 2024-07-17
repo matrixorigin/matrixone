@@ -87,6 +87,16 @@ var (
 		}, []string{"type"})
 	TraceMOLoggerExportSqlHistogram = traceMOLoggerExportDataHistogram.WithLabelValues("sql")
 	TraceMOLoggerExportCsvHistogram = traceMOLoggerExportDataHistogram.WithLabelValues("csv")
+
+	mologgerErorrCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "trace",
+			Name:      "mologger_error_total",
+			Help:      "Count of mologger error",
+		}, []string{"type"})
+	TraceMOLoggerErrorWriteItemCounter = mologgerErorrCounter.WithLabelValues("write_item")
+	TraceMOLoggerErrorFlushCounter     = mologgerErorrCounter.WithLabelValues("flush")
 )
 
 func GetTraceNegativeCUCounter(typ string) prometheus.Counter {

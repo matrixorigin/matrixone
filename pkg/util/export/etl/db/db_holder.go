@@ -200,6 +200,8 @@ func putBuffer(buf *bytes.Buffer) {
 	}
 }
 
+var _ table.RowWriter = (*CSVWriter)(nil)
+
 type CSVWriter struct {
 	ctx       context.Context
 	formatter *csv.Writer
@@ -217,6 +219,30 @@ func NewCSVWriter(ctx context.Context) *CSVWriter {
 		formatter: writer,
 	}
 	return w
+}
+
+func NewCSVWriterWithBuffer(ctx context.Context, buf *bytes.Buffer) *CSVWriter {
+	writer := csv.NewWriter(buf)
+
+	w := &CSVWriter{
+		ctx:       ctx,
+		buf:       buf,
+		formatter: writer,
+	}
+	return w
+}
+func (w *CSVWriter) WriteRow(row *table.Row) error { return w.WriteStrings(row.ToStrings()) }
+func (w *CSVWriter) GetContentLength() int         { return w.buf.Len() }
+
+// FlushAndClose implements RowWriter, but NO Close action.
+func (w *CSVWriter) FlushAndClose() (int, error) {
+	w.formatter.Flush()
+	return w.GetContentLength(), nil
+}
+
+func (w *CSVWriter) ResetBuffer(buf *bytes.Buffer) {
+	w.buf = buf
+	w.formatter = csv.NewWriter(buf)
 }
 
 func (w *CSVWriter) WriteStrings(record []string) error {

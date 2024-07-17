@@ -15,6 +15,7 @@
 package table
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -287,6 +288,11 @@ func GetExtension(ext string) string {
 	default:
 		panic("unknown type of ext")
 	}
+}
+
+type Flusher interface {
+	// FlushBuffer flush the buffer and close.
+	FlushBuffer(*bytes.Buffer) (int, error)
 }
 
 type RowWriter interface {

@@ -117,6 +117,17 @@ func (w *CSVWriter) FlushAndClose() (int, error) {
 	return n, nil
 }
 
+// FlushBuffer flush the input buf content into file.
+// The writer should NOT call function WriteRow, WriteStrings, FlushAndClose.
+func (w *CSVWriter) FlushBuffer(buf *bytes.Buffer) (int, error) {
+	n, err := w.writer.WriteString(util.UnsafeBytesToString(buf.Bytes()))
+	if err != nil {
+		return 0, err
+	}
+	w.writer = nil
+	return n, nil
+}
+
 type FSWriter struct {
 	ctx context.Context         // New args
 	fs  fileservice.FileService // New args
