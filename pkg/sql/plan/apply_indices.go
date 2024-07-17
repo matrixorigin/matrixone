@@ -18,8 +18,6 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -687,7 +685,6 @@ END0:
 				filter := node.FilterList[filterIdx[i]]
 				serialArgs[i] = DeepCopyExpr(filter.GetF().Args[1])
 				estimateExprSelectivity(filter, builder)
-				logutil.Infof("apply index on %v with filter selectivity %v", idxTableDef.Name, filter.Selectivity)
 				compositeFilterSel = compositeFilterSel * filter.Selectivity
 			}
 			rightArg, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", serialArgs)
@@ -722,7 +719,6 @@ END0:
 		}
 
 		idxTableNodeID := builder.appendNode(idxTableNode, builder.ctxByNode[nodeID])
-		logutil.Infof("apply index on %v, selectivity %v, output %v", idxTableDef.Name, idxFilter.Selectivity, builder.qry.Nodes[idxTableNodeID].Stats.Outcnt)
 
 		pkIdx := node.TableDef.Name2ColIndex[node.TableDef.Pkey.PkeyColName]
 		pkExpr := &plan.Expr{
