@@ -14,19 +14,27 @@
 
 package malloc
 
-type Allocator interface {
-	Allocate(size uint64, hint Hints) ([]byte, Deallocator, error)
-}
+import "testing"
 
-type Deallocator interface {
-	TraitHolder
-	Deallocate(hint Hints)
-}
+func TestReadOnlyAllocator(t *testing.T) {
+	allocator := NewReadOnlyAllocator(
+		NewClassAllocator(
+			NewFixedSizeMmapAllocator,
+		),
+	)
+	slice, dec, err := allocator.Allocate(42, NoHints)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = slice
+	defer dec.Deallocate(NoHints)
 
-type Trait interface {
-	IsTrait()
-}
+	var freeze Freeze
+	if !dec.As(&freeze) {
+		t.Fatal("should be freezable")
+	}
+	freeze()
 
-type TraitHolder interface {
-	As(trait Trait) bool
+	// this will trigger a memory fault
+	//slice[0] = 1
 }

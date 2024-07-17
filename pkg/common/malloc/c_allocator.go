@@ -29,6 +29,10 @@ type cDeallocatorArgs struct {
 	ptr unsafe.Pointer
 }
 
+func (cDeallocatorArgs) As(Trait) bool {
+	return false
+}
+
 func NewCAllocator() *CAllocator {
 	return &CAllocator{
 		deallocatorPool: NewClosureDeallocatorPool(

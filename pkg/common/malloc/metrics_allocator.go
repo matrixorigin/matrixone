@@ -32,6 +32,10 @@ type metricsDeallocatorArgs struct {
 	size uint64
 }
 
+func (metricsDeallocatorArgs) As(Trait) bool {
+	return false
+}
+
 func NewMetricsAllocator(
 	upstream Allocator,
 	allocateBytesCounter prometheus.Counter,

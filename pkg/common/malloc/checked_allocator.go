@@ -35,6 +35,10 @@ type checkedAllocatorArgs struct {
 	ptr          unsafe.Pointer
 }
 
+func (checkedAllocatorArgs) As(Trait) bool {
+	return false
+}
+
 func NewCheckedAllocator(
 	upstream Allocator,
 	fraction uint32,

@@ -24,6 +24,10 @@ type leaksTrackingDeallocatorArgs struct {
 	stacktraceID StacktraceID
 }
 
+func (leaksTrackingDeallocatorArgs) As(Trait) bool {
+	return false
+}
+
 func NewLeaksTrackingAllocator(
 	upstream Allocator,
 	tracker *LeaksTracker,

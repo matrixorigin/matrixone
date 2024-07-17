@@ -18,7 +18,7 @@ import (
 	"sync"
 )
 
-type ClosureDeallocator[T any] struct {
+type ClosureDeallocator[T TraitHolder] struct {
 	argument T
 	fn       func(Hints, *T)
 }
@@ -27,17 +27,19 @@ func (a *ClosureDeallocator[T]) SetArgument(arg T) {
 	a.argument = arg
 }
 
-var _ Deallocator = &ClosureDeallocator[int]{}
-
 func (a *ClosureDeallocator[T]) Deallocate(hints Hints) {
 	a.fn(hints, &a.argument)
 }
 
-type ClosureDeallocatorPool[T any] struct {
+func (a *ClosureDeallocator[T]) As(target Trait) bool {
+	return a.argument.As(target)
+}
+
+type ClosureDeallocatorPool[T TraitHolder] struct {
 	pool sync.Pool
 }
 
-func NewClosureDeallocatorPool[T any](
+func NewClosureDeallocatorPool[T TraitHolder](
 	deallocateFunc func(Hints, *T),
 ) *ClosureDeallocatorPool[T] {
 	ret := new(ClosureDeallocatorPool[T])

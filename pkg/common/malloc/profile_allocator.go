@@ -102,6 +102,10 @@ type profileDeallocateArgs struct {
 	size   uint64
 }
 
+func (profileDeallocateArgs) As(Trait) bool {
+	return false
+}
+
 var _ Allocator = new(ProfileAllocator)
 
 func (p *ProfileAllocator) Allocate(size uint64, hints Hints) ([]byte, Deallocator, error) {

@@ -14,15 +14,42 @@
 
 package malloc
 
+import (
+	"unsafe"
+
+	"golang.org/x/sys/unix"
+)
+
 type ReadOnlyAllocator struct {
 	upstream        Allocator
 	deallocatorPool *ClosureDeallocatorPool[readOnlyDeallocatorArgs]
 }
 
 type readOnlyDeallocatorArgs struct {
-	slice  []byte
+	info   MmapInfo
 	frozen bool
 }
+
+func (r readOnlyDeallocatorArgs) As(trait Trait) bool {
+	if ptr, ok := trait.(*Freeze); ok {
+		*ptr = r.freeze
+		return true
+	}
+	return false
+}
+
+func (r *readOnlyDeallocatorArgs) freeze() {
+	r.frozen = true
+	slice := unsafe.Slice(
+		(*byte)(r.info.Addr),
+		r.info.Length,
+	)
+	unix.Mprotect(slice, unix.PROT_READ)
+}
+
+type Freeze func()
+
+func (*Freeze) IsTrait() {}
 
 func NewReadOnlyAllocator(
 	upstream Allocator,
@@ -33,7 +60,12 @@ func NewReadOnlyAllocator(
 		deallocatorPool: NewClosureDeallocatorPool(
 			func(hints Hints, args *readOnlyDeallocatorArgs) {
 				if args.frozen {
-					//TODO unfreeze
+					// unfreeze
+					slice := unsafe.Slice(
+						(*byte)(args.info.Addr),
+						args.info.Length,
+					)
+					unix.Mprotect(slice, unix.PROT_READ|unix.PROT_WRITE)
 				}
 			},
 		),
@@ -48,10 +80,14 @@ func (r *ReadOnlyAllocator) Allocate(size uint64, hint Hints) ([]byte, Deallocat
 		return nil, nil, err
 	}
 
+	var args readOnlyDeallocatorArgs
+	if !dec.As(&args.info) {
+		// not mmap allocated
+		return bytes, dec, nil
+	}
+
 	return bytes, ChainDeallocator(
 		dec,
-		r.deallocatorPool.Get(readOnlyDeallocatorArgs{
-			slice: bytes,
-		}),
+		r.deallocatorPool.Get(args),
 	), nil
 }

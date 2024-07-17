@@ -28,6 +28,10 @@ type fixedSizeSyncPoolDeallocatorArgs struct {
 	slice *[]byte
 }
 
+func (fixedSizeSyncPoolDeallocatorArgs) As(Trait) bool {
+	return false
+}
+
 func NewFixedSizeSyncPoolAllocator(size uint64) (ret *fixedSizeSyncPoolAllocator) {
 	ret = &fixedSizeSyncPoolAllocator{
 		size: size,

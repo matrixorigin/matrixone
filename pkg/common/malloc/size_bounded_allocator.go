@@ -31,6 +31,10 @@ type sizeBoundedDeallocatorArgs struct {
 	size uint64
 }
 
+func (sizeBoundedDeallocatorArgs) As(Trait) bool {
+	return false
+}
+
 func NewSizeBoundedAllocator(upstream Allocator, maxSize uint64, counter *atomic.Uint64) (ret *SizeBoundedAllocator) {
 	if counter == nil {
 		counter = new(atomic.Uint64)
