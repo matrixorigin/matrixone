@@ -110,7 +110,7 @@ func handleTraceSpan(
 
 	if len(cns) == 1 && strings.ToLower(cns[0]) == "all" {
 		cns = make([]string, 0)
-		clusterservice.GetMOCluster(proc.Base.LockService.GetConfig().ServiceID).GetCNService(clusterservice.Selector{}, func(cn metadata.CNService) bool {
+		clusterservice.GetMOCluster(proc.GetService()).GetCNService(clusterservice.Selector{}, func(cn metadata.CNService) bool {
 			cns = append(cns, cn.ServiceID)
 			return true
 		})
@@ -166,7 +166,7 @@ func transferRequest(
 	threshold int64,
 ) (resp *query.Response, err error) {
 	clusterservice.GetMOCluster(
-		proc.Base.LockService.GetConfig().ServiceID).GetCNService(clusterservice.NewServiceIDSelector(uuid),
+		proc.GetService()).GetCNService(clusterservice.NewServiceIDSelector(uuid),
 		func(cn metadata.CNService) bool {
 			request := proc.GetQueryClient().NewRequest(query.CmdMethod_TraceSpan)
 			request.TraceSpanRequest = &query.TraceSpanRequest{

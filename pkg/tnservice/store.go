@@ -420,7 +420,7 @@ func (s *store) initShardServer() error {
 
 	s.cfg.ShardService.RPC = s.cfg.RPC
 	s.cfg.ShardService.ListenAddress = s.shardServiceListenAddr()
-	s.shardServer = shardservice.NewShardServer(s.cfg.ShardService)
+	s.shardServer = shardservice.NewShardServer(s.cfg.ShardService, s.rt.Logger())
 	return nil
 }
 
@@ -437,7 +437,7 @@ func (s *store) initHAKeeperClient() error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.HAKeeper.DiscoveryTimeout.Duration)
 	defer cancel()
-	client, err := logservice.NewTNHAKeeperClient(ctx, s.cfg.HAKeeper.ClientConfig)
+	client, err := logservice.NewTNHAKeeperClient(ctx, s.cfg.UUID, s.cfg.HAKeeper.ClientConfig)
 	if err != nil {
 		return err
 	}

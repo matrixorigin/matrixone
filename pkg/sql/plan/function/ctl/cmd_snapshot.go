@@ -27,7 +27,7 @@ func handleGetSnapshotTS(
 	parameter string,
 	sender requestSender,
 ) (Result, error) {
-	rt := runtime.ServiceRuntime(proc.Base.LockService.GetConfig().ServiceID)
+	rt := runtime.ServiceRuntime(proc.GetService())
 	now, _ := rt.Clock().Now()
 	return Result{
 		Method: GetSnapshotMethod,
@@ -42,7 +42,7 @@ func handleUseSnapshotTS(
 	sender requestSender,
 ) (Result, error) {
 	var options []client.TxnOption
-	rt := runtime.ServiceRuntime(proc.Base.LockService.GetConfig().ServiceID)
+	rt := runtime.ServiceRuntime(proc.GetService())
 	if parameter != "" {
 		ts, err := tspb.ParseTimestamp(parameter)
 		if err != nil {

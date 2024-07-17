@@ -17,7 +17,6 @@ package shardservice
 import (
 	"fmt"
 	"strings"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -25,22 +24,8 @@ import (
 	"go.uber.org/zap"
 )
 
-var (
-	logger *log.MOLogger
-	once   sync.Once
-)
-
-func getLogger() *log.MOLogger {
-	once.Do(initLoggers)
-	return logger
-}
-
-func initLoggers() {
-	rt := runtime.ProcessLevelRuntime()
-	if rt == nil {
-		rt = runtime.DefaultRuntime()
-	}
-	logger = rt.Logger().Named("shard-service")
+func getLogger(sid string) *log.MOLogger {
+	return runtime.GetLogger(sid)
 }
 
 func tableShardsField(

@@ -197,9 +197,14 @@ func NewService(
 		return nil, err
 	}
 
-	server, err := morpc.NewRPCServer("pipeline-server", srv.pipelineServiceListenAddr(),
-		morpc.NewMessageCodec(srv.acquireMessage,
-			morpc.WithCodecMaxBodySize(int(cfg.RPC.MaxMessageSize))),
+	server, err := morpc.NewRPCServer(
+		"pipeline-server",
+		srv.pipelineServiceListenAddr(),
+		morpc.NewMessageCodec(
+			cfg.UUID,
+			srv.acquireMessage,
+			morpc.WithCodecMaxBodySize(int(cfg.RPC.MaxMessageSize)),
+		),
 		morpc.WithServerLogger(srv.logger),
 		morpc.WithServerGoettyOptions(
 			goetty.WithSessionRWBUfferSize(cfg.ReadBufferSize, cfg.WriteBufferSize),
@@ -239,13 +244,15 @@ func NewService(
 
 	// TODO: global client need to refactor
 	c, err := cnclient.NewPipelineClient(
+		cfg.UUID,
 		srv.pipelineServiceServiceAddr(),
-		&cnclient.PipelineConfig{RPC: cfg.RPC})
+		&cnclient.PipelineConfig{RPC: cfg.RPC},
+	)
 	if err != nil {
 		panic(err)
 	}
 	srv.pipelines.client = c
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.PipelineClient, c)
+	runtime.ServiceRuntime(cfg.UUID).SetGlobalVariables(runtime.PipelineClient, c)
 	return srv, nil
 }
 
@@ -540,7 +547,7 @@ func (s *service) getHAKeeperClient() (client logservice.CNHAKeeperClient, err e
 			s.cfg.HAKeeper.DiscoveryTimeout.Duration,
 		)
 		defer cancel()
-		client, err = logservice.NewCNHAKeeperClient(ctx, s.cfg.HAKeeper.ClientConfig)
+		client, err = logservice.NewCNHAKeeperClient(ctx, s.cfg.UUID, s.cfg.HAKeeper.ClientConfig)
 		if err != nil {
 			return
 		}
@@ -654,7 +661,7 @@ func (s *service) getTxnSender() (sender rpc.TxnSender, err error) {
 
 func (s *service) getTxnClient() (c client.TxnClient, err error) {
 	s.initTxnClientOnce.Do(func() {
-		s.timestampWaiter = client.NewTimestampWaiter()
+		s.timestampWaiter = client.NewTimestampWaiter(runtime.ServiceRuntime(s.cfg.UUID).Logger())
 
 		rt := runtime.ServiceRuntime(s.cfg.UUID)
 		client.SetupRuntimeTxnOptions(

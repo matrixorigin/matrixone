@@ -361,7 +361,7 @@ func (s *Scope) RemoteRun(c *Compile) error {
 		return s.ParallelRun(c)
 	}
 
-	runtime.ServiceRuntime(s.Proc.Base.LockService.GetConfig().ServiceID).Logger().
+	runtime.ServiceRuntime(s.Proc.GetService()).Logger().
 		Debug("remote run pipeline",
 			zap.String("local-address", c.addr),
 			zap.String("remote-address", s.NodeInfo.Addr))
@@ -1088,7 +1088,13 @@ func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMess
 		errSubmit := ants.Submit(
 			func() {
 
-				sender, err := newMessageSenderOnClient(s.Proc.Ctx, fromAddr, s.Proc.Mp(), nil)
+				sender, err := newMessageSenderOnClient(
+					s.Proc.Ctx,
+					s.Proc.GetService(),
+					fromAddr,
+					s.Proc.Mp(),
+					nil,
+				)
 				if err != nil {
 					closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], nil)
 					return

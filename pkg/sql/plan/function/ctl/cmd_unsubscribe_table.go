@@ -64,7 +64,7 @@ func handleUnsubscribeTable(
 	if err != nil {
 		return Result{}, moerr.NewInternalErrorNoCtx("wrong table ID: %s", args[2])
 	}
-	targets := getTargets(proc.Base.LockService.GetConfig().ServiceID, args[0])
+	targets := getTargets(proc.GetService(), args[0])
 	for _, c := range targets {
 		if err := doUnsubscribeTable(proc, c, dbID, tbID); err != nil {
 			return Result{}, err
@@ -82,7 +82,7 @@ func doUnsubscribeTable(
 	dbID, tbID uint64,
 ) error {
 	var err error
-	clusterservice.GetMOCluster(proc.Base.LockService.GetConfig().ServiceID).GetCNService(clusterservice.NewServiceIDSelector(uuid),
+	clusterservice.GetMOCluster(proc.GetService()).GetCNService(clusterservice.NewServiceIDSelector(uuid),
 		func(cn metadata.CNService) bool {
 			request := proc.GetQueryClient().NewRequest(query.CmdMethod_UnsubscribeTable)
 			request.UnsubscribeTable = &query.UnsubscribeTableRequest{

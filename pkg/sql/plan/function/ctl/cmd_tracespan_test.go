@@ -69,13 +69,15 @@ func initRuntime(uuids []string, queryAddress []string) {
 		}
 	}
 
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	moCluster := clusterservice.NewMOCluster(new(testHAKeeperClient),
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	moCluster := clusterservice.NewMOCluster(
+		"",
+		new(testHAKeeperClient),
 		time.Duration(time.Second),
 		clusterservice.WithDisableRefresh(),
 		clusterservice.WithServices(cns, nil))
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, moCluster)
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	runtime.ServiceRuntime("").SetGlobalVariables(runtime.ClusterService, moCluster)
+	runtime.ServiceRuntime("").SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
 }
 
 func TestCanHandleSelfCmd(t *testing.T) {

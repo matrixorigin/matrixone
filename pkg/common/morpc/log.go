@@ -20,5 +20,8 @@ import (
 )
 
 func getLogger(sid string) *log.MOLogger {
+	if sid == "" {
+		return runtime.DefaultRuntime().Logger()
+	}
 	return runtime.ServiceRuntime(sid).Logger()
 }

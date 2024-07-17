@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/txn/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -251,8 +252,8 @@ func runTimestampWaiterTests(
 	t testing.TB,
 	fn func(*timestampWaiter)) {
 	defer leaktest.AfterTest(t)()
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	tw := NewTimestampWaiter()
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	tw := NewTimestampWaiter(util.GetLogger(""))
 	defer tw.Close()
 	fn(tw.(*timestampWaiter))
 }

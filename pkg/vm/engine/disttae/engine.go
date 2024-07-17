@@ -138,6 +138,10 @@ func New(
 	return e
 }
 
+func (e *Engine) GetService() string {
+	return e.service
+}
+
 func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator) error {
 	if op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("create database in snapshot txn")

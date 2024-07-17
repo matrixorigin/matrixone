@@ -69,6 +69,9 @@ func ServiceRuntime(
 ) Runtime {
 	v, ok := allRuntime.Load(service)
 	if !ok {
+		if service == "" {
+			return DefaultRuntime()
+		}
 		return nil
 	}
 	return v.(Runtime)

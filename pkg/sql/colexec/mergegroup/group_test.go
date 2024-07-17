@@ -180,7 +180,7 @@ func BenchmarkGroup(b *testing.B) {
 }
 
 func newTestCase(flgs []bool, needEval bool, ts []types.Type) groupTestCase {
-	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
+	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{

@@ -146,7 +146,7 @@ func handleSetLabel(
 	parameter string,
 	sender requestSender,
 ) (Result, error) {
-	cluster := clusterservice.GetMOCluster(proc.Base.LockService.GetConfig().ServiceID)
+	cluster := clusterservice.GetMOCluster(proc.GetService())
 	c, err := parseCNLabel(parameter)
 	if err != nil {
 		return Result{}, err
@@ -176,7 +176,7 @@ func handleSetWorkState(
 	parameter string,
 	sender requestSender,
 ) (Result, error) {
-	cluster := clusterservice.GetMOCluster(proc.Base.LockService.GetConfig().ServiceID)
+	cluster := clusterservice.GetMOCluster(proc.GetService())
 	c, err := parseCNWorkState(parameter)
 	if err != nil {
 		return Result{}, err
@@ -197,7 +197,7 @@ func handleSyncCommit(
 	sender requestSender,
 ) (Result, error) {
 	qt := proc.GetQueryClient()
-	mc := clusterservice.GetMOCluster(proc.Base.LockService.GetConfig().ServiceID)
+	mc := clusterservice.GetMOCluster(proc.GetService())
 	var addrs []string
 	mc.GetCNService(
 		clusterservice.NewSelector(),

@@ -31,7 +31,6 @@ func (s *service) initMemoryEngine(
 	ctx context.Context,
 	pu *config.ParameterUnit,
 ) error {
-
 	// txn client
 	client, err := s.getTxnClient()
 	if err != nil {
@@ -52,6 +51,7 @@ func (s *service) initMemoryEngine(
 	}
 	pu.StorageEngine = memoryengine.New(
 		ctx,
+		s.cfg.UUID,
 		memoryengine.NewDefaultShardPolicy(mp),
 		memoryengine.NewHakeeperIDGenerator(hakeeper),
 		s.moCluster,
@@ -111,6 +111,7 @@ func (s *service) initMemoryEngineNonDist(
 
 	s.storeEngine = memoryengine.New(
 		ctx,
+		s.cfg.UUID,
 		memoryengine.NewDefaultShardPolicy(mp),
 		memoryengine.RandomIDGenerator,
 		cluster,

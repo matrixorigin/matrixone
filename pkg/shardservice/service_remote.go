@@ -38,6 +38,7 @@ func (s *service) initRemote() {
 	s.initRemoteClient()
 
 	svr, err := morpc.NewMessageHandler(
+		s.cfg.ServiceID,
 		"shard-service",
 		s.cfg.ListenAddress,
 		s.cfg.RPC,
@@ -61,6 +62,7 @@ func (s *service) initRemote() {
 
 func (s *service) initRemoteClient() {
 	c, err := morpc.NewMethodBasedClient(
+		s.cfg.ServiceID,
 		"shard-service",
 		s.cfg.RPC,
 		s.remote.pool,

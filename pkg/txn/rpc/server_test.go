@@ -38,7 +38,7 @@ func TestHandleMessageWithSender(t *testing.T) {
 		})
 
 		rt := newTestRuntime(newTestClock(), s.rt.Logger().RawLogger())
-		runtime.SetupProcessLevelRuntime(rt)
+		runtime.SetupServiceBasedRuntime("", rt)
 		cli, err := NewSender(Config{EnableCompress: true}, rt)
 		assert.NoError(t, err)
 		defer func() {

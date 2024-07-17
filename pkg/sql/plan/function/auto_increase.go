@@ -60,7 +60,7 @@ func builtInInternalAutoIncrement(parameters []*vector.Vector, result vector.Fun
 		if autoIncrCol != "" {
 			autoIncrement, err := getCurrentValue(
 				proc.Ctx,
-				proc.Base.LockService.GetConfig().ServiceID,
+				proc.GetService(),
 				tableId,
 				autoIncrCol,
 			)

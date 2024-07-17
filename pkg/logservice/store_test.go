@@ -44,7 +44,7 @@ func TestMain(m *testing.M) {
 		Format: "console",
 	})
 
-	runtime.SetupProcessLevelRuntime(runtime.NewRuntime(metadata.ServiceType_LOG, "test", logutil.GetGlobalLogger()))
+	runtime.SetupServiceBasedRuntime("", runtime.NewRuntime(metadata.ServiceType_LOG, "test", logutil.GetGlobalLogger()))
 	m.Run()
 }
 

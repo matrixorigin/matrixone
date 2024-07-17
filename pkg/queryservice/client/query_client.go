@@ -68,15 +68,13 @@ type QueryClient interface {
 }
 
 func NewQueryClient(sid string, cfg morpc.Config) (QueryClient, error) {
-	rt := runtime.ServiceRuntime(sid)
-	if rt == nil {
-		rt = runtime.DefaultRuntime()
-	}
 	pool := morpc.NewMessagePool(
 		func() *pb.Request { return &pb.Request{} },
 		func() *pb.Response { return &pb.Response{} },
 	)
-	c, err := cfg.NewClient("query-client", rt.Logger().Named("query-client").RawLogger(),
+	c, err := cfg.NewClient(
+		sid,
+		"query-client",
 		func() morpc.Message {
 			return pool.AcquireResponse()
 		},

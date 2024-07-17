@@ -1314,7 +1314,7 @@ func TestWaiterAwakeOnDeadLock(t *testing.T) {
 
 					t2.Lock()
 					for _, w := range t2.blockedWaiters {
-						w.notify(notifyValue{err: ErrDeadLockDetected})
+						w.notify(notifyValue{err: ErrDeadLockDetected}, getLogger(s.GetConfig().ServiceID))
 					}
 					t2.Unlock()
 
@@ -3356,7 +3356,7 @@ func TestTxnUnlockWithBindChanged(t *testing.T) {
 					// changed bind
 					bind := lt.getBind()
 					bind.Version = bind.Version + 1
-					new := newLocalLockTable(bind, s.fsp, s.events, s.clock, s.activeTxnHolder)
+					new := newLocalLockTable(bind, s.fsp, s.events, s.clock, s.activeTxnHolder, getLogger(s.GetConfig().ServiceID))
 					s.tableGroups.set(0, table, new)
 					lt.close()
 
@@ -3583,7 +3583,7 @@ func TestIssue14008(t *testing.T) {
 					r1 *pb.Request,
 					r2 *pb.Response,
 					cs morpc.ClientSession) {
-					writeResponse(ctx, cf, r2, ErrTxnNotFound, cs)
+					writeResponse(ctx, getLogger(s1.GetConfig().ServiceID), cf, r2, ErrTxnNotFound, cs)
 				})
 			var wg sync.WaitGroup
 			for i := 0; i < 20; i++ {

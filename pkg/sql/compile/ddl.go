@@ -1286,7 +1286,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 	err = maybeCreateAutoIncrement(
 		c.proc.Ctx,
-		c.proc.Base.LockService.GetConfig().ServiceID,
+		c.proc.GetService(),
 		dbSource,
 		qry.GetTableDef(),
 		c.proc.GetTxnOperator(),
@@ -1300,7 +1300,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		return nil
 	}
 
-	return shardservice.GetService(c.proc.Base.LockService.GetConfig().ServiceID).Create(
+	return shardservice.GetService(c.proc.GetService()).Create(
 		c.proc.Ctx,
 		qry.GetTableDef().TblId,
 		c.proc.GetTxnOperator(),
@@ -1317,7 +1317,7 @@ func (s *Scope) CreateView(c *Compile) error {
 	// convert the plan's defs to the execution's defs
 	exeDefs, err := planDefsToExeDefs(qry.GetTableDef())
 	if err != nil {
-		getLogger().Info("createView",
+		getLogger(s.Proc.GetService()).Info("createView",
 			zap.String("databaseName", c.db),
 			zap.String("viewName", qry.GetTableDef().GetName()),
 			zap.Error(err),
@@ -1346,7 +1346,7 @@ func (s *Scope) CreateView(c *Compile) error {
 		if qry.GetReplace() {
 			err = c.runSql(fmt.Sprintf("drop view if exists %s", viewName))
 			if err != nil {
-				getLogger().Info("createView",
+				getLogger(s.Proc.GetService()).Info("createView",
 					zap.String("databaseName", c.db),
 					zap.String("viewName", qry.GetTableDef().GetName()),
 					zap.Error(err),
@@ -1354,7 +1354,7 @@ func (s *Scope) CreateView(c *Compile) error {
 				return err
 			}
 		} else {
-			getLogger().Info("createView",
+			getLogger(s.Proc.GetService()).Info("createView",
 				zap.String("databaseName", c.db),
 				zap.String("viewName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1370,7 +1370,7 @@ func (s *Scope) CreateView(c *Compile) error {
 			if qry.GetIfNotExists() {
 				return nil
 			}
-			getLogger().Info("createView",
+			getLogger(s.Proc.GetService()).Info("createView",
 				zap.String("databaseName", c.db),
 				zap.String("viewName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1380,7 +1380,7 @@ func (s *Scope) CreateView(c *Compile) error {
 	}
 
 	if err = lockMoTable(c, dbName, viewName, lock.LockMode_Exclusive); err != nil {
-		getLogger().Info("createView",
+		getLogger(s.Proc.GetService()).Info("createView",
 			zap.String("databaseName", c.db),
 			zap.String("viewName", qry.GetTableDef().GetName()),
 			zap.Error(err),
@@ -1389,7 +1389,7 @@ func (s *Scope) CreateView(c *Compile) error {
 	}
 
 	if err = dbSource.Create(context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql), viewName, append(exeCols, exeDefs...)); err != nil {
-		getLogger().Info("createView",
+		getLogger(s.Proc.GetService()).Info("createView",
 			zap.String("databaseName", c.db),
 			zap.String("viewName", qry.GetTableDef().GetName()),
 			zap.Error(err),
@@ -1483,7 +1483,7 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 
 	return maybeCreateAutoIncrement(
 		c.proc.Ctx,
-		c.proc.Base.LockService.GetConfig().ServiceID,
+		c.proc.GetService(),
 		tmpDBSource,
 		qry.GetTableDef(),
 		c.proc.GetTxnOperator(),
@@ -2037,7 +2037,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		}
 	}
 	if containAuto {
-		err = incrservice.GetAutoIncrementService(c.proc.Base.LockService.GetConfig().ServiceID).Reset(
+		err = incrservice.GetAutoIncrementService(c.proc.GetService()).Reset(
 			c.proc.Ctx,
 			oldId,
 			newId,
@@ -2246,7 +2246,7 @@ func (s *Scope) DropTable(c *Compile) error {
 				}
 			}
 			if containAuto {
-				err := incrservice.GetAutoIncrementService(c.proc.Base.LockService.GetConfig().ServiceID).Delete(
+				err := incrservice.GetAutoIncrementService(c.proc.GetService()).Delete(
 					c.proc.Ctx,
 					rel.GetTableID(c.proc.Ctx),
 					c.proc.GetTxnOperator())
@@ -2255,7 +2255,7 @@ func (s *Scope) DropTable(c *Compile) error {
 				}
 			}
 
-			if err := shardservice.GetService(c.proc.Base.LockService.GetConfig().ServiceID).Delete(
+			if err := shardservice.GetService(c.proc.GetService()).Delete(
 				c.proc.Ctx,
 				rel.GetTableID(c.proc.Ctx),
 				c.proc.GetTxnOperator(),
@@ -2292,7 +2292,7 @@ func (s *Scope) DropTable(c *Compile) error {
 			}
 			if containAuto {
 				// When drop table 'mo_catalog.mo_indexes', there is no need to delete the auto increment data
-				err := incrservice.GetAutoIncrementService(c.proc.Base.LockService.GetConfig().ServiceID).Delete(
+				err := incrservice.GetAutoIncrementService(c.proc.GetService()).Delete(
 					c.proc.Ctx,
 					rel.GetTableID(c.proc.Ctx),
 					c.proc.GetTxnOperator())
@@ -2301,7 +2301,7 @@ func (s *Scope) DropTable(c *Compile) error {
 				}
 			}
 
-			if err := shardservice.GetService(c.proc.Base.LockService.GetConfig().ServiceID).Delete(
+			if err := shardservice.GetService(c.proc.GetService()).Delete(
 				c.proc.Ctx,
 				rel.GetTableID(c.proc.Ctx),
 				c.proc.GetTxnOperator(),

@@ -548,7 +548,7 @@ func restoreToAccount(
 	for _, dbName := range dbNames {
 		if needSkipDb(dbName) {
 			if dbName == moCatalog {
-				if err = dropClusterTable(ctx, bh, "", toAccountId); err != nil {
+				if err = dropClusterTable(ctx, sid, bh, "", toAccountId); err != nil {
 					return
 				}
 			}
@@ -698,9 +698,10 @@ func restoreSystemDatabase(
 	bh BackgroundExec,
 	snapshotName string,
 	toAccountId uint32,
-	snapshotTs int64) (err error) {
-	getLogger().Info(fmt.Sprintf("[%s] start to restore system database: %s", snapshotName, moCatalog))
-	tableInfos, err := getTableInfos(ctx, bh, snapshotName, moCatalog, "")
+	snapshotTs int64,
+) (err error) {
+	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore system database: %s", snapshotName, moCatalog))
+	tableInfos, err := getTableInfos(ctx, sid, bh, snapshotName, moCatalog, "")
 	if err != nil {
 		return
 	}
@@ -728,19 +729,21 @@ func restoreSystemDatabase(
 
 func dropClusterTable(
 	ctx context.Context,
+	sid string,
 	bh BackgroundExec,
 	snapshotName string,
-	toAccountId uint32) (err error) {
-	getLogger().Info("start to drop cluster table")
+	toAccountId uint32,
+) (err error) {
+	getLogger(sid).Info("start to drop cluster table")
 
-	tableInfos, err := getTableInfos(ctx, bh, snapshotName, moCatalog, "")
+	tableInfos, err := getTableInfos(ctx, sid, bh, snapshotName, moCatalog, "")
 	if err != nil {
 		return
 	}
 
 	for _, tblInfo := range tableInfos {
 		if toAccountId == 0 && tblInfo.typ == clusterTable {
-			getLogger().Info(fmt.Sprintf("[%s] start to drop system table: %v.%v", snapshotName, moCatalog, tblInfo.tblName))
+			getLogger(sid).Info(fmt.Sprintf("[%s] start to drop system table: %v.%v", snapshotName, moCatalog, tblInfo.tblName))
 			if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists %s.%s", moCatalog, tblInfo.tblName)); err != nil {
 				return
 			}
@@ -1138,7 +1141,7 @@ func showFullTables(ctx context.Context, sid string, bh BackgroundExec, snapshot
 			typ:     tableType(cols[1]),
 		}
 	}
-	getLogger().Info(fmt.Sprintf("[%s] show full table `%s.%s`, get table number `%d`", snapshotName, dbName, tblName, len(ans)))
+	getLogger(sid).Info(fmt.Sprintf("[%s] show full table `%s.%s`, get table number `%d`", snapshotName, dbName, tblName, len(ans)))
 	return ans, nil
 }
 

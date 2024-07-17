@@ -30,10 +30,6 @@ func getLogger(sid string) *log.MOLogger {
 	return runtime.ServiceRuntime(sid).Logger().Named("lockservice")
 }
 
-func getWithSkipLogger(sid string) *log.MOLogger {
-	return getLogger(sid).WithOptions(zap.AddCallerSkip(1))
-}
-
 func logLocalLock(
 	logger *log.MOLogger,
 	txn *activeTxn,

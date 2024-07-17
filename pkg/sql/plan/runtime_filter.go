@@ -54,7 +54,7 @@ func GetInFilterCardLimitOnPK(
 
 func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 	node := builder.qry.Nodes[nodeID]
-	sid := builder.compCtx.GetProcess().Base.LockService.GetConfig().ServiceID
+	sid := builder.compCtx.GetProcess().GetService()
 
 	for _, childID := range node.Children {
 		builder.generateRuntimeFilters(childID)

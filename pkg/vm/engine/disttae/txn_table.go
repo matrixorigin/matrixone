@@ -605,7 +605,7 @@ func (tbl *txnTable) resetSnapshot() {
 //   - exprs: A slice of expressions used to filter data.
 //   - txnOffset: Transaction offset used to specify the starting position for reading data.
 func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr, txnOffset int) (ranges engine.Ranges, err error) {
-	sid := tbl.proc.Load().Base.LockService.GetConfig().ServiceID
+	sid := tbl.proc.Load().GetService()
 	start := time.Now()
 	seq := tbl.db.op.NextSequence()
 	trace.GetService(sid).AddTxnDurationAction(
@@ -2320,7 +2320,7 @@ func (tbl *txnTable) transferDeletes(
 	deleteObjs,
 	createObjs map[objectio.ObjectNameShort]struct{}) error {
 	var blks []objectio.BlockInfo
-	sid := tbl.proc.Load().Base.LockService.GetConfig().ServiceID
+	sid := tbl.proc.Load().GetService()
 	{
 		fs, err := fileservice.Get[fileservice.FileService](
 			tbl.proc.Load().GetFileService(),

@@ -860,7 +860,7 @@ func handleOptimizerHints(str string, builder *QueryBuilder) {
 }
 
 func (builder *QueryBuilder) parseOptimizeHints() {
-	v, ok := runtime.ServiceRuntime(builder.compCtx.GetProcess().Base.LockService.GetConfig().ServiceID).GetGlobalVariables("optimizer_hints")
+	v, ok := runtime.ServiceRuntime(builder.compCtx.GetProcess().GetService()).GetGlobalVariables("optimizer_hints")
 	if !ok {
 		return
 	}

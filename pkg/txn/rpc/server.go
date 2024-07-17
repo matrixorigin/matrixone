@@ -143,7 +143,7 @@ func NewTxnServer(
 		codecOpts = append(codecOpts, morpc.WithCodecEnableCompress(malloc.GetDefault(nil)))
 	}
 	rpc, err := morpc.NewRPCServer("txn-server", address,
-		morpc.NewMessageCodec(s.acquireRequest, codecOpts...),
+		morpc.NewMessageCodec(rt.ServiceUUID(), s.acquireRequest, codecOpts...),
 		morpc.WithServerLogger(s.rt.Logger().RawLogger()),
 		morpc.WithServerDisableAutoCancelContext(),
 		morpc.WithServerGoettyOptions(goetty.WithSessionReleaseMsgFunc(func(v interface{}) {

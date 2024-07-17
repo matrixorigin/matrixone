@@ -387,7 +387,7 @@ func (txn *Transaction) WriteOffset() uint64 {
 func (txn *Transaction) Adjust(writeOffset uint64) error {
 	start := time.Now()
 	seq := txn.op.NextSequence()
-	trace.GetService(txn.proc.Base.LockService.GetConfig().ServiceID).AddTxnDurationAction(
+	trace.GetService(txn.proc.GetService()).AddTxnDurationAction(
 		txn.op,
 		client.WorkspaceAdjustEvent,
 		seq,
@@ -395,7 +395,7 @@ func (txn *Transaction) Adjust(writeOffset uint64) error {
 		0,
 		nil)
 	defer func() {
-		trace.GetService(txn.proc.Base.LockService.GetConfig().ServiceID).AddTxnDurationAction(
+		trace.GetService(txn.proc.GetService()).AddTxnDurationAction(
 			txn.op,
 			client.WorkspaceAdjustEvent,
 			seq,
@@ -425,7 +425,7 @@ func (txn *Transaction) traceWorkspaceLocked(commit bool) {
 		index = -1
 	}
 	idx := 0
-	trace.GetService(txn.proc.Base.LockService.GetConfig().ServiceID).TxnAdjustWorkspace(
+	trace.GetService(txn.proc.GetService()).TxnAdjustWorkspace(
 		txn.op,
 		index,
 		func() (tableID uint64, typ string, bat *batch.Batch, more bool) {
@@ -587,7 +587,7 @@ func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) error
 	}
 	if !commit && txn.op.Txn().IsRCIsolation() &&
 		(txn.GetSQLCount() > 0 || needResetSnapshot) {
-		trace.GetService(txn.proc.Base.LockService.GetConfig().ServiceID).TxnUpdateSnapshot(
+		trace.GetService(txn.proc.GetService()).TxnUpdateSnapshot(
 			txn.op,
 			0,
 			"before execute")

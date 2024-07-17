@@ -53,7 +53,7 @@ func GetTNHandlerFunc(method api.OpCode,
 			return false
 		}
 
-		cluster := clusterservice.GetMOCluster(proc.Base.LockService.GetConfig().ServiceID)
+		cluster := clusterservice.GetMOCluster(proc.GetService())
 		var requests []txn.CNOpRequest
 		cluster.GetTNService(clusterservice.NewSelector(),
 			func(store metadata.TNService) bool {

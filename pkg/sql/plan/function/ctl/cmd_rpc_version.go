@@ -34,7 +34,7 @@ func handleGetProtocolVersion(proc *process.Process,
 	parameter string,
 	sender requestSender) (Result, error) {
 	qt := proc.GetQueryClient()
-	mc := clusterservice.GetMOCluster(proc.Base.LockService.GetConfig().ServiceID)
+	mc := clusterservice.GetMOCluster(proc.GetService())
 	var addrs []string
 	var nodeIds []string
 	mc.GetCNService(

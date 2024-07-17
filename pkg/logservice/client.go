@@ -287,7 +287,7 @@ func connectToLogServiceByReverseProxy(
 	discoveryAddress string,
 	cfg ClientConfig,
 ) (*client, error) {
-	si, ok, err := GetShardInfo(discoveryAddress, cfg.LogShardID)
+	si, ok, err := GetShardInfo(sid, discoveryAddress, cfg.LogShardID)
 	if err != nil {
 		return nil, err
 	}

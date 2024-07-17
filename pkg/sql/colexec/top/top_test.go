@@ -128,7 +128,7 @@ func BenchmarkTop(b *testing.B) {
 func newTestCase(m *mpool.MPool, ts []types.Type, limit int64, fs []*plan.OrderBySpec) topTestCase {
 	return topTestCase{
 		types: ts,
-		proc:  testutil.NewProcessWithMPool(m),
+		proc:  testutil.NewProcessWithMPool("", m),
 		arg: &Top{
 			Fs:    fs,
 			Limit: plan2.MakePlan2Uint64ConstExprWithType(uint64(limit)),

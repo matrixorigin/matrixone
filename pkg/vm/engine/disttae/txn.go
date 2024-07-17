@@ -87,7 +87,7 @@ func (txn *Transaction) WriteBatch(
 	truncate bool) error {
 	start := time.Now()
 	seq := txn.op.NextSequence()
-	trace.GetService(txn.proc.Base.LockService.GetConfig().ServiceID).AddTxnDurationAction(
+	trace.GetService(txn.proc.GetService()).AddTxnDurationAction(
 		txn.op,
 		client.WorkspaceWriteEvent,
 		seq,
@@ -95,7 +95,7 @@ func (txn *Transaction) WriteBatch(
 		0,
 		nil)
 	defer func() {
-		trace.GetService(txn.proc.Base.LockService.GetConfig().ServiceID).AddTxnDurationAction(
+		trace.GetService(txn.proc.GetService()).AddTxnDurationAction(
 			txn.op,
 			client.WorkspaceWriteEvent,
 			seq,
@@ -142,7 +142,7 @@ func (txn *Transaction) WriteBatch(
 	txn.writes = append(txn.writes, e)
 	txn.pkCount += bat.RowCount()
 
-	trace.GetService(txn.proc.Base.LockService.GetConfig().ServiceID).TxnWrite(txn.op, tableId, typesNames[typ], bat)
+	trace.GetService(txn.proc.GetService()).TxnWrite(txn.op, tableId, typesNames[typ], bat)
 	return nil
 }
 
@@ -683,7 +683,7 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 	databaseId, tableId uint64) *batch.Batch {
 	start := time.Now()
 	seq := txn.op.NextSequence()
-	trace.GetService(txn.proc.Base.LockService.GetConfig().ServiceID).AddTxnDurationAction(
+	trace.GetService(txn.proc.GetService()).AddTxnDurationAction(
 		txn.op,
 		client.WorkspaceWriteEvent,
 		seq,
@@ -691,7 +691,7 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 		0,
 		nil)
 	defer func() {
-		trace.GetService(txn.proc.Base.LockService.GetConfig().ServiceID).AddTxnDurationAction(
+		trace.GetService(txn.proc.GetService()).AddTxnDurationAction(
 			txn.op,
 			client.WorkspaceWriteEvent,
 			seq,
@@ -700,7 +700,7 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 			nil)
 	}()
 
-	trace.GetService(txn.proc.Base.LockService.GetConfig().ServiceID).TxnWrite(txn.op, tableId, typesNames[DELETE], bat)
+	trace.GetService(txn.proc.GetService()).TxnWrite(txn.op, tableId, typesNames[DELETE], bat)
 
 	mp := make(map[types.Rowid]uint8)
 	deleteBlkId := make(map[types.Blockid]bool)
@@ -1083,7 +1083,7 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 	}
 	reqs, err := genWriteReqs(
 		ctx,
-		txn.proc.Base.LockService.GetConfig().ServiceID,
+		txn.proc.GetService(),
 		txn.writes,
 		txn.op,
 	)
@@ -1210,7 +1210,7 @@ func (txn *Transaction) transferDeletesLocked(ctx context.Context, commit bool) 
 				types.TimestampToTS(ts),
 				types.TimestampToTS(endTs))
 
-			trace.GetService(txn.proc.Base.LockService.GetConfig().ServiceID).ApplyFlush(
+			trace.GetService(txn.proc.GetService()).ApplyFlush(
 				tbl.db.op.Txn().ID,
 				tbl.tableId,
 				ts,

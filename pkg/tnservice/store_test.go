@@ -211,7 +211,7 @@ func runTNStoreTestWithFileServiceFactory(
 	testFn func(*store),
 	fsFactory fileservice.NewFileServicesFunc,
 	opts ...Option) {
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	thc := newTestHAKeeperClient()
 	opts = append(opts,
 		WithHAKeeperClientFactory(func() (logservice.TNHAKeeperClient, error) {

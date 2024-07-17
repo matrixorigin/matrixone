@@ -53,6 +53,10 @@ var testFunc = func(
 	return false, nil
 }
 
+var (
+	sid = "sid"
+)
+
 func TestCallLockOpWithNoConflict(t *testing.T) {
 	runLockNonBlockingOpTest(
 		t,
@@ -410,7 +414,7 @@ func TestLockWithBlockingWithConflict(t *testing.T) {
 }
 
 func TestLockWithHasNewVersionInLockedTS(t *testing.T) {
-	tw := client.NewTimestampWaiter()
+	tw := client.NewTimestampWaiter(runtime.GetLogger(""))
 	stopper := stopper.NewStopper("")
 	stopper.RunTask(func(ctx context.Context) {
 		for {
@@ -563,40 +567,45 @@ func runLockOpTest(
 		[]string{"s1"},
 		time.Second,
 		func(_ lockservice.LockTableAllocator, services []lockservice.LockService) {
-			runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.LockService, services[0])
+			runtime.RunTest(
+				sid,
+				func(rt runtime.Runtime) {
+					rt.SetGlobalVariables(runtime.LockService, services[0])
 
-			// TODO: remove
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-			defer cancel()
+					// TODO: remove
+					ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+					defer cancel()
 
-			s, err := rpc.NewSender(rpc.Config{}, runtime.ProcessLevelRuntime())
-			require.NoError(t, err)
+					s, err := rpc.NewSender(rpc.Config{}, rt)
+					require.NoError(t, err)
 
-			opts = append(opts, client.WithLockService(services[0]))
-			c := client.NewTxnClient(s, opts...)
-			c.Resume()
-			defer func() {
-				assert.NoError(t, c.Close())
-			}()
-			txnOp, err := c.New(ctx, timestamp.Timestamp{})
-			require.NoError(t, err)
+					opts = append(opts, client.WithLockService(services[0]))
+					c := client.NewTxnClient(sid, s, opts...)
+					c.Resume()
+					defer func() {
+						assert.NoError(t, c.Close())
+					}()
+					txnOp, err := c.New(ctx, timestamp.Timestamp{})
+					require.NoError(t, err)
 
-			proc := process.New(
-				ctx,
-				mpool.MustNewZero(),
-				c,
-				txnOp,
-				nil,
-				services[0],
-				nil,
-				nil,
-				nil,
-				nil)
-			require.Equal(t, int64(0), proc.Mp().CurrNB())
-			defer func() {
-				require.Equal(t, int64(0), proc.Mp().CurrNB())
-			}()
-			fn(proc)
+					proc := process.New(
+						ctx,
+						mpool.MustNewZero(),
+						c,
+						txnOp,
+						nil,
+						services[0],
+						nil,
+						nil,
+						nil,
+						nil)
+					require.Equal(t, int64(0), proc.Mp().CurrNB())
+					defer func() {
+						require.Equal(t, int64(0), proc.Mp().CurrNB())
+					}()
+					fn(proc)
+				},
+			)
 		},
 		nil,
 	)

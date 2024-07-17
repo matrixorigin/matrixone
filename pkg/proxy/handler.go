@@ -91,7 +91,7 @@ func newProxyHandler(
 		if err != nil {
 			return nil, err
 		}
-		ru = newPluginRouter(ru, p)
+		ru = newPluginRouter(cfg.UUID, ru, p)
 	}
 
 	var ipNetList []*net.IPNet

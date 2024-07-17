@@ -23,6 +23,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -155,6 +156,7 @@ const (
 
 type txnClient struct {
 	sid                        string
+	logger                     *log.MOLogger
 	clock                      clock.Clock
 	sender                     rpc.TxnSender
 	generator                  TxnIDGenerator
@@ -230,6 +232,7 @@ func NewTxnClient(
 ) TxnClient {
 	c := &txnClient{
 		sid:    sid,
+		logger: util.GetLogger(sid),
 		clock:  runtime.ServiceRuntime(sid).Clock(),
 		sender: sender,
 	}
@@ -318,8 +321,10 @@ func (client *txnClient) New(
 	}
 
 	util.LogTxnSnapshotTimestamp(
+		client.logger,
 		minTS,
-		ts)
+		ts,
+	)
 
 	if err := op.waitActive(ctx); err != nil {
 		_ = op.Rollback(ctx)
@@ -447,7 +452,7 @@ func (client *txnClient) SyncLatestCommitTS(ts timestamp.Timestamp) {
 					time.Sleep(time.Second)
 					continue
 				} else {
-					util.GetLogger().Fatal("wait latest commit ts failed", zap.Error(err))
+					client.logger.Fatal("wait latest commit ts failed", zap.Error(err))
 				}
 			}
 			break
@@ -473,12 +478,12 @@ func (client *txnClient) openTxn(op *txnOperator) error {
 			return moerr.NewInternalErrorNoCtx("cn service is not ready, retry later")
 		}
 
-		util.GetLogger().Warn("txn client is in pause state, wait for it to be ready",
+		client.logger.Warn("txn client is in pause state, wait for it to be ready",
 			zap.String("txn ID", hex.EncodeToString(op.txnID)))
 		// Wait until the txn client's state changed to normal, and it will probably take
 		// no more than 5 seconds in theory.
 		client.mu.cond.Wait()
-		util.GetLogger().Warn("txn client is in ready state",
+		client.logger.Warn("txn client is in ready state",
 			zap.String("txn ID", hex.EncodeToString(op.txnID)))
 	}
 
@@ -536,7 +541,7 @@ func (client *txnClient) closeTxn(event TxnEvent) {
 			}
 		}
 	} else {
-		util.GetLogger().Warn("txn closed",
+		client.logger.Warn("txn closed",
 			zap.String("txn ID", hex.EncodeToString(txn.ID)),
 			zap.String("stack", string(debug.Stack())))
 	}
@@ -563,7 +568,7 @@ func (client *txnClient) Pause() {
 	client.mu.Lock()
 	defer client.mu.Unlock()
 
-	util.GetLogger().Info("txn client status changed to paused")
+	client.logger.Info("txn client status changed to paused")
 	client.mu.state = paused
 }
 
@@ -571,7 +576,7 @@ func (client *txnClient) Resume() {
 	client.mu.Lock()
 	defer client.mu.Unlock()
 
-	util.GetLogger().Info("txn client status changed to normal")
+	client.logger.Info("txn client status changed to normal")
 	client.mu.state = normal
 
 	// Notify all waiting transactions to goon with the opening operation.

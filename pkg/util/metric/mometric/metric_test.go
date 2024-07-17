@@ -36,7 +36,7 @@ func TestMetric(t *testing.T) {
 	sqlch := make(chan string, 100)
 	factory := newExecutorFactory(sqlch)
 
-	runtime.SetupProcessLevelRuntime(runtime.NewRuntime(metadata.ServiceType_CN, "test", logutil.GetGlobalLogger()))
+	runtime.SetupServiceBasedRuntime("", runtime.NewRuntime(metadata.ServiceType_CN, "test", logutil.GetGlobalLogger()))
 
 	withModifiedConfig(func() {
 		SV := config.NewObservabilityParameters()

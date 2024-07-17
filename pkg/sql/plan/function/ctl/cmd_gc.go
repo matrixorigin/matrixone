@@ -23,7 +23,7 @@ import (
 
 func handleCNGC(proc *process.Process, _ serviceType, _ string, _ requestSender) (Result, error) {
 	debug.FreeOSMemory()
-	runtime.ServiceRuntime(proc.Base.LockService.GetConfig().ServiceID).Logger().Info("force free memory completed")
+	runtime.ServiceRuntime(proc.GetService()).Logger().Info("force free memory completed")
 	return Result{
 		Method: ForceGCMethod,
 		Data:   "OK",

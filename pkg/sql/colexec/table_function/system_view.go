@@ -232,7 +232,7 @@ func getLocks(proc *process.Process) ([]*query.GetLockInfoResponse, error) {
 	var nodes []string
 
 	selectSuperTenant(
-		proc.Base.LockService.GetConfig().ServiceID,
+		proc.GetService(),
 		clusterservice.NewSelector(),
 		"root",
 		nil,
@@ -587,7 +587,7 @@ func getTxns(proc *process.Process) ([]*query.GetTxnInfoResponse, error) {
 	var nodes []string
 
 	selectSuperTenant(
-		proc.Base.LockService.GetConfig().ServiceID,
+		proc.GetService(),
 		clusterservice.NewSelector(),
 		"root",
 		nil,
@@ -716,7 +716,7 @@ func getCacheStats(proc *process.Process) ([]*query.GetCacheInfoResponse, error)
 	var nodes []string
 
 	selectSuperTenant(
-		proc.Base.LockService.GetConfig().ServiceID,
+		proc.GetService(),
 		clusterservice.NewSelector(),
 		"root",
 		nil,
@@ -725,9 +725,12 @@ func getCacheStats(proc *process.Process) ([]*query.GetCacheInfoResponse, error)
 		},
 	)
 
-	listTnService(func(s *metadata.TNService) {
-		nodes = append(nodes, s.QueryAddress)
-	})
+	listTnService(
+		proc.GetService(),
+		func(s *metadata.TNService) {
+			nodes = append(nodes, s.QueryAddress)
+		},
+	)
 
 	genRequest := func() *query.Request {
 		req := proc.Base.QueryClient.NewRequest(query.CmdMethod_GetCacheInfo)
@@ -761,8 +764,10 @@ var selectSuperTenant = func(
 		})
 }
 
-var listTnService = func(appendFn func(service *metadata.TNService)) {
-	disttae.ListTnService(appendFn)
+var listTnService = func(
+	sid string,
+	appendFn func(service *metadata.TNService)) {
+	disttae.ListTnService(sid, appendFn)
 }
 
 var requestMultipleCn = func(ctx context.Context, nodes []string, qc qclient.QueryClient, genRequest func() *query.Request, handleValidResponse func(string, *query.Response), handleInvalidResponse func(string)) error {

@@ -121,7 +121,7 @@ func TestHandleSetProtocolVersion(t *testing.T) {
 }
 
 func requireVersionValue(t *testing.T, version int64) {
-	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.MOProtocolVersion)
+	v, ok := runtime.ServiceRuntime("").GetGlobalVariables(runtime.MOProtocolVersion)
 	require.True(t, ok)
 	require.EqualValues(t, version, v)
 }

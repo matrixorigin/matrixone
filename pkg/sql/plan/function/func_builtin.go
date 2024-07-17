@@ -531,7 +531,7 @@ func builtInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWr
 		return moerr.NewNotSupported(proc.Ctx, "only support sys account")
 	}
 
-	v, ok := runtime.ServiceRuntime(proc.Base.LockService.GetConfig().ServiceID).GetGlobalVariables(runtime.InternalSQLExecutor)
+	v, ok := runtime.ServiceRuntime(proc.GetService()).GetGlobalVariables(runtime.InternalSQLExecutor)
 	if !ok {
 		return moerr.NewNotSupported(proc.Ctx, "no implement sqlExecutor")
 	}

@@ -222,7 +222,7 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		db,
 		item,
 		p,
-		shardservice.GetService(p.Base.LockService.GetConfig().ServiceID),
+		shardservice.GetService(p.GetService()),
 	)
 	if err != nil {
 		return nil, err

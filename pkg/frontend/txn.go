@@ -791,6 +791,7 @@ func (th *TxnHandler) CreateTempEngine() {
 
 	th.tempEngine = memoryengine.New(
 		context.TODO(), //!!!NOTE: memoryengine.New will neglect this context.
+		th.service,
 		memoryengine.NewDefaultShardPolicy(
 			mpool.MustNewZeroNoFixed(),
 		),
