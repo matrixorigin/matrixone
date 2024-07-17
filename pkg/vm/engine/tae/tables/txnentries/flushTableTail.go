@@ -128,7 +128,7 @@ func (entry *flushTableTailEntry) getObjectOffset(blkOffset int) (int, uint16) {
 	prevOffset := 0
 	for i, offset := range entry.aobjOffsets {
 		if blkOffset < int(offset) {
-			return i-1, uint16(blkOffset - prevOffset)
+			return i - 1, uint16(blkOffset - prevOffset)
 		}
 		prevOffset = int(offset)
 	}
@@ -187,52 +187,56 @@ func (entry *flushTableTailEntry) collectDelsAndTransfer(from, to types.TS) (tra
 	if entry.createdBlkHandles == nil {
 		return
 	}
-	for i, blk := range entry.ablksMetas {
-		// For ablock, there is only one block in it.
-		// Checking the block mapping once is enough
-		mapping := entry.transMappings.Mappings[i].M
-		if len(mapping) == 0 {
-			// empty frozen aobjects, it can not has any more deletes
-			continue
-		}
-		dataBlock := blk.GetObjectData()
-		var bat *containers.Batch
-		bat, _, err = dataBlock.CollectDeleteInRange(
-			entry.txn.GetContext(),
-			from.Next(), // NOTE HERE
-			to,
-			false,
-			common.MergeAllocator,
-		)
-		if err != nil {
-			return
-		}
-		if bat == nil || bat.Length() == 0 {
-			continue
-		}
-		rowid := vector.MustFixedCol[types.Rowid](bat.GetVectorByName(catalog.PhyAddrColumnName).GetDownstreamVector())
-		ts := vector.MustFixedCol[types.TS](bat.GetVectorByName(catalog.AttrCommitTs).GetDownstreamVector())
-
-		count := len(rowid)
-		transCnt += count
-		for i := 0; i < count; i++ {
-			row := rowid[i].GetRowOffset()
-			destpos, ok := mapping[int32(row)]
-			if !ok {
-				panic(fmt.Sprintf("%s find no transfer mapping for row %d", blk.ID().String(), row))
+	blkOffset := 0
+	for _, blk := range entry.ablksMetas {
+		for j := 0; j < blk.BlockCnt(); j++ {
+			// For ablock, there is only one block in it.
+			// Checking the block mapping once is enough
+			mapping := entry.transMappings.Mappings[blkOffset].M
+			if len(mapping) == 0 {
+				// empty frozen aobjects, it can not has any more deletes
+				continue
 			}
-			blkID := objectio.NewBlockidWithObjectID(entry.createdBlkHandles.GetID(), uint16(destpos.BlkIdx))
-			entry.delTbls[destpos.BlkIdx] = blkID
-			entry.rt.TransferDelsMap.SetDelsForBlk(*blkID, int(destpos.RowIdx), entry.txn.GetPrepareTS(), ts[i])
-			if err = entry.createdBlkHandles.RangeDelete(
-				uint16(destpos.BlkIdx), uint32(destpos.RowIdx), uint32(destpos.RowIdx), handle.DT_MergeCompact, common.MergeAllocator,
-			); err != nil {
-				bat.Close()
+			dataBlock := blk.GetObjectData()
+			var bat *containers.Batch
+			bat, _, err = dataBlock.CollectDeleteInRange(
+				entry.txn.GetContext(),
+				from.Next(), // NOTE HERE
+				to,
+				false,
+				common.MergeAllocator,
+			)
+			if err != nil {
 				return
 			}
+			if bat == nil || bat.Length() == 0 {
+				continue
+			}
+			rowid := vector.MustFixedCol[types.Rowid](bat.GetVectorByName(catalog.PhyAddrColumnName).GetDownstreamVector())
+			ts := vector.MustFixedCol[types.TS](bat.GetVectorByName(catalog.AttrCommitTs).GetDownstreamVector())
+
+			count := len(rowid)
+			transCnt += count
+			for i := 0; i < count; i++ {
+				row := rowid[i].GetRowOffset()
+				destpos, ok := mapping[int32(row)]
+				if !ok {
+					panic(fmt.Sprintf("%s find no transfer mapping for row %d", blk.ID().String(), row))
+				}
+				blkID := objectio.NewBlockidWithObjectID(entry.createdBlkHandles.GetID(), uint16(destpos.BlkIdx))
+				entry.delTbls[destpos.BlkIdx] = blkID
+				entry.rt.TransferDelsMap.SetDelsForBlk(*blkID, int(destpos.RowIdx), entry.txn.GetPrepareTS(), ts[i])
+				if err = entry.createdBlkHandles.RangeDelete(
+					uint16(destpos.BlkIdx), uint32(destpos.RowIdx), uint32(destpos.RowIdx), handle.DT_MergeCompact, common.MergeAllocator,
+				); err != nil {
+					bat.Close()
+					return
+				}
+			}
+			bat.Close()
+			entry.nextRoundDirties[blk] = struct{}{}
+			blkOffset++
 		}
-		bat.Close()
-		entry.nextRoundDirties[blk] = struct{}{}
 	}
 	return
 }
