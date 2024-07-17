@@ -110,7 +110,14 @@ func (node *memoryNode) doBatchDedup(
 	keysZM index.ZM,
 	skipFn func(row uint32) error,
 	bf objectio.BloomFilter,
+	txn txnif.TxnReader,
 ) (sels *roaring.Bitmap, err error) {
+	needWait, txnToWait := node.appendMVCC.NeedWaitCommittingLocked(txn)
+	if needWait {
+		node.object.RUnlock()
+		txnToWait.GetTxnState(true)
+		node.object.RLock()
+	}
 	return node.pkIndex.BatchDedup(ctx, keys.GetDownstreamVector(), keysZM, skipFn, bf)
 }
 
@@ -399,7 +406,8 @@ func (node *memoryNode) BatchDedupLocked(
 		keys,
 		keysZM,
 		node.checkConflictAndDupClosure(txn, isCommitting, &dupRow, rowmask),
-		bf)
+		bf,
+		txn)
 
 	// definitely no duplicate
 	if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedDup) {
