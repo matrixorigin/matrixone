@@ -687,6 +687,7 @@ END0:
 				filter := node.FilterList[filterIdx[i]]
 				serialArgs[i] = DeepCopyExpr(filter.GetF().Args[1])
 				estimateExprSelectivity(filter, builder)
+				logutil.Infof("apply index on %v with filter selectivity %v", idxTableDef.Name, filter.Selectivity)
 				compositeFilterSel = compositeFilterSel * filter.Selectivity
 			}
 			rightArg, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", serialArgs)
