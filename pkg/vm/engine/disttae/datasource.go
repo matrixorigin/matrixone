@@ -57,10 +57,10 @@ type LocalDataSource struct {
 	ranges []*objectio.BlockInfoInProgress
 	pState *logtailreplay.PartitionState
 
-	prevBlockId          types.Blockid
-	persistedDeletes     *nulls.Nulls
+	prevBlockId           types.Blockid
+	persistedDeletes      *nulls.Nulls
 	committedInmemDeletes map[types.Rowid]struct{}
-	unCommittedS3Deletes map[types.Rowid]struct{}
+	unCommittedS3Deletes  map[types.Rowid]struct{}
 
 	unCommittedInmemDeletes map[types.Rowid]struct{}
 	unCommittedInmemInserts []*batch.Batch
@@ -119,7 +119,7 @@ func (ls *LocalDataSource) HasTombstones(bid types.Blockid) bool {
 		return true
 	}
 
-	delIter := ls.pState.NewRowsIter(ls.snapshotTS, &ls.prevBlockId, true )
+	delIter := ls.pState.NewRowsIter(ls.snapshotTS, &ls.prevBlockId, true)
 
 	if delIter.Next() {
 		return true
@@ -164,7 +164,7 @@ func (ls *LocalDataSource) ApplyTombstones(rows []types.Rowid) (sel []int64, err
 		}
 
 		committedInmemDeletes := make(map[types.Rowid]struct{})
-		delIter := ls.pState.NewRowsIter(ls.snapshotTS, &ls.prevBlockId, true )
+		delIter := ls.pState.NewRowsIter(ls.snapshotTS, &ls.prevBlockId, true)
 		for delIter.Next() {
 			committedInmemDeletes[delIter.Entry().RowID] = struct{}{}
 		}
@@ -172,7 +172,6 @@ func (ls *LocalDataSource) ApplyTombstones(rows []types.Rowid) (sel []int64, err
 	}
 
 	left := make([]types.Rowid, 0)
-
 
 	for _, row := range rows {
 		if ls.unCommittedS3Deletes != nil {
@@ -308,7 +307,7 @@ func (ls *LocalDataSource) filterInMemCommittedInserts(
 	)
 
 	appendFunctions := make([]func(*vector.Vector, *vector.Vector, int64) error, len(bat.Attrs))
-	for i, _ := range bat.Attrs {
+	for i := range bat.Attrs {
 		appendFunctions[i] = vector.GetUnionOneFunction(colTypes[i], mp)
 	}
 
@@ -323,7 +322,7 @@ func (ls *LocalDataSource) filterInMemCommittedInserts(
 	for insIter.Next() && appendedRows < options.DefaultBlockMaxRows {
 		entry := insIter.Entry()
 
-		sel, err = ls.ApplyTombstones([]types.Rowid{entry.RowID}
+		sel, err = ls.ApplyTombstones([]types.Rowid{entry.RowID})
 		if err != nil {
 			return err
 		}
