@@ -17,8 +17,10 @@ package compile
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	txnClient "github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -100,7 +102,17 @@ func (srv *ServiceOfCompile) getCompile(
 		proc.Ctx, proc.Cancel = context.WithCancel(proc.Ctx)
 	}
 
-	runningCompile := reuse.Alloc[Compile](nil)
+	// runningCompile := reuse.Alloc[Compile](nil)
+	runningCompile := &Compile{
+		affectRows:   &atomic.Uint64{},
+		lock:         &sync.RWMutex{},
+		counterSet:   &perfcounter.CounterSet{},
+		nodeRegs:     make(map[[2]int32]*process.WaitRegister),
+		stepRegs:     make(map[int32][][2]int32),
+		metaTables:   make(map[string]struct{}),
+		lockTables:   make(map[uint64]*plan.LockTarget),
+		MessageBoard: process.NewMessageBoard(),
+	}
 	// runningCompile.AllocMsg = time.Now().String() + " : " + string(debug.Stack())
 	runningCompile.proc = proc
 
@@ -135,7 +147,8 @@ func (srv *ServiceOfCompile) putCompile(c *Compile) (mustReturnError bool, err e
 
 	if !c.isPrepare {
 		// c.FreeMsg = time.Now().String() + " : " + string(debug.Stack())
-		reuse.Free[Compile](c, nil)
+		// reuse.Free[Compile](c, nil)
+		c.clear()
 	}
 
 	return err != nil, err
