@@ -22,7 +22,9 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log"
 	"math"
+	"os"
 	"runtime"
 	"strconv"
 	"strings"
@@ -33,6 +35,7 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"golang.org/x/exp/constraints"
 
+	"github.com/google/generative-ai-go/genai"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
@@ -48,6 +51,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/version"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/tmc/langchaingo/llms/ollama"
+	"google.golang.org/api/option"
 )
 
 func AbsUInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -937,7 +941,19 @@ func Unhex(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 }
 
 func createGeminiEmbedding(ctx context.Context, input string) ([]float32, error) {
-	return nil, nil
+	client, err := genai.NewClient(ctx, option.WithAPIKey(os.Getenv("AIzaSyB1UQ_hzKKmedA5HCcHT9l3JMAW_IyiMh4")))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer client.Close()
+	// For embeddings, use the Text Embeddings model
+	em := client.EmbeddingModel("text-embedding-004")
+	res, err := em.EmbedContent(ctx, genai.Text(input))
+
+	if err != nil {
+		panic(err)
+	}
+	return res, nil
 }
 
 func createOllamaEmbedding(ctx context.Context, input string) ([]float32, error) {
