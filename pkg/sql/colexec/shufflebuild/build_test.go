@@ -164,7 +164,6 @@ func newTestCase(flgs []bool, ts []types.Type, cs []*plan.Expr) buildTestCase {
 				MatchPrefix: false,
 				UpperLimit:  0,
 				Expr:        nil,
-				Handled:     false,
 			},
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
