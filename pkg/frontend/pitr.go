@@ -427,17 +427,17 @@ func doDropPitr(ctx context.Context, ses *Session, stmt *tree.DropPitr) (err err
 		return err
 	}
 
-	// check pitr exists or not
-	tenantInfo := ses.GetTenantInfo()
-	pitrExist, err = checkPitrExistOrNot(ctx, bh, string(stmt.Name), uint64(tenantInfo.GetTenantID()))
-	if err != nil {
-		return err
-	}
-
 	err = bh.Exec(ctx, "begin;")
 	defer func() {
 		err = finishTxn(ctx, bh, err)
 	}()
+	if err != nil {
+		return err
+	}
+
+	// check pitr exists or not
+	tenantInfo := ses.GetTenantInfo()
+	pitrExist, err = checkPitrExistOrNot(ctx, bh, string(stmt.Name), uint64(tenantInfo.GetTenantID()))
 	if err != nil {
 		return err
 	}
@@ -492,18 +492,18 @@ func doAlterPitr(ctx context.Context, ses *Session, stmt *tree.AlterPitr) (err e
 		return moerr.NewInternalError(ctx, "invalid pitr unit %s", pitrUnit)
 	}
 
-	// check pitr exists or not
-	tenantInfo := ses.GetTenantInfo()
-	pitrExist, err = checkPitrExistOrNot(ctx, bh, string(stmt.Name), uint64(tenantInfo.GetTenantID()))
-	if err != nil {
-		return err
-	}
-
 	err = bh.Exec(ctx, "begin;")
 	defer func() {
 		err = finishTxn(ctx, bh, err)
 	}()
 
+	if err != nil {
+		return err
+	}
+
+	// check pitr exists or not
+	tenantInfo := ses.GetTenantInfo()
+	pitrExist, err = checkPitrExistOrNot(ctx, bh, string(stmt.Name), uint64(tenantInfo.GetTenantID()))
 	if err != nil {
 		return err
 	}
