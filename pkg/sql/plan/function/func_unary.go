@@ -47,7 +47,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
 	"github.com/matrixorigin/matrixone/pkg/version"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/tmc/langchaingo/llms/ollama"
 )
 
 func AbsUInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -944,18 +943,16 @@ func createOllamaEmbedding(ctx context.Context, input string) ([]float32, error)
 	return nil, nil
 }
 
+func createErnieEmbedding(ctx context.Context, input string) ([]float32, error) {
+	return nil, nil
+}
+
 // Embedding function
 func EmbeddingOp(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	source := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
-	llm, err := ollama.New(ollama.WithModel("llama3"))
-	if err != nil {
-		return err
-	}
-
 	ctx := context.Background()
-
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {
 		inputBytes, nullInput := source.GetStrValue(i)
@@ -967,12 +964,11 @@ func EmbeddingOp(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		}
 
 		input := string(inputBytes)
-		embeddings, err := llm.CreateEmbedding(ctx, []string{input})
+		embeddingFloats, err := createOllamaEmbedding(ctx, input)
 		if err != nil {
 			return err
 		}
 
-		embeddingFloats := embeddings[0]
 		embeddingBytes := types.ArrayToBytes[float32](embeddingFloats)
 
 		if err := rs.AppendBytes(embeddingBytes, false); err != nil {
