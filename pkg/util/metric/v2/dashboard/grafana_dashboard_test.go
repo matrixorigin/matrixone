@@ -38,7 +38,7 @@ func TestCreateLocalDashboard(t *testing.T) {
 		return
 	}
 
-	c := NewLocalDashboardCreator("http://127.0.0.1", "admin", "admin", "Prometheus")
+	c := NewLocalDashboardCreator("http://127.0.0.1:3000", "admin", "admin", "Prometheus")
 	require.NoError(t, c.Create())
 }
 

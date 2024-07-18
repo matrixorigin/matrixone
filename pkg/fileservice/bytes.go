@@ -17,7 +17,6 @@ package fileservice
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
-	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 type Bytes struct {
@@ -41,7 +40,6 @@ func (b Bytes) Slice(length int) memorycache.CacheData {
 func (b Bytes) Release() {
 	if b.deallocator != nil {
 		b.deallocator.Deallocate(malloc.NoHints)
-		metric.FSMallocLiveObjectsBytes.Dec()
 	}
 }
 
@@ -56,7 +54,6 @@ func (b *bytesAllocator) Alloc(size int) memorycache.CacheData {
 	if err != nil {
 		panic(err)
 	}
-	metric.FSMallocLiveObjectsBytes.Inc()
 	return Bytes{
 		bytes:       slice,
 		deallocator: dec,
