@@ -125,14 +125,6 @@ func (b *bufferHolder) getBuffer() batchpipe.ItemBuffer[batchpipe.HasName, any] 
 	return buffer
 }
 
-func (b *bufferHolder) getContentBuffer() batchpipe.ItemBuffer[batchpipe.HasName, any] {
-	b.c.allocBuffer()
-	b.bufferCnt.Add(1)
-	buffer := b.bufferPool.Get().(batchpipe.ItemBuffer[batchpipe.HasName, any])
-	b.logStatus("new buffer")
-	return buffer
-}
-
 func (b *bufferHolder) putBuffer(buffer batchpipe.ItemBuffer[batchpipe.HasName, any]) {
 	buffer.Reset()
 	b.bufferPool.Put(buffer)

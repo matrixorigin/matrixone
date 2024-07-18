@@ -26,12 +26,8 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
-type ContentSettable interface {
-	SetContent(buf *bytes.Buffer)
-}
-
 var _ table.RowWriter = (*ContentWriter)(nil)
-var _ ContentSettable = (*ContentWriter)(nil)
+var _ table.ContentSettable = (*ContentWriter)(nil)
 
 // ContentWriter NO do gen op, just do the flush op.
 type ContentWriter struct {

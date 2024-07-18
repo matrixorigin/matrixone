@@ -290,6 +290,10 @@ func GetExtension(ext string) string {
 	}
 }
 
+type ContentSettable interface {
+	SetContent(buf *bytes.Buffer)
+}
+
 type Flusher interface {
 	// FlushBuffer flush the buffer and close.
 	FlushBuffer(*bytes.Buffer) (int, error)

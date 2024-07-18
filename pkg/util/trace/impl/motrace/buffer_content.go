@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	bp "github.com/matrixorigin/matrixone/pkg/util/batchpipe"
-	"github.com/matrixorigin/matrixone/pkg/util/export/etl"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -59,6 +58,7 @@ func NewContentBuffer(opts ...BufferOption) *ContentBuffer {
 		opt.apply(&b.BufferConfig)
 	}
 	logutil.Debugf("NewContentBuffer, Reminder next: %v", b.Reminder.RemindNextAfter())
+	// fixme: genBatchFunc useless in this buffer
 	if b.genBatchFunc == nil || b.filterItemFunc == nil || b.Reminder == nil {
 		logutil.Debug("NewItemBuffer meet nil elem")
 		return nil
@@ -157,7 +157,8 @@ func (b *ContentBuffer) GetBatch(ctx context.Context, buf *bytes.Buffer) any {
 	if b.isEmpty() {
 		return nil
 	}
-	return b.genBatchFunc(ctx, nil, buf, nil)
+	// genBatchFunc Useless
+	//b.genBatchFunc(ctx, nil, buf, nil)
 
 	factory := GetTracerProvider().writerFactory
 	w := factory.GetRowWriter(ctx, "sys", b.tbl, time.Now())
@@ -176,7 +177,7 @@ type contentWriteRequest struct {
 }
 
 func (c *contentWriteRequest) Handle() (int, error) {
-	if setter, ok := c.writer.(etl.ContentSettable); ok {
+	if setter, ok := c.writer.(table.ContentSettable); ok {
 		setter.SetContent(c.buffer)
 	}
 	return c.writer.FlushAndClose()
