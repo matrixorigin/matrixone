@@ -459,6 +459,8 @@ func (c *Conn) Write(payload []byte) error {
 		if err != nil {
 			return err
 		}
+	} else {
+		c.sequenceId = c.fixBuf.data[3]
 	}
 
 	var header [4]byte
