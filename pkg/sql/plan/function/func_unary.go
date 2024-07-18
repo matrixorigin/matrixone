@@ -21,8 +21,11 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"github.com/baidubce/bce-qianfan-sdk/go/qianfan"
+	"github.com/tmc/langchaingo/llms/ollama"
 	"io"
 	"math"
+	"os"
 	"runtime"
 	"strconv"
 	"strings"
@@ -928,6 +931,83 @@ func Unhex(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 	for i := uint64(0); i < rowCount; i++ {
 		data, null := source.GetStrValue(i)
 		if err := unhexToBytes(data, null, rs); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func createGeminiEmbedding(ctx context.Context, input string) ([]float32, error) {
+	return nil, nil
+}
+
+func createOllamaEmbedding(ctx context.Context, input string) ([]float32, error) {
+	llm, err := ollama.New(ollama.WithModel("llama3"))
+	if err != nil {
+		return nil, err
+	}
+
+	embeddings, err := llm.CreateEmbedding(ctx, []string{input})
+	if err != nil {
+		return nil, err
+	}
+
+	return embeddings[0], nil
+}
+
+func createErnieEmbedding(ctx context.Context, input string) ([]float64, error) {
+	// set Qianfan's Access Key and Secret Key
+	os.Setenv("QIANFAN_ACCESS_KEY", "")
+	os.Setenv("QIANFAN_SECRET_KEY", "")
+
+	embed := qianfan.NewEmbedding(
+		qianfan.WithModel("Embedding-V1"),
+	)
+
+	resp, err := embed.Do(
+		ctx,
+		&qianfan.EmbeddingRequest{
+			Input: []string{input},
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(resp.Data) == 0 || len(resp.Data[0].Embedding) == 0 {
+		return nil, fmt.Errorf("embedding data is empty")
+	}
+
+	return resp.Data[0].Embedding, nil
+}
+
+// Embedding function
+func EmbeddingOp(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	source := vector.GenerateFunctionStrParameter(parameters[0])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	ctx := context.Background()
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		inputBytes, nullInput := source.GetStrValue(i)
+		if nullInput {
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
+			continue
+		}
+
+		input := string(inputBytes)
+		embeddingFloats, err := createErnieEmbedding(ctx, input)
+		if err != nil {
+			return err
+		}
+
+		// TODO Note float64 is for Ernie, and float32 is for gemini and ollama
+		embeddingBytes := types.ArrayToBytes[float64](embeddingFloats)
+
+		if err := rs.AppendBytes(embeddingBytes, false); err != nil {
 			return err
 		}
 	}
