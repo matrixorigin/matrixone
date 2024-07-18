@@ -27,11 +27,11 @@ func Test_BasicGet(t *testing.T) {
 	require.True(t, pc.isCached(hashString("abc")))
 	require.Equal(t, pc.get(hashString("abc")).sql, hashString("abc"))
 
-	pc.cache(hashString("abc"), nil, nil)
-	require.True(t, pc.isCached(hashString("abc")))
-	require.Equal(t, pc.get(hashString("abc")).sql, hashString("abc"))
+	pc.cache(hashString("abcd"), nil, nil)
+	require.True(t, pc.isCached(hashString("abcd")))
+	require.Equal(t, pc.get(hashString("abcd")).sql, hashString("abcd"))
 
-	require.False(t, pc.isCached(hashString("abc")))
+	require.False(t, pc.isCached(hashString("abcde")))
 }
 
 func Test_LRU(t *testing.T) {
