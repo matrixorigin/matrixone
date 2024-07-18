@@ -41,6 +41,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util"
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -253,15 +254,25 @@ type SessionAllocator struct {
 }
 
 func NewSessionAllocator(pu *config.ParameterUnit) *SessionAllocator {
-	allocator := malloc.NewManagedAllocator(
-		malloc.NewSizeBoundedAllocator(
-			malloc.GetDefault(nil),
-			uint64(pu.SV.GuestMmuLimitation),
-			nil,
-		),
+	// default
+	allocator := malloc.GetDefault(nil)
+	// size bounded
+	allocator = malloc.NewSizeBoundedAllocator(
+		allocator,
+		uint64(pu.SV.GuestMmuLimitation),
+		nil,
+	)
+	// with metrics
+	allocator = malloc.NewMetricsAllocator(
+		allocator,
+		metric.MallocCounterSessionAllocateBytes,
+		metric.MallocGaugeSessionInuseBytes,
+		metric.MallocCounterSessionAllocateObjects,
+		metric.MallocGaugeSessionInuseObjects,
 	)
 	ret := &SessionAllocator{
-		allocator: allocator,
+		// managed
+		allocator: malloc.NewManagedAllocator(allocator),
 	}
 	return ret
 }
