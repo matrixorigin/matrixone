@@ -21,6 +21,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"github.com/tmc/langchaingo/llms/ollama"
 	"io"
 	"math"
 	"runtime"
@@ -939,7 +940,7 @@ func createGeminiEmbedding(ctx context.Context, input string) ([]float32, error)
 	return nil, nil
 }
 
-func CreateEmbeddingUsingOllama(ctx context.Context, input string) ([]float32, error) {
+func createOllamaEmbedding(ctx context.Context, input string) ([]float32, error) {
 	llm, err := ollama.New(ollama.WithModel("llama3"))
 	if err != nil {
 		return nil, err
