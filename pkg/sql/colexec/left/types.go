@@ -78,7 +78,7 @@ type LeftJoin struct {
 	HashOnPK           bool
 	IsShuffle          bool
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
-
+	JoinMapTag         int32
 	vm.OperatorBase
 }
 

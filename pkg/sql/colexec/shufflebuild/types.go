@@ -65,6 +65,7 @@ type ShuffleBuild struct {
 	Conditions       []*plan.Expr
 
 	RuntimeFilterSpec *pbplan.RuntimeFilterSpec
+	JoinMapTag        int32
 	vm.OperatorBase
 }
 

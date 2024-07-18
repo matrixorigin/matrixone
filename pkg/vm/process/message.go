@@ -31,7 +31,7 @@ const (
 	MsgPipelineStart MsgType = 1
 	MsgPipelineStop  MsgType = 2
 	MsgRuntimeFilter MsgType = 3
-	MsgHashMap       MsgType = 4
+	MsgJoinMap       MsgType = 4
 	MaxMessage       MsgType = 1024
 )
 

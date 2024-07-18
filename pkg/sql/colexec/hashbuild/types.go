@@ -60,14 +60,14 @@ type container struct {
 type HashBuild struct {
 	ctr *container
 	// need to generate a push-down filter expression
-	NeedExpr         bool
-	NeedHashMap      bool
-	HashOnPK         bool
-	NeedMergedBatch  bool
-	NeedAllocateSels bool
-	Typs             []types.Type
-	Conditions       []*plan.Expr
-
+	NeedExpr          bool
+	NeedHashMap       bool
+	HashOnPK          bool
+	NeedMergedBatch   bool
+	NeedAllocateSels  bool
+	Typs              []types.Type
+	Conditions        []*plan.Expr
+	JoinMapTag        int32
 	RuntimeFilterSpec *pbplan.RuntimeFilterSpec
 	vm.OperatorBase
 }

@@ -214,6 +214,7 @@ message Join {
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 7;
   bool hash_on_pk = 8;
   bool is_shuffle =9;
+  int32 join_map_tag = 10;
 }
 
 message AntiJoin{
@@ -225,6 +226,7 @@ message AntiJoin{
   bool hash_on_pk = 6;
   bool is_shuffle = 7;
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 8;
+  int32 join_map_tag = 9;
 }
 
 message LeftJoin {
@@ -237,6 +239,7 @@ message LeftJoin {
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 7;
   bool hash_on_pk = 8;
   bool is_shuffle = 9;
+  int32 join_map_tag = 10;
 }
 
 message RightJoin {
@@ -250,6 +253,7 @@ message RightJoin {
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 8;
   bool hash_on_pk = 9;
   bool is_shuffle = 10;
+  int32 join_map_tag = 11;
 }
 
 message RightSemiJoin {
@@ -261,6 +265,7 @@ message RightSemiJoin {
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 6;
   bool hash_on_pk = 7;
   bool is_shuffle = 8;
+  int32 join_map_tag = 9;
 }
 
 message RightAntiJoin {
@@ -272,6 +277,7 @@ message RightAntiJoin {
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 6;
   bool hash_on_pk = 7;
   bool is_shuffle = 8;
+  int32 join_map_tag = 9;
 }
 
 message SemiJoin {
@@ -283,6 +289,7 @@ message SemiJoin {
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 6;
   bool hash_on_pk = 7;
   bool is_shuffle = 8;
+  int32 join_map_tag = 9;
 }
 
 message SingleJoin {
@@ -295,6 +302,7 @@ message SingleJoin {
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 7;
   bool hash_on_pk = 8;
   bool is_shuffle = 9;
+  int32 join_map_tag = 10;
 }
 
 message MarkJoin {
@@ -306,6 +314,7 @@ message MarkJoin {
   repeated plan.Expr on_list = 6;
   bool hash_on_pk = 7;
   bool is_shuffle = 8;
+  int32 join_map_tag = 9;
 }
 
 message Product {

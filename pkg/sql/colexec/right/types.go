@@ -90,7 +90,7 @@ type RightJoin struct {
 	IsShuffle          bool
 	IsMerger           bool
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
-
+	JoinMapTag         int32
 	vm.OperatorBase
 }
 
