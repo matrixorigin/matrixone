@@ -119,7 +119,6 @@ func (checker *ExprChecker) checkBinaryExpr(astExpr *tree.BinaryExpr, expr *plan
 	default:
 		return false, moerr.NewInternalError(context.Background(), "unsupport expr 2")
 	}
-	return false, nil
 }
 
 func (checker *ExprChecker) checkComparisonExpr(astExpr *tree.ComparisonExpr, expr *plan2.Expr) (bool, error) {
@@ -145,5 +144,4 @@ func (checker *ExprChecker) checkComparisonExpr(astExpr *tree.ComparisonExpr, ex
 	default:
 		return false, moerr.NewInternalError(context.Background(), "unsupport expr 2")
 	}
-	return false, nil
 }
