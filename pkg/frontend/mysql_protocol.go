@@ -1480,6 +1480,11 @@ func (mp *MysqlProtocolImpl) Authenticate(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	allowedPacketSize, err := ses.GetSessionSysVar("max_allowed_packet")
+	if err != nil {
+		return err
+	}
+	mp.tcpConn.allowedPacketSize = int(allowedPacketSize.(int64))
 	return nil
 }
 
