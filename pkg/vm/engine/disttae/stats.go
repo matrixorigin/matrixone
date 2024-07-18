@@ -566,7 +566,7 @@ func calcNdvUsingZonemap(zm objectio.ZoneMap, t *types.Type) float64 {
 	case types.T_datetime:
 		return float64(types.DecodeFixed[types.Datetime](zm.GetMaxBuf())) - float64(types.DecodeFixed[types.Datetime](zm.GetMinBuf())) + 1
 	case types.T_uuid, types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text,
-		types.T_array_float32, types.T_array_float64:
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		//NDV Function
 		// An aggregate function that returns an approximate value similar to the result of COUNT(DISTINCT col),
 		// the "number of distinct values".
@@ -660,7 +660,7 @@ func updateInfoFromZoneMap(
 							maxvalue := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMaxBuf())
 							info.ShuffleRanges[idx].Update(minvalue, maxvalue, int64(meta.BlockHeader().Rows()), int64(objColMeta.NullCnt()))
 						}
-					case types.T_varchar, types.T_char, types.T_text:
+					case types.T_varchar, types.T_char, types.T_text, types.T_datalink:
 						info.ShuffleRanges[idx] = plan2.NewShuffleRange(true)
 						if info.ColumnZMs[idx].IsInited() {
 							info.ShuffleRanges[idx].UpdateString(info.ColumnZMs[idx].GetMinBuf(), info.ColumnZMs[idx].GetMaxBuf(), int64(meta.BlockHeader().Rows()), int64(objColMeta.NullCnt()))
@@ -686,7 +686,7 @@ func updateInfoFromZoneMap(
 						minvalue := getMinMaxValueByFloat64(info.DataTypes[idx], zm.GetMinBuf())
 						maxvalue := getMinMaxValueByFloat64(info.DataTypes[idx], zm.GetMaxBuf())
 						info.ShuffleRanges[idx].Update(minvalue, maxvalue, int64(meta.BlockHeader().Rows()), int64(objColMeta.NullCnt()))
-					case types.T_varchar, types.T_char, types.T_text:
+					case types.T_varchar, types.T_char, types.T_text, types.T_datalink:
 						info.ShuffleRanges[idx].UpdateString(zm.GetMinBuf(), zm.GetMaxBuf(), int64(meta.BlockHeader().Rows()), int64(objColMeta.NullCnt()))
 					}
 				}

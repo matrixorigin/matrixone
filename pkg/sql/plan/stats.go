@@ -201,7 +201,7 @@ func UpdateStatsInfo(info *InfoFromZoneMap, tableDef *plan.TableDef, s *pb.Stats
 		case types.T_datetime:
 			s.MinValMap[colName] = float64(types.DecodeDatetime(info.ColumnZMs[i].GetMinBuf()))
 			s.MaxValMap[colName] = float64(types.DecodeDatetime(info.ColumnZMs[i].GetMaxBuf()))
-		case types.T_char, types.T_varchar, types.T_text:
+		case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
 			s.MinValMap[colName] = float64(ByteSliceToUint64(info.ColumnZMs[i].GetMinBuf()))
 			s.MaxValMap[colName] = float64(ByteSliceToUint64(info.ColumnZMs[i].GetMaxBuf()))
 		}
@@ -580,7 +580,7 @@ func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
 		w += 128
 	case int32(types.T_float32), int32(types.T_float64):
 		w += 8
-	case int32(types.T_char), int32(types.T_varchar), int32(types.T_text), int32(types.T_json):
+	case int32(types.T_char), int32(types.T_varchar), int32(types.T_text), int32(types.T_json), int32(types.T_datalink):
 		w += 4
 	}
 	switch exprImpl := expr.Expr.(type) {

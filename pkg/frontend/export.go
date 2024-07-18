@@ -467,7 +467,7 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 				} else {
 					writeByte = appendBytes(writeByte, []byte(strconv.FormatFloat(float64(val), 'f', int(vec.GetType().Scale), 64)), symbol[j], closeby, flag[j])
 				}
-			case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
+			case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
 				value := addEscapeToString(vec.GetBytesAt(i))
 				writeByte = appendBytes(writeByte, value, symbol[j], closeby, true)
 			case types.T_array_float32:

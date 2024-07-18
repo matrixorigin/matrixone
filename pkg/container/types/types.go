@@ -75,8 +75,9 @@ const (
 	T_enum      T = 66
 
 	// blobs
-	T_blob T = 70
-	T_text T = 71
+	T_blob     T = 70
+	T_text     T = 71
+	T_datalink T = 72
 
 	// Transaction TS
 	T_TS      T = 100
@@ -383,10 +384,11 @@ var Types = map[string]T{
 
 	"enum": T_enum,
 
-	"json": T_json,
-	"text": T_text,
-	"blob": T_blob,
-	"uuid": T_uuid,
+	"json":     T_json,
+	"text":     T_text,
+	"datalink": T_datalink,
+	"blob":     T_blob,
+	"uuid":     T_uuid,
 
 	"transaction timestamp": T_TS,
 	"rowid":                 T_Rowid,
@@ -594,7 +596,7 @@ func (t T) ToType() Type {
 		typ.Size = RowidSize
 	case T_Blockid:
 		typ.Size = BlockidSize
-	case T_json, T_blob, T_text:
+	case T_json, T_blob, T_text, T_datalink:
 		typ.Size = VarlenaSize
 	case T_char:
 		typ.Size = VarlenaSize
@@ -686,6 +688,8 @@ func (t T) String() string {
 		return "BLOB"
 	case T_text:
 		return "TEXT"
+	case T_datalink:
+		return "DATALINK"
 	case T_TS:
 		return "TRANSACTION TIMESTAMP"
 	case T_Rowid:
@@ -763,6 +767,8 @@ func (t T) OidString() string {
 		return "T_blob"
 	case T_text:
 		return "T_text"
+	case T_datalink:
+		return "T_datalink"
 	case T_TS:
 		return "T_TS"
 	case T_Rowid:
@@ -808,7 +814,7 @@ func (t T) TypeLen() int {
 		return 4
 	case T_float64:
 		return 8
-	case T_char, T_varchar, T_json, T_blob, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64:
+	case T_char, T_varchar, T_json, T_blob, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64, T_datalink:
 		return VarlenaSize
 	case T_decimal64:
 		return 8
@@ -861,7 +867,7 @@ func (t T) FixedLength() int {
 		return RowidSize
 	case T_Blockid:
 		return BlockidSize
-	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64:
+	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64, T_datalink:
 		return -24
 	case T_enum:
 		return 2

@@ -225,6 +225,9 @@ func checkPrimaryKeyPartType(ctx context.Context, colType plan.Type, columnName 
 	if colType.GetId() == int32(types.T_text) {
 		return moerr.NewNotSupported(ctx, "text type in primary key")
 	}
+	if colType.GetId() == int32(types.T_datalink) {
+		return moerr.NewNotSupported(ctx, "datalink type in primary key")
+	}
 	if colType.GetId() == int32(types.T_json) {
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("JSON column '%s' cannot be in primary key", columnName))
 	}
@@ -240,6 +243,9 @@ func checkUniqueKeyPartType(ctx context.Context, colType plan.Type, columnName s
 	}
 	if colType.GetId() == int32(types.T_text) {
 		return moerr.NewNotSupported(ctx, "text type in primary key")
+	}
+	if colType.GetId() == int32(types.T_datalink) {
+		return moerr.NewNotSupported(ctx, "datalink type in primary key")
 	}
 	if colType.GetId() == int32(types.T_json) {
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("JSON column '%s' cannot be in primary key", columnName))

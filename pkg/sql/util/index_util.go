@@ -445,7 +445,7 @@ func serialWithCompacted(vs []*vector.Vector, proc *process.Process, packers *Pa
 				}
 			}
 		case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
-			types.T_array_float32, types.T_array_float64:
+			types.T_array_float32, types.T_array_float64, types.T_datalink:
 			// NOTE 1: We will consider T_array as bytes here just like JSON, VARBINARY and BLOB.
 			// If not, we need to define arrayType in types/tuple.go as arrayF32TypeCode, arrayF64TypeCode etc
 			// NOTE 2: vs is []string and not []byte. vs[i] is not of form "[1,2,3]". It is binary string of []float32{1,2,3}

@@ -395,7 +395,7 @@ func builtInInternalCharacterSet(parameters []*vector.Vector, result vector.Func
 				return err
 			}
 			if typ.Oid == types.T_varchar || typ.Oid == types.T_char ||
-				typ.Oid == types.T_blob || typ.Oid == types.T_text {
+				typ.Oid == types.T_blob || typ.Oid == types.T_text || typ.Oid == types.T_datalink {
 				if err := rs.Append(int64(typ.Scale), false); err != nil {
 					return err
 				}
@@ -1488,7 +1488,7 @@ func SerialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 			}
 		}
 	case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64:
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		vs := vector.ExpandStrCol(v)
 		if hasNull {
 			for i := range vs {
@@ -1577,7 +1577,8 @@ func builtInSerialExtract(parameters []*vector.Vector, result vector.FunctionRes
 		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
 
 	case types.T_json, types.T_char, types.T_varchar, types.T_text,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_array_float32, types.T_array_float64:
+		types.T_binary, types.T_varbinary, types.T_blob,
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return serialExtractForString(p1, p2, rs, proc, length, selectList)
 	}

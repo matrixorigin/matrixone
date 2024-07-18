@@ -281,7 +281,7 @@ func mergeBaseFilterInKind(left, right basePKFilter, isOR bool, proc *process.Pr
 			vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y types.Decimal128) int { return types.CompareDecimal128(x, y) })
 		}
 
-	case types.T_varchar, types.T_char, types.T_json, types.T_binary, types.T_text:
+	case types.T_varchar, types.T_char, types.T_json, types.T_binary, types.T_text, types.T_datalink:
 		if isOR {
 			vector.Union2VectorValen(va, vb, ret.vec.(*vector.Vector), proc.Mp())
 		} else {
@@ -960,7 +960,7 @@ func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []in
 			mp[v] = true
 		}
 	case types.T_char, types.T_varchar, types.T_json,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		if pk.IsConst() {
 			for i := 0; i < pk.Length(); i++ {
 				v := pk.UnsafeGetStringAt(i)
@@ -1153,7 +1153,7 @@ func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []in
 				}
 			}
 		case types.T_char, types.T_varchar, types.T_json,
-			types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+			types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 			if pk.IsConst() {
 				for i := 0; i < pk.Length(); i++ {
 					v := pk.UnsafeGetStringAt(i)

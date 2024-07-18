@@ -98,6 +98,8 @@ func init() {
 
 		newTestCase(true, mp, types.New(types.T_text, 0, 0)),
 		newTestCase(false, mp, types.New(types.T_text, 0, 0)),
+		newTestCase(true, mp, types.New(types.T_datalink, 0, 0)),
+		newTestCase(false, mp, types.New(types.T_datalink, 0, 0)),
 
 		newTestCase(true, mp, types.New(types.T_array_float32, types.MaxArrayDimension, 0)),
 		newTestCase(false, mp, types.New(types.T_array_float32, types.MaxArrayDimension, 0)),

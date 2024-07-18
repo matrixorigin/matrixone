@@ -1271,11 +1271,11 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr) bool {
 		return true
 	}
 	switch constT.Oid {
-	case types.T_char, types.T_varchar, types.T_text:
+	case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
 		switch columnT.Oid {
 		case types.T_char, types.T_varchar:
 			return constT.Width <= columnT.Width
-		case types.T_text:
+		case types.T_text, types.T_datalink:
 			return true
 		default:
 			return false
