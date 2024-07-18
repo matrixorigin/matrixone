@@ -49,6 +49,9 @@ type handler struct {
 	haKeeperClient logservice.ProxyHAKeeperClient
 	// ipNetList is the list of ip net, which is parsed from CIDRs.
 	ipNetList []*net.IPNet
+	// SQLWorker works for the SQL selection. It connects to some
+	// CN server and query for some information.
+	sqlWorker SQLWorker
 }
 
 var ErrNoAvailableCNServers = moerr.NewInternalErrorNoCtx("no available CN servers")
@@ -61,6 +64,7 @@ func newProxyHandler(
 	st *stopper.Stopper,
 	cs *counterSet,
 	haKeeperClient logservice.ProxyHAKeeperClient,
+	test bool,
 ) (*handler, error) {
 	// Create the MO cluster.
 	mc := clusterservice.NewMOCluster(haKeeperClient, cfg.Cluster.RefreshInterval.Duration)
@@ -81,10 +85,19 @@ func newProxyHandler(
 		return nil, err
 	}
 
-	ru := newRouter(mc, re, false,
-		withConnectTimeout(cfg.ConnectTimeout.Duration),
-		withAuthTimeout(cfg.AuthTimeout.Duration),
-	)
+	// The SQL worker is mainly used in router currently.
+	sw := newSQLWorker()
+
+	var ru Router
+	if test {
+		ru = newRouter(mc, re, re.connManager, false)
+	} else {
+		ru = newRouter(mc, re, sw, false,
+			withConnectTimeout(cfg.ConnectTimeout.Duration),
+			withAuthTimeout(cfg.AuthTimeout.Duration),
+		)
+	}
+
 	// Decorate the router if plugin is enabled
 	if cfg.Plugin != nil {
 		p, err := newRPCPlugin(cfg.Plugin.Backend, cfg.Plugin.Timeout)
@@ -116,6 +129,7 @@ func newProxyHandler(
 		rebalancer:     re,
 		haKeeperClient: haKeeperClient,
 		ipNetList:      ipNetList,
+		sqlWorker:      sw,
 	}, nil
 }
 
