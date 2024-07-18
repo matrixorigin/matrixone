@@ -14,20 +14,33 @@
 
 package malloc
 
-import "testing"
+import (
+	"runtime"
+	"testing"
+)
 
 func TestReadOnlyAllocator(t *testing.T) {
 	testAllocator(t, func() Allocator {
 		return NewReadOnlyAllocator(
-			NewClassAllocator(
-				NewFixedSizeMmapAllocator,
+			NewShardedAllocator(
+				runtime.GOMAXPROCS(0),
+				func() Allocator {
+					return NewClassAllocator(
+						NewFixedSizeMmapAllocator,
+					)
+				},
 			),
 		)
 	})
 
 	allocator := NewReadOnlyAllocator(
-		NewClassAllocator(
-			NewFixedSizeMmapAllocator,
+		NewShardedAllocator(
+			runtime.GOMAXPROCS(0),
+			func() Allocator {
+				return NewClassAllocator(
+					NewFixedSizeMmapAllocator,
+				)
+			},
 		),
 	)
 	slice, dec, err := allocator.Allocate(42, NoHints)
@@ -51,8 +64,13 @@ func BenchmarkReadOnlyAllocator(b *testing.B) {
 	for _, n := range benchNs {
 		benchmarkAllocator(b, func() Allocator {
 			return NewReadOnlyAllocator(
-				NewClassAllocator(
-					NewFixedSizeMmapAllocator,
+				NewShardedAllocator(
+					runtime.GOMAXPROCS(0),
+					func() Allocator {
+						return NewClassAllocator(
+							NewFixedSizeMmapAllocator,
+						)
+					},
 				),
 			)
 		}, n)
@@ -62,8 +80,13 @@ func BenchmarkReadOnlyAllocator(b *testing.B) {
 func FuzzReadOnlyAllocator(f *testing.F) {
 	fuzzAllocator(f, func() Allocator {
 		return NewReadOnlyAllocator(
-			NewClassAllocator(
-				NewFixedSizeMmapAllocator,
+			NewShardedAllocator(
+				runtime.GOMAXPROCS(0),
+				func() Allocator {
+					return NewClassAllocator(
+						NewFixedSizeMmapAllocator,
+					)
+				},
 			),
 		)
 	})

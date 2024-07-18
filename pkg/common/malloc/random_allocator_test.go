@@ -19,8 +19,8 @@ import "testing"
 func TestRandomAllocator(t *testing.T) {
 	testAllocator(t, func() Allocator {
 		return NewRandomAllocator(
-			NewClassAllocator(NewFixedSizeMmapAllocator),
-			NewClassAllocator(NewFixedSizeMmapAllocator),
+			newUpstreamAllocatorForTest(),
+			newUpstreamAllocatorForTest(),
 			10,
 		)
 	})
@@ -30,8 +30,8 @@ func BenchmarkRandomAllocator(b *testing.B) {
 	for _, n := range benchNs {
 		benchmarkAllocator(b, func() Allocator {
 			return NewRandomAllocator(
-				NewClassAllocator(NewFixedSizeMmapAllocator),
-				NewClassAllocator(NewFixedSizeMmapAllocator),
+				newUpstreamAllocatorForTest(),
+				newUpstreamAllocatorForTest(),
 				10,
 			)
 		}, n)
@@ -41,8 +41,8 @@ func BenchmarkRandomAllocator(b *testing.B) {
 func FuzzRandomAllocator(f *testing.F) {
 	fuzzAllocator(f, func() Allocator {
 		return NewRandomAllocator(
-			NewClassAllocator(NewFixedSizeMmapAllocator),
-			NewClassAllocator(NewFixedSizeMmapAllocator),
+			newUpstreamAllocatorForTest(),
+			newUpstreamAllocatorForTest(),
 			10,
 		)
 	})

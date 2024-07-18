@@ -14,33 +14,15 @@
 
 package malloc
 
-import "testing"
+import "runtime"
 
-func TestMetricsAllocator(t *testing.T) {
-	testAllocator(t, func() Allocator {
-		return NewMetricsAllocator(
-			newUpstreamAllocatorForTest(),
-			nil, nil, nil, nil,
-		)
-	})
-}
-
-func BenchmarkMetricsAllocator(b *testing.B) {
-	for _, n := range benchNs {
-		benchmarkAllocator(b, func() Allocator {
-			return NewMetricsAllocator(
-				newUpstreamAllocatorForTest(),
-				nil, nil, nil, nil,
+func newUpstreamAllocatorForTest() Allocator {
+	return NewShardedAllocator(
+		runtime.GOMAXPROCS(0),
+		func() Allocator {
+			return NewClassAllocator(
+				NewFixedSizeMmapAllocator,
 			)
-		}, n)
-	}
-}
-
-func FuzzMetricsAllocator(f *testing.F) {
-	fuzzAllocator(f, func() Allocator {
-		return NewMetricsAllocator(
-			newUpstreamAllocatorForTest(),
-			nil, nil, nil, nil,
-		)
-	})
+		},
+	)
 }
