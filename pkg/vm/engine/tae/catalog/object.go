@@ -458,11 +458,11 @@ func (entry *ObjectEntry) BlockCnt() int {
 			return 1
 		} else {
 			panic(fmt.Sprintf("logic err obj %v-%d %v doesn't have data",
-			lastNode.GetTable().fullName, lastNode.GetTable().ID, lastNode.ID().String()))
+				lastNode.GetTable().fullName, lastNode.GetTable().ID, lastNode.ID().String()))
 		}
 	}
 	if lastNode.ObjectMVCCNode.IsEmpty() {
-		if !lastNode.IsAppendable(){
+		if !lastNode.IsAppendable() {
 			logutil.Warnf("[Metadata] get block count when naobj is creating")
 			return 0
 		}
@@ -526,9 +526,9 @@ func (entry *ObjectEntry) PrepareRollback() (err error) {
 		panic("logic error")
 	}
 	switch lastNode.ObjectState {
-	case ObjectState_Create_Active:
+	case ObjectState_Create_Active, ObjectState_Create_PrepareCommit:
 		entry.table.link.Delete(lastNode)
-	case ObjectState_Delete_Active:
+	case ObjectState_Delete_Active, ObjectState_Delete_PrepareCommit:
 		newEntry := entry.Clone()
 		newEntry.DeleteNode.Reset()
 		entry.table.link.Update(newEntry, entry)
