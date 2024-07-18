@@ -17,6 +17,8 @@ package testutil
 import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -119,9 +121,13 @@ func NewTestDisttaeEngine(ctx context.Context, mp *mpool.MPool,
 func (de *TestDisttaeEngine) NewTxnOperator(ctx context.Context,
 	commitTS timestamp.Timestamp, opts ...client.TxnOption) (client.TxnOperator, error) {
 	op, err := de.txnClient.New(ctx, commitTS, opts...)
+	if err != nil {
+		return nil, err
+	}
 
-	op.AddWorkspace(de.txnOperator.GetWorkspace())
-	de.txnOperator.GetWorkspace().BindTxnOp(op)
+	ws := de.txnOperator.GetWorkspace().CloneSnapshotWS()
+	ws.BindTxnOp(op)
+	op.AddWorkspace(ws)
 
 	return op, err
 }
@@ -333,6 +339,63 @@ func (de *TestDisttaeEngine) Close(ctx context.Context) {
 	close(de.logtailReceiver)
 	de.cancel()
 	de.wg.Wait()
+}
+
+func (de *TestDisttaeEngine) GetTable(ctx context.Context, databaseName, tableName string) (
+	database engine.Database, relation engine.Relation, txn client.TxnOperator, err error) {
+
+	if txn, err = de.NewTxnOperator(ctx, de.Now()); err != nil {
+		return nil, nil, nil, err
+	}
+
+	if database, err = de.Engine.Database(ctx, databaseName, txn); err != nil {
+		return nil, nil, nil, err
+	}
+
+	if relation, err = database.Relation(ctx, tableName, nil); err != nil {
+		return nil, nil, nil, err
+	}
+
+	return
+}
+
+func (de *TestDisttaeEngine) CreateDatabaseAndTable(
+	ctx context.Context, databaseName,
+	tableName string, schema *catalog.Schema) (
+	database engine.Database, table engine.Relation, err error) {
+
+	var txn client.TxnOperator
+
+	if txn, err = de.NewTxnOperator(ctx, de.Now()); err != nil {
+		return nil, nil, err
+	}
+
+	if err = de.Engine.Create(ctx, databaseName, txn); err != nil {
+		return nil, nil, err
+	}
+
+	if database, err = de.Engine.Database(ctx, databaseName, txn); err != nil {
+		return nil, nil, err
+	}
+
+	var engineTblDef []engine.TableDef
+	if engineTblDef, err = EngineTableDefBySchema(schema); err != nil {
+		return nil, nil, err
+	}
+
+	if err = database.Create(ctx, tableName, engineTblDef); err != nil {
+		return nil, nil, err
+	}
+
+	if table, err = database.Relation(ctx, tableName, nil); err != nil {
+		return nil, nil, err
+	}
+
+	if err = txn.Commit(ctx); err != nil {
+		return nil, nil, err
+	}
+
+	return
 }
 
 func initRuntime() {

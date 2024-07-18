@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"strings"
 
 	"go.uber.org/zap"
@@ -1697,4 +1699,85 @@ func (e *concurrentExecutor) Run(ctx context.Context) {
 // GetConcurrency implements the ConcurrentExecutor interface.
 func (e *concurrentExecutor) GetConcurrency() int {
 	return e.concurrency
+}
+
+// for test
+
+func MakeColExprForTest(idx int32, typ types.T) *plan.Expr {
+	schema := []string{"a", "b", "c", "d"}
+	containerType := typ.ToType()
+	exprType := plan2.MakePlan2Type(&containerType)
+
+	return &plan.Expr{
+		Typ: exprType,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: 0,
+				ColPos: idx,
+				Name:   schema[idx],
+			},
+		},
+	}
+}
+
+func MakeFunctionExprForTest(name string, args []*plan.Expr) *plan.Expr {
+	argTypes := make([]types.Type, len(args))
+	for i, arg := range args {
+		argTypes[i] = plan2.MakeTypeByPlan2Expr(arg)
+	}
+
+	finfo, err := function.GetFunctionByName(context.TODO(), name, argTypes)
+	if err != nil {
+		panic(err)
+	}
+
+	retTyp := finfo.GetReturnType()
+
+	return &plan.Expr{
+		Typ: plan2.MakePlan2Type(&retTyp),
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &plan.ObjectRef{
+					Obj:     finfo.GetEncodedOverloadID(),
+					ObjName: name,
+				},
+				Args: args,
+			},
+		},
+	}
+}
+
+func MakeInExprForTest[T any](arg0 *plan.Expr, vals []T, oid types.T, mp *mpool.MPool) *plan.Expr {
+	vec := vector.NewVec(oid.ToType())
+	for _, val := range vals {
+		_ = vector.AppendAny(vec, val, false, mp)
+	}
+	data, _ := vec.MarshalBinary()
+	vec.Free(mp)
+	return &plan.Expr{
+		Typ: plan.Type{
+			Id:          int32(types.T_bool),
+			NotNullable: true,
+		},
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &plan.ObjectRef{
+					Obj:     function.InFunctionEncodedID,
+					ObjName: function.InFunctionName,
+				},
+				Args: []*plan.Expr{
+					arg0,
+					{
+						Typ: plan2.MakePlan2Type(vec.GetType()),
+						Expr: &plan.Expr_Vec{
+							Vec: &plan.LiteralVec{
+								Len:  int32(len(vals)),
+								Data: data,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
 }

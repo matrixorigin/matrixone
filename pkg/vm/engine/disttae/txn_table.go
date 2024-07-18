@@ -2072,6 +2072,23 @@ func (tbl *txnTable) GetDBID(ctx context.Context) uint64 {
 	return tbl.db.databaseId
 }
 
+// for ut
+func BuildLocalDataSource(
+	ctx context.Context, rel engine.Relation,
+	ranges []*objectio.BlockInfoInProgress) (source DataSource, err error) {
+
+	var (
+		ok  bool
+		tbl *txnTable
+	)
+
+	if tbl, ok = rel.(*txnTable); !ok {
+		tbl = rel.(*txnTableDelegate).origin
+	}
+
+	return tbl.buildLocalDataSource(ctx, ranges)
+}
+
 func (tbl *txnTable) buildLocalDataSource(
 	ctx context.Context,
 	txnOffset int,
