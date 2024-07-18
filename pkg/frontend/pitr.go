@@ -71,7 +71,7 @@ func getSqlForDropPitr(pitrName string, accountId uint64) string {
 }
 
 func getSqlForAlterPitr(modifiedTime string, pitrLength uint8, pitrUnit string, pitrName string, accountId uint64) string {
-	return fmt.Sprintf(alterPitrFormat, pitrLength, pitrUnit, pitrName, accountId)
+	return fmt.Sprintf(alterPitrFormat, modifiedTime, pitrLength, pitrUnit, pitrName, accountId)
 }
 
 func checkPitrExistOrNot(ctx context.Context, bh BackgroundExec, pitrName string, accountId uint64) (bool, error) {

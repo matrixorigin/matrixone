@@ -154,3 +154,19 @@ drop pitr if exists pitr14;
 show pitr;
 -- @ignore:3,4
 select * from mo_catalog.mo_pitr;
+
+create account acc02 admin_name = 'test_account' identified by '111';
+-- @session:id=2&user=acc02:test_account&password=111
+create pitr pitr01 range 1 'h';
+-- @ignore:1,2
+show pitr;
+select sleep(1);
+alter pitr pitr01 range 1 'd';
+-- @ignore:1,2
+show pitr;
+-- @session
+-- @ignore:3,4
+select * from mo_catalog.mo_pitr;
+drop account if exists acc02;
+-- @ignore:3,4
+select * from mo_catalog.mo_pitr;
