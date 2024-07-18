@@ -669,16 +669,14 @@ func (c *Compile) runOnce() error {
 	}
 
 	// fuzzy filter not sure whether this insert / load obey duplicate constraints, need double check
-	if len(c.fuzzys) > 0 {
-		for _, f := range c.fuzzys {
-			if f != nil && f.cnt > 0 {
-				if f.cnt > 10 {
-					c.proc.Warnf(c.proc.Ctx, "fuzzy filter cnt is %d, may be too high", f.cnt)
-				}
-				err = f.backgroundSQLCheck(c)
-				if err != nil {
-					return err
-				}
+	for _, f := range c.fuzzys {
+		if f != nil && f.cnt > 0 {
+			if f.cnt > 10 {
+				c.proc.Debugf(c.proc.Ctx, "double check dup for `%s`.`%s`:collision cnt is %d, may be too high", f.db, f.tbl, f.cnt)
+			}
+			err = f.backgroundSQLCheck(c)
+			if err != nil {
+				return err
 			}
 		}
 	}
@@ -1225,6 +1223,21 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		}
 	}()
 	n := ns[curNodeIdx]
+
+	if n.Limit != nil {
+		if cExpr, ok := n.Limit.Expr.(*plan.Expr_Lit); ok {
+			if cval, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
+				if cval.U64Val == 0 {
+					// optimize for limit 0
+					rs := newScope(Merge)
+					rs.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
+					rs.Proc = process.NewFromProc(c.proc, c.proc.Ctx, 0)
+					return c.compileLimit(n, []*Scope{rs}), nil
+				}
+			}
+		}
+	}
+
 	switch n.NodeType {
 	case plan.Node_VALUE_SCAN:
 		ds := newScope(Normal)
@@ -2968,7 +2981,6 @@ func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
-
 	for i := range ss {
 		c.anal.isFirst = currentFirstFlag
 		if containBrokenNode(ss[i]) {
@@ -3001,7 +3013,7 @@ func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scop
 
 	rs.Instructions[0].Idx = c.anal.curr
 
-	arg := constructFuzzyFilter(c, n, ns[n.Children[1]])
+	arg := constructFuzzyFilter(n, ns[n.Children[0]], ns[n.Children[1]])
 
 	rs.appendInstruction(vm.Instruction{
 		Op:  vm.FuzzyFilter,
