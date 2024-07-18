@@ -661,30 +661,12 @@ func (v *Vector) PreExtend(rows int, mp *mpool.MPool) error {
 }
 
 // PreExtendArea use to expand the mpool and area of vector
-// rows: the number of rows to be extended
-// extraAreaSize: the size of area to be extended, if -1, it will be calculated automatically.
+// extraAreaSize: the size of area to be extended
 // mp: mpool
-func (v *Vector) PreExtendArea(rows int, extraAreaSize int, mp *mpool.MPool) error {
+func (v *Vector) PreExtendArea(extraAreaSize int, mp *mpool.MPool) error {
 
-	// expand mpool
-	if err := v.PreExtend(rows, mp); err != nil {
-		return err
-	}
-
-	// get the size required for storing new rows
-	if extraAreaSize == -1 {
-		var vSize int
-		switch v.typ.Oid {
-		case types.T_array_float32:
-			vSize = 4 * int(v.typ.Width)
-		case types.T_array_float64:
-			vSize = 8 * int(v.typ.Width)
-		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
-			vSize = 1 * int(v.typ.Width)
-		default:
-			vSize = v.typ.TypeSize()
-		}
-		extraAreaSize = vSize * rows
+	if v.class == CONSTANT {
+		return nil
 	}
 
 	// check if required size is already satisfied
