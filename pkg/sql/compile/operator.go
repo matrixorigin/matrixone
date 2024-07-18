@@ -303,7 +303,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 	case vm.Projection:
 		t := sourceOp.(*projection.Projection)
 		op := projection.NewArgument()
-		op.Es = t.Es
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.Filter:
@@ -776,7 +776,7 @@ func constructInsert(n *plan.Node, eg engine.Engine) (*insert.Insert, error) {
 
 func constructProjection(n *plan.Node) *projection.Projection {
 	arg := projection.NewArgument()
-	arg.Es = n.ProjectList
+	arg.ProjectList = n.ProjectList
 	return arg
 }
 

@@ -17,6 +17,7 @@ package table_scan
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -37,6 +38,8 @@ type TableScan struct {
 	Reader         engine.Reader
 	Attrs          []string
 	TableID        uint64
+	ProjectList    []*plan.Expr
+	Projection     *colexec.Projection
 
 	vm.OperatorBase
 }
@@ -90,4 +93,8 @@ func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err
 		}
 		tableScan.ctr = nil
 	}
+	if tableScan.Projection != nil {
+		tableScan.Projection = nil
+	}
+	tableScan.ProjectList = nil
 }

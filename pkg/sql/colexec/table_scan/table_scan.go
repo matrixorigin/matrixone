@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -42,7 +43,11 @@ func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 	if tableScan.TopValueMsgTag > 0 {
 		tableScan.ctr.msgReceiver = proc.NewMessageReceiver([]int32{tableScan.TopValueMsgTag}, tableScan.GetAddress())
 	}
-	return nil
+	if tableScan.ProjectList != nil {
+		tableScan.Projection = colexec.NewProjection(tableScan.ProjectList)
+		err = tableScan.Projection.Prepare(proc)
+	}
+	return
 }
 
 func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
@@ -144,6 +149,14 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		break
 	}
 
-	result.Batch = tableScan.ctr.buf
+	if tableScan.ProjectList == nil {
+		result.Batch = tableScan.ctr.buf
+	} else {
+		bat, err := tableScan.Projection.Eval(tableScan.ctr.buf, proc)
+		if err != nil {
+			return result, err
+		}
+		result.Batch = bat
+	}
 	return result, nil
 }

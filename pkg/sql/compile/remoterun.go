@@ -666,7 +666,7 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 			IsShuffle: t.IsShuffle,
 		}
 	case *projection.Projection:
-		in.ProjectList = t.Es
+		in.ProjectList = t.ProjectList
 	case *filter.Filter:
 		in.Filter = t.GetExeExpr()
 		if in.Filter == nil {
@@ -1084,7 +1084,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		op = arg
 	case vm.Projection:
 		arg := projection.NewArgument()
-		arg.Es = opr.ProjectList
+		arg.ProjectList = opr.ProjectList
 		op = arg
 	case vm.Filter:
 		arg := filter.NewArgument()

@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
@@ -2352,16 +2353,34 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 	if len(n.ProjectList) == 0 {
 		return ss
 	}
-	currentFirstFlag := c.anal.isFirst
-	var op *projection.Projection
+
 	for i := range ss {
-		op = constructProjection(n)
-		op.SetIdx(c.anal.curr)
-		op.SetIsFirst(currentFirstFlag)
-		ss[i].setRootOperator(op)
+		if ss[i].RootOp == nil {
+			c.setProjection(n, ss[i])
+			continue
+		}
+		switch ss[i].RootOp.(type) {
+		case *projection.Projection:
+			c.setProjection(n, ss[i])
+		case *table_scan.TableScan:
+			if ss[i].RootOp.(*table_scan.TableScan).ProjectList == nil {
+				ss[i].RootOp.(*table_scan.TableScan).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
+			}
+		default:
+			c.setProjection(n, ss[i])
+		}
 	}
 	c.anal.isFirst = false
 	return ss
+}
+
+func (c *Compile) setProjection(n *plan.Node, s *Scope) {
+	op := constructProjection(n)
+	op.SetIdx(c.anal.curr)
+	op.SetIsFirst(c.anal.isFirst)
+	s.setRootOperator(op)
 }
 
 func (c *Compile) compileTPUnion(n *plan.Node, ss []*Scope, children []*Scope) []*Scope {
