@@ -2211,22 +2211,67 @@ func (c *Compile) compileValueScan(n *plan.Node) ([]*Scope, error) {
 }
 
 func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
-	nodes, partialResults, partialResultTypes, err := c.generateNodes(n)
-	if err != nil {
-		return nil, err
-	}
-	ss := make([]*Scope, 0, len(nodes))
+	//处理分区表
+	if n.TableDef.Partition != nil {
+		nodes := make([]engine.Node, 0)
+		partitionDef := n.TableDef.Partition
+		// 遍历每个分区子表
+		for _, partitionItem := range partitionDef.Partitions {
+			//pNodes, partialResults, partialResultTypes, err := c.generateNodes(n, partitionItem.PartitionTableName)
+			pNodes, _, _, err := c.generateNodes(n, partitionItem.PartitionTableName)
+			if err != nil {
+				return nil, err
+			}
+			nodes = append(nodes, pNodes...)
+		}
 
-	for i := range nodes {
-		s, err := c.compileTableScanWithNode(n, nodes[i])
+		ss := make([]*Scope, 0, len(nodes))
+		for i := range nodes {
+			s, err := c.compileTableScanWithNode(n, nodes[i])
+			if err != nil {
+				return nil, err
+			}
+			ss = append(ss, s)
+		}
+		//ss[0].PartialResults = partialResults
+		//ss[0].PartialResultTypes = partialResultTypes
+		return ss, nil
+	} else {
+		// 处理普通表
+		nodes, partialResults, partialResultTypes, err := c.generateNodes(n, "")
 		if err != nil {
 			return nil, err
 		}
-		ss = append(ss, s)
+		ss := make([]*Scope, 0, len(nodes))
+
+		for i := range nodes {
+			s, err := c.compileTableScanWithNode(n, nodes[i])
+			if err != nil {
+				return nil, err
+			}
+			ss = append(ss, s)
+		}
+		ss[0].PartialResults = partialResults
+		ss[0].PartialResultTypes = partialResultTypes
+		return ss, nil
 	}
-	ss[0].PartialResults = partialResults
-	ss[0].PartialResultTypes = partialResultTypes
-	return ss, nil
+
+	//nodes, partialResults, partialResultTypes, err := c.generateNodes(n, "")
+	//if err != nil {
+	//	return nil, err
+	//}
+	//ss := make([]*Scope, 0, len(nodes))
+	//
+	//for i := range nodes {
+	//	s, err := c.compileTableScanWithNode(n, nodes[i])
+	//	if err != nil {
+	//		return nil, err
+	//	}
+	//	ss = append(ss, s)
+	//}
+	//ss[0].PartialResults = partialResults
+	//ss[0].PartialResultTypes = partialResultTypes
+	//return ss, nil
 }
 
 func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) (*Scope, error) {
@@ -3810,6 +3855,10 @@ func (c *Compile) determinExpandRanges(n *plan.Node) bool {
 		return true
 	}
 
+	if n.TableDef.Partition != nil {
+		return true
+	}
+
 	if n.Stats.BlockNum > int32(plan2.BlockThresholdForOneCN) && len(c.cnList) > 1 && !n.Stats.ForceOneCN {
 		return true
 	}
@@ -3822,7 +3871,7 @@ func (c *Compile) determinExpandRanges(n *plan.Node) bool {
 
 func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation, blockFilterList []*plan.Expr) (engine.Ranges, error) {
 	var err error
-	var db engine.Database
+	//var db engine.Database
 	var ranges engine.Ranges
 	var txnOp client.TxnOperator
 
@@ -3856,7 +3905,7 @@ func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation, blockFilterLis
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	}
 
-	db, err = c.e.Database(ctx, n.ObjRef.SchemaName, txnOp)
+	//db, err = c.e.Database(ctx, n.ObjRef.SchemaName, txnOp)
 	if err != nil {
 		return nil, err
 	}
@@ -3865,55 +3914,55 @@ func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation, blockFilterLis
 		return nil, err
 	}
 
-	if n.TableDef.Partition != nil {
-		if n.PartitionPrune != nil && n.PartitionPrune.IsPruned {
-			for i, partitionItem := range n.PartitionPrune.SelectedPartitions {
-				partTableName := partitionItem.PartitionTableName
-				subrelation, err := db.Relation(ctx, partTableName, c.proc)
-				if err != nil {
-					return nil, err
-				}
-				subranges, err := subrelation.Ranges(ctx, n.BlockFilterList, c.TxnOffset)
-				if err != nil {
-					return nil, err
-				}
-				// add partition number into objectio.BlockInfo.
-				blkSlice := subranges.(*objectio.BlockInfoSlice)
-				for j := 1; j < subranges.Len(); j++ {
-					blkInfo := blkSlice.Get(j)
-					blkInfo.PartitionNum = i
-					ranges.Append(blkSlice.GetBytes(j))
-				}
-			}
-		} else {
-			partitionInfo := n.TableDef.Partition
-			partitionNum := int(partitionInfo.PartitionNum)
-			partitionTableNames := partitionInfo.PartitionTableNames
-			for i := 0; i < partitionNum; i++ {
-				partTableName := partitionTableNames[i]
-				subrelation, err := db.Relation(ctx, partTableName, c.proc)
-				if err != nil {
-					return nil, err
-				}
-				subranges, err := subrelation.Ranges(ctx, n.BlockFilterList, c.TxnOffset)
-				if err != nil {
-					return nil, err
-				}
-				// add partition number into objectio.BlockInfo.
-				blkSlice := subranges.(*objectio.BlockInfoSlice)
-				for j := 1; j < subranges.Len(); j++ {
-					blkInfo := blkSlice.Get(j)
-					blkInfo.PartitionNum = i
-					ranges.Append(blkSlice.GetBytes(j))
-				}
-			}
-		}
-	}
+	//if n.TableDef.Partition != nil {
+	//	if n.PartitionPrune != nil && n.PartitionPrune.IsPruned {
+	//		for i, partitionItem := range n.PartitionPrune.SelectedPartitions {
+	//			partTableName := partitionItem.PartitionTableName
+	//			subrelation, err := db.Relation(ctx, partTableName, c.proc)
+	//			if err != nil {
+	//				return nil, err
+	//			}
+	//			subranges, err := subrelation.Ranges(ctx, n.BlockFilterList, c.TxnOffset)
+	//			if err != nil {
+	//				return nil, err
+	//			}
+	//			// add partition number into objectio.BlockInfo.
+	//			blkSlice := subranges.(*objectio.BlockInfoSlice)
+	//			for j := 1; j < subranges.Len(); j++ {
+	//				blkInfo := blkSlice.Get(j)
+	//				blkInfo.PartitionNum = i
+	//				ranges.Append(blkSlice.GetBytes(j))
+	//			}
+	//		}
+	//	} else {
+	//		partitionInfo := n.TableDef.Partition
+	//		partitionNum := int(partitionInfo.PartitionNum)
+	//		partitionTableNames := partitionInfo.PartitionTableNames
+	//		for i := 0; i < partitionNum; i++ {
+	//			partTableName := partitionTableNames[i]
+	//			subrelation, err := db.Relation(ctx, partTableName, c.proc)
+	//			if err != nil {
+	//				return nil, err
+	//			}
+	//			subranges, err := subrelation.Ranges(ctx, n.BlockFilterList, c.TxnOffset)
+	//			if err != nil {
+	//				return nil, err
+	//			}
+	//			// add partition number into objectio.BlockInfo.
+	//			blkSlice := subranges.(*objectio.BlockInfoSlice)
+	//			for j := 1; j < subranges.Len(); j++ {
+	//				blkInfo := blkSlice.Get(j)
+	//				blkInfo.PartitionNum = i
+	//				ranges.Append(blkSlice.GetBytes(j))
+	//			}
+	//		}
+	//	}
+	//}
 
 	return ranges, nil
 }
 
-func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, error) {
+func (c *Compile) generateNodes(n *plan.Node, partTblName string) (engine.Nodes, []any, []types.T, error) {
 	var err error
 	var db engine.Database
 	var rel engine.Relation
@@ -3958,7 +4007,13 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		rel, err = db.Relation(ctx, n.TableDef.Name, c.proc)
+
+		if partTblName != "" {
+			rel, err = db.Relation(ctx, partTblName, c.proc)
+		} else {
+			rel, err = db.Relation(ctx, n.TableDef.Name, c.proc)
+		}
+
 		if err != nil {
 			if txnOp.IsSnapOp() {
 				return nil, nil, nil, err
