@@ -460,7 +460,7 @@ func (c *Conn) Write(payload []byte) error {
 			return err
 		}
 	} else {
-		if c.packetInBuf != 0 {
+		if c.packetInBuf != 0 && len(c.fixBuf.data) >= HeaderLengthOfTheProtocol {
 			c.sequenceId = c.fixBuf.data[3]
 		}
 	}
