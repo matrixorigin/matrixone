@@ -41,11 +41,8 @@ import (
 	"go.uber.org/zap"
 )
 
-// defaultQueueSize default length for collect Channel
-// Deprecated, pls use defaultRingBufferSize
-const defaultQueueSize = 1310720 // queue mem cost = 10MB
-
-// need 2^N value
+// defaultRingBufferSize need 2^N value
+// OLD Case: defaultQueueSize default length for collect Channel (value = 1310720)
 const defaultRingBufferSize = 1 << 20
 
 const LoggerNameMOCollector = "MOCollector"
