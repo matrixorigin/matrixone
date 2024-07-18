@@ -84,15 +84,13 @@ func (obj *aobject) CheckFlushTaskRetry(startts types.TS) bool {
 	x := obj.getLastAppendMVCC().GetLatestAppendPrepareTSLocked()
 	return x.Greater(&startts)
 }
-func (obj *aobject) mustGetLastAppendMVCC() *updates.AppendMVCCHandle {
-	return obj.PinNode().MustMNode().getAppendableNode().appendMVCC
-}
 func (obj *aobject) getLastAppendMVCC() *updates.AppendMVCCHandle {
 	return obj.PinNode().MustMNode().getLastNode().appendMVCC
 }
 func (obj *aobject) getAppendMVCC(blkID uint16) *updates.AppendMVCCHandle {
 	return obj.PinNode().MustMNode().getMemoryNode(blkID).appendMVCC
 }
+// only used in replay
 func (obj *aobject) mustGetAppendMVCC(blkID uint16) *updates.AppendMVCCHandle {
 	return obj.PinNode().MustMNode().getOrCreateNode(blkID).appendMVCC
 }

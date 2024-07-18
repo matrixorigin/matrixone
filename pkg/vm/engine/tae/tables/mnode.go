@@ -687,21 +687,6 @@ func (node *objectMemoryNode) close() {
 		n.close()
 	}
 }
-func (node *objectMemoryNode) getAppendableNode() *memoryNode {
-	if len(node.blkMemoryNodes) == 0 {
-		blkNode := node.registerNodeLocked()
-		return blkNode
-	}
-	blkNode := node.getLastNode()
-	row, err := blkNode.Rows()
-	if err != nil {
-		panic(err)
-	}
-	if row >= node.writeSchema.BlockMaxRows {
-		blkNode = node.registerNodeLocked()
-	}
-	return blkNode
-}
 func (node *objectMemoryNode) getLastNode() *memoryNode {
 	return node.blkMemoryNodes[len(node.blkMemoryNodes)-1]
 }
@@ -741,18 +726,21 @@ func (node *objectMemoryNode) GetRowsByKey(blkID uint16, key any) (rows []uint32
 	return node.getMemoryNode(blkID).GetRowsByKey(key)
 }
 func (node *objectMemoryNode) registerNodeLocked() *memoryNode {
-	if len(node.blkMemoryNodes) >= int(node.writeSchema.ObjectMaxBlocks) {
-		return nil
+	if !node.checkBlockCountLocked() {
+		panic("logic error")
 	}
 	blkNode := newMemoryNode(node.obj, uint16(len(node.blkMemoryNodes)))
 	node.blkMemoryNodes = append(node.blkMemoryNodes, blkNode)
 	return blkNode
 }
+func (node *objectMemoryNode) checkBlockCountLocked() bool {
+	return len(node.blkMemoryNodes) < int(node.writeSchema.ObjectMaxBlocks)
+}
 
 // Only check block count.
 // Check rows in appender.
 func (node *objectMemoryNode) IsAppendable() bool {
-	return len(node.blkMemoryNodes) < int(node.writeSchema.ObjectMaxBlocks)
+	return node.checkBlockCountLocked()
 }
 func (node *objectMemoryNode) BatchDedup(
 	ctx context.Context,

@@ -129,6 +129,7 @@ type Schema struct {
 	BlockMaxRows uint32
 	// for aobj, there're at most one blk
 	ObjectMaxBlocks uint16
+	AObjectMaxSize  int
 	Extra           *apipb.SchemaExtra
 
 	// do not write down, reconstruct them when reading
@@ -862,6 +863,9 @@ func (s *Schema) Finalize(withoutPhyAddr bool) (err error) {
 	}
 	if s.ObjectMaxBlocks == 0 {
 		s.ObjectMaxBlocks = options.DefaultObjectPerSegment
+	}
+	if s.AObjectMaxSize == 0 {
+		s.AObjectMaxSize = options.DefaultAObjectMaxSize
 	}
 	if !withoutPhyAddr {
 		phyAddrDef := &ColDef{
