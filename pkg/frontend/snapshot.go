@@ -1651,3 +1651,17 @@ func getSnapshotPlanWithSharedBh(ctx context.Context, bh BackgroundExec, snapsho
 		},
 	}, nil
 }
+
+func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (err error) {
+	bh := ses.GetShareTxnBackgroundExec(ctx, false)
+	defer bh.Close()
+
+	// reslove timestamp
+
+	return
+}
+
+func doResolveTimeStampExpression(ctx context.Context, ses *Session, expr tree.Expr) (err error) {
+
+	return
+}
