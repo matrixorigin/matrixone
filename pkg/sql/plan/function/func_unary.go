@@ -21,9 +21,11 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"github.com/baidubce/bce-qianfan-sdk/go/qianfan"
 	"github.com/tmc/langchaingo/llms/ollama"
 	"io"
 	"math"
+	"os"
 	"runtime"
 	"strconv"
 	"strings"
@@ -954,8 +956,30 @@ func createOllamaEmbedding(ctx context.Context, input string) ([]float32, error)
 	return embeddings[0], nil
 }
 
-func createErnieEmbedding(ctx context.Context, input string) ([]float32, error) {
-	return nil, nil
+func createErnieEmbedding(ctx context.Context, input string) ([]float64, error) {
+	// set Qianfan's Access Key and Secret Key
+	os.Setenv("QIANFAN_ACCESS_KEY", "")
+	os.Setenv("QIANFAN_SECRET_KEY", "")
+
+	embed := qianfan.NewEmbedding(
+		qianfan.WithModel("Embedding-V1"),
+	)
+
+	resp, err := embed.Do(
+		ctx,
+		&qianfan.EmbeddingRequest{
+			Input: []string{input},
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(resp.Data) == 0 || len(resp.Data[0].Embedding) == 0 {
+		return nil, fmt.Errorf("embedding data is empty")
+	}
+
+	return resp.Data[0].Embedding, nil
 }
 
 // Embedding function
@@ -975,12 +999,13 @@ func EmbeddingOp(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		}
 
 		input := string(inputBytes)
-		embeddingFloats, err := createOllamaEmbedding(ctx, input)
+		embeddingFloats, err := createErnieEmbedding(ctx, input)
 		if err != nil {
 			return err
 		}
 
-		embeddingBytes := types.ArrayToBytes[float32](embeddingFloats)
+		// TODO Note float64 is for Ernie, and float32 is for gemini and ollama
+		embeddingBytes := types.ArrayToBytes[float64](embeddingFloats)
 
 		if err := rs.AppendBytes(embeddingBytes, false); err != nil {
 			return err
