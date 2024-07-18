@@ -235,10 +235,12 @@ func (b *bufferHolder) getGenerateReq() generateReq {
 
 	// handle aggr
 	// fixme: handle now ? or run regular
-	end := time.Now().Truncate(b.aggr.GetWindow())
-	results := b.aggr.GetResultsBeforeWindow(end)
-	for _, res := range results {
-		b.buffer.Add(res)
+	if b.aggr != nil {
+		end := time.Now().Truncate(b.aggr.GetWindow())
+		results := b.aggr.GetResultsBeforeWindow(end)
+		for _, res := range results {
+			b.buffer.Add(res)
+		}
 	}
 	// END> handle aggr
 
