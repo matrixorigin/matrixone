@@ -57,22 +57,16 @@ func (rt RuntimeFilterMessage) GetReceiverAddr() MessageAddress {
 func (proc *Process) SendRuntimeFilter(rt RuntimeFilterMessage, m *plan.RuntimeFilterSpec) {
 	if m != nil {
 		proc.SendMessage(rt)
-		m.Handled = true
 	}
 }
 
-func (proc *Process) FinalizeRuntimeFilter(m *plan.RuntimeFilterSpec) {
-	m.Handled = false
-	/*
-		if m != nil && !m.Handled {
+func (proc *Process) FinalizeRuntimeFilter(m *plan.RuntimeFilterSpec, pipelineFailed bool, err error) {
+	if m != nil {
+		if pipelineFailed || err != nil {
 			var runtimeFilter RuntimeFilterMessage
 			runtimeFilter.Tag = m.Tag
 			runtimeFilter.Typ = RuntimeFilter_DROP
 			proc.SendMessage(runtimeFilter)
 		}
-		if m != nil {
-			m.Handled = false
-		}
-
-	*/
+	}
 }
