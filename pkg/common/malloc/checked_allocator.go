@@ -23,7 +23,6 @@ import (
 
 type CheckedAllocator struct {
 	upstream        Allocator
-	fraction        uint32
 	deallocatorPool *ClosureDeallocatorPool[checkedAllocatorArgs, *checkedAllocatorArgs]
 }
 
@@ -41,11 +40,9 @@ func (checkedAllocatorArgs) As(Trait) bool {
 
 func NewCheckedAllocator(
 	upstream Allocator,
-	fraction uint32,
 ) *CheckedAllocator {
 	return &CheckedAllocator{
 		upstream: upstream,
-		fraction: fraction,
 
 		deallocatorPool: NewClosureDeallocatorPool(
 			func(hints Hints, args *checkedAllocatorArgs) {
@@ -76,10 +73,6 @@ func (c *CheckedAllocator) Allocate(size uint64, hints Hints) ([]byte, Deallocat
 	ptr, dec, err := c.upstream.Allocate(size, hints)
 	if err != nil {
 		return nil, nil, err
-	}
-
-	if fastrand()%c.fraction > 0 {
-		return ptr, dec, nil
 	}
 
 	stacktraceID := GetStacktraceID(0)

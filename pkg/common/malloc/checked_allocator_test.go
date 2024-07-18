@@ -25,7 +25,6 @@ func TestCheckedAllocator(t *testing.T) {
 	testAllocator(t, func() Allocator {
 		return NewCheckedAllocator(
 			NewClassAllocator(NewFixedSizeMmapAllocator),
-			1,
 		)
 	})
 
@@ -33,7 +32,6 @@ func TestCheckedAllocator(t *testing.T) {
 	t.Run("missing free", func(t *testing.T) {
 		allocator := NewCheckedAllocator(
 			NewClassAllocator(NewFixedSizeMmapAllocator),
-			1,
 		)
 		ptr, dec, err := allocator.Allocate(42, NoHints)
 		if err != nil {
@@ -61,7 +59,6 @@ func TestCheckedAllocator(t *testing.T) {
 		}()
 		allocator := NewCheckedAllocator(
 			NewClassAllocator(NewFixedSizeMmapAllocator),
-			1,
 		)
 		_, dec, err := allocator.Allocate(42, NoHints)
 		if err != nil {
@@ -75,7 +72,6 @@ func TestCheckedAllocator(t *testing.T) {
 	t.Run("use after free", func(t *testing.T) {
 		allocator := NewCheckedAllocator(
 			NewClassAllocator(NewFixedSizeMmapAllocator),
-			1,
 		)
 		slice, dec, err := allocator.Allocate(42, NoHints)
 		if err != nil {
@@ -100,7 +96,6 @@ func BenchmarkCheckedAllocator(b *testing.B) {
 		benchmarkAllocator(b, func() Allocator {
 			return NewCheckedAllocator(
 				NewClassAllocator(NewFixedSizeMmapAllocator),
-				1,
 			)
 		}, n)
 	}
@@ -110,7 +105,6 @@ func FuzzCheckedAllocator(f *testing.F) {
 	fuzzAllocator(f, func() Allocator {
 		return NewCheckedAllocator(
 			NewClassAllocator(NewFixedSizeMmapAllocator),
-			1,
 		)
 	})
 }
