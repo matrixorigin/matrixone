@@ -534,7 +534,7 @@ import (
 %type <statement> create_publication_stmt drop_publication_stmt alter_publication_stmt show_publications_stmt show_subscriptions_stmt
 %type <statement> create_stage_stmt drop_stage_stmt alter_stage_stmt
 %type <statement> create_snapshot_stmt drop_snapshot_stmt
-%type <statement> create_pitr_stmt drop_pitr_stmt show_pitr_stmt alter_pitr_stmt
+%type <statement> create_pitr_stmt drop_pitr_stmt show_pitr_stmt alter_pitr_stmt restore_pitr_stmt
 %type <str> urlparams
 %type <str> comment_opt view_list_opt view_opt security_opt view_tail check_type
 %type <subscriptionOption> subscription_opt
@@ -919,6 +919,7 @@ normal_stmt:
 |   kill_stmt
 |   backup_stmt
 |   snapshot_restore_stmt
+|   restore_pitr_stmt
 
 
 backup_stmt:
@@ -1127,6 +1128,32 @@ snapshot_restore_stmt:
             ToAccountName: tree.Identifier($13.Compare()),
         }
     }
+
+restore_pitr_stmt:
+   RESTORE FROM PITR TIMESTAMP '=' expression
+   {
+       $$ = &tree.RestorePitr{
+           Level: tree.RESTORELEVELACCOUNT,
+           TimeStampExpr: $6,
+       }
+   }
+|  RESTORE DATABASE ident FROM PITR TIMESTAMP '=' expression
+   {
+       $$ = &tree.RestorePitr{
+            Level: tree.RESTORELEVELDATABASE,
+            DatabaseName: tree.Identifier($3.Compare()),
+            TimeStampExpr: $8,
+       }
+   }
+|   RESTORE DATABASE ident TABLE ident FROM PITR TIMESTAMP '=' expression
+   {
+      $$ = &tree.RestorePitr{
+            Level: tree.RESTORELEVELTABLE,
+            DatabaseName: tree.Identifier($3.Compare()),
+            TableName: tree.Identifier($5.Compare()),
+            TimeStampExpr: $10,
+       }
+   }
 
 kill_stmt:
     KILL kill_opt INTEGRAL statement_id_opt
