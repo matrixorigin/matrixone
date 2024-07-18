@@ -141,16 +141,12 @@ func (markJoin *MarkJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) receiveHashMap(anal process.Analyze) error {
-	msg := ctr.ReceiveFromSingleReg(1, anal)
-	if msg.Err != nil {
-		return msg.Err
-	}
-	bat := msg.Batch
-	if bat != nil {
+func (markJoin *MarkJoin) receiveHashMap(anal process.Analyze, proc *process.Process) {
+	ctr := markJoin.ctr
+	ctr.mp = colexec.ReceiveHashMap(anal, markJoin.JoinMapTag, false, 0, proc)
+	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
-	return nil
 }
 
 func (ctr *container) receiveBatch(ap *MarkJoin, proc *process.Process, anal process.Analyze) error {
@@ -180,10 +176,7 @@ func (ctr *container) receiveBatch(ap *MarkJoin, proc *process.Process, anal pro
 }
 
 func (ctr *container) build(ap *MarkJoin, proc *process.Process, anal process.Analyze) error {
-	err := ctr.receiveHashMap(anal)
-	if err != nil {
-		return err
-	}
+	ap.receiveHashMap(anal, proc)
 	return ctr.receiveBatch(ap, proc, anal)
 }
 

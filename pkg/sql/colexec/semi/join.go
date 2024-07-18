@@ -69,7 +69,7 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(anal); err != nil {
+			if err := semiJoin.build(anal, proc); err != nil {
 				return result, err
 			}
 			if ctr.mp == nil && !semiJoin.IsShuffle {
@@ -134,16 +134,12 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) receiveHashMap(anal process.Analyze) error {
-	msg := ctr.ReceiveFromSingleReg(1, anal)
-	if msg.Err != nil {
-		return msg.Err
-	}
-	bat := msg.Batch
-	if bat != nil {
+func (semiJoin *SemiJoin) receiveHashMap(anal process.Analyze, proc *process.Process) {
+	ctr := semiJoin.ctr
+	ctr.mp = colexec.ReceiveHashMap(anal, semiJoin.JoinMapTag, semiJoin.IsShuffle, semiJoin.ShuffleIdx, proc)
+	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
-	return nil
 }
 
 func (ctr *container) receiveBatch(anal process.Analyze) error {
@@ -168,12 +164,9 @@ func (ctr *container) receiveBatch(anal process.Analyze) error {
 	return nil
 }
 
-func (ctr *container) build(anal process.Analyze) error {
-	err := ctr.receiveHashMap(anal)
-	if err != nil {
-		return err
-	}
-	return ctr.receiveBatch(anal)
+func (semiJoin *SemiJoin) build(anal process.Analyze, proc *process.Process) error {
+	semiJoin.receiveHashMap(anal, proc)
+	return semiJoin.ctr.receiveBatch(anal)
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *SemiJoin, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
