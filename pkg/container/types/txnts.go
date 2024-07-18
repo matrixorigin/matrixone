@@ -70,6 +70,10 @@ func (ts *TS) Compare(rhs *TS) int {
 	return 1
 }
 
+func (ts TS) Comp(rhs TS) int {
+	return ts.Compare(&rhs)
+}
+
 func (ts *TS) Less(rhs *TS) bool {
 	return ts.Compare(rhs) < 0
 }
