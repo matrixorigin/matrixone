@@ -451,6 +451,7 @@ func (c *MOCollector) Collect(ctx context.Context, item batchpipe.HasName) error
 				return nil
 			}
 			time.Sleep(time.Millisecond)
+			v2.GetTraceCollectorCollectHungCounter(item.GetName()).Inc()
 		}
 	}
 }

@@ -43,6 +43,14 @@ var (
 			Help:      "Count of trace collector discard wait-generate total.",
 		}, []string{"type"})
 
+	traceCollectorCollectHungCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "trace",
+			Name:      "collector_collect_hung_total",
+			Help:      "Count of trace collector hung collect total",
+		}, []string{"type"})
+
 	traceCollectorDiscardItemCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "mo",
@@ -118,4 +126,8 @@ func GetTraceCollectorDiscardCounter(typ string) prometheus.Counter {
 
 func GetTraceCollectorDiscardItemCounter(typ string) prometheus.Counter {
 	return traceCollectorDiscardItemCounter.WithLabelValues(typ)
+}
+
+func GetTraceCollectorCollectHungCounter(typ string) prometheus.Counter {
+	return traceCollectorCollectHungCounter.WithLabelValues(typ)
 }
