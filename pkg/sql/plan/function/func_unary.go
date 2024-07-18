@@ -939,8 +939,18 @@ func createGeminiEmbedding(ctx context.Context, input string) ([]float32, error)
 	return nil, nil
 }
 
-func createOllamaEmbedding(ctx context.Context, input string) ([]float32, error) {
-	return nil, nil
+func CreateEmbeddingUsingOllama(ctx context.Context, input string) ([]float32, error) {
+	llm, err := ollama.New(ollama.WithModel("llama3"))
+	if err != nil {
+		return nil, err
+	}
+
+	embeddings, err := llm.CreateEmbedding(ctx, []string{input})
+	if err != nil {
+		return nil, err
+	}
+
+	return embeddings[0], nil
 }
 
 func createErnieEmbedding(ctx context.Context, input string) ([]float32, error) {
