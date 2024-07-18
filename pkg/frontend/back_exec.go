@@ -663,7 +663,7 @@ func newBackSession(ses FeSession, txnOp TxnOperator, db string, callBack output
 	return backSes
 }
 
-func (backSes *backSession) getCachedPlan(sql string) *cachedPlan {
+func (backSes *backSession) getCachedPlan(sql [32]byte) *cachedPlan {
 	return nil
 }
 

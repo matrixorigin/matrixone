@@ -328,7 +328,7 @@ type FeSession interface {
 	DisableTrace() bool
 	Close()
 	Clear()
-	getCachedPlan(sql string) *cachedPlan
+	getCachedPlan(sql [32]byte) *cachedPlan
 
 	GetFPrints() footPrints
 	ResetFPrints()
