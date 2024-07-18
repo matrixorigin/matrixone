@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -179,6 +180,7 @@ func NewDefaultTableReader(
 	schema *catalog.Schema,
 	expr *plan.Expr,
 	proc *process.Process,
+	ranges []*objectio.BlockInfoInProgress,
 	fs fileservice.FileService,
 	snapshotTS timestamp.Timestamp,
 	packerPool *fileservice.Pool[*types.Packer],
@@ -186,7 +188,7 @@ func NewDefaultTableReader(
 
 	tblDef := PlanTableDefBySchema(schema, rel.GetTableID(ctx), databaseName)
 
-	source, err := disttae.BuildLocalDataSource(ctx, rel, nil)
+	source, err := disttae.BuildLocalDataSource(ctx, rel, ranges)
 	if err != nil {
 		return nil, err
 	}

@@ -16,6 +16,7 @@ package test
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"testing"
 	"time"
@@ -62,7 +63,10 @@ func Test_ReaderCanReadInMemInserts(t *testing.T) {
 	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
 	schema.Name = tableName
 
-	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
+	opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
+	require.NoError(t, err)
+
+	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(ctx, testutil.TestOptions{TaeEngineOptions: opt}, t)
 	defer func() {
 		disttaeEngine.Close(ctx)
 		taeEngine.Close(true)
@@ -72,15 +76,16 @@ func Test_ReaderCanReadInMemInserts(t *testing.T) {
 	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
 	require.NoError(t, err)
 
-	blockCnt := 1
+	blockCnt := 10
 	rowsCount := int(options.DefaultBlockMaxRows) * blockCnt
 	bats := catalog2.MockBatch(schema, rowsCount).Split(blockCnt)
 
 	// write table
 	{
+		_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
+		require.NoError(t, err)
+
 		for idx := 0; idx < blockCnt; idx++ {
-			_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
-			require.NoError(t, err)
 			require.NoError(t, relation.Write(ctx, containers.ToCNBatch(bats[idx])))
 		}
 
@@ -93,7 +98,9 @@ func Test_ReaderCanReadInMemInserts(t *testing.T) {
 		stats, err := disttaeEngine.GetPartitionStateStats(ctx, relation.GetDBID(ctx), relation.GetTableID(ctx))
 		require.NoError(t, err)
 
-		require.Equal(t, rowsCount, stats.InmemRows.VisibleCnt)
+		require.Equal(t, 1, stats.DataObjectsVisible.ObjCnt)
+		require.Equal(t, blockCnt, stats.DataObjectsVisible.BlkCnt)
+		require.Equal(t, rowsCount, stats.DataObjectsVisible.RowCnt)
 	}
 
 	expr := []*plan.Expr{
@@ -106,9 +113,18 @@ func Test_ReaderCanReadInMemInserts(t *testing.T) {
 	_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
 	require.NoError(t, err)
 
+	ranges, err := relation.Ranges(ctx, expr, txn.GetWorkspace().GetSnapshotWriteOffset())
+	require.NoError(t, err)
+
+	var blockInfo []*objectio.BlockInfoInProgress
+	for idx := 0; idx < ranges.Len(); idx++ {
+		blockInfo = append(blockInfo, ranges.(*objectio.BlockInfoSliceInProgress).Get(idx))
+	}
+
 	reader, err := testutil.NewDefaultTableReader(
 		ctx, relation, databaseName, schema,
 		expr[0], testutil2.NewProcessWithMPool(mp),
+		blockInfo,
 		disttaeEngine.Engine.FS(),
 		txn.SnapshotTS(),
 		disttaeEngine.Engine.PackerPool())

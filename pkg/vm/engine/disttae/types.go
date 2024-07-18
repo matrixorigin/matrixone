@@ -579,6 +579,10 @@ func (txn *Transaction) IncrSQLCount() {
 	v2.TxnLifeCycleStatementsTotalHistogram.Observe(float64(n))
 }
 
+func (txn *Transaction) GetProc() *process.Process {
+	return txn.proc
+}
+
 func (txn *Transaction) GetSQLCount() uint64 {
 	return txn.sqlCount.Load()
 }

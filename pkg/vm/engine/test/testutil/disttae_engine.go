@@ -127,6 +127,7 @@ func (de *TestDisttaeEngine) NewTxnOperator(ctx context.Context,
 
 	ws := de.txnOperator.GetWorkspace().CloneSnapshotWS()
 	ws.BindTxnOp(op)
+	ws.(*disttae.Transaction).GetProc().GetTxnOperator().UpdateSnapshot(ctx, commitTS)
 	op.AddWorkspace(ws)
 
 	return op, err
