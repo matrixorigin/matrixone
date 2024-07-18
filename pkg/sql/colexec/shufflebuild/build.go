@@ -123,8 +123,6 @@ func (shuffleBuild *ShuffleBuild) Call(proc *process.Process) (vm.CallResult, er
 			ctr.state = SendHashMap
 
 		case SendHashMap:
-			result.Batch = batch.NewWithSize(0)
-
 			if ctr.inputBatchRowCount > 0 {
 				var jm *hashmap.JoinMap
 				if ctr.keyWidth <= 8 {
@@ -143,15 +141,8 @@ func (shuffleBuild *ShuffleBuild) Call(proc *process.Process) (vm.CallResult, er
 			} else {
 				ctr.cleanHashMap()
 			}
-
-			// this is just a dummy batch to indicate that the batch is must not empty.
-			// we should make sure this batch can be sent to the next join operator in other pipelines.
-			if result.Batch.IsEmpty() {
-				result.Batch.AddRowCount(1)
-			}
-
 			ctr.state = SendBatch
-			return result, nil
+
 		case SendBatch:
 			if ctr.batchIdx >= len(ctr.batches) {
 				ctr.state = End

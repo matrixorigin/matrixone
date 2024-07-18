@@ -16,9 +16,8 @@ package process
 
 import (
 	"context"
-	"sync"
-
 	"github.com/google/uuid"
+	"sync"
 )
 
 const ALLCN = "ALLCN"
