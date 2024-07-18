@@ -47,7 +47,7 @@ var (
 
 	dropPitrFormat = `delete from mo_catalog.mo_pitr where pitr_name = '%s' and create_account = %d order by pitr_id;`
 
-	alterPitrFormat = `update mo_catalog.mo_pitr set pitr_length = %d, pitr_unit = '%s' where pitr_name = '%s' and create_account = %d;`
+	alterPitrFormat = `update mo_catalog.mo_pitr set modified_time = '%s', pitr_length = %d, pitr_unit = '%s' where pitr_name = '%s' and create_account = %d;`
 )
 
 func getSqlForCreatePitr(ctx context.Context, pitrId, pitrName string, createAcc uint64, createTime, modifitedTime string, level string, accountId uint64, accountName, databaseName, tableName string, objectId uint64, pitrLength uint8, pitrValue string) (string, error) {
@@ -70,7 +70,7 @@ func getSqlForDropPitr(pitrName string, accountId uint64) string {
 	return fmt.Sprintf(dropPitrFormat, pitrName, accountId)
 }
 
-func getSqlForAlterPitr(pitrName string, pitrLength uint8, pitrUnit string, accountId uint64) string {
+func getSqlForAlterPitr(modifiedTime string, pitrLength uint8, pitrUnit string, pitrName string, accountId uint64) string {
 	return fmt.Sprintf(alterPitrFormat, pitrLength, pitrUnit, pitrName, accountId)
 }
 
@@ -140,7 +140,7 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) erro
 
 	// 4.check pitr value [0, 100]
 	pitrVal := stmt.PitrValue
-	if pitrVal < 0 || pitrVal > 100 {
+	if pitrVal <= 0 || pitrVal > 100 {
 		return moerr.NewInternalError(ctx, "invalid pitr value %d", pitrVal)
 	}
 
@@ -450,7 +450,10 @@ func doDropPitr(ctx context.Context, ses *Session, stmt *tree.DropPitr) (err err
 			return err
 		}
 	} else {
-		sql = getSqlForDropPitr(string(stmt.Name), uint64(tenantInfo.GetTenantID()))
+		sql = getSqlForDropPitr(
+			string(stmt.Name),
+			uint64(tenantInfo.GetTenantID()))
+
 		if tenantInfo.GetTenant() != sysAccountName {
 			ctx = defines.AttachAccountId(ctx, sysAccountID)
 			defer func() {
@@ -513,7 +516,11 @@ func doAlterPitr(ctx context.Context, ses *Session, stmt *tree.AlterPitr) (err e
 			return err
 		}
 	} else {
-		sql = getSqlForAlterPitr(string(stmt.Name), uint8(stmt.PitrValue), pitrUnit, uint64(tenantInfo.GetTenantID()))
+		sql = getSqlForAlterPitr(types.CurrentTimestamp().String2(time.UTC, 0),
+			uint8(stmt.PitrValue),
+			pitrUnit,
+			string(stmt.Name),
+			uint64(tenantInfo.GetTenantID()))
 
 		if tenantInfo.GetTenant() != sysAccountName {
 			ctx = defines.AttachAccountId(ctx, sysAccountID)
