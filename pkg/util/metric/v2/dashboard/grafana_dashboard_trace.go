@@ -202,17 +202,17 @@ func (c *DashboardCreator) initNewCollectRow() dashboard.Option {
 		"Collect Status",
 		c.withMultiGraph(
 			"Discard item Total",
-			6,
+			3,
 			[]string{
-				`sum(delta(` + c.getMetricWithFilter("mo_trace_collector_discard_item_total", "") + `[$interval])) by (type)`,
+				`sum(delta(` + c.getMetricWithFilter("mo_trace_collector_discard_item_total", "") + `[$interval:1m])) by (type)`,
 			},
 			[]string{"{{ type }}"}),
 		c.withMultiGraph(
 			"Collect hung",
-			6,
+			3,
 			// try interval: 1ms, need 'val / 1000'
 			[]string{
-				`sum(delta(` + c.getMetricWithFilter("mo_trace_collector_collect_hung_total", "") + `[$interval])) by (type) / 1000`,
+				`sum(delta(` + c.getMetricWithFilter("mo_trace_collector_collect_hung_total", "") + `[$interval:1m])) by (type) / 1000`,
 			},
 			[]string{"{{ type }}"}),
 	)
