@@ -34,6 +34,7 @@ func (c *DashboardCreator) initTraceDashboard() error {
 			c.initTraceCollectorOverviewRow(),
 			c.initTraceMoLoggerExportDataRow(),
 			c.initCUStatusRow(),
+			c.initNewCollectRow(),
 		)...)
 	if err != nil {
 		return err
@@ -191,6 +192,19 @@ func (c *DashboardCreator) initCUStatusRow() dashboard.Option {
 			6,
 			[]string{
 				`sum(delta(` + c.getMetricWithFilter("mo_trace_negative_cu_total", "") + `[$interval])) by (type)`,
+			},
+			[]string{"{{ type }}"}),
+	)
+}
+
+func (c *DashboardCreator) initNewCollectRow() dashboard.Option {
+	return dashboard.Row(
+		"Collect Status",
+		c.withMultiGraph(
+			"Discard item Total",
+			6,
+			[]string{
+				`sum(delta(` + c.getMetricWithFilter("mo_trace_collector_discard_item_total", "") + `[$interval])) by (type)`,
 			},
 			[]string{"{{ type }}"}),
 	)

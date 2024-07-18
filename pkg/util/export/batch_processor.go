@@ -41,11 +41,17 @@ import (
 	"go.uber.org/zap"
 )
 
+// defaultQueueSize default length for collect Channel
+// Deprecated, pls use defaultRingBufferSize
 const defaultQueueSize = 1310720 // queue mem cost = 10MB
+
+// need 2^N value
+const defaultRingBufferSize = 1 << 20
 
 const LoggerNameMOCollector = "MOCollector"
 
 const discardCollectTimeout = time.Millisecond
+const discardCollectRetry = time.Millisecond / 10
 
 // bufferHolder hold ItemBuffer content, handle buffer's new/flush/reset/reminder(base on timer) operations.
 // work like:
@@ -319,7 +325,7 @@ func NewMOCollector(ctx context.Context, opts ...MOCollectorOption) *MOCollector
 		ctx:            ctx,
 		logger:         morun.ProcessLevelRuntime().Logger().Named(LoggerNameMOCollector).With(logutil.Discardable()),
 		buffers:        make(map[string]*bufferHolder),
-		awakeQueue:     ring.NewRingBuffer[batchpipe.HasName](defaultQueueSize),
+		awakeQueue:     ring.NewRingBuffer[batchpipe.HasName](defaultRingBufferSize),
 		awakeGenerate:  make(chan generateReq, 16),
 		awakeBatch:     make(chan exportReq),
 		stopCh:         make(chan struct{}),
@@ -464,10 +470,13 @@ func (c *MOCollector) DiscardableCollect(ctx context.Context, item batchpipe.Has
 			return moerr.NewInternalError(ctx, "MOCollector stopped")
 		default:
 			ok, _ := c.awakeQueue.Offer(item)
-			if ok || time.Since(now) > discardCollectTimeout {
+			if ok {
+				return nil
+			} else if time.Since(now) > discardCollectTimeout {
+				v2.GetTraceCollectorDiscardItemCounter(item.GetName()).Inc()
 				return nil
 			}
-			time.Sleep(time.Millisecond)
+			time.Sleep(discardCollectRetry)
 		}
 	}
 }
