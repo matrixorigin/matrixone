@@ -61,14 +61,23 @@ func (c *ContentWriter) SetContent(buf *bytes.Buffer) {
 func (c *ContentWriter) WriteRow(_ *table.Row) error { return nil }
 
 func (c *ContentWriter) GetContent() string {
+	if c.buf == nil {
+		return ""
+	}
 	return util.UnsafeBytesToString(c.buf.Bytes())
 }
 
 func (c *ContentWriter) GetContentLength() int {
+	if c.buf == nil {
+		return 0
+	}
 	return c.buf.Len()
 }
 
 func (c *ContentWriter) FlushAndClose() (int, error) {
+	if c.buf == nil {
+		return 0, nil
+	}
 	n, err := c.sqlFlusher.FlushBuffer(c.buf)
 	if err != nil {
 		n, err = c.csvFlusher.FlushBuffer(c.buf)

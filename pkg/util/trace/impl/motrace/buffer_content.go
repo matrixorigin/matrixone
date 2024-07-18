@@ -42,6 +42,8 @@ type ContentBuffer struct {
 	mux sync.Mutex
 
 	csvWriter *db_holder.CSVWriter
+
+	checkWriteHook []table.CheckWriteHook
 }
 
 func NewContentBuffer(opts ...BufferOption) *ContentBuffer {
@@ -112,6 +114,11 @@ func (b *ContentBuffer) Add(i bp.HasName) {
 			b.tbl = rowFields.GetTable()
 		}
 	}
+
+	// keep checkWriteHook, push checkWriteHook to the writer while GenBatch
+	if check, is := i.(table.NeedCheckWrite); is && check.NeedCheckWrite() {
+		b.checkWriteHook = append(b.checkWriteHook, check.GetCheckWriteHook())
+	}
 }
 
 func (b *ContentBuffer) Reset() {
@@ -163,6 +170,15 @@ func (b *ContentBuffer) GetBatch(ctx context.Context, buf *bytes.Buffer) any {
 	factory := GetTracerProvider().writerFactory
 	w := factory.GetRowWriter(ctx, "sys", b.tbl, time.Now())
 
+	// check Write Hook: for ReactWriter
+	if writer, support := w.(table.AfterWrite); support {
+		for idx, hook := range b.checkWriteHook {
+			writer.AddAfter(hook)
+			b.checkWriteHook[idx] = nil
+		}
+	}
+	b.checkWriteHook = b.checkWriteHook[:0]
+
 	return &contentWriteRequest{
 		buffer: b.buf,
 		writer: w,
@@ -178,6 +194,7 @@ type contentWriteRequest struct {
 
 func (c *contentWriteRequest) Handle() (int, error) {
 	if setter, ok := c.writer.(table.ContentSettable); ok {
+		// FIXME: too complicated.
 		setter.SetContent(c.buffer)
 	}
 	return c.writer.FlushAndClose()

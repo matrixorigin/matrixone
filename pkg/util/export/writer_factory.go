@@ -15,6 +15,7 @@
 package export
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"time"
@@ -61,6 +62,12 @@ func (rw *reactWriter) FlushAndClose() (int, error) {
 		}
 	}
 	return n, err
+}
+
+func (rw *reactWriter) SetContent(buf *bytes.Buffer) {
+	if setter, ok := rw.w.(table.ContentSettable); ok {
+		setter.SetContent(buf)
+	}
 }
 
 func (rw *reactWriter) AddAfter(hook table.CheckWriteHook) {
