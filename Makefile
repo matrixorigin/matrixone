@@ -52,7 +52,6 @@ GO_MODULE=$(shell go list -m)
 MUSL_DIR=$(ROOT_DIR)/musl
 MUSL_CC=$(MUSL_DIR)/bin/musl-gcc
 MUSL_VERSION:=1.2.5
-GCFLAGS=-gcflags "all=-N -l"
 
 # cross compilation has been disabled for now
 ifneq ($(GOARCH)$(TARGET_ARCH)$(GOOS)$(TARGET_OS),)
