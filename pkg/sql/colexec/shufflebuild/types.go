@@ -66,6 +66,7 @@ type ShuffleBuild struct {
 
 	RuntimeFilterSpec *pbplan.RuntimeFilterSpec
 	JoinMapTag        int32
+	ShuffleIdx        int32
 	vm.OperatorBase
 }
 
@@ -110,7 +111,6 @@ func (shuffleBuild *ShuffleBuild) Free(proc *process.Process, pipelineFailed boo
 	if ctr != nil {
 		ctr.cleanBatches(proc)
 		ctr.cleanEvalVectors()
-		ctr.cleanHashMap()
 		shuffleBuild.ctr = nil
 	}
 }

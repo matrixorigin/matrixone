@@ -1882,6 +1882,7 @@ func constructShuffleBuild(op vm.Operator, proc *process.Process) *shufflebuild.
 			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
 		}
 		ret.JoinMapTag = arg.JoinMapTag
+		ret.ShuffleIdx = arg.ShuffleIdx
 
 	case vm.Join:
 		arg := op.(*join.InnerJoin)
@@ -1906,6 +1907,7 @@ func constructShuffleBuild(op vm.Operator, proc *process.Process) *shufflebuild.
 			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
 		}
 		ret.JoinMapTag = arg.JoinMapTag
+		ret.ShuffleIdx = arg.ShuffleIdx
 
 	case vm.Left:
 		arg := op.(*left.LeftJoin)
@@ -1918,6 +1920,7 @@ func constructShuffleBuild(op vm.Operator, proc *process.Process) *shufflebuild.
 			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
 		}
 		ret.JoinMapTag = arg.JoinMapTag
+		ret.ShuffleIdx = arg.ShuffleIdx
 
 	case vm.Right:
 		arg := op.(*right.RightJoin)
@@ -1930,6 +1933,7 @@ func constructShuffleBuild(op vm.Operator, proc *process.Process) *shufflebuild.
 			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
 		}
 		ret.JoinMapTag = arg.JoinMapTag
+		ret.ShuffleIdx = arg.ShuffleIdx
 
 	case vm.RightSemi:
 		arg := op.(*rightsemi.RightSemi)
@@ -1942,6 +1946,7 @@ func constructShuffleBuild(op vm.Operator, proc *process.Process) *shufflebuild.
 			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
 		}
 		ret.JoinMapTag = arg.JoinMapTag
+		ret.ShuffleIdx = arg.ShuffleIdx
 
 	case vm.RightAnti:
 		arg := op.(*rightanti.RightAnti)
@@ -1954,6 +1959,7 @@ func constructShuffleBuild(op vm.Operator, proc *process.Process) *shufflebuild.
 			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
 		}
 		ret.JoinMapTag = arg.JoinMapTag
+		ret.ShuffleIdx = arg.ShuffleIdx
 
 	case vm.Semi:
 		arg := op.(*semi.SemiJoin)
@@ -1971,6 +1977,7 @@ func constructShuffleBuild(op vm.Operator, proc *process.Process) *shufflebuild.
 			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
 		}
 		ret.JoinMapTag = arg.JoinMapTag
+		ret.ShuffleIdx = arg.ShuffleIdx
 
 	default:
 		ret.Release()

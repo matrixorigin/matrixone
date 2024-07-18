@@ -22,6 +22,8 @@ var _ Message = new(JoinMapMsg)
 
 type JoinMapMsg struct {
 	JoinMapPtr *hashmap.JoinMap
+	IsShuffle  bool
+	ShuffleIdx int32
 	Tag        int32
 }
 
