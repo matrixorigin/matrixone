@@ -989,7 +989,6 @@ func TryFastFilterBlocksInProgress(
 	exprs []*plan.Expr,
 	snapshot *logtailreplay.PartitionState,
 	uncommittedObjects []objectio.ObjectStats,
-	//dirtyBlocks *map[types.Blockid]struct{},
 	outBlocks *objectio.BlockInfoSliceInProgress,
 	fs fileservice.FileService,
 	proc *process.Process,
@@ -1061,10 +1060,6 @@ func ExecuteBlockFilterInProgress(
 			v2.TxnRangesFastPathBlkTotalSelectivityHistogram.Observe(float64(outBlocks.Len()-1) / totalBlocks)
 		}
 	}()
-
-	//if !highSelectivityHint {
-	//*dirtyBlocks = tbl.collectDirtyBlocks(snapshot, uncommittedObjects, txnOffset)
-	//}
 
 	err = ForeachSnapshotObjects(
 		snapshotTS,
@@ -1173,7 +1168,6 @@ func ExecuteBlockFilterInProgress(
 				if obj.HasDeltaLoc {
 					_, commitTs, ok := snapshot.GetBockDeltaLoc(blk.BlockID)
 					if ok {
-						//blk.DeltaLoc = deltaLoc
 						blk.CommitTs = commitTs
 					}
 				}

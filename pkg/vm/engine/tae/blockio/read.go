@@ -47,7 +47,6 @@ type BlockReadFilter struct {
 func ReadDataByFilter(
 	ctx context.Context,
 	info *objectio.BlockInfoInProgress,
-	//inputDeletes []int64,
 	columns []uint16,
 	colTypes []types.Type,
 	ts types.TS,
@@ -60,57 +59,9 @@ func ReadDataByFilter(
 		return
 	}
 	defer release()
-	//var deleteMask *nulls.Nulls
-
-	// merge persisted deletes
-	//if !info.DeltaLocation().IsEmpty() {
-	//	now := time.Now()
-	//	var persistedDeletes *batch.Batch
-	//	var persistedByCN bool
-	//	var release func()
-	//	// load from storage
-	//	if persistedDeletes, persistedByCN, release, err = ReadBlockDelete(ctx, info.DeltaLocation(), fs); err != nil {
-	//		return
-	//	}
-	//	defer release()
-	//	readcost := time.Since(now)
-	//	var rows *nulls.Nulls
-	//	var bisect time.Duration
-	//	if persistedByCN {
-	//		rows = EvalDeleteRowsByTimestampForDeletesPersistedByCN(persistedDeletes, ts, info.CommitTs)
-	//	} else {
-	//		nowx := time.Now()
-	//		rows = EvalDeleteRowsByTimestamp(persistedDeletes, ts, &info.BlockID)
-	//		bisect = time.Since(nowx)
-	//	}
-	//	if rows != nil {
-	//		deleteMask = rows
-	//	}
-	//	readtotal := time.Since(now)
-	//	RecordReadDel(readtotal, readcost, bisect)
-	//}
-
-	//if deleteMask == nil {
-	//	deleteMask = nulls.NewWithSize(len(inputDeletes))
-	//}
-
-	//// merge input deletes
-	//for _, row := range inputDeletes {
-	//	deleteMask.Add(uint64(row))
-	//}
 
 	sels = searchFunc(bat.Vecs)
 
-	// deslect deleted rows from sels
-	//if !deleteMask.IsEmpty() {
-	//	var rows []int32
-	//	for _, row := range sels {
-	//		if !deleteMask.Contains(uint64(row)) {
-	//			rows = append(rows, row)
-	//		}
-	//	}
-	//	sels = rows
-	//}
 	return
 }
 
@@ -442,51 +393,7 @@ func BlockDataReadInner(
 		return
 	}
 
-	// read deletes from storage specified by delta location
-	//if !info.DeltaLocation().IsEmpty() {
-	//	var deletes *batch.Batch
-	//	var persistedByCN bool
-	//	var release func()
-	//	now := time.Now()
-	//	// load from storage
-	//	if deletes, persistedByCN, release, err = ReadBlockDelete(ctx, info.DeltaLocation(), fs); err != nil {
-	//		return
-	//	}
-	//	defer release()
-	//	readcost := time.Since(now)
-
-	//	// eval delete rows by timestamp
-	//	var rows *nulls.Nulls
-	//	var bisect time.Duration
-	//	if persistedByCN {
-	//		rows = EvalDeleteRowsByTimestampForDeletesPersistedByCN(deletes, ts, info.CommitTs)
-	//	} else {
-	//		nowx := time.Now()
-	//		rows = EvalDeleteRowsByTimestamp(deletes, ts, &info.BlockID)
-	//		bisect = time.Since(nowx)
-	//	}
-
-	//	// merge delete rows
-	//	deleteMask.Merge(rows)
-
-	//	readtotal := time.Since(now)
-	//	RecordReadDel(readtotal, readcost, bisect)
-
-	//	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
-	//		logutil.Debugf(
-	//			"blockread %s read delete %d: base %s filter out %v\n",
-	//			info.BlockID.String(), deletes.RowCount(), ts.ToString(), deleteMask.Count())
-	//	}
-	//}
-
-	//// merge deletes from input
-	//// deletes from storage + deletes from input
-	//for _, row := range inputDeleteRows {
-	//	deleteMask.Add(uint64(row))
-	//}
-
 	// Note: it always goes here if no filter or the block is not sorted
-
 	// transform delete mask to deleted rows
 	// TODO: avoid this transformation
 	if !deleteMask.IsEmpty() {

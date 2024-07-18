@@ -818,8 +818,6 @@ func (tbl *txnTable) rangesOnePartInProgress(
 	txnOffset int,
 ) (err error) {
 	var done bool
-	// collect dirty blocks lazily
-	//var dirtyBlks map[types.Blockid]struct{}
 	uncommittedObjects := tbl.collectUnCommittedObjects(txnOffset)
 
 	if done, err = TryFastFilterBlocksInProgress(
@@ -848,10 +846,6 @@ func (tbl *txnTable) rangesOnePartInProgress(
 			zap.String("exprs", plan2.FormatExprs(exprs)),
 		)
 	}
-
-	//if dirtyBlks == nil {
-	//	dirtyBlks = tbl.collectDirtyBlocks(state, uncommittedObjects, txnOffset)
-	//}
 
 	// for dynamic parameter, substitute param ref and const fold cast expression here to improve performance
 	newExprs, err := plan2.ConstandFoldList(exprs, tbl.proc.Load(), true)
@@ -962,7 +956,6 @@ func (tbl *txnTable) rangesOnePartInProgress(
 				if obj.HasDeltaLoc {
 					_, commitTs, ok := state.GetBockDeltaLoc(blk.BlockID)
 					if ok {
-						//blk.DeltaLoc = deltaLoc
 						blk.CommitTs = commitTs
 					}
 				}
