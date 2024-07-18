@@ -77,6 +77,8 @@ type Conn struct {
 	fixBuf *ListBlock
 	// dynamic buffer block is organized by a list
 	dynamicBuf *list.List
+	// just for load local
+	loadLocalBuf []byte
 	// current block pointer being written
 	curBuf *ListBlock
 	// current packet header pointer
@@ -85,12 +87,13 @@ type Conn struct {
 	// buffer data size, used to check maxBytesToFlush
 	bufferLength int
 	// packet data size, used to count header
-	packetLength    int
-	maxBytesToFlush int
-	packetInBuf     int
-	timeout         time.Duration
-	allocator       *BufferAllocator
-	ses             *Session
+	packetLength      int
+	maxBytesToFlush   int
+	packetInBuf       int
+	allowedPacketSize int
+	timeout           time.Duration
+	allocator         *BufferAllocator
+	ses               *Session
 }
 
 // NewIOSession create a new io session
@@ -155,6 +158,7 @@ func (c *Conn) Close() error {
 
 	// Free all allocated memory
 	c.allocator.Free(c.fixBuf.data)
+	c.fixBuf.data = nil
 	for e := c.dynamicBuf.Front(); e != nil; e = e.Next() {
 		c.allocator.Free(e.Value.([]byte))
 	}
@@ -162,13 +166,12 @@ func (c *Conn) Close() error {
 	getGlobalRtMgr().Closed(c)
 	return nil
 }
-func (c *Conn) CheckAllowedPacketSize(totalLength int) error {
-	var err error
-	allowedPacketSize, err := c.ses.GetSessionSysVar("max_allowed_packet")
-	if err != nil {
-		return err
+func (c *Conn) CheckAllowedPacketSize(totalLength int, allowedPacketSize int) error {
+	if c.allowedPacketSize == 0 {
+		return nil
 	}
-	if int64(totalLength) > allowedPacketSize.(int64) {
+	var err error
+	if totalLength > allowedPacketSize {
 		errMsg := moerr.MysqlErrorMsgRefer[moerr.ER_SERVER_NET_PACKET_TOO_LARGE]
 		err = c.ses.GetResponser().MysqlRrWr().WriteERR(errMsg.ErrorCode, strings.Join(errMsg.SqlStates, ","), errMsg.ErrorMsgOrFormat)
 		if err != nil {
@@ -179,15 +182,12 @@ func (c *Conn) CheckAllowedPacketSize(totalLength int) error {
 	return nil
 }
 
-// ReadLoadLocalPacket just for processLoadLocal, not merge 16MB packets
+// ReadLoadLocalPacket just for processLoadLocal, reuse memory, and not merge 16MB packets
 func (c *Conn) ReadLoadLocalPacket() ([]byte, error) {
-	var finalPayload []byte
-	var payload []byte
-	var err error
-
 	if !c.connected {
 		return nil, moerr.NewInternalError(moerr.Context(), "The IOSession connection has been closed")
 	}
+	var err error
 	var packetLength int
 	err = c.ReadBytes(c.header[:], HeaderLengthOfTheProtocol)
 	if err != nil {
@@ -197,21 +197,32 @@ func (c *Conn) ReadLoadLocalPacket() ([]byte, error) {
 	sequenceId := c.header[3]
 	c.sequenceId = sequenceId + 1
 
-	if packetLength == 0 {
-		return finalPayload, nil
+	if c.loadLocalBuf == nil {
+		c.loadLocalBuf, err = c.allocator.Alloc(packetLength)
+		if err != nil {
+			return nil, err
+		}
+	} else if len(c.loadLocalBuf) < packetLength {
+		c.allocator.Free(c.loadLocalBuf)
+		c.loadLocalBuf = nil
+		c.loadLocalBuf, err = c.allocator.Alloc(packetLength)
+		if err != nil {
+			return nil, err
+		}
 	}
-	// Read bytes based on packet length
-	payload, err = c.ReadOnePayload(packetLength)
+
+	err = c.ReadBytes(c.loadLocalBuf, packetLength)
 	if err != nil {
 		return nil, err
 	}
-	finalPayload = make([]byte, len(payload))
-	copy(finalPayload, payload)
-	return finalPayload, nil
+	return c.loadLocalBuf[:packetLength], nil
 }
 
 // Read reads the complete packet including process the > 16MB packet. return the payload
 func (c *Conn) Read() ([]byte, error) {
+	if !c.connected {
+		return nil, moerr.NewInternalError(moerr.Context(), "The IOSession connection has been closed")
+	}
 	// Requests > 16MB
 	payloads := make([][]byte, 0)
 	totalLength := 0
@@ -226,9 +237,6 @@ func (c *Conn) Read() ([]byte, error) {
 	}(payloads, payload, err)
 
 	for {
-		if !c.connected {
-			return nil, moerr.NewInternalError(moerr.Context(), "The IOSession connection has been closed")
-		}
 		var packetLength int
 		err = c.ReadBytes(c.header[:], HeaderLengthOfTheProtocol)
 		if err != nil {
@@ -241,39 +249,30 @@ func (c *Conn) Read() ([]byte, error) {
 		if packetLength == 0 {
 			break
 		}
-		// Read bytes based on packet length
+		totalLength += packetLength
+		err = c.CheckAllowedPacketSize(totalLength, c.allowedPacketSize)
+		if err != nil {
+			return nil, err
+		}
+
+		if totalLength != int(MaxPayloadSize) && payloads == nil {
+			signalPayload := make([]byte, totalLength)
+			err = c.ReadBytes(signalPayload, totalLength)
+			if err != nil {
+				return nil, err
+			}
+			return signalPayload, nil
+		}
+
 		payload, err = c.ReadOnePayload(packetLength)
 		if err != nil {
 			return nil, err
 		}
 
-		if uint32(packetLength) == MaxPayloadSize {
-			payloads = append(payloads, payload)
-			totalLength += len(payload)
-			payload = nil
-			err = c.CheckAllowedPacketSize(totalLength)
-			if err != nil {
-				return nil, err
-			}
-			continue
-		}
+		payloads = append(payloads, payload)
+		payload = nil
 
-		if len(payloads) == 0 {
-			err = c.CheckAllowedPacketSize(len(payload))
-			if err != nil {
-				return nil, err
-			}
-			finalPayload = make([]byte, len(payload))
-			copy(finalPayload, payload)
-			return finalPayload, nil
-		} else {
-			payloads = append(payloads, payload)
-			totalLength += len(payload)
-			payload = nil
-			err = c.CheckAllowedPacketSize(totalLength)
-			if err != nil {
-				return nil, err
-			}
+		if uint32(packetLength) != MaxPayloadSize {
 			break
 		}
 	}
@@ -283,9 +282,9 @@ func (c *Conn) Read() ([]byte, error) {
 	}
 
 	copyIndex := 0
-	for _, payload := range payloads {
-		copy(finalPayload[copyIndex:], payload)
-		copyIndex += len(payload)
+	for _, eachPayload := range payloads {
+		copy(finalPayload[copyIndex:], eachPayload)
+		copyIndex += len(eachPayload)
 	}
 	return finalPayload, nil
 }
@@ -574,5 +573,7 @@ func (c *Conn) Reset() {
 		c.allocator.Free(node.Value.(*ListBlock).data)
 	}
 	c.dynamicBuf.Init()
+	c.allocator.Free(c.loadLocalBuf)
+	c.loadLocalBuf = nil
 
 }
