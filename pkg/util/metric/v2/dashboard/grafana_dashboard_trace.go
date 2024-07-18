@@ -215,5 +215,12 @@ func (c *DashboardCreator) initNewCollectRow() dashboard.Option {
 				`sum(delta(` + c.getMetricWithFilter("mo_trace_collector_collect_hung_total", "") + `[$interval:1m])) by (type) / 1000`,
 			},
 			[]string{"{{ type }}"}),
+		c.withMultiGraph(
+			"MOLogger error count",
+			3,
+			[]string{
+				`sum(delta(` + c.getMetricWithFilter("mo_trace_mologger_error_total", "") + `[$interval:1m])) by (type)`,
+			},
+			[]string{"{{ type }}"}),
 	)
 }

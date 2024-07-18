@@ -109,6 +109,7 @@ func (f *SQLFlusher) FlushBuffer(buf *bytes.Buffer) (int, error) {
 	// FIXME: if error sometime, pls back-off
 	conn, err := db_holder.GetOrInitDBConn(false, true)
 	if err != nil {
+		v2.TraceMOLoggerErrorConnDBCounter.Inc()
 		return 0, err
 	}
 

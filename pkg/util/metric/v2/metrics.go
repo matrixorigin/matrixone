@@ -171,6 +171,7 @@ func initTraceMetrics() {
 	registry.MustRegister(traceNegativeCUCounter)
 	registry.MustRegister(traceCollectorDiscardItemCounter)
 	registry.MustRegister(traceCollectorCollectHungCounter)
+	registry.MustRegister(traceMOLoggerErrorCounter)
 }
 
 func initProxyMetrics() {
