@@ -35,8 +35,11 @@ var (
 		//output: "upgrade account acc1 with retry 5",
 		//input:  "upgrade account 'acc1'",
 		//output: "upgrade account acc1",
-		input:  "show upgrade",
-		output: "show upgrade",
+
+		input:  "create table t2(a int, b datalink);",
+		output: "create table t2 (a int, b datalink)",
+		//input:  "show upgrade",
+		//output: "show upgrade",
 	}
 )
 

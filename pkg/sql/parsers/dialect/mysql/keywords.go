@@ -450,6 +450,7 @@ func init() {
 		"terminated":                 TERMINATED,
 		"task":                       TASK,
 		"text":                       TEXT,
+		"datalink":                   DATALINK,
 		"temporary":                  TEMPORARY,
 		"than":                       THAN,
 		"then":                       THEN,
