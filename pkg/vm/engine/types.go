@@ -41,7 +41,8 @@ type Node struct {
 	Addr   string `json:"address"`
 	Header objectio.InfoHeader
 	Data   []byte `json:"payload"`
-	// Rel              Relation // local relation
+	//marshaled in memory tombstones and tombstone objects.
+	Tombstone        []byte
 	NeedExpandRanges bool
 }
 
@@ -598,6 +599,10 @@ type Relation interface {
 	// second parameter: Slice of expressions used to filter the data.
 	// third parameter: Transaction offset used to specify the starting position for reading data.
 	Ranges(context.Context, []*plan.Expr, int) (Ranges, error)
+
+	//RangesInProgress will substitute the Ranges function in the future.
+	RangesInProgress(context.Context, []*plan.Expr, int) (Ranges, error)
+	CollectTombstones(ctx context.Context, txnOffset int, blkIDs []types.Blockid) ([]byte, error)
 
 	TableDefs(context.Context) ([]TableDef, error)
 

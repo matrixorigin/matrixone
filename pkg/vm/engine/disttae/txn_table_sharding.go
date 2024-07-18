@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/fagongzi/goetty/v2/buf"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -180,6 +181,35 @@ func (tbl *txnTableDelegate) Ranges(
 ) (engine.Ranges, error) {
 	if tbl.isLocal() {
 		return tbl.origin.Ranges(
+			ctx,
+			exprs,
+			n,
+		)
+	}
+
+	// TODO: forward
+	return nil, nil
+}
+
+func (tbl *txnTableDelegate) CollectTombstones(ctx context.Context, txnOffset int, blkIDs []types.Blockid) ([]byte, error) {
+	if tbl.isLocal() {
+		return tbl.origin.CollectTombstones(
+			ctx,
+			txnOffset,
+			blkIDs,
+		)
+	}
+	// TODO: forward
+	return nil, nil
+}
+
+func (tbl *txnTableDelegate) RangesInProgress(
+	ctx context.Context,
+	exprs []*plan.Expr,
+	n int,
+) (engine.Ranges, error) {
+	if tbl.isLocal() {
+		return tbl.origin.RangesInProgress(
 			ctx,
 			exprs,
 			n,

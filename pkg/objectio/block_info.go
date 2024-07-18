@@ -66,6 +66,9 @@ type BlockInfoInProgress struct {
 	Sorted     bool
 	MetaLoc    ObjectLocation
 	CommitTs   types.TS
+
+	//TODO::remove it.
+	PartitionNum int
 }
 
 func (b *BlockInfoInProgress) MetaLocation() Location {

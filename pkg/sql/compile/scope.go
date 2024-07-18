@@ -693,7 +693,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 			newExprList = append(newExprList, s.DataSource.node.BlockFilterList...)
 		}
 
-		ranges, err := c.expandRanges(s.DataSource.node, s.DataSource.Rel, newExprList)
+		ranges, _, err := c.expandRangesInProgress(s.DataSource.node, s.DataSource.Rel, newExprList)
 		if err != nil {
 			return err
 		}
@@ -1170,6 +1170,165 @@ func (s *Scope) replace(c *Compile) error {
 	}
 	c.addAffectedRows(result.AffectedRows + delAffectedRows)
 	return nil
+}
+
+func (s *Scope) getReadersInProgress(c *Compile, maxProvidedCpuNumber int) (readers []engine.Reader, scanUsedCpuNumber int, err error) {
+	// receive runtime filter and optimized the datasource.
+	if err = s.handleRuntimeFilter(c); err != nil {
+		return
+	}
+
+	switch {
+
+	// If this was a remote-run pipeline. Reader should be generated from Engine.
+	case s.IsRemote:
+		// this cannot use c.proc.Ctx directly, please refer to `default case`.
+		ctx := c.proc.Ctx
+		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
+			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+		}
+		if s.DataSource.AccountId != nil {
+			ctx = defines.AttachAccountId(ctx, uint32(s.DataSource.AccountId.GetTenantId()))
+		}
+
+		// determined how many cpus we should use.
+		blkSlice := objectio.BlockInfoSlice(s.NodeInfo.Data)
+		scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, blkSlice.Len())
+
+		readers, err = c.e.NewBlockReader(
+			ctx, scanUsedCpuNumber,
+			s.DataSource.Timestamp, s.DataSource.FilterExpr, nil, s.NodeInfo.Data, s.DataSource.TableDef, c.proc)
+		if err != nil {
+			return
+		}
+
+	// Reader can be generated from local relation.
+	case s.DataSource.Rel != nil && s.DataSource.TableDef.Partition == nil:
+		switch s.DataSource.Rel.GetEngineType() {
+		case engine.Disttae:
+			blkSlice := objectio.BlockInfoSlice(s.NodeInfo.Data)
+			scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, blkSlice.Len())
+		case engine.Memory:
+			idSlice := memoryengine.ShardIdSlice(s.NodeInfo.Data)
+			scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, idSlice.Len())
+		default:
+			scanUsedCpuNumber = 1
+		}
+		if len(s.DataSource.OrderBy) > 0 {
+			scanUsedCpuNumber = 1
+		}
+
+		readers, err = s.DataSource.Rel.NewReader(c.proc.Ctx,
+			scanUsedCpuNumber,
+			s.DataSource.FilterExpr,
+			s.NodeInfo.Data,
+			len(s.DataSource.OrderBy) > 0,
+			s.TxnOffset)
+		if err != nil {
+			return
+		}
+
+	// Should get relation first to generate Reader.
+	// FIXME:: s.NodeInfo.Rel == nil, partition table? -- this is an old comment, I just do a copy here.
+	default:
+		// This cannot modify the c.proc.Ctx here, but I don't know why.
+		// Maybe there are some account related things stores in the context (using the context.WithValue),
+		// and modify action will change the account.
+		ctx := c.proc.Ctx
+
+		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
+			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+		}
+
+		var db engine.Database
+		var rel engine.Relation
+		// todo:
+		//  these following codes were very likely to `compile.go:compileTableScanDataSource `.
+		//  I kept the old codes here without any modify. I don't know if there is one `GetRelation(txn, scanNode, scheme, table)`
+		{
+			n := s.DataSource.node
+			txnOp := s.Proc.GetTxnOperator()
+			if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
+				if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
+					n.ScanSnapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
+					if c.proc.GetCloneTxnOperator() != nil {
+						txnOp = c.proc.GetCloneTxnOperator()
+					} else {
+						txnOp = c.proc.GetTxnOperator().CloneSnapshotOp(*n.ScanSnapshot.TS)
+						c.proc.SetCloneTxnOperator(txnOp)
+					}
+
+					if n.ScanSnapshot.Tenant != nil {
+						ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.Tenant.TenantID)
+					}
+				}
+			}
+
+			db, err = c.e.Database(ctx, s.DataSource.SchemaName, txnOp)
+			if err != nil {
+				return
+			}
+			rel, err = db.Relation(ctx, s.DataSource.RelationName, c.proc)
+			if err != nil {
+				var e error // avoid contamination of error messages
+				db, e = c.e.Database(ctx, defines.TEMPORARY_DBNAME, s.Proc.GetTxnOperator())
+				if e != nil {
+					err = e
+					return
+				}
+				rel, e = db.Relation(ctx, engine.GetTempTableName(s.DataSource.SchemaName, s.DataSource.RelationName), c.proc)
+				if e != nil {
+					err = e
+					return
+				}
+			}
+		}
+
+		switch rel.GetEngineType() {
+		case engine.Disttae:
+			blkSlice := objectio.BlockInfoSlice(s.NodeInfo.Data)
+			scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, blkSlice.Len())
+		case engine.Memory:
+			idSlice := memoryengine.ShardIdSlice(s.NodeInfo.Data)
+			scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, idSlice.Len())
+		default:
+			scanUsedCpuNumber = 1
+		}
+		if len(s.DataSource.OrderBy) > 0 {
+			scanUsedCpuNumber = 1
+		}
+
+		var mainRds []engine.Reader
+		if rel.GetEngineType() == engine.Memory || s.DataSource.PartitionRelationNames == nil {
+			mainRds, err = rel.NewReader(ctx,
+				scanUsedCpuNumber,
+				s.DataSource.FilterExpr,
+				s.NodeInfo.Data,
+				len(s.DataSource.OrderBy) > 0,
+				s.TxnOffset)
+			if err != nil {
+				return
+			}
+			readers = append(readers, mainRds...)
+		} else {
+			return nil, 0, moerr.NewInternalError(c.proc.Ctx, "partition table cannot be used in parallel scan")
+		}
+
+	}
+	// just for quick GC.
+	s.NodeInfo.Data = nil
+
+	// need some merge to make sure it is only scanUsedCpuNumber reader.
+	// partition table and read from memory will cause len(readers) > scanUsedCpuNumber.
+	if len(readers) != scanUsedCpuNumber {
+		newReaders := make([]engine.Reader, 0, scanUsedCpuNumber)
+		step := len(readers) / scanUsedCpuNumber
+		for i := 0; i < len(readers); i += step {
+			newReaders = append(newReaders, disttae.NewMergeReader(readers[i:i+step]))
+		}
+		readers = newReaders
+	}
+	return
 }
 
 func (s *Scope) getReaders(c *Compile, maxProvidedCpuNumber int) (readers []engine.Reader, scanUsedCpuNumber int, err error) {

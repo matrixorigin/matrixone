@@ -689,6 +689,22 @@ func (r *mergeReader) Read(
 
 // -----------------------------------------------------------------
 
+func NewReadersInProgress(
+	ctx context.Context,
+	proc *process.Process, //it comes from transaction if reader run in local,otherwise it comes from remote compile.
+	fs fileservice.FileService, //it comes from engine.fs.
+	packerPool *fileservice.Pool[*types.Packer], //it comes from engine.packerPool.
+	tableDef *plan.TableDef,
+	ts timestamp.Timestamp,
+	expr *plan.Expr,
+	//filter any, // it's valid when reader runs on remote side.
+	orderedScan bool, // it's valid when reader runs on local.
+	txnOffset int, // it can be removed. it's different between normal reader and snapshot reader.
+	//source DataSource,
+
+) []*readerInProgress {
+	return nil
+}
 func newReaderInProgress(
 	ctx context.Context,
 	proc *process.Process, //it comes from transaction if reader run in local,otherwise it comes from remote compile.

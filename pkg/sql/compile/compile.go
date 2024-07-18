@@ -81,7 +81,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
@@ -2210,7 +2209,7 @@ func (c *Compile) compileValueScan(n *plan.Node) ([]*Scope, error) {
 }
 
 func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
-	nodes, partialResults, partialResultTypes, err := c.generateNodes(n)
+	nodes, partialResults, partialResultTypes, err := c.generateNodesInProgress(n)
 	if err != nil {
 		return nil, err
 	}
@@ -3819,6 +3818,115 @@ func (c *Compile) determinExpandRanges(n *plan.Node) bool {
 	return false
 }
 
+// TODO::expandRangesInProgress support partition table.
+func (c *Compile) expandRangesInProgress(
+	n *plan.Node,
+	rel engine.Relation,
+	blockFilterList []*plan.Expr) (engine.Ranges, []byte, error) {
+	var err error
+	var db engine.Database
+	var ranges engine.Ranges
+	var txnOp client.TxnOperator
+
+	if n.TableDef.Partition != nil {
+		return nil, nil, moerr.NewInternalErrorNoCtx("expandRangesInProgress not support partition table")
+	}
+
+	//-----------------------------------------------------------------------------------------------------
+	ctx := c.proc.Ctx
+	txnOp = c.proc.GetTxnOperator()
+	if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
+		if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
+			n.ScanSnapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
+			if c.proc.GetCloneTxnOperator() != nil {
+				txnOp = c.proc.GetCloneTxnOperator()
+			} else {
+				txnOp = c.proc.GetTxnOperator().CloneSnapshotOp(*n.ScanSnapshot.TS)
+				c.proc.SetCloneTxnOperator(txnOp)
+			}
+
+			if n.ScanSnapshot.Tenant != nil {
+				ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.Tenant.TenantID)
+			}
+		}
+	}
+	//-----------------------------------------------------------------------------------------------------
+
+	if util.TableIsClusterTable(n.TableDef.GetTableType()) {
+		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+	}
+	if n.ObjRef.PubInfo != nil {
+		ctx = defines.AttachAccountId(ctx, uint32(n.ObjRef.PubInfo.GetTenantId()))
+	}
+	if util.TableIsLoggingTable(n.ObjRef.SchemaName, n.ObjRef.ObjName) {
+		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+	}
+
+	db, err = c.e.Database(ctx, n.ObjRef.SchemaName, txnOp)
+	if err != nil {
+		return nil, nil, err
+	}
+	ranges, err = rel.RangesInProgress(ctx, blockFilterList, c.TxnOffset)
+	if err != nil {
+		return nil, nil, err
+	}
+	tombstones, err := rel.CollectTombstones(ctx, c.TxnOffset, nil)
+
+	if n.TableDef.Partition != nil {
+		if n.PartitionPrune != nil && n.PartitionPrune.IsPruned {
+			for i, partitionItem := range n.PartitionPrune.SelectedPartitions {
+				partTableName := partitionItem.PartitionTableName
+				subrelation, err := db.Relation(ctx, partTableName, c.proc)
+				if err != nil {
+					return nil, nil, err
+				}
+				subranges, err := subrelation.RangesInProgress(ctx, n.BlockFilterList, c.TxnOffset)
+				if err != nil {
+					return nil, nil, err
+				}
+				//subTombstones, err := subrelation.CollectTombstones(ctx, c.TxnOffset, nil)
+				//if err != nil {
+				//	return nil, nil, err
+				//}
+				// add partition number into objectio.BlockInfo.
+				blkSlice := subranges.(*objectio.BlockInfoSliceInProgress)
+				for j := 1; j < subranges.Len(); j++ {
+					blkInfo := blkSlice.Get(j)
+					blkInfo.PartitionNum = i
+					ranges.Append(blkSlice.GetBytes(j))
+				}
+				//subTombstoner := disttae.UnmarshTomstones(subTombstones)
+				//subTombstoner.SetPartition(i)
+				//tombstones = append(tombstones, subTombstoner.MarshalToBytes()...)
+			}
+		} else {
+			partitionInfo := n.TableDef.Partition
+			partitionNum := int(partitionInfo.PartitionNum)
+			partitionTableNames := partitionInfo.PartitionTableNames
+			for i := 0; i < partitionNum; i++ {
+				partTableName := partitionTableNames[i]
+				subrelation, err := db.Relation(ctx, partTableName, c.proc)
+				if err != nil {
+					return nil, nil, err
+				}
+				subranges, err := subrelation.RangesInProgress(ctx, n.BlockFilterList, c.TxnOffset)
+				if err != nil {
+					return nil, nil, err
+				}
+				// add partition number into objectio.BlockInfo.
+				blkSlice := subranges.(*objectio.BlockInfoSliceInProgress)
+				for j := 1; j < subranges.Len(); j++ {
+					blkInfo := blkSlice.Get(j)
+					blkInfo.PartitionNum = i
+					ranges.Append(blkSlice.GetBytes(j))
+				}
+			}
+		}
+	}
+	return ranges, tombstones, nil
+
+}
+
 func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation, blockFilterList []*plan.Expr) (engine.Ranges, error) {
 	var err error
 	var db engine.Database
@@ -3912,11 +4020,12 @@ func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation, blockFilterLis
 	return ranges, nil
 }
 
-func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, error) {
+func (c *Compile) generateNodesInProgress(n *plan.Node) (engine.Nodes, []any, []types.T, error) {
 	var err error
 	var db engine.Database
 	var rel engine.Relation
 	var ranges engine.Ranges
+	var tombstones []byte
 	var partialResults []any
 	var partialResultTypes []types.T
 	var nodes engine.Nodes
@@ -3980,7 +4089,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 				},
 			}
 		}
-		ranges, err = c.expandRanges(n, rel, n.BlockFilterList)
+		ranges, tombstones, err = c.expandRangesInProgress(n, rel, n.BlockFilterList)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -3993,378 +4102,6 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 		nodes[0].NeedExpandRanges = true
 		return nodes, nil, nil, nil
 	}
-
-	if len(n.AggList) > 0 && ranges.Len() > 1 {
-		newranges := make([]byte, 0, ranges.Size())
-		newranges = append(newranges, ranges.GetBytes(0)...)
-		partialResults = make([]any, 0, len(n.AggList))
-		partialResultTypes = make([]types.T, len(n.AggList))
-
-		for i := range n.AggList {
-			agg := n.AggList[i].Expr.(*plan.Expr_F)
-			name := agg.F.Func.ObjName
-			switch name {
-			case "starcount":
-				partialResults = append(partialResults, int64(0))
-				partialResultTypes[i] = types.T_int64
-			case "count":
-				if (uint64(agg.F.Func.Obj) & function.Distinct) != 0 {
-					partialResults = nil
-				} else {
-					partialResults = append(partialResults, int64(0))
-					partialResultTypes[i] = types.T_int64
-				}
-			case "min", "max":
-				partialResults = append(partialResults, nil)
-			default:
-				partialResults = nil
-			}
-			if partialResults == nil {
-				break
-			}
-		}
-
-		if len(n.AggList) == 1 && n.AggList[0].Expr.(*plan.Expr_F).F.Func.ObjName == "starcount" {
-			for i := 1; i < ranges.Len(); i++ {
-				blk := ranges.(*objectio.BlockInfoSlice).Get(i)
-				if !blk.CanRemote || !blk.DeltaLocation().IsEmpty() {
-					newranges = append(newranges, ranges.(*objectio.BlockInfoSlice).GetBytes(i)...)
-					continue
-				}
-				partialResults[0] = partialResults[0].(int64) + int64(blk.MetaLocation().Rows())
-			}
-		} else if partialResults != nil {
-			columnMap := make(map[int]int)
-			for i := range n.AggList {
-				agg := n.AggList[i].Expr.(*plan.Expr_F)
-				if agg.F.Func.ObjName == "starcount" {
-					continue
-				}
-				args := agg.F.Args[0]
-				col, ok := args.Expr.(*plan.Expr_Col)
-				if !ok {
-					if _, ok := args.Expr.(*plan.Expr_Lit); ok {
-						if agg.F.Func.ObjName == "count" {
-							agg.F.Func.ObjName = "starcount"
-							continue
-						}
-					}
-					partialResults = nil
-					break
-				}
-				columnMap[int(col.Col.ColPos)] = int(n.TableDef.Cols[int(col.Col.ColPos)].Seqnum)
-			}
-			for i := 1; i < ranges.Len(); i++ {
-				if partialResults == nil {
-					break
-				}
-				blk := ranges.(*objectio.BlockInfoSlice).Get(i)
-				if !blk.CanRemote || !blk.DeltaLocation().IsEmpty() {
-					newranges = append(newranges, ranges.GetBytes(i)...)
-					continue
-				}
-				var objMeta objectio.ObjectMeta
-				location := blk.MetaLocation()
-				var fs fileservice.FileService
-				fs, err = fileservice.Get[fileservice.FileService](c.proc.Base.FileService, defines.SharedFileServiceName)
-				if err != nil {
-					return nil, nil, nil, err
-				}
-				objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs)
-				if err != nil {
-					partialResults = nil
-					break
-				} else {
-					objDataMeta := objMeta.MustDataMeta()
-					blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
-					for i := range n.AggList {
-						agg := n.AggList[i].Expr.(*plan.Expr_F)
-						name := agg.F.Func.ObjName
-						switch name {
-						case "starcount":
-							partialResults[i] = partialResults[i].(int64) + int64(blkMeta.GetRows())
-						case "count":
-							partialResults[i] = partialResults[i].(int64) + int64(blkMeta.GetRows())
-							col := agg.F.Args[0].Expr.(*plan.Expr_Col)
-							nullCnt := blkMeta.ColumnMeta(uint16(columnMap[int(col.Col.ColPos)])).NullCnt()
-							partialResults[i] = partialResults[i].(int64) - int64(nullCnt)
-						case "min":
-							col := agg.F.Args[0].Expr.(*plan.Expr_Col)
-							zm := blkMeta.ColumnMeta(uint16(columnMap[int(col.Col.ColPos)])).ZoneMap()
-							if zm.GetType().FixedLength() < 0 {
-								partialResults = nil
-							} else {
-								if partialResults[i] == nil {
-									partialResults[i] = zm.GetMin()
-									partialResultTypes[i] = zm.GetType()
-								} else {
-									switch zm.GetType() {
-									case types.T_bool:
-										partialResults[i] = !partialResults[i].(bool) || !types.DecodeFixed[bool](zm.GetMinBuf())
-									case types.T_bit:
-										min := types.DecodeFixed[uint64](zm.GetMinBuf())
-										if min < partialResults[i].(uint64) {
-											partialResults[i] = min
-										}
-									case types.T_int8:
-										min := types.DecodeFixed[int8](zm.GetMinBuf())
-										if min < partialResults[i].(int8) {
-											partialResults[i] = min
-										}
-									case types.T_int16:
-										min := types.DecodeFixed[int16](zm.GetMinBuf())
-										if min < partialResults[i].(int16) {
-											partialResults[i] = min
-										}
-									case types.T_int32:
-										min := types.DecodeFixed[int32](zm.GetMinBuf())
-										if min < partialResults[i].(int32) {
-											partialResults[i] = min
-										}
-									case types.T_int64:
-										min := types.DecodeFixed[int64](zm.GetMinBuf())
-										if min < partialResults[i].(int64) {
-											partialResults[i] = min
-										}
-									case types.T_uint8:
-										min := types.DecodeFixed[uint8](zm.GetMinBuf())
-										if min < partialResults[i].(uint8) {
-											partialResults[i] = min
-										}
-									case types.T_uint16:
-										min := types.DecodeFixed[uint16](zm.GetMinBuf())
-										if min < partialResults[i].(uint16) {
-											partialResults[i] = min
-										}
-									case types.T_uint32:
-										min := types.DecodeFixed[uint32](zm.GetMinBuf())
-										if min < partialResults[i].(uint32) {
-											partialResults[i] = min
-										}
-									case types.T_uint64:
-										min := types.DecodeFixed[uint64](zm.GetMinBuf())
-										if min < partialResults[i].(uint64) {
-											partialResults[i] = min
-										}
-									case types.T_float32:
-										min := types.DecodeFixed[float32](zm.GetMinBuf())
-										if min < partialResults[i].(float32) {
-											partialResults[i] = min
-										}
-									case types.T_float64:
-										min := types.DecodeFixed[float64](zm.GetMinBuf())
-										if min < partialResults[i].(float64) {
-											partialResults[i] = min
-										}
-									case types.T_date:
-										min := types.DecodeFixed[types.Date](zm.GetMinBuf())
-										if min < partialResults[i].(types.Date) {
-											partialResults[i] = min
-										}
-									case types.T_time:
-										min := types.DecodeFixed[types.Time](zm.GetMinBuf())
-										if min < partialResults[i].(types.Time) {
-											partialResults[i] = min
-										}
-									case types.T_datetime:
-										min := types.DecodeFixed[types.Datetime](zm.GetMinBuf())
-										if min < partialResults[i].(types.Datetime) {
-											partialResults[i] = min
-										}
-									case types.T_timestamp:
-										min := types.DecodeFixed[types.Timestamp](zm.GetMinBuf())
-										if min < partialResults[i].(types.Timestamp) {
-											partialResults[i] = min
-										}
-									case types.T_enum:
-										min := types.DecodeFixed[types.Enum](zm.GetMinBuf())
-										if min < partialResults[i].(types.Enum) {
-											partialResults[i] = min
-										}
-									case types.T_decimal64:
-										min := types.DecodeFixed[types.Decimal64](zm.GetMinBuf())
-										if min < partialResults[i].(types.Decimal64) {
-											partialResults[i] = min
-										}
-									case types.T_decimal128:
-										min := types.DecodeFixed[types.Decimal128](zm.GetMinBuf())
-										if min.Compare(partialResults[i].(types.Decimal128)) < 0 {
-											partialResults[i] = min
-										}
-									case types.T_uuid:
-										min := types.DecodeFixed[types.Uuid](zm.GetMinBuf())
-										if min.Lt(partialResults[i].(types.Uuid)) {
-											partialResults[i] = min
-										}
-									case types.T_TS:
-										min := types.DecodeFixed[types.TS](zm.GetMinBuf())
-										ts := partialResults[i].(types.TS)
-										if min.Less(&ts) {
-											partialResults[i] = min
-										}
-									case types.T_Rowid:
-										min := types.DecodeFixed[types.Rowid](zm.GetMinBuf())
-										if min.Less(partialResults[i].(types.Rowid)) {
-											partialResults[i] = min
-										}
-									case types.T_Blockid:
-										min := types.DecodeFixed[types.Blockid](zm.GetMinBuf())
-										if min.Less(partialResults[i].(types.Blockid)) {
-											partialResults[i] = min
-										}
-									}
-								}
-							}
-						case "max":
-							col := agg.F.Args[0].Expr.(*plan.Expr_Col)
-							zm := blkMeta.ColumnMeta(uint16(columnMap[int(col.Col.ColPos)])).ZoneMap()
-							if zm.GetType().FixedLength() < 0 {
-								partialResults = nil
-							} else {
-								if partialResults[i] == nil {
-									partialResults[i] = zm.GetMax()
-									partialResultTypes[i] = zm.GetType()
-								} else {
-									switch zm.GetType() {
-									case types.T_bool:
-										partialResults[i] = partialResults[i].(bool) || types.DecodeFixed[bool](zm.GetMaxBuf())
-									case types.T_bit:
-										max := types.DecodeFixed[uint64](zm.GetMaxBuf())
-										if max > partialResults[i].(uint64) {
-											partialResults[i] = max
-										}
-									case types.T_int8:
-										max := types.DecodeFixed[int8](zm.GetMaxBuf())
-										if max > partialResults[i].(int8) {
-											partialResults[i] = max
-										}
-									case types.T_int16:
-										max := types.DecodeFixed[int16](zm.GetMaxBuf())
-										if max > partialResults[i].(int16) {
-											partialResults[i] = max
-										}
-									case types.T_int32:
-										max := types.DecodeFixed[int32](zm.GetMaxBuf())
-										if max > partialResults[i].(int32) {
-											partialResults[i] = max
-										}
-									case types.T_int64:
-										max := types.DecodeFixed[int64](zm.GetMaxBuf())
-										if max > partialResults[i].(int64) {
-											partialResults[i] = max
-										}
-									case types.T_uint8:
-										max := types.DecodeFixed[uint8](zm.GetMaxBuf())
-										if max > partialResults[i].(uint8) {
-											partialResults[i] = max
-										}
-									case types.T_uint16:
-										max := types.DecodeFixed[uint16](zm.GetMaxBuf())
-										if max > partialResults[i].(uint16) {
-											partialResults[i] = max
-										}
-									case types.T_uint32:
-										max := types.DecodeFixed[uint32](zm.GetMaxBuf())
-										if max > partialResults[i].(uint32) {
-											partialResults[i] = max
-										}
-									case types.T_uint64:
-										max := types.DecodeFixed[uint64](zm.GetMaxBuf())
-										if max > partialResults[i].(uint64) {
-											partialResults[i] = max
-										}
-									case types.T_float32:
-										max := types.DecodeFixed[float32](zm.GetMaxBuf())
-										if max > partialResults[i].(float32) {
-											partialResults[i] = max
-										}
-									case types.T_float64:
-										max := types.DecodeFixed[float64](zm.GetMaxBuf())
-										if max > partialResults[i].(float64) {
-											partialResults[i] = max
-										}
-									case types.T_date:
-										max := types.DecodeFixed[types.Date](zm.GetMaxBuf())
-										if max > partialResults[i].(types.Date) {
-											partialResults[i] = max
-										}
-									case types.T_time:
-										max := types.DecodeFixed[types.Time](zm.GetMaxBuf())
-										if max > partialResults[i].(types.Time) {
-											partialResults[i] = max
-										}
-									case types.T_datetime:
-										max := types.DecodeFixed[types.Datetime](zm.GetMaxBuf())
-										if max > partialResults[i].(types.Datetime) {
-											partialResults[i] = max
-										}
-									case types.T_timestamp:
-										max := types.DecodeFixed[types.Timestamp](zm.GetMaxBuf())
-										if max > partialResults[i].(types.Timestamp) {
-											partialResults[i] = max
-										}
-									case types.T_enum:
-										max := types.DecodeFixed[types.Enum](zm.GetMaxBuf())
-										if max > partialResults[i].(types.Enum) {
-											partialResults[i] = max
-										}
-									case types.T_decimal64:
-										max := types.DecodeFixed[types.Decimal64](zm.GetMaxBuf())
-										if max > partialResults[i].(types.Decimal64) {
-											partialResults[i] = max
-										}
-									case types.T_decimal128:
-										max := types.DecodeFixed[types.Decimal128](zm.GetMaxBuf())
-										if max.Compare(partialResults[i].(types.Decimal128)) > 0 {
-											partialResults[i] = max
-										}
-									case types.T_uuid:
-										max := types.DecodeFixed[types.Uuid](zm.GetMaxBuf())
-										if max.Gt(partialResults[i].(types.Uuid)) {
-											partialResults[i] = max
-										}
-									case types.T_TS:
-										max := types.DecodeFixed[types.TS](zm.GetMaxBuf())
-										ts := partialResults[i].(types.TS)
-										if max.Greater(&ts) {
-											partialResults[i] = max
-										}
-									case types.T_Rowid:
-										max := types.DecodeFixed[types.Rowid](zm.GetMaxBuf())
-										if max.Great(partialResults[i].(types.Rowid)) {
-											partialResults[i] = max
-										}
-									case types.T_Blockid:
-										max := types.DecodeFixed[types.Blockid](zm.GetMaxBuf())
-										if max.Great(partialResults[i].(types.Blockid)) {
-											partialResults[i] = max
-										}
-									}
-								}
-							}
-						default:
-						}
-						if partialResults == nil {
-							break
-						}
-					}
-					if partialResults == nil {
-						break
-					}
-				}
-			}
-		}
-		if ranges.Size() == len(newranges) {
-			partialResults = nil
-		} else if partialResults != nil {
-			ranges.SetBytes(newranges)
-		}
-		if partialResults == nil {
-			partialResultTypes = nil
-		}
-	}
-	// n.AggList = nil
-
 	// some log for finding a bug.
 	tblId := rel.GetTableID(ctx)
 	expectedLen := ranges.Len()
@@ -4392,7 +4129,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	}
 	// disttae engine
 	if engineType == engine.Disttae {
-		nodes, err := shuffleBlocksToMultiCN(c, ranges.(*objectio.BlockInfoSlice), n)
+		nodes, err := shuffleBlocksToMultiCN(c, ranges.(*objectio.BlockInfoSliceInProgress), tombstones, n)
 		return nodes, partialResults, partialResultTypes, err
 	}
 	// maybe temp table on memengine , just put payloads in average
@@ -4443,7 +4180,7 @@ func putBlocksInAverage(c *Compile, ranges engine.Ranges, n *plan.Node) engine.N
 	return nodes
 }
 
-func shuffleBlocksToMultiCN(c *Compile, ranges *objectio.BlockInfoSlice, n *plan.Node) (engine.Nodes, error) {
+func shuffleBlocksToMultiCN(c *Compile, ranges *objectio.BlockInfoSliceInProgress, tombstone []byte, n *plan.Node) (engine.Nodes, error) {
 	var nodes engine.Nodes
 	// add current CN
 	nodes = append(nodes, engine.Node{
@@ -4462,15 +4199,16 @@ func shuffleBlocksToMultiCN(c *Compile, ranges *objectio.BlockInfoSlice, n *plan
 		nodes[0].Data = append(nodes[0].Data, ranges.GetAllBytes()...)
 		return nodes, nil
 	}
+
 	// put dirty blocks which can't be distributed remotely in current CN.
-	newRanges := make(objectio.BlockInfoSlice, 0, ranges.Len())
-	for i := 0; i < ranges.Len(); i++ {
-		if ranges.Get(i).CanRemote {
-			newRanges = append(newRanges, ranges.GetBytes(i)...)
-		} else {
-			nodes[0].Data = append(nodes[0].Data, ranges.GetBytes(i)...)
-		}
-	}
+	//newRanges := make(objectio.BlockInfoSlice, 0, ranges.Len())
+	//for i := 0; i < ranges.Len(); i++ {
+	//	if ranges.Get(i).CanRemote {
+	//		newRanges = append(newRanges, ranges.GetBytes(i)...)
+	//	} else {
+	//		nodes[0].Data = append(nodes[0].Data, ranges.GetBytes(i)...)
+	//	}
+	//}
 
 	// add the rest of CNs in list
 	for i := range c.cnList {
@@ -4486,12 +4224,12 @@ func shuffleBlocksToMultiCN(c *Compile, ranges *objectio.BlockInfoSlice, n *plan
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Addr < nodes[j].Addr })
 
 	if n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle && n.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Range {
-		err := shuffleBlocksByRange(c, newRanges, n, nodes)
+		err := shuffleBlocksByRange(c, *ranges, n, nodes)
 		if err != nil {
 			return nil, err
 		}
 	} else {
-		shuffleBlocksByHash(c, newRanges, nodes)
+		shuffleBlocksByHash(c, *ranges, nodes)
 	}
 
 	minWorkLoad := math.MaxInt32
@@ -4506,6 +4244,10 @@ func shuffleBlocksToMultiCN(c *Compile, ranges *objectio.BlockInfoSlice, n *plan
 			minWorkLoad = len(nodes[i].Data) / objectio.BlockInfoSize
 		}
 		if len(nodes[i].Data) > 0 {
+			//Put tombstone into remote node.
+			if i != 0 {
+				nodes[i].Tombstone = append(nodes[i].Tombstone, tombstone...)
+			}
 			newNodes = append(newNodes, nodes[i])
 		}
 	}
@@ -4520,7 +4262,7 @@ func shuffleBlocksToMultiCN(c *Compile, ranges *objectio.BlockInfoSlice, n *plan
 	return newNodes, nil
 }
 
-func shuffleBlocksByHash(c *Compile, ranges objectio.BlockInfoSlice, nodes engine.Nodes) {
+func shuffleBlocksByHash(c *Compile, ranges objectio.BlockInfoSliceInProgress, nodes engine.Nodes) {
 	for i := 0; i < ranges.Len(); i++ {
 		unmarshalledBlockInfo := ranges.Get(i)
 		// get timestamp in objName to make sure it is random enough
@@ -4530,7 +4272,7 @@ func shuffleBlocksByHash(c *Compile, ranges objectio.BlockInfoSlice, nodes engin
 	}
 }
 
-func shuffleBlocksByRange(c *Compile, ranges objectio.BlockInfoSlice, n *plan.Node, nodes engine.Nodes) error {
+func shuffleBlocksByRange(c *Compile, ranges objectio.BlockInfoSliceInProgress, n *plan.Node, nodes engine.Nodes) error {
 	var objDataMeta objectio.ObjectDataMeta
 	var objMeta objectio.ObjectMeta
 

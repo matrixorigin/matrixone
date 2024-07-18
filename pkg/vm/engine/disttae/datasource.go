@@ -40,6 +40,46 @@ const (
 	End
 )
 
+type Tombstone interface {
+	HasTomstones(bid types.Blockid) bool
+	ApplyTombstones(rows []types.Rowid) ([]int64, error)
+	MarshalToBytes() []byte
+	//TODO::remove it
+	SetPartition(num int)
+}
+
+func UnmarshTomstones(data []byte) Tombstone {
+
+	return nil
+}
+
+type TableTombstones struct {
+	//committed and uncommitted
+	inMem []types.Rowid
+	//committed and uncommitted.
+	persisted map[types.Blockid]objectio.Location
+	partNum   int
+}
+
+func (tblTom *TableTombstones) HasTomstones(bid types.Blockid) bool {
+	return true
+}
+
+func (tblTom *TableTombstones) ApplyTombstones(rows []types.Rowid) ([]int64, error) {
+	return nil, nil
+}
+
+func (tblTom *TableTombstones) MarshalToBytes() []byte {
+	if len(tblTom.inMem) == 0 && len(tblTom.persisted) == 0 {
+		return nil
+	}
+	return nil
+}
+
+func (tblTom *TableTombstones) SetPartition(num int) {
+	tblTom.partNum = num
+}
+
 type DataSource interface {
 	Next(ctx context.Context, cols []string, types []types.Type, seqNums []uint16,
 		memFilter MemPKFilterInProgress, txnOffset int, mp *mpool.MPool,
@@ -49,6 +89,49 @@ type DataSource interface {
 
 	// ApplyTombstones Apply tombstones into rows.
 	ApplyTombstones(rows []types.Rowid) ([]int64, error)
+}
+
+type RemoteDataSource struct {
+	tombstone Tombstone
+	ranges    []*objectio.BlockInfoInProgress
+}
+
+func NewRemoteDataSource(
+	ctx context.Context,
+	mp *mpool.MPool,
+	snapshotTS types.TS,
+	fs fileservice.FileService,
+	databaseId, tableId uint64,
+	ranges []*objectio.BlockInfoInProgress,
+	tombstone Tombstone,
+) (source *RemoteDataSource, err error) {
+	return &RemoteDataSource{
+		tombstone: tombstone,
+		ranges:    ranges,
+	}, nil
+}
+
+func (rs *RemoteDataSource) Next(
+	ctx context.Context,
+	cols []string,
+	types []types.Type,
+	seqNums []uint16,
+	memFilter MemPKFilterInProgress,
+	txnOffset int,
+	mp *mpool.MPool,
+	vp engine.VectorPool,
+	bat *batch.Batch) (*objectio.BlockInfoInProgress, DataState, error) {
+
+	return nil, InMem, nil
+}
+
+func (rs *RemoteDataSource) HasTombstones(bid types.Blockid) bool {
+	return true
+}
+
+// ApplyTombstones Apply tombstones into rows.
+func (rs *RemoteDataSource) ApplyTombstones(rows []types.Rowid) ([]int64, error) {
+	return nil, nil
 }
 
 // local data source

@@ -601,6 +601,17 @@ func (tbl *txnTable) resetSnapshot() {
 	tbl._partState.Store(nil)
 }
 
+// CollectTombstones collects in memory tombstones and tombstone objects for the given blocks.
+// If len(blkIDs) == 0, then collect the all the tombstones of table.
+func (tbl *txnTable) CollectTombstones(ctx context.Context, txnOffset int, blkIDs []types.Blockid) ([]byte, error) {
+	if blkIDs == nil || len(blkIDs) == 0 {
+		//TODO::
+		tombstone := &TableTombstones{}
+		return tombstone.MarshalToBytes(), nil
+	}
+	panic("implement me")
+}
+
 func (tbl *txnTable) RangesInProgress(ctx context.Context, exprs []*plan.Expr, txnOffset int) (ranges engine.Ranges, err error) {
 	start := time.Now()
 	seq := tbl.db.op.NextSequence()
