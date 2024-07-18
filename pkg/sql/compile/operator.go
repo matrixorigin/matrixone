@@ -1581,7 +1581,7 @@ func constructLoopMark(n *plan.Node, typs []types.Type, proc *process.Process) *
 	return arg
 }
 
-func constructJoinBuildOperator(c *Compile, op vm.Operator, isDup bool, isShuffle bool) vm.Operator {
+func constructJoinBuildOperator(c *Compile, op vm.Operator, isShuffle bool) vm.Operator {
 	switch op.OpType() {
 	case vm.IndexJoin:
 		indexJoin := op.(*indexjoin.IndexJoin)
@@ -1594,19 +1594,19 @@ func constructJoinBuildOperator(c *Compile, op vm.Operator, isDup bool, isShuffl
 		return ret
 	default:
 		if isShuffle {
-			res := constructShuffleBuild(op, c.proc, isDup)
+			res := constructShuffleBuild(op, c.proc)
 			res.SetIdx(op.GetOperatorBase().GetIdx())
 			res.SetIsFirst(true)
 			return res
 		}
-		res := constructHashBuild(op, c.proc, isDup)
+		res := constructHashBuild(op, c.proc)
 		res.SetIdx(op.GetOperatorBase().GetIdx())
 		res.SetIsFirst(true)
 		return res
 	}
 }
 
-func constructHashBuild(op vm.Operator, proc *process.Process, isDup bool) *hashbuild.HashBuild {
+func constructHashBuild(op vm.Operator, proc *process.Process) *hashbuild.HashBuild {
 	// XXX BUG
 	// relation index of arg.Conditions should be rewritten to 0 here.
 	ret := hashbuild.NewArgument()
@@ -1617,7 +1617,6 @@ func constructHashBuild(op vm.Operator, proc *process.Process, isDup bool) *hash
 		ret.NeedHashMap = true
 		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
-		ret.IsDup = isDup
 		ret.HashOnPK = arg.HashOnPK
 		if arg.Cond == nil {
 			ret.NeedMergedBatch = false
@@ -1632,7 +1631,6 @@ func constructHashBuild(op vm.Operator, proc *process.Process, isDup bool) *hash
 		ret.NeedHashMap = true
 		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
-		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = true
@@ -1642,7 +1640,6 @@ func constructHashBuild(op vm.Operator, proc *process.Process, isDup bool) *hash
 		ret.NeedHashMap = true
 		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
-		ret.IsDup = isDup
 		ret.HashOnPK = arg.HashOnPK
 
 		// to find if hashmap need to keep build batches for probe
@@ -1667,7 +1664,6 @@ func constructHashBuild(op vm.Operator, proc *process.Process, isDup bool) *hash
 		ret.NeedHashMap = true
 		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
-		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = true
@@ -1680,7 +1676,6 @@ func constructHashBuild(op vm.Operator, proc *process.Process, isDup bool) *hash
 		ret.NeedHashMap = true
 		ret.Typs = arg.RightTypes
 		ret.Conditions = arg.Conditions[1]
-		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = true
@@ -1693,7 +1688,6 @@ func constructHashBuild(op vm.Operator, proc *process.Process, isDup bool) *hash
 		ret.NeedHashMap = true
 		ret.Typs = arg.RightTypes
 		ret.Conditions = arg.Conditions[1]
-		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = true
@@ -1706,7 +1700,6 @@ func constructHashBuild(op vm.Operator, proc *process.Process, isDup bool) *hash
 		ret.NeedHashMap = true
 		ret.Typs = arg.RightTypes
 		ret.Conditions = arg.Conditions[1]
-		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = true
@@ -1719,7 +1712,6 @@ func constructHashBuild(op vm.Operator, proc *process.Process, isDup bool) *hash
 		ret.NeedHashMap = true
 		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
-		ret.IsDup = isDup
 		ret.HashOnPK = arg.HashOnPK
 		if arg.Cond == nil {
 			ret.NeedMergedBatch = false
@@ -1737,7 +1729,6 @@ func constructHashBuild(op vm.Operator, proc *process.Process, isDup bool) *hash
 		ret.NeedHashMap = true
 		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
-		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = true
@@ -1748,21 +1739,18 @@ func constructHashBuild(op vm.Operator, proc *process.Process, isDup bool) *hash
 		arg := op.(*product.Product)
 		ret.NeedHashMap = false
 		ret.Typs = arg.Typs
-		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.NeedAllocateSels = true
 	case vm.ProductL2:
 		arg := op.(*productl2.Productl2)
 		ret.NeedHashMap = false
 		ret.Typs = arg.Typs
-		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.NeedAllocateSels = true
 	case vm.LoopAnti:
 		arg := op.(*loopanti.LoopAnti)
 		ret.NeedHashMap = false
 		ret.Typs = arg.Typs
-		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.NeedAllocateSels = true
 
@@ -1770,7 +1758,6 @@ func constructHashBuild(op vm.Operator, proc *process.Process, isDup bool) *hash
 		arg := op.(*loopjoin.LoopJoin)
 		ret.NeedHashMap = false
 		ret.Typs = arg.Typs
-		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.NeedAllocateSels = true
 
@@ -1778,7 +1765,6 @@ func constructHashBuild(op vm.Operator, proc *process.Process, isDup bool) *hash
 		arg := op.(*loopleft.LoopLeft)
 		ret.NeedHashMap = false
 		ret.Typs = arg.Typs
-		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.NeedAllocateSels = true
 
@@ -1786,7 +1772,6 @@ func constructHashBuild(op vm.Operator, proc *process.Process, isDup bool) *hash
 		arg := op.(*loopsemi.LoopSemi)
 		ret.NeedHashMap = false
 		ret.Typs = arg.Typs
-		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.NeedAllocateSels = true
 
@@ -1794,7 +1779,6 @@ func constructHashBuild(op vm.Operator, proc *process.Process, isDup bool) *hash
 		arg := op.(*loopsingle.LoopSingle)
 		ret.NeedHashMap = false
 		ret.Typs = arg.Typs
-		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.NeedAllocateSels = true
 
@@ -1802,7 +1786,6 @@ func constructHashBuild(op vm.Operator, proc *process.Process, isDup bool) *hash
 		arg := op.(*loopmark.LoopMark)
 		ret.NeedHashMap = false
 		ret.Typs = arg.Typs
-		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.NeedAllocateSels = true
 
@@ -1813,7 +1796,7 @@ func constructHashBuild(op vm.Operator, proc *process.Process, isDup bool) *hash
 	return ret
 }
 
-func constructShuffleBuild(op vm.Operator, proc *process.Process, isDup bool) *shufflebuild.ShuffleBuild {
+func constructShuffleBuild(op vm.Operator, proc *process.Process) *shufflebuild.ShuffleBuild {
 	ret := shufflebuild.NewArgument()
 
 	switch op.OpType() {
@@ -1821,7 +1804,6 @@ func constructShuffleBuild(op vm.Operator, proc *process.Process, isDup bool) *s
 		arg := op.(*anti.AntiJoin)
 		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
-		ret.IsDup = isDup
 		ret.HashOnPK = arg.HashOnPK
 		if arg.Cond == nil {
 			ret.NeedMergedBatch = false
@@ -1838,7 +1820,6 @@ func constructShuffleBuild(op vm.Operator, proc *process.Process, isDup bool) *s
 		arg := op.(*join.InnerJoin)
 		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
-		ret.IsDup = isDup
 		ret.HashOnPK = arg.HashOnPK
 
 		// to find if hashmap need to keep build batches for probe
@@ -1862,7 +1843,6 @@ func constructShuffleBuild(op vm.Operator, proc *process.Process, isDup bool) *s
 		arg := op.(*left.LeftJoin)
 		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
-		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = true
@@ -1874,7 +1854,6 @@ func constructShuffleBuild(op vm.Operator, proc *process.Process, isDup bool) *s
 		arg := op.(*right.RightJoin)
 		ret.Typs = arg.RightTypes
 		ret.Conditions = arg.Conditions[1]
-		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = true
@@ -1886,7 +1865,6 @@ func constructShuffleBuild(op vm.Operator, proc *process.Process, isDup bool) *s
 		arg := op.(*rightsemi.RightSemi)
 		ret.Typs = arg.RightTypes
 		ret.Conditions = arg.Conditions[1]
-		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = true
@@ -1898,7 +1876,6 @@ func constructShuffleBuild(op vm.Operator, proc *process.Process, isDup bool) *s
 		arg := op.(*rightanti.RightAnti)
 		ret.Typs = arg.RightTypes
 		ret.Conditions = arg.Conditions[1]
-		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = true
@@ -1910,7 +1887,6 @@ func constructShuffleBuild(op vm.Operator, proc *process.Process, isDup bool) *s
 		arg := op.(*semi.SemiJoin)
 		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
-		ret.IsDup = isDup
 		ret.HashOnPK = arg.HashOnPK
 		if arg.Cond == nil {
 			ret.NeedMergedBatch = false

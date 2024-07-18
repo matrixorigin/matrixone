@@ -62,7 +62,6 @@ type HashBuild struct {
 	// need to generate a push-down filter expression
 	NeedExpr         bool
 	NeedHashMap      bool
-	IsDup            bool
 	HashOnPK         bool
 	NeedMergedBatch  bool
 	NeedAllocateSels bool

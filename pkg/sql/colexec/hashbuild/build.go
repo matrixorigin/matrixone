@@ -115,12 +115,11 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 				var jm *hashmap.JoinMap
 				if ap.NeedHashMap {
 					if ctr.keyWidth <= 8 {
-						jm = hashmap.NewJoinMap(ctr.multiSels, nil, ctr.intHashMap, nil, ctr.hasNull, ap.IsDup)
+						jm = hashmap.NewJoinMap(ctr.multiSels, nil, ctr.intHashMap, nil, ctr.hasNull)
 					} else {
-						jm = hashmap.NewJoinMap(ctr.multiSels, nil, nil, ctr.strHashMap, ctr.hasNull, ap.IsDup)
+						jm = hashmap.NewJoinMap(ctr.multiSels, nil, nil, ctr.strHashMap, ctr.hasNull)
 					}
 					jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
-					result.Batch.AuxData = jm
 				}
 				ctr.intHashMap = nil
 				ctr.strHashMap = nil

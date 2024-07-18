@@ -144,8 +144,7 @@ func (ctr *container) receiveHashMap(anal process.Analyze) error {
 		return msg.Err
 	}
 	bat := msg.Batch
-	if bat != nil && bat.AuxData != nil {
-		ctr.mp = bat.DupJmAuxData()
+	if bat != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
 	return nil

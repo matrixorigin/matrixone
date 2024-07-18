@@ -58,7 +58,6 @@ type ShuffleBuild struct {
 	ctr *container
 	// need to generate a push-down filter expression
 	NeedExpr         bool
-	IsDup            bool
 	HashOnPK         bool
 	NeedMergedBatch  bool
 	NeedAllocateSels bool

@@ -65,16 +65,13 @@ type Iterator interface {
 
 // JoinMap is used for join
 type JoinMap struct {
-	cnt       *int64
-	dupCnt    *int64
+	refCnt    int64
 	multiSels [][]int32
 	// push-down filter expression, possibly a bloomfilter
-	expr    *plan.Expr
-	shm     *StrHashMap
-	ihm     *IntHashMap
-	hasNull bool
-
-	isDup            bool
+	expr             *plan.Expr
+	shm              *StrHashMap
+	ihm              *IntHashMap
+	hasNull          bool
 	runtimeFilter_In bool
 }
 

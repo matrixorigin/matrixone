@@ -147,8 +147,7 @@ func (ctr *container) receiveHashMap(anal process.Analyze) error {
 		return msg.Err
 	}
 	bat := msg.Batch
-	if bat != nil && bat.AuxData != nil {
-		ctr.mp = bat.DupJmAuxData()
+	if bat != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
 	return nil
@@ -434,8 +433,7 @@ func (ctr *container) EvalEntire(pbat, bat *batch.Batch, idx int, proc *process.
 
 // collect the idx of tuple which contains null values
 func (ctr *container) evalNullSels(bat *batch.Batch) {
-	joinMap := bat.AuxData.(*hashmap.JoinMap)
-	jmSels := joinMap.Sels()
+	jmSels := ctr.mp.Sels()
 	selsMap := make(map[int32]bool)
 	for _, sel := range jmSels {
 		for _, i := range sel {
