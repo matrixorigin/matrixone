@@ -14,11 +14,22 @@
 
 package malloc
 
-type Allocator interface {
-	Allocate(size uint64, hint Hints) ([]byte, Deallocator, error)
-}
+import "testing"
 
-type Deallocator interface {
-	TraitHolder
-	Deallocate(hint Hints)
+func BenchmarkTraitAs(b *testing.B) {
+	allocator := NewReadOnlyAllocator(
+		NewClassAllocator(NewFixedSizeMmapAllocator),
+	)
+	_, dec, err := allocator.Allocate(42, NoHints)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+
+	var freeze Freeze
+	for i := 0; i < b.N; i++ {
+		if !dec.As(&freeze) {
+			b.Fatal()
+		}
+	}
 }

@@ -14,11 +14,10 @@
 
 package malloc
 
-type Allocator interface {
-	Allocate(size uint64, hint Hints) ([]byte, Deallocator, error)
+type Trait interface {
+	IsTrait()
 }
 
-type Deallocator interface {
-	TraitHolder
-	Deallocate(hint Hints)
+type TraitHolder interface {
+	As(trait Trait) bool
 }
