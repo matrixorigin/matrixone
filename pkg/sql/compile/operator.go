@@ -649,7 +649,7 @@ func constructFuzzyFilter(n, tableScan, sinkScan *plan.Node) *fuzzyfilter.FuzzyF
 	// so only use runtime filter when build on sink scan
 	if op.BuildIdx == 1 {
 		if len(n.RuntimeFilterBuildList) > 0 {
-			op.RuntimeFilterSpec = n.RuntimeFilterBuildList[0]
+			op.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(n.RuntimeFilterBuildList[0])
 		}
 	} else {
 		tableScan.RuntimeFilterProbeList = nil
@@ -853,7 +853,7 @@ func constructJoin(n *plan.Node, typs []types.Type, proc *process.Process) *join
 	arg.Result = result
 	arg.Cond = cond
 	arg.Conditions = constructJoinConditions(conds, proc)
-	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
+	arg.RuntimeFilterSpecs = plan2.DeepCopyRuntimeFilterSpecList(n.RuntimeFilterBuildList)
 	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
 	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
 	return arg
@@ -874,7 +874,7 @@ func constructSemi(n *plan.Node, typs []types.Type, proc *process.Process) *semi
 	arg.Result = result
 	arg.Cond = cond
 	arg.Conditions = constructJoinConditions(conds, proc)
-	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
+	arg.RuntimeFilterSpecs = plan2.DeepCopyRuntimeFilterSpecList(n.RuntimeFilterBuildList)
 	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
 	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
 	return arg
@@ -891,7 +891,7 @@ func constructLeft(n *plan.Node, typs []types.Type, proc *process.Process) *left
 	arg.Result = result
 	arg.Cond = cond
 	arg.Conditions = constructJoinConditions(conds, proc)
-	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
+	arg.RuntimeFilterSpecs = plan2.DeepCopyRuntimeFilterSpecList(n.RuntimeFilterBuildList)
 	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
 	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
 	return arg
@@ -909,7 +909,7 @@ func constructRight(n *plan.Node, left_typs, right_typs []types.Type, proc *proc
 	arg.Result = result
 	arg.Cond = cond
 	arg.Conditions = constructJoinConditions(conds, proc)
-	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
+	arg.RuntimeFilterSpecs = plan2.DeepCopyRuntimeFilterSpecList(n.RuntimeFilterBuildList)
 	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
 	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
 	return arg
@@ -927,7 +927,7 @@ func constructRightSemi(n *plan.Node, right_typs []types.Type, proc *process.Pro
 	arg.Result = result
 	arg.Cond = cond
 	arg.Conditions = constructJoinConditions(conds, proc)
-	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
+	arg.RuntimeFilterSpecs = plan2.DeepCopyRuntimeFilterSpecList(n.RuntimeFilterBuildList)
 	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
 	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
 	return arg
@@ -944,7 +944,7 @@ func constructRightAnti(n *plan.Node, right_typs []types.Type, proc *process.Pro
 	arg.Result = result
 	arg.Cond = cond
 	arg.Conditions = constructJoinConditions(conds, proc)
-	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
+	arg.RuntimeFilterSpecs = plan2.DeepCopyRuntimeFilterSpecList(n.RuntimeFilterBuildList)
 	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
 	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
 	return arg
@@ -961,7 +961,7 @@ func constructSingle(n *plan.Node, typs []types.Type, proc *process.Process) *si
 	arg.Result = result
 	arg.Cond = cond
 	arg.Conditions = constructJoinConditions(conds, proc)
-	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
+	arg.RuntimeFilterSpecs = plan2.DeepCopyRuntimeFilterSpecList(n.RuntimeFilterBuildList)
 	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
 	return arg
 }
@@ -994,7 +994,7 @@ func constructAnti(n *plan.Node, typs []types.Type, proc *process.Process) *anti
 	arg.Conditions = constructJoinConditions(conds, proc)
 	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
 	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
-	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
+	arg.RuntimeFilterSpecs = plan2.DeepCopyRuntimeFilterSpecList(n.RuntimeFilterBuildList)
 	return arg
 }
 
@@ -1478,7 +1478,7 @@ func constructIndexJoin(n *plan.Node, typs []types.Type, proc *process.Process) 
 	arg := indexjoin.NewArgument()
 	arg.Typs = typs
 	arg.Result = result
-	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
+	arg.RuntimeFilterSpecs = plan2.DeepCopyRuntimeFilterSpecList(n.RuntimeFilterBuildList)
 	return arg
 }
 
@@ -1587,7 +1587,7 @@ func constructJoinBuildOperator(c *Compile, op vm.Operator, isDup bool, isShuffl
 		indexJoin := op.(*indexjoin.IndexJoin)
 		ret := indexbuild.NewArgument()
 		if len(indexJoin.RuntimeFilterSpecs) > 0 {
-			ret.RuntimeFilterSpec = indexJoin.RuntimeFilterSpecs[0]
+			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(indexJoin.RuntimeFilterSpecs[0])
 		}
 		ret.SetIdx(indexJoin.Idx)
 		ret.SetIsFirst(true)
@@ -1659,7 +1659,7 @@ func constructHashBuild(op vm.Operator, proc *process.Process, isDup bool) *hash
 		ret.NeedMergedBatch = needMergedBatch
 		ret.NeedAllocateSels = true
 		if len(arg.RuntimeFilterSpecs) > 0 {
-			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
+			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
 		}
 
 	case vm.Left:
@@ -1672,7 +1672,7 @@ func constructHashBuild(op vm.Operator, proc *process.Process, isDup bool) *hash
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = true
 		if len(arg.RuntimeFilterSpecs) > 0 {
-			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
+			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
 		}
 
 	case vm.Right:
@@ -1685,7 +1685,7 @@ func constructHashBuild(op vm.Operator, proc *process.Process, isDup bool) *hash
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = true
 		if len(arg.RuntimeFilterSpecs) > 0 {
-			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
+			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
 		}
 
 	case vm.RightSemi:
@@ -1698,7 +1698,7 @@ func constructHashBuild(op vm.Operator, proc *process.Process, isDup bool) *hash
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = true
 		if len(arg.RuntimeFilterSpecs) > 0 {
-			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
+			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
 		}
 
 	case vm.RightAnti:
@@ -1711,7 +1711,7 @@ func constructHashBuild(op vm.Operator, proc *process.Process, isDup bool) *hash
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = true
 		if len(arg.RuntimeFilterSpecs) > 0 {
-			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
+			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
 		}
 
 	case vm.Semi:
@@ -1729,7 +1729,7 @@ func constructHashBuild(op vm.Operator, proc *process.Process, isDup bool) *hash
 			ret.NeedAllocateSels = true
 		}
 		if len(arg.RuntimeFilterSpecs) > 0 {
-			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
+			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
 		}
 
 	case vm.Single:
@@ -1742,7 +1742,7 @@ func constructHashBuild(op vm.Operator, proc *process.Process, isDup bool) *hash
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = true
 		if len(arg.RuntimeFilterSpecs) > 0 {
-			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
+			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
 		}
 	case vm.Product:
 		arg := op.(*product.Product)

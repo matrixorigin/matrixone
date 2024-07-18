@@ -2354,7 +2354,7 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	s.DataSource.SchemaName = n.ObjRef.SchemaName
 	s.DataSource.AccountId = n.ObjRef.GetPubInfo()
 	s.DataSource.FilterExpr = filterExpr
-	s.DataSource.RuntimeFilterSpecs = n.RuntimeFilterProbeList
+	s.DataSource.RuntimeFilterSpecs = plan2.DeepCopyRuntimeFilterSpecList(n.RuntimeFilterProbeList)
 	s.DataSource.OrderBy = n.OrderBy
 
 	return nil
