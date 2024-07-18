@@ -21,9 +21,8 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
-	"github.com/baidubce/bce-qianfan-sdk/go/qianfan"
-	"github.com/tmc/langchaingo/llms/ollama"
 	"io"
+	"log"
 	"math"
 	"os"
 	"runtime"
@@ -32,6 +31,11 @@ import (
 	"sync"
 	"time"
 	"unsafe"
+
+	"github.com/baidubce/bce-qianfan-sdk/go/qianfan"
+	"github.com/google/generative-ai-go/genai"
+	"github.com/tmc/langchaingo/llms/ollama"
+	"google.golang.org/api/option"
 
 	"github.com/RoaringBitmap/roaring"
 	"golang.org/x/exp/constraints"
@@ -939,7 +943,21 @@ func Unhex(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 }
 
 func createGeminiEmbedding(ctx context.Context, input string) ([]float32, error) {
-	return nil, nil
+	//Access your API key as an environment variable (tbd)
+	//Currently, replace the placeholder with yours
+	client, err := genai.NewClient(ctx, option.WithAPIKey("your_gemini_api_key"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer client.Close()
+	// For embeddings, use the Text Embeddings model
+	em := client.EmbeddingModel("text-embedding-004")
+	res, err := em.EmbedContent(ctx, genai.Text(input))
+
+	if err != nil {
+		panic(err)
+	}
+	return res, nil
 }
 
 func createOllamaEmbedding(ctx context.Context, input string) ([]float32, error) {
