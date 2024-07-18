@@ -453,6 +453,13 @@ func (entry *ObjectEntry) BlockCnt() int {
 		return 1
 	}
 	lastNode := entry.GetLatestNode()
+	if lastNode ==nil{
+		logutil.Warnf("obj %v not found",entry.StringWithLevel(3))
+		if !entry.ObjectMVCCNode.IsEmpty(){
+			return int(entry.BlkCnt())
+		}
+		return 0
+	}
 	if lastNode.objData == nil {
 		if lastNode.GetTable().db.isSys {
 			return 1
