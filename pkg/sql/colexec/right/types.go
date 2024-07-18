@@ -88,6 +88,7 @@ type RightJoin struct {
 
 	HashOnPK           bool
 	IsShuffle          bool
+	ShuffleIdx         int32
 	IsMerger           bool
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	JoinMapTag         int32

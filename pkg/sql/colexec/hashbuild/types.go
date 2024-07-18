@@ -113,9 +113,6 @@ func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err
 	if ctr != nil {
 		ctr.cleanBatches(proc)
 		ctr.cleanEvalVectors()
-		if !hashBuild.NeedHashMap {
-			ctr.cleanHashMap()
-		}
 		hashBuild.ctr = nil
 	}
 }

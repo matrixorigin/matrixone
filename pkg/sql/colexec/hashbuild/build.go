@@ -121,6 +121,11 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 					}
 					jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
 				}
+				if ap.JoinMapTag <= 0 {
+					panic("wrong joinmap message tag!")
+				}
+				proc.SendMessage(process.JoinMapMsg{JoinMapPtr: jm, Tag: ap.JoinMapTag})
+
 				ctr.intHashMap = nil
 				ctr.strHashMap = nil
 				ctr.multiSels = nil

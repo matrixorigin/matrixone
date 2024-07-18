@@ -21,7 +21,7 @@ import (
 var _ Message = new(JoinMapMsg)
 
 type JoinMapMsg struct {
-	joinMapPtr *hashmap.JoinMap
+	JoinMapPtr *hashmap.JoinMap
 	Tag        int32
 }
 
