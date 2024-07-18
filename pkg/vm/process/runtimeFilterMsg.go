@@ -62,13 +62,17 @@ func (proc *Process) SendRuntimeFilter(rt RuntimeFilterMessage, m *plan.RuntimeF
 }
 
 func (proc *Process) FinalizeRuntimeFilter(m *plan.RuntimeFilterSpec) {
-	if m != nil && !m.Handled {
-		var runtimeFilter RuntimeFilterMessage
-		runtimeFilter.Tag = m.Tag
-		runtimeFilter.Typ = RuntimeFilter_DROP
-		proc.SendMessage(runtimeFilter)
-	}
-	if m != nil {
-		m.Handled = false
-	}
+	m.Handled = false
+	/*
+		if m != nil && !m.Handled {
+			var runtimeFilter RuntimeFilterMessage
+			runtimeFilter.Tag = m.Tag
+			runtimeFilter.Typ = RuntimeFilter_DROP
+			proc.SendMessage(runtimeFilter)
+		}
+		if m != nil {
+			m.Handled = false
+		}
+
+	*/
 }
