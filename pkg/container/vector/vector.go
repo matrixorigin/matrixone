@@ -70,7 +70,7 @@ type typedSlice struct {
 
 func (t *typedSlice) reset() {
 	t.Ptr = nil
-	t.Cap = -1
+	t.Cap = 0
 }
 
 func (t *typedSlice) setFromVector(v *Vector) {
