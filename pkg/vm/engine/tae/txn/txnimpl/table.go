@@ -1087,7 +1087,10 @@ func (tbl *txnTable) DedupSnapByPK(ctx context.Context, keys containers.Vector, 
 		obj := objH.GetMeta().(*catalog.ObjectEntry)
 		objH.Close()
 		ObjectHint := obj.SortHint
-		if ObjectHint > maxObjectHint {
+		// the last appendable obj is appending and shouldn't be skipped
+		// the max object hint should equal id of last aobj
+		// naobj shouldn't count
+		if obj.IsAppendable() && ObjectHint > maxObjectHint {
 			maxObjectHint = ObjectHint
 		}
 		objData := obj.GetObjectData()

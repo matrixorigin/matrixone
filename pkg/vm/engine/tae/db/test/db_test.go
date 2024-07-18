@@ -7991,7 +7991,6 @@ func TestDedupSnapshot3(t *testing.T) {
 			err := rel.BatchDedup(bats[offset].Vecs[3])
 			txn.Commit(context.Background())
 			if err != nil {
-				logutil.Infof("err is %v", err)
 				return
 			}
 
