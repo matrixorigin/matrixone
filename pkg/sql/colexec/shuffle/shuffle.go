@@ -40,9 +40,6 @@ func (shuffle *Shuffle) OpType() vm.OpType {
 
 func (shuffle *Shuffle) Prepare(proc *process.Process) error {
 	shuffle.ctr = new(container)
-	if shuffle.RuntimeFilterSpec != nil {
-		shuffle.ctr.runtimeFilterHandled = false
-	}
 	shuffle.initShuffle()
 	return nil
 }
@@ -73,10 +70,6 @@ SENDLAST:
 		//send shuffle pool
 		for i, bat := range shuffle.ctr.shufflePool {
 			if bat != nil {
-				//need to wait for runtimefilter_pass before send batch
-				if err := shuffle.handleRuntimeFilter(proc); err != nil {
-					return vm.CancelResult, err
-				}
 				result.Batch = bat
 				shuffle.ctr.lastSentBatch = result.Batch
 				shuffle.ctr.shufflePool[i] = nil
@@ -108,18 +101,9 @@ SENDLAST:
 				return result, err
 			}
 			if bat != nil {
-				// can directly send this batch
-				//need to wait for runtimefilter_pass before send batch
-				if err := shuffle.handleRuntimeFilter(proc); err != nil {
-					return vm.CancelResult, err
-				}
 				return result, nil
 			}
 		}
-	}
-	//need to wait for runtimefilter_pass before send batch
-	if err := shuffle.handleRuntimeFilter(proc); err != nil {
-		return vm.CancelResult, err
 	}
 
 	// send batch in send pool
@@ -129,31 +113,6 @@ SENDLAST:
 	shuffle.ctr.lastSentBatch = result.Batch
 	shuffle.ctr.sendPool = shuffle.ctr.sendPool[:length-1]
 	return result, nil
-}
-
-func (shuffle *Shuffle) handleRuntimeFilter(proc *process.Process) error {
-	if shuffle.RuntimeFilterSpec != nil && !shuffle.ctr.runtimeFilterHandled {
-		shuffle.msgReceiver = proc.NewMessageReceiver([]int32{shuffle.RuntimeFilterSpec.Tag}, process.AddrBroadCastOnCurrentCN())
-		msgs, ctxDone := shuffle.msgReceiver.ReceiveMessage(true, proc.Ctx)
-		if ctxDone {
-			shuffle.ctr.runtimeFilterHandled = true
-			return nil
-		}
-		for i := range msgs {
-			msg, ok := msgs[i].(process.RuntimeFilterMessage)
-			if !ok {
-				panic("expect runtime filter message, receive unknown message!")
-			}
-			switch msg.Typ {
-			case process.RuntimeFilter_PASS, process.RuntimeFilter_DROP:
-				shuffle.ctr.runtimeFilterHandled = true
-				continue
-			default:
-				panic("unsupported runtime filter type!")
-			}
-		}
-	}
-	return nil
 }
 
 func (shuffle *Shuffle) initShuffle() {

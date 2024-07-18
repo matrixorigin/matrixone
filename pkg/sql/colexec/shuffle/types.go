@@ -34,7 +34,6 @@ type Shuffle struct {
 	ShuffleRangeUint64 []uint64
 	ShuffleRangeInt64  []int64
 	RuntimeFilterSpec  *plan.RuntimeFilterSpec
-	msgReceiver        *process.MessageReceiver
 	vm.OperatorBase
 }
 
@@ -70,12 +69,11 @@ func (shuffle *Shuffle) Release() {
 }
 
 type container struct {
-	ending               bool
-	sels                 [][]int32
-	shufflePool          []*batch.Batch
-	sendPool             []*batch.Batch
-	lastSentBatch        *batch.Batch
-	runtimeFilterHandled bool
+	ending        bool
+	sels          [][]int32
+	shufflePool   []*batch.Batch
+	sendPool      []*batch.Batch
+	lastSentBatch *batch.Batch
 }
 
 func (shuffle *Shuffle) Reset(proc *process.Process, pipelineFailed bool, err error) {
@@ -83,13 +81,6 @@ func (shuffle *Shuffle) Reset(proc *process.Process, pipelineFailed bool, err er
 }
 
 func (shuffle *Shuffle) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if shuffle.RuntimeFilterSpec != nil {
-		shuffle.ctr.runtimeFilterHandled = false
-	}
-	// can't free this
-	/*if arg.msgReceiver != nil {
-		arg.msgReceiver.Free()
-	}*/
 	if shuffle.ctr != nil {
 		for i := range shuffle.ctr.shufflePool {
 			if shuffle.ctr.shufflePool[i] != nil {
