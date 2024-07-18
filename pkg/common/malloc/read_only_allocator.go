@@ -32,14 +32,14 @@ type readOnlyDeallocatorArgs struct {
 }
 
 func (r *readOnlyDeallocatorArgs) As(trait Trait) bool {
-	if ptr, ok := trait.(*Freeze); ok {
-		*ptr = r.freeze
+	if ptr, ok := trait.(*Freezer); ok {
+		ptr.freezer = r
 		return true
 	}
 	return false
 }
 
-func (r *readOnlyDeallocatorArgs) freeze() {
+func (r *readOnlyDeallocatorArgs) Freeze() {
 	r.frozen = true
 	slice := unsafe.Slice(
 		(*byte)(r.info.Addr),
@@ -48,9 +48,15 @@ func (r *readOnlyDeallocatorArgs) freeze() {
 	unix.Mprotect(slice, unix.PROT_READ)
 }
 
-type Freeze func()
+type Freezer struct {
+	freezer
+}
 
-func (*Freeze) IsTrait() {}
+type freezer interface {
+	Freeze()
+}
+
+func (*Freezer) IsTrait() {}
 
 func NewReadOnlyAllocator(
 	upstream Allocator,

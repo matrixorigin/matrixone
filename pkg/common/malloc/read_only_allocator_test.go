@@ -50,11 +50,11 @@ func TestReadOnlyAllocator(t *testing.T) {
 	_ = slice
 	defer dec.Deallocate(NoHints)
 
-	var freeze Freeze
+	var freeze Freezer
 	if !dec.As(&freeze) {
 		t.Fatal("should be freezable")
 	}
-	freeze()
+	freeze.Freeze()
 
 	// this will trigger a memory fault
 	//slice[0] = 1

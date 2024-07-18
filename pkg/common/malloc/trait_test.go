@@ -26,9 +26,13 @@ func BenchmarkTraitAs(b *testing.B) {
 	}
 	b.ResetTimer()
 
-	var freeze Freeze
+	var freeze Freezer
+	var info MmapInfo
 	for i := 0; i < b.N; i++ {
 		if !dec.As(&freeze) {
+			b.Fatal()
+		}
+		if !dec.As(&info) {
 			b.Fatal()
 		}
 	}
