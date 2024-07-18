@@ -55,8 +55,7 @@ func (h *Handle) HandlePrepare(
 	}()
 	if ok {
 		//handle pre-commit write for 2PC
-		txn, err = h.db.GetOrCreateTxnWithMeta(nil, meta.GetID(),
-			types.TimestampToTS(meta.GetSnapshotTS()))
+		txn, err = h.db.GetOrCreateTxnWithMeta(meta.GetID(), types.TimestampToTS(meta.GetSnapshotTS()))
 		if err != nil {
 			return
 		}

@@ -13,7 +13,7 @@ insert into t1 values (110, 'a');
 -- @ignore:0
 select mo_ctl('dn', 'flush', 'mo_ctl_merge.t1');
 -- @ignore:0
-select mo_ctl('dn', 'mergeobjects', 'mo_ctl_merge.t1:all:small');
+select mo_ctl('cn', 'mergeobjects', 'mo_ctl_merge.t1:all:small');
 select sleep(1);
 select rows_cnt from metadata_scan('mo_ctl_merge.t1', 'a') g;
 
@@ -26,7 +26,7 @@ insert into t1 values (125, 'a');
 -- @ignore:0
 select mo_ctl('dn', 'flush', 'mo_ctl_merge.t1');
 -- @ignore:0
-select mo_ctl('dn', 'mergeobjects', 'mo_ctl_merge.t1:all:overlap');
+select mo_ctl('cn', 'mergeobjects', 'mo_ctl_merge.t1:all:overlap');
 select sleep(1);
 select rows_cnt, bit_cast(`min` as int), bit_cast(`max` as int) from metadata_scan('mo_ctl_merge.t1', 'a') g;
 drop table t1;
@@ -42,7 +42,7 @@ insert into t1 values (110, 'a');
 -- @ignore:0
 select mo_ctl('dn', 'flush', 'mo_ctl_merge.t1');
 -- @ignore:0
-select mo_ctl('dn', 'mergeobjects', 'mo_ctl_merge.t1:all:small');
+select mo_ctl('cn', 'mergeobjects', 'mo_ctl_merge.t1:all:small');
 select sleep(1);
 select rows_cnt from metadata_scan('mo_ctl_merge.t1', 'a') g;
 
@@ -55,7 +55,7 @@ insert into t1 values (125, 'a');
 -- @ignore:0
 select mo_ctl('dn', 'flush', 'mo_ctl_merge.t1');
 -- @ignore:0
-select mo_ctl('dn', 'mergeobjects', 'mo_ctl_merge.t1:all:overlap');
+select mo_ctl('cn', 'mergeobjects', 'mo_ctl_merge.t1:all:overlap');
 select sleep(1);
 select rows_cnt, bit_cast(`min` as int), bit_cast(`max` as int) from metadata_scan('mo_ctl_merge.t1', 'a') g;
 drop table t1;
@@ -70,7 +70,7 @@ insert into t1 values ('abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcd
 -- @ignore:0
 select mo_ctl('dn', 'flush', 'mo_ctl_merge.t1');
 -- @ignore:0
-select mo_ctl('dn', 'mergeobjects', 'mo_ctl_merge.t1:all:small');
+select mo_ctl('cn', 'mergeobjects', 'mo_ctl_merge.t1:all:small');
 select sleep(1);
 select rows_cnt from metadata_scan('mo_ctl_merge.t1', 'a') g;
 
@@ -83,7 +83,7 @@ insert into t1 values ('abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcd
 -- @ignore:0
 select mo_ctl('dn', 'flush', 'mo_ctl_merge.t1');
 -- @ignore:0
-select mo_ctl('dn', 'mergeobjects', 'mo_ctl_merge.t1:all:overlap');
+select mo_ctl('cn', 'mergeobjects', 'mo_ctl_merge.t1:all:overlap');
 select sleep(1);
 select rows_cnt, min, max from metadata_scan('mo_ctl_merge.t1', 'a') g;
 drop table t1;
@@ -104,7 +104,7 @@ insert into t1 values (126, 'a');
 -- @ignore:0
 select mo_ctl('dn', 'flush', 'mo_ctl_merge.t1');
 -- @ignore:0
-select mo_ctl('dn', 'mergeobjects', 'mo_ctl_merge.t1:all:overlap(2)');
+select mo_ctl('cn', 'mergeobjects', 'mo_ctl_merge.t1:all:overlap(2)');
 select sleep(1);
 select rows_cnt, bit_cast(`min` as int), bit_cast(`max` as int) from metadata_scan('mo_ctl_merge.t1', 'a') g;
 drop table t1;

@@ -20,20 +20,23 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/docker/go-units"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 const defaultTargetObjectSize = 120 * common.Const1MBytes
@@ -140,80 +143,96 @@ func parseArgs(arg string) (arguments, error) {
 	return a, nil
 }
 
-func handleMerge() handleFunc {
-	return GetTNHandlerFunc(
-		api.OpCode_OpCommitMerge,
-		func(_ string) ([]uint64, error) {
-			return nil, nil
-		},
-		func(tnShardID uint64, parameter string, proc *process.Process) (payload []byte, err error) {
-			txnOp := proc.GetTxnOperator()
-			if txnOp == nil {
-				return nil, moerr.NewInternalError(proc.Ctx, "handleFlush: txn operator is nil")
-			}
-			a, err := parseArgs(parameter)
-			if err != nil {
-				return nil, err
-			}
-			defer func() {
-				if err != nil {
-					logutil.Error("mergeblocks err on cn",
-						zap.String("err", err.Error()), zap.String("parameter", parameter))
-					e := &api.MergeCommitEntry{
-						StartTs: txnOp.SnapshotTS(),
-						Err:     err.Error(),
-					}
-					for _, o := range a.objs {
-						e.MergedObjs = append(e.MergedObjs, o.Clone().Marshal())
-					}
-					// No matter success or not, we should return the merge result to DN
-					payload, _ = e.MarshalBinary()
-					err = nil
-				}
-			}()
+func handleCNMerge(
+	proc *process.Process,
+	service serviceType,
+	parameter string,
+	sender requestSender,
+) (Result, error) {
+	if service != cn {
+		return Result{}, moerr.NewNotSupported(proc.Ctx, "service %s not supported", service)
+	}
+	a, err := parseArgs(parameter)
+	if err != nil {
+		return Result{}, err
+	}
 
-			if a.accountId != math.MaxUint64 {
-				proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(a.accountId))
-			}
+	txnOp := proc.GetTxnOperator()
+	if txnOp == nil {
+		return Result{}, moerr.NewInternalError(proc.Ctx, "handleMerge: txn operator is nil")
+	}
 
-			var rel engine.Relation
-			tblId, err1 := strconv.ParseUint(a.tbl, 10, 64)
-			if err1 == nil {
-				_, _, rel, err = proc.GetSessionInfo().StorageEngine.GetRelationById(proc.Ctx, txnOp, tblId)
-				if err != nil {
-					logutil.Errorf("mergeblocks err on cn, tblId %d, err %s", tblId, err.Error())
-					return nil, err
-				}
-			} else {
-				var database engine.Database
-				database, err = proc.GetSessionInfo().StorageEngine.Database(proc.Ctx, a.db, txnOp)
-				if err != nil {
-					logutil.Errorf("mergeblocks err on cn, db %s, err %s", a.db, err.Error())
-					return nil, err
-				}
-				rel, err = database.Relation(proc.Ctx, a.tbl, nil)
-				if err != nil {
-					logutil.Errorf("mergeblocks err on cn, table %s, err %s", a.db, err.Error())
-					return nil, err
-				}
-			}
+	if a.accountId != math.MaxUint64 {
+		proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(a.accountId))
+	}
 
-			entry, err := rel.MergeObjects(proc.Ctx, a.objs, a.filter, uint32(a.targetObjSize))
-			if err != nil {
-				merge.CleanUpUselessFiles(entry, proc.GetFileService())
-				return nil, err
+	var rel engine.Relation
+	tblId, err1 := strconv.ParseUint(a.tbl, 10, 64)
+	if err1 == nil {
+		_, _, rel, err = proc.GetSessionInfo().StorageEngine.GetRelationById(proc.Ctx, txnOp, tblId)
+		if err != nil {
+			logutil.Errorf("mergeblocks err on cn, tblId %d, err %s", tblId, err.Error())
+			return Result{}, err
+		}
+	} else {
+		var database engine.Database
+		database, err = proc.GetSessionInfo().StorageEngine.Database(proc.Ctx, a.db, txnOp)
+		if err != nil {
+			logutil.Errorf("mergeblocks err on cn, db %s, err %s", a.db, err.Error())
+			return Result{}, err
+		}
+		rel, err = database.Relation(proc.Ctx, a.tbl, nil)
+		if err != nil {
+			logutil.Errorf("mergeblocks err on cn, table %s, err %s", a.tbl, err.Error())
+			return Result{}, err
+		}
+	}
+
+	entry, err := rel.MergeObjects(proc.Ctx, a.objs, a.filter, uint32(120*mpool.MB))
+	if entry == nil {
+		merge.CleanUpUselessFiles(entry, proc.GetFileService())
+		return Result{}, err
+	}
+	payload, err := entry.Marshal()
+	if err != nil {
+		return Result{}, err
+	}
+	var target metadata.TNShard
+	cluster := clusterservice.GetMOCluster()
+	cluster.GetTNService(clusterservice.NewSelector(),
+		func(store metadata.TNService) bool {
+			for _, shard := range store.Shards {
+				target = metadata.TNShard{
+					TNShardRecord: metadata.TNShardRecord{
+						ShardID: shard.ShardID,
+					},
+					ReplicaID: shard.ReplicaID,
+					Address:   store.TxnServiceAddress,
+				}
+				return true
 			}
-			payload, err = entry.MarshalBinary()
-			if err != nil {
-				return nil, err
-			}
-			return payload, nil
-		},
-		func(data []byte) (any, error) {
-			resp := &db.InspectResp{}
-			if err := types.Decode(data, resp); err != nil {
-				return nil, err
-			}
-			return resp, nil
+			return true
 		})
+	write, err := txnOp.Write(proc.Ctx, []txn.TxnRequest{{
+		CNRequest: &txn.CNOpRequest{
+			OpCode:  uint32(api.OpCode_OpCommitMerge),
+			Payload: payload,
+			Target:  target,
+		},
+		Options: &txn.TxnRequestOptions{
+			RetryCodes: []int32{
+				// tn shard not found
+				int32(moerr.ErrTNShardNotFound),
+			},
+			RetryInterval: int64(time.Second),
+		},
+	}})
+	if err != nil {
+		return Result{}, err
+	}
+	defer write.Release()
+	return Result{
+		Method: MergeObjectsMethod,
+		Data:   write.Responses[0].CNOpResponse.Payload,
+	}, nil
 }

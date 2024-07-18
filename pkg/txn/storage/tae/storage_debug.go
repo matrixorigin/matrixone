@@ -109,13 +109,6 @@ func (s *taeStorage) Debug(ctx context.Context,
 	case uint32(api.OpCode_OpStorageUsage):
 		resp, _ := handleRead(ctx, txnMeta, data, s.taeHandler.HandleStorageUsage)
 		return resp.Read()
-
-	case uint32(api.OpCode_OpCommitMerge):
-		resp, err := handleRead(ctx, txnMeta, data, s.taeHandler.HandleCommitMerge)
-		if err != nil {
-			return nil, err
-		}
-		return resp.Read()
 	case uint32(api.OpCode_OpInterceptCommit):
 		resp, err := handleRead(ctx, txnMeta, data, s.taeHandler.HandleInterceptCommit)
 		if err != nil {

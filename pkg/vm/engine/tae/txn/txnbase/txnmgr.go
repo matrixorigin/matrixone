@@ -195,10 +195,7 @@ func (mgr *TxnManager) StartTxnWithStartTSAndSnapshotTS(
 }
 
 // GetOrCreateTxnWithMeta Get or create a txn initiated by CN
-func (mgr *TxnManager) GetOrCreateTxnWithMeta(
-	info []byte,
-	id []byte,
-	ts types.TS) (txn txnif.AsyncTxn, err error) {
+func (mgr *TxnManager) GetOrCreateTxnWithMeta(id []byte, ts types.TS) (txn txnif.AsyncTxn, err error) {
 	if exp := mgr.Exception.Load(); exp != nil {
 		err = exp.(error)
 		logutil.Warnf("StartTxn: %v", err)
