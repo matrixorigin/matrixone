@@ -100,9 +100,7 @@ func (builder *QueryBuilder) handleHashMapMessages(nodeID int32) {
 	if node.JoinType == plan.Node_INDEX {
 		return
 	}
-	if !builder.IsEquiJoin(node) {
-		return
-	}
+
 	msgTag := builder.genNewMsgTag()
 	msgHeader := &plan.MsgHeader{MsgTag: msgTag, MsgType: int32(process.MsgJoinMap)}
 	node.SendMsgList = append(node.SendMsgList, msgHeader)

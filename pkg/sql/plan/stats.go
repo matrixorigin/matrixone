@@ -1339,12 +1339,6 @@ func GetPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
 	return "QUERY PLAN"
 }
 
-func ReCalcQueryStats(builder *QueryBuilder, query *plan.Query) {
-	for _, rootID := range builder.qry.Steps {
-		ReCalcNodeStats(rootID, builder, true, false, true)
-	}
-}
-
 func PrintStats(qry *plan.Query) string {
 	buf := bytes.NewBuffer(make([]byte, 0, 1024*64))
 	buf.WriteString("Print Stats: \n")
