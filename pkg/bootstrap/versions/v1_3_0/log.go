@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,4 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package compile
+package v1_3_0
+
+import (
+	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+)
+
+var (
+	logger *log.MOLogger
+	once   sync.Once
+)
+
+func getLogger() *log.MOLogger {
+	once.Do(initLogger)
+	return logger
+}
+
+func initLogger() {
+	rt := runtime.ProcessLevelRuntime()
+	if rt == nil {
+		rt = runtime.DefaultRuntime()
+	}
+	logger = rt.Logger()
+}
