@@ -201,6 +201,8 @@ type RestorePitr struct {
 
 	Level RestoreLevel // restore level
 
+	Name Identifier // pitr name
+
 	AccountName  Identifier // account name
 	DatabaseName Identifier // database name
 	TableName    Identifier // table name
@@ -232,7 +234,8 @@ func (node *RestorePitr) Format(ctx *FmtCtx) {
 	}
 
 	ctx.WriteString(" from pitr ")
-	ctx.WriteString("timestamp = ")
+	node.Name.Format(ctx)
+	ctx.WriteString(" timestamp = ")
 	node.TimeStampExpr.Format(ctx)
 }
 

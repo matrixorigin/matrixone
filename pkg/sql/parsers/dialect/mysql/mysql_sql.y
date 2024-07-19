@@ -1130,28 +1130,31 @@ snapshot_restore_stmt:
     }
 
 restore_pitr_stmt:
-   RESTORE FROM PITR TIMESTAMP '=' expression
+   RESTORE FROM PITR ident expression
    {
        $$ = &tree.RestorePitr{
            Level: tree.RESTORELEVELACCOUNT,
-           TimeStampExpr: $6,
+           Name: tree.Identifier($4.Compare()),
+           TimeStampExpr: $5,
        }
    }
-|  RESTORE DATABASE ident FROM PITR TIMESTAMP '=' expression
+|  RESTORE DATABASE ident FROM PITR ident expression
    {
        $$ = &tree.RestorePitr{
             Level: tree.RESTORELEVELDATABASE,
             DatabaseName: tree.Identifier($3.Compare()),
-            TimeStampExpr: $8,
+            Name: tree.Identifier($6.Compare()),
+            TimeStampExpr: $7,
        }
    }
-|   RESTORE DATABASE ident TABLE ident FROM PITR TIMESTAMP '=' expression
+|   RESTORE DATABASE ident TABLE ident FROM PITR ident expression
    {
       $$ = &tree.RestorePitr{
             Level: tree.RESTORELEVELTABLE,
             DatabaseName: tree.Identifier($3.Compare()),
             TableName: tree.Identifier($5.Compare()),
-            TimeStampExpr: $10,
+            Name: tree.Identifier($8.Compare()),
+            TimeStampExpr: $9,
        }
    }
 
