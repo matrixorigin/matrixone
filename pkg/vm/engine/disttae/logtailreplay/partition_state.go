@@ -555,13 +555,13 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 					break
 				}
 			}
-			iter.Release()
 
 			// if there are no rows for the block, delete the block from the dirty
 			if objEntry.EntryState && scanCnt == blockDeleted && p.dirtyBlocks.Len() > 0 {
 				p.dirtyBlocks.Delete(*blkID)
 			}
 		}
+		iter.Release()
 	}
 	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
 		c.DistTAE.Logtail.ActiveRows.Add(-numDeleted)
