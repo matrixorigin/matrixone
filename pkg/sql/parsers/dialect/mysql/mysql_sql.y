@@ -475,6 +475,9 @@ import (
 // Snapshot READ
 %token <str> MO_TS
 
+// PITR
+%token <str> PITR
+
 %type <statement> stmt block_stmt block_type_stmt normal_stmt
 %type <statements> stmt_list stmt_list_return
 %type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt truncate_table_stmt alter_sequence_stmt upgrade_stmt
@@ -531,6 +534,7 @@ import (
 %type <statement> create_publication_stmt drop_publication_stmt alter_publication_stmt show_publications_stmt show_subscriptions_stmt
 %type <statement> create_stage_stmt drop_stage_stmt alter_stage_stmt
 %type <statement> create_snapshot_stmt drop_snapshot_stmt
+%type <statement> create_pitr_stmt drop_pitr_stmt show_pitr_stmt alter_pitr_stmt
 %type <str> urlparams
 %type <str> comment_opt view_list_opt view_opt security_opt view_tail check_type
 %type <subscriptionOption> subscription_opt
@@ -692,7 +696,7 @@ import (
 %type <frameBound> frame_bound frame_bound_start
 %type <frameType> frame_type
 %type <str> fields_or_columns
-%type <int64Val> algorithm_opt partition_num_opt sub_partition_num_opt opt_retry
+%type <int64Val> algorithm_opt partition_num_opt sub_partition_num_opt opt_retry pitr_value
 %type <boolVal> linear_opt
 %type <partition> partition
 %type <partitions> partition_list_opt partition_list
@@ -993,6 +997,69 @@ snapshot_object_opt:
         }
     }
 
+create_pitr_stmt:
+    CREATE PITR not_exists_opt ident RANGE pitr_value STRING
+    {
+        $$ = &tree.CreatePitr{
+            IfNotExists: $3,
+            Name: tree.Identifier($4.Compare()),
+            Level: tree.PITRLEVELACCOUNT,
+            PitrValue: $6,
+            PitrUnit: $7,
+        }
+    }
+|   CREATE PITR not_exists_opt ident FOR CLUSTER RANGE pitr_value STRING
+    {
+       $$ = &tree.CreatePitr{
+            IfNotExists: $3,
+            Name: tree.Identifier($4.Compare()),
+            Level: tree.PITRLEVELCLUSTER,
+            PitrValue: $8,
+            PitrUnit: $9,
+        }
+    }
+|   CREATE PITR not_exists_opt ident FOR ACCOUNT ident RANGE pitr_value STRING
+    {
+       $$ = &tree.CreatePitr{
+            IfNotExists: $3,
+            Name: tree.Identifier($4.Compare()),
+            Level: tree.PITRLEVELACCOUNT,
+            AccountName: tree.Identifier($7.Compare()),
+            PitrValue: $9,
+            PitrUnit: $10,
+        }
+    }
+|   CREATE PITR not_exists_opt ident FOR DATABASE ident RANGE pitr_value STRING
+    {
+        $$ = &tree.CreatePitr{
+            IfNotExists: $3,
+            Name: tree.Identifier($4.Compare()),
+            Level: tree.PITRLEVELDATABASE,
+            DatabaseName: tree.Identifier($7.Compare()),
+            PitrValue: $9,
+            PitrUnit: $10,
+        }
+    }
+|   CREATE PITR not_exists_opt ident FOR DATABASE ident TABLE ident RANGE pitr_value STRING
+    {
+        $$ = &tree.CreatePitr{
+            IfNotExists: $3,
+            Name: tree.Identifier($4.Compare()),
+            Level: tree.PITRLEVELTABLE,
+            DatabaseName: tree.Identifier($7.Compare()),
+            TableName: tree.Identifier($9.Compare()),
+            PitrValue: $11,
+            PitrUnit: $12,
+        }
+    }
+
+pitr_value:
+    INTEGRAL
+    {
+        $$ = $1.(int64)
+    }
+   
+    
 
 snapshot_restore_stmt:
     RESTORE CLUSTER FROM SNAPSHOT ident
@@ -2952,6 +3019,7 @@ alter_stmt:
 |   alter_publication_stmt
 |   alter_stage_stmt
 |   alter_sequence_stmt
+|   alter_pitr_stmt
 // |    alter_ddl_stmt
 
 alter_sequence_stmt:
@@ -3039,6 +3107,16 @@ alter_partition_option:
 	    )
 
 	    $$ = tree.AlterPartitionOption(opt)
+    }
+
+alter_pitr_stmt:
+    ALTER PITR exists_opt ident RANGE pitr_value STRING
+    {
+       var ifExists = $3
+       var name = tree.Identifier($4.Compare())
+       var pitrValue = $6
+       var pitrUnit = $7
+       $$ = tree.NewAlterPitr(ifExists, name, pitrValue, pitrUnit)
     }
 
 partition_option:
@@ -3685,6 +3763,7 @@ show_stmt:
 |   show_stages_stmt
 |   show_connectors_stmt
 |   show_snapshots_stmt
+|   show_pitr_stmt
 
 show_collation_stmt:
     SHOW COLLATION like_opt where_expression_opt
@@ -3707,6 +3786,14 @@ show_snapshots_stmt:
     SHOW SNAPSHOTS  where_expression_opt
     {
         $$ = &tree.ShowSnapShots{
+            Where: $3,
+        }
+    }
+
+show_pitr_stmt:
+    SHOW PITR where_expression_opt
+    {
+        $$ = &tree.ShowPitr{
             Where: $3,
         }
     }
@@ -4185,6 +4272,7 @@ drop_ddl_stmt:
 |   drop_stage_stmt
 |   drop_connector_stmt
 |   drop_snapshot_stmt
+|   drop_pitr_stmt
 
 drop_sequence_stmt:
     DROP SEQUENCE exists_opt table_name_list
@@ -5800,6 +5888,7 @@ create_stmt:
 |   create_publication_stmt
 |   create_stage_stmt
 |   create_snapshot_stmt
+|   create_pitr_stmt
 
 create_ddl_stmt:
     create_table_stmt
@@ -6508,6 +6597,14 @@ drop_snapshot_stmt:
         var name = tree.Identifier($4.Compare())
         $$ = tree.NewDropSnapShot(ifExists, name)
     }
+
+drop_pitr_stmt:
+   DROP PITR exists_opt ident
+   {
+       var ifExists = $3
+       var name = tree.Identifier($4.Compare())
+       $$ = tree.NewDropPitr(ifExists, name)
+   }
 
 account_role_name:
     ident
@@ -11871,6 +11968,7 @@ non_reserved_keyword:
 |   SIGNED
 |   SMALLINT
 |   SNAPSHOT
+|   PITR
 |   SPATIAL
 |   START
 |   STATUS
