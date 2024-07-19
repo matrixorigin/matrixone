@@ -14,10 +14,7 @@
 
 package process
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-)
+import "github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 const (
 	RuntimeFilter_IN          = 0
@@ -66,7 +63,6 @@ func (proc *Process) SendRuntimeFilter(rt RuntimeFilterMessage, m *plan.RuntimeF
 func (proc *Process) FinalizeRuntimeFilter(m *plan.RuntimeFilterSpec, pipelineFailed bool, err error) {
 	if m != nil {
 		if pipelineFailed || err != nil {
-			logutil.Infof("runtime filter: finalize runtime filter")
 			var runtimeFilter RuntimeFilterMessage
 			runtimeFilter.Tag = m.Tag
 			runtimeFilter.Typ = RuntimeFilter_DROP

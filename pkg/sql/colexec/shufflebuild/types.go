@@ -38,20 +38,21 @@ const (
 )
 
 type container struct {
-	state              int
-	keyWidth           int // keyWidth is the width of hash columns, it determines which hash map to use.
-	hasNull            bool
-	runtimeFilterIn    bool
-	multiSels          [][]int32
-	batches            []*batch.Batch
-	batchIdx           int
-	inputBatchRowCount int
-	tmpBatch           *batch.Batch
-	executor           []colexec.ExpressionExecutor
-	vecs               [][]*vector.Vector
-	intHashMap         *hashmap.IntHashMap
-	strHashMap         *hashmap.StrHashMap
-	uniqueJoinKeys     []*vector.Vector
+	state                int
+	keyWidth             int // keyWidth is the width of hash columns, it determines which hash map to use.
+	hasNull              bool
+	runtimeFilterIn      bool
+	multiSels            [][]int32
+	batches              []*batch.Batch
+	batchIdx             int
+	inputBatchRowCount   int
+	tmpBatch             *batch.Batch
+	executor             []colexec.ExpressionExecutor
+	vecs                 [][]*vector.Vector
+	intHashMap           *hashmap.IntHashMap
+	strHashMap           *hashmap.StrHashMap
+	uniqueJoinKeys       []*vector.Vector
+	runtimeFilterHandled bool
 }
 
 type ShuffleBuild struct {

@@ -43,6 +43,7 @@ func (shuffleBuild *ShuffleBuild) Prepare(proc *process.Process) (err error) {
 	if shuffleBuild.RuntimeFilterSpec == nil {
 		panic("there must be runtime filter in shuffle build!")
 	}
+	shuffleBuild.ctr.runtimeFilterHandled = false
 	shuffleBuild.ctr = new(container)
 
 	shuffleBuild.ctr.vecs = make([][]*vector.Vector, 0)
@@ -74,6 +75,7 @@ func (shuffleBuild *ShuffleBuild) Prepare(proc *process.Process) (err error) {
 	}
 
 	shuffleBuild.ctr.batches = make([]*batch.Batch, 0)
+
 	return nil
 }
 
@@ -94,6 +96,9 @@ func (shuffleBuild *ShuffleBuild) Call(proc *process.Process) (vm.CallResult, er
 		case ReceiveBatch:
 			err := ctr.collectBuildBatches(ap, proc, anal, shuffleBuild.GetIsFirst())
 			if err != nil {
+				return result, err
+			}
+			if err = ctr.handleRuntimeFilter(ap, proc); err != nil {
 				return result, err
 			}
 			ctr.state = BuildHashMap
@@ -356,6 +361,23 @@ func (ctr *container) buildHashmap(ap *ShuffleBuild, proc *process.Process) erro
 		}
 	}
 
+	return nil
+}
+
+func (ctr *container) handleRuntimeFilter(ap *ShuffleBuild, proc *process.Process) error {
+	if ap.RuntimeFilterSpec == nil {
+		panic("there must be runtime filter in shuffle build!")
+	}
+	// only shuffle build operator with parallelIdx = 0 send this runtime filter
+	if ap.GetParallelIdx() != 0 {
+		ap.ctr.runtimeFilterHandled = true
+		return nil
+	}
+	//only support runtime filter pass for now in shuffle join
+	var runtimeFilter process.RuntimeFilterMessage
+	runtimeFilter.Tag = ap.RuntimeFilterSpec.Tag
+	runtimeFilter.Typ = process.RuntimeFilter_PASS
+	proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
 	return nil
 }
 
