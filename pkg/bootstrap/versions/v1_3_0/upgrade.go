@@ -26,8 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
-var clusterUpgEntries = []versions.UpgradeEntry{}
-
 var (
 	Handler = &versionHandle{
 		metadata: versions.Version{
