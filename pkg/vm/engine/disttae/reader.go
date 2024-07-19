@@ -63,9 +63,10 @@ func (mixin *withFilterMixin) reset() {
 // NOTE: here we assume the tryUpdate is always called with the same cols
 // for all blocks and it will only be updated once
 func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
-	if len(cols) == len(mixin.columns.seqnums) {
+	if len(cols) == len(mixin.columns.seqnums) || mixin.columns.extraRowIdAdded {
 		return
 	}
+
 	if len(mixin.columns.seqnums) != 0 {
 		panic(moerr.NewInternalErrorNoCtx("withFilterMixin tryUpdate called with different cols"))
 	}
@@ -81,8 +82,11 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 	// mixin.columns.colNulls = make([]bool, len(cols))
 	mixin.columns.pkPos = -1
 	mixin.columns.indexOfFirstSortedColumn = -1
+
+	mixin.columns.rowIdColIdx = -1
 	for i, column := range cols {
 		if column == catalog.Row_ID {
+			mixin.columns.rowIdColIdx = i
 			mixin.columns.seqnums[i] = objectio.SEQNUM_ROWID
 			mixin.columns.colTypes[i] = objectio.RowidType
 		} else {
@@ -113,6 +117,13 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 
 		// records how many blks one reader needs to read when having filter
 		//objectio.BlkReadStats.BlksByReaderStats.Record(1, blkCnt)
+	}
+
+	if mixin.columns.rowIdColIdx == -1 {
+		mixin.columns.seqnums = append([]uint16{objectio.SEQNUM_ROWID}, mixin.columns.seqnums...)
+		mixin.columns.colTypes = append([]types.Type{objectio.RowidType}, mixin.columns.colTypes...)
+		mixin.columns.rowIdColIdx = 0
+		mixin.columns.extraRowIdAdded = true
 	}
 }
 
@@ -736,6 +747,23 @@ func NewReaderInProgress(
 	return r
 }
 
+// for ut, remove later
+func NewSingleReaderInProgress(
+	ctx context.Context,
+	proc *process.Process,                       //it comes from transaction if reader run in local,otherwise it comes from remote compile.
+	fs fileservice.FileService,                  //it comes from engine.fs.
+	packerPool *fileservice.Pool[*types.Packer], //it comes from engine.packerPool.
+	tableDef *plan.TableDef,
+	ts timestamp.Timestamp,
+	expr *plan.Expr,
+//filter any, // it's valid when reader runs on remote side.
+	orderedScan bool, // it's valid when reader runs on local.
+	txnOffset int,    // it can be removed. it's different between normal reader and snapshot reader.
+	source DataSource) *SingleReaderInProgress {
+	r := newReaderInProgress(ctx, proc, fs, packerPool, tableDef, ts, expr, orderedScan, txnOffset, source)
+	return &SingleReaderInProgress{readerInProgress: r}
+}
+
 func (r *readerInProgress) Close() error {
 	return nil
 }
@@ -860,16 +888,17 @@ func (r *readerInProgress) Read(
 
 	var sels []int64
 	if bat.RowCount() > 0 {
-		rowIDs := vector.MustFixedCol[types.Rowid](bat.Vecs[0])
+		rowIDs := vector.MustFixedCol[types.Rowid](bat.Vecs[r.columns.rowIdColIdx])
 		bid := rowIDs[0].CloneBlockID()
 		if r.source.HasTombstones(bid) {
 			sels, err = r.source.ApplyTombstones(rowIDs)
 			if err != nil {
 				return nil, err
 			}
+
+			bat.Shrink(sels, false)
 		}
 	}
-	bat.Shrink(sels, false)
 
 	if blkInfo.Sorted && r.columns.indexOfFirstSortedColumn != -1 {
 		bat.GetVector(int32(r.columns.indexOfFirstSortedColumn)).SetSorted(true)

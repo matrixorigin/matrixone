@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -163,6 +164,10 @@ type Engine struct {
 
 	//for message on multiCN, use uuid to get the messageBoard
 	messageCenter *process.MessageCenter
+}
+
+func (t *Transaction) String() string {
+	return fmt.Sprintf("writes %v", t.writes)
 }
 
 // Transaction represents a transaction
@@ -774,8 +779,9 @@ type withFilterMixin struct {
 		colTypes []types.Type
 		// colNulls []bool
 
-		pkPos int // -1 means no primary key in columns
-
+		pkPos                    int // -1 means no primary key in columns
+		extraRowIdAdded          bool
+		rowIdColIdx              int
 		indexOfFirstSortedColumn int
 	}
 
@@ -832,7 +838,11 @@ type blockMergeReader struct {
 	deletaLocs map[string][]objectio.Location
 }
 
-type ReaderInProgress struct {
+type SingleReaderInProgress struct {
+	*readerInProgress
+}
+
+type readerInProgress struct {
 	withFilterMixin
 
 	source DataSource

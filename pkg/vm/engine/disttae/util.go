@@ -1703,8 +1703,13 @@ func (e *concurrentExecutor) GetConcurrency() int {
 
 // for test
 
-func MakeColExprForTest(idx int32, typ types.T) *plan.Expr {
-	schema := []string{"a", "b", "c", "d"}
+func MakeColExprForTest(idx int32, typ types.T, colName ...string) *plan.Expr {
+	//schema := []string{"a", "b", "c", "d"}
+	var name = "d"
+	if len(colName) > 0 {
+		name = colName[0]
+	}
+
 	containerType := typ.ToType()
 	exprType := plan2.MakePlan2Type(&containerType)
 
@@ -1714,7 +1719,7 @@ func MakeColExprForTest(idx int32, typ types.T) *plan.Expr {
 			Col: &plan.ColRef{
 				RelPos: 0,
 				ColPos: idx,
-				Name:   schema[idx],
+				Name:   name,
 			},
 		},
 	}

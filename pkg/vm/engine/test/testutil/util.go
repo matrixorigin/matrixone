@@ -184,7 +184,7 @@ func NewDefaultTableReader(
 	fs fileservice.FileService,
 	snapshotTS timestamp.Timestamp,
 	packerPool *fileservice.Pool[*types.Packer],
-) (*disttae.ReaderInProgress, error) {
+) (*disttae.SingleReaderInProgress, error) {
 
 	tblDef := PlanTableDefBySchema(schema, rel.GetTableID(ctx), databaseName)
 
@@ -193,7 +193,7 @@ func NewDefaultTableReader(
 		return nil, err
 	}
 
-	r := disttae.NewReaderInProgress(
+	r := disttae.NewSingleReaderInProgress(
 		ctx,
 		proc,
 		fs,

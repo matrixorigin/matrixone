@@ -2127,6 +2127,7 @@ func (tbl *txnTable) buildLocalDataSource(
 		tbl.tableId,
 		ranges,
 		state,
+		tbl.getTxn().deletedBlocks.offsets,
 		tbl.getTxn().blockId_tn_delete_metaLoc_batch.data,
 		tbl.getTxn().writes[:txnOffset],
 		skipReadMem,

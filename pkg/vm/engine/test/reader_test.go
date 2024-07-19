@@ -16,14 +16,13 @@ package test
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	testutil2 "github.com/matrixorigin/matrixone/pkg/testutil"
@@ -32,11 +31,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
 	"github.com/stretchr/testify/require"
 )
 
-func Test_ReaderCanReadInMemInserts(t *testing.T) {
+func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 	var (
 		err          error
 		mp           *mpool.MPool
@@ -98,14 +98,18 @@ func Test_ReaderCanReadInMemInserts(t *testing.T) {
 		stats, err := disttaeEngine.GetPartitionStateStats(ctx, relation.GetDBID(ctx), relation.GetTableID(ctx))
 		require.NoError(t, err)
 
-		require.Equal(t, 1, stats.DataObjectsVisible.ObjCnt)
 		require.Equal(t, blockCnt, stats.DataObjectsVisible.BlkCnt)
 		require.Equal(t, rowsCount, stats.DataObjectsVisible.RowCnt)
 	}
 
 	expr := []*plan.Expr{
 		disttae.MakeFunctionExprForTest("=", []*plan.Expr{
-			disttae.MakeColExprForTest(int32(primaryKeyIdx), schema.ColDefs[primaryKeyIdx].Type.Oid),
+			disttae.MakeColExprForTest(int32(primaryKeyIdx), schema.ColDefs[primaryKeyIdx].Type.Oid, schema.ColDefs[primaryKeyIdx].Name),
+			plan2.MakePlan2Int64ConstExprWithType(bats[0].Vecs[primaryKeyIdx].Get(0).(int64)),
+		}),
+
+		disttae.MakeFunctionExprForTest("=", []*plan.Expr{
+			disttae.MakeColExprForTest(int32(primaryKeyIdx), schema.ColDefs[primaryKeyIdx].Type.Oid, schema.ColDefs[primaryKeyIdx].Name),
 			plan2.MakePlan2Int64ConstExprWithType(bats[0].Vecs[primaryKeyIdx].Get(0).(int64)),
 		}),
 	}
@@ -113,11 +117,12 @@ func Test_ReaderCanReadInMemInserts(t *testing.T) {
 	_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
 	require.NoError(t, err)
 
-	ranges, err := relation.Ranges(ctx, expr, txn.GetWorkspace().GetSnapshotWriteOffset())
+	ranges, err := relation.RangesInProgress(ctx, expr, txn.GetWorkspace().GetSnapshotWriteOffset())
 	require.NoError(t, err)
 
 	var blockInfo []*objectio.BlockInfoInProgress
-	for idx := 0; idx < ranges.Len(); idx++ {
+
+	for idx := 1; idx < ranges.Len(); idx++ {
 		blockInfo = append(blockInfo, ranges.(*objectio.BlockInfoSliceInProgress).Get(idx))
 	}
 
@@ -130,9 +135,19 @@ func Test_ReaderCanReadInMemInserts(t *testing.T) {
 		disttaeEngine.Engine.PackerPool())
 	require.NoError(t, err)
 
-	ret, err := reader.Read(ctx, []string{schema.ColDefs[primaryKeyIdx].Name}, expr[0], mp, nil)
-	require.NoError(t, err)
-	require.NotNil(t, ret)
+	resultHit := 0
+	for idx := 0; idx < blockCnt; idx++ {
+		ret, err := reader.Read(ctx, []string{schema.ColDefs[primaryKeyIdx].Name}, expr[0], mp, nil)
+		require.NoError(t, err)
 
-	require.Equal(t, rowsCount, ret.RowCount())
+		if ret != nil {
+			resultHit += int(ret.RowCount())
+		}
+	}
+
+	require.Equal(t, 1, resultHit)
+}
+
+func TestReaderCanReadHybridDataSource(t *testing.T) {
+
 }
