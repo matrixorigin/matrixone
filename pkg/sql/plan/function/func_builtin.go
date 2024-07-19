@@ -1489,22 +1489,24 @@ func SerialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 		}
 	case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
 		types.T_array_float32, types.T_array_float64:
-		vs := vector.ExpandStrCol(v)
 		if hasNull {
-			for i := range vs {
-				if v.IsNull(uint64(i)) {
+			fv := vector.GenerateFunctionStrParameter(v)
+			for i, j := uint64(0), uint64(v.Length()); i < j; i++ {
+				value, null := fv.GetStrValue(i)
+				if null {
 					if isFull {
 						ps[i].EncodeNull()
 					} else {
-						nulls.Add(bitMap, uint64(i))
+						nulls.Add(bitMap, i)
 					}
-				} else {
-					ps[i].EncodeStringType([]byte(vs[i]))
+					continue
 				}
+				ps[i].EncodeStringType(value)
 			}
 		} else {
+			vs := vector.ExpandBytesCol(v)
 			for i := range vs {
-				ps[i].EncodeStringType([]byte(vs[i]))
+				ps[i].EncodeStringType(vs[i])
 			}
 		}
 	}
