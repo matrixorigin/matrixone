@@ -127,7 +127,7 @@ func TestNotifyWaiters(t *testing.T) {
 }
 
 func TestRemoveWaiters(t *testing.T) {
-	tw := &timestampWaiter{}
+	tw := &timestampWaiter{logger: util.GetLogger("")}
 	tw.mu.cancelC = make(chan struct{}, 1)
 	var wg sync.WaitGroup
 	for i := 0; i < 10; i++ {

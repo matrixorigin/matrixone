@@ -873,7 +873,7 @@ func Test_CMD_FIELD_LIST(t *testing.T) {
 	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
 	convey.Convey("cmd field list", t, func() {
 
-		sid := "sid"
+		sid := ""
 		runtime.RunTest(
 			sid,
 			func(rt runtime.Runtime) {
@@ -1184,7 +1184,7 @@ func Test_StatementClassify(t *testing.T) {
 }
 
 func TestMysqlCmdExecutor_HandleShowBackendServers(t *testing.T) {
-	sid := "sid"
+	sid := ""
 	runtime.RunTest(
 		sid,
 		func(rt runtime.Runtime) {

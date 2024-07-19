@@ -38,7 +38,7 @@ func GetMOCluster(
 		v, ok := runtime.ServiceRuntime(service).GetGlobalVariables(runtime.ClusterService)
 		if !ok {
 			if time.Since(now) > timeout {
-				panic("no mocluster service")
+				panic("no mocluster service " + service)
 			}
 			time.Sleep(time.Second)
 			continue

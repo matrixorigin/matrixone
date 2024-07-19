@@ -212,6 +212,12 @@ func RunTest(
 	sid string,
 	fn func(rt Runtime),
 ) {
+	v, ok := allRuntime.Load(sid)
+	if ok {
+		fn(v.(Runtime))
+		return
+	}
+
 	rt := DefaultRuntime()
 	SetupServiceBasedRuntime(sid, rt)
 	fn(rt)

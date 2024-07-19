@@ -62,7 +62,11 @@ func New(
 	hakeeper logservice.CNHAKeeperClient,
 	udfService udf.Service,
 	aicm *defines.AutoIncrCacheManager) *Process {
-	sid := lockService.GetConfig().ServiceID
+	sid := ""
+	if lockService != nil {
+		sid = lockService.GetConfig().ServiceID
+	}
+
 	baseProcess := &BaseProcess{
 		mp:           m,
 		Ctx:          ctx,
@@ -163,6 +167,9 @@ func (proc *Process) Mp() *mpool.MPool {
 }
 
 func (proc *Process) GetService() string {
+	if proc == nil {
+		return ""
+	}
 	if ls := proc.GetLockService(); ls != nil {
 		return ls.GetConfig().ServiceID
 	}

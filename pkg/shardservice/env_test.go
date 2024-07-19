@@ -27,7 +27,7 @@ import (
 )
 
 var (
-	sid = "test_sid"
+	sid = ""
 )
 
 func TestHasCN(t *testing.T) {
@@ -57,6 +57,7 @@ func initTestCluster(
 		ServiceID:           "tn",
 		ShardServiceAddress: testSockets,
 	}
+	runtime.SetupServiceBasedRuntime(tn.ServiceID, runtime.ServiceRuntime(sid))
 	for _, info := range cnInfo {
 		cn := metadata.CNService{}
 		if !strings.Contains(info, ":") {
@@ -71,6 +72,8 @@ func initTestCluster(
 			time.Now().Nanosecond(), cn.ServiceID)
 
 		cns = append(cns, cn)
+
+		runtime.SetupServiceBasedRuntime(cn.ServiceID, runtime.ServiceRuntime(sid))
 	}
 
 	runtime.ServiceRuntime(sid).SetGlobalVariables(

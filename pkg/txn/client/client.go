@@ -337,6 +337,7 @@ func (client *txnClient) NewWithSnapshot(
 	snapshot txn.CNTxnSnapshot,
 ) (TxnOperator, error) {
 	op := newTxnOperatorWithSnapshot(
+		client.logger,
 		client.sender,
 		snapshot,
 	)

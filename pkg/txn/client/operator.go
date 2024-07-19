@@ -299,10 +299,11 @@ func (tc *txnOperator) CloneSnapshotOp(snapshot timestamp.Timestamp) TxnOperator
 }
 
 func newTxnOperatorWithSnapshot(
+	logger *log.MOLogger,
 	sender rpc.TxnSender,
 	snapshot txn.CNTxnSnapshot,
 ) *txnOperator {
-	tc := &txnOperator{sender: sender}
+	tc := &txnOperator{sender: sender, logger: logger}
 	tc.txnID = snapshot.Txn.ID
 	tc.options = snapshot.Options
 	tc.mu.txn = snapshot.Txn

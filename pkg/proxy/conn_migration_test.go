@@ -35,7 +35,7 @@ import (
 )
 
 func runTestWithQueryService(t *testing.T, cn metadata.CNService, fn func(qc qclient.QueryClient, addr string)) {
-	sid := "sid"
+	sid := ""
 	runtime.RunTest(
 		sid,
 		func(rt runtime.Runtime) {

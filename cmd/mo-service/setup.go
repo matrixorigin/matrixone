@@ -40,25 +40,23 @@ var (
 )
 
 var (
-	logOnce          sync.Once
-	setupRuntimeOnce sync.Once
+	logOnce sync.Once
 )
 
-func setupProcessLevelRuntime(
+func setupServiceRuntime(
 	cfg *Config,
 	stopper *stopper.Stopper,
 ) error {
-	var e error
-	setupRuntimeOnce.Do(func() {
-		mpool.InitCap(int64(cfg.Limit.Memory))
-		r, err := newRuntime(cfg, stopper)
-		if err != nil {
-			e = err
-			return
-		}
-		runtime.SetupServiceBasedRuntime(cfg.mustGetServiceUUID(), r)
-	})
-	return e
+	mpool.InitCap(int64(cfg.Limit.Memory))
+	r, err := newRuntime(cfg, stopper)
+	if err != nil {
+		return err
+	}
+	runtime.SetupServiceBasedRuntime(
+		cfg.mustGetServiceUUID(),
+		r,
+	)
+	return nil
 }
 
 func mustGetRuntime(
@@ -84,8 +82,9 @@ func newRuntime(
 	return runtime.NewRuntime(
 		cfg.mustGetServiceType(),
 		cfg.mustGetServiceUUID(),
-		logger,
-		runtime.WithClock(clock)), nil
+		logger.With(zap.String("service", cfg.mustGetServiceUUID())),
+		runtime.WithClock(clock),
+	), nil
 }
 
 func getClock(cfg *Config, stopper *stopper.Stopper) (clock.Clock, error) {

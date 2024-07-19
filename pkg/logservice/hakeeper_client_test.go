@@ -26,6 +26,7 @@ import (
 	"github.com/lni/vfs"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -307,6 +308,12 @@ func testNotHAKeeperErrorIsHandled(t *testing.T, fn func(*testing.T, *managedHAK
 	cfg2.GossipPort = 9011
 	cfg2.GossipSeedAddresses = []string{"127.0.0.1:9001"}
 	cfg2.DisableWorkers = true
+
+	rt := runtime.ServiceRuntime("")
+	runtime.SetupServiceBasedRuntime("", rt)
+	runtime.SetupServiceBasedRuntime(cfg1.UUID, rt)
+	runtime.SetupServiceBasedRuntime(cfg2.UUID, rt)
+
 	service1, err := NewService(cfg1,
 		newFS(),
 		nil,

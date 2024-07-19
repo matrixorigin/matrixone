@@ -40,7 +40,7 @@ func mockResultSet() *MysqlResultSet {
 }
 
 func TestIe(t *testing.T) {
-	sid := "sid"
+	sid := ""
 	runtime.RunTest(
 		sid,
 		func(rt runtime.Runtime) {

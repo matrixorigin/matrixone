@@ -61,23 +61,29 @@ func TestCanHandleServiceAndCmdWrong(t *testing.T) {
 }
 
 func initRuntime(uuids []string, queryAddress []string) {
-	cns := make([]metadata.CNService, len(uuids))
-	for idx := range uuids {
-		cns[idx] = metadata.CNService{
-			ServiceID:    uuids[idx],
-			QueryAddress: queryAddress[idx],
-		}
-	}
-
-	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
-	moCluster := clusterservice.NewMOCluster(
+	runtime.RunTest(
 		"",
-		new(testHAKeeperClient),
-		time.Duration(time.Second),
-		clusterservice.WithDisableRefresh(),
-		clusterservice.WithServices(cns, nil))
-	runtime.ServiceRuntime("").SetGlobalVariables(runtime.ClusterService, moCluster)
-	runtime.ServiceRuntime("").SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+		func(rt runtime.Runtime) {
+			cns := make([]metadata.CNService, len(uuids))
+			for idx := range uuids {
+				cns[idx] = metadata.CNService{
+					ServiceID:    uuids[idx],
+					QueryAddress: queryAddress[idx],
+				}
+				runtime.SetupServiceBasedRuntime(uuids[idx], rt)
+			}
+
+			moCluster := clusterservice.NewMOCluster(
+				"",
+				new(testHAKeeperClient),
+				time.Duration(time.Second),
+				clusterservice.WithDisableRefresh(),
+				clusterservice.WithServices(cns, nil))
+			rt.SetGlobalVariables(runtime.ClusterService, moCluster)
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+		},
+	)
+
 }
 
 func TestCanHandleSelfCmd(t *testing.T) {
@@ -93,6 +99,8 @@ func TestCanHandleSelfCmd(t *testing.T) {
 	initRuntime(nil, nil)
 
 	uuid := uuid2.New().String()
+	runtime.SetupServiceBasedRuntime(uuid, runtime.ServiceRuntime(""))
+
 	cli, err := qclient.NewQueryClient(uuid, morpc.Config{})
 	require.Nil(t, err)
 

@@ -98,7 +98,7 @@ func TestRemoteCache(t *testing.T) {
 func runTestWithTwoFileServices(t *testing.T, fn func(sf1 *cacheFs, sf2 *cacheFs)) {
 	defer leaktest.AfterTest(t)()
 
-	sid := "sid"
+	sid := ""
 	runtime.RunTest(
 		sid,
 		func(rt runtime.Runtime) {

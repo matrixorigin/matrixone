@@ -514,7 +514,7 @@ func runColumnCacheTestsWithInitOffset(
 	offset uint64,
 	fn func(context.Context, *columnCache),
 ) {
-	sid := "sid"
+	sid := ""
 	runtime.RunTest(
 		sid,
 		func(rt runtime.Runtime) {

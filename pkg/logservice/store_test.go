@@ -77,6 +77,13 @@ func getStoreTestConfig() Config {
 	cfg.DeploymentID = 1
 	cfg.FS = vfs.NewStrictMem()
 	cfg.UseTeeLogDB = true
+
+	runtime.RunTest(
+		"",
+		func(rt runtime.Runtime) {
+			runtime.SetupServiceBasedRuntime(cfg.UUID, rt)
+		},
+	)
 	return cfg
 }
 

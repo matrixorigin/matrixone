@@ -180,7 +180,7 @@ func TestKeepaliveBind(t *testing.T) {
 					runtime.DefaultRuntime().Logger(),
 				),
 			)
-			k := NewLockTableKeeper("s1", c, interval/5, interval/5, m, &service{})
+			k := NewLockTableKeeper("s1", c, interval/5, interval/5, m, &service{logger: runtime.GetLogger("")})
 
 			binds := a.getServiceBinds("s1")
 			assert.NotNil(t, binds)
@@ -371,7 +371,7 @@ func runLockTableAllocatorTest(
 	fn func(*lockTableAllocator),
 	opts ...AllocatorOption,
 ) {
-	sid := "sid"
+	sid := ""
 	runtime.RunTest(
 		sid,
 		func(rt runtime.Runtime) {

@@ -54,7 +54,7 @@ var testFunc = func(
 }
 
 var (
-	sid = "sid"
+	sid = ""
 )
 
 func TestCallLockOpWithNoConflict(t *testing.T) {

@@ -40,7 +40,7 @@ import (
 )
 
 func testCreateQueryService(t *testing.T) QueryService {
-	sid := "sid"
+	sid := ""
 	runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
 	cluster := clusterservice.NewMOCluster(
 		sid,
@@ -52,7 +52,7 @@ func testCreateQueryService(t *testing.T) QueryService {
 	address := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
 	err := os.RemoveAll(address[7:])
 	assert.NoError(t, err)
-	qs, err := NewQueryService("s1", address, morpc.Config{})
+	qs, err := NewQueryService("", address, morpc.Config{})
 	assert.NoError(t, err)
 	return qs
 }
@@ -143,12 +143,13 @@ func TestQueryServiceKillConn(t *testing.T) {
 }
 
 func runTestWithQueryService(t *testing.T, cn metadata.CNService, fs fileservice.FileService, fn func(cli client.QueryClient, addr string)) {
-	sid := "sid"
+	sid := ""
 	runtime.RunTest(
 		sid,
 		func(rt runtime.Runtime) {
 			defer leaktest.AfterTest(t)()
 			runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+			runtime.SetupServiceBasedRuntime(cn.ServiceID, runtime.ServiceRuntime(sid))
 			address := fmt.Sprintf("unix:///tmp/cn-%d-%s.sock",
 				time.Now().Nanosecond(), cn.ServiceID)
 

@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/assert"
@@ -3812,22 +3813,27 @@ func runLockServiceTestsWithLevel(
 ) {
 	defer leaktest.AfterTest(t.(testing.TB))()
 
-	reuse.RunReuseTests(func() {
-		RunLockServicesForTest(
-			level,
-			serviceIDs,
-			lockTableBindTimeout,
-			func(lta LockTableAllocator, ls []LockService) {
-				services := make([]*service, 0, len(ls))
-				for _, s := range ls {
-					services = append(services, s.(*service))
-				}
-				fn(lta.(*lockTableAllocator), services)
-			},
-			adjustConfig,
-			opts...,
-		)
-	})
+	runtime.RunTest(
+		"",
+		func(rt runtime.Runtime) {
+			reuse.RunReuseTests(func() {
+				RunLockServicesForTest(
+					level,
+					serviceIDs,
+					lockTableBindTimeout,
+					func(lta LockTableAllocator, ls []LockService) {
+						services := make([]*service, 0, len(ls))
+						for _, s := range ls {
+							services = append(services, s.(*service))
+						}
+						fn(lta.(*lockTableAllocator), services)
+					},
+					adjustConfig,
+					opts...,
+				)
+			})
+		},
+	)
 }
 
 func waitWaiters(

@@ -144,6 +144,7 @@ func TestCommitWithLockTables(t *testing.T) {
 	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
 		r := runtime.DefaultRuntime()
 		runtime.SetupServiceBasedRuntime("", r)
+		runtime.SetupServiceBasedRuntime("s1", r)
 
 		c := clusterservice.NewMOCluster("", nil, time.Hour, clusterservice.WithDisableRefresh())
 		defer c.Close()
@@ -416,7 +417,7 @@ func TestSnapshotTxnOperator(t *testing.T) {
 		v, err := tc.Snapshot()
 		assert.NoError(t, err)
 
-		tc2 := newTxnOperatorWithSnapshot(tc.sender, v)
+		tc2 := newTxnOperatorWithSnapshot(tc.logger, tc.sender, v)
 		assert.True(t, tc2.mu.txn.Mirror)
 
 		tc2.mu.txn.Mirror = false

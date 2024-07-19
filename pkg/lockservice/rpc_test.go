@@ -375,10 +375,13 @@ func runRPCTests(
 	t *testing.T,
 	fn func(Client, Server),
 	opts ...ServerOption) {
-	sid := "sid"
+	sid := ""
 	runtime.RunTest(
 		sid,
 		func(rt runtime.Runtime) {
+			runtime.SetupServiceBasedRuntime("s1", rt)
+			runtime.SetupServiceBasedRuntime("s2", rt)
+
 			reuse.RunReuseTests(func() {
 				defer leaktest.AfterTest(t)()
 				testSockets := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
@@ -430,7 +433,7 @@ func runRPCServerNoCloseTests(
 	t *testing.T,
 	fn func(Client, Server),
 	opts ...ServerOption) {
-	sid := "sid"
+	sid := ""
 	runtime.RunTest(
 		sid,
 		func(rt runtime.Runtime) {

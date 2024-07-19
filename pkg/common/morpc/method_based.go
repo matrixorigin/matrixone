@@ -161,7 +161,7 @@ func (s *methodBasedServer[REQ, RESP]) RegisterMethod(
 	h HandleFunc[REQ, RESP],
 	async bool,
 ) MethodBasedServer[REQ, RESP] {
-	s.handlers[method] = handleFuncCtx[REQ, RESP]{handleFunc: h, async: async}
+	s.handlers[method] = handleFuncCtx[REQ, RESP]{handleFunc: h, async: async, logger: s.logger}
 	return s
 }
 

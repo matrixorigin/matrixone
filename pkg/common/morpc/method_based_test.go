@@ -113,7 +113,7 @@ func runRPCTests(
 	opts ...HandlerOption[*testMethodBasedMessage, *testMethodBasedMessage]) {
 	defer leaktest.AfterTest(t)()
 
-	sid := "sid"
+	sid := ""
 	runtime.RunTest(
 		sid,
 		func(rt runtime.Runtime) {

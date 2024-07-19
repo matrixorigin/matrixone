@@ -185,7 +185,7 @@ func runAllocatorTests(
 	t *testing.T,
 	fn func(valueAllocator),
 ) {
-	sid := "sid"
+	sid := ""
 	runtime.RunTest(
 		sid,
 		func(rt runtime.Runtime) {

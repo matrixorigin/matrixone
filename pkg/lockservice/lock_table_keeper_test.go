@@ -93,7 +93,7 @@ func TestKeeper(t *testing.T) {
 				time.Millisecond*10,
 				time.Millisecond*10,
 				m,
-				&service{})
+				&service{logger: getLogger("")})
 			defer func() {
 				assert.NoError(t, k.Close())
 			}()
@@ -176,7 +176,9 @@ func TestKeepBindFailedWillRemoveAllLocalLockTable(t *testing.T) {
 				time.Millisecond*10,
 				time.Millisecond*10,
 				m,
-				&service{})
+				&service{
+					logger: getLogger(""),
+				})
 			defer func() {
 				assert.NoError(t, k.Close())
 			}()

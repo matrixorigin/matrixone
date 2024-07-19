@@ -31,7 +31,7 @@ import (
 )
 
 func TestBootstrapAlreadyBootstrapped(t *testing.T) {
-	sid := "s1"
+	sid := ""
 	runtime.RunTest(
 		sid,
 		func(rt runtime.Runtime) {
@@ -66,7 +66,7 @@ func TestBootstrapAlreadyBootstrapped(t *testing.T) {
 }
 
 func TestBootstrapWithWait(t *testing.T) {
-	sid := "s1"
+	sid := ""
 	runtime.RunTest(
 		sid,
 		func(rt runtime.Runtime) {

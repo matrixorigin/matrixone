@@ -131,7 +131,7 @@ func runClusterTest(
 	refreshInterval time.Duration,
 	fn func(*testHAKeeperClient, *cluster),
 ) {
-	sid := "s1"
+	sid := ""
 	runtime.RunTest(
 		sid,
 		func(rt runtime.Runtime) {

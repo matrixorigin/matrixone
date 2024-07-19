@@ -31,9 +31,6 @@ import (
 	_ "time/tzdata"
 
 	"github.com/google/uuid"
-	"go.uber.org/automaxprocs/maxprocs"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
@@ -60,6 +57,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	"github.com/matrixorigin/matrixone/pkg/util/profile"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
+	"go.uber.org/automaxprocs/maxprocs"
+	"go.uber.org/zap"
 )
 
 var (
@@ -180,11 +179,11 @@ func startService(
 		return err
 	}
 
-	setupProcessLevelRuntime(cfg, stopper)
+	setupServiceRuntime(cfg, stopper)
 
 	malloc.SetDefaultConfig(cfg.Malloc)
 
-	setupStatusServer(runtime.ProcessLevelRuntime())
+	setupStatusServer(runtime.ServiceRuntime(cfg.mustGetServiceUUID()))
 
 	goroutine.StartLeakCheck(stopper, cfg.Goroutine)
 
@@ -252,7 +251,7 @@ func startCNService(
 	// start up system module to do some calculation.
 	system.Run(stopper)
 
-	if err := waitClusterCondition(cfg.HAKeeperClient, waitAnyShardReady); err != nil {
+	if err := waitClusterCondition(cfg.mustGetServiceUUID(), cfg.HAKeeperClient, waitAnyShardReady); err != nil {
 		return err
 	}
 	serviceWG.Add(1)
@@ -297,7 +296,7 @@ func startTNService(
 	fileService fileservice.FileService,
 	shutdownC chan struct{},
 ) error {
-	if err := waitClusterCondition(cfg.HAKeeperClient, waitHAKeeperRunning); err != nil {
+	if err := waitClusterCondition(cfg.mustGetServiceUUID(), cfg.HAKeeperClient, waitHAKeeperRunning); err != nil {
 		return err
 	}
 	serviceWG.Add(1)
@@ -365,7 +364,7 @@ func startLogService(
 
 // startProxyService starts the proxy service.
 func startProxyService(cfg *Config, stopper *stopper.Stopper) error {
-	if err := waitClusterCondition(cfg.HAKeeperClient, waitHAKeeperRunning); err != nil {
+	if err := waitClusterCondition(cfg.mustGetServiceUUID(), cfg.HAKeeperClient, waitHAKeeperRunning); err != nil {
 		return err
 	}
 	serviceWG.Add(1)
@@ -391,7 +390,7 @@ func startProxyService(cfg *Config, stopper *stopper.Stopper) error {
 
 // startPythonUdfService starts the python udf service.
 func startPythonUdfService(cfg *Config, stopper *stopper.Stopper) error {
-	if err := waitClusterCondition(cfg.HAKeeperClient, waitHAKeeperRunning); err != nil {
+	if err := waitClusterCondition(cfg.mustGetServiceUUID(), cfg.HAKeeperClient, waitHAKeeperRunning); err != nil {
 		return err
 	}
 	serviceWG.Add(1)
