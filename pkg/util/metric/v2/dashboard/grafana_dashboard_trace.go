@@ -33,6 +33,7 @@ func (c *DashboardCreator) initTraceDashboard() error {
 			//c.initTraceDurationRow(),
 			c.initTraceCollectorOverviewRow(),
 			c.initTraceMoLoggerExportDataRow(),
+			c.initCronTaskRow(),
 			c.initCUStatusRow(),
 		)...)
 	if err != nil {
@@ -44,10 +45,11 @@ func (c *DashboardCreator) initTraceDashboard() error {
 
 func (c *DashboardCreator) initTraceMoLoggerExportDataRow() dashboard.Option {
 
+	// export data bytes
 	panels := c.getMultiHistogram(
 		[]string{
-			c.getMetricWithFilter(`mo_trace_mologger_export_data_bytes`, `type="sql"`),
-			c.getMetricWithFilter(`mo_trace_mologger_export_data_bytes`, `type="csv"`),
+			c.getMetricWithFilter(`mo_trace_mologger_export_data_bytes_bucket`, `type="sql"`),
+			c.getMetricWithFilter(`mo_trace_mologger_export_data_bytes_bucket`, `type="csv"`),
 		},
 		[]string{
 			"sql",
@@ -56,42 +58,49 @@ func (c *DashboardCreator) initTraceMoLoggerExportDataRow() dashboard.Option {
 		[]float64{0.50, 0.99},
 		[]float32{3, 3},
 		axis.Unit("bytes"),
-		axis.Min(0))
+		axis.Min(0),
+	)
 
+	// export files count
 	panels = append(panels, c.withMultiGraph(
-		"ETLMerge Success count",
+		"files",
+		3,
+		[]string{
+			`sum(delta(` + c.getMetricWithFilter("mo_trace_mologger_export_data_bytes_count", "") + `[$interval])) by (type)`,
+		},
+		[]string{
+			"{{type}}",
+		}),
+	)
+
+	// ETLMerge files count
+	panels = append(panels, c.withMultiGraph(
+		"ETLMerge files",
 		3,
 		[]string{
 			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", "") + `[$interval]))`,
 			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="success"`) + `[$interval]))`,
+			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="exist"`) + `[$interval]))`,
+			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="open_failed"`) + `[$interval]))`,
+			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="read_failed"`) + `[$interval]))`,
+			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="parse_failed"`) + `[$interval]))`,
+			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="write_failed"`) + `[$interval]))`,
+			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="delete_failed"`) + `[$interval]))`,
 		},
 		[]string{
 			"total",
 			"success",
+			"exist",
+			"open",
+			"read",
+			"parse",
+			"write",
+			"delete",
 		}),
-		c.withMultiGraph(
-			"ETLMerge Failed count",
-			3,
-			[]string{
-				`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="exist"`) + `[$interval]))`,
-				`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="open_failed"`) + `[$interval]))`,
-				`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="read_failed"`) + `[$interval]))`,
-				`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="parse_failed"`) + `[$interval]))`,
-				`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="write_failed"`) + `[$interval]))`,
-				`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="delete_failed"`) + `[$interval]))`,
-			},
-			[]string{
-				"exist",
-				"open",
-				"read",
-				"parse",
-				"write",
-				"delete",
-			}),
 	)
 
 	return dashboard.Row(
-		"MOLogger Export Bytes",
+		"MOLogger Export",
 		panels...,
 	)
 }
@@ -126,13 +135,13 @@ func (c *DashboardCreator) initTraceCollectorOverviewRow() dashboard.Option {
 		"Collector Overview",
 
 		c.withMultiGraph(
-			"rate (avg) - each instance",
+			"rate (avg) - each component",
 			3,
 			[]string{
-				`avg(rate(` + c.getMetricWithFilter("mo_trace_collector_duration_seconds_count", `type="collect"`) + `[$interval]))`,
+				`avg(rate(` + c.getMetricWithFilter("mo_trace_collector_duration_seconds_count", `type="collect"`) + `[$interval])) by (type, matrixorigin_io_component)`,
 			},
 			[]string{
-				"collect",
+				"",
 			}),
 
 		c.withMultiGraph(
@@ -193,5 +202,31 @@ func (c *DashboardCreator) initCUStatusRow() dashboard.Option {
 				`sum(delta(` + c.getMetricWithFilter("mo_trace_negative_cu_total", "") + `[$interval])) by (type)`,
 			},
 			[]string{"{{ type }}"}),
+	)
+}
+
+func (c *DashboardCreator) initCronTaskRow() dashboard.Option {
+	return dashboard.Row(
+		"CronTask StorageUsage",
+		c.withMultiGraph(
+			"Check Count",
+			3,
+			[]string{
+				`sum(delta(` + c.getMetricWithFilter("mo_trace_check_storage_usage_total", `type="all"`) + `[$interval:1m])) by (type)`,
+				`sum(delta(` + c.getMetricWithFilter("mo_trace_check_storage_usage_total", `type="new"`) + `[$interval:1m])) by (type)`,
+			},
+			[]string{
+				"check_all",
+				"check_new",
+			}),
+		c.withMultiGraph(
+			"New Account",
+			3,
+			[]string{
+				`sum(delta(` + c.getMetricWithFilter("mo_trace_check_storage_usage_total", `type="inc"`) + `[$interval:1m])) by (type)`,
+			},
+			[]string{
+				"new_inc",
+			}),
 	)
 }
