@@ -191,12 +191,7 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 		s.Reset(c)
 	}
 
-	for _, v := range c.nodeRegs {
-		v.CleanChannel(c.proc.GetMPool())
-	}
-
-	c.MessageBoard.Reset()
-	c.MessageBoard = process.NewMessageBoard()
+	c.MessageBoard = c.MessageBoard.Reset()
 	c.counterSet.Reset()
 
 	for _, f := range c.fuzzys {
@@ -222,8 +217,7 @@ func (c *Compile) clear() {
 		c.fuzzys[i].release()
 	}
 
-	c.MessageBoard.Reset()
-	c.MessageBoard = nil
+	c.MessageBoard = c.MessageBoard.Reset()
 	c.fuzzys = c.fuzzys[:0]
 	c.scope = c.scope[:0]
 	c.pn = nil
@@ -1230,6 +1224,21 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		}
 	}()
 	n := ns[curNodeIdx]
+
+	if n.Limit != nil {
+		if cExpr, ok := n.Limit.Expr.(*plan.Expr_Lit); ok {
+			if cval, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
+				if cval.U64Val == 0 {
+					// optimize for limit 0
+					rs := newScope(Merge)
+					rs.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
+					rs.Proc = process.NewFromProc(c.proc, c.proc.Ctx, 0)
+					return c.compileLimit(n, []*Scope{rs}), nil
+				}
+			}
+		}
+	}
+
 	switch n.NodeType {
 	case plan.Node_VALUE_SCAN:
 		ss, err = c.compileValueScan(n)
@@ -1250,20 +1259,6 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(node, ss)))
 		return ss, nil
 	case plan.Node_TABLE_SCAN:
-		if n.Limit != nil {
-			if cExpr, ok := n.Limit.Expr.(*plan.Expr_Lit); ok {
-				if cval, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
-					if cval.U64Val == 0 {
-						// optimize for limit 0
-						rs := newScope(Merge)
-						rs.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
-						rs.Proc = process.NewFromProc(c.proc, c.proc.Ctx, 0)
-						return c.compileLimit(n, []*Scope{rs}), nil
-					}
-				}
-			}
-		}
-
 		c.appendMetaTables(n.ObjRef)
 		ss, err = c.compileTableScan(n)
 		if err != nil {
