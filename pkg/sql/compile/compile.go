@@ -1461,36 +1461,10 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		}
 
 		n.NotCacheable = true
-		var arg *deletion.Deletion
-		arg, err = constructDeletion(n, c.e)
+		ss, err = c.compileDelete(n, ss)
 		if err != nil {
 			return nil, err
 		}
-
-		if n.Stats.Cost*float64(SingleLineSizeEstimate) >
-			float64(DistributedThreshold) &&
-			!arg.DeleteCtx.CanTruncate {
-			rs := c.newDeleteMergeScope(arg, ss)
-			rs.setRootOperator(
-				mergedelete.NewArgument().
-					WithObjectRef(arg.DeleteCtx.Ref).
-					WithParitionNames(arg.DeleteCtx.PartitionTableNames).
-					WithEngine(c.e).
-					WithAddAffectedRows(arg.DeleteCtx.AddAffectedRows),
-			)
-			rs.Magic = MergeDelete
-			ss = []*Scope{rs}
-			arg.Release()
-			return ss, nil
-		}
-		rs := ss[0]
-		if !c.IsSingleScope(ss) {
-			rs = c.newMergeScope(ss)
-			rs.Magic = Merge
-			c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
-		}
-		rs.setRootOperator(arg)
-		ss = []*Scope{rs}
 		c.setAnalyzeCurrent(ss, curr)
 		return ss, nil
 	case plan.Node_ON_DUPLICATE_KEY:
@@ -3364,6 +3338,52 @@ func (c *Compile) compilePreInsertSK(n *plan.Node, ss []*Scope) []*Scope {
 		ss[i].setRootOperator(preInsertSkArg)
 	}
 	return ss
+}
+
+func (c *Compile) compileDelete(n *plan.Node, ss []*Scope) ([]*Scope, error) {
+	var arg *deletion.Deletion
+	arg, err := constructDeletion(n, c.e)
+	if err != nil {
+		return nil, err
+	}
+
+	currentFirstFlag := c.anal.isFirst
+	arg.SetIdx(c.anal.curr)
+	arg.SetIsFirst(currentFirstFlag)
+	c.anal.isFirst = false
+
+	if n.Stats.Cost*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) && !arg.DeleteCtx.CanTruncate {
+		rs := c.newDeleteMergeScope(arg, ss)
+		rs.Magic = MergeDelete
+
+		mergeDeleteArg := mergedelete.NewArgument().
+			WithObjectRef(arg.DeleteCtx.Ref).
+			WithParitionNames(arg.DeleteCtx.PartitionTableNames).
+			WithEngine(c.e).
+			WithAddAffectedRows(arg.DeleteCtx.AddAffectedRows)
+
+		currentFirstFlag = c.anal.isFirst
+		mergeDeleteArg.SetIdx(c.anal.curr)
+		mergeDeleteArg.SetIsFirst(currentFirstFlag)
+		rs.setRootOperator(mergeDeleteArg)
+		c.anal.isFirst = false
+
+		ss = []*Scope{rs}
+		arg.Release()
+		return ss, nil
+	} else {
+		var rs *Scope
+		if c.IsSingleScope(ss) {
+			rs = ss[0]
+		} else {
+			rs = c.newMergeScope(ss)
+			rs.Magic = Merge
+		}
+
+		rs.setRootOperator(arg)
+		ss = []*Scope{rs}
+		return ss, nil
+	}
 }
 
 // DeleteMergeScope need to assure this:
