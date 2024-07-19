@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -89,9 +88,6 @@ func TestJoin(t *testing.T) {
 	for _, tc := range tcs {
 		nb0 := tc.proc.Mp().CurrNB()
 		bats := hashBuild(t, tc)
-		if jm, ok := bats[0].AuxData.(*hashmap.JoinMap); ok {
-			jm.SetDupCount(int64(1))
-		}
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
@@ -113,9 +109,6 @@ func TestJoin(t *testing.T) {
 		tc.arg.Reset(tc.proc, false, nil)
 
 		bats = hashBuild(t, tc)
-		if jm, ok := bats[0].AuxData.(*hashmap.JoinMap); ok {
-			jm.SetDupCount(int64(1))
-		}
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))

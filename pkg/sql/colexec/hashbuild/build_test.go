@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -85,8 +84,8 @@ func TestBuild(t *testing.T) {
 			ok, err := tc.arg.Call(tc.proc)
 			require.NoError(t, err)
 			require.Equal(t, false, ok.Status == vm.ExecStop)
-			mp := ok.Batch.AuxData.(*hashmap.JoinMap)
-			mp.Free()
+			//mp := ok.Batch.AuxData.(*hashmap.JoinMap)
+			//mp.Free()
 			ok.Batch.Clean(tc.proc.Mp())
 			break
 		}
@@ -105,8 +104,8 @@ func TestBuild(t *testing.T) {
 			ok, err := tc.arg.Call(tc.proc)
 			require.NoError(t, err)
 			require.Equal(t, false, ok.Status == vm.ExecStop)
-			mp := ok.Batch.AuxData.(*hashmap.JoinMap)
-			mp.Free()
+			//mp := ok.Batch.AuxData.(*hashmap.JoinMap)
+			//mp.Free()
 			ok.Batch.Clean(tc.proc.Mp())
 			break
 		}
@@ -135,9 +134,9 @@ func BenchmarkBuild(b *testing.B) {
 				ok, err := tc.arg.Call(tc.proc)
 				require.NoError(t, err)
 				require.Equal(t, true, ok)
-				mp := ok.Batch.AuxData.(*hashmap.JoinMap)
+				//mp := ok.Batch.AuxData.(*hashmap.JoinMap)
 				tc.proc.Reg.MergeReceivers[0].Ch <- nil
-				mp.Free()
+				//mp.Free()
 				ok.Batch.Clean(tc.proc.Mp())
 				break
 			}
