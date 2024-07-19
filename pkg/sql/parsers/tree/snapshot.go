@@ -14,9 +14,7 @@
 
 package tree
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
-)
+import "github.com/matrixorigin/matrixone/pkg/common/reuse"
 
 func init() {
 	reuse.CreatePool[DropSnapShot](

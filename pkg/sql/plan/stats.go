@@ -1433,14 +1433,10 @@ func (builder *QueryBuilder) canSkipStats() bool {
 		scan := builder.qry.Nodes[agg.Children[0]]
 		return scan.NodeType == plan.Node_TABLE_SCAN
 	}
-	//skip stats for select * from xx limit 0
-	if len(builder.qry.Steps) == 1 && len(builder.qry.Nodes) == 2 {
+	//skip stats for select * from xx limit 0, including view
+	if len(builder.qry.Steps) == 1 {
 		project := builder.qry.Nodes[builder.qry.Steps[0]]
 		if project.NodeType != plan.Node_PROJECT {
-			return false
-		}
-		scan := builder.qry.Nodes[project.Children[0]]
-		if scan.NodeType != plan.Node_TABLE_SCAN {
 			return false
 		}
 		if project.Limit != nil {
