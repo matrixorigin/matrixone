@@ -347,10 +347,15 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, fill func(*batch.B
 	c.proc.Ctx = context.WithValue(c.proc.Ctx, defines.EngineKey{}, c.e)
 	// generate logic pipeline for query.
 	c.scope, err = c.compileScope(pn)
-
 	if err != nil {
 		return err
 	}
+
+	if strings.HasPrefix(c.sql, "SELECT") {
+		scopeInfo := DebugShowScopes(c.scope)
+		fmt.Printf("----------------------------------wuxiliang start----------------------------------\nSQL:%s %s\n--------------------------------------------", c.sql, scopeInfo)
+	}
+
 	for _, s := range c.scope {
 		if len(s.NodeInfo.Addr) == 0 {
 			s.NodeInfo.Addr = c.addr
@@ -549,6 +554,11 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	c.proc.Ctx, span = trace.Start(c.proc.Ctx, "Compile.Run", trace.WithKind(trace.SpanKindStatement))
 	_, task := gotrace.NewTask(context.TODO(), "pipeline.Run")
 	defer func() {
+		if strings.HasPrefix(c.sql, "SELECT") {
+			scopeInfo := DebugShowScopes(c.scope)
+			fmt.Printf("----------------------------------wuxiliang end----------------------------------\nSQL:%s %s\n--------------------------------------------", c.sql, scopeInfo)
+		}
+
 		releaseRunC()
 
 		task.End()
@@ -1265,6 +1275,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 			return nil, err
 		}
 		ss = c.compileProjection(n, c.compileRestrict(n, ss))
+		ss = []*Scope{c.newMergeScope(ss)}
 		if n.Offset != nil {
 			ss = c.compileOffset(n, ss)
 		}
@@ -2213,11 +2224,14 @@ func (c *Compile) compileValueScan(n *plan.Node) ([]*Scope, error) {
 func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
 	//处理分区表
 	if n.TableDef.Partition != nil {
-		nodes := make([]engine.Node, 0)
-		partitionDef := n.TableDef.Partition
 		var allPartialResults []any
 		var allPartialResultTypes []types.T
-		// 遍历每个分区子表
+
+		nodes := make([]engine.Node, 0)
+		ss := make([]*Scope, 0)
+
+		partitionDef := n.TableDef.Partition
+		// Traverse each partition sub table
 		for _, partitionItem := range partitionDef.Partitions {
 			pNodes, partialResults, partialResultTypes, err := c.generateNodes(n, partitionItem.PartitionTableName)
 			if err != nil {
@@ -2232,21 +2246,20 @@ func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
 					mergePartialResults(n, allPartialResults, partialResults, partialResultTypes)
 				}
 			}
+			for i := range pNodes {
+				s, err := c.compileTableScanWithNode(n, pNodes[i], partitionItem.PartitionTableName)
+				if err != nil {
+					return nil, err
+				}
+				ss = append(ss, s)
+			}
 		}
 
-		ss := make([]*Scope, 0, len(nodes))
-		for i := range nodes {
-			s, err := c.compileTableScanWithNode(n, nodes[i])
-			if err != nil {
-				return nil, err
-			}
-			ss = append(ss, s)
-		}
 		ss[0].PartialResults = allPartialResults
 		ss[0].PartialResultTypes = allPartialResultTypes
 		return ss, nil
 	} else {
-		// 处理普通表
+		// Handling regular tables
 		nodes, partialResults, partialResultTypes, err := c.generateNodes(n, "")
 		if err != nil {
 			return nil, err
@@ -2254,7 +2267,7 @@ func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
 		ss := make([]*Scope, 0, len(nodes))
 
 		for i := range nodes {
-			s, err := c.compileTableScanWithNode(n, nodes[i])
+			s, err := c.compileTableScanWithNode(n, nodes[i], "")
 			if err != nil {
 				return nil, err
 			}
@@ -2264,31 +2277,15 @@ func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
 		ss[0].PartialResultTypes = partialResultTypes
 		return ss, nil
 	}
-
-	//nodes, partialResults, partialResultTypes, err := c.generateNodes(n, "")
-	//if err != nil {
-	//	return nil, err
-	//}
-	//ss := make([]*Scope, 0, len(nodes))
-	//
-	//for i := range nodes {
-	//	s, err := c.compileTableScanWithNode(n, nodes[i])
-	//	if err != nil {
-	//		return nil, err
-	//	}
-	//	ss = append(ss, s)
-	//}
-	//ss[0].PartialResults = partialResults
-	//ss[0].PartialResultTypes = partialResultTypes
-	//return ss, nil
 }
 
-func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) (*Scope, error) {
+func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, partitionTblName string) (*Scope, error) {
 	s := newScope(Remote)
 	s.NodeInfo = node
 	s.TxnOffset = c.TxnOffset
 	s.DataSource = &Source{
-		node: n,
+		node:         n,
+		ParitionName: partitionTblName,
 	}
 
 	op := constructTableScan()
@@ -2308,6 +2305,12 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	var txnOp client.TxnOperator
 
 	n := s.DataSource.node
+
+	finalTableName := n.TableDef.Name
+	if s.DataSource.ParitionName != "" {
+		finalTableName = s.DataSource.ParitionName
+	}
+
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
 		attrs[j] = col.Name
@@ -2355,7 +2358,8 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 		if err != nil {
 			panic(err)
 		}
-		rel, err = db.Relation(ctx, n.TableDef.Name, c.proc)
+
+		rel, err = db.Relation(ctx, finalTableName, c.proc)
 		if err != nil {
 			if txnOp.IsSnapOp() {
 				return err
@@ -2365,24 +2369,12 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 			if e != nil {
 				panic(e)
 			}
-			rel, e = db.Relation(c.proc.Ctx, engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name), c.proc)
+			rel, e = db.Relation(c.proc.Ctx, engine.GetTempTableName(n.ObjRef.SchemaName, finalTableName), c.proc)
 			if e != nil {
 				panic(e)
 			}
 		}
 		tblDef = rel.GetTableDef(ctx)
-	}
-
-	// prcoess partitioned table
-	var partitionRelNames []string
-	if n.TableDef.Partition != nil {
-		if n.PartitionPrune != nil && n.PartitionPrune.IsPruned {
-			for _, partition := range n.PartitionPrune.SelectedPartitions {
-				partitionRelNames = append(partitionRelNames, partition.PartitionTableName)
-			}
-		} else {
-			partitionRelNames = append(partitionRelNames, n.TableDef.Partition.PartitionTableNames...)
-		}
 	}
 
 	var filterExpr *plan.Expr
@@ -2398,8 +2390,7 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	s.DataSource.Attributes = attrs
 	s.DataSource.TableDef = tblDef
 	s.DataSource.Rel = rel
-	s.DataSource.RelationName = n.TableDef.Name
-	s.DataSource.PartitionRelationNames = partitionRelNames
+	s.DataSource.RelationName = finalTableName
 	s.DataSource.SchemaName = n.ObjRef.SchemaName
 	s.DataSource.AccountId = n.ObjRef.GetPubInfo()
 	s.DataSource.FilterExpr = filterExpr
@@ -3864,9 +3855,9 @@ func (c *Compile) determinExpandRanges(n *plan.Node) bool {
 		return true
 	}
 
-	if n.TableDef.Partition != nil {
-		return true
-	}
+	//if n.TableDef.Partition != nil {
+	//	return true
+	//}
 
 	if n.Stats.BlockNum > int32(plan2.BlockThresholdForOneCN) && len(c.cnList) > 1 && !n.Stats.ForceOneCN {
 		return true
@@ -4059,16 +4050,16 @@ func (c *Compile) generateNodes(n *plan.Node, partTblName string) (engine.Nodes,
 		return nodes, nil, nil, nil
 	}
 
-	if len(n.AggList) > 0 && ranges.Len() > 1 {
-		var newranges []byte
-		newranges, partialResults, partialResultTypes, err = c.evalPartialResults(n, ranges)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		if partialResults != nil {
-			ranges.SetBytes(newranges)
-		}
-	}
+	//if len(n.AggList) > 0 && ranges.Len() > 1 {
+	//	var newranges []byte
+	//	newranges, partialResults, partialResultTypes, err = c.evalPartialResults(n, ranges)
+	//	if err != nil {
+	//		return nil, nil, nil, err
+	//	}
+	//	if partialResults != nil {
+	//		ranges.SetBytes(newranges)
+	//	}
+	//}
 	// n.AggList = nil
 
 	// some log for finding a bug.

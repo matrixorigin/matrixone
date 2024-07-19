@@ -70,20 +70,20 @@ const (
 type Source struct {
 	isConst bool
 
-	PushdownId             uint64
-	PushdownAddr           string
-	SchemaName             string
-	RelationName           string
-	PartitionRelationNames []string
-	Attributes             []string
-	R                      engine.Reader
-	Rel                    engine.Relation
-	Bat                    *batch.Batch
-	FilterExpr             *plan.Expr // todo: change this to []*plan.Expr
-	node                   *plan.Node
-	TableDef               *plan.TableDef
-	Timestamp              timestamp.Timestamp
-	AccountId              *plan.PubInfo
+	PushdownId   uint64
+	PushdownAddr string
+	SchemaName   string
+	RelationName string
+	Attributes   []string
+	R            engine.Reader
+	Rel          engine.Relation
+	Bat          *batch.Batch
+	FilterExpr   *plan.Expr // todo: change this to []*plan.Expr
+	node         *plan.Node
+	ParitionName string
+	TableDef     *plan.TableDef
+	Timestamp    timestamp.Timestamp
+	AccountId    *plan.PubInfo
 
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	OrderBy            []*plan.OrderBySpec // for ordered scan
