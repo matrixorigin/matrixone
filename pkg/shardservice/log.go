@@ -18,15 +18,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/common/log"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"go.uber.org/zap"
 )
-
-func getLogger(sid string) *log.MOLogger {
-	return runtime.GetLogger(sid)
-}
 
 func tableShardsField(
 	name string,

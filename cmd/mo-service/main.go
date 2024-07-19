@@ -24,7 +24,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	struntime "runtime"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -34,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
@@ -50,7 +48,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
 	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
-	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/debug/goroutine"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
@@ -408,30 +405,6 @@ func startPythonUdfService(cfg *Config, stopper *stopper.Stopper) error {
 			panic(err)
 		}
 	})
-}
-
-func getNodeUUID(ctx context.Context, st metadata.ServiceType, cfg *Config) (UUID string, err error) {
-	switch st {
-	case metadata.ServiceType_CN:
-		// validate node_uuid
-		var uuidErr error
-		var nodeUUID uuid.UUID
-		if nodeUUID, uuidErr = uuid.Parse(cfg.CN.UUID); uuidErr != nil {
-			nodeUUID, _ = uuid.NewV7()
-		}
-		if err := util.SetUUIDNodeID(ctx, nodeUUID[:]); err != nil {
-			return "", moerr.ConvertPanicError(ctx, err)
-		}
-		UUID = nodeUUID.String()
-	case metadata.ServiceType_TN:
-		UUID = cfg.getTNServiceConfig().UUID
-	case metadata.ServiceType_LOG:
-		UUID = cfg.LogService.UUID
-	case metadata.ServiceType_PYTHON_UDF:
-		UUID = cfg.PythonUdfServerConfig.UUID
-	}
-	UUID = strings.ReplaceAll(UUID, " ", "_") // remove space in UUID for filename
-	return
 }
 
 func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, stopper *stopper.Stopper, fs fileservice.FileService, UUID string) error {

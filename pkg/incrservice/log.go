@@ -15,15 +15,8 @@
 package incrservice
 
 import (
-	"sync"
-
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-)
-
-var (
-	logger *log.MOLogger
-	once   sync.Once
 )
 
 func getLogger(sid string) *log.MOLogger {

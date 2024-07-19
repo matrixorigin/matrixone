@@ -761,7 +761,7 @@ func (s *service) initLockService() {
 			<-s.hakeeperConnected
 		}))
 	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(runtime.LockService, s.lockService)
-	lockservice.SetLockServiceByServiceID(s.lockService.GetServiceID(), s.lockService)
+	lockservice.SetLockServiceByServiceID(s.cfg.UUID, s.lockService)
 
 	ss, ok := runtime.ServiceRuntime(s.cfg.UUID).GetGlobalVariables(runtime.StatusServer)
 	if ok {
