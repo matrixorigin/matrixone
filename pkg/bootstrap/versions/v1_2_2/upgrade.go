@@ -27,6 +27,7 @@ import (
 )
 
 var clusterUpgEntries = []versions.UpgradeEntry{}
+var tenantUpgEntries = []versions.UpgradeEntry{}
 
 var (
 	Handler = &versionHandle{
