@@ -196,16 +196,18 @@ func TestDiskCacheWriteAgain(t *testing.T) {
 	assert.Equal(t, int64(3), counterSet.FileService.Cache.Disk.WriteFile.Load())
 	assert.Equal(t, int64(2), counterSet.FileService.Cache.Disk.Evict.Load())
 
-	err = cache.Read(ctx, &IOVector{
+	vec := &IOVector{
 		FilePath: "foo",
 		Entries: []IOEntry{
 			{
 				Size: 3,
 			},
 		},
-	})
+	}
+	err = cache.Read(ctx, vec)
 	assert.Nil(t, err)
 	assert.Equal(t, int64(1), counterSet.FileService.Cache.Disk.Hit.Load())
+	vec.Release()
 
 }
 
