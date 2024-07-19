@@ -217,6 +217,7 @@ func (entry *flushTableTailEntry) collectDelsAndTransfer(from, to types.TS) (tra
 			return
 		}
 		if bat == nil || bat.Length() == 0 {
+			blkOffset += blkCnt
 			continue
 		}
 		rowid := vector.MustFixedCol[types.Rowid](bat.GetVectorByName(catalog.PhyAddrColumnName).GetDownstreamVector())
