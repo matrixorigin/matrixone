@@ -313,9 +313,12 @@ func (sp *StmtProfile) GetStmtId() uuid.UUID {
 	return sp.stmtId
 }
 
-// the common part of process.
+// BaseProcess is the common part of process.
 // each query share only 1 instance of BaseProcess
 type BaseProcess struct {
+	// sqlContext includes the client context and the query context.
+	sqlContext queryBaseContext
+
 	StmtProfile *StmtProfile
 	// Id, query id.
 	Id              string
