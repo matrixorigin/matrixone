@@ -291,7 +291,7 @@ func startCNService(
 			}
 		}
 		if err := s.Close(); err != nil {
-			panic(err)
+			logutil.GetGlobalLogger().Error("failed to close cn service", zap.Error(err))
 		}
 	})
 }
@@ -332,7 +332,7 @@ func startTNService(
 
 		<-ctx.Done()
 		if err := s.Close(); err != nil {
-			panic(err)
+			logutil.GetGlobalLogger().Error("failed to close tn service", zap.Error(err))
 		}
 	})
 }
@@ -367,7 +367,7 @@ func startLogService(
 
 		<-ctx.Done()
 		if err := s.Close(); err != nil {
-			panic(err)
+			logutil.GetGlobalLogger().Error("failed to close log service", zap.Error(err))
 		}
 	})
 }
@@ -393,7 +393,7 @@ func startProxyService(cfg *Config, stopper *stopper.Stopper) error {
 		}
 		<-ctx.Done()
 		if err := s.Close(); err != nil {
-			panic(err)
+			logutil.GetGlobalLogger().Error("failed to close proxy service", zap.Error(err))
 		}
 	})
 }
@@ -415,7 +415,7 @@ func startPythonUdfService(cfg *Config, stopper *stopper.Stopper) error {
 		}
 		<-ctx.Done()
 		if err := s.Close(); err != nil {
-			panic(err)
+			logutil.GetGlobalLogger().Error("failed to close python udf service", zap.Error(err))
 		}
 	})
 }
