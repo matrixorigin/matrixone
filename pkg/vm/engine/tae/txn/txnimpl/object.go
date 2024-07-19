@@ -233,7 +233,7 @@ func (obj *txnObject) GetByFilter(
 
 func (obj *txnObject) GetColumnDataById(
 	ctx context.Context, blkID uint16, colIdx int, mp *mpool.MPool,
-) (*containers.ColumnView, error) {
+) (*containers.Batch, error) {
 	if obj.entry.IsLocal {
 		return obj.table.tableSpace.GetColumnDataById(ctx, obj.entry, colIdx, mp)
 	}
@@ -242,7 +242,7 @@ func (obj *txnObject) GetColumnDataById(
 
 func (obj *txnObject) GetColumnDataByIds(
 	ctx context.Context, blkID uint16, colIdxes []int, mp *mpool.MPool,
-) (*containers.BlockView, error) {
+) (*containers.Batch, error) {
 	if obj.entry.IsLocal {
 		return obj.table.tableSpace.GetColumnDataByIds(obj.entry, colIdxes, mp)
 	}
@@ -251,7 +251,7 @@ func (obj *txnObject) GetColumnDataByIds(
 
 func (obj *txnObject) GetColumnDataByName(
 	ctx context.Context, blkID uint16, attr string, mp *mpool.MPool,
-) (*containers.ColumnView, error) {
+) (*containers.Batch, error) {
 	schema := obj.table.GetLocalSchema()
 	colIdx := schema.GetColIdx(attr)
 	if obj.entry.IsLocal {
@@ -262,7 +262,7 @@ func (obj *txnObject) GetColumnDataByName(
 
 func (obj *txnObject) GetColumnDataByNames(
 	ctx context.Context, blkID uint16, attrs []string, mp *mpool.MPool,
-) (*containers.BlockView, error) {
+) (*containers.Batch, error) {
 	schema := obj.table.GetLocalSchema()
 	attrIds := make([]int, len(attrs))
 	for i, attr := range attrs {

@@ -34,7 +34,7 @@ type FuncT = func() error
 
 type TaskType uint16
 
-var taskIdAlloctor *common.IdAlloctor
+var taskIdAllocator *common.IdAllocator
 
 const (
 	NoopTask TaskType = iota
@@ -69,13 +69,13 @@ func TaskName(t TaskType) string {
 }
 
 func init() {
-	taskIdAlloctor = common.NewIdAlloctor(1)
+	taskIdAllocator = common.NewIdAllocator(1)
 }
 
 type TxnTaskFactory = func(ctx *Context, txn txnif.AsyncTxn) (Task, error)
 
 func NextTaskId() uint64 {
-	return taskIdAlloctor.Alloc()
+	return taskIdAllocator.Alloc()
 }
 
 type Task interface {

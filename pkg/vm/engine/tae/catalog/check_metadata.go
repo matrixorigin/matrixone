@@ -32,7 +32,7 @@ func (catalog *Catalog) CheckMetadata() {
 	logutil.Infof("[MetadataCheck] End")
 }
 func (catalog *Catalog) checkTombstone(t data.Tombstone) error {
-	obj := t.GetObject().(*ObjectEntry)
+	obj := t.GetObject().(*ObjectEntry).GetLatestNode()
 	_, err := obj.GetTable().GetObjectByID(obj.ID())
 	if err != nil {
 		logutil.Warnf("[MetadataCheck] tombstone and object doesn't match, err %v, obj %v, tombstone %v",

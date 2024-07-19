@@ -179,7 +179,7 @@ func (h *Handle) HandleForceGlobalCheckpoint(
 
 	currTs := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 
-	err = h.db.ForceGlobalCheckpoint(ctx, currTs, timeout)
+	err = h.db.ForceGlobalCheckpoint(ctx, currTs, timeout, 0)
 	return nil, err
 }
 
@@ -422,7 +422,7 @@ func (h *Handle) HandleCommitMerge(
 		}
 	}
 
-	_, err = jobs.HandleMergeEntryInTxn(txn, txn.String(), req, h.db.Runtime)
+	_, err = jobs.HandleMergeEntryInTxn(ctx, txn, txn.String(), req, h.db.Runtime)
 	if err != nil {
 		return
 	}
