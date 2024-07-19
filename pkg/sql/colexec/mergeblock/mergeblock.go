@@ -63,7 +63,7 @@ func (mergeBlock *MergeBlock) Call(proc *process.Process) (vm.CallResult, error)
 		return result, err
 	}
 
-	anal := proc.GetAnalyze(mergeBlock.GetIdx(), mergeBlock.GetParallelIdx(), mergeBlock.GetParallelMajor())
+	anal := proc.GetAnalyze2(mergeBlock.GetIdx(), mergeBlock.GetParallelIdx(), mergeBlock.GetParallelMajor(), mergeBlock.OpStats)
 	anal.Start()
 	defer anal.Stop()
 
@@ -76,7 +76,7 @@ func (mergeBlock *MergeBlock) Call(proc *process.Process) (vm.CallResult, error)
 		return result, nil
 	}
 	bat := result.Batch
-	if err := ap.Split(proc, bat); err != nil {
+	if err = ap.Split(proc, bat); err != nil {
 		return result, err
 	}
 

@@ -94,14 +94,13 @@ func (deletion *Deletion) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 func (deletion *Deletion) remoteDelete(proc *process.Process) (vm.CallResult, error) {
-	var err error
-
-	anal := proc.GetAnalyze(deletion.GetIdx(), deletion.GetParallelIdx(), deletion.GetParallelMajor())
+	anal := proc.GetAnalyze2(deletion.GetIdx(), deletion.GetParallelIdx(), deletion.GetParallelMajor(), deletion.OpStats)
 	anal.Start()
 	defer func() {
 		anal.Stop()
 	}()
 
+	var err error
 	if deletion.ctr.state == vm.Build {
 		for {
 			result, err := vm.ChildrenCall(deletion.GetChildren(0), proc, anal)
@@ -207,7 +206,6 @@ func (deletion *Deletion) remoteDelete(proc *process.Process) (vm.CallResult, er
 	}
 
 	panic("bug")
-
 }
 
 func (deletion *Deletion) normalDelete(proc *process.Process) (vm.CallResult, error) {
@@ -219,12 +217,11 @@ func (deletion *Deletion) normalDelete(proc *process.Process) (vm.CallResult, er
 		return result, nil
 	}
 
-	anal := proc.GetAnalyze(deletion.GetIdx(), deletion.GetParallelIdx(), deletion.GetParallelMajor())
+	anal := proc.GetAnalyze2(deletion.GetIdx(), deletion.GetParallelIdx(), deletion.GetParallelMajor(), deletion.OpStats)
 	anal.Start()
 	defer anal.Stop()
 
 	bat := result.Batch
-
 	var affectedRows uint64
 	delCtx := deletion.DeleteCtx
 
