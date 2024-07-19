@@ -45,7 +45,7 @@ func (tableFunction *TableFunction) Call(proc *process.Process) (vm.CallResult, 
 		return result, err
 	}
 
-	anal := proc.GetAnalyze(tableFunction.GetIdx(), tableFunction.GetParallelIdx(), tableFunction.GetParallelMajor())
+	anal := proc.GetAnalyze2(tableFunction.GetIdx(), tableFunction.GetParallelIdx(), tableFunction.GetParallelMajor(), tableFunction.OpStats)
 	anal.Start()
 	defer anal.Stop()
 

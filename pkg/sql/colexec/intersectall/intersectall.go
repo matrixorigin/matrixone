@@ -64,10 +64,11 @@ func (intersectAll *IntersectAll) Call(proc *process.Process) (vm.CallResult, er
 		return vm.CancelResult, err
 	}
 
-	var err error
-	analyzer := proc.GetAnalyze(intersectAll.GetIdx(), intersectAll.GetParallelIdx(), intersectAll.GetParallelMajor())
+	analyzer := proc.GetAnalyze2(intersectAll.GetIdx(), intersectAll.GetParallelIdx(), intersectAll.GetParallelMajor(), intersectAll.OpStats)
 	analyzer.Start()
 	defer analyzer.Stop()
+
+	var err error
 	result := vm.NewCallResult()
 	for {
 		switch intersectAll.ctr.state {

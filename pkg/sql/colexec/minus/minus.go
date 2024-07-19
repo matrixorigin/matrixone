@@ -57,13 +57,13 @@ func (minus *Minus) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	var err error
 	// prepare the analysis work.
-	analyze := proc.GetAnalyze(minus.GetIdx(), minus.GetParallelIdx(), minus.GetParallelMajor())
+	analyze := proc.GetAnalyze2(minus.GetIdx(), minus.GetParallelIdx(), minus.GetParallelMajor(), minus.OpStats)
 	analyze.Start()
 	defer analyze.Stop()
-	result := vm.NewCallResult()
 
+	var err error
+	result := vm.NewCallResult()
 	for {
 		switch minus.ctr.state {
 		case buildingHashMap:
@@ -215,6 +215,7 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 				}
 			}
 		}
+		ana.Alloc(int64(ctr.bat.Size()))
 		ana.Output(ctr.bat, isLast)
 		result.Batch = ctr.bat
 		proc.PutBatch(bat)

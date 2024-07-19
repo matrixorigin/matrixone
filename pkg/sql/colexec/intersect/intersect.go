@@ -53,7 +53,7 @@ func (intersect *Intersect) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	analyze := proc.GetAnalyze(intersect.GetIdx(), intersect.GetParallelIdx(), intersect.GetParallelMajor())
+	analyze := proc.GetAnalyze2(intersect.GetIdx(), intersect.GetParallelIdx(), intersect.GetParallelMajor(), intersect.OpStats)
 	analyze.Start()
 	defer analyze.Stop()
 

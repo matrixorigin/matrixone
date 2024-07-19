@@ -64,7 +64,7 @@ func (mergeDelete *MergeDelete) Call(proc *process.Process) (vm.CallResult, erro
 		return result, err
 	}
 
-	anal := proc.GetAnalyze(mergeDelete.GetIdx(), mergeDelete.GetParallelIdx(), mergeDelete.GetParallelMajor())
+	anal := proc.GetAnalyze2(mergeDelete.GetIdx(), mergeDelete.GetParallelIdx(), mergeDelete.GetParallelMajor(), mergeDelete.OpStats)
 	anal.Start()
 	defer anal.Stop()
 
