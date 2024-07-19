@@ -17,11 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
-<<<<<<< HEAD
-=======
-
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
->>>>>>> a403cb3389253ce374d22b9749309f09c35c0e9d
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
