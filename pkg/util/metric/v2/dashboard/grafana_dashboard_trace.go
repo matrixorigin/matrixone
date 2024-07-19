@@ -67,7 +67,7 @@ func (c *DashboardCreator) initTraceMoLoggerExportDataRow() dashboard.Option {
 		"files",
 		3,
 		[]string{
-			`sum(delta(` + c.getMetricWithFilter("mo_trace_mologger_export_data_bytes_count", "") + `[$interval])) by (type)`,
+			`sum(delta(` + c.getMetricWithFilter("mo_trace_mologger_export_data_bytes_count", "") + `[$interval:1m])) by (type)`,
 		},
 		[]string{
 			"{{type}}",
@@ -79,14 +79,14 @@ func (c *DashboardCreator) initTraceMoLoggerExportDataRow() dashboard.Option {
 		"ETLMerge files",
 		3,
 		[]string{
-			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", "") + `[$interval]))`,
-			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="success"`) + `[$interval]))`,
-			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="exist"`) + `[$interval]))`,
-			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="open_failed"`) + `[$interval]))`,
-			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="read_failed"`) + `[$interval]))`,
-			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="parse_failed"`) + `[$interval]))`,
-			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="write_failed"`) + `[$interval]))`,
-			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="delete_failed"`) + `[$interval]))`,
+			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", "") + `[$interval:1m]))`,
+			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="success"`) + `[$interval:1m]))`,
+			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="exist"`) + `[$interval:1m]))`,
+			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="open_failed"`) + `[$interval:1m]))`,
+			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="read_failed"`) + `[$interval:1m]))`,
+			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="parse_failed"`) + `[$interval:1m]))`,
+			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="write_failed"`) + `[$interval:1m]))`,
+			`sum(delta(` + c.getMetricWithFilter("mo_trace_etl_merge_total", `type="delete_failed"`) + `[$interval:1m]))`,
 		},
 		[]string{
 			"total",
@@ -200,7 +200,7 @@ func (c *DashboardCreator) initCUStatusRow() dashboard.Option {
 			"Negative CU status",
 			6,
 			[]string{
-				`sum(delta(` + c.getMetricWithFilter("mo_trace_negative_cu_total", "") + `[$interval])) by (type)`,
+				`sum(delta(` + c.getMetricWithFilter("mo_trace_negative_cu_total", "") + `[$interval:1m])) by (type)`,
 			},
 			[]string{"{{ type }}"}),
 	)
