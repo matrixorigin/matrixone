@@ -141,7 +141,7 @@ func (rightSemi *RightSemi) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (rightSemi *RightSemi) receiveHashMap(anal process.Analyze, proc *process.Process) {
 	ctr := rightSemi.ctr
-	ctr.mp = colexec.ReceiveHashMap(anal, rightSemi.JoinMapTag, rightSemi.IsShuffle, rightSemi.ShuffleIdx, proc)
+	ctr.mp = colexec.ReceiveJoinMap(anal, rightSemi.JoinMapTag, rightSemi.IsShuffle, rightSemi.ShuffleIdx, proc)
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
