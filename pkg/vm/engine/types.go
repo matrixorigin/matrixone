@@ -40,9 +40,8 @@ type Node struct {
 	Id     string `json:"id"`
 	Addr   string `json:"address"`
 	Header objectio.InfoHeader
-	Data   []byte `json:"payload"`
-	//marshaled in memory tombstones and tombstone objects.
-	Tombstone        []byte
+	//Data             []byte `json:"payload"`
+	Data             RelData
 	NeedExpandRanges bool
 }
 
@@ -573,6 +572,30 @@ func (def *StreamConfigsDef) ToPBVersion() ConstraintPB {
 	}
 }
 
+type TombstoneType uint8
+
+const (
+	TombstoneV0 TombstoneType = iota
+	TombstoneV1
+	TombstoneV2
+)
+
+type Tombstoner interface {
+	Type() TombstoneType
+	HasTombstones(bid types.Blockid) bool
+	ApplyTombstones(rows []types.Rowid) ([]int64, error)
+}
+
+type RelData interface {
+	MarshalToBytes() []byte
+	AttachTombstones(tombstones Tombstoner) error
+	ForeachDataBlk(f func(blk *objectio.BlockInfoInProgress))
+	GetDataBlk(i int) *objectio.BlockInfoInProgress
+	AppendDataBlk(blk *objectio.BlockInfoInProgress)
+	BuildEmptyRelData() RelData
+	BlkCnt() int
+}
+
 type Ranges interface {
 	GetBytes(i int) []byte
 
@@ -601,8 +624,8 @@ type Relation interface {
 	Ranges(context.Context, []*plan.Expr, int) (Ranges, error)
 
 	//RangesInProgress will substitute the Ranges function in the future.
-	RangesInProgress(context.Context, []*plan.Expr, int) (Ranges, error)
-	CollectTombstones(ctx context.Context, txnOffset int, blkIDs []types.Blockid) ([]byte, error)
+	RangesInProgress(context.Context, []*plan.Expr, int) (RelData, error)
+	CollectTombstones(ctx context.Context, txnOffset int) ([]byte, error)
 
 	TableDefs(context.Context) ([]TableDef, error)
 

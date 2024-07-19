@@ -67,7 +67,7 @@ type BlockInfoInProgress struct {
 	MetaLoc    ObjectLocation
 	CommitTs   types.TS
 
-	//TODO::remove it.
+	//TODO:: remove it.
 	PartitionNum int
 }
 

@@ -191,12 +191,11 @@ func (tbl *txnTableDelegate) Ranges(
 	return nil, nil
 }
 
-func (tbl *txnTableDelegate) CollectTombstones(ctx context.Context, txnOffset int, blkIDs []types.Blockid) ([]byte, error) {
+func (tbl *txnTableDelegate) CollectTombstones(ctx context.Context, txnOffset int) ([]byte, error) {
 	if tbl.isLocal() {
 		return tbl.origin.CollectTombstones(
 			ctx,
 			txnOffset,
-			blkIDs,
 		)
 	}
 	// TODO: forward
@@ -207,7 +206,7 @@ func (tbl *txnTableDelegate) RangesInProgress(
 	ctx context.Context,
 	exprs []*plan.Expr,
 	n int,
-) (engine.Ranges, error) {
+) (engine.RelData, error) {
 	if tbl.isLocal() {
 		return tbl.origin.RangesInProgress(
 			ctx,

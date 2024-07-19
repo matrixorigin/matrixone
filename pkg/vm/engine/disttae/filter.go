@@ -989,7 +989,7 @@ func TryFastFilterBlocksInProgress(
 	exprs []*plan.Expr,
 	snapshot *logtailreplay.PartitionState,
 	uncommittedObjects []objectio.ObjectStats,
-	outBlocks *objectio.BlockInfoSliceInProgress,
+	outBlocks *[]*objectio.BlockInfoInProgress,
 	fs fileservice.FileService,
 	proc *process.Process,
 ) (ok bool, err error) {
@@ -1031,7 +1031,7 @@ func ExecuteBlockFilterInProgress(
 	seekOp SeekFirstBlockOp,
 	snapshot *logtailreplay.PartitionState,
 	uncommittedObjects []objectio.ObjectStats,
-	outBlocks *objectio.BlockInfoSliceInProgress,
+	outBlocks *[]*objectio.BlockInfoInProgress,
 	fs fileservice.FileService,
 	proc *process.Process,
 	highSelectivityHint bool,
@@ -1046,7 +1046,7 @@ func ExecuteBlockFilterInProgress(
 
 	defer func() {
 		v2.TxnRangesFastPathLoadObjCntHistogram.Observe(loadHit)
-		v2.TxnRangesFastPathSelectedBlockCntHistogram.Observe(float64(outBlocks.Len() - 1))
+		v2.TxnRangesFastPathSelectedBlockCntHistogram.Observe(float64(len(*outBlocks) - 1))
 		if fastFilterTotal > 0 {
 			v2.TxnRangesFastPathObjSortKeyZMapSelectivityHistogram.Observe(fastFilterHit / fastFilterTotal)
 		}
@@ -1057,7 +1057,7 @@ func ExecuteBlockFilterInProgress(
 			v2.TxnRangesFastPathBlkColumnZMapSelectivityHistogram.Observe(blkFilterHit / blkFilterTotal)
 		}
 		if totalBlocks > 0 {
-			v2.TxnRangesFastPathBlkTotalSelectivityHistogram.Observe(float64(outBlocks.Len()-1) / totalBlocks)
+			v2.TxnRangesFastPathBlkTotalSelectivityHistogram.Observe(float64(len(*outBlocks)-1) / totalBlocks)
 		}
 	}()
 
@@ -1172,7 +1172,7 @@ func ExecuteBlockFilterInProgress(
 					}
 				}
 
-				outBlocks.AppendBlockInfo(blk)
+				*outBlocks = append(*outBlocks, &blk)
 			}
 			return
 		},

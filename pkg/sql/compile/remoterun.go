@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -187,11 +188,10 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 		p.Qry = s.Plan
 	}
 	p.Node = &pipeline.NodeInfo{
-		Id:         s.NodeInfo.Id,
-		Addr:       s.NodeInfo.Addr,
-		Mcpu:       int32(s.NodeInfo.Mcpu),
-		Payload:    string(s.NodeInfo.Data),
-		Tombstones: string(s.NodeInfo.Tombstone),
+		Id:      s.NodeInfo.Id,
+		Addr:    s.NodeInfo.Addr,
+		Mcpu:    int32(s.NodeInfo.Mcpu),
+		Payload: string(s.NodeInfo.Data.MarshalToBytes()),
 		Type: objectio.EncodeInfoHeader(objectio.InfoHeader{
 			Type:    objectio.BlockInfoType,
 			Version: objectio.V1},
@@ -354,8 +354,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		s.NodeInfo.Id = p.Node.Id
 		s.NodeInfo.Addr = p.Node.Addr
 		s.NodeInfo.Mcpu = int(p.Node.Mcpu)
-		s.NodeInfo.Data = []byte(p.Node.Payload)
-		s.NodeInfo.Tombstone = []byte(p.Node.Tombstones)
+		s.NodeInfo.Data = disttae.UnmarshalRelationData([]byte(p.Node.Payload))
 		s.NodeInfo.Header = objectio.DecodeInfoHeader(p.Node.Type)
 	}
 	s.Proc = process.NewFromProc(proc, proc.Ctx, int(p.ChildrenCount))

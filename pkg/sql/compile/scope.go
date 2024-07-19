@@ -554,7 +554,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		maxProvidedCpuNumber = 1
 	}
 
-	readers, scanUsedCpuNumber, err := s.getReaders(c, maxProvidedCpuNumber)
+	readers, scanUsedCpuNumber, err := s.buildReaders(c, maxProvidedCpuNumber)
 	if err != nil {
 		return nil, err
 	}
@@ -693,11 +693,11 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 			newExprList = append(newExprList, s.DataSource.node.BlockFilterList...)
 		}
 
-		ranges, _, err := c.expandRangesInProgress(s.DataSource.node, s.DataSource.Rel, newExprList)
+		relData, err := c.expandRangesInProgress(s.DataSource.node, s.DataSource.Rel, newExprList)
 		if err != nil {
 			return err
 		}
-		s.NodeInfo.Data = append(s.NodeInfo.Data, ranges.GetAllBytes()...)
+		s.NodeInfo.Data = relData
 		s.NodeInfo.NeedExpandRanges = false
 
 	} else if len(inExprList) > 0 {
@@ -1172,7 +1172,7 @@ func (s *Scope) replace(c *Compile) error {
 	return nil
 }
 
-func (s *Scope) getReadersInProgress(c *Compile, maxProvidedCpuNumber int) (readers []engine.Reader, scanUsedCpuNumber int, err error) {
+func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []engine.Reader, scanUsedCpuNumber int, err error) {
 	// receive runtime filter and optimized the datasource.
 	if err = s.handleRuntimeFilter(c); err != nil {
 		return
@@ -1192,12 +1192,18 @@ func (s *Scope) getReadersInProgress(c *Compile, maxProvidedCpuNumber int) (read
 		}
 
 		// determined how many cpus we should use.
-		blkSlice := objectio.BlockInfoSlice(s.NodeInfo.Data)
+		blkSlice := objectio.BlockInfoSliceInProgress(s.NodeInfo.Data)
 		scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, blkSlice.Len())
 
 		readers, err = c.e.NewBlockReader(
-			ctx, scanUsedCpuNumber,
-			s.DataSource.Timestamp, s.DataSource.FilterExpr, nil, s.NodeInfo.Data, s.DataSource.TableDef, c.proc)
+			ctx,
+			scanUsedCpuNumber,
+			s.DataSource.Timestamp,
+			s.DataSource.FilterExpr,
+			nil,
+			s.NodeInfo.Data,
+			s.DataSource.TableDef,
+			c.proc)
 		if err != nil {
 			return
 		}
@@ -1218,7 +1224,8 @@ func (s *Scope) getReadersInProgress(c *Compile, maxProvidedCpuNumber int) (read
 			scanUsedCpuNumber = 1
 		}
 
-		readers, err = s.DataSource.Rel.NewReader(c.proc.Ctx,
+		readers, err = s.DataSource.Rel.NewReader(
+			c.proc.Ctx,
 			scanUsedCpuNumber,
 			s.DataSource.FilterExpr,
 			s.NodeInfo.Data,

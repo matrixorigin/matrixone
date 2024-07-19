@@ -40,44 +40,165 @@ const (
 	End
 )
 
-type Tombstone interface {
-	HasTomstones(bid types.Blockid) bool
-	ApplyTombstones(rows []types.Rowid) ([]int64, error)
-	MarshalToBytes() []byte
-	//TODO::remove it
-	SetPartition(num int)
+type tombstoneDataV1 struct {
+	typ engine.TombstoneType
+	//tombstones
+	inMemTombstones []types.Rowid
+	deltaLocs       []objectio.Location
 }
 
-func UnmarshTomstones(data []byte) Tombstone {
-
-	return nil
+func buildTombstoneV1() *tombstoneDataV1 {
+	return &tombstoneDataV1{
+		typ: engine.TombstoneV1,
+	}
 }
 
-type TableTombstones struct {
-	//committed and uncommitted
-	inMem []types.Rowid
-	//committed and uncommitted.
-	persisted map[types.Blockid]objectio.Location
-	partNum   int
-}
-
-func (tblTom *TableTombstones) HasTomstones(bid types.Blockid) bool {
+func (tomV1 *tombstoneDataV1) HasTombstones(bid types.Blockid) bool {
 	return true
 }
 
-func (tblTom *TableTombstones) ApplyTombstones(rows []types.Rowid) ([]int64, error) {
+func (tomV1 *tombstoneDataV1) ApplyTombstones(rows []types.Rowid) ([]int64, error) {
 	return nil, nil
 }
 
-func (tblTom *TableTombstones) MarshalToBytes() []byte {
-	if len(tblTom.inMem) == 0 && len(tblTom.persisted) == 0 {
-		return nil
+func (tomV1 *tombstoneDataV1) Type() engine.TombstoneType {
+	return tomV1.typ
+}
+
+type tombstoneDataV2 struct {
+	typ engine.TombstoneType
+	//tombstones
+	inMemTombstones []types.Rowid
+	tombstoneObjs   []objectio.ObjectStats
+}
+
+func buildTombstoneV2() *tombstoneDataV2 {
+	return &tombstoneDataV2{
+		typ: engine.TombstoneV2,
 	}
+}
+
+func (tomV2 *tombstoneDataV2) HasTombstones(bid types.Blockid) bool {
+	return true
+}
+
+func (tomV2 *tombstoneDataV2) ApplyTombstones(rows []types.Rowid) ([]int64, error) {
+	return nil, nil
+}
+
+func (tomV2 *tombstoneDataV2) Type() engine.TombstoneType {
+	return tomV2.typ
+}
+
+type RelDataType uint8
+
+const (
+	RelDataV0 RelDataType = iota
+	RelDataV1
+	RelDataV2
+)
+
+type relationDataV0 struct {
+	typ     uint8
+	blkList []*objectio.BlockInfo
+}
+
+type relationDataV1 struct {
+	typ RelDataType
+	//blkList[0] is a empty block info
+	blkList []*objectio.BlockInfoInProgress
+
+	//tombstones
+	//inMemTombstones []types.Rowid
+	//deltaLocs []objectio.Location
+	tombstoneTyp uint8
+	tombstones   engine.Tombstoner
+}
+
+func buildRelationDataV1(blkList []*objectio.BlockInfoInProgress) *relationDataV1 {
+	return &relationDataV1{
+		typ:     RelDataV1,
+		blkList: blkList,
+		//tombstoneTyp: 1,
+	}
+}
+
+func (rd1 *relationDataV1) MarshalToBytes() []byte {
 	return nil
 }
 
-func (tblTom *TableTombstones) SetPartition(num int) {
-	tblTom.partNum = num
+func (rd1 *relationDataV1) AttachTombstones(tombstones engine.Tombstoner) error {
+	rd1.tombstones = tombstones
+	//if tombstones.Type() != rd1.tombstoneTyp {
+	//	return moerr.NewInternalErrorNoCtx("tombstone type mismatch")
+	//}
+	return nil
+}
+
+func (rd1 *relationDataV1) ForeachDataBlk(f func(blk *objectio.BlockInfoInProgress)) {
+	for i := 1; i < len(rd1.blkList); i++ {
+		f(rd1.blkList[i])
+	}
+}
+
+func (rd1 *relationDataV1) GetDataBlk(i int) *objectio.BlockInfoInProgress {
+	return rd1.blkList[i]
+}
+
+func (rd1 *relationDataV1) AppendDataBlk(blk *objectio.BlockInfoInProgress) {
+	rd1.blkList = append(rd1.blkList, blk)
+}
+
+func (rd1 *relationDataV1) BuildEmptyRelData() engine.RelData {
+	return &relationDataV1{
+		typ: rd1.typ,
+	}
+}
+
+func (rd1 *relationDataV1) BlkCnt() int {
+	return len(rd1.blkList)
+}
+
+//type relationDataV2 struct {
+//	typ RelDataType
+//	blkList objectio.BlockInfoInProgress
+//
+//	//tombstones
+//	//inMemTombstones []types.Rowid
+//	//tombstoneObjs   []objectio.ObjectStats
+//
+//	tombstoneTyp uint8
+//	tombstones  Tombstoner
+//}
+//
+//func buildRelationDataV2(blkList objectio.BlockInfoInProgress) *relationDataV2 {
+//	return &relationDataV2{
+//		blkList: blkList,
+//		typ: RelDataV2,
+//		//tombstoneTyp: 2,
+//	}
+//}
+//
+//func (rd2 *relationDataV2) MarshalToBytes() []byte {
+//	return nil
+//}
+//
+//func (rd2 *relationDataV2) AttachTombstones(tombstones Tombstoner) error {
+//	rd2.tombstones = tombstones
+//	//if tombstones.Type() != rd2.tombstoneTyp {
+//	//	return moerr.NewInternalErrorNoCtx("tombstone type mismatch")
+//	//}
+//	return nil
+//}
+
+func UnmarshalRelationData(data []byte) engine.RelData {
+	//typ := int(data[0])
+	//switch typ {
+	//case :
+
+	//}
+	return nil
+
 }
 
 type DataSource interface {
@@ -92,7 +213,7 @@ type DataSource interface {
 }
 
 type RemoteDataSource struct {
-	tombstone Tombstone
+	tombstone engine.Tombstoner
 	ranges    []*objectio.BlockInfoInProgress
 }
 
@@ -103,7 +224,7 @@ func NewRemoteDataSource(
 	fs fileservice.FileService,
 	databaseId, tableId uint64,
 	ranges []*objectio.BlockInfoInProgress,
-	tombstone Tombstone,
+	tombstone engine.Tombstoner,
 ) (source *RemoteDataSource, err error) {
 	return &RemoteDataSource{
 		tombstone: tombstone,

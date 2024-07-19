@@ -603,18 +603,17 @@ func (tbl *txnTable) resetSnapshot() {
 
 // CollectTombstones collects in memory tombstones and tombstone objects for the given blocks.
 // If len(blkIDs) == 0, then collect the all the tombstones of table.
-func (tbl *txnTable) CollectTombstones(ctx context.Context, txnOffset int, blkIDs []types.Blockid) ([]byte, error) {
-	if blkIDs == nil || len(blkIDs) == 0 {
-		//TODO::
-		tombstone := &TableTombstones{}
-		return tombstone.MarshalToBytes(), nil
-	}
-	panic("implement me")
+func (tbl *txnTable) CollectTombstones(ctx context.Context, txnOffset int) ([]byte, error) {
+	//TODO::
+	return nil, nil
 }
 
-func (tbl *txnTable) RangesInProgress(ctx context.Context, exprs []*plan.Expr, txnOffset int) (ranges engine.Ranges, err error) {
+func (tbl *txnTable) RangesInProgress(ctx context.Context, exprs []*plan.Expr, txnOffset int) (data engine.RelData, err error) {
 	start := time.Now()
 	seq := tbl.db.op.NextSequence()
+
+	var blocks []*objectio.BlockInfoInProgress
+
 	trace.GetService().AddTxnDurationAction(
 		tbl.db.op,
 		client.RangesEvent,
@@ -630,7 +629,7 @@ func (tbl *txnTable) RangesInProgress(ctx context.Context, exprs []*plan.Expr, t
 			step, slowStep uint64
 		)
 
-		rangesLen := ranges.Len()
+		rangesLen := len(blocks)
 		if rangesLen < 5 {
 			step = uint64(1)
 		} else if rangesLen < 10 {
@@ -659,7 +658,7 @@ func (tbl *txnTable) RangesInProgress(ctx context.Context, exprs []*plan.Expr, t
 				"TXN-FILTER-RANGE-LOG",
 				zap.String("name", tbl.tableDef.Name),
 				zap.String("exprs", plan2.FormatExprs(exprs)),
-				zap.Int("ranges-len", ranges.Len()),
+				zap.Int("ranges-len", len(blocks)),
 				zap.Uint64("tbl-id", tbl.tableId),
 				zap.String("txn", tbl.db.op.Txn().DebugString()),
 			)
@@ -670,7 +669,7 @@ func (tbl *txnTable) RangesInProgress(ctx context.Context, exprs []*plan.Expr, t
 			client.RangesEvent,
 			seq,
 			tbl.tableId,
-			int64(ranges.Len()),
+			int64(len(blocks)),
 			"blocks",
 			err)
 
@@ -688,16 +687,14 @@ func (tbl *txnTable) RangesInProgress(ctx context.Context, exprs []*plan.Expr, t
 		}
 	}()
 
-	var blocks objectio.BlockInfoSliceInProgress
-	ranges = &blocks
-
 	// get the table's snapshot
 	var part *logtailreplay.PartitionState
 	if part, err = tbl.getPartitionState(ctx); err != nil {
 		return
 	}
 
-	blocks.AppendBlockInfo(objectio.EmptyBlockInfoInProgress)
+	//blocks.AppendBlockInfo(objectio.EmptyBlockInfoInProgress)
+	blocks = append(blocks, &objectio.EmptyBlockInfoInProgress)
 
 	if err = tbl.rangesOnePartInProgress(
 		ctx,
@@ -710,7 +707,7 @@ func (tbl *txnTable) RangesInProgress(ctx context.Context, exprs []*plan.Expr, t
 	); err != nil {
 		return
 	}
-	return
+	return buildRelationDataV1(blocks), nil
 }
 
 // Ranges returns all unmodified blocks from the table.
@@ -824,7 +821,7 @@ func (tbl *txnTable) rangesOnePartInProgress(
 	state *logtailreplay.PartitionState, // snapshot state of this transaction
 	tableDef *plan.TableDef, // table definition (schema)
 	exprs []*plan.Expr, // filter expression
-	outBlocks *objectio.BlockInfoSliceInProgress, // output marshaled block list after filtering
+	outBlocks *[]*objectio.BlockInfoInProgress, // output marshaled block list after filtering
 	proc *process.Process, // process of this transaction
 	txnOffset int,
 ) (err error) {
@@ -970,8 +967,7 @@ func (tbl *txnTable) rangesOnePartInProgress(
 						blk.CommitTs = commitTs
 					}
 				}
-
-				outBlocks.AppendBlockInfo(blk)
+				*outBlocks = append(*outBlocks, &blk)
 
 				return true
 
@@ -986,7 +982,7 @@ func (tbl *txnTable) rangesOnePartInProgress(
 		return
 	}
 
-	bhit, btotal := outBlocks.Len()-1, int(s3BlkCnt)
+	bhit, btotal := len(*outBlocks)-1, int(s3BlkCnt)
 	v2.TaskSelBlockTotal.Add(float64(btotal))
 	v2.TaskSelBlockHit.Add(float64(btotal - bhit))
 	blockio.RecordBlockSelectivity(bhit, btotal)

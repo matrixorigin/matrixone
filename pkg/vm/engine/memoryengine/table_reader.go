@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -226,22 +225,12 @@ func (t *Table) Ranges(_ context.Context, _ []*plan.Expr, _ int) (engine.Ranges,
 	return &shards, nil
 }
 
-func (tbl *Table) CollectTombstones(ctx context.Context, txnOffset int, blkIDs []types.Blockid) ([]byte, error) {
+func (tbl *Table) CollectTombstones(ctx context.Context, txnOffset int) ([]byte, error) {
 	panic("implement me")
 }
 
-func (t *Table) RangesInProgress(_ context.Context, _ []*plan.Expr, _ int) (engine.Ranges, error) {
-	// return encoded shard ids
-	nodes := getTNServices(t.engine.cluster)
-	shards := make(ShardIdSlice, 0, len(nodes)*8)
-	for _, node := range nodes {
-		for _, shard := range node.Shards {
-			id := make([]byte, 8)
-			binary.LittleEndian.PutUint64(id, shard.ShardID)
-			shards = append(shards, id...)
-		}
-	}
-	return &shards, nil
+func (t *Table) RangesInProgress(_ context.Context, _ []*plan.Expr, _ int) (engine.RelData, error) {
+	panic("implement me")
 }
 
 type ShardIdSlice []byte

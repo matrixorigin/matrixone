@@ -3818,19 +3818,14 @@ func (c *Compile) determinExpandRanges(n *plan.Node) bool {
 	return false
 }
 
-// TODO::expandRangesInProgress support partition table.
 func (c *Compile) expandRangesInProgress(
 	n *plan.Node,
 	rel engine.Relation,
-	blockFilterList []*plan.Expr) (engine.Ranges, []byte, error) {
+	blockFilterList []*plan.Expr) (engine.RelData, error) {
 	var err error
 	var db engine.Database
-	var ranges engine.Ranges
+	var relData engine.RelData
 	var txnOp client.TxnOperator
-
-	if n.TableDef.Partition != nil {
-		return nil, nil, moerr.NewInternalErrorNoCtx("expandRangesInProgress not support partition table")
-	}
 
 	//-----------------------------------------------------------------------------------------------------
 	ctx := c.proc.Ctx
@@ -3864,13 +3859,13 @@ func (c *Compile) expandRangesInProgress(
 
 	db, err = c.e.Database(ctx, n.ObjRef.SchemaName, txnOp)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	ranges, err = rel.RangesInProgress(ctx, blockFilterList, c.TxnOffset)
+	relData, err = rel.RangesInProgress(ctx, blockFilterList, c.TxnOffset)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	tombstones, err := rel.CollectTombstones(ctx, c.TxnOffset, nil)
+	//tombstones, err := rel.CollectTombstones(ctx, c.TxnOffset)
 
 	if n.TableDef.Partition != nil {
 		if n.PartitionPrune != nil && n.PartitionPrune.IsPruned {
@@ -3878,26 +3873,23 @@ func (c *Compile) expandRangesInProgress(
 				partTableName := partitionItem.PartitionTableName
 				subrelation, err := db.Relation(ctx, partTableName, c.proc)
 				if err != nil {
-					return nil, nil, err
+					return nil, err
 				}
-				subranges, err := subrelation.RangesInProgress(ctx, n.BlockFilterList, c.TxnOffset)
+				subRelData, err := subrelation.RangesInProgress(ctx, n.BlockFilterList, c.TxnOffset)
 				if err != nil {
-					return nil, nil, err
+					return nil, err
 				}
-				//subTombstones, err := subrelation.CollectTombstones(ctx, c.TxnOffset, nil)
-				//if err != nil {
-				//	return nil, nil, err
-				//}
+				subRelData.ForeachDataBlk(func(blk *objectio.BlockInfoInProgress) {
+					blk.PartitionNum = i
+					relData.AppendDataBlk(blk)
+				})
 				// add partition number into objectio.BlockInfo.
-				blkSlice := subranges.(*objectio.BlockInfoSliceInProgress)
-				for j := 1; j < subranges.Len(); j++ {
-					blkInfo := blkSlice.Get(j)
-					blkInfo.PartitionNum = i
-					ranges.Append(blkSlice.GetBytes(j))
-				}
-				//subTombstoner := disttae.UnmarshTomstones(subTombstones)
-				//subTombstoner.SetPartition(i)
-				//tombstones = append(tombstones, subTombstoner.MarshalToBytes()...)
+				//blkSlice := subranges.(*objectio.BlockInfoSliceInProgress)
+				//for j := 1; j < subranges.Len(); j++ {
+				//	blkInfo := blkSlice.Get(j)
+				//	blkInfo.PartitionNum = i
+				//	ranges.Append(blkSlice.GetBytes(j))
+				//}
 			}
 		} else {
 			partitionInfo := n.TableDef.Partition
@@ -3907,23 +3899,20 @@ func (c *Compile) expandRangesInProgress(
 				partTableName := partitionTableNames[i]
 				subrelation, err := db.Relation(ctx, partTableName, c.proc)
 				if err != nil {
-					return nil, nil, err
+					return nil, err
 				}
-				subranges, err := subrelation.RangesInProgress(ctx, n.BlockFilterList, c.TxnOffset)
+				subRelData, err := subrelation.RangesInProgress(ctx, n.BlockFilterList, c.TxnOffset)
 				if err != nil {
-					return nil, nil, err
+					return nil, err
 				}
-				// add partition number into objectio.BlockInfo.
-				blkSlice := subranges.(*objectio.BlockInfoSliceInProgress)
-				for j := 1; j < subranges.Len(); j++ {
-					blkInfo := blkSlice.Get(j)
-					blkInfo.PartitionNum = i
-					ranges.Append(blkSlice.GetBytes(j))
-				}
+				subRelData.ForeachDataBlk(func(blk *objectio.BlockInfoInProgress) {
+					blk.PartitionNum = i
+					relData.AppendDataBlk(blk)
+				})
 			}
 		}
 	}
-	return ranges, tombstones, nil
+	return relData, nil
 
 }
 
@@ -4024,7 +4013,8 @@ func (c *Compile) generateNodesInProgress(n *plan.Node) (engine.Nodes, []any, []
 	var err error
 	var db engine.Database
 	var rel engine.Relation
-	var ranges engine.Ranges
+	//var ranges engine.Ranges
+	var relData engine.RelData
 	var tombstones []byte
 	var partialResults []any
 	var partialResultTypes []types.T
@@ -4089,7 +4079,7 @@ func (c *Compile) generateNodesInProgress(n *plan.Node) (engine.Nodes, []any, []
 				},
 			}
 		}
-		ranges, tombstones, err = c.expandRangesInProgress(n, rel, n.BlockFilterList)
+		relData, err = c.expandRangesInProgress(n, rel, n.BlockFilterList)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -4104,11 +4094,11 @@ func (c *Compile) generateNodesInProgress(n *plan.Node) (engine.Nodes, []any, []
 	}
 	// some log for finding a bug.
 	tblId := rel.GetTableID(ctx)
-	expectedLen := ranges.Len()
+	expectedLen := relData.BlkCnt()
 	c.proc.Debugf(ctx, "cn generateNodes, tbl %d ranges is %d", tblId, expectedLen)
 
 	// if len(ranges) == 0 indicates that it's a temporary table.
-	if ranges.Len() == 0 && n.TableDef.TableType != catalog.SystemOrdinaryRel {
+	if relData.BlkCnt() == 0 && n.TableDef.TableType != catalog.SystemOrdinaryRel {
 		nodes = make(engine.Nodes, len(c.cnList))
 		for i, node := range c.cnList {
 			nodes[i] = engine.Node{
@@ -4124,8 +4114,8 @@ func (c *Compile) generateNodesInProgress(n *plan.Node) (engine.Nodes, []any, []
 	// for multi cn in launch mode, put all payloads in current CN, maybe delete this in the future
 	// for an ordered scan, put all paylonds in current CN
 	// or sometimes force on one CN
-	if isLaunchMode(c.cnList) || len(n.OrderBy) > 0 || ranges.Len() < plan2.BlockThresholdForOneCN || n.Stats.ForceOneCN {
-		return putBlocksInCurrentCN(c, ranges.GetAllBytes(), n), partialResults, partialResultTypes, nil
+	if isLaunchMode(c.cnList) || len(n.OrderBy) > 0 || relData.BlkCnt() < plan2.BlockThresholdForOneCN || n.Stats.ForceOneCN {
+		return putBlocksInCurrentCN(c, relData, n), partialResults, partialResultTypes, nil
 	}
 	// disttae engine
 	if engineType == engine.Disttae {
@@ -4180,7 +4170,7 @@ func putBlocksInAverage(c *Compile, ranges engine.Ranges, n *plan.Node) engine.N
 	return nodes
 }
 
-func shuffleBlocksToMultiCN(c *Compile, ranges *objectio.BlockInfoSliceInProgress, tombstone []byte, n *plan.Node) (engine.Nodes, error) {
+func shuffleBlocksToMultiCN(c *Compile, relData engine.RelData, tombstone []byte, n *plan.Node) (engine.Nodes, error) {
 	var nodes engine.Nodes
 	// add current CN
 	nodes = append(nodes, engine.Node{
@@ -4188,15 +4178,20 @@ func shuffleBlocksToMultiCN(c *Compile, ranges *objectio.BlockInfoSliceInProgres
 		Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
 	})
 	// add memory table block
-	nodes[0].Data = append(nodes[0].Data, ranges.GetBytes(0)...)
-	*ranges = ranges.Slice(1, ranges.Len())
+	//nodes[0].Data = append(nodes[0].Data, ranges.GetBytes(0)...)
+	nodes[0].Data = relData.BuildEmptyRelData()
+	nodes[0].Data.AppendDataBlk(&objectio.EmptyBlockInfoInProgress)
+	//*ranges = ranges.Slice(1, ranges.Len())
 	// only memory table block
-	if ranges.Len() == 0 {
+	if nodes[0].Data.BlkCnt() == 1 {
 		return nodes, nil
 	}
 	// only one cn
 	if len(c.cnList) == 1 {
-		nodes[0].Data = append(nodes[0].Data, ranges.GetAllBytes()...)
+		//nodes[0].Data = append(nodes[0].Data, ranges.GetAllBytes()...)
+		relData.ForeachDataBlk(func(blk *objectio.BlockInfoInProgress) {
+			nodes[0].Data.AppendDataBlk(blk)
+		})
 		return nodes, nil
 	}
 
@@ -4217,6 +4212,7 @@ func shuffleBlocksToMultiCN(c *Compile, ranges *objectio.BlockInfoSliceInProgres
 				Id:   c.cnList[i].Id,
 				Addr: c.cnList[i].Addr,
 				Mcpu: c.generateCPUNumber(c.cnList[i].Mcpu, int(n.Stats.BlockNum)),
+				Data: relData.BuildEmptyRelData(),
 			})
 		}
 	}
@@ -4224,7 +4220,7 @@ func shuffleBlocksToMultiCN(c *Compile, ranges *objectio.BlockInfoSliceInProgres
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Addr < nodes[j].Addr })
 
 	if n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle && n.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Range {
-		err := shuffleBlocksByRange(c, *ranges, n, nodes)
+		err := shuffleBlocksByRange(c, relData, n, nodes)
 		if err != nil {
 			return nil, err
 		}
@@ -4244,10 +4240,6 @@ func shuffleBlocksToMultiCN(c *Compile, ranges *objectio.BlockInfoSliceInProgres
 			minWorkLoad = len(nodes[i].Data) / objectio.BlockInfoSize
 		}
 		if len(nodes[i].Data) > 0 {
-			//Put tombstone into remote node.
-			if i != 0 {
-				nodes[i].Tombstone = append(nodes[i].Tombstone, tombstone...)
-			}
 			newNodes = append(newNodes, nodes[i])
 		}
 	}
@@ -4272,7 +4264,7 @@ func shuffleBlocksByHash(c *Compile, ranges objectio.BlockInfoSliceInProgress, n
 	}
 }
 
-func shuffleBlocksByRange(c *Compile, ranges objectio.BlockInfoSliceInProgress, n *plan.Node, nodes engine.Nodes) error {
+func shuffleBlocksByRange(c *Compile, relData engine.RelData, n *plan.Node, nodes engine.Nodes) error {
 	var objDataMeta objectio.ObjectDataMeta
 	var objMeta objectio.ObjectMeta
 
@@ -4321,14 +4313,14 @@ func shuffleBlocksByRange(c *Compile, ranges objectio.BlockInfoSliceInProgress, 
 	return nil
 }
 
-func putBlocksInCurrentCN(c *Compile, ranges []byte, n *plan.Node) engine.Nodes {
+func putBlocksInCurrentCN(c *Compile, relData engine.RelData, n *plan.Node) engine.Nodes {
 	var nodes engine.Nodes
 	// add current CN
 	nodes = append(nodes, engine.Node{
 		Addr: c.addr,
 		Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
 	})
-	nodes[0].Data = append(nodes[0].Data, ranges...)
+	nodes[0].Data = relData
 	return nodes
 }
 
