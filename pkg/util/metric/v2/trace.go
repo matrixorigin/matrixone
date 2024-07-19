@@ -18,6 +18,19 @@ import "github.com/prometheus/client_golang/prometheus"
 
 // trace.go observe motrace, mometric those packages' behavior
 
+func initTraceMetrics() {
+	registry.MustRegister(traceCollectorDurationHistogram)
+	registry.MustRegister(traceCollectorDiscardCounter)
+	registry.MustRegister(traceCollectorCollectHungCounter)
+	registry.MustRegister(traceCollectorDiscardItemCounter)
+	registry.MustRegister(traceCollectorStatusCounter)
+	registry.MustRegister(traceNegativeCUCounter)
+	registry.MustRegister(traceETLMergeCounter)
+	registry.MustRegister(traceMOLoggerExportDataHistogram)
+	registry.MustRegister(traceCheckStorageUsageCounter)
+	registry.MustRegister(traceMOLoggerErrorCounter)
+}
+
 var (
 	traceCollectorDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -104,6 +117,14 @@ var (
 	TraceMOLoggerExportSqlHistogram = traceMOLoggerExportDataHistogram.WithLabelValues("sql")
 	TraceMOLoggerExportCsvHistogram = traceMOLoggerExportDataHistogram.WithLabelValues("csv")
 
+	traceCheckStorageUsageCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "trace",
+			Name:      "check_storage_usage_total",
+			Help:      "Count of cron_task MetricStorageUsage.",
+		}, []string{"type"})
+
 	traceMOLoggerErrorCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "mo",
@@ -123,6 +144,16 @@ func GetTraceNegativeCUCounter(typ string) prometheus.Counter {
 // GetTraceCollectorDiscardCounter count wait-generate discard.
 func GetTraceCollectorDiscardCounter(typ string) prometheus.Counter {
 	return traceCollectorDiscardCounter.WithLabelValues(typ)
+}
+
+func GetTraceCheckStorageUsageAllCounter() prometheus.Counter {
+	return traceCheckStorageUsageCounter.WithLabelValues("all")
+}
+func GetTraceCheckStorageUsageNewCounter() prometheus.Counter {
+	return traceCheckStorageUsageCounter.WithLabelValues("new")
+}
+func GetTraceCheckStorageUsageNewIncCounter() prometheus.Counter {
+	return traceCheckStorageUsageCounter.WithLabelValues("inc")
 }
 
 func GetTraceCollectorDiscardItemCounter(typ string) prometheus.Counter {
