@@ -74,6 +74,15 @@ func NewRowid(blkid *Blockid, offset uint32) *Rowid {
 	return &rowid
 }
 
+func NewRowIDWithObjectIDAndBlockNum(segid *Objectid, blknum uint16, offset uint32) *Rowid {
+	var rowid Rowid
+	size := ObjectidSize
+	copy(rowid[:size], segid[:])
+	copy(rowid[size:size+2], EncodeUint16(&blknum))
+	copy(rowid[size+2:size+6], EncodeUint32(&offset))
+	return &rowid
+}
+
 func CompareRowidRowidAligned(a, b Rowid) int {
 	return bytes.Compare(a[:], b[:])
 }

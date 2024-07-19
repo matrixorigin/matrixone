@@ -107,16 +107,14 @@ func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) {
 			if len(m) == 0 {
 				continue
 			}
-			tblEntry := obj.GetTable()
-			isTransient := !tblEntry.GetLastestSchema().HasPK()
+			isTransient := !obj.GetTable().GetLastestSchema().HasPK()
 			id := obj.AsCommonID()
 			id.SetBlockOffset(uint16(j))
 			page := model.NewTransferHashPage(id, time.Now(), isTransient, entry.rt.LocalFs.Service, model.GetTTL(), model.GetDiskTTL())
 			mapping := make(map[uint32][]byte, len(m))
 			for srcRow, dst := range m {
 				objID := entry.createdObjs[dst.ObjIdx].ID()
-				blkID := objectio.NewBlockidWithObjectID(objID, uint16(dst.BlkIdx))
-				rowID := objectio.NewRowid(blkID, uint32(dst.RowIdx))
+				rowID := objectio.NewRowIDWithObjectIDAndBlockNum(objID, uint16(dst.BlkIdx), uint32(dst.RowIdx))
 				mapping[uint32(srcRow)] = rowID[:]
 			}
 			page.Train(mapping)
