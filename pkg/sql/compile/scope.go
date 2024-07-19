@@ -1135,11 +1135,7 @@ func receiveMsgAndForward(proc *process.Process, sender *messageSenderOnClient, 
 			return nil
 		}
 
-		if forwardCh == nil {
-			// used for delete.
-			// I don't know what is that.
-			proc.SetInputBatch(bat)
-		} else {
+		if forwardCh != nil {
 			msg := &process.RegisterMessage{Batch: bat}
 			select {
 			case <-proc.Ctx.Done():

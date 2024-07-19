@@ -35,7 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
+	gc "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -240,12 +240,12 @@ func (e *TestEngine) DeleteAll(skipConflict bool) error {
 			view, err := blk.GetColumnDataByName(context.Background(), i, catalog.PhyAddrColumnName, common.DefaultAllocator)
 			assert.NoError(e.T, err)
 			defer view.Close()
-			view.ApplyDeletes()
+			view.Compact()
 			pkView, err := blk.GetColumnDataByName(context.Background(), i, pkName, common.DefaultAllocator)
 			assert.NoError(e.T, err)
 			defer pkView.Close()
-			pkView.ApplyDeletes()
-			err = rel.DeleteByPhyAddrKeys(view.GetData(), pkView.GetData())
+			pkView.Compact()
+			err = rel.DeleteByPhyAddrKeys(view.Vecs[0], pkView.Vecs[0])
 			assert.NoError(e.T, err)
 		}
 	}
@@ -758,8 +758,8 @@ func (e *TestEngine) CheckCollectDeleteInRange() {
 		deleteRowIDs := deleteBat.GetVectorByName(catalog.AttrRowID)
 		deletePKs := deleteBat.GetVectorByName(catalog.AttrPKVal)
 		blkCnt := obj.BlkCnt()
-		pkVectors := make([]*containers.ColumnView, blkCnt)
-		rowIDVectors := make([]*containers.ColumnView, blkCnt)
+		pkVectors := make([]*containers.Batch, blkCnt)
+		rowIDVectors := make([]*containers.Batch, blkCnt)
 		for i := uint16(0); i < uint16(blkCnt); i++ {
 			pkVectors[i], err = meta.GetObjectData().GetColumnDataById(context.Background(), txn, e.schema, i, pkDef.Idx, common.DefaultAllocator)
 			assert.NoError(e.T, err)
@@ -770,9 +770,9 @@ func (e *TestEngine) CheckCollectDeleteInRange() {
 			rowID := deleteRowIDs.Get(i).(types.Rowid)
 			offset := rowID.GetRowOffset()
 			_, blkOffset := rowID.BorrowBlockID().Offsets()
-			appendRowID := rowIDVectors[blkOffset].GetData().Get(int(offset)).(types.Rowid)
-			e.T.Logf("delete rowID %v pk %v, append rowID %v pk %v", rowID.String(), deletePKs.Get(i), appendRowID.String(), pkVectors[blkOffset].GetData().Get(int(offset)))
-			assert.Equal(e.T, pkVectors[blkOffset].GetData().Get(int(offset)), deletePKs.Get(i))
+			appendRowID := rowIDVectors[blkOffset].Vecs[0].Get(int(offset)).(types.Rowid)
+			e.T.Logf("delete rowID %v pk %v, append rowID %v pk %v", rowID.String(), deletePKs.Get(i), appendRowID.String(), pkVectors[blkOffset].Vecs[0].Get(int(offset)))
+			assert.Equal(e.T, pkVectors[blkOffset].Vecs[0].Get(int(offset)), deletePKs.Get(i))
 		}
 		return nil
 	})
