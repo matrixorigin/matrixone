@@ -38,7 +38,7 @@ func TestCreateLocalDashboard(t *testing.T) {
 		return
 	}
 
-	c := NewLocalDashboardCreator("http://127.0.0.1:3000", "admin", "admin", localFolderName)
+	c := NewLocalDashboardCreator("http://127.0.0.1", "admin", "admin", localFolderName)
 	require.NoError(t, c.Create())
 }
 
