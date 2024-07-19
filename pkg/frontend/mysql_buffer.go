@@ -255,7 +255,7 @@ func (c *Conn) Read() ([]byte, error) {
 			return nil, err
 		}
 
-		if totalLength != int(MaxPayloadSize) && payloads == nil {
+		if totalLength != int(MaxPayloadSize) && len(payloads) == 0 {
 			signalPayload := make([]byte, totalLength)
 			err = c.ReadBytes(signalPayload, totalLength)
 			if err != nil {
