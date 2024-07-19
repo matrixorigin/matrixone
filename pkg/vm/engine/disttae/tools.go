@@ -847,7 +847,7 @@ func genWriteReqs(ctx context.Context, writes []Entry, op client.TxnOperator) ([
 		if e.tableId == catalog.MO_TABLES_ID && (e.typ == INSERT || e.typ == INSERT_TXN) {
 			logutil.Infof("precommit: create table: %s-%v",
 				op.Txn().DebugString(),
-				vector.MustStrCol(e.bat.GetVector(1+catalog.MO_TABLES_REL_NAME_IDX)))
+				vector.InefficientMustStrCol(e.bat.GetVector(1+catalog.MO_TABLES_REL_NAME_IDX)))
 		}
 		if v != nil {
 			e.pkChkByTN = v.(int8)
