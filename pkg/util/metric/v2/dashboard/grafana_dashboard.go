@@ -69,13 +69,15 @@ func NewLocalDashboardCreator(
 	username,
 	password,
 	folderName string) *DashboardCreator {
+	datasourceVariableName := "datasource"
 	dc := &DashboardCreator{
-		cli: grabana.NewClient(http.DefaultClient, host, grabana.WithBasicAuth(username, password)),
+		cli:        grabana.NewClient(http.DefaultClient, host, grabana.WithBasicAuth(username, password)),
+		dataSource: fmt.Sprintf("${%s}", datasourceVariableName),
 	}
 	dc.extraFilterFunc = dc.getLocalFilters
 	dc.by = "instance"
 	dc.folderName = folderName
-	dc.initLocalFilterOptions()
+	dc.initLocalFilterOptions(datasourceVariableName)
 	return dc
 }
 
@@ -455,16 +457,16 @@ func (c *DashboardCreator) getLocalFilters() string {
 	return ""
 }
 
-func (c *DashboardCreator) initLocalFilterOptions() {
+func (c *DashboardCreator) initLocalFilterOptions(datasourceVariableName string) {
 	c.filterOptions = append(c.filterOptions,
 		dashboard.VariableAsDatasource(
-			"datasource",
+			datasourceVariableName,
 			datasource.Type(Prometheus),
-			datasource.Label("datasource"),
+			datasource.Label(datasourceVariableName),
 		),
 		dashboard.VariableAsQuery(
 			"instance",
-			query.DataSource("${datasource}"),
+			query.DataSource(fmt.Sprintf("${%s}", datasourceVariableName)),
 			query.DefaultAll(),
 			query.IncludeAll(),
 			query.Label("instance"),
