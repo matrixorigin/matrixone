@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
@@ -79,8 +78,6 @@ type AutoIncrementService interface {
 	Reload(ctx context.Context, tableID uint64) error
 	// Close close the auto increment service
 	Close()
-	// GetLastAllocateTS get last allocate timestamp for columnCache
-	GetLastAllocateTS(ctx context.Context, tableID uint64, colName string) (timestamp.Timestamp, error)
 }
 
 // incrTableCache a cache containing auto-incremented columns of a table, an incrCache may
@@ -120,14 +117,13 @@ type incrTableCache interface {
 	columns() []AutoColumn
 	insertAutoValues(ctx context.Context, tableID uint64, bat *batch.Batch, estimate int64) (uint64, error)
 	currentValue(ctx context.Context, tableID uint64, col string) (uint64, error)
-	getLastAllocateTS(colName string) (timestamp.Timestamp, error)
 	adjust(ctx context.Context, cols []AutoColumn) error
 	close() error
 }
 
 type valueAllocator interface {
-	allocate(ctx context.Context, tableID uint64, col string, count int, txnOp client.TxnOperator) (uint64, uint64, timestamp.Timestamp, error)
-	asyncAllocate(ctx context.Context, tableID uint64, col string, count int, txnOp client.TxnOperator, cb func(uint64, uint64, timestamp.Timestamp, error)) error
+	allocate(ctx context.Context, tableID uint64, col string, count int, txnOp client.TxnOperator) (uint64, uint64, error)
+	asyncAllocate(ctx context.Context, tableID uint64, col string, count int, txnOp client.TxnOperator, cb func(uint64, uint64, error)) error
 	updateMinValue(ctx context.Context, tableID uint64, col string, minValue uint64, txnOp client.TxnOperator) error
 	close()
 }
@@ -139,7 +135,7 @@ type IncrValueStore interface {
 	// Create add metadata records into catalog.AutoIncrTableName.
 	Create(ctx context.Context, tableID uint64, cols []AutoColumn, txnOp client.TxnOperator) error
 	// Allocate allocate new range for auto-increment column.
-	Allocate(ctx context.Context, tableID uint64, col string, count int, txnOp client.TxnOperator) (uint64, uint64, timestamp.Timestamp, error)
+	Allocate(ctx context.Context, tableID uint64, col string, count int, txnOp client.TxnOperator) (uint64, uint64, error)
 	// UpdateMinValue update auto column min value to specified value.
 	UpdateMinValue(ctx context.Context, tableID uint64, col string, minValue uint64, txnOp client.TxnOperator) error
 	// Delete remove metadata records from catalog.AutoIncrTableName.

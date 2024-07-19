@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -98,7 +97,7 @@ func (s *sqlStore) Allocate(
 	colName string,
 	count int,
 	txnOp client.TxnOperator,
-) (uint64, uint64, timestamp.Timestamp, error) {
+) (uint64, uint64, error) {
 	var current, next, step uint64
 	ok := false
 
@@ -213,7 +212,7 @@ func (s *sqlStore) Allocate(
 				continue
 			}
 
-			return 0, 0, timestamp.Timestamp{}, err
+			return 0, 0, err
 		}
 		if ok {
 			break
@@ -221,8 +220,7 @@ func (s *sqlStore) Allocate(
 	}
 
 	from, to := getNextRange(current, next, int(step))
-	commitTs := txnOp.GetOverview().Meta.CommitTS
-	return from, to, commitTs, nil
+	return from, to, nil
 }
 
 func (s *sqlStore) UpdateMinValue(
