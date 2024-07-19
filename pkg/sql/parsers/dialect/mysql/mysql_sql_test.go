@@ -2884,6 +2884,45 @@ var (
 			input:  "explain analyze verbose force execute st",
 			output: "explain (analyze,verbose) execute st",
 		},
+		{
+			input:  "create pitr `pitr1` for cluster range 1 'd'",
+			output: "create pitr pitr1 for cluster range 1  d",
+		},
+		{
+			input:  "create pitr `pitr2` for account acc01 range 1 'd'",
+			output: "create pitr pitr2 for account acc01 range 1  d",
+		},
+		{
+			input:  "create pitr `pitr3` range 1 'h'",
+			output: "create pitr pitr3 for self account range 1  h",
+		},
+		{
+			input:  "create pitr `pitr4` for database db01 range 1 'h'",
+			output: "create pitr pitr4 for database db01 range 1  h",
+		},
+		{
+			input:  "create pitr `pitr5` for database db01 table t01 range 1 'h'",
+			output: "create pitr pitr5 for database db01 table t01 range 1  h",
+		},
+		{
+			input: "show pitr",
+		},
+		{
+			input:  "drop pitr `pitr1`",
+			output: "drop pitr pitr1",
+		},
+		{
+			input:  "drop pitr if exists `pitr2`",
+			output: "drop pitr if exists pitr2",
+		},
+		{
+			input:  "alter pitr `pitr3` range 2 'h'",
+			output: "alter pitr pitr3 range 2  h",
+		},
+		{
+			input:  "alter pitr if exists `pitr01` range 2 'h'",
+			output: "alter pitr if exists pitr01 range 2  h",
+		},
 	}
 )
 
