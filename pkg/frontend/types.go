@@ -116,6 +116,7 @@ type PrepareStmt struct {
 	PreparePlan    *plan.Plan
 	PrepareStmt    tree.Statement
 	ParamTypes     []byte
+	IsCloudNonuser bool
 	IsInsertValues bool
 	InsertBat      *batch.Batch
 	proc           *process.Process

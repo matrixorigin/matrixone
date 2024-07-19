@@ -715,7 +715,7 @@ func adjustNDV(info *plan2.InfoFromZoneMap, tableDef *plan2.TableDef) {
 			if rate > 1 {
 				rate = 1
 			}
-			if rate < 0.1 {
+			if rate < 0.2 {
 				info.ColumnNDVs[idx] /= math.Pow(float64(info.AccurateObjectNumber), (1 - rate))
 			}
 			ndvUsingZonemap := calcNdvUsingZonemap(info.ColumnZMs[idx], &info.DataTypes[idx])
