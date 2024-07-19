@@ -48,6 +48,8 @@ func TestTables1(t *testing.T) {
 	schema := catalog.MockSchema(1, 0)
 	schema.BlockMaxRows = 1000
 	schema.ObjectMaxBlocks = 2
+	bat := catalog.MockBatch(schema, 10)
+	schema.AObjectMaxSize = bat.ApproxSize() - 1
 	rel, _ := database.CreateRelation(schema)
 	tableMeta := rel.GetMeta().(*catalog.TableEntry)
 	dataFactory := tables.NewDataFactory(db.Runtime, db.Dir)
@@ -76,6 +78,9 @@ func TestTables1(t *testing.T) {
 	_, _, toAppend, err = appender.PrepareAppend(rows-toAppend, nil)
 	assert.Nil(t, err)
 	assert.Equal(t, uint32(0), toAppend)
+
+	txn, _ = db.StartTxn(nil)
+	appender.ApplyAppend(bat, 0, txn)// update size of aobj
 
 	_, err = handle.GetAppender()
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrAppendableObjectNotFound))

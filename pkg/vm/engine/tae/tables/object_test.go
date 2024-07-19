@@ -60,6 +60,7 @@ func TestGetActiveRow(t *testing.T) {
 		blkMemoryNodes: []*memoryNode{mnode},
 	}
 	blk := &aobject{baseObject: b}
+	objectMemoryNode.obj = blk
 
 	objectMemoryNode.Ref()
 	n := NewNode(objectMemoryNode)

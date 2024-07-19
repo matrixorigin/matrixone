@@ -45,8 +45,8 @@ type NodeT interface {
 		blkID uint16, readSchema *catalog.Schema, colIdxes []int, from, to uint32, mp *mpool.MPool,
 	) (bat *containers.Batch, err error)
 
-	GetValueByRow(blkID uint16, readSchema *catalog.Schema, row, col int) (v any, isNull bool)
-	GetRowsByKey(blkID uint16, key any) (rows []uint32, err error)
+	// GetValueByRow(blkID uint16, readSchema *catalog.Schema, row, col int) (v any, isNull bool)
+	// GetRowsByKey(blkID uint16, key any) (rows []uint32, err error)
 	BatchDedup(
 		ctx context.Context,
 		txn txnif.TxnReader,

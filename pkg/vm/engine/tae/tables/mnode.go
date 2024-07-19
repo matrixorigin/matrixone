@@ -339,8 +339,6 @@ func (node *memoryNode) GetRowByFilter(
 	filter *handle.Filter,
 	mp *mpool.MPool,
 ) (blkID uint16, row uint32, err error) {
-	node.object.RLock()
-	defer node.object.RUnlock()
 	rows, err := node.GetRowsByKey(filter.Val)
 	if err != nil && !moerr.IsMoErrCode(err, moerr.ErrNotFound) {
 		return
@@ -496,7 +494,7 @@ func (node *memoryNode) checkConflictAandVisibility(
 		return
 	}
 	if isCommitting {
-		visible = n.IsCommitted()
+		visible = n.IsCommitted() || n.IsSameTxn(txn)
 	} else {
 		visible = n.IsVisible(txn)
 	}
@@ -506,19 +504,15 @@ func (node *memoryNode) checkConflictAandVisibility(
 func (node *memoryNode) CollectAppendInRange(
 	start, end types.TS, withAborted bool, mp *mpool.MPool,
 ) (batWithVer *containers.BatchWithVersion, err error) {
-	node.object.RLock()
 	minRow, maxRow, commitTSVec, abortVec, abortedMap :=
 		node.appendMVCC.CollectAppendLocked(start, end, mp)
 	if commitTSVec == nil || abortVec == nil {
-		node.object.RUnlock()
 		return nil, nil
 	}
 	batWithVer, err = node.GetDataWindowOnWriteSchema(minRow, maxRow, mp)
 	if err != nil {
-		node.object.RUnlock()
 		return nil, err
 	}
-	node.object.RUnlock()
 
 	batWithVer.Seqnums = append(batWithVer.Seqnums, objectio.SEQNUM_COMMITTS)
 	batWithVer.AddVector(catalog.AttrCommitTs, commitTSVec)
@@ -719,12 +713,13 @@ func (node *objectMemoryNode) GetDataWindow(
 	return node.getMemoryNode(blkID).GetDataWindow(readSchema, colIdxes, from, to, mp)
 }
 
-func (node *objectMemoryNode) GetValueByRow(blkID uint16, readSchema *catalog.Schema, row, col int) (v any, isNull bool) {
-	return node.getMemoryNode(blkID).GetValueByRow(readSchema, row, col)
-}
-func (node *objectMemoryNode) GetRowsByKey(blkID uint16, key any) (rows []uint32, err error) {
-	return node.getMemoryNode(blkID).GetRowsByKey(key)
-}
+//	func (node *objectMemoryNode) GetValueByRow(blkID uint16, readSchema *catalog.Schema, row, col int) (v any, isNull bool) {
+//		return node.getMemoryNode(blkID).GetValueByRow(readSchema, row, col)
+//	}
+//
+//	func (node *objectMemoryNode) GetRowsByKey(blkID uint16, key any) (rows []uint32, err error) {
+//		return node.getMemoryNode(blkID).GetRowsByKey(key)
+//	}
 func (node *objectMemoryNode) registerNodeLocked() *memoryNode {
 	if !node.checkBlockCountLocked() {
 		panic("logic error")
@@ -734,12 +729,21 @@ func (node *objectMemoryNode) registerNodeLocked() *memoryNode {
 	return blkNode
 }
 func (node *objectMemoryNode) checkBlockCountLocked() bool {
-	return len(node.blkMemoryNodes) < int(node.writeSchema.ObjectMaxBlocks)
+	// return len(node.blkMemoryNodes) < int(node.writeSchema.ObjectMaxBlocks)
+	size := 0
+	for _, blkNode := range node.blkMemoryNodes {
+		if blkNode.data != nil {
+			size += blkNode.data.ApproxSize()
+		}
+	}
+	return size < node.writeSchema.AObjectMaxSize
 }
 
 // Only check block count.
 // Check rows in appender.
 func (node *objectMemoryNode) IsAppendable() bool {
+	node.obj.RLock()
+	defer node.obj.RUnlock()
 	return node.checkBlockCountLocked()
 }
 func (node *objectMemoryNode) BatchDedup(
@@ -778,6 +782,8 @@ func (node *objectMemoryNode) Rows() (uint32, error) {
 }
 
 func (node *objectMemoryNode) GetRowByFilter(ctx context.Context, txn txnif.TxnReader, filter *handle.Filter, mp *mpool.MPool) (bid uint16, row uint32, err error) {
+	node.obj.RLock()
+	defer node.obj.RUnlock()
 	for blkOffset, node := range node.blkMemoryNodes {
 		_, row, err = node.GetRowByFilter(ctx, txn, filter, mp)
 		if moerr.IsMoErrCode(err, moerr.ErrNotFound) {
@@ -794,6 +800,8 @@ func (node *objectMemoryNode) GetRowByFilter(ctx context.Context, txn txnif.TxnR
 func (node *objectMemoryNode) CollectAppendInRange(
 	start, end types.TS, withAborted bool, mp *mpool.MPool,
 ) (batWithVer *containers.BatchWithVersion, err error) {
+	node.obj.RLock()
+	defer node.obj.RUnlock()
 	for _, blkNode := range node.blkMemoryNodes {
 		bat, err := blkNode.CollectAppendInRange(start, end, withAborted, mp)
 		if err != nil {

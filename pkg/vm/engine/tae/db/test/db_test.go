@@ -3972,7 +3972,7 @@ func TestLogtailBasic(t *testing.T) {
 	// 10 Objects, every Object has 1 blocks
 	reader = logMgr.GetReader(firstWriteTs, lastWriteTs)
 	dirties := reader.GetDirtyByTable(dbID, tableID)
-	require.Equal(t, 10, len(dirties.Objs))
+	require.Equal(t, 1, len(dirties.Objs))
 	tots := func(ts types.TS) *timestamp.Timestamp {
 		return &timestamp.Timestamp{PhysicalTime: types.DecodeInt64(ts[4:12]), LogicalTime: types.DecodeUint32(ts[:4])}
 	}
