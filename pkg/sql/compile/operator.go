@@ -17,6 +17,11 @@ package compile
 import (
 	"context"
 	"fmt"
+<<<<<<< HEAD
+=======
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
+>>>>>>> a403cb3389253ce374d22b9749309f09c35c0e9d
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
@@ -719,19 +724,27 @@ func constructPreInsert(ns []*plan.Node, n *plan.Node, eg engine.Engine, proc *p
 	return op, nil
 }
 
-func constructPreInsertUk(n *plan.Node, proc *process.Process) (*preinsertunique.PreInsertUnique, error) {
+func constructPreInsertUk(n *plan.Node, proc *process.Process) *preinsertunique.PreInsertUnique {
 	preCtx := n.PreInsertUkCtx
 	op := preinsertunique.NewArgument()
 	op.Ctx = proc.Ctx
 	op.PreInsertCtx = preCtx
-	return op, nil
+	return op
 }
 
-func constructPreInsertSk(n *plan.Node, proc *process.Process) (*preinsertsecondaryindex.PreInsertSecIdx, error) {
+func constructPreInsertSk(n *plan.Node, proc *process.Process) *preinsertsecondaryindex.PreInsertSecIdx {
 	op := preinsertsecondaryindex.NewArgument()
 	op.Ctx = proc.Ctx
 	op.PreInsertCtx = n.PreInsertSkCtx
-	return op, nil
+	return op
+}
+
+func constructMergeblock(eg engine.Engine, insertArg *insert.Insert) *mergeblock.MergeBlock {
+	return mergeblock.NewArgument().
+		WithEngine(eg).
+		WithObjectRef(insertArg.InsertCtx.Ref).
+		WithParitionNames(insertArg.InsertCtx.PartitionTableNames).
+		WithAddAffectedRows(insertArg.InsertCtx.AddAffectedRows)
 }
 
 func constructLockOp(n *plan.Node, eng engine.Engine) (*lockop.LockOp, error) {
