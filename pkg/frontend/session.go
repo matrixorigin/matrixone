@@ -638,28 +638,19 @@ func (ses *Session) IsBackgroundSession() bool {
 	return false
 }
 
-func (ses *Session) cachePlan(sql string, stmts []tree.Statement, plans []*plan.Plan) {
-	if len(sql) == 0 {
-		return
-	}
+func (ses *Session) cachePlan(sql [32]byte, stmts []tree.Statement, plans []*plan.Plan) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	ses.planCache.cache(sql, stmts, plans)
 }
 
-func (ses *Session) getCachedPlan(sql string) *cachedPlan {
-	if len(sql) == 0 {
-		return nil
-	}
+func (ses *Session) getCachedPlan(sql [32]byte) *cachedPlan {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.planCache.get(sql)
 }
 
-func (ses *Session) isCached(sql string) bool {
-	if len(sql) == 0 {
-		return false
-	}
+func (ses *Session) isCached(sql [32]byte) bool {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.planCache.isCached(sql)
