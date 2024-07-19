@@ -34,7 +34,8 @@ import (
 )
 
 var (
-	moFolderName = "Matrixone"
+	defaultMoFolderName = "Matrixone"
+	localFolderName     = "Matrixone-Standalone"
 )
 
 type DashboardCreator struct {
@@ -43,19 +44,22 @@ type DashboardCreator struct {
 	extraFilterFunc func() string
 	by              string
 	filterOptions   []dashboard.Option
+	folderName      string
 }
 
 func NewCloudDashboardCreator(
 	host,
 	username,
 	password,
-	dataSource string) *DashboardCreator {
+	dataSource,
+	folderName string) *DashboardCreator {
 	dc := &DashboardCreator{
 		cli:        grabana.NewClient(http.DefaultClient, host, grabana.WithBasicAuth(username, password)),
 		dataSource: dataSource,
 	}
 	dc.extraFilterFunc = dc.getCloudFilters
 	dc.by = "pod"
+	dc.folderName = folderName
 	dc.initCloudFilterOptions()
 	return dc
 }
@@ -64,13 +68,13 @@ func NewLocalDashboardCreator(
 	host,
 	username,
 	password,
-	dataSource string) *DashboardCreator {
+	folderName string) *DashboardCreator {
 	dc := &DashboardCreator{
-		cli:        grabana.NewClient(http.DefaultClient, host, grabana.WithBasicAuth(username, password)),
-		dataSource: dataSource,
+		cli: grabana.NewClient(http.DefaultClient, host, grabana.WithBasicAuth(username, password)),
 	}
 	dc.extraFilterFunc = dc.getLocalFilters
 	dc.by = "instance"
+	dc.folderName = folderName
 	dc.initLocalFilterOptions()
 	return dc
 }
@@ -79,13 +83,15 @@ func NewK8SDashboardCreator(
 	host,
 	username,
 	password,
-	dataSource string) *DashboardCreator {
+	dataSource,
+	folderName string) *DashboardCreator {
 	dc := &DashboardCreator{
 		cli:        grabana.NewClient(http.DefaultClient, host, grabana.WithBasicAuth(username, password)),
 		dataSource: dataSource,
 	}
 	dc.extraFilterFunc = dc.getK8SFilters
 	dc.by = "pod"
+	dc.folderName = folderName
 	dc.initK8SFilterOptions()
 	return dc
 }
@@ -94,13 +100,15 @@ func NewCloudCtrlPlaneDashboardCreator(
 	host,
 	username,
 	password,
-	dataSource string) *DashboardCreator {
+	dataSource,
+	folderName string) *DashboardCreator {
 	dc := &DashboardCreator{
 		cli:        grabana.NewClient(http.DefaultClient, host, grabana.WithBasicAuth(username, password)),
 		dataSource: AutoUnitPrometheusDatasource,
 	}
 	dc.extraFilterFunc = dc.getCloudFilters
 	dc.by = "pod"
+	dc.folderName = folderName
 	dc.initCloudCtrlPlaneFilterOptions(dataSource)
 	return dc
 }
@@ -449,12 +457,16 @@ func (c *DashboardCreator) getLocalFilters() string {
 
 func (c *DashboardCreator) initLocalFilterOptions() {
 	c.filterOptions = append(c.filterOptions,
+		dashboard.VariableAsDatasource(
+			"datasource",
+			datasource.Type(Prometheus),
+			datasource.Label("datasource"),
+		),
 		dashboard.VariableAsQuery(
 			"instance",
-			query.DataSource(c.dataSource),
+			query.DataSource("${datasource}"),
 			query.DefaultAll(),
 			query.IncludeAll(),
-			query.Multiple(),
 			query.Label("instance"),
 			query.Request("label_values(instance)"),
 		))

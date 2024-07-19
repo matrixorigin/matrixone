@@ -22,7 +22,7 @@ import (
 )
 
 func (c *DashboardCreator) initTxnDashboard() error {
-	folder, err := c.createFolder(moFolderName)
+	folder, err := c.createFolder(c.folderName)
 	if err != nil {
 		return err
 	}
