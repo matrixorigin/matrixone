@@ -94,6 +94,7 @@ func New(
 func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	proc := new(Process)
 	newctx, cancel := context.WithCancel(ctx)
+
 	proc.Base = p.Base
 	// reg and cancel
 	proc.Ctx = newctx

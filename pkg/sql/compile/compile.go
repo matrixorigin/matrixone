@@ -1545,12 +1545,12 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 	case plan.Node_FUZZY_FILTER:
 		//curr := c.anal.curNodeIdx
 		//c.setAnalyzeCurrent(nil, int(n.Children[0]))
-		left, err := c.compilePlanScope(step, n.Children[0], ns)
+		left, err = c.compilePlanScope(step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
 		//c.setAnalyzeCurrent(left, int(n.Children[1]))
-		right, err := c.compilePlanScope(step, n.Children[1], ns)
+		right, err = c.compilePlanScope(step, n.Children[1], ns)
 		if err != nil {
 			return nil, err
 		}
@@ -1559,45 +1559,43 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		c.setAnalyzeCurrent(left, int(curNodeIdx))
 		c.setAnalyzeCurrent(right, int(curNodeIdx))
 		return c.compileFuzzyFilter(n, ns, left, right)
-	case plan.Node_PRE_INSERT_UK: // XXX:TODO
-		curr := c.anal.curNodeIdx
+	case plan.Node_PRE_INSERT_UK:
 		ss, err = c.compilePlanScope(step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
+
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.compilePreInsertUk(n, ss)
-		c.setAnalyzeCurrent(ss, curr)
 		return ss, nil
-	case plan.Node_PRE_INSERT_SK: // XXX:TODO
-		curr := c.anal.curNodeIdx
+	case plan.Node_PRE_INSERT_SK:
 		ss, err = c.compilePlanScope(step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.compilePreInsertSK(n, ss)
-		c.setAnalyzeCurrent(ss, curr)
 		return ss, nil
-	case plan.Node_PRE_INSERT: // XXX:TODO
-		curr := c.anal.curNodeIdx
+	case plan.Node_PRE_INSERT:
 		ss, err = c.compilePlanScope(step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
 
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss, err = c.compilePreInsert(ns, n, ss)
-		c.setAnalyzeCurrent(ss, curr)
 		return ss, nil
-	case plan.Node_INSERT: // XXX:TODO
+	case plan.Node_INSERT:
 		c.appendMetaTables(n.ObjRef)
-		curr := c.anal.curNodeIdx
 		n.NotCacheable = true
+
 		ss, err = c.compilePlanScope(step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
 
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss, err = c.compileInsert(ns, n, ss)
-		c.setAnalyzeCurrent(ss, curr)
 		return ss, nil
 	case plan.Node_LOCK_OP: // XXX:TODO
 		curr := c.anal.curNodeIdx
@@ -2042,6 +2040,7 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 	return ss, nil
 }
 
+// getParallelSizeForExternalScan Calculate the number of parallel tasks that should be used
 func (c *Compile) getParallelSizeForExternalScan(n *plan.Node, cpuNum int) int {
 	if n.Stats == nil {
 		return cpuNum
@@ -3010,11 +3009,14 @@ func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scop
 	all := []*Scope{l, r}
 	rs := c.newMergeScope(all)
 
-	vm.GetLeafOp(rs.RootOp).GetOperatorBase().SetIdx(c.anal.curNodeIdx)
+	//vm.GetLeafOp(rs.RootOp).GetOperatorBase().SetIdx(c.anal.curNodeIdx)
 
+	currentFirstFlag := c.anal.isFirst
 	op := constructFuzzyFilter(n, ns[n.Children[0]], ns[n.Children[1]])
 	op.SetIdx(c.anal.curNodeIdx)
+	op.SetIsFirst(currentFirstFlag)
 	rs.setRootOperator(op)
+	c.anal.isFirst = false
 
 	fuzzyCheck, err := newFuzzyCheck(n)
 	if err != nil {
