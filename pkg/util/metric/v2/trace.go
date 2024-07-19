@@ -77,6 +77,14 @@ var (
 		}, []string{"type"})
 	TraceMOLoggerExportSqlHistogram = traceMOLoggerExportDataHistogram.WithLabelValues("sql")
 	TraceMOLoggerExportCsvHistogram = traceMOLoggerExportDataHistogram.WithLabelValues("csv")
+
+	traceCheckStorageUsageCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "trace",
+			Name:      "check_storage_usage_total",
+			Help:      "Count of cron_task MetricStorageUsage.",
+		}, []string{"type"})
 )
 
 func GetTraceNegativeCUCounter(typ string) prometheus.Counter {
@@ -85,4 +93,14 @@ func GetTraceNegativeCUCounter(typ string) prometheus.Counter {
 
 func GetTraceCollectorDiscardCounter(typ string) prometheus.Counter {
 	return traceCollectorDiscardCounter.WithLabelValues(typ)
+}
+
+func GetTraceCheckStorageUsageAllCounter() prometheus.Counter {
+	return traceCheckStorageUsageCounter.WithLabelValues("all")
+}
+func GetTraceCheckStorageUsageNewCounter() prometheus.Counter {
+	return traceCheckStorageUsageCounter.WithLabelValues("new")
+}
+func GetTraceCheckStorageUsageNewIncCounter() prometheus.Counter {
+	return traceCheckStorageUsageCounter.WithLabelValues("inc")
 }

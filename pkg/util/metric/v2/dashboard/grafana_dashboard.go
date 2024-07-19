@@ -306,9 +306,17 @@ func (c *DashboardCreator) getMultiHistogram(
 				fmt.Sprintf("histogram_quantile(%f, sum(rate(%s[$interval]))  by (le))", percent, metric))
 		}
 
+		// format title
+		// default: P50.000000 time
+		// bytes:   P50.000000 size
+		title := fmt.Sprintf("P%f time", percent*100)
+		if axis.New(axisOptions...).Builder.Format == "bytes" {
+			title = fmt.Sprintf("P%f size", percent*100)
+		}
+
 		options = append(options,
 			c.withMultiGraph(
-				fmt.Sprintf("P%f time", percent*100),
+				title,
 				columns[i],
 				queries,
 				legends,
