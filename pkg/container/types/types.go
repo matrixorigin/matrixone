@@ -954,6 +954,13 @@ func (t T) IsArrayRelate() bool {
 	return false
 }
 
+func (t T) IsDatalink() bool {
+	if t == T_datalink {
+		return true
+	}
+	return false
+}
+
 // IsDecimal return true if the types.T is decimal64 or decimal128
 func (t T) IsDecimal() bool {
 	if t == T_decimal64 || t == T_decimal128 || t == T_decimal256 {

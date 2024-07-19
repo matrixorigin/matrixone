@@ -665,6 +665,13 @@ func setInsertValueString(proc *process.Process, numVal *tree.NumVal, vec *vecto
 				return nil, function.FormatCastErrorForInsertValue(proc.Ctx, s, *typ, fmt.Sprintf("Src length %v is larger than Dest length %v", len(s), destLen))
 			}
 		}
+		if typ.Oid.IsDatalink() {
+			_, _, err2 := types.ParseDatalink(s)
+			if err2 != nil {
+				return nil, err2
+			}
+		}
+
 		var v []byte
 		if typ.Oid.IsArrayRelate() {
 			// Assuming that input s is of type "[1,2,3]"
