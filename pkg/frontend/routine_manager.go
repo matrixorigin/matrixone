@@ -243,7 +243,11 @@ func (rm *RoutineManager) Created(rs *Conn) {
 		logutil.Errorf("failed to get connection ID from HAKeeper: %v", err)
 		return
 	}
-	pro := NewMysqlClientProtocol(rm.baseService.ID(), connID, rs, int(getGlobalPu().SV.MaxBytesInOutbufToFlush), getGlobalPu().SV)
+	sid := ""
+	if rm.baseService != nil {
+		sid = rm.baseService.ID()
+	}
+	pro := NewMysqlClientProtocol(sid, connID, rs, int(getGlobalPu().SV.MaxBytesInOutbufToFlush), getGlobalPu().SV)
 	routine := NewRoutine(rm.getCtx(), pro, getGlobalPu().SV)
 	v2.CreatedRoutineCounter.Inc()
 
@@ -255,7 +259,7 @@ func (rm *RoutineManager) Created(rs *Conn) {
 	// XXX MPOOL pass in a nil mpool.
 	// XXX MPOOL can choose to use a Mid sized mpool, if, we know
 	// this mpool will be deleted.  Maybe in the following Closed method.
-	ses := NewSession(cancelCtx, rm.baseService.ID(), routine.getProtocol(), nil)
+	ses := NewSession(cancelCtx, sid, routine.getProtocol(), nil)
 	ses.SetFromRealUser(true)
 	ses.setRoutineManager(rm)
 	ses.setRoutine(routine)

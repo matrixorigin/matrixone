@@ -57,6 +57,7 @@ func runTestWithQueryService(t *testing.T, cn metadata.CNService, fn func(qc qcl
 					QueryAddress: address,
 				}}, nil))
 			runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.ClusterService, cluster)
+			runtime.SetupServiceBasedRuntime(cn.ServiceID, rt)
 
 			qs, err := queryservice.NewQueryService(cn.ServiceID, address, morpc.Config{})
 			assert.NoError(t, err)

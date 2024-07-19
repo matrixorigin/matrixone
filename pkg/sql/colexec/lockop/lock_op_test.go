@@ -562,14 +562,16 @@ func runLockOpTest(
 	fn func(*process.Process),
 	opts ...client.TxnClientCreateOption) {
 	defer leaktest.AfterTest(t)()
-	lockservice.RunLockServicesForTest(
-		zap.DebugLevel,
-		[]string{"s1"},
-		time.Second,
-		func(_ lockservice.LockTableAllocator, services []lockservice.LockService) {
-			runtime.RunTest(
-				sid,
-				func(rt runtime.Runtime) {
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			runtime.SetupServiceBasedRuntime("s1", rt)
+
+			lockservice.RunLockServicesForTest(
+				zap.DebugLevel,
+				[]string{"s1"},
+				time.Second,
+				func(_ lockservice.LockTableAllocator, services []lockservice.LockService) {
 					rt.SetGlobalVariables(runtime.LockService, services[0])
 
 					// TODO: remove
@@ -605,9 +607,9 @@ func runLockOpTest(
 					}()
 					fn(proc)
 				},
+				nil,
 			)
 		},
-		nil,
 	)
 }
 

@@ -77,7 +77,7 @@ func New(
 
 	e := memoryengine.New(
 		ctx,
-		eng.GetService(),
+		"",
 		memoryengine.NewDefaultShardPolicy(
 			mpool.MustNewZeroNoFixed(),
 		),

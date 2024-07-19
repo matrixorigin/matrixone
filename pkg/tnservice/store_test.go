@@ -234,6 +234,7 @@ func runTNStoreTestWithFileServiceFactory(
 			return fileservice.NewFileServices(name, fs)
 		}
 	}
+	runtime.SetupServiceBasedRuntime("u1", runtime.ServiceRuntime(""))
 	s := newTestStore(t, "u1", fsFactory, opts...)
 	defer func() {
 		assert.NoError(t, s.Close())
