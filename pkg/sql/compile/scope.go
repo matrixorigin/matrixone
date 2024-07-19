@@ -123,6 +123,11 @@ func (s *Scope) resetForReuse(c *Compile) (err error) {
 		s.Proc.Cancel = cancel
 	}
 
+	for i := 0; i < len(s.Proc.Reg.MergeReceivers); i++ {
+		s.Proc.Reg.MergeReceivers[i].Ctx = s.Proc.Ctx
+		s.Proc.Reg.MergeReceivers[i].CleanChannel(s.Proc.GetMPool())
+	}
+
 	vm.HandleAllOp(s.RootOp, func(parentOp vm.Operator, op vm.Operator) error {
 		if op.OpType() == vm.Output {
 			op.(*output.Output).Func = c.fill
@@ -630,10 +635,6 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 				case process.RuntimeFilter_PASS:
 					continue
 				case process.RuntimeFilter_DROP:
-					// FIXME: Should give an empty "Data" and then early return
-					s.NodeInfo.Data = nil
-					s.NodeInfo.NeedExpandRanges = false
-					s.DataSource.FilterExpr = plan2.MakeFalseExpr()
 					return nil
 				case process.RuntimeFilter_IN:
 					inExpr := plan2.MakeInExpr(c.proc.Ctx, spec.Expr, msg.Card, msg.Data, spec.MatchPrefix)
@@ -698,7 +699,6 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 			return err
 		}
 		s.NodeInfo.Data = append(s.NodeInfo.Data, ranges.GetAllBytes()...)
-		s.NodeInfo.NeedExpandRanges = false
 
 	} else if len(inExprList) > 0 {
 		s.NodeInfo.Data, err = ApplyRuntimeFilters(c.proc.Ctx, s.Proc, s.DataSource.TableDef, s.NodeInfo.Data, exprs, filters)
