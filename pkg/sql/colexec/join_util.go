@@ -41,6 +41,9 @@ func ReceiveHashMap(anal process.Analyze, tag int32, isShuffle bool, shuffleIdx 
 				}
 			}
 			ret := msg.JoinMapPtr
+			if !ret.IsValid() {
+				panic("join receive a joinmap which has been freed!")
+			}
 			ret.IncRef()
 			return ret
 		}

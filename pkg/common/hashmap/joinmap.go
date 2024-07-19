@@ -28,6 +28,7 @@ func NewJoinMap(sels [][]int32, expr *plan.Expr, ihm *IntHashMap, shm *StrHashMa
 		expr:      expr,
 		multiSels: sels,
 		hasNull:   hasNull,
+		valid:     true,
 	}
 }
 
@@ -69,6 +70,10 @@ func (jm *JoinMap) IncRef() {
 	atomic.AddInt64(&jm.refCnt, 1)
 }
 
+func (jm *JoinMap) IsValid() bool {
+	return jm.valid
+}
+
 func (jm *JoinMap) Free() {
 	if atomic.AddInt64(&jm.refCnt, -1) != 0 {
 		return
@@ -82,6 +87,7 @@ func (jm *JoinMap) Free() {
 	} else {
 		jm.shm.Free()
 	}
+	jm.valid = false
 }
 
 func (jm *JoinMap) Size() int64 {

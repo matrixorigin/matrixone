@@ -73,6 +73,7 @@ type JoinMap struct {
 	ihm              *IntHashMap
 	hasNull          bool
 	runtimeFilter_In bool
+	valid            bool
 }
 
 // StrHashMap key is []byte, value is an uint64 value (starting from 1)
