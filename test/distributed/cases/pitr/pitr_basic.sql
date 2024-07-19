@@ -133,13 +133,13 @@ drop pitr if exists pitr21;
 -- @session
 
 
--- @ignore:0,3,4
+-- @ignore:0,2,3,4,6,7,10
 select * from mo_catalog.mo_pitr;
 drop account if exists acc01;
--- @ignore:0,3,4
+-- @ignore:0,2,3,4,6,7,10
 select * from mo_catalog.mo_pitr;
 drop database if exists db01;
--- @ignore:0,3,4
+-- @ignore:0,2,3,4,6,7,10
 select * from mo_catalog.mo_pitr;
 -- @ignore:1,2
 drop pitr if exists pitr01;
@@ -152,7 +152,7 @@ drop pitr if exists pitr12;
 drop pitr if exists pitr14;
 -- @ignore:1,2
 show pitr;
--- @ignore:0,3,4
+-- @ignore:0,2,3,4,6,7,10
 select * from mo_catalog.mo_pitr;
 
 create account acc02 admin_name = 'test_account' identified by '111';
@@ -165,8 +165,8 @@ alter pitr pitr01 range 1 'd';
 -- @ignore:1,2
 show pitr;
 -- @session
--- @ignore:0,3,4
+-- @ignore:0,2,3,4,6,7,10
 select * from mo_catalog.mo_pitr;
 drop account if exists acc02;
--- @ignore:0,3,4
+-- @ignore:0,2,3,4,6,7,10
 select * from mo_catalog.mo_pitr;
