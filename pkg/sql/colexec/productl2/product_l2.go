@@ -182,7 +182,9 @@ func (ctr *container) probe(ap *Productl2, proc *process.Process, anal process.A
 		switch ctr.bat.Vecs[centroidColPos].GetType().Oid {
 		case types.T_array_float32:
 			tblEmbeddingF32IsNull := ctr.inBat.Vecs[tblColPos].IsNull(uint64(j))
-			tblEmbeddingF32 = types.BytesToArray[float32](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
+			if !tblEmbeddingF32IsNull {
+				tblEmbeddingF32 = types.BytesToArray[float32](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
+			}
 
 			//// NOTE: make sure you normalize_l2 probe vector once.
 			//normalizeTblEmbeddingPtrF32 = arrayF32Pool.Get().(*[]float32)
@@ -195,12 +197,12 @@ func (ctr *container) probe(ap *Productl2, proc *process.Process, anal process.A
 			//_ = moarray.NormalizeL2[float32](tblEmbeddingF32, normalizeTblEmbeddingF32)
 
 			for i = 0; i < buildCount; i++ {
-				clusterEmbeddingF32IsNull := ctr.bat.Vecs[centroidColPos].IsNull(uint64(i))
-				clusterEmbeddingF32 = types.BytesToArray[float32](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
-				if tblEmbeddingF32IsNull || clusterEmbeddingF32IsNull {
+				if tblEmbeddingF32IsNull || ctr.bat.Vecs[centroidColPos].IsNull(uint64(i)) {
 					leastDistance = 0
 					leastClusterIndex = i
 				} else {
+					clusterEmbeddingF32 = types.BytesToArray[float32](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
+
 					dist, err := moarray.L2DistanceSq[float32](clusterEmbeddingF32, tblEmbeddingF32)
 					if err != nil {
 						return err
@@ -216,7 +218,9 @@ func (ctr *container) probe(ap *Productl2, proc *process.Process, anal process.A
 			//arrayF32Pool.Put(normalizeTblEmbeddingPtrF32)
 		case types.T_array_float64:
 			tblEmbeddingF64IsNull := ctr.inBat.Vecs[tblColPos].IsNull(uint64(j))
-			tblEmbeddingF64 = types.BytesToArray[float64](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
+			if !tblEmbeddingF64IsNull {
+				tblEmbeddingF64 = types.BytesToArray[float64](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
+			}
 
 			//normalizeTblEmbeddingPtrF64 = arrayF64Pool.Get().(*[]float64)
 			//normalizeTblEmbeddingF64 = *normalizeTblEmbeddingPtrF64
@@ -228,12 +232,12 @@ func (ctr *container) probe(ap *Productl2, proc *process.Process, anal process.A
 			//_ = moarray.NormalizeL2[float64](tblEmbeddingF64, normalizeTblEmbeddingF64)
 
 			for i = 0; i < buildCount; i++ {
-				clusterEmbeddingF64IsNull := ctr.bat.Vecs[centroidColPos].IsNull(uint64(i))
-				clusterEmbeddingF64 = types.BytesToArray[float64](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
-				if tblEmbeddingF64IsNull || clusterEmbeddingF64IsNull {
+				if tblEmbeddingF64IsNull || ctr.bat.Vecs[centroidColPos].IsNull(uint64(i)) {
 					leastDistance = 0
 					leastClusterIndex = i
 				} else {
+					clusterEmbeddingF64 = types.BytesToArray[float64](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
+
 					dist, err := moarray.L2DistanceSq[float64](clusterEmbeddingF64, tblEmbeddingF64)
 					if err != nil {
 						return err

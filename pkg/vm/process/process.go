@@ -19,7 +19,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
@@ -64,19 +63,15 @@ func New(
 	udfService udf.Service,
 	aicm *defines.AutoIncrCacheManager) *Process {
 	baseProcess := &BaseProcess{
-		mp:           m,
-		Ctx:          ctx,
-		TxnClient:    txnClient,
-		FileService:  fileService,
-		IncrService:  incrservice.GetAutoIncrementService(ctx),
-		UnixTime:     time.Now().UnixNano(),
-		LastInsertID: new(uint64),
-		LockService:  lockService,
-		Aicm:         aicm,
-		vp: &vectorPool{
-			vecs:  make(map[uint8][]*vector.Vector),
-			Limit: VectorLimit,
-		},
+		mp:             m,
+		TxnClient:      txnClient,
+		FileService:    fileService,
+		IncrService:    incrservice.GetAutoIncrementService(ctx),
+		UnixTime:       time.Now().UnixNano(),
+		LastInsertID:   new(uint64),
+		LockService:    lockService,
+		Aicm:           aicm,
+		vp:             initCachedVectorPool(),
 		valueScanBatch: make(map[[16]byte]*batch.Batch),
 		QueryClient:    queryClient,
 		Hakeeper:       hakeeper,
@@ -267,7 +262,7 @@ func (proc *Process) CopyValueScanBatch(src *Process) {
 }
 
 func (proc *Process) SetVectorPoolSize(limit int) {
-	proc.Base.vp.Limit = limit
+	proc.Base.vp.modifyCapacity(limit, proc.Mp())
 }
 
 func (proc *Process) CopyVectorPool(src *Process) {
@@ -317,95 +312,6 @@ func (proc *Process) AppendToFixedSizeFromOffset(dst *batch.Batch, src *batch.Ba
 	}
 	dst.AddRowCount(length)
 	return dst, length, nil
-}
-
-func (proc *Process) PutBatch(bat *batch.Batch) {
-	if bat == batch.EmptyBatch {
-		return
-	}
-	if atomic.LoadInt64(&bat.Cnt) == 0 {
-		panic("put batch with zero cnt")
-	}
-	if atomic.AddInt64(&bat.Cnt, -1) > 0 {
-		return
-	}
-	for _, vec := range bat.Vecs {
-		if vec != nil {
-			// very large vectors should not put back into pool, which cause these memory can not release.
-			// XXX I left the old logic here. But it's unreasonable to use the number of rows to determine if a vector's size.
-			// use Allocated() may suitable.
-			if vec.IsConst() || vec.NeedDup() || vec.Allocated() > 8192*64 {
-				vec.Free(proc.Base.mp)
-				bat.ReplaceVector(vec, nil)
-				continue
-			}
-
-			if !proc.Base.vp.putVector(vec) {
-				vec.Free(proc.Base.mp)
-			}
-			bat.ReplaceVector(vec, nil)
-		}
-	}
-	for _, agg := range bat.Aggs {
-		if agg != nil {
-			agg.Free()
-		}
-	}
-	bat.Vecs = nil
-	bat.Attrs = nil
-	bat.SetRowCount(0)
-}
-
-func (proc *Process) FreeVectors() {
-	proc.Base.vp.freeVectors(proc.Mp())
-}
-
-func (proc *Process) PutVector(vec *vector.Vector) {
-	if !proc.Base.vp.putVector(vec) {
-		vec.Free(proc.Mp())
-	}
-}
-
-func (proc *Process) GetVector(typ types.Type) *vector.Vector {
-	if vec := proc.Base.vp.getVector(typ); vec != nil {
-		vec.Reset(typ)
-		return vec
-	}
-	return vector.NewVec(typ)
-}
-
-func (vp *vectorPool) freeVectors(mp *mpool.MPool) {
-	vp.Lock()
-	defer vp.Unlock()
-	for k, vecs := range vp.vecs {
-		for _, vec := range vecs {
-			vec.Free(mp)
-		}
-		delete(vp.vecs, k)
-	}
-}
-
-func (vp *vectorPool) putVector(vec *vector.Vector) bool {
-	vp.Lock()
-	defer vp.Unlock()
-	key := uint8(vec.GetType().Oid)
-	if len(vp.vecs[key]) >= vp.Limit {
-		return false
-	}
-	vp.vecs[key] = append(vp.vecs[key], vec)
-	return true
-}
-
-func (vp *vectorPool) getVector(typ types.Type) *vector.Vector {
-	vp.Lock()
-	defer vp.Unlock()
-	key := uint8(typ.Oid)
-	if vecs := vp.vecs[key]; len(vecs) > 0 {
-		vec := vecs[len(vecs)-1]
-		vp.vecs[key] = vecs[:len(vecs)-1]
-		return vec
-	}
-	return nil
 }
 
 // log do logging.
