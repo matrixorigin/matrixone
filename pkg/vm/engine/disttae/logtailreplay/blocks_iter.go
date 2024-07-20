@@ -18,10 +18,11 @@ import (
 	"bytes"
 	"fmt"
 
+	"github.com/tidwall/btree"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/tidwall/btree"
 )
 
 type ObjectsIter interface {
@@ -204,4 +205,14 @@ func (p *PartitionState) GetObject(name objectio.ObjectNameShort) (ObjectInfo, b
 		}
 	}
 	return ObjectInfo{}, false
+}
+
+func (p *PartitionState) GetTombstoneDeltaLocs(locs *[]objectio.Location, commitTS *[]types.TS) {
+	iter := p.blockDeltas.Copy().Iter()
+	defer iter.Release()
+	for ok := iter.First(); ok; ok = iter.Next() {
+		item := iter.Item()
+		*locs = append(*locs, item.DeltaLocation())
+		*commitTS = append(*commitTS, item.CommitTs)
+	}
 }

@@ -20,6 +20,7 @@ import (
 	timestamp "github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	client "github.com/matrixorigin/matrixone/pkg/txn/client"
 	engine "github.com/matrixorigin/matrixone/pkg/vm/engine"
+	process "github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // MockStatistics is a mock of Statistics interface.
@@ -240,6 +241,20 @@ func (mr *MockTombstonerMockRecorder) HasTombstones(bid interface{}) *gomock.Cal
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HasTombstones", reflect.TypeOf((*MockTombstoner)(nil).HasTombstones), bid)
 }
 
+// Merge mocks base method.
+func (m *MockTombstoner) Merge(other engine.Tombstoner) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Merge", other)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// Merge indicates an expected call of Merge.
+func (mr *MockTombstonerMockRecorder) Merge(other interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Merge", reflect.TypeOf((*MockTombstoner)(nil).Merge), other)
+}
+
 // Type mocks base method.
 func (m *MockTombstoner) Type() engine.TombstoneType {
 	m.ctrl.T.Helper()
@@ -303,6 +318,20 @@ func (mr *MockRelDataMockRecorder) AttachTombstones(tombstones interface{}) *gom
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AttachTombstones", reflect.TypeOf((*MockRelData)(nil).AttachTombstones), tombstones)
 }
 
+// BlkCnt mocks base method.
+func (m *MockRelData) BlkCnt() int {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "BlkCnt")
+	ret0, _ := ret[0].(int)
+	return ret0
+}
+
+// BlkCnt indicates an expected call of BlkCnt.
+func (mr *MockRelDataMockRecorder) BlkCnt() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BlkCnt", reflect.TypeOf((*MockRelData)(nil).BlkCnt))
+}
+
 // BuildEmptyRelData mocks base method.
 func (m *MockRelData) BuildEmptyRelData() engine.RelData {
 	m.ctrl.T.Helper()
@@ -317,16 +346,32 @@ func (mr *MockRelDataMockRecorder) BuildEmptyRelData() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BuildEmptyRelData", reflect.TypeOf((*MockRelData)(nil).BuildEmptyRelData))
 }
 
-// ForeachDataBlk mocks base method.
-func (m *MockRelData) ForeachDataBlk() {
+// DataBlkSlice mocks base method.
+func (m *MockRelData) DataBlkSlice(begin, end int) engine.RelData {
 	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "ForeachDataBlk")
+	ret := m.ctrl.Call(m, "DataBlkSlice", begin, end)
+	ret0, _ := ret[0].(engine.RelData)
+	return ret0
+}
+
+// DataBlkSlice indicates an expected call of DataBlkSlice.
+func (mr *MockRelDataMockRecorder) DataBlkSlice(begin, end interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DataBlkSlice", reflect.TypeOf((*MockRelData)(nil).DataBlkSlice), begin, end)
+}
+
+// ForeachDataBlk mocks base method.
+func (m *MockRelData) ForeachDataBlk(begin, end int, f func(*objectio.BlockInfoInProgress) error) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ForeachDataBlk", begin, end, f)
+	ret0, _ := ret[0].(error)
+	return ret0
 }
 
 // ForeachDataBlk indicates an expected call of ForeachDataBlk.
-func (mr *MockRelDataMockRecorder) ForeachDataBlk() *gomock.Call {
+func (mr *MockRelDataMockRecorder) ForeachDataBlk(begin, end, f interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ForeachDataBlk", reflect.TypeOf((*MockRelData)(nil).ForeachDataBlk))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ForeachDataBlk", reflect.TypeOf((*MockRelData)(nil).ForeachDataBlk), begin, end, f)
 }
 
 // GetDataBlk mocks base method.
@@ -355,6 +400,18 @@ func (m *MockRelData) MarshalToBytes() []byte {
 func (mr *MockRelDataMockRecorder) MarshalToBytes() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MarshalToBytes", reflect.TypeOf((*MockRelData)(nil).MarshalToBytes))
+}
+
+// SetDataBlk mocks base method.
+func (m *MockRelData) SetDataBlk(i int, blk *objectio.BlockInfoInProgress) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetDataBlk", i, blk)
+}
+
+// SetDataBlk indicates an expected call of SetDataBlk.
+func (mr *MockRelDataMockRecorder) SetDataBlk(i, blk interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetDataBlk", reflect.TypeOf((*MockRelData)(nil).SetDataBlk), i, blk)
 }
 
 // MockRanges is a mock of Ranges interface.
@@ -539,11 +596,26 @@ func (mr *MockRelationMockRecorder) ApproxObjectsNum(ctx interface{}) *gomock.Ca
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ApproxObjectsNum", reflect.TypeOf((*MockRelation)(nil).ApproxObjectsNum), ctx)
 }
 
+// BuildLocalReaders mocks base method.
+func (m *MockRelation) BuildLocalReaders(ctx context.Context, proc *process.Process, ts timestamp.Timestamp, expr *plan.Expr, def *plan.TableDef, relData engine.RelData, num, txnOffset int) ([]engine.Reader, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "BuildLocalReaders", ctx, proc, ts, expr, def, relData, num, txnOffset)
+	ret0, _ := ret[0].([]engine.Reader)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// BuildLocalReaders indicates an expected call of BuildLocalReaders.
+func (mr *MockRelationMockRecorder) BuildLocalReaders(ctx, proc, ts, expr, def, relData, num, txnOffset interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BuildLocalReaders", reflect.TypeOf((*MockRelation)(nil).BuildLocalReaders), ctx, proc, ts, expr, def, relData, num, txnOffset)
+}
+
 // CollectTombstones mocks base method.
-func (m *MockRelation) CollectTombstones(ctx context.Context, txnOffset int) ([]byte, error) {
+func (m *MockRelation) CollectTombstones(ctx context.Context, txnOffset int) (engine.Tombstoner, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "CollectTombstones", ctx, txnOffset)
-	ret0, _ := ret[0].([]byte)
+	ret0, _ := ret[0].(engine.Tombstoner)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -1248,6 +1320,21 @@ func (m *MockEngine) AllocateIDByKey(ctx context.Context, key string) (uint64, e
 func (mr *MockEngineMockRecorder) AllocateIDByKey(ctx, key interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AllocateIDByKey", reflect.TypeOf((*MockEngine)(nil).AllocateIDByKey), ctx, key)
+}
+
+// BuildBlockReaders mocks base method.
+func (m *MockEngine) BuildBlockReaders(ctx context.Context, proc *process.Process, ts timestamp.Timestamp, expr *plan.Expr, def *plan.TableDef, relData engine.RelData, num int) ([]engine.Reader, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "BuildBlockReaders", ctx, proc, ts, expr, def, relData, num)
+	ret0, _ := ret[0].([]engine.Reader)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// BuildBlockReaders indicates an expected call of BuildBlockReaders.
+func (mr *MockEngineMockRecorder) BuildBlockReaders(ctx, proc, ts, expr, def, relData, num interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BuildBlockReaders", reflect.TypeOf((*MockEngine)(nil).BuildBlockReaders), ctx, proc, ts, expr, def, relData, num)
 }
 
 // Create mocks base method.

@@ -15,6 +15,7 @@
 package disttae
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"strconv"
@@ -601,18 +602,78 @@ func (tbl *txnTable) resetSnapshot() {
 	tbl._partState.Store(nil)
 }
 
-// CollectTombstones collects in memory tombstones and tombstone objects for the given blocks.
-// If len(blkIDs) == 0, then collect the all the tombstones of table.
-func (tbl *txnTable) CollectTombstones(ctx context.Context, txnOffset int) ([]byte, error) {
-	//TODO::
-	return nil, nil
+// CollectTombstones collects in memory tombstones and tombstone objects.
+func (tbl *txnTable) CollectTombstones(ctx context.Context, txnOffset int) (engine.Tombstoner, error) {
+	tombstone := buildTombstoneV1()
+
+	offset := txnOffset
+	if tbl.db.op.IsSnapOp() {
+		offset = tbl.getTxn().GetSnapshotWriteOffset()
+	}
+
+	//collect in memory
+
+	//collect uncommitted in-memory tombstones from txn.writes
+	tbl.getTxn().forEachTableWrites(tbl.db.databaseId, tbl.tableId,
+		offset, func(entry Entry) {
+			if entry.typ == INSERT || entry.typ == INSERT_TXN {
+				return
+			}
+			//entry.typ == DELETE
+			if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
+				/*
+					CASE:
+					create table t1(a int);
+					begin;
+					truncate t1; //txnDatabase.Truncate will DELETE mo_tables
+					show tables; // t1 must be shown
+				*/
+				if entry.IsGeneratedByTruncate() {
+					return
+				}
+				//deletes in txn.Write maybe comes from PartitionState.Rows ,
+				// PartitionReader need to skip them.
+				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+				for _, v := range vs {
+					tombstone.inMemTombstones = append(tombstone.inMemTombstones, v)
+				}
+			}
+		})
+
+	//collect uncommitted in-memory tombstones belongs to blocks persisted by CN writing S3
+	tbl.getTxn().deletedBlocks.getDeletedRowIDs(&tombstone.inMemTombstones)
+
+	//collect committed in-memory tombstones from partition state.
+	state, err := tbl.getPartitionState(ctx)
+	if err != nil {
+		return nil, err
+	}
+	{
+		ts := tbl.db.op.SnapshotTS()
+		iter := state.NewRowsIter(types.TimestampToTS(ts), nil, true)
+		for iter.Next() {
+			entry := iter.Entry()
+			tombstone.inMemTombstones = append(tombstone.inMemTombstones, entry.RowID)
+		}
+		iter.Close()
+	}
+
+	//collect uncommitted persisted tombstones.
+	if err := tbl.getTxn().getUncommittedS3Tombstone(&tombstone.uncommittedDeltaLocs); err != nil {
+		return nil, err
+	}
+	//collect committed persisted tombstones from partition state.
+	state.GetTombstoneDeltaLocs(&tombstone.committedDeltalocs, &tombstone.commitTS)
+	return tombstone, nil
 }
 
 func (tbl *txnTable) RangesInProgress(ctx context.Context, exprs []*plan.Expr, txnOffset int) (data engine.RelData, err error) {
 	start := time.Now()
 	seq := tbl.db.op.NextSequence()
 
-	var blocks []*objectio.BlockInfoInProgress
+	var (
+		blocks []*objectio.BlockInfoInProgress
+	)
 
 	trace.GetService().AddTxnDurationAction(
 		tbl.db.op,
@@ -967,6 +1028,7 @@ func (tbl *txnTable) rangesOnePartInProgress(
 						blk.CommitTs = commitTs
 					}
 				}
+
 				*outBlocks = append(*outBlocks, &blk)
 
 				return true
@@ -2010,9 +2072,10 @@ func (tbl *txnTable) GetDBID(ctx context.Context) uint64 {
 	return tbl.db.databaseId
 }
 
-func (tbl *txnTable) BuildLocalDataSource(
+func (tbl *txnTable) buildLocalDataSource(
 	ctx context.Context,
-	ranges []*objectio.BlockInfoInProgress) (source DataSource, err error) {
+	txnOffset int,
+	relData engine.RelData) (source DataSource, err error) {
 
 	proc := tbl.proc.Load()
 
@@ -2024,6 +2087,20 @@ func (tbl *txnTable) BuildLocalDataSource(
 	tbl.getTxn().blockId_tn_delete_metaLoc_batch.RLock()
 	defer tbl.getTxn().blockId_tn_delete_metaLoc_batch.RUnlock()
 
+	var ranges []*objectio.BlockInfoInProgress
+	relData.ForeachDataBlk(
+		0,
+		relData.BlkCnt(),
+		func(blk *objectio.BlockInfoInProgress) error {
+			ranges = append(ranges, blk)
+			return nil
+		})
+	skipReadMem := !bytes.Equal(
+		objectio.EncodeBlockInfoInProgress(*ranges[0]), objectio.EmptyBlockInfoInProgressBytes)
+
+	if tbl.db.op.IsSnapOp() {
+		txnOffset = tbl.getTxn().GetSnapshotWriteOffset()
+	}
 	source, err = NewLocalDataSource(
 		ctx,
 		proc.Mp(),
@@ -2034,10 +2111,53 @@ func (tbl *txnTable) BuildLocalDataSource(
 		ranges,
 		state,
 		tbl.getTxn().blockId_tn_delete_metaLoc_batch.data,
-		tbl.getTxn().writes[:tbl.getTxn().snapshotWriteOffset],
+		tbl.getTxn().writes[:txnOffset],
+		skipReadMem,
 	)
 
 	return source, err
+}
+
+func (tbl *txnTable) BuildReaders(
+	ctx context.Context,
+	proc *process.Process,
+	expr *plan.Expr,
+	relData engine.RelData,
+	num int,
+	txnOffset int) ([]engine.Reader, error) {
+	blkCnt := relData.BlkCnt()
+	if blkCnt < num {
+		return nil, moerr.NewInternalErrorNoCtx("not enough blocks")
+	}
+	scanType := determineScanType(relData, num)
+	def := tbl.GetTableDef(ctx)
+	mod := blkCnt % num
+	divide := blkCnt / num
+	var shard engine.RelData
+	var rds []engine.Reader
+	for i := 0; i < num; i++ {
+		if i == 0 {
+			shard = relData.DataBlkSlice(i*divide, (i+1)*divide+mod)
+		} else {
+			shard = relData.DataBlkSlice(i*divide+mod, (i+1)*divide+mod)
+		}
+		ds, err := tbl.buildLocalDataSource(ctx, txnOffset, shard)
+		if err != nil {
+			return nil, err
+		}
+		rd := NewReaderInProgress(
+			ctx,
+			proc,
+			tbl.getTxn().engine,
+			def,
+			tbl.db.op.SnapshotTS(),
+			expr,
+			ds,
+		)
+		rd.scanType = scanType
+		rds = append(rds, rd)
+	}
+	return rds, nil
 }
 
 // NewReader creates a new list of Readers to read data from the table.

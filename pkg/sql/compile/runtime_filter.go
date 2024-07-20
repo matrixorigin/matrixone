@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -49,15 +50,14 @@ func (f *RuntimeZonemapFilter) Evaluate(zm objectio.ZoneMap) bool {
 	return f.Zm.FastIntersect(zm)
 }
 
-// TODO::modify it
 func ApplyRuntimeFilters(
 	ctx context.Context,
 	proc *process.Process,
 	tableDef *plan.TableDef,
-	blockInfos objectio.BlockInfoSlice,
+	relData engine.RelData,
 	exprs []*plan.Expr,
 	runtimeFilters []process.RuntimeFilterMessage,
-) ([]byte, error) {
+) (engine.RelData, error) {
 	var err error
 	evaluators := make([]RuntimeFilterEvaluator, len(runtimeFilters))
 
@@ -110,8 +110,8 @@ func ApplyRuntimeFilters(
 		return nil, err
 	}
 	curr := 1 // Skip the first block which is always the memtable
-	for i := 1; i < blockInfos.Len(); i++ {
-		blk := blockInfos.Get(i)
+	for i := 1; i < relData.BlkCnt(); i++ {
+		blk := relData.GetDataBlk(i)
 		location := blk.MetaLocation()
 
 		if !objectio.IsSameObjectLocVsMeta(location, objDataMeta) {
@@ -153,10 +153,9 @@ func ApplyRuntimeFilters(
 			continue
 		}
 
-		// store the block in ranges
-		blockInfos.Set(curr, blk)
+		relData.SetDataBlk(curr, blk)
 		curr++
 	}
 
-	return blockInfos.Slice(0, curr), nil
+	return relData.DataBlkSlice(0, curr), nil
 }

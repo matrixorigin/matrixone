@@ -38,6 +38,7 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
@@ -967,6 +968,25 @@ func (txn *Transaction) hasDeletesOnUncommitedObject() bool {
 
 func (txn *Transaction) hasUncommittedDeletesOnBlock(id *types.Blockid) bool {
 	return txn.deletedBlocks.hasDeletes(id)
+}
+
+// TODO::remove it after workspace refactor.
+func (txn *Transaction) getUncommittedS3Tombstone(locs *[]objectio.Location) error {
+	txn.blockId_tn_delete_metaLoc_batch.RLock()
+	defer txn.blockId_tn_delete_metaLoc_batch.RUnlock()
+	for _, bats := range txn.blockId_tn_delete_metaLoc_batch.data {
+		for _, bat := range bats {
+			vs, area := vector.MustVarlenaRawData(bat.GetVector(0))
+			for i := range vs {
+				location, err := blockio.EncodeLocationFromString(vs[i].UnsafeGetString(area))
+				if err != nil {
+					return err
+				}
+				*locs = append(*locs, location)
+			}
+		}
+	}
+	return nil
 }
 
 // TODO:: refactor in next PR, to make it more efficient and include persisted deletes in S3

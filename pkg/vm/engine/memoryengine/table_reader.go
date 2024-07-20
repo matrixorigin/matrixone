@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type TableReader struct {
@@ -40,6 +41,16 @@ type TableReader struct {
 type IterInfo struct {
 	Shard  Shard
 	IterID ID
+}
+
+func (t *Table) BuildReaders(
+	ctx context.Context,
+	proc *process.Process,
+	expr *plan.Expr,
+	relData engine.RelData,
+	num int,
+	txnOffset int) ([]engine.Reader, error) {
+	panic("implement me")
 }
 
 func (t *Table) NewReader(ctx context.Context, parallel int, expr *plan.Expr, bytes []byte, _ bool, txnOffset int) (readers []engine.Reader, err error) {
@@ -225,7 +236,7 @@ func (t *Table) Ranges(_ context.Context, _ []*plan.Expr, _ int) (engine.Ranges,
 	return &shards, nil
 }
 
-func (tbl *Table) CollectTombstones(ctx context.Context, txnOffset int) ([]byte, error) {
+func (tbl *Table) CollectTombstones(ctx context.Context, txnOffset int) (engine.Tombstoner, error) {
 	panic("implement me")
 }
 

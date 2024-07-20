@@ -67,7 +67,7 @@ func TestReaderInProgress(t *testing.T) {
 		Pkey: &plan.PrimaryKeyDef{},
 	}
 
-	r := newReaderInProgress(
+	r := NewReaderInProgress(
 		ctx,
 		nil,
 		nil,

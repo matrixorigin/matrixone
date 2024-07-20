@@ -191,7 +191,7 @@ func (tbl *txnTableDelegate) Ranges(
 	return nil, nil
 }
 
-func (tbl *txnTableDelegate) CollectTombstones(ctx context.Context, txnOffset int) ([]byte, error) {
+func (tbl *txnTableDelegate) CollectTombstones(ctx context.Context, txnOffset int) (engine.Tombstoner, error) {
 	if tbl.isLocal() {
 		return tbl.origin.CollectTombstones(
 			ctx,
@@ -245,6 +245,26 @@ func (tbl *txnTableDelegate) ApproxObjectsNum(
 
 	// TODO: forward
 	return 0
+}
+
+func (tbl *txnTableDelegate) BuildReaders(
+	ctx context.Context,
+	proc *process.Process,
+	expr *plan.Expr,
+	relData engine.RelData,
+	num int,
+	txnOffset int) ([]engine.Reader, error) {
+	if tbl.isLocal() {
+		return tbl.origin.BuildReaders(
+			ctx,
+			proc,
+			expr,
+			relData,
+			num,
+			txnOffset,
+		)
+	}
+	return nil, nil
 }
 
 func (tbl *txnTableDelegate) NewReader(

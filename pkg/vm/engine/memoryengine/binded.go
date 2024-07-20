@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type BindedEngine struct {
@@ -64,6 +65,17 @@ func (b *BindedEngine) Hints() engine.Hints {
 
 func (b *BindedEngine) NewBlockReader(_ context.Context, _ int, _ timestamp.Timestamp,
 	_ *plan.Expr, filter any, _ []byte, _ *plan.TableDef, _ any) ([]engine.Reader, error) {
+	return nil, nil
+}
+
+func (b *BindedEngine) BuildBlockReaders(
+	ctx context.Context,
+	proc *process.Process,
+	ts timestamp.Timestamp,
+	expr *plan.Expr,
+	def *plan.TableDef,
+	relData engine.RelData,
+	num int) ([]engine.Reader, error) {
 	return nil, nil
 }
 

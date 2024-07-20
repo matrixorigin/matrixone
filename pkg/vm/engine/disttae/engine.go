@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/panjf2000/ants/v2"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -54,7 +56,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/panjf2000/ants/v2"
 )
 
 var _ engine.Engine = new(Engine)
@@ -698,6 +699,66 @@ func (e *Engine) Nodes(
 func (e *Engine) Hints() (h engine.Hints) {
 	h.CommitOrRollbackTimeout = time.Minute * 5
 	return
+}
+
+func determineScanType(relData engine.RelData, num int) (scanType int) {
+	scanType = NORMAL
+	if relData.BlkCnt() < num*SMALLSCAN_THRESHOLD {
+		scanType = SMALL
+	} else if (num * LARGESCAN_THRESHOLD) <= relData.BlkCnt() {
+		scanType = LARGE
+	}
+	return
+}
+
+func (e *Engine) BuildBlockReaders(
+	ctx context.Context,
+	proc *process.Process,
+	ts timestamp.Timestamp,
+	expr *plan.Expr,
+	def *plan.TableDef,
+	relData engine.RelData,
+	num int) ([]engine.Reader, error) {
+	blkCnt := relData.BlkCnt()
+	if blkCnt < num {
+		return nil, moerr.NewInternalErrorNoCtx("not enough blocks")
+	}
+	fs, err := fileservice.Get[fileservice.FileService](e.fs, defines.SharedFileServiceName)
+	if err != nil {
+		return nil, err
+	}
+	var (
+		rds   []engine.Reader
+		shard engine.RelData
+	)
+	scanType := determineScanType(relData, num)
+	mod := blkCnt % num
+	divide := blkCnt / num
+	for i := 0; i < num; i++ {
+		if i == 0 {
+			shard = relData.DataBlkSlice(i*divide, (i+1)*divide+mod)
+		} else {
+			shard = relData.DataBlkSlice(i*divide+mod, (i+1)*divide+mod)
+		}
+		ds := NewRemoteDataSource(
+			ctx,
+			proc,
+			fs,
+			ts,
+			shard)
+		rd := NewReaderInProgress(
+			ctx,
+			proc,
+			e,
+			def,
+			ts,
+			expr,
+			ds,
+		)
+		rd.scanType = scanType
+		rds = append(rds, rd)
+	}
+	return rds, nil
 }
 
 func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp,

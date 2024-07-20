@@ -21,6 +21,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/panjf2000/ants/v2"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -45,7 +47,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/panjf2000/ants/v2"
 )
 
 const (
@@ -301,6 +302,16 @@ func (b *deletedBlocks) getDeletedOffsetsByBlock(blockID *types.Blockid, offsets
 	defer b.RUnlock()
 	res := b.offsets[*blockID]
 	*offsets = append(*offsets, res...)
+}
+
+func (b *deletedBlocks) getDeletedRowIDs(rows *[]types.Rowid) {
+	b.RLock()
+	defer b.RUnlock()
+	for bid, offsets := range b.offsets {
+		for _, offset := range offsets {
+			*rows = append(*rows, *types.NewRowid(&bid, uint32(offset)))
+		}
+	}
 }
 
 func (b *deletedBlocks) clean() {
@@ -820,9 +831,8 @@ type blockMergeReader struct {
 type readerInProgress struct {
 	withFilterMixin
 
-	source    DataSource
-	txnOffset int
-	ts        timestamp.Timestamp
+	source DataSource
+	ts     timestamp.Timestamp
 
 	//FIXME:: prefetch blocks in DataSource?
 	//dontPrefetch bool

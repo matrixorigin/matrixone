@@ -689,33 +689,14 @@ func (r *mergeReader) Read(
 
 // -----------------------------------------------------------------
 
-func NewReadersInProgress(
+func NewReaderInProgress(
 	ctx context.Context,
 	proc *process.Process, //it comes from transaction if reader run in local,otherwise it comes from remote compile.
-	fs fileservice.FileService, //it comes from engine.fs.
-	packerPool *fileservice.Pool[*types.Packer], //it comes from engine.packerPool.
+	e *Engine,
 	tableDef *plan.TableDef,
 	ts timestamp.Timestamp,
 	expr *plan.Expr,
-	//filter any, // it's valid when reader runs on remote side.
-	orderedScan bool, // it's valid when reader runs on local.
-	txnOffset int, // it can be removed. it's different between normal reader and snapshot reader.
-	//source DataSource,
-
-) []*readerInProgress {
-	return nil
-}
-func newReaderInProgress(
-	ctx context.Context,
-	proc *process.Process, //it comes from transaction if reader run in local,otherwise it comes from remote compile.
-	fs fileservice.FileService, //it comes from engine.fs.
-	packerPool *fileservice.Pool[*types.Packer], //it comes from engine.packerPool.
-	tableDef *plan.TableDef,
-	ts timestamp.Timestamp,
-	expr *plan.Expr,
-	//filter any, // it's valid when reader runs on remote side.
-	orderedScan bool, // it's valid when reader runs on local.
-	txnOffset int, // it can be removed. it's different between normal reader and snapshot reader.
+	//orderedScan bool, // it should be included in filter or expr.
 	source DataSource,
 ) *readerInProgress {
 
@@ -725,6 +706,7 @@ func newReaderInProgress(
 		proc,
 	)
 
+	packerPool := e.packerPool
 	memFilter := newMemPKFilterInProgress(
 		tableDef,
 		ts,
@@ -740,14 +722,13 @@ func newReaderInProgress(
 	r := &readerInProgress{
 		withFilterMixin: withFilterMixin{
 			ctx:      ctx,
-			fs:       fs,
+			fs:       e.fs,
 			ts:       ts,
 			proc:     proc,
 			tableDef: tableDef,
 		},
 		memFilter: memFilter,
 		source:    source,
-		txnOffset: txnOffset,
 		ts:        ts,
 	}
 	r.filterState.expr = expr
@@ -830,7 +811,6 @@ func (r *readerInProgress) Read(
 		r.columns.colTypes,
 		r.columns.seqnums,
 		r.memFilter,
-		r.txnOffset,
 		mp,
 		vp,
 		bat)

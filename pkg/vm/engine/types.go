@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -31,6 +32,7 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type Nodes []Node
@@ -583,14 +585,25 @@ const (
 type Tombstoner interface {
 	Type() TombstoneType
 	HasTombstones(bid types.Blockid) bool
-	ApplyTombstones(rows []types.Rowid) ([]int64, error)
+	ApplyTombstones(
+		rows []types.Rowid,
+		load1 func(
+			bid types.Blockid,
+			loc objectio.Location,
+			committs types.TS) (*nulls.Nulls, error),
+		load2 func(loc objectio.Location) (*nulls.Nulls, error)) ([]int64, error)
+	Merge(other Tombstoner) error
 }
 
 type RelData interface {
 	MarshalToBytes() []byte
 	AttachTombstones(tombstones Tombstoner) error
-	ForeachDataBlk(f func(blk *objectio.BlockInfoInProgress))
+	GetTombstones() Tombstoner
+	ForeachDataBlk(begin, end int, f func(blk *objectio.BlockInfoInProgress) error) error
 	GetDataBlk(i int) *objectio.BlockInfoInProgress
+	SetDataBlk(i int, blk *objectio.BlockInfoInProgress)
+	DataBlkSlice(begin, end int) RelData
+	//DataBlkClone(begin, end int) RelData
 	AppendDataBlk(blk *objectio.BlockInfoInProgress)
 	BuildEmptyRelData() RelData
 	BlkCnt() int
@@ -625,7 +638,7 @@ type Relation interface {
 
 	//RangesInProgress will substitute the Ranges function in the future.
 	RangesInProgress(context.Context, []*plan.Expr, int) (RelData, error)
-	CollectTombstones(ctx context.Context, txnOffset int) ([]byte, error)
+	CollectTombstones(ctx context.Context, txnOffset int) (Tombstoner, error)
 
 	TableDefs(context.Context) ([]TableDef, error)
 
@@ -662,13 +675,21 @@ type Relation interface {
 
 	GetDBID(context.Context) uint64
 
-	// NewReader Parameters:
+	// NewReader It's deprecated.
 	// second parameter is the number of reader,
 	// third parameter is the filter extend,
 	// foruth parameter is the payload required by the engine
 	// fifth parameter is data blocks
 	// sixth parameter is transaction offset used to specify the starting position for reading data.
 	NewReader(context.Context, int, *plan.Expr, []byte, bool, int) ([]Reader, error)
+
+	BuildReaders(
+		ctx context.Context,
+		proc *process.Process,
+		expr *plan.Expr,
+		relData RelData,
+		num int,
+		txnOffset int) ([]Reader, error)
 
 	TableColumns(ctx context.Context) ([]*Attribute, error)
 
@@ -743,7 +764,17 @@ type Engine interface {
 	// since implementations may update hints after engine had initialized
 	Hints() Hints
 
+	//It's deprecated.
 	NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp, expr *plan.Expr, blockReadPKFilter any, ranges []byte, tblDef *plan.TableDef, proc any) ([]Reader, error)
+
+	BuildBlockReaders(
+		ctx context.Context,
+		proc *process.Process,
+		ts timestamp.Timestamp,
+		expr *plan.Expr,
+		def *plan.TableDef,
+		relData RelData,
+		num int) ([]Reader, error)
 
 	// Get database name & table name by table id
 	GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error)

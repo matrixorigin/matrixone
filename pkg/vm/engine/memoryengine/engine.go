@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // Engine is an engine.Engine impl
@@ -69,6 +70,17 @@ func (e *Engine) Rollback(_ context.Context, _ client.TxnOperator) error {
 
 func (e *Engine) NewBlockReader(_ context.Context, _ int, _ timestamp.Timestamp,
 	_ *plan.Expr, _ any, _ []byte, _ *plan.TableDef, _ any) ([]engine.Reader, error) {
+	return nil, nil
+}
+
+func (b *Engine) BuildBlockReaders(
+	ctx context.Context,
+	proc *process.Process,
+	ts timestamp.Timestamp,
+	expr *plan.Expr,
+	def *plan.TableDef,
+	relData engine.RelData,
+	num int) ([]engine.Reader, error) {
 	return nil, nil
 }
 
