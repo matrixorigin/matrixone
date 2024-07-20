@@ -177,14 +177,7 @@ func (t *TableReader) Read(ctx context.Context, colNames []string, plan *plan.Ex
 
 }
 
-func (t *TableReader) SetFilterZM(objectio.ZoneMap) {
-}
-
-func (t *TableReader) GetOrderBy() []*plan.OrderBySpec {
-	return nil
-}
-
-func (t *TableReader) SetOrderBy([]*plan.OrderBySpec) {
+func (t *TableReader) SetDynamicFilter(filter func(zm objectio.ZoneMap) bool) {
 }
 
 func (t *TableReader) Close() error {

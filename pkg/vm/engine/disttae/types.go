@@ -45,7 +45,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -766,11 +765,6 @@ type withFilterMixin struct {
 	sels []int32
 }
 
-type blockSortHelper struct {
-	blk *objectio.BlockInfo
-	zm  index.ZM
-}
-
 type blockReader struct {
 	withFilterMixin
 
@@ -787,11 +781,12 @@ type blockReader struct {
 	buffer []int64
 
 	// for ordered scan
-	desc     bool
-	blockZMS []index.ZM
-	OrderBy  []*plan.OrderBySpec
-	sorted   bool // blks need to be sorted by zonemap
-	filterZM objectio.ZoneMap
+
+	orderedScan struct {
+		// skip current blk read if false
+		blocksZoneMap []objectio.ZoneMap
+		dynamicFilter func(zm objectio.ZoneMap) bool
+	}
 }
 
 type blockMergeReader struct {

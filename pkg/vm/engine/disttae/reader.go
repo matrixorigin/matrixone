@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"sort"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -38,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 )
@@ -119,14 +117,8 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string, blkCnt int) {
 // ------------------------ emptyReader ----------------------------
 // -----------------------------------------------------------------
 
-func (r *emptyReader) SetFilterZM(objectio.ZoneMap) {
-}
+func (r *emptyReader) SetDynamicFilter(filter func(oth objectio.ZoneMap) bool) {
 
-func (r *emptyReader) GetOrderBy() []*plan.OrderBySpec {
-	return nil
-}
-
-func (r *emptyReader) SetOrderBy([]*plan.OrderBySpec) {
 }
 
 func (r *emptyReader) Close() error {
@@ -168,6 +160,7 @@ func newBlockReader(
 		},
 		blks: blks,
 	}
+	r.orderedScan.blocksZoneMap = nil
 	r.filterState.expr = filterExpr
 	r.filterState.filter = filter
 	return r
@@ -180,106 +173,8 @@ func (r *blockReader) Close() error {
 	return nil
 }
 
-func (r *blockReader) SetFilterZM(zm objectio.ZoneMap) {
-	if !r.filterZM.IsInited() {
-		r.filterZM = zm.Clone()
-		return
-	}
-	if r.desc && r.filterZM.CompareMax(zm) < 0 {
-		r.filterZM = zm.Clone()
-		return
-	}
-	if !r.desc && r.filterZM.CompareMin(zm) > 0 {
-		r.filterZM = zm.Clone()
-		return
-	}
-}
-
-func (r *blockReader) GetOrderBy() []*plan.OrderBySpec {
-	return r.OrderBy
-}
-
-func (r *blockReader) SetOrderBy(orderby []*plan.OrderBySpec) {
-	r.OrderBy = orderby
-}
-
-func (r *blockReader) needReadBlkByZM(i int) bool {
-	zm := r.blockZMS[i]
-	if !r.filterZM.IsInited() || !zm.IsInited() {
-		return true
-	}
-	if r.desc {
-		return r.filterZM.CompareMax(zm) <= 0
-	} else {
-		return r.filterZM.CompareMin(zm) >= 0
-	}
-}
-
-func (r *blockReader) getBlockZMs() {
-	orderByCol, _ := r.OrderBy[0].Expr.Expr.(*plan.Expr_Col)
-	orderByColIDX := int(r.tableDef.Cols[int(orderByCol.Col.ColPos)].Seqnum)
-
-	r.blockZMS = make([]index.ZM, len(r.blks))
-	var objDataMeta objectio.ObjectDataMeta
-	var location objectio.Location
-	for i := range r.blks {
-		location = r.blks[i].MetaLocation()
-		if !objectio.IsSameObjectLocVsMeta(location, objDataMeta) {
-			objMeta, err := objectio.FastLoadObjectMeta(r.ctx, &location, false, r.fs)
-			if err != nil {
-				panic("load object meta error when ordered scan!")
-			}
-			objDataMeta = objMeta.MustDataMeta()
-		}
-		blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
-		r.blockZMS[i] = blkMeta.ColumnMeta(uint16(orderByColIDX)).ZoneMap()
-	}
-}
-
-func (r *blockReader) sortBlockList() {
-	helper := make([]*blockSortHelper, len(r.blks))
-	for i := range r.blks {
-		helper[i] = &blockSortHelper{}
-		helper[i].blk = r.blks[i]
-		helper[i].zm = r.blockZMS[i]
-	}
-	if r.desc {
-		sort.Slice(helper, func(i, j int) bool {
-			zm1 := helper[i].zm
-			if !zm1.IsInited() {
-				return true
-			}
-			zm2 := helper[j].zm
-			if !zm2.IsInited() {
-				return false
-			}
-			return zm1.CompareMax(zm2) > 0
-		})
-	} else {
-		sort.Slice(helper, func(i, j int) bool {
-			zm1 := helper[i].zm
-			if !zm1.IsInited() {
-				return true
-			}
-			zm2 := helper[j].zm
-			if !zm2.IsInited() {
-				return false
-			}
-			return zm1.CompareMin(zm2) < 0
-		})
-	}
-
-	for i := range helper {
-		r.blks[i] = helper[i].blk
-		r.blockZMS[i] = helper[i].zm
-	}
-}
-
-func (r *blockReader) deleteFirstNBlocks(n int) {
-	r.blks = r.blks[n:]
-	if len(r.OrderBy) > 0 {
-		r.blockZMS = r.blockZMS[n:]
-	}
+func (r *blockReader) SetDynamicFilter(filter func(zm objectio.ZoneMap) bool) {
+	r.orderedScan.dynamicFilter = filter
 }
 
 func (r *blockReader) Read(
@@ -294,31 +189,24 @@ func (r *blockReader) Read(
 		v2.TxnBlockReaderDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	// for ordered scan, sort blocklist by zonemap info, and then filter by zonemap
-	if len(r.OrderBy) > 0 {
-		if !r.sorted {
-			r.desc = r.OrderBy[0].Flag&plan.OrderBySpec_DESC != 0
-			r.getBlockZMs()
-			r.sortBlockList()
-			r.sorted = true
-		}
-		i := 0
-		for i < len(r.blks) {
-			if r.needReadBlkByZM(i) {
-				break
+	if r.orderedScan.dynamicFilter != nil {
+		for len(r.blks) > 0 {
+			if !r.orderedScan.dynamicFilter(r.orderedScan.blocksZoneMap[0]) {
+				r.blks = r.blks[1:]
+				r.orderedScan.blocksZoneMap = r.orderedScan.blocksZoneMap[1:]
+				continue
 			}
-			i++
+
+			break
 		}
-		r.deleteFirstNBlocks(i)
 	}
+
 	// if the block list is empty, return nil
 	if len(r.blks) == 0 {
 		return nil, nil
 	}
 
-	// move to the next block at the end of this call
 	defer func() {
-		r.deleteFirstNBlocks(1)
 		r.buffer = r.buffer[:0]
 		r.currentStep++
 	}()
@@ -619,24 +507,9 @@ func NewMergeReader(readers []engine.Reader) *mergeReader {
 	}
 }
 
-func (r *mergeReader) SetFilterZM(zm objectio.ZoneMap) {
+func (r *mergeReader) SetDynamicFilter(filter func(oth objectio.ZoneMap) bool) {
 	for i := range r.rds {
-		r.rds[i].SetFilterZM(zm)
-	}
-}
-
-func (r *mergeReader) GetOrderBy() []*plan.OrderBySpec {
-	for i := range r.rds {
-		if r.rds[i].GetOrderBy() != nil {
-			return r.rds[i].GetOrderBy()
-		}
-	}
-	return nil
-}
-
-func (r *mergeReader) SetOrderBy(orderby []*plan.OrderBySpec) {
-	for i := range r.rds {
-		r.rds[i].SetOrderBy(orderby)
+		r.rds[i].SetDynamicFilter(filter)
 	}
 }
 

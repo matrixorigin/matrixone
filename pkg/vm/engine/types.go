@@ -663,9 +663,7 @@ type Relation interface {
 type Reader interface {
 	Close() error
 	Read(context.Context, []string, *plan.Expr, *mpool.MPool, VectorPool) (*batch.Batch, error)
-	SetOrderBy([]*plan.OrderBySpec)
-	GetOrderBy() []*plan.OrderBySpec
-	SetFilterZM(objectio.ZoneMap)
+	SetDynamicFilter(filter func(zm objectio.ZoneMap) bool)
 }
 
 type Database interface {

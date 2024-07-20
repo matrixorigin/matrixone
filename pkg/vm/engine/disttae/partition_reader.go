@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"go.uber.org/zap"
@@ -49,14 +48,8 @@ type PartitionReader struct {
 
 var _ engine.Reader = new(PartitionReader)
 
-func (p *PartitionReader) SetFilterZM(objectio.ZoneMap) {
-}
+func (p *PartitionReader) SetDynamicFilter(filter func(zm objectio.ZoneMap) bool) {
 
-func (p *PartitionReader) GetOrderBy() []*plan.OrderBySpec {
-	return nil
-}
-
-func (p *PartitionReader) SetOrderBy([]*plan.OrderBySpec) {
 }
 
 func (p *PartitionReader) Close() error {
