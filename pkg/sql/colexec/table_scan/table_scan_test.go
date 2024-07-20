@@ -65,7 +65,6 @@ func TestPrepare(t *testing.T) {
 		return bat, nil
 	}).AnyTimes()
 	reader.EXPECT().Close().Return(nil).AnyTimes()
-	reader.EXPECT().GetOrderBy().Return(nil).AnyTimes()
 	arg := &TableScan{
 		Reader: reader,
 	}
@@ -120,7 +119,6 @@ func TestCall(t *testing.T) {
 		return bat, nil
 	}).AnyTimes()
 	reader.EXPECT().Close().Return(nil).AnyTimes()
-	reader.EXPECT().GetOrderBy().Return(nil).AnyTimes()
 	arg := &TableScan{
 		Reader: reader,
 	}

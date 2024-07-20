@@ -121,7 +121,6 @@ func TestNormalDeletion(t *testing.T) {
 		return bat, nil
 	}).AnyTimes()
 	reader.EXPECT().Close().Return(nil).AnyTimes()
-	reader.EXPECT().GetOrderBy().Return(nil).AnyTimes()
 	childArg := &table_scan.TableScan{
 		Reader: reader,
 	}
