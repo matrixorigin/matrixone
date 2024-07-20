@@ -17,13 +17,20 @@ package testengine
 import (
 	"context"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 )
 
 func TestTestEngine(t *testing.T) {
-	engine, client, compilerCtx := New(context.Background())
-	_ = engine
-	_ = client
-	_ = compilerCtx
+	runtime.RunTest(
+		"",
+		func(rt runtime.Runtime) {
+			engine, client, compilerCtx := New(context.Background())
+			_ = engine
+			_ = client
+			_ = compilerCtx
+		},
+	)
 }
 
 func BenchmarkNew(b *testing.B) {

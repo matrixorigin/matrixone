@@ -16,6 +16,9 @@ package task
 
 import (
 	"context"
+	"testing"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -24,8 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/stretchr/testify/assert"
-	"testing"
-	"time"
 )
 
 func TestMain(m *testing.M) {
@@ -34,7 +35,7 @@ func TestMain(m *testing.M) {
 		Format: "console",
 	})
 
-	runtime.SetupProcessLevelRuntime(runtime.NewRuntime(metadata.ServiceType_LOG, "test", logutil.GetGlobalLogger()))
+	runtime.SetupServiceBasedRuntime("", runtime.NewRuntime(metadata.ServiceType_LOG, "test", logutil.GetGlobalLogger()))
 	m.Run()
 }
 
@@ -131,7 +132,7 @@ func TestGetCNOrderedMap(t *testing.T) {
 
 func TestScheduleCreatedTasks(t *testing.T) {
 	service := taskservice.NewTaskService(runtime.DefaultRuntime(), taskservice.NewMemTaskStorage())
-	scheduler := NewScheduler(func() taskservice.TaskService { return service }, hakeeper.Config{})
+	scheduler := NewScheduler("", func() taskservice.TaskService { return service }, hakeeper.Config{})
 	cnState := pb.CNState{Stores: map[string]pb.CNStoreInfo{"a": {}}}
 	currentTick := uint64(0)
 
@@ -174,7 +175,7 @@ func TestScheduleCreatedTasks(t *testing.T) {
 
 func TestReallocateExpiredTasks(t *testing.T) {
 	service := taskservice.NewTaskService(runtime.DefaultRuntime(), taskservice.NewMemTaskStorage())
-	scheduler := NewScheduler(func() taskservice.TaskService { return service }, hakeeper.Config{})
+	scheduler := NewScheduler("", func() taskservice.TaskService { return service }, hakeeper.Config{})
 	cnState := pb.CNState{Stores: map[string]pb.CNStoreInfo{"a": {}}}
 	currentTick := expiredTick - 1
 
@@ -223,7 +224,7 @@ func TestReallocateExpiredTasks(t *testing.T) {
 
 func TestAllocTasksWithLabels(t *testing.T) {
 	service := taskservice.NewTaskService(runtime.DefaultRuntime(), taskservice.NewMemTaskStorage())
-	scheduler := NewScheduler(func() taskservice.TaskService { return service }, hakeeper.Config{})
+	scheduler := NewScheduler("", func() taskservice.TaskService { return service }, hakeeper.Config{})
 	cnState := pb.CNState{Stores: map[string]pb.CNStoreInfo{
 		"a": {Labels: map[string]metadata.LabelList{"k1": {Labels: []string{"v1"}}}},
 		"b": {Labels: map[string]metadata.LabelList{"k1": {Labels: []string{"v2"}}}},
@@ -282,7 +283,7 @@ func TestAllocTasksWithLabels(t *testing.T) {
 
 func TestAllocTasksWithMemoryOrCPU(t *testing.T) {
 	service := taskservice.NewTaskService(runtime.DefaultRuntime(), taskservice.NewMemTaskStorage())
-	scheduler := NewScheduler(func() taskservice.TaskService { return service }, hakeeper.Config{})
+	scheduler := NewScheduler("", func() taskservice.TaskService { return service }, hakeeper.Config{})
 	cnState := pb.CNState{Stores: map[string]pb.CNStoreInfo{
 		"a": {Resource: pb.Resource{CPUTotal: 1, MemTotal: 200}},
 		"b": {Resource: pb.Resource{CPUTotal: 1, MemTotal: 100}},

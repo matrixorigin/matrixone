@@ -290,6 +290,7 @@ var _ FeSession = &Session{}
 var _ FeSession = &backSession{}
 
 type FeSession interface {
+	GetService() string
 	GetTimeZone() *time.Location
 	GetStatsCache() *plan2.StatsCache
 	GetUserName() string

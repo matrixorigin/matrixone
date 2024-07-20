@@ -63,8 +63,8 @@ func (s *service) UpgradeTenant(ctx context.Context, tenantName string, retryCou
 func (s *service) CheckAndUpgradeCluster(ctx context.Context) error {
 	s.adjustUpgrade()
 
-	if err := retryRun(ctx, "doCheckUpgrade", s.doCheckUpgrade); err != nil {
-		getUpgradeLogger().Error("check upgrade failed", zap.Error(err))
+	if err := retryRun(ctx, s.logger, "doCheckUpgrade", s.doCheckUpgrade); err != nil {
+		s.logger.Error("check upgrade failed", zap.Error(err))
 		return err
 	}
 	if err := s.stopper.RunTask(s.asyncUpgradeTask); err != nil {
@@ -184,7 +184,7 @@ func (s *service) CheckUpgradeAccount(ctx context.Context, accountName string) (
 			var err error
 			accountId, err = GetAccountIdByName(accountName, txn)
 			if err != nil {
-				getUpgradeLogger().Error("failed to get accountId by accountName when upgrade account",
+				s.logger.Error("failed to get accountId by accountName when upgrade account",
 					zap.Error(err))
 				return err
 			}
@@ -229,7 +229,7 @@ func (s *service) UpgradePreCheck(ctx context.Context) error {
 		func(txn executor.TxnExecutor) error {
 			created, err := versions.IsFrameworkTablesCreated(txn)
 			if err != nil {
-				getUpgradeLogger().Error("failed to check upgrade framework",
+				s.logger.Error("failed to check upgrade framework",
 					zap.Error(err))
 				return err
 			}
@@ -240,12 +240,12 @@ func (s *service) UpgradePreCheck(ctx context.Context) error {
 			final := s.getFinalVersionHandle().Metadata()
 			unReady, err := checkUpgradePerVersionUnready(txn, final)
 			if err != nil {
-				getUpgradeLogger().Error("failed to check task status in pgrade environment", zap.Error(err))
+				s.logger.Error("failed to check task status in pgrade environment", zap.Error(err))
 				return err
 			}
 
 			if unReady {
-				getUpgradeLogger().Info("There are unexecuted tenant upgrade tasks in upgrade environment, start asynchronous supplementary execution")
+				s.logger.Info("There are unexecuted tenant upgrade tasks in upgrade environment, start asynchronous supplementary execution")
 				s.adjustUpgrade()
 				if err := s.stopper.RunTask(s.asyncUpgradeTask); err != nil {
 					return err

@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
@@ -32,6 +33,7 @@ var (
 )
 
 type detector struct {
+	logger            *log.MOLogger
 	c                 chan deadlockTxn
 	waitTxnsFetchFunc func(pb.WaitTxn, *waiters) (bool, error)
 	waitTxnAbortFunc  func(pb.WaitTxn, error)
@@ -50,14 +52,17 @@ type detector struct {
 // is found. When a deadlock is found, waitTxnAbortFunc is used to notify the external abort to drop a
 // txn.
 func newDeadlockDetector(
+	logger *log.MOLogger,
 	waitTxnsFetchFunc func(pb.WaitTxn, *waiters) (bool, error),
-	waitTxnAbortFunc func(pb.WaitTxn, error)) *detector {
+	waitTxnAbortFunc func(pb.WaitTxn, error),
+) *detector {
 	d := &detector{
+		logger:            logger,
 		c:                 make(chan deadlockTxn, maxWaitingCheckCount),
 		waitTxnsFetchFunc: waitTxnsFetchFunc,
 		waitTxnAbortFunc:  waitTxnAbortFunc,
 		stopper: stopper.NewStopper("deadlock-detector",
-			stopper.WithLogger(getLogger().RawLogger())),
+			stopper.WithLogger(logger.RawLogger())),
 	}
 	d.mu.activeCheckTxn = make(map[string]struct{}, maxWaitingCheckCount)
 	for i := 0; i < deadlockCheckTaskCount; i++ {
@@ -116,7 +121,7 @@ func (d *detector) check(
 }
 
 func (d *detector) doCheck(ctx context.Context) {
-	defer getLogger().InfoAction("dead lock checker")()
+	defer d.logger.InfoAction("dead lock checker")()
 
 	w := &waiters{ignoreTxns: &d.ignoreTxns}
 	for {
@@ -152,11 +157,11 @@ func (d *detector) checkDeadlock(w *waiters) (bool, error) {
 		txn := w.getCheckTargetTxn()
 		added, err := d.waitTxnsFetchFunc(txn, w)
 		if err != nil {
-			logCheckDeadLockFailed(txn, waitingTxn, err)
+			logCheckDeadLockFailed(d.logger, txn, waitingTxn, err)
 			return false, err
 		}
 		if !added {
-			logDeadLockFound(waitingTxn, w)
+			logDeadLockFound(d.logger, waitingTxn, w)
 			return true, nil
 		}
 		w.next()
