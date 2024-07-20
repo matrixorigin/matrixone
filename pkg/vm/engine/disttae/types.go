@@ -755,11 +755,15 @@ type withFilterMixin struct {
 	filterState struct {
 		evaluated bool
 		//point select for primary key
-		expr     *plan.Expr
-		filter   blockio.BlockReadFilter
+		expr *plan.Expr
+
 		seqnums  []uint16 // seqnums of the columns in the filter
 		colTypes []types.Type
 		hasNull  bool
+
+		filter blockio.BlockReadFilter
+		// skip current blk read if false
+		dynamicFilter func(zm objectio.ZoneMap) bool
 	}
 
 	sels []int32
@@ -780,13 +784,7 @@ type blockReader struct {
 	//buffer for block's deletes
 	buffer []int64
 
-	// for ordered scan
-
-	orderedScan struct {
-		// skip current blk read if false
-		blocksZoneMap []objectio.ZoneMap
-		dynamicFilter func(zm objectio.ZoneMap) bool
-	}
+	blocksZoneMap []objectio.ZoneMap
 }
 
 type blockMergeReader struct {

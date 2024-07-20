@@ -771,20 +771,6 @@ func (mr *MockReaderMockRecorder) Close() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Close", reflect.TypeOf((*MockReader)(nil).Close))
 }
 
-// GetOrderBy mocks base method.
-func (m *MockReader) GetOrderBy() []*plan.OrderBySpec {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetOrderBy")
-	ret0, _ := ret[0].([]*plan.OrderBySpec)
-	return ret0
-}
-
-// GetOrderBy indicates an expected call of GetOrderBy.
-func (mr *MockReaderMockRecorder) GetOrderBy() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetOrderBy", reflect.TypeOf((*MockReader)(nil).GetOrderBy))
-}
-
 // Read mocks base method.
 func (m *MockReader) Read(arg0 context.Context, arg1 []string, arg2 *plan.Expr, arg3 *mpool.MPool, arg4 engine.VectorPool) (*batch.Batch, error) {
 	m.ctrl.T.Helper()
@@ -800,28 +786,16 @@ func (mr *MockReaderMockRecorder) Read(arg0, arg1, arg2, arg3, arg4 interface{})
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Read", reflect.TypeOf((*MockReader)(nil).Read), arg0, arg1, arg2, arg3, arg4)
 }
 
-// SetFilterZM mocks base method.
-func (m *MockReader) SetFilterZM(arg0 objectio.ZoneMap) {
+// SetDynamicFilter mocks base method.
+func (m *MockReader) SetDynamicFilter(filter func(objectio.ZoneMap) bool) {
 	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "SetFilterZM", arg0)
+	m.ctrl.Call(m, "SetDynamicFilter", filter)
 }
 
-// SetFilterZM indicates an expected call of SetFilterZM.
-func (mr *MockReaderMockRecorder) SetFilterZM(arg0 interface{}) *gomock.Call {
+// SetDynamicFilter indicates an expected call of SetDynamicFilter.
+func (mr *MockReaderMockRecorder) SetDynamicFilter(filter interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetFilterZM", reflect.TypeOf((*MockReader)(nil).SetFilterZM), arg0)
-}
-
-// SetOrderBy mocks base method.
-func (m *MockReader) SetOrderBy(arg0 []*plan.OrderBySpec) {
-	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "SetOrderBy", arg0)
-}
-
-// SetOrderBy indicates an expected call of SetOrderBy.
-func (mr *MockReaderMockRecorder) SetOrderBy(arg0 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetOrderBy", reflect.TypeOf((*MockReader)(nil).SetOrderBy), arg0)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetDynamicFilter", reflect.TypeOf((*MockReader)(nil).SetDynamicFilter), filter)
 }
 
 // MockDatabase is a mock of Database interface.

@@ -160,7 +160,7 @@ func newBlockReader(
 		},
 		blks: blks,
 	}
-	r.orderedScan.blocksZoneMap = nil
+	r.blocksZoneMap = nil
 	r.filterState.expr = filterExpr
 	r.filterState.filter = filter
 	return r
@@ -174,7 +174,7 @@ func (r *blockReader) Close() error {
 }
 
 func (r *blockReader) SetDynamicFilter(filter func(zm objectio.ZoneMap) bool) {
-	r.orderedScan.dynamicFilter = filter
+	r.filterState.dynamicFilter = filter
 }
 
 func (r *blockReader) Read(
@@ -189,11 +189,11 @@ func (r *blockReader) Read(
 		v2.TxnBlockReaderDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	if r.orderedScan.dynamicFilter != nil {
+	if r.filterState.dynamicFilter != nil {
 		for len(r.blks) > 0 {
-			if !r.orderedScan.dynamicFilter(r.orderedScan.blocksZoneMap[0]) {
+			if !r.filterState.dynamicFilter(r.blocksZoneMap[0]) {
 				r.blks = r.blks[1:]
-				r.orderedScan.blocksZoneMap = r.orderedScan.blocksZoneMap[1:]
+				r.blocksZoneMap = r.blocksZoneMap[1:]
 				continue
 			}
 
