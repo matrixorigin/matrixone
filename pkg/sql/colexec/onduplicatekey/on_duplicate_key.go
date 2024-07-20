@@ -51,7 +51,7 @@ func (onDuplicatekey *OnDuplicatekey) Call(proc *process.Process) (vm.CallResult
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(onDuplicatekey.GetIdx(), onDuplicatekey.GetParallelIdx(), onDuplicatekey.GetParallelMajor())
+	anal := proc.GetAnalyze2(onDuplicatekey.GetIdx(), onDuplicatekey.GetParallelIdx(), onDuplicatekey.GetParallelMajor(), onDuplicatekey.OpStats)
 	anal.Start()
 	defer anal.Stop()
 

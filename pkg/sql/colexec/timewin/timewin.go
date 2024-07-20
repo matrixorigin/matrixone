@@ -98,9 +98,10 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(timeWin.GetIdx(), timeWin.GetParallelIdx(), timeWin.GetParallelMajor())
+	anal := proc.GetAnalyze2(timeWin.GetIdx(), timeWin.GetParallelIdx(), timeWin.GetParallelMajor(), timeWin.OpStats)
 	anal.Start()
 	defer anal.Stop()
+
 	ctr := timeWin.ctr
 	var err error
 	var bat *batch.Batch

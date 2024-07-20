@@ -493,7 +493,7 @@ func doLock(
 		return false, false, timestamp.Timestamp{}, err
 	}
 	// Record lock waiting time
-	process.AnalyzeLockWaitTime(analyze, start)
+	analyzeLockWaitTime(analyze, start)
 	//-------------------->>>>>>>----------------------------
 
 	if len(result.ConflictKey) > 0 {
@@ -546,7 +546,7 @@ func doLock(
 			return false, false, timestamp.Timestamp{}, err
 		}
 		// Record logtail waiting time
-		process.AnalyzeLockWaitTime(analyze, start)
+		analyzeLockWaitTime(analyze, start)
 
 		fn := opts.hasNewVersionInRangeFunc
 		if fn == nil {
@@ -942,4 +942,11 @@ func hasNewVersionInRange(
 	fromTS := types.BuildTS(from.PhysicalTime, from.LogicalTime)
 	toTS := types.BuildTS(to.PhysicalTime, to.LogicalTime)
 	return rel.PrimaryKeysMayBeModified(proc.Ctx, fromTS, toTS, vec)
+}
+
+// analyzeLockWaitTime encapsulates the logic for recording the waiting time of the analyzer
+func analyzeLockWaitTime(analyze process.Analyze, start time.Time) {
+	if analyze != nil {
+		analyze.WaitStop(start)
+	}
 }

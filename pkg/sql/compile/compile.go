@@ -1468,7 +1468,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		c.setAnalyzeCurrent(right, int(curNodeIdx))
 		ss = c.compileSort(n, c.compileUnionAll(left, right))
 		return ss, nil
-	case plan.Node_DELETE: // XXX:TODO
+	case plan.Node_DELETE:
 		if n.DeleteCtx.CanTruncate {
 			s := newScope(TruncateTable)
 			s.Plan = &plan.Plan{
@@ -1484,63 +1484,29 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 			ss = []*Scope{s}
 			return ss, nil
 		}
-		c.appendMetaTables(n.DeleteCtx.Ref)
-		curr := c.anal.curNodeIdx
-		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 
+		c.appendMetaTables(n.DeleteCtx.Ref)
 		ss, err = c.compilePlanScope(step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
 
 		n.NotCacheable = true
-		var arg *deletion.Deletion
-		arg, err = constructDeletion(n, c.e)
-		if err != nil {
-			return nil, err
-		}
-
-		if n.Stats.Cost*float64(SingleLineSizeEstimate) >
-			float64(DistributedThreshold) &&
-			!arg.DeleteCtx.CanTruncate {
-			rs := c.newDeleteMergeScope(arg, ss)
-			rs.setRootOperator(
-				mergedelete.NewArgument().
-					WithObjectRef(arg.DeleteCtx.Ref).
-					WithParitionNames(arg.DeleteCtx.PartitionTableNames).
-					WithEngine(c.e).
-					WithAddAffectedRows(arg.DeleteCtx.AddAffectedRows),
-			)
-			rs.Magic = MergeDelete
-			ss = []*Scope{rs}
-			arg.Release()
-			return ss, nil
-		}
-		rs := ss[0]
-		if !c.IsSingleScope(ss) {
-			rs = c.newMergeScope(ss)
-			rs.Magic = Merge
-			c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curNodeIdx)
-		}
-		rs.setRootOperator(arg)
-		ss = []*Scope{rs}
-		c.setAnalyzeCurrent(ss, curr)
-		return ss, nil
-	case plan.Node_ON_DUPLICATE_KEY: // XXX:TODO
-		curr := c.anal.curNodeIdx
-		c.setAnalyzeCurrent(nil, int(n.Children[0]))
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
+		return c.compileDelete(n, ss)
+	case plan.Node_ON_DUPLICATE_KEY:
+		//curr := c.anal.curNodeIdx
+		//c.setAnalyzeCurrent(nil, int(n.Children[0]))
 		ss, err = c.compilePlanScope(step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
-		c.setAnalyzeCurrent(ss, curr)
 
-		rs := c.newMergeScope(ss)
-		arg := constructOnduplicateKey(n, c.e)
-		arg.SetIdx(c.anal.curNodeIdx)
-		rs.ReplaceLeafOp(arg)
-
-		ss = []*Scope{rs}
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
+		ss, err = c.compileOnduplicateKey(n, ss)
+		if err != nil {
+			return nil, err
+		}
 		return ss, nil
 	case plan.Node_FUZZY_FILTER:
 		//curr := c.anal.curNodeIdx
@@ -1583,8 +1549,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		}
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		ss, err = c.compilePreInsert(ns, n, ss)
-		return ss, nil
+		return c.compilePreInsert(ns, n, ss)
 	case plan.Node_INSERT:
 		c.appendMetaTables(n.ObjRef)
 		n.NotCacheable = true
@@ -1595,58 +1560,19 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		}
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		ss, err = c.compileInsert(ns, n, ss)
-		return ss, nil
-	case plan.Node_LOCK_OP: // XXX:TODO
-		curr := c.anal.curNodeIdx
+		return c.compileInsert(ns, n, ss)
+	case plan.Node_LOCK_OP:
 		ss, err = c.compilePlanScope(step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
 
-		lockRows := make([]*plan.LockTarget, 0, len(n.LockTargets))
-		for _, tbl := range n.LockTargets {
-			if tbl.LockTable {
-				c.lockTables[tbl.TableId] = tbl
-			} else {
-				if _, ok := c.lockTables[tbl.TableId]; !ok {
-					lockRows = append(lockRows, tbl)
-				}
-			}
-		}
-		n.LockTargets = lockRows
-		if len(n.LockTargets) == 0 {
-			return ss, nil
-		}
-
-		block := false
-		// only pessimistic txn needs to block downstream operators.
-		if c.proc.GetTxnOperator().Txn().IsPessimistic() {
-			block = n.LockTargets[0].Block
-			if block {
-				ss = []*Scope{c.newMergeScope(ss)}
-			}
-		}
-		currentFirstFlag := c.anal.isFirst
-		for i := range ss {
-			var lockOpArg *lockop.LockOp
-			lockOpArg, err = constructLockOp(n, c.e)
-			if err != nil {
-				return nil, err
-			}
-			lockOpArg.SetBlock(block)
-			lockOpArg.Idx = c.anal.curNodeIdx
-			lockOpArg.IsFirst = currentFirstFlag
-			if block {
-				lockOpArg.SetChildren(ss[i].RootOp.GetOperatorBase().Children)
-				ss[i].RootOp.Release()
-				ss[i].RootOp = lockOpArg
-			} else {
-				ss[i].doSetRootOperator(lockOpArg)
-			}
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
+		ss, err = c.compileLock(n, ss)
+		if err != nil {
+			return nil, err
 		}
 		ss = c.compileProjection(n, ss)
-		c.setAnalyzeCurrent(ss, curr)
 		return ss, nil
 	case plan.Node_FUNCTION_SCAN:
 		//curr := c.anal.curNodeIdx
@@ -2376,6 +2302,7 @@ func (c *Compile) compileTpMinusAndIntersect(n *plan.Node, left []*Scope, right 
 		connector.NewArgument().
 			WithReg(rs[0].Proc.Reg.MergeReceivers[1]),
 	)
+
 	switch nodeType {
 	case plan.Node_MINUS:
 		arg := minus.NewArgument()
@@ -2397,6 +2324,7 @@ func (c *Compile) compileMinusAndIntersect(n *plan.Node, left []*Scope, right []
 	if c.IsSingleScope(left) && c.IsSingleScope(right) {
 		return c.compileTpMinusAndIntersect(n, left, right, nodeType)
 	}
+
 	rs := c.newScopeListOnCurrentCN(2, int(n.Stats.BlockNum))
 	rs = c.newJoinScopeListWithBucket(rs, left, right, n)
 	switch nodeType {
@@ -2900,7 +2828,8 @@ func (c *Compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
 func (c *Compile) compileWin(n *plan.Node, ss []*Scope) []*Scope {
 	rs := c.newMergeScope(ss)
 	arg := constructWindow(c.proc.Ctx, n, c.proc)
-	arg.Idx = c.anal.curNodeIdx
+	arg.SetIdx(c.anal.curNodeIdx)
+	arg.SetIsFirst(c.anal.isFirst)
 	rs.ReplaceLeafOp(arg)
 
 	return []*Scope{rs}
@@ -2910,6 +2839,7 @@ func (c *Compile) compileTimeWin(n *plan.Node, ss []*Scope) []*Scope {
 	rs := c.newMergeScope(ss)
 	arg := constructTimeWindow(c.proc.Ctx, n)
 	arg.Idx = c.anal.curNodeIdx
+	arg.SetIsFirst(c.anal.isFirst)
 	rs.ReplaceLeafOp(arg)
 
 	return []*Scope{rs}
@@ -2919,6 +2849,7 @@ func (c *Compile) compileFill(n *plan.Node, ss []*Scope) []*Scope {
 	rs := c.newMergeScope(ss)
 	arg := constructFill(n)
 	arg.Idx = c.anal.curNodeIdx
+	arg.SetIsFirst(c.anal.isFirst)
 	rs.ReplaceLeafOp(arg)
 
 	return []*Scope{rs}
@@ -3531,6 +3462,8 @@ func (c *Compile) newMergeRemoteScope(ss []*Scope, nodeinfo engine.Node) *Scope 
 	return rs
 }
 
+// newScopeListOnCurrentCN traverse the cnList and only generate Scope list for the current CN node
+// waring: only generate Scope list for the current CN node
 func (c *Compile) newScopeListOnCurrentCN(childrenCount int, blocks int) []*Scope {
 	var ss []*Scope
 	currentFirstFlag := c.anal.isFirst

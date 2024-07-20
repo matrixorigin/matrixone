@@ -56,7 +56,7 @@ func (shuffle *Shuffle) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
-	anal := proc.GetAnalyze(shuffle.GetIdx(), shuffle.GetParallelIdx(), shuffle.GetParallelMajor())
+	anal := proc.GetAnalyze2(shuffle.GetIdx(), shuffle.GetParallelIdx(), shuffle.GetParallelMajor(), shuffle.OpStats)
 	anal.Start()
 	defer func() {
 		anal.Stop()

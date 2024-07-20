@@ -69,11 +69,12 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	var err error
-	ctr := window.ctr
-	anal := proc.GetAnalyze(window.GetIdx(), window.GetParallelIdx(), window.GetParallelMajor())
+	anal := proc.GetAnalyze2(window.GetIdx(), window.GetParallelIdx(), window.GetParallelMajor(), window.OpStats)
 	anal.Start()
 	defer anal.Stop()
+
+	var err error
+	ctr := window.ctr
 	result := vm.NewCallResult()
 	var bat *batch.Batch
 	var msg *process.RegisterMessage
@@ -116,6 +117,7 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 			} else {
 				ctr.status = eval
 			}
+			anal.Input(msg.Batch, window.GetIsFirst())
 			ctr.bat = msg.Batch
 		case eval:
 			if err = ctr.evalAggVector(ctr.bat, proc); err != nil {

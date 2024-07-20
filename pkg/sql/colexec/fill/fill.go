@@ -105,7 +105,7 @@ func (fill *Fill) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(fill.GetIdx(), fill.GetParallelIdx(), fill.GetParallelMajor())
+	anal := proc.GetAnalyze2(fill.GetIdx(), fill.GetParallelIdx(), fill.GetParallelMajor(), fill.OpStats)
 	anal.Start()
 	defer anal.Stop()
 	ctr := fill.ctr
