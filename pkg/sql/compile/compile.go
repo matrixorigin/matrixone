@@ -1523,6 +1523,9 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		}
 
 		ss, err = c.compilePreInsert(ns, n, ss)
+		if err != nil {
+			return nil, err
+		}
 		c.setAnalyzeCurrent(ss, curr)
 		return ss, nil
 	case plan.Node_INSERT:
@@ -1535,6 +1538,9 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		}
 
 		ss, err = c.compileInsert(ns, n, ss)
+		if err != nil {
+			return nil, err
+		}
 		c.setAnalyzeCurrent(ss, curr)
 		return ss, nil
 	case plan.Node_LOCK_OP:
@@ -1544,47 +1550,11 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 			return nil, err
 		}
 
-		lockRows := make([]*plan.LockTarget, 0, len(n.LockTargets))
-		for _, tbl := range n.LockTargets {
-			if tbl.LockTable {
-				c.lockTables[tbl.TableId] = tbl
-			} else {
-				if _, ok := c.lockTables[tbl.TableId]; !ok {
-					lockRows = append(lockRows, tbl)
-				}
-			}
-		}
-		n.LockTargets = lockRows
-		if len(n.LockTargets) == 0 {
-			return ss, nil
+		ss, err = c.compileLock(n, ss)
+		if err != nil {
+			return nil, err
 		}
 
-		block := false
-		// only pessimistic txn needs to block downstream operators.
-		if c.proc.GetTxnOperator().Txn().IsPessimistic() {
-			block = n.LockTargets[0].Block
-			if block {
-				ss = []*Scope{c.newMergeScope(ss)}
-			}
-		}
-		currentFirstFlag := c.anal.isFirst
-		for i := range ss {
-			var lockOpArg *lockop.LockOp
-			lockOpArg, err = constructLockOp(n, c.e)
-			if err != nil {
-				return nil, err
-			}
-			lockOpArg.SetBlock(block)
-			lockOpArg.Idx = c.anal.curr
-			lockOpArg.IsFirst = currentFirstFlag
-			if block {
-				lockOpArg.SetChildren(ss[i].RootOp.GetOperatorBase().Children)
-				ss[i].RootOp.Release()
-				ss[i].RootOp = lockOpArg
-			} else {
-				ss[i].doSetRootOperator(lockOpArg)
-			}
-		}
 		ss = c.compileProjection(n, ss)
 		c.setAnalyzeCurrent(ss, curr)
 		return ss, nil
@@ -2818,6 +2788,7 @@ func (c *Compile) compileWin(n *plan.Node, ss []*Scope) []*Scope {
 	rs := c.newMergeScope(ss)
 	arg := constructWindow(c.proc.Ctx, n, c.proc)
 	arg.Idx = c.anal.curr
+	arg.SetIsFirst(c.anal.isFirst)
 	rs.ReplaceLeafOp(arg)
 
 	return []*Scope{rs}
@@ -2827,6 +2798,7 @@ func (c *Compile) compileTimeWin(n *plan.Node, ss []*Scope) []*Scope {
 	rs := c.newMergeScope(ss)
 	arg := constructTimeWindow(c.proc.Ctx, n)
 	arg.Idx = c.anal.curr
+	arg.SetIsFirst(c.anal.isFirst)
 	rs.ReplaceLeafOp(arg)
 
 	return []*Scope{rs}
@@ -2836,6 +2808,7 @@ func (c *Compile) compileFill(n *plan.Node, ss []*Scope) []*Scope {
 	rs := c.newMergeScope(ss)
 	arg := constructFill(n)
 	arg.Idx = c.anal.curr
+	arg.SetIsFirst(c.anal.isFirst)
 	rs.ReplaceLeafOp(arg)
 
 	return []*Scope{rs}
@@ -3384,6 +3357,54 @@ func (c *Compile) compileDelete(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 		ss = []*Scope{rs}
 		return ss, nil
 	}
+}
+
+func (c *Compile) compileLock(n *plan.Node, ss []*Scope) ([]*Scope, error) {
+	lockRows := make([]*plan.LockTarget, 0, len(n.LockTargets))
+	for _, tbl := range n.LockTargets {
+		if tbl.LockTable {
+			c.lockTables[tbl.TableId] = tbl
+		} else {
+			if _, ok := c.lockTables[tbl.TableId]; !ok {
+				lockRows = append(lockRows, tbl)
+			}
+		}
+	}
+	n.LockTargets = lockRows
+	if len(n.LockTargets) == 0 {
+		return ss, nil
+	}
+
+	block := false
+	// only pessimistic txn needs to block downstream operators.
+	if c.proc.GetTxnOperator().Txn().IsPessimistic() {
+		block = n.LockTargets[0].Block
+		if block {
+			ss = []*Scope{c.newMergeScope(ss)}
+		}
+	}
+
+	currentFirstFlag := c.anal.isFirst
+	for i := range ss {
+		var err error
+		var lockOpArg *lockop.LockOp
+		lockOpArg, err = constructLockOp(n, c.e)
+		if err != nil {
+			return nil, err
+		}
+		lockOpArg.SetBlock(block)
+		lockOpArg.Idx = c.anal.curr
+		lockOpArg.IsFirst = currentFirstFlag
+		if block {
+			lockOpArg.SetChildren(ss[i].RootOp.GetOperatorBase().Children)
+			ss[i].RootOp.Release()
+			ss[i].RootOp = lockOpArg
+		} else {
+			ss[i].doSetRootOperator(lockOpArg)
+		}
+	}
+	c.anal.isFirst = false
+	return ss, nil
 }
 
 // DeleteMergeScope need to assure this:
