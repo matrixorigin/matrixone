@@ -563,7 +563,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	if scanUsedCpuNumber == 1 {
 		s.Magic = Normal
 		s.DataSource.R = readers[0]
-		s.DataSource.R.SetOrderBy(s.DataSource.OrderBy)
+		//s.DataSource.R.SetOrderBy(s.DataSource.OrderBy)
 		return s, nil
 	}
 

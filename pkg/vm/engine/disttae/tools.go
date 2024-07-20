@@ -1500,7 +1500,7 @@ func newBlockReaders(ctx context.Context, fs fileservice.FileService, tblDef *pl
 	rds := make([]*blockReader, num)
 	for i := 0; i < num; i++ {
 		rds[i] = newBlockReader(
-			ctx, tblDef, ts, nil, nil, expr, filter, fs, proc,
+			ctx, tblDef, ts, nil, expr, filter, fs, proc,
 		)
 	}
 	return rds

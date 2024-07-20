@@ -38,7 +38,7 @@ func (tableScan *TableScan) OpType() vm.OpType {
 
 func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 	tableScan.ctr = new(container)
-	tableScan.ctr.orderBy = tableScan.Reader.GetOrderBy()
+	//tableScan.ctr.orderBy = tableScan.Reader.GetOrderBy()
 	if tableScan.TopValueMsgTag > 0 {
 		tableScan.ctr.msgReceiver = proc.NewMessageReceiver([]int32{tableScan.TopValueMsgTag}, tableScan.GetAddress())
 	}
@@ -101,12 +101,12 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		// receive topvalue message
 		if tableScan.ctr.msgReceiver != nil {
 			msgs, _ := tableScan.ctr.msgReceiver.ReceiveMessage(false, proc.Ctx)
-			for i := range msgs {
-				msg, ok := msgs[i].(process.TopValueMessage)
-				if !ok {
-					panic("only support top value message in table scan!")
-				}
-				tableScan.Reader.SetFilterZM(msg.TopValueZM)
+			for _ = range msgs {
+				//msg, ok := msgs[i].(process.TopValueMessage)
+				//if !ok {
+				//	panic("only support top value message in table scan!")
+				//}
+				//tableScan.Reader.SetFilterZM(msg.TopValueZM)
 			}
 		}
 		// read data from storage engine

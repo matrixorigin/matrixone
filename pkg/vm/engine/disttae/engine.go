@@ -722,7 +722,7 @@ func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Times
 			blk.EntryState = false
 			rds[i] = newBlockReader(
 				ctx, tblDef, ts,
-				[]*objectio.BlockInfo{blk}, nil,
+				[]*objectio.BlockInfo{blk},
 				expr, blockReadPKFilter, e.fs, proc.(*process.Process),
 			)
 		}

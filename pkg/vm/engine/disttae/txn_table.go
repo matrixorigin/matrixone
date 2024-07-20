@@ -1889,7 +1889,6 @@ func (tbl *txnTable) newBlockReader(
 				tableDef,
 				ts,
 				[]*objectio.BlockInfo{blk},
-				nil,
 				expr,
 				filter,
 				tbl.getTxn().engine.fs,
@@ -1913,7 +1912,7 @@ func (tbl *txnTable) newBlockReader(
 		if num != 1 {
 			panic("ordered scan must run in only one parallel")
 		}
-		rd := newBlockReader(ctx, tableDef, ts, blkInfos, nil, expr, filter, fs, proc)
+		rd := newBlockReader(ctx, tableDef, ts, blkInfos, expr, filter, fs, proc)
 		rd.dontPrefetch = true
 		return []engine.Reader{rd}, nil
 	}
