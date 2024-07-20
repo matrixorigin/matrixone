@@ -188,7 +188,12 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 		s.Reset(c)
 	}
 
+	for _, v := range c.nodeRegs {
+		v.CleanChannel(c.proc.GetMPool())
+	}
+
 	c.MessageBoard = c.MessageBoard.Reset()
+	proc.Base.MessageBoard = c.MessageBoard
 	c.counterSet.Reset()
 
 	for _, f := range c.fuzzys {
