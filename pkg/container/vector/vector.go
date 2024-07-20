@@ -70,7 +70,7 @@ type typedSlice struct {
 
 func (t *typedSlice) reset() {
 	t.Ptr = nil
-	t.Cap = -1
+	t.Cap = 0
 }
 
 func (t *typedSlice) setFromVector(v *Vector) {
@@ -98,13 +98,31 @@ func (v *Vector) SetSorted(b bool) {
 	v.sorted = b
 }
 
+// Reset update vector's fields with a specific type.
+// we should redefine the value of capacity and values-ptr because of the possible change in type.
 func (v *Vector) Reset(typ types.Type) {
+	originOid := v.typ.Oid
 	v.typ = typ
+
 	v.class = FLAT
 	if v.area != nil {
 		v.area = v.area[:0]
 	}
 
+	v.length = 0
+	v.nsp.Reset()
+	v.sorted = false
+
+	if originOid != v.typ.Oid {
+		v.col.reset()
+		v.setupFromData()
+	}
+}
+
+func (v *Vector) ResetWithSameType() {
+	if v.area != nil {
+		v.area = v.area[:0]
+	}
 	v.length = 0
 	v.nsp.Reset()
 	v.sorted = false
