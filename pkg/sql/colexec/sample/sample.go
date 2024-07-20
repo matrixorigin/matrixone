@@ -118,7 +118,7 @@ func (sample *Sample) Call(proc *process.Process) (vm.CallResult, error) {
 	if lastErr != nil {
 		return result, lastErr
 	}
-	anal := proc.GetAnalyze(sample.GetIdx(), sample.GetParallelIdx(), sample.GetParallelMajor())
+	anal := proc.GetAnalyze2(sample.GetIdx(), sample.GetParallelIdx(), sample.GetParallelMajor(), sample.OpStats)
 	anal.Start()
 	defer anal.Stop()
 

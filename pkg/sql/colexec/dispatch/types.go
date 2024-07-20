@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -63,6 +64,7 @@ type container struct {
 	rowCnt   []int
 }
 
+// Dispatch struct defines a dispatch operator. It is used to distribute data to different receivers locally or remotely.
 type Dispatch struct {
 	ctr *container
 

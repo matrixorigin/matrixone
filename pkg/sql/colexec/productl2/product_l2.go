@@ -49,9 +49,10 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(productl2.GetIdx(), productl2.GetParallelIdx(), productl2.GetParallelMajor())
+	anal := proc.GetAnalyze2(productl2.GetIdx(), productl2.GetParallelIdx(), productl2.GetParallelMajor(), productl2.OpStats)
 	anal.Start()
 	defer anal.Stop()
+
 	ap := productl2
 	ctr := ap.ctr
 	result := vm.NewCallResult()
