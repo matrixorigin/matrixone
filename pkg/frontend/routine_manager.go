@@ -236,13 +236,13 @@ func (rm *RoutineManager) GetAccountRoutineManager() *AccountRoutineManager {
 	return rm.accountRoutine
 }
 
-func (rm *RoutineManager) Created(rs *Conn) {
+func (rm *RoutineManager) Created(rs *Conn) error {
 	logutil.Debugf("get the connection from %s", rs.RemoteAddress())
 	createdStart := time.Now()
 	connID, err := rm.getConnID()
 	if err != nil {
 		logutil.Errorf("failed to get connection ID from HAKeeper: %v", err)
-		return
+		return err
 	}
 	pro := NewMysqlClientProtocol(connID, rs, int(getGlobalPu().SV.MaxBytesInOutbufToFlush), getGlobalPu().SV)
 	routine := NewRoutine(rm.getCtx(), pro, getGlobalPu().SV)
@@ -278,6 +278,7 @@ func (rm *RoutineManager) Created(rs *Conn) {
 		pro.receiveExtraInfo(rs)
 	}
 	rm.setRoutine(rs, pro.connectionID, routine)
+	return nil
 }
 
 /*
