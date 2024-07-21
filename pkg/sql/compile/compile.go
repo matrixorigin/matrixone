@@ -1587,42 +1587,13 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		ss = c.compileProjection(n, []*Scope{rs})
 		return ss, nil
 	case plan.Node_RECURSIVE_SCAN:
-		receivers := make([]*process.WaitRegister, len(n.SourceStep))
-		for i, step := range n.SourceStep {
-			receivers[i] = c.getNodeReg(step, curNodeIdx)
-			if receivers[i] == nil {
-				return nil, moerr.NewInternalError(c.proc.Ctx, "no data sender for sinkScan node")
-			}
-		}
-		rs := newScope(Merge)
-		rs.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
-		rs.Proc = process.NewFromProc(c.proc, c.proc.Ctx, len(receivers))
-		rs.setRootOperator(mergerecursive.NewArgument())
-
-		for _, r := range receivers {
-			r.Ctx = rs.Proc.Ctx
-		}
-		rs.Proc.Reg.MergeReceivers = receivers
-		ss = []*Scope{rs}
-		return ss, nil
+		return c.compileRecursiveScan(n, curNodeIdx)
 	case plan.Node_RECURSIVE_CTE:
-		receivers := make([]*process.WaitRegister, len(n.SourceStep))
-		for i, step := range n.SourceStep {
-			receivers[i] = c.getNodeReg(step, curNodeIdx)
-			if receivers[i] == nil {
-				return nil, moerr.NewInternalError(c.proc.Ctx, "no data sender for sinkScan node")
-			}
+		ss, err = c.compileRecursiveCte(n, curNodeIdx)
+		if err != nil {
+			return nil, err
 		}
-		rs := newScope(Merge)
-		rs.NodeInfo = getEngineNode(c)
-		rs.Proc = process.NewFromProc(c.proc, c.proc.Ctx, len(receivers))
-		rs.setRootOperator(mergecte.NewArgument())
-
-		for _, r := range receivers {
-			r.Ctx = rs.Proc.Ctx
-		}
-		rs.Proc.Reg.MergeReceivers = receivers
-		ss = c.compileSort(n, []*Scope{rs})
+		ss = c.compileSort(n, ss)
 		return ss, nil
 	case plan.Node_SINK:
 		receivers := c.getStepRegs(step)
@@ -3405,6 +3376,59 @@ func (c *Compile) compileLock(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 	}
 	c.anal.isFirst = false
 	return ss, nil
+}
+
+func (c *Compile) compileRecursiveCte(n *plan.Node, curNodeIdx int32) ([]*Scope, error) {
+	receivers := make([]*process.WaitRegister, len(n.SourceStep))
+	for i, step := range n.SourceStep {
+		receivers[i] = c.getNodeReg(step, curNodeIdx)
+		if receivers[i] == nil {
+			return nil, moerr.NewInternalError(c.proc.Ctx, "no data sender for sinkScan node")
+		}
+	}
+
+	rs := newScope(Merge)
+	rs.NodeInfo = getEngineNode(c)
+	rs.Proc = process.NewFromProc(c.proc, c.proc.Ctx, len(receivers))
+
+	currentFirstFlag := c.anal.isFirst
+	mergecteArg := mergecte.NewArgument()
+	mergecteArg.SetIdx(c.anal.curr)
+	mergecteArg.SetIsFirst(currentFirstFlag)
+	rs.setRootOperator(mergecteArg)
+	c.anal.isFirst = false
+
+	for _, r := range receivers {
+		r.Ctx = rs.Proc.Ctx
+	}
+	rs.Proc.Reg.MergeReceivers = receivers
+	return []*Scope{rs}, nil
+}
+
+func (c *Compile) compileRecursiveScan(n *plan.Node, curNodeIdx int32) ([]*Scope, error) {
+	receivers := make([]*process.WaitRegister, len(n.SourceStep))
+	for i, step := range n.SourceStep {
+		receivers[i] = c.getNodeReg(step, curNodeIdx)
+		if receivers[i] == nil {
+			return nil, moerr.NewInternalError(c.proc.Ctx, "no data sender for sinkScan node")
+		}
+	}
+	rs := newScope(Merge)
+	rs.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
+	rs.Proc = process.NewFromProc(c.proc, c.proc.Ctx, len(receivers))
+
+	currentFirstFlag := c.anal.isFirst
+	mergeRecursiveArg := mergerecursive.NewArgument()
+	mergeRecursiveArg.SetIdx(c.anal.curr)
+	mergeRecursiveArg.SetIsFirst(currentFirstFlag)
+	rs.setRootOperator(mergeRecursiveArg)
+	c.anal.isFirst = false
+
+	for _, r := range receivers {
+		r.Ctx = rs.Proc.Ctx
+	}
+	rs.Proc.Reg.MergeReceivers = receivers
+	return []*Scope{rs}, nil
 }
 
 // DeleteMergeScope need to assure this:
