@@ -576,13 +576,16 @@ func (def *StreamConfigsDef) ToPBVersion() ConstraintPB {
 type TombstoneType uint8
 
 const (
-	TombstoneV0 TombstoneType = iota
+	EmptyTombstone TombstoneType = iota
 	TombstoneV1
 	TombstoneV2
 )
 
 type Tombstoner interface {
 	Type() TombstoneType
+	IsEmpty() bool
+	MarshalWithBuf(w *bytes.Buffer) (uint32, error)
+	UnMarshal(buf []byte) error
 	HasTombstones(bid types.Blockid) bool
 	ApplyTombstones(
 		rows []types.Rowid,
@@ -603,7 +606,7 @@ type RelData interface {
 	SetDataBlk(i int, blk *objectio.BlockInfoInProgress)
 	DataBlkSlice(begin, end int) RelData
 	// GroupByPartitionNum TODO::remove it after refactor of partition table.
-	GroupByPartitionNum() map[int]RelData
+	GroupByPartitionNum() map[int16]RelData
 	//DataBlkClone(begin, end int) RelData
 	AppendDataBlk(blk *objectio.BlockInfoInProgress)
 	BuildEmptyRelData() RelData

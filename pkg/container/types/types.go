@@ -19,6 +19,8 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+
 	"golang.org/x/exp/constraints"
 )
 
@@ -338,7 +340,7 @@ type RealNumbers interface {
 }
 
 type FixedSizeTExceptStrType interface {
-	bool | OrderedT | Decimal | TS | Rowid | Uuid | Blockid
+	bool | OrderedT | Decimal | TS | Rowid | Uuid | Blockid | objectio.ObjectLocation
 }
 
 type Number interface {

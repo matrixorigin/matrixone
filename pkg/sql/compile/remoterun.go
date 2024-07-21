@@ -354,7 +354,11 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		s.NodeInfo.Id = p.Node.Id
 		s.NodeInfo.Addr = p.Node.Addr
 		s.NodeInfo.Mcpu = int(p.Node.Mcpu)
-		s.NodeInfo.Data = disttae.UnmarshalRelationData([]byte(p.Node.Payload))
+		relData, err := disttae.UnmarshalRelationData([]byte(p.Node.Payload))
+		if err != nil {
+			return nil, err
+		}
+		s.NodeInfo.Data = relData
 		s.NodeInfo.Header = objectio.DecodeInfoHeader(p.Node.Type)
 	}
 	s.Proc = process.NewFromProc(proc, proc.Ctx, int(p.ChildrenCount))

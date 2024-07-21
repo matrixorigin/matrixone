@@ -68,7 +68,57 @@ type BlockInfoInProgress struct {
 	CommitTs   types.TS
 
 	//TODO:: remove it.
-	PartitionNum int
+	PartitionNum int16
+}
+
+func (b *BlockInfoInProgress) MarshalWithBuf(w *bytes.Buffer) (uint32, error) {
+	var space uint32
+	if _, err := w.Write(types.EncodeFixed(b.BlockID)); err != nil {
+		return 0, err
+	}
+	space += uint32(types.BlockidSize)
+
+	if _, err := w.Write(types.EncodeBool(&b.EntryState)); err != nil {
+		return 0, err
+	}
+	space++
+
+	if _, err := w.Write(types.EncodeBool(&b.Sorted)); err != nil {
+		return 0, err
+	}
+	space++
+
+	if _, err := w.Write(types.EncodeFixed(b.MetaLoc)); err != nil {
+		return 0, err
+	}
+	space += uint32(LocationLen)
+
+	if _, err := w.Write(types.EncodeFixed(b.CommitTs)); err != nil {
+		return 0, err
+	}
+	space += types.TxnTsSize
+
+	if _, err := w.Write(types.EncodeInt16(&b.PartitionNum)); err != nil {
+		return 0, err
+	}
+	space += 2
+
+	return space, nil
+}
+
+func (b *BlockInfoInProgress) Unmarshal(buf []byte) error {
+	b.BlockID = types.DecodeFixed[types.Blockid](buf[:types.BlockidSize])
+	buf = buf[types.BlockidSize:]
+	b.EntryState = types.DecodeFixed[bool](buf)
+	buf = buf[1:]
+	b.Sorted = types.DecodeFixed[bool](buf)
+	buf = buf[1:]
+	b.MetaLoc = types.DecodeFixed[ObjectLocation](buf[:LocationLen])
+	buf = buf[LocationLen:]
+	b.CommitTs = types.DecodeFixed[types.TS](buf[:types.TxnTsSize])
+	buf = buf[types.TxnTsSize:]
+	b.PartitionNum = types.DecodeFixed[int16](buf[:2])
+	return nil
 }
 
 func (b *BlockInfoInProgress) MetaLocation() Location {

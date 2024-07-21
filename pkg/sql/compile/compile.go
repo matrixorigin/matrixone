@@ -3972,7 +3972,7 @@ func (c *Compile) expandRangesInProgress(
 					return nil, err
 				}
 				subRelData.ForeachDataBlk(1, subRelData.BlkCnt(), func(blk *objectio.BlockInfoInProgress) error {
-					blk.PartitionNum = i
+					blk.PartitionNum = int16(i)
 					relData.AppendDataBlk(blk)
 					return nil
 				})
@@ -3999,7 +3999,7 @@ func (c *Compile) expandRangesInProgress(
 					return nil, err
 				}
 				subRelData.ForeachDataBlk(1, subRelData.BlkCnt(), func(blk *objectio.BlockInfoInProgress) error {
-					blk.PartitionNum = i
+					blk.PartitionNum = int16(i)
 					relData.AppendDataBlk(blk)
 					return nil
 				})
