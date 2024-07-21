@@ -78,7 +78,14 @@ func (c *Cache) Get(ctx context.Context, key cache.CacheKey) (CacheData, bool) {
 }
 
 func (c *Cache) Set(ctx context.Context, key cache.CacheKey, value CacheData) error {
-	c.l.Set(ctx, key, value.(*Data))
+	data := value.(*Data)
+	// freeze
+	var freeze malloc.Freezer
+	if data.deallocator.As(&freeze) {
+		freeze.Freeze()
+	}
+	// set
+	c.l.Set(ctx, key, data)
 	return nil
 }
 

@@ -148,7 +148,7 @@ func BenchmarkProduct(b *testing.B) {
 }
 
 func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos) productTestCase {
-	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
+	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{

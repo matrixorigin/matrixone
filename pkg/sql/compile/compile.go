@@ -29,20 +29,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-
 	"github.com/google/uuid"
-	"github.com/panjf2000/ants/v2"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -67,18 +54,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergecte"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergedelete"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertsecondaryindex"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -95,7 +86,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/panjf2000/ants/v2"
+	"go.uber.org/zap"
 )
 
 // Note: Now the cost going from stat is actually the number of rows, so we can only estimate a number for the size of each row.
@@ -153,7 +147,7 @@ func (c *Compile) Release() {
 	if c == nil {
 		return
 	}
-	_, _ = GetCompileService().putCompile(c)
+	GetCompileService().putCompile(c)
 }
 
 func (c Compile) TypeName() string {
@@ -191,7 +185,12 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 		s.Reset(c)
 	}
 
+	for _, v := range c.nodeRegs {
+		v.CleanChannel(c.proc.GetMPool())
+	}
+
 	c.MessageBoard = c.MessageBoard.Reset()
+	proc.Base.MessageBoard = c.MessageBoard
 	c.counterSet.Reset()
 
 	for _, f := range c.fuzzys {
@@ -303,7 +302,7 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, fill func(*batch.B
 	if c.proc.GetTxnOperator() != nil && c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		txnOp := c.proc.GetTxnOperator()
 		seq := txnOp.NextSequence()
-		txnTrace.GetService().AddTxnDurationAction(
+		txnTrace.GetService(c.proc.GetService()).AddTxnDurationAction(
 			txnOp,
 			client.CompileEvent,
 			seq,
@@ -311,7 +310,7 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, fill func(*batch.B
 			0,
 			err)
 		defer func() {
-			txnTrace.GetService().AddTxnDurationAction(
+			txnTrace.GetService(c.proc.GetService()).AddTxnDurationAction(
 				txnOp,
 				client.CompileEvent,
 				seq,
@@ -503,7 +502,7 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	stats := statistic.StatsInfoFromContext(c.proc.Ctx)
 	stats.ExecutionStart()
 
-	txnTrace.GetService().TxnStatementStart(txnOp, sql, seq)
+	txnTrace.GetService(c.proc.GetService()).TxnStatementStart(txnOp, sql, seq)
 	defer func() {
 		stats.ExecutionEnd()
 
@@ -512,7 +511,7 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 		if result != nil {
 			row = int(result.AffectRows)
 		}
-		txnTrace.GetService().TxnStatementCompleted(
+		txnTrace.GetService(c.proc.GetService()).TxnStatementCompleted(
 			txnOp,
 			sql,
 			cost,
@@ -576,13 +575,13 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 					c.proc.GetTxnOperator().Txn().ID,
 				)
 				if e != nil {
-					getLogger().Error("failed to convert dup to orphan txn error",
+					getLogger(c.proc.GetService()).Error("failed to convert dup to orphan txn error",
 						zap.String("txn", hex.EncodeToString(c.proc.GetTxnOperator().Txn().ID)),
 						zap.Error(err),
 					)
 				}
 				if e == nil && orphan {
-					getLogger().Warn("convert dup to orphan txn error",
+					getLogger(c.proc.GetService()).Warn("convert dup to orphan txn error",
 						zap.String("txn", hex.EncodeToString(c.proc.GetTxnOperator().Txn().ID)),
 					)
 					err = moerr.NewCannotCommitOrphan(c.proc.Ctx)
@@ -649,7 +648,6 @@ func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 	if e = runC.Compile(c.proc.Ctx, c.pn, c.fill); e != nil {
 		return nil, e
 	}
-
 	return runC, nil
 }
 
@@ -712,6 +710,10 @@ func (c *Compile) runOnce() error {
 			return err
 		}
 	}
+	GetCompileService().startService(c)
+	defer func() {
+		_, _ = GetCompileService().endService(c)
+	}()
 
 	//c.printPipeline()
 
@@ -1002,7 +1004,9 @@ func isAvailable(client morpc.RPCClient, addr string) bool {
 }
 
 func (c *Compile) removeUnavailableCN() {
-	client := cnclient.GetPipelineClient()
+	client := cnclient.GetPipelineClient(
+		c.proc.GetService(),
+	)
 	if client == nil {
 		return
 	}
@@ -1028,7 +1032,7 @@ func (c *Compile) getCNList() (engine.Nodes, error) {
 	if c.proc == nil || c.proc.Base.QueryClient == nil {
 		return cnList, nil
 	}
-	cnID := c.proc.Base.QueryClient.ServiceID()
+	cnID := c.proc.GetService()
 	for _, node := range cnList {
 		if node.Id == cnID {
 			return cnList, nil
@@ -1132,15 +1136,19 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) (*Scope
 	if qry.Nodes[step].NodeType == plan.Node_SINK {
 		return ss[0], nil
 	}
-	var rs *Scope
+
 	switch qry.StmtType {
 	case plan.Query_DELETE:
+		updateScopesLastFlag(ss)
 		return ss[0], nil
 	case plan.Query_INSERT:
+		updateScopesLastFlag(ss)
 		return ss[0], nil
 	case plan.Query_UPDATE:
+		updateScopesLastFlag(ss)
 		return ss[0], nil
 	default:
+		var rs *Scope
 		if c.IsSingleScope(ss) {
 			rs = ss[0]
 		} else {
@@ -1152,8 +1160,8 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) (*Scope
 			output.NewArgument().
 				WithFunc(c.fill),
 		)
+		return rs, nil
 	}
-	return rs, nil
 }
 
 func constructValueScanBatch(proc *process.Process, node *plan.Node) (*batch.Batch, error) {
@@ -1522,35 +1530,22 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		}
 		c.setAnalyzeCurrent(right, curr)
 		return c.compileFuzzyFilter(n, ns, left, right)
-	case plan.Node_PRE_INSERT_UK, plan.Node_PRE_INSERT_SK:
+	case plan.Node_PRE_INSERT_UK:
 		curr := c.anal.curr
 		ss, err = c.compilePlanScope(step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
-		currentFirstFlag := c.anal.isFirst
-		for i := range ss {
-			if n.NodeType == plan.Node_PRE_INSERT_UK {
-				var preInsertUkArg *preinsertunique.PreInsertUnique
-				preInsertUkArg, err = constructPreInsertUk(n, c.proc)
-				if err != nil {
-					return nil, err
-				}
-				preInsertUkArg.SetIdx(c.anal.curr)
-				preInsertUkArg.SetIsFirst(currentFirstFlag)
-				ss[i].setRootOperator(preInsertUkArg)
-			} else {
-				var preInsertSkArg *preinsertsecondaryindex.PreInsertSecIdx
-				preInsertSkArg, err = constructPreInsertSk(n, c.proc)
-				if err != nil {
-					return nil, err
-				}
-
-				preInsertSkArg.SetIdx(c.anal.curr)
-				preInsertSkArg.SetIsFirst(currentFirstFlag)
-				ss[i].setRootOperator(preInsertSkArg)
-			}
+		ss = c.compilePreInsertUk(n, ss)
+		c.setAnalyzeCurrent(ss, curr)
+		return ss, nil
+	case plan.Node_PRE_INSERT_SK:
+		curr := c.anal.curr
+		ss, err = c.compilePlanScope(step, n.Children[0], ns)
+		if err != nil {
+			return nil, err
 		}
+		ss = c.compilePreInsertSK(n, ss)
 		c.setAnalyzeCurrent(ss, curr)
 		return ss, nil
 	case plan.Node_PRE_INSERT:
@@ -1559,17 +1554,8 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		if err != nil {
 			return nil, err
 		}
-		currentFirstFlag := c.anal.isFirst
-		for i := range ss {
-			var preInsertArg *preinsert.PreInsert
-			preInsertArg, err = constructPreInsert(ns, n, c.e, c.proc)
-			if err != nil {
-				return nil, err
-			}
-			preInsertArg.SetIdx(c.anal.curr)
-			preInsertArg.SetIsFirst(currentFirstFlag)
-			ss[i].setRootOperator(preInsertArg)
-		}
+
+		ss, err = c.compilePreInsert(ns, n, ss)
 		c.setAnalyzeCurrent(ss, curr)
 		return ss, nil
 	case plan.Node_INSERT:
@@ -1581,103 +1567,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 			return nil, err
 		}
 
-		currentFirstFlag := c.anal.isFirst
-		toWriteS3 := n.Stats.GetCost()*float64(SingleLineSizeEstimate) >
-			float64(DistributedThreshold) || c.anal.qry.LoadTag
-
-		if toWriteS3 {
-			c.proc.Debugf(c.proc.Ctx, "insert of '%s' write s3\n", c.sql)
-			if !haveSinkScanInPlan(ns, n.Children[0]) && len(ss) != 1 {
-				var insertArg *insert.Insert
-				insertArg, err = constructInsert(n, c.e)
-				if err != nil {
-					return nil, err
-				}
-				insertArg.ToWriteS3 = true
-				rs := c.newInsertMergeScope(insertArg, ss)
-				rs.Magic = MergeInsert
-				rs.setRootOperator(
-					mergeblock.NewArgument().
-						WithEngine(c.e).
-						WithObjectRef(insertArg.InsertCtx.Ref).
-						WithParitionNames(insertArg.InsertCtx.PartitionTableNames).
-						WithAddAffectedRows(insertArg.InsertCtx.AddAffectedRows),
-				)
-				ss = []*Scope{rs}
-				insertArg.Release()
-			} else {
-				dataScope := c.newMergeScope(ss)
-				if c.anal.qry.LoadTag {
-					dataScope.Proc.Reg.MergeReceivers[0].Ch = make(chan *process.RegisterMessage, dataScope.NodeInfo.Mcpu) // reset the channel buffer of sink for load
-				}
-				parallelSize := c.getParallelSizeForExternalScan(n, dataScope.NodeInfo.Mcpu)
-				scopes := make([]*Scope, 0, parallelSize)
-				regs := make([]*process.WaitRegister, 0, parallelSize)
-				for i := 0; i < parallelSize; i++ {
-					s := newScope(Merge)
-					s.setRootOperator(merge.NewArgument())
-					scopes = append(scopes, s)
-					scopes[i].Proc = process.NewFromProc(c.proc, c.proc.Ctx, 1)
-					if c.anal.qry.LoadTag {
-						for _, rr := range scopes[i].Proc.Reg.MergeReceivers {
-							rr.Ch = make(chan *process.RegisterMessage, shuffleChannelBufferSize)
-						}
-					}
-					regs = append(regs, scopes[i].Proc.Reg.MergeReceivers...)
-				}
-
-				if c.anal.qry.LoadTag && n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle && dataScope.NodeInfo.Mcpu == parallelSize {
-					_, arg := constructDispatchLocalAndRemote(0, scopes, c.addr)
-					arg.FuncId = dispatch.ShuffleToAllFunc
-					arg.ShuffleType = plan2.ShuffleToLocalMatchedReg
-					dataScope.setRootOperator(arg)
-				} else {
-					dataScope.setRootOperator(constructDispatchLocal(false, false, false, regs))
-				}
-				dataScope.IsEnd = true
-				for i := range scopes {
-					var insertArg *insert.Insert
-					insertArg, err = constructInsert(n, c.e)
-					if err != nil {
-						return nil, err
-					}
-					insertArg.ToWriteS3 = true
-					insertArg.SetIdx(c.anal.curr)
-					insertArg.SetIsFirst(currentFirstFlag)
-					scopes[i].setRootOperator(insertArg)
-				}
-
-				var insertArg *insert.Insert
-				insertArg, err = constructInsert(n, c.e)
-				if err != nil {
-					return nil, err
-				}
-				insertArg.ToWriteS3 = true
-				rs := c.newMergeScope(scopes)
-				rs.PreScopes = append(rs.PreScopes, dataScope)
-				rs.Magic = MergeInsert
-				rs.setRootOperator(
-					mergeblock.NewArgument().
-						WithEngine(c.e).
-						WithObjectRef(insertArg.InsertCtx.Ref).
-						WithParitionNames(insertArg.InsertCtx.PartitionTableNames).
-						WithAddAffectedRows(insertArg.InsertCtx.AddAffectedRows),
-				)
-				ss = []*Scope{rs}
-				insertArg.Release()
-			}
-		} else {
-			for i := range ss {
-				var insertArg *insert.Insert
-				insertArg, err = constructInsert(n, c.e)
-				if err != nil {
-					return nil, err
-				}
-				insertArg.SetIdx(c.anal.curr)
-				insertArg.SetIsFirst(currentFirstFlag)
-				ss[i].setRootOperator(insertArg)
-			}
-		}
+		ss, err = c.compileInsert(ns, n, ss)
 		c.setAnalyzeCurrent(ss, curr)
 		return ss, nil
 	case plan.Node_LOCK_OP:
@@ -1941,10 +1831,14 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 		ID2Addr[i] = mcpu - tmp
 	}
 	param := &tree.ExternParam{}
+
 	if n.ExternScan == nil || n.ExternScan.Type != tree.INLINE {
 		err := json.Unmarshal([]byte(n.TableDef.Createsql), param)
 		if err != nil {
 			return nil, err
+		}
+		if n.ExternScan == nil {
+			param.ExtTab = true
 		}
 	} else {
 		param.ScanType = int(n.ExternScan.Type)
@@ -1965,6 +1859,7 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 		}
 		param.JsonData = n.ExternScan.JsonType
 	}
+
 	if param.ScanType == tree.S3 {
 		if !param.Init {
 			if err := plan2.InitS3Param(param); err != nil {
@@ -3322,6 +3217,165 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 		return parent
 		// return []*Scope{c.newMergeScope(parent)}
 	}
+}
+
+// compilePreInsert Compile PreInsert Node and set it as the root operator for each Scope.
+func (c *Compile) compilePreInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*Scope, error) {
+	defer func() {
+		c.anal.isFirst = false
+	}()
+	currentFirstFlag := c.anal.isFirst
+
+	for i := range ss {
+		preInsertArg, err := constructPreInsert(ns, n, c.e, c.proc)
+		if err != nil {
+			return nil, err
+		}
+		preInsertArg.SetIdx(c.anal.curr)
+		preInsertArg.SetIsFirst(currentFirstFlag)
+		ss[i].setRootOperator(preInsertArg)
+	}
+	return ss, nil
+}
+
+func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*Scope, error) {
+	defer func() {
+		c.anal.isFirst = false
+	}()
+	currentFirstFlag := c.anal.isFirst
+
+	// Determine whether to Write S3
+	toWriteS3 := n.Stats.GetCost()*float64(SingleLineSizeEstimate) >
+		float64(DistributedThreshold) || c.anal.qry.LoadTag
+
+	if toWriteS3 {
+		c.proc.Debugf(c.proc.Ctx, "insert of '%s' write s3\n", c.sql)
+		if !haveSinkScanInPlan(ns, n.Children[0]) && len(ss) != 1 {
+			insertArg, err := constructInsert(n, c.e)
+			if err != nil {
+				return nil, err
+			}
+
+			insertArg.ToWriteS3 = true
+			insertArg.SetIdx(c.anal.curr)
+			insertArg.SetIsFirst(currentFirstFlag)
+
+			currentFirstFlag = false
+			rs := c.newInsertMergeScope(insertArg, ss)
+			rs.Magic = MergeInsert
+			mergeInsertArg := constructMergeblock(c.e, insertArg)
+			mergeInsertArg.SetIdx(c.anal.curr)
+			mergeInsertArg.SetIsFirst(currentFirstFlag)
+			rs.setRootOperator(mergeInsertArg)
+
+			insertArg.Release()
+			ss = []*Scope{rs}
+		} else {
+			dataScope := c.newMergeScope(ss)
+			if c.anal.qry.LoadTag {
+				// reset the channel buffer of sink for load
+				dataScope.Proc.Reg.MergeReceivers[0].Ch = make(chan *process.RegisterMessage, dataScope.NodeInfo.Mcpu)
+			}
+			parallelSize := c.getParallelSizeForExternalScan(n, dataScope.NodeInfo.Mcpu)
+			scopes := make([]*Scope, 0, parallelSize)
+			regs := make([]*process.WaitRegister, 0, parallelSize)
+			for i := 0; i < parallelSize; i++ {
+				s := newScope(Merge)
+				s.setRootOperator(merge.NewArgument())
+				scopes = append(scopes, s)
+				scopes[i].Proc = process.NewFromProc(c.proc, c.proc.Ctx, 1)
+				if c.anal.qry.LoadTag {
+					for _, rr := range scopes[i].Proc.Reg.MergeReceivers {
+						rr.Ch = make(chan *process.RegisterMessage, shuffleChannelBufferSize)
+					}
+				}
+				regs = append(regs, scopes[i].Proc.Reg.MergeReceivers...)
+			}
+
+			if c.anal.qry.LoadTag && n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle && dataScope.NodeInfo.Mcpu == parallelSize {
+				_, arg := constructDispatchLocalAndRemote(0, scopes, c.addr)
+				arg.FuncId = dispatch.ShuffleToAllFunc
+				arg.ShuffleType = plan2.ShuffleToLocalMatchedReg
+				dataScope.setRootOperator(arg)
+			} else {
+				dataScope.setRootOperator(constructDispatchLocal(false, false, false, regs))
+			}
+			dataScope.IsEnd = true
+			for i := range scopes {
+				insertArg, err := constructInsert(n, c.e)
+				if err != nil {
+					return nil, err
+				}
+				insertArg.ToWriteS3 = true
+				insertArg.SetIdx(c.anal.curr)
+				insertArg.SetIsFirst(currentFirstFlag)
+				scopes[i].setRootOperator(insertArg)
+			}
+			currentFirstFlag = false
+
+			insertArg, err := constructInsert(n, c.e)
+			if err != nil {
+				return nil, err
+			}
+
+			insertArg.ToWriteS3 = true
+			insertArg.SetIdx(c.anal.curr)
+			insertArg.SetIsFirst(currentFirstFlag)
+
+			rs := c.newMergeScope(scopes)
+			rs.PreScopes = append(rs.PreScopes, dataScope)
+			rs.Magic = MergeInsert
+			mergeInsertArg := constructMergeblock(c.e, insertArg)
+			mergeInsertArg.SetIdx(c.anal.curr)
+			mergeInsertArg.SetIsFirst(currentFirstFlag)
+			rs.setRootOperator(mergeInsertArg)
+
+			insertArg.Release()
+			ss = []*Scope{rs}
+		}
+	} else {
+		// Not write S3
+		for i := range ss {
+			insertArg, err := constructInsert(n, c.e)
+			if err != nil {
+				return nil, err
+			}
+			insertArg.SetIdx(c.anal.curr)
+			insertArg.SetIsFirst(currentFirstFlag)
+			ss[i].setRootOperator(insertArg)
+		}
+	}
+	return ss, nil
+}
+
+func (c *Compile) compilePreInsertUk(n *plan.Node, ss []*Scope) []*Scope {
+	currentFirstFlag := c.anal.isFirst
+	defer func() {
+		c.anal.isFirst = false
+	}()
+
+	for i := range ss {
+		preInsertUkArg := constructPreInsertUk(n, c.proc)
+		preInsertUkArg.SetIdx(c.anal.curr)
+		preInsertUkArg.SetIsFirst(currentFirstFlag)
+		ss[i].setRootOperator(preInsertUkArg)
+	}
+	return ss
+}
+
+func (c *Compile) compilePreInsertSK(n *plan.Node, ss []*Scope) []*Scope {
+	currentFirstFlag := c.anal.isFirst
+	defer func() {
+		c.anal.isFirst = false
+	}()
+
+	for i := range ss {
+		preInsertSkArg := constructPreInsertSk(n, c.proc)
+		preInsertSkArg.SetIdx(c.anal.curr)
+		preInsertSkArg.SetIsFirst(currentFirstFlag)
+		ss[i].setRootOperator(preInsertSkArg)
+	}
+	return ss
 }
 
 // DeleteMergeScope need to assure this:
@@ -4696,7 +4750,7 @@ func (c *Compile) runSql(sql string) error {
 }
 
 func (c *Compile) runSqlWithResult(sql string) (executor.Result, error) {
-	v, ok := moruntime.ProcessLevelRuntime().GetGlobalVariables(moruntime.InternalSQLExecutor)
+	v, ok := moruntime.ServiceRuntime(c.proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
 		panic("missing lock service")
 	}
@@ -4800,9 +4854,9 @@ func (c *Compile) fatalLog(retry int, err error) {
 		return
 	}
 
-	txnTrace.GetService().TxnError(c.proc.GetTxnOperator(), err)
+	txnTrace.GetService(c.proc.GetService()).TxnError(c.proc.GetTxnOperator(), err)
 
-	v, ok := moruntime.ProcessLevelRuntime().
+	v, ok := moruntime.ServiceRuntime(c.proc.GetService()).
 		GetGlobalVariables(moruntime.EnableCheckInvalidRCErrors)
 	if !ok || !v.(bool) {
 		return
