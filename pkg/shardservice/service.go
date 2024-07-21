@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
@@ -100,7 +101,7 @@ func NewService(
 	storage ShardStorage,
 	opts ...Option,
 ) ShardService {
-	logger := getLogger().With(zap.String("service", cfg.ServiceID))
+	logger := runtime.ServiceRuntime(cfg.ServiceID).Logger().With(zap.String("service", cfg.ServiceID))
 	s := &service{
 		logger:  logger,
 		cfg:     cfg,

@@ -33,9 +33,12 @@ type allocator struct {
 	stopper *stopper.Stopper
 }
 
-func newValueAllocator(store IncrValueStore) valueAllocator {
+func newValueAllocator(
+	sid string,
+	store IncrValueStore,
+) valueAllocator {
 	a := &allocator{
-		logger:  getLogger(),
+		logger:  getLogger(sid).Named("incrservice"),
 		c:       make(chan action, 1024),
 		stopper: stopper.NewStopper("valueAllocator"),
 		store:   store,
