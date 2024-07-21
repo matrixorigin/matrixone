@@ -75,11 +75,11 @@ func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
 
 	ioses, err := NewIOSession(serverConn, pu)
 	assert.Nil(t, err)
-	proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
+	proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
 
-	testutil.SetupAutoIncrService()
+	testutil.SetupAutoIncrService("")
 	//new session
-	ses := NewSession(context.TODO(), proto, testPool)
+	ses := NewSession(context.TODO(), "", proto, testPool)
 	var c clock.Clock
 	_ = ses.GetTxnHandler().CreateTempStorage(c)
 	tenant := &TenantInfo{

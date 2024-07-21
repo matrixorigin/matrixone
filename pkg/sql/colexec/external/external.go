@@ -855,6 +855,32 @@ func getRealAttrCnt(attrs []string, cols []*plan.ColDef) int {
 	return len(attrs) - cnt
 }
 
+func checkLineValid(param *ExternalParam, proc *process.Process, line []csvparser.Field, rowIdx int) error {
+	if param.ClusterTable != nil && param.ClusterTable.GetIsClusterTable() {
+		//the column account_id of the cluster table do need to be filled here
+		if len(line)+1 != getRealAttrCnt(param.Attrs, param.Cols) {
+			return moerr.NewInvalidInput(proc.Ctx, "the data of row %d contained is not equal to input columns", rowIdx+1)
+		}
+	} else {
+		if param.Extern.ExtTab {
+			if len(line) < getRealAttrCnt(param.Attrs, param.Cols) {
+				return moerr.NewInvalidInput(proc.Ctx, "the data of row %d contained is less than input columns", rowIdx+1)
+			}
+			return nil
+		}
+		if len(line) != len(param.TbColToDataCol) {
+			if len(line) != len(param.TbColToDataCol)+1 {
+				return moerr.NewInvalidInput(proc.Ctx, "the data of row %d contained is not equal to input columns", rowIdx+1)
+			}
+			field := line[len(line)-1]
+			if field.Val != "" {
+				return moerr.NewInvalidInput(proc.Ctx, "the data of row %d contained is not equal to input columns", rowIdx+1)
+			}
+		}
+	}
+	return nil
+}
+
 func getBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Process) (*batch.Batch, error) {
 	bat, err := makeBatch(param, plh.batchSize, proc)
 	if err != nil {
@@ -876,16 +902,11 @@ func getBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 			}
 			plh.moCsvLineArray[rowIdx] = line
 		}
-		if param.ClusterTable != nil && param.ClusterTable.GetIsClusterTable() {
-			//the column account_id of the cluster table do need to be filled here
-			if len(line)+1 < getRealAttrCnt(param.Attrs, param.Cols) {
-				return nil, moerr.NewInternalError(proc.Ctx, ColumnCntLargerErrorInfo)
-			}
-		} else {
-			if !param.Extern.SysTable && len(line) < getRealAttrCnt(param.Attrs, param.Cols) {
-				return nil, moerr.NewInternalError(proc.Ctx, ColumnCntLargerErrorInfo)
-			}
+
+		if err := checkLineValid(param, proc, line, rowIdx); err != nil {
+			return nil, err
 		}
+
 		err = getOneRowData(bat, line, rowIdx, param, proc.GetMPool())
 		if err != nil {
 			return nil, err
@@ -1023,7 +1044,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 	colCnt := meta.BlockHeader().ColumnCount()
 	for i := 0; i < len(param.Attrs); i++ {
 		idxs[i] = uint16(param.Name2ColIndex[param.Attrs[i]])
-		if param.Extern.SysTable && idxs[i] >= colCnt {
+		if idxs[i] >= colCnt {
 			idxs[i] = 0
 		}
 	}
@@ -1036,7 +1057,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 
 	var sels []int32
 	for i := 0; i < len(param.Attrs); i++ {
-		if param.Extern.SysTable && uint16(param.Name2ColIndex[param.Attrs[i]]) >= colCnt {
+		if uint16(param.Name2ColIndex[param.Attrs[i]]) >= colCnt {
 			vecTmp, err = proc.AllocVectorOfRows(makeType(&param.Cols[i].Typ, false), rows, nil)
 			if err != nil {
 				return nil, err
@@ -1294,22 +1315,28 @@ func getNullFlag(nullMap map[string]([]string), attr, field string) bool {
 	return false
 }
 
-func getFieldFromLine(line []csvparser.Field, colIdx int, param *ExternalParam) csvparser.Field {
-	if catalog.ContainExternalHidenCol(param.Attrs[colIdx]) {
+func getFieldFromLine(line []csvparser.Field, colName string, param *ExternalParam) csvparser.Field {
+	if catalog.ContainExternalHidenCol(colName) {
 		return csvparser.Field{Val: param.Fileparam.Filepath}
 	}
-	return line[param.Name2ColIndex[param.Attrs[colIdx]]]
+	if param.Extern.ExtTab {
+		return line[param.Name2ColIndex[colName]]
+	}
+	return line[param.TbColToDataCol[colName]]
 }
 
 func getOneRowData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam, mp *mpool.MPool) error {
 	var buf bytes.Buffer
-	for colIdx := range param.Attrs {
+
+	for colIdx, colName := range param.Attrs {
 		vec := bat.Vecs[colIdx]
+
 		if param.Cols[colIdx].Hidden {
 			nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			continue
 		}
-		field := getFieldFromLine(line, colIdx, param)
+
+		field := getFieldFromLine(line, colName, param)
 		id := types.T(param.Cols[colIdx].Typ.Id)
 		if id != types.T_char && id != types.T_varchar && id != types.T_json &&
 			id != types.T_binary && id != types.T_varbinary && id != types.T_blob && id != types.T_text {

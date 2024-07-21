@@ -22,19 +22,25 @@ import (
 	"go.uber.org/zap"
 )
 
-func Check(cfg hakeeper.Config, infos pb.CNState, user pb.TaskTableUser, currentTick uint64) (operators []*operator.Operator) {
+func Check(
+	service string,
+	cfg hakeeper.Config,
+	infos pb.CNState,
+	user pb.TaskTableUser,
+	currentTick uint64,
+) (operators []*operator.Operator) {
 	if user.Username == "" {
-		runtime.ProcessLevelRuntime().Logger().Warn("username is still empty.")
+		runtime.ServiceRuntime(service).Logger().Warn("username is still empty.")
 		return
 	}
 	working, expired := parseCNStores(cfg, infos, currentTick)
 	if len(working)+len(expired) == 0 {
-		runtime.ProcessLevelRuntime().Logger().Error("there are no CNs yet.")
+		runtime.ServiceRuntime(service).Logger().Error("there are no CNs yet.")
 		return
 	}
 	for _, store := range working {
 		if !infos.Stores[store].TaskServiceCreated {
-			runtime.ProcessLevelRuntime().Logger().Info("create task service for CN.",
+			runtime.ServiceRuntime(service).Logger().Info("create task service for CN.",
 				zap.String("uuid", store))
 			operators = append(operators, operator.CreateTaskServiceOp("",
 				store, pb.CNService, user))
@@ -43,7 +49,7 @@ func Check(cfg hakeeper.Config, infos pb.CNState, user pb.TaskTableUser, current
 		if !infos.Stores[store].GossipJoined {
 			addresses := getGossipAddresses(cfg, infos, currentTick, store)
 			if len(addresses) > 0 {
-				runtime.ProcessLevelRuntime().Logger().Info("join gossip cluster for CN",
+				runtime.ServiceRuntime(service).Logger().Info("join gossip cluster for CN",
 					zap.String("uuid", store),
 					zap.Any("addresses", addresses))
 				operators = append(operators, operator.JoinGossipClusterOp("",
@@ -52,7 +58,7 @@ func Check(cfg hakeeper.Config, infos pb.CNState, user pb.TaskTableUser, current
 		}
 	}
 	for _, store := range expired {
-		runtime.ProcessLevelRuntime().Logger().Warn("expired CN.",
+		runtime.ServiceRuntime(service).Logger().Warn("expired CN.",
 			zap.String("uuid", store))
 		operators = append(operators, operator.CreateDeleteCNOp("", store))
 	}

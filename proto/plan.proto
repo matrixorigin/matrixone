@@ -870,6 +870,7 @@ message ExternScan {
     string terminated = 6;
 	string json_type = 7;
     bytes  escaped_by = 8;
+	map<string, int32> TbColToDataCol = 9;
 }
 
 message LockTarget {
