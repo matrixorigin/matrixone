@@ -713,12 +713,13 @@ func determineScanType(relData engine.RelData, num int) (scanType int) {
 
 func (e *Engine) BuildBlockReaders(
 	ctx context.Context,
-	proc *process.Process,
+	p any,
 	ts timestamp.Timestamp,
 	expr *plan.Expr,
 	def *plan.TableDef,
 	relData engine.RelData,
 	num int) ([]engine.Reader, error) {
+	proc := p.(*process.Process)
 	blkCnt := relData.BlkCnt()
 	if blkCnt < num {
 		return nil, moerr.NewInternalErrorNoCtx("not enough blocks")

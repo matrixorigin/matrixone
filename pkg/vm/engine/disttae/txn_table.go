@@ -2120,11 +2120,12 @@ func (tbl *txnTable) buildLocalDataSource(
 
 func (tbl *txnTable) BuildReaders(
 	ctx context.Context,
-	proc *process.Process,
+	p any,
 	expr *plan.Expr,
 	relData engine.RelData,
 	num int,
 	txnOffset int) ([]engine.Reader, error) {
+	proc := p.(*process.Process)
 	blkCnt := relData.BlkCnt()
 	if blkCnt < num {
 		return nil, moerr.NewInternalErrorNoCtx("not enough blocks")

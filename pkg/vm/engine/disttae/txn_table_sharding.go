@@ -249,7 +249,7 @@ func (tbl *txnTableDelegate) ApproxObjectsNum(
 
 func (tbl *txnTableDelegate) BuildReaders(
 	ctx context.Context,
-	proc *process.Process,
+	proc any,
 	expr *plan.Expr,
 	relData engine.RelData,
 	num int,

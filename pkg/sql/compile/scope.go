@@ -1196,7 +1196,6 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 		readers, err = c.e.BuildBlockReaders(
 			ctx,
 			c.proc,
-			//c.e,
 			s.DataSource.Timestamp,
 			s.DataSource.FilterExpr,
 			s.DataSource.TableDef,
@@ -1328,6 +1327,7 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 		}
 
 		var mainRds []engine.Reader
+		var subRds []engine.Reader
 		if rel.GetEngineType() == engine.Memory || s.DataSource.PartitionRelationNames == nil {
 			mainRds, err = s.DataSource.Rel.BuildReaders(
 				c.proc.Ctx,
@@ -1347,16 +1347,43 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 			}
 			readers = append(readers, mainRds...)
 		} else {
-			//TODO::to handle parititon table.
-			return nil, 0, moerr.NewInternalError(c.proc.Ctx, "partition table cannot be used in parallel scan")
+			mp := s.NodeInfo.Data.GroupByPartitionNum()
+			var subRel engine.Relation
+			for num, relName := range s.DataSource.PartitionRelationNames {
+				subRel, err = db.Relation(ctx, relName, c.proc)
+				if err != nil {
+					return
+				}
+				subRds, err = subRel.BuildReaders(
+					ctx,
+					c.proc,
+					s.DataSource.FilterExpr,
+					mp[num],
+					scanUsedCpuNumber,
+					s.TxnOffset,
+				)
+				if err != nil {
+					return
+				}
+				readers = append(readers, subRds...)
+				//memRds, err = subRel.NewReader(ctx,
+				//	scanUsedCpuNumber,
+				//	s.DataSource.FilterExpr,
+				//	dirtyRanges[num],
+				//	len(s.DataSource.OrderBy) > 0,
+				//	s.TxnOffset)
+				//if err != nil {
+				//	return
+				//}
+				//readers = append(readers, memRds...)
+			}
 		}
 
 	}
 	// just for quick GC.
 	s.NodeInfo.Data = nil
 
-	// need some merge to make sure it is only scanUsedCpuNumber reader.
-	// partition table and read from memory will cause len(readers) > scanUsedCpuNumber.
+	//for partition table.
 	if len(readers) != scanUsedCpuNumber {
 		newReaders := make([]engine.Reader, 0, scanUsedCpuNumber)
 		step := len(readers) / scanUsedCpuNumber

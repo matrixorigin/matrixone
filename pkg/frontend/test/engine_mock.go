@@ -11,6 +11,7 @@ import (
 	gomock "github.com/golang/mock/gomock"
 	mpool "github.com/matrixorigin/matrixone/pkg/common/mpool"
 	batch "github.com/matrixorigin/matrixone/pkg/container/batch"
+	nulls "github.com/matrixorigin/matrixone/pkg/container/nulls"
 	types "github.com/matrixorigin/matrixone/pkg/container/types"
 	vector "github.com/matrixorigin/matrixone/pkg/container/vector"
 	objectio "github.com/matrixorigin/matrixone/pkg/objectio"
@@ -213,18 +214,18 @@ func (m *MockTombstoner) EXPECT() *MockTombstonerMockRecorder {
 }
 
 // ApplyTombstones mocks base method.
-func (m *MockTombstoner) ApplyTombstones(rows []types.Rowid) ([]int64, error) {
+func (m *MockTombstoner) ApplyTombstones(rows []types.Rowid, load1 func(types.Blockid, objectio.Location, types.TS) (*nulls.Nulls, error), load2 func(objectio.Location) (*nulls.Nulls, error)) ([]int64, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ApplyTombstones", rows)
+	ret := m.ctrl.Call(m, "ApplyTombstones", rows, load1, load2)
 	ret0, _ := ret[0].([]int64)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // ApplyTombstones indicates an expected call of ApplyTombstones.
-func (mr *MockTombstonerMockRecorder) ApplyTombstones(rows interface{}) *gomock.Call {
+func (mr *MockTombstonerMockRecorder) ApplyTombstones(rows, load1, load2 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ApplyTombstones", reflect.TypeOf((*MockTombstoner)(nil).ApplyTombstones), rows)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ApplyTombstones", reflect.TypeOf((*MockTombstoner)(nil).ApplyTombstones), rows, load1, load2)
 }
 
 // HasTombstones mocks base method.
@@ -386,6 +387,20 @@ func (m *MockRelData) GetDataBlk(i int) *objectio.BlockInfoInProgress {
 func (mr *MockRelDataMockRecorder) GetDataBlk(i interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDataBlk", reflect.TypeOf((*MockRelData)(nil).GetDataBlk), i)
+}
+
+// GetTombstones mocks base method.
+func (m *MockRelData) GetTombstones() engine.Tombstoner {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetTombstones")
+	ret0, _ := ret[0].(engine.Tombstoner)
+	return ret0
+}
+
+// GetTombstones indicates an expected call of GetTombstones.
+func (mr *MockRelDataMockRecorder) GetTombstones() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTombstones", reflect.TypeOf((*MockRelData)(nil).GetTombstones))
 }
 
 // MarshalToBytes mocks base method.
@@ -596,19 +611,19 @@ func (mr *MockRelationMockRecorder) ApproxObjectsNum(ctx interface{}) *gomock.Ca
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ApproxObjectsNum", reflect.TypeOf((*MockRelation)(nil).ApproxObjectsNum), ctx)
 }
 
-// BuildLocalReaders mocks base method.
-func (m *MockRelation) BuildLocalReaders(ctx context.Context, proc *process.Process, ts timestamp.Timestamp, expr *plan.Expr, def *plan.TableDef, relData engine.RelData, num, txnOffset int) ([]engine.Reader, error) {
+// BuildReaders mocks base method.
+func (m *MockRelation) BuildReaders(ctx context.Context, proc *process.Process, expr *plan.Expr, relData engine.RelData, num, txnOffset int) ([]engine.Reader, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "BuildLocalReaders", ctx, proc, ts, expr, def, relData, num, txnOffset)
+	ret := m.ctrl.Call(m, "BuildReaders", ctx, proc, expr, relData, num, txnOffset)
 	ret0, _ := ret[0].([]engine.Reader)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// BuildLocalReaders indicates an expected call of BuildLocalReaders.
-func (mr *MockRelationMockRecorder) BuildLocalReaders(ctx, proc, ts, expr, def, relData, num, txnOffset interface{}) *gomock.Call {
+// BuildReaders indicates an expected call of BuildReaders.
+func (mr *MockRelationMockRecorder) BuildReaders(ctx, proc, expr, relData, num, txnOffset interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BuildLocalReaders", reflect.TypeOf((*MockRelation)(nil).BuildLocalReaders), ctx, proc, ts, expr, def, relData, num, txnOffset)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BuildReaders", reflect.TypeOf((*MockRelation)(nil).BuildReaders), ctx, proc, expr, relData, num, txnOffset)
 }
 
 // CollectTombstones mocks base method.

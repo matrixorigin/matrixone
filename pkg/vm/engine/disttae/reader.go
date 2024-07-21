@@ -776,7 +776,7 @@ func (r *readerInProgress) Read(
 		v2.TxnBlockReaderDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	//// for ordered scan, sort blocklist by zonemap info, and then filter by zonemap
+	// for ordered scan, sort blocklist by zonemap info, and then filter by zonemap
 	//if len(r.OrderBy) > 0 {
 	//	if !r.sorted {
 	//		r.desc = r.OrderBy[0].Flag&plan.OrderBySpec_DESC != 0

@@ -24,7 +24,6 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func GetTempTableName(DbName string, TblName string) string {
@@ -79,7 +78,7 @@ func (e *EntireEngine) NewBlockReader(ctx context.Context, num int, ts timestamp
 
 func (e *EntireEngine) BuildBlockReaders(
 	ctx context.Context,
-	proc *process.Process,
+	proc any,
 	ts timestamp.Timestamp,
 	expr *plan.Expr,
 	def *plan.TableDef,

@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type TableReader struct {
@@ -45,7 +44,7 @@ type IterInfo struct {
 
 func (t *Table) BuildReaders(
 	ctx context.Context,
-	proc *process.Process,
+	proc any,
 	expr *plan.Expr,
 	relData engine.RelData,
 	num int,

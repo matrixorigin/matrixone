@@ -32,7 +32,6 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type Nodes []Node
@@ -603,6 +602,8 @@ type RelData interface {
 	GetDataBlk(i int) *objectio.BlockInfoInProgress
 	SetDataBlk(i int, blk *objectio.BlockInfoInProgress)
 	DataBlkSlice(begin, end int) RelData
+	// GroupByPartitionNum TODO::remove it after refactor of partition table.
+	GroupByPartitionNum() map[int]RelData
 	//DataBlkClone(begin, end int) RelData
 	AppendDataBlk(blk *objectio.BlockInfoInProgress)
 	BuildEmptyRelData() RelData
@@ -685,7 +686,7 @@ type Relation interface {
 
 	BuildReaders(
 		ctx context.Context,
-		proc *process.Process,
+		proc any,
 		expr *plan.Expr,
 		relData RelData,
 		num int,
@@ -769,7 +770,7 @@ type Engine interface {
 
 	BuildBlockReaders(
 		ctx context.Context,
-		proc *process.Process,
+		proc any,
 		ts timestamp.Timestamp,
 		expr *plan.Expr,
 		def *plan.TableDef,

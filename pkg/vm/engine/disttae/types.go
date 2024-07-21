@@ -848,11 +848,10 @@ type readerInProgress struct {
 	scanType int
 
 	// for ordered scan
-	desc bool
-	// FIXME: could usefull
-	//blockZMS []index.ZM
-	//sorted   bool // blks need to be sorted by zonemap
-	OrderBy []*plan.OrderBySpec
+	desc     bool
+	blockZMS []index.ZM
+	sorted   bool // blks need to be sorted by zonemap
+	OrderBy  []*plan.OrderBySpec
 
 	filterZM objectio.ZoneMap
 }

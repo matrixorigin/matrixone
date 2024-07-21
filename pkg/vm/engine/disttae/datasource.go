@@ -234,6 +234,16 @@ const (
 	RelDataV2
 )
 
+func UnmarshalRelationData(data []byte) engine.RelData {
+	//typ := int(data[0])
+	//switch typ {
+	//case :
+
+	//}
+	return nil
+
+}
+
 type relationDataV0 struct {
 	typ     uint8
 	blkList []*objectio.BlockInfo
@@ -299,6 +309,22 @@ func (rd1 *relationDataV1) DataBlkSlice(i, j int) engine.RelData {
 	}
 }
 
+func (rd1 *relationDataV1) GroupByPartitionNum() map[int]engine.RelData {
+	ret := make(map[int]engine.RelData)
+	for _, blk := range rd1.blkList {
+		partitionNum := blk.PartitionNum
+		if _, ok := ret[partitionNum]; !ok {
+			ret[partitionNum] = &relationDataV1{
+				typ:          rd1.typ,
+				tombstoneTyp: rd1.tombstoneTyp,
+				tombstones:   rd1.tombstones,
+			}
+		}
+		ret[partitionNum].AppendDataBlk(blk)
+	}
+	return ret
+}
+
 //func (rd1 *relationDataV1) DataBlkClone(i, j int) engine.RelData {
 //	var dst []*objectio.BlockInfoInProgress
 //	copy(dst, rd1.blkList[i:j])
@@ -355,16 +381,6 @@ func (rd1 *relationDataV1) BlkCnt() int {
 //	//}
 //	return nil
 //}
-
-func UnmarshalRelationData(data []byte) engine.RelData {
-	//typ := int(data[0])
-	//switch typ {
-	//case :
-
-	//}
-	return nil
-
-}
 
 type DataSource interface {
 	Next(
