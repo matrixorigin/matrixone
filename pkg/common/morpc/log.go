@@ -15,26 +15,13 @@
 package morpc
 
 import (
-	"sync"
-
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 )
 
-var (
-	logger *log.MOLogger
-	once   sync.Once
-)
-
-func getLogger() *log.MOLogger {
-	once.Do(initLogger)
-	return logger
-}
-
-func initLogger() {
-	rt := runtime.ProcessLevelRuntime()
-	if rt == nil {
-		rt = runtime.DefaultRuntime()
+func getLogger(sid string) *log.MOLogger {
+	if sid == "" {
+		return runtime.DefaultRuntime().Logger()
 	}
-	logger = rt.Logger().Named("morpc")
+	return runtime.ServiceRuntime(sid).Logger()
 }

@@ -83,7 +83,7 @@ func getTxnTable(
 	engine engine.Engine,
 ) (*txnTable, error) {
 	// TODO: reduce mem allocate
-	proc, err := process.GetCodecService().Decode(
+	proc, err := process.GetCodecService(engine.GetService()).Decode(
 		ctx,
 		param.Process,
 	)

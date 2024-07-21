@@ -51,7 +51,7 @@ func newTxnTableForTest(
 		engine:   engine,
 		tnStores: []DNStore{tnStore},
 	}
-	c := client.NewTxnClient(nil, nil, nil)
+	c := client.NewTxnClient("", nil, nil, nil)
 	op, _ := c.New(context.Background(), timestamp.Timestamp{})
 	op.AddWorkspace(txn)
 
