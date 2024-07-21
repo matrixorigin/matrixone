@@ -245,8 +245,8 @@ func TestBuildLockTables(t *testing.T) {
 func TestBuildCreateTable(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	rt := moruntime.DefaultRuntime()
-	moruntime.SetupProcessLevelRuntime(rt)
-	moruntime.ProcessLevelRuntime().SetGlobalVariables(moruntime.InternalSQLExecutor, executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+	moruntime.SetupServiceBasedRuntime("", rt)
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, executor.NewMemExecutor(func(sql string) (executor.Result, error) {
 		return executor.Result{}, nil
 	}))
 	sqls := []string{

@@ -307,7 +307,6 @@ func NewCluster(ctx context.Context, t *testing.T, opt Options) (Cluster, error)
 	}
 
 	// TODO: CN and LOG use process level runtime
-	runtime.SetupProcessLevelRuntime(c.newRuntime())
 
 	// build addresses for all services
 	c.network.addresses = c.buildServiceAddresses()
@@ -1366,7 +1365,7 @@ func (c *testCluster) initTNServices(fileservices *fileServices) []TNService {
 		}
 		ds, err := newTNService(
 			cfg,
-			c.newRuntime(),
+			c.newRuntime(cfg.UUID),
 			fs,
 			opt)
 		require.NoError(c.t, err)
@@ -1616,8 +1615,8 @@ func (c *testCluster) rangeHAKeeperService(
 	}
 }
 
-func (c *testCluster) newRuntime() runtime.Runtime {
-	return runtime.NewRuntime(metadata.ServiceType_CN, "", c.logger, runtime.WithClock(c.clock))
+func (c *testCluster) newRuntime(sid string) runtime.Runtime {
+	return runtime.NewRuntime(metadata.ServiceType_CN, sid, c.logger, runtime.WithClock(c.clock))
 }
 
 // FilterFunc returns true if traffic was allowed.

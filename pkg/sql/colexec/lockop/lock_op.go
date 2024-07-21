@@ -68,6 +68,7 @@ func (lockOp *LockOp) OpType() vm.OpType {
 }
 
 func (lockOp *LockOp) Prepare(proc *process.Process) error {
+	lockOp.logger = getLogger(proc.GetService())
 	lockOp.ctr = new(container)
 	lockOp.ctr.rt = &state{}
 	lockOp.ctr.rt.fetchers = make([]FetchLockRowsFunc, 0, len(lockOp.targets))
@@ -110,7 +111,8 @@ func (lockOp *LockOp) Call(proc *process.Process) (vm.CallResult, error) {
 
 func callNonBlocking(
 	proc *process.Process,
-	lockOp *LockOp) (vm.CallResult, error) {
+	lockOp *LockOp,
+) (vm.CallResult, error) {
 
 	result, err := lockOp.GetChildren(0).Call(proc)
 	if err != nil {
@@ -212,7 +214,7 @@ func performLock(
 		if proc.GetTxnOperator().LockSkipped(target.tableID, target.mode) {
 			return nil
 		}
-		getLogger().Debug("lock",
+		lockOp.logger.Debug("lock",
 			zap.Uint64("table", target.tableID),
 			zap.Bool("filter", target.filter != nil),
 			zap.Int32("filter-col", target.filterColIndexInBatch),
@@ -245,8 +247,8 @@ func performLock(
 				WithLockTable(target.lockTable, target.changeDef).
 				WithHasNewVersionInRangeFunc(lockOp.ctr.rt.hasNewVersionInRange),
 		)
-		if getLogger().Enabled(zap.DebugLevel) {
-			getLogger().Debug("lock result",
+		if lockOp.logger.Enabled(zap.DebugLevel) {
+			lockOp.logger.Debug("lock result",
 				zap.Uint64("table", target.tableID),
 				zap.Bool("locked", locked),
 				zap.Int32("primary-index", target.primaryColumnIndexInBatch),
@@ -405,7 +407,7 @@ func doLock(
 
 	seq := txnOp.NextSequence()
 	startAt := time.Now()
-	trace.GetService().AddTxnDurationAction(
+	trace.GetService(proc.GetService()).AddTxnDurationAction(
 		txnOp,
 		client.LockEvent,
 		seq,
@@ -486,7 +488,7 @@ func doLock(
 	}
 
 	if len(result.ConflictKey) > 0 {
-		trace.GetService().AddTxnActionInfo(
+		trace.GetService(proc.GetService()).AddTxnActionInfo(
 			txnOp,
 			client.LockEvent,
 			seq,
@@ -505,7 +507,7 @@ func doLock(
 		)
 	}
 
-	trace.GetService().AddTxnDurationAction(
+	trace.GetService(proc.GetService()).AddTxnDurationAction(
 		txnOp,
 		client.LockEvent,
 		seq,
@@ -546,7 +548,7 @@ func doLock(
 		}
 
 		if changed {
-			trace.GetService().TxnNoConflictChanged(
+			trace.GetService(proc.GetService()).TxnNoConflictChanged(
 				proc.GetTxnOperator(),
 				tableID,
 				lockedTS,
@@ -585,7 +587,7 @@ func doLock(
 	// forward rc's snapshot ts
 	snapshotTS = result.Timestamp.Next()
 
-	trace.GetService().TxnConflictChanged(
+	trace.GetService(proc.GetService()).TxnConflictChanged(
 		proc.GetTxnOperator(),
 		tableID,
 		snapshotTS)
