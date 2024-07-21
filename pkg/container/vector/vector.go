@@ -679,36 +679,25 @@ func (v *Vector) PreExtend(rows int, mp *mpool.MPool) error {
 }
 
 // PreExtendArea use to expand the mpool and area of vector
-func (v *Vector) PreExtendArea(rows int, mp *mpool.MPool) error {
+// extraAreaSize: the size of area to be extended
+// mp: mpool
+func (v *Vector) PreExtendArea(extraAreaSize int, mp *mpool.MPool) error {
 
-	// expand mpool
-	if err := v.PreExtend(rows, mp); err != nil {
-		return err
+	if v.class == CONSTANT {
+		return nil
 	}
-
-	// get the size required for storing new rows
-	var vSize int
-	switch v.typ.Oid {
-	case types.T_array_float32:
-		vSize = 4 * int(v.typ.Width)
-	case types.T_array_float64:
-		vSize = 8 * int(v.typ.Width)
-	default:
-		vSize = v.typ.TypeSize()
-	}
-	vlen := vSize * rows
 
 	// check if required size is already satisfied
 	area1 := v.GetArea()
 	voff := len(area1)
-	if voff+vlen <= cap(area1) {
+	if voff+extraAreaSize <= cap(area1) {
 		return nil
 	}
 
 	// grow area
 	var err error
 	oldSz := len(area1)
-	area1, err = mp.Grow(area1, voff+vlen)
+	area1, err = mp.Grow(area1, voff+extraAreaSize)
 	if err != nil {
 		return err
 	}
