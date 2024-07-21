@@ -25,7 +25,7 @@ import (
 )
 
 func (s *service) initRemote() {
-	s.remote.cluster = clusterservice.GetMOCluster()
+	s.remote.cluster = clusterservice.GetMOCluster(s.cfg.ServiceID)
 	s.remote.pool = morpc.NewMessagePool(
 		func() *pb.Request {
 			return &pb.Request{}
@@ -38,6 +38,7 @@ func (s *service) initRemote() {
 	s.initRemoteClient()
 
 	svr, err := morpc.NewMessageHandler(
+		s.cfg.ServiceID,
 		"shard-service",
 		s.cfg.ListenAddress,
 		s.cfg.RPC,
@@ -61,6 +62,7 @@ func (s *service) initRemote() {
 
 func (s *service) initRemoteClient() {
 	c, err := morpc.NewMethodBasedClient(
+		s.cfg.ServiceID,
 		"shard-service",
 		s.cfg.RPC,
 		s.remote.pool,

@@ -20,30 +20,29 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-
 	"github.com/google/uuid"
 	"github.com/lni/dragonboat/v4"
 	"github.com/lni/goutils/leaktest"
 	"github.com/lni/vfs"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestHAKeeperClientConfigIsValidated(t *testing.T) {
 	cfg := HAKeeperClientConfig{}
-	cc1, err := NewCNHAKeeperClient(context.TODO(), cfg)
+	cc1, err := NewCNHAKeeperClient(context.TODO(), "", cfg)
 	assert.Nil(t, cc1)
 	assert.Error(t, err)
-	cc2, err := NewTNHAKeeperClient(context.TODO(), cfg)
+	cc2, err := NewTNHAKeeperClient(context.TODO(), "", cfg)
 	assert.Nil(t, cc2)
 	assert.Error(t, err)
-	cc3, err := NewLogHAKeeperClient(context.TODO(), cfg)
+	cc3, err := NewLogHAKeeperClient(context.TODO(), "", cfg)
 	assert.Nil(t, cc3)
 	assert.Error(t, err)
 }
@@ -55,13 +54,13 @@ func TestHAKeeperClientsCanBeCreated(t *testing.T) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		c1, err := NewCNHAKeeperClient(ctx, cfg)
+		c1, err := NewCNHAKeeperClient(ctx, "", cfg)
 		require.NoError(t, err)
 		assert.NoError(t, c1.Close())
-		c2, err := NewTNHAKeeperClient(ctx, cfg)
+		c2, err := NewTNHAKeeperClient(ctx, "", cfg)
 		assert.NoError(t, err)
 		assert.NoError(t, c2.Close())
-		c3, err := NewLogHAKeeperClient(ctx, cfg)
+		c3, err := NewLogHAKeeperClient(ctx, "", cfg)
 		assert.NoError(t, err)
 		assert.NoError(t, c3.Close())
 	}
@@ -75,11 +74,11 @@ func TestHAKeeperClientCanNotConnectToNonHAKeeperNode(t *testing.T) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		_, err := NewCNHAKeeperClient(ctx, cfg)
+		_, err := NewCNHAKeeperClient(ctx, "", cfg)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoHAKeeper))
-		_, err = NewTNHAKeeperClient(ctx, cfg)
+		_, err = NewTNHAKeeperClient(ctx, "", cfg)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoHAKeeper))
-		_, err = NewLogHAKeeperClient(ctx, cfg)
+		_, err = NewLogHAKeeperClient(ctx, "", cfg)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoHAKeeper))
 	}
 	runServiceTest(t, false, true, fn)
@@ -89,7 +88,7 @@ func TestHAKeeperClientConnectByReverseProxy(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		done := false
 		for i := 0; i < 1000; i++ {
-			si, ok, err := GetShardInfo(testServiceAddress, hakeeper.DefaultHAKeeperShardID)
+			si, ok, err := GetShardInfo("", testServiceAddress, hakeeper.DefaultHAKeeperShardID)
 			if err != nil || !ok {
 				time.Sleep(10 * time.Millisecond)
 				continue
@@ -113,7 +112,7 @@ func TestHAKeeperClientConnectByReverseProxy(t *testing.T) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
-		c, err := NewLogHAKeeperClient(ctx, cfg)
+		c, err := NewLogHAKeeperClient(ctx, "", cfg)
 		require.NoError(t, err)
 		defer func() {
 			assert.NoError(t, c.Close())
@@ -147,7 +146,7 @@ func TestHAKeeperClientSendCNHeartbeat(t *testing.T) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		c1, err := NewCNHAKeeperClient(ctx, cfg)
+		c1, err := NewCNHAKeeperClient(ctx, "", cfg)
 		require.NoError(t, err)
 		defer func() {
 			assert.NoError(t, c1.Close())
@@ -166,7 +165,7 @@ func TestHAKeeperClientSendCNHeartbeat(t *testing.T) {
 		_, err = c1.SendCNHeartbeat(ctx, hb)
 		require.NoError(t, err)
 
-		c2, err := NewTNHAKeeperClient(ctx, cfg)
+		c2, err := NewTNHAKeeperClient(ctx, "", cfg)
 		require.NoError(t, err)
 		defer func() {
 			assert.NoError(t, c2.Close())
@@ -218,7 +217,7 @@ func TestHAKeeperClientSendTNHeartbeat(t *testing.T) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		c, err := NewTNHAKeeperClient(ctx, cfg)
+		c, err := NewTNHAKeeperClient(ctx, "", cfg)
 		require.NoError(t, err)
 		defer func() {
 			assert.NoError(t, c.Close())
@@ -253,7 +252,7 @@ func TestHAKeeperClientSendLogHeartbeat(t *testing.T) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		c, err := NewLogHAKeeperClient(ctx, cfg)
+		c, err := NewLogHAKeeperClient(ctx, "", cfg)
 		require.NoError(t, err)
 		defer func() {
 			assert.NoError(t, c.Close())
@@ -309,6 +308,12 @@ func testNotHAKeeperErrorIsHandled(t *testing.T, fn func(*testing.T, *managedHAK
 	cfg2.GossipPort = 9011
 	cfg2.GossipSeedAddresses = []string{"127.0.0.1:9001"}
 	cfg2.DisableWorkers = true
+
+	rt := runtime.ServiceRuntime("")
+	runtime.SetupServiceBasedRuntime("", rt)
+	runtime.SetupServiceBasedRuntime(cfg1.UUID, rt)
+	runtime.SetupServiceBasedRuntime(cfg2.UUID, rt)
+
 	service1, err := NewService(cfg1,
 		newFS(),
 		nil,
@@ -356,6 +361,7 @@ func testNotHAKeeperErrorIsHandled(t *testing.T, fn func(*testing.T, *managedHAK
 	defer cancel()
 	cc, err := getRPCClient(
 		ctx,
+		"",
 		cfg1.LogServiceServiceAddr(),
 		c.respPool,
 		defaultMaxMessageSize,
@@ -428,9 +434,9 @@ func TestHAKeeperClientUpdateCNLabel(t *testing.T) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		c1, err := NewProxyHAKeeperClient(ctx, cfg)
+		c1, err := NewProxyHAKeeperClient(ctx, "", cfg)
 		require.NoError(t, err)
-		c2, err := NewCNHAKeeperClient(ctx, cfg)
+		c2, err := NewCNHAKeeperClient(ctx, "", cfg)
 		require.NoError(t, err)
 		defer func() {
 			assert.NoError(t, c1.Close())
@@ -504,9 +510,9 @@ func TestHAKeeperClientUpdateCNWorkState(t *testing.T) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		c1, err := NewProxyHAKeeperClient(ctx, cfg)
+		c1, err := NewProxyHAKeeperClient(ctx, "", cfg)
 		require.NoError(t, err)
-		c2, err := NewCNHAKeeperClient(ctx, cfg)
+		c2, err := NewCNHAKeeperClient(ctx, "", cfg)
 		require.NoError(t, err)
 		defer func() {
 			assert.NoError(t, c1.Close())
@@ -576,9 +582,9 @@ func TestHAKeeperClientPatchCNStore(t *testing.T) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		c1, err := NewProxyHAKeeperClient(ctx, cfg)
+		c1, err := NewProxyHAKeeperClient(ctx, "", cfg)
 		require.NoError(t, err)
-		c2, err := NewCNHAKeeperClient(ctx, cfg)
+		c2, err := NewCNHAKeeperClient(ctx, "", cfg)
 		require.NoError(t, err)
 		defer func() {
 			assert.NoError(t, c1.Close())
@@ -674,9 +680,9 @@ func TestHAKeeperClientDeleteCNStore(t *testing.T) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		c1, err := NewProxyHAKeeperClient(ctx, cfg)
+		c1, err := NewProxyHAKeeperClient(ctx, "", cfg)
 		require.NoError(t, err)
-		c2, err := NewCNHAKeeperClient(ctx, cfg)
+		c2, err := NewCNHAKeeperClient(ctx, "", cfg)
 		require.NoError(t, err)
 		defer func() {
 			assert.NoError(t, c1.Close())
@@ -715,7 +721,7 @@ func TestHAKeeperClientSendProxyHeartbeat(t *testing.T) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		c1, err := NewProxyHAKeeperClient(ctx, cfg)
+		c1, err := NewProxyHAKeeperClient(ctx, "", cfg)
 		require.NoError(t, err)
 		defer func() {
 			assert.NoError(t, c1.Close())

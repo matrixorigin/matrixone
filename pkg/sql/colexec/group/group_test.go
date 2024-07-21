@@ -200,7 +200,7 @@ func newTestCase(flgs []bool, ts []types.Type, exprIdx []int, pos int32) groupTe
 	}
 	return groupTestCase{
 		flgs: flgs,
-		proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
+		proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
 		arg: &Group{
 			Exprs: exprs,
 			Types: ts,
