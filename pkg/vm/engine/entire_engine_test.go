@@ -172,6 +172,17 @@ func newtestEngine(name string, tee *testEntireEngine) *testEngine {
 	return &testEngine{name: name, parent: tee}
 }
 
+func (e *testEngine) BuildBlockReaders(
+	ctx context.Context,
+	p any,
+	ts timestamp.Timestamp,
+	expr *plan.Expr,
+	def *plan.TableDef,
+	relData RelData,
+	num int) ([]Reader, error) {
+	panic("unimplemented")
+}
+
 func (e *testEngine) New(_ context.Context, _ client.TxnOperator) error {
 	e.parent.step = e.parent.step + 1
 	if e.name == origin {

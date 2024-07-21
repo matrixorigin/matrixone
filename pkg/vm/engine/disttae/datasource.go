@@ -240,6 +240,7 @@ func (tomV1 *tombstoneDataV1) ApplyTombstones(
 		}
 		return ret
 	}
+	tomV1.initMap()
 
 	left := make([]types.Rowid, 0)
 	blockId, _ := rows[0].Decode()
