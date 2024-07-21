@@ -16,11 +16,12 @@ package logservice
 
 import (
 	"fmt"
-	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/util"
 	"strconv"
 	"strings"
 	"time"
+
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/util"
 
 	"github.com/google/uuid"
 	"github.com/lni/dragonboat/v4"

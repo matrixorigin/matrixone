@@ -28,11 +28,13 @@ func TestLeakCheck(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	ts := newTestTxnSender()
 
 	cc := make(chan struct{})
-	c := NewTxnClient(ts,
+	c := NewTxnClient(
+		"",
+		ts,
 		WithEnableLeakCheck(
 			time.Millisecond*200,
 			func([]ActiveTxn) {
@@ -49,11 +51,13 @@ func TestLeakCheckWithNoLeak(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	ts := newTestTxnSender()
 
 	n := 0
-	c := NewTxnClient(ts,
+	c := NewTxnClient(
+		"",
+		ts,
 		WithEnableLeakCheck(
 			time.Millisecond*200,
 			func([]ActiveTxn) {

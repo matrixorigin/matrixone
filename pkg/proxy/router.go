@@ -48,7 +48,7 @@ type Router interface {
 	// filter is a function which is used to do more checks whether the
 	// CN server is a proper one. If it returns true, means that CN
 	// server is not a valid one.
-	Route(ctx context.Context, client clientInfo, filter func(string) bool) (*CNServer, error)
+	Route(ctx context.Context, sid string, client clientInfo, filter func(string) bool) (*CNServer, error)
 
 	// SelectByConnID selects the CN server which has the connection ID.
 	SelectByConnID(connID uint32) (*CNServer, error)
@@ -193,9 +193,11 @@ func (r *router) SelectByConnID(connID uint32) (*CNServer, error) {
 
 // selectForSuperTenant is used to select CN servers for sys tenant.
 // For more detail, see route.RouteForSuperTenant.
-func (r *router) selectForSuperTenant(c clientInfo, filter func(string) bool) []*CNServer {
+func (r *router) selectForSuperTenant(sid string, c clientInfo, filter func(string) bool) []*CNServer {
 	var cns []*CNServer
-	route.RouteForSuperTenant(c.labelInfo.genSelector(clusterservice.EQ_Globbing), c.username, filter,
+	route.RouteForSuperTenant(
+		sid,
+		c.labelInfo.genSelector(clusterservice.EQ_Globbing), c.username, filter,
 		func(s *metadata.CNService) {
 			cns = append(cns, &CNServer{
 				reqLabel: c.labelInfo,
@@ -209,26 +211,33 @@ func (r *router) selectForSuperTenant(c clientInfo, filter func(string) bool) []
 
 // selectForCommonTenant is used to select CN servers for common tenant.
 // For more detail, see route.RouteForCommonTenant.
-func (r *router) selectForCommonTenant(c clientInfo, filter func(string) bool) []*CNServer {
+func (r *router) selectForCommonTenant(
+	sid string,
+	c clientInfo,
+	filter func(string) bool,
+) []*CNServer {
 	var cns []*CNServer
-	route.RouteForCommonTenant(c.labelInfo.genSelector(clusterservice.EQ_Globbing), filter, func(s *metadata.CNService) {
-		cns = append(cns, &CNServer{
-			reqLabel: c.labelInfo,
-			cnLabel:  s.Labels,
-			uuid:     s.ServiceID,
-			addr:     s.SQLAddress,
-		})
-	})
+	route.RouteForCommonTenant(
+		sid,
+		c.labelInfo.genSelector(clusterservice.EQ_Globbing), filter, func(s *metadata.CNService) {
+			cns = append(cns, &CNServer{
+				reqLabel: c.labelInfo,
+				cnLabel:  s.Labels,
+				uuid:     s.ServiceID,
+				addr:     s.SQLAddress,
+			})
+		},
+	)
 	return cns
 }
 
 // Route implements the Router interface.
-func (r *router) Route(ctx context.Context, c clientInfo, filter func(string) bool) (*CNServer, error) {
+func (r *router) Route(ctx context.Context, sid string, c clientInfo, filter func(string) bool) (*CNServer, error) {
 	var cns []*CNServer
 	if c.isSuperTenant() {
-		cns = r.selectForSuperTenant(c, filter)
+		cns = r.selectForSuperTenant(sid, c, filter)
 	} else {
-		cns = r.selectForCommonTenant(c, filter)
+		cns = r.selectForCommonTenant(sid, c, filter)
 	}
 	cnCount := len(cns)
 	v2.ProxyAvailableBackendServerNumGauge.

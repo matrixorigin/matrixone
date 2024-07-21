@@ -35,7 +35,6 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
-
 	"go.uber.org/zap"
 )
 
@@ -285,10 +284,14 @@ type MOCollector struct {
 
 type MOCollectorOption func(*MOCollector)
 
-func NewMOCollector(ctx context.Context, opts ...MOCollectorOption) *MOCollector {
+func NewMOCollector(
+	ctx context.Context,
+	service string,
+	opts ...MOCollectorOption,
+) *MOCollector {
 	c := &MOCollector{
 		ctx:            ctx,
-		logger:         morun.ProcessLevelRuntime().Logger().Named(LoggerNameMOCollector).With(logutil.Discardable()),
+		logger:         morun.ServiceRuntime(service).Logger().Named(LoggerNameMOCollector).With(logutil.Discardable()),
 		buffers:        make(map[string]*bufferHolder),
 		awakeCollect:   make(chan batchpipe.HasName, defaultQueueSize),
 		awakeGenerate:  make(chan generateReq, 16),

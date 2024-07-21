@@ -155,17 +155,33 @@ func (mo *MOServer) startAccept(listener net.Listener) {
 	}
 }
 func (mo *MOServer) handleConn(conn net.Conn) {
-	rs, err := NewIOSession(conn, mo.pu)
+	var rs *Conn
+	var err error
+	defer func() {
+		if rs != nil {
+			err = rs.Close()
+			if err != nil {
+				logutil.Error("Handle conn error", zap.Error(err))
+				return
+			}
+		}
+		if err != nil {
+			mo.rm.Closed(rs)
+		}
+	}()
+
+	rs, err = NewIOSession(conn, mo.pu)
 	if err != nil {
-		mo.rm.Closed(rs)
 		logutil.Error("NewIOSession error", zap.Error(err))
 		return
 	}
-	mo.rm.Created(rs)
-	err = mo.handshake(rs)
-
+	err = mo.rm.Created(rs)
 	if err != nil {
-		mo.rm.Closed(rs)
+		logutil.Error("Create routine error", zap.Error(err))
+		return
+	}
+	err = mo.handshake(rs)
+	if err != nil {
 		logutil.Error("HandShake error", zap.Error(err))
 		return
 	}
@@ -195,6 +211,13 @@ func (mo *MOServer) handshake(rs *Conn) error {
 	defer tempCancel()
 
 	routine := rm.getRoutine(rs)
+	if routine == nil {
+		logutil.Error(
+			"Failed to handshake with server, routine does not exist...",
+			zap.Error(err))
+		return err
+	}
+
 	protocol := routine.getProtocol()
 
 	ses := routine.getSession()

@@ -74,7 +74,7 @@ func TestCompilerContext_Database(t *testing.T) {
 	engine.EXPECT().Database(gomock.Any(), "", nil).Return(database, nil).Times(2)
 
 	c := &compilerContext{
-		proc:   testutil.NewProcessWithMPool(mpool.MustNewZero()),
+		proc:   testutil.NewProcessWithMPool("", mpool.MustNewZero()),
 		engine: engine,
 	}
 

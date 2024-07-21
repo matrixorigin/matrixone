@@ -31,6 +31,7 @@ import (
 
 // Engine is an engine.Engine impl
 type Engine struct {
+	sid         string
 	shardPolicy ShardPolicy
 	idGenerator IDGenerator
 	cluster     clusterservice.MOCluster
@@ -38,6 +39,7 @@ type Engine struct {
 
 func New(
 	ctx context.Context,
+	sid string,
 	shardPolicy ShardPolicy,
 	idGenerator IDGenerator,
 	cluster clusterservice.MOCluster,
@@ -45,6 +47,7 @@ func New(
 	_ = ctx
 
 	engine := &Engine{
+		sid:         sid,
 		shardPolicy: shardPolicy,
 		idGenerator: idGenerator,
 		cluster:     cluster,
@@ -54,6 +57,10 @@ func New(
 }
 
 var _ engine.Engine = new(Engine)
+
+func (e *Engine) GetService() string {
+	return e.sid
+}
 
 func (e *Engine) New(_ context.Context, _ client.TxnOperator) error {
 	return nil
@@ -183,7 +190,7 @@ func (e *Engine) Delete(ctx context.Context, dbName string, txnOperator client.T
 
 func (e *Engine) Nodes(isInternal bool, tenant string, _ string, cnLabel map[string]string) (engine.Nodes, error) {
 	var nodes engine.Nodes
-	cluster := clusterservice.GetMOCluster()
+	cluster := clusterservice.GetMOCluster(e.sid)
 	var selector clusterservice.Selector
 	if isInternal || strings.ToLower(tenant) == "sys" {
 		selector = clusterservice.NewSelector()
