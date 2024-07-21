@@ -64,8 +64,9 @@ func newDefault(delta *Config) (allocator Allocator) {
 	// checked
 	defer func() {
 		if config.CheckFraction != nil && *config.CheckFraction > 0 {
-			allocator = NewCheckedAllocator(
+			allocator = NewRandomAllocator(
 				allocator,
+				NewCheckedAllocator(allocator),
 				*config.CheckFraction,
 			)
 		}
