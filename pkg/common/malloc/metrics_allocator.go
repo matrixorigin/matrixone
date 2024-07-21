@@ -20,7 +20,7 @@ import (
 
 type MetricsAllocator struct {
 	upstream        Allocator
-	deallocatorPool *ClosureDeallocatorPool[metricsDeallocatorArgs]
+	deallocatorPool *ClosureDeallocatorPool[metricsDeallocatorArgs, *metricsDeallocatorArgs]
 
 	allocateBytesCounter   prometheus.Counter
 	inuseBytesGauge        prometheus.Gauge
@@ -30,6 +30,10 @@ type MetricsAllocator struct {
 
 type metricsDeallocatorArgs struct {
 	size uint64
+}
+
+func (metricsDeallocatorArgs) As(Trait) bool {
+	return false
 }
 
 func NewMetricsAllocator(
