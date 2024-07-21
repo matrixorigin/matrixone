@@ -211,6 +211,7 @@ func TestUnlockOrphanTxnWithServiceRestart(t *testing.T) {
 func TestGetTimeoutRemoveTxn(t *testing.T) {
 	hold := newMapBasedTxnHandler(
 		"s1",
+		getLogger(""),
 		newFixedSlicePool(16),
 		func(sid string) (bool, error) { return false, nil },
 		func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, nil },
@@ -250,6 +251,7 @@ func TestGetTimeoutRemoveTxn(t *testing.T) {
 func TestGetTimeoutRemoveTxnWithValid(t *testing.T) {
 	hold := newMapBasedTxnHandler(
 		"s1",
+		getLogger(""),
 		newFixedSlicePool(16),
 		func(sid string) (bool, error) { return sid == "s1", nil },
 		func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, nil },
@@ -293,6 +295,7 @@ func TestGetTimeoutRemoveTxnWithValid(t *testing.T) {
 func TestGetTimeoutRemoveTxnWithValidErrorAndNotifyOK(t *testing.T) {
 	hold := newMapBasedTxnHandler(
 		"s1",
+		getLogger(""),
 		newFixedSlicePool(16),
 		func(sid string) (bool, error) { return false, ErrTxnNotFound },
 		func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, nil },
@@ -318,6 +321,7 @@ func TestGetTimeoutRemoveTxnWithValidErrorAndNotifyOK(t *testing.T) {
 func TestGetTimeoutRemoveTxnWithValidErrorAndNotifyFailed(t *testing.T) {
 	hold := newMapBasedTxnHandler(
 		"s1",
+		getLogger(""),
 		newFixedSlicePool(16),
 		func(sid string) (bool, error) { return false, ErrTxnNotFound },
 		func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, ErrTxnNotFound },
@@ -584,6 +588,7 @@ func TestOrphanTxnHolderCanBeRelease(t *testing.T) {
 func TestValidTxnWithLocalTxn(t *testing.T) {
 	hold := newMapBasedTxnHandler(
 		"s1",
+		getLogger(""),
 		newFixedSlicePool(16),
 		func(sid string) (bool, error) { return false, nil },
 		func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, nil },
@@ -597,6 +602,7 @@ func TestValidTxnWithLocalTxn(t *testing.T) {
 func TestValidTxnWithValidRemoteTxn(t *testing.T) {
 	hold := newMapBasedTxnHandler(
 		"s1",
+		getLogger(""),
 		newFixedSlicePool(16),
 		func(sid string) (bool, error) { return false, nil },
 		func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, nil },
@@ -610,6 +616,7 @@ func TestValidTxnWithValidRemoteTxn(t *testing.T) {
 func TestValidTxnWithInvalidRemoteTxn(t *testing.T) {
 	hold := newMapBasedTxnHandler(
 		"s1",
+		getLogger(""),
 		newFixedSlicePool(16),
 		func(sid string) (bool, error) { return false, nil },
 		func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, nil },
@@ -623,6 +630,7 @@ func TestValidTxnWithInvalidRemoteTxn(t *testing.T) {
 func TestValidTxnWithInvalidRemoteTxnAndNotifyOK(t *testing.T) {
 	hold := newMapBasedTxnHandler(
 		"s1",
+		getLogger(""),
 		newFixedSlicePool(16),
 		func(sid string) (bool, error) { return false, nil },
 		func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, nil },
@@ -636,6 +644,7 @@ func TestValidTxnWithInvalidRemoteTxnAndNotifyOK(t *testing.T) {
 func TestValidTxnWithInvalidRemoteTxnAndNotifyFailed(t *testing.T) {
 	hold := newMapBasedTxnHandler(
 		"s1",
+		getLogger(""),
 		newFixedSlicePool(16),
 		func(sid string) (bool, error) { return false, nil },
 		func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, ErrLockConflict },
@@ -649,6 +658,7 @@ func TestValidTxnWithInvalidRemoteTxnAndNotifyFailed(t *testing.T) {
 func TestValidTxnWithInvalidRemoteTxnAndNotifyFoundCommitting(t *testing.T) {
 	hold := newMapBasedTxnHandler(
 		"s1",
+		getLogger(""),
 		newFixedSlicePool(16),
 		func(sid string) (bool, error) { return false, nil },
 		func(ot []pb.OrphanTxn) ([][]byte, error) { return [][]byte{{1}}, nil },

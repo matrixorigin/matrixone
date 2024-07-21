@@ -34,9 +34,6 @@ import (
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
-
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -69,6 +66,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 func createDropDatabaseErrorInfo() string {
@@ -695,19 +694,19 @@ func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error
 			if err != nil {
 				return err
 			}
-			runtime.ProcessLevelRuntime().SetGlobalVariables("optimizer_hints", value)
+			runtime.ServiceRuntime(ses.service).SetGlobalVariables("optimizer_hints", value)
 		} else if name == "runtime_filter_limit_in" {
 			err = setVarFunc(assign.System, assign.Global, name, value, sql)
 			if err != nil {
 				return err
 			}
-			runtime.ProcessLevelRuntime().SetGlobalVariables("runtime_filter_limit_in", value)
+			runtime.ServiceRuntime(ses.service).SetGlobalVariables("runtime_filter_limit_in", value)
 		} else if name == "runtime_filter_limit_bloom_filter" {
 			err = setVarFunc(assign.System, assign.Global, name, value, sql)
 			if err != nil {
 				return err
 			}
-			runtime.ProcessLevelRuntime().SetGlobalVariables("runtime_filter_limit_bloom_filter", value)
+			runtime.ServiceRuntime(ses.service).SetGlobalVariables("runtime_filter_limit_bloom_filter", value)
 		} else {
 			err = setVarFunc(assign.System, assign.Global, name, value, sql)
 			if err != nil {
@@ -1103,6 +1102,11 @@ func createPrepareStmt(
 		getFromSendLongData: make(map[int]struct{}),
 	}
 	prepareStmt.InsertBat = ses.GetTxnCompileCtx().GetProcess().GetPrepareBatch()
+
+	if execCtx.input != nil {
+		sqlSourceTypes := execCtx.input.getSqlSourceTypes()
+		prepareStmt.IsCloudNonuser = slices.Contains(sqlSourceTypes, constant.CloudNoUserSql)
+	}
 	return prepareStmt, nil
 }
 
@@ -1663,16 +1667,22 @@ func doShowBackendServers(ses *Session, execCtx *ExecCtx) error {
 		u := ses.GetTenantInfo().GetUser()
 		// For super use dump and root, we should list all servers.
 		if isSuperUser(u) {
-			clusterservice.GetMOCluster().GetCNService(
+			clusterservice.GetMOCluster(ses.GetService()).GetCNService(
 				clusterservice.NewSelectAll(), func(s metadata.CNService) bool {
 					appendFn(&s)
 					return true
 				})
 		} else {
-			route.RouteForSuperTenant(se, u, nil, appendFn)
+			route.RouteForSuperTenant(
+				ses.GetService(),
+				se,
+				u,
+				nil,
+				appendFn,
+			)
 		}
 	} else {
-		route.RouteForCommonTenant(se, nil, appendFn)
+		route.RouteForCommonTenant(ses.GetService(), se, nil, appendFn)
 	}
 
 	return trySaveQueryResult(execCtx.reqCtx, ses, mrs)
@@ -1785,7 +1795,7 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 	seq := uint64(0)
 	if txnOp != nil {
 		seq = txnOp.NextSequence()
-		txnTrace.GetService().AddTxnDurationAction(
+		txnTrace.GetService(ses.GetService()).AddTxnDurationAction(
 			txnOp,
 			client.BuildPlanEvent,
 			seq,
@@ -1798,7 +1808,7 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 		cost := time.Since(start)
 
 		if txnOp != nil {
-			txnTrace.GetService().AddTxnDurationAction(
+			txnTrace.GetService(ses.GetService()).AddTxnDurationAction(
 				txnOp,
 				client.BuildPlanEvent,
 				seq,
@@ -2991,8 +3001,17 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 	case COM_STMT_CLOSE:
 		// rewrite to "deallocate Prepare stmt_name"
 		stmtID := binary.LittleEndian.Uint32(req.GetData().([]byte)[0:4])
+		var preStmt *PrepareStmt
 		stmtName := getPrepareStmtName(stmtID)
-		sql = fmt.Sprintf("deallocate prepare %s", stmtName)
+		preStmt, err = ses.GetPrepareStmt(execCtx.reqCtx, stmtName)
+		if err != nil {
+			resp = NewGeneralErrorResponse(COM_STMT_CLOSE, ses.GetTxnHandler().GetServerStatus(), err)
+		}
+		prefix := ""
+		if preStmt.IsCloudNonuser {
+			prefix = "/* cloud_nonuser */"
+		}
+		sql = fmt.Sprintf("%sdeallocate prepare %s", prefix, stmtName)
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(sql))
 
 		err = doComQuery(ses, execCtx, &UserInput{sql: sql})
@@ -3005,7 +3024,16 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		//Payload of COM_STMT_RESET
 		stmtID := binary.LittleEndian.Uint32(req.GetData().([]byte)[0:4])
 		stmtName := getPrepareStmtName(stmtID)
-		sql = fmt.Sprintf("reset prepare %s", stmtName)
+		var preStmt *PrepareStmt
+		preStmt, err = ses.GetPrepareStmt(execCtx.reqCtx, stmtName)
+		if err != nil {
+			resp = NewGeneralErrorResponse(COM_STMT_CLOSE, ses.GetTxnHandler().GetServerStatus(), err)
+		}
+		prefix := ""
+		if preStmt.IsCloudNonuser {
+			prefix = "/* cloud_nonuser */"
+		}
+		sql = fmt.Sprintf("%sreset prepare %s", prefix, stmtName)
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(sql))
 		err = doComQuery(ses, execCtx, &UserInput{sql: sql})
 		if err != nil {
@@ -3041,7 +3069,13 @@ func parseStmtExecute(reqCtx context.Context, ses *Session, data []byte) (string
 		return "", nil, err
 	}
 
-	sql := fmt.Sprintf("execute %s", stmtName)
+	var sql string
+	prefix := ""
+	if preStmt.IsCloudNonuser {
+		prefix = "/* cloud_nonuser */"
+	}
+	sql = fmt.Sprintf("%sexecute %s", prefix, stmtName)
+
 	ses.Debug(reqCtx, "query trace", logutil.QueryField(sql))
 	err = ses.GetResponser().MysqlRrWr().ParseExecuteData(reqCtx, ses.GetTxnCompileCtx().GetProcess(), preStmt, data, pos)
 	if err != nil {
@@ -3065,7 +3099,13 @@ func parseStmtSendLongData(reqCtx context.Context, ses *Session, data []byte) er
 		return err
 	}
 
-	sql := fmt.Sprintf("send long data for stmt %s", stmtName)
+	var sql string
+	prefix := ""
+	if preStmt.IsCloudNonuser {
+		prefix = "/* cloud_nonuser */"
+	}
+	sql = fmt.Sprintf("%ssend long data for stmt %s", prefix, stmtName)
+
 	ses.Debug(reqCtx, "query trace", logutil.QueryField(sql))
 
 	err = ses.GetResponser().MysqlRrWr().ParseSendLongData(reqCtx, ses.GetTxnCompileCtx().GetProcess(), preStmt, data, pos)

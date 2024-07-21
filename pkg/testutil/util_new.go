@@ -37,14 +37,14 @@ import (
 
 func NewProcess() *process.Process {
 	mp := mpool.MustNewZeroNoFixed()
-	return NewProcessWithMPool(mp)
+	return NewProcessWithMPool("", mp)
 }
 
-func SetupAutoIncrService() {
-	rt := runtime.ProcessLevelRuntime()
+func SetupAutoIncrService(sid string) {
+	rt := runtime.ServiceRuntime(sid)
 	if rt == nil {
 		rt = runtime.DefaultRuntime()
-		runtime.SetupProcessLevelRuntime(rt)
+		runtime.SetupServiceBasedRuntime(sid, rt)
 	}
 	rt.SetGlobalVariables(
 		runtime.AutoIncrementService,
@@ -54,8 +54,8 @@ func SetupAutoIncrService() {
 			incrservice.Config{}))
 }
 
-func NewProcessWithMPool(mp *mpool.MPool) *process.Process {
-	SetupAutoIncrService()
+func NewProcessWithMPool(sid string, mp *mpool.MPool) *process.Process {
+	SetupAutoIncrService(sid)
 	proc := process.New(
 		context.Background(),
 		mp,
