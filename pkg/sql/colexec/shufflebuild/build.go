@@ -367,10 +367,6 @@ func (ctr *container) handleRuntimeFilter(ap *ShuffleBuild, proc *process.Proces
 	if ap.RuntimeFilterSpec == nil {
 		panic("there must be runtime filter in shuffle build!")
 	}
-	// only shuffle build operator with parallelIdx = 0 send this runtime filter
-	if ap.GetParallelIdx() != 0 {
-		return nil
-	}
 	//only support runtime filter pass for now in shuffle join
 	var runtimeFilter process.RuntimeFilterMessage
 	runtimeFilter.Tag = ap.RuntimeFilterSpec.Tag
