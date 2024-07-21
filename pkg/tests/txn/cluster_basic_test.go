@@ -175,7 +175,9 @@ func TestBasicSingleShardWithInternalSQLExecutor(t *testing.T) {
 			defer c.Stop()
 			c.Start()
 
-			v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.InternalSQLExecutor)
+			s, err := c.Env().GetCNServiceIndexed(0)
+			require.NoError(t, err)
+			v, ok := runtime.ServiceRuntime(s.ID()).GetGlobalVariables(runtime.InternalSQLExecutor)
 			if !ok {
 				panic("missing internal sql executor")
 			}

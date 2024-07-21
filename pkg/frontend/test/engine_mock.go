@@ -1156,6 +1156,20 @@ func (mr *MockEngineMockRecorder) GetRelationById(ctx, op, tableId interface{}) 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetRelationById", reflect.TypeOf((*MockEngine)(nil).GetRelationById), ctx, op, tableId)
 }
 
+// GetService mocks base method.
+func (m *MockEngine) GetService() string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetService")
+	ret0, _ := ret[0].(string)
+	return ret0
+}
+
+// GetService indicates an expected call of GetService.
+func (mr *MockEngineMockRecorder) GetService() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetService", reflect.TypeOf((*MockEngine)(nil).GetService))
+}
+
 // Hints mocks base method.
 func (m *MockEngine) Hints() engine.Hints {
 	m.ctrl.T.Helper()
@@ -1185,18 +1199,18 @@ func (mr *MockEngineMockRecorder) New(ctx, op interface{}) *gomock.Call {
 }
 
 // NewBlockReader mocks base method.
-func (m *MockEngine) NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp, expr *plan.Expr, filter any, ranges []byte, tblDef *plan.TableDef, proc any) ([]engine.Reader, error) {
+func (m *MockEngine) NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp, expr *plan.Expr, blockReadPKFilter any, ranges []byte, tblDef *plan.TableDef, proc any) ([]engine.Reader, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "NewBlockReader", ctx, num, ts, expr, filter, ranges, tblDef, proc)
+	ret := m.ctrl.Call(m, "NewBlockReader", ctx, num, ts, expr, blockReadPKFilter, ranges, tblDef, proc)
 	ret0, _ := ret[0].([]engine.Reader)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // NewBlockReader indicates an expected call of NewBlockReader.
-func (mr *MockEngineMockRecorder) NewBlockReader(ctx, num, ts, expr, ranges, tblDef, proc interface{}) *gomock.Call {
+func (mr *MockEngineMockRecorder) NewBlockReader(ctx, num, ts, expr, blockReadPKFilter, ranges, tblDef, proc interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NewBlockReader", reflect.TypeOf((*MockEngine)(nil).NewBlockReader), ctx, num, ts, expr, ranges, tblDef, proc)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NewBlockReader", reflect.TypeOf((*MockEngine)(nil).NewBlockReader), ctx, num, ts, expr, blockReadPKFilter, ranges, tblDef, proc)
 }
 
 // Nodes mocks base method.
