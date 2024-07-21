@@ -17,25 +17,23 @@ package testutil
 import (
 	"context"
 	"fmt"
-	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"os"
 	"os/user"
 	"path/filepath"
 	"testing"
+
+	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	testutil2 "github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func GetDefaultTestPath(module string, t *testing.T) string {
@@ -179,32 +177,29 @@ func NewDefaultTableReader(
 	databaseName string,
 	schema *catalog.Schema,
 	expr *plan.Expr,
-	proc *process.Process,
-	ranges []*objectio.BlockInfoInProgress,
-	fs fileservice.FileService,
+	mp *mpool.MPool,
+	ranges engine.RelData,
 	snapshotTS timestamp.Timestamp,
-	packerPool *fileservice.Pool[*types.Packer],
+	e *disttae.Engine,
+	txnOffset int,
 ) (*disttae.SingleReaderInProgress, error) {
 
 	tblDef := PlanTableDefBySchema(schema, rel.GetTableID(ctx), databaseName)
 
-	source, err := disttae.BuildLocalDataSource(ctx, rel, ranges)
+	source, err := disttae.BuildLocalDataSource(ctx, rel, ranges, txnOffset)
 	if err != nil {
 		return nil, err
 	}
 
-	r := disttae.NewSingleReaderInProgress(
+	r := disttae.NewReaderInProgress(
 		ctx,
-		proc,
-		fs,
-		packerPool,
+		testutil2.NewProcessWithMPool(mp),
+		e,
 		&tblDef,
 		snapshotTS,
 		expr,
-		false,
-		0,
 		source,
 	)
 
-	return r, nil
+	return &disttae.SingleReaderInProgress{R: r}, nil
 }

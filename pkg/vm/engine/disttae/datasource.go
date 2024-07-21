@@ -769,6 +769,12 @@ func NewLocalDataSource(
 	source.ctx = ctx
 	source.mp = mp
 
+	if bytes.Equal(
+		objectio.EncodeBlockInfoInProgress(*ranges[0]),
+		objectio.EmptyBlockInfoInProgressBytes) {
+		ranges = ranges[1:]
+	}
+
 	source.ranges = ranges
 	source.pState = pState
 	source.snapshotTS = snapshotTS
@@ -818,11 +824,22 @@ func (ls *LocalDataSource) prepareDeletes(blockId types.Blockid) (err error) {
 	if blockId.Compare(ls.prevBlockId) != 0 {
 		ls.prevBlockId = blockId
 
+		// extract deletes from workspace
+		if ls.workspaceDeletes.InWritesDeletes == nil {
+			ls.workspaceDeletes.InWritesDeletes = make(map[types.Rowid]struct{})
+			for idx := range ls.unCommittedInmemDeletesEntry {
+				delRowIds := vector.MustFixedCol[types.Rowid](ls.unCommittedInmemDeletesEntry[idx].bat.Vecs[0])
+				for _, delRowId := range delRowIds {
+					ls.workspaceDeletes.InWritesDeletes[delRowId] = struct{}{}
+				}
+			}
+		}
+
 		slices.Sort(ls.workspaceDeletes.RawRowIdOffsetsDeletes[blockId])
 
 		deltaLoc, commitTS, ok := ls.pState.GetBockDeltaLoc(blockId)
 		if ok {
-			ls.persistedDeletes, err = loadBlockDeletesByDeltaLoc(ls.ctx, ls.fs, blockId, deltaLoc, ls.snapshotTS, commitTS)
+			ls.persistedDeletes, err = loadBlockDeletesByDeltaLoc(ls.ctx, ls.fs, blockId, deltaLoc[:], ls.snapshotTS, commitTS)
 			if err != nil {
 				return err
 			}
@@ -976,17 +993,6 @@ func (ls *LocalDataSource) filterUncommittedInMemInserts(mp *mpool.MPool, bat *b
 		return nil
 	}
 
-	// extract deletes from workspace
-	if ls.workspaceDeletes.InWritesDeletes == nil {
-		ls.workspaceDeletes.InWritesDeletes = make(map[types.Rowid]struct{})
-		for idx := range ls.unCommittedInmemDeletesEntry {
-			delRowIds := vector.MustFixedCol[types.Rowid](ls.unCommittedInmemDeletesEntry[idx].bat.Vecs[0])
-			for _, delRowId := range delRowIds {
-				ls.workspaceDeletes.InWritesDeletes[delRowId] = struct{}{}
-			}
-		}
-	}
-
 	insertsBat := ls.unCommittedInmemInsertsBats[0]
 	ls.unCommittedInmemInsertsBats = ls.unCommittedInmemInsertsBats[1:]
 
@@ -994,9 +1000,14 @@ func (ls *LocalDataSource) filterUncommittedInMemInserts(mp *mpool.MPool, bat *b
 	for i, vec := range bat.Vecs {
 		uf := vector.GetUnionOneFunction(*vec.GetType(), mp)
 
-		for j, k := int64(0), int64(bat.RowCount()); j < k; j++ {
+		for j, k := int64(0), int64(insertsBat.RowCount()); j < k; j++ {
 
-			if _, ok := ls.workspaceDeletes.InWritesDeletes[insRowIDs[j]]; ok {
+			sel, err := ls.ApplyTombstones([]types.Rowid{insRowIDs[i]})
+			if err != nil {
+				return err
+			}
+
+			if len(sel) == 0 {
 				continue
 			}
 
@@ -1021,6 +1032,14 @@ func (ls *LocalDataSource) filterInMemCommittedInserts(
 		appendedRows uint32
 		insIter      logtailreplay.RowsIter
 	)
+
+	//for idx := range seqNums {
+	//	if seqNums[idx] == objectio.SEQNUM_ROWID {
+	//		seqNums = append(seqNums[0:idx], seqNums[idx+1:]...)
+	//		colTypes = append(colTypes[0:idx], colTypes[idx+1:]...)
+	//		break
+	//	}
+	//}
 
 	appendFunctions := make([]func(*vector.Vector, *vector.Vector, int64) error, len(bat.Attrs))
 	for i := range bat.Attrs {

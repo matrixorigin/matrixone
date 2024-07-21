@@ -839,7 +839,7 @@ type blockMergeReader struct {
 }
 
 type SingleReaderInProgress struct {
-	*readerInProgress
+	R *readerInProgress
 }
 
 type readerInProgress struct {

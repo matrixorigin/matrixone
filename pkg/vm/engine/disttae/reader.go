@@ -581,7 +581,7 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 
 	//TODO:: if r.table.writes is a map , the time complexity could be O(1)
 	//load deletes from txn.writes for the specified block
-	r.table.getTxn().forEachTableWrites(
+	r.table.getTxn().ForEachTableWrites(
 		r.table.db.databaseId,
 		r.table.tableId,
 		txnOffset, func(entry Entry) {
@@ -747,23 +747,6 @@ func NewReaderInProgress(
 	return r
 }
 
-// for ut, remove later
-func NewSingleReaderInProgress(
-	ctx context.Context,
-	proc *process.Process,                       //it comes from transaction if reader run in local,otherwise it comes from remote compile.
-	fs fileservice.FileService,                  //it comes from engine.fs.
-	packerPool *fileservice.Pool[*types.Packer], //it comes from engine.packerPool.
-	tableDef *plan.TableDef,
-	ts timestamp.Timestamp,
-	expr *plan.Expr,
-//filter any, // it's valid when reader runs on remote side.
-	orderedScan bool, // it's valid when reader runs on local.
-	txnOffset int,    // it can be removed. it's different between normal reader and snapshot reader.
-	source DataSource) *SingleReaderInProgress {
-	r := newReaderInProgress(ctx, proc, fs, packerPool, tableDef, ts, expr, orderedScan, txnOffset, source)
-	return &SingleReaderInProgress{readerInProgress: r}
-}
-
 func (r *readerInProgress) Close() error {
 	return nil
 }
@@ -824,15 +807,27 @@ func (r *readerInProgress) Read(
 
 	r.tryUpdateColumns(cols)
 
-	bat := batch.NewWithSize(len(cols))
-	bat.SetAttributes(cols)
-	for i := range cols {
-		if vp == nil {
-			bat.Vecs[i] = vector.NewVec(r.columns.colTypes[i])
-		} else {
-			bat.Vecs[i] = vp.GetVector(r.columns.colTypes[i])
-		}
+	bat := batch.NewWithSize(len(r.columns.colTypes))
+
+	if len(r.columns.colTypes) != len(cols) {
+		bat.Attrs = append(bat.Attrs, catalog.Row_ID)
 	}
+
+	bat.Attrs = append(bat.Attrs, cols...)
+
+	for i, j := 0, 0; i < len(r.columns.colTypes); i++ {
+		//if len(r.columns.colTypes) != len(cols) && r.columns.rowIdColIdx == i {
+		//	continue
+		//}
+
+		if vp == nil {
+			bat.Vecs[j] = vector.NewVec(r.columns.colTypes[i])
+		} else {
+			bat.Vecs[j] = vp.GetVector(r.columns.colTypes[i])
+		}
+		j++
+	}
+
 	blkInfo, state, err := r.source.Next(
 		ctx,
 		cols,
