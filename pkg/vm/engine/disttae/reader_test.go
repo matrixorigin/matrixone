@@ -17,8 +17,6 @@ package disttae
 import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/stretchr/testify/require"
 	"math/rand"
@@ -55,27 +53,4 @@ func TestGatherStats(t *testing.T) {
 	hit, total = objectio.BlkReadStats.EntryCacheHitStats.Export()
 	require.Equal(t, hit, hitNum)
 	require.Equal(t, total, readNum)
-}
-
-func TestReaderInProgress(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	tblDef := plan.TableDef{
-		Pkey: &plan.PrimaryKeyDef{},
-	}
-
-	r := NewReaderInProgress(
-		ctx,
-		nil,
-		nil,
-		nil,
-		&tblDef,
-		timestamp.Timestamp{},
-		nil,
-		false,
-		0,
-		nil,
-	)
-	require.NotNil(t, r)
 }

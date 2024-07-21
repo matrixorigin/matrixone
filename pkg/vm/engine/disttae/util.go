@@ -1704,8 +1704,8 @@ func (e *concurrentExecutor) GetConcurrency() int {
 // for test
 
 func MakeColExprForTest(idx int32, typ types.T, colName ...string) *plan.Expr {
-	//schema := []string{"a", "b", "c", "d"}
-	var name = "d"
+	schema := []string{"a", "b", "c", "d"}
+	var name = schema[idx]
 	if len(colName) > 0 {
 		name = colName[0]
 	}
