@@ -1041,15 +1041,8 @@ type notifyMessageResult struct {
 	err    error
 }
 
-// ReplaceLeafOp traversed the operators tree of Scope, found the leaf operator, and replaced it with a new operator.
-// However, while replace leaf operator, new operator needs to inherit the original operator's analyze attributes
 func (s *Scope) ReplaceLeafOp(dstLeafOp vm.Operator) {
 	vm.HandleLeafOp(nil, s.RootOp, func(leafOpParent vm.Operator, leafOp vm.Operator) error {
-		// dest operator inherit the original operator's analyze attributes
-		dstLeafOp.GetOperatorBase().Idx = leafOp.GetOperatorBase().Idx
-		dstLeafOp.GetOperatorBase().IsFirst = leafOp.GetOperatorBase().IsFirst
-		dstLeafOp.GetOperatorBase().IsLast = leafOp.GetOperatorBase().IsLast
-
 		leafOp.Release()
 		if leafOpParent == nil {
 			s.RootOp = dstLeafOp

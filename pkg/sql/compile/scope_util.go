@@ -15,11 +15,17 @@
 package compile
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergecte"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergedelete"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func (c *Compile) compileDelete(n *plan.Node, ss []*Scope) ([]*Scope, error) {
@@ -128,6 +134,95 @@ func (c *Compile) compileLock(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 		}
 	}
 	c.anal.isFirst = false
+	return ss, nil
+}
+
+func (c *Compile) compileRecursiveCte(n *plan.Node, curNodeIdx int32) ([]*Scope, error) {
+	receivers := make([]*process.WaitRegister, len(n.SourceStep))
+	for i, step := range n.SourceStep {
+		receivers[i] = c.getNodeReg(step, curNodeIdx)
+		if receivers[i] == nil {
+			return nil, moerr.NewInternalError(c.proc.Ctx, "no data sender for sinkScan node")
+		}
+	}
+
+	rs := newScope(Merge)
+	rs.NodeInfo = getEngineNode(c)
+	rs.Proc = process.NewFromProc(c.proc, c.proc.Ctx, len(receivers))
+
+	currentFirstFlag := c.anal.isFirst
+	mergecteArg := mergecte.NewArgument()
+	mergecteArg.SetIdx(c.anal.curNodeIdx)
+	mergecteArg.SetIsFirst(currentFirstFlag)
+	rs.setRootOperator(mergecteArg)
+	c.anal.isFirst = false
+
+	for _, r := range receivers {
+		r.Ctx = rs.Proc.Ctx
+	}
+	rs.Proc.Reg.MergeReceivers = receivers
+	return []*Scope{rs}, nil
+}
+
+func (c *Compile) compileRecursiveScan(n *plan.Node, curNodeIdx int32) ([]*Scope, error) {
+	receivers := make([]*process.WaitRegister, len(n.SourceStep))
+	for i, step := range n.SourceStep {
+		receivers[i] = c.getNodeReg(step, curNodeIdx)
+		if receivers[i] == nil {
+			return nil, moerr.NewInternalError(c.proc.Ctx, "no data sender for sinkScan node")
+		}
+	}
+	rs := newScope(Merge)
+	rs.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
+	rs.Proc = process.NewFromProc(c.proc, c.proc.Ctx, len(receivers))
+
+	currentFirstFlag := c.anal.isFirst
+	mergeRecursiveArg := mergerecursive.NewArgument()
+	mergeRecursiveArg.SetIdx(c.anal.curNodeIdx)
+	mergeRecursiveArg.SetIsFirst(currentFirstFlag)
+	rs.setRootOperator(mergeRecursiveArg)
+	c.anal.isFirst = false
+
+	for _, r := range receivers {
+		r.Ctx = rs.Proc.Ctx
+	}
+	rs.Proc.Reg.MergeReceivers = receivers
+	return []*Scope{rs}, nil
+}
+
+func (c *Compile) compileSinkScanNode(n *plan.Node, curNodeIdx int32) ([]*Scope, error) {
+	receivers := make([]*process.WaitRegister, len(n.SourceStep))
+	for i, step := range n.SourceStep {
+		receivers[i] = c.getNodeReg(step, curNodeIdx)
+		if receivers[i] == nil {
+			return nil, moerr.NewInternalError(c.proc.Ctx, "no data sender for sinkScan node")
+		}
+	}
+	rs := newScope(Merge)
+	rs.NodeInfo = getEngineNode(c)
+	rs.Proc = process.NewFromProc(c.proc, c.proc.Ctx, 1)
+	rs.setRootOperator(merge.NewArgument().WithSinkScan(true))
+	for _, r := range receivers {
+		r.Ctx = rs.Proc.Ctx
+	}
+	rs.Proc.Reg.MergeReceivers = receivers
+	return []*Scope{rs}, nil
+}
+
+func (c *Compile) compileSinkNode(n *plan.Node, ss []*Scope, step int32) ([]*Scope, error) {
+	receivers := c.getStepRegs(step)
+	if len(receivers) == 0 {
+		return nil, moerr.NewInternalError(c.proc.Ctx, "no data receiver for sink node")
+	}
+
+	var rs *Scope
+	if c.IsSingleScope(ss) {
+		rs = ss[0]
+	} else {
+		rs = c.newMergeScope(ss)
+	}
+	rs.setRootOperator(constructDispatchLocal(true, true, n.RecursiveSink, receivers))
+	ss = []*Scope{rs}
 	return ss, nil
 }
 

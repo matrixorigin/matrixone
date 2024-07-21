@@ -71,10 +71,11 @@ func (partition *Partition) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	ctr := partition.ctr
-	anal := proc.GetAnalyze(partition.GetIdx(), partition.GetParallelIdx(), partition.GetParallelMajor())
+	anal := proc.GetAnalyze2(partition.GetIdx(), partition.GetParallelIdx(), partition.GetParallelMajor(), partition.OpStats)
 	anal.Start()
 	defer anal.Stop()
+
+	ctr := partition.ctr
 	result := vm.NewCallResult()
 	var err error
 	for {

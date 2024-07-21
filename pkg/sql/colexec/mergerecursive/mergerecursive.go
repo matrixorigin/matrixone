@@ -43,7 +43,7 @@ func (mergeRecursive *MergeRecursive) Call(proc *process.Process) (vm.CallResult
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(mergeRecursive.GetIdx(), mergeRecursive.GetParallelIdx(), mergeRecursive.GetParallelMajor())
+	anal := proc.GetAnalyze2(mergeRecursive.GetIdx(), mergeRecursive.GetParallelIdx(), mergeRecursive.GetParallelMajor(), mergeRecursive.OpStats)
 	anal.Start()
 	defer anal.Stop()
 
