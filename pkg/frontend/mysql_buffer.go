@@ -389,7 +389,6 @@ func (c *Conn) BeginPacket() error {
 	c.curHeader = c.curBuf.data[c.curBuf.writeIndex : c.curBuf.writeIndex+HeaderLengthOfTheProtocol]
 	c.curBuf.writeIndex += HeaderLengthOfTheProtocol
 	c.bufferLength += HeaderLengthOfTheProtocol
-	c.packetInBuf += 1
 	return nil
 }
 
@@ -401,6 +400,7 @@ func (c *Conn) FinishedPacket() error {
 	binary.LittleEndian.PutUint32(c.curHeader, uint32(c.packetLength))
 	c.curHeader[3] = c.sequenceId
 	c.sequenceId += 1
+	c.packetInBuf += 1
 	c.packetLength = 0
 	err := c.FlushIfFull()
 	if err != nil {
@@ -459,6 +459,10 @@ func (c *Conn) Write(payload []byte) error {
 		if err != nil {
 			return err
 		}
+	} else {
+		if c.packetInBuf != 0 && len(c.fixBuf.data) >= HeaderLengthOfTheProtocol {
+			c.sequenceId = c.fixBuf.data[3]
+		}
 	}
 
 	var header [4]byte
@@ -511,5 +515,6 @@ func (c *Conn) Reset() {
 		c.allocator.Free(node.Value.(*ListBlock).data)
 	}
 	c.dynamicBuf.Init()
+	c.packetInBuf = 0
 
 }

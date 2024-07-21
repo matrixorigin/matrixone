@@ -171,8 +171,8 @@ var (
 	}
 )
 
-func GetService() Service {
-	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.TxnTraceService)
+func GetService(sid string) Service {
+	v, ok := runtime.ServiceRuntime(sid).GetGlobalVariables(runtime.TxnTraceService)
 	if !ok {
 		return &service{}
 	}

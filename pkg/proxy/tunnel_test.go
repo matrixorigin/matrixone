@@ -33,7 +33,7 @@ import (
 func TestTunnelClientToServer(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	baseCtx := context.Background()
 	rt := runtime.DefaultRuntime()
 	logger := rt.Logger()
@@ -187,7 +187,7 @@ func TestTunnelClientToServer(t *testing.T) {
 func TestTunnelServerClient(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	baseCtx := context.Background()
 
 	rt := runtime.DefaultRuntime()
@@ -347,7 +347,7 @@ func TestPipeCancelError(t *testing.T) {
 	defer serverProxy.Close()
 
 	rt := runtime.DefaultRuntime()
-	runtime.SetupProcessLevelRuntime(rt)
+	runtime.SetupServiceBasedRuntime("", rt)
 	logger := rt.Logger()
 	tun := newTunnel(ctx, logger, newCounterSet())
 
@@ -377,7 +377,7 @@ func TestPipeStart(t *testing.T) {
 	defer serverProxy.Close()
 
 	rt := runtime.DefaultRuntime()
-	runtime.SetupProcessLevelRuntime(rt)
+	runtime.SetupServiceBasedRuntime("", rt)
 	logger := rt.Logger()
 	tun := newTunnel(ctx, logger, newCounterSet())
 
@@ -421,7 +421,7 @@ func TestPipeStartAndPause(t *testing.T) {
 	defer serverProxy.Close()
 
 	rt := runtime.DefaultRuntime()
-	runtime.SetupProcessLevelRuntime(rt)
+	runtime.SetupServiceBasedRuntime("", rt)
 	logger := rt.Logger()
 	tun := newTunnel(ctx, logger, newCounterSet())
 
@@ -473,7 +473,7 @@ func TestPipeMultipleStartAndPause(t *testing.T) {
 	defer server.Close()
 
 	rt := runtime.DefaultRuntime()
-	runtime.SetupProcessLevelRuntime(rt)
+	runtime.SetupServiceBasedRuntime("", rt)
 	logger := rt.Logger()
 	tun := newTunnel(ctx, logger, newCounterSet())
 
@@ -575,7 +575,7 @@ func jitteredInterval(interval time.Duration) time.Duration {
 
 func TestCanStartTransfer(t *testing.T) {
 	rt := runtime.DefaultRuntime()
-	runtime.SetupProcessLevelRuntime(rt)
+	runtime.SetupServiceBasedRuntime("", rt)
 	logger := rt.Logger()
 
 	t.Run("not_started", func(t *testing.T) {

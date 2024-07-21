@@ -65,9 +65,9 @@ func (c *mockHAKeeperClient) GetClusterDetails(ctx context.Context) (logpb.Clust
 func runTestWithMOCluster(t *testing.T, fn func(t *testing.T, hc *mockHAKeeperClient, c clusterservice.MOCluster)) {
 	defer leaktest.AfterTest(t)()
 	rt := runtime.DefaultRuntime()
-	runtime.SetupProcessLevelRuntime(rt)
+	runtime.SetupServiceBasedRuntime("", rt)
 	hc := &mockHAKeeperClient{}
-	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
+	mc := clusterservice.NewMOCluster("", hc, 3*time.Second)
 	defer mc.Close()
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
 
@@ -88,7 +88,7 @@ func TestRouteForSuperTenant_C0_Contain(t *testing.T) {
 		s := clusterservice.NewSelector().SelectByLabel(map[string]string{
 			"account": "sys",
 		}, clusterservice.Contain)
-		RouteForSuperTenant(s, "dump", nil, func(s *metadata.CNService) {
+		RouteForSuperTenant("", s, "dump", nil, func(s *metadata.CNService) {
 			cns = append(cns, s)
 		})
 		assert.Equal(t, 2, len(cns))
@@ -109,7 +109,7 @@ func TestRouteForSuperTenant_C0_EQ_Globbing(t *testing.T) {
 		s := clusterservice.NewSelector().SelectByLabel(map[string]string{
 			"account": "sys",
 		}, clusterservice.EQ_Globbing)
-		RouteForSuperTenant(s, "dump", nil, func(s *metadata.CNService) {
+		RouteForSuperTenant("", s, "dump", nil, func(s *metadata.CNService) {
 			cns = append(cns, s)
 		})
 		assert.Equal(t, 2, len(cns))
@@ -142,7 +142,7 @@ func TestRouteForSuperTenant_C1_Contain(t *testing.T) {
 			"account": "sys",
 			"k1":      "v1",
 		}, clusterservice.Contain)
-		RouteForSuperTenant(s, "dump", nil, func(s *metadata.CNService) {
+		RouteForSuperTenant("", s, "dump", nil, func(s *metadata.CNService) {
 			cns = append(cns, s)
 		})
 		assert.Equal(t, 1, len(cns))
@@ -186,7 +186,7 @@ func TestRouteForSuperTenant_C1_EQ_Globbing(t *testing.T) {
 			"account": "sys",
 			"k1":      "v1",
 		}, clusterservice.EQ_Globbing)
-		RouteForSuperTenant(s, "dump", nil, func(s *metadata.CNService) {
+		RouteForSuperTenant("", s, "dump", nil, func(s *metadata.CNService) {
 			cns = append(cns, s)
 		})
 		assert.Equal(t, 2, len(cns))
@@ -216,7 +216,7 @@ func TestRouteForSuperTenant_C2_Contain(t *testing.T) {
 			"account": "sys",
 			"k2":      "v2",
 		}, clusterservice.Contain)
-		RouteForSuperTenant(s, "dump", nil, func(s *metadata.CNService) {
+		RouteForSuperTenant("", s, "dump", nil, func(s *metadata.CNService) {
 			cns = append(cns, s)
 		})
 		assert.Equal(t, 1, len(cns))
@@ -254,7 +254,7 @@ func TestRouteForSuperTenant_C2_EQ_Globbing(t *testing.T) {
 			"account": "sys",
 			"k2":      "v2",
 		}, clusterservice.EQ_Globbing)
-		RouteForSuperTenant(s, "dump", nil, func(s *metadata.CNService) {
+		RouteForSuperTenant("", s, "dump", nil, func(s *metadata.CNService) {
 			cns = append(cns, s)
 		})
 		assert.Equal(t, 2, len(cns))
@@ -283,7 +283,7 @@ func TestRouteForSuperTenant_C3_Contain(t *testing.T) {
 		s := clusterservice.NewSelector().SelectByLabel(map[string]string{
 			"account": "sys",
 		}, clusterservice.Contain)
-		RouteForSuperTenant(s, "dump", nil, func(s *metadata.CNService) {
+		RouteForSuperTenant("", s, "dump", nil, func(s *metadata.CNService) {
 			cns = append(cns, s)
 		})
 		assert.Equal(t, 1, len(cns))
@@ -320,7 +320,7 @@ func TestRouteForSuperTenant_C3_EQ_Globbing(t *testing.T) {
 		s := clusterservice.NewSelector().SelectByLabel(map[string]string{
 			"account": "sys",
 		}, clusterservice.EQ_Globbing)
-		RouteForSuperTenant(s, "dump", nil, func(s *metadata.CNService) {
+		RouteForSuperTenant("", s, "dump", nil, func(s *metadata.CNService) {
 			cns = append(cns, s)
 		})
 		assert.Equal(t, 2, len(cns))
@@ -349,7 +349,7 @@ func TestRouteForSuperTenant_C4_Contain(t *testing.T) {
 		s := clusterservice.NewSelector().SelectByLabel(map[string]string{
 			"account": "sys",
 		}, clusterservice.Contain)
-		RouteForSuperTenant(s, "dump", nil, func(s *metadata.CNService) {
+		RouteForSuperTenant("", s, "dump", nil, func(s *metadata.CNService) {
 			cns = append(cns, s)
 		})
 		assert.Equal(t, 2, len(cns))
@@ -385,7 +385,7 @@ func TestRouteForSuperTenant_C4_EQ_Globbing(t *testing.T) {
 		s := clusterservice.NewSelector().SelectByLabel(map[string]string{
 			"account": "sys",
 		}, clusterservice.EQ_Globbing)
-		RouteForSuperTenant(s, "dump", nil, func(s *metadata.CNService) {
+		RouteForSuperTenant("", s, "dump", nil, func(s *metadata.CNService) {
 			cns = append(cns, s)
 		})
 		assert.Equal(t, 3, len(cns))
@@ -410,7 +410,7 @@ func TestRouteForSuperTenant_C5_Contain(t *testing.T) {
 		s := clusterservice.NewSelector().SelectByLabel(map[string]string{
 			"account": "sys",
 		}, clusterservice.Contain)
-		RouteForSuperTenant(s, "dump", nil, func(s *metadata.CNService) {
+		RouteForSuperTenant("", s, "dump", nil, func(s *metadata.CNService) {
 			cns = append(cns, s)
 		})
 		assert.Equal(t, 1, len(cns))
@@ -443,7 +443,7 @@ func TestRouteForSuperTenant_C5_EQ_Globbing(t *testing.T) {
 		s := clusterservice.NewSelector().SelectByLabel(map[string]string{
 			"account": "sys",
 		}, clusterservice.EQ_Globbing)
-		RouteForSuperTenant(s, "dump", nil, func(s *metadata.CNService) {
+		RouteForSuperTenant("", s, "dump", nil, func(s *metadata.CNService) {
 			cns = append(cns, s)
 		})
 		assert.Equal(t, 2, len(cns))
@@ -468,7 +468,7 @@ func TestRouteForSuperTenant_C6_Contain(t *testing.T) {
 		s := clusterservice.NewSelector().SelectByLabel(map[string]string{
 			"account": "sys",
 		}, clusterservice.Contain)
-		RouteForSuperTenant(s, "dump", nil, func(s *metadata.CNService) {
+		RouteForSuperTenant("", s, "dump", nil, func(s *metadata.CNService) {
 			cns = append(cns, s)
 		})
 		assert.Equal(t, 1, len(cns))
@@ -501,7 +501,7 @@ func TestRouteForSuperTenant_C6_EQ_Globbing(t *testing.T) {
 		s := clusterservice.NewSelector().SelectByLabel(map[string]string{
 			"account": "sys",
 		}, clusterservice.EQ_Globbing)
-		RouteForSuperTenant(s, "dump", nil, func(s *metadata.CNService) {
+		RouteForSuperTenant("", s, "dump", nil, func(s *metadata.CNService) {
 			cns = append(cns, s)
 		})
 		assert.Equal(t, 2, len(cns))
@@ -534,7 +534,7 @@ func TestRouteForSuperTenant_C7_Contain(t *testing.T) {
 			"account": "sys",
 			"k3":      "v3",
 		}, clusterservice.Contain)
-		RouteForSuperTenant(s, "dump", nil, func(s *metadata.CNService) {
+		RouteForSuperTenant("", s, "dump", nil, func(s *metadata.CNService) {
 			cns = append(cns, s)
 		})
 		assert.Equal(t, 1, len(cns))
@@ -578,7 +578,7 @@ func TestRouteForSuperTenant_C7_EQ_Globbing(t *testing.T) {
 			"account": "sys",
 			"k3":      "v3",
 		}, clusterservice.EQ_Globbing)
-		RouteForSuperTenant(s, "dump", nil, func(s *metadata.CNService) {
+		RouteForSuperTenant("", s, "dump", nil, func(s *metadata.CNService) {
 			cns = append(cns, s)
 		})
 		assert.Equal(t, 3, len(cns))
@@ -608,7 +608,7 @@ func TestRouteForSuperTenant_C8_Contain(t *testing.T) {
 			"account": "sys",
 			"k1":      "v1",
 		}, clusterservice.Contain)
-		RouteForSuperTenant(s, "dump", nil, func(s *metadata.CNService) {
+		RouteForSuperTenant("", s, "dump", nil, func(s *metadata.CNService) {
 			cns = append(cns, s)
 		})
 		assert.Equal(t, 2, len(cns))
@@ -645,7 +645,7 @@ func TestRouteForSuperTenant_C8_EQ_Globbing(t *testing.T) {
 			"account": "sys",
 			"k1":      "v1",
 		}, clusterservice.EQ_Globbing)
-		RouteForSuperTenant(s, "dump", nil, func(s *metadata.CNService) {
+		RouteForSuperTenant("", s, "dump", nil, func(s *metadata.CNService) {
 			cns = append(cns, s)
 		})
 		assert.Equal(t, 3, len(cns))
@@ -670,7 +670,7 @@ func TestRouteForCommonTenant_C1_Contain(t *testing.T) {
 		s := clusterservice.NewSelector().SelectByLabel(map[string]string{
 			"account": "t1",
 		}, clusterservice.Contain)
-		RouteForCommonTenant(s, nil, func(s *metadata.CNService) {
+		RouteForCommonTenant("", s, nil, func(s *metadata.CNService) {
 			cns = append(cns, s)
 		})
 		assert.Equal(t, 1, len(cns))
@@ -703,7 +703,7 @@ func TestRouteForCommonTenant_C1_EQ_Globbing(t *testing.T) {
 		s := clusterservice.NewSelector().SelectByLabel(map[string]string{
 			"account": "t1",
 		}, clusterservice.Contain)
-		RouteForCommonTenant(s, nil, func(s *metadata.CNService) {
+		RouteForCommonTenant("", s, nil, func(s *metadata.CNService) {
 			cns = append(cns, s)
 		})
 		assert.Equal(t, 1, len(cns))
@@ -739,7 +739,7 @@ func TestRouteForCommonTenant_C2_Contain(t *testing.T) {
 		s := clusterservice.NewSelector().SelectByLabel(map[string]string{
 			"account": "t1",
 		}, clusterservice.Contain)
-		RouteForCommonTenant(s, nil, func(s *metadata.CNService) {
+		RouteForCommonTenant("", s, nil, func(s *metadata.CNService) {
 			cns = append(cns, s)
 		})
 		assert.Equal(t, 1, len(cns))
@@ -775,7 +775,7 @@ func TestRouteForCommonTenant_C2_EQ_Globbing(t *testing.T) {
 		s := clusterservice.NewSelector().SelectByLabel(map[string]string{
 			"account": "t1",
 		}, clusterservice.EQ_Globbing)
-		RouteForCommonTenant(s, nil, func(s *metadata.CNService) {
+		RouteForCommonTenant("", s, nil, func(s *metadata.CNService) {
 			cns = append(cns, s)
 		})
 		assert.Equal(t, 0, len(cns))
@@ -811,7 +811,7 @@ func TestRouteForCommonTenant_C3_EQ_Globbing(t *testing.T) {
 			"account": "t1",
 			"k1":      "v1",
 		}, clusterservice.EQ_Globbing)
-		RouteForCommonTenant(s, nil, func(s *metadata.CNService) {
+		RouteForCommonTenant("", s, nil, func(s *metadata.CNService) {
 			cns = append(cns, s)
 		})
 		assert.Equal(t, 1, len(cns))
@@ -858,7 +858,7 @@ func TestRouteForCommonTenant_C4_EQ_Globbing(t *testing.T) {
 			"account": "t1",
 			"k1":      "v1",
 		}, clusterservice.EQ_Globbing)
-		RouteForCommonTenant(s, nil, func(s *metadata.CNService) {
+		RouteForCommonTenant("", s, nil, func(s *metadata.CNService) {
 			cns = append(cns, s)
 		})
 		assert.Equal(t, 2, len(cns))
