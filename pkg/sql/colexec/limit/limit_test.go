@@ -49,7 +49,7 @@ var (
 func init() {
 	tcs = []limitTestCase{
 		{
-			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_int8.ToType(),
 			},
@@ -65,7 +65,7 @@ func init() {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_int8.ToType(),
 			},
@@ -81,7 +81,7 @@ func init() {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_int8.ToType(),
 			},
@@ -151,7 +151,7 @@ func BenchmarkLimit(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		tcs = []limitTestCase{
 			{
-				proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
+				proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
 				types: []types.Type{
 					types.T_int8.ToType(),
 				},

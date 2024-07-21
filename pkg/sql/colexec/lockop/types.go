@@ -15,6 +15,7 @@
 package lockop
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -68,6 +69,7 @@ type container struct {
 
 // LockOp lock op argument.
 type LockOp struct {
+	logger  *log.MOLogger
 	ctr     *container
 	engine  engine.Engine
 	targets []lockTarget
