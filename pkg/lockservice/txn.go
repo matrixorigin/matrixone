@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
@@ -93,7 +94,9 @@ func (txn *activeTxn) lockRemoved(
 func (txn *activeTxn) lockAdded(
 	group uint32,
 	bind pb.LockTable,
-	locks [][]byte) {
+	locks [][]byte,
+	logger *log.MOLogger,
+) {
 
 	// only in the lockservice node where the transaction was
 	// initiated will it be holds all locks. A remote transaction
@@ -111,7 +114,7 @@ func (txn *activeTxn) lockAdded(
 	//    between the deadlock detection module to query, it will miss
 	//    the lock information. We use mutex to solve it.
 
-	defer logTxnLockAdded(txn, locks)
+	defer logTxnLockAdded(logger, txn, locks)
 	h := txn.getHoldLocksLocked(group)
 	v, ok := h.tableKeys[bind.Table]
 	if ok {
@@ -127,11 +130,13 @@ func (txn *activeTxn) close(
 	txnID []byte,
 	commitTS timestamp.Timestamp,
 	lockTableFunc func(uint32, uint64) (lockTable, error),
-	mutations ...pb.ExtraMutation) error {
-	logTxnReadyToClose(serviceID, txn)
+	logger *log.MOLogger,
+	mutations ...pb.ExtraMutation,
+) error {
+	logTxnReadyToClose(logger, serviceID, txn)
 
 	// cancel all blocked waiters
-	txn.cancelBlocks()
+	txn.cancelBlocks(logger)
 
 	isRemoteTable := txn.remoteService != ""
 	canSkipTable := func(isRemoteTable bool, l lockTable) bool {
@@ -164,15 +169,19 @@ func (txn *activeTxn) close(
 			fn := func(table uint64, cs *cowSlice, l lockTable) func() {
 				return func() {
 					logTxnUnlockTable(
-						serviceID,
-						txn,
-						table)
-					l.unlock(txn, cs, commitTS, mutations...)
-					logTxnUnlockTableCompleted(
+						logger,
 						serviceID,
 						txn,
 						table,
-						cs)
+					)
+					l.unlock(txn, cs, commitTS, mutations...)
+					logTxnUnlockTableCompleted(
+						logger,
+						serviceID,
+						txn,
+						table,
+						cs,
+					)
 					if n > parallelUnlockTables {
 						wg.Done()
 					}
@@ -216,12 +225,14 @@ func (txn *activeTxn) reset() {
 func (txn *activeTxn) abort(
 	serviceID string,
 	waitTxn pb.WaitTxn,
-	err error) {
+	err error,
+	logger *log.MOLogger,
+) {
 	// abort is called by deadlock detection, so it is not necessary to lock
 	txn.Lock()
 	defer txn.Unlock()
 
-	logAbortDeadLock(waitTxn, txn)
+	logAbortDeadLock(logger, waitTxn, txn)
 
 	// txn already closed
 	if !bytes.Equal(txn.txnID, waitTxn.TxnID) {
@@ -233,13 +244,15 @@ func (txn *activeTxn) abort(
 		return
 	}
 	for _, w := range txn.blockedWaiters {
-		w.notify(notifyValue{err: err})
+		w.notify(notifyValue{err: err}, logger)
 	}
 }
 
-func (txn *activeTxn) cancelBlocks() {
+func (txn *activeTxn) cancelBlocks(
+	logger *log.MOLogger,
+) {
 	for _, w := range txn.blockedWaiters {
-		w.notify(notifyValue{err: ErrTxnNotFound})
+		w.notify(notifyValue{err: ErrTxnNotFound}, logger)
 		w.close()
 	}
 }
@@ -263,11 +276,14 @@ func (txn *activeTxn) closeBlockWaiters() {
 	txn.blockedWaiters = txn.blockedWaiters[:0]
 }
 
-func (txn *activeTxn) setBlocked(w *waiter) {
+func (txn *activeTxn) setBlocked(
+	w *waiter,
+	logger *log.MOLogger,
+) {
 	if w == nil {
 		panic("invalid waiter")
 	}
-	if !w.casStatus(ready, blocking) {
+	if !w.casStatus(ready, blocking, logger) {
 		panic(fmt.Sprintf("invalid waiter status %d, %s", w.getStatus(), w))
 	}
 	w.ref()

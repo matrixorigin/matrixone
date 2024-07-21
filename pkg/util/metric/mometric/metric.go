@@ -23,10 +23,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	prom "github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-	dto "github.com/prometheus/client_model/go"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -39,6 +35,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	prom "github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	dto "github.com/prometheus/client_model/go"
 )
 
 const (
@@ -71,7 +70,13 @@ var internalExporter metric.MetricExporter
 var enable bool
 var inited uint32
 
-func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *config.ObservabilityParameters, nodeUUID, role string, opts ...InitOption) (act bool) {
+func InitMetric(
+	ctx context.Context,
+	ieFactory func() ie.InternalExecutor,
+	SV *config.ObservabilityParameters,
+	nodeUUID, role string,
+	opts ...InitOption,
+) (act bool) {
 	// fix multi-init in standalone
 	if !atomic.CompareAndSwapUint32(&inited, 0, 1) {
 		return false
@@ -97,7 +102,7 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 	moExporter = newMetricExporter(registry, moCollector, nodeUUID, role, WithGatherInterval(metric.GetGatherInterval()))
 	internalRegistry = prom.NewRegistry()
 	internalExporter = newMetricExporter(internalRegistry, moCollector, nodeUUID, role, WithGatherInterval(initOpts.internalGatherInterval))
-	statsLogWriter = newStatsLogWriter(stats.DefaultRegistry, runtime.ProcessLevelRuntime().Logger().Named("StatsLog"), metric.GetStatsGatherInterval())
+	statsLogWriter = newStatsLogWriter(stats.DefaultRegistry, runtime.ServiceRuntime(nodeUUID).Logger().Named("StatsLog"), metric.GetStatsGatherInterval())
 
 	// register metrics and create tables
 	registerAllMetrics()

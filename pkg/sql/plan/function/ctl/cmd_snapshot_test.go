@@ -23,7 +23,7 @@ import (
 )
 
 func TestHandleGetSnapshotTS(t *testing.T) {
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	result, err := handleGetSnapshotTS(nil, cn, "", nil)
 	assert.NoError(t, err)
 	assert.NotEmpty(t, result.Data)
@@ -33,12 +33,12 @@ func TestHandleGetSnapshotTS(t *testing.T) {
 }
 
 func TestHandleUseSnapshotTS(t *testing.T) {
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	result, err := handleUseSnapshotTS(nil, cn, "1-2", nil)
 	assert.NoError(t, err)
 	assert.Equal(t, "OK", result.Data)
 
-	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.TxnOptions)
+	v, ok := runtime.ServiceRuntime("").GetGlobalVariables(runtime.TxnOptions)
 	assert.True(t, ok)
 	assert.NotEmpty(t, v)
 
@@ -46,7 +46,7 @@ func TestHandleUseSnapshotTS(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "OK", result.Data)
 
-	v, ok = runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.TxnOptions)
+	v, ok = runtime.ServiceRuntime("").GetGlobalVariables(runtime.TxnOptions)
 	assert.True(t, ok)
 	assert.Empty(t, v)
 }
