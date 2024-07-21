@@ -63,7 +63,7 @@ func newProxyHandler(
 	haKeeperClient logservice.ProxyHAKeeperClient,
 ) (*handler, error) {
 	// Create the MO cluster.
-	mc := clusterservice.NewMOCluster(haKeeperClient, cfg.Cluster.RefreshInterval.Duration)
+	mc := clusterservice.NewMOCluster(cfg.UUID, haKeeperClient, cfg.Cluster.RefreshInterval.Duration)
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
 
 	// Create the rebalancer.
@@ -76,7 +76,7 @@ func newProxyHandler(
 		opts = append(opts, withRebalancerDisabled())
 	}
 
-	re, err := newRebalancer(st, rt.Logger(), mc, opts...)
+	re, err := newRebalancer(cfg.UUID, st, rt.Logger(), mc, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -87,11 +87,11 @@ func newProxyHandler(
 	)
 	// Decorate the router if plugin is enabled
 	if cfg.Plugin != nil {
-		p, err := newRPCPlugin(cfg.Plugin.Backend, cfg.Plugin.Timeout)
+		p, err := newRPCPlugin(cfg.UUID, cfg.Plugin.Backend, cfg.Plugin.Timeout)
 		if err != nil {
 			return nil, err
 		}
-		ru = newPluginRouter(ru, p)
+		ru = newPluginRouter(cfg.UUID, ru, p)
 	}
 
 	var ipNetList []*net.IPNet
