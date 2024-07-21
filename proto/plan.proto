@@ -911,7 +911,6 @@ message RuntimeFilterSpec {
 	bool match_prefix = 2;
 	int32 upper_limit = 3;
 	Expr expr = 4;
-	bool handled = 5;
 }
 
 message IdList {
