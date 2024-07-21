@@ -62,6 +62,8 @@ var (
 
 	getSnapshotFormat = `select * from mo_catalog.mo_snapshots`
 
+	getPitrFormat = `select * from mo_catalog.mo_pitr`
+
 	checkSnapshotTsFormat = `select snapshot_id from mo_catalog.mo_snapshots where ts = %d order by snapshot_id;`
 
 	restoreTableDataByTsFmt = "insert into `%s`.`%s` SELECT * FROM `%s`.`%s` {MO_TS = %d }"
@@ -140,6 +142,22 @@ type snapshotRecord struct {
 	databaseName string
 	tableName    string
 	objId        uint64
+}
+
+type pitrRecord struct {
+	pitrId        string
+	pitrName      string
+	createAccount uint64
+	createTime    string
+	modifiedTime  string
+	level         string
+	accountId     uint64
+	accountName   string
+	databaseName  string
+	tableName     string
+	objId         uint64
+	pitrValue     uint64
+	pitrUnit      string
 }
 
 type tableInfo struct {
@@ -982,6 +1000,72 @@ func getSnapshotRecords(ctx context.Context, bh BackgroundExec, sql string) ([]*
 	return nil, err
 }
 
+func getPitrRecords(ctx context.Context, bh BackgroundExec, sql string, accountId uint64) ([]*pitrRecord, error) {
+	var erArray []ExecResult
+	var err error
+
+	bh.ClearExecResultSet()
+	if err = bh.Exec(ctx, sql); err != nil {
+		return nil, err
+	}
+
+	if erArray, err = getResultSet(ctx, bh); err != nil {
+		return nil, err
+	}
+
+	var records []*pitrRecord
+	if execResultArrayHasData(erArray) {
+		for _, er := range erArray {
+			var record pitrRecord
+			for row := uint64(0); row < er.GetRowCount(); row++ {
+				if record.pitrId, err = er.GetString(ctx, row, 0); err != nil {
+					return nil, err
+				}
+				if record.pitrName, err = er.GetString(ctx, row, 1); err != nil {
+					return nil, err
+				}
+				if record.createAccount, err = er.GetUint64(ctx, row, 2); err != nil {
+					return nil, err
+				}
+				if record.createTime, err = er.GetString(ctx, row, 3); err != nil {
+					return nil, err
+				}
+				if record.modifiedTime, err = er.GetString(ctx, row, 4); err != nil {
+					return nil, err
+				}
+				if record.level, err = er.GetString(ctx, row, 5); err != nil {
+					return nil, err
+				}
+				if record.accountId, err = er.GetUint64(ctx, row, 6); err != nil {
+					return nil, err
+				}
+				if record.accountName, err = er.GetString(ctx, row, 7); err != nil {
+					return nil, err
+				}
+				if record.databaseName, err = er.GetString(ctx, row, 8); err != nil {
+					return nil, err
+				}
+				if record.tableName, err = er.GetString(ctx, row, 9); err != nil {
+					return nil, err
+				}
+				if record.objId, err = er.GetUint64(ctx, row, 10); err != nil {
+					return nil, err
+				}
+				if record.pitrValue, err = er.GetUint64(ctx, row, 11); err != nil {
+					return nil, err
+				}
+				if record.pitrUnit, err = er.GetString(ctx, row, 12); err != nil {
+					return nil, err
+				}
+			}
+			records = append(records, &record)
+		}
+		return records, nil
+	}
+	return nil, err
+
+}
+
 func getSnapshotByName(ctx context.Context, bh BackgroundExec, snapshotName string) (*snapshotRecord, error) {
 	if err := inputNameIsInvalid(ctx, snapshotName); err != nil {
 		return nil, err
@@ -992,6 +1076,21 @@ func getSnapshotByName(ctx context.Context, bh BackgroundExec, snapshotName stri
 		return nil, err
 	} else if len(records) != 1 {
 		return nil, moerr.NewInternalError(ctx, "find %v snapshot records by name(%v), expect only 1", len(records), snapshotName)
+	} else {
+		return records[0], nil
+	}
+}
+
+func getPitrByName(ctx context.Context, bh BackgroundExec, pitrName string, accountId uint64) (*pitrRecord, error) {
+	if err := inputNameIsInvalid(ctx, pitrName); err != nil {
+		return nil, err
+	}
+
+	sql := fmt.Sprintf("%s where pitr_name = '%s'", getPitrFormat, pitrName)
+	if records, err := getPitrRecords(ctx, bh, sql, accountId); err != nil {
+		return nil, err
+	} else if len(records) != 1 {
+		return nil, moerr.NewInternalError(ctx, "find %v pitr records by name(%v), expect only 1", len(records), pitrName)
 	} else {
 		return records[0], nil
 	}
@@ -1657,11 +1756,73 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (e
 	defer bh.Close()
 
 	// reslove timestamp
+	ts, err := doResolveTimeStamp(stmt.TimeStamp)
+	if err != nil {
+		return err
+	}
+
+	// get pitr name
+	pitrName := string(stmt.Name)
+
+	// check if the pitr exists
+	tenantInfo := ses.GetTenantInfo()
+	pitrExist, err := checkPitrExistOrNot(ctx, bh, pitrName, uint64(tenantInfo.GetTenantID()))
+	if err != nil {
+		return err
+	}
+
+	if !pitrExist {
+		return moerr.NewInternalError(ctx, "pitr %s does not exist", pitrName)
+	}
+
+	// check privilege
+	// only sys account can restore other account's pitr
+	if len(string(stmt.AccountName)) != 0 && tenantInfo.GetTenant() != sysAccountName {
+		return moerr.NewInternalError(ctx, "only sys account can restore other account's pitr")
+	}
+
+	// get pitr Record
+	var pitr *pitrRecord
+	if pitr, err = getPitrByName(ctx, bh, pitrName, uint64(tenantInfo.GetTenantID())); err != nil {
+		return err
+	}
 
 	return
 }
 
-func doResolveTimeStampExpression(ctx context.Context, ses *Session, expr tree.Expr) (err error) {
+// change string timeStamp which is local time to utc timeStamp
+func doResolveTimeStamp(timeStamp string) (ts int64, err error) {
+	loc, err := time.LoadLocation("Local")
+	if err != nil {
+		return
+	}
+	t, err := time.ParseInLocation("2006-01-02 15:04:05", timeStamp, loc)
+	if err != nil {
+		return
+	}
+	ts = t.UTC().Unix()
+	return
+}
+
+// check the ts is valid or not
+// @param ts: the timestamp
+// @param pitrRecord: the pitr record
+func checkPitrInValidDurtion(ts int64, pitrRecord *pitrRecord) (err error) {
+	// use utc time now sub pitr during time get the minest time
+	// is ts time less than the minest time, then return error
+	pitrValue := pitrRecord.pitrValue
+	pitrUnit := pitrRecord.pitrUnit
+	var minTs int64
+	var during time.Duration
+
+	switch pitrUnit {
+	case "h":
+		during = time.Duration(pitrValue) * time.Hour
+	case "d":
+		during = time.Duration(pitrValue) * 24 * time.Hour
+	case "mo":
+
+	}
 
 	return
 }

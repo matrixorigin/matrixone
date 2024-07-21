@@ -2935,10 +2935,6 @@ var (
 			input:  "restore database db01 table t01 from pitr pitr01 '2021-01-01 00:00:00'",
 			output: "restore database db01 table t01 from pitr pitr01 timestamp = 2021-01-01 00:00:00",
 		},
-		{
-			input:  "restore from pitr pitr01 date_sub(now(), interval 1 day)",
-			output: "restore self account from pitr pitr01 timestamp = date_sub(now(), interval(1, day))",
-		},
 	}
 )
 

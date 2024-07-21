@@ -207,7 +207,7 @@ type RestorePitr struct {
 	DatabaseName Identifier // database name
 	TableName    Identifier // table name
 
-	TimeStampExpr Expr
+	TimeStamp string
 }
 
 func (node *RestorePitr) Format(ctx *FmtCtx) {
@@ -236,7 +236,7 @@ func (node *RestorePitr) Format(ctx *FmtCtx) {
 	ctx.WriteString(" from pitr ")
 	node.Name.Format(ctx)
 	ctx.WriteString(" timestamp = ")
-	node.TimeStampExpr.Format(ctx)
+	ctx.WriteString(node.TimeStamp)
 }
 
 func (node *RestorePitr) GetStatementType() string { return "Restore PITR" }
