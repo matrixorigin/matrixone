@@ -2514,13 +2514,14 @@ func (s *Scope) AlterSequence(c *Compile) error {
 	if rel, err := dbSource.Relation(c.proc.Ctx, tblName, nil); err == nil {
 		// sequence table exists
 		// get pre sequence table row values
-		values, err = c.proc.GetSessionInfo().SqlHelper.ExecSql(fmt.Sprintf("select * from `%s`.`%s`", dbName, tblName))
+		_values, err := c.proc.GetSessionInfo().SqlHelper.ExecSql(fmt.Sprintf("select * from `%s`.`%s`", dbName, tblName))
 		if err != nil {
 			return err
 		}
-		if values == nil {
+		if _values == nil {
 			return moerr.NewInternalError(c.proc.Ctx, "Failed to get sequence meta data.")
 		}
+		values = _values[0]
 
 		// get pre curval
 
