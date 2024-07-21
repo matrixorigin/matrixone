@@ -1569,22 +1569,11 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileTableFunction(n, ss))))
 		return ss, nil
 	case plan.Node_SINK_SCAN:
-		receivers := make([]*process.WaitRegister, len(n.SourceStep))
-		for i, step := range n.SourceStep {
-			receivers[i] = c.getNodeReg(step, curNodeIdx)
-			if receivers[i] == nil {
-				return nil, moerr.NewInternalError(c.proc.Ctx, "no data sender for sinkScan node")
-			}
+		ss, err = c.compileSinkScanNode(n, curNodeIdx)
+		if err != nil {
+			return nil, err
 		}
-		rs := newScope(Merge)
-		rs.NodeInfo = getEngineNode(c)
-		rs.Proc = process.NewFromProc(c.proc, c.proc.Ctx, 1)
-		rs.setRootOperator(merge.NewArgument().WithSinkScan(true))
-		for _, r := range receivers {
-			r.Ctx = rs.Proc.Ctx
-		}
-		rs.Proc.Reg.MergeReceivers = receivers
-		ss = c.compileProjection(n, []*Scope{rs})
+		ss = c.compileProjection(n, ss)
 		return ss, nil
 	case plan.Node_RECURSIVE_SCAN:
 		return c.compileRecursiveScan(n, curNodeIdx)
@@ -1596,21 +1585,11 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		ss = c.compileSort(n, ss)
 		return ss, nil
 	case plan.Node_SINK:
-		receivers := c.getStepRegs(step)
-		if len(receivers) == 0 {
-			return nil, moerr.NewInternalError(c.proc.Ctx, "no data receiver for sink node")
-		}
 		ss, err = c.compilePlanScope(step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
-		rs := ss[0]
-		if !c.IsSingleScope(ss) {
-			rs = c.newMergeScope(ss)
-		}
-		rs.setRootOperator(constructDispatchLocal(true, true, n.RecursiveSink, receivers))
-		ss = []*Scope{rs}
-		return ss, nil
+		return c.compileSinkNode(n, ss, step)
 	default:
 		return nil, moerr.NewNYI(c.proc.Ctx, fmt.Sprintf("query '%s'", n))
 	}
@@ -3429,6 +3408,42 @@ func (c *Compile) compileRecursiveScan(n *plan.Node, curNodeIdx int32) ([]*Scope
 	}
 	rs.Proc.Reg.MergeReceivers = receivers
 	return []*Scope{rs}, nil
+}
+
+func (c *Compile) compileSinkScanNode(n *plan.Node, curNodeIdx int32) ([]*Scope, error) {
+	receivers := make([]*process.WaitRegister, len(n.SourceStep))
+	for i, step := range n.SourceStep {
+		receivers[i] = c.getNodeReg(step, curNodeIdx)
+		if receivers[i] == nil {
+			return nil, moerr.NewInternalError(c.proc.Ctx, "no data sender for sinkScan node")
+		}
+	}
+	rs := newScope(Merge)
+	rs.NodeInfo = getEngineNode(c)
+	rs.Proc = process.NewFromProc(c.proc, c.proc.Ctx, 1)
+	rs.setRootOperator(merge.NewArgument().WithSinkScan(true))
+	for _, r := range receivers {
+		r.Ctx = rs.Proc.Ctx
+	}
+	rs.Proc.Reg.MergeReceivers = receivers
+	return []*Scope{rs}, nil
+}
+
+func (c *Compile) compileSinkNode(n *plan.Node, ss []*Scope, step int32) ([]*Scope, error) {
+	receivers := c.getStepRegs(step)
+	if len(receivers) == 0 {
+		return nil, moerr.NewInternalError(c.proc.Ctx, "no data receiver for sink node")
+	}
+
+	var rs *Scope
+	if c.IsSingleScope(ss) {
+		rs = ss[0]
+	} else {
+		rs = c.newMergeScope(ss)
+	}
+	rs.setRootOperator(constructDispatchLocal(true, true, n.RecursiveSink, receivers))
+	ss = []*Scope{rs}
+	return ss, nil
 }
 
 // DeleteMergeScope need to assure this:
