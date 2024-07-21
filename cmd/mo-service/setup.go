@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"go.uber.org/zap"
 )
@@ -41,34 +40,35 @@ var (
 )
 
 var (
-	logOnce          sync.Once
-	setupRuntimeOnce sync.Once
+	logOnce sync.Once
 )
 
-func setupProcessLevelRuntime(cfg *Config, stopper *stopper.Stopper) error {
-	var e error
-	setupRuntimeOnce.Do(func() {
-		mpool.InitCap(int64(cfg.Limit.Memory))
-		r, err := newRuntime(cfg, stopper)
-		if err != nil {
-			e = err
-			return
-		}
-		runtime.SetupProcessLevelRuntime(r)
-	})
-	return e
-}
-
-func getRuntime(st metadata.ServiceType, cfg *Config, stopper *stopper.Stopper) (runtime.Runtime, error) {
-	switch st {
-	case metadata.ServiceType_TN:
-		return newRuntime(cfg, stopper)
-	default:
-		return runtime.ProcessLevelRuntime(), nil
+func setupServiceRuntime(
+	cfg *Config,
+	stopper *stopper.Stopper,
+) error {
+	mpool.InitCap(int64(cfg.Limit.Memory))
+	r, err := newRuntime(cfg, stopper)
+	if err != nil {
+		return err
 	}
+	runtime.SetupServiceBasedRuntime(
+		cfg.mustGetServiceUUID(),
+		r,
+	)
+	return nil
 }
 
-func newRuntime(cfg *Config, stopper *stopper.Stopper) (runtime.Runtime, error) {
+func mustGetRuntime(
+	cfg *Config,
+) runtime.Runtime {
+	return runtime.ServiceRuntime(cfg.mustGetServiceUUID())
+}
+
+func newRuntime(
+	cfg *Config,
+	stopper *stopper.Stopper,
+) (runtime.Runtime, error) {
 	clock, err := getClock(cfg, stopper)
 	if err != nil {
 		return nil, err
@@ -79,10 +79,12 @@ func newRuntime(cfg *Config, stopper *stopper.Stopper) (runtime.Runtime, error) 
 		return nil, err
 	}
 
-	return runtime.NewRuntime(cfg.mustGetServiceType(),
+	return runtime.NewRuntime(
+		cfg.mustGetServiceType(),
 		cfg.mustGetServiceUUID(),
-		logger,
-		runtime.WithClock(clock)), nil
+		logger.With(zap.String("service", cfg.mustGetServiceUUID())),
+		runtime.WithClock(clock),
+	), nil
 }
 
 func getClock(cfg *Config, stopper *stopper.Stopper) (clock.Clock, error) {

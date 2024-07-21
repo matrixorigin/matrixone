@@ -78,14 +78,6 @@ var (
 		},
 		[]string{"type"},
 	)
-	MallocCounterAllocateBytes              = mallocCounter.WithLabelValues("allocate")
-	MallocCounterMemoryCacheAllocateBytes   = mallocCounter.WithLabelValues("memory-cache-allocate")
-	MallocCounterIOAllocateBytes            = mallocCounter.WithLabelValues("io-allocate")
-	MallocCounterBytesAllocateBytes         = mallocCounter.WithLabelValues("bytes-allocate")
-	MallocCounterAllocateObjects            = mallocCounter.WithLabelValues("allocate-objects")
-	MallocCounterMemoryCacheAllocateObjects = mallocCounter.WithLabelValues("memory-cache-allocate-objects")
-	MallocCounterIOAllocateObjects          = mallocCounter.WithLabelValues("io-allocate-objects")
-	MallocCounterBytesAllocateObjects       = mallocCounter.WithLabelValues("bytes-allocate-objects")
 
 	mallocGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -96,12 +88,34 @@ var (
 		},
 		[]string{"type"},
 	)
-	MallocGaugeInuseBytes              = mallocGauge.WithLabelValues("inuse")
-	MallocGaugeMemoryCacheInuseBytes   = mallocGauge.WithLabelValues("memory-cache-inuse")
-	MallocGaugeIOInuseBytes            = mallocGauge.WithLabelValues("io-inuse")
-	MallocGaugeBytesInuseBytes         = mallocGauge.WithLabelValues("bytes-inuse")
-	MallocGaugeInuseObjects            = mallocGauge.WithLabelValues("inuse-objects")
-	MallocGaugeMemoryCacheInuseObjects = mallocGauge.WithLabelValues("memory-cache-inuse-objects")
-	MallocGaugeIOInuseObjects          = mallocGauge.WithLabelValues("io-inuse-objects")
-	MallocGaugeBytesInuseObjects       = mallocGauge.WithLabelValues("bytes-inuse-objects")
+
+	// all
+	MallocCounterAllocateBytes   = mallocCounter.WithLabelValues("allocate")
+	MallocCounterAllocateObjects = mallocCounter.WithLabelValues("allocate-objects")
+	MallocGaugeInuseBytes        = mallocGauge.WithLabelValues("inuse")
+	MallocGaugeInuseObjects      = mallocGauge.WithLabelValues("inuse-objects")
+
+	// memory cache
+	MallocCounterMemoryCacheAllocateBytes   = mallocCounter.WithLabelValues("memory-cache-allocate")
+	MallocCounterMemoryCacheAllocateObjects = mallocCounter.WithLabelValues("memory-cache-allocate-objects")
+	MallocGaugeMemoryCacheInuseBytes        = mallocGauge.WithLabelValues("memory-cache-inuse")
+	MallocGaugeMemoryCacheInuseObjects      = mallocGauge.WithLabelValues("memory-cache-inuse-objects")
+
+	// io
+	MallocCounterIOAllocateBytes   = mallocCounter.WithLabelValues("io-allocate")
+	MallocCounterIOAllocateObjects = mallocCounter.WithLabelValues("io-allocate-objects")
+	MallocGaugeIOInuseBytes        = mallocGauge.WithLabelValues("io-inuse")
+	MallocGaugeIOInuseObjects      = mallocGauge.WithLabelValues("io-inuse-objects")
+
+	// bytes
+	MallocCounterBytesAllocateBytes   = mallocCounter.WithLabelValues("bytes-allocate")
+	MallocCounterBytesAllocateObjects = mallocCounter.WithLabelValues("bytes-allocate-objects")
+	MallocGaugeBytesInuseBytes        = mallocGauge.WithLabelValues("bytes-inuse")
+	MallocGaugeBytesInuseObjects      = mallocGauge.WithLabelValues("bytes-inuse-objects")
+
+	// session
+	MallocCounterSessionAllocateBytes   = mallocCounter.WithLabelValues("session-allocate")
+	MallocCounterSessionAllocateObjects = mallocCounter.WithLabelValues("session-allocate-objects")
+	MallocGaugeSessionInuseBytes        = mallocGauge.WithLabelValues("session-inuse")
+	MallocGaugeSessionInuseObjects      = mallocGauge.WithLabelValues("session-inuse-objects")
 )

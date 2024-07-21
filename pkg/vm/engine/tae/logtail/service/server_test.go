@@ -20,8 +20,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -34,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	taelogtail "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"github.com/stretchr/testify/require"
 )
 
 func TestService(t *testing.T) {
@@ -52,7 +51,9 @@ func TestService(t *testing.T) {
 	defer stop()
 
 	/* ---- construct logtail client ---- */
-	codec := morpc.NewMessageCodec(func() morpc.Message { return &LogtailResponseSegment{} },
+	codec := morpc.NewMessageCodec(
+		"",
+		func() morpc.Message { return &LogtailResponseSegment{} },
 		morpc.WithCodecEnableChecksum(),
 		morpc.WithCodecMaxBodySize(16*mpool.KB),
 	)
@@ -162,7 +163,7 @@ func (m *logtailer) Now() (timestamp.Timestamp, timestamp.Timestamp) {
 func mockRuntime() runtime.Runtime {
 	return runtime.NewRuntime(
 		metadata.ServiceType_TN,
-		"uuid",
+		"",
 		logutil.GetLogger(),
 		runtime.WithClock(
 			clock.NewHLCClock(

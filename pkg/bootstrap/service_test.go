@@ -31,63 +31,75 @@ import (
 )
 
 func TestBootstrapAlreadyBootstrapped(t *testing.T) {
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			n := 0
+			exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+				if sql == "show databases" {
+					n++
+					memRes := executor.NewMemResult(
+						[]types.Type{types.New(types.T_varchar, 2, 0)},
+						mpool.MustNewZero())
+					memRes.NewBatch()
+					executor.AppendStringRows(memRes, 0, []string{bootstrappedCheckerDB})
+					return memRes.GetResult(), nil
+				}
+				return executor.Result{}, nil
+			})
 
-	n := 0
-	exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
-		if sql == "show databases" {
-			n++
-			memRes := executor.NewMemResult(
-				[]types.Type{types.New(types.T_varchar, 2, 0)},
-				mpool.MustNewZero())
-			memRes.NewBatch()
-			executor.AppendStringRows(memRes, 0, []string{bootstrappedCheckerDB})
-			return memRes.GetResult(), nil
-		}
-		return executor.Result{}, nil
-	})
+			b := NewService(
+				sid,
+				&memLocker{},
+				clock.NewHLCClock(func() int64 { return 0 }, 0),
+				nil,
+				exec,
+			)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
 
-	b := NewService(
-		&memLocker{},
-		clock.NewHLCClock(func() int64 { return 0 }, 0),
-		nil,
-		exec)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-	defer cancel()
-
-	require.NoError(t, b.Bootstrap(ctx))
-	assert.Equal(t, 1, n)
+			require.NoError(t, b.Bootstrap(ctx))
+			assert.Equal(t, 1, n)
+		},
+	)
 }
 
 func TestBootstrapWithWait(t *testing.T) {
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			var n atomic.Uint32
+			exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+				if sql == "show databases" && n.Load() == 1 {
+					memRes := executor.NewMemResult(
+						[]types.Type{types.New(types.T_varchar, 2, 0)},
+						mpool.MustNewZero())
+					memRes.NewBatch()
+					executor.AppendStringRows(memRes, 0, []string{bootstrappedCheckerDB})
+					return memRes.GetResult(), nil
+				}
+				n.Add(1)
+				return executor.Result{}, nil
+			})
 
-	var n atomic.Uint32
-	exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
-		if sql == "show databases" && n.Load() == 1 {
-			memRes := executor.NewMemResult(
-				[]types.Type{types.New(types.T_varchar, 2, 0)},
-				mpool.MustNewZero())
-			memRes.NewBatch()
-			executor.AppendStringRows(memRes, 0, []string{bootstrappedCheckerDB})
-			return memRes.GetResult(), nil
-		}
-		n.Add(1)
-		return executor.Result{}, nil
-	})
+			b := NewService(
+				sid,
+				&memLocker{ids: map[string]uint64{
+					bootstrapKey: 1,
+				}},
+				clock.NewHLCClock(func() int64 { return 0 }, 0),
+				nil,
+				exec,
+			)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
 
-	b := NewService(
-		&memLocker{ids: map[string]uint64{
-			bootstrapKey: 1,
-		}},
-		clock.NewHLCClock(func() int64 { return 0 }, 0),
-		nil,
-		exec)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-	defer cancel()
-
-	require.NoError(t, b.Bootstrap(ctx))
-	assert.True(t, n.Load() > 0)
+			require.NoError(t, b.Bootstrap(ctx))
+			assert.True(t, n.Load() > 0)
+		},
+	)
 }
 
 type memLocker struct {

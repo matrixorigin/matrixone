@@ -75,7 +75,7 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 	if s.haKeeperClient == nil {
 		ctx, cancel := context.WithTimeout(ctx, time.Second*3)
 		defer cancel()
-		s.haKeeperClient, err = logservice.NewProxyHAKeeperClient(ctx, config.HAKeeper.ClientConfig)
+		s.haKeeperClient, err = logservice.NewProxyHAKeeperClient(ctx, config.UUID, config.HAKeeper.ClientConfig)
 		if err != nil {
 			return nil, err
 		}
