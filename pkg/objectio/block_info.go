@@ -88,7 +88,7 @@ func (b *BlockInfoInProgress) MarshalWithBuf(w *bytes.Buffer) (uint32, error) {
 	}
 	space++
 
-	if _, err := w.Write(types.EncodeFixed(b.MetaLoc)); err != nil {
+	if _, err := w.Write(types.EncodeSlice(b.MetaLoc[:])); err != nil {
 		return 0, err
 	}
 	space += uint32(LocationLen)
@@ -113,8 +113,10 @@ func (b *BlockInfoInProgress) Unmarshal(buf []byte) error {
 	buf = buf[1:]
 	b.Sorted = types.DecodeFixed[bool](buf)
 	buf = buf[1:]
-	b.MetaLoc = types.DecodeFixed[ObjectLocation](buf[:LocationLen])
+
+	copy(b.MetaLoc[:], buf[:LocationLen])
 	buf = buf[LocationLen:]
+
 	b.CommitTs = types.DecodeFixed[types.TS](buf[:types.TxnTsSize])
 	buf = buf[types.TxnTsSize:]
 	b.PartitionNum = types.DecodeFixed[int16](buf[:2])

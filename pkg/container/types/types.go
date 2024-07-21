@@ -18,10 +18,9 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-
 	"golang.org/x/exp/constraints"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 type T uint8
@@ -340,7 +339,7 @@ type RealNumbers interface {
 }
 
 type FixedSizeTExceptStrType interface {
-	bool | OrderedT | Decimal | TS | Rowid | Uuid | Blockid | objectio.ObjectLocation
+	bool | OrderedT | Decimal | TS | Rowid | Uuid | Blockid
 }
 
 type Number interface {

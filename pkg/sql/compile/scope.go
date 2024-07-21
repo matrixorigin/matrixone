@@ -1358,7 +1358,7 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 					ctx,
 					c.proc,
 					s.DataSource.FilterExpr,
-					mp[num],
+					mp[int16(num)],
 					scanUsedCpuNumber,
 					s.TxnOffset,
 				)
