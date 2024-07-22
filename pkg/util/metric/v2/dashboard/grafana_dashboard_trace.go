@@ -108,9 +108,10 @@ func (c *DashboardCreator) initTraceMoLoggerExportDataRow() dashboard.Option {
 
 func (c *DashboardCreator) initTraceCollectorOverviewRow() dashboard.Option {
 
-	panelP99Cost := c.getMultiHistogram(
+	panelP00Cost := c.getMultiHistogram(
 		[]string{
 			c.getMetricWithFilter(`mo_trace_collector_duration_seconds_bucket`, `type="collect"`),
+			c.getMetricWithFilter(`mo_trace_collector_duration_seconds_bucket`, `type="consume"`),
 			c.getMetricWithFilter(`mo_trace_collector_duration_seconds_bucket`, `type="generate_awake"`),
 			c.getMetricWithFilter(`mo_trace_collector_duration_seconds_bucket`, `type="generate_awake_discard"`),
 			c.getMetricWithFilter(`mo_trace_collector_duration_seconds_bucket`, `type="generate_delay"`),
@@ -120,6 +121,7 @@ func (c *DashboardCreator) initTraceCollectorOverviewRow() dashboard.Option {
 		},
 		[]string{
 			"collect",
+			"consume",
 			"generate_awake",
 			"generate_awake_discard",
 			"generate_delay",
@@ -127,23 +129,23 @@ func (c *DashboardCreator) initTraceCollectorOverviewRow() dashboard.Option {
 			"generate_discard",
 			"export",
 		},
-		[]float64{0.99},
-		[]float32{3},
+		[]float64{0.50, 0.99},
+		[]float32{3, 3},
 		axis.Unit("s"),
 		axis.Min(0))
 
 	return dashboard.Row(
 		"Collector Overview",
-
-		c.withMultiGraph(
-			"rate (avg) - each component",
-			3,
-			[]string{
-				`avg(rate(` + c.getMetricWithFilter("mo_trace_collector_duration_seconds_count", `type="collect"`) + `[$interval])) by (type, matrixorigin_io_component)`,
-			},
-			[]string{
-				"",
-			}),
+		/*
+			c.withMultiGraph(
+				"rate (avg) - each component",
+				3,
+				[]string{
+					`avg(rate(` + c.getMetricWithFilter("mo_trace_collector_duration_seconds_count", `type="collect"`) + `[$interval])) by (type, matrixorigin_io_component)`,
+				},
+				[]string{
+					"",
+				}),*/
 
 		c.withMultiGraph(
 			"rate (sum)",
@@ -159,6 +161,7 @@ func (c *DashboardCreator) initTraceCollectorOverviewRow() dashboard.Option {
 			"rate (sum) - no collect",
 			3,
 			[]string{
+				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_duration_seconds_count", `type="consume"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_duration_seconds_count", `type="generate_awake"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_duration_seconds_count", `type="generate_awake_discard"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_duration_seconds_count", `type="generate_delay"`) + `[$interval]))`,
@@ -167,6 +170,7 @@ func (c *DashboardCreator) initTraceCollectorOverviewRow() dashboard.Option {
 				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_duration_seconds_count", `type="export"`) + `[$interval]))`,
 			},
 			[]string{
+				"consume",
 				"generate_awake",
 				"generate_awake_discard",
 				"generate_delay",
@@ -175,7 +179,8 @@ func (c *DashboardCreator) initTraceCollectorOverviewRow() dashboard.Option {
 				"export",
 			}),
 
-		panelP99Cost[0],
+		panelP00Cost[0], // P50
+		panelP00Cost[1], // P99
 
 		c.withMultiGraph(
 			"Discard Count",

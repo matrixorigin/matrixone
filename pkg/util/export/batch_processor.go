@@ -168,6 +168,7 @@ func (b *bufferHolder) Add(item batchpipe.HasName) {
 			if err == nil {
 				// aggred, then return
 				i.Free()
+				b.mux.Unlock()
 				return
 			}
 		}
@@ -439,6 +440,7 @@ func (c *MOCollector) Register(name batchpipe.HasName, impl motrace.PipeImpl) {
 
 // Collect item in chan, if collector is stopped then return error
 func (c *MOCollector) Collect(ctx context.Context, item batchpipe.HasName) error {
+	start := time.Now()
 	for {
 		select {
 		case <-c.stopCh:
@@ -448,6 +450,7 @@ func (c *MOCollector) Collect(ctx context.Context, item batchpipe.HasName) error
 		default:
 			ok, _ := c.awakeQueue.Offer(item)
 			if ok {
+				v2.TraceCollectorCollectDurationHistogram.Observe(time.Since(start).Seconds())
 				return nil
 			}
 			time.Sleep(time.Millisecond)
@@ -570,7 +573,7 @@ loop:
 				buf.Add(i)
 				c.mux.RUnlock()
 			}
-			v2.TraceCollectorCollectDurationHistogram.Observe(time.Since(start).Seconds())
+			v2.TraceCollectorConsumeDurationHistogram.Observe(time.Since(start).Seconds())
 		case <-c.stopCh:
 			break loop
 		}
