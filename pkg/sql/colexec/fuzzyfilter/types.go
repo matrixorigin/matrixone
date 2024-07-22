@@ -112,7 +112,7 @@ func (fuzzyFilter *FuzzyFilter) Reset(proc *process.Process, pipelineFailed bool
 }
 
 func (fuzzyFilter *FuzzyFilter) Free(proc *process.Process, pipelineFailed bool, err error) {
-	proc.FinalizeRuntimeFilter(fuzzyFilter.RuntimeFilterSpec)
+	proc.FinalizeRuntimeFilter(fuzzyFilter.RuntimeFilterSpec, pipelineFailed, err)
 	if fuzzyFilter.ctr.bloomFilter != nil {
 		fuzzyFilter.ctr.bloomFilter.Clean()
 		fuzzyFilter.ctr.bloomFilter = nil

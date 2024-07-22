@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
-
 	"github.com/stretchr/testify/assert"
 )
 
@@ -316,6 +315,10 @@ func (e *testEngine) Rows(ctx context.Context, key pb.StatsInfoKey) uint64 {
 
 func (e *testEngine) Size(ctx context.Context, key pb.StatsInfoKey, colName string) (uint64, error) {
 	return 0, nil
+}
+
+func (e *testEngine) GetService() string {
+	return ""
 }
 
 func newtestOperator() *testOperator {

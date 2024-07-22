@@ -24,11 +24,15 @@ type SizeBoundedAllocator struct {
 	upstream        Allocator
 	max             uint64
 	counter         *atomic.Uint64
-	deallocatorPool *ClosureDeallocatorPool[sizeBoundedDeallocatorArgs]
+	deallocatorPool *ClosureDeallocatorPool[sizeBoundedDeallocatorArgs, *sizeBoundedDeallocatorArgs]
 }
 
 type sizeBoundedDeallocatorArgs struct {
 	size uint64
+}
+
+func (sizeBoundedDeallocatorArgs) As(Trait) bool {
+	return false
 }
 
 func NewSizeBoundedAllocator(upstream Allocator, maxSize uint64, counter *atomic.Uint64) (ret *SizeBoundedAllocator) {

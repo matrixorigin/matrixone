@@ -19,6 +19,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergecte"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"math"
 	"net"
 	"runtime"
@@ -146,7 +148,7 @@ func (c *Compile) Release() {
 	if c == nil {
 		return
 	}
-	_, _ = GetCompileService().putCompile(c)
+	GetCompileService().putCompile(c)
 }
 
 func (c Compile) TypeName() string {
@@ -301,7 +303,7 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, fill func(*batch.B
 	if c.proc.GetTxnOperator() != nil && c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		txnOp := c.proc.GetTxnOperator()
 		seq := txnOp.NextSequence()
-		txnTrace.GetService().AddTxnDurationAction(
+		txnTrace.GetService(c.proc.GetService()).AddTxnDurationAction(
 			txnOp,
 			client.CompileEvent,
 			seq,
@@ -309,7 +311,7 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, fill func(*batch.B
 			0,
 			err)
 		defer func() {
-			txnTrace.GetService().AddTxnDurationAction(
+			txnTrace.GetService(c.proc.GetService()).AddTxnDurationAction(
 				txnOp,
 				client.CompileEvent,
 				seq,
@@ -501,7 +503,7 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	stats := statistic.StatsInfoFromContext(c.proc.Ctx)
 	stats.ExecutionStart()
 
-	txnTrace.GetService().TxnStatementStart(txnOp, sql, seq)
+	txnTrace.GetService(c.proc.GetService()).TxnStatementStart(txnOp, sql, seq)
 	defer func() {
 		stats.ExecutionEnd()
 
@@ -510,7 +512,7 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 		if result != nil {
 			row = int(result.AffectRows)
 		}
-		txnTrace.GetService().TxnStatementCompleted(
+		txnTrace.GetService(c.proc.GetService()).TxnStatementCompleted(
 			txnOp,
 			sql,
 			cost,
@@ -574,13 +576,13 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 					c.proc.GetTxnOperator().Txn().ID,
 				)
 				if e != nil {
-					getLogger().Error("failed to convert dup to orphan txn error",
+					getLogger(c.proc.GetService()).Error("failed to convert dup to orphan txn error",
 						zap.String("txn", hex.EncodeToString(c.proc.GetTxnOperator().Txn().ID)),
 						zap.Error(err),
 					)
 				}
 				if e == nil && orphan {
-					getLogger().Warn("convert dup to orphan txn error",
+					getLogger(c.proc.GetService()).Warn("convert dup to orphan txn error",
 						zap.String("txn", hex.EncodeToString(c.proc.GetTxnOperator().Txn().ID)),
 					)
 					err = moerr.NewCannotCommitOrphan(c.proc.Ctx)
@@ -647,7 +649,6 @@ func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 	if e = runC.Compile(c.proc.Ctx, c.pn, c.fill); e != nil {
 		return nil, e
 	}
-
 	return runC, nil
 }
 
@@ -710,6 +711,10 @@ func (c *Compile) runOnce() error {
 			return err
 		}
 	}
+	GetCompileService().startService(c)
+	defer func() {
+		_, _ = GetCompileService().endService(c)
+	}()
 
 	//c.printPipeline()
 
@@ -1000,7 +1005,9 @@ func isAvailable(client morpc.RPCClient, addr string) bool {
 }
 
 func (c *Compile) removeUnavailableCN() {
-	client := cnclient.GetPipelineClient()
+	client := cnclient.GetPipelineClient(
+		c.proc.GetService(),
+	)
 	if client == nil {
 		return
 	}
@@ -1026,7 +1033,7 @@ func (c *Compile) getCNList() (engine.Nodes, error) {
 	if c.proc == nil || c.proc.Base.QueryClient == nil {
 		return cnList, nil
 	}
-	cnID := c.proc.Base.QueryClient.ServiceID()
+	cnID := c.proc.GetService()
 	for _, node := range cnList {
 		if node.Id == cnID {
 			return cnList, nil
@@ -1744,10 +1751,14 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 		ID2Addr[i] = mcpu - tmp
 	}
 	param := &tree.ExternParam{}
+
 	if n.ExternScan == nil || n.ExternScan.Type != tree.INLINE {
 		err := json.Unmarshal([]byte(n.TableDef.Createsql), param)
 		if err != nil {
 			return nil, err
+		}
+		if n.ExternScan == nil {
+			param.ExtTab = true
 		}
 	} else {
 		param.ScanType = int(n.ExternScan.Type)
@@ -1768,6 +1779,7 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 		}
 		param.JsonData = n.ExternScan.JsonType
 	}
+
 	if param.ScanType == tree.S3 {
 		if !param.Init {
 			if err := plan2.InitS3Param(param); err != nil {
@@ -3332,6 +3344,189 @@ func (c *Compile) compilePreInsertSK(n *plan.Node, ss []*Scope) []*Scope {
 	return ss
 }
 
+func (c *Compile) compileDelete(n *plan.Node, ss []*Scope) ([]*Scope, error) {
+	var arg *deletion.Deletion
+	arg, err := constructDeletion(n, c.e)
+	if err != nil {
+		return nil, err
+	}
+
+	currentFirstFlag := c.anal.isFirst
+	arg.SetIdx(c.anal.curNodeIdx)
+	arg.SetIsFirst(currentFirstFlag)
+	c.anal.isFirst = false
+
+	if n.Stats.Cost*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) && !arg.DeleteCtx.CanTruncate {
+		rs := c.newDeleteMergeScope(arg, ss)
+		rs.Magic = MergeDelete
+
+		mergeDeleteArg := mergedelete.NewArgument().
+			WithObjectRef(arg.DeleteCtx.Ref).
+			WithParitionNames(arg.DeleteCtx.PartitionTableNames).
+			WithEngine(c.e).
+			WithAddAffectedRows(arg.DeleteCtx.AddAffectedRows)
+
+		currentFirstFlag = c.anal.isFirst
+		mergeDeleteArg.SetIdx(c.anal.curNodeIdx)
+		mergeDeleteArg.SetIsFirst(currentFirstFlag)
+		rs.setRootOperator(mergeDeleteArg)
+		c.anal.isFirst = false
+
+		ss = []*Scope{rs}
+		arg.Release()
+		return ss, nil
+	} else {
+		var rs *Scope
+		if c.IsSingleScope(ss) {
+			rs = ss[0]
+		} else {
+			rs = c.newMergeScope(ss)
+			rs.Magic = Merge
+		}
+
+		rs.setRootOperator(arg)
+		ss = []*Scope{rs}
+		return ss, nil
+	}
+}
+
+func (c *Compile) compileLock(n *plan.Node, ss []*Scope) ([]*Scope, error) {
+	lockRows := make([]*plan.LockTarget, 0, len(n.LockTargets))
+	for _, tbl := range n.LockTargets {
+		if tbl.LockTable {
+			c.lockTables[tbl.TableId] = tbl
+		} else {
+			if _, ok := c.lockTables[tbl.TableId]; !ok {
+				lockRows = append(lockRows, tbl)
+			}
+		}
+	}
+	n.LockTargets = lockRows
+	if len(n.LockTargets) == 0 {
+		return ss, nil
+	}
+
+	block := false
+	// only pessimistic txn needs to block downstream operators.
+	if c.proc.GetTxnOperator().Txn().IsPessimistic() {
+		block = n.LockTargets[0].Block
+		if block {
+			ss = []*Scope{c.newMergeScope(ss)}
+		}
+	}
+
+	currentFirstFlag := c.anal.isFirst
+	for i := range ss {
+		var err error
+		var lockOpArg *lockop.LockOp
+		lockOpArg, err = constructLockOp(n, c.e)
+		if err != nil {
+			return nil, err
+		}
+		lockOpArg.SetBlock(block)
+		lockOpArg.Idx = c.anal.curNodeIdx
+		lockOpArg.IsFirst = currentFirstFlag
+		if block {
+			lockOpArg.SetChildren(ss[i].RootOp.GetOperatorBase().Children)
+			ss[i].RootOp.Release()
+			ss[i].RootOp = lockOpArg
+		} else {
+			ss[i].doSetRootOperator(lockOpArg)
+		}
+	}
+	c.anal.isFirst = false
+	return ss, nil
+}
+
+func (c *Compile) compileRecursiveCte(n *plan.Node, curNodeIdx int32) ([]*Scope, error) {
+	receivers := make([]*process.WaitRegister, len(n.SourceStep))
+	for i, step := range n.SourceStep {
+		receivers[i] = c.getNodeReg(step, curNodeIdx)
+		if receivers[i] == nil {
+			return nil, moerr.NewInternalError(c.proc.Ctx, "no data sender for sinkScan node")
+		}
+	}
+
+	rs := newScope(Merge)
+	rs.NodeInfo = getEngineNode(c)
+	rs.Proc = process.NewFromProc(c.proc, c.proc.Ctx, len(receivers))
+
+	currentFirstFlag := c.anal.isFirst
+	mergecteArg := mergecte.NewArgument()
+	mergecteArg.SetIdx(c.anal.curNodeIdx)
+	mergecteArg.SetIsFirst(currentFirstFlag)
+	rs.setRootOperator(mergecteArg)
+	c.anal.isFirst = false
+
+	for _, r := range receivers {
+		r.Ctx = rs.Proc.Ctx
+	}
+	rs.Proc.Reg.MergeReceivers = receivers
+	return []*Scope{rs}, nil
+}
+
+func (c *Compile) compileRecursiveScan(n *plan.Node, curNodeIdx int32) ([]*Scope, error) {
+	receivers := make([]*process.WaitRegister, len(n.SourceStep))
+	for i, step := range n.SourceStep {
+		receivers[i] = c.getNodeReg(step, curNodeIdx)
+		if receivers[i] == nil {
+			return nil, moerr.NewInternalError(c.proc.Ctx, "no data sender for sinkScan node")
+		}
+	}
+	rs := newScope(Merge)
+	rs.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
+	rs.Proc = process.NewFromProc(c.proc, c.proc.Ctx, len(receivers))
+
+	currentFirstFlag := c.anal.isFirst
+	mergeRecursiveArg := mergerecursive.NewArgument()
+	mergeRecursiveArg.SetIdx(c.anal.curNodeIdx)
+	mergeRecursiveArg.SetIsFirst(currentFirstFlag)
+	rs.setRootOperator(mergeRecursiveArg)
+	c.anal.isFirst = false
+
+	for _, r := range receivers {
+		r.Ctx = rs.Proc.Ctx
+	}
+	rs.Proc.Reg.MergeReceivers = receivers
+	return []*Scope{rs}, nil
+}
+
+func (c *Compile) compileSinkScanNode(n *plan.Node, curNodeIdx int32) ([]*Scope, error) {
+	receivers := make([]*process.WaitRegister, len(n.SourceStep))
+	for i, step := range n.SourceStep {
+		receivers[i] = c.getNodeReg(step, curNodeIdx)
+		if receivers[i] == nil {
+			return nil, moerr.NewInternalError(c.proc.Ctx, "no data sender for sinkScan node")
+		}
+	}
+	rs := newScope(Merge)
+	rs.NodeInfo = getEngineNode(c)
+	rs.Proc = process.NewFromProc(c.proc, c.proc.Ctx, 1)
+	rs.setRootOperator(merge.NewArgument().WithSinkScan(true))
+	for _, r := range receivers {
+		r.Ctx = rs.Proc.Ctx
+	}
+	rs.Proc.Reg.MergeReceivers = receivers
+	return []*Scope{rs}, nil
+}
+
+func (c *Compile) compileSinkNode(n *plan.Node, ss []*Scope, step int32) ([]*Scope, error) {
+	receivers := c.getStepRegs(step)
+	if len(receivers) == 0 {
+		return nil, moerr.NewInternalError(c.proc.Ctx, "no data receiver for sink node")
+	}
+
+	var rs *Scope
+	if c.IsSingleScope(ss) {
+		rs = ss[0]
+	} else {
+		rs = c.newMergeScope(ss)
+	}
+	rs.setRootOperator(constructDispatchLocal(true, true, n.RecursiveSink, receivers))
+	ss = []*Scope{rs}
+	return ss, nil
+}
+
 // DeleteMergeScope need to assure this:
 // one block can be only deleted by one and the same
 // CN, so we need to transfer the rows from the
@@ -4711,7 +4906,7 @@ func (c *Compile) runSql(sql string) error {
 }
 
 func (c *Compile) runSqlWithResult(sql string) (executor.Result, error) {
-	v, ok := moruntime.ProcessLevelRuntime().GetGlobalVariables(moruntime.InternalSQLExecutor)
+	v, ok := moruntime.ServiceRuntime(c.proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
 		panic("missing lock service")
 	}
@@ -4815,9 +5010,9 @@ func (c *Compile) fatalLog(retry int, err error) {
 		return
 	}
 
-	txnTrace.GetService().TxnError(c.proc.GetTxnOperator(), err)
+	txnTrace.GetService(c.proc.GetService()).TxnError(c.proc.GetTxnOperator(), err)
 
-	v, ok := moruntime.ProcessLevelRuntime().
+	v, ok := moruntime.ServiceRuntime(c.proc.GetService()).
 		GetGlobalVariables(moruntime.EnableCheckInvalidRCErrors)
 	if !ok || !v.(bool) {
 		return

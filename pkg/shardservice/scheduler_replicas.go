@@ -87,7 +87,7 @@ func (s *replicaScheduler) scheduleMoveCompleted(
 	if !ok {
 		return
 	}
-	getLogger().Info("remove move completed replica",
+	r.logger.Info("remove move completed replica",
 		zap.Uint64("table", t.id),
 		zap.String("shard", t.shards[i].String()),
 		zap.String("replica", t.shards[i].Replicas[j].String()),
@@ -157,7 +157,7 @@ func (s *replicaScheduler) scheduleMovePauseCNReplicas(
 
 	s.excludeFilter.reset()
 	s.freezeFilter.add(fromCN, toCN)
-	getLogger().Info("move replica out of paused CN",
+	r.logger.Info("move replica out of paused CN",
 		zap.String("from", fromCN),
 		zap.String("to", toCN),
 		zap.String("shard", shard.String()),

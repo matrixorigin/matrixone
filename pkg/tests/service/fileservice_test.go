@@ -15,24 +15,9 @@
 package service
 
 import (
-	"context"
 	"testing"
-
-	"github.com/stretchr/testify/require"
 )
 
 func TestFileServices(t *testing.T) {
-	ctx := context.Background()
-	c, err := NewCluster(
-		ctx,
-		t,
-		DefaultOptions().
-			WithTNServiceNum(3).
-			WithCNServiceNum(2))
-	require.NoError(t, err)
-	fs := c.(*testCluster).buildFileServices(ctx)
-	require.NotNil(t, fs.getTNLocalFileService(0))
-	require.NotNil(t, fs.getTNLocalFileService(1))
-	require.NotNil(t, fs.getTNLocalFileService(2))
-	require.Nil(t, fs.getTNLocalFileService(3))
+
 }

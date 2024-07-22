@@ -80,7 +80,7 @@ func CnServerMessageHandler(
 
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(ctx, e)
-			getLogger().Error("panic in CnServerMessageHandler",
+			getLogger(lockService.GetConfig().ServiceID).Error("panic in CnServerMessageHandler",
 				zap.String("error", err.Error()))
 			err = errors.Join(err, cs.Close())
 		}
@@ -404,6 +404,7 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	}
 
 	c := GetCompileService().getCompile(proc)
+	c.execType = plan2.ExecTypeAP_MULTICN
 	c.e = cnInfo.storeEngine
 	c.MessageBoard = c.MessageBoard.SetMultiCN(c.GetMessageCenter(), c.proc.GetStmtProfile().GetStmtId())
 	c.proc.Base.MessageBoard = c.MessageBoard

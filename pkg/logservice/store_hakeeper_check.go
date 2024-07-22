@@ -21,12 +21,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/bootstrap"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"go.uber.org/zap"
 )
 
 const (
@@ -312,7 +311,7 @@ func (l *store) getScheduleCommand(check bool,
 		return l.checker.Check(l.alloc, *state), nil
 	}
 	m := bootstrap.NewBootstrapManager(state.ClusterInfo)
-	return m.Bootstrap(l.alloc, state.TNState, state.LogState)
+	return m.Bootstrap(l.cfg.UUID, l.alloc, state.TNState, state.LogState)
 }
 
 func (l *store) setTaskTableUser(user pb.TaskTableUser) error {

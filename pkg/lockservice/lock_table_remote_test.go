@@ -41,7 +41,7 @@ func TestLockRemote(t *testing.T) {
 					req *pb.Request,
 					resp *pb.Response,
 					cs morpc.ClientSession) {
-					writeResponse(ctx, cancel, resp, nil, cs)
+					writeResponse(ctx, getLogger(""), cancel, resp, nil, cs)
 				},
 			)
 		},
@@ -74,7 +74,7 @@ func TestUnlockRemote(t *testing.T) {
 					req *pb.Request,
 					resp *pb.Response,
 					cs morpc.ClientSession) {
-					writeResponse(ctx, cancel, resp, nil, cs)
+					writeResponse(ctx, getLogger(""), cancel, resp, nil, cs)
 				},
 			)
 		},
@@ -105,11 +105,11 @@ func TestUnlockRemoteWithRetry(t *testing.T) {
 					cs morpc.ClientSession) {
 					n++
 					if n == 1 {
-						writeResponse(ctx, cancel, resp, moerr.NewRPCTimeout(ctx), cs)
+						writeResponse(ctx, getLogger(""), cancel, resp, moerr.NewRPCTimeout(ctx), cs)
 						return
 					}
 					close(c)
-					writeResponse(ctx, cancel, resp, nil, cs)
+					writeResponse(ctx, getLogger(""), cancel, resp, nil, cs)
 				},
 			)
 			s.RegisterMethodHandler(
@@ -124,7 +124,7 @@ func TestUnlockRemoteWithRetry(t *testing.T) {
 						ServiceID: "s1",
 						Valid:     true,
 					}
-					writeResponse(ctx, cancel, resp, nil, cs)
+					writeResponse(ctx, getLogger(""), cancel, resp, nil, cs)
 				},
 			)
 		},
@@ -161,7 +161,7 @@ func TestRemoteWithBindChanged(t *testing.T) {
 					resp *pb.Response,
 					cs morpc.ClientSession) {
 					resp.NewBind = &newBind
-					writeResponse(ctx, cancel, resp, nil, cs)
+					writeResponse(ctx, getLogger(""), cancel, resp, nil, cs)
 				},
 			)
 
@@ -174,7 +174,7 @@ func TestRemoteWithBindChanged(t *testing.T) {
 					resp *pb.Response,
 					cs morpc.ClientSession) {
 					resp.NewBind = &newBind
-					writeResponse(ctx, cancel, resp, nil, cs)
+					writeResponse(ctx, getLogger(""), cancel, resp, nil, cs)
 				},
 			)
 
@@ -187,7 +187,7 @@ func TestRemoteWithBindChanged(t *testing.T) {
 					resp *pb.Response,
 					cs morpc.ClientSession) {
 					resp.NewBind = &newBind
-					writeResponse(ctx, cancel, resp, nil, cs)
+					writeResponse(ctx, getLogger(""), cancel, resp, nil, cs)
 				},
 			)
 		},
@@ -230,7 +230,9 @@ func runRemoteLockTableTests(
 			time.Second,
 			binding,
 			c,
-			changed)
+			changed,
+			getLogger(""),
+		)
 		defer l.close()
 		fn(l, s)
 	})

@@ -276,8 +276,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *SemiJoin, proc *process.Proces
 		//eligible = eligible[:0]
 	}
 
-	for j := range ap.Result {
-		if err := ctr.rbat.Vecs[j].PreExtendArea(len(eligible), proc.Mp()); err != nil {
+	for j, pos := range ap.Result {
+		if err := ctr.rbat.Vecs[j].PreExtendArea(len(bat.Vecs[pos].GetArea()), proc.Mp()); err != nil {
 			return err
 		}
 	}

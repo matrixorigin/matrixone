@@ -41,7 +41,7 @@ func (shuffle *Shuffle) OpType() vm.OpType {
 func (shuffle *Shuffle) Prepare(proc *process.Process) error {
 	shuffle.ctr = new(container)
 	if shuffle.RuntimeFilterSpec != nil {
-		shuffle.RuntimeFilterSpec.Handled = false
+		shuffle.ctr.runtimeFilterHandled = false
 	}
 	shuffle.initShuffle()
 	return nil
@@ -132,11 +132,11 @@ SENDLAST:
 }
 
 func (shuffle *Shuffle) handleRuntimeFilter(proc *process.Process) error {
-	if shuffle.RuntimeFilterSpec != nil && !shuffle.RuntimeFilterSpec.Handled {
+	if shuffle.RuntimeFilterSpec != nil && !shuffle.ctr.runtimeFilterHandled {
 		shuffle.msgReceiver = proc.NewMessageReceiver([]int32{shuffle.RuntimeFilterSpec.Tag}, process.AddrBroadCastOnCurrentCN())
 		msgs, ctxDone := shuffle.msgReceiver.ReceiveMessage(true, proc.Ctx)
 		if ctxDone {
-			shuffle.RuntimeFilterSpec.Handled = true
+			shuffle.ctr.runtimeFilterHandled = true
 			return nil
 		}
 		for i := range msgs {
@@ -146,7 +146,7 @@ func (shuffle *Shuffle) handleRuntimeFilter(proc *process.Process) error {
 			}
 			switch msg.Typ {
 			case process.RuntimeFilter_PASS, process.RuntimeFilter_DROP:
-				shuffle.RuntimeFilterSpec.Handled = true
+				shuffle.ctr.runtimeFilterHandled = true
 				continue
 			default:
 				panic("unsupported runtime filter type!")

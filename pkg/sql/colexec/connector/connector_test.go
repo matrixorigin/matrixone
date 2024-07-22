@@ -133,7 +133,7 @@ func TestConnector(t *testing.T) {
 }
 
 func newTestCase() connectorTestCase {
-	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
+	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
 	return connectorTestCase{

@@ -21,8 +21,6 @@ import (
 	"io"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/lock"
-
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -36,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
@@ -62,11 +61,16 @@ func New(
 	hakeeper logservice.CNHAKeeperClient,
 	udfService udf.Service,
 	aicm *defines.AutoIncrCacheManager) *Process {
+	sid := ""
+	if lockService != nil {
+		sid = lockService.GetConfig().ServiceID
+	}
+
 	baseProcess := &BaseProcess{
 		mp:             m,
 		TxnClient:      txnClient,
 		FileService:    fileService,
-		IncrService:    incrservice.GetAutoIncrementService(ctx),
+		IncrService:    incrservice.GetAutoIncrementService(sid),
 		UnixTime:       time.Now().UnixNano(),
 		LastInsertID:   new(uint64),
 		LockService:    lockService,
@@ -76,7 +80,7 @@ func New(
 		QueryClient:    queryClient,
 		Hakeeper:       hakeeper,
 		UdfService:     udfService,
-		logger:         util.GetLogger(), // TODO: set by input
+		logger:         util.GetLogger(sid), // TODO: set by input
 		TxnOperator:    txnOperator,
 	}
 	return &Process{
@@ -156,6 +160,16 @@ func (proc *Process) GetMPool() *mpool.MPool {
 
 func (proc *Process) Mp() *mpool.MPool {
 	return proc.GetMPool()
+}
+
+func (proc *Process) GetService() string {
+	if proc == nil {
+		return ""
+	}
+	if ls := proc.GetLockService(); ls != nil {
+		return ls.GetConfig().ServiceID
+	}
+	return ""
 }
 
 func (proc *Process) GetLim() Limitation {
