@@ -109,7 +109,7 @@ for file in `ls $PROTOC_DIR/*.proto`
 do
   outArgName="gogofast_out"
   # For query.proto and statsinfo.proto, extra fields are redundant.
-  if echo $file | egrep "query.proto|statsinfo.proto|api.proto" >/dev/null; then
+  if echo $file | egrep "query.proto|statsinfo.proto" >/dev/null; then
     outArgName="gogofaster_out"
   fi
 	dir=$(basename $file .proto)
