@@ -2122,7 +2122,7 @@ func (tbl *txnTable) buildLocalDataSource(
 		ctx,
 		proc.Mp(),
 		types.TimestampToTS(tbl.getTxn().op.SnapshotTS()),
-		proc.GetFileService(),
+		tbl.getTxn().engine.fs,
 		tbl.db.databaseId,
 		tbl.tableId,
 		ranges,
@@ -2131,6 +2131,7 @@ func (tbl *txnTable) buildLocalDataSource(
 		tbl.getTxn().blockId_tn_delete_metaLoc_batch.data,
 		tbl.getTxn().writes[:txnOffset],
 		skipReadMem,
+		tbl.tableName,
 	)
 
 	return source, err

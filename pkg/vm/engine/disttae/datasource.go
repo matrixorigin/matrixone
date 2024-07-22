@@ -724,6 +724,7 @@ func (rs *RemoteDataSource) ApplyTombstones(rows []types.Rowid) ([]int64, error)
 // local data source
 
 type LocalDataSource struct {
+	TableName string
 	// cn unCommitted s3 flushed object will be collect during txnTable.Ranges
 	ranges []*objectio.BlockInfoInProgress
 	pState *logtailreplay.PartitionState
@@ -773,10 +774,11 @@ func NewLocalDataSource(
 	unCommittedRawRowIdOffsetsDeletes map[types.Blockid][]int64,
 	unCommittedS3DeletesBat map[types.Blockid][]*batch.Batch,
 	unCommittedInmemWrites []Entry,
-	skipReadMem bool) (source *LocalDataSource, err error) {
+	skipReadMem bool,
+	tableName string) (source *LocalDataSource, err error) {
 
 	source = &LocalDataSource{}
-
+	source.TableName = tableName
 	source.fs = fs
 	source.ctx = ctx
 	source.mp = mp
@@ -824,7 +826,13 @@ func (ls *LocalDataSource) HasTombstones(bid types.Blockid) bool {
 		return true
 	}
 
-	delIter := ls.pState.NewRowsIter(ls.snapshotTS, &ls.prevBlockId, true)
+	if len(ls.unCommittedInmemDeletesEntry) != 0 {
+		return true
+	}
+
+	delIter := ls.pState.NewRowsIter(ls.snapshotTS, &bid, true)
+	defer delIter.Close()
+
 	if delIter.Next() {
 		return true
 	}
@@ -890,9 +898,10 @@ func (ls *LocalDataSource) Close() {
 //  3. committedInmemDeletes
 //  4. committedPersistedTombstone
 func (ls *LocalDataSource) ApplyTombstones(rows []types.Rowid) (sel []int64, err error) {
+
 	rowIdsToOffsets := func(rowIds []types.Rowid) (ret []int64) {
-		for _, row := range rows {
-			_, offset := row.Decode()
+		for _, r := range rowIds {
+			_, offset := r.Decode()
 			ret = append(ret, int64(offset))
 		}
 		return ret
