@@ -707,7 +707,7 @@ func NewReaderInProgress(
 	tableDef *plan.TableDef,
 	ts timestamp.Timestamp,
 	expr *plan.Expr,
-	//orderedScan bool, // it should be included in filter or expr.
+//orderedScan bool, // it should be included in filter or expr.
 	source DataSource,
 ) *readerInProgress {
 
@@ -780,10 +780,16 @@ func (r *readerInProgress) Read(
 	expr *plan.Expr,
 	mp *mpool.MPool,
 	vp engine.VectorPool,
-) (*batch.Batch, error) {
+) (bat *batch.Batch, err error) {
 
 	start := time.Now()
 	defer func() {
+		if r.columns.extraRowIdAdded && bat != nil {
+			rowIDVec := bat.Vecs[r.columns.rowIdColIdx]
+			rowIDVec.Free(mp)
+			bat.Vecs = append(bat.Vecs[:r.columns.rowIdColIdx], bat.Vecs[r.columns.rowIdColIdx+1:]...)
+		}
+
 		v2.TxnBlockReaderDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
@@ -807,19 +813,14 @@ func (r *readerInProgress) Read(
 
 	r.tryUpdateColumns(cols)
 
-	bat := batch.NewWithSize(len(r.columns.colTypes))
+	bat = batch.NewWithSize(len(r.columns.colTypes))
 
-	if len(r.columns.colTypes) != len(cols) {
+	if r.columns.extraRowIdAdded {
 		bat.Attrs = append(bat.Attrs, catalog.Row_ID)
 	}
-
 	bat.Attrs = append(bat.Attrs, cols...)
 
 	for i, j := 0, 0; i < len(r.columns.colTypes); i++ {
-		//if len(r.columns.colTypes) != len(cols) && r.columns.rowIdColIdx == i {
-		//	continue
-		//}
-
 		if vp == nil {
 			bat.Vecs[j] = vector.NewVec(r.columns.colTypes[i])
 		} else {
