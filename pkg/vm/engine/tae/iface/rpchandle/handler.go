@@ -16,6 +16,7 @@ package rpchandle
 
 import (
 	"context"
+
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -66,7 +67,7 @@ type Handler interface {
 		ctx context.Context,
 		meta txn.TxnMeta,
 		req *apipb.PrecommitWriteCmd,
-		resp *apipb.SyncLogTailResp,
+		resp *apipb.TNStringResponse,
 	) error
 
 	HandleFlushTable(
@@ -76,6 +77,13 @@ type Handler interface {
 		resp *apipb.SyncLogTailResp,
 	) (func(), error)
 
+	HandleCommitMerge(
+		ctx context.Context,
+		meta txn.TxnMeta,
+		req *apipb.MergeCommitEntry,
+		resp *db.InspectResp,
+	) (func(), error)
+
 	HandleForceCheckpoint(
 		ctx context.Context,
 		meta txn.TxnMeta,
@@ -83,6 +91,12 @@ type Handler interface {
 		resp *apipb.SyncLogTailResp,
 	) (func(), error)
 
+	HandleForceGlobalCheckpoint(
+		ctx context.Context,
+		meta txn.TxnMeta,
+		req *db.Checkpoint,
+		resp *apipb.SyncLogTailResp,
+	) (func(), error)
 	HandleInspectTN(
 		ctx context.Context,
 		meta txn.TxnMeta,
@@ -117,4 +131,17 @@ type Handler interface {
 		req *db.StorageUsageReq,
 		resp *db.StorageUsageResp,
 	) (func(), error)
+
+	HandleInterceptCommit(
+		ctx context.Context,
+		meta txn.TxnMeta,
+		req *db.InterceptCommit,
+		resp *apipb.SyncLogTailResp,
+	) (func(), error)
+	HandleDiskCleaner(
+		ctx context.Context,
+		meta txn.TxnMeta,
+		req *db.DiskCleaner,
+		resp *apipb.SyncLogTailResp,
+	) (cb func(), err error)
 }

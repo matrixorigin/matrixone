@@ -16,11 +16,12 @@ package logservice
 
 import (
 	"fmt"
-	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/util"
 	"strconv"
 	"strings"
 	"time"
+
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/util"
 
 	"github.com/google/uuid"
 	"github.com/lni/dragonboat/v4"
@@ -145,6 +146,8 @@ type Config struct {
 	// HAKeeperTruncateInterval is the interval of how often log service should
 	// process truncate for HAKeeper shard.
 	HAKeeperTruncateInterval toml.Duration `toml:"hakeeper-truncate-interval"`
+	// ExplicitHostname is the hostname used in draogboat.
+	ExplicitHostname string `toml:"explicit-hostname"`
 
 	RPC struct {
 		// MaxMessageSize is the max size for RPC message. The default value is 10MiB.

@@ -17,7 +17,7 @@ package tree
 type TableName struct {
 	TableExpr
 	objName
-	AtTimeStampClause *AtTimeStampClause
+	AtTsExpr *AtTimeStamp
 }
 
 func (tn TableName) Format(ctx *FmtCtx) {
@@ -30,8 +30,10 @@ func (tn TableName) Format(ctx *FmtCtx) {
 		ctx.WriteByte('.')
 	}
 	ctx.WriteString(string(tn.ObjectName))
-	if tn.AtTimeStampClause != nil {
-		tn.AtTimeStampClause.Format(ctx)
+	if tn.AtTsExpr != nil {
+		ctx.WriteString("{")
+		tn.AtTsExpr.Format(ctx)
+		ctx.WriteString("}")
 	}
 }
 
@@ -61,38 +63,25 @@ func (node *TableNames) Format(ctx *FmtCtx) {
 	}
 }
 
-func NewTableName(name Identifier, prefix ObjectNamePrefix, atTs *AtTimeStampClause) *TableName {
+func NewTableName(name Identifier, prefix ObjectNamePrefix, AtTsExpr *AtTimeStamp) *TableName {
 	return &TableName{
 		objName: objName{
 			ObjectName:       name,
 			ObjectNamePrefix: prefix,
 		},
-		AtTimeStampClause: atTs,
+		AtTsExpr: AtTsExpr,
 	}
 }
 
-type AtTimeStampClause struct {
-	TimeStampExpr *TimeStampExpr
-}
-
-func (node *AtTimeStampClause) Format(ctx *FmtCtx) {
-	ctx.WriteString("@")
-	if node.TimeStampExpr != nil {
-		node.TimeStampExpr.Format(ctx)
-	}
-}
-
-type TimeStampExpr struct {
+type AtTimeStamp struct {
 	Type ATTimeStampType
-	Expr string
+	Expr Expr
 }
 
-func (node *TimeStampExpr) Format(ctx *FmtCtx) {
+func (node *AtTimeStamp) Format(ctx *FmtCtx) {
 	ctx.WriteString(node.Type.String())
-	if node.Expr != "" {
-		ctx.WriteByte('@')
-		ctx.WriteString(node.Expr)
-	}
+	ctx.WriteString(" = ")
+	node.Expr.Format(ctx)
 }
 
 type ATTimeStampType int
@@ -101,16 +90,19 @@ const (
 	ATTIMESTAMPNONE ATTimeStampType = iota
 	ATTIMESTAMPTIME
 	ATTIMESTAMPSNAPSHOT
+	ATMOTIMESTAMP
 )
 
 func (a ATTimeStampType) String() string {
 	switch a {
-	case ATTIMESTAMPNONE:
+	case ATTIMESTAMPNONE: // none
 		return "none"
-	case ATTIMESTAMPTIME:
+	case ATTIMESTAMPTIME: // format: {timestamp = expr}
 		return "timestamp"
-	case ATTIMESTAMPSNAPSHOT:
+	case ATTIMESTAMPSNAPSHOT: // format: {snapshot = expr}
 		return "snapshot"
+	case ATMOTIMESTAMP: // format: {mo-timestamp = expr}
+		return "mo-timestamp"
 	}
 	return "unknown"
 }

@@ -20,13 +20,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(AntiJoin)
 
 const (
 	Build = iota
@@ -59,69 +59,82 @@ type container struct {
 	vecs            []*vector.Vector
 
 	mp *hashmap.JoinMap
+
+	maxAllocSize int64
+	bat          *batch.Batch
+	lastrow      int
 }
 
-type Argument struct {
-	ctr        *container
-	Ibucket    uint64
-	Nbucket    uint64
-	Result     []int32
-	Typs       []types.Type
-	Cond       *plan.Expr
-	Conditions [][]*plan.Expr
-	HashOnPK   bool
-	IsShuffle  bool
-	bat        *batch.Batch
-	lastrow    int
+type AntiJoin struct {
+	ctr                *container
+	Result             []int32
+	Typs               []types.Type
+	Cond               *plan.Expr
+	Conditions         [][]*plan.Expr
+	HashOnPK           bool
+	IsShuffle          bool
+	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (antiJoin *AntiJoin) GetOperatorBase() *vm.OperatorBase {
+	return &antiJoin.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[AntiJoin](
+		func() *AntiJoin {
+			return &AntiJoin{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *AntiJoin) {
+			*a = AntiJoin{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[AntiJoin]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (antiJoin AntiJoin) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *AntiJoin {
+	return reuse.Alloc[AntiJoin](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (antiJoin *AntiJoin) Release() {
+	if antiJoin != nil {
+		reuse.Free[AntiJoin](antiJoin, nil)
 	}
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := arg.ctr
+func (antiJoin *AntiJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	antiJoin.Free(proc, pipelineFailed, err)
+}
+
+func (antiJoin *AntiJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := antiJoin.ctr
 	if ctr != nil {
 		ctr.cleanBatch(proc)
 		ctr.cleanEvalVectors()
 		ctr.cleanHashMap()
 		ctr.cleanExprExecutor()
 		ctr.FreeAllReg()
+
+		anal := proc.GetAnalyze(antiJoin.GetIdx(), antiJoin.GetParallelIdx(), antiJoin.GetParallelMajor())
+		anal.Alloc(ctr.maxAllocSize)
+
+		antiJoin.ctr.lastrow = 0
+
+		antiJoin.ctr = nil
 	}
 }
 
 func (ctr *container) cleanExprExecutor() {
 	if ctr.expr != nil {
 		ctr.expr.Free()
+		ctr.expr = nil
 	}
 }
 
@@ -153,6 +166,9 @@ func (ctr *container) cleanHashMap() {
 
 func (ctr *container) cleanEvalVectors() {
 	for i := range ctr.executorForVecs {
-		ctr.executorForVecs[i].Free()
+		if ctr.executorForVecs[i] != nil {
+			ctr.executorForVecs[i].Free()
+		}
 	}
+	ctr.executorForVecs = nil
 }

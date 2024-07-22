@@ -25,8 +25,8 @@ INSERT INTO T1 VALUES(213823.12);
 INSERT INTO t1 VALUES(-45412.38920);
 SELECT * FROM t1;
 a
--45412.39
 213823.12
+-45412.39
 DROP TABLE T1;
 drop table IF EXISTS table01;
 CREATE external table table01(clo1 int,clo2 bigint)infile{"filepath"='$resources/external_table_file/aaa.csv'} fields terminated by ',';
@@ -45,7 +45,7 @@ DROP TABLE IF EXISTS t1;
 CREATE TABLE t1(id int PRIMARY KEY, Word VARCHAR(40) NOT NULL, INDEX(Word));
 show CREATE TABLE t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n`id` INT NOT NULL,\n`word` VARCHAR(40) NOT NULL,\nPRIMARY KEY (`id`),\nKEY `word` (`word`)\n)
+t1    CREATE TABLE `t1` (\n  `id` INT NOT NULL,\n  `word` VARCHAR(40) NOT NULL,\n  PRIMARY KEY (`id`),\n  KEY `word` (`word`)\n)
 INSERT INTO t1 VALUES (1, 'a');
 INSERT INTO t1 VALUES (2, 'b');
 INSERT INTO t1 VALUES (3, 'c');
@@ -117,10 +117,10 @@ CREATE TABLE T2(id int PRIMARY KEY, Word VARCHAR(40) NOT NULL, INDEX(Word));
 CREATE TABLE t3(id int primary key, Word varchar(40) NOT NULL);
 show CREATE TABLE t2;
 Table    Create Table
-t2    CREATE TABLE `t2` (\n`id` INT NOT NULL,\n`word` VARCHAR(40) NOT NULL,\nPRIMARY KEY (`id`),\nKEY `word` (`word`)\n)
+t2    CREATE TABLE `t2` (\n  `id` INT NOT NULL,\n  `word` VARCHAR(40) NOT NULL,\n  PRIMARY KEY (`id`),\n  KEY `word` (`word`)\n)
 show CREATE TABLE t3;
 Table    Create Table
-t3    CREATE TABLE `t3` (\n`id` INT NOT NULL,\n`word` VARCHAR(40) NOT NULL,\nPRIMARY KEY (`id`)\n)
+t3    CREATE TABLE `t3` (\n  `id` INT NOT NULL,\n  `word` VARCHAR(40) NOT NULL,\n  PRIMARY KEY (`id`)\n)
 INSERT INTO T2 VALUES (1, 'a');
 INSERT INTO t2 VALUES (2, 'b');
 INSERT INTO t2 VALUES (3, 'c');
@@ -163,10 +163,10 @@ ALTER table t5 DROP FOREIGN KEY fC;
 ALTER table t5 ADD constraint fC foreign key(c) REFERENCES t4(a);
 show CREATE TABLE t4;
 Table    Create Table
-t4    CREATE TABLE `t4` (\n`a` INT NOT NULL,\n`b` VARCHAR(5) DEFAULT NULL,\nPRIMARY KEY (`a`)\n)
+t4    CREATE TABLE `t4` (\n  `a` INT NOT NULL,\n  `b` VARCHAR(5) DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
 show CREATE TABLE T5;
 Table    Create Table
-t5    CREATE TABLE `t5` (\n`a` INT DEFAULT NULL,\n`b` VARCHAR(5) DEFAULT NULL,\n`c` INT DEFAULT NULL,\nCONSTRAINT `fc` FOREIGN KEY (`c`) REFERENCES `t4` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+t5    CREATE TABLE `t5` (\n  `a` INT DEFAULT NULL,\n  `b` VARCHAR(5) DEFAULT NULL,\n  `c` INT DEFAULT NULL,\n  CONSTRAINT `fc` FOREIGN KEY (`c`) REFERENCES `t4` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 DROP table t5;
 DROP table t4;
 DROP USER IF EXISTS u_name;
@@ -269,7 +269,7 @@ id    name    age
 2    Bob    25
 show CREATE TABLE t10;
 Table    Create Table
-t10    CREATE TABLE `t10` (\n`id` INT NOT NULL,\n`name` VARCHAR(255) DEFAULT NULL,\n`age` INT DEFAULT NULL,\nPRIMARY KEY (`id`),\nUNIQUE KEY `idx` (`name`)\n)
+t10    CREATE TABLE `t10` (\n  `id` INT NOT NULL,\n  `name` VARCHAR(255) DEFAULT NULL,\n  `age` INT DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `idx` (`name`)\n)
 DROP TABLE t10;
 DROP table IF EXISTS t11;
 CREATE table t11(col1 int PRIMARY KEY,col2 CHAR,col3 float);
@@ -281,7 +281,7 @@ col1    col2    col3
 2    null    213145.45
 show CREATE table t11;
 Table    Create Table
-t11    CREATE TABLE `t11` (\n`col1` INT NOT NULL,\n`col2` CHAR(1) DEFAULT NULL,\n`col3` FLOAT DEFAULT NULL,\nPRIMARY KEY (`col1`)\n)
+t11    CREATE TABLE `t11` (\n  `col1` INT NOT NULL,\n  `col2` CHAR(1) DEFAULT NULL,\n  `col3` FLOAT DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
 DROP TABLE t11;
 DROP TABLE IF EXISTS t12;
 CREATE TABLE t12(col1 int,col2 varchar(20),col3 double);
@@ -291,7 +291,7 @@ select * from t12;
 col1    col2    col3
 show CREATE table t12;
 Table    Create Table
-t12    CREATE TABLE `t12` (\n`col1` INT DEFAULT NULL,\n`col2` VARCHAR(20) DEFAULT NULL,\n`col3` DOUBLE DEFAULT NULL\n)
+t12    CREATE TABLE `t12` (\n  `col1` INT DEFAULT NULL,\n  `col2` VARCHAR(20) DEFAULT NULL,\n  `col3` DOUBLE DEFAULT NULL\n)
 DROP TABLE t12;
 DROP ACCOUNT IF EXISTS tenant_test;
 CREATE ACCOUNT tenant_test admin_name = 'root' identified by '111' open comment 'tenant_test';
@@ -347,8 +347,8 @@ DROP VIEW IF EXISTS vie;
 CREATE TABLE TaB(Field int);
 CREATE VIEW ViE AS SELECT * FROM TAb;
 show CREATE TABLE VIe;
-View    Create View
-vie    CREATE VIEW ViE AS SELECT * FROM TAb;
+View    Create View    character_set_client    collation_connection
+vie    CREATE VIEW ViE AS SELECT * FROM TAb;    utf8mb4    utf8mb4_general_ci
 DROP VIEW vie;
 DROP table TAB;
 DROP TABLE IF EXISTS t13;
@@ -358,8 +358,8 @@ INSERT INTO t13 VALUES(1),(2),(3),(4);
 CREATE VIEW view01 AS SELECT * FROM t13;
 ALTER VIEW VIEW01 AS SELECT * FROM t13 WHERE a=1 or a = 2;
 show CREATE TABLE vieW01;
-View    Create View
-view01    CREATE VIEW VIEW01 AS SELECT * FROM t13 WHERE a=1 or a = 2;
+View    Create View    character_set_client    collation_connection
+view01    CREATE VIEW VIEW01 AS SELECT * FROM t13 WHERE a=1 or a = 2;    utf8mb4    utf8mb4_general_ci
 SELECT * FROM view01;
 a
 1
@@ -483,7 +483,7 @@ id    name    age
 2    Bob    25
 show CREATE TABLE `t17`;
 Table    Create Table
-t17    CREATE TABLE `t17` (\n`id` INT NOT NULL,\n`name` VARCHAR(255) DEFAULT NULL,\n`age` INT DEFAULT NULL,\nPRIMARY KEY (`id`),\nUNIQUE KEY `idx` (`name`)\n)
+t17    CREATE TABLE `t17` (\n  `id` INT NOT NULL,\n  `name` VARCHAR(255) DEFAULT NULL,\n  `age` INT DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `idx` (`name`)\n)
 DROP TABLE `t17`;
 DROP SEQUENCE IF EXISTS `SEQ`;
 CREATE SEQUENCE `SEQ` increment 100 start 30;
@@ -506,7 +506,7 @@ col1    col2    col3
 2    null    213145.45
 show CREATE table `t18`;
 Table    Create Table
-t18    CREATE TABLE `t18` (\n`col1` INT NOT NULL,\n`col2` CHAR(1) DEFAULT NULL,\n`col3` FLOAT DEFAULT NULL,\nPRIMARY KEY (`col1`)\n)
+t18    CREATE TABLE `t18` (\n  `col1` INT NOT NULL,\n  `col2` CHAR(1) DEFAULT NULL,\n  `col3` FLOAT DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
 DROP TABLE `t18`;
 DROP TABLE IF EXISTS `t19`;
 CREATE TABLE `t19`(col1 int,col2 varchar(20),col3 double);
@@ -516,7 +516,7 @@ select * from `t19`;
 col1    col2    col3
 show CREATE table `t19`;
 Table    Create Table
-t19    CREATE TABLE `t19` (\n`col1` INT DEFAULT NULL,\n`col2` VARCHAR(20) DEFAULT NULL,\n`col3` DOUBLE DEFAULT NULL\n)
+t19    CREATE TABLE `t19` (\n  `col1` INT DEFAULT NULL,\n  `col2` VARCHAR(20) DEFAULT NULL,\n  `col3` DOUBLE DEFAULT NULL\n)
 DROP TABLE `t19`;
 DROP ACCOUNT IF EXISTS `tenant_test`;
 CREATE ACCOUNT `tenant_test` admin_name = 'root' identified by '111' open comment 'tenant_test';
@@ -584,8 +584,8 @@ CREATE TABLE `TaB`(Field int);
 INSERT INTO TAB VALUES(10);
 CREATE VIEW `ViE` AS SELECT * FROM `TAb`;
 show CREATE TABLE `VIe`;
-View    Create View
-vie    CREATE VIEW `ViE` AS SELECT * FROM `TAb`;
+View    Create View    character_set_client    collation_connection
+vie    CREATE VIEW `ViE` AS SELECT * FROM `TAb`;    utf8mb4    utf8mb4_general_ci
 DROP view `VIE`;
 DROP table `TAB`;
 DROP TABLE IF EXISTS `t22`;
@@ -604,6 +604,7 @@ DROP view `vieW01`;
 drop database if exists `test10`;
 DROP DATABASE IF EXISTS `test07`;
 DROP TABLE IF EXISTS `t1`;
+not connect to a database
 CREATE DATABASE `test07`;
 USE `test07`;
 CREATE TEMPORARY TABLE `t1`(a float);
@@ -626,10 +627,10 @@ ALTER table `t5` DROP FOREIGN KEY fC;
 ALTER table `t5` ADD constraint fC foreign key(c) REFERENCES t4(a);
 show CREATE TABLE `t4`;
 Table    Create Table
-t4    CREATE TABLE `t4` (\n`a` INT NOT NULL,\n`b` VARCHAR(5) DEFAULT NULL,\nPRIMARY KEY (`a`)\n)
+t4    CREATE TABLE `t4` (\n  `a` INT NOT NULL,\n  `b` VARCHAR(5) DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
 show CREATE TABLE `T5`;
 Table    Create Table
-t5    CREATE TABLE `t5` (\n`a` INT DEFAULT NULL,\n`b` VARCHAR(5) DEFAULT NULL,\n`c` INT DEFAULT NULL,\nCONSTRAINT `fc` FOREIGN KEY (`c`) REFERENCES `t4` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+t5    CREATE TABLE `t5` (\n  `a` INT DEFAULT NULL,\n  `b` VARCHAR(5) DEFAULT NULL,\n  `c` INT DEFAULT NULL,\n  CONSTRAINT `fc` FOREIGN KEY (`c`) REFERENCES `t4` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 DROP table `t5`;
 DROP table `t4`;
 drop database if exists `test11`;

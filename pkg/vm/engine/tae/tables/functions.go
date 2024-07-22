@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
@@ -115,7 +116,7 @@ func parseNADedeupArgs(args ...any) (vec *vector.Vector, mask *nulls.Bitmap, def
 
 func parseADedeupArgs(args ...any) (
 	vec containers.Vector, mask *nulls.Bitmap, def *catalog.ColDef,
-	scan func() (containers.Vector, error),
+	scan func(uint16) (containers.Vector, error),
 	txn txnif.TxnReader,
 ) {
 	vec = args[0].(containers.Vector)
@@ -126,7 +127,7 @@ func parseADedeupArgs(args ...any) (
 		def = args[2].(*catalog.ColDef)
 	}
 	if args[3] != nil {
-		scan = args[3].(func() (containers.Vector, error))
+		scan = args[3].(func(uint16) (containers.Vector, error))
 	}
 	if args[4] != nil {
 		txn = args[4].(txnif.TxnReader)
@@ -158,12 +159,13 @@ func dedupNABlkBytesFunc(args ...any) func([]byte, bool, int) error {
 	vec, mask, def := parseNADedeupArgs(args...)
 	return func(v []byte, _ bool, row int) (err error) {
 		// logutil.Infof("row=%d,v=%v", row, v)
-		if _, existed := compute.GetOffsetOfBytes(
+		if rowOffset, existed := compute.GetOffsetOfBytes(
 			vec,
 			v,
 			mask,
 		); existed {
 			entry := common.TypeStringValue(*vec.GetType(), any(v), false)
+			logutil.Infof("Duplicate: row %d", rowOffset)
 			return moerr.NewDuplicateEntryNoCtx(entry, def.Name)
 		}
 		return
@@ -210,12 +212,13 @@ func dedupABlkBytesFunc(args ...any) func([]byte, bool, int) error {
 					return
 				}
 				if tsVec == nil {
-					if tsVec, err = scan(); err != nil {
+					if tsVec, err = scan(0); err != nil {
 						return
 					}
 				}
 				commitTS := tsVec.Get(row).(types.TS)
-				if commitTS.Greater(txn.GetStartTS()) {
+				startTS := txn.GetStartTS()
+				if commitTS.Greater(&startTS) {
 					return txnif.ErrTxnWWConflict
 				}
 				entry := common.TypeStringValue(*vec.GetType(), any(v1), false)
@@ -247,12 +250,13 @@ func dedupABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) func(args ...
 						return
 					}
 					if tsVec == nil {
-						if tsVec, err = scan(); err != nil {
+						if tsVec, err = scan(0); err != nil {
 							return
 						}
 					}
 					commitTS := tsVec.Get(row).(types.TS)
-					if commitTS.Greater(txn.GetStartTS()) {
+					startTS := txn.GetStartTS()
+					if commitTS.Greater(&startTS) {
 						return txnif.ErrTxnWWConflict
 					}
 					entry := common.TypeStringValue(*vec.GetType(), any(v1), false)
@@ -308,7 +312,8 @@ func dedupABlkClosureFactory(
 					}
 				}
 				commitTS := tsVec.Get(row).(types.TS)
-				if commitTS.Greater(txn.GetStartTS()) {
+				startTS := txn.GetStartTS()
+				if commitTS.Greater(&startTS) {
 					return txnif.ErrTxnWWConflict
 				}
 				entry := common.TypeStringValue(*vec.GetType(), v1, false)

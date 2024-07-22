@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -25,10 +26,17 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
+	"github.com/prashantv/gostub"
+	pcg "github.com/prometheus/client_model/go"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/errgroup"
+
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -36,11 +44,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/prashantv/gostub"
-	pcg "github.com/prometheus/client_model/go"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"golang.org/x/sync/errgroup"
 )
 
 func Test_inc_dec(t *testing.T) {
@@ -105,7 +108,7 @@ var newMockWrapper = func(ctrl *gomock.Controller, ses *Session,
 	uuid, _ := uuid.NewV7()
 	runner := mock_frontend.NewMockComputationRunner(ctrl)
 	runner.EXPECT().Run(gomock.Any()).DoAndReturn(func(uint64) (*util.RunResult, error) {
-		proto := ses.GetMysqlProtocol()
+		proto := ses.GetResponser().MysqlRrWr()
 		if mrs != nil {
 			if res.isSleepSql {
 				select {
@@ -115,7 +118,7 @@ var newMockWrapper = func(ctrl *gomock.Controller, ses *Session,
 					res.resultX.Store(contextCancel)
 				}
 			}
-			err = proto.SendResultSetTextBatchRowSpeedup(mrs, mrs.GetRowCount())
+			err = proto.WriteResultSetRow(mrs, mrs.GetRowCount())
 			if err != nil {
 				logutil.Errorf("flush error %v", err)
 				return nil, err
@@ -126,11 +129,14 @@ var newMockWrapper = func(ctrl *gomock.Controller, ses *Session,
 	mcw := mock_frontend.NewMockComputationWrapper(ctrl)
 	mcw.EXPECT().GetAst().Return(stmt).AnyTimes()
 	mcw.EXPECT().GetProcess().Return(proc).AnyTimes()
-	mcw.EXPECT().GetColumns().Return(columns, nil).AnyTimes()
-	mcw.EXPECT().Compile(gomock.Any(), gomock.Any(), gomock.Any()).Return(runner, nil).AnyTimes()
+	mcw.EXPECT().GetColumns(gomock.Any()).Return(columns, nil).AnyTimes()
+	mcw.EXPECT().Compile(gomock.Any(), gomock.Any()).Return(runner, nil).AnyTimes()
 	mcw.EXPECT().GetUUID().Return(uuid[:]).AnyTimes()
 	mcw.EXPECT().RecordExecPlan(gomock.Any()).Return(nil).AnyTimes()
 	mcw.EXPECT().GetLoadTag().Return(false).AnyTimes()
+	mcw.EXPECT().Clear().AnyTimes()
+	mcw.EXPECT().Free().AnyTimes()
+	mcw.EXPECT().Plan().Return(&plan2.Plan{}).AnyTimes()
 	return mcw
 }
 
@@ -138,6 +144,12 @@ func Test_ConnectionCount(t *testing.T) {
 	//client connection method: mysql -h 127.0.0.1 -P 6001 --default-auth=mysql_native_password -uroot -p
 	//client connect
 	//ion method: mysql -h 127.0.0.1 -P 6001 -udump -p
+
+	clientConn, serverConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	registerConn(clientConn)
+
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	var conn1, conn2 *sql.DB
@@ -150,30 +162,31 @@ func Test_ConnectionCount(t *testing.T) {
 	pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 	require.NoError(t, err)
 	pu.SV.SkipCheckUser = true
+	setGlobalPu(pu)
 
 	noResultSet := make(map[string]bool)
 	resultSet := make(map[string]*result)
 
-	var wrapperStubFunc = func(db string, input *UserInput, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
+	var wrapperStubFunc = func(execCtx *ExecCtx, db string, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
 		var cw []ComputationWrapper = nil
 		var stmts []tree.Statement = nil
 		var cmdFieldStmt *InternalCmdFieldList
 		var err error
-		if isCmdFieldListSql(input.getSql()) {
-			cmdFieldStmt, err = parseCmdFieldList(proc.Ctx, input.getSql())
+		if isCmdFieldListSql(execCtx.input.getSql()) {
+			cmdFieldStmt, err = parseCmdFieldList(execCtx.reqCtx, execCtx.input.getSql())
 			if err != nil {
 				return nil, err
 			}
 			stmts = append(stmts, cmdFieldStmt)
 		} else {
-			stmts, err = parsers.Parse(proc.Ctx, dialect.MYSQL, input.getSql(), 1)
+			stmts, err = parsers.Parse(execCtx.reqCtx, dialect.MYSQL, execCtx.input.getSql(), 1)
 			if err != nil {
 				return nil, err
 			}
 		}
 
 		for _, stmt := range stmts {
-			cw = append(cw, newMockWrapper(ctrl, ses, resultSet, noResultSet, input.getSql(), stmt, proc))
+			cw = append(cw, newMockWrapper(ctrl, ses, resultSet, noResultSet, execCtx.input.getSql(), stmt, proc))
 		}
 		return cw, nil
 	}
@@ -184,16 +197,19 @@ func Test_ConnectionCount(t *testing.T) {
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 	// A mock autoincrcache manager.
-	aicm := &defines.AutoIncrCacheManager{}
-	rm, _ := NewRoutineManager(ctx, pu, aicm)
+	acim := &defines.AutoIncrCacheManager{}
+	setGlobalAicm(acim)
+	rm, _ := NewRoutineManager(ctx)
+	setGlobalRtMgr(rm)
 
 	wg := sync.WaitGroup{}
 	wg.Add(1)
 
+	mo := createInnerServer()
 	//running server
 	go func() {
 		defer wg.Done()
-		echoServer(rm.Handler, rm, NewSqlCodec())
+		mo.handleConn(serverConn)
 	}()
 
 	cCounter := metric.ConnectionCounter(sysAccountName)
@@ -202,6 +218,17 @@ func Test_ConnectionCount(t *testing.T) {
 	time.Sleep(time.Second * 2)
 	conn1, err = openDbConn(t, 6001)
 	require.NoError(t, err)
+
+	clientConn2, serverConn2 := net.Pipe()
+	defer serverConn2.Close()
+	defer clientConn2.Close()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		mo.handleConn(serverConn2)
+	}()
+
+	registerConn(clientConn2)
 
 	time.Sleep(time.Second * 2)
 	conn2, err = openDbConn(t, 6001)
@@ -217,10 +244,6 @@ func Test_ConnectionCount(t *testing.T) {
 	assert.NoError(t, err)
 	assert.GreaterOrEqual(t, x.Gauge.GetValue(), float64(2))
 
-	//close the connection
-	closeDbConn(t, conn1)
-	closeDbConn(t, conn2)
-
 	time.Sleep(time.Second * 2)
 
 	cc = rm.clientCount()
@@ -231,7 +254,15 @@ func Test_ConnectionCount(t *testing.T) {
 	assert.GreaterOrEqual(t, x.Gauge.GetValue(), float64(0))
 
 	time.Sleep(time.Millisecond * 10)
+
+	//close the connection
+	closeDbConn(t, conn1)
+	closeDbConn(t, conn2)
+
 	//close server
-	setServer(1)
+	clientConn.Close()
+	serverConn.Close()
+	clientConn2.Close()
+	serverConn2.Close()
 	wg.Wait()
 }

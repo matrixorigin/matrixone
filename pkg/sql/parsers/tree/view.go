@@ -14,6 +14,16 @@
 
 package tree
 
+import "github.com/matrixorigin/matrixone/pkg/common/reuse"
+
+func init() {
+	reuse.CreatePool[CreateView](
+		func() *CreateView { return &CreateView{} },
+		func(c *CreateView) { c.reset() },
+		reuse.DefaultOptions[CreateView](), //.
+	) //WithEnableChecker()
+}
+
 type CreateView struct {
 	statementImpl
 	Replace     bool
@@ -21,6 +31,20 @@ type CreateView struct {
 	ColNames    IdentifierList
 	AsSource    *Select
 	IfNotExists bool
+}
+
+func NewCreateView(replace bool, name *TableName, colNames IdentifierList, asSource *Select, ifNotExists bool) *CreateView {
+	c := reuse.Alloc[CreateView](nil)
+	c.Replace = replace
+	c.Name = name
+	c.ColNames = colNames
+	c.AsSource = asSource
+	c.IfNotExists = ifNotExists
+	return c
+}
+
+func (node *CreateView) Free() {
+	reuse.Free[CreateView](node, nil)
 }
 
 func (node *CreateView) Format(ctx *FmtCtx) {
@@ -45,6 +69,18 @@ func (node *CreateView) Format(ctx *FmtCtx) {
 	ctx.WriteString(" as ")
 	node.AsSource.Format(ctx)
 }
+
+func (node *CreateView) reset() {
+	// if node.Name != nil {
+	// node.Name.Free()
+	// }
+	// if node.AsSource != nil {
+	// node.AsSource.Free()
+	// }
+	*node = CreateView{}
+}
+
+func (node CreateView) TypeName() string { return "tree.CreateView" }
 
 func (node *CreateView) GetStatementType() string { return "Create View" }
 func (node *CreateView) GetQueryType() string     { return QueryTypeDDL }

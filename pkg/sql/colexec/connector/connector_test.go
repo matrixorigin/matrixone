@@ -35,7 +35,7 @@ const (
 
 // add unit tests for cases
 type connectorTestCase struct {
-	arg    *Argument
+	arg    *Connector
 	types  []types.Type
 	proc   *process.Process
 	cancel context.CancelFunc
@@ -69,9 +69,8 @@ func TestConnector(t *testing.T) {
 	for _, tc := range tcs {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-
 		bats := []*batch.Batch{
-			newBatch(t, tc.types, tc.proc, Rows),
+			newBatch(tc.types, tc.proc, Rows),
 			batch.EmptyBatch,
 		}
 		resetChildren(tc.arg, bats)
@@ -84,14 +83,47 @@ func TestConnector(t *testing.T) {
 		}*/
 		_, _ = tc.arg.Call(tc.proc)
 		for len(tc.arg.Reg.Ch) > 0 {
-			bat := <-tc.arg.Reg.Ch
-			if bat == nil {
+			msg := <-tc.arg.Reg.Ch
+			if msg == nil {
 				break
 			}
-			if bat.IsEmpty() {
+			if msg.Batch.IsEmpty() {
 				continue
 			}
-			bat.Clean(tc.proc.Mp())
+			msg.Batch.Clean(tc.proc.Mp())
+		}
+		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
+
+		tc.arg.Reset(tc.proc, false, nil)
+
+		tc.arg.Reg = &process.WaitRegister{
+			Ctx: tc.arg.Reg.Ctx,
+			Ch:  make(chan *process.RegisterMessage, 3),
+		}
+		err = tc.arg.Prepare(tc.proc)
+		require.NoError(t, err)
+		bats = []*batch.Batch{
+			newBatch(tc.types, tc.proc, Rows),
+			batch.EmptyBatch,
+		}
+		resetChildren(tc.arg, bats)
+		/*{
+			for _, vec := range bat.Vecs {
+				if vec.IsOriginal() {
+					vec.FreeOriginal(tc.proc.Mp())
+				}
+			}
+		}*/
+		_, _ = tc.arg.Call(tc.proc)
+		for len(tc.arg.Reg.Ch) > 0 {
+			msg := <-tc.arg.Reg.Ch
+			if msg == nil {
+				break
+			}
+			if msg.Batch.IsEmpty() {
+				continue
+			}
+			msg.Batch.Clean(tc.proc.Mp())
 		}
 		tc.arg.Free(tc.proc, false, nil)
 		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
@@ -101,16 +133,16 @@ func TestConnector(t *testing.T) {
 }
 
 func newTestCase() connectorTestCase {
-	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
+	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
 	return connectorTestCase{
 		proc:  proc,
 		types: []types.Type{types.T_int8.ToType()},
-		arg: &Argument{
+		arg: &Connector{
 			Reg: &process.WaitRegister{
 				Ctx: ctx,
-				Ch:  make(chan *batch.Batch, 3),
+				Ch:  make(chan *process.RegisterMessage, 3),
 			},
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
@@ -126,16 +158,18 @@ func newTestCase() connectorTestCase {
 }
 
 // create a new block based on the type information
-func newBatch(t *testing.T, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
+func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
 
-func resetChildren(arg *Argument, bats []*batch.Batch) {
+func resetChildren(arg *Connector, bats []*batch.Batch) {
+	valueScanArg := &value_scan.ValueScan{
+		Batchs: bats,
+	}
+	valueScanArg.Prepare(nil)
 	arg.GetOperatorBase().SetChildren(
 		[]vm.Operator{
-			&value_scan.Argument{
-				Batchs: bats,
-			},
+			valueScanArg,
 		},
 	)
 }

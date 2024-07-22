@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -35,12 +36,12 @@ import (
 type Nodes []Node
 
 type Node struct {
-	Mcpu             int
-	Id               string `json:"id"`
-	Addr             string `json:"address"`
-	Header           objectio.InfoHeader
-	Data             []byte   `json:"payload"`
-	Rel              Relation // local relation
+	Mcpu   int
+	Id     string `json:"id"`
+	Addr   string `json:"address"`
+	Header objectio.InfoHeader
+	Data   []byte `json:"payload"`
+	// Rel              Relation // local relation
 	NeedExpandRanges bool
 }
 
@@ -90,7 +91,7 @@ type ClusterByDef struct {
 }
 
 type Statistics interface {
-	Stats(ctx context.Context, sync bool) *pb.StatsInfo
+	Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error)
 	Rows(ctx context.Context) (uint64, error)
 	Size(ctx context.Context, columnName string) (uint64, error)
 }
@@ -592,9 +593,11 @@ var _ Ranges = (*objectio.BlockInfoSlice)(nil)
 type Relation interface {
 	Statistics
 
-	UpdateObjectInfos(context.Context) error
-
-	Ranges(context.Context, []*plan.Expr) (Ranges, error)
+	// Ranges Parameters:
+	// first parameter: Context
+	// second parameter: Slice of expressions used to filter the data.
+	// third parameter: Transaction offset used to specify the starting position for reading data.
+	Ranges(context.Context, []*plan.Expr, int) (Ranges, error)
 
 	TableDefs(context.Context) ([]TableDef, error)
 
@@ -631,8 +634,13 @@ type Relation interface {
 
 	GetDBID(context.Context) uint64
 
-	// second argument is the number of reader, third argument is the filter extend, foruth parameter is the payload required by the engine
-	NewReader(context.Context, int, *plan.Expr, []byte, bool) ([]Reader, error)
+	// NewReader Parameters:
+	// second parameter is the number of reader,
+	// third parameter is the filter extend,
+	// foruth parameter is the payload required by the engine
+	// fifth parameter is data blocks
+	// sixth parameter is transaction offset used to specify the starting position for reading data.
+	NewReader(context.Context, int, *plan.Expr, []byte, bool, int) ([]Reader, error)
 
 	TableColumns(ctx context.Context) ([]*Attribute, error)
 
@@ -649,6 +657,7 @@ type Relation interface {
 	PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, keyVector *vector.Vector) (bool, error)
 
 	ApproxObjectsNum(ctx context.Context) int
+	MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, policyName string, targetObjSize uint32) (*api.MergeCommitEntry, error)
 }
 
 type Reader interface {
@@ -706,7 +715,7 @@ type Engine interface {
 	// since implementations may update hints after engine had initialized
 	Hints() Hints
 
-	NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp, expr *plan.Expr, ranges []byte, tblDef *plan.TableDef, proc any) ([]Reader, error)
+	NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp, expr *plan.Expr, blockReadPKFilter any, ranges []byte, tblDef *plan.TableDef, proc any) ([]Reader, error)
 
 	// Get database name & table name by table id
 	GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error)
@@ -721,6 +730,10 @@ type Engine interface {
 	// If sync is true, wait for the stats info to be updated, else,
 	// just return nil if the current stats info has not been initialized.
 	Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo
+
+	GetMessageCenter() any
+
+	GetService() string
 }
 
 type VectorPool interface {

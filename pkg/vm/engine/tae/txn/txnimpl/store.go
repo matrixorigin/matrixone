@@ -16,19 +16,17 @@ package txnimpl
 
 import (
 	"context"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"runtime/trace"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/moprobe"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -40,6 +38,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
+
+	"go.uber.org/zap"
 )
 
 var (
@@ -297,7 +297,7 @@ func (store *txnStore) Append(ctx context.Context, dbId, id uint64, data *contai
 	return db.Append(ctx, id, data)
 }
 
-func (store *txnStore) AddBlksWithMetaLoc(
+func (store *txnStore) AddObjsWithMetaLoc(
 	ctx context.Context,
 	dbId, tid uint64,
 	stats containers.Vector,
@@ -307,7 +307,7 @@ func (store *txnStore) AddBlksWithMetaLoc(
 	if err != nil {
 		return err
 	}
-	return db.AddBlksWithMetaLoc(ctx, tid, stats)
+	return db.AddObjsWithMetaLoc(ctx, tid, stats)
 }
 
 func (store *txnStore) RangeDelete(
@@ -329,18 +329,6 @@ func (store *txnStore) TryDeleteByDeltaloc(
 		return
 	}
 	return db.TryDeleteByDeltaloc(id, deltaloc)
-}
-
-func (store *txnStore) UpdateMetaLoc(id *common.ID, metaLoc objectio.Location) (err error) {
-	store.IncreateWriteCnt()
-	db, err := store.getOrSetDB(id.DbID)
-	if err != nil {
-		return err
-	}
-	// if table.IsDeleted() {
-	// 	return txnbase.ErrNotFound
-	// }
-	return db.UpdateMetaLoc(id, metaLoc)
 }
 
 func (store *txnStore) UpdateDeltaLoc(id *common.ID, deltaLoc objectio.Location) (err error) {
@@ -437,22 +425,11 @@ func (store *txnStore) GetDatabaseByID(id uint64) (h handle.Database, err error)
 }
 
 func (store *txnStore) CreateDatabase(name, createSql, datTyp string) (h handle.Database, err error) {
-	meta, err := store.catalog.CreateDBEntry(name, createSql, datTyp, store.txn)
-	if err != nil {
-		return nil, err
-	}
-	var db *txnDB
-	if db, err = store.getOrSetDB(meta.GetID()); err != nil {
-		return
-	}
-	if err = db.SetCreateEntry(meta); err != nil {
-		return
-	}
-	h = buildDB(db)
-	return
+	id := store.catalog.NextDB()
+	return store.CreateDatabaseWithID(context.Background(), name, createSql, datTyp, id)
 }
 
-func (store *txnStore) CreateDatabaseWithID(name, createSql, datTyp string, id uint64) (h handle.Database, err error) {
+func (store *txnStore) CreateDatabaseWithID(ctx context.Context, name, createSql, datTyp string, id uint64) (h handle.Database, err error) {
 	meta, err := store.catalog.CreateDBEntryWithID(name, createSql, datTyp, id, store.txn)
 	if err != nil {
 		return nil, err
@@ -464,12 +441,17 @@ func (store *txnStore) CreateDatabaseWithID(name, createSql, datTyp string, id u
 	if err = db.SetCreateEntry(meta); err != nil {
 		return
 	}
+
+	// TODO(aptend): write ddl row
+	// if err = store.Append(ctx, pkgcatalog.MO_CATALOG_ID, pkgcatalog.MO_DATABASE_ID, nil); err != nil {
+	// 	return
+	// }
 	h = buildDB(db)
 	return
 }
 
 func (store *txnStore) DropDatabase(name string) (h handle.Database, err error) {
-	hasNewEntry, meta, err := store.catalog.DropDBEntry(name, store.txn)
+	hasNewEntry, meta, err := store.catalog.DropDBEntryByName(name, store.txn)
 	if err != nil {
 		return
 	}
@@ -511,7 +493,7 @@ func (store *txnStore) ObserveTxn(
 				switch txnEntry := iTxnEntry.(type) {
 				case *catalog.ObjectEntry:
 					visitObject(txnEntry)
-				case *catalog.BlockEntry:
+				case *updates.DeltalocChain:
 					visitMetadata(txnEntry)
 				case *updates.DeleteNode:
 					visitDelete(store.ctx, txnEntry)
@@ -628,20 +610,20 @@ func (store *txnStore) GetObject(id *common.ID) (obj handle.Object, err error) {
 	return db.GetObject(id)
 }
 
-func (store *txnStore) CreateObject(dbId, tid uint64, is1PC bool) (obj handle.Object, err error) {
+func (store *txnStore) CreateObject(dbId, tid uint64) (obj handle.Object, err error) {
 	var db *txnDB
 	if db, err = store.getOrSetDB(dbId); err != nil {
 		return
 	}
-	return db.CreateObject(tid, is1PC)
+	return db.CreateObject(tid)
 }
 
-func (store *txnStore) CreateNonAppendableObject(dbId, tid uint64, is1PC bool, opt *objectio.CreateObjOpt) (obj handle.Object, err error) {
+func (store *txnStore) CreateNonAppendableObject(dbId, tid uint64, opt *objectio.CreateObjOpt) (obj handle.Object, err error) {
 	var db *txnDB
 	if db, err = store.getOrSetDB(dbId); err != nil {
 		return
 	}
-	return db.CreateNonAppendableObject(tid, is1PC, opt)
+	return db.CreateNonAppendableObject(tid, opt)
 }
 
 func (store *txnStore) getOrSetDB(id uint64) (db *txnDB, err error) {
@@ -673,47 +655,6 @@ func (store *txnStore) UpdateObjectStats(id *common.ID, stats *objectio.ObjectSt
 	}
 	db.UpdateObjectStats(id, stats)
 	return nil
-}
-
-func (store *txnStore) CreateNonAppendableBlock(id *common.ID, opts *objectio.CreateBlockOpt) (blk handle.Block, err error) {
-	var db *txnDB
-	if db, err = store.getOrSetDB(id.DbID); err != nil {
-		return
-	}
-	perfcounter.Update(store.ctx, func(counter *perfcounter.CounterSet) {
-		counter.TAE.Block.CreateNonAppendable.Add(1)
-	})
-	return db.CreateNonAppendableBlock(id, opts)
-}
-
-func (store *txnStore) GetBlock(id *common.ID) (blk handle.Block, err error) {
-	var db *txnDB
-	if db, err = store.getOrSetDB(id.DbID); err != nil {
-		return
-	}
-	return db.GetBlock(id)
-}
-
-func (store *txnStore) CreateBlock(id *common.ID, is1PC bool) (blk handle.Block, err error) {
-	var db *txnDB
-	if db, err = store.getOrSetDB(id.DbID); err != nil {
-		return
-	}
-	perfcounter.Update(store.ctx, func(counter *perfcounter.CounterSet) {
-		counter.TAE.Block.Create.Add(1)
-	})
-	return db.CreateBlock(id, is1PC)
-}
-
-func (store *txnStore) SoftDeleteBlock(id *common.ID) (err error) {
-	var db *txnDB
-	if db, err = store.getOrSetDB(id.DbID); err != nil {
-		return
-	}
-	perfcounter.Update(store.ctx, func(counter *perfcounter.CounterSet) {
-		counter.TAE.Block.SoftDelete.Add(1)
-	})
-	return db.SoftDeleteBlock(id)
 }
 
 func (store *txnStore) SoftDeleteObject(id *common.ID) (err error) {
@@ -839,11 +780,6 @@ func (store *txnStore) PrepareWAL() (err error) {
 	}
 
 	t1 := time.Now()
-	for _, db := range store.dbs {
-		if err = db.Apply1PCCommit(); err != nil {
-			return
-		}
-	}
 	t2 := time.Now()
 	if t2.Sub(t1) > time.Millisecond*500 {
 		logutil.Warn(

@@ -24,6 +24,8 @@ import "metadata.proto";
 import "lock.proto";
 
 option (gogoproto.goproto_enum_prefix_all) = true;
+option (gogoproto.sizer_all) = false;
+option (gogoproto.protosizer_all) = true;
 
 // TxnIsolation txn txn isolation
 enum TxnIsolation {
@@ -373,4 +375,6 @@ message TxnOptions {
     bool inRunSql = 11;
     bool inCommit = 12;
     bool inRollback = 13;
+    bool byBegin = 14;//created by the BEGIN statement
+    bool autocommit = 15;//AUTOCOMMIT
 }

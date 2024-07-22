@@ -35,7 +35,7 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 		return nil, err
 	}
 	// new logic
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 	queryBindCtx := NewBindContext(builder, nil)
 	lastNodeId, updatePlanCtxs, err := selectUpdateTables(builder, queryBindCtx, stmt, tblInfo)
 	if err != nil {
@@ -72,7 +72,7 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 
 		updateBindCtx := NewBindContext(builder, nil)
 		beginIdx = beginIdx + upPlanCtx.updateColLength + len(tableDef.Cols)
-		err = buildUpdatePlans(ctx, builder, updateBindCtx, upPlanCtx)
+		err = buildUpdatePlans(ctx, builder, updateBindCtx, upPlanCtx, false)
 		if err != nil {
 			return nil, err
 		}
@@ -90,6 +90,7 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 	query.DetectSqls = detectSqls
 	reduceSinkSinkScanNodes(query)
 	ReCalcQueryStats(builder, query)
+	reCheckifNeedLockWholeTable(builder)
 	query.StmtType = plan.Query_UPDATE
 	return &Plan{
 		Plan: &plan.Plan_Query{
@@ -130,9 +131,16 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 				if err != nil {
 					return err
 				}
-				lastNode.ProjectList[pos], err = forceCastExpr(builder.GetContext(), posExpr, col.Typ)
-				if err != nil {
-					return err
+				if col != nil && col.Typ.Id == int32(types.T_enum) {
+					lastNode.ProjectList[pos], err = funcCastForEnumType(builder.GetContext(), posExpr, col.Typ)
+					if err != nil {
+						return err
+					}
+				} else {
+					lastNode.ProjectList[pos], err = forceCastExpr(builder.GetContext(), posExpr, col.Typ)
+					if err != nil {
+						return err
+					}
 				}
 
 			} else {
@@ -141,9 +149,16 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 					lastNode.ProjectList[pos] = col.OnUpdate.Expr
 				}
 
-				lastNode.ProjectList[pos], err = forceCastExpr(builder.GetContext(), lastNode.ProjectList[pos], col.Typ)
-				if err != nil {
-					return err
+				if col != nil && col.Typ.Id == int32(types.T_enum) {
+					lastNode.ProjectList[pos], err = funcCastForEnumType(builder.GetContext(), lastNode.ProjectList[pos], col.Typ)
+					if err != nil {
+						return err
+					}
+				} else {
+					lastNode.ProjectList[pos], err = forceCastExpr(builder.GetContext(), lastNode.ProjectList[pos], col.Typ)
+					if err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -171,7 +186,7 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 		// append  table.* to project list
 		rowIdPos := -1
 		for idx, col := range tableDef.Cols {
-			e, _ := tree.NewUnresolvedName(builder.GetContext(), alias, col.Name)
+			e := tree.NewUnresolvedName(tree.NewCStr(alias, bindCtx.lower), tree.NewCStr(col.Name, 1))
 			selectList = append(selectList, tree.SelectExpr{
 				Expr: e,
 			})
@@ -206,13 +221,13 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 					}
 					if updateKeyExpr.Typ.Id >= 20 && updateKeyExpr.Typ.Id <= 29 {
 						updateKey = &tree.FuncExpr{
-							Func:  tree.FuncName2ResolvableFunctionReference(tree.SetUnresolvedName(moEnumCastIndexValueToIndexFun)),
+							Func:  tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName(moEnumCastIndexValueToIndexFun)),
 							Type:  tree.FUNC_TYPE_DEFAULT,
 							Exprs: exprs,
 						}
 					} else {
 						updateKey = &tree.FuncExpr{
-							Func:  tree.FuncName2ResolvableFunctionReference(tree.SetUnresolvedName(moEnumCastValueToIndexFun)),
+							Func:  tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName(moEnumCastValueToIndexFun)),
 							Type:  tree.FUNC_TYPE_DEFAULT,
 							Exprs: exprs,
 						}
@@ -230,7 +245,7 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 		}
 
 		// we don't known if update pk if tableDef.Pkey is nil. just set true and let check pk dup work
-		updatePkCol = tableDef.Pkey == nil || updatePkColCount > 0
+		updatePkCol = updatePkColCount > 0
 
 		// append  table.* to project list
 		upPlanCtx := getDmlPlanCtx()

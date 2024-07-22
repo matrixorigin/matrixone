@@ -36,7 +36,7 @@ const (
 
 // add unit tests for cases
 type orderTestCase struct {
-	arg   *Argument
+	arg   *Order
 	types []types.Type
 	proc  *process.Process
 }
@@ -72,17 +72,27 @@ func TestOrder(t *testing.T) {
 	for _, tc := range tcs {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-
 		bats := []*batch.Batch{
-			newBatch(t, tc.types, tc.proc, Rows),
-			newBatch(t, tc.types, tc.proc, Rows),
+			newBatch(tc.types, tc.proc, Rows),
+			newBatch(tc.types, tc.proc, Rows),
 			batch.EmptyBatch,
 		}
 		resetChildren(tc.arg, bats)
 		_, _ = tc.arg.Call(tc.proc)
-
-		tc.arg.Free(tc.proc, false, nil)
 		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
+		tc.arg.Reset(tc.proc, false, nil)
+
+		err = tc.arg.Prepare(tc.proc)
+		require.NoError(t, err)
+		bats = []*batch.Batch{
+			newBatch(tc.types, tc.proc, Rows),
+			newBatch(tc.types, tc.proc, Rows),
+			batch.EmptyBatch,
+		}
+		resetChildren(tc.arg, bats)
+		_, _ = tc.arg.Call(tc.proc)
+		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
+		tc.arg.Free(tc.proc, false, nil)
 		tc.proc.FreeVectors()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
@@ -100,8 +110,8 @@ func BenchmarkOrder(b *testing.B) {
 			require.NoError(t, err)
 
 			bats := []*batch.Batch{
-				newBatch(t, tc.types, tc.proc, BenchmarkRows),
-				newBatch(t, tc.types, tc.proc, BenchmarkRows),
+				newBatch(tc.types, tc.proc, BenchmarkRows),
+				newBatch(tc.types, tc.proc, BenchmarkRows),
 				batch.EmptyBatch,
 			}
 			resetChildren(tc.arg, bats)
@@ -115,8 +125,8 @@ func BenchmarkOrder(b *testing.B) {
 func newTestCase(ts []types.Type, fs []*plan.OrderBySpec) orderTestCase {
 	return orderTestCase{
 		types: ts,
-		proc:  testutil.NewProcessWithMPool(mpool.MustNewZero()),
-		arg: &Argument{
+		proc:  testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+		arg: &Order{
 			OrderBySpec: fs,
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
@@ -143,16 +153,18 @@ func newExpression(pos int32) *plan.Expr {
 }
 
 // create a new block based on the type information
-func newBatch(t *testing.T, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
+func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
 
-func resetChildren(arg *Argument, bats []*batch.Batch) {
+func resetChildren(arg *Order, bats []*batch.Batch) {
+	valueScanArg := &value_scan.ValueScan{
+		Batchs: bats,
+	}
+	valueScanArg.Prepare(nil)
 	arg.SetChildren(
 		[]vm.Operator{
-			&value_scan.Argument{
-				Batchs: bats,
-			},
+			valueScanArg,
 		})
 	arg.ctr.state = vm.Build
 }

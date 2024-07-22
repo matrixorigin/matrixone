@@ -35,8 +35,9 @@ import (
 )
 
 var (
-	stateRunning = int32(0)
-	stateStopped = int32(1)
+	stateRunning  = int32(0)
+	stateStopping = int32(1)
+	stateStopped  = int32(2)
 
 	backendClosed  = moerr.NewBackendClosedNoCtx()
 	messageSkipped = moerr.NewInvalidStateNoCtx("request is skipped")
@@ -132,6 +133,14 @@ func WithBackendFreeOrphansResponse(value func(Message)) BackendOption {
 	}
 }
 
+// WithDisconnectAfterRead used for testing. Close the connection
+// after read N messages.
+func WithDisconnectAfterRead(n int) BackendOption {
+	return func(rb *remoteBackend) {
+		rb.options.disconnectAfterRead = n
+	}
+}
+
 type remoteBackend struct {
 	remote       string
 	metrics      *metrics
@@ -151,16 +160,17 @@ type remoteBackend struct {
 	lastPingTime time.Time
 
 	options struct {
-		hasPayloadResponse bool
-		goettyOptions      []goetty.Option
-		connectTimeout     time.Duration
-		bufferSize         int
-		busySize           int
-		batchSendSize      int
-		streamBufferSize   int
-		filter             func(msg Message, backendAddr string) bool
-		readTimeout        time.Duration
-		freeResponse       func(Message)
+		hasPayloadResponse  bool
+		goettyOptions       []goetty.Option
+		connectTimeout      time.Duration
+		bufferSize          int
+		busySize            int
+		batchSendSize       int
+		streamBufferSize    int
+		disconnectAfterRead int
+		filter              func(msg Message, backendAddr string) bool
+		readTimeout         time.Duration
+		freeResponse        func(Message)
 	}
 
 	stateMu struct {
@@ -318,7 +328,7 @@ func (rb *remoteBackend) NewStream(unlockAfterClose bool) (Stream, error) {
 	rb.stateMu.RLock()
 	defer rb.stateMu.RUnlock()
 
-	if rb.stateMu.state == stateStopped {
+	if rb.stateMu.state != stateRunning {
 		return nil, backendClosed
 	}
 
@@ -341,7 +351,7 @@ func (rb *remoteBackend) doSend(f *Future) error {
 
 	for {
 		rb.stateMu.RLock()
-		if rb.stateMu.state == stateStopped {
+		if rb.stateMu.state != stateRunning {
 			rb.stateMu.RUnlock()
 			return backendClosed
 		}
@@ -423,6 +433,14 @@ func (rb *remoteBackend) inactive() {
 	rb.atomic.lastActiveTime.Store(time.Time{})
 }
 
+func (rb *remoteBackend) changeToStopping() {
+	rb.stateMu.Lock()
+	defer rb.stateMu.Unlock()
+	if rb.stateMu.state == stateRunning {
+		rb.stateMu.state = stateStopping
+	}
+}
+
 func (rb *remoteBackend) writeLoop(ctx context.Context) {
 	rb.logger.Debug("write loop started")
 	defer func() {
@@ -449,16 +467,8 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 	rb.pingTimer = time.NewTimer(rb.getPingTimeout())
 	messages := make([]*Future, 0, rb.options.batchSendSize)
 	stopped := false
-	lastScheduleTime := time.Now()
 	for {
 		messages, stopped = rb.fetch(messages, rb.options.batchSendSize)
-		interval := time.Since(lastScheduleTime)
-		if rb.options.readTimeout > 0 && interval > time.Second*5 {
-			getLogger().Warn("system is busy, write loop schedule interval is too large",
-				zap.Duration("interval", interval),
-				zap.Time("last-ping-trigger-time", rb.lastPingTime),
-				zap.Duration("ping-interval", rb.getPingTimeout()))
-		}
 		if len(messages) > 0 {
 			rb.metrics.sendingBatchSizeGauge.Set(float64(len(messages)))
 			start := time.Now()
@@ -502,7 +512,6 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 		if stopped {
 			return
 		}
-		lastScheduleTime = time.Now()
 	}
 }
 
@@ -561,6 +570,7 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 		}
 	}()
 
+	n := 0
 	for {
 		select {
 		case <-ctx.Done():
@@ -568,7 +578,8 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 			return
 		default:
 			msg, err := rb.conn.Read(goetty.ReadOptions{Timeout: rb.options.readTimeout})
-			if err != nil {
+			n++
+			if err != nil || rb.options.disconnectAfterRead == n {
 				rb.logger.Error("read from backend failed", zap.Error(err))
 				rb.inactiveReadLoop()
 				rb.cancelActiveStreams()
@@ -583,7 +594,7 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 				wg.Add(1)
 			}
 			resp := msg.(RPCMessage).Message
-			rb.metrics.inputBytesCounter.Add(float64(resp.Size()))
+			rb.metrics.inputBytesCounter.Add(float64(resp.ProtoSize()))
 			rb.requestDone(ctx, resp.GetID(), msg.(RPCMessage), nil, cb)
 			if rb.options.hasPayloadResponse {
 				wg.Wait()
@@ -629,7 +640,10 @@ func (rb *remoteBackend) fetch(messages []*Future, maxFetchCount int) ([]*Future
 		// If the connect needs to be reset, then all futures in the waiting response state will never
 		// get the response and need to be notified of an error immediately.
 		rb.makeAllWaitingFutureFailed()
-		rb.handleResetConn()
+		if err := rb.handleResetConn(); err != nil {
+			rb.changeToStopping()
+			return nil, true
+		}
 	case <-rb.stopWriteC:
 		return rb.fetchN(messages, math.MaxInt), true
 	}
@@ -685,11 +699,13 @@ func (rb *remoteBackend) makeAllWaitingFutureFailed() {
 	}
 }
 
-func (rb *remoteBackend) handleResetConn() {
+func (rb *remoteBackend) handleResetConn() error {
 	if err := rb.resetConn(); err != nil {
 		rb.logger.Error("fail to reset backend connection", zap.Error(err))
 		rb.inactive()
+		return err
 	}
+	return nil
 }
 
 func (rb *remoteBackend) doClose() {
@@ -859,14 +875,14 @@ func (rb *remoteBackend) resetConn() error {
 			zap.Error(err))
 
 		if !canRetry {
-			return err
+			return moerr.NewBackendCannotConnectNoCtx(err)
 		}
 		duration := time.Duration(0)
 		for {
 			time.Sleep(sleep)
 			duration += sleep
 			if time.Since(start) > rb.options.connectTimeout {
-				return moerr.NewBackendCannotConnectNoCtx()
+				return moerr.NewRPCTimeoutNoCtx()
 			}
 			select {
 			case <-rb.ctx.Done():
@@ -1068,6 +1084,7 @@ func (s *stream) Send(ctx context.Context, request Message) error {
 	s.mu.RLock()
 	if s.mu.closed {
 		s.mu.RUnlock()
+		s.rb.logger.Warn("stream is closed on send", zap.Uint64("stream-id", s.id))
 		return moerr.NewStreamClosedNoCtx()
 	}
 
@@ -1105,6 +1122,7 @@ func (s *stream) Receive() (chan Message, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.mu.closed {
+		s.rb.logger.Warn("stream is closed on receive", zap.Uint64("stream-id", s.id))
 		return nil, moerr.NewStreamClosedNoCtx()
 	}
 	return s.c, nil
@@ -1112,6 +1130,7 @@ func (s *stream) Receive() (chan Message, error) {
 
 func (s *stream) Close(closeConn bool) error {
 	if closeConn {
+		s.rb.logger.Info("stream call closed on client", zap.Uint64("stream-id", s.id))
 		s.rb.Close()
 	}
 	s.mu.Lock()
@@ -1154,6 +1173,8 @@ func (s *stream) done(
 	}
 	if response != nil &&
 		message.streamSequence != s.lastReceivedSequence+1 {
+		s.rb.logger.Warn("sequence out of order", zap.Uint32("new", message.streamSequence),
+			zap.Uint32("last", s.lastReceivedSequence))
 		response = nil
 	}
 

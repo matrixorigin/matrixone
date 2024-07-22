@@ -303,7 +303,7 @@ func SetInsertValue(proc *process.Process, numVal *tree.NumVal, vec *vector.Vect
 	case types.T_timestamp:
 		return setInsertValueTimeStamp(proc, numVal, vec)
 	case types.T_enum:
-		return setInsertValueNumber[types.Enum](proc, numVal, vec)
+		return false, nil
 	}
 
 	return false, nil
@@ -360,7 +360,7 @@ func setInsertValueTimeStamp(proc *process.Process, numVal *tree.NumVal, vec *ve
 			var val types.Timestamp
 			zone := time.Local
 			if proc != nil {
-				zone = proc.SessionInfo.TimeZone
+				zone = proc.GetSessionInfo().TimeZone
 			}
 			val, err = types.ParseTimestamp(zone, s, typ.Scale)
 			if err != nil {

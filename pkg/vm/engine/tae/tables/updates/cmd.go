@@ -184,11 +184,11 @@ func (c *UpdateCmd) GetCurrentVersion() uint16 {
 func (c *UpdateCmd) ApplyCommit() {
 	switch c.cmdType {
 	case IOET_WALTxnCommand_AppendNode:
-		if _, err := c.append.TxnMVCCNode.ApplyCommit(); err != nil {
+		if _, err := c.append.TxnMVCCNode.ApplyCommit(c.append.Txn.GetID()); err != nil {
 			panic(err)
 		}
 	case IOET_WALTxnCommand_DeleteNode, IOET_WALTxnCommand_PersistedDeleteNode:
-		if _, err := c.delete.TxnMVCCNode.ApplyCommit(); err != nil {
+		if _, err := c.delete.TxnMVCCNode.ApplyCommit(c.delete.Txn.GetID()); err != nil {
 			panic(err)
 		}
 	default:

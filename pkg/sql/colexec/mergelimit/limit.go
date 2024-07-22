@@ -19,76 +19,93 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "merge_limit"
+const opName = "merge_limit"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
-	ap := arg
-	buf.WriteString(fmt.Sprintf("mergeLimit(%d)", ap.Limit))
+func (mergeLimit *MergeLimit) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
+	ap := mergeLimit
+	buf.WriteString(fmt.Sprintf("mergeLimit(%v)", ap.Limit))
 }
 
-func (arg *Argument) Prepare(proc *process.Process) error {
-	ap := arg
-	ap.ctr = new(container)
-	ap.ctr.seen = 0
-	ap.ctr.InitReceiver(proc, true)
+func (mergeLimit *MergeLimit) OpType() vm.OpType {
+	return vm.MergeLimit
+}
+
+func (mergeLimit *MergeLimit) Prepare(proc *process.Process) error {
+	mergeLimit.ctr = new(container)
+	mergeLimit.ctr.seen = 0
+	mergeLimit.ctr.InitReceiver(proc, true)
+	var err error
+	if mergeLimit.ctr.limitExecutor == nil {
+		mergeLimit.ctr.limitExecutor, err = colexec.NewExpressionExecutor(proc, mergeLimit.Limit)
+		if err != nil {
+			return err
+		}
+	}
+	vec, err := mergeLimit.ctr.limitExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+	if err != nil {
+		return err
+	}
+	mergeLimit.ctr.limit = uint64(vector.MustFixedCol[uint64](vec)[0])
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (mergeLimit *MergeLimit) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze(mergeLimit.GetIdx(), mergeLimit.GetParallelIdx(), mergeLimit.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 
 	result := vm.NewCallResult()
-	var end bool
-	var err error
-	if arg.buf != nil {
-		proc.PutBatch(arg.buf)
-		arg.buf = nil
+	var msg *process.RegisterMessage
+	if mergeLimit.ctr.buf != nil {
+		proc.PutBatch(mergeLimit.ctr.buf)
+		mergeLimit.ctr.buf = nil
 	}
 
 	for {
-		arg.buf, end, err = arg.ctr.ReceiveFromAllRegs(anal)
-		if err != nil {
+		msg = mergeLimit.ctr.ReceiveFromAllRegs(anal)
+		if msg.Err != nil {
 			result.Status = vm.ExecStop
-			return result, nil
+			return result, msg.Err
 		}
-		if end {
+		if msg.Batch == nil {
 			result.Batch = nil
 			result.Status = vm.ExecStop
 			return result, nil
 		}
-		if arg.buf.Last() {
-			result.Batch = arg.buf
+		mergeLimit.ctr.buf = msg.Batch
+		if mergeLimit.ctr.buf.Last() {
+			result.Batch = mergeLimit.ctr.buf
 			return result, nil
 		}
 
-		anal.Input(arg.buf, arg.GetIsFirst())
-		if arg.ctr.seen >= arg.Limit {
-			proc.PutBatch(arg.buf)
+		anal.Input(mergeLimit.ctr.buf, mergeLimit.GetIsFirst())
+		if mergeLimit.ctr.seen >= mergeLimit.ctr.limit {
+			proc.PutBatch(mergeLimit.ctr.buf)
 			continue
 		}
-		newSeen := arg.ctr.seen + uint64(arg.buf.RowCount())
-		if newSeen < arg.Limit {
-			arg.ctr.seen = newSeen
-			anal.Output(arg.buf, arg.GetIsLast())
-			result.Batch = arg.buf
+		newSeen := mergeLimit.ctr.seen + uint64(mergeLimit.ctr.buf.RowCount())
+		if newSeen < mergeLimit.ctr.limit {
+			mergeLimit.ctr.seen = newSeen
+			anal.Output(mergeLimit.ctr.buf, mergeLimit.GetIsLast())
+			result.Batch = mergeLimit.ctr.buf
 			return result, nil
 		} else {
-			num := int(newSeen - arg.Limit)
-			batch.SetLength(arg.buf, arg.buf.RowCount()-num)
-			arg.ctr.seen = newSeen
-			anal.Output(arg.buf, arg.GetIsLast())
-			result.Batch = arg.buf
+			num := int(newSeen - mergeLimit.ctr.limit)
+			batch.SetLength(mergeLimit.ctr.buf, mergeLimit.ctr.buf.RowCount()-num)
+			mergeLimit.ctr.seen = newSeen
+			anal.Output(mergeLimit.ctr.buf, mergeLimit.GetIsLast())
+			result.Batch = mergeLimit.ctr.buf
 			return result, nil
 		}
 	}

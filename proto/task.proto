@@ -18,12 +18,15 @@
  package task; 
  option go_package = "github.com/matrixorigin/matrixone/pkg/pb/task";
  
- import "github.com/gogo/protobuf/gogoproto/gogo.proto";
+import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 import "google/protobuf/timestamp.proto";
 import "metadata.proto";
 
- option (gogoproto.goproto_enum_prefix_all) = true;
- 
+option (gogoproto.goproto_enum_prefix_all) = true;
+option (gogoproto.sizer_all) = false;
+option (gogoproto.protosizer_all) = true;
+
+
  // TaskStatus task status
  enum TaskStatus {
      // Create is the state of waiting to be scheduled.
@@ -61,6 +64,8 @@ import "metadata.proto";
    MetricStorageUsage = 3;
    // ConnectorKafkaSink is for the streaming connector task.
    ConnectorKafkaSink = 4;
+   // MergeObject is for the merge object task.
+   MergeObject = 5;
  }
  
  // TaskMetadata is a task metadata abstraction that can be scheduled for execution at any CN node.

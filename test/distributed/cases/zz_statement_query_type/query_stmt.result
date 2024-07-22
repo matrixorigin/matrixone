@@ -1,0 +1,20 @@
+select status, err_code, error from system.statement_info where account = 'bvt_query_stmt' and statement in ('use bvt_query_stmt', 'select syntax error stmt', '/*issue_8168*/use bvt_query_stmt') and status != 'Running' order by request_at desc limit 3;
+status    err_code    error
+Success    0    
+Failed    20303    SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 57 near " stmt;";
+Failed    20303    SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 57 near " stmt;";
+select /*case 2*/ account from system.statement_info where statement = 'create table bvt_query_stmt (i int)' order by request_at desc limit 1;
+account
+bvt_query_stmt
+select /*case 3*/ account, statement from system.statement_info where statement = 'insert into bvt_query_stmt values (1)' order by request_at desc limit 1;
+account    statement
+bvt_query_stmt    insert into bvt_query_stmt values (1)
+select /*case 4*/ statement from system.statement_info where statement_type in ('Create User', 'Create Table', 'Select') and account = 'bvt_query_stmt' order by request_at desc limit 4;
+statement
+create user u identified by '******'
+create user if not exists abc1 identified by '******', abc2 identified by '******', abc3 identified by '******', abc3 identified by '******'
+create external table t (a int) URL s3option{'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'}
+select 1
+select IF(span_kind="internal", 1, IF(span_kind="statement", 1, IF(span_kind="session", 1, IF(span_kind="remote", 1, 0)))) as exist from system.rawlog where `raw_item` = "log_info" limit 1;
+exist
+1

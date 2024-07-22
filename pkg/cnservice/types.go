@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -41,7 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
@@ -76,7 +77,6 @@ type Service interface {
 	GetTaskService() (taskservice.TaskService, bool)
 	GetSQLExecutor() executor.SQLExecutor
 	GetBootstrapService() bootstrap.Service
-	WaitSystemInitCompleted(ctx context.Context) error
 }
 
 type EngineType string
@@ -179,6 +179,9 @@ type Config struct {
 	// LockService lockservice
 	LockService lockservice.Config `toml:"lockservice"`
 
+	// ShardService shard service config
+	ShardService shardservice.Config `toml:"shardservice"`
+
 	// Txn txn config
 	Txn struct {
 		// Isolation txn isolation. SI or RC
@@ -240,6 +243,10 @@ type Config struct {
 			BufferSize    int           `toml:"buffer-size"`
 			FlushBytes    toml.ByteSize `toml:"flush-bytes"`
 			FlushDuration toml.Duration `toml:"force-flush-duration"`
+			Dir           string        `toml:"dir"`
+			Enable        bool          `toml:"enable"`
+			Tables        []uint64      `toml:"tables"`
+			LoadToMO      bool          `toml:"load-to-mo"`
 		} `toml:"trace"`
 	} `toml:"txn"`
 
@@ -252,6 +259,9 @@ type Config struct {
 	// PrimaryKeyCheck
 	PrimaryKeyCheck bool `toml:"primary-key-check"`
 
+	// LargestEntryLimit is the max size for reading file to buf
+	LargestEntryLimit int `toml:"largest-entry-limit"`
+
 	// MaxPreparedStmtCount
 	MaxPreparedStmtCount int `toml:"max_prepared_stmt_count"`
 
@@ -261,9 +271,13 @@ type Config struct {
 
 	PythonUdfClient pythonservice.ClientConfig `toml:"python-udf-client"`
 
-	// LogtailUpdateStatsThreshold is the number that logtail entries received
-	// to trigger stats updating.
-	LogtailUpdateStatsThreshold int `toml:"logtail-update-stats-threshold"`
+	// LogtailUpdateWorkerFactor is the times of CPU number of this node
+	// to start update workers.
+	LogtailUpdateWorkerFactor int `toml:"logtail-update-worker-factor"`
+
+	// Whether to automatically upgrade when system startup
+	AutomaticUpgrade       bool `toml:"auto-upgrade"`
+	UpgradeTenantBatchSize int  `toml:"upgrade-tenant-batch"`
 }
 
 func (c *Config) Validate() error {
@@ -381,9 +395,13 @@ func (c *Config) Validate() error {
 
 	// pessimistic mode implies primary key check
 	if txn.GetTxnMode(c.Txn.Mode) == txn.TxnMode_Pessimistic || c.PrimaryKeyCheck {
-		plan.CNPrimaryCheck = true
+		config.CNPrimaryCheck = true
 	} else {
-		plan.CNPrimaryCheck = false
+		config.CNPrimaryCheck = false
+	}
+
+	if c.LargestEntryLimit > 0 {
+		config.LargestEntryLimit = c.LargestEntryLimit
 	}
 
 	if c.MaxPreparedStmtCount > 0 {
@@ -403,13 +421,19 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	if c.LogtailUpdateWorkerFactor == 0 {
+		c.LogtailUpdateWorkerFactor = 4
+	}
+
 	if !metadata.ValidStateString(c.InitWorkState) {
 		c.InitWorkState = metadata.WorkState_Working.String()
 	}
 
 	// TODO: remove this if rc is stable
-	moruntime.ProcessLevelRuntime().SetGlobalVariables(moruntime.EnableCheckInvalidRCErrors,
-		c.Txn.EnableCheckRCInvalidError)
+	moruntime.ServiceRuntime(c.UUID).SetGlobalVariables(
+		moruntime.EnableCheckInvalidRCErrors,
+		c.Txn.EnableCheckRCInvalidError,
+	)
 	return nil
 }
 
@@ -518,9 +542,9 @@ func (c *Config) SetDefaultValue() {
 		c.Txn.MaxActive = runtime.NumCPU() * 4
 	}
 	c.Txn.NormalStateNoWait = false
-	c.LockService.ServiceID = "temp"
-	c.LockService.Validate()
 	c.LockService.ServiceID = c.UUID
+
+	c.ShardService.ServiceID = c.UUID
 
 	c.QueryServiceConfig.Adjust(foundMachineHost, defaultQueryServiceListenAddress)
 
@@ -534,6 +558,12 @@ func (c *Config) SetDefaultValue() {
 		c.InitWorkState = metadata.WorkState_Working.String()
 	}
 
+	if c.UpgradeTenantBatchSize <= 0 {
+		c.UpgradeTenantBatchSize = 16
+	} else if c.UpgradeTenantBatchSize >= 32 {
+		c.UpgradeTenantBatchSize = 32
+	}
+
 	c.Frontend.SetDefaultValues()
 }
 
@@ -541,7 +571,24 @@ func (s *service) getLockServiceConfig() lockservice.Config {
 	s.cfg.LockService.ServiceID = s.cfg.UUID
 	s.cfg.LockService.RPC = s.cfg.RPC
 	s.cfg.LockService.ListenAddress = s.lockServiceListenAddr()
+	s.cfg.LockService.TxnIterFunc = func(f func([]byte) bool) {
+		tc := s._txnClient
+		if tc == nil {
+			return
+		}
+
+		tc.IterTxns(func(to client.TxnOverview) bool {
+			return f(to.Meta.ID)
+		})
+	}
 	return s.cfg.LockService
+}
+
+func (s *service) getShardServiceConfig() shardservice.Config {
+	s.cfg.ShardService.ServiceID = s.cfg.UUID
+	s.cfg.ShardService.RPC = s.cfg.RPC
+	s.cfg.ShardService.ListenAddress = s.shardServiceListenAddr()
+	return s.cfg.ShardService
 }
 
 type service struct {
@@ -580,6 +627,7 @@ type service struct {
 	pu                     *config.ParameterUnit
 	moCluster              clusterservice.MOCluster
 	lockService            lockservice.LockService
+	shardService           shardservice.ShardService
 	sqlExecutor            executor.SQLExecutor
 	sessionMgr             *queryservice.SessionManager
 	// queryService is used to handle query request from other CN service.
@@ -589,10 +637,10 @@ type service struct {
 	// udfService is used to handle non-sql udf
 	udfService       udf.Service
 	bootstrapService bootstrap.Service
+	incrservice      incrservice.AutoIncrementService
 
-	stopper     *stopper.Stopper
-	aicm        *defines.AutoIncrCacheManager
-	upgradeOnce sync.Once
+	stopper *stopper.Stopper
+	aicm    *defines.AutoIncrCacheManager
 
 	task struct {
 		sync.RWMutex
@@ -615,6 +663,7 @@ type service struct {
 		// counter recording the total number of running pipelines,
 		// details are not recorded for simplicity as suggested by @nnsgmsone
 		counter atomic.Int64
+		client  cnclient.PipelineClient
 	}
 }
 

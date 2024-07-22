@@ -39,63 +39,49 @@ func mockResultSet() *MysqlResultSet {
 	return set
 }
 
-type miniExec struct {
-	sess *Session
-}
-
-func (e *miniExec) doComQuery(context.Context, *UserInput) error {
-	_ = e.sess.GetMysqlProtocol()
-	return nil
-}
-func (e *miniExec) SetSession(sess *Session) {
-	e.sess = sess
-}
-
 func TestIe(t *testing.T) {
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			ctx := context.TODO()
+			pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+			setGlobalPu(pu)
+			executor := newIe(sid)
+			executor.ApplySessionOverride(ie.NewOptsBuilder().Username("dump").Finish())
+			sess := executor.newCmdSession(ctx, ie.NewOptsBuilder().Database("mo_catalog").Internal(true).Finish())
+			assert.Equal(t, "dump", sess.GetResponser().GetStr(USERNAME))
 
-	ctx := context.TODO()
-	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-
-	// Mock autoIncrCaches
-	aicm := &defines.AutoIncrCacheManager{}
-
-	executor := newIe(pu, &miniExec{}, aicm)
-	executor.ApplySessionOverride(ie.NewOptsBuilder().Username("dump").Finish())
-	sess := executor.newCmdSession(ctx, ie.NewOptsBuilder().Database("mo_catalog").Internal(true).Finish())
-	assert.Equal(t, "dump", sess.GetMysqlProtocol().GetUserName())
-
-	err := executor.Exec(ctx, "whatever", ie.NewOptsBuilder().Finish())
-	assert.NoError(t, err)
-	res := executor.Query(ctx, "whatever", ie.NewOptsBuilder().Finish())
-	assert.NoError(t, err)
-	assert.Equal(t, uint64(0), res.RowCount())
+			err := executor.Exec(ctx, "whatever", ie.NewOptsBuilder().Finish())
+			assert.Error(t, err)
+			res := executor.Query(ctx, "whatever", ie.NewOptsBuilder().Finish())
+			assert.Error(t, err)
+			assert.Equal(t, uint64(0), res.RowCount())
+		},
+	)
 }
 
 func TestIeProto(t *testing.T) {
-	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-
+	setGlobalPu(config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
 	// Mock autoIncrCaches
-	aicm := &defines.AutoIncrCacheManager{}
+	setGlobalAicm(&defines.AutoIncrCacheManager{})
 
-	executor := NewInternalExecutor(pu, aicm)
+	executor := NewInternalExecutor("")
 	p := executor.proto
 	assert.True(t, p.IsEstablished())
 	p.SetEstablished()
-	p.Quit()
+	p.Close()
 	p.ResetStatistics()
-	_ = p.GetStats()
 	_ = p.ConnectionID()
 	ctx := context.TODO()
-	assert.Panics(t, func() { p.GetRequest([]byte{1}) })
-	assert.Nil(t, p.SendColumnDefinitionPacket(ctx, nil, 1))
-	assert.Nil(t, p.SendColumnCountPacket(1))
-	assert.Nil(t, p.SendEOFPacketIf(0, 1))
-	assert.Nil(t, p.sendOKPacket(1, 1, 0, 0, ""))
-	assert.Nil(t, p.sendEOFOrOkPacket(0, 1))
+	assert.Nil(t, p.WriteColumnDef(ctx, nil, 1))
+	assert.Nil(t, p.WriteLengthEncodedNumber(1))
+	assert.Nil(t, p.WriteEOFIF(0, 1))
+	assert.Nil(t, p.WriteOK(1, 1, 0, 0, ""))
+	assert.Nil(t, p.WriteEOFOrOK(0, 1))
 
 	p.stashResult = true
-	p.SendResponse(ctx, &Response{
+	p.WriteResponse(ctx, &Response{
 		category:     OkResponse,
 		status:       0,
 		affectedRows: 1,
@@ -103,7 +89,7 @@ func TestIeProto(t *testing.T) {
 	})
 	assert.Nil(t, nil, p.result.resultSet)
 	assert.Equal(t, uint64(1), p.result.affectedRows)
-	p.SendResponse(ctx, &Response{
+	p.WriteResponse(ctx, &Response{
 		category: ResultResponse,
 		status:   0,
 		data: &MysqlExecutionResult{
@@ -115,18 +101,11 @@ func TestIeProto(t *testing.T) {
 	assert.Equal(t, 42, v.(int))
 
 	p.ResetStatistics()
-	assert.NoError(t, p.SendResultSetTextBatchRowSpeedup(mockResultSet(), 1))
+	assert.NoError(t, p.WriteResultSetRow(mockResultSet(), 1))
 	r := p.swapOutResult()
 	v, e := r.Value(ctx, 0, 0)
 	assert.NoError(t, e)
 	assert.Equal(t, 42, v.(int))
-	p.ResetStatistics()
-	assert.NoError(t, p.SendResultSetTextBatchRow(mockResultSet(), 1))
-	r = p.swapOutResult()
-	v, e = r.Value(ctx, 0, 0)
-	assert.NoError(t, e)
-	assert.Equal(t, 42, v.(int))
-	assert.Equal(t, uint64(1), r.affectedRows)
 	p.ResetStatistics()
 
 	r = p.swapOutResult()

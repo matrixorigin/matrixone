@@ -149,6 +149,31 @@ func getAccountCol(filepath string) string {
 }
 
 func getExternalStats(node *plan.Node, builder *QueryBuilder) *Stats {
+	externScan := node.ExternScan
+	if externScan != nil && externScan.Type == tree.INLINE {
+		totolSize := len(externScan.Data)
+		lineSize := float64(0.0)
+		if externScan.Format == tree.CSV {
+			lineSize = float64(strings.Index(externScan.Data, "\n"))
+		}
+
+		if externScan.Format == tree.JSONLINE {
+			lineSize = GetRowSizeFromTableDef(node.GetTableDef(), true) * 0.8
+		}
+
+		if lineSize > 0 {
+			cost := float64(totolSize) / lineSize
+			return &plan.Stats{
+				Outcnt:      cost,
+				Cost:        cost,
+				Rowsize:     lineSize,
+				Selectivity: 1,
+				TableCnt:    cost,
+				BlockNum:    int32(cost / float64(options.DefaultBlockMaxRows)),
+			}
+		}
+	}
+
 	param := &tree.ExternParam{}
 	err := json.Unmarshal([]byte(node.TableDef.Createsql), param)
 	if err != nil || param.Local || param.ScanType == tree.S3 {
@@ -165,7 +190,7 @@ func getExternalStats(node *plan.Node, builder *QueryBuilder) *Stats {
 		}
 	}
 
-	param.FileService = builder.compCtx.GetProcess().FileService
+	param.FileService = builder.compCtx.GetProcess().GetFileService()
 	param.Ctx = builder.compCtx.GetProcess().Ctx
 	_, spanReadDir := trace.Start(param.Ctx, "ReCalcNodeStats.ReadDir")
 	fileList, fileSize, err := ReadDir(param)
@@ -184,6 +209,11 @@ func getExternalStats(node *plan.Node, builder *QueryBuilder) *Stats {
 	var cost float64
 	for i := range fileSize {
 		cost += float64(fileSize[i])
+	}
+
+	//special handle for query result
+	if strings.HasPrefix(param.Filepath, "SHARED:/query_result/") {
+		return DefaultStats()
 	}
 
 	//read one line
@@ -213,6 +243,7 @@ func getExternalStats(node *plan.Node, builder *QueryBuilder) *Stats {
 	return &plan.Stats{
 		Outcnt:      cost,
 		Cost:        cost,
+		Rowsize:     float64(size),
 		Selectivity: 1,
 		TableCnt:    cost,
 		BlockNum:    int32(cost / float64(options.DefaultBlockMaxRows)),

@@ -801,6 +801,14 @@ func TestIssue11838(t *testing.T) {
 	)
 }
 
+func TestCannotChangeStoppedToStopping(t *testing.T) {
+	b := &remoteBackend{}
+	b.stateMu.state = stateStopped
+
+	b.changeToStopping()
+	require.Equal(t, stateStopped, b.stateMu.state)
+}
+
 func testBackendSend(t *testing.T,
 	handleFunc func(goetty.IOSession, interface{}, uint64) error,
 	testFunc func(b *remoteBackend),
@@ -977,7 +985,7 @@ func (tm *testMessage) DebugString() string {
 	return fmt.Sprintf("%d:%d", tm.id, len(tm.payload))
 }
 
-func (tm *testMessage) Size() int {
+func (tm *testMessage) ProtoSize() int {
 	return 8 + len(tm.payload)
 }
 
@@ -1005,7 +1013,11 @@ func (tm *testMessage) SetPayloadField(data []byte) {
 func newTestCodec(options ...CodecOption) Codec {
 	options = append(options,
 		WithCodecPayloadCopyBufferSize(1024))
-	return NewMessageCodec(func() Message { return messagePool.Get().(*testMessage) }, options...)
+	return NewMessageCodec(
+		"",
+		func() Message { return messagePool.Get().(*testMessage) },
+		options...,
+	)
 }
 
 var (

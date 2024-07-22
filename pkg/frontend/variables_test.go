@@ -16,8 +16,9 @@ package frontend
 
 import (
 	"fmt"
-	"github.com/stretchr/testify/assert"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 
 	"github.com/smartystreets/goconvey/convey"
 )
@@ -25,7 +26,7 @@ import (
 func TestScope(t *testing.T) {
 	convey.Convey("test scope", t, func() {
 		wanted := make(map[Scope]string)
-		for i := ScopeGlobal; i <= ScopeResetPersist; i++ {
+		for i := ScopeGlobal; i <= ScopeBoth; i++ {
 			wanted[i] = i.String()
 		}
 

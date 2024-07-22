@@ -122,7 +122,7 @@ const (
 //			atomic.AddUint64(&all, uint64(len(nodes)))
 //		}
 //	}
-//	idAlloc := common.NewIdAlloctor(1)
+//	idAlloc := common.NewIdAllocator(1)
 //	for {
 //		id := idAlloc.Alloc()
 //		if id > 10 {
@@ -528,9 +528,9 @@ func TestTransaction2(t *testing.T) {
 	assert.Nil(t, err)
 	t.Log(db.String())
 	assert.Equal(t, txn1.GetCommitTS(), db.GetMeta().(*catalog.DBEntry).GetCreatedAtLocked())
-	assert.True(t, db.GetMeta().(*catalog.DBEntry).IsCommitted())
+	assert.True(t, db.GetMeta().(*catalog.DBEntry).IsCommittedLocked())
 	assert.Equal(t, txn1.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).GetCreatedAtLocked())
-	assert.True(t, rel.GetMeta().(*catalog.TableEntry).IsCommitted())
+	assert.True(t, rel.GetMeta().(*catalog.TableEntry).IsCommittedLocked())
 
 	txn2, _ := mgr.StartTxn(nil)
 	get, err := txn2.GetDatabase(name)
@@ -610,7 +610,7 @@ func TestObject1(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err := db.CreateRelation(schema)
 	assert.Nil(t, err)
-	_, err = rel.CreateObject(false)
+	_, err = rel.CreateObject()
 	assert.Nil(t, err)
 	err = txn1.Commit(context.Background())
 	assert.Nil(t, err)
@@ -622,24 +622,22 @@ func TestObject1(t *testing.T) {
 	assert.Nil(t, err)
 	objIt := rel.MakeObjectIt()
 	cnt := 0
-	for objIt.Valid() {
+	for objIt.Next() {
 		iobj := objIt.GetObject()
 		t.Log(iobj.String())
 		cnt++
-		objIt.Next()
 	}
 	assert.Equal(t, 1, cnt)
 
-	_, err = rel.CreateObject(false)
+	_, err = rel.CreateObject()
 	assert.Nil(t, err)
 
 	objIt = rel.MakeObjectIt()
 	cnt = 0
-	for objIt.Valid() {
+	for objIt.Next() {
 		iobj := objIt.GetObject()
 		t.Log(iobj.String())
 		cnt++
-		objIt.Next()
 	}
 	assert.Equal(t, 2, cnt)
 
@@ -648,11 +646,10 @@ func TestObject1(t *testing.T) {
 	rel, _ = db.GetRelationByName(schema.Name)
 	objIt = rel.MakeObjectIt()
 	cnt = 0
-	for objIt.Valid() {
+	for objIt.Next() {
 		iobj := objIt.GetObject()
 		t.Log(iobj.String())
 		cnt++
-		objIt.Next()
 	}
 	assert.Equal(t, 1, cnt)
 
@@ -661,11 +658,10 @@ func TestObject1(t *testing.T) {
 
 	objIt = rel.MakeObjectIt()
 	cnt = 0
-	for objIt.Valid() {
+	for objIt.Next() {
 		iobj := objIt.GetObject()
 		t.Log(iobj.String())
 		cnt++
-		objIt.Next()
 	}
 	assert.Equal(t, 1, cnt)
 }
@@ -686,70 +682,20 @@ func TestObject2(t *testing.T) {
 	rel, _ := db.CreateRelation(schema)
 	objCnt := 10
 	for i := 0; i < objCnt; i++ {
-		_, err := rel.CreateObject(false)
+		_, err := rel.CreateObject()
 		assert.Nil(t, err)
 	}
 
 	it := rel.MakeObjectIt()
 	cnt := 0
-	for it.Valid() {
+	for it.Next() {
 		cnt++
 		// iobj := it.GetObject()
-		it.Next()
 	}
 	assert.Equal(t, objCnt, cnt)
 	// err := txn1.Commit()
 	// assert.Nil(t, err)
 	t.Log(c.SimplePPString(common.PPL1))
-}
-
-func TestBlock1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	ctx := context.Background()
-	testutils.EnsureNoLeak(t)
-	dir := testutils.InitTestEnv(ModuleName, t)
-	c, mgr, driver := initTestContext(ctx, t, dir)
-	defer driver.Close()
-	defer mgr.Stop()
-	defer c.Close()
-
-	txn1, _ := mgr.StartTxn(nil)
-	db, _ := txn1.CreateDatabase("db", "", "")
-	schema := catalog.MockSchema(1, 0)
-	rel, _ := db.CreateRelation(schema)
-	obj, _ := rel.CreateNonAppendableObject(false, nil)
-
-	blkCnt := 100
-	for i := 0; i < blkCnt; i++ {
-		_, err := obj.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(uint16(i)))
-		assert.Nil(t, err)
-	}
-
-	it := obj.MakeBlockIt()
-	cnt := 0
-	for it.Valid() {
-		cnt++
-		it.Next()
-	}
-	assert.Equal(t, blkCnt, cnt)
-
-	err := txn1.Commit(context.Background())
-	assert.Nil(t, err)
-	txn2, _ := mgr.StartTxn(nil)
-	db, _ = txn2.GetDatabase("db")
-	rel, _ = db.GetRelationByName(schema.Name)
-	objIt := rel.MakeObjectIt()
-	cnt = 0
-	for objIt.Valid() {
-		obj = objIt.GetObject()
-		it = obj.MakeBlockIt()
-		for it.Valid() {
-			cnt++
-			it.Next()
-		}
-		objIt.Next()
-	}
-	assert.Equal(t, blkCnt, cnt)
 }
 
 func TestDedup1(t *testing.T) {

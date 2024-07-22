@@ -19,34 +19,38 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 )
 
-const argName = "time_window"
+const opName = "time_window"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (timeWin *TimeWin) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": time window")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	ap := arg
-	ap.ctr = new(container)
-	ctr := ap.ctr
+func (timeWin *TimeWin) OpType() vm.OpType {
+	return vm.TimeWin
+}
+
+func (timeWin *TimeWin) Prepare(proc *process.Process) (err error) {
+	timeWin.ctr = new(container)
+	ctr := timeWin.ctr
 	ctr.InitReceiver(proc, true)
 
-	ctr.aggExe = make([]colexec.ExpressionExecutor, len(ap.Aggs))
-	for i, ag := range ap.Aggs {
-		if ag.E != nil {
-			ctr.aggExe[i], err = colexec.NewExpressionExecutor(proc, ag.E)
+	ctr.aggExe = make([]colexec.ExpressionExecutor, len(timeWin.Aggs))
+	for i, ag := range timeWin.Aggs {
+		if expressions := ag.GetArgExpressions(); len(expressions) > 0 {
+			ctr.aggExe[i], err = colexec.NewExpressionExecutor(proc, expressions[0])
 			if err != nil {
 				return err
 			}
@@ -54,20 +58,20 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	}
 	// ctr.aggVec = make([][]*vector.Vector, len(ap.Aggs))
 
-	ctr.tsExe, err = colexec.NewExpressionExecutor(proc, ap.Ts)
+	ctr.tsExe, err = colexec.NewExpressionExecutor(proc, timeWin.Ts)
 	if err != nil {
 		return err
 	}
 
 	ctr.status = initTag
-	ctr.tsOid = types.T(ap.Ts.Typ.Id)
+	ctr.tsOid = types.T(timeWin.Ts.Typ.Id)
 	ctr.group = -1
 
-	ctr.colCnt = len(ap.Aggs)
-	if ap.WStart {
+	ctr.colCnt = len(timeWin.Aggs)
+	if timeWin.WStart {
 		ctr.colCnt++
 	}
-	if ap.WEnd {
+	if timeWin.WEnd {
 		ctr.colCnt++
 	}
 
@@ -89,28 +93,29 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze(timeWin.GetIdx(), timeWin.GetParallelIdx(), timeWin.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
-	ap := arg
-	ctr := ap.ctr
+	ctr := timeWin.ctr
 	var err error
 	var bat *batch.Batch
+	var msg *process.RegisterMessage
 
 	result := vm.NewCallResult()
 	for {
 
 		switch ctr.status {
 		case dataTag:
-			bat, _, err = ctr.ReceiveFromAllRegs(anal)
-			if err != nil {
-				return result, err
+			msg = ctr.ReceiveFromAllRegs(anal)
+			if msg.Err != nil {
+				return result, msg.Err
 			}
+			bat := msg.Batch
 			if bat == nil {
 				if ctr.cur == hasGrow {
 					ctr.status = evalLastCur
@@ -132,10 +137,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 			ctr.status = evalTag
 		case initTag:
-			bat, _, err = ctr.ReceiveFromAllRegs(anal)
-			if err != nil {
-				return result, err
+			msg = ctr.ReceiveFromAllRegs(anal)
+			if msg.Err != nil {
+				return result, msg.Err
 			}
+			bat = msg.Batch
 			if bat == nil {
 				result.Batch = nil
 				result.Status = vm.ExecStop
@@ -145,24 +151,27 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			if err = ctr.evalVecs(proc); err != nil {
 				return result, err
 			}
-			if err = ctr.firstWindow(ap, proc); err != nil {
+			if err = ctr.firstWindow(timeWin, proc); err != nil {
 				return result, err
 			}
-			ctr.aggs = make([]agg.Agg[any], len(ap.Aggs))
-			for i, ag := range ap.Aggs {
-				if ctr.aggs[i], err = agg.NewAggWithConfig(ag.Op, ag.Dist, []types.Type{ap.Types[i]}, ag.Config); err != nil {
-					return result, err
+			ctr.aggs = make([]aggexec.AggFuncExec, len(timeWin.Aggs))
+			for i, ag := range timeWin.Aggs {
+				ctr.aggs[i] = aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), timeWin.Types[i])
+				if config := ag.GetExtraConfig(); config != nil {
+					if err = ctr.aggs[i].SetExtraInformation(config, 0); err != nil {
+						return result, err
+					}
 				}
 			}
 			ctr.status = evalTag
 		case nextTag:
-			if err = ctr.nextWindow(ap, proc); err != nil {
+			if err = ctr.nextWindow(timeWin, proc); err != nil {
 				return result, err
 			}
 			ctr.status = evalTag
 		case evalTag:
 
-			if err = ctr.eval(ctr, ap, proc); err != nil {
+			if err = ctr.eval(ctr, timeWin, proc); err != nil {
 				return result, err
 			}
 
@@ -174,7 +183,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case evalLastCur:
 
-			if err = ctr.calRes(ctr, ap, proc); err != nil {
+			if err = ctr.calRes(ctr, timeWin, proc); err != nil {
 				return result, err
 			}
 			if ctr.pre == hasPre {
@@ -190,19 +199,22 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case evalLastPre:
 
-			if err = ctr.nextWindow(ap, proc); err != nil {
+			if err = ctr.nextWindow(timeWin, proc); err != nil {
 				return result, err
 			}
-			ctr.aggs = make([]agg.Agg[any], len(ap.Aggs))
-			for i, ag := range ap.Aggs {
-				if ctr.aggs[i], err = agg.NewAggWithConfig(ag.Op, ag.Dist, []types.Type{ap.Types[i]}, ag.Config); err != nil {
-					return result, err
+			ctr.aggs = make([]aggexec.AggFuncExec, len(timeWin.Aggs))
+			for i, ag := range timeWin.Aggs {
+				ctr.aggs[i] = aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), timeWin.Types[i])
+				if config := ag.GetExtraConfig(); config != nil {
+					if err = ctr.aggs[i].SetExtraInformation(config, 0); err != nil {
+						return result, err
+					}
 				}
 			}
 			ctr.wstart = append(ctr.wstart, ctr.start)
 			ctr.wend = append(ctr.wend, ctr.end)
 			for _, ag := range ctr.aggs {
-				if err = ag.Grows(1, proc.Mp()); err != nil {
+				if err = ag.GroupGrow(1); err != nil {
 					return result, err
 				}
 			}
@@ -210,7 +222,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			for i := ctr.preIdx; i < len(ctr.bats); i++ {
 				for k := ctr.preRow; k < ctr.bats[i].RowCount(); k++ {
 					for j, agg := range ctr.aggs {
-						if err = agg.Fill(0, int64(k), []*vector.Vector{ctr.aggVec[i][j]}); err != nil {
+						if err = agg.Fill(0, k, []*vector.Vector{ctr.aggVec[i][j]}); err != nil {
 							return result, err
 						}
 					}
@@ -218,7 +230,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.preRow = 0
 			}
 
-			if err = ctr.calRes(ctr, ap, proc); err != nil {
+			if err = ctr.calRes(ctr, timeWin, proc); err != nil {
 				return result, err
 			}
 
@@ -237,7 +249,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 const maxTimeWindowRows = 8192
 
-func eval[T constraints.Integer](ctr *container, ap *Argument, proc *process.Process) (err error) {
+func eval[T constraints.Integer](ctr *container, ap *TimeWin, proc *process.Process) (err error) {
 	end := T(ctr.end)
 	ts := vector.MustFixedCol[T](ctr.tsVec[ctr.curIdx])
 	for ; ctr.curRow < len(ts); ctr.curRow++ {
@@ -251,7 +263,7 @@ func eval[T constraints.Integer](ctr *container, ap *Argument, proc *process.Pro
 				ctr.wstart = append(ctr.wstart, ctr.start)
 				ctr.wend = append(ctr.wend, ctr.end)
 				for _, ag := range ctr.aggs {
-					if err = ag.Grows(1, proc.Mp()); err != nil {
+					if err = ag.GroupGrow(1); err != nil {
 						return err
 					}
 				}
@@ -259,7 +271,7 @@ func eval[T constraints.Integer](ctr *container, ap *Argument, proc *process.Pro
 				ctr.group++
 			}
 			for j, agg := range ctr.aggs {
-				if err = agg.Fill(int64(ctr.group), int64(ctr.curRow), []*vector.Vector{ctr.aggVec[ctr.curIdx][j]}); err != nil {
+				if err = agg.Fill(ctr.group, ctr.curRow, []*vector.Vector{ctr.aggVec[ctr.curIdx][j]}); err != nil {
 					return err
 				}
 			}
@@ -280,10 +292,13 @@ func eval[T constraints.Integer](ctr *container, ap *Argument, proc *process.Pro
 				if err = calRes[T](ctr, ap, proc); err != nil {
 					return err
 				}
-				ctr.aggs = make([]agg.Agg[any], len(ap.Aggs))
+				ctr.aggs = make([]aggexec.AggFuncExec, len(ap.Aggs))
 				for i, ag := range ap.Aggs {
-					if ctr.aggs[i], err = agg.NewAggWithConfig(ag.Op, ag.Dist, []types.Type{ap.Types[i]}, ag.Config); err != nil {
-						return err
+					ctr.aggs[i] = aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), ap.Types[i])
+					if config := ag.GetExtraConfig(); config != nil {
+						if err = ctr.aggs[i].SetExtraInformation(config, 0); err != nil {
+							return err
+						}
 					}
 				}
 				ctr.group = 0
@@ -304,11 +319,11 @@ func eval[T constraints.Integer](ctr *container, ap *Argument, proc *process.Pro
 	return
 }
 
-func calRes[T constraints.Integer](ctr *container, ap *Argument, proc *process.Process) (err error) {
+func calRes[T constraints.Integer](ctr *container, ap *TimeWin, proc *process.Process) (err error) {
 	ctr.rbat = batch.NewWithSize(ctr.colCnt)
 	i := 0
 	for _, agg := range ctr.aggs {
-		vec, err := agg.Eval(proc.Mp())
+		vec, err := agg.Flush()
 		if err != nil {
 			return err
 		}
@@ -377,7 +392,7 @@ func (ctr *container) pushBatch(bat *batch.Batch) {
 //}
 
 func (ctr *container) evalVecs(proc *process.Process) error {
-	vec, err := ctr.tsExe.Eval(proc, []*batch.Batch{ctr.peekBatch(ctr.curIdx)})
+	vec, err := ctr.tsExe.Eval(proc, []*batch.Batch{ctr.peekBatch(ctr.curIdx)}, nil)
 	if err != nil {
 		return err
 	}
@@ -393,7 +408,7 @@ func (ctr *container) evalAggVector(bat *batch.Batch, proc *process.Process) err
 	vs := make([]*vector.Vector, len(ctr.aggExe))
 	for i := range ctr.aggExe {
 		if ctr.aggExe[i] != nil {
-			vec, err := ctr.aggExe[i].Eval(proc, []*batch.Batch{bat})
+			vec, err := ctr.aggExe[i].Eval(proc, []*batch.Batch{bat}, nil)
 			if err != nil {
 				return err
 			}
@@ -404,7 +419,7 @@ func (ctr *container) evalAggVector(bat *batch.Batch, proc *process.Process) err
 	return nil
 }
 
-func (ctr *container) nextWindow(ap *Argument, proc *process.Process) error {
+func (ctr *container) nextWindow(ap *TimeWin, proc *process.Process) error {
 	m := ap.Interval
 	if ap.Sliding != nil {
 		m = ap.Sliding
@@ -455,13 +470,13 @@ func (ctr *container) nextWindow(ap *Argument, proc *process.Process) error {
 	case types.T_timestamp:
 		ctr.start = ctr.nextStart
 
-		nextStart, err := doTimestampAdd(proc.SessionInfo.TimeZone, types.Timestamp(ctr.start), m.Val, m.Typ)
+		nextStart, err := doTimestampAdd(proc.GetSessionInfo().TimeZone, types.Timestamp(ctr.start), m.Val, m.Typ)
 		if err != nil {
 			return err
 		}
 		ctr.nextStart = int64(nextStart)
 
-		end, err := doTimestampAdd(proc.SessionInfo.TimeZone, types.Timestamp(ctr.start), ap.Interval.Val, ap.Interval.Typ)
+		end, err := doTimestampAdd(proc.GetSessionInfo().TimeZone, types.Timestamp(ctr.start), ap.Interval.Val, ap.Interval.Typ)
 		if err != nil {
 			return err
 		}
@@ -470,7 +485,7 @@ func (ctr *container) nextWindow(ap *Argument, proc *process.Process) error {
 	return nil
 }
 
-func (ctr *container) firstWindow(ap *Argument, proc *process.Process) (err error) {
+func (ctr *container) firstWindow(ap *TimeWin, proc *process.Process) (err error) {
 	m := ap.Interval
 	if ap.Sliding != nil {
 		m = ap.Sliding
@@ -523,11 +538,11 @@ func (ctr *container) firstWindow(ap *Argument, proc *process.Process) (err erro
 	case types.T_timestamp:
 		ts := vector.MustFixedCol[types.Timestamp](vec)[0]
 
-		itv, err := doTimestampAdd(proc.SessionInfo.TimeZone, ts, ap.Interval.Val, ap.Interval.Typ)
+		itv, err := doTimestampAdd(proc.GetSessionInfo().TimeZone, ts, ap.Interval.Val, ap.Interval.Typ)
 		if err != nil {
 			return err
 		}
-		sld, err := doTimestampAdd(proc.SessionInfo.TimeZone, ts, m.Val, m.Typ)
+		sld, err := doTimestampAdd(proc.GetSessionInfo().TimeZone, ts, m.Val, m.Typ)
 		if err != nil {
 			return err
 		}
@@ -535,19 +550,19 @@ func (ctr *container) firstWindow(ap *Argument, proc *process.Process) (err erro
 			return moerr.NewInvalidInput(proc.Ctx, "sliding value should be smaller than the interval value")
 		}
 
-		start, err := roundTimestamp(proc.SessionInfo.TimeZone, ts, ap.Interval.Val, ap.Interval.Typ, proc)
+		start, err := roundTimestamp(proc.GetSessionInfo().TimeZone, ts, ap.Interval.Val, ap.Interval.Typ, proc)
 		if err != nil {
 			return err
 		}
 		ctr.start = int64(start)
 
-		nextStart, err := doTimestampAdd(proc.SessionInfo.TimeZone, start, m.Val, m.Typ)
+		nextStart, err := doTimestampAdd(proc.GetSessionInfo().TimeZone, start, m.Val, m.Typ)
 		if err != nil {
 			return err
 		}
 		ctr.nextStart = int64(nextStart)
 
-		end, err := doTimestampAdd(proc.SessionInfo.TimeZone, start, ap.Interval.Val, ap.Interval.Typ)
+		end, err := doTimestampAdd(proc.GetSessionInfo().TimeZone, start, ap.Interval.Val, ap.Interval.Typ)
 		if err != nil {
 			return err
 		}

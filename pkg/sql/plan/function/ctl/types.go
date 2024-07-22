@@ -28,20 +28,25 @@ var (
 	tn serviceType = "DN"
 	cn serviceType = "CN"
 
-	PingMethod          = "PING"
-	FlushMethod         = "FLUSH"
-	TaskMethod          = "TASK"
-	UseSnapshotMethod   = "USESNAPSHOT"
-	GetSnapshotMethod   = "GETSNAPSHOT"
-	CheckpointMethod    = "CHECKPOINT"
-	ForceGCMethod       = "FORCEGC"
-	InspectMethod       = "INSPECT"
-	LabelMethod         = "LABEL"
-	SyncCommitMethod    = "SYNCCOMMIT"
-	AddFaultPointMethod = "ADDFAULTPOINT"
-	BackupMethod        = "BACKUP"
-	TraceSpanMethod     = "TRACESPAN"
-	CoreDumpMethod      = "COREDUMP"
+	PingMethod             = "PING"
+	FlushMethod            = "FLUSH"
+	TaskMethod             = "TASK"
+	UseSnapshotMethod      = "USESNAPSHOT"
+	GetSnapshotMethod      = "GETSNAPSHOT"
+	CheckpointMethod       = "CHECKPOINT"
+	GlobalCheckpointMethod = "GLOBALCHECKPOINT"
+	ForceGCMethod          = "FORCEGC"
+	InspectMethod          = "INSPECT"
+	LabelMethod            = "LABEL"
+	WorkStateMethod        = "WORKSTATE"
+	SyncCommitMethod       = "SYNCCOMMIT"
+	AddFaultPointMethod    = "ADDFAULTPOINT"
+	BackupMethod           = "BACKUP"
+	TraceSpanMethod        = "TRACESPAN"
+	CoreDumpMethod         = "COREDUMP"
+	InterceptCommitMethod  = "INTERCEPTCOMMIT"
+	MergeObjectsMethod     = "MERGEOBJECTS"
+	DiskCleanerMethod      = "DISKCLEANER"
 
 	GetProtocolVersionMethod = "GETPROTOCOLVERSION"
 	SetProtocolVersionMethod = "SETPROTOCOLVERSION"
@@ -51,6 +56,8 @@ var (
 	UnsubscribeTable      = "UNSUBSCRIBE_TABLE"
 
 	HandleTxnTrace = strings.ToUpper("txn-trace")
+
+	ReloadAutoIncrementCache = strings.ToUpper("reload-auto-increment-cache")
 )
 
 var (
@@ -63,20 +70,25 @@ var (
 var (
 	// register all supported debug command here
 	supportedCmds = map[string]handleFunc{
-		PingMethod:          handlePing(),
-		FlushMethod:         handleFlush(),
-		TaskMethod:          handleTask,
-		UseSnapshotMethod:   handleUseSnapshotTS,
-		GetSnapshotMethod:   handleGetSnapshotTS,
-		CheckpointMethod:    handleCheckpoint(),
-		ForceGCMethod:       handleCNGC,
-		InspectMethod:       handleInspectTN(),
-		LabelMethod:         handleSetLabel,
-		SyncCommitMethod:    handleSyncCommit,
-		AddFaultPointMethod: handleAddFaultPoint(),
-		BackupMethod:        handleBackup(),
-		TraceSpanMethod:     handleTraceSpan,
-		CoreDumpMethod:      handleCoreDump,
+		PingMethod:             handlePing(),
+		FlushMethod:            handleFlush(),
+		TaskMethod:             handleTask,
+		UseSnapshotMethod:      handleUseSnapshotTS,
+		GetSnapshotMethod:      handleGetSnapshotTS,
+		CheckpointMethod:       handleCheckpoint(),
+		GlobalCheckpointMethod: handleGlobalCheckpoint(),
+		ForceGCMethod:          handleCNGC,
+		InspectMethod:          handleInspectTN(),
+		LabelMethod:            handleSetLabel,
+		WorkStateMethod:        handleSetWorkState,
+		SyncCommitMethod:       handleSyncCommit,
+		AddFaultPointMethod:    handleAddFaultPoint(),
+		BackupMethod:           handleBackup(),
+		TraceSpanMethod:        handleTraceSpan,
+		CoreDumpMethod:         handleCoreDump,
+		InterceptCommitMethod:  handleInterceptCommit(),
+		MergeObjectsMethod:     handleMerge(),
+		DiskCleanerMethod:      handleDiskCleaner(),
 
 		GetProtocolVersionMethod: handleGetProtocolVersion,
 		SetProtocolVersionMethod: handleSetProtocolVersion,
@@ -84,6 +96,8 @@ var (
 		GetLatestBind:            handleGetLatestBind,
 		UnsubscribeTable:         handleUnsubscribeTable,
 		HandleTxnTrace:           handleTxnTrace,
+
+		ReloadAutoIncrementCache: handleReloadAutoIncrementCache,
 	}
 )
 

@@ -15,7 +15,13 @@
 package plan
 
 import (
+	"strconv"
+	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]int) {
@@ -253,6 +259,9 @@ func (builder *QueryBuilder) remapWindowClause(expr *plan.Expr, windowTag int32,
 
 // if join cond is a=b and a=c, we can remove a=c to improve join performance
 func (builder *QueryBuilder) removeRedundantJoinCond(nodeID int32, colMap map[[2]int32]int, colGroup []int) []int {
+	if builder.optimizerHints != nil && builder.optimizerHints.removeRedundantJoinCond != 0 {
+		return colGroup
+	}
 	node := builder.qry.Nodes[nodeID]
 	for i := range node.Children {
 		colGroup = builder.removeRedundantJoinCond(node.Children[i], colMap, colGroup)
@@ -307,6 +316,9 @@ func (builder *QueryBuilder) removeRedundantJoinCond(nodeID int32, colMap map[[2
 }
 
 func (builder *QueryBuilder) removeEffectlessLeftJoins(nodeID int32, tagCnt map[int32]int) int32 {
+	if builder.optimizerHints != nil && builder.optimizerHints.removeEffectLessLeftJoins != 0 {
+		return nodeID
+	}
 	node := builder.qry.Nodes[nodeID]
 	if len(node.Children) == 0 {
 		return nodeID
@@ -400,6 +412,9 @@ func findHashOnPKTable(nodeID, tag int32, builder *QueryBuilder) *plan.TableDef 
 }
 
 func determineHashOnPK(nodeID int32, builder *QueryBuilder) {
+	if builder.optimizerHints != nil && builder.optimizerHints.determineHashOnPK != 0 {
+		return
+	}
 	node := builder.qry.Nodes[nodeID]
 	if len(node.Children) > 0 {
 		for _, child := range node.Children {
@@ -572,9 +587,6 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProject(nodeID int32) {
 	if scan.NodeType != plan.Node_TABLE_SCAN {
 		return
 	}
-	if scan.TableDef.Pkey == nil {
-		return
-	}
 	groupCol := make([]int32, 0)
 	for _, expr := range node.GroupBy {
 		if col := expr.GetCol(); col != nil {
@@ -588,4 +600,288 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProject(nodeID int32) {
 	node.BindingTags = node.BindingTags[:1]
 	node.ProjectList = node.GroupBy
 	node.GroupBy = nil
+}
+
+func makeBetweenExprFromDateFormat(equalFunc *plan.Function, dateformatFunc *plan.Function, intervalStr string, builder *QueryBuilder) *plan.Expr {
+	dateExpr := DeepCopyExpr(equalFunc.Args[1])
+	if intervalStr == "year" {
+		sval, _ := dateExpr.GetLit().GetValue().(*plan.Literal_Sval)
+		sval.Sval = sval.Sval + "0101"
+	}
+	begin, err := forceCastExpr(builder.GetContext(), dateExpr, dateformatFunc.Args[0].Typ)
+	if err != nil {
+		return nil
+	}
+	begin, err = ConstantFold(batch.EmptyForConstFoldBatch, begin, builder.compCtx.GetProcess(), false, true)
+	if err != nil {
+		return nil
+	}
+	interval := MakeIntervalExpr(1, intervalStr)
+	end, err := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "+", []*Expr{DeepCopyExpr(begin), interval})
+	if err != nil {
+		return nil
+	}
+	interval = MakeIntervalExpr(1, "microsecond")
+	end, err = bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "-", []*Expr{DeepCopyExpr(end), interval})
+	if err != nil {
+		return nil
+	}
+	args := []*Expr{dateformatFunc.Args[0], begin, end}
+	newFilter, err := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "between", args)
+	if err != nil {
+		return nil
+	}
+	return newFilter
+}
+
+func (builder *QueryBuilder) optimizeDateFormatExpr(nodeID int32) {
+	if builder.optimizerHints != nil && builder.optimizerHints.optimizeDateFormatExpr != 0 {
+		return
+	}
+	// for date_format(col,'%Y-%m-%d')= '2024-01-19', change this to col between [2024-01-19 00:00:00,2024-01-19 23:59:59]
+	node := builder.qry.Nodes[nodeID]
+	for _, childID := range node.Children {
+		builder.optimizeDateFormatExpr(childID)
+	}
+	if node.NodeType != plan.Node_TABLE_SCAN || len(node.FilterList) == 0 {
+		return
+	}
+	for i := range node.FilterList {
+		expr := node.FilterList[i]
+		equalFunc := expr.GetF()
+		if equalFunc != nil && equalFunc.Func.ObjName == "=" {
+			dateformatFunc := equalFunc.Args[0].GetF()
+			if dateformatFunc == nil || dateformatFunc.Func.ObjName != "date_format" {
+				continue
+			}
+			col := dateformatFunc.Args[0].GetCol()
+			if col == nil {
+				continue
+			}
+			if dateformatFunc.Args[1].GetLit() == nil {
+				continue
+			}
+			str := dateformatFunc.Args[1].GetLit().GetSval()
+			if len(str) == 0 {
+				continue
+			}
+			if equalFunc.Args[1].GetLit() == nil {
+				continue
+			}
+			dateSval := equalFunc.Args[1].GetLit().GetSval()
+			var newFilter *plan.Expr
+			switch str {
+			case "%Y-%m-%d":
+				if len(dateSval) != 10 || dateSval[4] != '-' || dateSval[7] != '-' {
+					continue
+				}
+				newFilter = makeBetweenExprFromDateFormat(equalFunc, dateformatFunc, "day", builder)
+			case "%Y%m%d":
+				if len(dateSval) != 8 {
+					continue
+				}
+				newFilter = makeBetweenExprFromDateFormat(equalFunc, dateformatFunc, "day", builder)
+			case "%Y":
+				if len(dateSval) != 4 {
+					continue
+				}
+				newFilter = makeBetweenExprFromDateFormat(equalFunc, dateformatFunc, "year", builder)
+			}
+			if newFilter != nil {
+				node.FilterList[i] = newFilter
+			}
+		}
+	}
+}
+
+func (builder *QueryBuilder) optimizeLikeExpr(nodeID int32) {
+	if builder.optimizerHints != nil && builder.optimizerHints.optimizeLikeExpr != 0 {
+		return
+	}
+	// for a like "abc%", change it to prefix_equal(a,"abc")
+	// for a like "abc%def", add an extra filter prefix_equal(a,"abc")
+	node := builder.qry.Nodes[nodeID]
+
+	for _, childID := range node.Children {
+		builder.optimizeLikeExpr(childID)
+	}
+	if node.NodeType != plan.Node_TABLE_SCAN || len(node.FilterList) == 0 {
+		return
+	}
+	var newFilters []*plan.Expr
+	for i := range node.FilterList {
+		expr := node.FilterList[i]
+		fun := expr.GetF()
+		if fun != nil && fun.Func.ObjName == "like" {
+			col := fun.Args[0].GetCol()
+			if col == nil {
+				continue
+			}
+			if fun.Args[1].GetLit() == nil {
+				continue
+			}
+			str := fun.Args[1].GetLit().GetSval()
+			if len(str) == 0 {
+				continue
+			}
+			index1 := strings.IndexByte(str, '_')
+			if index1 > 0 && str[index1-1] == '\\' {
+				index1--
+			}
+			index2 := strings.IndexByte(str, '%')
+			if index2 > 0 && str[index2-1] == '\\' {
+				index2--
+			}
+			if index1 == -1 && index2 == -1 {
+				// it's col like string without wildcard, can change to equal
+				fun.Func.ObjName = function.EqualFunctionName
+				fun.Func.Obj = function.EqualFunctionEncodedID
+				continue
+			}
+
+			indexOfWildCard := index1
+			if index1 == -1 {
+				indexOfWildCard = index2
+			}
+			if index2 != -1 && index2 < index1 {
+				indexOfWildCard = index2
+			}
+			if indexOfWildCard <= 0 {
+				continue
+			}
+			newStr := str[:indexOfWildCard]
+
+			newFilter := node.FilterList[i]
+			// if no _ and % in the last, we can replace the origin filter
+			replaceOrigin := (index1 == -1) && (index2 == len(str)-1)
+			if !replaceOrigin {
+				newFilter = DeepCopyExpr(newFilter)
+				newFilters = append(newFilters, newFilter)
+			}
+			newFunc := newFilter.GetF()
+			newFunc.Func.ObjName = function.PrefixEqualFunctionName
+			newFunc.Func.Obj = function.PrefixEqualFunctionEncodedID
+			newFunc.Args[1].GetLit().Value.(*plan.Literal_Sval).Sval = newStr
+			if replaceOrigin {
+				node.BlockFilterList = append(node.BlockFilterList, DeepCopyExpr(newFilter))
+			}
+		}
+	}
+	if len(newFilters) > 0 {
+		node.FilterList = append(node.FilterList, newFilters...)
+		node.BlockFilterList = append(node.BlockFilterList, DeepCopyExprList(newFilters)...)
+	}
+}
+
+func (builder *QueryBuilder) forceJoinOnOneCN(nodeID int32, force bool) {
+	if builder.optimizerHints != nil && builder.optimizerHints.forceOneCN != 0 {
+		return
+	}
+
+	node := builder.qry.Nodes[nodeID]
+	if node.NodeType == plan.Node_TABLE_SCAN {
+		node.Stats.ForceOneCN = force
+	} else if node.NodeType == plan.Node_JOIN {
+		if len(node.RuntimeFilterBuildList) > 0 {
+			switch node.JoinType {
+			case plan.Node_RIGHT:
+				if !node.Stats.HashmapStats.Shuffle {
+					force = true
+				}
+			case plan.Node_SEMI, plan.Node_ANTI:
+				if node.BuildOnLeft && !node.Stats.HashmapStats.Shuffle {
+					force = true
+				}
+			case plan.Node_INDEX:
+				force = true
+			}
+		}
+	}
+	for _, childID := range node.Children {
+		builder.forceJoinOnOneCN(childID, force)
+	}
+}
+
+func handleOptimizerHints(str string, builder *QueryBuilder) {
+	strs := strings.Split(str, "=")
+	if len(strs) != 2 {
+		return
+	}
+	key := strs[0]
+	value, err := strconv.Atoi(strs[1])
+	if err != nil {
+		return
+	}
+	if builder.optimizerHints == nil {
+		builder.optimizerHints = &OptimizerHints{}
+	}
+	switch key {
+	case "pushDownLimitToScan":
+		builder.optimizerHints.pushDownLimitToScan = value
+	case "pushDownTopThroughLeftJoin":
+		builder.optimizerHints.pushDownTopThroughLeftJoin = value
+	case "pushDownSemiAntiJoins":
+		builder.optimizerHints.pushDownSemiAntiJoins = value
+	case "aggPushDown":
+		builder.optimizerHints.aggPushDown = value
+	case "aggPullUp":
+		builder.optimizerHints.aggPullUp = value
+	case "removeEffectLessLeftJoins":
+		builder.optimizerHints.removeEffectLessLeftJoins = value
+	case "removeRedundantJoinCond":
+		builder.optimizerHints.removeRedundantJoinCond = value
+	case "optimizeLikeExpr":
+		builder.optimizerHints.optimizeLikeExpr = value
+	case "optimizeDateFormatExpr":
+		builder.optimizerHints.optimizeDateFormatExpr = value
+	case "determineHashOnPK":
+		builder.optimizerHints.determineHashOnPK = value
+	case "sendMessageFromTopToScan":
+		builder.optimizerHints.sendMessageFromTopToScan = value
+	case "determineShuffle":
+		builder.optimizerHints.determineShuffle = value
+	case "blockFilter":
+		builder.optimizerHints.blockFilter = value
+	case "applyIndices":
+		builder.optimizerHints.applyIndices = value
+	case "runtimeFilter":
+		builder.optimizerHints.runtimeFilter = value
+	case "joinOrdering":
+		builder.optimizerHints.joinOrdering = value
+	case "forceOneCN":
+		builder.optimizerHints.forceOneCN = value
+	case "execType":
+		builder.optimizerHints.execType = value
+	case "disableRightJoin":
+		builder.optimizerHints.disableRightJoin = value
+	case "printShuffle":
+		builder.optimizerHints.printShuffle = value
+	}
+}
+
+func (builder *QueryBuilder) parseOptimizeHints() {
+	v, ok := runtime.ServiceRuntime(builder.compCtx.GetProcess().GetService()).GetGlobalVariables("optimizer_hints")
+	if !ok {
+		return
+	}
+	str := v.(string)
+	if len(str) == 0 {
+		return
+	}
+	kvs := strings.Split(str, ",")
+	for i := range kvs {
+		handleOptimizerHints(kvs[i], builder)
+	}
+}
+
+func (builder *QueryBuilder) optimizeFilters(rootID int32) int32 {
+	rootID, _ = builder.pushdownFilters(rootID, nil, false)
+	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID, false)
+	builder.mergeFiltersOnCompositeKey(rootID)
+	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID, true)
+	builder.optimizeDateFormatExpr(rootID)
+	builder.optimizeLikeExpr(rootID)
+	ReCalcNodeStats(rootID, builder, false, true, true)
+	rewriteFilterListByStats(builder.GetContext(), rootID, builder)
+	return rootID
 }

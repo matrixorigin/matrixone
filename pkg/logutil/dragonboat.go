@@ -70,7 +70,7 @@ func (d DragonboatAdaptLogger) Panicf(format string, args ...interface{}) {
 func DragonboatFactory(name string) logger.ILogger {
 	var cores = make([]zapcore.Core, 0, 2)
 	cfg := getGlobalLogConfig()
-	atom := cfg.getLevel()
+	atom := cfg.GetLevel()
 	sinks := cfg.getSinks()
 	for _, sink := range sinks {
 		cores = append(cores, zapcore.NewCore(sink.enc, sink.out, atom))

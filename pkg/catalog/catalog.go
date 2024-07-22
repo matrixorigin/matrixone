@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -53,6 +52,48 @@ func init() {
 	for i, name := range MoTableMetaSchema {
 		MoTableMetaDefs[i] = newAttributeDef(name, MoTableMetaTypes[i], i == 0)
 	}
+
+	def := &engine.ConstraintDef{
+		Cts: []engine.Constraint{
+			&engine.PrimaryKeyDef{
+				Pkey: &plan.PrimaryKeyDef{
+					Cols:        []uint64{0},
+					PkeyColId:   0,
+					PkeyColName: SystemDBAttr_ID,
+					Names:       []string{SystemDBAttr_ID},
+				},
+			},
+		},
+	}
+	MoDatabaseConstraint, _ = def.MarshalBinary()
+
+	def = &engine.ConstraintDef{
+		Cts: []engine.Constraint{
+			&engine.PrimaryKeyDef{
+				Pkey: &plan.PrimaryKeyDef{
+					Cols:        []uint64{0},
+					PkeyColId:   0,
+					PkeyColName: SystemRelAttr_ID,
+					Names:       []string{SystemRelAttr_ID},
+				},
+			},
+		},
+	}
+	MoTableConstraint, _ = def.MarshalBinary()
+
+	def = &engine.ConstraintDef{
+		Cts: []engine.Constraint{
+			&engine.PrimaryKeyDef{
+				Pkey: &plan.PrimaryKeyDef{
+					Cols:        []uint64{0},
+					PkeyColId:   0,
+					PkeyColName: SystemColAttr_UniqName,
+					Names:       []string{SystemColAttr_UniqName},
+				},
+			},
+		},
+	}
+	MoColumnConstraint, _ = def.MarshalBinary()
 }
 
 func newAttributeDef(name string, typ types.Type, isPrimary bool) engine.TableDef {
@@ -105,40 +146,7 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 		cmds := genCreateTables(GenRows(bat))
 		idx := 0
 		for i := range cmds {
-			// tae's logic
-			if len(cmds[i].Comment) > 0 {
-				cmds[i].Defs = append(cmds[i].Defs, &engine.CommentDef{
-					Comment: cmds[i].Comment,
-				})
-			}
-			if len(cmds[i].Viewdef) > 0 {
-				cmds[i].Defs = append(cmds[i].Defs, &engine.ViewDef{
-					View: cmds[i].Viewdef,
-				})
-			}
-			if len(cmds[i].Constraint) > 0 {
-				c := new(engine.ConstraintDef)
-				if err = c.UnmarshalBinary(cmds[i].Constraint); err != nil {
-					return nil, nil, err
-				}
-				cmds[i].Defs = append(cmds[i].Defs, c)
-			}
-			if cmds[i].Partitioned > 0 || len(cmds[i].Partition) > 0 {
-				cmds[i].Defs = append(cmds[i].Defs, &engine.PartitionDef{
-					Partitioned: cmds[i].Partitioned,
-					Partition:   cmds[i].Partition,
-				})
-			}
-			pro := new(engine.PropertiesDef)
-			pro.Properties = append(pro.Properties, engine.Property{
-				Key:   SystemRelAttr_Kind,
-				Value: string(cmds[i].RelKind),
-			})
-			pro.Properties = append(pro.Properties, engine.Property{
-				Key:   SystemRelAttr_CreateSQL,
-				Value: cmds[i].CreateSql,
-			})
-			cmds[i].Defs = append(cmds[i].Defs, pro)
+			// fill columns
 			if err = fillCreateTable(&idx, &cmds[i], es); err != nil {
 				return nil, nil, err
 			}
@@ -167,8 +175,8 @@ func genCreateDatabases(rows [][]any) []CreateDatabase {
 func genDropDatabases(rows [][]any) []DropDatabase {
 	cmds := make([]DropDatabase, len(rows))
 	for i, row := range rows {
-		cmds[i].Id = row[MO_DATABASE_DAT_ID_IDX].(uint64)
-		cmds[i].Name = string(row[MO_DATABASE_DAT_NAME_IDX].([]byte))
+		cmds[i].Id = row[SKIP_ROWID_OFFSET+MO_DATABASE_DAT_ID_IDX].(uint64)
+		cmds[i].Name = string(row[SKIP_ROWID_OFFSET+MO_DATABASE_DAT_NAME_IDX].([]byte))
 	}
 	return cmds
 }
@@ -191,19 +199,55 @@ func genCreateTables(rows [][]any) []CreateTable {
 		cmds[i].Constraint = row[MO_TABLES_CONSTRAINT_IDX].([]byte)
 		cmds[i].RelKind = string(row[MO_TABLES_RELKIND_IDX].([]byte))
 	}
+
+	for i := range cmds {
+		// tae's logic
+		if len(cmds[i].Comment) > 0 {
+			cmds[i].Defs = append(cmds[i].Defs, &engine.CommentDef{
+				Comment: cmds[i].Comment,
+			})
+		}
+		if len(cmds[i].Viewdef) > 0 {
+			cmds[i].Defs = append(cmds[i].Defs, &engine.ViewDef{
+				View: cmds[i].Viewdef,
+			})
+		}
+		if len(cmds[i].Constraint) > 0 {
+			c := new(engine.ConstraintDef)
+			if err := c.UnmarshalBinary(cmds[i].Constraint); err != nil {
+				panic(err)
+			}
+			cmds[i].Defs = append(cmds[i].Defs, c)
+		}
+		if cmds[i].Partitioned > 0 || len(cmds[i].Partition) > 0 {
+			cmds[i].Defs = append(cmds[i].Defs, &engine.PartitionDef{
+				Partitioned: cmds[i].Partitioned,
+				Partition:   cmds[i].Partition,
+			})
+		}
+		pro := new(engine.PropertiesDef)
+		pro.Properties = append(pro.Properties, engine.Property{
+			Key:   SystemRelAttr_Kind,
+			Value: string(cmds[i].RelKind),
+		})
+		pro.Properties = append(pro.Properties, engine.Property{
+			Key:   SystemRelAttr_CreateSQL,
+			Value: cmds[i].CreateSql,
+		})
+		cmds[i].Defs = append(cmds[i].Defs, pro)
+	}
 	return cmds
 }
 
-func genUpdateConstraint(rows [][]any) []UpdateConstraint {
-	cmds := make([]UpdateConstraint, len(rows))
+func genUpdateConstraint(rows [][]any) []*api.AlterTableReq {
+	reqs := make([]*api.AlterTableReq, len(rows))
 	for i, row := range rows {
-		cmds[i].TableId = row[MO_TABLES_REL_ID_IDX].(uint64)
-		cmds[i].DatabaseId = row[MO_TABLES_RELDATABASE_ID_IDX].(uint64)
-		cmds[i].TableName = string(row[MO_TABLES_REL_NAME_IDX].([]byte))
-		cmds[i].DatabaseName = string(row[MO_TABLES_RELDATABASE_IDX].([]byte))
-		cmds[i].Constraint = row[MO_TABLES_UPDATE_CONSTRAINT].([]byte)
+		did := row[MO_TABLES_RELDATABASE_ID_IDX].(uint64)
+		tid := row[MO_TABLES_REL_ID_IDX].(uint64)
+		cstr := row[MO_TABLES_UPDATE_CONSTRAINT].([]byte)
+		reqs[i] = api.NewUpdateConstraintReq(did, tid, string(cstr))
 	}
-	return cmds
+	return reqs
 }
 
 func genUpdateAltertable(rows [][]any) ([]*api.AlterTableReq, error) {
@@ -460,7 +504,6 @@ func BuildQueryResultMetaPath(accountName, statementId string) string {
 	return fmt.Sprintf(QueryResultMetaPath, accountName, statementId)
 }
 
-func BuildProfilePath(typ, name string) string {
-	now := time.Now().Format(time.RFC3339)
-	return fmt.Sprintf("%s/%s_%s_%s", ProfileDir, typ, name, now)
+func BuildProfilePath(serviceTyp string, nodeId string, typ, name string) string {
+	return fmt.Sprintf("%s/%s_%s_%s_%s", ProfileDir, serviceTyp, nodeId, typ, name)
 }

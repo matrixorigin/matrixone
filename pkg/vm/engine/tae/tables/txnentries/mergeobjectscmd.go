@@ -30,23 +30,19 @@ type mergeObjectsCmd struct {
 	tid         uint64
 	droppedObjs []*common.ID
 	createdObjs []*common.ID
-	droppedBlks []*common.ID
-	createdBlks []*common.ID
 	txn         txnif.AsyncTxn
 	id          uint32
 }
 
 func newMergeBlocksCmd(
 	tid uint64,
-	droppedObjs, createdObjs, droppedBlks, createdBlks []*common.ID,
+	droppedObjs, createdObjs []*common.ID,
 	txn txnif.AsyncTxn,
 	id uint32) *mergeObjectsCmd {
 	return &mergeObjectsCmd{
 		tid:         tid,
 		droppedObjs: droppedObjs,
 		createdObjs: createdObjs,
-		droppedBlks: droppedBlks,
-		createdBlks: createdBlks,
 		txn:         txn,
 		id:          id,
 	}
@@ -86,11 +82,11 @@ func (cmd *mergeObjectsCmd) UnmarshalBinary(buf []byte) (err error) {
 
 func (cmd *mergeObjectsCmd) Desc() string {
 	s := "CmdName=MERGE;From=["
-	for _, blk := range cmd.droppedBlks {
+	for _, blk := range cmd.droppedObjs {
 		s = fmt.Sprintf("%s %d", s, blk.BlockID)
 	}
 	s = fmt.Sprintf("%s ];To=[", s)
-	for _, blk := range cmd.createdBlks {
+	for _, blk := range cmd.createdObjs {
 		s = fmt.Sprintf("%s %d", s, blk.BlockID)
 	}
 	s = fmt.Sprintf("%s ]", s)
@@ -99,11 +95,11 @@ func (cmd *mergeObjectsCmd) Desc() string {
 
 func (cmd *mergeObjectsCmd) String() string {
 	s := "CmdName=MERGE;From=["
-	for _, blk := range cmd.droppedBlks {
+	for _, blk := range cmd.droppedObjs {
 		s = fmt.Sprintf("%s %d", s, blk.BlockID)
 	}
 	s = fmt.Sprintf("%s ];To=[", s)
-	for _, blk := range cmd.createdBlks {
+	for _, blk := range cmd.createdObjs {
 		s = fmt.Sprintf("%s %d", s, blk.BlockID)
 	}
 	s = fmt.Sprintf("%s ]", s)
@@ -111,11 +107,11 @@ func (cmd *mergeObjectsCmd) String() string {
 }
 func (cmd *mergeObjectsCmd) VerboseString() string {
 	s := "CmdName=MERGE;From=["
-	for _, blk := range cmd.droppedBlks {
+	for _, blk := range cmd.droppedObjs {
 		s = fmt.Sprintf("%s %s", s, blk.BlockString())
 	}
 	s = fmt.Sprintf("%s ];To=[", s)
-	for _, blk := range cmd.createdBlks {
+	for _, blk := range cmd.createdObjs {
 		s = fmt.Sprintf("%s %s", s, blk.BlockString())
 	}
 	s = fmt.Sprintf("%s ]", s)

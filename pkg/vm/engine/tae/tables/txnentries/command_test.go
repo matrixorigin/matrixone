@@ -51,16 +51,10 @@ func TestMergeBlocksCmd(t *testing.T) {
 	id2.SetSegmentID(createdSid)
 	droppedObjs := []*common.ID{&id1, &id1}
 	createdObjs := []*common.ID{&id2}
-	droppedBlks := []*common.ID{
-		{TableID: 1, BlockID: *objectio.NewBlockid(droppedSid, 3, 0)},
-		{TableID: 1, BlockID: *objectio.NewBlockid(droppedSid, 4, 0)}}
-	createdBlks := []*common.ID{{TableID: 1, BlockID: *objectio.NewBlockid(createdSid, 1, 0)}}
 	cmd := newMergeBlocksCmd(
 		0,
 		droppedObjs,
 		createdObjs,
-		droppedBlks,
-		createdBlks,
 		nil,
 		0)
 

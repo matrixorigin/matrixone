@@ -16,14 +16,9 @@ package fileservice
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"io"
-	"net"
-	"net/http"
 	"net/url"
-	"os"
 	gotrace "runtime/trace"
 	"strings"
 	"time"
@@ -60,7 +55,7 @@ func NewMinioSDK(
 
 	// credentials
 	var credentialProviders []credentials.Provider
-	if !args.NoDefaultCredentials {
+	if args.shouldLoadDefaultCredentials() {
 		credentialProviders = append(credentialProviders,
 			// aws env
 			new(credentials.EnvAWS),
@@ -124,47 +119,7 @@ func NewMinioSDK(
 	}
 
 	// transport
-	dialer := &net.Dialer{
-		KeepAlive: 5 * time.Second,
-	}
-	transport := &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
-		DialContext:           dialer.DialContext,
-		MaxIdleConns:          100,
-		IdleConnTimeout:       180 * time.Second,
-		MaxIdleConnsPerHost:   100,
-		MaxConnsPerHost:       1000,
-		TLSHandshakeTimeout:   3 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-		ForceAttemptHTTP2:     true,
-	}
-	if len(args.CertFiles) > 0 {
-		// custom certs
-		pool, err := x509.SystemCertPool()
-		if err != nil {
-			panic(err)
-		}
-		for _, path := range args.CertFiles {
-			content, err := os.ReadFile(path)
-			if err != nil {
-				logutil.Info("load cert file error",
-					zap.Any("err", err),
-				)
-				// ignore
-				continue
-			}
-			logutil.Info("file service: load cert file",
-				zap.Any("path", path),
-			)
-			pool.AppendCertsFromPEM(content)
-		}
-		tlsConfig := &tls.Config{
-			InsecureSkipVerify: true,
-			RootCAs:            pool,
-		}
-		transport.TLSClientConfig = tlsConfig
-	}
-	options.Transport = transport
+	options.Transport = newHTTPClient(args).Transport
 
 	// endpoint
 	isSecure, err := minioValidateEndpoint(&args)
@@ -429,14 +384,10 @@ func (a *MinioSDK) deleteSingle(ctx context.Context, key string) error {
 func (a *MinioSDK) listObjects(ctx context.Context, prefix string, marker string) (minio.ListBucketResult, error) {
 	ctx, task := gotrace.NewTask(ctx, "MinioSDK.listObjects")
 	defer task.End()
-	t0 := time.Now()
-	defer func() {
-		FSProfileHandler.AddSample(time.Since(t0))
-	}()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.List.Add(1)
 	}, a.perfCounterSets...)
-	return doWithRetry(
+	return DoWithRetry(
 		"s3 list objects",
 		func() (minio.ListBucketResult, error) {
 			return a.core.ListObjects(
@@ -448,21 +399,17 @@ func (a *MinioSDK) listObjects(ctx context.Context, prefix string, marker string
 			)
 		},
 		maxRetryAttemps,
-		isRetryableError,
+		IsRetryableError,
 	)
 }
 
 func (a *MinioSDK) statObject(ctx context.Context, key string) (minio.ObjectInfo, error) {
 	ctx, task := gotrace.NewTask(ctx, "MinioSDK.statObject")
 	defer task.End()
-	t0 := time.Now()
-	defer func() {
-		FSProfileHandler.AddSample(time.Since(t0))
-	}()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Head.Add(1)
 	}, a.perfCounterSets...)
-	return doWithRetry(
+	return DoWithRetry(
 		"s3 head object",
 		func() (minio.ObjectInfo, error) {
 			return a.client.StatObject(
@@ -473,7 +420,7 @@ func (a *MinioSDK) statObject(ctx context.Context, key string) (minio.ObjectInfo
 			)
 		},
 		maxRetryAttemps,
-		isRetryableError,
+		IsRetryableError,
 	)
 }
 
@@ -486,10 +433,6 @@ func (a *MinioSDK) putObject(
 ) (minio.UploadInfo, error) {
 	ctx, task := gotrace.NewTask(ctx, "MinioSDK.putObject")
 	defer task.End()
-	t0 := time.Now()
-	defer func() {
-		FSProfileHandler.AddSample(time.Since(t0))
-	}()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Put.Add(1)
 	}, a.perfCounterSets...)
@@ -508,22 +451,18 @@ func (a *MinioSDK) putObject(
 func (a *MinioSDK) getObject(ctx context.Context, key string, min *int64, max *int64) (io.ReadCloser, error) {
 	ctx, task := gotrace.NewTask(ctx, "MinioSDK.getObject")
 	defer task.End()
-	t0 := time.Now()
-	defer func() {
-		FSProfileHandler.AddSample(time.Since(t0))
-	}()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Get.Add(1)
 	}, a.perfCounterSets...)
 	r, err := newRetryableReader(
 		func(offset int64) (io.ReadCloser, error) {
-			obj, err := doWithRetry(
+			obj, err := DoWithRetry(
 				"s3 get object",
 				func() (obj *minio.Object, err error) {
 					return a.client.GetObject(ctx, a.bucket, key, minio.GetObjectOptions{})
 				},
 				maxRetryAttemps,
-				isRetryableError,
+				IsRetryableError,
 			)
 			if err != nil {
 				return nil, err
@@ -536,7 +475,7 @@ func (a *MinioSDK) getObject(ctx context.Context, key string, min *int64, max *i
 			return obj, nil
 		},
 		*min,
-		isRetryableError,
+		IsRetryableError,
 	)
 	if err != nil {
 		return nil, err
@@ -547,14 +486,10 @@ func (a *MinioSDK) getObject(ctx context.Context, key string, min *int64, max *i
 func (a *MinioSDK) deleteObject(ctx context.Context, key string) (any, error) {
 	ctx, task := gotrace.NewTask(ctx, "MinioSDK.deleteObject")
 	defer task.End()
-	t0 := time.Now()
-	defer func() {
-		FSProfileHandler.AddSample(time.Since(t0))
-	}()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Delete.Add(1)
 	}, a.perfCounterSets...)
-	return doWithRetry(
+	return DoWithRetry(
 		"s3 delete object",
 		func() (any, error) {
 			if err := a.client.RemoveObject(ctx, a.bucket, key, minio.RemoveObjectOptions{}); err != nil {
@@ -563,21 +498,17 @@ func (a *MinioSDK) deleteObject(ctx context.Context, key string) (any, error) {
 			return nil, nil
 		},
 		maxRetryAttemps,
-		isRetryableError,
+		IsRetryableError,
 	)
 }
 
 func (a *MinioSDK) deleteObjects(ctx context.Context, keys ...string) (any, error) {
 	ctx, task := gotrace.NewTask(ctx, "MinioSDK.deleteObjects")
 	defer task.End()
-	t0 := time.Now()
-	defer func() {
-		FSProfileHandler.AddSample(time.Since(t0))
-	}()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.DeleteMulti.Add(1)
 	}, a.perfCounterSets...)
-	return doWithRetry(
+	return DoWithRetry(
 		"s3 delete objects",
 		func() (any, error) {
 			objsCh := make(chan minio.ObjectInfo)
@@ -593,7 +524,7 @@ func (a *MinioSDK) deleteObjects(ctx context.Context, keys ...string) (any, erro
 			return nil, nil
 		},
 		maxRetryAttemps,
-		isRetryableError,
+		IsRetryableError,
 	)
 }
 

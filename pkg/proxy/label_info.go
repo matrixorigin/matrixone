@@ -44,6 +44,8 @@ type clientInfo struct {
 	username string
 	// originIP that client used to communicate with server
 	originIP net.IP
+	// originPort is the origin port of client.
+	originPort uint16
 }
 
 // reservedLabels are the labels not allowed in user labels.

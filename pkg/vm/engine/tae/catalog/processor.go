@@ -14,6 +14,8 @@
 
 package catalog
 
+import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
+
 // XXX this API is broken.  In case of inplementing a cursor like interface
 // we cannot use error.  moerr is a very heavy mechanism.
 //
@@ -23,19 +25,19 @@ type Processor interface {
 	OnPostDatabase(database *DBEntry) error
 	OnTable(table *TableEntry) error
 	OnPostTable(table *TableEntry) error
-	OnPostObject(Object *ObjectEntry) error
-	OnObject(Object *ObjectEntry) error
-	OnBlock(block *BlockEntry) error
+	OnPostObject(object *ObjectEntry) error
+	OnObject(object *ObjectEntry) error
+	OnTombstone(tombstone data.Tombstone) error
 }
 
 type LoopProcessor struct {
 	DatabaseFn     func(*DBEntry) error
 	TableFn        func(*TableEntry) error
 	ObjectFn       func(*ObjectEntry) error
-	BlockFn        func(*BlockEntry) error
 	PostDatabaseFn func(*DBEntry) error
 	PostTableFn    func(*TableEntry) error
 	PostObjectFn   func(*ObjectEntry) error
+	TombstoneFn    func(data.Tombstone) error
 }
 
 func (p *LoopProcessor) OnDatabase(database *DBEntry) error {
@@ -79,10 +81,9 @@ func (p *LoopProcessor) OnObject(Object *ObjectEntry) error {
 	}
 	return nil
 }
-
-func (p *LoopProcessor) OnBlock(block *BlockEntry) error {
-	if p.BlockFn != nil {
-		return p.BlockFn(block)
+func (p *LoopProcessor) OnTombstone(tombstone data.Tombstone) error {
+	if p.TombstoneFn != nil {
+		return p.TombstoneFn(tombstone)
 	}
 	return nil
 }

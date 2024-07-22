@@ -187,12 +187,12 @@ func newEmptyEntryCmd[T BaseNode[T], N Node](cmdType uint16, mvccNodeFactory fun
 	return impl
 }
 
-func newBlockCmd(id uint32, cmdType uint16, entry *BlockEntry) *EntryCommand[*MetadataMVCCNode, *BlockNode] {
+func NewDeltalocCmd(id uint32, cmdType uint16, commonID *common.ID, baseEntry *BaseEntryImpl[*MetadataMVCCNode]) *EntryCommand[*MetadataMVCCNode, *BlockNode] {
 	impl := &EntryCommand[*MetadataMVCCNode, *BlockNode]{
-		ID:       entry.AsCommonID(),
+		ID:       commonID,
 		cmdType:  cmdType,
-		mvccNode: entry.BaseEntryImpl.GetLatestNodeLocked(),
-		node:     &entry.BlockNode,
+		mvccNode: baseEntry.GetLatestNodeLocked(),
+		node:     &BlockNode{},
 	}
 	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(id, impl)
 	return impl
@@ -202,8 +202,8 @@ func newObjectCmd(id uint32, cmdType uint16, entry *ObjectEntry) *EntryCommand[*
 	impl := &EntryCommand[*ObjectMVCCNode, *ObjectNode]{
 		ID:       entry.AsCommonID(),
 		cmdType:  cmdType,
-		mvccNode: entry.BaseEntryImpl.GetLatestNodeLocked(),
-		node:     entry.ObjectNode,
+		mvccNode: entry.GetLatestNode().GetCommandMVCCNode(),
+		node:     &entry.ObjectNode,
 	}
 	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(id, impl)
 	return impl
@@ -244,18 +244,12 @@ func (cmd *EntryCommand[T, N]) SetReplayTxn(txn txnif.AsyncTxn) {
 }
 
 func (cmd *EntryCommand[T, N]) ApplyCommit() {
-	if cmd.mvccNode.Is1PC() {
-		return
-	}
-	if err := cmd.mvccNode.ApplyCommit(); err != nil {
+	if err := cmd.mvccNode.ApplyCommit(cmd.mvccNode.Txn.GetID()); err != nil {
 		panic(err)
 	}
 }
 
 func (cmd *EntryCommand[T, N]) ApplyRollback() {
-	if cmd.mvccNode.Is1PC() {
-		return
-	}
 	cmd.mvccNode.ApplyRollback()
 }
 

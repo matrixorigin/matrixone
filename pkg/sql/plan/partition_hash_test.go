@@ -17,13 +17,14 @@ package plan
 import (
 	"context"
 	"fmt"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestCreateHashPartitionTable(t *testing.T) {
@@ -327,13 +328,13 @@ func Test_hash_buildEvalPartitionExpression(t *testing.T) {
 
 	addCol(tableDef, &ColDef{
 		Name: "col1",
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(types.T_int8),
 		},
 	})
 	addCol(tableDef, &ColDef{
 		Name: "col2",
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(types.T_int8),
 		},
 	})

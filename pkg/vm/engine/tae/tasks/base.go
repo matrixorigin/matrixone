@@ -27,6 +27,7 @@ import (
 var WaitableCtx = &Context{Waitable: true}
 
 type Context struct {
+	ID       uint64
 	DoneCB   ops.OpDoneCB
 	Waitable bool
 }
@@ -44,8 +45,14 @@ type BaseTask struct {
 }
 
 func NewBaseTask(impl Task, taskType TaskType, ctx *Context) *BaseTask {
+	var id uint64
+	if ctx != nil && ctx.ID != 0 {
+		id = ctx.ID
+	} else {
+		id = NextTaskId()
+	}
 	task := &BaseTask{
-		id:       NextTaskId(),
+		id:       id,
 		taskType: taskType,
 		impl:     impl,
 	}

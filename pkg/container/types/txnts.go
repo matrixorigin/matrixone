@@ -45,12 +45,12 @@ func (ts *TS) IsEmpty() bool {
 	}
 	return DecodeInt64(ts[:4]) == 0
 }
-func (ts TS) Equal(rhs TS) bool {
-	return ts == rhs
+func (ts *TS) Equal(rhs *TS) bool {
+	return *ts == *rhs
 }
 
 // Compare physical first then logical.
-func (ts TS) Compare(rhs TS) int {
+func (ts *TS) Compare(rhs *TS) int {
 	p1 := *(*int64)(unsafe.Pointer(&ts[4]))
 	p2 := *(*int64)(unsafe.Pointer(&rhs[4]))
 	if p1 < p2 {
@@ -59,8 +59,8 @@ func (ts TS) Compare(rhs TS) int {
 	if p1 > p2 {
 		return 1
 	}
-	l1 := *(*uint32)(unsafe.Pointer(&ts))
-	l2 := *(*uint32)(unsafe.Pointer(&rhs))
+	l1 := *(*uint32)(unsafe.Pointer(ts))
+	l2 := *(*uint32)(unsafe.Pointer(rhs))
 	if l1 < l2 {
 		return -1
 	}
@@ -70,16 +70,16 @@ func (ts TS) Compare(rhs TS) int {
 	return 1
 }
 
-func (ts TS) Less(rhs TS) bool {
+func (ts *TS) Less(rhs *TS) bool {
 	return ts.Compare(rhs) < 0
 }
-func (ts TS) LessEq(rhs TS) bool {
+func (ts *TS) LessEq(rhs *TS) bool {
 	return ts.Compare(rhs) <= 0
 }
-func (ts TS) Greater(rhs TS) bool {
+func (ts *TS) Greater(rhs *TS) bool {
 	return ts.Compare(rhs) > 0
 }
-func (ts TS) GreaterEq(rhs TS) bool {
+func (ts *TS) GreaterEq(rhs *TS) bool {
 	return ts.Compare(rhs) >= 0
 }
 
@@ -98,6 +98,11 @@ func BuildTS(p int64, l uint32) (ret TS) {
 	copy(ret[4:12], EncodeInt64(&p))
 	copy(ret[:4], EncodeUint32(&l))
 	return
+}
+
+func BuildTSForTest(p int64, l uint32) *TS {
+	ts := BuildTS(p, l)
+	return &ts
 }
 
 func MaxTs() TS {

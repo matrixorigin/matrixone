@@ -23,30 +23,85 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"golang.org/x/exp/constraints"
 )
 
+type TempDelCacheEntry struct {
+	Bat     *batch.Batch
+	Release func()
+}
+
+type DeletesCollectRecorder struct {
+	LoadCost   time.Duration
+	BisectCost time.Duration
+	MemCost    time.Duration
+	TempCache  map[string]TempDelCacheEntry
+}
+
+type DeletesCollectBoard struct {
+	DeletesCollectRecorder
+	LoadMax, BisectMax, MemMax time.Duration
+	LoadCnt                    int
+}
+
+func (r *DeletesCollectBoard) Add(other *DeletesCollectRecorder) {
+	r.LoadCost += other.LoadCost
+	r.BisectCost += other.BisectCost
+	r.MemCost += other.MemCost
+
+	if other.LoadCost > r.LoadMax {
+		r.LoadMax = other.LoadCost
+	}
+	if other.BisectCost > r.BisectMax {
+		r.BisectMax = other.BisectCost
+	}
+	if other.MemCost > r.MemMax {
+		r.MemMax = other.MemCost
+	}
+	if other.LoadCost > 0 {
+		r.LoadCnt++
+	}
+}
+
+func (r *DeletesCollectBoard) String() string {
+	return fmt.Sprintf(
+		"LoadCost:%v BisectCost:%v MemCost:%v LoadMax:%v BisectMax:%v MemMax:%v LoadCnt:%v",
+		r.LoadCost, r.BisectCost, r.MemCost, r.LoadMax, r.BisectMax, r.MemMax, r.LoadCnt)
+}
+
+type RecorderKey struct{}
+
 const (
-	DefaultMinRowsQualified = 40960
-	DefaultMaxRowsObj       = 8192 * 500
-	DefaultMaxMergeObjN     = 2
+	DefaultMinOsizeQualifiedMB   = 110   // MB
+	DefaultMaxOsizeObjMB         = 128   // MB
+	DefaultMinCNMergeSize        = 80000 // MB
+	DefaultCNMergeMemControlHint = 8192  // MB
+	DefaultMaxMergeObjN          = 16
 
 	Const1GBytes = 1 << 30
 	Const1MBytes = 1 << 20
 )
 
 var (
-	RuntimeMaxMergeObjN     atomic.Int32
-	RuntimeMinRowsQualified atomic.Int32
-	RuntimeMaxRowsObj       atomic.Int32
-	Epsilon                 float64
+	RuntimeMaxMergeObjN        atomic.Int32
+	RuntimeOsizeRowsQualified  atomic.Uint32
+	RuntimeMaxObjOsize         atomic.Uint32
+	RuntimeMinCNMergeSize      atomic.Uint64
+	RuntimeCNMergeMemControl   atomic.Uint64
+	RuntimeCNTakeOverAll       atomic.Bool
+	IsStandaloneBoost          atomic.Bool
+	ShouldStandaloneCNTakeOver atomic.Bool
+	Epsilon                    float64
+
+	RuntimeOverallFlushMemCap atomic.Uint64
 )
 
 func init() {
 	RuntimeMaxMergeObjN.Store(DefaultMaxMergeObjN)
-	RuntimeMinRowsQualified.Store(DefaultMinRowsQualified)
-	RuntimeMaxRowsObj.Store(DefaultMaxRowsObj)
+	RuntimeOsizeRowsQualified.Store(DefaultMinOsizeQualifiedMB * Const1MBytes)
+	RuntimeMaxObjOsize.Store(DefaultMaxOsizeObjMB * Const1MBytes)
 	Epsilon = math.Nextafter(1, 2) - 1
 }
 

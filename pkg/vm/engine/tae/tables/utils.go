@@ -16,7 +16,10 @@ package tables
 
 import (
 	"context"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
@@ -120,11 +123,58 @@ func LoadPersistedDeletes(
 	fs *objectio.ObjectFS,
 	location objectio.Location,
 	mp *mpool.MPool,
-) (bat *containers.Batch, isPersistedByCN bool, err error) {
-	movbat, isPersistedByCN, err := blockio.ReadBlockDelete(ctx, location, fs.Service)
-	if err != nil {
+) (bat *containers.Batch, isPersistedByCN bool, release func(), err error) {
+	if isPersistedByCN, err = blockio.IsPersistedByCN(ctx, location, fs.Service); err != nil {
 		return
 	}
+	bat, release, err = LoadPersistedDeletesBySchema(ctx, pkName, fs, location, isPersistedByCN, mp)
+	return
+}
+
+func LoadPersistedDeletesBySchema(
+	ctx context.Context,
+	pkName string,
+	fs *objectio.ObjectFS,
+	location objectio.Location,
+	isPersistedByCN bool,
+	mp *mpool.MPool,
+) (bat *containers.Batch, release func(), err error) {
+	var (
+		recorder *common.DeletesCollectRecorder
+		movbat   *batch.Batch
+	)
+
+	if v := ctx.Value(common.RecorderKey{}); v != nil {
+		recorder = v.(*common.DeletesCollectRecorder)
+		inst := time.Now()
+		defer func() {
+			recorder.LoadCost = time.Since(inst)
+		}()
+		sloc := location.String()
+		entry, ok := recorder.TempCache[sloc]
+		if ok && entry.Bat != nil { // hit cache
+			movbat = entry.Bat
+		}
+
+		if ok && entry.Bat == nil { // cache enable and first call
+			movbat, release, err = blockio.ReadBlockDeleteBySchema(ctx, location, fs.Service, isPersistedByCN)
+			if err != nil {
+				return nil, nil, err
+			}
+			recorder.TempCache[sloc] = common.TempDelCacheEntry{
+				Bat:     movbat,
+				Release: release,
+			}
+		}
+		release = func() {}
+	}
+	if movbat == nil { // cache disabled
+		movbat, release, err = blockio.ReadBlockDeleteBySchema(ctx, location, fs.Service, isPersistedByCN)
+		if err != nil {
+			return
+		}
+	}
+
 	bat = containers.NewBatch()
 	if isPersistedByCN {
 		colNames := []string{catalog.PhyAddrColumnName, catalog.AttrPKVal}
@@ -160,16 +210,16 @@ func LoadPersistedDeletes(
 
 func MakeImmuIndex(
 	ctx context.Context,
-	meta *catalog.BlockEntry,
+	meta *catalog.ObjectEntry,
 	bf objectio.BloomFilter,
 	rt *dbutils.Runtime,
 ) (idx indexwrapper.ImmutIndex, err error) {
-	pkZM, err := meta.GetPKZoneMap(ctx, rt.Fs.Service)
+	stats, err := meta.MustGetObjectStats()
 	if err != nil {
 		return
 	}
 	idx = indexwrapper.NewImmutIndex(
-		*pkZM, bf, meta.GetMetaLoc(),
+		stats.SortKeyZoneMap(), bf, stats.ObjectLocation(),
 	)
 	return
 }

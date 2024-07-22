@@ -18,8 +18,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/smartystreets/goconvey/convey"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 func Test_GetInt64(t *testing.T) {

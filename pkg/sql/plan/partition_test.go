@@ -566,7 +566,7 @@ func Test_checkUniqueKeyIncludePartKey(t *testing.T) {
 
 func mockPartitionBinder(tableDef *plan.TableDef) (*PartitionBinder, error) {
 	mock := NewMockOptimizer(false)
-	builder := NewQueryBuilder(plan.Query_SELECT, mock.CurrentContext(), false)
+	builder := NewQueryBuilder(plan.Query_SELECT, mock.CurrentContext(), false, false)
 	bindContext := NewBindContext(builder, nil)
 	nodeID := builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_TABLE_SCAN,
@@ -609,13 +609,13 @@ func Test_checkPartitionKeys(t *testing.T) {
 
 	addCol(tableDef, &ColDef{
 		Name: "col1",
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(types.T_int8),
 		},
 	})
 	addCol(tableDef, &ColDef{
 		Name: "col2",
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(types.T_int8),
 		},
 	})
@@ -636,19 +636,19 @@ func Test_checkPartitionKeys(t *testing.T) {
 
 	addCol(tableDef2, &ColDef{
 		Name: "col1",
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(types.T_int8),
 		},
 	})
 	addCol(tableDef2, &ColDef{
 		Name: "col2",
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(types.T_int8),
 		},
 	})
 	addCol(tableDef2, &ColDef{
 		Name: "col3",
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(types.T_int8),
 		},
 	})
@@ -842,13 +842,13 @@ func Test_checkPartitionExprType(t *testing.T) {
 
 	addCol(tableDef, &ColDef{
 		Name: "col1",
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(types.T_int8),
 		},
 	})
 	addCol(tableDef, &ColDef{
 		Name: "col2",
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(types.T_int8),
 		},
 	})
@@ -1005,19 +1005,19 @@ func TestCheckPartitionFuncValid(t *testing.T) {
 
 	addCol(tableDef, &ColDef{
 		Name: "col1",
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(types.T_int8),
 		},
 	})
 	addCol(tableDef, &ColDef{
 		Name: "col2",
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(types.T_int8),
 		},
 	})
 	addCol(tableDef, &ColDef{
 		Name: "col3",
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(types.T_date),
 		},
 	})

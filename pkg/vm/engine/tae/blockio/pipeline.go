@@ -299,11 +299,12 @@ func NewIOPipeline(
 }
 
 func (p *IoPipeline) fillDefaults() {
+	procs := runtime.GOMAXPROCS(0)
 	if p.options.fetchParallism <= 0 {
-		p.options.fetchParallism = runtime.NumCPU() * 4
+		p.options.fetchParallism = procs * 4
 	}
 	if p.options.prefetchParallism <= 0 {
-		p.options.prefetchParallism = runtime.NumCPU() * 4
+		p.options.prefetchParallism = procs * 4
 	}
 	if p.options.queueDepth <= 0 {
 		p.options.queueDepth = 100000

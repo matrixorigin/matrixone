@@ -97,6 +97,11 @@ func (rule *GetParamRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 			}
 		*/
 		return e, nil
+	case *plan.Expr_List:
+		for i := range exprImpl.List.List {
+			exprImpl.List.List[i], _ = rule.ApplyExpr(exprImpl.List.List[i])
+		}
+		return e, nil
 	default:
 		return e, nil
 	}
@@ -149,6 +154,11 @@ func (rule *ResetParamOrderRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 		return e, nil
 	case *plan.Expr_P:
 		exprImpl.P.Pos = int32(rule.params[int(exprImpl.P.Pos)])
+		return e, nil
+	case *plan.Expr_List:
+		for i := range exprImpl.List.List {
+			exprImpl.List.List[i], _ = rule.ApplyExpr(exprImpl.List.List[i])
+		}
 		return e, nil
 	default:
 		return e, nil
@@ -206,6 +216,14 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 			Typ:  e.Typ,
 			Expr: rule.params[int(exprImpl.P.Pos)].Expr,
 		}, nil
+	case *plan.Expr_List:
+		for i, arg := range exprImpl.List.List {
+			exprImpl.List.List[i], err = rule.ApplyExpr(arg)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return e, nil
 	default:
 		return e, nil
 	}
@@ -348,7 +366,7 @@ func GetVarValue(
 		return nil, err
 	}
 	if e.Typ.Id != int32(types.T_any) && expr.Typ.Id != e.Typ.Id {
-		expr, err = appendCastBeforeExpr(ctx, expr, &e.Typ)
+		expr, err = appendCastBeforeExpr(ctx, expr, e.Typ)
 	}
 	if err != nil {
 		return nil, err
@@ -441,7 +459,8 @@ func (r *RecomputeRealTimeRelatedFuncRule) ApplyExpr(e *plan.Expr) (*plan.Expr, 
 				if err != nil {
 					return nil, err
 				}
-				vec, err := executor.Eval(r.proc, []*batch.Batch{r.bat})
+				defer executor.Free()
+				vec, err := executor.Eval(r.proc, []*batch.Batch{r.bat}, nil)
 				if err != nil {
 					return nil, err
 				}

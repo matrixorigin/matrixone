@@ -31,7 +31,7 @@ func Add[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 	}
 
 	vec[0].AddVec(vec[0], vec[1])
-	return ToMoArray[T](vec[0]), nil
+	return ToMoArray[T](vec[0])
 }
 
 func Subtract[T types.RealNumbers](v1, v2 []T) ([]T, error) {
@@ -41,7 +41,7 @@ func Subtract[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 	}
 
 	vec[0].SubVec(vec[0], vec[1])
-	return ToMoArray[T](vec[0]), nil
+	return ToMoArray[T](vec[0])
 }
 
 func Multiply[T types.RealNumbers](v1, v2 []T) ([]T, error) {
@@ -51,7 +51,7 @@ func Multiply[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 	}
 
 	vec[0].MulElemVec(vec[0], vec[1])
-	return ToMoArray[T](vec[0]), nil
+	return ToMoArray[T](vec[0])
 }
 
 func Divide[T types.RealNumbers](v1, v2 []T) ([]T, error) {
@@ -68,7 +68,7 @@ func Divide[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 	}
 
 	vec[0].DivElemVec(vec[0], vec[1])
-	return ToMoArray[T](vec[0]), nil
+	return ToMoArray[T](vec[0])
 }
 
 // Compare returns an integer comparing two arrays/vectors lexicographically.
@@ -109,15 +109,31 @@ func InnerProduct[T types.RealNumbers](v1, v2 []T) (float64, error) {
 }
 
 func L2Distance[T types.RealNumbers](v1, v2 []T) (float64, error) {
-	vec, err := ToGonumVectors[T](v1, v2)
-	if err != nil {
-		return 0, err
+	if len(v1) != len(v2) {
+		return 0, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
+	var sumOfSquares T
+	var difference T
+	for i := range v1 {
+		difference = v1[i] - v2[i]
+		sumOfSquares += difference * difference
+	}
+	return math.Sqrt(float64(sumOfSquares)), nil
+}
 
-	diff := mat.NewVecDense(vec[0].Len(), nil)
-	diff.SubVec(vec[0], vec[1])
-
-	return math.Sqrt(mat.Dot(diff, diff)), nil
+// L2DistanceSq returns the squared L2 distance between two vectors.
+// It is an optimized version of L2Distance used in Index Scan
+func L2DistanceSq[T types.RealNumbers](v1, v2 []T) (float64, error) {
+	if len(v1) != len(v2) {
+		return 0, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
+	}
+	var sumOfSquares T
+	var difference T
+	for i := range v1 {
+		difference = v1[i] - v2[i]
+		sumOfSquares += difference * difference
+	}
+	return float64(sumOfSquares), nil
 }
 
 func CosineDistance[T types.RealNumbers](v1, v2 []T) (float64, error) {
@@ -194,21 +210,29 @@ func CosineSimilarity[T types.RealNumbers](v1, v2 []T) (float64, error) {
 	return cosineSimilarity, nil
 }
 
-func NormalizeL2[T types.RealNumbers](v1 []T) ([]T, error) {
+func NormalizeL2[T types.RealNumbers](v1 []T, normalized []T) error {
 
-	vec := ToGonumVector[T](v1)
-
-	norm := mat.Norm(vec, 2)
-	if norm == 0 {
-		// NOTE: don't throw error here. If you throw error, then when a zero vector comes in the Vector Index
-		// Mapping Query, the query will fail. Instead, return the same zero vector.
-		// This is consistent with FAISS:https://github.com/facebookresearch/faiss/blob/0716bde2500edb2e18509bf05f5dfa37bd698082/faiss/utils/distances.cpp#L97
-		return v1, nil
+	if len(v1) == 0 {
+		return moerr.NewInternalErrorNoCtx("cannot normalize empty vector")
 	}
 
-	vec.ScaleVec(1/norm, vec)
+	// Compute the norm of the vector
+	var sumSquares float64
+	for _, val := range v1 {
+		sumSquares += float64(val) * float64(val)
+	}
+	norm := math.Sqrt(sumSquares)
+	if norm == 0 {
+		copy(normalized, v1)
+		return nil
+	}
 
-	return ToMoArray[T](vec), nil
+	// Divide each element by the norm
+	for i, val := range v1 {
+		normalized[i] = T(float64(val) / norm)
+	}
+
+	return nil
 }
 
 // L1Norm returns l1 distance to origin.
@@ -256,7 +280,7 @@ func ScalarOp[T types.RealNumbers](v []T, operation string, scalar float64) ([]T
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("scale_vector: invalid operation")
 	}
-	return ToMoArray[T](vec), nil
+	return ToMoArray[T](vec)
 }
 
 /* ------------ [END] Performance critical functions. ------- */

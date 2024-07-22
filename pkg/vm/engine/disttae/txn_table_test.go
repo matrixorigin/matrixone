@@ -18,6 +18,9 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -48,8 +51,12 @@ func newTxnTableForTest(
 		engine:   engine,
 		tnStores: []DNStore{tnStore},
 	}
+	c := client.NewTxnClient("", nil, nil, nil)
+	op, _ := c.New(context.Background(), timestamp.Timestamp{})
+	op.AddWorkspace(txn)
+
 	db := &txnDatabase{
-		txn: txn,
+		op: op,
 	}
 	table := &txnTable{
 		db:         db,

@@ -41,12 +41,6 @@ const (
 	ReadData
 )
 
-type metaFile struct {
-	index int
-	start types.TS
-	end   types.TS
-}
-
 func (r *runner) Replay(dataFactory catalog.DataFactory) (
 	maxTs types.TS,
 	maxLSN uint64,
@@ -66,18 +60,21 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 	if len(dirs) == 0 {
 		return
 	}
-	metaFiles := make([]*metaFile, 0)
+	metaFiles := make([]*MetaFile, 0)
 	var readDuration, applyDuration time.Duration
+	r.checkpointMetaFiles.Lock()
 	for i, dir := range dirs {
+		r.checkpointMetaFiles.files[dir.Name] = struct{}{}
 		start, end := blockio.DecodeCheckpointMetadataFileName(dir.Name)
-		metaFiles = append(metaFiles, &metaFile{
+		metaFiles = append(metaFiles, &MetaFile{
 			start: start,
 			end:   end,
 			index: i,
 		})
 	}
+	r.checkpointMetaFiles.Unlock()
 	sort.Slice(metaFiles, func(i, j int) bool {
-		return metaFiles[i].end.Less(metaFiles[j].end)
+		return metaFiles[i].end.Less(&metaFiles[j].end)
 	})
 	targetIdx := metaFiles[len(metaFiles)-1].index
 	dir := dirs[targetIdx]
@@ -132,7 +129,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 	totalCount = len(entries)
 	readfn := func(i int, readType uint16) {
 		checkpointEntry := entries[i]
-		if checkpointEntry.end.Less(maxGlobalEnd) {
+		if checkpointEntry.end.Less(&maxGlobalEnd) {
 			return
 		}
 		var err2 error
@@ -225,7 +222,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 		ckpVers = append(ckpVers, maxGlobal.version)
 		ckpDatas = append(ckpDatas, datas[globalIdx])
 
-		if maxTs.Less(maxGlobal.end) {
+		if maxTs.Less(&maxGlobal.end) {
 			maxTs = maxGlobal.end
 		}
 		// for force checkpoint, ckpLSN is 0.
@@ -238,7 +235,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 		}
 	}
 	for _, e := range emptyFile {
-		if e.end.GreaterEq(maxTs) {
+		if e.end.GreaterEq(&maxTs) {
 			return types.TS{}, 0, false,
 				moerr.NewInternalError(ctx,
 					"read checkpoint %v failed",
@@ -250,7 +247,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 		if checkpointEntry == nil {
 			continue
 		}
-		if checkpointEntry.end.LessEq(maxTs) {
+		if checkpointEntry.end.LessEq(&maxTs) {
 			continue
 		}
 		logutil.Infof("replay checkpoint %v", checkpointEntry)
@@ -263,7 +260,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 		ckpVers = append(ckpVers, checkpointEntry.version)
 		ckpDatas = append(ckpDatas, datas[i])
 
-		if maxTs.Less(checkpointEntry.end) {
+		if maxTs.Less(&checkpointEntry.end) {
 			maxTs = checkpointEntry.end
 		}
 		if checkpointEntry.version >= logtail.CheckpointVersion7 && checkpointEntry.ckpLSN != 0 {
@@ -303,17 +300,17 @@ func MergeCkpMeta(ctx context.Context, fs fileservice.FileService, cnLocation, t
 	if len(dirs) == 0 {
 		return "", nil
 	}
-	metaFiles := make([]*metaFile, 0)
+	metaFiles := make([]*MetaFile, 0)
 	for i, dir := range dirs {
 		start, end := blockio.DecodeCheckpointMetadataFileName(dir.Name)
-		metaFiles = append(metaFiles, &metaFile{
+		metaFiles = append(metaFiles, &MetaFile{
 			start: start,
 			end:   end,
 			index: i,
 		})
 	}
 	sort.Slice(metaFiles, func(i, j int) bool {
-		return metaFiles[i].end.Less(metaFiles[j].end)
+		return metaFiles[i].end.Less(&metaFiles[j].end)
 	})
 	targetIdx := metaFiles[len(metaFiles)-1].index
 	dir := dirs[targetIdx]
@@ -420,7 +417,7 @@ func replayCheckpointEntries(bat *containers.Batch, checkpointVersion int) (entr
 		}
 		entries[i] = checkpointEntry
 		if typ == ET_Global {
-			if end.Greater(maxGlobalEnd) {
+			if end.Greater(&maxGlobalEnd) {
 				maxGlobalEnd = end
 			}
 		}

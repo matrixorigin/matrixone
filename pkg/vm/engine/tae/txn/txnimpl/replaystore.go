@@ -137,7 +137,7 @@ func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, observer wal.Repla
 		if !blk.IsActive() {
 			continue
 		}
-		if !blk.GetMetaLoc().IsEmpty() {
+		if blk.ObjectPersisted() {
 			continue
 		}
 		hasActive = true
@@ -165,14 +165,14 @@ func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, observer wal.Repla
 		if !blk.IsActive() {
 			continue
 		}
-		if !blk.GetMetaLoc().IsEmpty() {
+		if blk.ObjectPersisted() {
 			continue
 		}
 		start := info.GetSrcOff()
 		bat := data.CloneWindow(int(start), int(info.GetSrcLen()))
 		bat.Compact()
 		defer bat.Close()
-		if err = blk.GetBlockData().OnReplayAppendPayload(bat); err != nil {
+		if err = blk.GetObjectData().OnReplayAppendPayload(bat); err != nil {
 			panic(err)
 		}
 	}
@@ -189,11 +189,6 @@ func (store *replayTxnStore) replayDataCmds(cmd *updates.UpdateCmd, observer wal
 
 func (store *replayTxnStore) replayDelete(cmd *updates.UpdateCmd, observer wal.ReplayObserver) {
 	deleteNode := cmd.GetDeleteNode()
-	if deleteNode.Is1PC() {
-		if _, err := deleteNode.TxnMVCCNode.ApplyCommit(); err != nil {
-			panic(err)
-		}
-	}
 	id := deleteNode.GetID()
 	database, err := store.catalog.GetDatabaseByID(id.DbID)
 	if err != nil {
@@ -206,8 +201,9 @@ func (store *replayTxnStore) replayDelete(cmd *updates.UpdateCmd, observer wal.R
 	if !blk.IsActive() {
 		return
 	}
-	blkData := blk.GetBlockData()
-	err = blkData.OnReplayDelete(deleteNode)
+	blkData := blk.GetObjectData()
+	_, blkOffset := id.BlockID.Offsets()
+	err = blkData.OnReplayDelete(blkOffset, deleteNode)
 	if err != nil {
 		panic(err)
 	}
@@ -216,11 +212,6 @@ func (store *replayTxnStore) replayDelete(cmd *updates.UpdateCmd, observer wal.R
 
 func (store *replayTxnStore) replayAppend(cmd *updates.UpdateCmd, observer wal.ReplayObserver) {
 	appendNode := cmd.GetAppendNode()
-	if appendNode.Is1PC() {
-		if _, err := appendNode.TxnMVCCNode.ApplyCommit(); err != nil {
-			panic(err)
-		}
-	}
 	id := appendNode.GetID()
 	database, err := store.catalog.GetDatabaseByID(id.DbID)
 	if err != nil {
@@ -233,10 +224,10 @@ func (store *replayTxnStore) replayAppend(cmd *updates.UpdateCmd, observer wal.R
 	if !blk.IsActive() {
 		return
 	}
-	if !blk.GetMetaLoc().IsEmpty() {
+	if blk.ObjectPersisted() {
 		return
 	}
-	if err = blk.GetBlockData().OnReplayAppend(appendNode); err != nil {
+	if err = blk.GetObjectData().OnReplayAppend(appendNode); err != nil {
 		panic(err)
 	}
 }

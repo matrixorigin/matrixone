@@ -16,54 +16,73 @@ package offset
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(Offset)
 
-type Argument struct {
-	Seen   uint64 // seen is the number of tuples seen so far
-	Offset uint64
+type container struct {
+	seen           uint64 // seen is the number of tuples seen so far
+	offset         uint64
+	offsetExecutor colexec.ExpressionExecutor
+}
+type Offset struct {
+	ctr        *container
+	OffsetExpr *plan.Expr
 
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (offset *Offset) GetOperatorBase() *vm.OperatorBase {
+	return &offset.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[Offset](
+		func() *Offset {
+			return &Offset{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *Offset) {
+			*a = Offset{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[Offset]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (offset Offset) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *Offset {
+	return reuse.Alloc[Offset](nil)
 }
 
-func (arg *Argument) WithOffset(offset uint64) *Argument {
-	arg.Offset = offset
-	return arg
+func (offset *Offset) WithOffset(offsetExpr *plan.Expr) *Offset {
+	offset.OffsetExpr = offsetExpr
+	return offset
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (offset *Offset) Release() {
+	if offset != nil {
+		reuse.Free[Offset](offset, nil)
 	}
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
+func (offset *Offset) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	offset.Free(proc, pipelineFailed, err)
+}
+
+func (offset *Offset) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if offset.ctr != nil {
+		if offset.ctr.offsetExecutor != nil {
+			offset.ctr.offsetExecutor.Free()
+			offset.ctr.offsetExecutor = nil
+		}
+		offset.ctr = nil
+	}
+
 }

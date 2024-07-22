@@ -211,7 +211,7 @@ invalid input: the file does not exist in load flow
 load data infile{'filepath'='','format'='jsonline','jsondata'='object'}into table jsonline_t7;
 invalid configuration: the filepath must be specified
 load data infile{'filepath'='$resources/load_data/char_varchar_1.jl','format'='jsonline','jsondata'='array'}into table jsonline_t7;
-json: cannot unmarshal object into Go value of type []interface {}
+invalid input: not a json array
 load data infile{'filepath'='$resources/load_data/char_varchar_1.jl','format'='jsonline'}into table jsonline_t7;
 invalid configuration: the jsondata must be specified
 load data infile{'filepath'='$resources/load_data/char_varchar_1.jl','format'='jsonline','compression'='none','jsondata'='object'}into table jsonline_t7;

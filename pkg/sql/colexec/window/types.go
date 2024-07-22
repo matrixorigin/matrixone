@@ -19,20 +19,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
-
-type evalVector struct {
-	vec      *vector.Vector
-	executor colexec.ExpressionExecutor
-}
+var _ vm.Operator = new(Window)
 
 const (
 	receive = iota
@@ -49,65 +44,70 @@ type container struct {
 
 	desc      []bool
 	nullsLast []bool
-	orderVecs []evalVector
+	orderVecs []group.ExprEvalVector
 	sels      []int64
 
 	ps      []int64 // index of partition by
 	os      []int64 // Sorted partitions
-	aggVecs []evalVector
+	aggVecs []group.ExprEvalVector
 }
 
-type Argument struct {
+type Window struct {
 	ctr         *container
 	WinSpecList []*plan.Expr
 	// sort and partition
 	Fs []*plan.OrderBySpec
 	// agg func
 	Types []types.Type
-	Aggs  []agg.Aggregate
+	Aggs  []aggexec.AggFuncExecExpression
 
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (window *Window) GetOperatorBase() *vm.OperatorBase {
+	return &window.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[Window](
+		func() *Window {
+			return &Window{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *Window) {
+			*a = Window{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[Window]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (window Window) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *Window {
+	return reuse.Alloc[Window](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (window *Window) Release() {
+	if window != nil {
+		reuse.Free[Window](window, nil)
 	}
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := arg.ctr
+func (window *Window) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	window.Free(proc, pipelineFailed, err)
+}
+
+func (window *Window) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := window.ctr
 	if ctr != nil {
 		mp := proc.Mp()
 		ctr.FreeMergeTypeOperator(pipelineFailed)
 		ctr.cleanBatch(mp)
-		ctr.cleanAggVectors(mp)
-		ctr.cleanOrderVectors(mp)
+		ctr.cleanAggVectors()
+		ctr.cleanOrderVectors()
+		window.ctr = nil
 	}
 }
 
@@ -118,20 +118,16 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	}
 }
 
-func (ctr *container) cleanOrderVectors(_ *mpool.MPool) {
+func (ctr *container) cleanOrderVectors() {
 	for i := range ctr.orderVecs {
-		if ctr.orderVecs[i].executor != nil {
-			ctr.orderVecs[i].executor.Free()
-		}
-		ctr.orderVecs[i].vec = nil
+		ctr.orderVecs[i].Free()
 	}
+	ctr.orderVecs = nil
 }
 
-func (ctr *container) cleanAggVectors(_ *mpool.MPool) {
+func (ctr *container) cleanAggVectors() {
 	for i := range ctr.aggVecs {
-		if ctr.aggVecs[i].executor != nil {
-			ctr.aggVecs[i].executor.Free()
-		}
-		ctr.aggVecs[i].vec = nil
+		ctr.aggVecs[i].Free()
 	}
+	ctr.aggVecs = nil
 }

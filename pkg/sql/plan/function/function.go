@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -51,14 +50,19 @@ func initAllSupportedFunctions() {
 	for _, fn := range supportedOthersBuiltIns {
 		allSupportedFunctions[fn.functionId] = fn
 	}
-	for _, fn := range supportedAggregateFunctions {
-		allSupportedFunctions[fn.functionId] = fn
-	}
-	for _, fn := range supportedWindowFunctions {
-		allSupportedFunctions[fn.functionId] = fn
-	}
 
-	agg.InitAggFramework(generateAggExecutorWithoutConfig, generateAggExecutor, GetFunctionIsWinOrderFunById)
+	for _, fn := range supportedWindowInNewFramework {
+		for _, ov := range fn.Overloads {
+			ov.aggFramework.aggRegister(encodeOverloadID(int32(fn.functionId), int32(ov.overloadId)))
+		}
+		allSupportedFunctions[fn.functionId] = fn
+	}
+	for _, fn := range supportedAggInNewFramework {
+		for _, ov := range fn.Overloads {
+			ov.aggFramework.aggRegister(encodeOverloadID(int32(fn.functionId), int32(ov.overloadId)))
+		}
+		allSupportedFunctions[fn.functionId] = fn
+	}
 }
 
 func GetFunctionIsAggregateByName(name string) bool {
@@ -107,7 +111,7 @@ func GetFunctionIsZonemappableById(ctx context.Context, overloadID int64) (bool,
 
 func GetFunctionById(ctx context.Context, overloadID int64) (f overload, err error) {
 	fid, oIndex := DecodeOverloadID(overloadID)
-	if int(fid) >= len(allSupportedFunctions) || int(fid) != allSupportedFunctions[fid].functionId {
+	if fid < 0 || int(fid) >= len(allSupportedFunctions) || int(fid) != allSupportedFunctions[fid].functionId {
 		return overload{}, moerr.NewInvalidInput(ctx, "function overload id not found")
 	}
 	return allSupportedFunctions[fid].Overloads[oIndex], nil
@@ -115,7 +119,7 @@ func GetFunctionById(ctx context.Context, overloadID int64) (f overload, err err
 
 func GetLayoutById(ctx context.Context, overloadID int64) (FuncExplainLayout, error) {
 	fid, _ := DecodeOverloadID(overloadID)
-	if int(fid) >= len(allSupportedFunctions) || int(fid) != allSupportedFunctions[fid].functionId {
+	if fid < 0 || int(fid) >= len(allSupportedFunctions) || int(fid) != allSupportedFunctions[fid].functionId {
 		return 0, moerr.NewInvalidInput(ctx, "function overload id not found")
 	}
 	return allSupportedFunctions[fid].layout, nil
@@ -123,7 +127,7 @@ func GetLayoutById(ctx context.Context, overloadID int64) (FuncExplainLayout, er
 
 func GetFunctionByIdWithoutError(overloadID int64) (f overload, exists bool) {
 	fid, oIndex := DecodeOverloadID(overloadID)
-	if int(fid) >= len(allSupportedFunctions) || int(fid) != allSupportedFunctions[fid].functionId {
+	if fid < 0 || int(fid) >= len(allSupportedFunctions) || int(fid) != allSupportedFunctions[fid].functionId {
 		return overload{}, false
 	}
 	return allSupportedFunctions[fid].Overloads[oIndex], true
@@ -203,10 +207,20 @@ func RunFunctionDirectly(proc *process.Process, overloadID int64, inputs []*vect
 		result.Free()
 		return nil, err
 	}
-	exec := f.GetExecuteMethod()
-	if err = exec(inputs, result, proc, evaluateLength); err != nil {
+	exec, execFree := f.GetExecuteMethod()
+	if err = exec(inputs, result, proc, evaluateLength, nil); err != nil {
 		result.Free()
+		if execFree != nil {
+			// NOTE: execFree is only applicable for serial and serial_full.
+			// if execFree is not nil, then make sure to call it after exec() is done.
+			_ = execFree()
+		}
 		return nil, err
+	}
+	if execFree != nil {
+		// NOTE: execFree is only applicable for serial and serial_full.
+		// if execFree is not nil, then make sure to call it after exec() is done.
+		_ = execFree()
 	}
 
 	vec := result.GetResultVector()
@@ -221,22 +235,6 @@ func RunFunctionDirectly(proc *process.Process, overloadID int64, inputs []*vect
 		return cvec, nil
 	}
 	return vec, nil
-}
-
-func generateAggExecutor(
-	overloadID int64, isDistinct bool, inputTypes []types.Type, config any) (agg.Agg[any], error) {
-	f, exist := GetFunctionByIdWithoutError(overloadID)
-	if !exist {
-		return nil, moerr.NewInvalidInputNoCtx("function id '%d' not found", overloadID)
-	}
-
-	outputTyp := f.retType(inputTypes)
-	return f.aggFramework.aggNew(overloadID, isDistinct, inputTypes, outputTyp, config)
-}
-
-func generateAggExecutorWithoutConfig(
-	overloadID int64, isDistinct bool, inputTypes []types.Type) (agg.Agg[any], error) {
-	return generateAggExecutor(overloadID, isDistinct, inputTypes, nil)
 }
 
 func GetAggFunctionNameByID(overloadID int64) string {
@@ -343,14 +341,21 @@ type FuncNew struct {
 
 type executeLogicOfOverload func(parameters []*vector.Vector,
 	result vector.FunctionResultWrapper,
-	proc *process.Process, length int) error
+	proc *process.Process, length int,
+	selectList *FunctionSelectList) error
+
+// executeFreeOfOverload is used to free the resources allocated by the execution logic.
+// It is mainly used in SERIAL and SERIAL_FULL.
+// NOTE: right now, we are not throwing an error when the free logic failed. However, it is still included
+// in case we need it in the future.
+type executeFreeOfOverload func() error
 
 type aggregationLogicOfOverload struct {
 	// agg related string for error message.
 	str string
 
-	// newAgg is used to create a new aggregation structure for agg framework.
-	aggNew func(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, config any) (agg.Agg[any], error)
+	// how to register the aggregation.
+	aggRegister func(overloadID int64)
 }
 
 // an overload of a function.
@@ -373,6 +378,10 @@ type overload struct {
 
 	// the execution logic.
 	newOp func() executeLogicOfOverload
+
+	// the execution logic and free logic.
+	// NOTE: use either newOp or newOpWithFree.
+	newOpWithFree func() (executeLogicOfOverload, executeFreeOfOverload)
 
 	// in fact, the function framework does not directly run aggregate functions and window functions.
 	// we use two flags to mark whether function is one of them.
@@ -409,9 +418,14 @@ func (ov *overload) CannotExecuteInParallel() bool {
 	return ov.cannotParallel
 }
 
-func (ov *overload) GetExecuteMethod() executeLogicOfOverload {
-	f := ov.newOp
-	return f()
+func (ov *overload) GetExecuteMethod() (executeLogicOfOverload, executeFreeOfOverload) {
+	if ov.newOpWithFree != nil {
+		fn, fnFree := ov.newOpWithFree()
+		return fn, fnFree
+	}
+
+	fn := ov.newOp()
+	return fn, nil
 }
 
 func (ov *overload) GetReturnTypeMethod() func(parameters []types.Type) types.Type {
@@ -474,4 +488,31 @@ func newCheckResultWithCast(overloadId int, castType []types.Type) checkResult {
 		idx:       overloadId,
 		finalType: castType,
 	}
+}
+
+type FunctionSelectList struct {
+	AnyNull    bool
+	AllNull    bool
+	SelectList []bool
+}
+
+func (selectList *FunctionSelectList) ShouldEvalAllRow() bool {
+	if selectList == nil {
+		return true
+	}
+	return !selectList.AnyNull
+}
+
+func (selectList *FunctionSelectList) IgnoreAllRow() bool {
+	if selectList == nil {
+		return false
+	}
+	return selectList.AllNull
+}
+
+func (selectList *FunctionSelectList) Contains(row uint64) bool {
+	if selectList == nil {
+		return false
+	}
+	return !selectList.SelectList[row]
 }

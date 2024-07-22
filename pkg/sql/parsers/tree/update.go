@@ -85,6 +85,9 @@ type UpdateExpr struct {
 }
 
 func (node *UpdateExpr) Format(ctx *FmtCtx) {
+	if node == nil {
+		return
+	}
 	prefix := ""
 	for _, n := range node.Names {
 		ctx.WriteString(prefix)
@@ -116,12 +119,15 @@ const (
 	LZW        = "lzw"
 	ZLIB       = "zlib"
 	LZ4        = "lz4"
+	TAR_GZ     = "tar.gz"
+	TAR_BZ2    = "tar.bz2"
 )
 
 // load data fotmat
 const (
 	CSV      = "csv"
 	JSONLINE = "jsonline"
+	PARQUET  = "parquet"
 )
 
 // if $format is jsonline
@@ -164,8 +170,9 @@ type ExParam struct {
 	LoadFile    bool
 	Local       bool
 	QueryResult bool
-	SysTable    bool
 	Parallel    bool
+	Strict      bool
+	ExtTab      bool // means table is created by syntax, create external table
 }
 
 type S3Parameter struct {
@@ -291,6 +298,12 @@ func (node *Load) Format(ctx *FmtCtx) {
 	if node.Param.Tail.Assignments != nil {
 		ctx.WriteString(" set ")
 		node.Param.Tail.Assignments.Format(ctx)
+	}
+	if node.Param.Parallel {
+		ctx.WriteString(" parallel true ")
+		if node.Param.Strict {
+			ctx.WriteString("strict true ")
+		}
 	}
 }
 

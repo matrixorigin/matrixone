@@ -38,6 +38,7 @@ type tableCache struct {
 
 func newTableCache(
 	ctx context.Context,
+	sid string,
 	tableID uint64,
 	cols []AutoColumn,
 	cfg Config,
@@ -45,7 +46,7 @@ func newTableCache(
 	txnOp client.TxnOperator,
 	committed bool) (incrTableCache, error) {
 	c := &tableCache{
-		logger:  getLogger(),
+		logger:  getLogger(sid).Named("incrservice"),
 		tableID: tableID,
 		cols:    cols,
 	}
@@ -55,11 +56,14 @@ func newTableCache(
 	for _, col := range cols {
 		cc, err := newColumnCache(
 			ctx,
+			sid,
 			tableID,
 			col,
 			cfg,
+			committed,
 			allocator,
-			txnOp)
+			txnOp,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -76,6 +80,11 @@ func (c *tableCache) commit() {
 	}
 	c.mu.committed = true
 	c.mu.txnOp = nil
+	for _, col := range c.mu.cols {
+		col.Lock()
+		col.committed = true
+		col.Unlock()
+	}
 }
 
 func (c *tableCache) getTxn() client.TxnOperator {
@@ -87,7 +96,9 @@ func (c *tableCache) getTxn() client.TxnOperator {
 func (c *tableCache) insertAutoValues(
 	ctx context.Context,
 	tableID uint64,
-	bat *batch.Batch) (uint64, error) {
+	bat *batch.Batch,
+	estimate int64,
+) (uint64, error) {
 	lastInsert := uint64(0)
 	txnOp := c.getTxn()
 	for _, col := range c.cols {
@@ -95,6 +106,11 @@ func (c *tableCache) insertAutoValues(
 		if cc == nil {
 			panic("column cache should not be nil, " + col.ColName)
 		}
+
+		if estimate > int64(cc.cfg.CountPerAllocate) {
+			cc.preAllocate(ctx, tableID, int(estimate), txnOp)
+		}
+
 		rows := bat.RowCount()
 		vec := bat.GetVector(int32(col.ColIndex))
 		if v, err := cc.insertAutoValues(ctx, tableID, vec, rows, txnOp); err != nil {

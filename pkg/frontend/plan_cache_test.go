@@ -15,8 +15,9 @@
 package frontend
 
 import (
-	"github.com/stretchr/testify/require"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func Test_BasicGet(t *testing.T) {

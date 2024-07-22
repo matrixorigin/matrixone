@@ -16,6 +16,7 @@ package lockservice
 
 import (
 	"context"
+	"errors"
 	"hash/crc32"
 	"hash/crc64"
 	"sync"
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/assert"
@@ -52,7 +54,7 @@ func getRunner(remote bool) func(t *testing.T, table uint64, fn func(context.Con
 			[]string{"s1", "s2"},
 			func(alloc *lockTableAllocator, ss []*service) {
 				s1 := ss[0]
-				ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
 				defer cancel()
 
 				option := newTestRowExclusiveOptions()
@@ -121,6 +123,11 @@ func TestRowLockWithSharedAndExclusive(t *testing.T) {
 					rows := newTestRows(1)
 					txn1 := newTestTxnID(1)
 					txn2 := newTestTxnID(2)
+
+					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+						f(txn1)
+						f(txn2)
+					}
 
 					// txn1 hold the lock
 					_, err := s.Lock(ctx, table, rows, txn1, option)
@@ -225,11 +232,18 @@ func TestRangeLockWithSharedAndExclusive(t *testing.T) {
 					ctx context.Context,
 					s *service,
 					lt *localLockTable) {
+
 					option := newTestRangeExclusiveOptions()
 					sharedOptions := newTestRangeSharedOptions()
 					rows := newTestRows(1, 2)
 					txn1 := newTestTxnID(1)
 					txn2 := newTestTxnID(2)
+
+					// keep txn1 cannot close by orphan txn
+					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+						f(txn1)
+						f(txn2)
+					}
 
 					// txn1 hold the lock
 					_, err := s.Lock(ctx, table, rows, txn1, option)
@@ -318,6 +332,11 @@ func TestRowLockWithConflict(t *testing.T) {
 					txn1 := newTestTxnID(1)
 					txn2 := newTestTxnID(2)
 
+					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+						f(txn1)
+						f(txn2)
+					}
+
 					// txn1 hold the lock
 					_, err := s.Lock(ctx, table, rows, txn1, option)
 					require.NoError(t, err)
@@ -361,6 +380,11 @@ func TestRangeLockWithConflict(t *testing.T) {
 					rows := newTestRows(1, 2)
 					txn1 := newTestTxnID(1)
 					txn2 := newTestTxnID(2)
+
+					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+						f(txn1)
+						f(txn2)
+					}
 
 					// txn1 hold the lock
 					_, err := s.Lock(ctx, table, rows, txn1, option)
@@ -410,6 +434,12 @@ func TestRowLockWithWaitQueue(t *testing.T) {
 					txn1 := newTestTxnID(1)
 					txn2 := newTestTxnID(2)
 					txn3 := newTestTxnID(3)
+
+					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+						f(txn1)
+						f(txn2)
+						f(txn3)
+					}
 
 					_, err := s.Lock(ctx, table, rows, txn1, option)
 					require.NoError(t, err)
@@ -478,6 +508,12 @@ func TestRangeLockWithWaitQueue(t *testing.T) {
 					txn2 := newTestTxnID(2)
 					txn3 := newTestTxnID(3)
 
+					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+						f(txn1)
+						f(txn2)
+						f(txn3)
+					}
+
 					_, err := s.Lock(ctx, table, rows, txn1, option)
 					require.NoError(t, err)
 
@@ -532,6 +568,11 @@ func TestRowLockWithSameTxnWithConflict(t *testing.T) {
 					txn1 := newTestTxnID(1)
 					txn2 := newTestTxnID(2)
 
+					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+						f(txn1)
+						f(txn2)
+					}
+
 					_, err := s.Lock(ctx, table, rows, txn1, option)
 					require.NoError(t, err)
 
@@ -585,6 +626,11 @@ func TestRangeLockWithSameTxnWithConflict(t *testing.T) {
 					rows := newTestRows(1, 2)
 					txn1 := newTestTxnID(1)
 					txn2 := newTestTxnID(2)
+
+					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+						f(txn1)
+						f(txn2)
+					}
 
 					_, err := s.Lock(ctx, table, rows, txn1, option)
 					require.NoError(t, err)
@@ -707,6 +753,11 @@ func TestManyRowLockWithConflict(t *testing.T) {
 					txn1 := newTestTxnID(1)
 					txn2 := newTestTxnID(2)
 
+					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+						f(txn1)
+						f(txn2)
+					}
+
 					// txn1 hold the lock
 					_, err := s.Lock(ctx, table, rows, txn1, option)
 					require.NoError(t, err)
@@ -753,6 +804,11 @@ func TestManyRangeLockWithConflict(t *testing.T) {
 					rows := newTestRows(1, 2, 3, 4)
 					txn1 := newTestTxnID(1)
 					txn2 := newTestTxnID(2)
+
+					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+						f(txn1)
+						f(txn2)
+					}
 
 					// txn1 hold the lock
 					_, err := s.Lock(ctx, table, rows, txn1, option)
@@ -875,6 +931,12 @@ func TestCtxCancelWhileWaiting(t *testing.T) {
 					txn1 := newTestTxnID(1)
 					txn2 := newTestTxnID(2)
 					txn3 := newTestTxnID(3)
+
+					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+						f(txn1)
+						f(txn2)
+						f(txn3)
+					}
 
 					// txn1 hold the lock
 					_, err := s.Lock(ctx, table, rows, txn1, option)
@@ -1053,6 +1115,1040 @@ func TestDeadLockWith2Txn(t *testing.T) {
 	}
 }
 
+func TestDeadLockWithIndirectDependsOn(t *testing.T) {
+	for name, runner := range runners {
+		if name == "local" {
+			continue
+		}
+		t.Run(name, func(t *testing.T) {
+			table := uint64(10)
+			runner(
+				t,
+				table,
+				func(
+					ctx context.Context,
+					s *service,
+					lt *localLockTable) {
+					// row1: txn1 : txn2, txn3
+					// row4: txn4 : txn3, txn2
+
+					row1 := newTestRows(1)
+					row4 := newTestRows(4)
+					txn1 := newTestTxnID(1)
+					txn2 := newTestTxnID(2)
+					txn3 := newTestTxnID(3)
+					txn4 := newTestTxnID(4)
+
+					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+						f(txn1)
+						f(txn2)
+						f(txn3)
+						f(txn4)
+					}
+
+					mustAddTestLock(t, ctx, s, table, txn1, row1, pb.Granularity_Row)
+					mustAddTestLock(t, ctx, s, table, txn4, row4, pb.Granularity_Row)
+
+					var wg sync.WaitGroup
+					wg.Add(4)
+					go func() {
+						defer wg.Done()
+
+						// row1 wait list: txn2
+						maybeAddTestLockWithDeadlockWithWaitRetry(
+							t,
+							ctx,
+							s,
+							table,
+							txn2,
+							row1,
+							pb.Granularity_Row,
+							time.Second*5,
+						)
+					}()
+					go func() {
+						defer wg.Done()
+
+						// row4 wait list: txn3
+						waitLocalWaiters(lt, row4[0], 1)
+
+						// row4 wait list: txn3, txn2
+						maybeAddTestLockWithDeadlockWithWaitRetry(
+							t,
+							ctx,
+							s,
+							table,
+							txn2,
+							row4,
+							pb.Granularity_Row,
+							time.Second*5,
+						)
+
+						require.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
+					}()
+
+					go func() {
+						defer wg.Done()
+
+						// row1 wait list: txn2
+						waitLocalWaiters(lt, row1[0], 1)
+
+						// row1 wait list: txn2, txn3
+						maybeAddTestLockWithDeadlockWithWaitRetry(
+							t,
+							ctx,
+							s,
+							table,
+							txn3,
+							row1,
+							pb.Granularity_Row,
+							time.Second*5,
+						)
+
+						require.NoError(t, s.Unlock(ctx, txn3, timestamp.Timestamp{}))
+					}()
+					go func() {
+						defer wg.Done()
+
+						// row4 wait list: txn3
+						maybeAddTestLockWithDeadlockWithWaitRetry(
+							t,
+							ctx,
+							s,
+							table,
+							txn3,
+							row4,
+							pb.Granularity_Row,
+							time.Second*5)
+					}()
+
+					// row1:  txn1 : txn2, txn3
+					waitLocalWaiters(lt, row1[0], 2)
+					// row4:  txn4 : txn3, txn2
+					waitLocalWaiters(lt, row4[0], 2)
+
+					require.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
+					require.NoError(t, s.Unlock(ctx, txn4, timestamp.Timestamp{}))
+
+					wg.Wait()
+				})
+		})
+	}
+}
+
+func TestWaiterAwakeOnDeadLock(t *testing.T) {
+	for name, runner := range runners {
+		if name == "local" {
+			continue
+		}
+		t.Run(name, func(t *testing.T) {
+			table := uint64(10)
+			runner(
+				t,
+				table,
+				func(
+					ctx context.Context,
+					s *service,
+					lt *localLockTable) {
+					// row1: txn1 : txn2, txn3
+
+					row1 := newTestRows(1)
+					txn1 := newTestTxnID(1)
+					txn2 := newTestTxnID(2)
+					txn3 := newTestTxnID(3)
+
+					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+						f(txn1)
+						f(txn2)
+						f(txn3)
+					}
+
+					mustAddTestLock(t, ctx, s, table, txn1, row1, pb.Granularity_Row)
+
+					var wg sync.WaitGroup
+					wg.Add(2)
+					go func() {
+						defer wg.Done()
+
+						// row1 wait list: txn2
+						maybeAddTestLockWithDeadlockWithWaitRetry(
+							t,
+							ctx,
+							s,
+							table,
+							txn2,
+							row1,
+							pb.Granularity_Row,
+							time.Second*5,
+						)
+					}()
+
+					go func() {
+						defer wg.Done()
+
+						// row1 wait list: txn2
+						waitLocalWaiters(lt, row1[0], 1)
+
+						// row1 wait list: txn2, txn3
+						maybeAddTestLockWithDeadlockWithWaitRetry(
+							t,
+							ctx,
+							s,
+							table,
+							txn3,
+							row1,
+							pb.Granularity_Row,
+							time.Second*5,
+						)
+
+					}()
+
+					// row1:  txn1 : txn2, txn3
+					waitLocalWaiters(lt, row1[0], 2)
+
+					t2 := lt.txnHolder.getActiveTxn(txn2, false, "")
+					t2.Lock()
+					t2.deadlockFound = true
+					t2.Unlock()
+
+					require.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
+
+					t2.Lock()
+					for _, w := range t2.blockedWaiters {
+						w.notify(notifyValue{err: ErrDeadLockDetected}, getLogger(s.GetConfig().ServiceID))
+					}
+					t2.Unlock()
+
+					require.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
+					for {
+						t3 := lt.txnHolder.getActiveTxn(txn3, false, "")
+						t3.Lock()
+						if len(t3.getHoldLocksLocked(0).tableBinds) > 0 {
+							t3.Unlock()
+							break
+						}
+						t3.Unlock()
+
+						select {
+						case <-ctx.Done():
+							t3.Lock()
+							require.True(t, len(t3.getHoldLocksLocked(0).tableBinds) > 0)
+							t3.Unlock()
+							return
+						default:
+						}
+					}
+
+					wg.Wait()
+				})
+		})
+	}
+}
+
+func TestLockSuccWithKeepBindTimeout(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1"},
+		time.Millisecond*200,
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			_, err := l.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+			require.NoError(t, l.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
+
+			for i := 0; i < 10; i++ {
+				p := alloc.GetLatest(0, 0)
+				require.True(t, p.Valid)
+			}
+		},
+		nil,
+	)
+
+}
+
+func TestIssue3693(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1"},
+		time.Millisecond*200,
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+
+			alloc.registerService(l.serviceID, 0)
+
+			alloc.setRestartService("s1")
+			for {
+				if l.isStatus(pb.Status_ServiceLockWaiting) {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					panic("timeout bug")
+				default:
+				}
+			}
+		},
+		nil,
+	)
+
+}
+
+func TestReLockSuccWithLockTableBindChanged(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1", "s2"},
+		time.Second*1,
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			_, err := l1.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+			require.NoError(t, l1.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
+
+			b := l1.tableGroups.get(0, 0).getBind()
+			r := &remoteLockTable{bind: b}
+			l1.tableGroups.Lock()
+			l1.tableGroups.holders[0].tables[0] = r
+			l1.tableGroups.Unlock()
+
+			// should lock failed
+			_, err = l2.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn2"),
+				option)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
+
+		},
+		nil,
+	)
+}
+
+func TestIssue3654(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1", "s2"},
+		time.Second*1,
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Nanosecond)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+				RetryWait:   int64(time.Second),
+			}
+
+			_, err := l1.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+
+			_, err = l2.Lock(
+				ctx,
+				0,
+				[][]byte{{2}},
+				[]byte("txn2"),
+				option)
+			if err != nil {
+				require.True(t, errors.Is(err, context.DeadlineExceeded))
+			}
+		},
+		nil,
+	)
+}
+
+func TestIssue17225(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1", "s2"},
+		time.Second*1,
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			_, err := l1.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+
+			_, err = l2.Lock(
+				ctx,
+				0,
+				[][]byte{{2}},
+				[]byte("txn2"),
+				option)
+			require.NoError(t, err)
+			require.NoError(t, l2.Unlock(ctx, []byte("txn2"), timestamp.Timestamp{}))
+
+			// equivalent to restart tn
+			alloc.mu.Lock()
+			alloc.mu.lockTables = make(map[uint32]map[uint64]pb.LockTable)
+			alloc.mu.services = make(map[string]*serviceBinds)
+			alloc.mu.Unlock()
+
+			_, err = l2.Lock(
+				ctx,
+				0,
+				[][]byte{{3}},
+				[]byte("txn3"),
+				option)
+			require.NoError(t, err)
+
+			require.NoError(t, l1.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
+			require.NoError(t, l2.Unlock(ctx, []byte("txn3"), timestamp.Timestamp{}))
+		},
+		nil,
+	)
+}
+
+func TestIssue3537(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1"},
+		time.Second*1,
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			_, err := l1.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+
+			alloc.setRestartService("s1")
+			for {
+				if l1.isStatus(pb.Status_ServiceLockWaiting) {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					panic("timeout bug")
+				default:
+				}
+			}
+
+			b := alloc.getServiceBindsWithoutPrefix("s1")
+			b.setStatus(pb.Status_ServiceLockEnable)
+
+			for {
+				if b.isStatus(pb.Status_ServiceLockWaiting) {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					panic("timeout bug")
+				default:
+				}
+			}
+
+			require.NoError(t, l1.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
+			for {
+				if b.isStatus(pb.Status_ServiceCanRestart) {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					panic("timeout bug")
+				default:
+				}
+			}
+		},
+		nil,
+	)
+}
+
+func TestIssue3537_2(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1"},
+		time.Second*1,
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			_, err := l1.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+
+			alloc.setRestartService("s1")
+			for {
+				if l1.isStatus(pb.Status_ServiceLockWaiting) {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					panic("timeout bug")
+				default:
+				}
+			}
+
+			b := alloc.getServiceBindsWithoutPrefix("s1")
+			b.setStatus(pb.Status_ServiceLockEnable)
+
+			require.NoError(t, l1.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
+
+			for {
+				if b.isStatus(pb.Status_ServiceCanRestart) {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					panic("timeout bug")
+				default:
+				}
+			}
+		},
+		nil,
+	)
+}
+
+func TestIssue3537_3(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1"},
+		time.Second*1,
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			_, err := l1.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+
+			alloc.setRestartService("s1")
+			for {
+				if l1.isStatus(pb.Status_ServiceLockWaiting) {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					panic("timeout bug")
+				default:
+				}
+			}
+
+			require.NoError(t, l1.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
+
+			b := alloc.getServiceBindsWithoutPrefix("s1")
+			b.setStatus(pb.Status_ServiceLockEnable)
+
+			for {
+				if b.isStatus(pb.Status_ServiceCanRestart) {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					panic("timeout bug")
+				default:
+				}
+			}
+		},
+		nil,
+	)
+}
+
+func TestIssue3288(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1", "s2"},
+		time.Second*1,
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			_, err := l1.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+			require.NoError(t, l1.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
+
+			l1.Close()
+
+			// should lock failed
+			_, err = l2.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn2"),
+				option)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect))
+
+			time.Sleep(time.Second * 3)
+
+			// should lock succ
+			_, err = l2.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn2"),
+				option)
+			require.NoError(t, err)
+
+		},
+		nil,
+	)
+}
+
+func TestIssue3538(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1", "s2"},
+		time.Second*1,
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			_, err := l1.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+
+			alloc.setRestartService("s1")
+			for {
+				if l1.isStatus(pb.Status_ServiceLockWaiting) {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					panic("timeout bug")
+				default:
+				}
+			}
+
+			require.NoError(t, l1.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
+
+			for {
+				_, err = l2.Lock(
+					ctx,
+					0,
+					[][]byte{{1}},
+					[]byte("txn2"),
+					option)
+				if err == nil {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					panic("timeout bug")
+				default:
+				}
+			}
+		},
+		nil,
+	)
+}
+
+func TestIssue16121(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1", "s2"},
+		time.Second*1,
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			_, err := l1.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+			require.NoError(t, l1.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
+
+			_, err = l2.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn2"),
+				option)
+			require.NoError(t, err)
+
+			// change lock table to remote from local
+			b := l1.tableGroups.get(0, 0).getBind()
+			b.ServiceID = l2.serviceID
+			r := &remoteLockTable{
+				serviceID: l2.serviceID,
+				bind:      b,
+			}
+			l1.tableGroups.Lock()
+			l1.tableGroups.holders[0].tables[0] = r
+			l1.tableGroups.Unlock()
+
+			require.NoError(t, l2.Unlock(ctx, []byte("txn2"), timestamp.Timestamp{}))
+
+		},
+		nil,
+	)
+}
+
+func TestReLockSuccWithBindChanged(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1", "s2"},
+		time.Second*1,
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			_, err := l1.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+			require.NoError(t, l1.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
+
+			b := l1.tableGroups.get(0, 0).getBind()
+			r := &remoteLockTable{bind: b}
+			l1.tableGroups.Lock()
+			l1.tableGroups.holders[0].tables[0] = r
+			l1.tableGroups.Unlock()
+
+			// should lock failed
+			_, err = l2.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn2"),
+				option)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
+
+			// should lock succ
+			_, err = l2.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn2"),
+				option)
+			require.NoError(t, err)
+		},
+		nil,
+	)
+}
+
+func TestReLockSuccWithReStartCN(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1", "s2"},
+		time.Second*1,
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			_, err := l1.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+			require.NoError(t, l1.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
+
+			alloc.setRestartService("s1")
+			for {
+				if l1.isStatus(pb.Status_ServiceCanRestart) {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					panic("timeout bug")
+				default:
+				}
+			}
+
+			// should lock succ
+			_, err = l2.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn2"),
+				option)
+			require.NoError(t, err)
+			require.NoError(t, l1.Unlock(ctx, []byte("txn2"), timestamp.Timestamp{}))
+		},
+		nil,
+	)
+}
+
+func TestReLockSuccWithKeepBindTimeout(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1", "s2"},
+		time.Millisecond*200,
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			_, err := l1.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+			require.NoError(t, l1.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
+
+			p := alloc.GetLatest(0, 0)
+			require.True(t, p.Valid)
+
+			l1.tableGroups.removeWithFilter(func(key uint64, value lockTable) bool {
+				return true
+			})
+
+			// should lock succ
+			_, err = l2.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn2"),
+				option)
+			require.NoError(t, err)
+		},
+		nil,
+	)
+}
+
+func TestIssue3231(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1", "s2"},
+		time.Second*1,
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			t1, _ := l1.clock.Now()
+			option.SnapShotTs = t1
+			_, err := l1.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+			require.NoError(t, l1.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
+
+			alloc.setRestartService("s1")
+
+			// should lock succ
+			_, err = l2.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn2"),
+				option)
+			require.NoError(t, err)
+			b1 := alloc.GetLatest(0, 0)
+
+			_, err = l2.Lock(
+				ctx,
+				0,
+				[][]byte{{2}},
+				[]byte("txn2"),
+				option)
+			require.NoError(t, err)
+			b2 := alloc.GetLatest(0, 0)
+			// maybe not equal before fixed, because table bind 0 has moved
+			// when service is waiting status
+			require.True(t, b1.ServiceID == b2.ServiceID)
+			require.True(t, b1.Version == b2.Version)
+		},
+		nil,
+	)
+
+}
+
 func TestLockResultWithNoConflict(t *testing.T) {
 	runLockServiceTests(
 		t,
@@ -1137,6 +2233,898 @@ func TestLockResultWithConflictAndTxnCommitted(t *testing.T) {
 	)
 }
 
+func TestRestartInRollingRestartCN(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, s []*service) {
+			alloc.setRestartService("s1")
+			require.Equal(t, true, alloc.canRestartService("s1"))
+		},
+	)
+}
+
+func TestUnlockInRollingRestartCN(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			t1, _ := l.clock.Now()
+			option.SnapShotTs = t1
+			_, err := l.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+
+			err = l.Unlock(
+				ctx,
+				[]byte("txn1"),
+				timestamp.Timestamp{})
+			require.NoError(t, err)
+
+			alloc.setRestartService("s1")
+			for {
+				if l.isStatus(pb.Status_ServiceCanRestart) {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					require.Equal(t, false, true)
+					return
+				default:
+				}
+			}
+		},
+	)
+}
+
+func TestReLockInRollingRestartCN(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			t1, _ := l1.clock.Now()
+			option.SnapShotTs = t1
+			_, err := l1.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+
+			t2, _ := l2.clock.Now()
+			option.SnapShotTs = t2
+			_, err = l2.Lock(
+				ctx,
+				1,
+				[][]byte{{2}},
+				[]byte("txn2"),
+				option)
+			require.NoError(t, err)
+
+			alloc.setRestartService("s1")
+			for {
+				if l1.isStatus(pb.Status_ServiceLockWaiting) {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					require.True(t, false)
+					return
+				default:
+				}
+			}
+
+			_, err = l2.Lock(
+				ctx,
+				0,
+				[][]byte{{3}},
+				[]byte("txn2"),
+				option)
+			require.NoError(t, err)
+
+			err = l1.Unlock(
+				ctx,
+				[]byte("txn1"),
+				timestamp.Timestamp{})
+			require.NoError(t, err)
+			require.True(t, l1.validGroupTable(0, 0))
+			require.True(t, l1.isStatus(pb.Status_ServiceLockWaiting))
+
+			err = l2.Unlock(
+				ctx,
+				[]byte("txn2"),
+				timestamp.Timestamp{})
+			require.NoError(t, err)
+			require.False(t, l1.validGroupTable(0, 0))
+		},
+	)
+}
+
+func TestOldTxnLockInRollingRestartCN(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			t1, _ := l.clock.Now()
+			option.SnapShotTs = t1
+			_, err := l.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+
+			alloc.setRestartService("s1")
+			for {
+				if l.isStatus(pb.Status_ServiceLockWaiting) {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+			}
+
+			// old txn
+			_, err = l.Lock(
+				ctx,
+				0,
+				[][]byte{{2}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+		},
+	)
+}
+
+func TestLeaveGetBindInRollingRestartCN(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+			l1 := s[1]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			t1, _ := l.clock.Now()
+			option.SnapShotTs = t1
+			_, err := l.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+
+			err = l.Unlock(
+				ctx,
+				[]byte("txn1"),
+				timestamp.Timestamp{})
+			require.NoError(t, err)
+
+			// test
+			t2, _ := l1.clock.Now()
+			option.SnapShotTs = t2
+			_, err = l1.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn2"),
+				option)
+			require.NoError(t, err)
+
+			alloc.setRestartService("s1")
+
+			err = l1.Unlock(
+				ctx,
+				[]byte("txn2"),
+				timestamp.Timestamp{})
+			require.NoError(t, err)
+
+			for {
+				if l.isStatus(pb.Status_ServiceCanRestart) {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+			}
+			// get bind
+			_, err = getLockTableBind(
+				l.remote.client,
+				0,
+				0,
+				0,
+				l.serviceID,
+				pb.Sharding_ByRow)
+			require.Error(t, err)
+			require.True(t, alloc.canRestartService("s1"))
+		},
+	)
+}
+
+func TestNewTxnLockInRollingRestartCN(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			t1, _ := l.clock.Now()
+			option.SnapShotTs = t1
+			_, err := l.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+
+			alloc.setRestartService("s1")
+			for {
+				if l.isStatus(pb.Status_ServiceLockWaiting) {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+			}
+
+			// new txn
+			t2, _ := l.clock.Now()
+			option.SnapShotTs = t2
+			_, err = l.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn2"),
+				option)
+			require.Error(t, err)
+		},
+	)
+}
+
+func TestStatusInRollingRestartCN(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			t1, _ := l.clock.Now()
+			option.SnapShotTs = t1
+			_, err := l.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+
+			alloc.setRestartService("s1")
+			for {
+				if l.isStatus(pb.Status_ServiceLockWaiting) {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+			}
+			require.Equal(t, true, l.isStatus(pb.Status_ServiceLockWaiting))
+
+			err = l.Unlock(
+				ctx,
+				[]byte("txn1"),
+				timestamp.Timestamp{})
+			require.NoError(t, err)
+
+			for {
+				if l.isStatus(pb.Status_ServiceCanRestart) {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+			}
+			require.Equal(t, true, l.isStatus(pb.Status_ServiceCanRestart))
+			require.Equal(t, true, alloc.canRestartService("s1"))
+		},
+	)
+}
+
+func TestRemoteLockFailedInRollingRestartCN(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			t1, _ := l1.clock.Now()
+			option.SnapShotTs = t1
+			_, err := l1.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+
+			alloc.setRestartService("s1")
+			for {
+				if l1.isStatus(pb.Status_ServiceLockWaiting) {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+			}
+			require.Equal(t, true, l1.isStatus(pb.Status_ServiceLockWaiting))
+
+			// remote lock should be failed,
+			t2, _ := l2.clock.Now()
+			option.SnapShotTs = t2
+			_, err = l2.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn2"),
+				option)
+			require.Error(t, err)
+		},
+	)
+}
+
+func TestRemoteLockSuccInRollingRestartCN(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			t1, _ := l1.clock.Now()
+			option.SnapShotTs = t1
+			_, err := l1.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+
+			t2, _ := l2.clock.Now()
+			option.SnapShotTs = t2
+			_, err = l2.Lock(
+				ctx,
+				0,
+				[][]byte{{2}},
+				[]byte("txn2"),
+				option)
+			require.NoError(t, err)
+
+			alloc.setRestartService("s1")
+			for {
+				if l1.isStatus(pb.Status_ServiceLockWaiting) {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+			}
+			require.Equal(t, true, l1.isStatus(pb.Status_ServiceLockWaiting))
+
+			// remote lock should be succ
+			t3, _ := l2.clock.Now()
+			option.SnapShotTs = t3
+			_, err = l2.Lock(
+				ctx,
+				0,
+				[][]byte{{3}},
+				[]byte("txn2"),
+				option)
+			require.NoError(t, err)
+		},
+	)
+}
+
+func TestRetryLockSuccInRollingRestartCN(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			t1, _ := l1.clock.Now()
+			option.SnapShotTs = t1
+			_, err := l1.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+
+			t2, _ := l2.clock.Now()
+			option.SnapShotTs = t2
+			_, err = l2.Lock(
+				ctx,
+				0,
+				[][]byte{{2}},
+				[]byte("txn2"),
+				option)
+			require.NoError(t, err)
+
+			alloc.setRestartService("s1")
+			for {
+				if l1.isStatus(pb.Status_ServiceLockWaiting) {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+			}
+			require.Equal(t, true, l1.isStatus(pb.Status_ServiceLockWaiting))
+
+			// remote lock should be failed
+			t3, _ := l2.clock.Now()
+			option.SnapShotTs = t3
+			_, err = l2.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn3"),
+				option)
+			require.Error(t, err)
+
+			err = l1.Unlock(
+				ctx,
+				[]byte("txn1"),
+				timestamp.Timestamp{})
+			require.NoError(t, err)
+
+			err = l2.Unlock(
+				ctx,
+				[]byte("txn2"),
+				timestamp.Timestamp{})
+			require.NoError(t, err)
+			for {
+				if l1.isStatus(pb.Status_ServiceCanRestart) {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+			}
+			require.Equal(t, true, l1.isStatus(pb.Status_ServiceCanRestart))
+
+			// remote lock should be succ
+			option.SnapShotTs = t3
+			for {
+				if _, err = l2.Lock(
+					ctx,
+					0,
+					[][]byte{{1}},
+					[]byte("txn3"),
+					option); err == nil {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					return
+				default:
+					require.Error(t, moerr.NewRetryForCNRollingRestart(), err)
+				}
+			}
+		},
+	)
+}
+
+func TestMoveTableSuccInRollingRestartCN(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			t1, _ := l1.clock.Now()
+			option.SnapShotTs = t1
+			_, err := l1.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+
+			alloc.setRestartService("s1")
+			for {
+				if l1.isStatus(pb.Status_ServiceLockWaiting) {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+			}
+			require.Equal(t, true, l1.isStatus(pb.Status_ServiceLockWaiting))
+
+			err = l1.Unlock(
+				ctx,
+				[]byte("txn1"),
+				timestamp.Timestamp{})
+			require.NoError(t, err)
+
+			for {
+				if !alloc.validLockTable(0, 0) {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+			}
+			require.False(t, alloc.validLockTable(0, 0))
+		},
+	)
+}
+
+func TestMoveTableLockSuccInRollingRestartCN(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			t1, _ := l1.clock.Now()
+			option.SnapShotTs = t1
+			_, err := l1.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+
+			alloc.setRestartService("s1")
+			for {
+				if l1.isStatus(pb.Status_ServiceLockWaiting) {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+			}
+			require.Equal(t, true, l1.isStatus(pb.Status_ServiceLockWaiting))
+
+			err = l1.Unlock(
+				ctx,
+				[]byte("txn1"),
+				timestamp.Timestamp{})
+			require.NoError(t, err)
+
+			for {
+				if !alloc.validLockTable(0, 0) {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+			}
+			require.False(t, alloc.validLockTable(0, 0))
+
+			// new txn should be got right lock table
+			t2, _ := l2.clock.Now()
+			option.SnapShotTs = t2
+			_, err = l2.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn2"),
+				option)
+			require.NoError(t, err)
+		},
+	)
+}
+
+func TestMoveTableRetryLockSuccInRollingRestartCN(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			t1, _ := l1.clock.Now()
+			option.SnapShotTs = t1
+			_, err := l1.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+
+			t2, _ := l2.clock.Now()
+			option.SnapShotTs = t2
+			_, err = l2.Lock(
+				ctx,
+				1,
+				[][]byte{{1}},
+				[]byte("txn2"),
+				option)
+			require.NoError(t, err)
+
+			t3, _ := l1.clock.Now()
+			option.SnapShotTs = t3
+			_, err = l1.Lock(
+				ctx,
+				2,
+				[][]byte{{1}},
+				[]byte("txn3"),
+				option)
+			require.NoError(t, err)
+
+			alloc.setRestartService("s1")
+			for {
+				if l1.isStatus(pb.Status_ServiceLockWaiting) {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+			}
+			require.Equal(t, true, l1.isStatus(pb.Status_ServiceLockWaiting))
+
+			err = l1.Unlock(
+				ctx,
+				[]byte("txn1"),
+				timestamp.Timestamp{})
+			require.NoError(t, err)
+
+			for {
+				if _, err = l2.Lock(
+					ctx,
+					0,
+					[][]byte{{1}},
+					[]byte("txn2"),
+					option); err == nil {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					return
+				default:
+					require.Error(t, moerr.NewRetryForCNRollingRestart(), err)
+				}
+			}
+		},
+	)
+}
+
+func TestPreTxnLockInRollingRestartCN(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			t1, _ := l1.clock.Now()
+			option.SnapShotTs = t1
+			_, err := l1.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+
+			t2, _ := l2.clock.Now()
+			option.SnapShotTs = t2
+			_, err = l2.Lock(
+				ctx,
+				1,
+				[][]byte{{2}},
+				[]byte("txn2"),
+				option)
+			require.NoError(t, err)
+
+			alloc.setRestartService("s2")
+			for {
+				if l1.isStatus(pb.Status_ServiceLockWaiting) {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+			}
+			require.Equal(t, true, l1.isStatus(pb.Status_ServiceLockWaiting))
+
+			// remote lock should be succ, because txn3 start time earlier than restart time
+			option.SnapShotTs = t1
+			_, err = l1.Lock(
+				ctx,
+				1,
+				[][]byte{{1}},
+				[]byte("txn3"),
+				option)
+			require.NoError(t, err)
+		},
+	)
+}
+
 func TestLockResultWithConflictAndTxnAborted(t *testing.T) {
 	runLockServiceTests(
 		t,
@@ -1202,6 +3190,11 @@ func TestRowLockWithConflictAndUnlock(t *testing.T) {
 			txn1 := newTestTxnID(1)
 			txn2 := newTestTxnID(2)
 
+			s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+				f(txn1)
+				f(txn2)
+			}
+
 			// txn1 hold the lock
 			_, err := s.Lock(ctx, table, rows, txn1, option)
 			require.NoError(t, err)
@@ -1243,6 +3236,12 @@ func TestUnlockRangeLockCanNotifyAllWaiters(t *testing.T) {
 			txn1 := newTestTxnID(1)
 			txn2 := newTestTxnID(2)
 			txn3 := newTestTxnID(3)
+
+			s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+				f(txn1)
+				f(txn2)
+				f(txn3)
+			}
 
 			// txn1 hold the lock
 			_, err := s.Lock(ctx, table, rows, txn1, rangeOption)
@@ -1296,6 +3295,12 @@ func TestHasAnyHolderCannotNotifyWaiters(t *testing.T) {
 					txn1 := newTestTxnID(1)
 					txn2 := newTestTxnID(2)
 					txn3 := newTestTxnID(3)
+
+					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+						f(txn1)
+						f(txn2)
+						f(txn3)
+					}
 
 					// txn1 get lock
 					_, err := s.Lock(ctx, table, rows, txn1, option)
@@ -1352,7 +3357,7 @@ func TestTxnUnlockWithBindChanged(t *testing.T) {
 					// changed bind
 					bind := lt.getBind()
 					bind.Version = bind.Version + 1
-					new := newLocalLockTable(bind, s.fsp, s.events, s.clock, s.activeTxnHolder)
+					new := newLocalLockTable(bind, s.fsp, s.events, s.clock, s.activeTxnHolder, getLogger(s.GetConfig().ServiceID))
 					s.tableGroups.set(0, table, new)
 					lt.close()
 
@@ -1579,7 +3584,7 @@ func TestIssue14008(t *testing.T) {
 					r1 *pb.Request,
 					r2 *pb.Response,
 					cs morpc.ClientSession) {
-					writeResponse(ctx, cf, r2, ErrTxnNotFound, cs)
+					writeResponse(ctx, getLogger(s1.GetConfig().ServiceID), cf, r2, ErrTxnNotFound, cs)
 				})
 			var wg sync.WaitGroup
 			for i := 0; i < 20; i++ {
@@ -1725,19 +3730,42 @@ func maybeAddTestLockWithDeadlock(
 	table uint64,
 	txnID []byte,
 	lock [][]byte,
-	granularity pb.Granularity) pb.Result {
-	t.Logf("%s try lock %+v", string(txnID), lock)
+	granularity pb.Granularity,
+) pb.Result {
+	return maybeAddTestLockWithDeadlockWithWaitRetry(
+		t,
+		ctx,
+		l,
+		table,
+		txnID,
+		lock,
+		granularity,
+		0,
+	)
+}
+
+func maybeAddTestLockWithDeadlockWithWaitRetry(
+	t *testing.T,
+	ctx context.Context,
+	l *service,
+	table uint64,
+	txnID []byte,
+	lock [][]byte,
+	granularity pb.Granularity,
+	wait time.Duration,
+) pb.Result {
 	res, err := l.Lock(ctx, table, lock, txnID, pb.LockOptions{
 		Granularity: granularity,
 		Mode:        pb.LockMode_Exclusive,
 		Policy:      pb.WaitPolicy_Wait,
+		RetryWait:   int64(wait),
 	})
 
-	if moerr.IsMoErrCode(err, moerr.ErrDeadLockDetected) {
-		t.Logf("%s lock %+v, found dead lock", string(txnID), lock)
+	if moerr.IsMoErrCode(err, moerr.ErrDeadLockDetected) ||
+		moerr.IsMoErrCode(err, moerr.ErrTxnNotFound) ||
+		moerr.IsMoErrCode(err, moerr.ErrInvalidState) {
 		return res
 	}
-	t.Logf("%s lock %+v, ok", string(txnID), lock)
 	require.NoError(t, err)
 	return res
 }
@@ -1745,14 +3773,18 @@ func maybeAddTestLockWithDeadlock(
 func runLockServiceTests(
 	t assert.TestingT,
 	serviceIDs []string,
-	fn func(*lockTableAllocator, []*service)) {
+	fn func(*lockTableAllocator, []*service),
+	opts ...Option,
+) {
 	runLockServiceTestsWithLevel(
 		t,
 		zapcore.DebugLevel,
 		serviceIDs,
 		time.Second*10,
 		fn,
-		nil)
+		nil,
+		opts...,
+	)
 }
 
 func runLockServiceTestsWithAdjustConfig(
@@ -1776,24 +3808,32 @@ func runLockServiceTestsWithLevel(
 	serviceIDs []string,
 	lockTableBindTimeout time.Duration,
 	fn func(*lockTableAllocator, []*service),
-	adjustConfig func(*Config)) {
+	adjustConfig func(*Config),
+	opts ...Option,
+) {
 	defer leaktest.AfterTest(t.(testing.TB))()
 
-	reuse.RunReuseTests(func() {
-		RunLockServicesForTest(
-			level,
-			serviceIDs,
-			lockTableBindTimeout,
-			func(lta LockTableAllocator, ls []LockService) {
-				services := make([]*service, 0, len(ls))
-				for _, s := range ls {
-					services = append(services, s.(*service))
-				}
-				fn(lta.(*lockTableAllocator), services)
-			},
-			adjustConfig,
-		)
-	})
+	runtime.RunTest(
+		"",
+		func(rt runtime.Runtime) {
+			reuse.RunReuseTests(func() {
+				RunLockServicesForTest(
+					level,
+					serviceIDs,
+					lockTableBindTimeout,
+					func(lta LockTableAllocator, ls []LockService) {
+						services := make([]*service, 0, len(ls))
+						for _, s := range ls {
+							services = append(services, s.(*service))
+						}
+						fn(lta.(*lockTableAllocator), services)
+					},
+					adjustConfig,
+					opts...,
+				)
+			})
+		},
+	)
 }
 
 func waitWaiters(

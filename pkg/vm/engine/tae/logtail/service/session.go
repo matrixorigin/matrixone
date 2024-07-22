@@ -215,7 +215,7 @@ func (s *morpcStream) write(
 			return err
 		}
 	}
-
+	v2.LogTailServerSendCounter.Add(1)
 	return nil
 }
 
@@ -477,11 +477,17 @@ func (ss *Session) Publish(
 	sendCtx, cancel := context.WithTimeout(ctx, ss.sendTimeout)
 	defer cancel()
 
+	beforeSend := time.Now()
 	err := ss.SendUpdateResponse(sendCtx, ss.exactFrom, to, closeCB, qualified...)
 	if err == nil {
 		ss.heartbeatTimer.Reset(ss.heartbeatInterval)
 		ss.exactFrom = to
 	} else {
+		ss.logger.Error("send update response failed",
+			zap.String("send timeout value", ss.sendTimeout.String()),
+			zap.String("send duration", time.Since(beforeSend).String()),
+			zap.Error(err),
+		)
 		ss.notifier.NotifySessionError(ss, err)
 	}
 	return err

@@ -30,50 +30,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestUnlockAfterTimeoutOnRemote(t *testing.T) {
-	runLockServiceTestsWithAdjustConfig(
-		t,
-		[]string{"s1", "s2"},
-		time.Second*10,
-		func(alloc *lockTableAllocator, s []*service) {
-			l1 := s[0]
-			l2 := s[1]
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-			defer cancel()
-
-			txn1 := []byte{1}
-			txn2 := []byte{2}
-			table1 := uint64(1)
-
-			// table1 on l1
-			mustAddTestLock(t, ctx, l1, table1, txn1, [][]byte{{1}}, pb.Granularity_Row)
-			defer func() {
-				assert.NoError(t, l1.Unlock(ctx, txn1, timestamp.Timestamp{}))
-			}()
-
-			// txn2 lock row 2 on remote.
-			mustAddTestLock(t, ctx, l2, table1, txn2, [][]byte{{2}}, pb.Granularity_Row)
-
-			// l2 shutdown
-			assert.NoError(t, l2.Close())
-
-			// wait until txn2 unlocked
-			for {
-				txn := l1.activeTxnHolder.getActiveTxn(txn2, false, "")
-				if txn == nil {
-					return
-				}
-				time.Sleep(time.Millisecond * 100)
-			}
-		},
-		func(c *Config) {
-			c.RemoteLockTimeout.Duration = time.Second
-			c.KeepRemoteLockDuration.Duration = time.Millisecond * 100
-		},
-	)
-
-}
-
 func TestLockBlockedOnRemote(t *testing.T) {
 	runLockServiceTests(
 		t,
@@ -231,7 +187,12 @@ func TestGetActiveTxnWithRemote(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		hold := newMapBasedTxnHandler(
 			"s1",
-			newFixedSlicePool(16)).(*mapBasedTxnHolder)
+			getLogger(""),
+			newFixedSlicePool(16),
+			func(sid string) (bool, error) { return true, nil },
+			func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, nil },
+			func(txn pb.WaitTxn) (bool, error) { return true, nil },
+		).(*mapBasedTxnHolder)
 		defer hold.close()
 
 		txnID := []byte("txn1")
@@ -247,46 +208,16 @@ func TestGetActiveTxnWithRemote(t *testing.T) {
 	})
 }
 
-func TestGetTimeoutRemoveTxn(t *testing.T) {
-	reuse.RunReuseTests(func() {
-		hold := newMapBasedTxnHandler(
-			"s1",
-			newFixedSlicePool(16)).(*mapBasedTxnHolder)
-		defer hold.close()
-
-		txnID1 := []byte("txn1")
-		hold.getActiveTxn(txnID1, true, "s1")
-		txnID2 := []byte("txn2")
-		hold.getActiveTxn(txnID2, true, "s2")
-
-		// s1(now-10s), s2(now-5s)
-		now := time.Now()
-		hold.mu.remoteServices["s1"].Value.time = now.Add(-time.Second * 10)
-		hold.mu.remoteServices["s2"].Value.time = now.Add(-time.Second * 5)
-
-		txns, wait := hold.getTimeoutRemoveTxn(make(map[string]struct{}), nil, time.Second*20)
-		assert.Equal(t, 0, len(txns))
-		assert.NotEqual(t, time.Duration(0), wait)
-
-		// s1 timeout
-		txns, wait = hold.getTimeoutRemoveTxn(make(map[string]struct{}), nil, time.Second*8)
-		assert.Equal(t, 1, len(txns))
-		assert.NotEqual(t, time.Duration(0), wait)
-		assert.Equal(t, txnID1, txns[0])
-
-		// s2 timeout
-		txns, wait = hold.getTimeoutRemoveTxn(make(map[string]struct{}), nil, time.Second*2)
-		assert.Equal(t, 1, len(txns))
-		assert.Equal(t, time.Duration(0), wait)
-		assert.Equal(t, txnID2, txns[0])
-	})
-}
-
 func TestKeepRemoteActiveTxn(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		hold := newMapBasedTxnHandler(
 			"s1",
-			newFixedSlicePool(16)).(*mapBasedTxnHolder)
+			getLogger(""),
+			newFixedSlicePool(16),
+			func(sid string) (bool, error) { return false, nil },
+			func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, nil },
+			func(txn pb.WaitTxn) (bool, error) { return true, nil },
+		).(*mapBasedTxnHolder)
 		defer hold.close()
 
 		txnID1 := []byte("txn1")
@@ -331,7 +262,7 @@ func TestLockWithBindIsStale(t *testing.T) {
 
 			checkBind(
 				t,
-				pb.LockTable{ServiceID: l1.serviceID, Version: 2, Table: table, OriginTable: table, Valid: true},
+				pb.LockTable{ServiceID: l1.serviceID, Version: alloc.version + 1, Table: table, OriginTable: table, Valid: true},
 				l2)
 		},
 	)
@@ -352,7 +283,7 @@ func TestUnlockWithBindIsStable(t *testing.T) {
 
 			checkBind(
 				t,
-				pb.LockTable{ServiceID: l1.serviceID, Version: 2, Table: table, OriginTable: table, Valid: true},
+				pb.LockTable{ServiceID: l1.serviceID, Version: alloc.version + 1, Table: table, OriginTable: table, Valid: true},
 				l2)
 		},
 	)
@@ -375,7 +306,7 @@ func TestGetLockWithBindIsStable(t *testing.T) {
 
 			checkBind(
 				t,
-				pb.LockTable{ServiceID: l1.serviceID, Version: 2, Table: table, OriginTable: table, Valid: true},
+				pb.LockTable{ServiceID: l1.serviceID, Version: alloc.version + 1, Table: table, OriginTable: table, Valid: true},
 				l2)
 		},
 	)
@@ -474,7 +405,7 @@ func TestLockWithBindNotFound(t *testing.T) {
 			table uint64) {
 
 			// change l2's bind to s3, no bind in s3
-			l2.handleBindChanged(pb.LockTable{Table: table, ServiceID: "s3", Valid: true, Version: 1})
+			l2.handleBindChanged(pb.LockTable{Table: table, ServiceID: "s3", Valid: true, Version: alloc.version + 1})
 
 			txnID2 := []byte("txn2")
 			_, err := l2.Lock(ctx, table, [][]byte{{3}}, txnID2, pb.LockOptions{
@@ -486,7 +417,7 @@ func TestLockWithBindNotFound(t *testing.T) {
 
 			checkBind(
 				t,
-				pb.LockTable{ServiceID: l1.serviceID, Version: 1, Table: table, OriginTable: table, Valid: true},
+				pb.LockTable{ServiceID: l1.serviceID, Version: alloc.version, Table: table, OriginTable: table, Valid: true},
 				l2)
 		},
 	)
@@ -503,14 +434,14 @@ func TestUnlockWithBindNotFound(t *testing.T) {
 			table uint64) {
 
 			// change l2's bind to s3, no bind in s3
-			l2.handleBindChanged(pb.LockTable{Table: table, ServiceID: "s3", Valid: true, Version: 1})
+			l2.handleBindChanged(pb.LockTable{Table: table, ServiceID: "s3", Valid: true, Version: alloc.version})
 
 			txnID2 := []byte("txn2")
 			l2.Unlock(ctx, txnID2, timestamp.Timestamp{})
 
 			checkBind(
 				t,
-				pb.LockTable{ServiceID: l1.serviceID, Version: 1, Table: table, OriginTable: table, Valid: true},
+				pb.LockTable{ServiceID: l1.serviceID, Version: alloc.version, Table: table, OriginTable: table, Valid: true},
 				l2)
 		},
 	)
@@ -527,7 +458,7 @@ func TestGetLockWithBindNotFound(t *testing.T) {
 			table uint64) {
 
 			// change l2's bind to s3, no bind in s3
-			l2.handleBindChanged(pb.LockTable{Table: table, ServiceID: "s3", Valid: true, Version: 1})
+			l2.handleBindChanged(pb.LockTable{Table: table, ServiceID: "s3", Valid: true, Version: alloc.version})
 
 			txnID2 := []byte("txn2")
 			lt, err := l2.getLockTable(0, table)
@@ -536,7 +467,7 @@ func TestGetLockWithBindNotFound(t *testing.T) {
 
 			checkBind(
 				t,
-				pb.LockTable{ServiceID: l1.serviceID, Version: 1, Table: table, OriginTable: table, Valid: true},
+				pb.LockTable{ServiceID: l1.serviceID, Version: alloc.version, Table: table, OriginTable: table, Valid: true},
 				l2)
 		},
 	)
@@ -603,7 +534,8 @@ func TestIssue14346(t *testing.T) {
 			require.NoError(t, s2.Unlock(ctx, txn2, timestamp.Timestamp{}))
 
 			// remove s1
-			clusterservice.GetMOCluster().RemoveCN("s1")
+			clusterservice.GetMOCluster(s1.GetConfig().ServiceID).RemoveCN("s1")
+			clusterservice.GetMOCluster(s2.GetConfig().ServiceID).RemoveCN("s1")
 
 			// wait bind remove on s2
 			for {
@@ -681,19 +613,12 @@ func runBindChangedTests(
 }
 
 func waitBindDisabled(t *testing.T, alloc *lockTableAllocator, sid string) {
-	for {
-		b := alloc.getServiceBinds(sid)
-		if b == nil {
-			return
-		}
-		b.RLock()
-		disabled := b.disabled
-		b.RUnlock()
-		if disabled {
-			return
-		}
-		time.Sleep(time.Millisecond * 100)
+	b := alloc.getServiceBinds(sid)
+	if b == nil {
+		return
 	}
+	b.disable()
+	alloc.disableTableBinds(b)
 }
 
 func waitBindChanged(

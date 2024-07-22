@@ -19,10 +19,10 @@ Database    Create Database
 test_db    CREATE DATABASE `test_db`
 show create table test_table;
 Table    Create Table
-test_table    CREATE TABLE `test_table` (\n`col1` INT DEFAULT NULL,\n`col2` VARCHAR(65535) DEFAULT NULL\n)
+test_table    CREATE TABLE `test_table` (\n  `col1` INT DEFAULT NULL,\n  `col2` VARCHAR(65535) DEFAULT NULL\n)
 show create view test_view;
-View    Create View
-test_view    create view test_view as select * from test_table;
+View    Create View    character_set_client    collation_connection
+test_view    create view test_view as select * from test_table;    utf8mb4    utf8mb4_general_ci
 show triggers;
 Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
 show procedure status;
@@ -48,7 +48,7 @@ show collation like 'utf8mb4_general_ci%';
 Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
 utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
 show index from test_table;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
 values row(1,1), row(2,2), row(3,3) order by column_0 desc;
 column_0    column_1
 3    3
@@ -89,7 +89,7 @@ drop table if exists test_01;
 create table test_01(a int, b varchar);
 show create table test_01;
 Table    Create Table
-test_01    CREATE TABLE `test_01` (\n`a` INT DEFAULT NULL,\n`b` VARCHAR(65535) DEFAULT NULL\n)
+test_01    CREATE TABLE `test_01` (\n  `a` INT DEFAULT NULL,\n  `b` VARCHAR(65535) DEFAULT NULL\n)
 explain select * from test_01;
 QUERY PLAN
 Project
@@ -112,7 +112,7 @@ Database    Create Database
 test_db    CREATE DATABASE `test_db`
 show create table test_table;
 Table    Create Table
-test_table    CREATE TABLE `test_table` (\n`col1` INT DEFAULT NULL,\n`col2` VARCHAR(65535) DEFAULT NULL\n)
+test_table    CREATE TABLE `test_table` (\n  `col1` INT DEFAULT NULL,\n  `col2` VARCHAR(65535) DEFAULT NULL\n)
 show triggers;
 Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
 show procedure status;
@@ -132,7 +132,7 @@ Tables_in_test_db
 test_table
 test_view
 show index from test_table;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
 values row(1,1), row(2,2), row(3,3) order by column_0 desc;
 column_0    column_1
 3    3
@@ -151,7 +151,6 @@ internal error: administrative command is unsupported in transactions
 create user user_name identified by 'password';
 internal error: administrative command is unsupported in transactions
 create database if not exists db1;
-internal error: CREATE/DROP of database is not supported in transactions
 grant create table,drop table on database *.* to test_role;
 internal error: administrative command is unsupported in transactions
 revoke test_role from user_name;
@@ -163,9 +162,7 @@ internal error: administrative command is unsupported in transactions
 drop account test_account;
 internal error: do not have privilege to execute the statement
 drop database db1;
-internal error: CREATE/DROP of database is not supported in transactions
 create database db2;
-internal error: CREATE/DROP of database is not supported in transactions
 create table table_2(
 col1 int,
 col2 varchar
@@ -176,7 +173,6 @@ drop index index_table_2 on table_2;
 drop view view_2;
 drop table table_2;
 drop database db2;
-internal error: CREATE/DROP of database is not supported in transactions
 prepare s1 from select * from test_table where col1=?;
 set @a=2;
 execute s1 using @a;

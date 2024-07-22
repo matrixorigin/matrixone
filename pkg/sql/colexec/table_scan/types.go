@@ -23,65 +23,71 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(TableScan)
 
-type Argument struct {
-	msgReceiver    *process.MessageReceiver
+type container struct {
+	maxAllocSize int
+	orderBy      []*plan.OrderBySpec
+	buf          *batch.Batch
+	msgReceiver  *process.MessageReceiver
+}
+type TableScan struct {
+	ctr            *container
 	TopValueMsgTag int32
-	OrderBy        []*plan.OrderBySpec
 	Reader         engine.Reader
 	Attrs          []string
 	TableID        uint64
 
-	buf    *batch.Batch
-	tmpBuf *batch.Batch
-
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (tableScan *TableScan) GetOperatorBase() *vm.OperatorBase {
+	return &tableScan.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[TableScan](
+		func() *TableScan {
+			return &TableScan{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *TableScan) {
+			*a = TableScan{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[TableScan]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (tableScan TableScan) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *TableScan {
+	return reuse.Alloc[TableScan](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (tableScan *TableScan) Release() {
+	if tableScan != nil {
+		reuse.Free[TableScan](tableScan, nil)
 	}
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if arg.buf != nil {
-		arg.buf.Clean(proc.Mp())
-		arg.buf = nil
-	}
+func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	tableScan.Free(proc, pipelineFailed, err)
+}
 
-	if arg.tmpBuf != nil {
-		arg.tmpBuf.Clean(proc.Mp())
-		arg.tmpBuf = nil
-	}
-
-	if arg.msgReceiver != nil {
-		arg.msgReceiver.Free()
+func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if tableScan.ctr != nil {
+		if tableScan.ctr.buf != nil {
+			tableScan.ctr.buf.Clean(proc.Mp())
+			tableScan.ctr.buf = nil
+		}
+		anal := proc.GetAnalyze(tableScan.GetIdx(), tableScan.GetParallelIdx(), tableScan.GetParallelMajor())
+		anal.Alloc(int64(tableScan.ctr.maxAllocSize))
+		if tableScan.ctr.msgReceiver != nil {
+			tableScan.ctr.msgReceiver.Free()
+			tableScan.ctr.msgReceiver = nil
+		}
+		tableScan.ctr = nil
 	}
 }

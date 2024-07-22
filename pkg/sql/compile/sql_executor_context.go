@@ -16,7 +16,9 @@ package compile
 
 import (
 	"context"
+	"slices"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -24,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -43,7 +46,27 @@ type compilerContext struct {
 
 	buildAlterView       bool
 	dbOfView, nameOfView string
+	sql                  string
 	mu                   sync.Mutex
+
+	lower int64
+}
+
+func (c *compilerContext) GetLowerCaseTableNames() int64 {
+	return c.lower
+}
+
+func (c *compilerContext) GetViews() []string {
+	return nil
+}
+
+func (c *compilerContext) SetViews(views []string) {}
+
+func (c *compilerContext) GetSnapshot() *plan.Snapshot {
+	return nil
+}
+
+func (c *compilerContext) SetSnapshot(snapshot *plan.Snapshot) {
 }
 
 func (c *compilerContext) ReplacePlan(execPlan *planpb.Execute) (*planpb.Plan, tree.Statement, error) {
@@ -55,7 +78,19 @@ func (c *compilerContext) CheckSubscriptionValid(subName, accName string, pubNam
 	panic("not supported in internal sql executor")
 }
 
+func (c *compilerContext) ResolveSubscriptionTableById(tableId uint64, pubmeta *plan.SubscriptionMeta) (*plan.ObjectRef, *plan.TableDef) {
+	panic("not supported in internal sql executor")
+}
+
 func (c *compilerContext) IsPublishing(dbName string) (bool, error) {
+	panic("not supported in internal sql executor")
+}
+
+func (c *compilerContext) ResolveSnapshotWithSnapshotName(snapshotName string) (*plan.Snapshot, error) {
+	panic("not supported in internal sql executor")
+}
+
+func (c *compilerContext) CheckTimeStampValid(ts int64) (bool, error) {
 	panic("not supported in internal sql executor")
 }
 
@@ -67,19 +102,6 @@ func (c *compilerContext) GetQueryingSubscription() *plan.SubscriptionMeta {
 	return nil
 }
 
-func newCompilerContext(
-	ctx context.Context,
-	defaultDB string,
-	eng engine.Engine,
-	proc *process.Process) *compilerContext {
-	return &compilerContext{
-		ctx:       ctx,
-		defaultDB: defaultDB,
-		engine:    eng,
-		proc:      proc,
-	}
-}
-
 func (c *compilerContext) ResolveUdf(name string, ast []*plan.Expr) (*function.Udf, error) {
 	panic("not supported in internal sql executor")
 }
@@ -88,12 +110,12 @@ func (c *compilerContext) ResolveAccountIds(accountNames []string) ([]uint32, er
 	panic("not supported in internal sql executor")
 }
 
-func (c *compilerContext) Stats(obj *plan.ObjectRef) (*pb.StatsInfo, error) {
-	t, err := c.getRelation(obj.GetSchemaName(), obj.GetObjName())
+func (c *compilerContext) Stats(obj *plan.ObjectRef, snapshot plan.Snapshot) (*pb.StatsInfo, error) {
+	ctx, t, err := c.getRelation(obj.GetSchemaName(), obj.GetObjName(), snapshot)
 	if err != nil {
 		return nil, err
 	}
-	return t.Stats(c.ctx, true), nil
+	return t.Stats(ctx, true)
 }
 
 func (c *compilerContext) GetStatsCache() *plan.StatsCache {
@@ -103,7 +125,7 @@ func (c *compilerContext) GetStatsCache() *plan.StatsCache {
 	return c.statsCache
 }
 
-func (c *compilerContext) GetSubscriptionMeta(dbName string) (*plan.SubscriptionMeta, error) {
+func (c *compilerContext) GetSubscriptionMeta(dbName string, snapshot plan.Snapshot) (*plan.SubscriptionMeta, error) {
 	return nil, nil
 }
 
@@ -115,25 +137,58 @@ func (c *compilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, strin
 	panic("not supported in internal sql executor")
 }
 
-func (c *compilerContext) DatabaseExists(name string) bool {
+func (c *compilerContext) DatabaseExists(name string, snapshot plan.Snapshot) bool {
+	ctx := c.GetContext()
+	txnOpt := c.proc.GetTxnOperator()
+
+	if plan.IsSnapshotValid(&snapshot) && snapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
+		txnOpt = c.proc.GetTxnOperator().CloneSnapshotOp(*snapshot.TS)
+
+		if snapshot.Tenant != nil {
+			ctx = context.WithValue(ctx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)
+		}
+	}
+
 	_, err := c.engine.Database(
-		c.ctx,
+		ctx,
 		name,
-		c.proc.TxnOperator,
+		txnOpt,
 	)
 	return err == nil
 }
 
-func (c *compilerContext) GetDatabaseId(dbName string) (uint64, error) {
-	database, err := c.engine.Database(c.ctx, dbName, c.proc.TxnOperator)
+func (c *compilerContext) GetDatabaseId(dbName string, snapshot plan.Snapshot) (uint64, error) {
+	ctx := c.GetContext()
+	txnOpt := c.proc.GetTxnOperator()
+
+	if plan.IsSnapshotValid(&snapshot) && snapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
+		txnOpt = c.proc.GetTxnOperator().CloneSnapshotOp(*snapshot.TS)
+
+		if snapshot.Tenant != nil {
+			ctx = context.WithValue(ctx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)
+		}
+	}
+
+	database, err := c.engine.Database(ctx, dbName, txnOpt)
+
 	if err != nil {
 		return 0, err
 	}
-	databaseId, err := strconv.ParseUint(database.GetDatabaseId(c.ctx), 10, 64)
+	databaseId, err := strconv.ParseUint(database.GetDatabaseId(ctx), 10, 64)
 	if err != nil {
-		return 0, moerr.NewInternalError(c.ctx, "The databaseid of '%s' is not a valid number", dbName)
+		return 0, moerr.NewInternalError(ctx, "The databaseid of '%s' is not a valid number", dbName)
 	}
 	return databaseId, nil
+}
+
+func (c *compilerContext) GetDbLevelConfig(dbName string, varName string) (string, error) {
+	switch varName {
+	// For scenarios that are background SQL, use the default configuration to avoid triggering background SQL again.
+	case "unique_check_on_autoincr":
+		return "Check", nil
+	default:
+		return "", moerr.NewInternalError(c.GetContext(), "The variable '%s' is not a valid database level variable", varName)
+	}
 }
 
 func (c *compilerContext) DefaultDatabase() string {
@@ -142,17 +197,18 @@ func (c *compilerContext) DefaultDatabase() string {
 
 func (c *compilerContext) GetPrimaryKeyDef(
 	dbName string,
-	tableName string) []*plan.ColDef {
+	tableName string,
+	snapshot plan.Snapshot) []*plan.ColDef {
 	dbName, err := c.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
 		return nil
 	}
-	relation, err := c.getRelation(dbName, tableName)
+	ctx, relation, err := c.getRelation(dbName, tableName, snapshot)
 	if err != nil {
 		return nil
 	}
 
-	priKeys, err := relation.GetPrimaryKeys(c.ctx)
+	priKeys, err := relation.GetPrimaryKeys(ctx)
 	if err != nil {
 		return nil
 	}
@@ -164,7 +220,7 @@ func (c *compilerContext) GetPrimaryKeyDef(
 	for _, key := range priKeys {
 		priDefs = append(priDefs, &plan.ColDef{
 			Name: key.Name,
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:    int32(key.Type.Oid),
 				Width: key.Type.Width,
 				Scale: key.Type.Scale,
@@ -176,7 +232,13 @@ func (c *compilerContext) GetPrimaryKeyDef(
 }
 
 func (c *compilerContext) GetRootSql() string {
-	return ""
+	return c.sql
+}
+
+func (c *compilerContext) SetRootSql(sql string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sql = sql
 }
 
 func (c *compilerContext) GetUserName() string {
@@ -184,31 +246,49 @@ func (c *compilerContext) GetUserName() string {
 }
 
 func (c *compilerContext) GetAccountId() (uint32, error) {
-	return defines.GetAccountId(c.ctx)
+	return defines.GetAccountId(c.proc.Ctx)
 }
 
 func (c *compilerContext) GetContext() context.Context {
-	return c.ctx
+	return c.proc.Ctx
 }
 
-func (c *compilerContext) ResolveById(tableId uint64) (objRef *plan.ObjectRef, tableDef *plan.TableDef) {
-	dbName, tableName, _ := c.engine.GetNameById(c.ctx, c.proc.TxnOperator, tableId)
+func (c *compilerContext) ResolveById(tableId uint64, snapshot plan.Snapshot) (objRef *plan.ObjectRef, tableDef *plan.TableDef) {
+	ctx := c.GetContext()
+	txnOpt := c.proc.GetTxnOperator()
+
+	if plan.IsSnapshotValid(&snapshot) && snapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
+		txnOpt = c.proc.GetTxnOperator().CloneSnapshotOp(*snapshot.TS)
+
+		if snapshot.Tenant != nil {
+			ctx = context.WithValue(ctx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)
+		}
+	}
+
+	dbName, tableName, _ := c.engine.GetNameById(ctx, txnOpt, tableId)
 	if dbName == "" || tableName == "" {
 		return nil, nil
 	}
-	return c.Resolve(dbName, tableName)
+	return c.Resolve(dbName, tableName, snapshot)
 }
 
-func (c *compilerContext) Resolve(dbName string, tableName string) (*plan.ObjectRef, *plan.TableDef) {
+func (c *compilerContext) Resolve(dbName string, tableName string, snapshot plan.Snapshot) (*plan.ObjectRef, *plan.TableDef) {
+	// In order to be compatible with various GUI clients and BI tools, lower case db and table name if it's a mysql system table
+	if slices.Contains(mysql.CaseInsensitiveDbs, strings.ToLower(dbName)) {
+		dbName = strings.ToLower(dbName)
+		tableName = strings.ToLower(tableName)
+	}
+
 	dbName, err := c.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
 		return nil, nil
 	}
-	table, err := c.getRelation(dbName, tableName)
+
+	ctx, table, err := c.getRelation(dbName, tableName, snapshot)
 	if err != nil {
 		return nil, nil
 	}
-	return c.getTableDef(table, dbName, tableName)
+	return c.getTableDef(ctx, table, dbName, tableName)
 }
 
 func (c *compilerContext) ResolveVariable(varName string, isSystemVar bool, isGlobalVar bool) (interface{}, error) {
@@ -241,29 +321,42 @@ func (c *compilerContext) ensureDatabaseIsNotEmpty(dbName string) (string, error
 
 func (c *compilerContext) getRelation(
 	dbName string,
-	tableName string) (engine.Relation, error) {
+	tableName string,
+	snapshot plan.Snapshot) (context.Context, engine.Relation, error) {
 	dbName, err := c.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	db, err := c.engine.Database(c.ctx, dbName, c.proc.TxnOperator)
-	if err != nil {
-		return nil, err
+	ctx := c.GetContext()
+	txnOpt := c.proc.GetTxnOperator()
+
+	if plan.IsSnapshotValid(&snapshot) && snapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
+		txnOpt = c.proc.GetTxnOperator().CloneSnapshotOp(*snapshot.TS)
+
+		if snapshot.Tenant != nil {
+			ctx = context.WithValue(ctx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)
+		}
 	}
 
-	table, err := db.Relation(c.ctx, tableName, nil)
+	db, err := c.engine.Database(ctx, dbName, txnOpt)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return table, nil
+
+	table, err := db.Relation(ctx, tableName, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	return ctx, table, nil
 }
 
 func (c *compilerContext) getTableDef(
+	ctx context.Context,
 	table engine.Relation,
 	dbName, tableName string) (*plan.ObjectRef, *plan.TableDef) {
-	tableId := table.GetTableID(c.ctx)
-	engineDefs, err := table.TableDefs(c.ctx)
+	tableId := table.GetTableID(ctx)
+	engineDefs, err := table.TableDefs(ctx)
 	if err != nil {
 		return nil, nil
 	}
@@ -287,7 +380,7 @@ func (c *compilerContext) getTableDef(
 			col := &plan.ColDef{
 				ColId: attr.Attr.ID,
 				Name:  attr.Attr.Name,
-				Typ: &plan.Type{
+				Typ: plan.Type{
 					Id:          int32(attr.Attr.Type.Oid),
 					Width:       attr.Attr.Type.Width,
 					Scale:       attr.Attr.Type.Scale,
@@ -409,6 +502,7 @@ func (c *compilerContext) getTableDef(
 		ClusterBy:    clusterByDef,
 		Indexes:      indexes,
 		Version:      schemaVersion,
+		DbName:       dbName,
 	}
 	return obj, tableDef
 }

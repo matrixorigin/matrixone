@@ -50,6 +50,8 @@ var (
 	entryApplyEvent         = "apply"
 	entryCommitEvent        = "commit"
 	entryReadEvent          = "read"
+	entryWriteEvent         = "write"
+	entryWorkspaceEvent     = "workspace"
 	entryReadBlockEvent     = "read-block"
 	entryApplyFlushEvent    = "apply-flush"
 	entryTransferRowIDEvent = "transfer-row-id"
@@ -131,14 +133,15 @@ func (e txnEvent) toCSVRecord(
 }
 
 type dataEvent struct {
-	ts         int64
-	eventType  string
-	entryType  api.Entry_EntryType
-	tableID    uint64
-	txnID      []byte
-	row        []byte
-	commitTS   timestamp.Timestamp
-	snapshotTS timestamp.Timestamp
+	ts          int64
+	eventType   string
+	customEntry string
+	entryType   api.Entry_EntryType
+	tableID     uint64
+	txnID       []byte
+	row         []byte
+	commitTS    timestamp.Timestamp
+	snapshotTS  timestamp.Timestamp
 }
 
 func newApplyLogtailEvent(
@@ -177,17 +180,48 @@ func newReadEntryEvent(
 	ts int64,
 	txnID []byte,
 	tableID uint64,
-	entryType api.Entry_EntryType,
 	row []byte,
 	snapshotTS timestamp.Timestamp) dataEvent {
 	return dataEvent{
-		ts:         ts,
-		tableID:    tableID,
-		entryType:  entryType,
-		txnID:      txnID,
-		row:        row,
-		eventType:  entryReadEvent,
-		snapshotTS: snapshotTS,
+		ts:          ts,
+		tableID:     tableID,
+		customEntry: "read",
+		txnID:       txnID,
+		row:         row,
+		eventType:   entryReadEvent,
+		snapshotTS:  snapshotTS,
+	}
+}
+
+func newWriteEntryEvent(
+	ts int64,
+	txnID []byte,
+	typ string,
+	tableID uint64,
+	row []byte) dataEvent {
+	return dataEvent{
+		ts:          ts,
+		tableID:     tableID,
+		customEntry: typ,
+		txnID:       txnID,
+		row:         row,
+		eventType:   entryWriteEvent,
+	}
+}
+
+func newWorkspaceEntryEvent(
+	ts int64,
+	txnID []byte,
+	typ string,
+	tableID uint64,
+	row []byte) dataEvent {
+	return dataEvent{
+		ts:          ts,
+		tableID:     tableID,
+		customEntry: typ,
+		txnID:       txnID,
+		row:         row,
+		eventType:   entryWorkspaceEvent,
 	}
 }
 
@@ -252,7 +286,11 @@ func (e dataEvent) toCSVRecord(
 	records[0] = buf.writeInt(e.ts)
 	records[1] = cn
 	records[2] = e.eventType
-	records[3] = e.entryType.String()
+	if e.customEntry != "" {
+		records[3] = e.customEntry
+	} else {
+		records[3] = e.entryType.String()
+	}
 	records[4] = buf.writeUint(e.tableID)
 	records[5] = buf.writeHex(e.txnID)
 	records[6] = util.UnsafeBytesToString(e.row)
@@ -287,4 +325,40 @@ func (e actionEvent) toCSVRecord(
 		e.err = e.err[:100]
 	}
 	records[8] = e.err
+}
+
+type statement struct {
+	ts    int64
+	txnID []byte
+	sql   string
+	cost  int64
+}
+
+func newStatement(
+	txnID []byte,
+	sql string,
+	cost time.Duration) statement {
+	return statement{
+		ts:    time.Now().UnixNano(),
+		txnID: txnID,
+		sql:   sql,
+		cost:  cost.Microseconds(),
+	}
+}
+
+func (e statement) toCSVRecord(
+	cn string,
+	buf *buffer,
+	records []string) {
+	records[0] = buf.writeInt(e.ts)
+	records[1] = buf.writeHex(e.txnID)
+	records[2] = e.sql
+	records[3] = buf.writeInt(e.cost)
+}
+
+func truncateSQL(sql string) string {
+	if len(sql) > 1000 {
+		return sql[:1000]
+	}
+	return sql
 }

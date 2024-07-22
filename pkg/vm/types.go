@@ -35,7 +35,7 @@ const (
 	Output
 	Offset
 	Product
-	Restrict
+	Filter
 	Dispatch
 	Connector
 	Projection
@@ -77,6 +77,7 @@ const (
 	IntersectAll
 
 	HashBuild
+	ShuffleBuild
 
 	TableFunction
 	TableScan
@@ -105,34 +106,22 @@ const (
 	Shuffle
 
 	Sample
+	ProductL2
 )
-
-// Instruction contains relational algebra
-type Instruction struct {
-	// Op specified the operator code of an instruction.
-	Op OpType
-	// Idx specified the analysis information index.
-	Idx int
-	// Arg contains the operand of this instruction.
-	Arg Operator
-
-	// flag for analyzeInfo record the row information
-	IsFirst bool
-	IsLast  bool
-
-	CnAddr      string
-	OperatorID  int32
-	ParallelID  int32
-	MaxParallel int32
-}
 
 type Operator interface {
 	// Free release all the memory allocated from mPool in an operator.
 	// pipelineFailed marks the process status of the pipeline when the method is called.
 	Free(proc *process.Process, pipelineFailed bool, err error)
 
+	// Reset clean all the memory that can be reused.
+	Reset(proc *process.Process, pipelineFailed bool, err error)
+
 	// String returns the string representation of an operator.
 	String(buf *bytes.Buffer)
+
+	// OpType returns the OpType of an operator.
+	OpType() OpType
 
 	//Prepare prepares an operator for execution.
 	Prepare(proc *process.Process) error
@@ -167,6 +156,10 @@ func (o *OperatorBase) AppendChild(child Operator) {
 	o.Children = append(o.Children, child)
 }
 
+func (o *OperatorBase) SetChild(child Operator, idx int) {
+	o.Children[idx] = child
+}
+
 func (o *OperatorBase) SetChildren(children []Operator) {
 	o.Children = children
 }
@@ -179,20 +172,40 @@ func (o *OperatorBase) GetCnAddr() string {
 	return o.CnAddr
 }
 
+func (o *OperatorBase) SetCnAddr(cnAddr string) {
+	o.CnAddr = cnAddr
+}
+
 func (o *OperatorBase) GetOperatorID() int32 {
 	return o.OperatorID
+}
+
+func (o *OperatorBase) SetOperatorID(operatorID int32) {
+	o.OperatorID = operatorID
 }
 
 func (o *OperatorBase) GetParalleID() int32 {
 	return o.ParallelID
 }
 
+func (o *OperatorBase) SetParalleID(paralledID int32) {
+	o.ParallelID = paralledID
+}
+
 func (o *OperatorBase) GetMaxParallel() int32 {
 	return o.MaxParallel
 }
 
+func (o *OperatorBase) SetMaxParallel(maxParallel int32) {
+	o.MaxParallel = maxParallel
+}
+
 func (o *OperatorBase) GetIdx() int {
 	return o.Idx
+}
+
+func (o *OperatorBase) SetIdx(idx int) {
+	o.Idx = idx
 }
 
 func (o *OperatorBase) GetParallelIdx() int {
@@ -207,8 +220,16 @@ func (o *OperatorBase) GetIsFirst() bool {
 	return o.IsFirst
 }
 
+func (o *OperatorBase) SetIsFirst(isFirst bool) {
+	o.IsFirst = isFirst
+}
+
 func (o *OperatorBase) GetIsLast() bool {
 	return o.IsLast
+}
+
+func (o *OperatorBase) SetIsLast(isLast bool) {
+	o.IsLast = isLast
 }
 
 var CancelResult = CallResult{
@@ -279,10 +300,8 @@ func (info OperatorInfo) GetAddress() process.MessageAddress {
 	}
 }
 
-type Instructions []Instruction
-
-func (ins *Instruction) IsBrokenNode() bool {
-	switch ins.Op {
+func IsBrokenNode(op Operator) bool {
+	switch op.OpType() {
 	case Order, MergeOrder, Partition:
 		return true
 	case Limit, MergeLimit:
@@ -305,11 +324,67 @@ func (ins *Instruction) IsBrokenNode() bool {
 	return false
 }
 
-func (ins *Instruction) CannotRemote() bool {
+func CannotRemote(op Operator) bool {
 	// todo: I think we should add more operators here.
-	return ins.Op == LockOp
+	return op.OpType() == LockOp
 }
 
 type ModificationArgument interface {
 	AffectedRows() uint64
+}
+
+func doHandleAllOp(parentOp Operator, op Operator, opHandle func(parentOp Operator, op Operator) error) (err error) {
+	if op == nil {
+		return nil
+	}
+	numChildren := op.GetOperatorBase().NumChildren()
+
+	for i := 0; i < numChildren; i++ {
+		if err := doHandleAllOp(op, op.GetOperatorBase().GetChildren(i), opHandle); err != nil {
+			return err
+		}
+	}
+	return opHandle(parentOp, op)
+}
+
+func HandleAllOp(rootOp Operator, opHandle func(parentOp Operator, op Operator) error) (err error) {
+	return doHandleAllOp(nil, rootOp, opHandle)
+}
+
+func HandleLeafOp(parentOp Operator, op Operator, opHandle func(leafOpParent Operator, leafOp Operator) error) (err error) {
+	if op == nil {
+		return nil
+	}
+	numChildren := op.GetOperatorBase().NumChildren()
+	if numChildren == 0 {
+		return opHandle(parentOp, op)
+	}
+	for i := 0; i < numChildren; i++ {
+		if err := HandleLeafOp(op, op.GetOperatorBase().GetChildren(i), opHandle); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// suppose that the op tree is like a list, only one leaf child
+func GetLeafOp(op Operator) Operator {
+	if op == nil {
+		return nil
+	}
+	if op.GetOperatorBase().NumChildren() == 0 {
+		return op
+	}
+	return GetLeafOp(op.GetOperatorBase().GetChildren(0))
+}
+
+// suppose that the op tree is like a list, only one leaf child
+func GetLeafOpParent(parentOp Operator, op Operator) Operator {
+	if op == nil {
+		return nil
+	}
+	if op.GetOperatorBase().NumChildren() == 0 {
+		return parentOp
+	}
+	return GetLeafOpParent(op, op.GetOperatorBase().GetChildren(0))
 }

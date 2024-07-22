@@ -102,7 +102,7 @@ func (h *mockHandle) HandlePreCommit(
 	ctx context.Context,
 	meta *txn.TxnMeta,
 	req *api.PrecommitWriteCmd,
-	resp *api.SyncLogTailResp) error {
+	resp *api.TNStringResponse) error {
 
 	return h.Handle.HandlePreCommitWrite(ctx, *meta, req, resp)
 }
@@ -119,7 +119,7 @@ func (h *mockHandle) handleCmds(
 				return moerr.NewInfo(ctx, "cmd is not PreCommitWriteCmd")
 			}
 			if err = h.Handle.HandlePreCommitWrite(ctx, *txn,
-				&cmd, new(api.SyncLogTailResp)); err != nil {
+				&cmd, new(api.TNStringResponse)); err != nil {
 				return
 			}
 		case CmdPrepare:
@@ -161,14 +161,14 @@ func mockTAEHandle(ctx context.Context, t *testing.T, opts *options.Options) *mo
 	mh.Handle = &Handle{
 		db: tae,
 	}
-	mh.Handle.txnCtxs = common.NewMap[string, *txnContext](runtime.NumCPU())
+	mh.Handle.txnCtxs = common.NewMap[string, *txnContext](runtime.GOMAXPROCS(0))
 	return mh
 }
 
 func mock1PCTxn(db *db.DB) *txn.TxnMeta {
 	txnMeta := &txn.TxnMeta{}
 	txnMeta.ID = db.TxnMgr.IdAlloc.Alloc()
-	txnMeta.SnapshotTS = db.TxnMgr.TsAlloc.Alloc().ToTimestamp()
+	txnMeta.SnapshotTS = db.TxnMgr.Now().ToTimestamp()
 	return txnMeta
 }
 
@@ -186,7 +186,7 @@ func mockTNShard(id uint64) metadata.TNShard {
 func mock2PCTxn(db *db.DB) *txn.TxnMeta {
 	txnMeta := &txn.TxnMeta{}
 	txnMeta.ID = db.TxnMgr.IdAlloc.Alloc()
-	txnMeta.SnapshotTS = db.TxnMgr.TsAlloc.Alloc().ToTimestamp()
+	txnMeta.SnapshotTS = db.TxnMgr.Now().ToTimestamp()
 	txnMeta.TNShards = append(txnMeta.TNShards, mockTNShard(1))
 	txnMeta.TNShards = append(txnMeta.TNShards, mockTNShard(2))
 	return txnMeta

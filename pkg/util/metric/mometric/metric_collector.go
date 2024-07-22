@@ -297,30 +297,53 @@ type mfsetETL struct {
 	collector *metricFSCollector
 }
 
+// GetBatch implements table.Table.GetBatch.
+// Write metric into two tables: one for metric table, another for sql_statement_cu table.
 func (s *mfsetETL) GetBatch(ctx context.Context, buf *bytes.Buffer) table.ExportRequests {
 	buf.Reset()
 
 	ts := time.Now()
 	buffer := make(map[string]table.RowWriter, 2)
 	writeValues := func(row *table.Row) error {
-		w, exist := buffer[row.GetAccount()]
+		w, exist := buffer[row.Table.GetName()]
 		if !exist {
-			w = s.collector.writerFactory.GetRowWriter(ctx, row.GetAccount(), SingleMetricTable, ts)
-			buffer[row.GetAccount()] = w
+			w = s.collector.writerFactory.GetRowWriter(ctx, row.GetAccount(), row.Table, ts)
+			buffer[row.Table.GetName()] = w
 		}
 		if err := w.WriteRow(row); err != nil {
 			return err
 		}
 		return nil
 	}
+	rows := make(map[string]*table.Row, 2)
+	defer func() {
+		for _, r := range rows {
+			r.Free()
+		}
+	}()
+	getRow := func(metricName string) *table.Row {
+		tbl := SingleMetricTable
+		if metricName == SqlStatementCUTable.GetName() {
+			tbl = SqlStatementCUTable
+		}
+		row, exist := rows[tbl.GetName()]
+		if !exist {
+			row = tbl.GetRow(ctx)
+			rows[tbl.GetName()] = row
+		}
+		return row
+	}
 
-	row := SingleMetricTable.GetRow(ctx)
-	defer row.Free()
 	for _, mf := range s.mfs {
 		for _, metric := range mf.Metric {
 			// reserved labels
+			row := getRow(mf.GetName())
 			row.Reset()
-			row.SetColumnVal(metricNameColumn, table.StringField(mf.GetName()))
+			// table `metric` NEED column `metric_name`
+			// table `sql_statement_cu` NO column `metric_name`
+			if row.Table.GetName() == SingleMetricTable.GetName() {
+				row.SetColumnVal(metricNameColumn, table.StringField(mf.GetName()))
+			}
 			row.SetColumnVal(metricNodeColumn, table.StringField(mf.GetNode()))
 			row.SetColumnVal(metricRoleColumn, table.StringField(mf.GetRole()))
 			// custom labels

@@ -154,9 +154,10 @@ func CreateS(db engine.Database) {
 		{
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress.Lz4,
-					Name: "orderid",
-					Type: types.New(types.T_varchar, 10, 0),
+					Alg:     compress.Lz4,
+					Name:    "orderid",
+					Type:    types.New(types.T_varchar, 10, 0),
+					Primary: true,
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
@@ -269,9 +270,10 @@ func CreateT(db engine.Database) {
 		{
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress.Lz4,
-					Name: "id",
-					Type: types.T_varchar.ToType(),
+					Alg:     compress.Lz4,
+					Name:    "id",
+					Type:    types.T_varchar.ToType(),
+					Primary: true,
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
@@ -295,9 +297,10 @@ func CreateT1(db engine.Database) {
 		{
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress.Lz4,
-					Name: "spid",
-					Type: types.T_int32.ToType(),
+					Alg:     compress.Lz4,
+					Name:    "spid",
+					Type:    types.T_int32.ToType(),
+					Primary: true,
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
@@ -411,9 +414,10 @@ func CreateCustomer(db engine.Database) {
 		{
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress.Lz4,
-					Name: "c_custkey",
-					Type: types.T_int64.ToType(),
+					Alg:     compress.Lz4,
+					Name:    "c_custkey",
+					Type:    types.T_int64.ToType(),
+					Primary: true,
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
@@ -587,9 +591,10 @@ func CreatePart(db engine.Database) {
 		{
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress.Lz4,
-					Name: "p_partkey",
-					Type: types.T_int64.ToType(),
+					Alg:     compress.Lz4,
+					Name:    "p_partkey",
+					Type:    types.T_int64.ToType(),
+					Primary: true,
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
@@ -654,9 +659,10 @@ func CreateSupplier(db engine.Database) {
 		{
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress.Lz4,
-					Name: "s_suppkey",
-					Type: types.T_int64.ToType(),
+					Alg:     compress.Lz4,
+					Name:    "s_suppkey",
+					Type:    types.T_int64.ToType(),
+					Primary: true,
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
@@ -709,9 +715,10 @@ func CreateDate(db engine.Database) {
 		{
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress.Lz4,
-					Name: "d_datekey",
-					Type: types.T_varchar.ToType(),
+					Alg:     compress.Lz4,
+					Name:    "d_datekey",
+					Type:    types.T_varchar.ToType(),
+					Primary: true,
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{

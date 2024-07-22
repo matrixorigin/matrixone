@@ -106,6 +106,8 @@ type LockService interface {
 	// Unlock release all locks associated with the transaction. If commitTS is not empty, means
 	// the txn was committed.
 	Unlock(ctx context.Context, txnID []byte, commitTS timestamp.Timestamp, mutations ...pb.ExtraMutation) error
+	// IsOrphanTxn check txn is orphan txn
+	IsOrphanTxn(context.Context, []byte) (bool, error)
 
 	// Close close the lock service.
 	Close() error
@@ -174,13 +176,18 @@ type LockTableAllocator interface {
 	// periodically to keep the binding in place. If no heartbeat is sent for a long
 	// period of time to maintain the binding, the binding will become invalid.
 	KeepLockTableBind(serviceID string) bool
-	// Valid check for changes in the binding relationship of a specific locktable.
-	Valid(binds []pb.LockTable) []uint64
+	// Valid check for changes in the binding relationship of a specific lock-table.
+	Valid(serviceID string, txnID []byte, binds []pb.LockTable) ([]uint64, error)
+	// AddCannotCommit add cannot commit txn.
+	AddCannotCommit(values []pb.OrphanTxn) [][]byte
 	// Close close the lock table allocator
 	Close() error
 
 	// GetLatest get latest lock table bind
 	GetLatest(groupID uint32, tableID uint64) pb.LockTable
+
+	// GetVersion get latest version
+	GetVersion() uint64
 }
 
 // LockTableKeeper is used to keep a heartbeat with the LockTableAllocator to keep the
@@ -247,13 +254,16 @@ type holders struct {
 }
 
 // SetLockServiceByServiceID set lockservice instance into process level runtime.
-func SetLockServiceByServiceID(serviceID string, value LockService) {
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.LockService+"_"+serviceID, value)
+func SetLockServiceByServiceID(
+	serviceID string,
+	value LockService,
+) {
+	runtime.ServiceRuntime(serviceID).SetGlobalVariables(runtime.LockService, value)
 }
 
 // GetLockServiceByServiceID get lockservice instance by service id from process level runtime.
 func GetLockServiceByServiceID(serviceID string) LockService {
-	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.LockService + "_" + serviceID)
+	v, ok := runtime.ServiceRuntime(serviceID).GetGlobalVariables(runtime.LockService)
 	if !ok {
 		panic("BUG: lock service not found")
 	}

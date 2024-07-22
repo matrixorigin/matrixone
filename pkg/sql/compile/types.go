@@ -15,12 +15,12 @@
 package compile
 
 import (
-	"context"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -51,6 +50,7 @@ const (
 	Parallel
 	CreateDatabase
 	CreateTable
+	CreateView
 	CreateIndex
 	DropDatabase
 	DropTable
@@ -68,6 +68,8 @@ const (
 
 // Source contains information of a relation which will be used in execution.
 type Source struct {
+	isConst bool
+
 	PushdownId             uint64
 	PushdownAddr           string
 	SchemaName             string
@@ -75,8 +77,9 @@ type Source struct {
 	PartitionRelationNames []string
 	Attributes             []string
 	R                      engine.Reader
+	Rel                    engine.Relation
 	Bat                    *batch.Batch
-	FilterExpr             *plan.Expr //todo: change this to []*plan.Expr
+	FilterExpr             *plan.Expr // todo: change this to []*plan.Expr
 	node                   *plan.Node
 	TableDef               *plan.TableDef
 	Timestamp              timestamp.Timestamp
@@ -120,8 +123,11 @@ type Scope struct {
 	PreScopes []*Scope
 	// NodeInfo contains the information about the remote node.
 	NodeInfo engine.Node
+	// TxnOffset represents the transaction's write offset, specifying the starting position for reading data.
+	TxnOffset int
 	// Instructions contains command list of this scope.
-	Instructions vm.Instructions
+	// Instructions vm.Instructions
+	RootOp vm.Operator
 	// Proc contains the execution context.
 	Proc *process.Process
 
@@ -134,6 +140,23 @@ type Scope struct {
 
 	PartialResults     []any
 	PartialResultTypes []types.T
+}
+
+func canScopeOpRemote(rootOp vm.Operator) bool {
+	if rootOp == nil {
+		return true
+	}
+	if vm.CannotRemote(rootOp) {
+		return false
+	}
+	numChildren := rootOp.GetOperatorBase().NumChildren()
+	for idx := 0; idx < numChildren; idx++ {
+		res := canScopeOpRemote(rootOp.GetOperatorBase().GetChildren(idx))
+		if !res {
+			return false
+		}
+	}
+	return true
 }
 
 // canRemote checks whether the current scope can be executed remotely.
@@ -152,11 +175,11 @@ func (s *Scope) canRemote(c *Compile, checkAddr bool) bool {
 	// some operators cannot be remote.
 	// todo: it is not a good way to check the operator type here.
 	//  cannot generate this remote pipeline if the operator type is not supported.
-	for _, op := range s.Instructions {
-		if op.CannotRemote() {
-			return false
-		}
+
+	if !canScopeOpRemote(s.RootOp) {
+		return false
 	}
+
 	for _, pre := range s.PreScopes {
 		if !pre.canRemote(c, false) {
 			return false
@@ -222,13 +245,13 @@ func (a *anaylze) release() {
 type Compile struct {
 	scope []*Scope
 
-	pn   *plan.Plan
-	info plan2.ExecInfo
+	pn *plan.Plan
 
-	u any
+	execType plan2.ExecType
+
 	// fill is a result writer runs a callback function.
 	// fill will be called when result data is ready.
-	fill func(any, *batch.Batch) error
+	fill func(*batch.Batch) error
 	// affectRows stores the number of rows affected while insert / update / delete
 	affectRows *atomic.Uint64
 	// cn address
@@ -243,12 +266,17 @@ type Compile struct {
 	sql       string
 	originSQL string
 
+	// queryStatus is a structure to record query has done.
+	queryStatus queryDoneWaiter
+
 	anal *anaylze
 	// e db engine instance.
-	e   engine.Engine
-	ctx context.Context
+	e engine.Engine
+
 	// proc stores the execution context.
 	proc *process.Process
+	// TxnOffset read starting offset position within the transaction during the execute current statement
+	TxnOffset int
 
 	MessageBoard *process.MessageBoard
 
@@ -261,8 +289,6 @@ type Compile struct {
 	nodeRegs map[[2]int32]*process.WaitRegister
 	stepRegs map[int32][][2]int32
 
-	runtimeFilterReceiverMap map[int32]*runtimeFilterReceiver
-
 	lock *sync.RWMutex
 
 	isInternal bool
@@ -272,25 +298,17 @@ type Compile struct {
 
 	buildPlanFunc func() (*plan2.Plan, error)
 	startAt       time.Time
-	fuzzy         *fuzzyCheck
-	// use for release
-	createdFuzzy []*fuzzyCheck
+	// use for duplicate check
+	fuzzys []*fuzzyCheck
 
 	needLockMeta bool
 	metaTables   map[string]struct{}
+	lockTables   map[uint64]*plan.LockTarget
 	disableRetry bool
 
 	lastAllocID int32
-}
 
-// runtimeFilterSender is in hashbuild.Argument and fuzzyFilter.Arguement
-type runtimeFilterReceiver struct {
-	size int
-	ch   chan *pipeline.RuntimeFilter
-}
-
-type runtimeFilterSenderSetter interface {
-	SetRuntimeFilterSenders([]*colexec.RuntimeFilterChan)
+	isPrepare bool
 }
 
 type RemoteReceivRegInfo struct {
@@ -306,7 +324,12 @@ type fuzzyCheck struct {
 	condition string
 
 	// handle with primary key(a, b, ...) or unique key (a, b, ...)
-	isCompound   bool
+	isCompound bool
+
+	// handle with cases like create a unique index for existed table, or alter add unique key
+	// and the type of unique key is compound
+	onlyInsertHidden bool
+
 	col          *plan.ColDef
 	compoundCols []*plan.ColDef
 

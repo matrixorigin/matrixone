@@ -17,12 +17,13 @@ package reuse
 import (
 	"fmt"
 	"sync/atomic"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 )
 
 var (
-	pools = map[string]any{}
+	pools = map[unsafe.Pointer]any{}
 )
 
 var (
@@ -78,16 +79,17 @@ func CreatePool[T ReusableObject](
 	new func() *T,
 	reset func(*T),
 	opts *Options[T]) {
-	var v T
-	if p := get(v); p != nil {
+	if p := get[T](); p != nil {
+		var v *T
 		panic(fmt.Sprintf("%T pool already created", v))
 	}
 
+	tp := typeOf[T]()
 	switch defaultSPI {
 	case SyncBased:
-		pools[v.TypeName()] = newSyncPoolBased(new, reset, opts)
+		pools[tp] = newSyncPoolBased(new, reset, opts)
 	case MpoolBased:
-		pools[v.TypeName()] = newMpoolBased(mpool.MB*5, opts)
+		pools[tp] = newMpoolBased(mpool.MB*5, opts)
 	}
 }
 
@@ -95,7 +97,7 @@ func CreatePool[T ReusableObject](
 func Alloc[T ReusableObject](p Pool[T]) *T {
 	if p == nil {
 		var v T
-		p = get(v)
+		p = get[T]()
 		if p == nil {
 			panic(fmt.Sprintf("%T pool not created", v))
 		}
@@ -106,8 +108,7 @@ func Alloc[T ReusableObject](p Pool[T]) *T {
 // Free free a pooled object.
 func Free[T ReusableObject](v *T, p Pool[T]) {
 	if p == nil {
-		var ev T
-		p = get(ev)
+		p = get[T]()
 	}
 	if p == nil {
 		panic(fmt.Sprintf("%T pool not created", v))
@@ -115,9 +116,20 @@ func Free[T ReusableObject](v *T, p Pool[T]) {
 	p.Free(v)
 }
 
-func get[T ReusableObject](v T) Pool[T] {
-	if pool, ok := pools[v.TypeName()]; ok {
+func get[T ReusableObject]() Pool[T] {
+	if pool, ok := pools[typeOf[T]()]; ok {
 		return pool.(Pool[T])
 	}
 	return nil
+}
+
+func typeOf[T any]() unsafe.Pointer {
+	var v *T
+	i := any(v)
+	// any is a fat point and reflect.Type is a *abi.Type
+	// type emptyInterface struct {
+	// 	typ  *abi.Type
+	// 	word unsafe.Pointer
+	// }
+	return *(*unsafe.Pointer)(unsafe.Pointer(&i))
 }

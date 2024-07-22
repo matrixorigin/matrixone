@@ -295,7 +295,7 @@ func (idx *simpleTableIndex) BatchInsert(
 		if dedupInput {
 			set := make(map[string]bool)
 			for i := start; i < start+count; i++ {
-				v := vec.GetStringAt(i)
+				v := vec.UnsafeGetStringAt(i)
 				if _, ok := set[v]; ok {
 					entry := common.TypeStringValue(*colType, []byte(v), false)
 					return moerr.NewDuplicateEntryNoCtx(entry, attr)
@@ -305,7 +305,7 @@ func (idx *simpleTableIndex) BatchInsert(
 			break
 		}
 		for i := start; i < start+count; i++ {
-			v := vec.GetStringAt(i)
+			v := vec.UnsafeGetStringAt(i)
 			if _, ok := idx.tree[v]; ok {
 				entry := common.TypeStringValue(*colType, []byte(v), false)
 				return moerr.NewDuplicateEntryNoCtx(entry, attr)

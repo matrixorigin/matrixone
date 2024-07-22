@@ -17,6 +17,7 @@ package txnimpl
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -91,15 +92,9 @@ func (space *tableSpace) isStatsExisted(o objectio.ObjectStats) bool {
 
 // register an appendable insertNode.
 func (space *tableSpace) registerANode() {
-	entry := space.entry
-	meta := catalog.NewStandaloneBlock(
-		entry,
-		objectio.NewBlockidWithObjectID(&entry.ID, uint16(len(space.nodes))),
-		space.table.store.txn.GetStartTS())
-	entry.AddEntryLocked(meta)
 	n := NewANode(
 		space.table,
-		meta,
+		space.entry,
 	)
 	space.appendable = n
 	space.nodes = append(space.nodes, n)
@@ -165,43 +160,47 @@ func (space *tableSpace) prepareApplyANode(node *anode) error {
 	for appended < node.Rows() {
 		appender, err := space.tableHandle.GetAppender()
 		if moerr.IsMoErrCode(err, moerr.ErrAppendableObjectNotFound) {
-			objH, err := space.table.CreateObject(true)
+			objH, err := space.table.CreateObject()
 			if err != nil {
 				return err
 			}
-			blk, err := objH.CreateBlock(true)
+			appender = space.tableHandle.SetAppender(objH.Fingerprint())
 			objH.Close()
-			if err != nil {
-				return err
-			}
-			appender = space.tableHandle.SetAppender(blk.Fingerprint())
-			blk.Close()
-		} else if moerr.IsMoErrCode(err, moerr.ErrAppendableBlockNotFound) {
-			id := appender.GetID()
-			blk, err := space.table.CreateBlock(id.ObjectID(), true)
-			if err != nil {
-				return err
-			}
-			appender = space.tableHandle.SetAppender(blk.Fingerprint())
-			blk.Close()
 		}
 		if !appender.IsSameColumns(space.table.GetLocalSchema()) {
 			return moerr.NewInternalErrorNoCtx("schema changed, please rollback and retry")
 		}
+
+		// see more notes in flushtabletail.go
+		/// ----------- Choose a ablock ---------
+		appender.LockFreeze()
+		// no one can touch freeze for now, check it
+		if appender.CheckFreeze() {
+			// freezed, try to find another ablock
+			appender.UnlockFreeze()
+			continue
+		}
+
+		// hold freezelock to attach AppendNode
 		//PrepareAppend: It is very important that appending a AppendNode into
 		// block's MVCCHandle before applying data into block.
 		anode, created, toAppend, err := appender.PrepareAppend(
 			node.Rows()-appended,
 			space.table.store.txn)
 		if err != nil {
+			appender.UnlockFreeze()
 			return err
 		}
-		blockId := appender.GetMeta().(*catalog.BlockEntry).ID
+		appender.UnlockFreeze()
+		/// ------- Attach AppendNode Successfully -----
+
+		objID := appender.GetMeta().(*catalog.ObjectEntry).ID()
 		col := space.table.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
 		defer col.Close()
+		blkID := objectio.NewBlockidWithObjectID(objID, 0)
 		if err = objectio.ConstructRowidColumnTo(
 			col.GetDownstreamVector(),
-			&blockId,
+			blkID,
 			anode.GetMaxRow()-toAppend,
 			toAppend,
 			col.GetAllocator(),
@@ -223,9 +222,9 @@ func (space *tableSpace) prepareApplyANode(node *anode) error {
 			space.table.txnEntries.Append(anode)
 		}
 		id := appender.GetID()
-		space.table.store.warChecker.Insert(appender.GetMeta().(*catalog.BlockEntry))
-		space.table.store.txn.GetMemo().AddBlock(space.table.entry.GetDB().ID,
-			id.TableID, &id.BlockID)
+		space.table.store.warChecker.Insert(appender.GetMeta().(*catalog.ObjectEntry))
+		space.table.store.txn.GetMemo().AddObject(space.table.entry.GetDB().ID,
+			id.TableID, id.ObjectID())
 		space.appends = append(space.appends, ctx)
 		// logutil.Debugf("%s: toAppend %d, appended %d, blks=%d",
 		// 	id.String(), toAppend, appended, len(space.appends))
@@ -246,11 +245,11 @@ func (space *tableSpace) prepareApplyObjectStats(stats objectio.ObjectStats) (er
 			return true
 		}
 		entry := space.nobj.GetMeta().(*catalog.ObjectEntry)
-		return !entry.ID.Eq(*sid)
+		return !entry.ID().Eq(*sid)
 	}
 
 	if shouldCreateNewObj() {
-		space.nobj, err = space.table.CreateNonAppendableObject(true, new(objectio.CreateObjOpt).WithId(sid))
+		space.nobj, err = space.table.CreateNonAppendableObject(new(objectio.CreateObjOpt).WithId(sid))
 		if err != nil {
 			return
 		}
@@ -261,29 +260,6 @@ func (space *tableSpace) prepareApplyObjectStats(stats objectio.ObjectStats) (er
 		}
 	}
 
-	num := stats.ObjectName().Num()
-	blkCount := stats.BlkCnt()
-	totalRow := stats.Rows()
-	blkMaxRows := space.table.schema.BlockMaxRows
-	for i := uint16(0); i < uint16(blkCount); i++ {
-		var blkRow uint32
-		if totalRow > blkMaxRows {
-			blkRow = blkMaxRows
-		} else {
-			blkRow = totalRow
-		}
-		totalRow -= blkRow
-		metaloc := objectio.BuildLocation(stats.ObjectName(), stats.Extent(), blkRow, i)
-
-		opts := new(objectio.CreateBlockOpt).
-			WithMetaloc(metaloc).
-			WithFileIdx(num).
-			WithBlkIdx(i)
-		_, err = space.nobj.CreateNonAppendableBlock(opts)
-		if err != nil {
-			return
-		}
-	}
 	return
 }
 
@@ -305,7 +281,7 @@ func (space *tableSpace) CloseAppends() {
 }
 
 // Append appends batch of data into anode.
-func (space *tableSpace) Append(data *containers.Batch) (err error) {
+func (space *tableSpace) Append(data *containers.Batch) (dur float64, err error) {
 	if space.appendable == nil {
 		space.registerANode()
 	}
@@ -315,16 +291,13 @@ func (space *tableSpace) Append(data *containers.Batch) (err error) {
 	schema := space.table.GetLocalSchema()
 	for {
 		h := space.appendable
-		if h.GetSpace() == 0 {
-			space.registerANode()
-			h = space.appendable
-		}
 		appended, err = h.Append(data, offset)
 		if err != nil {
 			return
 		}
 		dedupType := space.table.store.txn.GetDedupType()
 		if schema.HasPK() && dedupType == txnif.FullDedup {
+			now := time.Now()
 			if err = space.index.BatchInsert(
 				data.Attrs[schema.GetSingleSortKeyIdx()],
 				data.Vecs[schema.GetSingleSortKeyIdx()],
@@ -334,6 +307,7 @@ func (space *tableSpace) Append(data *containers.Batch) (err error) {
 				false); err != nil {
 				break
 			}
+			dur += time.Since(now).Seconds()
 		}
 		offset += appended
 		space.rows += appended
@@ -344,8 +318,8 @@ func (space *tableSpace) Append(data *containers.Batch) (err error) {
 	return
 }
 
-// AddBlksWithMetaLoc transfers blocks with meta location into non-appendable nodes
-func (space *tableSpace) AddBlksWithMetaLoc(
+// AddObjsWithMetaLoc transfers blocks with meta location into non-appendable nodes
+func (space *tableSpace) AddObjsWithMetaLoc(
 	pkVecs []containers.Vector,
 	stats objectio.ObjectStats,
 ) (err error) {
@@ -488,12 +462,12 @@ func (space *tableSpace) GetByFilter(filter *handle.Filter) (id *common.ID, offs
 }
 
 func (space *tableSpace) GetPKColumn() containers.Vector {
-	schema := space.table.entry.GetLastestSchema()
+	schema := space.table.entry.GetLastestSchemaLocked()
 	return space.index.KeyToVector(schema.GetSingleSortKeyType())
 }
 
 func (space *tableSpace) GetPKVecs() []containers.Vector {
-	schema := space.table.entry.GetLastestSchema()
+	schema := space.table.entry.GetLastestSchemaLocked()
 	return space.index.KeyToVectors(schema.GetSingleSortKeyType())
 }
 
@@ -502,36 +476,27 @@ func (space *tableSpace) BatchDedup(key containers.Vector) error {
 }
 
 func (space *tableSpace) GetColumnDataByIds(
-	blk *catalog.BlockEntry,
+	obj *catalog.ObjectEntry,
 	colIdxes []int,
 	mp *mpool.MPool,
-) (view *containers.BlockView, err error) {
-	_, pos := blk.ID.Offsets()
-	n := space.nodes[int(pos)]
+) (view *containers.Batch, err error) {
+	n := space.nodes[0]
 	return n.GetColumnDataByIds(colIdxes, mp)
 }
 
 func (space *tableSpace) GetColumnDataById(
 	ctx context.Context,
-	blk *catalog.BlockEntry,
+	obj *catalog.ObjectEntry,
 	colIdx int,
 	mp *mpool.MPool,
-) (view *containers.ColumnView, err error) {
-	_, pos := blk.ID.Offsets()
-	n := space.nodes[int(pos)]
+) (view *containers.Batch, err error) {
+	n := space.nodes[0]
 	return n.GetColumnDataById(ctx, colIdx, mp)
 }
 
-func (space *tableSpace) Prefetch(blk *catalog.BlockEntry, idxes []uint16) error {
-	_, pos := blk.ID.Offsets()
-	n := space.nodes[int(pos)]
+func (space *tableSpace) Prefetch(obj *catalog.ObjectEntry, idxes []uint16) error {
+	n := space.nodes[0]
 	return n.Prefetch(idxes)
-}
-
-func (space *tableSpace) GetBlockRows(blk *catalog.BlockEntry) int {
-	_, pos := blk.ID.Offsets()
-	n := space.nodes[int(pos)]
-	return int(n.Rows())
 }
 
 func (space *tableSpace) GetValue(row uint32, col uint16) (any, bool, error) {

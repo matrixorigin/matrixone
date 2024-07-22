@@ -19,6 +19,7 @@ package plan;
 
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 import "lock.proto";
+import "timestamp.proto";
 
 option go_package = "github.com/matrixorigin/matrixone/pkg/pb/plan";
 option (gogoproto.sizer_all) = false;
@@ -88,6 +89,8 @@ message ColRef {
 	int32	rel_pos	= 1;
 	int32	col_pos	= 2;
 	string	name	= 3;
+	string	tbl_name = 4;
+	string	db_name	= 5;
 }
 
 // Reference a column by its internal table id and column id
@@ -245,7 +248,7 @@ message ColDef {
 	string name 		= 2;
 	bool hidden			= 3;
 	CompressType alg 	= 4;
-	Type typ			= 5;
+	Type typ			= 5 [(gogoproto.nullable) = false];
 	bool not_null		= 6;
 	Default default 	= 7;
 	string comment		= 8;
@@ -259,6 +262,9 @@ message ColDef {
 	int32 pkidx 		= 14;
 	bool headers = 15;
 	string header = 16;
+
+	string tbl_name = 17;
+	string db_name = 18;
 }
 
 message Default {
@@ -449,6 +455,7 @@ message TableDef {
 	uint64 auto_incr_offset = 30;
 	bool is_dynamic = 31;
 
+	string db_name = 32;
 }
 
 message TableFunction{
@@ -506,8 +513,9 @@ message Stats {
 	double table_cnt = 5;
 	//for scan, selectivity means outcnt divide total count
 	double selectivity = 6;
+	bool forceOneCN = 7;
 
-	HashMapStats hashmapStats = 7;
+	HashMapStats hashmapStats = 8;
 }
 
 message RowsetExpr {
@@ -522,6 +530,7 @@ message ColData {
 
 message RowsetData {
 	repeated ColData cols	= 1;
+	int32 row_count = 2;
 }
 
 message OrderBySpec {
@@ -575,10 +584,16 @@ message FrameBound {
 }
 
 message OnDuplicateKeyCtx {
-	TableDef table_def					= 1;
-	repeated int32 on_duplicate_idx		= 2;
-	map<string, Expr> on_duplicate_expr	= 3;
-	bool is_ignore 						= 4;
+	repeated string attrs = 1;
+	int32 insert_col_count = 2;
+	repeated Expr unique_col_check_expr = 3;
+	repeated string unique_cols = 4;
+	repeated int32 on_duplicate_idx		= 5;
+	map<string, Expr> on_duplicate_expr	= 6;
+	bool is_ignore 						= 7;
+	string table_name         = 8;
+	uint64 table_id           = 9;
+	uint32 table_version			= 10;
 }
 
 message InsertCtx {
@@ -602,6 +617,7 @@ message ReplaceCtx {
 	repeated uint64 partition_table_ids = 6;
 	repeated string partition_table_names = 7;
 	int32 partition_idx = 8;
+	bool rewrite_from_on_duplicate_key = 9;
 }
 
 message AnalyzeInfo {
@@ -621,6 +637,7 @@ message AnalyzeInfo {
 	int64 insertTime = 14;
 	repeated int64 time_consumed_array_major = 15;
 	repeated int64 time_consumed_array_minor = 16;
+	int64 input_blocks=17;
 }
 
 message PartitionPrune {
@@ -716,6 +733,7 @@ message Node {
 		MARK	= 7;
 		APPLY	= 8;
 		INDEX = 9;
+		L2 = 10;
 	}
 
 	enum AggMode {
@@ -818,11 +836,30 @@ message Node {
 	int32 window_idx = 52;
 	repeated Expr onUpdateExprs = 53;
 	OriginTableMessageForFuzzy fuzzymessage = 54;
+	bool ifInsertFromUnique = 55;
 
 	//for message
-	repeated msgHeader send_msg_list = 55;
-	repeated msgHeader recv_msg_list = 56;
+	repeated msgHeader send_msg_list = 56;
+	repeated msgHeader recv_msg_list = 57;
+
+	Snapshot scan_snapshot = 58;
+
 }
+
+// Snapshot Represents a snapshot of the database
+message Snapshot {
+	// The timestamp of the snapshot
+	timestamp.Timestamp TS = 1;
+	// Tenant information for creating snapshots
+	SnapshotTenant tenant = 2;
+}
+
+// Tenant information for creating snapshots
+message SnapshotTenant {
+	string tenantName = 1;
+	uint32 tenantID = 2;
+}
+
 
 message ExternScan {
     int32 type = 1;
@@ -832,12 +869,14 @@ message ExternScan {
     bytes  enclosed_by = 5;
     string terminated = 6;
 	string json_type = 7;
+    bytes  escaped_by = 8;
+	map<string, int32> TbColToDataCol = 9;
 }
 
 message LockTarget {
 	uint64 table_id           	= 1;
 	int32 primary_col_idx_in_bat  = 2;
-	Type primary_col_typ          = 3;
+	Type primary_col_typ          = 3 [(gogoproto.nullable) = false];
 	int32 refresh_ts_idx_in_bat   = 4;
 	int32 filter_col_idx_in_bat   = 5;
 	bool lock_table 				= 6;
@@ -851,9 +890,8 @@ message PreInsertUkCtx {
 	// index of columns(parts of unique key) in pre batch
 	repeated int32 columns 	= 1;
 	int32 pk_column 		= 2;
-	Type pk_type 			= 3;
-	Type uk_type			= 4;
-	TableDef table_def 		= 5;
+	Type pk_type 			= 3 [(gogoproto.nullable) = false];
+	Type uk_type			= 4 [(gogoproto.nullable) = false];
 }
 
 message PreDeleteCtx {
@@ -998,6 +1036,9 @@ message DataControl {
 		PREPARE			= 4;
 		EXECUTE			= 5;
 		DEALLOCATE		= 6;
+		CREATE_ACCOUNT  = 7;
+		ALTER_ACCOUNT   = 8;
+		DROP_ACCOUNT    = 9;
 	}
 	//DataDefinition type
 	DclType dcl_type = 1;
@@ -1006,6 +1047,7 @@ message DataControl {
 		Prepare prepare 			= 3;
 		Execute execute				= 4;
 		Deallocate deallocate 		= 5;
+		OtherDCL other = 6;
 	}
 }
 
@@ -1045,7 +1087,7 @@ message DataDefinition {
 		DROP_SEQUENCE		= 31;
 		SHOW_SEQUENCES      = 32;
 		SHOW_CONNECTORS = 33;
-
+		SHOW_UPGRADE = 34;
 	}
 	//DataDefinition type
 	DdlType ddl_type = 1;
@@ -1064,16 +1106,16 @@ message DataDefinition {
 		DropTable drop_table			= 8;
 		CreateIndex create_index 		= 9;
 		AlterIndex alter_index 			= 10;
-		DropIndex drop_index 			= 11;
+		DropIndex drop_index 			  = 11;
 		TruncateTable truncate_table	= 12;
 		ShowVariables show_variables 	= 13;
-		AlterView alter_view			= 14;
+		AlterView alter_view			      = 14;
 		LockTables lock_tables          = 15;
 		UnLockTables unlock_tables      = 16;
 		CreateSequence create_sequence  = 17;
 		DropSequence   drop_sequence    = 18;
 		AlterSequence  alter_sequence   = 19;
-
+		CreateView  create_view         = 20;
 	}
 }
 
@@ -1223,7 +1265,7 @@ message AlterTableName {
 message AlterAddColumn {
 	string name = 1;
 	string pre_name = 2;
-	Type type = 3;
+	Type type = 3 [(gogoproto.nullable) = false];
 	int32 pos = 4;
 }
 
@@ -1261,14 +1303,12 @@ message AlterTable {
 	AlgorithmType algorithm_type = 6;
 	string create_tmp_table_sql = 7;
 	string insert_tmp_data_sql = 8;
-	string create_table_sql = 9;
-	string insert_data_sql = 10;
-	map<uint64, ColDef> change_tbl_colId_map = 11;
+	map<uint64, ColDef> change_tbl_colId_map = 9;
 	//detect fk self refer constraint
-	repeated string detectSqls= 12;
+	repeated string detectSqls= 10;
 	// alter table may insert fk records related to this table
 	// into mo_foreign_keys
-	repeated string updateFkSqls = 13;
+	repeated string updateFkSqls = 11;
 }
 
 message DropTable {
@@ -1287,6 +1327,13 @@ message DropTable {
 	repeated string updateFkSqls = 11;
 	//fk child table id that refers to me
 	repeated uint64 fkChildTblsReferToMe = 12;
+}
+
+message CreateView {
+	bool if_not_exists 	= 1;
+	string database 	= 2;
+	bool replace        = 3;
+	TableDef table_def 	= 4;
 }
 
 message AlterView {
@@ -1382,6 +1429,10 @@ message Execute {
 
 message Deallocate {
 	string name			= 1;
+}
+
+message OtherDCL {
+	repeated int32 paramTypes = 1;
 }
 
 enum TableLockType {

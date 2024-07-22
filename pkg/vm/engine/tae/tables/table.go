@@ -22,7 +22,7 @@ import (
 
 type dataTable struct {
 	meta *catalog.TableEntry
-	aBlk *ablock
+	aBlk *aobject
 	rt   *dbutils.Runtime
 }
 
@@ -39,5 +39,5 @@ func (table *dataTable) GetHandle() data.TableHandle {
 
 func (table *dataTable) ApplyHandle(h data.TableHandle) {
 	handle := h.(*tableHandle)
-	table.aBlk = handle.block
+	table.aBlk = handle.object
 }

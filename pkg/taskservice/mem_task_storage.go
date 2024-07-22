@@ -57,6 +57,10 @@ func (s *memTaskStorage) Close() error {
 	return nil
 }
 
+func (s *memTaskStorage) PingContext(ctx context.Context) error {
+	return nil
+}
+
 func (s *memTaskStorage) AddAsyncTask(ctx context.Context, tasks ...task.AsyncTask) (int, error) {
 	s.Lock()
 	defer s.Unlock()

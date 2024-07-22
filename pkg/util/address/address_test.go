@@ -15,6 +15,7 @@
 package address
 
 import (
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -85,25 +86,38 @@ func TestAdjust(t *testing.T) {
 
 func TestAddressManager(t *testing.T) {
 	serviceAddr := "127.0.0.1"
-	portBase := 39000
+	portBase := 59320
 	m := NewAddressManager(serviceAddr, portBase)
 	assert.NotNil(t, m)
-	m.Register(2)
-	m.Register(1)
-	assert.Equal(t, "0.0.0.0:39000", m.ListenAddress(2))
-	assert.Equal(t, "127.0.0.1:39000", m.ServiceAddress(2))
-	assert.Equal(t, "0.0.0.0:39001", m.ListenAddress(1))
-	assert.Equal(t, "127.0.0.1:39001", m.ServiceAddress(1))
 
-	l, err := net.Listen("tcp4", "0.0.0.0:39002")
-	assert.NoError(t, err)
+	p1 := m.Register(2)
+	assert.Equal(t, fmt.Sprintf("0.0.0.0:%d", p1), m.ListenAddress(2))
+	assert.Equal(t, fmt.Sprintf("127.0.0.1:%d", p1), m.ServiceAddress(2))
+
+	p2 := m.Register(1)
+	assert.Equal(t, fmt.Sprintf("0.0.0.0:%d", p2), m.ListenAddress(1))
+	assert.Equal(t, fmt.Sprintf("127.0.0.1:%d", p2), m.ServiceAddress(1))
+
+	p3 := p2 + 1
+
+	var err error
+	var l net.Listener
+	for {
+		l, err = net.Listen("tcp4", fmt.Sprintf("0.0.0.0:%d", p3))
+		if err == nil {
+			break
+		}
+		p3++
+	}
 	defer func() {
-		err = l.Close()
-		assert.NoError(t, err)
+		if l != nil {
+			err = l.Close()
+			assert.NoError(t, err)
+		}
 	}()
-	m.Register(3)
-	assert.Equal(t, "0.0.0.0:39003", m.ListenAddress(3))
-	assert.Equal(t, "127.0.0.1:39003", m.ServiceAddress(3))
+	p4 := m.Register(3)
+	assert.Equal(t, fmt.Sprintf("0.0.0.0:%d", p4), m.ListenAddress(3))
+	assert.Equal(t, fmt.Sprintf("127.0.0.1:%d", p4), m.ServiceAddress(3))
 }
 
 func TestRemoteAddressAvail(t *testing.T) {

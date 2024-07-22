@@ -35,7 +35,7 @@ const (
 
 // add unit tests for cases
 type dispatchTestCase struct {
-	arg    *Argument
+	arg    *Dispatch
 	types  []types.Type
 	proc   *process.Process
 	cancel context.CancelFunc
@@ -47,8 +47,8 @@ var (
 
 func init() {
 	tcs = []dispatchTestCase{
-		newTestCase(true),
-		newTestCase(false),
+		newTestCase(),
+		newTestCase(),
 	}
 }
 
@@ -71,7 +71,7 @@ func TestDispatch(t *testing.T) {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		bats := []*batch.Batch{
-			newBatch(t, tc.types, tc.proc, Rows),
+			newBatch(tc.types, tc.proc, Rows),
 			batch.EmptyBatch,
 		}
 		resetChildren(tc.arg, bats)
@@ -87,11 +87,11 @@ func TestDispatch(t *testing.T) {
 		tc.arg.Children[0].Free(tc.proc, false, nil)
 		for _, re := range tc.arg.LocalRegs {
 			for len(re.Ch) > 0 {
-				bat := <-re.Ch
-				if bat == nil {
+				msg := <-re.Ch
+				if msg.Batch == nil {
 					break
 				}
-				bat.Clean(tc.proc.Mp())
+				msg.Batch.Clean(tc.proc.Mp())
 			}
 		}
 		tc.proc.FreeVectors()
@@ -99,15 +99,15 @@ func TestDispatch(t *testing.T) {
 	}
 }
 
-func newTestCase(all bool) dispatchTestCase {
-	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
+func newTestCase() dispatchTestCase {
+	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
-	reg := &process.WaitRegister{Ctx: ctx, Ch: make(chan *batch.Batch, 3)}
+	reg := &process.WaitRegister{Ctx: ctx, Ch: make(chan *process.RegisterMessage, 3)}
 	return dispatchTestCase{
 		proc:  proc,
 		types: []types.Type{types.T_int8.ToType()},
-		arg: &Argument{
+		arg: &Dispatch{
 			FuncId:    SendToAllLocalFunc,
 			LocalRegs: []*process.WaitRegister{reg},
 			OperatorBase: vm.OperatorBase{
@@ -124,20 +124,20 @@ func newTestCase(all bool) dispatchTestCase {
 }
 
 // create a new block based on the type information
-func newBatch(t *testing.T, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
+func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
 
-func resetChildren(arg *Argument, bats []*batch.Batch) {
+func resetChildren(arg *Dispatch, bats []*batch.Batch) {
+	valueScanArg := &value_scan.ValueScan{
+		Batchs: bats,
+	}
+	valueScanArg.Prepare(nil)
 	if len(arg.Children) == 0 {
-		arg.AppendChild(&value_scan.Argument{
-			Batchs: bats,
-		})
+		arg.AppendChild(valueScanArg)
 
 	} else {
 		arg.Children = arg.Children[:0]
-		arg.AppendChild(&value_scan.Argument{
-			Batchs: bats,
-		})
+		arg.AppendChild(valueScanArg)
 	}
 }

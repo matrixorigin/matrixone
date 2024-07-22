@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -392,36 +393,26 @@ func newResultFunc[T types.FixedSizeT](
 	return f
 }
 
-func (fr *FunctionResult[T]) PreExtendAndReset(size int) error {
+func (fr *FunctionResult[T]) PreExtendAndReset(targetSize int) error {
 	if fr.vec == nil {
 		fr.vec = fr.getVectorMethod(fr.typ)
 	}
 
-	if fr.isVarlena {
-		if err := fr.vec.PreExtend(size, fr.mp); err != nil {
-			return err
-		}
-		fr.vec.Reset(fr.typ)
-		return nil
-	}
-
-	fr.length = 0
-	if fr.vec.Capacity() < size {
-		if err := fr.vec.PreExtend(size, fr.mp); err != nil {
-			return err
-		}
-		fr.vec.Reset(fr.typ)
-		fr.vec.SetLength(size)
-		fr.cols = MustFixedCol[T](fr.vec)
-		return nil
-	}
-
 	oldLength := fr.vec.Length()
-	fr.vec.Reset(fr.typ)
-	fr.vec.SetLength(size)
-	// if fr.cols == nil, means the vector is first time to be sent to structure `FunctionResult`.
-	if (fr.cols == nil) || (len(fr.cols) > 0 && size > oldLength) {
-		fr.cols = MustFixedCol[T](fr.vec)
+
+	if more := targetSize - oldLength; more > 0 {
+		if err := fr.vec.PreExtend(more, fr.mp); err != nil {
+			return err
+		}
+	}
+	fr.vec.ResetWithSameType()
+
+	if !fr.isVarlena {
+		fr.length = 0
+		fr.vec.length = targetSize
+		if targetSize > oldLength {
+			fr.cols = MustFixedCol[T](fr.vec)
+		}
 	}
 	return nil
 }
@@ -465,6 +456,22 @@ func (fr *FunctionResult[T]) AppendMustBytesValue(val []byte) error {
 func (fr *FunctionResult[T]) AppendMustNullForBytesResult() error {
 	var v T
 	return appendOneFixed(fr.vec, v, true, fr.mp)
+}
+
+func (fr *FunctionResult[T]) AddNullRange(start, end uint64) {
+	fr.vec.nsp.AddRange(start, end)
+}
+
+func (fr *FunctionResult[T]) AddNullAt(idx uint64) {
+	fr.vec.nsp.Add(idx)
+}
+
+func (fr *FunctionResult[T]) AddNulls(ns *nulls.Nulls) {
+	fr.vec.nsp.Or(ns)
+}
+
+func (fr *FunctionResult[T]) GetNullAt(idx uint64) bool {
+	return fr.vec.nsp.Contains(idx)
 }
 
 func (fr *FunctionResult[T]) GetType() types.Type {

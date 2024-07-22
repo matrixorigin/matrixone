@@ -25,11 +25,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(Order)
 
 const maxBatchSizeToSort = 64 * mpool.MB
 
-type Argument struct {
+type Order struct {
 	ctr *container
 
 	OrderBySpec []*plan.OrderBySpec
@@ -37,34 +37,34 @@ type Argument struct {
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (order *Order) GetOperatorBase() *vm.OperatorBase {
+	return &order.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[Order](
+		func() *Order {
+			return &Order{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *Order) {
+			*a = Order{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[Order]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (order Order) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *Order {
+	return reuse.Alloc[Order](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (order *Order) Release() {
+	if order != nil {
+		reuse.Free[Order](order, nil)
 	}
 }
 
@@ -82,14 +82,21 @@ type container struct {
 	flatFn           []func(v, w *vector.Vector) error // method to flat const vector
 }
 
-func (arg *Argument) Free(proc *process.Process, _ bool, err error) {
-	ctr := arg.ctr
+func (order *Order) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	order.Free(proc, pipelineFailed, err)
+}
+
+func (order *Order) Free(proc *process.Process, _ bool, err error) {
+	ctr := order.ctr
 	if ctr != nil {
 		for i := range ctr.sortExprExecutor {
 			if ctr.sortExprExecutor[i] != nil {
 				ctr.sortExprExecutor[i].Free()
 			}
 		}
+
+		ctr.sortExprExecutor = nil
+
 		if ctr.batWaitForSort != nil {
 			ctr.batWaitForSort.Clean(proc.Mp())
 			ctr.batWaitForSort = nil
@@ -99,5 +106,7 @@ func (arg *Argument) Free(proc *process.Process, _ bool, err error) {
 			ctr.rbat = nil
 		}
 		ctr.resultOrderList = nil
+
+		order.ctr = nil
 	}
 }

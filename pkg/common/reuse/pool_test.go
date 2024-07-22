@@ -15,6 +15,7 @@
 package reuse
 
 import (
+	"reflect"
 	"runtime/debug"
 	"testing"
 
@@ -212,4 +213,11 @@ type person struct {
 
 func (p person) TypeName() string {
 	return "person"
+}
+
+func TestTypeOf(t *testing.T) {
+	rt := reflect.TypeOf((*person)(nil))
+	want := reflect.ValueOf(rt).Pointer()
+	got := uintptr(typeOf[person]())
+	assert.Equal(t, want, got)
 }

@@ -487,10 +487,11 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 	return nodeID, cantPushdown
 }
 
-// XXX: The following 2 rules should be expanded to a single pushdownTopAndLimit
-
 // order by limit can be pushed down to left child of left join
 func (builder *QueryBuilder) pushdownTopThroughLeftJoin(nodeID int32) {
+	if builder.optimizerHints != nil && builder.optimizerHints.pushDownTopThroughLeftJoin != 0 {
+		return
+	}
 	node := builder.qry.Nodes[nodeID]
 	var joinnode, nodePushDown *plan.Node
 	var tags []int32
@@ -540,6 +541,9 @@ END:
 }
 
 func (builder *QueryBuilder) pushdownLimitToTableScan(nodeID int32) {
+	if builder.optimizerHints != nil && builder.optimizerHints.pushDownLimitToScan != 0 {
+		return
+	}
 	node := builder.qry.Nodes[nodeID]
 	for _, childID := range node.Children {
 		builder.pushdownLimitToTableScan(childID)

@@ -14,6 +14,22 @@
 
 package tree
 
+import "github.com/matrixorigin/matrixone/pkg/common/reuse"
+
+func init() {
+	reuse.CreatePool[CreateExtension](
+		func() *CreateExtension { return &CreateExtension{} },
+		func(c *CreateExtension) { c.reset() },
+		reuse.DefaultOptions[CreateExtension](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[LoadExtension](
+		func() *LoadExtension { return &LoadExtension{} },
+		func(l *LoadExtension) { l.reset() },
+		reuse.DefaultOptions[LoadExtension](), //.
+	) //WithEnableChecker()
+}
+
 type CreateExtension struct {
 	statementImpl
 	Language string
@@ -21,9 +37,12 @@ type CreateExtension struct {
 	Filename Identifier
 }
 
-type LoadExtension struct {
-	statementImpl
-	Name Identifier
+func NewCreateExtension(language string, name, filename Identifier) *CreateExtension {
+	c := reuse.Alloc[CreateExtension](nil)
+	c.Language = language
+	c.Name = name
+	c.Filename = filename
+	return c
 }
 
 func (node *CreateExtension) Format(ctx *FmtCtx) {
@@ -35,7 +54,38 @@ func (node *CreateExtension) Format(ctx *FmtCtx) {
 	node.Filename.Format(ctx)
 }
 
+func (node *CreateExtension) Free() {
+	reuse.Free[CreateExtension](node, nil)
+}
+
+func (node *CreateExtension) reset() {
+	*node = CreateExtension{}
+}
+
+func (node CreateExtension) TypeName() string { return "tree.CreateExtension" }
+
+type LoadExtension struct {
+	statementImpl
+	Name Identifier
+}
+
+func NewLoadExtension(name Identifier) *LoadExtension {
+	c := reuse.Alloc[LoadExtension](nil)
+	c.Name = name
+	return c
+}
+
 func (node *LoadExtension) Format(ctx *FmtCtx) {
 	ctx.WriteString("load ")
 	node.Name.Format(ctx)
 }
+
+func (node *LoadExtension) Free() {
+	reuse.Free[LoadExtension](node, nil)
+}
+
+func (node *LoadExtension) reset() {
+	*node = LoadExtension{}
+}
+
+func (node LoadExtension) TypeName() string { return "tree.LoadExtension" }

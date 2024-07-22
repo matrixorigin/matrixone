@@ -24,7 +24,7 @@ var (
 )
 
 func init() {
-	reuse.CreatePool[EntryData](
+	reuse.CreatePool(
 		func() *EntryData { return &EntryData{} },
 		func(l *EntryData) {
 			l.reset()
@@ -32,7 +32,7 @@ func init() {
 		reuse.DefaultOptions[EntryData]().
 			WithEnableChecker())
 
-	reuse.CreatePool[buffer](
+	reuse.CreatePool(
 		func() *buffer {
 			return &buffer{buf: buf.NewByteBuf(buffSize, buf.WithDisableCompactAfterGrow(true))}
 		},

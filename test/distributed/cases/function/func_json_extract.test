@@ -83,3 +83,7 @@ select json_extract('{"a":1,"b":2,"c":3}','$.c','$.d');
 select json_extract('[0,1,2]', '$[0]', '$[1]');
 select json_extract('[0,1,2]', '$[1]', '$[0]');
 select json_extract('[0,1,2]', '$[last-1]', '$[0]', '$[2]');
+
+select json_extract('[0,1,2]','$[4]');
+select json_extract('[0,1,2]','$[100]');
+select json_extract('[0,234,32432,423,5234,11443242,44242342424,23424323]','$[2000]');

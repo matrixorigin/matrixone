@@ -95,6 +95,8 @@ func newBatch(batchSize int, typs []types.Type, pool *mpool.MPool) *batch.Batch 
 
 func (w *TAEWriter) GetContent() string { return "" }
 
+func (w *TAEWriter) GetContentLength() int { return 0 }
+
 // WriteStrings implement ETLWriter
 func (w *TAEWriter) WriteStrings(Line []string) error {
 	var elems = make([]table.ColumnField, len(w.columnsTypes))
@@ -312,6 +314,8 @@ type TAEReader struct {
 	batchs   []*batch.Batch
 	batchIdx int
 	rowIdx   int
+
+	release func()
 }
 
 // NewTaeReader returns a TAEReader.
@@ -338,10 +342,14 @@ func NewTaeReader(ctx context.Context, tbl *table.Table, filePath string, filesi
 }
 
 func (r *TAEReader) ReadAll(ctx context.Context) ([]*batch.Batch, error) {
-	ioVec, _, err := r.blockReader.LoadAllColumns(ctx, r.idxs, r.mp)
+	if r.release != nil {
+		panic("can only call once")
+	}
+	ioVec, release, err := r.blockReader.LoadAllColumns(ctx, r.idxs, r.mp)
 	if err != nil {
 		return nil, err
 	}
+	r.release = release
 	r.batchs = append(r.batchs, ioVec...)
 	return r.batchs, nil
 }
@@ -380,6 +388,9 @@ func (r *TAEReader) Close() {
 		r.batchs[idx] = nil
 	}
 	r.batchs = nil
+	if r.release != nil {
+		r.release()
+	}
 }
 
 func GetVectorArrayLen(ctx context.Context, vec *vector.Vector) (int, error) {
@@ -424,7 +435,7 @@ func ValToString(ctx context.Context, vec *vector.Vector, rowIdx int) (string, e
 	case types.T_char, types.T_varchar,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		cols, area := vector.MustVarlenaRawData(vec)
-		return cols[rowIdx].GetString(area), nil
+		return cols[rowIdx].UnsafeGetString(area), nil
 	case types.T_array_float32:
 		cols, area := vector.MustVarlenaRawData(vec)
 		return types.ArrayToString[float32](types.GetArray[float32](&cols[rowIdx], area)), nil

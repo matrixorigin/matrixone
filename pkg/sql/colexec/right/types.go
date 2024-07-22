@@ -17,7 +17,6 @@ package right
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -28,7 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(RightJoin)
 
 const (
 	Build = iota
@@ -45,13 +44,15 @@ type evalVector struct {
 type container struct {
 	colexec.ReceiverOperator
 
-	state int
+	state   int
+	lastpos int
 
 	inBuckets []uint8
 
 	batches       []*batch.Batch
 	batchRowCount int
 	rbat          *batch.Batch
+	buf           *batch.Batch
 
 	expr colexec.ExpressionExecutor
 
@@ -69,88 +70,92 @@ type container struct {
 	matched *bitmap.Bitmap
 
 	handledLast bool
+
+	maxAllocSize int64
 }
 
-type Argument struct {
+type RightJoin struct {
 	ctr        *container
-	Ibucket    uint64
-	Nbucket    uint64
 	Result     []colexec.ResultPos
 	LeftTypes  []types.Type
 	RightTypes []types.Type
 	Cond       *plan.Expr
 	Conditions [][]*plan.Expr
-	bat        *batch.Batch
 	rbat       []*batch.Batch
-	lastpos    int
 
-	IsMerger bool
-	Channel  chan *bitmap.Bitmap
-	NumCPU   uint64
+	Channel chan *bitmap.Bitmap
+	NumCPU  uint64
 
 	HashOnPK           bool
 	IsShuffle          bool
+	IsMerger           bool
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (rightJoin *RightJoin) GetOperatorBase() *vm.OperatorBase {
+	return &rightJoin.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[RightJoin](
+		func() *RightJoin {
+			return &RightJoin{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *RightJoin) {
+			*a = RightJoin{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[RightJoin]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (rightJoin RightJoin) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *RightJoin {
+	return reuse.Alloc[RightJoin](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (rightJoin *RightJoin) Release() {
+	if rightJoin != nil {
+		reuse.Free[RightJoin](rightJoin, nil)
 	}
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := arg.ctr
+func (rightJoin *RightJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	rightJoin.Free(proc, pipelineFailed, err)
+}
+
+func (rightJoin *RightJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := rightJoin.ctr
 	if ctr != nil {
-		if !ctr.handledLast {
-			if arg.NumCPU > 0 {
-				if arg.IsMerger {
-					for i := uint64(1); i < arg.NumCPU; i++ {
-						<-arg.Channel
-					}
-				} else {
-					arg.Channel <- ctr.matched
-				}
-			}
-			ctr.handledLast = true
+		if !ctr.handledLast && rightJoin.NumCPU > 1 && !rightJoin.IsMerger {
+			rightJoin.Channel <- nil
 		}
 		ctr.cleanBatch(proc)
 		ctr.cleanHashMap()
 		ctr.cleanExprExecutor()
 		ctr.FreeAllReg()
+		ctr.cleanEvalVectors()
+
+		anal := proc.GetAnalyze(rightJoin.GetIdx(), rightJoin.GetParallelIdx(), rightJoin.GetParallelMajor())
+		anal.Alloc(ctr.maxAllocSize)
+		if rightJoin.ctr.buf != nil {
+			proc.PutBatch(rightJoin.ctr.buf)
+			rightJoin.ctr.buf = nil
+		}
+		rightJoin.ctr = nil
 	}
+
 }
 
 func (ctr *container) cleanExprExecutor() {
 	if ctr.expr != nil {
 		ctr.expr.Free()
+		ctr.expr = nil
 	}
 }
 
@@ -180,10 +185,12 @@ func (ctr *container) cleanHashMap() {
 	}
 }
 
-func (ctr *container) cleanEvalVectors(mp *mpool.MPool) {
+func (ctr *container) cleanEvalVectors() {
 	for i := range ctr.evecs {
 		if ctr.evecs[i].executor != nil {
 			ctr.evecs[i].executor.Free()
 		}
+		ctr.evecs[i].vec = nil
 	}
+	ctr.evecs = nil
 }

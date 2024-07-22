@@ -17,14 +17,14 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"sync"
-	"testing"
-	"time"
-
 	"github.com/BurntSushi/toml"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/stretchr/testify/require"
+	"net"
+	"sync"
+	"testing"
+	"time"
 )
 
 func create_test_server() *MOServer {
@@ -34,6 +34,8 @@ func create_test_server() *MOServer {
 	if err != nil {
 		panic(err)
 	}
+	pu.SV.SetDefaultValues()
+	setGlobalPu(pu)
 
 	address := fmt.Sprintf("%s:%d", pu.SV.Host, pu.SV.Port)
 	moServerCtx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
@@ -44,30 +46,32 @@ func create_test_server() *MOServer {
 }
 
 func Test_Closed(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	registerConn(clientConn)
+
 	mo := create_test_server()
-	mo.rm.pu.SV.SkipCheckUser = true
+	getGlobalPu().SV.SkipCheckUser = true
 	wg := sync.WaitGroup{}
 	wg.Add(1)
 	cf := &CloseFlag{}
 	go func() {
-		cf.Open()
 		defer wg.Done()
-
-		err := mo.Start()
-		require.NoError(t, err)
-
-		for cf.IsOpened() {
-		}
+		mo.handleConn(serverConn)
 	}()
 
 	time.Sleep(100 * time.Millisecond)
 	db, err := openDbConn(t, 6001)
 	require.NoError(t, err)
 	time.Sleep(100 * time.Millisecond)
-	closeDbConn(t, db)
 	cf.Close()
 
 	err = mo.Stop()
 	require.NoError(t, err)
+	closeDbConn(t, db)
+	serverConn.Close()
+	clientConn.Close()
 	wg.Wait()
+
 }

@@ -16,19 +16,16 @@ package fileservice
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
-	"net"
-	stdhttp "net/http"
-	"os"
+	"math"
 	gotrace "runtime/trace"
 	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/aws/ratelimit"
 	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	"github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -65,51 +62,6 @@ func NewAwsSDKv2(
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 
-	// http client
-	dialer := &net.Dialer{
-		KeepAlive: 5 * time.Second,
-	}
-	transport := &stdhttp.Transport{
-		Proxy:                 stdhttp.ProxyFromEnvironment,
-		DialContext:           dialer.DialContext,
-		MaxIdleConns:          100,
-		IdleConnTimeout:       180 * time.Second,
-		MaxIdleConnsPerHost:   100,
-		MaxConnsPerHost:       1000,
-		TLSHandshakeTimeout:   3 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-		ForceAttemptHTTP2:     true,
-	}
-	if len(args.CertFiles) > 0 {
-		// custom certs
-		pool, err := x509.SystemCertPool()
-		if err != nil {
-			panic(err)
-		}
-		for _, path := range args.CertFiles {
-			content, err := os.ReadFile(path)
-			if err != nil {
-				logutil.Info("load cert file error",
-					zap.Any("err", err),
-				)
-				// ignore
-				continue
-			}
-			logutil.Info("file service: load cert file",
-				zap.Any("path", path),
-			)
-			pool.AppendCertsFromPEM(content)
-		}
-		tlsConfig := &tls.Config{
-			InsecureSkipVerify: true,
-			RootCAs:            pool,
-		}
-		transport.TLSClientConfig = tlsConfig
-	}
-	httpClient := &stdhttp.Client{
-		Transport: transport,
-	}
-
 	// options for loading configs
 	loadConfigOptions := []func(*config.LoadOptions) error{
 		config.WithLogger(logutil.GetS3Logger()),
@@ -122,7 +74,7 @@ func NewAwsSDKv2(
 				aws.LogRequestEventMessage |
 				aws.LogResponseEventMessage,
 		),
-		config.WithHTTPClient(httpClient),
+		config.WithHTTPClient(newHTTPClient(args)),
 	}
 
 	// shared config profile
@@ -161,12 +113,8 @@ func NewAwsSDKv2(
 	// options for s3 client
 	s3Options := []func(*s3.Options){
 		func(opts *s3.Options) {
-
-			opts.Retryer = retry.NewStandard(func(o *retry.StandardOptions) {
-				o.MaxAttempts = maxRetryAttemps
-				o.RateLimiter = noOpRateLimit{}
-			})
-
+			opts.Retryer = newAWSRetryer()
+			opts.HTTPClient = newHTTPClient(args)
 		},
 	}
 
@@ -536,50 +484,38 @@ func (a *AwsSDKv2) deleteMultiObj(ctx context.Context, objs []types.ObjectIdenti
 func (a *AwsSDKv2) listObjects(ctx context.Context, params *s3.ListObjectsInput, optFns ...func(*s3.Options)) (*s3.ListObjectsOutput, error) {
 	ctx, task := gotrace.NewTask(ctx, "AwsSDKv2.listObjects")
 	defer task.End()
-	t0 := time.Now()
-	defer func() {
-		FSProfileHandler.AddSample(time.Since(t0))
-	}()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.List.Add(1)
 	}, a.perfCounterSets...)
-	return doWithRetry(
+	return DoWithRetry(
 		"s3 list objects",
 		func() (*s3.ListObjectsOutput, error) {
 			return a.client.ListObjects(ctx, params, optFns...)
 		},
 		maxRetryAttemps,
-		isRetryableError,
+		IsRetryableError,
 	)
 }
 
 func (a *AwsSDKv2) headObject(ctx context.Context, params *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
 	ctx, task := gotrace.NewTask(ctx, "AwsSDKv2.headObject")
 	defer task.End()
-	t0 := time.Now()
-	defer func() {
-		FSProfileHandler.AddSample(time.Since(t0))
-	}()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Head.Add(1)
 	}, a.perfCounterSets...)
-	return doWithRetry(
+	return DoWithRetry(
 		"s3 head object",
 		func() (*s3.HeadObjectOutput, error) {
 			return a.client.HeadObject(ctx, params, optFns...)
 		},
 		maxRetryAttemps,
-		isRetryableError,
+		IsRetryableError,
 	)
 }
 
 func (a *AwsSDKv2) putObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
 	ctx, task := gotrace.NewTask(ctx, "AwsSDKv2.putObject")
 	defer task.End()
-	t0 := time.Now()
-	defer func() {
-		FSProfileHandler.AddSample(time.Since(t0))
-	}()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Put.Add(1)
 	}, a.perfCounterSets...)
@@ -590,15 +526,13 @@ func (a *AwsSDKv2) putObject(ctx context.Context, params *s3.PutObjectInput, opt
 func (a *AwsSDKv2) getObject(ctx context.Context, min *int64, max *int64, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (io.ReadCloser, error) {
 	ctx, task := gotrace.NewTask(ctx, "AwsSDKv2.getObject")
 	defer task.End()
-	t0 := time.Now()
-	defer func() {
-		FSProfileHandler.AddSample(time.Since(t0))
-	}()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Get.Add(1)
 	}, a.perfCounterSets...)
 	r, err := newRetryableReader(
 		func(offset int64) (io.ReadCloser, error) {
+			LogEvent(ctx, str_retryable_reader_new_reader_begin, offset)
+			defer LogEvent(ctx, str_retryable_reader_new_reader_end)
 			var rang string
 			if max != nil {
 				rang = fmt.Sprintf("bytes=%d-%d", offset, *max)
@@ -606,13 +540,15 @@ func (a *AwsSDKv2) getObject(ctx context.Context, min *int64, max *int64, params
 				rang = fmt.Sprintf("bytes=%d-", offset)
 			}
 			params.Range = &rang
-			output, err := doWithRetry(
+			output, err := DoWithRetry(
 				"s3 get object",
 				func() (*s3.GetObjectOutput, error) {
+					LogEvent(ctx, str_awssdkv2_get_object_begin)
+					defer LogEvent(ctx, str_awssdkv2_get_object_end)
 					return a.client.GetObject(ctx, params, optFns...)
 				},
 				maxRetryAttemps,
-				isRetryableError,
+				IsRetryableError,
 			)
 			if err != nil {
 				return nil, err
@@ -620,7 +556,7 @@ func (a *AwsSDKv2) getObject(ctx context.Context, min *int64, max *int64, params
 			return output.Body, nil
 		},
 		*min,
-		isRetryableError,
+		IsRetryableError,
 	)
 	if err != nil {
 		return nil, err
@@ -631,40 +567,32 @@ func (a *AwsSDKv2) getObject(ctx context.Context, min *int64, max *int64, params
 func (a *AwsSDKv2) deleteObject(ctx context.Context, params *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
 	ctx, task := gotrace.NewTask(ctx, "AwsSDKv2.deleteObject")
 	defer task.End()
-	t0 := time.Now()
-	defer func() {
-		FSProfileHandler.AddSample(time.Since(t0))
-	}()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Delete.Add(1)
 	}, a.perfCounterSets...)
-	return doWithRetry(
+	return DoWithRetry(
 		"s3 delete object",
 		func() (*s3.DeleteObjectOutput, error) {
 			return a.client.DeleteObject(ctx, params, optFns...)
 		},
 		maxRetryAttemps,
-		isRetryableError,
+		IsRetryableError,
 	)
 }
 
 func (a *AwsSDKv2) deleteObjects(ctx context.Context, params *s3.DeleteObjectsInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error) {
 	ctx, task := gotrace.NewTask(ctx, "AwsSDKv2.deleteObjects")
 	defer task.End()
-	t0 := time.Now()
-	defer func() {
-		FSProfileHandler.AddSample(time.Since(t0))
-	}()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.DeleteMulti.Add(1)
 	}, a.perfCounterSets...)
-	return doWithRetry(
+	return DoWithRetry(
 		"s3 delete objects",
 		func() (*s3.DeleteObjectsOutput, error) {
 			return a.client.DeleteObjects(ctx, params, optFns...)
 		},
 		maxRetryAttemps,
-		isRetryableError,
+		IsRetryableError,
 	)
 }
 
@@ -680,15 +608,6 @@ func (a *AwsSDKv2) mapError(err error, path string) error {
 	}
 	return err
 }
-
-// from https://github.com/aws/aws-sdk-go-v2/issues/543
-type noOpRateLimit struct{}
-
-func (noOpRateLimit) AddTokens(uint) error { return nil }
-func (noOpRateLimit) GetToken(context.Context, uint) (func() error, error) {
-	return noOpToken, nil
-}
-func noOpToken() error { return nil }
 
 func (o ObjectStorageArguments) credentialsProviderForAwsSDKv2(
 	ctx context.Context,
@@ -759,11 +678,57 @@ func (o ObjectStorageArguments) credentialsProviderForAwsSDKv2(
 		return credentials.NewStaticCredentialsProvider(o.KeyID, o.KeySecret, o.SessionToken), nil
 	}
 
-	if o.NoDefaultCredentials {
+	if !o.shouldLoadDefaultCredentials() {
 		return nil, moerr.NewInvalidInputNoCtx(
 			"no valid credentials",
 		)
 	}
 
 	return
+}
+
+type awsRetryer struct {
+	upstream aws.Retryer
+}
+
+func newAWSRetryer() aws.Retryer {
+	retryer := aws.Retryer(retry.NewStandard(
+		func(opts *retry.StandardOptions) {
+			opts.RateLimiter = ratelimit.NewTokenRateLimit(math.MaxInt)
+			opts.RetryCost = 1
+			opts.RetryTimeoutCost = 1
+		},
+	))
+	return &awsRetryer{
+		upstream: retryer,
+	}
+}
+
+var _ aws.Retryer = new(awsRetryer)
+
+func (a *awsRetryer) GetInitialToken() (releaseToken func(error) error) {
+	return a.upstream.GetInitialToken()
+}
+
+func (a *awsRetryer) GetRetryToken(ctx context.Context, opErr error) (releaseToken func(error) error, err error) {
+	return a.upstream.GetRetryToken(ctx, opErr)
+}
+
+func (a *awsRetryer) IsErrorRetryable(err error) (ret bool) {
+	defer func() {
+		if ret {
+			logutil.Info("file service retry",
+				zap.Error(err),
+			)
+		}
+	}()
+	return a.upstream.IsErrorRetryable(err)
+}
+
+func (a *awsRetryer) MaxAttempts() int {
+	return a.upstream.MaxAttempts()
+}
+
+func (a *awsRetryer) RetryDelay(attempt int, opErr error) (time.Duration, error) {
+	return a.upstream.RetryDelay(attempt, opErr)
 }

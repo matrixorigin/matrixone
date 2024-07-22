@@ -16,8 +16,10 @@ package plan
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -141,6 +143,8 @@ func (lpb *listPartitionBuilder) checkPartitionIntegrity(ctx context.Context, pa
 }
 
 func (lpb *listPartitionBuilder) buildEvalPartitionExpression(ctx context.Context, partitionBinder *PartitionBinder, stmt *tree.PartitionOption, partitionDef *plan.PartitionByDef) error {
+	proc := partitionBinder.builder.compCtx.GetProcess()
+
 	partitionType := stmt.PartBy.PType.(*tree.ListType)
 	// For the List partition, convert the partition information into the expression, such as:
 	// case when expr in (1, 5, 9, 13, 17) then 0 when expr in (2, 6, 10, 14, 18) then 1 else -1 end
@@ -154,10 +158,14 @@ func (lpb *listPartitionBuilder) buildEvalPartitionExpression(ctx context.Contex
 		if err != nil {
 			return err
 		}
-		partitionExpression, err := appendCastBeforeExpr(ctx, tempExpr, &plan.Type{
+		partitionExpression, err := appendCastBeforeExpr(ctx, tempExpr, plan.Type{
 			Id:          int32(types.T_int32),
 			NotNullable: true,
 		})
+		if err != nil {
+			return err
+		}
+		partitionExpression, err = ConstantFold(batch.EmptyForConstFoldBatch, partitionExpression, proc, false, true)
 		if err != nil {
 			return err
 		}
@@ -177,15 +185,20 @@ func (lpb *listPartitionBuilder) buildEvalPartitionExpression(ctx context.Contex
 		if err != nil {
 			return err
 		}
-		partitionExpression, err := appendCastBeforeExpr(ctx, tempExpr, &plan.Type{
+		partitionExpression, err := appendCastBeforeExpr(ctx, tempExpr, plan.Type{
 			Id:          int32(types.T_int32),
 			NotNullable: true,
 		})
 		if err != nil {
 			return err
 		}
+		partitionExpression, err = ConstantFold(batch.EmptyForConstFoldBatch, partitionExpression, proc, false, true)
+		if err != nil {
+			return err
+		}
 		partitionDef.PartitionExpression = partitionExpression
 	}
+
 	return nil
 }
 

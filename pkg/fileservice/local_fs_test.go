@@ -21,6 +21,7 @@ import (
 	"io"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/assert"
@@ -161,25 +162,30 @@ func TestLocalFSWithDiskCache(t *testing.T) {
 			err := fs.Read(ctx, &vec)
 			assert.Nil(t, err)
 			assert.Equal(t, expected[offset:offset+length], vec.Entries[0].Data)
+			vec.Release()
 		}
 	}
 
 }
 
+// default allocator must use with no memcache
+// only memory obtained through memcache.Alloc can be set to memcache
 func TestLocalFSWithIOVectorCache(t *testing.T) {
 	memCache1 := NewMemCache(
-		NewLRUCache(1<<20, false, nil),
+		NewMemoryCache(1<<20, false, nil),
 		nil,
 	)
 	memCache2 := NewMemCache(
-		NewLRUCache(1<<20, false, nil),
+		NewMemoryCache(1<<20, false, nil),
 		nil,
 	)
 	caches := []IOVectorCache{memCache1, memCache2}
 
 	ctx := context.Background()
 	dir := t.TempDir()
-	fs, err := NewLocalFS(ctx, "test", dir, DisabledCacheConfig, nil)
+	fs, err := NewLocalFS(ctx, "test", dir, CacheConfig{
+		MemoryCapacity: ptrTo[toml.ByteSize](128 * 1024),
+	}, nil)
 	assert.Nil(t, err)
 
 	err = fs.Write(ctx, IOVector{
@@ -200,7 +206,7 @@ func TestLocalFSWithIOVectorCache(t *testing.T) {
 		Entries: []IOEntry{
 			{
 				Size: 8,
-				ToCacheData: func(r io.Reader, _ []byte, allocator CacheDataAllocator) (CacheData, error) {
+				ToCacheData: func(r io.Reader, _ []byte, allocator CacheDataAllocator) (memorycache.CacheData, error) {
 					cacheData := allocator.Alloc(8)
 					_, err := io.ReadFull(r, cacheData.Bytes())
 					if err != nil {
@@ -213,10 +219,13 @@ func TestLocalFSWithIOVectorCache(t *testing.T) {
 	}
 	err = fs.Read(ctx, &vec)
 	assert.Nil(t, err)
+	vec.Release()
 
 	assert.Equal(t, int64(8), memCache1.cache.Used())
 	assert.Equal(t, int64(8), memCache2.cache.Used())
-
+	memCache1.cache.Flush()
+	memCache2.cache.Flush()
+	fs.FlushCache()
 }
 
 func TestLocalFSEmptyRootPath(t *testing.T) {

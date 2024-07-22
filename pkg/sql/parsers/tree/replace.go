@@ -20,8 +20,8 @@ func init() {
 	reuse.CreatePool[Replace](
 		func() *Replace { return &Replace{} },
 		func(r *Replace) { r.reset() },
-		reuse.DefaultOptions[Replace]().
-			WithEnableChecker())
+		reuse.DefaultOptions[Replace](), //.
+	) //WithEnableChecker()
 }
 
 // the REPLACE statement.
@@ -72,7 +72,7 @@ func (node *Replace) Free() {
 
 func (node *Replace) reset() {
 	// if node.Rows != nil {
-	// 	reuse.Free[Select](node.Rows, nil)
+	// node.Rows.Free()
 	// }
 	*node = Replace{}
 }

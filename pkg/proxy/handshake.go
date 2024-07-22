@@ -80,6 +80,7 @@ func (c *clientConn) upgradeToTLS() error {
 		return moerr.NewInternalError(ctx, "TSL handshake error: %v", err)
 	}
 	c.conn.UseConn(tlsConn)
+	c.mysqlProto.UseConn(tlsConn)
 	return nil
 }
 
@@ -100,7 +101,7 @@ func (s *serverConn) parseConnID(p *frontend.Packet) error {
 	if pos+3 >= int(p.Length) {
 		return moerr.NewInternalErrorNoCtx("protocol error: cannot parse connection ID")
 	}
-	s.backendConnID = binary.LittleEndian.Uint32(p.Payload[pos : pos+4])
+	s.connID = binary.LittleEndian.Uint32(p.Payload[pos : pos+4])
 	return nil
 }
 

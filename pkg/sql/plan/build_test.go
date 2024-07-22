@@ -23,12 +23,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/stretchr/testify/assert"
 )
 
 func BenchmarkInsert(b *testing.B) {
@@ -40,7 +41,7 @@ func BenchmarkInsert(b *testing.B) {
 	originStr := "0123456789"
 	testExpr := tree.NewNumValWithType(constant.MakeString(originStr), originStr, false, tree.P_char)
 	targetT := &plan.Expr{
-		Typ: *targetType,
+		Typ: targetType,
 		Expr: &plan.Expr_T{
 			T: &plan.TargetType{},
 		},
@@ -1146,11 +1147,11 @@ func runTestShouldError(opt Optimizer, t *testing.T, sqls []string) {
 }
 
 func Test_mergeContexts(t *testing.T) {
-	b1 := NewBinding(0, 1, "a", 0, nil, nil, nil, false, nil)
+	b1 := NewBinding(0, 1, "db", "a", 0, nil, nil, nil, false, nil)
 	bc1 := NewBindContext(nil, nil)
 	bc1.bindings = append(bc1.bindings, b1)
 
-	b2 := NewBinding(1, 2, "a", 0, nil, nil, nil, false, nil)
+	b2 := NewBinding(1, 2, "db", "a", 0, nil, nil, nil, false, nil)
 	bc2 := NewBindContext(nil, nil)
 	bc2.bindings = append(bc2.bindings, b2)
 
@@ -1162,7 +1163,7 @@ func Test_mergeContexts(t *testing.T) {
 	assert.EqualError(t, err, "invalid input: table 'a' specified more than once")
 
 	//a merge b
-	b3 := NewBinding(2, 3, "b", 0, nil, nil, nil, false, nil)
+	b3 := NewBinding(2, 3, "db", "b", 0, nil, nil, nil, false, nil)
 	bc3 := NewBindContext(nil, nil)
 	bc3.bindings = append(bc3.bindings, b3)
 
@@ -1174,4 +1175,22 @@ func Test_mergeContexts(t *testing.T) {
 	err = bc.mergeContexts(ctx, bc1, bc2)
 	assert.Error(t, err)
 	assert.EqualError(t, err, "invalid input: table 'a' specified more than once")
+}
+
+func Test_limitUint64(t *testing.T) {
+	sqls := []string{
+		"select * from t1 limit 0, 18446744073709551615",
+		"select * from t1 limit 18446744073709551615, 18446744073709551615",
+		"SELECT IFNULL(CAST(@var AS BIGINT UNSIGNED), 1)",
+	}
+	testutil.NewProc()
+	mock := NewMockOptimizer(false)
+
+	for _, sql := range sqls {
+		logicPlan, err := runOneStmt(mock, t, sql)
+		if err != nil {
+			t.Fatalf("%+v", err)
+		}
+		outPutPlan(logicPlan, true, t)
+	}
 }

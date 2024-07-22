@@ -16,14 +16,17 @@ package proxy
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
@@ -38,6 +41,9 @@ const (
 
 	pipeClientToServer = "c2s"
 	pipeServerToClient = "s2c"
+
+	minSequenceID = 0
+	maxSequenceID = 255
 )
 
 var (
@@ -56,6 +62,12 @@ func withRebalancer(r *rebalancer) tunnelOption {
 func withRebalancePolicy(policy RebalancePolicy) tunnelOption {
 	return func(t *tunnel) {
 		t.rebalancePolicy = policy
+	}
+}
+
+func withRealConn() tunnelOption {
+	return func(t *tunnel) {
+		t.realConn = true
 	}
 }
 
@@ -88,10 +100,19 @@ type tunnel struct {
 	rebalancer *rebalancer
 	// transferProactive means that the connection transfer is more proactive.
 	rebalancePolicy RebalancePolicy
-
+	// transferType is the type for transferring: rebalancing and scaling.
 	transferType transferType
+	// realConn indicates the connection in the tunnel is a real network
+	// connection but not a net.Pipe. It is used for testing. If it does NOt
+	// run in testing, the Close() method does not to be called, as it is
+	// closed in goetty module.
+	realConn bool
 
-	transferC chan struct{}
+	// transferIntent indicates that this tunnel was tried to transfer to
+	// other servers, but not safe to. Set it to true to do the transfer
+	// more proactive.
+	// It only works if RebalancePolicy is "active".
+	transferIntent atomic.Bool
 
 	mu struct {
 		sync.Mutex
@@ -99,11 +120,7 @@ type tunnel struct {
 		started bool
 		// inTransfer means a transfer of server connection is in progress.
 		inTransfer bool
-		// transferIntent indicates that this tunnel was tried to transfer to
-		// other servers, but not safe to. Set it to true to do the transfer
-		// more proactive.
-		// It only works if RebalancePolicy is "active".
-		transferIntent bool
+
 		// clientConn is the connection between client and proxy.
 		clientConn *MySQLConn
 		// serverConn is the connection between server and proxy.
@@ -132,7 +149,6 @@ func newTunnel(ctx context.Context, logger *log.MOLogger, cs *counterSet, opts .
 		respC: make(chan []byte, 10),
 		// set the counter set.
 		counterSet: cs,
-		transferC:  make(chan struct{}),
 	}
 	for _, opt := range opts {
 		opt(t)
@@ -150,14 +166,12 @@ func (t *tunnel) run(cc ClientConn, sc ServerConn) error {
 			return t.ctx.Err()
 		}
 		t.cc = cc
-		t.mu.clientConn = newMySQLConn(connClientName, cc.RawConn(), 0, t.reqC, t.respC)
-		t.mu.serverConn = newMySQLConn(connServerName, sc.RawConn(), 0, t.reqC, t.respC)
-
-		setPeer(t.mu.clientConn.msgBuf, t.mu.serverConn.msgBuf)
+		t.logger = t.logger.With(zap.Uint32("conn ID", cc.ConnID()))
+		t.mu.clientConn = newMySQLConn(connClientName, cc.RawConn(), 0, t.reqC, t.respC, cc.ConnID())
+		t.mu.serverConn = newMySQLConn(connServerName, sc.RawConn(), 0, t.reqC, t.respC, sc.ConnID())
 
 		// Create the pipes from client to server and server to client.
 		t.mu.csp = t.newPipe(pipeClientToServer, t.mu.clientConn, t.mu.serverConn)
-
 		t.mu.scp = t.newPipe(pipeServerToClient, t.mu.serverConn, t.mu.clientConn)
 
 		return nil
@@ -206,13 +220,13 @@ func (t *tunnel) setError(err error) {
 func (t *tunnel) kickoff() error {
 	csp, scp := t.getPipes()
 	go func() {
-		if err := csp.kickoff(t.ctx); err != nil {
+		if err := csp.kickoff(t.ctx, scp); err != nil {
 			v2.ProxyClientDisconnectCounter.Inc()
 			t.setError(withCode(err, codeClientDisconnect))
 		}
 	}()
 	go func() {
-		if err := scp.kickoff(t.ctx); err != nil {
+		if err := scp.kickoff(t.ctx, csp); err != nil {
 			v2.ProxyServerDisconnectCounter.Inc()
 			t.setError(withCode(err, codeServerDisconnect))
 		}
@@ -227,29 +241,28 @@ func (t *tunnel) kickoff() error {
 }
 
 // replaceServerConn replaces the CN server.
-func (t *tunnel) replaceServerConn(newServerConn *MySQLConn) {
+func (t *tunnel) replaceServerConn(newServerConn *MySQLConn, sync bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	_ = t.mu.serverConn.Close()
 	t.mu.serverConn = newServerConn
-	setPeer(t.mu.clientConn.msgBuf, t.mu.serverConn.msgBuf)
 
-	t.mu.csp = t.newPipe(pipeClientToServer, t.mu.clientConn, t.mu.serverConn)
-	t.mu.scp = t.newPipe(pipeServerToClient, t.mu.serverConn, t.mu.clientConn)
+	if sync {
+		t.mu.csp.dst = t.mu.serverConn
+		t.mu.scp.src = t.mu.serverConn
+	} else {
+		t.mu.csp = t.newPipe(pipeClientToServer, t.mu.clientConn, t.mu.serverConn)
+		t.mu.scp = t.newPipe(pipeServerToClient, t.mu.serverConn, t.mu.clientConn)
+	}
 }
 
 // canStartTransfer checks whether the transfer can be started.
-func (t *tunnel) canStartTransfer() bool {
+func (t *tunnel) canStartTransfer(sync bool) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	// The tunnel has not started.
 	if !t.mu.started {
-		return false
-	}
-
-	// Another transfer is already in progress.
-	if t.mu.inTransfer {
 		return false
 	}
 
@@ -261,18 +274,21 @@ func (t *tunnel) canStartTransfer() bool {
 
 	// The last message must be from server to client.
 	if scp.mu.lastCmdTime.Before(csp.mu.lastCmdTime) {
+		t.logger.Info("reason: client packet is after server packet")
 		return false
 	}
 
 	// We are now in a transaction.
-	if scp.isInTxn() {
+	if !scp.safeToTransferLocked() {
+		t.logger.Info("reason: txn status is true")
 		return false
 	}
 
-	// Set the tunnel in transfer and the pipes paused directly.
-	t.mu.inTransfer = true
-	csp.mu.paused = true
-	scp.mu.paused = true
+	if !sync {
+		csp.mu.paused = true
+		scp.mu.paused = true
+	}
+
 	return true
 }
 
@@ -281,13 +297,8 @@ func (t *tunnel) setTransferIntent(i bool) {
 		t.getTransferType() == transferByRebalance {
 		return
 	}
-	t.logger.Info("set tunnel transfer intent",
-		zap.Bool("value", i),
-		zap.Uint32("conn ID", t.cc.ConnID()),
-	)
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.mu.transferIntent = i
+	t.logger.Info("set tunnel transfer intent", zap.Bool("value", i))
+	t.transferIntent.Store(i)
 	if i {
 		v2.ProxyConnectionsTransferIntentGauge.Inc()
 	} else {
@@ -295,37 +306,57 @@ func (t *tunnel) setTransferIntent(i bool) {
 	}
 }
 
-func (t *tunnel) transferIntent() bool {
+func (t *tunnel) finishTransfer(start time.Time) {
+	t.setTransferIntent(false)
+	t.setTransferType(transferByRebalance)
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.mu.transferIntent
+	t.mu.inTransfer = false
+	resume := func(p *pipe) {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		p.mu.paused = false
+	}
+	resume(t.mu.scp)
+	resume(t.mu.csp)
+
+	t.logger.Info("transfer end")
+	duration := time.Since(start)
+	if duration > time.Second {
+		t.logger.Info("slow transfer for tunnel",
+			zap.Duration("transfer duration", duration),
+		)
+	}
+	v2.ProxyTransferDurationHistogram.Observe(time.Since(start).Seconds())
+}
+
+func (t *tunnel) doReplaceConnection(ctx context.Context, sync bool) error {
+	newConn, err := t.getNewServerConn(ctx)
+	if err != nil {
+		t.logger.Error("failed to get a new connection", zap.Error(err))
+		return err
+	}
+	t.replaceServerConn(newConn, sync)
+	t.counterSet.connMigrationSuccess.Add(1)
+	t.logger.Info("transfer to a new CN server",
+		zap.String("addr", newConn.RemoteAddr().String()))
+	return nil
 }
 
 // transfer transfers the serverConn of tunnel to a new one.
 func (t *tunnel) transfer(ctx context.Context) error {
 	t.counterSet.connMigrationRequested.Add(1)
 	// Must check if it is safe to start the transfer.
-	if ok := t.canStartTransfer(); !ok {
+	if ok := t.canStartTransfer(false); !ok {
+		t.logger.Info("cannot start transfer safely")
 		t.setTransferIntent(true)
-		t.logger.Info("cannot start transfer safely", zap.Any("tunnel", t))
 		t.counterSet.connMigrationCannotStart.Add(1)
 		return moerr.GetOkExpectedNotSafeToStartTransfer()
 	}
-	start := time.Now()
-	t.logger.Info("transfer begin", zap.Any("tunnel", t))
-	defer func() {
-		t.transferDone()
-		t.logger.Info("transfer end", zap.Any("tunnel", t))
 
-		duration := time.Since(start)
-		if duration > time.Second {
-			t.logger.Info("slow transfer for tunnel",
-				zap.Any("tunnel", t),
-				zap.Duration("transfer duration", duration),
-			)
-		}
-		v2.ProxyTransferDurationHistogram.Observe(time.Since(start).Seconds())
-	}()
+	start := time.Now()
+	defer t.finishTransfer(start)
+	t.logger.Info("transfer begin")
 
 	ctx, cancel := context.WithTimeout(ctx, defaultTransferTimeout)
 	defer cancel()
@@ -333,26 +364,42 @@ func (t *tunnel) transfer(ctx context.Context) error {
 	csp, scp := t.getPipes()
 	// Pause pipes before the transfer.
 	if err := csp.pause(ctx); err != nil {
+		v2.ProxyTransferFailCounter.Inc()
 		return err
 	}
 	if err := scp.pause(ctx); err != nil {
+		v2.ProxyTransferFailCounter.Inc()
 		return err
 	}
-	newConn, err := t.getNewServerConn(ctx)
-	if err != nil {
-		t.logger.Error("failed to get a new connection", zap.Error(err))
-		return err
+	if err := t.doReplaceConnection(ctx, false); err != nil {
+		v2.ProxyTransferFailCounter.Inc()
+		t.logger.Error("failed to replace connection", zap.Error(err))
 	}
-	t.replaceServerConn(newConn)
-	t.counterSet.connMigrationSuccess.Add(1)
-	t.logger.Info("transfer to a new CN server",
-		zap.String("addr", newConn.RemoteAddr().String()))
-
-	// After replace connections, restart pipes.
+	// Restart pipes even if the error happened in last step.
 	if err := t.kickoff(); err != nil {
 		t.logger.Error("failed to kickoff tunnel", zap.Error(err))
 		_ = t.Close()
+	} else {
+		v2.ProxyTransferSuccessCounter.Inc()
 	}
+	return nil
+}
+
+func (t *tunnel) transferSync(ctx context.Context) error {
+	// Must check if it is safe to start the transfer.
+	if ok := t.canStartTransfer(true); !ok {
+		return moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
+	start := time.Now()
+	defer t.finishTransfer(start)
+	t.logger.Info("transfer begin")
+	ctx, cancel := context.WithTimeout(ctx, defaultTransferTimeout)
+	defer cancel()
+	if err := t.doReplaceConnection(ctx, true); err != nil {
+		v2.ProxyTransferFailCounter.Inc()
+		return err
+	}
+	v2.ProxyTransferSuccessCounter.Inc()
 	return nil
 }
 
@@ -362,27 +409,17 @@ func (t *tunnel) getNewServerConn(ctx context.Context) (*MySQLConn, error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
-	newConn, err := t.cc.BuildConnWithServer(t.mu.serverConn.RemoteAddr().String())
+	prevAddr := t.mu.serverConn.RemoteAddr().String()
+	t.logger.Info("build connection with new server", zap.String("prev addr", prevAddr))
+	newConn, err := t.cc.BuildConnWithServer(prevAddr)
 	if err != nil {
+		t.logger.Error("failed to build connection with new server",
+			zap.String("prev addr", prevAddr),
+			zap.Error(err),
+		)
 		return nil, err
 	}
-	return newMySQLConn(connServerName, newConn.RawConn(), 0, t.reqC, t.respC), nil
-}
-
-func (t *tunnel) waitTransfer() {
-	<-t.transferC
-}
-
-func (t *tunnel) transferDone() {
-	select {
-	case t.transferC <- struct{}{}:
-	default:
-	}
-	t.setTransferIntent(false)
-	t.setTransferType(transferByRebalance)
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.mu.inTransfer = false
+	return newMySQLConn(connServerName, newConn.RawConn(), 0, t.reqC, t.respC, newConn.ConnID()), nil
 }
 
 func (t *tunnel) getTransferType() transferType {
@@ -404,7 +441,10 @@ func (t *tunnel) Close() error {
 		close(t.respC)
 
 		cc, sc := t.getConns()
-		if cc != nil {
+		// cc.Close() just only close the raw net connection, and it
+		// is closed in goetty module, so do NOT need to close it here:
+		// cc, sc := t.getConns()
+		if cc != nil && !t.realConn {
 			_ = cc.Close()
 		}
 		if sc != nil {
@@ -424,6 +464,10 @@ type pipe struct {
 	src *MySQLConn
 	dst *MySQLConn
 
+	// this value do not need in mutex as it is read and write in
+	// a single goroutine.
+	transferred bool
+
 	mu struct {
 		sync.Mutex
 		// cond is used to control the pause of the pipe.
@@ -436,14 +480,17 @@ type pipe struct {
 		inPreRecv bool
 		// paused indicates that the pipe is paused to do transfer.
 		paused bool
+		// inTxn indicates that if the session is in a txn. It only
+		// matters for server end.
+		inTxn bool
 		// Track last cmd time and whether we are in a transaction.
 		lastCmdTime time.Time
 	}
 
 	// tun is the tunnel that the pipe belongs to.
 	tun *tunnel
-	// the handler when we need to handle the transfer intent state.
-	transferIntentHandler func()
+
+	wg sync.WaitGroup
 
 	testHelper struct {
 		beforeSend func()
@@ -460,16 +507,11 @@ func (t *tunnel) newPipe(name string, src, dst *MySQLConn) *pipe {
 		tun:    t,
 	}
 	p.mu.cond = sync.NewCond(&p.mu)
-	if name == pipeClientToServer {
-		p.transferIntentHandler = p.clientHandleTransferIntent
-	} else if name == pipeServerToClient {
-		p.transferIntentHandler = p.serverHandleTransferIntent
-	}
 	return p
 }
 
 // kickoff starts up the pipe and the data would flow in it.
-func (p *pipe) kickoff(ctx context.Context) (e error) {
+func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 	start := func() (bool, error) {
 		p.mu.Lock()
 		defer p.mu.Unlock()
@@ -492,6 +534,8 @@ func (p *pipe) kickoff(ctx context.Context) (e error) {
 		p.mu.started = false
 		p.mu.cond.Broadcast()
 	}
+	var lastSeq int16 = -1
+	var rotated bool
 	prepareNextMessage := func() (terminate bool, err error) {
 		if terminate := func() bool {
 			p.mu.Lock()
@@ -523,6 +567,38 @@ func (p *pipe) kickoff(ctx context.Context) (e error) {
 			return false, moerr.NewInternalError(errutil.ContextWithNoReport(ctx, true),
 				"preRecv message: %s, name %s", re.Error(), p.name)
 		}
+		// set txn status and cmd time within the mutex together.
+		// only server->client pipe need to set the txn status.
+		if p.name == pipeServerToClient {
+			var currSeq int16
+			buf := p.src.readAvailBuf()
+
+			// issue#16042
+			if len(buf) > 3 {
+				currSeq = int16(buf[3])
+			}
+
+			// last sequence id is 255 and current sequence id is 0, the
+			// sequence ID is rotated, in which case, we do NOT allow to
+			// do the migration.
+			if currSeq == minSequenceID && lastSeq == maxSequenceID {
+				rotated = true
+			}
+
+			// the server starts a new response, reset the rotated.
+			if rotated && currSeq != minSequenceID && currSeq < lastSeq {
+				rotated = false
+			}
+
+			p.mu.inTxn = checkTxnStatus(buf)
+			if !p.mu.inTxn && p.tun.transferIntent.Load() && !rotated {
+				peer.wg.Add(1)
+				p.transferred = true
+			}
+			if len(buf) > 3 {
+				lastSeq = int16(buf[3])
+			}
+		}
 		p.mu.lastCmdTime = time.Now()
 		return false, nil
 	}
@@ -538,59 +614,37 @@ func (p *pipe) kickoff(ctx context.Context) (e error) {
 	defer finish()
 
 	for ctx.Err() == nil {
+		if p.name == pipeServerToClient && p.transferred {
+			if err := p.handleTransferIntent(ctx, &peer.wg); err != nil {
+				p.logger.Error("failed to transfer connection", zap.Error(err))
+			}
+		}
 		if terminate, err := prepareNextMessage(); err != nil || terminate {
 			return err
 		}
 		if p.testHelper.beforeSend != nil {
 			p.testHelper.beforeSend()
 		}
-		if _, err := p.src.sendTo(p.dst); err != nil {
-			return moerr.NewInternalErrorNoCtx("send message error:: %v", err)
-		}
+		// If the server is in transfer, we wait here until the transfer is finished.
+		p.wg.Wait()
 
-		// If it is not in a txn and transfer intent is true, slow down.
-		if p.transferIntentHandler != nil {
-			p.transferIntentHandler()
+		if err = p.src.sendTo(p.dst); err != nil {
+			return moerr.NewInternalErrorNoCtx("send message error: %v", err)
 		}
 	}
 	return ctx.Err()
 }
 
-// handleTransferIntent handles the situation when the transferIntent is true.
-func (p *pipe) clientHandleTransferIntent() {
-	if p.tun == nil {
-		return
+func (p *pipe) handleTransferIntent(ctx context.Context, wg *sync.WaitGroup) error {
+	// If it is not in a txn and transfer intent is true, transfer it sync.
+	if p.tun != nil && p.safeToTransfer() {
+		err := p.tun.transferSync(ctx)
+		// we have set transferred back to false, with "wg.Done()" together.
+		p.transferred = false
+		wg.Done()
+		return err
 	}
-	if p.tun.transferIntent() && !p.isInTxn() {
-		// make the client stalled as the pipe is in transfer intent state.
-		p.logger.Info("client is stuck as the pipe is in transfer intent state", zap.Any("tunnel", p.tun))
-
-		// wait for the transferring is finished.
-		p.tun.waitTransfer()
-
-		p.logger.Info("transferring is finished, client is resumed", zap.Any("tunnel", p.tun))
-	}
-}
-
-func (p *pipe) serverHandleTransferIntent() {
-	if p.tun.transferIntent() && !p.isInTxn() {
-		if p.tun != nil && p.tun.rebalancer != nil {
-			r := p.tun.rebalancer
-			r.mu.Lock()
-			defer r.mu.Unlock()
-			_, ok := r.mu.inflight[p.tun]
-			if ok { // already in the queue, or it is being transferred.
-				return
-			}
-			select {
-			case r.queue <- p.tun:
-				r.mu.inflight[p.tun] = struct{}{}
-				p.logger.Info("put the tunnel into rebalancer queue",
-					zap.Any("tunnel", p.tun))
-			default:
-			}
-		}
-	}
+	return nil
 }
 
 // waitReady waits the pip starts up.
@@ -643,10 +697,73 @@ func (p *pipe) pause(ctx context.Context) error {
 	return nil
 }
 
-// isInTxn indicates whether the session is in transaction.
-func (p *pipe) isInTxn() bool {
-	if p.src == nil {
-		return false
+// safeToTransfer indicates whether it is safe to transfer the session.
+// NB: the pipe MUST be server-to-client pipe.
+func (p *pipe) safeToTransfer() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return !p.mu.inTxn
+}
+
+func (p *pipe) safeToTransferLocked() bool {
+	return !p.mu.inTxn
+}
+
+// txnStatus return if the session is within a transaction.
+// first, we consider it as true and check the three conditions:
+// 1. SERVER_STATUS_IN_TRANS is not set
+// 2. SERVER_QUERY_WAS_SLOW and SERVER_STATUS_NO_GOOD_INDEX_USED is set
+func txnStatus(status uint16) bool {
+	// assume it is in txn by priority.
+	v := true
+	if status&frontend.SERVER_QUERY_WAS_SLOW != 0 &&
+		status&frontend.SERVER_STATUS_NO_GOOD_INDEX_USED != 0 &&
+		status&frontend.SERVER_STATUS_IN_TRANS == 0 {
+		v = false
 	}
-	return p.src.isInTxn()
+	return v
+}
+
+// handleOKPacket handles the OK packet from server to update the txn state.
+func handleOKPacket(msg []byte) bool {
+	var mp *frontend.MysqlProtocolImpl
+	// the sequence ID should be 1 for OK packet.
+	if msg[3] != 1 {
+		return txnStatus(0)
+	}
+	pos := 5
+	_, pos, ok := mp.ReadIntLenEnc(msg, pos)
+	if !ok {
+		return txnStatus(0)
+	}
+	_, pos, ok = mp.ReadIntLenEnc(msg, pos)
+	if !ok {
+		return txnStatus(0)
+	}
+	if len(msg[pos:]) < 2 {
+		return txnStatus(0)
+	}
+	status := binary.LittleEndian.Uint16(msg[pos:])
+	return txnStatus(status)
+}
+
+// handleEOFPacket handles the EOF packet from server to update the txn state.
+func handleEOFPacket(msg []byte) bool {
+	if len(msg) < 9 {
+		return txnStatus(0)
+	}
+	return txnStatus(binary.LittleEndian.Uint16(msg[7:]))
+}
+
+func checkTxnStatus(msg []byte) bool {
+	inTxn := true
+	// For the server->client pipe, we get the transaction status from the
+	// OK and EOF packet, which is used in connection transfer. If the session
+	// is in a transaction, a transfer should not start.
+	if isOKPacket(msg) {
+		inTxn = handleOKPacket(msg)
+	} else if isEOFPacket(msg) {
+		inTxn = handleEOFPacket(msg)
+	}
+	return inTxn
 }

@@ -56,6 +56,9 @@ func (s *subPathFS) toUpstreamPath(p string) (string, error) {
 	return parsed.String(), nil
 }
 
+func (s *subPathFS) Close() {
+}
+
 func (s *subPathFS) Write(ctx context.Context, vector IOVector) error {
 	p, err := s.toUpstreamPath(vector.FilePath)
 	if err != nil {
@@ -133,4 +136,8 @@ func (s *subPathFS) PrefetchFile(ctx context.Context, filePath string) error {
 		return err
 	}
 	return s.upstream.PrefetchFile(ctx, p)
+}
+
+func (s *subPathFS) Cost() *CostAttr {
+	return s.upstream.Cost()
 }

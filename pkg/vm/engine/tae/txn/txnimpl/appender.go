@@ -20,7 +20,7 @@ import (
 )
 
 type appendCtx struct {
-	driver data.BlockAppender
+	driver data.ObjectAppender
 	node   InsertNode
 	anode  txnif.AppendNode
 	start  uint32

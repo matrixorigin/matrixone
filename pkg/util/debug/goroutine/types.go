@@ -94,13 +94,17 @@ func (g Goroutine) String() string {
 }
 
 func (g Goroutine) Has(value string) bool {
+	if strings.Contains(strings.ToLower(g.rawState), value) {
+		return true
+	}
+
 	for _, v := range g.methods {
-		if strings.Contains(v, value) {
+		if strings.Contains(strings.ToLower(v), value) {
 			return true
 		}
 	}
 	for _, v := range g.files {
-		if strings.Contains(v, value) {
+		if strings.Contains(strings.ToLower(v), value) {
 			return true
 		}
 	}
@@ -128,6 +132,10 @@ func (res AnalyzeResult) read(
 func (res AnalyzeResult) Display(
 	top int,
 	filter func(i, j int) (bool, bool)) string {
+	if top > len(res.createGroups) {
+		top = len(res.createGroups)
+	}
+
 	var buf bytes.Buffer
 	indent := 0
 	write(

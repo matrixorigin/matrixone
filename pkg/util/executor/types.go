@@ -29,8 +29,6 @@ import (
 // data should be done using the internal sql executor, otherwise pessimistic transactions
 // may not work.
 type SQLExecutor interface {
-	// Exec new a txn operator, used for debug.
-	NewTxnOperator(ctx context.Context) client.TxnOperator
 	// Exec exec a sql in a exists txn.
 	Exec(ctx context.Context, sql string, opts Options) (Result, error)
 	// ExecTxn executor sql in a txn. execFunc can use TxnExecutor to exec multiple sql
@@ -44,7 +42,10 @@ type SQLExecutor interface {
 type TxnExecutor interface {
 	Use(db string)
 	LockTable(table string) error
+	// NOTE: If you specify `AccoundId` in `StatementOption`, sql will be executed under that tenant.
+	// If not specified, it will be executed under the system tenant by default.
 	Exec(sql string, options StatementOption) (Result, error)
+	Txn() client.TxnOperator
 }
 
 // Options execute options.
@@ -59,11 +60,14 @@ type Options struct {
 	timeZone                *time.Location
 	statementOptions        StatementOption
 	txnOpts                 []client.TxnOption
+	enableTrace             bool
+	lower                   *int64
 }
 
 // StatementOption statement execute option.
 type StatementOption struct {
 	waitPolicy lock.WaitPolicy
+	accountId  uint32
 }
 
 // Result exec sql result

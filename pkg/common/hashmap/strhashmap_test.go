@@ -32,7 +32,7 @@ const (
 
 func TestInsert(t *testing.T) {
 	m := mpool.MustNewZero()
-	mp, err := NewStrMap(false, 0, 0, m)
+	mp, err := NewStrMap(false, m)
 	require.NoError(t, err)
 	ts := []types.Type{
 		types.New(types.T_int8, 0, 0),
@@ -57,7 +57,7 @@ func TestInsert(t *testing.T) {
 
 func TestInsertValue(t *testing.T) {
 	m := mpool.MustNewZero()
-	mp, err := NewStrMap(false, 0, 0, m)
+	mp, err := NewStrMap(false, m)
 	require.NoError(t, err)
 	ok, err := mp.InsertValue(int8(0))
 	require.NoError(t, err)
@@ -108,7 +108,7 @@ func TestInsertValue(t *testing.T) {
 func TestIterator(t *testing.T) {
 	{
 		m := mpool.MustNewZero()
-		mp, err := NewStrMap(false, 0, 0, m)
+		mp, err := NewStrMap(false, m)
 		require.NoError(t, err)
 		ts := []types.Type{
 			types.New(types.T_int8, 0, 0),
@@ -133,7 +133,7 @@ func TestIterator(t *testing.T) {
 	}
 	{
 		m := mpool.MustNewZero()
-		mp, err := NewStrMap(true, 0, 0, m)
+		mp, err := NewStrMap(true, m)
 		require.NoError(t, err)
 		ts := []types.Type{
 			types.New(types.T_int8, 0, 0),
@@ -158,7 +158,7 @@ func TestIterator(t *testing.T) {
 	}
 	{
 		m := mpool.MustNewZero()
-		mp, err := NewStrMap(true, 0, 0, m)
+		mp, err := NewStrMap(true, m)
 		require.NoError(t, err)
 		ts := []types.Type{
 			types.New(types.T_int8, 0, 0),

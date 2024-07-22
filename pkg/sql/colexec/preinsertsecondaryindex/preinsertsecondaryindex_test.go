@@ -51,7 +51,7 @@ func TestPreInsertSecondaryIndex(t *testing.T) {
 	}).AnyTimes()
 
 	proc := testutil.NewProc()
-	proc.TxnClient = txnClient
+	proc.Base.TxnClient = txnClient
 	proc.Ctx = ctx
 	// create table t1(
 	// col1 int primary key,
@@ -71,12 +71,13 @@ func TestPreInsertSecondaryIndex(t *testing.T) {
 	}
 	testBatch.SetRowCount(3)
 
-	argument := Argument{
+	argument := PreInsertSecIdx{
+		ctr: &container{},
 		PreInsertCtx: &plan.PreInsertUkCtx{
 			Columns:  []int32{1, 0},
 			PkColumn: 0,
-			PkType:   &plan.Type{Id: int32(types.T_uint64), Width: types.T_int64.ToType().Width, Scale: -1},
-			UkType:   &plan.Type{Id: int32(types.T_uint64), Width: types.T_int64.ToType().Width, Scale: -1},
+			PkType:   plan.Type{Id: int32(types.T_uint64), Width: types.T_int64.ToType().Width, Scale: -1},
+			UkType:   plan.Type{Id: int32(types.T_uint64), Width: types.T_int64.ToType().Width, Scale: -1},
 		},
 		OperatorBase: vm.OperatorBase{
 			OperatorInfo: vm.OperatorInfo{
@@ -93,11 +94,13 @@ func TestPreInsertSecondaryIndex(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func resetChildren(arg *Argument, bat *batch.Batch) {
+func resetChildren(arg *PreInsertSecIdx, bat *batch.Batch) {
+	valueScanArg := &value_scan.ValueScan{
+		Batchs: []*batch.Batch{bat},
+	}
+	valueScanArg.Prepare(nil)
 	arg.SetChildren(
 		[]vm.Operator{
-			&value_scan.Argument{
-				Batchs: []*batch.Batch{bat},
-			},
+			valueScanArg,
 		})
 }

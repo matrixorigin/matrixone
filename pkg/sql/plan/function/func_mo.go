@@ -15,8 +15,15 @@
 package function
 
 import (
+	"bytes"
+	"context"
+	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
+	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -24,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -39,26 +47,22 @@ const (
 // Mo functions are better tested with bvt.
 
 // MoTableRows returns an estimated row number of a table.
-func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[int64](result)
 	dbs := vector.GenerateFunctionStrParameter(ivecs[0])
 	tbls := vector.GenerateFunctionStrParameter(ivecs[1])
 
 	// XXX WTF
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-	if proc.TxnOperator == nil {
+	if proc.GetTxnOperator() == nil {
 		return moerr.NewInternalError(proc.Ctx, "MoTableRows: txn operator is nil")
 	}
-	txn := proc.TxnOperator
+	txn := proc.GetTxnOperator()
 
-	var accountId uint32
-	var accSwitched bool
+	var ok bool
 	// XXX old code starts a new transaction.   why?
 	for i := uint64(0); i < uint64(length); i++ {
-		if accSwitched {
-			accSwitched = false
-			proc.Ctx = defines.AttachAccountId(proc.Ctx, accountId)
-		}
+		foolCtx := proc.Ctx
 
 		db, dbnull := dbs.GetStrValue(i)
 		tbl, tblnull := tbls.GetStrValue(i)
@@ -71,34 +75,45 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 			dbStr := functionUtil.QuickBytesToStr(db)
 			tblStr := functionUtil.QuickBytesToStr(tbl)
 
-			if isClusterTable(dbStr, tblStr) {
-				//if it is the cluster table in the general account, switch into the sys account
-				accountId, err = defines.GetAccountId(proc.Ctx)
-				if err != nil {
+			if ok, err = specialTableFilterForNonSys(foolCtx, dbStr, tblStr); ok && err == nil {
+				if err = rs.Append(int64(0), false); err != nil {
 					return err
 				}
-				if accountId != uint32(sysAccountID) {
-					accSwitched = true
-					proc.Ctx = defines.AttachAccountId(proc.Ctx, uint32(sysAccountID))
-				}
+				continue
 			}
-			ctx := proc.Ctx
+
+			if err != nil {
+				return err
+			}
+
 			var dbo engine.Database
-			dbo, err = e.Database(ctx, dbStr, txn)
+			dbo, err = e.Database(foolCtx, dbStr, txn)
 			if err != nil {
 				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-					return moerr.NewInvalidArgNoCtx("db not found when mo_table_rows", dbStr)
+					var buf bytes.Buffer
+					for j := uint64(0); j < uint64(length); j++ {
+						db2, _ := dbs.GetStrValue(j)
+						tbl2, _ := tbls.GetStrValue(j)
+
+						dbStr2 := functionUtil.QuickBytesToStr(db2)
+						tblStr2 := functionUtil.QuickBytesToStr(tbl2)
+
+						buf.WriteString(fmt.Sprintf("%s-%s; ", dbStr2, tblStr2))
+					}
+
+					logutil.Errorf(fmt.Sprintf("db not found when mo_table_size: %s-%s, extra: %s", dbStr, tblStr, buf.String()))
+					return moerr.NewInvalidArgNoCtx("db not found when mo_table_size", fmt.Sprintf("%s-%s", dbStr, tblStr))
 				}
 				return err
 			}
-			rel, err = dbo.Relation(ctx, tblStr, nil)
+			rel, err = dbo.Relation(foolCtx, tblStr, nil)
 			if err != nil {
 				return err
 			}
 
 			// get the table definition information and check whether the current table is a partition table
 			var engineDefs []engine.TableDef
-			engineDefs, err = rel.TableDefs(ctx)
+			engineDefs, err = rel.TableDefs(foolCtx)
 			if err != nil {
 				return err
 			}
@@ -117,31 +132,24 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 			}
 
 			var rows uint64
-
 			// check if the current table is partitioned
 			if partitionInfo != nil {
 				var prel engine.Relation
 				var prows uint64
 				// for partition table,  the table rows is equal to the sum of the partition tables.
 				for _, partitionTable := range partitionInfo.PartitionTableNames {
-					prel, err = dbo.Relation(ctx, partitionTable, nil)
+					prel, err = dbo.Relation(foolCtx, partitionTable, nil)
 					if err != nil {
 						return err
 					}
-					if err = prel.UpdateObjectInfos(ctx); err != nil {
-						return err
-					}
-					prows, err = prel.Rows(ctx)
+					prows, err = prel.Rows(foolCtx)
 					if err != nil {
 						return err
 					}
 					rows += prows
 				}
 			} else {
-				if err = rel.UpdateObjectInfos(ctx); err != nil {
-					return err
-				}
-				if rows, err = rel.Rows(ctx); err != nil {
+				if rows, err = rel.Rows(foolCtx); err != nil {
 					return err
 				}
 			}
@@ -155,33 +163,21 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 }
 
 // MoTableSize returns an estimated size of a table.
-func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[int64](result)
 	dbs := vector.GenerateFunctionStrParameter(ivecs[0])
 	tbls := vector.GenerateFunctionStrParameter(ivecs[1])
 
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-	if proc.TxnOperator == nil {
+	if proc.GetTxnOperator() == nil {
 		return moerr.NewInternalError(proc.Ctx, "MoTableSize: txn operator is nil")
 	}
-	txn := proc.TxnOperator
+	txn := proc.GetTxnOperator()
 
-	var accountId uint32
-	var accSwitched bool
+	var ok bool
 	// XXX old code starts a new transaction.   why?
 	for i := uint64(0); i < uint64(length); i++ {
-		if accSwitched {
-			// consider this situation:
-			// 	 if a sql trys to gather all table's size in one query,
-			// 	 this will traverse all tables, including the cluster table, belongs
-			// 	 this account.
-			//   but if these tables in `tbls` has orders: xxx, cluster table, xxx, xxx, xxx.
-			//   the account id stored in proc.Ctx will be changed to system account id when process that cluster
-			//   table, and causing the last three tables can not be found when call the `engine.Database()`.
-			//   so should be first to switch bach the right account id here.
-			accSwitched = false
-			proc.Ctx = defines.AttachAccountId(proc.Ctx, accountId)
-		}
+		foolCtx := proc.Ctx
 
 		db, dbnull := dbs.GetStrValue(i)
 		tbl, tblnull := tbls.GetStrValue(i)
@@ -194,81 +190,56 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 			dbStr := functionUtil.QuickBytesToStr(db)
 			tblStr := functionUtil.QuickBytesToStr(tbl)
 
-			if isClusterTable(dbStr, tblStr) {
-				//if it is the cluster table in the general account, switch into the sys account
-				accountId, err = defines.GetAccountId(proc.Ctx)
-				if err != nil {
+			if ok, err = specialTableFilterForNonSys(foolCtx, dbStr, tblStr); ok && err == nil {
+				if err = rs.Append(int64(0), false); err != nil {
 					return err
 				}
-				if accountId != uint32(sysAccountID) {
-					accSwitched = true
-					proc.Ctx = defines.AttachAccountId(proc.Ctx, uint32(sysAccountID))
-				}
+				continue
 			}
-			ctx := proc.Ctx
+
+			if err != nil {
+				return err
+			}
 
 			var dbo engine.Database
-			dbo, err = e.Database(ctx, dbStr, txn)
+			dbo, err = e.Database(foolCtx, dbStr, txn)
 			if err != nil {
 				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-					return moerr.NewInvalidArgNoCtx("db not found when mo_table_size", dbStr)
+					var buf bytes.Buffer
+					for j := uint64(0); j < uint64(length); j++ {
+						db2, _ := dbs.GetStrValue(j)
+						tbl2, _ := tbls.GetStrValue(j)
+
+						dbStr2 := functionUtil.QuickBytesToStr(db2)
+						tblStr2 := functionUtil.QuickBytesToStr(tbl2)
+
+						buf.WriteString(fmt.Sprintf("%s#%s; ", dbStr2, tblStr2))
+					}
+
+					originalAccId, _ := defines.GetAccountId(proc.Ctx)
+					attachedAccId, _ := defines.GetAccountId(foolCtx)
+
+					logutil.Errorf(
+						fmt.Sprintf("db not found when mo_table_size: %s#%s, acc: %d-%d, extra: %s",
+							dbStr, tblStr, attachedAccId, originalAccId, buf.String()))
+					return moerr.NewInvalidArgNoCtx("db not found when mo_table_size", fmt.Sprintf("%s-%s", dbStr, tblStr))
 				}
 				return err
 			}
-			rel, err = dbo.Relation(ctx, tblStr, nil)
+			rel, err = dbo.Relation(foolCtx, tblStr, nil)
 			if err != nil {
 				return err
 			}
 
-			// get the table definition information and check whether the current table is a partition table
-			var engineDefs []engine.TableDef
-			engineDefs, err = rel.TableDefs(ctx)
-			if err != nil {
+			var oSize, iSize uint64
+			if oSize, err = originalTableSize(foolCtx, dbo, rel); err != nil {
 				return err
 			}
-			var partitionInfo *plan.PartitionByDef
-			for _, def := range engineDefs {
-				if partitionDef, ok := def.(*engine.PartitionDef); ok {
-					if partitionDef.Partitioned > 0 {
-						p := &plan.PartitionByDef{}
-						err = p.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition))
-						if err != nil {
-							return err
-						}
-						partitionInfo = p
-					}
-				}
+			if iSize, err = indexesTableSize(foolCtx, dbo, rel); err != nil {
+				return err
 			}
 
-			var size uint64
-
-			// check if the current table is partitioned
-			if partitionInfo != nil {
-				var prel engine.Relation
-				var psize uint64
-				// for partition table, the table size is equal to the sum of the partition tables.
-				for _, partitionTable := range partitionInfo.PartitionTableNames {
-					prel, err = dbo.Relation(ctx, partitionTable, nil)
-					if err != nil {
-						return err
-					}
-					if err = prel.UpdateObjectInfos(ctx); err != nil {
-						return err
-					}
-					if psize, err = prel.Size(ctx, AllColumns); err != nil {
-						return err
-					}
-					size += psize
-				}
-			} else {
-				if err = rel.UpdateObjectInfos(ctx); err != nil {
-					return err
-				}
-				if size, err = rel.Size(ctx, AllColumns); err != nil {
-					return err
-				}
-			}
-			if err = rs.Append(int64(size), false); err != nil {
+			if err = rs.Append(int64(oSize+iSize), false); err != nil {
 				return err
 			}
 		}
@@ -276,22 +247,122 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 	return nil
 }
 
-// MoTableColMax return the max value of the column
-func MoTableColMax(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	return moTableColMaxMinImpl("mo_table_col_max", ivecs, result, proc, length)
+var specialRegexp = regexp.MustCompile(fmt.Sprintf("%s|%s|%s",
+	catalog.MO_TABLES, catalog.MO_DATABASE, catalog.MO_COLUMNS))
+
+func specialTableFilterForNonSys(ctx context.Context, dbStr, tblStr string) (bool, error) {
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return false, err
+	}
+
+	if accountId == sysAccountID || dbStr != catalog.MO_CATALOG {
+		return false, nil
+	}
+
+	if specialRegexp.MatchString(tblStr) || isClusterTable(dbStr, tblStr) {
+		return true, nil
+	}
+
+	return false, nil
+}
+
+func originalTableSize(ctx context.Context, db engine.Database, rel engine.Relation) (size uint64, err error) {
+	return getTableSize(ctx, db, rel)
+}
+
+func getTableSize(ctx context.Context, db engine.Database, rel engine.Relation) (size uint64, err error) {
+	// get the table definition information and check whether the current table is a partition table
+	var engineDefs []engine.TableDef
+	engineDefs, err = rel.TableDefs(ctx)
+	if err != nil {
+		return 0, err
+	}
+	var partitionInfo *plan.PartitionByDef
+	for _, def := range engineDefs {
+		if partitionDef, ok := def.(*engine.PartitionDef); ok {
+			if partitionDef.Partitioned > 0 {
+				p := &plan.PartitionByDef{}
+				err = p.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition))
+				if err != nil {
+					return 0, err
+				}
+				partitionInfo = p
+			}
+		}
+	}
+
+	// check if the current table is partitioned
+	if partitionInfo != nil {
+		var prel engine.Relation
+		var psize uint64
+		// for partition table, the table size is equal to the sum of the partition tables.
+		for _, partitionTable := range partitionInfo.PartitionTableNames {
+			prel, err = db.Relation(ctx, partitionTable, nil)
+			if err != nil {
+				return 0, err
+			}
+			if psize, err = prel.Size(ctx, AllColumns); err != nil {
+				return 0, err
+			}
+			size += psize
+		}
+	} else {
+		if size, err = rel.Size(ctx, AllColumns); err != nil {
+			return 0, err
+		}
+	}
+
+	return size, nil
+}
+
+func indexesTableSize(ctx context.Context, db engine.Database, rel engine.Relation) (totalSize uint64, err error) {
+	var irel engine.Relation
+	var size uint64
+	for _, idef := range rel.GetTableDef(ctx).Indexes {
+		if irel, err = db.Relation(ctx, idef.IndexTableName, nil); err != nil {
+			logutil.Info("indexesTableSize->Relation",
+				zap.String("originTable", rel.GetTableName()),
+				zap.String("indexTableName", idef.IndexTableName),
+				zap.Error(err))
+			continue
+		}
+
+		if size, err = getTableSize(ctx, db, irel); err != nil {
+			logutil.Info("indexesTableSize->getTableSize",
+				zap.String("originTable", rel.GetTableName()),
+				zap.String("indexTableName", idef.IndexTableName),
+				zap.Error(err))
+			continue
+		}
+
+		totalSize += size
+	}
+
+	// this is a quick fix for the issue of the indexTableName is empty.
+	// the empty indexTableName causes the `SQL parser err: table "" does not exist` err and
+	// then the mo_table_size call will fail.
+	// this fix does not fix the issue but only avoids the failure caused by it.
+	err = nil
+	return totalSize, err
 }
 
 // MoTableColMax return the max value of the column
-func MoTableColMin(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	return moTableColMaxMinImpl("mo_table_col_min", ivecs, result, proc, length)
+func MoTableColMax(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return moTableColMaxMinImpl("mo_table_col_max", ivecs, result, proc, length, selectList)
 }
 
-func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+// MoTableColMax return the max value of the column
+func MoTableColMin(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return moTableColMaxMinImpl("mo_table_col_min", ivecs, result, proc, length, selectList)
+}
+
+func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	e, ok := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-	if !ok || proc.TxnOperator == nil {
+	if !ok || proc.GetTxnOperator() == nil {
 		return moerr.NewInternalError(proc.Ctx, "MoTableColMaxMin: txn operator is nil")
 	}
-	txn := proc.TxnOperator
+	txn := proc.GetTxnOperator()
 
 	dbNames := vector.GenerateFunctionStrParameter(parameters[0])
 	tableNames := vector.GenerateFunctionStrParameter(parameters[1])
@@ -343,7 +414,7 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 			if db.IsSubscription(ctx) {
 				// get sub info
 				var sub *plan.SubscriptionMeta
-				if sub, err = proc.SessionInfo.SqlHelper.GetSubscriptionMeta(dbStr); err != nil {
+				if sub, err = proc.GetSessionInfo().SqlHelper.GetSubscriptionMeta(dbStr); err != nil {
 					return err
 				}
 
@@ -364,7 +435,8 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 				return err
 			}
 
-			ranges, err := rel.Ranges(ctx, nil)
+			//ranges, err := rel.Ranges(ctx, nil)
+			ranges, err := rel.Ranges(ctx, nil, 0)
 			if err != nil {
 				return err
 			}
@@ -458,6 +530,8 @@ func getValueInStr(value any) string {
 		return v.Format(0)
 	case types.Decimal128:
 		return v.Format(0)
+	case types.Enum:
+		return v.String()
 	default:
 		return ""
 	}
@@ -505,11 +579,12 @@ var (
 	}
 )
 
+// enum("a","b","c") -> CastIndexToValue(1) -> "a"
 // CastIndexToValue returns enum type index according to the value
-func CastIndexToValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func CastIndexToValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	typeEnums := vector.GenerateFunctionStrParameter(ivecs[0])
-	indexs := vector.GenerateFunctionFixedTypeParameter[uint16](ivecs[1])
+	indexs := vector.GenerateFunctionFixedTypeParameter[types.Enum](ivecs[1])
 
 	for i := uint64(0); i < uint64(length); i++ {
 		typeEnum, typeEnumNull := typeEnums.GetStrValue(i)
@@ -535,9 +610,10 @@ func CastIndexToValue(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	return nil
 }
 
+// enum("a","b","c") -> CastValueToIndex("a") -> 1
 // CastValueToIndex returns enum type index according to the value
-func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	rs := vector.MustFunctionResult[uint16](result)
+func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Enum](result)
 	typeEnums := vector.GenerateFunctionStrParameter(ivecs[0])
 	enumValues := vector.GenerateFunctionStrParameter(ivecs[1])
 
@@ -552,7 +628,7 @@ func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 			typeEnumVal := functionUtil.QuickBytesToStr(typeEnum)
 			enumStr := functionUtil.QuickBytesToStr(enumValue)
 
-			var index uint16
+			var index types.Enum
 			index, err := types.ParseEnum(typeEnumVal, enumStr)
 			if err != nil {
 				return err
@@ -566,9 +642,10 @@ func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	return nil
 }
 
+// enum("a","b","c") -> CastIndexValueToIndex(1) -> 1
 // CastIndexValueToIndex returns enum type index according to the index value
-func CastIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	rs := vector.MustFunctionResult[uint16](result)
+func CastIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Enum](result)
 	typeEnums := vector.GenerateFunctionStrParameter(ivecs[0])
 	enumIndexValues := vector.GenerateFunctionFixedTypeParameter[uint16](ivecs[1])
 
@@ -581,7 +658,7 @@ func CastIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultW
 			}
 		} else {
 			typeEnumVal := functionUtil.QuickBytesToStr(typeEnum)
-			var index uint16
+			var index types.Enum
 
 			index, err := types.ParseEnumValue(typeEnumVal, enumValueIndex)
 			if err != nil {
@@ -589,6 +666,28 @@ func CastIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultW
 			}
 
 			if err = rs.Append(index, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// CastNanoToTimestamp returns timestamp string according to the nano
+func CastNanoToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	nanos := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
+
+	layout := "2006-01-02 15:04:05.999999999"
+	for i := uint64(0); i < uint64(length); i++ {
+		nano, null := nanos.GetValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			t := time.Unix(0, nano).UTC()
+			if err := rs.AppendBytes([]byte(t.Format(layout)), false); err != nil {
 				return err
 			}
 		}

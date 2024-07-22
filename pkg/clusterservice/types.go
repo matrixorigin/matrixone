@@ -70,6 +70,8 @@ type MOCluster interface {
 	// Since the query result may be a Slice, to avoid memory allocation overhead,
 	// we use apply to notify the caller of a Service that satisfies the condition.
 	GetTNService(selector Selector, apply func(metadata.TNService) bool)
+	// GetAllTNServices get all tn services
+	GetAllTNServices() []metadata.TNService
 	// GetCNServiceWithoutWorkingState get services by selector, and the applyFunc used to save the
 	// cn service that matches the selector's conditions.
 	//
@@ -85,11 +87,14 @@ type MOCluster interface {
 	// DebugUpdateCNLabel updates the labels on specified CN. It is only used in mo_ctl
 	// internally for debug purpose.
 	DebugUpdateCNLabel(uuid string, kvs map[string][]string) error
+	DebugUpdateCNWorkState(uuid string, state int) error
 
 	// RemoveCN removes the specified CN from the cluster
 	RemoveCN(id string)
 	// AddCN adds the specified CN to the cluster
 	AddCN(metadata.CNService)
+	// UpdateCN updates the specified CN in the cluster
+	UpdateCN(metadata.CNService)
 }
 
 type ClusterClient interface {
@@ -99,4 +104,5 @@ type ClusterClient interface {
 type labelSupportedClient interface {
 	ClusterClient
 	UpdateCNLabel(ctx context.Context, label logpb.CNStoreLabel) error
+	UpdateCNWorkState(ctx context.Context, state logpb.CNWorkState) error
 }

@@ -22,6 +22,7 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestPut(t *testing.T) {
@@ -187,7 +188,7 @@ func TestSkipCompletedWaiters(t *testing.T) {
 		w2 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w2")})
 		w2.setStatus(blocking)
 		defer func() {
-			w2.wait(context.Background())
+			w2.wait(context.Background(), getLogger(""))
 			w2.close()
 		}()
 
@@ -195,7 +196,7 @@ func TestSkipCompletedWaiters(t *testing.T) {
 		w3 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w3")})
 		w3.setStatus(blocking)
 		defer func() {
-			w3.wait(context.Background())
+			w3.wait(context.Background(), getLogger(""))
 			w3.close()
 		}()
 
@@ -244,22 +245,46 @@ func TestCanGetCommitTSInWaitQueue(t *testing.T) {
 		q.notify(notifyValue{ts: timestamp.Timestamp{PhysicalTime: 1}})
 
 		// w2 get notify and abort
-		assert.Equal(t, int64(1), w2.wait(context.Background()).ts.PhysicalTime)
+		assert.Equal(t, int64(1), w2.wait(context.Background(), getLogger("")).ts.PhysicalTime)
 		q.removeByTxnID(w2.txn.TxnID)
 		q.notify(notifyValue{})
 
 		// w3 get notify and commit at 3
-		assert.Equal(t, int64(1), w3.wait(context.Background()).ts.PhysicalTime)
+		assert.Equal(t, int64(1), w3.wait(context.Background(), getLogger("")).ts.PhysicalTime)
 		q.removeByTxnID(w3.txn.TxnID)
 		q.notify(notifyValue{ts: timestamp.Timestamp{PhysicalTime: 3}})
 
 		// w4 get notify and commit at 2
-		assert.Equal(t, int64(3), w4.wait(context.Background()).ts.PhysicalTime)
+		assert.Equal(t, int64(3), w4.wait(context.Background(), getLogger("")).ts.PhysicalTime)
 		q.removeByTxnID(w4.txn.TxnID)
 		q.notify(notifyValue{ts: timestamp.Timestamp{PhysicalTime: 2}})
 
 		// w5 get notify
-		assert.Equal(t, int64(3), w5.wait(context.Background()).ts.PhysicalTime)
+		assert.Equal(t, int64(3), w5.wait(context.Background(), getLogger("")).ts.PhysicalTime)
 		q.removeByTxnID(w5.txn.TxnID)
 	})
+}
+
+func TestMoveToCannotCloseWaiter(t *testing.T) {
+	reuse.RunReuseTests(func() {
+
+		from := newWaiterQueue()
+		defer from.close(notifyValue{})
+
+		to := newWaiterQueue()
+
+		w1 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w1")})
+		defer w1.close()
+
+		from.put(w1)
+		require.Equal(t, int32(2), w1.refCount.Load())
+
+		to.beginChange()
+		from.moveTo(to)
+		require.Equal(t, int32(3), w1.refCount.Load())
+		to.rollbackChange()
+
+		require.Equal(t, int32(2), w1.refCount.Load())
+	})
+
 }

@@ -161,6 +161,14 @@ func TestIterLocks(t *testing.T) {
 			txn4 := newTestTxnID(4)
 			txn5 := newTestTxnID(5)
 
+			s.cfg.TxnIterFunc = func(f func([]byte) bool) {
+				f(txn1)
+				f(txn2)
+				f(txn3)
+				f(txn4)
+				f(txn5)
+			}
+
 			rows := newTestRows(1)
 			rangeRows := newTestRows(2, 3)
 

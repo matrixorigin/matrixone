@@ -47,8 +47,11 @@ GO_VERSION=$(shell go version)
 BRANCH_NAME=$(shell git rev-parse --abbrev-ref HEAD)
 LAST_COMMIT_ID=$(shell git rev-parse --short HEAD)
 BUILD_TIME=$(shell date +%s)
-MO_VERSION=$(shell git describe --always --tags $(shell git rev-list --tags --max-count=1))
+MO_VERSION=$(shell git describe --always --contains $(shell git rev-parse HEAD))
 GO_MODULE=$(shell go list -m)
+MUSL_DIR=$(ROOT_DIR)/musl
+MUSL_CC=$(MUSL_DIR)/bin/musl-gcc
+MUSL_VERSION:=1.2.5
 
 # cross compilation has been disabled for now
 ifneq ($(GOARCH)$(TARGET_ARCH)$(GOOS)$(TARGET_OS),)
@@ -95,8 +98,9 @@ pb: vendor-build generate-pb fmt
 RACE_OPT :=
 DEBUG_OPT :=
 CGO_DEBUG_OPT :=
-CGO_OPTS=CGO_CFLAGS="-I$(ROOT_DIR)/cgo " CGO_LDFLAGS="-L$(ROOT_DIR)/cgo -lmo -lm"
+CGO_OPTS=CGO_CFLAGS="-I$(ROOT_DIR)/cgo " CGO_LDFLAGS="-L$(ROOT_DIR)/cgo -lm -lmo"
 GOLDFLAGS=-ldflags="-X '$(GO_MODULE)/pkg/version.GoVersion=$(GO_VERSION)' -X '$(GO_MODULE)/pkg/version.BranchName=$(BRANCH_NAME)' -X '$(GO_MODULE)/pkg/version.CommitID=$(LAST_COMMIT_ID)' -X '$(GO_MODULE)/pkg/version.BuildTime=$(BUILD_TIME)' -X '$(GO_MODULE)/pkg/version.Version=$(MO_VERSION)'"
+TAGS :=
 
 .PHONY: cgo
 cgo:
@@ -106,7 +110,32 @@ cgo:
 .PHONY: build
 build: config cgo
 	$(info [Build binary])
-	$(CGO_OPTS) go build  $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) -o $(BIN_NAME) ./cmd/mo-service
+	$(CGO_OPTS) go build $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) -o $(BIN_NAME) ./cmd/mo-service
+
+.PHONY: musl-install
+musl-install:
+ifeq ("$(UNAME_S)","Linux")
+ ifeq ("$(wildcard $(MUSL_CC))","")
+	@rm -rf /tmp/musl-$(MUSL_VERSION) musl-$(MUSL_VERSION).tar.gz
+	@curl -SfL "https://musl.libc.org/releases/musl-$(MUSL_VERSION).tar.gz" -o /tmp/musl-$(MUSL_VERSION).tar.gz
+	@tar -zxf /tmp/musl-$(MUSL_VERSION).tar.gz -C $(ROOT_DIR)
+	@cd musl-$(MUSL_VERSION) && ./configure --prefix=$(MUSL_DIR) --syslibdir=$(MUSL_DIR)/syslib && $(MAKE) && $(MAKE) install
+	@rm -rf musl-$(MUSL_VERSION) /tmp/musl-$(MUSL_VERSION).tar.gz
+ endif
+endif
+
+.PHONY: musl-cgo
+musl-cgo: musl-install
+	@(cd $(ROOT_DIR)/cgo; CC=$(MUSL_CC) ${MAKE} ${CGO_DEBUG_OPT})
+
+.PHONY: musl
+musl: override CGO_OPTS += CC=$(MUSL_CC)
+musl: override GOLDFLAGS:=-ldflags="--linkmode 'external' --extldflags '-static' -X '$(GO_MODULE)/pkg/version.GoVersion=$(GO_VERSION)' -X '$(GO_MODULE)/pkg/version.BranchName=$(BRANCH_NAME)' -X '$(GO_MODULE)/pkg/version.CommitID=$(LAST_COMMIT_ID)' -X '$(GO_MODULE)/pkg/version.BuildTime=$(BUILD_TIME)' -X '$(GO_MODULE)/pkg/version.Version=$(MO_VERSION)'"
+musl: override TAGS := -tags musl
+musl: musl-install musl-cgo config
+musl:
+	$(info [Build binary(musl)])
+	$(CGO_OPTS) go build $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) -o $(BIN_NAME) ./cmd/mo-service
 
 # build mo-debug tool
 .PHONY: mo-debug
@@ -166,7 +195,7 @@ ci-clean:
 # docker compose bvt test
 ###############################################################################
 
-COMPOSE_LAUNCH := "launch-multi-cn"
+COMPOSE_LAUNCH := "launch"
 
 .PHONY: compose
 compose:
@@ -175,8 +204,11 @@ compose:
 .PHONY: compose-clean
 compose-clean:
 	@docker compose -f etc/launch-tae-compose/compose.yaml --profile $(COMPOSE_LAUNCH) down --remove-orphans
-	@docker volume rm launch-tae-compose_minio_storage
+	@docker volume rm -f launch-tae-compose_minio_storage
 	@docker image prune -f
+	@cd $(ROOT_DIR) && rm -rf docker-compose-log && rm -rf test/distributed/resources/json/export*
+	@cd $(ROOT_DIR) && rm -rf test/distributed/resources/into_outfile/*.csv
+	@cd $(ROOT_DIR) && rm -rf test/distributed/resources/into_outfile_2/*.csv
 
 ###############################################################################
 # clean
@@ -189,6 +221,8 @@ clean:
 	@go clean -testcache
 	rm -f $(BIN_NAME)
 	rm -rf $(ROOT_DIR)/vendor
+	rm -rf $(MUSL_DIR)
+	rm -rf /tmp/musl-$(MUSL_VERSION).tar.gz
 	$(MAKE) -C cgo clean
 
 ###############################################################################
@@ -201,7 +235,7 @@ fmt:
 
 .PHONY: install-static-check-tools
 install-static-check-tools:
-	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | bash -s -- -b $(GOPATH)/bin v1.55.2
+	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | bash -s -- -b $(GOPATH)/bin v1.59.1
 	@go install github.com/matrixorigin/linter/cmd/molint@latest
 	@go install github.com/apache/skywalking-eyes/cmd/license-eye@v0.4.0
 

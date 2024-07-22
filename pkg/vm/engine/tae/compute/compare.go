@@ -162,7 +162,9 @@ func CompareGeneric(a, b any, t types.T) int {
 	case types.T_enum:
 		return CompareOrdered(a.(types.Enum), b.(types.Enum))
 	case types.T_TS:
-		return a.(types.TS).Compare(b.(types.TS))
+		ts1 := b.(types.TS)
+		ts2 := a.(types.TS)
+		return ts2.Compare(&ts1)
 	case types.T_Rowid:
 		return CompareBytes(a.([]byte), b.([]byte))
 	case types.T_Blockid:

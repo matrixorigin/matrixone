@@ -29,7 +29,7 @@ import (
 
 type intersectAllTestCase struct {
 	proc   *process.Process
-	arg    *Argument
+	arg    *IntersectAll
 	cancel context.CancelFunc
 }
 
@@ -42,42 +42,13 @@ func TestIntersectAll(t *testing.T) {
 		{3, 4, 5}				{1, 2, 3}
 		{3, 4, 5}
 	*/
-	c := newIntersectAllTestCase(
-		proc,
-		[]*batch.Batch{
-			testutil.NewBatchWithVectors(
-				[]*vector.Vector{
-					testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 1}),
-					testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{2, 2}),
-					testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{3, 3}),
-				}, nil),
-			testutil.NewBatchWithVectors(
-				[]*vector.Vector{
-					testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{3, 3}),
-					testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{4, 4}),
-					testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{5, 5}),
-				}, nil),
-		},
-		[]*batch.Batch{
-			testutil.NewBatchWithVectors(
-				[]*vector.Vector{
-					testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 1}),
-					testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{2, 2}),
-					testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{3, 3}),
-				}, nil),
-			testutil.NewBatchWithVectors(
-				[]*vector.Vector{
-					testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{4}),
-					testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{5}),
-					testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{6}),
-				}, nil),
-		},
-	)
+	var end vm.CallResult
+	c, ctx := newIntersectAllTestCase(proc)
+
+	setProcForTest(ctx, proc)
 	err := c.arg.Prepare(c.proc)
 	require.NoError(t, err)
 	cnt := 0
-	var end vm.CallResult
-
 	for {
 		end, err = c.arg.Call(c.proc)
 		require.NoError(t, err)
@@ -89,7 +60,27 @@ func TestIntersectAll(t *testing.T) {
 			break
 		}
 	}
+	require.Equal(t, 2, cnt) // 1 row
+	c.proc.Reg.MergeReceivers[0].Ch <- nil
+	c.proc.Reg.MergeReceivers[1].Ch <- nil
 
+	c.arg.Reset(c.proc, false, nil)
+
+	setProcForTest(ctx, proc)
+	err = c.arg.Prepare(c.proc)
+	require.NoError(t, err)
+	cnt = 0
+	for {
+		end, err = c.arg.Call(c.proc)
+		require.NoError(t, err)
+		result := end.Batch
+		if result != nil && !result.IsEmpty() {
+			cnt += result.RowCount()
+			require.Equal(t, 3, len(result.Vecs))
+		} else {
+			break
+		}
+	}
 	require.Equal(t, 2, cnt) // 1 row
 	c.proc.Reg.MergeReceivers[0].Ch <- nil
 	c.proc.Reg.MergeReceivers[1].Ch <- nil
@@ -98,32 +89,9 @@ func TestIntersectAll(t *testing.T) {
 	require.Equal(t, int64(0), c.proc.Mp().CurrNB())
 }
 
-func newIntersectAllTestCase(proc *process.Process, leftBatches, rightBatches []*batch.Batch) intersectAllTestCase {
+func newIntersectAllTestCase(proc *process.Process) (intersectAllTestCase, context.Context) {
 	ctx, cancel := context.WithCancel(context.Background())
-	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
-	{
-		c := make(chan *batch.Batch, len(leftBatches)+1)
-		for i := range leftBatches {
-			c <- leftBatches[i]
-		}
-		c <- nil
-		proc.Reg.MergeReceivers[0] = &process.WaitRegister{
-			Ctx: ctx,
-			Ch:  c,
-		}
-	}
-	{
-		c := make(chan *batch.Batch, len(rightBatches)+1)
-		for i := range rightBatches {
-			c <- rightBatches[i]
-		}
-		c <- nil
-		proc.Reg.MergeReceivers[1] = &process.WaitRegister{
-			Ctx: ctx,
-			Ch:  c,
-		}
-	}
-	arg := new(Argument)
+	arg := new(IntersectAll)
 	arg.OperatorBase.OperatorInfo = vm.OperatorInfo{
 		Idx:     0,
 		IsFirst: false,
@@ -133,5 +101,61 @@ func newIntersectAllTestCase(proc *process.Process, leftBatches, rightBatches []
 		proc:   proc,
 		arg:    arg,
 		cancel: cancel,
+	}, ctx
+}
+
+func setProcForTest(ctx context.Context, proc *process.Process) {
+	leftBatches := []*batch.Batch{
+		testutil.NewBatchWithVectors(
+			[]*vector.Vector{
+				testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 1}),
+				testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{2, 2}),
+				testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{3, 3}),
+			}, nil),
+		testutil.NewBatchWithVectors(
+			[]*vector.Vector{
+				testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{3, 3}),
+				testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{4, 4}),
+				testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{5, 5}),
+			}, nil),
+	}
+
+	rightBatches := []*batch.Batch{
+		testutil.NewBatchWithVectors(
+			[]*vector.Vector{
+				testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 1}),
+				testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{2, 2}),
+				testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{3, 3}),
+			}, nil),
+		testutil.NewBatchWithVectors(
+			[]*vector.Vector{
+				testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{4}),
+				testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{5}),
+				testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{6}),
+			}, nil),
+	}
+
+	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
+	{
+		c := make(chan *process.RegisterMessage, len(leftBatches)+1)
+		for i := range leftBatches {
+			c <- testutil.NewRegMsg(leftBatches[i])
+		}
+		c <- nil
+		proc.Reg.MergeReceivers[0] = &process.WaitRegister{
+			Ctx: ctx,
+			Ch:  c,
+		}
+	}
+	{
+		c := make(chan *process.RegisterMessage, len(rightBatches)+1)
+		for i := range rightBatches {
+			c <- testutil.NewRegMsg(rightBatches[i])
+		}
+		c <- nil
+		proc.Reg.MergeReceivers[1] = &process.WaitRegister{
+			Ctx: ctx,
+			Ch:  c,
+		}
 	}
 }

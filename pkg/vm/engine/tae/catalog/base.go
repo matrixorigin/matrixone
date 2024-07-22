@@ -21,6 +21,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/stack"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -30,6 +32,7 @@ type BaseEntry interface {
 	//for global checkpoint
 	RLock()
 	RUnlock()
+	DeleteBeforeLocked(ts types.TS) bool
 	DeleteBefore(ts types.TS) bool
 }
 
@@ -47,16 +50,9 @@ type BaseEntryImpl[T BaseNode[T]] struct {
 	*txnbase.MVCCChain[*MVCCNode[T]]
 }
 
-func NewReplayBaseEntry[T BaseNode[T]](factory func() T) *BaseEntryImpl[T] {
-	be := &BaseEntryImpl[T]{
-		MVCCChain: txnbase.NewMVCCChain(CompareBaseNode[T], NewEmptyMVCCNodeFactory(factory)),
-	}
-	return be
-}
-
 func NewBaseEntry[T BaseNode[T]](factory func() T) *BaseEntryImpl[T] {
 	return &BaseEntryImpl[T]{
-		MVCCChain: txnbase.NewMVCCChain(CompareBaseNode[T], NewEmptyMVCCNodeFactory(factory)),
+		MVCCChain: txnbase.NewMVCCChain(CompareBaseNode[T], NewEmptyMVCCNodeFactory(factory), nil),
 	}
 }
 
@@ -87,6 +83,9 @@ func (be *BaseEntryImpl[T]) CreateWithTS(ts types.TS, baseNode T) {
 }
 
 func (be *BaseEntryImpl[T]) CreateWithTxn(txn txnif.AsyncTxn, baseNode T) {
+	if txn == nil {
+		logutil.Warnf("unexpected txn is nil: %+v", stack.Callers(0))
+	}
 	node := &MVCCNode[T]{
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: txnif.UncommitTS,
@@ -110,7 +109,13 @@ func (be *BaseEntryImpl[T]) CreateWithStartAndEnd(start, end types.TS, baseNode 
 }
 
 func (be *BaseEntryImpl[T]) TryGetTerminatedTS(waitIfcommitting bool) (terminated bool, TS types.TS) {
-	node := be.GetLatestCommittedNode()
+	be.RLock()
+	defer be.RUnlock()
+	return be.TryGetTerminatedTSLocked(waitIfcommitting)
+}
+
+func (be *BaseEntryImpl[T]) TryGetTerminatedTSLocked(waitIfcommitting bool) (terminated bool, TS types.TS) {
+	node := be.GetLatestCommittedNodeLocked()
 	if node == nil {
 		return
 	}
@@ -142,21 +147,20 @@ func (be *BaseEntryImpl[T]) ConflictCheck(txn txnif.TxnReader) (err error) {
 	be.RLock()
 	defer be.RUnlock()
 	if txn != nil {
-		needWait, waitTxn := be.NeedWaitCommitting(txn.GetStartTS())
+		needWait, waitTxn := be.NeedWaitCommittingLocked(txn.GetStartTS())
 		if needWait {
 			be.RUnlock()
 			waitTxn.GetTxnState(true)
 			be.RLock()
 		}
-		err = be.CheckConflict(txn)
+		err = be.CheckConflictLocked(txn)
 		if err != nil {
 			return
 		}
 	}
 	return
 }
-
-func (be *BaseEntryImpl[T]) getOrSetUpdateNode(txn txnif.TxnReader) (newNode bool, node *MVCCNode[T]) {
+func (be *BaseEntryImpl[T]) getOrSetUpdateNodeLocked(txn txnif.TxnReader) (newNode bool, node *MVCCNode[T]) {
 	entry := be.GetLatestNodeLocked()
 	if entry.IsSameTxn(txn) {
 		return false, entry
@@ -170,20 +174,26 @@ func (be *BaseEntryImpl[T]) getOrSetUpdateNode(txn txnif.TxnReader) (newNode boo
 
 func (be *BaseEntryImpl[T]) DeleteLocked(txn txnif.TxnReader) (isNewNode bool, err error) {
 	var entry *MVCCNode[T]
-	isNewNode, entry = be.getOrSetUpdateNode(txn)
+	isNewNode, entry = be.getOrSetUpdateNodeLocked(txn)
 	entry.Delete()
 	return
 }
 
 func (be *BaseEntryImpl[T]) DeleteBefore(ts types.TS) bool {
-	createAt := be.GetDeleteAt()
+	be.RLock()
+	defer be.RUnlock()
+	return be.DeleteBeforeLocked(ts)
+}
+
+func (be *BaseEntryImpl[T]) DeleteBeforeLocked(ts types.TS) bool {
+	createAt := be.GetDeleteAtLocked()
 	if createAt.IsEmpty() {
 		return false
 	}
-	return createAt.Less(ts)
+	return createAt.Less(&ts)
 }
 
-func (be *BaseEntryImpl[T]) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnReader) {
+func (be *BaseEntryImpl[T]) NeedWaitCommittingLocked(startTS types.TS) (bool, txnif.TxnReader) {
 	un := be.GetLatestNodeLocked()
 	if un == nil {
 		return false, nil
@@ -198,11 +208,19 @@ func (be *BaseEntryImpl[T]) HasDropCommitted() bool {
 }
 
 func (be *BaseEntryImpl[T]) HasDropCommittedLocked() bool {
-	un := be.GetLatestCommittedNode()
+	un := be.GetLatestCommittedNodeLocked()
 	if un == nil {
 		return false
 	}
 	return un.HasDropCommitted()
+}
+
+func (be *BaseEntryImpl[T]) HasDropIntentLocked() bool {
+	un := be.GetLatestNodeLocked()
+	if un == nil {
+		return false
+	}
+	return un.HasDropIntent()
 }
 
 func (be *BaseEntryImpl[T]) ensureVisibleAndNotDropped(txn txnif.TxnReader) bool {
@@ -214,7 +232,7 @@ func (be *BaseEntryImpl[T]) ensureVisibleAndNotDropped(txn txnif.TxnReader) bool
 }
 
 func (be *BaseEntryImpl[T]) GetVisibilityLocked(txn txnif.TxnReader) (visible, dropped bool) {
-	un := be.GetVisibleNode(txn)
+	un := be.GetVisibleNodeLocked(txn)
 	if un == nil {
 		return
 	}
@@ -227,8 +245,8 @@ func (be *BaseEntryImpl[T]) GetVisibilityLocked(txn txnif.TxnReader) (visible, d
 	return
 }
 
-func (be *BaseEntryImpl[T]) IsVisible(txn txnif.TxnReader, mu *sync.RWMutex) (ok bool, err error) {
-	needWait, txnToWait := be.NeedWaitCommitting(txn.GetStartTS())
+func (be *BaseEntryImpl[T]) IsVisibleWithLock(txn txnif.TxnReader, mu *sync.RWMutex) (ok bool, err error) {
+	needWait, txnToWait := be.NeedWaitCommittingLocked(txn.GetStartTS())
 	if needWait {
 		mu.RUnlock()
 		txnToWait.GetTxnState(true)
@@ -239,7 +257,7 @@ func (be *BaseEntryImpl[T]) IsVisible(txn txnif.TxnReader, mu *sync.RWMutex) (ok
 }
 
 func (be *BaseEntryImpl[T]) DropEntryLocked(txn txnif.TxnReader) (isNewNode bool, err error) {
-	err = be.CheckConflict(txn)
+	err = be.CheckConflictLocked(txn)
 	if err != nil {
 		return
 	}
@@ -255,17 +273,7 @@ func (be *BaseEntryImpl[T]) DeleteAfter(ts types.TS) bool {
 	if un == nil {
 		return false
 	}
-	return un.DeletedAt.Greater(ts)
-}
-
-func (be *BaseEntryImpl[T]) CloneCommittedInRange(start, end types.TS) BaseEntry {
-	chain := be.MVCCChain.CloneCommittedInRange(start, end)
-	if chain == nil {
-		return nil
-	}
-	return &BaseEntryImpl[T]{
-		MVCCChain: chain,
-	}
+	return un.DeletedAt.Greater(&ts)
 }
 
 func (be *BaseEntryImpl[T]) GetCreatedAtLocked() types.TS {
@@ -276,7 +284,7 @@ func (be *BaseEntryImpl[T]) GetCreatedAtLocked() types.TS {
 	return un.CreatedAt
 }
 
-func (be *BaseEntryImpl[T]) GetDeleteAt() types.TS {
+func (be *BaseEntryImpl[T]) GetDeleteAtLocked() types.TS {
 	un := be.GetLatestNodeLocked()
 	if un == nil {
 		return types.TS{}
@@ -287,7 +295,7 @@ func (be *BaseEntryImpl[T]) GetDeleteAt() types.TS {
 func (be *BaseEntryImpl[T]) GetVisibility(txn txnif.TxnReader) (visible, dropped bool) {
 	be.RLock()
 	defer be.RUnlock()
-	needWait, txnToWait := be.NeedWaitCommitting(txn.GetStartTS())
+	needWait, txnToWait := be.NeedWaitCommittingLocked(txn.GetStartTS())
 	if needWait {
 		be.RUnlock()
 		txnToWait.GetTxnState(true)

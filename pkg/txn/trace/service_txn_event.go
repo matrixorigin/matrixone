@@ -17,7 +17,6 @@ package trace
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -52,7 +51,9 @@ func (s *service) TxnCreated(op client.TxnOperator) {
 	register := false
 	if s.atomic.txnEventEnabled.Load() {
 		register = true
-		s.txnC <- newTxnCreated(op.Txn())
+		s.txnC <- event{
+			csv: newTxnCreated(op.Txn()),
+		}
 	}
 
 	if s.atomic.txnActionEventEnabled.Load() {
@@ -81,6 +82,8 @@ func (s *service) TxnCreated(op client.TxnOperator) {
 		op.AppendEventCallback(client.ExecuteSQLEvent, s.handleTxnActionEvent)
 		op.AppendEventCallback(client.CompileEvent, s.handleTxnActionEvent)
 		op.AppendEventCallback(client.TableScanEvent, s.handleTxnActionEvent)
+		op.AppendEventCallback(client.WorkspaceWriteEvent, s.handleTxnActionEvent)
+		op.AppendEventCallback(client.WorkspaceAdjustEvent, s.handleTxnActionEvent)
 	}
 }
 
@@ -100,10 +103,10 @@ func (s *service) TxnExecSQL(
 		return
 	}
 
-	if len(sql) > 1000 {
-		sql = sql[:1000]
+	sql = truncateSQL(sql)
+	s.txnC <- event{
+		csv: newTxnInfoEvent(op.Txn(), txnExecuteEvent, sql),
 	}
-	s.txnC <- newTxnInfoEvent(op.Txn(), txnExecuteEvent, sql)
 }
 
 func (s *service) TxnConflictChanged(
@@ -134,11 +137,16 @@ func (s *service) TxnConflictChanged(
 	buf.buf.WriteString(", new-min-snapshot-ts: ")
 	buf.buf.WriteString(ts)
 	info := buf.buf.RawSlice(idx, buf.buf.GetWriteIndex())
-	s.txnC <- newTxnInfoEvent(
-		op.Txn(),
-		txnConflictChanged,
-		util.UnsafeBytesToString(info))
-	s.txnBufC <- buf
+	s.txnC <- event{
+		csv: newTxnInfoEvent(
+			op.Txn(),
+			txnConflictChanged,
+			util.UnsafeBytesToString(info),
+		),
+	}
+	s.txnC <- event{
+		buffer: buf,
+	}
 }
 
 func (s *service) TxnNoConflictChanged(
@@ -172,11 +180,16 @@ func (s *service) TxnNoConflictChanged(
 	buf.buf.WriteString(", new-min-snapshot-ts: ")
 	buf.buf.WriteString(newSnapshot)
 	info := buf.buf.RawSlice(idx, buf.buf.GetWriteIndex())
-	s.txnC <- newTxnInfoEvent(
-		op.Txn(),
-		txnNoConflictChanged,
-		util.UnsafeBytesToString(info))
-	s.txnBufC <- buf
+	s.txnC <- event{
+		csv: newTxnInfoEvent(
+			op.Txn(),
+			txnNoConflictChanged,
+			util.UnsafeBytesToString(info),
+		),
+	}
+	s.txnC <- event{
+		buffer: buf,
+	}
 }
 
 func (s *service) TxnUpdateSnapshot(
@@ -204,11 +217,16 @@ func (s *service) TxnUpdateSnapshot(
 	buf.buf.WriteString(" table:")
 	buf.buf.WriteString(table)
 	info := buf.buf.RawSlice(idx, buf.buf.GetWriteIndex())
-	s.txnC <- newTxnInfoEvent(
-		op.Txn(),
-		txnUpdateSnapshotReasonEvent,
-		util.UnsafeBytesToString(info))
-	s.txnBufC <- buf
+	s.txnC <- event{
+		csv: newTxnInfoEvent(
+			op.Txn(),
+			txnUpdateSnapshotReasonEvent,
+			util.UnsafeBytesToString(info),
+		),
+	}
+	s.txnC <- event{
+		buffer: buf,
+	}
 }
 
 func (s *service) TxnCommit(
@@ -253,7 +271,9 @@ func (s *service) TxnCommit(
 			op.Txn().ID,
 			buf,
 			func(e dataEvent) {
-				s.entryC <- e
+				s.entryC <- event{
+					csv: e,
+				}
 			},
 			&s.atomic.complexPKTables)
 		n++
@@ -263,7 +283,9 @@ func (s *service) TxnCommit(
 		buf.close()
 		return
 	}
-	s.entryBufC <- buf
+	s.entryC <- event{
+		buffer: buf,
+	}
 }
 
 func (s *service) TxnRead(
@@ -272,7 +294,7 @@ func (s *service) TxnRead(
 	tableID uint64,
 	columns []string,
 	bat *batch.Batch) {
-	if !s.Enabled(FeatureTraceTxn) {
+	if !s.Enabled(FeatureTraceData) {
 		return
 	}
 
@@ -300,10 +322,14 @@ func (s *service) TxnRead(
 		op.Txn().ID,
 		buf,
 		func(e dataEvent) {
-			s.entryC <- e
+			s.entryC <- event{
+				csv: e,
+			}
 		},
 		&s.atomic.complexPKTables)
-	s.entryBufC <- buf
+	s.entryC <- event{
+		buffer: buf,
+	}
 }
 
 func (s *service) TxnReadBlock(
@@ -334,77 +360,200 @@ func (s *service) TxnReadBlock(
 	}
 
 	buf := reuse.Alloc[buffer](nil)
-	s.entryC <- newReadBlockEvent(
-		time.Now().UnixNano(),
+	s.entryC <- event{
+		csv: newReadBlockEvent(
+			time.Now().UnixNano(),
+			op.Txn().ID,
+			tableID,
+			buf.writeHexWithBytes(block),
+		),
+	}
+	s.entryC <- event{
+		buffer: buf,
+	}
+}
+
+func (s *service) TxnWrite(
+	op client.TxnOperator,
+	tableID uint64,
+	typ string,
+	bat *batch.Batch,
+) {
+	if !s.Enabled(FeatureTraceTxnWorkspace) {
+		return
+	}
+
+	if s.atomic.closed.Load() {
+		return
+	}
+
+	filters := s.atomic.txnFilters.Load()
+	if skipped := filters.filter(op); skipped {
+		return
+	}
+
+	entryData := newWriteEntryData(tableID, bat, time.Now().UnixNano())
+	defer func() {
+		entryData.close()
+	}()
+
+	tableFilters := s.atomic.tableFilters.Load()
+	if skipped := tableFilters.filter(entryData); skipped {
+		return
+	}
+
+	buf := reuse.Alloc[buffer](nil)
+	entryData.createWrite(
 		op.Txn().ID,
-		tableID,
-		buf.writeHexWithBytes(block))
-	s.entryBufC <- buf
+		buf,
+		typ,
+		func(e dataEvent) {
+			s.entryC <- event{
+				csv: e,
+			}
+		},
+		&s.atomic.complexPKTables)
+	s.entryC <- event{
+		buffer: buf,
+	}
+}
+
+func (s *service) TxnAdjustWorkspace(
+	op client.TxnOperator,
+	adjustCount int,
+	writes func() (tableID uint64, typ string, bat *batch.Batch, more bool),
+) {
+	if !s.Enabled(FeatureTraceTxnWorkspace) {
+		return
+	}
+
+	if s.atomic.closed.Load() {
+		return
+	}
+
+	filters := s.atomic.txnFilters.Load()
+	if skipped := filters.filter(op); skipped {
+		return
+	}
+
+	at := time.Now().UnixNano()
+
+	offsetCount := 0
+	for {
+		tableID, typ, bat, more := writes()
+		if !more {
+			return
+		}
+
+		func() {
+			entryData := newWorkspaceEntryData(tableID, bat, at)
+			defer func() {
+				entryData.close()
+			}()
+
+			tableFilters := s.atomic.tableFilters.Load()
+			if skipped := tableFilters.filter(entryData); skipped {
+				return
+			}
+
+			buf := reuse.Alloc[buffer](nil)
+			entryData.createWorkspace(
+				op.Txn().ID,
+				buf,
+				typ,
+				adjustCount,
+				offsetCount,
+				func(e dataEvent) {
+					s.entryC <- event{
+						csv: e,
+					}
+				},
+				&s.atomic.complexPKTables)
+			s.entryC <- event{
+				buffer: buf,
+			}
+		}()
+		offsetCount++
+	}
 }
 
 func (s *service) TxnEventEnabled() bool {
 	return s.atomic.txnEventEnabled.Load()
 }
 
-func (s *service) handleTxnActive(event client.TxnEvent) {
+func (s *service) handleTxnActive(e client.TxnEvent) {
 	if s.atomic.closed.Load() {
 		return
 	}
 
-	if !event.CostEvent && s.atomic.txnEventEnabled.Load() {
-		s.txnC <- newTxnActive(event.Txn)
-	}
-
-	if s.atomic.txnActionEventEnabled.Load() {
-		s.doTxnEventAction(event)
-	}
-}
-
-func (s *service) handleTxnUpdateSnapshot(event client.TxnEvent) {
-	if s.atomic.closed.Load() {
-		return
-	}
-
-	if event.CostEvent && s.atomic.txnEventEnabled.Load() {
-		s.txnC <- newTxnSnapshotUpdated(event.Txn)
-	}
-
-	if s.atomic.txnActionEventEnabled.Load() {
-		s.doTxnEventAction(event)
-	}
-}
-
-func (s *service) handleTxnCommit(event client.TxnEvent) {
-	if s.atomic.closed.Load() {
-		return
-	}
-
-	if event.CostEvent && s.atomic.txnEventEnabled.Load() {
-		s.txnC <- newTxnClosed(event.Txn)
-		if event.Err != nil {
-			s.doAddTxnError(event.Txn.ID, event.Err)
+	if !e.CostEvent && s.atomic.txnEventEnabled.Load() {
+		s.txnC <- event{
+			csv: newTxnActive(e.Txn),
 		}
 	}
 
 	if s.atomic.txnActionEventEnabled.Load() {
-		s.doTxnEventAction(event)
+		s.doTxnEventAction(e)
 	}
 }
 
-func (s *service) handleTxnRollback(event client.TxnEvent) {
+func (s *service) handleTxnUpdateSnapshot(e client.TxnEvent) {
 	if s.atomic.closed.Load() {
 		return
 	}
 
-	if event.CostEvent && s.atomic.txnEventEnabled.Load() {
-		s.txnC <- newTxnClosed(event.Txn)
-		if event.Err != nil {
-			s.doAddTxnError(event.Txn.ID, event.Err)
+	if e.CostEvent && s.atomic.txnEventEnabled.Load() {
+		s.txnC <- event{
+			csv: newTxnSnapshotUpdated(e.Txn),
 		}
 	}
 
 	if s.atomic.txnActionEventEnabled.Load() {
-		s.doTxnEventAction(event)
+		s.doTxnEventAction(e)
+	}
+}
+
+func (s *service) handleTxnCommit(e client.TxnEvent) {
+	if s.atomic.closed.Load() {
+		return
+	}
+
+	if e.CostEvent && s.atomic.txnEventEnabled.Load() {
+		s.txnC <- event{
+			csv: newTxnClosed(e.Txn),
+		}
+		if e.Err != nil {
+			s.addTxnError(
+				e.Txn.ID,
+				e.Err,
+			)
+		}
+	}
+
+	if s.atomic.txnActionEventEnabled.Load() {
+		s.doTxnEventAction(e)
+	}
+}
+
+func (s *service) handleTxnRollback(e client.TxnEvent) {
+	if s.atomic.closed.Load() {
+		return
+	}
+
+	if e.CostEvent && s.atomic.txnEventEnabled.Load() {
+		s.txnC <- event{
+			csv: newTxnClosed(e.Txn),
+		}
+		if e.Err != nil {
+			s.addTxnError(
+				e.Txn.ID,
+				e.Err,
+			)
+		}
+	}
+
+	if s.atomic.txnActionEventEnabled.Load() {
+		s.doTxnEventAction(e)
 	}
 }
 
@@ -420,7 +569,8 @@ func (s *service) handleTxnActionEvent(event client.TxnEvent) {
 
 func (s *service) TxnError(
 	op client.TxnOperator,
-	value error) {
+	value error,
+) {
 	if s.atomic.closed.Load() {
 		return
 	}
@@ -433,15 +583,16 @@ func (s *service) TxnError(
 		return
 	}
 
-	s.doAddTxnError(op.Txn().ID, value)
+	s.addTxnError(
+		op.Txn().ID,
+		value,
+	)
 }
 
-func (s *service) doAddTxnError(
+func (s *service) addTxnError(
 	txnID []byte,
-	value error) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-
+	value error,
+) {
 	ts := time.Now().UnixNano()
 	msg := value.Error()
 	if me, ok := value.(*moerr.Error); ok {
@@ -449,32 +600,75 @@ func (s *service) doAddTxnError(
 	}
 
 	sql := fmt.Sprintf("insert into %s (ts, txn_id, error_info) values (%d, '%x', '%s')",
-		eventErrorTable,
+		EventErrorTable,
 		ts,
 		txnID,
 		escape(msg))
 
-	now, _ := s.clock.Now()
-	err := s.executor.ExecTxn(
-		ctx,
-		func(txn executor.TxnExecutor) error {
-			res, err := txn.Exec(sql,
-				executor.StatementOption{})
-			if err != nil {
-				return err
-			}
-			res.Close()
-			return nil
-		},
-		executor.Options{}.
-			WithDatabase(DebugDB).
-			WithMinCommittedTS(now).
-			WithWaitCommittedLogApplied().
-			WithDisableTrace())
-	if err != nil {
-		s.logger.Error("exec txn error trace failed",
-			zap.String("sql", sql),
-			zap.Error(err))
+	select {
+	case s.txnErrorC <- sql:
+	default:
+		s.logger.Info("failed to added txn error trace",
+			zap.String("sql", sql))
+	}
+}
+
+func (s *service) TxnStatementStart(
+	op client.TxnOperator,
+	sql string,
+	seq uint64,
+) {
+	if !s.Enabled(FeatureTraceTxnAction) &&
+		!s.Enabled(FeatureTraceTxn) {
+		return
+	}
+
+	s.TxnExecSQL(op, sql)
+	s.AddTxnDurationAction(
+		op,
+		client.ExecuteSQLEvent,
+		seq,
+		0,
+		0,
+		nil)
+}
+
+func (s *service) TxnStatementCompleted(
+	op client.TxnOperator,
+	sql string,
+	cost time.Duration,
+	seq uint64,
+	affectRows int,
+	err error,
+) {
+	if !s.Enabled(FeatureTraceTxnAction) &&
+		!s.Enabled(FeatureTraceTxn) &&
+		!s.Enabled(FeatureTraceStatement) {
+		return
+	}
+
+	buf := reuse.Alloc[buffer](nil)
+	if err == nil {
+		err = infoErr{
+			info: buf.writeInt(int64(affectRows)),
+		}
+	}
+
+	s.AddTxnDurationAction(
+		op,
+		client.ExecuteSQLEvent,
+		seq,
+		0,
+		cost,
+		err)
+
+	s.AddStatement(
+		op,
+		sql,
+		cost)
+
+	s.txnActionC <- event{
+		buffer: buf,
 	}
 }
 
@@ -528,6 +722,51 @@ func (s *service) AddTxnAction(
 		err)
 }
 
+func (s *service) AddTxnActionInfo(
+	op client.TxnOperator,
+	eventType client.EventType,
+	seq uint64,
+	tableID uint64,
+	value func(Writer),
+) {
+	if !s.Enabled(FeatureTraceTxnAction) {
+		return
+	}
+
+	if s.atomic.closed.Load() {
+		return
+	}
+
+	filters := s.atomic.txnFilters.Load()
+	if skipped := filters.filter(op); skipped {
+		return
+	}
+
+	buf := reuse.Alloc[buffer](nil)
+	w := writer{
+		buf: buf.buf,
+		dst: buf.alloc(1024),
+		idx: buf.buf.GetWriteIndex(),
+	}
+	value(w)
+
+	s.txnActionC <- event{
+		csv: actionEvent{
+			ts:        time.Now().UnixNano(),
+			action:    eventType.Name,
+			actionSeq: seq,
+			tableID:   tableID,
+			value:     0,
+			unit:      w.data(),
+			txnID:     op.Txn().ID,
+			err:       "",
+		},
+	}
+	s.txnActionC <- event{
+		buffer: buf,
+	}
+}
+
 func (s *service) doTxnEventAction(event client.TxnEvent) {
 	unit := ""
 	if event.CostEvent {
@@ -538,7 +777,7 @@ func (s *service) doTxnEventAction(event client.TxnEvent) {
 		event.Event.Name,
 		event.Sequence,
 		0,
-		event.Cost.Milliseconds(),
+		event.Cost.Microseconds(),
 		unit,
 		event.Err)
 }
@@ -556,19 +795,27 @@ func (s *service) doAddTxnAction(
 	if err != nil {
 		e = err.Error()
 	}
-	s.txnActionC <- actionEvent{
-		ts:        time.Now().UnixNano(),
-		action:    action,
-		actionSeq: actionSequence,
-		tableID:   tableID,
-		value:     int64(value),
-		unit:      unit,
-		txnID:     txnID,
-		err:       e,
+	s.txnActionC <- event{
+		csv: actionEvent{
+			ts:        time.Now().UnixNano(),
+			action:    action,
+			actionSeq: actionSequence,
+			tableID:   tableID,
+			value:     int64(value),
+			unit:      unit,
+			txnID:     txnID,
+			err:       e,
+		},
 	}
 }
 
 func (s *service) AddTxnFilter(method, value string) error {
+	switch method {
+	case sessionMethod, connectionMethod, tenantMethod, userMethod:
+	default:
+		return moerr.NewNotSupportedNoCtx("method %s not support", method)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -601,7 +848,7 @@ func (s *service) ClearTxnFilters() error {
 			txn.Use(DebugDB)
 			res, err := txn.Exec(
 				fmt.Sprintf("truncate table %s",
-					traceTxnFilterTable),
+					TraceTxnFilterTable),
 				executor.StatementOption{})
 			if err != nil {
 				return err
@@ -634,7 +881,7 @@ func (s *service) RefreshTxnFilters() error {
 			txn.Use(DebugDB)
 			res, err := txn.Exec(
 				fmt.Sprintf("select method, value from %s",
-					traceTxnFilterTable),
+					TraceTxnFilterTable),
 				executor.StatementOption{})
 			if err != nil {
 				return err
@@ -643,8 +890,8 @@ func (s *service) RefreshTxnFilters() error {
 
 			res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 				for i := 0; i < rows; i++ {
-					methods = append(methods, cols[0].GetStringAt(i))
-					values = append(values, cols[1].GetStringAt(i))
+					methods = append(methods, cols[0].UnsafeGetStringAt(i))
+					values = append(values, cols[1].UnsafeGetStringAt(i))
 				}
 				return true
 			})
@@ -692,29 +939,62 @@ func (s *service) RefreshTxnFilters() error {
 func (s *service) handleTxnEvents(ctx context.Context) {
 	s.handleEvent(
 		ctx,
-		s.txnCSVFile,
 		8,
-		eventTxnTable,
+		EventTxnTable,
 		s.txnC,
-		s.txnBufC)
+	)
 }
 
 func (s *service) handleTxnActionEvents(ctx context.Context) {
 	s.handleEvent(
 		ctx,
-		s.txnActionCSVFile,
 		9,
-		eventTxnActionTable,
+		EventTxnActionTable,
 		s.txnActionC,
-		s.txnActionBufC)
+	)
 }
 
-func (s *service) txnCSVFile() string {
-	return filepath.Join(s.dir, fmt.Sprintf("txn-%d.csv", s.seq.Add(1)))
+func (s *service) handleTxnError(
+	ctx context.Context,
+) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case sql := <-s.txnErrorC:
+			s.doAddTxnError(sql)
+		}
+	}
 }
 
-func (s *service) txnActionCSVFile() string {
-	return filepath.Join(s.dir, fmt.Sprintf("txn-action-%d.csv", s.seq.Add(1)))
+func (s *service) doAddTxnError(
+	sql string,
+) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	now, _ := s.clock.Now()
+	err := s.executor.ExecTxn(
+		ctx,
+		func(txn executor.TxnExecutor) error {
+			res, err := txn.Exec(sql,
+				executor.StatementOption{})
+			if err != nil {
+				return err
+			}
+			res.Close()
+			return nil
+		},
+		executor.Options{}.
+			WithDatabase(DebugDB).
+			WithMinCommittedTS(now).
+			WithWaitCommittedLogApplied().
+			WithDisableTrace())
+	if err != nil {
+		s.logger.Error("exec txn error trace failed",
+			zap.String("sql", sql),
+			zap.Error(err))
+	}
 }
 
 func addTxnFilterSQL(
@@ -722,7 +1002,15 @@ func addTxnFilterSQL(
 	value string,
 ) string {
 	return fmt.Sprintf("insert into %s (method, value) values ('%s', '%s')",
-		traceTxnFilterTable,
+		TraceTxnFilterTable,
 		method,
 		value)
+}
+
+type infoErr struct {
+	info string
+}
+
+func (e infoErr) Error() string {
+	return e.info
 }

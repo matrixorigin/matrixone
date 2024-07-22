@@ -27,8 +27,16 @@ var (
 		input  string
 		output string
 	}{
-		input:  "LOAD DATA LOCAL INFILE 'a.csv' INTO TABLE wawa CHARACTER\nSET\nutf8 FIELDS TERMINATED BY ',' ENCLOSED BY '\"' ESCAPED BY '\"' LINES TERMINATED BY '' (\ndx,\ndx,\ncy,\nvx,\nvy\n);",
-		output: "load data local infile a.csv into table wawa character set utf8 fields terminated by , enclosed by \" escaped by \" lines terminated by '' (dx, dx, cy, vx, vy)",
+		//input:  "upgrade account all with retry 10",
+		//output: "upgrade account all with retry 10",
+		//input:  "upgrade account all",
+		//output: "upgrade account all",
+		//input:  "upgrade account 'acc1' with retry 5",
+		//output: "upgrade account acc1 with retry 5",
+		//input:  "upgrade account 'acc1'",
+		//output: "upgrade account acc1",
+		input:  "show upgrade",
+		output: "show upgrade",
 	}
 )
 
@@ -220,10 +228,10 @@ var (
 		output: "select id, cid, status, ip, streams from camera where (cid_type = ?)",
 	}, {
 		input:  "CREATE  \nVIEW `xab0100` AS (\n  select `a`.`SYSUSERID` AS `sysuserid`,`a`.`USERID` AS `userid`,`a`.`USERNAME` AS `usernm`,`a`.`PWDHASH` AS `userpwd`,`a`.`USERTYPE` AS `usertype`,`a`.`EMPID` AS `empid`,`a`.`EMAIL` AS `email`,`a`.`TELO` AS `telo`,`a`.`TELH` AS `telh`,`a`.`MOBIL` AS `mobil`,(case `a`.`ACTIVED` when '1' then 'N' when '2' then 'Y' else 'Y' end) AS `useyn`,`a`.`ENABLEPWD` AS `enablepwd`,`a`.`ENABLEMMSG` AS `enablemmsg`,`a`.`FEECENTER` AS `feecenter`,left(concat(ifnull(`c`.`ORGID`,''),'|'),(char_length(concat(ifnull(`c`.`ORGID`,''),'|')) - 1)) AS `orgid`,left(concat(ifnull(`c`.`ORGNAME`,''),'|'),(char_length(concat(ifnull(`c`.`ORGNAME`,''),'|')) - 1)) AS `orgname`,ifnull(`a`.`ISPLANNER`,'') AS `isplanner`,ifnull(`a`.`ISWHEMPLOYEE`,'') AS `iswhemployee`,ifnull(`a`.`ISBUYER`,'') AS `isbuyer`,ifnull(`a`.`ISQCEMPLOYEE`,'') AS `isqceemployee`,ifnull(`a`.`ISSALEEMPLOYEE`,'') AS `issaleemployee`,`a`.`SEX` AS `sex`,ifnull(`c`.`ENTID`,'3') AS `ORGANIZATION_ID`,ifnull(`a`.`NOTICEUSER`,'') AS `NOTICEUSER` \n  from ((`kaf_cpcuser` `a` left join `kaf_cpcorguser` `b` on((`a`.`SYSUSERID` = `b`.`SYSUSERID`))) left join `kaf_cpcorg` `c` on((`b`.`ORGID` = `c`.`ORGID`))) \n  order by `a`.`SYSUSERID`,`a`.`USERID`,`a`.`USERNAME`,`a`.`USERPASS`,`a`.`USERTYPE`,`a`.`EMPID`,`a`.`EMAIL`,`a`.`TELO`,`a`.`TELH`,`a`.`MOBIL`,`a`.`ACTIVED`,`a`.`ENABLEPWD`,`a`.`ENABLEMMSG`,`a`.`FEECENTER`,`a`.`ISPLANNER`,`a`.`ISWHEMPLOYEE`,`a`.`ISBUYER`,`a`.`ISQCEMPLOYEE`,`a`.`ISSALEEMPLOYEE`,`a`.`SEX`,`c`.`ENTID`) ;\n",
-		output: "create view xab0100 as (select a.sysuserid as sysuserid, a.userid as userid, a.username as usernm, a.pwdhash as userpwd, a.usertype as usertype, a.empid as empid, a.email as email, a.telo as telo, a.telh as telh, a.mobil as mobil, (case a.actived when 1 then N when 2 then Y else Y end) as useyn, a.enablepwd as enablepwd, a.enablemmsg as enablemmsg, a.feecenter as feecenter, left(concat(ifnull(c.orgid, ), |), (char_length(concat(ifnull(c.orgid, ), |)) - 1)) as orgid, left(concat(ifnull(c.orgname, ), |), (char_length(concat(ifnull(c.orgname, ), |)) - 1)) as orgname, ifnull(a.isplanner, ) as isplanner, ifnull(a.iswhemployee, ) as iswhemployee, ifnull(a.isbuyer, ) as isbuyer, ifnull(a.isqcemployee, ) as isqceemployee, ifnull(a.issaleemployee, ) as issaleemployee, a.sex as sex, ifnull(c.entid, 3) as ORGANIZATION_ID, ifnull(a.noticeuser, ) as NOTICEUSER from kaf_cpcuser as a left join kaf_cpcorguser as b on ((a.sysuserid = b.sysuserid)) left join kaf_cpcorg as c on ((b.orgid = c.orgid)) order by a.sysuserid, a.userid, a.username, a.userpass, a.usertype, a.empid, a.email, a.telo, a.telh, a.mobil, a.actived, a.enablepwd, a.enablemmsg, a.feecenter, a.isplanner, a.iswhemployee, a.isbuyer, a.isqcemployee, a.issaleemployee, a.sex, c.entid)",
+		output: "create view xab0100 as (select a.SYSUSERID as sysuserid, a.USERID as userid, a.USERNAME as usernm, a.PWDHASH as userpwd, a.USERTYPE as usertype, a.EMPID as empid, a.EMAIL as email, a.TELO as telo, a.TELH as telh, a.MOBIL as mobil, (case a.ACTIVED when 1 then N when 2 then Y else Y end) as useyn, a.ENABLEPWD as enablepwd, a.ENABLEMMSG as enablemmsg, a.FEECENTER as feecenter, left(concat(ifnull(c.ORGID, ), |), (char_length(concat(ifnull(c.ORGID, ), |)) - 1)) as orgid, left(concat(ifnull(c.ORGNAME, ), |), (char_length(concat(ifnull(c.ORGNAME, ), |)) - 1)) as orgname, ifnull(a.ISPLANNER, ) as isplanner, ifnull(a.ISWHEMPLOYEE, ) as iswhemployee, ifnull(a.ISBUYER, ) as isbuyer, ifnull(a.ISQCEMPLOYEE, ) as isqceemployee, ifnull(a.ISSALEEMPLOYEE, ) as issaleemployee, a.SEX as sex, ifnull(c.ENTID, 3) as ORGANIZATION_ID, ifnull(a.NOTICEUSER, ) as NOTICEUSER from kaf_cpcuser as a left join kaf_cpcorguser as b on ((a.SYSUSERID = b.SYSUSERID)) left join kaf_cpcorg as c on ((b.ORGID = c.ORGID)) order by a.SYSUSERID, a.USERID, a.USERNAME, a.USERPASS, a.USERTYPE, a.EMPID, a.EMAIL, a.TELO, a.TELH, a.MOBIL, a.ACTIVED, a.ENABLEPWD, a.ENABLEMMSG, a.FEECENTER, a.ISPLANNER, a.ISWHEMPLOYEE, a.ISBUYER, a.ISQCEMPLOYEE, a.ISSALEEMPLOYEE, a.SEX, c.ENTID)",
 	}, {
 		input:  "ALTER  \nVIEW `xab0100` AS (\n  select `a`.`SYSUSERID` AS `sysuserid`,`a`.`USERID` AS `userid`,`a`.`USERNAME` AS `usernm`,`a`.`PWDHASH` AS `userpwd`,`a`.`USERTYPE` AS `usertype`,`a`.`EMPID` AS `empid`,`a`.`EMAIL` AS `email`,`a`.`TELO` AS `telo`,`a`.`TELH` AS `telh`,`a`.`MOBIL` AS `mobil`,(case `a`.`ACTIVED` when '1' then 'N' when '2' then 'Y' else 'Y' end) AS `useyn`,`a`.`ENABLEPWD` AS `enablepwd`,`a`.`ENABLEMMSG` AS `enablemmsg`,`a`.`FEECENTER` AS `feecenter`,left(concat(ifnull(`c`.`ORGID`,''),'|'),(char_length(concat(ifnull(`c`.`ORGID`,''),'|')) - 1)) AS `orgid`,left(concat(ifnull(`c`.`ORGNAME`,''),'|'),(char_length(concat(ifnull(`c`.`ORGNAME`,''),'|')) - 1)) AS `orgname`,ifnull(`a`.`ISPLANNER`,'') AS `isplanner`,ifnull(`a`.`ISWHEMPLOYEE`,'') AS `iswhemployee`,ifnull(`a`.`ISBUYER`,'') AS `isbuyer`,ifnull(`a`.`ISQCEMPLOYEE`,'') AS `isqceemployee`,ifnull(`a`.`ISSALEEMPLOYEE`,'') AS `issaleemployee`,`a`.`SEX` AS `sex`,ifnull(`c`.`ENTID`,'3') AS `ORGANIZATION_ID`,ifnull(`a`.`NOTICEUSER`,'') AS `NOTICEUSER` \n  from ((`kaf_cpcuser` `a` left join `kaf_cpcorguser` `b` on((`a`.`SYSUSERID` = `b`.`SYSUSERID`))) left join `kaf_cpcorg` `c` on((`b`.`ORGID` = `c`.`ORGID`))) \n  order by `a`.`SYSUSERID`,`a`.`USERID`,`a`.`USERNAME`,`a`.`USERPASS`,`a`.`USERTYPE`,`a`.`EMPID`,`a`.`EMAIL`,`a`.`TELO`,`a`.`TELH`,`a`.`MOBIL`,`a`.`ACTIVED`,`a`.`ENABLEPWD`,`a`.`ENABLEMMSG`,`a`.`FEECENTER`,`a`.`ISPLANNER`,`a`.`ISWHEMPLOYEE`,`a`.`ISBUYER`,`a`.`ISQCEMPLOYEE`,`a`.`ISSALEEMPLOYEE`,`a`.`SEX`,`c`.`ENTID`) ;\n",
-		output: "alter view xab0100 as (select a.sysuserid as sysuserid, a.userid as userid, a.username as usernm, a.pwdhash as userpwd, a.usertype as usertype, a.empid as empid, a.email as email, a.telo as telo, a.telh as telh, a.mobil as mobil, (case a.actived when 1 then N when 2 then Y else Y end) as useyn, a.enablepwd as enablepwd, a.enablemmsg as enablemmsg, a.feecenter as feecenter, left(concat(ifnull(c.orgid, ), |), (char_length(concat(ifnull(c.orgid, ), |)) - 1)) as orgid, left(concat(ifnull(c.orgname, ), |), (char_length(concat(ifnull(c.orgname, ), |)) - 1)) as orgname, ifnull(a.isplanner, ) as isplanner, ifnull(a.iswhemployee, ) as iswhemployee, ifnull(a.isbuyer, ) as isbuyer, ifnull(a.isqcemployee, ) as isqceemployee, ifnull(a.issaleemployee, ) as issaleemployee, a.sex as sex, ifnull(c.entid, 3) as ORGANIZATION_ID, ifnull(a.noticeuser, ) as NOTICEUSER from kaf_cpcuser as a left join kaf_cpcorguser as b on ((a.sysuserid = b.sysuserid)) left join kaf_cpcorg as c on ((b.orgid = c.orgid)) order by a.sysuserid, a.userid, a.username, a.userpass, a.usertype, a.empid, a.email, a.telo, a.telh, a.mobil, a.actived, a.enablepwd, a.enablemmsg, a.feecenter, a.isplanner, a.iswhemployee, a.isbuyer, a.isqcemployee, a.issaleemployee, a.sex, c.entid)",
+		output: "alter view xab0100 as (select a.SYSUSERID as sysuserid, a.USERID as userid, a.USERNAME as usernm, a.PWDHASH as userpwd, a.USERTYPE as usertype, a.EMPID as empid, a.EMAIL as email, a.TELO as telo, a.TELH as telh, a.MOBIL as mobil, (case a.ACTIVED when 1 then N when 2 then Y else Y end) as useyn, a.ENABLEPWD as enablepwd, a.ENABLEMMSG as enablemmsg, a.FEECENTER as feecenter, left(concat(ifnull(c.ORGID, ), |), (char_length(concat(ifnull(c.ORGID, ), |)) - 1)) as orgid, left(concat(ifnull(c.ORGNAME, ), |), (char_length(concat(ifnull(c.ORGNAME, ), |)) - 1)) as orgname, ifnull(a.ISPLANNER, ) as isplanner, ifnull(a.ISWHEMPLOYEE, ) as iswhemployee, ifnull(a.ISBUYER, ) as isbuyer, ifnull(a.ISQCEMPLOYEE, ) as isqceemployee, ifnull(a.ISSALEEMPLOYEE, ) as issaleemployee, a.SEX as sex, ifnull(c.ENTID, 3) as ORGANIZATION_ID, ifnull(a.NOTICEUSER, ) as NOTICEUSER from kaf_cpcuser as a left join kaf_cpcorguser as b on ((a.SYSUSERID = b.SYSUSERID)) left join kaf_cpcorg as c on ((b.ORGID = c.ORGID)) order by a.SYSUSERID, a.USERID, a.USERNAME, a.USERPASS, a.USERTYPE, a.EMPID, a.EMAIL, a.TELO, a.TELH, a.MOBIL, a.ACTIVED, a.ENABLEPWD, a.ENABLEMMSG, a.FEECENTER, a.ISPLANNER, a.ISWHEMPLOYEE, a.ISBUYER, a.ISQCEMPLOYEE, a.ISSALEEMPLOYEE, a.SEX, c.ENTID)",
 	}, {
 		input: "select time from t1 as value",
 	}, {
@@ -231,6 +239,12 @@ var (
 		output: "alter database configuration for test as {transaction_isolation: REPEATABLE-READ, lower_case_table_names: 0} ",
 	}, {
 		input: "show profiles",
+	}, {
+		input:  "CREATE TABLE new_t1 LIKE t1",
+		output: "create table new_t1 like t1",
+	}, {
+		input:  "CREATE TABLE new_t1 LIKE test.t1",
+		output: "create table new_t1 like test.t1",
 	}, {
 		input: "show privileges",
 	}, {
@@ -262,7 +276,7 @@ var (
 		input: "select password from t1",
 	}, {
 		input:  "create table t1 (a datetime on update CURRENT_TIMESTAMP(1))",
-		output: "create table t1 (a datetime on update current_timestamp(1))",
+		output: "create table t1 (a datetime on update CURRENT_TIMESTAMP(1))",
 	}, {
 		input:  `create table table10 (a int primary key, b varchar(10)) checksum=0 COMMENT="asdf"`,
 		output: "create table table10 (a int primary key, b varchar(10)) checksum = 0 comment = 'asdf'",
@@ -285,597 +299,616 @@ var (
 	}, {
 		input:  "truncate table db1.t1",
 		output: "truncate table db1.t1",
-	}, {
-		input:  "explain select * from emp",
-		output: "explain select * from emp",
-	}, {
-		input:  "explain verbose select * from emp",
-		output: "explain (verbose) select * from emp",
-	}, {
-		input:  "explain analyze select * from emp",
-		output: "explain (analyze) select * from emp",
-	}, {
-		input:  "explain analyze verbose select * from emp",
-		output: "explain (analyze,verbose) select * from emp",
-	}, {
-		input:  "explain (analyze true,verbose false) select * from emp",
-		output: "explain (analyze true,verbose false) select * from emp",
-	}, {
-		input:  "explain (analyze true,verbose false,format json) select * from emp",
-		output: "explain (analyze true,verbose false,format json) select * from emp",
-	}, {
-		input:  "with t11 as (select * from t1) update t11 join t2 on t11.a = t2.b set t11.b = 1 where t2.a > 1",
-		output: "with t11 as (select * from t1) update t11 inner join t2 on t11.a = t2.b set t11.b = 1 where t2.a > 1",
-	}, {
-		input:  "UPDATE items,(SELECT id FROM items WHERE id IN (SELECT id FROM items WHERE retail / wholesale >= 1.3 AND quantity < 100)) AS discounted SET items.retail = items.retail * 0.9 WHERE items.id = discounted.id",
-		output: "update items cross join (select id from items where id in (select id from items where retail / wholesale >= 1.3 and quantity < 100)) as discounted set items.retail = items.retail * 0.9 where items.id = discounted.id",
-	}, {
-		input:  "with t2 as (select * from t1) DELETE FROM a1, a2 USING t1 AS a1 INNER JOIN t2 AS a2 WHERE a1.id=a2.id;",
-		output: "with t2 as (select * from t1) delete from a1, a2 using t1 as a1 inner join t2 as a2 where a1.id = a2.id",
-	}, {
-		input:  "DELETE FROM a1, a2 USING t1 AS a1 INNER JOIN t2 AS a2 WHERE a1.id=a2.id;",
-		output: "delete from a1, a2 using t1 as a1 inner join t2 as a2 where a1.id = a2.id",
-	}, {
-		input:  "DELETE a1, a2 FROM t1 AS a1 INNER JOIN t2 AS a2 WHERE a1.id=a2.id",
-		output: "delete from a1, a2 using t1 as a1 inner join t2 as a2 where a1.id = a2.id",
-	}, {
-		input:  "DELETE FROM t1, t2 USING t1 INNER JOIN t2 INNER JOIN t3 WHERE t1.id=t2.id AND t2.id=t3.id",
-		output: "delete from t1, t2 using t1 inner join t2 inner join t3 where t1.id = t2.id and t2.id = t3.id",
-	}, {
-		input:  "DELETE t1, t2 FROM t1 INNER JOIN t2 INNER JOIN t3 WHERE t1.id=t2.id AND t2.id=t3.id",
-		output: "delete from t1, t2 using t1 inner join t2 inner join t3 where t1.id = t2.id and t2.id = t3.id",
-	}, {
-		input: "select cast(false as varchar)",
-	}, {
-		input: "select cast(a as timestamp)",
-	}, {
-		input:  "select cast(\"2022-01-30\" as varchar);",
-		output: "select cast(2022-01-30 as varchar)",
-	}, {
-		input: "select cast(b as timestamp) from t2",
-	}, {
-		input:  "select cast(\"2022-01-01 01:23:34\" as varchar)",
-		output: "select cast(2022-01-01 01:23:34 as varchar)",
-	}, {
-		input:  "select serial_extract(col, 1 as varchar(3)) from t1",
-		output: "select serial_extract(col, 1 as varchar(3)) from t1",
-	}, {
-		input:  "select binary('Geeksforgeeks')",
-		output: "select binary(Geeksforgeeks)",
-	}, {
-		input:  "show schemas where 1",
-		output: "show databases where 1",
-	}, {
-		input: "select role from t1",
-	}, {
-		input:  "select a || 'hello' || 'world' from t1;",
-		output: "select concat(concat(a, hello), world) from t1",
-	}, {
-		input:  "select col || 'bar'",
-		output: "select concat(col, bar)",
-	}, {
-		input:  "select 'foo' || 'bar'",
-		output: "select concat(foo, bar)",
-	}, {
-		input:  "select 'a\\'b'",
-		output: "select a'b",
-	}, {
-		input:  "select char_length('\\n\\t\\r\\b\\0\\_\\%\\\\');",
-		output: "select char_length(\\n\\t\\r\\b\\0\\_\\%\\\\)",
-	}, {
-		input:  "select CAST('10 ' as unsigned);",
-		output: "select cast(10  as unsigned)",
-	}, {
-		input:  "select CAST('10 ' as unsigned integer);",
-		output: "select cast(10  as integer unsigned)",
-	}, {
-		input:  "SELECT ((+0) IN ((0b111111111111111111111111111111111111111111111111111),(rpad(1.0,2048,1)), (32767.1)));",
-		output: "select ((+0) in ((0b111111111111111111111111111111111111111111111111111), (rpad(1.0, 2048, 1)), (32767.1)))",
-	}, {
-		input: "select 0b111111111111111111111111111111111111111111111111111",
-	}, {
-		input:  "select date,format,to_date(date, format) as to_date from t1;",
-		output: "select date, format, to_date(date, format) as to_date from t1",
-	}, {
-		input:  "select date,format,concat_ws(',',to_date(date, format)) as con from t1;",
-		output: "select date, format, concat_ws(,, to_date(date, format)) as con from t1",
-	}, {
-		input:  "select date,format,to_date(date, format) as to_date from t1;",
-		output: "select date, format, to_date(date, format) as to_date from t1",
-	}, {
-		input:  "select date,format,concat_ws(\" \",to_date(date, format),'') as con from t1;",
-		output: "select date, format, concat_ws( , to_date(date, format), ) as con from t1",
-	}, {
-		input: "select schema()",
-	}, {
-		input: "select last_insert_id()",
-	}, {
-		input:  "show char set where charset = 'utf8mb4'",
-		output: "show charset where charset = utf8mb4",
-	}, {
-		input:  "show charset where charset = 'utf8mb4'",
-		output: "show charset where charset = utf8mb4",
-	}, {
-		input:  "show character set where charset = 'utf8mb4'",
-		output: "show charset where charset = utf8mb4",
-	}, {
-		input: "show config where a > 1",
-	}, {
-		input:  "set @@a = b",
-		output: "set a = b",
-	}, {
-		input:  "set @a = b",
-		output: "set a = b",
-	}, {
-		input:  "CREATE TABLE t1 (datetime datetime, timestamp timestamp, date date)",
-		output: "create table t1 (datetime datetime, timestamp timestamp, date date)",
-	}, {
-		input:  "SET timestamp=DEFAULT;",
-		output: "set timestamp = default",
-	}, {
-		input:  "SET timestamp=UNIX_TIMESTAMP('2011-07-31 10:00:00')",
-		output: "set timestamp = unix_timestamp(2011-07-31 10:00:00)",
-	}, {
-		input:  "select ltrim(\"a\"),rtrim(\"a\"),trim(BOTH \"\" from \"a\"),trim(BOTH \" \" from \"a\");",
-		output: "select ltrim(a), rtrim(a), trim(both  from a), trim(both   from a)",
-	}, {
-		input:  "select rpad('hello', -18446744073709551616, '1');",
-		output: "select rpad(hello, -18446744073709551616, 1)",
-	}, {
-		input:  "select rpad('hello', -18446744073709551616, '1');",
-		output: "select rpad(hello, -18446744073709551616, 1)",
-	}, {
-		input:  "SELECT CONCAT_WS(1471290948102948112341241204312904-23412412-4141, \"a\", \"b\")",
-		output: "select concat_ws(1471290948102948112341241204312904 - 23412412 - 4141, a, b)",
-	}, {
-		input:  "SELECT * FROM t1 WHERE a = ANY ( SELECT 1 UNION ( SELECT 1 UNION SELECT 1 ) );",
-		output: "select * from t1 where a = any (select 1 union (select 1 union select 1))",
-	}, {
-		input:  "SELECT * FROM t1 WHERE a = ANY ( SELECT 1 except ( SELECT 1 except SELECT 1 ) );",
-		output: "select * from t1 where a = any (select 1 except (select 1 except select 1))",
-	}, {
-		input:  "SELECT * FROM t1 WHERE a = ANY ( SELECT 1 intersect ( SELECT 1 intersect SELECT 1 ) );",
-		output: "select * from t1 where a = any (select 1 intersect (select 1 intersect select 1))",
-	}, {
-		input:  "SELECT * FROM t1 WHERE a = ANY ( SELECT 1 minus ( SELECT 1 minus SELECT 1 ) );",
-		output: "select * from t1 where a = any (select 1 minus (select 1 minus select 1))",
-	}, {
-		input:  "SELECT * FROM t1 WHERE (a,b) = ANY (SELECT a, max(b) FROM t1 GROUP BY a);",
-		output: "select * from t1 where (a, b) = any (select a, max(b) from t1 group by a)",
-	}, {
-		input:  "select  (1,2) != ALL (select * from t1);",
-		output: "select (1, 2) != all (select * from t1)",
-	}, {
-		input:  "select s1, s1 = ANY (SELECT s1 FROM t2) from t1;",
-		output: "select s1, s1 = any (select s1 from t2) from t1",
-	}, {
-		input:  "select * from t3 where a >= some (select b from t2);",
-		output: "select * from t3 where a >= some (select b from t2)",
-	}, {
-		input:  "select 9999999999999999999;",
-		output: "select 9999999999999999999",
-	}, {
-		input:  "select substring('hello', -18446744073709551616, -18446744073709551616);",
-		output: "select substring(hello, -18446744073709551616, -18446744073709551616)",
-	}, {
-		input:  "select substring('hello', -18446744073709551616, 1);",
-		output: "select substring(hello, -18446744073709551616, 1)",
-	}, {
-		input:  "select space(18446744073709551616);",
-		output: "select space(18446744073709551616)",
-	}, {
-		input:  "select space(-18446744073709551616);",
-		output: "select space(-18446744073709551616)",
-	}, {
-		input:  "select ltrim(\"a\"),rtrim(\"a\"),trim(BOTH \"\" from \"a\"),trim(BOTH \" \" from \"a\");",
-		output: "select ltrim(a), rtrim(a), trim(both  from a), trim(both   from a)",
-	}, {
-		input:  "SELECT (rpad(1.0, 2048,1)) IS NOT FALSE;",
-		output: "select (rpad(1.0, 2048, 1)) is not false",
-	}, {
-		input:  "SELECT 1 is unknown;",
-		output: "select 1 is unknown",
-	}, {
-		input:  "SELECT false is not unknown;",
-		output: "select false is not unknown",
-	}, {
-		input:  "SELECT 1 is true;",
-		output: "select 1 is true",
-	}, {
-		input:  "SELECT false is not true;",
-		output: "select false is not true",
-	}, {
-		input:  "SELECT 1 is false;",
-		output: "select 1 is false",
-	}, {
-		input:  "SELECT false is not false;",
-		output: "select false is not false",
-	}, {
-		input:  "SELECT FROM_UNIXTIME(99999999999999999999999999999999999999999999999999999999999999999);",
-		output: "select from_unixtime(99999999999999999999999999999999999999999999999999999999999999999)",
-	}, {
-		input:  "SELECT FROM_UNIXTIME(2147483647) AS c1, FROM_UNIXTIME(2147483648) AS c2, FROM_UNIXTIME(2147483647.9999999) AS c3, FROM_UNIXTIME(32536771199) AS c4,FROM_UNIXTIME(32536771199.9999999) AS c5;",
-		output: "select from_unixtime(2147483647) as c1, from_unixtime(2147483648) as c2, from_unixtime(2147483647.9999999) as c3, from_unixtime(32536771199) as c4, from_unixtime(32536771199.9999999) as c5",
-	}, {
-		input:  "select date_add(\"1997-12-31 23:59:59\",INTERVAL -100000 YEAR);",
-		output: "select date_add(1997-12-31 23:59:59, interval(-100000, year))",
-	}, {
-		input:  "SELECT ADDDATE(DATE'2021-01-01', INTERVAL 1 DAY);",
-		output: "select adddate(date(2021-01-01), interval(1, day))",
-	}, {
-		input:  "select '2007-01-01' + interval a day from t1;",
-		output: "select 2007-01-01 + interval(a, day) from t1",
-	}, {
-		input:  "SELECT CAST(COALESCE(t0.c0, -1) AS UNSIGNED) IS TRUE FROM t0;",
-		output: "select cast(coalesce(t0.c0, -1) as unsigned) is true from t0",
-	}, {
-		input:  "select Fld1, variance(Fld2) as q from t1 group by Fld1 having q is not null;",
-		output: "select fld1, variance(fld2) as q from t1 group by fld1 having q is not null",
-	}, {
-		input:  "select variance(-99999999999999999.99999);",
-		output: "select variance(-99999999999999999.99999)",
-	}, {
-		input:  "select Fld1, std(Fld2) from t1 group by Fld1 having variance(Fld2) is not null",
-		output: "select fld1, std(fld2) from t1 group by fld1 having variance(fld2) is not null",
-	}, {
-		input:  "select a.f1 as a, a.f1 > b.f1 as gt, a.f1 < b.f1 as lt, a.f1<=>b.f1 as eq from t1 a, t1 b;",
-		output: "select a.f1 as a, a.f1 > b.f1 as gt, a.f1 < b.f1 as lt, a.f1 <=> b.f1 as eq from t1 as a cross join t1 as b",
-	}, {
-		input:  "select var_samp(s) as '0.5', var_pop(s) as '0.25' from bug22555;",
-		output: "select var_samp(s) as 0.5, var_pop(s) as 0.25 from bug22555",
-	}, {
-		input:  "select var_samp(s) as 'null', var_pop(s) as 'null' from bug22555;",
-		output: "select var_samp(s) as null, var_pop(s) as null from bug22555",
-	}, {
-		input: "select cast(variance(ff) as decimal(10, 3)) from t2",
-	}, {
-		input:  "SELECT GROUP_CONCAT(DISTINCT 2) from t1",
-		output: "select group_concat(distinct 2, ,) from t1",
-	}, {
-		input:  "SELECT GROUP_CONCAT(DISTINCT a order by a) from t1",
-		output: "select group_concat(distinct a, ,order by a) from t1",
-	}, {
-		input: "select variance(2) from t1",
-	}, {
-		input:  "select SQL_BIG_RESULT bit_and(col), bit_or(col) from t1 group by col;",
-		output: "select sql_big_result bit_and(col), bit_or(col) from t1 group by col",
-	}, {
-		input: "select sql_small_result t2.id, avg(rating + 0.0e0) from t2 group by t2.id",
-	}, {
-		input: "select sql_small_result t2.id, avg(rating) from t2 group by t2.id",
-	}, {
-		input:  "select any_value(name), avg(value1), std(value1), variance(value1) from t1, t2 where t1.id = t2.id group by t1.id",
-		output: "select any_value(name), avg(value1), std(value1), variance(value1) from t1 cross join t2 where t1.id = t2.id group by t1.id",
-	}, {
-		input: "select id, avg(value1), std(value1), variance(value1) from t1 group by id",
-	}, {
-		input: "select i, count(*), std(s1 / s2) from bug22555 group by i order by i",
-	}, {
-		input: "select i, count(*), variance(s1 / s2) from bug22555 group by i order by i",
-	}, {
-		input: "select i, count(*), variance(s1 / s2) from bug22555 group by i order by i",
-	}, {
-		input:  "select name, avg(value1), std(value1), variance(value1) from t1, t2 where t1.id = t2.id group by t1.id",
-		output: "select name, avg(value1), std(value1), variance(value1) from t1 cross join t2 where t1.id = t2.id group by t1.id",
-	}, {
-		input:  "select sum(all a),count(all a),avg(all a),std(all a),variance(all a),bit_or(all a),bit_and(all a),min(all a),max(all a),min(all c),max(all c) from t",
-		output: "select sum(all a), count(all a), avg(all a), std(all a), variance(all a), bit_or(all a), bit_and(all a), min(all a), max(all a), min(all c), max(all c) from t",
-	}, {
-		input:  "insert into t1 values (date_add(NULL, INTERVAL 1 DAY));",
-		output: "insert into t1 values (date_add(null, interval(1, day)))",
-	}, {
-		input:  "replace into t1 values (date_add(NULL, INTERVAL 1 DAY));",
-		output: "replace into t1 values (date_add(null, interval(1, day)))",
-	}, {
-		input:  "SELECT DATE_ADD('2022-02-28 23:59:59.9999', INTERVAL 1 SECOND) '1 second later';",
-		output: "select date_add(2022-02-28 23:59:59.9999, interval(1, second)) as 1 second later",
-	}, {
-		input:  "SELECT sum(a) as 'hello' from t1;",
-		output: "select sum(a) as hello from t1",
-	}, {
-		input:  "select stream from t1;",
-		output: "select stream from t1",
-	}, {
-		input:  "SELECT DATE_ADD(\"2017-06-15\", INTERVAL -10 MONTH);",
-		output: "select date_add(2017-06-15, interval(-10, month))",
-	}, {
-		input:  "create table t1 (a varchar)",
-		output: "create table t1 (a varchar)",
-	}, {
-		input:  "SELECT (CAST(0x7FFFFFFFFFFFFFFF AS char));",
-		output: "select (cast(0x7fffffffffffffff as varchar))",
-	}, {
-		input:  "select cast(-19999999999999999999 as signed);",
-		output: "select cast(-19999999999999999999 as signed)",
-	}, {
-		input:  "select cast(19999999999999999999 as signed);",
-		output: "select cast(19999999999999999999 as signed)",
-	}, {
-		input:  "select date_sub(now(), interval 1 day) from t1;",
-		output: "select date_sub(now(), interval(1, day)) from t1",
-	}, {
-		input:  "select date_sub(now(), interval '1' day) from t1;",
-		output: "select date_sub(now(), interval(1, day)) from t1",
-	}, {
-		input:  "select date_add(now(), interval '1' day) from t1;",
-		output: "select date_add(now(), interval(1, day)) from t1",
-	}, {
-		input:  "SELECT md.datname as `Database` FROM TT md",
-		output: "select md.datname as Database from tt as md",
-	}, {
-		input:  "select * from t where a = `Hello`",
-		output: "select * from t where a = hello",
-	}, {
-		input:  "CREATE VIEW v AS SELECT * FROM t WHERE t.id = f(t.name);",
-		output: "create view v as select * from t where t.id = f(t.name)",
-	}, {
-		input:  "ALTER VIEW v AS SELECT * FROM t WHERE t.id = f(t.name);",
-		output: "alter view v as select * from t where t.id = f(t.name)",
-	}, {
-		input:  "CREATE VIEW v AS SELECT qty, price, qty*price AS value FROM t;",
-		output: "create view v as select qty, price, qty * price as value from t",
-	}, {
-		input:  "ALTER VIEW v AS SELECT qty, price, qty*price AS value FROM t;",
-		output: "alter view v as select qty, price, qty * price as value from t",
-	}, {
-		input: "create view v_today (today) as select current_day from t",
-	}, {
-		input: "alter view v_today (today) as select current_day from t",
-	}, {
-		input: "explain (analyze true,verbose false) select * from emp",
-	}, {
-		input: "select quarter from ontime limit 1",
-	}, {
-		input: "select month from ontime limit 1",
-	}, {
-		input: "with tw as (select * from t2), tf as (select * from t3) select * from tw where a > 1",
-	}, {
-		input: "with tw as (select * from t2) select * from tw where a > 1",
-	}, {
-		input:  "create table t (a double(13))  // comment",
-		output: "create table t (a double(13))",
-	}, {
-		input:  "create table t (a double(13))  -- comment",
-		output: "create table t (a double(13))",
-	}, {
-		input: "select a as promo_revenue from (select * from r) as c_orders(c_custkey, c_count)",
-	}, {
-		input:  "select extract(year from l_shipdate) as l_year from t",
-		output: "select extract(year, l_shipdate) as l_year from t",
-	}, {
-		input:  "select * from R join S on R.uid = S.uid where l_shipdate <= date '1998-12-01' - interval '112' day",
-		output: "select * from r inner join s on r.uid = s.uid where l_shipdate <= date(1998-12-01) - interval(112, day)",
-	}, {
-		input: "create table deci_table (a decimal(10, 5))",
-	}, {
-		input: "create table deci_table (a decimal(20, 5))",
-	}, {
-		input:  "create table deci_table (a decimal)",
-		output: "create table deci_table (a decimal(38))",
-	}, {
-		input: "create table deci_table (a decimal(20))",
-	}, {
-		input: "select substr(name, 5) from t1",
-	}, {
-		input: "select substring(name, 5) from t1",
-	}, {
-		input: "select substr(name, 5, 3) from t1",
-	}, {
-		input: "select substring(name, 5, 3) from t1",
-	}, {
-		input:  "select * from R join S on R.uid = S.uid",
-		output: "select * from r inner join s on r.uid = s.uid",
-	}, {
-		input:  "create table t (a int, b char, key idx1 type zonemap (a, b))",
-		output: "create table t (a int, b char, index idx1 using zonemap (a, b))",
-	}, {
-		input: "create table t (a int, index idx1 using zonemap (a))",
-	}, {
-		input: "create table t (a int, index idx1 using bsi (a))",
-	}, {
-		input:  "set @@sql_mode ='TRADITIONAL'",
-		output: "set sql_mode = TRADITIONAL",
-	}, {
-		input:  "set @@session.sql_mode ='TRADITIONAL'",
-		output: "set sql_mode = TRADITIONAL",
-	}, {
-		input:  "set session sql_mode ='TRADITIONAL'",
-		output: "set sql_mode = TRADITIONAL",
-	}, {
-		input:  "select @session.tx_isolation",
-		output: "select @session.tx_isolation",
-	}, {
-		input:  "select @@session.tx_isolation",
-		output: "select @@tx_isolation",
-	}, {
-		input:  "/* mysql-connector-java-8.0.27 (Revision: e920b979015ae7117d60d72bcc8f077a839cd791) */SHOW VARIABLES;",
-		output: "show variables",
-	}, {
-		input: "create index idx1 using bsi on a (a)",
-	}, {
-		input:  "INSERT INTO pet VALUES row('Sunsweet05','Dsant05','otter','f',30.11,2), row('Sunsweet06','Dsant06','otter','m',30.11,3);",
-		output: "insert into pet values (Sunsweet05, Dsant05, otter, f, 30.11, 2), (Sunsweet06, Dsant06, otter, m, 30.11, 3)",
-	}, {
-		input:  "INSERT INTO t1 SET f1 = -1.0e+30, f2 = 'exore', f3 = 123",
-		output: "insert into t1 (f1, f2, f3) values (-1.0e+30, exore, 123)",
-	}, {
-		input:  "INSERT INTO t1 SET f1 = -1;",
-		output: "insert into t1 (f1) values (-1)",
-	}, {
-		input:  "INSERT INTO t1 (a,b,c) VALUES (1,2,3),(4,5,6) ON DUPLICATE KEY UPDATE c=VALUES(a)+VALUES(b), b=VALUES(a)+VALUES(c);",
-		output: "insert into t1 (a, b, c) values (1, 2, 3), (4, 5, 6) on duplicate key update c = values(a) + values(b), b = values(a) + values(c)",
-	}, {
-		input:  "INSERT INTO t1 (a,b,c) VALUES (1,2,3),(4,5,6) ON DUPLICATE KEY UPDATE c=2, b=3;",
-		output: "insert into t1 (a, b, c) values (1, 2, 3), (4, 5, 6) on duplicate key update c = 2, b = 3",
-	}, {
-		input:  "INSERT INTO t1 (a,b,c) VALUES (1,2,3),(4,5,6) ON DUPLICATE KEY UPDATE c=2/2, b=3;",
-		output: "insert into t1 (a, b, c) values (1, 2, 3), (4, 5, 6) on duplicate key update c = 2 / 2, b = 3",
-	}, {
-		input:  "insert into t1 values (18446744073709551615), (0xFFFFFFFFFFFFFFFE), (18446744073709551613), (18446744073709551612)",
-		output: "insert into t1 values (18446744073709551615), (0xfffffffffffffffe), (18446744073709551613), (18446744073709551612)",
-	}, {
-		input:  "REPLACE INTO pet VALUES row('Sunsweet05','Dsant05','otter','f',30.11,2), row('Sunsweet06','Dsant06','otter','m',30.11,3);",
-		output: "replace into pet values (Sunsweet05, Dsant05, otter, f, 30.11, 2), (Sunsweet06, Dsant06, otter, m, 30.11, 3)",
-	}, {
-		input:  "REPLACE INTO t1 SET f1 = -1.0e+30, f2 = 'exore', f3 = 123",
-		output: "replace into t1 (f1, f2, f3) values (-1.0e+30, exore, 123)",
-	}, {
-		input:  "REPLACE INTO t1 SET f1 = -1;",
-		output: "replace into t1 (f1) values (-1)",
-	}, {
-		input:  "replace into t1 values (18446744073709551615), (0xFFFFFFFFFFFFFFFE), (18446744073709551613), (18446744073709551612)",
-		output: "replace into t1 values (18446744073709551615), (0xfffffffffffffffe), (18446744073709551613), (18446744073709551612)",
-	}, {
-		input:  "create table t (a int) properties(\"host\" = \"127.0.0.1\", \"port\" = \"8239\", \"user\" = \"mysql_user\", \"password\" = \"mysql_passwd\")",
-		output: "create table t (a int) properties(host = 127.0.0.1, port = 8239, user = mysql_user, password = mysql_passwd)",
-	}, {
-		input:  "create table t (a int) properties('a' = 'b')",
-		output: "create table t (a int) properties(a = b)",
-	}, {
-		input: "create table t (a int, b char, check (1 + 1) enforced)",
-	}, {
-		input: "create table t (a int, b char, foreign key sdf (a, b) references b(a asc, b desc))",
-	}, {
-		input:  "create table t (a int, b char, constraint sdf foreign key (a, b) references b(a asc, b desc))",
-		output: "create table t (a int, b char, constraint sdf foreign key (a, b) references b(a asc, b desc))",
-	}, {
-		input:  "create table t (a int, b char, constraint sdf foreign key dddd (a, b) references b(a asc, b desc))",
-		output: "create table t (a int, b char, constraint sdf foreign key dddd (a, b) references b(a asc, b desc))",
-	}, {
-		input: "create table t (a int, b char, unique key idx (a, b))",
-	}, {
-		input: "create table t (a int, b char, index if not exists idx (a, b))",
-	}, {
-		input: "create table t (a int, b char, fulltext idx (a, b))",
-	}, {
-		input:  "create table t (a int, b char, constraint p1 primary key idx using hash (a, b))",
-		output: "create table t (a int, b char, constraint p1 primary key idx using none (a, b))",
-	}, {
-		input: "create table t (a int, b char, primary key idx (a, b))",
-	}, {
-		input:  "create dynamic table t as select a from t1",
-		output: "create dynamic table t as select a from t1",
-	}, {
-		input:  "create dynamic table t as select a from t1 with (\"type\"='kafka')",
-		output: "create dynamic table t as select a from t1 with (type = kafka)",
-	}, {
-		input:  "create external table t (a int) infile 'data.txt'",
-		output: "create external table t (a int) infile 'data.txt'",
-	}, {
-		input: "create external table t (a int) infile {'filepath'='data.txt', 'compression'='none'}",
-	}, {
-		input: "create external table t (a int) infile {'filepath'='data.txt', 'compression'='auto'}",
-	}, {
-		input: "create external table t (a int) infile {'filepath'='data.txt', 'compression'='lz4'}",
-	}, {
-		input:  "create external table t (a int) infile 'data.txt' FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY ''",
-		output: "create external table t (a int) infile 'data.txt' fields terminated by '' optionally enclosed by '' lines terminated by ''",
-	}, {
-		input:  "SET NAMES 'utf8mb4' COLLATE 'utf8mb4_general_ci'",
-		output: "set names = utf8mb4 utf8mb4_general_ci",
-	}, {
-		input: "insert into cms values (null, default)",
-	}, {
-		input: "replace into cms values (null, default)",
-	}, {
-		input:  "create database `show`",
-		output: "create database show",
-	}, {
-		input: "create table table16 (1a20 int, 1e int)",
-	}, {
-		input: "insert into t2 values (-3, 2)",
-	}, {
-		input: "replace into t2 values (-3, 2)",
-	}, {
-		input:  "select spID,userID,score from t1 where spID>(userID-1);",
-		output: "select spid, userid, score from t1 where spid > (userid - 1)",
-	}, {
-		input:  "CREATE TABLE t2(product VARCHAR(32),country_id INTEGER NOT NULL,year INTEGER,profit INTEGER)",
-		output: "create table t2 (product varchar(32), country_id integer not null, year integer, profit integer)",
-	}, {
-		input: "insert into numtable values (255, 65535, 4294967295, 18446744073709551615)",
-	}, {
-		input: "replace into numtable values (255, 65535, 4294967295, 18446744073709551615)",
-	}, {
-		input: "create table numtable (a tinyint unsigned, b smallint unsigned, c int unsigned, d bigint unsigned)",
-	}, {
-		input:  "SELECT userID as user, MAX(score) as max FROM t1 GROUP BY userID order by user",
-		output: "select userid as user, max(score) as max from t1 group by userid order by user",
-	}, {
-		input:  "load data infile 'test/loadfile5' ignore INTO TABLE T.A FIELDS TERMINATED BY  ',' (@,@,c,d,e,f)",
-		output: "load data infile test/loadfile5 ignore into table t.a fields terminated by , (, , c, d, e, f)",
-	}, {
-		input:  "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '';",
-		output: "load data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by ''",
-	}, {
-		input:  "load data local infile 'data' replace into table db.a (a, b, @vc, @vd) set a = @vc != 0, d = @vd != 1",
-		output: "load data local infile data replace into table db.a (a, b, @vc, @vd) set a = @vc != 0, d = @vd != 1",
-	}, {
-		input:  "load data local infile 'data' replace into table db.a lines starting by '#' terminated by '\t' ignore 2 lines",
-		output: "load data local infile data replace into table db.a lines starting by # terminated by 	 ignore 2 lines",
-	}, {
-		input:  "load data local infile 'data' replace into table db.a lines starting by '#' terminated by '\t' ignore 2 rows",
-		output: "load data local infile data replace into table db.a lines starting by # terminated by 	 ignore 2 lines",
-	}, {
-		input:  "load data local infile 'data' replace into table db.a lines terminated by '\t' starting by '#' ignore 2 lines",
-		output: "load data local infile data replace into table db.a lines starting by # terminated by 	 ignore 2 lines",
-	}, {
-		input:  "load data local infile 'data' replace into table db.a lines terminated by '\t' starting by '#' ignore 2 rows",
-		output: "load data local infile data replace into table db.a lines starting by # terminated by 	 ignore 2 lines",
-	}, {
-		input:  "load data infile 'data.txt' into table db.a fields terminated by '\t' escaped by '\t'",
-		output: "load data infile data.txt into table db.a fields terminated by \t escaped by \t",
-	}, {
-		input:  "load data infile 'data.txt' into table db.a fields terminated by '\t' enclosed by '\t' escaped by '\t'",
-		output: "load data infile data.txt into table db.a fields terminated by \t enclosed by \t escaped by \t",
-	}, {
-		input:  "load data infile 'data.txt' into table db.a",
-		output: "load data infile data.txt into table db.a",
-	}, {
-		input: "load data infile {'filepath'='data.txt', 'compression'='auto'} into table db.a",
-	}, {
-		input: "load data infile {'filepath'='data.txt', 'compression'='none'} into table db.a",
-	}, {
-		input:  "create external table t (a int) infile 'data.txt'",
-		output: "create external table t (a int) infile 'data.txt'",
-	}, {
-		input: "create external table t (a int) infile {'filepath'='data.txt', 'compression'='none'}",
-	}, {
-		input: "create external table t (a int) infile {'filepath'='data.txt', 'compression'='auto'}",
-	}, {
-		input: "create external table t (a int) infile {'filepath'='data.txt', 'compression'='lz4'}",
-	}, {
-		input:  "create external table t (a int) infile 'data.txt' FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY ''",
-		output: "create external table t (a int) infile 'data.txt' fields terminated by '' optionally enclosed by '' lines terminated by ''",
-	}, {
-		input:  "create external table t (a int) URL s3option{'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'}",
-		output: "create external table t (a int) url s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'}",
-	}, {
-		input:  "load data infile 'test/loadfile5' ignore INTO TABLE T.A FIELDS TERMINATED BY  ',' (@,@,c,d,e,f)",
-		output: "load data infile test/loadfile5 ignore into table t.a fields terminated by , (, , c, d, e, f)",
-	}, {
-		input:  "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '';",
-		output: "load data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by ''",
-	}, {
-		input: "load data infile {'filepath'='data.txt', 'compression'='auto'} into table db.a",
-	}, {
-		input: "load data infile {'filepath'='data.txt', 'compression'='none'} into table db.a",
-	}, {
-		input: "load data infile {'filepath'='data.txt', 'compression'='GZIP'} into table db.a",
-	}, {
-		input: "load data infile {'filepath'='data.txt', 'compression'='BZIP2'} into table db.a",
-	}, {
-		input: "load data infile {'filepath'='data.txt', 'compression'='FLATE'} into table db.a",
-	}, {
-		input: "load data infile {'filepath'='data.txt', 'compression'='LZW'} into table db.a",
-	}, {
-		input: "load data infile {'filepath'='data.txt', 'compression'='ZLIB'} into table db.a",
-	}, {
-		input: "load data infile {'filepath'='data.txt', 'compression'='LZ4'} into table db.a",
-	}, {
-		input:  "LOAD DATA URL s3option{'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'} into table db.a",
-		output: "load data url s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'} into table db.a",
 	},
+		{
+			input:  "upgrade account all with retry 10",
+			output: "upgrade account all with retry 10",
+		}, {
+			input:  "upgrade account all",
+			output: "upgrade account all",
+		}, {
+			input:  "upgrade account 'acc1' with retry 5",
+			output: "upgrade account acc1 with retry 5",
+		}, {
+			input:  "upgrade account 'acc1'",
+			output: "upgrade account acc1",
+		}, {
+			input:  "explain select * from emp",
+			output: "explain select * from emp",
+		}, {
+			input:  "explain verbose select * from emp",
+			output: "explain (verbose) select * from emp",
+		}, {
+			input:  "explain analyze select * from emp",
+			output: "explain (analyze) select * from emp",
+		}, {
+			input:  "explain analyze verbose select * from emp",
+			output: "explain (analyze,verbose) select * from emp",
+		}, {
+			input:  "explain (analyze true,verbose false) select * from emp",
+			output: "explain (analyze true,verbose false) select * from emp",
+		}, {
+			input:  "explain (analyze true,verbose false,format json) select * from emp",
+			output: "explain (analyze true,verbose false,format json) select * from emp",
+		}, {
+			input:  "with t11 as (select * from t1) update t11 join t2 on t11.a = t2.b set t11.b = 1 where t2.a > 1",
+			output: "with t11 as (select * from t1) update t11 inner join t2 on t11.a = t2.b set t11.b = 1 where t2.a > 1",
+		}, {
+			input:  "UPDATE items,(SELECT id FROM items WHERE id IN (SELECT id FROM items WHERE retail / wholesale >= 1.3 AND quantity < 100)) AS discounted SET items.retail = items.retail * 0.9 WHERE items.id = discounted.id",
+			output: "update items cross join (select id from items where id in (select id from items where retail / wholesale >= 1.3 and quantity < 100)) as discounted set items.retail = items.retail * 0.9 where items.id = discounted.id",
+		}, {
+			input:  "with t2 as (select * from t1) DELETE FROM a1, a2 USING t1 AS a1 INNER JOIN t2 AS a2 WHERE a1.id=a2.id;",
+			output: "with t2 as (select * from t1) delete from a1, a2 using t1 as a1 inner join t2 as a2 where a1.id = a2.id",
+		}, {
+			input:  "DELETE FROM a1, a2 USING t1 AS a1 INNER JOIN t2 AS a2 WHERE a1.id=a2.id;",
+			output: "delete from a1, a2 using t1 as a1 inner join t2 as a2 where a1.id = a2.id",
+		}, {
+			input:  "DELETE a1, a2 FROM t1 AS a1 INNER JOIN t2 AS a2 WHERE a1.id=a2.id",
+			output: "delete from a1, a2 using t1 as a1 inner join t2 as a2 where a1.id = a2.id",
+		}, {
+			input:  "DELETE FROM t1, t2 USING t1 INNER JOIN t2 INNER JOIN t3 WHERE t1.id=t2.id AND t2.id=t3.id",
+			output: "delete from t1, t2 using t1 inner join t2 inner join t3 where t1.id = t2.id and t2.id = t3.id",
+		}, {
+			input:  "DELETE t1, t2 FROM t1 INNER JOIN t2 INNER JOIN t3 WHERE t1.id=t2.id AND t2.id=t3.id",
+			output: "delete from t1, t2 using t1 inner join t2 inner join t3 where t1.id = t2.id and t2.id = t3.id",
+		}, {
+			input: "select cast(false as varchar)",
+		}, {
+			input: "select cast(a as timestamp)",
+		}, {
+			input:  "select cast(\"2022-01-30\" as varchar);",
+			output: "select cast(2022-01-30 as varchar)",
+		}, {
+			input: "select cast(b as timestamp) from t2",
+		}, {
+			input:  "select cast(\"2022-01-01 01:23:34\" as varchar)",
+			output: "select cast(2022-01-01 01:23:34 as varchar)",
+		}, {
+			input:  "select serial_extract(col, 1 as varchar(3)) from t1",
+			output: "select serial_extract(col, 1 as varchar(3)) from t1",
+		}, {
+			input:  "select binary('Geeksforgeeks')",
+			output: "select binary(Geeksforgeeks)",
+		}, {
+			input:  "show schemas where 1",
+			output: "show databases where 1",
+		}, {
+			input: "select role from t1",
+		}, {
+			input:  "select a || 'hello' || 'world' from t1;",
+			output: "select concat(concat(a, hello), world) from t1",
+		}, {
+			input:  "select col || 'bar'",
+			output: "select concat(col, bar)",
+		}, {
+			input:  "select 'foo' || 'bar'",
+			output: "select concat(foo, bar)",
+		}, {
+			input:  "select 'a\\'b'",
+			output: "select a'b",
+		}, {
+			input:  "select char_length('\\n\\t\\r\\b\\0\\_\\%\\\\');",
+			output: "select char_length(\\n\\t\\r\\b\\0\\_\\%\\\\)",
+		}, {
+			input:  "select CAST('10 ' as unsigned);",
+			output: "select cast(10  as unsigned)",
+		}, {
+			input:  "select CAST('10 ' as unsigned integer);",
+			output: "select cast(10  as integer unsigned)",
+		}, {
+			input:  "SELECT ((+0) IN ((0b111111111111111111111111111111111111111111111111111),(rpad(1.0,2048,1)), (32767.1)));",
+			output: "select ((+0) in ((0b111111111111111111111111111111111111111111111111111), (rpad(1.0, 2048, 1)), (32767.1)))",
+		}, {
+			input: "select 0b111111111111111111111111111111111111111111111111111",
+		}, {
+			input:  "select date,format,to_date(date, format) as to_date from t1;",
+			output: "select date, format, to_date(date, format) as to_date from t1",
+		}, {
+			input:  "select date,format,concat_ws(',',to_date(date, format)) as con from t1;",
+			output: "select date, format, concat_ws(,, to_date(date, format)) as con from t1",
+		}, {
+			input:  "select date,format,to_date(date, format) as to_date from t1;",
+			output: "select date, format, to_date(date, format) as to_date from t1",
+		}, {
+			input:  "select date,format,concat_ws(\" \",to_date(date, format),'') as con from t1;",
+			output: "select date, format, concat_ws( , to_date(date, format), ) as con from t1",
+		}, {
+			input: "select schema()",
+		}, {
+			input: "select last_insert_id()",
+		}, {
+			input:  "show char set where charset = 'utf8mb4'",
+			output: "show charset where charset = utf8mb4",
+		}, {
+			input:  "show charset where charset = 'utf8mb4'",
+			output: "show charset where charset = utf8mb4",
+		}, {
+			input:  "show character set where charset = 'utf8mb4'",
+			output: "show charset where charset = utf8mb4",
+		}, {
+			input: "show config where a > 1",
+		}, {
+			input:  "set @@a = b",
+			output: "set a = b",
+		}, {
+			input:  "set @a = b",
+			output: "set a = b",
+		}, {
+			input:  "CREATE TABLE t1 (datetime datetime, timestamp timestamp, date date)",
+			output: "create table t1 (datetime datetime, timestamp timestamp, date date)",
+		}, {
+			input:  "SET timestamp=DEFAULT;",
+			output: "set timestamp = default",
+		}, {
+			input:  "SET timestamp=UNIX_TIMESTAMP('2011-07-31 10:00:00')",
+			output: "set timestamp = UNIX_TIMESTAMP(2011-07-31 10:00:00)",
+		}, {
+			input:  "select ltrim(\"a\"),rtrim(\"a\"),trim(BOTH \"\" from \"a\"),trim(BOTH \" \" from \"a\");",
+			output: "select ltrim(a), rtrim(a), trim(both  from a), trim(both   from a)",
+		}, {
+			input:  "select rpad('hello', -18446744073709551616, '1');",
+			output: "select rpad(hello, -18446744073709551616, 1)",
+		}, {
+			input:  "select rpad('hello', -18446744073709551616, '1');",
+			output: "select rpad(hello, -18446744073709551616, 1)",
+		}, {
+			input:  "SELECT CONCAT_WS(1471290948102948112341241204312904-23412412-4141, \"a\", \"b\")",
+			output: "select CONCAT_WS(1471290948102948112341241204312904 - 23412412 - 4141, a, b)",
+		}, {
+			input:  "SELECT * FROM t1 WHERE a = ANY ( SELECT 1 UNION ( SELECT 1 UNION SELECT 1 ) );",
+			output: "select * from t1 where a = any (select 1 union (select 1 union select 1))",
+		}, {
+			input:  "SELECT * FROM t1 WHERE a = ANY ( SELECT 1 except ( SELECT 1 except SELECT 1 ) );",
+			output: "select * from t1 where a = any (select 1 except (select 1 except select 1))",
+		}, {
+			input:  "SELECT * FROM t1 WHERE a = ANY ( SELECT 1 intersect ( SELECT 1 intersect SELECT 1 ) );",
+			output: "select * from t1 where a = any (select 1 intersect (select 1 intersect select 1))",
+		}, {
+			input:  "SELECT * FROM t1 WHERE a = ANY ( SELECT 1 minus ( SELECT 1 minus SELECT 1 ) );",
+			output: "select * from t1 where a = any (select 1 minus (select 1 minus select 1))",
+		}, {
+			input:  "SELECT * FROM t1 WHERE (a,b) = ANY (SELECT a, max(b) FROM t1 GROUP BY a);",
+			output: "select * from t1 where (a, b) = any (select a, max(b) from t1 group by a)",
+		}, {
+			input:  "select  (1,2) != ALL (select * from t1);",
+			output: "select (1, 2) != all (select * from t1)",
+		}, {
+			input:  "select s1, s1 = ANY (SELECT s1 FROM t2) from t1;",
+			output: "select s1, s1 = any (select s1 from t2) from t1",
+		}, {
+			input:  "select * from t3 where a >= some (select b from t2);",
+			output: "select * from t3 where a >= some (select b from t2)",
+		}, {
+			input:  "select 9999999999999999999;",
+			output: "select 9999999999999999999",
+		}, {
+			input:  "select substring('hello', -18446744073709551616, -18446744073709551616);",
+			output: "select substring(hello, -18446744073709551616, -18446744073709551616)",
+		}, {
+			input:  "select substring('hello', -18446744073709551616, 1);",
+			output: "select substring(hello, -18446744073709551616, 1)",
+		}, {
+			input:  "select space(18446744073709551616);",
+			output: "select space(18446744073709551616)",
+		}, {
+			input:  "select space(-18446744073709551616);",
+			output: "select space(-18446744073709551616)",
+		}, {
+			input:  "select ltrim(\"a\"),rtrim(\"a\"),trim(BOTH \"\" from \"a\"),trim(BOTH \" \" from \"a\");",
+			output: "select ltrim(a), rtrim(a), trim(both  from a), trim(both   from a)",
+		}, {
+			input:  "SELECT (rpad(1.0, 2048,1)) IS NOT FALSE;",
+			output: "select (rpad(1.0, 2048, 1)) is not false",
+		}, {
+			input:  "SELECT 1 is unknown;",
+			output: "select 1 is unknown",
+		}, {
+			input:  "SELECT false is not unknown;",
+			output: "select false is not unknown",
+		}, {
+			input:  "SELECT 1 is true;",
+			output: "select 1 is true",
+		}, {
+			input:  "SELECT false is not true;",
+			output: "select false is not true",
+		}, {
+			input:  "SELECT 1 is false;",
+			output: "select 1 is false",
+		}, {
+			input:  "SELECT false is not false;",
+			output: "select false is not false",
+		}, {
+			input:  "SELECT FROM_UNIXTIME(99999999999999999999999999999999999999999999999999999999999999999);",
+			output: "select FROM_UNIXTIME(99999999999999999999999999999999999999999999999999999999999999999)",
+		}, {
+			input:  "SELECT FROM_UNIXTIME(2147483647) AS c1, FROM_UNIXTIME(2147483648) AS c2, FROM_UNIXTIME(2147483647.9999999) AS c3, FROM_UNIXTIME(32536771199) AS c4,FROM_UNIXTIME(32536771199.9999999) AS c5;",
+			output: "select FROM_UNIXTIME(2147483647) as c1, FROM_UNIXTIME(2147483648) as c2, FROM_UNIXTIME(2147483647.9999999) as c3, FROM_UNIXTIME(32536771199) as c4, FROM_UNIXTIME(32536771199.9999999) as c5",
+		}, {
+			input:  "select date_add(\"1997-12-31 23:59:59\",INTERVAL -100000 YEAR);",
+			output: "select date_add(1997-12-31 23:59:59, INTERVAL(-100000, year))",
+		}, {
+			input:  "SELECT ADDDATE(DATE'2021-01-01', INTERVAL 1 DAY);",
+			output: "select ADDDATE(DATE(2021-01-01), INTERVAL(1, day))",
+		}, {
+			input:  "select '2007-01-01' + interval a day from t1;",
+			output: "select 2007-01-01 + interval(a, day) from t1",
+		}, {
+			input:  "SELECT CAST(COALESCE(t0.c0, -1) AS UNSIGNED) IS TRUE FROM t0;",
+			output: "select cast(COALESCE(t0.c0, -1) as unsigned) is true from t0",
+		}, {
+			input:  "select Fld1, variance(Fld2) as q from t1 group by Fld1 having q is not null;",
+			output: "select Fld1, variance(Fld2) as q from t1 group by Fld1 having q is not null",
+		}, {
+			input:  "select variance(-99999999999999999.99999);",
+			output: "select variance(-99999999999999999.99999)",
+		}, {
+			input:  "select Fld1, std(Fld2) from t1 group by Fld1 having variance(Fld2) is not null",
+			output: "select Fld1, std(Fld2) from t1 group by Fld1 having variance(Fld2) is not null",
+		}, {
+			input:  "select a.f1 as a, a.f1 > b.f1 as gt, a.f1 < b.f1 as lt, a.f1<=>b.f1 as eq from t1 a, t1 b;",
+			output: "select a.f1 as a, a.f1 > b.f1 as gt, a.f1 < b.f1 as lt, a.f1 <=> b.f1 as eq from t1 as a cross join t1 as b",
+		}, {
+			input:  "select var_samp(s) as '0.5', var_pop(s) as '0.25' from bug22555;",
+			output: "select var_samp(s) as 0.5, var_pop(s) as 0.25 from bug22555",
+		}, {
+			input:  "select var_samp(s) as 'null', var_pop(s) as 'null' from bug22555;",
+			output: "select var_samp(s) as null, var_pop(s) as null from bug22555",
+		}, {
+			input: "select cast(variance(ff) as decimal(10, 3)) from t2",
+		}, {
+			input:  "SELECT GROUP_CONCAT(DISTINCT 2) from t1",
+			output: "select GROUP_CONCAT(distinct 2, ,) from t1",
+		}, {
+			input:  "SELECT GROUP_CONCAT(DISTINCT a order by a) from t1",
+			output: "select GROUP_CONCAT(distinct a, ,order by a) from t1",
+		}, {
+			input: "select variance(2) from t1",
+		}, {
+			input:  "select SQL_BIG_RESULT bit_and(col), bit_or(col) from t1 group by col;",
+			output: "select sql_big_result bit_and(col), bit_or(col) from t1 group by col",
+		}, {
+			input: "select sql_small_result t2.id, avg(rating + 0.0e0) from t2 group by t2.id",
+		}, {
+			input: "select sql_small_result t2.id, avg(rating) from t2 group by t2.id",
+		}, {
+			input:  "select any_value(name), avg(value1), std(value1), variance(value1) from t1, t2 where t1.id = t2.id group by t1.id",
+			output: "select any_value(name), avg(value1), std(value1), variance(value1) from t1 cross join t2 where t1.id = t2.id group by t1.id",
+		}, {
+			input: "select id, avg(value1), std(value1), variance(value1) from t1 group by id",
+		}, {
+			input: "select i, count(*), std(s1 / s2) from bug22555 group by i order by i",
+		}, {
+			input: "select i, count(*), variance(s1 / s2) from bug22555 group by i order by i",
+		}, {
+			input: "select i, count(*), variance(s1 / s2) from bug22555 group by i order by i",
+		}, {
+			input:  "select name, avg(value1), std(value1), variance(value1) from t1, t2 where t1.id = t2.id group by t1.id",
+			output: "select name, avg(value1), std(value1), variance(value1) from t1 cross join t2 where t1.id = t2.id group by t1.id",
+		}, {
+			input:  "select sum(all a),count(all a),avg(all a),std(all a),variance(all a),bit_or(all a),bit_and(all a),min(all a),max(all a),min(all c),max(all c) from t",
+			output: "select sum(all a), count(all a), avg(all a), std(all a), variance(all a), bit_or(all a), bit_and(all a), min(all a), max(all a), min(all c), max(all c) from t",
+		}, {
+			input:  "insert into t1 values (date_add(NULL, INTERVAL 1 DAY));",
+			output: "insert into t1 values (date_add(null, INTERVAL(1, day)))",
+		}, {
+			input:  "replace into t1 values (date_add(NULL, INTERVAL 1 DAY));",
+			output: "replace into t1 values (date_add(null, INTERVAL(1, day)))",
+		}, {
+			input:  "SELECT DATE_ADD('2022-02-28 23:59:59.9999', INTERVAL 1 SECOND) '1 second later';",
+			output: "select DATE_ADD(2022-02-28 23:59:59.9999, INTERVAL(1, second)) as 1 second later",
+		}, {
+			input:  "SELECT sum(a) as 'hello' from t1;",
+			output: "select sum(a) as hello from t1",
+		}, {
+			input:  "select stream from t1;",
+			output: "select stream from t1",
+		}, {
+			input:  "SELECT DATE_ADD(\"2017-06-15\", INTERVAL -10 MONTH);",
+			output: "select DATE_ADD(2017-06-15, INTERVAL(-10, month))",
+		}, {
+			input:  "create table t1 (a varchar)",
+			output: "create table t1 (a varchar)",
+		}, {
+			input:  "SELECT (CAST(0x7FFFFFFFFFFFFFFF AS char));",
+			output: "select (cast(0x7fffffffffffffff as varchar))",
+		}, {
+			input:  "select cast(-19999999999999999999 as signed);",
+			output: "select cast(-19999999999999999999 as signed)",
+		}, {
+			input:  "select cast(19999999999999999999 as signed);",
+			output: "select cast(19999999999999999999 as signed)",
+		}, {
+			input:  "select date_sub(now(), interval 1 day) from t1;",
+			output: "select date_sub(now(), interval(1, day)) from t1",
+		}, {
+			input:  "select date_sub(now(), interval '1' day) from t1;",
+			output: "select date_sub(now(), interval(1, day)) from t1",
+		}, {
+			input:  "select date_add(now(), interval '1' day) from t1;",
+			output: "select date_add(now(), interval(1, day)) from t1",
+		}, {
+			input:  "SELECT md.datname as `Database` FROM TT md",
+			output: "select md.datname as Database from tt as md",
+		}, {
+			input:  "select * from t where a = `Hello`",
+			output: "select * from t where a = Hello",
+		}, {
+			input:  "CREATE VIEW v AS SELECT * FROM t WHERE t.id = f(t.name);",
+			output: "create view v as select * from t where t.id = f(t.name)",
+		}, {
+			input:  "ALTER VIEW v AS SELECT * FROM t WHERE t.id = f(t.name);",
+			output: "alter view v as select * from t where t.id = f(t.name)",
+		}, {
+			input:  "CREATE VIEW v AS SELECT qty, price, qty*price AS value FROM t;",
+			output: "create view v as select qty, price, qty * price as value from t",
+		}, {
+			input:  "ALTER VIEW v AS SELECT qty, price, qty*price AS value FROM t;",
+			output: "alter view v as select qty, price, qty * price as value from t",
+		}, {
+			input: "create view v_today (today) as select current_day from t",
+		}, {
+			input: "alter view v_today (today) as select current_day from t",
+		}, {
+			input: "explain (analyze true,verbose false) select * from emp",
+		}, {
+			input: "select quarter from ontime limit 1",
+		}, {
+			input: "select month from ontime limit 1",
+		}, {
+			input: "with tw as (select * from t2), tf as (select * from t3) select * from tw where a > 1",
+		}, {
+			input: "with tw as (select * from t2) select * from tw where a > 1",
+		}, {
+			input:  "create table t (a double(13))  // comment",
+			output: "create table t (a double(13))",
+		}, {
+			input:  "create table t (a double(13))  -- comment",
+			output: "create table t (a double(13))",
+		}, {
+			input: "select a as promo_revenue from (select * from r) as c_orders(c_custkey, c_count)",
+		}, {
+			input:  "select extract(year from l_shipdate) as l_year from t",
+			output: "select extract(year, l_shipdate) as l_year from t",
+		}, {
+			input:  "select * from R join S on R.uid = S.uid where l_shipdate <= date '1998-12-01' - interval '112' day",
+			output: "select * from r inner join s on R.uid = S.uid where l_shipdate <= date(1998-12-01) - interval(112, day)",
+		}, {
+			input: "create table deci_table (a decimal(10, 5))",
+		}, {
+			input: "create table deci_table (a decimal(20, 5))",
+		}, {
+			input:  "create table deci_table (a decimal)",
+			output: "create table deci_table (a decimal(38))",
+		}, {
+			input: "create table deci_table (a decimal(20))",
+		}, {
+			input: "select substr(name, 5) from t1",
+		}, {
+			input: "select substring(name, 5) from t1",
+		}, {
+			input: "select substr(name, 5, 3) from t1",
+		}, {
+			input: "select substring(name, 5, 3) from t1",
+		}, {
+			input:  "select * from R join S on R.uid = S.uid",
+			output: "select * from r inner join s on R.uid = S.uid",
+		}, {
+			input:  "create table t (a int, b char, key idx1 type zonemap (a, b))",
+			output: "create table t (a int, b char, index idx1 using zonemap (a, b))",
+		}, {
+			input: "create table t (a int, index idx1 using zonemap (a))",
+		}, {
+			input: "create table t (a int, index idx1 using bsi (a))",
+		}, {
+			input:  "set @@sql_mode ='TRADITIONAL'",
+			output: "set sql_mode = TRADITIONAL",
+		}, {
+			input:  "set @@session.sql_mode ='TRADITIONAL'",
+			output: "set sql_mode = TRADITIONAL",
+		}, {
+			input:  "set session sql_mode ='TRADITIONAL'",
+			output: "set sql_mode = TRADITIONAL",
+		}, {
+			input:  "select @session.tx_isolation",
+			output: "select @session.tx_isolation",
+		}, {
+			input:  "select @@session.tx_isolation",
+			output: "select @@tx_isolation",
+		}, {
+			input:  "/* mysql-connector-java-8.0.27 (Revision: e920b979015ae7117d60d72bcc8f077a839cd791) */SHOW VARIABLES;",
+			output: "show variables",
+		}, {
+			input: "create index idx1 using bsi on a (a)",
+		}, {
+			input:  "INSERT INTO pet VALUES row('Sunsweet05','Dsant05','otter','f',30.11,2), row('Sunsweet06','Dsant06','otter','m',30.11,3);",
+			output: "insert into pet values (Sunsweet05, Dsant05, otter, f, 30.11, 2), (Sunsweet06, Dsant06, otter, m, 30.11, 3)",
+		}, {
+			input:  "INSERT INTO t1 SET f1 = -1.0e+30, f2 = 'exore', f3 = 123",
+			output: "insert into t1 (f1, f2, f3) values (-1.0e+30, exore, 123)",
+		}, {
+			input:  "INSERT INTO t1 SET f1 = -1;",
+			output: "insert into t1 (f1) values (-1)",
+		}, {
+			input:  "INSERT INTO t1 (a,b,c) VALUES (1,2,3),(4,5,6) ON DUPLICATE KEY UPDATE c=VALUES(a)+VALUES(b), b=VALUES(a)+VALUES(c);",
+			output: "insert into t1 (a, b, c) values (1, 2, 3), (4, 5, 6) on duplicate key update c = VALUES(a) + VALUES(b), b = VALUES(a) + VALUES(c)",
+		}, {
+			input:  "INSERT INTO t1 (a,b,c) VALUES (1,2,3),(4,5,6) ON DUPLICATE KEY UPDATE c=2, b=3;",
+			output: "insert into t1 (a, b, c) values (1, 2, 3), (4, 5, 6) on duplicate key update c = 2, b = 3",
+		}, {
+			input:  "INSERT INTO t1 (a,b,c) VALUES (1,2,3),(4,5,6) ON DUPLICATE KEY UPDATE c=2/2, b=3;",
+			output: "insert into t1 (a, b, c) values (1, 2, 3), (4, 5, 6) on duplicate key update c = 2 / 2, b = 3",
+		}, {
+			input:  "insert into t1 values (18446744073709551615), (0xFFFFFFFFFFFFFFFE), (18446744073709551613), (18446744073709551612)",
+			output: "insert into t1 values (18446744073709551615), (0xfffffffffffffffe), (18446744073709551613), (18446744073709551612)",
+		}, {
+			input:  "REPLACE INTO pet VALUES row('Sunsweet05','Dsant05','otter','f',30.11,2), row('Sunsweet06','Dsant06','otter','m',30.11,3);",
+			output: "replace into pet values (Sunsweet05, Dsant05, otter, f, 30.11, 2), (Sunsweet06, Dsant06, otter, m, 30.11, 3)",
+		}, {
+			input:  "REPLACE INTO t1 SET f1 = -1.0e+30, f2 = 'exore', f3 = 123",
+			output: "replace into t1 (f1, f2, f3) values (-1.0e+30, exore, 123)",
+		}, {
+			input:  "REPLACE INTO t1 SET f1 = -1;",
+			output: "replace into t1 (f1) values (-1)",
+		}, {
+			input:  "replace into t1 values (18446744073709551615), (0xFFFFFFFFFFFFFFFE), (18446744073709551613), (18446744073709551612)",
+			output: "replace into t1 values (18446744073709551615), (0xfffffffffffffffe), (18446744073709551613), (18446744073709551612)",
+		}, {
+			input:  "create table t (a int) properties(\"host\" = \"127.0.0.1\", \"port\" = \"8239\", \"user\" = \"mysql_user\", \"password\" = \"mysql_passwd\")",
+			output: "create table t (a int) properties(host = 127.0.0.1, port = 8239, user = mysql_user, password = mysql_passwd)",
+		}, {
+			input:  "create table t (a int) properties('a' = 'b')",
+			output: "create table t (a int) properties(a = b)",
+		}, {
+			input: "create table t (a int, b char, check (1 + 1) enforced)",
+		}, {
+			input: "create table t (a int, b char, foreign key sdf (a, b) references b(a asc, b desc))",
+		}, {
+			input:  "create table t (a int, b char, constraint sdf foreign key (a, b) references b(a asc, b desc))",
+			output: "create table t (a int, b char, constraint sdf foreign key (a, b) references b(a asc, b desc))",
+		}, {
+			input:  "create table t (a int, b char, constraint sdf foreign key dddd (a, b) references b(a asc, b desc))",
+			output: "create table t (a int, b char, constraint sdf foreign key dddd (a, b) references b(a asc, b desc))",
+		}, {
+			input: "create table t (a int, b char, unique key idx (a, b))",
+		}, {
+			input: "create table t (a int, b char, index if not exists idx (a, b))",
+		}, {
+			input: "create table t (a int, b char, fulltext idx (a, b))",
+		}, {
+			input:  "create table t (a int, b char, constraint p1 primary key idx using hash (a, b))",
+			output: "create table t (a int, b char, constraint p1 primary key idx using none (a, b))",
+		}, {
+			input: "create table t (a int, b char, primary key idx (a, b))",
+		}, {
+			input:  "create dynamic table t as select a from t1",
+			output: "create dynamic table t as select a from t1",
+		}, {
+			input:  "create dynamic table t as select a from t1 with (\"type\"='kafka')",
+			output: "create dynamic table t as select a from t1 with (type = kafka)",
+		}, {
+			input:  "create external table t (a int) infile 'data.txt'",
+			output: "create external table t (a int) infile 'data.txt'",
+		}, {
+			input: "create external table t (a int) infile {'filepath'='data.txt', 'compression'='none'}",
+		}, {
+			input: "create external table t (a int) infile {'filepath'='data.txt', 'compression'='auto'}",
+		}, {
+			input: "create external table t (a int) infile {'filepath'='data.txt', 'compression'='lz4'}",
+		}, {
+			input:  "create external table t (a int) infile 'data.txt' FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY ''",
+			output: "create external table t (a int) infile 'data.txt' fields terminated by '' optionally enclosed by '' lines terminated by ''",
+		}, {
+			input:  "SET NAMES 'utf8mb4' COLLATE 'utf8mb4_general_ci'",
+			output: "set names = utf8mb4 utf8mb4_general_ci",
+		}, {
+			input: "insert into cms values (null, default)",
+		}, {
+			input: "replace into cms values (null, default)",
+		}, {
+			input:  "create database `show`",
+			output: "create database show",
+		}, {
+			input: "create table table16 (1a20 int, 1e int)",
+		}, {
+			input: "insert into t2 values (-3, 2)",
+		}, {
+			input: "replace into t2 values (-3, 2)",
+		}, {
+			input:  "select spID,userID,score from t1 where spID>(userID-1);",
+			output: "select spID, userID, score from t1 where spID > (userID - 1)",
+		}, {
+			input:  "CREATE TABLE t2(product VARCHAR(32),country_id INTEGER NOT NULL,year INTEGER,profit INTEGER)",
+			output: "create table t2 (product varchar(32), country_id integer not null, year integer, profit integer)",
+		}, {
+			input: "insert into numtable values (255, 65535, 4294967295, 18446744073709551615)",
+		}, {
+			input: "replace into numtable values (255, 65535, 4294967295, 18446744073709551615)",
+		}, {
+			input: "create table numtable (a tinyint unsigned, b smallint unsigned, c int unsigned, d bigint unsigned)",
+		}, {
+			input:  "SELECT userID as user, MAX(score) as max FROM t1 GROUP BY userID order by user",
+			output: "select userID as user, MAX(score) as max from t1 group by userID order by user",
+		}, {
+			input:  "load data infile 'test/loadfile5' ignore INTO TABLE T.A FIELDS TERMINATED BY  ',' (@,@,c,d,e,f)",
+			output: "load data infile test/loadfile5 ignore into table t.a fields terminated by , (, , c, d, e, f)",
+		}, {
+			input:  "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '';",
+			output: "load data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by ''",
+		}, {
+			input:  "load data local infile 'data' replace into table db.a (a, b, @vc, @vd) set a = @vc != 0, d = @vd != 1",
+			output: "load data local infile data replace into table db.a (a, b, @vc, @vd) set a = @vc != 0, d = @vd != 1",
+		}, {
+			input:  "load data local infile 'data' replace into table db.a lines starting by '#' terminated by '\t' ignore 2 lines",
+			output: "load data local infile data replace into table db.a lines starting by # terminated by 	 ignore 2 lines",
+		}, {
+			input:  "load data local infile 'data' replace into table db.a lines starting by '#' terminated by '\t' ignore 2 rows",
+			output: "load data local infile data replace into table db.a lines starting by # terminated by 	 ignore 2 lines",
+		}, {
+			input:  "load data local infile 'data' replace into table db.a lines terminated by '\t' starting by '#' ignore 2 lines",
+			output: "load data local infile data replace into table db.a lines starting by # terminated by 	 ignore 2 lines",
+		}, {
+			input:  "load data local infile 'data' replace into table db.a lines terminated by '\t' starting by '#' ignore 2 rows",
+			output: "load data local infile data replace into table db.a lines starting by # terminated by 	 ignore 2 lines",
+		}, {
+			input:  "load data infile 'data.txt' into table db.a fields terminated by '\t' escaped by '\t'",
+			output: "load data infile data.txt into table db.a fields terminated by \t escaped by \t",
+		}, {
+			input:  "load data infile 'data.txt' into table db.a fields terminated by '\t' enclosed by '\t' escaped by '\t'",
+			output: "load data infile data.txt into table db.a fields terminated by \t enclosed by \t escaped by \t",
+		}, {
+			input:  "load data infile 'data.txt' into table db.a",
+			output: "load data infile data.txt into table db.a",
+		}, {
+			input: "load data infile {'filepath'='data.txt', 'compression'='auto'} into table db.a",
+		}, {
+			input: "load data infile {'filepath'='data.txt', 'compression'='none'} into table db.a",
+		}, {
+			input:  "create external table t (a int) infile 'data.txt'",
+			output: "create external table t (a int) infile 'data.txt'",
+		}, {
+			input: "create external table t (a int) infile {'filepath'='data.txt', 'compression'='none'}",
+		}, {
+			input: "create external table t (a int) infile {'filepath'='data.txt', 'compression'='auto'}",
+		}, {
+			input: "create external table t (a int) infile {'filepath'='data.txt', 'compression'='lz4'}",
+		}, {
+			input:  "create external table t (a int) infile 'data.txt' FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY ''",
+			output: "create external table t (a int) infile 'data.txt' fields terminated by '' optionally enclosed by '' lines terminated by ''",
+		}, {
+			input:  "create external table t (a int) URL s3option{'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'}",
+			output: "create external table t (a int) url s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'}",
+		}, {
+			input:  "load data infile 'test/loadfile5' ignore INTO TABLE T.A FIELDS TERMINATED BY  ',' (@,@,c,d,e,f)",
+			output: "load data infile test/loadfile5 ignore into table t.a fields terminated by , (, , c, d, e, f)",
+		}, {
+			input:  "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '';",
+			output: "load data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by ''",
+		}, {
+			input:  "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '' parallel 'true';",
+			output: "load data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by '' parallel true ",
+		}, {
+			input:  "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '' parallel 'true' strict 'true';",
+			output: "load data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by '' parallel true strict true ",
+		}, {
+			input: "load data infile {'filepath'='data.txt', 'compression'='auto'} into table db.a",
+		}, {
+			input: "load data infile {'filepath'='data.txt', 'compression'='none'} into table db.a",
+		}, {
+			input: "load data infile {'filepath'='data.txt', 'compression'='GZIP'} into table db.a",
+		}, {
+			input: "load data infile {'filepath'='data.txt', 'compression'='BZIP2'} into table db.a",
+		}, {
+			input: "load data infile {'filepath'='data.txt', 'compression'='FLATE'} into table db.a",
+		}, {
+			input: "load data infile {'filepath'='data.txt', 'compression'='LZW'} into table db.a",
+		}, {
+			input: "load data infile {'filepath'='data.txt', 'compression'='ZLIB'} into table db.a",
+		}, {
+			input: "load data infile {'filepath'='data.txt', 'compression'='LZ4'} into table db.a",
+		}, {
+			input:  "LOAD DATA URL s3option{'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'} into table db.a",
+			output: "load data url s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'} into table db.a",
+		},
 		{
 			input: `load data url s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='jsonline/jsonline_object.jl', 'region'='us-west-2', 'compression'='none', 'format'='jsonline', 'jsondata'='object'} into table t1`,
 		}, {
@@ -907,35 +940,35 @@ var (
 			output: "show tables from test01 where tables_in_test01 like %t2%",
 		}, {
 			input:  "select userID,MAX(score) max_score from t1 where userID <2 || userID > 3 group by userID order by max_score",
-			output: "select userid, max(score) as max_score from t1 where concat(userid < 2, userid > 3) group by userid order by max_score",
+			output: "select userID, MAX(score) as max_score from t1 where concat(userID < 2, userID > 3) group by userID order by max_score",
 		}, {
 			input: "select c1, -c2 from t2 order by -c1 desc",
 		}, {
 			input:  "select * from t1 where spID>2 AND userID <2 || userID >=2 OR userID < 2 limit 3",
-			output: "select * from t1 where concat(spid > 2 and userid < 2, userid >= 2) or userid < 2 limit 3",
+			output: "select * from t1 where concat(spID > 2 and userID < 2, userID >= 2) or userID < 2 limit 3",
 		}, {
 			input:  "select * from t10 where (b='ba' or b='cb') and (c='dc' or c='ed');",
 			output: "select * from t10 where (b = ba or b = cb) and (c = dc or c = ed)",
 		}, {
 			input:  "select CAST(userID AS DOUBLE) cast_double, CAST(userID AS FLOAT(3)) cast_float , CAST(userID AS REAL) cast_real, CAST(userID AS SIGNED) cast_signed, CAST(userID AS UNSIGNED) cast_unsigned from t1 limit 2",
-			output: "select cast(userid as double) as cast_double, cast(userid as float(3)) as cast_float, cast(userid as real) as cast_real, cast(userid as signed) as cast_signed, cast(userid as unsigned) as cast_unsigned from t1 limit 2",
+			output: "select cast(userID as double) as cast_double, cast(userID as float(3)) as cast_float, cast(userID as real) as cast_real, cast(userID as signed) as cast_signed, cast(userID as unsigned) as cast_unsigned from t1 limit 2",
 		}, {
 			input: "select distinct name as name1 from t1",
 		}, {
 			input:  "select userID, userID DIV 2 as user_dir, userID%2 as user_percent, userID MOD 2 as user_mod from t1",
-			output: "select userid, userid div 2 as user_dir, userid % 2 as user_percent, userid % 2 as user_mod from t1",
+			output: "select userID, userID div 2 as user_dir, userID % 2 as user_percent, userID % 2 as user_mod from t1",
 		}, {
 			input:  "select sum(score) as sum from t1 where spID=6 group by score order by sum desc",
-			output: "select sum(score) as sum from t1 where spid = 6 group by score order by sum desc",
+			output: "select sum(score) as sum from t1 where spID = 6 group by score order by sum desc",
 		}, {
 			input:  "select userID,count(score) from t1 where userID>2 group by userID having count(score)>1",
-			output: "select userid, count(score) from t1 where userid > 2 group by userid having count(score) > 1",
+			output: "select userID, count(score) from t1 where userID > 2 group by userID having count(score) > 1",
 		}, {
 			input:  "SELECT product, SUM(profit),AVG(profit) FROM t2 where product<>'TV' GROUP BY product order by product asc",
-			output: "select product, sum(profit), avg(profit) from t2 where product != TV group by product order by product asc",
+			output: "select product, SUM(profit), AVG(profit) from t2 where product != TV group by product order by product asc",
 		}, {
 			input:  "SELECT product, SUM(profit),AVG(profit) FROM t2 where product='Phone' GROUP BY product order by product asc",
-			output: "select product, sum(profit), avg(profit) from t2 where product = Phone group by product order by product asc",
+			output: "select product, SUM(profit), AVG(profit) from t2 where product = Phone group by product order by product asc",
 		}, {
 			input:  "select sum(col_1d),count(col_1d),avg(col_1d),min(col_1d),max(col_1d) from tbl1 group by col_1e",
 			output: "select sum(col_1d), count(col_1d), avg(col_1d), min(col_1d), max(col_1d) from tbl1 group by col_1e",
@@ -1035,7 +1068,7 @@ var (
 			input: "select sysdate(), curtime from t",
 		}, {
 			input:  "select current_time(), current_timestamp, lacalTIMe(89), utc_time() from t",
-			output: "select current_time(), current_timestamp(), lacaltime(89), utc_time() from t",
+			output: "select current_time(), current_timestamp(), lacalTIMe(89), utc_time() from t",
 		}, {
 			input:  "select current_user(), current_role(), current_date, utc_date from t",
 			output: "select current_user(), current_role(), current_date(), utc_date() from t",
@@ -1144,11 +1177,11 @@ var (
 		},
 		{
 			input:  `CREATE TABLE tp10 (col1 INT, col2 CHAR(5), col3 DATETIME) PARTITION BY HASH (YEAR(col3));`,
-			output: `create table tp10 (col1 int, col2 char(5), col3 datetime) partition by hash (year(col3))`,
+			output: `create table tp10 (col1 int, col2 char(5), col3 datetime) partition by hash (YEAR(col3))`,
 		},
 		{
 			input:  `CREATE TABLE tp11 (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY LINEAR HASH( YEAR(col3)) PARTITIONS 6`,
-			output: `create table tp11 (col1 int, col2 char(5), col3 date) partition by linear hash (year(col3)) partitions 6`,
+			output: `create table tp11 (col1 int, col2 char(5), col3 date) partition by linear hash (YEAR(col3)) partitions 6`,
 		},
 		{
 			input:  `CREATE TABLE tp12 (col1 INT NOT NULL, col2 DATE NOT NULL, col3 INT NOT NULL, col4 INT NOT NULL, PRIMARY KEY (col1, col2)) PARTITION BY HASH(col1) PARTITIONS 4`,
@@ -1170,7 +1203,7 @@ var (
 					PARTITION p2 VALUES LESS THAN (2001),
 					PARTITION p3 VALUES LESS THAN MAXVALUE
 				);`,
-			output: `create table tp13 (id int not null, fname varchar(30), lname varchar(30), hired date not null default 1970-01-01, separated date not null default 9999-12-31, job_code int, store_id int) partition by range(year(separated)) (partition p0 values less than (1991), partition p1 values less than (1996), partition p2 values less than (2001), partition p3 values less than (MAXVALUE))`,
+			output: `create table tp13 (id int not null, fname varchar(30), lname varchar(30), hired date not null default 1970-01-01, separated date not null default 9999-12-31, job_code int, store_id int) partition by range(YEAR(separated)) (partition p0 values less than (1991), partition p1 values less than (1996), partition p2 values less than (2001), partition p3 values less than (MAXVALUE))`,
 		},
 		{
 			input: `CREATE TABLE tp14 (
@@ -1519,12 +1552,6 @@ var (
 		}, {
 			input: "select * from t",
 		}, {
-			input:  "select * from t@'timestamp'@'2024-01-01 00:00:00'",
-			output: "select * from t@timestamp@2024-01-01 00:00:00",
-		}, {
-			input:  "select * from t@'snapshot'@'snapshot1'",
-			output: "select * from t@snapshot@snapshot1",
-		}, {
 			input:  "select c1, c2, c3 from t1, t as t2 where t1.c1 = 1 group by c2 having c2 > 10",
 			output: "select c1, c2, c3 from t1 cross join t as t2 where t1.c1 = 1 group by c2 having c2 > 10",
 		}, {
@@ -1637,7 +1664,14 @@ var (
 			input:  "create account nihao admin_name 'admin' identified with '123'",
 			output: "create account nihao admin_name 'admin' identified with '******'",
 		}, {
+			input:  "create account ? admin_name 'admin' identified with '123'",
+			output: "create account ? admin_name 'admin' identified with '******'",
+		}, {
+			input: "create account nihao admin_name ? identified by ?",
+		}, {
 			input: "drop account if exists abc",
+		}, {
+			input: "drop account ?",
 		}, {
 			input:  "alter account if exists nihao admin_name 'admin' identified by '123' open comment 'new account'",
 			output: "alter account if exists nihao admin_name 'admin' identified by '******' open comment 'new account'",
@@ -1654,6 +1688,8 @@ var (
 		}, {
 			input:  "alter account nihao admin_name 'admin' identified with '123'",
 			output: "alter account nihao admin_name 'admin' identified with '******'",
+		}, {
+			input: "alter account ? admin_name ? identified with ?",
 		}, {
 			input: "create user if not exists abc1 identified by '123', abc2 identified by '234', abc3 identified by '111' default role def_role " +
 				"password expire " +
@@ -1835,7 +1871,7 @@ var (
 			input: `create table t3 (a int, b uuid, primary key idx (a, b))`,
 		}, {
 			input:  `DO SLEEP(5)`,
-			output: `do sleep(5)`,
+			output: `do SLEEP(5)`,
 		}, {
 			input:  `DECLARE a, b INT`,
 			output: `declare a b int default null`,
@@ -2377,6 +2413,21 @@ var (
 			input: "create publication pub1 database db1 comment 'test'",
 		},
 		{
+			input: "create publication pub1 table t1",
+		},
+		{
+			input: "create publication pub1 table t1 account acc0",
+		},
+		{
+			input: "create publication pub1 table t1 account acc0, acc1",
+		},
+		{
+			input: "create publication pub1 table t1 account acc0, acc1, acc2 comment 'test'",
+		},
+		{
+			input: "create publication pub1 table t1 comment 'test'",
+		},
+		{
 			input:  "CREATE STAGE my_ext_stage URL='s3://load/files/'",
 			output: "create stage my_ext_stage url='s3://load/files/'",
 		},
@@ -2387,22 +2438,6 @@ var (
 		{
 			input:  "CREATE STAGE my_ext_stage1 URL='s3://load/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c', 'AWS_SECRET_KEY'='4x5y6z'} ENABLE = TRUE;",
 			output: "create stage my_ext_stage1 url='s3://load/files/' crentiasl={'AWS_KEY_ID'='1a2b3c','AWS_SECRET_KEY'='4x5y6z'} enabled",
-		},
-		{
-			input:  "CREATE SNAPSHOT snapshot1 FOR CLUSTER",
-			output: "create snapshot snapshot1 for cluster ",
-		},
-		{
-			input:  "CREATE SNAPSHOT snapshot1 FOR ACCOUNT acc1",
-			output: "create snapshot snapshot1 for account acc1",
-		},
-		{
-			input:  "DROP SNAPSHOT snapshot1",
-			output: "drop snapshot snapshot1",
-		},
-		{
-			input:  "SHOW SNAPSHOTS WHERE sname = 'snapshot1'",
-			output: "show snapshots where sname = snapshot1",
 		},
 		{
 			input:  "DROP STAGE my_ext_stage1",
@@ -2428,6 +2463,18 @@ var (
 			input: "create database db1 from acc0 publication pub1",
 		},
 		{
+			input: "create table t1 from acc0 publication pub1",
+		},
+		{
+			input: "create temporary table t1 from acc0 publication pub1",
+		},
+		{
+			input: "create table if not exists t1 from acc0 publication pub1",
+		},
+		{
+			input: "create temporary table if not exists t1 from acc0 publication pub1",
+		},
+		{
 			input: "drop publication pub1",
 		},
 		{
@@ -2444,6 +2491,22 @@ var (
 		},
 		{
 			input: "alter publication pub1 account add acc0",
+		},
+		{
+			input: "restore cluster from snapshot snapshot_01",
+		},
+		{
+			input: "restore account account_01 from snapshot snapshot_01",
+		},
+		{
+			input: "restore account account_01 database db1 from snapshot snapshot_01",
+		},
+		{
+			input: "restore account account_01 database db1 table t1 from snapshot snapshot_01",
+		},
+		{
+			input:  "restore account account_01 from snapshot snapshot_01 to account account_02",
+			output: "restore account account_01 from snapshot snapshot_01 to account account_02",
 		},
 		{
 			input: "alter publication pub1 account add acc0, acc1",
@@ -2530,7 +2593,7 @@ var (
 		},
 		{
 			input:  "select BINARY 124",
-			output: "select binary(124)",
+			output: "select BINARY(124)",
 		},
 		{
 			input:  "set transaction isolation level read committed;",
@@ -2724,19 +2787,38 @@ var (
 		}, {
 			input:  `backup '123' s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='jsonline/jsonline_object.jl', 'region'='us-west-2', 'compression'='none', 'format'='jsonline', 'jsondata'='object'}`,
 			output: `backup 123 s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='jsonline/jsonline_object.jl', 'region'='us-west-2', 'compression'='none', 'format'='jsonline', 'jsondata'='object'}`,
+		},
+		{
+			input:  "backup '123' filesystem '/home/abc' parallelism '1' type 'incremental' timestamp 'xxxxx-xxxxx'",
+			output: "backup 123 filesystem /home/abc parallelism 1 backuptype incremental backupts xxxxx-xxxxx",
+		}, {
+			input:  "backup '125' filesystem '/tmp/backup' parallelism '1' type 'incremental' timestamp 'xxxxx-xxxxx';",
+			output: "backup 125 filesystem /tmp/backup parallelism 1 backuptype incremental backupts xxxxx-xxxxx",
+		}, {
+			input:  "backup '123' s3option {\"bucket\"='dan-test1', \"filepath\"='ex_table_dan_gzip.gz',\"role_arn\"='arn:aws:iam::468413122987:role/dev-cross-s3', \"external_id\"='5404f91c_4e59_4898_85b3', \"compression\"='auto'} type 'incremental' timestamp 'xxxxx-xxxxx'",
+			output: "backup 123 s3option {'bucket'='dan-test1', 'filepath'='ex_table_dan_gzip.gz', 'role_arn'='arn:aws:iam::468413122987:role/dev-cross-s3', 'external_id'='5404f91c_4e59_4898_85b3', 'compression'='auto'} backuptype incremental backupts xxxxx-xxxxx",
+		}, {
+			input:  "backup '123' s3option{'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'} type 'incremental' timestamp 'xxxxx-xxxxx'",
+			output: "backup 123 s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'} backuptype incremental backupts xxxxx-xxxxx",
+		}, {
+			input:  "backup '123' s3option{'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'} type 'incremental' timestamp 'xxxxx-xxxxx'",
+			output: "backup 123 s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'} backuptype incremental backupts xxxxx-xxxxx",
+		}, {
+			input:  `backup '123' s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='jsonline/jsonline_object.jl', 'region'='us-west-2', 'compression'='none', 'format'='jsonline', 'jsondata'='object'} type 'incremental' timestamp 'xxxxx-xxxxx'`,
+			output: `backup 123 s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='jsonline/jsonline_object.jl', 'region'='us-west-2', 'compression'='none', 'format'='jsonline', 'jsondata'='object'} backuptype incremental backupts xxxxx-xxxxx`,
 		}, {
 			input:  "/*!50001 CREATE ALGORITHM=UNDEFINED *//*!50013 DEFINER=`root`@`%` SQL SECURITY DEFINER *//*!50001 VIEW `pga0010` AS select distinct `a`.`FACDIV` AS `FACDIV`,`a`.`BLDCD` AS `BLDCD`,`a`.`PRDCD` AS `PRDCD`,`a`.`PRDNAM` AS `PRDNAM`,`a`.`PRDLNG` AS `PRDLNG`,`a`.`PRDWID` AS `PRDWID`,`a`.`PRDGAG` AS `PRDGAG`,`a`.`AREA` AS `AREA`,`a`.`GLZTYP` AS `GLZTYP`,`a`.`TECTYP` AS `TECTYP`,`a`.`PRDCATE` AS `PRDCATE`,`a`.`PRCCD` AS `PRCCD`,`a`.`PRCDSC` AS `PRCDSC`,`a`.`GLSSTR` AS `GLSSTR`,`a`.`REMARK` AS `REMARK`,`a`.`USEYN` AS `USEYN`,`a`.`ISMES` AS `ISMES` from (select 'N' AS `ISMES`,`skim`.`bga0010`.`USEYN` AS `USEYN`,`skim`.`bga0010`.`FACDIV` AS `FACDIV`,`skim`.`bga0010`.`BLDCDFATHER` AS `BLDCD`,substring_index(`skim`.`bga0010`.`PRDCD`,'-',1) AS `PRDCD`,`skim`.`bga0010`.`PRDNAM` AS `PRDNAM`,`skim`.`bga0010`.`PRDLNG` AS `PRDLNG`,`skim`.`bga0010`.`PRDWID` AS `PRDWID`,`skim`.`bga0010`.`PRDGAG` AS `PRDGAG`,`skim`.`bga0010`.`AREA` AS `AREA`,`skim`.`bga0010`.`GLZTYP` AS `GLZTYP`,`skim`.`bga0010`.`TECTYP` AS `TECTYP`,`skim`.`bga0010`.`PRDCATE` AS `PRDCATE`,`skim`.`bga0010`.`MATCST` AS `MATCST`,`skim`.`bga0010`.`PRCCD` AS `PRCCD`,`skim`.`bga0010`.`PRCDSC` AS `PRCDSC`,`skim`.`bga0010`.`GLSSTR` AS `GLSSTR`,`skim`.`bga0010`.`REMARK` AS `REMARK` from `skim`.`bga0010` where ((`skim`.`bga0010`.`ISMES` = 'Y') and (`skim`.`bga0010`.`USEYN` = 'Y') and (not(substring_index(`skim`.`bga0010`.`PRDCD`,'-',1) in (select `skim`.`bga0010`.`PRDCD` from `skim`.`bga0010` where ((`skim`.`bga0010`.`ISMES` = 'N') and (`skim`.`bga0010`.`USEYN` = 'Y')))))) union all select `skim`.`bga0010`.`ISMES` AS `ISMES`,`skim`.`bga0010`.`USEYN` AS `USEYN`,`skim`.`bga0010`.`FACDIV` AS `FACDIV`,`skim`.`bga0010`.`BLDCD` AS `BLDCD`,`skim`.`bga0010`.`PRDCD` AS `PRDCD`,`skim`.`bga0010`.`PRDNAM` AS `PRDNAM`,`skim`.`bga0010`.`PRDLNG` AS `PRDLNG`,`skim`.`bga0010`.`PRDWID` AS `PRDWID`,`skim`.`bga0010`.`PRDGAG` AS `PRDGAG`,`skim`.`bga0010`.`AREA` AS `AREA`,`skim`.`bga0010`.`GLZTYP` AS `GLZTYP`,`skim`.`bga0010`.`TECTYP` AS `TECTYP`,`skim`.`bga0010`.`PRDCATE` AS `PRDCATE`,`skim`.`bga0010`.`MATCST` AS `MATCST`,`skim`.`bga0010`.`PRCCD` AS `PRCCD`,`skim`.`bga0010`.`PRCDSC` AS `PRCDSC`,`skim`.`bga0010`.`GLSSTR` AS `GLSSTR`,`skim`.`bga0010`.`REMARK` AS `REMARK` from `skim`.`bga0010` where ((`skim`.`bga0010`.`ISMES` = 'N') and (`skim`.`bga0010`.`USEYN` = 'Y'))) `a` order by `a`.`BLDCD` */;",
-			output: "create view pga0010 as select distinct a.facdiv as FACDIV, a.bldcd as BLDCD, a.prdcd as PRDCD, a.prdnam as PRDNAM, a.prdlng as PRDLNG, a.prdwid as PRDWID, a.prdgag as PRDGAG, a.area as AREA, a.glztyp as GLZTYP, a.tectyp as TECTYP, a.prdcate as PRDCATE, a.prccd as PRCCD, a.prcdsc as PRCDSC, a.glsstr as GLSSTR, a.remark as REMARK, a.useyn as USEYN, a.ismes as ISMES from (select N as ISMES, skim.bga0010.useyn as USEYN, skim.bga0010.facdiv as FACDIV, skim.bga0010.bldcdfather as BLDCD, substring_index(skim.bga0010.prdcd, -, 1) as PRDCD, skim.bga0010.prdnam as PRDNAM, skim.bga0010.prdlng as PRDLNG, skim.bga0010.prdwid as PRDWID, skim.bga0010.prdgag as PRDGAG, skim.bga0010.area as AREA, skim.bga0010.glztyp as GLZTYP, skim.bga0010.tectyp as TECTYP, skim.bga0010.prdcate as PRDCATE, skim.bga0010.matcst as MATCST, skim.bga0010.prccd as PRCCD, skim.bga0010.prcdsc as PRCDSC, skim.bga0010.glsstr as GLSSTR, skim.bga0010.remark as REMARK from skim.bga0010 where ((skim.bga0010.ismes = Y) and (skim.bga0010.useyn = Y) and (not (substring_index(skim.bga0010.prdcd, -, 1) in (select skim.bga0010.prdcd from skim.bga0010 where ((skim.bga0010.ismes = N) and (skim.bga0010.useyn = Y)))))) union all select skim.bga0010.ismes as ISMES, skim.bga0010.useyn as USEYN, skim.bga0010.facdiv as FACDIV, skim.bga0010.bldcd as BLDCD, skim.bga0010.prdcd as PRDCD, skim.bga0010.prdnam as PRDNAM, skim.bga0010.prdlng as PRDLNG, skim.bga0010.prdwid as PRDWID, skim.bga0010.prdgag as PRDGAG, skim.bga0010.area as AREA, skim.bga0010.glztyp as GLZTYP, skim.bga0010.tectyp as TECTYP, skim.bga0010.prdcate as PRDCATE, skim.bga0010.matcst as MATCST, skim.bga0010.prccd as PRCCD, skim.bga0010.prcdsc as PRCDSC, skim.bga0010.glsstr as GLSSTR, skim.bga0010.remark as REMARK from skim.bga0010 where ((skim.bga0010.ismes = N) and (skim.bga0010.useyn = Y))) as a order by a.bldcd",
+			output: "create view pga0010 as select distinct a.FACDIV as FACDIV, a.BLDCD as BLDCD, a.PRDCD as PRDCD, a.PRDNAM as PRDNAM, a.PRDLNG as PRDLNG, a.PRDWID as PRDWID, a.PRDGAG as PRDGAG, a.AREA as AREA, a.GLZTYP as GLZTYP, a.TECTYP as TECTYP, a.PRDCATE as PRDCATE, a.PRCCD as PRCCD, a.PRCDSC as PRCDSC, a.GLSSTR as GLSSTR, a.REMARK as REMARK, a.USEYN as USEYN, a.ISMES as ISMES from (select N as ISMES, skim.bga0010.USEYN as USEYN, skim.bga0010.FACDIV as FACDIV, skim.bga0010.BLDCDFATHER as BLDCD, substring_index(skim.bga0010.PRDCD, -, 1) as PRDCD, skim.bga0010.PRDNAM as PRDNAM, skim.bga0010.PRDLNG as PRDLNG, skim.bga0010.PRDWID as PRDWID, skim.bga0010.PRDGAG as PRDGAG, skim.bga0010.AREA as AREA, skim.bga0010.GLZTYP as GLZTYP, skim.bga0010.TECTYP as TECTYP, skim.bga0010.PRDCATE as PRDCATE, skim.bga0010.MATCST as MATCST, skim.bga0010.PRCCD as PRCCD, skim.bga0010.PRCDSC as PRCDSC, skim.bga0010.GLSSTR as GLSSTR, skim.bga0010.REMARK as REMARK from skim.bga0010 where ((skim.bga0010.ISMES = Y) and (skim.bga0010.USEYN = Y) and (not (substring_index(skim.bga0010.PRDCD, -, 1) in (select skim.bga0010.PRDCD from skim.bga0010 where ((skim.bga0010.ISMES = N) and (skim.bga0010.USEYN = Y)))))) union all select skim.bga0010.ISMES as ISMES, skim.bga0010.USEYN as USEYN, skim.bga0010.FACDIV as FACDIV, skim.bga0010.BLDCD as BLDCD, skim.bga0010.PRDCD as PRDCD, skim.bga0010.PRDNAM as PRDNAM, skim.bga0010.PRDLNG as PRDLNG, skim.bga0010.PRDWID as PRDWID, skim.bga0010.PRDGAG as PRDGAG, skim.bga0010.AREA as AREA, skim.bga0010.GLZTYP as GLZTYP, skim.bga0010.TECTYP as TECTYP, skim.bga0010.PRDCATE as PRDCATE, skim.bga0010.MATCST as MATCST, skim.bga0010.PRCCD as PRCCD, skim.bga0010.PRCDSC as PRCDSC, skim.bga0010.GLSSTR as GLSSTR, skim.bga0010.REMARK as REMARK from skim.bga0010 where ((skim.bga0010.ISMES = N) and (skim.bga0010.USEYN = Y))) as a order by a.BLDCD",
 		}, {
 			input:  "/*!50001 CREATE ALGORITHM=UNDEFINED *//*!50013 DEFINER=`root`@`%` SQL SECURITY DEFINER *//*!50001 VIEW `sale_employee` AS select `ct`.`ENTID` AS `ORGANIZATION_ID`,`cu`.`SYSUSERID` AS `SALE_EMPLOYEE_ID`,`cu`.`SYSUSERID` AS `EMPLOYEE_ID`,`cu`.`ACTIVED` AS `ISUSEABLE`,`cu`.`CREATOR` AS `CREATED_BY`,`cu`.`CREATETIME` AS `CREATION_DATE`,`cu`.`UPDATOR` AS `LAST_UPDATED_BY`,`cu`.`UPDATETIME` AS `LAST_UPDATE_DATE`,'' AS `ATTRIBUTE11`,'' AS `ATTRIBUTE21`,'' AS `ATTRIBUTE31`,0 AS `ATTRIBUTE41`,0 AS `ATTRIBUTE51`,0 AS `AREA_ID` from (`kaf_cpcuser` `cu` join `kaf_cpcent` `ct`) where (`cu`.`ISSALEEMPLOYEE` = 2) */;",
-			output: "create view sale_employee as select ct.entid as ORGANIZATION_ID, cu.sysuserid as SALE_EMPLOYEE_ID, cu.sysuserid as EMPLOYEE_ID, cu.actived as ISUSEABLE, cu.creator as CREATED_BY, cu.createtime as CREATION_DATE, cu.updator as LAST_UPDATED_BY, cu.updatetime as LAST_UPDATE_DATE,  as ATTRIBUTE11,  as ATTRIBUTE21,  as ATTRIBUTE31, 0 as ATTRIBUTE41, 0 as ATTRIBUTE51, 0 as AREA_ID from kaf_cpcuser as cu inner join kaf_cpcent as ct where (cu.issaleemployee = 2)",
+			output: "create view sale_employee as select ct.ENTID as ORGANIZATION_ID, cu.SYSUSERID as SALE_EMPLOYEE_ID, cu.SYSUSERID as EMPLOYEE_ID, cu.ACTIVED as ISUSEABLE, cu.CREATOR as CREATED_BY, cu.CREATETIME as CREATION_DATE, cu.UPDATOR as LAST_UPDATED_BY, cu.UPDATETIME as LAST_UPDATE_DATE,  as ATTRIBUTE11,  as ATTRIBUTE21,  as ATTRIBUTE31, 0 as ATTRIBUTE41, 0 as ATTRIBUTE51, 0 as AREA_ID from kaf_cpcuser as cu inner join kaf_cpcent as ct where (cu.ISSALEEMPLOYEE = 2)",
 		}, {
 			input:  "/*!50001 CREATE ALGORITHM=UNDEFINED *//*!50013 DEFINER=`root`@`%` SQL SECURITY DEFINER *//*!50001 VIEW `xab0100` AS (select `a`.`SYSUSERID` AS `sysuserid`,`a`.`USERID` AS `userid`,`a`.`USERNAME` AS `usernm`,`a`.`PWDHASH` AS `userpwd`,`a`.`USERTYPE` AS `usertype`,`a`.`EMPID` AS `empid`,`a`.`EMAIL` AS `email`,`a`.`TELO` AS `telo`,`a`.`TELH` AS `telh`,`a`.`MOBIL` AS `mobil`,(case `a`.`ACTIVED` when '1' then 'N' when '2' then 'Y' else 'Y' end) AS `useyn`,`a`.`ENABLEPWD` AS `enablepwd`,`a`.`ENABLEMMSG` AS `enablemmsg`,`a`.`FEECENTER` AS `feecenter`,left(concat(ifnull(`c`.`ORGID`,''),'|'),(char_length(concat(ifnull(`c`.`ORGID`,''),'|')) - 1)) AS `orgid`,left(concat(ifnull(`c`.`ORGNAME`,''),'|'),(char_length(concat(ifnull(`c`.`ORGNAME`,''),'|')) - 1)) AS `orgname`,ifnull(`a`.`ISPLANNER`,'') AS `isplanner`,ifnull(`a`.`ISWHEMPLOYEE`,'') AS `iswhemployee`,ifnull(`a`.`ISBUYER`,'') AS `isbuyer`,ifnull(`a`.`ISQCEMPLOYEE`,'') AS `isqceemployee`,ifnull(`a`.`ISSALEEMPLOYEE`,'') AS `issaleemployee`,`a`.`SEX` AS `sex`,ifnull(`c`.`ENTID`,'3') AS `ORGANIZATION_ID`,ifnull(`a`.`NOTICEUSER`,'') AS `NOTICEUSER` from ((`kaf_cpcuser` `a` left join `kaf_cpcorguser` `b` on((`a`.`SYSUSERID` = `b`.`SYSUSERID`))) left join `kaf_cpcorg` `c` on((`b`.`ORGID` = `c`.`ORGID`))) order by `a`.`SYSUSERID`,`a`.`USERID`,`a`.`USERNAME`,`a`.`USERPASS`,`a`.`USERTYPE`,`a`.`EMPID`,`a`.`EMAIL`,`a`.`TELO`,`a`.`TELH`,`a`.`MOBIL`,`a`.`ACTIVED`,`a`.`ENABLEPWD`,`a`.`ENABLEMMSG`,`a`.`FEECENTER`,`a`.`ISPLANNER`,`a`.`ISWHEMPLOYEE`,`a`.`ISBUYER`,`a`.`ISQCEMPLOYEE`,`a`.`ISSALEEMPLOYEE`,`a`.`SEX`,`c`.`ENTID`) */;",
-			output: "create view xab0100 as (select a.sysuserid as sysuserid, a.userid as userid, a.username as usernm, a.pwdhash as userpwd, a.usertype as usertype, a.empid as empid, a.email as email, a.telo as telo, a.telh as telh, a.mobil as mobil, (case a.actived when 1 then N when 2 then Y else Y end) as useyn, a.enablepwd as enablepwd, a.enablemmsg as enablemmsg, a.feecenter as feecenter, left(concat(ifnull(c.orgid, ), |), (char_length(concat(ifnull(c.orgid, ), |)) - 1)) as orgid, left(concat(ifnull(c.orgname, ), |), (char_length(concat(ifnull(c.orgname, ), |)) - 1)) as orgname, ifnull(a.isplanner, ) as isplanner, ifnull(a.iswhemployee, ) as iswhemployee, ifnull(a.isbuyer, ) as isbuyer, ifnull(a.isqcemployee, ) as isqceemployee, ifnull(a.issaleemployee, ) as issaleemployee, a.sex as sex, ifnull(c.entid, 3) as ORGANIZATION_ID, ifnull(a.noticeuser, ) as NOTICEUSER from kaf_cpcuser as a left join kaf_cpcorguser as b on ((a.sysuserid = b.sysuserid)) left join kaf_cpcorg as c on ((b.orgid = c.orgid)) order by a.sysuserid, a.userid, a.username, a.userpass, a.usertype, a.empid, a.email, a.telo, a.telh, a.mobil, a.actived, a.enablepwd, a.enablemmsg, a.feecenter, a.isplanner, a.iswhemployee, a.isbuyer, a.isqcemployee, a.issaleemployee, a.sex, c.entid)",
+			output: "create view xab0100 as (select a.SYSUSERID as sysuserid, a.USERID as userid, a.USERNAME as usernm, a.PWDHASH as userpwd, a.USERTYPE as usertype, a.EMPID as empid, a.EMAIL as email, a.TELO as telo, a.TELH as telh, a.MOBIL as mobil, (case a.ACTIVED when 1 then N when 2 then Y else Y end) as useyn, a.ENABLEPWD as enablepwd, a.ENABLEMMSG as enablemmsg, a.FEECENTER as feecenter, left(concat(ifnull(c.ORGID, ), |), (char_length(concat(ifnull(c.ORGID, ), |)) - 1)) as orgid, left(concat(ifnull(c.ORGNAME, ), |), (char_length(concat(ifnull(c.ORGNAME, ), |)) - 1)) as orgname, ifnull(a.ISPLANNER, ) as isplanner, ifnull(a.ISWHEMPLOYEE, ) as iswhemployee, ifnull(a.ISBUYER, ) as isbuyer, ifnull(a.ISQCEMPLOYEE, ) as isqceemployee, ifnull(a.ISSALEEMPLOYEE, ) as issaleemployee, a.SEX as sex, ifnull(c.ENTID, 3) as ORGANIZATION_ID, ifnull(a.NOTICEUSER, ) as NOTICEUSER from kaf_cpcuser as a left join kaf_cpcorguser as b on ((a.SYSUSERID = b.SYSUSERID)) left join kaf_cpcorg as c on ((b.ORGID = c.ORGID)) order by a.SYSUSERID, a.USERID, a.USERNAME, a.USERPASS, a.USERTYPE, a.EMPID, a.EMAIL, a.TELO, a.TELH, a.MOBIL, a.ACTIVED, a.ENABLEPWD, a.ENABLEMMSG, a.FEECENTER, a.ISPLANNER, a.ISWHEMPLOYEE, a.ISBUYER, a.ISQCEMPLOYEE, a.ISSALEEMPLOYEE, a.SEX, c.ENTID)",
 		},
 		{
 			input:  "CREATE TABLE `ecbase_push_log` (`id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键',`create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间') ENGINE=InnoDB AUTO_INCREMENT=654 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='推送记录表'/*!50500 PARTITION BY RANGE  COLUMNS(create_time)(PARTITION p20240115 VALUES LESS THAN ('2024-01-15 00:00:00') ENGINE = InnoDB,PARTITION p20240116 VALUES LESS THAN ('2024-01-16 00:00:00') ENGINE = InnoDB,PARTITION p20240117 VALUES LESS THAN ('2024-01-17 00:00:00') ENGINE = InnoDB,PARTITION p20240118 VALUES LESS THAN ('2024-01-18 00:00:00') ENGINE = InnoDB,PARTITION p20240119 VALUES LESS THAN ('2024-01-19 00:00:00') ENGINE = InnoDB,PARTITION p20240120 VALUES LESS THAN ('2024-01-20 00:00:00') ENGINE = InnoDB,PARTITION p20240121 VALUES LESS THAN ('2024-01-21 00:00:00') ENGINE = InnoDB,PARTITION p20240122 VALUES LESS THAN ('2024-01-22 00:00:00') ENGINE = InnoDB,PARTITION p20240123 VALUES LESS THAN ('2024-01-23 00:00:00') ENGINE = InnoDB,PARTITION p20240124 VALUES LESS THAN ('2024-01-24 00:00:00') ENGINE = InnoDB,PARTITION p20240125 VALUES LESS THAN ('2024-01-25 00:00:00') ENGINE = InnoDB) */;",
-			output: "create table ecbase_push_log (id bigint not null auto_increment comment 主键, create_time datetime not null default current_timestamp() comment 创建时间) engine = innodb auto_increment = 654 charset = utf8mb4 Collate = utf8mb4_general_ci comment = '推送记录表' partition by range columns (create_time) (partition p20240115 values less than (2024-01-15 00:00:00) engine = innodb, partition p20240116 values less than (2024-01-16 00:00:00) engine = innodb, partition p20240117 values less than (2024-01-17 00:00:00) engine = innodb, partition p20240118 values less than (2024-01-18 00:00:00) engine = innodb, partition p20240119 values less than (2024-01-19 00:00:00) engine = innodb, partition p20240120 values less than (2024-01-20 00:00:00) engine = innodb, partition p20240121 values less than (2024-01-21 00:00:00) engine = innodb, partition p20240122 values less than (2024-01-22 00:00:00) engine = innodb, partition p20240123 values less than (2024-01-23 00:00:00) engine = innodb, partition p20240124 values less than (2024-01-24 00:00:00) engine = innodb, partition p20240125 values less than (2024-01-25 00:00:00) engine = innodb)",
+			output: "create table ecbase_push_log (id bigint not null auto_increment comment 主键, create_time datetime not null default CURRENT_TIMESTAMP() comment 创建时间) engine = innodb auto_increment = 654 charset = utf8mb4 Collate = utf8mb4_general_ci comment = '推送记录表' partition by range columns (create_time) (partition p20240115 values less than (2024-01-15 00:00:00) engine = innodb, partition p20240116 values less than (2024-01-16 00:00:00) engine = innodb, partition p20240117 values less than (2024-01-17 00:00:00) engine = innodb, partition p20240118 values less than (2024-01-18 00:00:00) engine = innodb, partition p20240119 values less than (2024-01-19 00:00:00) engine = innodb, partition p20240120 values less than (2024-01-20 00:00:00) engine = innodb, partition p20240121 values less than (2024-01-21 00:00:00) engine = innodb, partition p20240122 values less than (2024-01-22 00:00:00) engine = innodb, partition p20240123 values less than (2024-01-23 00:00:00) engine = innodb, partition p20240124 values less than (2024-01-24 00:00:00) engine = innodb, partition p20240125 values less than (2024-01-25 00:00:00) engine = innodb)",
 		},
 		{
 			input:  "show connectors",
@@ -2802,6 +2884,45 @@ var (
 			input:  "explain analyze verbose force execute st",
 			output: "explain (analyze,verbose) execute st",
 		},
+		{
+			input:  "create pitr `pitr1` for cluster range 1 'd'",
+			output: "create pitr pitr1 for cluster range 1  d",
+		},
+		{
+			input:  "create pitr `pitr2` for account acc01 range 1 'd'",
+			output: "create pitr pitr2 for account acc01 range 1  d",
+		},
+		{
+			input:  "create pitr `pitr3` range 1 'h'",
+			output: "create pitr pitr3 for self account range 1  h",
+		},
+		{
+			input:  "create pitr `pitr4` for database db01 range 1 'h'",
+			output: "create pitr pitr4 for database db01 range 1  h",
+		},
+		{
+			input:  "create pitr `pitr5` for database db01 table t01 range 1 'h'",
+			output: "create pitr pitr5 for database db01 table t01 range 1  h",
+		},
+		{
+			input: "show pitr",
+		},
+		{
+			input:  "drop pitr `pitr1`",
+			output: "drop pitr pitr1",
+		},
+		{
+			input:  "drop pitr if exists `pitr2`",
+			output: "drop pitr if exists pitr2",
+		},
+		{
+			input:  "alter pitr `pitr3` range 2 'h'",
+			output: "alter pitr pitr3 range 2  h",
+		},
+		{
+			input:  "alter pitr if exists `pitr01` range 2 'h'",
+			output: "alter pitr if exists pitr01 range 2  h",
+		},
 	}
 )
 
@@ -2820,6 +2941,7 @@ func TestValid(t *testing.T) {
 		if tcase.output != out {
 			t.Errorf("Parsing failed. \nExpected/Got:\n%s\n%s", tcase.output, out)
 		}
+		ast.StmtKind()
 	}
 }
 
@@ -2917,7 +3039,7 @@ var (
 					END IF;
 					SET s = CONCAT(n, ' ', s, ' ', m, '.');
 				END`,
-		output: "begin if n = m then set s = equals; else if n > m then set s = greater; else set s = less; end if; set s = concat(is , s,  than); end if; set s = concat(n,  , s,  , m, .); end",
+		output: "begin if n = m then set s = equals; else if n > m then set s = greater; else set s = less; end if; set s = CONCAT(is , s,  than); end if; set s = CONCAT(n,  , s,  , m, .); end",
 	}, {
 		input: `BEGIN					
 					label1: LOOP

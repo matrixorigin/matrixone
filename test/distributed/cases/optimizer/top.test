@@ -10,7 +10,7 @@ insert into t2 select *,*,* from generate_series(1000000) g;
 select mo_ctl('dn', 'flush', 'd1.t1');
 -- @separator:table
 select mo_ctl('dn', 'flush', 'd1.t2');
-select Sleep(5);
+select Sleep(1);
 -- @separator:table
 explain select * from t1 order by c1 limit 100 offset 200;
 -- @separator:table

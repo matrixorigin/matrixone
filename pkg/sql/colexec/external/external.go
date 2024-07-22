@@ -15,6 +15,7 @@
 package external
 
 import (
+	"archive/tar"
 	"bufio"
 	"bytes"
 	"compress/bzip2"
@@ -27,6 +28,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -68,21 +70,26 @@ var (
 	STATEMENT_ACCOUNT = "account"
 )
 
-const argName = "external"
+const opName = "external"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (external *External) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": external output")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) error {
+func (external *External) OpType() vm.OpType {
+	return vm.External
+}
+
+func (external *External) Prepare(proc *process.Process) error {
 	_, span := trace.Start(proc.Ctx, "ExternalPrepare")
+	external.ctr = new(container)
 	defer span.End()
-	param := arg.Es
-	if proc.Lim.MaxMsgSize == 0 {
+	param := external.Es
+	if proc.GetLim().MaxMsgSize == 0 {
 		param.maxBatchSize = uint64(morpc.GetMessageSize())
 	} else {
-		param.maxBatchSize = proc.Lim.MaxMsgSize
+		param.maxBatchSize = proc.GetLim().MaxMsgSize
 	}
 	param.maxBatchSize = uint64(float64(param.maxBatchSize) * 0.6)
 	if param.Extern == nil {
@@ -93,20 +100,24 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 		if err := plan2.InitS3Param(param.Extern); err != nil {
 			return err
 		}
-		param.Extern.FileService = proc.FileService
+		param.Extern.FileService = proc.Base.FileService
 	}
 	if !loadFormatIsValid(param.Extern) {
 		return moerr.NewNYI(proc.Ctx, "load format '%s'", param.Extern.Format)
 	}
 
-	if param.Extern.Format == tree.JSONLINE {
-		if param.Extern.JsonData != tree.OBJECT && param.Extern.JsonData != tree.ARRAY {
-			param.Fileparam.End = true
-			return moerr.NewNotSupported(proc.Ctx, "the jsonline format '%s' is not supported now", param.Extern.JsonData)
+	if param.Extern.Format != tree.PARQUET {
+		if param.Extern.Format == tree.JSONLINE {
+			if param.Extern.JsonData != tree.OBJECT && param.Extern.JsonData != tree.ARRAY {
+				param.Fileparam.End = true
+				return moerr.NewNotSupported(proc.Ctx, "the jsonline format '%s' is not supported now", param.Extern.JsonData)
+			}
 		}
+		param.IgnoreLineTag = int(param.Extern.Tail.IgnoredLines)
+		param.IgnoreLine = param.IgnoreLineTag
+		param.MoCsvLineArray = make([][]csvparser.Field, OneBatchMaxRow)
 	}
-	param.IgnoreLineTag = int(param.Extern.Tail.IgnoredLines)
-	param.IgnoreLine = param.IgnoreLineTag
+
 	if len(param.FileList) == 0 && param.Extern.ScanType != tree.INLINE {
 		logutil.Warnf("no such file '%s'", param.Extern.Filepath)
 		param.Fileparam.End = true
@@ -123,11 +134,10 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	}
 	param.Filter.columnMap, _, _, _ = plan2.GetColumnsByExpr(param.Filter.FilterExpr, param.tableDef)
 	param.Filter.zonemappable = plan2.ExprIsZonemappable(proc.Ctx, param.Filter.FilterExpr)
-	param.MoCsvLineArray = make([][]csvparser.Field, OneBatchMaxRow)
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
@@ -135,7 +145,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	t := time.Now()
 	ctx, span := trace.Start(proc.Ctx, "ExternalCall")
 	t1 := time.Now()
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze(external.GetIdx(), external.GetParallelIdx(), external.GetParallelMajor())
 	anal.Start()
 	defer func() {
 		anal.Stop()
@@ -143,16 +153,16 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		span.End()
 		v2.TxnStatementExternalScanDurationHistogram.Observe(time.Since(t).Seconds())
 	}()
-	anal.Input(nil, arg.GetIsFirst())
+	anal.Input(nil, external.GetIsFirst())
 
 	var err error
 	result := vm.NewCallResult()
-	param := arg.Es
+	param := external.Es
 	if param.Fileparam.End {
 		result.Status = vm.ExecStop
 		return result, nil
 	}
-	if param.plh == nil && param.Extern.ScanType != tree.INLINE {
+	if (param.plh == nil && param.parqh == nil) && param.Extern.ScanType != tree.INLINE {
 		if param.Fileparam.FileIndex >= len(param.FileList) {
 			result.Status = vm.ExecStop
 			return result, nil
@@ -160,23 +170,23 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		param.Fileparam.Filepath = param.FileList[param.Fileparam.FileIndex]
 		param.Fileparam.FileIndex++
 	}
-	if arg.buf != nil {
-		proc.PutBatch(arg.buf)
-		arg.buf = nil
+	if external.ctr.buf != nil {
+		proc.PutBatch(external.ctr.buf)
+		external.ctr.buf = nil
 	}
-	arg.buf, err = scanFileData(ctx, param, proc)
+	external.ctr.buf, err = scanFileData(ctx, param, proc)
 	if err != nil {
 		param.Fileparam.End = true
 		return result, err
 	}
 
-	if arg.buf != nil {
-		anal.Output(arg.buf, arg.GetIsLast())
-		anal.Alloc(int64(arg.buf.Size()))
+	if external.ctr.buf != nil {
+		anal.Output(external.ctr.buf, external.GetIsLast())
+		external.ctr.maxAllocSize = max(external.ctr.maxAllocSize, external.ctr.buf.Size())
 	}
-	result.Batch = arg.buf
+	result.Batch = external.ctr.buf
 	if result.Batch != nil {
-		result.Batch.ShuffleIDX = param.Idx
+		result.Batch.ShuffleIDX = int32(param.Idx)
 	}
 	return result, nil
 }
@@ -294,7 +304,7 @@ func filterByAccountAndFilename(ctx context.Context, node *plan.Node, proc *proc
 	if err != nil {
 		return nil, nil, err
 	}
-	vec, err := executor.Eval(proc, []*batch.Batch{bat})
+	vec, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
 	if err != nil {
 		executor.Free()
 		return nil, nil, err
@@ -323,7 +333,7 @@ func readFile(param *ExternalParam, proc *process.Process) (io.ReadCloser, error
 		return io.NopCloser(bytes.NewReader(util.UnsafeStringToBytes(param.Extern.Data))), nil
 	}
 	if param.Extern.Local {
-		return io.NopCloser(proc.LoadLocalReader), nil
+		return io.NopCloser(proc.GetLoadLocalReader()), nil
 	}
 	fs, readPath, err := plan2.GetForETLWithType(param.Extern, param.Fileparam.Filepath)
 	if err != nil {
@@ -358,7 +368,8 @@ func readFile(param *ExternalParam, proc *process.Process) (io.ReadCloser, error
 	return r, nil
 }
 
-func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64) ([]int64, error) {
+// TODO : merge below two functions
+func ReadFileOffsetNoStrict(param *tree.ExternParam, mcpu int, fileSize int64) ([]int64, error) {
 	arr := make([]int64, 0)
 
 	fs, readPath, err := plan2.GetForETLWithType(param, param.Filepath)
@@ -403,21 +414,360 @@ func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64) ([]int64,
 	return arr, nil
 }
 
+func ReadFileOffsetStrict(param *tree.ExternParam, mcpu int, fileSize int64, visibleCols []*plan.ColDef) ([]int64, error) {
+	arr := make([]int64, 0)
+
+	fs, readPath, err := plan2.GetForETLWithType(param, param.Filepath)
+	if err != nil {
+		return nil, err
+	}
+	var r io.ReadCloser
+	vec := fileservice.IOVector{
+		FilePath: readPath,
+		Entries: []fileservice.IOEntry{
+			0: {
+				Offset:            0,
+				Size:              -1,
+				ReadCloserForRead: &r,
+			},
+		},
+	}
+
+	var offset []int64
+	batchSize := fileSize / int64(mcpu)
+
+	offset = append(offset, 0)
+
+	for i := 1; i < mcpu; i++ {
+		vec.Entries[0].Offset = offset[i-1] + batchSize
+		if vec.Entries[0].Offset >= fileSize {
+			break
+		}
+		if err = fs.Read(param.Ctx, &vec); err != nil {
+			return nil, err
+		}
+		tailSize, err := getTailSize(param, visibleCols, r)
+		if err != nil {
+			break
+		}
+		offset = append(offset, vec.Entries[0].Offset+tailSize)
+	}
+
+	for i := 0; i < len(offset); i++ {
+		if i+1 < len(offset) {
+			arr = append(arr, offset[i])
+			arr = append(arr, offset[i+1])
+		} else {
+			arr = append(arr, offset[i])
+			arr = append(arr, -1)
+		}
+	}
+	return arr, nil
+}
+
+func getTailSize(param *tree.ExternParam, cols []*plan.ColDef, r io.ReadCloser) (int64, error) {
+	bufR := bufio.NewReader(r)
+	// ensure the first character is not field quote symbol
+	quoteByte := byte('"')
+	if param.Tail.Fields != nil {
+		if enclosed := param.Tail.Fields.EnclosedBy; enclosed != nil && enclosed.Value != 0 {
+			quoteByte = enclosed.Value
+		}
+	}
+	skipCount := int64(0)
+	for {
+		ch, err := bufR.ReadByte()
+		if err != nil {
+			return 0, err
+		}
+		if ch != quoteByte {
+			err = bufR.UnreadByte()
+			if err != nil {
+				return 0, err
+			}
+			break
+		}
+		skipCount++
+	}
+	csvReader, err := newReaderWithParam(&ExternalParam{
+		ExParamConst: ExParamConst{Extern: param},
+		ExParam:      ExParam{reader: io.NopCloser(bufR)},
+	}, true)
+	if err != nil {
+		return 0, err
+	}
+	var fields []csvparser.Field
+	for {
+		fields, err = csvReader.Read()
+		if err != nil {
+			return 0, err
+		}
+		if len(fields) < len(cols) {
+			continue
+		}
+		if isLegalLine(param, cols, fields) {
+			return csvReader.Pos() + skipCount, nil
+		}
+	}
+}
+
+func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparser.Field) bool {
+	for idx, col := range cols {
+		field := fields[idx]
+		id := types.T(col.Typ.Id)
+		if id != types.T_char && id != types.T_varchar && id != types.T_json &&
+			id != types.T_binary && id != types.T_varbinary && id != types.T_blob && id != types.T_text {
+			field.Val = strings.TrimSpace(field.Val)
+		}
+		isNullOrEmpty := field.IsNull || (getNullFlag(param.NullMap, col.Name, field.Val))
+		if id != types.T_char && id != types.T_varchar &&
+			id != types.T_binary && id != types.T_varbinary && id != types.T_json && id != types.T_blob && id != types.T_text {
+			isNullOrEmpty = isNullOrEmpty || len(field.Val) == 0
+		}
+		if isNullOrEmpty {
+			continue
+		}
+		switch id {
+		case types.T_bool:
+			_, err := types.ParseBool(field.Val)
+			if err != nil {
+				return false
+			}
+		case types.T_bit:
+			if len(field.Val) > 8 {
+				return false
+			}
+			width := col.Typ.Width
+			var val uint64
+			for i := 0; i < len(field.Val); i++ {
+				val = (val << 8) | uint64(field.Val[i])
+			}
+			if val > uint64(1<<width-1) {
+				return false
+			}
+		case types.T_int8:
+			_, err := strconv.ParseInt(field.Val, 10, 8)
+			if err != nil {
+				if errors.Is(err, strconv.ErrRange) {
+					return false
+				}
+				f, err := strconv.ParseFloat(field.Val, 64)
+				if err != nil || f < math.MinInt8 || f > math.MaxInt8 {
+					return false
+				}
+			}
+		case types.T_int16:
+			_, err := strconv.ParseInt(field.Val, 10, 16)
+			if err != nil {
+				if errors.Is(err, strconv.ErrRange) {
+					return false
+				}
+				f, err := strconv.ParseFloat(field.Val, 64)
+				if err != nil || f < math.MinInt16 || f > math.MaxInt16 {
+					return false
+				}
+			}
+		case types.T_int32:
+			_, err := strconv.ParseInt(field.Val, 10, 32)
+			if err != nil {
+				if errors.Is(err, strconv.ErrRange) {
+					return false
+				}
+				f, err := strconv.ParseFloat(field.Val, 64)
+				if err != nil || f < math.MinInt32 || f > math.MaxInt32 {
+					return false
+				}
+			}
+		case types.T_int64:
+			_, err := strconv.ParseInt(field.Val, 10, 64)
+			if err != nil {
+				if errors.Is(err, strconv.ErrRange) {
+					return false
+				}
+				f, err := strconv.ParseFloat(field.Val, 64)
+				if err != nil || f < math.MinInt64 || f > math.MaxInt64 {
+					return false
+				}
+			}
+		case types.T_uint8:
+			_, err := strconv.ParseUint(field.Val, 10, 8)
+			if err != nil {
+				if errors.Is(err, strconv.ErrRange) {
+					return false
+				}
+				f, err := strconv.ParseFloat(field.Val, 64)
+				if err != nil || f < 0 || f > math.MaxUint8 {
+					return false
+				}
+			}
+		case types.T_uint16:
+			_, err := strconv.ParseUint(field.Val, 10, 16)
+			if err != nil {
+				if errors.Is(err, strconv.ErrRange) {
+					return false
+				}
+				f, err := strconv.ParseFloat(field.Val, 64)
+				if err != nil || f < 0 || f > math.MaxUint16 {
+					return false
+				}
+			}
+		case types.T_uint32:
+			_, err := strconv.ParseUint(field.Val, 10, 32)
+			if err != nil {
+				if errors.Is(err, strconv.ErrRange) {
+					return false
+				}
+				f, err := strconv.ParseFloat(field.Val, 64)
+				if err != nil || f < 0 || f > math.MaxUint32 {
+					return false
+				}
+			}
+		case types.T_uint64:
+			_, err := strconv.ParseUint(field.Val, 10, 64)
+			if err != nil {
+				if errors.Is(err, strconv.ErrRange) {
+					return false
+				}
+				f, err := strconv.ParseFloat(field.Val, 64)
+				if err != nil || f < 0 || f > math.MaxUint64 {
+					return false
+				}
+			}
+		case types.T_float32:
+			// origin float32 data type
+			if col.Typ.Scale < 0 || col.Typ.Width == 0 {
+				_, err := strconv.ParseFloat(field.Val, 32)
+				if err != nil {
+					return false
+				}
+			} else {
+				_, err := types.ParseDecimal128(field.Val, col.Typ.Width, col.Typ.Scale)
+				if err != nil {
+					return false
+				}
+			}
+		case types.T_float64:
+			// origin float64 data type
+			if col.Typ.Scale < 0 || col.Typ.Width == 0 {
+				_, err := strconv.ParseFloat(field.Val, 64)
+				if err != nil {
+					return false
+				}
+			} else {
+				_, err := types.ParseDecimal128(field.Val, col.Typ.Width, col.Typ.Scale)
+				if err != nil {
+					return false
+				}
+
+			}
+		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+			continue
+		case types.T_array_float32:
+			_, err := types.StringToArrayToBytes[float32](field.Val)
+			if err != nil {
+				return false
+			}
+		case types.T_array_float64:
+			_, err := types.StringToArrayToBytes[float64](field.Val)
+			if err != nil {
+				return false
+			}
+		case types.T_json:
+			if param.Format == tree.CSV {
+				field.Val = fmt.Sprintf("%v", strings.Trim(field.Val, "\""))
+				byteJson, err := types.ParseStringToByteJson(field.Val)
+				if err != nil {
+					return false
+				}
+				_, err = types.EncodeJson(byteJson)
+				if err != nil {
+					return false
+				}
+			}
+		case types.T_date:
+			_, err := types.ParseDateCast(field.Val)
+			if err != nil {
+				return false
+			}
+		case types.T_time:
+			_, err := types.ParseTime(field.Val, col.Typ.Scale)
+			if err != nil {
+				return false
+			}
+		case types.T_datetime:
+			_, err := types.ParseDatetime(field.Val, col.Typ.Scale)
+			if err != nil {
+				return false
+			}
+		case types.T_enum:
+			_, err := strconv.ParseUint(field.Val, 10, 16)
+			if err == nil {
+				continue
+			} else if errors.Is(err, strconv.ErrSyntax) {
+				_, err := types.ParseEnum(col.Typ.Enumvalues, field.Val)
+				if err != nil {
+					return false
+				}
+			} else {
+				if errors.Is(err, strconv.ErrRange) {
+					return false
+				}
+				f, err := strconv.ParseFloat(field.Val, 64)
+				if err != nil || f < 0 || f > math.MaxUint16 {
+					return false
+				}
+			}
+		case types.T_decimal64:
+			_, err := types.ParseDecimal64(field.Val, col.Typ.Width, col.Typ.Scale)
+			if err != nil {
+				// we tolerate loss of digits.
+				if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
+					return false
+				}
+			}
+		case types.T_decimal128:
+			_, err := types.ParseDecimal128(field.Val, col.Typ.Width, col.Typ.Scale)
+			if err != nil {
+				// we tolerate loss of digits.
+				if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
+					return false
+				}
+			}
+		case types.T_timestamp:
+			t := time.Local
+			_, err := types.ParseTimestamp(t, field.Val, col.Typ.Scale)
+			if err != nil {
+				return false
+			}
+		case types.T_uuid:
+			_, err := types.ParseUuid(field.Val)
+			if err != nil {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func GetCompressType(param *tree.ExternParam, filepath string) string {
 	if param.CompressType != "" && param.CompressType != tree.AUTO {
 		return param.CompressType
 	}
-	index := strings.LastIndex(filepath, ".")
-	if index == -1 {
-		return tree.NOCOMPRESS
-	}
-	tail := string([]byte(filepath)[index+1:])
-	switch tail {
-	case "gz", "gzip":
+
+	filepath = strings.ToLower(filepath)
+
+	switch {
+	case strings.HasSuffix(filepath, ".tar.gz") || strings.HasSuffix(filepath, ".tar.gzip"):
+		return tree.TAR_GZ
+	case strings.HasSuffix(filepath, ".tar.bz2") || strings.HasSuffix(filepath, ".tar.bzip2"):
+		return tree.TAR_BZ2
+	case strings.HasSuffix(filepath, ".gz") || strings.HasSuffix(filepath, ".gzip"):
 		return tree.GZIP
-	case "bz2", "bzip2":
+	case strings.HasSuffix(filepath, ".bz2") || strings.HasSuffix(filepath, ".bzip2"):
 		return tree.BZIP2
-	case "lz4":
+	case strings.HasSuffix(filepath, ".lz4"):
 		return tree.LZ4
 	default:
 		return tree.NOCOMPRESS
@@ -440,9 +790,35 @@ func getUnCompressReader(param *tree.ExternParam, filepath string, r io.ReadClos
 		return io.NopCloser(lz4.NewReader(r)), nil
 	case tree.LZW:
 		return nil, moerr.NewInternalError(param.Ctx, "the compress type '%s' is not support now", param.CompressType)
+	case tree.TAR_GZ:
+		gzipReader, err := gzip.NewReader(r)
+		if err != nil {
+			return nil, err
+		}
+		return getTarReader(param.Ctx, gzipReader)
+	case tree.TAR_BZ2:
+		return getTarReader(param.Ctx, bzip2.NewReader(r))
 	default:
 		return nil, moerr.NewInternalError(param.Ctx, "the compress type '%s' is not support now", param.CompressType)
 	}
+}
+
+func getTarReader(ctx context.Context, r io.Reader) (io.ReadCloser, error) {
+	tarReader := tar.NewReader(r)
+	// move to first file
+	for {
+		header, err := tarReader.Next()
+		if err == io.EOF {
+			return nil, moerr.NewInternalError(ctx, "failed to decompress the file, no available files found")
+		}
+		if err != nil {
+			return nil, err
+		}
+		if !header.FileInfo().IsDir() && !strings.HasPrefix(header.FileInfo().Name(), ".") {
+			break
+		}
+	}
+	return io.NopCloser(tarReader), nil
 }
 
 func makeType(typ *plan.Type, flag bool) types.Type {
@@ -456,13 +832,14 @@ func makeBatch(param *ExternalParam, batchSize int, proc *process.Process) (bat 
 	bat = batch.New(false, param.Attrs)
 	//alloc space for vector
 	for i := range param.Attrs {
-		typ := makeType(param.Cols[i].Typ, param.ParallelLoad)
+		typ := makeType(&param.Cols[i].Typ, param.ParallelLoad)
 		bat.Vecs[i] = proc.GetVector(typ)
-		err = bat.Vecs[i].PreExtend(batchSize, proc.GetMPool())
-		if err != nil {
-			bat.Clean(proc.GetMPool())
-			return nil, err
-		}
+	}
+	if err = bat.PreExtend(proc.GetMPool(), batchSize); err != nil {
+		bat.Clean(proc.GetMPool())
+		return nil, err
+	}
+	for i := range bat.Vecs {
 		bat.Vecs[i].SetLength(batchSize)
 	}
 	return bat, nil
@@ -476,6 +853,32 @@ func getRealAttrCnt(attrs []string, cols []*plan.ColDef) int {
 		}
 	}
 	return len(attrs) - cnt
+}
+
+func checkLineValid(param *ExternalParam, proc *process.Process, line []csvparser.Field, rowIdx int) error {
+	if param.ClusterTable != nil && param.ClusterTable.GetIsClusterTable() {
+		//the column account_id of the cluster table do need to be filled here
+		if len(line)+1 != getRealAttrCnt(param.Attrs, param.Cols) {
+			return moerr.NewInvalidInput(proc.Ctx, "the data of row %d contained is not equal to input columns", rowIdx+1)
+		}
+	} else {
+		if param.Extern.ExtTab {
+			if len(line) < getRealAttrCnt(param.Attrs, param.Cols) {
+				return moerr.NewInvalidInput(proc.Ctx, "the data of row %d contained is less than input columns", rowIdx+1)
+			}
+			return nil
+		}
+		if len(line) != len(param.TbColToDataCol) {
+			if len(line) != len(param.TbColToDataCol)+1 {
+				return moerr.NewInvalidInput(proc.Ctx, "the data of row %d contained is not equal to input columns", rowIdx+1)
+			}
+			field := line[len(line)-1]
+			if field.Val != "" {
+				return moerr.NewInvalidInput(proc.Ctx, "the data of row %d contained is not equal to input columns", rowIdx+1)
+			}
+		}
+	}
+	return nil
 }
 
 func getBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Process) (*batch.Batch, error) {
@@ -499,16 +902,11 @@ func getBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 			}
 			plh.moCsvLineArray[rowIdx] = line
 		}
-		if param.ClusterTable != nil && param.ClusterTable.GetIsClusterTable() {
-			//the column account_id of the cluster table do need to be filled here
-			if len(line)+1 < getRealAttrCnt(param.Attrs, param.Cols) {
-				return nil, moerr.NewInternalError(proc.Ctx, ColumnCntLargerErrorInfo)
-			}
-		} else {
-			if !param.Extern.SysTable && len(line) < getRealAttrCnt(param.Attrs, param.Cols) {
-				return nil, moerr.NewInternalError(proc.Ctx, ColumnCntLargerErrorInfo)
-			}
+
+		if err := checkLineValid(param, proc, line, rowIdx); err != nil {
+			return nil, err
 		}
+
 		err = getOneRowData(bat, line, rowIdx, param, proc.GetMPool())
 		if err != nil {
 			return nil, err
@@ -539,7 +937,7 @@ func getMOCSVReader(param *ExternalParam, proc *process.Process) (*ParseLineHand
 		return nil, err
 	}
 
-	csvReader, err := newReaderWithParam(param)
+	csvReader, err := newReaderWithParam(param, false)
 	if err != nil {
 		return nil, err
 	}
@@ -613,6 +1011,11 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 	defer func() {
 		span.End()
 		if tmpBat != nil {
+			for i, v := range tmpBat.Vecs {
+				if v == vecTmp {
+					tmpBat.Vecs[i] = nil
+				}
+			}
 			tmpBat.Clean(mp)
 		}
 		if vecTmp != nil {
@@ -641,7 +1044,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 	colCnt := meta.BlockHeader().ColumnCount()
 	for i := 0; i < len(param.Attrs); i++ {
 		idxs[i] = uint16(param.Name2ColIndex[param.Attrs[i]])
-		if param.Extern.SysTable && idxs[i] >= colCnt {
+		if idxs[i] >= colCnt {
 			idxs[i] = 0
 		}
 	}
@@ -654,8 +1057,8 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 
 	var sels []int32
 	for i := 0; i < len(param.Attrs); i++ {
-		if param.Extern.SysTable && uint16(param.Name2ColIndex[param.Attrs[i]]) >= colCnt {
-			vecTmp, err = proc.AllocVectorOfRows(makeType(param.Cols[i].Typ, false), rows, nil)
+		if uint16(param.Name2ColIndex[param.Attrs[i]]) >= colCnt {
+			vecTmp, err = proc.AllocVectorOfRows(makeType(&param.Cols[i].Typ, false), rows, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -666,7 +1069,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 			if rows == 0 {
 				rows = tmpBat.Vecs[i].Length()
 			}
-			vecTmp, err = proc.AllocVectorOfRows(makeType(param.Cols[i].Typ, false), rows, nil)
+			vecTmp, err = proc.AllocVectorOfRows(makeType(&param.Cols[i].Typ, false), rows, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -777,9 +1180,11 @@ func scanZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Pr
 func scanFileData(ctx context.Context, param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
 	if param.Extern.QueryResult {
 		return scanZonemapFile(ctx, param, proc)
-	} else {
-		return scanCsvFile(ctx, param, proc)
 	}
+	if param.Extern.Format == tree.PARQUET {
+		return scanParquetFile(ctx, param, proc)
+	}
+	return scanCsvFile(ctx, param, proc)
 }
 
 func transJson2Lines(ctx context.Context, str string, attrs []string, cols []*plan.ColDef, jsonData string, param *ExternalParam) ([]csvparser.Field, error) {
@@ -804,46 +1209,47 @@ func transJsonObject2Lines(ctx context.Context, str string, attrs []string, cols
 		str = param.prevStr + str
 		param.prevStr = ""
 	}
-	var jsonMap map[string]interface{}
-	var decoder = json.NewDecoder(bytes.NewReader([]byte(str)))
-	decoder.UseNumber()
-	err = decoder.Decode(&jsonMap)
+	jsonNode, err := bytejson.ParseNodeString(str)
 	if err != nil {
 		logutil.Errorf("json unmarshal err:%v", err)
 		param.prevStr = str
 		return nil, err
 	}
-	if len(jsonMap) < getRealAttrCnt(attrs, cols) {
+	defer jsonNode.Free()
+	g, ok := jsonNode.V.(*bytejson.Group)
+	if !ok || !g.Obj {
+		return nil, moerr.NewInvalidInput(ctx, "not a object")
+	}
+	if len(g.Keys) < getRealAttrCnt(attrs, cols) {
 		return nil, moerr.NewInternalError(ctx, ColumnCntLargerErrorInfo)
 	}
 	for idx, attr := range attrs {
 		if cols[idx].Hidden {
 			continue
 		}
-		if val, ok := jsonMap[attr]; ok {
-			if val == nil {
-				res = append(res, csvparser.Field{IsNull: true})
-				continue
-			}
-			tp := cols[idx].Typ.Id
-			if tp != int32(types.T_json) {
-				val = fmt.Sprintf("%v", val)
-				res = append(res, csvparser.Field{Val: fmt.Sprintf("%v", val), IsNull: val == JsonNull})
-				continue
-			}
-			var bj bytejson.ByteJson
-			err = bj.UnmarshalObject(val)
-			if err != nil {
-				return nil, err
-			}
-			dt, err := bj.Marshal()
-			if err != nil {
-				return nil, err
-			}
-			res = append(res, csvparser.Field{Val: string(dt)})
-		} else {
+		ki := slices.Index(g.Keys, attr)
+		if ki < 0 {
 			return nil, moerr.NewInvalidInput(ctx, "the attr %s is not in json", attr)
 		}
+
+		valN := g.Values[ki]
+		if valN.V == nil {
+			res = append(res, csvparser.Field{IsNull: true})
+			continue
+		}
+
+		tp := cols[idx].Typ.Id
+		if tp == int32(types.T_json) {
+			data, err := valN.ByteJsonRaw()
+			if err != nil {
+				return nil, err
+			}
+			res = append(res, csvparser.Field{Val: string(data)})
+			continue
+		}
+
+		val := fmt.Sprint(valN)
+		res = append(res, csvparser.Field{Val: val, IsNull: val == JsonNull})
 	}
 	return res, nil
 }
@@ -857,41 +1263,41 @@ func transJsonArray2Lines(ctx context.Context, str string, attrs []string, cols 
 		str = param.prevStr + str
 		param.prevStr = ""
 	}
-	var jsonArray []interface{}
-	var decoder = json.NewDecoder(bytes.NewReader([]byte(str)))
-	decoder.UseNumber()
-	err = decoder.Decode(&jsonArray)
+	jsonNode, err := bytejson.ParseNodeString(str)
 	if err != nil {
 		param.prevStr = str
 		return nil, err
 	}
-	if len(jsonArray) < getRealAttrCnt(attrs, cols) {
+	defer jsonNode.Free()
+	g, ok := jsonNode.V.(*bytejson.Group)
+	if !ok || g.Obj {
+		return nil, moerr.NewInvalidInput(ctx, "not a json array")
+	}
+	if len(g.Values) < getRealAttrCnt(attrs, cols) {
 		return nil, moerr.NewInternalError(ctx, ColumnCntLargerErrorInfo)
 	}
-	for idx, val := range jsonArray {
-		if val == nil {
-			res = append(res, csvparser.Field{IsNull: true})
-			continue
-		}
+	for idx, valN := range g.Values {
 		if idx >= len(cols) {
 			return nil, moerr.NewInvalidInput(ctx, str+" , wrong number of colunms")
 		}
-		tp := cols[idx].Typ.Id
-		if tp != int32(types.T_json) {
-			val = fmt.Sprintf("%v", val)
-			res = append(res, csvparser.Field{Val: fmt.Sprintf("%v", val), IsNull: val == JsonNull})
+
+		if valN.V == nil {
+			res = append(res, csvparser.Field{IsNull: true})
 			continue
 		}
-		var bj bytejson.ByteJson
-		err = bj.UnmarshalObject(val)
-		if err != nil {
-			return nil, err
+
+		tp := cols[idx].Typ.Id
+		if tp == int32(types.T_json) {
+			data, err := valN.ByteJsonRaw()
+			if err != nil {
+				return nil, err
+			}
+			res = append(res, csvparser.Field{Val: string(data)})
+			continue
 		}
-		dt, err := bj.Marshal()
-		if err != nil {
-			return nil, err
-		}
-		res = append(res, csvparser.Field{Val: string(dt)})
+
+		val := fmt.Sprint(valN)
+		res = append(res, csvparser.Field{Val: val, IsNull: val == JsonNull})
 	}
 	return res, nil
 }
@@ -909,22 +1315,28 @@ func getNullFlag(nullMap map[string]([]string), attr, field string) bool {
 	return false
 }
 
-func getFieldFromLine(line []csvparser.Field, colIdx int, param *ExternalParam) csvparser.Field {
-	if catalog.ContainExternalHidenCol(param.Attrs[colIdx]) {
+func getFieldFromLine(line []csvparser.Field, colName string, param *ExternalParam) csvparser.Field {
+	if catalog.ContainExternalHidenCol(colName) {
 		return csvparser.Field{Val: param.Fileparam.Filepath}
 	}
-	return line[param.Name2ColIndex[param.Attrs[colIdx]]]
+	if param.Extern.ExtTab {
+		return line[param.Name2ColIndex[colName]]
+	}
+	return line[param.TbColToDataCol[colName]]
 }
 
 func getOneRowData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam, mp *mpool.MPool) error {
 	var buf bytes.Buffer
-	for colIdx := range param.Attrs {
+
+	for colIdx, colName := range param.Attrs {
 		vec := bat.Vecs[colIdx]
+
 		if param.Cols[colIdx].Hidden {
 			nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			continue
 		}
-		field := getFieldFromLine(line, colIdx, param)
+
+		field := getFieldFromLine(line, colName, param)
 		id := types.T(param.Cols[colIdx].Typ.Id)
 		if id != types.T_char && id != types.T_varchar && id != types.T_json &&
 			id != types.T_binary && id != types.T_varbinary && id != types.T_blob && id != types.T_text {
@@ -1212,6 +1624,7 @@ func getOneRowData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *
 			if param.Extern.Format != tree.CSV {
 				jsonBytes = []byte(field.Val)
 			} else {
+				field.Val = fmt.Sprintf("%v", strings.Trim(field.Val, "\""))
 				byteJson, err := types.ParseStringToByteJson(field.Val)
 				if err != nil {
 					logutil.Errorf("parse field[%v] err:%v", field.Val, err)
@@ -1258,7 +1671,16 @@ func getOneRowData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *
 		case types.T_enum:
 			d, err := strconv.ParseUint(field.Val, 10, 16)
 			if err == nil {
-				if err := vector.SetFixedAt(vec, rowIdx, uint16(d)); err != nil {
+				if err := vector.SetFixedAt(vec, rowIdx, types.Enum(d)); err != nil {
+					return err
+				}
+			} else if errors.Is(err, strconv.ErrSyntax) {
+				v, err := types.ParseEnum(param.Cols[colIdx].Typ.Enumvalues, field.Val)
+				if err != nil {
+					logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+					return err
+				}
+				if err := vector.SetFixedAt(vec, rowIdx, types.Enum(v)); err != nil {
 					return err
 				}
 			} else {
@@ -1271,7 +1693,7 @@ func getOneRowData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *
 					logutil.Errorf("parse field[%v] err:%v", field.Val, err)
 					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not uint16 type for column %d", field.Val, colIdx)
 				}
-				if err := vector.SetFixedAt(vec, rowIdx, uint16(f)); err != nil {
+				if err := vector.SetFixedAt(vec, rowIdx, types.Enum(f)); err != nil {
 					return err
 				}
 			}
@@ -1358,7 +1780,7 @@ func readCountStringLimitSize(r *csvparser.CSVParser, ctx context.Context, size 
 
 func loadFormatIsValid(param *tree.ExternParam) bool {
 	switch param.Format {
-	case tree.JSONLINE, tree.CSV:
+	case tree.JSONLINE, tree.CSV, tree.PARQUET:
 		return true
 	}
 	return false

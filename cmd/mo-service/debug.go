@@ -26,22 +26,28 @@ import (
 	"runtime/pprof"
 	"sort"
 	"strings"
+	"time"
 	"unsafe"
 
 	"github.com/felixge/fgprof"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/google/uuid"
+	"go.uber.org/zap"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/util/profile"
 	"github.com/matrixorigin/matrixone/pkg/util/status"
 )
 
 var (
-	cpuProfilePathFlag         = flag.String("cpu-profile", "", "write cpu profile to the specified file")
-	allocsProfilePathFlag      = flag.String("allocs-profile", "", "write allocs profile to the specified file")
-	heapProfilePathFlag        = flag.String("heap-profile", "", "write heap profile to the specified file")
-	fileServiceProfilePathFlag = flag.String("file-service-profile", "", "write file service profile to the specified file")
-	httpListenAddr             = flag.String("debug-http", "", "http server listen address")
-	statusServer               = status.NewServer()
+	cpuProfilePathFlag    = flag.String("cpu-profile", "", "write cpu profile to the specified file")
+	allocsProfilePathFlag = flag.String("allocs-profile", "", "write allocs profile to the specified file")
+	heapProfilePathFlag   = flag.String("heap-profile", "", "write heap profile to the specified file")
+	httpListenAddr        = flag.String("debug-http", "", "http server listen address")
+	profileInterval       = flag.Duration("profile-interval", 0, "profile interval")
+	statusServer          = status.NewServer()
 )
 
 func startCPUProfile() func() {
@@ -102,24 +108,6 @@ func writeHeapProfile() {
 		panic(err)
 	}
 	logutil.Infof("Heap profile written to %s", profilePath)
-}
-
-func startFileServiceProfile() func() {
-	filePath := *fileServiceProfilePathFlag
-	if filePath == "" {
-		filePath = "file-service-profile"
-	}
-	f, err := os.Create(filePath)
-	if err != nil {
-		panic(err)
-	}
-	write, stop := fileservice.FSProfileHandler.StartProfile()
-	logutil.Infof("File service profiling enabled, writing to %s", filePath)
-	return func() {
-		stop()
-		write(f)
-		f.Close()
-	}
 }
 
 func init() {
@@ -285,9 +273,6 @@ func init() {
 
 	})
 
-	// file service profile
-	http.Handle("/debug/fs/", fileservice.FSProfileHandler)
-
 	// global performance counter
 	v, ok := perfcounter.Named.Load(perfcounter.NameForGlobal)
 	if ok {
@@ -395,4 +380,48 @@ func _formatBytes(n int64, unitIndex int) string {
 		str = fmt.Sprintf(" %d%s", rem, units[unitIndex])
 	}
 	return _formatBytes(next, unitIndex+1) + str
+}
+
+// saveProfilesLoop save profiles again and again until the
+// mo is terminated.
+func saveProfilesLoop(sigs chan os.Signal) {
+	if *profileInterval == 0 {
+		return
+	}
+
+	if *profileInterval < time.Second*10 {
+		*profileInterval = time.Second * 10
+	}
+
+	quit := false
+	tk := time.NewTicker(*profileInterval)
+	logutil.GetGlobalLogger().Info("save profiles loop started", zap.Duration("profile-interval", *profileInterval))
+	for {
+		select {
+		case <-tk.C:
+			logutil.GetGlobalLogger().Info("save profiles start")
+			saveProfiles()
+			logutil.GetGlobalLogger().Info("save profiles end")
+		case <-sigs:
+			quit = true
+		}
+		if quit {
+			break
+		}
+	}
+}
+
+func saveProfiles() {
+	//dump heap profile before stopping services
+	saveProfile(profile.HEAP)
+	//dump goroutine before stopping services
+	saveProfile(profile.GOROUTINE)
+}
+
+func saveProfile(typ string) string {
+	name, _ := uuid.NewV7()
+	profilePath := catalog.BuildProfilePath(globalServiceType, globalNodeId, typ, name.String()) + ".gz"
+	logutil.GetGlobalLogger().Info("save profiles ", zap.String("path", profilePath))
+	cnservice.SaveProfile(profilePath, typ, globalEtlFS)
+	return profilePath
 }

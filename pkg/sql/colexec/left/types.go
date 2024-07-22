@@ -16,7 +16,6 @@ package left
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -27,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(LeftJoin)
 
 const (
 	Build = iota
@@ -43,7 +42,8 @@ type evalVector struct {
 type container struct {
 	colexec.ReceiverOperator
 
-	state int
+	state   int
+	lastrow int
 
 	inBuckets []uint8
 
@@ -63,18 +63,17 @@ type container struct {
 	vecs  []*vector.Vector
 
 	mp *hashmap.JoinMap
+
+	maxAllocSize int64
+	bat          *batch.Batch
 }
 
-type Argument struct {
+type LeftJoin struct {
 	ctr        *container
-	Ibucket    uint64
-	Nbucket    uint64
 	Result     []colexec.ResultPos
 	Typs       []types.Type
 	Cond       *plan.Expr
 	Conditions [][]*plan.Expr
-	bat        *batch.Batch
-	lastrow    int
 
 	HashOnPK           bool
 	IsShuffle          bool
@@ -83,50 +82,66 @@ type Argument struct {
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (leftJoin *LeftJoin) GetOperatorBase() *vm.OperatorBase {
+	return &leftJoin.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[LeftJoin](
+		func() *LeftJoin {
+			return &LeftJoin{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *LeftJoin) {
+			*a = LeftJoin{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[LeftJoin]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (leftJoin LeftJoin) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *LeftJoin {
+	return reuse.Alloc[LeftJoin](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (leftJoin *LeftJoin) Release() {
+	if leftJoin != nil {
+		reuse.Free[LeftJoin](leftJoin, nil)
 	}
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := arg.ctr
+func (leftJoin *LeftJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	leftJoin.Free(proc, pipelineFailed, err)
+}
+
+func (leftJoin *LeftJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := leftJoin.ctr
 	if ctr != nil {
 		ctr.cleanBatch(proc)
 		ctr.cleanHashMap()
 		ctr.cleanExprExecutor()
+		ctr.cleanEvalVectors()
 		ctr.FreeAllReg()
+
+		anal := proc.GetAnalyze(leftJoin.GetIdx(), leftJoin.GetParallelIdx(), leftJoin.GetParallelMajor())
+		anal.Alloc(ctr.maxAllocSize)
+
+		if leftJoin.ctr.bat != nil {
+			proc.PutBatch(leftJoin.ctr.bat)
+			leftJoin.ctr.bat = nil
+		}
+		leftJoin.ctr.lastrow = 0
+		leftJoin.ctr = nil
 	}
 }
 
 func (ctr *container) cleanExprExecutor() {
 	if ctr.expr != nil {
 		ctr.expr.Free()
+		ctr.expr = nil
 	}
 }
 
@@ -156,10 +171,12 @@ func (ctr *container) cleanHashMap() {
 	}
 }
 
-func (ctr *container) cleanEvalVectors(mp *mpool.MPool) {
+func (ctr *container) cleanEvalVectors() {
 	for i := range ctr.evecs {
 		if ctr.evecs[i].executor != nil {
 			ctr.evecs[i].executor.Free()
 		}
+		ctr.evecs[i].vec = nil
 	}
+	ctr.evecs = nil
 }

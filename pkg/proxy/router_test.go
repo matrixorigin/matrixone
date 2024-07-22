@@ -37,7 +37,7 @@ func TestCNServer(t *testing.T) {
 		addr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
 		require.NoError(t, os.RemoveAll(addr))
 		cn := testMakeCNServer("", addr, 0, "", labelInfo{})
-		c, err := cn.Connect(0)
+		c, err := cn.Connect(nil, 0)
 		require.Error(t, err)
 		require.Nil(t, c)
 	})
@@ -52,7 +52,7 @@ func TestCNServer(t *testing.T) {
 			require.NoError(t, stopFn())
 		}()
 		cn := testMakeCNServer("", addr, 0, "", labelInfo{})
-		c, err := cn.Connect(0)
+		c, err := cn.Connect(nil, 0)
 		require.NoError(t, err)
 		require.NotNil(t, c)
 	})
@@ -62,14 +62,14 @@ func TestRouter_SelectEmptyCN(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
 	rt := runtime.DefaultRuntime()
-	runtime.SetupProcessLevelRuntime(rt)
+	runtime.SetupServiceBasedRuntime("", rt)
 	logger := rt.Logger()
 	st := stopper.NewStopper("test-proxy", stopper.WithLogger(rt.Logger().RawLogger()))
 	defer st.Stop()
 	hc := &mockHAKeeperClient{}
 	hc.updateCN("cn1", "", map[string]metadata.LabelList{})
 
-	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
+	mc := clusterservice.NewMOCluster("", hc, 3*time.Second)
 	defer mc.Close()
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
 	mc.ForceRefresh(true)
@@ -83,7 +83,7 @@ func TestRouter_SelectEmptyCN(t *testing.T) {
 			"k1": "v1",
 		},
 	}
-	cn, err := ru.Route(context.TODO(), clientInfo{labelInfo: li1}, nil)
+	cn, err := ru.Route(context.TODO(), "", clientInfo{labelInfo: li1}, nil)
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 }
@@ -92,7 +92,7 @@ func TestRouter_RouteForCommon(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
 	rt := runtime.DefaultRuntime()
-	runtime.SetupProcessLevelRuntime(rt)
+	runtime.SetupServiceBasedRuntime("", rt)
 	logger := rt.Logger()
 	st := stopper.NewStopper("test-proxy", stopper.WithLogger(rt.Logger().RawLogger()))
 	defer st.Stop()
@@ -104,7 +104,7 @@ func TestRouter_RouteForCommon(t *testing.T) {
 		"k2":           {Labels: []string{"v2"}},
 	})
 
-	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
+	mc := clusterservice.NewMOCluster("", hc, 3*time.Second)
 	defer mc.Close()
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
 	mc.ForceRefresh(true)
@@ -120,7 +120,7 @@ func TestRouter_RouteForCommon(t *testing.T) {
 			"k2": "v2",
 		},
 	}
-	cn, err := ru.Route(ctx, clientInfo{labelInfo: li1}, nil)
+	cn, err := ru.Route(ctx, "", clientInfo{labelInfo: li1}, nil)
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 
@@ -130,7 +130,7 @@ func TestRouter_RouteForCommon(t *testing.T) {
 			"k1": "v1",
 		},
 	}
-	cn, err = ru.Route(ctx, clientInfo{labelInfo: li2}, nil)
+	cn, err = ru.Route(ctx, "", clientInfo{labelInfo: li2}, nil)
 	require.Error(t, err)
 	require.Nil(t, cn)
 
@@ -140,7 +140,7 @@ func TestRouter_RouteForCommon(t *testing.T) {
 			"k2": "v1",
 		},
 	}
-	cn, err = ru.Route(ctx, clientInfo{labelInfo: li3}, nil)
+	cn, err = ru.Route(ctx, "", clientInfo{labelInfo: li3}, nil)
 	require.Error(t, err)
 	require.Nil(t, cn)
 
@@ -151,11 +151,11 @@ func TestRouter_RouteForCommon(t *testing.T) {
 			"k2": "v1",
 		},
 	}
-	cn, err = ru.Route(ctx, clientInfo{labelInfo: li4, username: "dump"}, nil)
+	cn, err = ru.Route(ctx, "", clientInfo{labelInfo: li4, username: "dump"}, nil)
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 
-	cn, err = ru.Route(ctx, clientInfo{labelInfo: li4}, nil)
+	cn, err = ru.Route(ctx, "", clientInfo{labelInfo: li4}, nil)
 	require.Error(t, err)
 	require.Nil(t, cn)
 
@@ -165,11 +165,11 @@ func TestRouter_RouteForCommon(t *testing.T) {
 			"k2": "v1",
 		},
 	}
-	cn, err = ru.Route(ctx, clientInfo{labelInfo: li5, username: "dump"}, nil)
+	cn, err = ru.Route(ctx, "", clientInfo{labelInfo: li5, username: "dump"}, nil)
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 
-	cn, err = ru.Route(ctx, clientInfo{labelInfo: li5}, nil)
+	cn, err = ru.Route(ctx, "", clientInfo{labelInfo: li5}, nil)
 	require.Error(t, err)
 	require.Nil(t, cn)
 }
@@ -178,12 +178,12 @@ func TestRouter_RouteForSys(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
 	rt := runtime.DefaultRuntime()
-	runtime.SetupProcessLevelRuntime(rt)
+	runtime.SetupServiceBasedRuntime("", rt)
 	logger := rt.Logger()
 	st := stopper.NewStopper("test-proxy", stopper.WithLogger(rt.Logger().RawLogger()))
 	defer st.Stop()
 	hc := &mockHAKeeperClient{}
-	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
+	mc := clusterservice.NewMOCluster("", hc, 3*time.Second)
 	defer mc.Close()
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
 	re := testRebalancer(t, st, logger, mc)
@@ -197,18 +197,18 @@ func TestRouter_RouteForSys(t *testing.T) {
 	})
 	mc.ForceRefresh(true)
 	ctx := context.TODO()
-	cn, err := ru.Route(ctx, clientInfo{labelInfo: li1, username: "dump"}, nil)
+	cn, err := ru.Route(ctx, "", clientInfo{labelInfo: li1, username: "dump"}, nil)
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 	require.Equal(t, "cn1", cn.uuid)
 
-	cn, err = ru.Route(ctx, clientInfo{labelInfo: li1}, nil)
+	cn, err = ru.Route(ctx, "", clientInfo{labelInfo: li1}, nil)
 	require.Error(t, err)
 	require.Nil(t, cn)
 
 	hc.updateCN("cn2", "", map[string]metadata.LabelList{})
 	mc.ForceRefresh(true)
-	cn, err = ru.Route(ctx, clientInfo{labelInfo: li1}, nil)
+	cn, err = ru.Route(ctx, "", clientInfo{labelInfo: li1}, nil)
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 	require.Equal(t, "cn2", cn.uuid)
@@ -217,7 +217,7 @@ func TestRouter_RouteForSys(t *testing.T) {
 		"k1": {Labels: []string{"v1"}},
 	})
 	mc.ForceRefresh(true)
-	cn, err = ru.Route(ctx, clientInfo{labelInfo: li1}, nil)
+	cn, err = ru.Route(ctx, "", clientInfo{labelInfo: li1}, nil)
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 	require.Equal(t, "cn3", cn.uuid)
@@ -226,7 +226,7 @@ func TestRouter_RouteForSys(t *testing.T) {
 		tenantLabelKey: {Labels: []string{"sys"}},
 	})
 	mc.ForceRefresh(true)
-	cn, err = ru.Route(ctx, clientInfo{labelInfo: li1}, nil)
+	cn, err = ru.Route(ctx, "", clientInfo{labelInfo: li1}, nil)
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 	require.Equal(t, "cn4", cn.uuid)
@@ -237,7 +237,7 @@ func TestRouter_SelectByConnID(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.TODO())
 	defer cancel()
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	rt := runtime.DefaultRuntime()
 	logger := rt.Logger()
 	st := stopper.NewStopper("test-proxy", stopper.WithLogger(rt.Logger().RawLogger()))
@@ -274,7 +274,7 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.TODO())
 	defer cancel()
 	rt := runtime.DefaultRuntime()
-	runtime.SetupProcessLevelRuntime(rt)
+	runtime.SetupServiceBasedRuntime("", rt)
 	logger := rt.Logger()
 	st := stopper.NewStopper("test-proxy", stopper.WithLogger(rt.Logger().RawLogger()))
 	defer st.Stop()
@@ -317,7 +317,7 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 		require.NoError(t, stopFn3())
 	}()
 
-	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
+	mc := clusterservice.NewMOCluster("", hc, 3*time.Second)
 	defer mc.Close()
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
 	mc.ForceRefresh(true)
@@ -333,7 +333,7 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 			"k2": "v2",
 		},
 	}
-	cn, err := ru.Route(ctx, clientInfo{labelInfo: li1}, nil)
+	cn, err := ru.Route(ctx, "", clientInfo{labelInfo: li1}, nil)
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
@@ -350,7 +350,7 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 			"k2": "v2",
 		},
 	}
-	cn, err = ru.Route(ctx, clientInfo{labelInfo: li2}, nil)
+	cn, err = ru.Route(ctx, "", clientInfo{labelInfo: li2}, nil)
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
@@ -367,7 +367,7 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 			"k2": "v2",
 		},
 	}
-	cn, err = ru.Route(ctx, clientInfo{labelInfo: li3}, nil)
+	cn, err = ru.Route(ctx, "", clientInfo{labelInfo: li3}, nil)
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
@@ -386,7 +386,7 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.TODO())
 	defer cancel()
 	rt := runtime.DefaultRuntime()
-	runtime.SetupProcessLevelRuntime(rt)
+	runtime.SetupServiceBasedRuntime("", rt)
 	logger := rt.Logger()
 	st := stopper.NewStopper("test-proxy", stopper.WithLogger(rt.Logger().RawLogger()))
 	defer st.Stop()
@@ -427,7 +427,7 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 		require.NoError(t, stopFn3())
 	}()
 
-	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
+	mc := clusterservice.NewMOCluster("", hc, 3*time.Second)
 	defer mc.Close()
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
 	mc.ForceRefresh(true)
@@ -442,7 +442,7 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 			"k2": "v2",
 		},
 	}
-	cn, err := ru.Route(ctx, clientInfo{labelInfo: li1}, nil)
+	cn, err := ru.Route(ctx, "", clientInfo{labelInfo: li1}, nil)
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
@@ -458,7 +458,7 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 			"k2": "v2",
 		},
 	}
-	cn, err = ru.Route(ctx, clientInfo{labelInfo: li2}, nil)
+	cn, err = ru.Route(ctx, "", clientInfo{labelInfo: li2}, nil)
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
@@ -474,7 +474,7 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 			"k2": "v2",
 		},
 	}
-	cn, err = ru.Route(ctx, clientInfo{labelInfo: li3}, nil)
+	cn, err = ru.Route(ctx, "", clientInfo{labelInfo: li3}, nil)
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
@@ -493,7 +493,7 @@ func TestRouter_Filter(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.TODO())
 	defer cancel()
 	rt := runtime.DefaultRuntime()
-	runtime.SetupProcessLevelRuntime(rt)
+	runtime.SetupServiceBasedRuntime("", rt)
 	logger := rt.Logger()
 	st := stopper.NewStopper("test-proxy", stopper.WithLogger(rt.Logger().RawLogger()))
 	defer st.Stop()
@@ -523,7 +523,7 @@ func TestRouter_Filter(t *testing.T) {
 		require.NoError(t, stopFn2())
 	}()
 
-	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
+	mc := clusterservice.NewMOCluster("", hc, 3*time.Second)
 	defer mc.Close()
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
 	mc.ForceRefresh(true)
@@ -531,8 +531,8 @@ func TestRouter_Filter(t *testing.T) {
 
 	ru := newRouter(mc, re, true)
 
-	cn, err := ru.Route(ctx, clientInfo{username: "dump"}, func(s string) bool {
-		return s == "cn1"
+	cn, err := ru.Route(ctx, "", clientInfo{username: "dump"}, func(s string) bool {
+		return s == addr1
 	})
 	require.NoError(t, err)
 	require.NotNil(t, cn)
@@ -545,7 +545,7 @@ func TestRouter_RetryableConnect(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.TODO())
 	defer cancel()
 	rt := runtime.DefaultRuntime()
-	runtime.SetupProcessLevelRuntime(rt)
+	runtime.SetupServiceBasedRuntime("", rt)
 	logger := rt.Logger()
 	st := stopper.NewStopper("test-proxy", stopper.WithLogger(rt.Logger().RawLogger()))
 	defer st.Stop()
@@ -581,7 +581,7 @@ func TestRouter_RetryableConnect(t *testing.T) {
 		require.NoError(t, stopFn3())
 	}()
 
-	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
+	mc := clusterservice.NewMOCluster("", hc, 3*time.Second)
 	defer mc.Close()
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
 	mc.ForceRefresh(true)
@@ -592,9 +592,9 @@ func TestRouter_RetryableConnect(t *testing.T) {
 	li1 := labelInfo{
 		Tenant: "t1",
 	}
-	cn, err := ru.Route(ctx, clientInfo{labelInfo: li1}, func(s string) bool {
+	cn, err := ru.Route(ctx, "", clientInfo{labelInfo: li1}, func(s string) bool {
 		// choose cn2
-		return s == "cn1" || s == "cn3"
+		return s == addr1 || s == addr3
 	})
 	require.NoError(t, err)
 	require.NotNil(t, cn)
@@ -604,9 +604,9 @@ func TestRouter_RetryableConnect(t *testing.T) {
 	_, _, err = ru.Connect(cn, testPacket, tu1)
 	require.True(t, isRetryableErr(err))
 
-	cn, err = ru.Route(ctx, clientInfo{labelInfo: li1}, func(s string) bool {
+	cn, err = ru.Route(ctx, "", clientInfo{labelInfo: li1}, func(s string) bool {
 		// choose cn1
-		return s == "cn2" || s == "cn3"
+		return s == addr2 || s == addr3
 	})
 	require.NoError(t, err)
 	require.NotNil(t, cn)
@@ -617,9 +617,9 @@ func TestRouter_RetryableConnect(t *testing.T) {
 	require.Equal(t, "cn1", cn.uuid)
 
 	// could not connect to cn3, because of timeout.
-	cn, err = ru.Route(ctx, clientInfo{labelInfo: li1}, func(s string) bool {
+	cn, err = ru.Route(ctx, "", clientInfo{labelInfo: li1}, func(s string) bool {
 		// choose cn3
-		return s == "cn1" || s == "cn2"
+		return s == addr1 || s == addr2
 	})
 	require.NoError(t, err)
 	require.NotNil(t, cn)

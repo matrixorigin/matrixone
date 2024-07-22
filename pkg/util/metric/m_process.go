@@ -167,6 +167,6 @@ func (c procCpuTotal) Metric(ctx context.Context, s *statCaches) (prom.Metric, e
 	if cput, err := proc.TimesWithContext(ctx); err != nil {
 		return nil, err
 	} else {
-		return prom.MustNewConstMetric(c.Desc(), prom.CounterValue, cput.Total()), nil
+		return prom.MustNewConstMetric(c.Desc(), prom.CounterValue, CPUTotalTime(*cput)), nil
 	}
 }

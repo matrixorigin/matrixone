@@ -42,7 +42,7 @@ func (store *NoopTxnStore) Close() error                                 { retur
 func (store *NoopTxnStore) Append(ctx context.Context, dbId, id uint64, data *containers.Batch) error {
 	return nil
 }
-func (store *NoopTxnStore) AddBlksWithMetaLoc(
+func (store *NoopTxnStore) AddObjsWithMetaLoc(
 	ctx context.Context,
 	dbId, tid uint64,
 	stats containers.Vector,
@@ -86,7 +86,7 @@ func (store *NoopTxnStore) GetRelationByID(dbId uint64, id uint64) (rel handle.R
 func (store *NoopTxnStore) CreateDatabase(name, creatSql, datTyp string) (db handle.Database, err error) {
 	return
 }
-func (store *NoopTxnStore) CreateDatabaseWithID(name, createSql, datTyp string, id uint64) (db handle.Database, err error) {
+func (store *NoopTxnStore) CreateDatabaseWithID(ctx context.Context, s1, s2, s3 string, id uint64) (db handle.Database, err error) {
 	return
 }
 func (store *NoopTxnStore) DropDatabase(name string) (db handle.Database, err error)    { return }
@@ -102,20 +102,12 @@ func (store *NoopTxnStore) GetObject(id *common.ID) (obj handle.Object, err erro
 	return
 }
 
-func (store *NoopTxnStore) CreateObject(dbId, tid uint64, is1PC bool) (obj handle.Object, err error) {
+func (store *NoopTxnStore) CreateObject(dbId, tid uint64) (obj handle.Object, err error) {
 	return
 }
-func (store *NoopTxnStore) CreateNonAppendableObject(dbId, tid uint64, _ bool, _ *objectio.CreateObjOpt) (obj handle.Object, err error) {
+func (store *NoopTxnStore) CreateNonAppendableObject(dbId, tid uint64, _ *objectio.CreateObjOpt) (obj handle.Object, err error) {
 	return
 }
-func (store *NoopTxnStore) GetBlock(id *common.ID) (blk handle.Block, err error) { return }
-func (store *NoopTxnStore) CreateBlock(*common.ID, bool) (blk handle.Block, err error) {
-	return
-}
-func (store *NoopTxnStore) CreateNonAppendableBlock(*common.ID, *objectio.CreateBlockOpt) (blk handle.Block, err error) {
-	return
-}
-
 func (store *NoopTxnStore) UpdateMetaLoc(id *common.ID, un objectio.Location) (err error) {
 	return
 }

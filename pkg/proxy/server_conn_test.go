@@ -51,12 +51,12 @@ func testMakeCNServer(
 		addr = "unix://" + addr
 	}
 	return &CNServer{
-		backendConnID: connID,
-		addr:          addr,
-		uuid:          uuid,
-		salt:          testSlat,
-		hash:          hash,
-		reqLabel:      reqLabel,
+		connID:   connID,
+		addr:     addr,
+		uuid:     uuid,
+		salt:     testSlat,
+		hash:     hash,
+		reqLabel: reqLabel,
 	}
 }
 
@@ -228,11 +228,17 @@ func (s *testCNServer) Start() error {
 				cid := baseConnID.Add(1)
 				c := goetty.NewIOSession(goetty.WithSessionCodec(frontend.NewSqlCodec()),
 					goetty.WithSessionConn(uint64(cid), conn))
+				pu := config.NewParameterUnit(&fp, nil, nil, nil)
+				ios, err := frontend.NewIOSession(c.RawConn(), pu)
+				if err != nil {
+					return err
+				}
 				h := &testHandler{
 					connID: cid,
 					conn:   c,
 					mysqlProto: frontend.NewMysqlClientProtocol(
-						cid, c, 0, &fp),
+						"",
+						cid, ios, 0, &fp),
 					sessionVars: make(map[string]string),
 					labels:      make(map[string]string),
 					server:      s,
@@ -250,7 +256,7 @@ func (s *testCNServer) Start() error {
 
 func testHandle(h *testHandler) {
 	// read extra info from proxy.
-	extraInfo := proxy.NewVersionedExtraInfo(proxy.Version0, nil)
+	extraInfo := proxy.ExtraInfo{}
 	reader := bufio.NewReader(h.conn.RawConn())
 	_ = extraInfo.Decode(reader)
 	// server writes init handshake.
@@ -318,8 +324,8 @@ func (h *testHandler) handleShowVar() {
 		return
 	}
 	cols := []*plan.ColDef{
-		{Typ: &plan.Type{Id: int32(types.T_char)}, Name: "Variable_name"},
-		{Typ: &plan.Type{Id: int32(types.T_char)}, Name: "Value"},
+		{Typ: plan.Type{Id: int32(types.T_char)}, Name: "Variable_name"},
+		{Typ: plan.Type{Id: int32(types.T_char)}, Name: "Value"},
 	}
 	columns := make([]interface{}, len(cols))
 	res := &frontend.MysqlResultSet{}
@@ -349,7 +355,6 @@ func (h *testHandler) handleShowVar() {
 		res.AddRow(row)
 	}
 	ses := &frontend.Session{}
-	ses.SetRequestContext(context.Background())
 	h.mysqlProto.SetSession(ses)
 	if err := h.mysqlProto.SendResultSetTextBatchRow(res, res.GetRowCount()); err != nil {
 		_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeErrPayload(0, "", err.Error()))
@@ -366,8 +371,8 @@ func (h *testHandler) handleShowGlobalVar() {
 		return
 	}
 	cols := []*plan.ColDef{
-		{Typ: &plan.Type{Id: int32(types.T_char)}, Name: "Variable_name"},
-		{Typ: &plan.Type{Id: int32(types.T_char)}, Name: "Value"},
+		{Typ: plan.Type{Id: int32(types.T_char)}, Name: "Variable_name"},
+		{Typ: plan.Type{Id: int32(types.T_char)}, Name: "Value"},
 	}
 	columns := make([]interface{}, len(cols))
 	res := &frontend.MysqlResultSet{}
@@ -397,7 +402,6 @@ func (h *testHandler) handleShowGlobalVar() {
 		res.AddRow(row)
 	}
 	ses := &frontend.Session{}
-	ses.SetRequestContext(context.Background())
 	h.mysqlProto.SetSession(ses)
 	if err := h.mysqlProto.SendResultSetTextBatchRow(res, res.GetRowCount()); err != nil {
 		_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeErrPayload(0, "", err.Error()))

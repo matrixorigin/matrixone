@@ -22,7 +22,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -131,10 +130,7 @@ func (interpreter *Interpreter) GetSimpleExprValueWithSpVar(e tree.Expr) (interf
 		return nil, err
 	}
 	retExpr := retStmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
-	if err != nil {
-		return nil, err
-	}
-	return GetSimpleExprValue(retExpr, interpreter.ses)
+	return GetSimpleExprValue(interpreter.ctx, retExpr, interpreter.ses)
 }
 
 // Currently we support only binary, unary and comparison expression.
@@ -186,16 +182,16 @@ func (interpreter *Interpreter) MatchExpr(expr tree.Expr) (tree.Expr, error) {
 	case *tree.FuncExpr:
 	case *tree.UnresolvedName:
 		// change column name to var name
-		val, err := interpreter.GetSpVar(e.Parts[0])
+		val, err := interpreter.GetSpVar(e.ColName())
 		if err != nil {
 			return nil, err
 		}
 		retName := &tree.UnresolvedName{
-			NumParts: e.NumParts,
-			Star:     e.Star,
-			Parts:    e.Parts,
+			NumParts:  e.NumParts,
+			Star:      e.Star,
+			CStrParts: e.CStrParts,
 		}
-		retName.Parts[0] = fmt.Sprintf("%v", val)
+		retName.CStrParts[0] = tree.NewCStr(fmt.Sprintf("%v", val), 1)
 		return retName, nil
 	default:
 		return e, nil
@@ -256,7 +252,7 @@ func (interpreter *Interpreter) ExecuteSp(stmt tree.Statement, dbName string) (e
 				interpreter.outParamMap[k] = 0
 			} else { // For INOUT and IN type, fetch store its previous value
 				interpreter.bh.ClearExecResultSet()
-				_, value, _ := interpreter.ses.GetUserDefinedVar(varParam.Name)
+				value, _ := interpreter.ses.GetUserDefinedVar(varParam.Name)
 				if value == nil {
 					// raise an error as INOUT / IN type param has to have a value
 					return moerr.NewNotSupported(interpreter.ctx, fmt.Sprintf("parameter %s with type INOUT or IN has to have a specified value.", k))
@@ -313,7 +309,7 @@ func (interpreter *Interpreter) interpret(stmt tree.Statement) (SpStatus, error)
 		// create new variable scope and push it
 		curScope := make(map[string]interface{})
 		*interpreter.varScope = append(*interpreter.varScope, curScope)
-		logutil.Info("current scope level: " + strconv.Itoa(len(*interpreter.varScope)))
+		interpreter.ses.Infof(interpreter.ctx, "current scope level: "+strconv.Itoa(len(*interpreter.varScope)))
 		// recursively execute
 		for _, innerSt := range st.Stmts {
 			_, err := interpreter.interpret(innerSt)
@@ -501,7 +497,7 @@ func (interpreter *Interpreter) interpret(stmt tree.Statement) (SpStatus, error)
 		var value interface{}
 		// store variables into current scope
 		if st.DefaultVal != nil {
-			value, err = GetSimpleExprValue(st.DefaultVal, interpreter.ses)
+			value, err = GetSimpleExprValue(interpreter.ctx, st.DefaultVal, interpreter.ses)
 			if err != nil {
 				return SpNotOk, nil
 			}

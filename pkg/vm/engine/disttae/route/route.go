@@ -32,12 +32,13 @@ import (
 //     4.1 If the username is dump or root, we just select one randomly.
 //     4.2 Else, no servers are selected.
 func RouteForSuperTenant(
+	service string,
 	selector clusterservice.Selector,
 	username string,
 	filter func(string) bool,
 	appendFn func(service *metadata.CNService),
 ) {
-	mc := clusterservice.GetMOCluster()
+	mc := clusterservice.GetMOCluster(service)
 
 	// found is true indicates that we have find some available CN services.
 	var found bool
@@ -45,7 +46,7 @@ func RouteForSuperTenant(
 
 	// S1: Select servers that configured as sys account.
 	mc.GetCNService(selector, func(s metadata.CNService) bool {
-		if filter != nil && filter(s.ServiceID) {
+		if filter != nil && filter(s.SQLAddress) {
 			return true
 		}
 		// At this phase, only append non-empty servers.
@@ -76,7 +77,7 @@ func RouteForSuperTenant(
 		se = selector.SelectWithoutLabel(map[string]string{"account": "sys"})
 	}
 	mc.GetCNService(se, func(s metadata.CNService) bool {
-		if filter != nil && filter(s.ServiceID) {
+		if filter != nil && filter(s.SQLAddress) {
 			return true
 		}
 		// Append CN servers that are not configured as label with key "account".
@@ -102,7 +103,7 @@ func RouteForSuperTenant(
 	username = strings.ToLower(username)
 	if username == "dump" || username == "root" {
 		mc.GetCNService(clusterservice.NewSelector(), func(s metadata.CNService) bool {
-			if filter != nil && filter(s.ServiceID) {
+			if filter != nil && filter(s.SQLAddress) {
 				return true
 			}
 			appendFn(&s)
@@ -118,9 +119,12 @@ func RouteForSuperTenant(
 // If there are CN services for the selector, just select them,
 // else, return CN services with empty labels if there are any.
 func RouteForCommonTenant(
-	selector clusterservice.Selector, filter func(string) bool, appendFn func(service *metadata.CNService),
+	service string,
+	selector clusterservice.Selector,
+	filter func(string) bool,
+	appendFn func(service *metadata.CNService),
 ) {
-	mc := clusterservice.GetMOCluster()
+	mc := clusterservice.GetMOCluster(service)
 
 	// found is true indicates that there are CN services for the selector.
 	var found bool
@@ -130,7 +134,7 @@ func RouteForCommonTenant(
 	var preEmptyCNs []*metadata.CNService
 
 	mc.GetCNService(selector, func(s metadata.CNService) bool {
-		if filter != nil && filter(s.ServiceID) {
+		if filter != nil && filter(s.SQLAddress) {
 			return true
 		}
 		if len(s.Labels) > 0 {

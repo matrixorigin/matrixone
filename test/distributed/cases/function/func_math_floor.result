@@ -92,7 +92,8 @@ FROM t1 ORDER BY a LIMIT 5;
 a	a
 DROP TABLE t1;
 SELECT DATE(FLOOR(20110512154559.616));
-invalid argument operator cast, bad value [DECIMAL128 DATE]
+date(floor(20110512154559.616))
+2011-05-12
 CREATE table t1(a int, b float);
 insert into t1 select floor(12124.413), floor(-4213.413);
 insert into t1 select floor(12124.123), floor(-42413.409);

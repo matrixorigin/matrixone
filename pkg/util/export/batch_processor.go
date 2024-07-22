@@ -35,7 +35,6 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
-
 	"go.uber.org/zap"
 )
 
@@ -166,6 +165,9 @@ func (b *bufferHolder) Add(item batchpipe.HasName) {
 var _ generateReq = (*bufferGenerateReq)(nil)
 
 type bufferGenerateReq struct {
+	// itemName name of buffer's item
+	itemName string
+	// buffer keep content
 	buffer batchpipe.ItemBuffer[batchpipe.HasName, any]
 	// impl NewItemBatchHandler
 	b *bufferHolder
@@ -181,6 +183,8 @@ func (r *bufferGenerateReq) handle(buf *bytes.Buffer) (exportReq, error) {
 }
 
 func (r *bufferGenerateReq) callback(err error) {}
+
+func (r *bufferGenerateReq) typ() string { return r.itemName }
 
 var _ exportReq = (*bufferExportReq)(nil)
 
@@ -213,6 +217,8 @@ func (b *bufferHolder) getGenerateReq() generateReq {
 	req := &bufferGenerateReq{
 		buffer: b.buffer,
 		b:      b,
+		// impl generateReq.typ()
+		itemName: b.name,
 	}
 	b.buffer = nil
 	return req
@@ -273,14 +279,19 @@ type MOCollector struct {
 	stopOnce sync.Once
 	stopWait sync.WaitGroup
 	stopCh   chan struct{}
+	stopDrop atomic.Uint64
 }
 
 type MOCollectorOption func(*MOCollector)
 
-func NewMOCollector(ctx context.Context, opts ...MOCollectorOption) *MOCollector {
+func NewMOCollector(
+	ctx context.Context,
+	service string,
+	opts ...MOCollectorOption,
+) *MOCollector {
 	c := &MOCollector{
 		ctx:            ctx,
-		logger:         morun.ProcessLevelRuntime().Logger().Named(LoggerNameMOCollector).With(logutil.Discardable()),
+		logger:         morun.ServiceRuntime(service).Logger().Named(LoggerNameMOCollector).With(logutil.Discardable()),
 		buffers:        make(map[string]*bufferHolder),
 		awakeCollect:   make(chan batchpipe.HasName, defaultQueueSize),
 		awakeGenerate:  make(chan generateReq, 16),
@@ -401,6 +412,7 @@ func (c *MOCollector) Register(name batchpipe.HasName, impl motrace.PipeImpl) {
 func (c *MOCollector) Collect(ctx context.Context, item batchpipe.HasName) error {
 	select {
 	case <-c.stopCh:
+		c.stopDrop.Add(1)
 		ctx = errutil.ContextWithNoReport(ctx, true)
 		return moerr.NewInternalError(ctx, "MOCollector stopped")
 	case c.awakeCollect <- item:
@@ -413,6 +425,7 @@ func (c *MOCollector) Collect(ctx context.Context, item batchpipe.HasName) error
 func (c *MOCollector) DiscardableCollect(ctx context.Context, item batchpipe.HasName) error {
 	select {
 	case <-c.stopCh:
+		c.stopDrop.Add(1)
 		ctx = errutil.ContextWithNoReport(ctx, true)
 		return moerr.NewInternalError(ctx, "MOCollector stopped")
 	case c.awakeCollect <- item:
@@ -514,6 +527,7 @@ loop:
 type generateReq interface {
 	handle(*bytes.Buffer) (exportReq, error)
 	callback(error)
+	typ() string
 }
 
 type exportReq interface {
@@ -580,6 +594,8 @@ loop:
 				case <-time.After(time.Second * 10):
 					c.logger.Info("awakeBatch: timeout after 10 seconds")
 					v2.TraceCollectorGenerateDiscardDurationHistogram.Observe(time.Since(start).Seconds())
+					// fixme: do csv output, should NO discard case
+					v2.GetTraceCollectorDiscardCounter(req.typ()).Inc()
 				}
 				end := time.Now()
 				v2.TraceCollectorGenerateDelayDurationHistogram.Observe(end.Sub(startDelay).Seconds())

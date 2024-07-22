@@ -24,8 +24,8 @@ var (
 )
 
 type TableHandle interface {
-	GetAppender() (BlockAppender, error)
-	SetAppender(*common.ID) BlockAppender
+	GetAppender() (ObjectAppender, error)
+	SetAppender(*common.ID) ObjectAppender
 }
 
 type Table interface {

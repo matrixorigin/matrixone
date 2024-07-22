@@ -25,13 +25,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "projection"
+const opName = "projection"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
-	n := arg
+func (projection *Projection) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": projection(")
-	for i, e := range n.Es {
+	for i, e := range projection.Es {
 		if i > 0 {
 			buf.WriteString(",")
 		}
@@ -40,30 +39,33 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(")")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	ap := arg
-	ap.ctr = new(container)
-	ap.ctr.projExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, ap.Es)
-	ap.ctr.uafs = make([]func(v *vector.Vector, w *vector.Vector) error, len(ap.Es))
-	for i, e := range ap.Es {
+func (projection *Projection) OpType() vm.OpType {
+	return vm.Projection
+}
+
+func (projection *Projection) Prepare(proc *process.Process) (err error) {
+	projection.ctr = new(container)
+	projection.ctr.projExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, projection.Es)
+	projection.ctr.uafs = make([]func(v *vector.Vector, w *vector.Vector) error, len(projection.Es))
+	for i, e := range projection.Es {
 		if e.Typ.Id != 0 {
-			ap.ctr.uafs[i] = vector.GetUnionAllFunction(plan.MakeTypeByPlan2Expr(e), proc.Mp())
+			projection.ctr.uafs[i] = vector.GetUnionAllFunction(plan.MakeTypeByPlan2Expr(e), proc.Mp())
 		}
 	}
 	return err
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (projection *Projection) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	result, err := arg.GetChildren(0).Call(proc)
+	result, err := projection.GetChildren(0).Call(proc)
 	if err != nil {
 		return result, err
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze(projection.GetIdx(), projection.GetParallelIdx(), projection.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 
@@ -71,33 +73,43 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, nil
 	}
 	bat := result.Batch
-	anal.Input(bat, arg.GetIsFirst())
+	anal.Input(bat, projection.GetIsFirst())
 
-	if arg.buf != nil {
-		proc.PutBatch(arg.buf)
-		arg.buf = nil
+	if projection.ctr.buf != nil {
+		proc.PutBatch(projection.ctr.buf)
+		projection.ctr.buf = nil
 	}
 
-	arg.buf = batch.NewWithSize(len(arg.Es))
+	projection.ctr.buf = batch.NewWithSize(len(projection.Es))
 	// keep shuffleIDX unchanged
-	arg.buf.ShuffleIDX = bat.ShuffleIDX
+	projection.ctr.buf.ShuffleIDX = bat.ShuffleIDX
 	// do projection.
-	for i := range arg.ctr.projExecutors {
-		vec, err := arg.ctr.projExecutors[i].Eval(proc, []*batch.Batch{bat})
+	for i := range projection.ctr.projExecutors {
+		vec, err := projection.ctr.projExecutors[i].Eval(proc, []*batch.Batch{bat}, nil)
 		if err != nil {
+			for _, newV := range projection.ctr.buf.Vecs {
+				if newV != nil {
+					for k, oldV := range bat.Vecs {
+						if oldV != nil && newV == oldV {
+							bat.Vecs[k] = nil
+						}
+					}
+				}
+			}
+			projection.ctr.buf = nil
 			return result, err
 		}
-		arg.buf.Vecs[i] = vec
+		projection.ctr.buf.Vecs[i] = vec
 	}
 
-	newAlloc, err := colexec.FixProjectionResult(proc, arg.ctr.projExecutors, arg.ctr.uafs, arg.buf, bat)
+	newAlloc, err := colexec.FixProjectionResult(proc, projection.ctr.projExecutors, projection.ctr.uafs, projection.ctr.buf, bat)
 	if err != nil {
 		return result, err
 	}
-	anal.Alloc(int64(newAlloc))
-	arg.buf.SetRowCount(bat.RowCount())
+	projection.maxAllocSize = max(projection.maxAllocSize, newAlloc)
+	projection.ctr.buf.SetRowCount(bat.RowCount())
 
-	anal.Output(arg.buf, arg.GetIsLast())
-	result.Batch = arg.buf
+	anal.Output(projection.ctr.buf, projection.GetIsLast())
+	result.Batch = projection.ctr.buf
 	return result, nil
 }

@@ -15,14 +15,15 @@
 package db
 
 import (
-	"sync/atomic"
-	"time"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	dto "github.com/prometheus/client_model/go"
 )
 
 type ScannerOp interface {
@@ -31,135 +32,43 @@ type ScannerOp interface {
 	PostExecute() error
 }
 
-// objHelper holds some temp statistics and founds deletable objects of a table.
-// If a Object has no any non-dropped blocks, it can be deleted. Except the
-// Object has the max Object id, appender may creates block in it.
-type objHelper struct {
-	// Statistics
-	objHasNonDropBlk     bool
-	objRowCnt, objRowDel int
-	objNonAppend         bool
-	isCreating           bool
-
-	// Found deletable Objects
-	maxObjId    uint64
-	objCandids  []*catalog.ObjectEntry // appendable
-	nobjCandids []*catalog.ObjectEntry // non-appendable
-}
-
-func newObjHelper() *objHelper {
-	return &objHelper{
-		objCandids:  make([]*catalog.ObjectEntry, 0),
-		nobjCandids: make([]*catalog.ObjectEntry, 0),
-	}
-}
-
-func (d *objHelper) reset() {
-	d.resetForNewObj()
-	d.maxObjId = 0
-	d.objCandids = d.objCandids[:0]
-	d.nobjCandids = d.nobjCandids[:0]
-}
-
-func (d *objHelper) resetForNewObj() {
-	d.objHasNonDropBlk = false
-	d.objNonAppend = false
-	d.isCreating = false
-	d.objRowCnt = 0
-	d.objRowDel = 0
-}
-
-// call this when a non dropped block was found when iterating blocks of a Object,
-// which make the builder skip this Object
-func (d *objHelper) hintNonDropBlock() {
-	d.objHasNonDropBlk = true
-}
-
-func (d *objHelper) push(entry *catalog.ObjectEntry) {
-	isAppendable := entry.IsAppendable()
-	if isAppendable && d.maxObjId < entry.SortHint {
-		d.maxObjId = entry.SortHint
-	}
-	if d.objHasNonDropBlk {
-		return
-	}
-	// all blocks has been dropped
-	if isAppendable {
-		d.objCandids = append(d.objCandids, entry)
-	} else {
-		d.nobjCandids = append(d.nobjCandids, entry)
-	}
-}
-
-// unused
-// copy out Object entries expect the one with max Object id.
-// func (d *objHelper) finish() []*catalog.ObjectEntry {
-// 	sort.Slice(d.objCandids, func(i, j int) bool { return d.objCandids[i].SortHint < d.objCandids[j].SortHint })
-// 	if last := len(d.objCandids) - 1; last >= 0 && d.objCandids[last].SortHint == d.maxObjId {
-// 		d.objCandids = d.objCandids[:last]
-// 	}
-// 	if len(d.objCandids) == 0 && len(d.nobjCandids) == 0 {
-// 		return nil
-// 	}
-// 	ret := make([]*catalog.ObjectEntry, len(d.objCandids)+len(d.nobjCandids))
-// 	copy(ret[:len(d.objCandids)], d.objCandids)
-// 	copy(ret[len(d.objCandids):], d.nobjCandids)
-// 	return ret
-// }
-
 type MergeTaskBuilder struct {
 	db *DB
 	*catalog.LoopProcessor
 	tid  uint64
 	name string
-	tbl  *catalog.TableEntry
 
-	ObjectHelper *objHelper
-	objPolicy    merge.Policy
-	executor     *merge.MergeExecutor
-	tableRowCnt  int
-	tableRowDel  int
+	objDeltaLocCnt    map[*catalog.ObjectEntry]int
+	objDeltaLocRowCnt map[*catalog.ObjectEntry]uint32
+	distinctDeltaLocs map[string]struct{}
+	mergingObjs       map[*catalog.ObjectEntry]struct{}
 
-	// concurrecy control
-	suspend    atomic.Bool
-	suspendCnt atomic.Int32
+	objPolicy   merge.Policy
+	executor    *merge.MergeExecutor
+	tableRowCnt int
+	tableRowDel int
+
+	skipForTransPageLimit bool
 }
 
-func newMergeTaskBuiler(db *DB) *MergeTaskBuilder {
+func newMergeTaskBuilder(db *DB) *MergeTaskBuilder {
 	op := &MergeTaskBuilder{
-		db:            db,
-		LoopProcessor: new(catalog.LoopProcessor),
-		ObjectHelper:  newObjHelper(),
-		objPolicy:     merge.NewBasicPolicy(),
-		executor:      merge.NewMergeExecutor(db.Runtime),
+		db:                db,
+		LoopProcessor:     new(catalog.LoopProcessor),
+		objPolicy:         merge.NewBasicPolicy(),
+		executor:          merge.NewMergeExecutor(db.Runtime, db.CNMergeSched),
+		objDeltaLocRowCnt: make(map[*catalog.ObjectEntry]uint32),
+		distinctDeltaLocs: make(map[string]struct{}),
+		objDeltaLocCnt:    make(map[*catalog.ObjectEntry]int),
+		mergingObjs:       make(map[*catalog.ObjectEntry]struct{}),
 	}
 
 	op.DatabaseFn = op.onDataBase
 	op.TableFn = op.onTable
-	op.BlockFn = op.onBlock
 	op.ObjectFn = op.onObject
 	op.PostObjectFn = op.onPostObject
 	op.PostTableFn = op.onPostTable
 	return op
-}
-
-func (s *MergeTaskBuilder) ManuallyMerge(entry *catalog.TableEntry, objs []*catalog.ObjectEntry) error {
-	// stop new merge task
-	s.suspend.Store(true)
-	defer s.suspend.Store(false)
-	// waiting the runing merge sched task to finish
-	for s.suspendCnt.Load() < 2 {
-		time.Sleep(50 * time.Millisecond)
-	}
-
-	// all status are safe in the TaskBuilder
-	for _, obj := range objs {
-		// TODO(_), delete this if every object has objectStat in memory
-		if err := obj.CheckAndLoad(); err != nil {
-			return err
-		}
-	}
-	return s.executor.ManuallyExecute(entry, objs)
 }
 
 func (s *MergeTaskBuilder) ConfigPolicy(tbl *catalog.TableEntry, c any) {
@@ -175,29 +84,38 @@ func (s *MergeTaskBuilder) GetPolicy(tbl *catalog.TableEntry) any {
 	return s.objPolicy.GetConfig(tbl)
 }
 
-func (s *MergeTaskBuilder) trySchedMergeTask() {
-	if s.tid == 0 {
-		return
-	}
-	// delObjs := s.ObjectHelper.finish()
-	s.executor.ExecuteFor(s.tbl, s.objPolicy)
-}
-
 func (s *MergeTaskBuilder) resetForTable(entry *catalog.TableEntry) {
 	s.tid = 0
 	if entry != nil {
 		s.tid = entry.ID
-		s.tbl = entry
-		s.name = entry.GetLastestSchema().Name
+		s.name = entry.GetLastestSchemaLocked().Name
 		s.tableRowCnt = 0
 		s.tableRowDel = 0
+
+		clear(s.objDeltaLocCnt)
+		clear(s.objDeltaLocRowCnt)
+		clear(s.distinctDeltaLocs)
 	}
-	s.ObjectHelper.reset()
 	s.objPolicy.ResetForTable(entry)
 }
 
 func (s *MergeTaskBuilder) PreExecute() error {
 	s.executor.RefreshMemInfo()
+	for obj := range s.mergingObjs {
+		if !objectValid(obj) {
+			delete(s.mergingObjs, obj)
+		}
+	}
+	s.skipForTransPageLimit = false
+	m := &dto.Metric{}
+	v2.TaskMergeTransferPageLengthGauge.Write(m)
+	pagesize := m.GetGauge().GetValue() * 28 /*int32 + rowid(24b)*/ * 1.3 /*map inflationg factor*/
+	if pagesize > float64(s.executor.TransferPageSizeLimit()) {
+		logutil.Infof("[mergeblocks] skip merge scanning due to transfer page %s, limit %s",
+			common.HumanReadableBytes(int(pagesize)),
+			common.HumanReadableBytes(int(s.executor.TransferPageSizeLimit())))
+		s.skipForTransPageLimit = true
+	}
 	return nil
 }
 
@@ -206,107 +124,137 @@ func (s *MergeTaskBuilder) PostExecute() error {
 	return nil
 }
 func (s *MergeTaskBuilder) onDataBase(dbEntry *catalog.DBEntry) (err error) {
-	if s.suspend.Load() {
-		s.suspendCnt.Add(1)
-		return moerr.GetOkStopCurrRecur()
-	}
-	s.suspendCnt.Store(0)
 	if merge.StopMerge.Load() {
 		return moerr.GetOkStopCurrRecur()
 	}
 	if s.executor.MemAvailBytes() < 100*common.Const1MBytes {
 		return moerr.GetOkStopCurrRecur()
 	}
+
+	if s.skipForTransPageLimit {
+		return moerr.GetOkStopCurrRecur()
+	}
+
 	return
 }
 
 func (s *MergeTaskBuilder) onTable(tableEntry *catalog.TableEntry) (err error) {
-	if merge.StopMerge.Load() || s.suspend.Load() {
+	if merge.StopMerge.Load() {
 		return moerr.GetOkStopCurrRecur()
 	}
 	if !tableEntry.IsActive() {
 		return moerr.GetOkStopCurrRecur()
 	}
+
+	tableEntry.RLock()
+	// this table is creating or altering
+	if !tableEntry.IsCommittedLocked() {
+		tableEntry.RUnlock()
+		return moerr.GetOkStopCurrRecur()
+	}
+	tableEntry.RUnlock()
 	s.resetForTable(tableEntry)
+
+	deltaLocRows := uint32(0)
+	distinctDeltaLocs := 0
+	tblRows := 0
+	objIt := tableEntry.MakeObjectIt(true)
+	defer objIt.Release()
+	for objIt.Next() {
+		objectEntry := objIt.Item()
+		if !objectValid(objectEntry) {
+			continue
+		}
+
+		var rows int
+		rows, err = objectEntry.GetObjectData().Rows()
+		if err != nil {
+			return
+		}
+		dels := objectEntry.GetObjectData().GetTotalChanges()
+		objectEntry.SetRemainingRows(rows - dels)
+		s.tableRowCnt += rows
+		s.tableRowDel += dels
+		tblRows += rows - dels
+
+		tombstone := tableEntry.TryGetTombstone(*objectEntry.ID())
+		if tombstone == nil {
+			continue
+		}
+		for j := range objectEntry.BlockCnt() {
+			deltaLoc := tombstone.GetLatestDeltaloc(uint16(j))
+			if deltaLoc == nil || deltaLoc.IsEmpty() {
+				continue
+			}
+			if _, ok := s.distinctDeltaLocs[util.UnsafeBytesToString(deltaLoc)]; !ok {
+				s.distinctDeltaLocs[util.UnsafeBytesToString(deltaLoc)] = struct{}{}
+				s.objDeltaLocCnt[objectEntry]++
+				s.objDeltaLocRowCnt[objectEntry] += deltaLoc.Rows()
+				deltaLocRows += deltaLoc.Rows()
+				distinctDeltaLocs++
+			}
+		}
+	}
 	return
 }
 
 func (s *MergeTaskBuilder) onPostTable(tableEntry *catalog.TableEntry) (err error) {
 	// base on the info of tableEntry, we can decide whether to merge or not
 	tableEntry.Stats.AddRowStat(s.tableRowCnt, s.tableRowDel)
-	s.trySchedMergeTask()
+	if s.tid == 0 {
+		return
+	}
+	// delObjs := s.ObjectHelper.finish()
+
+	mobjs, kind := s.objPolicy.Revise(s.executor.CPUPercent(), int64(s.executor.MemAvailBytes()))
+	if len(mobjs) > 1 {
+		for _, m := range mobjs {
+			s.mergingObjs[m] = struct{}{}
+		}
+		s.executor.ExecuteFor(tableEntry, mobjs, kind)
+	}
 	return
 }
 
 func (s *MergeTaskBuilder) onObject(objectEntry *catalog.ObjectEntry) (err error) {
+	if _, ok := s.mergingObjs[objectEntry]; ok {
+		return moerr.GetOkStopCurrRecur()
+	}
 	if !objectEntry.IsActive() {
 		return moerr.GetOkStopCurrRecur()
 	}
 
-	objectEntry.RLock()
-	defer objectEntry.RUnlock()
-
-	// Skip uncommitted entries
-	if !objectEntry.IsCommitted() || !catalog.ActiveObjectWithNoTxnFilter(objectEntry.BaseEntryImpl) {
+	if !objectValid(objectEntry) {
 		return moerr.GetOkStopCurrRecur()
 	}
 
-	s.ObjectHelper.resetForNewObj()
-	s.ObjectHelper.objNonAppend = !objectEntry.IsAppendable()
+	// Rows will check objectStat, and if not loaded, it will load it.
+	remainingRows := objectEntry.GetRemainingRows()
+	deltaLocRows := s.objDeltaLocRowCnt[objectEntry]
+	if !merge.DisableDeltaLocMerge.Load() && deltaLocRows > uint32(remainingRows) {
+		deltaLocCnt := s.objDeltaLocCnt[objectEntry]
+		rate := float64(deltaLocRows) / float64(remainingRows)
+		logutil.Infof(
+			"[DeltaLoc Merge] tblId: %s(%d), obj: %s, deltaLoc: %d, rows: %d, deltaLocRows: %d, rate: %f",
+			s.name, s.tid, objectEntry.ID().String(), deltaLocCnt, remainingRows, deltaLocRows, rate)
+		s.objPolicy.OnObject(objectEntry, true)
+	} else {
+		s.objPolicy.OnObject(objectEntry, false)
+	}
 	return
 }
 
 func (s *MergeTaskBuilder) onPostObject(obj *catalog.ObjectEntry) (err error) {
-	s.ObjectHelper.push(obj)
-
-	if !s.ObjectHelper.objNonAppend || s.ObjectHelper.isCreating {
-		return nil
-	}
-	// for sorted Objects, we have to feed it to policy to see if it is qualified to be merged
-	obj.SetRemainingRows(s.ObjectHelper.objRowCnt - s.ObjectHelper.objRowDel)
-
-	obj.CheckAndLoad()
-	s.tableRowCnt += s.ObjectHelper.objRowCnt
-	s.tableRowDel += s.ObjectHelper.objRowDel
-
-	s.objPolicy.OnObject(obj)
 	return nil
 }
 
-// for sorted Objects, we just collect the rows and dels on this Object
-// for non-sorted Objects, flushTableTail will take care of them, here we just check if it is deletable(having no active blocks)
-func (s *MergeTaskBuilder) onBlock(entry *catalog.BlockEntry) (err error) {
-	if !entry.IsActive() {
-		return
-	}
-	// it has active blk, this obj can't be deleted
-	s.ObjectHelper.hintNonDropBlock()
-
-	// this blk is not in a s3 object
-	if !s.ObjectHelper.objNonAppend {
-		return
+func objectValid(objectEntry *catalog.ObjectEntry) bool {
+	if !objectEntry.IsCommitted() || !catalog.ActiveObjectWithNoTxnFilter(objectEntry) {
+		return false
 	}
 
-	entry.RLock()
-	defer entry.RUnlock()
-
-	// Skip uncommitted entries and appendable block
-	if !entry.IsCommitted() || !catalog.ActiveWithNoTxnFilter(&entry.BaseEntryImpl) {
-		// txn appending metalocs
-		s.ObjectHelper.isCreating = true
-		return
+	if objectEntry.IsAppendable() {
+		return false
 	}
-	if !catalog.NonAppendableBlkFilter(entry) {
-		panic("append block in sorted Object")
-	}
-
-	// nblks in appenable objs or non-sorted non-appendable objs
-	// these blks are formed by continuous append
-	entry.RUnlock()
-	rows := entry.GetBlockData().Rows()
-	dels := entry.GetBlockData().GetTotalChanges()
-	entry.RLock()
-	s.ObjectHelper.objRowCnt += rows
-	s.ObjectHelper.objRowDel += dels
-	return nil
+	return true
 }

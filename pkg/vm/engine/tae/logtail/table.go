@@ -235,11 +235,11 @@ func (blk *txnBlock) ForeachRowInBetween(
 	for _, row := range rows {
 		readRows += 1
 		ts := row.GetPrepareTS()
-		if ts.IsEmpty() || ts.Greater(to) {
+		if ts.IsEmpty() || ts.Greater(&to) {
 			outOfRange = true
 			return
 		}
-		if ts.Less(from) {
+		if ts.Less(&from) {
 			continue
 		}
 
@@ -264,12 +264,12 @@ type TxnTable struct {
 }
 
 func (blk *txnBlock) Less(b BlockT) bool {
-	return blk.bornTS.Less(b.bornTS)
+	return blk.bornTS.Less(&b.bornTS)
 }
 
 func timeBasedTruncateFactory(ts types.TS) func(b BlockT) bool {
 	return func(b BlockT) bool {
-		return b.bornTS.GreaterEq(ts)
+		return b.bornTS.GreaterEq(&ts)
 	}
 }
 
@@ -335,7 +335,8 @@ func (table *TxnTable) ForeachRowInBetween(
 	})
 
 	// from is smaller than the very first block and it is not special like 0-0, 0-1, 1-0
-	if outOfLeft && from.Greater(types.BuildTS(1, 1)) {
+	ts := types.BuildTS(1, 1)
+	if outOfLeft && from.Greater(&ts) {
 		minTs := types.TS{}
 		snapshot.Ascend(&txnBlock{}, func(blk *txnBlock) bool {
 			minTs = blk.bornTS
@@ -344,12 +345,13 @@ func (table *TxnTable) ForeachRowInBetween(
 		logutil.Info("[logtail] fetch with too small ts", zap.String("ts", from.ToString()), zap.String("minTs", minTs.ToString()))
 	}
 	snapshot.Ascend(pivot, func(blk BlockT) bool {
-		if blk.bornTS.Greater(to) {
+		if blk.bornTS.Greater(&to) {
 			return false
 		}
 
 		if skipBlkOp != nil && skipBlkOp(blk) {
-			return blk.rows[len(blk.rows)-1].GetPrepareTS().LessEq(to)
+			prepareTS := blk.rows[len(blk.rows)-1].GetPrepareTS()
+			return prepareTS.LessEq(&to)
 		}
 		outOfRange, cnt := blk.ForeachRowInBetween(
 			from,

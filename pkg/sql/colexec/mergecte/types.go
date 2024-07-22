@@ -23,7 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(MergeCTE)
 
 const (
 	sendInitial   = 0
@@ -33,52 +33,61 @@ const (
 
 type container struct {
 	colexec.ReceiverOperator
+	buf        *batch.Batch
 	nodeCnt    int32
 	curNodeCnt int32
 	status     int32
 }
 
-type Argument struct {
+type MergeCTE struct {
 	ctr *container
-	buf *batch.Batch
 
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (mergeCTE *MergeCTE) GetOperatorBase() *vm.OperatorBase {
+	return &mergeCTE.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[MergeCTE](
+		func() *MergeCTE {
+			return &MergeCTE{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *MergeCTE) {
+			*a = MergeCTE{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[MergeCTE]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (mergeCTE MergeCTE) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *MergeCTE {
+	return reuse.Alloc[MergeCTE](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (mergeCTE *MergeCTE) Release() {
+	if mergeCTE != nil {
+		reuse.Free[MergeCTE](mergeCTE, nil)
 	}
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if arg.buf != nil {
-		arg.buf.Clean(proc.Mp())
-		arg.buf = nil
+func (mergeCTE *MergeCTE) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	mergeCTE.Free(proc, pipelineFailed, err)
+}
+
+func (mergeCTE *MergeCTE) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if mergeCTE.ctr != nil {
+		mergeCTE.ctr.FreeMergeTypeOperator(pipelineFailed)
+		if mergeCTE.ctr.buf != nil {
+			mergeCTE.ctr.buf.Clean(proc.Mp())
+			mergeCTE.ctr.buf = nil
+		}
+		mergeCTE.ctr = nil
 	}
+
 }

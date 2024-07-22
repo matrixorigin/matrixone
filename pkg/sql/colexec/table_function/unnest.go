@@ -46,7 +46,7 @@ func genFilterMap(filters []string) map[string]struct{} {
 // 	buf.WriteString("unnest")
 // }
 
-func unnestPrepare(proc *process.Process, arg *Argument) error {
+func unnestPrepare(proc *process.Process, arg *TableFunction) error {
 	param := unnestParam{}
 	param.ColName = string(arg.Params)
 	if len(param.ColName) == 0 {
@@ -72,24 +72,22 @@ func unnestPrepare(proc *process.Process, arg *Argument) error {
 	if len(arg.Args) == 1 {
 		vType := types.T_varchar.ToType()
 		bType := types.T_bool.ToType()
-		arg.Args = append(arg.Args, &plan.Expr{Typ: *plan2.MakePlan2Type(&vType), Expr: &plan.Expr_Lit{Lit: &plan2.Const{Value: &plan.Literal_Sval{Sval: "$"}}}})
-		arg.Args = append(arg.Args, &plan.Expr{Typ: *plan2.MakePlan2Type(&bType), Expr: &plan.Expr_Lit{Lit: &plan2.Const{Value: &plan.Literal_Bval{Bval: false}}}})
+		arg.Args = append(arg.Args, &plan.Expr{Typ: plan2.MakePlan2Type(&vType), Expr: &plan.Expr_Lit{Lit: &plan2.Const{Value: &plan.Literal_Sval{Sval: "$"}}}})
+		arg.Args = append(arg.Args, &plan.Expr{Typ: plan2.MakePlan2Type(&bType), Expr: &plan.Expr_Lit{Lit: &plan2.Const{Value: &plan.Literal_Bval{Bval: false}}}})
 	} else if len(arg.Args) == 2 {
 		bType := types.T_bool.ToType()
-		arg.Args = append(arg.Args, &plan.Expr{Typ: *plan2.MakePlan2Type(&bType), Expr: &plan.Expr_Lit{Lit: &plan2.Const{Value: &plan.Literal_Bval{Bval: false}}}})
+		arg.Args = append(arg.Args, &plan.Expr{Typ: plan2.MakePlan2Type(&bType), Expr: &plan.Expr_Lit{Lit: &plan2.Const{Value: &plan.Literal_Bval{Bval: false}}}})
 	}
 	dt, err := json.Marshal(param)
 	if err != nil {
 		return err
 	}
 	arg.Params = dt
-
-	arg.ctr = new(container)
 	arg.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Args)
 	return err
 }
 
-func unnestCall(_ int, proc *process.Process, arg *Argument, result *vm.CallResult) (bool, error) {
+func unnestCall(_ int, proc *process.Process, arg *TableFunction, result *vm.CallResult) (bool, error) {
 	var (
 		err      error
 		rbat     *batch.Batch
@@ -104,15 +102,6 @@ func unnestCall(_ int, proc *process.Process, arg *Argument, result *vm.CallResu
 		if err != nil && rbat != nil {
 			rbat.Clean(proc.Mp())
 		}
-		if jsonVec != nil {
-			jsonVec.Free(proc.Mp())
-		}
-		if pathVec != nil {
-			pathVec.Free(proc.Mp())
-		}
-		if outerVec != nil {
-			outerVec.Free(proc.Mp())
-		}
 	}()
 	if bat == nil {
 		return true, nil
@@ -122,21 +111,21 @@ func unnestCall(_ int, proc *process.Process, arg *Argument, result *vm.CallResu
 		result.Batch = batch.EmptyBatch
 		return false, nil
 	}
-	jsonVec, err = arg.ctr.executorsForArgs[0].Eval(proc, []*batch.Batch{bat})
+	jsonVec, err = arg.ctr.executorsForArgs[0].Eval(proc, []*batch.Batch{bat}, nil)
 	if err != nil {
 		return false, err
 	}
 	if jsonVec.GetType().Oid != types.T_json && jsonVec.GetType().Oid != types.T_varchar {
 		return false, moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("unnest: first argument must be json or string, but got %s", jsonVec.GetType().String()))
 	}
-	pathVec, err = arg.ctr.executorsForArgs[1].Eval(proc, []*batch.Batch{bat})
+	pathVec, err = arg.ctr.executorsForArgs[1].Eval(proc, []*batch.Batch{bat}, nil)
 	if err != nil {
 		return false, err
 	}
 	if pathVec.GetType().Oid != types.T_varchar {
 		return false, moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("unnest: second argument must be string, but got %s", pathVec.GetType().String()))
 	}
-	outerVec, err = arg.ctr.executorsForArgs[2].Eval(proc, []*batch.Batch{bat})
+	outerVec, err = arg.ctr.executorsForArgs[2].Eval(proc, []*batch.Batch{bat}, nil)
 	if err != nil {
 		return false, err
 	}
@@ -146,7 +135,7 @@ func unnestCall(_ int, proc *process.Process, arg *Argument, result *vm.CallResu
 	if !pathVec.IsConst() || !outerVec.IsConst() {
 		return false, moerr.NewInvalidInput(proc.Ctx, "unnest: second and third arguments must be scalar")
 	}
-	path, err = types.ParseStringToPath(pathVec.GetStringAt(0))
+	path, err = types.ParseStringToPath(pathVec.UnsafeGetStringAt(0))
 	if err != nil {
 		return false, err
 	}
@@ -168,7 +157,7 @@ func unnestCall(_ int, proc *process.Process, arg *Argument, result *vm.CallResu
 	return false, nil
 }
 
-func handle(jsonVec *vector.Vector, path *bytejson.Path, outer bool, param *unnestParam, arg *Argument, proc *process.Process, fn func(dt []byte) (bytejson.ByteJson, error)) (*batch.Batch, error) {
+func handle(jsonVec *vector.Vector, path *bytejson.Path, outer bool, param *unnestParam, arg *TableFunction, proc *process.Process, fn func(dt []byte) (bytejson.ByteJson, error)) (*batch.Batch, error) {
 	var (
 		err  error
 		rbat *batch.Batch
@@ -179,8 +168,8 @@ func handle(jsonVec *vector.Vector, path *bytejson.Path, outer bool, param *unne
 	rbat = batch.NewWithSize(len(arg.Attrs))
 	rbat.Attrs = arg.Attrs
 	rbat.Cnt = 1
-	for i := range arg.retSchema {
-		rbat.Vecs[i] = proc.GetVector(arg.retSchema[i])
+	for i := range arg.ctr.retSchema {
+		rbat.Vecs[i] = proc.GetVector(arg.ctr.retSchema[i])
 	}
 
 	if jsonVec.IsConst() {
@@ -220,7 +209,7 @@ func handle(jsonVec *vector.Vector, path *bytejson.Path, outer bool, param *unne
 	return rbat, nil
 }
 
-func makeBatch(bat *batch.Batch, ures []bytejson.UnnestResult, param *unnestParam, arg *Argument, proc *process.Process) (*batch.Batch, error) {
+func makeBatch(bat *batch.Batch, ures []bytejson.UnnestResult, param *unnestParam, arg *TableFunction, proc *process.Process) (*batch.Batch, error) {
 	for i := 0; i < len(ures); i++ {
 		for j := 0; j < len(arg.Attrs); j++ {
 			vec := bat.GetVector(int32(j))

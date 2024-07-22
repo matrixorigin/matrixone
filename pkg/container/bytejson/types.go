@@ -26,10 +26,6 @@ type ByteJson struct {
 	Data []byte
 	Type TpCode
 }
-type kv struct {
-	key string
-	val interface{}
-}
 
 type subPathIndices struct {
 	tp  byte

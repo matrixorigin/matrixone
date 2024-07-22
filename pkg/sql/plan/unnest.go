@@ -25,7 +25,7 @@ var (
 	defaultColDefs = []*plan.ColDef{
 		{
 			Name: "col",
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(types.T_varchar),
 				NotNullable: false,
 				Width:       types.MaxVarcharLen,
@@ -33,7 +33,7 @@ var (
 		},
 		{
 			Name: "seq",
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(types.T_int32),
 				NotNullable: false,
 				Width:       4,
@@ -41,7 +41,7 @@ var (
 		},
 		{
 			Name: "key",
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(types.T_varchar),
 				NotNullable: false,
 				Width:       types.MaxVarcharLen,
@@ -49,7 +49,7 @@ var (
 		},
 		{
 			Name: "path",
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(types.T_varchar),
 				NotNullable: false,
 				Width:       types.MaxVarcharLen,
@@ -57,7 +57,7 @@ var (
 		},
 		{
 			Name: "index",
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(types.T_int32),
 				NotNullable: false,
 				Width:       4,
@@ -65,14 +65,14 @@ var (
 		},
 		{
 			Name: "value",
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(types.T_json),
 				NotNullable: false,
 			},
 		},
 		{
 			Name: "this",
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(types.T_json),
 				NotNullable: false,
 			},
@@ -92,7 +92,7 @@ func _dupType(typ *plan.Type) *plan.Type {
 func _dupColDef(src *plan.ColDef) *plan.ColDef {
 	return &plan.ColDef{
 		Name: src.Name,
-		Typ:  _dupType(src.Typ),
+		Typ:  *_dupType(&src.Typ),
 	}
 }
 

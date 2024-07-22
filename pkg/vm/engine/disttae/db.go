@@ -16,16 +16,21 @@ package disttae
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"strconv"
+	"strings"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
 // init is used to insert some data that will not be synchronized by logtail.
@@ -42,15 +47,15 @@ func (e *Engine) init(ctx context.Context) error {
 	defer put.Put()
 
 	{
-		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID}] = logtailreplay.NewPartition()
+		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID}] = logtailreplay.NewPartition(e.service)
 	}
 
 	{
-		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}] = logtailreplay.NewPartition()
+		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}] = logtailreplay.NewPartition(e.service)
 	}
 
 	{
-		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}] = logtailreplay.NewPartition()
+		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}] = logtailreplay.NewPartition(e.service)
 	}
 
 	{ // mo_catalog
@@ -255,19 +260,269 @@ func (e *Engine) init(ctx context.Context) error {
 	return nil
 }
 
-func (e *Engine) getPartition(databaseId, tableId uint64) *logtailreplay.Partition {
+func (e *Engine) getLatestCatalogCache() *cache.CatalogCache {
+	return e.catalog
+}
+
+func (e *Engine) loadSnapCkpForTable(
+	ctx context.Context,
+	snapCatalog *cache.CatalogCache,
+	loc string,
+	tid uint64,
+	tblName string,
+	did uint64,
+	dbName string,
+	pkSeqNum int,
+) error {
+	entries, closeCBs, err := logtail.LoadCheckpointEntries(
+		ctx,
+		loc,
+		tid,
+		tblName,
+		did,
+		dbName,
+		e.mp,
+		e.fs)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		for _, cb := range closeCBs {
+			cb()
+		}
+	}()
+	for _, entry := range entries {
+		if err = consumeEntry(ctx, pkSeqNum, e, snapCatalog, nil, entry); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (e *Engine) getOrCreateSnapCatalogCache(
+	ctx context.Context,
+	ts types.TS) (*cache.CatalogCache, error) {
+	if e.catalog.CanServe(ts) {
+		return e.catalog, nil
+	}
+	e.snapCatalog.Lock()
+	defer e.snapCatalog.Unlock()
+	for _, snap := range e.snapCatalog.snaps {
+		if snap.CanServe(ts) {
+			return snap, nil
+		}
+	}
+	snapCata := cache.NewCatalog()
+	//TODO:: insert mo_tables, or mo_colunms, or mo_database, mo_catalog into snapCata.
+	//       ref to engine.init.
+	ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, e.fs, ts, 0, nil)
+	if ckps == nil {
+		return nil, moerr.NewInternalErrorNoCtx("No checkpoints for snapshot read")
+	}
+	if err != nil {
+		return nil, err
+	}
+	//Notice that checkpoints must contain only one or zero global checkpoint
+	//followed by zero or multi continuous incremental checkpoints.
+	start := types.MaxTs()
+	end := types.TS{}
+	for _, ckp := range ckps {
+		locs := make([]string, 0)
+		locs = append(locs, ckp.GetLocation().String())
+		locs = append(locs, strconv.Itoa(int(ckp.GetVersion())))
+		locations := strings.Join(locs, ";")
+		//FIXME::pkSeqNum == 0?
+		if err := e.loadSnapCkpForTable(
+			ctx,
+			snapCata,
+			locations,
+			catalog.MO_DATABASE_ID,
+			catalog.MO_DATABASE,
+			catalog.MO_CATALOG_ID,
+			catalog.MO_CATALOG,
+			0); err != nil {
+			return nil, err
+		}
+		if err := e.loadSnapCkpForTable(
+			ctx,
+			snapCata,
+			locations,
+			catalog.MO_TABLES_ID,
+			catalog.MO_TABLES,
+			catalog.MO_CATALOG_ID,
+			catalog.MO_CATALOG, 0); err != nil {
+			return nil, err
+		}
+		if err := e.loadSnapCkpForTable(
+			ctx,
+			snapCata,
+			locations,
+			catalog.MO_COLUMNS_ID,
+			catalog.MO_COLUMNS,
+			catalog.MO_CATALOG_ID,
+			catalog.MO_CATALOG,
+			0); err != nil {
+			return nil, err
+		}
+		//update start and end of snapCata.
+		if ckp.GetType() == checkpoint.ET_Global {
+			start = ckp.GetEnd()
+		}
+		if ckp.GetType() == checkpoint.ET_Incremental {
+			ckpstart := ckp.GetStart()
+			if ckpstart.Less(&start) {
+				start = ckpstart
+			}
+			ckpend := ckp.GetEnd()
+			if ckpend.Greater(&end) {
+				end = ckpend
+			}
+		}
+	}
+	if end.IsEmpty() {
+		//only on global checkpoint.
+		end = start
+	}
+	if ts.Greater(&end) || ts.Less(&start) {
+		return nil, moerr.NewInternalErrorNoCtx("Invalid checkpoints for snapshot read")
+	}
+	snapCata.UpdateDuration(start, end)
+	e.snapCatalog.snaps = append(e.snapCatalog.snaps, snapCata)
+	return snapCata, nil
+}
+
+func (e *Engine) getOrCreateSnapPart(
+	ctx context.Context,
+	tbl *txnTable,
+	ts types.TS) (*logtailreplay.PartitionState, error) {
+
+	//check whether the latest partition is available for reuse.
+	// if the snapshot-read's ts is too old , subscribing table maybe timeout.
+	//if err := tbl.updateLogtail(ctx); err == nil {
+	//	if p := e.getOrCreateLatestPart(tbl.db.databaseId, tbl.tableId); p.CanServe(ts) {
+	//		return p, nil
+	//	}
+	//}
+
+	//check whether the snapshot partitions are available for reuse.
+	e.mu.Lock()
+	tblSnaps, ok := e.mu.snapParts[[2]uint64{tbl.db.databaseId, tbl.tableId}]
+	if !ok {
+		e.mu.snapParts[[2]uint64{tbl.db.databaseId, tbl.tableId}] = &struct {
+			sync.Mutex
+			snaps []*logtailreplay.Partition
+		}{}
+		tblSnaps = e.mu.snapParts[[2]uint64{tbl.db.databaseId, tbl.tableId}]
+	}
+	e.mu.Unlock()
+
+	tblSnaps.Lock()
+	defer tblSnaps.Unlock()
+	for _, snap := range tblSnaps.snaps {
+		if snap.CanServe(ts) {
+			return snap.Snapshot(), nil
+		}
+	}
+
+	//new snapshot partition and apply checkpoints into it.
+	snap := logtailreplay.NewPartition(e.service)
+	//TODO::if tableId is mo_tables, or mo_colunms, or mo_database,
+	//      we should init the partition,ref to engine.init
+	ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, e.fs, ts, tbl.tableId, nil)
+	if err != nil {
+		return nil, err
+	}
+	snap.ConsumeSnapCkps(ctx, ckps, func(
+		checkpoint *checkpoint.CheckpointEntry,
+		state *logtailreplay.PartitionState) error {
+		locs := make([]string, 0)
+		locs = append(locs, checkpoint.GetLocation().String())
+		locs = append(locs, strconv.Itoa(int(checkpoint.GetVersion())))
+		locations := strings.Join(locs, ";")
+		entries, closeCBs, err := logtail.LoadCheckpointEntries(
+			ctx,
+			locations,
+			tbl.tableId,
+			tbl.tableName,
+			tbl.db.databaseId,
+			tbl.db.databaseName,
+			e.mp,
+			e.fs)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			for _, cb := range closeCBs {
+				cb()
+			}
+		}()
+		for _, entry := range entries {
+			if err = consumeEntry(
+				ctx,
+				tbl.primarySeqnum,
+				e,
+				nil,
+				state,
+				entry); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if snap.CanServe(ts) {
+		tblSnaps.snaps = append(tblSnaps.snaps, snap)
+		return snap.Snapshot(), nil
+	}
+
+	start, end := snap.GetDuration()
+	//if has no checkpoints or ts > snap.end, use latest partition.
+	if snap.IsEmpty() || ts.Greater(&end) {
+		ps, err := tbl.tryToSubscribe(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return ps, nil
+	}
+	if ts.Less(&start) {
+		return nil, moerr.NewInternalErrorNoCtx(
+			"No valid checkpoints for snapshot read,maybe snapshot is too old, "+
+				"snapshot op:%s, start:%s, end:%s",
+			tbl.db.op.Txn().DebugString(),
+			start.ToTimestamp().DebugString(),
+			end.ToTimestamp().DebugString())
+	}
+	panic("impossible path")
+}
+
+func (e *Engine) GetOrCreateLatestPart(
+	databaseId,
+	tableId uint64) *logtailreplay.Partition {
 	e.Lock()
 	defer e.Unlock()
 	partition, ok := e.partitions[[2]uint64{databaseId, tableId}]
 	if !ok { // create a new table
-		partition = logtailreplay.NewPartition()
+		partition = logtailreplay.NewPartition(e.service)
 		e.partitions[[2]uint64{databaseId, tableId}] = partition
 	}
 	return partition
 }
 
-func (e *Engine) lazyLoad(ctx context.Context, tbl *txnTable) (*logtailreplay.Partition, error) {
-	part := e.getPartition(tbl.db.databaseId, tbl.tableId)
+func (e *Engine) LazyLoadLatestCkp(
+	ctx context.Context,
+	tblHandler engine.Relation) (*logtailreplay.Partition, error) {
+
+	var (
+		ok  bool
+		tbl *txnTable
+	)
+
+	if tbl, ok = tblHandler.(*txnTable); !ok {
+		delegate := tblHandler.(*txnTableDelegate)
+		tbl = delegate.origin
+	}
+
+	part := e.GetOrCreateLatestPart(tbl.db.databaseId, tbl.tableId)
+	cache := e.getLatestCatalogCache()
 
 	if err := part.ConsumeCheckpoints(
 		ctx,
@@ -279,8 +534,8 @@ func (e *Engine) lazyLoad(ctx context.Context, tbl *txnTable) (*logtailreplay.Pa
 				tbl.tableName,
 				tbl.db.databaseId,
 				tbl.db.databaseName,
-				tbl.db.txn.engine.mp,
-				tbl.db.txn.engine.fs)
+				tbl.getTxn().engine.mp,
+				tbl.getTxn().engine.fs)
 			if err != nil {
 				return err
 			}
@@ -290,7 +545,7 @@ func (e *Engine) lazyLoad(ctx context.Context, tbl *txnTable) (*logtailreplay.Pa
 				}
 			}()
 			for _, entry := range entries {
-				if err = consumeEntry(ctx, tbl.primarySeqnum, e, state, entry); err != nil {
+				if err = consumeEntry(ctx, tbl.primarySeqnum, e, cache, state, entry); err != nil {
 					return err
 				}
 			}
@@ -303,54 +558,9 @@ func (e *Engine) lazyLoad(ctx context.Context, tbl *txnTable) (*logtailreplay.Pa
 	return part, nil
 }
 
-func (e *Engine) UpdateOfPush(ctx context.Context, databaseId, tableId uint64, ts timestamp.Timestamp) error {
+func (e *Engine) UpdateOfPush(
+	ctx context.Context,
+	databaseId,
+	tableId uint64, ts timestamp.Timestamp) error {
 	return e.pClient.TryToSubscribeTable(ctx, databaseId, tableId)
-}
-
-// skip SCA check for unused function.
-var _ = (&Engine{}).UpdateOfPull
-
-func (e *Engine) UpdateOfPull(ctx context.Context, tnList []DNStore, tbl *txnTable, op client.TxnOperator,
-	primarySeqnum int, databaseId, tableId uint64, ts timestamp.Timestamp) error {
-	logDebugf(op.Txn(), "UpdateOfPull")
-
-	part := e.ensureTablePart(databaseId, tableId)
-
-	if err := func() error {
-		lockErr := part.Lock(ctx)
-		if lockErr != nil {
-			return lockErr
-		}
-		defer part.Unlock()
-
-		if part.TS.Greater(ts) || part.TS.Equal(ts) {
-			return nil
-		}
-
-		if err := updatePartitionOfPull(
-			primarySeqnum, tbl, ctx, op, e, part, tnList[0],
-			genSyncLogTailReq(part.TS, ts, databaseId, tableId),
-		); err != nil {
-			return err
-		}
-
-		part.TS = ts
-
-		return nil
-	}(); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (e *Engine) ensureTablePart(databaseId uint64, tableId uint64) *logtailreplay.Partition {
-	e.Lock()
-	defer e.Unlock()
-	part, ok := e.partitions[[2]uint64{databaseId, tableId}]
-	if !ok {
-		part = logtailreplay.NewPartition()
-		e.partitions[[2]uint64{databaseId, tableId}] = part
-	}
-	return part
 }

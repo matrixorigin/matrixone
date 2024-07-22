@@ -188,8 +188,11 @@ func NewNoAvailableBackendNoCtx() *Error {
 	return newError(Context(), ErrNoAvailableBackend)
 }
 
-func NewBackendCannotConnectNoCtx() *Error {
-	return newError(Context(), ErrBackendCannotConnect)
+func NewBackendCannotConnectNoCtx(args ...any) *Error {
+	if len(args) == 0 {
+		return newError(Context(), ErrBackendCannotConnect, "none")
+	}
+	return newError(Context(), ErrBackendCannotConnect, args...)
 }
 
 func NewTxnClosedNoCtx(txnID []byte) *Error {
@@ -263,12 +266,28 @@ func NewTAENeedRetryNoCtx() *Error {
 	return newError(Context(), ErrTAENeedRetry)
 }
 
-func NewTxnStaleNoCtx() *Error {
-	return newError(Context(), ErrTxnStale)
+func NewTxnStaleNoCtx(msg string) *Error {
+	return newError(Context(), ErrTxnStale, msg)
 }
 
 func NewWaiterPausedNoCtx() *Error {
 	return newError(Context(), ErrWaiterPaused)
+}
+
+func NewRetryForCNRollingRestart() *Error {
+	return newError(Context(), ErrRetryForCNRollingRestart)
+}
+
+func NewNewTxnInCNRollingRestart() *Error {
+	return newError(Context(), ErrNewTxnInCNRollingRestart)
+}
+
+func NewPrevCheckpointNotFinished() *Error {
+	return newError(Context(), ErrPrevCheckpointNotFinished)
+}
+
+func NewCantDelGCCheckerNoCtx() *Error {
+	return newError(Context(), ErrCantDelGCChecker)
 }
 
 func NewNotFoundNoCtx() *Error {
@@ -308,6 +327,10 @@ func NewDeadlockCheckBusyNoCtx() *Error {
 	return newError(Context(), ErrDeadlockCheckBusy)
 }
 
+func NewCannotCommitOrphanNoCtx() *Error {
+	return NewCannotCommitOrphan(Context())
+}
+
 func NewLockTableBindChangedNoCtx() *Error {
 	return newError(Context(), ErrLockTableBindChanged)
 }
@@ -342,4 +365,32 @@ func NewTxnNeedRetryWithDefChangedNoCtx() *Error {
 
 func NewTxnCannotRetryNoCtx() *Error {
 	return newError(Context(), ErrTxnCannotRetry)
+}
+
+func NewRPCTimeoutNoCtx() *Error {
+	return NewRPCTimeout(Context())
+}
+
+func NewKeyAlreadyExistsNoCtx() *Error {
+	return newError(Context(), ErrKeyAlreadyExists)
+}
+
+func NewErrTooLargeObjectSizeNoCtx(option uint64) *Error {
+	return newError(Context(), ErrTooLargeObjectSize, option)
+}
+
+func NewArenaFullNoCtx() *Error {
+	return newError(Context(), ErrArenaFull)
+}
+
+func NewReplicaNotFound(replica string) *Error {
+	return newError(Context(), ErrReplicaNotFound, replica)
+}
+
+func NewReplicaNotMatch(current, received string) *Error {
+	return newError(Context(), ErrReplicaNotMatch, current, received)
+}
+
+func NewCantCompileForPrepareNoCtx() *Error {
+	return newError(Context(), ErrCantCompileForPrepare)
 }

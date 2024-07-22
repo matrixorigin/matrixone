@@ -93,6 +93,7 @@ func getNodeHostConfig(cfg Config) config.NodeHostConfig {
 			// citizen
 			TestGossipProbeInterval: cfg.GossipProbeInterval.Duration,
 			LogDB:                   logdb,
+			ExplicitHostname:        cfg.ExplicitHostname,
 		},
 		Gossip: config.GossipConfig{
 			BindAddress:      cfg.GossipListenAddr(),
@@ -156,8 +157,8 @@ func newLogStore(cfg Config,
 	ls := &store{
 		cfg:           cfg,
 		nh:            nh,
-		checker:       checkers.NewCoordinator(hakeeperConfig),
-		taskScheduler: task.NewScheduler(taskServiceGetter, hakeeperConfig),
+		checker:       checkers.NewCoordinator(cfg.UUID, hakeeperConfig),
+		taskScheduler: task.NewScheduler(cfg.UUID, taskServiceGetter, hakeeperConfig),
 		alloc:         newIDAllocator(),
 		stopper:       stopper.NewStopper("log-store"),
 		tickerStopper: stopper.NewStopper("hakeeper-ticker"),

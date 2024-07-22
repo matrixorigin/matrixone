@@ -35,7 +35,9 @@ func (c *DashboardCreator) initLogTailDashboard() error {
 			c.initLogtailBytesRow(),
 			c.initLogtailLoadCheckpointRow(),
 			c.initLogtailCollectRow(),
+			c.initLogtailTransmitRow(),
 			c.initLogtailSubscriptionRow(),
+			c.initLogtailUpdatePartitionRow(),
 		)...)
 	if err != nil {
 		return err
@@ -48,10 +50,24 @@ func (c *DashboardCreator) initLogtailCollectRow() dashboard.Option {
 	return dashboard.Row(
 		"Logtail collect duration",
 		c.getHistogram(
-			"collect duration",
-			c.getMetricWithFilter("mo_logtail_collect_duration_seconds_bucket", ``),
+			"pull type phase1 collection duration",
+			c.getMetricWithFilter("mo_logtail_pull_collection_phase1_duration_seconds_bucket", ``),
 			[]float64{0.50, 0.8, 0.90, 0.99},
-			12,
+			4,
+			axis.Unit("s"),
+			axis.Min(0)),
+		c.getHistogram(
+			"pull type phase2 collection duration",
+			c.getMetricWithFilter("mo_logtail_pull_collection_phase2_duration_seconds_bucket", ``),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			4,
+			axis.Unit("s"),
+			axis.Min(0)),
+		c.getHistogram(
+			"push type collection duration",
+			c.getMetricWithFilter("mo_logtail_push_collection_duration_seconds_bucket", ``),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			4,
 			axis.Unit("s"),
 			axis.Min(0)),
 	)
@@ -161,6 +177,45 @@ func (c *DashboardCreator) initLogtailOverviewRow() dashboard.Option {
 	)
 }
 
+func (c *DashboardCreator) initLogtailUpdatePartitionRow() dashboard.Option {
+	return dashboard.Row(
+		"Logtail update partition",
+		c.getMultiHistogram(
+			[]string{
+				c.getMetricWithFilter(`mo_logtail_update_partition_duration_seconds_bucket`, `step="enqueue-global-stats"`),
+				c.getMetricWithFilter(`mo_logtail_update_partition_duration_seconds_bucket`, `step="get-partition"`),
+				c.getMetricWithFilter(`mo_logtail_update_partition_duration_seconds_bucket`, `step="get-lock"`),
+				c.getMetricWithFilter(`mo_logtail_update_partition_duration_seconds_bucket`, `step="get-catalog"`),
+				c.getMetricWithFilter(`mo_logtail_update_partition_duration_seconds_bucket`, `step="handle-checkpoint"`),
+				c.getMetricWithFilter(`mo_logtail_update_partition_duration_seconds_bucket`, `step="consume"`),
+				c.getMetricWithFilter(`mo_logtail_update_partition_duration_seconds_bucket`, `step="consume-catalog-table"`),
+				c.getMetricWithFilter(`mo_logtail_update_partition_duration_seconds_bucket`, `step="consume-catalog-table"`),
+				c.getMetricWithFilter(`mo_logtail_update_partition_duration_seconds_bucket`, `step="consume-one-entry"`),
+				c.getMetricWithFilter(`mo_logtail_update_partition_duration_seconds_bucket`, `step="consume-one-entry-logtailreplay"`),
+				c.getMetricWithFilter(`mo_logtail_update_partition_duration_seconds_bucket`, `step="consume-one-entry-catalog-cache"`),
+				c.getMetricWithFilter(`mo_logtail_update_partition_duration_seconds_bucket`, `step="update-timestamps"`),
+			},
+			[]string{
+				"enqueue-global-stats",
+				"get-partition",
+				"get-lock",
+				"get-catalog",
+				"handle-checkpoint",
+				"consume",
+				"consume-catalog-table",
+				"consume-catalog-table",
+				"consume-one-entry",
+				"consume-one-entry-logtailreplay",
+				"consume-one-entry-catalog-cache",
+				"update-timestamps",
+			},
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			[]float32{3, 3, 3, 3},
+			axis.Unit("s"),
+			axis.Min(0))...,
+	)
+}
+
 func (c *DashboardCreator) initLogtailLoadCheckpointRow() dashboard.Option {
 	return dashboard.Row(
 		"Logtail load checkpoint",
@@ -171,5 +226,21 @@ func (c *DashboardCreator) initLogtailLoadCheckpointRow() dashboard.Option {
 			12,
 			axis.Unit("s"),
 			axis.Min(0)),
+	)
+}
+
+func (c *DashboardCreator) initLogtailTransmitRow() dashboard.Option {
+	return dashboard.Row(
+		"Logtail Transmit counter",
+		c.withGraph(
+			"Server Send",
+			6,
+			`sum(rate(`+c.getMetricWithFilter("mo_logtail_transmit_total", `type="server-send"`)+`[$interval]))`,
+			""),
+		c.withGraph(
+			"Client Receive",
+			6,
+			`sum(rate(`+c.getMetricWithFilter("mo_logtail_transmit_total", `type="client-receive"`)+`[$interval]))`,
+			""),
 	)
 }

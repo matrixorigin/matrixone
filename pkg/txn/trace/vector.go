@@ -167,7 +167,7 @@ func writeValue(
 		hex.Encode(dst[:n], v[:])
 		buf.buf.MustWrite(dst[:n])
 	default:
-		panic(fmt.Sprintf("not support for %s", t.String()))
+		buf.buf.WriteString("not support")
 	}
 }
 

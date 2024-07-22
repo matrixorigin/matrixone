@@ -65,7 +65,6 @@ func DeepCopyOnDupliateKeyCtx(ctx *plan.OnDuplicateKeyCtx) *plan.OnDuplicateKeyC
 		return nil
 	}
 	newCtx := &plan.OnDuplicateKeyCtx{
-		TableDef:       DeepCopyTableDef(ctx.TableDef, true),
 		OnDuplicateIdx: make([]int32, len(ctx.OnDuplicateIdx)),
 	}
 
@@ -141,9 +140,8 @@ func DeepCopyPreInsertUkCtx(ctx *plan.PreInsertUkCtx) *plan.PreInsertUkCtx {
 	newCtx := &plan.PreInsertUkCtx{
 		Columns:  make([]int32, len(ctx.Columns)),
 		PkColumn: ctx.PkColumn,
-		PkType:   DeepCopyType(ctx.PkType),
-		UkType:   DeepCopyType(ctx.UkType),
-		TableDef: DeepCopyTableDef(ctx.TableDef, true),
+		PkType:   ctx.PkType,
+		UkType:   ctx.UkType,
 	}
 	copy(newCtx.Columns, ctx.Columns)
 
@@ -169,7 +167,7 @@ func DeepCopyLockTarget(target *plan.LockTarget) *plan.LockTarget {
 	return &plan.LockTarget{
 		TableId:            target.TableId,
 		PrimaryColIdxInBat: target.PrimaryColIdxInBat,
-		PrimaryColTyp:      DeepCopyType(target.PrimaryColTyp),
+		PrimaryColTyp:      target.PrimaryColTyp,
 		RefreshTsIdxInBat:  target.RefreshTsIdxInBat,
 		FilterColIdxInBat:  target.FilterColIdxInBat,
 		LockTable:          target.LockTable,
@@ -200,6 +198,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		TblFuncExprList: make([]*plan.Expr, len(node.TblFuncExprList)),
 		ClusterTable:    DeepCopyClusterTable(node.GetClusterTable()),
 		InsertCtx:       DeepCopyInsertCtx(node.InsertCtx),
+		ReplaceCtx:      DeepCopyReplaceCtx(node.ReplaceCtx),
 		NotCacheable:    node.NotCacheable,
 		SourceStep:      node.SourceStep,
 		PreInsertCtx:    DeepCopyPreInsertCtx(node.PreInsertCtx),
@@ -277,7 +276,8 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 
 	if node.RowsetData != nil {
 		newNode.RowsetData = &plan.RowsetData{
-			Cols: make([]*plan.ColData, len(node.RowsetData.Cols)),
+			Cols:     make([]*plan.ColData, len(node.RowsetData.Cols)),
+			RowCount: node.RowsetData.RowCount,
 		}
 
 		for idx, col := range node.RowsetData.Cols {
@@ -289,6 +289,26 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 	}
 
 	return newNode
+}
+
+func DeepCopyReplaceCtx(oldCtx *plan.ReplaceCtx) *plan.ReplaceCtx {
+	if oldCtx == nil {
+		return nil
+	}
+	ctx := &plan.ReplaceCtx{
+		Ref:                       DeepCopyObjectRef(oldCtx.Ref),
+		AddAffectedRows:           oldCtx.AddAffectedRows,
+		IsClusterTable:            oldCtx.IsClusterTable,
+		TableDef:                  DeepCopyTableDef(oldCtx.TableDef, true),
+		DeleteCond:                oldCtx.DeleteCond,
+		PartitionTableIds:         make([]uint64, len(oldCtx.PartitionTableIds)),
+		PartitionTableNames:       make([]string, len(oldCtx.PartitionTableNames)),
+		PartitionIdx:              oldCtx.PartitionIdx,
+		RewriteFromOnDuplicateKey: oldCtx.RewriteFromOnDuplicateKey,
+	}
+	copy(ctx.PartitionTableIds, oldCtx.PartitionTableIds)
+	copy(ctx.PartitionTableNames, oldCtx.PartitionTableNames)
+	return ctx
 }
 
 func DeepCopyDefault(def *plan.Default) *plan.Default {
@@ -324,7 +344,7 @@ func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
 		ColId:     col.ColId,
 		Name:      col.Name,
 		Alg:       col.Alg,
-		Typ:       DeepCopyType(col.Typ),
+		Typ:       col.Typ,
 		Default:   DeepCopyDefault(col.Default),
 		Primary:   col.Primary,
 		Pkidx:     col.Pkidx,
@@ -333,6 +353,8 @@ func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
 		ClusterBy: col.ClusterBy,
 		Hidden:    col.Hidden,
 		Seqnum:    col.Seqnum,
+		TblName:   col.TblName,
+		DbName:    col.DbName,
 	}
 }
 
@@ -463,6 +485,7 @@ func DeepCopyTableDef(table *plan.TableDef, withCols bool) *plan.TableDef {
 		TableLockType:  table.TableLockType,
 		IsTemporary:    table.IsTemporary,
 		AutoIncrOffset: table.AutoIncrOffset,
+		DbName:         table.DbName,
 	}
 
 	copy(newTable.RefChildTbls, table.RefChildTbls)
@@ -668,14 +691,14 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 
 	case *plan.DataDefinition_AlterTable:
 		AlterTable := &plan.AlterTable{
-			Database:       df.AlterTable.Database,
-			TableDef:       DeepCopyTableDef(df.AlterTable.TableDef, true),
-			CopyTableDef:   DeepCopyTableDef(df.AlterTable.CopyTableDef, true),
-			IsClusterTable: df.AlterTable.IsClusterTable,
-			AlgorithmType:  df.AlterTable.AlgorithmType,
-			CreateTableSql: df.AlterTable.CreateTableSql,
-			InsertDataSql:  df.AlterTable.InsertDataSql,
-			Actions:        make([]*plan.AlterTable_Action, len(df.AlterTable.Actions)),
+			Database:          df.AlterTable.Database,
+			TableDef:          DeepCopyTableDef(df.AlterTable.TableDef, true),
+			CopyTableDef:      DeepCopyTableDef(df.AlterTable.CopyTableDef, true),
+			IsClusterTable:    df.AlterTable.IsClusterTable,
+			AlgorithmType:     df.AlterTable.AlgorithmType,
+			CreateTmpTableSql: df.AlterTable.CreateTmpTableSql,
+			InsertTmpDataSql:  df.AlterTable.InsertTmpDataSql,
+			Actions:           make([]*plan.AlterTable_Action, len(df.AlterTable.Actions)),
 		}
 		for i, action := range df.AlterTable.Actions {
 			switch act := action.Action.(type) {
@@ -819,6 +842,18 @@ func DeepCopyFkey(fkey *ForeignKeyDef) *ForeignKeyDef {
 	copy(def.Cols, fkey.Cols)
 	copy(def.ForeignCols, fkey.ForeignCols)
 	return def
+}
+
+func DeepCopyRuntimeFilterSpec(rf *plan.RuntimeFilterSpec) *plan.RuntimeFilterSpec {
+	if rf == nil {
+		return nil
+	}
+	return &plan.RuntimeFilterSpec{
+		Tag:         rf.Tag,
+		MatchPrefix: rf.MatchPrefix,
+		UpperLimit:  rf.UpperLimit,
+		Expr:        DeepCopyExpr(rf.Expr),
+	}
 }
 
 func DeepCopyExpr(expr *Expr) *Expr {
@@ -1043,6 +1078,7 @@ func DeepCopyAnalyzeInfo(analyzeinfo *plan.AnalyzeInfo) *plan.AnalyzeInfo {
 	}
 
 	return &plan.AnalyzeInfo{
+		InputBlocks:            analyzeinfo.GetInputBlocks(),
 		InputRows:              analyzeinfo.GetInputRows(),
 		OutputRows:             analyzeinfo.GetOutputRows(),
 		InputSize:              analyzeinfo.GetInputSize(),

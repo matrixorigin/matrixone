@@ -13,9 +13,8 @@ use ssb;
 /* cloud_nonuser */ use system;/* cloud_user */show tables;
 -- @session
 
--- result check
-select sleep(16);
-select statement, sql_source_type from system.statement_info where account="bvt_sql_source_type" and status != 'Running' and statement not like '%mo_ctl%' order by request_at desc limit 4;
+-- result check, issue 14,836 move into ../zz_statement_query_type
+-- select statement, sql_source_type from system.statement_info where account="bvt_sql_source_type" and status != 'Running' and statement not like '%mo_ctl%' order by request_at desc limit 4;
 
 -- cleanup
 drop account if exists bvt_sql_source_type;

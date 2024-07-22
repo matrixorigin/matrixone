@@ -15,6 +15,7 @@
 package types
 
 import (
+	"bytes"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -118,11 +119,23 @@ func GetArray[T RealNumbers](v *Varlena, area []byte) []T {
 }
 
 // See the lifespan comment above.
-func (v *Varlena) GetString(area []byte) string {
+func (v *Varlena) UnsafeGetString(area []byte) string {
 	return util.UnsafeBytesToString(v.GetByteSlice(area))
+}
+
+func (v *Varlena) GetString(area []byte) string {
+	return string(v.GetByteSlice(area))
 }
 
 func (v *Varlena) Reset() {
 	var vzero Varlena
 	*v = vzero
+}
+
+func PrefixCompare(lhs, rhs []byte) int {
+	if len(lhs) > len(rhs) {
+		lhs = lhs[:len(rhs)]
+	}
+
+	return bytes.Compare(lhs, rhs)
 }

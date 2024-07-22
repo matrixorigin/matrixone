@@ -427,7 +427,8 @@ func TestGenerateSeriesString(t *testing.T) {
 }
 
 func TestGenerateSeriesPrepare(t *testing.T) {
-	err := generateSeriesPrepare(nil, &Argument{
+	err := generateSeriesPrepare(nil, &TableFunction{
+		ctr: &container{},
 		OperatorBase: vm.OperatorBase{
 			OperatorInfo: vm.OperatorInfo{
 				Idx:     0,
@@ -457,7 +458,7 @@ func TestGenStep(t *testing.T) {
 func TestGenerateSeriesCall(t *testing.T) {
 	proc := testutil.NewProc()
 	beforeCall := proc.Mp().CurrNB()
-	arg := &Argument{
+	arg := &TableFunction{
 		Attrs:    []string{"result"},
 		FuncName: "generate_series",
 		OperatorBase: vm.OperatorBase{
@@ -481,6 +482,7 @@ func TestGenerateSeriesCall(t *testing.T) {
 	require.Equal(t, false, end)
 	require.Equal(t, 3, result.Batch.GetVector(0).Length())
 	cleanResult(&result, proc)
+	arg.Free(proc, false, nil)
 
 	arg.Args = makeDatetimeList("2020-01-01 00:00:00", "2020-01-01 00:00:59", "1 second", 0)
 	arg.Rets = plan.GSColDefs[1]
@@ -495,6 +497,7 @@ func TestGenerateSeriesCall(t *testing.T) {
 	require.Equal(t, false, end)
 	require.Equal(t, 60, result.Batch.GetVector(0).Length())
 	cleanResult(&result, proc)
+	arg.Free(proc, false, nil)
 
 	arg.Args = makeVarcharList("2020-01-01 00:00:00", "2020-01-01 00:00:59", "1 second")
 	arg.Rets = plan.GSColDefs[2]
@@ -509,6 +512,7 @@ func TestGenerateSeriesCall(t *testing.T) {
 	require.Equal(t, false, end)
 	require.Equal(t, 60, result.Batch.GetVector(0).Length())
 	cleanResult(&result, proc)
+	arg.Free(proc, false, nil)
 
 	bat.Clean(proc.Mp())
 	require.Equal(t, beforeCall, proc.Mp().CurrNB())

@@ -230,3 +230,171 @@ delete from t1;
 load data infile '$resources/load_data/char_varchar_5.csv' into table t1 fields terminated by'?';
 delete from t1;
 drop table t1;
+
+drop table if exists t1;
+create table t1 (col1 int);
+load data infile '$resources/load_data/test_character.csv' into table t1 CHARACTER SET utf8 FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n';
+select * from t1;
+load data infile '$resources/load_data/test_character.csv' into table t1 CHARACTER SET utf_8 FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n';
+select * from t1;
+load data infile '$resources/load_data/test_character.csv' into table t1 CHARACTER SET gbk FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n';
+select * from t1;
+load data infile '$resources/load_data/test_character.csv' into table t1 CHARACTER SET utf_16 FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n';
+select * from t1;
+load data infile '$resources/load_data/test_character.csv' into table t1 CHARACTER SET utf_xx FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n';
+select * from t1;
+load data infile '$resources/load_data/test_character.csv' into table t1 CHARACTER SET "utf-xx" FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n';
+select * from t1;
+load data infile '$resources/load_data/test_character.csv' into table t1 CHARACTER SET "utf-16" FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n';
+select * from t1;
+drop table t1;
+
+drop table if exists t1;
+create table t1(col1 int, col2 varchar(10));
+load data infile '$resources/load_data/test_character01.csv' into table t1 CHARACTER SET abcd FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n';
+select * from t1;
+load data infile '$resources/load_data/test_character01.csv' into table t1 CHARACTER SET utf_8 FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n';
+select * from t1;
+load data infile '$resources/load_data/test_character01.csv' into table t1 CHARACTER SET "utf-16" FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n';
+select * from t1;
+load data infile '$resources/load_data/test_character01.csv' into table t1 CHARACTER SET "utf_xx" FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n';
+select * from t1;
+drop table t1;
+
+drop table if exists test01;
+create table test01(col1 int, col2 varchar(20));
+load data infile '$resources/load_data/test_starting_by02.csv' into table test01 CHARACTER SET "utf_8" fields terminated by ',' lines starting by 'cha';
+select * from test01;
+drop table test01;
+
+drop table if exists test02;
+create table test02(col1 int, col2 bigint, col3 varchar(30));
+load data infile '$resources/load_data/test_starting_by03.csv' into table test02 fields terminated by '|' lines starting by '1' terminated by '\n';
+select * from test02;
+drop table test02;
+
+-- default starting by string ''
+drop table if exists test03;
+create table test03(col1 varchar(20), col2 varchar(20));
+load data infile '$resources/load_data/test_starting_by01.csv' into table test03 CHARACTER SET "utf_8" fields terminated by ',' lines terminated by '\n';
+select * from test03;
+drop table test03;
+
+drop table if exists test04;
+create table test04 (col1 varchar(20), col2 varchar(60));
+load data infile '$resources/load_data/test_escaped_by01.csv' into table test04 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
+select * from test04;
+drop table test04;
+
+drop table if exists test05;
+create table test05 (col1 varchar(20), col2 varchar(60));
+load data infile '$resources/load_data/test_escaped_by02.csv' into table test05 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
+select * from test05;
+drop table test05;
+
+-- @bvt:issue#15110
+drop table if exists test06;
+create table test06(col1 varchar(20), col2 varchar(20));
+load data infile '$resources/load_data/test_enclosed_by01.csv' into table test06 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
+select * from test06;
+drop table test06;
+-- @bvt:issue
+
+drop table if exists test07;
+create table test07(col1 varchar(20), col2 varchar(20));
+load data infile '$resources/load_data/test_enclosed_by02.csv' into table test07 fields terminated by ',' enclosed by '`' lines terminated by '\n';
+select * from test07;
+drop table test07;
+
+-- @bvt:issue#15110
+drop table if exists test08;
+create table test08 (col1 varchar(20), col2 varchar(20));
+load data infile '$resources/load_data/test_enclosed_by01.csv' into table test08 fields terminated by ',' enclosed by '`' lines terminated by '\n';
+select * from test08;
+drop table test08;
+-- @bvt:issue
+
+drop table if exists test09;
+create table test09(col1 varchar(20), col2 varchar(20));
+load data infile '$resources/load_data/test_starting_by04.csv' into table test09 CHARACTER SET "utf_8" fields terminated by ',' lines starting by ' ';
+select * from test09;
+drop table test09;
+
+drop table if exists test10;
+create table test10(col1 text, col2 text);
+load data infile {'filepath'='$resources/load_data/text.csv.tar.gz', 'compression'='tar.gz'} into table test10 FIELDS  ENCLOSED BY '"' TERMINATED BY "," LINES TERMINATED BY '\n' parallel 'true';
+select * from test10;
+
+load data infile {'filepath'='$resources/load_data/text.csv.tar.bz2', 'compression'='tar.bz2'} into table test10 FIELDS  ENCLOSED BY '"' TERMINATED BY "," LINES TERMINATED BY '\n' parallel 'true';
+select * from test10;
+drop table test10;
+
+drop table if exists load_data_t1;
+CREATE TABLE load_data_t1 (
+`name` VARCHAR(255) DEFAULT null,
+`age` INT DEFAULT null,
+`city` VARCHAR(255) DEFAULT null
+);
+load data inline format='csv', data=$XXX$ zhangsan,26,XiAn $XXX$ into table load_data_t1 fields terminated by ',' lines terminated by '\r\n' (city,age,name);
+select * from load_data_t1;
+delete from load_data_t1;
+load data inline format='csv', data=$XXX$ XiAn,26 $XXX$ into table load_data_t1 fields terminated by ',' lines terminated by '\r\n' (city,age);
+select * from load_data_t1;
+delete from load_data_t1;
+load data inline format='csv', data=$XXX$ zhangsan, XiAn,26 $XXX$ into table load_data_t1 fields terminated by ',' lines terminated by '\r\n' (@name, city,age);
+select * from load_data_t1;
+delete from load_data_t1;
+load data inline format='csv', data=$XXX$ zhangsan, XiAn,26 $XXX$ into table load_data_t1 fields terminated by ',' lines terminated by '\r\n' (@aa, city,age);
+select * from load_data_t1;
+delete from load_data_t1;
+load data inline format='csv', data=$XXX$ zhangsan, XiAn,26 $XXX$ into table load_data_t1 fields terminated by ',' lines terminated by '\r\n' (city,age);
+load data inline format='csv', data=$XXX$ zhangsan $XXX$ into table load_data_t1 fields terminated by ',' lines terminated by '\r\n' (city,age);
+drop table load_data_t1;
+
+drop table if exists load_data_t2;
+create table load_data_t2(id int, name varchar(20), age int);
+LOAD DATA infile '$resources/load_data/test_columnlist_01.csv' into table load_data_t2 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (id,   name , age);
+select * from load_data_t2 order by id;
+delete from load_data_t2;
+
+LOAD DATA infile '$resources/load_data/test_columnlist_01.csv' into table load_data_t2 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (name, id, age);
+
+
+LOAD DATA infile '$resources/load_data/test_columnlist_01.csv' into table load_data_t2 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (id,   name );
+select * from load_data_t2 order by id;
+delete from load_data_t2;
+
+LOAD DATA infile '$resources/load_data/test_columnlist_01.csv' into table load_data_t2 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (id,   name , age, address);
+
+
+LOAD DATA infile '$resources/load_data/test_columnlist_02.csv' into table load_data_t2 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (id, name, age);
+select * from load_data_t2;
+delete from load_data_t2;
+
+LOAD DATA infile '$resources/load_data/test_columnlist_02.csv' into table load_data_t2 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (id, name);
+select * from load_data_t2 order by id;
+delete from load_data_t2;
+
+LOAD DATA infile '$resources/load_data/test_columnlist_02.csv' into table load_data_t2 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (age, name);
+select * from load_data_t2 order by id;
+drop table load_data_t2;
+
+drop table if exists load_data_t3;
+create table load_data_t3(col1 int not null, col2 varchar(20) default "jane", col3 int);
+LOAD DATA infile '$resources/load_data/test_columnlist_02.csv' into table load_data_t3 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (col3, col2);
+
+LOAD DATA infile '$resources/load_data/test_columnlist_03.csv' into table load_data_t3 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (col1, col3);
+select * from load_data_t3 order by id;
+drop table load_data_t3;
+
+drop table if exists load_data_t4;
+create table load_data_t4(col1 int default 22, col2 int);
+LOAD DATA infile '$resources/load_data/test_columnlist_03.csv' into table load_data_t4 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (col1, @col2);
+select * from load_data_t4;
+delete from load_data_t4;
+LOAD DATA infile '$resources/load_data/test_columnlist_03.csv' into table load_data_t4 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (@col1, col2);
+select * from load_data_t4;
+delete from load_data_t4;
+
+LOAD DATA infile '$resources/load_data/test_columnlist_04.csv' into table load_data_t4 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (@col1, col2);
+drop table load_data_t4;

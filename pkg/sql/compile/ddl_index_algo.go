@@ -25,14 +25,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
+const (
+	ivfFlatIndexFlag = "experimental_ivf_index"
+)
+
 func (s *Scope) handleUniqueIndexTable(c *Compile,
 	indexDef *plan.IndexDef, qryDatabase string,
 	originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
 
-	err := genNewUniqueIndexDuplicateCheck(c, qryDatabase, originalTableDef.Name, partsToColsStr(indexDef.Parts))
-	if err != nil {
-		return err
-	}
+	// the logic of detecting whether the unique constraint is violated does not need to be done separately,
+	// it will be processed when inserting into the hidden table.
 
 	return s.createAndInsertForUniqueOrRegularIndexTable(c, indexDef, qryDatabase, originalTableDef, indexInfo)
 }
@@ -157,17 +159,25 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 	}
 	centroidParamsDistFn := catalog.ToLower(params[catalog.IndexAlgoParamOpType])
 	kmeansInitType := "kmeansplusplus"
-	kmeansNormalize := "true"
+	kmeansNormalize := "false"
 
 	// 1.b init centroids table with default centroid, if centroids are not enough.
 	// NOTE: we can run re-index to improve the centroid quality.
 	if totalCnt == 0 || totalCnt < int64(centroidParamsLists) {
-		initSQL := fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`, `%s`) VALUES(0,1,NULL);",
+		initSQL := fmt.Sprintf("INSERT INTO `%s`.`%s` (`%s`, `%s`, `%s`) "+
+			"SELECT "+
+			"(SELECT CAST(`%s` AS BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version'), "+
+			"1, NULL;",
 			qryDatabase,
 			indexDef.IndexTableName,
 			catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
 			catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
 			catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
+
+			catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+			qryDatabase,
+			metadataTableName,
+			catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
 		)
 		err := c.runSql(initSQL)
 		if err != nil {
@@ -253,22 +263,9 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 	metadataTableName string,
 	centroidsTableName string) error {
 
-	// 1. algo params
-	params, err := catalog.IndexParamsStringToMap(indexDef.IndexAlgoParams)
-	if err != nil {
-		return err
-	}
-	algoParamsDistFn := catalog.ToLower(params[catalog.IndexAlgoParamOpType])
-	ops := make(map[string]string)
-	ops[catalog.IndexAlgoParamOpType_l2] = "l2_distance"
-	//ops[catalog.IndexAlgoParamOpType_ip] = "inner_product" //TODO: verify this is correct @arjun
-	//ops[catalog.IndexAlgoParamOpType_cos] = "cosine_distance"
-	algoParamsDistFn = ops[algoParamsDistFn]
-
-	// 2. Original table's pkey name and value
+	// 1. Original table's pkey name and value
 	var originalTblPkColsCommaSeperated string
 	var originalTblPkColMaySerial string
-	var originalTblPkColMaySerialColNameAlias = "__mo_org_tbl_pk_may_serial_col"
 	if originalTableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
 		for i, part := range originalTableDef.Pkey.Names {
 			if i > 0 {
@@ -282,16 +279,17 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 		originalTblPkColMaySerial = originalTblPkColsCommaSeperated
 	}
 
-	// 3. insert into entries table
-	indexColumnName := indexDef.Parts[0]
-	insertSQL := fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`, `%s`) ",
+	// 2. insert into entries table
+	insertSQL := fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`, `%s`, `%s`) ",
 		qryDatabase,
 		indexDef.IndexTableName,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
-		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk)
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
+	)
 
-	// 4. centroids table with latest version
+	// 3. centroids table with latest version
 	centroidsTableForCurrentVersionSql := fmt.Sprintf("(select * from "+
 		"`%s`.`%s` where `%s` = "+
 		"(select CAST(%s as BIGINT) from `%s`.`%s` where `%s` = 'version'))  as `%s`",
@@ -306,65 +304,40 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 		centroidsTableName,
 	)
 
-	// 5. original table with normalized SK
-	originalTableWithNormalizedSkSql := fmt.Sprintf("(select %s as `%s`, "+
-		"normalize_l2(`%s`.`%s`) as `%s` from `%s`.`%s`) as `%s`",
-		originalTblPkColMaySerial,
-		originalTblPkColMaySerialColNameAlias,
-
-		originalTableDef.Name,
-		indexColumnName,
-		indexColumnName,
-		qryDatabase,
-		originalTableDef.Name,
-		originalTableDef.Name,
-	)
-
-	/*
-		Sample SQL:
-		INSERT INTO `a`.`entries_tbl`(`__mo_index_centroid_fk_version`, `__mo_index_centroid_fk_id`, `__mo_index_pri_col`)
-		SELECT     `centroids_tbl`.`__mo_index_centroid_version`,
-		           serial_extract( min( serial( l2_distance(`centroids_tbl`.`__mo_index_centroid`,`tbl`.embedding ), `centroids_tbl`.`__mo_index_centroid_id`)), 1 AS bigint),
-		           `tbl`.`__mo_org_tbl_pk_may_serial_col`
-		FROM
-			(SELECT `tbl`.`id` AS `__mo_org_tbl_pk_may_serial_col`, normalize_l2(`tbl`.embedding) AS `embedding` FROM `a`.`tbl`) AS `tbl`
-		CROSS JOIN
-			(SELECT * FROM   `a`.`centroids_tbl` WHERE  `__mo_index_centroid_version` = 0) AS `centroids_tbl`
-		GROUP BY   `tbl`.`__mo_org_tbl_pk_may_serial_col`;
-
-	*/
-	// 6. final SQL
-	mappingSQL := fmt.Sprintf("%s "+
-		"select `%s`.`__mo_index_centroid_version`, "+
-		"serial_extract( min( serial_full( %s(`%s`.`%s`, `%s`.%s), `%s`.`%s`)), 1 as bigint), "+
-		"%s "+
-		"from %s CROSS JOIN %s group by %s, `%s`.`__mo_index_centroid_version`;",
+	// 4. select * from table and cross join centroids;
+	indexColumnName := indexDef.Parts[0]
+	centroidsCrossL2JoinTbl := fmt.Sprintf("%s "+
+		"SELECT `%s`, `%s`,  %s, `%s`"+
+		" FROM `%s` cross_l2 join %s "+
+		" using (`%s`, `%s`) "+
+		" order by `%s`, `%s`;",
 		insertSQL,
 
-		centroidsTableName,
-
-		algoParamsDistFn,
-		centroidsTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
-		originalTableDef.Name,
-		indexColumnName,
-		centroidsTableName,
+		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
+		originalTblPkColMaySerial,
+		indexColumnName,
 
-		originalTblPkColMaySerialColNameAlias, // NOTE: no need to add tableName here, because it could be serial()
-
-		originalTableWithNormalizedSkSql,
+		originalTableDef.Name,
 		centroidsTableForCurrentVersionSql,
-		originalTblPkColMaySerialColNameAlias,
-		centroidsTableName,
+
+		catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
+		indexColumnName,
+
+		// Without ORDER BY, we get 20QPS
+		// With    ORDER BY, we get 60QPS
+		// I think it's because there are lesser number of segments to scan during JOIN.
+		//TODO: need to revisit this once we have BlockFilter applied on the TableScan.
+		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
+		catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
 	)
 
-	err = s.logTimestamp(c, qryDatabase, metadataTableName, "mapping_start")
+	err := s.logTimestamp(c, qryDatabase, metadataTableName, "mapping_start")
 	if err != nil {
 		return err
 	}
 
-	err = c.runSql(mappingSQL)
+	err = c.runSql(centroidsCrossL2JoinTbl)
 	if err != nil {
 		return err
 	}
@@ -390,4 +363,71 @@ func (s *Scope) logTimestamp(c *Compile, qryDatabase, metadataTableName, metrics
 
 		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
 	))
+}
+
+func (s *Scope) isExperimentalEnabled(c *Compile, flag string) (bool, error) {
+
+	val, err := c.proc.GetResolveVariableFunc()(flag, true, false)
+	if err != nil {
+		return false, err
+	}
+
+	if val == nil {
+		return false, nil
+	}
+
+	return fmt.Sprintf("%v", val) == "1", nil
+}
+
+func (s *Scope) handleIvfIndexDeleteOldEntries(c *Compile,
+	metadataTableName string,
+	centroidsTableName string,
+	entriesTableName string,
+	qryDatabase string) error {
+
+	pruneCentroidsTbl := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE `%s` < "+
+		"(SELECT CAST(`%s` AS BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version');",
+		qryDatabase,
+		centroidsTableName,
+		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
+
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+		qryDatabase,
+		metadataTableName,
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
+	)
+
+	pruneEntriesTbl := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE `%s` < "+
+		"(SELECT CAST(`%s` AS BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version');",
+		qryDatabase,
+		entriesTableName,
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
+
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+		qryDatabase,
+		metadataTableName,
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
+	)
+
+	err := s.logTimestamp(c, qryDatabase, metadataTableName, "pruning_start")
+	if err != nil {
+		return err
+	}
+
+	err = c.runSql(pruneCentroidsTbl)
+	if err != nil {
+		return err
+	}
+
+	err = c.runSql(pruneEntriesTbl)
+	if err != nil {
+		return err
+	}
+
+	err = s.logTimestamp(c, qryDatabase, metadataTableName, "pruning_end")
+	if err != nil {
+		return err
+	}
+
+	return nil
 }

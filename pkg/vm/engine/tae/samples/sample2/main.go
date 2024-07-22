@@ -117,22 +117,17 @@ func main() {
 			panic(err)
 		}
 		objIt := rel.MakeObjectIt()
-		for objIt.Valid() {
+		for objIt.Next() {
 			obj := objIt.GetObject()
 			logutil.Info(obj.String())
-			blkIt := obj.MakeBlockIt()
-			for blkIt.Valid() {
-				blk := blkIt.GetBlock()
-				logutil.Info(blk.String())
-				view, err := blk.GetColumnDataById(context.Background(), 0, common.DefaultAllocator)
-				logutil.Infof("Block %s Rows %d", blk.Fingerprint().BlockString(), view.Length())
+			for i := 0; i < obj.BlkCnt(); i++ {
+				view, err := obj.GetColumnDataById(context.Background(), uint16(i), 0, common.DefaultAllocator)
+				logutil.Infof("Block %s Rows %d", obj.Fingerprint().BlockString(), view.Length())
 				if err != nil {
 					panic(err)
 				}
 				defer view.Close()
-				blkIt.Next()
 			}
-			objIt.Next()
 		}
 		if err = txn.Commit(context.Background()); err != nil {
 			panic(err)

@@ -51,12 +51,39 @@ func BuildTestBlockid(a, b int64) (ret Blockid) {
 	return
 }
 
+func NewObjectid() *Objectid {
+	sid := Uuid(uuid.Must(uuid.NewV7()))
+	var oid Objectid
+	copy(oid[:UuidSize], sid[:])
+	return &oid
+}
+
+func NewBlockidWithObjectID(segid *Objectid, blknum uint16) *Blockid {
+	var bid Blockid
+	size := ObjectidSize
+	copy(bid[:size], segid[:])
+	copy(bid[size:size+2], EncodeUint16(&blknum))
+	return &bid
+}
+
+func NewRowid(blkid *Blockid, offset uint32) *Rowid {
+	var rowid Rowid
+	size := BlockidSize
+	copy(rowid[:size], blkid[:])
+	copy(rowid[size:size+4], EncodeUint32(&offset))
+	return &rowid
+}
+
 func CompareRowidRowidAligned(a, b Rowid) int {
 	return bytes.Compare(a[:], b[:])
 }
 
 func CompareBlockidBlockidAligned(a, b Blockid) int {
 	return bytes.Compare(a[:], b[:])
+}
+
+func (r Rowid) Compare(other Rowid) int {
+	return bytes.Compare(r[:], other[:])
 }
 
 func (r Rowid) Less(than Rowid) bool {
@@ -174,6 +201,11 @@ func (b *Blockid) String() string {
 	return fmt.Sprintf("%s-%d-%d", uuid.String(), filen, blkn)
 }
 
+func (b *Blockid) ObjectNameString() string {
+	fileNum, _ := b.Offsets()
+	return fmt.Sprintf("%v_%05d", b.Segment().ToString(), fileNum)
+}
+
 func (b *Blockid) ShortString() string {
 	filen, blkn := b.Offsets()
 	return fmt.Sprintf("%d-%d", filen, blkn)
@@ -207,7 +239,12 @@ func (o *Objectid) Segment() *Segmentid {
 	return (*Uuid)(unsafe.Pointer(&o[0]))
 }
 func (o *Objectid) String() string {
-	return fmt.Sprintf("%v-%d", o.Segment().ToString(), o.Offset())
+	return fmt.Sprintf("%v_%d", o.Segment().ToString(), o.Offset())
+}
+func (o *Objectid) ShortStringEx() string {
+	var shortuuid [12]byte
+	hex.Encode(shortuuid[:], o[10:16])
+	return string(shortuuid[:])
 }
 func (o *Objectid) Offset() uint16 {
 	filen := DecodeUint16(o[UuidSize:ObjectBytesSize])

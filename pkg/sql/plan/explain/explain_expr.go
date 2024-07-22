@@ -179,6 +179,7 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 		} else {
 			buf.WriteString(vec.String())
 		}
+		vec.Free(nil)
 	case *plan.Expr_T:
 		tt := types.T(expr.Typ.Id)
 		if tt == types.T_decimal64 || tt == types.T_decimal128 {
@@ -255,6 +256,20 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Function, Typ *plan.Typ
 		err = describeExpr(ctx, funcExpr.Args[1], options, buf)
 		if err != nil {
 			return err
+		}
+		buf.WriteString(")")
+	case function.MULTIARY_LOGICAL_OPERATOR:
+		buf.WriteString("(")
+		err = describeExpr(ctx, funcExpr.Args[0], options, buf)
+		if err != nil {
+			return err
+		}
+		for i := 1; i < len(funcExpr.Args); i++ {
+			buf.WriteString(" " + funcExpr.Func.GetObjName() + " ")
+			err = describeExpr(ctx, funcExpr.Args[i], options, buf)
+			if err != nil {
+				return err
+			}
 		}
 		buf.WriteString(")")
 	case function.CAST_EXPRESSION:

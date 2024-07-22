@@ -115,6 +115,9 @@ func (builder *QueryBuilder) applyAssociativeLawRule3(nodeID int32) int32 {
 }
 
 func (builder *QueryBuilder) applyAssociativeLaw(nodeID int32) int32 {
+	if builder.optimizerHints != nil && builder.optimizerHints.joinOrdering != 0 {
+		return nodeID
+	}
 	nodeID = builder.applyAssociativeLawRule1(nodeID)
 	builder.determineBuildAndProbeSide(nodeID, true)
 	nodeID = builder.applyAssociativeLawRule2(nodeID)

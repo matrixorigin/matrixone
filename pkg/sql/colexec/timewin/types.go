@@ -22,12 +22,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(TimeWin)
 
 const (
 	initTag     = 0
@@ -86,20 +86,20 @@ type container struct {
 	curIdx int
 
 	group int
-	aggs  []agg.Agg[any]
+	aggs  []aggexec.AggFuncExec
 
 	wstart []int64
 	wend   []int64
 
-	calRes func(ctr *container, ap *Argument, proc *process.Process) (err error)
-	eval   func(ctr *container, ap *Argument, proc *process.Process) (err error)
+	calRes func(ctr *container, ap *TimeWin, proc *process.Process) (err error)
+	eval   func(ctr *container, ap *TimeWin, proc *process.Process) (err error)
 }
 
-type Argument struct {
+type TimeWin struct {
 	ctr *container
 
 	Types []types.Type
-	Aggs  []agg.Aggregate
+	Aggs  []aggexec.AggFuncExecExpression
 
 	Interval *Interval
 	Sliding  *Interval
@@ -111,34 +111,34 @@ type Argument struct {
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (timeWin *TimeWin) GetOperatorBase() *vm.OperatorBase {
+	return &timeWin.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[TimeWin](
+		func() *TimeWin {
+			return &TimeWin{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *TimeWin) {
+			*a = TimeWin{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[TimeWin]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (timeWin TimeWin) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *TimeWin {
+	return reuse.Alloc[TimeWin](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (timeWin *TimeWin) Release() {
+	if timeWin != nil {
+		reuse.Free[TimeWin](timeWin, nil)
 	}
 }
 
@@ -147,13 +147,19 @@ type Interval struct {
 	Val int64
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := arg.ctr
+func (timeWin *TimeWin) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	timeWin.Free(proc, pipelineFailed, err)
+}
+
+func (timeWin *TimeWin) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := timeWin.ctr
 	if ctr != nil {
+		ctr.FreeMergeTypeOperator(pipelineFailed)
 		ctr.cleanBatch(proc.Mp())
 		ctr.cleanTsVector()
 		ctr.cleanAggVector()
 		ctr.cleanWin()
+		timeWin.ctr = nil
 	}
 }
 
@@ -173,6 +179,7 @@ func (ctr *container) cleanTsVector() {
 		ctr.tsExe.Free()
 	}
 	ctr.tsVec = nil
+	ctr.tsExe = nil
 }
 
 func (ctr *container) cleanAggVector() {
@@ -182,6 +189,7 @@ func (ctr *container) cleanAggVector() {
 		}
 	}
 	ctr.aggVec = nil
+	ctr.aggExe = nil
 }
 
 func (ctr *container) cleanWin() {

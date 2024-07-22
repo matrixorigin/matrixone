@@ -52,6 +52,12 @@ func (f *FileServices) Delete(ctx context.Context, filePaths ...string) error {
 	return nil
 }
 
+func (f *FileServices) Close() {
+	for _, fs := range f.mappings {
+		fs.Close()
+	}
+}
+
 func (f *FileServices) deleteSingle(ctx context.Context, filePath string) error {
 	path, err := ParsePathAtService(filePath, "")
 	if err != nil {
@@ -159,4 +165,25 @@ func (f *FileServices) PrefetchFile(ctx context.Context, filePath string) error 
 		return err
 	}
 	return fs.PrefetchFile(ctx, filePath)
+}
+
+func (f *FileServices) Cost() *CostAttr {
+	attr := &CostAttr{
+		List: CostLow,
+	}
+	for _, fs := range f.mappings {
+		cost := fs.Cost()
+		attr = maxCost(attr, cost)
+	}
+	return attr
+}
+
+func maxCost(a, b *CostAttr) *CostAttr {
+	attr := &CostAttr{
+		List: a.List,
+	}
+	if attr.List < b.List {
+		attr.List = b.List
+	}
+	return attr
 }

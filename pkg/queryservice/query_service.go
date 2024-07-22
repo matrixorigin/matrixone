@@ -16,6 +16,7 @@ package queryservice
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -34,44 +35,74 @@ type QueryService interface {
 	// Close closes the service.
 	Close() error
 	// AddHandleFunc add message handler.
-	AddHandleFunc(method pb.CmdMethod, h func(context.Context, *pb.Request, *pb.Response) error, async bool)
+	AddHandleFunc(method pb.CmdMethod, h func(context.Context, *pb.Request, *pb.Response, *morpc.Buffer) error, async bool)
+	// SetReleaseFunc sets the release handler.
+	SetReleaseFunc(resp *pb.Response, f func())
 }
 
 // queryService is a query service started in CN service.
 type queryService struct {
 	// serviceID is the UUID of CN service.
 	serviceID string
-	handler   morpc.MessageHandler[*pb.Request, *pb.Response]
+	handler   morpc.MethodBasedServer[*pb.Request, *pb.Response]
+
+	mu struct {
+		sync.Mutex
+		releaser map[*pb.Response]func()
+	}
 }
 
 // NewQueryService creates a new queryService instance.
 func NewQueryService(serviceID string, address string, cfg morpc.Config) (QueryService, error) {
 	serviceName := "query-service"
+	qs := &queryService{
+		serviceID: serviceID,
+	}
+
+	qs.mu.releaser = make(map[*pb.Response]func())
 
 	pool := morpc.NewMessagePool(
 		func() *pb.Request { return &pb.Request{} },
 		func() *pb.Response { return &pb.Response{} })
 
-	h, err := morpc.NewMessageHandler(serviceName, address, cfg, pool)
+	h, err := morpc.NewMessageHandler(serviceID, serviceName, address, cfg, pool,
+		morpc.WithHandlerRespReleaseFunc[*pb.Request, *pb.Response](func(m morpc.Message) {
+			resp := m.(*pb.Response)
+			if resp.CmdMethod == pb.CmdMethod_GetCacheData {
+				qs.mu.Lock()
+				defer qs.mu.Unlock()
+				release, ok := qs.mu.releaser[resp]
+				if ok {
+					release()
+					delete(qs.mu.releaser, resp)
+				}
+			}
+			pool.ReleaseResponse(resp)
+		}),
+	)
 	if err != nil {
 		return nil, err
 	}
-	qs := &queryService{
-		serviceID: serviceID,
-		handler:   h,
-	}
+	qs.handler = h
 	qs.initHandleFunc()
 	return qs, nil
 }
 
 // AddHandleFunc implements the QueryService interface.
-func (s *queryService) AddHandleFunc(method pb.CmdMethod, h func(context.Context, *pb.Request, *pb.Response) error, async bool) {
-	s.handler.RegisterHandleFunc(uint32(method), h, async)
+func (s *queryService) AddHandleFunc(method pb.CmdMethod, h func(context.Context, *pb.Request, *pb.Response, *morpc.Buffer) error, async bool) {
+	s.handler.RegisterMethod(uint32(method), h, async)
+}
+
+// SetReleaseFunc implements the QueryService interface.
+func (s *queryService) SetReleaseFunc(resp *pb.Response, f func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mu.releaser[resp] = f
 }
 
 func (s *queryService) initHandleFunc() {
-	s.AddHandleFunc(pb.CmdMethod_GetProtocolVersion, handleGetProtocolVersion, false)
-	s.AddHandleFunc(pb.CmdMethod_SetProtocolVersion, handleSetProtocolVersion, false)
+	s.AddHandleFunc(pb.CmdMethod_GetProtocolVersion, s.handleGetProtocolVersion(), false)
+	s.AddHandleFunc(pb.CmdMethod_SetProtocolVersion, s.handleSetProtocolVersion(), false)
 	s.AddHandleFunc(pb.CmdMethod_CoreDumpConfig, handleCoreDumpConfig, false)
 }
 

@@ -17,9 +17,7 @@ package onduplicatekey
 import (
 	"bytes"
 	"fmt"
-	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -31,47 +29,51 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "on_duplicate_key"
+const opName = "on_duplicate_key"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (onDuplicatekey *OnDuplicatekey) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": processing on duplicate key before insert")
 }
 
-func (arg *Argument) Prepare(p *process.Process) error {
-	ap := arg
-	ap.ctr = &container{}
-	ap.ctr.InitReceiver(p, true)
+func (onDuplicatekey *OnDuplicatekey) OpType() vm.OpType {
+	return vm.OnDuplicateKey
+}
+
+func (onDuplicatekey *OnDuplicatekey) Prepare(p *process.Process) error {
+	onDuplicatekey.ctr = &container{}
+	onDuplicatekey.ctr.InitReceiver(p, true)
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (onDuplicatekey *OnDuplicatekey) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze(onDuplicatekey.GetIdx(), onDuplicatekey.GetParallelIdx(), onDuplicatekey.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 
-	ctr := arg.ctr
+	ctr := onDuplicatekey.ctr
 	result := vm.NewCallResult()
-
+	var err error
 	for {
 		switch ctr.state {
 		case Build:
 			for {
-				bat, end, err := ctr.ReceiveFromAllRegs(anal)
-				if err != nil {
+				msg := ctr.ReceiveFromAllRegs(anal)
+				if msg.Err != nil {
 					result.Status = vm.ExecStop
 					return result, nil
 				}
 
-				if end {
+				if msg.Batch == nil {
 					break
 				}
-				anal.Input(bat, arg.GetIsFirst())
-				err = resetInsertBatchForOnduplicateKey(proc, bat, arg)
+				bat := msg.Batch
+				anal.Input(bat, onDuplicatekey.GetIsFirst())
+				err = resetInsertBatchForOnduplicateKey(proc, bat, onDuplicatekey)
 				if err != nil {
 					bat.Clean(proc.Mp())
 					return result, err
@@ -82,7 +84,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Eval:
 			if ctr.rbat != nil {
-				anal.Output(ctr.rbat, arg.GetIsLast())
+				anal.Output(ctr.rbat, onDuplicatekey.GetIsLast())
 			}
 			result.Batch = ctr.rbat
 			ctr.state = End
@@ -96,7 +98,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch.Batch, insertArg *Argument) error {
+func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch.Batch, insertArg *OnDuplicatekey) error {
 	//get rowid vec index
 	rowIdIdx := int32(-1)
 	for _, idx := range insertArg.OnDuplicateIdx {
@@ -109,26 +111,13 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 		return moerr.NewConstraintViolation(proc.Ctx, "can not find rowid when insert with on duplicate key")
 	}
 
-	tableDef := insertArg.TableDef
-	insertColCount := 0 //columns without hidden columns
+	insertColCount := int(insertArg.InsertColCount) //columns without hidden columns
 	if insertArg.ctr.rbat == nil {
-		attrs := make([]string, 0, len(originBatch.Vecs))
-		for _, col := range tableDef.Cols {
-			if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
-				continue
-			}
-			attrs = append(attrs, col.Name)
-			insertColCount++
-		}
-		for _, col := range tableDef.Cols {
-			attrs = append(attrs, col.Name)
-		}
-		attrs = append(attrs, catalog.Row_ID)
-		insertArg.ctr.rbat = batch.NewWithSize(len(attrs))
-		insertArg.ctr.rbat.Attrs = attrs
+		insertArg.ctr.rbat = batch.NewWithSize(len(insertArg.Attrs))
+		insertArg.ctr.rbat.Attrs = insertArg.Attrs
 
-		insertArg.ctr.checkConflictBat = batch.NewWithSize(len(attrs))
-		insertArg.ctr.checkConflictBat.Attrs = append(insertArg.ctr.checkConflictBat.Attrs, attrs...)
+		insertArg.ctr.checkConflictBat = batch.NewWithSize(len(insertArg.Attrs))
+		insertArg.ctr.checkConflictBat.Attrs = append(insertArg.ctr.checkConflictBat.Attrs, insertArg.Attrs...)
 
 		for i, v := range originBatch.Vecs {
 			newVec := proc.GetVector(*v.GetType())
@@ -137,18 +126,6 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 			ckVec := proc.GetVector(*v.GetType())
 			insertArg.ctr.checkConflictBat.SetVector(int32(i), ckVec)
 		}
-	} else {
-		for _, col := range tableDef.Cols {
-			if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
-				continue
-			}
-			insertColCount++
-		}
-	}
-	uniqueCols := plan2.GetUniqueColAndIdxFromTableDef(tableDef)
-	checkExpr, err := plan2.GenUniqueColCheckExpr(proc.Ctx, tableDef, uniqueCols, insertColCount)
-	if err != nil {
-		return err
 	}
 
 	insertBatch := insertArg.ctr.rbat
@@ -159,7 +136,7 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 	updateExpr := insertArg.OnDuplicateExpr
 	oldRowIdVec := vector.MustFixedCol[types.Rowid](originBatch.Vecs[rowIdIdx])
 
-	checkExpressionExecutors, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, checkExpr)
+	checkExpressionExecutors, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, insertArg.UniqueColCheckExpr)
 	if err != nil {
 		return err
 	}
@@ -176,7 +153,7 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 		}
 
 		// check if uniqueness conflict found in checkConflictBatch
-		oldConflictIdx, conflictMsg, err := checkConflict(proc, newBatch, checkConflictBatch, checkExpressionExecutors, uniqueCols, insertColCount)
+		oldConflictIdx, conflictMsg, err := checkConflict(proc, newBatch, checkConflictBatch, checkExpressionExecutors, insertArg.UniqueCols, insertColCount)
 		if err != nil {
 			newBatch.Clean(proc.GetMPool())
 			return err
@@ -256,7 +233,7 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 					newBatch.Clean(proc.GetMPool())
 					return err
 				}
-				conflictIdx, conflictMsg, err := checkConflict(proc, tmpBatch, checkConflictBatch, checkExpressionExecutors, uniqueCols, insertColCount)
+				conflictIdx, conflictMsg, err := checkConflict(proc, tmpBatch, checkConflictBatch, checkExpressionExecutors, insertArg.UniqueCols, insertColCount)
 				if err != nil {
 					tmpBatch.Clean(proc.GetMPool())
 					newBatch.Clean(proc.GetMPool())
@@ -364,7 +341,7 @@ func updateOldBatch(evalBatch *batch.Batch, updateExpr map[string]*plan.Expr, pr
 }
 
 func checkConflict(proc *process.Process, newBatch *batch.Batch, checkConflictBatch *batch.Batch,
-	checkExpressionExecutor []colexec.ExpressionExecutor, uniqueCols []map[string]int, colCount int) (int, string, error) {
+	checkExpressionExecutor []colexec.ExpressionExecutor, uniqueCols []string, colCount int) (int, string, error) {
 	if checkConflictBatch.RowCount() == 0 {
 		return -1, "", nil
 	}
@@ -381,7 +358,7 @@ func checkConflict(proc *process.Process, newBatch *batch.Batch, checkConflictBa
 
 	// build the check expr
 	for i, executor := range checkExpressionExecutor {
-		result, err := executor.Eval(proc, []*batch.Batch{checkConflictBatch})
+		result, err := executor.Eval(proc, []*batch.Batch{checkConflictBatch}, nil)
 		if err != nil {
 			return 0, "", err
 		}
@@ -390,11 +367,7 @@ func checkConflict(proc *process.Process, newBatch *batch.Batch, checkConflictBa
 		isConflict := vector.MustFixedCol[bool](result)
 		for _, flag := range isConflict {
 			if flag {
-				keys := make([]string, 0, len(uniqueCols[i]))
-				for k := range uniqueCols[i] {
-					keys = append(keys, k)
-				}
-				conflictMsg := fmt.Sprintf("Duplicate entry for key '%s'", strings.Join(keys, ","))
+				conflictMsg := fmt.Sprintf("Duplicate entry for key '%s'", uniqueCols[i])
 				return i, conflictMsg, nil
 			}
 		}

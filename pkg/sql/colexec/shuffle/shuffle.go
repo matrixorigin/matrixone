@@ -27,18 +27,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "shuffle"
+const opName = "shuffle"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (shuffle *Shuffle) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": shuffle")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) error {
-	ap := arg
-	ctr := new(container)
-	ap.ctr = ctr
-	ap.initShuffle()
+func (shuffle *Shuffle) OpType() vm.OpType {
+	return vm.Shuffle
+}
+
+func (shuffle *Shuffle) Prepare(proc *process.Process) error {
+	shuffle.ctr = new(container)
+	if shuffle.RuntimeFilterSpec != nil {
+		shuffle.ctr.runtimeFilterHandled = false
+	}
+	shuffle.initShuffle()
 	return nil
 }
 
@@ -47,31 +52,34 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 // else split this batch into pieces, write data into pool. if one bucket is full, send this bucket.
 // next time, set this bucket rowcount to 0 and reuse it
 // for now, we shuffle null to the first bucket
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (shuffle *Shuffle) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
-	ap := arg
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze(shuffle.GetIdx(), shuffle.GetParallelIdx(), shuffle.GetParallelMajor())
 	anal.Start()
 	defer func() {
 		anal.Stop()
 	}()
 
-	if ap.ctr.lastSentBatch != nil {
-		proc.PutBatch(ap.ctr.lastSentBatch)
-		ap.ctr.lastSentBatch = nil
+	if shuffle.ctr.lastSentBatch != nil {
+		proc.PutBatch(shuffle.ctr.lastSentBatch)
+		shuffle.ctr.lastSentBatch = nil
 	}
 
 SENDLAST:
-	if ap.ctr.ending {
+	if shuffle.ctr.ending {
 		result := vm.NewCallResult()
 		//send shuffle pool
-		for i, bat := range ap.ctr.shufflePool {
+		for i, bat := range shuffle.ctr.shufflePool {
 			if bat != nil {
+				//need to wait for runtimefilter_pass before send batch
+				if err := shuffle.handleRuntimeFilter(proc); err != nil {
+					return vm.CancelResult, err
+				}
 				result.Batch = bat
-				ap.ctr.lastSentBatch = result.Batch
-				ap.ctr.shufflePool[i] = nil
+				shuffle.ctr.lastSentBatch = result.Batch
+				shuffle.ctr.shufflePool[i] = nil
 				return result, nil
 			}
 		}
@@ -80,59 +88,92 @@ SENDLAST:
 		return result, nil
 	}
 
-	for len(ap.ctr.sendPool) == 0 {
+	for len(shuffle.ctr.sendPool) == 0 {
 		// do input
-		result, err := vm.ChildrenCall(arg.GetChildren(0), proc, anal)
+		result, err := vm.ChildrenCall(shuffle.GetChildren(0), proc, anal)
 		if err != nil {
 			return result, err
 		}
 		bat := result.Batch
 		if bat == nil {
-			ap.ctr.ending = true
+			shuffle.ctr.ending = true
 			goto SENDLAST
 		} else if !bat.IsEmpty() {
-			if ap.ShuffleType == int32(plan.ShuffleType_Hash) {
-				bat, err = hashShuffle(ap, bat, proc)
-			} else if ap.ShuffleType == int32(plan.ShuffleType_Range) {
-				bat, err = rangeShuffle(ap, bat, proc)
+			if shuffle.ShuffleType == int32(plan.ShuffleType_Hash) {
+				bat, err = hashShuffle(shuffle, bat, proc)
+			} else if shuffle.ShuffleType == int32(plan.ShuffleType_Range) {
+				bat, err = rangeShuffle(shuffle, bat, proc)
 			}
 			if err != nil {
 				return result, err
 			}
 			if bat != nil {
 				// can directly send this batch
+				//need to wait for runtimefilter_pass before send batch
+				if err := shuffle.handleRuntimeFilter(proc); err != nil {
+					return vm.CancelResult, err
+				}
 				return result, nil
 			}
 		}
 	}
+	//need to wait for runtimefilter_pass before send batch
+	if err := shuffle.handleRuntimeFilter(proc); err != nil {
+		return vm.CancelResult, err
+	}
 
 	// send batch in send pool
 	result := vm.NewCallResult()
-	length := len(ap.ctr.sendPool)
-	result.Batch = ap.ctr.sendPool[length-1]
-	ap.ctr.lastSentBatch = result.Batch
-	ap.ctr.sendPool = ap.ctr.sendPool[:length-1]
+	length := len(shuffle.ctr.sendPool)
+	result.Batch = shuffle.ctr.sendPool[length-1]
+	shuffle.ctr.lastSentBatch = result.Batch
+	shuffle.ctr.sendPool = shuffle.ctr.sendPool[:length-1]
 	return result, nil
 }
 
-func (arg *Argument) initShuffle() {
-	if arg.ctr.sels == nil {
-		arg.ctr.sels = make([][]int32, arg.AliveRegCnt)
-		for i := 0; i < int(arg.AliveRegCnt); i++ {
-			arg.ctr.sels[i] = make([]int32, 0, colexec.DefaultBatchSize/arg.AliveRegCnt*2)
+func (shuffle *Shuffle) handleRuntimeFilter(proc *process.Process) error {
+	if shuffle.RuntimeFilterSpec != nil && !shuffle.ctr.runtimeFilterHandled {
+		shuffle.msgReceiver = proc.NewMessageReceiver([]int32{shuffle.RuntimeFilterSpec.Tag}, process.AddrBroadCastOnCurrentCN())
+		msgs, ctxDone := shuffle.msgReceiver.ReceiveMessage(true, proc.Ctx)
+		if ctxDone {
+			shuffle.ctr.runtimeFilterHandled = true
+			return nil
 		}
-		arg.ctr.shufflePool = make([]*batch.Batch, arg.AliveRegCnt)
+		for i := range msgs {
+			msg, ok := msgs[i].(process.RuntimeFilterMessage)
+			if !ok {
+				panic("expect runtime filter message, receive unknown message!")
+			}
+			switch msg.Typ {
+			case process.RuntimeFilter_PASS, process.RuntimeFilter_DROP:
+				shuffle.ctr.runtimeFilterHandled = true
+				continue
+			default:
+				panic("unsupported runtime filter type!")
+			}
+		}
+	}
+	return nil
+}
+
+func (shuffle *Shuffle) initShuffle() {
+	if shuffle.ctr.sels == nil {
+		shuffle.ctr.sels = make([][]int32, shuffle.AliveRegCnt)
+		for i := 0; i < int(shuffle.AliveRegCnt); i++ {
+			shuffle.ctr.sels[i] = make([]int32, 0, colexec.DefaultBatchSize/shuffle.AliveRegCnt*2)
+		}
+		shuffle.ctr.shufflePool = make([]*batch.Batch, shuffle.AliveRegCnt)
 	}
 }
 
-func (arg *Argument) getSels() [][]int32 {
-	for i := range arg.ctr.sels {
-		arg.ctr.sels[i] = arg.ctr.sels[i][:0]
+func (shuffle *Shuffle) getSels() [][]int32 {
+	for i := range shuffle.ctr.sels {
+		shuffle.ctr.sels[i] = shuffle.ctr.sels[i][:0]
 	}
-	return arg.ctr.sels
+	return shuffle.ctr.sels
 }
 
-func shuffleConstVectorByHash(ap *Argument, bat *batch.Batch) uint64 {
+func shuffleConstVectorByHash(ap *Shuffle, bat *batch.Batch) uint64 {
 	lenRegs := uint64(ap.AliveRegCnt)
 	groupByVec := bat.Vecs[ap.ShuffleColIdx]
 	switch groupByVec.GetType().Oid {
@@ -165,7 +206,7 @@ func shuffleConstVectorByHash(ap *Argument, bat *batch.Batch) uint64 {
 	}
 }
 
-func getShuffledSelsByHashWithNull(ap *Argument, bat *batch.Batch) [][]int32 {
+func getShuffledSelsByHashWithNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 	sels := ap.getSels()
 	lenRegs := uint64(ap.AliveRegCnt)
 	groupByVec := bat.Vecs[ap.ShuffleColIdx]
@@ -248,7 +289,7 @@ func getShuffledSelsByHashWithNull(ap *Argument, bat *batch.Batch) [][]int32 {
 	return sels
 }
 
-func getShuffledSelsByHashWithoutNull(ap *Argument, bat *batch.Batch) [][]int32 {
+func getShuffledSelsByHashWithoutNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 	sels := ap.getSels()
 	lenRegs := uint64(ap.AliveRegCnt)
 	groupByVec := bat.Vecs[ap.ShuffleColIdx]
@@ -307,14 +348,14 @@ func getShuffledSelsByHashWithoutNull(ap *Argument, bat *batch.Batch) [][]int32 
 	return sels
 }
 
-func hashShuffle(ap *Argument, bat *batch.Batch, proc *process.Process) (*batch.Batch, error) {
+func hashShuffle(ap *Shuffle, bat *batch.Batch, proc *process.Process) (*batch.Batch, error) {
 	groupByVec := bat.Vecs[ap.ShuffleColIdx]
 	if groupByVec.IsConstNull() {
 		bat.ShuffleIDX = 0
 		return bat, nil
 	}
 	if groupByVec.IsConst() {
-		bat.ShuffleIDX = int(shuffleConstVectorByHash(ap, bat))
+		bat.ShuffleIDX = int32(shuffleConstVectorByHash(ap, bat))
 		return bat, nil
 	}
 
@@ -329,7 +370,7 @@ func hashShuffle(ap *Argument, bat *batch.Batch, proc *process.Process) (*batch.
 			break
 		}
 		if len(sels[i]) == bat.RowCount() {
-			bat.ShuffleIDX = i
+			bat.ShuffleIDX = int32(i)
 			return bat, nil
 		}
 	}
@@ -337,7 +378,7 @@ func hashShuffle(ap *Argument, bat *batch.Batch, proc *process.Process) (*batch.
 	return nil, putBatchIntoShuffledPoolsBySels(ap, bat, sels, proc)
 }
 
-func allBatchInOneRange(ap *Argument, bat *batch.Batch) (bool, uint64) {
+func allBatchInOneRange(ap *Shuffle, bat *batch.Batch) (bool, uint64) {
 	lenRegs := uint64(ap.AliveRegCnt)
 	groupByVec := bat.Vecs[ap.ShuffleColIdx]
 	if groupByVec.IsConstNull() {
@@ -444,7 +485,7 @@ func allBatchInOneRange(ap *Argument, bat *batch.Batch) (bool, uint64) {
 	}
 }
 
-func getShuffledSelsByRangeWithoutNull(ap *Argument, bat *batch.Batch) [][]int32 {
+func getShuffledSelsByRangeWithoutNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 	sels := ap.getSels()
 	lenRegs := uint64(ap.AliveRegCnt)
 	groupByVec := bat.Vecs[ap.ShuffleColIdx]
@@ -577,7 +618,7 @@ func getShuffledSelsByRangeWithoutNull(ap *Argument, bat *batch.Batch) [][]int32
 	return sels
 }
 
-func getShuffledSelsByRangeWithNull(ap *Argument, bat *batch.Batch) [][]int32 {
+func getShuffledSelsByRangeWithNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 	sels := ap.getSels()
 	lenRegs := uint64(ap.AliveRegCnt)
 	groupByVec := bat.Vecs[ap.ShuffleColIdx]
@@ -764,7 +805,7 @@ func getShuffledSelsByRangeWithNull(ap *Argument, bat *batch.Batch) [][]int32 {
 	return sels
 }
 
-func putBatchIntoShuffledPoolsBySels(ap *Argument, srcBatch *batch.Batch, sels [][]int32, proc *process.Process) error {
+func putBatchIntoShuffledPoolsBySels(ap *Shuffle, srcBatch *batch.Batch, sels [][]int32, proc *process.Process) error {
 	shuffledPool := ap.ctr.shufflePool
 	var err error
 	for regIndex := range shuffledPool {
@@ -776,7 +817,7 @@ func putBatchIntoShuffledPoolsBySels(ap *Argument, srcBatch *batch.Batch, sels [
 				if err != nil {
 					return err
 				}
-				bat.ShuffleIDX = regIndex
+				bat.ShuffleIDX = int32(regIndex)
 				ap.ctr.shufflePool[regIndex] = bat
 			}
 			length := len(newSels)
@@ -802,12 +843,12 @@ func putBatchIntoShuffledPoolsBySels(ap *Argument, srcBatch *batch.Batch, sels [
 	return nil
 }
 
-func rangeShuffle(ap *Argument, bat *batch.Batch, proc *process.Process) (*batch.Batch, error) {
+func rangeShuffle(ap *Shuffle, bat *batch.Batch, proc *process.Process) (*batch.Batch, error) {
 	groupByVec := bat.Vecs[ap.ShuffleColIdx]
 	if groupByVec.GetSorted() || groupByVec.IsConst() {
 		ok, regIndex := allBatchInOneRange(ap, bat)
 		if ok {
-			bat.ShuffleIDX = int(regIndex)
+			bat.ShuffleIDX = int32(regIndex)
 			return bat, nil
 		}
 	}
@@ -822,7 +863,7 @@ func rangeShuffle(ap *Argument, bat *batch.Batch, proc *process.Process) (*batch
 			break
 		}
 		if len(sels[i]) == bat.RowCount() {
-			bat.ShuffleIDX = i
+			bat.ShuffleIDX = int32(i)
 			return bat, nil
 		}
 	}

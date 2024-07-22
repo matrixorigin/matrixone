@@ -15,15 +15,13 @@
 package colexec
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"reflect"
 	"sync"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -44,14 +42,52 @@ type ReceiveInfo struct {
 	Uuid     uuid.UUID
 }
 
-// Server used to support cn2s3 directly, for more info, refer to docs about it
 type Server struct {
-	sync.Mutex
-
 	hakeeper      logservice.CNHAKeeperClient
 	uuidCsChanMap UuidProcMap
 	//txn's local segments.
 	cnSegmentMap CnSegmentMap
+
+	receivedRunningPipeline RunningPipelineMapForRemoteNode
+}
+
+// RunningPipelineMapForRemoteNode
+// is a map to record which pipeline was built for a remote node.
+// these pipelines will send data to a remote node,
+// we record them for a better control for their lives.
+type RunningPipelineMapForRemoteNode struct {
+	sync.Mutex
+
+	fromRpcClientToRelatedPipeline map[rpcClientItem]runningPipelineInfo
+}
+
+type rpcClientItem struct {
+	// connection.
+	tcp morpc.ClientSession
+
+	// stream id.
+	id uint64
+}
+
+type runningPipelineInfo struct {
+	alreadyDone bool
+	runningProc *process.Process
+
+	isDispatch bool
+	receiver   *process.WrapCs
+}
+
+func (info *runningPipelineInfo) cancelPipeline() {
+	// If this was a pipeline responsible for distributing data, we cannot end this
+	// because we are just one of the receivers.
+	if info.isDispatch {
+		info.receiver.Lock()
+		info.receiver.ReceiverDone = true
+		info.receiver.Unlock()
+
+	} else {
+		info.runningProc.Cancel()
+	}
 }
 
 type uuidProcMapItem struct {
@@ -83,13 +119,8 @@ type ReceiverOperator struct {
 	// Merge/MergeGroup/MergeLimit ... are Merge-Type
 	// while Join/Intersect/Minus ... are not
 	aliveMergeReceiver int
-	chs                []chan *batch.Batch
+	chs                []chan *process.RegisterMessage
 	receiverListener   []reflect.SelectCase
-}
-
-type RuntimeFilterChan struct {
-	Spec *plan.RuntimeFilterSpec
-	Chan chan *pipeline.RuntimeFilter
 }
 
 const (

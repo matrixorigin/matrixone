@@ -31,7 +31,7 @@ import (
 
 func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindContext) (int32, error) {
 	var err error
-	val, err := builder.compCtx.ResolveVariable("save_query_result", true, true)
+	val, err := builder.compCtx.ResolveVariable("save_query_result", true, false)
 	if err == nil {
 		if v, _ := val.(int8); v == 0 {
 			return 0, moerr.NewNoConfig(builder.GetContext(), "save query result")
@@ -50,7 +50,7 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 		}
 		exprs = append(exprs, curExpr)
 	}
-	exprs[0], err = appendCastBeforeExpr(builder.GetContext(), exprs[0], &plan.Type{
+	exprs[0], err = appendCastBeforeExpr(builder.GetContext(), exprs[0], plan.Type{
 		Id:          int32(types.T_uuid),
 		NotNullable: true,
 	})
@@ -79,7 +79,7 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 	for i, c := range cols {
 		typs[i] = types.New(types.T(c.Typ.Id), c.Typ.Width, c.Typ.Scale)
 	}
-	builder.compCtx.GetProcess().SessionInfo.ResultColTypes = typs
+	builder.compCtx.GetProcess().GetSessionInfo().ResultColTypes = typs
 	name2ColIndex := map[string]int32{}
 	for i := 0; i < len(cols); i++ {
 		name2ColIndex[cols[i].Name] = int32(i)

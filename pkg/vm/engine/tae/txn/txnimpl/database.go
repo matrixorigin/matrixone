@@ -70,7 +70,7 @@ func (it *txnDBIt) Next() {
 		curr := node.GetPayload()
 		curr.RLock()
 		if curr.GetTenantID() == it.txn.GetTenantID() || isSysSharedDB(curr.GetName()) {
-			valid, err = curr.IsVisible(it.txn, curr.RWMutex)
+			valid, err = curr.IsVisibleWithLock(it.txn, curr.RWMutex)
 		}
 		curr.RUnlock()
 		if err != nil {
@@ -124,15 +124,15 @@ func (db *txnDatabase) DropRelationByID(id uint64) (rel handle.Relation, err err
 }
 
 func cloneLatestSchema(meta *catalog.TableEntry) *catalog.Schema {
-	latest := meta.MVCCChain.GetLatestCommittedNode()
+	latest := meta.MVCCChain.GetLatestCommittedNodeLocked()
 	if latest != nil {
 		return latest.BaseNode.Schema.Clone()
 	}
-	return meta.GetLastestSchema().Clone()
+	return meta.GetLastestSchemaLocked().Clone()
 }
 
 func (db *txnDatabase) TruncateByName(name string) (rel handle.Relation, err error) {
-	newTableId := db.txnDB.entry.GetCatalog().IDAlloctor.NextTable()
+	newTableId := db.txnDB.entry.GetCatalog().IDAllocator.NextTable()
 
 	oldRel, err := db.DropRelationByName(name)
 	if err != nil {

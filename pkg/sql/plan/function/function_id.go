@@ -129,6 +129,8 @@ const (
 	HEX_DECODE
 	HEX_ENCODE
 	HEX
+	UNHEX
+	MD5
 	IFF
 	IFNULL
 	ILIKE
@@ -200,6 +202,7 @@ const (
 	STDDEV_SAMPLE
 	SUBSTR
 	SUM
+	SYSDATE
 	GROUP_CONCAT
 	TAN
 	TO_DATE
@@ -208,6 +211,7 @@ const (
 	TRANSLATE
 	TRIM
 	UNIFORM
+	SHA1
 	SHA2
 	UTC_TIMESTAMP
 	UNIX_TIMESTAMP
@@ -215,6 +219,10 @@ const (
 	UPPER
 	VAR_POP
 	VAR_SAMPLE
+
+	// Date and Time functions
+	LAST_DAY
+	MAKEDATE
 
 	DATE
 	TIME
@@ -226,6 +234,8 @@ const (
 	SUBSTRING
 	ENCODE
 	DECODE
+	TO_BASE64
+	FROM_BASE64
 	SUBSTRING_INDEX
 	WEEK
 	WEEKDAY
@@ -271,6 +281,10 @@ const (
 	JSON_EXTRACT
 	JSON_QUOTE
 	JSON_UNQUOTE
+	JQ
+	TRY_JQ
+	WASM
+	TRY_WASM
 	FORMAT
 	SLEEP
 	INSTR
@@ -296,7 +310,8 @@ const (
 	// see builtin.ctl.ctl.go to get detail.
 	MO_CTL
 
-	MO_SHOW_VISIBLE_BIN // parse type/onUpdate/default []byte to visible string
+	MO_SHOW_VISIBLE_BIN      // parse type/onUpdate/default []byte to visible string
+	MO_SHOW_VISIBLE_BIN_ENUM //  parse type/onUpdate/default []byte to visible string for enum
 
 	MO_TABLE_ROWS    // table rows
 	MO_TABLE_SIZE    // table size
@@ -305,7 +320,10 @@ const (
 
 	MO_LOG_DATE // parse date from string, like __mo_filepath
 	MO_CHECH_LEVEL
-	PURGE_LOG // purge mo internal log, like rawlog, statement_info, metric
+	PURGE_LOG     // purge mo internal log, like rawlog, statement_info, metric
+	MO_ADMIN_NAME // get mo admin name of account
+	MO_CU
+	MO_CU_V1
 
 	GIT_VERSION
 	BUILD_VERSION
@@ -321,10 +339,13 @@ const (
 	INTERNAL_COLUMN_CHARACTER_SET
 	INTERNAL_AUTO_INCREMENT
 
-	// be uesed: enum
+	// be used: enum
 	CAST_INDEX_TO_VALUE
 	CAST_VALUE_TO_INDEX
 	CAST_INDEX_VALUE_TO_INDEX
+
+	// be used: show snapshots
+	CAST_NANO_TO_TIMESTAMP
 
 	//Sequence function
 	NEXTVAL
@@ -341,6 +362,7 @@ const (
 	VECTOR_DIMS     //VECTOR DIMENSIONS
 	NORMALIZE_L2    //NORMALIZE L2
 	L2_DISTANCE     //L2_DISTANCE
+	L2_DISTANCE_SQ  //L2_DISTANCE_SQ
 	COSINE_DISTANCE //COSINE_DISTANCE
 	CLUSTER_CENTERS // CLUSTER_CENTERS
 	SUB_VECTOR      // SUB_VECTOR
@@ -351,6 +373,13 @@ const (
 	MO_CPU
 	MO_MEMORY
 	MO_CPU_DUMP
+
+	// bitmap function
+	BITMAP_BIT_POSITION
+	BITMAP_BUCKET_NUMBER
+	BITMAP_COUNT
+	BITMAP_CONSTRUCT_AGG
+	BITMAP_OR_AGG
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
@@ -456,6 +485,7 @@ var functionIdRegister = map[string]int32{
 	"concat":            CONCAT,
 	"current_timestamp": CURRENT_TIMESTAMP,
 	"now":               CURRENT_TIMESTAMP,
+	"sysdate":           SYSDATE,
 	"floor":             FLOOR,
 	"lpad":              LPAD,
 	"pi":                PI,
@@ -547,6 +577,10 @@ var functionIdRegister = map[string]int32{
 	"collation":                      COLLATION,
 	"json_extract":                   JSON_EXTRACT,
 	"json_quote":                     JSON_QUOTE,
+	"jq":                             JQ,
+	"try_jq":                         TRY_JQ,
+	"wasm":                           WASM,
+	"try_wasm":                       TRY_WASM,
 	"enable_fault_injection":         ENABLE_FAULT_INJECTION,
 	"disable_fault_injection":        DISABLE_FAULT_INJECTION,
 	"dense_rank":                     DENSE_RANK,
@@ -556,6 +590,10 @@ var functionIdRegister = map[string]int32{
 	"uuid":                           UUID,
 	"load_file":                      LOAD_FILE,
 	"hex":                            HEX,
+	"unhex":                          UNHEX,
+	"md5":                            MD5,
+	"to_base64":                      TO_BASE64,
+	"from_base64":                    FROM_BASE64,
 	"serial":                         SERIAL,
 	"serial_full":                    SERIAL_FULL,
 	"serial_extract":                 SERIAL_EXTRACT,
@@ -564,6 +602,8 @@ var functionIdRegister = map[string]int32{
 	"datediff":                       DATEDIFF,
 	"timestampdiff":                  TIMESTAMPDIFF,
 	"timediff":                       TIMEDIFF,
+	"last_day":                       LAST_DAY,
+	"makedate":                       MAKEDATE,
 	"reg_match":                      REG_MATCH,
 	"not_reg_match":                  NOT_REG_MATCH,
 	"regexp_instr":                   REGEXP_INSTR,
@@ -576,6 +616,7 @@ var functionIdRegister = map[string]int32{
 	"mo_disable_memory_usage_detail": MO_DISABLE_MEMORY_USAGE_DETAIL,
 	"mo_ctl":                         MO_CTL,
 	"mo_show_visible_bin":            MO_SHOW_VISIBLE_BIN,
+	"mo_show_visible_bin_enum":       MO_SHOW_VISIBLE_BIN_ENUM,
 	"substring_index":                SUBSTRING_INDEX,
 	"field":                          FIELD,
 	"format":                         FORMAT,
@@ -597,6 +638,9 @@ var functionIdRegister = map[string]int32{
 	"mo_log_date":                    MO_LOG_DATE,
 	"mo_check_level":                 MO_CHECH_LEVEL,
 	"purge_log":                      PURGE_LOG,
+	"mo_admin_name":                  MO_ADMIN_NAME,
+	"mo_cu":                          MO_CU,
+	"mo_cu_v1":                       MO_CU_V1,
 	"git_version":                    GIT_VERSION,
 	"build_version":                  BUILD_VERSION,
 	"values":                         VALUES,
@@ -615,12 +659,15 @@ var functionIdRegister = map[string]int32{
 	"cast_index_to_value":            CAST_INDEX_TO_VALUE,
 	"cast_value_to_index":            CAST_VALUE_TO_INDEX,
 	"cast_index_value_to_index":      CAST_INDEX_VALUE_TO_INDEX,
+	"cast_nano_to_timestamp":         CAST_NANO_TO_TIMESTAMP,
 	"to_upper":                       UPPER,
 	"upper":                          UPPER,
 	"ucase":                          UPPER,
 	"to_lower":                       LOWER,
 	"lower":                          LOWER,
 	"lcase":                          LOWER,
+	"sha1":                           SHA1,
+	"sha":                            SHA1,
 
 	"summation":         SUMMATION,
 	"l1_norm":           L1_NORM,
@@ -630,6 +677,7 @@ var functionIdRegister = map[string]int32{
 	"vector_dims":       VECTOR_DIMS,
 	"normalize_l2":      NORMALIZE_L2,
 	"l2_distance":       L2_DISTANCE,
+	"l2_distance_sq":    L2_DISTANCE_SQ,
 	"cosine_distance":   COSINE_DISTANCE,
 
 	"python_user_defined_function": PYTHON_UDF,
@@ -637,4 +685,10 @@ var functionIdRegister = map[string]int32{
 	"mo_cpu":      MO_CPU,
 	"mo_memory":   MO_MEMORY,
 	"mo_cpu_dump": MO_CPU_DUMP,
+	// bitmap function
+	"bitmap_bit_position":  BITMAP_BIT_POSITION,
+	"bitmap_bucket_number": BITMAP_BUCKET_NUMBER,
+	"bitmap_count":         BITMAP_COUNT,
+	"bitmap_construct_agg": BITMAP_CONSTRUCT_AGG,
+	"bitmap_or_agg":        BITMAP_OR_AGG,
 }

@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2021 - 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,524 +15,281 @@
 package frontend
 
 import (
-	"context"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
+
+	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
-// statusStmtExecutor represents the execution without outputting result set to the client
-type statusStmtExecutor struct {
-	*baseStmtExecutor
-}
+// executeStatusStmt run the statement that responses status t
+func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
+	var loadLocalErrGroup *errgroup.Group
+	var columns []interface{}
 
-type BeginTxnExecutor struct {
-	*statusStmtExecutor
-	bt *tree.BeginTransaction
-}
+	mrs := ses.GetMysqlResultSet()
+	ep := ses.GetExportConfig()
+	switch st := execCtx.stmt.(type) {
+	case *tree.Select:
+		if ep.needExportToFile() {
+			defer ep.Close()
+			columns, err = execCtx.cw.GetColumns(execCtx.reqCtx)
+			if err != nil {
+				ses.Error(execCtx.reqCtx,
+					"Failed to get columns from computation handler",
+					zap.Error(err))
+				return
+			}
+			for _, c := range columns {
+				mysqlc := c.(Column)
+				mrs.AddColumn(mysqlc)
+			}
 
-func (bte *BeginTxnExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
-	err := ses.TxnBegin()
-	if err != nil {
-		return err
-	}
-	RecordStatementTxnID(ctx, ses)
-	return err
-}
+			// open new file
+			ep.DefaultBufSize = getGlobalPu().SV.ExportDataDefaultFlushSize
+			initExportFileParam(ep, mrs)
+			if err = openNewFile(execCtx.reqCtx, ep, mrs); err != nil {
+				return
+			}
 
-type CommitTxnExecutor struct {
-	*statusStmtExecutor
-	ct *tree.CommitTransaction
-}
+			ep.init()
+			fPrintTxnOp := execCtx.ses.GetTxnHandler().GetTxn()
+			setFPrints(fPrintTxnOp, execCtx.ses.GetFPrints())
+			runBegin := time.Now()
+			/*
+				Start pipeline
+				Producing the data row and sending the data row
+			*/
+			// todo: add trace
+			if _, err = execCtx.runner.Run(0); err != nil {
+				return
+			}
 
-func (cte *CommitTxnExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
-	return ses.TxnCommit()
-}
+			// only log if run time is longer than 1s
+			if time.Since(runBegin) > time.Second {
+				ses.Infof(execCtx.reqCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
+			}
 
-type RollbackTxnExecutor struct {
-	*statusStmtExecutor
-	rt *tree.RollbackTransaction
-}
+			if err = exportAllData(ep); err != nil {
+				return
+			}
+			if err = ep.Writer.Flush(); err != nil {
+				return
+			}
+			if err = ep.File.Close(); err != nil {
+				return
+			}
 
-func (rte *RollbackTxnExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
-	return ses.TxnRollback()
-}
-
-type SetRoleExecutor struct {
-	*statusStmtExecutor
-	sr *tree.SetRole
-}
-
-func (sre *SetRoleExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
-	return doSwitchRole(ctx, ses, sre.sr)
-}
-
-type UseExecutor struct {
-	*statusStmtExecutor
-	u *tree.Use
-}
-
-func (ue *UseExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
-	v, err := ses.GetGlobalVar("lower_case_table_names")
-	if err != nil {
-		return err
-	}
-	ue.u.Name.SetConfig(v.(int64))
-	return doUse(ctx, ses, ue.u.Name.Compare())
-}
-
-type DropDatabaseExecutor struct {
-	*statusStmtExecutor
-	dd *tree.DropDatabase
-}
-
-func (dde *DropDatabaseExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
-	// if the droped database is the same as the one in use, database must be reseted to empty.
-	if string(dde.dd.Name) == ses.GetDatabaseName() {
-		ses.SetDatabaseName("")
-	}
-	return dde.statusStmtExecutor.ExecuteImpl(ctx, ses)
-}
-
-type PrepareStmtExecutor struct {
-	*statusStmtExecutor
-	ps          *tree.PrepareStmt
-	prepareStmt *PrepareStmt
-}
-
-func (pse *PrepareStmtExecutor) ResponseAfterExec(ctx context.Context, ses *Session) error {
-	var err2, retErr error
-	if ses.GetCmd() == COM_STMT_PREPARE {
-		if err2 = ses.GetMysqlProtocol().SendPrepareResponse(ctx, pse.prepareStmt); err2 != nil {
-			retErr = moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err2)
-			logStatementStatus(ctx, ses, pse.GetAst(), fail, retErr)
-			return retErr
+		} else {
+			return moerr.NewInternalError(execCtx.reqCtx, "select without it generates the result rows")
 		}
-	} else {
-		resp := NewOkResponse(pse.GetAffectedRows(), 0, 0, pse.GetServerStatus(), int(COM_QUERY), "")
-		if err2 = ses.GetMysqlProtocol().SendResponse(ctx, resp); err2 != nil {
-			retErr = moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err2)
-			logStatementStatus(ctx, ses, pse.GetAst(), fail, retErr)
-			return retErr
+	case *tree.CreateTable:
+		fPrintTxnOp := execCtx.ses.GetTxnHandler().GetTxn()
+		setFPrints(fPrintTxnOp, execCtx.ses.GetFPrints())
+		runBegin := time.Now()
+		if execCtx.runResult, err = execCtx.runner.Run(0); err != nil {
+			return
 		}
-	}
-	return nil
-}
-
-func (pse *PrepareStmtExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
-	var err error
-	pse.prepareStmt, err = doPrepareStmt(ctx, ses, pse.ps, "")
-	if err != nil {
-		return err
-	}
-	return authenticateUserCanExecutePrepareOrExecute(ctx, ses, pse.prepareStmt.PrepareStmt, pse.prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
-}
-
-type PrepareStringExecutor struct {
-	*statusStmtExecutor
-	ps          *tree.PrepareString
-	prepareStmt *PrepareStmt
-}
-
-func (pse *PrepareStringExecutor) ResponseAfterExec(ctx context.Context, ses *Session) error {
-	var err2, retErr error
-	if ses.GetCmd() == COM_STMT_PREPARE {
-		if err2 = ses.GetMysqlProtocol().SendPrepareResponse(ctx, pse.prepareStmt); err2 != nil {
-			retErr = moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err2)
-			logStatementStatus(ctx, ses, pse.GetAst(), fail, retErr)
-			return retErr
+		// only log if run time is longer than 1s
+		if time.Since(runBegin) > time.Second {
+			ses.Infof(execCtx.reqCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
 		}
-	} else {
-		resp := NewOkResponse(pse.GetAffectedRows(), 0, 0, pse.GetServerStatus(), int(COM_QUERY), "")
-		if err2 = ses.GetMysqlProtocol().SendResponse(ctx, resp); err2 != nil {
-			retErr = moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err2)
-			logStatementStatus(ctx, ses, pse.GetAst(), fail, retErr)
-			return retErr
+
+		// execute insert sql if this is a `create table as select` stmt
+		if st.IsAsSelect {
+			insertSql := execCtx.cw.Plan().GetDdl().GetDefinition().(*plan.DataDefinition_CreateTable).CreateTable.CreateAsSelectSql
+			ses.createAsSelectSql = insertSql
+			return
 		}
-	}
-	return nil
-}
 
-func (pse *PrepareStringExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
-	var err error
-	pse.prepareStmt, err = doPrepareString(ctx, ses, pse.ps)
-	if err != nil {
-		return err
-	}
-	return authenticateUserCanExecutePrepareOrExecute(ctx, ses, pse.prepareStmt.PrepareStmt, pse.prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
-}
+		// Start the dynamic table daemon task
+		if st.IsDynamicTable {
+			if err = handleCreateDynamicTable(execCtx.reqCtx, ses, st); err != nil {
+				return
+			}
+		}
+	default:
+		//change privilege
+		switch execCtx.stmt.(type) {
+		case *tree.DropTable, *tree.DropDatabase, *tree.DropIndex, *tree.DropView, *tree.DropSequence,
+			*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
+			*tree.CreateRole, *tree.DropRole,
+			*tree.Revoke, *tree.Grant,
+			*tree.SetDefaultRole, *tree.SetRole:
+			ses.InvalidatePrivilegeCache()
+		}
+		runBegin := time.Now()
+		if st, ok := execCtx.stmt.(*tree.Load); ok {
+			if st.Local {
+				loadLocalErrGroup = new(errgroup.Group)
+				loadLocalErrGroup.Go(func() error {
+					return processLoadLocal(ses, execCtx, st.Param, execCtx.loadLocalWriter)
+				})
+			}
+		}
 
-// TODO: DeallocateExecutor has no response like QUIT COMMAND ?
-type DeallocateExecutor struct {
-	*statusStmtExecutor
-	d *tree.Deallocate
-}
+		fPrintTxnOp := execCtx.ses.GetTxnHandler().GetTxn()
+		setFPrints(fPrintTxnOp, execCtx.ses.GetFPrints())
+		if execCtx.runResult, err = execCtx.runner.Run(0); err != nil {
+			if loadLocalErrGroup != nil { // release resources
+				err2 := execCtx.proc.Base.LoadLocalReader.Close()
+				if err2 != nil {
+					ses.Error(execCtx.reqCtx,
+						"processLoadLocal goroutine failed",
+						zap.Error(err2))
+				}
+				err2 = loadLocalErrGroup.Wait() // executor failed, but processLoadLocal is still running, wait for it
+				if err2 != nil {
+					ses.Error(execCtx.reqCtx,
+						"processLoadLocal goroutine failed",
+						zap.Error(err2))
+				}
+			}
+			return
+		}
 
-func (de *DeallocateExecutor) ResponseAfterExec(ctx context.Context, ses *Session) error {
-	var err2, retErr error
-	//we will not send response in COM_STMT_CLOSE command
-	if ses.GetCmd() != COM_STMT_CLOSE {
-		resp := NewOkResponse(de.GetAffectedRows(), 0, 0, de.GetServerStatus(), int(COM_QUERY), "")
-		if err2 = ses.GetMysqlProtocol().SendResponse(ctx, resp); err2 != nil {
-			retErr = moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err2)
-			logStatementStatus(ctx, ses, de.GetAst(), fail, retErr)
-			return retErr
+		if loadLocalErrGroup != nil {
+			if err = loadLocalErrGroup.Wait(); err != nil { //executor success, but processLoadLocal goroutine failed
+				return
+			}
+		}
+
+		// only log if run time is longer than 1s
+		if time.Since(runBegin) > time.Second {
+			ses.Infof(execCtx.reqCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
 		}
 	}
-	return nil
+
+	return
 }
 
-func (de *DeallocateExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
-	return doDeallocate(ctx, ses, de.d)
-}
-
-type ExecuteExecutor struct {
-	*baseStmtExecutor
-	actualStmtExec StmtExecutor
-	ses            *Session
-	proc           *process.Process
-	e              *tree.Execute
-}
-
-func (ee *ExecuteExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
-	var err error
-	var ret interface{}
-	ret, err = ee.baseStmtExecutor.Compile(requestCtx, u, fill)
-	if err != nil {
-		return nil, err
+func (resper *MysqlResp) respStatus(ses *Session,
+	execCtx *ExecCtx) (err error) {
+	ses.EnterFPrint(73)
+	defer ses.ExitFPrint(73)
+	if execCtx.inMigration {
+		return nil
+	}
+	var rspLen uint64
+	if execCtx.runResult != nil {
+		rspLen = execCtx.runResult.AffectRows
 	}
 
-	ee.actualStmtExec, err = getStmtExecutor(ee.ses, ee.proc, ee.baseStmtExecutor, ee.GetAst())
-	if err != nil {
-		return nil, err
-	}
-	return ret, err
-}
+	switch st := execCtx.stmt.(type) {
+	case *tree.Select:
+		//select ... into ...
+		if len(execCtx.proc.GetSessionInfo().SeqAddValues) != 0 {
+			ses.AddSeqValues(execCtx.proc)
+		}
+		ses.SetSeqLastValue(execCtx.proc)
 
-func (ee *ExecuteExecutor) ResponseBeforeExec(ctx context.Context, ses *Session) error {
-	return ee.actualStmtExec.ResponseBeforeExec(ctx, ses)
-}
+		res := setResponse(ses, execCtx.isLastStmt, rspLen)
+		if err2 := resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, res); err2 != nil {
+			err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
+			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
+			return err
+		}
+	case *tree.PrepareStmt, *tree.PrepareString:
+		if ses.GetCmd() == COM_STMT_PREPARE {
+			if err2 := resper.mysqlRrWr.WritePrepareResponse(execCtx.reqCtx, execCtx.prepareStmt); err2 != nil {
+				err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
+				logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
+				return err
+			}
+		} else {
+			res := setResponse(ses, execCtx.isLastStmt, rspLen)
+			if err2 := resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, res); err2 != nil {
+				err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
+				logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
+				return err
+			}
+		}
 
-func (ee *ExecuteExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
-	return ee.actualStmtExec.ExecuteImpl(ctx, ses)
-}
+	case *tree.Deallocate:
+		//we will not send response in COM_STMT_CLOSE command
+		if ses.GetCmd() != COM_STMT_CLOSE {
+			res := setResponse(ses, execCtx.isLastStmt, rspLen)
+			if err2 := resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, res); err2 != nil {
+				err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
+				logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
+				return err
+			}
+		}
+	case *tree.CreateTable:
+		// skip create table as select
+		if st.IsAsSelect {
+			return nil
+		}
+		res := setResponse(ses, execCtx.isLastStmt, rspLen)
+		if len(execCtx.proc.GetSessionInfo().SeqDeleteKeys) != 0 {
+			ses.DeleteSeqValues(execCtx.proc)
+		}
+		_ = doGrantPrivilegeImplicitly(execCtx.reqCtx, ses, st)
+		if err2 := resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, res); err2 != nil {
+			err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
+			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
+			return err
+		}
+	case *InternalCmdFieldList:
+		if err2 := resper.mysqlRrWr.WriteEOFOrOK(0, ses.GetTxnHandler().GetServerStatus()); err2 != nil {
+			err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
+			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
+			return err
+		}
+	default:
+		res := setResponse(ses, execCtx.isLastStmt, rspLen)
 
-func (ee *ExecuteExecutor) ResponseAfterExec(ctx context.Context, ses *Session) error {
-	return ee.actualStmtExec.ResponseAfterExec(ctx, ses)
-}
+		if len(execCtx.proc.GetSessionInfo().SeqDeleteKeys) != 0 {
+			ses.DeleteSeqValues(execCtx.proc)
+		}
 
-func (ee *ExecuteExecutor) CommitOrRollbackTxn(ctx context.Context, ses *Session) error {
-	return ee.actualStmtExec.CommitOrRollbackTxn(ctx, ses)
-}
+		isIssue3482 := false
+		localFileName := ""
+		switch st := execCtx.stmt.(type) {
+		case *tree.Insert:
+			res.lastInsertId = execCtx.proc.GetLastInsertID()
+			if execCtx.proc.GetLastInsertID() != 0 {
+				ses.SetLastInsertID(execCtx.proc.GetLastInsertID())
+			}
+		case *tree.CreateTable:
+			_ = doGrantPrivilegeImplicitly(execCtx.reqCtx, ses, st)
+		case *tree.DropTable:
+			// handle dynamic table drop, cancel all the running daemon task
+			_ = handleDropDynamicTable(execCtx.reqCtx, ses, st)
+			_ = doRevokePrivilegeImplicitly(execCtx.reqCtx, ses, st)
+		case *tree.CreateDatabase:
+			_ = insertRecordToMoMysqlCompatibilityMode(execCtx.reqCtx, ses, execCtx.stmt)
+			_ = doGrantPrivilegeImplicitly(execCtx.reqCtx, ses, st)
+		case *tree.DropDatabase:
+			_ = deleteRecordToMoMysqlCompatbilityMode(execCtx.reqCtx, ses, execCtx.stmt)
+			_ = doRevokePrivilegeImplicitly(execCtx.reqCtx, ses, st)
+			err = doDropFunctionWithDB(execCtx.reqCtx, ses, execCtx.stmt, func(path string) error {
+				return execCtx.proc.Base.FileService.Delete(execCtx.reqCtx, path)
+			})
+		case *tree.Load:
+			if st.Local && execCtx.isIssue3482 {
+				isIssue3482 = true
+				localFileName = st.Param.Filepath
+			}
+		}
 
-func (ee *ExecuteExecutor) Close(ctx context.Context, ses *Session) error {
-	return ee.actualStmtExec.Close(ctx, ses)
-}
+		if err2 := resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, res); err2 != nil {
+			if isIssue3482 {
+				err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. local local '%s' response error:%v ", localFileName, err2)
+			} else {
+				err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
+			}
 
-type SetVarExecutor struct {
-	*statusStmtExecutor
-	sv *tree.SetVar
-}
+			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
+			return err
+		}
 
-func (sve *SetVarExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
-	return doSetVar(ctx, nil, ses, sve.sv, "")
-}
-
-type DeleteExecutor struct {
-	*statusStmtExecutor
-	d *tree.Delete
-}
-
-func (de *DeleteExecutor) Setup(ctx context.Context, ses *Session) error {
-	err := de.baseStmtExecutor.Setup(ctx, ses)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-type UpdateExecutor struct {
-	*statusStmtExecutor
-	u *tree.Update
-}
-
-func (de *UpdateExecutor) Setup(ctx context.Context, ses *Session) error {
-	err := de.baseStmtExecutor.Setup(ctx, ses)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-type DropPublicationExecutor struct {
-	*statusStmtExecutor
-	dp *tree.DropPublication
-}
-
-func (dpe *DropPublicationExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
-	return doDropPublication(ctx, ses, dpe.dp)
-}
-
-type AlterPublicationExecutor struct {
-	*statusStmtExecutor
-	ap *tree.AlterPublication
-}
-
-func (ape *AlterPublicationExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
-	return doAlterPublication(ctx, ses, ape.ap)
-}
-
-type CreatePublicationExecutor struct {
-	*statusStmtExecutor
-	cp *tree.CreatePublication
-}
-
-func (cpe *CreatePublicationExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
-	return doCreatePublication(ctx, ses, cpe.cp)
-}
-
-type CreateAccountExecutor struct {
-	*statusStmtExecutor
-	ca *tree.CreateAccount
-}
-
-func (cae *CreateAccountExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
-	return InitGeneralTenant(ctx, ses, cae.ca)
-}
-
-type DropAccountExecutor struct {
-	*statusStmtExecutor
-	da *tree.DropAccount
-}
-
-func (dae *DropAccountExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
-	return doDropAccount(ctx, ses, dae.da)
-}
-
-type AlterAccountExecutor struct {
-	*statusStmtExecutor
-	aa *tree.AlterAccount
-}
-
-type CreateUserExecutor struct {
-	*statusStmtExecutor
-	cu *tree.CreateUser
-}
-
-func (cue *CreateUserExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
-	tenant := ses.GetTenantInfo()
-	return InitUser(ctx, ses, tenant, cue.cu)
-}
-
-type DropUserExecutor struct {
-	*statusStmtExecutor
-	du *tree.DropUser
-}
-
-func (due *DropUserExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
-	return doDropUser(ctx, ses, due.du)
-}
-
-type AlterUserExecutor struct {
-	*statusStmtExecutor
-	au *tree.AlterUser
-}
-
-type CreateRoleExecutor struct {
-	*statusStmtExecutor
-	cr *tree.CreateRole
-}
-
-func (cre *CreateRoleExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
-	tenant := ses.GetTenantInfo()
-
-	//step1 : create the role
-	return InitRole(ctx, ses, tenant, cre.cr)
-}
-
-type DropRoleExecutor struct {
-	*statusStmtExecutor
-	dr *tree.DropRole
-}
-
-func (dre *DropRoleExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
-	return doDropRole(ctx, ses, dre.dr)
-}
-
-type GrantExecutor struct {
-	*statusStmtExecutor
-	g *tree.Grant
-}
-
-func (ge *GrantExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
-	switch ge.g.Typ {
-	case tree.GrantTypeRole:
-		return doGrantRole(ctx, ses, &ge.g.GrantRole)
-	case tree.GrantTypePrivilege:
-		return doGrantPrivilege(ctx, ses, &ge.g.GrantPrivilege)
-	}
-	return moerr.NewInternalError(ctx, "no such grant type %v", ge.g.Typ)
-}
-
-type RevokeExecutor struct {
-	*statusStmtExecutor
-	r *tree.Revoke
-}
-
-func (re *RevokeExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
-	switch re.r.Typ {
-	case tree.RevokeTypeRole:
-		return doRevokeRole(ctx, ses, &re.r.RevokeRole)
-	case tree.RevokeTypePrivilege:
-		return doRevokePrivilege(ctx, ses, &re.r.RevokePrivilege)
-	}
-	return moerr.NewInternalError(ctx, "no such revoke type %v", re.r.Typ)
-}
-
-type CreateTableExecutor struct {
-	*statusStmtExecutor
-	ct *tree.CreateTable
-}
-
-type DropTableExecutor struct {
-	*statusStmtExecutor
-	dt *tree.DropTable
-}
-
-type CreateDatabaseExecutor struct {
-	*statusStmtExecutor
-	cd *tree.CreateDatabase
-}
-
-type CreateIndexExecutor struct {
-	*statusStmtExecutor
-	ci *tree.CreateIndex
-}
-
-type DropIndexExecutor struct {
-	*statusStmtExecutor
-	di *tree.DropIndex
-}
-
-type CreateViewExecutor struct {
-	*statusStmtExecutor
-	cv *tree.CreateView
-}
-
-type AlterViewExecutor struct {
-	*statusStmtExecutor
-	av *tree.AlterView
-}
-
-type CreateSequenceExecutor struct {
-	*statusStmtExecutor
-	cs *tree.CreateSequence
-}
-
-type DropSequenceExecutor struct {
-	*statusStmtExecutor
-	ds *tree.DropSequence
-}
-
-type AlterSequenceExecutor struct {
-	*statusStmtExecutor
-	cs *tree.AlterSequence
-}
-
-type DropViewExecutor struct {
-	*statusStmtExecutor
-	dv *tree.DropView
-}
-
-type AlterTableExecutor struct {
-	*statusStmtExecutor
-	at *tree.AlterTable
-}
-
-type InsertExecutor struct {
-	*statusStmtExecutor
-	i *tree.Insert
-}
-
-func (ie *InsertExecutor) ResponseAfterExec(ctx context.Context, ses *Session) error {
-	var err, retErr error
-	if ie.GetStatus() == stmtExecSuccess {
-		resp := NewOkResponse(ie.GetAffectedRows(), 0, 0, ie.GetServerStatus(), int(COM_QUERY), "")
-		resp.lastInsertId = 1
-		if err = ses.GetMysqlProtocol().SendResponse(ctx, resp); err != nil {
-			retErr = moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err)
-			logStatementStatus(ctx, ses, ie.GetAst(), fail, retErr)
-			return retErr
+		if isIssue3482 {
+			ses.Infof(execCtx.reqCtx, "local local '%s' response ok", localFileName)
 		}
 	}
-	return nil
-}
-
-type ReplaceExecutor struct {
-	*statusStmtExecutor
-	r *tree.Replace
-}
-
-func (re *ReplaceExecutor) ResponseAfterExec(ctx context.Context, ses *Session) error {
-	var err, retErr error
-	if re.GetStatus() == stmtExecSuccess {
-		resp := NewOkResponse(re.GetAffectedRows(), 0, 0, re.GetServerStatus(), int(COM_QUERY), "")
-		resp.lastInsertId = 1
-		if err = ses.GetMysqlProtocol().SendResponse(ctx, resp); err != nil {
-			retErr = moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err)
-			logStatementStatus(ctx, ses, re.GetAst(), fail, retErr)
-			return retErr
-		}
-	}
-	return nil
-}
-
-type LoadExecutor struct {
-	*statusStmtExecutor
-	l *tree.Load
-}
-
-func (le *LoadExecutor) CommitOrRollbackTxn(ctx context.Context, ses *Session) error {
-	stmt := le.GetAst()
-	tenant := le.tenantName
-	incStatementCounter(tenant, stmt)
-	if le.GetStatus() == stmtExecSuccess {
-		logStatementStatus(ctx, ses, stmt, success, nil)
-	} else {
-		incStatementErrorsCounter(tenant, stmt)
-		/*
-			Cases    | set Autocommit = 1/0 | BEGIN statement |
-			---------------------------------------------------
-			Case1      1                       Yes
-			Case2      1                       No
-			Case3      0                       Yes
-			Case4      0                       No
-			---------------------------------------------------
-			update error message in Case1,Case3,Case4.
-		*/
-		if ses.InMultiStmtTransactionMode() && ses.InActiveTransaction() {
-			ses.SetOptionBits(OPTION_ATTACH_ABORT_TRANSACTION_ERROR)
-		}
-		logutil.Error(le.err.Error())
-		logStatementStatus(ctx, ses, stmt, fail, le.err)
-	}
-	return nil
-}
-
-type SetDefaultRoleExecutor struct {
-	*statusStmtExecutor
-	sdr *tree.SetDefaultRole
-}
-
-type SetPasswordExecutor struct {
-	*statusStmtExecutor
-	sp *tree.SetPassword
-}
-
-type TruncateTableExecutor struct {
-	*statusStmtExecutor
-	tt *tree.TruncateTable
+	return
 }

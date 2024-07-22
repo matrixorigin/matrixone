@@ -64,6 +64,7 @@ func testMutableFileService(
 	err = fs.Read(ctx, vec)
 	assert.Nil(t, err)
 	assert.Equal(t, []byte("123d"), vec.Entries[0].Data)
+	vec.Release()
 
 	// append
 	err = mutator.Mutate(ctx, IOEntry{
@@ -85,6 +86,7 @@ func testMutableFileService(
 	err = fs.Read(ctx, vec)
 	assert.Nil(t, err)
 	assert.Equal(t, []byte("123dq"), vec.Entries[0].Data)
+	vec.Release()
 
 	// append
 	err = mutator.Append(ctx, IOEntry{

@@ -27,6 +27,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -65,18 +66,18 @@ func newReplayer(dataFactory *tables.DataFactory, db *DB, ckpedTS types.TS, lsn 
 
 func (replayer *Replayer) PreReplayWal() {
 	processor := new(catalog.LoopProcessor)
-	processor.BlockFn = func(entry *catalog.BlockEntry) (err error) {
-		entry.InitData(replayer.DataFactory)
-		return
-	}
 	processor.ObjectFn = func(entry *catalog.ObjectEntry) (err error) {
 		if entry.GetTable().IsVirtual() {
 			return moerr.GetOkStopCurrRecur()
 		}
-		dropCommit := entry.TreeMaxDropCommitEntry()
-		if dropCommit != nil && dropCommit.DeleteBefore(replayer.ckpedTS) {
+		dropCommit, obj := entry.TreeMaxDropCommitEntry()
+		if dropCommit != nil && dropCommit.DeleteBeforeLocked(replayer.ckpedTS) {
 			return moerr.GetOkStopCurrRecur()
 		}
+		if obj != nil && obj.DeleteBefore(replayer.ckpedTS) {
+			return moerr.GetOkStopCurrRecur()
+		}
+		entry.InitData(replayer.DataFactory)
 		return
 	}
 	if err := replayer.db.Catalog.RecurLoop(processor); err != nil {
@@ -86,6 +87,22 @@ func (replayer *Replayer) PreReplayWal() {
 	}
 }
 
+func (replayer *Replayer) postReplayWal() {
+	processor := new(catalog.LoopProcessor)
+	processor.ObjectFn = func(entry *catalog.ObjectEntry) (err error) {
+		if entry.InMemoryDeletesExisted() {
+			entry.GetTable().DeletedDirties = append(entry.GetTable().DeletedDirties, entry)
+		}
+		return
+	}
+	processor.TombstoneFn = func(t data.Tombstone) error {
+		t.UpgradeAllDeleteChain()
+		return nil
+	}
+	if err := replayer.db.Catalog.RecurLoop(processor); err != nil {
+		panic(err)
+	}
+}
 func (replayer *Replayer) Replay() {
 	replayer.wg.Add(1)
 	go replayer.applyTxnCmds()
@@ -95,6 +112,7 @@ func (replayer *Replayer) Replay() {
 	replayer.txnCmdChan <- txnbase.NewLastTxnCmd()
 	close(replayer.txnCmdChan)
 	replayer.wg.Wait()
+	replayer.postReplayWal()
 	logutil.Info("open-tae", common.OperationField("replay"),
 		common.OperandField("wal"),
 		common.AnyField("apply logentries cost", replayer.applyDuration),
@@ -139,7 +157,7 @@ func (replayer *Replayer) GetMaxTS() types.TS {
 }
 
 func (replayer *Replayer) OnTimeStamp(ts types.TS) {
-	if ts.Greater(replayer.maxTs) {
+	if ts.Greater(&replayer.maxTs) {
 		replayer.maxTs = ts
 	}
 }
@@ -161,7 +179,7 @@ func (replayer *Replayer) OnReplayTxn(cmd txnif.TxnCmd, lsn uint64) {
 	replayer.readCount++
 	txnCmd := cmd.(*txnbase.TxnCmd)
 	// If WAL entry splits, they share same prepareTS
-	if txnCmd.PrepareTS.Less(replayer.maxTs) {
+	if txnCmd.PrepareTS.Less(&replayer.maxTs) {
 		return
 	}
 	replayer.applyCount++

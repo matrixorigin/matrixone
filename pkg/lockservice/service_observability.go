@@ -82,16 +82,22 @@ func (s *service) GetLockTableBind(
 }
 
 func (s *service) IterLocks(fn func(tableID uint64, keys [][]byte, lock Lock) bool) {
+	var lockTables []*localLockTable
 	s.tableGroups.iter(func(_ uint64, v lockTable) bool {
 		l, ok := v.(*localLockTable)
 		if !ok {
 			return true
 		}
+		lockTables = append(lockTables, l)
+		return true
+	})
+
+	for _, l := range lockTables {
 		keys := make([][]byte, 0, 2)
-		return func() bool {
+		ok := func() bool {
 			stop := false
-			l.mu.Lock()
-			defer l.mu.Unlock()
+			l.mu.RLock()
+			defer l.mu.RUnlock()
 			l.mu.store.Iter(func(key []byte, lock Lock) bool {
 				keys = append(keys, key)
 				if lock.isLockRangeStart() {
@@ -103,7 +109,10 @@ func (s *service) IterLocks(fn func(tableID uint64, keys [][]byte, lock Lock) bo
 			})
 			return !stop
 		}()
-	})
+		if !ok {
+			return
+		}
+	}
 }
 
 func (s *service) CloseRemoteLockTable(

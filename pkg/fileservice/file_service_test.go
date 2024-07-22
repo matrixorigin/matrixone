@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/stretchr/testify/assert"
@@ -137,6 +138,7 @@ func testFileService(
 		assert.Equal(t, []byte("1234567"), content)
 		assert.Equal(t, []byte("56"), buf1.Bytes())
 		assert.Equal(t, []byte("123456789ab"), vec.Entries[6].Data)
+		vec.Release()
 
 		// stat
 		entry, err := fs.StatFile(ctx, "foo")
@@ -159,6 +161,7 @@ func testFileService(
 		err = fs.Read(ctx, &vec)
 		assert.Nil(t, err)
 		assert.Equal(t, []byte("8"), vec.Entries[0].Data)
+		vec.Release()
 
 		// sub path
 		err = fs.Write(ctx, IOVector{
@@ -350,6 +353,7 @@ func testFileService(
 			for i, entry := range readVector.Entries {
 				assert.Equal(t, parts[i], entry.Data, "part %d, got %+v", i, entry)
 			}
+			readVector.Release()
 
 			// read, random entry
 			parts = randomSplit(content, 16)
@@ -367,6 +371,7 @@ func testFileService(
 			for i, entry := range readVector.Entries {
 				assert.Equal(t, parts[i], entry.Data, "path: %s, entry: %+v, content %v", filePath, entry, content)
 			}
+			readVector.Release()
 
 			// read, random entry with ReadCloserForRead
 			parts = randomSplit(content, len(content)/10)
@@ -545,6 +550,9 @@ func testFileService(
 		for _, entry := range entries {
 			err := fs.Delete(ctx, path.Join("qux/quux", entry.Name))
 			assert.Nil(t, err)
+			// delete again
+			err = fs.Delete(ctx, path.Join("qux/quux", entry.Name))
+			assert.Nil(t, err)
 		}
 		entries, err = fs.List(ctx, "qux/quux")
 		assert.Nil(t, err)
@@ -687,7 +695,7 @@ func testFileService(
 			Entries: []IOEntry{
 				{
 					Size: int64(len(data)),
-					ToCacheData: func(r io.Reader, data []byte, allocator CacheDataAllocator) (CacheData, error) {
+					ToCacheData: func(r io.Reader, data []byte, allocator CacheDataAllocator) (memorycache.CacheData, error) {
 						bs, err := io.ReadAll(r)
 						assert.Nil(t, err)
 						if len(data) > 0 {
@@ -713,6 +721,8 @@ func testFileService(
 		assert.Equal(t, 1, len(m.M))
 		assert.Equal(t, int64(42), m.M[42])
 
+		vec.Release()
+
 		// ReadCache
 		vec = &IOVector{
 			FilePath: "foo",
@@ -728,7 +738,8 @@ func testFileService(
 		if vec.Entries[0].CachedData != nil {
 			assert.Equal(t, data, vec.Entries[0].CachedData.Bytes())
 		}
-
+		vec.Release()
+		fs.Close()
 	})
 
 	t.Run("ignore", func(t *testing.T) {
@@ -763,10 +774,9 @@ func testFileService(
 		}
 		err = fs.Read(ctx, vec)
 		assert.Nil(t, err)
-
 		assert.Nil(t, vec.Entries[0].Data)
 		assert.Equal(t, []byte("foo"), vec.Entries[1].Data)
-
+		vec.Release()
 	})
 
 	t.Run("named path", func(t *testing.T) {

@@ -19,7 +19,9 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -56,7 +58,7 @@ func (c *clientInfo) parse(full string) error {
 	if err != nil {
 		return err
 	}
-	c.labelInfo.Tenant = Tenant(tenant.Tenant)
+	c.labelInfo.Tenant = Tenant(tenant.GetTenant())
 	c.username = tenant.GetUser()
 
 	// For label part.
@@ -110,6 +112,7 @@ type migration struct {
 // clientConn is the connection between proxy and client.
 type clientConn struct {
 	ctx context.Context
+	sid string
 	log *log.MOLogger
 	// counterSet counts the events in proxy.
 	counterSet *counterSet
@@ -171,9 +174,11 @@ func newClientConn(
 	ipNetList []*net.IPNet,
 ) (ClientConn, error) {
 	var originIP net.IP
-	host, _, err := net.SplitHostPort(conn.RemoteAddress())
+	var port int
+	host, portStr, err := net.SplitHostPort(conn.RemoteAddress())
 	if err == nil {
 		originIP = net.ParseIP(host)
+		port, _ = strconv.Atoi(portStr)
 	}
 	qc, err := qclient.NewQueryClient(cfg.UUID, morpc.Config{})
 	if err != nil {
@@ -181,7 +186,7 @@ func newClientConn(
 	}
 	c := &clientConn{
 		ctx:            ctx,
-		log:            logger,
+		sid:            cfg.UUID,
 		counterSet:     cs,
 		conn:           conn,
 		haKeeperClient: haKeeperClient,
@@ -189,7 +194,8 @@ func newClientConn(
 		router:         router,
 		tun:            tun,
 		clientInfo: clientInfo{
-			originIP: originIP,
+			originIP:   originIP,
+			originPort: uint16(port),
 		},
 		ipNetList: ipNetList,
 		// set the connection timeout value.
@@ -200,11 +206,17 @@ func newClientConn(
 	if err != nil {
 		return nil, err
 	}
+	c.log = logger.With(zap.Uint32("ConnID", c.connID))
 	fp := config.FrontendParameters{
 		EnableTls: cfg.TLSEnabled,
 	}
 	fp.SetDefaultValues()
-	c.mysqlProto = frontend.NewMysqlClientProtocol(c.connID, c.conn, 0, &fp)
+	pu := config.NewParameterUnit(&fp, nil, nil, nil)
+	ios, err := frontend.NewIOSession(c.RawConn(), pu)
+	if err != nil {
+		return nil, err
+	}
+	c.mysqlProto = frontend.NewMysqlClientProtocol(cfg.UUID, c.connID, ios, 0, &fp)
 	if cfg.TLSEnabled {
 		tlsConfig, err := frontend.ConstructTLSConfig(
 			ctx, cfg.TLSCAFile, cfg.TLSCertFile, cfg.TLSKeyFile)
@@ -261,12 +273,20 @@ func (c *clientConn) BuildConnWithServer(prevAddr string) (ServerConn, error) {
 	if prevAddr == "" {
 		// Step 1, proxy write initial handshake to client.
 		if err := c.writeInitialHandshake(); err != nil {
-			c.log.Debug("failed to write Handshake packet", zap.Error(err))
+			if errors.Is(err, io.EOF) {
+				return nil, err
+			}
+			c.log.Error("failed to write Handshake packet", zap.Error(err))
 			return nil, err
 		}
 		// Step 2, client send handshake response, which is auth request,
 		// to proxy.
 		if err := c.handleHandshakeResp(); err != nil {
+			// This connection may come from heartbeat of LB, and receive EOF error
+			// from it. Just return error and do not log it.
+			if errors.Is(err, io.EOF) {
+				return nil, err
+			}
 			c.log.Error("failed to handle Handshake response", zap.Error(err))
 			return nil, err
 		}
@@ -352,7 +372,16 @@ func (c *clientConn) handleKillQuery(e *killQueryEvent, resp chan<- []byte) erro
 	// Before connect to backend server, update the salt.
 	cn.salt = c.mysqlProto.GetSalt()
 
-	return c.connAndExec(cn, fmt.Sprintf("KILL QUERY %d", cn.backendConnID), resp)
+	// And also update the connection ID.
+	cid, err := c.genConnID()
+	if err != nil {
+		c.log.Error("failed to generate conn ID for kill query", zap.Error(err))
+		c.sendErr(err, resp)
+		return err
+	}
+	cn.connID = cid
+
+	return c.connAndExec(cn, fmt.Sprintf("KILL QUERY %d", e.connID), resp)
 }
 
 // handleSetVar handles the set variable event.
@@ -379,8 +408,11 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 	}
 
 	badCNServers := make(map[string]struct{})
-	filterFn := func(uuid string) bool {
-		if _, ok := badCNServers[uuid]; ok {
+	if prevAdd != "" {
+		badCNServers[prevAdd] = struct{}{}
+	}
+	filterFn := func(str string) bool {
+		if _, ok := badCNServers[str]; ok {
 			return true
 		}
 		return false
@@ -394,19 +426,21 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 		// Select the best CN server from backend.
 		//
 		// NB: The selected CNServer must have label hash in it.
-		cn, err = c.router.Route(c.ctx, c.clientInfo, filterFn)
+		cn, err = c.router.Route(c.ctx, c.sid, c.clientInfo, filterFn)
 		if err != nil {
 			v2.ProxyConnectRouteFailCounter.Inc()
+			c.log.Error("route failed", zap.Error(err))
 			return nil, err
 		}
-		// We have to set proxy connection ID after cn is returned.
-		cn.proxyConnID = c.connID
+		// We have to set connection ID after cn is returned.
+		cn.connID = c.connID
 
 		// Set the salt value of cn server.
 		cn.salt = c.mysqlProto.GetSalt()
 
 		// Update the internal connection.
 		cn.internalConn = containIP(c.ipNetList, c.clientInfo.originIP)
+		cn.clientAddr = fmt.Sprintf("%s:%d", c.clientInfo.originIP.String(), c.clientInfo.originPort)
 
 		// After select a CN server, we try to connect to it. If connect
 		// fails, and it is a retryable error, we reselect another CN server.
@@ -414,7 +448,7 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 		if err != nil {
 			if isRetryableErr(err) {
 				v2.ProxyConnectRetryCounter.Inc()
-				badCNServers[cn.uuid] = struct{}{}
+				badCNServers[cn.addr] = struct{}{}
 				c.log.Warn("failed to connect to CN server, will retry",
 					zap.String("current server uuid", cn.uuid),
 					zap.String("current server address", cn.addr),
@@ -427,28 +461,54 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 				continue
 			} else {
 				v2.ProxyConnectCommonFailCounter.Inc()
+				c.log.Error("failed to connect to CN server, cannot retry", zap.Error(err))
+				return nil, err
+			}
+		}
+
+		if prevAdd == "" {
+			// r is the packet received from CN server, send r to client.
+			if err := c.mysqlProto.WritePacket(r[4:]); err != nil {
+				c.log.Error("failed to write packet to client", zap.Error(err))
+				v2.ProxyConnectCommonFailCounter.Inc()
+				closeErr := sc.Close()
+				if closeErr != nil {
+					c.log.Error("failed to close server connection", zap.Error(closeErr))
+				}
 				return nil, err
 			}
 		} else {
-			break
+			// The connection has been transferred to a new server, but migration fails,
+			// but we don't return error, which will cause unknown issue.
+			if err := c.migrateConn(prevAdd, sc); err != nil {
+				closeErr := sc.Close()
+				if closeErr != nil {
+					c.log.Error("failed to close server connection", zap.Error(closeErr))
+				}
+				c.log.Error("failed to migrate connection to cn, will retry",
+					zap.Uint32("conn ID", c.connID),
+					zap.String("current uuid", cn.uuid),
+					zap.String("current addr", cn.addr),
+					zap.Any("bad backend servers", badCNServers),
+					zap.Error(err),
+				)
+				badCNServers[cn.addr] = struct{}{}
+				continue
+			}
 		}
-	}
 
-	if prevAdd == "" {
-		// r is the packet received from CN server, send r to client.
-		if err := c.mysqlProto.WritePacket(r[4:]); err != nil {
-			v2.ProxyConnectCommonFailCounter.Inc()
-			return nil, err
-		}
-	} else {
-		// The connection has been transferred to a new server, but migration fails,
-		// but we don't return error, which will cause unknown issue.
-		if err := c.migrateConn(prevAdd, sc); err != nil {
-			c.log.Error("failed to migrate connection information", zap.Error(err))
-			return sc, nil
-		}
+		// connection to cn server successfully.
+		break
 	}
 	if !isOKPacket(r) {
+		c.log.Error("response is not OK", zap.Any("packet", err))
+		// If we do not close here, there will be a lot of unused connections
+		// in connManager.
+		if sc != nil {
+			if closeErr := sc.Close(); closeErr != nil {
+				c.log.Error("failed to close server connection", zap.Error(closeErr))
+			}
+		}
 		v2.ProxyConnectCommonFailCounter.Inc()
 		return nil, withCode(moerr.NewInternalErrorNoCtx("access error"),
 			codeAuthFailed)
@@ -467,6 +527,7 @@ func (c *clientConn) readPacket() (*frontend.Packet, error) {
 	if proxyAddr, ok := msg.(*ProxyAddr); ok {
 		if proxyAddr.SourceAddress != nil {
 			c.clientInfo.originIP = proxyAddr.SourceAddress
+			c.clientInfo.originPort = proxyAddr.SourcePort
 		}
 		return c.readPacket()
 	}

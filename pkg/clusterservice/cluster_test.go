@@ -129,12 +129,18 @@ func TestCluster_DebugUpdateCNLabel(t *testing.T) {
 
 func runClusterTest(
 	refreshInterval time.Duration,
-	fn func(*testHAKeeperClient, *cluster)) {
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	hc := &testHAKeeperClient{}
-	c := NewMOCluster(hc, refreshInterval)
-	defer c.Close()
-	fn(hc, c.(*cluster))
+	fn func(*testHAKeeperClient, *cluster),
+) {
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			hc := &testHAKeeperClient{}
+			c := NewMOCluster(sid, hc, refreshInterval)
+			defer c.Close()
+			fn(hc, c.(*cluster))
+		},
+	)
 }
 
 type testHAKeeperClient struct {
@@ -188,6 +194,16 @@ func (c *testHAKeeperClient) UpdateCNLabel(ctx context.Context, label logpb.CNSt
 	for i, cn := range c.value.CNStores {
 		if cn.UUID == label.UUID {
 			c.value.CNStores[i].Labels = label.Labels
+		}
+	}
+	return nil
+}
+func (c *testHAKeeperClient) UpdateCNWorkState(ctx context.Context, state logpb.CNWorkState) error {
+	c.Lock()
+	defer c.Unlock()
+	for i, cn := range c.value.CNStores {
+		if cn.UUID == state.UUID {
+			c.value.CNStores[i].WorkState = state.State
 		}
 	}
 	return nil

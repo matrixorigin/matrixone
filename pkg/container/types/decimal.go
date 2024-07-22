@@ -47,6 +47,10 @@ var Pow10 = [20]uint64{
 }
 
 var FloatHigh = float64(1<<63) * 2
+var Decimal64Min = Decimal64(uint64(1) << 63)
+var Decimal64Max = ^Decimal64Min
+var Decimal128Min = Decimal128{0, uint64(1) << 63}
+var Decimal128Max = Decimal128{^uint64(0), ^Decimal128Min.B64_127}
 
 func (x Decimal64) Sign() bool {
 	return x>>63 == 1
@@ -1453,7 +1457,39 @@ func Decimal128FromFloat64(x float64, width, scale int32) (y Decimal128, err err
 	return
 }
 
+func Decimal256FromInt64(x int64) Decimal256 {
+	return Decimal256{uint64(x), 0, 0, 0}
+}
+
+func Decimal256FromDecimal128(x Decimal128) Decimal256 {
+	y := Decimal256{x.B0_63, x.B64_127, 0, 0}
+	if x.Sign() {
+		y.B128_191 = ^y.B128_191
+		y.B192_255 = ^y.B192_255
+	}
+	return y
+}
+
+func Decimal256ToFloat64(x Decimal256, scale int32) float64 {
+	sign := x.Sign()
+	if sign {
+		x = x.Minus()
+	}
+	for x.B128_191 != 0 || x.B192_255 != 0 {
+		x, _ = x.Scale(-1)
+		scale--
+	}
+	y := Decimal128ToFloat64(Decimal128{x.B0_63, x.B64_127}, scale)
+	if sign {
+		y = -y
+	}
+	return y
+}
+
 func Parse64(x string) (y Decimal64, scale int32, err error) {
+	if x == "" {
+		return 0, 0, moerr.NewInvalidInputNoCtx("can't cast empty string to Decimal64")
+	}
 	y = Decimal64(0)
 	z := Decimal64(0)
 	scale = -1
@@ -1584,6 +1620,9 @@ func Parse64(x string) (y Decimal64, scale int32, err error) {
 }
 
 func ParseDecimal64(x string, width, scale int32) (y Decimal64, err error) {
+	if x == "" {
+		return 0, moerr.NewInvalidInputNoCtx("can't cast empty string to Decimal64")
+	}
 	if width > 18 {
 		width = 18
 	}
@@ -1617,6 +1656,9 @@ func ParseDecimal64(x string, width, scale int32) (y Decimal64, err error) {
 }
 
 func ParseDecimal64FromByte(x string, width, scale int32) (y Decimal64, err error) {
+	if x == "" {
+		return 0, moerr.NewInvalidInputNoCtx("can't cast empty string to Decimal64")
+	}
 	y = 0
 	err = nil
 	n := len(x)
@@ -1634,6 +1676,9 @@ func ParseDecimal64FromByte(x string, width, scale int32) (y Decimal64, err erro
 }
 
 func Parse128(x string) (y Decimal128, scale int32, err error) {
+	if x == "" {
+		return Decimal128{0, 0}, 0, moerr.NewInvalidInputNoCtx("can't cast empty string to Decimal128")
+	}
 	var z Decimal128
 	width := 0
 	t := false
@@ -1764,6 +1809,9 @@ func Parse128(x string) (y Decimal128, scale int32, err error) {
 }
 
 func ParseDecimal128(x string, width, scale int32) (y Decimal128, err error) {
+	if x == "" {
+		return Decimal128{0, 0}, moerr.NewInvalidInputNoCtx("can't cast empty string to Decimal128")
+	}
 	if width > 38 {
 		width = 38
 	}
@@ -1803,6 +1851,9 @@ func ParseDecimal128(x string, width, scale int32) (y Decimal128, err error) {
 }
 
 func ParseDecimal128FromByte(x string, width, scale int32) (y Decimal128, err error) {
+	if x == "" {
+		return Decimal128{0, 0}, moerr.NewInvalidInputNoCtx("can't cast empty string to Decimal128")
+	}
 	y = Decimal128{0, 0}
 	err = nil
 	n := len(x)

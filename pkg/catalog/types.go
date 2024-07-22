@@ -15,6 +15,7 @@
 package catalog
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -29,6 +30,9 @@ const (
 	PrefixPriColName = "__mo_cpkey_"
 	PrefixCBColName  = "__mo_cbkey_"
 
+	// Wildcard characters for partition subtable name
+	PartitionSubTableWildcard = "\\%!\\%%\\%!\\%%"
+
 	ExternalFilePath = "__mo_filepath"
 
 	// MOAutoIncrTable mo auto increment table name
@@ -38,6 +42,7 @@ const (
 	TableTailAttrAborted  = "__mo_%1_aborted"
 	TableTailAttrPKVal    = "__mo_%1_pk_val"
 
+	MOAccountTable = "mo_account"
 	// MOVersionTable mo version table. This table records information about the
 	// versions of the MO cluster that have been upgraded. In other words, you can
 	// query this table to find out all the versions of the MO cluster that have
@@ -54,6 +59,12 @@ const (
 
 	// MOForeignKeys saves the fk relationships
 	MOForeignKeys = "mo_foreign_keys"
+
+	// MOShardsMetadata is used to store the sharding information of the table. See detail
+	// in shardservice.
+	MOShardsMetadata = "mo_shards_metadata"
+	// MOShards shards detail.
+	MOShards = "mo_shards"
 )
 
 var InternalColumns = map[string]int8{
@@ -72,6 +83,7 @@ var InternalColumns = map[string]int8{
 	SystemSI_IVFFLAT_TblCol_Centroids_centroid: 0,
 	SystemSI_IVFFLAT_TblCol_Entries_version:    0,
 	SystemSI_IVFFLAT_TblCol_Entries_id:         0,
+	SystemSI_IVFFLAT_TblCol_Entries_entry:      0,
 }
 
 var InternalTableNames = map[string]int8{
@@ -101,6 +113,10 @@ const (
 )
 
 const (
+	MO_COMMENT_NO_DEL_HINT = "[mo_no_del_hint]"
+)
+
+const (
 	// Non-hard-coded data dictionary table
 	MO_INDEXES = "mo_indexes"
 
@@ -112,6 +128,9 @@ const (
 
 	// MOSysDaemonTask is the table name of daemon task table in mo_task.
 	MOSysDaemonTask = "sys_daemon_task"
+
+	// MOSysAsyncTask is the table name of async task table in mo_task.
+	MOSysAsyncTask = "sys_async_task"
 
 	// MOStages if the table name of mo_stages table in mo_cataglog.
 	MO_STAGES = "mo_stages"
@@ -128,9 +147,11 @@ const (
 
 	MO_SYSTEM    = "system"
 	MO_STATEMENT = "statement_info"
+	MO_RAWLOG    = "rawlog"
 
 	MO_SYSTEM_METRICS = "system_metrics"
 	MO_METRIC         = "metric"
+	MO_SQL_STMT_CU    = "sql_statement_cu"
 
 	// default database name for catalog
 	MO_CATALOG  = "mo_catalog"
@@ -291,6 +312,7 @@ const (
 	SystemSI_IVFFLAT_TblCol_Entries_version = "__mo_index_centroid_fk_version"
 	SystemSI_IVFFLAT_TblCol_Entries_id      = "__mo_index_centroid_fk_id"
 	SystemSI_IVFFLAT_TblCol_Entries_pk      = IndexTablePrimaryColName
+	SystemSI_IVFFLAT_TblCol_Entries_entry   = "__mo_index_centroid_fk_entry"
 )
 
 const (
@@ -386,9 +408,9 @@ type CreateDatabase struct {
 	Name        string
 	CreateSql   string
 	DatTyp      string
-	Owner       uint32
-	Creator     uint32
-	AccountId   uint32
+	Owner       uint32 // roleid
+	Creator     uint32 // userid
+	AccountId   uint32 // tenantid
 	CreatedTime types.Timestamp
 }
 
@@ -415,12 +437,9 @@ type CreateTable struct {
 	Defs         []engine.TableDef
 }
 
-type UpdateConstraint struct {
-	DatabaseId   uint64
-	TableId      uint64
-	TableName    string
-	DatabaseName string
-	Constraint   []byte
+func (t CreateTable) String() string {
+	return fmt.Sprintf("{aid-%v,uid-%v,rid-%v}: %d-%s:%d-%s, %q",
+		t.AccountId, t.Creator, t.Owner, t.DatabaseId, t.DatabaseName, t.TableId, t.Name, t.CreateSql)
 }
 
 type DropOrTruncateTable struct {
@@ -728,6 +747,10 @@ var (
 	MoColumnsTableDefs = []engine.TableDef{}
 	// used by memengine or tae or cn
 	MoTableMetaDefs = []engine.TableDef{}
+
+	MoDatabaseConstraint = []byte{}
+	MoTableConstraint    = []byte{}
+	MoColumnConstraint   = []byte{}
 )
 
 var (
@@ -736,6 +759,7 @@ var (
 	QueryResultMetaDir  string
 	//ProfileDir holds all profiles dumped by the runtime/pprof
 	ProfileDir string
+	TraceDir   string
 )
 
 func init() {
@@ -743,26 +767,26 @@ func init() {
 	QueryResultMetaPath = fileservice.JoinPath(defines.SharedFileServiceName, "/query_result_meta/%s_%s.blk")
 	QueryResultMetaDir = fileservice.JoinPath(defines.SharedFileServiceName, "/query_result_meta")
 	ProfileDir = fileservice.JoinPath(defines.ETLFileServiceName, "/profile")
+	TraceDir = fileservice.JoinPath(defines.ETLFileServiceName, "/trace")
 }
 
-const QueryResultName = "%s_%s_%d.blk"
-const QueryResultMetaName = "%s_%s.blk"
-
 type Meta struct {
-	QueryId     [16]byte
-	Statement   string
-	AccountId   uint32
-	RoleId      uint32
-	ResultPath  string
-	CreateTime  types.Timestamp
-	ResultSize  float64
-	Columns     string
-	Tables      string
-	UserId      uint32
-	ExpiredTime types.Timestamp
-	Plan        string
-	Ast         string
-	ColumnMap   string
+	QueryId       [16]byte
+	Statement     string
+	AccountId     uint32
+	RoleId        uint32
+	ResultPath    string
+	CreateTime    types.Timestamp
+	ResultSize    float64
+	Columns       string
+	Tables        string
+	UserId        uint32
+	ExpiredTime   types.Timestamp
+	Plan          string
+	Ast           string
+	ColumnMap     string
+	SaveRowCount  uint64
+	QueryRowCount uint64
 }
 
 var (
@@ -781,6 +805,8 @@ var (
 		types.New(types.T_text, 0, 0),      // Plan
 		types.New(types.T_text, 0, 0),      // Ast
 		types.New(types.T_text, 0, 0),      // ColumnMap
+		types.New(types.T_uint64, 0, 0),    // SavedRowCount
+		types.New(types.T_uint64, 0, 0),    // QueryRowCount
 	}
 
 	MetaColNames = []string{
@@ -798,22 +824,26 @@ var (
 		"plan",
 		"Ast",
 		"ColumnMap",
+		"savedRowCount", //count of rows saved in the query result
+		"queryRowCount", //count of rows generated by the query
 	}
 )
 
 const (
-	QUERY_ID_IDX     = 0
-	STATEMENT_IDX    = 1
-	ACCOUNT_ID_IDX   = 2
-	ROLE_ID_IDX      = 3
-	RESULT_PATH_IDX  = 4
-	CREATE_TIME_IDX  = 5
-	RESULT_SIZE_IDX  = 6
-	COLUMNS_IDX      = 7
-	TABLES_IDX       = 8
-	USER_ID_IDX      = 9
-	EXPIRED_TIME_IDX = 10
-	PLAN_IDX         = 11
-	AST_IDX          = 12
-	COLUMN_MAP_IDX   = 13
+	QUERY_ID_IDX        = 0
+	STATEMENT_IDX       = 1
+	ACCOUNT_ID_IDX      = 2
+	ROLE_ID_IDX         = 3
+	RESULT_PATH_IDX     = 4
+	CREATE_TIME_IDX     = 5
+	RESULT_SIZE_IDX     = 6
+	COLUMNS_IDX         = 7
+	TABLES_IDX          = 8
+	USER_ID_IDX         = 9
+	EXPIRED_TIME_IDX    = 10
+	PLAN_IDX            = 11
+	AST_IDX             = 12
+	COLUMN_MAP_IDX      = 13
+	SAVED_ROW_COUNT_IDX = 14
+	QUERY_ROW_COUNT_IDX = 15
 )

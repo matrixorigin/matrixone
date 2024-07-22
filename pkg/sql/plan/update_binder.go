@@ -17,8 +17,6 @@ package plan
 import (
 	"context"
 
-	"strings"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -47,18 +45,18 @@ func (b *UpdateBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 }
 
 func (b *UpdateBinder) bindColRef(astExpr *tree.UnresolvedName, _ int32, _ bool) (expr *plan.Expr, err error) {
-	col := strings.ToLower(astExpr.Parts[0])
+	col := astExpr.ColName()
 	idx := -1
 	var typ *Type
 	for i, c := range b.cols {
 		if c.Name == col {
 			idx = i
-			typ = c.Typ
+			typ = &c.Typ
 			break
 		}
 	}
 	if idx == -1 {
-		err = moerr.NewInvalidInput(b.GetContext(), "column '%s' does not exist", col)
+		err = moerr.NewInvalidInput(b.GetContext(), "column '%s' does not exist", astExpr.ColNameOrigin())
 		return
 	}
 	expr = &plan.Expr{

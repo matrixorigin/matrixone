@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 func WithTransferTableTTL(ttl time.Duration) func(*Options) {
@@ -130,7 +131,7 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	}
 
 	if o.TransferTableTTL == time.Duration(0) {
-		o.TransferTableTTL = time.Second * 90
+		o.TransferTableTTL = time.Second * 60
 	}
 
 	if o.StorageCfg == nil {
@@ -149,11 +150,17 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	if o.CheckpointCfg.FlushInterval <= 0 {
 		o.CheckpointCfg.FlushInterval = DefaultCheckpointFlushInterval
 	}
+	if o.CheckpointCfg.TransferInterval <= 0 {
+		o.CheckpointCfg.TransferInterval = DefaultCheckpointTransferInterval
+	}
 	if o.CheckpointCfg.IncrementalInterval <= 0 {
 		o.CheckpointCfg.IncrementalInterval = DefaultCheckpointIncremetalInterval
 	}
 	if o.CheckpointCfg.GlobalMinCount <= 0 {
 		o.CheckpointCfg.GlobalMinCount = DefaultCheckpointMinCount
+	}
+	if o.CheckpointCfg.OverallFlushMemControl <= 0 {
+		o.CheckpointCfg.OverallFlushMemControl = DefaultOverallFlushMemControl
 	}
 	if o.CheckpointCfg.MinCount <= 0 {
 		o.CheckpointCfg.MinCount = DefaultCheckpointMinCount
@@ -163,6 +170,17 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	}
 	if o.CheckpointCfg.GCCheckpointInterval <= 0 {
 		o.CheckpointCfg.GCCheckpointInterval = DefaultGCCheckpointInterval
+	}
+
+	if o.MergeCfg == nil {
+		o.MergeCfg = new(MergeConfig)
+	}
+	if o.MergeCfg.CNMergeMemControlHint == 0 {
+		o.MergeCfg.CNMergeMemControlHint = common.DefaultCNMergeMemControlHint * common.Const1MBytes
+	}
+
+	if o.MergeCfg.CNTakeOverExceed == 0 {
+		o.MergeCfg.CNTakeOverExceed = common.DefaultMinCNMergeSize * common.Const1MBytes
 	}
 
 	if o.CatalogCfg == nil {
@@ -186,10 +204,11 @@ func (o *Options) FillDefaults(dirname string) *Options {
 
 	if o.SchedulerCfg == nil {
 		ioworkers := DefaultIOWorkers
-		if ioworkers < runtime.NumCPU() {
-			ioworkers = min(runtime.NumCPU(), 100)
+		procs := runtime.GOMAXPROCS(0)
+		if ioworkers < procs {
+			ioworkers = min(procs, 100)
 		}
-		workers := min(runtime.NumCPU()/4, 100)
+		workers := min(procs/2, 100)
 		if workers < 1 {
 			workers = 1
 		}

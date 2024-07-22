@@ -30,35 +30,35 @@ var (
 	MetaColDefs = []*plan.ColDef{
 		{
 			Name: catalog.MetaColNames[catalog.QUERY_ID_IDX],
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(catalog.MetaColTypes[catalog.QUERY_ID_IDX].Oid),
 				NotNullable: false,
 			},
 		},
 		{
 			Name: catalog.MetaColNames[catalog.STATEMENT_IDX],
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(catalog.MetaColTypes[catalog.STATEMENT_IDX].Oid),
 				NotNullable: false,
 			},
 		},
 		{
 			Name: catalog.MetaColNames[catalog.ACCOUNT_ID_IDX],
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(catalog.MetaColTypes[catalog.ACCOUNT_ID_IDX].Oid),
 				NotNullable: false,
 			},
 		},
 		{
 			Name: catalog.MetaColNames[catalog.ROLE_ID_IDX],
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(catalog.MetaColTypes[catalog.ROLE_ID_IDX].Oid),
 				NotNullable: false,
 			},
 		},
 		{
 			Name: catalog.MetaColNames[catalog.RESULT_PATH_IDX],
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(catalog.MetaColTypes[catalog.RESULT_PATH_IDX].Oid),
 				NotNullable: false,
 				Width:       4,
@@ -66,43 +66,57 @@ var (
 		},
 		{
 			Name: catalog.MetaColNames[catalog.CREATE_TIME_IDX],
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(catalog.MetaColTypes[catalog.CREATE_TIME_IDX].Oid),
 				NotNullable: false,
 			},
 		},
 		{
 			Name: catalog.MetaColNames[catalog.RESULT_SIZE_IDX],
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(catalog.MetaColTypes[catalog.RESULT_SIZE_IDX].Oid),
 				NotNullable: false,
 			},
 		},
 		{
 			Name: catalog.MetaColNames[catalog.TABLES_IDX],
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(catalog.MetaColTypes[catalog.TABLES_IDX].Oid),
 				NotNullable: false,
 			},
 		},
 		{
 			Name: catalog.MetaColNames[catalog.USER_ID_IDX],
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(catalog.MetaColTypes[catalog.USER_ID_IDX].Oid),
 				NotNullable: false,
 			},
 		},
 		{
 			Name: catalog.MetaColNames[catalog.EXPIRED_TIME_IDX],
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(catalog.MetaColTypes[catalog.EXPIRED_TIME_IDX].Oid),
 				NotNullable: false,
 			},
 		},
 		{
 			Name: catalog.MetaColNames[catalog.COLUMN_MAP_IDX],
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(catalog.MetaColTypes[catalog.COLUMN_MAP_IDX].Oid),
+				NotNullable: false,
+			},
+		},
+		{
+			Name: catalog.MetaColNames[catalog.SAVED_ROW_COUNT_IDX],
+			Typ: plan.Type{
+				Id:          int32(catalog.MetaColTypes[catalog.SAVED_ROW_COUNT_IDX].Oid),
+				NotNullable: false,
+			},
+		},
+		{
+			Name: catalog.MetaColNames[catalog.QUERY_ROW_COUNT_IDX],
+			Typ: plan.Type{
+				Id:          int32(catalog.MetaColTypes[catalog.QUERY_ROW_COUNT_IDX].Oid),
 				NotNullable: false,
 			},
 		},
@@ -111,7 +125,7 @@ var (
 
 func (builder *QueryBuilder) buildMetaScan(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, childId int32) (int32, error) {
 	var err error
-	val, err := builder.compCtx.ResolveVariable("save_query_result", true, true)
+	val, err := builder.compCtx.ResolveVariable("save_query_result", true, false)
 	if err == nil {
 		if v, _ := val.(int8); v == 0 {
 			return 0, moerr.NewNoConfig(builder.GetContext(), "save query result")
@@ -121,7 +135,7 @@ func (builder *QueryBuilder) buildMetaScan(tbl *tree.TableFunction, ctx *BindCon
 	} else {
 		return 0, err
 	}
-	exprs[0], err = appendCastBeforeExpr(builder.GetContext(), exprs[0], &plan.Type{
+	exprs[0], err = appendCastBeforeExpr(builder.GetContext(), exprs[0], plan.Type{
 		Id:          int32(types.T_uuid),
 		NotNullable: true,
 	})

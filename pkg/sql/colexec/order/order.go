@@ -27,7 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "order"
+const opName = "order"
 
 func (ctr *container) appendBatch(proc *process.Process, bat *batch.Batch) (enoughToSend bool, err error) {
 	s1, s2 := 0, bat.Size()
@@ -90,13 +90,11 @@ func (ctr *container) appendBatch(proc *process.Process, bat *batch.Batch) (enou
 func (ctr *container) sortAndSend(proc *process.Process, result *vm.CallResult) (err error) {
 	if ctr.batWaitForSort != nil {
 		for i := range ctr.sortExprExecutor {
-			ctr.sortVectors[i], err = ctr.sortExprExecutor[i].Eval(proc, []*batch.Batch{ctr.batWaitForSort})
+			ctr.sortVectors[i], err = ctr.sortExprExecutor[i].Eval(proc, []*batch.Batch{ctr.batWaitForSort}, nil)
 			if err != nil {
 				return err
 			}
 		}
-
-		var strCol []string
 
 		firstVec := ctr.sortVectors[0]
 		if cap(ctr.resultOrderList) >= ctr.batWaitForSort.RowCount() {
@@ -113,12 +111,7 @@ func (ctr *container) sortAndSend(proc *process.Process, result *vm.CallResult) 
 		if !firstVec.IsConst() {
 			nullCnt := firstVec.GetNulls().Count()
 			if nullCnt < firstVec.Length() {
-				if firstVec.GetType().IsVarlen() {
-					strCol = vector.MustStrCol(firstVec)
-				} else {
-					strCol = nil
-				}
-				sort.Sort(ctr.desc[0], ctr.nullsLast[0], nullCnt > 0, ctr.resultOrderList, firstVec, strCol)
+				sort.Sort(ctr.desc[0], ctr.nullsLast[0], nullCnt > 0, ctr.resultOrderList, firstVec)
 			}
 		}
 
@@ -138,16 +131,11 @@ func (ctr *container) sortAndSend(proc *process.Process, result *vm.CallResult) 
 
 					nullCnt := vec.GetNulls().Count()
 					if nullCnt < vec.Length() {
-						if vec.GetType().IsVarlen() {
-							strCol = vector.MustStrCol(vec)
-						} else {
-							strCol = nil
-						}
 						for m, n := 0, len(ps); m < n; m++ {
 							if m == n-1 {
-								sort.Sort(desc, nullsLast, nullCnt > 0, sels[ps[m]:], vec, strCol)
+								sort.Sort(desc, nullsLast, nullCnt > 0, sels[ps[m]:], vec)
 							} else {
-								sort.Sort(desc, nullsLast, nullCnt > 0, sels[ps[m]:ps[m+1]], vec, strCol)
+								sort.Sort(desc, nullsLast, nullCnt > 0, sels[ps[m]:ps[m+1]], vec)
 							}
 						}
 					}
@@ -170,9 +158,9 @@ func (ctr *container) sortAndSend(proc *process.Process, result *vm.CallResult) 
 	return nil
 }
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
-	ap := arg
+func (order *Order) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
+	ap := order
 	buf.WriteString(": τ([")
 	for i, f := range ap.OrderBySpec {
 		if i > 0 {
@@ -183,31 +171,34 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString("])")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	ap := arg
-	ap.ctr = new(container)
-	ctr := ap.ctr
+func (order *Order) OpType() vm.OpType {
+	return vm.Order
+}
+
+func (order *Order) Prepare(proc *process.Process) (err error) {
+	order.ctr = new(container)
+	ctr := order.ctr
 	ctr.state = vm.Build
 	{
-		ctr.desc = make([]bool, len(ap.OrderBySpec))
-		ctr.nullsLast = make([]bool, len(ap.OrderBySpec))
-		ctr.sortVectors = make([]*vector.Vector, len(ap.OrderBySpec))
-		for i, f := range ap.OrderBySpec {
+		ctr.desc = make([]bool, len(order.OrderBySpec))
+		ctr.nullsLast = make([]bool, len(order.OrderBySpec))
+		ctr.sortVectors = make([]*vector.Vector, len(order.OrderBySpec))
+		for i, f := range order.OrderBySpec {
 			ctr.desc[i] = f.Flag&pbplan.OrderBySpec_DESC != 0
 			if f.Flag&pbplan.OrderBySpec_NULLS_FIRST != 0 {
-				ap.ctr.nullsLast[i] = false
+				order.ctr.nullsLast[i] = false
 			} else if f.Flag&pbplan.OrderBySpec_NULLS_LAST != 0 {
-				ap.ctr.nullsLast[i] = true
+				order.ctr.nullsLast[i] = true
 			} else {
-				ap.ctr.nullsLast[i] = ap.ctr.desc[i]
+				order.ctr.nullsLast[i] = order.ctr.desc[i]
 			}
 		}
 	}
 
-	ctr.sortVectors = make([]*vector.Vector, len(ap.OrderBySpec))
-	ctr.sortExprExecutor = make([]colexec.ExpressionExecutor, len(ap.OrderBySpec))
+	ctr.sortVectors = make([]*vector.Vector, len(order.OrderBySpec))
+	ctr.sortExprExecutor = make([]colexec.ExpressionExecutor, len(order.OrderBySpec))
 	for i := range ctr.sortVectors {
-		ctr.sortExprExecutor[i], err = colexec.NewExpressionExecutor(proc, ap.OrderBySpec[i].Expr)
+		ctr.sortExprExecutor[i], err = colexec.NewExpressionExecutor(proc, order.OrderBySpec[i].Expr)
 		if err != nil {
 			return err
 		}
@@ -216,13 +207,13 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (order *Order) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	ctr := arg.ctr
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	ctr := order.ctr
+	anal := proc.GetAnalyze(order.GetIdx(), order.GetParallelIdx(), order.GetParallelMajor())
 	anal.Start()
 	defer func() {
 		anal.Stop()
@@ -230,7 +221,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	if ctr.state == vm.Build {
 		for {
-			result, err := vm.ChildrenCall(arg.GetChildren(0), proc, anal)
+			result, err := vm.ChildrenCall(order.GetChildren(0), proc, anal)
 
 			if err != nil {
 				result.Status = vm.ExecStop

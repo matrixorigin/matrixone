@@ -18,7 +18,6 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -41,25 +40,27 @@ type TaskScheduler interface {
 	Scheduler
 	ScheduleTxnTask(ctx *Context, taskType TaskType, factory TxnTaskFactory) (Task, error)
 	ScheduleMultiScopedTxnTask(ctx *Context, taskType TaskType, scopes []common.ID, factory TxnTaskFactory) (Task, error)
+	ScheduleMultiScopedTxnTaskWithObserver(ctx *Context, taskType TaskType, scopes []common.ID, factory TxnTaskFactory, observers ...iops.Observer) (Task, error)
 	ScheduleMultiScopedFn(ctx *Context, taskType TaskType, scopes []common.ID, fn FuncT) (Task, error)
 	ScheduleFn(ctx *Context, taskType TaskType, fn func() error) (Task, error)
 	ScheduleScopedFn(ctx *Context, taskType TaskType, scope *common.ID, fn func() error) (Task, error)
 
+	CheckAsyncScopes(scopes []common.ID) error
+
 	GetCheckpointedLSN() uint64
 	GetPenddingLSNCnt() uint64
-	GetCheckpointTS() types.TS
 }
 
 type BaseScheduler struct {
 	ops.OpWorker
-	idAlloc     *common.IdAlloctor
+	idAlloc     *common.IdAllocator
 	Dispatchers map[TaskType]Dispatcher
 }
 
 func NewBaseScheduler(ctx context.Context, name string) *BaseScheduler {
 	scheduler := &BaseScheduler{
 		OpWorker:    *ops.NewOpWorker(ctx, name),
-		idAlloc:     common.NewIdAlloctor(1),
+		idAlloc:     common.NewIdAllocator(1),
 		Dispatchers: make(map[TaskType]Dispatcher),
 	}
 	scheduler.ExecFunc = scheduler.doDispatch

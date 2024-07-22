@@ -40,12 +40,13 @@ type MOZapLog struct {
 	SpanContext *trace.SpanContext `json:"span"`
 	Timestamp   time.Time          `json:"timestamp"`
 	LoggerName  string
-	Caller      string   `json:"caller"` // like "util/trace/trace.go:666"
-	Message     string   `json:"message"`
-	Extra       string   `json:"extra"` // like json text
-	Stack       string   `json:"stack"`
-	SessionID   [16]byte `json:"session_id"`
-	StatementID [16]byte `json:"statement_id"`
+	Caller      string `json:"caller"` // like "util/trace/trace.go:666"
+	Message     string `json:"message"`
+	Extra       string `json:"extra"` // like json text
+	Stack       string `json:"stack"`
+
+	SessionID   string `json:"session_id"`
+	StatementID string `json:"statement_id"`
 }
 
 var logPool = sync.Pool{
@@ -71,9 +72,9 @@ func (m *MOZapLog) GetName() string {
 const (
 	deltaContentLength = int64(26 + 5 + 8 + 40 + 36 + 16)
 
-	session_id = "session_id"
+	sessionId = "session_id"
 
-	statement_id = "statement_id"
+	statementId = "statement_id"
 )
 
 // Size 计算近似值
@@ -88,6 +89,8 @@ func (m *MOZapLog) Free() {
 	m.Caller = ""
 	m.Message = ""
 	m.Extra = ""
+	m.SessionID = ""
+	m.StatementID = ""
 	logPool.Put(m)
 }
 
@@ -112,11 +115,11 @@ func (m *MOZapLog) FillRow(ctx context.Context, row *table.Row) {
 	row.SetColumnVal(messageCol, table.StringField(m.Message))
 	row.SetColumnVal(extraCol, table.StringField(m.Extra))
 	row.SetColumnVal(stackCol, table.StringField(m.Stack))
-	if m.SessionID != [16]byte{} {
-		row.SetColumnVal(sessionIDCol, table.UuidField(m.SessionID[:]))
+	if m.SessionID != "" {
+		row.SetColumnVal(sessionIDCol, table.StringField(m.SessionID))
 	}
-	if m.StatementID != [16]byte{} {
-		row.SetColumnVal(sessionIDCol, table.UuidField(m.SessionID[:]))
+	if m.StatementID != "" {
+		row.SetColumnVal(statementIDCol, table.StringField(m.StatementID))
 	}
 }
 
@@ -154,11 +157,19 @@ func ReportZap(jsonEncoder zapcore.Encoder, entry zapcore.Entry, fields []zapcor
 			continue
 		}
 
-		if v.Type == zapcore.ByteStringType {
-			if v.Key == session_id {
-				copy(log.SessionID[:], v.Interface.([]byte))
-			} else if v.Key == statement_id {
-				copy(log.StatementID[:], v.Interface.([]byte))
+		if v.Type == zapcore.StringType {
+			if v.Key == sessionId {
+				log.SessionID = v.String
+				if idx <= endIdx {
+					fields[idx], fields[endIdx] = fields[endIdx], fields[idx]
+					endIdx--
+				}
+			} else if v.Key == statementId {
+				log.StatementID = v.String
+				if idx <= endIdx {
+					fields[idx], fields[endIdx] = fields[endIdx], fields[idx]
+					endIdx--
+				}
 			}
 		}
 		if idx == endIdx {

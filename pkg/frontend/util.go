@@ -17,38 +17,39 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"math/rand"
 	"os"
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-
-	"github.com/matrixorigin/matrixone/pkg/defines"
 
 	"github.com/BurntSushi/toml"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	mo_config "github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"go.uber.org/zap"
 )
 
@@ -189,27 +190,6 @@ var PathExists = func(path string) (bool, bool, error) {
 	return false, false, err
 }
 
-/*
-MakeDebugInfo prints bytes in multi-lines.
-*/
-func MakeDebugInfo(data []byte, bytesCount int, bytesPerLine int) string {
-	if len(data) == 0 || bytesCount == 0 || bytesPerLine == 0 {
-		return ""
-	}
-	pl := Min(bytesCount, len(data))
-	ps := ""
-	for i := 0; i < pl; i++ {
-		if i > 0 && (i%bytesPerLine == 0) {
-			ps += "\n"
-		}
-		if i%bytesPerLine == 0 {
-			ps += fmt.Sprintf("%d", i/bytesPerLine) + " : "
-		}
-		ps += fmt.Sprintf("%02x ", data[i])
-	}
-	return ps
-}
-
 func getSystemVariables(configFile string) (*mo_config.FrontendParameters, error) {
 	sv := &mo_config.FrontendParameters{}
 	var err error
@@ -225,7 +205,7 @@ func getParameterUnit(configFile string, eng engine.Engine, txnClient TxnClient)
 	if err != nil {
 		return nil, err
 	}
-	logutil.Info("Using Dump Storage Engine and Cluster Nodes.")
+	sv.SetDefaultValues()
 	pu := mo_config.NewParameterUnit(sv, eng, txnClient, engine.Nodes{})
 
 	return pu, nil
@@ -278,7 +258,7 @@ func WildcardMatch(pattern, target string) bool {
 }
 
 // getExprValue executes the expression and returns the value.
-func getExprValue(e tree.Expr, mce *MysqlCmdExecutor, ses *Session) (interface{}, error) {
+func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx) (interface{}, error) {
 	/*
 		CORNER CASE:
 			SET character_set_results = utf8; // e = tree.UnresolvedName{'utf8'}.
@@ -288,7 +268,7 @@ func getExprValue(e tree.Expr, mce *MysqlCmdExecutor, ses *Session) (interface{}
 	switch v := e.(type) {
 	case *tree.UnresolvedName:
 		// set @a = on, type of a is bool.
-		return v.Parts[0], nil
+		return v.ColName(), nil
 	}
 
 	var err error
@@ -318,22 +298,26 @@ func getExprValue(e tree.Expr, mce *MysqlCmdExecutor, ses *Session) (interface{}
 	}
 
 	//2.run the select
-	ctx := ses.GetRequestContext()
 
 	//run the statement in the same session
 	ses.ClearResultBatches()
-	err = executeStmtInSameSession(ctx, mce, ses, compositedSelect)
+	//!!!different ExecCtx
+	tempExecCtx := ExecCtx{
+		reqCtx: execCtx.reqCtx,
+		ses:    ses,
+	}
+	err = executeStmtInSameSession(tempExecCtx.reqCtx, ses, &tempExecCtx, compositedSelect)
 	if err != nil {
 		return nil, err
 	}
 
 	batches := ses.GetResultBatches()
 	if len(batches) == 0 {
-		return nil, moerr.NewInternalError(ctx, "the expr %s does not generate a value", e.String())
+		return nil, moerr.NewInternalError(execCtx.reqCtx, "the expr %s does not generate a value", e.String())
 	}
 
 	if batches[0].VectorCount() > 1 {
-		return nil, moerr.NewInternalError(ctx, "the expr %s generates multi columns value", e.String())
+		return nil, moerr.NewInternalError(execCtx.reqCtx, "the expr %s generates multi columns value", e.String())
 	}
 
 	//evaluate the count of rows, the count of columns
@@ -345,7 +329,7 @@ func getExprValue(e tree.Expr, mce *MysqlCmdExecutor, ses *Session) (interface{}
 		}
 		count += b.RowCount()
 		if count > 1 {
-			return nil, moerr.NewInternalError(ctx, "the expr %s generates multi rows value", e.String())
+			return nil, moerr.NewInternalError(execCtx.reqCtx, "the expr %s generates multi rows value", e.String())
 		}
 		if resultVec == nil && b.GetVector(0).Length() != 0 {
 			resultVec = b.GetVector(0)
@@ -353,7 +337,7 @@ func getExprValue(e tree.Expr, mce *MysqlCmdExecutor, ses *Session) (interface{}
 	}
 
 	if resultVec == nil {
-		return nil, moerr.NewInternalError(ctx, "the expr %s does not generate a value", e.String())
+		return nil, moerr.NewInternalError(execCtx.reqCtx, "the expr %s does not generate a value", e.String())
 	}
 
 	// for the decimal type, we need the type of expr
@@ -361,7 +345,7 @@ func getExprValue(e tree.Expr, mce *MysqlCmdExecutor, ses *Session) (interface{}
 	var planExpr *plan.Expr
 	oid := resultVec.GetType().Oid
 	if oid == types.T_decimal64 || oid == types.T_decimal128 {
-		builder := plan2.NewQueryBuilder(plan.Query_SELECT, ses.GetTxnCompileCtx(), false)
+		builder := plan2.NewQueryBuilder(plan.Query_SELECT, ses.GetTxnCompileCtx(), false, false)
 		bindContext := plan2.NewBindContext(builder, nil)
 		binder := plan2.NewSetVarBinder(builder, bindContext)
 		planExpr, err = binder.BindExpr(e, 0, false)
@@ -370,17 +354,17 @@ func getExprValue(e tree.Expr, mce *MysqlCmdExecutor, ses *Session) (interface{}
 		}
 	}
 
-	return getValueFromVector(resultVec, ses, planExpr)
+	return getValueFromVector(execCtx.reqCtx, resultVec, ses, planExpr)
 }
 
 // only support single value and unary minus
-func GetSimpleExprValue(e tree.Expr, ses *Session) (interface{}, error) {
+func GetSimpleExprValue(ctx context.Context, e tree.Expr, ses *Session) (interface{}, error) {
 	switch v := e.(type) {
 	case *tree.UnresolvedName:
 		// set @a = on, type of a is bool.
-		return v.Parts[0], nil
+		return v.ColName(), nil
 	default:
-		builder := plan2.NewQueryBuilder(plan.Query_SELECT, ses.GetTxnCompileCtx(), false)
+		builder := plan2.NewQueryBuilder(plan.Query_SELECT, ses.GetTxnCompileCtx(), false, false)
 		bindContext := plan2.NewBindContext(builder, nil)
 		binder := plan2.NewSetVarBinder(builder, bindContext)
 		planExpr, err := binder.BindExpr(e, 0, false)
@@ -389,20 +373,22 @@ func GetSimpleExprValue(e tree.Expr, ses *Session) (interface{}, error) {
 		}
 		// set @a = 'on', type of a is bool. And mo cast rule does not fit set variable rule so delay to convert type.
 		// Here the evalExpr may execute some function that needs engine.Engine.
-		ses.txnCompileCtx.GetProcess().Ctx = context.WithValue(ses.txnCompileCtx.GetProcess().Ctx, defines.EngineKey{}, ses.storage)
+		ses.txnCompileCtx.GetProcess().Ctx = attachValue(ses.txnCompileCtx.GetProcess().Ctx,
+			defines.EngineKey{},
+			ses.GetTxnHandler().GetStorage())
 
 		vec, err := colexec.EvalExpressionOnce(ses.txnCompileCtx.GetProcess(), planExpr, []*batch.Batch{batch.EmptyForConstFoldBatch})
 		if err != nil {
 			return nil, err
 		}
 
-		value, err := getValueFromVector(vec, ses, planExpr)
+		value, err := getValueFromVector(ctx, vec, ses, planExpr)
 		vec.Free(ses.txnCompileCtx.GetProcess().Mp())
 		return value, err
 	}
 }
 
-func getValueFromVector(vec *vector.Vector, ses *Session, expr *plan2.Expr) (interface{}, error) {
+func getValueFromVector(ctx context.Context, vec *vector.Vector, ses *Session, expr *plan2.Expr) (interface{}, error) {
 	if vec.IsConstNull() || vec.GetNulls().Contains(0) {
 		return nil, nil
 	}
@@ -465,7 +451,7 @@ func getValueFromVector(vec *vector.Vector, ses *Session, expr *plan2.Expr) (int
 	case types.T_enum:
 		return vector.MustFixedCol[types.Enum](vec)[0], nil
 	default:
-		return nil, moerr.NewInvalidArg(ses.GetRequestContext(), "variable type", vec.GetType().Oid.String())
+		return nil, moerr.NewInvalidArg(ctx, "variable type", vec.GetType().Oid.String())
 	}
 }
 
@@ -474,10 +460,6 @@ type statementStatus int
 const (
 	success statementStatus = iota
 	fail
-	sessionId = "session_id"
-
-	txnId       = "txn_id"
-	statementId = "statement_id"
 )
 
 func (s statementStatus) String() string {
@@ -491,9 +473,9 @@ func (s statementStatus) String() string {
 }
 
 // logStatementStatus prints the status of the statement into the log.
-func logStatementStatus(ctx context.Context, ses *Session, stmt tree.Statement, status statementStatus, err error) {
+func logStatementStatus(ctx context.Context, ses FeSession, stmt tree.Statement, status statementStatus, err error) {
 	var stmtStr string
-	stm := motrace.StatementFromContext(ctx)
+	stm := ses.GetStmtInfo()
 	if stm == nil {
 		fmtCtx := tree.NewFmtCtx(dialect.MYSQL)
 		stmt.Format(fmtCtx)
@@ -504,93 +486,62 @@ func logStatementStatus(ctx context.Context, ses *Session, stmt tree.Statement, 
 	logStatementStringStatus(ctx, ses, stmtStr, status, err)
 }
 
-func logStatementStringStatus(ctx context.Context, ses *Session, stmtStr string, status statementStatus, err error) {
-	str := SubStringFromBegin(stmtStr, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
-	outBytes, outPacket := ses.GetMysqlProtocol().CalculateOutTrafficBytes(true)
+func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string, status statementStatus, err error) {
+	str := SubStringFromBegin(stmtStr, int(getGlobalPu().SV.LengthOfQueryPrinted))
+	var outBytes, outPacket int64
+	switch resper := ses.GetResponser().(type) {
+	case *MysqlResp:
+		outBytes, outPacket = resper.mysqlRrWr.CalculateOutTrafficBytes(true)
+		if outBytes == 0 && outPacket == 0 {
+			ses.Warnf(ctx, "unexpected protocol closed")
+		}
+	default:
+
+	}
+
 	if status == success {
-		logDebug(ses, ses.GetDebugString(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), trace.ContextField(ctx))
+		ses.Debug(ctx, "query trace status", logutil.StatementField(str), logutil.StatusField(status.String()))
 		err = nil // make sure: it is nil for EndStatement
 	} else {
-		logError(ses, ses.GetDebugString(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err), trace.ContextField(ctx))
+		ses.Error(
+			ctx,
+			"query trace status",
+			logutil.StatementField(str),
+			logutil.StatusField(status.String()),
+			logutil.ErrorField(err),
+			logutil.TxnInfoField(ses.GetStaticTxnInfo()),
+		)
 	}
+
 	// pls make sure: NO ONE use the ses.tStmt after EndStatement
-	motrace.EndStatement(ctx, err, ses.sentRows.Load(), outBytes, outPacket)
+	if !ses.IsBackgroundSession() {
+		stmt := ses.GetStmtInfo()
+		stmt.EndStatement(ctx, err, ses.SendRows(), outBytes, outPacket)
+	}
 	// need just below EndStatement
 	ses.SetTStmt(nil)
 }
 
-var logger *log.MOLogger
-var loggerOnce sync.Once
-
-func getLogger() *log.MOLogger {
-	loggerOnce.Do(initLogger)
-	return logger
+func getLogger(sid string) *log.MOLogger {
+	return moruntime.GetLogger(sid)
 }
 
-func initLogger() {
-	rt := moruntime.ProcessLevelRuntime()
-	if rt == nil {
-		rt = moruntime.DefaultRuntime()
-	}
-	logger = rt.Logger().Named("frontend")
-}
-
-func appendSessionField(fields []zap.Field, ses *Session) []zap.Field {
+// appendSessionField append session id, transaction id and statement id to the fields
+// history:
+// #15877, discard ses.GetTxnInfo(), it need ses.Lock(). may cause deadlock: locked by itself.
+// #16028, depend on ses.GetStmtProfile() itself do the log. get rid of StatementInfo.
+func appendSessionField(fields []zap.Field, ses FeSession) []zap.Field {
 	if ses != nil {
-		if ses.tStmt != nil {
-			fields = append(fields, zap.String(sessionId, uuid.UUID(ses.tStmt.SessionID).String()))
-			fields = append(fields, zap.String(statementId, uuid.UUID(ses.tStmt.StatementID).String()))
-			txnInfo := ses.GetTxnInfo()
-			if txnInfo != "" {
-				fields = append(fields, zap.String(txnId, txnInfo))
-			}
-		} else {
-			fields = append(fields, zap.String(sessionId, uuid.UUID(ses.GetUUID()).String()))
+		fields = append(fields, logutil.SessionIdField(uuid.UUID(ses.GetUUID()).String()))
+		p := ses.GetStmtProfile()
+		if p.GetStmtId() != dumpUUID {
+			fields = append(fields, logutil.StatementIdField(uuid.UUID(p.GetStmtId()).String()))
+		}
+		if txnId := p.GetTxnId(); txnId != dumpUUID {
+			fields = append(fields, logutil.TxnIdField(hex.EncodeToString(txnId[:])))
 		}
 	}
 	return fields
-}
-
-func logInfo(ses *Session, info string, msg string, fields ...zap.Field) {
-	if ses != nil && ses.tenant != nil && ses.tenant.User == db_holder.MOLoggerUser {
-		return
-	}
-	fields = append(fields, zap.String("session_info", info))
-	fields = appendSessionField(fields, ses)
-	getLogger().Log(msg, log.DefaultLogOptions().WithLevel(zap.InfoLevel).AddCallerSkip(1), fields...)
-}
-
-func logInfof(info string, msg string, fields ...zap.Field) {
-	if logutil.GetSkip1Logger().Core().Enabled(zap.InfoLevel) {
-		fields = append(fields, zap.String("session_info", info))
-		getLogger().Log(msg, log.DefaultLogOptions().WithLevel(zap.InfoLevel).AddCallerSkip(1), fields...)
-	}
-}
-
-func logDebug(ses *Session, info string, msg string, fields ...zap.Field) {
-	if ses != nil && ses.tenant != nil && ses.tenant.User == db_holder.MOLoggerUser {
-		return
-	}
-	fields = append(fields, zap.String("session_info", info))
-	fields = appendSessionField(fields, ses)
-	getLogger().Log(msg, log.DefaultLogOptions().WithLevel(zap.DebugLevel).AddCallerSkip(1), fields...)
-}
-
-func logError(ses *Session, info string, msg string, fields ...zap.Field) {
-	if ses != nil && ses.tenant != nil && ses.tenant.User == db_holder.MOLoggerUser {
-		return
-	}
-	fields = append(fields, zap.String("session_info", info))
-	fields = appendSessionField(fields, ses)
-	getLogger().Log(msg, log.DefaultLogOptions().WithLevel(zap.ErrorLevel).AddCallerSkip(1), fields...)
-}
-
-// todo: remove this function after all the logDebugf are replaced by logDebug
-func logDebugf(info string, msg string, fields ...interface{}) {
-	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
-		fields = append(fields, info)
-		logutil.Debugf(msg+" %s", fields...)
-	}
 }
 
 // isCmdFieldListSql checks the sql is the cmdFieldListSql or not.
@@ -737,7 +688,7 @@ func needConvertedToAccessDeniedError(errMsg string) bool {
 }
 
 const (
-	quitStr = "!!!COM_QUIT!!!"
+	quitStr = "MysqlClientQuit"
 )
 
 // makeExecuteSql appends the PREPARE sql and its values of parameters for the EXECUTE statement.
@@ -745,7 +696,7 @@ const (
 // execute.... // prepare stmt1 from .... ; set var1 = val1 ; set var2 = val2 ;
 // Format 2: COM_STMT_EXECUTE
 // execute.... // prepare stmt1 from .... ; param0 ; param1 ...
-func makeExecuteSql(ses *Session, stmt tree.Statement) string {
+func makeExecuteSql(ctx context.Context, ses *Session, stmt tree.Statement) string {
 	if ses == nil || stmt == nil {
 		return ""
 	}
@@ -755,7 +706,7 @@ func makeExecuteSql(ses *Session, stmt tree.Statement) string {
 	switch t := stmt.(type) {
 	case *tree.Execute:
 		name := string(t.Name)
-		prepareStmt, err := ses.GetPrepareStmt(name)
+		prepareStmt, err := ses.GetPrepareStmt(ctx, name)
 		if err != nil || prepareStmt == nil {
 			break
 		}
@@ -767,7 +718,7 @@ func makeExecuteSql(ses *Session, stmt tree.Statement) string {
 			//get SET VAR sql
 			setVarSqls := make([]string, len(t.Variables))
 			for i, v := range t.Variables {
-				_, userVal, err := ses.GetUserDefinedVar(v.Name)
+				userVal, err := ses.GetUserDefinedVar(v.Name)
 				if err == nil && userVal != nil && len(userVal.Sql) != 0 {
 					setVarSqls[i] = userVal.Sql
 				}
@@ -784,7 +735,7 @@ func makeExecuteSql(ses *Session, stmt tree.Statement) string {
 				if isNull {
 					paramValues[i] = "NULL"
 				} else {
-					paramValues[i] = vs[i].GetString(prepareStmt.params.GetArea())
+					paramValues[i] = vs[i].UnsafeGetString(prepareStmt.params.GetArea())
 				}
 			}
 			bb.WriteString(strings.Join(paramValues, " ; "))
@@ -795,60 +746,269 @@ func makeExecuteSql(ses *Session, stmt tree.Statement) string {
 	return bb.String()
 }
 
-func mysqlColDef2PlanResultColDef(mr *MysqlResultSet) *plan.ResultColDef {
-	if mr == nil {
-		return nil
+func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batch.Batch, *plan.ResultColDef, error) {
+	planColDefs, colTyps, colNames, err := mysqlColDef2PlanResultColDef(cols)
+	if err != nil {
+		return nil, nil, err
+	}
+	//1. make vector type
+	bat := batch.New(true, colNames)
+	//2. make batch
+	cnt := len(rows)
+	bat.SetRowCount(cnt)
+	for colIdx, typ := range colTyps {
+		bat.Vecs[colIdx] = vector.NewVec(typ)
+		nsp := nulls.NewWithSize(cnt)
+
+		switch typ.Oid {
+		case types.T_varchar:
+			vData := make([]string, cnt)
+			for rowIdx, row := range rows {
+				if row[colIdx] == nil {
+					nsp.Add(uint64(rowIdx))
+					continue
+				}
+				if val, ok := row[colIdx].(string); ok {
+					vData[rowIdx] = val
+				} else {
+					vData[rowIdx] = fmt.Sprintf("%v", row[colIdx])
+				}
+			}
+			err := vector.AppendStringList(bat.Vecs[colIdx], vData, nil, pool)
+			if err != nil {
+				return nil, nil, err
+			}
+		case types.T_int16:
+			vData := make([]int16, cnt)
+			for rowIdx, row := range rows {
+				if row[colIdx] == nil {
+					nsp.Add(uint64(rowIdx))
+					continue
+				}
+				vData[rowIdx] = row[colIdx].(int16)
+			}
+			err := vector.AppendFixedList[int16](bat.Vecs[colIdx], vData, nil, pool)
+			if err != nil {
+				return nil, nil, err
+			}
+		case types.T_int32:
+			vData := make([]int32, cnt)
+			for rowIdx, row := range rows {
+				if row[colIdx] == nil {
+					nsp.Add(uint64(rowIdx))
+					continue
+				}
+				vData[rowIdx] = row[colIdx].(int32)
+			}
+			err := vector.AppendFixedList[int32](bat.Vecs[colIdx], vData, nil, pool)
+			if err != nil {
+				return nil, nil, err
+			}
+		case types.T_int64:
+			vData := make([]int64, cnt)
+			for rowIdx, row := range rows {
+				if row[colIdx] == nil {
+					nsp.Add(uint64(rowIdx))
+					continue
+				}
+				vData[rowIdx] = row[colIdx].(int64)
+			}
+			err := vector.AppendFixedList[int64](bat.Vecs[colIdx], vData, nil, pool)
+			if err != nil {
+				return nil, nil, err
+			}
+		case types.T_float64:
+			vData := make([]float64, cnt)
+			for rowIdx, row := range rows {
+				if row[colIdx] == nil {
+					nsp.Add(uint64(rowIdx))
+					continue
+				}
+				vData[rowIdx] = row[colIdx].(float64)
+			}
+			err := vector.AppendFixedList[float64](bat.Vecs[colIdx], vData, nil, pool)
+			if err != nil {
+				return nil, nil, err
+			}
+		case types.T_float32:
+			vData := make([]float32, cnt)
+			for rowIdx, row := range rows {
+				if row[colIdx] == nil {
+					nsp.Add(uint64(rowIdx))
+					continue
+				}
+				vData[rowIdx] = row[colIdx].(float32)
+			}
+			err := vector.AppendFixedList[float32](bat.Vecs[colIdx], vData, nil, pool)
+			if err != nil {
+				return nil, nil, err
+			}
+		case types.T_date:
+			vData := make([]types.Date, cnt)
+			for rowIdx, row := range rows {
+				if row[colIdx] == nil {
+					nsp.Add(uint64(rowIdx))
+					continue
+				}
+				vData[rowIdx] = row[colIdx].(types.Date)
+			}
+			err := vector.AppendFixedList[types.Date](bat.Vecs[colIdx], vData, nil, pool)
+			if err != nil {
+				return nil, nil, err
+			}
+		case types.T_time:
+			vData := make([]types.Time, cnt)
+			for rowIdx, row := range rows {
+				if row[colIdx] == nil {
+					nsp.Add(uint64(rowIdx))
+					continue
+				}
+				vData[rowIdx] = row[colIdx].(types.Time)
+			}
+			err := vector.AppendFixedList[types.Time](bat.Vecs[colIdx], vData, nil, pool)
+			if err != nil {
+				return nil, nil, err
+			}
+		case types.T_datetime:
+			vData := make([]types.Datetime, cnt)
+			for rowIdx, row := range rows {
+				if row[colIdx] == nil {
+					nsp.Add(uint64(rowIdx))
+					continue
+				}
+				vData[rowIdx] = row[colIdx].(types.Datetime)
+			}
+			err := vector.AppendFixedList[types.Datetime](bat.Vecs[colIdx], vData, nil, pool)
+			if err != nil {
+				return nil, nil, err
+			}
+		case types.T_timestamp:
+			vData := make([]types.Timestamp, cnt)
+			for rowIdx, row := range rows {
+				if row[colIdx] == nil {
+					nsp.Add(uint64(rowIdx))
+					continue
+				}
+				switch val := row[colIdx].(type) {
+				case types.Timestamp:
+					vData[rowIdx] = val
+				case string:
+					if vData[rowIdx], err = types.ParseTimestamp(time.Local, val, typ.Scale); err != nil {
+						return nil, nil, err
+					}
+				default:
+					return nil, nil, moerr.NewInternalErrorNoCtx("%v can't convert to timestamp type", val)
+				}
+			}
+			err := vector.AppendFixedList[types.Timestamp](bat.Vecs[colIdx], vData, nil, pool)
+			if err != nil {
+				return nil, nil, err
+			}
+		case types.T_enum:
+			vData := make([]types.Enum, cnt)
+			for rowIdx, row := range rows {
+				if row[colIdx] == nil {
+					nsp.Add(uint64(rowIdx))
+					continue
+				}
+				vData[rowIdx] = row[colIdx].(types.Enum)
+			}
+			err := vector.AppendFixedList[types.Enum](bat.Vecs[colIdx], vData, nil, pool)
+			if err != nil {
+				return nil, nil, err
+			}
+		default:
+			return nil, nil, moerr.NewInternalErrorNoCtx("unsupported type %d", typ.Oid)
+		}
+
+		bat.Vecs[colIdx].SetNulls(nsp)
+	}
+	return bat, planColDefs, nil
+}
+
+func cleanBatch(pool *mpool.MPool, data ...*batch.Batch) {
+	for _, item := range data {
+		if item != nil {
+			item.Clean(pool)
+		}
+	}
+}
+
+func mysqlColDef2PlanResultColDef(cols []Column) (*plan.ResultColDef, []types.Type, []string, error) {
+	if len(cols) == 0 {
+		return nil, nil, nil, nil
 	}
 
-	resultCols := make([]*plan.ColDef, len(mr.Columns))
-	for i, col := range mr.Columns {
+	resultCols := make([]*plan.ColDef, len(cols))
+	resultColTypes := make([]types.Type, len(cols))
+	resultColNames := make([]string, len(cols))
+	for i, col := range cols {
+		resultColNames[i] = col.Name()
 		resultCols[i] = &plan.ColDef{
 			Name: col.Name(),
 		}
+		var pType plan.Type
+		var tType types.Type
 		switch col.ColumnType() {
-		case defines.MYSQL_TYPE_VAR_STRING:
-			resultCols[i].Typ = &plan.Type{
+		case defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_VARCHAR:
+			pType = plan.Type{
 				Id: int32(types.T_varchar),
 			}
+			tType = types.New(types.T_varchar, types.MaxVarcharLen, 0)
+		case defines.MYSQL_TYPE_SHORT:
+			pType = plan.Type{
+				Id: int32(types.T_int16),
+			}
+			tType = types.New(types.T_int16, 0, 0)
 		case defines.MYSQL_TYPE_LONG:
-			resultCols[i].Typ = &plan.Type{
+			pType = plan.Type{
 				Id: int32(types.T_int32),
 			}
+			tType = types.New(types.T_int32, 0, 0)
 		case defines.MYSQL_TYPE_LONGLONG:
-			resultCols[i].Typ = &plan.Type{
+			pType = plan.Type{
 				Id: int32(types.T_int64),
 			}
+			tType = types.New(types.T_int64, 0, 0)
 		case defines.MYSQL_TYPE_DOUBLE:
-			resultCols[i].Typ = &plan.Type{
+			pType = plan.Type{
 				Id: int32(types.T_float64),
 			}
+			tType = types.New(types.T_float64, 0, 0)
 		case defines.MYSQL_TYPE_FLOAT:
-			resultCols[i].Typ = &plan.Type{
+			pType = plan.Type{
 				Id: int32(types.T_float32),
 			}
+			tType = types.New(types.T_float32, 0, 0)
 		case defines.MYSQL_TYPE_DATE:
-			resultCols[i].Typ = &plan.Type{
+			pType = plan.Type{
 				Id: int32(types.T_date),
 			}
+			tType = types.New(types.T_date, 0, 0)
 		case defines.MYSQL_TYPE_TIME:
-			resultCols[i].Typ = &plan.Type{
+			pType = plan.Type{
 				Id: int32(types.T_time),
 			}
+			tType = types.New(types.T_time, 0, 0)
 		case defines.MYSQL_TYPE_DATETIME:
-			resultCols[i].Typ = &plan.Type{
+			pType = plan.Type{
 				Id: int32(types.T_datetime),
 			}
+			tType = types.New(types.T_datetime, 0, 0)
 		case defines.MYSQL_TYPE_TIMESTAMP:
-			resultCols[i].Typ = &plan.Type{
+			pType = plan.Type{
 				Id: int32(types.T_timestamp),
 			}
+			tType = types.New(types.T_timestamp, 0, 0)
 		default:
-			panic(fmt.Sprintf("unsupported mysql type %d", col.ColumnType()))
+			return nil, nil, nil, moerr.NewInternalErrorNoCtx("unsupported mysql type %d", col.ColumnType())
 		}
+		resultCols[i].Typ = pType
+		resultColTypes[i] = tType
 	}
 	return &plan.ResultColDef{
 		ResultCols: resultCols,
-	}
+	}, resultColTypes, resultColNames, nil
 }
 
 // errCodeRollbackWholeTxn denotes that the error code
@@ -897,4 +1057,365 @@ func getRandomErrorRollbackWholeTxn() error {
 	default:
 		panic(fmt.Sprintf("usp error code %d", arr[x]))
 	}
+}
+
+func skipClientQuit(info string) bool {
+	return strings.Contains(info, quitStr)
+}
+
+// UserInput
+// normally, just use the sql.
+// for some special statement, like 'set_var', we need to use the stmt.
+// if the stmt is not nil, we neglect the sql.
+type UserInput struct {
+	sql           string
+	hashedSql     string
+	stmt          tree.Statement
+	sqlSourceType []string
+	isRestore     bool
+	// operator account, the account executes restoration
+	// e.g. sys takes a snapshot sn1 for acc1, then restores acc1 from snapshot sn1. In this scenario, sys is the operator account
+	opAccount uint32
+	toAccount uint32
+}
+
+func (ui *UserInput) getSql() string {
+	return ui.sql
+}
+
+func (ui *UserInput) genHash() {
+	ui.hashedSql = hashString(ui.sql)
+}
+
+func (ui *UserInput) getHash() string {
+	return ui.hashedSql
+}
+
+// getStmt if the stmt is not nil, we neglect the sql.
+func (ui *UserInput) getStmt() tree.Statement {
+	return ui.stmt
+}
+
+func (ui *UserInput) getSqlSourceTypes() []string {
+	return ui.sqlSourceType
+}
+
+// isInternal return true if the stmt is not nil.
+// it means the statement is not from any client.
+// currently, we use it to handle the 'set_var' statement.
+func (ui *UserInput) isInternal() bool {
+	return ui.getStmt() != nil
+}
+
+func (ui *UserInput) genSqlSourceType(ses FeSession) {
+	sql := ui.getSql()
+	ui.sqlSourceType = nil
+	if ui.getStmt() != nil {
+		ui.sqlSourceType = append(ui.sqlSourceType, constant.InternalSql)
+		return
+	}
+	tenant := ses.GetTenantInfo()
+	if tenant == nil || strings.HasPrefix(sql, cmdFieldListSql) {
+		ui.sqlSourceType = append(ui.sqlSourceType, constant.InternalSql)
+		return
+	}
+	flag, _, _ := isSpecialUser(tenant.GetUser())
+	if flag {
+		ui.sqlSourceType = append(ui.sqlSourceType, constant.InternalSql)
+		return
+	}
+	if tenant.GetTenant() == sysAccountName && tenant.GetUser() == "internal" {
+		ui.sqlSourceType = append(ui.sqlSourceType, constant.InternalSql)
+		return
+	}
+	for len(sql) > 0 {
+		p1 := strings.Index(sql, "/*")
+		p2 := strings.Index(sql, "*/")
+		if p1 < 0 || p2 < 0 || p2 <= p1+1 {
+			ui.sqlSourceType = append(ui.sqlSourceType, constant.ExternSql)
+			return
+		}
+		source := strings.TrimSpace(sql[p1+2 : p2])
+		if source == cloudUserTag {
+			ui.sqlSourceType = append(ui.sqlSourceType, constant.CloudUserSql)
+		} else if source == cloudNoUserTag {
+			ui.sqlSourceType = append(ui.sqlSourceType, constant.CloudNoUserSql)
+		} else if source == saveResultTag {
+			ui.sqlSourceType = append(ui.sqlSourceType, constant.CloudUserSql)
+		} else {
+			ui.sqlSourceType = append(ui.sqlSourceType, constant.ExternSql)
+		}
+		sql = sql[p2+2:]
+	}
+}
+
+func (ui *UserInput) getSqlSourceType(i int) string {
+	sqlType := constant.ExternSql
+	if i < len(ui.sqlSourceType) {
+		sqlType = ui.sqlSourceType[i]
+	}
+	return sqlType
+}
+
+const (
+	issue3482SqlPrefix    = "load data local infile '/data/customer/sutpc_001/data_csv"
+	issue3482SqlPrefixLen = len(issue3482SqlPrefix)
+)
+
+// !!!NOTE!!! For debug
+// https://github.com/matrixorigin/MO-Cloud/issues/3482
+// TODO: remove it in the future
+func (ui *UserInput) isIssue3482Sql() bool {
+	if ui == nil {
+		return false
+	}
+	sql := ui.getSql()
+	sqlLen := len(sql)
+	if sqlLen <= issue3482SqlPrefixLen {
+		return false
+	}
+	return strings.HasPrefix(sql, issue3482SqlPrefix)
+}
+
+func unboxExprStr(ctx context.Context, expr tree.Expr) (string, error) {
+	if e, ok := expr.(*tree.NumVal); ok && e.ValType == tree.P_char {
+		return e.OrigString(), nil
+	}
+	return "", moerr.NewInternalError(ctx, "invalid expr type")
+}
+
+type strParamBinder struct {
+	ctx    context.Context
+	params *vector.Vector
+	err    error
+}
+
+func (b *strParamBinder) bind(e tree.Expr) string {
+	if b.err != nil {
+		return ""
+	}
+
+	switch val := e.(type) {
+	case *tree.NumVal:
+		return val.OrigString()
+	case *tree.ParamExpr:
+		return b.params.GetStringAt(val.Offset - 1)
+	default:
+		b.err = moerr.NewInternalError(b.ctx, "invalid params type %T", e)
+		return ""
+	}
+}
+
+func (b *strParamBinder) bindIdentStr(ident *tree.AccountIdentified) string {
+	if b.err != nil {
+		return ""
+	}
+
+	switch ident.Typ {
+	case tree.AccountIdentifiedByPassword,
+		tree.AccountIdentifiedWithSSL:
+		return b.bind(ident.Str)
+	default:
+		return ""
+	}
+}
+
+func resetBits(t *uint32, val uint32) {
+	if t == nil {
+		return
+	}
+	*t = val
+}
+
+func setBits(t *uint32, bit uint32) {
+	if t == nil {
+		return
+	}
+	*t |= bit
+}
+
+func clearBits(t *uint32, bit uint32) {
+	if t == nil {
+		return
+	}
+	*t &= ^bit
+}
+
+func bitsIsSet(t uint32, bit uint32) bool {
+	return t&bit != 0
+}
+
+func attachValue(ctx context.Context, key, val any) context.Context {
+	if ctx == nil {
+		panic("context is nil")
+	}
+
+	return context.WithValue(ctx, key, val)
+}
+
+func updateTempEngine(storage engine.Engine, te *memoryengine.Engine) {
+	if ee, ok := storage.(*engine.EntireEngine); ok && ee != nil {
+		ee.TempEngine = te
+	}
+}
+
+const KeySep = "#"
+
+func genKey(dbName, tblName string) string {
+	return fmt.Sprintf("%s%s%s", dbName, KeySep, tblName)
+}
+
+func splitKey(key string) (string, string) {
+	parts := strings.Split(key, KeySep)
+	if len(parts) >= 2 {
+		return parts[0], parts[1]
+	}
+	return parts[0], ""
+}
+
+type topsort struct {
+	next map[string][]string
+}
+
+func (g *topsort) addVertex(v string) {
+	if _, ok := g.next[v]; ok {
+		return
+	}
+	g.next[v] = make([]string, 0)
+}
+
+func (g *topsort) addEdge(from, to string) {
+	if _, ok := g.next[from]; !ok {
+		g.next[from] = make([]string, 0)
+	}
+	g.next[from] = append(g.next[from], to)
+}
+
+func (g *topsort) sort() (ans []string, err error) {
+	inDegree := make(map[string]uint)
+	for u := range g.next {
+		inDegree[u] = 0
+	}
+	for _, nextVertices := range g.next {
+		for _, v := range nextVertices {
+			inDegree[v] += 1
+		}
+	}
+
+	var noPreVertices []string
+	for v, deg := range inDegree {
+		if deg == 0 {
+			noPreVertices = append(noPreVertices, v)
+		}
+	}
+
+	for len(noPreVertices) > 0 {
+		// find vertex whose inDegree = 0
+		v := noPreVertices[0]
+		noPreVertices = noPreVertices[1:]
+		ans = append(ans, v)
+
+		// update the next vertices from v
+		for _, to := range g.next[v] {
+			inDegree[to] -= 1
+			if inDegree[to] == 0 {
+				noPreVertices = append(noPreVertices, to)
+			}
+		}
+	}
+
+	if len(ans) != len(inDegree) {
+		err = moerr.NewInternalErrorNoCtx("There is a cycle in dependency graph")
+	}
+	return
+}
+
+func setFPrints(txnOp TxnOperator, fprints footPrints) {
+	if txnOp != nil {
+		txnOp.SetFootPrints(fprints.prints[:])
+	}
+}
+
+type footPrints struct {
+	prints [256][2]uint32
+}
+
+func (fprints *footPrints) reset() {
+	for i := 0; i < len(fprints.prints); i++ {
+		fprints.prints[i][0] = 0
+		fprints.prints[i][1] = 0
+	}
+}
+
+func (fprints *footPrints) String() string {
+	strBuf := strings.Builder{}
+	for i := 0; i < len(fprints.prints); i++ {
+		if fprints.prints[i][0] == 0 && fprints.prints[i][1] == 0 {
+			continue
+		}
+		strBuf.WriteString("[")
+		strBuf.WriteString(fmt.Sprintf("%d", i))
+		strBuf.WriteString(": ")
+		strBuf.WriteString(fmt.Sprintf("enter:%d exit:%d", fprints.prints[i][0], fprints.prints[i][1]))
+		strBuf.WriteString("] ")
+	}
+	return strBuf.String()
+}
+
+func (fprints *footPrints) addEnter(idx int) {
+	if idx >= 0 && idx < len(fprints.prints) {
+		fprints.prints[idx][0]++
+	}
+}
+
+func (fprints *footPrints) addExit(idx int) {
+	if idx >= 0 && idx < len(fprints.prints) {
+		fprints.prints[idx][1]++
+	}
+}
+
+func ToRequest(payload []byte) *Request {
+	req := &Request{
+		cmd:  CommandType(payload[0]),
+		data: payload[1:],
+	}
+
+	return req
+}
+
+// CancelCheck checks if the given context has been canceled.
+// If the context is canceled, it returns the context's error.
+func CancelCheck(Ctx context.Context) error {
+	select {
+	case <-Ctx.Done():
+		return Ctx.Err()
+	default:
+		return nil
+	}
+}
+
+func checkMoreResultSet(status uint16, isLastStmt bool) uint16 {
+	if !isLastStmt {
+		status |= SERVER_MORE_RESULTS_EXISTS
+	}
+	return status
+}
+
+func Copy[T any](src []T) []T {
+	if src == nil {
+		return nil
+	}
+	if len(src) == 0 {
+		return []T{}
+	}
+	dst := make([]T, len(src))
+	copy(dst, src)
+	return dst
+}
+
+func hashString(s string) string {
+	hash := sha256.New()
+	hash.Write(util.UnsafeStringToBytes(s))
+	hashBytes := hash.Sum(nil)
+	return hex.EncodeToString(hashBytes)
 }

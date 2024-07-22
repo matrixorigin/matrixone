@@ -20,6 +20,8 @@ import (
 	"io"
 	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
 )
 
 // FileService is a write-once file system
@@ -58,6 +60,11 @@ type FileService interface {
 
 	// PrefetchFile prefetches a file
 	PrefetchFile(ctx context.Context, filePath string) error
+
+	// Cost returns the cost attr of the file service
+	Cost() *CostAttr
+
+	Close()
 }
 
 type IOVector struct {
@@ -101,7 +108,8 @@ type IOEntry struct {
 
 	// raw content
 	// when reading, if len(Data) < Size, a new Size-lengthed byte slice will be allocated
-	Data []byte
+	Data        []byte
+	releaseData func()
 
 	// when reading, if Writer is not nil, write data to it instead of setting Data field
 	WriterForRead io.Writer
@@ -117,14 +125,14 @@ type IOEntry struct {
 	// When reading, if the ToCacheData field is not nil, the returning object's byte slice will be set to this field
 	// Data, WriterForRead, ReadCloserForRead may be empty if CachedData is not null
 	// if ToCacheData is provided, caller should always read CachedData instead of Data, WriterForRead or ReadCloserForRead
-	CachedData CacheData
+	CachedData memorycache.CacheData
 
 	// ToCacheData constructs an object byte slice from entry contents
 	// reader or data must not be retained after returns
 	// reader always contains entry contents
 	// data may contains entry contents if available
 	// if data is empty, the io.Reader must be fully read before returning nil error
-	ToCacheData func(reader io.Reader, data []byte, allocator CacheDataAllocator) (cacheData CacheData, err error)
+	ToCacheData func(reader io.Reader, data []byte, allocator CacheDataAllocator) (cacheData memorycache.CacheData, err error)
 
 	// done indicates whether the entry is filled with data
 	// for implementing cascade cache
@@ -132,6 +140,8 @@ type IOEntry struct {
 
 	// fromCache indicates which cache filled the entry
 	fromCache IOVectorCache
+
+	allocator CacheDataAllocator
 }
 
 func (i IOEntry) String() string {
@@ -143,14 +153,8 @@ func (i IOEntry) String() string {
 	return buf.String()
 }
 
-type CacheData interface {
-	Bytes() []byte
-	Slice(length int) CacheData
-	Release()
-}
-
 type CacheDataAllocator interface {
-	Alloc(size int) CacheData
+	Alloc(size int) memorycache.CacheData
 }
 
 // DirEntry is a file or dir
@@ -159,4 +163,16 @@ type DirEntry struct {
 	Name  string
 	IsDir bool
 	Size  int64
+}
+
+type CostItem uint8
+
+const (
+	CostLow CostItem = iota
+	CostHigh
+)
+
+type CostAttr struct {
+	// List is the cost of List from FileService
+	List CostItem
 }

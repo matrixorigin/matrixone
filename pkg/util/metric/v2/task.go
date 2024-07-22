@@ -28,8 +28,10 @@ var (
 			Buckets:   getDurationBuckets(),
 		}, []string{"type"})
 
-	TaskFlushTableTailDurationHistogram = taskShortDurationHistogram.WithLabelValues("flush_table_tail")
-	GetObjectStatsDurationHistogram     = taskShortDurationHistogram.WithLabelValues("get_object_stats")
+	TaskFlushTableTailDurationHistogram     = taskShortDurationHistogram.WithLabelValues("flush_table_tail")
+	TaskCommitTableTailDurationHistogram    = taskShortDurationHistogram.WithLabelValues("commit_table_tail")
+	TaskCommitMergeObjectsDurationHistogram = taskShortDurationHistogram.WithLabelValues("commit_merge_objects")
+	GetObjectStatsDurationHistogram         = taskShortDurationHistogram.WithLabelValues("get_object_stats")
 
 	// storage usage / show accounts metrics
 	TaskGCkpCollectUsageDurationHistogram          = taskShortDurationHistogram.WithLabelValues("gckp_collect_usage")
@@ -38,6 +40,14 @@ var (
 	TaskShowAccountsGetTableStatsDurationHistogram = taskShortDurationHistogram.WithLabelValues("show_accounts_get_table_stats")
 	TaskShowAccountsGetUsageDurationHistogram      = taskShortDurationHistogram.WithLabelValues("show_accounts_get_storage_usage")
 	TaskShowAccountsTotalDurationHistogram         = taskShortDurationHistogram.WithLabelValues("show_accounts_total_duration")
+
+	TransferPageFlushLatencyHistogram = taskShortDurationHistogram.WithLabelValues("transfer_page_flush_latency")
+	TransferPageMergeLatencyHistogram = taskShortDurationHistogram.WithLabelValues("transfer_page_merge_latency")
+
+	TransferMemLatencyHistogram            = taskShortDurationHistogram.WithLabelValues("transfer_mem_latency")
+	TransferDiskLatencyHistogram           = taskShortDurationHistogram.WithLabelValues("transfer_disk_latency")
+	TransferPageSinceBornDurationHistogram = taskShortDurationHistogram.WithLabelValues("transfer_page_since_born_duration")
+	TransferTableRunTTLDurationHistogram   = taskShortDurationHistogram.WithLabelValues("transfer_table_run_ttl_duration")
 
 	taskLongDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -79,9 +89,10 @@ var (
 			Subsystem: "task",
 			Name:      "scheduled_by_total",
 			Help:      "Total number of task have been scheduled.",
-		}, []string{"type"})
+		}, []string{"type", "nodetype"})
 
-	TaskMergeScheduledByCounter = taskScheduledByCounter.WithLabelValues("merge")
+	TaskDNMergeScheduledByCounter = taskScheduledByCounter.WithLabelValues("merge", "dn")
+	TaskCNMergeScheduledByCounter = taskScheduledByCounter.WithLabelValues("merge", "cn")
 
 	taskGeneratedStuffCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -89,10 +100,10 @@ var (
 			Subsystem: "task",
 			Name:      "execute_results_total",
 			Help:      "Total number of stuff a task have generated",
-		}, []string{"type"})
+		}, []string{"type", "nodetype"})
 
-	TaskMergedBlocksCounter = taskGeneratedStuffCounter.WithLabelValues("merged_block")
-	TasKMergedSizeCounter   = taskGeneratedStuffCounter.WithLabelValues("merged_size")
+	TaskDNMergedSizeCounter = taskGeneratedStuffCounter.WithLabelValues("merged_size", "dn")
+	TaskCNMergedSizeCounter = taskGeneratedStuffCounter.WithLabelValues("merged_size", "cn")
 
 	taskSelectivityCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -126,4 +137,26 @@ var (
 			Name:      "storage_usage_cache_size",
 			Help:      "Size of the storage usage cache used",
 		})
+)
+
+var (
+	transferPageHitHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: "mo",
+		Subsystem: "task",
+		Name:      "transfer_page_hit_count",
+		Help:      "The total number of transfer hit counter.",
+	}, []string{"type"})
+
+	//TransferPageMemHitHistogram   = transferPageHitHistogram.WithLabelValues("memory")
+	//TransferPageDiskHitHistogram  = transferPageHitHistogram.WithLabelValues("disk")
+	TransferPageTotalHitHistogram = transferPageHitHistogram.WithLabelValues("total")
+)
+
+var (
+	TransferPageRowHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace: "mo",
+		Subsystem: "task",
+		Name:      "transfer_page_row",
+		Help:      "The total number of transfer row.",
+	})
 )

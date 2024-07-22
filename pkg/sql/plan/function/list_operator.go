@@ -319,18 +319,39 @@ var supportedOperators = []FuncNew{
 	{
 		functionId: AND,
 		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
-		layout:     BINARY_LOGICAL_OPERATOR,
-		checkFn:    fixedTypeMatch,
+		layout:     MULTIARY_LOGICAL_OPERATOR,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			cost := 0
+			for _, source := range inputs {
+				if source.Oid != types.T_bool {
+					can, _ := fixedImplicitTypeCast(source, types.T_bool)
+					if !can {
+						return newCheckResultWithFailure(failedFunctionParametersWrong)
+					}
+					cost++
+				}
+			}
+
+			if cost == 0 {
+				return newCheckResultWithSuccess(0)
+			} else {
+				castTypes := make([]types.Type, len(inputs))
+				boolType := types.T_bool.ToType()
+				for i := range castTypes {
+					castTypes[i] = boolType
+				}
+				return newCheckResultWithCast(0, castTypes)
+			}
+		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				args:       []types.T{types.T_bool, types.T_bool},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return andFn
+					return opMultiAnd
 				},
 			},
 		},
@@ -340,18 +361,39 @@ var supportedOperators = []FuncNew{
 	{
 		functionId: OR,
 		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
-		layout:     BINARY_LOGICAL_OPERATOR,
-		checkFn:    fixedTypeMatch,
+		layout:     MULTIARY_LOGICAL_OPERATOR,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			cost := 0
+			for _, source := range inputs {
+				if source.Oid != types.T_bool {
+					can, _ := fixedImplicitTypeCast(source, types.T_bool)
+					if !can {
+						return newCheckResultWithFailure(failedFunctionParametersWrong)
+					}
+					cost++
+				}
+			}
+
+			if cost == 0 {
+				return newCheckResultWithSuccess(0)
+			} else {
+				castTypes := make([]types.Type, len(inputs))
+				boolType := types.T_bool.ToType()
+				for i := range castTypes {
+					castTypes[i] = boolType
+				}
+				return newCheckResultWithCast(0, castTypes)
+			}
+		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				args:       []types.T{types.T_bool, types.T_bool},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return orFn
+					return opMultiOr
 				},
 			},
 		},
@@ -438,7 +480,7 @@ var supportedOperators = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				args:       []types.T{types.T_uint8, types.T_tuple},
+				args:       []types.T{types.T_uint8, types.T_uint8},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -448,7 +490,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 1,
-				args:       []types.T{types.T_uint16, types.T_tuple},
+				args:       []types.T{types.T_uint16, types.T_uint16},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -458,7 +500,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 2,
-				args:       []types.T{types.T_uint32, types.T_tuple},
+				args:       []types.T{types.T_uint32, types.T_uint32},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -468,7 +510,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 3,
-				args:       []types.T{types.T_uint64, types.T_tuple},
+				args:       []types.T{types.T_uint64, types.T_uint64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -478,7 +520,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 4,
-				args:       []types.T{types.T_int8, types.T_tuple},
+				args:       []types.T{types.T_int8, types.T_int8},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -488,7 +530,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 5,
-				args:       []types.T{types.T_int16, types.T_tuple},
+				args:       []types.T{types.T_int16, types.T_int16},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -498,7 +540,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 6,
-				args:       []types.T{types.T_int32, types.T_tuple},
+				args:       []types.T{types.T_int32, types.T_int32},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -508,7 +550,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 7,
-				args:       []types.T{types.T_int64, types.T_tuple},
+				args:       []types.T{types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -518,7 +560,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 8,
-				args:       []types.T{types.T_float32, types.T_tuple},
+				args:       []types.T{types.T_float32, types.T_float32},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -528,7 +570,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 9,
-				args:       []types.T{types.T_float64, types.T_tuple},
+				args:       []types.T{types.T_float64, types.T_float64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -538,7 +580,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 10,
-				args:       []types.T{types.T_decimal64, types.T_tuple},
+				args:       []types.T{types.T_decimal64, types.T_decimal64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -548,7 +590,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 11,
-				args:       []types.T{types.T_decimal128, types.T_tuple},
+				args:       []types.T{types.T_decimal128, types.T_decimal128},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -558,7 +600,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 12,
-				args:       []types.T{types.T_varchar, types.T_tuple},
+				args:       []types.T{types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -568,7 +610,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 13,
-				args:       []types.T{types.T_char, types.T_tuple},
+				args:       []types.T{types.T_char, types.T_char},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -578,7 +620,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 14,
-				args:       []types.T{types.T_date, types.T_tuple},
+				args:       []types.T{types.T_date, types.T_date},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -588,7 +630,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 15,
-				args:       []types.T{types.T_datetime, types.T_tuple},
+				args:       []types.T{types.T_datetime, types.T_datetime},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -598,7 +640,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 16,
-				args:       []types.T{types.T_bool, types.T_tuple},
+				args:       []types.T{types.T_bool, types.T_bool},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -608,7 +650,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 17,
-				args:       []types.T{types.T_timestamp, types.T_tuple},
+				args:       []types.T{types.T_timestamp, types.T_timestamp},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -618,7 +660,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 18,
-				args:       []types.T{types.T_blob, types.T_tuple},
+				args:       []types.T{types.T_blob, types.T_blob},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -628,7 +670,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 19,
-				args:       []types.T{types.T_uuid, types.T_tuple},
+				args:       []types.T{types.T_uuid, types.T_uuid},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -638,7 +680,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 20,
-				args:       []types.T{types.T_text, types.T_tuple},
+				args:       []types.T{types.T_text, types.T_text},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -648,7 +690,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 21,
-				args:       []types.T{types.T_time, types.T_tuple},
+				args:       []types.T{types.T_time, types.T_time},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -658,7 +700,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 22,
-				args:       []types.T{types.T_binary, types.T_tuple},
+				args:       []types.T{types.T_binary, types.T_binary},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -668,7 +710,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 23,
-				args:       []types.T{types.T_varbinary, types.T_tuple},
+				args:       []types.T{types.T_varbinary, types.T_varbinary},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -689,7 +731,7 @@ var supportedOperators = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				args:       []types.T{types.T_uint8, types.T_tuple},
+				args:       []types.T{types.T_uint8, types.T_uint8},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -699,7 +741,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 1,
-				args:       []types.T{types.T_uint16, types.T_tuple},
+				args:       []types.T{types.T_uint16, types.T_uint16},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -709,7 +751,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 2,
-				args:       []types.T{types.T_uint32, types.T_tuple},
+				args:       []types.T{types.T_uint32, types.T_uint32},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -719,7 +761,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 3,
-				args:       []types.T{types.T_uint64, types.T_tuple},
+				args:       []types.T{types.T_uint64, types.T_uint64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -729,7 +771,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 4,
-				args:       []types.T{types.T_int8, types.T_tuple},
+				args:       []types.T{types.T_int8, types.T_int8},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -739,7 +781,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 5,
-				args:       []types.T{types.T_int16, types.T_tuple},
+				args:       []types.T{types.T_int16, types.T_int16},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -749,7 +791,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 6,
-				args:       []types.T{types.T_int32, types.T_tuple},
+				args:       []types.T{types.T_int32, types.T_int32},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -759,7 +801,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 7,
-				args:       []types.T{types.T_int64, types.T_tuple},
+				args:       []types.T{types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -769,7 +811,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 8,
-				args:       []types.T{types.T_float32, types.T_tuple},
+				args:       []types.T{types.T_float32, types.T_float32},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -779,7 +821,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 9,
-				args:       []types.T{types.T_float64, types.T_tuple},
+				args:       []types.T{types.T_float64, types.T_float64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -789,7 +831,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 10,
-				args:       []types.T{types.T_decimal64, types.T_tuple},
+				args:       []types.T{types.T_decimal64, types.T_decimal64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -799,7 +841,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 11,
-				args:       []types.T{types.T_decimal128, types.T_tuple},
+				args:       []types.T{types.T_decimal128, types.T_decimal128},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -809,7 +851,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 12,
-				args:       []types.T{types.T_varchar, types.T_tuple},
+				args:       []types.T{types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -819,7 +861,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 13,
-				args:       []types.T{types.T_char, types.T_tuple},
+				args:       []types.T{types.T_char, types.T_char},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -829,7 +871,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 14,
-				args:       []types.T{types.T_date, types.T_tuple},
+				args:       []types.T{types.T_date, types.T_date},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -839,7 +881,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 15,
-				args:       []types.T{types.T_datetime, types.T_tuple},
+				args:       []types.T{types.T_datetime, types.T_datetime},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -849,7 +891,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 16,
-				args:       []types.T{types.T_bool, types.T_tuple},
+				args:       []types.T{types.T_bool, types.T_bool},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -859,7 +901,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 17,
-				args:       []types.T{types.T_timestamp, types.T_tuple},
+				args:       []types.T{types.T_timestamp, types.T_timestamp},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -869,7 +911,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 18,
-				args:       []types.T{types.T_blob, types.T_tuple},
+				args:       []types.T{types.T_blob, types.T_blob},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -879,7 +921,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 19,
-				args:       []types.T{types.T_uuid, types.T_tuple},
+				args:       []types.T{types.T_uuid, types.T_uuid},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -889,7 +931,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 20,
-				args:       []types.T{types.T_text, types.T_tuple},
+				args:       []types.T{types.T_text, types.T_text},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -899,7 +941,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 21,
-				args:       []types.T{types.T_time, types.T_tuple},
+				args:       []types.T{types.T_time, types.T_time},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -909,7 +951,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 22,
-				args:       []types.T{types.T_binary, types.T_tuple},
+				args:       []types.T{types.T_binary, types.T_binary},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -919,7 +961,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 23,
-				args:       []types.T{types.T_varbinary, types.T_tuple},
+				args:       []types.T{types.T_varbinary, types.T_varbinary},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},

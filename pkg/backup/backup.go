@@ -26,6 +26,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -33,7 +34,12 @@ import (
 
 // Backup
 // Note: ctx needs to support cancel. The user can cancel the backup task by canceling the ctx.
-func Backup(ctx context.Context, bs *tree.BackupStart, cfg *Config) error {
+func Backup(
+	ctx context.Context,
+	sid string,
+	bs *tree.BackupStart,
+	cfg *Config,
+) error {
 	var err error
 	var s3Conf *s3Config
 	if !cfg.metasMustBeSet() {
@@ -76,6 +82,13 @@ func Backup(ctx context.Context, bs *tree.BackupStart, cfg *Config) error {
 		cfg.Parallelism = s3Conf.parallelism
 	}
 
+	if bs.BackupTs == "" {
+		cfg.BackupTs = types.TS{}
+	} else {
+		cfg.BackupTs = types.StringToTS(bs.BackupTs)
+	}
+	cfg.BackupType = bs.BackupType
+
 	// step 2 : backup mo
 	if err = backupBuildInfo(ctx, cfg); err != nil {
 		return err
@@ -85,7 +98,7 @@ func Backup(ctx context.Context, bs *tree.BackupStart, cfg *Config) error {
 		return err
 	}
 
-	if err = backupTae(ctx, cfg); err != nil {
+	if err = backupTae(ctx, sid, cfg); err != nil {
 		return err
 	}
 
@@ -123,9 +136,13 @@ func backupConfigs(ctx context.Context, cfg *Config) error {
 	return err
 }
 
-var backupTae = func(ctx context.Context, config *Config) error {
+var backupTae = func(
+	ctx context.Context,
+	sid string,
+	config *Config,
+) error {
 	fs := fileservice.SubPath(config.TaeDir, taeDir)
-	return BackupData(ctx, config.SharedFs, fs, "")
+	return BackupData(ctx, sid, config.SharedFs, fs, "", config)
 }
 
 func backupHakeeper(ctx context.Context, config *Config) error {
@@ -192,7 +209,7 @@ func ToCsvLine2(s [][]string) (string, error) {
 	return ss.String(), nil
 }
 
-func saveTaeFilesList(ctx context.Context, Fs fileservice.FileService, taeFiles []*taeFile, backupTime string) error {
+func saveTaeFilesList(ctx context.Context, Fs fileservice.FileService, taeFiles []*taeFile, backupTime, backupTS, typ string) error {
 	var err error
 	if Fs == nil {
 		return moerr.NewInternalError(ctx, "fileservice is nil")
@@ -213,11 +230,12 @@ func saveTaeFilesList(ctx context.Context, Fs fileservice.FileService, taeFiles 
 	}
 
 	//save tae files size
-	lines = [][]string{taeBackupTimeAndSizeToCsv(backupTime, size)}
+	lines = [][]string{taeBackupTimeAndSizeToCsv(backupTime, backupTS, typ, size)}
 	metas, err = ToCsvLine2(lines)
 	if err != nil {
 		return err
 	}
+
 	return writeFile(ctx, Fs, taeSum, []byte(metas))
 }
 

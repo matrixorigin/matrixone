@@ -34,6 +34,9 @@ type joinVertex struct {
 }
 
 func (builder *QueryBuilder) pushdownSemiAntiJoins(nodeID int32) int32 {
+	if builder.optimizerHints != nil && builder.optimizerHints.pushDownSemiAntiJoins != 0 {
+		return nodeID
+	}
 	// TODO: handle SEMI/ANTI joins in join order
 	node := builder.qry.Nodes[nodeID]
 
@@ -199,6 +202,9 @@ func HasColExpr(expr *plan.Expr, pos int32) int32 {
 }
 
 func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
+	if builder.optimizerHints != nil && builder.optimizerHints.joinOrdering != 0 {
+		return nodeID
+	}
 	node := builder.qry.Nodes[nodeID]
 
 	if node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_INNER {
@@ -522,9 +528,6 @@ func (builder *QueryBuilder) buildSubJoinTree(vertices []*joinVertex, vid int32)
 }
 
 func containsAllPKs(cols []int32, tableDef *plan.TableDef) bool {
-	if tableDef.Pkey == nil {
-		return false
-	}
 	pkNames := tableDef.Pkey.Names
 	pks := make([]int32, len(pkNames))
 	for i := range pkNames {

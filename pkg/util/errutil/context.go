@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/cockroachdb/errors/errbase"
+
 	"github.com/matrixorigin/matrixone/pkg/util/stack"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
@@ -32,6 +33,9 @@ func WithContext(ctx context.Context, err error) error {
 
 func WithContextWithDepth(ctx context.Context, err error, depth int) error {
 	if err == nil {
+		return nil
+	}
+	if NoReportFromContext(ctx) {
 		return nil
 	}
 	if _, ok := err.(StackTracer); !ok {

@@ -120,7 +120,7 @@ func (l *LogtailerImpl) RangeLogtail(
 		return nil, nil, err
 	}
 
-	if checkpointed.GreaterEq(end) {
+	if checkpointed.GreaterEq(&end) {
 		return []logtail.TableLogtail{{
 			CkpLocation: ckpLoc,
 			Ts:          &to,

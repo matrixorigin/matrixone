@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(Top)
 
 type container struct {
 	n     int // result vector number
@@ -35,14 +35,17 @@ type container struct {
 	poses []int32 // sorted list of attributes
 	cmps  []compare.Compare
 
+	limit         uint64
+	limitExecutor colexec.ExpressionExecutor
+
 	executorsForOrderColumn []colexec.ExpressionExecutor
 	desc                    bool
 	topValueZM              objectio.ZoneMap
 	bat                     *batch.Batch
 }
 
-type Argument struct {
-	Limit       int64
+type Top struct {
+	Limit       *plan.Expr
 	TopValueTag int32
 	ctr         *container
 	Fs          []*plan.OrderBySpec
@@ -50,52 +53,69 @@ type Argument struct {
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (top *Top) GetOperatorBase() *vm.OperatorBase {
+	return &top.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[Top](
+		func() *Top {
+			return &Top{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *Top) {
+			*a = Top{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[Top]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (top Top) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *Top {
+	return reuse.Alloc[Top](nil)
 }
 
-func (arg *Argument) WithLimit(limit int64) *Argument {
-	arg.Limit = limit
-	return arg
+func (top *Top) WithLimit(limit *plan.Expr) *Top {
+	top.Limit = limit
+	return top
 }
 
-func (arg *Argument) WithFs(fs []*plan.OrderBySpec) *Argument {
-	arg.Fs = fs
-	return arg
+func (top *Top) WithFs(fs []*plan.OrderBySpec) *Top {
+	top.Fs = fs
+	return top
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (top *Top) Release() {
+	if top != nil {
+		reuse.Free[Top](top, nil)
 	}
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := arg.ctr
+func (top *Top) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	top.Free(proc, pipelineFailed, err)
+}
+
+func (top *Top) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := top.ctr
 	if ctr != nil {
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
+
+		for i := range ctr.executorsForOrderColumn {
+			if ctr.executorsForOrderColumn[i] != nil {
+				ctr.executorsForOrderColumn[i].Free()
+			}
+		}
+		ctr.executorsForOrderColumn = nil
+
+		if ctr.limitExecutor != nil {
+			ctr.limitExecutor.Free()
+			ctr.limitExecutor = nil
+		}
+		top.ctr = nil
 	}
 }
 

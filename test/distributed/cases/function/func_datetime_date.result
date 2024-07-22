@@ -1,9 +1,9 @@
 SELECT DATE(0.0124);
-invalid argument operator cast, bad value [DECIMAL64 DATE]
+Data truncation: data out of range: data type date, '0.0124'
 SELECT DATE("2112123");
 Data truncation: data out of range: data type date, '2112123'
 SELECT DATE(1231241.4513);
-invalid argument operator cast, bad value [DECIMAL64 DATE]
+Data truncation: data out of range: data type date, '1231241.4513'
 SELECT DATE("2017-06-15");
 DATE("2017-06-15")
 2017-06-15
@@ -54,7 +54,8 @@ date("1997-12-31 23:59:59.000001")
 select date("1997-13-31 23:59:59.000001");
 Data truncation: data out of range: data type date, '1997-13-31 23:59:59.000001'
 SELECT DATE(20110512154559.6 + 0e0);
-invalid argument operator cast, bad value [DOUBLE DATE]
+date(20110512154559.6 + 0e0)
+2011-05-12
 SELECT DATE(concat_ws('a', 0));
 Data truncation: data out of range: data type date, '0'
 CREATE TABLE t1 (a timestamp);
@@ -74,7 +75,8 @@ dt	exp
 2013-10-13 00:00:00	false
 DROP TABLE t1;
 SELECT DATE(20110512154559.616), DATE(FLOOR(20110512154559.616));
-invalid argument operator cast, bad value [DECIMAL128 DATE]
+date(20110512154559.616)    date(floor(20110512154559.616))
+2011-05-12    2011-05-12
 DROP TABLE IF EXISTS t3;
 CREATE TABLE t3(c1 DATE NOT NULL);
 INSERT INTO t3 VALUES('2000-01-01');

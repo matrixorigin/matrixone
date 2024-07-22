@@ -257,6 +257,7 @@ const (
 	Label_Grouping_Keys             = "Grouping keys"
 	Label_Agg_Functions             = "Aggregate functions"
 	Label_Filter_Conditions         = "Filter conditions"
+	Label_Block_Filter_Conditions   = "Block Filter conditions"
 	Label_Join_Type                 = "Join type"
 	Label_Join_Conditions           = "Join conditions"
 	Label_Left_NodeId               = "Left node id"

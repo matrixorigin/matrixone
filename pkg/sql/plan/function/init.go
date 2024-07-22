@@ -26,6 +26,8 @@ var InFunctionEncodedID = encodeOverloadID(IN, 0)
 var InFunctionName = "in"
 var PrefixInFunctionEncodedID = encodeOverloadID(PREFIX_IN, 0)
 var PrefixInFunctionName = "prefix_in"
+var PrefixEqualFunctionEncodedID = encodeOverloadID(PREFIX_EQ, 0)
+var PrefixEqualFunctionName = "prefix_eq"
 var L2DistanceFunctionEncodedID = encodeOverloadID(L2_DISTANCE, 0)
 
 func init() {

@@ -16,44 +16,51 @@ package indexjoin
 
 import (
 	"bytes"
+
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "index"
+const opName = "index"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (indexJoin *IndexJoin) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": index join ")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	ap := arg
+func (indexJoin *IndexJoin) OpType() vm.OpType {
+	return vm.IndexJoin
+}
+
+func (indexJoin *IndexJoin) Prepare(proc *process.Process) (err error) {
+	ap := indexJoin
 	ap.ctr = new(container)
 	ap.ctr.InitReceiver(proc, false)
 	return err
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (indexJoin *IndexJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze(indexJoin.GetIdx(), indexJoin.GetParallelIdx(), indexJoin.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
-	ap := arg
+	ap := indexJoin
 	ctr := ap.ctr
 	result := vm.NewCallResult()
 	for {
 		switch ctr.state {
 
 		case Probe:
-			bat, _, err := ctr.ReceiveFromSingleReg(0, anal)
-			if err != nil {
-				return result, err
+			msg := ctr.ReceiveFromSingleReg(0, anal)
+			if msg.Err != nil {
+				return result, msg.Err
 			}
+			bat := msg.Batch
 			if bat == nil {
 				ctr.state = End
 				continue
@@ -62,20 +69,25 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				proc.PutBatch(bat)
 				continue
 			}
-			vecused := make([]bool, len(bat.Vecs))
-			newvecs := make([]*vector.Vector, len(ap.Result))
+
+			if indexJoin.ctr.buf != nil {
+				proc.PutBatch(indexJoin.ctr.buf)
+				indexJoin.ctr.buf = nil
+			}
+			indexJoin.ctr.buf = batch.NewWithSize(len(ap.Result))
 			for i, pos := range ap.Result {
-				vecused[pos] = true
-				newvecs[i] = bat.Vecs[pos]
-			}
-			for i := range bat.Vecs {
-				if !vecused[i] {
-					bat.Vecs[i].Free(proc.Mp())
+				srcVec := bat.Vecs[pos]
+				vec := proc.GetVector(*srcVec.GetType())
+				if err := vector.GetUnionAllFunction(*srcVec.GetType(), proc.Mp())(vec, srcVec); err != nil {
+					vec.Free(proc.Mp())
+					return result, err
 				}
+				indexJoin.ctr.buf.SetVector(int32(i), vec)
 			}
-			bat.Vecs = newvecs
-			result.Batch = bat
-			anal.Output(bat, arg.GetIsLast())
+			indexJoin.ctr.buf.AddRowCount(bat.RowCount())
+			proc.PutBatch(bat)
+			result.Batch = indexJoin.ctr.buf
+			anal.Output(indexJoin.ctr.buf, indexJoin.GetIsLast())
 			return result, nil
 
 		default:

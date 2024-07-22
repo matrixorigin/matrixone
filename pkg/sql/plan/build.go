@@ -27,18 +27,26 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
-func runBuildSelectByBinder(stmtType plan.Query_StatementType, ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool) (*Plan, error) {
+func runBuildSelectByBinder(stmtType plan.Query_StatementType, ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool, skipStats bool) (*Plan, error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementBuildSelectHistogram.Observe(time.Since(start).Seconds())
 	}()
-	builder := NewQueryBuilder(stmtType, ctx, isPrepareStmt)
+
+	builder := NewQueryBuilder(stmtType, ctx, isPrepareStmt, true)
 	bindCtx := NewBindContext(builder, nil)
+	if IsSnapshotValid(ctx.GetSnapshot()) {
+		bindCtx.snapshot = ctx.GetSnapshot()
+	}
+
 	rootId, err := builder.buildSelect(stmt, bindCtx, true)
-	builder.qry.Steps = append(builder.qry.Steps, rootId)
 	if err != nil {
 		return nil, err
 	}
+	ctx.SetViews(bindCtx.views)
+
+	builder.qry.Steps = append(builder.qry.Steps, rootId)
+	builder.skipStats = skipStats
 	query, err := builder.createQuery()
 	if err != nil {
 		return nil, err
@@ -85,15 +93,15 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 	defer task.End()
 	switch stmt := stmt.(type) {
 	case *tree.Select:
-		return runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt, isPrepareStmt)
+		return runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt, isPrepareStmt, false)
 	case *tree.ParenSelect:
-		return runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt.Select, isPrepareStmt)
+		return runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt.Select, isPrepareStmt, false)
 	case *tree.ExplainAnalyze:
 		return buildExplainAnalyze(ctx, stmt, isPrepareStmt)
 	case *tree.Insert:
 		return buildInsert(stmt, ctx, false, isPrepareStmt)
 	case *tree.Replace:
-		return buildReplace(stmt, ctx, isPrepareStmt)
+		return buildReplace(stmt, ctx, isPrepareStmt, false)
 	case *tree.Update:
 		return buildTableUpdate(stmt, ctx, isPrepareStmt)
 	case *tree.Delete:
@@ -202,23 +210,17 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 		return buildShowStages(stmt, ctx)
 	case *tree.ShowSnapShots:
 		return buildShowSnapShots(stmt, ctx)
+	case *tree.CreateAccount:
+		return buildCreateAccount(stmt, ctx, isPrepareStmt)
+	case *tree.AlterAccount:
+		return buildAlterAccount(stmt, ctx, isPrepareStmt)
+	case *tree.DropAccount:
+		return buildDropAccount(stmt, ctx, isPrepareStmt)
+	case *tree.ShowAccountUpgrade:
+		return buildShowAccountUpgrade(stmt, ctx)
 	default:
 		return nil, moerr.NewInternalError(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
 	}
-}
-
-// GetExecType get executor will execute base AP or TP
-func GetExecTypeFromPlan(pn *Plan) ExecInfo {
-	defInfo := ExecInfo{
-		Typ:        ExecTypeAP,
-		WithGPU:    false,
-		WithBigMem: false,
-		CnNumbers:  2,
-	}
-	if IsTpQuery(pn.GetQuery()) {
-		defInfo.Typ = ExecTypeTP
-	}
-	return defInfo
 }
 
 // GetResultColumnsFromPlan
@@ -229,7 +231,14 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 		for idx, expr := range lastNode.ProjectList {
 			columns[idx] = &ColDef{
 				Name: query.Headings[idx],
-				Typ:  &expr.Typ,
+				Typ:  expr.Typ,
+			}
+
+			if exprCol, ok := expr.Expr.(*plan.Expr_Col); ok {
+				if col := exprCol.Col; col != nil {
+					columns[idx].TblName = col.TblName
+					columns[idx].DbName = col.DbName
+				}
 			}
 		}
 
@@ -251,7 +260,7 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 	case *plan.Plan_Ddl:
 		switch logicPlan.Ddl.DdlType {
 		case plan.DataDefinition_SHOW_VARIABLES:
-			typ := &plan.Type{
+			typ := plan.Type{
 				Id:    int32(types.T_varchar),
 				Width: 1024,
 			}

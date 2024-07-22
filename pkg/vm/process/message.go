@@ -15,7 +15,10 @@
 package process
 
 import (
+	"context"
 	"sync"
+
+	"github.com/google/uuid"
 )
 
 const ALLCN = "ALLCN"
@@ -36,18 +39,10 @@ func (m MsgType) MessageName() string {
 	switch m {
 	case MsgTopValue:
 		return "MsgTopValue"
+	case MsgRuntimeFilter:
+		return "MsgRuntimeFilter"
 	}
 	return "unknown message type"
-}
-
-func NewMessageBoard() *MessageBoard {
-	m := &MessageBoard{
-		Messages: make([]*Message, 0, 1024),
-		RwMutex:  &sync.RWMutex{},
-		Mutex:    &sync.Mutex{},
-	}
-	m.Cond = sync.NewCond(m.Mutex)
-	return m
 }
 
 type MessageAddress struct {
@@ -64,11 +59,58 @@ type Message interface {
 	GetReceiverAddr() MessageAddress
 }
 
+type MessageCenter struct {
+	StmtIDToBoard map[uuid.UUID]*MessageBoard
+	RwMutex       *sync.Mutex
+}
+
 type MessageBoard struct {
-	Messages []*Message
-	RwMutex  *sync.RWMutex // for nonblock message
-	Mutex    *sync.Mutex   // for block message
-	Cond     *sync.Cond    //for block message
+	multiCN       bool
+	stmtId        uuid.UUID
+	MessageCenter *MessageCenter
+	Messages      []*Message
+	Waiters       []chan bool
+	RwMutex       *sync.RWMutex
+}
+
+func NewMessageBoard() *MessageBoard {
+	m := &MessageBoard{
+		Messages: make([]*Message, 0, 16),
+		Waiters:  make([]chan bool, 0, 16),
+		RwMutex:  &sync.RWMutex{},
+	}
+	return m
+}
+
+func (m *MessageBoard) SetMultiCN(center *MessageCenter, stmtId uuid.UUID) *MessageBoard {
+	center.RwMutex.Lock()
+	defer center.RwMutex.Unlock()
+	mb, ok := center.StmtIDToBoard[stmtId]
+	if ok {
+		return mb
+	}
+	m.RwMutex.Lock()
+	m.multiCN = true
+	m.stmtId = stmtId
+	m.MessageCenter = center
+	m.RwMutex.Unlock()
+	center.StmtIDToBoard[stmtId] = m
+	return m
+}
+
+func (m *MessageBoard) Reset() *MessageBoard {
+	if m.multiCN {
+		m.MessageCenter.RwMutex.Lock()
+		delete(m.MessageCenter.StmtIDToBoard, m.stmtId)
+		m.MessageCenter.RwMutex.Unlock()
+		return NewMessageBoard()
+	}
+	m.RwMutex.Lock()
+	defer m.RwMutex.Unlock()
+	m.Messages = m.Messages[:0]
+	m.Waiters = m.Waiters[:0]
+	m.multiCN = false
+	return m
 }
 
 type MessageReceiver struct {
@@ -77,18 +119,23 @@ type MessageReceiver struct {
 	received []int32
 	addr     *MessageAddress
 	mb       *MessageBoard
+	waiter   chan bool
 }
 
 func (proc *Process) SendMessage(m Message) {
-	mb := proc.MessageBoard
-	mb.RwMutex.Lock()
-	defer mb.RwMutex.Unlock()
+	mb := proc.Base.MessageBoard
 	if m.GetReceiverAddr().CnAddr == CURRENTCN { // message for current CN
+		mb.RwMutex.Lock()
 		mb.Messages = append(mb.Messages, &m)
 		if m.NeedBlock() {
 			// broadcast for block message
-			mb.Cond.Broadcast()
+			for _, ch := range mb.Waiters {
+				if ch != nil && len(ch) == 0 {
+					ch <- true
+				}
+			}
 		}
+		mb.RwMutex.Unlock()
 	} else {
 		//todo: send message to other CN, need to lookup cnlist
 		panic("unsupported message yet!")
@@ -99,7 +146,7 @@ func (proc *Process) NewMessageReceiver(tags []int32, addr MessageAddress) *Mess
 	return &MessageReceiver{
 		tags: tags,
 		addr: &addr,
-		mb:   proc.MessageBoard,
+		mb:   proc.Base.MessageBoard,
 	}
 }
 
@@ -109,6 +156,9 @@ func (mr *MessageReceiver) receiveMessageNonBlock() []Message {
 	var result []Message
 	lenMessages := int32(len(mr.mb.Messages))
 	for ; mr.offset < lenMessages; mr.offset++ {
+		if mr.mb.Messages[mr.offset] == nil {
+			continue
+		}
 		message := *mr.mb.Messages[mr.offset]
 		if !MatchAddress(message, mr.addr) {
 			continue
@@ -131,23 +181,35 @@ func (mr *MessageReceiver) Free() {
 	mr.mb.RwMutex.Lock()
 	defer mr.mb.RwMutex.Unlock()
 	for i := range mr.received {
-		mr.mb.Messages[i] = nil
+		mr.mb.Messages[mr.received[i]] = nil
 	}
 	mr.received = nil
+	mr.waiter = nil
 }
 
-func (mr *MessageReceiver) ReceiveMessage(needBlock bool) []Message {
-	if !needBlock {
-		return mr.receiveMessageNonBlock()
+func (mr *MessageReceiver) ReceiveMessage(needBlock bool, ctx context.Context) ([]Message, bool) {
+	var result = mr.receiveMessageNonBlock()
+	if !needBlock || len(result) > 0 {
+		return result, false
 	}
-	var result []Message
-	for len(result) == 0 {
-		mr.mb.Cond.L.Lock()
-		mr.mb.Cond.Wait()
-		mr.mb.Cond.L.Unlock()
+	if mr.waiter == nil {
+		mr.waiter = make(chan bool, 1)
+		mr.mb.RwMutex.Lock()
+		mr.mb.Waiters = append(mr.mb.Waiters, mr.waiter)
+		mr.mb.RwMutex.Unlock()
+	}
+	for {
 		result = mr.receiveMessageNonBlock()
+		if len(result) > 0 {
+			break
+		}
+		select {
+		case <-mr.waiter:
+		case <-ctx.Done():
+			return result, true
+		}
 	}
-	return result
+	return result, false
 }
 
 func MatchAddress(m Message, raddr *MessageAddress) bool {

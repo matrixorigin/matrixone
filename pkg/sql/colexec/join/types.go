@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(InnerJoin)
 
 const (
 	Build = iota
@@ -48,6 +48,7 @@ type container struct {
 
 	batches       []*batch.Batch
 	batchRowCount int
+	lastrow       int
 	rbat          *batch.Batch
 
 	expr colexec.ExpressionExecutor
@@ -61,19 +62,18 @@ type container struct {
 	evecs []evalVector
 	vecs  []*vector.Vector
 
-	mp *hashmap.JoinMap
+	mp  *hashmap.JoinMap
+	bat *batch.Batch
+
+	maxAllocSize int64
 }
 
-type Argument struct {
+type InnerJoin struct {
 	ctr        *container
-	Ibucket    uint64 // index in buckets
-	Nbucket    uint64 // buckets count
 	Result     []colexec.ResultPos
 	Typs       []types.Type
 	Cond       *plan.Expr
 	Conditions [][]*plan.Expr
-	bat        *batch.Batch
-	lastrow    int
 
 	HashOnPK           bool
 	IsShuffle          bool
@@ -82,51 +82,66 @@ type Argument struct {
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (innerJoin *InnerJoin) GetOperatorBase() *vm.OperatorBase {
+	return &innerJoin.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[InnerJoin](
+		func() *InnerJoin {
+			return &InnerJoin{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *InnerJoin) {
+			*a = InnerJoin{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[InnerJoin]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (innerJoin InnerJoin) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *InnerJoin {
+	return reuse.Alloc[InnerJoin](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (innerJoin *InnerJoin) Release() {
+	if innerJoin != nil {
+		reuse.Free[InnerJoin](innerJoin, nil)
 	}
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := arg.ctr
+func (innerJoin *InnerJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	innerJoin.Free(proc, pipelineFailed, err)
+}
+
+func (innerJoin *InnerJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := innerJoin.ctr
 	if ctr != nil {
 		ctr.cleanBatch(proc)
 		ctr.cleanEvalVectors()
 		ctr.cleanHashMap()
 		ctr.cleanExprExecutor()
 		ctr.FreeAllReg()
+
+		anal := proc.GetAnalyze(innerJoin.GetIdx(), innerJoin.GetParallelIdx(), innerJoin.GetParallelMajor())
+		anal.Alloc(ctr.maxAllocSize)
+
+		if innerJoin.ctr.bat != nil {
+			proc.PutBatch(innerJoin.ctr.bat)
+			innerJoin.ctr.bat = nil
+		}
+		innerJoin.ctr.lastrow = 0
+		innerJoin.ctr = nil
 	}
 }
 
 func (ctr *container) cleanExprExecutor() {
 	if ctr.expr != nil {
 		ctr.expr.Free()
+		ctr.expr = nil
 	}
 }
 
@@ -158,6 +173,10 @@ func (ctr *container) cleanHashMap() {
 
 func (ctr *container) cleanEvalVectors() {
 	for i := range ctr.evecs {
-		ctr.evecs[i].executor.Free()
+		if ctr.evecs[i].executor != nil {
+			ctr.evecs[i].executor.Free()
+		}
+		ctr.evecs[i].vec = nil
 	}
+	ctr.evecs = nil
 }

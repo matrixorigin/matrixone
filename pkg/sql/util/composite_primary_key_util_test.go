@@ -168,7 +168,7 @@ func TestFillCompositePKeyBatch(t *testing.T) {
 	bat, pkeyDef, valueCount := MakeBatch(columnSize, rowCount, proc.Mp())
 	err := FillCompositeKeyBatch(bat, catalog.CPrimaryKeyColName, pkeyDef.Names, proc)
 	require.Equal(t, err, nil)
-	bs := vector.MustBytesCol(bat.Vecs[len(bat.Vecs)-1])
+	bs := vector.InefficientMustBytesCol(bat.Vecs[len(bat.Vecs)-1])
 	tuples := make([]types.Tuple, 0)
 	for i := 0; i < len(bs); i++ {
 		tuple, err := types.Unpack(bs[i])

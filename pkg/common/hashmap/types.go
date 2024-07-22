@@ -89,8 +89,6 @@ type StrHashMap struct {
 	// zValues, 0 indicates the presence null, 1 indicates the absence of a null
 	zValues       []int64
 	strHashStates [][3]uint64
-	ibucket       uint64
-	nbucket       uint64
 
 	m       *mpool.MPool
 	hashMap *hashtable.StringHashMap
@@ -108,21 +106,17 @@ type IntHashMap struct {
 	values  []uint64
 	zValues []int64
 	hashes  []uint64
-	ibucket uint64
-	nbucket uint64
 
 	m       *mpool.MPool
 	hashMap *hashtable.Int64HashMap
 }
 
 type strHashmapIterator struct {
-	m                *mpool.MPool
-	mp               *StrHashMap
-	ibucket, nbucket uint64
+	m  *mpool.MPool
+	mp *StrHashMap
 }
 
 type intHashMapIterator struct {
-	ibucket, nbucket uint64
-	m                *mpool.MPool
-	mp               *IntHashMap
+	m  *mpool.MPool
+	mp *IntHashMap
 }

@@ -55,22 +55,27 @@ type columnCache struct {
 	// imprecise, but it doesn't matter), and then allocate more than one at a time.
 	concurrencyApply atomic.Uint64
 	allocateCount    atomic.Uint64
+	committed        bool
 }
 
 func newColumnCache(
 	ctx context.Context,
+	sid string,
 	tableID uint64,
 	col AutoColumn,
 	cfg Config,
+	committed bool,
 	allocator valueAllocator,
-	txnOp client.TxnOperator) (*columnCache, error) {
+	txnOp client.TxnOperator,
+) (*columnCache, error) {
 	item := &columnCache{
-		logger:    getLogger(),
+		logger:    getLogger(sid).Named("incrservice"),
 		col:       col,
 		cfg:       cfg,
 		allocator: allocator,
 		overflow:  col.Offset == math.MaxUint64,
 		ranges:    &ranges{step: col.Step, values: make([]uint64, 0, 1)},
+		committed: committed,
 	}
 	item.preAllocate(ctx, tableID, cfg.CountPerAllocate, txnOp)
 	item.Lock()
@@ -417,9 +422,10 @@ func (col *columnCache) allocateLocked(
 
 func (col *columnCache) maybeAllocate(ctx context.Context, tableID uint64, txnOp client.TxnOperator) error {
 	col.Lock()
+	committed := col.committed
 	low := col.ranges.left() <= col.cfg.LowCapacity
 	col.Unlock()
-	if low {
+	if low && committed {
 		accountId, err := defines.GetAccountId(ctx)
 		if err != nil {
 			return err

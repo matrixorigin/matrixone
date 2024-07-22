@@ -1,0 +1,210 @@
+select count(*) from tpch.customer {snapshot = 'tpch_snapshot'};
+count(*)
+150
+select count(*) from tpch.customer {snapshot = 'tpch_snapshot'};
+count(*)
+150
+select count(*) from tpch.customer {snapshot = 'tpch_snapshot'};
+count(*)
+150
+select count(*) from tpch.customer {snapshot = 'tpch_snapshot'};
+count(*)
+150
+select count(*) from tpch.customer {snapshot = 'tpch_snapshot'};
+count(*)
+150
+select count(*) from tpch.lineitem {snapshot = 'tpch_snapshot'};
+count(*)
+6005
+select count(*) from tpch.lineitem {snapshot = 'tpch_snapshot'};
+count(*)
+6005
+select count(*) from tpch.lineitem {snapshot = 'tpch_snapshot'};
+count(*)
+6005
+select count(*) from tpch.lineitem {snapshot = 'tpch_snapshot'};
+count(*)
+6005
+select count(*) from tpch.lineitem {snapshot = 'tpch_snapshot'};
+count(*)
+6005
+select count(*) from tpch.nation {snapshot = 'tpch_snapshot'};
+count(*)
+25
+select count(*) from tpch.nation {snapshot = 'tpch_snapshot'};
+count(*)
+25
+select count(*) from tpch.nation {snapshot = 'tpch_snapshot'};
+count(*)
+25
+select count(*) from tpch.nation {snapshot = 'tpch_snapshot'};
+count(*)
+25
+select count(*) from tpch.nation {snapshot = 'tpch_snapshot'};
+count(*)
+25
+select count(*) from tpch.orders {snapshot = 'tpch_snapshot'};
+count(*)
+1500
+select count(*) from tpch.orders {snapshot = 'tpch_snapshot'};
+count(*)
+1500
+select count(*) from tpch.orders {snapshot = 'tpch_snapshot'};
+count(*)
+1500
+select count(*) from tpch.orders {snapshot = 'tpch_snapshot'};
+count(*)
+1500
+select count(*) from tpch.orders {snapshot = 'tpch_snapshot'};
+count(*)
+1500
+select count(*) from tpch.part {snapshot = 'tpch_snapshot'};
+count(*)
+200
+select count(*) from tpch.part {snapshot = 'tpch_snapshot'};
+count(*)
+200
+select count(*) from tpch.part {snapshot = 'tpch_snapshot'};
+count(*)
+200
+select count(*) from tpch.part {snapshot = 'tpch_snapshot'};
+count(*)
+200
+select count(*) from tpch.part {snapshot = 'tpch_snapshot'};
+count(*)
+200
+select count(*) from tpch.partsupp {snapshot = 'tpch_snapshot'};
+count(*)
+800
+select count(*) from tpch.partsupp {snapshot = 'tpch_snapshot'};
+count(*)
+800
+select count(*) from tpch.partsupp {snapshot = 'tpch_snapshot'};
+count(*)
+800
+select count(*) from tpch.partsupp {snapshot = 'tpch_snapshot'};
+count(*)
+800
+select count(*) from tpch.partsupp {snapshot = 'tpch_snapshot'};
+count(*)
+800
+select count(*) from tpch.supplier {snapshot = 'tpch_snapshot'};
+count(*)
+10
+select count(*) from tpch.supplier {snapshot = 'tpch_snapshot'};
+count(*)
+10
+select count(*) from tpch.supplier {snapshot = 'tpch_snapshot'};
+count(*)
+10
+select count(*) from tpch.supplier {snapshot = 'tpch_snapshot'};
+count(*)
+10
+select count(*) from tpch.supplier {snapshot = 'tpch_snapshot'};
+count(*)
+10
+select count(*) from tpch.customer {snapshot = 'tpch_cluster'};
+count(*)
+150
+select count(*) from tpch.customer {snapshot = 'tpch_cluster'};
+count(*)
+150
+select count(*) from tpch.customer {snapshot = 'tpch_cluster'};
+count(*)
+150
+select count(*) from tpch.customer {snapshot = 'tpch_cluster'};
+count(*)
+150
+select count(*) from tpch.customer {snapshot = 'tpch_cluster'};
+count(*)
+150
+select count(*) from tpch.lineitem {snapshot = 'tpch_cluster'};
+count(*)
+6005
+select count(*) from tpch.lineitem {snapshot = 'tpch_cluster'};
+count(*)
+6005
+select count(*) from tpch.lineitem {snapshot = 'tpch_cluster'};
+count(*)
+6005
+select count(*) from tpch.lineitem {snapshot = 'tpch_cluster'};
+count(*)
+6005
+select count(*) from tpch.lineitem {snapshot = 'tpch_cluster'};
+count(*)
+6005
+select count(*) from tpch.nation {snapshot = 'tpch_cluster'};
+count(*)
+25
+select count(*) from tpch.nation {snapshot = 'tpch_cluster'};
+count(*)
+25
+select count(*) from tpch.nation {snapshot = 'tpch_cluster'};
+count(*)
+25
+select count(*) from tpch.nation {snapshot = 'tpch_cluster'};
+count(*)
+25
+select count(*) from tpch.nation {snapshot = 'tpch_cluster'};
+count(*)
+25
+select count(*) from tpch.orders {snapshot = 'tpch_cluster'};
+count(*)
+1500
+select count(*) from tpch.orders {snapshot = 'tpch_cluster'};
+count(*)
+1500
+select count(*) from tpch.orders {snapshot = 'tpch_cluster'};
+count(*)
+1500
+select count(*) from tpch.orders {snapshot = 'tpch_cluster'};
+count(*)
+1500
+select count(*) from tpch.orders {snapshot = 'tpch_cluster'};
+count(*)
+1500
+select count(*) from tpch.part {snapshot = 'tpch_cluster'};
+count(*)
+200
+select count(*) from tpch.part {snapshot = 'tpch_cluster'};
+count(*)
+200
+select count(*) from tpch.part {snapshot = 'tpch_cluster'};
+count(*)
+200
+select count(*) from tpch.part {snapshot = 'tpch_cluster'};
+count(*)
+200
+select count(*) from tpch.part {snapshot = 'tpch_cluster'};
+count(*)
+200
+select count(*) from tpch.partsupp {snapshot = 'tpch_cluster'};
+count(*)
+800
+select count(*) from tpch.partsupp {snapshot = 'tpch_cluster'};
+count(*)
+800
+select count(*) from tpch.partsupp {snapshot = 'tpch_cluster'};
+count(*)
+800
+select count(*) from tpch.partsupp {snapshot = 'tpch_cluster'};
+count(*)
+800
+select count(*) from tpch.partsupp {snapshot = 'tpch_cluster'};
+count(*)
+800
+select count(*) from tpch.supplier {snapshot = 'tpch_cluster'};
+count(*)
+10
+select count(*) from tpch.supplier {snapshot = 'tpch_cluster'};
+count(*)
+10
+select count(*) from tpch.supplier {snapshot = 'tpch_cluster'};
+count(*)
+10
+select count(*) from tpch.supplier {snapshot = 'tpch_cluster'};
+count(*)
+10
+select count(*) from tpch.supplier {snapshot = 'tpch_cluster'};
+count(*)
+10

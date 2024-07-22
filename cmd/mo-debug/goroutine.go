@@ -144,17 +144,23 @@ func handleTop(line string) {
 		return
 	}
 
-	fields := strings.Split(strings.TrimSpace(line[4:]), " ")
-	if len(fields) != 1 && len(fields) != 3 {
-		fmt.Println("invalid top command.")
-		return
+	var fields []string
+	var err error
+	top := 0
+	if len(line) > 4 {
+		fields = strings.Split(strings.TrimSpace(line[4:]), " ")
+		if len(fields) != 1 && len(fields) != 3 {
+			fmt.Println("invalid top command.")
+			return
+		}
+
+		top, err = format.ParseStringInt(fields[0])
+		if err != nil {
+			fmt.Println(err.Error())
+			return
+		}
 	}
 
-	top, err := format.ParseStringInt(fields[0])
-	if err != nil {
-		fmt.Println(err.Error())
-		return
-	}
 	if top == 0 ||
 		top >= groupRes.GroupCount() {
 		top = groupRes.GroupCount()
@@ -197,10 +203,13 @@ func handleDump(line string) {
 	}
 	defer file.Close()
 
-	_, err = file.WriteString(groupRes.Display(math.MaxInt,
-		func(i, j int) (bool, bool) {
-			return false, true
-		}))
+	_, err = file.WriteString(
+		groupRes.Display(
+			math.MaxInt,
+			func(i, j int) (bool, bool) {
+				return false, true
+			}),
+	)
 	if err != nil {
 		fmt.Println(err.Error())
 	}

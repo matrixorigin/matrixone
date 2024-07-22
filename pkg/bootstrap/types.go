@@ -50,6 +50,12 @@ type Service interface {
 		ctx context.Context,
 		tenantFetchFunc func() (int32, string, error),
 		txnOp client.TxnOperator) (bool, error)
+	// UpgradeTenant used to manual upgrade tenant metadata
+	UpgradeTenant(ctx context.Context, tenantName string, retryCount uint32, isALLAccount bool) (bool, error)
+	// GetFinalVersion Get mo final version, which is based on the current code
+	GetFinalVersion() string
+	// GetFinalVersionOffset Get mo final version offset, which is based on the current code
+	GetFinalVersionOffset() int32
 	// Close close bootstrap service
 	Close() error
 }
@@ -73,6 +79,9 @@ type VersionHandle interface {
 	HandleClusterUpgrade(ctx context.Context, txn executor.TxnExecutor) error
 	// HandleTenantUpgrade handle upgrade a special tenant.
 	HandleTenantUpgrade(ctx context.Context, tenantID int32, txn executor.TxnExecutor) error
+	// HandleCreateFrameworkDeps Used to execute pre dependencies when creating a new upgrade framework
+	// based on the current version for the first time.
+	HandleCreateFrameworkDeps(txn executor.TxnExecutor) error
 }
 
 // Option option for bootstrap service

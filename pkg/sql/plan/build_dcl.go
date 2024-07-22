@@ -70,7 +70,7 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 
 	case *tree.PrepareString:
 		var v interface{}
-		v, err = ctx.ResolveVariable("lower_case_table_names", true, true)
+		v, err = ctx.ResolveVariable("lower_case_table_names", true, false)
 		if err != nil {
 			v = int64(1)
 		}
@@ -122,7 +122,7 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 }
 
 func buildExecute(stmt *tree.Execute, ctx CompilerContext) (*Plan, error) {
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
 	binder := NewWhereBinder(builder, &BindContext{})
 
 	args := make([]*Expr, len(stmt.Variables))
@@ -172,7 +172,7 @@ func buildSetVariables(stmt *tree.SetVar, ctx CompilerContext) (*Plan, error) {
 	var err error
 	items := make([]*plan.SetVariablesItem, len(stmt.Assignments))
 
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
 	binder := NewWhereBinder(builder, &BindContext{})
 
 	for idx, assignment := range stmt.Assignments {
@@ -207,6 +207,79 @@ func buildSetVariables(stmt *tree.SetVar, ctx CompilerContext) (*Plan, error) {
 				DclType: plan.DataControl_SET_VARIABLES,
 				Control: &plan.DataControl_SetVariables{
 					SetVariables: setVariables,
+				},
+			},
+		},
+	}, nil
+}
+
+func buildCreateAccount(stmt *tree.CreateAccount, ctx CompilerContext, isPrepareStmt bool) (*Plan, error) {
+	params := []tree.Expr{
+		stmt.Name,
+		stmt.AuthOption.AdminName,
+		stmt.AuthOption.IdentifiedType.Str,
+	}
+	paramTypes, err := getParamTypes(params, ctx, isPrepareStmt)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Plan{
+		Plan: &plan.Plan_Dcl{
+			Dcl: &plan.DataControl{
+				DclType: plan.DataControl_CREATE_ACCOUNT,
+				Control: &plan.DataControl_Other{
+					Other: &plan.OtherDCL{
+						ParamTypes: paramTypes,
+					},
+				},
+			},
+		},
+	}, nil
+}
+
+func buildAlterAccount(stmt *tree.AlterAccount, ctx CompilerContext, isPrepareStmt bool) (*Plan, error) {
+	params := []tree.Expr{
+		stmt.Name,
+		stmt.AuthOption.AdminName,
+		stmt.AuthOption.IdentifiedType.Str,
+	}
+	paramTypes, err := getParamTypes(params, ctx, isPrepareStmt)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Plan{
+		Plan: &plan.Plan_Dcl{
+			Dcl: &plan.DataControl{
+				DclType: plan.DataControl_ALTER_ACCOUNT,
+				Control: &plan.DataControl_Other{
+					Other: &plan.OtherDCL{
+						ParamTypes: paramTypes,
+					},
+				},
+			},
+		},
+	}, nil
+}
+
+func buildDropAccount(stmt *tree.DropAccount, ctx CompilerContext, isPrepareStmt bool) (*Plan, error) {
+	params := []tree.Expr{
+		stmt.Name,
+	}
+	paramTypes, err := getParamTypes(params, ctx, isPrepareStmt)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Plan{
+		Plan: &plan.Plan_Dcl{
+			Dcl: &plan.DataControl{
+				DclType: plan.DataControl_DROP_ACCOUNT,
+				Control: &plan.DataControl_Other{
+					Other: &plan.OtherDCL{
+						ParamTypes: paramTypes,
+					},
 				},
 			},
 		},

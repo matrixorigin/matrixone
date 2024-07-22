@@ -1,0 +1,111 @@
+drop table if exists t1;
+
+create table t1(
+a int primary key,
+b varchar(10)
+);
+
+select mo_ctl('dn', 'inspect', 'policy -r 0 -m 0');
+insert into t1 values (100, 'a');
+-- @ignore:0
+select mo_ctl('dn', 'flush', 'mo_ctl_merge.t1');
+insert into t1 values (110, 'a');
+-- @ignore:0
+select mo_ctl('dn', 'flush', 'mo_ctl_merge.t1');
+-- @ignore:0
+select mo_ctl('dn', 'mergeobjects', 'mo_ctl_merge.t1:all:small');
+select sleep(1);
+select rows_cnt from metadata_scan('mo_ctl_merge.t1', 'a') g;
+
+insert into t1 values (105, 'a');
+insert into t1 values (115, 'a');
+-- @ignore:0
+select mo_ctl('dn', 'flush', 'mo_ctl_merge.t1');
+insert into t1 values (120, 'a');
+insert into t1 values (125, 'a');
+-- @ignore:0
+select mo_ctl('dn', 'flush', 'mo_ctl_merge.t1');
+-- @ignore:0
+select mo_ctl('dn', 'mergeobjects', 'mo_ctl_merge.t1:all:overlap');
+select sleep(1);
+select rows_cnt, bit_cast(`min` as int), bit_cast(`max` as int) from metadata_scan('mo_ctl_merge.t1', 'a') g;
+drop table t1;
+
+create table t1(
+a int,
+b varchar(10)
+);
+insert into t1 values (100, 'a');
+-- @ignore:0
+select mo_ctl('dn', 'flush', 'mo_ctl_merge.t1');
+insert into t1 values (110, 'a');
+-- @ignore:0
+select mo_ctl('dn', 'flush', 'mo_ctl_merge.t1');
+-- @ignore:0
+select mo_ctl('dn', 'mergeobjects', 'mo_ctl_merge.t1:all:small');
+select sleep(1);
+select rows_cnt from metadata_scan('mo_ctl_merge.t1', 'a') g;
+
+insert into t1 values (105, 'a');
+insert into t1 values (115, 'a');
+-- @ignore:0
+select mo_ctl('dn', 'flush', 'mo_ctl_merge.t1');
+insert into t1 values (120, 'a');
+insert into t1 values (125, 'a');
+-- @ignore:0
+select mo_ctl('dn', 'flush', 'mo_ctl_merge.t1');
+-- @ignore:0
+select mo_ctl('dn', 'mergeobjects', 'mo_ctl_merge.t1:all:overlap');
+select sleep(1);
+select rows_cnt, bit_cast(`min` as int), bit_cast(`max` as int) from metadata_scan('mo_ctl_merge.t1', 'a') g;
+drop table t1;
+create table t1(
+a varchar(100) primary key,
+b varchar(10)
+);
+insert into t1 values ('abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxya', 'b');
+-- @ignore:0
+select mo_ctl('dn', 'flush', 'mo_ctl_merge.t1');
+insert into t1 values ('abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz', 'b');
+-- @ignore:0
+select mo_ctl('dn', 'flush', 'mo_ctl_merge.t1');
+-- @ignore:0
+select mo_ctl('dn', 'mergeobjects', 'mo_ctl_merge.t1:all:small');
+select sleep(1);
+select rows_cnt from metadata_scan('mo_ctl_merge.t1', 'a') g;
+
+insert into t1 values ('abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyb', 'b');
+insert into t1 values ('abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyc', 'b');
+-- @ignore:0
+select mo_ctl('dn', 'flush', 'mo_ctl_merge.t1');
+insert into t1 values ('abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxaa', 'b');
+insert into t1 values ('abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxab', 'b');
+-- @ignore:0
+select mo_ctl('dn', 'flush', 'mo_ctl_merge.t1');
+-- @ignore:0
+select mo_ctl('dn', 'mergeobjects', 'mo_ctl_merge.t1:all:overlap');
+select sleep(1);
+select rows_cnt, min, max from metadata_scan('mo_ctl_merge.t1', 'a') g;
+drop table t1;
+create table t1(
+a int primary key,
+b varchar(10)
+);
+insert into t1 values (105, 'a');
+insert into t1 values (115, 'a');
+-- @ignore:0
+select mo_ctl('dn', 'flush', 'mo_ctl_merge.t1');
+insert into t1 values (110, 'a');
+insert into t1 values (120, 'a');
+-- @ignore:0
+select mo_ctl('dn', 'flush', 'mo_ctl_merge.t1');
+insert into t1 values (116, 'a');
+insert into t1 values (126, 'a');
+-- @ignore:0
+select mo_ctl('dn', 'flush', 'mo_ctl_merge.t1');
+-- @ignore:0
+select mo_ctl('dn', 'mergeobjects', 'mo_ctl_merge.t1:all:overlap(2)');
+select sleep(1);
+select rows_cnt, bit_cast(`min` as int), bit_cast(`max` as int) from metadata_scan('mo_ctl_merge.t1', 'a') g;
+drop table t1;
+select mo_ctl('dn', 'inspect', 'policy');

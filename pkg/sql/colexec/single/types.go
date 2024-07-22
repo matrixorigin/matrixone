@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(SingleJoin)
 
 const (
 	Build = iota
@@ -62,12 +62,12 @@ type container struct {
 	vecs  []*vector.Vector
 
 	mp *hashmap.JoinMap
+
+	maxAllocSize int64
 }
 
-type Argument struct {
+type SingleJoin struct {
 	ctr        *container
-	Ibucket    uint64
-	Nbucket    uint64
 	Typs       []types.Type
 	Cond       *plan.Expr
 	Conditions [][]*plan.Expr
@@ -79,51 +79,60 @@ type Argument struct {
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (singleJoin *SingleJoin) GetOperatorBase() *vm.OperatorBase {
+	return &singleJoin.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[SingleJoin](
+		func() *SingleJoin {
+			return &SingleJoin{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *SingleJoin) {
+			*a = SingleJoin{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[SingleJoin]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (singleJoin SingleJoin) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *SingleJoin {
+	return reuse.Alloc[SingleJoin](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (singleJoin *SingleJoin) Release() {
+	if singleJoin != nil {
+		reuse.Free[SingleJoin](singleJoin, nil)
 	}
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := arg.ctr
+func (singleJoin *SingleJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	singleJoin.Free(proc, pipelineFailed, err)
+}
+
+func (singleJoin *SingleJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := singleJoin.ctr
 	if ctr != nil {
 		ctr.cleanBatch(proc)
 		ctr.cleanEvalVectors()
 		ctr.cleanHashMap()
 		ctr.cleanExprExecutor()
 		ctr.FreeAllReg()
+
+		anal := proc.GetAnalyze(singleJoin.GetIdx(), singleJoin.GetParallelIdx(), singleJoin.GetParallelMajor())
+		anal.Alloc(ctr.maxAllocSize)
+		singleJoin.ctr = nil
 	}
 }
 
 func (ctr *container) cleanExprExecutor() {
 	if ctr.expr != nil {
 		ctr.expr.Free()
+		ctr.expr = nil
 	}
 }
 
@@ -158,5 +167,8 @@ func (ctr *container) cleanEvalVectors() {
 		if ctr.evecs[i].executor != nil {
 			ctr.evecs[i].executor.Free()
 		}
+		ctr.evecs[i].vec = nil
 	}
+
+	ctr.evecs = nil
 }

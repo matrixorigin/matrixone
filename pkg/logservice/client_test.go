@@ -52,46 +52,51 @@ func runClientTest(
 	readOnly bool,
 	cCfgFn func(bool) ClientConfig,
 	fn func(*testing.T, *Service, ClientConfig, Client)) {
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
 
-	defer leaktest.AfterTest(t)()
-	cfg := getServiceTestConfig()
-	defer vfs.ReportLeakedFD(cfg.FS, t)
-	service, err := NewService(cfg,
-		newFS(),
-		nil,
-		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
-			return true
-		}),
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			defer leaktest.AfterTest(t)()
+			cfg := getServiceTestConfig()
+			defer vfs.ReportLeakedFD(cfg.FS, t)
+			service, err := NewService(cfg,
+				newFS(),
+				nil,
+				WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
+					return true
+				}),
+			)
+			require.NoError(t, err)
+			defer func() {
+				assert.NoError(t, service.Close())
+			}()
+
+			init := make(map[uint64]string)
+			init[2] = service.ID()
+			assert.NoError(t, service.store.startReplica(1, 2, init, false))
+
+			if cCfgFn == nil {
+				cCfgFn = getClientConfig
+			}
+			scfg := cCfgFn(readOnly)
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			c, err := NewClient(ctx, sid, scfg)
+			require.NoError(t, err)
+			defer func() {
+				assert.NoError(t, c.Close())
+			}()
+
+			fn(t, service, scfg, c)
+		},
 	)
-	require.NoError(t, err)
-	defer func() {
-		assert.NoError(t, service.Close())
-	}()
-
-	init := make(map[uint64]string)
-	init[2] = service.ID()
-	assert.NoError(t, service.store.startReplica(1, 2, init, false))
-
-	if cCfgFn == nil {
-		cCfgFn = getClientConfig
-	}
-	scfg := cCfgFn(readOnly)
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	c, err := NewClient(ctx, scfg)
-	require.NoError(t, err)
-	defer func() {
-		assert.NoError(t, c.Close())
-	}()
-
-	fn(t, service, scfg, c)
 }
 
 func TestClientConfigIsValidated(t *testing.T) {
 	cfg := ClientConfig{}
-	cc, err := NewClient(context.TODO(), cfg)
+	cc, err := NewClient(context.TODO(), "", cfg)
 	assert.Nil(t, cc)
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
 }
@@ -168,7 +173,7 @@ func TestClientCanBeConnectedByReverseProxy(t *testing.T) {
 
 	done := false
 	for i := 0; i < 1000; i++ {
-		si, ok, err := GetShardInfo(testServiceAddress, 1)
+		si, ok, err := GetShardInfo("", testServiceAddress, 1)
 		if err != nil || !ok {
 			time.Sleep(10 * time.Millisecond)
 			continue
@@ -188,7 +193,7 @@ func TestClientCanBeConnectedByReverseProxy(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	c, err := NewClient(ctx, scfg)
+	c, err := NewClient(ctx, "", scfg)
 	require.NoError(t, err)
 	defer func() {
 		assert.NoError(t, c.Close())
@@ -242,7 +247,7 @@ func TestClientAppendAlloc(t *testing.T) {
 		rec := c.GetLogRecord(16)
 		rand.Read(rec.Payload())
 		ac := testing.AllocsPerRun(1000, func() {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 			defer cancel()
 			_, err := c.Append(ctx, rec)
 			require.NoError(t, err)

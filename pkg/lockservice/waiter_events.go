@@ -16,18 +16,22 @@ package lockservice
 
 import (
 	"context"
+	"encoding/hex"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"go.uber.org/zap"
 )
 
 var (
 	defaultLazyCheckDuration atomic.Value
+	waitTooLong              = time.Minute
 )
 
 func init() {
@@ -48,6 +52,7 @@ type lockContext struct {
 	lockFunc func(*lockContext, bool)
 	w        *waiter
 	createAt time.Time
+	closed   bool
 }
 
 func (l *localLockTable) newLockContext(
@@ -67,6 +72,10 @@ func (l *localLockTable) newLockContext(
 	c.result = pb.Result{LockedOn: bind}
 	c.createAt = time.Now()
 	return c
+}
+
+func (c lockContext) TypeName() string {
+	return "lockservice.lockContext"
 }
 
 func (c *lockContext) done(err error) {
@@ -99,10 +108,14 @@ func (e event) notified() {
 // waiterEvents is used to handle all notified waiters. And use a pool to retry the lock op,
 // to avoid too many goroutine blocked.
 type waiterEvents struct {
-	n        int
-	detector *detector
-	eventC   chan *lockContext
-	stopper  *stopper.Stopper
+	logger       *log.MOLogger
+	workers      int
+	detector     *detector
+	eventC       chan *lockContext
+	checkOrphanC chan checkOrphan
+	txnHolder    activeTxnHolder
+	unlock       func(ctx context.Context, txnID []byte, commitTS timestamp.Timestamp, mutations ...pb.ExtraMutation) error
+	stopper      *stopper.Stopper
 
 	mu struct {
 		sync.RWMutex
@@ -111,18 +124,26 @@ type waiterEvents struct {
 }
 
 func newWaiterEvents(
-	n int,
-	detector *detector) *waiterEvents {
+	workers int,
+	detector *detector,
+	txnHolder activeTxnHolder,
+	unlock func(ctx context.Context, txnID []byte, commitTS timestamp.Timestamp, mutations ...pb.ExtraMutation) error,
+	logger *log.MOLogger,
+) *waiterEvents {
 	return &waiterEvents{
-		n:        n,
-		detector: detector,
-		eventC:   make(chan *lockContext, 10000),
-		stopper:  stopper.NewStopper("waiter-events", stopper.WithLogger(getLogger().RawLogger())),
+		logger:       logger,
+		workers:      workers,
+		detector:     detector,
+		txnHolder:    txnHolder,
+		unlock:       unlock,
+		eventC:       make(chan *lockContext, 10000),
+		checkOrphanC: make(chan checkOrphan, 64),
+		stopper:      stopper.NewStopper("waiter-events", stopper.WithLogger(logger.RawLogger())),
 	}
 }
 
 func (mw *waiterEvents) start() {
-	for i := 0; i < mw.n; i++ {
+	for i := 0; i < mw.workers; i++ {
 		if err := mw.stopper.RunTask(mw.handle); err != nil {
 			panic(err)
 		}
@@ -171,6 +192,8 @@ func (mw *waiterEvents) handle(ctx context.Context) {
 			txn.Lock()
 			c.doLock()
 			txn.Unlock()
+		case v := <-mw.checkOrphanC:
+			mw.checkOrphan(v)
 		case <-timer.C:
 			mw.check(timeout)
 			timer.Reset(timeout)
@@ -185,34 +208,24 @@ func (mw *waiterEvents) check(timeout time.Duration) {
 		return
 	}
 
-	stopAt := -1
 	now := time.Now()
+	newBlockedWaiters := mw.mu.blockedWaiters[:0]
 	for i, w := range mw.mu.blockedWaiters {
-		if now.Sub(w.waitAt.Load().(time.Time)) < timeout {
-			stopAt = i
-			break
-		}
-
-		// already completed
+		// remove if not in blocking state
 		if w.getStatus() != blocking {
+			w.close()
+			mw.mu.blockedWaiters[i] = nil
 			continue
 		}
 
-		// deadlock check busy, retry later
-		if err := mw.addToDeadlockCheck(w); err != nil {
-			stopAt = i
-			break
+		wait := now.Sub(w.waitAt.Load().(time.Time))
+		mw.addToOrphanCheck(w, wait)
+		if wait >= timeout {
+			mw.addToDeadlockCheck(w)
 		}
+		newBlockedWaiters = append(newBlockedWaiters, w)
 	}
-	if stopAt == -1 {
-		stopAt = len(mw.mu.blockedWaiters)
-	}
-	for i := 0; i < stopAt; i++ {
-		mw.mu.blockedWaiters[i].close()
-		mw.mu.blockedWaiters[i] = nil
-	}
-
-	mw.mu.blockedWaiters = append(mw.mu.blockedWaiters[:0], mw.mu.blockedWaiters[stopAt:]...)
+	mw.mu.blockedWaiters = newBlockedWaiters
 }
 
 func (mw *waiterEvents) addToDeadlockCheck(w *waiter) error {
@@ -224,6 +237,76 @@ func (mw *waiterEvents) addToDeadlockCheck(w *waiter) error {
 	return nil
 }
 
-func (c lockContext) TypeName() string {
-	return "lockservice.lockContext"
+func (mw *waiterEvents) checkOrphan(v checkOrphan) {
+	if mw.txnHolder == nil {
+		return
+	}
+
+	if v.wait >= waitTooLong {
+		lockDetail := ""
+		v.lt.mu.RLock()
+		lock, ok := v.lt.mu.store.Get(v.key)
+		if ok {
+			lockDetail = lock.String()
+		}
+		mw.logger.Warn("wait too long",
+			zap.Duration("wait", v.wait),
+			zap.String("key", hex.EncodeToString(v.key)),
+			zap.String("bind", v.lt.bind.DebugString()),
+			zap.String("lock", lockDetail),
+			zap.String("txn", hex.EncodeToString(v.txn.TxnID)))
+		v.lt.mu.RUnlock()
+	}
+
+	holders := func() []pb.WaitTxn {
+		var holders []pb.WaitTxn
+		v.lt.mu.RLock()
+		defer v.lt.mu.RUnlock()
+
+		lock, ok := v.lt.mu.store.Get(v.key)
+		if !ok {
+			return nil
+		}
+
+		holders = append(holders, lock.holders.txns...)
+		return holders
+	}()
+	if len(holders) == 0 {
+		return
+	}
+
+	for _, h := range holders {
+		// When you have determined that a remote transaction is an orphaned transaction, you
+		// can release the lock that the remote transaction has placed on the current cn.
+		if !mw.txnHolder.isValidRemoteTxn(h) {
+			mw.logger.Warn("found orphans txns",
+				bytesArrayField("txns", [][]byte{h.TxnID}))
+			// ignore error. If failed will retry until lock removed
+			_ = mw.unlock(context.Background(), h.TxnID, timestamp.Timestamp{})
+		}
+	}
+}
+
+func (mw *waiterEvents) addToOrphanCheck(
+	w *waiter,
+	wait time.Duration,
+) {
+	v := checkOrphan{
+		wait: wait,
+		key:  w.conflictKey,
+		lt:   w.lt,
+		txn:  w.txn,
+	}
+
+	select {
+	case mw.checkOrphanC <- v:
+	default:
+	}
+}
+
+type checkOrphan struct {
+	wait time.Duration
+	key  []byte
+	lt   *localLockTable
+	txn  pb.WaitTxn
 }

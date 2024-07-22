@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -98,6 +99,19 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	lval.str = str
 	return typ
 }
+
+func (l *Lexer) GetDbOrTblName(origin string) string {
+	if l.lower == 1 {
+		return strings.ToLower(origin)
+	}
+	return origin
+}
+
+func (l *Lexer) GetDbOrTblNameCStr(origin string) *tree.CStr {
+	return tree.NewCStr(origin, l.lower)
+}
+
+var CaseInsensitiveDbs = []string{"information_schema", "mysql"}
 
 func (l *Lexer) Error(err string) {
 	errMsg := fmt.Sprintf("You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. %s", err)

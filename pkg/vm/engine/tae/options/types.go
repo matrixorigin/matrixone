@@ -18,10 +18,13 @@ import (
 	"context"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
 )
 
@@ -35,11 +38,13 @@ const (
 
 	DefaultScannerInterval              = time.Second * 5
 	DefaultCheckpointFlushInterval      = time.Minute
+	DefaultCheckpointTransferInterval   = time.Second * 5
 	DefaultCheckpointMinCount           = int64(100)
 	DefaultCheckpointIncremetalInterval = time.Minute
 	DefaultCheckpointGlobalMinCount     = 10
 	DefaultGlobalVersionInterval        = time.Hour
 	DefaultGCCheckpointInterval         = time.Minute
+	DefaultOverallFlushMemControl       = common.Const1GBytes
 
 	DefaultScanGCInterval = time.Minute * 30
 	DefaultGCTTL          = time.Hour
@@ -67,18 +72,21 @@ type Options struct {
 	SchedulerCfg  *SchedulerCfg  `toml:"scheduler-cfg"`
 	GCCfg         *GCCfg         `toml:"gc-cfg"`
 	LogtailCfg    *LogtailCfg
+	MergeCfg      *MergeConfig
 	CatalogCfg    *CatalogCfg
 
-	TransferTableTTL time.Duration
-
-	IncrementalDedup bool
-
-	Clock     clock.Clock
-	Fs        fileservice.FileService
-	Lc        logservicedriver.LogServiceClientFactory
-	Shard     metadata.TNShard
-	LogStoreT LogstoreType
-	Ctx       context.Context
 	// MaxMessageSize is the size of max message which is sent to log-service.
-	MaxMessageSize uint64
+	MaxMessageSize   uint64
+	TransferTableTTL time.Duration
+	IncrementalDedup bool
+	IsStandalone     bool
+	LogStoreT        LogstoreType
+
+	Fs                fileservice.FileService                  `toml:"-"`
+	LocalFs           fileservice.FileService                  `toml:"-"`
+	Lc                logservicedriver.LogServiceClientFactory `toml:"-"`
+	Ctx               context.Context                          `toml:"-"`
+	Shard             metadata.TNShard                         `toml:"-"`
+	Clock             clock.Clock                              `toml:"-"`
+	TaskServiceGetter taskservice.Getter                       `toml:"-"`
 }

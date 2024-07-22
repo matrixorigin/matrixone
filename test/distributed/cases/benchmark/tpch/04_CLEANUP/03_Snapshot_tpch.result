@@ -1,0 +1,2542 @@
+use tpch;
+select
+l_returnflag,
+l_linestatus,
+sum(l_quantity) as sum_qty,
+sum(l_extendedprice) as sum_base_price,
+sum(l_extendedprice * (1 - l_discount)) as sum_disc_price,
+sum(l_extendedprice * (1 - l_discount) * (1 + l_tax)) as sum_charge,
+avg(l_quantity) as avg_qty,
+avg(l_extendedprice) as avg_price,
+avg(l_discount) as avg_disc,
+count(*) as count_order
+from
+lineitem {snapshot = 'tpch_snapshot'}
+where
+l_shipdate <= date '1998-12-01' - interval '112' day
+group by
+l_returnflag,
+l_linestatus
+order by
+l_returnflag,
+l_linestatus
+;
+l_returnflag    l_linestatus    sum_qty    sum_base_price    sum_disc_price    sum_charge    avg_qty    avg_price    avg_disc    count_order
+A    F    37474.00    37569624.64    35676192.0970    37101416.222424    25.35453315    25419.23182679    0.05086604    1478
+N    F    1041.00    1041301.07    999060.8980    1036450.802280    27.39473684    27402.65973684    0.04289474    38
+N    O    73962.00    74177309.20    70512214.0527    73308018.638225    25.52173913    25596.03492063    0.04965148    2898
+R    F    36511.00    36570841.24    34738472.8758    36169060.112193    25.05902539    25100.09693892    0.05002745    1457
+select
+l_returnflag,
+l_linestatus,
+sum(l_quantity) as sum_qty,
+sum(l_extendedprice) as sum_base_price,
+sum(l_extendedprice * (1 - l_discount)) as sum_disc_price,
+sum(l_extendedprice * (1 - l_discount) * (1 + l_tax)) as sum_charge,
+avg(l_quantity) as avg_qty,
+avg(l_extendedprice) as avg_price,
+avg(l_discount) as avg_disc,
+count(*) as count_order
+from
+lineitem {snapshot = 'tpch_snapshot'}
+where
+l_shipdate <= date '1998-12-01' - interval '112' day
+group by
+l_returnflag,
+l_linestatus
+order by
+l_returnflag,
+l_linestatus
+;
+l_returnflag    l_linestatus    sum_qty    sum_base_price    sum_disc_price    sum_charge    avg_qty    avg_price    avg_disc    count_order
+A    F    37474.00    37569624.64    35676192.0970    37101416.222424    25.35453315    25419.23182679    0.05086604    1478
+N    F    1041.00    1041301.07    999060.8980    1036450.802280    27.39473684    27402.65973684    0.04289474    38
+N    O    73962.00    74177309.20    70512214.0527    73308018.638225    25.52173913    25596.03492063    0.04965148    2898
+R    F    36511.00    36570841.24    34738472.8758    36169060.112193    25.05902539    25100.09693892    0.05002745    1457
+select
+l_returnflag,
+l_linestatus,
+sum(l_quantity) as sum_qty,
+sum(l_extendedprice) as sum_base_price,
+sum(l_extendedprice * (1 - l_discount)) as sum_disc_price,
+sum(l_extendedprice * (1 - l_discount) * (1 + l_tax)) as sum_charge,
+avg(l_quantity) as avg_qty,
+avg(l_extendedprice) as avg_price,
+avg(l_discount) as avg_disc,
+count(*) as count_order
+from
+lineitem {snapshot = 'tpch_snapshot'}
+where
+l_shipdate <= date '1998-12-01' - interval '112' day
+group by
+l_returnflag,
+l_linestatus
+order by
+l_returnflag,
+l_linestatus
+;
+l_returnflag    l_linestatus    sum_qty    sum_base_price    sum_disc_price    sum_charge    avg_qty    avg_price    avg_disc    count_order
+A    F    37474.00    37569624.64    35676192.0970    37101416.222424    25.35453315    25419.23182679    0.05086604    1478
+N    F    1041.00    1041301.07    999060.8980    1036450.802280    27.39473684    27402.65973684    0.04289474    38
+N    O    73962.00    74177309.20    70512214.0527    73308018.638225    25.52173913    25596.03492063    0.04965148    2898
+R    F    36511.00    36570841.24    34738472.8758    36169060.112193    25.05902539    25100.09693892    0.05002745    1457
+select
+s_acctbal,
+s_name,
+n_name,
+p_partkey,
+p_mfgr,
+s_address,
+s_phone,
+s_comment
+from
+part {snapshot = 'tpch_snapshot'},
+supplier {snapshot = 'tpch_snapshot'},
+partsupp {snapshot = 'tpch_snapshot'},
+nation {snapshot = 'tpch_snapshot'},
+region {snapshot = 'tpch_snapshot'}
+where
+p_partkey = ps_partkey
+and s_suppkey = ps_suppkey
+and p_size = 48
+and p_type like '%TIN'
+and s_nationkey = n_nationkey
+and n_regionkey = r_regionkey
+and r_name = 'MIDDLE EAST'
+and ps_supplycost = (
+select
+min(ps_supplycost)
+from
+partsupp {snapshot = 'tpch_snapshot'},
+supplier {snapshot = 'tpch_snapshot'},
+nation {snapshot = 'tpch_snapshot'},
+region {snapshot = 'tpch_snapshot'}
+where
+p_partkey = ps_partkey
+and s_suppkey = ps_suppkey
+and s_nationkey = n_nationkey
+and n_regionkey = r_regionkey
+and r_name = 'MIDDLE EAST'
+)
+order by
+s_acctbal desc,
+n_name,
+s_name,
+p_partkey
+limit 100
+;
+s_acctbal    s_name    n_name    p_partkey    p_mfgr    s_address    s_phone    s_comment
+-283.84    Supplier#000000005    IRAQ    44    Manufacturer#4    Gcdm2rJRzl5qlTVzc    21-151-690-3663    . slyly regular pinto bea
+select
+s_acctbal,
+s_name,
+n_name,
+p_partkey,
+p_mfgr,
+s_address,
+s_phone,
+s_comment
+from
+part {snapshot = 'tpch_snapshot'},
+supplier {snapshot = 'tpch_snapshot'},
+partsupp {snapshot = 'tpch_snapshot'},
+nation {snapshot = 'tpch_snapshot'},
+region {snapshot = 'tpch_snapshot'}
+where
+p_partkey = ps_partkey
+and s_suppkey = ps_suppkey
+and p_size = 48
+and p_type like '%TIN'
+and s_nationkey = n_nationkey
+and n_regionkey = r_regionkey
+and r_name = 'MIDDLE EAST'
+and ps_supplycost = (
+select
+min(ps_supplycost)
+from
+partsupp {snapshot = 'tpch_snapshot'},
+supplier {snapshot = 'tpch_snapshot'},
+nation {snapshot = 'tpch_snapshot'},
+region {snapshot = 'tpch_snapshot'}
+where
+p_partkey = ps_partkey
+and s_suppkey = ps_suppkey
+and s_nationkey = n_nationkey
+and n_regionkey = r_regionkey
+and r_name = 'MIDDLE EAST'
+)
+order by
+s_acctbal desc,
+n_name,
+s_name,
+p_partkey
+limit 100
+;
+s_acctbal    s_name    n_name    p_partkey    p_mfgr    s_address    s_phone    s_comment
+-283.84    Supplier#000000005    IRAQ    44    Manufacturer#4    Gcdm2rJRzl5qlTVzc    21-151-690-3663    . slyly regular pinto bea
+select
+s_acctbal,
+s_name,
+n_name,
+p_partkey,
+p_mfgr,
+s_address,
+s_phone,
+s_comment
+from
+part {snapshot = 'tpch_snapshot'},
+supplier {snapshot = 'tpch_snapshot'},
+partsupp {snapshot = 'tpch_snapshot'},
+nation {snapshot = 'tpch_snapshot'},
+region {snapshot = 'tpch_snapshot'}
+where
+p_partkey = ps_partkey
+and s_suppkey = ps_suppkey
+and p_size = 48
+and p_type like '%TIN'
+and s_nationkey = n_nationkey
+and n_regionkey = r_regionkey
+and r_name = 'MIDDLE EAST'
+and ps_supplycost = (
+select
+min(ps_supplycost)
+from
+partsupp {snapshot = 'tpch_snapshot'},
+supplier {snapshot = 'tpch_snapshot'},
+nation {snapshot = 'tpch_snapshot'},
+region {snapshot = 'tpch_snapshot'}
+where
+p_partkey = ps_partkey
+and s_suppkey = ps_suppkey
+and s_nationkey = n_nationkey
+and n_regionkey = r_regionkey
+and r_name = 'MIDDLE EAST'
+)
+order by
+s_acctbal desc,
+n_name,
+s_name,
+p_partkey
+limit 100
+;
+s_acctbal    s_name    n_name    p_partkey    p_mfgr    s_address    s_phone    s_comment
+-283.84    Supplier#000000005    IRAQ    44    Manufacturer#4    Gcdm2rJRzl5qlTVzc    21-151-690-3663    . slyly regular pinto bea
+select
+l_orderkey,
+sum(l_extendedprice * (1 - l_discount)) as revenue,
+o_orderdate,
+o_shippriority
+from
+customer {snapshot = 'tpch_snapshot'},
+orders {snapshot = 'tpch_snapshot'},
+lineitem {snapshot = 'tpch_snapshot'}
+where
+c_mktsegment = 'HOUSEHOLD'
+and c_custkey = o_custkey
+and l_orderkey = o_orderkey
+and o_orderdate < date '1995-03-29'
+and l_shipdate > date '1995-03-29'
+group by
+l_orderkey,
+o_orderdate,
+o_shippriority
+order by
+revenue desc,
+o_orderdate
+limit 10
+;
+l_orderkey    revenue    o_orderdate    o_shippriority
+643    174011.2942    1995-03-25    0
+5444    166691.7175    1995-03-18    0
+4642    113368.5066    1995-02-27    0
+3749    83734.8686    1995-02-24    0
+5955    65943.2992    1995-03-27    0
+5765    65713.4436    1994-12-15    0
+5636    64688.1780    1995-02-16    0
+930    51611.7600    1994-12-17    0
+1445    44384.8914    1995-01-10    0
+3399    36727.7730    1995-02-28    0
+select
+l_orderkey,
+sum(l_extendedprice * (1 - l_discount)) as revenue,
+o_orderdate,
+o_shippriority
+from
+customer {snapshot = 'tpch_snapshot'},
+orders {snapshot = 'tpch_snapshot'},
+lineitem {snapshot = 'tpch_snapshot'}
+where
+c_mktsegment = 'HOUSEHOLD'
+and c_custkey = o_custkey
+and l_orderkey = o_orderkey
+and o_orderdate < date '1995-03-29'
+and l_shipdate > date '1995-03-29'
+group by
+l_orderkey,
+o_orderdate,
+o_shippriority
+order by
+revenue desc,
+o_orderdate
+limit 10
+;
+l_orderkey    revenue    o_orderdate    o_shippriority
+643    174011.2942    1995-03-25    0
+5444    166691.7175    1995-03-18    0
+4642    113368.5066    1995-02-27    0
+3749    83734.8686    1995-02-24    0
+5955    65943.2992    1995-03-27    0
+5765    65713.4436    1994-12-15    0
+5636    64688.1780    1995-02-16    0
+930    51611.7600    1994-12-17    0
+1445    44384.8914    1995-01-10    0
+3399    36727.7730    1995-02-28    0
+select
+l_orderkey,
+sum(l_extendedprice * (1 - l_discount)) as revenue,
+o_orderdate,
+o_shippriority
+from
+customer {snapshot = 'tpch_snapshot'},
+orders {snapshot = 'tpch_snapshot'},
+lineitem {snapshot = 'tpch_snapshot'}
+where
+c_mktsegment = 'HOUSEHOLD'
+and c_custkey = o_custkey
+and l_orderkey = o_orderkey
+and o_orderdate < date '1995-03-29'
+and l_shipdate > date '1995-03-29'
+group by
+l_orderkey,
+o_orderdate,
+o_shippriority
+order by
+revenue desc,
+o_orderdate
+limit 10
+;
+l_orderkey    revenue    o_orderdate    o_shippriority
+643    174011.2942    1995-03-25    0
+5444    166691.7175    1995-03-18    0
+4642    113368.5066    1995-02-27    0
+3749    83734.8686    1995-02-24    0
+5955    65943.2992    1995-03-27    0
+5765    65713.4436    1994-12-15    0
+5636    64688.1780    1995-02-16    0
+930    51611.7600    1994-12-17    0
+1445    44384.8914    1995-01-10    0
+3399    36727.7730    1995-02-28    0
+select
+o_orderpriority,
+count(*) as order_count
+from
+orders {snapshot = 'tpch_snapshot'}
+where
+o_orderdate >= date '1997-07-01'
+and o_orderdate < date '1997-07-01' + interval '3' month
+and exists (
+select
+*
+from
+lineitem {snapshot = 'tpch_snapshot'}
+where
+l_orderkey = o_orderkey
+and l_commitdate < l_receiptdate
+)
+group by
+o_orderpriority
+order by
+o_orderpriority
+;
+o_orderpriority    order_count
+1-URGENT    16
+2-HIGH    9
+3-MEDIUM    6
+4-NOT SPECIFIED    8
+5-LOW    6
+select
+o_orderpriority,
+count(*) as order_count
+from
+orders {snapshot = 'tpch_snapshot'}
+where
+o_orderdate >= date '1997-07-01'
+and o_orderdate < date '1997-07-01' + interval '3' month
+and exists (
+select
+*
+from
+lineitem {snapshot = 'tpch_snapshot'}
+where
+l_orderkey = o_orderkey
+and l_commitdate < l_receiptdate
+)
+group by
+o_orderpriority
+order by
+o_orderpriority
+;
+o_orderpriority    order_count
+1-URGENT    16
+2-HIGH    9
+3-MEDIUM    6
+4-NOT SPECIFIED    8
+5-LOW    6
+select
+o_orderpriority,
+count(*) as order_count
+from
+orders {snapshot = 'tpch_snapshot'}
+where
+o_orderdate >= date '1997-07-01'
+and o_orderdate < date '1997-07-01' + interval '3' month
+and exists (
+select
+*
+from
+lineitem {snapshot = 'tpch_snapshot'}
+where
+l_orderkey = o_orderkey
+and l_commitdate < l_receiptdate
+)
+group by
+o_orderpriority
+order by
+o_orderpriority
+;
+o_orderpriority    order_count
+1-URGENT    16
+2-HIGH    9
+3-MEDIUM    6
+4-NOT SPECIFIED    8
+5-LOW    6
+select
+n_name,
+sum(l_extendedprice * (1 - l_discount)) as revenue
+from
+customer {snapshot = 'tpch_snapshot'},
+orders {snapshot = 'tpch_snapshot'},
+lineitem {snapshot = 'tpch_snapshot'},
+supplier {snapshot = 'tpch_snapshot'},
+nation {snapshot = 'tpch_snapshot'},
+region {snapshot = 'tpch_snapshot'}
+where
+c_custkey = o_custkey
+and l_orderkey = o_orderkey
+and l_suppkey = s_suppkey
+and c_nationkey = s_nationkey
+and s_nationkey = n_nationkey
+and n_regionkey = r_regionkey
+and r_name = 'AMERICA'
+and o_orderdate >= date '1994-01-01'
+and o_orderdate < date '1994-01-01' + interval '1' year
+group by
+n_name
+order by
+revenue desc
+;
+n_name    revenue
+PERU    272671.5220
+select
+n_name,
+sum(l_extendedprice * (1 - l_discount)) as revenue
+from
+customer {snapshot = 'tpch_snapshot'},
+orders {snapshot = 'tpch_snapshot'},
+lineitem {snapshot = 'tpch_snapshot'},
+supplier {snapshot = 'tpch_snapshot'},
+nation {snapshot = 'tpch_snapshot'},
+region {snapshot = 'tpch_snapshot'}
+where
+c_custkey = o_custkey
+and l_orderkey = o_orderkey
+and l_suppkey = s_suppkey
+and c_nationkey = s_nationkey
+and s_nationkey = n_nationkey
+and n_regionkey = r_regionkey
+and r_name = 'AMERICA'
+and o_orderdate >= date '1994-01-01'
+and o_orderdate < date '1994-01-01' + interval '1' year
+group by
+n_name
+order by
+revenue desc
+;
+n_name    revenue
+PERU    272671.5220
+select
+n_name,
+sum(l_extendedprice * (1 - l_discount)) as revenue
+from
+customer {snapshot = 'tpch_snapshot'},
+orders {snapshot = 'tpch_snapshot'},
+lineitem {snapshot = 'tpch_snapshot'},
+supplier {snapshot = 'tpch_snapshot'},
+nation {snapshot = 'tpch_snapshot'},
+region {snapshot = 'tpch_snapshot'}
+where
+c_custkey = o_custkey
+and l_orderkey = o_orderkey
+and l_suppkey = s_suppkey
+and c_nationkey = s_nationkey
+and s_nationkey = n_nationkey
+and n_regionkey = r_regionkey
+and r_name = 'AMERICA'
+and o_orderdate >= date '1994-01-01'
+and o_orderdate < date '1994-01-01' + interval '1' year
+group by
+n_name
+order by
+revenue desc
+;
+n_name    revenue
+PERU    272671.5220
+select
+sum(l_extendedprice * l_discount) as revenue
+from
+lineitem {snapshot = 'tpch_snapshot'}
+where
+l_shipdate >= date '1994-01-01'
+and l_shipdate < date '1994-01-01' + interval '1' year
+and l_discount between 0.03 - 0.01 and 0.03 + 0.01
+and l_quantity < 24;
+revenue
+43092.5479
+select
+sum(l_extendedprice * l_discount) as revenue
+from
+lineitem {snapshot = 'tpch_snapshot'}
+where
+l_shipdate >= date '1994-01-01'
+and l_shipdate < date '1994-01-01' + interval '1' year
+and l_discount between 0.03 - 0.01 and 0.03 + 0.01
+and l_quantity < 24;
+revenue
+43092.5479
+select
+sum(l_extendedprice * l_discount) as revenue
+from
+lineitem {snapshot = 'tpch_snapshot'}
+where
+l_shipdate >= date '1994-01-01'
+and l_shipdate < date '1994-01-01' + interval '1' year
+and l_discount between 0.03 - 0.01 and 0.03 + 0.01
+and l_quantity < 24;
+revenue
+43092.5479
+select
+supp_nation,
+cust_nation,
+l_year,
+sum(volume) as revenue
+from
+(
+select
+n1.n_name as supp_nation,
+n2.n_name as cust_nation,
+extract(year from l_shipdate) as l_year,
+l_extendedprice * (1 - l_discount) as volume
+from
+supplier {snapshot = 'tpch_snapshot'},
+lineitem {snapshot = 'tpch_snapshot'},
+orders {snapshot = 'tpch_snapshot'},
+customer {snapshot = 'tpch_snapshot'},
+nation {snapshot = 'tpch_snapshot'} n1 ,
+nation {snapshot = 'tpch_snapshot'} n2
+where
+s_suppkey = l_suppkey
+and o_orderkey = l_orderkey
+and c_custkey = o_custkey
+and s_nationkey = n1.n_nationkey
+and c_nationkey = n2.n_nationkey
+and (
+(n1.n_name = 'FRANCE' and n2.n_name = 'ARGENTINA')
+or (n1.n_name = 'ARGENTINA' and n2.n_name = 'FRANCE')
+)
+and l_shipdate between date '1995-01-01' and date '1996-12-31'
+) as shipping
+group by
+supp_nation,
+cust_nation,
+l_year
+order by
+supp_nation,
+cust_nation,
+l_year
+;
+supp_nation    cust_nation    l_year    revenue
+ARGENTINA    FRANCE    1995    36554.0010
+ARGENTINA    FRANCE    1996    64102.9664
+select
+supp_nation,
+cust_nation,
+l_year,
+sum(volume) as revenue
+from
+(
+select
+n1.n_name as supp_nation,
+n2.n_name as cust_nation,
+extract(year from l_shipdate) as l_year,
+l_extendedprice * (1 - l_discount) as volume
+from
+supplier {snapshot = 'tpch_snapshot'},
+lineitem {snapshot = 'tpch_snapshot'},
+orders {snapshot = 'tpch_snapshot'},
+customer {snapshot = 'tpch_snapshot'},
+nation {snapshot = 'tpch_snapshot'} n1 ,
+nation {snapshot = 'tpch_snapshot'} n2
+where
+s_suppkey = l_suppkey
+and o_orderkey = l_orderkey
+and c_custkey = o_custkey
+and s_nationkey = n1.n_nationkey
+and c_nationkey = n2.n_nationkey
+and (
+(n1.n_name = 'FRANCE' and n2.n_name = 'ARGENTINA')
+or (n1.n_name = 'ARGENTINA' and n2.n_name = 'FRANCE')
+)
+and l_shipdate between date '1995-01-01' and date '1996-12-31'
+) as shipping
+group by
+supp_nation,
+cust_nation,
+l_year
+order by
+supp_nation,
+cust_nation,
+l_year
+;
+supp_nation    cust_nation    l_year    revenue
+ARGENTINA    FRANCE    1995    36554.0010
+ARGENTINA    FRANCE    1996    64102.9664
+select
+supp_nation,
+cust_nation,
+l_year,
+sum(volume) as revenue
+from
+(
+select
+n1.n_name as supp_nation,
+n2.n_name as cust_nation,
+extract(year from l_shipdate) as l_year,
+l_extendedprice * (1 - l_discount) as volume
+from
+supplier {snapshot = 'tpch_snapshot'},
+lineitem {snapshot = 'tpch_snapshot'},
+orders {snapshot = 'tpch_snapshot'},
+customer {snapshot = 'tpch_snapshot'},
+nation {snapshot = 'tpch_snapshot'} n1 ,
+nation {snapshot = 'tpch_snapshot'} n2
+where
+s_suppkey = l_suppkey
+and o_orderkey = l_orderkey
+and c_custkey = o_custkey
+and s_nationkey = n1.n_nationkey
+and c_nationkey = n2.n_nationkey
+and (
+(n1.n_name = 'FRANCE' and n2.n_name = 'ARGENTINA')
+or (n1.n_name = 'ARGENTINA' and n2.n_name = 'FRANCE')
+)
+and l_shipdate between date '1995-01-01' and date '1996-12-31'
+) as shipping
+group by
+supp_nation,
+cust_nation,
+l_year
+order by
+supp_nation,
+cust_nation,
+l_year
+;
+supp_nation    cust_nation    l_year    revenue
+ARGENTINA    FRANCE    1995    36554.0010
+ARGENTINA    FRANCE    1996    64102.9664
+select
+o_year,
+(sum(case
+when nation = 'ARGENTINA' then volume
+else 0
+end) / sum(volume)) as mkt_share
+from
+(
+select
+extract(year from o_orderdate) as o_year,
+l_extendedprice * (1 - l_discount) as volume,
+n2.n_name as nation
+from
+part {snapshot = 'tpch_snapshot'},
+supplier {snapshot = 'tpch_snapshot'},
+lineitem {snapshot = 'tpch_snapshot'},
+orders {snapshot = 'tpch_snapshot'},
+customer {snapshot = 'tpch_snapshot'},
+nation {snapshot = 'tpch_snapshot'} n1,
+nation {snapshot = 'tpch_snapshot'} n2,
+region {snapshot = 'tpch_snapshot'}
+where
+p_partkey = l_partkey
+and s_suppkey = l_suppkey
+and l_orderkey = o_orderkey
+and o_custkey = c_custkey
+and c_nationkey = n1.n_nationkey
+and n1.n_regionkey = r_regionkey
+and r_name = 'AMERICA'
+and s_nationkey = n2.n_nationkey
+and o_orderdate between date '1995-01-01' and date '1996-12-31'
+and p_type = 'ECONOMY BURNISHED TIN'
+) as all_nations
+group by
+o_year
+order by
+o_year
+;
+o_year    mkt_share
+1995    0E-10
+1996    0E-10
+select
+o_year,
+(sum(case
+when nation = 'ARGENTINA' then volume
+else 0
+end) / sum(volume)) as mkt_share
+from
+(
+select
+extract(year from o_orderdate) as o_year,
+l_extendedprice * (1 - l_discount) as volume,
+n2.n_name as nation
+from
+part {snapshot = 'tpch_snapshot'},
+supplier {snapshot = 'tpch_snapshot'},
+lineitem {snapshot = 'tpch_snapshot'},
+orders {snapshot = 'tpch_snapshot'},
+customer {snapshot = 'tpch_snapshot'},
+nation {snapshot = 'tpch_snapshot'} n1,
+nation {snapshot = 'tpch_snapshot'} n2,
+region {snapshot = 'tpch_snapshot'}
+where
+p_partkey = l_partkey
+and s_suppkey = l_suppkey
+and l_orderkey = o_orderkey
+and o_custkey = c_custkey
+and c_nationkey = n1.n_nationkey
+and n1.n_regionkey = r_regionkey
+and r_name = 'AMERICA'
+and s_nationkey = n2.n_nationkey
+and o_orderdate between date '1995-01-01' and date '1996-12-31'
+and p_type = 'ECONOMY BURNISHED TIN'
+) as all_nations
+group by
+o_year
+order by
+o_year
+;
+o_year    mkt_share
+1995    0E-10
+1996    0E-10
+select
+o_year,
+(sum(case
+when nation = 'ARGENTINA' then volume
+else 0
+end) / sum(volume)) as mkt_share
+from
+(
+select
+extract(year from o_orderdate) as o_year,
+l_extendedprice * (1 - l_discount) as volume,
+n2.n_name as nation
+from
+part {snapshot = 'tpch_snapshot'},
+supplier {snapshot = 'tpch_snapshot'},
+lineitem {snapshot = 'tpch_snapshot'},
+orders {snapshot = 'tpch_snapshot'},
+customer {snapshot = 'tpch_snapshot'},
+nation {snapshot = 'tpch_snapshot'} n1,
+nation {snapshot = 'tpch_snapshot'} n2,
+region {snapshot = 'tpch_snapshot'}
+where
+p_partkey = l_partkey
+and s_suppkey = l_suppkey
+and l_orderkey = o_orderkey
+and o_custkey = c_custkey
+and c_nationkey = n1.n_nationkey
+and n1.n_regionkey = r_regionkey
+and r_name = 'AMERICA'
+and s_nationkey = n2.n_nationkey
+and o_orderdate between date '1995-01-01' and date '1996-12-31'
+and p_type = 'ECONOMY BURNISHED TIN'
+) as all_nations
+group by
+o_year
+order by
+o_year
+;
+o_year    mkt_share
+1995    0E-10
+1996    0E-10
+select
+nation,
+o_year,
+sum(amount) as sum_profit
+from
+(
+select
+n_name as nation,
+extract(year from o_orderdate) as o_year,
+l_extendedprice * (1 - l_discount) - ps_supplycost * l_quantity as amount
+from
+part {snapshot = 'tpch_snapshot'},
+supplier {snapshot = 'tpch_snapshot'},
+lineitem {snapshot = 'tpch_snapshot'},
+partsupp {snapshot = 'tpch_snapshot'},
+orders {snapshot = 'tpch_snapshot'},
+nation {snapshot = 'tpch_snapshot'}
+where
+s_suppkey = l_suppkey
+and ps_suppkey = l_suppkey
+and ps_partkey = l_partkey
+and p_partkey = l_partkey
+and o_orderkey = l_orderkey
+and s_nationkey = n_nationkey
+and p_name like '%pink%'
+) as profit
+group by
+nation,
+o_year
+order by
+nation,
+o_year desc
+;
+nation    o_year    sum_profit
+ARGENTINA    1997    6575.4934
+ARGENTINA    1996    12913.1476
+ARGENTINA    1995    109908.3997
+ARGENTINA    1994    39271.1404
+ARGENTINA    1993    39770.6973
+ARGENTINA    1992    35740.0000
+ETHIOPIA    1998    24489.1496
+ETHIOPIA    1997    39665.2644
+ETHIOPIA    1996    113173.0956
+ETHIOPIA    1995    25732.7452
+ETHIOPIA    1994    93731.1008
+ETHIOPIA    1993    147385.8720
+ETHIOPIA    1992    66636.9616
+IRAN    1998    116681.1813
+IRAN    1997    50964.2584
+IRAN    1996    185552.5634
+IRAN    1995    103479.6512
+IRAN    1994    164106.8680
+IRAN    1993    100245.6590
+IRAN    1992    73757.9540
+IRAQ    1998    21292.0377
+IRAQ    1997    128533.3496
+IRAQ    1996    141170.6272
+IRAQ    1995    16607.1624
+IRAQ    1994    16515.2008
+IRAQ    1993    138752.8297
+IRAQ    1992    71365.9886
+KENYA    1997    47549.3594
+KENYA    1996    1866.6024
+KENYA    1995    13480.5734
+KENYA    1994    54826.0012
+KENYA    1993    111983.0035
+KENYA    1992    7651.5866
+MOROCCO    1998    225961.3058
+MOROCCO    1997    288732.1257
+MOROCCO    1996    295243.1019
+MOROCCO    1995    255208.9581
+MOROCCO    1994    158194.0814
+MOROCCO    1993    159196.2528
+MOROCCO    1992    256151.4254
+PERU    1998    35151.8682
+PERU    1997    99779.3198
+PERU    1996    53735.2566
+PERU    1995    71954.3164
+PERU    1994    73084.5552
+PERU    1993    95623.4989
+PERU    1992    38212.4187
+UNITED KINGDOM    1998    176649.9065
+UNITED KINGDOM    1997    74705.2598
+UNITED KINGDOM    1996    62768.5129
+UNITED KINGDOM    1995    93466.7552
+UNITED KINGDOM    1994    89094.2599
+UNITED KINGDOM    1993    112886.5742
+UNITED KINGDOM    1992    142060.9690
+UNITED STATES    1997    111352.3559
+UNITED STATES    1996    78268.8638
+UNITED STATES    1995    251.2274
+UNITED STATES    1994    57303.1500
+UNITED STATES    1993    70350.5923
+UNITED STATES    1992    65369.7612
+select
+nation,
+o_year,
+sum(amount) as sum_profit
+from
+(
+select
+n_name as nation,
+extract(year from o_orderdate) as o_year,
+l_extendedprice * (1 - l_discount) - ps_supplycost * l_quantity as amount
+from
+part {snapshot = 'tpch_snapshot'},
+supplier {snapshot = 'tpch_snapshot'},
+lineitem {snapshot = 'tpch_snapshot'},
+partsupp {snapshot = 'tpch_snapshot'},
+orders {snapshot = 'tpch_snapshot'},
+nation {snapshot = 'tpch_snapshot'}
+where
+s_suppkey = l_suppkey
+and ps_suppkey = l_suppkey
+and ps_partkey = l_partkey
+and p_partkey = l_partkey
+and o_orderkey = l_orderkey
+and s_nationkey = n_nationkey
+and p_name like '%pink%'
+) as profit
+group by
+nation,
+o_year
+order by
+nation,
+o_year desc
+;
+nation    o_year    sum_profit
+ARGENTINA    1997    6575.4934
+ARGENTINA    1996    12913.1476
+ARGENTINA    1995    109908.3997
+ARGENTINA    1994    39271.1404
+ARGENTINA    1993    39770.6973
+ARGENTINA    1992    35740.0000
+ETHIOPIA    1998    24489.1496
+ETHIOPIA    1997    39665.2644
+ETHIOPIA    1996    113173.0956
+ETHIOPIA    1995    25732.7452
+ETHIOPIA    1994    93731.1008
+ETHIOPIA    1993    147385.8720
+ETHIOPIA    1992    66636.9616
+IRAN    1998    116681.1813
+IRAN    1997    50964.2584
+IRAN    1996    185552.5634
+IRAN    1995    103479.6512
+IRAN    1994    164106.8680
+IRAN    1993    100245.6590
+IRAN    1992    73757.9540
+IRAQ    1998    21292.0377
+IRAQ    1997    128533.3496
+IRAQ    1996    141170.6272
+IRAQ    1995    16607.1624
+IRAQ    1994    16515.2008
+IRAQ    1993    138752.8297
+IRAQ    1992    71365.9886
+KENYA    1997    47549.3594
+KENYA    1996    1866.6024
+KENYA    1995    13480.5734
+KENYA    1994    54826.0012
+KENYA    1993    111983.0035
+KENYA    1992    7651.5866
+MOROCCO    1998    225961.3058
+MOROCCO    1997    288732.1257
+MOROCCO    1996    295243.1019
+MOROCCO    1995    255208.9581
+MOROCCO    1994    158194.0814
+MOROCCO    1993    159196.2528
+MOROCCO    1992    256151.4254
+PERU    1998    35151.8682
+PERU    1997    99779.3198
+PERU    1996    53735.2566
+PERU    1995    71954.3164
+PERU    1994    73084.5552
+PERU    1993    95623.4989
+PERU    1992    38212.4187
+UNITED KINGDOM    1998    176649.9065
+UNITED KINGDOM    1997    74705.2598
+UNITED KINGDOM    1996    62768.5129
+UNITED KINGDOM    1995    93466.7552
+UNITED KINGDOM    1994    89094.2599
+UNITED KINGDOM    1993    112886.5742
+UNITED KINGDOM    1992    142060.9690
+UNITED STATES    1997    111352.3559
+UNITED STATES    1996    78268.8638
+UNITED STATES    1995    251.2274
+UNITED STATES    1994    57303.1500
+UNITED STATES    1993    70350.5923
+UNITED STATES    1992    65369.7612
+select
+nation,
+o_year,
+sum(amount) as sum_profit
+from
+(
+select
+n_name as nation,
+extract(year from o_orderdate) as o_year,
+l_extendedprice * (1 - l_discount) - ps_supplycost * l_quantity as amount
+from
+part {snapshot = 'tpch_snapshot'},
+supplier {snapshot = 'tpch_snapshot'},
+lineitem {snapshot = 'tpch_snapshot'},
+partsupp {snapshot = 'tpch_snapshot'},
+orders {snapshot = 'tpch_snapshot'},
+nation {snapshot = 'tpch_snapshot'}
+where
+s_suppkey = l_suppkey
+and ps_suppkey = l_suppkey
+and ps_partkey = l_partkey
+and p_partkey = l_partkey
+and o_orderkey = l_orderkey
+and s_nationkey = n_nationkey
+and p_name like '%pink%'
+) as profit
+group by
+nation,
+o_year
+order by
+nation,
+o_year desc
+;
+nation    o_year    sum_profit
+ARGENTINA    1997    6575.4934
+ARGENTINA    1996    12913.1476
+ARGENTINA    1995    109908.3997
+ARGENTINA    1994    39271.1404
+ARGENTINA    1993    39770.6973
+ARGENTINA    1992    35740.0000
+ETHIOPIA    1998    24489.1496
+ETHIOPIA    1997    39665.2644
+ETHIOPIA    1996    113173.0956
+ETHIOPIA    1995    25732.7452
+ETHIOPIA    1994    93731.1008
+ETHIOPIA    1993    147385.8720
+ETHIOPIA    1992    66636.9616
+IRAN    1998    116681.1813
+IRAN    1997    50964.2584
+IRAN    1996    185552.5634
+IRAN    1995    103479.6512
+IRAN    1994    164106.8680
+IRAN    1993    100245.6590
+IRAN    1992    73757.9540
+IRAQ    1998    21292.0377
+IRAQ    1997    128533.3496
+IRAQ    1996    141170.6272
+IRAQ    1995    16607.1624
+IRAQ    1994    16515.2008
+IRAQ    1993    138752.8297
+IRAQ    1992    71365.9886
+KENYA    1997    47549.3594
+KENYA    1996    1866.6024
+KENYA    1995    13480.5734
+KENYA    1994    54826.0012
+KENYA    1993    111983.0035
+KENYA    1992    7651.5866
+MOROCCO    1998    225961.3058
+MOROCCO    1997    288732.1257
+MOROCCO    1996    295243.1019
+MOROCCO    1995    255208.9581
+MOROCCO    1994    158194.0814
+MOROCCO    1993    159196.2528
+MOROCCO    1992    256151.4254
+PERU    1998    35151.8682
+PERU    1997    99779.3198
+PERU    1996    53735.2566
+PERU    1995    71954.3164
+PERU    1994    73084.5552
+PERU    1993    95623.4989
+PERU    1992    38212.4187
+UNITED KINGDOM    1998    176649.9065
+UNITED KINGDOM    1997    74705.2598
+UNITED KINGDOM    1996    62768.5129
+UNITED KINGDOM    1995    93466.7552
+UNITED KINGDOM    1994    89094.2599
+UNITED KINGDOM    1993    112886.5742
+UNITED KINGDOM    1992    142060.9690
+UNITED STATES    1997    111352.3559
+UNITED STATES    1996    78268.8638
+UNITED STATES    1995    251.2274
+UNITED STATES    1994    57303.1500
+UNITED STATES    1993    70350.5923
+UNITED STATES    1992    65369.7612
+select
+c_custkey,
+c_name,
+sum(l_extendedprice * (1 - l_discount)) as revenue,
+c_acctbal,
+n_name,
+c_address,
+c_phone,
+c_comment
+from
+customer {snapshot = 'tpch_snapshot'},
+orders {snapshot = 'tpch_snapshot'},
+lineitem {snapshot = 'tpch_snapshot'},
+nation {snapshot = 'tpch_snapshot'}
+where
+c_custkey = o_custkey
+and l_orderkey = o_orderkey
+and o_orderdate >= date '1993-03-01'
+and o_orderdate < date '1993-03-01' + interval '3' month
+and l_returnflag = 'R'
+and c_nationkey = n_nationkey
+group by
+c_custkey,
+c_name,
+c_acctbal,
+c_phone,
+n_name,
+c_address,
+c_comment
+order by
+revenue desc
+limit 20
+;
+c_custkey    c_name    revenue    c_acctbal    n_name    c_address    c_phone    c_comment
+70    Customer#000000070    316759.4208    4867.52    RUSSIA    mFowIuhnHjp2GjCiYYavkW kUwOjIaTCQ    32-828-107-2832    fter the special asymptotes. ideas after the unusual frets cajole quickly regular pinto be
+109    Customer#000000109    272732.4698    -716.10    MOZAMBIQUE    OOOkYBgCMzgMQXUmkocoLb56rfrdWp2NE2c    26-992-422-8153    es. fluffily final dependencies sleep along the blithely even pinto beans. final deposits haggle furiously furiou
+106    Customer#000000106    175284.3983    3288.42    ARGENTINA    xGCOEAUjUNG    11-751-989-4627    lose slyly. ironic accounts along the evenly regular theodolites wake about the special, final gifts. 
+2    Customer#000000002    121173.0081    121.65    JORDAN    XSTf4,NCwDVaWNe6tEgvwfmRchLXak    23-768-687-3665    l accounts. blithely ironic theodolites integrate boldly: caref
+100    Customer#000000100    113840.4294    9889.89    SAUDI ARABIA    fptUABXcmkC5Wx    30-749-445-4907    was furiously fluffily quiet deposits. silent, pending requests boost against 
+58    Customer#000000058    103790.5932    6478.46    JORDAN    g9ap7Dk1Sv9fcXEWjpMYpBZIRUohi T    23-244-493-2508    ideas. ironic ideas affix furiously express, final instructions. regular excuses use quickly e
+94    Customer#000000094    100840.0020    5500.11    INDONESIA    IfVNIN9KtkScJ9dUjK3Pg5gY1aFeaXewwf    19-953-499-8833    latelets across the bold, final requests sleep according to the fluffily bold accounts. unusual deposits amon
+97    Customer#000000097    99194.2317    2164.48    PERU    OApyejbhJG,0Iw3j rd1M    27-588-919-5638    haggle slyly. bold, special ideas are blithely above the thinly bold theo
+101    Customer#000000101    90564.6478    7470.96    BRAZIL    sMmL2rNeHDltovSm Y    12-514-298-3699     sleep. pending packages detect slyly ironic pack
+52    Customer#000000052    85250.3310    5630.28    IRAQ    7 QOqGqqSy9jfV51BC71jcHJSD0    21-186-284-5998    ic platelets use evenly even accounts. stealthy theodolites cajole furiou
+142    Customer#000000142    74220.1107    2209.81    INDONESIA    AnJ5lxtLjioClr2khl9pb8NLxG2,    19-407-425-2584    . even, express theodolites upo
+59    Customer#000000059    71312.3586    3458.60    ARGENTINA    zLOCP0wh92OtBihgspOGl4    11-355-584-3112    ously final packages haggle blithely after the express deposits. furiou
+40    Customer#000000040    69690.6972    1335.30    CANADA    gOnGWAyhSV1ofv    13-652-915-8939    rges impress after the slyly ironic courts. foxes are. blithely 
+8    Customer#000000008    67088.8134    6819.74    PERU    I0B10bB0AymmC, 0PrRYBCP1yGJ8xcBPmWhl5    27-147-574-9335    among the slyly regular theodolites kindle blithely courts. carefully even theodolites haggle slyly along the ide
+49    Customer#000000049    66789.7960    4573.94    IRAN    cNgAeX7Fqrdf7HQN9EwjUa4nxT,68L FKAxzl    20-908-631-4424    nusual foxes! fluffily pending packages maintain to the regular 
+26    Customer#000000026    66653.8296    5182.05    RUSSIA    8ljrc5ZeMl7UciP    32-363-455-4837    c requests use furiously ironic requests. slyly ironic dependencies us
+77    Customer#000000077    65603.6040    1738.87    PERU    4tAE5KdMFGD4byHtXF92vx    27-269-357-4674    uffily silent requests. carefully ironic asymptotes among the ironic hockey players are carefully bli
+136    Customer#000000136    64024.4532    -842.39    GERMANY    QoLsJ0v5C1IQbh,DS1    17-501-210-4726    ackages sleep ironic, final courts. even requests above the blithely bold requests g
+112    Customer#000000112    62915.4416    2953.35    ROMANIA    RcfgG3bO7QeCnfjqJT1    29-233-262-8382    rmanently unusual multipliers. blithely ruthless deposits are furiously along the
+80    Customer#000000080    57993.8394    7383.53    ALGERIA    K,vtXp8qYB     10-267-172-7101    tect among the dependencies. bold accounts engage closely even pinto beans. ca
+select
+c_custkey,
+c_name,
+sum(l_extendedprice * (1 - l_discount)) as revenue,
+c_acctbal,
+n_name,
+c_address,
+c_phone,
+c_comment
+from
+customer {snapshot = 'tpch_snapshot'},
+orders {snapshot = 'tpch_snapshot'},
+lineitem {snapshot = 'tpch_snapshot'},
+nation {snapshot = 'tpch_snapshot'}
+where
+c_custkey = o_custkey
+and l_orderkey = o_orderkey
+and o_orderdate >= date '1993-03-01'
+and o_orderdate < date '1993-03-01' + interval '3' month
+and l_returnflag = 'R'
+and c_nationkey = n_nationkey
+group by
+c_custkey,
+c_name,
+c_acctbal,
+c_phone,
+n_name,
+c_address,
+c_comment
+order by
+revenue desc
+limit 20
+;
+c_custkey    c_name    revenue    c_acctbal    n_name    c_address    c_phone    c_comment
+70    Customer#000000070    316759.4208    4867.52    RUSSIA    mFowIuhnHjp2GjCiYYavkW kUwOjIaTCQ    32-828-107-2832    fter the special asymptotes. ideas after the unusual frets cajole quickly regular pinto be
+109    Customer#000000109    272732.4698    -716.10    MOZAMBIQUE    OOOkYBgCMzgMQXUmkocoLb56rfrdWp2NE2c    26-992-422-8153    es. fluffily final dependencies sleep along the blithely even pinto beans. final deposits haggle furiously furiou
+106    Customer#000000106    175284.3983    3288.42    ARGENTINA    xGCOEAUjUNG    11-751-989-4627    lose slyly. ironic accounts along the evenly regular theodolites wake about the special, final gifts. 
+2    Customer#000000002    121173.0081    121.65    JORDAN    XSTf4,NCwDVaWNe6tEgvwfmRchLXak    23-768-687-3665    l accounts. blithely ironic theodolites integrate boldly: caref
+100    Customer#000000100    113840.4294    9889.89    SAUDI ARABIA    fptUABXcmkC5Wx    30-749-445-4907    was furiously fluffily quiet deposits. silent, pending requests boost against 
+58    Customer#000000058    103790.5932    6478.46    JORDAN    g9ap7Dk1Sv9fcXEWjpMYpBZIRUohi T    23-244-493-2508    ideas. ironic ideas affix furiously express, final instructions. regular excuses use quickly e
+94    Customer#000000094    100840.0020    5500.11    INDONESIA    IfVNIN9KtkScJ9dUjK3Pg5gY1aFeaXewwf    19-953-499-8833    latelets across the bold, final requests sleep according to the fluffily bold accounts. unusual deposits amon
+97    Customer#000000097    99194.2317    2164.48    PERU    OApyejbhJG,0Iw3j rd1M    27-588-919-5638    haggle slyly. bold, special ideas are blithely above the thinly bold theo
+101    Customer#000000101    90564.6478    7470.96    BRAZIL    sMmL2rNeHDltovSm Y    12-514-298-3699     sleep. pending packages detect slyly ironic pack
+52    Customer#000000052    85250.3310    5630.28    IRAQ    7 QOqGqqSy9jfV51BC71jcHJSD0    21-186-284-5998    ic platelets use evenly even accounts. stealthy theodolites cajole furiou
+142    Customer#000000142    74220.1107    2209.81    INDONESIA    AnJ5lxtLjioClr2khl9pb8NLxG2,    19-407-425-2584    . even, express theodolites upo
+59    Customer#000000059    71312.3586    3458.60    ARGENTINA    zLOCP0wh92OtBihgspOGl4    11-355-584-3112    ously final packages haggle blithely after the express deposits. furiou
+40    Customer#000000040    69690.6972    1335.30    CANADA    gOnGWAyhSV1ofv    13-652-915-8939    rges impress after the slyly ironic courts. foxes are. blithely 
+8    Customer#000000008    67088.8134    6819.74    PERU    I0B10bB0AymmC, 0PrRYBCP1yGJ8xcBPmWhl5    27-147-574-9335    among the slyly regular theodolites kindle blithely courts. carefully even theodolites haggle slyly along the ide
+49    Customer#000000049    66789.7960    4573.94    IRAN    cNgAeX7Fqrdf7HQN9EwjUa4nxT,68L FKAxzl    20-908-631-4424    nusual foxes! fluffily pending packages maintain to the regular 
+26    Customer#000000026    66653.8296    5182.05    RUSSIA    8ljrc5ZeMl7UciP    32-363-455-4837    c requests use furiously ironic requests. slyly ironic dependencies us
+77    Customer#000000077    65603.6040    1738.87    PERU    4tAE5KdMFGD4byHtXF92vx    27-269-357-4674    uffily silent requests. carefully ironic asymptotes among the ironic hockey players are carefully bli
+136    Customer#000000136    64024.4532    -842.39    GERMANY    QoLsJ0v5C1IQbh,DS1    17-501-210-4726    ackages sleep ironic, final courts. even requests above the blithely bold requests g
+112    Customer#000000112    62915.4416    2953.35    ROMANIA    RcfgG3bO7QeCnfjqJT1    29-233-262-8382    rmanently unusual multipliers. blithely ruthless deposits are furiously along the
+80    Customer#000000080    57993.8394    7383.53    ALGERIA    K,vtXp8qYB     10-267-172-7101    tect among the dependencies. bold accounts engage closely even pinto beans. ca
+select
+c_custkey,
+c_name,
+sum(l_extendedprice * (1 - l_discount)) as revenue,
+c_acctbal,
+n_name,
+c_address,
+c_phone,
+c_comment
+from
+customer {snapshot = 'tpch_snapshot'},
+orders {snapshot = 'tpch_snapshot'},
+lineitem {snapshot = 'tpch_snapshot'},
+nation {snapshot = 'tpch_snapshot'}
+where
+c_custkey = o_custkey
+and l_orderkey = o_orderkey
+and o_orderdate >= date '1993-03-01'
+and o_orderdate < date '1993-03-01' + interval '3' month
+and l_returnflag = 'R'
+and c_nationkey = n_nationkey
+group by
+c_custkey,
+c_name,
+c_acctbal,
+c_phone,
+n_name,
+c_address,
+c_comment
+order by
+revenue desc
+limit 20
+;
+c_custkey    c_name    revenue    c_acctbal    n_name    c_address    c_phone    c_comment
+70    Customer#000000070    316759.4208    4867.52    RUSSIA    mFowIuhnHjp2GjCiYYavkW kUwOjIaTCQ    32-828-107-2832    fter the special asymptotes. ideas after the unusual frets cajole quickly regular pinto be
+109    Customer#000000109    272732.4698    -716.10    MOZAMBIQUE    OOOkYBgCMzgMQXUmkocoLb56rfrdWp2NE2c    26-992-422-8153    es. fluffily final dependencies sleep along the blithely even pinto beans. final deposits haggle furiously furiou
+106    Customer#000000106    175284.3983    3288.42    ARGENTINA    xGCOEAUjUNG    11-751-989-4627    lose slyly. ironic accounts along the evenly regular theodolites wake about the special, final gifts. 
+2    Customer#000000002    121173.0081    121.65    JORDAN    XSTf4,NCwDVaWNe6tEgvwfmRchLXak    23-768-687-3665    l accounts. blithely ironic theodolites integrate boldly: caref
+100    Customer#000000100    113840.4294    9889.89    SAUDI ARABIA    fptUABXcmkC5Wx    30-749-445-4907    was furiously fluffily quiet deposits. silent, pending requests boost against 
+58    Customer#000000058    103790.5932    6478.46    JORDAN    g9ap7Dk1Sv9fcXEWjpMYpBZIRUohi T    23-244-493-2508    ideas. ironic ideas affix furiously express, final instructions. regular excuses use quickly e
+94    Customer#000000094    100840.0020    5500.11    INDONESIA    IfVNIN9KtkScJ9dUjK3Pg5gY1aFeaXewwf    19-953-499-8833    latelets across the bold, final requests sleep according to the fluffily bold accounts. unusual deposits amon
+97    Customer#000000097    99194.2317    2164.48    PERU    OApyejbhJG,0Iw3j rd1M    27-588-919-5638    haggle slyly. bold, special ideas are blithely above the thinly bold theo
+101    Customer#000000101    90564.6478    7470.96    BRAZIL    sMmL2rNeHDltovSm Y    12-514-298-3699     sleep. pending packages detect slyly ironic pack
+52    Customer#000000052    85250.3310    5630.28    IRAQ    7 QOqGqqSy9jfV51BC71jcHJSD0    21-186-284-5998    ic platelets use evenly even accounts. stealthy theodolites cajole furiou
+142    Customer#000000142    74220.1107    2209.81    INDONESIA    AnJ5lxtLjioClr2khl9pb8NLxG2,    19-407-425-2584    . even, express theodolites upo
+59    Customer#000000059    71312.3586    3458.60    ARGENTINA    zLOCP0wh92OtBihgspOGl4    11-355-584-3112    ously final packages haggle blithely after the express deposits. furiou
+40    Customer#000000040    69690.6972    1335.30    CANADA    gOnGWAyhSV1ofv    13-652-915-8939    rges impress after the slyly ironic courts. foxes are. blithely 
+8    Customer#000000008    67088.8134    6819.74    PERU    I0B10bB0AymmC, 0PrRYBCP1yGJ8xcBPmWhl5    27-147-574-9335    among the slyly regular theodolites kindle blithely courts. carefully even theodolites haggle slyly along the ide
+49    Customer#000000049    66789.7960    4573.94    IRAN    cNgAeX7Fqrdf7HQN9EwjUa4nxT,68L FKAxzl    20-908-631-4424    nusual foxes! fluffily pending packages maintain to the regular 
+26    Customer#000000026    66653.8296    5182.05    RUSSIA    8ljrc5ZeMl7UciP    32-363-455-4837    c requests use furiously ironic requests. slyly ironic dependencies us
+77    Customer#000000077    65603.6040    1738.87    PERU    4tAE5KdMFGD4byHtXF92vx    27-269-357-4674    uffily silent requests. carefully ironic asymptotes among the ironic hockey players are carefully bli
+136    Customer#000000136    64024.4532    -842.39    GERMANY    QoLsJ0v5C1IQbh,DS1    17-501-210-4726    ackages sleep ironic, final courts. even requests above the blithely bold requests g
+112    Customer#000000112    62915.4416    2953.35    ROMANIA    RcfgG3bO7QeCnfjqJT1    29-233-262-8382    rmanently unusual multipliers. blithely ruthless deposits are furiously along the
+80    Customer#000000080    57993.8394    7383.53    ALGERIA    K,vtXp8qYB     10-267-172-7101    tect among the dependencies. bold accounts engage closely even pinto beans. ca
+select
+ps_partkey,
+sum(ps_supplycost * ps_availqty) as value
+from
+partsupp {snapshot = 'tpch_snapshot'},
+supplier {snapshot = 'tpch_snapshot'},
+nation {snapshot = 'tpch_snapshot'}
+where
+ps_suppkey = s_suppkey
+and s_nationkey = n_nationkey
+and n_name = 'JAPAN'
+group by
+ps_partkey having
+sum(ps_supplycost * ps_availqty) > (
+select
+sum(ps_supplycost * ps_availqty) * 0.0001000000
+from
+partsupp {snapshot = 'tpch_snapshot'},
+supplier {snapshot = 'tpch_snapshot'},
+nation {snapshot = 'tpch_snapshot'}
+where
+ps_suppkey = s_suppkey
+and s_nationkey = n_nationkey
+and n_name = 'JAPAN'
+)
+order by
+value desc
+;
+ps_partkey    value
+select
+ps_partkey,
+sum(ps_supplycost * ps_availqty) as value
+from
+partsupp {snapshot = 'tpch_snapshot'},
+supplier {snapshot = 'tpch_snapshot'},
+nation {snapshot = 'tpch_snapshot'}
+where
+ps_suppkey = s_suppkey
+and s_nationkey = n_nationkey
+and n_name = 'JAPAN'
+group by
+ps_partkey having
+sum(ps_supplycost * ps_availqty) > (
+select
+sum(ps_supplycost * ps_availqty) * 0.0001000000
+from
+partsupp {snapshot = 'tpch_snapshot'},
+supplier {snapshot = 'tpch_snapshot'},
+nation {snapshot = 'tpch_snapshot'}
+where
+ps_suppkey = s_suppkey
+and s_nationkey = n_nationkey
+and n_name = 'JAPAN'
+)
+order by
+value desc
+;
+ps_partkey    value
+select
+ps_partkey,
+sum(ps_supplycost * ps_availqty) as value
+from
+partsupp {snapshot = 'tpch_snapshot'},
+supplier {snapshot = 'tpch_snapshot'},
+nation {snapshot = 'tpch_snapshot'}
+where
+ps_suppkey = s_suppkey
+and s_nationkey = n_nationkey
+and n_name = 'JAPAN'
+group by
+ps_partkey having
+sum(ps_supplycost * ps_availqty) > (
+select
+sum(ps_supplycost * ps_availqty) * 0.0001000000
+from
+partsupp {snapshot = 'tpch_snapshot'},
+supplier {snapshot = 'tpch_snapshot'},
+nation {snapshot = 'tpch_snapshot'}
+where
+ps_suppkey = s_suppkey
+and s_nationkey = n_nationkey
+and n_name = 'JAPAN'
+)
+order by
+value desc
+;
+ps_partkey    value
+select
+l_shipmode,
+sum(case
+when o_orderpriority = '1-URGENT'
+or o_orderpriority = '2-HIGH'
+then 1
+else 0
+end) as high_line_count,
+sum(case
+when o_orderpriority <> '1-URGENT'
+and o_orderpriority <> '2-HIGH'
+then 1
+else 0
+end) as low_line_count
+from
+orders {snapshot = 'tpch_snapshot'},
+lineitem {snapshot = 'tpch_snapshot'}
+where
+o_orderkey = l_orderkey
+and l_shipmode in ('FOB', 'TRUCK')
+and l_commitdate < l_receiptdate
+and l_shipdate < l_commitdate
+and l_receiptdate >= date '1996-01-01'
+and l_receiptdate < date '1996-01-01' + interval '1' year
+group by
+l_shipmode
+order by
+l_shipmode
+;
+l_shipmode    high_line_count    low_line_count
+FOB    4    5
+TRUCK    5    7
+select
+l_shipmode,
+sum(case
+when o_orderpriority = '1-URGENT'
+or o_orderpriority = '2-HIGH'
+then 1
+else 0
+end) as high_line_count,
+sum(case
+when o_orderpriority <> '1-URGENT'
+and o_orderpriority <> '2-HIGH'
+then 1
+else 0
+end) as low_line_count
+from
+orders {snapshot = 'tpch_snapshot'},
+lineitem {snapshot = 'tpch_snapshot'}
+where
+o_orderkey = l_orderkey
+and l_shipmode in ('FOB', 'TRUCK')
+and l_commitdate < l_receiptdate
+and l_shipdate < l_commitdate
+and l_receiptdate >= date '1996-01-01'
+and l_receiptdate < date '1996-01-01' + interval '1' year
+group by
+l_shipmode
+order by
+l_shipmode
+;
+l_shipmode    high_line_count    low_line_count
+FOB    4    5
+TRUCK    5    7
+select
+l_shipmode,
+sum(case
+when o_orderpriority = '1-URGENT'
+or o_orderpriority = '2-HIGH'
+then 1
+else 0
+end) as high_line_count,
+sum(case
+when o_orderpriority <> '1-URGENT'
+and o_orderpriority <> '2-HIGH'
+then 1
+else 0
+end) as low_line_count
+from
+orders {snapshot = 'tpch_snapshot'},
+lineitem {snapshot = 'tpch_snapshot'}
+where
+o_orderkey = l_orderkey
+and l_shipmode in ('FOB', 'TRUCK')
+and l_commitdate < l_receiptdate
+and l_shipdate < l_commitdate
+and l_receiptdate >= date '1996-01-01'
+and l_receiptdate < date '1996-01-01' + interval '1' year
+group by
+l_shipmode
+order by
+l_shipmode
+;
+l_shipmode    high_line_count    low_line_count
+FOB    4    5
+TRUCK    5    7
+select
+c_count,
+count(*) as custdist
+from
+(
+select
+c_custkey,
+count(o_orderkey)
+from
+customer {snapshot = 'tpch_snapshot'} left outer join orders {snapshot = 'tpch_snapshot'} on
+c_custkey = o_custkey
+and o_comment not like '%pending%accounts%'
+group by
+c_custkey
+) as c_orders (c_custkey, c_count)
+group by
+c_count
+order by
+custdist desc,
+c_count desc
+;
+c_count    custdist
+0    50
+17    8
+16    7
+22    6
+14    6
+11    6
+20    5
+12    5
+10    5
+9    5
+7    5
+23    4
+21    4
+15    4
+13    4
+4    4
+26    3
+19    3
+8    3
+6    3
+18    2
+5    2
+30    1
+29    1
+28    1
+25    1
+24    1
+3    1
+select
+c_count,
+count(*) as custdist
+from
+(
+select
+c_custkey,
+count(o_orderkey)
+from
+customer {snapshot = 'tpch_snapshot'} left outer join orders {snapshot = 'tpch_snapshot'} on
+c_custkey = o_custkey
+and o_comment not like '%pending%accounts%'
+group by
+c_custkey
+) as c_orders (c_custkey, c_count)
+group by
+c_count
+order by
+custdist desc,
+c_count desc
+;
+c_count    custdist
+0    50
+17    8
+16    7
+22    6
+14    6
+11    6
+20    5
+12    5
+10    5
+9    5
+7    5
+23    4
+21    4
+15    4
+13    4
+4    4
+26    3
+19    3
+8    3
+6    3
+18    2
+5    2
+30    1
+29    1
+28    1
+25    1
+24    1
+3    1
+select
+c_count,
+count(*) as custdist
+from
+(
+select
+c_custkey,
+count(o_orderkey)
+from
+customer {snapshot = 'tpch_snapshot'} left outer join orders {snapshot = 'tpch_snapshot'} on
+c_custkey = o_custkey
+and o_comment not like '%pending%accounts%'
+group by
+c_custkey
+) as c_orders (c_custkey, c_count)
+group by
+c_count
+order by
+custdist desc,
+c_count desc
+;
+c_count    custdist
+0    50
+17    8
+16    7
+22    6
+14    6
+11    6
+20    5
+12    5
+10    5
+9    5
+7    5
+23    4
+21    4
+15    4
+13    4
+4    4
+26    3
+19    3
+8    3
+6    3
+18    2
+5    2
+30    1
+29    1
+28    1
+25    1
+24    1
+3    1
+select
+100.00 * sum(case
+when p_type like 'PROMO%'
+then l_extendedprice * (1 - l_discount)
+else 0
+end) / sum(l_extendedprice * (1 - l_discount)) as promo_revenue
+from
+lineitem {snapshot = 'tpch_snapshot'},
+part {snapshot = 'tpch_snapshot'}
+where
+l_partkey = p_partkey
+and l_shipdate >= date '1996-04-01'
+and l_shipdate < date '1996-04-01' + interval '1' month;
+promo_revenue
+17.682841639365
+select
+100.00 * sum(case
+when p_type like 'PROMO%'
+then l_extendedprice * (1 - l_discount)
+else 0
+end) / sum(l_extendedprice * (1 - l_discount)) as promo_revenue
+from
+lineitem {snapshot = 'tpch_snapshot'},
+part {snapshot = 'tpch_snapshot'}
+where
+l_partkey = p_partkey
+and l_shipdate >= date '1996-04-01'
+and l_shipdate < date '1996-04-01' + interval '1' month;
+promo_revenue
+17.682841639365
+select
+100.00 * sum(case
+when p_type like 'PROMO%'
+then l_extendedprice * (1 - l_discount)
+else 0
+end) / sum(l_extendedprice * (1 - l_discount)) as promo_revenue
+from
+lineitem {snapshot = 'tpch_snapshot'},
+part {snapshot = 'tpch_snapshot'}
+where
+l_partkey = p_partkey
+and l_shipdate >= date '1996-04-01'
+and l_shipdate < date '1996-04-01' + interval '1' month;
+promo_revenue
+17.682841639365
+with q15_revenue0 as (
+select
+l_suppkey as supplier_no,
+sum(l_extendedprice * (1 - l_discount)) as total_revenue
+from
+lineitem {snapshot = 'tpch_snapshot'}
+where
+l_shipdate >= date '1995-12-01'
+and l_shipdate < date '1995-12-01' + interval '3' month
+group by
+l_suppkey
+)
+select
+s_suppkey,
+s_name,
+s_address,
+s_phone,
+total_revenue
+from
+supplier {snapshot = 'tpch_snapshot'},
+q15_revenue0 {snapshot = 'tpch_snapshot'}
+where
+s_suppkey = supplier_no
+and total_revenue = (
+select
+max(total_revenue)
+from
+q15_revenue0 {snapshot = 'tpch_snapshot'}
+)
+order by
+s_suppkey
+;
+s_suppkey    s_name    s_address    s_phone    total_revenue
+1    Supplier#000000001     N kD4on9OM Ipw3,gf0JBoQDd7tgrzrddZ    27-918-335-1736    863528.2162
+with q15_revenue0 as (
+select
+l_suppkey as supplier_no,
+sum(l_extendedprice * (1 - l_discount)) as total_revenue
+from
+lineitem {snapshot = 'tpch_snapshot'}
+where
+l_shipdate >= date '1995-12-01'
+and l_shipdate < date '1995-12-01' + interval '3' month
+group by
+l_suppkey
+)
+select
+s_suppkey,
+s_name,
+s_address,
+s_phone,
+total_revenue
+from
+supplier {snapshot = 'tpch_snapshot'},
+q15_revenue0 {snapshot = 'tpch_snapshot'}
+where
+s_suppkey = supplier_no
+and total_revenue = (
+select
+max(total_revenue)
+from
+q15_revenue0 {snapshot = 'tpch_snapshot'}
+)
+order by
+s_suppkey
+;
+s_suppkey    s_name    s_address    s_phone    total_revenue
+1    Supplier#000000001     N kD4on9OM Ipw3,gf0JBoQDd7tgrzrddZ    27-918-335-1736    863528.2162
+with q15_revenue0 as (
+select
+l_suppkey as supplier_no,
+sum(l_extendedprice * (1 - l_discount)) as total_revenue
+from
+lineitem {snapshot = 'tpch_snapshot'}
+where
+l_shipdate >= date '1995-12-01'
+and l_shipdate < date '1995-12-01' + interval '3' month
+group by
+l_suppkey
+)
+select
+s_suppkey,
+s_name,
+s_address,
+s_phone,
+total_revenue
+from
+supplier {snapshot = 'tpch_snapshot'},
+q15_revenue0 {snapshot = 'tpch_snapshot'}
+where
+s_suppkey = supplier_no
+and total_revenue = (
+select
+max(total_revenue)
+from
+q15_revenue0 {snapshot = 'tpch_snapshot'}
+)
+order by
+s_suppkey
+;
+s_suppkey    s_name    s_address    s_phone    total_revenue
+1    Supplier#000000001     N kD4on9OM Ipw3,gf0JBoQDd7tgrzrddZ    27-918-335-1736    863528.2162
+select
+p_brand,
+p_type,
+p_size,
+count(distinct ps_suppkey) as supplier_cnt
+from
+partsupp {snapshot = 'tpch_snapshot'},
+part {snapshot = 'tpch_snapshot'}
+where
+p_partkey = ps_partkey
+and p_brand <> 'Brand#35'
+and p_type not like 'ECONOMY BURNISHED%'
+and p_size in (14, 7, 21, 24, 35, 33, 2, 20)
+and ps_suppkey not in (
+select
+s_suppkey
+from
+supplier {snapshot = 'tpch_snapshot'}
+where
+s_comment like '%Customer%Complaints%'
+)
+group by
+p_brand,
+p_type,
+p_size
+order by
+supplier_cnt desc,
+p_brand,
+p_type,
+p_size
+;
+p_brand    p_type    p_size    supplier_cnt
+Brand#11    STANDARD PLATED TIN    20    4
+Brand#12    MEDIUM PLATED STEEL    20    4
+Brand#13    PROMO BURNISHED COPPER    7    4
+Brand#13    SMALL BRUSHED COPPER    20    4
+Brand#14    ECONOMY POLISHED STEEL    24    4
+Brand#14    LARGE ANODIZED TIN    20    4
+Brand#15    LARGE POLISHED TIN    20    4
+Brand#15    STANDARD PLATED STEEL    24    4
+Brand#21    SMALL BRUSHED COPPER    35    4
+Brand#22    STANDARD ANODIZED TIN    35    4
+Brand#23    ECONOMY ANODIZED TIN    7    4
+Brand#23    LARGE PLATED BRASS    35    4
+Brand#23    SMALL ANODIZED NICKEL    33    4
+Brand#24    LARGE ANODIZED TIN    2    4
+Brand#31    STANDARD PLATED STEEL    20    4
+Brand#32    PROMO PLATED TIN    2    4
+Brand#33    MEDIUM ANODIZED COPPER    35    4
+Brand#33    PROMO PLATED COPPER    7    4
+Brand#33    STANDARD BURNISHED NICKEL    7    4
+Brand#34    SMALL PLATED BRASS    14    4
+Brand#42    STANDARD POLISHED BRASS    21    4
+Brand#43    ECONOMY BRUSHED STEEL    20    4
+Brand#43    SMALL POLISHED NICKEL    2    4
+Brand#45    LARGE BURNISHED BRASS    14    4
+Brand#45    STANDARD POLISHED STEEL    24    4
+Brand#51    ECONOMY POLISHED STEEL    7    4
+Brand#52    MEDIUM PLATED STEEL    20    4
+Brand#52    MEDIUM POLISHED BRASS    2    4
+Brand#52    SMALL BURNISHED NICKEL    14    4
+Brand#53    MEDIUM POLISHED TIN    2    4
+Brand#53    PROMO BRUSHED COPPER    24    4
+Brand#53    PROMO POLISHED NICKEL    33    4
+Brand#21    MEDIUM BURNISHED STEEL    24    2
+Brand#22    SMALL PLATED STEEL    2    2
+Brand#32    MEDIUM BRUSHED STEEL    7    2
+Brand#42    SMALL POLISHED STEEL    35    2
+Brand#43    MEDIUM ANODIZED BRASS    14    2
+Brand#45    STANDARD BURNISHED BRASS    2    2
+Brand#52    PROMO POLISHED STEEL    35    1
+Brand#53    ECONOMY BRUSHED TIN    21    1
+Brand#53    STANDARD BURNISHED STEEL    7    1
+select
+p_brand,
+p_type,
+p_size,
+count(distinct ps_suppkey) as supplier_cnt
+from
+partsupp {snapshot = 'tpch_snapshot'},
+part {snapshot = 'tpch_snapshot'}
+where
+p_partkey = ps_partkey
+and p_brand <> 'Brand#35'
+and p_type not like 'ECONOMY BURNISHED%'
+and p_size in (14, 7, 21, 24, 35, 33, 2, 20)
+and ps_suppkey not in (
+select
+s_suppkey
+from
+supplier {snapshot = 'tpch_snapshot'}
+where
+s_comment like '%Customer%Complaints%'
+)
+group by
+p_brand,
+p_type,
+p_size
+order by
+supplier_cnt desc,
+p_brand,
+p_type,
+p_size
+;
+p_brand    p_type    p_size    supplier_cnt
+Brand#11    STANDARD PLATED TIN    20    4
+Brand#12    MEDIUM PLATED STEEL    20    4
+Brand#13    PROMO BURNISHED COPPER    7    4
+Brand#13    SMALL BRUSHED COPPER    20    4
+Brand#14    ECONOMY POLISHED STEEL    24    4
+Brand#14    LARGE ANODIZED TIN    20    4
+Brand#15    LARGE POLISHED TIN    20    4
+Brand#15    STANDARD PLATED STEEL    24    4
+Brand#21    SMALL BRUSHED COPPER    35    4
+Brand#22    STANDARD ANODIZED TIN    35    4
+Brand#23    ECONOMY ANODIZED TIN    7    4
+Brand#23    LARGE PLATED BRASS    35    4
+Brand#23    SMALL ANODIZED NICKEL    33    4
+Brand#24    LARGE ANODIZED TIN    2    4
+Brand#31    STANDARD PLATED STEEL    20    4
+Brand#32    PROMO PLATED TIN    2    4
+Brand#33    MEDIUM ANODIZED COPPER    35    4
+Brand#33    PROMO PLATED COPPER    7    4
+Brand#33    STANDARD BURNISHED NICKEL    7    4
+Brand#34    SMALL PLATED BRASS    14    4
+Brand#42    STANDARD POLISHED BRASS    21    4
+Brand#43    ECONOMY BRUSHED STEEL    20    4
+Brand#43    SMALL POLISHED NICKEL    2    4
+Brand#45    LARGE BURNISHED BRASS    14    4
+Brand#45    STANDARD POLISHED STEEL    24    4
+Brand#51    ECONOMY POLISHED STEEL    7    4
+Brand#52    MEDIUM PLATED STEEL    20    4
+Brand#52    MEDIUM POLISHED BRASS    2    4
+Brand#52    SMALL BURNISHED NICKEL    14    4
+Brand#53    MEDIUM POLISHED TIN    2    4
+Brand#53    PROMO BRUSHED COPPER    24    4
+Brand#53    PROMO POLISHED NICKEL    33    4
+Brand#21    MEDIUM BURNISHED STEEL    24    2
+Brand#22    SMALL PLATED STEEL    2    2
+Brand#32    MEDIUM BRUSHED STEEL    7    2
+Brand#42    SMALL POLISHED STEEL    35    2
+Brand#43    MEDIUM ANODIZED BRASS    14    2
+Brand#45    STANDARD BURNISHED BRASS    2    2
+Brand#52    PROMO POLISHED STEEL    35    1
+Brand#53    ECONOMY BRUSHED TIN    21    1
+Brand#53    STANDARD BURNISHED STEEL    7    1
+select
+p_brand,
+p_type,
+p_size,
+count(distinct ps_suppkey) as supplier_cnt
+from
+partsupp {snapshot = 'tpch_snapshot'},
+part {snapshot = 'tpch_snapshot'}
+where
+p_partkey = ps_partkey
+and p_brand <> 'Brand#35'
+and p_type not like 'ECONOMY BURNISHED%'
+and p_size in (14, 7, 21, 24, 35, 33, 2, 20)
+and ps_suppkey not in (
+select
+s_suppkey
+from
+supplier {snapshot = 'tpch_snapshot'}
+where
+s_comment like '%Customer%Complaints%'
+)
+group by
+p_brand,
+p_type,
+p_size
+order by
+supplier_cnt desc,
+p_brand,
+p_type,
+p_size
+;
+p_brand    p_type    p_size    supplier_cnt
+Brand#11    STANDARD PLATED TIN    20    4
+Brand#12    MEDIUM PLATED STEEL    20    4
+Brand#13    PROMO BURNISHED COPPER    7    4
+Brand#13    SMALL BRUSHED COPPER    20    4
+Brand#14    ECONOMY POLISHED STEEL    24    4
+Brand#14    LARGE ANODIZED TIN    20    4
+Brand#15    LARGE POLISHED TIN    20    4
+Brand#15    STANDARD PLATED STEEL    24    4
+Brand#21    SMALL BRUSHED COPPER    35    4
+Brand#22    STANDARD ANODIZED TIN    35    4
+Brand#23    ECONOMY ANODIZED TIN    7    4
+Brand#23    LARGE PLATED BRASS    35    4
+Brand#23    SMALL ANODIZED NICKEL    33    4
+Brand#24    LARGE ANODIZED TIN    2    4
+Brand#31    STANDARD PLATED STEEL    20    4
+Brand#32    PROMO PLATED TIN    2    4
+Brand#33    MEDIUM ANODIZED COPPER    35    4
+Brand#33    PROMO PLATED COPPER    7    4
+Brand#33    STANDARD BURNISHED NICKEL    7    4
+Brand#34    SMALL PLATED BRASS    14    4
+Brand#42    STANDARD POLISHED BRASS    21    4
+Brand#43    ECONOMY BRUSHED STEEL    20    4
+Brand#43    SMALL POLISHED NICKEL    2    4
+Brand#45    LARGE BURNISHED BRASS    14    4
+Brand#45    STANDARD POLISHED STEEL    24    4
+Brand#51    ECONOMY POLISHED STEEL    7    4
+Brand#52    MEDIUM PLATED STEEL    20    4
+Brand#52    MEDIUM POLISHED BRASS    2    4
+Brand#52    SMALL BURNISHED NICKEL    14    4
+Brand#53    MEDIUM POLISHED TIN    2    4
+Brand#53    PROMO BRUSHED COPPER    24    4
+Brand#53    PROMO POLISHED NICKEL    33    4
+Brand#21    MEDIUM BURNISHED STEEL    24    2
+Brand#22    SMALL PLATED STEEL    2    2
+Brand#32    MEDIUM BRUSHED STEEL    7    2
+Brand#42    SMALL POLISHED STEEL    35    2
+Brand#43    MEDIUM ANODIZED BRASS    14    2
+Brand#45    STANDARD BURNISHED BRASS    2    2
+Brand#52    PROMO POLISHED STEEL    35    1
+Brand#53    ECONOMY BRUSHED TIN    21    1
+Brand#53    STANDARD BURNISHED STEEL    7    1
+select
+sum(l_extendedprice) / 7.0 as avg_yearly
+from
+lineitem {snapshot = 'tpch_snapshot'},
+part {snapshot = 'tpch_snapshot'}
+where
+p_partkey = l_partkey
+and p_brand = 'Brand#54'
+and p_container = 'LG BAG'
+and l_quantity < (
+select
+0.2 * avg(l_quantity)
+from
+lineitem {snapshot = 'tpch_snapshot'}
+where
+l_partkey = p_partkey
+);
+avg_yearly
+null
+select
+sum(l_extendedprice) / 7.0 as avg_yearly
+from
+lineitem {snapshot = 'tpch_snapshot'},
+part {snapshot = 'tpch_snapshot'}
+where
+p_partkey = l_partkey
+and p_brand = 'Brand#54'
+and p_container = 'LG BAG'
+and l_quantity < (
+select
+0.2 * avg(l_quantity)
+from
+lineitem {snapshot = 'tpch_snapshot'}
+where
+l_partkey = p_partkey
+);
+avg_yearly
+null
+select
+sum(l_extendedprice) / 7.0 as avg_yearly
+from
+lineitem {snapshot = 'tpch_snapshot'},
+part {snapshot = 'tpch_snapshot'}
+where
+p_partkey = l_partkey
+and p_brand = 'Brand#54'
+and p_container = 'LG BAG'
+and l_quantity < (
+select
+0.2 * avg(l_quantity)
+from
+lineitem {snapshot = 'tpch_snapshot'}
+where
+l_partkey = p_partkey
+);
+avg_yearly
+null
+select
+c_name,
+c_custkey,
+o_orderkey,
+o_orderdate,
+o_totalprice,
+sum(l_quantity)
+from
+customer {snapshot = 'tpch_snapshot'},
+orders {snapshot = 'tpch_snapshot'},
+lineitem {snapshot = 'tpch_snapshot'}
+where
+o_orderkey in (
+select
+l_orderkey
+from
+lineitem {snapshot = 'tpch_snapshot'}
+group by
+l_orderkey having
+sum(l_quantity) > 314
+)
+and c_custkey = o_custkey
+and o_orderkey = l_orderkey
+group by
+c_name,
+c_custkey,
+o_orderkey,
+o_orderdate,
+o_totalprice
+order by
+o_totalprice desc,
+o_orderdate
+limit 100
+;
+c_name    c_custkey    o_orderkey    o_orderdate    o_totalprice    sum(l_quantity)
+select
+c_name,
+c_custkey,
+o_orderkey,
+o_orderdate,
+o_totalprice,
+sum(l_quantity)
+from
+customer {snapshot = 'tpch_snapshot'},
+orders {snapshot = 'tpch_snapshot'},
+lineitem {snapshot = 'tpch_snapshot'}
+where
+o_orderkey in (
+select
+l_orderkey
+from
+lineitem {snapshot = 'tpch_snapshot'}
+group by
+l_orderkey having
+sum(l_quantity) > 314
+)
+and c_custkey = o_custkey
+and o_orderkey = l_orderkey
+group by
+c_name,
+c_custkey,
+o_orderkey,
+o_orderdate,
+o_totalprice
+order by
+o_totalprice desc,
+o_orderdate
+limit 100
+;
+c_name    c_custkey    o_orderkey    o_orderdate    o_totalprice    sum(l_quantity)
+select
+c_name,
+c_custkey,
+o_orderkey,
+o_orderdate,
+o_totalprice,
+sum(l_quantity)
+from
+customer {snapshot = 'tpch_snapshot'},
+orders {snapshot = 'tpch_snapshot'},
+lineitem {snapshot = 'tpch_snapshot'}
+where
+o_orderkey in (
+select
+l_orderkey
+from
+lineitem {snapshot = 'tpch_snapshot'}
+group by
+l_orderkey having
+sum(l_quantity) > 314
+)
+and c_custkey = o_custkey
+and o_orderkey = l_orderkey
+group by
+c_name,
+c_custkey,
+o_orderkey,
+o_orderdate,
+o_totalprice
+order by
+o_totalprice desc,
+o_orderdate
+limit 100
+;
+c_name    c_custkey    o_orderkey    o_orderdate    o_totalprice    sum(l_quantity)
+select
+sum(l_extendedprice* (1 - l_discount)) as revenue
+from
+lineitem {snapshot = 'tpch_snapshot'},
+part {snapshot = 'tpch_snapshot'}
+where
+(
+p_partkey = l_partkey
+and p_brand = 'Brand#23'
+and p_container in ('SM CASE', 'SM BOX', 'SM PACK', 'SM PKG')
+and l_quantity >= 5 and l_quantity <= 5 + 10
+and p_size between 1 and 5
+and l_shipmode in ('AIR', 'AIR REG')
+and l_shipinstruct = 'DELIVER IN PERSON'
+)
+or
+(
+p_partkey = l_partkey
+and p_brand = 'Brand#15'
+and p_container in ('MED BAG', 'MED BOX', 'MED PKG', 'MED PACK')
+and l_quantity >= 14 and l_quantity <= 14 + 10
+and p_size between 1 and 10
+and l_shipmode in ('AIR', 'AIR REG')
+and l_shipinstruct = 'DELIVER IN PERSON'
+)
+or
+(
+p_partkey = l_partkey
+and p_brand = 'Brand#44'
+and p_container in ('LG CASE', 'LG BOX', 'LG PACK', 'LG PKG')
+and l_quantity >= 28 and l_quantity <= 28 + 10
+and p_size between 1 and 15
+and l_shipmode in ('AIR', 'AIR REG')
+and l_shipinstruct = 'DELIVER IN PERSON'
+);
+revenue
+null
+select
+sum(l_extendedprice* (1 - l_discount)) as revenue
+from
+lineitem {snapshot = 'tpch_snapshot'},
+part {snapshot = 'tpch_snapshot'}
+where
+(
+p_partkey = l_partkey
+and p_brand = 'Brand#23'
+and p_container in ('SM CASE', 'SM BOX', 'SM PACK', 'SM PKG')
+and l_quantity >= 5 and l_quantity <= 5 + 10
+and p_size between 1 and 5
+and l_shipmode in ('AIR', 'AIR REG')
+and l_shipinstruct = 'DELIVER IN PERSON'
+)
+or
+(
+p_partkey = l_partkey
+and p_brand = 'Brand#15'
+and p_container in ('MED BAG', 'MED BOX', 'MED PKG', 'MED PACK')
+and l_quantity >= 14 and l_quantity <= 14 + 10
+and p_size between 1 and 10
+and l_shipmode in ('AIR', 'AIR REG')
+and l_shipinstruct = 'DELIVER IN PERSON'
+)
+or
+(
+p_partkey = l_partkey
+and p_brand = 'Brand#44'
+and p_container in ('LG CASE', 'LG BOX', 'LG PACK', 'LG PKG')
+and l_quantity >= 28 and l_quantity <= 28 + 10
+and p_size between 1 and 15
+and l_shipmode in ('AIR', 'AIR REG')
+and l_shipinstruct = 'DELIVER IN PERSON'
+);
+revenue
+null
+select
+sum(l_extendedprice* (1 - l_discount)) as revenue
+from
+lineitem {snapshot = 'tpch_snapshot'},
+part {snapshot = 'tpch_snapshot'}
+where
+(
+p_partkey = l_partkey
+and p_brand = 'Brand#23'
+and p_container in ('SM CASE', 'SM BOX', 'SM PACK', 'SM PKG')
+and l_quantity >= 5 and l_quantity <= 5 + 10
+and p_size between 1 and 5
+and l_shipmode in ('AIR', 'AIR REG')
+and l_shipinstruct = 'DELIVER IN PERSON'
+)
+or
+(
+p_partkey = l_partkey
+and p_brand = 'Brand#15'
+and p_container in ('MED BAG', 'MED BOX', 'MED PKG', 'MED PACK')
+and l_quantity >= 14 and l_quantity <= 14 + 10
+and p_size between 1 and 10
+and l_shipmode in ('AIR', 'AIR REG')
+and l_shipinstruct = 'DELIVER IN PERSON'
+)
+or
+(
+p_partkey = l_partkey
+and p_brand = 'Brand#44'
+and p_container in ('LG CASE', 'LG BOX', 'LG PACK', 'LG PKG')
+and l_quantity >= 28 and l_quantity <= 28 + 10
+and p_size between 1 and 15
+and l_shipmode in ('AIR', 'AIR REG')
+and l_shipinstruct = 'DELIVER IN PERSON'
+);
+revenue
+null
+select
+s_name,
+s_address
+from
+supplier {snapshot = 'tpch_snapshot'},
+nation {snapshot = 'tpch_snapshot'}
+where
+s_suppkey in (
+select
+ps_suppkey
+from
+partsupp {snapshot = 'tpch_snapshot'}
+where
+ps_partkey in (
+select
+p_partkey
+from
+part {snapshot = 'tpch_snapshot'}
+where
+p_name like 'lime%'
+)
+and ps_availqty > (
+select
+0.5 * sum(l_quantity)
+from
+lineitem {snapshot = 'tpch_snapshot'}
+where
+l_partkey = ps_partkey
+and l_suppkey = ps_suppkey
+and l_shipdate >= date '1993-01-01'
+and l_shipdate < date '1993-01-01' + interval '1' year
+)
+)
+and s_nationkey = n_nationkey
+and n_name = 'VIETNAM'
+order by s_name
+;
+s_name    s_address
+select
+s_name,
+s_address
+from
+supplier {snapshot = 'tpch_snapshot'},
+nation {snapshot = 'tpch_snapshot'}
+where
+s_suppkey in (
+select
+ps_suppkey
+from
+partsupp {snapshot = 'tpch_snapshot'}
+where
+ps_partkey in (
+select
+p_partkey
+from
+part {snapshot = 'tpch_snapshot'}
+where
+p_name like 'lime%'
+)
+and ps_availqty > (
+select
+0.5 * sum(l_quantity)
+from
+lineitem {snapshot = 'tpch_snapshot'}
+where
+l_partkey = ps_partkey
+and l_suppkey = ps_suppkey
+and l_shipdate >= date '1993-01-01'
+and l_shipdate < date '1993-01-01' + interval '1' year
+)
+)
+and s_nationkey = n_nationkey
+and n_name = 'VIETNAM'
+order by s_name
+;
+s_name    s_address
+select
+s_name,
+s_address
+from
+supplier {snapshot = 'tpch_snapshot'},
+nation {snapshot = 'tpch_snapshot'}
+where
+s_suppkey in (
+select
+ps_suppkey
+from
+partsupp {snapshot = 'tpch_snapshot'}
+where
+ps_partkey in (
+select
+p_partkey
+from
+part {snapshot = 'tpch_snapshot'}
+where
+p_name like 'lime%'
+)
+and ps_availqty > (
+select
+0.5 * sum(l_quantity)
+from
+lineitem {snapshot = 'tpch_snapshot'}
+where
+l_partkey = ps_partkey
+and l_suppkey = ps_suppkey
+and l_shipdate >= date '1993-01-01'
+and l_shipdate < date '1993-01-01' + interval '1' year
+)
+)
+and s_nationkey = n_nationkey
+and n_name = 'VIETNAM'
+order by s_name
+;
+s_name    s_address
+select
+s_name,
+count(*) as numwait
+from
+supplier {snapshot = 'tpch_snapshot'},
+lineitem l1 {snapshot = 'tpch_snapshot'},
+orders {snapshot = 'tpch_snapshot'},
+nation {snapshot = 'tpch_snapshot'}
+where
+s_suppkey = l1.l_suppkey
+and o_orderkey = l1.l_orderkey
+and o_orderstatus = 'F'
+and l1.l_receiptdate > l1.l_commitdate
+and exists (
+select
+*
+from
+lineitem l2 {snapshot = 'tpch_snapshot'}
+where
+l2.l_orderkey = l1.l_orderkey
+and l2.l_suppkey <> l1.l_suppkey
+)
+and not exists (
+select
+*
+from
+lineitem l3 {snapshot = 'tpch_snapshot'}
+where
+l3.l_orderkey = l1.l_orderkey
+and l3.l_suppkey <> l1.l_suppkey
+and l3.l_receiptdate > l3.l_commitdate
+)
+and s_nationkey = n_nationkey
+and n_name = 'BRAZIL'
+group by
+s_name
+order by
+numwait desc,
+s_name
+limit 100
+;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 6 column 14 near " {snapshot = 'tpch_snapshot'},
+orders {snapshot = 'tpch_snapshot'},
+nation {snapshot = 'tpch_snapshot'}
+where
+s_suppkey = l1.l_suppkey
+and o_orderkey = l1.l_orderkey
+and o_orderstatus = 'F'
+and l1.l_receiptdate > l1.l_commitdate
+and exists (
+select
+*
+from
+lineitem l2 {snapshot = 'tpch_snapshot'}
+where
+l2.l_orderkey = l1.l_orderkey
+and l2.l_suppkey <> l1.l_suppkey
+)
+and not exists (
+select
+*
+from
+lineitem l3 {snapshot = 'tpch_snapshot'}
+where
+l3.l_orderkey = l1.l_orderkey
+and l3.l_suppkey <> l1.l_suppkey
+and l3.l_receiptdate > l3.l_commitdate
+)
+and s_nationkey = n_nationkey
+and n_name = 'BRAZIL'
+group by
+s_name
+order by
+numwait desc,
+s_name
+limit 100
+;";
+select
+s_name,
+count(*) as numwait
+from
+supplier {snapshot = 'tpch_snapshot'},
+lineitem l1 {snapshot = 'tpch_snapshot'},
+orders {snapshot = 'tpch_snapshot'},
+nation {snapshot = 'tpch_snapshot'}
+where
+s_suppkey = l1.l_suppkey
+and o_orderkey = l1.l_orderkey
+and o_orderstatus = 'F'
+and l1.l_receiptdate > l1.l_commitdate
+and exists (
+select
+*
+from
+lineitem l2 {snapshot = 'tpch_snapshot'}
+where
+l2.l_orderkey = l1.l_orderkey
+and l2.l_suppkey <> l1.l_suppkey
+)
+and not exists (
+select
+*
+from
+lineitem l3 {snapshot = 'tpch_snapshot'}
+where
+l3.l_orderkey = l1.l_orderkey
+and l3.l_suppkey <> l1.l_suppkey
+and l3.l_receiptdate > l3.l_commitdate
+)
+and s_nationkey = n_nationkey
+and n_name = 'BRAZIL'
+group by
+s_name
+order by
+numwait desc,
+s_name
+limit 100
+;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 6 column 14 near " {snapshot = 'tpch_snapshot'},
+orders {snapshot = 'tpch_snapshot'},
+nation {snapshot = 'tpch_snapshot'}
+where
+s_suppkey = l1.l_suppkey
+and o_orderkey = l1.l_orderkey
+and o_orderstatus = 'F'
+and l1.l_receiptdate > l1.l_commitdate
+and exists (
+select
+*
+from
+lineitem l2 {snapshot = 'tpch_snapshot'}
+where
+l2.l_orderkey = l1.l_orderkey
+and l2.l_suppkey <> l1.l_suppkey
+)
+and not exists (
+select
+*
+from
+lineitem l3 {snapshot = 'tpch_snapshot'}
+where
+l3.l_orderkey = l1.l_orderkey
+and l3.l_suppkey <> l1.l_suppkey
+and l3.l_receiptdate > l3.l_commitdate
+)
+and s_nationkey = n_nationkey
+and n_name = 'BRAZIL'
+group by
+s_name
+order by
+numwait desc,
+s_name
+limit 100
+;";
+select
+s_name,
+count(*) as numwait
+from
+supplier {snapshot = 'tpch_snapshot'},
+lineitem l1 {snapshot = 'tpch_snapshot'},
+orders {snapshot = 'tpch_snapshot'},
+nation {snapshot = 'tpch_snapshot'}
+where
+s_suppkey = l1.l_suppkey
+and o_orderkey = l1.l_orderkey
+and o_orderstatus = 'F'
+and l1.l_receiptdate > l1.l_commitdate
+and exists (
+select
+*
+from
+lineitem l2 {snapshot = 'tpch_snapshot'}
+where
+l2.l_orderkey = l1.l_orderkey
+and l2.l_suppkey <> l1.l_suppkey
+)
+and not exists (
+select
+*
+from
+lineitem l3 {snapshot = 'tpch_snapshot'}
+where
+l3.l_orderkey = l1.l_orderkey
+and l3.l_suppkey <> l1.l_suppkey
+and l3.l_receiptdate > l3.l_commitdate
+)
+and s_nationkey = n_nationkey
+and n_name = 'BRAZIL'
+group by
+s_name
+order by
+numwait desc,
+s_name
+limit 100
+;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 6 column 14 near " {snapshot = 'tpch_snapshot'},
+orders {snapshot = 'tpch_snapshot'},
+nation {snapshot = 'tpch_snapshot'}
+where
+s_suppkey = l1.l_suppkey
+and o_orderkey = l1.l_orderkey
+and o_orderstatus = 'F'
+and l1.l_receiptdate > l1.l_commitdate
+and exists (
+select
+*
+from
+lineitem l2 {snapshot = 'tpch_snapshot'}
+where
+l2.l_orderkey = l1.l_orderkey
+and l2.l_suppkey <> l1.l_suppkey
+)
+and not exists (
+select
+*
+from
+lineitem l3 {snapshot = 'tpch_snapshot'}
+where
+l3.l_orderkey = l1.l_orderkey
+and l3.l_suppkey <> l1.l_suppkey
+and l3.l_receiptdate > l3.l_commitdate
+)
+and s_nationkey = n_nationkey
+and n_name = 'BRAZIL'
+group by
+s_name
+order by
+numwait desc,
+s_name
+limit 100
+;";
+drop database if exists TPCH;
+drop snapshot tpch_snapshot;
+drop snapshot tpch_cluster;

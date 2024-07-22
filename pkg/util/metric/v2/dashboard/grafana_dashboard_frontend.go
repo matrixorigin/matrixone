@@ -30,7 +30,10 @@ func (c *DashboardCreator) initFrontendDashboard() error {
 	build, err := dashboard.New(
 		"Frontend Metrics",
 		c.withRowOptions(
-			c.initFrontendOverviewRow(),
+			c.initFrontendAcceptConnectionDuration(),
+			c.initFrontendRoutineAndRequestCount(),
+			c.initFrontendResolveDuration(),
+			c.initFrontendCreateAccount(),
 		)...)
 	if err != nil {
 		return err
@@ -39,9 +42,9 @@ func (c *DashboardCreator) initFrontendDashboard() error {
 	return err
 }
 
-func (c *DashboardCreator) initFrontendOverviewRow() dashboard.Option {
+func (c *DashboardCreator) initFrontendAcceptConnectionDuration() dashboard.Option {
 	return dashboard.Row(
-		"Frontend overview",
+		"Accept Connection Duration",
 		c.getMultiHistogram(
 			[]string{
 				c.getMetricWithFilter(`mo_frontend_accept_connection_duration_bucket`, `label="created"`),
@@ -64,6 +67,96 @@ func (c *DashboardCreator) initFrontendOverviewRow() dashboard.Option {
 				"check-role",
 				"check-dbname",
 				"init-global-sys-var",
+			},
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			[]float32{3, 3, 3, 3},
+			axis.Unit("s"),
+			axis.Min(0))...,
+	)
+}
+
+func (c *DashboardCreator) initFrontendRoutineAndRequestCount() dashboard.Option {
+	return dashboard.Row(
+		"Routine and request count",
+		c.withMultiGraph(
+			"Routine Count",
+			6,
+			[]string{
+				`sum(rate(` + c.getMetricWithFilter(`mo_frontend_routine_count`, `label="created"`) + `[$interval]))`,
+				`sum(rate(` + c.getMetricWithFilter(`mo_frontend_routine_count`, `label="close"`) + `[$interval]))`,
+			},
+			[]string{
+				"created",
+				"close",
+			}),
+		c.withMultiGraph(
+			"Request Count",
+			6,
+			[]string{
+				`sum(rate(` + c.getMetricWithFilter(`mo_frontend_request_count`, `label="start-handle"`) + `[$interval]))`,
+				`sum(rate(` + c.getMetricWithFilter(`mo_frontend_request_count`, `label="end-handle"`) + `[$interval]))`,
+			},
+			[]string{
+				"start-handle",
+				"end-handle",
+			}),
+	)
+}
+
+func (c *DashboardCreator) initFrontendResolveDuration() dashboard.Option {
+	return dashboard.Row(
+		"Resolve Duration",
+		c.getMultiHistogram(
+			[]string{
+				c.getMetricWithFilter(`mo_frontend_resolve_duration_bucket`, `label="total-resolve"`),
+				c.getMetricWithFilter(`mo_frontend_resolve_duration_bucket`, `label="ensure-database"`),
+				c.getMetricWithFilter(`mo_frontend_resolve_duration_bucket`, `label="get-sub-meta"`),
+				c.getMetricWithFilter(`mo_frontend_resolve_duration_bucket`, `label="check-sub-valid"`),
+				c.getMetricWithFilter(`mo_frontend_resolve_duration_bucket`, `label="get-relation"`),
+				c.getMetricWithFilter(`mo_frontend_resolve_duration_bucket`, `label="open-db"`),
+				c.getMetricWithFilter(`mo_frontend_resolve_duration_bucket`, `label="open-table"`),
+				c.getMetricWithFilter(`mo_frontend_resolve_duration_bucket`, `label="get-tmp-table"`),
+			},
+			[]string{
+				"total-resolve",
+				"ensure-database",
+				"get-sub-meta",
+				"check-sub-valid",
+				"get-relation",
+				"open-db",
+				"open-table",
+				"get-tmp-table",
+			},
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			[]float32{3, 3, 3, 3},
+			axis.Unit("s"),
+			axis.Min(0))...,
+	)
+}
+
+func (c *DashboardCreator) initFrontendCreateAccount() dashboard.Option {
+	return dashboard.Row(
+		"Create account Duration",
+		c.getMultiHistogram(
+			[]string{
+				c.getMetricWithFilter(`mo_frontend_create_account_duration_bucket`, `label="total-create"`),
+				c.getMetricWithFilter(`mo_frontend_create_account_duration_bucket`, `label="step1"`),
+				c.getMetricWithFilter(`mo_frontend_create_account_duration_bucket`, `label="step2"`),
+				c.getMetricWithFilter(`mo_frontend_create_account_duration_bucket`, `label="create-tables-in-mo-catalog"`),
+				c.getMetricWithFilter(`mo_frontend_create_account_duration_bucket`, `label="exec-ddl1"`),
+				c.getMetricWithFilter(`mo_frontend_create_account_duration_bucket`, `label="init-data1"`),
+				c.getMetricWithFilter(`mo_frontend_create_account_duration_bucket`, `label="create-tables-in-system"`),
+				c.getMetricWithFilter(`mo_frontend_create_account_duration_bucket`, `label="create-tables-in-info-schema"`),
+			},
+			[]string{
+				"total-create",
+				"step1",
+				"step2",
+				"create-tables-in-mo-catalog",
+				"exec-ddl1",
+				"init-data1",
+				"create-tables-in-system",
+				"create-tables-in-info-schema",
 			},
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3},

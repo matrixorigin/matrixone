@@ -59,7 +59,7 @@ func (c cpuTotal) Metric(ctx context.Context, _ *statCaches) (prom.Metric, error
 	if len(cpus) == 0 {
 		return nil, moerr.NewInternalError(ctx, "empty cpu times")
 	}
-	v := (cpus[0].Total() - cpus[0].Idle) / float64(logicalCore)
+	v := (CPUTotalTime(cpus[0]) - cpus[0].Idle) / float64(logicalCore)
 	return prom.MustNewConstMetric(c.Desc(), prom.CounterValue, v), nil
 }
 

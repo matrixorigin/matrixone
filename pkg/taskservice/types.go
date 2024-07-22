@@ -44,14 +44,17 @@ var (
 	LE = Op(5)
 	// IN record in condition
 	IN = Op(6)
+	// LIKE record LIKE condition
+	LIKE = Op(7)
 
 	OpName = map[Op]string{
-		EQ: "=",
-		GT: ">",
-		GE: ">=",
-		LT: "<",
-		LE: "<=",
-		IN: "IN",
+		EQ:   "=",
+		GT:   ">",
+		GE:   ">=",
+		LT:   "<",
+		LE:   "<=",
+		IN:   "IN",
+		LIKE: "LIKE",
 	}
 )
 
@@ -287,6 +290,19 @@ func (c *cronTaskIDCond) sql() string {
 	return fmt.Sprintf("cron_task_id%s%d", OpName[c.op], c.cronTaskID)
 }
 
+type taskMetadataIDCond struct {
+	op             Op
+	taskMetadataID string
+}
+
+func (c *taskMetadataIDCond) eval(v any) bool {
+	return false
+}
+
+func (c *taskMetadataIDCond) sql() string {
+	return fmt.Sprintf("task_metadata_id %s '%s'", OpName[c.op], c.taskMetadataID)
+}
+
 func compare[T constraints.Ordered](op Op, a T, b T) bool {
 	switch op {
 	case EQ:
@@ -320,6 +336,7 @@ const (
 	CondAccount
 	CondLastHeartbeat
 	CondCronTaskId
+	CondTaskMetadataId
 )
 
 var (
@@ -331,6 +348,7 @@ var (
 		CondTaskParentTaskID: {},
 		CondTaskExecutor:     {},
 		CondCronTaskId:       {},
+		CondTaskMetadataId:   {},
 	}
 	daemonWhereConditionCodes = map[condCode]struct{}{
 		CondTaskID:        {},
@@ -444,6 +462,12 @@ func WithCronTaskId(op Op, value uint64) Condition {
 	}
 }
 
+func WithTaskMetadataId(op Op, value string) Condition {
+	return func(c *conditions) {
+		(*c)[CondTaskMetadataId] = &taskMetadataIDCond{op: op, taskMetadataID: value}
+	}
+}
+
 // TaskService Asynchronous Task Service, which provides scheduling execution and management of
 // asynchronous tasks. CN, DN, HAKeeper, LogService will all hold this service.
 type TaskService interface {
@@ -522,6 +546,8 @@ type TaskRunner interface {
 type TaskStorage interface {
 	// Close close the task storage
 	Close() error
+	// PingContext ping the db with context
+	PingContext(context.Context) error
 
 	// AddAsyncTask adds async tasks and returns number of successful added
 	AddAsyncTask(context.Context, ...task.AsyncTask) (int, error)
@@ -568,3 +594,5 @@ type TaskServiceHolder interface {
 type TaskStorageFactory interface {
 	Create(address string) (TaskStorage, error)
 }
+
+type Getter func() (TaskService, bool)

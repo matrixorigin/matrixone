@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -29,9 +30,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/parquet-go/parquet-go"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(External)
 
 const (
 	ColumnCntLargerErrorInfo = "the table column is larger than input data column"
@@ -60,6 +62,7 @@ type ExParamConst struct {
 	FileOffset      []int64
 	FileOffsetTotal []*pipeline.FileOffset
 	Name2ColIndex   map[string]int32
+	TbColToDataCol  map[string]int32
 	Ctx             context.Context
 	Extern          *tree.ExternParam
 	tableDef        *plan.TableDef
@@ -74,6 +77,7 @@ type ExParam struct {
 	Zoneparam      *ZonemapFileparam
 	Filter         *FilterParam
 	MoCsvLineArray [][]csvparser.Field
+	parqh          *ParquetHandler
 }
 
 type ExFileparam struct {
@@ -96,52 +100,66 @@ type FilterParam struct {
 	blockReader  *blockio.BlockReader
 }
 
-type Argument struct {
+type container struct {
+	maxAllocSize int
+	buf          *batch.Batch
+}
+type External struct {
+	ctr *container
 	Es  *ExternalParam
-	buf *batch.Batch
+
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (external *External) GetOperatorBase() *vm.OperatorBase {
+	return &external.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[External](
+		func() *External {
+			return &External{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *External) {
+			*a = External{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[External]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (external External) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *External {
+	return reuse.Alloc[External](nil)
 }
 
-func (arg *Argument) WithEs(es *ExternalParam) *Argument {
-	arg.Es = es
-	return arg
+func (external *External) WithEs(es *ExternalParam) *External {
+	external.Es = es
+	return external
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (external *External) Release() {
+	if external != nil {
+		reuse.Free[External](external, nil)
 	}
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if arg.buf != nil {
-		arg.buf.Clean(proc.Mp())
-		arg.buf = nil
+func (external *External) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	external.Free(proc, pipelineFailed, err)
+}
+
+func (external *External) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if external.ctr != nil {
+		if external.ctr.buf != nil {
+			external.ctr.buf.Clean(proc.Mp())
+			external.ctr.buf = nil
+		}
+		anal := proc.GetAnalyze(external.GetIdx(), external.GetParallelIdx(), external.GetParallelMajor())
+		anal.Alloc(int64(external.ctr.maxAllocSize))
+		external.ctr = nil
 	}
 }
 
@@ -153,7 +171,7 @@ type ParseLineHandler struct {
 	moCsvLineArray [][]csvparser.Field
 }
 
-func newReaderWithParam(param *ExternalParam) (*csvparser.CSVParser, error) {
+func newReaderWithParam(param *ExternalParam, reuseRow bool) (*csvparser.CSVParser, error) {
 	fieldsTerminatedBy := "\t"
 	fieldsEnclosedBy := "\""
 	fieldsEscapedBy := "\\"
@@ -203,5 +221,20 @@ func newReaderWithParam(param *ExternalParam) (*csvparser.CSVParser, error) {
 		Comment:            '#',
 	}
 
-	return csvparser.NewCSVParser(&config, bufio.NewReader(param.reader), csvparser.ReadBlockSize, false, false)
+	return csvparser.NewCSVParser(&config, bufio.NewReader(param.reader), csvparser.ReadBlockSize, false, reuseRow)
+}
+
+type ParquetHandler struct {
+	file     *parquet.File
+	offset   int64
+	batchCnt int64
+	cols     []*parquet.Column
+	mappers  []*columnMapper
+}
+
+type columnMapper struct {
+	srcNull, dstNull   bool
+	maxDefinitionLevel byte
+
+	mapper func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error
 }

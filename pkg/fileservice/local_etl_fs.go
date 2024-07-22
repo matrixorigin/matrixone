@@ -80,6 +80,9 @@ func (l *LocalETLFS) Name() string {
 	return l.name
 }
 
+func (l *LocalETLFS) Close() {
+}
+
 func (l *LocalETLFS) Write(ctx context.Context, vector IOVector) error {
 	select {
 	case <-ctx.Done():
@@ -234,9 +237,12 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 					R: r,
 					C: counter,
 				}
-				cacheData, err := entry.ToCacheData(cr, nil, DefaultCacheDataAllocator)
+				cacheData, err := entry.ToCacheData(cr, nil, GetDefaultCacheDataAllocator())
 				if err != nil {
 					return err
+				}
+				if cacheData == nil {
+					panic("ToCacheData returns nil cache data")
 				}
 				vector.Entries[i].CachedData = cacheData
 				if entry.Size > 0 && counter.Load() != entry.Size {
@@ -284,9 +290,12 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 					r: io.TeeReader(r, buf),
 					closeFunc: func() error {
 						defer f.Close()
-						cacheData, err := entry.ToCacheData(buf, buf.Bytes(), DefaultCacheDataAllocator)
+						cacheData, err := entry.ToCacheData(buf, buf.Bytes(), GetDefaultCacheDataAllocator())
 						if err != nil {
 							return err
+						}
+						if cacheData != nil {
+							panic("ToCacheData returns nil cache data")
 						}
 						vector.Entries[i].CachedData = cacheData
 						return nil
@@ -336,7 +345,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 				}
 			}
 
-			if err := entry.setCachedData(); err != nil {
+			if err := entry.setCachedData(ctx); err != nil {
 				return err
 			}
 
@@ -467,10 +476,11 @@ func (l *LocalETLFS) deleteSingle(ctx context.Context, filePath string) error {
 	nativePath := l.toNativeFilePath(path.File)
 
 	_, err = os.Stat(nativePath)
-	if os.IsNotExist(err) {
-		return moerr.NewFileNotFoundNoCtx(path.File)
-	}
 	if err != nil {
+		if os.IsNotExist(err) {
+			// ignore not found error
+			return nil
+		}
 		return err
 	}
 
@@ -560,6 +570,12 @@ func (l *LocalETLFS) syncDir(nativePath string) error {
 		return err
 	}
 	return nil
+}
+
+func (l *LocalETLFS) Cost() *CostAttr {
+	return &CostAttr{
+		List: CostLow,
+	}
 }
 
 func (l *LocalETLFS) toNativeFilePath(filePath string) string {

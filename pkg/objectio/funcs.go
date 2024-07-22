@@ -18,6 +18,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"slices"
+
+	"github.com/matrixorigin/matrixone/pkg/util"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -28,22 +31,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
-var enableCacheRelease bool
-
-func init() {
-	enableCacheRelease = false
-}
-
-func ReleaseIOEntry(entry *fileservice.IOEntry) {
-	if enableCacheRelease {
-		entry.CachedData.Release()
-	}
-}
-
 func ReleaseIOVector(vector *fileservice.IOVector) {
-	if enableCacheRelease {
-		vector.Release()
-	}
+	vector.Release()
 }
 
 func ReadExtent(
@@ -68,11 +57,17 @@ func ReadExtent(
 	if err = fs.Read(ctx, ioVec); err != nil {
 		return
 	}
+	if ioVec.Entries[0].CachedData == nil {
+		logutil.Errorf("ReadExtent: ioVec.Entries[0].CachedData is nil, name: %s, extent: %v",
+			name, extent.String())
+		util.EnableCoreDump()
+		util.CoreDump()
+	}
 	//TODO when to call ioVec.Release?
 	v := ioVec.Entries[0].CachedData.Bytes()
 	buf = make([]byte, len(v))
 	copy(buf, v)
-	ReleaseIOEntry(&ioVec.Entries[0])
+	ReleaseIOVector(ioVec)
 	return
 }
 
@@ -154,7 +149,7 @@ func ReadOneBlockWithMeta(
 ) (ioVec *fileservice.IOVector, err error) {
 	ioVec = &fileservice.IOVector{
 		FilePath: name,
-		Entries:  make([]fileservice.IOEntry, 0),
+		Entries:  make([]fileservice.IOEntry, 0, len(seqnums)),
 		Policy:   policy,
 	}
 
@@ -230,7 +225,7 @@ func ReadOneBlockWithMeta(
 				if err = vector.NewConstNull(typs[i], length, m).MarshalBinaryWithBuffer(buf); err != nil {
 					return
 				}
-				cacheData := fileservice.DefaultCacheDataAllocator.Alloc(buf.Len())
+				cacheData := fileservice.GetDefaultCacheDataAllocator().Alloc(buf.Len())
 				copy(cacheData.Bytes(), buf.Bytes())
 				filledEntries[i].CachedData = cacheData
 			}
@@ -348,11 +343,17 @@ func ReadOneBlockAllColumns(
 	}
 
 	err = fs.Read(ctx, ioVec)
-	//TODO when to call ioVec.Release?
+	if err != nil {
+		return nil, err
+	}
+	defer ioVec.Release()
+
 	bat = batch.NewWithSize(len(cols))
 	var obj any
 	for i := range cols {
-		obj, err = Decode(ioVec.Entries[i].CachedData.Bytes())
+		// always copy to avoid memory leak
+		bs := slices.Clone(ioVec.Entries[i].CachedData.Bytes())
+		obj, err = Decode(bs)
 		if err != nil {
 			return nil, err
 		}

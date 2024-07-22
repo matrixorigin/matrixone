@@ -26,26 +26,26 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func New(tableID uint64, attrs []string, ins vm.Instructions, reg *process.WaitRegister) *Pipeline {
+func New(tableID uint64, attrs []string, op vm.Operator, reg *process.WaitRegister) *Pipeline {
 	return &Pipeline{
-		reg:          reg,
-		instructions: ins,
-		attrs:        attrs,
-		tableID:      tableID,
+		reg:     reg,
+		rootOp:  op,
+		attrs:   attrs,
+		tableID: tableID,
 	}
 }
 
-func NewMerge(ins vm.Instructions, reg *process.WaitRegister) *Pipeline {
+func NewMerge(op vm.Operator, reg *process.WaitRegister) *Pipeline {
 	return &Pipeline{
-		reg:          reg,
-		instructions: ins,
+		reg:    reg,
+		rootOp: op,
 	}
 }
 
 func (p *Pipeline) String() string {
 	var buf bytes.Buffer
 
-	vm.String(p.instructions, &buf)
+	vm.String(p.rootOp, &buf)
 	return buf.String()
 }
 
@@ -66,27 +66,18 @@ func (p *Pipeline) Run(r engine.Reader, topValueMsgTag int32, proc *process.Proc
 		}
 	}
 
-	tableScanOperator := table_scan.Argument{
-		Reader:         r,
-		TopValueMsgTag: topValueMsgTag,
-		Attrs:          p.attrs,
-		TableID:        p.tableID,
+	if tableScanOperator, ok := vm.GetLeafOp(p.rootOp).(*table_scan.TableScan); ok {
+		tableScanOperator.Reader = r
+		tableScanOperator.TopValueMsgTag = topValueMsgTag
+		tableScanOperator.Attrs = p.attrs
+		tableScanOperator.TableID = p.tableID
 	}
-	p.instructions = append([]vm.Instruction{
-		{
-			Op:      vm.TableScan,
-			Idx:     -1,
-			Arg:     &tableScanOperator,
-			IsFirst: true,
-			IsLast:  false,
-		},
-	}, p.instructions...)
 
-	if err = vm.Prepare(p.instructions, proc); err != nil {
+	if err = vm.Prepare(p.rootOp, proc); err != nil {
 		return false, err
 	}
 	for {
-		end, err = vm.Run(p.instructions, proc)
+		end, err = vm.Run(p.rootOp, proc)
 		if err != nil {
 			return end, err
 		}
@@ -105,32 +96,21 @@ func (p *Pipeline) ConstRun(bat *batch.Batch, proc *process.Process) (end bool, 
 		case <-p.reg.Ch:
 		}
 	}
-	pipelineInputBatches := []*batch.Batch{bat, nil}
 
-	for _, ins := range p.instructions {
-		ins.Idx += 1
-		ins.IsFirst = false
+	if valueScanOperator, ok := vm.GetLeafOp(p.rootOp).(*value_scan.ValueScan); ok {
+		pipelineInputBatches := []*batch.Batch{bat}
+		if bat != nil {
+			pipelineInputBatches = append(pipelineInputBatches, nil)
+		}
+		valueScanOperator.Batchs = pipelineInputBatches
 	}
 
-	valueScanOperator := value_scan.Argument{
-		Batchs: pipelineInputBatches,
-	}
-	p.instructions = append([]vm.Instruction{
-		{
-			Op:      vm.ValueScan,
-			Idx:     0,
-			Arg:     &valueScanOperator,
-			IsFirst: true,
-			IsLast:  false,
-		},
-	}, p.instructions...)
-
-	if err = vm.Prepare(p.instructions, proc); err != nil {
+	if err = vm.Prepare(p.rootOp, proc); err != nil {
 		return false, err
 	}
 
 	for {
-		end, err = vm.Run(p.instructions, proc)
+		end, err = vm.Run(p.rootOp, proc)
 		if err != nil {
 			return end, err
 		}
@@ -149,11 +129,11 @@ func (p *Pipeline) MergeRun(proc *process.Process) (end bool, err error) {
 		}
 	}
 
-	if err = vm.Prepare(p.instructions, proc); err != nil {
+	if err = vm.Prepare(p.rootOp, proc); err != nil {
 		return false, err
 	}
 	for {
-		end, err = vm.Run(p.instructions, proc)
+		end, err = vm.Run(p.rootOp, proc)
 		if err != nil {
 			return end, err
 		}

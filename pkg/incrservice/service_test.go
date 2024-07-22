@@ -88,6 +88,57 @@ func TestCreateOnOtherService(t *testing.T) {
 		})
 }
 
+func TestReloadIncrCache(t *testing.T) {
+	runServiceTests(
+		t,
+		2,
+		func(
+			ctx context.Context,
+			ss []*service,
+			ops []client.TxnOperator,
+		) {
+			s := ss[0]
+			op := ops[0]
+			def := newTestTableDef(1)
+			require.NoError(t, s.Create(ctx, 0, def, op))
+			require.NoError(t, op.Commit(ctx))
+
+			s2 := ss[1]
+			_, err := s2.getCommittedTableCache(ctx, 0)
+			require.NoError(t, err)
+
+			v := uint64(100000000)
+			s.mu.Lock()
+			c := s.mu.tables[0].(*tableCache)
+			s.mu.Unlock()
+
+			c.mu.Lock()
+			cc := c.mu.cols[def[0].ColName]
+			c.mu.Unlock()
+			err = cc.updateTo(
+				ctx,
+				0,
+				v,
+				nil,
+			)
+			require.NoError(t, err)
+
+			require.NoError(t, s2.Reload(ctx, 0))
+			tc, err := s2.getCommittedTableCache(
+				ctx,
+				0,
+			)
+			require.NoError(t, err)
+
+			c = tc.(*tableCache)
+			c.mu.Lock()
+			cc = c.mu.cols[def[0].ColName]
+			c.mu.Unlock()
+
+			require.Equal(t, v+1, cc.ranges.current())
+		})
+}
+
 func TestCreateWithTxnAborted(t *testing.T) {
 	runServiceTests(
 		t,
@@ -190,7 +241,6 @@ func TestDeleteOnOtherService(t *testing.T) {
 			op2 := ops[1]
 			require.NoError(t, s2.Delete(ctx, 0, op2))
 			require.NoError(t, op2.Commit(ctx))
-			waitStoreCachesCommitted(t, s2.store.(*memStore), 0)
 		})
 }
 
@@ -208,8 +258,8 @@ func runServiceTests(
 
 		ss := make([]*service, 0, n)
 		ops := make([]client.TxnOperator, 0, n)
+		store := NewMemStore()
 		for i := 0; i < n; i++ {
-			store := NewMemStore()
 			ss = append(ss, NewIncrService("", store, Config{CountPerAllocate: 1}).(*service))
 
 			op, err := tc.New(ctx, timestamp.Timestamp{})

@@ -145,8 +145,10 @@ func TestMergeDelete(t *testing.T) {
 	}
 	batch2.SetRowCount(3)
 
-	argument1 := Argument{
-		DelSource:    &mockRelation{},
+	argument1 := MergeDelete{
+		ctr: &container{
+			delSource: &mockRelation{},
+		},
 		AffectedRows: 0,
 		OperatorBase: vm.OperatorBase{
 			OperatorInfo: vm.OperatorInfo{
@@ -157,14 +159,14 @@ func TestMergeDelete(t *testing.T) {
 		},
 	}
 
-	require.NoError(t, argument1.Prepare(proc))
+	// require.NoError(t, argument1.Prepare(proc))
 	resetChildren(&argument1, batch1)
 	_, err = argument1.Call(proc)
 	require.NoError(t, err)
 	require.Equal(t, uint64(15), argument1.AffectedRows)
 
 	// Check DelSource
-	result0 := argument1.DelSource.(*mockRelation).result
+	result0 := argument1.ctr.delSource.(*mockRelation).result
 	// check attr names
 	require.True(t, reflect.DeepEqual(
 		[]string{
@@ -184,7 +186,7 @@ func TestMergeDelete(t *testing.T) {
 	require.Equal(t, uint64(60), argument1.AffectedRows)
 
 	// Check DelSource
-	result1 := argument1.DelSource.(*mockRelation).result
+	result1 := argument1.ctr.delSource.(*mockRelation).result
 	// check attr names
 	require.True(t, reflect.DeepEqual(
 		[]string{
@@ -211,11 +213,13 @@ func TestMergeDelete(t *testing.T) {
 	require.Equal(t, int64(16+2*16), proc.GetMPool().CurrNB())
 }
 
-func resetChildren(arg *Argument, bat *batch.Batch) {
+func resetChildren(arg *MergeDelete, bat *batch.Batch) {
+	valueScanArg := &value_scan.ValueScan{
+		Batchs: []*batch.Batch{bat},
+	}
+	valueScanArg.Prepare(nil)
 	arg.SetChildren(
 		[]vm.Operator{
-			&value_scan.Argument{
-				Batchs: []*batch.Batch{bat},
-			},
+			valueScanArg,
 		})
 }

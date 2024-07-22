@@ -53,6 +53,7 @@ func WithQuickScanAndCKPOpts(in *options.Options) (opts *options.Options) {
 	opts.CheckpointCfg.GlobalMinCount = 1
 	opts.CheckpointCfg.GCCheckpointInterval = time.Millisecond * 10
 	opts.CheckpointCfg.BlockRows = 10
+	opts.CheckpointCfg.GlobalVersionInterval = time.Millisecond * 10
 	opts.GCCfg = new(options.GCCfg)
 	opts.GCCfg.ScanGCInterval = time.Millisecond * 10
 	opts.GCCfg.GCTTL = time.Millisecond * 1

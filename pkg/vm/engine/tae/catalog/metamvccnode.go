@@ -28,6 +28,9 @@ import (
 type MetadataMVCCNode struct {
 	MetaLoc  objectio.Location
 	DeltaLoc objectio.Location
+
+	// For deltaloc from CN, it needs to ensure that deleteChain is empty.
+	NeedCheckDeleteChainWhenCommit bool
 }
 
 func NewEmptyMetadataMVCCNode() *MetadataMVCCNode {
@@ -133,9 +136,10 @@ func NewObjectInfoWithObjectStats(stats *objectio.ObjectStats) *ObjectMVCCNode {
 }
 
 func (e *ObjectMVCCNode) CloneAll() *ObjectMVCCNode {
-	return &ObjectMVCCNode{
+	obj := &ObjectMVCCNode{
 		ObjectStats: *e.ObjectStats.Clone(),
 	}
+	return obj
 }
 func (e *ObjectMVCCNode) CloneData() *ObjectMVCCNode {
 	return &ObjectMVCCNode{
@@ -182,9 +186,15 @@ func (e *ObjectMVCCNode) IsEmpty() bool {
 	return e.Size() == 0
 }
 
-func (e *ObjectMVCCNode) AppendTuple(sid *types.Objectid, batch *containers.Batch) {
-	if e == nil || e.IsEmpty() {
-		objectio.SetObjectStatsObjectName(&e.ObjectStats, objectio.BuildObjectNameWithObjectID(sid)) // when replay, sid is get from object name
+func (e *ObjectMVCCNode) AppendTuple(sid *types.Objectid, batch *containers.Batch, empty bool) {
+	if empty {
+		stats := objectio.NewObjectStats()
+		objectio.SetObjectStatsObjectName(stats, objectio.BuildObjectNameWithObjectID(sid)) // when replay, sid is get from object name
+		batch.GetVectorByName(ObjectAttr_ObjectStats).Append(stats[:], false)
+		return
+	}
+	if e.IsEmpty() {
+		panic("logic error")
 	}
 	batch.GetVectorByName(ObjectAttr_ObjectStats).Append(e.ObjectStats[:], false)
 }
@@ -201,21 +211,15 @@ type ObjectNode struct {
 	state    EntryState
 	IsLocal  bool   // this object is hold by a localobject
 	SortHint uint64 // sort object by create time, make iteration on object determined
-	// used in appendable object, bump this if creating a new block, and
-	// the block will be eventually flushed to a s3 file.
-	// for non-appendable object, this field makes no sense, because if we
-	// decide to create a new non-appendable object, its content is all set.
-	nextObjectIdx uint16
-	sorted        bool // deprecated
+	sorted   bool   // deprecated
 
-	remainingRows common.FixedSampleIII[int]
+	remainingRows *common.FixedSampleIII[int]
 }
 
 const (
 	BlockNodeSize int64 = int64(unsafe.Sizeof(BlockNode{}))
 )
 
-// not marshal nextObjectIdx
 func (node *ObjectNode) ReadFrom(r io.Reader) (n int64, err error) {
 	_, err = r.Read(types.EncodeInt8((*int8)(&node.state)))
 	if err != nil {

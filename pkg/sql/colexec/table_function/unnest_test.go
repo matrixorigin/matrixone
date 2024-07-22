@@ -31,7 +31,7 @@ import (
 )
 
 type unnestTestCase struct {
-	arg      *Argument
+	arg      *TableFunction
 	proc     *process.Process
 	jsons    []string
 	paths    []string
@@ -54,7 +54,7 @@ var (
 	defaultColDefs = []*plan.ColDef{
 		{
 			Name: "col",
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(types.T_varchar),
 				NotNullable: false,
 				Width:       4,
@@ -62,14 +62,14 @@ var (
 		},
 		{
 			Name: "seq",
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(types.T_int32),
 				NotNullable: false,
 			},
 		},
 		{
 			Name: "key",
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(types.T_varchar),
 				NotNullable: false,
 				Width:       256,
@@ -77,7 +77,7 @@ var (
 		},
 		{
 			Name: "path",
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(types.T_varchar),
 				NotNullable: false,
 				Width:       256,
@@ -85,14 +85,14 @@ var (
 		},
 		{
 			Name: "index",
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(types.T_int32),
 				NotNullable: false,
 			},
 		},
 		{
 			Name: "value",
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(types.T_varchar),
 				NotNullable: false,
 				Width:       1024,
@@ -100,7 +100,7 @@ var (
 		},
 		{
 			Name: "this",
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(types.T_varchar),
 				NotNullable: false,
 				Width:       1024,
@@ -120,7 +120,7 @@ func init() {
 }
 
 func newTestCase(m *mpool.MPool, attrs []string, jsons, paths []string, outers []bool, jsonType string, success bool) unnestTestCase {
-	proc := testutil.NewProcessWithMPool(m)
+	proc := testutil.NewProcessWithMPool("", m)
 	colDefs := make([]*plan.ColDef, len(attrs))
 	for i := range attrs {
 		for j := range defaultColDefs {
@@ -133,7 +133,7 @@ func newTestCase(m *mpool.MPool, attrs []string, jsons, paths []string, outers [
 
 	ret := unnestTestCase{
 		proc: proc,
-		arg: &Argument{
+		arg: &TableFunction{
 			Attrs:    attrs,
 			Rets:     colDefs,
 			FuncName: "unnest",
@@ -183,6 +183,7 @@ func TestUnnestCall(t *testing.T) {
 			require.False(t, end)
 			cleanResult(&result, ut.proc)
 			inputBat.Clean(ut.proc.Mp())
+			ut.arg.Free(ut.proc, false, nil)
 			afterMem := ut.proc.Mp().CurrNB()
 			require.Equal(t, beforeMem, afterMem)
 		case "json":
@@ -199,6 +200,7 @@ func TestUnnestCall(t *testing.T) {
 			require.False(t, end)
 			cleanResult(&result, ut.proc)
 			inputBat.Clean(ut.proc.Mp())
+			ut.arg.Free(ut.proc, false, nil)
 			afterMem := ut.proc.Mp().CurrNB()
 			require.Equal(t, beforeMem, afterMem)
 		}
@@ -310,12 +312,14 @@ func appendOtherExprs(ret []*plan.Expr, paths []string, outers []bool) []*plan.E
 	return ret
 }
 
-func resetChildren(arg *Argument, bat *batch.Batch) {
+func resetChildren(arg *TableFunction, bat *batch.Batch) {
+	valueScanArg := &value_scan.ValueScan{
+		Batchs: []*batch.Batch{bat},
+	}
+	valueScanArg.Prepare(nil)
 	arg.SetChildren(
 		[]vm.Operator{
-			&value_scan.Argument{
-				Batchs: []*batch.Batch{bat},
-			},
+			valueScanArg,
 		})
 }
 

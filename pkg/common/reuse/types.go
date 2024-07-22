@@ -44,6 +44,7 @@ type Options[T ReusableObject] struct {
 type ReusableObject interface {
 	// TypeName returns the name of the object type. We cannot use reflect.TypeOf to get
 	// the name of the object type, to avoid mem allocate.
+	// Outdated, may delete later.
 	TypeName() string
 }
 

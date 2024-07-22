@@ -26,56 +26,69 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
+	"go.uber.org/zap"
 )
 
 type flushTableTailEntry struct {
 	txn txnif.AsyncTxn
 
-	taskID     uint64
+	taskName   string
 	tableEntry *catalog.TableEntry
 
 	transMappings      *api.BlkTransferBooking
-	ablksMetas         []*catalog.BlockEntry
-	delSrcMetas        []*catalog.BlockEntry
-	ablksHandles       []handle.Block
-	delSrcHandles      []handle.Block
-	createdBlkHandles  []handle.Block
-	pageIds            []*common.ID
-	nextRoundDirties   []*catalog.BlockEntry
+	ablksMetas         []*catalog.ObjectEntry
+	delSrcMetas        []*catalog.ObjectEntry
+	ablksHandles       []handle.Object
+	delSrcHandles      []handle.Object
+	createdBlkHandles  handle.Object
 	createdDeletesFile string
 	createdMergeFile   string
 	dirtyLen           int
 	rt                 *dbutils.Runtime
 	dirtyEndTs         types.TS
+
+	// use TxnMgr.Now as collectTs to do the first collect deletes,
+	// which is a relief for the second try in the commit queue
+	collectTs types.TS
+	// we have to record the ACTUAL commit time of those deletes that happened
+	// in the flushing process, before packed them into the created object.
+	delTbls []*objectio.Blockid
+	// some statistics
+	pageIds              []*common.ID
+	transCntBeforeCommit int
+	nextRoundDirties     map[*catalog.ObjectEntry]struct{}
 }
 
 func NewFlushTableTailEntry(
+	ctx context.Context,
 	txn txnif.AsyncTxn,
-	taskID uint64,
+	taskName string,
 	mapping *api.BlkTransferBooking,
 	tableEntry *catalog.TableEntry,
-	ablksMetas []*catalog.BlockEntry,
-	nblksMetas []*catalog.BlockEntry,
-	ablksHandles []handle.Block,
-	nblksHandles []handle.Block,
-	createdBlkHandles []handle.Block,
+	ablksMetas []*catalog.ObjectEntry,
+	nblksMetas []*catalog.ObjectEntry,
+	ablksHandles []handle.Object,
+	nblksHandles []handle.Object,
+	createdBlkHandles handle.Object,
 	createdDeletesFile string,
 	createdMergeFile string,
 	dirtyLen int,
 	rt *dbutils.Runtime,
 	dirtyEndTs types.TS,
-) *flushTableTailEntry {
+) (*flushTableTailEntry, error) {
 
 	entry := &flushTableTailEntry{
 		txn:                txn,
-		taskID:             taskID,
+		taskName:           taskName,
 		transMappings:      mapping,
 		tableEntry:         tableEntry,
 		ablksMetas:         ablksMetas,
@@ -89,13 +102,33 @@ func NewFlushTableTailEntry(
 		rt:                 rt,
 		dirtyEndTs:         dirtyEndTs,
 	}
-	entry.addTransferPages()
-	return entry
+
+	if entry.transMappings != nil {
+		if entry.createdBlkHandles != nil {
+			entry.delTbls = make([]*objectio.Blockid, entry.createdBlkHandles.GetMeta().(*catalog.ObjectEntry).GetLatestNode().BlockCnt())
+			entry.nextRoundDirties = make(map[*catalog.ObjectEntry]struct{})
+			// collect deletes phase 1
+			entry.collectTs = rt.Now()
+			var err error
+			entry.transCntBeforeCommit, err = entry.collectDelsAndTransfer(entry.txn.GetStartTS(), entry.collectTs)
+			if err != nil {
+				return nil, err
+			}
+		}
+		// prepare transfer pages
+		entry.addTransferPages(ctx)
+	}
+
+	return entry, nil
 }
 
-// add transfer pages for dropped ablocks
-func (entry *flushTableTailEntry) addTransferPages() {
-	isTransient := !entry.tableEntry.GetLastestSchema().HasPK()
+// add transfer pages for dropped aobjects
+func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) {
+	isTransient := !entry.tableEntry.GetLastestSchemaLocked().HasPK()
+	ioVector := model.InitTransferPageIO()
+	pages := make([]*model.TransferHashPage, 0, len(entry.transMappings.Mappings))
+	var duration time.Duration
+	var start time.Time
 	for i, mcontainer := range entry.transMappings.Mappings {
 		m := mcontainer.M
 		if len(m) == 0 {
@@ -103,37 +136,61 @@ func (entry *flushTableTailEntry) addTransferPages() {
 		}
 		id := entry.ablksHandles[i].Fingerprint()
 		entry.pageIds = append(entry.pageIds, id)
-		page := model.NewTransferHashPage(id, time.Now(), isTransient)
+		page := model.NewTransferHashPage(id, time.Now(), isTransient, entry.rt.LocalFs.Service, model.GetTTL(), model.GetDiskTTL())
+		mapping := make(map[uint32][]byte, len(m))
 		for srcRow, dst := range m {
-			blkid := entry.createdBlkHandles[dst.Idx].ID()
-			page.Train(uint32(srcRow), *objectio.NewRowid(&blkid, uint32(dst.Row)))
+			blkid := objectio.NewBlockidWithObjectID(entry.createdBlkHandles.GetID(), uint16(dst.BlkIdx))
+			rowID := objectio.NewRowid(blkid, uint32(dst.RowIdx))
+			mapping[uint32(srcRow)] = rowID[:]
 		}
+		page.Train(mapping)
+
+		start = time.Now()
+		err := model.AddTransferPage(page, ioVector)
+		if err != nil {
+			return
+		}
+		duration += time.Since(start)
+
 		entry.rt.TransferTable.AddPage(page)
+		pages = append(pages, page)
 	}
+
+	start = time.Now()
+	model.WriteTransferPage(ctx, entry.rt.LocalFs.Service, pages, *ioVector)
+	duration += time.Since(start)
+	v2.TransferPageFlushLatencyHistogram.Observe(duration.Seconds())
 }
 
-// PrepareCommit check deletes between start ts and commit ts
-func (entry *flushTableTailEntry) PrepareCommit() error {
-	var aconflictCnt, totalTrans int
-	// transfer deletes in (startts .. committs] for ablocks
-	delTbls := make([]*model.TransDels, len(entry.createdBlkHandles))
+// collectDelsAndTransfer collects deletes in flush process and moves them to the created obj
+// ATTENTION !!! (from, to] !!!
+func (entry *flushTableTailEntry) collectDelsAndTransfer(from, to types.TS) (transCnt int, err error) {
+	if len(entry.ablksHandles) == 0 {
+		return
+	}
+	// if created blk handles is nil, all rows in ablks are deleted
+	if entry.createdBlkHandles == nil {
+		return
+	}
 	for i, blk := range entry.ablksMetas {
+		// For ablock, there is only one block in it.
+		// Checking the block mapping once is enough
 		mapping := entry.transMappings.Mappings[i].M
 		if len(mapping) == 0 {
-			// empty frozen ablocks, it can not has any more deletes
+			// empty frozen aobjects, it can not has any more deletes
 			continue
 		}
-		dataBlock := blk.GetBlockData()
-		startTS := entry.txn.GetStartTS()
-		bat, err := dataBlock.CollectDeleteInRange(
+		dataBlock := blk.GetObjectData()
+		var bat *containers.Batch
+		bat, _, err = dataBlock.CollectDeleteInRange(
 			entry.txn.GetContext(),
-			startTS.Next(),
-			entry.txn.GetPrepareTS(),
+			from.Next(), // NOTE HERE
+			to,
 			false,
 			common.MergeAllocator,
 		)
 		if err != nil {
-			return err
+			return
 		}
 		if bat == nil || bat.Length() == 0 {
 			continue
@@ -142,41 +199,52 @@ func (entry *flushTableTailEntry) PrepareCommit() error {
 		ts := vector.MustFixedCol[types.TS](bat.GetVectorByName(catalog.AttrCommitTs).GetDownstreamVector())
 
 		count := len(rowid)
-		totalTrans += count
-		aconflictCnt++
+		transCnt += count
 		for i := 0; i < count; i++ {
 			row := rowid[i].GetRowOffset()
 			destpos, ok := mapping[int32(row)]
 			if !ok {
-				panic(fmt.Sprintf("%s find no transfer mapping for row %d", blk.ID.String(), row))
+				panic(fmt.Sprintf("%s find no transfer mapping for row %d", blk.ID().String(), row))
 			}
-			if delTbls[destpos.Idx] == nil {
-				delTbls[destpos.Idx] = model.NewTransDels(entry.txn.GetPrepareTS())
-			}
-			delTbls[destpos.Idx].Mapping[int(destpos.Row)] = ts[i]
-			if err = entry.createdBlkHandles[destpos.Idx].RangeDelete(
-				uint32(destpos.Row), uint32(destpos.Row), handle.DT_MergeCompact, common.MergeAllocator,
+			blkID := objectio.NewBlockidWithObjectID(entry.createdBlkHandles.GetID(), uint16(destpos.BlkIdx))
+			entry.delTbls[destpos.BlkIdx] = blkID
+			entry.rt.TransferDelsMap.SetDelsForBlk(*blkID, int(destpos.RowIdx), entry.txn.GetPrepareTS(), ts[i])
+			if err = entry.createdBlkHandles.RangeDelete(
+				uint16(destpos.BlkIdx), uint32(destpos.RowIdx), uint32(destpos.RowIdx), handle.DT_MergeCompact, common.MergeAllocator,
 			); err != nil {
-				return err
+				bat.Close()
+				return
 			}
 		}
-		entry.nextRoundDirties = append(entry.nextRoundDirties, blk)
+		bat.Close()
+		entry.nextRoundDirties[blk] = struct{}{}
 	}
-	for i, delTbl := range delTbls {
-		if delTbl != nil {
-			destid := entry.createdBlkHandles[i].ID()
-			entry.rt.TransferDelsMap.SetDelsForBlk(destid, delTbl)
-		}
+	return
+}
+
+// PrepareCommit check deletes between start ts and commit ts
+func (entry *flushTableTailEntry) PrepareCommit() error {
+	inst := time.Now()
+	defer func() {
+		v2.TaskCommitTableTailDurationHistogram.Observe(time.Since(inst).Seconds())
+	}()
+	if entry.transMappings == nil {
+		// no del table, no transfer
+		return nil
+	}
+	trans, err := entry.collectDelsAndTransfer(entry.collectTs, entry.txn.GetPrepareTS())
+	if err != nil {
+		return err
 	}
 
-	if aconflictCnt > 0 || totalTrans > 0 {
-		logutil.Infof(
-			"[FlushTabletail] task %d ww (%s .. %s): on %d ablk, transfer %v rows",
-			entry.taskID,
-			entry.txn.GetStartTS().ToString(),
-			entry.txn.GetPrepareTS().ToString(),
-			aconflictCnt,
-			totalTrans,
+	if aconflictCnt, totalTrans := len(entry.nextRoundDirties), trans+entry.transCntBeforeCommit; aconflictCnt > 0 || totalTrans > 0 {
+		logutil.Info(
+			"[FLUSH-PREPARE-COMMIT]",
+			zap.String("task", entry.taskName),
+			zap.String("commit-ts", entry.txn.GetPrepareTS().ToString()),
+			zap.Int("ablks", aconflictCnt),
+			zap.Int("transfer-rows", totalTrans),
+			zap.Int("in-queue-transfers", trans),
 		)
 	}
 	return nil
@@ -184,25 +252,43 @@ func (entry *flushTableTailEntry) PrepareCommit() error {
 
 // PrepareRollback remove transfer page and written files
 func (entry *flushTableTailEntry) PrepareRollback() (err error) {
-	logutil.Warnf("[FlushTabletail] FT task %d rollback", entry.taskID)
+	logutil.Warn(
+		"[FLUSH-PREPARE-ROLLBACK]",
+		zap.String("task", entry.taskName),
+	)
 	// remove transfer page
 	for _, id := range entry.pageIds {
 		_ = entry.rt.TransferTable.DeletePage(id)
 	}
 
+	for _, blkID := range entry.delTbls {
+		if blkID != nil {
+			entry.rt.TransferDelsMap.DeleteDelsForBlk(*blkID)
+		}
+	}
+
+	// why not clean TranDel?
+	// 1. There's little tiny chance for a txn to fail after PrepareCommit
+	// 2. If txn failed, no txn will see the transfered deletes,
+	//    so no one will consult the TransferDelsMap about the right commite time.
+	//    It's ok to leave the DelsMap fade away naturally.
+
 	// remove written file
 	fs := entry.rt.Fs.Service
 
-	// object for snapshot read of ablocks
+	// object for snapshot read of aobjects
 	ablkNames := make([]string, 0, len(entry.ablksMetas))
 	for _, blk := range entry.ablksMetas {
 		if !blk.HasPersistedData() {
-			logutil.Infof("[FlushTabletail] skip empty ablk %s when rollback", blk.ID.String())
+			logutil.Info(
+				"[FLUSH-PREPARE-ROLLBACK]",
+				zap.String("task", entry.taskName),
+				zap.String("extra-info", fmt.Sprintf("skip empty ablk %s when rollback", blk.ID().String())),
+			)
 			continue
 		}
-		seg := blk.ID.Segment()
-		num, _ := blk.ID.Offsets()
-		name := objectio.BuildObjectName(seg, num).String()
+		seg := blk.ID().Segment()
+		name := objectio.BuildObjectName(seg, 0).String()
 		ablkNames = append(ablkNames, name)
 	}
 
@@ -226,14 +312,14 @@ func (entry *flushTableTailEntry) PrepareRollback() (err error) {
 }
 
 // ApplyCommit Gc in memory deletes and update table compact status
-func (entry *flushTableTailEntry) ApplyCommit() (err error) {
-	for i, blk := range entry.ablksMetas {
-		_ = blk.GetBlockData().TryUpgrade()
-		blk.GetBlockData().GCInMemeoryDeletesByTS(entry.ablksHandles[i].GetDeltaPersistedTS())
+func (entry *flushTableTailEntry) ApplyCommit(_ string) (err error) {
+	for _, blk := range entry.ablksMetas {
+		_ = blk.GetObjectData().TryUpgrade()
+		blk.GetObjectData().UpgradeAllDeleteChain()
 	}
 
-	for i, blk := range entry.delSrcMetas {
-		blk.GetBlockData().GCInMemeoryDeletesByTS(entry.delSrcHandles[i].GetDeltaPersistedTS())
+	for _, blk := range entry.delSrcMetas {
+		blk.GetObjectData().UpgradeAllDeleteChain()
 	}
 
 	tbl := entry.tableEntry
@@ -247,7 +333,9 @@ func (entry *flushTableTailEntry) ApplyCommit() (err error) {
 		// some merge tasks touch the dirties, we need to keep those new dirties
 		tbl.DeletedDirties = tbl.DeletedDirties[entry.dirtyLen:]
 	}
-	tbl.DeletedDirties = append(tbl.DeletedDirties, entry.nextRoundDirties...)
+	for k := range entry.nextRoundDirties {
+		tbl.DeletedDirties = append(tbl.DeletedDirties, k)
+	}
 	return
 }
 
@@ -259,8 +347,6 @@ func (entry *flushTableTailEntry) MakeCommand(csn uint32) (cmd txnif.TxnCmd, err
 	return &flushTableTailCmd{}, nil
 }
 func (entry *flushTableTailEntry) IsAborted() bool { return false }
-func (entry *flushTableTailEntry) Set1PC()         {}
-func (entry *flushTableTailEntry) Is1PC() bool     { return false }
 
 ////////////////////////////////////////
 // flushTableTailCmd

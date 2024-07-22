@@ -22,14 +22,15 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/prashantv/gostub"
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/prashantv/gostub"
-	"github.com/stretchr/testify/require"
 )
 
 type mockedBackgroundHandler struct {
@@ -50,6 +51,10 @@ func (m *mockedBackgroundHandler) Exec(ctx context.Context, s string) error {
 
 func (m *mockedBackgroundHandler) ExecStmt(ctx context.Context, statement tree.Statement) error {
 	return nil
+}
+
+func (m *mockedBackgroundHandler) ExecRestore(context.Context, string, uint32, uint32) error {
+	panic("unimplement")
 }
 
 func (m *mockedBackgroundHandler) GetExecResultSet() []interface{} {
@@ -169,6 +174,8 @@ func (m *mockedBackgroundHandler) initLike(mp *mpool.MPool) {
 	b.SetRowCount(2)
 	m.subBatches = []*batch.Batch{b}
 }
+
+func (m *mockedBackgroundHandler) Clear() {}
 
 var _ BackgroundExec = &mockedBackgroundHandler{}
 

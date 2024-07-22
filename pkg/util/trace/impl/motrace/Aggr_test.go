@@ -22,17 +22,16 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 )
 
 func TestAggregator(t *testing.T) {
 
-	var sessionId [16]byte
-	sessionId[0] = 1
-	var sessionId2 [16]byte
-	sessionId2[0] = 2
+	var sessionId = [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x1}
+	var sessionId2 = [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x11}
 	const aggrWindow = 5 * time.Second
 
 	ctx := context.Background()
@@ -108,7 +107,7 @@ func TestAggregator(t *testing.T) {
 			RequestAt:     fixedTime.Add(-10 * time.Millisecond),
 			Duration:      10 * time.Millisecond,
 			TransactionID: _1TxnID,
-			StatementID:   _1TxnID,
+			StatementID:   _1StmtID,
 			Status:        StatementStatusSuccess,
 			ExecPlan:      NewDummySerializableExecPlan(map[string]string{"key": "val"}, dummySerializeExecPlan, uuid.UUID(_2TraceID)),
 			ConnType:      statistic.ConnTypeExternal,
@@ -130,7 +129,7 @@ func TestAggregator(t *testing.T) {
 			RequestAt:     fixedTime.Add(-10 * time.Millisecond),
 			Duration:      10 * time.Millisecond,
 			TransactionID: _1TxnID,
-			StatementID:   _1TxnID,
+			StatementID:   _1StmtID,
 			Status:        StatementStatusSuccess,
 			ExecPlan:      NewDummySerializableExecPlan(map[string]string{"key": "val"}, dummySerializeExecPlan, uuid.UUID(_2TraceID)),
 			ConnType:      statistic.ConnTypeExternal,
@@ -152,7 +151,7 @@ func TestAggregator(t *testing.T) {
 			RequestAt:     fixedTime.Add(6 * time.Second).Add(-10 * time.Millisecond),
 			Duration:      10 * time.Millisecond,
 			TransactionID: _1TxnID,
-			StatementID:   _1TxnID,
+			StatementID:   _1StmtID,
 			Status:        StatementStatusSuccess,
 			ExecPlan:      NewDummySerializableExecPlan(map[string]string{"key": "val"}, dummySerializeExecPlan, uuid.UUID(_2TraceID)),
 			ConnType:      statistic.ConnTypeExternal,
@@ -175,7 +174,7 @@ func TestAggregator(t *testing.T) {
 			RequestAt:     fixedTime.Add(6 * time.Second).Add(-10 * time.Millisecond),
 			Duration:      10 * time.Millisecond,
 			TransactionID: _1TxnID,
-			StatementID:   _1TxnID,
+			StatementID:   _1StmtID,
 			Status:        StatementStatusFailed,
 			ExecPlan:      NewDummySerializableExecPlan(map[string]string{"key": "val"}, dummySerializeExecPlan, uuid.UUID(_2TraceID)),
 			ConnType:      statistic.ConnTypeExternal,
@@ -196,21 +195,19 @@ func TestAggregator(t *testing.T) {
 	assert.Equal(t, 50*time.Millisecond, results[1].(*StatementInfo).Duration)
 	assert.Equal(t, 50*time.Millisecond, results[2].(*StatementInfo).Duration)
 	assert.Equal(t, 50*time.Millisecond, results[3].(*StatementInfo).Duration)
-	require.Equal(t, []byte(`[4,5,10.000,15,20,25,2,0]`), results[0].(*StatementInfo).ExecPlan2Stats(ctx))
-	require.Equal(t, []byte(`[4,5,10.000,15,20,25,2,0]`), results[1].(*StatementInfo).ExecPlan2Stats(ctx))
-	require.Equal(t, []byte(`[4,5,10.000,15,20,25,2,0]`), results[2].(*StatementInfo).ExecPlan2Stats(ctx))
-	require.Equal(t, []byte(`[4,5,10.000,15,20,25,2,0]`), results[3].(*StatementInfo).ExecPlan2Stats(ctx))
+	for idx := 0; idx < 4; idx++ {
+	}
+	targetBytes := []byte(`[4,5,10.000,15,20,25,2,0,220.0803]`)
+	for idx := 0; idx < 4; idx++ {
+		require.Equal(t, targetBytes, results[idx].(*StatementInfo).GetStatsArrayBytes())
+	}
 	item, _ := results[0].(*StatementInfo)
 	row := item.GetTable().GetRow(ctx)
-	targetBytes := []byte(`[4,5,2.000,15,20,25,2,0]`)
-	results[0].(*StatementInfo).FillRow(ctx, row)
-	require.Equal(t, targetBytes, results[0].(*StatementInfo).ExecPlan2Stats(ctx))
-	results[1].(*StatementInfo).FillRow(ctx, row)
-	require.Equal(t, targetBytes, results[1].(*StatementInfo).ExecPlan2Stats(ctx))
-	results[2].(*StatementInfo).FillRow(ctx, row)
-	require.Equal(t, targetBytes, results[2].(*StatementInfo).ExecPlan2Stats(ctx))
-	results[3].(*StatementInfo).FillRow(ctx, row)
-	require.Equal(t, targetBytes, results[3].(*StatementInfo).ExecPlan2Stats(ctx))
+	targetBytes = []byte(`[4,5,2.000,15,20,25,2,0,220.0803]`) // re-calculate memory usage in FillRow
+	for idx := 0; idx < 4; idx++ {
+		results[idx].(*StatementInfo).FillRow(ctx, row)
+		require.Equal(t, targetBytes, results[idx].(*StatementInfo).GetStatsArrayBytes())
+	}
 
 	aggregator.Close()
 
@@ -237,7 +234,7 @@ func TestAggregator(t *testing.T) {
 			RequestAt:     fixedTime.Add(6 * time.Second).Add(-10 * time.Millisecond),
 			Duration:      time.Duration(10+i) * time.Millisecond,
 			TransactionID: _1TxnID,
-			StatementID:   _1TxnID,
+			StatementID:   _1StmtID,
 			Status:        StatementStatusFailed,
 			ExecPlan:      NewDummySerializableExecPlan(map[string]string{"key": "val"}, dummySerializeExecPlan, uuid.UUID(_2TraceID)),
 		})
@@ -257,7 +254,7 @@ func TestAggregator(t *testing.T) {
 			RequestAt:     fixedTime.Add(6 * time.Second).Add(-10 * time.Millisecond),
 			Duration:      time.Duration(10+i) * time.Millisecond,
 			TransactionID: _1TxnID,
-			StatementID:   _1TxnID,
+			StatementID:   _1StmtID,
 			Status:        StatementStatusFailed,
 			ExecPlan:      NewDummySerializableExecPlan(map[string]string{"key": "val"}, dummySerializeExecPlan, uuid.UUID(_2TraceID)),
 		})
@@ -275,9 +272,9 @@ func TestAggregator(t *testing.T) {
 	assert.Equal(t, fixedTime.Add(4*time.Second), results[0].(*StatementInfo).RequestAt)
 	// ResponseAt should be end of the window
 	assert.Equal(t, fixedTime.Add(9*time.Second), results[0].(*StatementInfo).ResponseAt)
-	require.Equal(t, []byte(`[4,5,10.000,15,20,25,0,0]`), results[0].(*StatementInfo).ExecPlan2Stats(ctx))
-	results[0].(*StatementInfo).FillRow(ctx, row)
-	require.Equal(t, []byte(`[4,5,2.000,15,20,25,0,0]`), results[0].(*StatementInfo).ExecPlan2Stats(ctx))
+	require.Equal(t, []byte(`[4,5,10.000,15,20,25,0,0,220.0803]`), results[0].(*StatementInfo).GetStatsArrayBytes())
+	results[0].(*StatementInfo).FillRow(ctx, row) // re-calculate memory usage in FillRow
+	require.Equal(t, []byte(`[4,5,2.000,15,20,25,0,0,220.0803]`), results[0].(*StatementInfo).GetStatsArrayBytes())
 
 	_, err = aggregator.AddItem(&StatementInfo{
 		Account:       "MO",
@@ -291,7 +288,7 @@ func TestAggregator(t *testing.T) {
 		RequestAt:     fixedTime.Add(6 * time.Second).Add(-10 * time.Millisecond),
 		Duration:      203 * time.Millisecond,
 		TransactionID: _1TxnID,
-		StatementID:   _1TxnID,
+		StatementID:   _1StmtID,
 		Status:        StatementStatusFailed,
 		ExecPlan:      NewDummySerializableExecPlan(map[string]string{"key": "val"}, dummySerializeExecPlan, uuid.UUID(_2TraceID)),
 	})
@@ -305,10 +302,7 @@ func TestAggregatorWithStmtMerge(t *testing.T) {
 	c := GetTracerProvider()
 	c.enableStmtMerge = true
 
-	var sessionId [16]byte
-	sessionId[0] = 1
-	var sessionId2 [16]byte
-	sessionId2[0] = 2
+	var sessionId = [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x1}
 	const aggrWindow = 5 * time.Second
 
 	ctx := context.Background()
@@ -336,7 +330,7 @@ func TestAggregatorWithStmtMerge(t *testing.T) {
 			Duration:      10 * time.Millisecond,
 			RowsRead:      1,
 			TransactionID: _1TxnID,
-			StatementID:   _1TxnID,
+			StatementID:   _1StmtID,
 			Status:        StatementStatusSuccess,
 			ExecPlan:      NewDummySerializableExecPlan(map[string]string{"key": "val"}, dummySerializeExecPlan, uuid.UUID(_2TraceID)),
 		})
@@ -385,7 +379,7 @@ func TestAggregator_MarkExported(t *testing.T) {
 	const aggrWindow = 5 * time.Second
 
 	var err error
-	var sessionId = [16]byte{1}
+	var sessionId = [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x1}
 	var ctx = context.TODO()
 	// Aggregate some Select
 	var fixedTime = time.Date(2023, time.June, 10, 12, 0, 1, 0, time.UTC)
@@ -415,7 +409,7 @@ func TestAggregator_MarkExported(t *testing.T) {
 					RequestAt:     fixedTime.Add(-10 * time.Millisecond),
 					Duration:      10 * time.Millisecond,
 					TransactionID: _1TxnID,
-					StatementID:   _1TxnID,
+					StatementID:   _1StmtID,
 					Status:        StatementStatusSuccess,
 					ExecPlan:      NewDummySerializableExecPlan(map[string]string{"key": "val"}, dummySerializeExecPlan, uuid.UUID(_2TraceID)),
 				}

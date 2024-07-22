@@ -15,9 +15,11 @@
 package compile
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"sync"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
@@ -28,18 +30,18 @@ func init() {
 	reuse.CreatePool[Compile](
 		func() *Compile {
 			return &Compile{
-				affectRows:               &atomic.Uint64{},
-				lock:                     &sync.RWMutex{},
-				counterSet:               &perfcounter.CounterSet{},
-				nodeRegs:                 make(map[[2]int32]*process.WaitRegister),
-				stepRegs:                 make(map[int32][][2]int32),
-				runtimeFilterReceiverMap: make(map[int32]*runtimeFilterReceiver),
-				metaTables:               make(map[string]struct{}),
-				MessageBoard:             process.NewMessageBoard(),
+				affectRows:   &atomic.Uint64{},
+				lock:         &sync.RWMutex{},
+				counterSet:   &perfcounter.CounterSet{},
+				nodeRegs:     make(map[[2]int32]*process.WaitRegister),
+				stepRegs:     make(map[int32][][2]int32),
+				metaTables:   make(map[string]struct{}),
+				lockTables:   make(map[uint64]*plan.LockTarget),
+				MessageBoard: process.NewMessageBoard(),
 			}
 		},
 		func(c *Compile) {
-			c.reset()
+			c.clear()
 		},
 		reuse.DefaultOptions[Compile]().
 			WithEnableChecker(),
@@ -67,7 +69,7 @@ func init() {
 		func() *fuzzyCheck {
 			return &fuzzyCheck{}
 		},
-		func(f *fuzzyCheck) { f.reset() },
+		func(f *fuzzyCheck) { f.clear() },
 		reuse.DefaultOptions[fuzzyCheck]().
 			WithEnableChecker(),
 	)

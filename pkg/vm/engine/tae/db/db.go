@@ -16,6 +16,7 @@ package db
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"sync/atomic"
 	"time"
@@ -24,7 +25,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
-	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
+	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
@@ -69,6 +71,8 @@ type DB struct {
 
 	DBLocker io.Closer
 
+	CNMergeSched merge.CNMergeScheduler
+
 	Closed *atomic.Value
 }
 
@@ -93,16 +97,58 @@ func (db *DB) ForceCheckpoint(
 	db.BGCheckpointRunner.DisableCheckpoint()
 	defer db.BGCheckpointRunner.EnableCheckpoint()
 	db.BGCheckpointRunner.CleanPenddingCheckpoint()
+	if flushDuration == 0 {
+		flushDuration = time.Minute * 3 / 2
+	}
 	t0 := time.Now()
 	err = db.BGCheckpointRunner.ForceFlush(ts, ctx, flushDuration)
 	logutil.Infof("[Force Checkpoint] flush takes %v: %v", time.Since(t0), err)
 	if err != nil {
 		return err
 	}
-	if err = db.BGCheckpointRunner.ForceIncrementalCheckpoint(ts, true); err != nil {
+
+	wait := flushDuration - time.Since(t0)
+	if wait < time.Minute {
+		wait = time.Minute
+	}
+
+	timeout := time.After(wait)
+	for {
+		select {
+		case <-timeout:
+			return moerr.NewInternalError(ctx, fmt.Sprintf("timeout for: %v", err))
+		default:
+			err = db.BGCheckpointRunner.ForceIncrementalCheckpoint(ts, true)
+			if dbutils.IsRetrieableCheckpoint(err) {
+				db.BGCheckpointRunner.CleanPenddingCheckpoint()
+				interval := flushDuration.Milliseconds() / 400
+				time.Sleep(time.Duration(interval))
+				break
+			}
+			logutil.Debugf("[Force Checkpoint] takes %v", time.Since(t0))
+			return err
+		}
+	}
+}
+
+func (db *DB) ForceGlobalCheckpoint(
+	ctx context.Context,
+	ts types.TS,
+	flushDuration, versionInterval time.Duration) (err error) {
+	// FIXME: cannot disable with a running job
+	db.BGCheckpointRunner.DisableCheckpoint()
+	defer db.BGCheckpointRunner.EnableCheckpoint()
+	db.BGCheckpointRunner.CleanPenddingCheckpoint()
+	t0 := time.Now()
+	err = db.BGCheckpointRunner.ForceFlush(ts, ctx, flushDuration)
+	logutil.Infof("[Force Global Checkpoint] flush takes %v: %v", time.Since(t0), err)
+	if err != nil {
 		return err
 	}
-	logutil.Debugf("[Force Checkpoint] takes %v", time.Since(t0))
+	if err = db.BGCheckpointRunner.ForceGlobalCheckpointSynchronously(ctx, ts, versionInterval); err != nil {
+		return err
+	}
+	logutil.Infof("[Force Global Checkpoint] takes %v", time.Since(t0))
 	return err
 }
 
@@ -130,10 +176,6 @@ func (db *DB) ForceCheckpointForBackup(
 
 func (db *DB) StartTxn(info []byte) (txnif.AsyncTxn, error) {
 	return db.TxnMgr.StartTxn(info)
-}
-
-func (db *DB) StartTxnWithLatestTS(info []byte) (txnif.AsyncTxn, error) {
-	return db.TxnMgr.StartTxnWithLatestTS(info)
 }
 
 func (db *DB) CommitTxn(txn txnif.AsyncTxn) (err error) {

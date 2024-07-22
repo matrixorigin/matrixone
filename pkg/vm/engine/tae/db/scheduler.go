@@ -18,11 +18,11 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/ops/base"
 )
 
 var (
@@ -101,6 +101,27 @@ func (s *taskScheduler) ScheduleMultiScopedTxnTask(
 	return
 }
 
+func (s *taskScheduler) ScheduleMultiScopedTxnTaskWithObserver(
+	ctx *tasks.Context,
+	taskType tasks.TaskType,
+	scopes []common.ID,
+	factory tasks.TxnTaskFactory,
+	observers ...base.Observer) (task tasks.Task, err error) {
+	task = NewScheduledTxnTask(ctx, s.db, taskType, scopes, factory)
+	for _, observer := range observers {
+		task.AddObserver(observer)
+	}
+	err = s.Schedule(task)
+	return
+}
+
+func (s *taskScheduler) CheckAsyncScopes(scopes []common.ID) (err error) {
+	dispatcher := s.Dispatchers[tasks.DataCompactionTask].(*asyncJobDispatcher)
+	dispatcher.Lock()
+	defer dispatcher.Unlock()
+	return dispatcher.checkConflictLocked(scopes)
+}
+
 func (s *taskScheduler) ScheduleMultiScopedFn(
 	ctx *tasks.Context,
 	taskType tasks.TaskType,
@@ -109,10 +130,6 @@ func (s *taskScheduler) ScheduleMultiScopedFn(
 	task = tasks.NewMultiScopedFnTask(ctx, taskType, scopes, fn)
 	err = s.Schedule(task)
 	return
-}
-
-func (s *taskScheduler) GetCheckpointTS() types.TS {
-	return s.db.TxnMgr.StatMaxCommitTS()
 }
 
 func (s *taskScheduler) GetPenddingLSNCnt() uint64 {

@@ -16,14 +16,14 @@ package taskservice
 
 import (
 	"context"
-	"fmt"
+	"slices"
+	"strings"
+	"testing"
+
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"slices"
-	"strings"
-	"testing"
 )
 
 func TestBuildWhereClause(t *testing.T) {
@@ -71,11 +71,6 @@ func TestBuildWhereClause(t *testing.T) {
 	}
 }
 
-const (
-	useDB    = "use mo_task"
-	setTrace = "set session disable_txn_trace=1"
-)
-
 var (
 	asyncRows = []string{
 		"task_id",
@@ -105,18 +100,11 @@ var (
 		"create_at",
 		"update_at",
 	}
-
-	expectUseDB = func(mock sqlmock.Sqlmock) {
-		mock.ExpectExec(useDB).WillReturnResult(sqlmock.NewResult(0, 1))
-		mock.ExpectExec(setTrace).WillReturnResult(sqlmock.NewResult(0, 1))
-	}
 )
 
 func TestAsyncTaskInSqlMock(t *testing.T) {
-	storage, mock := newMockStorage(t, "sqlmock", "mo_task")
-	expectUseDB(mock)
-	mock.ExpectPrepare(fmt.Sprintf(insertAsyncTask, storage.dbname) + "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-	mock.ExpectExec(fmt.Sprintf(insertAsyncTask, storage.dbname)+"(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").
+	storage, mock := newMockStorage(t, "sqlmock")
+	mock.ExpectExec(insertAsyncTask+"(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").
 		WithArgs("a", 0, []byte(nil), "{}", "", 0, "", 0, 0, sqlmock.AnyArg(), 0).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
@@ -124,8 +112,7 @@ func TestAsyncTaskInSqlMock(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 1, affected)
 
-	expectUseDB(mock)
-	mock.ExpectQuery(fmt.Sprintf(selectAsyncTask, storage.dbname) + " AND task_id=1 order by task_id").
+	mock.ExpectQuery(selectAsyncTask + " AND task_id=1 order by task_id").
 		WillReturnRows(sqlmock.NewRows(asyncRows).
 			AddRow(1, "a", 0, []byte(nil), "{}", "", 0, "", 0, 0, 0, "", 0, 0))
 	asyncTask, err := storage.QueryAsyncTask(context.Background(), WithTaskIDCond(EQ, 1))
@@ -133,10 +120,9 @@ func TestAsyncTaskInSqlMock(t *testing.T) {
 	assert.Equal(t, 1, len(asyncTask))
 	assert.Equal(t, "a", asyncTask[0].Metadata.ID)
 
-	expectUseDB(mock)
 	mock.ExpectBegin()
-	mock.ExpectPrepare(fmt.Sprintf(updateAsyncTask, storage.dbname) + " AND task_epoch=0")
-	mock.ExpectExec(fmt.Sprintf(updateAsyncTask, storage.dbname)+" AND task_epoch=0").
+	mock.ExpectPrepare(updateAsyncTask + " AND task_epoch=0")
+	mock.ExpectExec(updateAsyncTask+" AND task_epoch=0").
 		WithArgs(0, []byte(nil), "{}", "", 0, "c1", 0, 0, 0, "", 0, 0, 1).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
@@ -150,10 +136,8 @@ func TestAsyncTaskInSqlMock(t *testing.T) {
 }
 
 func TestCronTaskInSqlMock(t *testing.T) {
-	storage, mock := newMockStorage(t, "sqlmock", "mo_task")
-	expectUseDB(mock)
-	mock.ExpectPrepare(fmt.Sprintf(insertCronTask, storage.dbname) + "(?, ?, ?, ?, ?, ?, ?, ?, ?)")
-	mock.ExpectExec(fmt.Sprintf(insertCronTask, storage.dbname)+"(?, ?, ?, ?, ?, ?, ?, ?, ?)").
+	storage, mock := newMockStorage(t, "sqlmock")
+	mock.ExpectExec(insertCronTask+"(?, ?, ?, ?, ?, ?, ?, ?, ?)").
 		WithArgs("a", 0, []byte(nil), "{}", "mock_cron_expr", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
@@ -161,8 +145,7 @@ func TestCronTaskInSqlMock(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 1, affected)
 
-	expectUseDB(mock)
-	mock.ExpectQuery(fmt.Sprintf(selectCronTask, storage.dbname) + " AND cron_task_id=1").
+	mock.ExpectQuery(selectCronTask + " AND cron_task_id=1").
 		WillReturnRows(sqlmock.NewRows(cronRows).
 			AddRow(1, "a", 0, []byte(nil), "{}", "mock_cron_expr", 0, 0, 0, 0))
 	cronTask, err := storage.QueryCronTask(context.Background(), WithCronTaskId(EQ, 1))
@@ -174,12 +157,10 @@ func TestCronTaskInSqlMock(t *testing.T) {
 	require.NoError(t, storage.Close())
 }
 
-func newMockStorage(t *testing.T, dsn, dbname string) (*mysqlTaskStorage, sqlmock.Sqlmock) {
+func newMockStorage(t *testing.T, dsn string) (*mysqlTaskStorage, sqlmock.Sqlmock) {
 	db, mock, err := sqlmock.NewWithDSN(dsn, sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	return &mysqlTaskStorage{
-		dsn:    dsn,
-		db:     db,
-		dbname: dbname,
+		db: db,
 	}, mock
 }

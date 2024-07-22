@@ -146,6 +146,14 @@ func (c *DashboardCreator) Create() error {
 		return err
 	}
 
+	if err := c.initShardingDashboard(); err != nil {
+		return err
+	}
+
+	if err := c.initPipelineDashBoard(); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -298,9 +306,17 @@ func (c *DashboardCreator) getMultiHistogram(
 				fmt.Sprintf("histogram_quantile(%f, sum(rate(%s[$interval]))  by (le))", percent, metric))
 		}
 
+		// format title
+		// default: P50.000000 time
+		// bytes:   P50.000000 size
+		title := fmt.Sprintf("P%f time", percent*100)
+		if axis.New(axisOptions...).Builder.Format == "bytes" {
+			title = fmt.Sprintf("P%f size", percent*100)
+		}
+
 		options = append(options,
 			c.withMultiGraph(
-				fmt.Sprintf("P%f time", percent*100),
+				title,
 				columns[i],
 				queries,
 				legends,
@@ -345,7 +361,7 @@ func (c *DashboardCreator) getMetricWithFilter(name string, filter string) strin
 }
 
 func (c *DashboardCreator) getCloudFilters() string {
-	return `matrixone_cloud_main_cluster=~"$physicalCluster", pod=~"$pod"`
+	return `matrixone_cloud_main_cluster=~"$physicalCluster", matrixorigin_io_owner=~"$owner", pod=~"$pod"`
 }
 
 func (c *DashboardCreator) initCloudFilterOptions() {
@@ -368,6 +384,7 @@ func (c *DashboardCreator) initCloudFilterOptions() {
 			query.Label("owner"),
 			query.Request(`label_values(up{matrixone_cloud_main_cluster=~"$physicalCluster"}, matrixorigin_io_owner)`),
 			query.AllValue(".*"),
+			query.Refresh(query.TimeChange),
 		),
 		dashboard.VariableAsQuery(
 			"pod",
@@ -377,6 +394,7 @@ func (c *DashboardCreator) initCloudFilterOptions() {
 			query.Multiple(),
 			query.Label("pod"),
 			query.Request(`label_values(up{matrixone_cloud_main_cluster="$physicalCluster", matrixorigin_io_owner=~"$owner"},pod)`),
+			query.Refresh(query.TimeChange),
 		))
 }
 
@@ -411,6 +429,7 @@ func (c *DashboardCreator) initCloudCtrlPlaneFilterOptions(metaDatasource string
 			query.Label("owner"),
 			query.Request(`label_values(up{matrixone_cloud_main_cluster=~"$physicalCluster"}, matrixorigin_io_owner)`),
 			query.AllValue(".*"),
+			query.Refresh(query.TimeChange),
 		),
 		dashboard.VariableAsQuery(
 			"pod",
@@ -420,6 +439,7 @@ func (c *DashboardCreator) initCloudCtrlPlaneFilterOptions(metaDatasource string
 			query.Multiple(),
 			query.Label("pod"),
 			query.Request(`label_values(up{matrixone_cloud_main_cluster="$physicalCluster", matrixorigin_io_owner=~"$owner"},pod)`),
+			query.Refresh(query.TimeChange),
 		))
 }
 
@@ -454,6 +474,7 @@ func (c *DashboardCreator) initK8SFilterOptions() {
 			query.Multiple(),
 			query.Label("namespace"),
 			query.Request("label_values(namespace)"),
+			query.Refresh(query.TimeChange),
 		),
 		dashboard.VariableAsQuery(
 			"pod",
@@ -462,6 +483,7 @@ func (c *DashboardCreator) initK8SFilterOptions() {
 			query.IncludeAll(),
 			query.Multiple(),
 			query.Label("pod"),
-			query.Request("label_values(pod)"),
+			query.Request(`label_values(kube_pod_info{namespace="$namespace"},pod)`),
+			query.Refresh(query.TimeChange),
 		))
 }

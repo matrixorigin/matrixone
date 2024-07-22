@@ -24,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(OnDuplicatekey)
 
 const (
 	Build = iota
@@ -40,18 +40,19 @@ type container struct {
 	rbat             *batch.Batch
 }
 
-type Argument struct {
-	// Ts is not used
-	Ts       uint64
+type OnDuplicatekey struct {
 	Affected uint64
 	Engine   engine.Engine
 
 	// Source       engine.Relation
 	// UniqueSource []engine.Relation
 	// Ref          *plan.ObjectRef
-	TableDef        *plan.TableDef
-	OnDuplicateIdx  []int32
-	OnDuplicateExpr map[string]*plan.Expr
+	Attrs              []string
+	InsertColCount     int32
+	UniqueColCheckExpr []*plan.Expr
+	UniqueCols         []string
+	OnDuplicateIdx     []int32
+	OnDuplicateExpr    map[string]*plan.Expr
 
 	IdxIdx []int32
 
@@ -61,45 +62,50 @@ type Argument struct {
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (onDuplicatekey *OnDuplicatekey) GetOperatorBase() *vm.OperatorBase {
+	return &onDuplicatekey.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[OnDuplicatekey](
+		func() *OnDuplicatekey {
+			return &OnDuplicatekey{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *OnDuplicatekey) {
+			*a = OnDuplicatekey{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[OnDuplicatekey]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (onDuplicatekey OnDuplicatekey) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *OnDuplicatekey {
+	return reuse.Alloc[OnDuplicatekey](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (onDuplicatekey *OnDuplicatekey) Release() {
+	if onDuplicatekey != nil {
+		reuse.Free[OnDuplicatekey](onDuplicatekey, nil)
 	}
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if arg.ctr != nil {
-		arg.ctr.FreeMergeTypeOperator(pipelineFailed)
-		if arg.ctr.rbat != nil {
-			arg.ctr.rbat.Clean(proc.GetMPool())
+func (onDuplicatekey *OnDuplicatekey) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	onDuplicatekey.Free(proc, pipelineFailed, err)
+}
+
+func (onDuplicatekey *OnDuplicatekey) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if onDuplicatekey.ctr != nil {
+		onDuplicatekey.ctr.FreeMergeTypeOperator(pipelineFailed)
+		if onDuplicatekey.ctr.rbat != nil {
+			onDuplicatekey.ctr.rbat.Clean(proc.GetMPool())
 		}
-		if arg.ctr.checkConflictBat != nil {
-			arg.ctr.checkConflictBat.Clean(proc.GetMPool())
+		if onDuplicatekey.ctr.checkConflictBat != nil {
+			onDuplicatekey.ctr.checkConflictBat.Clean(proc.GetMPool())
 		}
+		onDuplicatekey.ctr = nil
 	}
 }

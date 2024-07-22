@@ -48,11 +48,11 @@ func (task *ScheduledTxnTask) Scope() *common.ID {
 }
 
 func (task *ScheduledTxnTask) Execute(ctx context.Context) (err error) {
-	txn, err := task.db.TxnMgr.StartTxnWithLatestTS(nil)
+	txn, err := task.db.TxnMgr.StartTxn(nil)
 	if err != nil {
 		return
 	}
-	txnTask, err := task.factory(nil, txn)
+	txnTask, err := task.factory(&tasks.Context{ID: task.ID()}, txn)
 	if err != nil {
 		err2 := txn.Rollback(ctx)
 		if err2 != nil {

@@ -364,3 +364,9 @@ select * from test_11;
 -- @session}
 
 drop table if exists test_11;
+create database test_drop_db;
+set autocommit=0;
+use test_drop_db;
+drop database test_drop_db;
+show databases like '%test_drop_db%';
+set autocommit=1;

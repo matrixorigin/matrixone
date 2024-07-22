@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
@@ -52,6 +53,8 @@ type tracerProviderConfig struct {
 
 	// disableSpan
 	disableSpan bool
+	// disableError
+	disableError bool
 	// debugMode used in Tracer.Debug
 	debugMode bool // DebugMode
 
@@ -81,6 +84,13 @@ type tracerProviderConfig struct {
 	skipRunningStmt bool // set by WithSkipRunningStmt
 
 	bufferSizeThreshold int64 // WithBufferSizeThreshold
+
+	cuConfig   config.OBCUConfig // WithCUConfig
+	cuConfigV1 config.OBCUConfig // WithCUConfig
+
+	tcpPacket bool // WithTCPPacket
+
+	labels map[string]string
 
 	mux sync.RWMutex
 }
@@ -176,6 +186,12 @@ func WithSpanDisable(disable bool) tracerProviderOption {
 	}
 }
 
+func WithErrorDisable(disable bool) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) {
+		cfg.disableError = disable
+	}
+}
+
 func WithSkipRunningStmt(skip bool) tracerProviderOption {
 	return func(cfg *tracerProviderConfig) {
 		cfg.skipRunningStmt = skip
@@ -197,6 +213,25 @@ func WithAggregatorDisable(disable bool) tracerProviderOption {
 func WithStmtMergeEnable(enable bool) tracerProviderOption {
 	return func(cfg *tracerProviderConfig) {
 		cfg.enableStmtMerge = enable
+	}
+}
+
+func WithCUConfig(cu config.OBCUConfig, cuv1 config.OBCUConfig) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) {
+		cfg.cuConfig = cu
+		cfg.cuConfigV1 = cuv1
+	}
+}
+
+func WithTCPPacket(count bool) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) {
+		cfg.tcpPacket = count
+	}
+}
+
+func WithLabels(l map[string]string) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) {
+		cfg.labels = l
 	}
 }
 

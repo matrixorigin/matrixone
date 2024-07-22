@@ -17,12 +17,12 @@ package indexbuild
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(IndexBuild)
 
 const (
 	ReceiveBatch = iota
@@ -31,64 +31,58 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
-	state   int
-	isMerge bool
-	batch   *batch.Batch
+	state int
+	batch *batch.Batch
 }
 
-type Argument struct {
-	ctr                  *container
-	RuntimeFilterSenders []*colexec.RuntimeFilterChan
+type IndexBuild struct {
+	ctr               *container
+	RuntimeFilterSpec *plan.RuntimeFilterSpec
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (indexBuild *IndexBuild) GetOperatorBase() *vm.OperatorBase {
+	return &indexBuild.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[IndexBuild](
+		func() *IndexBuild {
+			return &IndexBuild{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *IndexBuild) {
+			*a = IndexBuild{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[IndexBuild]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (indexBuild IndexBuild) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *IndexBuild {
+	return reuse.Alloc[IndexBuild](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (indexBuild *IndexBuild) Release() {
+	if indexBuild != nil {
+		reuse.Free[IndexBuild](indexBuild, nil)
 	}
 }
 
-func (arg *Argument) SetRuntimeFilterSenders(rfs []*colexec.RuntimeFilterChan) {
-	arg.RuntimeFilterSenders = rfs
+func (indexBuild *IndexBuild) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	indexBuild.Free(proc, pipelineFailed, err)
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := arg.ctr
+func (indexBuild *IndexBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := indexBuild.ctr
+	proc.FinalizeRuntimeFilter(indexBuild.RuntimeFilterSpec, pipelineFailed, err)
 	if ctr != nil {
 		if ctr.batch != nil {
 			proc.PutBatch(ctr.batch)
 		}
-		ctr.FreeMergeTypeOperator(pipelineFailed)
-		if ctr.isMerge {
-			ctr.FreeMergeTypeOperator(pipelineFailed)
-		} else {
-			ctr.FreeAllReg()
-		}
+		indexBuild.ctr = nil
 	}
 }

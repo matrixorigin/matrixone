@@ -32,7 +32,7 @@ func TestRetryableReaderIOTest(t *testing.T) {
 
 	r, err := newRetryableReader(func(offset int64) (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewReader(data[offset:])), nil
-	}, 0, isRetryableError)
+	}, 0, IsRetryableError)
 	assert.Nil(t, err)
 
 	err = iotest.TestReader(r, data)
@@ -61,7 +61,7 @@ func TestRetryableReaderUnexpectedEOFIOTest(t *testing.T) {
 		return io.NopCloser(&unexpectedEOFReader{
 			r: bytes.NewReader(data[offset:]),
 		}), nil
-	}, 0, isRetryableError)
+	}, 0, IsRetryableError)
 	assert.Nil(t, err)
 
 	err = iotest.TestReader(r, data)
@@ -78,7 +78,7 @@ func TestRetryableReaderUnexpectedEOF(t *testing.T) {
 			return io.NopCloser(&unexpectedEOFReader{
 				r: bytes.NewReader(data[offset:]),
 			}), nil
-		}, 0, isRetryableError)
+		}, 0, IsRetryableError)
 		assert.Nil(t, err)
 		got, err := io.ReadAll(r)
 		assert.Nil(t, err)

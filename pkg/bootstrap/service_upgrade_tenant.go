@@ -84,7 +84,7 @@ func (s *service) MaybeUpgradeTenant(
 					break
 				}
 
-				upgrades, err := versions.GetUpgradeVersions(latestVersion.Version, txn, false, true)
+				upgrades, err := versions.GetUpgradeVersions(latestVersion.Version, latestVersion.VersionOffset, txn, false, true)
 				if err != nil {
 					return err
 				}
@@ -138,18 +138,19 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 		opts := executor.Options{}.
 			WithDatabase(catalog.MO_CATALOG).
 			WithMinCommittedTS(s.now()).
-			WithWaitCommittedLogApplied()
+			WithWaitCommittedLogApplied().
+			WithTimeZone(time.Local)
 		err := s.exec.ExecTxn(
 			ctx,
 			func(txn executor.TxnExecutor) error {
 				upgrade, ok, err := versions.GetUpgradingTenantVersion(txn)
 				if err != nil {
-					getUpgradeLogger().Error("failed to get upgrading tenant version",
+					s.logger.Error("failed to get upgrading tenant version",
 						zap.Error(err))
 					return err
 				}
 
-				getUpgradeLogger().Info("get upgrading tenant version",
+				s.logger.Info("get upgrading tenant version",
 					zap.String("upgrade", upgrade.String()),
 					zap.Bool("has", ok))
 				if !ok || upgrade.TotalTenant == upgrade.ReadyTenant {
@@ -159,7 +160,7 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 				// no upgrade logic on current cn, skip
 				v := s.getFinalVersionHandle().Metadata().Version
 				if versions.Compare(upgrade.ToVersion, v) > 0 {
-					getUpgradeLogger().Info("skip upgrade tenant",
+					s.logger.Info("skip upgrade tenant",
 						zap.String("final", v),
 						zap.String("to", upgrade.ToVersion))
 					return nil
@@ -168,13 +169,13 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 				// select task and tenants for update
 				taskID, tenants, createVersions, err := versions.GetUpgradeTenantTasks(upgrade.ID, txn)
 				if err != nil {
-					getUpgradeLogger().Error("failed to load upgrade tenants",
+					s.logger.Error("failed to load upgrade tenants",
 						zap.String("upgrade", upgrade.String()),
 						zap.Error(err))
 					return err
 				}
 
-				getUpgradeLogger().Info("load upgrade tenants",
+				s.logger.Info("load upgrade tenants",
 					zap.Int("count", len(tenants)),
 					zap.String("upgrade", upgrade.String()))
 				if len(tenants) == 0 {
@@ -187,23 +188,23 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 				for i, id := range tenants {
 					createVersion := createVersions[i]
 
-					getUpgradeLogger().Info("upgrade tenant",
+					s.logger.Info("upgrade tenant",
 						zap.Int32("tenant", id),
 						zap.String("tenant-version", createVersion),
 						zap.String("upgrade", upgrade.String()))
 
 					// createVersion >= upgrade.ToVersion already upgrade
-					if versions.Compare(createVersion, upgrade.ToVersion) >= 0 {
+					if versions.Compare(createVersion, upgrade.ToVersion) > 0 {
 						continue
 					}
 
-					getUpgradeLogger().Info("execute upgrade tenant",
+					s.logger.Info("execute upgrade tenant",
 						zap.Int32("tenant", id),
 						zap.String("tenant-version", createVersion),
 						zap.String("upgrade", upgrade.String()))
 
 					if err := h.HandleTenantUpgrade(ctx, id, txn); err != nil {
-						getUpgradeLogger().Error("failed to execute upgrade tenant",
+						s.logger.Error("failed to execute upgrade tenant",
 							zap.Int32("tenant", id),
 							zap.String("tenant-version", createVersion),
 							zap.String("upgrade", upgrade.String()),
@@ -212,14 +213,14 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 					}
 
 					if err := versions.UpgradeTenantVersion(id, h.Metadata().Version, txn); err != nil {
-						getUpgradeLogger().Error("failed to update upgrade tenant create version",
+						s.logger.Error("failed to update upgrade tenant create version",
 							zap.Int32("tenant", id),
 							zap.String("upgrade", upgrade.String()),
 							zap.Error(err))
 						return err
 					}
 
-					getUpgradeLogger().Info("execute upgrade tenant completed",
+					s.logger.Info("execute upgrade tenant completed",
 						zap.Int32("tenant", id),
 						zap.String("tenant-version", createVersion),
 						zap.String("upgrade", upgrade.String()))
@@ -227,11 +228,11 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 				}
 
 				if err := versions.UpdateUpgradeTenantTaskState(taskID, versions.Yes, txn); err != nil {
-					getUpgradeLogger().Error("failed to update upgrade tenant state",
+					s.logger.Error("failed to update upgrade tenant state",
 						zap.String("upgrade", upgrade.String()))
 					return err
 				}
-				getUpgradeLogger().Info("tenant state updated",
+				s.logger.Info("tenant state updated",
 					zap.Int32("from", tenants[0]),
 					zap.Int32("to", tenants[len(tenants)-1]),
 					zap.String("upgrade", upgrade.String()))
@@ -239,7 +240,7 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 				// update count, we need using select for update to avoid concurrent update
 				upgrade, err = versions.GetUpgradeVersionForUpdateByID(upgrade.ID, txn)
 				if err != nil {
-					getUpgradeLogger().Error("failed to get latest upgrade info",
+					s.logger.Error("failed to get latest upgrade info",
 						zap.String("upgrade", upgrade.String()))
 					return err
 				}
@@ -249,7 +250,7 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 					panic(fmt.Sprintf("BUG: invalid upgrade tenant, upgrade %s, updated %d", upgrade.String(), updated))
 				}
 
-				getUpgradeLogger().Info("upgrade tenant ready count changed",
+				s.logger.Info("upgrade tenant ready count changed",
 					zap.String("upgrade", upgrade.String()))
 
 				if upgrade.State == versions.StateReady {
@@ -259,7 +260,7 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 			},
 			opts)
 		if err != nil {
-			getUpgradeLogger().Error("tenant task handle failed",
+			s.logger.Error("tenant task handle failed",
 				zap.Error(err))
 			return false, err
 		}
@@ -279,8 +280,7 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 			}
 
 			for {
-				if hasUpgradeTenants, err := fn(); err != nil ||
-					hasUpgradeTenants {
+				if hasUpgradeTenants, err := fn(); err != nil || hasUpgradeTenants {
 					continue
 				}
 				break

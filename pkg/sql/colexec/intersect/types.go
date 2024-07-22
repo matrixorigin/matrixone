@@ -23,7 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(Intersect)
 
 const (
 	build = iota
@@ -31,44 +31,40 @@ const (
 	end
 )
 
-type Argument struct {
+type Intersect struct {
 	ctr *container
-
-	// hash table bucket related information.
-	IBucket uint64
-	NBucket uint64
 
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (intersect *Intersect) GetOperatorBase() *vm.OperatorBase {
+	return &intersect.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[Intersect](
+		func() *Intersect {
+			return &Intersect{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *Intersect) {
+			*a = Intersect{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[Intersect]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (intersect Intersect) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *Intersect {
+	return reuse.Alloc[Intersect](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (intersect *Intersect) Release() {
+	if intersect != nil {
+		reuse.Free[Intersect](intersect, nil)
 	}
 }
 
@@ -91,8 +87,12 @@ type container struct {
 	inBuckets []uint8
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := arg.ctr
+func (intersect *Intersect) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	intersect.Free(proc, pipelineFailed, err)
+}
+
+func (intersect *Intersect) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := intersect.ctr
 	if ctr != nil {
 		if ctr.hashTable != nil {
 			ctr.hashTable.Free()
@@ -109,5 +109,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 			ctr.cnts = nil
 		}
 		ctr.FreeAllReg()
+
+		intersect.ctr = nil
 	}
 }

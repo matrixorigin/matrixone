@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 )
 
@@ -42,22 +43,32 @@ const (
 	flagLockTableDefChanged
 )
 
-func newRangeLock(c *lockContext) (Lock, Lock) {
-	l := newLock(c)
+func newRangeLock(
+	logger *log.MOLogger,
+	c *lockContext,
+) (Lock, Lock) {
+	l := newLock(logger, c)
 	return l.toRangeStartLock(), l.toRangeEndLock()
 }
 
-func newRowLock(c *lockContext) Lock {
-	l := newLock(c)
+func newRowLock(
+	logger *log.MOLogger,
+	c *lockContext,
+) Lock {
+	l := newLock(logger, c)
 	return l.toRowLock()
 }
 
-func newLock(c *lockContext) Lock {
+func newLock(
+	logger *log.MOLogger,
+	c *lockContext,
+) Lock {
 	l := Lock{
 		createAt: time.Now(),
 		holders:  holdersPool.Get().(*holders),
 		waiters:  waitQueuePool.Get().(waiterQueue),
 	}
+	l.waiters.init(logger)
 	l.holders.add(c.waitTxn)
 	if c.opts.Mode == pb.LockMode_Exclusive {
 		l.value |= flagLockExclusiveMode
@@ -67,17 +78,25 @@ func newLock(c *lockContext) Lock {
 	if c.opts.TableDefChanged {
 		l.value |= flagLockTableDefChanged
 	}
+	logHolderAdded(logger, c, l)
 	return l
 }
 
-func (l Lock) addWaiter(w *waiter) {
+func (l Lock) addWaiter(
+	logger *log.MOLogger,
+	w *waiter,
+) {
 	l.waiters.put(w)
-	logWaitersAdded(l.holders, w)
+	logWaitersAdded(logger, l.holders, w)
 }
 
-func (l Lock) addHolder(c *lockContext) {
+func (l Lock) addHolder(
+	logger *log.MOLogger,
+	c *lockContext,
+) {
 	l.holders.add(c.waitTxn)
 	l.waiters.removeByTxnID(c.waitTxn.TxnID)
+	logHolderAdded(logger, c, l)
 }
 
 func (l Lock) isEmpty() bool {
@@ -85,7 +104,10 @@ func (l Lock) isEmpty() bool {
 		(l.waiters == nil || l.waiters.size() == 0)
 }
 
-func (l Lock) tryHold(c *lockContext) (bool, bool) {
+func (l Lock) tryHold(
+	logger *log.MOLogger,
+	c *lockContext,
+) (bool, bool) {
 	if l.isEmpty() {
 		panic("BUG: try hold on empty lock")
 	}
@@ -96,7 +118,7 @@ func (l Lock) tryHold(c *lockContext) (bool, bool) {
 	}
 
 	if l.canHold(c) {
-		l.addHolder(c)
+		l.addHolder(logger, c)
 		return true, true
 	}
 
@@ -105,6 +127,10 @@ func (l Lock) tryHold(c *lockContext) (bool, bool) {
 
 // (no holders && is first waiter txn) || (both shared lock) can hold lock
 func (l Lock) canHold(c *lockContext) bool {
+	if c.closed {
+		panic("BUG: closed context should not call canHold")
+	}
+
 	return (l.holders.size() == 0 && l.waiters.first().isTxn(c.txn.txnID)) ||
 		l.isLockModeAllowed(c)
 }
@@ -126,6 +152,42 @@ func (l Lock) release() {
 	l.waiters.reset()
 	waitQueuePool.Put(l.waiters)
 	holdersPool.Put(l.holders)
+}
+
+func (l Lock) closeWaiter(w *waiter) bool {
+	canRemove := func() bool {
+		if !l.isLockRow() {
+			panic("BUG: range lock cannot call closeWaiter")
+		}
+
+		if l.holders.size() > 0 {
+			return false
+		}
+
+		if l.waiters.size() == 0 {
+			return true
+		}
+
+		if l.waiters.first() != w {
+			return false
+		}
+
+		if l.waiters.size() == 1 {
+			return true
+		}
+
+		l.waiters.notify(notifyValue{defChanged: l.isLockTableDefChanged()})
+		return l.isEmpty()
+	}()
+
+	if canRemove {
+		// close all ref in waiter queue
+		l.waiters.iter(func(w *waiter) bool {
+			w.close()
+			return true
+		})
+	}
+	return canRemove
 }
 
 func (l Lock) closeTxn(

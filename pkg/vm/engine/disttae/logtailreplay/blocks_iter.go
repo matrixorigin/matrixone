@@ -16,6 +16,7 @@ package logtailreplay
 
 import (
 	"bytes"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -30,9 +31,9 @@ type ObjectsIter interface {
 }
 
 type objectsIter struct {
+	onlyVisible bool
 	ts          types.TS
-	iter        btree.IterG[ObjectIndexByCreateTSEntry]
-	firstCalled bool
+	iter        btree.IterG[ObjectEntry]
 }
 
 // not accurate!  only used by stats
@@ -40,14 +41,16 @@ func (p *PartitionState) ApproxObjectsNum() int {
 	return p.dataObjects.Len()
 }
 
-func (p *PartitionState) NewObjectsIter(ts types.TS) (*objectsIter, error) {
-	if ts.Less(p.minTS) {
-		return nil, moerr.NewTxnStaleNoCtx()
+func (p *PartitionState) NewObjectsIter(ts types.TS, onlyVisible bool) (ObjectsIter, error) {
+	if ts.Less(&p.minTS) {
+		msg := fmt.Sprintf("(%s<%s)", ts.ToString(), p.minTS.ToString())
+		return nil, moerr.NewTxnStaleNoCtx(msg)
 	}
-	iter := p.dataObjectsByCreateTS.Copy().Iter()
+	iter := p.dataObjects.Copy().Iter()
 	ret := &objectsIter{
-		ts:   ts,
-		iter: iter,
+		onlyVisible: onlyVisible,
+		ts:          ts,
+		iter:        iter,
 	}
 	return ret, nil
 }
@@ -55,35 +58,15 @@ func (p *PartitionState) NewObjectsIter(ts types.TS) (*objectsIter, error) {
 var _ ObjectsIter = new(objectsIter)
 
 func (b *objectsIter) Next() bool {
-	for {
-
-		pivot := ObjectIndexByCreateTSEntry{
-			ObjectInfo{
-				CreateTime: b.ts.Next(),
-			},
-		}
-		if !b.firstCalled {
-			if !b.iter.Seek(pivot) {
-				if !b.iter.Last() {
-					return false
-				}
-			}
-			b.firstCalled = true
-		} else {
-			if !b.iter.Prev() {
-				return false
-			}
-		}
-
+	for b.iter.Next() {
 		entry := b.iter.Item()
-
-		if !entry.Visible(b.ts) {
+		if b.onlyVisible && !entry.Visible(b.ts) {
 			// not visible
 			continue
 		}
-
 		return true
 	}
+	return false
 }
 
 func (b *objectsIter) Entry() ObjectEntry {
@@ -108,7 +91,7 @@ type dirtyBlocksIter struct {
 	firstCalled bool
 }
 
-func (p *PartitionState) NewDirtyBlocksIter() *dirtyBlocksIter {
+func (p *PartitionState) NewDirtyBlocksIter() BlocksIter {
 	iter := p.dirtyBlocks.Copy().Iter()
 	ret := &dirtyBlocksIter{
 		iter: iter,
@@ -158,7 +141,7 @@ func (p *PartitionState) GetChangedObjsBetween(
 	}); ok; ok = iter.Next() {
 		entry := iter.Item()
 
-		if entry.Time.Greater(end) {
+		if entry.Time.Greater(&end) {
 			break
 		}
 

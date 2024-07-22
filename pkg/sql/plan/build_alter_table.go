@@ -23,10 +23,12 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
@@ -37,7 +39,8 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 	if schemaName == "" {
 		schemaName = ctx.DefaultDatabase()
 	}
-	_, tableDef := ctx.Resolve(schemaName, tableName)
+
+	_, tableDef := ctx.Resolve(schemaName, tableName, Snapshot{TS: &timestamp.Timestamp{}})
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
 	}
@@ -118,7 +121,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", spec)
 		case *tree.TableOptionComment:
 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", spec)
-		case *tree.AlterTableName:
+		case *tree.AlterOptionTableName:
 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", spec)
 		case *tree.AlterAddCol:
 			err = AddColumn(ctx, alterTablePlan, option, alterTableCtx)
@@ -142,29 +145,17 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 		}
 	}
 
-	createTmpDdl, err := restoreDDL(ctx, alterTablePlan.CopyTableDef, schemaName, alterTableCtx.copyTableName, false)
+	createTmpDdl, err := restoreDDL(ctx, alterTablePlan.CopyTableDef, schemaName, alterTableCtx.copyTableName)
 	if err != nil {
 		return nil, err
 	}
 	alterTablePlan.CreateTmpTableSql = createTmpDdl
-
-	createDdl, err := restoreDDL(ctx, alterTablePlan.CopyTableDef, schemaName, alterTableCtx.originTableName, false)
-	if err != nil {
-		return nil, err
-	}
-	alterTablePlan.CreateTableSql = createDdl
 
 	insertTmpDml, err := buildAlterInsertDataSQL(ctx, alterTableCtx)
 	if err != nil {
 		return nil, err
 	}
 	alterTablePlan.InsertTmpDataSql = insertTmpDml
-
-	insertDml, err := builInsertSQL(ctx, alterTableCtx)
-	if err != nil {
-		return nil, err
-	}
-	alterTablePlan.InsertDataSql = insertDml
 
 	alterTablePlan.ChangeTblColIdMap = alterTableCtx.changColDefMap
 	alterTablePlan.UpdateFkSqls = append(alterTablePlan.UpdateFkSqls, alterTableCtx.UpdateSqls...)
@@ -184,7 +175,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 
 // restoreDDL Get the DDL statement for the corresponding table based on tableDef,
 // skipConstraint: Skip foreign key and index constraints
-func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblName string, skipConstraint bool) (string, error) {
+func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblName string) (string, error) {
 	var createStr string
 	if tableDef.TableType == catalog.SystemOrdinaryRel {
 		createStr = fmt.Sprintf("CREATE TABLE `%s`.`%s` (", formatStr(schemaName), formatStr(tblName))
@@ -220,47 +211,47 @@ func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblN
 			accountId != catalog.System_Account {
 			continue
 		}
-		nullOrNot := "NOT NULL"
-		// col.Default must be not nil
-		if len(col.Default.OriginString) > 0 {
-			nullOrNot = "DEFAULT " + formatStr(col.Default.OriginString)
-		} else if col.Default.NullAbility {
-			nullOrNot = ""
-		}
 
-		if col.Typ.AutoIncr {
-			nullOrNot = "NOT NULL AUTO_INCREMENT"
-		}
-
-		var hasAttrComment string
-		if col.Comment != "" {
-			hasAttrComment = " COMMENT '" + col.Comment + "'"
-		}
+		buf := bytes.NewBuffer(make([]byte, 0, 64))
 
 		if rowCount == 0 {
-			createStr += "\n"
+			buf.WriteString("\n")
 		} else {
-			createStr += ",\n"
-		}
-		typ := types.T(col.Typ.Id).ToType()
-		typeStr := typ.String()
-		if typ.Oid.IsDecimal() { //after decimal fix,remove this
-			typeStr = fmt.Sprintf("DECIMAL(%d,%d)", col.Typ.Width, col.Typ.Scale)
-		}
-		if typ.Oid == types.T_varchar || typ.Oid == types.T_char ||
-			typ.Oid == types.T_binary || typ.Oid == types.T_varbinary ||
-			typ.Oid.IsArrayRelate() || typ.Oid == types.T_bit {
-			typeStr += fmt.Sprintf("(%d)", col.Typ.Width)
-		}
-		if typ.Oid.IsFloat() && col.Typ.Scale != -1 {
-			typeStr += fmt.Sprintf("(%d,%d)", col.Typ.Width, col.Typ.Scale)
+			buf.WriteString(",\n")
 		}
 
-		updateOpt := ""
-		if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
-			updateOpt = " ON UPDATE " + col.OnUpdate.OriginString
+		typeStr := FormatColType(col.Typ)
+		fmt.Fprintf(buf, "  `%s` %s", formatStr(colName), typeStr)
+
+		if col.Typ.AutoIncr {
+			buf.WriteString(" NOT NULL AUTO_INCREMENT")
+		} else {
+			if !col.Default.NullAbility {
+				buf.WriteString(" NOT NULL")
+			}
+
+			if strings.EqualFold(col.Default.OriginString, "null") ||
+				len(col.Default.OriginString) == 0 {
+				if col.Default.NullAbility {
+					if col.Typ.Id == int32(types.T_timestamp) {
+						buf.WriteString(" NULL")
+					}
+					buf.WriteString(" DEFAULT NULL")
+				}
+			} else if len(col.Default.OriginString) > 0 {
+				buf.WriteString(" DEFAULT " + formatStr(col.Default.OriginString))
+			}
+
+			if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
+				buf.WriteString(" ON UPDATE " + col.OnUpdate.OriginString)
+			}
 		}
-		createStr += fmt.Sprintf("`%s` %s %s%s%s", formatStr(colName), typeStr, nullOrNot, updateOpt, hasAttrComment)
+
+		if col.Comment != "" {
+			buf.WriteString(" COMMENT '" + col.Comment + "'")
+		}
+
+		createStr += buf.String()
 		rowCount++
 		if col.Primary {
 			pkDefs = append(pkDefs, colName)
@@ -273,7 +264,7 @@ func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblN
 	}
 
 	if len(pkDefs) != 0 {
-		pkStr := "PRIMARY KEY ("
+		pkStr := "  PRIMARY KEY ("
 		for i, def := range pkDefs {
 			if i == len(pkDefs)-1 {
 				pkStr += fmt.Sprintf("`%s`", formatStr(def))
@@ -288,122 +279,102 @@ func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblN
 		createStr += pkStr
 	}
 
-	if !skipConstraint {
-		if tableDef.Indexes != nil {
+	if tableDef.Indexes != nil {
 
-			// We only print distinct index names. This is used to avoid printing the same index multiple times for IVFFLAT or
-			// other multi-table indexes.
-			indexNames := make(map[string]bool)
+		// We only print distinct index names. This is used to avoid printing the same index multiple times for IVFFLAT or
+		// other multi-table indexes.
+		indexNames := make(map[string]bool)
 
-			for _, indexdef := range tableDef.Indexes {
-				if _, ok := indexNames[indexdef.IndexName]; ok {
+		for _, indexdef := range tableDef.Indexes {
+			if _, ok := indexNames[indexdef.IndexName]; ok {
+				continue
+			} else {
+				indexNames[indexdef.IndexName] = true
+			}
+
+			var indexStr string
+			if indexdef.Unique {
+				indexStr = "  UNIQUE KEY "
+			} else {
+				indexStr = "  KEY "
+			}
+			indexStr += fmt.Sprintf("`%s` ", formatStr(indexdef.IndexName))
+			if !catalog.IsNullIndexAlgo(indexdef.IndexAlgo) {
+				indexStr += fmt.Sprintf("USING %s ", indexdef.IndexAlgo)
+			}
+			indexStr += "("
+			i := 0
+			for _, part := range indexdef.Parts {
+				if catalog.IsAlias(part) {
 					continue
-				} else {
-					indexNames[indexdef.IndexName] = true
+				}
+				if i > 0 {
+					indexStr += ","
 				}
 
-				var indexStr string
-				if indexdef.Unique {
-					indexStr = "UNIQUE KEY "
-				} else {
-					indexStr = "KEY "
-				}
-				indexStr += fmt.Sprintf("`%s` ", formatStr(indexdef.IndexName))
-				if !catalog.IsNullIndexAlgo(indexdef.IndexAlgo) {
-					indexStr += fmt.Sprintf("USING %s ", indexdef.IndexAlgo)
-				}
-				indexStr += "("
-				i := 0
-				for _, part := range indexdef.Parts {
-					// NOTE: we skip the alias PK column from the secondary keys list here.
-					// The final SQL string will be similar to the output of "show create table"
-					// (ie buildShowCreateTable) and we should avoid
-					// showing the alias column in the secondary keys list.
-					if catalog.IsAlias(part) {
-						continue
-					}
-					if i > 0 {
-						indexStr += ","
-					}
-					indexStr += fmt.Sprintf("`%s`", formatStr(part))
-					i++
-				}
-				indexStr += ")"
-				if indexdef.Comment != "" {
-					indexdef.Comment = strings.Replace(indexdef.Comment, "'", "\\'", -1)
-					indexStr += fmt.Sprintf(" COMMENT '%s'", formatStr(indexdef.Comment))
-				}
-				if indexdef.IndexAlgoParams != "" {
-					var paramList string
-					var err error
-					paramList, err = catalog.IndexParamsToStringList(indexdef.IndexAlgoParams)
-					if err != nil {
-						return "", err
-					}
-					indexStr += paramList
-				}
-				if rowCount != 0 {
-					createStr += ",\n"
-				}
-				createStr += indexStr
-			}
-		}
-	}
-
-	if !skipConstraint {
-		for _, fk := range tableDef.Fkeys {
-			colNames := make([]string, len(fk.Cols))
-			for i, colId := range fk.Cols {
-				colNames[i] = colIdToName[colId]
-			}
-			_, fkTableDef := ctx.ResolveById(fk.ForeignTbl)
-			fkColIdToName := make(map[uint64]string)
-			for _, col := range fkTableDef.Cols {
-				fkColIdToName[col.ColId] = col.Name
-			}
-			fkColNames := make([]string, len(fk.ForeignCols))
-			for i, colId := range fk.ForeignCols {
-				fkColNames[i] = fkColIdToName[colId]
+				indexStr += fmt.Sprintf("`%s`", formatStr(part))
+				i++
 			}
 
+			indexStr += ")"
+			if indexdef.IndexAlgoParams != "" {
+				var paramList string
+				paramList, err := catalog.IndexParamsToStringList(indexdef.IndexAlgoParams)
+				if err != nil {
+					return "", err
+				}
+				indexStr += paramList
+			}
+			if indexdef.Comment != "" {
+				indexdef.Comment = strings.Replace(indexdef.Comment, "'", "\\'", -1)
+				indexStr += fmt.Sprintf(" COMMENT '%s'", formatStr(indexdef.Comment))
+			}
 			if rowCount != 0 {
 				createStr += ",\n"
 			}
+			createStr += indexStr
+		}
+	}
 
-			if fk.Name == "" {
-				createStr += fmt.Sprintf("CONSTRAINT FOREIGN KEY (`%s`) REFERENCES `%s` (`%s`) ON DELETE %s ON UPDATE %s",
-					strings.Join(colNames, "`,`"), formatStr(fkTableDef.Name), strings.Join(fkColNames, "`,`"), fk.OnDelete.String(), fk.OnUpdate.String())
+	for _, fk := range tableDef.Fkeys {
+		colNames := make([]string, len(fk.Cols))
+		for i, colId := range fk.Cols {
+			colNames[i] = colIdToName[colId]
+		}
+
+		var fkTableDef *TableDef
+
+		//fk self reference
+		if fk.ForeignTbl == 0 {
+			fkTableDef = tableDef
+		} else {
+			if ctx.GetQueryingSubscription() != nil {
+				_, fkTableDef = ctx.ResolveSubscriptionTableById(fk.ForeignTbl, ctx.GetQueryingSubscription())
 			} else {
-				createStr += fmt.Sprintf("CONSTRAINT `%s` FOREIGN KEY (`%s`) REFERENCES `%s` (`%s`) ON DELETE %s ON UPDATE %s",
-					formatStr(fk.Name), strings.Join(colNames, "`,`"), formatStr(fkTableDef.Name), strings.Join(fkColNames, "`,`"), fk.OnDelete.String(), fk.OnUpdate.String())
+				_, fkTableDef = ctx.ResolveById(fk.ForeignTbl, Snapshot{TS: &timestamp.Timestamp{}})
 			}
 		}
+
+		fkColIdToName := make(map[uint64]string)
+		for _, col := range fkTableDef.Cols {
+			fkColIdToName[col.ColId] = col.Name
+		}
+		fkColNames := make([]string, len(fk.ForeignCols))
+		for i, colId := range fk.ForeignCols {
+			fkColNames[i] = fkColIdToName[colId]
+		}
+
+		if rowCount != 0 {
+			createStr += ",\n"
+		}
+		createStr += fmt.Sprintf("  CONSTRAINT `%s` FOREIGN KEY (`%s`) REFERENCES `%s` (`%s`) ON DELETE %s ON UPDATE %s",
+			formatStr(fk.Name), strings.Join(colNames, "`,`"), formatStr(fkTableDef.Name), strings.Join(fkColNames, "`,`"), fk.OnDelete.String(), fk.OnUpdate.String())
 	}
 
 	if rowCount != 0 {
 		createStr += "\n"
 	}
 	createStr += ")"
-
-	if tableDef.ClusterBy != nil {
-		clusterby := " CLUSTER BY ("
-		if util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
-			//multi column clusterby
-			cbNames := util.SplitCompositeClusterByColumnName(tableDef.ClusterBy.Name)
-			for i, cbName := range cbNames {
-				if i != 0 {
-					clusterby += fmt.Sprintf(", `%s`", formatStr(cbName))
-				} else {
-					clusterby += fmt.Sprintf("`%s`", formatStr(cbName))
-				}
-			}
-		} else {
-			//single column cluster by
-			clusterby += fmt.Sprintf("`%s`", formatStr(tableDef.ClusterBy.Name))
-		}
-		clusterby += ")"
-		createStr += clusterby
-	}
 
 	var comment string
 	var partition string
@@ -424,6 +395,33 @@ func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblN
 	createStr += comment
 	createStr += partition
 
+	/**
+	Fix issue: https://github.com/matrixorigin/MO-Cloud/issues/1028#issuecomment-1667642384
+	Based on the grammar of the 'create table' in the file pkg/sql/parsers/dialect/mysql/mysql_sql.y
+		https://github.com/matrixorigin/matrixone/blob/68db7260e411e5a4541eaccf78ca9bb57e810f24/pkg/sql/parsers/dialect/mysql/mysql_sql.y#L6076C7-L6076C7
+		https://github.com/matrixorigin/matrixone/blob/68db7260e411e5a4541eaccf78ca9bb57e810f24/pkg/sql/parsers/dialect/mysql/mysql_sql.y#L6097
+	The 'cluster by' is after the 'partition by' and the 'table options', so we need to add the 'cluster by' string after the 'partition by' and the 'table options'.
+	*/
+	if tableDef.ClusterBy != nil {
+		clusterby := " CLUSTER BY ("
+		if util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
+			//multi column clusterby
+			cbNames := util.SplitCompositeClusterByColumnName(tableDef.ClusterBy.Name)
+			for i, cbName := range cbNames {
+				if i != 0 {
+					clusterby += fmt.Sprintf(", `%s`", formatStr(cbName))
+				} else {
+					clusterby += fmt.Sprintf("`%s`", formatStr(cbName))
+				}
+			}
+		} else {
+			//single column cluster by
+			clusterby += fmt.Sprintf("`%s`", formatStr(tableDef.ClusterBy.Name))
+		}
+		clusterby += ")"
+		createStr += clusterby
+	}
+
 	if tableDef.TableType == catalog.SystemExternalRel {
 		param := tree.ExternParam{}
 		err := json.Unmarshal([]byte(tableDef.Createsql), &param)
@@ -432,7 +430,7 @@ func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblN
 		}
 		createStr += fmt.Sprintf(" INFILE{'FILEPATH'='%s','COMPRESSION'='%s','FORMAT'='%s','JSONDATA'='%s'}", param.Filepath, param.CompressType, param.Format, param.JsonData)
 
-		fields := " FIELDS"
+		fields := ""
 		if param.Tail.Fields.Terminated != nil {
 			if param.Tail.Fields.Terminated.Value == "" {
 				fields += " TERMINATED BY \"\""
@@ -459,7 +457,7 @@ func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblN
 			}
 		}
 
-		line := " LINES"
+		line := ""
 		if param.Tail.Lines.StartingBy != "" {
 			line += fmt.Sprintf(" STARTING BY '%s'", param.Tail.Lines.StartingBy)
 		}
@@ -471,10 +469,12 @@ func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblN
 			}
 		}
 
-		if fields != " FIELDS" {
+		if len(fields) > 0 {
+			fields = " FIELDS" + fields
 			createStr += fields
 		}
-		if line != " LINES" {
+		if len(line) > 0 {
+			line = " LINES" + line
 			createStr += line
 		}
 
@@ -490,6 +490,7 @@ func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblN
 		}
 		buf.WriteRune(ch)
 	}
+
 	sql := buf.String()
 	stmt, err := getRewriteSQLStmt(ctx, sql)
 	defer func() {
@@ -497,6 +498,7 @@ func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblN
 			stmt.Free()
 		}
 	}()
+
 	if err != nil {
 		return "", err
 	}
@@ -535,16 +537,6 @@ func buildAlterInsertDataSQL(ctx CompilerContext, alterCtx *AlterTableContext) (
 	insertSQL := fmt.Sprintf("INSERT INTO `%s`.`%s` (%s) SELECT %s FROM `%s`.`%s`",
 		formatStr(schemaName), formatStr(copyTableName), insertBuffer.String(),
 		selectBuffer.String(), formatStr(schemaName), formatStr(originTableName))
-	return insertSQL, nil
-}
-
-func builInsertSQL(ctx CompilerContext, alterCtx *AlterTableContext) (string, error) {
-	schemaName := alterCtx.schemaName
-	originTableName := alterCtx.originTableName
-	copyTableName := alterCtx.copyTableName
-
-	insertSQL := fmt.Sprintf("INSERT INTO `%s`.`%s` SELECT * FROM `%s`.`%s`",
-		formatStr(schemaName), formatStr(originTableName), formatStr(schemaName), formatStr(copyTableName))
 	return insertSQL, nil
 }
 
@@ -621,7 +613,7 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	if schemaName == "" {
 		schemaName = ctx.DefaultDatabase()
 	}
-	objRef, tableDef := ctx.Resolve(schemaName, tableName)
+	objRef, tableDef := ctx.Resolve(schemaName, tableName, Snapshot{TS: &timestamp.Timestamp{}})
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
 	}
@@ -704,7 +696,7 @@ func ResolveAlterTableAlgorithm(ctx context.Context, validAlterSpecs []tree.Alte
 			algorithm = plan.AlterTable_INPLACE
 		case *tree.TableOptionComment:
 			algorithm = plan.AlterTable_INPLACE
-		case *tree.AlterTableName:
+		case *tree.AlterOptionTableName:
 			algorithm = plan.AlterTable_INPLACE
 		case *tree.AlterAddCol:
 			algorithm = plan.AlterTable_COPY
@@ -768,6 +760,14 @@ func buildNotNullColumnVal(col *ColDef) string {
 	} else if col.Typ.Id == int32(types.T_enum) {
 		enumvalues := strings.Split(col.Typ.Enumvalues, ",")
 		defaultValue = enumvalues[0]
+	} else if col.Typ.Id == int32(types.T_array_float32) || col.Typ.Id == int32(types.T_array_float64) {
+		if col.Typ.Width > 0 {
+			zerosWithCommas := strings.Repeat("0,", int(col.Typ.Width)-1)
+			arrayAsString := zerosWithCommas + "0" // final zero
+			defaultValue = fmt.Sprintf("'[%s]'", arrayAsString)
+		} else {
+			defaultValue = "'[]'"
+		}
 	} else {
 		defaultValue = "null"
 	}

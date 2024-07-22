@@ -19,9 +19,13 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"go.uber.org/zap"
 )
@@ -43,46 +47,18 @@ func (c AutoColumn) getInsertSQL() string {
 }
 
 type sqlStore struct {
+	ls   lockservice.LockService
 	exec executor.SQLExecutor
 }
 
-func NewSQLStore(exec executor.SQLExecutor) (IncrValueStore, error) {
-	return &sqlStore{exec: exec}, nil
-}
-
-func (s *sqlStore) NewTxnOperator(ctx context.Context) client.TxnOperator {
-	return s.exec.NewTxnOperator(ctx)
-}
-
-// only use for debug
-func (s *sqlStore) SelectAll(
-	ctx context.Context,
-	tableID uint64,
-	txnOp client.TxnOperator) (string, error) {
-	fetchSQL := fmt.Sprintf(`select col_name, table_id from %s`, incrTableName)
-	opts := executor.Options{}.WithDatabase(database).WithTxn(txnOp)
-	if txnOp != nil {
-		opts = opts.WithDisableIncrStatement()
-	}
-	res, err := s.exec.Exec(ctx, fetchSQL, opts)
-	if err != nil {
-		return "", err
-	}
-	defer res.Close()
-
-	accountId, err := defines.GetAccountId(ctx)
-	if err != nil {
-		return "", err
-	}
-	str := fmt.Sprintf("Cannot find tableID %d in table %s, accountid %d, txn: %s", tableID, incrTableName,
-		accountId, txnOp.Txn().DebugString())
-	res.ReadRows(func(_ int, cols []*vector.Vector) bool {
-		str += fmt.Sprintf("\tcol_name: %s, table_id: %d\n",
-			executor.GetStringRows(cols[0])[0],
-			executor.GetFixedRows[uint64](cols[1])[0])
-		return true
-	})
-	return str, nil
+func NewSQLStore(
+	exec executor.SQLExecutor,
+	ls lockservice.LockService,
+) (IncrValueStore, error) {
+	return &sqlStore{
+		exec: exec,
+		ls:   ls,
+	}, nil
 }
 
 func (s *sqlStore) Create(
@@ -90,9 +66,14 @@ func (s *sqlStore) Create(
 	tableID uint64,
 	cols []AutoColumn,
 	txnOp client.TxnOperator) error {
-	opts := executor.Options{}.WithDatabase(database).WithTxn(txnOp).WithWaitCommittedLogApplied()
+	opts := executor.Options{}.
+		WithDatabase(database).
+		WithTxn(txnOp).
+		WithWaitCommittedLogApplied()
 	if txnOp != nil {
 		opts = opts.WithDisableIncrStatement()
+	} else {
+		opts = opts.WithEnableTrace()
 	}
 
 	return s.exec.ExecTxn(
@@ -115,7 +96,8 @@ func (s *sqlStore) Allocate(
 	tableID uint64,
 	colName string,
 	count int,
-	txnOp client.TxnOperator) (uint64, uint64, error) {
+	txnOp client.TxnOperator,
+) (uint64, uint64, error) {
 	var current, next, step uint64
 	ok := false
 
@@ -129,7 +111,10 @@ func (s *sqlStore) Allocate(
 		WithWaitCommittedLogApplied() // make sure the update is visible to the subsequence txn, wait log tail applied
 	if txnOp != nil {
 		opts = opts.WithDisableIncrStatement()
+	} else {
+		opts = opts.WithEnableTrace()
 	}
+
 	ctxDone := func() bool {
 		select {
 		case <-ctx.Done():
@@ -138,10 +123,12 @@ func (s *sqlStore) Allocate(
 			return false
 		}
 	}
+	retry := false
 	for {
 		err := s.exec.ExecTxn(
 			ctx,
 			func(te executor.TxnExecutor) error {
+				txnOp = te.Txn()
 				start := time.Now()
 				res, err := te.Exec(fetchSQL, executor.StatementOption{})
 				if err != nil {
@@ -157,22 +144,18 @@ func (s *sqlStore) Allocate(
 				res.Close()
 
 				if rows != 1 {
-					accountId, err := defines.GetAccountId(ctx)
+					accountID, err := defines.GetAccountId(ctx)
 					if err != nil {
 						return err
 					}
-					selectAll, err := s.SelectAll(ctx, tableID, txnOp)
-					if err != nil {
-						return err
-					}
-					getLogger().Fatal("BUG: read incr record invalid",
+					trace.GetService(s.ls.GetConfig().ServiceID).Sync()
+					getLogger(s.ls.GetConfig().ServiceID).Fatal("BUG: read incr record invalid",
 						zap.String("fetch-sql", fetchSQL),
-						zap.Any("account", accountId),
+						zap.Any("account", accountID),
 						zap.Uint64("table", tableID),
 						zap.String("col", colName),
 						zap.Int("rows", rows),
 						zap.Duration("cost", time.Since(start)),
-						zap.String("select-all", selectAll),
 						zap.Bool("ctx-done", ctxDone()))
 				}
 
@@ -192,22 +175,28 @@ func (s *sqlStore) Allocate(
 
 				if res.AffectedRows == 1 {
 					ok = true
+				} else if ctxDone() {
+					return ctx.Err()
 				} else {
-					accountId, err := defines.GetAccountId(ctx)
+					ctx2, cancel := context.WithTimeout(context.Background(), time.Second*30)
+					defer cancel()
+					ok, err := s.ls.IsOrphanTxn(ctx2, txnOp.Txn().ID)
+					if ok || err != nil {
+						retry = true
+						return moerr.NewTxnNeedRetryNoCtx()
+					}
+
+					accountID, err := defines.GetAccountId(ctx)
 					if err != nil {
 						return err
 					}
-					selectAll, err := s.SelectAll(ctx, tableID, txnOp)
-					if err != nil {
-						return err
-					}
-					getLogger().Fatal("BUG: update incr record returns invalid affected rows",
+					trace.GetService(s.ls.GetConfig().ServiceID).Sync()
+					getLogger(s.ls.GetConfig().ServiceID).Fatal("BUG: update incr record returns invalid affected rows",
 						zap.String("update-sql", sql),
-						zap.Any("account", accountId),
+						zap.Any("account", accountID),
 						zap.Uint64("table", tableID),
 						zap.String("col", colName),
 						zap.Uint64("affected-rows", res.AffectedRows),
-						zap.String("select-all", selectAll),
 						zap.Duration("cost", time.Since(start)),
 						zap.Bool("ctx-done", ctxDone()))
 				}
@@ -216,6 +205,13 @@ func (s *sqlStore) Allocate(
 			},
 			opts)
 		if err != nil {
+			// retry ww conflict if the txn is not pessimistic
+			if retry ||
+				(txnOp != nil && !txnOp.Txn().IsPessimistic() &&
+					moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict)) {
+				continue
+			}
+
 			return 0, 0, err
 		}
 		if ok {
@@ -233,12 +229,16 @@ func (s *sqlStore) UpdateMinValue(
 	col string,
 	minValue uint64,
 	txnOp client.TxnOperator) error {
-	opts := executor.Options{}.WithDatabase(database).WithTxn(txnOp)
+	opts := executor.Options{}.
+		WithDatabase(database).
+		WithTxn(txnOp)
+
 	// txnOp is nil means the auto increment metadata is already insert into catalog.MOAutoIncrTable and committed.
 	// So updateMinValue will use a new txn to update the min value. To avoid w-w conflict, we need to wait this
 	// committed log tail applied to ensure subsequence txn must get a snapshot ts which is large than this commit.
 	if txnOp == nil {
-		opts = opts.WithWaitCommittedLogApplied()
+		opts = opts.WithWaitCommittedLogApplied().
+			WithEnableTrace()
 	} else {
 		opts = opts.WithDisableIncrStatement()
 	}
@@ -258,22 +258,44 @@ func (s *sqlStore) UpdateMinValue(
 	return nil
 }
 
-func (s *sqlStore) Delete(
-	ctx context.Context,
-	tableID uint64) error {
+func (s *sqlStore) Delete(ctx context.Context, tableID uint64) error {
 	opts := executor.Options{}.
 		WithDatabase(database).
+		WithEnableTrace().
 		WithWaitCommittedLogApplied()
-	res, err := s.exec.Exec(
-		ctx,
-		fmt.Sprintf("delete from %s where table_id = %d",
-			incrTableName, tableID),
+
+	return s.exec.ExecTxn(ctx,
+		func(txn executor.TxnExecutor) error {
+			var tenantId uint32
+			tenantId, err := defines.GetAccountId(ctx)
+			if err != nil {
+				return err
+			}
+
+			sql := fmt.Sprintf("select account_name from mo_catalog.mo_account where account_id = %d", tenantId)
+			newCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+			res, err := s.exec.Exec(newCtx, sql, opts)
+			if err != nil {
+				return err
+			}
+			var rowCount int
+			res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+				rowCount += rows
+				return true
+			})
+			if rowCount == 0 {
+				res.Close()
+				return nil
+			}
+			res, err = s.exec.Exec(
+				ctx,
+				fmt.Sprintf("delete from %s where table_id = %d",
+					incrTableName, tableID),
+				opts)
+			res.Close()
+			return err
+		},
 		opts)
-	if err != nil {
-		return err
-	}
-	defer res.Close()
-	return nil
 }
 
 func (s *sqlStore) GetColumns(
@@ -283,9 +305,14 @@ func (s *sqlStore) GetColumns(
 	fetchSQL := fmt.Sprintf(`select col_name, col_index, offset, step from %s where table_id = %d order by col_index`,
 		incrTableName,
 		tableID)
-	opts := executor.Options{}.WithDatabase(database).WithTxn(txnOp)
+	opts := executor.Options{}.
+		WithDatabase(database).
+		WithTxn(txnOp)
+
 	if txnOp != nil {
 		opts = opts.WithDisableIncrStatement()
+	} else {
+		opts = opts.WithEnableTrace()
 	}
 
 	res, err := s.exec.Exec(ctx, fetchSQL, opts)
@@ -298,7 +325,7 @@ func (s *sqlStore) GetColumns(
 	var indexes []int32
 	var offsets []uint64
 	var steps []uint64
-	res.ReadRows(func(_ int, cols []*vector.Vector) bool {
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		colNames = append(colNames, executor.GetStringRows(cols[0])...)
 		indexes = append(indexes, executor.GetFixedRows[int32](cols[1])...)
 		offsets = append(offsets, executor.GetFixedRows[uint64](cols[2])...)

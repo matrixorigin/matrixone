@@ -20,8 +20,8 @@ func init() {
 	reuse.CreatePool[Deallocate](
 		func() *Deallocate { return &Deallocate{} },
 		func(d *Deallocate) { d.reset() },
-		reuse.DefaultOptions[Deallocate]().
-			WithEnableChecker())
+		reuse.DefaultOptions[Deallocate](), //.
+	) //WithEnableChecker()
 }
 
 type Deallocate struct {

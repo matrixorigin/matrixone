@@ -18,6 +18,8 @@ import (
 	"math/bits"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -27,8 +29,10 @@ import (
 )
 
 const (
-	HashMapSizeForShuffle           = 160000
+	threshHoldForRightJoinShuffle   = 120000
+	threshHoldForRangeShuffle       = 240000
 	threshHoldForHybirdShuffle      = 4000000
+	threshHoldForHashShuffle        = 8000000
 	MAXShuffleDOP                   = 64
 	ShuffleThreshHoldOfNDV          = 50000
 	ShuffleTypeThreshHoldLowerLimit = 16
@@ -306,9 +310,16 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 		return
 	}
 
-	if n.Stats.HashmapStats.HashmapSize < HashMapSizeForShuffle {
-		return
+	if n.BuildOnLeft {
+		if n.Stats.HashmapStats.HashmapSize < threshHoldForRightJoinShuffle {
+			return
+		}
+	} else {
+		if n.Stats.HashmapStats.HashmapSize < threshHoldForRangeShuffle {
+			return
+		}
 	}
+
 	idx := 0
 	if !builder.IsEquiJoin(n) {
 		return
@@ -336,15 +347,20 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 	}
 
 	// get the column of left child
-	var expr *plan.Expr
+	var expr0, expr1 *plan.Expr
 	cond := n.OnList[idx]
 	switch condImpl := cond.Expr.(type) {
 	case *plan.Expr_F:
-		expr = condImpl.F.Args[0]
+		expr0 = condImpl.F.Args[0]
+		expr1 = condImpl.F.Args[1]
 	}
 
-	hashCol, typ := GetHashColumn(expr)
-	if hashCol == nil {
+	hashCol0, typ := GetHashColumn(expr0)
+	if hashCol0 == nil {
+		return
+	}
+	hashCol1, _ := GetHashColumn(expr1)
+	if hashCol1 == nil {
 		return
 	}
 	//for now ,only support integer and string type
@@ -352,7 +368,10 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
 		n.Stats.HashmapStats.ShuffleColIdx = int32(idx)
 		n.Stats.HashmapStats.Shuffle = true
-		determinShuffleType(hashCol, n, builder)
+		determinShuffleType(hashCol0, n, builder)
+		if n.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Hash && n.Stats.HashmapStats.HashmapSize < threshHoldForHashShuffle {
+			n.Stats.HashmapStats.Shuffle = false
+		}
 	}
 }
 
@@ -387,7 +406,7 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 		return
 	}
 
-	if n.Stats.HashmapStats.HashmapSize < HashMapSizeForShuffle {
+	if n.Stats.HashmapStats.HashmapSize < threshHoldForRangeShuffle {
 		return
 	}
 	//find the highest ndv
@@ -413,6 +432,9 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 		n.Stats.HashmapStats.ShuffleColIdx = int32(idx)
 		n.Stats.HashmapStats.Shuffle = true
 		determinShuffleType(hashCol, n, builder)
+		if n.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Hash && n.Stats.HashmapStats.HashmapSize < threshHoldForHashShuffle {
+			n.Stats.HashmapStats.Shuffle = false
+		}
 	}
 
 	//shuffle join-> shuffle group ,if they use the same hask key, the group can reuse the shuffle method
@@ -439,7 +461,10 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 
 }
 
-func GetShuffleDop() (dop int) {
+func GetShuffleDop(cpunum int) (dop int) {
+	if cpunum < MAXShuffleDOP {
+		return cpunum
+	}
 	return MAXShuffleDOP
 }
 
@@ -449,6 +474,9 @@ func GetShuffleDop() (dop int) {
 func determinShuffleForScan(n *plan.Node, builder *QueryBuilder) {
 	n.Stats.HashmapStats.Shuffle = true
 	n.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Hash
+	if builder.optimizerHints != nil && builder.optimizerHints.determineShuffle == 2 { // always go hashshuffle for scan
+		return
+	}
 	s := builder.getStatsInfoByTableID(n.TableDef.TblId)
 	if s == nil {
 		return
@@ -457,12 +485,12 @@ func determinShuffleForScan(n *plan.Node, builder *QueryBuilder) {
 	var firstSortColName string
 	if n.TableDef.ClusterBy != nil {
 		firstSortColName = util.GetClusterByFirstColumn(n.TableDef.ClusterBy.Name)
-		if s.NdvMap[firstSortColName] < ShuffleThreshHoldOfNDV && n.TableDef.Pkey != nil {
-			firstSortColName = n.TableDef.Pkey.Names[0]
-		}
-	} else if n.TableDef.Pkey != nil {
+	} else if n.TableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+		return
+	} else {
 		firstSortColName = n.TableDef.Pkey.Names[0]
 	}
+
 	if s.NdvMap[firstSortColName] < ShuffleThreshHoldOfNDV {
 		return
 	}
@@ -471,7 +499,7 @@ func determinShuffleForScan(n *plan.Node, builder *QueryBuilder) {
 		return
 	}
 	switch types.T(n.TableDef.Cols[firstSortColID].Typ.Id) {
-	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_char, types.T_varchar, types.T_text, types.T_bit:
+	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_char, types.T_varchar, types.T_text:
 		n.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
 		n.Stats.HashmapStats.ShuffleColIdx = int32(n.TableDef.Cols[firstSortColID].Seqnum)
 		n.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[firstSortColName])
@@ -482,6 +510,9 @@ func determinShuffleForScan(n *plan.Node, builder *QueryBuilder) {
 }
 
 func determineShuffleMethod(nodeID int32, builder *QueryBuilder) {
+	if builder.optimizerHints != nil && builder.optimizerHints.determineShuffle == 1 {
+		return
+	}
 	node := builder.qry.Nodes[nodeID]
 	if len(node.Children) > 0 {
 		for _, child := range node.Children {
@@ -501,6 +532,9 @@ func determineShuffleMethod(nodeID int32, builder *QueryBuilder) {
 
 // second pass of determine shuffle
 func determineShuffleMethod2(nodeID, parentID int32, builder *QueryBuilder) {
+	if builder.optimizerHints != nil && builder.optimizerHints.determineShuffle == 1 {
+		return
+	}
 	node := builder.qry.Nodes[nodeID]
 	if len(node.Children) > 0 {
 		for _, child := range node.Children {
@@ -546,4 +580,16 @@ func shouldUseShuffleRanges(s *pb.ShuffleRange) []float64 {
 		return nil
 	}
 	return s.Result
+}
+
+func IsShuffleChildren(n *plan.Node, ns []*plan.Node) bool {
+	switch n.NodeType {
+	case plan.Node_JOIN:
+		if n.Stats.HashmapStats.Shuffle {
+			return true
+		}
+	case plan.Node_FILTER:
+		return IsShuffleChildren(ns[n.Children[0]], ns)
+	}
+	return false
 }

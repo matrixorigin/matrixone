@@ -27,7 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(RightSemi)
 
 const (
 	Build = iota
@@ -44,7 +44,8 @@ type evalVector struct {
 type container struct {
 	colexec.ReceiverOperator
 
-	state int
+	state   int
+	lastpos int
 
 	inBuckets []uint8
 
@@ -70,23 +71,23 @@ type container struct {
 	handledLast bool
 
 	tmpBatches []*batch.Batch // for reuse
+
+	buf []*batch.Batch
+
+	maxAllocSize int64
 }
 
-type Argument struct {
+type RightSemi struct {
 	ctr        *container
-	Ibucket    uint64
-	Nbucket    uint64
 	Result     []int32
 	RightTypes []types.Type
 	Cond       *plan.Expr
 	Conditions [][]*plan.Expr
-	rbat       []*batch.Batch
-	lastpos    int
 
-	IsMerger bool
-	Channel  chan *bitmap.Bitmap
-	NumCPU   uint64
+	Channel chan *bitmap.Bitmap
+	NumCPU  uint64
 
+	IsMerger           bool
 	HashOnPK           bool
 	IsShuffle          bool
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
@@ -94,51 +95,46 @@ type Argument struct {
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (rightSemi *RightSemi) GetOperatorBase() *vm.OperatorBase {
+	return &rightSemi.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[RightSemi](
+		func() *RightSemi {
+			return &RightSemi{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *RightSemi) {
+			*a = RightSemi{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[RightSemi]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (rightSemi RightSemi) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *RightSemi {
+	return reuse.Alloc[RightSemi](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (rightSemi *RightSemi) Release() {
+	if rightSemi != nil {
+		reuse.Free[RightSemi](rightSemi, nil)
 	}
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := arg.ctr
+func (rightSemi *RightSemi) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	rightSemi.Free(proc, pipelineFailed, err)
+}
+
+func (rightSemi *RightSemi) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := rightSemi.ctr
 	if ctr != nil {
-		if !ctr.handledLast {
-			if arg.NumCPU > 0 {
-				if arg.IsMerger {
-					for i := uint64(1); i < arg.NumCPU; i++ {
-						<-arg.Channel
-					}
-				} else {
-					arg.Channel <- ctr.matched
-				}
-			}
-			ctr.handledLast = true
+		if !ctr.handledLast && rightSemi.NumCPU > 1 && !rightSemi.IsMerger {
+			rightSemi.Channel <- nil
 		}
 		ctr.cleanBatch(proc)
 		ctr.cleanEvalVectors()
@@ -146,12 +142,18 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		ctr.cleanExprExecutor()
 		ctr.FreeAllReg()
 		ctr.tmpBatches = nil
+
+		anal := proc.GetAnalyze(rightSemi.GetIdx(), rightSemi.GetParallelIdx(), rightSemi.GetParallelMajor())
+		anal.Alloc(ctr.maxAllocSize)
+
+		rightSemi.ctr = nil
 	}
 }
 
 func (ctr *container) cleanExprExecutor() {
 	if ctr.expr != nil {
 		ctr.expr.Free()
+		ctr.expr = nil
 	}
 }
 
@@ -160,6 +162,7 @@ func (ctr *container) cleanBatch(proc *process.Process) {
 		proc.PutBatch(ctr.batches[i])
 	}
 	ctr.batches = nil
+
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
@@ -186,5 +189,7 @@ func (ctr *container) cleanEvalVectors() {
 		if ctr.evecs[i].executor != nil {
 			ctr.evecs[i].executor.Free()
 		}
+		ctr.evecs[i].vec = nil
 	}
+	ctr.evecs = nil
 }

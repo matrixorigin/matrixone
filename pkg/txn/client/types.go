@@ -66,7 +66,7 @@ type TxnClient interface {
 	New(ctx context.Context, commitTS timestamp.Timestamp, options ...TxnOption) (TxnOperator, error)
 	// NewWithSnapshot create a txn operator from a snapshot. The snapshot must
 	// be from a CN coordinator txn operator.
-	NewWithSnapshot(snapshot []byte) (TxnOperator, error)
+	NewWithSnapshot(snapshot txn.CNTxnSnapshot) (TxnOperator, error)
 	// Close closes client.sender
 	Close() error
 	// RefreshExpressionEnabled return true if refresh expression feature enabled
@@ -101,6 +101,10 @@ type TxnOperator interface {
 	// GetOverview returns txn overview
 	GetOverview() TxnOverview
 
+	// CloneSnapshotOp clone a read-only snapshot op from parent txn operator
+	CloneSnapshotOp(snapshot timestamp.Timestamp) TxnOperator
+	IsSnapOp() bool
+
 	// Txn returns the current txn metadata
 	Txn() txn.TxnMeta
 	// TxnOptions returns the current txn options
@@ -114,13 +118,15 @@ type TxnOperator interface {
 	// can be used to recover the transaction operation handle at a non-CN coordinator
 	// node, or it can be used to pass information back to the transaction coordinator
 	// after the non-CN coordinator completes the transaction operation.
-	Snapshot() ([]byte, error)
+	Snapshot() (txn.CNTxnSnapshot, error)
 	// UpdateSnapshot in some scenarios, we need to boost the snapshotTimestamp to eliminate
 	// the w-w conflict.
 	// If ts is empty, it will use the latest commit timestamp which is received from DN.
 	UpdateSnapshot(ctx context.Context, ts timestamp.Timestamp) error
 	// SnapshotTS returns the snapshot timestamp of the transaction.
 	SnapshotTS() timestamp.Timestamp
+	// CreateTS returns the creation timestamp of the txnOperator.
+	CreateTS() timestamp.Timestamp
 	// Status returns the current transaction status.
 	Status() txn.TxnStatus
 	// ApplySnapshot CN coordinator applies a snapshot of the non-coordinator's transaction
@@ -156,8 +162,12 @@ type TxnOperator interface {
 	AddWaitLock(tableID uint64, rows [][]byte, opt lock.LockOptions) uint64
 	// RemoveWaitLock remove wait lock for current txn
 	RemoveWaitLock(key uint64)
+	// LockTableCount get quality of lock table
+	LockTableCount() int32
 	// LockSkipped return true if lock need skipped.
 	LockSkipped(tableID uint64, mode lock.LockMode) bool
+
+	GetWaitActiveCost() time.Duration
 
 	// AddWorkspace for the transaction
 	AddWorkspace(workspace Workspace)
@@ -179,6 +189,7 @@ type TxnOperator interface {
 
 	EnterRunSql()
 	ExitRunSql()
+	SetFootPrints(prints [][2]uint32)
 }
 
 // TxnIDGenerator txn id generator
@@ -250,6 +261,13 @@ type Workspace interface {
 
 	IncrSQLCount()
 	GetSQLCount() uint64
+
+	CloneSnapshotWS() Workspace
+
+	BindTxnOp(op TxnOperator)
+
+	SetHaveDDL(flag bool)
+	GetHaveDDL() bool
 }
 
 // TxnOverview txn overview include meta and status
@@ -283,4 +301,12 @@ type TxnEvent struct {
 	Sequence  uint64
 	Cost      time.Duration
 	CostEvent bool
+}
+
+func (e TxnEvent) Committed() bool {
+	return e.Txn.Status == txn.TxnStatus_Committed
+}
+
+func (e TxnEvent) Aborted() bool {
+	return e.Txn.Status == txn.TxnStatus_Aborted
 }

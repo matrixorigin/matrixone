@@ -18,10 +18,11 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 
@@ -40,7 +41,7 @@ const (
 
 // add unit tests for cases
 type groupTestCase struct {
-	arg  *Argument
+	arg  *Group
 	flgs []bool // flgs[i] == true: nullable
 	proc *process.Process
 }
@@ -51,42 +52,42 @@ var (
 
 func init() {
 	tcs = []groupTestCase{
-		newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, []*plan.Expr{}, []agg.Aggregate{{Op: function.AggSumOverloadID, E: newExpression(0)}}),
-		newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, []*plan.Expr{newExpression(0)}, []agg.Aggregate{{Op: function.AggSumOverloadID, E: newExpression(0)}}),
+		newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, nil, 0),
+		newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, []int{0}, 0),
 		newTestCase([]bool{false, true, false, true}, []types.Type{
 			types.T_int8.ToType(),
 			types.T_int16.ToType(),
-		}, []*plan.Expr{newExpression(0), newExpression(1)}, []agg.Aggregate{{Op: function.AggSumOverloadID, E: newExpression(0)}}),
+		}, []int{0, 1}, 0),
 		newTestCase([]bool{false, true, false, true}, []types.Type{
 			types.T_int8.ToType(),
 			types.T_int16.ToType(),
 			types.T_int32.ToType(),
 			types.T_int64.ToType(),
-		}, []*plan.Expr{newExpression(0), newExpression(3)}, []agg.Aggregate{{Op: function.AggSumOverloadID, E: newExpression(0)}}),
+		}, []int{0, 3}, 0),
 		newTestCase([]bool{false, true, false, true}, []types.Type{
 			types.T_int64.ToType(),
 			types.T_int64.ToType(),
 			types.T_int64.ToType(),
 			types.T_decimal128.ToType(),
-		}, []*plan.Expr{newExpression(1), newExpression(3)}, []agg.Aggregate{{Op: function.AggSumOverloadID, E: newExpression(0)}}),
+		}, []int{1, 3}, 0),
 		newTestCase([]bool{false, true, false, true}, []types.Type{
 			types.T_int64.ToType(),
 			types.T_int64.ToType(),
 			types.T_int64.ToType(),
 			types.T_decimal128.ToType(),
-		}, []*plan.Expr{newExpression(1), newExpression(2), newExpression(3)}, []agg.Aggregate{{Op: function.AggSumOverloadID, E: newExpression(0)}}),
+		}, []int{1, 2, 3}, 0),
 		newTestCase([]bool{false, true, false, true}, []types.Type{
 			types.T_int64.ToType(),
 			types.T_int64.ToType(),
 			types.New(types.T_varchar, 2, 0),
 			types.T_decimal128.ToType(),
-		}, []*plan.Expr{newExpression(1), newExpression(2), newExpression(3)}, []agg.Aggregate{{Op: function.AggSumOverloadID, E: newExpression(0)}}),
+		}, []int{1, 2, 3}, 0),
 		newTestCase([]bool{false, true, false, true}, []types.Type{
 			types.T_int64.ToType(),
 			types.T_int64.ToType(),
 			types.T_varchar.ToType(),
 			types.T_decimal128.ToType(),
-		}, []*plan.Expr{newExpression(1), newExpression(2), newExpression(3)}, []agg.Aggregate{{Op: function.AggSumOverloadID, E: newExpression(0)}}),
+		}, []int{1, 2, 3}, 0),
 	}
 }
 
@@ -101,15 +102,43 @@ func TestGroup(t *testing.T) {
 	for _, tc := range tcs {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-
 		bats := []*batch.Batch{
-			newBatch(t, tc.flgs, tc.arg.Types, tc.proc, Rows),
-			newBatch(t, tc.flgs, tc.arg.Types, tc.proc, Rows),
+			newBatch(tc.arg.Types, tc.proc, Rows),
+			newBatch(tc.arg.Types, tc.proc, Rows),
 			batch.EmptyBatch,
+			nil,
 		}
 		resetChildren(tc.arg, bats)
-		_, err = tc.arg.Call(tc.proc)
+		for {
+			result, err1 := tc.arg.Call(tc.proc)
+			require.NoError(t, err1)
+			if result.Status == vm.ExecStop || result.Batch == nil {
+				break
+			}
+			result.Batch.Clean(tc.proc.Mp())
+		}
+
+		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
+		tc.arg.Reset(tc.proc, false, nil)
+
+		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
+		bats = []*batch.Batch{
+			newBatch(tc.arg.Types, tc.proc, Rows),
+			newBatch(tc.arg.Types, tc.proc, Rows),
+			batch.EmptyBatch,
+			nil,
+		}
+		resetChildren(tc.arg, bats)
+
+		for {
+			result, err1 := tc.arg.Call(tc.proc)
+			require.NoError(t, err1)
+			if result.Status == vm.ExecStop || result.Batch == nil {
+				break
+			}
+			result.Batch.Clean(tc.proc.Mp())
+		}
 
 		tc.arg.Free(tc.proc, false, nil)
 		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
@@ -121,21 +150,28 @@ func TestGroup(t *testing.T) {
 func BenchmarkGroup(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		tcs = []groupTestCase{
-			newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, []*plan.Expr{}, []agg.Aggregate{{Op: function.AggSumOverloadID, E: newExpression(0)}}),
-			newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, []*plan.Expr{newExpression(0)}, []agg.Aggregate{{Op: function.AggSumOverloadID, E: newExpression(0)}}),
+			newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, nil, 0),
+			newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, []int{0}, 0),
 		}
 		t := new(testing.T)
 		for _, tc := range tcs {
 			err := tc.arg.Prepare(tc.proc)
 			require.NoError(t, err)
 			bats := []*batch.Batch{
-				newBatch(t, tc.flgs, tc.arg.Types, tc.proc, BenchmarkRows),
-				newBatch(t, tc.flgs, tc.arg.Types, tc.proc, BenchmarkRows),
+				newBatch(tc.arg.Types, tc.proc, BenchmarkRows),
+				newBatch(tc.arg.Types, tc.proc, BenchmarkRows),
 				batch.EmptyBatch,
+				nil,
 			}
 			resetChildren(tc.arg, bats)
-			_, err = tc.arg.Call(tc.proc)
-			require.NoError(t, err)
+			for {
+				result, err1 := tc.arg.Call(tc.proc)
+				require.NoError(t, err1)
+				if result.Status == vm.ExecStop || result.Batch == nil {
+					break
+				}
+				result.Batch.Clean(tc.proc.Mp())
+			}
 
 			tc.arg.Free(tc.proc, false, nil)
 			tc.arg.GetChildren(0).Free(tc.proc, false, nil)
@@ -144,7 +180,14 @@ func BenchmarkGroup(b *testing.B) {
 	}
 }
 
-func newTestCase(flgs []bool, ts []types.Type, exprs []*plan.Expr, aggs []agg.Aggregate) groupTestCase {
+func newTestCase(flgs []bool, ts []types.Type, exprIdx []int, pos int32) groupTestCase {
+	exprs := []*plan.Expr{}
+	for _, idx := range exprIdx {
+		exprs = append(exprs, newExpression(int32(idx), ts))
+	}
+	aggs := []aggexec.AggFuncExecExpression{
+		aggexec.MakeAggFunctionExpression(function.AggSumOverloadID, false, []*plan.Expr{newExpression(pos, ts)}, nil)}
+
 	for _, expr := range exprs {
 		if col, ok := expr.Expr.(*plan.Expr_Col); ok {
 			idx := col.Col.ColPos
@@ -157,8 +200,8 @@ func newTestCase(flgs []bool, ts []types.Type, exprs []*plan.Expr, aggs []agg.Ag
 	}
 	return groupTestCase{
 		flgs: flgs,
-		proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
-		arg: &Argument{
+		proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+		arg: &Group{
 			Exprs: exprs,
 			Types: ts,
 			Aggs:  aggs,
@@ -173,9 +216,9 @@ func newTestCase(flgs []bool, ts []types.Type, exprs []*plan.Expr, aggs []agg.Ag
 	}
 }
 
-func newExpression(pos int32) *plan.Expr {
+func newExpression(pos int32, typs []types.Type) *plan.Expr {
 	return &plan.Expr{
-		Typ: plan.Type{},
+		Typ: plan.Type{Id: int32(typs[pos].Oid)},
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				ColPos: pos,
@@ -185,22 +228,22 @@ func newExpression(pos int32) *plan.Expr {
 }
 
 // create a new block based on the type information, flgs[i] == ture: has null
-func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
+func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
 
-func resetChildren(arg *Argument, bats []*batch.Batch) {
+func resetChildren(arg *Group, bats []*batch.Batch) {
+	valueScanArg := &value_scan.ValueScan{
+		Batchs: bats,
+	}
+	valueScanArg.Prepare(nil)
 	if arg.NumChildren() == 0 {
-		arg.AppendChild(&value_scan.Argument{
-			Batchs: bats,
-		})
+		arg.AppendChild(valueScanArg)
 
 	} else {
 		arg.SetChildren(
 			[]vm.Operator{
-				&value_scan.Argument{
-					Batchs: bats,
-				},
+				valueScanArg,
 			})
 	}
 	arg.ctr.state = vm.Build

@@ -1,0 +1,20 @@
+set @tcp_cnt=3;
+select statement, json_unquote(json_extract(stats, '$[7]')) between (@tcp_cnt-2) and (@tcp_cnt+5) check_val, statement_id, stats, json_extract(stats, '$[7]') pkg_cnt from system.statement_info where account= 'bvt_query_tcp' and statement='select * from 32kb_8192row_int order by a' order by request_at desc limit 1;
+statement    check_val    statement_id    stats    pkg_cnt
+select * from 32kb_8192row_int order by a    true    ignored    ignored    3
+set @tcp_cnt=3;
+select left(statement, 47) stmt, json_unquote(json_extract(stats, '$[7]')) between (@tcp_cnt-2) and (@tcp_cnt+5) check_val, statement_id, stats, json_extract(stats, '$[7]') pkg_cnt from system.statement_info where account= 'bvt_query_tcp' and statement like 'insert into 32kb_8192row_int values (1),(1),(1)%' order by request_at desc limit 1;
+stmt    check_val    statement_id    stats    pkg_cnt
+insert into 32kb_8192row_int values (1),(1),(1)    true    ignored    ignored    3
+set @tcp_cnt=1;
+select left(statement, 16) as stmt, json_unquote(json_extract(stats, '$[7]')) between (@tcp_cnt-2) and (@tcp_cnt+5) check_val, statement_id, stats, json_extract(stats, '$[7]') pkg_cnt from system.statement_info where account= 'bvt_query_tcp' and statement like 'load data infile%rawlog_withnull.csv%' and statement_type = 'Load' order by request_at desc limit 1;
+stmt    check_val    statement_id    stats    pkg_cnt
+load data infile    true    ignored    ignored    1
+set @tcp_cnt=25;
+select left(statement, 22) as stmt, json_unquote(json_extract(stats, '$[7]')) between (@tcp_cnt-2) and (@tcp_cnt+5) check_val, statement_id, stats, json_extract(stats, '$[7]') pkg_cnt from system.statement_info where account= 'bvt_query_tcp' and statement like 'load data local%rawlog_withnull.csv%' and statement_type = 'Load' order by request_at desc limit 1;
+stmt    check_val    statement_id    stats    pkg_cnt
+load data local infile    true    ignored    ignored    25
+set @tcp_cnt=1;
+select statement, json_unquote(json_extract(stats, '$[7]')) between (@tcp_cnt-2) and (@tcp_cnt+5) check_val, statement_id, stats, json_extract(stats, '$[7]') pkg_cnt from system.statement_info where account= 'bvt_query_tcp' and statement='use test' order by request_at desc limit 1;
+statement    check_val    statement_id    stats    pkg_cnt
+use test    true    ignored    ignored    1

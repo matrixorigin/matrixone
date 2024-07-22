@@ -21,15 +21,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/panjf2000/ants/v2"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -47,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -65,6 +64,20 @@ const (
 	ALTER
 	INSERT_TXN // Only for CN workspace consumption, not sent to DN
 	DELETE_TXN // Only for CN workspace consumption, not sent to DN
+
+	MERGEOBJECT
+)
+
+var (
+	typesNames = map[int]string{
+		INSERT:        "insert",
+		DELETE:        "delete",
+		COMPACTION_CN: "compaction_cn",
+		UPDATE:        "update",
+		ALTER:         "alter",
+		INSERT_TXN:    "insert_txn",
+		DELETE_TXN:    "delete_txn",
+	}
 )
 
 const (
@@ -87,9 +100,10 @@ const (
 )
 
 const (
-	WorkspaceThreshold uint64 = 1 * mpool.MB
-	GCBatchOfFileCount int    = 1000
-	GCPoolSize         int    = 5
+	WorkspaceThreshold   uint64 = 1 * mpool.MB
+	InsertEntryThreshold        = 5000
+	GCBatchOfFileCount   int    = 1000
+	GCPoolSize           int    = 5
 )
 
 var (
@@ -108,17 +122,35 @@ type IDGenerator interface {
 
 type Engine struct {
 	sync.RWMutex
-	mp         *mpool.MPool
-	fs         fileservice.FileService
-	ls         lockservice.LockService
-	qc         qclient.QueryClient
-	hakeeper   logservice.CNHAKeeperClient
-	us         udf.Service
-	cli        client.TxnClient
-	idGen      IDGenerator
-	catalog    *cache.CatalogCache
-	tnID       string
+	service  string
+	mp       *mpool.MPool
+	fs       fileservice.FileService
+	ls       lockservice.LockService
+	qc       qclient.QueryClient
+	hakeeper logservice.CNHAKeeperClient
+	us       udf.Service
+	cli      client.TxnClient
+	idGen    IDGenerator
+	tnID     string
+
+	//latest catalog will be loaded from TN when engine is initialized.
+	catalog *cache.CatalogCache
+	//snapshot catalog will be loaded from TN When snapshot read is needed.
+	snapCatalog *struct {
+		sync.Mutex
+		snaps []*cache.CatalogCache
+	}
+	//latest partitions which be protected by e.Lock().
 	partitions map[[2]uint64]*logtailreplay.Partition
+	//snapshot partitions
+	mu struct {
+		sync.Mutex
+		snapParts map[[2]uint64]*struct {
+			sync.Mutex
+			snaps []*logtailreplay.Partition
+		}
+	}
+
 	packerPool *fileservice.Pool[*types.Packer]
 
 	gcPool *ants.Pool
@@ -129,6 +161,9 @@ type Engine struct {
 	// globalStats is the global stats information, which is updated
 	// from logtail updates.
 	globalStats *GlobalStats
+
+	//for message on multiCN, use uuid to get the messageBoard
+	messageCenter *process.MessageCenter
 }
 
 // Transaction represents a transaction
@@ -142,9 +177,6 @@ type Transaction struct {
 	// this is used to name the file on s3 and then give it to tae to use
 	// not-used now
 	// blockId uint64
-
-	// local timestamp for workspace operations
-	//meta     *txn.TxnMeta
 	op       client.TxnOperator
 	sqlCount atomic.Uint64
 
@@ -152,7 +184,8 @@ type Transaction struct {
 	writes []Entry
 	// txn workspace size
 	workspaceSize uint64
-
+	// the total row count for insert entries when txn commits.
+	insertCount int
 	// the last snapshot write offset
 	snapshotWriteOffset int
 
@@ -164,13 +197,15 @@ type Transaction struct {
 	// interim incremental rowid
 	rowId [6]uint32
 	segId types.Uuid
-	// use to cache opened tables on snapshot by current txn.
+	// use to cache opened snapshot tables by current txn.
 	tableCache struct {
 		cachedIndex int
 		tableMap    *sync.Map
 	}
 	// use to cache databases created by current txn.
 	databaseMap *sync.Map
+	// Used to record deleted databases in transactions.
+	deletedDatabaseMap *sync.Map
 	// use to cache tables created by current txn.
 	createMap *sync.Map
 	/*
@@ -208,6 +243,10 @@ type Transaction struct {
 	statementID int
 	//offsets of the txn.writes for statements in a txn.
 	offsets []int
+	//for RC isolation, the txn's snapshot TS for each statement.
+	timestamps []timestamp.Timestamp
+	//the start time of first statement in a txn.
+	start time.Time
 
 	hasS3Op              atomic.Bool
 	removed              bool
@@ -215,6 +254,10 @@ type Transaction struct {
 	incrStatementCalled  bool
 	syncCommittedTSCount uint64
 	pkCount              int
+
+	adjustCount int
+
+	haveDDL atomic.Bool
 }
 
 type Pos struct {
@@ -342,6 +385,25 @@ func (txn *Transaction) WriteOffset() uint64 {
 
 // Adjust adjust writes order after the current statement finished.
 func (txn *Transaction) Adjust(writeOffset uint64) error {
+	start := time.Now()
+	seq := txn.op.NextSequence()
+	trace.GetService(txn.proc.GetService()).AddTxnDurationAction(
+		txn.op,
+		client.WorkspaceAdjustEvent,
+		seq,
+		0,
+		0,
+		nil)
+	defer func() {
+		trace.GetService(txn.proc.GetService()).AddTxnDurationAction(
+			txn.op,
+			client.WorkspaceAdjustEvent,
+			seq,
+			0,
+			time.Since(start),
+			nil)
+	}()
+
 	txn.Lock()
 	defer txn.Unlock()
 	if err := txn.adjustUpdateOrderLocked(writeOffset); err != nil {
@@ -352,7 +414,29 @@ func (txn *Transaction) Adjust(writeOffset uint64) error {
 	if err := txn.mergeTxnWorkspaceLocked(); err != nil {
 		return err
 	}
+
+	txn.traceWorkspaceLocked(false)
 	return nil
+}
+
+func (txn *Transaction) traceWorkspaceLocked(commit bool) {
+	index := txn.adjustCount
+	if commit {
+		index = -1
+	}
+	idx := 0
+	trace.GetService(txn.proc.GetService()).TxnAdjustWorkspace(
+		txn.op,
+		index,
+		func() (tableID uint64, typ string, bat *batch.Batch, more bool) {
+			if idx == len(txn.writes) {
+				return 0, "", nil, false
+			}
+			e := txn.writes[idx]
+			idx++
+			return e.tableId, typesNames[e.typ], e.bat, true
+		})
+	txn.adjustCount++
 }
 
 // The current implementation, update's delete and insert are executed concurrently, inside workspace it
@@ -375,20 +459,21 @@ func (txn *Transaction) adjustUpdateOrderLocked(writeOffset uint64) error {
 	return nil
 }
 
-func (txn *Transaction) gcObjs(start int, ctx context.Context) error {
+func (txn *Transaction) gcObjs(start int) error {
 	objsToGC := make(map[string]struct{})
 	var objsName []string
 	for i := start; i < len(txn.writes); i++ {
-		if txn.writes[i].bat == nil {
+		if txn.writes[i].bat == nil ||
+			txn.writes[i].bat.RowCount() == 0 {
 			continue
 		}
 		//1. Remove blocks from txn.cnBlkId_Pos lazily till txn commits or rollback.
 		//2. Remove the segments generated by this statement lazily till txn commits or rollback.
 		//3. Now, GC the s3 objects(data objects and tombstone objects) asynchronously.
 		if txn.writes[i].fileName != "" {
-			vs := vector.MustStrCol(txn.writes[i].bat.GetVector(0))
-			for _, s := range vs {
-				loc, _ := blockio.EncodeLocationFromString(s)
+			vs, area := vector.MustVarlenaRawData(txn.writes[i].bat.GetVector(0))
+			for i := range vs {
+				loc, _ := blockio.EncodeLocationFromString(vs[i].UnsafeGetString(area))
 				if _, ok := objsToGC[loc.Name().String()]; !ok {
 					objsToGC[loc.Name().String()] = struct{}{}
 					objsName = append(objsName, loc.Name().String())
@@ -448,7 +533,7 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 
 		txn.statementID--
 		end := txn.offsets[txn.statementID]
-		if err := txn.gcObjs(end, ctx); err != nil {
+		if err := txn.gcObjs(end); err != nil {
 			panic("to gc objects generated by CN failed")
 		}
 		for i := end; i < len(txn.writes); i++ {
@@ -459,6 +544,7 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 		}
 		txn.writes = txn.writes[:end]
 		txn.offsets = txn.offsets[:txn.statementID]
+		txn.timestamps = txn.timestamps[:txn.statementID]
 	}
 	// rollback current statement's writes info
 	for b := range txn.batchSelectList {
@@ -473,7 +559,7 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 }
 func (txn *Transaction) resetSnapshot() error {
 	txn.tableCache.tableMap.Range(func(key, value interface{}) bool {
-		value.(*txnTable).resetSnapshot()
+		value.(*txnTableDelegate).origin.resetSnapshot()
 		return true
 	})
 	return nil
@@ -494,14 +580,14 @@ func (txn *Transaction) GetSQLCount() uint64 {
 // 2. not first sql
 func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) error {
 	needResetSnapshot := false
-	newTimes := txn.proc.TxnClient.GetSyncLatestCommitTSTimes()
+	newTimes := txn.proc.Base.TxnClient.GetSyncLatestCommitTSTimes()
 	if newTimes > txn.syncCommittedTSCount {
 		txn.syncCommittedTSCount = newTimes
 		needResetSnapshot = true
 	}
 	if !commit && txn.op.Txn().IsRCIsolation() &&
-		(txn.GetSQLCount() > 1 || needResetSnapshot) {
-		trace.GetService().TxnUpdateSnapshot(
+		(txn.GetSQLCount() > 0 || needResetSnapshot) {
+		trace.GetService(txn.proc.GetService()).TxnUpdateSnapshot(
 			txn.op,
 			0,
 			"before execute")
@@ -512,7 +598,8 @@ func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) error
 		}
 		txn.resetSnapshot()
 	}
-	return nil
+	//Transfer row ids for deletes in RC isolation
+	return txn.transferDeletesLocked(ctx, commit)
 }
 
 // Entry represents a delete/insert
@@ -558,7 +645,10 @@ type txnDatabase struct {
 	databaseName      string
 	databaseType      string
 	databaseCreateSql string
-	txn               *Transaction
+	//txn               *Transaction
+	op client.TxnOperator
+
+	rowId types.Rowid
 }
 
 type tableKey struct {
@@ -582,26 +672,13 @@ type txnTable struct {
 	tableId   uint64
 	version   uint32
 	tableName string
-	tnList    []int
 	db        *txnDatabase
 	//	insertExpr *plan.Expr
-	defs       []engine.TableDef
-	tableDef   *plan.TableDef
-	seqnums    []uint16
-	typs       []types.Type
-	_partState *logtailreplay.PartitionState
-
-	// objInofs stores all the data object infos for this table of this transaction
-	// it is only generated when the table is not created by this transaction
-	// it is initialized by updateObjectInfos and once it is initialized, it will not be updated
-	//objInfos []logtailreplay.ObjectEntry
-
-	// specify whether the objInfos is updated. once it is updated, it will not be updated again
-	//TODO::remove it in next PR.
-	objInfosUpdated bool
-	// specify whether the logtail is updated. once it is updated, it will not be updated again
-	logtailUpdated bool
-
+	defs          []engine.TableDef
+	tableDef      *plan.TableDef
+	seqnums       []uint16
+	typs          []types.Type
+	_partState    atomic.Pointer[logtailreplay.PartitionState]
 	primaryIdx    int // -1 means no primary key
 	primarySeqnum int // -1 means no primary key
 	clusterByIdx  int // -1 means no clusterBy key
@@ -631,6 +708,7 @@ type txnTable struct {
 	proc atomic.Pointer[process.Process]
 
 	createByStatementID int
+	enableLogFilterExpr atomic.Bool
 }
 
 type column struct {
@@ -671,10 +749,7 @@ type withFilterMixin struct {
 		colTypes []types.Type
 		// colNulls []bool
 
-		compPKPositions []uint16 // composite primary key pos in the columns
-
-		pkPos    int // -1 means no primary key in columns
-		rowidPos int // -1 means no rowid in columns
+		pkPos int // -1 means no primary key in columns
 
 		indexOfFirstSortedColumn int
 	}
@@ -683,7 +758,7 @@ type withFilterMixin struct {
 		evaluated bool
 		//point select for primary key
 		expr     *plan.Expr
-		filter   blockio.ReadFilter
+		filter   blockio.BlockReadFilter
 		seqnums  []uint16 // seqnums of the columns in the filter
 		colTypes []types.Type
 		hasNull  bool
@@ -722,10 +797,9 @@ type blockReader struct {
 
 type blockMergeReader struct {
 	*blockReader
-	table *txnTable
-
-	encodedPrimaryKey []byte
-
+	table     *txnTable
+	txnOffset int // Transaction writes offset used to specify the starting position for reading data.
+	pkFilter  memPKFilter
 	//for perfetch deletes
 	loaded     bool
 	pkidx      int

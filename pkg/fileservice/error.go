@@ -17,14 +17,21 @@ package fileservice
 import (
 	"errors"
 	"io"
+	"net"
 	"strings"
 )
 
-func isRetryableError(err error) bool {
-	// Is error
+func IsRetryableError(err error) bool {
+	// unexpected EOF
 	if errors.Is(err, io.ErrUnexpectedEOF) {
 		return true
 	}
+
+	// net timeout
+	if e, ok := err.(net.Error); ok && e.Timeout() {
+		return true
+	}
+
 	str := err.Error()
 	// match exact string
 	switch str {
@@ -33,18 +40,17 @@ func isRetryableError(err error) bool {
 		return true
 	}
 	// match sub-string
-	if strings.Contains(str, "unexpected EOF") {
+	if strings.Contains(str, "unexpected EOF") ||
+		strings.Contains(str, "connection reset by peer") ||
+		strings.Contains(str, "connection timed out") ||
+		strings.Contains(str, "dial tcp: lookup") ||
+		strings.Contains(str, "i/o timeout") ||
+		strings.Contains(str, "write: broken pipe") ||
+		strings.Contains(str, "TLS handshake timeout") ||
+		strings.Contains(str, "use of closed network connection") {
 		return true
 	}
-	if strings.Contains(str, "connection reset by peer") {
-		return true
-	}
-	if strings.Contains(str, "connection timed out") {
-		return true
-	}
-	if strings.Contains(str, "dial tcp: lookup") {
-		return true
-	}
+
 	return false
 }
 

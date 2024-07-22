@@ -23,10 +23,11 @@ import (
 
 var (
 	defaultLockListenAddress      = "127.0.0.1:6003"
-	defaultMaxLockRowCount        = 1024
-	defaultMaxFixedSliceSize      = 1 << 20 // 1mb
+	defaultMaxLockRowCount        = 1000000
+	defaultMaxFixedSliceSize      = 1 << 20 * 10 // 10mb
 	defaultKeepRemoteLockDuration = time.Second
 	defaultKeepBindTimeout        = time.Second * 10
+	defaultRemoteLockTimeout      = time.Minute * 1
 )
 
 // Config lock service config
@@ -35,6 +36,11 @@ type Config struct {
 	ServiceID string `toml:"-"`
 	// RPC rpc config
 	RPC morpc.Config `toml:"-"`
+	// TxnIterFunc used to iterate all active transactions in current cn
+	TxnIterFunc func(func([]byte) bool) `toml:"-"`
+	// disconnectAfterRead for testing
+	disconnectAfterRead      int           `toml:"-"`
+	removeDisconnectDuration time.Duration `toml:"-"`
 
 	// ListenAddress lock service listen address for receiving lock requests
 	ListenAddress string `toml:"listen-address"`
@@ -84,6 +90,9 @@ func (c *Config) Validate() {
 	if c.MaxFixedSliceSize == 0 {
 		c.MaxFixedSliceSize = toml.ByteSize(defaultMaxFixedSliceSize)
 	}
+	if c.MaxLockRowCount > c.MaxFixedSliceSize {
+		panic("This parameter configuration may trigger scenarios that violate MaxFixedSliceSize")
+	}
 	if c.KeepBindDuration.Duration == 0 {
 		c.KeepBindDuration.Duration = time.Second
 	}
@@ -91,7 +100,7 @@ func (c *Config) Validate() {
 		c.KeepRemoteLockDuration.Duration = defaultKeepRemoteLockDuration
 	}
 	if c.RemoteLockTimeout.Duration == 0 {
-		c.RemoteLockTimeout.Duration = c.KeepRemoteLockDuration.Duration * 10
+		c.RemoteLockTimeout.Duration = defaultRemoteLockTimeout
 	}
 	if c.KeepBindTimeout.Duration == 0 {
 		c.KeepBindTimeout.Duration = defaultKeepBindTimeout

@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -113,7 +114,7 @@ func (db *txnDB) Append(ctx context.Context, id uint64, bat *containers.Batch) e
 	return table.Append(ctx, bat)
 }
 
-func (db *txnDB) AddBlksWithMetaLoc(
+func (db *txnDB) AddObjsWithMetaLoc(
 	ctx context.Context,
 	tid uint64,
 	stats containers.Vector) error {
@@ -124,7 +125,7 @@ func (db *txnDB) AddBlksWithMetaLoc(
 	if table.IsDeleted() {
 		return moerr.NewNotFoundNoCtx()
 	}
-	return table.AddBlksWithMetaLoc(ctx, stats)
+	return table.AddObjsWithMetaLoc(ctx, stats)
 }
 
 // func (db *txnDB) DeleteOne(table *txnTable, id *common.ID, row uint32, dt handle.DeleteType) (err error) {
@@ -306,19 +307,19 @@ func (db *txnDB) GetObject(id *common.ID) (obj handle.Object, err error) {
 	return table.GetObject(id.ObjectID())
 }
 
-func (db *txnDB) CreateObject(tid uint64, is1PC bool) (obj handle.Object, err error) {
+func (db *txnDB) CreateObject(tid uint64) (obj handle.Object, err error) {
 	var table *txnTable
 	if table, err = db.getOrSetTable(tid); err != nil {
 		return
 	}
-	return table.CreateObject(is1PC)
+	return table.CreateObject()
 }
-func (db *txnDB) CreateNonAppendableObject(tid uint64, is1PC bool, opt *objectio.CreateObjOpt) (obj handle.Object, err error) {
+func (db *txnDB) CreateNonAppendableObject(tid uint64, opt *objectio.CreateObjOpt) (obj handle.Object, err error) {
 	var table *txnTable
 	if table, err = db.getOrSetTable(tid); err != nil {
 		return
 	}
-	return table.CreateNonAppendableObject(is1PC, opt)
+	return table.CreateNonAppendableObject(opt)
 }
 
 func (db *txnDB) UpdateObjectStats(id *common.ID, stats *objectio.ObjectStats) error {
@@ -358,44 +359,6 @@ func (db *txnDB) getOrSetTable(id uint64) (table *txnTable, err error) {
 	return
 }
 
-func (db *txnDB) CreateNonAppendableBlock(id *common.ID, opts *objectio.CreateBlockOpt) (blk handle.Block, err error) {
-	var table *txnTable
-	if table, err = db.getOrSetTable(id.TableID); err != nil {
-		return
-	}
-	return table.CreateNonAppendableBlock(id.ObjectID(), opts)
-}
-
-func (db *txnDB) GetBlock(id *common.ID) (blk handle.Block, err error) {
-	var table *txnTable
-	if table, err = db.getOrSetTable(id.TableID); err != nil {
-		return
-	}
-	return table.GetBlock(id)
-}
-
-func (db *txnDB) CreateBlock(id *common.ID, is1PC bool) (blk handle.Block, err error) {
-	var table *txnTable
-	if table, err = db.getOrSetTable(id.TableID); err != nil {
-		return
-	}
-	return table.CreateBlock(id.ObjectID(), is1PC)
-}
-
-func (db *txnDB) SoftDeleteBlock(id *common.ID) (err error) {
-	var table *txnTable
-	if table, err = db.getOrSetTable(id.TableID); err != nil {
-		return
-	}
-	return table.SoftDeleteBlock(id)
-}
-func (db *txnDB) UpdateMetaLoc(id *common.ID, metaLoc objectio.Location) (err error) {
-	var table *txnTable
-	if table, err = db.getOrSetTable(id.TableID); err != nil {
-		return
-	}
-	return table.UpdateMetaLoc(id, metaLoc)
-}
 func (db *txnDB) UpdateDeltaLoc(id *common.ID, deltaLoc objectio.Location) (err error) {
 	var table *txnTable
 	if table, err = db.getOrSetTable(id.TableID); err != nil {
@@ -438,28 +401,11 @@ func (db *txnDB) WaitPrepared() (err error) {
 	}
 	return
 }
-func (db *txnDB) Apply1PCCommit() (err error) {
-	if db.createEntry != nil && db.createEntry.Is1PC() {
-		if err = db.createEntry.ApplyCommit(); err != nil {
-			return
-		}
-	}
-	for _, table := range db.tables {
-		if err = table.Apply1PCCommit(); err != nil {
-			break
-		}
-	}
-	if db.dropEntry != nil && db.dropEntry.Is1PC() {
-		if err = db.dropEntry.ApplyCommit(); err != nil {
-			return
-		}
-	}
-	return
-}
+
 func (db *txnDB) ApplyCommit() (err error) {
 	now := time.Now()
-	if db.createEntry != nil && !db.createEntry.Is1PC() {
-		if err = db.createEntry.ApplyCommit(); err != nil {
+	if db.createEntry != nil {
+		if err = db.createEntry.ApplyCommit(db.store.txn.GetID()); err != nil {
 			return
 		}
 	}
@@ -468,8 +414,8 @@ func (db *txnDB) ApplyCommit() (err error) {
 			break
 		}
 	}
-	if db.dropEntry != nil && !db.dropEntry.Is1PC() {
-		if err = db.dropEntry.ApplyCommit(); err != nil {
+	if db.dropEntry != nil {
+		if err = db.dropEntry.ApplyCommit(db.store.txn.GetID()); err != nil {
 			return
 		}
 	}
@@ -502,11 +448,15 @@ func (db *txnDB) PrePrepare(ctx context.Context) (err error) {
 			return
 		}
 	}
+
+	now := time.Now()
 	for _, table := range db.tables {
 		if err = table.PrePrepareDedup(ctx); err != nil {
 			return
 		}
 	}
+	v2.TxnTNPrePrepareDeduplicateDurationHistogram.Observe(time.Since(now).Seconds())
+
 	for _, table := range db.tables {
 		if err = table.PrePrepare(); err != nil {
 			return

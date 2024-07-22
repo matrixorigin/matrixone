@@ -151,19 +151,10 @@ func AllocS3Writer(proc *process.Process, tableDef *plan.TableDef) (*S3Writer, e
 
 	// Get Single Col pk index
 	for idx, colDef := range tableDef.Cols {
-		// Maybe current table are `mo_cloumns`, `mo_tables` or `mo_databases`, these table's `TableDef.Pkey` is NULL
-		if tableDef.Pkey == nil {
-			if colDef.Primary {
-				writer.sortIndex = idx
-				writer.pk = idx
-				break
-			}
-		} else {
-			if colDef.Name == tableDef.Pkey.PkeyColName && colDef.Name != catalog.FakePrimaryKeyColName {
-				writer.sortIndex = idx
-				writer.pk = idx
-				break
-			}
+		if colDef.Name == tableDef.Pkey.PkeyColName && colDef.Name != catalog.FakePrimaryKeyColName {
+			writer.sortIndex = idx
+			writer.pk = idx
+			break
 		}
 	}
 
@@ -400,7 +391,7 @@ func getFixedCols[T types.FixedSizeT](bats []*batch.Batch, idx int) (cols [][]T)
 func getStrCols(bats []*batch.Batch, idx int) (cols [][]string) {
 	cols = make([][]string, 0, len(bats))
 	for i := range bats {
-		cols = append(cols, vector.MustStrCol(bats[i].Vecs[idx]))
+		cols = append(cols, vector.InefficientMustStrCol(bats[i].Vecs[idx]))
 	}
 	return
 }
@@ -442,47 +433,47 @@ func (w *S3Writer) SortAndFlush(proc *process.Process) error {
 		pos := w.sortIndex
 		switch w.Bats[0].Vecs[sortIdx].GetType().Oid {
 		case types.T_bool:
-			merge = NewMerge(len(w.Bats), sort.NewBoolLess(), getFixedCols[bool](w.Bats, pos), nulls)
+			merge = newMerge(len(w.Bats), sort.BoolLess, getFixedCols[bool](w.Bats, pos), nulls)
 		case types.T_bit:
-			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[uint64](), getFixedCols[uint64](w.Bats, pos), nulls)
+			merge = newMerge(len(w.Bats), sort.GenericLess[uint64], getFixedCols[uint64](w.Bats, pos), nulls)
 		case types.T_int8:
-			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[int8](), getFixedCols[int8](w.Bats, pos), nulls)
+			merge = newMerge(len(w.Bats), sort.GenericLess[int8], getFixedCols[int8](w.Bats, pos), nulls)
 		case types.T_int16:
-			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[int16](), getFixedCols[int16](w.Bats, pos), nulls)
+			merge = newMerge(len(w.Bats), sort.GenericLess[int16], getFixedCols[int16](w.Bats, pos), nulls)
 		case types.T_int32:
-			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[int32](), getFixedCols[int32](w.Bats, pos), nulls)
+			merge = newMerge(len(w.Bats), sort.GenericLess[int32], getFixedCols[int32](w.Bats, pos), nulls)
 		case types.T_int64:
-			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[int64](), getFixedCols[int64](w.Bats, pos), nulls)
+			merge = newMerge(len(w.Bats), sort.GenericLess[int64], getFixedCols[int64](w.Bats, pos), nulls)
 		case types.T_uint8:
-			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[uint8](), getFixedCols[uint8](w.Bats, pos), nulls)
+			merge = newMerge(len(w.Bats), sort.GenericLess[uint8], getFixedCols[uint8](w.Bats, pos), nulls)
 		case types.T_uint16:
-			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[uint16](), getFixedCols[uint16](w.Bats, pos), nulls)
+			merge = newMerge(len(w.Bats), sort.GenericLess[uint16], getFixedCols[uint16](w.Bats, pos), nulls)
 		case types.T_uint32:
-			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[uint32](), getFixedCols[uint32](w.Bats, pos), nulls)
+			merge = newMerge(len(w.Bats), sort.GenericLess[uint32], getFixedCols[uint32](w.Bats, pos), nulls)
 		case types.T_uint64:
-			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[uint64](), getFixedCols[uint64](w.Bats, pos), nulls)
+			merge = newMerge(len(w.Bats), sort.GenericLess[uint64], getFixedCols[uint64](w.Bats, pos), nulls)
 		case types.T_float32:
-			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[float32](), getFixedCols[float32](w.Bats, pos), nulls)
+			merge = newMerge(len(w.Bats), sort.GenericLess[float32], getFixedCols[float32](w.Bats, pos), nulls)
 		case types.T_float64:
-			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[float64](), getFixedCols[float64](w.Bats, pos), nulls)
+			merge = newMerge(len(w.Bats), sort.GenericLess[float64], getFixedCols[float64](w.Bats, pos), nulls)
 		case types.T_date:
-			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[types.Date](), getFixedCols[types.Date](w.Bats, pos), nulls)
+			merge = newMerge(len(w.Bats), sort.GenericLess[types.Date], getFixedCols[types.Date](w.Bats, pos), nulls)
 		case types.T_datetime:
-			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[types.Datetime](), getFixedCols[types.Datetime](w.Bats, pos), nulls)
+			merge = newMerge(len(w.Bats), sort.GenericLess[types.Datetime], getFixedCols[types.Datetime](w.Bats, pos), nulls)
 		case types.T_time:
-			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[types.Time](), getFixedCols[types.Time](w.Bats, pos), nulls)
+			merge = newMerge(len(w.Bats), sort.GenericLess[types.Time], getFixedCols[types.Time](w.Bats, pos), nulls)
 		case types.T_timestamp:
-			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[types.Timestamp](), getFixedCols[types.Timestamp](w.Bats, pos), nulls)
+			merge = newMerge(len(w.Bats), sort.GenericLess[types.Timestamp], getFixedCols[types.Timestamp](w.Bats, pos), nulls)
 		case types.T_enum:
-			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[types.Enum](), getFixedCols[types.Enum](w.Bats, pos), nulls)
+			merge = newMerge(len(w.Bats), sort.GenericLess[types.Enum], getFixedCols[types.Enum](w.Bats, pos), nulls)
 		case types.T_decimal64:
-			merge = NewMerge(len(w.Bats), sort.NewDecimal64Less(), getFixedCols[types.Decimal64](w.Bats, pos), nulls)
+			merge = newMerge(len(w.Bats), sort.Decimal64Less, getFixedCols[types.Decimal64](w.Bats, pos), nulls)
 		case types.T_decimal128:
-			merge = NewMerge(len(w.Bats), sort.NewDecimal128Less(), getFixedCols[types.Decimal128](w.Bats, pos), nulls)
+			merge = newMerge(len(w.Bats), sort.Decimal128Less, getFixedCols[types.Decimal128](w.Bats, pos), nulls)
 		case types.T_uuid:
-			merge = NewMerge(len(w.Bats), sort.NewUuidCompLess(), getFixedCols[types.Uuid](w.Bats, pos), nulls)
+			merge = newMerge(len(w.Bats), sort.UuidLess, getFixedCols[types.Uuid](w.Bats, pos), nulls)
 		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
-			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[string](), getStrCols(w.Bats, pos), nulls)
+			merge = newMerge(len(w.Bats), sort.GenericLess[string], getStrCols(w.Bats, pos), nulls)
 			//TODO: check if we need T_array here? T_json is missing here.
 			// Update Oct 20 2023: I don't think it is necessary to add T_array here. Keeping this comment,
 			// in case anything fails in vector S3 flush in future.
@@ -496,7 +487,7 @@ func (w *S3Writer) SortAndFlush(proc *process.Process) error {
 		var batchIndex int
 		var rowIndex int
 		for size > 0 {
-			batchIndex, rowIndex, size = merge.GetNextPos()
+			batchIndex, rowIndex, size = merge.getNextPos()
 			for i := range w.buffer.Vecs {
 				err := w.buffer.Vecs[i].UnionOne(w.Bats[batchIndex].Vecs[i], int64(rowIndex), proc.GetMPool())
 				if err != nil {
@@ -570,7 +561,7 @@ func (w *S3Writer) generateWriter(proc *process.Process) (objectio.ObjectName, e
 	// Use uuid as segment id
 	// TODO: multiple 64m file in one segment
 	obj := Get().GenerateObject()
-	s3, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
+	s3, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
 	if err != nil {
 		return nil, err
 	}
@@ -594,23 +585,17 @@ func sortByKey(proc *process.Process, bat *batch.Batch, sortIndex int, allow_nul
 				sortIndex, bat.Attrs[sortIndex])
 		}
 	}
-	var strCol []string
 	rowCount := bat.RowCount()
 	sels := make([]int64, rowCount)
 	for i := 0; i < rowCount; i++ {
 		sels[i] = int64(i)
 	}
 	ovec := bat.GetVector(int32(sortIndex))
-	if ovec.GetType().IsVarlen() {
-		strCol = vector.MustStrCol(ovec)
-	} else {
-		strCol = nil
-	}
 	if allow_null {
 		// null last
-		sort.Sort(false, true, hasNull, sels, ovec, strCol)
+		sort.Sort(false, true, hasNull, sels, ovec)
 	} else {
-		sort.Sort(false, false, hasNull, sels, ovec, strCol)
+		sort.Sort(false, false, hasNull, sels, ovec)
 	}
 	return bat.Shuffle(sels, m)
 }
@@ -706,9 +691,6 @@ func (w *S3Writer) WriteEndBlocks(proc *process.Process) ([]objectio.BlockInfo, 
 			blocks[j].GetID(),
 		)
 
-		if err != nil {
-			return nil, nil, err
-		}
 		sid := location.Name().SegmentId()
 		blkInfo := objectio.BlockInfo{
 			BlockID: *objectio.NewBlockid(

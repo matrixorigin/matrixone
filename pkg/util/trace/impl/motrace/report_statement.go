@@ -17,6 +17,7 @@ package motrace
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -31,6 +32,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 
 	"github.com/google/uuid"
@@ -59,7 +62,6 @@ func mustDecimal128(v types.Decimal128, err error) types.Decimal128 {
 }
 
 func StatementInfoNew(i Item, ctx context.Context) Item {
-	stmt := NewStatementInfo() // Get a new statement from the pool
 	if s, ok := i.(*StatementInfo); ok {
 
 		// execute the stat plan
@@ -71,36 +73,15 @@ func StatementInfoNew(i Item, ctx context.Context) Item {
 		s.exported = true
 
 		// copy value
-		stmt.StatementID = s.StatementID
-		stmt.SessionID = s.SessionID
-		stmt.TransactionID = s.TransactionID
-		stmt.Account = s.Account
-		stmt.User = s.User
-		stmt.Host = s.Host
-		stmt.RoleId = s.RoleId
-		stmt.StatementType = s.StatementType
-		stmt.QueryType = s.QueryType
-		stmt.SqlSourceType = s.SqlSourceType
-		stmt.Statement = s.Statement
-		stmt.StmtBuilder.WriteString(s.Statement)
-		stmt.Status = s.Status
-		stmt.Duration = s.Duration
-		stmt.ResultCount = s.ResultCount
-		stmt.RowsRead = s.RowsRead
-		stmt.BytesScan = s.BytesScan
-		stmt.ConnType = s.ConnType
-		stmt.statsArray = s.statsArray
-		stmt.RequestAt = s.RequestAt
-		stmt.ResponseAt = s.ResponseAt
-		stmt.end = s.end
-		stmt.StatementTag = s.StatementTag
-		stmt.StatementFingerprint = s.StatementFingerprint
-		stmt.Error = s.Error
-		stmt.Database = s.Database
-		stmt.AggrMemoryTime = s.AggrMemoryTime
+		stmt := s.CloneWithoutExecPlan() // Get a new statement from the pool
+		stmt.exported = false
 
 		// initialize the AggrCount as 0 here since aggr is not started
 		stmt.AggrCount = 0
+		// fixme: StmtBuilder maybe not best choose
+		stmt.StmtBuilder.Reset()
+		stmt.StmtBuilder.WriteString(s.Statement)
+
 		return stmt
 	}
 	return nil
@@ -159,6 +140,11 @@ func StatementInfoFilter(i Item) bool {
 
 	// Do not aggr the running statement
 	if statementInfo.Status == StatementStatusRunning {
+		return false
+	}
+
+	// for #14926
+	if statementInfo.statsArray.GetCU() < 0 {
 		return false
 	}
 
@@ -239,6 +225,7 @@ type StatementInfo struct {
 	// keep []byte as elem
 	jsonByte   []byte
 	statsArray statistic.StatsArray
+	stated     bool
 
 	// skipTxnOnce, readonly, for flow control
 	// see more on NeedSkipTxn() and SkipTxnId()
@@ -263,6 +250,7 @@ var stmtPool = sync.Pool{
 func NewStatementInfo() *StatementInfo {
 	s := stmtPool.Get().(*StatementInfo)
 	s.statsArray.Reset()
+	s.stated = false
 	return s
 }
 
@@ -277,6 +265,10 @@ func (s *StatementInfo) Key(duration time.Duration) interface{} {
 
 func (s *StatementInfo) GetName() string {
 	return SingleStatementTable.GetName()
+}
+
+func (s *StatementInfo) IsMoLogger() bool {
+	return s.Account == "sys" && s.User == db_holder.MOLoggerUser
 }
 
 // deltaContentLength approximate value that may gen as table record
@@ -358,10 +350,53 @@ func (s *StatementInfo) free() {
 	// clean []byte
 	s.jsonByte = nil
 	s.statsArray.Reset()
+	s.stated = false
 	// clean skipTxn ctrl
 	s.skipTxnOnce = false
 	s.skipTxnID = nil
 	stmtPool.Put(s)
+}
+
+func (s *StatementInfo) CloneWithoutExecPlan() *StatementInfo {
+	stmt := NewStatementInfo() // Get a new statement from the pool
+	stmt.StatementID = s.StatementID
+	stmt.SessionID = s.SessionID
+	stmt.TransactionID = s.TransactionID
+	stmt.Account = s.Account
+	stmt.User = s.User
+	stmt.Host = s.Host
+	stmt.RoleId = s.RoleId
+	stmt.Database = s.Database
+	stmt.Statement = s.Statement
+	// s.StmtBuilder.Reset()
+	stmt.StatementFingerprint = s.StatementFingerprint
+	stmt.StatementTag = s.StatementTag
+	stmt.SqlSourceType = s.SqlSourceType
+	stmt.RequestAt = s.RequestAt
+	stmt.StatementType = s.StatementType
+	stmt.QueryType = s.QueryType
+	stmt.Status = s.Status
+	stmt.Error = s.Error
+	stmt.ResponseAt = s.ResponseAt
+	stmt.Duration = s.Duration
+	stmt.ExecPlan = nil // without ExecPlan
+	stmt.RowsRead = s.RowsRead
+	stmt.BytesScan = s.BytesScan
+	stmt.AggrCount = s.AggrCount
+	stmt.AggrMemoryTime = s.AggrMemoryTime // mark
+	stmt.ResultCount = s.ResultCount
+	stmt.ConnType = s.ConnType
+	stmt.end = s.end
+	stmt.reported = s.reported
+	stmt.exported = s.exported
+	// bytes element
+	stmt.jsonByte = nil // without ExecPlan
+	stmt.statsArray = s.statsArray
+	stmt.stated = s.stated
+	// part: skipTxn ctrl
+	stmt.skipTxnOnce = s.skipTxnOnce
+	stmt.skipTxnID = s.skipTxnID
+	return stmt
 }
 
 func (s *StatementInfo) GetTable() *table.Table { return SingleStatementTable }
@@ -373,7 +408,7 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 	row.Reset()
 	row.SetColumnVal(stmtIDCol, table.UuidField(s.StatementID[:]))
 	if !s.IsZeroTxnID() {
-		row.SetColumnVal(txnIDCol, table.UuidField(s.TransactionID[:]))
+		row.SetColumnVal(txnIDCol, table.StringField(hex.EncodeToString(s.TransactionID[:])))
 	}
 	row.SetColumnVal(sesIDCol, table.UuidField(s.SessionID[:]))
 	row.SetColumnVal(accountCol, table.StringField(s.Account))
@@ -405,7 +440,8 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 		float64Val := calculateAggrMemoryBytes(s.AggrMemoryTime, float64(s.Duration))
 		s.statsArray.WithMemorySize(float64Val)
 	}
-	stats := s.ExecPlan2Stats(ctx)
+	// stats := s.ExecPlan2Stats(ctx) // deprecated
+	stats := s.GetStatsArrayBytes()
 	if GetTracerProvider().disableSqlWriter {
 		// Be careful, this two string is unsafe, will be free after Free
 		row.SetColumnVal(execPlanCol, table.StringField(util.UnsafeBytesToString(execPlan)))
@@ -449,14 +485,15 @@ func mergeStats(e, n *StatementInfo) error {
 	return nil
 }
 
+var noExecPlan = []byte(`{}`)
+
 // ExecPlan2Json return ExecPlan Serialized json-str //
 // please used in s.mux.Lock()
 func (s *StatementInfo) ExecPlan2Json(ctx context.Context) []byte {
 	if s.jsonByte != nil {
 		goto endL
 	} else if s.ExecPlan == nil {
-		uuidStr := uuid.UUID(s.StatementID).String()
-		return []byte(fmt.Sprintf(`{"code":200,"message":"NO ExecPlan Serialize function","steps":null,"uuid":%q}`, uuidStr))
+		return noExecPlan
 	} else {
 		s.jsonByte = s.ExecPlan.Marshal(ctx)
 		//if queryTime := GetTracerProvider().longQueryTime; queryTime > int64(s.Duration) {
@@ -470,16 +507,12 @@ endL:
 
 // ExecPlan2Stats return Stats Serialized int array str
 // and set RowsRead, BytesScan from ExecPlan
-func (s *StatementInfo) ExecPlan2Stats(ctx context.Context) []byte {
+// and CalculateCU
+func (s *StatementInfo) ExecPlan2Stats(ctx context.Context) error {
 	var stats Statistic
 	var statsArray statistic.StatsArray
 
-	if s.ExecPlan == nil {
-		if s.statsArray.GetVersion() == 0 {
-			s.statsArray.Init()
-		}
-		return s.statsArray.ToJsonString()
-	} else {
+	if s.ExecPlan != nil && !s.stated {
 		statsArray, stats = s.ExecPlan.Stats(ctx)
 		if s.statsArray.GetTimeConsumed() > 0 {
 			logutil.GetSkip1Logger().Error("statsArray.GetTimeConsumed() > 0",
@@ -490,8 +523,15 @@ func (s *StatementInfo) ExecPlan2Stats(ctx context.Context) []byte {
 		s.statsArray.WithConnType(s.ConnType)
 		s.RowsRead = stats.RowsRead
 		s.BytesScan = stats.BytesScan
-		return s.statsArray.ToJsonString()
+		s.stated = true
 	}
+	cu := CalculateCU(s.statsArray, int64(s.Duration))
+	s.statsArray.WithCU(cu)
+	return nil
+}
+
+func (s *StatementInfo) GetStatsArrayBytes() []byte {
+	return s.statsArray.ToJsonString()
 }
 
 // SetSkipTxn set skip txn flag, cooperate with SetSkipTxnId()
@@ -536,9 +576,12 @@ func (s *StatementInfo) SetTxnID(id []byte) {
 }
 
 func (s *StatementInfo) IsZeroTxnID() bool {
-	return bytes.Equal(s.TransactionID[:], NilTxnID[:])
+	return s.TransactionID == NilTxnID
 }
 
+// Report do report statement info to the Collector.
+// Pls note that Report is only locked in EndStatement.
+// Pls note that Report should only call twice at most: one for status:Running, one for status:Failed/Success.
 func (s *StatementInfo) Report(ctx context.Context) {
 	ReportStatement(ctx, s)
 }
@@ -558,14 +601,14 @@ const TcpIpv4HeaderSize = 66
 // 13: avg payload prefix of err response
 const ResponseErrPacketSize = TcpIpv4HeaderSize + 13
 
-func EndStatement(ctx context.Context, err error, sentRows int64, outBytes int64, outPacket int64) {
+func (s *StatementInfo) EndStatement(ctx context.Context, err error, sentRows int64, outBytes int64, outPacket int64) {
 	if !GetTracerProvider().IsEnable() {
 		return
 	}
-	s := StatementFromContext(ctx)
 	if s == nil {
-		panic(moerr.NewInternalError(ctx, "no statement info in context"))
+		return
 	}
+
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	if !s.end { // cooperate with s.mux
@@ -574,11 +617,25 @@ func EndStatement(ctx context.Context, err error, sentRows int64, outBytes int64
 		s.ResultCount = sentRows
 		s.AggrCount = 0
 		s.MarkResponseAt()
+		// --- Start of metric part
+		// duration is filled in s.MarkResponseAt()
+		incStatementCounter(s.Account, s.QueryType)
+		addStatementDurationCounter(s.Account, s.QueryType, s.Duration)
+		// --- END of metric part
 		if err != nil {
 			outBytes += ResponseErrPacketSize + int64(len(err.Error()))
 		}
-		outBytes += TcpIpv4HeaderSize * outPacket
+		if GetTracerProvider().tcpPacket {
+			outBytes += TcpIpv4HeaderSize * outPacket
+		}
 		s.statsArray.InitIfEmpty().WithOutTrafficBytes(float64(outBytes)).WithOutPacketCount(float64(outPacket))
+		s.ExecPlan2Stats(ctx)
+		if s.statsArray.GetCU() < 0 {
+			logutil.Warnf("negative cu: %f, %s", s.statsArray.GetCU(), uuid.UUID(s.StatementID).String())
+			v2.GetTraceNegativeCUCounter("cu").Inc()
+		} else {
+			metric.StatementCUCounter(s.Account, s.SqlSourceType).Add(s.statsArray.GetCU())
+		}
 		s.Status = StatementStatusSuccess
 		if err != nil {
 			s.Error = err
@@ -589,6 +646,13 @@ func EndStatement(ctx context.Context, err error, sentRows int64, outBytes int64
 			s.Report(ctx)
 		}
 	}
+}
+
+func addStatementDurationCounter(tenant, queryType string, duration time.Duration) {
+	metric.StatementDuration(tenant, queryType).Add(float64(duration))
+}
+func incStatementCounter(tenant, queryType string) {
+	metric.StatementCounter(tenant, queryType).Inc()
 }
 
 type StatementInfoStatus int
@@ -622,13 +686,17 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 		return nil
 	}
 	// Filter out the Running record.
-	if s.Status == StatementStatusRunning && GetTracerProvider().skipRunningStmt {
-		return nil
+	if s.Status == StatementStatusRunning {
+		if GetTracerProvider().skipRunningStmt {
+			return nil
+		} else {
+			s = s.CloneWithoutExecPlan()
+		}
 	}
 	// Filter out the MO_LOGGER SQL statements
-	if s.User == db_holder.MOLoggerUser {
-		goto DiscardAndFreeL
-	}
+	//if s.User == db_holder.MOLoggerUser {
+	//	goto DiscardAndFreeL
+	//}
 
 	// Filter out the statement is empty
 	if s.Statement == "" {
@@ -642,14 +710,14 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 
 	// Filter out part of the internal SQL statements
 	// Todo: review how to aggregate the internal SQL statements logging
-	if s.User == "internal" {
+	if s.User == "internal" && s.Account == "sys" {
 		if s.StatementType == "Commit" || s.StatementType == "Start Transaction" || s.StatementType == "Use" {
 			goto DiscardAndFreeL
 		}
 	}
 
 	// logging the statement that should not be here anymore
-	if s.exported || s.reported || s.User == db_holder.MOLoggerUser || s.Statement == "" {
+	if s.exported || s.reported || s.Statement == "" {
 		logutil.Error("StatementInfo should not be here anymore", zap.String("StatementInfo", s.Statement), zap.String("statement_id", uuid.UUID(s.StatementID).String()), zap.String("user", s.User), zap.Bool("exported", s.exported), zap.Bool("reported", s.reported))
 	}
 

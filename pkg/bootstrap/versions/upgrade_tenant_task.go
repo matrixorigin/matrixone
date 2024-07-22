@@ -31,12 +31,12 @@ func AddUpgradeTenantTask(
 	toAccountID int32,
 	txn executor.TxnExecutor) error {
 	sql := fmt.Sprintf(`insert into %s (
-			upgrade_id, 
-			target_version, 
-			from_account_id, 
-			to_account_id, 
-			ready, 
-			create_at, 
+			upgrade_id,
+			target_version,
+			from_account_id,
+			to_account_id,
+			ready,
+			create_at,
 			update_at) values (%d, '%s', %d, %d, %d, current_timestamp(), current_timestamp())`,
 		catalog.MOUpgradeTenantTable,
 		upgradeID,
@@ -56,7 +56,7 @@ func UpdateUpgradeTenantTaskState(
 	taskID uint64,
 	state int32,
 	txn executor.TxnExecutor) error {
-	sql := fmt.Sprintf("update %s set ready = %d where id = %d",
+	sql := fmt.Sprintf("update %s set ready = %d, update_at = current_timestamp() where id = %d",
 		catalog.MOUpgradeTenantTable,
 		state,
 		taskID)
@@ -111,7 +111,7 @@ func GetUpgradeTenantTasks(
 		res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 			for i := 0; i < rows; i++ {
 				tenants = append(tenants, vector.GetFixedAt[int32](cols[0], i))
-				versions = append(versions, cols[1].GetStringAt(i))
+				versions = append(versions, cols[1].UnsafeGetStringAt(i))
 			}
 			return true
 		})
@@ -131,7 +131,7 @@ func GetTenantCreateVersionForUpdate(
 	defer res.Close()
 	version := ""
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		version = cols[0].GetStringAt(0)
+		version = cols[0].UnsafeGetStringAt(0)
 		return true
 	})
 	if version == "" {
@@ -161,4 +161,24 @@ func UpgradeTenantVersion(
 
 func isConflictError(err error) bool {
 	return moerr.IsMoErrCode(err, moerr.ErrLockConflict)
+}
+
+func GetTenantVersion(
+	tenantID int32,
+	txn executor.TxnExecutor) (string, error) {
+	sql := fmt.Sprintf("select create_version from mo_account where account_id = %d", tenantID)
+	res, err := txn.Exec(sql, executor.StatementOption{})
+	if err != nil {
+		return "", err
+	}
+	defer res.Close()
+	version := ""
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		version = cols[0].UnsafeGetStringAt(0)
+		return true
+	})
+	if version == "" {
+		panic(fmt.Sprintf("BUG: missing tenant: %d", tenantID))
+	}
+	return version, nil
 }

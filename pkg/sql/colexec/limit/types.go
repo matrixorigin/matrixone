@@ -16,53 +16,73 @@ package limit
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(Limit)
 
-type Argument struct {
-	Seen  uint64 // seen is the number of tuples seen so far
-	Limit uint64
+type container struct {
+	seen          uint64 // seen is the number of tuples seen so far
+	limit         uint64
+	limitExecutor colexec.ExpressionExecutor
+}
+type Limit struct {
+	ctr       *container
+	LimitExpr *plan.Expr
+
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (limit *Limit) GetOperatorBase() *vm.OperatorBase {
+	return &limit.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[Limit](
+		func() *Limit {
+			return &Limit{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *Limit) {
+			*a = Limit{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[Limit]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (limit Limit) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *Limit {
+	return reuse.Alloc[Limit](nil)
 }
 
-func (arg *Argument) WithLimit(limit uint64) *Argument {
-	arg.Limit = limit
-	return arg
+func (limit *Limit) WithLimit(limitExpr *plan.Expr) *Limit {
+	limit.LimitExpr = limitExpr
+	return limit
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (limit *Limit) Release() {
+	if limit != nil {
+		reuse.Free[Limit](limit, nil)
 	}
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
+func (limit *Limit) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	limit.Free(proc, pipelineFailed, err)
+}
+
+func (limit *Limit) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if limit.ctr != nil {
+		if limit.ctr.limitExecutor != nil {
+			limit.ctr.limitExecutor.Free()
+			limit.ctr.limitExecutor = nil
+		}
+		limit.ctr = nil
+	}
+
 }

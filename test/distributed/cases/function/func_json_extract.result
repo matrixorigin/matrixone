@@ -219,3 +219,12 @@ json_extract([0,1,2], $[1], $[0])
 select json_extract('[0,1,2]', '$[last-1]', '$[0]', '$[2]');
 json_extract([0,1,2], $[last-1], $[0], $[2])
 [1, 0, 2]
+select json_extract('[0,1,2]','$[4]');
+json_extract([0,1,2], $[4])
+null
+select json_extract('[0,1,2]','$[100]');
+json_extract([0,1,2], $[100])
+null
+select json_extract('[0,234,32432,423,5234,11443242,44242342424,23424323]','$[2000]');
+json_extract([0,234,32432,423,5234,11443242,44242342424,23424323], $[2000])
+null
