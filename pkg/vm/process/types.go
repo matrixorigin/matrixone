@@ -317,7 +317,7 @@ func (sp *StmtProfile) GetStmtId() uuid.UUID {
 // each query share only 1 instance of BaseProcess
 type BaseProcess struct {
 	// sqlContext includes the client context and the query context.
-	sqlContext queryBaseContext
+	sqlContext QueryBaseContext
 
 	StmtProfile *StmtProfile
 	// Id, query id.

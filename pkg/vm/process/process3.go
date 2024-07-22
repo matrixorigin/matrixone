@@ -58,7 +58,7 @@ func NewTopProcess(
 	}
 
 	Base := &BaseProcess{
-		sqlContext: queryBaseContext{
+		sqlContext: QueryBaseContext{
 			outerContext: topContext,
 		},
 
@@ -119,11 +119,17 @@ func (proc *Process) NewContextChildProc(dataEntryCount int) *Process {
 }
 
 // RebuildContext cleans the old context and creates a new one from the input parent context.
-func (proc *Process) RebuildContext(parentContext context.Context) {
+func (proc *Process) RebuildContext(parentContext context.Context) context.Context {
 	if proc.Cancel != nil {
 		proc.Cancel()
 	}
 	proc.Ctx, proc.Cancel = context.WithCancel(parentContext)
+
+	// update the context held by this process's data producers.
+	for _, sender := range proc.Reg.MergeReceivers {
+		sender.Ctx = proc.Ctx
+	}
+	return proc.Ctx
 }
 
 func (proc *Process) GetLatestContext() context.Context {
@@ -147,7 +153,7 @@ func (proc *Process) Free() {
 	proc.Base.vp.free(proc.Base.mp)
 }
 
-type queryBaseContext struct {
+type QueryBaseContext struct {
 	// outerContext represents the top context for a query that originates from the session client directly.
 	// It encompasses a wealth of information, including accountID, userID and more.
 	// Additionally, we use this context to reconstruct the query context once query needs rerun due to specific errors.
@@ -162,24 +168,29 @@ type queryBaseContext struct {
 	queryCancel  context.CancelFunc
 }
 
+func (bp *BaseProcess) GetContextBase() *QueryBaseContext {
+	return &bp.sqlContext
+}
+
 // ReplaceTopCtx sets the new top context.
-func (qbCtx *queryBaseContext) ReplaceTopCtx(topCtx context.Context) {
+func (qbCtx *QueryBaseContext) ReplaceTopCtx(topCtx context.Context) {
 	qbCtx.outerContext = topCtx
 }
 
 // RefreshQueryCtx refreshes the query context and cancellation method after the outer context was ready to run the query.
-func (qbCtx *queryBaseContext) RefreshQueryCtx() {
+func (qbCtx *QueryBaseContext) RefreshQueryCtx() context.Context {
 	qbCtx.queryContext, qbCtx.queryCancel = context.WithCancel(qbCtx.outerContext)
+	return qbCtx.queryContext
 }
 
 // saveToQueryContext saves the key-value pair to the query context.
 // Every pipeline context can access the key-value pair by calling its own context.Value() method.
 // But should be careful to avoid adding key-value pairs after the pipeline context has been created.
-func (qbCtx *queryBaseContext) saveToQueryContext(key, value any) {
+func (qbCtx *QueryBaseContext) saveToQueryContext(key, value any) {
 	qbCtx.queryContext = context.WithValue(qbCtx.queryContext, key, value)
 }
 
-func (qbCtx *queryBaseContext) getLatestContext() context.Context {
+func (qbCtx *QueryBaseContext) getLatestContext() context.Context {
 	if qbCtx.queryContext != nil {
 		return qbCtx.queryContext
 	}
@@ -187,7 +198,7 @@ func (qbCtx *queryBaseContext) getLatestContext() context.Context {
 }
 
 // getQueryStatus returns error if the query context has been cancelled.
-func (qbCtx *queryBaseContext) getQueryStatus() error {
+func (qbCtx *QueryBaseContext) getQueryStatus() error {
 	if qbCtx.queryContext != nil {
 		return qbCtx.queryContext.Err()
 	}
