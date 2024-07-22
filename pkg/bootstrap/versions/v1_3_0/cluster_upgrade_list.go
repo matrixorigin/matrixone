@@ -22,10 +22,10 @@ import (
 )
 
 var clusterUpgEntries = []versions.UpgradeEntry{
-	upg_mo_snapshots,
+	upg_mo_pitr,
 }
 
-var upg_mo_snapshots = versions.UpgradeEntry{
+var upg_mo_pitr = versions.UpgradeEntry{
 	Schema:    catalog.MO_CATALOG,
 	TableName: catalog.MO_PITR,
 	UpgType:   versions.CREATE_NEW_TABLE,
