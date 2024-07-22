@@ -899,22 +899,22 @@ func (ls *LocalDataSource) Close() {
 //  4. committedPersistedTombstone
 func (ls *LocalDataSource) ApplyTombstones(rows []types.Rowid) (sel []int64, err error) {
 
-	rowIdsToOffsets := func(rowIds []types.Rowid) (ret []int64) {
-		for _, r := range rowIds {
-			_, offset := r.Decode()
-			ret = append(ret, int64(offset))
-		}
-		return ret
-	}
+	//rowIdsToOffsets := func(rowIds []types.Rowid) (ret []int64) {
+	//	for _, r := range rowIds {
+	//		_, offset := r.Decode()
+	//		ret = append(ret, int64(offset))
+	//	}
+	//	return ret
+	//}
 
 	blockId, _ := rows[0].Decode()
 	if err = ls.prepareDeletes(blockId); err != nil {
 		return nil, err
 	}
 
-	left := make([]types.Rowid, 0)
+	left := make([]int64, 0)
 
-	for _, row := range rows {
+	for idx, row := range rows {
 		if ls.tmpDeletesMask != nil {
 			if _, ok := ls.tmpDeletesMask[row]; ok {
 				continue
@@ -944,10 +944,10 @@ func (ls *LocalDataSource) ApplyTombstones(rows []types.Rowid) (sel []int64, err
 			}
 		}
 
-		left = append(left, row)
+		left = append(left, int64(idx))
 	}
 
-	return rowIdsToOffsets(left), nil
+	return left, nil
 }
 
 func (ls *LocalDataSource) Next(
