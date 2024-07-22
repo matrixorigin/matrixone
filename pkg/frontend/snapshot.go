@@ -117,7 +117,8 @@ var (
 		"mo_transactions":   1,
 		"mo_cache":          1,
 
-		"mo_snapshots": 1,
+		catalog.MO_SNAPSHOTS: 1,
+		catalog.MO_PITR:      1,
 	}
 )
 
@@ -164,7 +165,7 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 	var sql string
 	var objId uint64
 
-	// check create stage priv
+	// check create snapshot priv
 	err = doCheckRole(ctx, ses)
 	if err != nil {
 		return err
@@ -180,13 +181,6 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 		return err
 	}
 
-	// check create snapshot priv
-
-	// 1.only admin can create tenant level snapshot
-	err = doCheckRole(ctx, ses)
-	if err != nil {
-		return err
-	}
 	// 2.only sys can create cluster level snapshot
 	tenantInfo := ses.GetTenantInfo()
 	currentAccount := tenantInfo.GetTenant()

@@ -576,6 +576,7 @@ var (
 		"mo_pubs":                     0,
 		"mo_stages":                   0,
 		"mo_snapshots":                0,
+		"mo_pitr":                     0,
 	}
 )
 
