@@ -122,16 +122,15 @@ func (shuffleBuild *ShuffleBuild) Call(proc *process.Process) (vm.CallResult, er
 			ctr.state = SendHashMap
 
 		case SendHashMap:
+			if ap.JoinMapTag <= 0 {
+				panic("wrong joinmap message tag!")
+			}
 			if ctr.inputBatchRowCount > 0 {
 				var jm *hashmap.JoinMap
 				if ctr.keyWidth <= 8 {
 					jm = hashmap.NewJoinMap(ctr.multiSels, nil, ctr.intHashMap, nil, ctr.hasNull)
 				} else {
 					jm = hashmap.NewJoinMap(ctr.multiSels, nil, nil, ctr.strHashMap, ctr.hasNull)
-				}
-				jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
-				if ap.JoinMapTag <= 0 {
-					panic("wrong joinmap message tag!")
 				}
 				proc.SendMessage(process.JoinMapMsg{JoinMapPtr: jm, IsShuffle: true, ShuffleIdx: ap.ShuffleIdx, Tag: ap.JoinMapTag})
 				ctr.intHashMap = nil

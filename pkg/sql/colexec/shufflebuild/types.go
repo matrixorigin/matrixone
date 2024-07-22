@@ -41,7 +41,6 @@ type container struct {
 	state              int
 	keyWidth           int // keyWidth is the width of hash columns, it determines which hash map to use.
 	hasNull            bool
-	runtimeFilterIn    bool
 	multiSels          [][]int32
 	batches            []*batch.Batch
 	batchIdx           int
@@ -108,6 +107,7 @@ func (shuffleBuild *ShuffleBuild) Reset(proc *process.Process, pipelineFailed bo
 func (shuffleBuild *ShuffleBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := shuffleBuild.ctr
 	proc.FinalizeRuntimeFilter(shuffleBuild.RuntimeFilterSpec, pipelineFailed, err)
+	proc.FinalizeJoinMapMessage(shuffleBuild.JoinMapTag, true, shuffleBuild.ShuffleIdx, pipelineFailed, err)
 	if ctr != nil {
 		ctr.cleanBatches(proc)
 		ctr.cleanEvalVectors()

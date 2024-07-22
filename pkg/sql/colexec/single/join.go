@@ -120,7 +120,7 @@ func (singleJoin *SingleJoin) Call(proc *process.Process) (vm.CallResult, error)
 
 func (singleJoin *SingleJoin) receiveHashMap(anal process.Analyze, proc *process.Process) {
 	ctr := singleJoin.ctr
-	ctr.mp = colexec.ReceiveJoinMap(anal, singleJoin.JoinMapTag, false, 0, proc)
+	ctr.mp = proc.ReceiveJoinMap(anal, singleJoin.JoinMapTag, false, 0)
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}

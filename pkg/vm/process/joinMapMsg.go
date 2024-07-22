@@ -15,6 +15,8 @@
 package process
 
 import (
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 )
 
@@ -45,4 +47,39 @@ func (t JoinMapMsg) GetMsgTag() int32 {
 
 func (t JoinMapMsg) GetReceiverAddr() MessageAddress {
 	return AddrBroadCastOnCurrentCN()
+}
+
+func (proc *Process) ReceiveJoinMap(anal Analyze, tag int32, isShuffle bool, shuffleIdx int32) *hashmap.JoinMap {
+	start := time.Now()
+	defer anal.WaitStop(start)
+	msgReceiver := proc.NewMessageReceiver([]int32{tag}, AddrBroadCastOnCurrentCN())
+	for {
+		msgs, ctxDone := msgReceiver.ReceiveMessage(true, proc.Ctx)
+		if ctxDone {
+			return nil
+		}
+		for i := range msgs {
+			msg, ok := msgs[i].(JoinMapMsg)
+			if !ok {
+				panic("expect join map message, receive unknown message!")
+			}
+			if isShuffle || msg.IsShuffle {
+				if shuffleIdx != msg.ShuffleIdx {
+					continue
+				}
+			}
+			jm := msg.JoinMapPtr
+			if !jm.IsValid() {
+				panic("join receive a joinmap which has been freed!")
+			}
+			jm.IncRef()
+			return jm
+		}
+	}
+}
+
+func (proc *Process) FinalizeJoinMapMessage(tag int32, isShuffle bool, shuffleIdx int32, pipelineFailed bool, err error) {
+	if pipelineFailed || err != nil {
+		proc.SendMessage(JoinMapMsg{JoinMapPtr: nil, IsShuffle: isShuffle, ShuffleIdx: shuffleIdx, Tag: tag})
+	}
 }

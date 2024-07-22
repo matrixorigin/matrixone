@@ -110,6 +110,7 @@ func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, er
 func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := hashBuild.ctr
 	proc.FinalizeRuntimeFilter(hashBuild.RuntimeFilterSpec, pipelineFailed, err)
+	proc.FinalizeJoinMapMessage(hashBuild.JoinMapTag, false, 0, pipelineFailed, err)
 	if ctr != nil {
 		ctr.cleanBatches(proc)
 		ctr.cleanEvalVectors()

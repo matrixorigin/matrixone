@@ -109,6 +109,10 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 			ctr.state = SendHashMap
 
 		case SendHashMap:
+			if ap.JoinMapTag <= 0 {
+				panic("wrong joinmap message tag!")
+			}
+
 			if ctr.inputBatchRowCount > 0 {
 				var jm *hashmap.JoinMap
 				if ap.NeedHashMap {
@@ -118,11 +122,8 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 						jm = hashmap.NewJoinMap(ctr.multiSels, nil, nil, ctr.strHashMap, ctr.hasNull)
 					}
 					jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
+					proc.SendMessage(process.JoinMapMsg{JoinMapPtr: jm, Tag: ap.JoinMapTag})
 				}
-				if ap.JoinMapTag <= 0 {
-					panic("wrong joinmap message tag!")
-				}
-				proc.SendMessage(process.JoinMapMsg{JoinMapPtr: jm, Tag: ap.JoinMapTag})
 
 				ctr.intHashMap = nil
 				ctr.strHashMap = nil

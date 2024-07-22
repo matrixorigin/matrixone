@@ -143,7 +143,7 @@ func (markJoin *MarkJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (markJoin *MarkJoin) receiveHashMap(anal process.Analyze, proc *process.Process) {
 	ctr := markJoin.ctr
-	ctr.mp = colexec.ReceiveJoinMap(anal, markJoin.JoinMapTag, false, 0, proc)
+	ctr.mp = proc.ReceiveJoinMap(anal, markJoin.JoinMapTag, false, 0)
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
