@@ -407,6 +407,7 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	}
 
 	c := GetCompileService().getCompile(proc)
+	c.execType = plan2.ExecTypeAP_MULTICN
 	c.e = cnInfo.storeEngine
 	c.MessageBoard = c.MessageBoard.SetMultiCN(c.GetMessageCenter(), c.proc.GetStmtProfile().GetStmtId())
 	c.proc.Base.MessageBoard = c.MessageBoard
