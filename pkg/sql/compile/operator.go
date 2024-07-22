@@ -1673,7 +1673,7 @@ func constructLoopMark(n *plan.Node, typs []types.Type, proc *process.Process) *
 	return arg
 }
 
-func constructJoinBuildOperator(c *Compile, op vm.Operator, isShuffle bool) vm.Operator {
+func constructJoinBuildOperator(c *Compile, op vm.Operator, isShuffle bool, mcpu int32) vm.Operator {
 	switch op.OpType() {
 	case vm.IndexJoin:
 		indexJoin := op.(*indexjoin.IndexJoin)
@@ -1691,14 +1691,14 @@ func constructJoinBuildOperator(c *Compile, op vm.Operator, isShuffle bool) vm.O
 			res.SetIsFirst(true)
 			return res
 		}
-		res := constructHashBuild(op, c.proc)
+		res := constructHashBuild(op, c.proc, mcpu)
 		res.SetIdx(op.GetOperatorBase().GetIdx())
 		res.SetIsFirst(true)
 		return res
 	}
 }
 
-func constructHashBuild(op vm.Operator, proc *process.Process) *hashbuild.HashBuild {
+func constructHashBuild(op vm.Operator, proc *process.Process, mcpu int32) *hashbuild.HashBuild {
 	// XXX BUG
 	// relation index of arg.Conditions should be rewritten to 0 here.
 	ret := hashbuild.NewArgument()
@@ -1902,6 +1902,7 @@ func constructHashBuild(op vm.Operator, proc *process.Process) *hashbuild.HashBu
 		ret.Release()
 		panic(moerr.NewInternalError(proc.Ctx, "unsupport join type '%v'", op.OpType()))
 	}
+	ret.JoinMapRefCnt = mcpu
 	return ret
 }
 

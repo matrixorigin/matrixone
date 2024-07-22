@@ -121,6 +121,7 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 					panic("wrong joinmap message tag!")
 				}
 				jm.SetRowCount(int64(ctr.inputBatchRowCount))
+				jm.IncRef(ap.JoinMapRefCnt)
 				proc.SendMessage(process.JoinMapMsg{JoinMapPtr: jm, Tag: ap.JoinMapTag})
 				ctr.intHashMap = nil
 				ctr.strHashMap = nil

@@ -71,8 +71,8 @@ func (jm *JoinMap) NewIterator() Iterator {
 	}
 }
 
-func (jm *JoinMap) IncRef() {
-	atomic.AddInt64(&jm.refCnt, 1)
+func (jm *JoinMap) IncRef(cnt int32) {
+	atomic.AddInt64(&jm.refCnt, int64(cnt))
 }
 
 func (jm *JoinMap) IsValid() bool {

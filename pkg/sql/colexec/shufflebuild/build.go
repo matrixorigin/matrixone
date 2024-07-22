@@ -133,6 +133,7 @@ func (shuffleBuild *ShuffleBuild) Call(proc *process.Process) (vm.CallResult, er
 					jm = hashmap.NewJoinMap(ctr.multiSels, nil, ctr.strHashMap)
 				}
 				jm.SetRowCount(int64(ctr.inputBatchRowCount))
+				jm.IncRef(1)
 				ctr.intHashMap = nil
 				ctr.strHashMap = nil
 				ctr.multiSels = nil

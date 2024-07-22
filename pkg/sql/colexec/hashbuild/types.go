@@ -67,6 +67,7 @@ type HashBuild struct {
 	Typs              []types.Type
 	Conditions        []*plan.Expr
 	JoinMapTag        int32
+	JoinMapRefCnt     int32
 	RuntimeFilterSpec *pbplan.RuntimeFilterSpec
 	vm.OperatorBase
 }
