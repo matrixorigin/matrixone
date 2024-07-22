@@ -30,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -632,7 +631,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 					s.NodeInfo.Data = nil
 					s.NodeInfo.NeedExpandRanges = false
 					s.DataSource.FilterExpr = plan2.MakeFalseExpr()
-					logutil.Infof("xxxx runtime filter drop, "+
+					fmt.Printf("xxxx runtime filter drop, "+
 						"set s.NodeInfo.data=nil, neeedExpandRanges=false:, txn:%s, table:%s",
 						c.proc.GetTxnOperator().Txn().DebugString(),
 						s.DataSource.TableDef.Name)
@@ -699,7 +698,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		if err != nil {
 			return err
 		}
-		logutil.Infof("xxxx expand ranges in run time filter, txn:%s, table:%s, blkCnt:%d, hasMemBlk:%v",
+		fmt.Printf("xxxx expand ranges in run time filter, txn:%s, table:%s, blkCnt:%d, hasMemBlk:%v",
 			c.proc.GetTxnOperator().Txn().DebugString(),
 			s.DataSource.TableDef.Name,
 			relData.BlkCnt(),
@@ -710,7 +709,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		s.NodeInfo.NeedExpandRanges = false
 
 	} else if len(inExprList) > 0 {
-		logutil.Infof("xxxx Before appyly run time filter, txn:%s, table:%s, blkCnt:%d, hasMemBlk:%v",
+		fmt.Printf("xxxx Before appyly run time filter, txn:%s, table:%s, blkCnt:%d, hasMemBlk:%v",
 			c.proc.GetTxnOperator().Txn().DebugString(),
 			s.DataSource.TableDef.Name,
 			s.NodeInfo.Data.BlkCnt(),
@@ -719,7 +718,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		if err != nil {
 			return err
 		}
-		logutil.Infof("xxxx after appyly run time filter, txn:%s, table:%s, blkCnt:%d, hasMemBlk:%v",
+		fmt.Printf("xxxx after appyly run time filter, txn:%s, table:%s, blkCnt:%d, hasMemBlk:%v",
 			c.proc.GetTxnOperator().Txn().DebugString(),
 			s.DataSource.TableDef.Name,
 			s.NodeInfo.Data.BlkCnt(),
@@ -1243,7 +1242,7 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 		switch s.DataSource.Rel.GetEngineType() {
 		case engine.Disttae:
 			//blkSlice := objectio.BlockInfoSlice(s.NodeInfo.Data)
-			logutil.Infof("xxxx start to build readers, txn:%s, table:%s. DataIsEmpty:%v",
+			fmt.Printf("xxxx start to build readers, txn:%s, table:%s. DataIsEmpty:%v",
 				c.proc.GetTxnOperator().Txn().DebugString(),
 				s.DataSource.TableDef.Name,
 				s.NodeInfo.Data == nil)
@@ -1270,7 +1269,7 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 			scanUsedCpuNumber,
 			s.TxnOffset)
 		if s.DataSource.TableDef.Name == "bugt" {
-			logutil.Infof("xxxx build readers finished, "+
+			fmt.Printf("xxxx build readers finished, "+
 				"sql:%s, txn:%s, table:%s, scanusednum:%d, readers num :%d, blkCnt:%d, hasMemBlk:%v, err:%v",
 				sql,
 				c.proc.GetTxnOperator().Txn().DebugString(),
@@ -1426,7 +1425,7 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 
 	//for partition table.
 	if len(readers) != scanUsedCpuNumber {
-		logutil.Infof("xxxx start to merge readers, txn:%s, table:%s,cpu num:%d, readers:%d",
+		fmt.Printf("xxxx start to merge readers, txn:%s, table:%s,cpu num:%d, readers:%d",
 			c.proc.GetTxnOperator().Txn().DebugString(),
 			s.DataSource.TableDef.Name,
 			scanUsedCpuNumber,

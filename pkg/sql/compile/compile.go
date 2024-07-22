@@ -4180,7 +4180,7 @@ func (c *Compile) generateNodesInProgress(n *plan.Node) (engine.Nodes, []any, []
 		}
 	} else {
 		// add current CN
-		logutil.Infof("xxxx expand ranges will be in run stage, txn:%s, table:%s",
+		fmt.Printf("xxxx expand ranges will be in run stage, txn:%s, table:%s",
 			txnOp.Txn().DebugString(), n.TableDef.Name)
 		nodes = append(nodes, engine.Node{
 			Addr: c.addr,
@@ -4193,7 +4193,7 @@ func (c *Compile) generateNodesInProgress(n *plan.Node) (engine.Nodes, []any, []
 	tblId := rel.GetTableID(ctx)
 	expectedLen := relData.BlkCnt()
 	c.proc.Debugf(ctx, "cn generateNodes, tbl %d ranges is %d", tblId, expectedLen)
-	logutil.Infof("xxxx expand ranges in compile stage, txn:%s, table:%s, ranges:%d",
+	fmt.Printf("xxxx expand ranges in compile stage, txn:%s, table:%s, ranges:%d",
 		txnOp.Txn().DebugString(), n.TableDef.Name, expectedLen)
 	// if len(ranges) == 0 indicates that it's a temporary table.
 	if relData.BlkCnt() == 0 && n.TableDef.TableType != catalog.SystemOrdinaryRel {
@@ -4215,21 +4215,21 @@ func (c *Compile) generateNodesInProgress(n *plan.Node) (engine.Nodes, []any, []
 	// for an ordered scan, put all paylonds in current CN
 	// or sometimes force on one CN
 	if isLaunchMode(c.cnList) || len(n.OrderBy) > 0 || relData.BlkCnt() < plan2.BlockThresholdForOneCN || n.Stats.ForceOneCN {
-		logutil.Infof("xxxx put ranges in current CN, txn:%s, table:%s",
+		fmt.Printf("xxxx put ranges in current CN, txn:%s, table:%s",
 			txnOp.Txn().DebugString(), n.TableDef.Name)
 		return putBlocksInCurrentCN(c, relData, n), partialResults, partialResultTypes, nil
 	}
 	// disttae engine
 	if engineType == engine.Disttae {
 
-		logutil.Infof("xxxx shuffle Blocks to multi CN, txn:%s, table:%s",
+		fmt.Printf("xxxx shuffle Blocks to multi CN, txn:%s, table:%s",
 			txnOp.Txn().DebugString(), n.TableDef.Name)
 
 		nodes, err := shuffleBlocksToMultiCN(c, rel, relData, n)
 		return nodes, partialResults, partialResultTypes, err
 	}
 	// maybe temp table on memengine , just put payloads in average
-	logutil.Infof("xxxx put blocks in average, txn:%s, table:%s",
+	fmt.Printf("xxxx put blocks in average, txn:%s, table:%s",
 		txnOp.Txn().DebugString(), n.TableDef.Name)
 	return putBlocksInAverage(c, relData, n), partialResults, partialResultTypes, nil
 }
