@@ -496,6 +496,8 @@ func partsToColsStr(parts []string) string {
 	return temp
 }
 
+// haveSinkScanInPlan Start from the `curNodeIdx` node, recursively check its Subtree all nodes,
+// determine if they contain `SINK_SCAN` node in the subtree
 func haveSinkScanInPlan(nodes []*plan.Node, curNodeIdx int32) bool {
 	node := nodes[curNodeIdx]
 	if node.NodeType == plan.Node_SINK_SCAN {
