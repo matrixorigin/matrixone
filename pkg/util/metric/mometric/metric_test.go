@@ -36,7 +36,7 @@ func TestMetric(t *testing.T) {
 	sqlch := make(chan string, 100)
 	factory := newExecutorFactory(sqlch)
 
-	runtime.SetupProcessLevelRuntime(runtime.NewRuntime(metadata.ServiceType_CN, "test", logutil.GetGlobalLogger()))
+	runtime.SetupServiceBasedRuntime("", runtime.NewRuntime(metadata.ServiceType_CN, "", logutil.GetGlobalLogger()))
 
 	withModifiedConfig(func() {
 		SV := config.NewObservabilityParameters()
@@ -47,7 +47,7 @@ func TestMetric(t *testing.T) {
 		SV.MetricExportInterval = 1
 		defer metric.SetGatherInterval(metric.SetGatherInterval(30 * time.Millisecond))
 		defer metric.SetRawHistBufLimit(metric.SetRawHistBufLimit(5))
-		InitMetric(context.TODO(), factory, SV, "node_uuid", "test", WithInitAction(true))
+		InitMetric(context.TODO(), factory, SV, "", "test", WithInitAction(true))
 		defer StopMetricSync()
 
 		const (
@@ -106,7 +106,7 @@ func TestMetricNoProm(t *testing.T) {
 
 		defer metric.SetGatherInterval(metric.SetGatherInterval(30 * time.Millisecond))
 		defer metric.SetRawHistBufLimit(metric.SetRawHistBufLimit(5))
-		InitMetric(context.TODO(), factory, SV, "node_uuid", "test", WithInitAction(true))
+		InitMetric(context.TODO(), factory, SV, "", "test", WithInitAction(true))
 		defer StopMetricSync()
 
 		client := http.Client{

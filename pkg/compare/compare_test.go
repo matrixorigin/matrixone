@@ -132,6 +132,6 @@ func newTestCase(desc bool, m *mpool.MPool, typ types.Type) testCase {
 	return testCase{
 		desc: desc,
 		vecs: vecs,
-		proc: testutil.NewProcessWithMPool(m),
+		proc: testutil.NewProcessWithMPool("", m),
 	}
 }

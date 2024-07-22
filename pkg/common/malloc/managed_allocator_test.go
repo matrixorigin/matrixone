@@ -22,7 +22,7 @@ import (
 
 func TestManagedAllocator(t *testing.T) {
 	allocator := NewManagedAllocator(
-		NewClassAllocator(NewFixedSizeMmapAllocator),
+		newUpstreamAllocatorForTest(),
 	)
 	for i := uint64(1); i < 128*MB; i = uint64(math.Ceil(float64(i) * 1.1)) {
 		// allocate
@@ -66,7 +66,7 @@ func BenchmarkManagedAllocator(b *testing.B) {
 
 	newAllocator := func() *ManagedAllocator {
 		return NewManagedAllocator(
-			newDefault(nil),
+			newUpstreamAllocatorForTest(),
 		)
 	}
 	for _, n := range benchNs {

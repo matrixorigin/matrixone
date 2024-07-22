@@ -30,7 +30,7 @@ func TestBootstrap(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	rt := runtime.DefaultRuntime()
-	runtime.SetupProcessLevelRuntime(rt)
+	runtime.SetupServiceBasedRuntime("", rt)
 	c := mockHAKeeperClient{}
 	st := stopper.NewStopper("test-proxy", stopper.WithLogger(rt.Logger().RawLogger()))
 	cfg := Config{

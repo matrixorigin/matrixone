@@ -21,9 +21,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
-
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -42,6 +39,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 type backExec struct {
@@ -205,8 +204,11 @@ func (back *backExec) Clear() {
 }
 
 // execute query
-func doComQueryInBack(backSes *backSession, execCtx *ExecCtx,
-	input *UserInput) (retErr error) {
+func doComQueryInBack(
+	backSes *backSession,
+	execCtx *ExecCtx,
+	input *UserInput,
+) (retErr error) {
 	backSes.EnterFPrint(92)
 	defer backSes.ExitFPrint(92)
 	backSes.GetTxnCompileCtx().SetExecCtx(execCtx)
@@ -270,11 +272,14 @@ func doComQueryInBack(backSes *backSession, execCtx *ExecCtx,
 	execCtx.input = input
 
 	proc.Base.SessionInfo.User = userNameOnly
-	cws, err := GetComputationWrapperInBack(execCtx, backSes.respr.GetStr(DBNAME),
+	cws, err := GetComputationWrapperInBack(
+		execCtx, backSes.respr.GetStr(DBNAME),
 		input,
 		backSes.respr.GetStr(USERNAME),
 		getGlobalPu().StorageEngine,
-		proc, backSes)
+		proc,
+		backSes,
+	)
 
 	if err != nil {
 		retErr = err
@@ -472,7 +477,8 @@ var GetComputationWrapperInBack = func(execCtx *ExecCtx, db string, input *UserI
 
 var NewBackgroundExec = func(
 	reqCtx context.Context,
-	upstream FeSession) BackgroundExec {
+	upstream FeSession,
+) BackgroundExec {
 	backSes := newBackSession(upstream, nil, "", fakeDataSetFetcher2)
 	if up, ok := upstream.(*Session); ok {
 		backSes.upstream = up
@@ -632,11 +638,12 @@ func getResultSet(ctx context.Context, bh BackgroundExec) ([]ExecResult, error) 
 }
 
 type backSession struct {
+	service string
 	feSessionImpl
 }
 
 func newBackSession(ses FeSession, txnOp TxnOperator, db string, callBack outputCallBackFunc) *backSession {
-	txnHandler := InitTxnHandler(getGlobalPu().StorageEngine, ses.GetTxnHandler().GetConnCtx(), txnOp)
+	txnHandler := InitTxnHandler(ses.GetService(), getGlobalPu().StorageEngine, ses.GetTxnHandler().GetConnCtx(), txnOp)
 	backSes := &backSession{
 		feSessionImpl: feSessionImpl{
 			pool:           ses.GetMemPool(),
@@ -655,10 +662,15 @@ func newBackSession(ses FeSession, txnOp TxnOperator, db string, callBack output
 			respr:          defResper,
 		},
 	}
+	backSes.service = ses.GetService()
 	backSes.gSysVars = ses.GetGlobalSysVars()
 	backSes.sesSysVars = ses.GetSessionSysVars()
 	backSes.uuid, _ = uuid.NewV7()
 	return backSes
+}
+
+func (backSes *backSession) GetService() string {
+	return backSes.service
 }
 
 func (backSes *backSession) getCachedPlan(sql string) *cachedPlan {
@@ -890,7 +902,7 @@ func (backSes *backSession) GetLogger() SessionLogger {
 
 func (backSes *backSession) getMOLogger() *log.MOLogger {
 	if backSes.upstream == nil {
-		return getLogger()
+		return getLogger(backSes.GetService())
 	} else {
 		return backSes.upstream.logger
 	}
