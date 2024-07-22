@@ -98,7 +98,7 @@ func (appender *objectAppender) ReplayAppend(
 	blkOffset uint16,
 	txn txnif.AsyncTxn) (from int, err error) {
 	blkCount := appender.obj.BlockCnt()
-	if blkCount < int(blkOffset)-1 {
+	if blkCount < int(blkOffset) {
 		return 0, nil
 	}
 	if from, err = appender.ApplyAppend(bat, blkOffset, txn); err != nil {

@@ -9338,3 +9338,25 @@ func TestClearPersistTransferTable(t *testing.T) {
 	_, err = tae.Runtime.TransferTable.Pin(*page.ID())
 	assert.True(t, errors.Is(err, moerr.GetOkExpectedEOB()))
 }
+
+func TestFlushAndReplay(t *testing.T) {
+	ctx := context.Background()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(13, 3)
+	schema.BlockMaxRows = 10
+	schema.ObjectMaxBlocks = 3
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 20)
+	bats := bat.Split(2)
+
+	tae.CreateRelAndAppend(bats[0], true)
+	ts1 := tae.TxnMgr.Now()
+	tae.DoAppend(bats[1])
+	tae.CompactBlocks(true)
+	tae.BGCheckpointRunner.ForceIncrementalCheckpoint(ts1, true)
+	tae.CheckRowsByScan(20, false)
+	tae.Restart(ctx)
+	tae.CheckRowsByScan(20, false)
+}

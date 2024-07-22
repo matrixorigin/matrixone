@@ -95,14 +95,11 @@ func (obj *aobject) PreapreAppend(
 func (obj *aobject) getLastAppendMVCC() *updates.AppendMVCCHandle {
 	return obj.PinNode().MustMNode().getLastNode().appendMVCC
 }
-func (obj *aobject) getAppendMVCC(blkID uint16) *updates.AppendMVCCHandle {
-	return obj.PinNode().MustMNode().getMemoryNode(blkID).appendMVCC
-}
 
 // only used in replay
 func (obj *aobject) mustGetAppendMVCC(blkID uint16) *updates.AppendMVCCHandle {
 	blkCount := obj.node.Load().MustMNode().blockCnt()
-	if blkCount < int(blkID)-1 {
+	if blkCount < int(blkID) {
 		return nil
 	}
 	return obj.PinNode().MustMNode().getOrCreateNode(blkID).appendMVCC
