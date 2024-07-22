@@ -50,7 +50,7 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 	defer func() {
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(s.Proc.Ctx, e)
-			getLogger().Error("panic in scope remoteRun",
+			getLogger(s.Proc.GetService()).Error("panic in scope remoteRun",
 				zap.String("sql", c.sql),
 				zap.String("error", err.Error()))
 		}
@@ -64,7 +64,13 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 	}
 
 	// generate a new sender to do send work.
-	sender, err = newMessageSenderOnClient(s.Proc.Ctx, s.NodeInfo.Addr, s.Proc.Mp(), c.anal)
+	sender, err = newMessageSenderOnClient(
+		s.Proc.Ctx,
+		s.Proc.GetService(),
+		s.NodeInfo.Addr,
+		s.Proc.Mp(),
+		c.anal,
+	)
 	if err != nil {
 		c.proc.Errorf(s.Proc.Ctx, "Failed to newMessageSenderOnClient sql=%s, txnID=%s, err=%v",
 			c.sql, c.proc.GetTxnOperator().Txn().DebugString(), err)
@@ -203,9 +209,13 @@ type messageSenderOnClient struct {
 }
 
 func newMessageSenderOnClient(
-	ctx context.Context, toAddr string, mp *mpool.MPool, ana *anaylze) (*messageSenderOnClient, error) {
-
-	streamSender, err := cnclient.GetPipelineClient().NewStream(toAddr)
+	ctx context.Context,
+	sid string,
+	toAddr string,
+	mp *mpool.MPool,
+	ana *anaylze,
+) (*messageSenderOnClient, error) {
+	streamSender, err := cnclient.GetPipelineClient(sid).NewStream(toAddr)
 	if err != nil {
 		return nil, err
 	}

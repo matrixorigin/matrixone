@@ -86,10 +86,12 @@ func checkParameter(param string, ignoreUUID bool) (args []string, threshold int
 	return args, threshold, nil
 }
 
-func handleTraceSpan(proc *process.Process,
+func handleTraceSpan(
+	proc *process.Process,
 	service serviceType,
 	parameter string,
-	sender requestSender) (Result, error) {
+	sender requestSender,
+) (Result, error) {
 	if service != cn && service != tn {
 		return Result{}, moerr.NewWrongServiceNoCtx("CN or DN", string(service))
 	}
@@ -108,7 +110,7 @@ func handleTraceSpan(proc *process.Process,
 
 	if len(cns) == 1 && strings.ToLower(cns[0]) == "all" {
 		cns = make([]string, 0)
-		clusterservice.GetMOCluster().GetCNService(clusterservice.Selector{}, func(cn metadata.CNService) bool {
+		clusterservice.GetMOCluster(proc.GetService()).GetCNService(clusterservice.Selector{}, func(cn metadata.CNService) bool {
 			cns = append(cns, cn.ServiceID)
 			return true
 		})
@@ -156,8 +158,15 @@ func SelfProcess(cmd string, spans string, threshold int64) string {
 	return fmt.Sprintf("%v %sd, %v failed", succeed, cmd, failed)
 }
 
-func transferRequest(proc *process.Process, uuid string, cmd string, spans string, threshold int64) (resp *query.Response, err error) {
-	clusterservice.GetMOCluster().GetCNService(clusterservice.NewServiceIDSelector(uuid),
+func transferRequest(
+	proc *process.Process,
+	uuid string,
+	cmd string,
+	spans string,
+	threshold int64,
+) (resp *query.Response, err error) {
+	clusterservice.GetMOCluster(
+		proc.GetService()).GetCNService(clusterservice.NewServiceIDSelector(uuid),
 		func(cn metadata.CNService) bool {
 			request := proc.GetQueryClient().NewRequest(query.CmdMethod_TraceSpan)
 			request.TraceSpanRequest = &query.TraceSpanRequest{
@@ -170,7 +179,8 @@ func transferRequest(proc *process.Process, uuid string, cmd string, spans strin
 
 			resp, err = proc.GetQueryClient().SendMessage(ctx, cn.QueryAddress, request)
 			return true
-		})
+		},
+	)
 	return
 }
 

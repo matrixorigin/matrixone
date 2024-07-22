@@ -2836,7 +2836,6 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 	}
 
 	var primaryKeys []string
-	var indexs []string
 	var detectSqls []string
 	var updateSqls []string
 	uniqueIndexInfos := make([]*tree.UniqueIndex, 0)
@@ -3278,21 +3277,6 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			return nil, moerr.NewNotSupported(ctx.GetContext(), "alter table truncate partition clause")
 		case *tree.AlterPartitionRedefinePartitionClause:
 			return nil, moerr.NewNotSupported(ctx.GetContext(), "alter table partition by clause")
-		}
-	}
-
-	for _, str := range indexs {
-		if _, ok := colMap[str]; !ok {
-			return nil, moerr.NewInvalidInput(ctx.GetContext(), "column '%s' is not exist", str)
-		}
-		if colMap[str].Typ.Id == int32(types.T_blob) {
-			return nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("BLOB column '%s' cannot be in index", str))
-		}
-		if colMap[str].Typ.Id == int32(types.T_text) {
-			return nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("TEXT column '%s' cannot be in index", str))
-		}
-		if colMap[str].Typ.Id == int32(types.T_json) {
-			return nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", str))
 		}
 	}
 

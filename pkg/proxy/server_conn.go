@@ -93,7 +93,7 @@ func newServerConn(cn *CNServer, tun *tunnel, r *rebalancer, timeout time.Durati
 	if err != nil {
 		return nil, err
 	}
-	s.mysqlProto = frontend.NewMysqlClientProtocol(s.connID, ios, 0, &fp)
+	s.mysqlProto = frontend.NewMysqlClientProtocol(cn.uuid, s.connID, ios, 0, &fp)
 	return s, nil
 }
 

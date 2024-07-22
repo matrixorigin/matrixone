@@ -18,6 +18,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
@@ -40,17 +41,18 @@ type server struct {
 
 func NewShardServer(
 	cfg Config,
+	logger *log.MOLogger,
 	opts ...ServerOption,
 ) ShardServer {
 	cfg.Validate()
-	env := NewEnv(cfg.SelectCNLabel)
+	env := NewEnv(cfg.ServiceID, cfg.SelectCNLabel)
 	s := &server{
 		cfg: cfg,
 		env: env,
-		r:   newRuntime(env),
+		r:   newRuntime(env, logger),
 		stopper: stopper.NewStopper(
 			"shard-server",
-			stopper.WithLogger(getLogger().RawLogger()),
+			stopper.WithLogger(logger.RawLogger()),
 		),
 		initReplicaVersion: uint64(time.Now().UnixNano()),
 	}
@@ -106,6 +108,7 @@ func (s *server) initRemote() {
 	)
 
 	rpc, err := morpc.NewMessageHandler(
+		s.cfg.ServiceID,
 		"shard-server",
 		s.cfg.ListenAddress,
 		s.cfg.RPC,
@@ -255,7 +258,7 @@ func (s *server) schedule(ctx context.Context) {
 func (s *server) doSchedule() {
 	for _, scheduler := range s.schedulers {
 		if err := scheduler.schedule(s.r, s.filters...); err != nil {
-			getLogger().Error("schedule shards failed",
+			s.r.logger.Error("schedule shards failed",
 				zap.Error(err))
 		}
 	}

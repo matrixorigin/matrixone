@@ -37,12 +37,17 @@ type Coordinator struct {
 	teardown    bool
 	teardownOps []*operator.Operator
 
-	cfg hakeeper.Config
+	service string
+	cfg     hakeeper.Config
 }
 
-func NewCoordinator(cfg hakeeper.Config) *Coordinator {
+func NewCoordinator(
+	service string,
+	cfg hakeeper.Config,
+) *Coordinator {
 	cfg.Fill()
 	return &Coordinator{
+		service:            service,
 		OperatorController: operator.NewController(),
 		cfg:                cfg,
 	}
@@ -56,7 +61,7 @@ func (c *Coordinator) Check(alloc util.IDAllocator, state pb.CheckerState) []pb.
 	cluster := state.ClusterInfo
 	currentTick := state.Tick
 	user := state.TaskTableUser
-	runtime.ProcessLevelRuntime().Logger().Debug("hakeeper checker state",
+	runtime.ServiceRuntime(c.service).Logger().Debug("hakeeper checker state",
 		zap.Any("cluster information", cluster),
 		zap.Any("log state", logState),
 		zap.Any("dn state", tnState),
@@ -66,7 +71,7 @@ func (c *Coordinator) Check(alloc util.IDAllocator, state pb.CheckerState) []pb.
 
 	defer func() {
 		if !c.teardown {
-			runtime.ProcessLevelRuntime().Logger().Debug("MO is working.")
+			runtime.ServiceRuntime(c.service).Logger().Debug("MO is working.")
 		}
 	}()
 
@@ -88,9 +93,9 @@ func (c *Coordinator) Check(alloc util.IDAllocator, state pb.CheckerState) []pb.
 	executing := c.OperatorController.GetExecutingReplicas()
 
 	operators := make([]*operator.Operator, 0)
-	operators = append(operators, logservice.Check(alloc, c.cfg, cluster, logState, executing, user, currentTick)...)
-	operators = append(operators, dnservice.Check(alloc, c.cfg, cluster, tnState, user, currentTick)...)
-	operators = append(operators, cnservice.Check(c.cfg, cnState, user, currentTick)...)
+	operators = append(operators, logservice.Check(c.service, alloc, c.cfg, cluster, logState, executing, user, currentTick)...)
+	operators = append(operators, dnservice.Check(c.service, alloc, c.cfg, cluster, tnState, user, currentTick)...)
+	operators = append(operators, cnservice.Check(c.service, c.cfg, cnState, user, currentTick)...)
 	operators = append(operators, proxy.Check(c.cfg, proxyState, currentTick)...)
 
 	return c.OperatorController.Dispatch(operators, logState, tnState, cnState, proxyState)

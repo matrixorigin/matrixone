@@ -31,8 +31,10 @@ const (
 	defaultTimeout = time.Second * 10
 )
 
-func GetService() ShardService {
-	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.ShardService)
+func GetService(
+	sid string,
+) ShardService {
+	v, ok := runtime.ServiceRuntime(sid).GetGlobalVariables(runtime.ShardService)
 	if !ok {
 		return &service{}
 	}
