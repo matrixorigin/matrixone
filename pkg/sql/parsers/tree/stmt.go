@@ -416,7 +416,7 @@ func (node *ShowCreatePublications) StmtKind() StmtKind {
 }
 
 func (node *ShowPublications) StmtKind() StmtKind {
-	return defaultResRowTyp
+	return compositeResRowType
 }
 
 func (node *ShowTableSize) StmtKind() StmtKind {

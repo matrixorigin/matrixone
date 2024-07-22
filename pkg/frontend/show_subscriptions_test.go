@@ -214,7 +214,7 @@ func TestDoShowSubscriptions(t *testing.T) {
 	require.NoError(t, err)
 
 	rs := ses.GetMysqlResultSet()
-	require.Equal(t, uint64(len(showSubscriptionOutputColumns)), rs.GetColumnCount())
+	require.Equal(t, uint64(len(showSubscriptionsOutputColumns)), rs.GetColumnCount())
 	require.Equal(t, uint64(2), rs.GetRowCount())
 
 	var actual, expected []interface{}
@@ -254,7 +254,7 @@ func TestDoShowSubscriptionsAll(t *testing.T) {
 	require.NoError(t, err)
 
 	rs := ses.GetMysqlResultSet()
-	require.Equal(t, uint64(len(showSubscriptionOutputColumns)), rs.GetColumnCount())
+	require.Equal(t, uint64(len(showSubscriptionsOutputColumns)), rs.GetColumnCount())
 	require.Equal(t, uint64(3), rs.GetRowCount())
 
 	var actual, expected []interface{}
@@ -305,7 +305,7 @@ func TestDoShowSubscriptionsAllLike(t *testing.T) {
 	require.NoError(t, err)
 
 	rs := ses.GetMysqlResultSet()
-	require.Equal(t, uint64(len(showSubscriptionOutputColumns)), rs.GetColumnCount())
+	require.Equal(t, uint64(len(showSubscriptionsOutputColumns)), rs.GetColumnCount())
 	require.Equal(t, uint64(1), rs.GetRowCount())
 
 	var actual, expected []interface{}

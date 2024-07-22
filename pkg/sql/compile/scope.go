@@ -17,10 +17,9 @@ package compile
 import (
 	"context"
 	"fmt"
-	"strings"
-
 	goruntime "runtime"
 	"runtime/debug"
+	"strings"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -1155,7 +1154,7 @@ func (s *Scope) replace(c *Compile) error {
 
 	delAffectedRows := uint64(0)
 	if deleteCond != "" {
-		result, err := c.runSqlWithResult(fmt.Sprintf("delete from %s where %s", tblName, deleteCond))
+		result, err := c.runSqlWithResult(fmt.Sprintf("delete from %s where %s", tblName, deleteCond), -1)
 		if err != nil {
 			return err
 		}
@@ -1168,7 +1167,7 @@ func (s *Scope) replace(c *Compile) error {
 	} else {
 		sql = "insert " + c.sql[7:]
 	}
-	result, err := c.runSqlWithResult(sql)
+	result, err := c.runSqlWithResult(sql, -1)
 	if err != nil {
 		return err
 	}

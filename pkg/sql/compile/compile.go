@@ -4658,10 +4658,14 @@ func (s *Scope) affectedRows() uint64 {
 }
 
 func (c *Compile) runSql(sql string) error {
+	return c.runSqlWithAccountId(sql, -1)
+}
+
+func (c *Compile) runSqlWithAccountId(sql string, accountId int32) error {
 	if sql == "" {
 		return nil
 	}
-	res, err := c.runSqlWithResult(sql)
+	res, err := c.runSqlWithResult(sql, accountId)
 	if err != nil {
 		return err
 	}
@@ -4669,7 +4673,7 @@ func (c *Compile) runSql(sql string) error {
 	return nil
 }
 
-func (c *Compile) runSqlWithResult(sql string) (executor.Result, error) {
+func (c *Compile) runSqlWithResult(sql string, accountId int32) (executor.Result, error) {
 	v, ok := moruntime.ProcessLevelRuntime().GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
 		panic("missing lock service")
@@ -4694,6 +4698,18 @@ func (c *Compile) runSqlWithResult(sql string) (executor.Result, error) {
 		WithDatabase(c.db).
 		WithTimeZone(c.proc.GetSessionInfo().TimeZone).
 		WithLowerCaseTableNames(&lower)
+
+	if accountId >= 0 {
+		oldAccountId, err := defines.GetAccountId(c.proc.Ctx)
+		if err != nil {
+			return executor.Result{}, err
+		}
+
+		c.proc.Ctx = defines.AttachAccountId(c.proc.Ctx, uint32(accountId))
+		defer func() {
+			c.proc.Ctx = defines.AttachAccountId(c.proc.Ctx, oldAccountId)
+		}()
+	}
 	return exec.Exec(c.proc.Ctx, sql, opts)
 }
 
@@ -4813,7 +4829,7 @@ func detectFkSelfRefer(c *Compile, detectSqls []string) error {
 
 // runDetectSql runs the fk detecting sql
 func runDetectSql(c *Compile, sql string) error {
-	res, err := c.runSqlWithResult(sql)
+	res, err := c.runSqlWithResult(sql, -1)
 	if err != nil {
 		c.proc.Errorf(c.proc.Ctx, "The sql that caused the fk self refer check failed is %s, and generated background sql is %s", c.sql, sql)
 		return err
@@ -4834,7 +4850,7 @@ func runDetectSql(c *Compile, sql string) error {
 
 // runDetectFkReferToDBSql runs the fk detecting sql
 func runDetectFkReferToDBSql(c *Compile, sql string) error {
-	res, err := c.runSqlWithResult(sql)
+	res, err := c.runSqlWithResult(sql, -1)
 	if err != nil {
 		c.proc.Errorf(c.proc.Ctx, "The sql that caused the fk self refer check failed is %s, and generated background sql is %s", c.sql, sql)
 		return err

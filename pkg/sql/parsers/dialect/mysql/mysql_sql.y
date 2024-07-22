@@ -534,7 +534,7 @@ import (
 %type <str> urlparams
 %type <str> comment_opt view_list_opt view_opt security_opt view_tail check_type
 %type <subscriptionOption> subscription_opt
-%type <accountsSetOption> alter_publication_accounts_opt
+%type <accountsSetOption> alter_publication_accounts_opt, create_publication_accounts
 %type <str> alter_publication_db_name_opt
 
 %type <select> select_stmt select_no_parens
@@ -4026,11 +4026,11 @@ show_upgrade_stmt:
 show_subscriptions_stmt:
     SHOW SUBSCRIPTIONS like_opt
     {
-	$$ = &tree.ShowSubscriptions{Like: $3}
+	    $$ = &tree.ShowSubscriptions{Like: $3}
     }
 |   SHOW SUBSCRIPTIONS ALL like_opt
     {
-	$$ = &tree.ShowSubscriptions{All: true, Like: $4}
+	    $$ = &tree.ShowSubscriptions{All: true, Like: $4}
     }
 
 like_opt:
@@ -6271,7 +6271,7 @@ create_user_stmt:
     }
 
 create_publication_stmt:
-    CREATE PUBLICATION not_exists_opt ident DATABASE db_name alter_publication_accounts_opt comment_opt
+    CREATE PUBLICATION not_exists_opt ident DATABASE db_name create_publication_accounts comment_opt
     {
         var IfNotExists = $3
         var Name = tree.Identifier($4.Compare())
@@ -6287,7 +6287,7 @@ create_publication_stmt:
             Comment,
         )
     }
-|   CREATE PUBLICATION not_exists_opt ident DATABASE db_name TABLE table_name_list alter_publication_accounts_opt comment_opt
+|   CREATE PUBLICATION not_exists_opt ident DATABASE db_name TABLE table_name_list create_publication_accounts comment_opt
     {
         var IfNotExists = $3
         var Name = tree.Identifier($4.Compare())
@@ -6304,6 +6304,21 @@ create_publication_stmt:
             Comment,
         )
     }
+
+create_publication_accounts:
+    ACCOUNT ALL
+    {
+	    $$ = &tree.AccountsSetOption{
+	        All: true,
+	    }
+    }
+    | ACCOUNT accounts_list
+    {
+    	$$ = &tree.AccountsSetOption{
+	        SetAccounts: $2,
+	    }
+    }
+
 
 create_stage_stmt:
     CREATE STAGE not_exists_opt ident urlparams stage_credentials_opt stage_status_opt stage_comment_opt

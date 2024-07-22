@@ -1184,7 +1184,7 @@ func getCreateTableSql(ctx context.Context, bh BackgroundExec, snapshotName stri
 }
 
 func getAccountId(ctx context.Context, bh BackgroundExec, accountName string) (uint32, error) {
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	sql := getAccountIdNamesSql
 	if len(accountName) > 0 {
 		sql += fmt.Sprintf(" and account_name = '%s'", accountName)
