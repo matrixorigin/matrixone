@@ -135,14 +135,6 @@ func (f *SQLFlusher) FlushBuffer(buf *bytes.Buffer) (int, error) {
 
 	_, err = conn.Exec(loadSQL)
 
-	if err != nil {
-		fmt.Printf("content.go origin: %s\n", buf)
-		fmt.Printf("content.go csv: %s\n", sqlCsv)
-		fmt.Printf("content.go sql: %s\n", loadSQL)
-		fmt.Printf("content.go sql: length: %d, sqlcsv: %d V.S. %d\n", len(loadSQL), sqlCsv.Len(), buf.Len())
-		fmt.Printf("content.go err: %v\n", err)
-	}
-
 	return 0, err
 }
 
