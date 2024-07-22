@@ -143,6 +143,12 @@ mo-debug: config cgo
 	$(info [Build mo-debug tool])
 	$(CGO_OPTS) go build -o mo-debug ./cmd/mo-debug
 
+# build mo-inspect tool
+.PHONY: mo-inspect
+mo-inspect: config cgo
+	$(info [Build mo-inspect tool])
+	$(CGO_OPTS) go build -o mo-inspect ./cmd/mo-inspect
+
 # build mo-service binary for debugging with go's race detector enabled
 # produced executable is 10x slower and consumes much more memory
 .PHONY: debug
