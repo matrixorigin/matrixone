@@ -25,8 +25,6 @@ import (
 	"go.uber.org/zap"
 )
 
-var clusterUpgEntries = []versions.UpgradeEntry{}
-
 var (
 	Handler = &versionHandle{
 		metadata: versions.Version{
