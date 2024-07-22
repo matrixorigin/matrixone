@@ -97,6 +97,10 @@ func (appender *objectAppender) ReplayAppend(
 	bat *containers.Batch,
 	blkOffset uint16,
 	txn txnif.AsyncTxn) (from int, err error) {
+	blkCount := appender.obj.BlockCnt()
+	if blkCount < int(blkOffset)-1 {
+		return 0, nil
+	}
 	if from, err = appender.ApplyAppend(bat, blkOffset, txn); err != nil {
 		return
 	}

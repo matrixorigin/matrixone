@@ -426,9 +426,9 @@ func TestReplay2(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 
-	txn,rel=testutil.GetRelation(t,0,tae,"db",schema.Name)
-	obj:=testutil.GetOneObject(rel)
-	assert.Nil(t,txn.Commit(ctx))
+	txn, rel = testutil.GetRelation(t, 0, tae, "db", schema.Name)
+	obj := testutil.GetOneObject(rel)
+	assert.Nil(t, txn.Commit(ctx))
 	testutil.CompactBlocks(t, 0, tae, "db", schema, true)
 
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))

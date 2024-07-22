@@ -101,6 +101,10 @@ func (obj *aobject) getAppendMVCC(blkID uint16) *updates.AppendMVCCHandle {
 
 // only used in replay
 func (obj *aobject) mustGetAppendMVCC(blkID uint16) *updates.AppendMVCCHandle {
+	blkCount := obj.node.Load().MustMNode().blockCnt()
+	if blkCount < int(blkID)-1 {
+		return nil
+	}
 	return obj.PinNode().MustMNode().getOrCreateNode(blkID).appendMVCC
 }
 func (obj *aobject) PPString(level common.PPLevel, depth int, prefix string, blkid int) string {
@@ -515,7 +519,11 @@ func (obj *aobject) RunCalibration() (score int, err error) {
 func (obj *aobject) OnReplayAppend(node txnif.AppendNode) (err error) {
 	an := node.(*updates.AppendNode)
 	blkID := an.GetID().GetBlockOffset()
-	obj.mustGetAppendMVCC(blkID).OnReplayAppendNode(an)
+	appendMVCC := obj.mustGetAppendMVCC(blkID)
+	if appendMVCC == nil {
+		return nil
+	}
+	appendMVCC.OnReplayAppendNode(an)
 	return
 }
 

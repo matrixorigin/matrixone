@@ -80,7 +80,7 @@ func TestTables1(t *testing.T) {
 	assert.Equal(t, uint32(0), toAppend)
 
 	txn, _ = db.StartTxn(nil)
-	appender.ApplyAppend(bat, 0, txn)// update size of aobj
+	appender.ApplyAppend(bat, 0, txn) // update size of aobj
 
 	_, err = handle.GetAppender()
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrAppendableObjectNotFound))
