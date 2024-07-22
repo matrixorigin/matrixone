@@ -1240,7 +1240,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 					// optimize for limit 0
 					rs := newScope(Merge)
 					rs.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
-					rs.Proc = process.NewFromProc(c.proc, c.proc.Ctx, 0)
+					rs.Proc = c.proc.NewNoContextChildProc(0)
 					return c.compileLimit(n, []*Scope{rs}), nil
 				}
 			}
@@ -1641,7 +1641,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		}
 		rs := newScope(Merge)
 		rs.NodeInfo = getEngineNode(c)
-		rs.Proc = process.NewFromProc(c.proc, c.proc.Ctx, 1)
+		rs.Proc = c.proc.NewNoContextChildProc(1)
 		rs.setRootOperator(merge.NewArgument().WithSinkScan(true))
 		for _, r := range receivers {
 			r.Ctx = rs.Proc.Ctx
@@ -1659,7 +1659,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		}
 		rs := newScope(Merge)
 		rs.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
-		rs.Proc = process.NewFromProc(c.proc, c.proc.Ctx, len(receivers))
+		rs.Proc = c.proc.NewNoContextChildProc(len(receivers))
 		rs.setRootOperator(mergerecursive.NewArgument())
 
 		for _, r := range receivers {
@@ -1678,7 +1678,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		}
 		rs := newScope(Merge)
 		rs.NodeInfo = getEngineNode(c)
-		rs.Proc = process.NewFromProc(c.proc, c.proc.Ctx, len(receivers))
+		rs.Proc = c.proc.NewNoContextChildProc(len(receivers))
 		rs.setRootOperator(mergecte.NewArgument())
 
 		for _, r := range receivers {
@@ -1732,7 +1732,7 @@ func (c *Compile) constructScopeForExternal(addr string, parallel bool) *Scope {
 	}
 	ds.NodeInfo = getEngineNode(c)
 	ds.NodeInfo.Addr = addr
-	ds.Proc = process.NewFromProc(c.proc, c.proc.Ctx, 0)
+	ds.Proc = c.proc.NewNoContextChildProc(0)
 	c.proc.Base.LoadTag = c.anal.qry.LoadTag
 	ds.Proc.Base.LoadTag = true
 	ds.DataSource = &Source{isConst: true}
@@ -1741,7 +1741,7 @@ func (c *Compile) constructScopeForExternal(addr string, parallel bool) *Scope {
 
 func (c *Compile) constructLoadMergeScope() *Scope {
 	ds := newScope(Merge)
-	ds.Proc = process.NewFromProc(c.proc, c.proc.Ctx, 1)
+	ds.Proc = c.proc.NewNoContextChildProc(1)
 	ds.Proc.Base.LoadTag = true
 	arg := merge.NewArgument()
 	arg.SetIdx(c.anal.curr)
@@ -1774,7 +1774,7 @@ func (c *Compile) compileSourceScan(n *plan.Node) ([]*Scope, error) {
 	for i := range ss {
 		ss[i] = newScope(Normal)
 		ss[i].NodeInfo = getEngineNode(c)
-		ss[i].Proc = process.NewFromProc(c.proc, c.proc.Ctx, 0)
+		ss[i].Proc = c.proc.NewNoContextChildProc(0)
 		arg := constructStream(n, ps[i])
 		arg.SetIdx(c.anal.curr)
 		arg.SetIsFirst(c.anal.isFirst)
@@ -1930,7 +1930,7 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 		op.SetIdx(c.anal.curr)
 		op.SetIsFirst(c.anal.isFirst)
 		ret.setRootOperator(op)
-		ret.Proc = process.NewFromProc(c.proc, c.proc.Ctx, 0)
+		ret.Proc = c.proc.NewNoContextChildProc(0)
 
 		return []*Scope{ret}, nil
 	}
@@ -2095,7 +2095,7 @@ func (c *Compile) compileValueScan(n *plan.Node) ([]*Scope, error) {
 	ds := newScope(Normal)
 	ds.DataSource = &Source{isConst: true, node: n}
 	ds.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
-	ds.Proc = process.NewFromProc(c.proc, c.proc.Ctx, 0)
+	ds.Proc = c.proc.NewNoContextChildProc(0)
 
 	op := constructValueScan()
 	op.SetIdx(c.anal.curr)
@@ -2136,7 +2136,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) (*Sco
 	op.SetIdx(c.anal.curr)
 	op.SetIsFirst(c.anal.isFirst)
 	s.setRootOperator(op)
-	s.Proc = process.NewFromProc(c.proc, c.proc.Ctx, 0)
+	s.Proc = c.proc.NewNoContextChildProc(0)
 	return s, nil
 }
 
@@ -3283,7 +3283,7 @@ func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*
 				s := newScope(Merge)
 				s.setRootOperator(merge.NewArgument())
 				scopes = append(scopes, s)
-				scopes[i].Proc = process.NewFromProc(c.proc, c.proc.Ctx, 1)
+				scopes[i].Proc = c.proc.NewNoContextChildProc(1)
 				if c.anal.qry.LoadTag {
 					for _, rr := range scopes[i].Proc.Reg.MergeReceivers {
 						rr.Ch = make(chan *process.RegisterMessage, shuffleChannelBufferSize)
@@ -3433,7 +3433,7 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 		}
 		cnt++
 	}
-	rs.Proc = process.NewFromProc(c.proc, c.proc.Ctx, cnt)
+	rs.Proc = c.proc.NewNoContextChildProc(cnt)
 	if len(ss) > 0 {
 		rs.Proc.Base.LoadTag = ss[0].Proc.Base.LoadTag
 	}
@@ -3518,7 +3518,7 @@ func (c *Compile) newScopeListWithNode(mcpu, childrenCount int, addr string) []*
 		ss[i].Magic = Remote
 		ss[i].NodeInfo.Addr = addr
 		ss[i].NodeInfo.Mcpu = 1 // ss is already the mcpu length so we don't need to parallel it
-		ss[i].Proc = process.NewFromProc(c.proc, c.proc.Ctx, childrenCount)
+		ss[i].Proc = c.proc.NewNoContextChildProc(childrenCount)
 		merge := merge.NewArgument()
 		merge.SetIdx(c.anal.curr)
 		merge.SetIsFirst(currentFirstFlag)
@@ -3553,7 +3553,7 @@ func (c *Compile) newScopeListForRightJoin(childrenCount int, bIdx int, leftScop
 	ss := make([]*Scope, 1)
 	ss[0] = newScope(Remote)
 	ss[0].IsJoin = true
-	ss[0].Proc = process.NewFromProc(c.proc, c.proc.Ctx, childrenCount)
+	ss[0].Proc = c.proc.NewNoContextChildProc(childrenCount)
 	ss[0].NodeInfo = engine.Node{Addr: c.addr, Mcpu: maxCpuNum}
 	ss[0].BuildIdx = bIdx
 	return ss
@@ -3600,7 +3600,7 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 			idx = i
 		}
 		rs[i].PreScopes = []*Scope{probeScopes[i]}
-		rs[i].Proc = process.NewFromProc(c.proc, c.proc.Ctx, 2)
+		rs[i].Proc = c.proc.NewNoContextChildProc(2)
 		probeScopes[i].setRootOperator(
 			connector.NewArgument().
 				WithReg(rs[i].Proc.Reg.MergeReceivers[0]))
@@ -3652,7 +3652,7 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 			ss[i].IsJoin = true
 			ss[i].NodeInfo.Addr = cn.Addr
 			ss[i].NodeInfo.Mcpu = 1
-			ss[i].Proc = process.NewFromProc(c.proc, c.proc.Ctx, sum)
+			ss[i].Proc = c.proc.NewNoContextChildProc(sum)
 			ss[i].BuildIdx = lnum
 			ss[i].ShuffleCnt = dop
 			for _, rr := range ss[i].Proc.Reg.MergeReceivers {
@@ -3718,7 +3718,7 @@ func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 	merge.SetIdx(vm.GetLeafOp(s.RootOp).GetOperatorBase().GetIdx())
 	merge.SetIsFirst(true)
 	rs.setRootOperator(merge)
-	rs.Proc = process.NewFromProc(s.Proc, s.Proc.Ctx, s.BuildIdx)
+	rs.Proc = s.Proc.NewContextChildProc(s.BuildIdx)
 	for i := 0; i < s.BuildIdx; i++ {
 		regTransplant(s, rs, i, i)
 	}
@@ -3745,7 +3745,7 @@ func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 	rs := newScope(Merge)
 	buildLen := len(s.Proc.Reg.MergeReceivers) - s.BuildIdx
-	rs.Proc = process.NewFromProc(s.Proc, s.Proc.Ctx, buildLen)
+	rs.Proc = s.Proc.NewContextChildProc(buildLen)
 	for i := 0; i < buildLen; i++ {
 		regTransplant(s, rs, i+s.BuildIdx, i)
 	}

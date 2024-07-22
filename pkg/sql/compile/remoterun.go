@@ -356,7 +356,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		s.NodeInfo.Data = []byte(p.Node.Payload)
 		s.NodeInfo.Header = objectio.DecodeInfoHeader(p.Node.Type)
 	}
-	s.Proc = process.NewFromProc(proc, proc.Ctx, int(p.ChildrenCount))
+	s.Proc = proc.NewNoContextChildProc(int(p.ChildrenCount))
 	{
 		for i := range s.Proc.Reg.MergeReceivers {
 			ctx.regs[s.Proc.Reg.MergeReceivers[i]] = int32(i)

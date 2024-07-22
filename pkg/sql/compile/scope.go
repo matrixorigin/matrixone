@@ -471,7 +471,7 @@ func buildJoinParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	for i := 0; i < mcpu; i++ {
 		ss[i] = newScope(Merge)
 		ss[i].NodeInfo = s.NodeInfo
-		ss[i].Proc = process.NewFromProc(s.Proc, s.Proc.Ctx, 2)
+		ss[i].Proc = s.Proc.NewContextChildProc(2)
 		ss[i].Proc.Reg.MergeReceivers[1].Ch = make(chan *process.RegisterMessage, 10)
 	}
 	probeScope, buildScope := c.newJoinProbeScope(s, ss), c.newJoinBuildScope(s, ss)
@@ -528,7 +528,7 @@ func buildLoadParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		ss[i].DataSource = &Source{
 			isConst: true,
 		}
-		ss[i].Proc = process.NewFromProc(s.Proc, c.proc.Ctx, 0)
+		ss[i].Proc = s.Proc.NewContextChildProc(0)
 		if err := ss[i].initDataSource(c); err != nil {
 			return nil, err
 		}
@@ -587,7 +587,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 			AccountId:    s.DataSource.AccountId,
 			node:         s.DataSource.node,
 		}
-		readerScopes[i].Proc = process.NewFromProc(s.Proc, c.proc.Ctx, 0)
+		readerScopes[i].Proc = s.Proc.NewContextChildProc(0)
 		readerScopes[i].TxnOffset = s.TxnOffset
 	}
 
