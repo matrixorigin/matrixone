@@ -111,7 +111,7 @@ func Stop(sid string) {
 func MustGetPipeline(sid string) *IoPipeline {
 	v, ok := rt.ServiceRuntime(sid).GetGlobalVariables("blockio")
 	if !ok {
-		panic("blockio not started")
+		panic("blockio not started for " + sid)
 	}
 	return v.(*IoPipeline)
 }
