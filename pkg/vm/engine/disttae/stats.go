@@ -296,11 +296,13 @@ func (gs *GlobalStats) updateWorker(ctx context.Context) {
 func (gs *GlobalStats) triggerUpdate(key pb.StatsInfoKey, force bool) {
 	if force {
 		gs.updateC <- key
+		v2.StatsTriggerForcedCounter.Add(1)
 		return
 	}
 
 	select {
 	case gs.updateC <- key:
+		v2.StatsTriggerUnforcedCounter.Add(1)
 	default:
 	}
 }
@@ -519,6 +521,7 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 		logutil.Errorf("failed to init stats info for table %v, err: %v", key, err)
 		return
 	}
+	v2.StatsUpdateBlockCounter.Add(float64(stats.BlockNumber))
 	updated = true
 }
 
