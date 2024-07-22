@@ -622,7 +622,7 @@ func (ndesc *NodeDescribeImpl) GetSendMessageInfo(ctx context.Context, options *
 				continue
 			}
 			if first {
-				buf.WriteString("Recv Message: ")
+				buf.WriteString("Send Message: ")
 			} else {
 				buf.WriteString(", ")
 			}
