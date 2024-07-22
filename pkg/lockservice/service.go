@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -54,6 +55,7 @@ type service struct {
 	stopper              *stopper.Stopper
 	stopOnce             sync.Once
 	fetchWhoWaitingListC chan who
+	logger               *log.MOLogger
 
 	remote struct {
 		client Client
@@ -91,29 +93,32 @@ func NewLockService(
 		cfg:       cfg,
 		fsp:       newFixedSlicePool(int(cfg.MaxFixedSliceSize)),
 		stopper: stopper.NewStopper("lock-service",
-			stopper.WithLogger(getLogger().RawLogger())),
+			stopper.WithLogger(getLogger(cfg.ServiceID).RawLogger())),
 		fetchWhoWaitingListC: make(chan who, 10240),
+		logger:               getLogger(cfg.ServiceID),
 	}
 
 	for _, opt := range opts {
 		opt(s)
 	}
 
-	s.tableGroups = &lockTableHolders{service: s.serviceID, holders: map[uint32]*lockTableHolder{}}
+	s.tableGroups = &lockTableHolders{service: s.serviceID, logger: s.logger, holders: map[uint32]*lockTableHolder{}}
 	s.mu.allocating = make(map[uint32]map[uint64]chan struct{})
 	s.mu.lockTableRef = make(map[uint32]map[uint64]uint64)
 	s.deadlockDetector = newDeadlockDetector(
+		s.logger,
 		s.fetchTxnWaitingList,
-		s.abortDeadlockTxn)
-	s.clock = runtime.ProcessLevelRuntime().Clock()
+		s.abortDeadlockTxn,
+	)
+	s.clock = runtime.ServiceRuntime(cfg.ServiceID).Clock()
 
 	s.initRemote()
-	s.events = newWaiterEvents(eventsWorkers, s.deadlockDetector, s.activeTxnHolder, s.Unlock)
+	s.events = newWaiterEvents(eventsWorkers, s.deadlockDetector, s.activeTxnHolder, s.Unlock, s.logger)
 	s.events.start()
 	for i := 0; i < fetchWhoWaitingListTaskCount; i++ {
 		_ = s.stopper.RunTask(s.handleFetchWhoWaitingMe)
 	}
-	logLockServiceStartSucc(s.serviceID)
+	logLockServiceStartSucc(s.logger, s.serviceID)
 	return s
 }
 
@@ -220,8 +225,8 @@ func (s *service) Unlock(
 		}
 	}
 
-	defer logUnlockTxn(s.serviceID, txn)()
-	txn.close(s.serviceID, txnID, commitTS, s.getLockTable, mutations...)
+	defer logUnlockTxn(s.logger, s.serviceID, txn)()
+	txn.close(s.serviceID, txnID, commitTS, s.getLockTable, s.logger, mutations...)
 	// The deadlock detector will hold the deadlocked transaction that is aborted
 	// to avoid the situation where the deadlock detection is interfered with by
 	// the abort transaction. When a transaction is unlocked, the deadlock detector
@@ -298,7 +303,7 @@ func (s *service) checkCanMoveGroupTables() {
 	}
 	s.mu.restartTime, _ = s.clock.Now()
 	s.mu.status = pb.Status_ServiceLockWaiting
-	logStatusChange(s.mu.status, pb.Status_ServiceLockWaiting)
+	logStatusChange(s.logger, s.mu.status, pb.Status_ServiceLockWaiting)
 }
 
 func (s *service) incRef(group uint32, table uint64) {
@@ -322,7 +327,7 @@ func (s *service) canLockOnServiceStatus(
 		tableID = shardingByRow(rows[0])
 	}
 	if !s.validGroupTable(opts.Group, tableID) {
-		logCanLockOnService(s.serviceID)
+		logCanLockOnService(s.logger, s.serviceID)
 		return false
 	}
 	if s.activeTxnHolder.hasActiveTxn(txnID) {
@@ -386,7 +391,7 @@ func (s *service) Close() error {
 func (s *service) setStatus(status pb.Status) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	logStatusChange(s.mu.status, status)
+	logStatusChange(s.logger, s.mu.status, status)
 	s.mu.status = status
 }
 
@@ -463,7 +468,7 @@ func (s *service) abortDeadlockTxn(wait pb.WaitTxn, err error) {
 	if activeTxn == nil {
 		return
 	}
-	activeTxn.abort(s.serviceID, wait, err)
+	activeTxn.abort(s.serviceID, wait, err, s.logger)
 }
 
 func (s *service) getLockTable(
@@ -572,9 +577,11 @@ func (s *service) handleBindChanged(newBind pb.LockTable) {
 
 func (s *service) createLockTableByBind(bind pb.LockTable) lockTable {
 	defer logLockTableCreated(
+		s.logger,
 		s.serviceID,
 		bind,
-		bind.ServiceID != s.serviceID)
+		bind.ServiceID != s.serviceID,
+	)
 
 	if bind.ServiceID == s.serviceID {
 		return newLocalLockTable(
@@ -582,18 +589,22 @@ func (s *service) createLockTableByBind(bind pb.LockTable) lockTable {
 			s.fsp,
 			s.events,
 			s.clock,
-			s.activeTxnHolder)
+			s.activeTxnHolder,
+			s.logger,
+		)
 	} else {
 		remote := newRemoteLockTable(
 			s.serviceID,
 			s.cfg.RemoteLockTimeout.Duration,
 			bind,
 			s.remote.client,
-			s.handleBindChanged)
+			s.handleBindChanged,
+			s.logger,
+		)
 		if !s.cfg.EnableRemoteLocalProxy {
 			return remote
 		}
-		return newLockTableProxy(s.serviceID, remote)
+		return newLockTableProxy(s.serviceID, remote, s.logger)
 	}
 }
 
@@ -622,6 +633,7 @@ type activeTxnHolder interface {
 
 type mapBasedTxnHolder struct {
 	serviceID string
+	logger    *log.MOLogger
 	fsp       *fixedSlicePool
 	validTxn  func(txn pb.WaitTxn) (bool, error)
 	valid     func(sid string) (bool, error)
@@ -639,12 +651,14 @@ type mapBasedTxnHolder struct {
 
 func newMapBasedTxnHandler(
 	serviceID string,
+	logger *log.MOLogger,
 	fsp *fixedSlicePool,
 	valid func(sid string) (bool, error),
 	notify func([]pb.OrphanTxn) ([][]byte, error),
 	validTxn func(txn pb.WaitTxn) (bool, error),
 ) activeTxnHolder {
 	h := &mapBasedTxnHolder{}
+	h.logger = logger
 	h.fsp = fsp
 	h.valid = valid
 	h.notify = notify
@@ -667,7 +681,8 @@ func (h *mapBasedTxnHolder) getActiveLocked(txnKey string) *activeTxn {
 func (h *mapBasedTxnHolder) getActiveTxn(
 	txnID []byte,
 	create bool,
-	remoteService string) *activeTxn {
+	remoteService string,
+) *activeTxn {
 	txnKey := util.UnsafeBytesToString(txnID)
 	h.mu.RLock()
 	v := h.getActiveLocked(txnKey)
@@ -699,7 +714,7 @@ func (h *mapBasedTxnHolder) getActiveTxn(
 
 		}
 	}
-	logTxnCreated(txn)
+	logTxnCreated(h.logger, txn)
 	return txn
 }
 
@@ -913,6 +928,7 @@ func shardingByRow(row []byte) uint64 {
 type lockTableHolders struct {
 	sync.RWMutex
 	service string
+	logger  *log.MOLogger
 	holders map[uint32]*lockTableHolder
 }
 
@@ -921,7 +937,7 @@ func (m *lockTableHolders) get(group uint32, id uint64) lockTable {
 }
 
 func (m *lockTableHolders) set(group uint32, id uint64, new lockTable) lockTable {
-	return m.mustGetHolder(group).set(id, new)
+	return m.mustGetHolder(group).set(id, new, m.logger)
 }
 
 func (m *lockTableHolders) mustGetHolder(group uint32) *lockTableHolder {
@@ -976,7 +992,11 @@ func (m *lockTableHolder) get(id uint64) lockTable {
 	return m.tables[id]
 }
 
-func (m *lockTableHolder) set(id uint64, new lockTable) lockTable {
+func (m *lockTableHolder) set(
+	id uint64,
+	new lockTable,
+	logger *log.MOLogger,
+) lockTable {
 	m.Lock()
 	defer m.Unlock()
 
@@ -992,7 +1012,7 @@ func (m *lockTableHolder) set(id uint64, new lockTable) lockTable {
 	if oldBind.Changed(newBind) {
 		old.close()
 		m.tables[id] = new
-		logRemoteBindChanged(m.service, oldBind, newBind)
+		logRemoteBindChanged(logger, m.service, oldBind, newBind)
 		return new
 	}
 	new.close()

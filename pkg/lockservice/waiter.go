@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -39,7 +40,6 @@ const (
 
 func acquireWaiter(txn pb.WaitTxn) *waiter {
 	w := reuse.Alloc[waiter](nil)
-	logWaiterContactPool(w, "get")
 	w.txn = txn
 	if w.ref() != 1 {
 		panic("BUG: invalid ref count")
@@ -116,31 +116,41 @@ func (w *waiter) getStatus() waiterStatus {
 	return waiterStatus(w.status.Load())
 }
 
-func (w *waiter) setStatus(status waiterStatus) {
+func (w *waiter) setStatus(
+	status waiterStatus,
+) {
 	w.status.Store(int32(status))
-	logWaiterStatusUpdate(w, status)
 }
 
-func (w *waiter) casStatus(old, new waiterStatus) bool {
+func (w *waiter) casStatus(
+	old, new waiterStatus,
+	logger *log.MOLogger,
+) bool {
 	if w.status.CompareAndSwap(int32(old), int32(new)) {
-		logWaiterStatusChanged(w, old, new)
+		logWaiterStatusChanged(logger, w, old, new)
 		return true
 	}
 	return false
 }
 
-func (w *waiter) mustRecvNotification(ctx context.Context) notifyValue {
+func (w *waiter) mustRecvNotification(
+	ctx context.Context,
+	logger *log.MOLogger,
+) notifyValue {
 	select {
 	case v := <-w.c:
-		logWaiterGetNotify(w, v)
+		logWaiterGetNotify(logger, w, v)
 		return v
 	case <-ctx.Done():
 		return notifyValue{err: ctx.Err()}
 	}
 }
 
-func (w *waiter) mustSendNotification(value notifyValue) {
-	logWaiterNotified(w, value)
+func (w *waiter) mustSendNotification(
+	value notifyValue,
+	logger *log.MOLogger,
+) {
+	logWaiterNotified(logger, w, value)
 
 	w.event.notified()
 	select {
@@ -151,15 +161,20 @@ func (w *waiter) mustSendNotification(value notifyValue) {
 	panic("BUG: must send value to channel, " + w.String())
 }
 
-func (w *waiter) resetWait() {
-	if w.casStatus(completed, ready) {
+func (w *waiter) resetWait(
+	logger *log.MOLogger,
+) {
+	if w.casStatus(completed, ready, logger) {
 		w.event = event{}
 		return
 	}
 	panic("invalid reset wait")
 }
 
-func (w *waiter) wait(ctx context.Context) notifyValue {
+func (w *waiter) wait(
+	ctx context.Context,
+	logger *log.MOLogger,
+) notifyValue {
 	status := w.getStatus()
 	if status != blocking &&
 		status != notified {
@@ -169,7 +184,7 @@ func (w *waiter) wait(ctx context.Context) notifyValue {
 	w.beforeSwapStatusAdjustFunc()
 
 	apply := func(v notifyValue) {
-		logWaiterGetNotify(w, v)
+		logWaiterGetNotify(logger, w, v)
 		w.setStatus(completed)
 	}
 	select {
@@ -188,13 +203,13 @@ func (w *waiter) wait(ctx context.Context) notifyValue {
 	w.beforeSwapStatusAdjustFunc()
 
 	// context is timeout, and status not changed, no concurrent happen
-	if w.casStatus(status, completed) {
+	if w.casStatus(status, completed, logger) {
 		return notifyValue{err: ctx.Err()}
 	}
 	// notify and timeout are concurrently issued, we use real result to replace
 	// timeout error
 	w.setStatus(completed)
-	return w.mustRecvNotification(ctx)
+	return w.mustRecvNotification(ctx, logger)
 }
 
 func (w *waiter) disableNotify() {
@@ -206,9 +221,12 @@ func (w *waiter) disableNotify() {
 }
 
 // notify return false means this waiter is completed, cannot be used to notify
-func (w *waiter) notify(value notifyValue) bool {
+func (w *waiter) notify(
+	value notifyValue,
+	logger *log.MOLogger,
+) bool {
 	debug := ""
-	if getLogger().Enabled(zap.DebugLevel) {
+	if logger != nil && logger.Enabled(zap.DebugLevel) {
 		debug = w.String()
 	}
 
@@ -216,18 +234,18 @@ func (w *waiter) notify(value notifyValue) bool {
 		status := w.getStatus()
 		// not on wait, no need to notify
 		if status != blocking {
-			logWaiterNotifySkipped(debug, "waiter not in blocking")
+			logWaiterNotifySkipped(logger, debug, "waiter not in blocking")
 			return false
 		}
 
 		w.beforeSwapStatusAdjustFunc()
 		// if status changed, notify and timeout are concurrently issued, need
 		// retry.
-		if w.casStatus(status, notified) {
-			w.mustSendNotification(value)
+		if w.casStatus(status, notified, logger) {
+			w.mustSendNotification(value, logger)
 			return true
 		}
-		logWaiterNotifySkipped(debug, "concurrently issued")
+		logWaiterNotifySkipped(logger, debug, "concurrently issued")
 	}
 }
 
@@ -243,7 +261,6 @@ func (w *waiter) reset() {
 			notifies))
 	}
 
-	logWaiterContactPool(w, "put")
 	w.txn = pb.WaitTxn{}
 	w.event = event{}
 	w.waitFor = w.waitFor[:0]

@@ -441,6 +441,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 					FileSize:        t.Es.FileSize,
 					FileOffsetTotal: t.Es.FileOffsetTotal,
 					Extern:          t.Es.Extern,
+					TbColToDataCol:  t.Es.TbColToDataCol,
 				},
 				ExParam: external.ExParam{
 					Filter: &external.FilterParam{
@@ -790,9 +791,17 @@ func constructProjection(n *plan.Node) *projection.Projection {
 }
 
 func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Context, fileList []string, FileSize []int64, fileOffset []*pipeline.FileOffset) *external.External {
-	attrs := make([]string, len(n.TableDef.Cols))
-	for j, col := range n.TableDef.Cols {
-		attrs[j] = col.Name
+	var attrs []string
+
+	for _, col := range n.TableDef.Cols {
+		if !col.Hidden {
+			attrs = append(attrs, col.Name)
+		}
+	}
+
+	var tbColToDataCol map[string]int32
+	if n.ExternScan != nil {
+		tbColToDataCol = n.ExternScan.TbColToDataCol
 	}
 	return external.NewArgument().WithEs(
 		&external.ExternalParam{
@@ -801,6 +810,7 @@ func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Contex
 				Cols:            n.TableDef.Cols,
 				Extern:          param,
 				Name2ColIndex:   n.TableDef.Name2ColIndex,
+				TbColToDataCol:  tbColToDataCol,
 				FileOffsetTotal: fileOffset,
 				CreateSql:       n.TableDef.Createsql,
 				Ctx:             ctx,

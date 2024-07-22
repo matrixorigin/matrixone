@@ -143,7 +143,7 @@ func newExpr(pos int32, typ types.Type) *plan.Expr {
 }
 
 func newTestCase(flgs []bool, ts []types.Type, cs []*plan.Expr) buildTestCase {
-	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
+	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
@@ -164,7 +164,6 @@ func newTestCase(flgs []bool, ts []types.Type, cs []*plan.Expr) buildTestCase {
 				MatchPrefix: false,
 				UpperLimit:  0,
 				Expr:        nil,
-				Handled:     false,
 			},
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
