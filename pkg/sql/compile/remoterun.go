@@ -787,6 +787,7 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 			CreateSql:       t.Es.CreateSql,
 			FileList:        t.Es.FileList,
 			Filter:          t.Es.Filter.FilterExpr,
+			TbColToDataCol:  t.Es.TbColToDataCol,
 		}
 	case *source.Source:
 		in.StreamScan = &pipeline.StreamScan{
@@ -1213,6 +1214,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 					CreateSql:       t.CreateSql,
 					Name2ColIndex:   name2ColIndex,
 					FileList:        t.FileList,
+					TbColToDataCol:  t.TbColToDataCol,
 				},
 				ExParam: external.ExParam{
 					Fileparam: new(external.ExFileparam),

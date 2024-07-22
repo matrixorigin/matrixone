@@ -107,7 +107,7 @@ func (shuffleBuild *ShuffleBuild) Reset(proc *process.Process, pipelineFailed bo
 
 func (shuffleBuild *ShuffleBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := shuffleBuild.ctr
-	proc.FinalizeRuntimeFilter(shuffleBuild.RuntimeFilterSpec)
+	proc.FinalizeRuntimeFilter(shuffleBuild.RuntimeFilterSpec, pipelineFailed, err)
 	if ctr != nil {
 		ctr.cleanBatches(proc)
 		ctr.cleanEvalVectors()

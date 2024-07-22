@@ -76,7 +76,7 @@ func TestAllocateID(t *testing.T) {
 		ServiceAddresses: []string{c.(*testCluster).network.addresses.logAddresses[0].listenAddr},
 		AllocateIDBatch:  10,
 	}
-	hc, err := logservice.NewCNHAKeeperClient(ctx, cfg)
+	hc, err := logservice.NewCNHAKeeperClient(ctx, "", cfg)
 	require.NoError(t, err)
 	defer func() {
 		assert.NoError(t, hc.Close())
@@ -121,7 +121,7 @@ func TestAllocateIDByKey(t *testing.T) {
 		ServiceAddresses: []string{c.(*testCluster).network.addresses.logAddresses[0].listenAddr},
 		AllocateIDBatch:  10,
 	}
-	hc, err := logservice.NewCNHAKeeperClient(ctx, cfg)
+	hc, err := logservice.NewCNHAKeeperClient(ctx, "", cfg)
 	require.NoError(t, err)
 	defer func() {
 		assert.NoError(t, hc.Close())
