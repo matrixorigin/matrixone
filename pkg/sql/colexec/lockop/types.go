@@ -15,6 +15,7 @@
 package lockop
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -27,7 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(LockOp)
 
 // FetchLockRowsFunc fetch lock rows from vector.
 type FetchLockRowsFunc func(
@@ -61,46 +62,50 @@ type LockOptions struct {
 	hasNewVersionInRangeFunc hasNewVersionInRangeFunc
 }
 
-// Argument lock op argument.
-type Argument struct {
+type container struct {
+	// state used for save lock op temp state.
+	rt *state
+}
+
+// LockOp lock op argument.
+type LockOp struct {
+	logger  *log.MOLogger
+	ctr     *container
 	engine  engine.Engine
 	targets []lockTarget
 	block   bool
 
-	// state used for save lock op temp state.
-	rt *state
-
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (lockOp *LockOp) GetOperatorBase() *vm.OperatorBase {
+	return &lockOp.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[LockOp](
+		func() *LockOp {
+			return &LockOp{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *LockOp) {
+			*a = LockOp{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[LockOp]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (lockOp LockOp) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *LockOp {
+	return reuse.Alloc[LockOp](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (lockOp *LockOp) Release() {
+	if lockOp != nil {
+		reuse.Free[LockOp](lockOp, nil)
 	}
 }
 

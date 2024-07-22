@@ -1,9 +1,9 @@
+SET experimental_ivf_index = 1;
+
 -- pre
 drop database if exists vecdb3;
 create database vecdb3;
 use vecdb3;
-SET GLOBAL experimental_ivf_index = 1;
-
 
 -- 0.a  Verify Experimental Flag
 drop table if exists t6;
@@ -14,9 +14,11 @@ insert into t6 values(3, "[3,0,0,0]", "3");
 insert into t6 values(4, "[11,11,0,0]", "4");
 insert into t6 values(5, "[12,12,0,0]", "5");
 insert into t6 values(6, "[13,13,0,0]", "6");
-SET GLOBAL experimental_ivf_index = 0;
+SET experimental_ivf_index = 0;
+
 create index idx6 using ivfflat on t6(b) lists=2 op_type "vector_l2_ops";
-SET GLOBAL experimental_ivf_index = 1;
+SET experimental_ivf_index = 1;
+
 create index idx6 using ivfflat on t6(b) lists=2 op_type "vector_l2_ops";
 select a, b from t6 order by l2_distance(b, "[1,0,0,0]") limit 4;
 
@@ -180,8 +182,6 @@ select a, b from t5 order by l2_distance(b, "[111,111,111,0]") limit 7;
 insert into t5 values(11, "[114,114,114,0]", "11");
 select a, b from t5 order by l2_distance(b, "[111,111,111,0]") limit 7;
 
-
 -- post
-SET GLOBAL experimental_ivf_index = 0;
+SET experimental_ivf_index = 0;
 drop database vecdb3;
-

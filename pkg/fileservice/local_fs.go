@@ -23,13 +23,11 @@ import (
 	"os"
 	pathpkg "path"
 	"path/filepath"
-	gotrace "runtime/trace"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
@@ -151,6 +149,7 @@ func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
 				*config.DiskPath,
 				int(*config.DiskCapacity),
 				l.perfCounterSets,
+				true,
 			)
 			if err != nil {
 				return err
@@ -174,8 +173,6 @@ func (l *LocalFS) Write(ctx context.Context, vector IOVector) error {
 		return err
 	}
 
-	metric.FSWriteLocalCounter.Add(float64(len(vector.Entries)))
-
 	var err error
 	var bytesWritten int
 	start := time.Now()
@@ -183,7 +180,7 @@ func (l *LocalFS) Write(ctx context.Context, vector IOVector) error {
 	defer func() {
 		// cover another func to catch the err when process Write
 		span.End(trace.WithFSReadWriteExtra(vector.FilePath, err, int64(bytesWritten)))
-		metric.LocalWriteIODurationHistogram.Observe(time.Since(start).Seconds())
+		metric.FSWriteDurationWrite.Observe(time.Since(start).Seconds())
 		metric.LocalWriteIOBytesHistogram.Observe(float64(bytesWritten))
 	}()
 
@@ -293,12 +290,10 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	bytesCounter := new(atomic.Int64)
-	start := time.Now()
+	t0 := time.Now()
 	defer func() {
-		LocalReadIODuration := time.Since(start)
-
-		metric.LocalReadIODurationHistogram.Observe(LocalReadIODuration.Seconds())
 		metric.LocalReadIOBytesHistogram.Observe(float64(bytesCounter.Load()))
+		metric.FSReadDurationGetContent.Observe(time.Since(t0).Seconds())
 	}()
 
 	if len(vector.Entries) == 0 {
@@ -306,17 +301,6 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	stats := statistic.StatsInfoFromContext(ctx)
-
-	startLock := time.Now()
-	_, task := gotrace.NewTask(ctx, "LocalFS.Read: wait io")
-	done, wait := l.ioMerger.Merge(vector.ioMergeKey())
-	if done != nil {
-		defer done()
-	} else {
-		wait()
-	}
-	task.End()
-	stats.AddLocalFSReadIOMergerTimeConsumption(time.Since(startLock))
 
 	allocator := l.allocator
 	if vector.Policy.Any(SkipMemoryCache) {
@@ -328,26 +312,47 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 
 	for _, cache := range vector.Caches {
 		cache := cache
-		if err := readCache(ctx, cache, vector); err != nil {
+
+		t0 := time.Now()
+		err := readCache(ctx, cache, vector)
+		metric.FSReadDurationReadVectorCache.Observe(time.Since(t0).Seconds())
+		if err != nil {
 			return err
 		}
+		if vector.allDone() {
+			return nil
+		}
+
 		defer func() {
 			if err != nil {
 				return
 			}
+			t0 := time.Now()
 			err = cache.Update(ctx, vector, false)
+			metric.FSReadDurationUpdateVectorCache.Observe(time.Since(t0).Seconds())
 		}()
 	}
 
+read_memory_cache:
 	if l.memCache != nil {
-		if err := readCache(ctx, l.memCache, vector); err != nil {
+
+		t0 := time.Now()
+		err := readCache(ctx, l.memCache, vector)
+		metric.FSReadDurationReadMemoryCache.Observe(time.Since(t0).Seconds())
+		if err != nil {
 			return err
 		}
+		if vector.allDone() {
+			return nil
+		}
+
 		defer func() {
 			if err != nil {
 				return
 			}
+			t0 := time.Now()
 			err = l.memCache.Update(ctx, vector, l.asyncUpdate)
+			metric.FSReadDurationUpdateMemoryCache.Observe(time.Since(t0).Seconds())
 		}()
 	}
 
@@ -356,21 +361,48 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 		stats.AddIOAccessTimeConsumption(time.Since(ioStart))
 	}()
 
+	startLock := time.Now()
+	done, wait := l.ioMerger.Merge(vector.ioMergeKey())
+	if done != nil {
+		stats.AddLocalFSReadIOMergerTimeConsumption(time.Since(startLock))
+		defer done()
+	} else {
+		wait()
+		stats.AddLocalFSReadIOMergerTimeConsumption(time.Since(startLock))
+		goto read_memory_cache
+	}
+
 	if l.diskCache != nil {
-		if err := readCache(ctx, l.diskCache, vector); err != nil {
+
+		t0 := time.Now()
+		err := readCache(ctx, l.diskCache, vector)
+		metric.FSReadDurationReadDiskCache.Observe(time.Since(t0).Seconds())
+		if err != nil {
 			return err
 		}
+		if vector.allDone() {
+			return nil
+		}
+
 		defer func() {
 			if err != nil {
 				return
 			}
+			t0 := time.Now()
 			err = l.diskCache.Update(ctx, vector, l.asyncUpdate)
+			metric.FSReadDurationUpdateDiskCache.Observe(time.Since(t0).Seconds())
 		}()
 	}
 
 	if l.remoteCache != nil {
-		if err := readCache(ctx, l.remoteCache, vector); err != nil {
+		t0 := time.Now()
+		err := readCache(ctx, l.remoteCache, vector)
+		metric.FSReadDurationReadRemoteCache.Observe(time.Since(t0).Seconds())
+		if err != nil {
 			return err
+		}
+		if vector.allDone() {
+			return nil
 		}
 	}
 
@@ -394,20 +426,15 @@ func (l *LocalFS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 		return moerr.NewEmptyVectorNoCtx()
 	}
 
-	startLock := time.Now()
-	done, wait := l.ioMerger.Merge(vector.ioMergeKey())
-	if done != nil {
-		defer done()
-	} else {
-		wait()
-	}
-	statistic.StatsInfoFromContext(ctx).AddLocalFSReadCacheIOMergerTimeConsumption(time.Since(startLock))
-
 	for _, cache := range vector.Caches {
 		cache := cache
 		if err := readCache(ctx, cache, vector); err != nil {
 			return err
 		}
+		if vector.allDone() {
+			return nil
+		}
+
 		defer func() {
 			if err != nil {
 				return
@@ -419,6 +446,9 @@ func (l *LocalFS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 	if l.memCache != nil {
 		if err := readCache(ctx, l.memCache, vector); err != nil {
 			return err
+		}
+		if vector.allDone() {
+			return nil
 		}
 	}
 
@@ -446,6 +476,11 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 	}
 	defer file.Close()
 
+	numNotDoneEntries := 0
+	defer func() {
+		metric.FSReadLocalCounter.Add(float64(numNotDoneEntries))
+	}()
+
 	for i, entry := range vector.Entries {
 		if entry.Size == 0 {
 			return moerr.NewEmptyRangeNoCtx(path.File)
@@ -454,6 +489,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 		if entry.done {
 			continue
 		}
+		numNotDoneEntries++
 
 		if entry.WriterForRead != nil {
 			fileWithChecksum, put := NewFileWithChecksumOSFile(ctx, file, _BlockContentSize, l.perfCounterSets)
@@ -481,12 +517,15 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 					R: r,
 					C: counter,
 				}
-				var bs memorycache.CacheData
-				bs, err = entry.ToCacheData(cr, nil, GetDefaultCacheDataAllocator())
+				var cacheData memorycache.CacheData
+				cacheData, err = entry.ToCacheData(cr, nil, GetDefaultCacheDataAllocator())
 				if err != nil {
 					return err
 				}
-				vector.Entries[i].CachedData = bs
+				if cacheData == nil {
+					panic("ToCacheData returns nil cache data")
+				}
+				vector.Entries[i].CachedData = cacheData
 				if entry.Size > 0 && counter.Load() != entry.Size {
 					return moerr.NewUnexpectedEOFNoCtx(path.File)
 				}
@@ -505,51 +544,15 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 			}
 
 		} else if entry.ReadCloserForRead != nil {
-			file, err = os.Open(nativePath)
-			if os.IsNotExist(err) {
-				return moerr.NewFileNotFoundNoCtx(path.File)
-			}
-			if err != nil {
+			if err := l.handleReadCloserForRead(
+				ctx,
+				vector,
+				i,
+				path,
+				nativePath,
+				bytesCounter,
+			); err != nil {
 				return err
-			}
-			fileWithChecksum := NewFileWithChecksum(ctx, file, _BlockContentSize, l.perfCounterSets)
-
-			if entry.Offset > 0 {
-				_, err = fileWithChecksum.Seek(int64(entry.Offset), io.SeekStart)
-				if err != nil {
-					return err
-				}
-			}
-			r := (io.Reader)(fileWithChecksum)
-			if entry.Size > 0 {
-				r = io.LimitReader(r, int64(entry.Size))
-			}
-			r = &countingReader{
-				R: r,
-				C: bytesCounter,
-			}
-
-			if entry.ToCacheData == nil {
-				*entry.ReadCloserForRead = &readCloser{
-					r:         r,
-					closeFunc: file.Close,
-				}
-
-			} else {
-				buf := new(bytes.Buffer)
-				*entry.ReadCloserForRead = &readCloser{
-					r: io.TeeReader(r, buf),
-					closeFunc: func() error {
-						defer file.Close()
-						var bs memorycache.CacheData
-						bs, err = entry.ToCacheData(buf, buf.Bytes(), GetDefaultCacheDataAllocator())
-						if err != nil {
-							return err
-						}
-						vector.Entries[i].CachedData = bs
-						return nil
-					},
-				}
 			}
 
 		} else {
@@ -581,13 +584,8 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 				entry.Size = int64(len(data))
 
 			} else {
-				if int64(len(entry.Data)) < entry.Size {
-					ptr, dec := getMallocAllocator().Allocate(uint64(entry.Size))
-					entry.Data = unsafe.Slice((*byte)(ptr), entry.Size)
-					entry.releaseFuncs = append(entry.releaseFuncs, func() {
-						dec.Deallocate(ptr)
-					})
-				}
+				finally := entry.prepareData()
+				defer finally(&err)
 				var n int
 				n, err = io.ReadFull(r, entry.Data)
 				if err != nil {
@@ -598,7 +596,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 				}
 			}
 
-			if err = entry.setCachedData(); err != nil {
+			if err = entry.setCachedData(ctx); err != nil {
 				return err
 			}
 
@@ -610,6 +608,77 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 
 	return nil
 
+}
+
+func (l *LocalFS) handleReadCloserForRead(
+	ctx context.Context,
+	vector *IOVector,
+	i int,
+	path Path,
+	nativePath string,
+	bytesCounter *atomic.Int64,
+) (err error) {
+
+	var file *os.File
+	defer func() {
+		if err != nil && file != nil {
+			_ = file.Close()
+		}
+	}()
+
+	file, err = os.Open(nativePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return moerr.NewFileNotFoundNoCtx(path.File)
+		}
+		return err
+	}
+
+	fileWithChecksum := NewFileWithChecksum(ctx, file, _BlockContentSize, l.perfCounterSets)
+
+	entry := vector.Entries[i]
+	if entry.Offset > 0 {
+		_, err = fileWithChecksum.Seek(int64(entry.Offset), io.SeekStart)
+		if err != nil {
+			return err
+		}
+	}
+	r := (io.Reader)(fileWithChecksum)
+	if entry.Size > 0 {
+		r = io.LimitReader(r, int64(entry.Size))
+	}
+	r = &countingReader{
+		R: r,
+		C: bytesCounter,
+	}
+
+	if entry.ToCacheData == nil {
+		*entry.ReadCloserForRead = &readCloser{
+			r:         r,
+			closeFunc: file.Close,
+		}
+
+	} else {
+		buf := new(bytes.Buffer)
+		*entry.ReadCloserForRead = &readCloser{
+			r: io.TeeReader(r, buf),
+			closeFunc: func() error {
+				defer file.Close()
+				var cacheData memorycache.CacheData
+				cacheData, err = entry.ToCacheData(buf, buf.Bytes(), GetDefaultCacheDataAllocator())
+				if err != nil {
+					return err
+				}
+				if cacheData == nil {
+					panic("ToCacheData returns nil cache data")
+				}
+				vector.Entries[i].CachedData = cacheData
+				return nil
+			},
+		}
+	}
+
+	return nil
 }
 
 func (l *LocalFS) List(ctx context.Context, dirPath string) (ret []DirEntry, err error) {
@@ -983,6 +1052,12 @@ func (l *LocalFS) FlushCache() {
 
 func (l *LocalFS) SetAsyncUpdate(b bool) {
 	l.asyncUpdate = b
+}
+
+func (l *LocalFS) Cost() *CostAttr {
+	return &CostAttr{
+		List: CostLow,
+	}
 }
 
 func entryIsDir(path string, name string, entry fs.FileInfo) (bool, error) {

@@ -1,7 +1,7 @@
 use tpch;
 
 -- @@setup
-set global save_query_result = on;
+set save_query_result = on;
 
 -- test q1
 /* save_result */select
@@ -727,6 +727,5 @@ order by
 ;
 select * from result_scan(last_query_id()) as u;
 
-
--- @teardown
-set global save_query_result = off;
+# reset to default(off)
+set save_query_result = off;

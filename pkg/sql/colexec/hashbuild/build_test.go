@@ -19,6 +19,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -37,7 +39,8 @@ const (
 
 // add unit tests for cases
 type buildTestCase struct {
-	arg    *Argument
+	arg    *HashBuild
+	marg   *merge.Merge
 	flgs   []bool // flgs[i] == true: nullable
 	types  []types.Type
 	proc   *process.Process
@@ -70,8 +73,11 @@ func TestString(t *testing.T) {
 
 func TestBuild(t *testing.T) {
 	for _, tc := range tcs[:1] {
-		err := tc.arg.Prepare(tc.proc)
+		err := tc.marg.Prepare(tc.proc)
 		require.NoError(t, err)
+		err = tc.arg.Prepare(tc.proc)
+		require.NoError(t, err)
+		tc.arg.SetChildren([]vm.Operator{tc.marg})
 		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
 		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
@@ -80,15 +86,16 @@ func TestBuild(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, false, ok.Status == vm.ExecStop)
 			mp := ok.Batch.AuxData.(*hashmap.JoinMap)
-			tc.proc.Reg.MergeReceivers[0].Ch <- nil
 			mp.Free()
 			ok.Batch.Clean(tc.proc.Mp())
 			break
 		}
-		tc.proc.Reg.MergeReceivers[0].Ch <- nil
 
 		tc.arg.Reset(tc.proc, false, nil)
+		tc.marg.Reset(tc.proc, false, nil)
 
+		err = tc.marg.Prepare(tc.proc)
+		require.NoError(t, err)
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
@@ -99,12 +106,10 @@ func TestBuild(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, false, ok.Status == vm.ExecStop)
 			mp := ok.Batch.AuxData.(*hashmap.JoinMap)
-			tc.proc.Reg.MergeReceivers[0].Ch <- nil
 			mp.Free()
 			ok.Batch.Clean(tc.proc.Mp())
 			break
 		}
-		tc.proc.Reg.MergeReceivers[0].Ch <- nil
 		tc.arg.Free(tc.proc, false, nil)
 		tc.proc.FreeVectors()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
@@ -156,7 +161,7 @@ func newExpr(pos int32, typ types.Type) *plan.Expr {
 }
 
 func newTestCase(flgs []bool, ts []types.Type, cs []*plan.Expr) buildTestCase {
-	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
+	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
@@ -168,7 +173,7 @@ func newTestCase(flgs []bool, ts []types.Type, cs []*plan.Expr) buildTestCase {
 		flgs:   flgs,
 		proc:   proc,
 		cancel: cancel,
-		arg: &Argument{
+		arg: &HashBuild{
 			Typs:        ts,
 			Conditions:  cs,
 			NeedHashMap: true,
@@ -180,6 +185,7 @@ func newTestCase(flgs []bool, ts []types.Type, cs []*plan.Expr) buildTestCase {
 				},
 			},
 		},
+		marg: &merge.Merge{},
 	}
 }
 

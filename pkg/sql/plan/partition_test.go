@@ -511,7 +511,7 @@ func TestPartitionKeysShouldShowError(t *testing.T) {
 }
 
 func buildSingleStmt(opt Optimizer, t *testing.T, sql string) (*Plan, error) {
-	statements, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1, 0)
+	statements, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -566,7 +566,7 @@ func Test_checkUniqueKeyIncludePartKey(t *testing.T) {
 
 func mockPartitionBinder(tableDef *plan.TableDef) (*PartitionBinder, error) {
 	mock := NewMockOptimizer(false)
-	builder := NewQueryBuilder(plan.Query_SELECT, mock.CurrentContext(), false)
+	builder := NewQueryBuilder(plan.Query_SELECT, mock.CurrentContext(), false, false)
 	bindContext := NewBindContext(builder, nil)
 	nodeID := builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_TABLE_SCAN,
@@ -585,7 +585,7 @@ func mockPartitionBinder(tableDef *plan.TableDef) (*PartitionBinder, error) {
 
 func mockExpr(t *testing.T, s string) (tree.Expr, error) {
 	selStr := "select " + s
-	one, err := parsers.ParseOne(context.TODO(), dialect.MYSQL, selStr, 1, 0)
+	one, err := parsers.ParseOne(context.TODO(), dialect.MYSQL, selStr, 1)
 	require.Nil(t, err)
 	return one.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr, err
 }

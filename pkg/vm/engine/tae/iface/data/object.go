@@ -16,6 +16,7 @@ package data
 
 import (
 	"context"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -82,10 +83,10 @@ type Object interface {
 
 	GetColumnDataById(
 		ctx context.Context, txn txnif.AsyncTxn, readSchema any /*avoid import cycle*/, blkID uint16, colIdx int, mp *mpool.MPool,
-	) (*containers.ColumnView, error)
+	) (*containers.Batch, error)
 	GetColumnDataByIds(
 		ctx context.Context, txn txnif.AsyncTxn, readSchema any, blkID uint16, colIdxes []int, mp *mpool.MPool,
-	) (*containers.BlockView, error)
+	) (*containers.Batch, error)
 	Prefetch(idxes []uint16, blkID uint16) error
 	GetMeta() any
 
@@ -94,7 +95,7 @@ type Object interface {
 	TryDeleteByDeltaloc(txn txnif.AsyncTxn, blkID uint16, deltaLoc objectio.Location) (node txnif.TxnEntry, ok bool, err error)
 
 	GetTotalChanges() int
-	CollectChangesInRange(ctx context.Context, blkID uint16, startTs, endTs types.TS, mp *mpool.MPool) (*containers.BlockView, error)
+	CollectChangesInRange(ctx context.Context, blkID uint16, startTs, endTs types.TS, mp *mpool.MPool) (*containers.Batch, error)
 
 	// check wether any delete intents with prepared ts within [from, to]
 	HasDeleteIntentsPreparedIn(from, to types.TS) (bool, bool)
@@ -140,7 +141,7 @@ type Object interface {
 
 	Init() error
 	TryUpgrade() error
-	GCInMemeoryDeletesByTSForTest(types.TS)
+	GCInMemoryDeletesByTSForTest(types.TS)
 	UpgradeAllDeleteChain()
 	CollectAppendInRange(start, end types.TS, withAborted bool, mp *mpool.MPool) (*containers.BatchWithVersion, error)
 	CollectDeleteInRange(ctx context.Context, start, end types.TS, withAborted bool, mp *mpool.MPool) (*containers.Batch, *bitmap.Bitmap, error)
@@ -158,7 +159,8 @@ type Object interface {
 	GetFs() *objectio.ObjectFS
 	FreezeAppend()
 	UpdateDeltaLoc(txn txnif.TxnReader, blkID uint16, deltaLoc objectio.Location) (bool, txnif.TxnEntry, error)
-
+	UpdateMeta(meta any)
+	GetMutex() *sync.RWMutex
 	Close()
 }
 
@@ -170,7 +172,7 @@ type Tombstone interface {
 	GetDeltaLocAndCommitTSByTxn(blkID uint16, txn txnif.TxnReader) (objectio.Location, types.TS)
 	GetDeltaLocAndCommitTS(blkID uint16) (objectio.Location, types.TS, types.TS)
 	GetDeltaPersistedTSLocked() types.TS
-	GetDeltaCommitedTSLocked() types.TS
+	GetDeltaCommitedTS() types.TS
 	// GetOrCreateDeleteChain(blkID uint16) *updates.MVCCHandle
 	HasDeleteIntentsPreparedIn(from types.TS, to types.TS) (found bool, isPersist bool)
 	HasInMemoryDeleteIntentsPreparedInByBlock(blockID uint16, from, to types.TS) (bool, bool)
@@ -183,8 +185,9 @@ type Tombstone interface {
 	UpgradeDeleteChain(blkID uint16)
 	UpgradeDeleteChainByTSLocked(ts types.TS)
 	ReplayDeltaLoc(any, uint16)
-	VisitDeletes(ctx context.Context, start, end types.TS, bat, tnBatch *containers.Batch, skipMemory bool) (*containers.Batch, int, int, error)
+	VisitDeletes(ctx context.Context, start, end types.TS, bat, tnBatch *containers.Batch, skipMemory, lastDeltaLoc bool) (*containers.Batch, int, int, error)
 	GetObject() any
+	InMemoryDeletesExisted() bool
 	InMemoryDeletesExistedLocked() bool
 	// for test
 	GetLatestDeltaloc(uint16) objectio.Location

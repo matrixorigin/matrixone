@@ -14,11 +14,6 @@
 
 package tree
 
-import (
-	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-)
-
 // the common interface for qualified object names
 type ObjectName interface {
 	NodeFormatter
@@ -77,21 +72,16 @@ func (node *UnresolvedObjectName) ToTableName() TableName {
 	}
 }
 
-func NewUnresolvedObjectName(ctx context.Context, num int, parts [3]string) (*UnresolvedObjectName, error) {
-	if num < 1 || num > 3 {
-		return nil, moerr.NewInternalError(ctx, "invalid number of parts")
+func NewUnresolvedObjectName(parts ...string) *UnresolvedObjectName {
+	l := len(parts)
+	name := &UnresolvedObjectName{
+		NumParts: l,
 	}
-	return &UnresolvedObjectName{
-		NumParts: num,
-		Parts:    parts,
-	}, nil
-}
+	for i := 0; i < l; i++ {
+		name.Parts[i] = parts[l-1-i]
+	}
 
-func SetUnresolvedObjectName(num int, parts [3]string) *UnresolvedObjectName {
-	return &UnresolvedObjectName{
-		NumParts: num,
-		Parts:    parts,
-	}
+	return name
 }
 
 func (node *UnresolvedObjectName) GetDBName() string {

@@ -18,12 +18,12 @@ import (
 	"reflect"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // isMergeType means the receiver operator receive batch from all regs or single by some order
 // Merge/MergeGroup/MergeLimit ... are Merge-Type
-// while Join/Intersect/Minus ... are not
 func (r *ReceiverOperator) InitReceiver(proc *process.Process, isMergeType bool) {
 	r.proc = proc
 	if isMergeType {
@@ -224,4 +224,16 @@ func (r *ReceiverOperator) selectFromAllReg() (int, *process.RegisterMessage, bo
 		r.DisableChosen(chosen)
 	}
 	return chosen, msg, ok
+}
+
+func (r *ReceiverOperator) ReceiveBitmapFromChannel(ch chan *bitmap.Bitmap) *bitmap.Bitmap {
+	select {
+	case <-r.proc.Ctx.Done():
+		return nil
+	case bm, ok := <-ch:
+		if !ok {
+			return nil
+		}
+		return bm
+	}
 }

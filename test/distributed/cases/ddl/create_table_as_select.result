@@ -34,7 +34,7 @@ CREATE table t3 (a bigint unsigned not null auto_increment primary key, c float)
 desc t3;
 Field    Type    Null    Key    Default    Extra    Comment
 c    FLOAT(0)    YES        null        
-a    BIGINT UNSIGNED(64)    NO    PRI    null        
+a    BIGINT UNSIGNED(64)    NO    PRI    null    auto_increment    
 b    CHAR(5)    YES        null        
 select * from t3;
 c    a    b
@@ -424,7 +424,7 @@ desc table02;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    NO        null        
 col2    CHAR(1)    YES        'c'        
-col3    DECIMAL128(38)    NO        null        
+col3    DECIMAL(38)    NO        null        
 select * from table02;
 col1    col2    col3
 1    a    3728
@@ -955,10 +955,10 @@ table02    CREATE TABLE `table02` (\n  `id` INT NOT NULL AUTO_INCREMENT,\n  `col
 alter table table02 modify column newcolumn bigint;
 desc table02;
 Field    Type    Null    Key    Default    Extra    Comment
-id    INT(32)    NO        null        
+id    INT(32)    NO        null    auto_increment    
 col1    VARCHAR(255)    NO        null        
 col2    INT(32)    YES        null        
-col3    DECIMAL64(10)    YES        null        
+col3    DECIMAL(10)    YES        null        
 newcolumn    BIGINT(64)    YES        null        
 col5    BOOL(0)    YES        null        
 col6    ENUM('apple','banana','orange')    YES        null        
@@ -1191,7 +1191,7 @@ Table    Create Table
 test03    CREATE TABLE `test03` (\n  `col2` DECIMAL(38,0) DEFAULT NULL,\n  UNIQUE KEY `col2` (`col2`)\n)
 desc test03;
 Field    Type    Null    Key    Default    Extra    Comment
-col2    DECIMAL128(38)    YES    UNI    null        
+col2    DECIMAL(38)    YES    UNI    null        
 insert into test03 values (372.324);
 Duplicate entry '372' for key '__mo_index_idx_col'
 drop table if exists test04;
@@ -1585,10 +1585,6 @@ internal error: cannot create table in subscription database
 drop database sub1;
 drop account acc0;
 drop publication sys_pub_1;
-show variables like 'lower_case_table_names';
-Variable_name    Value
-lower_case_table_names    1
-set @@global.lower_case_table_names = 0;
 use test;
 drop table if exists alias01;
 create table alias01 (col1 int, col2 decimal);
@@ -1596,14 +1592,11 @@ insert into alias01 values (1,2);
 insert into alias01 values (2,3);
 drop table if exists alias02;
 create table alias02 (NewCol int) as select * from alias01;
-show variables like 'lower_case_table_names';
-Variable_name    Value
-lower_case_table_names    0
 show create table alias02;
 Table    Create Table
-alias02    CREATE TABLE `alias02` (\n  `NewCol` INT DEFAULT NULL,\n  `col1` INT DEFAULT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL\n)
+alias02    CREATE TABLE `alias02` (\n  `newcol` INT DEFAULT NULL,\n  `col1` INT DEFAULT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL\n)
 select * from alias02;
-NewCol    col1    col2
+newcol    col1    col2
 null    1    2
 null    2    3
 drop table alias01;
@@ -1809,4 +1802,3 @@ no such table db7.t2
 drop role role_r1;
 drop user role_u1;
 drop database db7;
-set @@global.lower_case_table_names = 1;

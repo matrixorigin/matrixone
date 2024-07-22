@@ -155,6 +155,18 @@ func (mr *MockCompilerContext2MockRecorder) GetContext() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetContext", reflect.TypeOf((*MockCompilerContext2)(nil).GetContext))
 }
 
+// SetContext mocks base method.
+func (m *MockCompilerContext2) SetContext(ctx context.Context) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetContext", ctx)
+}
+
+// SetContext indicates an expected call of SetContext.
+func (mr *MockCompilerContext2MockRecorder) SetContext(ctx interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetContext", reflect.TypeOf((*MockCompilerContext2)(nil).SetContext), ctx)
+}
+
 // GetDatabaseId mocks base method.
 func (m *MockCompilerContext2) GetDatabaseId(dbName string, snapshot Snapshot) (uint64, error) {
 	m.ctrl.T.Helper()
@@ -168,6 +180,20 @@ func (m *MockCompilerContext2) GetDatabaseId(dbName string, snapshot Snapshot) (
 func (mr *MockCompilerContext2MockRecorder) GetDatabaseId(dbName, snapshot interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDatabaseId", reflect.TypeOf((*MockCompilerContext2)(nil).GetDatabaseId), dbName, snapshot)
+}
+
+// GetLowerCaseTableNames mocks base method.
+func (m *MockCompilerContext2) GetLowerCaseTableNames() int64 {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetLowerCaseTableNames")
+	ret0, _ := ret[0].(int64)
+	return ret0
+}
+
+// GetLowerCaseTableNames indicates an expected call of GetLowerCaseTableNames.
+func (mr *MockCompilerContext2MockRecorder) GetLowerCaseTableNames() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLowerCaseTableNames", reflect.TypeOf((*MockCompilerContext2)(nil).GetLowerCaseTableNames))
 }
 
 // GetPrimaryKeyDef mocks base method.

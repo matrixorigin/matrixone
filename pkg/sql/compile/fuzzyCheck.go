@@ -320,7 +320,7 @@ func (f *fuzzyCheck) backgroundSQLCheck(c *Compile) error {
 
 	res, err := c.runSqlWithResult(duplicateCheckSql)
 	if err != nil {
-		c.proc.Errorf(c.ctx, "The sql that caused the fuzzy check background SQL failed is %s, and generated background sql is %s", c.sql, duplicateCheckSql)
+		c.proc.Errorf(c.proc.Ctx, "The sql that caused the fuzzy check background SQL failed is %s, and generated background sql is %s", c.sql, duplicateCheckSql)
 		return err
 	}
 	defer res.Close()
@@ -336,9 +336,9 @@ func (f *fuzzyCheck) backgroundSQLCheck(c *Compile) error {
 				} else {
 					ds, e := strconv.Unquote(dupKey[0])
 					if e != nil {
-						err = moerr.NewDuplicateEntry(c.ctx, dupKey[0], f.attr)
+						err = moerr.NewDuplicateEntry(c.proc.Ctx, dupKey[0], f.attr)
 					} else {
-						err = moerr.NewDuplicateEntry(c.ctx, ds, f.attr)
+						err = moerr.NewDuplicateEntry(c.proc.Ctx, ds, f.attr)
 					}
 				}
 			} else {
@@ -353,7 +353,7 @@ func (f *fuzzyCheck) backgroundSQLCheck(c *Compile) error {
 							scales[i] = 0
 						}
 					}
-					err = moerr.NewDuplicateEntry(c.ctx, t.ErrString(scales), f.attr)
+					err = moerr.NewDuplicateEntry(c.proc.Ctx, t.ErrString(scales), f.attr)
 				}
 			}
 		}
@@ -455,7 +455,7 @@ func vectorToString(vec *vector.Vector, rowIndex int) (string, error) {
 	case types.T_float64:
 		return fmt.Sprintf("%v", vector.GetFixedAt[float64](vec, rowIndex)), nil
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_text, types.T_blob:
-		return vec.UnsafeGetStringAt(rowIndex), nil
+		return vec.GetStringAt(rowIndex), nil
 	case types.T_array_float32:
 		return types.ArrayToString[float32](vector.GetArrayAt[float32](vec, rowIndex)), nil
 	case types.T_array_float64:

@@ -32,11 +32,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+var _ plan.CompilerContext = &CompilerContext{}
+
 type CompilerContext struct {
 	ctx       context.Context
 	defaultDB string
 	engine    *Engine
 	txnOp     client.TxnOperator
+}
+
+func (c *CompilerContext) GetLowerCaseTableNames() int64 {
+	return 1
 }
 
 func (c *CompilerContext) GetViews() []string {
@@ -45,13 +51,10 @@ func (c *CompilerContext) GetViews() []string {
 }
 
 func (c *CompilerContext) SetViews(views []string) {
-	//TODO implement me
-	panic("implement me")
 }
 
 func (c *CompilerContext) GetSnapshot() *plan.Snapshot {
-	//TODO implement me
-	panic("implement me")
+	return nil
 }
 
 func (c *CompilerContext) SetSnapshot(snapshot *plan.Snapshot) {
@@ -218,6 +221,10 @@ func (c *CompilerContext) GetAccountId() (uint32, error) {
 
 func (c *CompilerContext) GetContext() context.Context {
 	return c.ctx
+}
+
+func (c *CompilerContext) SetContext(ctx context.Context) {
+	c.ctx = ctx
 }
 
 func (c *CompilerContext) ResolveById(tableId uint64, snapshot plan.Snapshot) (objRef *plan.ObjectRef, tableDef *plan.TableDef) {

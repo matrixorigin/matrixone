@@ -24,62 +24,61 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(TableFunction)
 
 const (
 	dataProducing = iota
 	dataFinished
 )
 
-type Argument struct {
+type TableFunction struct {
 	ctr *container
 
-	Rets      []*plan.ColDef
-	Args      []*plan.Expr
-	Attrs     []string
-	Params    []byte
-	FuncName  string
-	retSchema []types.Type
-
-	buf            *batch.Batch
-	generateSeries *generateSeriesArg
+	Rets     []*plan.ColDef
+	Args     []*plan.Expr
+	Attrs    []string
+	Params   []byte
+	FuncName string
 
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (tableFunction *TableFunction) GetOperatorBase() *vm.OperatorBase {
+	return &tableFunction.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[TableFunction](
+		func() *TableFunction {
+			return &TableFunction{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *TableFunction) {
+			*a = TableFunction{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[TableFunction]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (tableFunction TableFunction) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *TableFunction {
+	return reuse.Alloc[TableFunction](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (tableFunction *TableFunction) Release() {
+	if tableFunction != nil {
+		reuse.Free[TableFunction](tableFunction, nil)
 	}
 }
 
 type container struct {
-	state int
+	state          int
+	buf            *batch.Batch
+	generateSeries *generateSeriesArg
+	retSchema      []types.Type
 
 	executorsForArgs []colexec.ExpressionExecutor
 }
@@ -102,18 +101,20 @@ type generateSeriesArg struct {
 	scale        int32 // used by handleDateTime
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	arg.Free(proc, pipelineFailed, err)
+func (tableFunction *TableFunction) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	tableFunction.Free(proc, pipelineFailed, err)
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if arg.ctr != nil {
-		arg.ctr.cleanExecutors()
+func (tableFunction *TableFunction) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if tableFunction.ctr != nil {
+		tableFunction.ctr.cleanExecutors()
+		if tableFunction.ctr.buf != nil {
+			tableFunction.ctr.buf.Clean(proc.Mp())
+			tableFunction.ctr.buf = nil
+		}
+		tableFunction.ctr = nil
 	}
-	if arg.buf != nil {
-		arg.buf.Clean(proc.Mp())
-		arg.buf = nil
-	}
+
 }
 
 func (ctr *container) cleanExecutors() {

@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
@@ -68,6 +69,14 @@ func ConstructCreateTableSQL(tableObjRef *plan.ObjectRef, tableDef *plan.TableDe
 			accountId != catalog.System_Account {
 			continue
 		}
+
+		if util.IsClusterTableAttribute(colName) &&
+			isClusterTable &&
+			accountId == catalog.System_Account &&
+			!snapshot.TS.Equal(timestamp.Timestamp{}) {
+			continue
+		}
+
 		//-------------------------------------------------------------------------------------------------------------
 		buf := bytes.NewBuffer(make([]byte, 0, 64))
 
@@ -193,7 +202,15 @@ func ConstructCreateTableSQL(tableObjRef *plan.ObjectRef, tableDef *plan.TableDe
 		}
 	}
 
+	dedupFkName := make(UnorderedSet[string])
 	for _, fk := range tableDef.Fkeys {
+		if len(fk.Name) != 0 {
+			if dedupFkName.Find(fk.Name) {
+				continue
+			}
+			dedupFkName.Insert(fk.Name)
+		}
+
 		colNames := make([]string, len(fk.Cols))
 		for i, colId := range fk.Cols {
 			colNames[i] = colIdToName[colId]
@@ -300,41 +317,45 @@ func ConstructCreateTableSQL(tableObjRef *plan.ObjectRef, tableDef *plan.TableDe
 		createStr += fmt.Sprintf(" INFILE{'FILEPATH'='%s','COMPRESSION'='%s','FORMAT'='%s','JSONDATA'='%s'}", param.Filepath, param.CompressType, param.Format, param.JsonData)
 
 		fields := ""
-		if param.Tail.Fields.Terminated != nil {
-			if param.Tail.Fields.Terminated.Value == "" {
-				fields += " TERMINATED BY \"\""
-			} else {
-				fields += fmt.Sprintf(" TERMINATED BY '%s'", param.Tail.Fields.Terminated.Value)
+		if param.Tail != nil && param.Tail.Fields != nil {
+			if param.Tail.Fields.Terminated != nil {
+				if param.Tail.Fields.Terminated.Value == "" {
+					fields += " TERMINATED BY \"\""
+				} else {
+					fields += fmt.Sprintf(" TERMINATED BY '%s'", param.Tail.Fields.Terminated.Value)
+				}
 			}
-		}
-		if param.Tail.Fields.EnclosedBy != nil {
-			if param.Tail.Fields.EnclosedBy.Value == byte(0) {
-				fields += " ENCLOSED BY ''"
-			} else if param.Tail.Fields.EnclosedBy.Value == byte('\\') {
-				fields += " ENCLOSED BY '\\\\'"
-			} else {
-				fields += fmt.Sprintf(" ENCLOSED BY '%c'", param.Tail.Fields.EnclosedBy.Value)
+			if param.Tail.Fields.EnclosedBy != nil {
+				if param.Tail.Fields.EnclosedBy.Value == byte(0) {
+					fields += " ENCLOSED BY ''"
+				} else if param.Tail.Fields.EnclosedBy.Value == byte('\\') {
+					fields += " ENCLOSED BY '\\\\'"
+				} else {
+					fields += fmt.Sprintf(" ENCLOSED BY '%c'", param.Tail.Fields.EnclosedBy.Value)
+				}
 			}
-		}
-		if param.Tail.Fields.EscapedBy != nil {
-			if param.Tail.Fields.EscapedBy.Value == byte(0) {
-				fields += " ESCAPED BY ''"
-			} else if param.Tail.Fields.EscapedBy.Value == byte('\\') {
-				fields += " ESCAPED BY '\\\\'"
-			} else {
-				fields += fmt.Sprintf(" ESCAPED BY '%c'", param.Tail.Fields.EscapedBy.Value)
+			if param.Tail.Fields.EscapedBy != nil {
+				if param.Tail.Fields.EscapedBy.Value == byte(0) {
+					fields += " ESCAPED BY ''"
+				} else if param.Tail.Fields.EscapedBy.Value == byte('\\') {
+					fields += " ESCAPED BY '\\\\'"
+				} else {
+					fields += fmt.Sprintf(" ESCAPED BY '%c'", param.Tail.Fields.EscapedBy.Value)
+				}
 			}
 		}
 
 		line := ""
-		if param.Tail.Lines.StartingBy != "" {
-			line += fmt.Sprintf(" STARTING BY '%s'", param.Tail.Lines.StartingBy)
-		}
-		if param.Tail.Lines.TerminatedBy != nil {
-			if param.Tail.Lines.TerminatedBy.Value == "\n" || param.Tail.Lines.TerminatedBy.Value == "\r\n" {
-				line += " TERMINATED BY '\\\\n'"
-			} else {
-				line += fmt.Sprintf(" TERMINATED BY '%s'", param.Tail.Lines.TerminatedBy)
+		if param.Tail != nil && param.Tail.Lines != nil {
+			if param.Tail.Lines.StartingBy != "" {
+				line += fmt.Sprintf(" STARTING BY '%s'", param.Tail.Lines.StartingBy)
+			}
+			if param.Tail.Lines.TerminatedBy != nil {
+				if param.Tail.Lines.TerminatedBy.Value == "\n" || param.Tail.Lines.TerminatedBy.Value == "\r\n" {
+					line += " TERMINATED BY '\\\\n'"
+				} else {
+					line += fmt.Sprintf(" TERMINATED BY '%s'", param.Tail.Lines.TerminatedBy)
+				}
 			}
 		}
 
@@ -347,14 +368,17 @@ func ConstructCreateTableSQL(tableObjRef *plan.ObjectRef, tableDef *plan.TableDe
 			createStr += line
 		}
 
-		if param.Tail.IgnoredLines > 0 {
+		if param.Tail != nil && param.Tail.IgnoredLines > 0 {
 			createStr += fmt.Sprintf(" IGNORE %d LINES", param.Tail.IgnoredLines)
 		}
 	}
 
 	var buf bytes.Buffer
-	for _, ch := range createStr {
+	for i, ch := range createStr {
 		if ch == '"' {
+			if i > 0 && createStr[i-1] == '\\' {
+				continue
+			}
 			buf.WriteRune('"')
 		}
 		buf.WriteRune(ch)

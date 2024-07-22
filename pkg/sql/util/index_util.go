@@ -451,18 +451,18 @@ func serialWithCompacted(vs []*vector.Vector, proc *process.Process, packers *Pa
 			// NOTE 2: vs is []string and not []byte. vs[i] is not of form "[1,2,3]". It is binary string of []float32{1,2,3}
 			// NOTE 3: This class is mainly used by PreInsertUnique which gets triggered before inserting into column having
 			// Unique Key or Primary Key constraint. Vector cannot be UK or PK.
-			vs := vector.MustStrCol(v)
+			vs, area := vector.MustVarlenaRawData(v)
 			if hasNull {
 				for i := range vs {
 					if nulls.Contains(vNull, uint64(i)) {
 						nulls.Add(bitMap, uint64(i))
 					} else {
-						ps[i].EncodeStringType([]byte(vs[i]))
+						ps[i].EncodeStringType(vs[i].GetByteSlice(area))
 					}
 				}
 			} else {
 				for i := range vs {
-					ps[i].EncodeStringType([]byte(vs[i]))
+					ps[i].EncodeStringType(vs[i].GetByteSlice(area))
 				}
 			}
 		}
@@ -723,11 +723,11 @@ func compactSingleIndexCol(v *vector.Vector, proc *process.Process) (*vector.Vec
 		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob,
 		types.T_array_float32, types.T_array_float64:
-		s := vector.MustBytesCol(v)
+		s, area := vector.MustVarlenaRawData(v)
 		ns := make([][]byte, 0, len(s))
-		for i, b := range s {
+		for i := range s {
 			if !nulls.Contains(v.GetNulls(), uint64(i)) {
-				ns = append(ns, b)
+				ns = append(ns, s[i].GetByteSlice(area))
 			}
 		}
 		err = vector.AppendBytesList(vec, ns, nil, proc.Mp())
@@ -923,11 +923,11 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob,
 		types.T_array_float32, types.T_array_float64:
-		s := vector.MustBytesCol(v)
-		ns := make([][]byte, 0)
-		for i, b := range s {
+		s, area := vector.MustVarlenaRawData(v)
+		ns := make([][]byte, 0, len(s))
+		for i := range s {
 			if !nulls.Contains(bitMap, uint64(i)) {
-				ns = append(ns, b)
+				ns = append(ns, s[i].GetByteSlice(area))
 			}
 		}
 		err = vector.AppendBytesList(vec, ns, nil, proc.Mp())

@@ -61,8 +61,7 @@ const (
 		"		mo_catalog.mo_database AS md" +
 		"	ON " +
 		"		mt.account_id = md.account_id AND" +
-		"		mt.relkind IN ('v','e','r','cluster') AND" +
-		"		md.dat_type != 'subscription'" +
+		"		mt.relkind IN ('v','e','r','cluster') " +
 		"	GROUP BY" +
 		"		mt.account_id" +
 		")," +
@@ -159,10 +158,10 @@ func requestStorageUsage(ctx context.Context, ses *Session, accIds [][]int64) (r
 
 	// create a new proc for `handler`
 	proc := process.New(ctx, ses.proc.GetMPool(),
-		ses.proc.TxnClient, txnOperator,
-		ses.proc.FileService, ses.proc.LockService,
-		ses.proc.QueryClient, ses.proc.Hakeeper,
-		ses.proc.UdfService, ses.proc.Aicm,
+		ses.proc.Base.TxnClient, txnOperator,
+		ses.proc.Base.FileService, ses.proc.Base.LockService,
+		ses.proc.Base.QueryClient, ses.proc.Base.Hakeeper,
+		ses.proc.Base.UdfService, ses.proc.Base.Aicm,
 	)
 
 	handler := ctl.GetTNHandlerFunc(api.OpCode_OpStorageUsage, whichTN, payload, responseUnmarshaler)
@@ -457,9 +456,8 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 		return err
 	}
 
-	oq := newFakeOutputQueue(outputRS)
 	for _, b := range accInfosBatches {
-		if err = fillResultSet(ctx, oq, b, ses); err != nil {
+		if err = fillResultSet(ctx, b, ses, outputRS); err != nil {
 			return err
 		}
 	}
@@ -467,23 +465,20 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 	ses.SetMysqlResultSet(outputRS)
 
 	ses.rs = columnDef
-	if openSaveQueryResult(ctx, ses) {
-		err = saveResult(ctx, ses, accInfosBatches)
-	}
 
-	return err
-}
-
-func saveResult(ctx context.Context, ses *Session, outputBatch []*batch.Batch) error {
-	for _, b := range outputBatch {
-		if err := saveQueryResult(ctx, ses, b); err != nil {
+	if canSaveQueryResult(ctx, ses) {
+		err = saveQueryResult(ctx, ses,
+			func() ([]*batch.Batch, error) {
+				return accInfosBatches, nil
+			},
+			nil,
+		)
+		if err != nil {
 			return err
 		}
 	}
-	if err := saveQueryResultMeta(ctx, ses); err != nil {
-		return err
-	}
-	return nil
+
+	return err
 }
 
 func initOutputRs(dest *MysqlResultSet, src *MysqlResultSet, ctx context.Context) error {
@@ -511,10 +506,22 @@ func getAccountInfo(ctx context.Context,
 	if err != nil {
 		return nil, nil, err
 	}
-
-	rsOfMoAccount = bh.GetExecResultBatches()
+	//the resultBatches referred outside this function far away
+	rsOfMoAccount = Copy[*batch.Batch](bh.GetExecResultBatches())
 	if len(rsOfMoAccount) == 0 {
 		return nil, nil, moerr.NewInternalError(ctx, "no account info")
+	}
+
+	//copy rsOfMoAccount from backgroundExec
+	//the original batches to be released at the ClearExecResultBatches or the backgroundExec.Close
+	//the rsOfMoAccount to be released at the end of the doShowAccounts
+	for i := 0; i < len(rsOfMoAccount); i++ {
+		originBat := rsOfMoAccount[i]
+
+		rsOfMoAccount[i], err = originBat.Dup(mp)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 
 	batchCount := len(rsOfMoAccount)

@@ -41,21 +41,22 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 	case *tree.Use:
 		ses.EnterFPrint(12)
 		defer ses.ExitFPrint(12)
-		var v interface{}
-		v, err = ses.GetGlobalVar(execCtx.reqCtx, "lower_case_table_names")
-		if err != nil {
-			return
-		}
-		st.Name.SetConfig(v.(int64))
+		var uniqueCheckOnAuto string
+		dbName := st.Name.Compare()
 		//use database
-		err = handleChangeDB(ses, execCtx, st.Name.Compare())
+		err = handleChangeDB(ses, execCtx, dbName)
 		if err != nil {
 			return
 		}
-		err = changeVersion(execCtx.reqCtx, ses, st.Name.Compare())
+		err = changeVersion(execCtx.reqCtx, ses, dbName)
 		if err != nil {
 			return
 		}
+		uniqueCheckOnAuto, err = GetUniqueCheckOnAutoIncr(execCtx.reqCtx, ses, dbName)
+		if err != nil {
+			return
+		}
+		ses.SetConfig(dbName, "unique_check_on_autoincr", uniqueCheckOnAuto)
 	case *tree.MoDump:
 
 		//dump
@@ -66,7 +67,7 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 	case *tree.PrepareStmt:
 		ses.EnterFPrint(13)
 		defer ses.ExitFPrint(13)
-		execCtx.prepareStmt, err = handlePrepareStmt(ses, execCtx, st)
+		execCtx.prepareStmt, err = handlePrepareStmt(ses, execCtx, st, execCtx.sqlOfStmt)
 		if err != nil {
 			return
 		}
@@ -159,7 +160,7 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 	case *tree.ShowErrors, *tree.ShowWarnings:
 		ses.EnterFPrint(25)
 		defer ses.ExitFPrint(25)
-		err = handleShowErrors(ses)
+		err = handleShowErrors(ses, execCtx)
 		if err != nil {
 			return
 		}
@@ -322,7 +323,7 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 	case *tree.CallStmt:
 		ses.EnterFPrint(49)
 		defer ses.ExitFPrint(49)
-		if err = handleCallProcedure(ses, execCtx, st, execCtx.proc); err != nil {
+		if err = handleCallProcedure(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.Grant:
@@ -423,6 +424,34 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 		defer ses.ExitFPrint(61)
 		//TODO: invalidate privilege cache
 		if err = handleExecUpgrade(ses, execCtx, st); err != nil {
+			return
+		}
+	case *tree.CreatePitr:
+		ses.EnterFPrint(120)
+		defer ses.ExitFPrint(120)
+		//TODO: invalidate privilege cache
+		if err = handleCreatePitr(ses, execCtx, st); err != nil {
+			return
+		}
+	case *tree.DropPitr:
+		ses.EnterFPrint(121)
+		defer ses.ExitFPrint(121)
+		//TODO: invalidate privilege cache
+		if err = handleDropPitr(ses, execCtx, st); err != nil {
+			return
+		}
+	case *tree.AlterPitr:
+		ses.EnterFPrint(122)
+		defer ses.ExitFPrint(122)
+		//TODO: invalidate privilege cache
+		if err = handleAlterPitr(ses, execCtx, st); err != nil {
+			return
+		}
+	case *tree.RestorePitr:
+		ses.EnterFPrint(123)
+		defer ses.ExitFPrint(123)
+		//TODO: invalidate privilege cache
+		if err = handleRestorePitr(ses, execCtx, st); err != nil {
 			return
 		}
 	}

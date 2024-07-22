@@ -13,11 +13,11 @@
   <a href="https://www.codefactor.io/repository/github/matrixorigin/matrixone">
     <img src="https://www.codefactor.io/repository/github/matrixorigin/matrixone/badge?s=7280f4312fca2f2e6938fb8de5b726c5252541f0" alt="codefactor"/>
   </a>
-  <a href="https://docs.matrixorigin.cn/1.1.3/MatrixOne/Release-Notes/v1.1.3/">
-   <img src="https://img.shields.io/badge/Release-1.1.3-green.svg" alt="release"/>
+  <a href="https://docs.matrixorigin.cn/1.2.0/MatrixOne/Release-Notes/v1.2.0/">
+   <img src="https://img.shields.io/badge/Release-1.2.0-green.svg" alt="release"/>
   </a>
   <br>
-  <a href="https://docs.matrixorigin.cn//1.1.3/">
+  <a href="https://docs.matrixorigin.cn//1.2.0/">
     <b>Docs</b>
   </a>
   <b>||</b>
@@ -162,13 +162,13 @@ MatrixOne 的架构图如下图所示：
   <img alt="MatrixOne" height="500" src="https://community-shared-data-1308875761.cos.ap-beijing.myqcloud.com/artwork/docs/overview/architecture/architecture-1.png?raw=true">
 </p>
 
-关于更详细的 MatrixOne 技术架构，可以参考[MatrixOne 架构设计](https://docs.matrixorigin.cn/1.1.3/MatrixOne/Overview/architecture/matrixone-architecture-design/)。
+关于更详细的 MatrixOne 技术架构，可以参考[MatrixOne 架构设计](https://docs.matrixorigin.cn/1.2.0/MatrixOne/Overview/architecture/matrixone-architecture-design/)。
 
 ## ⚡️ <a id="quick-start">快速上手</a>
 
 ### ⚙️ 安装 MatrixOne
 
-MatrixOne 目前支持 Linux 及 MacOS 系统，您可以通过源码安装，二进制包安装或者 docker 安装。对于更详情的安装方式请参见[MatrixOne 安装指南](https://docs.matrixorigin.cn/1.1.3/MatrixOne/Get-Started/install-standalone-matrixone/)。
+MatrixOne 目前支持 Linux 及 MacOS 系统，您可以通过源码安装，二进制包安装或者 docker 安装。对于更详情的安装方式请参见[MatrixOne 安装指南](https://docs.matrixorigin.cn/1.2.0/MatrixOne/Get-Started/install-standalone-matrixone/)。
 
 以下为您介绍通过源码部署和docker部署两种方式:
 
@@ -214,7 +214,7 @@ __Tips__: 建议 MySQL 客户端版本为 8.0.30 版本及以上。
 wget https://raw.githubusercontent.com/matrixorigin/mo_ctl_standalone/main/install.sh && sudo -u $(whoami) bash +x ./install.sh
 ```
 
-如需获取完整的使用细节可以参考 [mo_ctl 工具指南](https://docs.matrixorigin.cn/1.1.3/MatrixOne/Maintain/mo_ctl/#_3)。
+如需获取完整的使用细节可以参考 [mo_ctl 工具指南](https://docs.matrixorigin.cn/1.2.0/MatrixOne/Maintain/mo_ctl/#_3)。
 
 **步骤 3.设置 mo_ctl 的配置参数**
 
@@ -246,10 +246,10 @@ mo_ctl set_conf MO_DEPLOY_MODE=docker #设置MatrixOne部署方式，此为docke
 
 - *选项 2*:获取 MatrixOne (稳定版本)
 
-    如果您想获得 MatrixOne 发布的最新稳定版本，请先从 **main** 切换选择至 **1.1.3** 版本分支。
+    如果您想获得 MatrixOne 发布的最新稳定版本，请先从 **main** 切换选择至 **1.2.0** 版本分支。
 
     ```
-    mo_ctl deploy 1.1.3
+    mo_ctl deploy 1.2.0
     ```
 
 **步骤 5.启动 MatrixOne 服务**
@@ -262,7 +262,7 @@ __Tips__: 首次启动 MatrixOne 大致需要花费 20 至 30 秒的时间，在
 
 通过 `mo_ctl connect` 命令一键连接 MatrixOne 服务。
 
-__Tips__: 连接和登录账号为初始账号 `root` 和密码 `111`，请在登录 MatrixOne 后及时修改初始密码，参见[密码管理](https://docs.matrixorigin.cn/1.1.3/MatrixOne/Security/password-mgmt/)。修改登录用户名或密码后重新登录同样需要通过 `mo_ctl set_conf` 的方式设置新的用户名和密码。详情可以参考 [mo_ctl 工具指南](https://docs.matrixorigin.cn/1.1.3/MatrixOne/Maintain/mo_ctl/#_3)。
+__Tips__: 连接和登录账号为初始账号 `root` 和密码 `111`，请在登录 MatrixOne 后及时修改初始密码，参见[密码管理](https://docs.matrixorigin.cn/1.2.0/MatrixOne/Security/password-mgmt/)。修改登录用户名或密码后重新登录同样需要通过 `mo_ctl set_conf` 的方式设置新的用户名和密码。详情可以参考 [mo_ctl 工具指南](https://docs.matrixorigin.cn/1.2.0/MatrixOne/Maintain/mo_ctl/#_3)。
 
 
 ### 👏贡献者
@@ -1021,7 +1021,7 @@ __Tips__: 连接和登录账号为初始账号 `root` 和密码 `111`，请在�
 ## 🙌 <a id="contributing">参与贡献</a>
 
 欢迎大家对 MatrixOne 的贡献。  
-请查看[贡献指南](https://docs.matrixorigin.cn/1.1.3/MatrixOne/Contribution-Guide/make-your-first-contribution/)来了解有关提交补丁和完成整个贡献流程的详细信息。
+请查看[贡献指南](https://docs.matrixorigin.cn/1.2.0/MatrixOne/Contribution-Guide/make-your-first-contribution/)来了解有关提交补丁和完成整个贡献流程的详细信息。
 
 ## <a id="license">License</a>
 

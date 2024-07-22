@@ -16,9 +16,10 @@ package merge
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"fmt"
-	"sort"
+	"slices"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -85,16 +86,15 @@ func (o *customConfigProvider) GetConfig(tbl *catalog.TableEntry) *BasicPolicyCo
 			if cnSize == 0 {
 				cnSize = common.DefaultMinCNMergeSize * common.Const1MBytes
 			}
-			// if the values are smaller than default, it map old rows -> bytes size
+			// compatible codes: remap old rows -> default bytes size
 			minOsize := extra.MinOsizeQuailifed
-			if v := uint32(80 * 8192); minOsize < v {
-				minOsize = v
+			if minOsize < 80*8192 {
+				minOsize = common.DefaultMinOsizeQualifiedMB * common.Const1MBytes
 			}
 			maxOsize := extra.MaxOsizeMergedObj
-			if v := uint32(500 * 8192); maxOsize < v {
-				maxOsize = v
+			if maxOsize < 500*8192 {
+				maxOsize = common.DefaultMaxOsizeObjMB * common.Const1MBytes
 			}
-
 			p = &BasicPolicyConfig{
 				ObjectMinOsize:    minOsize,
 				MergeMaxOneRun:    int(extra.MaxObjOnerun),
@@ -131,9 +131,7 @@ func (o *customConfigProvider) String() string {
 	for k := range o.configs {
 		keys = append(keys, k)
 	}
-	sort.Slice(keys, func(i, j int) bool {
-		return keys[i] < keys[j]
-	})
+	slices.SortFunc(keys, func(a, b uint64) int { return cmp.Compare(a, b) })
 	buf := bytes.Buffer{}
 	buf.WriteString("customConfigProvider: ")
 	for _, k := range keys {
@@ -172,12 +170,12 @@ func NewBasicPolicy() Policy {
 }
 
 // impl Policy for Basic
-func (o *basic) OnObject(obj *catalog.ObjectEntry) {
+func (o *basic) OnObject(obj *catalog.ObjectEntry, force bool) {
 	rowsLeftOnObj := obj.GetRemainingRows()
 	osize := obj.GetOriginSize()
 
-	iscandidate := func() bool {
-		// objext with a lot of holes
+	isCandidate := func() bool {
+		// object with a lot of holes
 		if rowsLeftOnObj < obj.GetRows()/2 {
 			return true
 		}
@@ -192,7 +190,7 @@ func (o *basic) OnObject(obj *catalog.ObjectEntry) {
 		return false
 	}
 
-	if iscandidate() {
+	if force || isCandidate() {
 		o.objHeap.pushWithCap(&mItem[*catalog.ObjectEntry]{
 			row:   rowsLeftOnObj,
 			entry: obj,
@@ -239,8 +237,8 @@ func (o *basic) GetConfig(tbl *catalog.TableEntry) any {
 
 func (o *basic) Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind) {
 	objs := o.objHeap.finish()
-	sort.Slice(objs, func(i, j int) bool {
-		return objs[i].GetRemainingRows() < objs[j].GetRemainingRows()
+	slices.SortFunc(objs, func(a, b *catalog.ObjectEntry) int {
+		return cmp.Compare(a.GetRemainingRows(), b.GetRemainingRows())
 	})
 
 	isStandalone := common.IsStandaloneBoost.Load()
@@ -327,7 +325,7 @@ func (o *basic) controlMem(objs []*catalog.ObjectEntry, mem int64) []*catalog.Ob
 	}
 
 	needPopout := func(ss []*catalog.ObjectEntry) bool {
-		osize, esize, _ := estimateMergeConsume(ss)
+		_, esize, _ := estimateMergeConsume(ss)
 		if esize > int(2*mem/3) {
 			return true
 		}
@@ -335,8 +333,7 @@ func (o *basic) controlMem(objs []*catalog.ObjectEntry, mem int64) []*catalog.Ob
 		if len(ss) <= 2 {
 			return false
 		}
-		// make object averaged size
-		return osize > int(o.config.MaxOsizeMergedObj)
+		return false
 	}
 	for needPopout(objs) {
 		objs = objs[:len(objs)-1]

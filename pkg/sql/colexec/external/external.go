@@ -70,21 +70,26 @@ var (
 	STATEMENT_ACCOUNT = "account"
 )
 
-const argName = "external"
+const opName = "external"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (external *External) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": external output")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) error {
+func (external *External) OpType() vm.OpType {
+	return vm.External
+}
+
+func (external *External) Prepare(proc *process.Process) error {
 	_, span := trace.Start(proc.Ctx, "ExternalPrepare")
+	external.ctr = new(container)
 	defer span.End()
-	param := arg.Es
-	if proc.Lim.MaxMsgSize == 0 {
+	param := external.Es
+	if proc.GetLim().MaxMsgSize == 0 {
 		param.maxBatchSize = uint64(morpc.GetMessageSize())
 	} else {
-		param.maxBatchSize = proc.Lim.MaxMsgSize
+		param.maxBatchSize = proc.GetLim().MaxMsgSize
 	}
 	param.maxBatchSize = uint64(float64(param.maxBatchSize) * 0.6)
 	if param.Extern == nil {
@@ -95,7 +100,7 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 		if err := plan2.InitS3Param(param.Extern); err != nil {
 			return err
 		}
-		param.Extern.FileService = proc.FileService
+		param.Extern.FileService = proc.Base.FileService
 	}
 	if !loadFormatIsValid(param.Extern) {
 		return moerr.NewNYI(proc.Ctx, "load format '%s'", param.Extern.Format)
@@ -132,7 +137,7 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
@@ -140,7 +145,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	t := time.Now()
 	ctx, span := trace.Start(proc.Ctx, "ExternalCall")
 	t1 := time.Now()
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze(external.GetIdx(), external.GetParallelIdx(), external.GetParallelMajor())
 	anal.Start()
 	defer func() {
 		anal.Stop()
@@ -148,11 +153,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		span.End()
 		v2.TxnStatementExternalScanDurationHistogram.Observe(time.Since(t).Seconds())
 	}()
-	anal.Input(nil, arg.GetIsFirst())
+	anal.Input(nil, external.GetIsFirst())
 
 	var err error
 	result := vm.NewCallResult()
-	param := arg.Es
+	param := external.Es
 	if param.Fileparam.End {
 		result.Status = vm.ExecStop
 		return result, nil
@@ -165,21 +170,21 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		param.Fileparam.Filepath = param.FileList[param.Fileparam.FileIndex]
 		param.Fileparam.FileIndex++
 	}
-	if arg.buf != nil {
-		proc.PutBatch(arg.buf)
-		arg.buf = nil
+	if external.ctr.buf != nil {
+		proc.PutBatch(external.ctr.buf)
+		external.ctr.buf = nil
 	}
-	arg.buf, err = scanFileData(ctx, param, proc)
+	external.ctr.buf, err = scanFileData(ctx, param, proc)
 	if err != nil {
 		param.Fileparam.End = true
 		return result, err
 	}
 
-	if arg.buf != nil {
-		anal.Output(arg.buf, arg.GetIsLast())
-		arg.maxAllocSize = max(arg.maxAllocSize, arg.buf.Size())
+	if external.ctr.buf != nil {
+		anal.Output(external.ctr.buf, external.GetIsLast())
+		external.ctr.maxAllocSize = max(external.ctr.maxAllocSize, external.ctr.buf.Size())
 	}
-	result.Batch = arg.buf
+	result.Batch = external.ctr.buf
 	if result.Batch != nil {
 		result.Batch.ShuffleIDX = int32(param.Idx)
 	}
@@ -299,7 +304,7 @@ func filterByAccountAndFilename(ctx context.Context, node *plan.Node, proc *proc
 	if err != nil {
 		return nil, nil, err
 	}
-	vec, err := executor.Eval(proc, []*batch.Batch{bat})
+	vec, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
 	if err != nil {
 		executor.Free()
 		return nil, nil, err
@@ -328,7 +333,7 @@ func readFile(param *ExternalParam, proc *process.Process) (io.ReadCloser, error
 		return io.NopCloser(bytes.NewReader(util.UnsafeStringToBytes(param.Extern.Data))), nil
 	}
 	if param.Extern.Local {
-		return io.NopCloser(proc.LoadLocalReader), nil
+		return io.NopCloser(proc.GetLoadLocalReader()), nil
 	}
 	fs, readPath, err := plan2.GetForETLWithType(param.Extern, param.Fileparam.Filepath)
 	if err != nil {
@@ -850,6 +855,32 @@ func getRealAttrCnt(attrs []string, cols []*plan.ColDef) int {
 	return len(attrs) - cnt
 }
 
+func checkLineValid(param *ExternalParam, proc *process.Process, line []csvparser.Field, rowIdx int) error {
+	if param.ClusterTable != nil && param.ClusterTable.GetIsClusterTable() {
+		//the column account_id of the cluster table do need to be filled here
+		if len(line)+1 != getRealAttrCnt(param.Attrs, param.Cols) {
+			return moerr.NewInvalidInput(proc.Ctx, "the data of row %d contained is not equal to input columns", rowIdx+1)
+		}
+	} else {
+		if param.Extern.ExtTab {
+			if len(line) < getRealAttrCnt(param.Attrs, param.Cols) {
+				return moerr.NewInvalidInput(proc.Ctx, "the data of row %d contained is less than input columns", rowIdx+1)
+			}
+			return nil
+		}
+		if len(line) != len(param.TbColToDataCol) {
+			if len(line) != len(param.TbColToDataCol)+1 {
+				return moerr.NewInvalidInput(proc.Ctx, "the data of row %d contained is not equal to input columns", rowIdx+1)
+			}
+			field := line[len(line)-1]
+			if field.Val != "" {
+				return moerr.NewInvalidInput(proc.Ctx, "the data of row %d contained is not equal to input columns", rowIdx+1)
+			}
+		}
+	}
+	return nil
+}
+
 func getBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Process) (*batch.Batch, error) {
 	bat, err := makeBatch(param, plh.batchSize, proc)
 	if err != nil {
@@ -871,16 +902,11 @@ func getBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 			}
 			plh.moCsvLineArray[rowIdx] = line
 		}
-		if param.ClusterTable != nil && param.ClusterTable.GetIsClusterTable() {
-			//the column account_id of the cluster table do need to be filled here
-			if len(line)+1 < getRealAttrCnt(param.Attrs, param.Cols) {
-				return nil, moerr.NewInternalError(proc.Ctx, ColumnCntLargerErrorInfo)
-			}
-		} else {
-			if !param.Extern.SysTable && len(line) < getRealAttrCnt(param.Attrs, param.Cols) {
-				return nil, moerr.NewInternalError(proc.Ctx, ColumnCntLargerErrorInfo)
-			}
+
+		if err := checkLineValid(param, proc, line, rowIdx); err != nil {
+			return nil, err
 		}
+
 		err = getOneRowData(bat, line, rowIdx, param, proc.GetMPool())
 		if err != nil {
 			return nil, err
@@ -1018,7 +1044,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 	colCnt := meta.BlockHeader().ColumnCount()
 	for i := 0; i < len(param.Attrs); i++ {
 		idxs[i] = uint16(param.Name2ColIndex[param.Attrs[i]])
-		if param.Extern.SysTable && idxs[i] >= colCnt {
+		if idxs[i] >= colCnt {
 			idxs[i] = 0
 		}
 	}
@@ -1031,7 +1057,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 
 	var sels []int32
 	for i := 0; i < len(param.Attrs); i++ {
-		if param.Extern.SysTable && uint16(param.Name2ColIndex[param.Attrs[i]]) >= colCnt {
+		if uint16(param.Name2ColIndex[param.Attrs[i]]) >= colCnt {
 			vecTmp, err = proc.AllocVectorOfRows(makeType(&param.Cols[i].Typ, false), rows, nil)
 			if err != nil {
 				return nil, err
@@ -1289,22 +1315,28 @@ func getNullFlag(nullMap map[string]([]string), attr, field string) bool {
 	return false
 }
 
-func getFieldFromLine(line []csvparser.Field, colIdx int, param *ExternalParam) csvparser.Field {
-	if catalog.ContainExternalHidenCol(param.Attrs[colIdx]) {
+func getFieldFromLine(line []csvparser.Field, colName string, param *ExternalParam) csvparser.Field {
+	if catalog.ContainExternalHidenCol(colName) {
 		return csvparser.Field{Val: param.Fileparam.Filepath}
 	}
-	return line[param.Name2ColIndex[param.Attrs[colIdx]]]
+	if param.Extern.ExtTab {
+		return line[param.Name2ColIndex[colName]]
+	}
+	return line[param.TbColToDataCol[colName]]
 }
 
 func getOneRowData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam, mp *mpool.MPool) error {
 	var buf bytes.Buffer
-	for colIdx := range param.Attrs {
+
+	for colIdx, colName := range param.Attrs {
 		vec := bat.Vecs[colIdx]
+
 		if param.Cols[colIdx].Hidden {
 			nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			continue
 		}
-		field := getFieldFromLine(line, colIdx, param)
+
+		field := getFieldFromLine(line, colName, param)
 		id := types.T(param.Cols[colIdx].Typ.Id)
 		if id != types.T_char && id != types.T_varchar && id != types.T_json &&
 			id != types.T_binary && id != types.T_varbinary && id != types.T_blob && id != types.T_text {

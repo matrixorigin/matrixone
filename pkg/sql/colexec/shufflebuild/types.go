@@ -27,7 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(ShuffleBuild)
 
 const (
 	ReceiveBatch = iota
@@ -38,87 +38,80 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
 	state              int
+	keyWidth           int // keyWidth is the width of hash columns, it determines which hash map to use.
 	hasNull            bool
-	isMerge            bool
+	runtimeFilterIn    bool
 	multiSels          [][]int32
 	batches            []*batch.Batch
 	batchIdx           int
-	tmpBatch           *batch.Batch
 	inputBatchRowCount int
+	tmpBatch           *batch.Batch
 	executor           []colexec.ExpressionExecutor
 	vecs               [][]*vector.Vector
 	intHashMap         *hashmap.IntHashMap
 	strHashMap         *hashmap.StrHashMap
-	keyWidth           int // keyWidth is the width of hash columns, it determines which hash map to use.
 	uniqueJoinKeys     []*vector.Vector
-	runtimeFilterIn    bool
 }
 
-type Argument struct {
+type ShuffleBuild struct {
 	ctr *container
 	// need to generate a push-down filter expression
-	NeedExpr          bool
-	IsDup             bool
-	Typs              []types.Type
-	Conditions        []*plan.Expr
-	HashOnPK          bool
-	NeedMergedBatch   bool
-	NeedAllocateSels  bool
+	NeedExpr         bool
+	IsDup            bool
+	HashOnPK         bool
+	NeedMergedBatch  bool
+	NeedAllocateSels bool
+	Typs             []types.Type
+	Conditions       []*plan.Expr
+
 	RuntimeFilterSpec *pbplan.RuntimeFilterSpec
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (shuffleBuild *ShuffleBuild) GetOperatorBase() *vm.OperatorBase {
+	return &shuffleBuild.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[ShuffleBuild](
+		func() *ShuffleBuild {
+			return &ShuffleBuild{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *ShuffleBuild) {
+			*a = ShuffleBuild{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[ShuffleBuild]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (shuffleBuild ShuffleBuild) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *ShuffleBuild {
+	return reuse.Alloc[ShuffleBuild](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (shuffleBuild *ShuffleBuild) Release() {
+	if shuffleBuild != nil {
+		reuse.Free[ShuffleBuild](shuffleBuild, nil)
 	}
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	arg.Free(proc, pipelineFailed, err)
+func (shuffleBuild *ShuffleBuild) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	shuffleBuild.Free(proc, pipelineFailed, err)
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := arg.ctr
-	proc.FinalizeRuntimeFilter(arg.RuntimeFilterSpec)
+func (shuffleBuild *ShuffleBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := shuffleBuild.ctr
+	proc.FinalizeRuntimeFilter(shuffleBuild.RuntimeFilterSpec, pipelineFailed, err)
 	if ctr != nil {
 		ctr.cleanBatches(proc)
 		ctr.cleanEvalVectors()
 		ctr.cleanHashMap()
-		ctr.FreeMergeTypeOperator(pipelineFailed)
-		if ctr.isMerge {
-			ctr.FreeMergeTypeOperator(pipelineFailed)
-		} else {
-			ctr.FreeAllReg()
-		}
-		arg.ctr = nil
+		shuffleBuild.ctr = nil
 	}
 }
 

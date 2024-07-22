@@ -25,41 +25,46 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "merge_delete"
+const opName = "merge_delete"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (mergeDelete *MergeDelete) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": MergeS3DeleteInfo ")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) error {
-	ref := arg.Ref
-	eng := arg.Engine
-	partitionNames := arg.PartitionTableNames
+func (mergeDelete *MergeDelete) OpType() vm.OpType {
+	return vm.MergeDelete
+}
+
+func (mergeDelete *MergeDelete) Prepare(proc *process.Process) error {
+	mergeDelete.ctr = new(container)
+	ref := mergeDelete.Ref
+	eng := mergeDelete.Engine
+	partitionNames := mergeDelete.PartitionTableNames
 	rel, partitionRels, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, eng, ref, partitionNames)
 	if err != nil {
 		return err
 	}
-	arg.delSource = rel
-	arg.partitionSources = partitionRels
+	mergeDelete.ctr.delSource = rel
+	mergeDelete.ctr.partitionSources = partitionRels
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (mergeDelete *MergeDelete) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
 	var err error
 	var name string
-	ap := arg
+	ap := mergeDelete
 
-	result, err := arg.GetChildren(0).Call(proc)
+	result, err := mergeDelete.GetChildren(0).Call(proc)
 	if err != nil {
 		return result, err
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze(mergeDelete.GetIdx(), mergeDelete.GetParallelIdx(), mergeDelete.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 
@@ -74,22 +79,22 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	// |  blk_id  | batch.Marshal(int64 offset) | CNBlockOffset (CN Block )                 |  partitionIdx
 	// |  blk_id  | batch.Marshal(rowId)        | RawRowIdBatch (DN Blcok )                 |  partitionIdx
 	// |  blk_id  | batch.Marshal(int64 offset) | RawBatchOffset(RawBatch[in txn workspace])|  partitionIdx
-	blkIds := vector.MustStrCol(bat.GetVector(0))
-	deltaLocs := vector.MustBytesCol(bat.GetVector(1))
+	blkIds, area0 := vector.MustVarlenaRawData(bat.GetVector(0))
+	deltaLocs, area1 := vector.MustVarlenaRawData(bat.GetVector(1))
 	typs := vector.MustFixedCol[int8](bat.GetVector(2))
 
 	// If the target table is a partition table, Traverse partition subtables for separate processing
-	if len(ap.partitionSources) > 0 {
+	if len(ap.ctr.partitionSources) > 0 {
 		partitionIdxs := vector.MustFixedCol[int32](bat.GetVector(3))
 		for i := 0; i < bat.RowCount(); i++ {
-			name = fmt.Sprintf("%s|%d", blkIds[i], typs[i])
+			name = fmt.Sprintf("%s|%d", blkIds[i].UnsafeGetString(area0), typs[i])
 			bat := &batch.Batch{}
-			if err := bat.UnmarshalBinary(deltaLocs[i]); err != nil {
+			if err := bat.UnmarshalBinary(deltaLocs[i].GetByteSlice(area1)); err != nil {
 				return result, err
 			}
 			bat.Cnt = 1
 			pIndex := partitionIdxs[i]
-			err = ap.partitionSources[pIndex].Delete(proc.Ctx, bat, name)
+			err = ap.ctr.partitionSources[pIndex].Delete(proc.Ctx, bat, name)
 			if err != nil {
 				return result, err
 			}
@@ -99,11 +104,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		for i := 0; i < bat.RowCount(); i++ {
 			name = fmt.Sprintf("%s|%d", blkIds[i], typs[i])
 			bat := &batch.Batch{}
-			if err := bat.UnmarshalBinary(deltaLocs[i]); err != nil {
+			if err := bat.UnmarshalBinary(deltaLocs[i].GetByteSlice(area1)); err != nil {
 				return result, err
 			}
 			bat.Cnt = 1
-			err = ap.delSource.Delete(proc.Ctx, bat, name)
+			err = ap.ctr.delSource.Delete(proc.Ctx, bat, name)
 			if err != nil {
 				return result, err
 			}

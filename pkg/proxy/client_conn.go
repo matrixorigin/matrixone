@@ -19,6 +19,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strconv"
 	"strings"
@@ -26,8 +27,6 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -37,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"go.uber.org/zap"
 )
 
 // clientBaseConnID is the base connection ID for client.
@@ -112,6 +112,7 @@ type migration struct {
 // clientConn is the connection between proxy and client.
 type clientConn struct {
 	ctx context.Context
+	sid string
 	log *log.MOLogger
 	// counterSet counts the events in proxy.
 	counterSet *counterSet
@@ -185,6 +186,7 @@ func newClientConn(
 	}
 	c := &clientConn{
 		ctx:            ctx,
+		sid:            cfg.UUID,
 		counterSet:     cs,
 		conn:           conn,
 		haKeeperClient: haKeeperClient,
@@ -209,7 +211,12 @@ func newClientConn(
 		EnableTls: cfg.TLSEnabled,
 	}
 	fp.SetDefaultValues()
-	c.mysqlProto = frontend.NewMysqlClientProtocol(c.connID, c.conn, 0, &fp)
+	pu := config.NewParameterUnit(&fp, nil, nil, nil)
+	ios, err := frontend.NewIOSession(c.RawConn(), pu)
+	if err != nil {
+		return nil, err
+	}
+	c.mysqlProto = frontend.NewMysqlClientProtocol(cfg.UUID, c.connID, ios, 0, &fp)
 	if cfg.TLSEnabled {
 		tlsConfig, err := frontend.ConstructTLSConfig(
 			ctx, cfg.TLSCAFile, cfg.TLSCertFile, cfg.TLSKeyFile)
@@ -266,12 +273,20 @@ func (c *clientConn) BuildConnWithServer(prevAddr string) (ServerConn, error) {
 	if prevAddr == "" {
 		// Step 1, proxy write initial handshake to client.
 		if err := c.writeInitialHandshake(); err != nil {
-			c.log.Debug("failed to write Handshake packet", zap.Error(err))
+			if errors.Is(err, io.EOF) {
+				return nil, err
+			}
+			c.log.Error("failed to write Handshake packet", zap.Error(err))
 			return nil, err
 		}
 		// Step 2, client send handshake response, which is auth request,
 		// to proxy.
 		if err := c.handleHandshakeResp(); err != nil {
+			// This connection may come from heartbeat of LB, and receive EOF error
+			// from it. Just return error and do not log it.
+			if errors.Is(err, io.EOF) {
+				return nil, err
+			}
 			c.log.Error("failed to handle Handshake response", zap.Error(err))
 			return nil, err
 		}
@@ -357,7 +372,16 @@ func (c *clientConn) handleKillQuery(e *killQueryEvent, resp chan<- []byte) erro
 	// Before connect to backend server, update the salt.
 	cn.salt = c.mysqlProto.GetSalt()
 
-	return c.connAndExec(cn, fmt.Sprintf("KILL QUERY %d", cn.connID), resp)
+	// And also update the connection ID.
+	cid, err := c.genConnID()
+	if err != nil {
+		c.log.Error("failed to generate conn ID for kill query", zap.Error(err))
+		c.sendErr(err, resp)
+		return err
+	}
+	cn.connID = cid
+
+	return c.connAndExec(cn, fmt.Sprintf("KILL QUERY %d", e.connID), resp)
 }
 
 // handleSetVar handles the set variable event.
@@ -402,7 +426,7 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 		// Select the best CN server from backend.
 		//
 		// NB: The selected CNServer must have label hash in it.
-		cn, err = c.router.Route(c.ctx, c.clientInfo, filterFn)
+		cn, err = c.router.Route(c.ctx, c.sid, c.clientInfo, filterFn)
 		if err != nil {
 			v2.ProxyConnectRouteFailCounter.Inc()
 			c.log.Error("route failed", zap.Error(err))

@@ -19,6 +19,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -27,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -38,7 +39,7 @@ const (
 // add unit tests for cases
 type topTestCase struct {
 	ds     []bool // Directions, ds[i] == true: the attrs[i] are in descending order
-	arg    *Argument
+	arg    *MergeTop
 	types  []types.Type
 	proc   *process.Process
 	cancel context.CancelFunc
@@ -158,7 +159,7 @@ func BenchmarkTop(b *testing.B) {
 }
 
 func newTestCase(ds []bool, ts []types.Type, limit int64, fs []*plan.OrderBySpec) topTestCase {
-	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
+	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
@@ -173,9 +174,9 @@ func newTestCase(ds []bool, ts []types.Type, limit int64, fs []*plan.OrderBySpec
 		ds:    ds,
 		types: ts,
 		proc:  proc,
-		arg: &Argument{
+		arg: &MergeTop{
 			Fs:    fs,
-			Limit: plan2.MakePlan2Int64ConstExprWithType(limit),
+			Limit: plan2.MakePlan2Uint64ConstExprWithType(uint64(limit)),
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
 					Idx:     0,

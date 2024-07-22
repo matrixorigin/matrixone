@@ -240,5 +240,8 @@ select * from t8 except select * from t9;
 -- infinity scenario
 select cast("[76875768584509877574546435800000005,8955885757767774774774774456466]" as vecf32(2)) *623585864455;
 
+-- l2_distance_sq
+select l2_distance("[0, 0, 0]", "[3, 4, 0]"), l2_distance_sq("[0, 0, 0]", "[3, 4, 0]");
+
 -- post
 drop database vecdb;

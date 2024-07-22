@@ -74,7 +74,7 @@ function cmd_timeout {
 }
 
 G_TS=`date +%Y%m%d%H%M%S`
-G_STAGE="$HOME/scratch"
+G_STAGE="${UT_WORKDIR:-$HOME}/scratch"
 if [[ ! -d $G_STAGE ]]; then mkdir -p $G_STAGE; fi
 
 G_CONT_ID=$(get_container_id)

@@ -594,6 +594,7 @@ func init() {
 		"extension":                  EXTENSION,
 		"query_result":               QUERY_RESULT,
 		"mysql_compatibility_mode":   MYSQL_COMPATIBILITY_MODE,
+		"unique_check_on_autoincr":   UNIQUE_CHECK_ON_AUTOINCR,
 		"sequences":                  SEQUENCES,
 		"sequence":                   SEQUENCE,
 		"increment":                  INCREMENT,
@@ -629,5 +630,6 @@ func init() {
 		"retry":                      RETRY,
 		"mo_ts":                      MO_TS,
 		"restore":                    RESTORE,
+		"pitr":                       PITR,
 	}
 }

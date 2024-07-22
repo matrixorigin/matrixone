@@ -16,55 +16,52 @@ package indexbuild
 
 import (
 	"bytes"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "index_build"
+const opName = "index_build"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (indexBuild *IndexBuild) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": index build ")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	if arg.RuntimeFilterSpec == nil {
+func (indexBuild *IndexBuild) OpType() vm.OpType {
+	return vm.IndexBuild
+}
+
+func (indexBuild *IndexBuild) Prepare(proc *process.Process) (err error) {
+	if indexBuild.RuntimeFilterSpec == nil {
 		panic("there must be runtime filter in index build!")
 	}
-
-	arg.ctr = new(container)
-	if len(proc.Reg.MergeReceivers) > 1 {
-		arg.ctr.InitReceiver(proc, true)
-		arg.ctr.isMerge = true
-	} else {
-		arg.ctr.InitReceiver(proc, false)
-	}
-
+	indexBuild.ctr = new(container)
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (indexBuild *IndexBuild) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze(indexBuild.GetIdx(), indexBuild.GetParallelIdx(), indexBuild.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 	result := vm.NewCallResult()
-	ctr := arg.ctr
+	ctr := indexBuild.ctr
 	for {
 		switch ctr.state {
 		case ReceiveBatch:
-			if err := ctr.build(arg, proc, anal, arg.GetIsFirst()); err != nil {
+			if err := ctr.build(indexBuild, proc, anal, indexBuild.GetIsFirst()); err != nil {
 				return result, err
 			}
 			ctr.state = HandleRuntimeFilter
 
 		case HandleRuntimeFilter:
-			if err := ctr.handleRuntimeFilter(arg, proc); err != nil {
+			if err := ctr.handleRuntimeFilter(indexBuild, proc); err != nil {
 				return result, err
 			}
 			ctr.state = End
@@ -80,35 +77,33 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) collectBuildBatches(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
-	var err error
-	var msg *process.RegisterMessage
+func (ctr *container) collectBuildBatches(indexBuild *IndexBuild, proc *process.Process, anal process.Analyze, isFirst bool) error {
 	var currentBatch *batch.Batch
 	for {
-		if ap.ctr.isMerge {
-			msg = ctr.ReceiveFromAllRegs(anal)
-		} else {
-			msg = ctr.ReceiveFromSingleReg(0, anal)
+		result, err := vm.ChildrenCall(indexBuild.GetChildren(0), proc, anal)
+		if err != nil {
+			return err
 		}
-		if msg.Err != nil {
-			return msg.Err
-		}
-		if msg.Batch == nil {
+		if result.Batch == nil {
 			break
 		}
-		currentBatch = msg.Batch
+		currentBatch = result.Batch
+		atomic.AddInt64(&currentBatch.Cnt, 1)
 		if currentBatch.IsEmpty() {
 			proc.PutBatch(currentBatch)
 			continue
 		}
+
 		anal.Input(currentBatch, isFirst)
-		// anal.Alloc(int64(currentBatch.Size())) @todo we need to redesin annalyze memory size
+		anal.Alloc(int64(currentBatch.Size()))
 		ctr.batch, err = ctr.batch.AppendWithCopy(proc.Ctx, proc.Mp(), currentBatch)
 		if err != nil {
 			return err
 		}
 		proc.PutBatch(currentBatch)
-		if ctr.batch.RowCount() > int(ap.RuntimeFilterSpec.UpperLimit) {
+
+		// If read index table data exceeds the UpperLimit, abandon reading data from index table
+		if ctr.batch.RowCount() > int(indexBuild.RuntimeFilterSpec.UpperLimit) {
 			// for index build, can exit early
 			return nil
 		}
@@ -116,7 +111,7 @@ func (ctr *container) collectBuildBatches(ap *Argument, proc *process.Process, a
 	return nil
 }
 
-func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
+func (ctr *container) build(ap *IndexBuild, proc *process.Process, anal process.Analyze, isFirst bool) error {
 	err := ctr.collectBuildBatches(ap, proc, anal, isFirst)
 	if err != nil {
 		return err
@@ -124,7 +119,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	return nil
 }
 
-func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) error {
+func (ctr *container) handleRuntimeFilter(ap *IndexBuild, proc *process.Process) error {
 	var runtimeFilter process.RuntimeFilterMessage
 	runtimeFilter.Tag = ap.RuntimeFilterSpec.Tag
 

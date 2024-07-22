@@ -35,6 +35,7 @@ const (
 )
 
 type rebalancer struct {
+	sid     string
 	stopper *stopper.Stopper
 	logger  *log.MOLogger
 	// mc is MO-Cluster instance, which is used to get CN servers.
@@ -84,9 +85,14 @@ func withRebalancerTolerance(tolerance float64) rebalancerOption {
 
 // newRebalancer creates a new rebalancer.
 func newRebalancer(
-	stopper *stopper.Stopper, logger *log.MOLogger, mc clusterservice.MOCluster, opts ...rebalancerOption,
+	sid string,
+	stopper *stopper.Stopper,
+	logger *log.MOLogger,
+	mc clusterservice.MOCluster,
+	opts ...rebalancerOption,
 ) (*rebalancer, error) {
 	r := &rebalancer{
+		sid:         sid,
 		stopper:     stopper,
 		logger:      logger,
 		connManager: newConnManager(),
@@ -165,18 +171,24 @@ func (r *rebalancer) collectTunnels(hash LabelHash) []*tunnel {
 
 	selector := li.genSelector(clusterservice.EQ_Globbing)
 	appendFn := func(s *metadata.CNService) {
+		if s.WorkState != metadata.WorkState_Working {
+			return
+		}
 		cns[s.ServiceID] = struct{}{}
 		if len(s.Labels) > 0 {
 			notEmptyCns[s.ServiceID] = struct{}{}
 		}
 	}
 	if li.isSuperTenant() {
-		route.RouteForSuperTenant(selector, "", nil, appendFn)
+		route.RouteForSuperTenant(r.sid, selector, "", nil, appendFn)
 	} else {
-		route.RouteForCommonTenant(selector, nil, appendFn)
+		route.RouteForCommonTenant(r.sid, selector, nil, appendFn)
 	}
 
 	r.mc.GetCNService(selector, func(s metadata.CNService) bool {
+		if s.WorkState != metadata.WorkState_Working {
+			return true
+		}
 		if len(s.Labels) == 0 {
 			emptyCNs[s.ServiceID] = struct{}{}
 		}

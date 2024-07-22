@@ -26,6 +26,10 @@ import "statsinfo.proto";
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 import "google/protobuf/timestamp.proto";
 
+option (gogoproto.sizer_all) = false;
+option (gogoproto.protosizer_all) = true;
+
+
 enum CmdMethod {
   // Query is the common query command.
   Query = 0;
@@ -72,6 +76,12 @@ enum CmdMethod {
   MigrateConnFrom = 20;
   // MigrateConnTo migrate the session info to the new cn node.
   MigrateConnTo = 21;
+
+  // ReloadAutoIncrementCache is the method to reload auto increment cache.
+  ReloadAutoIncrementCache = 22;
+
+  // GetReplicaCount get the replica count on specified cn node.
+  GetReplicaCount = 23;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -196,6 +206,8 @@ message Request {
   GetPipelineInfoRequest GetPipelineInfoRequest = 22;
   MigrateConnFromRequest MigrateConnFromRequest = 23;
   MigrateConnToRequest MigrateConnToRequest = 24;
+  ReloadAutoIncrementCacheRequest ReloadAutoIncrementCache = 25;
+  GetReplicaCountRequest GetReplicaCount = 26 [ (gogoproto.nullable) = false ];
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -245,6 +257,8 @@ message Response {
   GetPipelineInfoResponse GetPipelineInfoResponse = 22;
   MigrateConnFromResponse MigrateConnFromResponse = 23;
   MigrateConnToResponse MigrateConnToResponse = 24;
+  ReloadAutoIncrementCacheResponse ReloadAutoIncrementCache = 25;
+  GetReplicaCountResponse GetReplicaCount = 26 [ (gogoproto.nullable) = false ];
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.
@@ -449,4 +463,23 @@ message MigrateConnToRequest {
 
 message MigrateConnToResponse {
   bool Success = 1;
+}
+
+
+
+// ReloadAutoIncrementCacheRequest reload auto increment cache request
+message ReloadAutoIncrementCacheRequest {
+  uint64 TableID = 1;
+}
+
+// ReloadAutoIncrementCacheResponse reload auto increment cache response
+message ReloadAutoIncrementCacheResponse {
+}
+
+message GetReplicaCountRequest {
+  string CN = 1;
+}
+
+message GetReplicaCountResponse {
+  int64 Count = 1;
 }

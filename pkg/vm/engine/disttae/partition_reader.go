@@ -19,9 +19,10 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -34,8 +35,9 @@ import (
 )
 
 type PartitionReader struct {
-	table    *txnTable
-	prepared bool
+	table     *txnTable
+	txnOffset int // Transaction writes offset used to specify the starting position for reading data.
+	prepared  bool
 	// inserted rows comes from txn.writes.
 	inserts []*batch.Batch
 	//deleted rows comes from txn.writes or partitionState.rows.
@@ -73,8 +75,14 @@ func (p *PartitionReader) prepare() error {
 		inserts = make([]*batch.Batch, 0)
 		deletes = make(map[types.Rowid]uint8)
 		//load inserts and deletes from txn.writes.
+
+		txnOffset := p.txnOffset
+		if p.table.db.op.IsSnapOp() {
+			txnOffset = p.table.getTxn().GetSnapshotWriteOffset()
+		}
+
 		p.table.getTxn().forEachTableWrites(p.table.db.databaseId, p.table.tableId,
-			p.table.getTxn().GetSnapshotWriteOffset(), func(entry Entry) {
+			txnOffset, func(entry Entry) {
 				if entry.typ == INSERT || entry.typ == INSERT_TXN {
 					if entry.bat == nil || entry.bat.IsEmpty() {
 						return
@@ -117,6 +125,8 @@ func (p *PartitionReader) prepare() error {
 	return nil
 }
 
+// PartitionReader.Read reads memory data which comes from partitionState.rows and txn.writes,
+// and load its tombstones.
 func (p *PartitionReader) Read(
 	_ context.Context,
 	colNames []string,
@@ -126,7 +136,7 @@ func (p *PartitionReader) Read(
 	if p == nil {
 		return
 	}
-	// prepare the data for read.
+	// prepare the memory data and its tombstones for read.
 	if err = p.prepare(); err != nil {
 		return nil, err
 	}

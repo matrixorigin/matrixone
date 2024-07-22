@@ -21,10 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
-func (m *Message) Size() int {
-	return m.ProtoSize()
-}
-
 func (m *Message) GetID() uint64 {
 	return m.Id
 }
@@ -35,14 +31,6 @@ func (m *Message) SetID(id uint64) {
 
 func (m *Message) SetSid(sid Status) {
 	m.Sid = sid
-}
-
-func (m *Message) SetCheckSum(sum uint32) {
-	m.Checksum = sum
-}
-
-func (m *Message) SetSequence(s uint64) {
-	m.Sequence = s
 }
 
 func (m *Message) SetMoError(ctx context.Context, err error) {
@@ -86,7 +74,7 @@ func (m *Message) DebugString() string {
 		}
 		errInfo = me.Error()
 	}
-	return fmt.Sprintf("MessageSize: %d, sid: %d, ErrInfo: %s, batchSize: %d", m.Size(), m.Sid, errInfo, len(m.Data))
+	return fmt.Sprintf("MessageSize: %d, sid: %d, ErrInfo: %s, batchSize: %d", m.ProtoSize(), m.Sid, errInfo, len(m.Data))
 }
 
 func (m *Message) IsBatchMessage() bool {
@@ -130,16 +118,4 @@ func EncodedMessageError(ctx context.Context, err error) []byte {
 		errData, _ = moerr.ConvertGoError(ctx, err).(*moerr.Error).MarshalBinary()
 	}
 	return errData
-}
-
-func GetMessageErrorInfo(m *Message) error {
-	errData := m.GetErr()
-	if len(errData) > 0 {
-		err := &moerr.Error{}
-		if errUnmarshal := err.UnmarshalBinary(errData); errUnmarshal != nil {
-			return errUnmarshal
-		}
-		return err
-	}
-	return nil
 }

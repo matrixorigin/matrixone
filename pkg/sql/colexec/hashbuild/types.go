@@ -27,7 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(HashBuild)
 
 const (
 	BuildHashMap = iota
@@ -38,96 +38,86 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
-
-	state int
-
+	state              int
+	keyWidth           int // keyWidth is the width of hash columns, it determines which hash map to use.
 	hasNull            bool
-	isMerge            bool
+	runtimeFilterIn    bool
 	multiSels          [][]int32
 	batches            []*batch.Batch
 	batchIdx           int
-	tmpBatch           *batch.Batch
 	inputBatchRowCount int
+	tmpBatch           *batch.Batch
 
 	executor []colexec.ExpressionExecutor
 	vecs     [][]*vector.Vector
 
 	intHashMap *hashmap.IntHashMap
 	strHashMap *hashmap.StrHashMap
-	keyWidth   int // keyWidth is the width of hash columns, it determines which hash map to use.
 
-	uniqueJoinKeys  []*vector.Vector
-	runtimeFilterIn bool
+	uniqueJoinKeys []*vector.Vector
 }
 
-type Argument struct {
+type HashBuild struct {
 	ctr *container
 	// need to generate a push-down filter expression
-	NeedExpr    bool
-	NeedHashMap bool
-	IsDup       bool
-	Typs        []types.Type
-	Conditions  []*plan.Expr
+	NeedExpr         bool
+	NeedHashMap      bool
+	IsDup            bool
+	HashOnPK         bool
+	NeedMergedBatch  bool
+	NeedAllocateSels bool
+	Typs             []types.Type
+	Conditions       []*plan.Expr
 
-	HashOnPK          bool
-	NeedMergedBatch   bool
-	NeedAllocateSels  bool
 	RuntimeFilterSpec *pbplan.RuntimeFilterSpec
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (hashBuild *HashBuild) GetOperatorBase() *vm.OperatorBase {
+	return &hashBuild.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[HashBuild](
+		func() *HashBuild {
+			return &HashBuild{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *HashBuild) {
+			*a = HashBuild{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[HashBuild]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (hashBuild HashBuild) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *HashBuild {
+	return reuse.Alloc[HashBuild](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (hashBuild *HashBuild) Release() {
+	if hashBuild != nil {
+		reuse.Free[HashBuild](hashBuild, nil)
 	}
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	arg.Free(proc, pipelineFailed, err)
+func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	hashBuild.Free(proc, pipelineFailed, err)
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := arg.ctr
-	proc.FinalizeRuntimeFilter(arg.RuntimeFilterSpec)
+func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := hashBuild.ctr
+	proc.FinalizeRuntimeFilter(hashBuild.RuntimeFilterSpec, pipelineFailed, err)
 	if ctr != nil {
 		ctr.cleanBatches(proc)
 		ctr.cleanEvalVectors()
-		if !arg.NeedHashMap {
+		if !hashBuild.NeedHashMap {
 			ctr.cleanHashMap()
 		}
-		ctr.FreeMergeTypeOperator(pipelineFailed)
-		if ctr.isMerge {
-			ctr.FreeMergeTypeOperator(pipelineFailed)
-		} else {
-			ctr.FreeAllReg()
-		}
-		arg.ctr = nil
+		hashBuild.ctr = nil
 	}
 }
 

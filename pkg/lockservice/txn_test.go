@@ -33,9 +33,9 @@ func TestLockAdded(t *testing.T) {
 		txn := newActiveTxn(id, string(id), fsp, "")
 		defer reuse.Free(txn, nil)
 
-		txn.lockAdded(0, pb.LockTable{Table: 1}, [][]byte{[]byte("k1")})
-		txn.lockAdded(0, pb.LockTable{Table: 1}, [][]byte{[]byte("k11")})
-		txn.lockAdded(0, pb.LockTable{Table: 2}, [][]byte{[]byte("k2"), []byte("k22")})
+		txn.lockAdded(0, pb.LockTable{Table: 1}, [][]byte{[]byte("k1")}, getLogger(""))
+		txn.lockAdded(0, pb.LockTable{Table: 1}, [][]byte{[]byte("k11")}, getLogger(""))
+		txn.lockAdded(0, pb.LockTable{Table: 2}, [][]byte{[]byte("k2"), []byte("k22")}, getLogger(""))
 
 		assert.Equal(t, 2, len(txn.getHoldLocksLocked(0).tableKeys))
 
@@ -53,15 +53,15 @@ func TestLockAdded(t *testing.T) {
 
 func TestClose(t *testing.T) {
 	reuse.RunReuseTests(func() {
-		events := newWaiterEvents(1, nil, nil, nil)
+		events := newWaiterEvents(1, nil, nil, nil, getLogger(""))
 		defer events.close()
 
 		id := []byte("t1")
 		fsp := newFixedSlicePool(2)
 		txn := newActiveTxn(id, string(id), fsp, "")
 		tables := map[uint64]lockTable{
-			1: newLocalLockTable(pb.LockTable{Table: 1}, nil, events, runtime.DefaultRuntime().Clock(), nil),
-			2: newLocalLockTable(pb.LockTable{Table: 2}, nil, events, runtime.DefaultRuntime().Clock(), nil),
+			1: newLocalLockTable(pb.LockTable{Table: 1}, nil, events, runtime.DefaultRuntime().Clock(), nil, getLogger("")),
+			2: newLocalLockTable(pb.LockTable{Table: 2}, nil, events, runtime.DefaultRuntime().Clock(), nil, getLogger("")),
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 		defer cancel()
@@ -80,7 +80,9 @@ func TestClose(t *testing.T) {
 			timestamp.Timestamp{},
 			func(group uint32, table uint64) (lockTable, error) {
 				return tables[table], nil
-			})
+			},
+			getLogger(""),
+		)
 		assert.Empty(t, txn.txnID)
 		assert.Empty(t, txn.txnKey)
 		assert.Empty(t, txn.blockedWaiters)

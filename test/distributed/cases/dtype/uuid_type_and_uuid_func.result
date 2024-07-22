@@ -55,8 +55,8 @@ length(cast(uuid() as text))
 CREATE TABLE ratings (   `book_id` bigint,   `user_id` bigint,   `score` tinyint,   `rated_at` datetime DEFAULT NOW(),   PRIMARY KEY (`book_id`,`user_id`) );
 desc ratings;
 Field    Type    Null    Key    Default    Extra    Comment
-book_id    BIGINT(64)    NO    PRI    null
-rated_at    DATETIME(0)    YES        now()
-score    TINYINT(8)    YES        null
-user_id    BIGINT(64)    NO    PRI    null
+book_id    BIGINT(64)    NO    PRI    null        
+user_id    BIGINT(64)    NO    PRI    null        
+score    TINYINT(8)    YES        null        
+rated_at    DATETIME(0)    YES        NOW()        
 drop table ratings;

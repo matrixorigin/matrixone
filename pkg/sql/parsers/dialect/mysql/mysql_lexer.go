@@ -19,14 +19,15 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func Parse(ctx context.Context, sql string, lower int64, useOrigin int64) ([]tree.Statement, error) {
-	lexer := NewLexer(dialect.MYSQL, sql, lower, useOrigin)
+func Parse(ctx context.Context, sql string, lower int64) ([]tree.Statement, error) {
+	lexer := NewLexer(dialect.MYSQL, sql, lower)
 	defer PutScanner(lexer.scanner)
 	if yyParse(lexer) != 0 {
 		for _, s := range lexer.stmts {
@@ -49,8 +50,8 @@ func Parse(ctx context.Context, sql string, lower int64, useOrigin int64) ([]tre
 	return lexer.stmts, nil
 }
 
-func ParseOne(ctx context.Context, sql string, lower int64, useOrigin int64) (tree.Statement, error) {
-	lexer := NewLexer(dialect.MYSQL, sql, lower, useOrigin)
+func ParseOne(ctx context.Context, sql string, lower int64) (tree.Statement, error) {
+	lexer := NewLexer(dialect.MYSQL, sql, lower)
 	defer PutScanner(lexer.scanner)
 	if yyParse(lexer) != 0 {
 		for _, s := range lexer.stmts {
@@ -69,15 +70,13 @@ type Lexer struct {
 	stmts      []tree.Statement
 	paramIndex int
 	lower      int64
-	useOrigin  int64
 }
 
-func NewLexer(dialectType dialect.DialectType, sql string, lower int64, useOrigin int64) *Lexer {
+func NewLexer(dialectType dialect.DialectType, sql string, lower int64) *Lexer {
 	return &Lexer{
 		scanner:    NewScanner(dialectType, sql),
 		paramIndex: 0,
 		lower:      lower,
-		useOrigin:  useOrigin,
 	}
 }
 
@@ -100,6 +99,19 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	lval.str = str
 	return typ
 }
+
+func (l *Lexer) GetDbOrTblName(origin string) string {
+	if l.lower == 1 {
+		return strings.ToLower(origin)
+	}
+	return origin
+}
+
+func (l *Lexer) GetDbOrTblNameCStr(origin string) *tree.CStr {
+	return tree.NewCStr(origin, l.lower)
+}
+
+var CaseInsensitiveDbs = []string{"information_schema", "mysql"}
 
 func (l *Lexer) Error(err string) {
 	errMsg := fmt.Sprintf("You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. %s", err)

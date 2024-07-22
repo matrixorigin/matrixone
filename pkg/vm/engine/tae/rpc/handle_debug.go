@@ -18,7 +18,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
+	gc "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v1"
 
 	"github.com/google/shlex"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -84,7 +89,8 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 		memo.LeaveProcessing()
 	}()
 
-	specialSize := memo.GatherSpecialTableSize()
+	//specialSize := memo.GatherSpecialTableSize()
+	specialSize := uint64(0)
 	usages := memo.GatherAllAccSize()
 	for accId := range usages {
 		if accId != uint64(catalog.System_Account) {
@@ -113,7 +119,7 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 		resp.Sizes = append(resp.Sizes, size)
 	}
 
-	var notReadyNewAcc []uint64
+	//var notReadyNewAcc []uint64
 
 	// new accounts
 	traverseCatalogForNewAccounts(h.db.Catalog, memo, newIds)
@@ -123,18 +129,19 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 			resp.AccIds = append(resp.AccIds, int64(newIds[idx]))
 			resp.Sizes = append(resp.Sizes, size)
 			memo.AddReqTrace(uint64(newIds[idx]), size, start, "new, ready")
-		} else {
-			notReadyNewAcc = append(notReadyNewAcc, newIds[idx])
 		}
+		//else {
+		//	notReadyNewAcc = append(notReadyNewAcc, newIds[idx])
+		//}
 	}
 
 	memo.ClearNewAccCache()
 
-	for idx := range notReadyNewAcc {
-		resp.AccIds = append(resp.AccIds, int64(notReadyNewAcc[idx]))
-		resp.Sizes = append(resp.Sizes, specialSize)
-		memo.AddReqTrace(uint64(newIds[idx]), specialSize, start, " new, not ready, only special")
-	}
+	//for idx := range notReadyNewAcc {
+	//	resp.AccIds = append(resp.AccIds, int64(notReadyNewAcc[idx]))
+	//	resp.Sizes = append(resp.Sizes, specialSize)
+	//	memo.AddReqTrace(uint64(newIds[idx]), specialSize, start, "new, not ready, only special")
+	//}
 
 	resp.Succeed = true
 
@@ -172,7 +179,7 @@ func (h *Handle) HandleForceGlobalCheckpoint(
 
 	currTs := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 
-	err = h.db.ForceGlobalCheckpoint(ctx, currTs, timeout)
+	err = h.db.ForceGlobalCheckpoint(ctx, currTs, timeout, 0)
 	return nil, err
 }
 
@@ -216,6 +223,72 @@ func (h *Handle) HandleBackup(
 	}
 	resp.CkpLocation = locations
 	return nil, err
+}
+
+func (h *Handle) HandleDiskCleaner(
+	ctx context.Context,
+	meta txn.TxnMeta,
+	req *db.DiskCleaner,
+	resp *api.SyncLogTailResp) (cb func(), err error) {
+
+	op := req.Op
+	key := req.Key
+	value := req.Value
+	if op == gc.RemoveChecker {
+		return nil, h.db.DiskCleaner.GetCleaner().RemoveChecker(key)
+	}
+	switch key {
+	case gc.CheckerKeyTTL:
+		// Set a ttl, checkpoints whose endTS is less than this ttl can be consumed
+		var ttl time.Duration
+		ttl, err = time.ParseDuration(value)
+		if err != nil {
+			logutil.Errorf("parse ttl failed: %v", err)
+			return nil, err
+		}
+		// ttl should be at least 1 hour,
+		if ttl < time.Hour {
+			logutil.Errorf("ttl should be at least 1 hour")
+			return nil, moerr.NewInvalidArgNoCtx(key, value)
+		}
+		h.db.DiskCleaner.GetCleaner().AddChecker(
+			func(item any) bool {
+				checkpoint := item.(*checkpoint.CheckpointEntry)
+				ts := types.BuildTS(time.Now().UTC().UnixNano()-int64(ttl), 0)
+				endTS := checkpoint.GetEnd()
+				return !endTS.GreaterEq(&ts)
+			}, gc.CheckerKeyTTL)
+		return
+	case gc.CheckerKeyMinTS:
+		// Set a minTS, checkpoints whose endTS is less than this minTS can be consumed
+		var ts types.TS
+		var pTime int64
+		var lTime uint64
+		tmp := strings.Split(value, "-")
+		if len(tmp) != 2 {
+			return nil, moerr.NewInvalidArgNoCtx(key, value)
+		}
+
+		pTime, err = strconv.ParseInt(tmp[0], 10, 64)
+		if err != nil {
+			return nil, err
+		}
+
+		lTime, err = strconv.ParseUint(tmp[1], 10, 32)
+		if err != nil {
+			return nil, err
+		}
+		ts = types.BuildTS(pTime, uint32(lTime))
+		h.db.DiskCleaner.GetCleaner().AddChecker(
+			func(item any) bool {
+				ckp := item.(*checkpoint.CheckpointEntry)
+				end := ckp.GetEnd()
+				return !end.GreaterEq(&ts)
+			}, gc.CheckerKeyMinTS)
+		return
+	default:
+		return nil, moerr.NewInvalidArgNoCtx(key, value)
+	}
 }
 
 func (h *Handle) HandleInterceptCommit(
@@ -349,7 +422,7 @@ func (h *Handle) HandleCommitMerge(
 		}
 	}
 
-	_, err = jobs.HandleMergeEntryInTxn(txn, req, h.db.Runtime)
+	_, err = jobs.HandleMergeEntryInTxn(ctx, txn, txn.String(), req, h.db.Runtime)
 	if err != nil {
 		return
 	}

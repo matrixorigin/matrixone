@@ -19,6 +19,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -26,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -36,7 +37,7 @@ const (
 
 // add unit tests for cases
 type limitTestCase struct {
-	arg    *Argument
+	arg    *MergeLimit
 	types  []types.Type
 	proc   *process.Process
 	cancel context.CancelFunc
@@ -155,7 +156,7 @@ func BenchmarkLimit(b *testing.B) {
 }
 
 func newTestCase(limit uint64) limitTestCase {
-	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
+	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
@@ -171,8 +172,8 @@ func newTestCase(limit uint64) limitTestCase {
 		types: []types.Type{
 			types.T_int8.ToType(),
 		},
-		arg: &Argument{
-			Limit: plan.MakePlan2Int64ConstExprWithType(int64(limit)),
+		arg: &MergeLimit{
+			Limit: plan.MakePlan2Uint64ConstExprWithType(limit),
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
 					Idx:     0,

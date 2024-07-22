@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
 type Merger interface {
@@ -64,16 +63,13 @@ type merger[T any] struct {
 
 	mustColFunc func(*vector.Vector) []T
 
-	totalRowCnt   uint32
-	totalSize     uint32
-	rowPerBlk     uint32
-	blkPerObj     uint16
-	rowSize       uint32
-	targetObjSize uint32
+	rowPerBlk uint32
+	stats     mergeStats
 }
 
 func newMerger[T any](host MergeTaskHost, lessFunc sort.LessFunc[T], sortKeyPos int, mustColFunc func(*vector.Vector) []T) Merger {
 	size := host.GetObjectCnt()
+	rowSizeU64 := host.GetTotalSize() / uint64(host.GetTotalRowCnt())
 	m := &merger[T]{
 		host:       host,
 		objCnt:     size,
@@ -85,17 +81,18 @@ func newMerger[T any](host MergeTaskHost, lessFunc sort.LessFunc[T], sortKeyPos 
 		heap:       newHeapSlice[T](size, lessFunc),
 		sortKeyIdx: sortKeyPos,
 
-		accObjBlkCnts:    host.GetAccBlkCnts(),
-		objBlkCnts:       host.GetBlkCnts(),
-		rowPerBlk:        host.GetBlockMaxRows(),
-		blkPerObj:        host.GetObjectMaxBlocks(),
-		targetObjSize:    host.GetTargetObjSize(),
-		totalSize:        host.GetTotalSize(),
-		totalRowCnt:      host.GetTotalRowCnt(),
+		accObjBlkCnts: host.GetAccBlkCnts(),
+		objBlkCnts:    host.GetBlkCnts(),
+		rowPerBlk:     host.GetBlockMaxRows(),
+		stats: mergeStats{
+			totalRowCnt:   host.GetTotalRowCnt(),
+			rowSize:       uint32(rowSizeU64),
+			targetObjSize: host.GetTargetObjSize(),
+			blkPerObj:     host.GetObjectMaxBlocks(),
+		},
 		loadedObjBlkCnts: make([]int, size),
 		mustColFunc:      mustColFunc,
 	}
-	m.rowSize = m.totalSize / m.totalRowCnt
 	totalBlkCnt := 0
 	for _, cnt := range m.objBlkCnts {
 		totalBlkCnt += cnt
@@ -110,25 +107,33 @@ func newMerger[T any](host MergeTaskHost, lessFunc sort.LessFunc[T], sortKeyPos 
 func (m *merger[T]) merge(ctx context.Context) error {
 	for i := 0; i < m.objCnt; i++ {
 		if ok, err := m.loadBlk(ctx, uint32(i)); !ok {
+			if err == nil {
+				continue
+			}
 			return errors.Join(moerr.NewInternalError(ctx, "failed to load first blk"), err)
 		}
 
 		heapPush(m.heap, heapElem[T]{
-			data:   m.cols[i][m.rowIdx[i]],
-			isNull: m.nulls[i].Contains(uint64(m.rowIdx[i])),
+			data:   m.cols[i][0],
+			isNull: m.nulls[i].Contains(0),
 			src:    uint32(i),
 		})
 	}
+	defer m.release()
 
 	var releaseF func()
-	m.buffer, releaseF = getSimilarBatch(m.bats[0].bat, int(m.rowPerBlk), m.host)
+	for i := 0; i < m.objCnt; i++ {
+		if m.bats[i].bat != nil {
+			m.buffer, releaseF = getSimilarBatch(m.bats[i].bat, int(m.rowPerBlk), m.host)
+			break
+		}
+	}
+	// all batches are empty.
+	if m.buffer == nil {
+		return nil
+	}
 	defer releaseF()
 
-	objCnt := 0
-	objBlkCnt := 0
-	bufferRowCnt := 0
-	objRowCnt := uint32(0)
-	mergedRowCnt := uint32(0)
 	commitEntry := m.host.GetCommitEntry()
 	for m.heap.Len() != 0 {
 		select {
@@ -154,19 +159,19 @@ func (m *merger[T]) merge(ctx context.Context) error {
 
 		if m.host.DoTransfer() {
 			commitEntry.Booking.Mappings[m.accObjBlkCnts[objIdx]+m.loadedObjBlkCnts[objIdx]-1].M[int32(rowIdx)] = api.TransDestPos{
-				ObjIdx: int32(objCnt),
-				BlkIdx: int32(uint32(objBlkCnt)),
-				RowIdx: int32(bufferRowCnt),
+				ObjIdx: int32(m.stats.objCnt),
+				BlkIdx: int32(uint32(m.stats.objBlkCnt)),
+				RowIdx: int32(m.stats.blkRowCnt),
 			}
 		}
 
-		bufferRowCnt++
-		objRowCnt++
-		mergedRowCnt++
+		m.stats.blkRowCnt++
+		m.stats.objRowCnt++
+		m.stats.mergedRowCnt++
 		// write new block
-		if bufferRowCnt == int(m.rowPerBlk) {
-			bufferRowCnt = 0
-			objBlkCnt++
+		if m.stats.blkRowCnt == int(m.rowPerBlk) {
+			m.stats.blkRowCnt = 0
+			m.stats.objBlkCnt++
 
 			if m.writer == nil {
 				m.writer = m.host.PrepareNewWriter()
@@ -179,15 +184,15 @@ func (m *merger[T]) merge(ctx context.Context) error {
 			m.buffer.CleanOnlyData()
 
 			// write new object
-			if m.needNewObject(objBlkCnt, objRowCnt, mergedRowCnt) {
+			if m.stats.needNewObject() {
 				// write object and reset writer
 				if err := m.syncObject(ctx); err != nil {
 					return err
 				}
 				// reset writer after sync
-				objBlkCnt = 0
-				objRowCnt = 0
-				objCnt++
+				m.stats.objBlkCnt = 0
+				m.stats.objRowCnt = 0
+				m.stats.objCnt++
 			}
 		}
 
@@ -197,8 +202,8 @@ func (m *merger[T]) merge(ctx context.Context) error {
 	}
 
 	// write remain data
-	if bufferRowCnt > 0 {
-		objBlkCnt++
+	if m.stats.blkRowCnt > 0 {
+		m.stats.objBlkCnt++
 
 		if m.writer == nil {
 			m.writer = m.host.PrepareNewWriter()
@@ -208,26 +213,12 @@ func (m *merger[T]) merge(ctx context.Context) error {
 		}
 		m.buffer.CleanOnlyData()
 	}
-	if objBlkCnt > 0 {
+	if m.stats.objBlkCnt > 0 {
 		if err := m.syncObject(ctx); err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-func (m *merger[T]) needNewObject(objBlkCnt int, objRowCnt, mergedRowCnt uint32) bool {
-	if m.targetObjSize == 0 {
-		if m.blkPerObj == 0 {
-			return objBlkCnt == int(options.DefaultBlocksPerObject)
-		}
-		return objBlkCnt == int(m.blkPerObj)
-	}
-
-	if objRowCnt*m.rowSize > m.targetObjSize {
-		return (m.totalRowCnt-mergedRowCnt)*m.rowSize > m.targetObjSize
-	}
-	return false
 }
 
 func (m *merger[T]) nextPos() uint32 {
@@ -238,12 +229,23 @@ func (m *merger[T]) loadBlk(ctx context.Context, objIdx uint32) (bool, error) {
 	nextBatch, del, releaseF, err := m.host.LoadNextBatch(ctx, objIdx)
 	if m.bats[objIdx].bat != nil {
 		m.bats[objIdx].releaseF()
+		m.bats[objIdx].releaseF = nil
 	}
 	if err != nil {
 		if errors.Is(err, ErrNoMoreBlocks) {
 			return false, nil
 		}
 		return false, err
+	}
+	for nextBatch.RowCount() == 0 {
+		releaseF()
+		nextBatch, del, releaseF, err = m.host.LoadNextBatch(ctx, objIdx)
+		if err != nil {
+			if errors.Is(err, ErrNoMoreBlocks) {
+				return false, nil
+			}
+			return false, err
+		}
 	}
 
 	m.bats[objIdx] = releasableBatch{bat: nextBatch, releaseF: releaseF}
@@ -286,11 +288,19 @@ func (m *merger[T]) syncObject(ctx context.Context) error {
 	return nil
 }
 
+func (m *merger[T]) release() {
+	for _, bat := range m.bats {
+		if bat.releaseF != nil {
+			bat.releaseF()
+		}
+	}
+}
+
 func mergeObjs(ctx context.Context, mergeHost MergeTaskHost, sortKeyPos int) error {
 	var merger Merger
 	typ := mergeHost.GetSortKeyType()
 	if typ.IsVarlen() {
-		merger = newMerger(mergeHost, sort.GenericLess[string], sortKeyPos, vector.MustStrCol)
+		merger = newMerger(mergeHost, sort.GenericLess[string], sortKeyPos, vector.InefficientMustStrCol)
 	} else {
 		switch typ.Oid {
 		case types.T_bool:

@@ -78,7 +78,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	// 	return nil, moerr.NewNotSupported(ctx.GetContext(), "INSERT ... ON DUPLICATE KEY UPDATE ... for cluster table")
 	// }
 
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 	builder.haveOnDuplicateKey = len(stmt.OnDuplicateUpdate) > 0
 	if stmt.IsRestore {
 		oldSnapshot := builder.compCtx.GetSnapshot()
@@ -94,9 +94,13 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	}
 
 	bindCtx := NewBindContext(builder, nil)
-	ifExistAutoPkCol, insertWithoutUniqueKeyMap, err := initInsertStmt(builder, bindCtx, stmt, rewriteInfo)
+	ifExistAutoPkCol, insertWithoutUniqueKeyMap, ifInsertFromUniqueColMap, err := initInsertStmt(builder, bindCtx, stmt, rewriteInfo)
 	if err != nil {
 		return nil, err
+	}
+	replaceStmt := getRewriteToReplaceStmt(tableDef, stmt, rewriteInfo, isPrepareStmt)
+	if replaceStmt != nil {
+		return buildReplace(replaceStmt, ctx, isPrepareStmt, true)
 	}
 	lastNodeId := rewriteInfo.rootId
 	sourceStep := builder.appendStep(lastNodeId)
@@ -228,12 +232,20 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		// append project node to make batch like update logic, not insert
 		updateColLength := 0
 		updateColPosMap := make(map[string]int)
+		updatePkCol := false
 		var insertColPos []int
 		var projectProjection []*Expr
 		tableDef = DeepCopyTableDef(tableDef, true)
 		tableDef.Cols = append(tableDef.Cols, MakeRowIdColDef())
 		colLength := len(tableDef.Cols)
 		rowIdPos := colLength - 1
+		if tableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
+			for _, name := range tableDef.Pkey.Names {
+				if _, ok := rewriteInfo.onDuplicateExpr[name]; ok {
+					updatePkCol = true
+				}
+			}
+		}
 		for _, col := range tableDef.Cols {
 			if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
 				continue
@@ -288,6 +300,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		upPlanCtx.rowIdPos = rowIdPos
 		upPlanCtx.insertColPos = insertColPos
 		upPlanCtx.updateColPosMap = updateColPosMap
+		upPlanCtx.updatePkCol = updatePkCol
 
 		err = buildUpdatePlans(ctx, builder, updateBindCtx, upPlanCtx, true)
 		if err != nil {
@@ -297,7 +310,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 
 		query.StmtType = plan.Query_UPDATE
 	} else {
-		err = buildInsertPlans(ctx, builder, bindCtx, stmt, objRef, tableDef, rewriteInfo.rootId, ifExistAutoPkCol, insertWithoutUniqueKeyMap)
+		err = buildInsertPlans(ctx, builder, bindCtx, stmt, objRef, tableDef, rewriteInfo.rootId, ifExistAutoPkCol, insertWithoutUniqueKeyMap, ifInsertFromUniqueColMap)
 		if err != nil {
 			return nil, err
 		}
@@ -754,9 +767,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 			filterExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "in", []*Expr{
 				pkExpr,
 				{
-					Typ: plan.Type{
-						Id: int32(types.T_tuple),
-					},
+					Typ: pkExpr.Typ,
 					Expr: &plan.Expr_List{
 						List: &plan.ExprList{
 							List: colExprs[0],
@@ -798,11 +809,33 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 				pkExpr,
 				serialExpr,
 			})
+		} else if rowsCount <= 3 {
+			inArgs := make([]*plan.Expr, rowsCount)
+			for i := range inArgs {
+				serialArgs := make([]*plan.Expr, len(colExprs))
+				for j := range colExprs {
+					serialArgs[j] = colExprs[j][i]
+				}
+
+				inArgs[i], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", serialArgs)
+			}
+			filterExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "in", []*Expr{
+				pkExpr,
+				{
+					Typ: pkExpr.Typ,
+					Expr: &plan.Expr_List{
+						List: &plan.ExprList{
+							List: inArgs,
+						},
+					},
+				},
+			})
 		} else {
 			names := make([]string, len(lmap.m))
 			for n, p := range lmap.m {
 				names[p.order] = n
 			}
+			bat.Attrs = insertColsNameFromStmt
 			toSerialBatch := bat.GetSubBatch(names)
 			// serialize
 			//  __cpkey__ in (serial(a1,b1,c1,d1),serial(a2,b2,c2,d2),xxx)
@@ -813,7 +846,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 			if err != nil {
 				return nil, err
 			}
-			vec.InplaceSort()
+			vec.InplaceSortAndCompact()
 			data, err := vec.MarshalBinary()
 			if err != nil {
 				return nil, err
@@ -821,9 +854,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 			filterExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "in", []*Expr{
 				pkExpr,
 				{
-					Typ: plan.Type{
-						Id: int32(types.T_tuple),
-					},
+					Typ: pkExpr.Typ,
 					Expr: &plan.Expr_Vec{
 						Vec: &plan.LiteralVec{
 							Len:  int32(vec.Length()),
@@ -835,7 +866,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 		}
 	}
 
-	filterExpr, err = ConstantFold(batch.EmptyForConstFoldBatch, filterExpr, proc, false)
+	filterExpr, err = ConstantFold(batch.EmptyForConstFoldBatch, filterExpr, proc, false, true)
 	if err != nil {
 		return nil, nil
 	}
@@ -899,4 +930,50 @@ func remapPartExprColRef(expr *Expr, colMap map[int]int, tableDef *TableDef) boo
 		}
 	}
 	return true
+}
+
+func getRewriteToReplaceStmt(tableDef *TableDef, stmt *tree.Insert, info *dmlSelectInfo, isPrepareStmt bool) *tree.Replace {
+	if len(info.onDuplicateIdx) == 0 {
+		return nil
+	}
+	if _, ok := stmt.Rows.Select.(*tree.ValuesClause); !ok {
+		return nil
+	}
+	if isPrepareStmt {
+		return nil
+	}
+	canUpdateCols := make([]string, 0, len(tableDef.Cols))
+	for _, col := range tableDef.Cols {
+		if col.Hidden {
+			continue
+		}
+		canUpdateCols = append(canUpdateCols, col.Name)
+	}
+	if len(info.onDuplicateExpr) != len(canUpdateCols) {
+		return nil
+	}
+
+	for colName, colExpr := range info.onDuplicateExpr {
+		isUpdateSelf := false
+		if expr, ok := colExpr.Expr.(*plan.Expr_F); ok {
+			if expr.F.Func.GetObjName() == "values" {
+				if cExpr, ok := expr.F.Args[0].Expr.(*plan.Expr_Col); ok {
+					if cExpr.Col.Name == colName {
+						isUpdateSelf = true
+					}
+				}
+			}
+		}
+		if !isUpdateSelf {
+			return nil
+		}
+	}
+
+	replaceStmt := &tree.Replace{
+		Table:          stmt.Table,
+		PartitionNames: stmt.PartitionNames,
+		Columns:        stmt.Columns,
+		Rows:           stmt.Rows,
+	}
+	return replaceStmt
 }

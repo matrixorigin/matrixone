@@ -20,8 +20,6 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -34,7 +32,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
+	"go.uber.org/zap"
 )
 
 var (
@@ -149,6 +149,7 @@ const (
 type TxnHandler struct {
 	mu sync.Mutex
 
+	service       string
 	storage       engine.Engine
 	tempStorage   *memorystorage.Storage
 	tempTnService *metadata.TNService
@@ -180,8 +181,9 @@ type TxnHandler struct {
 	optionBits uint32
 }
 
-func InitTxnHandler(storage engine.Engine, connCtx context.Context, txnOp TxnOperator) *TxnHandler {
+func InitTxnHandler(service string, storage engine.Engine, connCtx context.Context, txnOp TxnOperator) *TxnHandler {
 	ret := &TxnHandler{
+		service:      service,
 		storage:      &engine.EntireEngine{Engine: storage},
 		connCtx:      connCtx,
 		txnOp:        txnOp,
@@ -325,6 +327,10 @@ func (th *TxnHandler) createUnsafe(execCtx *ExecCtx) error {
 		execCtx.ses.SetTxnId(dumpUUID[:])
 	} else {
 		execCtx.ses.SetTxnId(th.txnOp.Txn().ID)
+		err = disttae.CheckTxnIsValid(th.txnOp)
+		if err != nil {
+			return err
+		}
 	}
 	return err
 }
@@ -341,7 +347,7 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 	}
 
 	var opts []client.TxnOption
-	rt := moruntime.ProcessLevelRuntime()
+	rt := moruntime.ServiceRuntime(execCtx.ses.GetService())
 	if rt != nil {
 		if v, ok := rt.GetGlobalVariables(moruntime.TxnOptions); ok {
 			opts = v.([]client.TxnOption)
@@ -354,8 +360,8 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 	accountID := uint32(0)
 	userName := ""
 	connectionID := uint32(0)
-	if execCtx.proto != nil {
-		connectionID = execCtx.proto.ConnectionID()
+	if execCtx.resper != nil {
+		connectionID = execCtx.resper.GetU32(CONNID)
 	}
 	if execCtx.ses.GetTenantInfo() != nil {
 		accountID = execCtx.ses.GetTenantInfo().TenantID
@@ -380,13 +386,13 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 		execCtx.ses.DisableTrace() {
 		opts = append(opts, client.WithDisableTrace(true))
 	} else {
-		varVal, err := execCtx.ses.GetSessionVar(execCtx.reqCtx, "disable_txn_trace")
+		varVal, err := execCtx.ses.GetSessionSysVar("disable_txn_trace")
 		if err != nil {
 			return err
 		}
-		if gsv, ok := GSysVariables.GetDefinitionOfSysVar("disable_txn_trace"); ok {
-			if svbt, ok2 := gsv.GetType().(SystemVariableBoolType); ok2 {
-				if svbt.IsTrue(varVal) {
+		if def, ok := gSysVarsDefs["disable_txn_trace"]; ok {
+			if boolType, ok := def.GetType().(SystemVariableBoolType); ok {
+				if boolType.IsTrue(varVal) {
 					opts = append(opts, client.WithDisableTrace(true))
 				}
 			}
@@ -471,7 +477,7 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 		storage.Hints().CommitOrRollbackTimeout,
 	)
 	defer cancel()
-	val, e := execCtx.ses.GetSessionVar(execCtx.reqCtx, "mo_pk_check_by_dn")
+	val, e := execCtx.ses.GetSessionSysVar("mo_pk_check_by_dn")
 	if e != nil {
 		return e
 	}
@@ -501,6 +507,7 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 		defer execCtx.ses.ExitFPrint(79)
 		commitTs := th.txnOp.Txn().CommitTS
 		execCtx.ses.SetTxnId(th.txnOp.Txn().ID)
+		setFPrints(th.txnOp, execCtx.ses.GetFPrints())
 		err = th.txnOp.Commit(ctx2)
 		if err != nil {
 			th.invalidateTxnUnsafe()
@@ -545,6 +552,7 @@ func (th *TxnHandler) Rollback(execCtx *ExecCtx) error {
 		defer execCtx.ses.ExitFPrint(85)
 		//non derived statement
 		if th.txnOp != nil && !execCtx.ses.IsDerivedStmt() {
+			setFPrints(th.txnOp, execCtx.ses.GetFPrints())
 			err = th.txnOp.GetWorkspace().RollbackLastStatement(th.txnCtx)
 			if err != nil {
 				err4 := th.rollbackUnsafe(execCtx)
@@ -605,6 +613,7 @@ func (th *TxnHandler) rollbackUnsafe(execCtx *ExecCtx) error {
 		execCtx.ses.EnterFPrint(84)
 		defer execCtx.ses.ExitFPrint(84)
 		execCtx.ses.SetTxnId(th.txnOp.Txn().ID)
+		setFPrints(th.txnOp, execCtx.ses.GetFPrints())
 		err = th.txnOp.Rollback(ctx2)
 		if err != nil {
 			th.invalidateTxnUnsafe()
@@ -782,11 +791,13 @@ func (th *TxnHandler) CreateTempEngine() {
 
 	th.tempEngine = memoryengine.New(
 		context.TODO(), //!!!NOTE: memoryengine.New will neglect this context.
+		th.service,
 		memoryengine.NewDefaultShardPolicy(
 			mpool.MustNewZeroNoFixed(),
 		),
 		memoryengine.RandomIDGenerator,
 		clusterservice.NewMOCluster(
+			th.service,
 			nil,
 			0,
 			clusterservice.WithDisableRefresh(),

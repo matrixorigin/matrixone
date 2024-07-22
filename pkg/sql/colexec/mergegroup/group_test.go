@@ -36,7 +36,7 @@ const (
 // add unit tests for cases
 
 type groupTestCase struct {
-	arg    *Argument
+	arg    *MergeGroup
 	flgs   []bool // flgs[i] == true: nullable
 	types  []types.Type
 	proc   *process.Process
@@ -180,7 +180,7 @@ func BenchmarkGroup(b *testing.B) {
 }
 
 func newTestCase(flgs []bool, needEval bool, ts []types.Type) groupTestCase {
-	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
+	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
@@ -196,7 +196,7 @@ func newTestCase(flgs []bool, needEval bool, ts []types.Type) groupTestCase {
 		flgs:   flgs,
 		proc:   proc,
 		cancel: cancel,
-		arg: &Argument{
+		arg: &MergeGroup{
 			NeedEval: needEval,
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{

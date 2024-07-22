@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(Dispatch)
 
 const (
 	maxMessageSizeToMoRpc = 64 * mpool.MB
@@ -41,14 +41,15 @@ const (
 
 type container struct {
 	// the clientsession info for the channel you want to dispatch
-	remoteReceivers []process.WrapCs
+	remoteReceivers []*process.WrapCs
 	// sendFunc is the rule you want to send batch
-	sendFunc func(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error)
+	sendFunc func(bat *batch.Batch, ap *Dispatch, proc *process.Process) (bool, error)
 
 	// isRemote specify it is a remote receiver or not
 	isRemote bool
 	// prepared specify waiting remote receiver ready or not
 	prepared bool
+	hasData  bool
 
 	// for send-to-any function decide send to which reg
 	sendCnt       int
@@ -57,19 +58,20 @@ type container struct {
 	remoteRegsCnt int
 
 	remoteToIdx map[uuid.UUID]int
-	hasData     bool
 
 	batchCnt []int
 	rowCnt   []int
 }
 
-type Argument struct {
+type Dispatch struct {
 	ctr *container
 
 	// IsSink means this is a Sink Node
 	IsSink bool
 	// RecSink means this is a Recursive Sink Node
 	RecSink bool
+
+	ShuffleType int32
 	// FuncId means the sendFunc you want to call
 	FuncId int
 	// LocalRegs means the local register you need to send to.
@@ -77,72 +79,71 @@ type Argument struct {
 	// RemoteRegs specific the remote reg you need to send to.
 	RemoteRegs []colexec.ReceiveInfo
 	// for shuffle dispatch
-	ShuffleType         int32
 	ShuffleRegIdxLocal  []int
 	ShuffleRegIdxRemote []int
 
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (dispatch *Dispatch) GetOperatorBase() *vm.OperatorBase {
+	return &dispatch.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[Dispatch](
+		func() *Dispatch {
+			return &Dispatch{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *Dispatch) {
+			*a = Dispatch{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[Dispatch]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (dispatch Dispatch) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *Dispatch {
+	return reuse.Alloc[Dispatch](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (dispatch *Dispatch) Release() {
+	if dispatch != nil {
+		reuse.Free[Dispatch](dispatch, nil)
 	}
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	arg.Free(proc, pipelineFailed, err)
+func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	dispatch.Free(proc, pipelineFailed, err)
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if arg.ctr != nil {
-		if arg.ctr.isRemote {
-			for _, r := range arg.ctr.remoteReceivers {
+func (dispatch *Dispatch) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if dispatch.ctr != nil {
+		if dispatch.ctr.isRemote {
+			for _, r := range dispatch.ctr.remoteReceivers {
 				r.Err <- err
 			}
 
-			uuids := make([]uuid.UUID, 0, len(arg.RemoteRegs))
-			for i := range arg.RemoteRegs {
-				uuids = append(uuids, arg.RemoteRegs[i].Uuid)
+			uuids := make([]uuid.UUID, 0, len(dispatch.RemoteRegs))
+			for i := range dispatch.RemoteRegs {
+				uuids = append(uuids, dispatch.RemoteRegs[i].Uuid)
 			}
 			colexec.Get().DeleteUuids(uuids)
 		}
 
-		arg.ctr = nil
+		dispatch.ctr = nil
 	}
 
 	// told the local receiver to stop if it is still running.
 	msg := process.NewRegMsg(nil)
 	msg.Err = err
-	for i := range arg.LocalRegs {
+	for i := range dispatch.LocalRegs {
 		select {
-		case <-arg.LocalRegs[i].Ctx.Done():
-		case arg.LocalRegs[i].Ch <- msg:
+		case <-dispatch.LocalRegs[i].Ctx.Done():
+		case dispatch.LocalRegs[i].Ch <- msg:
 		}
 	}
 }

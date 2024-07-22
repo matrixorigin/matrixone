@@ -10,3 +10,4 @@ port-base = 19000
 
 [malloc]
 check-fraction = 65536
+enable-metrics = true

@@ -17,11 +17,26 @@ package compile
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/join"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+
+	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -33,8 +48,31 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil/testengine"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"github.com/stretchr/testify/require"
 )
+
+func checkSrcOpsWithDst(srcRoot vm.Operator, dstRoot vm.Operator) bool {
+	if srcRoot == nil && dstRoot == nil {
+		return true
+	}
+	if srcRoot == nil || dstRoot == nil {
+		return false
+	}
+	if srcRoot.OpType() != dstRoot.OpType() {
+		return false
+	}
+	srcNumChildren := srcRoot.GetOperatorBase().NumChildren()
+	dstNumChildren := dstRoot.GetOperatorBase().NumChildren()
+	if srcNumChildren != dstNumChildren {
+		return false
+	}
+	for i := 0; i < srcNumChildren; i++ {
+		res := checkSrcOpsWithDst(srcRoot.GetOperatorBase().GetChildren(i), dstRoot.GetOperatorBase().GetChildren(i))
+		if !res {
+			return false
+		}
+	}
+	return true
+}
 
 func TestScopeSerialization(t *testing.T) {
 	testCases := []string{
@@ -54,11 +92,8 @@ func TestScopeSerialization(t *testing.T) {
 		require.NoError(t, errDecode)
 
 		// Just do simple check
-		require.Equal(t, len(sourceScope.PreScopes), len(targetScope.PreScopes), fmt.Sprintf("related SQL is '%s'", testCases[i]))
-		require.Equal(t, len(sourceScope.Instructions), len(targetScope.Instructions), fmt.Sprintf("related SQL is '%s'", testCases[i]))
-		for j := 0; j < len(sourceScope.Instructions); j++ {
-			require.Equal(t, sourceScope.Instructions[j].Op, targetScope.Instructions[j].Op)
-		}
+		require.Equal(t, checkSrcOpsWithDst(sourceScope.RootOp, targetScope.RootOp), true, fmt.Sprintf("related SQL is '%s'", testCases[i]))
+
 		if sourceScope.DataSource == nil {
 			require.Nil(t, targetScope.DataSource)
 		} else {
@@ -73,27 +108,70 @@ func TestScopeSerialization(t *testing.T) {
 
 }
 
+func checkScopeRoot(t *testing.T, s *Scope) {
+	require.NotEqual(t, nil, s.RootOp)
+	for i := range s.PreScopes {
+		checkScopeRoot(t, s.PreScopes[i])
+	}
+}
+
+func TestScopeSerialization2(t *testing.T) {
+	testCompile := &Compile{
+		lock: &sync.RWMutex{},
+		proc: testutil.NewProcess(),
+	}
+	var reg process.WaitRegister
+	testCompile.proc.Reg.MergeReceivers = []*process.WaitRegister{&reg}
+
+	// join->Shuffle->Dispatch
+	s := generateScopeWithRootOperator(
+		testCompile.proc,
+		[]vm.OpType{vm.Join, vm.Shuffle, vm.Dispatch})
+	s.IsEnd = true
+	//join->connector
+	s1 := generateScopeWithRootOperator(
+		testCompile.proc,
+		[]vm.OpType{vm.Join, vm.Connector})
+	s.PreScopes = []*Scope{s1}
+
+	// tablescan-> projection -> connector.)
+	s2 := generateScopeWithRootOperator(
+		testCompile.proc,
+		[]vm.OpType{vm.TableScan, vm.Projection, vm.Connector})
+	s.PreScopes[0].PreScopes = []*Scope{s2}
+	scopeData, err := encodeScope(s)
+	require.NoError(t, err)
+	scope, err := decodeScope(scopeData, testCompile.proc, true, nil)
+	require.NoError(t, err)
+	checkScopeRoot(t, scope)
+}
+
 func generateScopeCases(t *testing.T, testCases []string) []*Scope {
 	// getScope method generate and return the scope of a SQL string.
 	getScope := func(t1 *testing.T, sql string) *Scope {
 		proc := testutil.NewProcess()
-		proc.SessionInfo.Buf = buffer.New()
+		proc.Base.SessionInfo.Buf = buffer.New()
+		ctrl := gomock.NewController(t)
+		txnCli, txnOp := newTestTxnClientAndOp(ctrl)
+		proc.Base.TxnClient = txnCli
+		proc.Base.TxnOperator = txnOp
 		e, _, compilerCtx := testengine.New(defines.AttachAccountId(context.Background(), catalog.System_Account))
 		opt := plan2.NewBaseOptimizer(compilerCtx)
 		ctx := compilerCtx.GetContext()
-		stmts, err := mysql.Parse(ctx, sql, 1, 0)
+		stmts, err := mysql.Parse(ctx, sql, 1)
 		require.NoError(t1, err)
 		qry, err := opt.Optimize(stmts[0], false)
 		require.NoError(t1, err)
 		proc.Ctx = ctx
-		c := NewCompile("test", "test", sql, "", "", context.Background(), e, proc, nil, false, nil, time.Now())
+		c := NewCompile("test", "test", sql, "", "", e, proc, nil, false, nil, time.Now())
+		qry.Nodes[0].Stats.Cost = 10000000 // to hint this is ap query for unit test
 		err = c.Compile(ctx, &plan.Plan{Plan: &plan.Plan_Query{Query: qry}}, func(batch *batch.Batch) error {
 			return nil
 		})
 		require.NoError(t1, err)
 		// ignore the last operator if it's output
-		if c.scope[0].Instructions[len(c.scope[0].Instructions)-1].Op == vm.Output {
-			c.scope[0].Instructions = c.scope[0].Instructions[:len(c.scope[0].Instructions)-1]
+		if c.scope[0].RootOp.OpType() == vm.Output {
+			c.scope[0].RootOp = c.scope[0].RootOp.GetOperatorBase().GetChildren(0)
 		}
 		return c.scope[0]
 	}
@@ -169,4 +247,117 @@ func TestMessageSenderOnClientReceive(t *testing.T) {
 		_, err := sender.receiveMessage()
 		require.NotNil(t, err)
 	}
+}
+
+func TestNewParallelScope(t *testing.T) {
+	// function `newParallelScope` will dispatch one scope's work into n scopes.
+	testCompile := &Compile{
+		lock: &sync.RWMutex{},
+		proc: testutil.NewProcess(),
+	}
+
+	var reg process.WaitRegister
+	testCompile.proc.Reg.MergeReceivers = []*process.WaitRegister{&reg}
+
+	// 1. test (-> projection -> limit -> connector.)
+	{
+		scopeToParallel := generateScopeWithRootOperator(
+			testCompile.proc,
+			[]vm.OpType{vm.Projection, vm.Limit, vm.Connector})
+		ss := []*Scope{{}}
+
+		rs, err := newParallelScope(testCompile, scopeToParallel, ss)
+		require.NoError(t, err)
+		require.NoError(t, checkScopeWithExpectedList(rs, []vm.OpType{vm.MergeLimit, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.Projection, vm.Limit, vm.Connector}))
+	}
+
+	// 2. test (-> filter -> projection -> connector.)
+	{
+		scopeToParallel := generateScopeWithRootOperator(
+			testCompile.proc,
+			[]vm.OpType{vm.Filter, vm.Projection, vm.Connector})
+		ss := []*Scope{{}}
+
+		rs, err := newParallelScope(testCompile, scopeToParallel, ss)
+		require.NoError(t, err)
+		require.NoError(t, checkScopeWithExpectedList(rs, []vm.OpType{vm.Merge, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.Filter, vm.Projection, vm.Connector}))
+	}
+}
+
+func generateScopeWithRootOperator(proc *process.Process, operatorList []vm.OpType) *Scope {
+	simpleFakeArgument := func(id vm.OpType) vm.Operator {
+		switch id {
+		case vm.Projection:
+			return projection.NewArgument()
+		case vm.Limit:
+			return limit.NewArgument()
+		case vm.Connector:
+			return connector.NewArgument().WithReg(proc.Reg.MergeReceivers[0])
+		case vm.Filter:
+			return filter.NewArgument()
+		case vm.Dispatch:
+			return dispatch.NewArgument()
+		case vm.Join:
+			arg := join.NewArgument()
+			arg.Conditions = [][]*plan.Expr{nil, nil}
+			return arg
+		case vm.Shuffle:
+			return shuffle.NewArgument()
+		case vm.TableScan:
+			return table_scan.NewArgument()
+		default:
+			panic("unsupported for ut.")
+		}
+	}
+
+	ret := &Scope{
+		Proc: proc,
+	}
+
+	for i := 0; i < len(operatorList); i++ {
+		ret.setRootOperator(simpleFakeArgument(operatorList[i]))
+	}
+	return ret
+}
+
+func checkScopeWithExpectedList(s *Scope, requiredOperator []vm.OpType) error {
+	resultOperators := getReverseList(s.RootOp)
+
+	if len(resultOperators) != len(requiredOperator) {
+		return moerr.NewInternalErrorNoCtx(fmt.Sprintf(
+			"required %d operators but get %d", len(requiredOperator), len(resultOperators)))
+	}
+
+	for i, expected := range requiredOperator {
+		if expected != resultOperators[i] {
+			return moerr.NewInternalErrorNoCtx(fmt.Sprintf(
+				"the %dth operator need %d but get %d",
+				i+1, expected, resultOperators[i]))
+		}
+	}
+
+	return nil
+}
+
+func getReverseList(rootOp vm.Operator) []vm.OpType {
+	return getReverseList2(rootOp, nil)
+}
+
+func getReverseList2(rootOp vm.Operator, stack []vm.OpType) []vm.OpType {
+	if rootOp == nil {
+		return stack
+	}
+	base := rootOp.GetOperatorBase()
+	if base == nil {
+		panic("unexpected to get an empty base.")
+	}
+
+	if len(base.Children) > 0 {
+		stack = getReverseList2(base.GetChildren(0), stack)
+	}
+
+	stack = append(stack, rootOp.OpType())
+	return stack
 }

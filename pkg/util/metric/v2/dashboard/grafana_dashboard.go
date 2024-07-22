@@ -146,6 +146,14 @@ func (c *DashboardCreator) Create() error {
 		return err
 	}
 
+	if err := c.initShardingDashboard(); err != nil {
+		return err
+	}
+
+	if err := c.initPipelineDashBoard(); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -298,9 +306,17 @@ func (c *DashboardCreator) getMultiHistogram(
 				fmt.Sprintf("histogram_quantile(%f, sum(rate(%s[$interval]))  by (le))", percent, metric))
 		}
 
+		// format title
+		// default: P50.000000 time
+		// bytes:   P50.000000 size
+		title := fmt.Sprintf("P%f time", percent*100)
+		if axis.New(axisOptions...).Builder.Format == "bytes" {
+			title = fmt.Sprintf("P%f size", percent*100)
+		}
+
 		options = append(options,
 			c.withMultiGraph(
-				fmt.Sprintf("P%f time", percent*100),
+				title,
 				columns[i],
 				queries,
 				legends,
@@ -458,6 +474,7 @@ func (c *DashboardCreator) initK8SFilterOptions() {
 			query.Multiple(),
 			query.Label("namespace"),
 			query.Request("label_values(namespace)"),
+			query.Refresh(query.TimeChange),
 		),
 		dashboard.VariableAsQuery(
 			"pod",
@@ -466,6 +483,7 @@ func (c *DashboardCreator) initK8SFilterOptions() {
 			query.IncludeAll(),
 			query.Multiple(),
 			query.Label("pod"),
-			query.Request("label_values(pod)"),
+			query.Request(`label_values(kube_pod_info{namespace="$namespace"},pod)`),
+			query.Refresh(query.TimeChange),
 		))
 }
