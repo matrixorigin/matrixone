@@ -51,11 +51,17 @@ type HashMap interface {
 
 // Iterator allows users to do insert or find operations on hash tables in bulk.
 type Iterator interface {
+	// not safe for multi parallel!!!!
 	// Insert vecs[start, start+count) into hashmap
 	// vs  : the number of rows corresponding to each value in the hash table (start with 1)
 	// zvs : if zvs[i] is 0 indicates the presence null, 1 indicates the absence of a null.
 	Insert(start, count int, vecs []*vector.Vector) (vs []uint64, zvs []int64, err error)
 
+	// not safe for multi parallel!!!!
+	// Insert a row from multiple columns into the hashmap, return true if it is new, otherwise false
+	DetectDup(vecs []*vector.Vector, row int) (bool, error)
+
+	//safe for multi parallel
 	// Find vecs[start, start+count) in hashmap
 	// vs  : the number of rows corresponding to each value in the hash table (start with 1, and 0 means not found.)
 	// zvs : if zvs[i] is 0 indicates the presence null, 1 indicates the absence of a null.
@@ -79,12 +85,6 @@ type JoinMap struct {
 type StrHashMap struct {
 	hasNull bool
 	rows    uint64
-	keys    [][]byte
-	values  []uint64
-	// zValues, 0 indicates the presence null, 1 indicates the absence of a null
-	zValues       []int64
-	strHashStates [][3]uint64
-
 	m       *mpool.MPool
 	hashMap *hashtable.StringHashMap
 }
@@ -94,24 +94,27 @@ type StrHashMap struct {
 // sum of vectors' length equal to 8
 type IntHashMap struct {
 	hasNull bool
-
 	rows    uint64
-	keys    []uint64
-	keyOffs []uint32
-	values  []uint64
-	zValues []int64
-	hashes  []uint64
-
 	m       *mpool.MPool
 	hashMap *hashtable.Int64HashMap
 }
 
 type strHashmapIterator struct {
-	m  *mpool.MPool
-	mp *StrHashMap
+	m      *mpool.MPool
+	mp     *StrHashMap
+	keys   [][]byte
+	values []uint64
+	// zValues, 0 indicates the presence null, 1 indicates the absence of a null
+	zValues       []int64
+	strHashStates [][3]uint64
 }
 
 type intHashMapIterator struct {
-	m  *mpool.MPool
-	mp *IntHashMap
+	m       *mpool.MPool
+	mp      *IntHashMap
+	keys    []uint64
+	keyOffs []uint32
+	values  []uint64
+	zValues []int64
+	hashes  []uint64
 }

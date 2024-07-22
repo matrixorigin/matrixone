@@ -51,13 +51,22 @@ func (jm *JoinMap) Sels() [][]int32 {
 func (jm *JoinMap) NewIterator() Iterator {
 	if jm.shm == nil {
 		return &intHashMapIterator{
-			mp: jm.ihm,
-			m:  jm.ihm.m,
+			mp:      jm.ihm,
+			m:       jm.ihm.m,
+			keys:    make([]uint64, UnitLimit),
+			keyOffs: make([]uint32, UnitLimit),
+			values:  make([]uint64, UnitLimit),
+			zValues: make([]int64, UnitLimit),
+			hashes:  make([]uint64, UnitLimit),
 		}
 	} else {
 		return &strHashmapIterator{
-			mp: jm.shm,
-			m:  jm.shm.m,
+			mp:            jm.shm,
+			m:             jm.shm.m,
+			values:        make([]uint64, UnitLimit),
+			zValues:       make([]int64, UnitLimit),
+			keys:          make([][]byte, UnitLimit),
+			strHashStates: make([][3]uint64, UnitLimit),
 		}
 	}
 }
