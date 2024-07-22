@@ -109,26 +109,21 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 			ctr.state = SendHashMap
 
 		case SendHashMap:
-			if ctr.inputBatchRowCount > 0 {
+			if ap.NeedHashMap {
 				var jm *hashmap.JoinMap
-				if ap.NeedHashMap {
-					if ctr.keyWidth <= 8 {
-						jm = hashmap.NewJoinMap(ctr.multiSels, nil, ctr.intHashMap, nil, ctr.hasNull)
-					} else {
-						jm = hashmap.NewJoinMap(ctr.multiSels, nil, nil, ctr.strHashMap, ctr.hasNull)
-					}
-					jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
-					if ap.JoinMapTag <= 0 {
-						panic("wrong joinmap message tag!")
-					}
-					proc.SendMessage(process.JoinMapMsg{JoinMapPtr: jm, Tag: ap.JoinMapTag})
+				if ctr.keyWidth <= 8 {
+					jm = hashmap.NewJoinMap(ctr.multiSels, nil, ctr.intHashMap, nil, ctr.hasNull)
+				} else {
+					jm = hashmap.NewJoinMap(ctr.multiSels, nil, nil, ctr.strHashMap, ctr.hasNull)
 				}
-
+				jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
+				if ap.JoinMapTag <= 0 {
+					panic("wrong joinmap message tag!")
+				}
+				proc.SendMessage(process.JoinMapMsg{JoinMapPtr: jm, Tag: ap.JoinMapTag})
 				ctr.intHashMap = nil
 				ctr.strHashMap = nil
 				ctr.multiSels = nil
-			} else {
-				ctr.cleanHashMap()
 			}
 			ctr.state = SendBatch
 

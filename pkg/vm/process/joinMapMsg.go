@@ -69,6 +69,9 @@ func (proc *Process) ReceiveJoinMap(anal Analyze, tag int32, isShuffle bool, shu
 				}
 			}
 			jm := msg.JoinMapPtr
+			if jm == nil {
+				return nil
+			}
 			if !jm.IsValid() {
 				panic("join receive a joinmap which has been freed!")
 			}
