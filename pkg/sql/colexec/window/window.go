@@ -116,6 +116,7 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 			} else {
 				ctr.status = eval
 			}
+			anal.Input(msg.Batch, window.GetIsFirst())
 			ctr.bat = msg.Batch
 		case eval:
 			if err = ctr.evalAggVector(ctr.bat, proc); err != nil {
