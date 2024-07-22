@@ -2,7 +2,6 @@
 -- wasm test
 --
 
--- @bvt:issue#17492
 select wasm('https://github.com/matrixorigin/mojo/raw/main/plugin/hello/hello.wasm', 'mowasm_hello', 'world');
 select wasm('https://github.com/matrixorigin/mojo/raw/main/plugin/hello/hello.wasm', 'mowasm_add', '[3, 5]');
 
@@ -36,7 +35,6 @@ select id, try_wasm('https://github.com/matrixorigin/mojo/raw/main/plugin/hello/
 from wasmt;
 
 drop table wasmt;
--- @bvt:issue
 
 
 

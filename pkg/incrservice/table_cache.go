@@ -20,7 +20,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
@@ -39,6 +38,7 @@ type tableCache struct {
 
 func newTableCache(
 	ctx context.Context,
+	sid string,
 	tableID uint64,
 	cols []AutoColumn,
 	cfg Config,
@@ -46,7 +46,7 @@ func newTableCache(
 	txnOp client.TxnOperator,
 	committed bool) (incrTableCache, error) {
 	c := &tableCache{
-		logger:  getLogger(),
+		logger:  getLogger(sid).Named("incrservice"),
 		tableID: tableID,
 		cols:    cols,
 	}
@@ -56,12 +56,14 @@ func newTableCache(
 	for _, col := range cols {
 		cc, err := newColumnCache(
 			ctx,
+			sid,
 			tableID,
 			col,
 			cfg,
 			committed,
 			allocator,
-			txnOp)
+			txnOp,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -91,14 +93,6 @@ func (c *tableCache) getTxn() client.TxnOperator {
 	return c.mu.txnOp
 }
 
-func (c *tableCache) getLastAllocateTS(colName string) (timestamp.Timestamp, error) {
-	cc := c.getColumnCache(colName)
-	if cc == nil {
-		panic("column cache should not be nil, " + colName)
-	}
-	return cc.lastAllocateAt, nil
-}
-
 func (c *tableCache) insertAutoValues(
 	ctx context.Context,
 	tableID uint64,
@@ -107,7 +101,6 @@ func (c *tableCache) insertAutoValues(
 ) (uint64, error) {
 	lastInsert := uint64(0)
 	txnOp := c.getTxn()
-
 	for _, col := range c.cols {
 		cc := c.getColumnCache(col.ColName)
 		if cc == nil {

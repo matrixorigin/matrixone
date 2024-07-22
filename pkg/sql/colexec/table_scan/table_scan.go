@@ -54,7 +54,7 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		seq = txnOp.NextSequence()
 	}
 
-	trace.GetService().AddTxnDurationAction(
+	trace.GetService(proc.GetService()).AddTxnDurationAction(
 		txnOp,
 		client.TableScanEvent,
 		seq,
@@ -69,7 +69,7 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 
 		cost := time.Since(start)
 
-		trace.GetService().AddTxnDurationAction(
+		trace.GetService(proc.GetService()).AddTxnDurationAction(
 			txnOp,
 			client.TableScanEvent,
 			seq,
@@ -127,7 +127,7 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 			continue
 		}
 
-		trace.GetService().TxnRead(
+		trace.GetService(proc.GetService()).TxnRead(
 			proc.GetTxnOperator(),
 			proc.GetTxnOperator().Txn().SnapshotTS,
 			tableScan.TableID,
