@@ -9296,60 +9296,64 @@ func TestPersistTransferTable(t *testing.T) {
 }
 
 func TestClearPersistTransferTable(t *testing.T) {
-	ctx := context.Background()
-	opts := config.WithQuickScanAndCKPOpts(nil)
-	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
-	defer tae.Close()
-	schema := catalog.MockSchemaAll(13, 3)
-	schema.BlockMaxRows = 10
-	schema.ObjectMaxBlocks = 3
-	tae.BindSchema(schema)
-	testutil.CreateRelation(t, tae.DB, "db", schema, true)
+	blockio.RunPipelineTest(
+		func() {
+			ctx := context.Background()
+			opts := config.WithQuickScanAndCKPOpts(nil)
+			tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+			defer tae.Close()
+			schema := catalog.MockSchemaAll(13, 3)
+			schema.BlockMaxRows = 10
+			schema.ObjectMaxBlocks = 3
+			tae.BindSchema(schema)
+			testutil.CreateRelation(t, tae.DB, "db", schema, true)
 
-	sid := objectio.NewSegmentid()
+			sid := objectio.NewSegmentid()
 
-	id1 := common.ID{BlockID: *objectio.NewBlockid(sid, 1, 0)}
-	id2 := common.ID{BlockID: *objectio.NewBlockid(sid, 2, 0)}
+			id1 := common.ID{BlockID: *objectio.NewBlockid(sid, 1, 0)}
+			id2 := common.ID{BlockID: *objectio.NewBlockid(sid, 2, 0)}
 
-	now := time.Now()
-	page := model.NewTransferHashPage(&id1, now, false, tae.Runtime.LocalFs.Service, time.Second, 2*time.Second)
-	ids := make([]types.Rowid, 10)
-	m := make(map[uint32][]byte, 10)
-	for i := 0; i < 10; i++ {
-		rowID := *objectio.NewRowid(&id2.BlockID, uint32(i))
-		m[uint32(i)] = rowID[:]
-		ids[i] = rowID
-	}
-	page.Train(m)
-	tae.Runtime.TransferTable.AddPage(page)
+			now := time.Now()
+			page := model.NewTransferHashPage(&id1, now, false, tae.Runtime.LocalFs.Service, time.Second, 2*time.Second)
+			ids := make([]types.Rowid, 10)
+			m := make(map[uint32][]byte, 10)
+			for i := 0; i < 10; i++ {
+				rowID := *objectio.NewRowid(&id2.BlockID, uint32(i))
+				m[uint32(i)] = rowID[:]
+				ids[i] = rowID
+			}
+			page.Train(m)
+			tae.Runtime.TransferTable.AddPage(page)
 
-	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
-	ioVector := fileservice.IOVector{
-		FilePath: name.String(),
-	}
-	offset := int64(0)
-	data := page.Marshal()
-	ioEntry := fileservice.IOEntry{
-		Offset: offset,
-		Size:   int64(len(data)),
-		Data:   data,
-	}
-	ioVector.Entries = append(ioVector.Entries, ioEntry)
+			name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+			ioVector := fileservice.IOVector{
+				FilePath: name.String(),
+			}
+			offset := int64(0)
+			data := page.Marshal()
+			ioEntry := fileservice.IOEntry{
+				Offset: offset,
+				Size:   int64(len(data)),
+				Data:   data,
+			}
+			ioVector.Entries = append(ioVector.Entries, ioEntry)
 
-	err := tae.Runtime.Fs.Service.Write(context.Background(), ioVector)
-	if err != nil {
-		return
-	}
+			err := tae.Runtime.Fs.Service.Write(context.Background(), ioVector)
+			if err != nil {
+				return
+			}
 
-	path := model.Path{
-		Name:   ioVector.FilePath,
-		Offset: 0,
-		Size:   int64(len(data)),
-	}
-	page.SetPath(path)
+			path := model.Path{
+				Name:   ioVector.FilePath,
+				Offset: 0,
+				Size:   int64(len(data)),
+			}
+			page.SetPath(path)
 
-	time.Sleep(2 * time.Second)
-	tae.Runtime.TransferTable.RunTTL()
-	_, err = tae.Runtime.TransferTable.Pin(*page.ID())
-	assert.True(t, errors.Is(err, moerr.GetOkExpectedEOB()))
+			time.Sleep(2 * time.Second)
+			tae.Runtime.TransferTable.RunTTL()
+			_, err = tae.Runtime.TransferTable.Pin(*page.ID())
+			assert.True(t, errors.Is(err, moerr.GetOkExpectedEOB()))
+		},
+	)
 }
