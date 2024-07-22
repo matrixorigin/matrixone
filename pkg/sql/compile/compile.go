@@ -4222,12 +4222,16 @@ func (c *Compile) generateNodesInProgress(n *plan.Node) (engine.Nodes, []any, []
 	}
 	// disttae engine
 	if engineType == engine.Disttae {
-		log.Fatal("xxxx impossible path: multi CN.")
+
+		logutil.Infof("xxxx shuffle Blocks to multi CN, txn:%s, table:%s",
+			txnOp.Txn().DebugString(), n.TableDef.Name)
+
 		nodes, err := shuffleBlocksToMultiCN(c, rel, relData, n)
 		return nodes, partialResults, partialResultTypes, err
 	}
 	// maybe temp table on memengine , just put payloads in average
-	log.Fatal("xxxx impossible path: mem engine")
+	logutil.Infof("xxxx put blocks in average, txn:%s, table:%s",
+		txnOp.Txn().DebugString(), n.TableDef.Name)
 	return putBlocksInAverage(c, relData, n), partialResults, partialResultTypes, nil
 }
 
