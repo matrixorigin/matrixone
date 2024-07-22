@@ -35,7 +35,7 @@ func TestMain(m *testing.M) {
 		Format: "console",
 	})
 
-	runtime.SetupProcessLevelRuntime(runtime.NewRuntime(metadata.ServiceType_LOG, "test", logutil.GetGlobalLogger()))
+	runtime.SetupServiceBasedRuntime("", runtime.NewRuntime(metadata.ServiceType_LOG, "test", logutil.GetGlobalLogger()))
 	m.Run()
 }
 
@@ -288,7 +288,7 @@ func TestFixExpiredStore(t *testing.T) {
 
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
-		coordinator := NewCoordinator(hakeeper.Config{})
+		coordinator := NewCoordinator("", hakeeper.Config{})
 		output := coordinator.Check(c.idAlloc, pb.CheckerState{
 			Tick:        c.currentTick,
 			ClusterInfo: c.cluster,
@@ -451,7 +451,7 @@ func TestFixZombie(t *testing.T) {
 
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
-		coordinator := NewCoordinator(hakeeper.Config{})
+		coordinator := NewCoordinator("", hakeeper.Config{})
 		output := coordinator.Check(c.idAlloc, pb.CheckerState{
 			Tick:        c.tick,
 			ClusterInfo: c.cluster,
@@ -465,7 +465,7 @@ func TestFixZombie(t *testing.T) {
 func TestOpExpiredAndThenCompleted(t *testing.T) {
 	cluster := pb.ClusterInfo{LogShards: []metadata.LogShardRecord{{ShardID: 1, NumberOfReplicas: 3}}}
 	idAlloc := util.NewTestIDAllocator(2)
-	coordinator := NewCoordinator(hakeeper.Config{})
+	coordinator := NewCoordinator("", hakeeper.Config{})
 	fn := func(time uint64) uint64 { return time * hakeeper.DefaultTickPerSecond }
 	currentTick := fn(uint64(hakeeper.DefaultLogStoreTimeout / time.Second))
 

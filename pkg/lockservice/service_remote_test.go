@@ -187,6 +187,7 @@ func TestGetActiveTxnWithRemote(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		hold := newMapBasedTxnHandler(
 			"s1",
+			getLogger(""),
 			newFixedSlicePool(16),
 			func(sid string) (bool, error) { return true, nil },
 			func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, nil },
@@ -211,6 +212,7 @@ func TestKeepRemoteActiveTxn(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		hold := newMapBasedTxnHandler(
 			"s1",
+			getLogger(""),
 			newFixedSlicePool(16),
 			func(sid string) (bool, error) { return false, nil },
 			func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, nil },
@@ -532,7 +534,8 @@ func TestIssue14346(t *testing.T) {
 			require.NoError(t, s2.Unlock(ctx, txn2, timestamp.Timestamp{}))
 
 			// remove s1
-			clusterservice.GetMOCluster().RemoveCN("s1")
+			clusterservice.GetMOCluster(s1.GetConfig().ServiceID).RemoveCN("s1")
+			clusterservice.GetMOCluster(s2.GetConfig().ServiceID).RemoveCN("s1")
 
 			// wait bind remove on s2
 			for {

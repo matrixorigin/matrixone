@@ -148,8 +148,8 @@ func (s *sqlStore) Allocate(
 					if err != nil {
 						return err
 					}
-					trace.GetService().Sync()
-					getLogger().Fatal("BUG: read incr record invalid",
+					trace.GetService(s.ls.GetConfig().ServiceID).Sync()
+					getLogger(s.ls.GetConfig().ServiceID).Fatal("BUG: read incr record invalid",
 						zap.String("fetch-sql", fetchSQL),
 						zap.Any("account", accountID),
 						zap.Uint64("table", tableID),
@@ -190,8 +190,8 @@ func (s *sqlStore) Allocate(
 					if err != nil {
 						return err
 					}
-					trace.GetService().Sync()
-					getLogger().Fatal("BUG: update incr record returns invalid affected rows",
+					trace.GetService(s.ls.GetConfig().ServiceID).Sync()
+					getLogger(s.ls.GetConfig().ServiceID).Fatal("BUG: update incr record returns invalid affected rows",
 						zap.String("update-sql", sql),
 						zap.Any("account", accountID),
 						zap.Uint64("table", tableID),

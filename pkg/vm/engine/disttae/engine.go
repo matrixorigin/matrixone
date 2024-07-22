@@ -62,6 +62,7 @@ var ncpu = runtime.GOMAXPROCS(0)
 
 func New(
 	ctx context.Context,
+	service string,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 	cli client.TxnClient,
@@ -69,7 +70,7 @@ func New(
 	keyRouter client2.KeyRouter[pb.StatsInfoKey],
 	updateWorkerFactor int,
 ) *Engine {
-	cluster := clusterservice.GetMOCluster()
+	cluster := clusterservice.GetMOCluster(service)
 	services := cluster.GetAllTNServices()
 
 	var tnID string
@@ -77,12 +78,13 @@ func New(
 		tnID = services[0].ServiceID
 	}
 
-	ls, ok := moruntime.ProcessLevelRuntime().GetGlobalVariables(moruntime.LockService)
+	ls, ok := moruntime.ServiceRuntime(service).GetGlobalVariables(moruntime.LockService)
 	if !ok {
 		logutil.Fatalf("missing lock service")
 	}
 
 	e := &Engine{
+		service:  service,
 		mp:       mp,
 		fs:       fs,
 		ls:       ls.(lockservice.LockService),
@@ -134,6 +136,10 @@ func New(
 
 	e.pClient.LogtailRPCClientFactory = DefaultNewRpcStreamToTnLogTailService
 	return e
+}
+
+func (e *Engine) GetService() string {
+	return e.service
 }
 
 func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator) error {
@@ -652,7 +658,7 @@ func (e *Engine) Nodes(
 		v2.TxnStatementNodesHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	cluster := clusterservice.GetMOCluster()
+	cluster := clusterservice.GetMOCluster(e.service)
 	var selector clusterservice.Selector
 
 	// If the requested labels are empty, return all CN servers.
@@ -672,25 +678,36 @@ func (e *Engine) Nodes(
 
 	selector = clusterservice.NewSelector().SelectByLabel(cnLabel, clusterservice.EQ_Globbing)
 	if isInternal || strings.ToLower(tenant) == "sys" {
-		route.RouteForSuperTenant(selector, username, nil, func(s *metadata.CNService) {
-			if s.CommitID == version.CommitID {
-				nodes = append(nodes, engine.Node{
-					Mcpu: ncpu,
-					Id:   s.ServiceID,
-					Addr: s.PipelineServiceAddress,
-				})
-			}
-		})
+		route.RouteForSuperTenant(
+			e.service,
+			selector,
+			username,
+			nil,
+			func(s *metadata.CNService) {
+				if s.CommitID == version.CommitID {
+					nodes = append(nodes, engine.Node{
+						Mcpu: ncpu,
+						Id:   s.ServiceID,
+						Addr: s.PipelineServiceAddress,
+					})
+				}
+			},
+		)
 	} else {
-		route.RouteForCommonTenant(selector, nil, func(s *metadata.CNService) {
-			if s.CommitID == version.CommitID {
-				nodes = append(nodes, engine.Node{
-					Mcpu: ncpu,
-					Id:   s.ServiceID,
-					Addr: s.PipelineServiceAddress,
-				})
-			}
-		})
+		route.RouteForCommonTenant(
+			e.service,
+			selector,
+			nil,
+			func(s *metadata.CNService) {
+				if s.CommitID == version.CommitID {
+					nodes = append(nodes, engine.Node{
+						Mcpu: ncpu,
+						Id:   s.ServiceID,
+						Addr: s.PipelineServiceAddress,
+					})
+				}
+			},
+		)
 	}
 	return nodes, nil
 }
@@ -744,7 +761,7 @@ func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Times
 }
 
 func (e *Engine) getTNServices() []DNStore {
-	cluster := clusterservice.GetMOCluster()
+	cluster := clusterservice.GetMOCluster(e.service)
 	return cluster.GetAllTNServices()
 }
 

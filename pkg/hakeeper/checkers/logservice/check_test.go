@@ -35,7 +35,7 @@ func TestMain(m *testing.M) {
 		Format: "console",
 	})
 
-	runtime.SetupProcessLevelRuntime(runtime.NewRuntime(metadata.ServiceType_LOG, "test", logutil.GetGlobalLogger()))
+	runtime.SetupServiceBasedRuntime("", runtime.NewRuntime(metadata.ServiceType_LOG, "test", logutil.GetGlobalLogger()))
 	m.Run()
 }
 
@@ -418,7 +418,7 @@ func TestCheck(t *testing.T) {
 			Adding:   c.adding,
 			Removing: c.removing,
 		}
-		operators := Check(alloc, cfg, c.cluster, c.infos, executing, c.users, c.currentTick)
+		operators := Check("", alloc, cfg, c.cluster, c.infos, executing, c.users, c.currentTick)
 
 		assert.Equal(t, len(c.expected), len(operators))
 		for j, op := range operators {

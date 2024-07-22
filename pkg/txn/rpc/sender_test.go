@@ -359,7 +359,9 @@ func newTestTxnServer(t assert.TestingT, addr string, opts ...morpc.CodecOption)
 	opts = append(opts,
 		morpc.WithCodecIntegrationHLC(newTestClock()),
 		morpc.WithCodecEnableChecksum())
-	codec := morpc.NewMessageCodec(func() morpc.Message { return &txn.TxnRequest{} },
+	codec := morpc.NewMessageCodec(
+		"",
+		func() morpc.Message { return &txn.TxnRequest{} },
 		opts...)
 	s, err := morpc.NewRPCServer("test-txn-server", addr, codec)
 	assert.NoError(t, err)
