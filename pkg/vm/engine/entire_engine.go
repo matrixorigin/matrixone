@@ -103,3 +103,7 @@ func (e *EntireEngine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool
 func (e *EntireEngine) GetMessageCenter() any {
 	return e.Engine.GetMessageCenter()
 }
+
+func (e *EntireEngine) GetService() string {
+	return e.Engine.GetService()
+}

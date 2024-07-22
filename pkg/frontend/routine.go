@@ -248,7 +248,7 @@ func (rt *Routine) handleRequest(req *Request) error {
 		trace.WithHungThreshold(30*time.Minute),
 		trace.WithProfileGoroutine(),
 		trace.WithProfileSystemStatus(func() ([]byte, error) {
-			ss, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.StatusServer)
+			ss, ok := runtime.ServiceRuntime(ses.GetService()).GetGlobalVariables(runtime.StatusServer)
 			if !ok {
 				return nil, nil
 			}
