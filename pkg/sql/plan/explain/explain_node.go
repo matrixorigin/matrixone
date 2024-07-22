@@ -18,9 +18,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"sort"
 	"strconv"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
@@ -404,7 +405,9 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 		if err != nil {
 			return nil, err
 		}
-		lines = append(lines, msgInfo)
+		if len(msgInfo) > 0 {
+			lines = append(lines, msgInfo)
+		}
 	}
 
 	if len(ndesc.Node.RecvMsgList) > 0 {
@@ -412,7 +415,9 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 		if err != nil {
 			return nil, err
 		}
-		lines = append(lines, msgInfo)
+		if len(msgInfo) > 0 {
+			lines = append(lines, msgInfo)
+		}
 	}
 	return lines, nil
 }
@@ -610,14 +615,15 @@ func (ndesc *NodeDescribeImpl) GetRuntimeFilterBuildInfo(ctx context.Context, op
 
 func (ndesc *NodeDescribeImpl) GetSendMessageInfo(ctx context.Context, options *ExplainOptions) (string, error) {
 	buf := bytes.NewBuffer(make([]byte, 0, 300))
-	buf.WriteString("Send Message: ")
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		first := true
 		for _, v := range ndesc.Node.SendMsgList {
 			if v.GetMsgType() == int32(process.MsgJoinMap) {
 				continue
 			}
-			if !first {
+			if first {
+				buf.WriteString("Recv Message: ")
+			} else {
 				buf.WriteString(", ")
 			}
 			first = false
@@ -633,14 +639,15 @@ func (ndesc *NodeDescribeImpl) GetSendMessageInfo(ctx context.Context, options *
 
 func (ndesc *NodeDescribeImpl) GetRecvMessageInfo(ctx context.Context, options *ExplainOptions) (string, error) {
 	buf := bytes.NewBuffer(make([]byte, 0, 300))
-	buf.WriteString("Recv Message: ")
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		first := true
 		for _, v := range ndesc.Node.RecvMsgList {
 			if v.GetMsgType() == int32(process.MsgJoinMap) {
 				continue
 			}
-			if !first {
+			if first {
+				buf.WriteString("Recv Message: ")
+			} else {
 				buf.WriteString(", ")
 			}
 			first = false
