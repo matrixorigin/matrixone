@@ -1828,10 +1828,14 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 		ID2Addr[i] = mcpu - tmp
 	}
 	param := &tree.ExternParam{}
+
 	if n.ExternScan == nil || n.ExternScan.Type != tree.INLINE {
 		err := json.Unmarshal([]byte(n.TableDef.Createsql), param)
 		if err != nil {
 			return nil, err
+		}
+		if n.ExternScan == nil {
+			param.ExtTab = true
 		}
 	} else {
 		param.ScanType = int(n.ExternScan.Type)
@@ -1852,6 +1856,7 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 		}
 		param.JsonData = n.ExternScan.JsonType
 	}
+
 	if param.ScanType == tree.S3 {
 		if !param.Init {
 			if err := plan2.InitS3Param(param); err != nil {

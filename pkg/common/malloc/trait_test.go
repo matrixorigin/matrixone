@@ -16,31 +16,24 @@ package malloc
 
 import "testing"
 
-func TestMetricsAllocator(t *testing.T) {
-	testAllocator(t, func() Allocator {
-		return NewMetricsAllocator(
-			newUpstreamAllocatorForTest(),
-			nil, nil, nil, nil,
-		)
-	})
-}
-
-func BenchmarkMetricsAllocator(b *testing.B) {
-	for _, n := range benchNs {
-		benchmarkAllocator(b, func() Allocator {
-			return NewMetricsAllocator(
-				newUpstreamAllocatorForTest(),
-				nil, nil, nil, nil,
-			)
-		}, n)
+func BenchmarkTraitAs(b *testing.B) {
+	allocator := NewReadOnlyAllocator(
+		NewClassAllocator(NewFixedSizeMmapAllocator),
+	)
+	_, dec, err := allocator.Allocate(42, NoHints)
+	if err != nil {
+		b.Fatal(err)
 	}
-}
+	b.ResetTimer()
 
-func FuzzMetricsAllocator(f *testing.F) {
-	fuzzAllocator(f, func() Allocator {
-		return NewMetricsAllocator(
-			newUpstreamAllocatorForTest(),
-			nil, nil, nil, nil,
-		)
-	})
+	var freeze Freezer
+	var info MmapInfo
+	for i := 0; i < b.N; i++ {
+		if !dec.As(&freeze) {
+			b.Fatal()
+		}
+		if !dec.As(&info) {
+			b.Fatal()
+		}
+	}
 }
