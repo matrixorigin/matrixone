@@ -30,6 +30,7 @@ import (
 
 func newService(
 	file string,
+	index int,
 ) (ServiceOperator, error) {
 	cfg := newServiceConfig()
 	if err := parseConfigFromFile(file, &cfg); err != nil {
@@ -42,104 +43,11 @@ func newService(
 
 	op := &operator{
 		cfg:         cfg,
+		index:       index,
 		sid:         cfg.mustGetServiceUUID(),
 		serviceType: cfg.mustGetServiceType(),
 	}
 	return op, nil
-}
-
-func (op *operator) init() error {
-	if err := op.initLogger(); err != nil {
-		return err
-	}
-	if err := op.initStopper(); err != nil {
-		return err
-	}
-	if err := op.initClock(); err != nil {
-		return err
-	}
-	if err := op.initRuntime(); err != nil {
-		return nil
-	}
-	if err := op.setupGossip(); err != nil {
-		return err
-	}
-
-	malloc.SetDefaultConfig(op.cfg.Malloc)
-
-	op.reset.rt.SetGlobalVariables(
-		runtime.StatusServer,
-		status.NewServer(),
-	)
-
-	return nil
-}
-
-func (op *operator) initLogger() error {
-	logger, err := logutil.NewMOLogger(&op.cfg.Log)
-	if err != nil {
-		return err
-	}
-	op.reset.logger = logger.With(zap.String("service", op.sid))
-	return nil
-}
-
-func (op *operator) initStopper() error {
-	op.reset.shutdownC = make(chan struct{})
-	op.reset.stopper = stopper.NewStopper(
-		fmt.Sprintf("%s/%s", op.serviceType.String(), op.sid),
-		stopper.WithLogger(op.reset.logger),
-	)
-	return nil
-}
-
-func (op *operator) initClock() error {
-	clock, err := newClock(
-		op.cfg,
-		op.reset.stopper,
-	)
-	if err != nil {
-		return err
-	}
-	op.reset.clock = clock
-	return nil
-}
-
-func (op *operator) initRuntime() error {
-	rt := runtime.NewRuntime(
-		op.serviceType,
-		op.sid,
-		op.reset.logger,
-		runtime.WithClock(op.reset.clock),
-	)
-	runtime.SetupServiceBasedRuntime(op.sid, rt)
-	op.reset.rt = rt
-	return nil
-}
-
-func (op *operator) setupGossip() error {
-	if op.serviceType != metadata.ServiceType_CN {
-		return nil
-	}
-
-	gossipNode, err := gossip.NewNode(
-		context.Background(),
-		op.sid,
-	)
-	if err != nil {
-		return err
-	}
-	for i := range op.cfg.FileServices {
-		op.cfg.FileServices[i].Cache.KeyRouterFactory = gossipNode.DistKeyCacheGetter()
-		op.cfg.FileServices[i].Cache.QueryClient, err = client.NewQueryClient(
-			op.cfg.CN.UUID,
-			op.cfg.FileServices[i].Cache.RPC,
-		)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func (op *operator) ServiceID() string {
@@ -148,6 +56,22 @@ func (op *operator) ServiceID() string {
 
 func (op *operator) ServiceType() metadata.ServiceType {
 	return op.serviceType
+}
+
+func (op *operator) Close() error {
+	op.Lock()
+	defer op.Unlock()
+
+	if op.state == stopped {
+		return moerr.NewInvalidStateNoCtx("service already stopped")
+	}
+
+	if err := op.reset.svc.Close(); err != nil {
+		return err
+	}
+
+	op.reset.stopper.Stop()
+	return nil
 }
 
 func (op *operator) Start() error {
@@ -173,14 +97,17 @@ func (op *operator) Start() error {
 
 	// start up system module to do some calculation.
 	system.Run(op.reset.stopper)
+	waitShutdown := false
 
 	switch op.serviceType {
 	case metadata.ServiceType_CN:
 		err = op.startCNServiceLocked(fs)
 	case metadata.ServiceType_TN:
 		err = op.startTNServiceLocked(fs)
+		waitShutdown = true
 	case metadata.ServiceType_LOG:
 		err = op.startLogServiceLocked(fs)
+		waitShutdown = true
 	case metadata.ServiceType_PROXY:
 		err = op.startProxyServiceLocked()
 	case metadata.ServiceType_PYTHON_UDF:
@@ -191,6 +118,26 @@ func (op *operator) Start() error {
 
 	if err != nil {
 		return err
+	}
+
+	if waitShutdown {
+		go func(c chan struct{}) {
+			select {
+			case <-c:
+				_ = op.Close()
+			}
+		}(op.reset.shutdownC)
+		op.reset.stopper.RunTask(
+			func(c chan struct{}) func(ctx context.Context) {
+				return func(ctx context.Context) {
+					select {
+					case <-ctx.Done():
+					case <-c:
+
+					}
+				}
+			}(op.reset.shutdownC),
+		)
 	}
 
 	op.state = started
@@ -329,6 +276,100 @@ func (op *operator) startPythonUDFServiceLocked() error {
 			}
 		},
 	)
+}
+
+func (op *operator) init() error {
+	if err := op.initLogger(); err != nil {
+		return err
+	}
+	if err := op.initStopper(); err != nil {
+		return err
+	}
+	if err := op.initClock(); err != nil {
+		return err
+	}
+	if err := op.initRuntime(); err != nil {
+		return nil
+	}
+	if err := op.setupGossip(); err != nil {
+		return err
+	}
+
+	malloc.SetDefaultConfig(op.cfg.Malloc)
+
+	op.reset.rt.SetGlobalVariables(
+		runtime.StatusServer,
+		status.NewServer(),
+	)
+
+	return nil
+}
+
+func (op *operator) initLogger() error {
+	logger, err := logutil.NewMOLogger(&op.cfg.Log)
+	if err != nil {
+		return err
+	}
+	op.reset.logger = logger.With(zap.String("service", op.sid))
+	return nil
+}
+
+func (op *operator) initStopper() error {
+	op.reset.shutdownC = make(chan struct{})
+	op.reset.stopper = stopper.NewStopper(
+		fmt.Sprintf("%s/%s", op.serviceType.String(), op.sid),
+		stopper.WithLogger(op.reset.logger),
+	)
+	return nil
+}
+
+func (op *operator) initClock() error {
+	clock, err := newClock(
+		op.cfg,
+		op.reset.stopper,
+	)
+	if err != nil {
+		return err
+	}
+	op.reset.clock = clock
+	return nil
+}
+
+func (op *operator) initRuntime() error {
+	rt := runtime.NewRuntime(
+		op.serviceType,
+		op.sid,
+		op.reset.logger,
+		runtime.WithClock(op.reset.clock),
+	)
+	runtime.SetupServiceBasedRuntime(op.sid, rt)
+	op.reset.rt = rt
+	return nil
+}
+
+func (op *operator) setupGossip() error {
+	if op.serviceType != metadata.ServiceType_CN {
+		return nil
+	}
+
+	gossipNode, err := gossip.NewNode(
+		context.Background(),
+		op.sid,
+	)
+	if err != nil {
+		return err
+	}
+	for i := range op.cfg.FileServices {
+		op.cfg.FileServices[i].Cache.KeyRouterFactory = gossipNode.DistKeyCacheGetter()
+		op.cfg.FileServices[i].Cache.QueryClient, err = client.NewQueryClient(
+			op.cfg.CN.UUID,
+			op.cfg.FileServices[i].Cache.RPC,
+		)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (op *operator) waitClusterConditionLocked(

@@ -113,4 +113,40 @@ type = "distributed-tae"
 port = %d
 unix-socket = "%s/mysql%d.sock"
 `
+
+	proxyConfig = `
+service-type = "PROXY"
+data-dir = "%s"
+
+[log]
+level = "info"
+format = "console"
+max-size = 512
+
+[hakeeper-client]
+service-addresses = [
+  "127.0.0.1:32001",
+]
+
+[[fileservice]]
+name = "LOCAL"
+backend = "DISK"
+
+[[fileservice]]
+name = "SHARED"
+backend = "DISK"
+data-dir = "%s/shared"
+
+[fileservice.cache]
+memory-capacity = "32MB"
+disk-capacity = "32MB"
+disk-path = "%s/file-service-cache"
+
+[[fileservice]]
+name = "ETL"
+backend = "DISK-ETL"
+
+[proxy]
+uuid = "proxy"
+`
 )

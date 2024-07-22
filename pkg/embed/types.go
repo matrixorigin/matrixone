@@ -25,6 +25,9 @@ type ServiceOperator interface {
 	ServiceType() metadata.ServiceType
 	Index() int
 	Adjust(func(*ServiceConfig))
+
+	Start() error
+	Close() error
 }
 
 type operator struct {
@@ -32,6 +35,7 @@ type operator struct {
 
 	sid         string
 	cfg         ServiceConfig
+	index       int
 	serviceType metadata.ServiceType
 	state       state
 

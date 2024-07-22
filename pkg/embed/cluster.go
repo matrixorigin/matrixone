@@ -6,11 +6,9 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
-)
 
-// basePort         = 18000
-// 	baseFrontendPort = 16001
-// 	baseUnixSocket   = 0
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+)
 
 type state int
 
@@ -22,13 +20,15 @@ const (
 type cluster struct {
 	sync.RWMutex
 
-	services map[string]ServiceOperator
+	state    state
+	files    []string
+	services []ServiceOperator
 
 	options struct {
 		dataPath  string
 		cn        int
 		withProxy bool
-		adjust    func(ServiceOperator)
+		preStart  func(ServiceOperator)
 	}
 
 	gen struct {
@@ -59,30 +59,60 @@ func NewMultiCN(
 func NewCluster(
 	opts ...Option,
 ) (Cluster, error) {
-	c := &cluster{
-		services: map[string]ServiceOperator{},
-	}
+	c := &cluster{}
 	for _, opt := range opts {
 		opt(c)
 	}
 	c.adjust()
-	return nil, nil
+
+	if err := c.createServiceOperators(); err != nil {
+		return nil, err
+	}
+	return c, nil
 }
 
-func newClusterWithConfigFile(
-	serviceConfigs []string,
-) (Cluster, error) {
-	c := &cluster{
-		services: make(map[string]ServiceOperator),
+func (c *cluster) Start() error {
+	c.Lock()
+	defer c.Unlock()
+
+	if c.state == started {
+		return moerr.NewInvalidStateNoCtx("embed mo cluster already started")
 	}
-	for _, f := range serviceConfigs {
-		s, err := newService(f)
-		if err != nil {
-			return nil, err
+
+	for _, s := range c.services {
+		if err := s.Start(); err != nil {
+			return err
 		}
-		c.services[s.ServiceID()] = s
 	}
-	return nil, nil
+	c.state = started
+	return nil
+}
+
+func (c *cluster) Close() error {
+	c.Lock()
+	defer c.Unlock()
+
+	for _, s := range c.services {
+		if err := s.Close(); err != nil {
+			return err
+		}
+	}
+	c.state = stopped
+	return nil
+}
+
+func (c *cluster) GetService(
+	sid string,
+) (ServiceOperator, error) {
+	c.RLock()
+	defer c.RUnlock()
+
+	for _, s := range c.services {
+		if s.ServiceID() == sid {
+			return s, nil
+		}
+	}
+	return nil, moerr.NewInvalidStateNoCtx("service not found")
 }
 
 func (c *cluster) adjust() {
@@ -93,7 +123,10 @@ func (c *cluster) adjust() {
 		c.options.cn = 1
 	}
 	if c.options.dataPath == "" {
-		c.options.dataPath = filepath.Join("/tmp/", fmt.Sprintf("%d", time.Now().Nanosecond()))
+		c.options.dataPath = filepath.Join(
+			os.TempDir(),
+			fmt.Sprintf("%d", time.Now().Nanosecond()),
+		)
 		if err := os.MkdirAll(c.options.dataPath, 0755); err != nil {
 			panic(err)
 		}
@@ -105,13 +138,42 @@ func (c *cluster) adjust() {
 	}
 }
 
+func (c *cluster) createServiceOperators() error {
+	if err := c.initConfigs(); err != nil {
+		return err
+	}
+
+	for i, f := range c.files {
+		s, err := newService(f, i)
+		if err != nil {
+			return err
+		}
+		if c.options.preStart != nil {
+			c.options.preStart(s)
+		}
+		c.services = append(c.services, s)
+	}
+	return nil
+}
+
 func (c *cluster) initConfigs() error {
+	if len(c.files) > 0 {
+		return nil
+	}
+
 	if err := c.initLogServiceConfig(); err != nil {
 		return err
 	}
 
 	if err := c.initTNServiceConfig(); err != nil {
 		return err
+	}
+
+	if c.options.withProxy {
+		if err := c.initProxyServiceConfig(); err != nil {
+			return err
+		}
+
 	}
 
 	if err := c.initCNServiceConfig(); err != nil {
@@ -122,8 +184,10 @@ func (c *cluster) initConfigs() error {
 }
 
 func (c *cluster) initLogServiceConfig() error {
+	file := filepath.Join(c.options.dataPath, "log.toml")
+	c.files = append(c.files, file)
 	return genConfig(
-		filepath.Join(c.options.dataPath, "log.toml"),
+		file,
 		fmt.Sprintf(
 			logConfig,
 			c.options.dataPath,
@@ -131,8 +195,10 @@ func (c *cluster) initLogServiceConfig() error {
 }
 
 func (c *cluster) initTNServiceConfig() error {
+	file := filepath.Join(c.options.dataPath, "tn.toml")
+	c.files = append(c.files, file)
 	return genConfig(
-		filepath.Join(c.options.dataPath, "tn.toml"),
+		file,
 		fmt.Sprintf(
 			tnConfig,
 			c.options.dataPath,
@@ -144,8 +210,10 @@ func (c *cluster) initTNServiceConfig() error {
 
 func (c *cluster) initCNServiceConfig() error {
 	for i := 0; i < c.options.cn; i++ {
+		file := filepath.Join(c.options.dataPath, fmt.Sprintf("cn-%d.toml", i))
+		c.files = append(c.files, file)
 		err := genConfig(
-			filepath.Join(c.options.dataPath, fmt.Sprintf("cn-%d.toml", i)),
+			file,
 			fmt.Sprintf(
 				cnConfig,
 				c.options.dataPath,
@@ -163,6 +231,17 @@ func (c *cluster) initCNServiceConfig() error {
 		}
 	}
 	return nil
+}
+
+func (c *cluster) initProxyServiceConfig() error {
+	return genConfig(
+		filepath.Join(c.options.dataPath, "proxy.toml"),
+		fmt.Sprintf(
+			proxyConfig,
+			c.options.dataPath,
+			c.options.dataPath,
+			c.options.dataPath,
+		))
 }
 
 func (c *cluster) getNextBasePort() int {
