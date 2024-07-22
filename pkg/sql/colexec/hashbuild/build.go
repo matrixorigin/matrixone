@@ -112,14 +112,15 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 			if ap.NeedHashMap {
 				var jm *hashmap.JoinMap
 				if ctr.keyWidth <= 8 {
-					jm = hashmap.NewJoinMap(ctr.multiSels, nil, ctr.intHashMap, nil, ctr.hasNull)
+					jm = hashmap.NewJoinMap(ctr.multiSels, ctr.intHashMap, nil)
 				} else {
-					jm = hashmap.NewJoinMap(ctr.multiSels, nil, nil, ctr.strHashMap, ctr.hasNull)
+					jm = hashmap.NewJoinMap(ctr.multiSels, nil, ctr.strHashMap)
 				}
 				jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
 				if ap.JoinMapTag <= 0 {
 					panic("wrong joinmap message tag!")
 				}
+				jm.SetRowCount(int64(ctr.inputBatchRowCount))
 				proc.SendMessage(process.JoinMapMsg{JoinMapPtr: jm, Tag: ap.JoinMapTag})
 				ctr.intHashMap = nil
 				ctr.strHashMap = nil
@@ -276,11 +277,7 @@ func (ctr *container) buildHashmap(ap *HashBuild, proc *process.Process) error {
 			return err
 		}
 		for k, v := range vals[:n] {
-			if zvals[k] == 0 {
-				ctr.hasNull = true
-				continue
-			}
-			if v == 0 {
+			if zvals[k] == 0 || v == 0 {
 				continue
 			}
 			ai := int64(v) - 1

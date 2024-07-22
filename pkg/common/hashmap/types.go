@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 const (
@@ -65,13 +64,11 @@ type Iterator interface {
 
 // JoinMap is used for join
 type JoinMap struct {
-	refCnt    int64
-	multiSels [][]int32
-	// push-down filter expression, possibly a bloomfilter
-	expr             *plan.Expr
+	rowcnt           int64 // for debug purpose
+	refCnt           int64
+	multiSels        [][]int32
 	shm              *StrHashMap
 	ihm              *IntHashMap
-	hasNull          bool
 	runtimeFilter_In bool
 	valid            bool
 }

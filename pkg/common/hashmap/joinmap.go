@@ -16,20 +16,24 @@ package hashmap
 
 import (
 	"sync/atomic"
-
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
-func NewJoinMap(sels [][]int32, expr *plan.Expr, ihm *IntHashMap, shm *StrHashMap, hasNull bool) *JoinMap {
+func NewJoinMap(sels [][]int32, ihm *IntHashMap, shm *StrHashMap) *JoinMap {
 	return &JoinMap{
 		refCnt:    0,
 		shm:       shm,
 		ihm:       ihm,
-		expr:      expr,
 		multiSels: sels,
-		hasNull:   hasNull,
 		valid:     true,
 	}
+}
+
+func (jm *JoinMap) SetRowCount(cnt int64) {
+	jm.rowcnt = cnt
+}
+
+func (jm *JoinMap) GetRowCount() int64 {
+	return jm.rowcnt
 }
 
 func (jm *JoinMap) SetPushedRuntimeFilterIn(b bool) {
@@ -42,14 +46,6 @@ func (jm *JoinMap) PushedRuntimeFilterIn() bool {
 
 func (jm *JoinMap) Sels() [][]int32 {
 	return jm.multiSels
-}
-
-func (jm *JoinMap) Expr() *plan.Expr {
-	return jm.expr
-}
-
-func (jm *JoinMap) HasNull() bool {
-	return jm.hasNull
 }
 
 func (jm *JoinMap) NewIterator() Iterator {
