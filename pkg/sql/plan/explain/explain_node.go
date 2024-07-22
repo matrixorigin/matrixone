@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"sort"
 	"strconv"
 
@@ -613,6 +614,9 @@ func (ndesc *NodeDescribeImpl) GetSendMessageInfo(ctx context.Context, options *
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		first := true
 		for _, v := range ndesc.Node.SendMsgList {
+			if v.GetMsgType() == int32(process.MsgJoinMap) {
+				continue
+			}
 			if !first {
 				buf.WriteString(", ")
 			}
@@ -633,6 +637,9 @@ func (ndesc *NodeDescribeImpl) GetRecvMessageInfo(ctx context.Context, options *
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		first := true
 		for _, v := range ndesc.Node.RecvMsgList {
+			if v.GetMsgType() == int32(process.MsgJoinMap) {
+				continue
+			}
 			if !first {
 				buf.WriteString(", ")
 			}
