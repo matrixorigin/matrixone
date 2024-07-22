@@ -113,14 +113,20 @@ func (f *SQLFlusher) FlushBuffer(buf *bytes.Buffer) (int, error) {
 		return 0, err
 	}
 
-	sqlCsv := bytes.NewBuffer(make([]byte, 0, buf.Len()+mpool.KB))
-	for _, c := range buf.Bytes() {
+	sqlCsv := bytes.NewBuffer(make([]byte, 0, 10*mpool.MB))
+	for i := 0; i < buf.Len(); i++ {
+		c := buf.Bytes()[i]
+		if sqlCsv.Cap() == sqlCsv.Len() {
+			sqlCsv.Grow(mpool.MB)
+		}
 		// case \: mo sql NEED quote '\'
 		// case ': sql (load data inline ... DATA='' ...) will quote {sqlCsv} with "'"
 		if c == '\\' || c == '\'' {
-			sqlCsv.WriteByte(c)
+			// \ -> \\
+			// ' -> ''
 			sqlCsv.WriteByte(c)
 		}
+		sqlCsv.WriteByte(c)
 	}
 
 	loadSQL := fmt.Sprintf("LOAD DATA INLINE FORMAT='csv', DATA='%s' INTO TABLE %s.%s FIELDS TERMINATED BY ','",
@@ -128,6 +134,15 @@ func (f *SQLFlusher) FlushBuffer(buf *bytes.Buffer) (int, error) {
 	v2.TraceMOLoggerExportSqlHistogram.Observe(float64(len(loadSQL)))
 
 	_, err = conn.Exec(loadSQL)
+
+	if err != nil {
+		fmt.Printf("content.go origin: %s\n", buf)
+		fmt.Printf("content.go csv: %s\n", sqlCsv)
+		fmt.Printf("content.go sql: %s\n", loadSQL)
+		fmt.Printf("content.go sql: length: %d, sqlcsv: %d V.S. %d\n", len(loadSQL), sqlCsv.Len(), buf.Len())
+		fmt.Printf("content.go err: %v\n", err)
+	}
+
 	return 0, err
 }
 

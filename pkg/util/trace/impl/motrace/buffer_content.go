@@ -136,6 +136,7 @@ func (b *ContentBuffer) IsEmpty() bool {
 }
 
 func (b *ContentBuffer) isEmpty() bool {
+	b.csvWriter.Flush()
 	return b.buf.Len() == 0
 }
 

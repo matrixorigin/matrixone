@@ -232,7 +232,7 @@ func NewCSVWriterWithBuffer(ctx context.Context, buf *bytes.Buffer) *CSVWriter {
 	return w
 }
 func (w *CSVWriter) WriteRow(row *table.Row) error { return w.WriteStrings(row.ToStrings()) }
-func (w *CSVWriter) GetContentLength() int         { return w.buf.Len() }
+func (w *CSVWriter) GetContentLength() int         { w.formatter.Flush(); return w.buf.Len() }
 
 // FlushAndClose implements RowWriter, but NO Close action.
 func (w *CSVWriter) FlushAndClose() (int, error) {
@@ -256,6 +256,8 @@ func (w *CSVWriter) GetContent() string {
 	w.formatter.Flush() // Ensure all data is written to buffer
 	return w.buf.String()
 }
+
+func (w *CSVWriter) Flush() { w.formatter.Flush() }
 
 func (w *CSVWriter) Release() {
 	if w.buf != nil {
