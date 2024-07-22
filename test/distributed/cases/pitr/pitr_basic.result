@@ -1,0 +1,237 @@
+drop pitr if exists pitr01;
+create pitr pitr01 range 1 'h';
+drop pitr if exists pitr02;
+create pitr pitr02 range 1 'd';
+drop pitr if exists pitr03;
+create pitr pitr03 range 1 'mo';
+drop pitr if exists pitr04;
+create pitr pitr04 range 1 'y';
+show pitr;
+PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
+pitr01    2024-07-18 07:20:30    2024-07-18 07:20:30    account    sys            1    h
+pitr02    2024-07-18 07:20:30    2024-07-18 07:20:30    account    sys            1    d
+pitr03    2024-07-18 07:20:30    2024-07-18 07:20:30    account    sys            1    mo
+pitr04    2024-07-18 07:20:30    2024-07-18 07:20:30    account    sys            1    y
+drop pitr if exists pitr05;
+create pitr pitr05 for cluster range 1 'h';
+show pitr;
+PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
+pitr01    2024-07-18 07:20:30    2024-07-18 07:20:30    account    sys            1    h
+pitr02    2024-07-18 07:20:30    2024-07-18 07:20:30    account    sys            1    d
+pitr03    2024-07-18 07:20:30    2024-07-18 07:20:30    account    sys            1    mo
+pitr04    2024-07-18 07:20:30    2024-07-18 07:20:30    account    sys            1    y
+pitr05    2024-07-18 07:20:30    2024-07-18 07:20:30    cluster                1    h
+create pitr pitr01 range 1 'h';
+internal error: pitr pitr01 already exists
+create pitr if not exists pitr01 range 1 'h';
+create pitr pitr07 for account acc01 database mo_catalog range 1 'h';
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 45 near " database mo_catalog range 1 'h';";
+create pitr pitr08 for account acc01 database mo_catalog table mo_table range 1 'h';
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 45 near " database mo_catalog table mo_table range 1 'h';";
+create pitr pitr09 range 1 'yy';
+internal error: invalid pitr unit yy
+create pitr pitr09 range -1 'h';
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 26 near " -1 'h';";
+create pitr pitr09 range 2000 'h';
+internal error: invalid pitr value 2000
+show pitr;
+PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
+pitr01    2024-07-18 07:20:30    2024-07-18 07:20:30    account    sys            1    h
+pitr02    2024-07-18 07:20:30    2024-07-18 07:20:30    account    sys            1    d
+pitr03    2024-07-18 07:20:30    2024-07-18 07:20:30    account    sys            1    mo
+pitr04    2024-07-18 07:20:30    2024-07-18 07:20:30    account    sys            1    y
+pitr05    2024-07-18 07:20:30    2024-07-18 07:20:30    cluster                1    h
+create database db01;
+drop pitr if exists pitr10;
+create pitr pitr10 for database db01 range 1 'h';
+create pitr pitr11 for database db02 range 1 'h';
+internal error: database db02 does not exist
+show pitr;
+PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
+pitr01    2024-07-18 07:20:30    2024-07-18 07:20:30    account    sys            1    h
+pitr02    2024-07-18 07:20:30    2024-07-18 07:20:30    account    sys            1    d
+pitr03    2024-07-18 07:20:30    2024-07-18 07:20:30    account    sys            1    mo
+pitr04    2024-07-18 07:20:30    2024-07-18 07:20:30    account    sys            1    y
+pitr05    2024-07-18 07:20:30    2024-07-18 07:20:30    cluster                1    h
+pitr10    2024-07-18 07:20:30    2024-07-18 07:20:30    database    sys    db01        1    h
+create table db01.table01 (col1 int);
+drop pitr if exists pitr12;
+create pitr pitr12 for database db01 table table01 range 1 'h';
+create pitr pitr13 for database db01 table table02 range 1 'h';
+internal error: table table02 does not exist
+show pitr;
+PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
+pitr01    2024-07-18 07:20:30    2024-07-18 07:20:30    account    sys            1    h
+pitr02    2024-07-18 07:20:30    2024-07-18 07:20:30    account    sys            1    d
+pitr03    2024-07-18 07:20:30    2024-07-18 07:20:30    account    sys            1    mo
+pitr04    2024-07-18 07:20:30    2024-07-18 07:20:30    account    sys            1    y
+pitr05    2024-07-18 07:20:30    2024-07-18 07:20:30    cluster                1    h
+pitr10    2024-07-18 07:20:30    2024-07-18 07:20:30    database    sys    db01        1    h
+pitr12    2024-07-18 07:20:30    2024-07-18 07:20:30    table    sys    db01    table01    1    h
+create account acc01 admin_name = 'test_account' identified by '111';
+drop pitr if exists pitr14;
+create pitr pitr14 for account acc01 range 1 'h';
+create pitr pitr15 for account acc02 range 1 'h';
+internal error: account acc02 does not exist
+show pitr;
+PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
+pitr14    2024-07-18 07:20:31    2024-07-18 07:20:31    account    acc01            1    h
+pitr01    2024-07-18 07:20:30    2024-07-18 07:20:30    account    sys            1    h
+pitr02    2024-07-18 07:20:30    2024-07-18 07:20:30    account    sys            1    d
+pitr03    2024-07-18 07:20:30    2024-07-18 07:20:30    account    sys            1    mo
+pitr04    2024-07-18 07:20:30    2024-07-18 07:20:30    account    sys            1    y
+pitr05    2024-07-18 07:20:30    2024-07-18 07:20:30    cluster                1    h
+pitr10    2024-07-18 07:20:30    2024-07-18 07:20:30    database    sys    db01        1    h
+pitr12    2024-07-18 07:20:30    2024-07-18 07:20:30    table    sys    db01    table01    1    h
+drop pitr if exists pitr16;
+create pitr pitr16 range 1 'h';
+show pitr;
+PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
+pitr16    2024-07-18 07:20:31    2024-07-18 07:20:31    account    acc01            1    h
+create pitr pitr16 range 1 'h';
+internal error: pitr pitr16 already exists
+create pitr pitr16 if not exists range 1 'h';
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 21 near " if not exists range 1 'h';";
+create pitr pitr17 for cluster range 1 'h';
+internal error: only sys tenant can create cluster level pitr
+create pitr pitr18 for account acc01 range 1 'h';
+internal error: only sys tenant can create tenant level pitr for other tenant
+show pitr;
+PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
+pitr16    2024-07-18 07:20:31    2024-07-18 07:20:31    account    acc01            1    h
+create database db01;
+drop pitr if exists pitr19;
+create pitr pitr19 for database db01 range 1 'h';
+create pitr pitr20 for database db02 range 1 'h';
+internal error: database db02 does not exist
+show pitr;
+PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
+pitr16    2024-07-18 07:20:31    2024-07-18 07:20:31    account    acc01            1    h
+pitr19    2024-07-18 07:20:31    2024-07-18 07:20:31    database    acc01    db01        1    h
+create table db01.table01 (col1 int);
+drop pitr if exists pitr21;
+create pitr pitr21 for database db01 table table01 range 1 'h';
+create pitr pitr22 for database db01 table table02 range 1 'h';
+internal error: table table02 does not exist
+show pitr;
+PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
+pitr16    2024-07-18 07:20:31    2024-07-18 07:20:31    account    acc01            1    h
+pitr19    2024-07-18 07:20:31    2024-07-18 07:20:31    database    acc01    db01        1    h
+pitr21    2024-07-18 07:20:31    2024-07-18 07:20:31    table    acc01    db01    table01    1    h
+alter pitr pitr01 range 1 'd';
+alter pitr pitr100 range 1 'd';
+internal error: pitr pitr100 does not exist
+alter pitr if exists pitr100 range 1 'd';
+alter pitr pitr01 range 1 'yy';
+internal error: invalid pitr unit yy
+alter pitr pitr01 range -1 'd';
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 25 near " -1 'd';";
+alter pitr pitr01 range 2000 'd';
+internal error: invalid pitr value 2000
+show pitr;
+PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
+pitr14    2024-07-18 07:20:31    2024-07-18 07:20:31    account    acc01            1    h
+pitr02    2024-07-18 07:20:30    2024-07-18 07:20:30    account    sys            1    d
+pitr03    2024-07-18 07:20:30    2024-07-18 07:20:30    account    sys            1    mo
+pitr04    2024-07-18 07:20:30    2024-07-18 07:20:30    account    sys            1    y
+pitr05    2024-07-18 07:20:30    2024-07-18 07:20:30    cluster                1    h
+pitr10    2024-07-18 07:20:30    2024-07-18 07:20:30    database    sys    db01        1    h
+pitr12    2024-07-18 07:20:30    2024-07-18 07:20:30    table    sys    db01    table01    1    h
+pitr01    2024-07-18 07:20:30    2024-07-18 07:20:31    account    sys            1    d
+drop pitr pitr01;
+drop pitr pitr100;
+internal error: pitr pitr100 does not exist
+drop pitr if exists pitr100;
+show pitr;
+PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
+pitr14    2024-07-18 07:20:31    2024-07-18 07:20:31    account    acc01            1    h
+pitr02    2024-07-18 07:20:30    2024-07-18 07:20:30    account    sys            1    d
+pitr03    2024-07-18 07:20:30    2024-07-18 07:20:30    account    sys            1    mo
+pitr04    2024-07-18 07:20:30    2024-07-18 07:20:30    account    sys            1    y
+pitr05    2024-07-18 07:20:30    2024-07-18 07:20:30    cluster                1    h
+pitr10    2024-07-18 07:20:30    2024-07-18 07:20:30    database    sys    db01        1    h
+pitr12    2024-07-18 07:20:30    2024-07-18 07:20:30    table    sys    db01    table01    1    h
+alter pitr pitr16 range 1 'd';
+alter pitr pitr100 range 1 'd';
+internal error: pitr pitr100 does not exist
+alter pitr if exists pitr100 range 1 'd';
+alter pitr pitr16 range 1 'yy';
+internal error: invalid pitr unit yy
+alter pitr pitr16 range -1 'd';
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 25 near " -1 'd';";
+alter pitr pitr16 range 2000 'd';
+internal error: invalid pitr value 2000
+show pitr;
+PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
+pitr19    2024-07-18 07:20:31    2024-07-18 07:20:31    database    acc01    db01        1    h
+pitr21    2024-07-18 07:20:31    2024-07-18 07:20:31    table    acc01    db01    table01    1    h
+pitr16    2024-07-18 07:20:31    2024-07-18 07:20:31    account    acc01            1    d
+drop pitr pitr16;
+drop pitr pitr100;
+internal error: pitr pitr100 does not exist
+drop pitr if exists pitr100;
+show pitr;
+PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
+pitr19    2024-07-18 07:20:31    2024-07-18 07:20:31    database    acc01    db01        1    h
+pitr21    2024-07-18 07:20:31    2024-07-18 07:20:31    table    acc01    db01    table01    1    h
+drop pitr if exists pitr19;
+drop pitr if exists pitr21;
+select * from mo_catalog.mo_pitr;
+pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
+0190c4b6-c41c-7c9e-903f-f86cb794f60b    pitr02    0    2024-07-18 07:20:30    2024-07-18 07:20:30    account    0    sys            0    1    d
+0190c4b6-c423-7124-b0de-7c46f39c0f3f    pitr03    0    2024-07-18 07:20:30    2024-07-18 07:20:30    account    0    sys            0    1    mo
+0190c4b6-c429-789f-aa7b-12f7b411f553    pitr04    0    2024-07-18 07:20:30    2024-07-18 07:20:30    account    0    sys            0    1    y
+0190c4b6-c433-76a3-b20a-4c9220b78a8b    pitr05    0    2024-07-18 07:20:30    2024-07-18 07:20:30    cluster    0                0    1    h
+0190c4b6-c44b-770c-aba2-d8d758bd7fc1    pitr10    0    2024-07-18 07:20:30    2024-07-18 07:20:30    database    0    sys    db01        293966    1    h
+0190c4b6-c460-7693-baf3-7fdcead5d113    pitr12    0    2024-07-18 07:20:30    2024-07-18 07:20:30    table    0    sys    db01    table01    293967    1    h
+0190c4b6-c6a2-7510-b047-2ecbabdc6838    pitr14    0    2024-07-18 07:20:31    2024-07-18 07:20:31    account    20001    acc01            20001    1    h
+drop account if exists acc01;
+select * from mo_catalog.mo_pitr;
+pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
+0190c4b6-c41c-7c9e-903f-f86cb794f60b    pitr02    0    2024-07-18 07:20:30    2024-07-18 07:20:30    account    0    sys            0    1    d
+0190c4b6-c423-7124-b0de-7c46f39c0f3f    pitr03    0    2024-07-18 07:20:30    2024-07-18 07:20:30    account    0    sys            0    1    mo
+0190c4b6-c429-789f-aa7b-12f7b411f553    pitr04    0    2024-07-18 07:20:30    2024-07-18 07:20:30    account    0    sys            0    1    y
+0190c4b6-c433-76a3-b20a-4c9220b78a8b    pitr05    0    2024-07-18 07:20:30    2024-07-18 07:20:30    cluster    0                0    1    h
+0190c4b6-c44b-770c-aba2-d8d758bd7fc1    pitr10    0    2024-07-18 07:20:30    2024-07-18 07:20:30    database    0    sys    db01        293966    1    h
+0190c4b6-c460-7693-baf3-7fdcead5d113    pitr12    0    2024-07-18 07:20:30    2024-07-18 07:20:30    table    0    sys    db01    table01    293967    1    h
+0190c4b6-c6a2-7510-b047-2ecbabdc6838    pitr14    0    2024-07-18 07:20:31    2024-07-18 07:20:31    account    20001    acc01            20001    1    h
+drop database if exists db01;
+select * from mo_catalog.mo_pitr;
+pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
+0190c4b6-c41c-7c9e-903f-f86cb794f60b    pitr02    0    2024-07-18 07:20:30    2024-07-18 07:20:30    account    0    sys            0    1    d
+0190c4b6-c423-7124-b0de-7c46f39c0f3f    pitr03    0    2024-07-18 07:20:30    2024-07-18 07:20:30    account    0    sys            0    1    mo
+0190c4b6-c429-789f-aa7b-12f7b411f553    pitr04    0    2024-07-18 07:20:30    2024-07-18 07:20:30    account    0    sys            0    1    y
+0190c4b6-c433-76a3-b20a-4c9220b78a8b    pitr05    0    2024-07-18 07:20:30    2024-07-18 07:20:30    cluster    0                0    1    h
+0190c4b6-c44b-770c-aba2-d8d758bd7fc1    pitr10    0    2024-07-18 07:20:30    2024-07-18 07:20:30    database    0    sys    db01        293966    1    h
+0190c4b6-c460-7693-baf3-7fdcead5d113    pitr12    0    2024-07-18 07:20:30    2024-07-18 07:20:30    table    0    sys    db01    table01    293967    1    h
+0190c4b6-c6a2-7510-b047-2ecbabdc6838    pitr14    0    2024-07-18 07:20:31    2024-07-18 07:20:31    account    20001    acc01            20001    1    h
+drop pitr if exists pitr01;
+drop pitr if exists pitr02;
+drop pitr if exists pitr03;
+drop pitr if exists pitr04;
+drop pitr if exists pitr05;
+drop pitr if exists pitr10;
+drop pitr if exists pitr12;
+drop pitr if exists pitr14;
+show pitr;
+PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
+select * from mo_catalog.mo_pitr;
+pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
+create account acc02 admin_name = 'test_account' identified by '111';
+create pitr pitr01 range 1 'h';
+show pitr;
+PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
+pitr01    2024-07-18 07:20:34    2024-07-18 07:20:34    account    acc02            1    h
+select sleep(1);
+sleep(1)
+0
+alter pitr pitr01 range 1 'd';
+show pitr;
+PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
+pitr01    2024-07-18 07:20:34    2024-07-18 07:20:35    account    acc02            1    d
+select * from mo_catalog.mo_pitr;
+pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
+0190c4b6-d46f-739d-9b41-aec9f9ac2798    pitr01    20002    2024-07-18 07:20:34    2024-07-18 07:20:35    account    20002    acc02            20002    1    d
+drop account if exists acc02;
+select * from mo_catalog.mo_pitr;
+pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit

@@ -426,6 +426,34 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 		if err = handleExecUpgrade(ses, execCtx, st); err != nil {
 			return
 		}
+	case *tree.CreatePitr:
+		ses.EnterFPrint(120)
+		defer ses.ExitFPrint(120)
+		//TODO: invalidate privilege cache
+		if err = handleCreatePitr(ses, execCtx, st); err != nil {
+			return
+		}
+	case *tree.DropPitr:
+		ses.EnterFPrint(121)
+		defer ses.ExitFPrint(121)
+		//TODO: invalidate privilege cache
+		if err = handleDropPitr(ses, execCtx, st); err != nil {
+			return
+		}
+	case *tree.AlterPitr:
+		ses.EnterFPrint(122)
+		defer ses.ExitFPrint(122)
+		//TODO: invalidate privilege cache
+		if err = handleAlterPitr(ses, execCtx, st); err != nil {
+			return
+		}
+	case *tree.RestorePitr:
+		ses.EnterFPrint(123)
+		defer ses.ExitFPrint(123)
+		//TODO: invalidate privilege cache
+		if err = handleRestorePitr(ses, execCtx, st); err != nil {
+			return
+		}
 	}
 	return
 }
