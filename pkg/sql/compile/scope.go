@@ -632,6 +632,10 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 					s.NodeInfo.Data = nil
 					s.NodeInfo.NeedExpandRanges = false
 					s.DataSource.FilterExpr = plan2.MakeFalseExpr()
+					logutil.Infof("xxxx runtime filter drop, "+
+						"set s.NodeInfo.data=nil, neeedExpandRanges=false:, txn:%s, table:%s",
+						c.proc.GetTxnOperator().Txn().DebugString(),
+						s.DataSource.TableDef.Name)
 					return nil
 				case process.RuntimeFilter_IN:
 					inExpr := plan2.MakeInExpr(c.proc.Ctx, spec.Expr, msg.Card, msg.Data, spec.MatchPrefix)
@@ -1239,6 +1243,10 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 		switch s.DataSource.Rel.GetEngineType() {
 		case engine.Disttae:
 			//blkSlice := objectio.BlockInfoSlice(s.NodeInfo.Data)
+			logutil.Infof("xxxx start to build readers, txn:%s, table:%s. DataIsEmpty:%v",
+				c.proc.GetTxnOperator().Txn().DebugString(),
+				s.DataSource.TableDef.Name,
+				s.NodeInfo.Data == nil)
 			scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, s.NodeInfo.Data.BlkCnt())
 		case engine.Memory:
 			//idSlice := memoryengine.ShardIdSlice(s.NodeInfo.Data)
@@ -1261,16 +1269,18 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 			s.NodeInfo.Data,
 			scanUsedCpuNumber,
 			s.TxnOffset)
-		logutil.Infof("xxxx start to build readers, "+
-			"sql:%s, txn:%s, table:%s, scanusednum:%d, readers num :%d, blkCnt:%d, hasMemBlk:%v, err:%v",
-			sql,
-			c.proc.GetTxnOperator().Txn().DebugString(),
-			s.DataSource.TableDef.Name,
-			scanUsedCpuNumber,
-			len(readers),
-			s.NodeInfo.Data.BlkCnt(),
-			s.NodeInfo.Data.GetDataBlk(0).IsMemBlk(),
-			err)
+		if s.DataSource.TableDef.Name == "bugt" {
+			logutil.Infof("xxxx build readers finished, "+
+				"sql:%s, txn:%s, table:%s, scanusednum:%d, readers num :%d, blkCnt:%d, hasMemBlk:%v, err:%v",
+				sql,
+				c.proc.GetTxnOperator().Txn().DebugString(),
+				s.DataSource.TableDef.Name,
+				scanUsedCpuNumber,
+				len(readers),
+				s.NodeInfo.Data.BlkCnt(),
+				s.NodeInfo.Data.GetDataBlk(0).IsMemBlk(),
+				err)
+		}
 
 		if err != nil {
 			return

@@ -768,6 +768,10 @@ func (tbl *txnTable) RangesInProgress(ctx context.Context, exprs []*plan.Expr, t
 	); err != nil {
 		return
 	}
+	if tbl.tableName == "bugt" {
+		logutil.Infof("xxxx call ranges in progress ,txn:%s, table:%s, blocks:%d",
+			tbl.db.op.Txn().DebugString(), tbl.tableName, len(blocks))
+	}
 	return buildRelationDataV1(blocks), nil
 }
 
@@ -1282,7 +1286,6 @@ func (tbl *txnTable) collectUnCommittedObjects(txnOffset int) []objectio.ObjectS
 	if tbl.db.op.IsSnapOp() {
 		txnOffset = tbl.getTxn().GetSnapshotWriteOffset()
 	}
-
 	tbl.getTxn().ForEachTableWrites(
 		tbl.db.databaseId,
 		tbl.tableId,
@@ -1305,6 +1308,10 @@ func (tbl *txnTable) collectUnCommittedObjects(txnOffset int) []objectio.ObjectS
 				unCommittedObjects = append(unCommittedObjects, stats)
 			}
 		})
+	if tbl.tableName == "bugt" {
+		logutil.Infof("xxxx ranges:collect uncommitted objects, txn:%s, table:%s, txnOffset:%d, uncommitted objs:%d",
+			tbl.db.op.Txn().DebugString(), tbl.tableName, txnOffset, len(unCommittedObjects))
+	}
 
 	return unCommittedObjects
 }

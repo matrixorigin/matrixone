@@ -784,6 +784,7 @@ func (r *readerInProgress) Read(
 ) (bat *batch.Batch, err error) {
 
 	start := time.Now()
+	status := InMem
 	defer func() {
 		if r.columns.extraRowIdAdded && bat != nil {
 			rowIDVec := bat.Vecs[r.columns.rowIdColIdx]
@@ -791,15 +792,18 @@ func (r *readerInProgress) Read(
 			bat.Vecs = append(bat.Vecs[:r.columns.rowIdColIdx], bat.Vecs[r.columns.rowIdColIdx+1:]...)
 		}
 
-		logutil.Info("xxxx Reader.Read",
-			zap.String("txn", r.proc.GetTxnOperator().Txn().DebugString()),
-			zap.String("table", r.tableDef.Name),
-			zap.String("read batch rowCnt", func() string {
-				if bat == nil {
-					return "nil"
-				}
-				return strconv.Itoa(bat.RowCount())
-			}()))
+		if r.tableDef.Name == "bugt" {
+			logutil.Info("xxxx Reader.Read",
+				zap.String("txn", r.proc.GetTxnOperator().Txn().DebugString()),
+				zap.String("table", r.tableDef.Name),
+				zap.Int("status", int(status)),
+				zap.String("read batch rowCnt", func() string {
+					if bat == nil {
+						return "nil"
+					}
+					return strconv.Itoa(bat.RowCount())
+				}()))
+		}
 
 		v2.TxnBlockReaderDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
@@ -854,12 +858,14 @@ func (r *readerInProgress) Read(
 		return nil, err
 	}
 	if state == End {
+		status = End
 		return nil, nil
 	}
 	if state == InMem {
+		status = InMem
 		return bat, nil
 	}
-
+	status = Persisted
 	//read block
 	filter := r.withFilterMixin.filterState.filter
 
