@@ -424,6 +424,9 @@ func (h *Handle) HandleCommitMerge(
 		}
 	} else if req.Booking != nil {
 		booking = make(api.TransferMaps, len(req.Booking.Mappings))
+		for i := range booking {
+			booking[i] = make(api.TransferMap)
+		}
 		for i, m := range req.Booking.Mappings {
 			for r, pos := range m.M {
 				booking[i][r] = api.TransferDestPos{

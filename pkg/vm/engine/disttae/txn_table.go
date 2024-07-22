@@ -2723,7 +2723,6 @@ func dumpTransferInfo(ctx context.Context, taskHost *cnMergeTask) (err error) {
 			return err
 		}
 		taskHost.commitEntry.BookingLoc = append(taskHost.commitEntry.BookingLoc, location...)
-		objRowCnt = 0
 	}
 
 	taskHost.commitEntry.Booking = nil
