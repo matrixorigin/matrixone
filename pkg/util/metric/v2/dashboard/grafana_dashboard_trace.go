@@ -152,16 +152,17 @@ func (c *DashboardCreator) initTraceCollectorOverviewRow() dashboard.Option {
 			3,
 			[]string{
 				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_duration_seconds_count", `type="collect"`) + `[$interval]))`,
+				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_duration_seconds_count", `type="consume"`) + `[$interval]))`,
 			},
 			[]string{
 				"collect",
+				"consume",
 			}),
 
 		c.withMultiGraph(
 			"rate (sum) - no collect",
 			3,
 			[]string{
-				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_duration_seconds_count", `type="consume"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_duration_seconds_count", `type="generate_awake"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_duration_seconds_count", `type="generate_awake_discard"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_duration_seconds_count", `type="generate_delay"`) + `[$interval]))`,
@@ -170,7 +171,6 @@ func (c *DashboardCreator) initTraceCollectorOverviewRow() dashboard.Option {
 				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_duration_seconds_count", `type="export"`) + `[$interval]))`,
 			},
 			[]string{
-				"consume",
 				"generate_awake",
 				"generate_awake_discard",
 				"generate_delay",
