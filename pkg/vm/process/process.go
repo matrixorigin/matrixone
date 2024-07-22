@@ -117,22 +117,6 @@ func (wreg *WaitRegister) CleanChannel(m *mpool.MPool) {
 	}
 }
 
-func (wreg *WaitRegister) MarshalBinary() ([]byte, error) {
-	return nil, nil
-}
-
-func (wreg *WaitRegister) UnmarshalBinary(_ []byte) error {
-	return nil
-}
-
-func (proc *Process) MarshalBinary() ([]byte, error) {
-	return nil, nil
-}
-
-func (proc *Process) UnmarshalBinary(_ []byte) error {
-	return nil
-}
-
 func (proc *Process) QueryId() string {
 	return proc.Base.Id
 }
