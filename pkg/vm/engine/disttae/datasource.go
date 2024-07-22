@@ -620,6 +620,8 @@ type DataSource interface {
 
 	// ApplyTombstones Apply tombstones into rows.
 	ApplyTombstones(rows []types.Rowid) ([]int64, error)
+
+	Close()
 }
 
 type RemoteDataSource struct {
@@ -664,6 +666,10 @@ func (rs *RemoteDataSource) Next(
 	}
 	rs.cursor++
 	return rs.data.GetDataBlk(rs.cursor - 1), Persisted, nil
+}
+
+func (rs *RemoteDataSource) Close() {
+
 }
 
 func (rs *RemoteDataSource) HasTombstones(bid types.Blockid) bool {
@@ -721,6 +727,8 @@ type LocalDataSource struct {
 	// cn unCommitted s3 flushed object will be collect during txnTable.Ranges
 	ranges []*objectio.BlockInfoInProgress
 	pState *logtailreplay.PartitionState
+
+	pStateRowsInsIter logtailreplay.RowsIter
 
 	// load deletes only once for each blk
 	prevBlockId types.Blockid
@@ -870,6 +878,10 @@ func (ls *LocalDataSource) prepareDeletes(blockId types.Blockid) (err error) {
 	return nil
 }
 
+func (ls *LocalDataSource) Close() {
+	ls.pStateRowsInsIter.Close()
+}
+
 // ApplyTombstones check if any deletes exist in
 //  1. unCommittedInmemDeletes:
 //     a. workspace writes
@@ -934,6 +946,10 @@ func (ls *LocalDataSource) Next(
 	memFilter MemPKFilterInProgress, mp *mpool.MPool, vp engine.VectorPool,
 	bat *batch.Batch) (*objectio.BlockInfoInProgress, DataState, error) {
 
+	if len(cols) == 0 {
+		return nil, End, nil
+	}
+
 	for {
 		switch ls.iteratePhase {
 		case InMem:
@@ -977,7 +993,7 @@ func (ls *LocalDataSource) iterateInMemData(
 
 	bat.SetRowCount(0)
 
-	if err := ls.filterUncommittedInMemInserts(mp, bat); err != nil {
+	if err := ls.filterUncommittedInMemInserts(seqNums, mp, bat); err != nil {
 		return err
 	}
 
@@ -992,7 +1008,7 @@ func (ls *LocalDataSource) iterateInMemData(
 	return nil
 }
 
-func (ls *LocalDataSource) filterUncommittedInMemInserts(mp *mpool.MPool, bat *batch.Batch) error {
+func (ls *LocalDataSource) filterUncommittedInMemInserts(seqNums []uint16, mp *mpool.MPool, bat *batch.Batch) error {
 	if len(ls.unCommittedInmemInsertsBats) == 0 {
 		return nil
 	}
@@ -1001,12 +1017,13 @@ func (ls *LocalDataSource) filterUncommittedInMemInserts(mp *mpool.MPool, bat *b
 	ls.unCommittedInmemInsertsBats = ls.unCommittedInmemInsertsBats[1:]
 
 	insRowIDs := vector.MustFixedCol[types.Rowid](insertsBat.Vecs[0])
+
 	for i, vec := range bat.Vecs {
 		uf := vector.GetUnionOneFunction(*vec.GetType(), mp)
 
 		for j, k := int64(0), int64(insertsBat.RowCount()); j < k; j++ {
 
-			sel, err := ls.ApplyTombstones([]types.Rowid{insRowIDs[i]})
+			sel, err := ls.ApplyTombstones([]types.Rowid{insRowIDs[j]})
 			if err != nil {
 				return err
 			}
@@ -1015,7 +1032,14 @@ func (ls *LocalDataSource) filterUncommittedInMemInserts(mp *mpool.MPool, bat *b
 				continue
 			}
 
-			if err := uf(vec, bat.Vecs[i], j); err != nil {
+			colIdx := int(seqNums[i])
+			if colIdx != objectio.SEQNUM_ROWID {
+				colIdx++
+			} else {
+				colIdx = 0
+			}
+
+			if err = uf(vec, insertsBat.Vecs[colIdx], j); err != nil {
 				return err
 			}
 		}
@@ -1034,7 +1058,6 @@ func (ls *LocalDataSource) filterInMemCommittedInserts(
 		err          error
 		sel          []int64
 		appendedRows uint32
-		insIter      logtailreplay.RowsIter
 	)
 
 	//for idx := range seqNums {
@@ -1050,16 +1073,16 @@ func (ls *LocalDataSource) filterInMemCommittedInserts(
 		appendFunctions[i] = vector.GetUnionOneFunction(colTypes[i], mp)
 	}
 
-	if memFilter.Spec.Move == nil {
-		insIter = ls.pState.NewRowsIter(memFilter.TS, nil, false)
-	} else {
-		insIter = ls.pState.NewPrimaryKeyIter(memFilter.TS, memFilter.Spec)
+	if ls.pStateRowsInsIter == nil {
+		if memFilter.Spec.Move == nil {
+			ls.pStateRowsInsIter = ls.pState.NewRowsIter(memFilter.TS, nil, false)
+		} else {
+			ls.pStateRowsInsIter = ls.pState.NewPrimaryKeyIter(memFilter.TS, memFilter.Spec)
+		}
 	}
 
-	defer insIter.Close()
-
-	for insIter.Next() && appendedRows < options.DefaultBlockMaxRows {
-		entry := insIter.Entry()
+	for ls.pStateRowsInsIter.Next() && appendedRows < options.DefaultBlockMaxRows {
+		entry := ls.pStateRowsInsIter.Entry()
 
 		sel, err = ls.ApplyTombstones([]types.Rowid{entry.RowID})
 		if err != nil {
