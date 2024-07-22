@@ -131,6 +131,10 @@ func (b *BlockInfoInProgress) SetMetaLocation(metaLoc Location) {
 	b.MetaLoc = *(*[LocationLen]byte)(unsafe.Pointer(&metaLoc[0]))
 }
 
+func (b *BlockInfoInProgress) IsMemBlk() bool {
+	return bytes.Compare(EncodeBlockInfoInProgress(*b), EmptyBlockInfoInProgressBytes) == 0
+}
+
 func EncodeBlockInfoInProgress(info BlockInfoInProgress) []byte {
 	return unsafe.Slice((*byte)(unsafe.Pointer(&info)), BlockInfoSizeInProgress)
 }

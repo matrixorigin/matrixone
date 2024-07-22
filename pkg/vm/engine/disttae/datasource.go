@@ -562,6 +562,9 @@ func (rd1 *relationDataV1) DataBlkSlice(i, j int) engine.RelData {
 func (rd1 *relationDataV1) GroupByPartitionNum() map[int16]engine.RelData {
 	ret := make(map[int16]engine.RelData)
 	for _, blk := range rd1.blkList {
+		if blk.IsMemBlk() {
+			continue
+		}
 		partitionNum := blk.PartitionNum
 		if _, ok := ret[partitionNum]; !ok {
 			ret[partitionNum] = &relationDataV1{
@@ -570,6 +573,7 @@ func (rd1 *relationDataV1) GroupByPartitionNum() map[int16]engine.RelData {
 				tombstoneTyp: rd1.tombstoneTyp,
 				tombstones:   rd1.tombstones,
 			}
+			ret[partitionNum].AppendDataBlk(&objectio.EmptyBlockInfoInProgress)
 		}
 		ret[partitionNum].AppendDataBlk(blk)
 	}
