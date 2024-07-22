@@ -795,6 +795,8 @@ type Engine interface {
 	Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo
 
 	GetMessageCenter() any
+
+	GetService() string
 }
 
 type VectorPool interface {

@@ -25,10 +25,7 @@ import (
 	"time"
 	"unsafe"
 
-	"go.uber.org/zap"
-
 	"github.com/docker/go-units"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -59,6 +56,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 const (
@@ -781,9 +779,10 @@ func (tbl *txnTable) RangesInProgress(ctx context.Context, exprs []*plan.Expr, t
 //   - exprs: A slice of expressions used to filter data.
 //   - txnOffset: Transaction offset used to specify the starting position for reading data.
 func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr, txnOffset int) (ranges engine.Ranges, err error) {
+	sid := tbl.proc.Load().GetService()
 	start := time.Now()
 	seq := tbl.db.op.NextSequence()
-	trace.GetService().AddTxnDurationAction(
+	trace.GetService(sid).AddTxnDurationAction(
 		tbl.db.op,
 		client.RangesEvent,
 		seq,
@@ -833,7 +832,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr, txnOffset i
 			)
 		}
 
-		trace.GetService().AddTxnAction(
+		trace.GetService(sid).AddTxnAction(
 			tbl.db.op,
 			client.RangesEvent,
 			seq,
@@ -842,7 +841,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr, txnOffset i
 			"blocks",
 			err)
 
-		trace.GetService().AddTxnDurationAction(
+		trace.GetService(sid).AddTxnDurationAction(
 			tbl.db.op,
 			client.RangesEvent,
 			seq,
@@ -2785,7 +2784,7 @@ func (tbl *txnTable) transferDeletes(
 	deleteObjs,
 	createObjs map[objectio.ObjectNameShort]struct{}) error {
 	var blks []objectio.BlockInfo
-
+	sid := tbl.proc.Load().GetService()
 	{
 		fs, err := fileservice.Get[fileservice.FileService](
 			tbl.proc.Load().GetFileService(),
@@ -2856,7 +2855,7 @@ func (tbl *txnTable) transferDeletes(
 					}
 					if ok {
 						newBlockID, _ := newId.Decode()
-						trace.GetService().ApplyTransferRowID(
+						trace.GetService(sid).ApplyTransferRowID(
 							tbl.db.op.Txn().ID,
 							tbl.tableId,
 							rowids[i][:],

@@ -123,6 +123,7 @@ type IDGenerator interface {
 
 type Engine struct {
 	sync.RWMutex
+	service  string
 	mp       *mpool.MPool
 	fs       fileservice.FileService
 	ls       lockservice.LockService
@@ -401,7 +402,7 @@ func (txn *Transaction) WriteOffset() uint64 {
 func (txn *Transaction) Adjust(writeOffset uint64) error {
 	start := time.Now()
 	seq := txn.op.NextSequence()
-	trace.GetService().AddTxnDurationAction(
+	trace.GetService(txn.proc.GetService()).AddTxnDurationAction(
 		txn.op,
 		client.WorkspaceAdjustEvent,
 		seq,
@@ -409,7 +410,7 @@ func (txn *Transaction) Adjust(writeOffset uint64) error {
 		0,
 		nil)
 	defer func() {
-		trace.GetService().AddTxnDurationAction(
+		trace.GetService(txn.proc.GetService()).AddTxnDurationAction(
 			txn.op,
 			client.WorkspaceAdjustEvent,
 			seq,
@@ -439,7 +440,7 @@ func (txn *Transaction) traceWorkspaceLocked(commit bool) {
 		index = -1
 	}
 	idx := 0
-	trace.GetService().TxnAdjustWorkspace(
+	trace.GetService(txn.proc.GetService()).TxnAdjustWorkspace(
 		txn.op,
 		index,
 		func() (tableID uint64, typ string, bat *batch.Batch, more bool) {
@@ -605,7 +606,7 @@ func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) error
 	}
 	if !commit && txn.op.Txn().IsRCIsolation() &&
 		(txn.GetSQLCount() > 0 || needResetSnapshot) {
-		trace.GetService().TxnUpdateSnapshot(
+		trace.GetService(txn.proc.GetService()).TxnUpdateSnapshot(
 			txn.op,
 			0,
 			"before execute")

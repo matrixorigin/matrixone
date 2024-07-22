@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -144,7 +143,7 @@ type PushClient struct {
 	receiver    []routineController
 	eng         *Engine
 
-	LogtailRPCClientFactory func(string, morpc.RPCClient) (morpc.RPCClient, morpc.Stream, error)
+	LogtailRPCClientFactory func(string, string, morpc.RPCClient) (morpc.RPCClient, morpc.Stream, error)
 }
 
 type State struct {
@@ -216,11 +215,10 @@ func (c *connector) run(ctx context.Context) {
 func (c *PushClient) init(
 	serviceAddr string,
 	timestampWaiter client.TimestampWaiter,
-	serviceID string,
 	e *Engine,
 ) error {
 
-	c.serviceID = serviceID
+	c.serviceID = e.GetService()
 	c.timestampWaiter = timestampWaiter
 	if c.subscriber == nil {
 		c.subscriber = new(logTailSubscriber)
@@ -249,7 +247,7 @@ func (c *PushClient) init(
 	}
 	c.initialized = true
 
-	return c.subscriber.init(serviceAddr, c.LogtailRPCClientFactory)
+	return c.subscriber.init(e.GetService(), serviceAddr, c.LogtailRPCClientFactory)
 }
 
 func (c *PushClient) validLogTailMustApplied(snapshotTS timestamp.Timestamp) {
@@ -658,7 +656,7 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 				time.Sleep(time.Second)
 
 				tnLogTailServerBackend := e.getTNServices()[0].LogTailServiceAddress
-				if err := c.init(tnLogTailServerBackend, c.timestampWaiter, c.serviceID, e); err != nil {
+				if err := c.init(tnLogTailServerBackend, c.timestampWaiter, e); err != nil {
 					logutil.Errorf("%s init push client failed: %v", logTag, err)
 					continue
 				}
@@ -685,7 +683,7 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 		}
 
 		tnLogTailServerBackend := e.getTNServices()[0].LogTailServiceAddress
-		if err := c.init(tnLogTailServerBackend, c.timestampWaiter, c.serviceID, e); err != nil {
+		if err := c.init(tnLogTailServerBackend, c.timestampWaiter, e); err != nil {
 			logutil.Errorf("%s rebuild the cn log tail client failed, reason: %s", logTag, err)
 			time.Sleep(retryReconnect)
 			continue
@@ -1165,6 +1163,7 @@ func (r *syncLogTailTimestamp) updateTimestamp(
 }
 
 type logTailSubscriber struct {
+	sid           string
 	tnNodeID      int
 	rpcClient     morpc.RPCClient
 	rpcStream     morpc.Stream
@@ -1188,12 +1187,18 @@ type logTailSubscriberResponse struct {
 // XXX generate a rpc client and new a stream.
 // we should hide these code into service's NewClient method next day.
 func DefaultNewRpcStreamToTnLogTailService(
-	serviceAddr string, rpcClient morpc.RPCClient) (morpc.RPCClient, morpc.Stream, error) {
+	sid string,
+	serviceAddr string,
+	rpcClient morpc.RPCClient,
+) (morpc.RPCClient, morpc.Stream, error) {
 	if rpcClient == nil {
 		logger := logutil.GetGlobalLogger().Named("cn-log-tail-client")
-		codec := morpc.NewMessageCodec(func() morpc.Message {
-			return &service.LogtailResponseSegment{}
-		})
+		codec := morpc.NewMessageCodec(
+			sid,
+			func() morpc.Message {
+				return &service.LogtailResponseSegment{}
+			},
+		)
 		factory := morpc.NewGoettyBasedBackendFactory(codec,
 			morpc.WithBackendGoettyOptions(
 				goetty.WithSessionRWBUfferSize(1<<20, 1<<20),
@@ -1220,10 +1225,13 @@ func DefaultNewRpcStreamToTnLogTailService(
 	return rpcClient, stream, nil
 }
 
-func (s *logTailSubscriber) init(serviceAddr string,
-	rpcStreamFactory func(string, morpc.RPCClient) (morpc.RPCClient, morpc.Stream, error)) (err error) {
+func (s *logTailSubscriber) init(
+	sid string,
+	serviceAddr string,
+	rpcStreamFactory func(string, string, morpc.RPCClient) (morpc.RPCClient, morpc.Stream, error)) (err error) {
 	// XXX we assume that we have only 1 tn now.
 	s.tnNodeID = 0
+	s.sid = sid
 
 	// clear the old status.
 	s.sendSubscribe = clientIsPreparing
@@ -1233,7 +1241,7 @@ func (s *logTailSubscriber) init(serviceAddr string,
 		s.logTailClient = nil
 	}
 
-	rpcClient, rpcStream, err := rpcStreamFactory(serviceAddr, s.rpcClient)
+	rpcClient, rpcStream, err := rpcStreamFactory(sid, serviceAddr, s.rpcClient)
 	if err != nil {
 		return err
 	}
@@ -1366,7 +1374,7 @@ func (e *Engine) InitLogTailPushModel(ctx context.Context, timestampWaiter clien
 		}
 
 		// get log tail service address.
-		if err := e.pClient.init(logTailServerAddr, timestampWaiter, e.ls.GetServiceID(), e); err != nil {
+		if err := e.pClient.init(logTailServerAddr, timestampWaiter, e); err != nil {
 			logutil.Errorf("%s client init failed, err is %s", logTag, err)
 			continue
 		}

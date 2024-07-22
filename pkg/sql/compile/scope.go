@@ -17,10 +17,9 @@ package compile
 import (
 	"context"
 	"fmt"
-	"strings"
-
 	goruntime "runtime"
 	"runtime/debug"
+	"strings"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -30,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -56,6 +56,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
@@ -118,6 +119,11 @@ func (s *Scope) resetForReuse(c *Compile) (err error) {
 		s.Proc.Base = c.proc.Base
 		s.Proc.Ctx = newctx
 		s.Proc.Cancel = cancel
+	}
+
+	for i := 0; i < len(s.Proc.Reg.MergeReceivers); i++ {
+		s.Proc.Reg.MergeReceivers[i].Ctx = s.Proc.Ctx
+		s.Proc.Reg.MergeReceivers[i].CleanChannel(s.Proc.GetMPool())
 	}
 
 	vm.HandleAllOp(s.RootOp, func(parentOp vm.Operator, op vm.Operator) error {
@@ -360,7 +366,7 @@ func (s *Scope) RemoteRun(c *Compile) error {
 		return s.ParallelRun(c)
 	}
 
-	runtime.ProcessLevelRuntime().Logger().
+	runtime.ServiceRuntime(s.Proc.GetService()).Logger().
 		Debug("remote run pipeline",
 			zap.String("local-address", c.addr),
 			zap.String("remote-address", s.NodeInfo.Addr))
@@ -627,14 +633,6 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 				case process.RuntimeFilter_PASS:
 					continue
 				case process.RuntimeFilter_DROP:
-					// FIXME: Should give an empty "Data" and then early return
-					s.NodeInfo.Data = nil
-					s.NodeInfo.NeedExpandRanges = false
-					s.DataSource.FilterExpr = plan2.MakeFalseExpr()
-					fmt.Printf("xxxx runtime filter drop, "+
-						"set s.NodeInfo.data=nil, neeedExpandRanges=false:, txn:%s, table:%s",
-						c.proc.GetTxnOperator().Txn().DebugString(),
-						s.DataSource.TableDef.Name)
 					return nil
 				case process.RuntimeFilter_IN:
 					inExpr := plan2.MakeInExpr(c.proc.Ctx, spec.Expr, msg.Card, msg.Data, spec.MatchPrefix)
@@ -706,7 +704,6 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		//FIXME:: Do need to attache tombstones? No, because the scope runs on local CN
 		//relData.AttachTombstones()
 		s.NodeInfo.Data = relData
-		s.NodeInfo.NeedExpandRanges = false
 
 	} else if len(inExprList) > 0 {
 		fmt.Printf("xxxx Before appyly run time filter, txn:%s, table:%s, blkCnt:%d, hasMemBlk:%v",
@@ -1108,7 +1105,13 @@ func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMess
 		errSubmit := ants.Submit(
 			func() {
 
-				sender, err := newMessageSenderOnClient(s.Proc.Ctx, fromAddr, s.Proc.Mp(), nil)
+				sender, err := newMessageSenderOnClient(
+					s.Proc.Ctx,
+					s.Proc.GetService(),
+					fromAddr,
+					s.Proc.Mp(),
+					nil,
+				)
 				if err != nil {
 					closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], nil)
 					return

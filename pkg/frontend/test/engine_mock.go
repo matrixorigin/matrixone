@@ -1514,6 +1514,20 @@ func (mr *MockEngineMockRecorder) GetRelationById(ctx, op, tableId interface{}) 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetRelationById", reflect.TypeOf((*MockEngine)(nil).GetRelationById), ctx, op, tableId)
 }
 
+// GetService mocks base method.
+func (m *MockEngine) GetService() string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetService")
+	ret0, _ := ret[0].(string)
+	return ret0
+}
+
+// GetService indicates an expected call of GetService.
+func (mr *MockEngineMockRecorder) GetService() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetService", reflect.TypeOf((*MockEngine)(nil).GetService))
+}
+
 // Hints mocks base method.
 func (m *MockEngine) Hints() engine.Hints {
 	m.ctrl.T.Helper()

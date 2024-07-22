@@ -78,7 +78,7 @@ func TestCheckExprIsZonemappable(t *testing.T) {
 
 func TestEvalZonemapFilter(t *testing.T) {
 	m := mpool.MustNewNoFixed(t.Name())
-	proc := testutil.NewProcessWithMPool(m)
+	proc := testutil.NewProcessWithMPool("", m)
 	type myCase = struct {
 		exprs  []*plan.Expr
 		meta   objectio.BlockObject
@@ -365,7 +365,7 @@ func TestForeachBlkInObjStatsList(t *testing.T) {
 
 func TestGetPKExpr(t *testing.T) {
 	m := mpool.MustNewNoFixed(t.Name())
-	proc := testutil.NewProcessWithMPool(m)
+	proc := testutil.NewProcessWithMPool("", m)
 	type myCase struct {
 		desc     []string
 		exprs    []*plan.Expr
@@ -589,7 +589,7 @@ func TestGetPKExpr(t *testing.T) {
 
 func TestGetPkExprValue(t *testing.T) {
 	m := mpool.MustNewZeroNoFixed()
-	proc := testutil.NewProcessWithMPool(m)
+	proc := testutil.NewProcessWithMPool("", m)
 	type testCase struct {
 		desc       []string
 		exprs      []*plan.Expr
@@ -751,7 +751,7 @@ func TestGetPkExprValue(t *testing.T) {
 
 func TestEvalExprListToVec(t *testing.T) {
 	m := mpool.MustNewZeroNoFixed()
-	proc := testutil.NewProcessWithMPool(m)
+	proc := testutil.NewProcessWithMPool("", m)
 	type testCase struct {
 		desc     []string
 		oids     []types.T
@@ -875,7 +875,7 @@ func Test_removeIf(t *testing.T) {
 
 func Test_ConstructBasePKFilter(t *testing.T) {
 	m := mpool.MustNewNoFixed(t.Name())
-	proc := testutil.NewProcessWithMPool(m)
+	proc := testutil.NewProcessWithMPool("", m)
 	exprStrings := []string{
 		"a=10",
 		"a=20 and a=10",

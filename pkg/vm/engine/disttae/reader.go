@@ -166,7 +166,7 @@ func newBlockReader(
 	proc *process.Process,
 ) *blockReader {
 	for _, blk := range blks {
-		trace.GetService().TxnReadBlock(
+		trace.GetService(proc.GetService()).TxnReadBlock(
 			proc.GetTxnOperator(),
 			tableDef.TblId,
 			blk.BlockID[:])
