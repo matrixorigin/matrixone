@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
@@ -888,6 +889,9 @@ func constructJoin(n *plan.Node, typs []types.Type, proc *process.Process) *join
 			arg.JoinMapTag = n.SendMsgList[i].MsgTag
 		}
 	}
+	if arg.JoinMapTag <= 0 {
+		panic("wrong joinmap tag!")
+	}
 	return arg
 }
 
@@ -914,6 +918,9 @@ func constructSemi(n *plan.Node, typs []types.Type, proc *process.Process) *semi
 			arg.JoinMapTag = n.SendMsgList[i].MsgTag
 		}
 	}
+	if arg.JoinMapTag <= 0 {
+		panic("wrong joinmap tag!")
+	}
 	return arg
 }
 
@@ -935,6 +942,9 @@ func constructLeft(n *plan.Node, typs []types.Type, proc *process.Process) *left
 		if n.SendMsgList[i].MsgType == int32(process.MsgJoinMap) {
 			arg.JoinMapTag = n.SendMsgList[i].MsgTag
 		}
+	}
+	if arg.JoinMapTag <= 0 {
+		panic("wrong joinmap tag!")
 	}
 	return arg
 }
@@ -959,6 +969,9 @@ func constructRight(n *plan.Node, left_typs, right_typs []types.Type, proc *proc
 			arg.JoinMapTag = n.SendMsgList[i].MsgTag
 		}
 	}
+	if arg.JoinMapTag <= 0 {
+		panic("wrong joinmap tag!")
+	}
 	return arg
 }
 
@@ -982,6 +995,9 @@ func constructRightSemi(n *plan.Node, right_typs []types.Type, proc *process.Pro
 			arg.JoinMapTag = n.SendMsgList[i].MsgTag
 		}
 	}
+	if arg.JoinMapTag <= 0 {
+		panic("wrong joinmap tag!")
+	}
 	return arg
 }
 
@@ -1004,6 +1020,9 @@ func constructRightAnti(n *plan.Node, right_typs []types.Type, proc *process.Pro
 			arg.JoinMapTag = n.SendMsgList[i].MsgTag
 		}
 	}
+	if arg.JoinMapTag <= 0 {
+		panic("wrong joinmap tag!")
+	}
 	return arg
 }
 
@@ -1024,6 +1043,9 @@ func constructSingle(n *plan.Node, typs []types.Type, proc *process.Process) *si
 		if n.SendMsgList[i].MsgType == int32(process.MsgJoinMap) {
 			arg.JoinMapTag = n.SendMsgList[i].MsgTag
 		}
+	}
+	if arg.JoinMapTag <= 0 {
+		panic("wrong joinmap tag!")
 	}
 	return arg
 }
@@ -1061,6 +1083,9 @@ func constructAnti(n *plan.Node, typs []types.Type, proc *process.Process) *anti
 		if n.SendMsgList[i].MsgType == int32(process.MsgJoinMap) {
 			arg.JoinMapTag = n.SendMsgList[i].MsgTag
 		}
+	}
+	if arg.JoinMapTag <= 0 {
+		panic("wrong joinmap tag!")
 	}
 	return arg
 }
