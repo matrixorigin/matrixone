@@ -172,6 +172,10 @@ func (bp *BaseProcess) GetContextBase() *QueryBaseContext {
 	return &bp.sqlContext
 }
 
+func (qbCtx *QueryBaseContext) GetTopCtx() context.Context {
+	return qbCtx.outerContext
+}
+
 // ReplaceTopCtx sets the new top context.
 func (qbCtx *QueryBaseContext) ReplaceTopCtx(topCtx context.Context) {
 	qbCtx.outerContext = topCtx

@@ -590,7 +590,7 @@ func runLockOpTest(
 					txnOp, err := c.New(ctx, timestamp.Timestamp{})
 					require.NoError(t, err)
 
-					proc := process.New(
+					proc := process.NewTopProcess(
 						ctx,
 						mpool.MustNewZero(),
 						c,

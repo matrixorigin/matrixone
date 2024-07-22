@@ -284,7 +284,7 @@ func (exec *txnExecutor) Exec(
 		}
 	}
 
-	proc := process.New(
+	proc := process.NewTopProcess(
 		exec.ctx,
 		exec.s.mp,
 		exec.s.txnClient,
@@ -381,7 +381,7 @@ func (exec *txnExecutor) LockTable(table string) error {
 	if err != nil {
 		return err
 	}
-	proc := process.New(
+	proc := process.NewTopProcess(
 		ctx,
 		exec.s.mp,
 		exec.s.txnClient,

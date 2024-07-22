@@ -216,7 +216,7 @@ func doComQueryInBack(
 	//the ses.GetUserName returns the user_name with the account_name.
 	//here,we only need the user_name.
 	userNameOnly := rootName
-	proc := process.New(
+	proc := process.NewTopProcess(
 		execCtx.reqCtx,
 		backSes.pool,
 		getGlobalPu().TxnClient,

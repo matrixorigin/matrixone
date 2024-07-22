@@ -91,7 +91,7 @@ func Test_EncodeProcessInfo(t *testing.T) {
 	txnOperator.EXPECT().Snapshot().AnyTimes()
 
 	a := reuse.Alloc[process.AnalyzeInfo](nil)
-	proc := process.New(defines.AttachAccountId(context.TODO(), catalog.System_Account),
+	proc := process.NewTopProcess(defines.AttachAccountId(context.TODO(), catalog.System_Account),
 		nil,
 		nil,
 		txnOperator,
@@ -372,7 +372,7 @@ func Test_convertToPlanAnalyzeInfo(t *testing.T) {
 
 func Test_decodeBatch(t *testing.T) {
 	mp := &mpool.MPool{}
-	vp := process.New(
+	vp := process.NewTopProcess(
 		context.TODO(),
 		nil,
 		nil,

@@ -376,7 +376,7 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	}
 
 	runningCtx, runningCancel := context.WithDeadline(receiver.connectionCtx, deadline)
-	proc := process.New(
+	proc := process.NewTopProcess(
 		runningCtx,
 		mp,
 		pHelper.txnClient,

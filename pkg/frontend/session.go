@@ -534,7 +534,7 @@ func NewSession(
 			panic(err)
 		}
 	}
-	ses.proc = process.New(
+	ses.proc = process.NewTopProcess(
 		context.TODO(),
 		ses.pool,
 		getGlobalPu().TxnClient,
