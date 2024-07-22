@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -694,16 +695,31 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		if err != nil {
 			return err
 		}
+		logutil.Infof("xxxx expand ranges in run time filter, txn:%s, table:%s, blkCnt:%d, hasMemBlk:%v",
+			c.proc.GetTxnOperator().Txn().DebugString(),
+			s.DataSource.TableDef.Name,
+			relData.BlkCnt(),
+			relData.GetDataBlk(0).IsMemBlk())
 		//FIXME:: Do need to attache tombstones? No, because the scope runs on local CN
 		//relData.AttachTombstones()
 		s.NodeInfo.Data = relData
 		s.NodeInfo.NeedExpandRanges = false
 
 	} else if len(inExprList) > 0 {
+		logutil.Infof("xxxx Before appyly run time filter, txn:%s, table:%s, blkCnt:%d, hasMemBlk:%v",
+			c.proc.GetTxnOperator().Txn().DebugString(),
+			s.DataSource.TableDef.Name,
+			s.NodeInfo.Data.BlkCnt(),
+			s.NodeInfo.Data.GetDataBlk(0).IsMemBlk())
 		s.NodeInfo.Data, err = ApplyRuntimeFilters(c.proc.Ctx, s.Proc, s.DataSource.TableDef, s.NodeInfo.Data, exprs, filters)
 		if err != nil {
 			return err
 		}
+		logutil.Infof("xxxx after appyly run time filter, txn:%s, table:%s, blkCnt:%d, hasMemBlk:%v",
+			c.proc.GetTxnOperator().Txn().DebugString(),
+			s.DataSource.TableDef.Name,
+			s.NodeInfo.Data.BlkCnt(),
+			s.NodeInfo.Data.GetDataBlk(0).IsMemBlk())
 	}
 	return nil
 }
@@ -1233,6 +1249,10 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 		if len(s.DataSource.OrderBy) > 0 {
 			scanUsedCpuNumber = 1
 		}
+		sql := c.originSQL
+		if sql == "" {
+			sql = c.sql
+		}
 
 		readers, err = s.DataSource.Rel.BuildReaders(
 			c.proc.Ctx,
@@ -1241,6 +1261,17 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 			s.NodeInfo.Data,
 			scanUsedCpuNumber,
 			s.TxnOffset)
+		logutil.Infof("xxxx start to build readers, "+
+			"sql:%s, txn:%s, table:%s, scanusednum:%d, readers num :%d, blkCnt:%d, hasMemBlk:%v, err:%v",
+			sql,
+			c.proc.GetTxnOperator().Txn().DebugString(),
+			s.DataSource.TableDef.Name,
+			scanUsedCpuNumber,
+			len(readers),
+			s.NodeInfo.Data.BlkCnt(),
+			s.NodeInfo.Data.GetDataBlk(0).IsMemBlk(),
+			err)
+
 		if err != nil {
 			return
 		}
@@ -1385,6 +1416,11 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 
 	//for partition table.
 	if len(readers) != scanUsedCpuNumber {
+		logutil.Infof("xxxx start to merge readers, txn:%s, table:%s,cpu num:%d, readers:%d",
+			c.proc.GetTxnOperator().Txn().DebugString(),
+			s.DataSource.TableDef.Name,
+			scanUsedCpuNumber,
+			len(readers))
 		newReaders := make([]engine.Reader, 0, scanUsedCpuNumber)
 		step := len(readers) / scanUsedCpuNumber
 		for i := 0; i < len(readers); i += step {

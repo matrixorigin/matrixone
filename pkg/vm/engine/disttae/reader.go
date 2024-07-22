@@ -707,7 +707,7 @@ func NewReaderInProgress(
 	tableDef *plan.TableDef,
 	ts timestamp.Timestamp,
 	expr *plan.Expr,
-//orderedScan bool, // it should be included in filter or expr.
+	//orderedScan bool, // it should be included in filter or expr.
 	source DataSource,
 ) *readerInProgress {
 
@@ -789,6 +789,11 @@ func (r *readerInProgress) Read(
 			rowIDVec.Free(mp)
 			bat.Vecs = append(bat.Vecs[:r.columns.rowIdColIdx], bat.Vecs[r.columns.rowIdColIdx+1:]...)
 		}
+
+		logutil.Infof("xxxx txn:%s, table:%s, read batch:%d",
+			r.proc.GetTxnOperator().Txn().DebugString(),
+			r.tableDef.Name,
+			bat.RowCount())
 
 		v2.TxnBlockReaderDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
