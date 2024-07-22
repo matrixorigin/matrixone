@@ -17,7 +17,6 @@ package disttae
 import (
 	"context"
 	"sort"
-	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -708,7 +707,7 @@ func NewReaderInProgress(
 	tableDef *plan.TableDef,
 	ts timestamp.Timestamp,
 	expr *plan.Expr,
-	//orderedScan bool, // it should be included in filter or expr.
+//orderedScan bool, // it should be included in filter or expr.
 	source DataSource,
 ) *readerInProgress {
 
@@ -793,11 +792,6 @@ func (r *readerInProgress) Read(
 
 		v2.TxnBlockReaderDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
-
-	if strings.Contains(r.withFilterMixin.tableDef.Name, "mo_database") {
-		x := 0
-		x++
-	}
 
 	// for ordered scan, sort blocklist by zonemap info, and then filter by zonemap
 	//if len(r.OrderBy) > 0 {
