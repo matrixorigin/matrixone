@@ -875,3 +875,7 @@ func (e *Engine) GetMessageCenter() any {
 func (e *Engine) FS() fileservice.FileService {
 	return e.fs
 }
+
+func (e *Engine) PackerPool() *fileservice.Pool[*types.Packer] {
+	return e.packerPool
+}

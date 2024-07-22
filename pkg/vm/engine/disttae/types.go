@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -163,6 +164,10 @@ type Engine struct {
 
 	//for message on multiCN, use uuid to get the messageBoard
 	messageCenter *process.MessageCenter
+}
+
+func (t *Transaction) String() string {
+	return fmt.Sprintf("writes %v", t.writes)
 }
 
 // Transaction represents a transaction
@@ -579,6 +584,10 @@ func (txn *Transaction) IncrSQLCount() {
 	v2.TxnLifeCycleStatementsTotalHistogram.Observe(float64(n))
 }
 
+func (txn *Transaction) GetProc() *process.Process {
+	return txn.proc
+}
+
 func (txn *Transaction) GetSQLCount() uint64 {
 	return txn.sqlCount.Load()
 }
@@ -770,8 +779,9 @@ type withFilterMixin struct {
 		colTypes []types.Type
 		// colNulls []bool
 
-		pkPos int // -1 means no primary key in columns
-
+		pkPos                    int // -1 means no primary key in columns
+		extraRowIdAdded          bool
+		rowIdColIdx              int
 		indexOfFirstSortedColumn int
 	}
 
@@ -826,6 +836,10 @@ type blockMergeReader struct {
 	loaded     bool
 	pkidx      int
 	deletaLocs map[string][]objectio.Location
+}
+
+type SingleReaderInProgress struct {
+	R *readerInProgress
 }
 
 type readerInProgress struct {

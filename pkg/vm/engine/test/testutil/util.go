@@ -26,7 +26,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	testutil2 "github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -90,7 +94,7 @@ func GetDefaultTNShard() metadata.TNShard {
 	}
 }
 
-func TableDefBySchema(schema *catalog.Schema) ([]engine.TableDef, error) {
+func EngineTableDefBySchema(schema *catalog.Schema) ([]engine.TableDef, error) {
 	var defs = make([]engine.TableDef, 0)
 	for idx := range schema.ColDefs {
 		if schema.ColDefs[idx].Name == catalog2.Row_ID {
@@ -123,4 +127,79 @@ func TableDefBySchema(schema *catalog.Schema) ([]engine.TableDef, error) {
 	}
 
 	return defs, nil
+}
+
+func PlanTableDefBySchema(schema *catalog.Schema, tableId uint64, databaseName string) plan.TableDef {
+	tblDef := plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{},
+	}
+
+	tblDef.Name = schema.Name
+	tblDef.TblId = tableId
+
+	for idx := range schema.ColDefs {
+		tblDef.Cols = append(tblDef.Cols, &plan.ColDef{
+			ColId:     uint64(schema.ColDefs[idx].Idx),
+			Name:      schema.ColDefs[idx].Name,
+			Hidden:    schema.ColDefs[idx].Hidden,
+			NotNull:   !schema.ColDefs[idx].Nullable(),
+			TblName:   schema.Name,
+			DbName:    databaseName,
+			ClusterBy: schema.ColDefs[idx].ClusterBy,
+			Primary:   schema.ColDefs[idx].IsPrimary(),
+			Pkidx:     int32(schema.GetPrimaryKey().Idx),
+			Typ: plan.Type{
+				Id:          int32(schema.ColDefs[idx].Type.Oid),
+				NotNullable: !schema.ColDefs[idx].Nullable(),
+				Width:       schema.ColDefs[idx].Type.Oid.ToType().Width,
+			},
+			Seqnum: uint32(schema.ColDefs[idx].Idx),
+		})
+	}
+
+	tblDef.Pkey.PkeyColName = schema.GetPrimaryKey().Name
+	tblDef.Pkey.PkeyColId = uint64(schema.GetPrimaryKey().Idx)
+	tblDef.Pkey.Names = append(tblDef.Pkey.Names, schema.GetPrimaryKey().Name)
+	tblDef.Pkey.CompPkeyCol = nil
+	tblDef.Pkey.Cols = append(tblDef.Pkey.Cols, uint64(schema.GetPrimaryKey().Idx))
+
+	tblDef.Name2ColIndex = make(map[string]int32)
+	for idx := range schema.ColDefs {
+		tblDef.Name2ColIndex[schema.ColDefs[idx].Name] = int32(schema.ColDefs[idx].Idx)
+	}
+
+	return tblDef
+}
+
+func NewDefaultTableReader(
+	ctx context.Context,
+	rel engine.Relation,
+	databaseName string,
+	schema *catalog.Schema,
+	expr *plan.Expr,
+	mp *mpool.MPool,
+	ranges engine.RelData,
+	snapshotTS timestamp.Timestamp,
+	e *disttae.Engine,
+	txnOffset int,
+) (*disttae.SingleReaderInProgress, error) {
+
+	tblDef := PlanTableDefBySchema(schema, rel.GetTableID(ctx), databaseName)
+
+	source, err := disttae.BuildLocalDataSource(ctx, rel, ranges, txnOffset)
+	if err != nil {
+		return nil, err
+	}
+
+	r := disttae.NewReaderInProgress(
+		ctx,
+		testutil2.NewProcessWithMPool(mp),
+		e,
+		&tblDef,
+		snapshotTS,
+		expr,
+		source,
+	)
+
+	return &disttae.SingleReaderInProgress{R: r}, nil
 }

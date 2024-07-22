@@ -196,7 +196,7 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 	}
 
 	deletes := make(map[types.Rowid]struct{})
-	tbl.getTxn().forEachTableWrites(
+	tbl.getTxn().ForEachTableWrites(
 		tbl.db.databaseId,
 		tbl.tableId,
 		tbl.getTxn().GetSnapshotWriteOffset(),
@@ -614,7 +614,7 @@ func (tbl *txnTable) CollectTombstones(ctx context.Context, txnOffset int) (engi
 	//collect in memory
 
 	//collect uncommitted in-memory tombstones from txn.writes
-	tbl.getTxn().forEachTableWrites(tbl.db.databaseId, tbl.tableId,
+	tbl.getTxn().ForEachTableWrites(tbl.db.databaseId, tbl.tableId,
 		offset, func(entry Entry) {
 			if entry.typ == INSERT || entry.typ == INSERT_TXN {
 				return
@@ -1283,7 +1283,7 @@ func (tbl *txnTable) collectUnCommittedObjects(txnOffset int) []objectio.ObjectS
 		txnOffset = tbl.getTxn().GetSnapshotWriteOffset()
 	}
 
-	tbl.getTxn().forEachTableWrites(
+	tbl.getTxn().ForEachTableWrites(
 		tbl.db.databaseId,
 		tbl.tableId,
 		txnOffset,
@@ -1345,7 +1345,7 @@ func (tbl *txnTable) collectDirtyBlocks(
 		txnOffset = tbl.getTxn().GetSnapshotWriteOffset()
 	}
 
-	tbl.getTxn().forEachTableWrites(
+	tbl.getTxn().ForEachTableWrites(
 		tbl.db.databaseId,
 		tbl.tableId,
 		txnOffset,
@@ -2072,6 +2072,23 @@ func (tbl *txnTable) GetDBID(ctx context.Context) uint64 {
 	return tbl.db.databaseId
 }
 
+// for ut
+func BuildLocalDataSource(
+	ctx context.Context, rel engine.Relation,
+	ranges engine.RelData, txnOffset int) (source DataSource, err error) {
+
+	var (
+		ok  bool
+		tbl *txnTable
+	)
+
+	if tbl, ok = rel.(*txnTable); !ok {
+		tbl = rel.(*txnTableDelegate).origin
+	}
+
+	return tbl.buildLocalDataSource(ctx, txnOffset, ranges)
+}
+
 func (tbl *txnTable) buildLocalDataSource(
 	ctx context.Context,
 	txnOffset int,
@@ -2110,6 +2127,7 @@ func (tbl *txnTable) buildLocalDataSource(
 		tbl.tableId,
 		ranges,
 		state,
+		tbl.getTxn().deletedBlocks.offsets,
 		tbl.getTxn().blockId_tn_delete_metaLoc_batch.data,
 		tbl.getTxn().writes[:txnOffset],
 		skipReadMem,
@@ -3145,7 +3163,7 @@ func (tbl *txnTable) getUncommittedRows(
 	deletes map[types.Rowid]struct{},
 ) uint64 {
 	rows := uint64(0)
-	tbl.getTxn().forEachTableWrites(
+	tbl.getTxn().ForEachTableWrites(
 		tbl.db.databaseId,
 		tbl.tableId,
 		tbl.getTxn().GetSnapshotWriteOffset(),

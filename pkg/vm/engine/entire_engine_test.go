@@ -293,6 +293,12 @@ func (e *testEngine) NewBlockReader(_ context.Context, _ int, _ timestamp.Timest
 	return nil, nil
 }
 
+func (e *testEngine) BuildBlockReaders(
+	ctx context.Context, proc any, ts timestamp.Timestamp,
+	expr *plan.Expr, def *plan.TableDef, relData RelData, num int) ([]Reader, error) {
+	return nil, nil
+}
+
 func (e *testEngine) GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error) {
 	return "", "", nil
 }

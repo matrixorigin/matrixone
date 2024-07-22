@@ -81,7 +81,7 @@ func (p *PartitionReader) prepare() error {
 			txnOffset = p.table.getTxn().GetSnapshotWriteOffset()
 		}
 
-		p.table.getTxn().forEachTableWrites(p.table.db.databaseId, p.table.tableId,
+		p.table.getTxn().ForEachTableWrites(p.table.db.databaseId, p.table.tableId,
 			txnOffset, func(entry Entry) {
 				if entry.typ == INSERT || entry.typ == INSERT_TXN {
 					if entry.bat == nil || entry.bat.IsEmpty() {

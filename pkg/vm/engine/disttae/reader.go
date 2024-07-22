@@ -63,9 +63,10 @@ func (mixin *withFilterMixin) reset() {
 // NOTE: here we assume the tryUpdate is always called with the same cols
 // for all blocks and it will only be updated once
 func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
-	if len(cols) == len(mixin.columns.seqnums) {
+	if len(cols) == len(mixin.columns.seqnums) || mixin.columns.extraRowIdAdded {
 		return
 	}
+
 	if len(mixin.columns.seqnums) != 0 {
 		panic(moerr.NewInternalErrorNoCtx("withFilterMixin tryUpdate called with different cols"))
 	}
@@ -81,8 +82,11 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 	// mixin.columns.colNulls = make([]bool, len(cols))
 	mixin.columns.pkPos = -1
 	mixin.columns.indexOfFirstSortedColumn = -1
+
+	mixin.columns.rowIdColIdx = -1
 	for i, column := range cols {
 		if column == catalog.Row_ID {
+			mixin.columns.rowIdColIdx = i
 			mixin.columns.seqnums[i] = objectio.SEQNUM_ROWID
 			mixin.columns.colTypes[i] = objectio.RowidType
 		} else {
@@ -113,6 +117,13 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 
 		// records how many blks one reader needs to read when having filter
 		//objectio.BlkReadStats.BlksByReaderStats.Record(1, blkCnt)
+	}
+
+	if mixin.columns.rowIdColIdx == -1 {
+		mixin.columns.seqnums = append([]uint16{objectio.SEQNUM_ROWID}, mixin.columns.seqnums...)
+		mixin.columns.colTypes = append([]types.Type{objectio.RowidType}, mixin.columns.colTypes...)
+		mixin.columns.rowIdColIdx = 0
+		mixin.columns.extraRowIdAdded = true
 	}
 }
 
@@ -570,7 +581,7 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 
 	//TODO:: if r.table.writes is a map , the time complexity could be O(1)
 	//load deletes from txn.writes for the specified block
-	r.table.getTxn().forEachTableWrites(
+	r.table.getTxn().ForEachTableWrites(
 		r.table.db.databaseId,
 		r.table.tableId,
 		txnOffset, func(entry Entry) {
@@ -796,15 +807,27 @@ func (r *readerInProgress) Read(
 
 	r.tryUpdateColumns(cols)
 
-	bat := batch.NewWithSize(len(cols))
-	bat.SetAttributes(cols)
-	for i := range cols {
-		if vp == nil {
-			bat.Vecs[i] = vector.NewVec(r.columns.colTypes[i])
-		} else {
-			bat.Vecs[i] = vp.GetVector(r.columns.colTypes[i])
-		}
+	bat := batch.NewWithSize(len(r.columns.colTypes))
+
+	if len(r.columns.colTypes) != len(cols) {
+		bat.Attrs = append(bat.Attrs, catalog.Row_ID)
 	}
+
+	bat.Attrs = append(bat.Attrs, cols...)
+
+	for i, j := 0, 0; i < len(r.columns.colTypes); i++ {
+		//if len(r.columns.colTypes) != len(cols) && r.columns.rowIdColIdx == i {
+		//	continue
+		//}
+
+		if vp == nil {
+			bat.Vecs[j] = vector.NewVec(r.columns.colTypes[i])
+		} else {
+			bat.Vecs[j] = vp.GetVector(r.columns.colTypes[i])
+		}
+		j++
+	}
+
 	blkInfo, state, err := r.source.Next(
 		ctx,
 		cols,
@@ -860,16 +883,17 @@ func (r *readerInProgress) Read(
 
 	var sels []int64
 	if bat.RowCount() > 0 {
-		rowIDs := vector.MustFixedCol[types.Rowid](bat.Vecs[0])
+		rowIDs := vector.MustFixedCol[types.Rowid](bat.Vecs[r.columns.rowIdColIdx])
 		bid := rowIDs[0].CloneBlockID()
 		if r.source.HasTombstones(bid) {
 			sels, err = r.source.ApplyTombstones(rowIDs)
 			if err != nil {
 				return nil, err
 			}
+
+			bat.Shrink(sels, false)
 		}
 	}
-	bat.Shrink(sels, false)
 
 	if blkInfo.Sorted && r.columns.indexOfFirstSortedColumn != -1 {
 		bat.GetVector(int32(r.columns.indexOfFirstSortedColumn)).SetSorted(true)

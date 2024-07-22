@@ -1024,7 +1024,7 @@ func (txn *Transaction) forEachTableHasDeletesLocked(f func(tbl *txnTable) error
 	return nil
 }
 
-func (txn *Transaction) forEachTableWrites(databaseId uint64, tableId uint64, offset int, f func(Entry)) {
+func (txn *Transaction) ForEachTableWrites(databaseId uint64, tableId uint64, offset int, f func(Entry)) {
 	txn.Lock()
 	defer txn.Unlock()
 	for i := 0; i < offset; i++ {
@@ -1254,6 +1254,8 @@ func (txn *Transaction) CloneSnapshotWS() client.Workspace {
 		proc:     txn.proc,
 		engine:   txn.engine,
 		tnStores: txn.tnStores,
+
+		idGen: txn.idGen,
 
 		tableCache: struct {
 			cachedIndex int

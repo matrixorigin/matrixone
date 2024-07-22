@@ -16,6 +16,7 @@ package testutil
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 
@@ -137,6 +138,7 @@ func (s *MockRPCClientStream) ID() uint64 {
 
 func (s *MockRPCClientStream) Send(ctx context.Context, request morpc.Message) error {
 	request.SetID(s.ID())
+	fmt.Println("GGG", request)
 	s.sender <- request
 	return nil
 }
