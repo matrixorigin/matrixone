@@ -128,6 +128,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 	totalCount = len(entries)
 	readfn := func(i int, readType uint16) {
 		checkpointEntry := entries[i]
+		checkpointEntry.sid = r.rt.SID()
 		if checkpointEntry.end.Less(&maxGlobalEnd) {
 			return
 		}
