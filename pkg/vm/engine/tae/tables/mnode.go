@@ -51,7 +51,7 @@ func newMemoryNode(object *baseObject) *memoryNode {
 	impl.object = object
 
 	// Get the lastest schema, it will not be modified, so just keep the pointer
-	schema := object.meta.GetSchemaLocked()
+	schema := object.meta.Load().GetSchemaLocked()
 	impl.writeSchema = schema
 	// impl.data = containers.BuildBatchWithPool(
 	// 	schema.AllNames(), schema.AllTypes(), 0, object.rt.VectorPool.Memtable,
@@ -85,7 +85,7 @@ func (node *memoryNode) initPKIndex(schema *catalog.Schema) {
 
 func (node *memoryNode) close() {
 	mvcc := node.object.appendMVCC
-	logutil.Debugf("Releasing Memorynode BLK-%s", node.object.meta.ID.String())
+	logutil.Debugf("Releasing Memorynode BLK-%s", node.object.meta.Load().ID().String())
 	if node.data != nil {
 		node.data.Close()
 		node.data = nil
@@ -297,7 +297,7 @@ func (node *memoryNode) PrepareAppend(rows uint32) (n uint32, err error) {
 func (node *memoryNode) FillPhyAddrColumn(startRow, length uint32) (err error) {
 	var col *vector.Vector
 	if col, err = objectio.ConstructRowidColumn(
-		objectio.NewBlockidWithObjectID(&node.object.meta.ID, 0),
+		objectio.NewBlockidWithObjectID(node.object.meta.Load().ID(), 0),
 		startRow,
 		length,
 		common.MutMemAllocator,
@@ -499,6 +499,10 @@ func (node *memoryNode) CollectAppendInRange(
 	node.object.RLock()
 	minRow, maxRow, commitTSVec, abortVec, abortedMap :=
 		node.object.appendMVCC.CollectAppendLocked(start, end, mp)
+	if commitTSVec == nil || abortVec == nil {
+		node.object.RUnlock()
+		return nil, nil
+	}
 	batWithVer, err = node.GetDataWindowOnWriteSchema(minRow, maxRow, mp)
 	if err != nil {
 		node.object.RUnlock()
@@ -528,7 +532,7 @@ func (node *memoryNode) resolveInMemoryColumnDatas(
 	colIdxes []int,
 	skipDeletes bool,
 	mp *mpool.MPool,
-) (view *containers.BlockView, err error) {
+) (view *containers.Batch, err error) {
 	node.object.RLock()
 	defer node.object.RUnlock()
 	maxRow, visible, deSels, err := node.object.appendMVCC.GetVisibleRowLocked(ctx, txn)
@@ -540,23 +544,23 @@ func (node *memoryNode) resolveInMemoryColumnDatas(
 	if err != nil {
 		return
 	}
-	view = containers.NewBlockView()
+	view = containers.NewBatch()
 	for i, colIdx := range colIdxes {
-		view.SetData(colIdx, data.Vecs[i])
+		view.AddVector(readSchema.ColDefs[colIdx].Name, data.Vecs[i])
 	}
 	if skipDeletes {
 		return
 	}
 
-	err = node.object.fillInMemoryDeletesLocked(txn, 0, view.BaseView, node.object.RWMutex)
+	err = node.object.fillInMemoryDeletesLocked(txn, 0, &view.Deletes, node.object.RWMutex)
 	if err != nil {
 		return
 	}
 	if !deSels.IsEmpty() {
-		if view.DeleteMask != nil {
-			view.DeleteMask.Or(deSels)
+		if view.Deletes != nil {
+			view.Deletes.Or(deSels)
 		} else {
-			view.DeleteMask = deSels
+			view.Deletes = deSels
 		}
 	}
 	return
@@ -569,7 +573,7 @@ func (node *memoryNode) resolveInMemoryColumnData(
 	col int,
 	skipDeletes bool,
 	mp *mpool.MPool,
-) (view *containers.ColumnView, err error) {
+) (view *containers.Batch, err error) {
 	node.object.RLock()
 	defer node.object.RUnlock()
 	maxRow, visible, deSels, err := node.object.appendMVCC.GetVisibleRowLocked(context.TODO(), txn)
@@ -577,7 +581,7 @@ func (node *memoryNode) resolveInMemoryColumnData(
 		return
 	}
 
-	view = containers.NewColumnView(col)
+	view = containers.NewBatch()
 	var data containers.Vector
 	if data, err = node.GetColumnDataWindow(
 		readSchema,
@@ -588,20 +592,20 @@ func (node *memoryNode) resolveInMemoryColumnData(
 	); err != nil {
 		return
 	}
-	view.SetData(data)
+	view.AddVector(readSchema.ColDefs[col].Name, data)
 	if skipDeletes {
 		return
 	}
 
-	err = node.object.fillInMemoryDeletesLocked(txn, 0, view.BaseView, node.object.RWMutex)
+	err = node.object.fillInMemoryDeletesLocked(txn, 0, &view.Deletes, node.object.RWMutex)
 	if err != nil {
 		return
 	}
 	if deSels != nil && !deSels.IsEmpty() {
-		if view.DeleteMask != nil {
-			view.DeleteMask.Or(deSels)
+		if view.Deletes != nil {
+			view.Deletes.Or(deSels)
 		} else {
-			view.DeleteMask = deSels
+			view.Deletes = deSels
 		}
 	}
 
@@ -637,7 +641,10 @@ func (node *memoryNode) getInMemoryValue(
 		return
 	}
 	defer view.Close()
-	v, isNull = view.GetValue(row)
+	isNull = view.Vecs[0].IsNull(row)
+	if !isNull {
+		v = view.Vecs[0].Get(row)
+	}
 	return
 }
 

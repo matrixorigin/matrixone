@@ -32,20 +32,19 @@ func ModifyColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 	tableDef := alterPlan.CopyTableDef
 
 	specNewColumn := spec.NewColumn
-	originalColName := specNewColumn.Name.Parts[0]
+	colName := specNewColumn.Name.ColName()
 
 	// Check whether added column has existed.
-	colName := specNewColumn.Name.Parts[0]
-	col := FindColumn(tableDef.Cols, originalColName)
+	col := FindColumn(tableDef.Cols, colName)
 	if col == nil || col.Hidden {
-		return moerr.NewBadFieldError(ctx.GetContext(), colName, alterPlan.TableDef.Name)
+		return moerr.NewBadFieldError(ctx.GetContext(), specNewColumn.Name.ColNameOrigin(), alterPlan.TableDef.Name)
 	}
 
 	colType, err := getTypeFromAst(ctx.GetContext(), specNewColumn.Type)
 	if err != nil {
 		return err
 	}
-	if err = checkAddColumnType(ctx.GetContext(), &colType, specNewColumn.Name.Parts[0]); err != nil {
+	if err = checkAddColumnType(ctx.GetContext(), &colType, colName); err != nil {
 		return err
 	}
 
@@ -83,14 +82,9 @@ func ModifyColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 func checkModifyNewColumn(ctx context.Context, tableDef *TableDef, oldCol, newCol *ColDef, pos *tree.ColumnPosition) error {
 	if pos != nil && pos.Typ != tree.ColumnPositionNone {
 		// detete old column
-		originIndex := -1
-		for i, col := range tableDef.Cols {
-			if strings.EqualFold(col.Name, oldCol.Name) {
-				originIndex = i
-				break
-			}
-		}
-		tableDef.Cols = append(tableDef.Cols[:originIndex], tableDef.Cols[originIndex+1:]...)
+		tableDef.Cols = RemoveIf[*ColDef](tableDef.Cols, func(col *ColDef) bool {
+			return strings.EqualFold(col.Name, oldCol.Name)
+		})
 
 		targetPos, err := findPositionRelativeColumn(ctx, tableDef.Cols, pos)
 		if err != nil {

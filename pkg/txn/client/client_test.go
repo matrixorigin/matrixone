@@ -33,7 +33,7 @@ import (
 )
 
 func TestAdjustClient(t *testing.T) {
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	c := &txnClient{}
 	c.adjust()
 	assert.NotNil(t, c.generator)
@@ -46,8 +46,8 @@ func TestNewTxn(t *testing.T) {
 		runtime.WithClock(clock.NewHLCClock(func() int64 {
 			return 1
 		}, 0)))
-	runtime.SetupProcessLevelRuntime(rt)
-	c := NewTxnClient(newTestTxnSender())
+	runtime.SetupServiceBasedRuntime("", rt)
+	c := NewTxnClient("", newTestTxnSender())
 	c.Resume()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 	defer cancel()
@@ -66,8 +66,8 @@ func TestNewTxnWithNormalStateWait(t *testing.T) {
 		runtime.WithClock(clock.NewHLCClock(func() int64 {
 			return 1
 		}, 0)))
-	runtime.SetupProcessLevelRuntime(rt)
-	c := NewTxnClient(newTestTxnSender())
+	runtime.SetupServiceBasedRuntime("", rt)
+	c := NewTxnClient("", newTestTxnSender())
 	// Do not resume the txn client for now.
 	// c.Resume()
 	var wg sync.WaitGroup
@@ -97,8 +97,8 @@ func TestNewTxnWithNormalStateNoWait(t *testing.T) {
 		runtime.WithClock(clock.NewHLCClock(func() int64 {
 			return 1
 		}, 0)))
-	runtime.SetupProcessLevelRuntime(rt)
-	c := NewTxnClient(newTestTxnSender(), WithNormalStateNoWait(true))
+	runtime.SetupServiceBasedRuntime("", rt)
+	c := NewTxnClient("", newTestTxnSender(), WithNormalStateNoWait(true))
 	// Do not resume the txn client.
 	// c.Resume()
 	var wg sync.WaitGroup
@@ -122,8 +122,8 @@ func TestNewTxnWithSnapshotTS(t *testing.T) {
 		runtime.WithClock(clock.NewHLCClock(func() int64 {
 			return 1
 		}, 0)))
-	runtime.SetupProcessLevelRuntime(rt)
-	c := NewTxnClient(newTestTxnSender())
+	runtime.SetupServiceBasedRuntime("", rt)
+	c := NewTxnClient("", newTestTxnSender())
 	c.Resume()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 	defer cancel()
@@ -135,15 +135,22 @@ func TestNewTxnWithSnapshotTS(t *testing.T) {
 	assert.Equal(t, txn.TxnStatus_Active, txnMeta.Status)
 }
 
+type fakeRunningPipelinesManager struct{}
+
+func (m *fakeRunningPipelinesManager) PauseService()                   {}
+func (m *fakeRunningPipelinesManager) KillAllQueriesWithError(_ error) {}
+func (m *fakeRunningPipelinesManager) ResumeService()                  {}
+
 func TestTxnClientAbortAllRunningTxn(t *testing.T) {
+	SetRunningPipelineManagement(&fakeRunningPipelinesManager{})
 	rt := runtime.NewRuntime(metadata.ServiceType_CN, "",
 		logutil.GetPanicLogger(),
 		runtime.WithClock(clock.NewHLCClock(func() int64 {
 			return 1
 		}, 0)))
-	runtime.SetupProcessLevelRuntime(rt)
+	runtime.SetupServiceBasedRuntime("", rt)
 
-	c := NewTxnClient(newTestTxnSender())
+	c := NewTxnClient("", newTestTxnSender())
 	c.Resume()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
@@ -169,8 +176,8 @@ func TestTxnClientPauseAndResume(t *testing.T) {
 		runtime.WithClock(clock.NewHLCClock(func() int64 {
 			return 1
 		}, 0)))
-	runtime.SetupProcessLevelRuntime(rt)
-	c := NewTxnClient(newTestTxnSender())
+	runtime.SetupServiceBasedRuntime("", rt)
+	c := NewTxnClient("", newTestTxnSender())
 
 	c.Pause()
 	require.Equal(t, paused, c.(*txnClient).mu.state)

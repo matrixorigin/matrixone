@@ -23,58 +23,62 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "intersect"
+const opName = "intersect"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (intersect *Intersect) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": intersect ")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) error {
+func (intersect *Intersect) OpType() vm.OpType {
+	return vm.Intersect
+}
+
+func (intersect *Intersect) Prepare(proc *process.Process) error {
 	var err error
 
-	arg.ctr = new(container)
-	arg.ctr.InitReceiver(proc, false)
-	arg.ctr.btc = nil
-	arg.ctr.hashTable, err = hashmap.NewStrMap(true, proc.Mp())
+	intersect.ctr = new(container)
+	intersect.ctr.InitReceiver(proc, false)
+	intersect.ctr.btc = nil
+	intersect.ctr.hashTable, err = hashmap.NewStrMap(true, proc.Mp())
 	if err != nil {
 		return err
 	}
-	arg.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
+	intersect.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (intersect *Intersect) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	analyze := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	analyze := proc.GetAnalyze(intersect.GetIdx(), intersect.GetParallelIdx(), intersect.GetParallelMajor())
 	analyze.Start()
 	defer analyze.Stop()
 
 	result := vm.NewCallResult()
 
 	for {
-		switch arg.ctr.state {
+		switch intersect.ctr.state {
 		case build:
-			if err := arg.ctr.buildHashTable(proc, analyze, 1, arg.GetIsFirst()); err != nil {
+			if err := intersect.ctr.buildHashTable(proc, analyze, 1, intersect.GetIsFirst()); err != nil {
 				return result, err
 			}
-			if arg.ctr.hashTable != nil {
-				analyze.Alloc(arg.ctr.hashTable.Size())
+			if intersect.ctr.hashTable != nil {
+				analyze.Alloc(intersect.ctr.hashTable.Size())
 			}
-			arg.ctr.state = probe
+			intersect.ctr.state = probe
 
 		case probe:
 			var err error
 			isLast := false
-			if isLast, err = arg.ctr.probeHashTable(proc, analyze, 0, arg.GetIsFirst(), arg.GetIsLast(), &result); err != nil {
+			if isLast, err = intersect.ctr.probeHashTable(proc, analyze, 0, intersect.GetIsFirst(), intersect.GetIsLast(), &result); err != nil {
 				result.Status = vm.ExecStop
 				return result, err
 			}
 			if isLast {
-				arg.ctr.state = end
+				intersect.ctr.state = end
 				continue
 			}
 
@@ -91,10 +95,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 // build hash table
 func (c *container) buildHashTable(proc *process.Process, analyse process.Analyze, idx int, isFirst bool) error {
 	for {
-		btc, _, err := c.ReceiveFromSingleReg(idx, analyse)
-		if err != nil {
-			return err
+		msg := c.ReceiveFromSingleReg(idx, analyse)
+		if msg.Err != nil {
+			return msg.Err
 		}
+		btc := msg.Batch
 
 		// last batch of block
 		if btc == nil {
@@ -144,10 +149,11 @@ func (c *container) buildHashTable(proc *process.Process, analyse process.Analyz
 
 func (c *container) probeHashTable(proc *process.Process, analyze process.Analyze, idx int, isFirst bool, isLast bool, result *vm.CallResult) (bool, error) {
 	for {
-		btc, _, err := c.ReceiveFromSingleReg(idx, analyze)
-		if err != nil {
-			return false, err
+		msg := c.ReceiveFromSingleReg(idx, analyze)
+		if msg.Err != nil {
+			return false, msg.Err
 		}
+		btc := msg.Batch
 
 		// last batch of block
 		if btc == nil {

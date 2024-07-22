@@ -546,6 +546,8 @@ type TaskRunner interface {
 type TaskStorage interface {
 	// Close close the task storage
 	Close() error
+	// PingContext ping the db with context
+	PingContext(context.Context) error
 
 	// AddAsyncTask adds async tasks and returns number of successful added
 	AddAsyncTask(context.Context, ...task.AsyncTask) (int, error)

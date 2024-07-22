@@ -16,48 +16,100 @@ package aggexec
 
 import (
 	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-type multiAggInfo struct {
-	aggID    int64
-	distinct bool
-	argTypes []types.Type
-	retType  types.Type
+// newMultiAggFuncExecRetFixed return the agg executor for multi columns agg which return a fixed length type.
+func newMultiAggFuncExecRetFixed(
+	mg AggMemoryManager, info multiAggInfo, impl multiColumnAggImplementation) AggFuncExec {
 
-	// emptyNull indicates that whether we should return null for a group without any input value.
-	emptyNull bool
-}
-
-func (info multiAggInfo) String() string {
-	args := "[" + info.argTypes[0].String()
-	for i := 1; i < len(info.argTypes); i++ {
-		args += ", " + info.argTypes[i].String()
+	switch info.retType.Oid {
+	case types.T_bool:
+		e := &multiAggFuncExec1[bool]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_int8:
+		e := &multiAggFuncExec1[int8]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_int16:
+		e := &multiAggFuncExec1[int16]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_int32:
+		e := &multiAggFuncExec1[int32]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_int64:
+		e := &multiAggFuncExec1[int64]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_uint8:
+		e := &multiAggFuncExec1[uint8]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_uint16:
+		e := &multiAggFuncExec1[uint16]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_uint32:
+		e := &multiAggFuncExec1[uint32]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_uint64:
+		e := &multiAggFuncExec1[uint64]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_float32:
+		e := &multiAggFuncExec1[float32]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_float64:
+		e := &multiAggFuncExec1[float64]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_decimal64:
+		e := &multiAggFuncExec1[types.Decimal64]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_decimal128:
+		e := &multiAggFuncExec1[types.Decimal128]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_date:
+		e := &multiAggFuncExec1[types.Date]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_datetime:
+		e := &multiAggFuncExec1[types.Datetime]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_time:
+		e := &multiAggFuncExec1[types.Time]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_timestamp:
+		e := &multiAggFuncExec1[types.Timestamp]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_enum:
+		e := &multiAggFuncExec1[types.Enum]{}
+		e.init(mg, info, impl)
+		return e
 	}
-	args += "]"
-	return fmt.Sprintf("{aggID: %d, argTypes: %s, retType: %s}", info.aggID, args, info.retType.String())
+
+	panic(fmt.Sprintf("unexpected parameter to Init a multiAggFuncExec, aggInfo: %s", info))
 }
 
-func (info multiAggInfo) AggID() int64 {
-	return info.aggID
-}
-
-func (info multiAggInfo) IsDistinct() bool {
-	return info.distinct
-}
-
-func (info multiAggInfo) TypesInfo() ([]types.Type, types.Type) {
-	return info.argTypes, info.retType
-}
-
-func (info multiAggInfo) getEncoded() *EncodedBasicInfo {
-	return &EncodedBasicInfo{
-		Id:         info.aggID,
-		IsDistinct: info.distinct,
-		Args:       info.argTypes,
-		Ret:        info.retType,
-	}
+// newMultiAggFuncExecRetVar return the agg executor for multi columns agg which return a variable length type.
+func newMultiAggFuncExecRetVar(
+	mg AggMemoryManager, info multiAggInfo, impl multiColumnAggImplementation) AggFuncExec {
+	e := &multiAggFuncExec2{}
+	e.init(mg, info, impl)
+	return e
 }
 
 // multiAggFuncExec1 and multiAggFuncExec2 are the executors of multi columns agg.
@@ -95,6 +147,62 @@ type multiAggFuncExec2 struct {
 
 	// method to new the private structure for group growing.
 	gGroup func() MultiAggRetVar
+}
+
+func (exec *multiAggFuncExec1[to]) marshal() ([]byte, error) {
+	d := exec.multiAggInfo.getEncoded()
+	r, err := exec.ret.marshal()
+	if err != nil {
+		return nil, err
+	}
+	encoded := &EncodedAgg{
+		Info:   d,
+		Result: r,
+	}
+	if len(exec.groups) > 0 {
+		encoded.Groups = make([][]byte, len(exec.groups))
+		for i := range encoded.Groups {
+			encoded.Groups[i] = exec.groups[i].Marshal()
+		}
+	}
+	return encoded.Marshal()
+}
+
+func (exec *multiAggFuncExec1[T]) unmarshal(mp *mpool.MPool, result []byte, groups [][]byte) error {
+	exec.groups = make([]MultiAggRetFixed[T], len(groups))
+	for i := range exec.groups {
+		exec.groups[i] = exec.gGroup()
+		exec.groups[i].Unmarshal(groups[i])
+	}
+	return exec.ret.unmarshal(result)
+}
+
+func (exec *multiAggFuncExec2) marshal() ([]byte, error) {
+	d := exec.multiAggInfo.getEncoded()
+	r, err := exec.ret.marshal()
+	if err != nil {
+		return nil, err
+	}
+	encoded := &EncodedAgg{
+		Info:   d,
+		Result: r,
+	}
+	if len(exec.groups) > 0 {
+		encoded.Groups = make([][]byte, len(exec.groups))
+		for i := range encoded.Groups {
+			encoded.Groups[i] = exec.groups[i].Marshal()
+		}
+	}
+	return encoded.Marshal()
+}
+
+func (exec *multiAggFuncExec2) unmarshal(mp *mpool.MPool, result []byte, groups [][]byte) error {
+	exec.groups = make([]MultiAggRetVar, len(groups))
+	for i := range exec.groups {
+		exec.groups[i] = exec.gGroup()
+		exec.groups[i].Unmarshal(groups[i])
+	}
+	return exec.ret.unmarshal(result)
 }
 
 func (exec *multiAggFuncExec1[T]) init(

@@ -70,7 +70,7 @@ a
 create snapshot sn1 for account acc1;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sn1    2024-05-15 14:54:00.906635    account    acc1        
+sn1    2024-05-23 08:46:01.873457    account    acc1        
 drop database fk_test;
 restore account acc1 from snapshot sn1;
 show databases;
@@ -131,4 +131,83 @@ a
 2
 drop snapshot sn1;
 drop database fk_test;
+show databases;
+Database
+information_schema
+mo_catalog
+mysql
+system
+system_metrics
+create database fk_test1;
+use fk_test1;
+create table t1 (a int primary key);
+insert into t1 values (1);
+select * from t1;
+a
+1
+create database fk_test2;
+use fk_test2;
+create table t3 (a int primary key, b int, FOREIGN KEY (b) REFERENCES fk_test1.t1(a));
+insert into t3 values (1, 1);
+select * from t3;
+a    b
+1    1
+create table t4 (a int primary key);
+insert into t4 values (1);
+select * from t4;
+a
+1
+use fk_test1;
+create table t2 (a int primary key, b int, FOREIGN KEY (b) REFERENCES fk_test2.t4(a));
+insert into t2 values (1, 1);
+select * from t2;
+a    b
+1    1
+create snapshot sn1 for account acc1;
+show snapshots;
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+sn1    2024-05-23 08:46:03.237143    account    acc1        
+delete from fk_test1.t2;
+select * from fk_test1.t2;
+a    b
+delete from fk_test2.t3;
+select * from fk_test2.t3;
+a    b
+restore account acc1 from snapshot sn1;
+show databases;
+Database
+fk_test1
+fk_test2
+information_schema
+mo_catalog
+mysql
+system
+system_metrics
+use fk_test1;
+show tables;
+Tables_in_fk_test1
+t1
+t2
+select * from t1;
+a
+1
+select * from t2;
+a    b
+1    1
+use fk_test2;
+show tables;
+Tables_in_fk_test2
+t3
+t4
+select * from t3;
+a    b
+1    1
+select * from t4;
+a
+1
+drop snapshot sn1;
+drop table fk_test1.t2;
+drop table fk_test2.t3;
+drop database fk_test1;
+drop database fk_test2;
 drop account acc1;

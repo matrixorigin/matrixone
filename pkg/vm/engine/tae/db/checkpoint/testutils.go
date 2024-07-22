@@ -133,7 +133,9 @@ func (r *runner) ForceGlobalCheckpointSynchronously(ctx context.Context, end typ
 	r.ForceGlobalCheckpoint(end, versionInterval)
 
 	op := func() (ok bool, err error) {
+		r.storage.RLock()
 		global, _ := r.storage.globals.Max()
+		r.storage.RUnlock()
 		if global == nil {
 			return false, nil
 		}

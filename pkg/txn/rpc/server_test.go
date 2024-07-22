@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
@@ -37,9 +38,7 @@ func TestHandleMessageWithSender(t *testing.T) {
 			return nil
 		})
 
-		rt := newTestRuntime(newTestClock(), s.rt.Logger().RawLogger())
-		runtime.SetupProcessLevelRuntime(rt)
-		cli, err := NewSender(Config{EnableCompress: true}, rt)
+		cli, err := NewSender(Config{EnableCompress: true}, runtime.ServiceRuntime(""))
 		assert.NoError(t, err)
 		defer func() {
 			assert.NoError(t, cli.Close())
@@ -49,7 +48,7 @@ func TestHandleMessageWithSender(t *testing.T) {
 		defer cancel()
 
 		v, err := cli.Send(ctx, []txn.TxnRequest{{CNRequest: &txn.CNOpRequest{Target: metadata.TNShard{Address: testTN1Addr}}}})
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, 1, len(v.Responses))
 	}, WithServerEnableCompress(true))
 }
@@ -178,12 +177,15 @@ func TestTimeoutRequestCannotHandled(t *testing.T) {
 }
 
 func runTestTxnServer(t *testing.T, addr string, testFunc func(s *server), opts ...ServerOption) {
+	rt := newTestRuntime(newTestClock(), logutil.GetPanicLogger())
+	runtime.SetupServiceBasedRuntime("", rt)
+
 	assert.NoError(t, os.RemoveAll(addr[7:]))
 	opts = append(opts,
 		WithServerQueueBufferSize(100),
 		WithServerQueueWorkers(2))
 	s, err := NewTxnServer(addr,
-		newTestRuntime(clock.NewHLCClock(func() int64 { return 0 }, 0), logutil.GetPanicLogger()),
+		runtime.ServiceRuntime(""),
 		opts...)
 	assert.NoError(t, err)
 	defer func() {
@@ -209,6 +211,10 @@ func (cs *testClientSession) RemoteAddress() string {
 }
 
 func (cs *testClientSession) Close() error {
+	return nil
+}
+
+func (cs *testClientSession) SessionCtx() context.Context {
 	return nil
 }
 

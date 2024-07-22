@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -33,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -44,6 +46,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+var _ plan2.CompilerContext = &TxnCompilerContext{}
+
 type TxnCompilerContext struct {
 	dbName               string
 	buildAlterView       bool
@@ -52,12 +56,18 @@ type TxnCompilerContext struct {
 	snapshot             *plan2.Snapshot
 	views                []string
 	//for support explain analyze
-	tcw     *TxnComputationWrapper
+	tcw     ComputationWrapper
 	execCtx *ExecCtx
 	mu      sync.Mutex
 }
 
-var _ plan2.CompilerContext = &TxnCompilerContext{}
+func (tcc *TxnCompilerContext) GetLowerCaseTableNames() int64 {
+	lower := int64(0)
+	if val, err := tcc.execCtx.ses.GetSessionSysVar("lower_case_table_names"); err != nil {
+		lower = val.(int64)
+	}
+	return lower
+}
 
 func (tcc *TxnCompilerContext) SetExecCtx(execCtx *ExecCtx) {
 	tcc.mu.Lock()
@@ -90,7 +100,7 @@ func (tcc *TxnCompilerContext) SetSnapshot(snapshot *plan2.Snapshot) {
 }
 
 func (tcc *TxnCompilerContext) ReplacePlan(execPlan *plan.Execute) (*plan.Plan, tree.Statement, error) {
-	p, st, _, err := replacePlan(tcc.execCtx.reqCtx, tcc.execCtx.ses.(*Session), tcc.tcw, execPlan)
+	_, p, st, _, err := replacePlan(tcc.execCtx.reqCtx, tcc.execCtx.ses.(*Session), tcc.tcw.(*TxnComputationWrapper), execPlan)
 	return p, st, err
 }
 
@@ -216,12 +226,41 @@ func (tcc *TxnCompilerContext) GetDatabaseId(dbName string, snapshot plan2.Snaps
 	return databaseId, nil
 }
 
+func (tcc *TxnCompilerContext) GetDbLevelConfig(dbName string, varName string) (string, error) {
+	switch varName {
+	case "unique_check_on_autoincr":
+		// check if the database is a system database
+		if _, ok := sysDatabases[dbName]; !ok {
+			ses := tcc.GetSession()
+			if _, ok := ses.(*backSession); ok {
+				return "None", nil
+			}
+			ret, err := ses.GetConfig(tcc.GetContext(), dbName, varName)
+			if err != nil {
+				return "", err
+			}
+			if ret != nil {
+				return ret.(string), nil
+			}
+			return "None", nil
+		}
+		return "Check", nil
+	default:
+	}
+	return "", moerr.NewInternalError(tcc.GetContext(), "The variable '%s' is not a valid database level variable", varName)
+}
+
 // getRelation returns the context (maybe updated) and the relation
 func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub *plan.SubscriptionMeta, snapshot plan2.Snapshot) (context.Context, engine.Relation, error) {
 	dbName, _, err := tcc.ensureDatabaseIsNotEmpty(dbName, false, snapshot)
 	if err != nil {
 		return nil, nil, err
 	}
+
+	start := time.Now()
+	defer func() {
+		v2.GetRelationDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 
 	ses := tcc.GetSession()
 	txn := tcc.GetTxnHandler().GetTxn()
@@ -257,6 +296,8 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 		tempCtx = defines.AttachAccountId(tempCtx, uint32(sysAccountID))
 	}
 
+	start1 := time.Now()
+
 	//open database
 	db, err := tcc.GetTxnHandler().GetStorage().Database(tempCtx, dbName, txn)
 	if err != nil {
@@ -267,11 +308,15 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 		return nil, nil, err
 	}
 
+	v2.OpenDBDurationHistogram.Observe(time.Since(start1).Seconds())
+
 	// tableNames, err := db.Relations(ctx)
 	// if err != nil {
 	// 	return nil, nil, err
 	// }
 	// logDebugf(ses.GetDebugString(), "dbName %v tableNames %v", dbName, tableNames)
+
+	start2 := time.Now()
 
 	//open table
 	table, err := db.Relation(tempCtx, tableName, nil)
@@ -287,10 +332,17 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 			table = tmpTable
 		}
 	}
+
+	v2.OpenTableDurationHistogram.Observe(time.Since(start2).Seconds())
+
 	return tempCtx, table, nil
 }
 
 func (tcc *TxnCompilerContext) getTmpRelation(ctx context.Context, tableName string) (engine.Relation, error) {
+	start := time.Now()
+	defer func() {
+		v2.GetTmpTableDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 	e := tcc.execCtx.ses.GetTxnHandler().GetStorage()
 	txn := tcc.execCtx.ses.GetTxnHandler().GetTxn()
 	db, err := e.Database(ctx, defines.TEMPORARY_DBNAME, txn)
@@ -305,6 +357,10 @@ func (tcc *TxnCompilerContext) getTmpRelation(ctx context.Context, tableName str
 }
 
 func (tcc *TxnCompilerContext) ensureDatabaseIsNotEmpty(dbName string, checkSub bool, snapshot plan2.Snapshot) (string, *plan.SubscriptionMeta, error) {
+	start := time.Now()
+	defer func() {
+		v2.EnsureDatabaseDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 	if len(dbName) == 0 {
 		dbName = tcc.DefaultDatabase()
 	}
@@ -375,8 +431,17 @@ func (tcc *TxnCompilerContext) ResolveSubscriptionTableById(tableId uint64, pubm
 func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot plan2.Snapshot) (*plan2.ObjectRef, *plan2.TableDef) {
 	start := time.Now()
 	defer func() {
-		v2.TxnStatementResolveDurationHistogram.Observe(time.Since(start).Seconds())
+		end := time.Since(start).Seconds()
+		v2.TxnStatementResolveDurationHistogram.Observe(end)
+		v2.TotalResolveDurationHistogram.Observe(end)
 	}()
+
+	// In order to be compatible with various GUI clients and BI tools, lower case db and table name if it's a mysql system table
+	if slices.Contains(mysql.CaseInsensitiveDbs, strings.ToLower(dbName)) {
+		dbName = strings.ToLower(dbName)
+		tableName = strings.ToLower(tableName)
+	}
+
 	dbName, sub, err := tcc.ensureDatabaseIsNotEmpty(dbName, true, snapshot)
 	if err != nil {
 		return nil, nil
@@ -573,7 +638,7 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 	}
 }
 
-func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (varValue interface{}, err error) {
 	ctx := tcc.execCtx.reqCtx
 
 	if ctx.Value(defines.InSp{}) != nil && ctx.Value(defines.InSp{}).(bool) {
@@ -588,17 +653,24 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 
 	if isSystemVar {
 		if isGlobalVar {
-			return tcc.GetSession().GetGlobalSystemVariableValue(ctx, varName)
+			if varValue, err = tcc.GetSession().GetGlobalSysVar(varName); err != nil {
+				return
+			}
 		} else {
-			return tcc.GetSession().GetSessionVar(ctx, varName)
+			if varValue, err = tcc.GetSession().GetSessionSysVar(varName); err != nil {
+				return
+			}
 		}
 	} else {
-		_, val, err := tcc.GetSession().GetUserDefinedVar(varName)
-		if val == nil {
+		var udVar *UserDefinedVar
+		if udVar, err = tcc.GetSession().GetUserDefinedVar(varName); err != nil || udVar == nil {
 			return nil, err
 		}
-		return val.Value, err
+
+		varValue = udVar.Value
 	}
+
+	return
 }
 
 func (tcc *TxnCompilerContext) ResolveAccountIds(accountNames []string) (accountIds []uint32, err error) {
@@ -765,7 +837,10 @@ func (tcc *TxnCompilerContext) statsInCache(ctx context.Context, dbName string, 
 	approxNumObjects := 0
 	if partitionInfo != nil {
 		for _, PartitionTableName := range partitionInfo.PartitionTableNames {
-			_, ptable, _ := tcc.getRelation(dbName, PartitionTableName, nil, snapshot)
+			_, ptable, err := tcc.getRelation(dbName, PartitionTableName, nil, snapshot)
+			if err != nil {
+				return nil, false
+			}
 			approxNumObjects += ptable.ApproxObjectsNum(ctx)
 		}
 	} else {
@@ -789,9 +864,9 @@ func (tcc *TxnCompilerContext) GetProcess() *process.Process {
 func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, string, error) {
 	proc := tcc.execCtx.proc
 	// get file size
-	path := catalog.BuildQueryResultMetaPath(proc.SessionInfo.Account, uuid)
+	path := catalog.BuildQueryResultMetaPath(proc.GetSessionInfo().Account, uuid)
 	// read meta's meta
-	reader, err := blockio.NewFileReader(proc.FileService, path)
+	reader, err := blockio.NewFileReader(proc.Base.FileService, path)
 	if err != nil {
 		return nil, "", err
 	}
@@ -802,7 +877,7 @@ func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, 
 	bats, release, err := reader.LoadAllColumns(tcc.execCtx.reqCtx, idxs, common.DefaultAllocator)
 	if err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-			return nil, "", moerr.NewResultFileNotFound(tcc.execCtx.reqCtx, makeResultMetaPath(proc.SessionInfo.Account, uuid))
+			return nil, "", moerr.NewResultFileNotFound(tcc.execCtx.reqCtx, makeResultMetaPath(proc.Base.SessionInfo.Account, uuid))
 		}
 		return nil, "", err
 	}
@@ -813,7 +888,7 @@ func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, 
 	}()
 	// cols
 	vec := bats[0].Vecs[0]
-	def := vec.GetStringAt(0)
+	def := vec.UnsafeGetStringAt(0)
 	r := &plan.ResultColDef{}
 	if err = r.Unmarshal([]byte(def)); err != nil {
 		return nil, "", err
@@ -827,7 +902,10 @@ func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, 
 func (tcc *TxnCompilerContext) GetSubscriptionMeta(dbName string, snapshot plan2.Snapshot) (*plan.SubscriptionMeta, error) {
 	tempCtx := tcc.execCtx.reqCtx
 	txn := tcc.GetTxnHandler().GetTxn()
-
+	start := time.Now()
+	defer func() {
+		v2.GetSubMetaDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 	if plan2.IsSnapshotValid(&snapshot) && snapshot.TS.Less(txn.Txn().SnapshotTS) {
 		txn = txn.CloneSnapshotOp(*snapshot.TS)
 

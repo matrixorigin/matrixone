@@ -427,7 +427,8 @@ func TestGenerateSeriesString(t *testing.T) {
 }
 
 func TestGenerateSeriesPrepare(t *testing.T) {
-	err := generateSeriesPrepare(nil, &Argument{
+	err := generateSeriesPrepare(nil, &TableFunction{
+		ctr: &container{},
 		OperatorBase: vm.OperatorBase{
 			OperatorInfo: vm.OperatorInfo{
 				Idx:     0,
@@ -457,7 +458,7 @@ func TestGenStep(t *testing.T) {
 func TestGenerateSeriesCall(t *testing.T) {
 	proc := testutil.NewProc()
 	beforeCall := proc.Mp().CurrNB()
-	arg := &Argument{
+	arg := &TableFunction{
 		Attrs:    []string{"result"},
 		FuncName: "generate_series",
 		OperatorBase: vm.OperatorBase{

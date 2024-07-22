@@ -104,6 +104,41 @@ func ListSnapshotMeta(
 	return listFunc(snapshot, metaFiles)
 }
 
+func ListSnapshotMetaWithDiskCleaner(
+	snapshot types.TS,
+	listFunc GetCheckpointRange,
+	metas map[string]struct{},
+) ([]*MetaFile, int, error) {
+	if len(metas) == 0 {
+		return nil, 0, nil
+	}
+	metaFiles := make([]*MetaFile, 0)
+	idx := 0
+	for meta := range metas {
+		start, end := blockio.DecodeCheckpointMetadataFileName(meta)
+		metaFiles = append(metaFiles, &MetaFile{
+			start: start,
+			end:   end,
+			index: idx,
+			name:  meta,
+		})
+		idx++
+	}
+	sort.Slice(metaFiles, func(i, j int) bool {
+		return metaFiles[i].end.Less(&metaFiles[j].end)
+	})
+
+	for i, file := range metaFiles {
+		// TODO: remove log
+		logutil.Infof("metaFiles[%d]: %v", i, file.String())
+	}
+
+	if listFunc == nil {
+		listFunc = AllAfterAndGCheckpoint
+	}
+	return listFunc(snapshot, metaFiles)
+}
+
 func ListSnapshotCheckpointWithMeta(
 	ctx context.Context,
 	fs fileservice.FileService,
@@ -141,7 +176,19 @@ func ListSnapshotCheckpointWithMeta(
 		}
 		bat.AddVector(colNames[i], vec)
 	}
-	entries, maxGlobalEnd := replayCheckpointEntries(bat, 3)
+
+	var checkpointVersion int
+	// in version 1, checkpoint metadata doesn't contain 'version'.
+	vecLen := len(bats[0].Vecs)
+	if vecLen < CheckpointSchemaColumnCountV1 {
+		checkpointVersion = 1
+	} else if vecLen < CheckpointSchemaColumnCountV2 {
+		checkpointVersion = 2
+	} else {
+		checkpointVersion = 3
+	}
+
+	entries, maxGlobalEnd := replayCheckpointEntries(bat, checkpointVersion)
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].end.Less(&entries[j].end)
 	})

@@ -345,7 +345,9 @@ a    b
 127    fffff
 null    fffff
 truncate table dis_table_01;
+use isolation_2;
 insert into dis_table_01 select 9999,'abcdefg';
+no such table isolation_2.dis_table_01
 select * from dis_table_01;
 a    b
 explain select * from dis_table_01;

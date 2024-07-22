@@ -72,7 +72,7 @@ func (s *StorageTxnClient) IterTxns(func(client.TxnOverview) bool) {
 	panic("unimplemented")
 }
 
-func (*StorageTxnClient) NewWithSnapshot(snapshot []byte) (client.TxnOperator, error) {
+func (*StorageTxnClient) NewWithSnapshot(snapshot txn.CNTxnSnapshot) (client.TxnOperator, error) {
 	panic("unimplemented")
 }
 
@@ -105,6 +105,11 @@ func (*StorageTxnClient) CNBasedConsistencyEnabled() bool        { panic("unimpl
 type StorageTxnOperator struct {
 	storages map[string]*Storage
 	meta     txn.TxnMeta
+}
+
+func (s *StorageTxnOperator) SetFootPrints(prints [][2]uint32) {
+	//TODO implement me
+	panic("implement me")
 }
 
 func (s *StorageTxnOperator) IsSnapOp() bool {
@@ -222,7 +227,7 @@ func (s *StorageTxnOperator) Rollback(ctx context.Context) error {
 	return nil
 }
 
-func (*StorageTxnOperator) Snapshot() ([]byte, error) {
+func (*StorageTxnOperator) Snapshot() (txn.CNTxnSnapshot, error) {
 	panic("unimplemented")
 }
 

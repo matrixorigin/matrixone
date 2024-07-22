@@ -17,21 +17,42 @@ package client
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 )
 
 // RunTxnTests runs txn tests.
 func RunTxnTests(fn func(TxnClient, rpc.TxnSender), opts ...TxnClientCreateOption) {
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	ts := newTestTxnSender()
-	c := NewTxnClient(ts, opts...)
+	c := NewTxnClient("", ts, opts...)
 	c.Resume()
 	fn(c, ts)
+}
+
+// NewTestTxnOperator returns a test txn operator.
+func NewTestTxnOperator(
+	ctx context.Context,
+) (TxnOperator, func()) {
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	ts := newTestTxnSender()
+	c := NewTxnClient("", ts)
+	c.Resume()
+	txnOp, err := c.New(ctx, timestamp.Timestamp{})
+	if err != nil {
+		panic(err)
+	}
+	return txnOp, func() {
+		if err := c.Close(); err != nil {
+			panic(err)
+		}
+	}
 }
 
 func newTestTxnSender() *testTxnSender {
@@ -117,4 +138,42 @@ func (count *counter) more() bool {
 
 func (count *counter) String() string {
 	return fmt.Sprintf("enter:%d, exit:%d", count.enter.Load(), count.exit.Load())
+}
+
+type fPrint [2]uint32
+
+func (fp fPrint) String() string {
+	return fmt.Sprintf("enter:%d exit:%d", fp[0], fp[1])
+}
+func (fp fPrint) nonZero() bool {
+	return fp[0] != 0 || fp[1] != 0
+}
+
+type footPrints struct {
+	prints [256]fPrint
+}
+
+func (fprints *footPrints) setFPrints(fp [][2]uint32) {
+	flen := len(fp)
+	if len(fprints.prints) < flen {
+		flen = len(fprints.prints)
+	}
+	for i := 0; i < flen; i++ {
+		fprints.prints[i] = fp[i]
+	}
+}
+
+func (fprints *footPrints) String() string {
+	strBuf := strings.Builder{}
+	for i := 0; i < len(fprints.prints); i++ {
+		if !fprints.prints[i].nonZero() {
+			continue
+		}
+		strBuf.WriteString("[")
+		strBuf.WriteString(fmt.Sprintf("%d", i))
+		strBuf.WriteString(": ")
+		strBuf.WriteString(fprints.prints[i].String())
+		strBuf.WriteString("] ")
+	}
+	return strBuf.String()
 }

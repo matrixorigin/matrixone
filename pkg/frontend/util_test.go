@@ -24,39 +24,33 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
-
-	"github.com/stretchr/testify/assert"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/util/toml"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-
 	"github.com/golang/mock/gomock"
-	cvey "github.com/smartystreets/goconvey/convey"
-
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
+	cvey "github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func init() {
-	testutil.SetupAutoIncrService()
+	testutil.SetupAutoIncrService("")
 }
 
 func Test_PathExists(t *testing.T) {
@@ -440,7 +434,7 @@ func TestGetSimpleExprValue(t *testing.T) {
 		ec.ses = ses
 		ses.txnCompileCtx.execCtx = ec
 		for _, kase := range kases {
-			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1, 0)
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1)
 			cvey.So(err, cvey.ShouldBeNil)
 
 			sv, ok := stmt.(*tree.SetVar)
@@ -480,7 +474,7 @@ func TestGetSimpleExprValue(t *testing.T) {
 		ec.ses = ses
 		ses.txnCompileCtx.execCtx = ec
 		for _, kase := range kases {
-			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1, 0)
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1)
 			cvey.So(err, cvey.ShouldBeNil)
 
 			sv, ok := stmt.(*tree.SetVar)
@@ -603,8 +597,8 @@ func TestGetExprValue(t *testing.T) {
 		binary.LittleEndian.PutUint64(id, 1)
 		ranges.Append(id)
 
-		table.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(&ranges, nil).AnyTimes()
-		table.EXPECT().NewReader(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, moerr.NewInvalidInputNoCtx("new reader failed")).AnyTimes()
+		table.EXPECT().Ranges(gomock.Any(), gomock.Any(), gomock.Any()).Return(&ranges, nil).AnyTimes()
+		table.EXPECT().NewReader(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, moerr.NewInvalidInputNoCtx("new reader failed")).AnyTimes()
 
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()
 		eng.EXPECT().Hints().Return(engine.Hints{
@@ -635,6 +629,7 @@ func TestGetExprValue(t *testing.T) {
 		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
 		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 		txnOperator.EXPECT().GetWaitActiveCost().Return(time.Duration(0)).AnyTimes()
+		txnOperator.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 
@@ -644,7 +639,7 @@ func TestGetExprValue(t *testing.T) {
 
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 		setGlobalPu(pu)
-		ses := NewSession(ctx, &FakeProtocol{}, testutil.NewProc().Mp(), GSysVariables, true, nil)
+		ses := NewSession(ctx, "", &testMysqlWriter{}, testutil.NewProc().Mp())
 		ses.SetDatabaseName("db")
 		var c clock.Clock
 		err := ses.GetTxnHandler().CreateTempStorage(c)
@@ -655,7 +650,7 @@ func TestGetExprValue(t *testing.T) {
 		ses.txnCompileCtx.execCtx = ec
 		for _, kase := range kases {
 			fmt.Println("++++>", kase.sql)
-			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1, 0)
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1)
 			cvey.So(err, cvey.ShouldBeNil)
 
 			sv, ok := stmt.(*tree.SetVar)
@@ -745,6 +740,7 @@ func TestGetExprValue(t *testing.T) {
 		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
 		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 		txnOperator.EXPECT().GetWaitActiveCost().Return(time.Duration(0)).AnyTimes()
+		txnOperator.EXPECT().SetFootPrints(gomock.Any()).Return().AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 
@@ -754,7 +750,7 @@ func TestGetExprValue(t *testing.T) {
 
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 		setGlobalPu(pu)
-		ses := NewSession(ctx, &FakeProtocol{}, testutil.NewProc().Mp(), GSysVariables, true, nil)
+		ses := NewSession(ctx, "", &testMysqlWriter{}, testutil.NewProc().Mp())
 		var c clock.Clock
 		err := ses.GetTxnHandler().CreateTempStorage(c)
 		assert.Nil(t, err)
@@ -762,7 +758,7 @@ func TestGetExprValue(t *testing.T) {
 		ec.reqCtx = ctx
 		ses.txnCompileCtx.execCtx = ec
 		for _, kase := range kases {
-			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1, 0)
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1)
 			cvey.So(err, cvey.ShouldBeNil)
 
 			sv, ok := stmt.(*tree.SetVar)
@@ -909,8 +905,7 @@ func Test_makeExecuteSql(t *testing.T) {
 	ctx := context.TODO()
 	pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 	setGlobalPu(pu)
-	ses1 := NewSession(ctx, &FakeProtocol{}, testutil.NewProc().Mp(), GSysVariables, true,
-		nil)
+	ses1 := NewSession(ctx, "", &testMysqlWriter{}, testutil.NewProc().Mp())
 
 	ses1.SetUserDefinedVar("var2", "val2", "set var2 = val2")
 	ses1.SetUserDefinedVar("var3", "val3", "set var3 = val3")
@@ -1159,8 +1154,8 @@ func TestTopsort(t *testing.T) {
 		g.addEdge("3", "4")
 		g.addEdge("3", "5")
 
-		ans, ok := g.sort()
-		cvey.So(ok, cvey.ShouldBeTrue)
+		ans, err := g.sort()
+		cvey.So(err, cvey.ShouldBeNil)
 
 		sort.StringSlice(ans[:2]).Sort()
 		cvey.So(ans[:2], cvey.ShouldResemble, []string{"0", "1"})
@@ -1177,8 +1172,8 @@ func TestTopsort(t *testing.T) {
 		g.addVertex("2")
 
 		// can be in any order
-		_, ok := g.sort()
-		cvey.So(ok, cvey.ShouldBeTrue)
+		_, err := g.sort()
+		cvey.So(err, cvey.ShouldBeNil)
 	})
 
 	cvey.Convey("create graph", t, func() {
@@ -1191,7 +1186,110 @@ func TestTopsort(t *testing.T) {
 		g.addEdge("2", "0")
 
 		// has a cycle
-		_, ok := g.sort()
-		cvey.So(ok, cvey.ShouldBeFalse)
+		_, err := g.sort()
+		cvey.So(err, cvey.ShouldNotBeNil)
 	})
+}
+
+func Test_convertRowsIntoBatch(t *testing.T) {
+	colMysqlTyps := []defines.MysqlType{
+		defines.MYSQL_TYPE_VAR_STRING,
+		defines.MYSQL_TYPE_LONG,
+		defines.MYSQL_TYPE_LONGLONG,
+		defines.MYSQL_TYPE_DOUBLE,
+		defines.MYSQL_TYPE_FLOAT,
+		defines.MYSQL_TYPE_DATE,
+		defines.MYSQL_TYPE_TIME,
+		defines.MYSQL_TYPE_DATETIME,
+		defines.MYSQL_TYPE_TIMESTAMP,
+	}
+	colNames := make([]string, len(colMysqlTyps))
+	mrs := &MysqlResultSet{}
+	cnt := 5
+	for colIdx, mysqlTyp := range colMysqlTyps {
+		col := new(MysqlColumn)
+		col.SetColumnType(mysqlTyp)
+		col.SetName(colNames[colIdx])
+		mrs.AddColumn(col)
+	}
+
+	for i := 0; i < cnt; i++ {
+		row := make([]any, len(mrs.Columns))
+		mrs.AddRow(row)
+		for j := 0; j < len(mrs.Columns); j++ {
+			switch mrs.Columns[j].ColumnType() {
+			case defines.MYSQL_TYPE_VARCHAR:
+				row[j] = "def"
+			case defines.MYSQL_TYPE_VAR_STRING:
+				row[j] = "abc"
+			case defines.MYSQL_TYPE_SHORT:
+				row[j] = int32(math.MaxInt16)
+			case defines.MYSQL_TYPE_LONG:
+				row[j] = int32(math.MaxInt32)
+			case defines.MYSQL_TYPE_LONGLONG:
+				row[j] = int64(math.MaxInt64)
+			case defines.MYSQL_TYPE_DOUBLE:
+				row[j] = float64(math.MaxFloat64)
+			case defines.MYSQL_TYPE_FLOAT:
+				row[j] = float32(math.MaxFloat32)
+			case defines.MYSQL_TYPE_DATE:
+				row[j] = types.Date(0)
+			case defines.MYSQL_TYPE_TIME:
+				row[j] = types.Time(0)
+			case defines.MYSQL_TYPE_DATETIME:
+				row[j] = types.Datetime(0)
+			case defines.MYSQL_TYPE_TIMESTAMP:
+				row[j] = types.Timestamp(0)
+			case defines.MYSQL_TYPE_ENUM:
+				row[j] = types.Enum(1)
+			default:
+				assert.True(t, false)
+			}
+		}
+	}
+
+	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	assert.NoError(t, err)
+	data, pColDefs, err := convertRowsIntoBatch(pool, mrs.Columns, mrs.Data)
+	assert.NoError(t, err)
+	assert.Equal(t, len(mrs.Columns), len(pColDefs.ResultCols))
+	assert.NotNil(t, data)
+	assert.Equal(t, len(data.Vecs), len(mrs.Columns))
+
+	ses := &Session{}
+	ses.SetTimeZone(time.UTC)
+	for i := 0; i < cnt; i++ {
+		row := make([]any, len(data.Vecs))
+		for j := 0; j < len(data.Vecs); j++ {
+			err = extractRowFromVector(context.TODO(), ses, data.Vecs[j], j, row, i)
+			assert.NoError(t, err)
+			switch data.Vecs[j].GetType().Oid {
+			case types.T_varchar:
+				row[j] = string(row[j].([]uint8))
+			case types.T_date:
+				assert.Equal(t, mrs.Data[i][j].(types.Date), row[j])
+				continue
+			case types.T_time:
+				assert.Equal(t, mrs.Data[i][j].(types.Time).String(), row[j])
+				continue
+			case types.T_datetime:
+				assert.Equal(t, mrs.Data[i][j].(types.Datetime).String(), row[j])
+				continue
+			case types.T_timestamp:
+				assert.Equal(t, mrs.Data[i][j].(types.Timestamp).String2(time.UTC, 0), row[j])
+				continue
+			case types.T_enum:
+				assert.Equal(t, mrs.Data[i][j].(types.Enum), row[j])
+				continue
+			}
+			assert.Equal(t, mrs.Data[i][j], row[j])
+		}
+
+	}
+}
+
+func Test_issue3482(t *testing.T) {
+	s := issue3482SqlPrefix + " "
+	ui := UserInput{sql: s}
+	assert.True(t, ui.isIssue3482Sql())
 }

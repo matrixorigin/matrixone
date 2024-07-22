@@ -14,12 +14,11 @@
 
 package malloc
 
-import "unsafe"
-
 type Allocator interface {
-	Allocate(size uint64) (unsafe.Pointer, Deallocator)
+	Allocate(size uint64, hint Hints) ([]byte, Deallocator, error)
 }
 
 type Deallocator interface {
-	Deallocate(unsafe.Pointer)
+	TraitHolder
+	Deallocate(hint Hints)
 }

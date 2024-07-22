@@ -16,6 +16,7 @@ package logtailreplay
 
 import (
 	"bytes"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -30,8 +31,9 @@ type ObjectsIter interface {
 }
 
 type objectsIter struct {
-	ts   types.TS
-	iter btree.IterG[ObjectEntry]
+	onlyVisible bool
+	ts          types.TS
+	iter        btree.IterG[ObjectEntry]
 }
 
 // not accurate!  only used by stats
@@ -39,14 +41,16 @@ func (p *PartitionState) ApproxObjectsNum() int {
 	return p.dataObjects.Len()
 }
 
-func (p *PartitionState) NewObjectsIter(ts types.TS) (ObjectsIter, error) {
+func (p *PartitionState) NewObjectsIter(ts types.TS, onlyVisible bool) (ObjectsIter, error) {
 	if ts.Less(&p.minTS) {
-		return nil, moerr.NewTxnStaleNoCtx()
+		msg := fmt.Sprintf("(%s<%s)", ts.ToString(), p.minTS.ToString())
+		return nil, moerr.NewTxnStaleNoCtx(msg)
 	}
 	iter := p.dataObjects.Copy().Iter()
 	ret := &objectsIter{
-		ts:   ts,
-		iter: iter,
+		onlyVisible: onlyVisible,
+		ts:          ts,
+		iter:        iter,
 	}
 	return ret, nil
 }
@@ -56,7 +60,7 @@ var _ ObjectsIter = new(objectsIter)
 func (b *objectsIter) Next() bool {
 	for b.iter.Next() {
 		entry := b.iter.Item()
-		if !entry.Visible(b.ts) {
+		if b.onlyVisible && !entry.Visible(b.ts) {
 			// not visible
 			continue
 		}

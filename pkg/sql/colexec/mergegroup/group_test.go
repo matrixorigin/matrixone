@@ -36,7 +36,7 @@ const (
 // add unit tests for cases
 
 type groupTestCase struct {
-	arg    *Argument
+	arg    *MergeGroup
 	flgs   []bool // flgs[i] == true: nullable
 	types  []types.Type
 	proc   *process.Process
@@ -102,11 +102,11 @@ func TestGroup(t *testing.T) {
 	for _, tc := range tcs {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
-		tc.proc.Reg.MergeReceivers[0].Ch <- batch.EmptyBatch
+		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
+		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
-		tc.proc.Reg.MergeReceivers[1].Ch <- newBatch(tc.types, tc.proc, Rows)
-		tc.proc.Reg.MergeReceivers[1].Ch <- batch.EmptyBatch
+		tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
+		tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
 		tc.proc.Reg.MergeReceivers[1].Ch <- nil
 		for {
 			ok, err := tc.arg.Call(tc.proc)
@@ -114,15 +114,16 @@ func TestGroup(t *testing.T) {
 				break
 			}
 		}
+
 		tc.arg.Reset(tc.proc, false, nil)
 
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
-		tc.proc.Reg.MergeReceivers[0].Ch <- batch.EmptyBatch
+		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
+		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
-		tc.proc.Reg.MergeReceivers[1].Ch <- newBatch(tc.types, tc.proc, Rows)
-		tc.proc.Reg.MergeReceivers[1].Ch <- batch.EmptyBatch
+		tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
+		tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
 		tc.proc.Reg.MergeReceivers[1].Ch <- nil
 		for {
 			ok, err := tc.arg.Call(tc.proc)
@@ -154,11 +155,11 @@ func BenchmarkGroup(b *testing.B) {
 		for _, tc := range tcs {
 			err := tc.arg.Prepare(tc.proc)
 			require.NoError(t, err)
-			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
-			tc.proc.Reg.MergeReceivers[0].Ch <- batch.EmptyBatch
+			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
+			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
-			tc.proc.Reg.MergeReceivers[1].Ch <- newBatch(tc.types, tc.proc, Rows)
-			tc.proc.Reg.MergeReceivers[1].Ch <- batch.EmptyBatch
+			tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
+			tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
 			tc.proc.Reg.MergeReceivers[1].Ch <- nil
 			for {
 				ok, err := tc.arg.Call(tc.proc)
@@ -168,9 +169,9 @@ func BenchmarkGroup(b *testing.B) {
 			}
 			for i := 0; i < len(tc.proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
 				for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
-					bat := <-tc.proc.Reg.MergeReceivers[i].Ch
-					if bat != nil {
-						bat.Clean(tc.proc.Mp())
+					msg := <-tc.proc.Reg.MergeReceivers[i].Ch
+					if msg.Batch != nil {
+						msg.Batch.Clean(tc.proc.Mp())
 					}
 				}
 			}
@@ -179,23 +180,23 @@ func BenchmarkGroup(b *testing.B) {
 }
 
 func newTestCase(flgs []bool, needEval bool, ts []types.Type) groupTestCase {
-	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
+	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
 		Ctx: ctx,
-		Ch:  make(chan *batch.Batch, 3),
+		Ch:  make(chan *process.RegisterMessage, 3),
 	}
 	proc.Reg.MergeReceivers[1] = &process.WaitRegister{
 		Ctx: ctx,
-		Ch:  make(chan *batch.Batch, 3),
+		Ch:  make(chan *process.RegisterMessage, 3),
 	}
 	return groupTestCase{
 		types:  ts,
 		flgs:   flgs,
 		proc:   proc,
 		cancel: cancel,
-		arg: &Argument{
+		arg: &MergeGroup{
 			NeedEval: needEval,
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{

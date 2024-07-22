@@ -223,7 +223,7 @@ func checkTenantVersion(
 
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		for i := 0; i < rows; i++ {
-			require.Equal(t, version, cols[1].GetStringAt(i))
+			require.Equal(t, version, cols[1].UnsafeGetStringAt(i))
 		}
 		return true
 	})

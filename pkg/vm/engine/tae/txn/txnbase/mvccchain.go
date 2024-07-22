@@ -250,16 +250,10 @@ func (be *MVCCChain[T]) ApplyRollback() error {
 
 }
 
-func (be *MVCCChain[T]) ApplyCommit() error {
+func (be *MVCCChain[T]) ApplyCommit(id string) error {
 	be.Lock()
 	defer be.Unlock()
-	return be.GetLatestNodeLocked().ApplyCommit()
-}
-
-func (be *MVCCChain[T]) Apply1PCCommit() error {
-	be.Lock()
-	defer be.Unlock()
-	return be.GetLatestNodeLocked().ApplyCommit()
+	return be.GetLatestNodeLocked().ApplyCommit(id)
 }
 
 func (be *MVCCChain[T]) PrepareCommit() error {

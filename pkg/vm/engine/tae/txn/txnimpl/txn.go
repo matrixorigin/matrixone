@@ -59,7 +59,7 @@ func (txn *txnImpl) CreateDatabaseWithCtx(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	return txn.Store.CreateDatabaseWithID(name, createSql, datTyp, id)
+	return txn.Store.CreateDatabaseWithID(ctx, name, createSql, datTyp, id)
 }
 
 func (txn *txnImpl) DropDatabase(name string) (db handle.Database, err error) {

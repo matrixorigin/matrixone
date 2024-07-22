@@ -63,7 +63,7 @@ func (b *BindedEngine) Hints() engine.Hints {
 }
 
 func (b *BindedEngine) NewBlockReader(_ context.Context, _ int, _ timestamp.Timestamp,
-	_ *plan.Expr, _ []byte, _ *plan.TableDef, _ any) ([]engine.Reader, error) {
+	_ *plan.Expr, filter any, _ []byte, _ *plan.TableDef, _ any) ([]engine.Reader, error) {
 	return nil, nil
 }
 
@@ -101,4 +101,12 @@ func (b *BindedEngine) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) 
 
 func (b *BindedEngine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
 	return b.engine.Stats(ctx, key, sync)
+}
+
+func (b *BindedEngine) GetMessageCenter() any {
+	return nil
+}
+
+func (b *BindedEngine) GetService() string {
+	return b.engine.GetService()
 }

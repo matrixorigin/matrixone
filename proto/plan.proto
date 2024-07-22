@@ -617,6 +617,7 @@ message ReplaceCtx {
 	repeated uint64 partition_table_ids = 6;
 	repeated string partition_table_names = 7;
 	int32 partition_idx = 8;
+	bool rewrite_from_on_duplicate_key = 9;
 }
 
 message AnalyzeInfo {
@@ -636,6 +637,7 @@ message AnalyzeInfo {
 	int64 insertTime = 14;
 	repeated int64 time_consumed_array_major = 15;
 	repeated int64 time_consumed_array_minor = 16;
+	int64 input_blocks=17;
 }
 
 message PartitionPrune {
@@ -731,6 +733,7 @@ message Node {
 		MARK	= 7;
 		APPLY	= 8;
 		INDEX = 9;
+		L2 = 10;
 	}
 
 	enum AggMode {
@@ -833,12 +836,14 @@ message Node {
 	int32 window_idx = 52;
 	repeated Expr onUpdateExprs = 53;
 	OriginTableMessageForFuzzy fuzzymessage = 54;
+	bool ifInsertFromUnique = 55;
 
 	//for message
-	repeated msgHeader send_msg_list = 55;
-	repeated msgHeader recv_msg_list = 56;
+	repeated msgHeader send_msg_list = 56;
+	repeated msgHeader recv_msg_list = 57;
 
-	Snapshot scan_snapshot = 57;
+	Snapshot scan_snapshot = 58;
+
 }
 
 // Snapshot Represents a snapshot of the database
@@ -864,6 +869,8 @@ message ExternScan {
     bytes  enclosed_by = 5;
     string terminated = 6;
 	string json_type = 7;
+    bytes  escaped_by = 8;
+	map<string, int32> TbColToDataCol = 9;
 }
 
 message LockTarget {
@@ -904,7 +911,6 @@ message RuntimeFilterSpec {
 	bool match_prefix = 2;
 	int32 upper_limit = 3;
 	Expr expr = 4;
-	bool handled = 5;
 }
 
 message IdList {
@@ -1100,16 +1106,16 @@ message DataDefinition {
 		DropTable drop_table			= 8;
 		CreateIndex create_index 		= 9;
 		AlterIndex alter_index 			= 10;
-		DropIndex drop_index 			= 11;
+		DropIndex drop_index 			  = 11;
 		TruncateTable truncate_table	= 12;
 		ShowVariables show_variables 	= 13;
-		AlterView alter_view			= 14;
+		AlterView alter_view			      = 14;
 		LockTables lock_tables          = 15;
 		UnLockTables unlock_tables      = 16;
 		CreateSequence create_sequence  = 17;
 		DropSequence   drop_sequence    = 18;
 		AlterSequence  alter_sequence   = 19;
-
+		CreateView  create_view         = 20;
 	}
 }
 
@@ -1297,14 +1303,12 @@ message AlterTable {
 	AlgorithmType algorithm_type = 6;
 	string create_tmp_table_sql = 7;
 	string insert_tmp_data_sql = 8;
-	string create_table_sql = 9;
-	string insert_data_sql = 10;
-	map<uint64, ColDef> change_tbl_colId_map = 11;
+	map<uint64, ColDef> change_tbl_colId_map = 9;
 	//detect fk self refer constraint
-	repeated string detectSqls= 12;
+	repeated string detectSqls= 10;
 	// alter table may insert fk records related to this table
 	// into mo_foreign_keys
-	repeated string updateFkSqls = 13;
+	repeated string updateFkSqls = 11;
 }
 
 message DropTable {
@@ -1323,6 +1327,13 @@ message DropTable {
 	repeated string updateFkSqls = 11;
 	//fk child table id that refers to me
 	repeated uint64 fkChildTblsReferToMe = 12;
+}
+
+message CreateView {
+	bool if_not_exists 	= 1;
+	string database 	= 2;
+	bool replace        = 3;
+	TableDef table_def 	= 4;
 }
 
 message AlterView {

@@ -17,6 +17,7 @@ package aggexec
 import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"math"
@@ -33,6 +34,27 @@ type groupConcatExec struct {
 	distinctHash
 
 	separator []byte
+}
+
+func (exec *groupConcatExec) marshal() ([]byte, error) {
+	d := exec.multiAggInfo.getEncoded()
+	r, err := exec.ret.marshal()
+	if err != nil {
+		return nil, err
+	}
+	encoded := &EncodedAgg{
+		Info:   d,
+		Result: r,
+		Groups: [][]byte{exec.separator},
+	}
+	return encoded.Marshal()
+}
+
+func (exec *groupConcatExec) unmarshal(mp *mpool.MPool, result []byte, groups [][]byte) error {
+	if err := exec.SetExtraInformation(groups[0], 0); err != nil {
+		return err
+	}
+	return exec.ret.unmarshal(result)
 }
 
 func GroupConcatReturnType(args []types.Type) types.Type {

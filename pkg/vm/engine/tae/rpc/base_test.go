@@ -102,7 +102,7 @@ func (h *mockHandle) HandlePreCommit(
 	ctx context.Context,
 	meta *txn.TxnMeta,
 	req *api.PrecommitWriteCmd,
-	resp *api.SyncLogTailResp) error {
+	resp *api.TNStringResponse) error {
 
 	return h.Handle.HandlePreCommitWrite(ctx, *meta, req, resp)
 }
@@ -119,7 +119,7 @@ func (h *mockHandle) handleCmds(
 				return moerr.NewInfo(ctx, "cmd is not PreCommitWriteCmd")
 			}
 			if err = h.Handle.HandlePreCommitWrite(ctx, *txn,
-				&cmd, new(api.SyncLogTailResp)); err != nil {
+				&cmd, new(api.TNStringResponse)); err != nil {
 				return
 			}
 		case CmdPrepare:

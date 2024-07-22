@@ -67,7 +67,7 @@ type Handler interface {
 		ctx context.Context,
 		meta txn.TxnMeta,
 		req *apipb.PrecommitWriteCmd,
-		resp *apipb.SyncLogTailResp,
+		resp *apipb.TNStringResponse,
 	) error
 
 	HandleFlushTable(
@@ -138,4 +138,10 @@ type Handler interface {
 		req *db.InterceptCommit,
 		resp *apipb.SyncLogTailResp,
 	) (func(), error)
+	HandleDiskCleaner(
+		ctx context.Context,
+		meta txn.TxnMeta,
+		req *db.DiskCleaner,
+		resp *apipb.SyncLogTailResp,
+	) (cb func(), err error)
 }

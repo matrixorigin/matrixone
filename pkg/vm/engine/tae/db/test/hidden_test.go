@@ -55,13 +55,13 @@ func TestHiddenWithPK1(t *testing.T) {
 	{
 		offsets := make([]uint32, 0)
 		it := rel.MakeObjectIt()
-		for it.Valid() {
+		for it.Next() {
 			blk := it.GetObject()
 			view, err := blk.GetColumnDataById(context.Background(), 0, schema.PhyAddrKey.Idx, common.DefaultAllocator)
 			assert.NoError(t, err)
 			defer view.Close()
 			fp := blk.Fingerprint()
-			_ = view.GetData().Foreach(func(v any, _ bool, _ int) (err error) {
+			_ = view.Vecs[0].Foreach(func(v any, _ bool, _ int) (err error) {
 				rid := v.(types.Rowid)
 				bid, offset := rid.Decode()
 				t.Logf("bid=%s,offset=%d", bid.String(), offset)
@@ -69,7 +69,6 @@ func TestHiddenWithPK1(t *testing.T) {
 				offsets = append(offsets, offset)
 				return
 			}, nil)
-			it.Next()
 		}
 		// sort.Slice(offsets, func(i, j int) bool { return offsets[i] < offsets[j] })
 		// assert.Equal(t, []uint32{0, 1, 2, 3}, offsets)
@@ -86,7 +85,7 @@ func TestHiddenWithPK1(t *testing.T) {
 		offsets := make([]uint32, 0)
 		fp := blk.Fingerprint()
 		t.Log(fp.String())
-		_ = view.GetData().Foreach(func(v any, _ bool, _ int) (err error) {
+		_ = view.Vecs[0].Foreach(func(v any, _ bool, _ int) (err error) {
 			rid := v.(types.Rowid)
 			bid, offset := rid.Decode()
 			t.Logf(",bid=%s,offset=%d", bid, offset)
@@ -120,7 +119,7 @@ func TestHiddenWithPK1(t *testing.T) {
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
 	{
 		it := rel.MakeObjectIt()
-		for it.Valid() {
+		for it.Next() {
 			blk := it.GetObject()
 			for j := 0; j < blk.BlkCnt(); j++ {
 				view, err := blk.GetColumnDataByName(context.Background(), uint16(j), catalog.PhyAddrColumnName, common.DefaultAllocator)
@@ -129,11 +128,11 @@ func TestHiddenWithPK1(t *testing.T) {
 				offsets := make([]uint32, 0)
 				meta := blk.GetMeta().(*catalog.ObjectEntry)
 				t.Logf("%v, blk %d", meta.String(), j)
-				_ = view.GetData().Foreach(func(v any, _ bool, _ int) (err error) {
+				_ = view.Vecs[0].Foreach(func(v any, _ bool, _ int) (err error) {
 					rid := v.(types.Rowid)
 					bid, offset := rid.Decode()
 					// t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
-					expectedBid := objectio.NewBlockidWithObjectID(&meta.ID, uint16(j))
+					expectedBid := objectio.NewBlockidWithObjectID(meta.ID(), uint16(j))
 					assert.Equal(t, *expectedBid, bid, "expect %v, get %v", expectedBid.String(), bid.String())
 					offsets = append(offsets, offset)
 					return
@@ -149,7 +148,6 @@ func TestHiddenWithPK1(t *testing.T) {
 					}
 				}
 			}
-			it.Next()
 		}
 	}
 
@@ -163,7 +161,7 @@ func TestHiddenWithPK1(t *testing.T) {
 	{
 		it := rel.MakeObjectIt()
 		objIdx := -1
-		for it.Valid() {
+		for it.Next() {
 			blk := it.GetObject()
 			objIdx++
 			for j := 0; j < blk.BlkCnt(); j++ {
@@ -174,11 +172,11 @@ func TestHiddenWithPK1(t *testing.T) {
 				meta := blk.GetMeta().(*catalog.ObjectEntry)
 				t.Log(meta.String())
 				t.Log(meta.String())
-				_ = view.GetData().Foreach(func(v any, _ bool, _ int) (err error) {
+				_ = view.Vecs[0].Foreach(func(v any, _ bool, _ int) (err error) {
 					rid := v.(types.Rowid)
 					bid, offset := rid.Decode()
 					// t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
-					assert.Equal(t, *objectio.NewBlockidWithObjectID(&meta.ID, uint16(j)), bid)
+					assert.Equal(t, *objectio.NewBlockidWithObjectID(meta.ID(), uint16(j)), bid)
 					offsets = append(offsets, offset)
 					return
 				}, nil)
@@ -194,7 +192,6 @@ func TestHiddenWithPK1(t *testing.T) {
 				}
 
 			}
-			it.Next()
 		}
 	}
 
@@ -223,7 +220,7 @@ func TestHidden2(t *testing.T) {
 	err := rel.Append(context.Background(), bats[0])
 	{
 		blk := testutil.GetOneObject(rel)
-		var hidden *containers.ColumnView
+		var hidden *containers.Batch
 		for _, def := range schema.ColDefs {
 			view, err := blk.GetColumnDataById(context.Background(), 0, def.Idx, common.DefaultAllocator)
 			assert.NoError(t, err)
@@ -233,7 +230,7 @@ func TestHidden2(t *testing.T) {
 				hidden = view
 			}
 		}
-		_ = hidden.GetData().Foreach(func(key any, _ bool, _ int) (err error) {
+		_ = hidden.Vecs[0].Foreach(func(key any, _ bool, _ int) (err error) {
 			rid := key.(types.Rowid)
 			bid, offset := rid.Decode()
 			t.Logf(",bid=%s,offset=%d", bid, offset)
@@ -250,7 +247,7 @@ func TestHidden2(t *testing.T) {
 			view, err := blk.GetColumnDataById(context.Background(), 0, def.Idx, common.DefaultAllocator)
 			assert.NoError(t, err)
 			defer view.Close()
-			view.ApplyDeletes()
+			view.Compact()
 			assert.Equal(t, bats[0].Length()-1, view.Length())
 		}
 	}
@@ -260,7 +257,7 @@ func TestHidden2(t *testing.T) {
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
 	{
 		blk := testutil.GetOneObject(rel)
-		var hidden *containers.ColumnView
+		var hidden *containers.Batch
 		for _, def := range schema.ColDefs {
 			view, err := blk.GetColumnDataById(context.Background(), 0, def.Idx, common.DefaultAllocator)
 			assert.NoError(t, err)
@@ -270,7 +267,7 @@ func TestHidden2(t *testing.T) {
 				hidden = view
 			}
 		}
-		_ = hidden.GetData().Foreach(func(key any, _ bool, _ int) (err error) {
+		_ = hidden.Vecs[0].Foreach(func(key any, _ bool, _ int) (err error) {
 			rid := key.(types.Rowid)
 			bid, offset := rid.Decode()
 			t.Logf(",bid=%s,offset=%d", bid, offset)
@@ -307,16 +304,15 @@ func TestHidden2(t *testing.T) {
 	{
 		it := rel.MakeObjectIt()
 		rows := 0
-		for it.Valid() {
+		for it.Next() {
 			blk := it.GetObject()
 			for j := 0; j < blk.BlkCnt(); j++ {
 				hidden, err := blk.GetColumnDataById(context.Background(), uint16(j), schema.PhyAddrKey.Idx, common.DefaultAllocator)
 				assert.NoError(t, err)
 				defer hidden.Close()
-				hidden.ApplyDeletes()
+				hidden.Compact()
 				rows += hidden.Length()
 			}
-			it.Next()
 		}
 		assert.Equal(t, 26, rows)
 	}

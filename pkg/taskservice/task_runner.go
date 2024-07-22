@@ -380,14 +380,20 @@ func (r *taskRunner) addToWait(ctx context.Context, task task.AsyncTask) bool {
 	select {
 	case <-ctx.Done():
 		return false
+	default:
+	}
+
+	r.runningTasks.Lock()
+	defer r.runningTasks.Unlock()
+	select {
 	case r.waitTasksC <- rt:
-		r.runningTasks.Lock()
 		r.runningTasks.m[task.ID] = rt
-		r.runningTasks.Unlock()
 		r.logger.Info("task added to wait queue",
 			zap.String("task", task.DebugString()))
 		return true
+	default:
 	}
+	return false
 }
 
 func (r *taskRunner) dispatch(ctx context.Context) {

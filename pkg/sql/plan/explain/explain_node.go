@@ -957,6 +957,9 @@ func (a AnalyzeInfoDescribeImpl) GetDescription(ctx context.Context, options *Ex
 	}
 
 	fmt.Fprintf(buf, " waitTime=%dms", a.AnalyzeInfo.WaitTimeConsumed/MILLION)
+	if options.NodeType == plan.Node_TABLE_SCAN {
+		fmt.Fprintf(buf, " inputBlocks=%d", a.AnalyzeInfo.InputBlocks)
+	}
 	fmt.Fprintf(buf, " inputRows=%d", a.AnalyzeInfo.InputRows)
 	fmt.Fprintf(buf, " outputRows=%d", a.AnalyzeInfo.OutputRows)
 	if a.AnalyzeInfo.InputSize < MB {
@@ -999,7 +1002,7 @@ func (c *CostDescribeImpl) GetDescription(ctx context.Context, options *ExplainO
 		if c.Stats.BlockNum > 0 {
 			blockNumStr = " blockNum=" + strconv.FormatInt(int64(c.Stats.BlockNum), 10)
 		}
-		if c.Stats.HashmapStats != nil && c.Stats.HashmapStats.HashmapSize > 0 {
+		if c.Stats.HashmapStats != nil && c.Stats.HashmapStats.HashmapSize > 1 {
 			hashmapSizeStr = " hashmapSize=" + strconv.FormatFloat(c.Stats.HashmapStats.HashmapSize, 'f', 2, 64)
 		}
 		buf.WriteString(" (cost=" + strconv.FormatFloat(c.Stats.Cost, 'f', 2, 64) +

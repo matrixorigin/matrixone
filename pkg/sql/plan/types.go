@@ -16,7 +16,9 @@ package plan
 
 import (
 	"context"
+	"fmt"
 	"math"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -129,6 +131,8 @@ type CompilerContext interface {
 	SetSnapshot(snapshot *Snapshot)
 	GetViews() []string
 	SetViews(views []string)
+
+	GetLowerCaseTableNames() int64
 }
 
 type Optimizer interface {
@@ -151,20 +155,6 @@ type BaseOptimizer struct {
 type ViewData struct {
 	Stmt            string
 	DefaultDatabase string
-}
-
-type ExecType int
-
-const (
-	ExecTypeAP ExecType = iota
-	ExecTypeTP
-)
-
-type ExecInfo struct {
-	Typ        ExecType
-	WithGPU    bool
-	WithBigMem bool
-	CnNumbers  int
 }
 
 type QueryBuilder struct {
@@ -206,6 +196,10 @@ type OptimizerHints struct {
 	applyIndices               int
 	runtimeFilter              int
 	joinOrdering               int
+	forceOneCN                 int
+	execType                   int
+	disableRightJoin           int
+	printShuffle               int
 }
 
 type CTERef struct {
@@ -292,6 +286,9 @@ type BindContext struct {
 	snapshot *Snapshot
 	// all view keys(dbName#viewName)
 	views []string
+
+	// lower is sys var lower_case_table_names
+	lower int64
 }
 
 type NameTuple struct {
@@ -347,6 +344,7 @@ type WhereBinder struct {
 
 type GroupBinder struct {
 	baseBinder
+	selectList tree.SelectExprs
 }
 
 type HavingBinder struct {
@@ -423,4 +421,50 @@ type OriginTableMessageForFuzzy struct {
 type MultiTableIndex struct {
 	IndexAlgo string
 	IndexDefs map[string]*plan.IndexDef
+}
+
+type RemapInfo struct {
+	step           int32
+	node           *plan.Node
+	tip            string
+	colRefCnt      map[[2]int32]int
+	colRefBool     map[[2]int32]bool
+	sinkColRef     map[[2]int32]int
+	remapping      *ColRefRemapping
+	interRemapping *ColRefRemapping
+	srcExprIdx     int
+}
+
+func (info *RemapInfo) String() string {
+	if info == nil {
+		return "empty RemapInfo"
+	}
+
+	sb := strings.Builder{}
+	sb.WriteString("colRefCnt:")
+	for k, v := range info.colRefCnt {
+		sb.WriteString(fmt.Sprintf("[%v : %v]", k, v))
+	}
+	sb.WriteString("colRefBool:")
+	for k, v := range info.colRefBool {
+		sb.WriteString(fmt.Sprintf("[%v : %v]", k, v))
+	}
+	sb.WriteString("sinkColRef:")
+	for k, v := range info.sinkColRef {
+		sb.WriteString(fmt.Sprintf("[%v : %v]", k, v))
+	}
+	sb.WriteString(info.remapping.String())
+	sb.WriteString(info.interRemapping.String())
+
+	return fmt.Sprintf(
+		"step %d nodeId %d nodeType %s tip %s "+
+			"%s "+
+			"srcExprIdx %d ",
+		info.step,
+		info.node.NodeId,
+		info.node.NodeType,
+		info.tip,
+		sb.String(),
+		info.srcExprIdx,
+	)
 }

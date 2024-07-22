@@ -41,7 +41,7 @@ const (
 
 // add unit tests for cases
 type groupTestCase struct {
-	arg  *Argument
+	arg  *Group
 	flgs []bool // flgs[i] == true: nullable
 	proc *process.Process
 }
@@ -106,10 +106,17 @@ func TestGroup(t *testing.T) {
 			newBatch(tc.arg.Types, tc.proc, Rows),
 			newBatch(tc.arg.Types, tc.proc, Rows),
 			batch.EmptyBatch,
+			nil,
 		}
 		resetChildren(tc.arg, bats)
-		_, err = tc.arg.Call(tc.proc)
-		require.NoError(t, err)
+		for {
+			result, err1 := tc.arg.Call(tc.proc)
+			require.NoError(t, err1)
+			if result.Status == vm.ExecStop || result.Batch == nil {
+				break
+			}
+			result.Batch.Clean(tc.proc.Mp())
+		}
 
 		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
 		tc.arg.Reset(tc.proc, false, nil)
@@ -120,10 +127,19 @@ func TestGroup(t *testing.T) {
 			newBatch(tc.arg.Types, tc.proc, Rows),
 			newBatch(tc.arg.Types, tc.proc, Rows),
 			batch.EmptyBatch,
+			nil,
 		}
 		resetChildren(tc.arg, bats)
-		_, err = tc.arg.Call(tc.proc)
-		require.NoError(t, err)
+
+		for {
+			result, err1 := tc.arg.Call(tc.proc)
+			require.NoError(t, err1)
+			if result.Status == vm.ExecStop || result.Batch == nil {
+				break
+			}
+			result.Batch.Clean(tc.proc.Mp())
+		}
+
 		tc.arg.Free(tc.proc, false, nil)
 		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
 		tc.proc.FreeVectors()
@@ -145,10 +161,17 @@ func BenchmarkGroup(b *testing.B) {
 				newBatch(tc.arg.Types, tc.proc, BenchmarkRows),
 				newBatch(tc.arg.Types, tc.proc, BenchmarkRows),
 				batch.EmptyBatch,
+				nil,
 			}
 			resetChildren(tc.arg, bats)
-			_, err = tc.arg.Call(tc.proc)
-			require.NoError(t, err)
+			for {
+				result, err1 := tc.arg.Call(tc.proc)
+				require.NoError(t, err1)
+				if result.Status == vm.ExecStop || result.Batch == nil {
+					break
+				}
+				result.Batch.Clean(tc.proc.Mp())
+			}
 
 			tc.arg.Free(tc.proc, false, nil)
 			tc.arg.GetChildren(0).Free(tc.proc, false, nil)
@@ -177,8 +200,8 @@ func newTestCase(flgs []bool, ts []types.Type, exprIdx []int, pos int32) groupTe
 	}
 	return groupTestCase{
 		flgs: flgs,
-		proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
-		arg: &Argument{
+		proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+		arg: &Group{
 			Exprs: exprs,
 			Types: ts,
 			Aggs:  aggs,
@@ -209,18 +232,18 @@ func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
 
-func resetChildren(arg *Argument, bats []*batch.Batch) {
+func resetChildren(arg *Group, bats []*batch.Batch) {
+	valueScanArg := &value_scan.ValueScan{
+		Batchs: bats,
+	}
+	valueScanArg.Prepare(nil)
 	if arg.NumChildren() == 0 {
-		arg.AppendChild(&value_scan.Argument{
-			Batchs: bats,
-		})
+		arg.AppendChild(valueScanArg)
 
 	} else {
 		arg.SetChildren(
 			[]vm.Operator{
-				&value_scan.Argument{
-					Batchs: bats,
-				},
+				valueScanArg,
 			})
 	}
 	arg.ctr.state = vm.Build

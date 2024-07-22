@@ -29,8 +29,6 @@ import (
 // data should be done using the internal sql executor, otherwise pessimistic transactions
 // may not work.
 type SQLExecutor interface {
-	// Exec new a txn operator, used for debug.
-	NewTxnOperator(ctx context.Context) client.TxnOperator
 	// Exec exec a sql in a exists txn.
 	Exec(ctx context.Context, sql string, opts Options) (Result, error)
 	// ExecTxn executor sql in a txn. execFunc can use TxnExecutor to exec multiple sql
@@ -63,6 +61,7 @@ type Options struct {
 	statementOptions        StatementOption
 	txnOpts                 []client.TxnOption
 	enableTrace             bool
+	lower                   *int64
 }
 
 // StatementOption statement execute option.

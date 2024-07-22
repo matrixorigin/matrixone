@@ -26,7 +26,6 @@ import (
 	"strconv"
 	"strings"
 
-	json2 "github.com/goccy/go-json"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -634,7 +633,7 @@ type parser struct {
 
 func (p *parser) do() (Node, error) {
 	var z Node
-	de := json2.NewDecoder(bytes.NewReader(p.src))
+	de := json.NewDecoder(bytes.NewReader(p.src))
 	de.UseNumber()
 	checkEOF := func(v any) (Node, error) {
 		_, err := de.Token()
@@ -646,7 +645,7 @@ func (p *parser) do() (Node, error) {
 		}
 		return Node{v}, nil
 	}
-	var tk json2.Token
+	var tk json.Token
 	var err error
 	for {
 		tk, err = de.Token()

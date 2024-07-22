@@ -33,7 +33,7 @@ import (
 	"github.com/parquet-go/parquet-go"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(External)
 
 const (
 	ColumnCntLargerErrorInfo = "the table column is larger than input data column"
@@ -62,6 +62,7 @@ type ExParamConst struct {
 	FileOffset      []int64
 	FileOffsetTotal []*pipeline.FileOffset
 	Name2ColIndex   map[string]int32
+	TbColToDataCol  map[string]int32
 	Ctx             context.Context
 	Extern          *tree.ExternParam
 	tableDef        *plan.TableDef
@@ -99,62 +100,67 @@ type FilterParam struct {
 	blockReader  *blockio.BlockReader
 }
 
-type Argument struct {
-	Es  *ExternalParam
-	buf *batch.Batch
-
+type container struct {
 	maxAllocSize int
+	buf          *batch.Batch
+}
+type External struct {
+	ctr *container
+	Es  *ExternalParam
 
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (external *External) GetOperatorBase() *vm.OperatorBase {
+	return &external.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[External](
+		func() *External {
+			return &External{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *External) {
+			*a = External{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[External]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (external External) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *External {
+	return reuse.Alloc[External](nil)
 }
 
-func (arg *Argument) WithEs(es *ExternalParam) *Argument {
-	arg.Es = es
-	return arg
+func (external *External) WithEs(es *ExternalParam) *External {
+	external.Es = es
+	return external
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (external *External) Release() {
+	if external != nil {
+		reuse.Free[External](external, nil)
 	}
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	arg.Free(proc, pipelineFailed, err)
+func (external *External) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	external.Free(proc, pipelineFailed, err)
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if arg.buf != nil {
-		arg.buf.Clean(proc.Mp())
-		arg.buf = nil
+func (external *External) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if external.ctr != nil {
+		if external.ctr.buf != nil {
+			external.ctr.buf.Clean(proc.Mp())
+			external.ctr.buf = nil
+		}
+		anal := proc.GetAnalyze(external.GetIdx(), external.GetParallelIdx(), external.GetParallelMajor())
+		anal.Alloc(int64(external.ctr.maxAllocSize))
+		external.ctr = nil
 	}
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
-	anal.Alloc(int64(arg.maxAllocSize))
 }
 
 type ParseLineHandler struct {

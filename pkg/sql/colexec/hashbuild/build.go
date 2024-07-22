@@ -17,6 +17,7 @@ package hashbuild
 import (
 	"bytes"
 	"runtime"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -27,28 +28,26 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "hash_build"
+const opName = "hash_build"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (hashBuild *HashBuild) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": hash build ")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	arg.ctr = new(container)
-	if len(proc.Reg.MergeReceivers) > 1 {
-		arg.ctr.InitReceiver(proc, true)
-		arg.ctr.isMerge = true
-	} else {
-		arg.ctr.InitReceiver(proc, false)
-	}
+func (hashBuild *HashBuild) OpType() vm.OpType {
+	return vm.HashBuild
+}
 
-	if arg.NeedHashMap {
-		arg.ctr.vecs = make([][]*vector.Vector, 0)
-		ctr := arg.ctr
-		ctr.executor = make([]colexec.ExpressionExecutor, len(arg.Conditions))
+func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
+	hashBuild.ctr = new(container)
+
+	if hashBuild.NeedHashMap {
+		hashBuild.ctr.vecs = make([][]*vector.Vector, 0)
+		ctr := hashBuild.ctr
+		ctr.executor = make([]colexec.ExpressionExecutor, len(hashBuild.Conditions))
 		ctr.keyWidth = 0
-		for i, expr := range arg.Conditions {
+		for i, expr := range hashBuild.Conditions {
 			typ := expr.Typ
 			width := types.T(typ.Id).TypeLen()
 			// todo : for varlena type, always go strhashmap
@@ -56,7 +55,7 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 				width = 128
 			}
 			ctr.keyWidth += width
-			ctr.executor[i], err = colexec.NewExpressionExecutor(proc, arg.Conditions[i])
+			ctr.executor[i], err = colexec.NewExpressionExecutor(proc, hashBuild.Conditions[i])
 			if err != nil {
 				return err
 			}
@@ -73,26 +72,26 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 		}
 	}
 
-	arg.ctr.batches = make([]*batch.Batch, 0)
+	hashBuild.ctr.batches = make([]*batch.Batch, 0)
 
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze(hashBuild.GetIdx(), hashBuild.GetParallelIdx(), hashBuild.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 	result := vm.NewCallResult()
-	ap := arg
+	ap := hashBuild
 	ctr := ap.ctr
 	for {
 		switch ctr.state {
 		case BuildHashMap:
-			if err := ctr.build(ap, proc, anal, arg.GetIsFirst()); err != nil {
+			if err := ctr.build(ap, proc, anal, hashBuild.GetIsFirst()); err != nil {
 				ctr.cleanHashMap()
 				return result, err
 			}
@@ -180,21 +179,18 @@ func (ctr *container) mergeIntoBatches(src *batch.Batch, proc *process.Process) 
 	return nil
 }
 
-func (ctr *container) collectBuildBatches(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
-	var err error
+func (ctr *container) collectBuildBatches(hashBuild *HashBuild, proc *process.Process, anal process.Analyze, isFirst bool) error {
 	var currentBatch *batch.Batch
 	for {
-		if ap.ctr.isMerge {
-			currentBatch, _, err = ctr.ReceiveFromAllRegs(anal)
-		} else {
-			currentBatch, _, err = ctr.ReceiveFromSingleReg(0, anal)
-		}
+		result, err := vm.ChildrenCall(hashBuild.GetChildren(0), proc, anal)
 		if err != nil {
 			return err
 		}
-		if currentBatch == nil {
+		if result.Batch == nil {
 			break
 		}
+		currentBatch = result.Batch
+		atomic.AddInt64(&currentBatch.Cnt, 1)
 		if currentBatch.IsEmpty() {
 			proc.PutBatch(currentBatch)
 			continue
@@ -214,7 +210,7 @@ func (ctr *container) collectBuildBatches(ap *Argument, proc *process.Process, a
 	return nil
 }
 
-func (ctr *container) buildHashmap(ap *Argument, proc *process.Process) error {
+func (ctr *container) buildHashmap(ap *HashBuild, proc *process.Process) error {
 	if len(ctr.batches) == 0 || !ap.NeedHashMap {
 		return nil
 	}
@@ -351,7 +347,7 @@ func (ctr *container) buildHashmap(ap *Argument, proc *process.Process) error {
 	return nil
 }
 
-func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
+func (ctr *container) build(ap *HashBuild, proc *process.Process, anal process.Analyze, isFirst bool) error {
 	err := ctr.collectBuildBatches(ap, proc, anal, isFirst)
 	if err != nil {
 		return err
@@ -370,7 +366,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	return nil
 }
 
-func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) error {
+func (ctr *container) handleRuntimeFilter(ap *HashBuild, proc *process.Process) error {
 	if ap.RuntimeFilterSpec == nil {
 		return nil
 	}
@@ -453,7 +449,7 @@ func (ctr *container) evalJoinCondition(proc *process.Process) error {
 		tmpVes := make([]*vector.Vector, len(ctr.executor))
 		ctr.vecs = append(ctr.vecs, tmpVes)
 		for idx2 := range ctr.executor {
-			vec, err := ctr.executor[idx2].Eval(proc, []*batch.Batch{ctr.batches[idx1]})
+			vec, err := ctr.executor[idx2].Eval(proc, []*batch.Batch{ctr.batches[idx1]}, nil)
 			if err != nil {
 				return err
 			}

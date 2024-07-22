@@ -19,39 +19,32 @@ import (
 	"context"
 	"fmt"
 	"go/constant"
+	"net"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/BurntSushi/toml"
-	"github.com/fagongzi/goetty/v2"
-	"github.com/stretchr/testify/assert"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-
-	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/golang/mock/gomock"
-	"github.com/prashantv/gostub"
-	"github.com/smartystreets/goconvey/convey"
-	"github.com/stretchr/testify/require"
-
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/queryservice"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/prashantv/gostub"
+	"github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGetTenantInfo(t *testing.T) {
@@ -171,72 +164,6 @@ func TestFormSql(t *testing.T) {
 		convey.So(sql, convey.ShouldEqual, fmt.Sprintf(roleIdOfRoleFormat, "r"))
 		sql, _ = getSqlForRoleOfUser(context.TODO(), 0, "r")
 		convey.So(sql, convey.ShouldEqual, fmt.Sprintf(getRoleOfUserFormat, 0, "r"))
-	})
-}
-
-func Test_checkSysExistsOrNot(t *testing.T) {
-	convey.Convey("check sys tenant exists or not", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-		pu.SV.SetDefaultValues()
-
-		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
-
-		mrs1 := mock_frontend.NewMockExecResult(ctrl)
-		dbs := make([]string, 0)
-		for k := range sysWantedDatabases {
-			dbs = append(dbs, k)
-		}
-		mrs1.EXPECT().GetRowCount().Return(uint64(len(sysWantedDatabases))).AnyTimes()
-		mrs1.EXPECT().GetString(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx2 context.Context, r uint64, c uint64) (string, error) {
-			return dbs[r], nil
-		}).AnyTimes()
-
-		mrs2 := mock_frontend.NewMockExecResult(ctrl)
-		tables := make([]string, 0)
-		for k := range sysWantedTables {
-			tables = append(tables, k)
-		}
-
-		mrs2.EXPECT().GetRowCount().Return(uint64(len(sysWantedTables))).AnyTimes()
-		mrs2.EXPECT().GetString(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx2 context.Context, r uint64, c uint64) (string, error) {
-			return tables[r], nil
-		}).AnyTimes()
-
-		rs := []ExecResult{
-			mrs1,
-			mrs2,
-		}
-
-		cnt := 0
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			old := cnt
-			cnt++
-			if cnt >= len(rs) {
-				cnt = 0
-			}
-			return []interface{}{rs[old]}
-		}).AnyTimes()
-
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		exists, err := checkSysExistsOrNot(ctx, bh)
-		convey.So(exists, convey.ShouldBeTrue)
-		convey.So(err, convey.ShouldBeNil)
-
-		// A mock autoIncrCaches.
-		aicm := &defines.AutoIncrCacheManager{}
-		finalVersion := "1.2.0"
-		err = InitSysTenantOld(ctx, aicm, finalVersion)
-		convey.So(err, convey.ShouldBeNil)
 	})
 }
 
@@ -2418,38 +2345,42 @@ func Test_determineRevokePrivilege(t *testing.T) {
 	convey.Convey("revoke privilege [ObjectType: Table] AdminRole succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
-		var stmts []*tree.RevokePrivilege
+		// var stmts []*tree.RevokePrivilege
 
-		for _, stmt := range stmts {
-			priv := determinePrivilegeSetOfStatement(stmt)
-			ses := newSes(priv, ctrl)
+		// XXX FIXME: Go compiler is correct -- this test is busted.
+		// we are looping over nil.
+		// for _, stmt := range stmts {
+		// 	priv := determinePrivilegeSetOfStatement(stmt)
+		//	ses := newSes(priv, ctrl)
 
-			ok, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
-			convey.So(err, convey.ShouldBeNil)
-			convey.So(ok, convey.ShouldBeTrue)
-		}
+		//	ok, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		//	convey.So(err, convey.ShouldBeNil)
+		//	convey.So(ok, convey.ShouldBeTrue)
+		// }
 	})
 	convey.Convey("revoke privilege [ObjectType: Table] not AdminRole fail", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
-		var stmts []*tree.RevokePrivilege
+		// var stmts []*tree.RevokePrivilege
 
-		for _, stmt := range stmts {
-			priv := determinePrivilegeSetOfStatement(stmt)
-			ses := newSes(priv, ctrl)
-			ses.tenant = &TenantInfo{
-				Tenant:        "xxx",
-				User:          "xxx",
-				DefaultRole:   "xxx",
-				TenantID:      1001,
-				UserID:        1001,
-				DefaultRoleID: 1001,
-			}
+		// XXX FIXME: Go compiler is correct -- this test is busted.
+		// we are looping over nil.
+		// for _, stmt := range stmts {
+		// 	priv := determinePrivilegeSetOfStatement(stmt)
+		// 	ses := newSes(priv, ctrl)
+		// 	ses.tenant = &TenantInfo{
+		// 		Tenant:        "xxx",
+		// 		User:          "xxx",
+		// 		DefaultRole:   "xxx",
+		// 		TenantID:      1001,
+		// 		UserID:        1001,
+		// 		DefaultRoleID: 1001,
+		// 	}
 
-			ok, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
-			convey.So(err, convey.ShouldBeNil)
-			convey.So(ok, convey.ShouldBeFalse)
-		}
+		// 	ok, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		// 	convey.So(err, convey.ShouldBeNil)
+		// 	convey.So(ok, convey.ShouldBeFalse)
+		// }
 	})
 }
 
@@ -5939,8 +5870,8 @@ func Test_doInterpretCall(t *testing.T) {
 		priv := determinePrivilegeSetOfStatement(call)
 		ses := newSes(priv, ctrl)
 		proc := testutil.NewProcess()
-		proc.FileService = getGlobalPu().FileService
-		proc.SessionInfo = process.SessionInfo{Account: sysAccountName}
+		proc.Base.FileService = getGlobalPu().FileService
+		proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
 		ses.GetTxnCompileCtx().execCtx = &ExecCtx{
 			proc: proc,
 		}
@@ -5981,8 +5912,8 @@ func Test_doInterpretCall(t *testing.T) {
 		priv := determinePrivilegeSetOfStatement(call)
 		ses := newSes(priv, ctrl)
 		proc := testutil.NewProcess()
-		proc.FileService = getGlobalPu().FileService
-		proc.SessionInfo = process.SessionInfo{Account: sysAccountName}
+		proc.Base.FileService = getGlobalPu().FileService
+		proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
 		ses.SetDatabaseName("procedure_test")
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
@@ -6003,7 +5934,7 @@ func Test_doInterpretCall(t *testing.T) {
 		})
 		bh.sql2result[sql] = mrs
 
-		sql = getSystemVariablesWithAccount(uint64(ses.GetTenantInfo().GetTenantID()))
+		sql = getSqlForGetSystemVariablesWithAccount(uint64(ses.GetTenantInfo().GetTenantID()))
 		mrs = newMrsForPasswordOfUser([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
@@ -6033,8 +5964,8 @@ func Test_doInterpretCall(t *testing.T) {
 		priv := determinePrivilegeSetOfStatement(call)
 		ses := newSes(priv, ctrl)
 		proc := testutil.NewProcess()
-		proc.FileService = getGlobalPu().FileService
-		proc.SessionInfo = process.SessionInfo{Account: sysAccountName}
+		proc.Base.FileService = getGlobalPu().FileService
+		proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
 		ses.SetDatabaseName("procedure_test")
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
@@ -6056,7 +5987,7 @@ func Test_doInterpretCall(t *testing.T) {
 		})
 		bh.sql2result[sql] = mrs
 
-		sql = getSystemVariablesWithAccount(uint64(ses.GetTenantInfo().GetTenantID()))
+		sql = getSqlForGetSystemVariablesWithAccount(uint64(ses.GetTenantInfo().GetTenantID()))
 		mrs = newMrsForPasswordOfUser([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
@@ -6141,6 +6072,7 @@ func Test_initProcedure(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
+
 func TestDoSetSecondaryRoleAll(t *testing.T) {
 	convey.Convey("do set secondary role succ", t, func() {
 		ctrl := gomock.NewController(t)
@@ -6539,7 +6471,88 @@ func TestDoRevokePrivilegeImplicitly(t *testing.T) {
 
 }
 
-func TestDoGetGlobalSystemVariable(t *testing.T) {
+func TestGetSessionSysVar(t *testing.T) {
+	convey.Convey("get session system variable succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		ses := newSes(nil, ctrl)
+
+		value, err := ses.GetSessionSysVar("port")
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(value, convey.ShouldEqual, 6001)
+		value, err = ses.GetSessionSysVar("host")
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(value, convey.ShouldEqual, "0.0.0.0")
+		_, err = ses.GetSessionSysVar("not exists sys var")
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+}
+
+func TestSetSessionSysVar(t *testing.T) {
+	convey.Convey("set session system variable succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		ses0 := newSes(nil, ctrl)
+		ses1 := newSes(nil, ctrl)
+
+		// set ScopeGlobal var, err
+		err := ses0.SetSessionSysVar(context.TODO(), "port", 6002)
+		convey.So(err, convey.ShouldNotBeNil)
+
+		// before set
+		value, err := ses0.GetSessionSysVar("autocommit")
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(value, convey.ShouldEqual, 1)
+		value, err = ses1.GetSessionSysVar("autocommit")
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(value, convey.ShouldEqual, 1)
+		// set
+		err = ses0.SetSessionSysVar(context.TODO(), "autocommit", "off")
+		convey.So(err, convey.ShouldBeNil)
+		// after set
+		value, err = ses0.GetSessionSysVar("autocommit")
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(value, convey.ShouldEqual, 0)
+		// do not affect other existing session
+		value, err = ses1.GetSessionSysVar("autocommit")
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(value, convey.ShouldEqual, 1)
+		// do not affect new session
+		ses2 := newSes(nil, ctrl)
+		value, err = ses2.GetSessionSysVar("autocommit")
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(value, convey.ShouldEqual, 1)
+
+		err = ses0.SetSessionSysVar(context.TODO(), "not exists sys var", "xxxx")
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+}
+
+func TestGetGlobalSysVar(t *testing.T) {
 	convey.Convey("get global system variable succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -6550,28 +6563,25 @@ func TestDoGetGlobalSystemVariable(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		stmt := &tree.ShowVariables{
-			Global: true,
-		}
-
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
-
 		//no result set
 		bh.sql2result["begin;"] = nil
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql := getSystemVariablesWithAccount(uint64(ses.GetTenantInfo().GetTenantID()))
-		mrs := newMrsForSqlForCheckUserHasRole([][]interface{}{})
-		bh.sql2result[sql] = mrs
+		ses := newSes(nil, ctrl)
 
-		_, err := doGetGlobalSystemVariable(ses.GetTxnHandler().GetTxnCtx(), ses)
+		value, err := ses.GetGlobalSysVar("port")
 		convey.So(err, convey.ShouldBeNil)
+		convey.So(value, convey.ShouldEqual, 6001)
+		// err when get from a ScopeSession var
+		_, err = ses.GetGlobalSysVar("debug_sync")
+		convey.So(err, convey.ShouldNotBeNil)
+		_, err = ses.GetGlobalSysVar("not exists sys var")
+		convey.So(err, convey.ShouldNotBeNil)
 	})
 }
 
-func TestDoSetGlobalSystemVariable(t *testing.T) {
+func TestSetGlobalSysVar(t *testing.T) {
 	convey.Convey("set global system variable succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -6582,68 +6592,70 @@ func TestDoSetGlobalSystemVariable(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		stmt := &tree.SetVar{
-			Assignments: []*tree.VarAssignmentExpr{
-				{
-					System: true,
-					Global: true,
-					Name:   "sql_mode",
-					Value:  tree.NewStrVal(""),
-				},
-			},
-		}
-
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
-
 		//no result set
 		bh.sql2result["begin;"] = nil
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
-
-		sql := getSqlForUpdateSystemVariableValue(getVariableValue(stmt.Assignments[0].Value), uint64(ses.GetTenantInfo().GetTenantID()), stmt.Assignments[0].Name)
-		mrs := newMrsForSqlForCheckUserHasRole([][]interface{}{})
+		sql := getSqlForGetSysVarWithAccount(sysAccountID, "autocommit")
+		mrs := newMrsForSystemVariableNameOfAccount([][]interface{}{})
 		bh.sql2result[sql] = mrs
+		sql = getSqlForInsertSysVarWithAccount(sysAccountID, "sys", "autocommit", "0")
+		bh.sql2result[sql] = nil
 
-		err := doSetGlobalSystemVariable(ses.GetTxnHandler().GetTxnCtx(), ses, stmt.Assignments[0].Name, stmt.Assignments[0].Value)
+		ses0 := newSes(nil, ctrl)
+		ses1 := newSes(nil, ctrl)
+
+		// set ScopeSession var, err
+		err := ses0.SetGlobalSysVar(context.TODO(), "rand_seed1", 1)
+		convey.So(err, convey.ShouldNotBeNil)
+
+		// before set
+		value, err := ses0.GetSessionSysVar("autocommit")
 		convey.So(err, convey.ShouldBeNil)
-	})
-
-	convey.Convey("set global system variable succ", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		bh := &backgroundExecTest{}
-		bh.init()
-
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		stmt := &tree.SetVar{
-			Assignments: []*tree.VarAssignmentExpr{
-				{
-					System: true,
-					Global: true,
-					Name:   "sql_mode",
-					Value:  tree.NewStrVal("NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION"),
-				},
-			},
-		}
-
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
-
-		//no result set
-		bh.sql2result["begin;"] = nil
-		bh.sql2result["commit;"] = nil
-		bh.sql2result["rollback;"] = nil
-
-		sql := getSqlForUpdateSystemVariableValue(getVariableValue(stmt.Assignments[0].Value), uint64(ses.GetTenantInfo().GetTenantID()), stmt.Assignments[0].Name)
-		mrs := newMrsForSqlForCheckUserHasRole([][]interface{}{})
-		bh.sql2result[sql] = mrs
-
-		err := doSetGlobalSystemVariable(ses.GetTxnHandler().GetTxnCtx(), ses, stmt.Assignments[0].Name, stmt.Assignments[0].Value)
+		convey.So(value, convey.ShouldEqual, 1)
+		value, err = ses0.GetGlobalSysVar("autocommit")
 		convey.So(err, convey.ShouldBeNil)
+		convey.So(value, convey.ShouldEqual, 1)
+		value, err = ses1.GetSessionSysVar("autocommit")
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(value, convey.ShouldEqual, 1)
+		value, err = ses1.GetGlobalSysVar("autocommit")
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(value, convey.ShouldEqual, 1)
+
+		// set
+		err = ses0.SetGlobalSysVar(context.TODO(), "autocommit", 0)
+		convey.So(err, convey.ShouldBeNil)
+
+		// after set, only affect global level var
+		value, err = ses0.GetSessionSysVar("autocommit")
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(value, convey.ShouldEqual, 1)
+		value, err = ses0.GetGlobalSysVar("autocommit")
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(value, convey.ShouldEqual, 0)
+
+		// affect other existing session's global level var
+		value, err = ses1.GetSessionSysVar("autocommit")
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(value, convey.ShouldEqual, 1)
+		value, err = ses1.GetGlobalSysVar("autocommit")
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(value, convey.ShouldEqual, 0)
+
+		// new session, both GetSession/GlobalSysVar equal 0
+		ses2 := newSes(nil, ctrl)
+		ses2.sesSysVars.sysVars["autocommit"] = 0
+		ses2.gSysVars.sysVars["autocommit"] = 0
+		value, err = ses2.GetSessionSysVar("autocommit")
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(value, convey.ShouldEqual, 0)
+		value, err = ses2.GetGlobalSysVar("autocommit")
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(value, convey.ShouldEqual, 0)
+
+		err = ses0.SetGlobalSysVar(context.TODO(), "not exists sys var", "xxxx")
+		convey.So(err, convey.ShouldNotBeNil)
 	})
 }
 
@@ -7689,14 +7701,18 @@ func newSes(priv *privilege, ctrl *gomock.Controller) *Session {
 
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 	ctx = defines.AttachAccountId(ctx, 0)
-	ioses := mock_frontend.NewMockIOSession(ctrl)
-	ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
-	ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
-	ioses.EXPECT().Ref().AnyTimes()
-	proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+	go startConsumeRead(clientConn)
 
-	ses := NewSession(ctx, proto, nil, GSysVariables, true, nil)
+	ioses, err := NewIOSession(serverConn, pu)
+	if err != nil {
+		panic(err)
+	}
+	proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
+
+	ses := NewSession(ctx, "", proto, nil)
 	tenant := &TenantInfo{
 		Tenant:        sysAccountName,
 		User:          rootName,
@@ -7707,6 +7723,11 @@ func newSes(priv *privilege, ctrl *gomock.Controller) *Session {
 	}
 	ses.SetTenantInfo(tenant)
 	ses.priv = priv
+
+	stubs := gostub.StubFunc(&ExeSqlInBgSes, nil, nil)
+	defer stubs.Reset()
+
+	_ = ses.InitSystemVariables(ctx)
 
 	rm, _ := NewRoutineManager(ctx)
 	rm.baseService = new(MockBaseService)
@@ -8190,19 +8211,14 @@ func newMrsForPrivilegeWGO(rows [][]interface{}) *MysqlResultSet {
 	return mrs
 }
 
-func newMrsForSystemVariablesOfAccount(rows [][]interface{}) *MysqlResultSet {
+func newMrsForSystemVariableNameOfAccount(rows [][]interface{}) *MysqlResultSet {
 	mrs := &MysqlResultSet{}
 
 	col1 := &MysqlColumn{}
 	col1.SetName("variable_name")
 	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 
-	col2 := &MysqlColumn{}
-	col2.SetName("variable_value")
-	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-
 	mrs.AddColumn(col1)
-	mrs.AddColumn(col2)
 
 	for _, row := range rows {
 		mrs.AddRow(row)
@@ -8752,11 +8768,10 @@ func TestDoAlterPublication(t *testing.T) {
 }
 
 func TestCheckSubscriptionValid(t *testing.T) {
-
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	ses := newTestSession(t, ctrl)
-	_ = ses.SetGlobalVar(context.TODO(), "lower_case_table_names", int64(1))
+	_ = ses.SetGlobalSysVar(context.TODO(), "lower_case_table_names", int64(1))
 	defer ses.Close()
 
 	bh := &backgroundExecTest{}
@@ -8773,11 +8788,11 @@ func TestCheckSubscriptionValid(t *testing.T) {
 	ses.rm = rm
 
 	proc := testutil.NewProcess()
-	proc.FileService = getGlobalPu().FileService
+	proc.Base.FileService = getGlobalPu().FileService
 	ses.GetTxnCompileCtx().execCtx = &ExecCtx{
 		proc: proc,
 	}
-	ses.GetTxnCompileCtx().GetProcess().SessionInfo = process.SessionInfo{Account: sysAccountName}
+	ses.GetTxnCompileCtx().GetProcess().Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
 
 	columns := [][]Column{
 		{
@@ -9532,7 +9547,7 @@ func TestInsertRecordToMoMysqlCompatibilityMode(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql := fmt.Sprintf(initMoMysqlCompatbilityModeFormat, tenant.TenantID, tenant.GetTenant(), "abc", "", "", false)
+		sql := fmt.Sprintf(initMoMysqlCompatibilityModeFormat, tenant.TenantID, tenant.GetTenant(), "abc", "", "", false)
 		mrs := newMrsForPasswordOfUser([][]interface{}{
 			{0, 0},
 		})
@@ -11028,26 +11043,19 @@ func TestUpload(t *testing.T) {
 	convey.Convey("call upload func", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
-		ioses := mock_frontend.NewMockIOSession(ctrl)
 		proc := testutil.NewProc()
-		cnt := 0
-		ioses.EXPECT().Read(gomock.Any()).DoAndReturn(func(options goetty.ReadOptions) (pkt any, err error) {
-			if cnt == 0 {
-				pkt = &Packet{Length: 5, Payload: []byte("def add(a, b):\n"), SequenceID: 1}
-			} else if cnt == 1 {
-				pkt = &Packet{Length: 5, Payload: []byte("  return a + b"), SequenceID: 2}
-			} else {
-				err = moerr.NewInvalidInput(context.TODO(), "length 0")
-			}
-			cnt++
-			return
-		}).AnyTimes()
-		proto := &FakeProtocol{
-			ioses: ioses,
-		}
+		clientConn, serverConn := net.Pipe()
+		defer clientConn.Close()
+		defer serverConn.Close()
+		go writeExceptResult(clientConn, []*Packet{
+			{Length: 5, Payload: []byte("def add(a, b):\n"), SequenceID: 1},
+			{Length: 5, Payload: []byte("  return a + b"), SequenceID: 2},
+			{Length: 0, Payload: []byte(""), SequenceID: 3},
+		})
+
 		fs, err := fileservice.NewLocalFS(context.TODO(), defines.SharedFileServiceName, t.TempDir(), fileservice.DisabledCacheConfig, nil)
 		convey.So(err, convey.ShouldBeNil)
-		proc.FileService = fs
+		proc.Base.FileService = fs
 
 		//parameter
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
@@ -11055,15 +11063,19 @@ func TestUpload(t *testing.T) {
 		assert.Nil(t, err)
 		pu.SV.SetDefaultValues()
 		pu.SV.SaveQueryResult = "on"
-		if err != nil {
-			assert.Nil(t, err)
-		}
 		//file service
 		pu.FileService = fs
 		setGlobalPu(pu)
+
+		ioses, err := NewIOSession(serverConn, pu)
+		assert.Nil(t, err)
+		proto := &testMysqlWriter{
+			ioses: ioses,
+		}
+
 		ses := &Session{
 			feSessionImpl: feSessionImpl{
-				proto: proto,
+				respr: NewMysqlResp(proto),
 			},
 			proc: proc,
 		}
@@ -11430,7 +11442,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
 		ses.proc = testutil.NewProc()
-		ses.proc.TxnOperator = txnOperator
+		ses.proc.Base.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
@@ -11491,7 +11503,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
 		ses.proc = testutil.NewProc()
-		ses.proc.TxnOperator = txnOperator
+		ses.proc.Base.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
@@ -11552,7 +11564,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
 		ses.proc = testutil.NewProc()
-		ses.proc.TxnOperator = txnOperator
+		ses.proc.Base.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
@@ -11617,7 +11629,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
 		ses.proc = testutil.NewProc()
-		ses.proc.TxnOperator = txnOperator
+		ses.proc.Base.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
@@ -11682,7 +11694,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
 		ses.proc = testutil.NewProc()
-		ses.proc.TxnOperator = txnOperator
+		ses.proc.Base.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
@@ -11748,7 +11760,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
 		ses.proc = testutil.NewProc()
-		ses.proc.TxnOperator = txnOperator
+		ses.proc.Base.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
@@ -11814,7 +11826,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
 		ses.proc = testutil.NewProc()
-		ses.proc.TxnOperator = txnOperator
+		ses.proc.Base.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),

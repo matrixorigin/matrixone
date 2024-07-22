@@ -20,17 +20,17 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
 // init is used to insert some data that will not be synchronized by logtail.
@@ -47,15 +47,15 @@ func (e *Engine) init(ctx context.Context) error {
 	defer put.Put()
 
 	{
-		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID}] = logtailreplay.NewPartition()
+		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID}] = logtailreplay.NewPartition(e.service)
 	}
 
 	{
-		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}] = logtailreplay.NewPartition()
+		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}] = logtailreplay.NewPartition(e.service)
 	}
 
 	{
-		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}] = logtailreplay.NewPartition()
+		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}] = logtailreplay.NewPartition(e.service)
 	}
 
 	{ // mo_catalog
@@ -394,7 +394,16 @@ func (e *Engine) getOrCreateSnapCatalogCache(
 func (e *Engine) getOrCreateSnapPart(
 	ctx context.Context,
 	tbl *txnTable,
-	ts types.TS) (*logtailreplay.Partition, error) {
+	ts types.TS) (*logtailreplay.PartitionState, error) {
+
+	//check whether the latest partition is available for reuse.
+	// if the snapshot-read's ts is too old , subscribing table maybe timeout.
+	//if err := tbl.updateLogtail(ctx); err == nil {
+	//	if p := e.getOrCreateLatestPart(tbl.db.databaseId, tbl.tableId); p.CanServe(ts) {
+	//		return p, nil
+	//	}
+	//}
+
 	//check whether the snapshot partitions are available for reuse.
 	e.mu.Lock()
 	tblSnaps, ok := e.mu.snapParts[[2]uint64{tbl.db.databaseId, tbl.tableId}]
@@ -411,12 +420,12 @@ func (e *Engine) getOrCreateSnapPart(
 	defer tblSnaps.Unlock()
 	for _, snap := range tblSnaps.snaps {
 		if snap.CanServe(ts) {
-			return snap, nil
+			return snap.Snapshot(), nil
 		}
 	}
 
 	//new snapshot partition and apply checkpoints into it.
-	snap := logtailreplay.NewPartition()
+	snap := logtailreplay.NewPartition(e.service)
 	//TODO::if tableId is mo_tables, or mo_colunms, or mo_database,
 	//      we should init the partition,ref to engine.init
 	ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, e.fs, ts, tbl.tableId, nil)
@@ -462,46 +471,57 @@ func (e *Engine) getOrCreateSnapPart(
 	})
 	if snap.CanServe(ts) {
 		tblSnaps.snaps = append(tblSnaps.snaps, snap)
-		return snap, nil
+		return snap.Snapshot(), nil
 	}
 
 	start, end := snap.GetDuration()
 	//if has no checkpoints or ts > snap.end, use latest partition.
 	if snap.IsEmpty() || ts.Greater(&end) {
-		err := tbl.updateLogtail(ctx)
+		ps, err := tbl.tryToSubscribe(ctx)
 		if err != nil {
 			return nil, err
 		}
-		return e.getOrCreateLatestPart(tbl.db.databaseId, tbl.tableId), nil
+		return ps, nil
 	}
 	if ts.Less(&start) {
 		return nil, moerr.NewInternalErrorNoCtx(
 			"No valid checkpoints for snapshot read,maybe snapshot is too old, "+
-				"snapshot:%s, start:%s, end:%s",
-			ts.ToTimestamp().DebugString(),
+				"snapshot op:%s, start:%s, end:%s",
+			tbl.db.op.Txn().DebugString(),
 			start.ToTimestamp().DebugString(),
 			end.ToTimestamp().DebugString())
 	}
 	panic("impossible path")
 }
 
-func (e *Engine) getOrCreateLatestPart(
+func (e *Engine) GetOrCreateLatestPart(
 	databaseId,
 	tableId uint64) *logtailreplay.Partition {
 	e.Lock()
 	defer e.Unlock()
 	partition, ok := e.partitions[[2]uint64{databaseId, tableId}]
 	if !ok { // create a new table
-		partition = logtailreplay.NewPartition()
+		partition = logtailreplay.NewPartition(e.service)
 		e.partitions[[2]uint64{databaseId, tableId}] = partition
 	}
 	return partition
 }
 
-func (e *Engine) lazyLoadLatestCkp(
+func (e *Engine) LazyLoadLatestCkp(
 	ctx context.Context,
-	tbl *txnTable) (*logtailreplay.Partition, error) {
-	part := e.getOrCreateLatestPart(tbl.db.databaseId, tbl.tableId)
+	tblHandler engine.Relation) (*logtailreplay.Partition, error) {
+
+	var (
+		ok  bool
+		tbl *txnTable
+	)
+
+	if tbl, ok = tblHandler.(*txnTable); !ok {
+		delegate := tblHandler.(*txnTableDelegate)
+		tbl = delegate.origin
+	}
+
+	part := e.GetOrCreateLatestPart(tbl.db.databaseId, tbl.tableId)
 	cache := e.getLatestCatalogCache()
 
 	if err := part.ConsumeCheckpoints(

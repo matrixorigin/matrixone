@@ -17,7 +17,6 @@ package proxy
 import (
 	"context"
 	"math"
-	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -36,6 +35,7 @@ const (
 )
 
 type rebalancer struct {
+	sid     string
 	stopper *stopper.Stopper
 	logger  *log.MOLogger
 	// mc is MO-Cluster instance, which is used to get CN servers.
@@ -46,12 +46,8 @@ type rebalancer struct {
 	scaling *scaling
 	// queue takes the tunnels which need to do migration.
 	queue chan *tunnel
-	mu    struct {
-		sync.Mutex
-		// inflight is the tunnels which are in the queue or is being
-		// rebalanced. The same tunnel should not be added to the queue.
-		inflight map[*tunnel]struct{}
-	}
+	// tunnelDeliver is used to deliver tunnels to the queue.
+	tunnelDeliver TunnelDeliver
 	// If disabled is true, rebalance does nothing.
 	disabled bool
 	// interval indicates that how often the rebalance is act.
@@ -89,20 +85,25 @@ func withRebalancerTolerance(tolerance float64) rebalancerOption {
 
 // newRebalancer creates a new rebalancer.
 func newRebalancer(
-	stopper *stopper.Stopper, logger *log.MOLogger, mc clusterservice.MOCluster, opts ...rebalancerOption,
+	sid string,
+	stopper *stopper.Stopper,
+	logger *log.MOLogger,
+	mc clusterservice.MOCluster,
+	opts ...rebalancerOption,
 ) (*rebalancer, error) {
 	r := &rebalancer{
+		sid:         sid,
 		stopper:     stopper,
 		logger:      logger,
 		connManager: newConnManager(),
 		mc:          mc,
 		queue:       make(chan *tunnel, defaultQueueSize),
 	}
-	r.mu.inflight = make(map[*tunnel]struct{})
+	r.tunnelDeliver = newTunnelDeliver(r.queue, logger)
 	for _, opt := range opts {
 		opt(r)
 	}
-	r.scaling = newScaling(r.connManager, r.queue, mc, logger, r.disabled)
+	r.scaling = newScaling(r.connManager, r.tunnelDeliver, mc, logger, r.disabled)
 
 	// Starts the transfer go-routine to handle the transfer request.
 	if err := r.stopper.RunNamedTask("rebalaner-transfer", r.handleTransfer); err != nil {
@@ -152,22 +153,9 @@ func (r *rebalancer) rebalanceByHash(hash LabelHash) {
 	tuns := r.collectTunnels(hash)
 	v2.ProxyConnectionsNeedToTransferGauge.Set(float64(len(tuns)))
 
-	r.mu.Lock()
-	defer r.mu.Unlock()
 	// Put the tunnels to the queue.
 	for _, t := range tuns {
-		// If the tunnel is inflight, do NOT enqueue it.
-		_, ok := r.mu.inflight[t]
-		if ok {
-			continue
-		}
-
-		select {
-		case r.queue <- t:
-			r.mu.inflight[t] = struct{}{}
-		default:
-			r.logger.Info("rebalance queue is full")
-		}
+		r.tunnelDeliver.Deliver(t, transferByRebalance)
 	}
 }
 
@@ -183,18 +171,24 @@ func (r *rebalancer) collectTunnels(hash LabelHash) []*tunnel {
 
 	selector := li.genSelector(clusterservice.EQ_Globbing)
 	appendFn := func(s *metadata.CNService) {
+		if s.WorkState != metadata.WorkState_Working {
+			return
+		}
 		cns[s.ServiceID] = struct{}{}
 		if len(s.Labels) > 0 {
 			notEmptyCns[s.ServiceID] = struct{}{}
 		}
 	}
 	if li.isSuperTenant() {
-		route.RouteForSuperTenant(selector, "", nil, appendFn)
+		route.RouteForSuperTenant(r.sid, selector, "", nil, appendFn)
 	} else {
-		route.RouteForCommonTenant(selector, nil, appendFn)
+		route.RouteForCommonTenant(r.sid, selector, nil, appendFn)
 	}
 
 	r.mc.GetCNService(selector, func(s metadata.CNService) bool {
+		if s.WorkState != metadata.WorkState_Working {
+			return true
+		}
 		if len(s.Labels) == 0 {
 			emptyCNs[s.ServiceID] = struct{}{}
 		}
@@ -252,10 +246,6 @@ func (r *rebalancer) handleTransfer(ctx context.Context) {
 				}
 			}
 
-			// After transfer the tunnel, remove it from the inflight map.
-			r.mu.Lock()
-			delete(r.mu.inflight, tun)
-			r.mu.Unlock()
 		case <-ctx.Done():
 			r.logger.Info("rebalancer transfer ended.")
 			return

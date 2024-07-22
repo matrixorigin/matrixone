@@ -19,35 +19,26 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
 // GetAutoIncrementService get increment service from process level runtime
-func GetAutoIncrementService(ctx context.Context) AutoIncrementService {
-	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.AutoIncrementService)
+func GetAutoIncrementService(sid string) AutoIncrementService {
+	v, ok := runtime.ServiceRuntime(sid).GetGlobalVariables(runtime.AutoIncrementService)
 	if !ok {
 		return nil
 	}
-	s := v.(AutoIncrementService)
-	uuid, ok := ctx.Value(defines.NodeIDKey{}).(string)
-	if !ok || uuid == "" {
-		return s
-	}
-	if s.UUID() != uuid {
-		v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.AutoIncrementService + "_" + uuid)
-		if !ok {
-			panic("cannot get the appropriate AutoIncrementService")
-		}
-		s = v.(AutoIncrementService)
-	}
-	return s
+	return v.(AutoIncrementService)
+
 }
 
 // SetAutoIncrementServiceByID set auto increment service instance into process level runtime.
-func SetAutoIncrementServiceByID(id string, v AutoIncrementService) {
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.AutoIncrementService+"_"+id, v)
+func SetAutoIncrementServiceByID(
+	service string,
+	v AutoIncrementService,
+) {
+	runtime.ServiceRuntime(service).SetGlobalVariables(runtime.AutoIncrementService, v)
 }
 
 // AutoIncrementService provides data service for the columns of auto-increment.
@@ -74,6 +65,8 @@ type AutoIncrementService interface {
 	InsertValues(ctx context.Context, tableID uint64, bat *batch.Batch, estimate int64) (uint64, error)
 	// CurrentValue return current incr column value.
 	CurrentValue(ctx context.Context, tableID uint64, col string) (uint64, error)
+	// Reload reload auto increment cache.
+	Reload(ctx context.Context, tableID uint64) error
 	// Close close the auto increment service
 	Close()
 }
@@ -115,8 +108,8 @@ type incrTableCache interface {
 	columns() []AutoColumn
 	insertAutoValues(ctx context.Context, tableID uint64, bat *batch.Batch, estimate int64) (uint64, error)
 	currentValue(ctx context.Context, tableID uint64, col string) (uint64, error)
-	close() error
 	adjust(ctx context.Context, cols []AutoColumn) error
+	close() error
 }
 
 type valueAllocator interface {
@@ -128,10 +121,6 @@ type valueAllocator interface {
 
 // IncrValueStore is used to add and delete metadata records for auto-increment columns.
 type IncrValueStore interface {
-	// Exec new a txn operator, used for debug.
-	NewTxnOperator(ctx context.Context) client.TxnOperator
-	// SelectAll return all auto increment metadata records from catalog.AutoIncrTableName.
-	SelectAll(ctx context.Context, tableID uint64, txnOp client.TxnOperator) (string, error)
 	// GetColumns return auto columns of table.
 	GetColumns(ctx context.Context, tableID uint64, txnOp client.TxnOperator) ([]AutoColumn, error)
 	// Create add metadata records into catalog.AutoIncrTableName.

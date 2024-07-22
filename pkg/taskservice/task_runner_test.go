@@ -186,6 +186,21 @@ func TestCancelRunningTask(t *testing.T) {
 		for v := mustGetTestAsyncTask(t, store, 1)[0]; v.Status != task.TaskStatus_Completed; v = mustGetTestAsyncTask(t, store, 1)[0] {
 			time.Sleep(10 * time.Millisecond)
 		}
+		timeout := time.After(10 * time.Second)
+		for {
+			select {
+			case <-timeout:
+				require.Fail(t, "task not removed after 10 seconds")
+			default:
+			}
+			r.runningTasks.RLock()
+			if len(r.runningTasks.m) == 0 {
+				r.runningTasks.RUnlock()
+				break
+			}
+			r.runningTasks.RUnlock()
+			time.Sleep(time.Millisecond * 10)
+		}
 		r.runningTasks.RLock()
 		defer r.runningTasks.RUnlock()
 		assert.Equal(t, 0, len(r.runningTasks.m))

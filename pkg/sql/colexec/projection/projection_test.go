@@ -35,7 +35,7 @@ const (
 
 // add unit tests for cases
 type projectionTestCase struct {
-	arg   *Argument
+	arg   *Projection
 	types []types.Type
 	proc  *process.Process
 }
@@ -47,11 +47,11 @@ var (
 func init() {
 	tcs = []projectionTestCase{
 		{
-			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_int8.ToType(),
 			},
-			arg: &Argument{
+			arg: &Projection{
 				Es: []*plan.Expr{
 					{
 						Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
@@ -121,11 +121,13 @@ func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
 
-func resetChildren(arg *Argument, bats []*batch.Batch) {
+func resetChildren(arg *Projection, bats []*batch.Batch) {
+	valueScanArg := &value_scan.ValueScan{
+		Batchs: bats,
+	}
+	valueScanArg.Prepare(nil)
 	arg.SetChildren(
 		[]vm.Operator{
-			&value_scan.Argument{
-				Batchs: bats,
-			},
+			valueScanArg,
 		})
 }

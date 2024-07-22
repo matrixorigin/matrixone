@@ -16,6 +16,7 @@ mo-server
 gen_config
 store/
 mo-data/
+**/scratch/
 
 # cgo compiler files linked system lib, so ignore it
 **/*.o

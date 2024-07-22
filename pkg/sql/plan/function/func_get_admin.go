@@ -19,12 +19,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func builtInInternalGetAdminName(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func builtInInternalGetAdminName(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
@@ -34,16 +33,16 @@ func builtInInternalGetAdminName(parameters []*vector.Vector, result vector.Func
 			return moerr.NewInvalidInput(proc.Ctx, "unsupported parameter `null` for getAdminName")
 		}
 
-		v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.InternalSQLExecutor)
+		v, ok := runtime.ServiceRuntime(proc.GetService()).GetGlobalVariables(runtime.InternalSQLExecutor)
 		if !ok {
 			return moerr.NewNotSupported(proc.Ctx, "no implement sqlExecutor")
 		}
 
 		exec := v.(executor.SQLExecutor)
 		opts := executor.Options{}.WithAccountID(uint32(accountId)).
-			WithTxn(proc.TxnOperator).
-			WithTimeZone(proc.SessionInfo.TimeZone)
-		if proc.TxnOperator != nil {
+			WithTxn(proc.GetTxnOperator()).
+			WithTimeZone(proc.GetSessionInfo().TimeZone)
+		if proc.GetTxnOperator() != nil {
 			opts = opts.WithDisableIncrStatement() // this option always with WithTxn()
 		}
 		res, err := exec.Exec(proc.Ctx, "SELECT user_name FROM mo_catalog.mo_user ORDER BY user_id ASC LIMIT 1", opts)
@@ -52,12 +51,12 @@ func builtInInternalGetAdminName(parameters []*vector.Vector, result vector.Func
 		}
 		defer res.Close()
 
-		var adminNme string
+		var adminNme []byte
 		res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-			adminNme = cols[0].GetStringAt(0)
+			adminNme = cols[0].GetBytesAt(0)
 			return true
 		})
-		if err = rs.AppendBytes(functionUtil.QuickStrToBytes(adminNme), false); err != nil {
+		if err = rs.AppendBytes(adminNme, false); err != nil {
 			return err
 		}
 	}

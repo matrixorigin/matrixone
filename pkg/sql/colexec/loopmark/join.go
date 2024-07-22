@@ -26,38 +26,42 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "loop_mark"
+const opName = "loop_mark"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (loopMark *LoopMark) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": loop mark join ")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) error {
+func (loopMark *LoopMark) OpType() vm.OpType {
+	return vm.LoopMark
+}
+
+func (loopMark *LoopMark) Prepare(proc *process.Process) error {
 	var err error
 
-	arg.ctr = new(container)
-	arg.ctr.InitReceiver(proc, false)
-	arg.ctr.bat = batch.NewWithSize(len(arg.Typs))
-	for i, typ := range arg.Typs {
-		arg.ctr.bat.Vecs[i] = proc.GetVector(typ)
+	loopMark.ctr = new(container)
+	loopMark.ctr.InitReceiver(proc, false)
+	loopMark.ctr.bat = batch.NewWithSize(len(loopMark.Typs))
+	for i, typ := range loopMark.Typs {
+		loopMark.ctr.bat.Vecs[i] = proc.GetVector(typ)
 	}
 
-	if arg.Cond != nil {
-		arg.ctr.expr, err = colexec.NewExpressionExecutor(proc, arg.Cond)
+	if loopMark.Cond != nil {
+		loopMark.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopMark.Cond)
 	}
 	return err
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (loopMark *LoopMark) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze(loopMark.GetIdx(), loopMark.GetParallelIdx(), loopMark.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
-	ctr := arg.ctr
+	ctr := loopMark.ctr
 	result := vm.NewCallResult()
 	for {
 		switch ctr.state {
@@ -69,11 +73,12 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Probe:
 			var err error
-			bat, _, err := ctr.ReceiveFromSingleReg(0, anal)
-			if err != nil {
-				return result, err
+			msg := ctr.ReceiveFromSingleReg(0, anal)
+			if msg.Err != nil {
+				return result, msg.Err
 			}
 
+			bat := msg.Batch
 			if bat == nil {
 				ctr.state = End
 				continue
@@ -83,9 +88,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				continue
 			}
 			if ctr.bat.RowCount() == 0 {
-				err = ctr.emptyProbe(bat, arg, proc, anal, arg.GetIsFirst(), arg.GetIsLast(), &result)
+				err = ctr.emptyProbe(bat, loopMark, proc, anal, loopMark.GetIsFirst(), loopMark.GetIsLast(), &result)
 			} else {
-				err = ctr.probe(bat, arg, proc, anal, arg.GetIsFirst(), arg.GetIsLast(), &result)
+				err = ctr.probe(bat, loopMark, proc, anal, loopMark.GetIsFirst(), loopMark.GetIsLast(), &result)
 			}
 			proc.PutBatch(bat)
 			return result, err
@@ -99,11 +104,13 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
+	var err error
 	for {
-		bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
-		if err != nil {
-			return err
+		msg := ctr.ReceiveFromSingleReg(1, anal)
+		if msg.Err != nil {
+			return msg.Err
 		}
+		bat := msg.Batch
 		if bat == nil {
 			break
 		}
@@ -116,7 +123,7 @@ func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
 	return nil
 }
 
-func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) (err error) {
+func (ctr *container) emptyProbe(bat *batch.Batch, ap *LoopMark, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) (err error) {
 	anal.Input(bat, isFirst)
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
@@ -144,7 +151,7 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 	return nil
 }
 
-func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
+func (ctr *container) probe(bat *batch.Batch, ap *LoopMark, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
 	anal.Input(bat, isFirst)
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
@@ -174,7 +181,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			ctr.bat.RowCount(), ctr.cfs); err != nil {
 			return err
 		}
-		vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat, ctr.bat})
+		vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat, ctr.bat}, nil)
 		if err != nil {
 			return err
 		}

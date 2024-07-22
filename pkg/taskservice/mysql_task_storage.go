@@ -19,9 +19,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"os"
 	"strings"
+	"time"
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -30,174 +29,162 @@ import (
 )
 
 var (
-	insertAsyncTask = `insert into %s.sys_async_task(
-                           task_metadata_id,
-                           task_metadata_executor,
-                           task_metadata_context,
-                           task_metadata_option,
-                           task_parent_id,
-                           task_status,
-                           task_runner,
-                           task_epoch,
-                           last_heartbeat,
-                           create_at,
-                           end_at) values `
+	insertAsyncTask = "insert into sys_async_task(" +
+		"task_metadata_id," +
+		"task_metadata_executor," +
+		"task_metadata_context," +
+		"task_metadata_option," +
+		"task_parent_id," +
+		"task_status," +
+		"task_runner," +
+		"task_epoch," +
+		"last_heartbeat," +
+		"create_at," +
+		"end_at) values "
 
-	updateAsyncTask = `update %s.sys_async_task set 
-							task_metadata_executor=?,
-							task_metadata_context=?,
-							task_metadata_option=?,
-							task_parent_id=?,
-							task_status=?,
-							task_runner=?,
-							task_epoch=?,
-							last_heartbeat=?,
-							result_code=?,
-							error_msg=?,
-							create_at=?,
-							end_at=? where task_id=?`
+	updateAsyncTask = "update sys_async_task set " +
+		"task_metadata_executor=?," +
+		"task_metadata_context=?," +
+		"task_metadata_option=?," +
+		"task_parent_id=?," +
+		"task_status=?," +
+		"task_runner=?," +
+		"task_epoch=?," +
+		"last_heartbeat=?," +
+		"result_code=?," +
+		"error_msg=?," +
+		"create_at=?," +
+		"end_at=? " +
+		"where task_id=?"
 
-	selectAsyncTask = `select 
-    						task_id,
-							task_metadata_id,
-							task_metadata_executor,
-							task_metadata_context,
-							task_metadata_option,
-							task_parent_id,
-							task_status,
-							task_runner,
-							task_epoch,
-							last_heartbeat,
-							result_code,
-							error_msg,
-							create_at,
-							end_at 
-						from %s.sys_async_task where 1=1`
+	selectAsyncTask = "select " +
+		"task_id," +
+		"task_metadata_id," +
+		"task_metadata_executor," +
+		"task_metadata_context," +
+		"task_metadata_option," +
+		"task_parent_id," +
+		"task_status," +
+		"task_runner," +
+		"task_epoch," +
+		"last_heartbeat," +
+		"result_code," +
+		"error_msg," +
+		"create_at," +
+		"end_at from sys_async_task where 1=1"
 
-	insertCronTask = `insert into %s.sys_cron_task (
-                           task_metadata_id,
-						   task_metadata_executor,
-                           task_metadata_context,
-                           task_metadata_option,
-                           cron_expr,
-                           next_time,
-                           trigger_times,
-                           create_at,
-                           update_at
-                    ) values `
+	insertCronTask = "insert into sys_cron_task(" +
+		"task_metadata_id," +
+		"task_metadata_executor," +
+		"task_metadata_context," +
+		"task_metadata_option," +
+		"cron_expr," +
+		"next_time," +
+		"trigger_times," +
+		"create_at," +
+		"update_at) values "
 
-	selectCronTask = `select 
-    						cron_task_id,
-    						task_metadata_id,
-    						task_metadata_executor,
-    						task_metadata_context,
-    						task_metadata_option,
-    						cron_expr,
-    						next_time,
-    						trigger_times,
-    						create_at,
-    						update_at
-						from %s.sys_cron_task where 1=1`
+	selectCronTask = "select " +
+		"cron_task_id," +
+		"task_metadata_id," +
+		"task_metadata_executor," +
+		"task_metadata_context," +
+		"task_metadata_option," +
+		"cron_expr," +
+		"next_time," +
+		"trigger_times," +
+		"create_at," +
+		"update_at from sys_cron_task where 1=1"
 
-	updateCronTask = `update %s.sys_cron_task set 
-							task_metadata_executor=?,
-    						task_metadata_context=?,
-    						task_metadata_option=?,
-    						cron_expr=?,
-    						next_time=?,
-    						trigger_times=?,
-    						create_at=?,
-    						update_at=? where cron_task_id=?`
+	updateCronTask = "update sys_cron_task set " +
+		"task_metadata_executor=?," +
+		"task_metadata_context=?," +
+		"task_metadata_option=?," +
+		"cron_expr=?," +
+		"next_time=?," +
+		"trigger_times=?," +
+		"create_at=?," +
+		"update_at=? where cron_task_id=?"
 
-	countTaskId = `select count(task_metadata_id) from %s.sys_async_task where task_metadata_id=?`
+	countTaskId = "select count(task_metadata_id) from sys_async_task where task_metadata_id=?"
 
-	getTriggerTimes = `select trigger_times from %s.sys_cron_task where task_metadata_id=?`
+	getTriggerTimes = "select trigger_times from sys_cron_task where task_metadata_id=?"
 
-	deleteAsyncTask = `delete from %s.sys_async_task where 1=1`
+	deleteAsyncTask = "delete from sys_async_task where 1=1"
 
-	insertDaemonTask = `insert into %s.sys_daemon_task (
-                      task_metadata_id,
-							task_metadata_executor,
-							task_metadata_context,
-                           task_metadata_option,
-                           account_id,
-                           account,
-                           task_type,
-                           task_status,
-                           create_at,
-                           update_at,
-                           details
-                    ) values `
+	insertDaemonTask = "insert into sys_daemon_task (" +
+		"task_metadata_id," +
+		"task_metadata_executor," +
+		"task_metadata_context," +
+		"task_metadata_option," +
+		"account_id," +
+		"account," +
+		"task_type," +
+		"task_status," +
+		"create_at," +
+		"update_at," +
+		"details) values "
 
-	updateDaemonTask = `update %s.sys_daemon_task set
-							task_metadata_executor=?,
-							task_metadata_context=?,
-							task_metadata_option=?,
-							task_type=?,
-							task_status=?,
-							task_runner=?,
-							last_heartbeat=?,
-							update_at=?,
-							end_at=?,
-                            last_run=?,
-                            details=? where task_id=?`
+	updateDaemonTask = "update sys_daemon_task set " +
+		"task_metadata_executor=?, " +
+		"task_metadata_context=?, " +
+		"task_metadata_option=?, " +
+		"task_type=?, " +
+		"task_status=?, " +
+		"task_runner=?, " +
+		"last_heartbeat=?, " +
+		"update_at=?, " +
+		"end_at=?, " +
+		"last_run=?, " +
+		"details=? where task_id=?"
 
-	heartbeatDaemonTask = `update %s.sys_daemon_task set
-							last_heartbeat=? where task_id=?`
+	heartbeatDaemonTask = "update sys_daemon_task set last_heartbeat=? where task_id=?"
 
-	deleteDaemonTask = `delete from %s.sys_daemon_task where 1=1`
+	deleteDaemonTask = "delete from sys_daemon_task where 1=1"
 
-	selectDaemonTask = `select
-							task_id,
-							task_metadata_id,
-							task_metadata_executor,
-							task_metadata_context,
-							task_metadata_option,
-							account_id,
-							account,
-							task_type,
-							task_runner,
-							task_status,
-							last_heartbeat,
-							create_at,
-							update_at,
-							end_at,
-							last_run,
-							details
-						from %s.sys_daemon_task where 1=1`
-)
-
-var (
-	forceNewConn = "async_task_force_new_connection"
+	selectDaemonTask = "select " +
+		"task_id, " +
+		"task_metadata_id, " +
+		"task_metadata_executor, " +
+		"task_metadata_context, " +
+		"task_metadata_option, " +
+		"account_id, " +
+		"account, " +
+		"task_type, " +
+		"task_runner, " +
+		"task_status, " +
+		"last_heartbeat, " +
+		"create_at, " +
+		"update_at, " +
+		"end_at, " +
+		"last_run, " +
+		"details from sys_daemon_task where 1=1"
 )
 
 type mysqlTaskStorage struct {
-	dsn          string
-	dbname       string
-	db           *sql.DB
-	forceNewConn bool
+	db *sql.DB
 }
 
-func NewMysqlTaskStorage(dsn, dbname string) (TaskStorage, error) {
+func newMysqlTaskStorage(dsn string) (TaskStorage, error) {
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		return nil, err
 	}
 
 	db.SetMaxOpenConns(5)
-	db.SetMaxIdleConns(1)
+	db.SetMaxIdleConns(3)
 
-	_, ok := os.LookupEnv(forceNewConn)
 	return &mysqlTaskStorage{
-		dsn:          dsn,
-		db:           db,
-		dbname:       dbname,
-		forceNewConn: ok,
+		db: db,
 	}, nil
 }
 
 func (m *mysqlTaskStorage) Close() error {
 	return m.db.Close()
+}
+
+func (m *mysqlTaskStorage) PingContext(ctx context.Context) error {
+	return m.db.PingContext(ctx)
 }
 
 func (m *mysqlTaskStorage) AddAsyncTask(ctx context.Context, tasks ...task.AsyncTask) (int, error) {
@@ -209,23 +196,7 @@ func (m *mysqlTaskStorage) AddAsyncTask(ctx context.Context, tasks ...task.Async
 		return 0, nil
 	}
 
-	db, release, err := m.getDB()
-	if err != nil {
-		return 0, err
-	}
-	defer func() {
-		_ = release()
-	}()
-
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		return 0, err
-	}
-	defer func() {
-		_ = conn.Close()
-	}()
-
-	sqlStr := fmt.Sprintf(insertAsyncTask, m.dbname)
+	sqlStr := insertAsyncTask
 	vals := make([]any, 0, len(tasks)*13)
 
 	for _, t := range tasks {
@@ -249,16 +220,10 @@ func (m *mysqlTaskStorage) AddAsyncTask(ctx context.Context, tasks ...task.Async
 		)
 	}
 
-	if sqlStr == fmt.Sprintf(insertAsyncTask, m.dbname) {
+	if sqlStr == insertAsyncTask {
 		return 0, nil
 	}
-	sqlStr = sqlStr[0 : len(sqlStr)-1]
-	stmt, err := conn.PrepareContext(ctx, sqlStr)
-	if err != nil {
-		return 0, err
-	}
-	defer stmt.Close()
-	exec, err := stmt.ExecContext(ctx, vals...)
+	exec, err := m.db.ExecContext(ctx, sqlStr[:len(sqlStr)-1], vals...)
 	if err != nil {
 		dup, err := removeDuplicateAsyncTasks(err, tasks)
 		if err != nil {
@@ -287,29 +252,16 @@ func (m *mysqlTaskStorage) UpdateAsyncTask(ctx context.Context, tasks []task.Asy
 		return 0, nil
 	}
 
-	db, release, err := m.getDB()
-	if err != nil {
-		return 0, err
-	}
-	defer func() {
-		_ = release()
-	}()
-
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		return 0, err
-	}
-	defer func() {
-		_ = conn.Close()
-	}()
-
-	tx, err := conn.BeginTx(ctx, &sql.TxOptions{})
+	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
 	}
 
-	c := newConditions(condition...)
-	updateSql := fmt.Sprintf(updateAsyncTask, m.dbname) + buildWhereClause(c)
+	prepare, err := tx.PrepareContext(ctx, updateAsyncTask+buildWhereClause(newConditions(condition...)))
+	if err != nil {
+		return 0, err
+	}
+	defer prepare.Close()
 	n := 0
 	for _, t := range tasks {
 		err := func() error {
@@ -325,12 +277,6 @@ func (m *mysqlTaskStorage) UpdateAsyncTask(ctx context.Context, tasks []task.Asy
 			if err != nil {
 				return err
 			}
-
-			prepare, err := tx.PrepareContext(ctx, updateSql)
-			if err != nil {
-				return err
-			}
-			defer prepare.Close()
 
 			exec, err := prepare.ExecContext(ctx,
 				t.Metadata.Executor,
@@ -374,32 +320,13 @@ func (m *mysqlTaskStorage) DeleteAsyncTask(ctx context.Context, condition ...Con
 	if taskFrameworkDisabled() {
 		return 0, nil
 	}
-
-	db, release, err := m.getDB()
-	if err != nil {
-		return 0, err
-	}
-	defer func() {
-		_ = release()
-	}()
-
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		return 0, err
-	}
-	defer func() {
-		_ = conn.Close()
-	}()
-
-	c := newConditions(condition...)
-	deleteSql := fmt.Sprintf(deleteAsyncTask, m.dbname) + buildWhereClause(c)
-	exec, err := conn.ExecContext(ctx, deleteSql)
+	exec, err := m.db.ExecContext(ctx, deleteAsyncTask+buildWhereClause(newConditions(condition...)))
 	if err != nil {
 		return 0, err
 	}
 	affected, err := exec.RowsAffected()
 	if err != nil {
-		panic(err)
+		return 0, err
 	}
 	return int(affected), nil
 }
@@ -409,29 +336,13 @@ func (m *mysqlTaskStorage) QueryAsyncTask(ctx context.Context, condition ...Cond
 		return nil, nil
 	}
 
-	db, release, err := m.getDB()
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		_ = release()
-	}()
-
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		_ = conn.Close()
-	}()
-
 	c := newConditions(condition...)
+	query := selectAsyncTask +
+		buildWhereClause(c) +
+		buildOrderByClause(c) +
+		buildLimitClause(c)
 
-	query := fmt.Sprintf(selectAsyncTask, m.dbname) + buildWhereClause(c)
-	query += buildOrderByClause(c)
-	query += buildLimitClause(c)
-
-	rows, err := conn.QueryContext(ctx, query)
+	rows, err := m.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -499,23 +410,7 @@ func (m *mysqlTaskStorage) AddCronTask(ctx context.Context, cronTask ...task.Cro
 		return 0, nil
 	}
 
-	db, release, err := m.getDB()
-	if err != nil {
-		return 0, err
-	}
-	defer func() {
-		_ = release()
-	}()
-
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		return 0, err
-	}
-	defer func() {
-		_ = conn.Close()
-	}()
-
-	sqlStr := fmt.Sprintf(insertCronTask, m.dbname)
+	sqlStr := insertCronTask
 	vals := make([]any, 0)
 	for _, t := range cronTask {
 		sqlStr += "(?, ?, ?, ?, ?, ?, ?, ?, ?),"
@@ -537,13 +432,7 @@ func (m *mysqlTaskStorage) AddCronTask(ctx context.Context, cronTask ...task.Cro
 			t.UpdateAt,
 		)
 	}
-	sqlStr = sqlStr[0 : len(sqlStr)-1]
-	stmt, err := conn.PrepareContext(ctx, sqlStr)
-	if err != nil {
-		return 0, err
-	}
-	defer stmt.Close()
-	exec, err := stmt.Exec(vals...)
+	exec, err := m.db.ExecContext(ctx, sqlStr[:len(sqlStr)-1], vals...)
 	if err != nil {
 		dup, err := removeDuplicateCronTasks(err, cronTask)
 		if err != nil {
@@ -566,36 +455,15 @@ func (m *mysqlTaskStorage) QueryCronTask(ctx context.Context, condition ...Condi
 	if taskFrameworkDisabled() {
 		return nil, nil
 	}
-
-	db, release, err := m.getDB()
+	var rows *sql.Rows
+	rows, err = m.db.QueryContext(ctx, selectCronTask+buildWhereClause(newConditions(condition...)))
 	if err != nil {
 		return nil, err
 	}
 	defer func() {
-		_ = release()
-	}()
-
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		_ = conn.Close()
-	}()
-
-	c := newConditions(condition...)
-	query := fmt.Sprintf(selectCronTask, m.dbname) + buildWhereClause(c)
-	rows, err := conn.QueryContext(ctx, query)
-	defer func(rows *sql.Rows) {
 		if rows == nil {
 			return
 		}
-		_ = rows.Close()
-	}(rows)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
 		err = errors.Join(err, rows.Close(), rows.Err())
 	}()
 
@@ -634,33 +502,18 @@ func (m *mysqlTaskStorage) UpdateCronTask(ctx context.Context, cronTask task.Cro
 		return 0, nil
 	}
 
-	db, release, err := m.getDB()
-	if err != nil {
-		return 0, err
-	}
-	defer func() {
-		_ = release()
-	}()
-
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		return 0, err
-	}
-	defer func() {
-		_ = conn.Close()
-	}()
-
-	ok, err := m.taskExists(ctx, conn, asyncTask.Metadata.ID)
+	// task exists in async task table
+	ok, err := m.taskExists(ctx, asyncTask.Metadata.ID)
 	if err != nil || ok {
 		return 0, err
 	}
 
-	triggerTimes, err := m.getTriggerTimes(ctx, conn, cronTask.Metadata.ID)
+	triggerTimes, err := m.getTriggerTimes(ctx, cronTask.Metadata.ID)
 	if errors.Is(err, sql.ErrNoRows) || triggerTimes != cronTask.TriggerTimes-1 {
 		return 0, moerr.NewInternalError(ctx, "cron task trigger times not match")
 	}
 
-	tx, err := conn.BeginTx(ctx, &sql.TxOptions{})
+	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -668,23 +521,13 @@ func (m *mysqlTaskStorage) UpdateCronTask(ctx context.Context, cronTask task.Cro
 		_ = tx.Rollback()
 	}(tx)
 
-	preInsert, err := tx.Prepare(fmt.Sprintf(insertAsyncTask, m.dbname) + "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-	if err != nil {
-		return 0, err
-	}
-	defer preInsert.Close()
-
-	preUpdate, err := tx.Prepare(fmt.Sprintf(updateCronTask, m.dbname))
-	if err != nil {
-		return 0, err
-	}
-	defer preUpdate.Close()
-
 	j, err := json.Marshal(asyncTask.Metadata.Options)
 	if err != nil {
 		return 0, err
 	}
-	inserted, err := preInsert.Exec(
+	inserted, err := tx.ExecContext(
+		ctx,
+		insertAsyncTask+"(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 		asyncTask.Metadata.ID,
 		asyncTask.Metadata.Executor,
 		asyncTask.Metadata.Context,
@@ -700,7 +543,9 @@ func (m *mysqlTaskStorage) UpdateCronTask(ctx context.Context, cronTask task.Cro
 		return 0, err
 	}
 
-	updated, err := preUpdate.Exec(
+	updated, err := tx.ExecContext(
+		ctx,
+		updateCronTask,
 		cronTask.Metadata.Executor,
 		cronTask.Metadata.Context,
 		util.UnsafeBytesToString(j),
@@ -728,17 +573,17 @@ func (m *mysqlTaskStorage) UpdateCronTask(ctx context.Context, cronTask task.Cro
 	return int(affected2) + int(affected1), nil
 }
 
-func (m *mysqlTaskStorage) taskExists(ctx context.Context, conn *sql.Conn, taskMetadataID string) (bool, error) {
+func (m *mysqlTaskStorage) taskExists(ctx context.Context, taskMetadataID string) (bool, error) {
 	var count int32
-	if err := conn.QueryRowContext(ctx, fmt.Sprintf(countTaskId, m.dbname), taskMetadataID).Scan(&count); err != nil {
+	if err := m.db.QueryRowContext(ctx, countTaskId, taskMetadataID).Scan(&count); err != nil {
 		return false, err
 	}
 	return count != 0, nil
 }
 
-func (m *mysqlTaskStorage) getTriggerTimes(ctx context.Context, conn *sql.Conn, taskMetadataID string) (uint64, error) {
+func (m *mysqlTaskStorage) getTriggerTimes(ctx context.Context, taskMetadataID string) (uint64, error) {
 	var triggerTimes uint64
-	err := conn.QueryRowContext(ctx, fmt.Sprintf(getTriggerTimes, m.dbname), taskMetadataID).Scan(&triggerTimes)
+	err := m.db.QueryRowContext(ctx, getTriggerTimes, taskMetadataID).Scan(&triggerTimes)
 	if err != nil {
 		return 0, err
 	}
@@ -756,39 +601,6 @@ func buildWhereClause(c *conditions) string {
 	}
 
 	return clauseBuilder.String()
-}
-
-func (m *mysqlTaskStorage) getDB() (*sql.DB, func() error, error) {
-	if !m.forceNewConn {
-		if err := m.useDB(m.db); err != nil {
-			return nil, nil, err
-		}
-		return m.db, func() error { return nil }, nil
-	}
-
-	db, err := sql.Open("mysql", m.dsn)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	if err = m.useDB(db); err != nil {
-		return nil, nil, errors.Join(err, db.Close())
-	}
-
-	return db, db.Close, nil
-}
-
-func (m *mysqlTaskStorage) useDB(db *sql.DB) (err error) {
-	if err := db.Ping(); err != nil {
-		return errors.Join(err, ErrNotReady)
-	}
-	if _, err := db.Exec("use " + m.dbname); err != nil {
-		return errors.Join(err, db.Close())
-	}
-	if _, err := db.Exec("set session disable_txn_trace=1"); err != nil {
-		return errors.Join(err, db.Close())
-	}
-	return nil
 }
 
 func buildLimitClause(c *conditions) string {
@@ -863,21 +675,8 @@ func (m *mysqlTaskStorage) AddDaemonTask(ctx context.Context, tasks ...task.Daem
 	if len(tasks) == 0 {
 		return 0, nil
 	}
-	db, release, err := m.getDB()
-	if err != nil {
-		return 0, err
-	}
-	defer func() {
-		_ = release()
-	}()
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		return 0, err
-	}
-	defer func() {
-		_ = conn.Close()
-	}()
-	sqlStr := fmt.Sprintf(insertDaemonTask, m.dbname)
+
+	sqlStr := insertDaemonTask
 	values := make([]any, 0)
 	for _, t := range tasks {
 		sqlStr += "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?),"
@@ -905,16 +704,10 @@ func (m *mysqlTaskStorage) AddDaemonTask(ctx context.Context, tasks ...task.Daem
 			details,
 		)
 	}
-	if sqlStr == fmt.Sprintf(insertDaemonTask, m.dbname) {
+	if sqlStr == insertDaemonTask {
 		return 0, nil
 	}
-	sqlStr = sqlStr[0 : len(sqlStr)-1]
-	stmt, err := conn.PrepareContext(ctx, sqlStr)
-	if err != nil {
-		return 0, err
-	}
-	defer stmt.Close()
-	exec, err := stmt.Exec(values...)
+	exec, err := m.db.ExecContext(ctx, sqlStr[:len(sqlStr)-1], values...)
 	if err != nil {
 		dup, err := removeDuplicateDaemonTasks(err, tasks)
 		if err != nil {
@@ -942,29 +735,18 @@ func (m *mysqlTaskStorage) UpdateDaemonTask(ctx context.Context, tasks []task.Da
 		return 0, nil
 	}
 
-	db, release, err := m.getDB()
-	if err != nil {
-		return 0, err
-	}
-	defer func() {
-		_ = release()
-	}()
-
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		return 0, err
-	}
-	defer func() {
-		_ = conn.Close()
-	}()
-
-	tx, err := conn.BeginTx(ctx, &sql.TxOptions{})
+	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
 	}
 
 	c := newConditions(condition...)
-	updateSql := fmt.Sprintf(updateDaemonTask, m.dbname) + buildDaemonTaskWhereClause(c)
+	updateSql := updateDaemonTask + buildDaemonTaskWhereClause(c)
+	prepare, err := tx.PrepareContext(ctx, updateSql)
+	if err != nil {
+		return 0, err
+	}
+	defer prepare.Close()
 	n := 0
 	for _, t := range tasks {
 		err := func() error {
@@ -976,12 +758,6 @@ func (m *mysqlTaskStorage) UpdateDaemonTask(ctx context.Context, tasks []task.Da
 			if err != nil {
 				return err
 			}
-
-			prepare, err := tx.PrepareContext(ctx, updateSql)
-			if err != nil {
-				return err
-			}
-			defer prepare.Close()
 
 			var lastHeartbeat, updateAt, endAt, lastRun any
 			if !t.LastHeartbeat.IsZero() {
@@ -1039,25 +815,9 @@ func (m *mysqlTaskStorage) DeleteDaemonTask(ctx context.Context, condition ...Co
 		return 0, nil
 	}
 
-	db, release, err := m.getDB()
-	if err != nil {
-		return 0, err
-	}
-	defer func() {
-		_ = release()
-	}()
-
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		return 0, err
-	}
-	defer func() {
-		_ = conn.Close()
-	}()
-
 	c := newConditions(condition...)
-	deleteSql := fmt.Sprintf(deleteDaemonTask, m.dbname) + buildDaemonTaskWhereClause(c)
-	exec, err := conn.ExecContext(ctx, deleteSql)
+	deleteSql := deleteDaemonTask + buildDaemonTaskWhereClause(c)
+	exec, err := m.db.ExecContext(ctx, deleteSql)
 	if err != nil {
 		return 0, err
 	}
@@ -1073,28 +833,13 @@ func (m *mysqlTaskStorage) QueryDaemonTask(ctx context.Context, condition ...Con
 		return nil, nil
 	}
 
-	db, release, err := m.getDB()
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		_ = release()
-	}()
-
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		_ = conn.Close()
-	}()
-
 	c := newConditions(condition...)
-	query := fmt.Sprintf(selectDaemonTask, m.dbname) + buildDaemonTaskWhereClause(c)
-	query += buildOrderByClause(c)
-	query += buildLimitClause(c)
+	query := selectDaemonTask +
+		buildDaemonTaskWhereClause(c) +
+		buildOrderByClause(c) +
+		buildLimitClause(c)
 
-	rows, err := conn.QueryContext(ctx, query)
+	rows, err := m.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -1162,38 +907,20 @@ func (m *mysqlTaskStorage) HeartbeatDaemonTask(ctx context.Context, tasks []task
 		return 0, nil
 	}
 
-	db, release, err := m.getDB()
-	if err != nil {
-		return 0, err
-	}
-	defer func() {
-		_ = release()
-	}()
-
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		return 0, err
-	}
-	defer func() {
-		_ = conn.Close()
-	}()
-
-	tx, err := conn.BeginTx(ctx, &sql.TxOptions{})
+	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
 	}
 
-	update := fmt.Sprintf(heartbeatDaemonTask, m.dbname)
+	prepare, err := tx.PrepareContext(ctx, heartbeatDaemonTask)
+	if err != nil {
+		return 0, err
+	}
+	defer prepare.Close()
 	n := 0
 	for _, t := range tasks {
 		err := func() error {
-			prepare, err := tx.PrepareContext(ctx, update)
-			if err != nil {
-				return err
-			}
-			defer prepare.Close()
-
-			var lastHeartbeat any
+			var lastHeartbeat time.Time
 			if !t.LastHeartbeat.IsZero() {
 				lastHeartbeat = t.LastHeartbeat
 			}

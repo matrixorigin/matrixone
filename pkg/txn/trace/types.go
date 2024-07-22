@@ -171,8 +171,8 @@ var (
 	}
 )
 
-func GetService() Service {
-	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.TxnTraceService)
+func GetService(sid string) Service {
+	v, ok := runtime.ServiceRuntime(sid).GetGlobalVariables(runtime.TxnTraceService)
 	if !ok {
 		return &service{}
 	}
@@ -192,10 +192,11 @@ type txnEventService interface {
 	TxnError(op client.TxnOperator, err error)
 
 	TxnStatementStart(op client.TxnOperator, sql string, seq uint64)
-	TxnStatementCompleted(op client.TxnOperator, sql string, cost time.Duration, seq uint64, err error)
+	TxnStatementCompleted(op client.TxnOperator, sql string, cost time.Duration, seq uint64, affectRows int, err error)
 
 	AddTxnDurationAction(op client.TxnOperator, eventType client.EventType, seq uint64, tableID uint64, value time.Duration, err error)
 	AddTxnAction(op client.TxnOperator, eventType client.EventType, seq uint64, tableID uint64, value int64, unit string, err error)
+	AddTxnActionInfo(op client.TxnOperator, eventType client.EventType, seq uint64, tableID uint64, value func(Writer))
 
 	AddTxnFilter(method, value string) error
 	ClearTxnFilters() error
@@ -258,8 +259,17 @@ type StatementFilter interface {
 }
 
 type csvEvent interface {
-	toCSVRecord(
-		cn string,
-		buf *buffer,
-		records []string)
+	toCSVRecord(cn string, buf *buffer, records []string)
+}
+
+type event struct {
+	csv    csvEvent
+	buffer *buffer
+}
+
+type Writer interface {
+	WriteUint(uint64)
+	WriteInt(int64)
+	WriteString(string)
+	WriteHex([]byte)
 }

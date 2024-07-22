@@ -20,7 +20,9 @@ import (
 
 type CStrParts [4]*CStr
 type CStr struct {
+	// user origin input
 	o string
+	// use for compare
 	c string
 	// quote bool
 }
@@ -35,18 +37,6 @@ func NewCStr(str string, lower int64) *CStr {
 	return cs
 }
 
-func (cs *CStr) SetConfig(lower int64) {
-	if lower == 0 {
-		cs.c = cs.o
-		return
-	}
-	cs.c = strings.ToLower(cs.o)
-}
-
-func (cs *CStr) ToLower() string {
-	return strings.ToLower(cs.o)
-}
-
 func (cs *CStr) Origin() string {
 	return cs.o
 }
@@ -57,14 +47,4 @@ func (cs *CStr) Compare() string {
 
 func (cs *CStr) Empty() bool {
 	return len(cs.o) == 0
-}
-
-func NewCStrUseOrigin(str string, useOrigin int64) *CStr {
-	cs := &CStr{o: str}
-	if useOrigin == 1 {
-		cs.c = cs.o
-		return cs
-	}
-	cs.c = strings.ToLower(cs.o)
-	return cs
 }

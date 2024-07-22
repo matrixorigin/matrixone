@@ -220,6 +220,10 @@ const (
 	VAR_POP
 	VAR_SAMPLE
 
+	// Date and Time functions
+	LAST_DAY
+	MAKEDATE
+
 	DATE
 	TIME
 	DAY
@@ -277,6 +281,10 @@ const (
 	JSON_EXTRACT
 	JSON_QUOTE
 	JSON_UNQUOTE
+	JQ
+	TRY_JQ
+	WASM
+	TRY_WASM
 	FORMAT
 	SLEEP
 	INSTR
@@ -354,6 +362,7 @@ const (
 	VECTOR_DIMS     //VECTOR DIMENSIONS
 	NORMALIZE_L2    //NORMALIZE L2
 	L2_DISTANCE     //L2_DISTANCE
+	L2_DISTANCE_SQ  //L2_DISTANCE_SQ
 	COSINE_DISTANCE //COSINE_DISTANCE
 	CLUSTER_CENTERS // CLUSTER_CENTERS
 	SUB_VECTOR      // SUB_VECTOR
@@ -568,6 +577,10 @@ var functionIdRegister = map[string]int32{
 	"collation":                      COLLATION,
 	"json_extract":                   JSON_EXTRACT,
 	"json_quote":                     JSON_QUOTE,
+	"jq":                             JQ,
+	"try_jq":                         TRY_JQ,
+	"wasm":                           WASM,
+	"try_wasm":                       TRY_WASM,
 	"enable_fault_injection":         ENABLE_FAULT_INJECTION,
 	"disable_fault_injection":        DISABLE_FAULT_INJECTION,
 	"dense_rank":                     DENSE_RANK,
@@ -589,6 +602,8 @@ var functionIdRegister = map[string]int32{
 	"datediff":                       DATEDIFF,
 	"timestampdiff":                  TIMESTAMPDIFF,
 	"timediff":                       TIMEDIFF,
+	"last_day":                       LAST_DAY,
+	"makedate":                       MAKEDATE,
 	"reg_match":                      REG_MATCH,
 	"not_reg_match":                  NOT_REG_MATCH,
 	"regexp_instr":                   REGEXP_INSTR,
@@ -662,6 +677,7 @@ var functionIdRegister = map[string]int32{
 	"vector_dims":       VECTOR_DIMS,
 	"normalize_l2":      NORMALIZE_L2,
 	"l2_distance":       L2_DISTANCE,
+	"l2_distance_sq":    L2_DISTANCE_SQ,
 	"cosine_distance":   COSINE_DISTANCE,
 
 	"python_user_defined_function": PYTHON_UDF,

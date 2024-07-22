@@ -400,7 +400,7 @@ func showConnectors(ctx context.Context, ses FeSession) error {
 		row[11] = t.Details.Error
 		mrs.AddRow(row)
 	}
-	return nil
+	return trySaveQueryResult(ctx, ses.(*Session), mrs)
 }
 
 func optionString(options map[string]string) string {

@@ -39,6 +39,7 @@ type CacheConfig struct {
 	DiskEvictTarget      *float64       `toml:"disk-evict-target"`
 	RemoteCacheEnabled   bool           `toml:"remote-cache-enabled"`
 	RPC                  morpc.Config   `toml:"rpc"`
+	CheckOverlaps        bool           `toml:"check-overlaps"`
 
 	QueryClient      client.QueryClient            `json:"-"`
 	KeyRouterFactory KeyRouterFactory[pb.CacheKey] `json:"-"`
@@ -124,8 +125,18 @@ var DisabledCacheConfig = CacheConfig{
 
 const DisableCacheCapacity = 1
 
-// var DefaultCacheDataAllocator = RCBytesPool
-var DefaultCacheDataAllocator = new(bytesAllocator)
+var initDefaultCacheDataAllocator sync.Once
+
+var _defaultCacheDataAllocator CacheDataAllocator
+
+func GetDefaultCacheDataAllocator() CacheDataAllocator {
+	initDefaultCacheDataAllocator.Do(func() {
+		_defaultCacheDataAllocator = &bytesAllocator{
+			allocator: getBytesAllocator(),
+		}
+	})
+	return _defaultCacheDataAllocator
+}
 
 // VectorCache caches IOVector
 type IOVectorCache interface {
@@ -149,13 +160,19 @@ type IOVectorCache interface {
 var slowCacheReadThreshold = time.Second * 0
 
 func readCache(ctx context.Context, cache IOVectorCache, vector *IOVector) error {
+	if vector.allDone() {
+		return nil
+	}
+
 	if slowCacheReadThreshold > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, slowCacheReadThreshold)
 		defer cancel()
 	}
+
 	err := cache.Read(ctx, vector)
 	if err != nil {
+
 		if errors.Is(err, context.DeadlineExceeded) {
 			logutil.Warn("cache read exceed deadline",
 				zap.Any("err", err),
@@ -166,8 +183,10 @@ func readCache(ctx context.Context, cache IOVectorCache, vector *IOVector) error
 			// safe to ignore
 			return nil
 		}
+
 		return err
 	}
+
 	return nil
 }
 

@@ -4,3 +4,8 @@ data-dir = "./mo-data"
 
 [log]
 level = "info"
+
+[malloc]
+check-fraction = 65536
+enable-metrics = true
+

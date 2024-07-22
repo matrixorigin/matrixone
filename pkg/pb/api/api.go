@@ -29,6 +29,7 @@ var (
 		OpCode_OpGlobalCheckpoint: "GlobalCheckpoint",
 		OpCode_OpInterceptCommit:  "InterceptCommit",
 		OpCode_OpCommitMerge:      "CommitMerge",
+		OpCode_OpDiskDiskCleaner:  "DiskCleaner",
 	}
 )
 
@@ -141,6 +142,14 @@ func (m *SyncLogTailResp) MarshalBinary() ([]byte, error) {
 }
 
 func (m *SyncLogTailResp) UnmarshalBinary(data []byte) error {
+	return m.Unmarshal(data)
+}
+
+func (m *TNStringResponse) MarshalBinary() ([]byte, error) {
+	return m.Marshal()
+}
+
+func (m *TNStringResponse) UnmarshalBinary(data []byte) error {
 	return m.Unmarshal(data)
 }
 

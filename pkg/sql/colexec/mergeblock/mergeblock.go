@@ -17,38 +17,53 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "merge_block"
+const opName = "merge_block"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (mergeBlock *MergeBlock) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": MergeS3BlocksMetaLoc ")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) error {
-	ap := arg
+func (mergeBlock *MergeBlock) OpType() vm.OpType {
+	return vm.MergeBlock
+}
+
+func (mergeBlock *MergeBlock) Prepare(proc *process.Process) error {
+	ap := mergeBlock
 	ap.container = new(Container)
 	ap.container.mp = make(map[int]*batch.Batch)
 	ap.container.mp2 = make(map[int][]*batch.Batch)
+
+	ref := mergeBlock.Ref
+	eng := mergeBlock.Engine
+	partitionNames := mergeBlock.PartitionTableNames
+	rel, partitionRels, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, eng, ref, partitionNames)
+	if err != nil {
+		return err
+	}
+	mergeBlock.container.source = rel
+	mergeBlock.container.partitionSources = partitionRels
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (mergeBlock *MergeBlock) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
 	var err error
-	ap := arg
-	result, err := arg.GetChildren(0).Call(proc)
+	ap := mergeBlock
+	result, err := mergeBlock.GetChildren(0).Call(proc)
 	if err != nil {
 		return result, err
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze(mergeBlock.GetIdx(), mergeBlock.GetParallelIdx(), mergeBlock.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 
@@ -66,19 +81,19 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	// If the target is a partition table
-	if len(ap.PartitionSources) > 0 {
+	if len(ap.container.partitionSources) > 0 {
 		// 'i' aligns with partition number
-		for i := range ap.PartitionSources {
+		for i := range ap.container.partitionSources {
 			if ap.container.mp[i].RowCount() > 0 {
 				// batches in mp will be deeply copied into txn's workspace.
-				if err = ap.PartitionSources[i].Write(proc.Ctx, ap.container.mp[i]); err != nil {
+				if err = ap.container.partitionSources[i].Write(proc.Ctx, ap.container.mp[i]); err != nil {
 					return result, err
 				}
 			}
 
 			for _, bat := range ap.container.mp2[i] {
 				// batches in mp2 will be deeply copied into txn's workspace.
-				if err = ap.PartitionSources[i].Write(proc.Ctx, bat); err != nil {
+				if err = ap.container.partitionSources[i].Write(proc.Ctx, bat); err != nil {
 					return result, err
 				}
 
@@ -89,14 +104,14 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		// handle origin/main table.
 		if ap.container.mp[0].RowCount() > 0 {
 			//batches in mp will be deeply copied into txn's workspace.
-			if err = ap.Tbl.Write(proc.Ctx, ap.container.mp[0]); err != nil {
+			if err = ap.container.source.Write(proc.Ctx, ap.container.mp[0]); err != nil {
 				return result, err
 			}
 		}
 
 		for _, bat := range ap.container.mp2[0] {
 			//batches in mp2 will be deeply copied into txn's workspace.
-			if err = ap.Tbl.Write(proc.Ctx, bat); err != nil {
+			if err = ap.container.source.Write(proc.Ctx, bat); err != nil {
 				return result, err
 			}
 		}

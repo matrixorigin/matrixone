@@ -28,12 +28,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "partition"
+const opName = "partition"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (partition *Partition) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": partition([")
-	for i, f := range arg.OrderBySpecs {
+	for i, f := range partition.OrderBySpecs {
 		if i > 0 {
 			buf.WriteString(", ")
 		}
@@ -42,49 +42,53 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString("])")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) (err error) {
-	arg.ctr = new(container)
-	ctr := arg.ctr
-	arg.ctr.InitReceiver(proc, true)
+func (partition *Partition) OpType() vm.OpType {
+	return vm.Partition
+}
+
+func (partition *Partition) Prepare(proc *process.Process) (err error) {
+	partition.ctr = new(container)
+	ctr := partition.ctr
+	partition.ctr.InitReceiver(proc, true)
 
 	length := 2 * len(proc.Reg.MergeReceivers)
 	ctr.batchList = make([]*batch.Batch, 0, length)
 	ctr.orderCols = make([][]*vector.Vector, 0, length)
 
-	arg.ctr.executors = make([]colexec.ExpressionExecutor, len(arg.OrderBySpecs))
-	for i := range arg.ctr.executors {
-		arg.ctr.executors[i], err = colexec.NewExpressionExecutor(proc, arg.OrderBySpecs[i].Expr)
+	partition.ctr.executors = make([]colexec.ExpressionExecutor, len(partition.OrderBySpecs))
+	for i := range partition.ctr.executors {
+		partition.ctr.executors[i], err = colexec.NewExpressionExecutor(proc, partition.OrderBySpecs[i].Expr)
 		if err != nil {
 			return err
 		}
 	}
-	ctr.generateCompares(arg.OrderBySpecs)
+	ctr.generateCompares(partition.OrderBySpecs)
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (partition *Partition) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	ctr := arg.ctr
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	ctr := partition.ctr
+	anal := proc.GetAnalyze(partition.GetIdx(), partition.GetParallelIdx(), partition.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 	result := vm.NewCallResult()
-
+	var err error
 	for {
 		switch ctr.status {
 		case receive:
-			bat, end, err := ctr.ReceiveFromAllRegs(anal)
-			if err != nil {
-				return result, err
+			msg := ctr.ReceiveFromAllRegs(anal)
+			if msg.Err != nil {
+				return result, msg.Err
 			}
-			if end {
+			if msg.Batch == nil {
 				ctr.indexList = make([]int64, len(ctr.batchList))
 				ctr.status = eval
 			} else {
-				if err = ctr.mergeAndEvaluateOrderColumn(proc, bat); err != nil {
+				if err = ctr.mergeAndEvaluateOrderColumn(proc, msg.Batch); err != nil {
 					return result, err
 				}
 			}
@@ -118,7 +122,7 @@ func (ctr *container) evaluateOrderColumn(proc *process.Process, index int) erro
 
 	ctr.orderCols[index] = make([]*vector.Vector, len(ctr.executors))
 	for i := 0; i < len(ctr.executors); i++ {
-		vec, err := ctr.executors[i].EvalWithoutResultReusing(proc, inputs)
+		vec, err := ctr.executors[i].EvalWithoutResultReusing(proc, inputs, nil)
 		if err != nil {
 			return err
 		}

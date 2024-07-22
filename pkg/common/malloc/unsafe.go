@@ -23,3 +23,6 @@ func runtime_procPin() int
 
 //go:linkname runtime_procUnpin runtime.procUnpin
 func runtime_procUnpin() int
+
+//go:linkname fastrand runtime.fastrand
+func fastrand() uint32

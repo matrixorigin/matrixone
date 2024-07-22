@@ -16,6 +16,8 @@ package catalog
 
 type EntryState int8
 
+var DefaultTableDataFactory TableDataFactory
+
 const (
 	ES_Appendable EntryState = iota
 	ES_NotAppendable

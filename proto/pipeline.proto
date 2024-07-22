@@ -25,12 +25,14 @@ option (gogoproto.protosizer_all) = true;
 import "plan.proto";
 import "timestamp.proto";
 import "lock.proto";
+import "txn.proto";
 
 enum Method {
     UnknownMethod = 0;
     PipelineMessage = 1;
     BatchMessage = 2;
     PrepareDoneNotifyMessage = 3;// for dispatch
+    StopSending = 4;
 }
 
 enum Status {
@@ -49,9 +51,7 @@ message Message {
   bytes   analyse = 6;
   uint64  id = 7;
   bytes   uuid = 8;
-  uint64  batch_cnt = 9;
-  uint32  checksum = 10;
-  uint64  sequence = 11;
+  bool    needNotReply = 9;
 }
 
 message Connector {
@@ -137,18 +137,19 @@ message Map{
 message Deletion{
   uint64 AffectedRows = 1;
   bool RemoteDelete = 2;
+  uint32 IBucket = 3;
+  uint32 NBucket = 4;
   // DeleteCtx
-
-  int32 row_id_idx                      = 3;
-  repeated uint64 partition_table_ids   = 4;
-  repeated string partition_table_names = 5;
-  int32 partition_index_in_batch        = 6;
-  plan.ObjectRef ref                    = 7;
-  bool add_affected_rows                = 8;
-  map<string,int32> SegmentMap          = 9;
-  bool can_truncate                     = 10;
-  bool is_end                           = 11;
-  int32 primary_key_idx                 = 12;
+  int32 row_id_idx                      = 5;
+  repeated uint64 partition_table_ids   = 6;
+  repeated string partition_table_names = 7;
+  int32 partition_index_in_batch        = 8;
+  plan.ObjectRef ref                    = 9;
+  bool add_affected_rows                = 10;
+  map<string,int32> SegmentMap          = 11;
+  bool can_truncate                     = 12;
+  bool is_end                           = 13;
+  int32 primary_key_idx                 = 14;
 }
 
 message PreInsert {
@@ -199,6 +200,8 @@ message FuzzyFilter {
   float N = 1;
   string PkName = 2;
   plan.Type PkTyp = 3 [(gogoproto.nullable) = false];
+  int32 BuildIdx = 4;
+  bool IfInsertFromUnique = 5;
 }
 
 message Join {
@@ -312,6 +315,13 @@ message Product {
   bool is_shuffle =4;
 }
 
+message ProductL2 {
+  repeated int32 rel_list = 1;
+  repeated int32 col_list = 2;
+  repeated plan.Type  types = 3 [(gogoproto.nullable) = false];
+  plan.Expr  expr = 4;
+}
+
 message IndexJoin {
   repeated int32 result = 1;
   repeated plan.Type  types = 2 [(gogoproto.nullable) = false];
@@ -345,12 +355,21 @@ message ExternalScan {
   repeated string file_list = 7;
   repeated plan.ColDef origin_cols = 8;
   plan.Expr    filter = 9;
+  map<string, int32> TbColToDataCol = 10;
 }
 
 message StreamScan {
   plan.TableDef tbl_def = 1;
   int64 offset = 2;
   int64 limit = 3;
+}
+
+message TableScan {
+
+}
+
+message ValueScan {
+
 }
 
 message SampleFunc {
@@ -414,6 +433,9 @@ message Instruction{
   int32 parallel_id = 41;
   int32 max_parallel = 42;
   IndexJoin index_join = 43;
+  ProductL2 product_l2 = 44;
+  TableScan table_scan = 45;
+  ValueScan value_scan = 46;
 }
 
 message AnalysisList {
@@ -431,6 +453,7 @@ message Source {
   plan.TableDef tableDef = 8;
   timestamp.Timestamp timestamp = 9;
   repeated plan.RuntimeFilterSpec runtime_filter_probe_list = 10;
+  bool is_const = 11;
 }
 
 message NodeInfo {
@@ -449,16 +472,24 @@ message ProcessLimitation {
   int64 reader_size = 5;
 }
 
+message PrepareParamInfo {
+  int64 length = 1;
+  bytes data = 2;
+  bytes area = 3;
+  repeated bool nulls = 4;
+}
+
 message ProcessInfo {
   string id = 1;
   string sql = 2;
-  ProcessLimitation lim = 3;
+  ProcessLimitation lim = 3 [(gogoproto.nullable) = false];
   int64 unix_time = 4;
   uint32 account_id = 5;
-  string snapshot = 6;
-  SessionInfo session_info = 7;
+  txn.CNTxnSnapshot snapshot = 6 [(gogoproto.nullable) = false];
+  SessionInfo session_info = 7 [(gogoproto.nullable) = false];
   repeated int32 analysis_node_list = 8;
-  SessionLoggerInfo session_logger = 9;
+  SessionLoggerInfo session_logger = 9 [(gogoproto.nullable) = false];
+  PrepareParamInfo prepare_params = 10 [(gogoproto.nullable) = false];
 }
 
 message SessionInfo {

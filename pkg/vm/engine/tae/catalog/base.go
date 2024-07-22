@@ -50,13 +50,6 @@ type BaseEntryImpl[T BaseNode[T]] struct {
 	*txnbase.MVCCChain[*MVCCNode[T]]
 }
 
-func NewReplayBaseEntry[T BaseNode[T]](factory func() T) *BaseEntryImpl[T] {
-	be := &BaseEntryImpl[T]{
-		MVCCChain: txnbase.NewMVCCChain(CompareBaseNode[T], NewEmptyMVCCNodeFactory(factory), nil),
-	}
-	return be
-}
-
 func NewBaseEntry[T BaseNode[T]](factory func() T) *BaseEntryImpl[T] {
 	return &BaseEntryImpl[T]{
 		MVCCChain: txnbase.NewMVCCChain(CompareBaseNode[T], NewEmptyMVCCNodeFactory(factory), nil),
@@ -220,6 +213,14 @@ func (be *BaseEntryImpl[T]) HasDropCommittedLocked() bool {
 		return false
 	}
 	return un.HasDropCommitted()
+}
+
+func (be *BaseEntryImpl[T]) HasDropIntentLocked() bool {
+	un := be.GetLatestNodeLocked()
+	if un == nil {
+		return false
+	}
+	return un.HasDropIntent()
 }
 
 func (be *BaseEntryImpl[T]) ensureVisibleAndNotDropped(txn txnif.TxnReader) bool {

@@ -29,7 +29,7 @@ import (
 )
 
 type fuzzyTestCase struct {
-	arg   *Argument
+	arg   *FuzzyFilter
 	types []types.Type
 	proc  *process.Process
 }
@@ -90,22 +90,22 @@ func init() {
 	}
 }
 
-func newArgument(typ types.Type) *Argument {
-	arg := new(Argument)
+func newArgument(typ types.Type) *FuzzyFilter {
+	arg := new(FuzzyFilter)
 	arg.PkTyp = plan.MakePlan2Type(&typ)
 	return arg
 }
 
 func newProcess() *process.Process {
-	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
+	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
 		Ctx: proc.Ctx,
-		Ch:  make(chan *batch.Batch, 10),
+		Ch:  make(chan *process.RegisterMessage, 10),
 	}
 	proc.Reg.MergeReceivers[1] = &process.WaitRegister{
 		Ctx: proc.Ctx,
-		Ch:  make(chan *batch.Batch, 3),
+		Ch:  make(chan *process.RegisterMessage, 3),
 	}
 	return proc
 }
@@ -138,7 +138,7 @@ func TestFuzzyFilter(t *testing.T) {
 			require.NoError(t, err)
 
 			bat := newBatch(tc.types, tc.proc, int64(r))
-			tc.proc.Reg.MergeReceivers[0].Ch <- bat
+			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(bat)
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
 			tc.proc.Reg.MergeReceivers[1].Ch <- nil
 
@@ -157,7 +157,7 @@ func TestFuzzyFilter(t *testing.T) {
 			require.NoError(t, err)
 
 			bat = newBatch(tc.types, tc.proc, int64(r))
-			tc.proc.Reg.MergeReceivers[0].Ch <- bat
+			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(bat)
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
 			tc.proc.Reg.MergeReceivers[1].Ch <- nil
 
@@ -186,11 +186,13 @@ func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return bat
 }
 
-func resetChildren(arg *Argument, bats []*batch.Batch) {
+func resetChildren(arg *FuzzyFilter, bats []*batch.Batch) {
+	valueScanArg := &value_scan.ValueScan{
+		Batchs: bats,
+	}
+	valueScanArg.Prepare(nil)
 	arg.SetChildren(
 		[]vm.Operator{
-			&value_scan.Argument{
-				Batchs: bats,
-			},
+			valueScanArg,
 		})
 }

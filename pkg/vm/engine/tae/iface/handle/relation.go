@@ -54,8 +54,8 @@ type Relation interface {
 	AddObjsWithMetaLoc(ctx context.Context, stats containers.Vector) error
 
 	GetMeta() any
-	CreateObject(bool) (Object, error)
-	CreateNonAppendableObject(is1PC bool, opt *objectio.CreateObjOpt) (Object, error)
+	CreateObject() (Object, error)
+	CreateNonAppendableObject(opt *objectio.CreateObjOpt) (Object, error)
 	GetObject(id *types.Objectid) (Object, error)
 	SoftDeleteObject(id *types.Objectid) (err error)
 

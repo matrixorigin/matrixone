@@ -23,6 +23,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -78,7 +79,7 @@ func (m *mockQueryService) Close() error {
 	return nil
 }
 
-func (m *mockQueryService) AddHandleFunc(method query.CmdMethod, h func(context.Context, *query.Request, *query.Response) error, async bool) {
+func (m *mockQueryService) AddHandleFunc(method query.CmdMethod, h func(context.Context, *query.Request, *query.Response, *morpc.Buffer) error, async bool) {
 }
 
 func (m *mockQueryService) AddReleaseFunc(method query.CmdMethod, f func()) {
@@ -114,8 +115,11 @@ func Test_gettingInfo(t *testing.T) {
 		Waiters:     nil,
 	}
 
-	selectStubs := gostub.Stub(&selectSuperTenant,
-		func(selector clusterservice.Selector,
+	selectStubs := gostub.Stub(
+		&selectSuperTenant,
+		func(
+			sid string,
+			selector clusterservice.Selector,
 			username string,
 			filter func(string) bool,
 			appendFn func(service *metadata.CNService)) {
@@ -127,8 +131,13 @@ func Test_gettingInfo(t *testing.T) {
 		})
 	defer selectStubs.Reset()
 
-	listTnStubs := gostub.Stub(&listTnService, func(appendFn func(service *metadata.TNService)) {
-	})
+	listTnStubs := gostub.Stub(
+		&listTnService,
+		func(
+			sid string,
+			appendFn func(service *metadata.TNService)) {
+		},
+	)
 	defer listTnStubs.Reset()
 
 	requestMultipleCnStubs := gostub.Stub(&requestMultipleCn,
@@ -295,7 +304,7 @@ func Test_gettingInfo(t *testing.T) {
 	type argsx struct {
 		in0  int
 		proc *process.Process
-		arg  *Argument
+		arg  *TableFunction
 	}
 	tests4 := []struct {
 		name    string
@@ -307,10 +316,11 @@ func Test_gettingInfo(t *testing.T) {
 			name: "",
 			args: argsx{
 				proc: testProc,
-				arg: &Argument{
+				arg: &TableFunction{
 					ctr: &container{
 						state:            dataProducing,
 						executorsForArgs: nil,
+						retSchema:        nil,
 					},
 					Rets: nil,
 					Args: nil,
@@ -319,9 +329,8 @@ func Test_gettingInfo(t *testing.T) {
 						"used",
 						"hit_ratio",
 					},
-					Params:    nil,
-					FuncName:  "",
-					retSchema: nil,
+					Params:   nil,
+					FuncName: "",
 				},
 			},
 			want:    false,
@@ -346,7 +355,7 @@ func Test_gettingInfo(t *testing.T) {
 			assert.Equal(t, bat.Attrs[1], "used")
 			assert.Equal(t, bat.Attrs[2], "hit_ratio")
 
-			assert.Equal(t, vector.MustStrCol(bat.GetVector(0))[0], "mock_cache")
+			assert.Equal(t, vector.InefficientMustStrCol(bat.GetVector(0))[0], "mock_cache")
 			assert.Equal(t, vector.MustFixedCol[uint64](bat.GetVector(1))[0], uint64(0))
 
 		})
@@ -364,19 +373,19 @@ func Test_gettingInfo(t *testing.T) {
 			name: "",
 			args: argsx{
 				proc: testProc,
-				arg: &Argument{
+				arg: &TableFunction{
 					ctr: &container{
 						state:            dataProducing,
 						executorsForArgs: nil,
+						retSchema:        nil,
 					},
 					Rets: nil,
 					Args: nil,
 					Attrs: []string{
 						"user_txn",
 					},
-					Params:    nil,
-					FuncName:  "",
-					retSchema: nil,
+					Params:   nil,
+					FuncName: "",
 				},
 			},
 			want: false,
@@ -399,7 +408,7 @@ func Test_gettingInfo(t *testing.T) {
 			assert.Equal(t, len(bat.Attrs), 1)
 			assert.Equal(t, bat.Attrs[0], "user_txn")
 
-			assert.Equal(t, vector.MustStrCol(bat.GetVector(0))[0], "true")
+			assert.Equal(t, vector.InefficientMustStrCol(bat.GetVector(0))[0], "true")
 		})
 	}
 
@@ -415,10 +424,11 @@ func Test_gettingInfo(t *testing.T) {
 			name: "",
 			args: argsx{
 				proc: testProc,
-				arg: &Argument{
+				arg: &TableFunction{
 					ctr: &container{
 						state:            dataProducing,
 						executorsForArgs: nil,
+						retSchema:        nil,
 					},
 					Rets: nil,
 					Args: nil,
@@ -427,9 +437,8 @@ func Test_gettingInfo(t *testing.T) {
 						"lock_key",
 						"lock_mode",
 					},
-					Params:    nil,
-					FuncName:  "",
-					retSchema: nil,
+					Params:   nil,
+					FuncName: "",
 				},
 			},
 			want: false,
@@ -453,9 +462,9 @@ func Test_gettingInfo(t *testing.T) {
 			assert.Equal(t, bat.Attrs[1], "lock_key")
 			assert.Equal(t, bat.Attrs[2], "lock_mode")
 
-			assert.Equal(t, vector.MustStrCol(bat.GetVector(0))[0], "1000")
-			assert.Equal(t, vector.MustStrCol(bat.GetVector(1))[0], "range")
-			assert.Equal(t, vector.MustStrCol(bat.GetVector(2))[0], "Exclusive")
+			assert.Equal(t, vector.InefficientMustStrCol(bat.GetVector(0))[0], "1000")
+			assert.Equal(t, vector.InefficientMustStrCol(bat.GetVector(1))[0], "range")
+			assert.Equal(t, vector.InefficientMustStrCol(bat.GetVector(2))[0], "Exclusive")
 		})
 	}
 }
@@ -563,7 +572,7 @@ func Test_moConfigurationsCall(t *testing.T) {
 	type args struct {
 		in0  int
 		proc *process.Process
-		arg  *Argument
+		arg  *TableFunction
 	}
 	tests := []struct {
 		name    string
@@ -575,10 +584,11 @@ func Test_moConfigurationsCall(t *testing.T) {
 			name: "t1",
 			args: args{
 				proc: testProc,
-				arg: &Argument{
+				arg: &TableFunction{
 					ctr: &container{
 						state:            dataProducing,
 						executorsForArgs: nil,
+						retSchema:        nil,
 					},
 					Rets: nil,
 					Args: nil,
@@ -587,9 +597,8 @@ func Test_moConfigurationsCall(t *testing.T) {
 						"current_value",
 						"default_value",
 					},
-					Params:    nil,
-					FuncName:  "",
-					retSchema: nil,
+					Params:   nil,
+					FuncName: "",
 				},
 			},
 			want: false,
@@ -613,9 +622,9 @@ func Test_moConfigurationsCall(t *testing.T) {
 			assert.Equal(t, bat.Attrs[2], "default_value")
 
 			for i := 0; i < 4; i++ {
-				assert.Equal(t, vector.MustStrCol(bat.GetVector(0))[i], "xxxx")
-				assert.Equal(t, vector.MustStrCol(bat.GetVector(1))[i], "123")
-				assert.Equal(t, vector.MustStrCol(bat.GetVector(2))[i], "0")
+				assert.Equal(t, vector.InefficientMustStrCol(bat.GetVector(0))[i], "xxxx")
+				assert.Equal(t, vector.InefficientMustStrCol(bat.GetVector(1))[i], "123")
+				assert.Equal(t, vector.InefficientMustStrCol(bat.GetVector(2))[i], "0")
 			}
 		})
 	}

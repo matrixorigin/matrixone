@@ -21,17 +21,23 @@ import (
 
 func execInFrontendInBack(backSes *backSession,
 	execCtx *ExecCtx) (err error) {
+	execCtx.ses.EnterFPrint(104)
+	defer execCtx.ses.ExitFPrint(104)
 	//check transaction states
 	switch st := execCtx.stmt.(type) {
 	case *tree.BeginTransaction:
 	case *tree.CommitTransaction:
 	case *tree.RollbackTransaction:
 	case *tree.Use:
+		execCtx.ses.EnterFPrint(105)
+		defer execCtx.ses.ExitFPrint(105)
 		err = handleChangeDB(backSes, execCtx, st.Name.Compare())
 		if err != nil {
 			return
 		}
 	case *tree.CreateDatabase:
+		execCtx.ses.EnterFPrint(106)
+		defer execCtx.ses.ExitFPrint(106)
 		err = inputNameIsInvalid(execCtx.reqCtx, string(st.Name))
 		if err != nil {
 			return
@@ -42,6 +48,8 @@ func execInFrontendInBack(backSes *backSession,
 		}
 		st.Sql = execCtx.sqlOfStmt
 	case *tree.DropDatabase:
+		execCtx.ses.EnterFPrint(107)
+		defer execCtx.ses.ExitFPrint(107)
 		err = inputNameIsInvalid(execCtx.reqCtx, string(st.Name))
 		if err != nil {
 			return
@@ -51,6 +59,8 @@ func execInFrontendInBack(backSes *backSession,
 			backSes.SetDatabaseName("")
 		}
 	case *tree.Grant:
+		execCtx.ses.EnterFPrint(108)
+		defer execCtx.ses.ExitFPrint(108)
 		switch st.Typ {
 		case tree.GrantTypeRole:
 			if err = handleGrantRole(backSes, execCtx, &st.GrantRole); err != nil {
@@ -62,6 +72,8 @@ func execInFrontendInBack(backSes *backSession,
 			}
 		}
 	case *tree.Revoke:
+		execCtx.ses.EnterFPrint(109)
+		defer execCtx.ses.ExitFPrint(109)
 		switch st.Typ {
 		case tree.RevokeTypeRole:
 			if err = handleRevokeRole(backSes, execCtx, &st.RevokeRole); err != nil {

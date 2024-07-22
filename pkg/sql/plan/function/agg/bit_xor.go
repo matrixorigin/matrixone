@@ -20,225 +20,147 @@ import (
 	"math"
 )
 
-func RegisterBitXor1(id int64) {
-	aggexec.RegisterSingleAggFromFixedToFixed(
-		aggexec.MakeSingleAgg1RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_bit.ToType(), BitXorReturnType, false, true),
-			newAggBitXor[uint64],
-			InitAggBitXor[uint64],
-			FillAggBitXor1[uint64], nil, FillsAggBitXor1[uint64],
-			MergeAggBitXor1[uint64],
-			nil,
-		))
+func RegisterBitXor2(id int64) {
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_bit.ToType(), BitAndReturnType, true),
+		nil, nil, aggBitXorInitResult,
+		aggBitXorFill[uint64], aggBitXorFills[uint64], aggBitXorMerge, nil)
 
-	aggexec.RegisterSingleAggFromFixedToFixed(
-		aggexec.MakeSingleAgg1RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_uint8.ToType(), BitXorReturnType, false, true),
-			newAggBitXor[uint8],
-			InitAggBitXor[uint8],
-			FillAggBitXor1[uint8], nil, FillsAggBitXor1[uint8],
-			MergeAggBitXor1[uint8],
-			nil,
-		))
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_uint8.ToType(), BitAndReturnType, true),
+		nil, nil, aggBitXorInitResult,
+		aggBitXorFill[uint8], aggBitXorFills[uint8], aggBitXorMerge, nil)
 
-	aggexec.RegisterSingleAggFromFixedToFixed(
-		aggexec.MakeSingleAgg1RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_uint16.ToType(), BitXorReturnType, false, true),
-			newAggBitXor[uint16],
-			InitAggBitXor[uint16],
-			FillAggBitXor1[uint16], nil, FillsAggBitXor1[uint16],
-			MergeAggBitXor1[uint16],
-			nil,
-		))
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_uint16.ToType(), BitAndReturnType, true),
+		nil, nil, aggBitXorInitResult,
+		aggBitXorFill[uint16], aggBitXorFills[uint16], aggBitXorMerge, nil)
 
-	aggexec.RegisterSingleAggFromFixedToFixed(
-		aggexec.MakeSingleAgg1RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_uint32.ToType(), BitXorReturnType, false, true),
-			newAggBitXor[uint32],
-			InitAggBitXor[uint32],
-			FillAggBitXor1[uint32], nil, FillsAggBitXor1[uint32],
-			MergeAggBitXor1[uint32],
-			nil,
-		))
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_uint32.ToType(), BitAndReturnType, true),
+		nil, nil, aggBitXorInitResult,
+		aggBitXorFill[uint32], aggBitXorFills[uint32], aggBitXorMerge, nil)
 
-	aggexec.RegisterSingleAggFromFixedToFixed(
-		aggexec.MakeSingleAgg1RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_uint64.ToType(), BitXorReturnType, false, true),
-			newAggBitXor[uint64],
-			InitAggBitXor[uint64],
-			FillAggBitXor1[uint64], nil, FillsAggBitXor1[uint64],
-			MergeAggBitXor1[uint64],
-			nil,
-		))
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_uint64.ToType(), BitAndReturnType, true),
+		nil, nil, aggBitXorInitResult,
+		aggBitXorFill[uint64], aggBitXorFills[uint64], aggBitXorMerge, nil)
 
-	aggexec.RegisterSingleAggFromFixedToFixed(
-		aggexec.MakeSingleAgg1RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_int8.ToType(), BitXorReturnType, false, true),
-			newAggBitXor[int8],
-			InitAggBitXor[int8],
-			FillAggBitXor1[int8], nil, FillsAggBitXor1[int8],
-			MergeAggBitXor1[int8],
-			nil,
-		))
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_int8.ToType(), BitAndReturnType, true),
+		nil, nil, aggBitXorInitResult,
+		aggBitXorFill[int8], aggBitXorFills[int8], aggBitXorMerge, nil)
 
-	aggexec.RegisterSingleAggFromFixedToFixed(
-		aggexec.MakeSingleAgg1RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_int16.ToType(), BitXorReturnType, false, true),
-			newAggBitXor[int16],
-			InitAggBitXor[int16],
-			FillAggBitXor1[int16], nil, FillsAggBitXor1[int16],
-			MergeAggBitXor1[int16],
-			nil,
-		))
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_int16.ToType(), BitAndReturnType, true),
+		nil, nil, aggBitXorInitResult,
+		aggBitXorFill[int16], aggBitXorFills[int16], aggBitXorMerge, nil)
 
-	aggexec.RegisterSingleAggFromFixedToFixed(
-		aggexec.MakeSingleAgg1RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_int32.ToType(), BitXorReturnType, false, true),
-			newAggBitXor[int32],
-			InitAggBitXor[int32],
-			FillAggBitXor1[int32], nil, FillsAggBitXor1[int32],
-			MergeAggBitXor1[int32],
-			nil,
-		))
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_int32.ToType(), BitAndReturnType, true),
+		nil, nil, aggBitXorInitResult,
+		aggBitXorFill[int32], aggBitXorFills[int32], aggBitXorMerge, nil)
 
-	aggexec.RegisterSingleAggFromFixedToFixed(
-		aggexec.MakeSingleAgg1RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_int64.ToType(), BitXorReturnType, false, true),
-			newAggBitXor[int64],
-			InitAggBitXor[int64],
-			FillAggBitXor1[int64], nil, FillsAggBitXor1[int64],
-			MergeAggBitXor1[int64],
-			nil,
-		))
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_int64.ToType(), BitAndReturnType, true),
+		nil, nil, aggBitXorInitResult,
+		aggBitXorFill[int64], aggBitXorFills[int64], aggBitXorMerge, nil)
 
-	aggexec.RegisterSingleAggFromFixedToFixed(
-		aggexec.MakeSingleAgg1RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_float32.ToType(), BitXorReturnType, false, true),
-			newAggBitXor[float32],
-			InitAggBitXor[float32],
-			FillAggBitXor1[float32], nil, FillsAggBitXor1[float32],
-			MergeAggBitXor1[float32],
-			nil,
-		))
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_float32.ToType(), BitAndReturnType, true),
+		nil, nil, aggBitXorInitResult,
+		aggBitXorFill[float32], aggBitXorFills[float32], aggBitXorMerge, nil)
 
-	aggexec.RegisterSingleAggFromFixedToFixed(
-		aggexec.MakeSingleAgg1RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_float64.ToType(), BitXorReturnType, false, true),
-			newAggBitXor[float64],
-			InitAggBitXor[float64],
-			FillAggBitXor1[float64], nil, FillsAggBitXor1[float64],
-			MergeAggBitXor1[float64],
-			nil,
-		))
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_float64.ToType(), BitAndReturnType, true),
+		nil, nil, aggBitXorInitResult,
+		aggBitXorFill[float64], aggBitXorFills[float64], aggBitXorMerge, nil)
 
-	aggexec.RegisterSingleAggFromVarToVar(
-		aggexec.MakeSingleAgg4RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_binary.ToType(), BitXorReturnType, false, true),
-			aggexec.GenerateFlagContextFromVarToVar,
-			aggexec.InitFlagContextFromVarToVar,
-			FillAggBitXorBinary, nil, FillsAggBitXorBinary,
-			MergeAggBitXorBinary,
-			nil,
-		))
+	aggexec.RegisterAggFromBytesRetBytes(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_binary.ToType(), BitAndReturnType, true),
+		nil, nil, nil,
+		aggBitXorOfBinaryFill, aggBitXorOfBinaryFills, aggBitXorOfBinaryMerge, nil)
 
-	aggexec.RegisterSingleAggFromVarToVar(
-		aggexec.MakeSingleAgg4RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_varbinary.ToType(), BitXorReturnType, false, true),
-			aggexec.GenerateFlagContextFromVarToVar,
-			aggexec.InitFlagContextFromVarToVar,
-			FillAggBitXorBinary, nil, FillsAggBitXorBinary,
-			MergeAggBitXorBinary,
-			nil,
-		))
+	aggexec.RegisterAggFromBytesRetBytes(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_varbinary.ToType(), BitAndReturnType, true),
+		nil, nil, nil,
+		aggBitXorOfBinaryFill, aggBitXorOfBinaryFills, aggBitXorOfBinaryMerge, nil)
 }
 
-var BitXorReturnType = BitAndReturnType
-
-type aggBitXor[T numeric] struct{}
-
-func newAggBitXor[T numeric]() aggexec.SingleAggFromFixedRetFixed[T, uint64] {
-	return aggBitXor[T]{}
+func aggBitXorInitResult(_ types.Type, _ ...types.Type) uint64 {
+	return 0
 }
-
-func (a aggBitXor[T]) Marshal() []byte  { return nil }
-func (a aggBitXor[T]) Unmarshal([]byte) {}
-
-func InitAggBitXor[from numeric](
-	exec aggexec.SingleAggFromFixedRetFixed[from, uint64], setter aggexec.AggSetter[uint64], arg, ret types.Type) error {
-	setter(0)
-	return nil
-}
-func FillAggBitXor1[from numeric](
-	exec aggexec.SingleAggFromFixedRetFixed[from, uint64], value from, getter aggexec.AggGetter[uint64], setter aggexec.AggSetter[uint64]) error {
+func aggBitXorFill[from numeric](
+	_ aggexec.AggGroupExecContext, _ aggexec.AggCommonExecContext,
+	value from, isEmpty bool,
+	resultGetter aggexec.AggGetter[uint64], resultSetter aggexec.AggSetter[uint64]) error {
 	vv := float64(value)
 	if vv > math.MaxUint64 {
-		setter(math.MaxInt64 ^ getter())
+		resultSetter(math.MaxInt64 ^ resultGetter())
 		return nil
 	}
 	if vv < 0 {
-		setter(uint64(int64(value)) ^ getter())
+		resultSetter(uint64(int64(value)) ^ resultGetter())
 		return nil
 	}
-	setter(uint64(value) ^ getter())
+	resultSetter(uint64(value) ^ resultGetter())
 	return nil
 }
-func FillsAggBitXor1[from numeric](
-	exec aggexec.SingleAggFromFixedRetFixed[from, uint64],
-	value from, isNull bool, count int, getter aggexec.AggGetter[uint64], setter aggexec.AggSetter[uint64]) error {
-	if !isNull {
-		if count%2 == 1 {
-			return FillAggBitXor1(exec, value, getter, setter)
-		}
-		setter(getter())
+func aggBitXorFills[from numeric](
+	_ aggexec.AggGroupExecContext, _ aggexec.AggCommonExecContext,
+	value from, count int, isEmpty bool,
+	resultGetter aggexec.AggGetter[uint64], resultSetter aggexec.AggSetter[uint64]) error {
+	if count%2 == 1 {
+		return aggBitXorFill(nil, nil, value, isEmpty, resultGetter, resultSetter)
 	}
 	return nil
 }
-func MergeAggBitXor1[from numeric](
-	exec1, exec2 aggexec.SingleAggFromFixedRetFixed[from, uint64],
-	getter1, getter2 aggexec.AggGetter[uint64], setter aggexec.AggSetter[uint64]) error {
-	setter(getter1() ^ getter2())
+func aggBitXorMerge(
+	_, _ aggexec.AggGroupExecContext,
+	_ aggexec.AggCommonExecContext,
+	isEmpty1, isEmpty2 bool,
+	resultGetter1, resultGetter2 aggexec.AggGetter[uint64],
+	resultSetter aggexec.AggSetter[uint64]) error {
+	resultSetter(resultGetter1() ^ resultGetter2())
 	return nil
 }
 
-func FillAggBitXorBinary(
-	exec aggexec.SingleAggFromVarRetVar, value []byte, getter aggexec.AggBytesGetter, setter aggexec.AggBytesSetter) error {
-	a := exec.(*aggexec.ContextWithEmptyFlagOfSingleAggRetBytes)
-	if a.IsEmpty {
-		a.IsEmpty = false
-		return setter(value)
+func aggBitXorOfBinaryFill(
+	_ aggexec.AggGroupExecContext, _ aggexec.AggCommonExecContext,
+	value []byte, isEmpty bool,
+	resultGetter aggexec.AggBytesGetter, resultSetter aggexec.AggBytesSetter) error {
+	if isEmpty {
+		return resultSetter(value)
 	}
-	v := getter()
+	v := resultGetter()
 	types.BitXor(v, v, value)
 	return nil
 }
-func FillsAggBitXorBinary(
-	exec aggexec.SingleAggFromVarRetVar,
-	value []byte, isNull bool, count int, getter aggexec.AggBytesGetter, setter aggexec.AggBytesSetter) error {
-	if !isNull {
-		if count%2 == 1 {
-			return FillAggBitXorBinary(exec, value, getter, setter)
-		}
-		a := exec.(*aggexec.ContextWithEmptyFlagOfSingleAggRetBytes)
-		if a.IsEmpty {
-			a.IsEmpty = false
-			return setter(make([]byte, len(value)))
-		}
+func aggBitXorOfBinaryFills(
+	_ aggexec.AggGroupExecContext, _ aggexec.AggCommonExecContext,
+	value []byte, count int, isEmpty bool,
+	resultGetter aggexec.AggBytesGetter, resultSetter aggexec.AggBytesSetter) error {
+	if count%2 == 1 {
+		return aggBitXorOfBinaryFill(nil, nil, value, isEmpty, resultGetter, resultSetter)
+	}
+	if isEmpty {
+		return resultSetter(make([]byte, len(value)))
 	}
 	return nil
 }
-func MergeAggBitXorBinary(
-	exec1, exec2 aggexec.SingleAggFromVarRetVar,
-	getter1, getter2 aggexec.AggBytesGetter, setter aggexec.AggBytesSetter) error {
-	a1 := exec1.(*aggexec.ContextWithEmptyFlagOfSingleAggRetBytes)
-	a2 := exec2.(*aggexec.ContextWithEmptyFlagOfSingleAggRetBytes)
-	if a2.IsEmpty {
+func aggBitXorOfBinaryMerge(
+	_, _ aggexec.AggGroupExecContext,
+	_ aggexec.AggCommonExecContext,
+	isEmpty1, isEmpty2 bool,
+	resultGetter1, resultGetter2 aggexec.AggBytesGetter,
+	resultSetter aggexec.AggBytesSetter) error {
+	if isEmpty2 {
 		return nil
 	}
-	if a1.IsEmpty {
-		a1.IsEmpty = false
-		return setter(getter2())
+	if isEmpty1 {
+		return resultSetter(resultGetter2())
 	}
-	v1, v2 := getter1(), getter2()
+	v1, v2 := resultGetter1(), resultGetter2()
 	types.BitXor(v1, v1, v2)
 	return nil
 }

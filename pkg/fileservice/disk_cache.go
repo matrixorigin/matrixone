@@ -22,9 +22,11 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fifocache"
@@ -51,6 +53,7 @@ func NewDiskCache(
 	path string,
 	capacity int,
 	perfCounterSets []*perfcounter.CounterSet,
+	asyncLoad bool,
 ) (ret *DiskCache, err error) {
 
 	err = os.MkdirAll(path, 0755)
@@ -80,36 +83,78 @@ func NewDiskCache(
 	ret.updatingPaths.Cond = sync.NewCond(new(sync.Mutex))
 	ret.updatingPaths.m = make(map[string]bool)
 
-	ret.loadCache()
+	if asyncLoad {
+		go ret.loadCache()
+	} else {
+		ret.loadCache()
+	}
 
 	return ret, nil
 }
 
 func (d *DiskCache) loadCache() {
+	t0 := time.Now()
+
+	type Info struct {
+		Path  string
+		Entry os.DirEntry
+	}
+	works := make(chan Info)
+
+	numWorkers := runtime.NumCPU()
+	wg := new(sync.WaitGroup)
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for work := range works {
+
+				info, err := work.Entry.Info()
+				if err != nil {
+					continue // ignore
+				}
+
+				d.cache.Set(work.Path, struct{}{}, int(fileSize(info)))
+			}
+		}()
+	}
+
+	var numFiles, numCacheFiles int
 
 	_ = filepath.WalkDir(d.path, func(path string, entry os.DirEntry, err error) error {
+		numFiles++
 		if err != nil {
 			return nil //ignore
 		}
 		if entry.IsDir() {
 			// try remove if empty. for cleaning old structure
 			if path != d.path {
-				os.Remove(path)
+				// os.Remove will not delete non-empty directory
+				_ = os.Remove(path)
 			}
 			return nil
 		}
 		if !strings.HasSuffix(entry.Name(), cacheFileSuffix) {
 			return nil
 		}
-		info, err := entry.Info()
-		if err != nil {
-			return nil // ignore
-		}
 
-		d.cache.Set(path, struct{}{}, int(fileSize(info)))
+		numCacheFiles++
+		works <- Info{
+			Path:  path,
+			Entry: entry,
+		}
 
 		return nil
 	})
+
+	close(works)
+	wg.Wait()
+
+	logutil.Info("disk cache info loaded",
+		zap.Any("all files", numFiles),
+		zap.Any("cache files", numCacheFiles),
+		zap.Any("time", time.Since(t0)),
+	)
 
 }
 
@@ -227,11 +272,8 @@ func (d *DiskCache) Read(
 			d.cache.Set(diskPath, struct{}{}, int(fileSize(stat)))
 		}
 
-		if err := entry.ReadFromOSFile(file); err != nil {
-			// ignore error
-			numError++
-			logutil.Warn("read disk cache error", zap.Any("error", err))
-			return nil
+		if err := entry.ReadFromOSFile(ctx, file); err != nil {
+			return err
 		}
 
 		entry.done = true
@@ -243,7 +285,14 @@ func (d *DiskCache) Read(
 
 	for i := range vector.Entries {
 		if err := fillEntry(&vector.Entries[i]); err != nil {
-			return err
+			// ignore error
+			numError++
+			logutil.Warn(
+				"read disk cache error",
+				zap.Any("error", err),
+				zap.Any("path", vector.FilePath),
+				zap.Any("entry", vector.Entries[i]),
+			)
 		}
 	}
 
@@ -309,7 +358,8 @@ func (d *DiskCache) writeFile(
 	ctx context.Context,
 	diskPath string,
 	openReader func(context.Context) (io.ReadCloser, error),
-) (bool, error) {
+) (written bool, err error) {
+
 	var numCreate, numStat, numError, numWrite int64
 	defer func() {
 		perfcounter.Update(ctx, func(set *perfcounter.CounterSet) {
@@ -318,6 +368,19 @@ func (d *DiskCache) writeFile(
 			set.FileService.Cache.Disk.WriteFile.Add(numWrite)
 			set.FileService.Cache.Disk.Error.Add(numError)
 		})
+	}()
+
+	defer func() {
+		if err != nil {
+			// ignore errors
+			numError++
+			logutil.Warn(
+				"write disk cache error",
+				zap.Any("error", err),
+				zap.Any("path", diskPath),
+			)
+			err = nil
+		}
 	}()
 
 	doneUpdate := d.startUpdate(diskPath)
@@ -339,22 +402,16 @@ func (d *DiskCache) writeFile(
 	dir := filepath.Dir(diskPath)
 	err = os.MkdirAll(dir, 0755)
 	if err != nil {
-		numError++
-		logutil.Warn("write disk cache error", zap.Any("error", err))
-		return false, nil // ignore error
+		return false, err
 	}
 	f, err := os.CreateTemp(dir, "*")
 	if err != nil {
-		numError++
-		logutil.Warn("write disk cache error", zap.Any("error", err))
-		return false, nil // ignore error
+		return false, err
 	}
 	numCreate++
 	from, err := openReader(ctx)
 	if err != nil {
-		numError++
-		logutil.Warn("write disk cache error", zap.Any("error", err))
-		return false, nil // ignore error
+		return false, err
 	}
 	defer from.Close()
 	var buf []byte
@@ -364,35 +421,25 @@ func (d *DiskCache) writeFile(
 	if err != nil {
 		f.Close()
 		os.Remove(f.Name())
-		numError++
-		logutil.Warn("write disk cache error", zap.Any("error", err))
-		return false, nil // ignore error
+		return false, err
 	}
 
 	if err := f.Sync(); err != nil {
-		numError++
-		logutil.Warn("write disk cache error", zap.Any("error", err))
-		return false, nil // ignore error
+		return false, err
 	}
 
 	// set cache
 	stat, err = f.Stat()
 	if err != nil {
-		numError++
-		logutil.Warn("write disk cache error", zap.Any("error", err))
-		return false, nil // ignore error
+		return false, err
 	}
 	d.cache.Set(diskPath, struct{}{}, int(fileSize(stat)))
 
 	if err := f.Close(); err != nil {
-		numError++
-		logutil.Warn("write disk cache error", zap.Any("error", err))
-		return false, nil // ignore error
+		return false, err
 	}
 	if err := os.Rename(f.Name(), diskPath); err != nil {
-		numError++
-		logutil.Warn("write disk cache error", zap.Any("error", err))
-		return false, nil // ignore error
+		return false, err
 	}
 	logutil.Debug("disk cache file written",
 		zap.Any("path", diskPath),

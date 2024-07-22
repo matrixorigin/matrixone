@@ -41,6 +41,7 @@ enum OpCode {
     OpGlobalCheckpoint = 2009;
     OpInterceptCommit  = 2010;
     OpCommitMerge      = 2011;
+    OpDiskDiskCleaner   = 2012;
 }
 
 // TNPingRequest ping request
@@ -407,4 +408,8 @@ message MergeTaskEntry {
     uint32 account_id = 7;
     uint32 user_id = 8;
     uint32 role_id = 9;
+}
+
+message HashPageMap {
+    map<uint32, bytes> m = 1[(gogoproto.nullable) = false];
 }

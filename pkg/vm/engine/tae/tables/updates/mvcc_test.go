@@ -55,7 +55,7 @@ func TestMutationControllerAppend(t *testing.T) {
 		txn.CommitTS = ts
 		txn.PrepareTS = ts
 		node, _ := mc.AddAppendNodeLocked(txn, rowsPerNode*uint32(i), rowsPerNode*(uint32(i)+1))
-		err := node.ApplyCommit()
+		err := node.ApplyCommit(txn.ID)
 		assert.Nil(t, err)
 		//queries = append(queries, ts+1)
 		queries = append(queries, ts.Next())

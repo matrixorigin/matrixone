@@ -16,12 +16,16 @@
 
 syntax = "proto3";
 package gossip;
+
 option go_package = "github.com/matrixorigin/matrixone/pkg/pb/gossip";
 
 import "google/protobuf/any.proto";
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 import "query.proto";
 import "statsinfo.proto";
+
+option (gogoproto.sizer_all) = false;
+option (gogoproto.protosizer_all) = true;
 
 enum Operation {
   Unknown = 0;

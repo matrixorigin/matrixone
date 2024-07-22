@@ -26,6 +26,10 @@ import (
 )
 
 func (builder *QueryBuilder) partitionPrune(nodeID int32) {
+	if builder.isPrepareStatement {
+		return
+	}
+
 	node := builder.qry.Nodes[nodeID]
 	for _, childID := range node.Children {
 		builder.partitionPrune(childID)

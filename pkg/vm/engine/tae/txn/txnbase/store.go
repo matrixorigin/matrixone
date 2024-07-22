@@ -86,7 +86,7 @@ func (store *NoopTxnStore) GetRelationByID(dbId uint64, id uint64) (rel handle.R
 func (store *NoopTxnStore) CreateDatabase(name, creatSql, datTyp string) (db handle.Database, err error) {
 	return
 }
-func (store *NoopTxnStore) CreateDatabaseWithID(name, createSql, datTyp string, id uint64) (db handle.Database, err error) {
+func (store *NoopTxnStore) CreateDatabaseWithID(ctx context.Context, s1, s2, s3 string, id uint64) (db handle.Database, err error) {
 	return
 }
 func (store *NoopTxnStore) DropDatabase(name string) (db handle.Database, err error)    { return }
@@ -102,10 +102,10 @@ func (store *NoopTxnStore) GetObject(id *common.ID) (obj handle.Object, err erro
 	return
 }
 
-func (store *NoopTxnStore) CreateObject(dbId, tid uint64, is1PC bool) (obj handle.Object, err error) {
+func (store *NoopTxnStore) CreateObject(dbId, tid uint64) (obj handle.Object, err error) {
 	return
 }
-func (store *NoopTxnStore) CreateNonAppendableObject(dbId, tid uint64, _ bool, _ *objectio.CreateObjOpt) (obj handle.Object, err error) {
+func (store *NoopTxnStore) CreateNonAppendableObject(dbId, tid uint64, _ *objectio.CreateObjOpt) (obj handle.Object, err error) {
 	return
 }
 func (store *NoopTxnStore) UpdateMetaLoc(id *common.ID, un objectio.Location) (err error) {

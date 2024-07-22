@@ -29,7 +29,7 @@ import (
 
 type intersectAllTestCase struct {
 	proc   *process.Process
-	arg    *Argument
+	arg    *IntersectAll
 	cancel context.CancelFunc
 }
 
@@ -91,7 +91,7 @@ func TestIntersectAll(t *testing.T) {
 
 func newIntersectAllTestCase(proc *process.Process) (intersectAllTestCase, context.Context) {
 	ctx, cancel := context.WithCancel(context.Background())
-	arg := new(Argument)
+	arg := new(IntersectAll)
 	arg.OperatorBase.OperatorInfo = vm.OperatorInfo{
 		Idx:     0,
 		IsFirst: false,
@@ -137,9 +137,9 @@ func setProcForTest(ctx context.Context, proc *process.Process) {
 
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	{
-		c := make(chan *batch.Batch, len(leftBatches)+1)
+		c := make(chan *process.RegisterMessage, len(leftBatches)+1)
 		for i := range leftBatches {
-			c <- leftBatches[i]
+			c <- testutil.NewRegMsg(leftBatches[i])
 		}
 		c <- nil
 		proc.Reg.MergeReceivers[0] = &process.WaitRegister{
@@ -148,9 +148,9 @@ func setProcForTest(ctx context.Context, proc *process.Process) {
 		}
 	}
 	{
-		c := make(chan *batch.Batch, len(rightBatches)+1)
+		c := make(chan *process.RegisterMessage, len(rightBatches)+1)
 		for i := range rightBatches {
-			c <- rightBatches[i]
+			c <- testutil.NewRegMsg(rightBatches[i])
 		}
 		c <- nil
 		proc.Reg.MergeReceivers[1] = &process.WaitRegister{

@@ -19,6 +19,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -40,12 +42,13 @@ const (
 
 // add unit tests for cases
 type joinTestCase struct {
-	arg    *Argument
+	arg    *LeftJoin
 	flgs   []bool // flgs[i] == true: nullable
 	types  []types.Type
 	proc   *process.Process
 	cancel context.CancelFunc
-	barg   *hashbuild.Argument
+	barg   *hashbuild.HashBuild
+	marg   *merge.Merge
 }
 
 var (
@@ -91,14 +94,14 @@ func TestJoin(t *testing.T) {
 		}
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
-		tc.proc.Reg.MergeReceivers[0].Ch <- batch.EmptyBatch
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
+		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
+		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
+		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
+		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
+		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
-		tc.proc.Reg.MergeReceivers[1].Ch <- bats[0]
-		tc.proc.Reg.MergeReceivers[1].Ch <- bats[1]
+		tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(bats[0])
+		tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(bats[1])
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
 		tc.proc.Reg.MergeReceivers[1].Ch <- nil
 		for {
@@ -116,14 +119,14 @@ func TestJoin(t *testing.T) {
 		}
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
-		tc.proc.Reg.MergeReceivers[0].Ch <- batch.EmptyBatch
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
+		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
+		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
+		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
+		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
+		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
-		tc.proc.Reg.MergeReceivers[1].Ch <- bats[0]
-		tc.proc.Reg.MergeReceivers[1].Ch <- bats[1]
+		tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(bats[0])
+		tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(bats[1])
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
 		tc.proc.Reg.MergeReceivers[1].Ch <- nil
 		for {
@@ -142,11 +145,11 @@ func TestJoin(t *testing.T) {
 		nb0 := tc.proc.Mp().CurrNB()
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
-		tc.proc.Reg.MergeReceivers[0].Ch <- batch.EmptyBatch
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
+		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
+		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
+		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
+		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
+		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
 		tc.proc.Reg.MergeReceivers[1].Ch <- nil
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
@@ -162,11 +165,11 @@ func TestJoin(t *testing.T) {
 
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
-		tc.proc.Reg.MergeReceivers[0].Ch <- batch.EmptyBatch
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
+		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
+		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
+		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
+		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
+		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
 		tc.proc.Reg.MergeReceivers[1].Ch <- nil
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
@@ -211,14 +214,14 @@ func BenchmarkJoin(b *testing.B) {
 			bats := hashBuild(t, tc)
 			err := tc.arg.Prepare(tc.proc)
 			require.NoError(t, err)
-			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
-			tc.proc.Reg.MergeReceivers[0].Ch <- batch.EmptyBatch
-			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
-			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
-			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
+			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
+			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
+			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
+			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
+			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
-			tc.proc.Reg.MergeReceivers[1].Ch <- bats[0]
-			tc.proc.Reg.MergeReceivers[1].Ch <- bats[1]
+			tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(bats[0])
+			tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(bats[1])
 			for {
 				ok, err := tc.arg.Call(tc.proc)
 				if ok.Status == vm.ExecStop || err != nil {
@@ -245,16 +248,16 @@ func newExpr(pos int32, typ types.Type) *plan.Expr {
 }
 
 func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos, cs [][]*plan.Expr) joinTestCase {
-	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
+	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
 		Ctx: ctx,
-		Ch:  make(chan *batch.Batch, 10),
+		Ch:  make(chan *process.RegisterMessage, 10),
 	}
 	proc.Reg.MergeReceivers[1] = &process.WaitRegister{
 		Ctx: ctx,
-		Ch:  make(chan *batch.Batch, 10),
+		Ch:  make(chan *process.RegisterMessage, 10),
 	}
 	fr, _ := function.GetFunctionByName(ctx, "=", ts)
 	fid := fr.GetEncodedOverloadID()
@@ -297,7 +300,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos, cs [][]*p
 		flgs:   flgs,
 		proc:   proc,
 		cancel: cancel,
-		arg: &Argument{
+		arg: &LeftJoin{
 			Typs:       ts,
 			Result:     rp,
 			Conditions: cs,
@@ -310,7 +313,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos, cs [][]*p
 				},
 			},
 		},
-		barg: &hashbuild.Argument{
+		barg: &hashbuild.HashBuild{
 			Typs:        ts,
 			NeedHashMap: true,
 			Conditions:  cs[1],
@@ -324,13 +327,17 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos, cs [][]*p
 			NeedAllocateSels: true,
 			NeedMergedBatch:  true,
 		},
+		marg: &merge.Merge{},
 	}
 }
 
 func hashBuild(t *testing.T, tc joinTestCase) []*batch.Batch {
-	err := tc.barg.Prepare(tc.proc)
+	err := tc.marg.Prepare(tc.proc)
 	require.NoError(t, err)
-	tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
+	err = tc.barg.Prepare(tc.proc)
+	require.NoError(t, err)
+	tc.barg.SetChildren([]vm.Operator{tc.marg})
+	tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
 	for _, r := range tc.proc.Reg.MergeReceivers {
 		r.Ch <- nil
 	}

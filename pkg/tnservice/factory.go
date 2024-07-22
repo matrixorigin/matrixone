@@ -98,7 +98,7 @@ func (s *store) createLogServiceClientFactroy(shard metadata.TNShard) logservice
 func (s *store) newLogServiceClient(shard metadata.TNShard) (logservice.Client, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.LogService.ConnectTimeout.Duration)
 	defer cancel()
-	return logservice.NewClient(ctx, logservice.ClientConfig{
+	return logservice.NewClient(ctx, s.cfg.UUID, logservice.ClientConfig{
 		ReadOnly:         false,
 		LogShardID:       shard.LogShardID,
 		TNReplicaID:      shard.ReplicaID,
@@ -135,6 +135,12 @@ func (s *store) newTAEStorage(ctx context.Context, shard metadata.TNShard, facto
 		return nil, err
 	}
 
+	// local fs
+	localFs, err2 := fileservice.Get[fileservice.FileService](s.fileService, defines.LocalFileServiceName)
+	if err2 != nil {
+		return nil, err2
+	}
+
 	ckpcfg := &options.CheckpointCfg{
 		MinCount:               s.cfg.Ckp.MinCount,
 		ScanInterval:           s.cfg.Ckp.ScanInterval.Duration,
@@ -150,6 +156,7 @@ func (s *store) newTAEStorage(ctx context.Context, shard metadata.TNShard, facto
 		GCTTL:          s.cfg.GCCfg.GCTTL.Duration,
 		ScanGCInterval: s.cfg.GCCfg.ScanGCInterval.Duration,
 		DisableGC:      s.cfg.GCCfg.DisableGC,
+		CheckGC:        s.cfg.GCCfg.CheckGC,
 	}
 
 	mergeCfg := &options.MergeConfig{
@@ -166,6 +173,7 @@ func (s *store) newTAEStorage(ctx context.Context, shard metadata.TNShard, facto
 		RPCStreamPoisonTime:    s.cfg.LogtailServer.LogtailRPCStreamPoisonTime.Duration,
 		LogtailCollectInterval: s.cfg.LogtailServer.LogtailCollectInterval.Duration,
 		ResponseSendTimeout:    s.cfg.LogtailServer.LogtailResponseSendTimeout.Duration,
+		PullWorkerPoolSize:     int64(s.cfg.LogtailServer.PullWorkerPoolSize),
 	}
 
 	// the previous values
@@ -176,6 +184,7 @@ func (s *store) newTAEStorage(ctx context.Context, shard metadata.TNShard, facto
 	opt := &options.Options{
 		Clock:             s.rt.Clock(),
 		Fs:                fs,
+		LocalFs:           localFs,
 		Lc:                logservicedriver.LogServiceClientFactory(factory),
 		Shard:             shard,
 		CheckpointCfg:     ckpcfg,

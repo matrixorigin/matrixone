@@ -58,4 +58,58 @@ drop snapshot sn1;
 drop database fk_test;
 -- @session
 
+
+-- @session:id=2&user=acc1:admin1&password=test123
+-- 跨库循环依赖
+show databases;
+create database fk_test1;
+use fk_test1;
+create table t1 (a int primary key);
+insert into t1 values (1);
+select * from t1;
+
+create database fk_test2;
+use fk_test2;
+create table t3 (a int primary key, b int, FOREIGN KEY (b) REFERENCES fk_test1.t1(a));
+insert into t3 values (1, 1);
+select * from t3;
+create table t4 (a int primary key);
+insert into t4 values (1);
+select * from t4;
+
+use fk_test1;
+create table t2 (a int primary key, b int, FOREIGN KEY (b) REFERENCES fk_test2.t4(a));
+insert into t2 values (1, 1);
+select * from t2;
+
+create snapshot sn1 for account acc1;
+-- @ignore:1
+show snapshots;
+
+delete from fk_test1.t2;
+select * from fk_test1.t2;
+delete from fk_test2.t3;
+select * from fk_test2.t3;
+
+restore account acc1 from snapshot sn1;
+
+show databases;
+use fk_test1;
+show tables;
+select * from t1;
+select * from t2;
+
+use fk_test2;
+show tables;
+select * from t3;
+select * from t4;
+
+
+drop snapshot sn1;
+drop table fk_test1.t2;
+drop table fk_test2.t3;
+drop database fk_test1;
+drop database fk_test2;
+-- @session
+
 drop account acc1;

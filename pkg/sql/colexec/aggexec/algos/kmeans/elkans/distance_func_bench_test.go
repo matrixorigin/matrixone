@@ -43,7 +43,8 @@ func Benchmark_L2Distance(b *testing.B) {
 		b.ResetTimer()
 
 		for i := 0; i < b.N; i++ {
-			_, _ = moarray.NormalizeL2[float64](v1[i])
+			res := make([]float64, dim)
+			_ = moarray.NormalizeL2[float64](v1[i], res)
 		}
 	})
 
@@ -52,8 +53,9 @@ func Benchmark_L2Distance(b *testing.B) {
 		b.ResetTimer()
 
 		for i := 0; i < b.N; i++ {
-			v21, _ := moarray.NormalizeL2[float64](v2[i])
-			_ = L2Distance(v1[i], moarray.ToGonumVector(v21))
+			res := make([]float64, dim)
+			_ = moarray.NormalizeL2[float64](v2[i], res)
+			_ = L2Distance(v1[i], moarray.ToGonumVector(res))
 		}
 	})
 

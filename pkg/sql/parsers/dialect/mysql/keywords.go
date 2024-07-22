@@ -112,6 +112,7 @@ func init() {
 		"create":                     CREATE,
 		"cluster":                    CLUSTER,
 		"cross":                      CROSS,
+		"cross_l2":                   CROSS_L2,
 		"current_date":               CURRENT_DATE,
 		"current_time":               CURRENT_TIME,
 		"current_timestamp":          CURRENT_TIMESTAMP,
@@ -593,6 +594,7 @@ func init() {
 		"extension":                  EXTENSION,
 		"query_result":               QUERY_RESULT,
 		"mysql_compatibility_mode":   MYSQL_COMPATIBILITY_MODE,
+		"unique_check_on_autoincr":   UNIQUE_CHECK_ON_AUTOINCR,
 		"sequences":                  SEQUENCES,
 		"sequence":                   SEQUENCE,
 		"increment":                  INCREMENT,
@@ -628,5 +630,6 @@ func init() {
 		"retry":                      RETRY,
 		"mo_ts":                      MO_TS,
 		"restore":                    RESTORE,
+		"pitr":                       PITR,
 	}
 }

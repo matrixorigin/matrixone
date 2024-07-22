@@ -18,6 +18,11 @@ syntax = "proto3";
 package timestamp;
 option go_package = "github.com/matrixorigin/matrixone/pkg/pb/timestamp";
 
+import "github.com/gogo/protobuf/gogoproto/gogo.proto";
+
+option (gogoproto.sizer_all) = false;
+option (gogoproto.protosizer_all) = true;
+
 // Timestamp is a HLC time value. All its field should never be accessed
 // directly by its users. 
 message Timestamp {

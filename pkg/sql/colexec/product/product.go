@@ -24,32 +24,36 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "product"
+const opName = "product"
 
-func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName)
+func (product *Product) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
 	buf.WriteString(": cross join ")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) error {
-	ap := arg
+func (product *Product) OpType() vm.OpType {
+	return vm.Product
+}
+
+func (product *Product) Prepare(proc *process.Process) error {
+	ap := product
 	ap.ctr = new(container)
 	ap.ctr.InitReceiver(proc, false)
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (product *Product) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze(product.GetIdx(), product.GetParallelIdx(), product.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
-	ap := arg
+	ap := product
 	ctr := ap.ctr
 	result := vm.NewCallResult()
-	var err error
+	var msg *process.RegisterMessage
 	for {
 		switch ctr.state {
 		case Build:
@@ -60,16 +64,16 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Probe:
 			if ctr.inBat != nil {
-				if err := ctr.probe(ap, proc, anal, arg.GetIsLast(), &result); err != nil {
+				if err := ctr.probe(ap, proc, anal, product.GetIsLast(), &result); err != nil {
 					return result, err
 				}
 				return result, nil
 			}
-			ctr.inBat, _, err = ctr.ReceiveFromSingleReg(0, anal)
-			if err != nil {
-				return result, err
+			msg = ctr.ReceiveFromSingleReg(0, anal)
+			if msg.Err != nil {
+				return result, msg.Err
 			}
-
+			ctr.inBat = msg.Batch
 			if ctr.inBat == nil {
 				ctr.state = End
 				continue
@@ -84,8 +88,8 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.inBat = nil
 				continue
 			}
-			anal.Input(ctr.inBat, arg.GetIsFirst())
-			if err := ctr.probe(ap, proc, anal, arg.GetIsLast(), &result); err != nil {
+			anal.Input(ctr.inBat, product.GetIsFirst())
+			if err := ctr.probe(ap, proc, anal, product.GetIsLast(), &result); err != nil {
 				return result, err
 			}
 			return result, nil
@@ -99,11 +103,13 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
+	var err error
 	for {
-		bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
-		if err != nil {
-			return err
+		msg := ctr.ReceiveFromSingleReg(1, anal)
+		if msg.Err != nil {
+			return msg.Err
 		}
+		bat := msg.Batch
 		if bat == nil {
 			break
 		}
@@ -116,7 +122,7 @@ func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
 	return nil
 }
 
-func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.Analyze, isLast bool, result *vm.CallResult) error {
+func (ctr *container) probe(ap *Product, proc *process.Process, anal process.Analyze, isLast bool, result *vm.CallResult) error {
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil

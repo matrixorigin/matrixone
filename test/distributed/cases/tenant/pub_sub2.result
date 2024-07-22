@@ -73,7 +73,7 @@ a    INT(32)    YES        null
 b    INT(32)    YES        null        
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL\n)
+t1    CREATE TABLE `t1` (\n  `a` INT DEFAULT NULL,\n  `b` INT DEFAULT NULL\n)
 select * from t1;
 a    b
 1    1
@@ -117,3 +117,11 @@ drop database sub1;
 drop database sub2;
 drop account a1;
 drop account a2;
+create database sub1;
+create table sub1.t1 (a int,b int);
+insert into sub1.t1 values (1, 1), (2, 2), (3, 3);
+create publication pub1 database sub1;
+drop publication if exists pub1;
+drop publication if exists pub1;
+drop database if exists sub1;
+set global enable_privilege_cache = on;
