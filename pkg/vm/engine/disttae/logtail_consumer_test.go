@@ -19,6 +19,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 )
 
@@ -55,4 +56,13 @@ func TestSubscribedTable(t *testing.T) {
 		subscribeRecord.setTableUnsubscribe(tbl.db, tbl.tb)
 	}
 	require.Equal(t, 0, len(subscribeRecord.m))
+}
+
+func TestBlockInfoSlice(t *testing.T) {
+	var data []byte
+	data = nil
+	blkSlice := objectio.BlockInfoSlice(data)
+	require.Equal(t, 0, len(blkSlice))
+	cnt := blkSlice.Len()
+	require.Equal(t, 0, cnt)
 }

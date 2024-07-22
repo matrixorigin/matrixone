@@ -26,6 +26,8 @@ import (
 	"unsafe"
 
 	"github.com/docker/go-units"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -56,7 +58,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 const (
@@ -666,6 +667,7 @@ func (tbl *txnTable) CollectTombstones(ctx context.Context, txnOffset int) (engi
 }
 
 func (tbl *txnTable) RangesInProgress(ctx context.Context, exprs []*plan.Expr, txnOffset int) (data engine.RelData, err error) {
+	sid := tbl.proc.Load().GetService()
 	start := time.Now()
 	seq := tbl.db.op.NextSequence()
 
@@ -673,7 +675,7 @@ func (tbl *txnTable) RangesInProgress(ctx context.Context, exprs []*plan.Expr, t
 		blocks []*objectio.BlockInfoInProgress
 	)
 
-	trace.GetService().AddTxnDurationAction(
+	trace.GetService(sid).AddTxnDurationAction(
 		tbl.db.op,
 		client.RangesEvent,
 		seq,
@@ -723,7 +725,7 @@ func (tbl *txnTable) RangesInProgress(ctx context.Context, exprs []*plan.Expr, t
 			)
 		}
 
-		trace.GetService().AddTxnAction(
+		trace.GetService(sid).AddTxnAction(
 			tbl.db.op,
 			client.RangesEvent,
 			seq,
@@ -732,7 +734,7 @@ func (tbl *txnTable) RangesInProgress(ctx context.Context, exprs []*plan.Expr, t
 			"blocks",
 			err)
 
-		trace.GetService().AddTxnDurationAction(
+		trace.GetService(sid).AddTxnDurationAction(
 			tbl.db.op,
 			client.RangesEvent,
 			seq,
@@ -2151,6 +2153,10 @@ func (tbl *txnTable) BuildReaders(
 	num int,
 	txnOffset int) ([]engine.Reader, error) {
 	proc := p.(*process.Process)
+	//relData maybe is nil, indicate that only read data from memory.
+	if relData == nil {
+		relData = buildRelationDataV1([]*objectio.BlockInfoInProgress{&objectio.EmptyBlockInfoInProgress})
+	}
 	blkCnt := relData.BlkCnt()
 	if blkCnt < num {
 		return nil, moerr.NewInternalErrorNoCtx("not enough blocks")

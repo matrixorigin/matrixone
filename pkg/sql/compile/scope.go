@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -56,7 +55,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
@@ -633,6 +631,10 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 				case process.RuntimeFilter_PASS:
 					continue
 				case process.RuntimeFilter_DROP:
+					fmt.Printf("xxxx handleRunTimeFilter:Drop, txn:%s, table:%s.needExpandRanges:%v\n",
+						c.proc.GetTxnOperator().Txn().DebugString(),
+						s.DataSource.TableDef.Name,
+						s.NodeInfo.NeedExpandRanges)
 					return nil
 				case process.RuntimeFilter_IN:
 					inExpr := plan2.MakeInExpr(c.proc.Ctx, spec.Expr, msg.Card, msg.Data, spec.MatchPrefix)
@@ -696,7 +698,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("xxxx expand ranges in run time filter, txn:%s, table:%s, blkCnt:%d, hasMemBlk:%v",
+		fmt.Printf("xxxx expand ranges in run time filter, txn:%s, table:%s, blkCnt:%d, hasMemBlk:%v.\n",
 			c.proc.GetTxnOperator().Txn().DebugString(),
 			s.DataSource.TableDef.Name,
 			relData.BlkCnt(),
@@ -706,7 +708,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		s.NodeInfo.Data = relData
 
 	} else if len(inExprList) > 0 {
-		fmt.Printf("xxxx Before appyly run time filter, txn:%s, table:%s, blkCnt:%d, hasMemBlk:%v",
+		fmt.Printf("xxxx Before appyly run time filter, txn:%s, table:%s, blkCnt:%d, hasMemBlk:%v.\n",
 			c.proc.GetTxnOperator().Txn().DebugString(),
 			s.DataSource.TableDef.Name,
 			s.NodeInfo.Data.BlkCnt(),
@@ -715,7 +717,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("xxxx after appyly run time filter, txn:%s, table:%s, blkCnt:%d, hasMemBlk:%v",
+		fmt.Printf("xxxx after appyly run time filter, txn:%s, table:%s, blkCnt:%d, hasMemBlk:%v.\n",
 			c.proc.GetTxnOperator().Txn().DebugString(),
 			s.DataSource.TableDef.Name,
 			s.NodeInfo.Data.BlkCnt(),
@@ -1249,10 +1251,19 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 				c.proc.GetTxnOperator().Txn().DebugString(),
 				s.DataSource.TableDef.Name,
 				s.NodeInfo.Data == nil)
-			scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, s.NodeInfo.Data.BlkCnt())
+			//Run time filter had already dropped it
+			if s.NodeInfo.Data == nil {
+				scanUsedCpuNumber = 1
+			} else {
+				scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, s.NodeInfo.Data.BlkCnt())
+			}
 		case engine.Memory:
 			//idSlice := memoryengine.ShardIdSlice(s.NodeInfo.Data)
-			scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, s.NodeInfo.Data.BlkCnt())
+			if s.NodeInfo.Data == nil {
+				scanUsedCpuNumber = 1
+			} else {
+				scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, s.NodeInfo.Data.BlkCnt())
+			}
 		default:
 			scanUsedCpuNumber = 1
 		}
@@ -1263,7 +1274,6 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 		if sql == "" {
 			sql = c.sql
 		}
-
 		readers, err = s.DataSource.Rel.BuildReaders(
 			c.proc.Ctx,
 			c.proc,
@@ -1357,11 +1367,21 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 
 		switch rel.GetEngineType() {
 		case engine.Disttae:
+			if s.NodeInfo.Data == nil {
+				scanUsedCpuNumber = 1
+			} else {
+				scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, s.NodeInfo.Data.BlkCnt())
+			}
 			//blkSlice := objectio.BlockInfoSlice(s.NodeInfo.Data)
-			scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, s.NodeInfo.Data.BlkCnt())
+			//scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, s.NodeInfo.Data.BlkCnt())
 		case engine.Memory:
+			if s.NodeInfo.Data == nil {
+				scanUsedCpuNumber = 1
+			} else {
+				scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, s.NodeInfo.Data.BlkCnt())
+			}
 			//idSlice := memoryengine.ShardIdSlice(s.NodeInfo.Data)
-			scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, s.NodeInfo.Data.BlkCnt())
+			//scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, s.NodeInfo.Data.BlkCnt())
 		default:
 			scanUsedCpuNumber = 1
 		}

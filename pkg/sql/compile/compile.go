@@ -30,6 +30,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/panjf2000/ants/v2"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -87,8 +90,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/panjf2000/ants/v2"
-	"go.uber.org/zap"
 )
 
 // Note: Now the cost going from stat is actually the number of rows, so we can only estimate a number for the size of each row.
@@ -4315,7 +4316,7 @@ func (c *Compile) generateNodesInProgress(n *plan.Node) (engine.Nodes, []any, []
 		}
 	} else {
 		// add current CN
-		fmt.Printf("xxxx expand ranges will be in run stage, txn:%s, table:%s",
+		fmt.Printf("xxxx expand ranges will be in run stage, txn:%s, table:%s\n",
 			txnOp.Txn().DebugString(), n.TableDef.Name)
 		nodes = append(nodes, engine.Node{
 			Addr: c.addr,
@@ -4328,7 +4329,7 @@ func (c *Compile) generateNodesInProgress(n *plan.Node) (engine.Nodes, []any, []
 	tblId := rel.GetTableID(ctx)
 	expectedLen := relData.BlkCnt()
 	c.proc.Debugf(ctx, "cn generateNodes, tbl %d ranges is %d", tblId, expectedLen)
-	fmt.Printf("xxxx expand ranges in compile stage, txn:%s, table:%s, ranges:%d",
+	fmt.Printf("xxxx expand ranges in compile stage, txn:%s, table:%s, ranges:%d.\n",
 		txnOp.Txn().DebugString(), n.TableDef.Name, expectedLen)
 	// if len(ranges) == 0 indicates that it's a temporary table.
 	if relData.BlkCnt() == 0 && n.TableDef.TableType != catalog.SystemOrdinaryRel {
@@ -4350,21 +4351,21 @@ func (c *Compile) generateNodesInProgress(n *plan.Node) (engine.Nodes, []any, []
 	// for an ordered scan, put all paylonds in current CN
 	// or sometimes force on one CN
 	if isLaunchMode(c.cnList) || len(n.OrderBy) > 0 || relData.BlkCnt() < plan2.BlockThresholdForOneCN || n.Stats.ForceOneCN {
-		fmt.Printf("xxxx put ranges in current CN, txn:%s, table:%s",
+		fmt.Printf("xxxx put ranges in current CN, txn:%s, table:%s.\n",
 			txnOp.Txn().DebugString(), n.TableDef.Name)
 		return putBlocksInCurrentCN(c, relData, n), partialResults, partialResultTypes, nil
 	}
 	// disttae engine
 	if engineType == engine.Disttae {
 
-		fmt.Printf("xxxx shuffle Blocks to multi CN, txn:%s, table:%s",
+		fmt.Printf("xxxx shuffle Blocks to multi CN, txn:%s, table:%s.\n",
 			txnOp.Txn().DebugString(), n.TableDef.Name)
 
 		nodes, err := shuffleBlocksToMultiCN(c, rel, relData, n)
 		return nodes, partialResults, partialResultTypes, err
 	}
 	// maybe temp table on memengine , just put payloads in average
-	fmt.Printf("xxxx put blocks in average, txn:%s, table:%s",
+	fmt.Printf("xxxx put blocks in average, txn:%s, table:%s.\n",
 		txnOp.Txn().DebugString(), n.TableDef.Name)
 	return putBlocksInAverage(c, relData, n), partialResults, partialResultTypes, nil
 }
