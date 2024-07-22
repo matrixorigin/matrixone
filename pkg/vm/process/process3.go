@@ -51,6 +51,12 @@ func NewTopProcess(
 	udfService udf.Service,
 	autoIncrease *defines.AutoIncrCacheManager) *Process {
 
+	// get needed attributes from input parameters.
+	sid := ""
+	if lockService != nil {
+		sid = lockService.GetConfig().ServiceID
+	}
+
 	Base := &BaseProcess{
 		sqlContext: queryBaseContext{
 			outerContext: topContext,
@@ -61,7 +67,7 @@ func NewTopProcess(
 		TxnClient:   txnClient,
 		TxnOperator: txnOperator,
 		FileService: fileService,
-		IncrService: incrservice.GetAutoIncrementService(topContext),
+		IncrService: incrservice.GetAutoIncrementService(sid),
 		LockService: lockService,
 		Aicm:        autoIncrease,
 		QueryClient: queryClient,
@@ -74,7 +80,7 @@ func NewTopProcess(
 		valueScanBatch: make(map[[16]byte]*batch.Batch),
 
 		// 3. other fields.
-		logger:   util.GetLogger(),
+		logger:   util.GetLogger(sid),
 		UnixTime: time.Now().UnixNano(),
 	}
 
