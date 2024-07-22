@@ -247,7 +247,11 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 
 				upgrade.ReadyTenant += updated
 				if upgrade.TotalTenant < upgrade.ReadyTenant {
-					panic(fmt.Sprintf("BUG: invalid upgrade tenant, upgrade %s, updated %d", upgrade.String(), updated))
+					s.logger.Error("invalid upgrade tenant",
+						zap.String("upgrade", upgrade.String()),
+						zap.Int32("updated", updated),
+					)
+					return moerr.NewInvalidStateNoCtx("orphan txn or pre lock released by lock table changed")
 				}
 
 				s.logger.Info("upgrade tenant ready count changed",
