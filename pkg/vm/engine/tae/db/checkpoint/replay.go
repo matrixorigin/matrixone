@@ -17,16 +17,15 @@ package checkpoint
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"sort"
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -78,7 +77,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 	})
 	targetIdx := metaFiles[len(metaFiles)-1].index
 	dir := dirs[targetIdx]
-	reader, err := blockio.NewFileReader(r.rt.Fs.Service, CheckpointDir+dir.Name)
+	reader, err := blockio.NewFileReader(r.rt.SID(), r.rt.Fs.Service, CheckpointDir+dir.Name)
 	if err != nil {
 		return
 	}
@@ -169,7 +168,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 	for i := 0; i < bat.Length(); i++ {
 		metaLoc := objectio.Location(bat.GetVectorByName(CheckpointAttr_MetaLocation).Get(i).([]byte))
 
-		err = blockio.PrefetchMeta(r.rt.Fs.Service, metaLoc)
+		err = blockio.PrefetchMeta(r.rt.SID(), r.rt.Fs.Service, metaLoc)
 		if err != nil {
 			return
 		}
@@ -292,7 +291,13 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 	return
 }
 
-func MergeCkpMeta(ctx context.Context, fs fileservice.FileService, cnLocation, tnLocation objectio.Location, startTs, ts types.TS) (string, error) {
+func MergeCkpMeta(
+	ctx context.Context,
+	sid string,
+	fs fileservice.FileService,
+	cnLocation, tnLocation objectio.Location,
+	startTs, ts types.TS,
+) (string, error) {
 	dirs, err := fs.List(ctx, CheckpointDir)
 	if err != nil {
 		return "", err
@@ -314,7 +319,7 @@ func MergeCkpMeta(ctx context.Context, fs fileservice.FileService, cnLocation, t
 	})
 	targetIdx := metaFiles[len(metaFiles)-1].index
 	dir := dirs[targetIdx]
-	reader, err := blockio.NewFileReader(fs, CheckpointDir+dir.Name)
+	reader, err := blockio.NewFileReader(sid, fs, CheckpointDir+dir.Name)
 	if err != nil {
 		return "", err
 	}

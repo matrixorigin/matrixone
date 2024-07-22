@@ -28,8 +28,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/spf13/cobra"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -42,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
+	"github.com/spf13/cobra"
 )
 
 type inspectContext struct {
@@ -1237,7 +1236,7 @@ func storageUsageDetails(c *storageUsageHistoryArg) (err error) {
 	var usageDelData [][]logtail.UsageData
 
 	if usageInsData, usageDelData, err = logtail.GetStorageUsageHistory(
-		ctx, locations, versions,
+		ctx, c.ctx.db.Runtime.SID(), locations, versions,
 		c.ctx.db.Runtime.Fs.Service, common.DebugAllocator); err != nil {
 		return err
 	}
