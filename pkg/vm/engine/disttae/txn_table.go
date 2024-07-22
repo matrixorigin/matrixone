@@ -2584,19 +2584,46 @@ func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.Objec
 	}
 
 	// if transfer info is too large, write it down to s3
-	if size := taskHost.commitEntry.Booking.ProtoSize(); size > 80*common.Const1MBytes {
+	// transfer info size is only related to row count.
+	rowCnt := 0
+	for _, m := range taskHost.transferMaps {
+		rowCnt += len(m)
+	}
+	// if transfer info is small, send it to tn directly.
+	if rowCnt < 8000000 {
+		size := len(taskHost.transferMaps)
+		mappings := make([]api.BlkTransMap, size)
+		for i := 0; i < size; i++ {
+			mappings[i] = api.BlkTransMap{
+				M: make(map[int32]api.TransDestPos),
+			}
+		}
+		taskHost.commitEntry.Booking = &api.BlkTransferBooking{
+			Mappings: mappings,
+		}
+
+		for i, m := range taskHost.transferMaps {
+			for r, pos := range m {
+				taskHost.commitEntry.Booking.Mappings[i].M[r] = api.TransDestPos{
+					ObjIdx: pos.ObjIdx,
+					BlkIdx: pos.BlkIdx,
+					RowIdx: pos.RowIdx,
+				}
+			}
+		}
+	} else {
 		if err := dumpTransferInfo(ctx, taskHost); err != nil {
 			return taskHost.commitEntry, err
 		}
-		idx := 0
-		locstr := ""
+		var locStr strings.Builder
 		locations := taskHost.commitEntry.BookingLoc
-		for ; idx < len(locations); idx += objectio.LocationLen {
+		for idx := 0; idx < len(locations); idx += objectio.LocationLen {
 			loc := objectio.Location(locations[idx : idx+objectio.LocationLen])
-			locstr += loc.String() + ","
+			locStr.WriteString(loc.String())
+			locStr.WriteString(",")
 		}
-		logutil.Infof("mergeblocks %v-%v on cn: write s3 transfer info (%v) %v",
-			tbl.tableId, tbl.tableName, common.HumanReadableBytes(size), locstr)
+		logutil.Infof("mergeblocks %v-%v on cn: write s3 transfer info %v",
+			tbl.tableId, tbl.tableName, locStr.String())
 	}
 
 	// commit this to tn
@@ -2614,58 +2641,106 @@ func dumpTransferInfo(ctx context.Context, taskHost *cnMergeTask) (err error) {
 			}
 		}
 	}()
-	data, err := taskHost.commitEntry.Booking.Marshal()
-	if err != nil {
-		return
+	bookingMaps := taskHost.transferMaps
+	blkCnt := int32(len(bookingMaps))
+	totalRows := 0
+
+	taskHost.commitEntry.BookingLoc = append(taskHost.commitEntry.BookingLoc, types.EncodeInt32(&blkCnt)...)
+	for _, m := range bookingMaps {
+		rowCnt := int32(len(m))
+		taskHost.commitEntry.BookingLoc = append(taskHost.commitEntry.BookingLoc, types.EncodeInt32(&rowCnt)...)
+		totalRows += len(m)
 	}
-	taskHost.commitEntry.BookingLoc = make([]byte, 0, objectio.LocationLen)
-	chunkSize := 1000 * mpool.MB
-	for len(data) > 0 {
-		var chunck []byte
-		if len(data) > chunkSize {
-			chunck = data[:chunkSize]
-			data = data[chunkSize:]
-		} else {
-			chunck = data
-			data = nil
+
+	columns := []string{"src_blk", "src_row", "dest_obj", "dest_blk", "dest_row"}
+	batchSize := min(200*mpool.MB/len(columns)/int(unsafe.Sizeof(int32(0))), totalRows)
+
+	buffer := batch.New(true, columns)
+
+	releases := make([]func(), len(columns))
+	for i := range columns {
+		t := types.T_int32.ToType()
+		vec, release := taskHost.GetVector(&t)
+		err = vec.PreExtend(batchSize, taskHost.GetMPool())
+		if err != nil {
+			return err
+		}
+		buffer.Vecs[i] = vec
+		releases[i] = release
+	}
+	objRowCnt := 0
+	for blkIdx, transMap := range bookingMaps {
+		for rowIdx, destPos := range transMap {
+			vector.AppendFixed(buffer.Vecs[0], int32(blkIdx), false, taskHost.GetMPool())
+			vector.AppendFixed(buffer.Vecs[1], rowIdx, false, taskHost.GetMPool())
+			vector.AppendFixed(buffer.Vecs[2], destPos.ObjIdx, false, taskHost.GetMPool())
+			vector.AppendFixed(buffer.Vecs[3], destPos.BlkIdx, false, taskHost.GetMPool())
+			vector.AppendFixed(buffer.Vecs[4], destPos.RowIdx, false, taskHost.GetMPool())
+
+			buffer.SetRowCount(buffer.RowCount() + 1)
+			objRowCnt++
+
+			if objRowCnt*len(columns)*int(unsafe.Sizeof(int32(0))) > 200*mpool.MB {
+				objectName := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
+				writer, err := blockio.NewBlockWriterNew(taskHost.fs, objectName, 0, nil)
+				if err != nil {
+					return err
+				}
+
+				_, err = writer.WriteTombstoneBatch(buffer)
+				if err != nil {
+					return err
+				}
+				buffer.CleanOnlyData()
+
+				location, err := syncBooking(ctx, writer, uint32(objRowCnt))
+				if err != nil {
+					return err
+				}
+				taskHost.commitEntry.BookingLoc = append(taskHost.commitEntry.BookingLoc, location...)
+
+				objRowCnt = 0
+			}
+		}
+	}
+
+	// write remaining data
+	if buffer.RowCount() != 0 {
+		objectName := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
+		writer, err := blockio.NewBlockWriterNew(taskHost.fs, objectName, 0, nil)
+		if err != nil {
+			return err
 		}
 
-		t := types.T_varchar.ToType()
-		v, releasev := taskHost.GetVector(&t)
-		vectorRowCnt := 1
-		vector.AppendBytes(v, chunck, false, taskHost.GetMPool())
-		name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
-		var writer *blockio.BlockWriter
-		writer, err = blockio.NewBlockWriterNew(taskHost.fs, name, 0, nil)
+		_, err = writer.WriteTombstoneBatch(buffer)
 		if err != nil {
-			releasev()
-			return
+			return err
 		}
+		buffer.CleanOnlyData()
 
-		batch := batch.New(true, []string{"payload"})
-		batch.SetRowCount(vectorRowCnt)
-		batch.Vecs[0] = v
-		_, err = writer.WriteTombstoneBatch(batch)
+		location, err := syncBooking(ctx, writer, uint32(objRowCnt))
 		if err != nil {
-			releasev()
-			return
+			return err
 		}
-		var blocks []objectio.BlockObject
-		blocks, _, err = writer.Sync(ctx)
-		releasev()
-		if err != nil {
-			return
-		}
-		location := blockio.EncodeLocation(
-			name,
-			blocks[0].GetExtent(),
-			uint32(vectorRowCnt),
-			blocks[0].GetID())
 		taskHost.commitEntry.BookingLoc = append(taskHost.commitEntry.BookingLoc, location...)
+		objRowCnt = 0
 	}
 
 	taskHost.commitEntry.Booking = nil
 	return
+}
+
+func syncBooking(ctx context.Context, writer *blockio.BlockWriter, objRowCnt uint32) (objectio.Location, error) {
+	blocks, _, err := writer.Sync(ctx)
+	if err != nil {
+		return nil, err
+	}
+	location := blockio.EncodeLocation(
+		writer.GetName(),
+		blocks[0].GetExtent(),
+		objRowCnt,
+		blocks[0].GetID())
+	return location, nil
 }
 
 func applyMergePolicy(ctx context.Context, policyName string, sortKeyPos int, objInfos []logtailreplay.ObjectInfo) ([]logtailreplay.ObjectInfo, error) {
