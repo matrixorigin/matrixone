@@ -38,7 +38,7 @@ func (t JoinMapMsg) Deserialize([]byte) Message {
 }
 
 func (t JoinMapMsg) NeedBlock() bool {
-	return false
+	return true
 }
 
 func (t JoinMapMsg) GetMsgTag() int32 {
