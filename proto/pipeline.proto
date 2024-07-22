@@ -355,6 +355,7 @@ message ExternalScan {
   repeated string file_list = 7;
   repeated plan.ColDef origin_cols = 8;
   plan.Expr    filter = 9;
+  map<string, int32> TbColToDataCol = 10;
 }
 
 message StreamScan {

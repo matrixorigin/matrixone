@@ -83,7 +83,7 @@ func CnServerMessageHandler(
 
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(ctx, e)
-			getLogger().Error("panic in CnServerMessageHandler",
+			getLogger(lockService.GetConfig().ServiceID).Error("panic in CnServerMessageHandler",
 				zap.String("error", err.Error()))
 			err = errors.Join(err, cs.Close())
 		}
@@ -199,12 +199,12 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		err = s.ParallelRun(runCompile)
 		if err == nil {
 			// record the number of s3 requests
-			runCompile.proc.Base.AnalInfos[runCompile.anal.curr].S3IOInputCount += runCompile.counterSet.FileService.S3.Put.Load()
-			runCompile.proc.Base.AnalInfos[runCompile.anal.curr].S3IOInputCount += runCompile.counterSet.FileService.S3.List.Load()
-			runCompile.proc.Base.AnalInfos[runCompile.anal.curr].S3IOOutputCount += runCompile.counterSet.FileService.S3.Head.Load()
-			runCompile.proc.Base.AnalInfos[runCompile.anal.curr].S3IOOutputCount += runCompile.counterSet.FileService.S3.Get.Load()
-			runCompile.proc.Base.AnalInfos[runCompile.anal.curr].S3IOOutputCount += runCompile.counterSet.FileService.S3.Delete.Load()
-			runCompile.proc.Base.AnalInfos[runCompile.anal.curr].S3IOOutputCount += runCompile.counterSet.FileService.S3.DeleteMulti.Load()
+			runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOInputCount += runCompile.counterSet.FileService.S3.Put.Load()
+			runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOInputCount += runCompile.counterSet.FileService.S3.List.Load()
+			runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOOutputCount += runCompile.counterSet.FileService.S3.Head.Load()
+			runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOOutputCount += runCompile.counterSet.FileService.S3.Get.Load()
+			runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOOutputCount += runCompile.counterSet.FileService.S3.Delete.Load()
+			runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOOutputCount += runCompile.counterSet.FileService.S3.DeleteMulti.Load()
 
 			receiver.finalAnalysisInfo = runCompile.proc.Base.AnalInfos
 		} else {
@@ -407,6 +407,7 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	}
 
 	c := GetCompileService().getCompile(proc)
+	c.execType = plan2.ExecTypeAP_MULTICN
 	c.e = cnInfo.storeEngine
 	c.MessageBoard = c.MessageBoard.SetMultiCN(c.GetMessageCenter(), c.proc.GetStmtProfile().GetStmtId())
 	c.proc.Base.MessageBoard = c.MessageBoard

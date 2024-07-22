@@ -20,8 +20,6 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -36,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
+	"go.uber.org/zap"
 )
 
 var (
@@ -150,6 +149,7 @@ const (
 type TxnHandler struct {
 	mu sync.Mutex
 
+	service       string
 	storage       engine.Engine
 	tempStorage   *memorystorage.Storage
 	tempTnService *metadata.TNService
@@ -181,8 +181,9 @@ type TxnHandler struct {
 	optionBits uint32
 }
 
-func InitTxnHandler(storage engine.Engine, connCtx context.Context, txnOp TxnOperator) *TxnHandler {
+func InitTxnHandler(service string, storage engine.Engine, connCtx context.Context, txnOp TxnOperator) *TxnHandler {
 	ret := &TxnHandler{
+		service:      service,
 		storage:      &engine.EntireEngine{Engine: storage},
 		connCtx:      connCtx,
 		txnOp:        txnOp,
@@ -346,7 +347,7 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 	}
 
 	var opts []client.TxnOption
-	rt := moruntime.ProcessLevelRuntime()
+	rt := moruntime.ServiceRuntime(execCtx.ses.GetService())
 	if rt != nil {
 		if v, ok := rt.GetGlobalVariables(moruntime.TxnOptions); ok {
 			opts = v.([]client.TxnOption)
@@ -790,11 +791,13 @@ func (th *TxnHandler) CreateTempEngine() {
 
 	th.tempEngine = memoryengine.New(
 		context.TODO(), //!!!NOTE: memoryengine.New will neglect this context.
+		th.service,
 		memoryengine.NewDefaultShardPolicy(
 			mpool.MustNewZeroNoFixed(),
 		),
 		memoryengine.RandomIDGenerator,
 		clusterservice.NewMOCluster(
+			th.service,
 			nil,
 			0,
 			clusterservice.WithDisableRefresh(),

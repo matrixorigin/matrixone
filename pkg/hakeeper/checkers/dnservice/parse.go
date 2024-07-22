@@ -87,7 +87,13 @@ func parseTnState(cfg hakeeper.Config,
 
 // checkReportedState generates Operators for reported state.
 // NB: the order of list is deterministic.
-func checkReportedState(rs *reportedShards, mapper ShardMapper, workingStores []*util.Store, idAlloc util.IDAllocator) []*operator.Operator {
+func checkReportedState(
+	service string,
+	rs *reportedShards,
+	mapper ShardMapper,
+	workingStores []*util.Store,
+	idAlloc util.IDAllocator,
+) []*operator.Operator {
 	var ops []*operator.Operator
 
 	reported := rs.listShards()
@@ -103,7 +109,7 @@ func checkReportedState(rs *reportedShards, mapper ShardMapper, workingStores []
 			panic(fmt.Sprintf("shard `%d` not register", shardID))
 		}
 
-		steps := checkShard(shard, mapper, workingStores, idAlloc)
+		steps := checkShard(service, shard, mapper, workingStores, idAlloc)
 		// avoid Operator with nil steps
 		if len(steps) > 0 {
 			ops = append(ops,
@@ -112,7 +118,7 @@ func checkReportedState(rs *reportedShards, mapper ShardMapper, workingStores []
 		}
 	}
 
-	runtime.ProcessLevelRuntime().Logger().Debug(fmt.Sprintf("construct %d operators for reported tn shards", len(ops)))
+	runtime.ServiceRuntime(service).Logger().Debug(fmt.Sprintf("construct %d operators for reported tn shards", len(ops)))
 
 	return ops
 }
@@ -120,8 +126,15 @@ func checkReportedState(rs *reportedShards, mapper ShardMapper, workingStores []
 // checkInitiatingShards generates Operators for newly-created shards.
 // NB: the order of list is deterministic.
 func checkInitiatingShards(
-	rs *reportedShards, mapper ShardMapper, workingStores []*util.Store, idAlloc util.IDAllocator,
-	cluster pb.ClusterInfo, cfg hakeeper.Config, currTick uint64) []*operator.Operator {
+	service string,
+	rs *reportedShards,
+	mapper ShardMapper,
+	workingStores []*util.Store,
+	idAlloc util.IDAllocator,
+	cluster pb.ClusterInfo,
+	cfg hakeeper.Config,
+	currTick uint64,
+) []*operator.Operator {
 	// update the registered newly-created shards
 	for _, record := range cluster.TNShards {
 		shardID := record.ShardID
@@ -145,7 +158,7 @@ func checkInitiatingShards(
 
 	var ops []*operator.Operator
 	for _, id := range expired {
-		steps := checkShard(newTnShard(id), mapper, workingStores, idAlloc)
+		steps := checkShard(service, newTnShard(id), mapper, workingStores, idAlloc)
 		if len(steps) > 0 { // avoid Operator with nil steps
 			ops = append(ops,
 				operator.NewOperator("dnservice", id, operator.NoopEpoch, steps...),
@@ -153,7 +166,7 @@ func checkInitiatingShards(
 		}
 	}
 
-	runtime.ProcessLevelRuntime().Logger().Debug(fmt.Sprintf("construct %d operators for initiating tn shards", len(ops)))
+	runtime.ServiceRuntime(service).Logger().Debug(fmt.Sprintf("construct %d operators for initiating tn shards", len(ops)))
 	if bootstrapping && len(ops) != 0 {
 		bootstrapping = false
 	}

@@ -469,6 +469,25 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		pks: []int{0},
 	}
 
+	moSchema["mo_pitr"] = &Schema{
+		cols: []col{
+			{"pitr_id", types.T_uuid, false, 100, 0},
+			{"pitr_name", types.T_varchar, false, 64, 0},
+			{"create_account", types.T_uint64, false, 50, 0},
+			{"create_time", types.T_timestamp, false, 50, 0},
+			{"modified_time", types.T_timestamp, false, 50, 0},
+			{"level", types.T_varchar, false, 50, 0},
+			{"account_id", types.T_uint64, false, 50, 0},
+			{"account_name", types.T_varchar, false, 50, 0},
+			{"database_name", types.T_varchar, false, 50, 0},
+			{"table_name", types.T_varchar, false, 50, 0},
+			{"obj_id", types.T_uint64, false, 100, 0},
+			{"pitr_length", types.T_int64, false, 50, 0},
+			{"pitr_unit", types.T_varchar, false, 50, 0},
+		},
+		pks: []int{0},
+	}
+
 	//---------------------------------------------constraint test schema---------------------------------------------------------
 	/*
 		create table emp(
@@ -936,6 +955,10 @@ func (m *MockCompilerContext) GetAccountId() (uint32, error) {
 
 func (m *MockCompilerContext) GetContext() context.Context {
 	return m.ctx
+}
+
+func (m *MockCompilerContext) SetContext(ctx context.Context) {
+	m.ctx = ctx
 }
 
 func (m *MockCompilerContext) GetProcess() *process.Process {

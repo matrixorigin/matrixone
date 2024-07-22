@@ -32,12 +32,13 @@ import (
 //     4.1 If the username is dump or root, we just select one randomly.
 //     4.2 Else, no servers are selected.
 func RouteForSuperTenant(
+	service string,
 	selector clusterservice.Selector,
 	username string,
 	filter func(string) bool,
 	appendFn func(service *metadata.CNService),
 ) {
-	mc := clusterservice.GetMOCluster()
+	mc := clusterservice.GetMOCluster(service)
 
 	// found is true indicates that we have find some available CN services.
 	var found bool
@@ -118,9 +119,12 @@ func RouteForSuperTenant(
 // If there are CN services for the selector, just select them,
 // else, return CN services with empty labels if there are any.
 func RouteForCommonTenant(
-	selector clusterservice.Selector, filter func(string) bool, appendFn func(service *metadata.CNService),
+	service string,
+	selector clusterservice.Selector,
+	filter func(string) bool,
+	appendFn func(service *metadata.CNService),
 ) {
-	mc := clusterservice.GetMOCluster()
+	mc := clusterservice.GetMOCluster(service)
 
 	// found is true indicates that there are CN services for the selector.
 	var found bool

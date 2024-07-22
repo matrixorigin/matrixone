@@ -33,7 +33,7 @@ func builtInInternalGetAdminName(parameters []*vector.Vector, result vector.Func
 			return moerr.NewInvalidInput(proc.Ctx, "unsupported parameter `null` for getAdminName")
 		}
 
-		v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.InternalSQLExecutor)
+		v, ok := runtime.ServiceRuntime(proc.GetService()).GetGlobalVariables(runtime.InternalSQLExecutor)
 		if !ok {
 			return moerr.NewNotSupported(proc.Ctx, "no implement sqlExecutor")
 		}

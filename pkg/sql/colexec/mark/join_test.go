@@ -221,7 +221,7 @@ func newExpr(pos int32, typ types.Type) *plan.Expr {
 }
 
 func newTestCase(flgs []bool, ts []types.Type, rp []int32, cs [][]*plan.Expr) markTestCase {
-	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
+	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
