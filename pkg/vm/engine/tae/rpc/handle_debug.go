@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"strconv"
 	"strings"
 	"time"
@@ -391,54 +392,66 @@ func (h *Handle) HandleCommitMerge(
 		}
 	}()
 
+	var booking api.TransferMaps
 	if len(req.BookingLoc) > 0 {
 		// load transfer info from s3
 		if req.Booking != nil {
 			logutil.Error("mergeblocks err booking loc is not empty, but booking is not nil")
 		}
-		if len(req.BookingLoc) == objectio.LocationLen {
-			loc := objectio.Location(req.BookingLoc)
+
+		blkCnt := types.DecodeInt32(req.BookingLoc)
+		rowsCnt := make([]int32, blkCnt)
+		idx := 1
+		for i := range blkCnt {
+			rowsCnt[i] = types.DecodeInt32(req.BookingLoc[idx*4:])
+			idx++
+		}
+		booking = make(api.TransferMaps, blkCnt)
+		for i := range blkCnt {
+			booking[i] = make(api.TransferMap, rowsCnt[i])
+		}
+
+		locations := req.BookingLoc[idx*4:]
+		for p := 0; p < len(locations); p += objectio.LocationLen {
+			loc := objectio.Location(locations[p : p+objectio.LocationLen])
 			var bat *batch.Batch
 			var release func()
-			bat, release, err = blockio.LoadTombstoneColumns(ctx, []uint16{0}, nil, h.db.Runtime.Fs.Service, loc, nil)
+			bat, release, err = blockio.LoadTombstoneColumns(ctx, []uint16{0, 1, 2, 3, 4}, nil, h.db.Runtime.Fs.Service, loc, nil)
 			if err != nil {
 				return
 			}
-			req.Booking = &api.BlkTransferBooking{}
-			err = req.Booking.Unmarshal(bat.Vecs[0].GetBytesAt(0))
-			if err != nil {
-				release()
-				return
+
+			for i := range bat.RowCount() {
+				srcBlk := vector.GetFixedAt[int32](bat.Vecs[0], i)
+				srcRow := vector.GetFixedAt[int32](bat.Vecs[1], i)
+				destObj := vector.GetFixedAt[int32](bat.Vecs[2], i)
+				destBlk := vector.GetFixedAt[int32](bat.Vecs[3], i)
+				destRow := vector.GetFixedAt[int32](bat.Vecs[4], i)
+
+				booking[srcBlk][srcRow] = api.TransferDestPos{
+					ObjIdx: destObj,
+					BlkIdx: destBlk,
+					RowIdx: destRow,
+				}
 			}
 			release()
 			h.db.Runtime.Fs.Service.Delete(ctx, loc.Name().String())
 			bat = nil
-		} else {
-			// it has to copy to concat
-			idx := 0
-			locations := req.BookingLoc
-			data := make([]byte, 0, 2<<30)
-			for ; idx < len(locations); idx += objectio.LocationLen {
-				loc := objectio.Location(locations[idx : idx+objectio.LocationLen])
-				var bat *batch.Batch
-				var release func()
-				bat, release, err = blockio.LoadTombstoneColumns(ctx, []uint16{0}, nil, h.db.Runtime.Fs.Service, loc, nil)
-				if err != nil {
-					return
+		}
+	} else if req.Booking != nil {
+		booking = make(api.TransferMaps, len(req.Booking.Mappings))
+		for i, m := range req.Booking.Mappings {
+			for r, pos := range m.M {
+				booking[i][r] = api.TransferDestPos{
+					ObjIdx: pos.ObjIdx,
+					BlkIdx: pos.BlkIdx,
+					RowIdx: pos.RowIdx,
 				}
-				data = append(data, bat.Vecs[0].GetBytesAt(0)...)
-				release()
-				h.db.Runtime.Fs.Service.Delete(ctx, loc.Name().String())
-				bat = nil
-			}
-			req.Booking = &api.BlkTransferBooking{}
-			if err = req.Booking.Unmarshal(data); err != nil {
-				return
 			}
 		}
 	}
 
-	_, err = jobs.HandleMergeEntryInTxn(txn, txn.String(), req, h.db.Runtime)
+	_, err = jobs.HandleMergeEntryInTxn(txn, txn.String(), req, booking, h.db.Runtime)
 	if err != nil {
 		return
 	}
