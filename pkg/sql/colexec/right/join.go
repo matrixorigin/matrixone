@@ -142,7 +142,7 @@ func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (rightJoin *RightJoin) receiveHashMap(anal process.Analyze, proc *process.Process) {
 	ctr := rightJoin.ctr
-	ctr.mp = colexec.ReceiveHashMap(anal, rightJoin.JoinMapTag, rightJoin.IsShuffle, rightJoin.ShuffleIdx, proc)
+	ctr.mp = colexec.ReceiveJoinMap(anal, rightJoin.JoinMapTag, rightJoin.IsShuffle, rightJoin.ShuffleIdx, proc)
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}

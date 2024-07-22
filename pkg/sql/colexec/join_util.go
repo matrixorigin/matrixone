@@ -21,7 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func ReceiveHashMap(anal process.Analyze, tag int32, isShuffle bool, shuffleIdx int32, proc *process.Process) *hashmap.JoinMap {
+func ReceiveJoinMap(anal process.Analyze, tag int32, isShuffle bool, shuffleIdx int32, proc *process.Process) *hashmap.JoinMap {
 	start := time.Now()
 	defer anal.WaitStop(start)
 	msgReceiver := proc.NewMessageReceiver([]int32{tag}, process.AddrBroadCastOnCurrentCN())
@@ -40,12 +40,16 @@ func ReceiveHashMap(anal process.Analyze, tag int32, isShuffle bool, shuffleIdx 
 					continue
 				}
 			}
-			ret := msg.JoinMapPtr
-			if !ret.IsValid() {
+			jm := msg.JoinMapPtr
+			if !jm.IsValid() {
 				panic("join receive a joinmap which has been freed!")
 			}
-			ret.IncRef()
-			return ret
+			jm.IncRef()
+			return jm
 		}
 	}
+}
+
+func FinalizeJoinMapMessage(tag int32, isShuffle bool, shuffleIdx int32, proc *process.Process) {
+	proc.SendMessage(process.JoinMapMsg{JoinMapPtr: nil, IsShuffle: isShuffle, ShuffleIdx: shuffleIdx, Tag: tag})
 }
