@@ -890,6 +890,7 @@ func (r *readerInProgress) Read(
 		r.filterState.colTypes,
 		filter,
 		r.fs, mp, vp, policy,
+		r.tableDef.Name,
 	)
 	if err != nil {
 		return nil, err
