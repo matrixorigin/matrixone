@@ -47,15 +47,15 @@ func (e *Engine) init(ctx context.Context) error {
 	defer put.Put()
 
 	{
-		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID}] = logtailreplay.NewPartition()
+		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID}] = logtailreplay.NewPartition(e.service)
 	}
 
 	{
-		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}] = logtailreplay.NewPartition()
+		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}] = logtailreplay.NewPartition(e.service)
 	}
 
 	{
-		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}] = logtailreplay.NewPartition()
+		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}] = logtailreplay.NewPartition(e.service)
 	}
 
 	{ // mo_catalog
@@ -276,13 +276,15 @@ func (e *Engine) loadSnapCkpForTable(
 ) error {
 	entries, closeCBs, err := logtail.LoadCheckpointEntries(
 		ctx,
+		e.service,
 		loc,
 		tid,
 		tblName,
 		did,
 		dbName,
 		e.mp,
-		e.fs)
+		e.fs,
+	)
 	if err != nil {
 		return err
 	}
@@ -315,7 +317,7 @@ func (e *Engine) getOrCreateSnapCatalogCache(
 	snapCata := cache.NewCatalog()
 	//TODO:: insert mo_tables, or mo_colunms, or mo_database, mo_catalog into snapCata.
 	//       ref to engine.init.
-	ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, e.fs, ts, 0, nil)
+	ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, e.service, e.fs, ts, 0, nil)
 	if ckps == nil {
 		return nil, moerr.NewInternalErrorNoCtx("No checkpoints for snapshot read")
 	}
@@ -425,10 +427,10 @@ func (e *Engine) getOrCreateSnapPart(
 	}
 
 	//new snapshot partition and apply checkpoints into it.
-	snap := logtailreplay.NewPartition()
+	snap := logtailreplay.NewPartition(e.service)
 	//TODO::if tableId is mo_tables, or mo_colunms, or mo_database,
 	//      we should init the partition,ref to engine.init
-	ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, e.fs, ts, tbl.tableId, nil)
+	ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, e.service, e.fs, ts, tbl.tableId, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -441,6 +443,7 @@ func (e *Engine) getOrCreateSnapPart(
 		locations := strings.Join(locs, ";")
 		entries, closeCBs, err := logtail.LoadCheckpointEntries(
 			ctx,
+			e.service,
 			locations,
 			tbl.tableId,
 			tbl.tableName,
@@ -481,6 +484,9 @@ func (e *Engine) getOrCreateSnapPart(
 		if err != nil {
 			return nil, err
 		}
+		if ps == nil {
+			ps = tbl.getTxn().engine.GetOrCreateLatestPart(tbl.db.databaseId, tbl.tableId).Snapshot()
+		}
 		return ps, nil
 	}
 	if ts.Less(&start) {
@@ -501,7 +507,7 @@ func (e *Engine) GetOrCreateLatestPart(
 	defer e.Unlock()
 	partition, ok := e.partitions[[2]uint64{databaseId, tableId}]
 	if !ok { // create a new table
-		partition = logtailreplay.NewPartition()
+		partition = logtailreplay.NewPartition(e.service)
 		e.partitions[[2]uint64{databaseId, tableId}] = partition
 	}
 	return partition
@@ -529,6 +535,7 @@ func (e *Engine) LazyLoadLatestCkp(
 		func(checkpoint string, state *logtailreplay.PartitionState) error {
 			entries, closeCBs, err := logtail.LoadCheckpointEntries(
 				ctx,
+				e.service,
 				checkpoint,
 				tbl.tableId,
 				tbl.tableName,

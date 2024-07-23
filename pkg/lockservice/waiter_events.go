@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
@@ -107,6 +108,7 @@ func (e event) notified() {
 // waiterEvents is used to handle all notified waiters. And use a pool to retry the lock op,
 // to avoid too many goroutine blocked.
 type waiterEvents struct {
+	logger       *log.MOLogger
 	workers      int
 	detector     *detector
 	eventC       chan *lockContext
@@ -126,15 +128,17 @@ func newWaiterEvents(
 	detector *detector,
 	txnHolder activeTxnHolder,
 	unlock func(ctx context.Context, txnID []byte, commitTS timestamp.Timestamp, mutations ...pb.ExtraMutation) error,
+	logger *log.MOLogger,
 ) *waiterEvents {
 	return &waiterEvents{
+		logger:       logger,
 		workers:      workers,
 		detector:     detector,
 		txnHolder:    txnHolder,
 		unlock:       unlock,
 		eventC:       make(chan *lockContext, 10000),
 		checkOrphanC: make(chan checkOrphan, 64),
-		stopper:      stopper.NewStopper("waiter-events", stopper.WithLogger(getLogger().RawLogger())),
+		stopper:      stopper.NewStopper("waiter-events", stopper.WithLogger(logger.RawLogger())),
 	}
 }
 
@@ -245,7 +249,7 @@ func (mw *waiterEvents) checkOrphan(v checkOrphan) {
 		if ok {
 			lockDetail = lock.String()
 		}
-		getLogger().Warn("wait too long",
+		mw.logger.Warn("wait too long",
 			zap.Duration("wait", v.wait),
 			zap.String("key", hex.EncodeToString(v.key)),
 			zap.String("bind", v.lt.bind.DebugString()),
@@ -275,7 +279,7 @@ func (mw *waiterEvents) checkOrphan(v checkOrphan) {
 		// When you have determined that a remote transaction is an orphaned transaction, you
 		// can release the lock that the remote transaction has placed on the current cn.
 		if !mw.txnHolder.isValidRemoteTxn(h) {
-			getLogger().Warn("found orphans txns",
+			mw.logger.Warn("found orphans txns",
 				bytesArrayField("txns", [][]byte{h.TxnID}))
 			// ignore error. If failed will retry until lock removed
 			_ = mw.unlock(context.Background(), h.TxnID, timestamp.Timestamp{})

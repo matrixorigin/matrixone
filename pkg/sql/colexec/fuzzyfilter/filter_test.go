@@ -97,7 +97,7 @@ func newArgument(typ types.Type) *FuzzyFilter {
 }
 
 func newProcess() *process.Process {
-	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
+	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
 		Ctx: proc.Ctx,

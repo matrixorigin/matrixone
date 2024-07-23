@@ -201,6 +201,8 @@ func (ds *debugStats) AddFlushBytes(b uint64) {
 type MysqlProtocolImpl struct {
 	m sync.Mutex
 
+	sid string
+
 	//TODO: make it global
 	io IOPackage
 
@@ -2979,9 +2981,10 @@ func generate_salt(n int) []byte {
 	}
 	return buf
 }
-func NewMysqlClientProtocol(connectionID uint32, tcp *Conn, maxBytesToFlush int, SV *config.FrontendParameters) *MysqlProtocolImpl {
+func NewMysqlClientProtocol(sid string, connectionID uint32, tcp *Conn, maxBytesToFlush int, SV *config.FrontendParameters) *MysqlProtocolImpl {
 	salt := generate_salt(20)
 	mysql := &MysqlProtocolImpl{
+		sid:              sid,
 		io:               NewIOPackage(true),
 		tcpConn:          tcp,
 		salt:             salt,

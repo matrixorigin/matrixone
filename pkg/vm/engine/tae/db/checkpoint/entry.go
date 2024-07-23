@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -33,6 +32,7 @@ import (
 
 type CheckpointEntry struct {
 	sync.RWMutex
+	sid        string
 	start, end types.TS
 	state      State
 	entryType  EntryType
@@ -46,8 +46,9 @@ type CheckpointEntry struct {
 	truncateLSN uint64
 }
 
-func NewCheckpointEntry(start, end types.TS, typ EntryType) *CheckpointEntry {
+func NewCheckpointEntry(sid string, start, end types.TS, typ EntryType) *CheckpointEntry {
 	return &CheckpointEntry{
+		sid:       sid,
 		start:     start,
 		end:       end,
 		state:     ST_Pending,
@@ -199,7 +200,7 @@ func (e *CheckpointEntry) Read(
 	fs *objectio.ObjectFS,
 	data *logtail.CheckpointData,
 ) (err error) {
-	reader, err := blockio.NewObjectReader(fs.Service, e.tnLocation)
+	reader, err := blockio.NewObjectReader(e.sid, fs.Service, e.tnLocation)
 	if err != nil {
 		return
 	}
@@ -220,7 +221,7 @@ func (e *CheckpointEntry) PrefetchMetaIdx(
 	ctx context.Context,
 	fs *objectio.ObjectFS,
 ) (data *logtail.CheckpointData, err error) {
-	data = logtail.NewCheckpointData(common.CheckpointAllocator)
+	data = logtail.NewCheckpointData(e.sid, common.CheckpointAllocator)
 	if err = data.PrefetchMeta(
 		ctx,
 		e.version,
@@ -237,7 +238,7 @@ func (e *CheckpointEntry) ReadMetaIdx(
 	fs *objectio.ObjectFS,
 	data *logtail.CheckpointData,
 ) (err error) {
-	reader, err := blockio.NewObjectReader(fs.Service, e.tnLocation)
+	reader, err := blockio.NewObjectReader(e.sid, fs.Service, e.tnLocation)
 	if err != nil {
 		return
 	}
@@ -245,12 +246,12 @@ func (e *CheckpointEntry) ReadMetaIdx(
 }
 
 func (e *CheckpointEntry) GetByTableID(ctx context.Context, fs *objectio.ObjectFS, tid uint64) (ins, del, cnIns, segDel *api.Batch, err error) {
-	reader, err := blockio.NewObjectReader(fs.Service, e.cnLocation)
+	reader, err := blockio.NewObjectReader(e.sid, fs.Service, e.cnLocation)
 	if err != nil {
 		return
 	}
-	data := logtail.NewCNCheckpointData()
-	err = blockio.PrefetchMeta(fs.Service, e.cnLocation)
+	data := logtail.NewCNCheckpointData(e.sid)
+	err = blockio.PrefetchMeta(e.sid, fs.Service, e.cnLocation)
 	if err != nil {
 		return
 	}
