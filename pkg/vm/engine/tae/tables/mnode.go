@@ -62,9 +62,6 @@ func newMemoryNode(object *aobject, offset uint16) *memoryNode {
 	impl.initPKIndex(schema)
 	return impl
 }
-func (node *memoryNode) getappendMVCC() *updates.AppendMVCCHandle {
-	return node.appendMVCC
-}
 func (node *memoryNode) mustData() *containers.Batch {
 	if node.data != nil {
 		return node.data

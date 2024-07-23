@@ -9359,4 +9359,5 @@ func TestFlushAndReplay(t *testing.T) {
 	tae.CheckRowsByScan(20, false)
 	tae.Restart(ctx)
 	tae.CheckRowsByScan(20, false)
+	assert.Zero(t, common.MutMemAllocator.CurrNB())
 }

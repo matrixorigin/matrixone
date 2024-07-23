@@ -89,11 +89,12 @@ func (obj *aobject) PreapreAppend(
 	startRow, maxRow uint32,
 	batchSize int,
 ) (an *updates.AppendNode, created bool) {
-	obj.PinNode().MustMNode().getLastNode().data.ApproxSize()
 	return obj.getLastAppendMVCC().AddAppendNodeLocked(txn, startRow, maxRow)
 }
 func (obj *aobject) getLastAppendMVCC() *updates.AppendMVCCHandle {
-	return obj.PinNode().MustMNode().getLastNode().appendMVCC
+	node := obj.PinNode()
+	defer node.Unref()
+	return node.MustMNode().getLastNode().appendMVCC
 }
 
 // only used in replay
@@ -102,7 +103,7 @@ func (obj *aobject) mustGetAppendMVCC(blkID uint16) *updates.AppendMVCCHandle {
 	if blkCount < int(blkID) {
 		return nil
 	}
-	return obj.PinNode().MustMNode().getOrCreateNode(blkID).appendMVCC
+	return obj.node.Load().MustMNode().getOrCreateNode(blkID).appendMVCC
 }
 func (obj *aobject) PPString(level common.PPLevel, depth int, prefix string, blkid int) string {
 	rows, err := obj.Rows()
