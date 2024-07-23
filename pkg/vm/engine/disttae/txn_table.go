@@ -769,8 +769,8 @@ func (tbl *txnTable) RangesInProgress(ctx context.Context, exprs []*plan.Expr, t
 		return
 	}
 	if tbl.tableName == "bugt" {
-		fmt.Printf("luofei xxxx finished call RangesInProgress ,txn:%s, table:%s, blocks:%d",
-			tbl.db.op.Txn().DebugString(), tbl.tableName, len(blocks))
+		//fmt.Printf("luofei xxxx finished call RangesInProgress ,txn:%s, table:%s, blocks:%d",
+		//	tbl.db.op.Txn().DebugString(), tbl.tableName, len(blocks))
 	}
 	return buildRelationDataV1(blocks), nil
 }
@@ -1310,8 +1310,8 @@ func (tbl *txnTable) collectUnCommittedObjects(txnOffset int) []objectio.ObjectS
 			}
 		})
 	if tbl.tableName == "bugt" {
-		logutil.Infof("xxxx ranges:collect uncommitted objects, txn:%s, table:%s, txnOffset:%d, uncommitted objs:%d",
-			tbl.db.op.Txn().DebugString(), tbl.tableName, txnOffset, len(unCommittedObjects))
+		//logutil.Infof("xxxx ranges:collect uncommitted objects, txn:%s, table:%s, txnOffset:%d, uncommitted objs:%d",
+		//	tbl.db.op.Txn().DebugString(), tbl.tableName, txnOffset, len(unCommittedObjects))
 	}
 
 	return unCommittedObjects
