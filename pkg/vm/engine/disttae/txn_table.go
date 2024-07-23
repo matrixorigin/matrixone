@@ -914,7 +914,7 @@ func (tbl *txnTable) rangesOnePart(
 	bhit, btotal := outBlocks.Len()-1, int(s3BlkCnt)
 	v2.TaskSelBlockTotal.Add(float64(btotal))
 	v2.TaskSelBlockHit.Add(float64(btotal - bhit))
-	blockio.RecordBlockSelectivity(bhit, btotal)
+	blockio.RecordBlockSelectivity(proc.GetService(), bhit, btotal)
 	if btotal > 0 {
 		v2.TxnRangesSlowPathLoadObjCntHistogram.Observe(float64(loadObjCnt))
 		v2.TxnRangesSlowPathSelectedBlockCntHistogram.Observe(float64(bhit))
@@ -2467,7 +2467,7 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 		}
 		// rowid + pk
 		bat, err := blockio.BlockRead(
-			tbl.proc.Load().Ctx, &blk, nil, columns, colTypes,
+			tbl.proc.Load().Ctx, tbl.proc.Load().GetService(), &blk, nil, columns, colTypes,
 			tbl.db.op.SnapshotTS(),
 			nil, nil, blockio.BlockReadFilter{},
 			tbl.getTxn().engine.fs, tbl.proc.Load().Mp(), tbl.proc.Load(), fileservice.Policy(0),
