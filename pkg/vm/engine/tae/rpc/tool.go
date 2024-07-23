@@ -122,7 +122,7 @@ func (c *MoInspectArg) Usage() (res string) {
 	res += "inspect [flags] [options]\n"
 
 	res += "\n"
-	res += "Use \"inspect <command> --help\" for more information about a given command.\n"
+	res += "Use \"mo-tool inspect <command> --help\" for more information about a given command.\n"
 
 	return
 }
@@ -171,7 +171,7 @@ func (c *ObjArg) Usage() (res string) {
 	res += "inspect obj [flags] [options]\n"
 
 	res += "\n"
-	res += "Use \"inspect obj <command> --help\" for more information about a given command.\n"
+	res += "Use \"mo-tool inspect obj <command> --help\" for more information about a given command.\n"
 
 	return
 }
@@ -678,7 +678,7 @@ func (c *TableArg) Usage() (res string) {
 	res += "inspect table [flags] [options]\n"
 
 	res += "\n"
-	res += "Use \"inspect table <command> --help\" for more information about a given command.\n"
+	res += "Use \"mo-tool inspect table <command> --help\" for more information about a given command.\n"
 
 	return
 }
