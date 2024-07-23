@@ -396,9 +396,12 @@ func localTimeStr(value int64) string {
 	return time.UnixMicro(value).In(time.Local).Format("2006-01-02 15:04:05.000000")
 }
 
-var bufferPool = sync.Pool{New: func() any { return make([]byte, 0, mpool.MB) }}
+var bufferPool = sync.Pool{New: func() any { return bytes.NewBuffer(make([]byte, 0, mpool.MB)) }}
 
 func getBuffer() *bytes.Buffer {
 	return bufferPool.Get().(*bytes.Buffer)
 }
-func putBuffer(b *bytes.Buffer) { bufferPool.Put(b) }
+func putBuffer(b *bytes.Buffer) {
+	b.Reset()
+	bufferPool.Put(b)
+}

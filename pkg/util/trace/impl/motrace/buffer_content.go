@@ -41,7 +41,7 @@ type ContentBuffer struct {
 	tbl *table.Table
 	mux sync.Mutex
 
-	csvWriter *db_holder.CSVWriter
+	formatter *db_holder.CSVWriter
 
 	checkWriteHook []table.CheckWriteHook
 }
@@ -71,10 +71,10 @@ func NewContentBuffer(opts ...BufferOption) *ContentBuffer {
 func (b *ContentBuffer) reset() {
 	if b.buf == nil {
 		b.buf = bytes.NewBuffer(make([]byte, 0, b.sizeThreshold))
-		if b.csvWriter == nil {
-			b.csvWriter = db_holder.NewCSVWriterWithBuffer(b.ctx, b.buf)
+		if b.formatter == nil {
+			b.formatter = db_holder.NewCSVWriterWithBuffer(b.ctx, b.buf)
 		} else {
-			b.csvWriter.ResetBuffer(b.buf)
+			b.formatter.ResetBuffer(b.buf)
 		}
 	}
 }
@@ -89,7 +89,6 @@ func (b *ContentBuffer) Add(i bp.HasName) {
 		panic("not implement interface IBuffer2SqlItem")
 	} else {
 		b.filterItemFunc(item)
-		//GenContent(b.ctx, item, b.csvWriter)
 
 		rowFields, ok := i.(table.RowField)
 		if !ok {
@@ -100,7 +99,7 @@ func (b *ContentBuffer) Add(i bp.HasName) {
 		rowFields.FillRow(b.ctx, row)
 		// fixme: support diff account diff buffer
 		// account := row.GetAccount()
-		if err := b.csvWriter.WriteRow(row); err != nil {
+		if err := b.formatter.WriteRow(row); err != nil {
 			logutil.Error("writer item failed",
 				logutil.ErrorField(err),
 				logutil.VarsField(fmt.Sprintf("%v", item)),
@@ -136,7 +135,7 @@ func (b *ContentBuffer) IsEmpty() bool {
 }
 
 func (b *ContentBuffer) isEmpty() bool {
-	b.csvWriter.Flush()
+	b.formatter.Flush()
 	return b.buf.Len() == 0
 }
 

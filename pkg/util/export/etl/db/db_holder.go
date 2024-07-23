@@ -206,6 +206,7 @@ type CSVWriter struct {
 	ctx       context.Context
 	formatter *csv.Writer
 	buf       *bytes.Buffer
+	release   func(buffer *bytes.Buffer)
 }
 
 func NewCSVWriter(ctx context.Context) *CSVWriter {
@@ -217,6 +218,7 @@ func NewCSVWriter(ctx context.Context) *CSVWriter {
 		ctx:       ctx,
 		buf:       buf,
 		formatter: writer,
+		release:   putBuffer,
 	}
 	return w
 }
@@ -228,6 +230,7 @@ func NewCSVWriterWithBuffer(ctx context.Context, buf *bytes.Buffer) *CSVWriter {
 		ctx:       ctx,
 		buf:       buf,
 		formatter: writer,
+		release:   nil,
 	}
 	return w
 }
@@ -261,11 +264,14 @@ func (w *CSVWriter) Flush() { w.formatter.Flush() }
 
 func (w *CSVWriter) Release() {
 	if w.buf != nil {
-		w.buf.Reset()
+		if w.release != nil {
+			// fix: need to release the !nil buffer
+			defer w.release(w.buf)
+		}
 		w.buf = nil
 		w.formatter = nil
 	}
-	putBuffer(w.buf)
+	w.release = nil
 }
 
 func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *table.Table) error {

@@ -34,26 +34,26 @@ type ContentWriter struct {
 	ctx context.Context
 	tbl *table.Table
 
+	// mode 1
 	buf         *bytes.Buffer
 	bufCallback func(*bytes.Buffer)
 
+	// mode 2
+	formatter Formatter
+
+	// main flow
 	sqlFlusher table.Flusher
 	csvFlusher table.Flusher
 }
 
-func NewContentWriter(ctx context.Context, tbl *table.Table, writer table.RowWriter) *ContentWriter {
-	flusher, ok := writer.(table.Flusher)
-	if !ok {
-		panic("target writer NEED implements table.Flusher")
-	}
-
+func NewContentWriter(ctx context.Context, tbl *table.Table, fileFlusher table.Flusher) *ContentWriter {
 	return &ContentWriter{
 		ctx: ctx,
 		tbl: tbl,
 		// buf dependent on SetContent to set.
 
 		sqlFlusher: NewSQLFlusher(tbl),
-		csvFlusher: NewFileContentFlusher(flusher),
+		csvFlusher: NewFileContentFlusher(fileFlusher),
 	}
 }
 
@@ -66,7 +66,12 @@ func (c *ContentWriter) SetBuffer(buf *bytes.Buffer, callback func(buffer *bytes
 // NeedBuffer implements table.BufferSettable
 func (c *ContentWriter) NeedBuffer() bool { return true }
 
-func (c *ContentWriter) WriteRow(_ *table.Row) error { return nil }
+func (c *ContentWriter) WriteRow(row *table.Row) error {
+	if c.formatter == nil {
+		c.formatter = NewContentFormatter(c.ctx, c.buf)
+	}
+	return c.formatter.WriteRow(row)
+}
 
 func (c *ContentWriter) GetContent() string {
 	if c.buf == nil {
@@ -86,6 +91,11 @@ func (c *ContentWriter) FlushAndClose() (int, error) {
 	if c.buf == nil {
 		return 0, nil
 	}
+	// mode 2
+	if c.formatter != nil {
+		c.formatter.Flush()
+	}
+	// main flow
 	n, err := c.sqlFlusher.FlushBuffer(c.buf)
 	if err != nil {
 		n, err = c.csvFlusher.FlushBuffer(c.buf)
@@ -101,6 +111,7 @@ func (c *ContentWriter) FlushAndClose() (int, error) {
 		c.bufCallback(c.buf)
 	}
 	c.buf = nil
+	c.formatter = nil
 	return n, nil
 }
 
@@ -165,4 +176,21 @@ func NewFileContentFlusher(writer table.Flusher) *FileFlusher {
 
 func (f *FileFlusher) FlushBuffer(buf *bytes.Buffer) (int, error) {
 	return f.writer.FlushBuffer(buf)
+}
+
+type Formatter interface {
+	WriteRow(*table.Row) error
+	Flush()
+}
+
+// ContentFormatter common File Format
+type ContentFormatter struct {
+	Formatter
+}
+
+func NewContentFormatter(ctx context.Context, buf *bytes.Buffer) Formatter {
+	w := db_holder.NewCSVWriterWithBuffer(ctx, buf)
+	return &ContentFormatter{
+		Formatter: w,
+	}
 }
