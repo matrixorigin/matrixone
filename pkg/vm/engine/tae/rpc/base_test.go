@@ -63,8 +63,6 @@ type txnCommand struct {
 
 func (h *mockHandle) HandleClose(ctx context.Context) error {
 	err := h.Handle.HandleClose(ctx)
-	blockio.Stop()
-	blockio.ResetPipeline()
 	return err
 }
 
@@ -152,7 +150,7 @@ func initDB(ctx context.Context, t *testing.T, opts *options.Options) *db.DB {
 }
 
 func mockTAEHandle(ctx context.Context, t *testing.T, opts *options.Options) *mockHandle {
-	blockio.Start()
+	blockio.Start("")
 	tae := initDB(ctx, t, opts)
 	mh := &mockHandle{
 		m: mpool.MustNewZero(),

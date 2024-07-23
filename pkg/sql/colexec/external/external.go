@@ -1153,7 +1153,7 @@ func getZonemapBatch(ctx context.Context, param *ExternalParam, proc *process.Pr
 
 func scanZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
 	var err error
-	param.Filter.blockReader, err = blockio.NewFileReader(param.Extern.FileService, param.Fileparam.Filepath)
+	param.Filter.blockReader, err = blockio.NewFileReader(proc.GetService(), param.Extern.FileService, param.Fileparam.Filepath)
 	if err != nil {
 		return nil, err
 	}
