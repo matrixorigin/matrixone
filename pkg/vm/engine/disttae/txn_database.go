@@ -20,20 +20,18 @@ import (
 	"strconv"
 	"strings"
 
-	"go.uber.org/zap"
-
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	txn2 "github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/shardservice"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	txn2 "github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/shardservice"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 var _ engine.Database = new(txnDatabase)
@@ -224,7 +222,7 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		db,
 		item,
 		p,
-		shardservice.GetService(),
+		shardservice.GetService(p.GetService()),
 	)
 	if err != nil {
 		return nil, err

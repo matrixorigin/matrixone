@@ -33,58 +33,67 @@ import (
 )
 
 func TestBackgroundTickAndHeartbeat(t *testing.T) {
-	defer leaktest.AfterTest(t)()
-	cfg := DefaultConfig()
-	cfg.UUID = uuid.New().String()
-	cfg.FS = vfs.NewStrictMem()
-	cfg.DeploymentID = 1
-	cfg.RTTMillisecond = 5
-	cfg.DataDir = "data-1"
-	cfg.LogServicePort = 9002
-	cfg.RaftPort = 9000
-	cfg.GossipPort = 9001
-	// below is an unreachable address intentionally set
-	cfg.GossipSeedAddresses = []string{"127.0.0.1:9010"}
-	cfg.HeartbeatInterval.Duration = 5 * time.Millisecond
-	cfg.HAKeeperTickInterval.Duration = 5 * time.Millisecond
-	cfg.HAKeeperClientConfig.ServiceAddresses = []string{"127.0.0.1:9002"}
-	service, err := NewService(cfg,
-		newFS(),
-		nil,
-		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
-			return true
-		}),
-	)
-	require.NoError(t, err)
-	defer func() {
-		assert.NoError(t, service.Close())
-	}()
-	peers := make(map[uint64]dragonboat.Target)
-	peers[1] = service.ID()
-	require.NoError(t, service.store.startHAKeeperReplica(1, peers, false))
+	runtime.RunTest(
+		"",
+		func(rt runtime.Runtime) {
+			defer leaktest.AfterTest(t)()
+			cfg := DefaultConfig()
+			cfg.UUID = uuid.New().String()
+			cfg.FS = vfs.NewStrictMem()
+			cfg.DeploymentID = 1
+			cfg.RTTMillisecond = 5
+			cfg.DataDir = "data-1"
+			cfg.LogServicePort = 9002
+			cfg.RaftPort = 9000
+			cfg.GossipPort = 9001
+			// below is an unreachable address intentionally set
+			cfg.GossipSeedAddresses = []string{"127.0.0.1:9010"}
+			cfg.HeartbeatInterval.Duration = 5 * time.Millisecond
+			cfg.HAKeeperTickInterval.Duration = 5 * time.Millisecond
+			cfg.HAKeeperClientConfig.ServiceAddresses = []string{"127.0.0.1:9002"}
 
-	for i := 0; i < 500; i++ {
-		done := true
-		state, err := service.store.getCheckerState()
-		require.NoError(t, err)
-		if state.Tick < 10 {
-			done = false
-		}
-		si, ok := state.LogState.Stores[service.ID()]
-		if !ok {
-			done = false
-		} else {
-			if si.Tick < 10 {
-				done = false
+			runtime.SetupServiceBasedRuntime(cfg.UUID, rt)
+
+			service, err := NewService(
+				cfg,
+				newFS(),
+				nil,
+				WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
+					return true
+				}),
+			)
+			require.NoError(t, err)
+			defer func() {
+				assert.NoError(t, service.Close())
+			}()
+			peers := make(map[uint64]dragonboat.Target)
+			peers[1] = service.ID()
+			require.NoError(t, service.store.startHAKeeperReplica(1, peers, false))
+
+			for i := 0; i < 500; i++ {
+				done := true
+				state, err := service.store.getCheckerState()
+				require.NoError(t, err)
+				if state.Tick < 10 {
+					done = false
+				}
+				si, ok := state.LogState.Stores[service.ID()]
+				if !ok {
+					done = false
+				} else {
+					if si.Tick < 10 {
+						done = false
+					}
+				}
+				if done {
+					return
+				} else {
+					time.Sleep(5 * time.Millisecond)
+				}
 			}
-		}
-		if done {
-			return
-		} else {
-			time.Sleep(5 * time.Millisecond)
-		}
-	}
-	t.Fatalf("failed to tick/heartbeat")
+			t.Fatalf("failed to tick/heartbeat")
+		},
+	)
 }
 
 func TestHandleKillZombie(t *testing.T) {

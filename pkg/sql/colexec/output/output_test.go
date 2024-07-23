@@ -50,7 +50,7 @@ func sqlOutput(_ *batch.Batch) error {
 func init() {
 	tcs = []outputTestCase{
 		{
-			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_int8.ToType(),
 			},

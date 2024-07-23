@@ -22,11 +22,15 @@ import "unsafe"
 import "C"
 
 type CAllocator struct {
-	deallocatorPool *ClosureDeallocatorPool[cDeallocatorArgs]
+	deallocatorPool *ClosureDeallocatorPool[cDeallocatorArgs, *cDeallocatorArgs]
 }
 
 type cDeallocatorArgs struct {
 	ptr unsafe.Pointer
+}
+
+func (cDeallocatorArgs) As(Trait) bool {
+	return false
 }
 
 func NewCAllocator() *CAllocator {
