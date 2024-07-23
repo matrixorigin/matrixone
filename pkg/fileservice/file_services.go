@@ -187,3 +187,12 @@ func maxCost(a, b *CostAttr) *CostAttr {
 	}
 	return attr
 }
+
+var _ WrapFileService = new(FileServices)
+
+func (f *FileServices) Unwrap() (ret []FileService) {
+	for _, fs := range f.mappings {
+		ret = append(ret, fs)
+	}
+	return
+}
