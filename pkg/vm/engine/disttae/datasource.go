@@ -236,7 +236,7 @@ func (tomV1 *tombstoneDataV1) ApplyTombstones(
 ) ([]int64, error) {
 
 	rowIdsToOffsets := func(rowIds []types.Rowid) (ret []int64) {
-		for _, row := range rows {
+		for _, row := range rowIds {
 			_, offset := row.Decode()
 			ret = append(ret, int64(offset))
 		}

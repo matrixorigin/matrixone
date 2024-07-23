@@ -790,6 +790,7 @@ func (r *readerInProgress) Read(
 			rowIDVec := bat.Vecs[r.columns.rowIdColIdx]
 			rowIDVec.Free(mp)
 			bat.Vecs = append(bat.Vecs[:r.columns.rowIdColIdx], bat.Vecs[r.columns.rowIdColIdx+1:]...)
+			bat.Attrs = bat.Attrs[1:]
 		}
 
 		if r.tableDef.Name == "bugt" {
