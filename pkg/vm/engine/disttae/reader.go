@@ -17,7 +17,6 @@ package disttae
 import (
 	"context"
 	"sort"
-	"strconv"
 	"time"
 
 	"go.uber.org/zap"
@@ -794,19 +793,19 @@ func (r *readerInProgress) Read(
 			bat.Vecs = append(bat.Vecs[:r.columns.rowIdColIdx], bat.Vecs[r.columns.rowIdColIdx+1:]...)
 			bat.Attrs = bat.Attrs[1:]
 		}
-
-		if r.tableDef.Name == "bugt" {
-			logutil.Info("xxxx Reader.Read",
-				zap.String("txn", r.proc.GetTxnOperator().Txn().DebugString()),
-				zap.String("table", r.tableDef.Name),
-				zap.Int("status", int(status)),
-				zap.String("read batch rowCnt", func() string {
-					if bat == nil {
-						return "nil"
-					}
-					return strconv.Itoa(bat.RowCount())
-				}()))
-		}
+		status++
+		//if r.tableDef.Name == "bugt" {
+		//	logutil.Info("xxxx Reader.Read",
+		//		zap.String("txn", r.proc.GetTxnOperator().Txn().DebugString()),
+		//		zap.String("table", r.tableDef.Name),
+		//		zap.Int("status", int(status)),
+		//		zap.String("read batch rowCnt", func() string {
+		//			if bat == nil {
+		//				return "nil"
+		//			}
+		//			return strconv.Itoa(bat.RowCount())
+		//		}()))
+		//}
 
 		v2.TxnBlockReaderDurationHistogram.Observe(time.Since(start).Seconds())
 	}()

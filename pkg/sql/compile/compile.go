@@ -494,7 +494,7 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 		c.proc.SetPrepareExprList(nil)
 	}()
 
-	fmt.Printf("%x xxxx run sql: %s\n", txnOp.Txn().ID, sql)
+	//fmt.Printf("%x xxxx run sql: %s\n", txnOp.Txn().ID, sql)
 
 	var writeOffset uint64
 
@@ -4336,8 +4336,8 @@ func (c *Compile) generateNodesInProgress(n *plan.Node) (engine.Nodes, []any, []
 
 	// if len(ranges) == 0 indicates that it's a temporary table.
 	if relData.BlkCnt() == 0 && n.TableDef.TableType != catalog.SystemOrdinaryRel {
-		logutil.Infof("xxxx temporary table %s.%s has no data, txn:%s",
-			n.ObjRef.SchemaName, n.TableDef.Name, txnOp.Txn().DebugString())
+		//logutil.Infof("xxxx temporary table %s.%s has no data, txn:%s",
+		//	n.ObjRef.SchemaName, n.TableDef.Name, txnOp.Txn().DebugString())
 		nodes = make(engine.Nodes, len(c.cnList))
 		for i, node := range c.cnList {
 			nodes[i] = engine.Node{
