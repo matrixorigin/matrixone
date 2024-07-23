@@ -24,7 +24,8 @@ import (
 func main() {
 	var rootCmd = &cobra.Command{
 		Use:   "mo-tool",
-		Short: "mo tools",
+		Short: "Mo tool",
+		Long:  "Mo tool is a multifunctional development tool",
 	}
 
 	rootCmd.AddCommand(debug.PrepareCommand())

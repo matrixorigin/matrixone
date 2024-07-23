@@ -28,6 +28,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -83,11 +84,13 @@ type MoInspectArg struct {
 
 func (c *MoInspectArg) PrepareCommand() *cobra.Command {
 	moInspectCmd := &cobra.Command{
-		Use:   "mo_inspect",
-		Short: "mo_inspect is a visualization analysis tool",
-		Long:  "mo_inspect is a visualization analysis tool",
+		Use:   "inspect",
+		Short: "Mo inspect",
+		Long:  "Mo inspect is a visualization analysis tool",
 		Run:   RunFactory(c),
 	}
+
+	moInspectCmd.SetUsageTemplate(c.Usage())
 
 	obj := ObjArg{}
 	moInspectCmd.AddCommand(obj.PrepareCommand())
@@ -106,6 +109,24 @@ func (c *MoInspectArg) String() string {
 	return "mo_inspect"
 }
 
+func (c *MoInspectArg) Usage() (res string) {
+	res += "Offline Commands:\n"
+	res += fmt.Sprintf("  %-8v show object information\n", "obj")
+
+	res += "\n"
+	res += "Online Commands:\n"
+	res += fmt.Sprintf("  %-8v show table information\n", "table")
+
+	res += "\n"
+	res += "Usage:\n"
+	res += "inspect [flags] [options]\n"
+
+	res += "\n"
+	res += "Use \"inspect <command> --help\" for more information about a given command.\n"
+
+	return
+}
+
 func (c *MoInspectArg) Run() (err error) {
 	return
 }
@@ -117,9 +138,11 @@ func (c *ObjArg) PrepareCommand() *cobra.Command {
 	objCmd := &cobra.Command{
 		Use:   "obj",
 		Short: "obj",
-		Long:  "mo_inspect is a visualization analysis tool",
+		Long:  "Display information about a given object",
 		Run:   RunFactory(c),
 	}
+
+	objCmd.SetUsageTemplate(c.Usage())
 
 	stat := moObjStatArg{}
 	objCmd.AddCommand(stat.PrepareCommand())
@@ -136,6 +159,21 @@ func (c *ObjArg) FromCommand(cmd *cobra.Command) (err error) {
 
 func (c *ObjArg) String() string {
 	return "obj"
+}
+
+func (c *ObjArg) Usage() (res string) {
+	res += "Available Commands:\n"
+	res += fmt.Sprintf("  %-5v show object information\n", "stat")
+	res += fmt.Sprintf("  %-5v get data from object\n", "get")
+
+	res += "\n"
+	res += "Usage:\n"
+	res += "inspect obj [flags] [options]\n"
+
+	res += "\n"
+	res += "Use \"inspect obj <command> --help\" for more information about a given command.\n"
+
+	return
 }
 
 func (c *ObjArg) Run() (err error) {
@@ -158,8 +196,11 @@ func (c *moObjStatArg) PrepareCommand() *cobra.Command {
 	var statCmd = &cobra.Command{
 		Use:   "stat",
 		Short: "obj stat",
+		Long:  "Display status about a given object",
 		Run:   RunFactory(c),
 	}
+
+	statCmd.SetUsageTemplate(c.Usage())
 
 	statCmd.Flags().IntP("id", "i", invalidId, "id")
 	statCmd.Flags().IntP("level", "l", brief, "level")
@@ -187,7 +228,33 @@ func (c *moObjStatArg) String() string {
 	return fmt.Sprintf("\n%v", c.res)
 }
 
+func (c *moObjStatArg) Usage() (res string) {
+	res += "Examples:\n"
+	res += "  # Display information about object\n"
+	res += "  inspect obj stat -n /your/path/obj-name\n"
+	res += "\n"
+	res += "  # Display information about object block idx with level 1\n"
+	res += "  inspect obj stat -n /your/path/obj-name -i idx -l 1\n"
+	res += "\n"
+	res += "  # Display information about object with local fs\n"
+	res += "  inspect obj stat -n /your/path/obj-name --local\n"
+
+	res += "\n"
+	res += "Options:\n"
+	res += "  -n, --name='':\n"
+	res += "    The path to the object file\n"
+	res += "  -i, --idx=invalidId:\n"
+	res += "    The sequence number of the block in the object\n"
+	res += "  -l, --level=0:\n"
+	res += "    The level of detail of the information, should be 0(brief), 1(standard), 2(detailed)\n"
+	res += "  --local=false:\n"
+	res += "    Whether it is a local file, if true, use local fs to read file\n"
+
+	return
+}
+
 func (c *moObjStatArg) Run() (err error) {
+	ctx := context.Background()
 	if err = c.checkInputs(); err != nil {
 		return moerr.NewInfoNoCtx(fmt.Sprintf("invalid inputs: %v\n", err))
 	}
@@ -196,16 +263,16 @@ func (c *moObjStatArg) Run() (err error) {
 		c.fs = c.ctx.db.Runtime.Fs.Service
 	}
 
-	if err = c.InitReader(c.name); err != nil {
+	if err = c.InitReader(ctx, c.name); err != nil {
 		return moerr.NewInfoNoCtx(fmt.Sprintf("failed to init reader %v", err))
 	}
 
-	c.res, err = c.GetStat()
+	c.res, err = c.GetStat(ctx)
 
 	return
 }
 
-func (c *moObjStatArg) initFs(local bool) (err error) {
+func (c *moObjStatArg) initFs(ctx context.Context, local bool) (err error) {
 	if local {
 		cfg := fileservice.Config{
 			Name:    defines.LocalFileServiceName,
@@ -213,7 +280,7 @@ func (c *moObjStatArg) initFs(local bool) (err error) {
 			DataDir: c.dir,
 			Cache:   fileservice.DisabledCacheConfig,
 		}
-		c.fs, err = fileservice.NewFileService(context.Background(), cfg, nil)
+		c.fs, err = fileservice.NewFileService(ctx, cfg, nil)
 		return
 	}
 
@@ -222,13 +289,13 @@ func (c *moObjStatArg) initFs(local bool) (err error) {
 		Endpoint: "DISK",
 		Bucket:   c.dir,
 	}
-	c.fs, err = fileservice.NewS3FS(context.Background(), arg, fileservice.DisabledCacheConfig, nil, false, true)
+	c.fs, err = fileservice.NewS3FS(ctx, arg, fileservice.DisabledCacheConfig, nil, false, true)
 	return
 }
 
-func (c *moObjStatArg) InitReader(name string) (err error) {
+func (c *moObjStatArg) InitReader(ctx context.Context, name string) (err error) {
 	if c.fs == nil {
-		err = c.initFs(c.local)
+		err = c.initFs(ctx, c.local)
 		if err != nil {
 			return err
 		}
@@ -251,14 +318,14 @@ func (c *moObjStatArg) checkInputs() error {
 	return nil
 }
 
-func (c *moObjStatArg) GetStat() (res string, err error) {
+func (c *moObjStatArg) GetStat(ctx context.Context) (res string, err error) {
 	var m *mpool.MPool
 	var meta objectio.ObjectMeta
 	if m, err = mpool.NewMPool("data", 0, mpool.NoFixed); err != nil {
 		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to init mpool, err: %v", err))
 		return
 	}
-	if meta, err = c.reader.ReadAllMeta(context.Background(), m); err != nil {
+	if meta, err = c.reader.ReadAllMeta(ctx, m); err != nil {
 		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to read meta, err: %v", err))
 		return
 	}
@@ -379,8 +446,12 @@ func (c *objGetArg) PrepareCommand() *cobra.Command {
 	var getCmd = &cobra.Command{
 		Use:   "get",
 		Short: "obj get",
+		Long:  "Display data about a given object",
 		Run:   RunFactory(c),
 	}
+
+	getCmd.SetUsageTemplate(c.Usage())
+
 	getCmd.Flags().IntP("id", "i", invalidId, "id")
 	getCmd.Flags().StringP("name", "n", "", "name")
 	getCmd.Flags().StringP("col", "c", "", "col")
@@ -409,7 +480,32 @@ func (c *objGetArg) String() string {
 	return fmt.Sprintf("\n%v", c.res)
 }
 
+func (c *objGetArg) Usage() (res string) {
+	res += "Examples:\n"
+	res += "  # Display the data of the idxth block of this object\n"
+	res += "  inspect obj get -n /your/path/obj-name -i idx\n"
+	res += "\n"
+	res += "  # Display the data of the specified row and column of the idxth block of this object\n"
+	res += "  inspect obj get -n /your/path/obj-name -i idx -c \"1,2,4\" -r\"0,50\"\n"
+
+	res += "\n"
+	res += "Options:\n"
+	res += "  -n, --name='':\n"
+	res += "    The path to the object file\n"
+	res += "  -i, --idx=invalidId:\n"
+	res += "    The sequence number of the block in the object\n"
+	res += "  -c, --col='':\n"
+	res += "    Specify the columns to display, should be \"0,2,19\"\n"
+	res += "  -r, --row='':\n"
+	res += "    Specify the rows to display, should be \"left,right\", means [left,right)\n"
+	res += "  --local=false:\n"
+	res += "    Whether it is a local file, if true, use local fs to read file\n"
+
+	return
+}
+
 func (c *objGetArg) Run() (err error) {
+	ctx := context.Background()
 	if err = c.checkInputs(); err != nil {
 		return moerr.NewInfoNoCtx(fmt.Sprintf("invalid inputs: %v\n", err))
 	}
@@ -418,16 +514,16 @@ func (c *objGetArg) Run() (err error) {
 		c.fs = c.ctx.db.Runtime.Fs.Service
 	}
 
-	if err = c.InitReader(c.name); err != nil {
+	if err = c.InitReader(ctx, c.name); err != nil {
 		return moerr.NewInfoNoCtx(fmt.Sprintf("failed to init reader: %v", err))
 	}
 
-	c.res, err = c.GetData()
+	c.res, err = c.GetData(ctx)
 
 	return
 }
 
-func (c *objGetArg) initFs(local bool) (err error) {
+func (c *objGetArg) initFs(ctx context.Context, local bool) (err error) {
 	if local {
 		cfg := fileservice.Config{
 			Name:    defines.LocalFileServiceName,
@@ -435,7 +531,7 @@ func (c *objGetArg) initFs(local bool) (err error) {
 			DataDir: c.dir,
 			Cache:   fileservice.DisabledCacheConfig,
 		}
-		c.fs, err = fileservice.NewFileService(context.Background(), cfg, nil)
+		c.fs, err = fileservice.NewFileService(ctx, cfg, nil)
 		return
 	}
 
@@ -444,13 +540,13 @@ func (c *objGetArg) initFs(local bool) (err error) {
 		Endpoint: "DISK",
 		Bucket:   c.dir,
 	}
-	c.fs, err = fileservice.NewS3FS(context.Background(), arg, fileservice.DisabledCacheConfig, nil, false, true)
+	c.fs, err = fileservice.NewS3FS(ctx, arg, fileservice.DisabledCacheConfig, nil, false, true)
 	return
 }
 
-func (c *objGetArg) InitReader(name string) (err error) {
+func (c *objGetArg) InitReader(ctx context.Context, name string) (err error) {
 	if c.fs == nil {
-		err = c.initFs(c.local)
+		err = c.initFs(ctx, c.local)
 		if err != nil {
 			return err
 		}
@@ -478,14 +574,16 @@ func (c *objGetArg) checkInputs() error {
 	return nil
 }
 
-func (c *objGetArg) GetData() (res string, err error) {
+func (c *objGetArg) GetData(ctx context.Context) (res string, err error) {
 	var m *mpool.MPool
 	var meta objectio.ObjectMeta
 	if m, err = mpool.NewMPool("data", 0, mpool.NoFixed); err != nil {
 		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to init mpool, err: %v", err))
 		return
 	}
-	if meta, err = c.reader.ReadAllMeta(context.Background(), m); err != nil {
+	ctx1, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if meta, err = c.reader.ReadAllMeta(ctx1, m); err != nil {
 		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to read meta, err: %v", err))
 		return
 	}
@@ -518,7 +616,9 @@ func (c *objGetArg) GetData() (res string, err error) {
 		typs = append(typs, tp)
 	}
 
-	v, _ := c.reader.ReadOneBlock(context.Background(), idxs, typs, uint16(c.id), m)
+	ctx2, cancel2 := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel2()
+	v, _ := c.reader.ReadOneBlock(ctx2, idxs, typs, uint16(c.id), m)
 	for i, entry := range v.Entries {
 		obj, _ := objectio.Decode(entry.CachedData.Bytes())
 		vec := obj.(*vector.Vector)
@@ -549,8 +649,11 @@ func (c *TableArg) PrepareCommand() *cobra.Command {
 	tableCmd := &cobra.Command{
 		Use:   "table",
 		Short: "table",
+		Long:  "Display information about a given object",
 		Run:   RunFactory(c),
 	}
+
+	tableCmd.SetUsageTemplate(c.Usage())
 
 	stat := tableStatArg{}
 	tableCmd.AddCommand(stat.PrepareCommand())
@@ -566,6 +669,20 @@ func (c *TableArg) String() string {
 	return "table"
 }
 
+func (c *TableArg) Usage() (res string) {
+	res += "Available Commands:\n"
+	res += fmt.Sprintf("  %-5v show table information\n", "stat")
+
+	res += "\n"
+	res += "Usage:\n"
+	res += "inspect table [flags] [options]\n"
+
+	res += "\n"
+	res += "Use \"inspect table <command> --help\" for more information about a given command.\n"
+
+	return
+}
+
 func (c *TableArg) Run() error {
 	return nil
 }
@@ -577,15 +694,18 @@ type tableStatArg struct {
 }
 
 func (c *tableStatArg) PrepareCommand() *cobra.Command {
-	moInspectCmd := &cobra.Command{
+	statCmd := &cobra.Command{
 		Use:   "stat",
 		Short: "table stat",
+		Long:  "Display status about a given table",
 		Run:   RunFactory(c),
 	}
 
-	moInspectCmd.Flags().IntP("tid", "t", 0, "set table id")
-	moInspectCmd.Flags().IntP("did", "d", 0, "set database id")
-	return moInspectCmd
+	statCmd.SetUsageTemplate(c.Usage())
+
+	statCmd.Flags().IntP("tid", "t", 0, "set table id")
+	statCmd.Flags().IntP("did", "d", 0, "set database id")
+	return statCmd
 }
 
 func (c *tableStatArg) FromCommand(cmd *cobra.Command) (err error) {
@@ -599,6 +719,21 @@ func (c *tableStatArg) FromCommand(cmd *cobra.Command) (err error) {
 
 func (c *tableStatArg) String() string {
 	return fmt.Sprintf("table %v has %v objects, compacted size %v, original size %v", c.name, c.cnt, formatBytes(c.com), formatBytes(c.ori))
+}
+
+func (c *tableStatArg) Usage() (res string) {
+	res += "Examples:\n"
+	res += "  # Display the information of table\n"
+	res += "  inspect table stat -d did -t tid\n"
+
+	res += "\n"
+	res += "Options:\n"
+	res += "  -d, --did=invalidId:\n"
+	res += "    The id of databases\n"
+	res += "  -t, --tid=invalidId:\n"
+	res += "    The id of table\n"
+
+	return
 }
 
 func (c *tableStatArg) Run() (err error) {

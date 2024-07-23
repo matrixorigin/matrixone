@@ -20,16 +20,7 @@ import (
 )
 
 func PrepareCommand() *cobra.Command {
-	var rootCmd = &cobra.Command{
-		Use:   "mo-inspect",
-		Short: "A tool provides object visualization",
-	}
+	inspect := rpc.MoInspectArg{}
 
-	obj := rpc.ObjArg{}
-	rootCmd.AddCommand(obj.PrepareCommand())
-
-	table := rpc.TableArg{}
-	rootCmd.AddCommand(table.PrepareCommand())
-
-	return rootCmd
+	return inspect.PrepareCommand()
 }

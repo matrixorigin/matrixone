@@ -20,7 +20,7 @@ import (
 
 func PrepareCommand() *cobra.Command {
 	rootCmd := &cobra.Command{
-		Use:        "mo-debug",
+		Use:        "debug",
 		Short:      "MO debug tool",
 		Long:       "MO debug tool. Helps to analyze MO problems like Goroutine, Txn, etc.",
 		SuggestFor: []string{"mo-tool"},
