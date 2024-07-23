@@ -203,7 +203,7 @@ func (b *Blockid) String() string {
 
 func (b *Blockid) ObjectNameString() string {
 	fileNum, _ := b.Offsets()
-	return fmt.Sprintf("%v_%05d", b.Segment().ToString(), fileNum)
+	return fmt.Sprintf("%v_%05d", b.Segment().String(), fileNum)
 }
 
 func (b *Blockid) ShortString() string {
@@ -239,7 +239,7 @@ func (o *Objectid) Segment() *Segmentid {
 	return (*Uuid)(unsafe.Pointer(&o[0]))
 }
 func (o *Objectid) String() string {
-	return fmt.Sprintf("%v_%d", o.Segment().ToString(), o.Offset())
+	return fmt.Sprintf("%v_%d", o.Segment().String(), o.Offset())
 }
 func (o *Objectid) ShortStringEx() string {
 	var shortuuid [12]byte

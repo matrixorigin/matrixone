@@ -503,7 +503,7 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 				val := vector.GetFixedAt[types.Decimal128](vec, i).Format(scale)
 				writeByte = appendBytes(writeByte, []byte(val), symbol[j], closeby, flag[j])
 			case types.T_uuid:
-				val := vector.GetFixedAt[types.Uuid](vec, i).ToString()
+				val := vector.GetFixedAt[types.Uuid](vec, i).String()
 				writeByte = appendBytes(writeByte, []byte(val), symbol[j], closeby, flag[j])
 			case types.T_Rowid:
 				val := vector.GetFixedAt[types.Rowid](vec, i)
