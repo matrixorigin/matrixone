@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
 type state int
@@ -22,7 +23,7 @@ type cluster struct {
 
 	state    state
 	files    []string
-	services []ServiceOperator
+	services []*operator
 
 	options struct {
 		dataPath  string
@@ -37,29 +38,12 @@ type cluster struct {
 	}
 }
 
-func NewSingleCN(
-	opts ...Option,
-) (Cluster, error) {
-	return NewMultiCN(1, opts...)
-}
-
-func NewMultiCN(
-	cn int,
-	opts ...Option,
-) (Cluster, error) {
-	opts = append(
-		opts,
-		func(c *cluster) {
-			c.options.cn = cn
-		},
-	)
-	return NewCluster(opts...)
-}
-
 func NewCluster(
 	opts ...Option,
 ) (Cluster, error) {
-	c := &cluster{}
+	c := &cluster{
+		state: stopped,
+	}
 	for _, opt := range opts {
 		opt(c)
 	}
@@ -79,11 +63,38 @@ func (c *cluster) Start() error {
 		return moerr.NewInvalidStateNoCtx("embed mo cluster already started")
 	}
 
+	var wg sync.WaitGroup
+	errC := make(chan error, 1)
+	defer close(errC)
 	for _, s := range c.services {
-		if err := s.Start(); err != nil {
-			return err
+		if s.serviceType != metadata.ServiceType_CN {
+			if err := s.Start(); err != nil {
+				return err
+			}
+			continue
 		}
+
+		wg.Add(1)
+		go func(s *operator) {
+			defer wg.Done()
+			if err := s.Start(); err != nil {
+				select {
+				case errC <- err:
+					return
+				default:
+				}
+				return
+			}
+		}(s)
 	}
+
+	wg.Wait()
+	select {
+	case err := <-errC:
+		return err
+	default:
+	}
+
 	c.state = started
 	return nil
 }
@@ -104,15 +115,35 @@ func (c *cluster) Close() error {
 func (c *cluster) GetService(
 	sid string,
 ) (ServiceOperator, error) {
+	var v ServiceOperator
+	c.ForeachServices(
+		func(s ServiceOperator) bool {
+			if s.ServiceID() == sid {
+				v = s
+				return false
+			}
+			return true
+		},
+	)
+
+	if v == nil {
+		return nil, moerr.NewInvalidStateNoCtx("service not found")
+	}
+
+	return v, nil
+}
+
+func (c *cluster) ForeachServices(
+	fn func(ServiceOperator) bool,
+) {
 	c.RLock()
 	defer c.RUnlock()
 
 	for _, s := range c.services {
-		if s.ServiceID() == sid {
-			return s, nil
+		if !fn(s) {
+			return
 		}
 	}
-	return nil, moerr.NewInvalidStateNoCtx("service not found")
 }
 
 func (c *cluster) adjust() {

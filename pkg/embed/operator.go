@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
@@ -23,15 +24,41 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
 	"github.com/matrixorigin/matrixone/pkg/util/status"
 	"go.uber.org/zap"
 )
 
+type operator struct {
+	sync.RWMutex
+
+	sid         string
+	cfg         ServiceConfig
+	index       int
+	serviceType metadata.ServiceType
+	state       state
+
+	reset struct {
+		svc        service
+		shutdownC  chan struct{}
+		stopper    *stopper.Stopper
+		rt         runtime.Runtime
+		gossipNode *gossip.Node
+		clock      clock.Clock
+		logger     *zap.Logger
+	}
+}
+
+type service interface {
+	Start() error
+	Close() error
+}
+
 func newService(
 	file string,
 	index int,
-) (ServiceOperator, error) {
+) (*operator, error) {
 	cfg := newServiceConfig()
 	if err := parseConfigFromFile(file, &cfg); err != nil {
 		return nil, err
@@ -48,6 +75,10 @@ func newService(
 		serviceType: cfg.mustGetServiceType(),
 	}
 	return op, nil
+}
+
+func (op *operator) Index() int {
+	return op.index
 }
 
 func (op *operator) ServiceID() string {
@@ -97,17 +128,14 @@ func (op *operator) Start() error {
 
 	// start up system module to do some calculation.
 	system.Run(op.reset.stopper)
-	waitShutdown := false
 
 	switch op.serviceType {
 	case metadata.ServiceType_CN:
 		err = op.startCNServiceLocked(fs)
 	case metadata.ServiceType_TN:
 		err = op.startTNServiceLocked(fs)
-		waitShutdown = true
 	case metadata.ServiceType_LOG:
 		err = op.startLogServiceLocked(fs)
-		waitShutdown = true
 	case metadata.ServiceType_PROXY:
 		err = op.startProxyServiceLocked()
 	case metadata.ServiceType_PYTHON_UDF:
@@ -120,28 +148,17 @@ func (op *operator) Start() error {
 		return err
 	}
 
-	if waitShutdown {
-		go func(c chan struct{}) {
-			select {
-			case <-c:
-				_ = op.Close()
-			}
-		}(op.reset.shutdownC)
-		op.reset.stopper.RunTask(
-			func(c chan struct{}) func(ctx context.Context) {
-				return func(ctx context.Context) {
-					select {
-					case <-ctx.Done():
-					case <-c:
-
-					}
-				}
-			}(op.reset.shutdownC),
-		)
-	}
-
 	op.state = started
 	return nil
+}
+
+func (op *operator) Adjust(
+	fn func(*ServiceConfig),
+) {
+	op.Lock()
+	defer op.Unlock()
+
+	fn(&op.cfg)
 }
 
 func (op *operator) startLogServiceLocked(
