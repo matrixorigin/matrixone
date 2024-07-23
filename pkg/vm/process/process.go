@@ -254,6 +254,10 @@ func (proc *Process) GetAnalyze(idx, parallelIdx int, parallelMajor bool) Analyz
 	return &operatorAnalyzer{analInfo: proc.Base.AnalInfos[idx], wait: 0, parallelIdx: parallelIdx, parallelMajor: parallelMajor}
 }
 
+func (proc *Process) GetOutputAnalyze(outputAlyInfo *AnalyzeInfo, parallelIdx int, parallelMajor bool) Analyze {
+	return &operatorAnalyzer{analInfo: outputAlyInfo, wait: 0, parallelIdx: parallelIdx, parallelMajor: parallelMajor}
+}
+
 func (proc *Process) AllocVectorOfRows(typ types.Type, nele int, nsp *nulls.Nulls) (*vector.Vector, error) {
 	vec := proc.GetVector(typ)
 	err := vec.PreExtend(nele, proc.Mp())

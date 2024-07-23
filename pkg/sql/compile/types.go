@@ -205,9 +205,10 @@ type anaylze struct {
 	// curNodeIdx is the current Node index when compilePlanScope
 	curNodeIdx int
 	// isFirst is the first opeator in pipeline for plan Node
-	isFirst   bool
-	qry       *plan.Query
-	analInfos []*process.AnalyzeInfo
+	isFirst    bool
+	qry        *plan.Query
+	analInfos  []*process.AnalyzeInfo
+	outputInfo *process.AnalyzeInfo
 }
 
 func (a *anaylze) S3IOInputCount(idx int, count int64) {
@@ -239,6 +240,7 @@ func (a *anaylze) release() {
 	for i := range a.analInfos {
 		reuse.Free[process.AnalyzeInfo](a.analInfos[i], nil)
 	}
+	reuse.Free[process.AnalyzeInfo](a.outputInfo, nil)
 	reuse.Free[anaylze](a, nil)
 }
 

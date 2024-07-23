@@ -30,6 +30,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/panjf2000/ants/v2"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -88,8 +91,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/panjf2000/ants/v2"
-	"go.uber.org/zap"
 )
 
 // Note: Now the cost going from stat is actually the number of rows, so we can only estimate a number for the size of each row.
@@ -505,6 +506,13 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	txnTrace.GetService(c.proc.GetService()).TxnStatementStart(txnOp, sql, seq)
 	defer func() {
 		stats.ExecutionEnd()
+		if strings.Contains(c.sql, "real_time_position") {
+			fmt.Println("----------------------1------------------------")
+		}
+
+		if _, ok := c.pn.Plan.(*plan.Plan_Query); ok {
+			stats.SetOutputTimeConsumption(time.Duration(c.anal.outputInfo.TimeConsumed))
+		}
 
 		cost := time.Since(start)
 		row := 0
@@ -548,6 +556,13 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	c.proc.Ctx, span = trace.Start(c.proc.Ctx, "Compile.Run", trace.WithKind(trace.SpanKindStatement))
 	_, task := gotrace.NewTask(context.TODO(), "pipeline.Run")
 	defer func() {
+		if strings.Contains(c.sql, "real_time_position") {
+			fmt.Println("----------------------2------------------------")
+		}
+
+		if _, ok := c.pn.Plan.(*plan.Plan_Query); ok {
+			stats.SetOutputTimeConsumption(time.Duration(c.anal.outputInfo.TimeConsumed))
+		}
 		releaseRunC()
 
 		task.End()
@@ -1156,10 +1171,12 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) (*Scope
 		}
 		updateScopesLastFlag([]*Scope{rs})
 		c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curNodeIdx)
-		rs.setRootOperator(
-			output.NewArgument().
-				WithFunc(c.fill),
-		)
+
+		outputArg := output.NewArgument()
+		outputArg.WithFunc(c.fill)
+		outputArg.OutputAlyInfo = c.anal.outputInfo
+		rs.setRootOperator(outputArg)
+
 		return rs, nil
 	}
 }
@@ -3887,6 +3904,11 @@ func (c *Compile) initAnalyze(qry *plan.Query) {
 	c.anal = newAnaylze()
 	c.anal.qry = qry
 	c.anal.analInfos = anals
+
+	outputAnalyzeInfo := reuse.Alloc[process.AnalyzeInfo](nil)
+	outputAnalyzeInfo.NodeId = -1
+	c.anal.outputInfo = outputAnalyzeInfo
+
 	c.anal.curNodeIdx = int(qry.Steps[0])
 	for _, node := range c.anal.qry.Nodes {
 		if node.AnalyzeInfo == nil {

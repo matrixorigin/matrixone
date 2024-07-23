@@ -24,8 +24,9 @@ import (
 var _ vm.Operator = new(Output)
 
 type Output struct {
-	Data interface{}
-	Func func(*batch.Batch) error
+	Data          interface{}
+	Func          func(*batch.Batch) error
+	OutputAlyInfo *process.AnalyzeInfo
 
 	vm.OperatorBase
 }
@@ -78,5 +79,6 @@ func (output *Output) Reset(proc *process.Process, pipelineFailed bool, err erro
 func (output *Output) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if !pipelineFailed {
 		_ = output.Func(nil)
+		output.OutputAlyInfo = nil
 	}
 }

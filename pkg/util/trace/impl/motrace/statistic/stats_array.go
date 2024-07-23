@@ -254,6 +254,7 @@ type StatsInfo struct {
 	PlanDuration      time.Duration `json:"PlanDuration"`
 	CompileDuration   time.Duration `json:"CompileDuration"`
 	ExecutionDuration time.Duration `json:"ExecutionDuration"`
+	OutputDuration    time.Duration `json:"OutputDuration"`
 
 	//PipelineTimeConsumption      time.Duration
 	//PipelineBlockTimeConsumption time.Duration
@@ -322,6 +323,13 @@ func (stats *StatsInfo) ExecutionEnd() {
 	}
 	stats.ExecutionEndTime = time.Now()
 	stats.ExecutionDuration = stats.ExecutionEndTime.Sub(stats.ExecutionStartTime)
+}
+
+func (stats *StatsInfo) SetOutputTimeConsumption(d time.Duration) {
+	if stats == nil {
+		return
+	}
+	stats.OutputDuration = d
 }
 
 func (stats *StatsInfo) AddIOAccessTimeConsumption(d time.Duration) {
