@@ -54,6 +54,7 @@ func ReadDataByFilter(
 	searchFunc ReadFilterSearchFuncType,
 	fs fileservice.FileService,
 	mp *mpool.MPool,
+	tableName string,
 ) (sels []int32, err error) {
 	bat, release, err := LoadColumns(ctx, columns, colTypes, fs, info.MetaLocation(), mp, fileservice.Policy(0))
 	if err != nil {
@@ -155,6 +156,7 @@ func BlockDataRead(
 	mp *mpool.MPool,
 	vp engine.VectorPool,
 	policy fileservice.Policy,
+	tableName string,
 ) (*batch.Batch, error) {
 	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 		logutil.Debugf("read block %s, columns %v, types %v", info.BlockID.String(), columns, colTypes)
@@ -175,7 +177,7 @@ func BlockDataRead(
 	if searchFunc != nil {
 		if sels, err = ReadDataByFilter(
 			ctx, info, ds, filterSeqnums, filterColTypes,
-			types.TimestampToTS(ts), searchFunc, fs, mp,
+			types.TimestampToTS(ts), searchFunc, fs, mp, tableName,
 		); err != nil {
 			return nil, err
 		}

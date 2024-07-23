@@ -1288,7 +1288,7 @@ func fastApplyDeletedRows(leftRows []int32, deletedRows []int64, o uint32) ([]in
 	if leftRows != nil {
 		if x := sort.Search(len(leftRows), func(i int) bool {
 			return leftRows[i] < int32(o)
-		}); x != len(leftRows) {
+		}); x != len(leftRows) && leftRows[x] == int32(o) {
 			leftRows = append(leftRows[:x], leftRows[x+1:]...)
 		}
 	} else {
