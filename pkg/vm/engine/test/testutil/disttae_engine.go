@@ -336,7 +336,6 @@ func (de *TestDisttaeEngine) Close(ctx context.Context) {
 }
 
 func initRuntime() {
-	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	runtime.ServiceRuntime("").SetGlobalVariables(runtime.ClusterService, new(mockMOCluster))
 	runtime.ServiceRuntime("").SetGlobalVariables(runtime.LockService, new(mockLockService))
 }

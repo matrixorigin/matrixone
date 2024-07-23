@@ -16,6 +16,12 @@ package v1
 
 import (
 	"context"
+	"sort"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -28,11 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"go.uber.org/zap"
-	"sort"
-	"strings"
-	"sync"
-	"sync/atomic"
-	"time"
 )
 
 type checkpointCleaner struct {
@@ -99,16 +100,20 @@ type checkpointCleaner struct {
 	snapshotMeta *logtail.SnapshotMeta
 
 	mPool *mpool.MPool
+
+	sid string
 }
 
 func NewCheckpointCleaner(
 	ctx context.Context,
+	sid string,
 	fs *objectio.ObjectFS,
 	ckpClient checkpoint.RunnerReader,
 	disableGC bool,
 ) Cleaner {
 	cleaner := &checkpointCleaner{
 		ctx:       ctx,
+		sid:       sid,
 		fs:        fs,
 		ckpClient: ckpClient,
 		disableGC: disableGC,
@@ -232,12 +237,12 @@ func (c *checkpointCleaner) Replay() error {
 			return err
 		}
 	}
-	ckp := checkpoint.NewCheckpointEntry(maxConsumedStart, maxConsumedEnd, checkpoint.ET_Incremental)
+	ckp := checkpoint.NewCheckpointEntry(c.sid, maxConsumedStart, maxConsumedEnd, checkpoint.ET_Incremental)
 	c.updateMaxConsumed(ckp)
 	defer func() {
 		// Ensure that updateMinMerged is executed last, because minMergedEnd is not empty means that the replay is completed
 		// For UT
-		ckp = checkpoint.NewCheckpointEntry(minMergedStart, minMergedEnd, checkpoint.ET_Incremental)
+		ckp = checkpoint.NewCheckpointEntry(c.sid, minMergedStart, minMergedEnd, checkpoint.ET_Incremental)
 		c.updateMinMerged(ckp)
 	}()
 	if acctFile != "" {
@@ -250,7 +255,7 @@ func (c *checkpointCleaner) Replay() error {
 		//and the table information needs to be initialized from the checkpoint
 		maxConsumed := c.maxConsumed.Load()
 		isConsumedGCkp := false
-		checkpointEntries, err := checkpoint.ListSnapshotCheckpoint(c.ctx, c.fs.Service, maxConsumed.GetEnd(), 0, checkpoint.SpecifiedCheckpoint)
+		checkpointEntries, err := checkpoint.ListSnapshotCheckpoint(c.ctx, c.sid, c.fs.Service, maxConsumed.GetEnd(), 0, checkpoint.SpecifiedCheckpoint)
 		if err != nil {
 			logutil.Warnf("list checkpoint failed, err[%v]", err)
 		}
@@ -520,7 +525,7 @@ func (c *checkpointCleaner) getDeleteFile(
 	ts, stage types.TS,
 	ckpSnapList []types.TS,
 ) ([]string, error) {
-	ckps, err := checkpoint.ListSnapshotCheckpointWithMeta(ctx, fs, files, idx, ts, true)
+	ckps, err := checkpoint.ListSnapshotCheckpointWithMeta(ctx, c.sid, fs, files, idx, ts, true)
 	if err != nil {
 		return nil, err
 	}
@@ -555,7 +560,7 @@ func (c *checkpointCleaner) getDeleteFile(
 				checkpoint.CheckpointDir, checkpoint.PrefixMetadata,
 				ckp.GetStart(), ckp.GetEnd())
 			locations, err := logtail.LoadCheckpointLocations(
-				c.ctx, ckp.GetTNLocation(), ckp.GetVersion(), c.fs.Service)
+				c.ctx, c.sid, ckp.GetTNLocation(), ckp.GetVersion(), c.fs.Service)
 			if err != nil {
 				if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 					deleteFiles = append(deleteFiles, nameMeta)
@@ -649,7 +654,7 @@ func (c *checkpointCleaner) mergeCheckpointFiles(stage types.TS, snapshotList ma
 func (c *checkpointCleaner) collectGlobalCkpData(
 	ckp *checkpoint.CheckpointEntry,
 ) (data *logtail.CheckpointData, err error) {
-	_, data, err = logtail.LoadCheckpointEntriesFromKey(c.ctx, c.fs.Service,
+	_, data, err = logtail.LoadCheckpointEntriesFromKey(c.ctx, c.sid, c.fs.Service,
 		ckp.GetLocation(), ckp.GetVersion(), nil, &types.TS{})
 	return
 }
@@ -657,7 +662,7 @@ func (c *checkpointCleaner) collectGlobalCkpData(
 func (c *checkpointCleaner) collectCkpData(
 	ckp *checkpoint.CheckpointEntry,
 ) (data *logtail.CheckpointData, err error) {
-	_, data, err = logtail.LoadCheckpointEntriesFromKey(c.ctx, c.fs.Service,
+	_, data, err = logtail.LoadCheckpointEntriesFromKey(c.ctx, c.sid, c.fs.Service,
 		ckp.GetLocation(), ckp.GetVersion(), nil, &types.TS{})
 	return
 }
@@ -1017,7 +1022,7 @@ func (c *checkpointCleaner) updateSnapshot(data *logtail.CheckpointData) error {
 }
 
 func (c *checkpointCleaner) GetSnapshots() (map[uint32]containers.Vector, error) {
-	return c.snapshotMeta.GetSnapshot(c.ctx, c.fs.Service, c.mPool)
+	return c.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs.Service, c.mPool)
 }
 
 func isSnapshotCKPRefers(start, end types.TS, snapVec []types.TS) bool {

@@ -67,11 +67,11 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 	vec.Free(builder.compCtx.GetProcess().GetMPool())
 
 	// get cols
-	cols, path, err := builder.compCtx.GetQueryResultMeta(uuid.ToString())
+	cols, path, err := builder.compCtx.GetQueryResultMeta(uuid.String())
 	if err != nil {
 		return 0, err
 	}
-	logutil.Infof("buildResultScan : get save query result path is %s, uuid is %s", path, uuid.ToString())
+	logutil.Infof("buildResultScan : get save query result path is %s, uuid is %s", path, uuid.String())
 	if len(path) == 0 {
 		return 0, moerr.NewInvalidInput(builder.GetContext(), "empty %s", "query result")
 	}
@@ -85,7 +85,7 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 		name2ColIndex[cols[i].Name] = int32(i)
 	}
 	tableDef := &plan.TableDef{
-		Name:          uuid.ToString(),
+		Name:          uuid.String(),
 		TableType:     "query_result",
 		Cols:          cols,
 		Name2ColIndex: name2ColIndex,
