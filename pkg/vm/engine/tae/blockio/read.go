@@ -47,6 +47,7 @@ type BlockReadFilter struct {
 func ReadDataByFilter(
 	ctx context.Context,
 	info *objectio.BlockInfoInProgress,
+	ds engine.DataSource,
 	columns []uint16,
 	colTypes []types.Type,
 	ts types.TS,
@@ -61,7 +62,10 @@ func ReadDataByFilter(
 	defer release()
 
 	sels = searchFunc(bat.Vecs)
-
+	sels, err = ds.ApplyTombstones(ctx, info.BlockID, sels)
+	if err != nil {
+		return
+	}
 	return
 }
 
@@ -169,7 +173,7 @@ func BlockDataRead(
 
 	if searchFunc != nil {
 		if sels, err = ReadDataByFilter(
-			ctx, info, filterSeqnums, filterColTypes,
+			ctx, info, ds, filterSeqnums, filterColTypes,
 			types.TimestampToTS(ts), searchFunc, fs, mp,
 		); err != nil {
 			return nil, err
@@ -196,7 +200,7 @@ func BlockDataRead(
 	}
 
 	columnBatch, err := BlockDataReadInner(
-		ctx, info, columns, colTypes,
+		ctx, info, ds, columns, colTypes,
 		types.TimestampToTS(ts), sels, fs, mp, vp, policy,
 	)
 	if err != nil {
@@ -323,6 +327,7 @@ func BlockCompactionRead(
 func BlockDataReadInner(
 	ctx context.Context,
 	info *objectio.BlockInfoInProgress,
+	ds engine.DataSource,
 	columns []uint16,
 	colTypes []types.Type,
 	ts types.TS,
@@ -376,7 +381,7 @@ func BlockDataReadInner(
 			} else {
 				result.Vecs[i] = vp.GetVector(typ)
 			}
-			if err = result.Vecs[i].PreExtendArea(len(selectRows), mp); err != nil {
+			if err = result.Vecs[i].PreExtendArea(len(col.GetArea()), mp); err != nil {
 				break
 			}
 			if err = result.Vecs[i].Union(col, selectRows, mp); err != nil {
@@ -393,7 +398,18 @@ func BlockDataReadInner(
 		return
 	}
 
+	tombstones, err := ds.GetTombstones(ctx, info.BlockID)
+	if err != nil {
+		return
+	}
+
+	// merge deletes from tombstones
+	for _, row := range tombstones {
+		deleteMask.Add(uint64(row))
+	}
+
 	// Note: it always goes here if no filter or the block is not sorted
+
 	// transform delete mask to deleted rows
 	// TODO: avoid this transformation
 	if !deleteMask.IsEmpty() {
@@ -433,8 +449,6 @@ func BlockDataReadInner(
 				break
 			}
 		}
-
-		// shrink the vector by deleted rows
 		if len(deletedRows) > 0 {
 			result.Vecs[i].Shrink(deletedRows, true)
 		}
