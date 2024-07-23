@@ -114,7 +114,7 @@ func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) {
 			mapping := make(map[uint32][]byte, len(m))
 			for srcRow, dst := range m {
 				objID := entry.createdObjs[dst.ObjIdx].ID()
-				rowID := objectio.NewRowIDWithObjectIDAndBlockNum(objID, uint16(dst.BlkIdx), uint32(dst.RowIdx))
+				rowID := objectio.NewRowIDWithObjectIDAndBlockNum(*objID, uint16(dst.BlkIdx), uint32(dst.RowIdx))
 				mapping[uint32(srcRow)] = rowID[:]
 			}
 			page.Train(mapping)
