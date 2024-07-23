@@ -17,6 +17,7 @@ package disttae
 import (
 	"bytes"
 	"context"
+	"slices"
 	"sort"
 	"time"
 
@@ -1243,6 +1244,10 @@ func (ls *LocalDataSource) ApplyTombstonesInProgress(
 	bid objectio.Blockid,
 	rowsOffset []int32) ([]int32, error) {
 
+	slices.SortFunc(rowsOffset, func(a, b int32) int {
+		return int(a - b)
+	})
+
 	var err error
 
 	rowsOffset, _ = ls.applyWorkspaceEntryDeletes(bid, rowsOffset)
@@ -1275,8 +1280,10 @@ func (ls *LocalDataSource) GetTombstonesInProgress(
 
 	_, dels = ls.applyWorkspaceRawRowIdDeletes(bid, nil)
 	deletedRows = append(deletedRows, dels...)
+
 	_, dels = ls.applyPStateInMemDeletes(bid, nil)
 	deletedRows = append(deletedRows, dels...)
+
 	_, dels, err = ls.applyPStatePersistedDeltaLocation(bid, nil)
 	if err != nil {
 		return nil, err
@@ -1288,11 +1295,16 @@ func (ls *LocalDataSource) GetTombstonesInProgress(
 
 func fastApplyDeletedRows(leftRows []int32, deletedRows []int64, o uint32) ([]int32, []int64) {
 	if leftRows != nil {
-		if x := sort.Search(len(leftRows), func(i int) bool {
-			return leftRows[i] < int32(o)
-		}); x != len(leftRows) && leftRows[x] == int32(o) {
+		if x, found := sort.Find(len(leftRows), func(i int) int {
+			return int(int32(o) - leftRows[i])
+		}); found {
 			leftRows = append(leftRows[:x], leftRows[x+1:]...)
 		}
+		//if x := sort.Search(len(leftRows), func(i int) bool {
+		//	return int32(o) > leftRows[i]
+		//}); x != len(leftRows) && leftRows[x] == int32(o) {
+		//	leftRows = append(leftRows[:x], leftRows[x+1:]...)
+		//}
 	} else {
 		deletedRows = append(deletedRows, int64(o))
 	}
