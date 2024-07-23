@@ -124,7 +124,7 @@ func TestBackupData(t *testing.T) {
 	for _, location := range files {
 		locations = append(locations, location)
 	}
-	err = execBackup(ctx, db.Opts.Fs, service, locations, 1, types.TS{}, "full")
+	err = execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full")
 	assert.Nil(t, err)
 	db.Opts.Fs = service
 	db.Restart(ctx)
