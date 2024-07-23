@@ -25,6 +25,7 @@ import (
 
 type MemCache struct {
 	cache       fscache.DataCache
+	upstream    FileService
 	counterSets []*perfcounter.CounterSet
 }
 
@@ -76,6 +77,7 @@ func NewMemCache(
 	dataCache := fifocache.NewDataCache(capacityFunc, postSetFn, postGetFn, postEvictFn)
 
 	return &MemCache{
+		//upstream:    upstream, //TODO
 		cache:       dataCache,
 		counterSets: counterSets,
 	}
@@ -185,4 +187,39 @@ func (m *MemCache) Evict(done chan int64) {
 func (m *MemCache) Close() {
 	m.Flush()
 	allMemoryCaches.Delete(m)
+	m.upstream.Close()
+}
+
+var _ FileService = new(MemCache)
+
+func (m *MemCache) Cost() *CostAttr {
+	return m.upstream.Cost()
+}
+
+func (m *MemCache) Delete(ctx context.Context, filePaths ...string) error {
+	return m.upstream.Delete(ctx, filePaths...)
+}
+
+func (m *MemCache) List(ctx context.Context, dirPath string) ([]DirEntry, error) {
+	return m.upstream.List(ctx, dirPath)
+}
+
+func (m *MemCache) Name() string {
+	return m.upstream.Name()
+}
+
+func (m *MemCache) PrefetchFile(ctx context.Context, filePath string) error {
+	return m.upstream.PrefetchFile(ctx, filePath)
+}
+
+func (m *MemCache) ReadCache(ctx context.Context, vector *IOVector) error {
+	return m.upstream.ReadCache(ctx, vector)
+}
+
+func (m *MemCache) StatFile(ctx context.Context, filePath string) (*DirEntry, error) {
+	return m.upstream.StatFile(ctx, filePath)
+}
+
+func (m *MemCache) Write(ctx context.Context, vector IOVector) error {
+	return m.upstream.Write(ctx, vector)
 }

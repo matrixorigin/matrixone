@@ -141,3 +141,9 @@ func (s *subPathFS) PrefetchFile(ctx context.Context, filePath string) error {
 func (s *subPathFS) Cost() *CostAttr {
 	return s.upstream.Cost()
 }
+
+var _ WrapFileService = new(subPathFS)
+
+func (s *subPathFS) Unwrap() []FileService {
+	return []FileService{s.upstream}
+}

@@ -172,13 +172,15 @@ func TestLocalFSWithDiskCache(t *testing.T) {
 // only memory obtained through memcache.Alloc can be set to memcache
 func TestLocalFSWithIOVectorCache(t *testing.T) {
 	memCache1 := NewMemCache(
-		fscache.ConstCapacity(1<<20), nil,
+		fscache.ConstCapacity(1<<20),
+		nil,
 		nil,
 		"",
 	)
 	defer memCache1.Close()
 	memCache2 := NewMemCache(
-		fscache.ConstCapacity(1<<20), nil,
+		fscache.ConstCapacity(1<<20),
+		nil,
 		nil,
 		"",
 	)
