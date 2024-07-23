@@ -22,7 +22,6 @@ import (
 	"math"
 	"net"
 	"runtime"
-	gotrace "runtime/trace"
 	"sort"
 	"strings"
 	"sync"
@@ -79,11 +78,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
-	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -280,87 +277,6 @@ func (c *Compile) SetTempEngine(tempEngine engine.Engine, tempStorage *memorysto
 	}
 }
 
-// Compile is the entrance of the compute-execute-layer.
-// It generates a scope (logic pipeline) for a query plan.
-func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, fill func(*batch.Batch) error) (err error) {
-	start := time.Now()
-	defer func() {
-		v2.TxnStatementCompileDurationHistogram.Observe(time.Since(start).Seconds())
-	}()
-
-	_, task := gotrace.NewTask(context.TODO(), "pipeline.Compile")
-	defer task.End()
-	defer func() {
-		if e := recover(); e != nil {
-			err = moerr.ConvertPanicError(ctx, e)
-			c.proc.Error(ctx, "panic in compile",
-				zap.String("sql", c.sql),
-				zap.String("error", err.Error()))
-		}
-	}()
-
-	if c.proc.GetTxnOperator() != nil && c.proc.GetTxnOperator().Txn().IsPessimistic() {
-		txnOp := c.proc.GetTxnOperator()
-		seq := txnOp.NextSequence()
-		txnTrace.GetService(c.proc.GetService()).AddTxnDurationAction(
-			txnOp,
-			client.CompileEvent,
-			seq,
-			0,
-			0,
-			err)
-		defer func() {
-			txnTrace.GetService(c.proc.GetService()).AddTxnDurationAction(
-				txnOp,
-				client.CompileEvent,
-				seq,
-				0,
-				time.Since(start),
-				err)
-		}()
-
-		if qry, ok := pn.Plan.(*plan.Plan_Query); ok {
-			if qry.Query.StmtType == plan.Query_SELECT {
-				for _, n := range qry.Query.Nodes {
-					if n.NodeType == plan.Node_LOCK_OP {
-						c.needLockMeta = true
-						break
-					}
-				}
-			} else {
-				c.needLockMeta = true
-			}
-		}
-	}
-
-	// with values
-	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, c.counterSet)
-
-	// session info and callback function to write back query result.
-	// XXX u is really a bad name, I'm not sure if `session` or `user` will be more suitable.
-	c.fill = fill
-
-	c.pn = pn
-
-	// Compile may exec some function that need engine.Engine.
-	c.proc.Ctx = context.WithValue(c.proc.Ctx, defines.EngineKey{}, c.e)
-	// generate logic pipeline for query.
-	c.scope, err = c.compileScope(pn)
-
-	if err != nil {
-		return err
-	}
-	for _, s := range c.scope {
-		if len(s.NodeInfo.Addr) == 0 {
-			s.NodeInfo.Addr = c.addr
-		}
-	}
-	if c.shouldReturnCtxErr() {
-		return c.proc.Ctx.Err()
-	}
-	return nil
-}
-
 func (c *Compile) addAffectedRows(n uint64) {
 	c.affectRows.Add(n)
 }
@@ -468,147 +384,6 @@ func (c *Compile) allocOperatorID() int32 {
 	}()
 
 	return c.lastAllocID
-}
-
-// Run is an important function of the compute-layer, it executes a single sql according to its scope
-// Need call Release() after call this function.
-func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
-	sql := c.originSQL
-	if sql == "" {
-		sql = c.sql
-	}
-
-	txnOp := c.proc.GetTxnOperator()
-	seq := uint64(0)
-	if txnOp != nil {
-		seq = txnOp.NextSequence()
-		txnOp.EnterRunSql()
-	}
-
-	defer func() {
-		if txnOp != nil {
-			txnOp.ExitRunSql()
-		}
-		c.proc.CleanValueScanBatchs()
-		c.proc.SetPrepareBatch(nil)
-		c.proc.SetPrepareExprList(nil)
-	}()
-
-	var writeOffset uint64
-
-	start := time.Now()
-	v2.TxnStatementExecuteLatencyDurationHistogram.Observe(start.Sub(c.startAt).Seconds())
-
-	stats := statistic.StatsInfoFromContext(c.proc.Ctx)
-	stats.ExecutionStart()
-
-	txnTrace.GetService(c.proc.GetService()).TxnStatementStart(txnOp, sql, seq)
-	defer func() {
-		stats.ExecutionEnd()
-
-		cost := time.Since(start)
-		row := 0
-		if result != nil {
-			row = int(result.AffectRows)
-		}
-		txnTrace.GetService(c.proc.GetService()).TxnStatementCompleted(
-			txnOp,
-			sql,
-			cost,
-			seq,
-			row,
-			err,
-		)
-		v2.TxnStatementExecuteDurationHistogram.Observe(cost.Seconds())
-		if _, ok := c.pn.Plan.(*plan.Plan_Ddl); ok {
-			c.setHaveDDL(true)
-		}
-	}()
-
-	for _, s := range c.scope {
-		s.SetOperatorInfoRecursively(c.allocOperatorID)
-	}
-
-	if c.proc.GetTxnOperator() != nil {
-		writeOffset = uint64(c.proc.GetTxnOperator().GetWorkspace().GetSnapshotWriteOffset())
-	}
-	result = &util2.RunResult{}
-	var span trace.Span
-	var runC *Compile // compile structure for rerun.
-	// var result = &util2.RunResult{}
-	// var err error
-	var retryTimes int
-	releaseRunC := func() {
-		if runC != c {
-			runC.Release()
-		}
-	}
-
-	sp := c.proc.GetStmtProfile()
-	c.proc.Ctx, span = trace.Start(c.proc.Ctx, "Compile.Run", trace.WithKind(trace.SpanKindStatement))
-	_, task := gotrace.NewTask(context.TODO(), "pipeline.Run")
-	defer func() {
-		releaseRunC()
-
-		task.End()
-		span.End(trace.WithStatementExtra(sp.GetTxnId(), sp.GetStmtId(), sp.GetSqlOfStmt()))
-	}()
-
-	if c.proc.GetTxnOperator() != nil {
-		c.proc.GetTxnOperator().GetWorkspace().IncrSQLCount()
-		c.proc.GetTxnOperator().ResetRetry(false)
-	}
-
-	v2.TxnStatementTotalCounter.Inc()
-	runC = c
-	for {
-		if err = runC.runOnce(); err == nil {
-			break
-		}
-
-		c.fatalLog(retryTimes, err)
-		if !c.canRetry(err) {
-			if c.proc.GetTxnOperator().Txn().IsRCIsolation() &&
-				moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
-				orphan, e := c.proc.Base.LockService.IsOrphanTxn(
-					c.proc.Ctx,
-					c.proc.GetTxnOperator().Txn().ID,
-				)
-				if e != nil {
-					getLogger(c.proc.GetService()).Error("failed to convert dup to orphan txn error",
-						zap.String("txn", hex.EncodeToString(c.proc.GetTxnOperator().Txn().ID)),
-						zap.Error(err),
-					)
-				}
-				if e == nil && orphan {
-					getLogger(c.proc.GetService()).Warn("convert dup to orphan txn error",
-						zap.String("txn", hex.EncodeToString(c.proc.GetTxnOperator().Txn().ID)),
-					)
-					err = moerr.NewCannotCommitOrphan(c.proc.Ctx)
-				}
-			}
-			return nil, err
-		}
-
-		retryTimes++
-		releaseRunC()
-		defChanged := moerr.IsMoErrCode(
-			err,
-			moerr.ErrTxnNeedRetryWithDefChanged)
-		if runC, err = c.prepareRetry(defChanged); err != nil {
-			return nil, err
-		}
-	}
-
-	if c.shouldReturnCtxErr() {
-		return nil, c.proc.Ctx.Err()
-	}
-	result.AffectRows = runC.getAffectedRows()
-
-	if c.proc.GetTxnOperator() != nil {
-		return result, c.proc.GetTxnOperator().GetWorkspace().Adjust(writeOffset)
-	}
-	return result, nil
 }
 
 func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {

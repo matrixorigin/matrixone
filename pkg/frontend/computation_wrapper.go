@@ -296,7 +296,7 @@ func (cwft *TxnComputationWrapper) GetUUID() []byte {
 }
 
 func (cwft *TxnComputationWrapper) Run(ts uint64) (*util2.RunResult, error) {
-	runResult, err := cwft.compile.Run(ts)
+	runResult, err := cwft.compile.Run()
 	cwft.compile.Release()
 	cwft.runResult = runResult
 	cwft.compile = nil

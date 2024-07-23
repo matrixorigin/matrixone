@@ -139,6 +139,18 @@ func (proc *Process) GetLatestContext() context.Context {
 	return proc.Base.sqlContext.getLatestContext()
 }
 
+// GetErrorFromQueryStatus return error if top context or query context with error.
+func (proc *Process) GetErrorFromQueryStatus() error {
+	base := proc.Base.GetContextBase()
+	if base.outerContext != nil && base.outerContext.Err() != nil {
+		return base.outerContext.Err()
+	}
+	if base.queryContext != nil && base.queryContext.Err() != nil {
+		return base.queryContext.Err()
+	}
+	return nil
+}
+
 // Free cleans the process.
 // todo: consider to use it instead of other method like `FreeVectors` next day.
 func (proc *Process) Free() {
@@ -206,12 +218,4 @@ func (qbCtx *QueryBaseContext) getLatestContext() context.Context {
 		return qbCtx.queryContext
 	}
 	return qbCtx.outerContext
-}
-
-// getQueryStatus returns error if the query context has been cancelled.
-func (qbCtx *QueryBaseContext) getQueryStatus() error {
-	if qbCtx.queryContext != nil {
-		return qbCtx.queryContext.Err()
-	}
-	return nil
 }

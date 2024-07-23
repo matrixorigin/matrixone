@@ -347,7 +347,7 @@ func (exec *txnExecutor) Exec(
 		return executor.Result{}, err
 	}
 	var runResult *util.RunResult
-	runResult, err = c.Run(0)
+	runResult, err = c.Run()
 	if err != nil {
 		for _, bat := range batches {
 			if bat != nil {
