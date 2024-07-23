@@ -759,7 +759,7 @@ func constructLockOp(n *plan.Node, c *Compile, block bool) *lockop.LockOp {
 		}
 	}
 	arg.SetBlock(block)
-	arg.Idx = c.anal.curr
+	arg.Idx = c.anal.curNodeIdx
 	arg.IsFirst = c.anal.isFirst
 
 	return arg

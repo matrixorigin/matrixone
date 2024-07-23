@@ -3363,54 +3363,6 @@ func (c *Compile) compileDelete(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 	}
 }
 
-func (c *Compile) compileLock(n *plan.Node, ss []*Scope) ([]*Scope, error) {
-	lockRows := make([]*plan.LockTarget, 0, len(n.LockTargets))
-	for _, tbl := range n.LockTargets {
-		if tbl.LockTable {
-			c.lockTables[tbl.TableId] = tbl
-		} else {
-			if _, ok := c.lockTables[tbl.TableId]; !ok {
-				lockRows = append(lockRows, tbl)
-			}
-		}
-	}
-	n.LockTargets = lockRows
-	if len(n.LockTargets) == 0 {
-		return ss, nil
-	}
-
-	block := false
-	// only pessimistic txn needs to block downstream operators.
-	if c.proc.GetTxnOperator().Txn().IsPessimistic() {
-		block = n.LockTargets[0].Block
-		if block {
-			ss = []*Scope{c.newMergeScope(ss)}
-		}
-	}
-
-	currentFirstFlag := c.anal.isFirst
-	for i := range ss {
-		var err error
-		var lockOpArg *lockop.LockOp
-		lockOpArg, err = constructLockOp(n, c.e)
-		if err != nil {
-			return nil, err
-		}
-		lockOpArg.SetBlock(block)
-		lockOpArg.Idx = c.anal.curNodeIdx
-		lockOpArg.IsFirst = currentFirstFlag
-		if block {
-			lockOpArg.SetChildren(ss[i].RootOp.GetOperatorBase().Children)
-			ss[i].RootOp.Release()
-			ss[i].RootOp = lockOpArg
-		} else {
-			ss[i].doSetRootOperator(lockOpArg)
-		}
-	}
-	c.anal.isFirst = false
-	return ss, nil
-}
-
 func (c *Compile) compileRecursiveCte(n *plan.Node, curNodeIdx int32) ([]*Scope, error) {
 	receivers := make([]*process.WaitRegister, len(n.SourceStep))
 	for i, step := range n.SourceStep {
