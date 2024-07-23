@@ -506,13 +506,6 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	txnTrace.GetService(c.proc.GetService()).TxnStatementStart(txnOp, sql, seq)
 	defer func() {
 		stats.ExecutionEnd()
-		if strings.Contains(c.sql, "real_time_position") {
-			fmt.Println("----------------------1------------------------")
-		}
-
-		if _, ok := c.pn.Plan.(*plan.Plan_Query); ok {
-			stats.SetOutputTimeConsumption(time.Duration(c.anal.outputInfo.TimeConsumed))
-		}
 
 		cost := time.Since(start)
 		row := 0
@@ -556,13 +549,10 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	c.proc.Ctx, span = trace.Start(c.proc.Ctx, "Compile.Run", trace.WithKind(trace.SpanKindStatement))
 	_, task := gotrace.NewTask(context.TODO(), "pipeline.Run")
 	defer func() {
-		if strings.Contains(c.sql, "real_time_position") {
-			fmt.Println("----------------------2------------------------")
-		}
-
-		if _, ok := c.pn.Plan.(*plan.Plan_Query); ok {
+		if _, ok := c.pn.Plan.(*plan.Plan_Query); ok && c.anal != nil {
 			stats.SetOutputTimeConsumption(time.Duration(c.anal.outputInfo.TimeConsumed))
 		}
+
 		releaseRunC()
 
 		task.End()
