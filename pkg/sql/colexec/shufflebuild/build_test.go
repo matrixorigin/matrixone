@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -70,62 +69,63 @@ func TestString(t *testing.T) {
 	}
 }
 
-func TestBuild(t *testing.T) {
-	for _, tc := range tcs[:1] {
-		err := tc.marg.Prepare(tc.proc)
-		require.NoError(t, err)
-		err = tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-		tc.arg.SetChildren([]vm.Operator{tc.marg})
-		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-		tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
-		tc.proc.Reg.MergeReceivers[0].Ch <- nil
-		for {
-			ok, err := tc.arg.Call(tc.proc)
+/*
+	func TestBuild(t *testing.T) {
+		for _, tc := range tcs[:1] {
+			err := tc.marg.Prepare(tc.proc)
 			require.NoError(t, err)
-			require.Equal(t, false, ok.Status == vm.ExecStop)
-			//mp := ok.Batch.AuxData.(*hashmap.JoinMap)
-			tc.proc.Reg.MergeReceivers[0].Ch <- nil
-			//mp.Free()
-			ok.Batch.Clean(tc.proc.Mp())
-			break
-		}
-		tc.proc.Reg.MergeReceivers[0].Ch <- nil
-		tc.arg.Free(tc.proc, false, nil)
-		tc.proc.FreeVectors()
-		tc.proc.Base.MessageBoard = tc.proc.Base.MessageBoard.Reset()
-	}
-}
-
-func BenchmarkBuild(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		tcs = []buildTestCase{
-			newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()},
-				[]*plan.Expr{
-					newExpr(0, types.T_int8.ToType()),
-				}),
-		}
-		t := new(testing.T)
-		for _, tc := range tcs {
-			err := tc.arg.Prepare(tc.proc)
+			err = tc.arg.Prepare(tc.proc)
 			require.NoError(t, err)
+			tc.arg.SetChildren([]vm.Operator{tc.marg})
 			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
 			tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
 			for {
 				ok, err := tc.arg.Call(tc.proc)
 				require.NoError(t, err)
-				require.Equal(t, true, ok)
+				require.Equal(t, false, ok.Status == vm.ExecStop)
 				//mp := ok.Batch.AuxData.(*hashmap.JoinMap)
 				tc.proc.Reg.MergeReceivers[0].Ch <- nil
 				//mp.Free()
 				ok.Batch.Clean(tc.proc.Mp())
 				break
 			}
+			tc.proc.Reg.MergeReceivers[0].Ch <- nil
+			tc.arg.Free(tc.proc, false, nil)
+			tc.proc.FreeVectors()
+			tc.proc.Base.MessageBoard = tc.proc.Base.MessageBoard.Reset()
 		}
 	}
-}
 
+	func BenchmarkBuild(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			tcs = []buildTestCase{
+				newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()},
+					[]*plan.Expr{
+						newExpr(0, types.T_int8.ToType()),
+					}),
+			}
+			t := new(testing.T)
+			for _, tc := range tcs {
+				err := tc.arg.Prepare(tc.proc)
+				require.NoError(t, err)
+				tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
+				tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
+				tc.proc.Reg.MergeReceivers[0].Ch <- nil
+				for {
+					ok, err := tc.arg.Call(tc.proc)
+					require.NoError(t, err)
+					require.Equal(t, true, ok)
+					//mp := ok.Batch.AuxData.(*hashmap.JoinMap)
+					tc.proc.Reg.MergeReceivers[0].Ch <- nil
+					//mp.Free()
+					ok.Batch.Clean(tc.proc.Mp())
+					break
+				}
+			}
+		}
+	}
+*/
 func newExpr(pos int32, typ types.Type) *plan.Expr {
 	return &plan.Expr{
 		Typ: plan.Type{

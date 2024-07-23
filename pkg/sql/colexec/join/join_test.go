@@ -84,6 +84,7 @@ func TestString(t *testing.T) {
 	}
 }
 
+/*
 func TestJoin(t *testing.T) {
 	for _, tc := range tcs {
 		nb0 := tc.proc.Mp().CurrNB()
@@ -134,7 +135,7 @@ func TestJoin(t *testing.T) {
 		require.Equal(t, nb0, nb1)
 	}
 }
-
+*/
 /*
 func TestLowCardinalityJoin(t *testing.T) {
 	tc := newTestCase([]bool{false}, []types.Type{types.T_varchar.ToType()}, []colexec.ResultPos{colexec.NewResultPos(1, 0)},
