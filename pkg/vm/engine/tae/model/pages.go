@@ -247,6 +247,7 @@ func (page *TransferHashPage) loadTable() *api.HashPageMap {
 		logutil.Errorf("[TransferPage] read persist table %v: %v", page.path.Name, err)
 		return nil
 	}
+	defer ioVector.Release()
 
 	m = page.hashmap.Load()
 	if m != nil {
