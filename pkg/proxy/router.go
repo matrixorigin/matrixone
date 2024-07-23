@@ -132,6 +132,7 @@ func (s *CNServer) Connect(logger *zap.Logger, timeout time.Duration) (goetty.IO
 type router struct {
 	rebalancer *rebalancer
 	moCluster  clusterservice.MOCluster
+	sqlRouter  SQLRouter
 	test       bool
 
 	// timeout configs.
@@ -159,12 +160,14 @@ func withAuthTimeout(t time.Duration) routeOption {
 func newRouter(
 	mc clusterservice.MOCluster,
 	r *rebalancer,
+	sqlRouter SQLRouter,
 	test bool,
 	opts ...routeOption,
 ) Router {
 	rt := &router{
 		rebalancer: r,
 		moCluster:  mc,
+		sqlRouter:  sqlRouter,
 		test:       test,
 	}
 	for _, opt := range opts {
@@ -178,7 +181,11 @@ func newRouter(
 
 // SelectByConnID implements the Router interface.
 func (r *router) SelectByConnID(connID uint32) (*CNServer, error) {
-	cn := r.rebalancer.connManager.getCNServerByConnID(connID)
+	cn, err := r.sqlRouter.GetCNServerByConnID(connID)
+	if err != nil {
+		logutil.Errorf("failed to get cn server by conn id %d: %v", connID, err)
+		return nil, err
+	}
 	if cn == nil {
 		return nil, noCNServerErr
 	}

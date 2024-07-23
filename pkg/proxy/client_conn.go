@@ -381,7 +381,7 @@ func (c *clientConn) handleKillQuery(e *killQueryEvent, resp chan<- []byte) erro
 	}
 	cn.connID = cid
 
-	return c.connAndExec(cn, fmt.Sprintf("KILL QUERY %d", e.connID), resp)
+	return c.connAndExec(cn, e.stmt, resp)
 }
 
 // handleSetVar handles the set variable event.
