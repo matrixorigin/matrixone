@@ -1274,7 +1274,9 @@ func (ls *LocalDataSource) GetTombstonesInProgress(
 	deletedRows = append(deletedRows, dels...)
 
 	_, dels = ls.applyWorkspaceRawRowIdDeletes(bid, nil)
+	deletedRows = append(deletedRows, dels...)
 	_, dels = ls.applyPStateInMemDeletes(bid, nil)
+	deletedRows = append(deletedRows, dels...)
 	_, dels, err = ls.applyPStatePersistedDeltaLocation(bid, nil)
 	if err != nil {
 		return nil, err

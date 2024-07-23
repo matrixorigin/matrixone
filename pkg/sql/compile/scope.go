@@ -698,30 +698,30 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("xxxx expand ranges in run time filter, txn:%s, table:%s, blkCnt:%d, hasMemBlk:%v.\n",
-			c.proc.GetTxnOperator().Txn().DebugString(),
-			s.DataSource.TableDef.Name,
-			relData.BlkCnt(),
-			relData.GetDataBlk(0).IsMemBlk())
+		//fmt.Printf("xxxx expand ranges in run time filter, txn:%s, table:%s, blkCnt:%d, hasMemBlk:%v.\n",
+		//	c.proc.GetTxnOperator().Txn().DebugString(),
+		//	s.DataSource.TableDef.Name,
+		//	relData.BlkCnt(),
+		//	relData.GetDataBlk(0).IsMemBlk())
 		//FIXME:: Do need to attache tombstones? No, because the scope runs on local CN
 		//relData.AttachTombstones()
 		s.NodeInfo.Data = relData
 
 	} else if len(inExprList) > 0 {
-		fmt.Printf("xxxx Before appyly run time filter, txn:%s, table:%s, blkCnt:%d, hasMemBlk:%v.\n",
-			c.proc.GetTxnOperator().Txn().DebugString(),
-			s.DataSource.TableDef.Name,
-			s.NodeInfo.Data.BlkCnt(),
-			s.NodeInfo.Data.GetDataBlk(0).IsMemBlk())
+		//fmt.Printf("xxxx Before appyly run time filter, txn:%s, table:%s, blkCnt:%d, hasMemBlk:%v.\n",
+		//	c.proc.GetTxnOperator().Txn().DebugString(),
+		//	s.DataSource.TableDef.Name,
+		//	s.NodeInfo.Data.BlkCnt(),
+		//	s.NodeInfo.Data.GetDataBlk(0).IsMemBlk())
 		s.NodeInfo.Data, err = ApplyRuntimeFilters(c.proc.Ctx, s.Proc, s.DataSource.TableDef, s.NodeInfo.Data, exprs, filters)
 		if err != nil {
 			return err
 		}
-		fmt.Printf("xxxx after appyly run time filter, txn:%s, table:%s, blkCnt:%d, hasMemBlk:%v.\n",
-			c.proc.GetTxnOperator().Txn().DebugString(),
-			s.DataSource.TableDef.Name,
-			s.NodeInfo.Data.BlkCnt(),
-			s.NodeInfo.Data.GetDataBlk(0).IsMemBlk())
+		//fmt.Printf("xxxx after appyly run time filter, txn:%s, table:%s, blkCnt:%d, hasMemBlk:%v.\n",
+		//	c.proc.GetTxnOperator().Txn().DebugString(),
+		//	s.DataSource.TableDef.Name,
+		//	s.NodeInfo.Data.BlkCnt(),
+		//	s.NodeInfo.Data.GetDataBlk(0).IsMemBlk())
 	}
 	return nil
 }
@@ -1247,10 +1247,10 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 		switch s.DataSource.Rel.GetEngineType() {
 		case engine.Disttae:
 			//blkSlice := objectio.BlockInfoSlice(s.NodeInfo.Data)
-			fmt.Printf("xxxx start to build readers, txn:%s, table:%s. DataIsEmpty:%v",
-				c.proc.GetTxnOperator().Txn().DebugString(),
-				s.DataSource.TableDef.Name,
-				s.NodeInfo.Data == nil)
+			//fmt.Printf("xxxx start to build readers, txn:%s, table:%s. DataIsEmpty:%v",
+			//	c.proc.GetTxnOperator().Txn().DebugString(),
+			//	s.DataSource.TableDef.Name,
+			//	s.NodeInfo.Data == nil)
 			//Run time filter had already dropped it
 			if s.NodeInfo.Data == nil {
 				scanUsedCpuNumber = 1
@@ -1448,11 +1448,11 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 
 	//for partition table.
 	if len(readers) != scanUsedCpuNumber {
-		fmt.Printf("xxxx start to merge readers, txn:%s, table:%s,cpu num:%d, readers:%d",
-			c.proc.GetTxnOperator().Txn().DebugString(),
-			s.DataSource.TableDef.Name,
-			scanUsedCpuNumber,
-			len(readers))
+		//fmt.Printf("xxxx start to merge readers, txn:%s, table:%s,cpu num:%d, readers:%d",
+		//	c.proc.GetTxnOperator().Txn().DebugString(),
+		//	s.DataSource.TableDef.Name,
+		//	scanUsedCpuNumber,
+		//	len(readers))
 		newReaders := make([]engine.Reader, 0, scanUsedCpuNumber)
 		step := len(readers) / scanUsedCpuNumber
 		for i := 0; i < len(readers); i += step {
