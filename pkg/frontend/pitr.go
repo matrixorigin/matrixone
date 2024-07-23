@@ -1425,7 +1425,7 @@ func addTimeSpan(length int, unit string) (time.Time, error) {
 	case "h":
 		return now.Add(time.Duration(-length) * time.Hour), nil
 	case "d":
-		return now.Add(time.Duration(-length) * 24 * time.Hour), nil
+		return now.AddDate(0, 0, -length), nil
 	case "mo":
 		return now.AddDate(0, -length, 0), nil
 	case "y":
@@ -1433,6 +1433,30 @@ func addTimeSpan(length int, unit string) (time.Time, error) {
 	default:
 		return time.Time{}, moerr.NewInternalErrorNoCtx("unknown unit '%s'", unit)
 	}
+}
+
+func checkPitrValidOrNot(ctx context.Context, bh BackgroundExec, pitrRecord *pitrRecord, stmt *tree.RestorePitr) (err error) {
+	restoreLevel := stmt.Level
+	switch restoreLevel {
+	case tree.RESTORELEVELACCOUNT:
+
+		if len(stmt.AccountName) == 0 { // restore self account
+			// check the level
+			if pitrRecord.level == tree.PITRLEVELDATABASE.String() || pitrRecord.level == tree.PITRLEVELTABLE.String() {
+				return moerr.NewInternalErrorNoCtx("restore level %v is not allowed for account restore", pitrRecord.level)
+			}
+		}
+	case tree.RESTORELEVELDATABASE:
+		// check the level
+		if pitrRecord.level == tree.PITRLEVELTABLE.String() {
+			return moerr.NewInternalErrorNoCtx("restore level %v is not allowed for database restore", pitrRecord.level)
+		}
+	case tree.RESTORELEVELTABLE:
+	default:
+		return moerr.NewInternalErrorNoCtx("unknown restore level %v", restoreLevel.String())
+	}
+	return nil
+
 }
 func getFkDepsInPitrRestore(
 	ctx context.Context,
