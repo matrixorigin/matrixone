@@ -1960,10 +1960,12 @@ func (c *Compile) compileValueScan(n *plan.Node) ([]*Scope, error) {
 	ds.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
 	ds.Proc = process.NewFromProc(c.proc, c.proc.Ctx, 0)
 
+	currentFirstFlag := c.anal.isFirst
 	op := constructValueScan()
 	op.SetIdx(c.anal.curNodeIdx)
-	op.SetIsFirst(c.anal.isFirst)
+	op.SetIsFirst(currentFirstFlag)
 	ds.setRootOperator(op)
+	c.anal.isFirst = false
 
 	return []*Scope{ds}, nil
 }
@@ -2656,10 +2658,12 @@ func containBrokenNode(s *Scope) bool {
 func (c *Compile) compileTop(n *plan.Node, topN *plan.Expr, ss []*Scope) []*Scope {
 	// use topN TO make scope.
 	if c.IsSingleScope(ss) {
+		currentFirstFlag := c.anal.isFirst
 		op := constructTop(n, topN)
 		op.SetIdx(c.anal.curNodeIdx)
-		op.SetIsFirst(c.anal.isFirst)
+		op.SetIsFirst(currentFirstFlag)
 		ss[0].setRootOperator(op)
+		c.anal.isFirst = false
 		return ss
 	}
 
