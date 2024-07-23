@@ -19,35 +19,26 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
 // GetAutoIncrementService get increment service from process level runtime
-func GetAutoIncrementService(ctx context.Context) AutoIncrementService {
-	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.AutoIncrementService)
+func GetAutoIncrementService(sid string) AutoIncrementService {
+	v, ok := runtime.ServiceRuntime(sid).GetGlobalVariables(runtime.AutoIncrementService)
 	if !ok {
 		return nil
 	}
-	s := v.(AutoIncrementService)
-	uuid, ok := ctx.Value(defines.NodeIDKey{}).(string)
-	if !ok || uuid == "" {
-		return s
-	}
-	if s.UUID() != uuid {
-		v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.AutoIncrementService + "_" + uuid)
-		if !ok {
-			panic("cannot get the appropriate AutoIncrementService")
-		}
-		s = v.(AutoIncrementService)
-	}
-	return s
+	return v.(AutoIncrementService)
+
 }
 
 // SetAutoIncrementServiceByID set auto increment service instance into process level runtime.
-func SetAutoIncrementServiceByID(id string, v AutoIncrementService) {
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.AutoIncrementService+"_"+id, v)
+func SetAutoIncrementServiceByID(
+	service string,
+	v AutoIncrementService,
+) {
+	runtime.ServiceRuntime(service).SetGlobalVariables(runtime.AutoIncrementService, v)
 }
 
 // AutoIncrementService provides data service for the columns of auto-increment.

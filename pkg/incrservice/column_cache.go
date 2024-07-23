@@ -60,14 +60,16 @@ type columnCache struct {
 
 func newColumnCache(
 	ctx context.Context,
+	sid string,
 	tableID uint64,
 	col AutoColumn,
 	cfg Config,
 	committed bool,
 	allocator valueAllocator,
-	txnOp client.TxnOperator) (*columnCache, error) {
+	txnOp client.TxnOperator,
+) (*columnCache, error) {
 	item := &columnCache{
-		logger:    getLogger(),
+		logger:    getLogger(sid).Named("incrservice"),
 		col:       col,
 		cfg:       cfg,
 		allocator: allocator,

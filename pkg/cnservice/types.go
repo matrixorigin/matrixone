@@ -430,8 +430,10 @@ func (c *Config) Validate() error {
 	}
 
 	// TODO: remove this if rc is stable
-	moruntime.ProcessLevelRuntime().SetGlobalVariables(moruntime.EnableCheckInvalidRCErrors,
-		c.Txn.EnableCheckRCInvalidError)
+	moruntime.ServiceRuntime(c.UUID).SetGlobalVariables(
+		moruntime.EnableCheckInvalidRCErrors,
+		c.Txn.EnableCheckRCInvalidError,
+	)
 	return nil
 }
 

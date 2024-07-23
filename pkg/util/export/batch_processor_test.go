@@ -23,16 +23,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/gops/agent"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/util/stack"
-	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
-
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
-
-	"github.com/google/gops/agent"
+	"github.com/matrixorigin/matrixone/pkg/util/stack"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap/zapcore"
@@ -180,7 +178,7 @@ func TestNewMOCollector(t *testing.T) {
 	defer stub1.Reset()
 
 	cfg := getDummyOBCollectorConfig()
-	collector := NewMOCollector(ctx, WithOBCollectorConfig(cfg))
+	collector := NewMOCollector(ctx, "", WithOBCollectorConfig(cfg))
 	collector.Register(newDummy(0), &dummyPipeImpl{ch: ch, duration: time.Hour})
 	collector.Start()
 
@@ -213,7 +211,7 @@ func TestNewMOCollector_Stop(t *testing.T) {
 	ctx := context.Background()
 	ch := make(chan string, 3)
 
-	collector := NewMOCollector(ctx)
+	collector := NewMOCollector(ctx, "")
 	collector.Register(newDummy(0), &dummyPipeImpl{ch: ch, duration: time.Hour})
 	collector.Start()
 	collector.Stop(true)
@@ -255,7 +253,7 @@ func TestNewMOCollector_BufferCnt(t *testing.T) {
 	cfg := getDummyOBCollectorConfig()
 	cfg.ShowStatsInterval.Duration = 5 * time.Second
 	cfg.BufferCnt = 2
-	collector := NewMOCollector(ctx, WithOBCollectorConfig(cfg))
+	collector := NewMOCollector(ctx, "", WithOBCollectorConfig(cfg))
 	collector.Register(newDummy(0), &dummyPipeImpl{ch: ch, duration: time.Hour})
 	collector.Start()
 
@@ -329,7 +327,7 @@ func Test_newBufferHolder_AddAfterStop(t *testing.T) {
 	triggerSignalFunc := func(holder *bufferHolder) {}
 
 	cfg := getDummyOBCollectorConfig()
-	collector := NewMOCollector(context.TODO(), WithOBCollectorConfig(cfg))
+	collector := NewMOCollector(context.TODO(), "", WithOBCollectorConfig(cfg))
 
 	tests := []struct {
 		name string
@@ -374,7 +372,7 @@ func TestMOCollector_DiscardableCollect(t *testing.T) {
 
 	ctx := context.TODO()
 	cfg := getDummyOBCollectorConfig()
-	collector := NewMOCollector(context.TODO(), WithOBCollectorConfig(cfg))
+	collector := NewMOCollector(context.TODO(), "", WithOBCollectorConfig(cfg))
 	elem := newDummy(1)
 	for i := 0; i < defaultQueueSize; i++ {
 		collector.Collect(ctx, elem)
