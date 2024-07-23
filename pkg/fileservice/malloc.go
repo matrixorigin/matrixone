@@ -21,18 +21,38 @@ import (
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
+const (
+	// 1/freezeFraction of allocations may be frozen to detect wrong mutation such as mutating the memory cache objects
+	freezeFraction = 100
+)
+
+func decorateAllocator(allocator malloc.Allocator) malloc.Allocator {
+	// freeze randomly to detect wrong mutation
+	// this makes the allocator randomly freezable, whether to freeze is decided by the callers of Allocate method
+	allocator = malloc.NewRandomAllocator(
+		allocator,
+		malloc.NewReadOnlyAllocator(allocator),
+		freezeFraction,
+	)
+	return allocator
+}
+
 var getMemoryCacheAllocator = func() func() malloc.Allocator {
 	var allocator malloc.Allocator
 	var initOnce sync.Once
 	return func() malloc.Allocator {
 		initOnce.Do(func() {
+			allocator = malloc.GetDefault(nil)
+			// with metrics
 			allocator = malloc.NewMetricsAllocator(
-				malloc.GetDefault(nil),
+				allocator,
 				metric.MallocCounterMemoryCacheAllocateBytes,
 				metric.MallocGaugeMemoryCacheInuseBytes,
 				metric.MallocCounterMemoryCacheAllocateObjects,
 				metric.MallocGaugeMemoryCacheInuseObjects,
 			)
+			// decorate
+			allocator = decorateAllocator(allocator)
 		})
 		return allocator
 	}
@@ -43,13 +63,17 @@ var getBytesAllocator = func() func() malloc.Allocator {
 	var initOnce sync.Once
 	return func() malloc.Allocator {
 		initOnce.Do(func() {
+			allocator = malloc.GetDefault(nil)
+			// with metrics
 			allocator = malloc.NewMetricsAllocator(
-				malloc.GetDefault(nil),
+				allocator,
 				metric.MallocCounterBytesAllocateBytes,
 				metric.MallocGaugeBytesInuseBytes,
 				metric.MallocCounterBytesAllocateObjects,
 				metric.MallocGaugeBytesInuseObjects,
 			)
+			// decorate
+			allocator = decorateAllocator(allocator)
 		})
 		return allocator
 	}
@@ -60,13 +84,17 @@ var getIOAllocator = func() func() malloc.Allocator {
 	var initOnce sync.Once
 	return func() malloc.Allocator {
 		initOnce.Do(func() {
+			allocator = malloc.GetDefault(nil)
+			// with metrics
 			allocator = malloc.NewMetricsAllocator(
-				malloc.GetDefault(nil),
+				allocator,
 				metric.MallocCounterIOAllocateBytes,
 				metric.MallocGaugeIOInuseBytes,
 				metric.MallocCounterIOAllocateObjects,
 				metric.MallocGaugeIOInuseObjects,
 			)
+			// decorate
+			allocator = decorateAllocator(allocator)
 		})
 		return allocator
 	}

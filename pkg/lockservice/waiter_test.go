@@ -43,10 +43,10 @@ func TestWait(t *testing.T) {
 		w.setStatus(blocking)
 		go func() {
 			time.Sleep(time.Millisecond * 10)
-			w.notify(notifyValue{})
+			w.notify(notifyValue{}, getLogger(""))
 		}()
 
-		assert.NoError(t, w.wait(context.Background()).err)
+		assert.NoError(t, w.wait(context.Background(), getLogger("")).err)
 	})
 }
 
@@ -58,7 +58,7 @@ func TestWaitWithTimeout(t *testing.T) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
 		defer cancel()
-		assert.Error(t, w.wait(ctx).err)
+		assert.Error(t, w.wait(ctx, getLogger("")).err)
 	})
 }
 
@@ -75,7 +75,7 @@ func TestWaitAndNotifyConcurrent(t *testing.T) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*10)
 		defer cancel()
-		assert.NoError(t, w.wait(ctx).err)
+		assert.NoError(t, w.wait(ctx, getLogger("")).err)
 	})
 
 }
@@ -90,9 +90,9 @@ func TestWaitMultiTimes(t *testing.T) {
 
 		for i := 0; i < 100; i++ {
 			w.setStatus(blocking)
-			w.notify(notifyValue{})
-			assert.NoError(t, w.wait(ctx).err)
-			w.resetWait()
+			w.notify(notifyValue{}, getLogger(""))
+			assert.NoError(t, w.wait(ctx, getLogger("")).err)
+			w.resetWait(getLogger(""))
 		}
 	})
 }
@@ -103,7 +103,7 @@ func TestNotifyAfterCompleted(t *testing.T) {
 		require.Equal(t, 0, len(w.c))
 		defer w.close()
 		w.setStatus(completed)
-		assert.False(t, w.notify(notifyValue{}))
+		assert.False(t, w.notify(notifyValue{}, getLogger("")))
 	})
 }
 
@@ -112,9 +112,9 @@ func TestNotifyAfterAlreadyNotified(t *testing.T) {
 		w := acquireWaiter(pb.WaitTxn{})
 		w.setStatus(blocking)
 		defer w.close()
-		assert.True(t, w.notify(notifyValue{}))
-		assert.NoError(t, w.wait(context.Background()).err)
-		assert.False(t, w.notify(notifyValue{}))
+		assert.True(t, w.notify(notifyValue{}, getLogger("")))
+		assert.NoError(t, w.wait(context.Background(), getLogger("")).err)
+		assert.False(t, w.notify(notifyValue{}, getLogger("")))
 	})
 }
 
@@ -126,6 +126,6 @@ func TestNotifyWithStatusChanged(t *testing.T) {
 		w.beforeSwapStatusAdjustFunc = func() {
 			w.setStatus(completed)
 		}
-		assert.False(t, w.notify(notifyValue{}))
+		assert.False(t, w.notify(notifyValue{}, getLogger("")))
 	})
 }

@@ -57,7 +57,7 @@ func NewTAEStorage(
 		return nil, err
 	}
 
-	ss, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.StatusServer)
+	ss, ok := rt.GetGlobalVariables(runtime.StatusServer)
 	if ok {
 		ss.(*status.Server).SetLogtailServer(server)
 	}

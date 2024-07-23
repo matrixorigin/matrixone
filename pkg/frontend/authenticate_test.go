@@ -18,9 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/BurntSushi/toml"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/stretchr/testify/assert"
 	"go/constant"
 	"net"
 	"reflect"
@@ -28,15 +25,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	"github.com/golang/mock/gomock"
-	"github.com/prashantv/gostub"
-	"github.com/smartystreets/goconvey/convey"
-	"github.com/stretchr/testify/require"
-
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -46,6 +41,10 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/prashantv/gostub"
+	"github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGetTenantInfo(t *testing.T) {
@@ -7711,9 +7710,9 @@ func newSes(priv *privilege, ctrl *gomock.Controller) *Session {
 	if err != nil {
 		panic(err)
 	}
-	proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
+	proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
 
-	ses := NewSession(ctx, proto, nil)
+	ses := NewSession(ctx, "", proto, nil)
 	tenant := &TenantInfo{
 		Tenant:        sysAccountName,
 		User:          rootName,
