@@ -808,7 +808,7 @@ func restoreToDatabaseWithPitr(
 		return err
 	}
 	if !databaseExist {
-		getLogger(sid).Info(fmt.Sprintf("[%s] db: %v not exists at timestamp %d", pitrName, dbName, ts))
+		return moerr.NewInternalError(ctx, "database '%s' not exists at timestamp %d", dbName, ts)
 	}
 
 	return restoreToDatabaseOrTableWithPitr(ctx, sid, bh, pitrName, ts, dbName, "", fkTableMap, viewMap)
@@ -831,7 +831,7 @@ func restoreToTableWithPitr(
 		return err
 	}
 	if !TableExist {
-		getLogger(sid).Info(fmt.Sprintf("[%s] table: '%v' not exists at timestamp %d", pitrName, tblName, ts))
+		return moerr.NewInternalError(ctx, "database '%s' table '%s' not exists at timestamp %d", dbName, tblName, ts)
 	}
 	return restoreToDatabaseOrTableWithPitr(ctx, sid, bh, pitrName, ts, dbName, tblName, fkTableMap, viewMap)
 }
@@ -1431,7 +1431,7 @@ func addTimeSpan(length int, unit string) (time.Time, error) {
 	case "y":
 		return now.AddDate(-length, 0, 0), nil
 	default:
-		return time.Time{}, fmt.Errorf("unknown unit '%s'", unit)
+		return time.Time{}, moerr.NewInternalErrorNoCtx("unknown unit '%s'", unit)
 	}
 }
 func getFkDepsInPitrRestore(
