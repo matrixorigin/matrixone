@@ -61,8 +61,6 @@ var (
 
 	getSnapshotFormat = `select * from mo_catalog.mo_snapshots`
 
-	getPitrFormat = `select * from mo_catalog.mo_pitr`
-
 	checkSnapshotTsFormat = `select snapshot_id from mo_catalog.mo_snapshots where ts = %d order by snapshot_id;`
 
 	restoreTableDataByTsFmt = "insert into `%s`.`%s` SELECT * FROM `%s`.`%s` {MO_TS = %d }"

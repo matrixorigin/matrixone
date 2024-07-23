@@ -57,6 +57,8 @@ var (
 	getDbPubCountWithTsFormat = `select count(1) from mo_catalog.mo_pubs {MO_TS = %d} where database_name = '%s';`
 
 	restorePubDbDataWithTsFmt = "insert into `%s`.`%s` SELECT * FROM `%s`.`%s` {MO_TS = %d} WHERE  DATABASE_NAME = '%s'"
+
+	getPitrFormat = `select * from mo_catalog.mo_pitr`
 )
 
 type pitrRecord struct {
