@@ -1,3 +1,17 @@
+// Copyright 2021-2024 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package embed
 
 import (
@@ -102,6 +116,7 @@ func (op *operator) Close() error {
 	}
 
 	op.reset.stopper.Stop()
+	op.state = stopped
 	return nil
 }
 
@@ -178,18 +193,14 @@ func (op *operator) startLogServiceLocked(
 	if err := s.Start(); err != nil {
 		return err
 	}
+	if op.cfg.LogService.BootstrapConfig.BootstrapCluster {
+		op.reset.logger.Info("bootstrapping hakeeper...")
+		if err := s.BootstrapHAKeeper(context.Background(), op.cfg.LogService); err != nil {
+			return err
+		}
+	}
 	op.reset.svc = s
-	return op.reset.stopper.RunNamedTask(
-		"log-service",
-		func(ctx context.Context) {
-			if op.cfg.LogService.BootstrapConfig.BootstrapCluster {
-				op.reset.logger.Info("bootstrapping hakeeper...")
-				if err := s.BootstrapHAKeeper(ctx, op.cfg.LogService); err != nil {
-					panic(err)
-				}
-			}
-		},
-	)
+	return nil
 }
 
 func (op *operator) startTNServiceLocked(
@@ -198,29 +209,26 @@ func (op *operator) startTNServiceLocked(
 	if err := op.waitClusterConditionLocked(op.waitHAKeeperRunningLocked); err != nil {
 		return err
 	}
-	return op.reset.stopper.RunNamedTask(
-		"tn-service",
-		func(ctx context.Context) {
-			op.cfg.initMetaCache()
-			c := op.cfg.getTNServiceConfig()
-			//notify the tn service it is in the standalone cluster
-			c.InStandalone = op.cfg.IsStandalone
-			commonConfigKVMap, _ := dumpCommonConfig(op.cfg)
-			s, err := tnservice.NewService(
-				&c,
-				op.reset.rt,
-				fs,
-				op.reset.shutdownC,
-				tnservice.WithConfigData(commonConfigKVMap),
-			)
-			if err != nil {
-				panic(err)
-			}
-			if err := s.Start(); err != nil {
-				panic(err)
-			}
-		},
+	op.cfg.initMetaCache()
+	c := op.cfg.getTNServiceConfig()
+	//notify the tn service it is in the standalone cluster
+	c.InStandalone = op.cfg.IsStandalone
+	commonConfigKVMap, _ := dumpCommonConfig(op.cfg)
+	s, err := tnservice.NewService(
+		&c,
+		op.reset.rt,
+		fs,
+		op.reset.shutdownC,
+		tnservice.WithConfigData(commonConfigKVMap),
 	)
+	if err != nil {
+		return err
+	}
+	if err := s.Start(); err != nil {
+		return err
+	}
+	op.reset.svc = s
+	return nil
 }
 
 func (op *operator) startCNServiceLocked(
@@ -229,30 +237,27 @@ func (op *operator) startCNServiceLocked(
 	if err := op.waitClusterConditionLocked(op.waitAnyShardReadyLocked); err != nil {
 		return err
 	}
-	return op.reset.stopper.RunNamedTask(
-		"cn-service",
-		func(ctx context.Context) {
-			op.cfg.initMetaCache()
-			c := op.cfg.getCNServiceConfig()
-			commonConfigKVMap, _ := dumpCommonConfig(op.cfg)
-			s, err := cnservice.NewService(
-				&c,
-				ctx,
-				fs,
-				op.reset.gossipNode,
-				cnservice.WithLogger(op.reset.logger),
-				cnservice.WithMessageHandle(compile.CnServerMessageHandler),
-				cnservice.WithConfigData(commonConfigKVMap),
-				cnservice.WithTxnTraceData(filepath.Join(op.cfg.DataDir, c.Txn.Trace.Dir)),
-			)
-			if err != nil {
-				panic(err)
-			}
-			if err := s.Start(); err != nil {
-				panic(err)
-			}
-		},
+	op.cfg.initMetaCache()
+	c := op.cfg.getCNServiceConfig()
+	commonConfigKVMap, _ := dumpCommonConfig(op.cfg)
+	s, err := cnservice.NewService(
+		&c,
+		context.Background(),
+		fs,
+		op.reset.gossipNode,
+		cnservice.WithLogger(op.reset.logger),
+		cnservice.WithMessageHandle(compile.CnServerMessageHandler),
+		cnservice.WithConfigData(commonConfigKVMap),
+		cnservice.WithTxnTraceData(filepath.Join(op.cfg.DataDir, c.Txn.Trace.Dir)),
 	)
+	if err != nil {
+		return err
+	}
+	if err := s.Start(); err != nil {
+		return err
+	}
+	op.reset.svc = s
+	return nil
 }
 
 func (op *operator) startProxyServiceLocked() error {

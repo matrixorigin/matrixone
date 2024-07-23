@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2021-2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -410,12 +410,6 @@ func (c *ServiceConfig) getCNServiceConfig() cnservice.Config {
 func (c *ServiceConfig) getProxyConfig() proxy.Config {
 	cfg := c.ProxyConfig
 	cfg.HAKeeper.ClientConfig = c.HAKeeperClient
-	return cfg
-}
-
-func (c *ServiceConfig) getObservabilityConfig() config.ObservabilityParameters {
-	cfg := c.Observability
-	cfg.SetDefaultValues(version.Version)
 	return cfg
 }
 
