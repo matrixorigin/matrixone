@@ -1411,7 +1411,7 @@ func checkPitrInValidDurtion(ts int64, pitrRecord *pitrRecord) (err error) {
 	}
 
 	if ts < minTs.UnixNano() {
-		return fmt.Errorf("ts %v is less than the minest time %v", ts, minTs.Unix())
+		return moerr.NewInternalErrorNoCtx("ts %v is less than the minest time %v", ts, minTs.Unix())
 	}
 
 	return
