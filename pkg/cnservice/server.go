@@ -288,7 +288,7 @@ func (s *service) Close() error {
 		return err
 	}
 	// stop I/O pipeline
-	blockio.Stop()
+	blockio.Stop(s.cfg.UUID)
 
 	if s.gossipNode != nil {
 		if err := s.gossipNode.Leave(time.Second); err != nil {
