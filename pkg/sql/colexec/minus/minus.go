@@ -215,6 +215,7 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 				}
 			}
 		}
+		ana.Alloc(int64(ctr.bat.Size()))
 		ana.Output(ctr.bat, isLast)
 		result.Batch = ctr.bat
 		proc.PutBatch(bat)

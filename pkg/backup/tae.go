@@ -104,7 +104,7 @@ func BackupData(
 		return err
 	}
 	count := config.Parallelism
-	return execBackup(ctx, srcFs, dstFs, fileName, int(count), config.BackupTs, config.BackupType)
+	return execBackup(ctx, sid, srcFs, dstFs, fileName, int(count), config.BackupTs, config.BackupType)
 }
 
 func getParallelCount(count int) int {
@@ -262,6 +262,7 @@ func parallelCopyData(srcFs, dstFs fileservice.FileService,
 
 func execBackup(
 	ctx context.Context,
+	sid string,
 	srcFs, dstFs fileservice.FileService,
 	names []string,
 	count int,
@@ -309,9 +310,9 @@ func execBackup(
 		var oneNames []*objectio.BackupObject
 		var data *logtail.CheckpointData
 		if i == 0 {
-			oneNames, data, err = logtail.LoadCheckpointEntriesFromKey(ctx, srcFs, key, uint32(version), nil, &baseTS)
+			oneNames, data, err = logtail.LoadCheckpointEntriesFromKey(ctx, sid, srcFs, key, uint32(version), nil, &baseTS)
 		} else {
-			oneNames, data, err = logtail.LoadCheckpointEntriesFromKey(ctx, srcFs, key, uint32(version), &softDeletes, &baseTS)
+			oneNames, data, err = logtail.LoadCheckpointEntriesFromKey(ctx, sid, srcFs, key, uint32(version), &softDeletes, &baseTS)
 		}
 		if err != nil {
 			return err
@@ -378,7 +379,7 @@ func execBackup(
 			return err
 		}
 		var checkpointFiles []string
-		cnLocation, tnLocation, checkpointFiles, err = logtail.ReWriteCheckpointAndBlockFromKey(ctx, srcFs, dstFs,
+		cnLocation, tnLocation, checkpointFiles, err = logtail.ReWriteCheckpointAndBlockFromKey(ctx, sid, srcFs, dstFs,
 			cnLocation, tnLocation, uint32(version), start, softDeletes)
 		for _, name := range checkpointFiles {
 			dentry, err := dstFs.StatFile(ctx, name)
@@ -395,7 +396,7 @@ func execBackup(
 		if err != nil {
 			return err
 		}
-		file, err := checkpoint.MergeCkpMeta(ctx, dstFs, cnLocation, tnLocation, start, end)
+		file, err := checkpoint.MergeCkpMeta(ctx, sid, dstFs, cnLocation, tnLocation, start, end)
 		if err != nil {
 			return err
 		}

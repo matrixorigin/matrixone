@@ -89,4 +89,5 @@ type Options struct {
 	Shard             metadata.TNShard                         `toml:"-"`
 	Clock             clock.Clock                              `toml:"-"`
 	TaskServiceGetter taskservice.Getter                       `toml:"-"`
+	SID               string                                   `toml:"-"`
 }
