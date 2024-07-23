@@ -37,7 +37,7 @@ func newSyncPoolBased[T ReusableObject](
 			New: func() any {
 				v := new()
 
-				if enableChecker.Load() && !c.enable {
+				if enableChecker.Load() && c.enable {
 					c.created(v)
 					runtime.SetFinalizer(
 						v,
