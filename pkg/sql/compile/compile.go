@@ -2355,12 +2355,8 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 	case plan.Node_INNER:
 		for i := range children {
 			op := constructJoin(node, rightTyps, c.proc)
-<<<<<<< HEAD
 			op.ShuffleIdx = int32(children[i].ShuffleIdx)
-			op.SetIdx(c.anal.curr)
-=======
 			op.SetIdx(c.anal.curNodeIdx)
->>>>>>> c91a7731aab955496229e43a909cb7d7bb72ea66
 			children[i].setRootOperator(op)
 		}
 
@@ -2368,23 +2364,15 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 		if node.BuildOnLeft {
 			for i := range children {
 				op := constructRightAnti(node, rightTyps, c.proc)
-<<<<<<< HEAD
 				op.ShuffleIdx = int32(children[i].ShuffleIdx)
-				op.SetIdx(c.anal.curr)
-=======
 				op.SetIdx(c.anal.curNodeIdx)
->>>>>>> c91a7731aab955496229e43a909cb7d7bb72ea66
 				children[i].setRootOperator(op)
 			}
 		} else {
 			for i := range children {
 				op := constructAnti(node, rightTyps, c.proc)
-<<<<<<< HEAD
 				op.ShuffleIdx = int32(children[i].ShuffleIdx)
-				op.SetIdx(c.anal.curr)
-=======
 				op.SetIdx(c.anal.curNodeIdx)
->>>>>>> c91a7731aab955496229e43a909cb7d7bb72ea66
 				children[i].setRootOperator(op)
 			}
 		}
@@ -2393,23 +2381,15 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 		if node.BuildOnLeft {
 			for i := range children {
 				op := constructRightSemi(node, rightTyps, c.proc)
-<<<<<<< HEAD
 				op.ShuffleIdx = int32(children[i].ShuffleIdx)
-				op.SetIdx(c.anal.curr)
-=======
 				op.SetIdx(c.anal.curNodeIdx)
->>>>>>> c91a7731aab955496229e43a909cb7d7bb72ea66
 				children[i].setRootOperator(op)
 			}
 		} else {
 			for i := range children {
 				op := constructSemi(node, rightTyps, c.proc)
-<<<<<<< HEAD
 				op.ShuffleIdx = int32(children[i].ShuffleIdx)
-				op.SetIdx(c.anal.curr)
-=======
 				op.SetIdx(c.anal.curNodeIdx)
->>>>>>> c91a7731aab955496229e43a909cb7d7bb72ea66
 				children[i].setRootOperator(op)
 			}
 		}
@@ -2417,24 +2397,16 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 	case plan.Node_LEFT:
 		for i := range children {
 			op := constructLeft(node, rightTyps, c.proc)
-<<<<<<< HEAD
 			op.ShuffleIdx = int32(children[i].ShuffleIdx)
-			op.SetIdx(c.anal.curr)
-=======
 			op.SetIdx(c.anal.curNodeIdx)
->>>>>>> c91a7731aab955496229e43a909cb7d7bb72ea66
 			children[i].setRootOperator(op)
 		}
 
 	case plan.Node_RIGHT:
 		for i := range children {
 			op := constructRight(node, leftTyps, rightTyps, c.proc)
-<<<<<<< HEAD
 			op.ShuffleIdx = int32(children[i].ShuffleIdx)
-			op.SetIdx(c.anal.curr)
-=======
 			op.SetIdx(c.anal.curNodeIdx)
->>>>>>> c91a7731aab955496229e43a909cb7d7bb72ea66
 			children[i].setRootOperator(op)
 		}
 	default:
@@ -3866,19 +3838,11 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope, mcpu int32) *Scope {
 	for i := 0; i < buildLen; i++ {
 		regTransplant(s, rs, i+s.BuildIdx, i)
 	}
-<<<<<<< HEAD
 	mergeOp := merge.NewArgument()
-	mergeOp.SetIdx(c.anal.curr)
+	mergeOp.SetIdx(c.anal.curNodeIdx)
 	mergeOp.SetIsFirst(c.anal.isFirst)
 	rs.setRootOperator(mergeOp)
 	rs.setRootOperator(constructJoinBuildOperator(c, vm.GetLeafOp(s.RootOp), s.ShuffleIdx > 0, mcpu))
-=======
-	merge := merge.NewArgument()
-	merge.SetIdx(c.anal.curNodeIdx)
-	merge.SetIsFirst(c.anal.isFirst)
-	rs.setRootOperator(merge)
-	rs.setRootOperator(constructJoinBuildOperator(c, vm.GetLeafOp(s.RootOp), ss != nil, s.ShuffleCnt > 0))
->>>>>>> c91a7731aab955496229e43a909cb7d7bb72ea66
 
 	if ss == nil { // unparallel, send the hashtable to join scope directly
 		s.Proc.Reg.MergeReceivers[s.BuildIdx] = &process.WaitRegister{
