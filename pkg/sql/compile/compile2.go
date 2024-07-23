@@ -193,7 +193,7 @@ func (c *Compile) Run() (queryResult *util2.RunResult, err error) {
 	v2.TxnStatementTotalCounter.Inc()
 	for {
 		// build query context and pipeline contexts for the current run.
-		runC.proc.RebuildContext(execTopContext)
+		c.InitPipelineContextToExecuteQuery()
 
 		if err = runC.runOnce(); err == nil {
 			break

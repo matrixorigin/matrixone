@@ -185,7 +185,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 			return err
 		}
 		s = appendWriteBackOperator(runCompile, s)
-		s.SetContextRecursively(runCompile.proc.Ctx)
+		runCompile.InitPipelineContextToExecuteQuery()
 
 		defer func() {
 			runCompile.proc.FreeVectors()

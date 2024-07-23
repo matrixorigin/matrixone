@@ -14,7 +14,10 @@
 
 package compile
 
-import "context"
+import (
+	"context"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+)
 
 // InitPipelineContextToExecuteQuery initializes the context for each pipeline tree.
 // The entire process must follow these rules:
@@ -22,6 +25,8 @@ import "context"
 // 2. if there's a data transfer between two pipelines, the lifecycle of the sender's context ends with the receiver's termination.
 func (c *Compile) InitPipelineContextToExecuteQuery() {
 	queryContext := c.proc.Base.GetContextBase().RefreshQueryCtx()
+	queryContext = c.proc.Base.GetContextBase().SaveToQueryContext(defines.EngineKey{}, c.e)
+	queryContext = c.proc.Base.GetContextBase().WithCounterSetToQueryContext(c.counterSet)
 
 	// build pipeline context.
 	for _, pipeline := range c.scope {

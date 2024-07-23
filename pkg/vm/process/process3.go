@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
@@ -210,6 +211,11 @@ func (qbCtx *QueryBaseContext) RefreshQueryCtx() context.Context {
 // But should be careful to avoid adding key-value pairs after the pipeline context has been created.
 func (qbCtx *QueryBaseContext) SaveToQueryContext(key, value any) context.Context {
 	qbCtx.queryContext = context.WithValue(qbCtx.queryContext, key, value)
+	return qbCtx.queryContext
+}
+
+func (qbCtx *QueryBaseContext) WithCounterSetToQueryContext(sets ...*perfcounter.CounterSet) context.Context {
+	qbCtx.queryContext = perfcounter.WithCounterSet(qbCtx.queryContext, sets...)
 	return qbCtx.queryContext
 }
 

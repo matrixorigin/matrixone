@@ -192,8 +192,6 @@ func (s *Scope) Run(c *Compile) (err error) {
 		}
 	}()
 
-	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
-
 	id := uint64(0)
 	if s.DataSource.TableDef != nil {
 		id = s.DataSource.TableDef.TblId
@@ -215,16 +213,6 @@ func (s *Scope) Run(c *Compile) (err error) {
 	default:
 	}
 	return err
-}
-
-func (s *Scope) SetContextRecursively(ctx context.Context) {
-	if s.Proc == nil {
-		return
-	}
-	newCtx := s.Proc.ResetContextFromParent(ctx)
-	for _, scope := range s.PreScopes {
-		scope.SetContextRecursively(newCtx)
-	}
 }
 
 func (s *Scope) InitAllDataSource(c *Compile) error {
@@ -288,7 +276,6 @@ func (s *Scope) MergeRun(c *Compile) error {
 		}
 	}
 
-	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
 	var notifyMessageResultReceiveChan chan notifyMessageResult
 	if len(s.RemoteReceivRegInfos) > 0 {
 		notifyMessageResultReceiveChan = make(chan notifyMessageResult, len(s.RemoteReceivRegInfos))
@@ -411,8 +398,6 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 			pipeline.NewMerge(s.RootOp, s.Reg).Cleanup(s.Proc, true, c.isPrepare, err)
 		}
 	}()
-
-	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
 
 	switch {
 	// probability 1: it's a JOIN pipeline.
@@ -596,7 +581,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		ReleaseScopes(readerScopes)
 		return nil, err
 	}
-	mergeFromParallelScanScope.SetContextRecursively(s.Proc.Ctx)
+	//mergeFromParallelScanScope.buildContextFromParentCtx(s.Proc.Ctx)
 	return mergeFromParallelScanScope, nil
 }
 

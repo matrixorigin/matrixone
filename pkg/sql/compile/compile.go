@@ -439,7 +439,6 @@ func (c *Compile) runOnce() error {
 	}
 	errC := make(chan error, len(c.scope))
 	for _, s := range c.scope {
-		s.SetContextRecursively(c.proc.Ctx)
 		err = s.InitAllDataSource(c)
 		if err != nil {
 			return err
