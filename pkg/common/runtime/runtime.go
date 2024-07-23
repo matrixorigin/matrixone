@@ -70,7 +70,9 @@ func ServiceRuntime(
 	v, ok := allRuntime.Load(service)
 	if !ok {
 		if service == "" {
-			return DefaultRuntime()
+			rt := DefaultRuntime()
+			SetupServiceBasedRuntime("", rt)
+			return rt
 		}
 		return nil
 	}

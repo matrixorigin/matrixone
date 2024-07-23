@@ -75,18 +75,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -682,6 +679,7 @@ func GetMetaIdxesByVersion(ver uint32) []uint16 {
 }
 func LoadCheckpointEntries(
 	ctx context.Context,
+	sid string,
 	metLoc string,
 	tableID uint64,
 	tableName string,
@@ -716,12 +714,12 @@ func LoadCheckpointEntries(
 			return nil, nil, err
 		}
 		locations[i/2] = location
-		reader, err := blockio.NewObjectReader(fs, location)
+		reader, err := blockio.NewObjectReader(sid, fs, location)
 		if err != nil {
 			return nil, nil, err
 		}
 		readers[i/2] = reader
-		err = blockio.PrefetchMeta(fs, location)
+		err = blockio.PrefetchMeta(sid, fs, location)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -730,7 +728,7 @@ func LoadCheckpointEntries(
 	}
 
 	for i := range objectLocations {
-		data := NewCNCheckpointData()
+		data := NewCNCheckpointData(sid)
 		meteIdxSchema := checkpointDataReferVersions[versions[i]][MetaIDX]
 		idxes := make([]uint16, len(meteIdxSchema.attrs))
 		for attr := range meteIdxSchema.attrs {
