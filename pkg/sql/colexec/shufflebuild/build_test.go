@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -176,7 +175,9 @@ func newTestCase(flgs []bool, ts []types.Type, cs []*plan.Expr) buildTestCase {
 	}
 }
 
+/*
 // create a new block based on the type information, flgs[i] == ture: has null
 func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
+*/

@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
@@ -30,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -323,6 +321,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []int32, cs [][]*plan.Expr) jo
 	}
 }
 
+/*
 func hashBuild(t *testing.T, tc joinTestCase) []*batch.Batch {
 	err := tc.marg.Prepare(tc.proc)
 	require.NoError(t, err)
@@ -346,3 +345,4 @@ func hashBuild(t *testing.T, tc joinTestCase) []*batch.Batch {
 func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
+*/
