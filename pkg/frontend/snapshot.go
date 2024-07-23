@@ -143,22 +143,6 @@ type snapshotRecord struct {
 	objId        uint64
 }
 
-type pitrRecord struct {
-	pitrId        string
-	pitrName      string
-	createAccount uint64
-	createTime    string
-	modifiedTime  string
-	level         string
-	accountId     uint64
-	accountName   string
-	databaseName  string
-	tableName     string
-	objId         uint64
-	pitrValue     uint64
-	pitrUnit      string
-}
-
 type tableInfo struct {
 	dbName    string
 	tblName   string
@@ -448,7 +432,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	}
 
 	// get topo sorted tables with foreign key
-	sortedFkTbls, err := fkTablesTopoSort(ctx, ses.GetService(), bh, snapshotName, dbName, tblName)
+	sortedFkTbls, err := fkTablesTopoSort(ctx, bh, snapshotName, dbName, tblName)
 	if err != nil {
 		return
 	}
@@ -489,10 +473,6 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		}
 	}
 
-	if err != nil {
-		return
-	}
-
 	if snapshot.level == tree.RESTORELEVELCLUSTER.String() && len(srcAccountName) != 0 {
 		err = deleteSnapshotRecord(ctx, ses.GetService(), bh, snapshot.snapshotName, snapshotName)
 		if err != nil {
@@ -514,7 +494,7 @@ func deleteCurFkTables(ctx context.Context, sid string, bh BackgroundExec, dbNam
 	ctx = defines.AttachAccountId(ctx, toAccountId)
 
 	// get topo sorted tables with foreign key
-	sortedFkTbls, err := fkTablesTopoSort(ctx, sid, bh, "", dbName, tblName)
+	sortedFkTbls, err := fkTablesTopoSort(ctx, bh, "", dbName, tblName)
 	if err != nil {
 		return
 	}
@@ -1318,7 +1298,7 @@ func getTableInfoMap(
 	return
 }
 
-func fkTablesTopoSort(ctx context.Context, sid string, bh BackgroundExec, snapshotName string, dbName string, tblName string) (sortedTbls []string, err error) {
+func fkTablesTopoSort(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string, tblName string) (sortedTbls []string, err error) {
 	// get foreign key deps from mo_catalog.mo_foreign_keys
 	fkDeps, err := getFkDeps(ctx, bh, snapshotName, dbName, tblName)
 	if err != nil {
@@ -1495,7 +1475,7 @@ func restoreAccountUsingClusterSnapshot(ctx context.Context, ses *Session, bh Ba
 	// get topo sorted tables with foreign key
 	var sortedFkTbls []string
 	var fkTableMap map[string]*tableInfo
-	sortedFkTbls, err = fkTablesTopoSort(ctx, ses.GetService(), bh, newSnapshot, "", "")
+	sortedFkTbls, err = fkTablesTopoSort(ctx, bh, newSnapshot, "", "")
 	if err != nil {
 		return err
 	}
@@ -1681,313 +1661,4 @@ func getSnapshotPlanWithSharedBh(ctx context.Context, bh BackgroundExec, snapsho
 			TenantID:   accountId,
 		},
 	}, nil
-}
-
-func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (err error) {
-	bh := ses.GetShareTxnBackgroundExec(ctx, false)
-	defer bh.Close()
-
-	var restoreLevel tree.RestoreLevel
-	// reslove timestamp
-	ts, err := doResolveTimeStamp(stmt.TimeStamp)
-	if err != nil {
-		return err
-	}
-
-	// get pitr name
-	pitrName := string(stmt.Name)
-	srcAccountName := string(stmt.AccountName)
-	dbName := string(stmt.DatabaseName)
-	tblName := string(stmt.TableName)
-
-	// check if the pitr exists
-	tenantInfo := ses.GetTenantInfo()
-	pitrExist, err := checkPitrExistOrNot(ctx, bh, pitrName, uint64(tenantInfo.GetTenantID()))
-	if err != nil {
-		return err
-	}
-
-	if !pitrExist {
-		return moerr.NewInternalError(ctx, "pitr %s does not exist", pitrName)
-	}
-
-	// check privilege
-	// only sys account can restore other account's pitr
-	if len(srcAccountName) != 0 && tenantInfo.GetTenant() != sysAccountName {
-		return moerr.NewInternalError(ctx, "only sys account can restore other account's pitr")
-	}
-
-	// check if the database can be restore
-	if len(dbName) != 0 && needSkipDb(dbName) {
-		return moerr.NewInternalError(ctx, "database %s can not be restore", dbName)
-
-	}
-
-	// get pitr Record
-	var pitr *pitrRecord
-	if pitr, err = getPitrByName(ctx, bh, pitrName, uint64(tenantInfo.GetTenantID())); err != nil {
-		return err
-	}
-
-	// check the ts is valid or not
-	if err = checkPitrInValidDurtion(ts, pitr); err != nil {
-		return err
-	}
-
-	restoreLevel = stmt.Level
-
-	// restore as a txn
-	if err = bh.Exec(ctx, "begin;"); err != nil {
-		return err
-	}
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-
-	// restore self account
-
-	// drop foreign key related tables first
-	// if err = deleteCurFkTableInPitrRestore(ctx, ses.GetService(), bh, dbName, tblName); err != nil {
-	// 	return
-	// }
-
-	// // get topo sorted tables with foreign key
-	// sortedFkTbls, err := fkTablesTopoSortInPitrRestore(ctx, ses.GetService(), bh, ts, dbName, tblName)
-	// if err != nil {
-	// 	return
-	// }
-
-	// // get foreign key table infos
-	// _, err = getTableInfoMapInPitrRestore(ctx, ses.GetService(), bh, ts, dbName, tblName, sortedFkTbls)
-	// if err != nil {
-	// 	return
-	// }
-
-	// restore according the restore level
-	switch restoreLevel {
-	case tree.RESTORELEVELCLUSTER:
-		// error
-		return moerr.NewInternalError(ctx, "restore level cluster is not supported")
-	case tree.RESTORELEVELACCOUNT:
-		return moerr.NewInternalError(ctx, "restore level account is not supported")
-	case tree.RESTORELEVELDATABASE:
-		return moerr.NewInternalError(ctx, "restore level database is not supported")
-	case tree.RESTORELEVELTABLE:
-		return restoreToTableWithPitr(ctx, ses.service, bh, pitrName, ts, dbName, tblName, nil, nil)
-
-	default:
-		return moerr.NewInternalError(ctx, "unknown restore level %v", restoreLevel)
-	}
-
-}
-
-func getTableInfoWithPitr(
-	ctx context.Context,
-	sid string,
-	bh BackgroundExec,
-	pitrName string,
-	ts int64,
-	dbName string,
-	tblName string) ([]*tableInfo, error) {
-	getLogger(sid).Info(fmt.Sprintf("[%s] start to get table info: datatabse `%s`, table `%s`, ts %d", pitrName, dbName, tblName, ts))
-	tableInfos, err := showFullTablesWitsTs(ctx,
-		sid,
-		bh,
-		pitrName,
-		ts,
-		dbName,
-		tblName)
-	if err != nil {
-		return nil, err
-	}
-
-	for _, tblInfo := range tableInfos {
-		if tblInfo.createSql, err = getCreateTableSqlWithTs(ctx, bh, ts, dbName, tblInfo.tblName); err != nil {
-			return nil, err
-		}
-	}
-
-	return tableInfos, nil
-}
-
-func showFullTablesWitsTs(
-	ctx context.Context,
-	sid string,
-	bh BackgroundExec,
-	pitrName string,
-	ts int64,
-	dbName string,
-	tblName string) ([]*tableInfo, error) {
-	sql := fmt.Sprintf("show full tables from `%s`", dbName)
-	if len(tblName) > 0 {
-		sql += fmt.Sprintf(" like '%s'", tblName)
-	}
-	if ts > 0 {
-		sql += fmt.Sprintf(" {MO_TS = %d}", ts)
-	}
-	getLogger(sid).Info(fmt.Sprintf("[%s] show full table `%s.%s` sql: %s ", pitrName, dbName, tblName, sql))
-	// cols: table name, table type
-	colsList, err := getStringColsList(ctx, bh, sql, 0, 1)
-	if err != nil {
-		return nil, err
-	}
-
-	ans := make([]*tableInfo, len(colsList))
-	for i, cols := range colsList {
-		ans[i] = &tableInfo{
-			dbName:  dbName,
-			tblName: cols[0],
-			typ:     tableType(cols[1]),
-		}
-	}
-	getLogger(sid).Info(fmt.Sprintf("[%s] show full table `%s.%s`, get table number `%d`", pitrName, dbName, tblName, len(ans)))
-	return ans, nil
-}
-
-func getCreateTableSqlWithTs(ctx context.Context, bh BackgroundExec, ts int64, dbName string, tblName string) (string, error) {
-	sql := fmt.Sprintf("show create table `%s`.`%s`", dbName, tblName)
-	if ts > 0 {
-		sql += fmt.Sprintf(" {MO_TS = %d}", ts)
-	}
-
-	// cols: table_name, create_sql
-	colsList, err := getStringColsList(ctx, bh, sql, 1)
-	if err != nil {
-		return "", nil
-	}
-	if len(colsList) == 0 || len(colsList[0]) == 0 {
-		return "", moerr.NewNoSuchTable(ctx, dbName, tblName)
-	}
-	return colsList[0][0], nil
-}
-
-func restoreToTableWithPitr(
-	ctx context.Context,
-	sid string,
-	bh BackgroundExec,
-	pitrName string,
-	ts int64,
-	dbName string,
-	tblName string,
-	fkTableMap map[string]*tableInfo,
-	viewMap map[string]*tableInfo) (err error) {
-	getLogger(sid).Info(fmt.Sprintf("[%s]  start to restore table: %v at timestamp %d", pitrName, tblName, ts))
-	return restoreToDatabaseOrTableWithPitr(ctx, sid, bh, pitrName, ts, dbName, tblName, fkTableMap, viewMap)
-}
-
-func restoreToDatabaseOrTableWithPitr(
-	ctx context.Context,
-	sid string,
-	bh BackgroundExec,
-	pitrName string,
-	ts int64,
-	dbName string,
-	tblName string,
-	fkTableMap map[string]*tableInfo,
-	viewMap map[string]*tableInfo) (err error) {
-	if needSkipDb(dbName) {
-		getLogger(sid).Info(fmt.Sprintf("[%s] skip restore db: %v", pitrName, dbName))
-		return
-	}
-
-	restoreToTbl := tblName != ""
-
-	// if restore to db, delete the same name db first
-	if !restoreToTbl {
-		getLogger(sid).Info(fmt.Sprintf("[%s] start to drop database: %v", pitrName, dbName))
-		if err = bh.Exec(ctx, "drop database if exists "+dbName); err != nil {
-			return
-		}
-	}
-
-	getLogger(sid).Info(fmt.Sprintf("[%s] start to create database: %v", pitrName, dbName))
-	if err = bh.Exec(ctx, "create database if not exists "+dbName); err != nil {
-		return
-	}
-
-	// if !restoreToTbl {
-	// 	if err = checkAndRestorePublicationRecord(ctx, sid, bh, snapshotName, dbName, toAccountId); err != nil {
-	// 		return
-	// 	}
-	// }
-
-	tableInfos, err := getTableInfoWithPitr(ctx, sid, bh, pitrName, ts, dbName, tblName)
-	if err != nil {
-		return
-	}
-
-	// if restore to table, expect only one table here
-	if restoreToTbl {
-		if len(tableInfos) == 0 {
-			return moerr.NewInternalError(ctx, "table %s not exists at pitr %s", tblName, pitrName)
-		} else if len(tableInfos) != 1 {
-			return moerr.NewInternalError(ctx, "find %v tableInfos by name %s at pitr %s, expect only 1", len(tableInfos), tblName, pitrName)
-		}
-	}
-
-	for _, tblInfo := range tableInfos {
-		key := genKey(dbName, tblInfo.tblName)
-
-		// skip table which is foreign key related
-		if _, ok := fkTableMap[key]; ok {
-			continue
-		}
-
-		// skip view
-		if tblInfo.typ == view {
-			viewMap[key] = tblInfo
-			continue
-		}
-
-		// checks if the given context has been canceled.
-		if err = CancelCheck(ctx); err != nil {
-			return
-		}
-
-		if err = recreateTableWithPitr(ctx,
-			sid,
-			bh,
-			pitrName,
-			ts,
-			tblInfo); err != nil {
-			return
-		}
-	}
-	return
-}
-
-func recreateTableWithPitr(
-	ctx context.Context,
-	sid string,
-	bh BackgroundExec,
-	pitrName string,
-	ts int64,
-	tblInfo *tableInfo) (err error) {
-	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore table: %v at timestamp %d", pitrName, tblInfo.tblName, ts))
-
-	if err = bh.Exec(ctx, fmt.Sprintf("use `%s`", tblInfo.dbName)); err != nil {
-		return
-	}
-
-	getLogger(sid).Info(fmt.Sprintf("[%s] start to drop table: %v,", pitrName, tblInfo.tblName))
-	if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists %s", tblInfo.tblName)); err != nil {
-		return
-	}
-
-	// create table
-	getLogger(sid).Info(fmt.Sprintf("[%s]  start to create table: %v, create table sql: %s", pitrName, tblInfo.tblName, tblInfo.createSql))
-	if err = bh.Exec(ctx, tblInfo.createSql); err != nil {
-		return
-	}
-
-	// insert data
-	insertIntoSql := fmt.Sprintf(restoreTableDataByTsFmt, tblInfo.dbName, tblInfo.tblName, tblInfo.dbName, tblInfo.tblName, ts)
-	beginTime := time.Now()
-	getLogger(sid).Info(fmt.Sprintf("[%s] start to insert select table: %v, insert sql: %s", pitrName, tblInfo.tblName, insertIntoSql))
-	if err = bh.Exec(ctx, insertIntoSql); err != nil {
-		return
-	}
-	getLogger(sid).Info(fmt.Sprintf("[%s] insert select table: %v, cost: %v", pitrName, tblInfo.tblName, time.Since(beginTime)))
-
-	return
 }
