@@ -22,8 +22,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -37,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"go.uber.org/zap"
 )
 
 func getQueryResultDir() string {
@@ -345,12 +344,12 @@ func isResultQuery(p *plan.Plan) []string {
 	return uuids
 }
 
-func checkPrivilege(uuids []string, reqCtx context.Context, ses *Session) error {
+func checkPrivilege(sid string, uuids []string, reqCtx context.Context, ses *Session) error {
 	f := getGlobalPu().FileService
 	for _, id := range uuids {
 		// var size int64 = -1
 		path := catalog.BuildQueryResultMetaPath(ses.GetTenantInfo().GetTenant(), id)
-		reader, err := blockio.NewFileReader(f, path)
+		reader, err := blockio.NewFileReader(sid, f, path)
 		if err != nil {
 			return err
 		}
@@ -680,7 +679,7 @@ func openResultMeta(ctx context.Context, ses *Session, queryId string) (*plan.Re
 	}
 	metaFile := catalog.BuildQueryResultMetaPath(account.GetTenant(), queryId)
 	// read meta's meta
-	reader, err := blockio.NewFileReader(getGlobalPu().FileService, metaFile)
+	reader, err := blockio.NewFileReader(ses.service, getGlobalPu().FileService, metaFile)
 	if err != nil {
 		return nil, err
 	}
@@ -741,7 +740,7 @@ func getResultFiles(ctx context.Context, ses *Session, queryId string) ([]result
 func openResultFile(ctx context.Context, ses *Session, fileName string, fileSize int64) (*blockio.BlockReader, []objectio.BlockObject, error) {
 	// read result's blocks
 	filePath := getPathOfQueryResultFile(fileName)
-	reader, err := blockio.NewFileReader(getGlobalPu().FileService, filePath)
+	reader, err := blockio.NewFileReader(ses.service, getGlobalPu().FileService, filePath)
 	if err != nil {
 		return nil, nil, err
 	}
