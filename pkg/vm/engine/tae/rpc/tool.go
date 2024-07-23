@@ -17,6 +17,7 @@ package rpc
 import (
 	"context"
 	"fmt"
+	jsoniter "github.com/json-iterator/go"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -39,6 +40,39 @@ const (
 	detailed = 2
 )
 
+type ColumnJson struct {
+	Index   uint16 `json:"col_index"`
+	Ndv     uint32 `json:"ndv,omitempty"`
+	NullCnt uint32 `json:"null_cnt,omitempty"`
+	Zonemap string `json:"zonemap,omitempty"`
+	Data    string `json:"data,omitempty"`
+}
+
+type BlockJson struct {
+	Index   uint16       `json:"blk_index"`
+	Rows    uint32       `json:"rows,omitempty"`
+	Cols    uint16       `json:"cols,omitempty"`
+	Columns []ColumnJson `json:"columns,omitempty"`
+}
+
+type ObjectJson struct {
+	Name         string      `json:"name"`
+	Rows         uint32      `json:"rows,omitempty"`
+	Cols         uint16      `json:"cols,omitempty"`
+	BlkCnt       uint32      `json:"blk_cnt,omitempty"`
+	Size         string      `json:"size,omitempty"`
+	OriginalSize string      `json:"original_size,omitempty"`
+	Zonemap      string      `json:"zonemap,omitempty"`
+	Blocks       []BlockJson `json:"blocks,omitempty"`
+}
+
+type tableStatJson struct {
+	Name         string `json:"name"`
+	ObjectCount  int    `json:"object_count"`
+	Size         string `json:"size"`
+	OriginalSize string `json:"original_size"`
+}
+
 func getInputs(input string, result *[]int) error {
 	*result = make([]int, 0)
 	if input == "" {
@@ -56,18 +90,15 @@ func getInputs(input string, result *[]int) error {
 	return nil
 }
 
-func formatBytes(bytes int) string {
+func formatBytes(bytes uint32) string {
 	const (
-		_      = iota
-		KB int = 1 << (10 * iota)
+		_         = iota
+		KB uint32 = 1 << (10 * iota)
 		MB
 		GB
-		TB
 	)
 
 	switch {
-	case bytes >= TB:
-		return fmt.Sprintf("%.2f TB", float64(bytes)/float64(TB))
 	case bytes >= GB:
 		return fmt.Sprintf("%.2f GB", float64(bytes)/float64(GB))
 	case bytes >= MB:
@@ -225,7 +256,7 @@ func (c *moObjStatArg) FromCommand(cmd *cobra.Command) (err error) {
 }
 
 func (c *moObjStatArg) String() string {
-	return fmt.Sprintf("\n%v", c.res)
+	return c.res
 }
 
 func (c *moObjStatArg) Usage() (res string) {
@@ -332,7 +363,11 @@ func (c *moObjStatArg) GetStat(ctx context.Context) (res string, err error) {
 
 	switch c.level {
 	case brief:
-		res, err = c.GetBriefStat(&meta)
+		if c.id != invalidId {
+			res, err = c.GetStandardStat(&meta)
+		} else {
+			res, err = c.GetBriefStat(&meta)
+		}
 	case standard:
 		res, err = c.GetStandardStat(&meta)
 	case detailed:
@@ -349,11 +384,25 @@ func (c *moObjStatArg) GetBriefStat(obj *objectio.ObjectMeta) (res string, err e
 		return
 	}
 
-	cnt := data.BlockCount()
 	header := data.BlockHeader()
 	ext := c.reader.GetMetaExtent()
-	res = fmt.Sprintf("object %v has %v blocks, %v rows, %v cols, object size %v", c.name, cnt, header.Rows(), header.ColumnCount(), ext.Length())
 
+	var json = jsoniter.ConfigCompatibleWithStandardLibrary
+	o := ObjectJson{
+		Name:         c.name,
+		Rows:         header.Rows(),
+		Cols:         header.ColumnCount(),
+		BlkCnt:       data.BlockCount(),
+		Size:         formatBytes(ext.Length()),
+		OriginalSize: formatBytes(ext.OriginSize()),
+	}
+
+	data, err = json.MarshalIndent(o, "", "  ")
+	if err != nil {
+		return
+	}
+
+	res = string(data)
 	return
 }
 
@@ -369,7 +418,6 @@ func (c *moObjStatArg) GetStandardStat(obj *objectio.ObjectMeta) (res string, er
 	cnt := data.BlockCount()
 
 	if c.id != invalidId {
-		println(uint32(c.id))
 		if uint32(c.id) > cnt {
 			err = moerr.NewInfoNoCtx(fmt.Sprintf("id %3d out of block count %3d", c.id, cnt))
 			return
@@ -384,10 +432,33 @@ func (c *moObjStatArg) GetStandardStat(obj *objectio.ObjectMeta) (res string, er
 
 	header := data.BlockHeader()
 	ext := c.reader.GetMetaExtent()
-	res += fmt.Sprintf("object %v has %v blocks, %v rows, %v cols, object size %v\n", c.name, cnt, header.Rows(), header.ColumnCount(), ext.Length())
+	var blks []BlockJson
 	for _, blk := range blocks {
-		res += fmt.Sprintf("block %3d: rows %4v, cols %3v\n", blk.GetID(), blk.GetRows(), blk.GetColumnCount())
+		blkjson := BlockJson{
+			Index: blk.GetID(),
+			Rows:  blk.GetRows(),
+			Cols:  blk.GetColumnCount(),
+		}
+		blks = append(blks, blkjson)
 	}
+
+	var json = jsoniter.ConfigCompatibleWithStandardLibrary
+	o := ObjectJson{
+		Name:         c.name,
+		Rows:         header.Rows(),
+		Cols:         header.ColumnCount(),
+		BlkCnt:       cnt,
+		Size:         formatBytes(ext.Length()),
+		OriginalSize: formatBytes(ext.OriginSize()),
+		Blocks:       blks,
+	}
+
+	data, err = json.MarshalIndent(o, "", "  ")
+	if err != nil {
+		return
+	}
+
+	res = string(data)
 
 	return
 }
@@ -416,15 +487,50 @@ func (c *moObjStatArg) GetDetailedStat(obj *objectio.ObjectMeta) (res string, er
 	}
 
 	res += fmt.Sprintf("object %v has %3d blocks\n", c.name, cnt)
+	var blks []BlockJson
 	for _, blk := range blocks {
 		cnt := blk.GetColumnCount()
 		res += fmt.Sprintf("block %3d has %3d cloumns\n", blk.GetID(), cnt)
 
+		var cols []ColumnJson
 		for i := range cnt {
 			col := blk.ColumnMeta(i)
-			res += fmt.Sprintf("    cloumns %3d, ndv %3d, null cnt %3d, zonemap %v\n", i, col.Ndv(), col.NullCnt(), col.ZoneMap())
+			column := ColumnJson{
+				Index:   i,
+				Ndv:     col.Ndv(),
+				NullCnt: col.NullCnt(),
+				Zonemap: col.ZoneMap().String(),
+			}
+			cols = append(cols, column)
 		}
+		blkjson := BlockJson{
+			Index:   blk.GetID(),
+			Rows:    blk.GetRows(),
+			Cols:    blk.GetColumnCount(),
+			Columns: cols,
+		}
+		blks = append(blks, blkjson)
 	}
+
+	header := data.BlockHeader()
+	ext := c.reader.GetMetaExtent()
+	var json = jsoniter.ConfigCompatibleWithStandardLibrary
+	o := ObjectJson{
+		Name:         c.name,
+		Rows:         header.Rows(),
+		Cols:         header.ColumnCount(),
+		BlkCnt:       cnt,
+		Size:         formatBytes(ext.Length()),
+		OriginalSize: formatBytes(ext.OriginSize()),
+		Blocks:       blks,
+	}
+
+	data, err = json.MarshalIndent(o, "", "  ")
+	if err != nil {
+		return
+	}
+
+	res = string(data)
 
 	return
 }
@@ -477,7 +583,7 @@ func (c *objGetArg) FromCommand(cmd *cobra.Command) (err error) {
 }
 
 func (c *objGetArg) String() string {
-	return fmt.Sprintf("\n%v", c.res)
+	return c.res
 }
 
 func (c *objGetArg) Usage() (res string) {
@@ -619,6 +725,8 @@ func (c *objGetArg) GetData(ctx context.Context) (res string, err error) {
 	ctx2, cancel2 := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel2()
 	v, _ := c.reader.ReadOneBlock(ctx2, idxs, typs, uint16(c.id), m)
+	defer v.Release()
+	var cols []ColumnJson
 	for i, entry := range v.Entries {
 		obj, _ := objectio.Decode(entry.CachedData.Bytes())
 		vec := obj.(*vector.Vector)
@@ -636,8 +744,26 @@ func (c *objGetArg) GetData(ctx context.Context) (res string, err error) {
 			}
 			vec, _ = vec.Window(left, right)
 		}
-		res += fmt.Sprintf("col %d:\n%v\n", c.cols[i], vec)
+
+		col := ColumnJson{
+			Index: uint16(c.cols[i]),
+			Data:  vec.String(),
+		}
+		cols = append(cols, col)
 	}
+
+	var json = jsoniter.ConfigCompatibleWithStandardLibrary
+	o := BlockJson{
+		Index:   blk.GetID(),
+		Cols:    blk.GetColumnCount(),
+		Columns: cols,
+	}
+	data, err := json.MarshalIndent(o, "", "  ")
+	if err != nil {
+		return
+	}
+
+	res = string(data)
 
 	return
 }
@@ -690,7 +816,7 @@ func (c *TableArg) Run() error {
 type tableStatArg struct {
 	ctx                     *inspectContext
 	did, tid, ori, com, cnt int
-	name                    string
+	name, res               string
 }
 
 func (c *tableStatArg) PrepareCommand() *cobra.Command {
@@ -718,7 +844,7 @@ func (c *tableStatArg) FromCommand(cmd *cobra.Command) (err error) {
 }
 
 func (c *tableStatArg) String() string {
-	return fmt.Sprintf("table %v has %v objects, compacted size %v, original size %v", c.name, c.cnt, formatBytes(c.com), formatBytes(c.ori))
+	return c.res
 }
 
 func (c *tableStatArg) Usage() (res string) {
@@ -763,6 +889,21 @@ func (c *tableStatArg) Run() (err error) {
 		c.com += entry.GetCompSize()
 		c.cnt++
 	}
+
+	var json = jsoniter.ConfigCompatibleWithStandardLibrary
+	o := tableStatJson{
+		Name:         c.name,
+		ObjectCount:  c.cnt,
+		Size:         formatBytes(uint32(c.com)),
+		OriginalSize: formatBytes(uint32(c.ori)),
+	}
+
+	data, err := json.MarshalIndent(o, "", "  ")
+	if err != nil {
+		return
+	}
+
+	c.res = string(data)
 
 	return
 }
