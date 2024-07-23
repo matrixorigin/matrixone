@@ -435,4 +435,24 @@ load data infile '$resources/load_data/test_escaped_by03.csv' into table load_da
 select * from load_data_t7;
 drop table load_data_t7;
 
+drop account if exists test_load;
+create account test_load ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+-- @session:id=5&user=test_load:admin&password=123456
+show session variables like 'sql_mode';
+set session sql_mode = "NO_ENGINE_SUBSTITUTION";
+show session variables like 'sql_mode';
+create database test_load_db;
+use test_load_db;
+drop table if exists load_data_t8;
+create table load_data_t8(col1 int);
+LOAD DATA infile '$resources/load_data/test_columnlist_03.csv' into table load_data_t8 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n';
+select * from load_data_t8;
+set session sql_mode = "ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES";
+LOAD DATA infile '$resources/load_data/test_columnlist_03.csv' into table load_data_t8 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n';
+drop table load_data_t8;
+drop database test_load_db;
+
+-- @session
+drop account test_load;
+
 

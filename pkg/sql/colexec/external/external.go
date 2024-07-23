@@ -92,6 +92,7 @@ func (external *External) Prepare(proc *process.Process) error {
 		param.maxBatchSize = proc.GetLim().MaxMsgSize
 	}
 	param.maxBatchSize = uint64(float64(param.maxBatchSize) * 0.6)
+
 	if param.Extern == nil {
 		param.Extern = &tree.ExternParam{}
 		if err := json.Unmarshal([]byte(param.CreateSql), param.Extern); err != nil {
@@ -855,14 +856,6 @@ func getRealAttrCnt(attrs []string, cols []*plan.ColDef) int {
 	return len(attrs) - cnt
 }
 
-// Data interpretation is nonrestrictive if the LOCAL modifier is specified
-func checkLineValid(param *ExternalParam, proc *process.Process, line []csvparser.Field, rowIdx int) error {
-	if !param.Extern.Local {
-		return checkLineValidRestrictive(param, proc, line, rowIdx)
-	}
-	return nil
-}
-
 func checkLineValidRestrictive(param *ExternalParam, proc *process.Process, line []csvparser.Field, rowIdx int) error {
 	if param.ClusterTable != nil && param.ClusterTable.GetIsClusterTable() {
 		//the column account_id of the cluster table do need to be filled here
@@ -886,6 +879,23 @@ func checkLineValidRestrictive(param *ExternalParam, proc *process.Process, line
 			}
 		}
 	}
+	return nil
+}
+
+func checkLineStrict(param *ExternalParam) bool {
+	if param.Extern.Local || !param.StrictSqlMode {
+		return false
+	}
+	return true
+}
+
+// Data interpretation is nonrestrictive if the SQL mode is nonrestrictive or the IGNORE or LOCAL modifier is specified
+// todo IGNORE
+func checkLineValid(param *ExternalParam, proc *process.Process, line []csvparser.Field, rowIdx int) error {
+	if checkLineStrict(param) {
+		return checkLineValidRestrictive(param, proc, line, rowIdx)
+	}
+
 	return nil
 }
 
@@ -1370,12 +1380,10 @@ func getOneRowDataNonRestrictive(bat *batch.Batch, line []csvparser.Field, rowId
 }
 
 func getOneRowData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam, mp *mpool.MPool) error {
-	// when LOCAL modifier is specified and the input line has too few fileds
-	if param.Extern.Local {
-		return getOneRowDataNonRestrictive(bat, line, rowIdx, param, mp)
+	if checkLineStrict(param) {
+		return getOneRowDataRestrictive(bat, line, rowIdx, param, mp)
 	}
-
-	return getOneRowDataRestrictive(bat, line, rowIdx, param, mp)
+	return getOneRowDataNonRestrictive(bat, line, rowIdx, param, mp)
 }
 
 func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam, mp *mpool.MPool, colIdx int) error {
