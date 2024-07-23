@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
@@ -191,6 +192,9 @@ func (c *Compile) Run() (queryResult *util2.RunResult, err error) {
 	queryResult = &util2.RunResult{}
 	v2.TxnStatementTotalCounter.Inc()
 	for {
+		// build query context and pipeline contexts for the current run.
+		runC.proc.RebuildContext(execTopContext)
+
 		if err = runC.runOnce(); err == nil {
 			break
 		}
@@ -239,4 +243,46 @@ func (c *Compile) Run() (queryResult *util2.RunResult, err error) {
 		err = txnOperator.GetWorkspace().Adjust(writeOffset)
 	}
 	return queryResult, err
+}
+
+func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
+	v2.TxnStatementRetryCounter.Inc()
+	c.proc.GetTxnOperator().ResetRetry(true)
+	c.proc.GetTxnOperator().GetWorkspace().IncrSQLCount()
+
+	topContext := c.proc.Base.GetContextBase().GetTopCtx()
+
+	// clear the workspace of the failed statement
+	if e := c.proc.GetTxnOperator().GetWorkspace().RollbackLastStatement(topContext); e != nil {
+		return nil, e
+	}
+
+	// increase the statement id
+	if e := c.proc.GetTxnOperator().GetWorkspace().IncrStatementID(topContext, false); e != nil {
+		return nil, e
+	}
+
+	// FIXME: the current retry method is quite bad, the overhead is relatively large, and needs to be
+	// improved to refresh expression in the future.
+
+	var e error
+	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
+	runC.SetOriginSQL(c.originSQL)
+	defer func() {
+		if e != nil {
+			runC.Release()
+		}
+	}()
+	if defChanged {
+		var pn *plan2.Plan
+		pn, e = c.buildPlanFunc()
+		if e != nil {
+			return nil, e
+		}
+		c.pn = pn
+	}
+	if e = runC.Compile(topContext, c.pn, c.fill); e != nil {
+		return nil, e
+	}
+	return runC, nil
 }

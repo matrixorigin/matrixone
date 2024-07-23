@@ -386,46 +386,6 @@ func (c *Compile) allocOperatorID() int32 {
 	return c.lastAllocID
 }
 
-func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
-	v2.TxnStatementRetryCounter.Inc()
-	c.proc.GetTxnOperator().ResetRetry(true)
-	c.proc.GetTxnOperator().GetWorkspace().IncrSQLCount()
-
-	// clear the workspace of the failed statement
-	if e := c.proc.GetTxnOperator().GetWorkspace().RollbackLastStatement(c.proc.Ctx); e != nil {
-		return nil, e
-	}
-
-	// increase the statement id
-	if e := c.proc.GetTxnOperator().GetWorkspace().IncrStatementID(c.proc.Ctx, false); e != nil {
-		return nil, e
-	}
-
-	// FIXME: the current retry method is quite bad, the overhead is relatively large, and needs to be
-	// improved to refresh expression in the future.
-
-	var e error
-	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
-	runC.SetOriginSQL(c.originSQL)
-	defer func() {
-		if e != nil {
-			runC.Release()
-		}
-	}()
-	if defChanged {
-		var pn *plan2.Plan
-		pn, e = c.buildPlanFunc()
-		if e != nil {
-			return nil, e
-		}
-		c.pn = pn
-	}
-	if e = runC.Compile(c.proc.Ctx, c.pn, c.fill); e != nil {
-		return nil, e
-	}
-	return runC, nil
-}
-
 // isRetryErr if the error is ErrTxnNeedRetry and the transaction is RC isolation, we need to retry t
 // he statement
 func (c *Compile) isRetryErr(err error) bool {
