@@ -194,9 +194,9 @@ type contentWriteRequest struct {
 }
 
 func (c *contentWriteRequest) Handle() (int, error) {
-	if setter, ok := c.writer.(table.ContentSettable); ok {
+	if setter, ok := c.writer.(table.BufferSettable); ok && setter.NeedBuffer() {
 		// FIXME: too complicated.
-		setter.SetContent(c.buffer)
+		setter.SetBuffer(c.buffer, nil)
 	}
 	return c.writer.FlushAndClose()
 }

@@ -290,8 +290,12 @@ func GetExtension(ext string) string {
 	}
 }
 
-type ContentSettable interface {
-	SetContent(buf *bytes.Buffer)
+type BufferSettable interface {
+	// SetBuffer set the buffer into Writer, and the callback for Close or Release.
+	// @callback can be nil.
+	SetBuffer(buf *bytes.Buffer, callback func(buffer *bytes.Buffer))
+	// NeedBuffer return true, means the writer need outside buffer.
+	NeedBuffer() bool
 }
 
 type Flusher interface {

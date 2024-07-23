@@ -27,13 +27,16 @@ import (
 )
 
 var _ table.RowWriter = (*ContentWriter)(nil)
-var _ table.ContentSettable = (*ContentWriter)(nil)
+var _ table.BufferSettable = (*ContentWriter)(nil)
 
 // ContentWriter NO do gen op, just do the flush op.
 type ContentWriter struct {
-	ctx        context.Context
-	tbl        *table.Table
-	buf        *bytes.Buffer
+	ctx context.Context
+	tbl *table.Table
+
+	buf         *bytes.Buffer
+	bufCallback func(*bytes.Buffer)
+
 	sqlFlusher table.Flusher
 	csvFlusher table.Flusher
 }
@@ -54,9 +57,14 @@ func NewContentWriter(ctx context.Context, tbl *table.Table, writer table.RowWri
 	}
 }
 
-func (c *ContentWriter) SetContent(buf *bytes.Buffer) {
+// SetBuffer implements table.BufferSettable
+func (c *ContentWriter) SetBuffer(buf *bytes.Buffer, callback func(buffer *bytes.Buffer)) {
 	c.buf = buf
+	c.bufCallback = callback
 }
+
+// NeedBuffer implements table.BufferSettable
+func (c *ContentWriter) NeedBuffer() bool { return true }
 
 func (c *ContentWriter) WriteRow(_ *table.Row) error { return nil }
 
@@ -88,6 +96,11 @@ func (c *ContentWriter) FlushAndClose() (int, error) {
 	}
 	c.sqlFlusher = nil
 	c.csvFlusher = nil
+	// release the buf.
+	if c.bufCallback != nil {
+		c.bufCallback(c.buf)
+	}
+	c.buf = nil
 	return n, nil
 }
 
