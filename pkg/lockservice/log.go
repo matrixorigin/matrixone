@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -762,7 +763,7 @@ func logCleanCannotCommitTxn(
 	logger.Log(
 		"clean cannot commit txn",
 		getLogOptions(zap.InfoLevel),
-		zap.String("txnID", txnID),
+		zap.String("txnID", hex.EncodeToString(util.UnsafeStringToBytes(txnID))),
 		zap.Int("state", state),
 	)
 }
