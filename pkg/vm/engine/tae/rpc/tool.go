@@ -432,7 +432,7 @@ func (c *moObjStatArg) GetStandardStat(obj *objectio.ObjectMeta) (res string, er
 
 	header := data.BlockHeader()
 	ext := c.reader.GetMetaExtent()
-	var blks []BlockJson
+	blks := make([]BlockJson, len(blocks))
 	for _, blk := range blocks {
 		blkjson := BlockJson{
 			Index: blk.GetID(),
@@ -487,7 +487,7 @@ func (c *moObjStatArg) GetDetailedStat(obj *objectio.ObjectMeta) (res string, er
 	}
 
 	res += fmt.Sprintf("object %v has %3d blocks\n", c.name, cnt)
-	var blks []BlockJson
+	blks := make([]BlockJson, len(blocks))
 	for _, blk := range blocks {
 		cnt := blk.GetColumnCount()
 		res += fmt.Sprintf("block %3d has %3d cloumns\n", blk.GetID(), cnt)
@@ -726,7 +726,7 @@ func (c *objGetArg) GetData(ctx context.Context) (res string, err error) {
 	defer cancel2()
 	v, _ := c.reader.ReadOneBlock(ctx2, idxs, typs, uint16(c.id), m)
 	defer v.Release()
-	var cols []ColumnJson
+	cols := make([]ColumnJson, len(v.Entries))
 	for i, entry := range v.Entries {
 		obj, _ := objectio.Decode(entry.CachedData.Bytes())
 		vec := obj.(*vector.Vector)
