@@ -56,14 +56,15 @@ type BlockJson struct {
 }
 
 type ObjectJson struct {
-	Name         string      `json:"name"`
-	Rows         uint32      `json:"rows,omitempty"`
-	Cols         uint16      `json:"cols,omitempty"`
-	BlkCnt       uint32      `json:"blk_cnt,omitempty"`
-	Size         string      `json:"size,omitempty"`
-	OriginalSize string      `json:"original_size,omitempty"`
-	Zonemap      string      `json:"zonemap,omitempty"`
-	Blocks       []BlockJson `json:"blocks,omitempty"`
+	Name         string       `json:"name"`
+	Rows         uint32       `json:"rows,omitempty"`
+	Cols         uint16       `json:"cols,omitempty"`
+	BlkCnt       uint32       `json:"blk_cnt,omitempty"`
+	Size         string       `json:"size,omitempty"`
+	OriginalSize string       `json:"original_size,omitempty"`
+	Zonemap      string       `json:"zonemap,omitempty"`
+	Columns      []ColumnJson `json:"columns,omitempty"`
+	Blocks       []BlockJson  `json:"blocks,omitempty"`
 }
 
 type tableStatJson struct {
@@ -432,7 +433,7 @@ func (c *moObjStatArg) GetStandardStat(obj *objectio.ObjectMeta) (res string, er
 
 	header := data.BlockHeader()
 	ext := c.reader.GetMetaExtent()
-	blks := make([]BlockJson, len(blocks))
+	blks := make([]BlockJson, 0, len(blocks))
 	for _, blk := range blocks {
 		blkjson := BlockJson{
 			Index: blk.GetID(),
@@ -443,6 +444,16 @@ func (c *moObjStatArg) GetStandardStat(obj *objectio.ObjectMeta) (res string, er
 	}
 
 	var json = jsoniter.ConfigCompatibleWithStandardLibrary
+
+	colCnt := header.ColumnCount()
+	cols := make([]ColumnJson, colCnt)
+	for i := range colCnt {
+		col := data.MustGetColumn(i)
+		cols[i] = ColumnJson{
+			Index:   i,
+			Zonemap: col.ZoneMap().String(),
+		}
+	}
 	o := ObjectJson{
 		Name:         c.name,
 		Rows:         header.Rows(),
@@ -451,6 +462,7 @@ func (c *moObjStatArg) GetStandardStat(obj *objectio.ObjectMeta) (res string, er
 		Size:         formatBytes(ext.Length()),
 		OriginalSize: formatBytes(ext.OriginSize()),
 		Blocks:       blks,
+		Columns:      cols,
 	}
 
 	data, err = json.MarshalIndent(o, "", "  ")
@@ -471,8 +483,8 @@ func (c *moObjStatArg) GetDetailedStat(obj *objectio.ObjectMeta) (res string, er
 		return
 	}
 
-	var blocks []objectio.BlockObject
 	cnt := data.BlockCount()
+	blocks := make([]objectio.BlockObject, 0, cnt)
 	if c.id != invalidId {
 		if uint32(c.id) >= cnt {
 			err = moerr.NewInfoNoCtx(fmt.Sprintf("id %v out of block count %v", c.id, cnt))
@@ -487,7 +499,7 @@ func (c *moObjStatArg) GetDetailedStat(obj *objectio.ObjectMeta) (res string, er
 	}
 
 	res += fmt.Sprintf("object %v has %3d blocks\n", c.name, cnt)
-	blks := make([]BlockJson, len(blocks))
+	blks := make([]BlockJson, 0, len(blocks))
 	for _, blk := range blocks {
 		cnt := blk.GetColumnCount()
 		res += fmt.Sprintf("block %3d has %3d cloumns\n", blk.GetID(), cnt)
@@ -515,6 +527,16 @@ func (c *moObjStatArg) GetDetailedStat(obj *objectio.ObjectMeta) (res string, er
 	header := data.BlockHeader()
 	ext := c.reader.GetMetaExtent()
 	var json = jsoniter.ConfigCompatibleWithStandardLibrary
+	colCnt := header.ColumnCount()
+	cols := make([]ColumnJson, colCnt)
+	for i := range colCnt {
+		col := data.MustGetColumn(i)
+		cols[i] = ColumnJson{
+			Index:   i,
+			Zonemap: col.ZoneMap().String(),
+		}
+	}
+
 	o := ObjectJson{
 		Name:         c.name,
 		Rows:         header.Rows(),
@@ -523,6 +545,7 @@ func (c *moObjStatArg) GetDetailedStat(obj *objectio.ObjectMeta) (res string, er
 		Size:         formatBytes(ext.Length()),
 		OriginalSize: formatBytes(ext.OriginSize()),
 		Blocks:       blks,
+		Columns:      cols,
 	}
 
 	data, err = json.MarshalIndent(o, "", "  ")
@@ -710,6 +733,7 @@ func (c *objGetArg) GetData(ctx context.Context) (res string, err error) {
 			c.cols = append(c.cols, int(i))
 		}
 	}
+
 	for _, i := range c.cols {
 		idx := uint16(i)
 		if idx >= cnt {
@@ -717,6 +741,7 @@ func (c *objGetArg) GetData(ctx context.Context) (res string, err error) {
 			return
 		}
 		col := blk.ColumnMeta(idx)
+		col.ZoneMap()
 		idxs = append(idxs, idx)
 		tp := types.T(col.DataType()).ToType()
 		typs = append(typs, tp)
@@ -726,7 +751,7 @@ func (c *objGetArg) GetData(ctx context.Context) (res string, err error) {
 	defer cancel2()
 	v, _ := c.reader.ReadOneBlock(ctx2, idxs, typs, uint16(c.id), m)
 	defer v.Release()
-	cols := make([]ColumnJson, len(v.Entries))
+	cols := make([]ColumnJson, 0, len(v.Entries))
 	for i, entry := range v.Entries {
 		obj, _ := objectio.Decode(entry.CachedData.Bytes())
 		vec := obj.(*vector.Vector)

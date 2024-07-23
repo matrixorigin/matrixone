@@ -28,6 +28,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -40,7 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
-	"github.com/spf13/cobra"
 )
 
 type inspectContext struct {
@@ -134,7 +135,7 @@ func RunFactory[T InspectCmd](t T) func(cmd *cobra.Command, args []string) {
 			)
 		} else {
 			cmd.OutOrStdout().Write(
-				[]byte(fmt.Sprintf("%v", t.String())),
+				[]byte(fmt.Sprintf("success. arg %v", t.String())),
 			)
 		}
 	}
