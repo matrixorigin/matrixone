@@ -22,6 +22,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -32,8 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func GetDefaultTestPath(module string, t *testing.T) string {
@@ -193,7 +194,7 @@ func NewDefaultTableReader(
 
 	r := disttae.NewReaderInProgress(
 		ctx,
-		testutil2.NewProcessWithMPool(mp),
+		testutil2.NewProcessWithMPool("", mp),
 		e,
 		&tblDef,
 		snapshotTS,
