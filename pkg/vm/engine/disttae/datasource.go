@@ -1312,6 +1312,7 @@ func (ls *LocalDataSource) applyWorkspaceEntryDeletes(
 
 	leftRows = offsets
 
+	done := false
 	for idx := range ls.unCommittedInmemDeletesEntry {
 		delRowIds := vector.MustFixedCol[types.Rowid](ls.unCommittedInmemDeletesEntry[idx].bat.Vecs[0])
 		for _, delRowId := range delRowIds {
@@ -1322,8 +1323,13 @@ func (ls *LocalDataSource) applyWorkspaceEntryDeletes(
 
 			leftRows, deletedRows = fastApplyDeletedRows(leftRows, deletedRows, o)
 			if leftRows != nil && len(leftRows) == 0 {
+				done = true
 				break
 			}
+		}
+
+		if done {
+			break
 		}
 	}
 
