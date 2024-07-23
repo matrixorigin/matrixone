@@ -59,6 +59,12 @@ var (
 	restorePubDbDataWithTsFmt = "insert into `%s`.`%s` SELECT * FROM `%s`.`%s` {MO_TS = %d} WHERE  DATABASE_NAME = '%s'"
 
 	getPitrFormat = `select * from mo_catalog.mo_pitr`
+
+	getSqlForCheckDatabaseFmt = `select dat_id from mo_catalog.mo_database {MO_TS = %d} where datname = '%s';`
+
+	getSqlForCheckTableFmt = `select rel_id from mo_catalog.mo_tables {MO_TS = %d} where reldatabase = '%s' and relname = '%s';`
+
+	getSqlForCheckAccountFmt = `select account_id from mo_catalog.mo_account {MO_TS = %d} where account_name = '%s';`
 )
 
 type pitrRecord struct {
@@ -107,6 +113,34 @@ func getSqlForGetDbPubCountWithTimestamp(ctx context.Context, ts int64, dbName s
 		return "", err
 	}
 	return fmt.Sprintf(getDbPubCountWithTsFormat, ts, dbName), nil
+}
+
+func getSqlForCheckDatabaseWithPitr(ctx context.Context, ts int64, dbName string) (string, error) {
+	err := inputNameIsInvalid(ctx, dbName)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(getSqlForCheckDatabaseFmt, ts, dbName), nil
+}
+
+func getSqlForCheckTableWithPitr(ctx context.Context, ts int64, dbName, tblName string) (string, error) {
+	err := inputNameIsInvalid(ctx, dbName)
+	if err != nil {
+		return "", err
+	}
+	err = inputNameIsInvalid(ctx, tblName)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(getSqlForCheckTableFmt, ts, dbName, tblName), nil
+}
+
+func getSqlForCheckAccountWithPitr(ctx context.Context, ts int64, accountName string) (string, error) {
+	err := inputNameIsInvalid(ctx, accountName)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(getSqlForCheckAccountFmt, ts, accountName), nil
 }
 
 func checkPitrExistOrNot(ctx context.Context, bh BackgroundExec, pitrName string, accountId uint64) (bool, error) {
@@ -634,6 +668,14 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (e
 	}()
 
 	// restore self account
+	// check account exists or not
+	var accountExist bool
+	if accountExist, err = doCheckAccountExistsInPitrRestore(ctx, ses.GetService(), bh, pitrName, ts, tenantInfo.GetTenant(), tenantInfo.GetTenantID()); err != nil {
+		return err
+	}
+	if !accountExist {
+		return moerr.NewInternalError(ctx, "account %s does not exist at timestamp %d", tenantInfo.GetTenant(), ts)
+	}
 
 	//drop foreign key related tables first
 	if err = deleteCurFkTableInPitrRestore(ctx, ses.GetService(), bh, pitrName, dbName, tblName); err != nil {
@@ -760,6 +802,15 @@ func restoreToDatabaseWithPitr(
 	fkTableMap map[string]*tableInfo,
 	viewMap map[string]*tableInfo) (err error) {
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore db: %v, restore timestamp: %d", pitrName, dbName, ts))
+
+	var databaseExist bool
+	if databaseExist, err = doCheckDatabaseExistsInPitrRestore(ctx, sid, bh, pitrName, ts, dbName); err != nil {
+		return err
+	}
+	if !databaseExist {
+		getLogger(sid).Info(fmt.Sprintf("[%s] db: %v not exists at timestamp %d", pitrName, dbName, ts))
+	}
+
 	return restoreToDatabaseOrTableWithPitr(ctx, sid, bh, pitrName, ts, dbName, "", fkTableMap, viewMap)
 }
 
@@ -773,7 +824,15 @@ func restoreToTableWithPitr(
 	tblName string,
 	fkTableMap map[string]*tableInfo,
 	viewMap map[string]*tableInfo) (err error) {
-	getLogger(sid).Info(fmt.Sprintf("[%s]  start to restore table: %v at timestamp %d", pitrName, tblName, ts))
+	getLogger(sid).Info(fmt.Sprintf("[%s]  start to restore table: '%v' at timestamp %d", pitrName, tblName, ts))
+
+	var TableExist bool
+	if TableExist, err = doCheckTableExistsInPitrRestore(ctx, sid, bh, pitrName, ts, dbName, tblName); err != nil {
+		return err
+	}
+	if !TableExist {
+		getLogger(sid).Info(fmt.Sprintf("[%s] table: '%v' not exists at timestamp %d", pitrName, tblName, ts))
+	}
 	return restoreToDatabaseOrTableWithPitr(ctx, sid, bh, pitrName, ts, dbName, tblName, fkTableMap, viewMap)
 }
 
@@ -788,7 +847,7 @@ func restoreToDatabaseOrTableWithPitr(
 	fkTableMap map[string]*tableInfo,
 	viewMap map[string]*tableInfo) (err error) {
 	if needSkipDb(dbName) {
-		getLogger(sid).Info(fmt.Sprintf("[%s] skip restore db: %v", pitrName, dbName))
+		getLogger(sid).Info(fmt.Sprintf("[%s] skip restore db: '%v'", pitrName, dbName))
 		return
 	}
 
@@ -796,13 +855,13 @@ func restoreToDatabaseOrTableWithPitr(
 
 	// if restore to db, delete the same name db first
 	if !restoreToTbl {
-		getLogger(sid).Info(fmt.Sprintf("[%s] start to drop database: %v", pitrName, dbName))
+		getLogger(sid).Info(fmt.Sprintf("[%s] start to drop database: '%v'", pitrName, dbName))
 		if err = bh.Exec(ctx, "drop database if exists "+dbName); err != nil {
 			return
 		}
 	}
 
-	getLogger(sid).Info(fmt.Sprintf("[%s] start to create database: %v", pitrName, dbName))
+	getLogger(sid).Info(fmt.Sprintf("[%s] start to create database: '%v'", pitrName, dbName))
 	if err = bh.Exec(ctx, "create database if not exists "+dbName); err != nil {
 		return
 	}
@@ -822,9 +881,9 @@ func restoreToDatabaseOrTableWithPitr(
 	// if restore to table, expect only one table here
 	if restoreToTbl {
 		if len(tableInfos) == 0 {
-			return moerr.NewInternalError(ctx, "table %s not exists at pitr %s", tblName, pitrName)
+			return moerr.NewInternalError(ctx, "table '%s' not exists at pitr '%s'", tblName, pitrName)
 		} else if len(tableInfos) != 1 {
-			return moerr.NewInternalError(ctx, "find %v tableInfos by name %s at pitr %s, expect only 1", len(tableInfos), tblName, pitrName)
+			return moerr.NewInternalError(ctx, "find %v tableInfos by name '%s' at pitr '%s', expect only 1", len(tableInfos), tblName, pitrName)
 		}
 	}
 
@@ -866,19 +925,19 @@ func recreateTableWithPitr(
 	pitrName string,
 	ts int64,
 	tblInfo *tableInfo) (err error) {
-	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore table: %v at timestamp %d", pitrName, tblInfo.tblName, ts))
+	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore table: '%v' at timestamp %d", pitrName, tblInfo.tblName, ts))
 
 	if err = bh.Exec(ctx, fmt.Sprintf("use `%s`", tblInfo.dbName)); err != nil {
 		return
 	}
 
-	getLogger(sid).Info(fmt.Sprintf("[%s] start to drop table: %v,", pitrName, tblInfo.tblName))
+	getLogger(sid).Info(fmt.Sprintf("[%s] start to drop table: '%v',", pitrName, tblInfo.tblName))
 	if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists %s", tblInfo.tblName)); err != nil {
 		return
 	}
 
 	// create table
-	getLogger(sid).Info(fmt.Sprintf("[%s]  start to create table: %v, create table sql: %s", pitrName, tblInfo.tblName, tblInfo.createSql))
+	getLogger(sid).Info(fmt.Sprintf("[%s]  start to create table: '%v', create table sql: %s", pitrName, tblInfo.tblName, tblInfo.createSql))
 	if err = bh.Exec(ctx, tblInfo.createSql); err != nil {
 		return
 	}
@@ -886,7 +945,7 @@ func recreateTableWithPitr(
 	// insert data
 	insertIntoSql := fmt.Sprintf(restoreTableDataByTsFmt, tblInfo.dbName, tblInfo.tblName, tblInfo.dbName, tblInfo.tblName, ts)
 	beginTime := time.Now()
-	getLogger(sid).Info(fmt.Sprintf("[%s] start to insert select table: %v, insert sql: %s", pitrName, tblInfo.tblName, insertIntoSql))
+	getLogger(sid).Info(fmt.Sprintf("[%s] start to insert select table: '%v', insert sql: %s", pitrName, tblInfo.tblName, insertIntoSql))
 	if err = bh.Exec(ctx, insertIntoSql); err != nil {
 		return
 	}
@@ -1303,12 +1362,16 @@ func getPitrRecords(ctx context.Context, bh BackgroundExec, sql string) ([]*pitr
 }
 
 func getPitrByName(ctx context.Context, bh BackgroundExec, pitrName string, accountId uint64) (*pitrRecord, error) {
-	if err := inputNameIsInvalid(ctx, pitrName); err != nil {
+	newCtx := ctx
+	if accountId != sysAccountID {
+		newCtx = defines.AttachAccountId(ctx, sysAccountID)
+	}
+	if err := inputNameIsInvalid(newCtx, pitrName); err != nil {
 		return nil, err
 	}
 
 	sql := fmt.Sprintf("%s where pitr_name = '%s' and create_account = %d", getPitrFormat, pitrName, accountId)
-	if records, err := getPitrRecords(ctx, bh, sql); err != nil {
+	if records, err := getPitrRecords(newCtx, bh, sql); err != nil {
 		return nil, err
 	} else if len(records) != 1 {
 		return nil, moerr.NewInternalError(ctx, "find %v pitr records by name(%v), expect only 1", len(records), pitrName)
@@ -1486,4 +1549,100 @@ func getTableInfoInPitrRestore(
 		return nil, nil
 	}
 	return tableInfos[0], nil
+}
+
+func doCheckDatabaseExistsInPitrRestore(
+	ctx context.Context,
+	sid string,
+	bh BackgroundExec,
+	pitrName string,
+	ts int64,
+	dbName string) (bool, error) {
+	getLogger(sid).Info(fmt.Sprintf("[%s] start to check if db '%v' exists at timestamp %d", pitrName, dbName, ts))
+
+	sql, err := getSqlForCheckDatabaseWithPitr(ctx, ts, dbName)
+	if err != nil {
+		return false, err
+	}
+
+	bh.ClearExecResultSet()
+	if err = bh.Exec(ctx, sql); err != nil {
+		return false, err
+	}
+
+	resultSet, err := getResultSet(ctx, bh)
+	if err != nil {
+		return false, err
+	}
+
+	if !execResultArrayHasData(resultSet) {
+		return false, nil
+	}
+	return true, nil
+}
+
+func doCheckTableExistsInPitrRestore(
+	ctx context.Context,
+	sid string,
+	bh BackgroundExec,
+	pitrName string,
+	ts int64,
+	dbName string,
+	tblName string) (bool, error) {
+	getLogger(sid).Info(fmt.Sprintf("[%s] start to check if table '%v.%v' exists at timestamp %d", pitrName, dbName, tblName, ts))
+
+	sql, err := getSqlForCheckTableWithPitr(ctx, ts, dbName, tblName)
+	if err != nil {
+		return false, err
+	}
+
+	bh.ClearExecResultSet()
+	if err = bh.Exec(ctx, sql); err != nil {
+		return false, err
+	}
+
+	resultSet, err := getResultSet(ctx, bh)
+	if err != nil {
+		return false, err
+	}
+
+	if !execResultArrayHasData(resultSet) {
+		return false, nil
+	}
+	return true, nil
+}
+
+func doCheckAccountExistsInPitrRestore(
+	ctx context.Context,
+	sid string,
+	bh BackgroundExec,
+	pitrName string,
+	ts int64,
+	accountName string,
+	accountId uint32) (bool, error) {
+	getLogger(sid).Info(fmt.Sprintf("[%s] start to check if account '%v' exists at timestamp %d", pitrName, accountName, ts))
+
+	newCtx := ctx
+	if accountId != sysAccountID {
+		newCtx = defines.AttachAccountId(ctx, sysAccountID)
+	}
+	sql, err := getSqlForCheckAccountWithPitr(newCtx, ts, accountName)
+	if err != nil {
+		return false, err
+	}
+
+	bh.ClearExecResultSet()
+	if err = bh.Exec(newCtx, sql); err != nil {
+		return false, err
+	}
+
+	resultSet, err := getResultSet(newCtx, bh)
+	if err != nil {
+		return false, err
+	}
+
+	if !execResultArrayHasData(resultSet) {
+		return false, nil
+	}
+	return true, nil
 }
