@@ -12,17 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package mo_inspect
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/rpc"
 	"github.com/spf13/cobra"
-	"os"
 )
 
-func main() {
+func PrepareCommand() *cobra.Command {
 	var rootCmd = &cobra.Command{
-		Use:   "mo",
+		Use:   "mo-inspect",
 		Short: "A tool provides object visualization",
 	}
 
@@ -32,7 +31,5 @@ func main() {
 	table := rpc.TableArg{}
 	rootCmd.AddCommand(table.PrepareCommand())
 
-	if err := rootCmd.Execute(); err != nil {
-		os.Exit(1)
-	}
+	return rootCmd
 }

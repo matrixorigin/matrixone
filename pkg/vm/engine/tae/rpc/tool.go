@@ -84,7 +84,8 @@ type MoInspectArg struct {
 func (c *MoInspectArg) PrepareCommand() *cobra.Command {
 	moInspectCmd := &cobra.Command{
 		Use:   "mo_inspect",
-		Short: "mo_inspect",
+		Short: "mo_inspect is a visualization analysis tool",
+		Long:  "mo_inspect is a visualization analysis tool",
 		Run:   RunFactory(c),
 	}
 
@@ -116,6 +117,7 @@ func (c *ObjArg) PrepareCommand() *cobra.Command {
 	objCmd := &cobra.Command{
 		Use:   "obj",
 		Short: "obj",
+		Long:  "mo_inspect is a visualization analysis tool",
 		Run:   RunFactory(c),
 	}
 
@@ -591,7 +593,6 @@ func (c *tableStatArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.did, _ = cmd.Flags().GetInt("did")
 	if cmd.Flag("ictx") != nil {
 		c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
-
 	}
 	return nil
 }
