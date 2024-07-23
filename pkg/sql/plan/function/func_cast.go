@@ -4453,7 +4453,7 @@ func uuidToStr(
 	if toType.Oid == types.T_binary && toType.Scale == -1 {
 		for i = 0; i < l; i++ {
 			v, null := from.GetValue(i)
-			v1 := []byte(v.ToString())
+			v1 := []byte(v.String())
 			if err := explicitCastToBinary(toType, v1, null, to); err != nil {
 				return err
 			}
@@ -4467,7 +4467,7 @@ func uuidToStr(
 				return err
 			}
 		} else {
-			result := []byte(v.ToString())
+			result := []byte(v.String())
 			if toType.Oid == types.T_binary || toType.Oid == types.T_varbinary {
 				if int32(len(result)) > toType.Width {
 					return moerr.NewDataTruncatedNoCtx("Uuid", "truncated for binary/varbinary")
@@ -4486,7 +4486,7 @@ func uuidToStr(
 			}
 			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
-					"%v is larger than Dest length %v", v.ToString(), toType.Width))
+					"%v is larger than Dest length %v", v.String(), toType.Width))
 			}
 			if err := to.AppendBytes(result, false); err != nil {
 				return err

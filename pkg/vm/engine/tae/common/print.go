@@ -164,7 +164,7 @@ func TypeStringValue(t types.Type, v any, isNull bool, opts ...TypePrintOpt) str
 		return j.String()
 	case types.T_uuid:
 		val := v.(types.Uuid)
-		return val.ToString()
+		return val.String()
 	case types.T_TS:
 		val := v.(types.TS)
 		return val.ToString()
