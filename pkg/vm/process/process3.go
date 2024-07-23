@@ -181,17 +181,24 @@ func (qbCtx *QueryBaseContext) ReplaceTopCtx(topCtx context.Context) {
 	qbCtx.outerContext = topCtx
 }
 
+// SaveToTopContext for easy access to change the top context.
+func (qbCtx *QueryBaseContext) SaveToTopContext(key, value any) context.Context {
+	qbCtx.outerContext = context.WithValue(qbCtx.outerContext, key, value)
+	return qbCtx.outerContext
+}
+
 // RefreshQueryCtx refreshes the query context and cancellation method after the outer context was ready to run the query.
 func (qbCtx *QueryBaseContext) RefreshQueryCtx() context.Context {
 	qbCtx.queryContext, qbCtx.queryCancel = context.WithCancel(qbCtx.outerContext)
 	return qbCtx.queryContext
 }
 
-// saveToQueryContext saves the key-value pair to the query context.
+// SaveToQueryContext saves the key-value pair to the query context.
 // Every pipeline context can access the key-value pair by calling its own context.Value() method.
 // But should be careful to avoid adding key-value pairs after the pipeline context has been created.
-func (qbCtx *QueryBaseContext) saveToQueryContext(key, value any) {
+func (qbCtx *QueryBaseContext) SaveToQueryContext(key, value any) context.Context {
 	qbCtx.queryContext = context.WithValue(qbCtx.queryContext, key, value)
+	return qbCtx.queryContext
 }
 
 func (qbCtx *QueryBaseContext) getLatestContext() context.Context {

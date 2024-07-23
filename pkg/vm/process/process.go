@@ -41,7 +41,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 
-	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -374,9 +373,9 @@ func (proc *Process) Debugf(ctx context.Context, msg string, args ...any) {
 // appendSessionField append session id, transaction id and statement id to the fields
 func appendSessionField(fields []zap.Field, proc *Process) []zap.Field {
 	if proc != nil {
-		fields = append(fields, logutil.SessionIdField(uuid.UUID(proc.Base.SessionInfo.SessionId).String()))
+		fields = append(fields, logutil.SessionIdField(proc.Base.SessionInfo.SessionId.String()))
 		if p := proc.GetStmtProfile(); p != nil {
-			fields = append(fields, logutil.StatementIdField(uuid.UUID(p.stmtId).String()))
+			fields = append(fields, logutil.StatementIdField(p.stmtId.String()))
 			fields = append(fields, logutil.TxnIdField(hex.EncodeToString(p.txnId[:])))
 		}
 	}
