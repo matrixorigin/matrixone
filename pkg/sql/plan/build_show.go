@@ -73,8 +73,9 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	dbName := stmt.Name.GetDBName()
 
 	snapshot := &Snapshot{TS: &timestamp.Timestamp{}}
-	if len(stmt.SnapshotName) > 0 {
-		if snapshot, err = ctx.ResolveSnapshotWithSnapshotName(stmt.SnapshotName); err != nil {
+
+	if stmt.AtTsExpr != nil {
+		if snapshot, err = getTimeStampByTsHint(ctx, stmt.AtTsExpr); err != nil {
 			return nil, err
 		}
 	}
@@ -108,8 +109,8 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		} else if stmt.Name.NumParts == 2 {
 			newStmt = tree.NewShowCreateView(tree.NewUnresolvedObjectName(dbName, tblName))
 		}
-		if len(stmt.SnapshotName) > 0 {
-			newStmt.SnapshotName = stmt.SnapshotName
+		if stmt.AtTsExpr != nil {
+			newStmt.AtTsExpr = stmt.AtTsExpr
 		}
 
 		return buildShowCreateView(newStmt, ctx)
@@ -133,8 +134,8 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 	dbName := stmt.Name.GetDBName()
 
 	snapshot := &Snapshot{TS: &timestamp.Timestamp{}}
-	if len(stmt.SnapshotName) > 0 {
-		if snapshot, err = ctx.ResolveSnapshotWithSnapshotName(stmt.SnapshotName); err != nil {
+	if stmt.AtTsExpr != nil {
+		if snapshot, err = getTimeStampByTsHint(ctx, stmt.AtTsExpr); err != nil {
 			return nil, err
 		}
 	}
@@ -182,14 +183,22 @@ func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, e
 
 	var sql string
 	snapshotSpec := ""
-	if len(stmt.SnapshotName) > 0 {
-		snapshot, err := ctx.ResolveSnapshotWithSnapshotName(stmt.SnapshotName)
-		if err != nil {
+
+	if stmt.AtTsExpr != nil {
+		var snapshot *Snapshot
+		if snapshot, err = getTimeStampByTsHint(ctx, stmt.AtTsExpr); err != nil {
 			return nil, err
 		}
-		accountId = snapshot.Tenant.TenantID
-		snapshotSpec = fmt.Sprintf("{snapshot = '%s'}", stmt.SnapshotName)
+
+		if stmt.AtTsExpr.Type == tree.ATTIMESTAMPSNAPSHOT {
+			accountId = snapshot.Tenant.TenantID
+			snapshotSpec = fmt.Sprintf("{snapshot = '%s'}", stmt.AtTsExpr.SnapshotName)
+		} else {
+			snapshotSpec = fmt.Sprintf("{MO_TS = %d}", snapshot.TS.PhysicalTime)
+		}
+
 	}
+
 	// Any account should show database MO_CATALOG_DB_NAME
 	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and datname = '%s')", accountId, MO_CATALOG_DB_NAME)
 	sql = fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database %s where (%s) ORDER BY %s", MO_CATALOG_DB_NAME, snapshotSpec, accountClause, catalog.SystemDBAttr_Name)
@@ -243,12 +252,19 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 
 	snapshot := &Snapshot{TS: &timestamp.Timestamp{}}
 	snapshotSpec := ""
-	if len(stmt.SnapshotName) > 0 {
-		if snapshot, err = ctx.ResolveSnapshotWithSnapshotName(stmt.SnapshotName); err != nil {
+	if stmt.AtTsExpr != nil {
+		var snapshot *Snapshot
+		if snapshot, err = getTimeStampByTsHint(ctx, stmt.AtTsExpr); err != nil {
 			return nil, err
 		}
-		accountId = snapshot.Tenant.TenantID
-		snapshotSpec = fmt.Sprintf("{snapshot = '%s'}", stmt.SnapshotName)
+
+		if stmt.AtTsExpr.Type == tree.ATTIMESTAMPSNAPSHOT {
+			accountId = snapshot.Tenant.TenantID
+			snapshotSpec = fmt.Sprintf("{snapshot = '%s'}", stmt.AtTsExpr.SnapshotName)
+		} else {
+			snapshotSpec = fmt.Sprintf("{MO_TS = %d}", snapshot.TS.PhysicalTime)
+		}
+
 	}
 
 	dbName, err := databaseIsValid(stmt.DBName, ctx, *snapshot)

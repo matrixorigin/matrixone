@@ -633,7 +633,7 @@ import (
 %type <unresolvedObjectName> table_name_unresolved
 %type <comparisionExpr> like_opt
 %type <fullOpt> full_opt
-%type <str> database_name_opt auth_string constraint_keyword_opt constraint_keyword snapshot_option_opt
+%type <str> database_name_opt auth_string constraint_keyword_opt constraint_keyword
 %type <userMiscOption> pwd_or_lck pwd_or_lck_opt
 //%type <userMiscOptions> pwd_or_lck_list
 
@@ -4059,7 +4059,7 @@ show_sequences_stmt:
     }
 
 show_tables_stmt:
-    SHOW full_opt TABLES database_name_opt like_opt where_expression_opt snapshot_option_opt
+    SHOW full_opt TABLES database_name_opt like_opt where_expression_opt table_snapshot_opt
     {
         $$ = &tree.ShowTables{
             Open: false,
@@ -4067,7 +4067,7 @@ show_tables_stmt:
             DBName: $4,
             Like: $5,
             Where: $6,
-            SnapshotName : $7,
+            AtTsExpr: $7,
         }
     }
 |   SHOW OPEN full_opt TABLES database_name_opt like_opt where_expression_opt
@@ -4082,12 +4082,12 @@ show_tables_stmt:
     }
 
 show_databases_stmt:
-    SHOW DATABASES like_opt where_expression_opt snapshot_option_opt
+    SHOW DATABASES like_opt where_expression_opt table_snapshot_opt
     {
         $$ = &tree.ShowDatabases{
             Like: $3, 
             Where: $4,
-            SnapshotName: $5,
+            AtTsExpr: $5,
         }
     }
 |   SHOW SCHEMAS like_opt where_expression_opt
@@ -4178,15 +4178,6 @@ table_column_name:
         $$ = $2
     }
 
-snapshot_option_opt:
-    {
-        $$ = ""
-    }
-|   '{' SNAPSHOT '=' STRING '}'
-    {
-        $$ = $4
-    }
-
 
 
 from_or_in:
@@ -4207,19 +4198,19 @@ full_opt:
     }
 
 show_create_stmt:
-    SHOW CREATE TABLE table_name_unresolved snapshot_option_opt
+    SHOW CREATE TABLE table_name_unresolved table_snapshot_opt
     {
         $$ = &tree.ShowCreateTable{
             Name: $4,
-            SnapshotName: $5,
+            AtTsExpr: $5,
         }
     }
 |
-    SHOW CREATE VIEW table_name_unresolved snapshot_option_opt
+    SHOW CREATE VIEW table_name_unresolved table_snapshot_opt
     {
         $$ = &tree.ShowCreateView{
             Name: $4,
-            SnapshotName: $5,
+            AtTsExpr: $5,
         }
     }
 |   SHOW CREATE DATABASE not_exists_opt db_name
@@ -8348,10 +8339,6 @@ table_snapshot_opt:
     {
         $$ = nil
     }
-|   '{' '}'
-    {
-        $$ = nil
-    }
 |   '{' TIMESTAMP '=' expression '}'
     {
         $$ = &tree.AtTimeStamp{
@@ -8364,6 +8351,7 @@ table_snapshot_opt:
         var Str = $4.Compare()
         $$ = &tree.AtTimeStamp{
             Type: tree.ATTIMESTAMPSNAPSHOT,
+            SnapshotName: yylex.(*Lexer).GetDbOrTblName($4.Origin()),
             Expr: tree.NewNumValWithType(constant.MakeString(Str), Str, false, tree.P_char),
         }
     }
@@ -8371,7 +8359,8 @@ table_snapshot_opt:
     {
         $$ = &tree.AtTimeStamp{
            Type: tree.ATTIMESTAMPSNAPSHOT,
-          Expr: tree.NewNumValWithType(constant.MakeString($4), $4, false, tree.P_char),
+           SnapshotName: $4,
+           Expr: tree.NewNumValWithType(constant.MakeString($4), $4, false, tree.P_char),
         }
     }
 |   '{' MO_TS '=' expression '}'
