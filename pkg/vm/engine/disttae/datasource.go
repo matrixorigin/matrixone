@@ -38,14 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type DataState uint8
-
-const (
-	InMem DataState = iota
-	Persisted
-	End
-)
-
 type tombstoneDataV1 struct {
 	typ engine.TombstoneType
 	//in memory tombstones
@@ -605,25 +597,6 @@ func (rd1 *relationDataV1) BlkCnt() int {
 	return len(rd1.blkList)
 }
 
-type DataSource interface {
-	Next(
-		ctx context.Context,
-		cols []string,
-		types []types.Type,
-		seqNums []uint16,
-		memFilter MemPKFilterInProgress,
-		mp *mpool.MPool,
-		vp engine.VectorPool,
-		bat *batch.Batch) (*objectio.BlockInfoInProgress, DataState, error)
-
-	HasTombstones(bid types.Blockid) bool
-
-	// ApplyTombstones Apply tombstones into rows.
-	ApplyTombstones(rows []types.Rowid) ([]int64, error)
-
-	Close()
-}
-
 type RemoteDataSource struct {
 	ctx  context.Context
 	proc *process.Process
@@ -656,16 +629,16 @@ func (rs *RemoteDataSource) Next(
 	_ []string,
 	_ []types.Type,
 	_ []uint16,
-	_ MemPKFilterInProgress,
+	_ any,
 	_ *mpool.MPool,
 	_ engine.VectorPool,
-	_ *batch.Batch) (*objectio.BlockInfoInProgress, DataState, error) {
+	_ *batch.Batch) (*objectio.BlockInfoInProgress, engine.DataState, error) {
 
 	if rs.cursor >= rs.data.BlkCnt() {
-		return nil, End, nil
+		return nil, engine.End, nil
 	}
 	rs.cursor++
-	return rs.data.GetDataBlk(rs.cursor - 1), Persisted, nil
+	return rs.data.GetDataBlk(rs.cursor - 1), engine.Persisted, nil
 }
 
 func (rs *RemoteDataSource) Close() {
@@ -760,7 +733,7 @@ type LocalDataSource struct {
 	fs           fileservice.FileService
 	cursor       int
 	snapshotTS   types.TS
-	iteratePhase DataState
+	iteratePhase engine.DataState
 }
 
 func NewLocalDataSource(
@@ -802,15 +775,15 @@ func NewLocalDataSource(
 		return source, err
 	}
 
-	source.iteratePhase = InMem
+	source.iteratePhase = engine.InMem
 	if skipReadMem {
-		source.iteratePhase = Persisted
+		source.iteratePhase = engine.Persisted
 	}
 	return source, nil
 }
 
 func (ls *LocalDataSource) HasTombstones(bid types.Blockid) bool {
-	if ls.iteratePhase == InMem {
+	if ls.iteratePhase == engine.InMem {
 		return false
 	}
 
@@ -952,34 +925,35 @@ func (ls *LocalDataSource) ApplyTombstones(rows []types.Rowid) (sel []int64, err
 
 func (ls *LocalDataSource) Next(
 	ctx context.Context, cols []string, types []types.Type, seqNums []uint16,
-	memFilter MemPKFilterInProgress, mp *mpool.MPool, vp engine.VectorPool,
-	bat *batch.Batch) (*objectio.BlockInfoInProgress, DataState, error) {
+	filter any, mp *mpool.MPool, vp engine.VectorPool,
+	bat *batch.Batch) (*objectio.BlockInfoInProgress, engine.DataState, error) {
+	memFilter := filter.(MemPKFilterInProgress)
 
 	if len(cols) == 0 {
-		return nil, End, nil
+		return nil, engine.End, nil
 	}
 
 	for {
 		switch ls.iteratePhase {
-		case InMem:
+		case engine.InMem:
 			err := ls.iterateInMemData(ctx, cols, types, seqNums, memFilter, bat, mp, vp)
 			if bat.RowCount() == 0 && err == nil {
-				ls.iteratePhase = Persisted
+				ls.iteratePhase = engine.Persisted
 				continue
 			}
 
-			return nil, InMem, err
+			return nil, engine.InMem, err
 
-		case Persisted:
+		case engine.Persisted:
 			if ls.cursor < len(ls.ranges) {
 				ls.cursor++
-				return ls.ranges[ls.cursor-1], Persisted, nil
+				return ls.ranges[ls.cursor-1], engine.Persisted, nil
 			}
 
-			ls.iteratePhase = End
+			ls.iteratePhase = engine.End
 			continue
 
-		case End:
+		case engine.End:
 			return nil, ls.iteratePhase, nil
 		}
 	}
@@ -992,7 +966,7 @@ func (ls *LocalDataSource) iterateInMemData(
 
 	defer func() {
 		if bat.RowCount() == 0 {
-			ls.iteratePhase = Persisted
+			ls.iteratePhase = engine.Persisted
 		}
 	}()
 

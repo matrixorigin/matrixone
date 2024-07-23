@@ -613,6 +613,33 @@ type RelData interface {
 	BlkCnt() int
 }
 
+type DataState uint8
+
+const (
+	InMem DataState = iota
+	Persisted
+	End
+)
+
+type DataSource interface {
+	Next(
+		ctx context.Context,
+		cols []string,
+		types []types.Type,
+		seqNums []uint16,
+		memFilter any,
+		mp *mpool.MPool,
+		vp VectorPool,
+		bat *batch.Batch) (*objectio.BlockInfoInProgress, DataState, error)
+
+	HasTombstones(bid types.Blockid) bool
+
+	// ApplyTombstones Apply tombstones into rows.
+	ApplyTombstones(rows []types.Rowid) ([]int64, error)
+
+	Close()
+}
+
 type Ranges interface {
 	GetBytes(i int) []byte
 

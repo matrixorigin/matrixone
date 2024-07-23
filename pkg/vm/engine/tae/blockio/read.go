@@ -139,7 +139,7 @@ func ReadByFilter(
 func BlockDataRead(
 	ctx context.Context,
 	info *objectio.BlockInfoInProgress,
-	//inputDeletes []int64,
+	ds engine.DataSource,
 	columns []uint16,
 	colTypes []types.Type,
 	ts timestamp.Timestamp,

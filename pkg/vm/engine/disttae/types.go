@@ -846,7 +846,7 @@ type SingleReaderInProgress struct {
 type readerInProgress struct {
 	withFilterMixin
 
-	source DataSource
+	source engine.DataSource
 	ts     timestamp.Timestamp
 
 	//FIXME:: prefetch blocks in DataSource?

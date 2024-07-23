@@ -2083,7 +2083,7 @@ func (tbl *txnTable) GetDBID(ctx context.Context) uint64 {
 // for ut
 func BuildLocalDataSource(
 	ctx context.Context, rel engine.Relation,
-	ranges engine.RelData, txnOffset int) (source DataSource, err error) {
+	ranges engine.RelData, txnOffset int) (source engine.DataSource, err error) {
 
 	var (
 		ok  bool
@@ -2100,7 +2100,7 @@ func BuildLocalDataSource(
 func (tbl *txnTable) buildLocalDataSource(
 	ctx context.Context,
 	txnOffset int,
-	relData engine.RelData) (source DataSource, err error) {
+	relData engine.RelData) (source engine.DataSource, err error) {
 
 	proc := tbl.proc.Load()
 

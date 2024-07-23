@@ -709,7 +709,7 @@ func NewReaderInProgress(
 	ts timestamp.Timestamp,
 	expr *plan.Expr,
 	//orderedScan bool, // it should be included in filter or expr.
-	source DataSource,
+	source engine.DataSource,
 ) *readerInProgress {
 
 	baseFilter := newBasePKFilter(
@@ -784,7 +784,7 @@ func (r *readerInProgress) Read(
 ) (bat *batch.Batch, err error) {
 
 	start := time.Now()
-	status := InMem
+	status := engine.InMem
 	defer func() {
 		if r.columns.extraRowIdAdded && bat != nil {
 			rowIDVec := bat.Vecs[r.columns.rowIdColIdx]
@@ -858,15 +858,15 @@ func (r *readerInProgress) Read(
 	if err != nil {
 		return nil, err
 	}
-	if state == End {
-		status = End
+	if state == engine.End {
+		status = engine.End
 		return nil, nil
 	}
-	if state == InMem {
-		status = InMem
+	if state == engine.InMem {
+		status = engine.InMem
 		return bat, nil
 	}
-	status = Persisted
+	status = engine.Persisted
 	//read block
 	filter := r.withFilterMixin.filterState.filter
 
@@ -883,7 +883,7 @@ func (r *readerInProgress) Read(
 	}
 
 	bat, err = blockio.BlockDataRead(
-		statsCtx, blkInfo, r.columns.seqnums, r.columns.colTypes, r.ts,
+		statsCtx, blkInfo, r.source, r.columns.seqnums, r.columns.colTypes, r.ts,
 		r.filterState.seqnums,
 		r.filterState.colTypes,
 		filter,
@@ -899,20 +899,6 @@ func (r *readerInProgress) Read(
 	}
 
 	bat.SetAttributes(cols)
-
-	var sels []int64
-	if bat.RowCount() > 0 {
-		rowIDs := vector.MustFixedCol[types.Rowid](bat.Vecs[r.columns.rowIdColIdx])
-		bid := rowIDs[0].CloneBlockID()
-		if r.source.HasTombstones(bid) {
-			sels, err = r.source.ApplyTombstones(rowIDs)
-			if err != nil {
-				return nil, err
-			}
-
-			bat.Shrink(sels, false)
-		}
-	}
 
 	if blkInfo.Sorted && r.columns.indexOfFirstSortedColumn != -1 {
 		bat.GetVector(int32(r.columns.indexOfFirstSortedColumn)).SetSorted(true)
