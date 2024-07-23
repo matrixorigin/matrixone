@@ -513,7 +513,7 @@ func (mrs *MysqlResultSet) GetString(ctx context.Context, rindex, cindex uint64)
 	case bytejson.ByteJson:
 		return v.String(), nil
 	case types.Uuid:
-		return v.ToString(), nil
+		return v.String(), nil
 	case types.Blockid:
 		return v.String(), nil
 	case types.TS:
