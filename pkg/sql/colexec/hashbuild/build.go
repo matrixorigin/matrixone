@@ -111,17 +111,20 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 		case SendHashMap:
 			if ap.NeedHashMap {
 				var jm *hashmap.JoinMap
-				if ctr.keyWidth <= 8 {
-					jm = hashmap.NewJoinMap(ctr.multiSels, ctr.intHashMap, nil)
-				} else {
-					jm = hashmap.NewJoinMap(ctr.multiSels, nil, ctr.strHashMap)
+				if ctr.inputBatchRowCount > 0 {
+					if ctr.keyWidth <= 8 {
+						jm = hashmap.NewJoinMap(ctr.multiSels, ctr.intHashMap, nil)
+					} else {
+						jm = hashmap.NewJoinMap(ctr.multiSels, nil, ctr.strHashMap)
+					}
+					jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
+
+					jm.SetRowCount(int64(ctr.inputBatchRowCount))
+					jm.IncRef(ap.JoinMapRefCnt)
 				}
-				jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
 				if ap.JoinMapTag <= 0 {
 					panic("wrong joinmap message tag!")
 				}
-				jm.SetRowCount(int64(ctr.inputBatchRowCount))
-				jm.IncRef(ap.JoinMapRefCnt)
 				proc.SendMessage(process.JoinMapMsg{JoinMapPtr: jm, Tag: ap.JoinMapTag})
 				ctr.intHashMap = nil
 				ctr.strHashMap = nil
