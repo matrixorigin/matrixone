@@ -703,7 +703,6 @@ func deleteCurFkTableInPitrRestore(ctx context.Context, sid string, bh Backgroun
 
 func fkTablesTopoSortInPitrRestore(
 	ctx context.Context,
-	sid string,
 	bh BackgroundExec,
 	ts int64,
 	dbName string,
