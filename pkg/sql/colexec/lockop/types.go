@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -119,6 +120,8 @@ type lockTarget struct {
 	lockTable                    bool
 	changeDef                    bool
 	mode                         lock.LockMode
+	lockRows                     *plan.Expr
+	lockTableAtTheEnd            bool
 }
 
 // RowsFilter used to filter row from primary vector. The row will not lock if filter return false.
@@ -143,6 +146,7 @@ type state struct {
 	cachedBatches        []*batch.Batch
 	batchFetchFunc       func(process.Analyze) *process.RegisterMessage
 	hasNewVersionInRange hasNewVersionInRangeFunc
+	lockCount            int64
 }
 
 const (
