@@ -79,6 +79,7 @@ func LockTableWithUniqueID(
 		proc.Ctx,
 		eng,
 		nil,
+		nil,
 		tableID,
 		proc,
 		nil,

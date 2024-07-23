@@ -77,10 +77,8 @@ select * from result_scan(last_query_id()) as u;
 select count(*) from meta_scan(last_query_id()) as u;
 /* cloud_user */show tables;
 select * from result_scan(last_query_id()) as u;
--- @bvt:issue#12083
 /* cloud_user */show variables like 'tx_isolation';
 select * from result_scan(last_query_id()) as u;
--- @bvt:issue
 /* cloud_user */show columns from tt;
 select * from result_scan(last_query_id()) as u;
 /* cloud_user */show grants;
@@ -90,7 +88,7 @@ select * from result_scan(last_query_id()) as u;
 alter table tt add unique index id(a);
 /* cloud_user */show index from tt;
 select * from result_scan(last_query_id()) as u;
--- @bvt:issue#12083
+-- @bvt:issue#17598
 /* cloud_user */show node list;
 select * from result_scan(last_query_id()) as u;
 -- @bvt:issue

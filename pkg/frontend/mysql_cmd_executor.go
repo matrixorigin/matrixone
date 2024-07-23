@@ -173,7 +173,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	// add by #9907, set the result of last_query_id(), this will pass those isCmdFieldListSql() from client.
 	// fixme: this op leads all internal/background executor got NULL result if call last_query_id().
 	if sqlType != constant.InternalSql {
-		ses.pushQueryId(types.Uuid(stmID).ToString())
+		ses.pushQueryId(types.Uuid(stmID).String())
 	}
 
 	// -------------------------------------
@@ -1167,6 +1167,23 @@ func handleDropSnapshot(ses *Session, execCtx *ExecCtx, ct *tree.DropSnapShot) e
 
 func handleRestoreSnapshot(ses *Session, execCtx *ExecCtx, rs *tree.RestoreSnapShot) error {
 	return doRestoreSnapshot(execCtx.reqCtx, ses, rs)
+}
+
+func handleCreatePitr(ses *Session, execCtx *ExecCtx, cp *tree.CreatePitr) error {
+	return doCreatePitr(execCtx.reqCtx, ses, cp)
+}
+
+func handleDropPitr(ses *Session, execCtx *ExecCtx, dp *tree.DropPitr) error {
+	return doDropPitr(execCtx.reqCtx, ses, dp)
+}
+
+func handleAlterPitr(ses *Session, execCtx *ExecCtx, ap *tree.AlterPitr) error {
+	return doAlterPitr(execCtx.reqCtx, ses, ap)
+}
+
+func handleRestorePitr(ses *Session, execCtx *ExecCtx, rp *tree.RestorePitr) error {
+	//return doRestorePitr(execCtx.reqCtx, ses, rp)
+	return nil
 }
 
 // handleCreateAccount creates a new user-level tenant in the context of the tenant SYS
