@@ -43,8 +43,8 @@ func SetAnalyzeInfo(rootOp Operator, proc *process.Process) {
 		switch op.OpType() {
 		case Output:
 			op.GetOperatorBase().SetIdx(-1)
-		case TableScan:
-			op.GetOperatorBase().SetIdx(parentOp.GetOperatorBase().Idx)
+			//case TableScan:
+			//	op.GetOperatorBase().SetIdx(parentOp.GetOperatorBase().Idx)
 		}
 		return nil
 	})
