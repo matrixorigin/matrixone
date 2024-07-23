@@ -1566,6 +1566,61 @@ func TestIssue17225(t *testing.T) {
 	)
 }
 
+func TestIssue17655(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1"},
+		time.Second*1,
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			t1, _ := l1.clock.Now()
+			option.SnapShotTs = t1
+			_, err := l1.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+
+			alloc.setRestartService("s1")
+			for {
+				if l1.isStatus(pb.Status_ServiceLockWaiting) {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					panic("timeout bug")
+				default:
+				}
+			}
+
+			require.NoError(t, l1.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
+
+			_, err = l1.Lock(
+				ctx,
+				0,
+				[][]byte{{2}},
+				[]byte("txn2"),
+				option)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNewTxnInCNRollingRestart))
+		},
+		nil,
+	)
+}
+
 func TestIssue3537(t *testing.T) {
 	runLockServiceTestsWithLevel(
 		t,
