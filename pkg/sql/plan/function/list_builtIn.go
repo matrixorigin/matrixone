@@ -5497,7 +5497,7 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 			},
 			{
-				overloadId: 0,
+				overloadId: 1,
 				volatile:   true,
 				args:       []types.T{types.T_char},
 				retType: func(parameters []types.Type) types.Type {
@@ -5505,6 +5505,17 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return LoadFile
+				},
+			},
+			{
+				overloadId: 2,
+				volatile:   true,
+				args:       []types.T{types.T_datalink},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_text.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return LoadFileDatalink
 				},
 			},
 		},
