@@ -17,7 +17,6 @@ package disttae
 import (
 	"bytes"
 	"context"
-	"slices"
 	"sort"
 	"time"
 
@@ -645,6 +644,18 @@ func (rs *RemoteDataSource) Close() {
 
 }
 
+func (rs *RemoteDataSource) ApplyTombstonesInProgress(
+	ctx context.Context,
+	bid objectio.Blockid,
+	rowsOffset []int32) ([]int32, error) {
+	return nil, nil
+}
+
+func (rs *RemoteDataSource) GetTombstonesInProgress(
+	ctx context.Context, bid objectio.Blockid) (deletedRows []int64, err error) {
+	return nil, nil
+}
+
 func (rs *RemoteDataSource) HasTombstones(bid types.Blockid) bool {
 	return rs.data.GetTombstones().HasTombstones(bid)
 }
@@ -813,51 +824,51 @@ func (ls *LocalDataSource) HasTombstones(bid types.Blockid) bool {
 	return false
 }
 
-func (ls *LocalDataSource) prepareDeletes(blockId types.Blockid) (err error) {
-	if blockId.Compare(ls.prevBlockId) != 0 {
-		ls.prevBlockId = blockId
-
-		// extract deletes from workspace
-		if ls.workspaceDeletes.InWritesDeletes == nil {
-			ls.workspaceDeletes.InWritesDeletes = make(map[types.Rowid]struct{})
-			for idx := range ls.unCommittedInmemDeletesEntry {
-				delRowIds := vector.MustFixedCol[types.Rowid](ls.unCommittedInmemDeletesEntry[idx].bat.Vecs[0])
-				for _, delRowId := range delRowIds {
-					ls.workspaceDeletes.InWritesDeletes[delRowId] = struct{}{}
-				}
-			}
-		}
-
-		slices.Sort(ls.workspaceDeletes.RawRowIdOffsetsDeletes[blockId])
-
-		deltaLoc, commitTS, ok := ls.pState.GetBockDeltaLoc(blockId)
-		if ok {
-			ls.persistedDeletes, err = loadBlockDeletesByDeltaLoc(ls.ctx, ls.fs, blockId, deltaLoc[:], ls.snapshotTS, commitTS)
-			if err != nil {
-				return err
-			}
-		}
-
-		if len(ls.workspaceDeletes.FlushedS3Deletes[blockId]) != 0 {
-			ls.tmpDeletesMask = make(map[types.Rowid]struct{})
-			err = loadUncommittedS3Deletes(ls.ctx, ls.mp, ls.fs, &ls.tmpDeletesMask, ls.workspaceDeletes.FlushedS3Deletes[blockId])
-			if err != nil {
-				return err
-			}
-		}
-
-		delIter := ls.pState.NewRowsIter(ls.snapshotTS, &ls.prevBlockId, true)
-		for delIter.Next() {
-			if ls.tmpDeletesMask == nil {
-				ls.tmpDeletesMask = make(map[types.Rowid]struct{})
-			}
-			ls.tmpDeletesMask[delIter.Entry().RowID] = struct{}{}
-		}
-		delIter.Close()
-	}
-
-	return nil
-}
+//func (ls *LocalDataSource) prepareDeletes(blockId types.Blockid) (err error) {
+//	if blockId.Compare(ls.prevBlockId) != 0 {
+//		ls.prevBlockId = blockId
+//
+//		// extract deletes from workspace
+//		if ls.workspaceDeletes.InWritesDeletes == nil {
+//			ls.workspaceDeletes.InWritesDeletes = make(map[types.Rowid]struct{})
+//			for idx := range ls.unCommittedInmemDeletesEntry {
+//				delRowIds := vector.MustFixedCol[types.Rowid](ls.unCommittedInmemDeletesEntry[idx].bat.Vecs[0])
+//				for _, delRowId := range delRowIds {
+//					ls.workspaceDeletes.InWritesDeletes[delRowId] = struct{}{}
+//				}
+//			}
+//		}
+//
+//		slices.Sort(ls.workspaceDeletes.RawRowIdOffsetsDeletes[blockId])
+//
+//		deltaLoc, commitTS, ok := ls.pState.GetBockDeltaLoc(blockId)
+//		if ok {
+//			ls.persistedDeletes, err = loadBlockDeletesByDeltaLoc(ls.ctx, ls.fs, blockId, deltaLoc[:], ls.snapshotTS, commitTS)
+//			if err != nil {
+//				return err
+//			}
+//		}
+//
+//		if len(ls.workspaceDeletes.FlushedS3Deletes[blockId]) != 0 {
+//			ls.tmpDeletesMask = make(map[types.Rowid]struct{})
+//			err = loadUncommittedS3Deletes(ls.ctx, ls.mp, ls.fs, &ls.tmpDeletesMask, ls.workspaceDeletes.FlushedS3Deletes[blockId])
+//			if err != nil {
+//				return err
+//			}
+//		}
+//
+//		delIter := ls.pState.NewRowsIter(ls.snapshotTS, &ls.prevBlockId, true)
+//		for delIter.Next() {
+//			if ls.tmpDeletesMask == nil {
+//				ls.tmpDeletesMask = make(map[types.Rowid]struct{})
+//			}
+//			ls.tmpDeletesMask[delIter.Entry().RowID] = struct{}{}
+//		}
+//		delIter.Close()
+//	}
+//
+//	return nil
+//}
 
 func (ls *LocalDataSource) Close() {
 	ls.pStateRowsInsIter.Close()
@@ -880,53 +891,55 @@ func (ls *LocalDataSource) ApplyTombstones(rows []types.Rowid) (sel []int64, err
 	//	return ret
 	//}
 
-	blockId, _ := rows[0].Decode()
-	if err = ls.prepareDeletes(blockId); err != nil {
-		return nil, err
-	}
+	//blockId, _ := rows[0].Decode()
+	//if err = ls.prepareDeletes(blockId); err != nil {
+	//	return nil, err
+	//}
+	//
+	//left := make([]int64, 0)
+	//
+	//for idx, row := range rows {
+	//	if ls.tmpDeletesMask != nil {
+	//		if _, ok := ls.tmpDeletesMask[row]; ok {
+	//			continue
+	//		}
+	//	}
+	//
+	//	if ls.persistedDeletes != nil {
+	//		_, offset := row.Decode()
+	//		if ls.persistedDeletes.Contains(uint64(offset)) {
+	//			continue
+	//		}
+	//	}
+	//
+	//	if offsets := ls.workspaceDeletes.RawRowIdOffsetsDeletes[blockId]; len(offsets) != 0 {
+	//		_, o := row.Decode()
+	//		_, found := sort.Find(len(offsets), func(i int) int {
+	//			return int(int64(o) - offsets[i])
+	//		})
+	//		if found {
+	//			continue
+	//		}
+	//	}
+	//
+	//	if ls.workspaceDeletes.InWritesDeletes != nil {
+	//		if _, ok := ls.workspaceDeletes.InWritesDeletes[row]; ok {
+	//			continue
+	//		}
+	//	}
+	//
+	//	left = append(left, int64(idx))
+	//}
 
-	left := make([]int64, 0)
-
-	for idx, row := range rows {
-		if ls.tmpDeletesMask != nil {
-			if _, ok := ls.tmpDeletesMask[row]; ok {
-				continue
-			}
-		}
-
-		if ls.persistedDeletes != nil {
-			_, offset := row.Decode()
-			if ls.persistedDeletes.Contains(uint64(offset)) {
-				continue
-			}
-		}
-
-		if offsets := ls.workspaceDeletes.RawRowIdOffsetsDeletes[blockId]; len(offsets) != 0 {
-			_, o := row.Decode()
-			_, found := sort.Find(len(offsets), func(i int) int {
-				return int(int64(o) - offsets[i])
-			})
-			if found {
-				continue
-			}
-		}
-
-		if ls.workspaceDeletes.InWritesDeletes != nil {
-			if _, ok := ls.workspaceDeletes.InWritesDeletes[row]; ok {
-				continue
-			}
-		}
-
-		left = append(left, int64(idx))
-	}
-
-	return left, nil
+	//return left, nil
+	return nil, nil
 }
 
 func (ls *LocalDataSource) Next(
 	ctx context.Context, cols []string, types []types.Type, seqNums []uint16,
 	filter any, mp *mpool.MPool, vp engine.VectorPool,
 	bat *batch.Batch) (*objectio.BlockInfoInProgress, engine.DataState, error) {
+
 	memFilter := filter.(MemPKFilterInProgress)
 
 	if len(cols) == 0 {
@@ -1005,8 +1018,9 @@ func (ls *LocalDataSource) filterUncommittedInMemInserts(seqNums []uint16, mp *m
 		uf := vector.GetUnionOneFunction(*vec.GetType(), mp)
 
 		for j, k := int64(0), int64(insertsBat.RowCount()); j < k; j++ {
+			b, o := insRowIDs[j].Decode()
 
-			sel, err := ls.ApplyTombstones([]types.Rowid{insRowIDs[j]})
+			sel, err := ls.ApplyTombstonesInProgress(ls.ctx, b, []int32{int32(o)})
 			if err != nil {
 				return err
 			}
@@ -1039,17 +1053,9 @@ func (ls *LocalDataSource) filterInMemCommittedInserts(
 
 	var (
 		err          error
-		sel          []int64
+		sel          []int32
 		appendedRows uint32
 	)
-
-	//for idx := range seqNums {
-	//	if seqNums[idx] == objectio.SEQNUM_ROWID {
-	//		seqNums = append(seqNums[0:idx], seqNums[idx+1:]...)
-	//		colTypes = append(colTypes[0:idx], colTypes[idx+1:]...)
-	//		break
-	//	}
-	//}
 
 	appendFunctions := make([]func(*vector.Vector, *vector.Vector, int64) error, len(bat.Attrs))
 	for i := range bat.Attrs {
@@ -1066,8 +1072,9 @@ func (ls *LocalDataSource) filterInMemCommittedInserts(
 
 	for ls.pStateRowsInsIter.Next() && appendedRows < options.DefaultBlockMaxRows {
 		entry := ls.pStateRowsInsIter.Entry()
+		b, o := entry.RowID.Decode()
 
-		sel, err = ls.ApplyTombstones([]types.Rowid{entry.RowID})
+		sel, err = ls.ApplyTombstonesInProgress(ls.ctx, b, []int32{int32(o)})
 		if err != nil {
 			return err
 		}
@@ -1229,4 +1236,199 @@ func loadBlockDeletesByDeltaLoc(
 	}
 
 	return deleteMask, nil
+}
+
+func (ls *LocalDataSource) ApplyTombstonesInProgress(
+	ctx context.Context,
+	bid objectio.Blockid,
+	rowsOffset []int32) ([]int32, error) {
+
+	var err error
+
+	rowsOffset, _ = ls.applyWorkspaceEntryDeletes(bid, rowsOffset)
+	rowsOffset, _, err = ls.applyWorkspaceFlushedS3Deletes(bid, rowsOffset)
+	if err != nil {
+		return nil, err
+	}
+
+	rowsOffset, _ = ls.applyWorkspaceRawRowIdDeletes(bid, rowsOffset)
+	rowsOffset, _ = ls.applyPStateInMemDeletes(bid, rowsOffset)
+	rowsOffset, _, err = ls.applyPStatePersistedDeltaLocation(bid, rowsOffset)
+	if err != nil {
+		return nil, err
+	}
+
+	return rowsOffset, nil
+}
+
+func (ls *LocalDataSource) GetTombstonesInProgress(
+	ctx context.Context, bid objectio.Blockid) (deletedRows []int64, err error) {
+
+	_, dels := ls.applyWorkspaceEntryDeletes(bid, nil)
+	deletedRows = append(deletedRows, dels...)
+
+	_, dels, err = ls.applyWorkspaceFlushedS3Deletes(bid, nil)
+	if err != nil {
+		return nil, err
+	}
+	deletedRows = append(deletedRows, dels...)
+
+	_, dels = ls.applyWorkspaceRawRowIdDeletes(bid, nil)
+	_, dels = ls.applyPStateInMemDeletes(bid, nil)
+	_, dels, err = ls.applyPStatePersistedDeltaLocation(bid, nil)
+	if err != nil {
+		return nil, err
+	}
+	deletedRows = append(deletedRows, dels...)
+
+	return deletedRows, nil
+}
+
+func fastApplyDeletedRows(leftRows []int32, deletedRows []int64, o uint32) ([]int32, []int64) {
+	if leftRows != nil {
+		if x := sort.Search(len(leftRows), func(i int) bool {
+			return leftRows[i] < int32(o)
+		}); x != len(leftRows) {
+			leftRows = append(leftRows[:x], leftRows[x+1:]...)
+		}
+	} else {
+		deletedRows = append(deletedRows, int64(o))
+	}
+
+	return leftRows, deletedRows
+}
+
+func (ls *LocalDataSource) applyWorkspaceEntryDeletes(
+	bid objectio.Blockid, offsets []int32) (leftRows []int32, deletedRows []int64) {
+
+	leftRows = offsets
+
+	for idx := range ls.unCommittedInmemDeletesEntry {
+		delRowIds := vector.MustFixedCol[types.Rowid](ls.unCommittedInmemDeletesEntry[idx].bat.Vecs[0])
+		for _, delRowId := range delRowIds {
+			b, o := delRowId.Decode()
+			if bid.Compare(b) != 0 {
+				continue
+			}
+
+			leftRows, deletedRows = fastApplyDeletedRows(leftRows, deletedRows, o)
+			if leftRows != nil && len(leftRows) == 0 {
+				break
+			}
+		}
+	}
+
+	return offsets, deletedRows
+}
+
+func (ls *LocalDataSource) applyWorkspaceFlushedS3Deletes(
+	bid objectio.Blockid, offsets []int32) (leftRows []int32, deletedRows []int64, err error) {
+
+	leftRows = offsets
+
+	if len(ls.workspaceDeletes.FlushedS3Deletes[bid]) == 0 {
+		return
+	}
+
+	done := false
+	for _, bat := range ls.workspaceDeletes.FlushedS3Deletes[bid] {
+		vs, area := vector.MustVarlenaRawData(bat.GetVector(0))
+		for i := range vs {
+			location, err := blockio.EncodeLocationFromString(vs[i].UnsafeGetString(area))
+			if err != nil {
+				return nil, nil, err
+			}
+
+			rowIdBat, release, err := blockio.LoadColumns(ls.ctx, []uint16{0}, nil, ls.fs, location, ls.mp, fileservice.Policy(0))
+			if err != nil {
+				release()
+				return nil, nil, err
+			}
+
+			delRowIds := vector.MustFixedCol[types.Rowid](rowIdBat.GetVector(0))
+			for _, delRowId := range delRowIds {
+				b, o := delRowId.Decode()
+				if bid.Compare(b) != 0 {
+					continue
+				}
+
+				leftRows, deletedRows = fastApplyDeletedRows(leftRows, deletedRows, o)
+				if leftRows != nil && len(leftRows) == 0 {
+					done = true
+					break
+				}
+			}
+
+			release()
+
+			if done {
+				break
+			}
+		}
+	}
+
+	return leftRows, deletedRows, nil
+}
+
+func (ls *LocalDataSource) applyWorkspaceRawRowIdDeletes(
+	bid objectio.Blockid, offsets []int32) (leftRows []int32, deletedRows []int64) {
+
+	leftRows = offsets
+
+	for _, o := range ls.workspaceDeletes.RawRowIdOffsetsDeletes[bid] {
+		leftRows, deletedRows = fastApplyDeletedRows(leftRows, deletedRows, uint32(o))
+		if leftRows != nil && len(leftRows) == 0 {
+			break
+		}
+	}
+
+	return leftRows, deletedRows
+}
+
+func (ls *LocalDataSource) applyPStateInMemDeletes(
+	bid objectio.Blockid, offsets []int32) (leftRows []int32, deletedRows []int64) {
+
+	leftRows = offsets
+	delIter := ls.pState.NewRowsIter(ls.snapshotTS, &bid, true)
+	for delIter.Next() {
+		_, o := delIter.Entry().RowID.Decode()
+		leftRows, deletedRows = fastApplyDeletedRows(leftRows, deletedRows, o)
+		if leftRows != nil && len(leftRows) == 0 {
+			break
+		}
+	}
+
+	delIter.Close()
+
+	return leftRows, deletedRows
+}
+
+func (ls *LocalDataSource) applyPStatePersistedDeltaLocation(
+	bid objectio.Blockid, offsets []int32) (leftRows []int32, deletedRows []int64, err error) {
+
+	deltaLoc, commitTS, ok := ls.pState.GetBockDeltaLoc(bid)
+	if ok {
+		ls.persistedDeletes, err = loadBlockDeletesByDeltaLoc(ls.ctx, ls.fs, bid, deltaLoc[:], ls.snapshotTS, commitTS)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		if offsets != nil {
+			for _, offset := range offsets {
+				if ls.persistedDeletes.Contains(uint64(offset)) {
+					continue
+				}
+				leftRows = append(leftRows, offset)
+			}
+		} else {
+			ls.persistedDeletes.Foreach(func(u uint64) bool {
+				deletedRows = append(deletedRows, int64(u))
+				return true
+			})
+		}
+	} else {
+		leftRows = offsets
+	}
+
+	return leftRows, deletedRows, nil
 }

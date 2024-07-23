@@ -637,15 +637,13 @@ type DataSource interface {
 	// ApplyTombstones Apply tombstones into rows.
 	ApplyTombstones(rows []types.Rowid) ([]int64, error)
 
-	//ApplyTombstones(
-	//ctx context.Context,
-	//bid types.Blockid,
-	//rowoffset []int32) (sels []int32, error)
+	ApplyTombstonesInProgress(
+		ctx context.Context,
+		bid objectio.Blockid,
+		rowsOffset []int32) ([]int32, error)
 
-	//GetTombstones(
-	//ctx, context.Context,
-	//bid types.Blockid,
-	//) (deleted []int64, error)
+	GetTombstonesInProgress(
+		ctx context.Context, bid objectio.Blockid) (deletedRows []int64, err error)
 
 	Close()
 }
