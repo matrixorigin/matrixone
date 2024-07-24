@@ -214,6 +214,8 @@ message Join {
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 7;
   bool hash_on_pk = 8;
   bool is_shuffle =9;
+  int32 join_map_tag = 10;
+  int32 shuffle_idx = 11;
 }
 
 message AntiJoin{
@@ -225,6 +227,8 @@ message AntiJoin{
   bool hash_on_pk = 6;
   bool is_shuffle = 7;
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 8;
+  int32 join_map_tag = 9;
+  int32 shuffle_idx = 10;
 }
 
 message LeftJoin {
@@ -237,6 +241,8 @@ message LeftJoin {
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 7;
   bool hash_on_pk = 8;
   bool is_shuffle = 9;
+  int32 join_map_tag = 10;
+  int32 shuffle_idx = 11;
 }
 
 message RightJoin {
@@ -250,6 +256,8 @@ message RightJoin {
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 8;
   bool hash_on_pk = 9;
   bool is_shuffle = 10;
+  int32 join_map_tag = 11;
+  int32 shuffle_idx = 12;
 }
 
 message RightSemiJoin {
@@ -261,6 +269,8 @@ message RightSemiJoin {
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 6;
   bool hash_on_pk = 7;
   bool is_shuffle = 8;
+  int32 join_map_tag = 9;
+  int32 shuffle_idx = 11;
 }
 
 message RightAntiJoin {
@@ -272,6 +282,8 @@ message RightAntiJoin {
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 6;
   bool hash_on_pk = 7;
   bool is_shuffle = 8;
+  int32 join_map_tag = 9;
+  int32 shuffle_idx = 10;
 }
 
 message SemiJoin {
@@ -283,6 +295,8 @@ message SemiJoin {
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 6;
   bool hash_on_pk = 7;
   bool is_shuffle = 8;
+  int32 join_map_tag = 9;
+  int32 shuffle_idx = 10;
 }
 
 message SingleJoin {
@@ -295,6 +309,8 @@ message SingleJoin {
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 7;
   bool hash_on_pk = 8;
   bool is_shuffle = 9;
+  int32 join_map_tag = 10;
+  int32 shuffle_idx = 11;
 }
 
 message MarkJoin {
@@ -306,6 +322,8 @@ message MarkJoin {
   repeated plan.Expr on_list = 6;
   bool hash_on_pk = 7;
   bool is_shuffle = 8;
+  int32 join_map_tag = 9;
+  int32 shuffle_idx = 10;
 }
 
 message Product {
@@ -313,6 +331,7 @@ message Product {
   repeated int32 col_list = 2;
   repeated plan.Type  types = 3 [(gogoproto.nullable) = false];
   bool is_shuffle =4;
+  int32 join_map_tag = 5;
 }
 
 message ProductL2 {
@@ -320,6 +339,7 @@ message ProductL2 {
   repeated int32 col_list = 2;
   repeated plan.Type  types = 3 [(gogoproto.nullable) = false];
   plan.Expr  expr = 4;
+  int32 join_map_tag = 5;
 }
 
 message IndexJoin {
@@ -355,6 +375,7 @@ message ExternalScan {
   repeated string file_list = 7;
   repeated plan.ColDef origin_cols = 8;
   plan.Expr    filter = 9;
+  map<string, int32> TbColToDataCol = 10;
 }
 
 message StreamScan {
@@ -543,7 +564,7 @@ message Pipeline {
 
   repeated UuidToRegIdx uuids_to_reg_idx = 13;
   int32 build_idx = 14;
-  int32 shuffle_cnt = 15;
+  int32 shuffle_idx = 15;
 }
 
 message WrapNode {

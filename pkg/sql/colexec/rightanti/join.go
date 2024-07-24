@@ -41,7 +41,6 @@ func (rightAnti *RightAnti) OpType() vm.OpType {
 func (rightAnti *RightAnti) Prepare(proc *process.Process) (err error) {
 	rightAnti.ctr = new(container)
 	rightAnti.ctr.InitReceiver(proc, false)
-	rightAnti.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
 	rightAnti.ctr.vecs = make([]*vector.Vector, len(rightAnti.Conditions[0]))
 	rightAnti.ctr.evecs = make([]evalVector, len(rightAnti.Conditions[0]))
 	for i := range rightAnti.ctr.evecs {
@@ -71,9 +70,7 @@ func (rightAnti *RightAnti) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(analyze); err != nil {
-				return result, err
-			}
+			rightAnti.build(analyze, proc)
 			// for inner ,right and semi join, if hashmap is empty, we can finish this pipeline
 			// shuffle join can't stop early for this moment
 			if ctr.mp == nil && !rightAnti.IsShuffle {
@@ -138,51 +135,18 @@ func (rightAnti *RightAnti) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) receiveHashMap(anal process.Analyze) error {
-	msg := ctr.ReceiveFromSingleReg(1, anal)
-	if msg.Err != nil {
-		return msg.Err
-	}
-	bat := msg.Batch
-	if bat != nil && bat.AuxData != nil {
-		ctr.mp = bat.DupJmAuxData()
+func (rightAnti *RightAnti) build(anal process.Analyze, proc *process.Process) {
+	ctr := rightAnti.ctr
+	ctr.mp = proc.ReceiveJoinMap(anal, rightAnti.JoinMapTag, rightAnti.IsShuffle, rightAnti.ShuffleIdx)
+	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
-	return nil
-}
-
-func (ctr *container) receiveBatch(anal process.Analyze) error {
-	for {
-		msg := ctr.ReceiveFromSingleReg(1, anal)
-		if msg.Err != nil {
-			return msg.Err
-		}
-		bat := msg.Batch
-		if bat != nil {
-			ctr.batchRowCount += bat.RowCount()
-			ctr.batches = append(ctr.batches, bat)
-		} else {
-			break
-		}
-	}
-	for i := 0; i < len(ctr.batches)-1; i++ {
-		if ctr.batches[i].RowCount() != colexec.DefaultBatchSize {
-			panic("wrong batch received for hash build!")
-		}
-	}
+	ctr.batches = ctr.mp.GetBatches()
+	ctr.batchRowCount = ctr.mp.GetRowCount()
 	if ctr.batchRowCount > 0 {
 		ctr.matched = &bitmap.Bitmap{}
-		ctr.matched.InitWithSize(int64(ctr.batchRowCount))
+		ctr.matched.InitWithSize(ctr.batchRowCount)
 	}
-	return nil
-}
-
-func (ctr *container) build(anal process.Analyze) error {
-	err := ctr.receiveHashMap(anal)
-	if err != nil {
-		return err
-	}
-	return ctr.receiveBatch(anal)
 }
 
 func (ctr *container) sendLast(ap *RightAnti, proc *process.Process, analyze process.Analyze, _ bool, isLast bool) (bool, error) {
@@ -209,7 +173,7 @@ func (ctr *container) sendLast(ap *RightAnti, proc *process.Process, analyze pro
 		}
 	}
 
-	count := ctr.batchRowCount - ctr.matched.Count()
+	count := ctr.batchRowCount - int64(ctr.matched.Count())
 	ctr.matched.Negate()
 	sels := make([]int32, 0, count)
 	itr := ctr.matched.Iterator()
@@ -291,10 +255,9 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightAnti, proc *process.Proce
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
-		copy(ctr.inBuckets, hashmap.OneUInt8s)
-		vals, zvals := itr.Find(i, n, ctr.vecs, ctr.inBuckets)
+		vals, zvals := itr.Find(i, n, ctr.vecs)
 		for k := 0; k < n; k++ {
-			if ctr.inBuckets[k] == 0 || zvals[k] == 0 || vals[k] == 0 {
+			if zvals[k] == 0 || vals[k] == 0 {
 				continue
 			}
 			if ap.HashOnPK {

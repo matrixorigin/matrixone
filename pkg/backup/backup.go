@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/csv"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"os"
 	"path"
 	"strconv"
@@ -27,6 +26,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -34,7 +34,12 @@ import (
 
 // Backup
 // Note: ctx needs to support cancel. The user can cancel the backup task by canceling the ctx.
-func Backup(ctx context.Context, bs *tree.BackupStart, cfg *Config) error {
+func Backup(
+	ctx context.Context,
+	sid string,
+	bs *tree.BackupStart,
+	cfg *Config,
+) error {
 	var err error
 	var s3Conf *s3Config
 	if !cfg.metasMustBeSet() {
@@ -93,7 +98,7 @@ func Backup(ctx context.Context, bs *tree.BackupStart, cfg *Config) error {
 		return err
 	}
 
-	if err = backupTae(ctx, cfg); err != nil {
+	if err = backupTae(ctx, sid, cfg); err != nil {
 		return err
 	}
 
@@ -131,9 +136,13 @@ func backupConfigs(ctx context.Context, cfg *Config) error {
 	return err
 }
 
-var backupTae = func(ctx context.Context, config *Config) error {
+var backupTae = func(
+	ctx context.Context,
+	sid string,
+	config *Config,
+) error {
 	fs := fileservice.SubPath(config.TaeDir, taeDir)
-	return BackupData(ctx, config.SharedFs, fs, "", config)
+	return BackupData(ctx, sid, config.SharedFs, fs, "", config)
 }
 
 func backupHakeeper(ctx context.Context, config *Config) error {

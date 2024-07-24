@@ -1285,6 +1285,8 @@ func appendPrimaryConstraintPlan(
 	ifInsertFromUnique bool,
 	fuzzymessage *OriginTableMessageForFuzzy,
 ) error {
+	sid := builder.compCtx.GetProcess().GetService()
+
 	var lastNodeId int32
 	var err error
 
@@ -1480,7 +1482,7 @@ func appendPrimaryConstraintPlan(
 						},
 					},
 				}
-				fuzzyFilterNode.RuntimeFilterBuildList = []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimitOnPK(scanNode.Stats.TableCnt), buildExpr)}
+				fuzzyFilterNode.RuntimeFilterBuildList = []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimitOnPK(sid, scanNode.Stats.TableCnt), buildExpr)}
 				recalcStatsByRuntimeFilter(scanNode, fuzzyFilterNode, builder)
 			}
 
@@ -1599,7 +1601,7 @@ func appendPrimaryConstraintPlan(
 					JoinType:               plan.Node_RIGHT,
 					OnList:                 []*Expr{condExpr},
 					ProjectList:            []*Expr{rowIdExpr, rightRowIdExpr, pkColExpr},
-					RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimitOnPK(scanNode.Stats.TableCnt), buildExpr)},
+					RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimitOnPK(sid, scanNode.Stats.TableCnt), buildExpr)},
 				}
 				lastNodeId = builder.appendNode(joinNode, bindCtx)
 				recalcStatsByRuntimeFilter(scanNode, joinNode, builder)

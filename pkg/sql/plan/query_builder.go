@@ -25,7 +25,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -1555,7 +1554,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		// after this ,never call ReCalcNodeStats again !!!
 
 		if builder.isForUpdate {
-			reCheckifNeedLockWholeTable(builder)
+			reCheckifNeedLockWholeTable(builder, false)
 		}
 
 		builder.handleMessgaes(rootID)

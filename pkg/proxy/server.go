@@ -44,6 +44,7 @@ type Server struct {
 	haKeeperClient logservice.ProxyHAKeeperClient
 	// configData will be sent to HAKeeper.
 	configData *util.ConfigData
+	test       bool
 }
 
 // NewServer creates the proxy server.
@@ -75,7 +76,7 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 	if s.haKeeperClient == nil {
 		ctx, cancel := context.WithTimeout(ctx, time.Second*3)
 		defer cancel()
-		s.haKeeperClient, err = logservice.NewProxyHAKeeperClient(ctx, config.HAKeeper.ClientConfig)
+		s.haKeeperClient, err = logservice.NewProxyHAKeeperClient(ctx, config.UUID, config.HAKeeper.ClientConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -85,7 +86,15 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 	stats.Register(statsFamilyName, stats.WithLogExporter(logExporter))
 
 	s.stopper = stopper.NewStopper("mo-proxy", stopper.WithLogger(s.runtime.Logger().RawLogger()))
-	h, err := newProxyHandler(ctx, s.runtime, s.config, s.stopper, s.counterSet, s.haKeeperClient)
+	h, err := newProxyHandler(
+		ctx,
+		s.runtime,
+		s.config,
+		s.stopper,
+		s.counterSet,
+		s.haKeeperClient,
+		s.test,
+	)
 	if err != nil {
 		return nil, err
 	}
