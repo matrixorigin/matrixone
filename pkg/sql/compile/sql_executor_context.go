@@ -246,11 +246,11 @@ func (c *compilerContext) GetUserName() string {
 }
 
 func (c *compilerContext) GetAccountId() (uint32, error) {
-	return defines.GetAccountId(c.proc.Ctx)
+	return defines.GetAccountId(c.proc.GetTopContext())
 }
 
 func (c *compilerContext) GetContext() context.Context {
-	return c.proc.Ctx
+	return c.proc.GetTopContext()
 }
 
 func (c *compilerContext) SetContext(ctx context.Context) {

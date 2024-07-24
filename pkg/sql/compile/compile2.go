@@ -250,7 +250,7 @@ func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 	c.proc.GetTxnOperator().ResetRetry(true)
 	c.proc.GetTxnOperator().GetWorkspace().IncrSQLCount()
 
-	topContext := c.proc.Base.GetContextBase().GetTopCtx()
+	topContext := c.proc.GetTopContext()
 
 	// clear the workspace of the failed statement
 	if e := c.proc.GetTxnOperator().GetWorkspace().RollbackLastStatement(topContext); e != nil {

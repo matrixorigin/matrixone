@@ -165,6 +165,7 @@ func (c *Compile) GetMessageCenter() *process.MessageCenter {
 }
 
 func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch) error, sql string) {
+	proc.Ctx = nil
 	c.proc = proc
 	c.fill = fill
 	c.sql = sql
@@ -1755,7 +1756,7 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	}
 
 	//-----------------------------------------------------------------------------------------------------
-	ctx := c.proc.Ctx
+	ctx := c.proc.GetTopContext()
 	txnOp = c.proc.GetTxnOperator()
 	err = disttae.CheckTxnIsValid(txnOp)
 	if err != nil {
@@ -3692,7 +3693,7 @@ func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation, blockFilterLis
 	var txnOp client.TxnOperator
 
 	//-----------------------------------------------------------------------------------------------------
-	ctx := c.proc.Ctx
+	ctx := c.proc.GetTopContext()
 	txnOp = c.proc.GetTxnOperator()
 	if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
 		if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
@@ -3789,7 +3790,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	var txnOp client.TxnOperator
 
 	//------------------------------------------------------------------------------------------------------------------
-	ctx := c.proc.Ctx
+	ctx := c.proc.GetTopContext()
 	txnOp = c.proc.GetTxnOperator()
 	if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
 		if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
@@ -3804,7 +3805,6 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 		}
 	}
 	//-------------------------------------------------------------------------------------------------------------
-	//ctx := c.proc.Ctx
 	if util.TableIsClusterTable(n.TableDef.GetTableType()) {
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	}
