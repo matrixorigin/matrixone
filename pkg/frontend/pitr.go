@@ -652,13 +652,13 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (e
 		return err
 	}
 
-	// check the ts is valid or not
-	if err = checkPitrInValidDurtion(ts, pitr); err != nil {
+	// check the restore level and the pitr level
+	if err = checkPitrValidOrNot(pitr, stmt, tenantInfo); err != nil {
 		return err
 	}
 
-	// check the restore level
-	if err = checkPitrValidOrNot(pitr, stmt, tenantInfo); err != nil {
+	// check the ts is valid or not
+	if err = checkPitrInValidDurtion(ts, pitr); err != nil {
 		return err
 	}
 
