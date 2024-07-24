@@ -258,6 +258,7 @@ Drop database Projects;
 Drop database Payroll;
 
 restore account sys from snapshot snapshot_01;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 
 select * from Company.Departments;
 select * from Company.Employees;
@@ -542,6 +543,7 @@ Drop database Company;
 Drop database Payroll;
 
 restore account sys from snapshot snapshot_01;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 
 select * from Company.Departments;
 select * from Company.Employees;
@@ -863,6 +865,7 @@ select * from ProjectBonuses;
 select * from DepartmentBudgets;
 
 restore account sys from snapshot snapshot_01;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 
 select * from acc_test02.pri01;
 select * from acc_test02.aff01;

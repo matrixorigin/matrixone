@@ -24,11 +24,13 @@ drop database db1;
 select name, db from mo_catalog.mo_user_defined_function;
 
 restore account sys from snapshot snapshot1;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 -- @ignore:1
 show snapshots;
 select name, db from mo_catalog.mo_user_defined_function;
 
 restore account sys from snapshot snapshot2;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 -- @ignore:1
 show snapshots;
 select name, db from mo_catalog.mo_user_defined_function;
@@ -75,11 +77,13 @@ DROP STAGE my_ext_stage2;
 DROP STAGE my_ext_stage3;
 
 restore account sys from snapshot snapshot1;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 -- @ignore:1
 show snapshots;
 SELECT stage_name from mo_catalog.mo_stages;
 
 restore account sys from snapshot snapshot2;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 -- @ignore:1
 show snapshots;
 SELECT stage_name from mo_catalog.mo_stages;
@@ -140,12 +144,14 @@ create snapshot snapshot2 for account sys;
 show snapshots;
 
 restore account sys from snapshot snapshot1;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 -- @ignore:1
 show snapshots;
 select name from mo_catalog.mo_stored_procedure;
 call test_if_hit_if();
 
 restore account sys from snapshot snapshot2;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 -- @ignore:1
 show snapshots;
 select name from mo_catalog.mo_stored_procedure;
@@ -189,6 +195,7 @@ create snapshot snapshot2 for account sys;
 show snapshots;
 
 restore account sys from snapshot snapshot1;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 -- @ignore:1
 show snapshots;
 -- @ignore:1
@@ -198,6 +205,7 @@ select user_id,user_name,authentication_string from mo_catalog.mo_user;
 select role_id,user_id from mo_catalog.mo_user_grant;
 
 restore account sys from snapshot snapshot2;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 -- @ignore:1
 show snapshots;
 -- @ignore:1
@@ -610,9 +618,11 @@ select * from cluster_table_2;
 create snapshot snapshot2 for account sys;
 
 restore account sys from snapshot snapshot1;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 select * from mo_catalog.cluster_table_1;
 
 restore account sys from snapshot snapshot2;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 select * from mo_catalog.cluster_table_2;
 
 drop snapshot snapshot1;

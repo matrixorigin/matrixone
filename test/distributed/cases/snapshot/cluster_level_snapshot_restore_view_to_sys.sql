@@ -40,6 +40,7 @@ select * from v02;
 select * from v03;
 
 restore account sys from snapshot sp100;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 
 show create view v01;
 select * from v01;
@@ -109,6 +110,7 @@ select * from v04{snapshot = 'sp02'};
 select * from v05{snapshot = 'sp02'};
 
 restore account sys from snapshot sp02;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 
 select * from v04;
 select * from v05;
@@ -174,6 +176,7 @@ select * from EmployeeDepartmentView;
 select * from EmployeeDepartmentView{snapshot = 'sp05'};
 
 restore account sys from snapshot sp05;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 select * from EmployeeDepartmentView;
 select * from EmployeeDepartmentView{snapshot = 'sp05'};
 
@@ -182,6 +185,7 @@ select * from EmployeeDepartmentView;
 select * from EmployeeDepartmentView{snapshot = 'sp05'};
 
 restore account sys from snapshot sp05;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 select * from EmployeeDepartmentView;
 select * from EmployeeDepartmentView{snapshot = 'sp05'};
 
@@ -246,6 +250,7 @@ select * from employee_with_department_view;
 select * from employee_with_department_view {snapshot = 'sp04'};
 
 restore account sys from snapshot sp04;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 
 select * from employee_view;
 select * from department_view;
@@ -258,6 +263,7 @@ select * from employee_view;
 select * from employee_view {snapshot = 'sp04'};
 
 restore account sys from snapshot sp04;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 
 select * from employee_view;
 select * from department_view;
@@ -308,6 +314,7 @@ drop snapshot if exists sp06;
 create snapshot sp06 for cluster;
 
 restore account sys from snapshot sp05;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 
 select * from view01;
 select * from view01{snapshot = 'sp05'};
@@ -317,6 +324,7 @@ select * from view01;
 select * from view01{snapshot = 'sp05'};
 
 restore account sys from snapshot sp06;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 select * from view01;
 select * from view01{snapshot = 'sp06'};
 
@@ -364,6 +372,7 @@ select * from test01.EmployeeSalaryRanking;
 select * from test01.EmployeeSalaryRanking{snapshot = 'sp06'};
 
 restore account sys from snapshot sp06;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 select * from test01.EmployeeSalaryRanking{snapshot = 'sp06'};
 select * from test01.EmployeeSalaryRanking;
 drop snapshot sp06;
@@ -507,6 +516,7 @@ select * from test02.employees_by_salary_view;
 select * from test02.employees_by_salary_view{snapshot = 'sp10'};
 
 restore account sys from snapshot sp10;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 select * from test02.employees_view;
 select * from test02.employees_view{snapshot = 'sp10'};
 select * from test02.employees_by_salary_view;
@@ -600,6 +610,7 @@ select * from test04.employee_view {snapshot = 'sp100'};
 select * from test03.department_view {snapshot = 'sp100'};
 select * from test05.employee_with_department_view {snapshot = 'sp100'};
 restore account sys from snapshot sp100;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 select * from test04.employee_view;
 select * from test03.department_view;
 select * from test05.employee_with_department_view;

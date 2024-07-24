@@ -103,6 +103,10 @@ select count(*) from cluster01{snapshot = `binary`};
 count(*)
 2
 restore account sys from snapshot `binary`;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+user_id    user_name    creator    owner    default_role
+0    root    0    0    0
+1    dump    0    0    0
 select count(*) from cluster01{snapshot = `binary`};
 count(*)
 2
@@ -121,6 +125,10 @@ select count(*) from cluster01{snapshot = `_binary`};
 count(*)
 2
 restore account sys from snapshot `_binary`;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+user_id    user_name    creator    owner    default_role
+0    root    0    0    0
+1    dump    0    0    0
 select count(*) from cluster01{snapshot = `_binary`};
 count(*)
 2

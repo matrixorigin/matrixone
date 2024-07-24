@@ -113,6 +113,10 @@ col1    col2    col3
 1    -321    null
 2    -1    null
 restore account sys from snapshot sp01;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+user_id    user_name    creator    owner    default_role
+0    root    0    0    0
+1    dump    0    0    0
 select * from rs01;
 col1    col2    col3
 1    null    database

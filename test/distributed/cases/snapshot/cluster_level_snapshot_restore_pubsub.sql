@@ -22,6 +22,7 @@ select * from mo_catalog.mo_pubs;
 drop publication publication01;
 drop database republication01;
 restore account sys from snapshot sp01;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 
 -- @ignore:2,6
 select * from mo_catalog.mo_pubs;
@@ -95,6 +96,8 @@ select * from aff01;
 -- @session
 
 restore account sys from snapshot sp02;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+
 -- @ignore:2
 show publications;
 -- @ignore:2,6
@@ -433,6 +436,7 @@ select sum(a) from test01;
 -- @session
 
 restore account sys from snapshot sp100;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 
 -- @session:id=1&user=acc01:test_account&password=111
 show databases;
@@ -440,6 +444,8 @@ use sub07;
 -- @session
 
 restore account sys from snapshot sp101;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+
 -- @ignore:2,6
 select * from mo_catalog.mo_pubs;
 

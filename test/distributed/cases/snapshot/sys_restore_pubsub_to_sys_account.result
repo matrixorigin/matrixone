@@ -20,6 +20,10 @@ publication01    republication01    272580    true        acc01    2024-06-05 20
 drop publication publication01;
 drop database republication01;
 restore account sys from snapshot sp01;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+user_id    user_name    creator    owner    default_role
+0    root    0    0    0
+1    dump    0    0    0
 select * from mo_catalog.mo_pubs;
 pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
 show databases;
@@ -114,6 +118,10 @@ empno    ename    job    mgr    hiredate    sal    comm    deptno
 7566    JONES    MANAGER    7839    1981-04-02    2975.00    null    20
 7654    MARTIN    SALESMAN    7698    1981-09-28    1250.00    1400.00    30
 restore account sys from snapshot sp02;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+user_id    user_name    creator    owner    default_role
+0    root    0    0    0
+1    dump    0    0    0
 show publications;
 publication    database    create_time    update_time    sub_account    comments
 select * from mo_catalog.mo_pubs;
@@ -483,6 +491,10 @@ select sum(a) from test01;
 sum(a)
 5050
 restore account sys from snapshot sp100;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+user_id    user_name    creator    owner    default_role
+0    root    0    0    0
+1    dump    0    0    0
 show databases;
 Database
 information_schema
@@ -494,6 +506,10 @@ system_metrics
 use sub07;
 internal error: there is no publication pub07
 restore account sys from snapshot sp101;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+user_id    user_name    creator    owner    default_role
+0    root    0    0    0
+1    dump    0    0    0
 select * from mo_catalog.mo_pubs;
 pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
 pub07    test01    272795    true        acc01    2024-06-05 20:50:28    null    0    1    publish test01

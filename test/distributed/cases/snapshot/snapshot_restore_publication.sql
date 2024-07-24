@@ -39,6 +39,7 @@ show tables;
 -- @session
 
 restore account sys from snapshot snapshot2;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 -- @ignore:2,3
 show publications;
 show databases like 'db1';
@@ -142,6 +143,7 @@ show subscriptions;
 -- @session
 
 restore account sys from snapshot snapshot3;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 
 -- @ignore:2,3
 show publications;
@@ -235,6 +237,7 @@ show subscriptions;
 -- @session
 
 restore account sys from snapshot snapshot4;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 
 -- @ignore:2,3
 show publications;
@@ -339,6 +342,7 @@ show subscriptions;
 -- @session
 
 restore account sys from snapshot snapshot6;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 
 -- @ignore:2,3
 show publications;
@@ -366,6 +370,7 @@ show subscriptions;
 -- @session
 
 restore account sys from snapshot snapshot5;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 -- @session:id=7&user=test_tenant_1:test_account&password=111
 show databases like 'sub_db1';
 use sub_db1;

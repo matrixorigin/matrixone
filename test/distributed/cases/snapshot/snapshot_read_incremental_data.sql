@@ -84,6 +84,7 @@ select count(*) from rs01 {snapshot = 'sp01'};
 select * from rs01 {snapshot = 'sp01'};
 
 restore account sys from snapshot sp01;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 select * from rs01;
 select count(*) from rs01;
 select count(*) from rs01 {snapshot = 'sp01'};

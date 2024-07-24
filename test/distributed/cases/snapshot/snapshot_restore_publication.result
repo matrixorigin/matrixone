@@ -44,6 +44,10 @@ internal error: there is no publication pubname1
 show tables;
 internal error: there is no publication pubname1
 restore account sys from snapshot snapshot2;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+user_id    user_name    creator    owner    default_role
+0    root    0    0    0
+1    dump    0    0    0
 show publications;
 publication    database    create_time    update_time    sub_account    comments
 pubname1    db1    2024-05-29 09:49:04    null    test_tenant_1    publish db1 database
@@ -157,6 +161,10 @@ internal error: there is no publication pubname2
 show subscriptions;
 pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
 restore account sys from snapshot snapshot3;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+user_id    user_name    creator    owner    default_role
+0    root    0    0    0
+1    dump    0    0    0
 show publications;
 publication    database    create_time    update_time    sub_account    comments
 pubname2    db2    2024-05-29 09:49:06    null    *    publish db2 database
@@ -263,6 +271,10 @@ show subscriptions;
 pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
 pubname2    sys    db2    2024-05-29 09:49:08    sub_db2    2024-05-29 09:49:08
 restore account sys from snapshot snapshot4;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+user_id    user_name    creator    owner    default_role
+0    root    0    0    0
+1    dump    0    0    0
 show publications;
 publication    database    create_time    update_time    sub_account    comments
 show databases like 'db%';
@@ -367,6 +379,10 @@ show subscriptions;
 pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
 pubname2    sys    db2    2024-05-29 09:49:10    sub_db2    2024-05-29 09:49:10
 restore account sys from snapshot snapshot6;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+user_id    user_name    creator    owner    default_role
+0    root    0    0    0
+1    dump    0    0    0
 show publications;
 publication    database    create_time    update_time    sub_account    comments
 pubname1    db1    2024-05-29 09:49:09    null    test_tenant_1    publish db1 database
@@ -401,6 +417,10 @@ internal error: there is no publication pubname2
 show subscriptions;
 pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
 restore account sys from snapshot snapshot5;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
+user_id    user_name    creator    owner    default_role
+0    root    0    0    0
+1    dump    0    0    0
 show databases like 'sub_db1';
 Database
 sub_db1
