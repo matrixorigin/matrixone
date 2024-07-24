@@ -1,4 +1,4 @@
-// Copyright 2023 Matrix Origin
+// Copyright 2021 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,21 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package mo_debug
+package main
 
 import (
+	debug "github.com/matrixorigin/matrixone/cmd/mo-debug"
+	inspect "github.com/matrixorigin/matrixone/cmd/mo-inspect"
 	"github.com/spf13/cobra"
+	"os"
 )
 
-func PrepareCommand() *cobra.Command {
-	rootCmd := &cobra.Command{
-		Use:        "debug",
-		Short:      "MO debug tool",
-		Long:       "MO debug tool. Helps to analyze MO problems like Goroutine, Txn, etc.",
-		SuggestFor: []string{"mo-tool"},
-		Version:    "0.1.0",
+func main() {
+	var rootCmd = &cobra.Command{
+		Use:   "mo-tool",
+		Short: "Mo tool",
+		Long:  "Mo tool is a multifunctional development tool",
 	}
 
-	rootCmd.AddCommand(goroutineCMD)
-	return rootCmd
+	rootCmd.AddCommand(debug.PrepareCommand())
+	rootCmd.AddCommand(inspect.PrepareCommand())
+
+	if err := rootCmd.Execute(); err != nil {
+		os.Exit(1)
+	}
 }
