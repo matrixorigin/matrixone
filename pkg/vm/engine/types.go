@@ -673,7 +673,7 @@ type Relation interface {
 	// first parameter: Context
 	// second parameter: Slice of expressions used to filter the data.
 	// third parameter: Transaction offset used to specify the starting position for reading data.
-	Ranges(context.Context, []*plan.Expr, int) (Ranges, error)
+	//Ranges(context.Context, []*plan.Expr, int) (Ranges, error)
 
 	//RangesInProgress will substitute the Ranges function in the future.
 	RangesInProgress(context.Context, []*plan.Expr, int) (RelData, error)
@@ -720,7 +720,7 @@ type Relation interface {
 	// foruth parameter is the payload required by the engine
 	// fifth parameter is data blocks
 	// sixth parameter is transaction offset used to specify the starting position for reading data.
-	NewReader(context.Context, int, *plan.Expr, []byte, bool, int) ([]Reader, error)
+	//NewReader(context.Context, int, *plan.Expr, []byte, bool, int) ([]Reader, error)
 
 	BuildReaders(
 		ctx context.Context,

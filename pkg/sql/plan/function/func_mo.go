@@ -436,14 +436,14 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 			}
 
 			//ranges, err := rel.Ranges(ctx, nil)
-			ranges, err := rel.Ranges(ctx, nil, 0)
+			ranges, err := rel.RangesInProgress(ctx, nil, 0)
 			if err != nil {
 				return err
 			}
 
-			if ranges.Len() == 0 {
+			if ranges.BlkCnt() == 0 {
 				getValueFailed = true
-			} else if ranges.Len() == 1 && engine.IsMemtable(ranges.GetBytes(0)) {
+			} else if ranges.BlkCnt() == 1 && ranges.GetDataBlk(0).IsMemBlk() {
 				getValueFailed = true
 			} else {
 				// BUG： if user delete the max or min value within the same txn, the result will be wrong.
