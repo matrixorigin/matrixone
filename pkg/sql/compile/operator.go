@@ -1066,6 +1066,14 @@ func constructProduct(n *plan.Node, typs []types.Type, proc *process.Process) *p
 	arg := product.NewArgument()
 	arg.Typs = typs
 	arg.Result = result
+	for i := range n.SendMsgList {
+		if n.SendMsgList[i].MsgType == int32(process.MsgJoinMap) {
+			arg.JoinMapTag = n.SendMsgList[i].MsgTag
+		}
+	}
+	if arg.JoinMapTag <= 0 {
+		panic("wrong joinmap tag!")
+	}
 	return arg
 }
 
@@ -1591,6 +1599,14 @@ func constructProductL2(n *plan.Node, typs []types.Type, proc *process.Process) 
 	arg.Typs = typs
 	arg.Result = result
 	arg.OnExpr = colexec.RewriteFilterExprList(n.OnList)
+	for i := range n.SendMsgList {
+		if n.SendMsgList[i].MsgType == int32(process.MsgJoinMap) {
+			arg.JoinMapTag = n.SendMsgList[i].MsgTag
+		}
+	}
+	if arg.JoinMapTag <= 0 {
+		panic("wrong joinmap tag!")
+	}
 	return arg
 }
 
@@ -1603,6 +1619,14 @@ func constructLoopJoin(n *plan.Node, typs []types.Type, proc *process.Process) *
 	arg.Typs = typs
 	arg.Result = result
 	arg.Cond = colexec.RewriteFilterExprList(n.OnList)
+	for i := range n.SendMsgList {
+		if n.SendMsgList[i].MsgType == int32(process.MsgJoinMap) {
+			arg.JoinMapTag = n.SendMsgList[i].MsgTag
+		}
+	}
+	if arg.JoinMapTag <= 0 {
+		panic("wrong joinmap tag!")
+	}
 	return arg
 }
 
@@ -1619,6 +1643,14 @@ func constructLoopSemi(n *plan.Node, typs []types.Type, proc *process.Process) *
 	arg.Typs = typs
 	arg.Result = result
 	arg.Cond = colexec.RewriteFilterExprList(n.OnList)
+	for i := range n.SendMsgList {
+		if n.SendMsgList[i].MsgType == int32(process.MsgJoinMap) {
+			arg.JoinMapTag = n.SendMsgList[i].MsgTag
+		}
+	}
+	if arg.JoinMapTag <= 0 {
+		panic("wrong joinmap tag!")
+	}
 	return arg
 }
 
@@ -1631,6 +1663,14 @@ func constructLoopLeft(n *plan.Node, typs []types.Type, proc *process.Process) *
 	arg.Typs = typs
 	arg.Result = result
 	arg.Cond = colexec.RewriteFilterExprList(n.OnList)
+	for i := range n.SendMsgList {
+		if n.SendMsgList[i].MsgType == int32(process.MsgJoinMap) {
+			arg.JoinMapTag = n.SendMsgList[i].MsgTag
+		}
+	}
+	if arg.JoinMapTag <= 0 {
+		panic("wrong joinmap tag!")
+	}
 	return arg
 }
 
@@ -1643,6 +1683,14 @@ func constructLoopSingle(n *plan.Node, typs []types.Type, proc *process.Process)
 	arg.Typs = typs
 	arg.Result = result
 	arg.Cond = colexec.RewriteFilterExprList(n.OnList)
+	for i := range n.SendMsgList {
+		if n.SendMsgList[i].MsgType == int32(process.MsgJoinMap) {
+			arg.JoinMapTag = n.SendMsgList[i].MsgTag
+		}
+	}
+	if arg.JoinMapTag <= 0 {
+		panic("wrong joinmap tag!")
+	}
 	return arg
 }
 
@@ -1659,6 +1707,14 @@ func constructLoopAnti(n *plan.Node, typs []types.Type, proc *process.Process) *
 	arg.Typs = typs
 	arg.Result = result
 	arg.Cond = colexec.RewriteFilterExprList(n.OnList)
+	for i := range n.SendMsgList {
+		if n.SendMsgList[i].MsgType == int32(process.MsgJoinMap) {
+			arg.JoinMapTag = n.SendMsgList[i].MsgTag
+		}
+	}
+	if arg.JoinMapTag <= 0 {
+		panic("wrong joinmap tag!")
+	}
 	return arg
 }
 
@@ -1678,6 +1734,14 @@ func constructLoopMark(n *plan.Node, typs []types.Type, proc *process.Process) *
 	arg.Typs = typs
 	arg.Result = result
 	arg.Cond = colexec.RewriteFilterExprList(n.OnList)
+	for i := range n.SendMsgList {
+		if n.SendMsgList[i].MsgType == int32(process.MsgJoinMap) {
+			arg.JoinMapTag = n.SendMsgList[i].MsgTag
+		}
+	}
+	if arg.JoinMapTag <= 0 {
+		panic("wrong joinmap tag!")
+	}
 	return arg
 }
 

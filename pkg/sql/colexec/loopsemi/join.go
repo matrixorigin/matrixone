@@ -112,6 +112,9 @@ func (loopSemi *LoopSemi) Call(proc *process.Process) (vm.CallResult, error) {
 func (loopSemi *LoopSemi) build(proc *process.Process, anal process.Analyze) error {
 	ctr := loopSemi.ctr
 	mp := proc.ReceiveJoinMap(anal, loopSemi.JoinMapTag, false, 0)
+	if mp == nil {
+		return nil
+	}
 	batches := mp.GetBatches()
 	var err error
 	//maybe optimize this in the future

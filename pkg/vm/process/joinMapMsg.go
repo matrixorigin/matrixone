@@ -51,6 +51,9 @@ func NewJoinMap(sels [][]int32, ihm *hashmap.IntHashMap, shm *hashmap.StrHashMap
 }
 
 func (jm *JoinMap) GetBatches() []*batch.Batch {
+	if jm == nil {
+		return nil
+	}
 	return jm.batches
 }
 
@@ -59,6 +62,9 @@ func (jm *JoinMap) SetRowCount(cnt int64) {
 }
 
 func (jm *JoinMap) GetRowCount() int64 {
+	if jm == nil {
+		return 0
+	}
 	return jm.rowcnt
 }
 

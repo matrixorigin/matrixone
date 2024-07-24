@@ -106,6 +106,9 @@ func (loopMark *LoopMark) Call(proc *process.Process) (vm.CallResult, error) {
 func (loopMark *LoopMark) build(proc *process.Process, anal process.Analyze) error {
 	ctr := loopMark.ctr
 	mp := proc.ReceiveJoinMap(anal, loopMark.JoinMapTag, false, 0)
+	if mp == nil {
+		return nil
+	}
 	batches := mp.GetBatches()
 	var err error
 	//maybe optimize this in the future

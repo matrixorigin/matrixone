@@ -107,6 +107,9 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 func (productl2 *Productl2) build(proc *process.Process, anal process.Analyze) error {
 	ctr := productl2.ctr
 	mp := proc.ReceiveJoinMap(anal, productl2.JoinMapTag, false, 0)
+	if mp == nil {
+		return nil
+	}
 	batches := mp.GetBatches()
 	var err error
 	//maybe optimize this in the future

@@ -107,6 +107,9 @@ func (loopAnti *LoopAnti) Call(proc *process.Process) (vm.CallResult, error) {
 func (loopAnti *LoopAnti) build(proc *process.Process, anal process.Analyze) error {
 	ctr := loopAnti.ctr
 	mp := proc.ReceiveJoinMap(anal, loopAnti.JoinMapTag, false, 0)
+	if mp == nil {
+		return nil
+	}
 	batches := mp.GetBatches()
 	var err error
 	//maybe optimize this in the future

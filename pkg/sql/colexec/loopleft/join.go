@@ -108,6 +108,9 @@ func (loopLeft *LoopLeft) Call(proc *process.Process) (vm.CallResult, error) {
 func (loopLeft *LoopLeft) build(proc *process.Process, anal process.Analyze) error {
 	ctr := loopLeft.ctr
 	mp := proc.ReceiveJoinMap(anal, loopLeft.JoinMapTag, false, 0)
+	if mp == nil {
+		return nil
+	}
 	batches := mp.GetBatches()
 	var err error
 	//maybe optimize this in the future
