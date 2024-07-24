@@ -109,6 +109,7 @@ func (ar *AccountRoutineManager) EnKillQueue(tenantID int64, version uint64) {
 	KillRecord := NewKillRecord(time.Now(), version)
 	ar.killQueueMu.Lock()
 	defer ar.killQueueMu.Unlock()
+	logutil.Infof("[set suspend] set account id %d, version %d to kill queue at time %v, ", tenantID, version, KillRecord.killTime)
 	ar.killIdQueue[tenantID] = KillRecord
 
 }
@@ -422,6 +423,7 @@ func (rm *RoutineManager) KillRoutineConnections() {
 			for rt, version := range rtMap {
 				if rt != nil && ((version+1)%math.MaxUint64)-1 <= killRecord.version {
 					//kill connect of this routine
+					logutil.Infof("[kill connection] do kill connection account id %d, version %d, connection id %d, ", account, killRecord.version, rt.getConnectionID())
 					rt.killConnection(false)
 					ar.deleteRoutine(account, rt)
 				}
