@@ -106,41 +106,21 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 			if err := ctr.handleRuntimeFilter(ap, proc); err != nil {
 				return result, err
 			}
-			ctr.state = SendHashMap
+			ctr.state = SendJoinMap
 
-		case SendHashMap:
-			if ap.NeedHashMap {
-				var jm *hashmap.JoinMap
-				if ctr.inputBatchRowCount > 0 {
-					if ctr.keyWidth <= 8 {
-						jm = hashmap.NewJoinMap(ctr.multiSels, ctr.intHashMap, nil)
-					} else {
-						jm = hashmap.NewJoinMap(ctr.multiSels, nil, ctr.strHashMap)
-					}
-					jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
-
-					jm.SetRowCount(int64(ctr.inputBatchRowCount))
-					jm.IncRef(ap.JoinMapRefCnt)
-				}
-				if ap.JoinMapTag <= 0 {
-					panic("wrong joinmap message tag!")
-				}
-				proc.SendMessage(process.JoinMapMsg{JoinMapPtr: jm, Tag: ap.JoinMapTag})
-				ctr.intHashMap = nil
-				ctr.strHashMap = nil
-				ctr.multiSels = nil
+		case SendJoinMap:
+			var jm *process.JoinMap
+			if ctr.inputBatchRowCount > 0 {
+				jm = process.NewJoinMap(ctr.multiSels, ctr.intHashMap, ctr.strHashMap, ctr.batches, proc.Mp())
+				jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
+				jm.SetRowCount(int64(ctr.inputBatchRowCount))
+				jm.IncRef(ap.JoinMapRefCnt)
 			}
-			ctr.state = SendBatch
-
-		case SendBatch:
-			if ctr.batchIdx >= len(ctr.batches) {
-				ctr.state = End
-			} else {
-				result.Batch = ctr.batches[ctr.batchIdx]
-				ctr.batchIdx++
+			if ap.JoinMapTag <= 0 {
+				panic("wrong joinmap message tag!")
 			}
-			return result, nil
-		default:
+			proc.SendMessage(process.JoinMapMsg{JoinMapPtr: jm, Tag: ap.JoinMapTag})
+
 			result.Batch = nil
 			result.Status = vm.ExecStop
 			return result, nil
