@@ -328,6 +328,16 @@ type Decimal interface {
 	Decimal64 | Decimal128 | Decimal256
 }
 
+type DecimalWithFormat interface {
+	Decimal64 | Decimal128
+	Format(scale int32) string
+}
+
+type FixedWithStringer interface {
+	Date | Time | Datetime | Timestamp | Enum | Uuid
+	String() string
+}
+
 // FixedSized types in our type system.   Esp, Varlena.
 type FixedSizeT interface {
 	FixedSizeTExceptStrType | Varlena

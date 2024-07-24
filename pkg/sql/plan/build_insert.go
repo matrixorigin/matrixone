@@ -708,7 +708,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 						Expr: &plan.Expr_Lit{
 							Lit: &plan.Literal{
 								Value: &plan.Literal_Sval{
-									Sval: val.ToString(),
+									Sval: val.String(),
 								},
 							},
 						},

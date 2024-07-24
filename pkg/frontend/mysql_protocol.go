@@ -2364,9 +2364,9 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow(mrs *MysqlResultSet, rowId
 			// 		return nil, err
 			// 	} else {
 			// 		data = err = mp.appendStringLenEnc(data, value)
-			if err != nil {
-				return err
-			}
+			//; if err != nil {
+			// 	return err
+			// }
 		// 	}
 		default:
 			return moerr.NewInternalError(mp.ctx, "type is not supported in binary text result row")

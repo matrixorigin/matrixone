@@ -202,6 +202,15 @@ func (s *Scope) Run(c *Compile) (err error) {
 	if s.DataSource.isConst {
 		_, err = p.ConstRun(s.DataSource.Bat, s.Proc)
 	} else {
+		if s.DataSource.R == nil {
+			s.NodeInfo.Data = s.NodeInfo.Data[:0]
+			readers, _, err := s.getReaders(c, 1)
+			if err != nil {
+				return err
+			}
+			s.DataSource.R = readers[0]
+		}
+
 		var tag int32
 		if s.DataSource.node != nil && len(s.DataSource.node.RecvMsgList) > 0 {
 			tag = s.DataSource.node.RecvMsgList[0].MsgTag

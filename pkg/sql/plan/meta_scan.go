@@ -154,7 +154,7 @@ func (builder *QueryBuilder) buildMetaScan(tbl *tree.TableFunction, ctx *BindCon
 		NodeType: plan.Node_FUNCTION_SCAN,
 		Stats:    &plan.Stats{},
 		TableDef: &plan.TableDef{
-			Name:      uuid.ToString(),
+			Name:      uuid.String(),
 			TableType: "func_table",
 			TblFunc: &plan.TableFunction{
 				Name: "meta_scan",
