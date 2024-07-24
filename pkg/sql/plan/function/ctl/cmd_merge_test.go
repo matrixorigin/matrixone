@@ -30,15 +30,15 @@ func TestParseArgs(t *testing.T) {
 	}{
 		{
 			s: "t:db1.table1",
-			r: arguments{db: "db1", tbl: "table1", accountId: math.MaxUint64, targetObjSize: defaultTargetObjectSize},
+			r: arguments{mergeType: tableMergeType, db: "db1", tbl: "table1", accountId: math.MaxUint64, targetObjSize: defaultTargetObjectSize},
 		},
 		{
 			s: "t:db1.table1:small",
-			r: arguments{db: "db1", tbl: "table1", accountId: math.MaxUint64, filter: "small", targetObjSize: defaultTargetObjectSize},
+			r: arguments{mergeType: tableMergeType, db: "db1", tbl: "table1", accountId: math.MaxUint64, filter: "small", targetObjSize: defaultTargetObjectSize},
 		},
 		{
 			s: "t:db1.table1:small:1M",
-			r: arguments{db: "db1", tbl: "table1", accountId: math.MaxUint64, filter: "small", targetObjSize: common.Const1MBytes},
+			r: arguments{mergeType: tableMergeType, db: "db1", tbl: "table1", accountId: math.MaxUint64, filter: "small", targetObjSize: common.Const1MBytes},
 		},
 		{
 			s: "t:db1",
@@ -46,7 +46,7 @@ func TestParseArgs(t *testing.T) {
 		},
 		{
 			s: "t:db1.table1.1:small:1M",
-			r: arguments{db: "db1", tbl: "table1", accountId: 1, filter: "small", targetObjSize: common.Const1MBytes},
+			r: arguments{mergeType: tableMergeType, db: "db1", tbl: "table1", accountId: 1, filter: "small", targetObjSize: common.Const1MBytes},
 		},
 		{
 			s: "t:10000",
@@ -54,7 +54,7 @@ func TestParseArgs(t *testing.T) {
 		},
 		{
 			s: "t:10000.1",
-			r: arguments{db: "10000", tbl: "1", accountId: math.MaxUint64, targetObjSize: defaultTargetObjectSize},
+			r: arguments{mergeType: tableMergeType, db: "10000", tbl: "1", accountId: math.MaxUint64, targetObjSize: defaultTargetObjectSize},
 		},
 		{
 			s: "o:10000:018f27b6-c6e1-7bef-a1e8-0f639ddedeef_0,018f27b6-c6e1-7bef-a1e8-0f639ddede00_0",
