@@ -254,7 +254,8 @@ type StatsInfo struct {
 	PlanDuration      time.Duration `json:"PlanDuration"`
 	CompileDuration   time.Duration `json:"CompileDuration"`
 	ExecutionDuration time.Duration `json:"ExecutionDuration"`
-	OutputDuration    int64         `json:"OutputDuration"`
+	// Statistics on the time consumption of the output operator in generating data for query statements
+	OutputDuration int64 `json:"OutputDuration"`
 
 	//PipelineTimeConsumption      time.Duration
 	//PipelineBlockTimeConsumption time.Duration
