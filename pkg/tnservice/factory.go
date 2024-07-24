@@ -196,6 +196,7 @@ func (s *store) newTAEStorage(ctx context.Context, shard metadata.TNShard, facto
 		Ctx:               ctx,
 		MaxMessageSize:    max2LogServiceMsgSizeLimit,
 		TaskServiceGetter: s.GetTaskService,
+		SID:               s.cfg.UUID,
 	}
 
 	return taestorage.NewTAEStorage(
