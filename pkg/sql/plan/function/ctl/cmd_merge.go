@@ -15,6 +15,7 @@
 package ctl
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -291,7 +292,7 @@ func handleCNMerge(
 
 		// check if the current table is partitioned
 		var prel engine.Relation
-		var resultBuilder strings.Builder
+		var resultBuffer bytes.Buffer
 		// for partition table, run merge on each partition table separately.
 		for _, partitionTable := range partitionInfo.PartitionTableNames {
 			prel, err = database.Relation(proc.Ctx, partitionTable, nil)
@@ -300,7 +301,9 @@ func handleCNMerge(
 			}
 			entry, err := prel.MergeObjects(proc.Ctx, a.objs, a.filter, uint32(a.targetObjSize))
 			if err != nil {
-				return Result{}, err
+				resultBuffer.WriteString(err.Error())
+				resultBuffer.WriteString("\n")
+				continue
 			}
 
 			payload, err := entry.MarshalBinary()
@@ -312,13 +315,13 @@ func handleCNMerge(
 			if err != nil {
 				return Result{}, err
 			}
-			resultBuilder.WriteString(string(resp.Responses[0].CNOpResponse.Payload))
-			resultBuilder.WriteString("\n")
+			resultBuffer.WriteString(string(resp.Responses[0].CNOpResponse.Payload))
+			resultBuffer.WriteString("\n")
 			resp.Release()
 		}
 		return Result{
 			Method: MergeObjectsMethod,
-			Data:   resultBuilder.String(),
+			Data:   resultBuffer.Bytes(),
 		}, nil
 	}
 	return Result{}, nil
