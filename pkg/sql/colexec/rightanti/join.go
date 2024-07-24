@@ -71,7 +71,7 @@ func (rightAnti *RightAnti) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(analyze); err != nil {
+			if err := rightAnti.build(analyze, proc); err != nil {
 				return result, err
 			}
 			// for inner ,right and semi join, if hashmap is empty, we can finish this pipeline
@@ -138,17 +138,12 @@ func (rightAnti *RightAnti) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) receiveHashMap(anal process.Analyze) error {
-	msg := ctr.ReceiveFromSingleReg(1, anal)
-	if msg.Err != nil {
-		return msg.Err
-	}
-	bat := msg.Batch
-	if bat != nil && bat.AuxData != nil {
-		ctr.mp = bat.DupJmAuxData()
+func (rightAnti *RightAnti) receiveHashMap(anal process.Analyze, proc *process.Process) {
+	ctr := rightAnti.ctr
+	ctr.mp = proc.ReceiveJoinMap(anal, rightAnti.JoinMapTag, rightAnti.IsShuffle, rightAnti.ShuffleIdx)
+	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
-	return nil
 }
 
 func (ctr *container) receiveBatch(anal process.Analyze) error {
@@ -177,12 +172,9 @@ func (ctr *container) receiveBatch(anal process.Analyze) error {
 	return nil
 }
 
-func (ctr *container) build(anal process.Analyze) error {
-	err := ctr.receiveHashMap(anal)
-	if err != nil {
-		return err
-	}
-	return ctr.receiveBatch(anal)
+func (rightAnti *RightAnti) build(anal process.Analyze, proc *process.Process) error {
+	rightAnti.receiveHashMap(anal, proc)
+	return rightAnti.ctr.receiveBatch(anal)
 }
 
 func (ctr *container) sendLast(ap *RightAnti, proc *process.Process, analyze process.Analyze, _ bool, isLast bool) (bool, error) {

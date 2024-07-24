@@ -71,7 +71,7 @@ func (rightSemi *RightSemi) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(analyze); err != nil {
+			if err := rightSemi.build(analyze, proc); err != nil {
 				return result, err
 			}
 			if ctr.mp == nil && !rightSemi.IsShuffle {
@@ -139,17 +139,12 @@ func (rightSemi *RightSemi) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) receiveHashMap(anal process.Analyze) error {
-	msg := ctr.ReceiveFromSingleReg(1, anal)
-	if msg.Err != nil {
-		return msg.Err
-	}
-	bat := msg.Batch
-	if bat != nil && bat.AuxData != nil {
-		ctr.mp = bat.DupJmAuxData()
+func (rightSemi *RightSemi) receiveHashMap(anal process.Analyze, proc *process.Process) {
+	ctr := rightSemi.ctr
+	ctr.mp = proc.ReceiveJoinMap(anal, rightSemi.JoinMapTag, rightSemi.IsShuffle, rightSemi.ShuffleIdx)
+	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
-	return nil
 }
 
 func (ctr *container) receiveBatch(anal process.Analyze) error {
@@ -178,12 +173,9 @@ func (ctr *container) receiveBatch(anal process.Analyze) error {
 	return nil
 }
 
-func (ctr *container) build(anal process.Analyze) error {
-	err := ctr.receiveHashMap(anal)
-	if err != nil {
-		return err
-	}
-	return ctr.receiveBatch(anal)
+func (rightSemi *RightSemi) build(anal process.Analyze, proc *process.Process) error {
+	rightSemi.receiveHashMap(anal, proc)
+	return rightSemi.ctr.receiveBatch(anal)
 }
 
 func (ctr *container) sendLast(ap *RightSemi, proc *process.Process, analyze process.Analyze, _ bool, isLast bool) (bool, error) {

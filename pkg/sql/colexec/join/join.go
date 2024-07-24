@@ -69,7 +69,7 @@ func (innerJoin *InnerJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(anal); err != nil {
+			if err := innerJoin.build(anal, proc); err != nil {
 				return result, err
 			}
 			if ctr.mp == nil && !innerJoin.IsShuffle {
@@ -126,20 +126,16 @@ func (innerJoin *InnerJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) receiveHashMap(anal process.Analyze) error {
-	msg := ctr.ReceiveFromSingleReg(1, anal)
-	if msg.Err != nil {
-		return msg.Err
-	}
-	bat := msg.Batch
-	if bat != nil && bat.AuxData != nil {
-		ctr.mp = bat.DupJmAuxData()
+func (innerJoin *InnerJoin) receiveHashMap(anal process.Analyze, proc *process.Process) {
+	ctr := innerJoin.ctr
+	ctr.mp = proc.ReceiveJoinMap(anal, innerJoin.JoinMapTag, innerJoin.IsShuffle, innerJoin.ShuffleIdx)
+	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
-	return nil
 }
 
-func (ctr *container) receiveBatch(anal process.Analyze) error {
+func (innerJoin *InnerJoin) receiveBatch(anal process.Analyze) error {
+	ctr := innerJoin.ctr
 	for {
 		msg := ctr.ReceiveFromSingleReg(1, anal)
 		if msg.Err != nil {
@@ -161,12 +157,9 @@ func (ctr *container) receiveBatch(anal process.Analyze) error {
 	return nil
 }
 
-func (ctr *container) build(anal process.Analyze) error {
-	err := ctr.receiveHashMap(anal)
-	if err != nil {
-		return err
-	}
-	return ctr.receiveBatch(anal)
+func (innerJoin *InnerJoin) build(anal process.Analyze, proc *process.Process) error {
+	innerJoin.receiveHashMap(anal, proc)
+	return innerJoin.receiveBatch(anal)
 }
 
 func (ctr *container) probe(ap *InnerJoin, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {

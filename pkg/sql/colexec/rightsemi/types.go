@@ -90,8 +90,9 @@ type RightSemi struct {
 	IsMerger           bool
 	HashOnPK           bool
 	IsShuffle          bool
+	ShuffleIdx         int32
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
-
+	JoinMapTag         int32
 	vm.OperatorBase
 }
 

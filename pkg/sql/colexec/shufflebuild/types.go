@@ -40,8 +40,6 @@ const (
 type container struct {
 	state              int
 	keyWidth           int // keyWidth is the width of hash columns, it determines which hash map to use.
-	hasNull            bool
-	runtimeFilterIn    bool
 	multiSels          [][]int32
 	batches            []*batch.Batch
 	batchIdx           int
@@ -58,7 +56,6 @@ type ShuffleBuild struct {
 	ctr *container
 	// need to generate a push-down filter expression
 	NeedExpr         bool
-	IsDup            bool
 	HashOnPK         bool
 	NeedMergedBatch  bool
 	NeedAllocateSels bool
@@ -66,6 +63,8 @@ type ShuffleBuild struct {
 	Conditions       []*plan.Expr
 
 	RuntimeFilterSpec *pbplan.RuntimeFilterSpec
+	JoinMapTag        int32
+	ShuffleIdx        int32
 	vm.OperatorBase
 }
 
@@ -107,10 +106,10 @@ func (shuffleBuild *ShuffleBuild) Reset(proc *process.Process, pipelineFailed bo
 func (shuffleBuild *ShuffleBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := shuffleBuild.ctr
 	proc.FinalizeRuntimeFilter(shuffleBuild.RuntimeFilterSpec, pipelineFailed, err)
+	proc.FinalizeJoinMapMessage(shuffleBuild.JoinMapTag, true, shuffleBuild.ShuffleIdx, pipelineFailed, err)
 	if ctr != nil {
 		ctr.cleanBatches(proc)
 		ctr.cleanEvalVectors()
-		ctr.cleanHashMap()
 		shuffleBuild.ctr = nil
 	}
 }
