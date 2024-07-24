@@ -122,6 +122,7 @@ type Object interface {
 		rowmask *roaring.Bitmap,
 		precommit bool,
 		bf objectio.BloomFilter,
+		startBlkID uint16,
 		mp *mpool.MPool,
 	) error
 	//TODO::

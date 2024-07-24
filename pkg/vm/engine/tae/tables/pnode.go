@@ -63,6 +63,7 @@ func (node *persistedNode) BatchDedup(
 	keys containers.Vector,
 	keysZM index.ZM,
 	rowmask *roaring.Bitmap,
+	_ uint16,
 	bf objectio.BloomFilter,
 ) (err error) {
 	panic("should not be called")

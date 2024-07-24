@@ -134,6 +134,7 @@ func (obj *object) BatchDedup(
 	rowmask *roaring.Bitmap,
 	precommit bool,
 	bf objectio.BloomFilter,
+	startBLKID uint16,
 	mp *mpool.MPool,
 ) (err error) {
 	defer func() {

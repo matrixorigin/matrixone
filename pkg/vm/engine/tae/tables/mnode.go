@@ -750,12 +750,14 @@ func (node *objectMemoryNode) BatchDedup(
 	keys containers.Vector,
 	keysZM index.ZM,
 	rowmask *roaring.Bitmap,
+	startBLKID uint16,
 	bf objectio.BloomFilter,
 ) (err error) {
 	node.obj.RLock()
 	defer node.obj.RUnlock()
-	for _, node := range node.blkMemoryNodes {
-		err = node.BatchDedupLocked(ctx, txn, isCommitting, keys, keysZM, rowmask, bf)
+	for i := int(startBLKID); i < len(node.blkMemoryNodes); i++ {
+		mnode := node.blkMemoryNodes[i]
+		err = mnode.BatchDedupLocked(ctx, txn, isCommitting, keys, keysZM, rowmask, bf)
 		if err != nil {
 			return
 		}

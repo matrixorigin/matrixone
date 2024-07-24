@@ -3386,7 +3386,7 @@ func TestImmutableIndexInAblk(t *testing.T) {
 	assert.NoError(t, err)
 
 	err = meta.GetObjectData().BatchDedup(
-		context.Background(), txn, bat.Vecs[1], nil, nil, false, objectio.BloomFilter{}, common.DefaultAllocator,
+		context.Background(), txn, bat.Vecs[1], nil, nil, false, objectio.BloomFilter{}, 0, common.DefaultAllocator,
 	)
 	assert.Error(t, err)
 }
@@ -9374,14 +9374,16 @@ func TestFlushAndReplay(t *testing.T) {
 	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 20)
 	bats := bat.Split(2)
+	currNB := common.MutMemAllocator.CurrNB()
 
 	tae.CreateRelAndAppend(bats[0], true)
 	ts1 := tae.TxnMgr.Now()
 	tae.DoAppend(bats[1])
 	tae.CompactBlocks(true)
+	assert.Equal(t, currNB, common.MutMemAllocator.CurrNB())
 	tae.BGCheckpointRunner.ForceIncrementalCheckpoint(ts1, true)
 	tae.CheckRowsByScan(20, false)
 	tae.Restart(ctx)
 	tae.CheckRowsByScan(20, false)
-	assert.Zero(t, common.MutMemAllocator.CurrNB())
+	assert.Equal(t, currNB, common.MutMemAllocator.CurrNB())
 }

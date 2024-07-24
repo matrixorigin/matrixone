@@ -54,6 +54,7 @@ type NodeT interface {
 		keys containers.Vector,
 		keysZM index.ZM,
 		rowmask *roaring.Bitmap,
+		startBLKID uint16,
 		bf objectio.BloomFilter,
 	) (err error)
 	ContainsKey(ctx context.Context, key any, blkID uint32) (ok bool, err error)
