@@ -28,6 +28,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -40,7 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
-	"github.com/spf13/cobra"
 )
 
 type inspectContext struct {
@@ -99,6 +100,9 @@ func initCommand(_ context.Context, inspectCtx *inspectContext) *cobra.Command {
 	transfer := &transferArg{}
 	rootCmd.AddCommand(transfer.PrepareCommand())
 
+	inspect := &MoInspectArg{}
+	rootCmd.AddCommand(inspect.PrepareCommand())
+
 	return rootCmd
 }
 
@@ -119,8 +123,11 @@ func RunFactory[T InspectCmd](t T) func(cmd *cobra.Command, args []string) {
 			cmd.OutOrStdout().Write([]byte(fmt.Sprintf("parse err: %v", err)))
 			return
 		}
-		ctx := cmd.Flag("ictx").Value.(*inspectContext)
-		logutil.Infof("inpsect mo_ctl %s: %v by account %+v", cmd.Name(), t.String(), ctx.acinfo)
+		v := cmd.Flag("ictx")
+		if v != nil {
+			ctx := cmd.Flag("ictx").Value.(*inspectContext)
+			logutil.Infof("inpsect mo_ctl %s: %v by account %+v", cmd.Name(), t.String(), ctx.acinfo)
+		}
 		err := t.Run()
 		if err != nil {
 			cmd.OutOrStdout().Write(
@@ -128,7 +135,7 @@ func RunFactory[T InspectCmd](t T) func(cmd *cobra.Command, args []string) {
 			)
 		} else {
 			cmd.OutOrStdout().Write(
-				[]byte(fmt.Sprintf("success. arg %v", t.String())),
+				[]byte(fmt.Sprintf("%v", t.String())),
 			)
 		}
 	}

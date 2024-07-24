@@ -41,7 +41,6 @@ func (rightAnti *RightAnti) OpType() vm.OpType {
 func (rightAnti *RightAnti) Prepare(proc *process.Process) (err error) {
 	rightAnti.ctr = new(container)
 	rightAnti.ctr.InitReceiver(proc, false)
-	rightAnti.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
 	rightAnti.ctr.vecs = make([]*vector.Vector, len(rightAnti.Conditions[0]))
 	rightAnti.ctr.evecs = make([]evalVector, len(rightAnti.Conditions[0]))
 	for i := range rightAnti.ctr.evecs {
@@ -283,10 +282,9 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightAnti, proc *process.Proce
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
-		copy(ctr.inBuckets, hashmap.OneUInt8s)
-		vals, zvals := itr.Find(i, n, ctr.vecs, ctr.inBuckets)
+		vals, zvals := itr.Find(i, n, ctr.vecs)
 		for k := 0; k < n; k++ {
-			if ctr.inBuckets[k] == 0 || zvals[k] == 0 || vals[k] == 0 {
+			if zvals[k] == 0 || vals[k] == 0 {
 				continue
 			}
 			if ap.HashOnPK {
