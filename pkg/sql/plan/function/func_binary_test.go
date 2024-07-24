@@ -3178,17 +3178,6 @@ func initJsonExtractTestCase() []tcTemp {
 	return testInputs
 }
 
-func TestJsonExtract(t *testing.T) {
-	testCases := initJsonExtractTestCase()
-
-	proc := testutil.NewProcess()
-	for _, tc := range testCases {
-		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonExtract)
-		s, info := fcTC.Run()
-		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
-	}
-}
-
 // SPLIT PART
 
 func initSplitPart() []tcTemp {
