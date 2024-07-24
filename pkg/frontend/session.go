@@ -922,7 +922,7 @@ func (ses *Session) SetPrepareStmt(ctx context.Context, name string, prepareStmt
 	defer ses.mu.Unlock()
 	if stmt, ok := ses.prepareStmts[name]; !ok {
 		if len(ses.prepareStmts) >= int(MaxPrepareNumberInOneSession.Load()) {
-			return moerr.NewInvalidState(ctx, "too many prepared statement, max %d", MaxPrepareNumberInOneSession)
+			return moerr.NewInvalidState(ctx, "too many prepared statement, max %d", MaxPrepareNumberInOneSession.Load())
 		}
 	} else {
 		stmt.Close()
