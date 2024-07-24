@@ -249,9 +249,9 @@ func (proc *Process) ResetContextFromParent(parent context.Context) context.Cont
 
 func (proc *Process) GetAnalyze(idx, parallelIdx int, parallelMajor bool) Analyze {
 	if idx >= len(proc.Base.AnalInfos) || idx < 0 {
-		return &analyze{analInfo: nil, parallelIdx: parallelIdx, parallelMajor: parallelMajor}
+		return &operatorAnalyzer{analInfo: nil, parallelIdx: parallelIdx, parallelMajor: parallelMajor}
 	}
-	return &analyze{analInfo: proc.Base.AnalInfos[idx], wait: 0, parallelIdx: parallelIdx, parallelMajor: parallelMajor}
+	return &operatorAnalyzer{analInfo: proc.Base.AnalInfos[idx], wait: 0, parallelIdx: parallelIdx, parallelMajor: parallelMajor}
 }
 
 func (proc *Process) AllocVectorOfRows(typ types.Type, nele int, nsp *nulls.Nulls) (*vector.Vector, error) {

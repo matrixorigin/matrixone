@@ -1249,6 +1249,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 
 	switch n.NodeType {
 	case plan.Node_VALUE_SCAN:
+		c.setAnalyzeCurrent(nil, int(curNodeIdx))
 		ss, err = c.compileValueScan(n)
 		if err != nil {
 			return nil, err
@@ -1260,6 +1261,8 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 			c.appendMetaTables(n.ObjRef)
 		}
 		node := plan2.DeepCopyNode(n)
+
+		c.setAnalyzeCurrent(nil, int(curNodeIdx))
 		ss, err = c.compileExternScan(node)
 		if err != nil {
 			return nil, err
@@ -1268,6 +1271,8 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		return ss, nil
 	case plan.Node_TABLE_SCAN:
 		c.appendMetaTables(n.ObjRef)
+
+		c.setAnalyzeCurrent(nil, int(curNodeIdx))
 		ss, err = c.compileTableScan(n)
 		if err != nil {
 			return nil, err
@@ -1281,6 +1286,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		}
 		return ss, nil
 	case plan.Node_SOURCE_SCAN:
+		c.setAnalyzeCurrent(nil, int(curNodeIdx))
 		ss, err = c.compileSourceScan(n)
 		if err != nil {
 			return nil, err
@@ -1288,28 +1294,25 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss)))
 		return ss, nil
 	case plan.Node_FILTER, plan.Node_PROJECT, plan.Node_PRE_DELETE:
-		curr := c.anal.curNodeIdx
-		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 		ss, err = c.compilePlanScope(step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
-		c.setAnalyzeCurrent(ss, curr)
+
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss)))
 		return ss, nil
 	case plan.Node_AGG:
-		curr := c.anal.curNodeIdx
-		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 		ss, err = c.compilePlanScope(step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
-		c.setAnalyzeCurrent(ss, curr)
 
 		groupInfo := constructGroup(c.proc.Ctx, n, ns[n.Children[0]], false, 0, c.proc)
 		defer groupInfo.Release()
 		anyDistinctAgg := groupInfo.AnyDistinctAgg()
 
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		if c.IsSingleScope(ss) && ss[0].PartialResults == nil {
 			ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileTPGroup(n, ss, ns))))
 			return ss, nil
@@ -1321,125 +1324,113 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 			return ss, nil
 		}
 	case plan.Node_SAMPLE:
-		curr := c.anal.curNodeIdx
-		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 		ss, err = c.compilePlanScope(step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
-		c.setAnalyzeCurrent(ss, curr)
 
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileSample(n, ss))))
 		return ss, nil
 	case plan.Node_WINDOW:
-		curr := c.anal.curNodeIdx
-		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 		ss, err = c.compilePlanScope(step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
-		c.setAnalyzeCurrent(ss, curr)
+
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileWin(n, ss))))
 		return ss, nil
 	case plan.Node_TIME_WINDOW:
-		curr := c.anal.curNodeIdx
-		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 		ss, err = c.compilePlanScope(step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
-		c.setAnalyzeCurrent(ss, curr)
+
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.compileProjection(n, c.compileRestrict(n, c.compileTimeWin(n, c.compileSort(n, ss))))
 		return ss, nil
 	case plan.Node_FILL:
-		curr := c.anal.curNodeIdx
-		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 		ss, err = c.compilePlanScope(step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
-		c.setAnalyzeCurrent(ss, curr)
+
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.compileProjection(n, c.compileRestrict(n, c.compileFill(n, ss)))
 		return ss, nil
 	case plan.Node_JOIN:
-		curr := c.anal.curNodeIdx
-		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 		left, err = c.compilePlanScope(step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
-		c.setAnalyzeCurrent(left, int(n.Children[1]))
 		right, err = c.compilePlanScope(step, n.Children[1], ns)
 		if err != nil {
 			return nil, err
 		}
-		c.setAnalyzeCurrent(right, curr)
+
+		c.setAnalyzeCurrent(left, int(curNodeIdx))
+		c.setAnalyzeCurrent(right, int(curNodeIdx))
 		ss = c.compileSort(n, c.compileJoin(n, ns[n.Children[0]], ns[n.Children[1]], ns, left, right))
 		return ss, nil
 	case plan.Node_SORT:
-		curr := c.anal.curNodeIdx
-		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 		ss, err = c.compilePlanScope(step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
-		c.setAnalyzeCurrent(ss, curr)
+
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.compileProjection(n, c.compileRestrict(n, c.compileSort(n, ss)))
 		return ss, nil
 	case plan.Node_PARTITION:
-		curr := c.anal.curNodeIdx
-		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 		ss, err = c.compilePlanScope(step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
-		c.setAnalyzeCurrent(ss, curr)
+
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.compileProjection(n, c.compileRestrict(n, c.compilePartition(n, ss)))
 		return ss, nil
 	case plan.Node_UNION:
-		curr := c.anal.curNodeIdx
-		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 		left, err = c.compilePlanScope(step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
-		c.setAnalyzeCurrent(left, int(n.Children[1]))
 		right, err = c.compilePlanScope(step, n.Children[1], ns)
 		if err != nil {
 			return nil, err
 		}
-		c.setAnalyzeCurrent(right, curr)
+
+		c.setAnalyzeCurrent(left, int(curNodeIdx))
+		c.setAnalyzeCurrent(right, int(curNodeIdx))
 		ss = c.compileSort(n, c.compileUnion(n, left, right))
 		return ss, nil
 	case plan.Node_MINUS, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
-		curr := c.anal.curNodeIdx
-		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 		left, err = c.compilePlanScope(step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
-		c.setAnalyzeCurrent(left, int(n.Children[1]))
 		right, err = c.compilePlanScope(step, n.Children[1], ns)
 		if err != nil {
 			return nil, err
 		}
-		c.setAnalyzeCurrent(right, curr)
+
+		c.setAnalyzeCurrent(left, int(curNodeIdx))
+		c.setAnalyzeCurrent(right, int(curNodeIdx))
 		ss = c.compileSort(n, c.compileMinusAndIntersect(n, left, right, n.NodeType))
 		return ss, nil
 	case plan.Node_UNION_ALL:
-		curr := c.anal.curNodeIdx
-		c.setAnalyzeCurrent(nil, int(n.Children[0]))
-
 		left, err = c.compilePlanScope(step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
-		c.setAnalyzeCurrent(left, int(n.Children[1]))
 		right, err = c.compilePlanScope(step, n.Children[1], ns)
 		if err != nil {
 			return nil, err
 		}
-		c.setAnalyzeCurrent(right, curr)
+
+		c.setAnalyzeCurrent(left, int(curNodeIdx))
+		c.setAnalyzeCurrent(right, int(curNodeIdx))
 		ss = c.compileSort(n, c.compileUnionAll(left, right))
 		return ss, nil
 	case plan.Node_DELETE:
@@ -1459,123 +1450,97 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 			return ss, nil
 		}
 		c.appendMetaTables(n.DeleteCtx.Ref)
-		curr := c.anal.curNodeIdx
-		c.setAnalyzeCurrent(nil, int(n.Children[0]))
-
 		ss, err = c.compilePlanScope(step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
 
 		n.NotCacheable = true
-		ss, err = c.compileDelete(n, ss)
-		if err != nil {
-			return nil, err
-		}
-		c.setAnalyzeCurrent(ss, curr)
-		return ss, nil
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
+		return c.compileDelete(n, ss)
 	case plan.Node_ON_DUPLICATE_KEY:
-		curr := c.anal.curNodeIdx
-		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 		ss, err = c.compilePlanScope(step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
-		c.setAnalyzeCurrent(ss, curr)
 
-		rs := c.newMergeScope(ss)
-		arg := constructOnduplicateKey(n, c.e)
-		arg.SetIdx(c.anal.curNodeIdx)
-		rs.ReplaceLeafOp(arg)
-
-		ss = []*Scope{rs}
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
+		ss, err = c.compileOnduplicateKey(n, ss)
+		if err != nil {
+			return nil, err
+		}
 		return ss, nil
 	case plan.Node_FUZZY_FILTER:
-		curr := c.anal.curNodeIdx
-		c.setAnalyzeCurrent(nil, int(n.Children[0]))
-		left, err := c.compilePlanScope(step, n.Children[0], ns)
+		left, err = c.compilePlanScope(step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
-		c.setAnalyzeCurrent(left, int(n.Children[1]))
-		right, err := c.compilePlanScope(step, n.Children[1], ns)
+		right, err = c.compilePlanScope(step, n.Children[1], ns)
 		if err != nil {
 			return nil, err
 		}
-		c.setAnalyzeCurrent(right, curr)
+
+		c.setAnalyzeCurrent(left, int(curNodeIdx))
+		c.setAnalyzeCurrent(right, int(curNodeIdx))
 		return c.compileFuzzyFilter(n, ns, left, right)
 	case plan.Node_PRE_INSERT_UK:
-		curr := c.anal.curNodeIdx
 		ss, err = c.compilePlanScope(step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
+
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.compilePreInsertUk(n, ss)
-		c.setAnalyzeCurrent(ss, curr)
 		return ss, nil
 	case plan.Node_PRE_INSERT_SK:
-		curr := c.anal.curNodeIdx
 		ss, err = c.compilePlanScope(step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.compilePreInsertSK(n, ss)
-		c.setAnalyzeCurrent(ss, curr)
 		return ss, nil
 	case plan.Node_PRE_INSERT:
-		curr := c.anal.curNodeIdx
 		ss, err = c.compilePlanScope(step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
 
-		ss, err = c.compilePreInsert(ns, n, ss)
-		if err != nil {
-			return nil, err
-		}
-		c.setAnalyzeCurrent(ss, curr)
-		return ss, nil
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
+		return c.compilePreInsert(ns, n, ss)
 	case plan.Node_INSERT:
 		c.appendMetaTables(n.ObjRef)
-		curr := c.anal.curNodeIdx
+		ss, err = c.compilePlanScope(step, n.Children[0], ns)
+		if err != nil {
+			return nil, err
+		}
+
 		n.NotCacheable = true
-		ss, err = c.compilePlanScope(step, n.Children[0], ns)
-		if err != nil {
-			return nil, err
-		}
-
-		ss, err = c.compileInsert(ns, n, ss)
-		if err != nil {
-			return nil, err
-		}
-		c.setAnalyzeCurrent(ss, curr)
-		return ss, nil
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
+		return c.compileInsert(ns, n, ss)
 	case plan.Node_LOCK_OP:
-		curr := c.anal.curNodeIdx
 		ss, err = c.compilePlanScope(step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
 
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss, err = c.compileLock(n, ss)
 		if err != nil {
 			return nil, err
 		}
-
 		ss = c.compileProjection(n, ss)
-		c.setAnalyzeCurrent(ss, curr)
 		return ss, nil
 	case plan.Node_FUNCTION_SCAN:
-		curr := c.anal.curNodeIdx
-		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 		ss, err = c.compilePlanScope(step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
-		c.setAnalyzeCurrent(ss, curr)
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileTableFunction(n, ss))))
 		return ss, nil
 	case plan.Node_SINK_SCAN:
+		c.setAnalyzeCurrent(nil, int(curNodeIdx))
 		ss, err = c.compileSinkScanNode(n, curNodeIdx)
 		if err != nil {
 			return nil, err
@@ -1583,8 +1548,10 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		ss = c.compileProjection(n, ss)
 		return ss, nil
 	case plan.Node_RECURSIVE_SCAN:
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		return c.compileRecursiveScan(n, curNodeIdx)
 	case plan.Node_RECURSIVE_CTE:
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss, err = c.compileRecursiveCte(n, curNodeIdx)
 		if err != nil {
 			return nil, err
@@ -1596,6 +1563,8 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		if err != nil {
 			return nil, err
 		}
+
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		return c.compileSinkNode(n, ss, step)
 	default:
 		return nil, moerr.NewNYI(c.proc.Ctx, fmt.Sprintf("query '%s'", n))
@@ -1991,10 +1960,12 @@ func (c *Compile) compileValueScan(n *plan.Node) ([]*Scope, error) {
 	ds.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
 	ds.Proc = process.NewFromProc(c.proc, c.proc.Ctx, 0)
 
+	currentFirstFlag := c.anal.isFirst
 	op := constructValueScan()
 	op.SetIdx(c.anal.curNodeIdx)
-	op.SetIsFirst(c.anal.isFirst)
+	op.SetIsFirst(currentFirstFlag)
 	ds.setRootOperator(op)
+	c.anal.isFirst = false
 
 	return []*Scope{ds}, nil
 }
@@ -2297,7 +2268,7 @@ func (c *Compile) compileJoin(node, left, right *plan.Node, ns []*plan.Node, pro
 	rs := c.compileBroadcastJoin(node, left, right, ns, probeScopes, buildScopes)
 	if c.IsTpQuery() {
 		//construct join build operator for tp join
-		buildScopes[0].setRootOperator(constructJoinBuildOperator(c, vm.GetLeafOp(rs[0].RootOp), false, false))
+		buildScopes[0].setRootOperator(constructJoinBuildOperator(c, vm.GetLeafOp(rs[0].RootOp), false, 1))
 		rs[0].Proc.Reg.MergeReceivers[1] = &process.WaitRegister{
 			Ctx: rs[0].Proc.Ctx,
 			Ch:  make(chan *process.RegisterMessage, 1),
@@ -2355,6 +2326,7 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 	case plan.Node_INNER:
 		for i := range children {
 			op := constructJoin(node, rightTyps, c.proc)
+			op.ShuffleIdx = int32(children[i].ShuffleIdx)
 			op.SetIdx(c.anal.curNodeIdx)
 			children[i].setRootOperator(op)
 		}
@@ -2363,12 +2335,14 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 		if node.BuildOnLeft {
 			for i := range children {
 				op := constructRightAnti(node, rightTyps, c.proc)
+				op.ShuffleIdx = int32(children[i].ShuffleIdx)
 				op.SetIdx(c.anal.curNodeIdx)
 				children[i].setRootOperator(op)
 			}
 		} else {
 			for i := range children {
 				op := constructAnti(node, rightTyps, c.proc)
+				op.ShuffleIdx = int32(children[i].ShuffleIdx)
 				op.SetIdx(c.anal.curNodeIdx)
 				children[i].setRootOperator(op)
 			}
@@ -2378,12 +2352,14 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 		if node.BuildOnLeft {
 			for i := range children {
 				op := constructRightSemi(node, rightTyps, c.proc)
+				op.ShuffleIdx = int32(children[i].ShuffleIdx)
 				op.SetIdx(c.anal.curNodeIdx)
 				children[i].setRootOperator(op)
 			}
 		} else {
 			for i := range children {
 				op := constructSemi(node, rightTyps, c.proc)
+				op.ShuffleIdx = int32(children[i].ShuffleIdx)
 				op.SetIdx(c.anal.curNodeIdx)
 				children[i].setRootOperator(op)
 			}
@@ -2392,6 +2368,7 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 	case plan.Node_LEFT:
 		for i := range children {
 			op := constructLeft(node, rightTyps, c.proc)
+			op.ShuffleIdx = int32(children[i].ShuffleIdx)
 			op.SetIdx(c.anal.curNodeIdx)
 			children[i].setRootOperator(op)
 		}
@@ -2399,6 +2376,7 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 	case plan.Node_RIGHT:
 		for i := range children {
 			op := constructRight(node, leftTyps, rightTyps, c.proc)
+			op.ShuffleIdx = int32(children[i].ShuffleIdx)
 			op.SetIdx(c.anal.curNodeIdx)
 			children[i].setRootOperator(op)
 		}
@@ -2687,10 +2665,12 @@ func containBrokenNode(s *Scope) bool {
 func (c *Compile) compileTop(n *plan.Node, topN *plan.Expr, ss []*Scope) []*Scope {
 	// use topN TO make scope.
 	if c.IsSingleScope(ss) {
+		currentFirstFlag := c.anal.isFirst
 		op := constructTop(n, topN)
 		op.SetIdx(c.anal.curNodeIdx)
-		op.SetIsFirst(c.anal.isFirst)
+		op.SetIsFirst(currentFirstFlag)
 		ss[0].setRootOperator(op)
+		c.anal.isFirst = false
 		return ss
 	}
 
@@ -3458,6 +3438,20 @@ func (c *Compile) compileSinkNode(n *plan.Node, ss []*Scope, step int32) ([]*Sco
 	return ss, nil
 }
 
+func (c *Compile) compileOnduplicateKey(n *plan.Node, ss []*Scope) ([]*Scope, error) {
+	rs := c.newMergeScope(ss)
+	arg := constructOnduplicateKey(n, c.e)
+
+	currentFirstFlag := c.anal.isFirst
+	arg.SetIdx(c.anal.curNodeIdx)
+	arg.SetIsFirst(currentFirstFlag)
+	rs.ReplaceLeafOp(arg)
+	c.anal.isFirst = false
+
+	ss = []*Scope{rs}
+	return ss, nil
+}
+
 // DeleteMergeScope need to assure this:
 // one block can be only deleted by one and the same
 // CN, so we need to transfer the rows from the
@@ -3724,6 +3718,7 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 	children := make([]*Scope, 0, len(c.cnList))
 	lnum := len(left)
 	sum := lnum + len(right)
+	shuffleIdx := 0
 	for _, cn := range c.cnList {
 		dop := plan2.GetShuffleDop(cn.Mcpu)
 		ss := make([]*Scope, dop)
@@ -3734,7 +3729,8 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 			ss[i].NodeInfo.Mcpu = 1
 			ss[i].Proc = process.NewFromProc(c.proc, c.proc.Ctx, sum)
 			ss[i].BuildIdx = lnum
-			ss[i].ShuffleCnt = dop
+			shuffleIdx++
+			ss[i].ShuffleIdx = shuffleIdx
 			for _, rr := range ss[i].Proc.Reg.MergeReceivers {
 				rr.Ch = make(chan *process.RegisterMessage, shuffleChannelBufferSize)
 			}
@@ -3794,10 +3790,10 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 
 func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 	rs := newScope(Merge)
-	merge := merge.NewArgument()
-	merge.SetIdx(vm.GetLeafOp(s.RootOp).GetOperatorBase().GetIdx())
-	merge.SetIsFirst(true)
-	rs.setRootOperator(merge)
+	mergeOp := merge.NewArgument()
+	mergeOp.SetIdx(vm.GetLeafOp(s.RootOp).GetOperatorBase().GetIdx())
+	mergeOp.SetIsFirst(true)
+	rs.setRootOperator(mergeOp)
 	rs.Proc = process.NewFromProc(s.Proc, s.Proc.Ctx, s.BuildIdx)
 	for i := 0; i < s.BuildIdx; i++ {
 		regTransplant(s, rs, i, i)
@@ -3822,18 +3818,18 @@ func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 	return rs
 }
 
-func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
+func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope, mcpu int32) *Scope {
 	rs := newScope(Merge)
 	buildLen := len(s.Proc.Reg.MergeReceivers) - s.BuildIdx
 	rs.Proc = process.NewFromProc(s.Proc, s.Proc.Ctx, buildLen)
 	for i := 0; i < buildLen; i++ {
 		regTransplant(s, rs, i+s.BuildIdx, i)
 	}
-	merge := merge.NewArgument()
-	merge.SetIdx(c.anal.curNodeIdx)
-	merge.SetIsFirst(c.anal.isFirst)
-	rs.setRootOperator(merge)
-	rs.setRootOperator(constructJoinBuildOperator(c, vm.GetLeafOp(s.RootOp), ss != nil, s.ShuffleCnt > 0))
+	mergeOp := merge.NewArgument()
+	mergeOp.SetIdx(c.anal.curNodeIdx)
+	mergeOp.SetIsFirst(c.anal.isFirst)
+	rs.setRootOperator(mergeOp)
+	rs.setRootOperator(constructJoinBuildOperator(c, vm.GetLeafOp(s.RootOp), s.ShuffleIdx > 0, mcpu))
 
 	if ss == nil { // unparallel, send the hashtable to join scope directly
 		s.Proc.Reg.MergeReceivers[s.BuildIdx] = &process.WaitRegister{
