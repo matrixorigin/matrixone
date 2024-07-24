@@ -40,6 +40,7 @@ const (
 	GCFullExt     = "fgc"
 	SnapshotExt   = "snap"
 	AcctExt       = "acct"
+	TmpExt        = "tmp"
 )
 
 func EncodeCheckpointMetadataFileName(dir, prefix string, start, end types.TS) string {
@@ -60,6 +61,10 @@ func EncodeTableMetadataFileName(dir, prefix string, start, end types.TS) string
 
 func EncodeGCMetadataFileName(dir, prefix string, start, end types.TS) string {
 	return fmt.Sprintf("%s/%s_%s_%s.%s", dir, prefix, start.ToString(), end.ToString(), GCFullExt)
+}
+
+func EncodeTmpFileName(dir, prefix string, ts int64) string {
+	return fmt.Sprintf("%s/%s_%d.%s", dir, prefix, ts, TmpExt)
 }
 
 func UpdateGCMetadataFileName(name string, start, end types.TS) string {
