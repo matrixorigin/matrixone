@@ -1608,7 +1608,7 @@ func (c *Compile) constructLoadMergeScope() *Scope {
 	ds.Proc.Base.LoadTag = true
 	arg := merge.NewArgument()
 	arg.SetIdx(c.anal.curNodeIdx)
-	arg.SetIsFirst(c.anal.isFirst)
+	arg.SetIsFirst(false)
 
 	ds.setRootOperator(arg)
 	return ds
@@ -1789,12 +1789,15 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 	if len(fileList) == 0 {
 		ret := newScope(Normal)
 		ret.DataSource = &Source{isConst: true, node: n}
+
+		currentFirstFlag := c.anal.isFirst
 		op := constructValueScan()
 		op.SetIdx(c.anal.curNodeIdx)
-		op.SetIsFirst(c.anal.isFirst)
+		op.SetIsFirst(currentFirstFlag)
 		ret.setRootOperator(op)
-		ret.Proc = process.NewFromProc(c.proc, c.proc.Ctx, 0)
+		c.anal.isFirst = false
 
+		ret.Proc = process.NewFromProc(c.proc, c.proc.Ctx, 0)
 		return []*Scope{ret}, nil
 	}
 	if param.Parallel && (external.GetCompressType(param, fileList[0]) != tree.NOCOMPRESS || param.Local) {
@@ -1844,6 +1847,8 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 		ss = make([]*Scope, len(c.cnList))
 	}
 	pre := 0
+
+	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
 		ss[i] = c.constructScopeForExternal(c.cnList[i].Addr, param.Parallel)
 		ss[i].IsLoad = true
@@ -1871,10 +1876,11 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 		}
 		op := constructExternal(n, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp)
 		op.SetIdx(c.anal.curNodeIdx)
-		op.SetIsFirst(c.anal.isFirst)
+		op.SetIsFirst(currentFirstFlag)
 		ss[i].setRootOperator(op)
 		pre += count
 	}
+	c.anal.isFirst = false
 
 	return ss, nil
 }
@@ -1899,16 +1905,21 @@ func (c *Compile) compileExternValueScan(n *plan.Node, param *tree.ExternParam) 
 	for i := 0; i < parallelSize; i++ {
 		ss[i] = c.constructLoadMergeScope()
 	}
+
 	s := c.constructScopeForExternal(c.addr, false)
+	currentFirstFlag := c.anal.isFirst
 	op := constructExternal(n, param, c.proc.Ctx, nil, nil, nil)
 	op.SetIdx(c.anal.curNodeIdx)
-	op.SetIsFirst(c.anal.isFirst)
+	op.SetIsFirst(currentFirstFlag)
 	s.setRootOperator(op)
+	c.anal.isFirst = false
+
 	_, dispatchOp := constructDispatchLocalAndRemote(0, ss, c.addr)
 	dispatchOp.FuncId = dispatch.SendToAnyLocalFunc
+	dispatchOp.SetIdx(c.anal.curNodeIdx)
 	s.setRootOperator(dispatchOp)
+
 	ss[0].PreScopes = append(ss[0].PreScopes, s)
-	c.anal.isFirst = false
 	return ss, nil
 }
 
@@ -1926,15 +1937,22 @@ func (c *Compile) compileExternScanParallel(n *plan.Node, param *tree.ExternPara
 		fileOffsetTmp[i].Offset = make([]int64, 0)
 		fileOffsetTmp[i].Offset = append(fileOffsetTmp[i].Offset, []int64{0, -1}...)
 	}
+
+	scope := c.constructScopeForExternal("", false)
+
+	currentFirstFlag := c.anal.isFirst
 	extern := constructExternal(n, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp)
 	extern.Es.ParallelLoad = true
-	scope := c.constructScopeForExternal("", false)
 	extern.SetIdx(c.anal.curNodeIdx)
-	extern.SetIsFirst(c.anal.isFirst)
+	extern.SetIsFirst(currentFirstFlag)
 	scope.setRootOperator(extern)
+	c.anal.isFirst = false
+
 	_, dispatchOp := constructDispatchLocalAndRemote(0, ss, c.addr)
 	dispatchOp.FuncId = dispatch.SendToAnyLocalFunc
+	dispatchOp.SetIdx(c.anal.curNodeIdx)
 	scope.setRootOperator(dispatchOp)
+
 	ss[0].PreScopes = append(ss[0].PreScopes, scope)
 	c.anal.isFirst = false
 	return ss, nil
@@ -1977,19 +1995,22 @@ func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
 	}
 	ss := make([]*Scope, 0, len(nodes))
 
+	currentFirstFlag := c.anal.isFirst
 	for i := range nodes {
-		s, err := c.compileTableScanWithNode(n, nodes[i])
+		s, err := c.compileTableScanWithNode(n, nodes[i], currentFirstFlag)
 		if err != nil {
 			return nil, err
 		}
 		ss = append(ss, s)
 	}
+	c.anal.isFirst = false
+
 	ss[0].PartialResults = partialResults
 	ss[0].PartialResultTypes = partialResultTypes
 	return ss, nil
 }
 
-func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) (*Scope, error) {
+func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, firstFlag bool) (*Scope, error) {
 	s := newScope(Remote)
 	s.NodeInfo = node
 	s.TxnOffset = c.TxnOffset
@@ -1999,7 +2020,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) (*Sco
 
 	op := constructTableScan()
 	op.SetIdx(c.anal.curNodeIdx)
-	op.SetIsFirst(c.anal.isFirst)
+	op.SetIsFirst(firstFlag)
 	s.setRootOperator(op)
 	s.Proc = process.NewFromProc(c.proc, c.proc.Ctx, 0)
 	return s, nil
@@ -2669,52 +2690,68 @@ func (c *Compile) compileTop(n *plan.Node, topN *plan.Expr, ss []*Scope) []*Scop
 
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
-		c.anal.isFirst = currentFirstFlag
+		//c.anal.isFirst = currentFirstFlag
 		if containBrokenNode(ss[i]) {
 			ss[i] = c.newMergeScope([]*Scope{ss[i]})
 		}
 		op := constructTop(n, topN)
 		op.SetIdx(c.anal.curNodeIdx)
-		op.SetIsFirst(c.anal.isFirst)
+		op.SetIsFirst(currentFirstFlag)
 		ss[i].setRootOperator(op)
 	}
 	c.anal.isFirst = false
 
 	rs := c.newMergeScope(ss)
+
+	currentFirstFlag = c.anal.isFirst
 	arg := constructMergeTop(n, topN)
 	arg.Idx = c.anal.curNodeIdx
+	arg.SetIsFirst(currentFirstFlag)
 	rs.ReplaceLeafOp(arg)
+	c.anal.isFirst = false
+
 	return []*Scope{rs}
 }
 
 func (c *Compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
 	if c.IsSingleScope(ss) {
+		currentFirstFlag := c.anal.isFirst
 		order := constructOrder(n)
 		order.SetIdx(c.anal.curNodeIdx)
-		order.SetIsFirst(c.anal.isFirst)
+		order.SetIsFirst(currentFirstFlag)
 		ss[0].setRootOperator(order)
+		c.anal.isFirst = false
+
+		currentFirstFlag = c.anal.isFirst
 		mergeOrder := constructMergeOrder(n)
 		mergeOrder.SetIdx(c.anal.curNodeIdx)
+		mergeOrder.SetIsFirst(currentFirstFlag)
 		ss[0].setRootOperator(mergeOrder)
+		c.anal.isFirst = false
 		return ss
 	}
 
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
-		c.anal.isFirst = currentFirstFlag
+		//c.anal.isFirst = currentFirstFlag
 		if containBrokenNode(ss[i]) {
 			ss[i] = c.newMergeScope([]*Scope{ss[i]})
 		}
 		order := constructOrder(n)
 		order.SetIdx(c.anal.curNodeIdx)
-		order.SetIsFirst(c.anal.isFirst)
+		order.SetIsFirst(currentFirstFlag)
 		ss[i].setRootOperator(order)
 	}
 	c.anal.isFirst = false
+
 	rs := c.newMergeScope(ss)
+
+	currentFirstFlag = c.anal.isFirst
 	mergeOrder := constructMergeOrder(n)
 	mergeOrder.SetIdx(c.anal.curNodeIdx)
+	mergeOrder.SetIsFirst(currentFirstFlag)
 	rs.setRootOperator(mergeOrder)
+	c.anal.isFirst = false
 
 	return []*Scope{rs}
 }
@@ -2751,41 +2788,47 @@ func (c *Compile) compileFill(n *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
 	if c.IsSingleScope(ss) {
+		currentFirstFlag := c.anal.isFirst
 		op := offset.NewArgument().WithOffset(n.Offset)
 		op.SetIdx(c.anal.curNodeIdx)
-		op.SetIsFirst(c.anal.isFirst)
+		op.SetIsFirst(currentFirstFlag)
 		ss[0].setRootOperator(op)
+		c.anal.isFirst = false
 		return ss
 	}
 
-	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
 		if containBrokenNode(ss[i]) {
-			c.anal.isFirst = currentFirstFlag
 			ss[i] = c.newMergeScope([]*Scope{ss[i]})
 		}
 	}
 
 	rs := c.newMergeScope(ss)
+
+	currentFirstFlag := c.anal.isFirst
 	arg := constructMergeOffset(n)
-	arg.Idx = c.anal.curNodeIdx
+	arg.SetIdx(c.anal.curNodeIdx)
+	arg.SetIsFirst(currentFirstFlag)
 	rs.ReplaceLeafOp(arg)
+	c.anal.isFirst = false
 
 	return []*Scope{rs}
 }
 
 func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 	if c.IsSingleScope(ss) {
+		currentFirstFlag := c.anal.isFirst
 		op := constructLimit(n)
 		op.SetIdx(c.anal.curNodeIdx)
-		op.SetIsFirst(c.anal.isFirst)
+		op.SetIsFirst(currentFirstFlag)
 		ss[0].setRootOperator(op)
+		c.anal.isFirst = false
 		return ss
 	}
-	currentFirstFlag := c.anal.isFirst
 
+	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
-		c.anal.isFirst = currentFirstFlag
+		//c.anal.isFirst = currentFirstFlag
 		if containBrokenNode(ss[i]) {
 			ss[i] = c.newMergeScope([]*Scope{ss[i]})
 		}
@@ -2797,9 +2840,13 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 	c.anal.isFirst = false
 
 	rs := c.newMergeScope(ss)
+
+	currentFirstFlag = c.anal.isFirst
 	arg := constructMergeLimit(n)
 	arg.Idx = c.anal.curNodeIdx
+	arg.SetIsFirst(currentFirstFlag)
 	rs.ReplaceLeafOp(arg)
+	c.anal.isFirst = false
 
 	return []*Scope{rs}
 }
@@ -3504,11 +3551,15 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 	if len(ss) > 0 {
 		rs.Proc.Base.LoadTag = ss[0].Proc.Base.LoadTag
 	}
+
+	// waring: Merge operator is not used as an input/output analyze,
+	// and Merge operator cannot play the role of IsFirst/IsLast
 	merge := merge.NewArgument()
 	merge.SetIdx(c.anal.curNodeIdx)
-	merge.SetIsFirst(c.anal.isFirst)
+	//merge.SetIsFirst(c.anal.isFirst)
+	merge.SetIsFirst(false)
 	rs.setRootOperator(merge)
-	c.anal.isFirst = false
+	//c.anal.isFirst = false
 
 	j := 0
 	for i := range ss {
