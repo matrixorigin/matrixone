@@ -39,10 +39,7 @@ type container struct {
 
 	state int
 
-	hasNull bool
-
-	inBuckets []uint8
-
+	hasNull       bool
 	batches       []*batch.Batch
 	batchRowCount int
 	rbat          *batch.Batch

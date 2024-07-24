@@ -40,7 +40,6 @@ func (leftJoin *LeftJoin) OpType() vm.OpType {
 func (leftJoin *LeftJoin) Prepare(proc *process.Process) (err error) {
 	leftJoin.ctr = new(container)
 	leftJoin.ctr.InitReceiver(proc, false)
-	leftJoin.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
 	leftJoin.ctr.vecs = make([]*vector.Vector, len(leftJoin.Conditions[0]))
 
 	leftJoin.ctr.evecs = make([]evalVector, len(leftJoin.Conditions[0]))
@@ -225,14 +224,9 @@ func (ctr *container) probe(ap *LeftJoin, proc *process.Process, anal process.An
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
-		copy(ctr.inBuckets, hashmap.OneUInt8s)
-		vals, zvals := itr.Find(i, n, ctr.vecs, ctr.inBuckets)
+		vals, zvals := itr.Find(i, n, ctr.vecs)
 		rowCount := 0
 		for k := 0; k < n; k++ {
-			if ctr.inBuckets[k] == 0 {
-				continue
-			}
-
 			// if null or not found.
 			// the result row was  [left cols, null cols]
 			if zvals[k] == 0 || vals[k] == 0 {

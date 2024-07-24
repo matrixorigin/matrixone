@@ -44,8 +44,6 @@ type container struct {
 
 	state int
 
-	inBuckets []uint8
-
 	batches       []*batch.Batch
 	batchRowCount int
 	lastrow       int
