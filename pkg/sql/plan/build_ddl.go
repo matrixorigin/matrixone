@@ -2848,7 +2848,6 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 	}
 
 	var primaryKeys []string
-	var indexs []string
 	var detectSqls []string
 	var updateSqls []string
 	uniqueIndexInfos := make([]*tree.UniqueIndex, 0)
