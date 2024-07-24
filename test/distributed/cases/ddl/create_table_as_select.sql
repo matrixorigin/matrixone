@@ -1075,8 +1075,8 @@ col10 double
 insert into test01 values (1,2,3,4,5,6,7,8,10.2131,3824.34324);
 insert into test01 values (2,3,4,5,6,7,8,9,2131.3242343,-3824.34324);
 show create table test01;
-create publication publication01 database test;
--- @ignore:2,3
+create publication publication01 database test account all;
+-- @ignore:5,6
 show publications;
 drop table if exists test02;
 create table test02 as select * from test01;
@@ -1090,9 +1090,9 @@ create account acc0 admin_name 'root' identified by '111';
 drop table if exists sys_tbl_1;
 create table sys_tbl_1(a int primary key, b decimal, c char, d varchar(20) );
 insert into sys_tbl_1 values(1,2,'a','database'),(2,3,'b','test publication'),(3, 4, 'c','324243243');
-create publication sys_pub_1 database test;
+create publication sys_pub_1 database test account all;
 select * from sys_tbl_1;
--- @ignore:2,3
+-- @ignore:5,6
 show publications;
 select pub_name, database_name, account_list from mo_catalog.mo_pubs;
 -- @session:id=2&user=acc0:root&password=111

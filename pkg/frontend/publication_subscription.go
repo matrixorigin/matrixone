@@ -34,15 +34,17 @@ import (
 
 const (
 	// account
-	getAccountIdNamesSql = "select account_id, account_name from mo_catalog.mo_account where status != 'suspend'"
+	getAccountIdNamesSql = "select account_id, account_name, status, version, suspended_time from mo_catalog.mo_account where 1=1"
 	// pub
-	getPubInfoSql       = "select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, comment from mo_catalog.mo_pubs where 1=1"
-	updatePubInfoFormat = `update mo_catalog.mo_pubs set account_list = '%s', comment = '%s', database_name = '%s', database_id = %d, update_time = now(), table_list = '%s' where pub_name = '%s';`
+	getPubInfoSql                  = "select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, comment from mo_catalog.mo_pubs where 1=1"
+	updatePubInfoFormat            = `update mo_catalog.mo_pubs set account_list = '%s', comment = '%s', database_name = '%s', database_id = %d, update_time = now(), table_list = '%s' where pub_name = '%s';`
+	updatePubInfoAccountListFormat = `update mo_catalog.mo_pubs set account_list = '%s' where pub_name = '%s';`
 	// sub
-	insertIntoMoSubsFormat = "insert into mo_catalog.mo_subs (sub_account_id, pub_account_name, pub_name, pub_database, pub_tables, pub_time, pub_comment, status) values (%d, '%s', '%s', '%s', '%s', now(), '%s', %d)"
-	updateMoSubsFormat     = "update mo_catalog.mo_subs set pub_database='%s', pub_tables='%s', pub_time=now(), pub_comment='%s', status=%d where pub_account_name = '%s' and pub_name = '%s' and sub_account_id = %d"
-	deleteMoSubsFormat     = "delete from mo_catalog.mo_subs where pub_account_name = '%s' and pub_name = '%s' and sub_account_id = %d"
-	getSubsSql             = "select sub_account_id, sub_name, sub_time, pub_account_name, pub_name, pub_database, pub_tables, pub_time, pub_comment, status from mo_catalog.mo_subs where 1=1"
+	insertIntoMoSubsFormat                  = "insert into mo_catalog.mo_subs (sub_account_id, pub_account_name, pub_name, pub_database, pub_tables, pub_time, pub_comment, status) values (%d, '%s', '%s', '%s', '%s', now(), '%s', %d)"
+	updateMoSubsFormat                      = "update mo_catalog.mo_subs set pub_database='%s', pub_tables='%s', pub_time=now(), pub_comment='%s', status=%d where pub_account_name = '%s' and pub_name = '%s' and sub_account_id = %d"
+	deleteMoSubsFormat                      = "delete from mo_catalog.mo_subs where pub_account_name = '%s' and pub_name = '%s' and sub_account_id = %d"
+	getSubsSql                              = "select sub_account_id, sub_name, sub_time, pub_account_name, pub_name, pub_database, pub_tables, pub_time, pub_comment, status from mo_catalog.mo_subs where 1=1"
+	deleteMoSubsRecordsBySubAccountIdFormat = "delete from mo_catalog.mo_subs where sub_account_id = %d"
 )
 
 var (
@@ -187,13 +189,13 @@ func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePubli
 		if !tenantInfo.IsSysTenant() && !slices.Contains(pubAllAccounts, tenantInfo.Tenant) {
 			return moerr.NewInternalError(ctx, "only sys account and authorized normal accounts can publish to all accounts")
 		}
-
 		subAccounts = accIdInfoMap
 		accountNamesStr = pubsub.AccountAll
 	} else {
-		if subAccounts, accountNamesStr, err = getSetAccounts(ctx, cp.AccountsSet.SetAccounts, accNameInfoMap, tenantInfo); err != nil {
+		if subAccounts, err = getSetAccounts(ctx, cp.AccountsSet.SetAccounts, accNameInfoMap, tenantInfo); err != nil {
 			return err
 		}
+		accountNamesStr = pubsub.JoinAccounts(subAccounts)
 	}
 
 	pubName := string(cp.Name)
@@ -329,6 +331,7 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 	var oldSubAccounts, newSubAccounts map[int32]*pubsub.AccountInfo
 	if pub.SubAccountsStr == pubsub.AccountAll {
 		oldSubAccounts = accIdInfoMap
+		accountNamesStr = pubsub.AccountAll
 	} else {
 		oldSubAccounts = make(map[int32]*pubsub.AccountInfo)
 		for _, accountName := range pub.GetSubAccountNames() {
@@ -336,7 +339,9 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 				oldSubAccounts[accInfo.Id] = accInfo
 			}
 		}
+		accountNamesStr = pubsub.JoinAccounts(oldSubAccounts)
 	}
+	newSubAccounts = oldSubAccounts
 
 	if ap.AccountsSet != nil {
 		switch {
@@ -345,29 +350,31 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 			if !tenantInfo.IsSysTenant() && !slices.Contains(pubAllAccounts, tenantInfo.Tenant) {
 				return moerr.NewInternalError(ctx, "only sys account and authorized normal accounts can publish to all accounts")
 			}
-
 			newSubAccounts = accIdInfoMap
 			accountNamesStr = pubsub.AccountAll
 		case len(ap.AccountsSet.SetAccounts) > 0:
-			if newSubAccounts, accountNamesStr, err = getSetAccounts(ctx, ap.AccountsSet.SetAccounts, accNameInfoMap, tenantInfo); err != nil {
+			if newSubAccounts, err = getSetAccounts(ctx, ap.AccountsSet.SetAccounts, accNameInfoMap, tenantInfo); err != nil {
 				return
 			}
+			accountNamesStr = pubsub.JoinAccounts(oldSubAccounts)
 		case len(ap.AccountsSet.DropAccounts) > 0:
 			if pub.SubAccountsStr == pubsub.AccountAll {
 				err = moerr.NewInternalError(ctx, "cannot drop accounts from all account option")
 				return
 			}
-			if newSubAccounts, accountNamesStr, err = getDropAccounts(ap.AccountsSet.DropAccounts, oldSubAccounts, accNameInfoMap); err != nil {
+			if newSubAccounts, err = getDropAccounts(ap.AccountsSet.DropAccounts, oldSubAccounts, accNameInfoMap); err != nil {
 				return
 			}
+			accountNamesStr = pubsub.JoinAccounts(oldSubAccounts)
 		case len(ap.AccountsSet.AddAccounts) > 0:
 			if pub.SubAccountsStr == pubsub.AccountAll {
 				err = moerr.NewInternalError(ctx, "cannot add account from all account option")
 				return
 			}
-			if newSubAccounts, accountNamesStr, err = getAddAccounts(ctx, ap.AccountsSet.AddAccounts, oldSubAccounts, accNameInfoMap, tenantInfo); err != nil {
+			if newSubAccounts, err = getAddAccounts(ctx, ap.AccountsSet.AddAccounts, oldSubAccounts, accNameInfoMap, tenantInfo); err != nil {
 				return
 			}
+			accountNamesStr = pubsub.JoinAccounts(oldSubAccounts)
 		}
 	}
 
@@ -506,7 +513,7 @@ func dropPublication(ctx context.Context, bh BackgroundExec, ifExists bool, pubN
 		return err
 	}
 	if pub == nil {
-		if ifExists {
+		if !ifExists {
 			err = moerr.NewInternalError(ctx, "publication '%s' does not exist", pubName)
 		}
 		return
@@ -561,8 +568,14 @@ func getAccounts(ctx context.Context, bh BackgroundExec) (idInfoMap map[int32]*p
 		return
 	}
 
-	var id int64
-	var name string
+	var (
+		id            int64
+		name          string
+		status        string
+		version       uint64
+		suspendedTime string
+		isNull        bool
+	)
 	idInfoMap = make(map[int32]*pubsub.AccountInfo)
 	nameInfoMap = make(map[string]*pubsub.AccountInfo)
 	for _, result := range erArray {
@@ -575,8 +588,31 @@ func getAccounts(ctx context.Context, bh BackgroundExec) (idInfoMap map[int32]*p
 			if name, err = result.GetString(ctx, i, 1); err != nil {
 				return
 			}
-
-			accountInfo := &pubsub.AccountInfo{Id: int32(id), Name: name}
+			// column[2]: status
+			if status, err = result.GetString(ctx, i, 2); err != nil {
+				return
+			}
+			// column[3]: version
+			if version, err = result.GetUint64(ctx, i, 3); err != nil {
+				return
+			}
+			// column[4]: suspended_time
+			if isNull, err = result.ColumnIsNull(ctx, i, 4); err != nil {
+				return
+			} else if !isNull {
+				if suspendedTime, err = result.GetString(ctx, i, 4); err != nil {
+					return
+				}
+			} else {
+				suspendedTime = ""
+			}
+			accountInfo := &pubsub.AccountInfo{
+				Id:            int32(id),
+				Name:          name,
+				Status:        status,
+				Version:       version,
+				SuspendedTime: suspendedTime,
+			}
 			idInfoMap[int32(id)] = accountInfo
 			nameInfoMap[name] = accountInfo
 		}
@@ -683,8 +719,24 @@ func getPubInfos(ctx context.Context, bh BackgroundExec, like string) (pubInfos 
 		return
 	}
 
-	pubInfos, err = extractPubInfosFromExecResult(ctx, erArray)
-	return
+	return extractPubInfosFromExecResult(ctx, erArray)
+}
+
+func getPubInfosToAllAccounts(ctx context.Context, bh BackgroundExec) (pubInfos []*pubsub.PubInfo, err error) {
+	sql := getPubInfoSql
+	sql += fmt.Sprintf(" and account_list = '%s'", pubsub.AccountAll)
+
+	bh.ClearExecResultSet()
+	if err = bh.Exec(ctx, sql); err != nil {
+		return
+	}
+
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return
+	}
+
+	return extractPubInfosFromExecResult(ctx, erArray)
 }
 
 func extractSubInfosFromExecResult(ctx context.Context, erArray []ExecResult) (subInfos []*pubsub.SubInfo, err error) {
@@ -799,10 +851,18 @@ func getSubInfosFromPub(ctx context.Context, bh BackgroundExec, pubAccountName, 
 	return
 }
 
-// getSubInfosFromPub return subInfo map for given (subAccountId, subName)
-func getSubInfoFromSub(ctx context.Context, bh BackgroundExec, subAccountId int32, subName string) (subInfo *pubsub.SubInfo, err error) {
+// getSubInfosFromSub return subInfo map for given subName
+func getSubInfosFromSub(ctx context.Context, bh BackgroundExec, subName string) (subInfo []*pubsub.SubInfo, err error) {
+	subAccountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return nil, err
+	}
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
-	sql := getSubsSql + fmt.Sprintf(" and sub_account_id = %d and sub_name = '%s'", subAccountId, subName)
+
+	sql := getSubsSql + fmt.Sprintf(" and sub_account_id = %d", subAccountId)
+	if len(subName) > 0 {
+		sql += fmt.Sprintf(" and sub_name = '%s'", subName)
+	}
 	bh.ClearExecResultSet()
 	if err = bh.Exec(ctx, sql); err != nil {
 		return
@@ -813,15 +873,7 @@ func getSubInfoFromSub(ctx context.Context, bh BackgroundExec, subAccountId int3
 		return
 	}
 
-	subInfos, err := extractSubInfosFromExecResult(ctx, erArray)
-	if err != nil {
-		return
-	}
-
-	if len(subInfos) > 0 {
-		subInfo = subInfos[0]
-	}
-	return
+	return extractSubInfosFromExecResult(ctx, erArray)
 }
 
 func doShowPublications(ctx context.Context, ses *Session, sp *tree.ShowPublications) (err error) {
@@ -865,6 +917,11 @@ func doShowPublications(ctx context.Context, ses *Session, sp *tree.ShowPublicat
 			updateTime = pubInfo.UpdateTime
 		}
 
+		subAccountsStr := pubInfo.SubAccountsStr
+		if subAccountsStr == pubsub.AccountAll {
+			subAccountsStr = pubsub.AccountAllOutput
+		}
+
 		var subscribedAccountNames []string
 		subscribedInfos, err := getSubInfosFromPub(ctx, bh, tenantInfo.Tenant, pubInfo.PubName, true)
 		if err != nil {
@@ -879,7 +936,7 @@ func doShowPublications(ctx context.Context, ses *Session, sp *tree.ShowPublicat
 			pubInfo.PubName,
 			pubInfo.DbName,
 			pubInfo.TablesStr,
-			pubInfo.SubAccountsStr,
+			subAccountsStr,
 			strings.Join(subscribedAccountNames, pubsub.Sep),
 			pubInfo.CreateTime,
 			updateTime,
@@ -1033,6 +1090,10 @@ func showTablesFromDb(ctx context.Context, bh BackgroundExec, dbName string) (ta
 }
 
 func genPubTablesStr(ctx context.Context, bh BackgroundExec, dbName string, table tree.TableNames) (pubTablesStr string, err error) {
+	if len(table) == 1 && string(table[0].ObjectName) == pubsub.TableAll {
+		return pubsub.TableAll, nil
+	}
+
 	tablesInDb, err := showTablesFromDb(ctx, bh, dbName)
 	if err != nil {
 		return
@@ -1057,27 +1118,22 @@ func getSetAccounts(
 	setAccounts tree.IdentifierList,
 	accNameInfoMap map[string]*pubsub.AccountInfo,
 	tenantInfo *TenantInfo,
-) (map[int32]*pubsub.AccountInfo, string, error) {
+) (map[int32]*pubsub.AccountInfo, error) {
 	accountMap := make(map[int32]*pubsub.AccountInfo)
 	for _, acc := range setAccounts {
 		accName := string(acc)
 
 		if accName == tenantInfo.Tenant {
-			return nil, "", moerr.NewInternalError(ctx, "can't publish to self")
+			return nil, moerr.NewInternalError(ctx, "can't publish to self")
 		}
 
 		accInfo, ok := accNameInfoMap[accName]
 		if !ok {
-			return nil, "", moerr.NewInternalError(ctx, "not existed account name '%s'", accName)
+			return nil, moerr.NewInternalError(ctx, "not existed account name '%s'", accName)
 		}
 		accountMap[accInfo.Id] = accInfo
 	}
-
-	accountNames := make([]string, 0, len(accountMap))
-	for _, acc := range accountMap {
-		accountNames = append(accountNames, acc.Name)
-	}
-	return accountMap, strings.Join(accountNames, pubsub.Sep), nil
+	return accountMap, nil
 }
 
 func getAddAccounts(
@@ -1086,7 +1142,7 @@ func getAddAccounts(
 	oldSubAccounts map[int32]*pubsub.AccountInfo,
 	accNameInfoMap map[string]*pubsub.AccountInfo,
 	tenantInfo *TenantInfo,
-) (map[int32]*pubsub.AccountInfo, string, error) {
+) (map[int32]*pubsub.AccountInfo, error) {
 	accountMap := make(map[int32]*pubsub.AccountInfo)
 	for _, acc := range oldSubAccounts {
 		accountMap[acc.Id] = acc
@@ -1096,28 +1152,23 @@ func getAddAccounts(
 		accName := string(acc)
 
 		if accName == tenantInfo.Tenant {
-			return nil, "", moerr.NewInternalError(ctx, "can't publish to self")
+			return nil, moerr.NewInternalError(ctx, "can't publish to self")
 		}
 
 		accInfo, ok := accNameInfoMap[accName]
 		if !ok {
-			return nil, "", moerr.NewInternalError(ctx, "not existed account name '%s'", accName)
+			return nil, moerr.NewInternalError(ctx, "not existed account name '%s'", accName)
 		}
 		accountMap[accInfo.Id] = accInfo
 	}
-
-	accountNames := make([]string, 0, len(accountMap))
-	for _, acc := range accountMap {
-		accountNames = append(accountNames, acc.Name)
-	}
-	return accountMap, strings.Join(accountNames, pubsub.Sep), nil
+	return accountMap, nil
 }
 
 func getDropAccounts(
 	dropAccounts tree.IdentifierList,
 	oldSubAccounts map[int32]*pubsub.AccountInfo,
 	accNameInfoMap map[string]*pubsub.AccountInfo,
-) (map[int32]*pubsub.AccountInfo, string, error) {
+) (map[int32]*pubsub.AccountInfo, error) {
 	accountMap := make(map[int32]*pubsub.AccountInfo)
 	for _, acc := range oldSubAccounts {
 		accountMap[acc.Id] = acc
@@ -1129,12 +1180,7 @@ func getDropAccounts(
 			delete(accountMap, accInfo.Id)
 		}
 	}
-
-	accountNames := make([]string, 0, len(accountMap))
-	for _, acc := range accountMap {
-		accountNames = append(accountNames, acc.Name)
-	}
-	return accountMap, strings.Join(accountNames, pubsub.Sep), nil
+	return accountMap, nil
 }
 
 func getSqlForUpdatePubInfo(ctx context.Context, pubName string, accountList string, comment string, dbName string, dbId uint64, tablesStr string, checkNameValid bool) (string, error) {
@@ -1162,6 +1208,16 @@ func updateMoSubs(ctx context.Context, bh BackgroundExec, subInfo *pubsub.SubInf
 func deleteMoSubs(ctx context.Context, bh BackgroundExec, subInfo *pubsub.SubInfo) (err error) {
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	sql := fmt.Sprintf(deleteMoSubsFormat, subInfo.PubAccountName, subInfo.PubName, subInfo.SubAccountId)
+	return bh.Exec(ctx, sql)
+}
+
+func deleteMoSubsBySubAccountId(ctx context.Context, bh BackgroundExec) (err error) {
+	subAccountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+	sql := fmt.Sprintf(deleteMoSubsRecordsBySubAccountIdFormat, subAccountId)
 	return bh.Exec(ctx, sql)
 }
 
@@ -1277,19 +1333,17 @@ func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, p
 }
 
 func checkSubscriptionValid(ctx context.Context, ses FeSession, dbName string) (*plan.SubscriptionMeta, error) {
-	subAccountId, err := defines.GetAccountId(ctx)
-	if err != nil {
-		return nil, err
-	}
-
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
-	subInfo, err := getSubInfoFromSub(ctx, bh, int32(subAccountId), dbName)
+	subInfos, err := getSubInfosFromSub(ctx, bh, dbName)
 	if err != nil {
 		return nil, err
+	} else if len(subInfos) == 0 {
+		return nil, moerr.NewInternalError(ctx, "there is no subscription for database %s", dbName)
 	}
 
+	subInfo := subInfos[0]
 	return checkSubscriptionValidCommon(ctx, ses, subInfo.SubName, subInfo.PubAccountName, subInfo.PubName)
 }
 
@@ -1329,4 +1383,36 @@ func isDbPublishing(ctx context.Context, dbName string, ses FeSession) (ok bool,
 	}
 
 	return count > 0, err
+}
+
+func dropSubAccountNameInSubAccounts(ctx context.Context, bh BackgroundExec, pubAccountId int32, pubName, subAccountName string) (err error) {
+	ctx = defines.AttachAccountId(ctx, uint32(pubAccountId))
+
+	pubInfo, err := getPubInfo(ctx, bh, pubName)
+	if err != nil {
+		return err
+	} else if pubInfo == nil {
+		return
+	}
+
+	accountNames := pubInfo.GetSubAccountNames()
+	idx := slices.Index(accountNames, subAccountName)
+	// if not in accountNames, return
+	if idx == -1 {
+		return
+	}
+
+	var str string
+	str1 := strings.Join(accountNames[:idx], pubsub.Sep)
+	str2 := strings.Join(accountNames[idx+1:], pubsub.Sep)
+	if len(str1) == 0 {
+		str = str2
+	} else if len(str2) == 0 {
+		str = str1
+	} else {
+		str = str1 + pubsub.Sep + str2
+	}
+
+	sql := fmt.Sprintf(updatePubInfoAccountListFormat, str, pubName)
+	return bh.Exec(ctx, sql)
 }

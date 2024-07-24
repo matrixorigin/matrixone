@@ -8,22 +8,22 @@ insert into sub1.t1 values (1, 1), (2, 2), (3, 3);
 
 create publication pub1 database sub1;
 create publication pub3 database sub1;
--- @ignore:2,3
+-- @ignore:5,6
 show publications;
--- @ignore:2,3
+-- @ignore:5,6
 show publications like 'pub%';
--- @ignore:2,3
+-- @ignore:5,6
 show publications like '%1';
 
 create database sub2;
 create table sub2.t1 (a float);
 
 create publication pub2 database sub2 account a1;
--- @ignore:2,3
+-- @ignore:5,6
 show publications;
--- @ignore:2,3
+-- @ignore:5,6
 show publications like 'pub%';
--- @ignore:2,3
+-- @ignore:5,6
 show publications like '%1';
 
 -- @session:id=1&user=a1:admin1&password=test123
@@ -60,7 +60,7 @@ show subscriptions all;
 -- @session
 
 alter publication pub2 account all;
--- @ignore:2,3
+-- @ignore:5,6
 show publications;
 
 -- @session:id=2&user=a2:admin2&password=test456
@@ -70,7 +70,7 @@ show subscriptions all;
 
 -- alter db
 alter publication pub1 database sub2;
--- @ignore:2,3
+-- @ignore:5,6
 show publications;
 
 -- @session:id=1&user=a1:admin1&password=test123

@@ -2428,19 +2428,18 @@ insert into table03 values ('1', 'database');
 insert into table03 values ('a', 'data warehouse');
 create publication publication02 database database02 account acc_save;
 show publications;
-publication    database    create_time    update_time    sub_account    comments
-publication02    database02    2024-06-06 16:24:50    null    acc_save    
+internal error: unsupported mysql type 241
 create database sub_database02 from sys publication publication02;
 show subscriptions;
-pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
-publication02    sys    database02    2024-06-06 16:24:50    sub_database02    2024-06-06 16:24:50
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+publication02    sys    database02    *        2024-07-23 23:00:02    sub_database02    2024-07-23 23:00:06    0
 show subscriptions all;
-pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
-publication02    sys    database02    2024-06-06 16:24:50    sub_database02    2024-06-06 16:24:50
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+publication02    sys    database02    *        2024-07-23 23:00:02    sub_database02    2024-07-23 23:00:06    0
 show subscriptions;
-pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
+internal error: unsupported mysql type 241
 show subscriptions all;
-pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
+internal error: unsupported mysql type 241
 drop publication publication02;
 drop database if exists database02;
 drop account acc_save;

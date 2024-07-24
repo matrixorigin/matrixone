@@ -20,11 +20,11 @@ insert into t1 values (1.0), (1.1), (2.0);
 ########### create -> sub -> alter -> drop -> recreate ###########
 # create publication
 create publication pub1 database db1 account acc1,acc2;
--- @ignore:2,3
+-- @ignore:5,6
 show publications;
--- @ignore:2,3
+-- @ignore:5,6
 show publications like 'pub%';
--- @ignore:2,3
+-- @ignore:5,6
 show publications like '%1';
 show create publication pub1;
 

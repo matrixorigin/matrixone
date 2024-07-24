@@ -5348,13 +5348,17 @@ func (node *CreatePublication) Format(ctx *FmtCtx) {
 			node.Table.Format(ctx)
 		}
 	}
-	if node.AccountsSet != nil && len(node.AccountsSet.SetAccounts) > 0 {
+	if node.AccountsSet != nil {
 		ctx.WriteString(" account ")
-		prefix := ""
-		for _, a := range node.AccountsSet.SetAccounts {
-			ctx.WriteString(prefix)
-			a.Format(ctx)
-			prefix = ", "
+		if node.AccountsSet.All {
+			ctx.WriteString("all")
+		} else if len(node.AccountsSet.SetAccounts) > 0 {
+			prefix := ""
+			for _, a := range node.AccountsSet.SetAccounts {
+				ctx.WriteString(prefix)
+				a.Format(ctx)
+				prefix = ", "
+			}
 		}
 	}
 	if len(node.Comment) > 0 {

@@ -1,15 +1,15 @@
 set enable_privilege_cache = off;
-create publication pub1 database t;
+create publication pub1 database t account all;
 create account acc0 admin_name 'root' identified by '111';
 create account acc1 admin_name 'root' identified by '111';
 create account acc2 admin_name 'root' identified by '111';
 create database t;
-create publication pub1 database t;
+create publication pub1 database t account all;
 create publication pub2 database t account all;
 create publication pub3 database t account acc0,acc1;
 create publication pub4 database t account acc0,acc1,accx;
 create publication pub5 database t account accx comment 'test';
--- @ignore:2,3
+-- @ignore:5,6
 show publications;
 show create publication pub1;
 show create publication pub2;
@@ -25,7 +25,7 @@ show create publication pub4;
 alter publication pub5 account all comment '1212';
 show create publication pub5;
 drop publication pub1;
--- @ignore:2,3
+-- @ignore:5,6
 show publications;
 create publication pub1 database t;
 create publication pub1 database t;
@@ -53,7 +53,7 @@ create table sys_tbl_1(a int primary key );
 insert into sys_tbl_1 values(1),(2),(3);
 create view v1 as (select * from sys_tbl_1);
 create publication sys_pub_1 database sys_db_1;
--- @ignore:2,3
+-- @ignore:5,6
 show publications;
 
 select pub_name, database_name, account_list from mo_catalog.mo_pubs;

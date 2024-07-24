@@ -5,9 +5,10 @@ import (
 )
 
 const (
-	AccountAll = "all"
-	TableAll   = "*"
-	Sep        = ","
+	AccountAll       = "all"
+	AccountAllOutput = "*"
+	TableAll         = "*"
+	Sep              = ","
 )
 
 type SubStatus int
@@ -19,8 +20,11 @@ const (
 )
 
 type AccountInfo struct {
-	Id   int32
-	Name string
+	Id            int32
+	Name          string
+	Status        string
+	Version       uint64
+	SuspendedTime string
 }
 
 type PubInfo struct {
@@ -35,10 +39,7 @@ type PubInfo struct {
 }
 
 func (pubInfo *PubInfo) GetSubAccountNames() (names []string) {
-	for _, name := range strings.Split(pubInfo.SubAccountsStr, Sep) {
-		names = append(names, name)
-	}
-	return names
+	return SplitAccounts(pubInfo.SubAccountsStr)
 }
 
 func (pubInfo *PubInfo) InSubAccounts(accountName string) bool {

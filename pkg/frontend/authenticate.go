@@ -30,6 +30,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/tidwall/btree"
 	"golang.org/x/sync/errgroup"
 
@@ -3588,7 +3589,6 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 	var deleteCtx context.Context
 	var accountId int64
 	var version uint64
-	var hasAccount = true
 	clusterTables := make(map[string]int)
 
 	da.Name, err = normalizeName(ctx, da.Name)
@@ -3609,43 +3609,21 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 			return rtnErr
 		}
 
+		_, nameInfoMap, rtnErr := getAccounts(ctx, bh)
+		if rtnErr != nil {
+			return rtnErr
+		}
+
 		//check the account exists or not
-		sql, rtnErr = getSqlForCheckTenant(ctx, da.Name)
-		if rtnErr != nil {
-			return rtnErr
-		}
-		bh.ClearExecResultSet()
-		rtnErr = bh.Exec(ctx, sql)
-		if rtnErr != nil {
-			return rtnErr
-		}
-
-		erArray, rtnErr = getResultSet(ctx, bh)
-		if rtnErr != nil {
-			return rtnErr
-		}
-
-		if execResultArrayHasData(erArray) {
-			accountId, rtnErr = erArray[0].GetInt64(ctx, 0, 0)
-			if rtnErr != nil {
-				return rtnErr
-			}
-			version, rtnErr = erArray[0].GetUint64(ctx, 0, 3)
-			if rtnErr != nil {
-				return rtnErr
-			}
-		} else {
+		if _, ok := nameInfoMap[da.Name]; !ok {
 			//no such account
 			if !da.IfExists { //when the "IF EXISTS" is set, just skip it.
 				rtnErr = moerr.NewInternalError(ctx, "there is no account %s", da.Name)
-				return
 			}
-			hasAccount = false
+			return
 		}
-
-		if !hasAccount {
-			return rtnErr
-		}
+		accountId = int64(nameInfoMap[da.Name].Id)
+		version = nameInfoMap[da.Name].Version
 
 		//drop tables of the tenant
 		//NOTE!!!: single DDL drop statement per single transaction
@@ -3722,6 +3700,27 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 			if rtnErr != nil {
 				return rtnErr
 			}
+		}
+
+		// alter sub_account field in mo_pubs which contains accountName
+		subInfos, rtnErr := getSubInfosFromSub(deleteCtx, bh, "")
+		if rtnErr != nil {
+			return rtnErr
+		}
+		for _, subInfo := range subInfos {
+			pubAccInfo, ok := nameInfoMap[subInfo.PubAccountName]
+			if !ok {
+				continue
+			}
+
+			if rtnErr = dropSubAccountNameInSubAccounts(deleteCtx, bh, pubAccInfo.Id, subInfo.PubName, da.Name); rtnErr != nil {
+				return rtnErr
+			}
+		}
+
+		// delete records in mo_subs
+		if rtnErr = deleteMoSubsBySubAccountId(deleteCtx, bh); rtnErr != nil {
+			return rtnErr
 		}
 
 		// drop table mo_mysql_compatibility_mode
@@ -7264,16 +7263,15 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *createAccount) (er
 		return rtnErr
 	}
 
-	err = createNewAccount()
-	if err != nil {
+	if err = createNewAccount(); err != nil {
 		return err
 	}
 
 	if !exists {
-		//just skip nonexistent pubs
-		_ = createSubscriptionDatabase(ctx, bh, newTenant, ses)
+		if err = createSubscription(ctx, bh, newTenant); err != nil {
+			return err
+		}
 	}
-
 	return err
 }
 
@@ -7536,47 +7534,54 @@ func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh Back
 	return err
 }
 
-// create subscription database
-func createSubscriptionDatabase(ctx context.Context, bh BackgroundExec, newTenant *TenantInfo, ses *Session) error {
-	// TODO implement this function (#8946) by other ways
-	return nil
-	//ctx, span := trace.Debug(ctx, "createSubscriptionDatabase")
-	//defer span.End()
-	//
-	//subscriptions := make([]string, 0)
-	////process the syspublications
-	//sysPubsVar, err := ses.GetSessionSysVar("syspublications")
-	//if err != nil {
-	//	return err
-	//}
-	//
-	//if sysPublications, ok := sysPubsVar.(string); ok {
-	//	if len(sysPublications) == 0 {
-	//		return err
-	//	}
-	//	subscriptions = strings.Split(sysPublications, ",")
-	//}
-	//// if no subscriptions, return
-	//if len(subscriptions) == 0 {
-	//	return err
-	//}
-	//
-	////with new tenant
-	//ctx = defines.AttachAccount(ctx, uint32(newTenant.GetTenantID()), uint32(newTenant.GetUserID()), uint32(newTenant.GetDefaultRoleID()))
-	//
-	//createSubscriptionFormat := `create database %s from sys publication %s;`
-	//sqls := make([]string, 0, len(subscriptions))
-	//for _, subscription := range subscriptions {
-	//	sqls = append(sqls, fmt.Sprintf(createSubscriptionFormat, subscription, subscription))
-	//}
-	//for _, sql := range sqls {
-	//	bh.ClearExecResultSet()
-	//	err = bh.Exec(ctx, sql)
-	//	if err != nil {
-	//		return err
-	//	}
-	//}
-	//return err
+// createSubscription insert records into mo_subs of To-All-Publications
+func createSubscription(ctx context.Context, bh BackgroundExec, newTenant *TenantInfo) (err error) {
+	// get all accounts
+	accIdInfoMap, accNameInfoMap, err := getAccounts(ctx, bh)
+	if err != nil {
+		return
+	}
+
+	// insert mo_subs records for new account
+	handleForAccount := func(accountId int32) (err error) {
+		newCtx := defines.AttachAccountId(ctx, uint32(accountId))
+		pubInfos, err := getPubInfosToAllAccounts(newCtx, bh)
+		if err != nil {
+			return err
+		}
+
+		for _, pubInfo := range pubInfos {
+			subInfo := &pubsub.SubInfo{
+				SubAccountId:   int32(newTenant.TenantID),
+				PubAccountName: accIdInfoMap[accountId].Name,
+				PubName:        pubInfo.PubName,
+				PubDbName:      pubInfo.DbName,
+				PubTables:      pubInfo.TablesStr,
+				PubComment:     pubInfo.Comment,
+				Status:         pubsub.SubStatusNormal,
+			}
+			if err = insertMoSubs(newCtx, bh, subInfo); err != nil {
+				return
+			}
+		}
+		return
+	}
+
+	if err = handleForAccount(int32(catalog.System_Account)); err != nil {
+		return err
+	}
+	pubAllAccounts := pubsub.SplitAccounts(getGlobalPu().SV.PubAllAccounts)
+	for _, accountName := range pubAllAccounts {
+		accountInfo, ok := accNameInfoMap[accountName]
+		if !ok {
+			continue
+		}
+
+		if err = handleForAccount(accountInfo.Id); err != nil {
+			return err
+		}
+	}
+	return
 }
 
 type createUser struct {

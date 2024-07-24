@@ -241,6 +241,7 @@ mo_sessions
 mo_snapshots
 mo_stages
 mo_stored_procedure
+mo_subs
 mo_table_partitions
 mo_tables
 mo_transactions
@@ -253,7 +254,7 @@ mo_variables
 mo_version
 show table_number from mo_catalog;
 Number of tables in mo_catalog
-27
+28
 show column_number from mo_database;
 Number of columns in mo_database
 9

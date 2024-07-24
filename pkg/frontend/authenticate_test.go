@@ -18,15 +18,17 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/BurntSushi/toml"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/stretchr/testify/assert"
 	"go/constant"
 	"net"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/BurntSushi/toml"
+	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/stretchr/testify/assert"
 
 	"github.com/golang/mock/gomock"
 	"github.com/prashantv/gostub"
@@ -8737,7 +8739,7 @@ func TestDoAlterPublication(t *testing.T) {
 		sql3, err := getSqlForGetDbIdAndType(ctx, kase.dbName, true, 0)
 		require.NoError(t, err)
 
-		sql2, err := getSqlForUpdatePubInfo(ctx, string(sa.Name), kase.accountList, sa.Comment, kase.dbName, kase.dbId, true)
+		sql2, err := getSqlForUpdatePubInfo(ctx, string(sa.Name), kase.accountList, sa.Comment, kase.dbName, kase.dbId, pubsub.TableAll, true)
 		require.NoError(t, err)
 
 		bh := &backgroundExecTest{}

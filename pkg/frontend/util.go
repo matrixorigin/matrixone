@@ -20,7 +20,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"math/rand"
 	"os"
 	"runtime"
@@ -29,6 +28,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 
 	"github.com/BurntSushi/toml"
 	"github.com/google/uuid"
@@ -789,8 +790,23 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 					vData[rowIdx] = fmt.Sprintf("%v", row[colIdx])
 				}
 			}
-			err := vector.AppendStringList(bat.Vecs[colIdx], vData, nil, pool)
-			if err != nil {
+			if err = vector.AppendStringList(bat.Vecs[colIdx], vData, nil, pool); err != nil {
+				return nil, nil, err
+			}
+		case types.T_text:
+			vData := make([][]byte, cnt)
+			for rowIdx, row := range rows {
+				if row[colIdx] == nil {
+					nsp.Add(uint64(rowIdx))
+					continue
+				}
+				if val, ok := row[colIdx].([]byte); ok {
+					vData[rowIdx] = val
+				} else {
+					vData[rowIdx] = ([]byte)(fmt.Sprintf("%v", row[colIdx]))
+				}
+			}
+			if err = vector.AppendBytesList(bat.Vecs[colIdx], vData, nil, pool); err != nil {
 				return nil, nil, err
 			}
 		case types.T_int16:
@@ -970,6 +986,11 @@ func mysqlColDef2PlanResultColDef(cols []Column) (*plan.ResultColDef, []types.Ty
 				Id: int32(types.T_varchar),
 			}
 			tType = types.New(types.T_varchar, types.MaxVarcharLen, 0)
+		case defines.MYSQL_TYPE_TEXT:
+			pType = plan.Type{
+				Id: int32(types.T_text),
+			}
+			tType = types.New(types.T_text, types.MaxVarcharLen, 0)
 		case defines.MYSQL_TYPE_SHORT:
 			pType = plan.Type{
 				Id: int32(types.T_int16),

@@ -110,6 +110,7 @@ var (
 		"mo_mysql_compatibility_mode": 0,
 		"mo_stages":                   0,
 		"mo_pubs":                     1,
+		"mo_subs":                     1,
 
 		"mo_sessions":       1,
 		"mo_configurations": 1,
