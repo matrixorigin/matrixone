@@ -1029,9 +1029,31 @@ func Chunk(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 			continue
 		}
 
-		input := string(inputBytes)
-		chunkType := string(chunkTypeBytes)
+		Filepath := string(inputBytes)
 
+		fs := proc.GetFileService()
+		r, err := ReadFromFile(Filepath, fs)
+		if err != nil {
+			return err
+		}
+		defer r.Close()
+		ctx, err := io.ReadAll(r)
+		if err != nil {
+			return err
+		}
+		if len(ctx) > 65536 /*blob size*/ {
+			return moerr.NewInternalError(proc.Ctx, "Data too long for blob")
+		}
+		if len(ctx) == 0 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			return nil
+		}
+
+		input := string(ctx)
+
+		chunkType := string(chunkTypeBytes)
 		resultStr := ChunkString(input, chunkType)
 		if err := rs.AppendMustBytesValue([]byte(resultStr)); err != nil {
 			return err
