@@ -885,3 +885,12 @@ func (builder *QueryBuilder) optimizeFilters(rootID int32) int32 {
 	rewriteFilterListByStats(builder.GetContext(), rootID, builder)
 	return rootID
 }
+
+// plan for dml  don't go optimizer, which cause some problem, and this need refactoring
+// this is a temp solution to work around some bugs
+func (builder *QueryBuilder) tempOptimizeForDML() {
+	for _, rootID := range builder.qry.Steps {
+		ReCalcNodeStats(rootID, builder, true, false, true)
+		builder.handleHashMapMessages(rootID)
+	}
+}

@@ -44,8 +44,6 @@ type container struct {
 
 	state int
 
-	inBuckets []uint8
-
 	batches       []*batch.Batch
 	batchRowCount int
 	rbat          *batch.Batch
@@ -75,7 +73,7 @@ type SingleJoin struct {
 
 	HashOnPK           bool
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
-
+	JoinMapTag         int32
 	vm.OperatorBase
 }
 
