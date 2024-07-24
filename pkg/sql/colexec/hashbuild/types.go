@@ -32,8 +32,7 @@ var _ vm.Operator = new(HashBuild)
 const (
 	BuildHashMap = iota
 	HandleRuntimeFilter
-	SendHashMap
-	SendBatch
+	SendJoinMap
 	End
 )
 
@@ -43,7 +42,6 @@ type container struct {
 	runtimeFilterIn    bool
 	multiSels          [][]int32
 	batches            []*batch.Batch
-	batchIdx           int
 	inputBatchRowCount int
 	tmpBatch           *batch.Batch
 
@@ -112,17 +110,13 @@ func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err
 	proc.FinalizeRuntimeFilter(hashBuild.RuntimeFilterSpec, pipelineFailed, err)
 	proc.FinalizeJoinMapMessage(hashBuild.JoinMapTag, false, 0, pipelineFailed, err)
 	if ctr != nil {
-		ctr.cleanBatches(proc)
+		ctr.batches = nil
+		ctr.intHashMap = nil
+		ctr.strHashMap = nil
+		ctr.multiSels = nil
 		ctr.cleanEvalVectors()
 		hashBuild.ctr = nil
 	}
-}
-
-func (ctr *container) cleanBatches(proc *process.Process) {
-	for i := range ctr.batches {
-		proc.PutBatch(ctr.batches[i])
-	}
-	ctr.batches = nil
 }
 
 func (ctr *container) cleanEvalVectors() {

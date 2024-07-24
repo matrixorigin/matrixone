@@ -98,7 +98,7 @@ func newMerger[T any](host MergeTaskHost, lessFunc sort.LessFunc[T], sortKeyPos 
 		totalBlkCnt += cnt
 	}
 	if host.DoTransfer() {
-		initTransferMapping(host.GetCommitEntry(), totalBlkCnt)
+		host.InitTransferMaps(totalBlkCnt)
 	}
 
 	return m
@@ -134,7 +134,7 @@ func (m *merger[T]) merge(ctx context.Context) error {
 	}
 	defer releaseF()
 
-	commitEntry := m.host.GetCommitEntry()
+	transferMaps := m.host.GetTransferMaps()
 	for m.heap.Len() != 0 {
 		select {
 		case <-ctx.Done():
@@ -158,7 +158,7 @@ func (m *merger[T]) merge(ctx context.Context) error {
 		}
 
 		if m.host.DoTransfer() {
-			commitEntry.Booking.Mappings[m.accObjBlkCnts[objIdx]+m.loadedObjBlkCnts[objIdx]-1].M[int32(rowIdx)] = api.TransDestPos{
+			(*transferMaps)[m.accObjBlkCnts[objIdx]+m.loadedObjBlkCnts[objIdx]-1][int32(rowIdx)] = api.TransferDestPos{
 				ObjIdx: int32(m.stats.objCnt),
 				BlkIdx: int32(uint32(m.stats.objBlkCnt)),
 				RowIdx: int32(m.stats.blkRowCnt),

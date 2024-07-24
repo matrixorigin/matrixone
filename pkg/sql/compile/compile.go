@@ -1668,6 +1668,19 @@ func calculatePartitions(start, end, n int64) [][2]int64 {
 	return ps
 }
 
+func StrictSqlMode(proc *process.Process) (error, bool) {
+	mode, err := proc.GetResolveVariableFunc()("sql_mode", true, false)
+	if err != nil {
+		return err, false
+	}
+	if modeStr, ok := mode.(string); ok {
+		if strings.Contains(modeStr, "STRICT_TRANS_TABLES") || strings.Contains(modeStr, "STRICT_ALL_TABLES") {
+			return nil, true
+		}
+	}
+	return nil, false
+}
+
 func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 	if c.isPrepare {
 		return nil, cantCompileForPrepareErr
@@ -1723,6 +1736,11 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 		param.JsonData = n.ExternScan.JsonType
 	}
 
+	err, strictSqlMode := StrictSqlMode(c.proc)
+	if err != nil {
+		return nil, err
+	}
+
 	if param.ScanType == tree.S3 {
 		if !param.Init {
 			if err := plan2.InitS3Param(param); err != nil {
@@ -1743,7 +1761,7 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 			}
 		}
 	} else if param.ScanType == tree.INLINE {
-		return c.compileExternValueScan(n, param)
+		return c.compileExternValueScan(n, param, strictSqlMode)
 	} else {
 		if err := plan2.InitInfileParam(param); err != nil {
 			return nil, err
@@ -1753,7 +1771,6 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 	t = time.Now()
 	param.FileService = c.proc.Base.FileService
 	param.Ctx = c.proc.Ctx
-	var err error
 	var fileList []string
 	var fileSize []int64
 	if !param.Local && !param.Init {
@@ -1801,7 +1818,7 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 		return []*Scope{ret}, nil
 	}
 	if param.Parallel && (external.GetCompressType(param, fileList[0]) != tree.NOCOMPRESS || param.Local) {
-		return c.compileExternScanParallel(n, param, fileList, fileSize)
+		return c.compileExternScanParallel(n, param, fileList, fileSize, strictSqlMode)
 	}
 
 	t = time.Now()
@@ -1874,7 +1891,7 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 				fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, []int64{0, -1}...)
 			}
 		}
-		op := constructExternal(n, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp)
+		op := constructExternal(n, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp, strictSqlMode)
 		op.SetIdx(c.anal.curNodeIdx)
 		op.SetIsFirst(currentFirstFlag)
 		ss[i].setRootOperator(op)
@@ -1899,7 +1916,7 @@ func (c *Compile) getParallelSizeForExternalScan(n *plan.Node, cpuNum int) int {
 	return cpuNum
 }
 
-func (c *Compile) compileExternValueScan(n *plan.Node, param *tree.ExternParam) ([]*Scope, error) {
+func (c *Compile) compileExternValueScan(n *plan.Node, param *tree.ExternParam, strictSqlMode bool) ([]*Scope, error) {
 	parallelSize := c.getParallelSizeForExternalScan(n, ncpu)
 	ss := make([]*Scope, parallelSize)
 	for i := 0; i < parallelSize; i++ {
@@ -1908,7 +1925,7 @@ func (c *Compile) compileExternValueScan(n *plan.Node, param *tree.ExternParam) 
 
 	s := c.constructScopeForExternal(c.addr, false)
 	currentFirstFlag := c.anal.isFirst
-	op := constructExternal(n, param, c.proc.Ctx, nil, nil, nil)
+	op := constructExternal(n, param, c.proc.Ctx, nil, nil, nil, strictSqlMode)
 	op.SetIdx(c.anal.curNodeIdx)
 	op.SetIsFirst(currentFirstFlag)
 	s.setRootOperator(op)
@@ -1924,7 +1941,7 @@ func (c *Compile) compileExternValueScan(n *plan.Node, param *tree.ExternParam) 
 }
 
 // construct one thread to read the file data, then dispatch to mcpu thread to get the filedata for insert
-func (c *Compile) compileExternScanParallel(n *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64) ([]*Scope, error) {
+func (c *Compile) compileExternScanParallel(n *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
 	param.Parallel = false
 	mcpu := c.cnList[0].Mcpu
 	ss := make([]*Scope, mcpu)
@@ -1939,9 +1956,8 @@ func (c *Compile) compileExternScanParallel(n *plan.Node, param *tree.ExternPara
 	}
 
 	scope := c.constructScopeForExternal("", false)
-
 	currentFirstFlag := c.anal.isFirst
-	extern := constructExternal(n, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp)
+	extern := constructExternal(n, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp, strictSqlMode)
 	extern.Es.ParallelLoad = true
 	extern.SetIdx(c.anal.curNodeIdx)
 	extern.SetIsFirst(currentFirstFlag)
