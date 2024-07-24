@@ -197,7 +197,7 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isF
 				if n > hashmap.UnitLimit {
 					n = hashmap.UnitLimit
 				}
-				
+
 				copy(ctr.inserted[:n], ctr.resetInserted[:n])
 				cnt = 0
 
