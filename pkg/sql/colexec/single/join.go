@@ -40,7 +40,6 @@ func (singleJoin *SingleJoin) OpType() vm.OpType {
 func (singleJoin *SingleJoin) Prepare(proc *process.Process) (err error) {
 	singleJoin.ctr = new(container)
 	singleJoin.ctr.InitReceiver(proc, false)
-	singleJoin.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
 	singleJoin.ctr.vecs = make([]*vector.Vector, len(singleJoin.Conditions[0]))
 
 	singleJoin.ctr.evecs = make([]evalVector, len(singleJoin.Conditions[0]))
@@ -206,12 +205,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *SingleJoin, proc *process.Proc
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
-		copy(ctr.inBuckets, hashmap.OneUInt8s)
-		vals, zvals := itr.Find(i, n, ctr.vecs, ctr.inBuckets)
+		vals, zvals := itr.Find(i, n, ctr.vecs)
 		for k := 0; k < n; k++ {
-			if ctr.inBuckets[k] == 0 {
-				continue
-			}
 			if zvals[k] == 0 || vals[k] == 0 {
 				for j, rp := range ap.Result {
 					if rp.Rel != 0 {
