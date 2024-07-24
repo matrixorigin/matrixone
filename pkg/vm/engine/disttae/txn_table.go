@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	commonUtil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -2575,9 +2576,8 @@ func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.Objec
 		}
 		var locStr strings.Builder
 		locations := taskHost.commitEntry.BookingLoc
-		for idx := 0; idx < len(locations); idx += objectio.LocationLen {
-			loc := objectio.Location(locations[idx : idx+objectio.LocationLen])
-			locStr.WriteString(loc.String())
+		for _, filepath := range locations {
+			locStr.WriteString(filepath)
 			locStr.WriteString(",")
 		}
 		logutil.Infof("mergeblocks %v-%v on cn: write s3 transfer info %v",
@@ -2591,11 +2591,9 @@ func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.Objec
 func dumpTransferInfo(ctx context.Context, taskHost *cnMergeTask) (err error) {
 	defer func() {
 		if err != nil {
-			idx := 0
 			locations := taskHost.commitEntry.BookingLoc
-			for ; idx < len(locations); idx += objectio.LocationLen {
-				loc := objectio.Location(locations[idx : idx+objectio.LocationLen])
-				taskHost.fs.Delete(ctx, loc.Name().String())
+			for _, filepath := range locations {
+				_ = taskHost.fs.Delete(ctx, filepath)
 			}
 		}
 	}()
@@ -2603,10 +2601,14 @@ func dumpTransferInfo(ctx context.Context, taskHost *cnMergeTask) (err error) {
 	blkCnt := int32(len(bookingMaps))
 	totalRows := 0
 
-	taskHost.commitEntry.BookingLoc = append(taskHost.commitEntry.BookingLoc, types.EncodeInt32(&blkCnt)...)
+	// BookingLoc layout:
+	// | blockCnt | Blk1RowCnt | Blk2RowCnt | ... | filepath1 | filepath2 | ... |
+	taskHost.commitEntry.BookingLoc = append(taskHost.commitEntry.BookingLoc,
+		commonUtil.UnsafeBytesToString(types.EncodeInt32(&blkCnt)))
 	for _, m := range bookingMaps {
 		rowCnt := int32(len(m))
-		taskHost.commitEntry.BookingLoc = append(taskHost.commitEntry.BookingLoc, types.EncodeInt32(&rowCnt)...)
+		taskHost.commitEntry.BookingLoc = append(taskHost.commitEntry.BookingLoc,
+			commonUtil.UnsafeBytesToString(types.EncodeInt32(&rowCnt)))
 		totalRows += len(m)
 	}
 
@@ -2639,24 +2641,23 @@ func dumpTransferInfo(ctx context.Context, taskHost *cnMergeTask) (err error) {
 			objRowCnt++
 
 			if objRowCnt*len(columns)*int(unsafe.Sizeof(int32(0))) > 200*mpool.MB {
-				objectName := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
-				writer, err := blockio.NewBlockWriterNew(taskHost.fs, objectName, 0, nil)
+				filename := blockio.EncodeTmpFileName("tmp", "merge", time.Now().UTC().Unix())
+				writer, err := objectio.NewObjectWriterSpecial(objectio.WriterTmp, filename, taskHost.fs)
 				if err != nil {
 					return err
 				}
 
-				_, err = writer.WriteTombstoneBatch(buffer)
+				_, err = writer.Write(buffer)
 				if err != nil {
 					return err
 				}
 				buffer.CleanOnlyData()
 
-				location, err := syncBooking(ctx, writer, uint32(objRowCnt))
+				_, err = writer.WriteEnd(ctx)
 				if err != nil {
 					return err
 				}
-				taskHost.commitEntry.BookingLoc = append(taskHost.commitEntry.BookingLoc, location...)
-
+				taskHost.commitEntry.BookingLoc = append(taskHost.commitEntry.BookingLoc, filename)
 				objRowCnt = 0
 			}
 		}
@@ -2664,40 +2665,27 @@ func dumpTransferInfo(ctx context.Context, taskHost *cnMergeTask) (err error) {
 
 	// write remaining data
 	if buffer.RowCount() != 0 {
-		objectName := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
-		writer, err := blockio.NewBlockWriterNew(taskHost.fs, objectName, 0, nil)
+		filename := blockio.EncodeTmpFileName("tmp", "merge", time.Now().UTC().Unix())
+		writer, err := objectio.NewObjectWriterSpecial(objectio.WriterTmp, filename, taskHost.fs)
 		if err != nil {
 			return err
 		}
 
-		_, err = writer.WriteTombstoneBatch(buffer)
+		_, err = writer.Write(buffer)
 		if err != nil {
 			return err
 		}
 		buffer.CleanOnlyData()
 
-		location, err := syncBooking(ctx, writer, uint32(objRowCnt))
+		_, err = writer.WriteEnd(ctx)
 		if err != nil {
 			return err
 		}
-		taskHost.commitEntry.BookingLoc = append(taskHost.commitEntry.BookingLoc, location...)
+		taskHost.commitEntry.BookingLoc = append(taskHost.commitEntry.BookingLoc, filename)
 	}
 
 	taskHost.commitEntry.Booking = nil
 	return
-}
-
-func syncBooking(ctx context.Context, writer *blockio.BlockWriter, objRowCnt uint32) (objectio.Location, error) {
-	blocks, _, err := writer.Sync(ctx)
-	if err != nil {
-		return nil, err
-	}
-	location := blockio.EncodeLocation(
-		writer.GetName(),
-		blocks[0].GetExtent(),
-		objRowCnt,
-		blocks[0].GetID())
-	return location, nil
 }
 
 func applyMergePolicy(ctx context.Context, policyName string, sortKeyPos int, objInfos []logtailreplay.ObjectInfo) ([]logtailreplay.ObjectInfo, error) {

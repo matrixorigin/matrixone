@@ -25,7 +25,7 @@ import (
 	"github.com/google/shlex"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -398,44 +398,46 @@ func (h *Handle) HandleCommitMerge(
 			logutil.Error("mergeblocks err booking loc is not empty, but booking is not nil")
 		}
 
-		blkCnt := types.DecodeInt32(req.BookingLoc)
+		blkCnt := types.DecodeInt32(util.UnsafeStringToBytes(req.BookingLoc[0]))
 		rowsCnt := make([]int32, blkCnt)
 		idx := 1
 		for i := range blkCnt {
-			rowsCnt[i] = types.DecodeInt32(req.BookingLoc[idx*4:])
+			rowsCnt[i] = types.DecodeInt32(util.UnsafeStringToBytes(req.BookingLoc[idx]))
 			idx++
 		}
 		booking = make(api.TransferMaps, blkCnt)
 		for i := range blkCnt {
 			booking[i] = make(api.TransferMap, rowsCnt[i])
 		}
-
-		locations := req.BookingLoc[idx*4:]
-		for p := 0; p < len(locations); p += objectio.LocationLen {
-			loc := objectio.Location(locations[p : p+objectio.LocationLen])
-			var bat *batch.Batch
-			var release func()
-			bat, release, err = blockio.LoadTombstoneColumns(ctx, []uint16{0, 1, 2, 3, 4}, nil, h.db.Runtime.Fs.Service, loc, nil)
+		locations := req.BookingLoc[idx:]
+		for _, filepath := range locations {
+			reader, err := blockio.NewFileReader(h.db.Runtime.Fs.Service, filepath)
+			if err != nil {
+				return
+			}
+			bats, releases, err := reader.LoadAllColumns(ctx, nil, nil)
 			if err != nil {
 				return
 			}
 
-			for i := range bat.RowCount() {
-				srcBlk := vector.GetFixedAt[int32](bat.Vecs[0], i)
-				srcRow := vector.GetFixedAt[int32](bat.Vecs[1], i)
-				destObj := vector.GetFixedAt[int32](bat.Vecs[2], i)
-				destBlk := vector.GetFixedAt[int32](bat.Vecs[3], i)
-				destRow := vector.GetFixedAt[int32](bat.Vecs[4], i)
+			for _, bat := range bats {
+				for i := range bat.RowCount() {
+					srcBlk := vector.GetFixedAt[int32](bat.Vecs[0], i)
+					srcRow := vector.GetFixedAt[int32](bat.Vecs[1], i)
+					destObj := vector.GetFixedAt[int32](bat.Vecs[2], i)
+					destBlk := vector.GetFixedAt[int32](bat.Vecs[3], i)
+					destRow := vector.GetFixedAt[int32](bat.Vecs[4], i)
 
-				booking[srcBlk][srcRow] = api.TransferDestPos{
-					ObjIdx: destObj,
-					BlkIdx: destBlk,
-					RowIdx: destRow,
+					booking[srcBlk][srcRow] = api.TransferDestPos{
+						ObjIdx: destObj,
+						BlkIdx: destBlk,
+						RowIdx: destRow,
+					}
 				}
 			}
-			release()
-			h.db.Runtime.Fs.Service.Delete(ctx, loc.Name().String())
-			bat = nil
+			releases()
+			_ = h.db.Runtime.Fs.Service.Delete(ctx, filepath)
+			bats = nil
 		}
 	} else if req.Booking != nil {
 		booking = make(api.TransferMaps, len(req.Booking.Mappings))
