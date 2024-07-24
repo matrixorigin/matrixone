@@ -289,6 +289,8 @@ END0:
 }
 
 func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
+	sid := builder.compCtx.GetProcess().GetService()
+
 	if len(node.FilterList) == 0 || len(node.TableDef.Indexes) == 0 {
 		return nodeID
 	}
@@ -582,7 +584,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	}
 
 END0:
-	if node.Stats.Selectivity > InFilterSelectivityLimit || node.Stats.Outcnt > float64(GetInFilterCardLimitOnPK(node.Stats.TableCnt)) {
+	if node.Stats.Selectivity > InFilterSelectivityLimit || node.Stats.Outcnt > float64(GetInFilterCardLimitOnPK(sid, node.Stats.TableCnt)) {
 		return nodeID
 	}
 
@@ -653,7 +655,7 @@ END0:
 			filterIdx = append(filterIdx, idx)
 
 			filter := node.FilterList[idx]
-			if filter.Selectivity <= InFilterSelectivityLimit && node.Stats.TableCnt*filter.Selectivity <= float64(GetInFilterCardLimitOnPK(node.Stats.TableCnt)) {
+			if filter.Selectivity <= InFilterSelectivityLimit && node.Stats.TableCnt*filter.Selectivity <= float64(GetInFilterCardLimitOnPK(sid, node.Stats.TableCnt)) {
 				usePartialIndex = true
 			}
 		}
@@ -708,19 +710,17 @@ END0:
 			idxFilter.Selectivity = compositeFilterSel
 		}
 
-		idxTableNodeID := builder.appendNode(&plan.Node{
+		idxTableNode := &plan.Node{
 			NodeType:     plan.Node_TABLE_SCAN,
 			TableDef:     idxTableDef,
 			ObjRef:       idxObjRef,
 			ParentObjRef: DeepCopyObjectRef(node.ObjRef),
 			FilterList:   []*plan.Expr{idxFilter},
-			Limit:        node.Limit,
-			Offset:       node.Offset,
 			BindingTags:  []int32{idxTag},
 			ScanSnapshot: node.ScanSnapshot,
-		}, builder.ctxByNode[nodeID])
+		}
 
-		node.Limit, node.Offset = nil, nil
+		idxTableNodeID := builder.appendNode(idxTableNode, builder.ctxByNode[nodeID])
 
 		pkIdx := node.TableDef.Name2ColIndex[node.TableDef.Pkey.PkeyColName]
 		pkExpr := &plan.Expr{
@@ -745,12 +745,21 @@ END0:
 				},
 			},
 		})
-		joinNodeID := builder.appendNode(&plan.Node{
+
+		joinNode := &plan.Node{
 			NodeType: plan.Node_JOIN,
 			Children: []int32{nodeID, idxTableNodeID},
 			JoinType: plan.Node_INDEX,
 			OnList:   []*plan.Expr{joinCond},
-		}, builder.ctxByNode[nodeID])
+		}
+		joinNodeID := builder.appendNode(joinNode, builder.ctxByNode[nodeID])
+
+		if len(node.FilterList) == 0 {
+			idxTableNode.Limit, idxTableNode.Offset = node.Limit, node.Offset
+		} else {
+			joinNode.Limit, joinNode.Offset = node.Limit, node.Offset
+		}
+		node.Limit, node.Offset = nil, nil
 
 		return joinNodeID
 	}
@@ -831,19 +840,16 @@ END0:
 		}
 		idxFilter.Selectivity = expr.Selectivity
 
-		idxTableNodeID := builder.appendNode(&plan.Node{
+		idxTableNode := &plan.Node{
 			NodeType:     plan.Node_TABLE_SCAN,
 			TableDef:     idxTableDef,
 			ObjRef:       idxObjRef,
 			ParentObjRef: DeepCopyObjectRef(node.ObjRef),
 			FilterList:   []*plan.Expr{idxFilter},
-			Limit:        node.Limit,
-			Offset:       node.Offset,
 			BindingTags:  []int32{idxTag},
 			ScanSnapshot: node.ScanSnapshot,
-		}, builder.ctxByNode[nodeID])
-
-		node.Limit, node.Offset = nil, nil
+		}
+		idxTableNodeID := builder.appendNode(idxTableNode, builder.ctxByNode[nodeID])
 
 		pkIdx := node.TableDef.Name2ColIndex[node.TableDef.Pkey.PkeyColName]
 		pkExpr := &plan.Expr{
@@ -868,12 +874,20 @@ END0:
 				},
 			},
 		})
-		joinNodeID := builder.appendNode(&plan.Node{
+		joinNode := &plan.Node{
 			NodeType: plan.Node_JOIN,
 			Children: []int32{nodeID, idxTableNodeID},
 			JoinType: plan.Node_INDEX,
 			OnList:   []*plan.Expr{joinCond},
-		}, builder.ctxByNode[nodeID])
+		}
+		joinNodeID := builder.appendNode(joinNode, builder.ctxByNode[nodeID])
+
+		if len(node.FilterList) == 0 {
+			idxTableNode.Limit, idxTableNode.Offset = node.Limit, node.Offset
+		} else {
+			joinNode.Limit, joinNode.Offset = node.Limit, node.Offset
+		}
+		node.Limit, node.Offset = nil, nil
 
 		return joinNodeID
 	}
@@ -882,6 +896,8 @@ END0:
 }
 
 func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
+	sid := builder.compCtx.GetProcess().GetService()
+
 	if node.JoinType == plan.Node_INDEX {
 		return nodeID
 	}
@@ -906,7 +922,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 		return nodeID
 	}
 
-	if rightChild.Stats.Outcnt > float64(GetInFilterCardLimitOnPK(leftChild.Stats.TableCnt)) || rightChild.Stats.Outcnt > leftChild.Stats.Cost*0.1 {
+	if rightChild.Stats.Outcnt > float64(GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt)) || rightChild.Stats.Outcnt > leftChild.Stats.Cost*0.1 {
 		return nodeID
 	}
 
@@ -1032,7 +1048,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 			RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, len(condIdx) < numParts, 0, probeExpr)},
 		}, builder.ctxByNode[nodeID])
 
-		node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, MakeRuntimeFilter(rfTag, len(condIdx) < numParts, GetInFilterCardLimitOnPK(leftChild.Stats.TableCnt), rfBuildExpr))
+		node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, MakeRuntimeFilter(rfTag, len(condIdx) < numParts, GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt), rfBuildExpr))
 		recalcStatsByRuntimeFilter(builder.qry.Nodes[idxTableNodeID], node, builder)
 
 		pkIdx := leftChild.TableDef.Name2ColIndex[leftChild.TableDef.Pkey.PkeyColName]

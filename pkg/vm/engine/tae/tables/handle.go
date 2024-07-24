@@ -68,13 +68,13 @@ func (h *tableHandle) GetAppender() (appender data.ObjectAppender, err error) {
 		}
 	}
 
-	dropped := h.object.meta.HasDropCommitted()
+	dropped := h.object.meta.Load().HasDropCommitted()
 	if !h.appender.IsAppendable() || !h.object.IsAppendable() || dropped {
 		return h.ThrowAppenderAndErr()
 	}
 	h.object.Ref()
 	// Similar to optimistic locking
-	dropped = h.object.meta.HasDropCommitted()
+	dropped = h.object.meta.Load().HasDropCommitted()
 	if !h.appender.IsAppendable() || !h.object.IsAppendable() || dropped {
 		h.object.Unref()
 		return h.ThrowAppenderAndErr()

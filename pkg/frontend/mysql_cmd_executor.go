@@ -32,12 +32,8 @@ import (
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
-	"github.com/fagongzi/goetty/v2"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
-
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -70,6 +66,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 func createDropDatabaseErrorInfo() string {
@@ -175,7 +173,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	// add by #9907, set the result of last_query_id(), this will pass those isCmdFieldListSql() from client.
 	// fixme: this op leads all internal/background executor got NULL result if call last_query_id().
 	if sqlType != constant.InternalSql {
-		ses.pushQueryId(types.Uuid(stmID).ToString())
+		ses.pushQueryId(types.Uuid(stmID).String())
 	}
 
 	// -------------------------------------
@@ -696,19 +694,19 @@ func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error
 			if err != nil {
 				return err
 			}
-			runtime.ProcessLevelRuntime().SetGlobalVariables("optimizer_hints", value)
+			runtime.ServiceRuntime(ses.service).SetGlobalVariables("optimizer_hints", value)
 		} else if name == "runtime_filter_limit_in" {
 			err = setVarFunc(assign.System, assign.Global, name, value, sql)
 			if err != nil {
 				return err
 			}
-			runtime.ProcessLevelRuntime().SetGlobalVariables("runtime_filter_limit_in", value)
+			runtime.ServiceRuntime(ses.service).SetGlobalVariables("runtime_filter_limit_in", value)
 		} else if name == "runtime_filter_limit_bloom_filter" {
 			err = setVarFunc(assign.System, assign.Global, name, value, sql)
 			if err != nil {
 				return err
 			}
-			runtime.ProcessLevelRuntime().SetGlobalVariables("runtime_filter_limit_bloom_filter", value)
+			runtime.ServiceRuntime(ses.service).SetGlobalVariables("runtime_filter_limit_bloom_filter", value)
 		} else {
 			err = setVarFunc(assign.System, assign.Global, name, value, sql)
 			if err != nil {
@@ -1086,13 +1084,6 @@ func createPrepareStmt(
 			comp.Release()
 			comp = nil
 		}
-
-		// @xxx when refactor prepare finish, remove this code
-		if comp != nil {
-			comp.SetIsPrepare(false)
-			comp.Release()
-			comp = nil
-		}
 	}
 
 	prepareStmt := &PrepareStmt{
@@ -1104,6 +1095,11 @@ func createPrepareStmt(
 		getFromSendLongData: make(map[int]struct{}),
 	}
 	prepareStmt.InsertBat = ses.GetTxnCompileCtx().GetProcess().GetPrepareBatch()
+
+	if execCtx.input != nil {
+		sqlSourceTypes := execCtx.input.getSqlSourceTypes()
+		prepareStmt.IsCloudNonuser = slices.Contains(sqlSourceTypes, constant.CloudNoUserSql)
+	}
 	return prepareStmt, nil
 }
 
@@ -1164,6 +1160,23 @@ func handleDropSnapshot(ses *Session, execCtx *ExecCtx, ct *tree.DropSnapShot) e
 
 func handleRestoreSnapshot(ses *Session, execCtx *ExecCtx, rs *tree.RestoreSnapShot) error {
 	return doRestoreSnapshot(execCtx.reqCtx, ses, rs)
+}
+
+func handleCreatePitr(ses *Session, execCtx *ExecCtx, cp *tree.CreatePitr) error {
+	return doCreatePitr(execCtx.reqCtx, ses, cp)
+}
+
+func handleDropPitr(ses *Session, execCtx *ExecCtx, dp *tree.DropPitr) error {
+	return doDropPitr(execCtx.reqCtx, ses, dp)
+}
+
+func handleAlterPitr(ses *Session, execCtx *ExecCtx, ap *tree.AlterPitr) error {
+	return doAlterPitr(execCtx.reqCtx, ses, ap)
+}
+
+func handleRestorePitr(ses *Session, execCtx *ExecCtx, rp *tree.RestorePitr) error {
+	//return doRestorePitr(execCtx.reqCtx, ses, rp)
+	return nil
 }
 
 // handleCreateAccount creates a new user-level tenant in the context of the tenant SYS
@@ -1664,16 +1677,22 @@ func doShowBackendServers(ses *Session, execCtx *ExecCtx) error {
 		u := ses.GetTenantInfo().GetUser()
 		// For super use dump and root, we should list all servers.
 		if isSuperUser(u) {
-			clusterservice.GetMOCluster().GetCNService(
+			clusterservice.GetMOCluster(ses.GetService()).GetCNService(
 				clusterservice.NewSelectAll(), func(s metadata.CNService) bool {
 					appendFn(&s)
 					return true
 				})
 		} else {
-			route.RouteForSuperTenant(se, u, nil, appendFn)
+			route.RouteForSuperTenant(
+				ses.GetService(),
+				se,
+				u,
+				nil,
+				appendFn,
+			)
 		}
 	} else {
-		route.RouteForCommonTenant(se, nil, appendFn)
+		route.RouteForCommonTenant(ses.GetService(), se, nil, appendFn)
 	}
 
 	return trySaveQueryResult(execCtx.reqCtx, ses, mrs)
@@ -1786,7 +1805,7 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 	seq := uint64(0)
 	if txnOp != nil {
 		seq = txnOp.NextSequence()
-		txnTrace.GetService().AddTxnDurationAction(
+		txnTrace.GetService(ses.GetService()).AddTxnDurationAction(
 			txnOp,
 			client.BuildPlanEvent,
 			seq,
@@ -1799,7 +1818,7 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 		cost := time.Since(start)
 
 		if txnOp != nil {
-			txnTrace.GetService().AddTxnDurationAction(
+			txnTrace.GetService(ses.GetService()).AddTxnDurationAction(
 				txnOp,
 				client.BuildPlanEvent,
 				seq,
@@ -2102,6 +2121,50 @@ func canExecuteStatementInUncommittedTransaction(reqCtx context.Context, ses FeS
 	return nil
 }
 
+func readThenWrite(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, writer *io.PipeWriter, mysqlRrWr MysqlRrWr, skipWrite bool, epoch uint64) (bool, time.Duration, time.Duration, error) {
+	var readTime, writeTime time.Duration
+	readStart := time.Now()
+	payload, err := mysqlRrWr.Read()
+	if err != nil {
+		if errors.Is(err, errorInvalidLength0) {
+			return skipWrite, readTime, writeTime, err
+		}
+		if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
+			err = moerr.NewInvalidInput(execCtx.reqCtx, "cannot read '%s' from client,please check the file path, user privilege and if client start with --local-infile", param.Filepath)
+		}
+		return skipWrite, readTime, writeTime, err
+	}
+	readTime = time.Since(readStart)
+
+	//empty packet means the file is over.
+	length := len(payload)
+	if length == 0 {
+		return skipWrite, readTime, writeTime, errorInvalidLength0
+	}
+	ses.CountPayload(len(payload))
+
+	// If inner error occurs(unexpected or expected(ctrl-c)), proc.Base.LoadLocalReader will be closed.
+	// Then write will return error, but we need to read the rest of the data and not write it to pipe.
+	// So we need a flag[skipWrite] to tell us whether we need to write the data to pipe.
+	// https://github.com/matrixorigin/matrixone/issues/6665#issuecomment-1422236478
+
+	writeStart := time.Now()
+	if !skipWrite {
+		_, err = writer.Write(payload)
+		if err != nil {
+			ses.Errorf(execCtx.reqCtx,
+				"Failed to load local file",
+				zap.String("path", param.Filepath),
+				zap.Uint64("epoch", epoch),
+				zap.Error(err))
+			skipWrite = true
+		}
+		writeTime = time.Since(writeStart)
+
+	}
+	return skipWrite, readTime, writeTime, err
+}
+
 // processLoadLocal executes the load data local.
 // load data local interaction: https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_com_query_response_local_infile_request.html
 func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, writer *io.PipeWriter) (err error) {
@@ -2120,104 +2183,57 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	if err != nil {
 		return
 	}
+	var skipWrite bool
+	skipWrite = false
+	var readTime, writeTime time.Duration
 	start := time.Now()
-	var msg interface{}
-	msg, err = mysqlRrWr.Read(goetty.ReadOptions{Timeout: getGlobalPu().SV.SessionTimeout.Duration})
+	epoch, printEvery, minReadTime, maxReadTime, minWriteTime, maxWriteTime := uint64(0), uint64(1024*60), 24*time.Hour, time.Nanosecond, 24*time.Hour, time.Nanosecond
+
+	skipWrite, readTime, writeTime, err = readThenWrite(ses, execCtx, param, writer, mysqlRrWr, skipWrite, epoch)
 	if err != nil {
-		mysqlRrWr.SetU8(SEQUENCEID, mysqlRrWr.GetU8(SEQUENCEID)+1)
 		if errors.Is(err, errorInvalidLength0) {
 			return nil
 		}
-		if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
-			err = moerr.NewInvalidInput(execCtx.reqCtx, "cannot read '%s' from client,please check the file path, user privilege and if client start with --local-infile", param.Filepath)
-		}
-		return
+		return err
+	}
+	if readTime > maxReadTime {
+		maxReadTime = readTime
+	}
+	if readTime < minReadTime {
+		minReadTime = readTime
 	}
 
-	packet, ok := msg.(*Packet)
-	if !ok {
-		mysqlRrWr.SetU8(SEQUENCEID, mysqlRrWr.GetU8(SEQUENCEID)+1)
-		err = moerr.NewInvalidInput(execCtx.reqCtx, "invalid packet")
-		return
+	if writeTime > maxWriteTime {
+		maxWriteTime = writeTime
+	}
+	if writeTime < minWriteTime {
+		minWriteTime = writeTime
 	}
 
-	mysqlRrWr.SetU8(SEQUENCEID, uint8(packet.SequenceID+1))
-	seq := uint8(packet.SequenceID + 1)
-	//empty packet means the file is over.
-	length := packet.Length
-	if length == 0 {
-		return
-	}
-	ses.CountPayload(len(packet.Payload))
-
-	skipWrite := false
-	// If inner error occurs(unexpected or expected(ctrl-c)), proc.Base.LoadLocalReader will be closed.
-	// Then write will return error, but we need to read the rest of the data and not write it to pipe.
-	// So we need a flag[skipWrite] to tell us whether we need to write the data to pipe.
-	// https://github.com/matrixorigin/matrixone/issues/6665#issuecomment-1422236478
-
-	_, err = writer.Write(packet.Payload)
-	if err != nil {
-		skipWrite = true // next, we just need read the rest of the data,no need to write it to pipe.
-		ses.Errorf(execCtx.reqCtx,
-			"Failed to load local file",
-			zap.String("path", param.Filepath),
-			zap.Error(err))
-	}
-	epoch, printEvery, minReadTime, maxReadTime, minWriteTime, maxWriteTime := uint64(0), uint64(1024*60), 24*time.Hour, time.Nanosecond, 24*time.Hour, time.Nanosecond
 	for {
-		readStart := time.Now()
-		msg, err = mysqlRrWr.Read(goetty.ReadOptions{Timeout: getGlobalPu().SV.SessionTimeout.Duration})
+		skipWrite, readTime, writeTime, err = readThenWrite(ses, execCtx, param, writer, mysqlRrWr, skipWrite, epoch)
 		if err != nil {
-			if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
-				seq += 1
-				mysqlRrWr.SetU8(SEQUENCEID, seq)
+			if errors.Is(err, errorInvalidLength0) {
 				err = nil
+				break
 			}
-			break
+			return err
 		}
-		readTime := time.Since(readStart)
+
 		if readTime > maxReadTime {
 			maxReadTime = readTime
 		}
 		if readTime < minReadTime {
 			minReadTime = readTime
 		}
-		packet, ok = msg.(*Packet)
-		if !ok {
-			err = moerr.NewInvalidInput(execCtx.reqCtx, "invalid packet")
-			seq += 1
-			mysqlRrWr.SetU8(SEQUENCEID, seq)
-			break
-		}
-		seq = uint8(packet.SequenceID + 1)
-		mysqlRrWr.SetU8(SEQUENCEID, seq)
-		ses.CountPayload(len(packet.Payload))
 
-		//empty packet means the file is over.
-		if packet.Length == 0 {
-			break
+		if writeTime > maxWriteTime {
+			maxWriteTime = writeTime
+		}
+		if writeTime < minWriteTime {
+			minWriteTime = writeTime
 		}
 
-		writeStart := time.Now()
-		if !skipWrite {
-			_, err = writer.Write(packet.Payload)
-			if err != nil {
-				ses.Errorf(execCtx.reqCtx,
-					"Failed to load local file",
-					zap.String("path", param.Filepath),
-					zap.Uint64("epoch", epoch),
-					zap.Error(err))
-				skipWrite = true
-			}
-			writeTime := time.Since(writeStart)
-			if writeTime > maxWriteTime {
-				maxWriteTime = writeTime
-			}
-			if writeTime < minWriteTime {
-				minWriteTime = writeTime
-			}
-		}
 		if epoch%printEvery == 0 {
 			if execCtx.isIssue3482 {
 				ses.Infof(execCtx.reqCtx, "load local '%s', epoch: %d, skipWrite: %v, minReadTime: %s, maxReadTime: %s, minWriteTime: %s, maxWriteTime: %s,\n", param.Filepath, epoch, skipWrite, minReadTime.String(), maxReadTime.String(), minWriteTime.String(), maxWriteTime.String())
@@ -2226,6 +2242,7 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 		}
 		epoch += 1
 	}
+
 	if execCtx.isIssue3482 {
 		ses.Infof(execCtx.reqCtx, "load local '%s', read&write all data from client cost: %s\n", param.Filepath, time.Since(start))
 	}
@@ -2994,8 +3011,17 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 	case COM_STMT_CLOSE:
 		// rewrite to "deallocate Prepare stmt_name"
 		stmtID := binary.LittleEndian.Uint32(req.GetData().([]byte)[0:4])
+		var preStmt *PrepareStmt
 		stmtName := getPrepareStmtName(stmtID)
-		sql = fmt.Sprintf("deallocate prepare %s", stmtName)
+		preStmt, err = ses.GetPrepareStmt(execCtx.reqCtx, stmtName)
+		if err != nil {
+			resp = NewGeneralErrorResponse(COM_STMT_CLOSE, ses.GetTxnHandler().GetServerStatus(), err)
+		}
+		prefix := ""
+		if preStmt.IsCloudNonuser {
+			prefix = "/* cloud_nonuser */"
+		}
+		sql = fmt.Sprintf("%sdeallocate prepare %s", prefix, stmtName)
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(sql))
 
 		err = doComQuery(ses, execCtx, &UserInput{sql: sql})
@@ -3008,7 +3034,16 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		//Payload of COM_STMT_RESET
 		stmtID := binary.LittleEndian.Uint32(req.GetData().([]byte)[0:4])
 		stmtName := getPrepareStmtName(stmtID)
-		sql = fmt.Sprintf("reset prepare %s", stmtName)
+		var preStmt *PrepareStmt
+		preStmt, err = ses.GetPrepareStmt(execCtx.reqCtx, stmtName)
+		if err != nil {
+			resp = NewGeneralErrorResponse(COM_STMT_CLOSE, ses.GetTxnHandler().GetServerStatus(), err)
+		}
+		prefix := ""
+		if preStmt.IsCloudNonuser {
+			prefix = "/* cloud_nonuser */"
+		}
+		sql = fmt.Sprintf("%sreset prepare %s", prefix, stmtName)
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(sql))
 		err = doComQuery(ses, execCtx, &UserInput{sql: sql})
 		if err != nil {
@@ -3044,7 +3079,13 @@ func parseStmtExecute(reqCtx context.Context, ses *Session, data []byte) (string
 		return "", nil, err
 	}
 
-	sql := fmt.Sprintf("execute %s", stmtName)
+	var sql string
+	prefix := ""
+	if preStmt.IsCloudNonuser {
+		prefix = "/* cloud_nonuser */"
+	}
+	sql = fmt.Sprintf("%sexecute %s", prefix, stmtName)
+
 	ses.Debug(reqCtx, "query trace", logutil.QueryField(sql))
 	err = ses.GetResponser().MysqlRrWr().ParseExecuteData(reqCtx, ses.GetTxnCompileCtx().GetProcess(), preStmt, data, pos)
 	if err != nil {
@@ -3068,7 +3109,13 @@ func parseStmtSendLongData(reqCtx context.Context, ses *Session, data []byte) er
 		return err
 	}
 
-	sql := fmt.Sprintf("send long data for stmt %s", stmtName)
+	var sql string
+	prefix := ""
+	if preStmt.IsCloudNonuser {
+		prefix = "/* cloud_nonuser */"
+	}
+	sql = fmt.Sprintf("%ssend long data for stmt %s", prefix, stmtName)
+
 	ses.Debug(reqCtx, "query trace", logutil.QueryField(sql))
 
 	err = ses.GetResponser().MysqlRrWr().ParseSendLongData(reqCtx, ses.GetTxnCompileCtx().GetProcess(), preStmt, data, pos)

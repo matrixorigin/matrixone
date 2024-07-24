@@ -38,7 +38,7 @@ const (
 
 // add unit tests for cases
 type topTestCase struct {
-	arg   *Argument
+	arg   *Top
 	types []types.Type
 	proc  *process.Process
 }
@@ -128,8 +128,8 @@ func BenchmarkTop(b *testing.B) {
 func newTestCase(m *mpool.MPool, ts []types.Type, limit int64, fs []*plan.OrderBySpec) topTestCase {
 	return topTestCase{
 		types: ts,
-		proc:  testutil.NewProcessWithMPool(m),
-		arg: &Argument{
+		proc:  testutil.NewProcessWithMPool("", m),
+		arg: &Top{
 			Fs:    fs,
 			Limit: plan2.MakePlan2Uint64ConstExprWithType(uint64(limit)),
 			OperatorBase: vm.OperatorBase{
@@ -159,8 +159,8 @@ func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
 
-func resetChildren(arg *Argument, bats []*batch.Batch) {
-	valueScanArg := &value_scan.Argument{
+func resetChildren(arg *Top, bats []*batch.Batch) {
+	valueScanArg := &value_scan.ValueScan{
 		Batchs: bats,
 	}
 	valueScanArg.Prepare(nil)

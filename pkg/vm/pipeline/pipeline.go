@@ -16,9 +16,11 @@ package pipeline
 
 import (
 	"bytes"
+	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -26,78 +28,46 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func New(tableID uint64, attrs []string, ins vm.Instructions, reg *process.WaitRegister) *Pipeline {
+func New(tableID uint64, attrs []string, op vm.Operator, reg *process.WaitRegister) *Pipeline {
 	return &Pipeline{
-		reg:          reg,
-		instructions: ins,
-		attrs:        attrs,
-		tableID:      tableID,
+		reg:     reg,
+		rootOp:  op,
+		attrs:   attrs,
+		tableID: tableID,
 	}
 }
 
-func NewMerge(ins vm.Instructions, reg *process.WaitRegister) *Pipeline {
+func NewMerge(op vm.Operator, reg *process.WaitRegister) *Pipeline {
 	return &Pipeline{
-		reg:          reg,
-		instructions: ins,
+		reg:    reg,
+		rootOp: op,
 	}
 }
 
 func (p *Pipeline) String() string {
 	var buf bytes.Buffer
 
-	vm.String(p.instructions, &buf)
+	vm.String(p.rootOp, &buf)
 	return buf.String()
 }
 
 func (p *Pipeline) Run(r engine.Reader, topValueMsgTag int32, proc *process.Process) (end bool, err error) {
-	// performance counter
-	perfCounterSet := new(perfcounter.CounterSet)
-	proc.Ctx = perfcounter.WithCounterSet(proc.Ctx, perfCounterSet)
-	defer func() {
-		_ = perfCounterSet //TODO
-	}()
+	p.waitRegister()
 
-	// var bat *batch.Batch
-	// used to handle some push-down request
-	if p.reg != nil {
-		select {
-		case <-p.reg.Ctx.Done():
-		case <-p.reg.Ch:
-		}
-	}
-
-	if tableScanOperator, ok := p.instructions[0].Arg.(*table_scan.Argument); ok {
+	if tableScanOperator, ok := vm.GetLeafOp(p.rootOp).(*table_scan.TableScan); ok {
 		tableScanOperator.Reader = r
 		tableScanOperator.TopValueMsgTag = topValueMsgTag
 		tableScanOperator.Attrs = p.attrs
 		tableScanOperator.TableID = p.tableID
 	}
 
-	if err = vm.Prepare(p.instructions, proc); err != nil {
-		return false, err
-	}
-	for {
-		end, err = vm.Run(p.instructions, proc)
-		if err != nil {
-			return end, err
-		}
-		if end {
-			// end is true means pipeline successfully completed
-			return end, nil
-		}
-	}
+	return p.run(proc)
 }
 
 func (p *Pipeline) ConstRun(bat *batch.Batch, proc *process.Process) (end bool, err error) {
-	// used to handle some push-down request
-	if p.reg != nil {
-		select {
-		case <-p.reg.Ctx.Done():
-		case <-p.reg.Ch:
-		}
-	}
+	p.waitRegister()
 
-	if valueScanOperator, ok := p.instructions[0].Arg.(*value_scan.Argument); ok {
+	if valueScanOperator, ok := vm.GetLeafOp(p.rootOp).(*value_scan.ValueScan); ok {
 		pipelineInputBatches := []*batch.Batch{bat}
 		if bat != nil {
 			pipelineInputBatches = append(pipelineInputBatches, nil)
@@ -105,40 +75,48 @@ func (p *Pipeline) ConstRun(bat *batch.Batch, proc *process.Process) (end bool, 
 		valueScanOperator.Batchs = pipelineInputBatches
 	}
 
-	if err = vm.Prepare(p.instructions, proc); err != nil {
-		return false, err
-	}
-
-	for {
-		end, err = vm.Run(p.instructions, proc)
-		if err != nil {
-			return end, err
-		}
-		if end {
-			return end, nil
-		}
-	}
+	return p.run(proc)
 }
 
 func (p *Pipeline) MergeRun(proc *process.Process) (end bool, err error) {
-	// used to handle some push-down request
-	if p.reg != nil {
-		select {
-		case <-p.reg.Ctx.Done():
-		case <-p.reg.Ch:
-		}
-	}
+	p.waitRegister()
 
-	if err = vm.Prepare(p.instructions, proc); err != nil {
+	return p.run(proc)
+}
+
+func (p *Pipeline) waitRegister() {
+	if p.reg == nil {
+		return
+	}
+	select {
+	case <-p.reg.Ctx.Done():
+	case <-p.reg.Ch:
+	}
+}
+
+func (p *Pipeline) run(proc *process.Process) (end bool, err error) {
+	if err = vm.Prepare(p.rootOp, proc); err != nil {
 		return false, err
 	}
-	for {
-		end, err = vm.Run(p.instructions, proc)
+
+	defer catchPanic(proc.Ctx, &err)
+
+	vm.SetAnalyzeInfo(p.rootOp, proc)
+
+	for end := false; !end; {
+		result, err := p.rootOp.Call(proc)
 		if err != nil {
-			return end, err
+			return true, err
 		}
-		if end {
-			return end, nil
-		}
+		end = result.Status == vm.ExecStop || result.Batch == nil
+	}
+
+	return true, nil
+}
+
+func catchPanic(ctx context.Context, errPtr *error) {
+	if e := recover(); e != nil {
+		*errPtr = moerr.ConvertPanicError(ctx, e)
+		logutil.Errorf("panic in pipeline: %v", *errPtr)
 	}
 }

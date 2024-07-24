@@ -63,7 +63,7 @@ type AppendMVCCHandle struct {
 
 func NewAppendMVCCHandle(meta *catalog.ObjectEntry) *AppendMVCCHandle {
 	node := &AppendMVCCHandle{
-		RWMutex: meta.RWMutex,
+		RWMutex: &sync.RWMutex{},
 		meta:    meta,
 		appends: txnbase.NewMVCCSlice(NewEmptyAppendNode, CompareAppendNode),
 	}
@@ -279,14 +279,18 @@ func (n *AppendMVCCHandle) PrepareCompact() bool {
 func (n *AppendMVCCHandle) GetLatestAppendPrepareTSLocked() types.TS {
 	return n.appends.GetUpdateNodeLocked().Prepare
 }
+func (n *AppendMVCCHandle) GetMeta() *catalog.ObjectEntry {
+	return n.meta
+}
 
 // check if all appendnodes are committed.
 func (n *AppendMVCCHandle) allAppendsCommittedLocked() bool {
 	if n.appends == nil {
+		meta := n.GetMeta()
 		logutil.Warnf("[MetadataCheck] appends mvcc is nil, obj %v, has dropped %v, deleted at %v",
-			n.meta.ID.String(),
-			n.meta.HasDropCommittedLocked(),
-			n.meta.GetDeleteAtLocked().ToString())
+			meta.ID().String(),
+			meta.HasDropCommitted(),
+			meta.GetDeleteAt().ToString())
 		return false
 	}
 	return n.appends.IsCommitted()
@@ -357,8 +361,14 @@ type ObjectMVCCHandle struct {
 }
 
 func NewObjectMVCCHandle(meta *catalog.ObjectEntry) *ObjectMVCCHandle {
+	var rwMutex *sync.RWMutex
+	if meta.GetObjectData() != nil {
+		rwMutex = meta.GetObjectData().GetMutex()
+	} else {
+		rwMutex = &sync.RWMutex{}
+	}
 	node := &ObjectMVCCHandle{
-		RWMutex: meta.RWMutex,
+		RWMutex: rwMutex,
 		meta:    meta,
 		deletes: make(map[uint16]*MVCCHandle),
 	}
@@ -396,7 +406,7 @@ func (n *ObjectMVCCHandle) GetDeletesListener() func(uint64, types.TS) error {
 func (n *ObjectMVCCHandle) GetChangeIntentionCntLocked() uint32 {
 	changes := uint32(0)
 	for _, deletes := range n.deletes {
-		changes += deletes.GetChangeIntentionCnt()
+		changes += deletes.GetChangeIntentionCntLocked()
 	}
 	return changes
 }
@@ -426,7 +436,9 @@ func (n *ObjectMVCCHandle) GetDeltaPersistedTSLocked() types.TS {
 	return persisted
 }
 
-func (n *ObjectMVCCHandle) GetDeltaCommitedTSLocked() types.TS {
+func (n *ObjectMVCCHandle) GetDeltaCommitedTS() types.TS {
+	n.RLock()
+	defer n.RUnlock()
 	commitTS := types.TS{}
 	for _, deletes := range n.deletes {
 		ts := deletes.getDeltaCommittedTSLocked()
@@ -533,6 +545,11 @@ func (n *ObjectMVCCHandle) ReplayDeltaLoc(vMVCCNode any, blkID uint16) {
 	mvcc := n.GetOrCreateDeleteChainLocked(blkID)
 	mvcc.ReplayDeltaLoc(mvccNode)
 }
+func (n *ObjectMVCCHandle) InMemoryDeletesExisted() bool {
+	n.RLock()
+	defer n.RUnlock()
+	return n.InMemoryDeletesExistedLocked()
+}
 func (n *ObjectMVCCHandle) InMemoryDeletesExistedLocked() bool {
 	for _, deletes := range n.deletes {
 		if !deletes.deletes.mask.IsEmpty() {
@@ -576,7 +593,7 @@ func (n *ObjectMVCCHandle) VisitDeletes(
 		nodes := mvcc.deltaloc.ClonePreparedInRangeLocked(start, end)
 		var skipData bool
 		if len(nodes) != 0 {
-			blkID := objectio.NewBlockidWithObjectID(&n.meta.ID, blkOffset)
+			blkID := objectio.NewBlockidWithObjectID(n.meta.ID(), blkOffset)
 			newest := nodes[len(nodes)-1]
 			if lastDeltaLoc {
 				VisitDeltaloc(deltalocBat, tnInsertBat, n.meta, blkID, newest, newest.End, newest.CreatedAt)
@@ -661,7 +678,7 @@ func VisitDeltaloc(bat, tnBatch *containers.Batch, object *catalog.ObjectEntry, 
 	bat.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Append([]byte(node.BaseNode.MetaLoc), false)
 	bat.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(node.BaseNode.DeltaLoc), false)
 	bat.GetVectorByName(pkgcatalog.BlockMeta_CommitTs).Append(commitTS, false)
-	bat.GetVectorByName(pkgcatalog.BlockMeta_SegmentID).Append(*object.ID.Segment(), false)
+	bat.GetVectorByName(pkgcatalog.BlockMeta_SegmentID).Append(*object.ID().Segment(), false)
 	bat.GetVectorByName(pkgcatalog.BlockMeta_MemTruncPoint).Append(node.Start, false)
 	bat.GetVectorByName(catalog.AttrCommitTs).Append(createTS, false)
 	bat.GetVectorByName(catalog.AttrRowID).Append(objectio.HackBlockid2Rowid(blkID), false)
@@ -693,11 +710,11 @@ func (d *DeltalocChain) PrepareCommit() (err error) {
 	node := d.GetLatestNodeLocked()
 	if node.BaseNode.NeedCheckDeleteChainWhenCommit {
 		if found, _ := d.mvcc.GetDeleteChain().HasDeleteIntentsPreparedInLocked(node.Start, node.Txn.GetPrepareTS()); found {
-			logutil.Infof("retry delete, there're new deletes in obj %v", d.mvcc.meta.ID.String())
+			logutil.Infof("retry delete, there're new deletes in obj %v", d.mvcc.meta.ID().String())
 			return txnif.ErrTxnNeedRetry
 		}
-		if d.mvcc.meta.HasDropIntentLocked() {
-			logutil.Infof("retry delete, obj %v is soft deleted", d.mvcc.meta.ID.String())
+		if d.mvcc.meta.GetLatestNode().HasDropIntent() {
+			logutil.Infof("retry delete, obj %v is soft deleted", d.mvcc.meta.ID().String())
 			return txnif.ErrTxnNeedRetry
 		}
 	}
@@ -724,7 +741,7 @@ func (d *DeltalocChain) PrepareRollback() error {
 	return err
 }
 func (d *DeltalocChain) GetBlockID() *objectio.Blockid {
-	return objectio.NewBlockidWithObjectID(&d.mvcc.meta.ID, d.mvcc.blkID)
+	return objectio.NewBlockidWithObjectID(d.mvcc.meta.ID(), d.mvcc.blkID)
 }
 func (d *DeltalocChain) GetMeta() *catalog.ObjectEntry { return d.mvcc.meta }
 
@@ -838,9 +855,9 @@ func (n *MVCCHandle) DecChangeIntentionCnt() {
 	n.changes.Add(^uint32(0))
 }
 
-// GetChangeIntentionCnt returns the number of operation of delete, which is updated before commiting.
+// GetChangeIntentionCntLocked returns the number of operation of delete, which is updated before commiting.
 // Note: Now it is ** only ** used in checkpointe runner to check whether this block has any chance to be flushed
-func (n *MVCCHandle) GetChangeIntentionCnt() uint32 {
+func (n *MVCCHandle) GetChangeIntentionCntLocked() uint32 {
 	return n.changes.Load()
 }
 
@@ -902,7 +919,7 @@ func (n *MVCCHandle) CollectDeleteLocked(
 		}
 		pkVec = containers.MakeVector(pkType, mp)
 		aborts = &nulls.Bitmap{}
-		id := objectio.NewBlockidWithObjectID(&n.meta.ID, n.blkID)
+		id := objectio.NewBlockidWithObjectID(n.meta.ID(), n.blkID)
 		n.deletes.LoopChainLocked(
 			func(node *DeleteNode) bool {
 				needWait, txn := node.NeedWaitCommitting(end.Next())
@@ -976,7 +993,7 @@ func (n *MVCCHandle) InMemoryCollectDeleteInRange(
 	// for deleteNode version less than 2, pk doesn't exist in memory
 	// collect pk by block.Foreach
 	if len(deletes) != 0 {
-		logutil.Infof("visit deletes: collect pk by load, obj is %v", n.meta.ID.String())
+		logutil.Infof("visit deletes: collect pk by load, obj is %v", n.meta.ID().String())
 		pkIdx := pkDef.Idx
 		data := n.meta.GetObjectData()
 		data.Foreach(ctx, schema, n.blkID, pkIdx, func(v any, isNull bool, row int) error {

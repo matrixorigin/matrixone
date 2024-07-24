@@ -98,7 +98,7 @@ func (s *store) createLogServiceClientFactroy(shard metadata.TNShard) logservice
 func (s *store) newLogServiceClient(shard metadata.TNShard) (logservice.Client, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.LogService.ConnectTimeout.Duration)
 	defer cancel()
-	return logservice.NewClient(ctx, logservice.ClientConfig{
+	return logservice.NewClient(ctx, s.cfg.UUID, logservice.ClientConfig{
 		ReadOnly:         false,
 		LogShardID:       shard.LogShardID,
 		TNReplicaID:      shard.ReplicaID,
@@ -133,6 +133,12 @@ func (s *store) newTAEStorage(ctx context.Context, shard metadata.TNShard, facto
 	fs, err := fileservice.Get[fileservice.FileService](s.fileService, defines.SharedFileServiceName)
 	if err != nil {
 		return nil, err
+	}
+
+	// local fs
+	localFs, err2 := fileservice.Get[fileservice.FileService](s.fileService, defines.LocalFileServiceName)
+	if err2 != nil {
+		return nil, err2
 	}
 
 	ckpcfg := &options.CheckpointCfg{
@@ -178,6 +184,7 @@ func (s *store) newTAEStorage(ctx context.Context, shard metadata.TNShard, facto
 	opt := &options.Options{
 		Clock:             s.rt.Clock(),
 		Fs:                fs,
+		LocalFs:           localFs,
 		Lc:                logservicedriver.LogServiceClientFactory(factory),
 		Shard:             shard,
 		CheckpointCfg:     ckpcfg,
@@ -189,6 +196,7 @@ func (s *store) newTAEStorage(ctx context.Context, shard metadata.TNShard, facto
 		Ctx:               ctx,
 		MaxMessageSize:    max2LogServiceMsgSizeLimit,
 		TaskServiceGetter: s.GetTaskService,
+		SID:               s.cfg.UUID,
 	}
 
 	return taestorage.NewTAEStorage(

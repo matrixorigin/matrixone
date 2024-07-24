@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"go/constant"
@@ -23,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -102,9 +104,9 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	if tableDef.TableType == catalog.SystemViewRel {
 		var newStmt *tree.ShowCreateView
 		if stmt.Name.NumParts == 1 {
-			newStmt = tree.NewShowCreateView(tree.SetUnresolvedObjectName(1, [3]string{tblName, "", ""}))
+			newStmt = tree.NewShowCreateView(tree.NewUnresolvedObjectName(tblName))
 		} else if stmt.Name.NumParts == 2 {
-			newStmt = tree.NewShowCreateView(tree.SetUnresolvedObjectName(2, [3]string{tblName, dbName, ""}))
+			newStmt = tree.NewShowCreateView(tree.NewUnresolvedObjectName(dbName, tblName))
 		}
 		if len(stmt.SnapshotName) > 0 {
 			newStmt.SnapshotName = stmt.SnapshotName
@@ -112,15 +114,6 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 
 		return buildShowCreateView(newStmt, ctx)
 	}
-
-	// sql := `
-	// 	SELECT *
-	// 		FROM %s.mo_tables mt JOIN %s.mo_columns mc
-	// 			ON mt.relname = mc.att_relname and mt.reldatabase=mc.att_database
-	// 	WHERE mt.reldatabase = '%s' AND mt.relname = '%s'
-	// `
-	// sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName)
-	// logutil.Info(sql)
 
 	ddlStr, err := ConstructCreateTableSQL(tableObjRef, tableDef, *snapshot, ctx)
 	if err != nil {
@@ -896,6 +889,28 @@ func buildShowStages(stmt *tree.ShowStages, ctx CompilerContext) (*Plan, error) 
 func buildShowSnapShots(stmt *tree.ShowSnapShots, ctx CompilerContext) (*Plan, error) {
 	ddlType := plan.DataDefinition_SHOW_TARGET
 	sql := fmt.Sprintf("SELECT sname as `SNAPSHOT_NAME`, CAST_NANO_TO_TIMESTAMP(ts) as `TIMESTAMP`,  level as `SNAPSHOT_LEVEL`, account_name as `ACCOUNT_NAME`, database_name as `DATABASE_NAME`, table_name as `TABLE_NAME` FROM %s.mo_snapshots ORDER BY ts DESC", MO_CATALOG_DB_NAME)
+
+	if stmt.Where != nil {
+		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
+	}
+
+	return returnByRewriteSQL(ctx, sql, ddlType)
+}
+
+func buildShowPitr(stmt *tree.ShowPitr, ctx CompilerContext) (*Plan, error) {
+	ddlType := plan.DataDefinition_SHOW_TARGET
+	curAccountId, err := ctx.GetAccountId()
+	if err != nil {
+		return nil, err
+	}
+
+	sql := fmt.Sprintf("SELECT pitr_name as `PITR_NAME`, create_time  as `CREATED_TIME`, modified_time as MODIFIED_TIME, level as `PITR_LEVEL`, account_name as `ACCOUNT_NAME`, database_name as `DATABASE_NAME`, table_name as `TABLE_NAME`, pitr_length as `PITR_LENGTH`, pitr_unit  as `PITR_UNIT` FROM %s.mo_pitr where create_account = %d ORDER BY create_time DESC", MO_CATALOG_DB_NAME, curAccountId)
+
+	newCtx := ctx.GetContext()
+	if curAccountId != catalog.System_Account {
+		newCtx = context.WithValue(newCtx, defines.TenantIDKey{}, catalog.System_Account)
+	}
+	ctx.SetContext(newCtx)
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)

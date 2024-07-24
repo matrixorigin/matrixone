@@ -117,7 +117,7 @@ func main() {
 			panic(err)
 		}
 		objIt := rel.MakeObjectIt()
-		for objIt.Valid() {
+		for objIt.Next() {
 			obj := objIt.GetObject()
 			logutil.Info(obj.String())
 			for i := 0; i < obj.BlkCnt(); i++ {
@@ -128,7 +128,6 @@ func main() {
 				}
 				defer view.Close()
 			}
-			objIt.Next()
 		}
 		if err = txn.Commit(context.Background()); err != nil {
 			panic(err)

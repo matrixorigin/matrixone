@@ -31,10 +31,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/tidwall/btree"
-	"go.uber.org/zap"
-	"golang.org/x/sync/errgroup"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -59,6 +55,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
+	"github.com/tidwall/btree"
+	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
 type TenantInfo struct {
@@ -910,6 +909,7 @@ var (
 		catalog.MOVersionTable:       {},
 		catalog.MOUpgradeTable:       {},
 		catalog.MOUpgradeTenantTable: {},
+		catalog.MO_PITR:              {},
 	}
 	//predefined tables of the database mo_catalog in every account
 	predefinedTables = map[string]int8{
@@ -1142,17 +1142,19 @@ const (
 
 	getTenantNameForMat = `select account_name from mo_catalog.mo_account where account_id = %d;`
 
-	updateCommentsOfAccountFormat = `update mo_catalog.mo_account set comments = "%s" where account_name = "%s" order by account_id;;`
+	updateCommentsOfAccountFormat = `update mo_catalog.mo_account set comments = "%s" where account_name = "%s" order by account_id;`
 
-	updateStatusOfAccountFormat = `update mo_catalog.mo_account set status = "%s",suspended_time = "%s" where account_name = "%s" order by account_id;;`
+	updateStatusOfAccountFormat = `update mo_catalog.mo_account set status = "%s",suspended_time = "%s" where account_name = "%s" order by account_id;`
 
 	updateStatusAndVersionOfAccountFormat = `update mo_catalog.mo_account set status = "%s",version = %d,suspended_time = default where account_name = "%s";`
 
-	deleteAccountFromMoAccountFormat = `delete from mo_catalog.mo_account where account_name = "%s" order by account_id;;`
+	deleteAccountFromMoAccountFormat = `delete from mo_catalog.mo_account where account_name = "%s" order by account_id;`
+
+	deletePitrFromMoPitrFormat = `delete from mo_catalog.mo_pitr where create_account = %d;`
 
 	getPasswordOfUserFormat = `select user_id,authentication_string,default_role from mo_catalog.mo_user where user_name = "%s" order by user_id;`
 
-	updatePasswordOfUserFormat = `update mo_catalog.mo_user set authentication_string = "%s" where user_name = "%s" order by user_id;;`
+	updatePasswordOfUserFormat = `update mo_catalog.mo_user set authentication_string = "%s" where user_name = "%s" order by user_id;`
 
 	checkRoleExistsFormat = `select role_id from mo_catalog.mo_role where role_id = %d and role_name = "%s";`
 
@@ -1612,6 +1614,10 @@ func getSqlForDeleteAccountFromMoAccount(ctx context.Context, account string) (s
 		return "", err
 	}
 	return fmt.Sprintf(deleteAccountFromMoAccountFormat, account), nil
+}
+
+func getSqlForDeletePitrFromMoPitr(accountId uint64) string {
+	return fmt.Sprintf(deletePitrFromMoPitrFormat, accountId)
 }
 
 func getSqlForPasswordOfUser(ctx context.Context, user string) (string, error) {
@@ -4234,6 +4240,13 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 			return rtnErr
 		}
 
+		// delete the pitr record in the mo_pitr created by the account which is dropped
+		sql = getSqlForDeletePitrFromMoPitr(uint64(accountId))
+		rtnErr = bh.Exec(ctx, sql)
+		if rtnErr != nil {
+			return rtnErr
+		}
+
 		// delete the account in the mo_account of the sys account
 		sql, rtnErr = getSqlForDeleteAccountFromMoAccount(ctx, da.Name)
 		if rtnErr != nil {
@@ -4308,14 +4321,24 @@ func postDropSuspendAccount(
 		map[string]string{"account": accountName}, clusterservice.Contain)
 	sysTenant := isSysTenant(currTenant)
 	if sysTenant {
-		route.RouteForSuperTenant(clusterservice.NewSelector(), currUser, nil,
+		route.RouteForSuperTenant(
+			ses.GetService(),
+			clusterservice.NewSelector(),
+			currUser,
+			nil,
 			func(s *metadata.CNService) {
 				nodes = append(nodes, s.QueryAddress)
-			})
+			},
+		)
 	} else {
-		route.RouteForCommonTenant(labels, nil, func(s *metadata.CNService) {
-			nodes = append(nodes, s.QueryAddress)
-		})
+		route.RouteForCommonTenant(
+			ses.GetService(),
+			labels,
+			nil,
+			func(s *metadata.CNService) {
+				nodes = append(nodes, s.QueryAddress)
+			},
+		)
 	}
 
 	var retErr error
@@ -5894,7 +5917,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.ValuesStatement:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeValues, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
-	case *tree.ShowSnapShots:
+	case *tree.ShowSnapShots, *tree.ShowPitr:
 		typs = append(typs, PrivilegeTypeAccountAll)
 		objType = objectTypeDatabase
 		kind = privilegeKindNone
@@ -5903,6 +5926,10 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeDatabase
 		kind = privilegeKindNone
 	case *tree.RestoreSnapShot:
+		typs = append(typs, PrivilegeTypeAccountAll)
+		objType = objectTypeDatabase
+		kind = privilegeKindNone
+	case *tree.CreatePitr, *tree.DropPitr, *tree.AlterPitr, *tree.RestorePitr:
 		typs = append(typs, PrivilegeTypeAccountAll)
 		objType = objectTypeDatabase
 		kind = privilegeKindNone
@@ -9339,14 +9366,24 @@ func postAlterSessionStatus(
 		map[string]string{"account": accountName}, clusterservice.Contain)
 	sysTenant := isSysTenant(currTenant)
 	if sysTenant {
-		route.RouteForSuperTenant(clusterservice.NewSelector(), currUser, nil,
+		route.RouteForSuperTenant(
+			ses.GetService(),
+			clusterservice.NewSelector(),
+			currUser,
+			nil,
 			func(s *metadata.CNService) {
 				nodes = append(nodes, s.QueryAddress)
-			})
+			},
+		)
 	} else {
-		route.RouteForCommonTenant(labels, nil, func(s *metadata.CNService) {
-			nodes = append(nodes, s.QueryAddress)
-		})
+		route.RouteForCommonTenant(
+			ses.GetService(),
+			labels,
+			nil,
+			func(s *metadata.CNService) {
+				nodes = append(nodes, s.QueryAddress)
+			},
+		)
 	}
 
 	var retErr, err error

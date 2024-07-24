@@ -37,7 +37,7 @@ const (
 
 // add unit tests for cases
 type offsetTestCase struct {
-	arg   *Argument
+	arg   *Offset
 	types []types.Type
 	proc  *process.Process
 }
@@ -49,11 +49,11 @@ var (
 func init() {
 	tcs = []offsetTestCase{
 		{
-			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_int8.ToType(),
 			},
-			arg: &Argument{
+			arg: &Offset{
 				ctr: &container{
 					seen: 0,
 				},
@@ -68,11 +68,11 @@ func init() {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_int8.ToType(),
 			},
-			arg: &Argument{
+			arg: &Offset{
 				ctr: &container{
 					seen: 0,
 				},
@@ -87,11 +87,11 @@ func init() {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_int8.ToType(),
 			},
-			arg: &Argument{
+			arg: &Offset{
 				ctr: &container{
 					seen: 0,
 				},
@@ -157,11 +157,11 @@ func BenchmarkOffset(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		tcs = []offsetTestCase{
 			{
-				proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
+				proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
 				types: []types.Type{
 					types.T_int8.ToType(),
 				},
-				arg: &Argument{
+				arg: &Offset{
 					ctr: &container{
 						seen: 0,
 					},
@@ -198,8 +198,8 @@ func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
 
-func resetChildren(arg *Argument, bats []*batch.Batch) {
-	valueScanArg := &value_scan.Argument{
+func resetChildren(arg *Offset, bats []*batch.Batch) {
+	valueScanArg := &value_scan.ValueScan{
 		Batchs: bats,
 	}
 	valueScanArg.Prepare(nil)

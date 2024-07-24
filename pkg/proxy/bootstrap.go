@@ -50,7 +50,9 @@ func (h *handler) bootstrap(ctx context.Context) {
 			}(ctx)
 			if state.TaskTableUser.GetUsername() != "" && state.TaskTableUser.GetPassword() != "" {
 				db_holder.SetSQLWriterDBUser(db_holder.MOLoggerUser, state.TaskTableUser.GetPassword())
-				db_holder.SetSQLWriterDBAddressFunc(util.AddressFunc(getClient))
+				db_holder.SetSQLWriterDBAddressFunc(util.AddressFunc(h.config.UUID, getClient))
+				h.sqlWorker.SetSQLUser(SQLUsername, state.TaskTableUser.GetPassword())
+				h.sqlWorker.SetAddressFn(util.AddressFunc(h.config.UUID, getClient))
 				return
 			}
 		case <-ctx.Done():

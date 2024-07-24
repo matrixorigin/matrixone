@@ -18,9 +18,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"runtime"
 	"time"
+
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 
@@ -33,6 +34,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -80,7 +83,7 @@ func CnServerMessageHandler(
 
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(ctx, e)
-			getLogger().Error("panic in CnServerMessageHandler",
+			getLogger(lockService.GetConfig().ServiceID).Error("panic in CnServerMessageHandler",
 				zap.String("error", err.Error()))
 			err = errors.Join(err, cs.Close())
 		}
@@ -196,12 +199,12 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		err = s.ParallelRun(runCompile)
 		if err == nil {
 			// record the number of s3 requests
-			runCompile.proc.Base.AnalInfos[runCompile.anal.curr].S3IOInputCount += runCompile.counterSet.FileService.S3.Put.Load()
-			runCompile.proc.Base.AnalInfos[runCompile.anal.curr].S3IOInputCount += runCompile.counterSet.FileService.S3.List.Load()
-			runCompile.proc.Base.AnalInfos[runCompile.anal.curr].S3IOOutputCount += runCompile.counterSet.FileService.S3.Head.Load()
-			runCompile.proc.Base.AnalInfos[runCompile.anal.curr].S3IOOutputCount += runCompile.counterSet.FileService.S3.Get.Load()
-			runCompile.proc.Base.AnalInfos[runCompile.anal.curr].S3IOOutputCount += runCompile.counterSet.FileService.S3.Delete.Load()
-			runCompile.proc.Base.AnalInfos[runCompile.anal.curr].S3IOOutputCount += runCompile.counterSet.FileService.S3.DeleteMulti.Load()
+			runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOInputCount += runCompile.counterSet.FileService.S3.Put.Load()
+			runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOInputCount += runCompile.counterSet.FileService.S3.List.Load()
+			runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOOutputCount += runCompile.counterSet.FileService.S3.Head.Load()
+			runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOOutputCount += runCompile.counterSet.FileService.S3.Get.Load()
+			runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOOutputCount += runCompile.counterSet.FileService.S3.Delete.Load()
+			runCompile.proc.Base.AnalInfos[runCompile.anal.curNodeIdx].S3IOOutputCount += runCompile.counterSet.FileService.S3.DeleteMulti.Load()
 
 			receiver.finalAnalysisInfo = runCompile.proc.Base.AnalInfos
 		} else {
@@ -263,6 +266,7 @@ type processHelper struct {
 	sessionInfo      process.SessionInfo
 	analysisNodeList []int32
 	StmtId           uuid.UUID
+	prepareParams    *vector.Vector
 }
 
 // messageReceiverOnServer supported a series methods to write back results.
@@ -383,10 +387,6 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 		cnInfo.hakeeper,
 		cnInfo.udfService,
 		cnInfo.aicm)
-	if proc.Cancel != nil {
-		proc.Cancel()
-	}
-	proc.Ctx = runningCtx
 	proc.Cancel = runningCancel
 	proc.Base.UnixTime = pHelper.unixTime
 	proc.Base.Id = pHelper.id
@@ -394,6 +394,7 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	proc.Base.SessionInfo = pHelper.sessionInfo
 	proc.Base.SessionInfo.StorageEngine = cnInfo.storeEngine
 	proc.Base.AnalInfos = make([]*process.AnalyzeInfo, len(pHelper.analysisNodeList))
+	proc.SetPrepareParams(pHelper.prepareParams)
 	for i := range proc.Base.AnalInfos {
 		proc.Base.AnalInfos[i] = reuse.Alloc[process.AnalyzeInfo](nil)
 		proc.Base.AnalInfos[i].NodeId = pHelper.analysisNodeList[i]
@@ -406,6 +407,7 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	}
 
 	c := GetCompileService().getCompile(proc)
+	c.execType = plan2.ExecTypeAP_MULTICN
 	c.e = cnInfo.storeEngine
 	c.MessageBoard = c.MessageBoard.SetMultiCN(c.GetMessageCenter(), c.proc.GetStmtProfile().GetStmtId())
 	c.proc.Base.MessageBoard = c.MessageBoard
@@ -527,6 +529,19 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 		accountId:        procInfo.AccountId,
 		txnClient:        cli,
 		analysisNodeList: procInfo.GetAnalysisNodeList(),
+	}
+	if procInfo.PrepareParams.Length > 0 {
+		result.prepareParams = vector.NewVecWithData(
+			types.T_text.ToType(),
+			int(procInfo.PrepareParams.Length),
+			procInfo.PrepareParams.Data,
+			procInfo.PrepareParams.Area,
+		)
+		for i := range procInfo.PrepareParams.Nulls {
+			if procInfo.PrepareParams.Nulls[i] {
+				result.prepareParams.GetNulls().Add(uint64(i))
+			}
+		}
 	}
 	result.txnOperator, err = cli.NewWithSnapshot(procInfo.Snapshot)
 	if err != nil {

@@ -23,8 +23,6 @@ import (
 	"sync/atomic"
 	"unsafe"
 
-	"github.com/tidwall/btree"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -34,10 +32,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/tidwall/btree"
 )
 
 type PartitionState struct {
+	service string
+
 	// also modify the Copy method if adding fields
 
 	// data
@@ -276,11 +276,15 @@ func (b ObjectIndexByTSEntry) Less(than ObjectIndexByTSEntry) bool {
 	return false
 }
 
-func NewPartitionState(noData bool) *PartitionState {
+func NewPartitionState(
+	service string,
+	noData bool,
+) *PartitionState {
 	opts := btree.Options{
 		Degree: 64,
 	}
 	return &PartitionState{
+		service:         service,
 		noData:          noData,
 		rows:            btree.NewBTreeGOptions((RowEntry).Less, opts),
 		dataObjects:     btree.NewBTreeGOptions((ObjectEntry).Less, opts),
@@ -294,6 +298,7 @@ func NewPartitionState(noData bool) *PartitionState {
 
 func (p *PartitionState) Copy() *PartitionState {
 	state := PartitionState{
+		service:         p.service,
 		rows:            p.rows.Copy(),
 		dataObjects:     p.dataObjects.Copy(),
 		blockDeltas:     p.blockDeltas.Copy(),
@@ -310,6 +315,10 @@ func (p *PartitionState) Copy() *PartitionState {
 		copy(state.checkpoints, p.checkpoints)
 	}
 	return &state
+}
+
+func (p *PartitionState) Checkpoints() []string {
+	return p.checkpoints
 }
 
 func (p *PartitionState) RowExists(rowID types.Rowid, ts types.TS) bool {
@@ -350,7 +359,7 @@ func (p *PartitionState) HandleLogtailEntry(
 	primarySeqnum int,
 	packer *types.Packer,
 ) {
-	txnTrace.GetService().ApplyLogtail(entry, 1)
+	txnTrace.GetService(p.service).ApplyLogtail(entry, 1)
 	switch entry.EntryType {
 	case api.Entry_Insert:
 		if IsBlkTable(entry.TableName) {
@@ -477,9 +486,9 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 			p.objectIndexByTS.Set(e)
 		}
 		//prefetch the object meta
-		if err := blockio.PrefetchMeta(fs, objEntry.Location()); err != nil {
-			logutil.Errorf("prefetch object meta failed. %v", err)
-		}
+		// if err := blockio.PrefetchMeta(fs, objEntry.Location()); err != nil {
+		// 	logutil.Errorf("prefetch object meta failed. %v", err)
+		// }
 
 		p.dataObjects.Set(objEntry)
 		{
@@ -920,7 +929,7 @@ func (p *PartitionState) objectDeleteHelper(
 
 				IsAppendable: objEntry.EntryState,
 			}
-			txnTrace.GetService().ApplyDeleteObject(
+			txnTrace.GetService(p.service).ApplyDeleteObject(
 				tableID,
 				objEntry.DeleteTime.ToTimestamp(),
 				"",

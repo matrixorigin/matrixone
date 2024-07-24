@@ -82,7 +82,7 @@ func init() {
 		// newTestCase("insert into R values('991', '992', '993')", new(testing.T)),
 		// newTestCase("insert into R select * from S", new(testing.T)),
 		// newTestCase("update R set uid=110 where orderid='abcd'", new(testing.T)),
-		newTestCase(fmt.Sprintf("load data infile {\"filepath\"=\"%s/../../../test/distributed/resources/load_data/parallel.txt.gz\", \"compression\"=\"gzip\"} into table pressTbl FIELDS TERMINATED BY '|' OPTIONALLY ENCLOSED BY '\"' LINES TERMINATED BY '\n' parallel 'true';", GetFilePath()), new(testing.T)),
+		newTestCase(fmt.Sprintf("load data infile {\"filepath\"=\"%s/../../../test/distributed/resources/load_data/parallel_1.txt.gz\", \"compression\"=\"gzip\"} into table pressTbl FIELDS TERMINATED BY '|' OPTIONALLY ENCLOSED BY '\"' LINES TERMINATED BY '\n' parallel 'true';", GetFilePath()), new(testing.T)),
 	}
 }
 
@@ -140,7 +140,12 @@ func (w *Ws) GetHaveDDL() bool {
 }
 
 func TestCompile(t *testing.T) {
-	cnclient.NewCNClient("test", new(cnclient.ClientConfig))
+	c, err := cnclient.NewPipelineClient("", "test", &cnclient.PipelineConfig{})
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, c.Close())
+	}()
+
 	ctrl := gomock.NewController(t)
 	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
 	txnCli, txnOp := newTestTxnClientAndOp(ctrl)
@@ -169,7 +174,13 @@ func TestCompileWithFaults(t *testing.T) {
 	// Enable this line to trigger the Hung.
 	// fault.Enable()
 	var ctx = defines.AttachAccountId(context.Background(), catalog.System_Account)
-	cnclient.NewCNClient("test", new(cnclient.ClientConfig))
+
+	pc, err := cnclient.NewPipelineClient("", "test", &cnclient.PipelineConfig{})
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, pc.Close())
+	}()
+
 	fault.AddFaultPoint(ctx, "panic_in_batch_append", ":::", "panic", 0, "")
 	tc := newTestCase("select * from R join S on R.uid = S.uid", t)
 	ctrl := gomock.NewController(t)
@@ -178,7 +189,7 @@ func TestCompileWithFaults(t *testing.T) {
 	tc.proc.Base.TxnOperator = txnOp
 	tc.proc.Ctx = ctx
 	c := NewCompile("test", "test", tc.sql, "", "", tc.e, tc.proc, nil, false, nil, time.Now())
-	err := c.Compile(ctx, tc.pn, testPrint)
+	err = c.Compile(ctx, tc.pn, testPrint)
 	require.NoError(t, err)
 	c.getAffectedRows()
 	_, err = c.Run(0)
@@ -225,7 +236,7 @@ func newTestCase(sql string, t *testing.T) compileTestCase {
 func TestCompileShouldReturnCtxError(t *testing.T) {
 	{
 		c := reuse.Alloc[Compile](nil)
-		c.proc = testutil.NewProcessWithMPool(mpool.MustNewZero())
+		c.proc = testutil.NewProcessWithMPool("", mpool.MustNewZero())
 		ctx, cancel := context.WithTimeout(context.TODO(), 100*time.Millisecond)
 		c.proc.Ctx = ctx
 		time.Sleep(time.Second)
@@ -236,7 +247,7 @@ func TestCompileShouldReturnCtxError(t *testing.T) {
 
 	{
 		c := reuse.Alloc[Compile](nil)
-		c.proc = testutil.NewProcessWithMPool(mpool.MustNewZero())
+		c.proc = testutil.NewProcessWithMPool("", mpool.MustNewZero())
 		ctx, cancel := context.WithTimeout(context.TODO(), 500*time.Millisecond)
 		c.proc.Ctx = ctx
 		cancel()

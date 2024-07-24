@@ -15,15 +15,15 @@
 package db
 
 import (
-	"sync/atomic"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	dto "github.com/prometheus/client_model/go"
 )
 
 type ScannerOp interface {
@@ -48,9 +48,7 @@ type MergeTaskBuilder struct {
 	tableRowCnt int
 	tableRowDel int
 
-	// concurrecy control
-	suspend    atomic.Bool
-	suspendCnt atomic.Int32
+	skipForTransPageLimit bool
 }
 
 func newMergeTaskBuilder(db *DB) *MergeTaskBuilder {
@@ -108,6 +106,16 @@ func (s *MergeTaskBuilder) PreExecute() error {
 			delete(s.mergingObjs, obj)
 		}
 	}
+	s.skipForTransPageLimit = false
+	m := &dto.Metric{}
+	v2.TaskMergeTransferPageLengthGauge.Write(m)
+	pagesize := m.GetGauge().GetValue() * 28 /*int32 + rowid(24b)*/ * 1.3 /*map inflationg factor*/
+	if pagesize > float64(s.executor.TransferPageSizeLimit()) {
+		logutil.Infof("[mergeblocks] skip merge scanning due to transfer page %s, limit %s",
+			common.HumanReadableBytes(int(pagesize)),
+			common.HumanReadableBytes(int(s.executor.TransferPageSizeLimit())))
+		s.skipForTransPageLimit = true
+	}
 	return nil
 }
 
@@ -116,27 +124,28 @@ func (s *MergeTaskBuilder) PostExecute() error {
 	return nil
 }
 func (s *MergeTaskBuilder) onDataBase(dbEntry *catalog.DBEntry) (err error) {
-	if s.suspend.Load() {
-		s.suspendCnt.Add(1)
-		return moerr.GetOkStopCurrRecur()
-	}
-	s.suspendCnt.Store(0)
 	if merge.StopMerge.Load() {
 		return moerr.GetOkStopCurrRecur()
 	}
 	if s.executor.MemAvailBytes() < 100*common.Const1MBytes {
 		return moerr.GetOkStopCurrRecur()
 	}
+
+	if s.skipForTransPageLimit {
+		return moerr.GetOkStopCurrRecur()
+	}
+
 	return
 }
 
 func (s *MergeTaskBuilder) onTable(tableEntry *catalog.TableEntry) (err error) {
-	if merge.StopMerge.Load() || s.suspend.Load() {
+	if merge.StopMerge.Load() {
 		return moerr.GetOkStopCurrRecur()
 	}
 	if !tableEntry.IsActive() {
 		return moerr.GetOkStopCurrRecur()
 	}
+
 	tableEntry.RLock()
 	// this table is creating or altering
 	if !tableEntry.IsCommittedLocked() {
@@ -149,8 +158,10 @@ func (s *MergeTaskBuilder) onTable(tableEntry *catalog.TableEntry) (err error) {
 	deltaLocRows := uint32(0)
 	distinctDeltaLocs := 0
 	tblRows := 0
-	for objIt := tableEntry.MakeObjectIt(true); objIt.Valid(); objIt.Next() {
-		objectEntry := objIt.Get().GetPayload()
+	objIt := tableEntry.MakeObjectIt(true)
+	defer objIt.Release()
+	for objIt.Next() {
+		objectEntry := objIt.Item()
 		if !objectValid(objectEntry) {
 			continue
 		}
@@ -166,7 +177,7 @@ func (s *MergeTaskBuilder) onTable(tableEntry *catalog.TableEntry) (err error) {
 		s.tableRowDel += dels
 		tblRows += rows - dels
 
-		tombstone := tableEntry.TryGetTombstone(objectEntry.ID)
+		tombstone := tableEntry.TryGetTombstone(*objectEntry.ID())
 		if tombstone == nil {
 			continue
 		}
@@ -195,8 +206,7 @@ func (s *MergeTaskBuilder) onPostTable(tableEntry *catalog.TableEntry) (err erro
 	}
 	// delObjs := s.ObjectHelper.finish()
 
-	mobjs, kind := s.objPolicy.Revise(s.executor.CPUPercent(), int64(s.executor.MemAvailBytes()),
-		merge.DisableDeltaLocMerge.Load())
+	mobjs, kind := s.objPolicy.Revise(s.executor.CPUPercent(), int64(s.executor.MemAvailBytes()))
 	if len(mobjs) > 1 {
 		for _, m := range mobjs {
 			s.mergingObjs[m] = struct{}{}
@@ -226,7 +236,7 @@ func (s *MergeTaskBuilder) onObject(objectEntry *catalog.ObjectEntry) (err error
 		rate := float64(deltaLocRows) / float64(remainingRows)
 		logutil.Infof(
 			"[DeltaLoc Merge] tblId: %s(%d), obj: %s, deltaLoc: %d, rows: %d, deltaLocRows: %d, rate: %f",
-			s.name, s.tid, objectEntry.ID.String(), deltaLocCnt, remainingRows, deltaLocRows, rate)
+			s.name, s.tid, objectEntry.ID().String(), deltaLocCnt, remainingRows, deltaLocRows, rate)
 		s.objPolicy.OnObject(objectEntry, true)
 	} else {
 		s.objPolicy.OnObject(objectEntry, false)
@@ -239,9 +249,7 @@ func (s *MergeTaskBuilder) onPostObject(obj *catalog.ObjectEntry) (err error) {
 }
 
 func objectValid(objectEntry *catalog.ObjectEntry) bool {
-	objectEntry.RLock()
-	defer objectEntry.RUnlock()
-	if !objectEntry.IsCommittedLocked() || !catalog.ActiveObjectWithNoTxnFilter(objectEntry.BaseEntryImpl) {
+	if !objectEntry.IsCommitted() || !catalog.ActiveObjectWithNoTxnFilter(objectEntry) {
 		return false
 	}
 

@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(Argument)
+var _ vm.Operator = new(LoopAnti)
 
 const (
 	Build = iota
@@ -46,7 +46,7 @@ type container struct {
 	buf *batch.Batch
 }
 
-type Argument struct {
+type LoopAnti struct {
 	ctr    *container
 	Result []int32
 	Cond   *plan.Expr
@@ -55,43 +55,43 @@ type Argument struct {
 	vm.OperatorBase
 }
 
-func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
-	return &arg.OperatorBase
+func (loopAnti *LoopAnti) GetOperatorBase() *vm.OperatorBase {
+	return &loopAnti.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[Argument](
-		func() *Argument {
-			return &Argument{}
+	reuse.CreatePool[LoopAnti](
+		func() *LoopAnti {
+			return &LoopAnti{}
 		},
-		func(a *Argument) {
-			*a = Argument{}
+		func(a *LoopAnti) {
+			*a = LoopAnti{}
 		},
-		reuse.DefaultOptions[Argument]().
+		reuse.DefaultOptions[LoopAnti]().
 			WithEnableChecker(),
 	)
 }
 
-func (arg Argument) TypeName() string {
-	return argName
+func (loopAnti LoopAnti) TypeName() string {
+	return opName
 }
 
-func NewArgument() *Argument {
-	return reuse.Alloc[Argument](nil)
+func NewArgument() *LoopAnti {
+	return reuse.Alloc[LoopAnti](nil)
 }
 
-func (arg *Argument) Release() {
-	if arg != nil {
-		reuse.Free[Argument](arg, nil)
+func (loopAnti *LoopAnti) Release() {
+	if loopAnti != nil {
+		reuse.Free[LoopAnti](loopAnti, nil)
 	}
 }
 
-func (arg *Argument) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	arg.Free(proc, pipelineFailed, err)
+func (loopAnti *LoopAnti) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	loopAnti.Free(proc, pipelineFailed, err)
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if ctr := arg.ctr; ctr != nil {
+func (loopAnti *LoopAnti) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if ctr := loopAnti.ctr; ctr != nil {
 		ctr.cleanBatch(proc.Mp())
 		ctr.cleanExprExecutor()
 		ctr.FreeAllReg()
@@ -99,8 +99,8 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		//	proc.PutBatch(arg.ctr.buf)
 		//	arg.ctr.buf = nil
 		//}
-		arg.ctr.lastrow = 0
-		arg.ctr = nil
+		loopAnti.ctr.lastrow = 0
+		loopAnti.ctr = nil
 	}
 }
 

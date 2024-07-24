@@ -496,3 +496,18 @@ set @id='f7945612-e27f-4bd8-b372-8cc596ea8eb6';
 execute __mo_stmt_id_23 using @account_id,@user,@id;
 count(*)
 1
+create database prepare_test;
+use prepare_test;
+drop table if exists t1;
+drop table if exists t2;
+create table t1(a int);
+create table t2(a int);
+insert into t1 select * from generate_series(1,20000000,1)g;
+insert into t2 select * from generate_series(1,10000000,1)g;
+prepare stmt1 from 'select count(*) from (t1 join t2 on t1.a=t2.a%?)';
+set @value1=2;
+execute stmt1 using @value1;
+count(*)
+5000000
+deallocate prepare stmt1;
+drop database prepare_test;

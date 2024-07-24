@@ -17,6 +17,9 @@ package compile
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -29,8 +32,6 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"go.uber.org/zap"
-	"sync/atomic"
-	"time"
 )
 
 // MaxRpcTime is a default timeout time to rpc context if user never set this deadline.
@@ -49,7 +50,7 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 	defer func() {
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(s.Proc.Ctx, e)
-			getLogger().Error("panic in scope remoteRun",
+			getLogger(s.Proc.GetService()).Error("panic in scope remoteRun",
 				zap.String("sql", c.sql),
 				zap.String("error", err.Error()))
 		}
@@ -63,7 +64,13 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 	}
 
 	// generate a new sender to do send work.
-	sender, err = newMessageSenderOnClient(s.Proc.Ctx, s.NodeInfo.Addr, s.Proc.Mp(), c.anal)
+	sender, err = newMessageSenderOnClient(
+		s.Proc.Ctx,
+		s.Proc.GetService(),
+		s.NodeInfo.Addr,
+		s.Proc.Mp(),
+		c.anal,
+	)
 	if err != nil {
 		c.proc.Errorf(s.Proc.Ctx, "Failed to newMessageSenderOnClient sql=%s, txnID=%s, err=%v",
 			c.sql, c.proc.GetTxnOperator().Txn().DebugString(), err)
@@ -86,11 +93,15 @@ func prepareRemoteRunSendingData(sqlStr string, s *Scope) (scopeData []byte, pro
 	// Encode the Scope related.
 	// encode all operators in the scope except the last one.
 	// because we need to keep it local for receiving and sending batch to next pipeline.
-	LastIndex := len(s.Instructions) - 1
-	LastOperator := s.Instructions[LastIndex]
-	s.Instructions = s.Instructions[:LastIndex]
+	rootOp := s.RootOp
+	if rootOp.GetOperatorBase().NumChildren() == 0 {
+		s.RootOp = nil
+	} else {
+		s.RootOp = s.RootOp.GetOperatorBase().GetChildren(0)
+	}
+	rootOp.GetOperatorBase().SetChildren(nil)
 	defer func() {
-		s.Instructions = append(s.Instructions, LastOperator)
+		s.doSetRootOperator(rootOp)
 	}()
 
 	if scopeData, err = encodeScope(s); err != nil {
@@ -117,10 +128,10 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 		fakeValueScanOperator.Release()
 	}()
 
-	LastOperator := s.Instructions[len(s.Instructions)-1]
-	lastAnalyze := c.proc.GetAnalyze(LastOperator.Idx, -1, false)
-	switch arg := LastOperator.Arg.(type) {
-	case *connector.Argument:
+	LastOperator := s.RootOp
+	lastAnalyze := c.proc.GetAnalyze(LastOperator.GetOperatorBase().GetIdx(), -1, false)
+	switch arg := LastOperator.(type) {
+	case *connector.Connector:
 		oldChildren := arg.Children
 		arg.Children = nil
 		arg.AppendChild(fakeValueScanOperator)
@@ -128,7 +139,7 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 			arg.Children = oldChildren
 		}()
 
-	case *dispatch.Argument:
+	case *dispatch.Dispatch:
 		oldChildren := arg.Children
 		arg.Children = nil
 		arg.AppendChild(fakeValueScanOperator)
@@ -138,11 +149,11 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 
 	default:
 		panic(
-			fmt.Sprintf("remote run pipeline has an unexpected operator [id = %d] at last.", LastOperator.Op))
+			fmt.Sprintf("remote run pipeline has an unexpected operator [id = %d] at last.", LastOperator.OpType()))
 	}
 
 	// the last operator is responsible for distributing received data locally. Need Prepare here.
-	if err := LastOperator.Arg.Prepare(s.Proc); err != nil {
+	if err := LastOperator.Prepare(s.Proc); err != nil {
 		return err
 	}
 
@@ -162,7 +173,7 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 		lastAnalyze.Network(bat)
 		fakeValueScanOperator.Batchs = append(fakeValueScanOperator.Batchs, bat)
 
-		result, errCall := LastOperator.Arg.Call(s.Proc)
+		result, errCall := LastOperator.Call(s.Proc)
 		if errCall != nil || result.Status == vm.ExecStop {
 			return errCall
 		}
@@ -198,9 +209,13 @@ type messageSenderOnClient struct {
 }
 
 func newMessageSenderOnClient(
-	ctx context.Context, toAddr string, mp *mpool.MPool, ana *anaylze) (*messageSenderOnClient, error) {
-
-	streamSender, err := cnclient.GetStreamSender(toAddr)
+	ctx context.Context,
+	sid string,
+	toAddr string,
+	mp *mpool.MPool,
+	ana *anaylze,
+) (*messageSenderOnClient, error) {
+	streamSender, err := cnclient.GetPipelineClient(sid).NewStream(toAddr)
 	if err != nil {
 		return nil, err
 	}

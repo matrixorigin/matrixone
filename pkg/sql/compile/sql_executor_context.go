@@ -48,10 +48,12 @@ type compilerContext struct {
 	dbOfView, nameOfView string
 	sql                  string
 	mu                   sync.Mutex
+
+	lower int64
 }
 
 func (c *compilerContext) GetLowerCaseTableNames() int64 {
-	return 1
+	return c.lower
 }
 
 func (c *compilerContext) GetViews() []string {
@@ -98,19 +100,6 @@ func (c *compilerContext) SetQueryingSubscription(meta *plan.SubscriptionMeta) {
 
 func (c *compilerContext) GetQueryingSubscription() *plan.SubscriptionMeta {
 	return nil
-}
-
-func newCompilerContext(
-	ctx context.Context,
-	defaultDB string,
-	eng engine.Engine,
-	proc *process.Process) *compilerContext {
-	return &compilerContext{
-		ctx:       ctx,
-		defaultDB: defaultDB,
-		engine:    eng,
-		proc:      proc,
-	}
 }
 
 func (c *compilerContext) ResolveUdf(name string, ast []*plan.Expr) (*function.Udf, error) {
@@ -262,6 +251,10 @@ func (c *compilerContext) GetAccountId() (uint32, error) {
 
 func (c *compilerContext) GetContext() context.Context {
 	return c.proc.Ctx
+}
+
+func (c *compilerContext) SetContext(ctx context.Context) {
+	c.proc.Ctx = ctx
 }
 
 func (c *compilerContext) ResolveById(tableId uint64, snapshot plan.Snapshot) (objRef *plan.ObjectRef, tableDef *plan.TableDef) {

@@ -30,14 +30,14 @@ func TestBootstrap(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	rt := runtime.DefaultRuntime()
-	runtime.SetupProcessLevelRuntime(rt)
+	runtime.SetupServiceBasedRuntime("", rt)
 	c := mockHAKeeperClient{}
 	st := stopper.NewStopper("test-proxy", stopper.WithLogger(rt.Logger().RawLogger()))
 	cfg := Config{
 		RebalanceInterval: toml.Duration{Duration: time.Second},
 	}
 	cfg.Cluster.RefreshInterval = toml.Duration{Duration: defaultRefreshInterval}
-	h, err := newProxyHandler(ctx, rt, cfg, st, nil, &c)
+	h, err := newProxyHandler(ctx, rt, cfg, st, nil, &c, true)
 	require.NoError(t, err)
 	h.bootstrap(ctx)
 

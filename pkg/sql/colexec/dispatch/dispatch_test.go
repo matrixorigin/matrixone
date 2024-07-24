@@ -35,7 +35,7 @@ const (
 
 // add unit tests for cases
 type dispatchTestCase struct {
-	arg    *Argument
+	arg    *Dispatch
 	types  []types.Type
 	proc   *process.Process
 	cancel context.CancelFunc
@@ -100,14 +100,14 @@ func TestDispatch(t *testing.T) {
 }
 
 func newTestCase() dispatchTestCase {
-	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
+	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
 	reg := &process.WaitRegister{Ctx: ctx, Ch: make(chan *process.RegisterMessage, 3)}
 	return dispatchTestCase{
 		proc:  proc,
 		types: []types.Type{types.T_int8.ToType()},
-		arg: &Argument{
+		arg: &Dispatch{
 			FuncId:    SendToAllLocalFunc,
 			LocalRegs: []*process.WaitRegister{reg},
 			OperatorBase: vm.OperatorBase{
@@ -128,8 +128,8 @@ func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
 
-func resetChildren(arg *Argument, bats []*batch.Batch) {
-	valueScanArg := &value_scan.Argument{
+func resetChildren(arg *Dispatch, bats []*batch.Batch) {
+	valueScanArg := &value_scan.ValueScan{
 		Batchs: bats,
 	}
 	valueScanArg.Prepare(nil)

@@ -45,7 +45,7 @@ const (
 
 // add unit tests for cases
 type externalTestCase struct {
-	arg      *Argument
+	arg      *External
 	types    []types.Type
 	proc     *process.Process
 	cancel   context.CancelFunc
@@ -65,7 +65,7 @@ func newTestCase(format, jsondata string) externalTestCase {
 	return externalTestCase{
 		proc:  proc,
 		types: []types.Type{types.T_int8.ToType()},
-		arg: &Argument{
+		arg: &External{
 			ctr: &container{},
 			Es: &ExternalParam{
 				ExParamConst: ExParamConst{
@@ -505,6 +505,10 @@ func Test_getBatchData(t *testing.T) {
 		for i := 0; i < len(attrs); i++ {
 			param.Name2ColIndex[attrs[i]] = int32(i)
 		}
+		param.TbColToDataCol = make(map[string]int32)
+		for i := 0; i < len(attrs); i++ {
+			param.TbColToDataCol[attrs[i]] = int32(i)
+		}
 		plh := &ParseLineHandler{
 			batchSize:      1,
 			moCsvLineArray: [][]csvparser.Field{buildFields(line)},
@@ -535,10 +539,15 @@ func Test_getBatchData(t *testing.T) {
 		line = []string{"truefalse", "128", "32768", "2147483648", "9223372036854775808", "256", "65536", "4294967296", "18446744073709551616",
 			"float32", "float64", "", "13", "date", "datetime", "decimal64", "decimal128", "timestamp"}
 		for i := 0; i < len(attrs); i++ {
+			tempLine := line[:len(line)-i]
 			tmp := attrs[i:]
 			param.Attrs = tmp
+			param.TbColToDataCol = make(map[string]int32)
+			for i := 0; i < len(tmp); i++ {
+				param.TbColToDataCol[tmp[i]] = int32(i)
+			}
 			param.Cols = cols[i:]
-			plh.moCsvLineArray = [][]csvparser.Field{buildFields(line)}
+			plh.moCsvLineArray = [][]csvparser.Field{buildFields(tempLine)}
 			_, err = getBatchData(param, plh, proc)
 			convey.So(err, convey.ShouldNotBeNil)
 		}
@@ -558,6 +567,10 @@ func Test_getBatchData(t *testing.T) {
 		for i := 1; i <= 8; i++ {
 			tmp := attrs[i:]
 			param.Attrs = tmp
+			param.TbColToDataCol = make(map[string]int32)
+			for i := 0; i < len(tmp); i++ {
+				param.TbColToDataCol[tmp[i]] = int32(i)
+			}
 			param.Cols = cols[i:]
 			plh.moCsvLineArray = [][]csvparser.Field{buildFields(line)}
 			_, err = getBatchData(param, plh, proc)
@@ -568,6 +581,10 @@ func Test_getBatchData(t *testing.T) {
 		param.Extern.Format = tree.JSONLINE
 		param.Extern.JsonData = tree.OBJECT
 		param.Attrs = attrs
+		param.TbColToDataCol = make(map[string]int32)
+		for i := 0; i < len(attrs); i++ {
+			param.TbColToDataCol[attrs[i]] = int32(i)
+		}
 		param.Cols = cols
 		plh.moCsvLineArray = [][]csvparser.Field{buildFields(jsonline_object)}
 		_, err = getBatchData(param, plh, proc)

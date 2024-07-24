@@ -29,6 +29,7 @@ import (
 )
 
 const (
+	threshHoldForRightJoinShuffle   = 120000
 	threshHoldForRangeShuffle       = 240000
 	threshHoldForHybirdShuffle      = 4000000
 	threshHoldForHashShuffle        = 8000000
@@ -309,9 +310,16 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 		return
 	}
 
-	if n.Stats.HashmapStats.HashmapSize < threshHoldForRangeShuffle {
-		return
+	if n.BuildOnLeft {
+		if n.Stats.HashmapStats.HashmapSize < threshHoldForRightJoinShuffle {
+			return
+		}
+	} else {
+		if n.Stats.HashmapStats.HashmapSize < threshHoldForRangeShuffle {
+			return
+		}
 	}
+
 	idx := 0
 	if !builder.IsEquiJoin(n) {
 		return
@@ -339,15 +347,20 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 	}
 
 	// get the column of left child
-	var expr *plan.Expr
+	var expr0, expr1 *plan.Expr
 	cond := n.OnList[idx]
 	switch condImpl := cond.Expr.(type) {
 	case *plan.Expr_F:
-		expr = condImpl.F.Args[0]
+		expr0 = condImpl.F.Args[0]
+		expr1 = condImpl.F.Args[1]
 	}
 
-	hashCol, typ := GetHashColumn(expr)
-	if hashCol == nil {
+	hashCol0, typ := GetHashColumn(expr0)
+	if hashCol0 == nil {
+		return
+	}
+	hashCol1, _ := GetHashColumn(expr1)
+	if hashCol1 == nil {
 		return
 	}
 	//for now ,only support integer and string type
@@ -355,7 +368,7 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
 		n.Stats.HashmapStats.ShuffleColIdx = int32(idx)
 		n.Stats.HashmapStats.Shuffle = true
-		determinShuffleType(hashCol, n, builder)
+		determinShuffleType(hashCol0, n, builder)
 		if n.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Hash && n.Stats.HashmapStats.HashmapSize < threshHoldForHashShuffle {
 			n.Stats.HashmapStats.Shuffle = false
 		}

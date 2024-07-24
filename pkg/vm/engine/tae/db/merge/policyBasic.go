@@ -86,16 +86,15 @@ func (o *customConfigProvider) GetConfig(tbl *catalog.TableEntry) *BasicPolicyCo
 			if cnSize == 0 {
 				cnSize = common.DefaultMinCNMergeSize * common.Const1MBytes
 			}
-			// if the values are smaller than default, it map old rows -> bytes size
+			// compatible codes: remap old rows -> default bytes size
 			minOsize := extra.MinOsizeQuailifed
-			if v := uint32(80 * 8192); minOsize < v {
-				minOsize = v
+			if minOsize < 80*8192 {
+				minOsize = common.DefaultMinOsizeQualifiedMB * common.Const1MBytes
 			}
 			maxOsize := extra.MaxOsizeMergedObj
-			if v := uint32(500 * 8192); maxOsize < v {
-				maxOsize = v
+			if maxOsize < 500*8192 {
+				maxOsize = common.DefaultMaxOsizeObjMB * common.Const1MBytes
 			}
-
 			p = &BasicPolicyConfig{
 				ObjectMinOsize:    minOsize,
 				MergeMaxOneRun:    int(extra.MaxObjOnerun),
@@ -236,17 +235,11 @@ func (o *basic) GetConfig(tbl *catalog.TableEntry) any {
 	return r
 }
 
-func (o *basic) Revise(cpu, mem int64, littleFirst bool) ([]*catalog.ObjectEntry, TaskHostKind) {
+func (o *basic) Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind) {
 	objs := o.objHeap.finish()
-	if littleFirst {
-		slices.SortFunc(objs, func(a, b *catalog.ObjectEntry) int {
-			return cmp.Compare(a.GetRemainingRows(), b.GetRemainingRows())
-		})
-	} else {
-		slices.SortFunc(objs, func(a, b *catalog.ObjectEntry) int {
-			return -cmp.Compare(a.GetRemainingRows(), b.GetRemainingRows())
-		})
-	}
+	slices.SortFunc(objs, func(a, b *catalog.ObjectEntry) int {
+		return cmp.Compare(a.GetRemainingRows(), b.GetRemainingRows())
+	})
 
 	isStandalone := common.IsStandaloneBoost.Load()
 	mergeOnDNIfStandalone := !common.ShouldStandaloneCNTakeOver.Load()
@@ -332,12 +325,15 @@ func (o *basic) controlMem(objs []*catalog.ObjectEntry, mem int64) []*catalog.Ob
 	}
 
 	needPopout := func(ss []*catalog.ObjectEntry) bool {
+		_, esize, _ := estimateMergeConsume(ss)
+		if esize > int(2*mem/3) {
+			return true
+		}
+
 		if len(ss) <= 2 {
 			return false
 		}
-
-		_, esize, _ := estimateMergeConsume(ss)
-		return esize > int(2*mem/3)
+		return false
 	}
 	for needPopout(objs) {
 		objs = objs[:len(objs)-1]

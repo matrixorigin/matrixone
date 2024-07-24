@@ -37,7 +37,7 @@ const (
 
 // add unit tests for cases
 type limitTestCase struct {
-	arg    *Argument
+	arg    *MergeLimit
 	types  []types.Type
 	proc   *process.Process
 	cancel context.CancelFunc
@@ -156,7 +156,7 @@ func BenchmarkLimit(b *testing.B) {
 }
 
 func newTestCase(limit uint64) limitTestCase {
-	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
+	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
@@ -172,7 +172,7 @@ func newTestCase(limit uint64) limitTestCase {
 		types: []types.Type{
 			types.T_int8.ToType(),
 		},
-		arg: &Argument{
+		arg: &MergeLimit{
 			Limit: plan.MakePlan2Uint64ConstExprWithType(limit),
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{

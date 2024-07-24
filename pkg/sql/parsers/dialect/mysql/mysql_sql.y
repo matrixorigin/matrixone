@@ -475,6 +475,9 @@ import (
 // Snapshot READ
 %token <str> MO_TS
 
+// PITR
+%token <str> PITR
+
 %type <statement> stmt block_stmt block_type_stmt normal_stmt
 %type <statements> stmt_list stmt_list_return
 %type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt truncate_table_stmt alter_sequence_stmt upgrade_stmt
@@ -531,6 +534,7 @@ import (
 %type <statement> create_publication_stmt drop_publication_stmt alter_publication_stmt show_publications_stmt show_subscriptions_stmt
 %type <statement> create_stage_stmt drop_stage_stmt alter_stage_stmt
 %type <statement> create_snapshot_stmt drop_snapshot_stmt
+%type <statement> create_pitr_stmt drop_pitr_stmt show_pitr_stmt alter_pitr_stmt
 %type <str> urlparams
 %type <str> comment_opt view_list_opt view_opt security_opt view_tail check_type
 %type <subscriptionOption> subscription_opt
@@ -615,7 +619,7 @@ import (
 %type <funcExpr> function_call_window
 %type <expr> sample_function_expr
 
-%type <unresolvedName> column_name column_name_unresolved
+%type <unresolvedName> column_name column_name_unresolved normal_ident
 %type <strs> enum_values force_quote_opt force_quote_list infile_or_s3_param infile_or_s3_params credentialsparams credentialsparam
 %type <str> charset_keyword db_name db_name_opt
 %type <str> backup_type_opt backup_timestamp_opt
@@ -692,7 +696,7 @@ import (
 %type <frameBound> frame_bound frame_bound_start
 %type <frameType> frame_type
 %type <str> fields_or_columns
-%type <int64Val> algorithm_opt partition_num_opt sub_partition_num_opt opt_retry
+%type <int64Val> algorithm_opt partition_num_opt sub_partition_num_opt opt_retry pitr_value
 %type <boolVal> linear_opt
 %type <partition> partition
 %type <partitions> partition_list_opt partition_list
@@ -734,7 +738,6 @@ import (
 %type <varExprs> variable_list
 %type <loadColumn> columns_or_variable
 %type <loadColumns> columns_or_variable_list columns_or_variable_list_opt
-%type <unresolvedName> normal_ident
 %type <updateExpr> load_set_item
 %type <updateExprs> load_set_list load_set_spec_opt
 %type <strs> index_name_and_type_opt index_name_list
@@ -994,6 +997,69 @@ snapshot_object_opt:
         }
     }
 
+create_pitr_stmt:
+    CREATE PITR not_exists_opt ident RANGE pitr_value STRING
+    {
+        $$ = &tree.CreatePitr{
+            IfNotExists: $3,
+            Name: tree.Identifier($4.Compare()),
+            Level: tree.PITRLEVELACCOUNT,
+            PitrValue: $6,
+            PitrUnit: $7,
+        }
+    }
+|   CREATE PITR not_exists_opt ident FOR CLUSTER RANGE pitr_value STRING
+    {
+       $$ = &tree.CreatePitr{
+            IfNotExists: $3,
+            Name: tree.Identifier($4.Compare()),
+            Level: tree.PITRLEVELCLUSTER,
+            PitrValue: $8,
+            PitrUnit: $9,
+        }
+    }
+|   CREATE PITR not_exists_opt ident FOR ACCOUNT ident RANGE pitr_value STRING
+    {
+       $$ = &tree.CreatePitr{
+            IfNotExists: $3,
+            Name: tree.Identifier($4.Compare()),
+            Level: tree.PITRLEVELACCOUNT,
+            AccountName: tree.Identifier($7.Compare()),
+            PitrValue: $9,
+            PitrUnit: $10,
+        }
+    }
+|   CREATE PITR not_exists_opt ident FOR DATABASE ident RANGE pitr_value STRING
+    {
+        $$ = &tree.CreatePitr{
+            IfNotExists: $3,
+            Name: tree.Identifier($4.Compare()),
+            Level: tree.PITRLEVELDATABASE,
+            DatabaseName: tree.Identifier($7.Compare()),
+            PitrValue: $9,
+            PitrUnit: $10,
+        }
+    }
+|   CREATE PITR not_exists_opt ident FOR DATABASE ident TABLE ident RANGE pitr_value STRING
+    {
+        $$ = &tree.CreatePitr{
+            IfNotExists: $3,
+            Name: tree.Identifier($4.Compare()),
+            Level: tree.PITRLEVELTABLE,
+            DatabaseName: tree.Identifier($7.Compare()),
+            TableName: tree.Identifier($9.Compare()),
+            PitrValue: $11,
+            PitrUnit: $12,
+        }
+    }
+
+pitr_value:
+    INTEGRAL
+    {
+        $$ = $1.(int64)
+    }
+   
+    
 
 snapshot_restore_stmt:
     RESTORE CLUSTER FROM SNAPSHOT ident
@@ -1384,6 +1450,7 @@ strict_opt:
             goto ret1
         }
     }
+
 normal_ident:
     ident
     {
@@ -1391,11 +1458,14 @@ normal_ident:
     }
 |   ident '.' ident
     {
-        $$ = tree.NewUnresolvedName(yylex.(*Lexer).GetTblNameCStr("", $1.Origin()), $3)
+        tblNameCStr := yylex.(*Lexer).GetDbOrTblNameCStr($1.Origin())
+        $$ = tree.NewUnresolvedName(tblNameCStr, $3)
     }
 |   ident '.' ident '.' ident
     {
-        $$ = tree.NewUnresolvedName(yylex.(*Lexer).GetDbNameCStr($1.Origin()), yylex.(*Lexer).GetTblNameCStr($1.Origin(), $3.Origin()), $5)
+        dbNameCStr := yylex.(*Lexer).GetDbOrTblNameCStr($1.Origin())
+        tblNameCStr := yylex.(*Lexer).GetDbOrTblNameCStr($3.Origin())
+        $$ = tree.NewUnresolvedName(dbNameCStr, tblNameCStr, $5)
     }
 
 columns_or_variable_list_opt:
@@ -1793,24 +1863,28 @@ priv_level:
     }
 |   ident '.' '*'
     {
+        tblName := yylex.(*Lexer).GetDbOrTblName($1.Origin())
         $$ = &tree.PrivilegeLevel{
             Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR,
-            DbName: $1.Compare(),
+            DbName: tblName,
         }
     }
 |   ident '.' ident
     {
+        dbName := yylex.(*Lexer).GetDbOrTblName($1.Origin())
+        tblName := yylex.(*Lexer).GetDbOrTblName($3.Origin())
         $$ = &tree.PrivilegeLevel{
             Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
-            DbName: $1.Compare(),
-            TabName: $3.Compare(),
+            DbName: dbName,
+            TabName: tblName,
         }
     }
 |   ident
     {
+        tblName := yylex.(*Lexer).GetDbOrTblName($1.Origin())
         $$ = &tree.PrivilegeLevel{
             Level: tree.PRIVILEGE_LEVEL_TYPE_TABLE,
-            TabName: $1.Compare(),
+            TabName: tblName,
         }
     }
 
@@ -2945,6 +3019,7 @@ alter_stmt:
 |   alter_publication_stmt
 |   alter_stage_stmt
 |   alter_sequence_stmt
+|   alter_pitr_stmt
 // |    alter_ddl_stmt
 
 alter_sequence_stmt:
@@ -3032,6 +3107,16 @@ alter_partition_option:
 	    )
 
 	    $$ = tree.AlterPartitionOption(opt)
+    }
+
+alter_pitr_stmt:
+    ALTER PITR exists_opt ident RANGE pitr_value STRING
+    {
+       var ifExists = $3
+       var name = tree.Identifier($4.Compare())
+       var pitrValue = $6
+       var pitrUnit = $7
+       $$ = tree.NewAlterPitr(ifExists, name, pitrValue, pitrUnit)
     }
 
 partition_option:
@@ -3678,6 +3763,7 @@ show_stmt:
 |   show_stages_stmt
 |   show_connectors_stmt
 |   show_snapshots_stmt
+|   show_pitr_stmt
 
 show_collation_stmt:
     SHOW COLLATION like_opt where_expression_opt
@@ -3700,6 +3786,14 @@ show_snapshots_stmt:
     SHOW SNAPSHOTS  where_expression_opt
     {
         $$ = &tree.ShowSnapShots{
+            Where: $3,
+        }
+    }
+
+show_pitr_stmt:
+    SHOW PITR where_expression_opt
+    {
+        $$ = &tree.ShowPitr{
             Where: $3,
         }
     }
@@ -4116,31 +4210,37 @@ show_servers_stmt:
 table_name_unresolved:
     ident
     {
-        $$ = tree.SetUnresolvedObjectName(1, [3]string{$1.Compare()})
+        tblName := yylex.(*Lexer).GetDbOrTblName($1.Origin())
+        $$ = tree.NewUnresolvedObjectName(tblName)
     }
 |   ident '.' ident
     {
-        $$ = tree.SetUnresolvedObjectName(2, [3]string{$3.Compare(), $1.Compare()})
+        dbName := yylex.(*Lexer).GetDbOrTblName($1.Origin())
+        tblName := yylex.(*Lexer).GetDbOrTblName($3.Origin())
+        $$ = tree.NewUnresolvedObjectName(dbName, tblName)
     }
 
 db_name:
     ident
     {
-		$$ = yylex.(*Lexer).GetDbName($1.Origin())
+		$$ = yylex.(*Lexer).GetDbOrTblName($1.Origin())
     }
 
 unresolved_object_name:
     ident
     {
-        $$ = tree.SetUnresolvedObjectName(1, [3]string{$1.Compare()})
+        tblName := yylex.(*Lexer).GetDbOrTblName($1.Origin())
+        $$ = tree.NewUnresolvedObjectName(tblName)
     }
 |   ident '.' ident
     {
-        $$ = tree.SetUnresolvedObjectName(2, [3]string{$3.Compare(), $1.Compare()})
+        dbName := yylex.(*Lexer).GetDbOrTblName($1.Origin())
+        tblName := yylex.(*Lexer).GetDbOrTblName($3.Origin())
+        $$ = tree.NewUnresolvedObjectName(dbName, tblName)
     }
 |   ident '.' ident '.' ident
     {
-        $$ = tree.SetUnresolvedObjectName(3, [3]string{$5.Compare(), $3.Compare(), $1.Compare()})
+        $$ = tree.NewUnresolvedObjectName($1.Compare(), $3.Compare(), $5.Compare())
     }
 
 truncate_table_stmt:
@@ -4172,6 +4272,7 @@ drop_ddl_stmt:
 |   drop_stage_stmt
 |   drop_connector_stmt
 |   drop_snapshot_stmt
+|   drop_pitr_stmt
 
 drop_sequence_stmt:
     DROP SEQUENCE exists_opt table_name_list
@@ -4268,13 +4369,13 @@ drop_view_stmt:
     }
 
 drop_database_stmt:
-    DROP DATABASE exists_opt ident
+    DROP DATABASE exists_opt db_name_ident
     {
         var name = tree.Identifier($4.Compare())
         var ifExists = $3
         $$ = tree.NewDropDatabase(name, ifExists)
     }
-|   DROP SCHEMA exists_opt ident
+|   DROP SCHEMA exists_opt db_name_ident
     {
         var name = tree.Identifier($4.Compare())
         var ifExists = $3
@@ -4376,13 +4477,16 @@ table_name_wild_list:
 table_name_opt_wild:
     ident wild_opt
     {
+        tblName := yylex.(*Lexer).GetDbOrTblName($1.Origin())
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix, nil)
+        $$ = tree.NewTableName(tree.Identifier(tblName), prefix, nil)
     }
 |    ident '.' ident wild_opt
     {
-        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
-        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, nil)
+        dbName := yylex.(*Lexer).GetDbOrTblName($1.Origin())
+        tblName := yylex.(*Lexer).GetDbOrTblName($3.Origin())
+        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier(dbName), ExplicitSchema: true}
+        $$ = tree.NewTableName(tree.Identifier(tblName), prefix, nil)
     }
 
 wild_opt:
@@ -4603,11 +4707,11 @@ insert_column_list:
 insert_column:
     ident
     {
-        $$ = $1.Compare()
+        $$ = yylex.(*Lexer).GetDbOrTblName($1.Origin())
     }
 |   ident '.' ident
     {
-        $$ = $3.Compare()
+        $$ = yylex.(*Lexer).GetDbOrTblName($3.Origin())
     }
 
 values_list:
@@ -5732,11 +5836,11 @@ as_opt_id:
 table_alias:
     ident
     {
-	    $$ = yylex.(*Lexer).GetTblName("", $1.Origin())
+	    $$ = yylex.(*Lexer).GetDbOrTblName($1.Origin())
     }
 |   STRING
     {
-	    $$ = yylex.(*Lexer).GetTblName("", $1)
+	    $$ = yylex.(*Lexer).GetDbOrTblName($1)
     }
 
 as_name_opt:
@@ -5784,6 +5888,7 @@ create_stmt:
 |   create_publication_stmt
 |   create_stage_stmt
 |   create_snapshot_stmt
+|   create_pitr_stmt
 
 create_ddl_stmt:
     create_table_stmt
@@ -5846,7 +5951,8 @@ proc_name:
     }
 |   ident '.' ident
     {
-        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier(yylex.(*Lexer).GetTblName("", $1.Origin())), ExplicitSchema: true}
+        dbName := yylex.(*Lexer).GetDbOrTblName($1.Origin())
+        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier(dbName), ExplicitSchema: true}
         $$ = tree.NewProcedureName(tree.Identifier($3.Compare()), prefix)
     }
 
@@ -5937,7 +6043,8 @@ func_name:
     }
 |   ident '.' ident
     {
-        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
+        dbName := yylex.(*Lexer).GetDbOrTblName($1.Origin())
+        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier(dbName), ExplicitSchema: true}
         $$ = tree.NewFuncName(tree.Identifier($3.Compare()), prefix)
     }
 
@@ -6490,6 +6597,14 @@ drop_snapshot_stmt:
         var name = tree.Identifier($4.Compare())
         $$ = tree.NewDropSnapShot(ifExists, name)
     }
+
+drop_pitr_stmt:
+   DROP PITR exists_opt ident
+   {
+       var ifExists = $3
+       var name = tree.Identifier($4.Compare())
+       $$ = tree.NewDropPitr(ifExists, name)
+   }
 
 account_role_name:
     ident
@@ -8187,13 +8302,16 @@ table_name_list:
 table_name:
     ident table_snapshot_opt
     {
+        tblName := yylex.(*Lexer).GetDbOrTblName($1.Origin())
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        $$ = tree.NewTableName(tree.Identifier(yylex.(*Lexer).GetTblName("", $1.Origin())), prefix, $2)
+        $$ = tree.NewTableName(tree.Identifier(tblName), prefix, $2)
     }
 |   ident '.' ident table_snapshot_opt
     {
-        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier(yylex.(*Lexer).GetDbName($1.Origin())), ExplicitSchema: true}
-        $$ = tree.NewTableName(tree.Identifier(yylex.(*Lexer).GetTblName($1.Origin(), $3.Origin())), prefix, $4)
+        dbName := yylex.(*Lexer).GetDbOrTblName($1.Origin())
+        tblName := yylex.(*Lexer).GetDbOrTblName($3.Origin())
+        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier(dbName), ExplicitSchema: true}
+        $$ = tree.NewTableName(tree.Identifier(tblName), prefix, $4)
     }
 
 table_snapshot_opt:
@@ -8552,11 +8670,14 @@ column_name_unresolved:
     }
 |   ident '.' ident
     {
-        $$ = tree.NewUnresolvedName(yylex.(*Lexer).GetTblNameCStr("", $1.Origin()), $3)
+        tblNameCStr := yylex.(*Lexer).GetDbOrTblNameCStr($1.Origin())
+        $$ = tree.NewUnresolvedName(tblNameCStr, $3)
     }
 |   ident '.' ident '.' ident
     {
-        $$ = tree.NewUnresolvedName(yylex.(*Lexer).GetDbNameCStr($1.Origin()), yylex.(*Lexer).GetTblNameCStr($1.Origin(), $3.Origin()), $5)
+        dbNameCStr := yylex.(*Lexer).GetDbOrTblNameCStr($1.Origin())
+        tblNameCStr := yylex.(*Lexer).GetDbOrTblNameCStr($3.Origin())
+        $$ = tree.NewUnresolvedName(dbNameCStr, tblNameCStr, $5)
     }
 
 ident:
@@ -8580,7 +8701,7 @@ ident:
 db_name_ident:
     ident
     {
-    	$$ = yylex.(*Lexer).GetDbNameCStr($1.Origin())
+    	$$ = yylex.(*Lexer).GetDbOrTblNameCStr($1.Origin())
     }
 
 column_name:
@@ -8590,11 +8711,14 @@ column_name:
     }
 |   ident '.' ident
     {
-        $$ = tree.NewUnresolvedName(yylex.(*Lexer).GetTblNameCStr("", $1.Origin()), $3)
+        tblNameCStr := yylex.(*Lexer).GetDbOrTblNameCStr($1.Origin())
+        $$ = tree.NewUnresolvedName(tblNameCStr, $3)
     }
 |   ident '.' ident '.' ident
     {
-        $$ = tree.NewUnresolvedName(yylex.(*Lexer).GetDbNameCStr($1.Origin()), yylex.(*Lexer).GetTblNameCStr($1.Origin(), $3.Origin()), $5)
+        dbNameCStr := yylex.(*Lexer).GetDbOrTblNameCStr($1.Origin())
+        tblNameCStr := yylex.(*Lexer).GetDbOrTblNameCStr($3.Origin())
+        $$ = tree.NewUnresolvedName(dbNameCStr, tblNameCStr, $5)
     }
 
 column_attribute_list_opt:
@@ -11844,6 +11968,7 @@ non_reserved_keyword:
 |   SIGNED
 |   SMALLINT
 |   SNAPSHOT
+|   PITR
 |   SPATIAL
 |   START
 |   STATUS

@@ -22,7 +22,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -308,6 +307,9 @@ func (bat *Batch) PreExtend(m *mpool.MPool, rows int) error {
 	return nil
 }
 
+// AppendWithCopy is used to append data from batch `b` to another batch `bat`. The function
+// ensures that the batch structure is consistent and copies all vector data to the target batch.
+// WARING: this function will cause a memory allocation.
 func (bat *Batch) AppendWithCopy(ctx context.Context, mh *mpool.MPool, b *Batch) (*Batch, error) {
 	if bat == nil {
 		return b.Dup(mh)
@@ -383,19 +385,5 @@ func (bat *Batch) ReplaceVector(oldVec *vector.Vector, newVec *vector.Vector) {
 }
 
 func (bat *Batch) IsEmpty() bool {
-	return bat.rowCount == 0 && bat.AuxData == nil && len(bat.Aggs) == 0
-}
-
-func (bat *Batch) DupJmAuxData() (ret *hashmap.JoinMap) {
-	if bat.AuxData == nil {
-		return
-	}
-	jm := bat.AuxData.(*hashmap.JoinMap)
-	if jm.IsDup() {
-		ret = jm.Dup()
-	} else {
-		ret = jm
-		bat.AuxData = nil
-	}
-	return
+	return bat.rowCount == 0 && len(bat.Aggs) == 0
 }

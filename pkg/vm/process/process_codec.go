@@ -20,6 +20,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -58,6 +60,18 @@ func (proc *Process) BuildProcessInfo(
 		procInfo.AnalysisNodeList = make([]int32, len(proc.Base.AnalInfos))
 		for i := range procInfo.AnalysisNodeList {
 			procInfo.AnalysisNodeList[i] = proc.Base.AnalInfos[i].NodeId
+		}
+		vec := proc.GetPrepareParams()
+		if vec != nil {
+			procInfo.PrepareParams.Length = int64(vec.Length())
+			procInfo.PrepareParams.Data = make([]byte, 0, len(vec.GetData()))
+			procInfo.PrepareParams.Data = append(procInfo.PrepareParams.Data, vec.GetData()...)
+			procInfo.PrepareParams.Area = make([]byte, 0, len(vec.GetArea()))
+			procInfo.PrepareParams.Area = append(procInfo.PrepareParams.Area, vec.GetArea()...)
+			procInfo.PrepareParams.Nulls = make([]bool, procInfo.PrepareParams.Length)
+			for i := range procInfo.PrepareParams.Nulls {
+				procInfo.PrepareParams.Nulls[i] = vec.GetNulls().Contains(uint64(i))
+			}
 		}
 	}
 	{ // session info
@@ -138,8 +152,8 @@ type codecService struct {
 	engine      engine.Engine
 }
 
-func GetCodecService() ProcessCodecService {
-	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.ProcessCodecService)
+func GetCodecService(service string) ProcessCodecService {
+	v, ok := runtime.ServiceRuntime(service).GetGlobalVariables(runtime.ProcessCodecService)
 	if !ok {
 		panic("codec service not found")
 	}
@@ -183,11 +197,25 @@ func (c *codecService) Decode(
 		c.udfService,
 		nil,
 	)
+	proc.Base.LockService = c.lockService
 	proc.Base.UnixTime = value.UnixTime
 	proc.Base.Id = value.Id
 	proc.Base.Lim = ConvertToProcessLimitation(value.Lim)
 	proc.Base.SessionInfo = sessionInfo
 	proc.Base.SessionInfo.StorageEngine = c.engine
+	if value.PrepareParams.Length > 0 {
+		proc.Base.prepareParams = vector.NewVecWithData(
+			types.T_text.ToType(),
+			int(value.PrepareParams.Length),
+			value.PrepareParams.Data,
+			value.PrepareParams.Area,
+		)
+		for i := range value.PrepareParams.Nulls {
+			if value.PrepareParams.Nulls[i] {
+				proc.Base.prepareParams.GetNulls().Add(uint64(i))
+			}
+		}
+	}
 	return proc, nil
 }
 
