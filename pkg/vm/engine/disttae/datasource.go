@@ -714,8 +714,7 @@ type LocalDataSource struct {
 	ranges []*objectio.BlockInfoInProgress
 	pState *logtailreplay.PartitionState
 
-	memInsPkFilter MemPKFilterInProgress
-	memDelPkFilter MemPKFilterInProgress
+	memPKFilter *MemPKFilterInProgress
 
 	pStateRowsDelIter logtailreplay.RowsIter
 	pStateRowsInsIter logtailreplay.RowsIter
@@ -945,8 +944,10 @@ func (ls *LocalDataSource) Next(
 	filter any, mp *mpool.MPool, vp engine.VectorPool,
 	bat *batch.Batch) (*objectio.BlockInfoInProgress, engine.DataState, error) {
 
-	ls.memInsPkFilter = filter.(MemPKFilterInProgress)
-	ls.memDelPkFilter = filter.(MemPKFilterInProgress)
+	if ls.memPKFilter == nil {
+		ff := filter.(MemPKFilterInProgress)
+		ls.memPKFilter = &ff
+	}
 
 	if len(cols) == 0 {
 		return nil, engine.End, nil
@@ -1048,7 +1049,9 @@ func (ls *LocalDataSource) filterUncommittedInMemInserts(seqNums []uint16, mp *m
 		}
 	}
 
-	bat.SetRowCount(insertsBat.RowCount())
+	if len(bat.Vecs) != 0 {
+		bat.SetRowCount(bat.Vecs[0].Length())
+	}
 
 	return nil
 }
@@ -1068,10 +1071,11 @@ func (ls *LocalDataSource) filterInMemCommittedInserts(
 	}
 
 	if ls.pStateRowsInsIter == nil {
-		if ls.memInsPkFilter.Spec.Move == nil {
-			ls.pStateRowsInsIter = ls.pState.NewRowsIter(ls.memInsPkFilter.TS, nil, false)
+		if ls.memPKFilter.SpecFactory == nil {
+			ls.pStateRowsInsIter = ls.pState.NewRowsIter(ls.snapshotTS, nil, false)
 		} else {
-			ls.pStateRowsInsIter = ls.pState.NewPrimaryKeyIter(ls.memInsPkFilter.TS, ls.memInsPkFilter.Spec)
+			ls.pStateRowsInsIter = ls.pState.NewPrimaryKeyIter(
+				ls.memPKFilter.TS, ls.memPKFilter.SpecFactory(ls.memPKFilter))
 		}
 	}
 
@@ -1413,10 +1417,12 @@ func (ls *LocalDataSource) applyPStateInMemDeletes(
 
 	var delIter logtailreplay.RowsIter
 
-	if ls.memDelPkFilter.Spec.Move == nil {
+	if ls.memPKFilter.SpecFactory == nil {
 		delIter = ls.pState.NewRowsIter(ls.snapshotTS, &bid, true)
 	} else {
-		delIter = ls.pState.NewPrimaryKeyDelIter(ls.memDelPkFilter.TS, ls.memDelPkFilter.Spec, bid)
+		delIter = ls.pState.NewPrimaryKeyDelIter(
+			ls.memPKFilter.TS,
+			ls.memPKFilter.SpecFactory(ls.memPKFilter), bid)
 	}
 
 	leftRows = offsets
