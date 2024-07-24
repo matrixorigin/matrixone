@@ -39,8 +39,6 @@ func (antiJoin *AntiJoin) OpType() vm.OpType {
 func (antiJoin *AntiJoin) Prepare(proc *process.Process) (err error) {
 	antiJoin.ctr = new(container)
 	antiJoin.ctr.InitReceiver(proc, false)
-	antiJoin.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
-
 	antiJoin.ctr.vecs = make([]*vector.Vector, len(antiJoin.Conditions[0]))
 	antiJoin.ctr.executorForVecs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, antiJoin.Conditions[0])
 	if err != nil {
@@ -237,12 +235,11 @@ func (ctr *container) probe(ap *AntiJoin, proc *process.Process, anal process.An
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
-		copy(ctr.inBuckets, hashmap.OneUInt8s)
-		vals, zvals := itr.Find(i, n, ctr.vecs, ctr.inBuckets)
+		vals, zvals := itr.Find(i, n, ctr.vecs)
 
 		rowCountIncrease := 0
 		for k := 0; k < n; k++ {
-			if ctr.inBuckets[k] == 0 || zvals[k] == 0 {
+			if zvals[k] == 0 {
 				continue
 			}
 			if vals[k] == 0 {

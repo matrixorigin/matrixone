@@ -39,7 +39,6 @@ func (semiJoin *SemiJoin) OpType() vm.OpType {
 func (semiJoin *SemiJoin) Prepare(proc *process.Process) (err error) {
 	semiJoin.ctr = new(container)
 	semiJoin.ctr.InitReceiver(proc, false)
-	semiJoin.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
 	semiJoin.ctr.vecs = make([]*vector.Vector, len(semiJoin.Conditions[0]))
 
 	semiJoin.ctr.evecs = make([]evalVector, len(semiJoin.Conditions[0]))
@@ -201,10 +200,9 @@ func (ctr *container) probe(bat *batch.Batch, ap *SemiJoin, proc *process.Proces
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
-		copy(ctr.inBuckets, hashmap.OneUInt8s)
-		vals, zvals := itr.Find(i, n, ctr.vecs, ctr.inBuckets)
+		vals, zvals := itr.Find(i, n, ctr.vecs)
 		for k := 0; k < n; k++ {
-			if ctr.inBuckets[k] == 0 || zvals[k] == 0 || vals[k] == 0 {
+			if zvals[k] == 0 || vals[k] == 0 {
 				continue
 			}
 			if ap.Cond != nil {

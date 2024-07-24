@@ -40,7 +40,6 @@ func (innerJoin *InnerJoin) OpType() vm.OpType {
 func (innerJoin *InnerJoin) Prepare(proc *process.Process) (err error) {
 	innerJoin.ctr = new(container)
 	innerJoin.ctr.InitReceiver(proc, false)
-	innerJoin.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
 	innerJoin.ctr.vecs = make([]*vector.Vector, len(innerJoin.Conditions[0]))
 	innerJoin.ctr.evecs = make([]evalVector, len(innerJoin.Conditions[0]))
 	for i := range innerJoin.ctr.evecs {
@@ -206,11 +205,9 @@ func (ctr *container) probe(ap *InnerJoin, proc *process.Process, anal process.A
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
-		copy(ctr.inBuckets, hashmap.OneUInt8s)
-
-		vals, zvals := itr.Find(i, n, ctr.vecs, ctr.inBuckets)
+		vals, zvals := itr.Find(i, n, ctr.vecs)
 		for k := 0; k < n; k++ {
-			if ctr.inBuckets[k] == 0 || zvals[k] == 0 || vals[k] == 0 {
+			if zvals[k] == 0 || vals[k] == 0 {
 				continue
 			}
 			idx := vals[k] - 1
