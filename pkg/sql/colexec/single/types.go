@@ -75,7 +75,7 @@ type SingleJoin struct {
 
 	HashOnPK           bool
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
-
+	JoinMapTag         int32
 	vm.OperatorBase
 }
 
