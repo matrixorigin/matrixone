@@ -414,6 +414,7 @@ mo_foreign_keys
 mo_indexes
 mo_locks
 mo_mysql_compatibility_mode
+mo_pitr
 mo_pubs
 mo_role
 mo_role_grant
@@ -512,6 +513,7 @@ mo_foreign_keys
 mo_indexes
 mo_locks
 mo_mysql_compatibility_mode
+mo_pitr
 mo_pubs
 mo_role
 mo_role_grant

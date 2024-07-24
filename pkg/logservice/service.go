@@ -145,7 +145,7 @@ func NewService(
 	}
 
 	// TODO: check and fix all these magic numbers
-	codec := morpc.NewMessageCodec(mf, codecOpts...)
+	codec := morpc.NewMessageCodec(cfg.UUID, mf, codecOpts...)
 	server, err := morpc.NewRPCServer(LogServiceRPCName, cfg.LogServiceListenAddr(), codec,
 		morpc.WithServerGoettyOptions(goetty.WithSessionReleaseMsgFunc(func(i interface{}) {
 			msg := i.(morpc.RPCMessage)

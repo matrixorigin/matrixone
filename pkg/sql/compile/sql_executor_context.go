@@ -253,6 +253,10 @@ func (c *compilerContext) GetContext() context.Context {
 	return c.proc.Ctx
 }
 
+func (c *compilerContext) SetContext(ctx context.Context) {
+	c.proc.Ctx = ctx
+}
+
 func (c *compilerContext) ResolveById(tableId uint64, snapshot plan.Snapshot) (objRef *plan.ObjectRef, tableDef *plan.TableDef) {
 	ctx := c.GetContext()
 	txnOpt := c.proc.GetTxnOperator()

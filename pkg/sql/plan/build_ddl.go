@@ -3296,24 +3296,6 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		}
 	}
 
-	for _, str := range indexs {
-		if _, ok := colMap[str]; !ok {
-			return nil, moerr.NewInvalidInput(ctx.GetContext(), "column '%s' is not exist", str)
-		}
-		if colMap[str].Typ.Id == int32(types.T_blob) {
-			return nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("BLOB column '%s' cannot be in index", str))
-		}
-		if colMap[str].Typ.Id == int32(types.T_text) {
-			return nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("TEXT column '%s' cannot be in index", str))
-		}
-		if colMap[str].Typ.Id == int32(types.T_datalink) {
-			return nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("DATALINK column '%s' cannot be in index", str))
-		}
-		if colMap[str].Typ.Id == int32(types.T_json) {
-			return nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", str))
-		}
-	}
-
 	// check Constraint Name (include index/ unique)
 	err = checkConstraintNames(uniqueIndexInfos, secondaryIndexInfos, ctx.GetContext())
 	if err != nil {

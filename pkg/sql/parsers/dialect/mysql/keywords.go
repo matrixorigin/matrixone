@@ -631,5 +631,6 @@ func init() {
 		"retry":                      RETRY,
 		"mo_ts":                      MO_TS,
 		"restore":                    RESTORE,
+		"pitr":                       PITR,
 	}
 }

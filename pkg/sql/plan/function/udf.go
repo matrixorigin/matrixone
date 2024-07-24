@@ -265,7 +265,7 @@ func vector2DataVector(v *vector.Vector) (*udf.DataVector, error) {
 		for i := 0; i < size; i++ {
 			val, isNull := p.GetValue(uint64(i))
 			if !isNull {
-				dv.Data[i] = &udf.Data{Val: &udf.Data_StringVal{StringVal: val.ToString()}}
+				dv.Data[i] = &udf.Data{Val: &udf.Data_StringVal{StringVal: val.String()}}
 			}
 		}
 	case types.T_time:

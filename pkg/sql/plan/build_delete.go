@@ -117,8 +117,8 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 	}
 
 	reduceSinkSinkScanNodes(query)
-	ReCalcQueryStats(builder, query)
-	reCheckifNeedLockWholeTable(builder)
+	builder.tempOptimizeForDML()
+	reCheckifNeedLockWholeTable(builder, false)
 	query.StmtType = plan.Query_DELETE
 	return &Plan{
 		Plan: &plan.Plan_Query{

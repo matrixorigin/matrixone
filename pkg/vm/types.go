@@ -280,7 +280,7 @@ func NewCallResult() CallResult {
 }
 
 type OperatorInfo struct {
-	Idx           int
+	Idx           int // plan node index to which the pipeline operator belongs
 	ParallelIdx   int
 	ParallelMajor bool
 	IsFirst       bool

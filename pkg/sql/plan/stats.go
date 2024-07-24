@@ -1339,12 +1339,6 @@ func GetPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
 	return "QUERY PLAN"
 }
 
-func ReCalcQueryStats(builder *QueryBuilder, query *plan.Query) {
-	for _, rootID := range builder.qry.Steps {
-		ReCalcNodeStats(rootID, builder, true, false, true)
-	}
-}
-
 func PrintStats(qry *plan.Query) string {
 	buf := bytes.NewBuffer(make([]byte, 0, 1024*64))
 	buf.WriteString("Print Stats: \n")
@@ -1433,14 +1427,10 @@ func (builder *QueryBuilder) canSkipStats() bool {
 		scan := builder.qry.Nodes[agg.Children[0]]
 		return scan.NodeType == plan.Node_TABLE_SCAN
 	}
-	//skip stats for select * from xx limit 0
-	if len(builder.qry.Steps) == 1 && len(builder.qry.Nodes) == 2 {
+	//skip stats for select * from xx limit 0, including view
+	if len(builder.qry.Steps) == 1 {
 		project := builder.qry.Nodes[builder.qry.Steps[0]]
 		if project.NodeType != plan.Node_PROJECT {
-			return false
-		}
-		scan := builder.qry.Nodes[project.Children[0]]
-		if scan.NodeType != plan.Node_TABLE_SCAN {
 			return false
 		}
 		if project.Limit != nil {

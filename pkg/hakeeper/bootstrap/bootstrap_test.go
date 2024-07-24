@@ -34,7 +34,7 @@ func TestMain(m *testing.M) {
 		Format: "console",
 	})
 
-	runtime.SetupProcessLevelRuntime(runtime.NewRuntime(metadata.ServiceType_LOG, "test", logutil.GetGlobalLogger()))
+	runtime.SetupServiceBasedRuntime("", runtime.NewRuntime(metadata.ServiceType_LOG, "test", logutil.GetGlobalLogger()))
 	m.Run()
 }
 
@@ -198,7 +198,7 @@ func TestBootstrap(t *testing.T) {
 
 		alloc := util.NewTestIDAllocator(0)
 		bm := NewBootstrapManager(c.cluster)
-		output, err := bm.Bootstrap(alloc, c.tn, c.log)
+		output, err := bm.Bootstrap("", alloc, c.tn, c.log)
 		assert.Equal(t, c.err, err)
 		if err != nil {
 			continue
@@ -391,7 +391,7 @@ func TestIssue3814(t *testing.T) {
 	for _, c := range cases {
 		alloc := util.NewTestIDAllocator(0)
 		bm := NewBootstrapManager(c.cluster)
-		_, err := bm.Bootstrap(alloc, c.tn, c.log)
+		_, err := bm.Bootstrap("", alloc, c.tn, c.log)
 		assert.Equal(t, c.expected, err)
 	}
 }

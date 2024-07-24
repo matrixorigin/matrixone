@@ -58,7 +58,7 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(proc, anal); err != nil {
+			if err := productl2.build(proc, anal); err != nil {
 				return result, err
 			}
 			ctr.state = Probe
@@ -104,22 +104,20 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
+func (productl2 *Productl2) build(proc *process.Process, anal process.Analyze) error {
+	ctr := productl2.ctr
+	mp := proc.ReceiveJoinMap(anal, productl2.JoinMapTag, false, 0)
+	if mp == nil {
+		return nil
+	}
+	batches := mp.GetBatches()
 	var err error
-	for {
-		msg := ctr.ReceiveFromSingleReg(1, anal)
-		if msg.Err != nil {
-			return msg.Err
-		}
-		bat := msg.Batch
-		if bat == nil {
-			break
-		}
-		ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), bat)
+	//maybe optimize this in the future
+	for i := range batches {
+		ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), batches[i])
 		if err != nil {
 			return err
 		}
-		proc.PutBatch(bat)
 	}
 	return nil
 }
@@ -182,7 +180,9 @@ func (ctr *container) probe(ap *Productl2, proc *process.Process, anal process.A
 		switch ctr.bat.Vecs[centroidColPos].GetType().Oid {
 		case types.T_array_float32:
 			tblEmbeddingF32IsNull := ctr.inBat.Vecs[tblColPos].IsNull(uint64(j))
-			tblEmbeddingF32 = types.BytesToArray[float32](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
+			if !tblEmbeddingF32IsNull {
+				tblEmbeddingF32 = types.BytesToArray[float32](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
+			}
 
 			//// NOTE: make sure you normalize_l2 probe vector once.
 			//normalizeTblEmbeddingPtrF32 = arrayF32Pool.Get().(*[]float32)
@@ -195,12 +195,12 @@ func (ctr *container) probe(ap *Productl2, proc *process.Process, anal process.A
 			//_ = moarray.NormalizeL2[float32](tblEmbeddingF32, normalizeTblEmbeddingF32)
 
 			for i = 0; i < buildCount; i++ {
-				clusterEmbeddingF32IsNull := ctr.bat.Vecs[centroidColPos].IsNull(uint64(i))
-				clusterEmbeddingF32 = types.BytesToArray[float32](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
-				if tblEmbeddingF32IsNull || clusterEmbeddingF32IsNull {
+				if tblEmbeddingF32IsNull || ctr.bat.Vecs[centroidColPos].IsNull(uint64(i)) {
 					leastDistance = 0
 					leastClusterIndex = i
 				} else {
+					clusterEmbeddingF32 = types.BytesToArray[float32](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
+
 					dist, err := moarray.L2DistanceSq[float32](clusterEmbeddingF32, tblEmbeddingF32)
 					if err != nil {
 						return err
@@ -216,7 +216,9 @@ func (ctr *container) probe(ap *Productl2, proc *process.Process, anal process.A
 			//arrayF32Pool.Put(normalizeTblEmbeddingPtrF32)
 		case types.T_array_float64:
 			tblEmbeddingF64IsNull := ctr.inBat.Vecs[tblColPos].IsNull(uint64(j))
-			tblEmbeddingF64 = types.BytesToArray[float64](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
+			if !tblEmbeddingF64IsNull {
+				tblEmbeddingF64 = types.BytesToArray[float64](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
+			}
 
 			//normalizeTblEmbeddingPtrF64 = arrayF64Pool.Get().(*[]float64)
 			//normalizeTblEmbeddingF64 = *normalizeTblEmbeddingPtrF64
@@ -228,12 +230,12 @@ func (ctr *container) probe(ap *Productl2, proc *process.Process, anal process.A
 			//_ = moarray.NormalizeL2[float64](tblEmbeddingF64, normalizeTblEmbeddingF64)
 
 			for i = 0; i < buildCount; i++ {
-				clusterEmbeddingF64IsNull := ctr.bat.Vecs[centroidColPos].IsNull(uint64(i))
-				clusterEmbeddingF64 = types.BytesToArray[float64](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
-				if tblEmbeddingF64IsNull || clusterEmbeddingF64IsNull {
+				if tblEmbeddingF64IsNull || ctr.bat.Vecs[centroidColPos].IsNull(uint64(i)) {
 					leastDistance = 0
 					leastClusterIndex = i
 				} else {
+					clusterEmbeddingF64 = types.BytesToArray[float64](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
+
 					dist, err := moarray.L2DistanceSq[float64](clusterEmbeddingF64, tblEmbeddingF64)
 					if err != nil {
 						return err

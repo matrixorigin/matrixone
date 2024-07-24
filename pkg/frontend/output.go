@@ -112,7 +112,7 @@ func extractRowFromVector(ctx context.Context, ses FeSession, vec *vector.Vector
 		scale := vec.GetType().Scale
 		row[i] = vector.GetFixedAt[types.Decimal128](vec, rowIndex).Format(scale)
 	case types.T_uuid:
-		row[i] = vector.GetFixedAt[types.Uuid](vec, rowIndex).ToString()
+		row[i] = vector.GetFixedAt[types.Uuid](vec, rowIndex).String()
 	case types.T_Rowid:
 		row[i] = vector.GetFixedAt[types.Rowid](vec, rowIndex)
 	case types.T_Blockid:

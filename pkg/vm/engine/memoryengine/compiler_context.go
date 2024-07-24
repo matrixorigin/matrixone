@@ -223,6 +223,10 @@ func (c *CompilerContext) GetContext() context.Context {
 	return c.ctx
 }
 
+func (c *CompilerContext) SetContext(ctx context.Context) {
+	c.ctx = ctx
+}
+
 func (c *CompilerContext) ResolveById(tableId uint64, snapshot plan.Snapshot) (objRef *plan.ObjectRef, tableDef *plan.TableDef) {
 	dbName, tableName, _ := c.engine.GetNameById(c.ctx, c.txnOp, tableId)
 	if dbName == "" || tableName == "" {

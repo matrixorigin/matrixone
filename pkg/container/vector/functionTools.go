@@ -405,7 +405,7 @@ func (fr *FunctionResult[T]) PreExtendAndReset(targetSize int) error {
 			return err
 		}
 	}
-	fr.vec.Reset(fr.typ)
+	fr.vec.ResetWithSameType()
 
 	if !fr.isVarlena {
 		fr.length = 0

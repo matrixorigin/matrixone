@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
@@ -131,6 +132,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.HashOnPK = t.HashOnPK
 		op.IsShuffle = t.IsShuffle
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
+		op.JoinMapTag = t.JoinMapTag
 		op.SetInfo(&info)
 		return op
 	case vm.Group:
@@ -157,6 +159,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Typs = t.Typs
 		op.Conditions = t.Conditions
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
+		op.JoinMapTag = t.JoinMapTag
 		op.HashOnPK = t.HashOnPK
 		op.IsShuffle = t.IsShuffle
 		op.SetInfo(&info)
@@ -169,6 +172,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Typs = t.Typs
 		op.Conditions = t.Conditions
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
+		op.JoinMapTag = t.JoinMapTag
 		op.HashOnPK = t.HashOnPK
 		op.IsShuffle = t.IsShuffle
 		op.SetInfo(&info)
@@ -182,6 +186,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.LeftTypes = t.LeftTypes
 		op.Conditions = t.Conditions
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
+		op.JoinMapTag = t.JoinMapTag
 		op.HashOnPK = t.HashOnPK
 		op.IsShuffle = t.IsShuffle
 		op.SetInfo(&info)
@@ -194,6 +199,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.RightTypes = t.RightTypes
 		op.Conditions = t.Conditions
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
+		op.JoinMapTag = t.JoinMapTag
 		op.HashOnPK = t.HashOnPK
 		op.IsShuffle = t.IsShuffle
 		op.SetInfo(&info)
@@ -206,6 +212,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.RightTypes = t.RightTypes
 		op.Conditions = t.Conditions
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
+		op.JoinMapTag = t.JoinMapTag
 		op.HashOnPK = t.HashOnPK
 		op.IsShuffle = t.IsShuffle
 		op.SetInfo(&info)
@@ -222,6 +229,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Result = t.Result
 		op.Cond = t.Cond
 		op.Typs = t.Typs
+		op.JoinMapTag = t.JoinMapTag
 		op.SetInfo(&info)
 		return op
 	case vm.LoopJoin:
@@ -230,6 +238,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Result = t.Result
 		op.Cond = t.Cond
 		op.Typs = t.Typs
+		op.JoinMapTag = t.JoinMapTag
 		op.SetInfo(&info)
 		return op
 	case vm.IndexJoin:
@@ -246,6 +255,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Cond = t.Cond
 		op.Typs = t.Typs
 		op.Result = t.Result
+		op.JoinMapTag = t.JoinMapTag
 		op.SetInfo(&info)
 		return op
 	case vm.LoopSemi:
@@ -254,6 +264,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Result = t.Result
 		op.Cond = t.Cond
 		op.Typs = t.Typs
+		op.JoinMapTag = t.JoinMapTag
 		op.SetInfo(&info)
 		return op
 	case vm.LoopSingle:
@@ -262,6 +273,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Result = t.Result
 		op.Cond = t.Cond
 		op.Typs = t.Typs
+		op.JoinMapTag = t.JoinMapTag
 		op.SetInfo(&info)
 		return op
 	case vm.LoopMark:
@@ -270,6 +282,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Result = t.Result
 		op.Cond = t.Cond
 		op.Typs = t.Typs
+		op.JoinMapTag = t.JoinMapTag
 		op.SetInfo(&info)
 		return op
 	case vm.Offset:
@@ -290,6 +303,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Result = t.Result
 		op.Typs = t.Typs
 		op.IsShuffle = t.IsShuffle
+		op.JoinMapTag = t.JoinMapTag
 		op.SetInfo(&info)
 		return op
 	case vm.ProductL2:
@@ -298,6 +312,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Result = t.Result
 		op.Typs = t.Typs
 		op.OnExpr = t.OnExpr
+		op.JoinMapTag = t.JoinMapTag
 		op.SetInfo(&info)
 		return op
 	case vm.Projection:
@@ -323,6 +338,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Typs = t.Typs
 		op.Conditions = t.Conditions
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
+		op.JoinMapTag = t.JoinMapTag
 		op.HashOnPK = t.HashOnPK
 		op.IsShuffle = t.IsShuffle
 		op.SetInfo(&info)
@@ -335,6 +351,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Typs = t.Typs
 		op.Conditions = t.Conditions
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
+		op.JoinMapTag = t.JoinMapTag
 		op.HashOnPK = t.HashOnPK
 		op.SetInfo(&info)
 		return op
@@ -414,6 +431,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Cond = t.Cond
 		op.OnList = t.OnList
 		op.HashOnPK = t.HashOnPK
+		op.JoinMapTag = t.JoinMapTag
 		op.SetInfo(&info)
 		return op
 	case vm.TableFunction:
@@ -440,6 +458,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 					FileSize:        t.Es.FileSize,
 					FileOffsetTotal: t.Es.FileOffsetTotal,
 					Extern:          t.Es.Extern,
+					TbColToDataCol:  t.Es.TbColToDataCol,
 				},
 				ExParam: external.ExParam{
 					Filter: &external.FilterParam{
@@ -711,19 +730,27 @@ func constructPreInsert(ns []*plan.Node, n *plan.Node, eg engine.Engine, proc *p
 	return op, nil
 }
 
-func constructPreInsertUk(n *plan.Node, proc *process.Process) (*preinsertunique.PreInsertUnique, error) {
+func constructPreInsertUk(n *plan.Node, proc *process.Process) *preinsertunique.PreInsertUnique {
 	preCtx := n.PreInsertUkCtx
 	op := preinsertunique.NewArgument()
 	op.Ctx = proc.Ctx
 	op.PreInsertCtx = preCtx
-	return op, nil
+	return op
 }
 
-func constructPreInsertSk(n *plan.Node, proc *process.Process) (*preinsertsecondaryindex.PreInsertSecIdx, error) {
+func constructPreInsertSk(n *plan.Node, proc *process.Process) *preinsertsecondaryindex.PreInsertSecIdx {
 	op := preinsertsecondaryindex.NewArgument()
 	op.Ctx = proc.Ctx
 	op.PreInsertCtx = n.PreInsertSkCtx
-	return op, nil
+	return op
+}
+
+func constructMergeblock(eg engine.Engine, insertArg *insert.Insert) *mergeblock.MergeBlock {
+	return mergeblock.NewArgument().
+		WithEngine(eg).
+		WithObjectRef(insertArg.InsertCtx.Ref).
+		WithParitionNames(insertArg.InsertCtx.PartitionTableNames).
+		WithAddAffectedRows(insertArg.InsertCtx.AddAffectedRows)
 }
 
 func constructLockOp(n *plan.Node, eng engine.Engine) (*lockop.LockOp, error) {
@@ -780,11 +807,20 @@ func constructProjection(n *plan.Node) *projection.Projection {
 	return arg
 }
 
-func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Context, fileList []string, FileSize []int64, fileOffset []*pipeline.FileOffset) *external.External {
-	attrs := make([]string, len(n.TableDef.Cols))
-	for j, col := range n.TableDef.Cols {
-		attrs[j] = col.Name
+func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Context, fileList []string, FileSize []int64, fileOffset []*pipeline.FileOffset, strictSqlMode bool) *external.External {
+	var attrs []string
+
+	for _, col := range n.TableDef.Cols {
+		if !col.Hidden {
+			attrs = append(attrs, col.Name)
+		}
 	}
+
+	var tbColToDataCol map[string]int32
+	if n.ExternScan != nil {
+		tbColToDataCol = n.ExternScan.TbColToDataCol
+	}
+
 	return external.NewArgument().WithEs(
 		&external.ExternalParam{
 			ExParamConst: external.ExParamConst{
@@ -792,12 +828,14 @@ func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Contex
 				Cols:            n.TableDef.Cols,
 				Extern:          param,
 				Name2ColIndex:   n.TableDef.Name2ColIndex,
+				TbColToDataCol:  tbColToDataCol,
 				FileOffsetTotal: fileOffset,
 				CreateSql:       n.TableDef.Createsql,
 				Ctx:             ctx,
 				FileList:        fileList,
 				FileSize:        FileSize,
 				ClusterTable:    n.GetClusterTable(),
+				StrictSqlMode:   strictSqlMode,
 			},
 			ExParam: external.ExParam{
 				Fileparam: new(external.ExFileparam),
@@ -856,6 +894,14 @@ func constructJoin(n *plan.Node, typs []types.Type, proc *process.Process) *join
 	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
 	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
 	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
+	for i := range n.SendMsgList {
+		if n.SendMsgList[i].MsgType == int32(process.MsgJoinMap) {
+			arg.JoinMapTag = n.SendMsgList[i].MsgTag
+		}
+	}
+	if arg.JoinMapTag <= 0 {
+		panic("wrong joinmap tag!")
+	}
 	return arg
 }
 
@@ -877,6 +923,14 @@ func constructSemi(n *plan.Node, typs []types.Type, proc *process.Process) *semi
 	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
 	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
 	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
+	for i := range n.SendMsgList {
+		if n.SendMsgList[i].MsgType == int32(process.MsgJoinMap) {
+			arg.JoinMapTag = n.SendMsgList[i].MsgTag
+		}
+	}
+	if arg.JoinMapTag <= 0 {
+		panic("wrong joinmap tag!")
+	}
 	return arg
 }
 
@@ -894,6 +948,14 @@ func constructLeft(n *plan.Node, typs []types.Type, proc *process.Process) *left
 	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
 	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
 	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
+	for i := range n.SendMsgList {
+		if n.SendMsgList[i].MsgType == int32(process.MsgJoinMap) {
+			arg.JoinMapTag = n.SendMsgList[i].MsgTag
+		}
+	}
+	if arg.JoinMapTag <= 0 {
+		panic("wrong joinmap tag!")
+	}
 	return arg
 }
 
@@ -912,6 +974,14 @@ func constructRight(n *plan.Node, left_typs, right_typs []types.Type, proc *proc
 	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
 	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
 	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
+	for i := range n.SendMsgList {
+		if n.SendMsgList[i].MsgType == int32(process.MsgJoinMap) {
+			arg.JoinMapTag = n.SendMsgList[i].MsgTag
+		}
+	}
+	if arg.JoinMapTag <= 0 {
+		panic("wrong joinmap tag!")
+	}
 	return arg
 }
 
@@ -930,6 +1000,14 @@ func constructRightSemi(n *plan.Node, right_typs []types.Type, proc *process.Pro
 	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
 	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
 	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
+	for i := range n.SendMsgList {
+		if n.SendMsgList[i].MsgType == int32(process.MsgJoinMap) {
+			arg.JoinMapTag = n.SendMsgList[i].MsgTag
+		}
+	}
+	if arg.JoinMapTag <= 0 {
+		panic("wrong joinmap tag!")
+	}
 	return arg
 }
 
@@ -947,6 +1025,14 @@ func constructRightAnti(n *plan.Node, right_typs []types.Type, proc *process.Pro
 	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
 	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
 	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
+	for i := range n.SendMsgList {
+		if n.SendMsgList[i].MsgType == int32(process.MsgJoinMap) {
+			arg.JoinMapTag = n.SendMsgList[i].MsgTag
+		}
+	}
+	if arg.JoinMapTag <= 0 {
+		panic("wrong joinmap tag!")
+	}
 	return arg
 }
 
@@ -963,6 +1049,14 @@ func constructSingle(n *plan.Node, typs []types.Type, proc *process.Process) *si
 	arg.Conditions = constructJoinConditions(conds, proc)
 	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
 	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
+	for i := range n.SendMsgList {
+		if n.SendMsgList[i].MsgType == int32(process.MsgJoinMap) {
+			arg.JoinMapTag = n.SendMsgList[i].MsgTag
+		}
+	}
+	if arg.JoinMapTag <= 0 {
+		panic("wrong joinmap tag!")
+	}
 	return arg
 }
 
@@ -974,6 +1068,14 @@ func constructProduct(n *plan.Node, typs []types.Type, proc *process.Process) *p
 	arg := product.NewArgument()
 	arg.Typs = typs
 	arg.Result = result
+	for i := range n.SendMsgList {
+		if n.SendMsgList[i].MsgType == int32(process.MsgJoinMap) {
+			arg.JoinMapTag = n.SendMsgList[i].MsgTag
+		}
+	}
+	if arg.JoinMapTag <= 0 {
+		panic("wrong joinmap tag!")
+	}
 	return arg
 }
 
@@ -995,6 +1097,14 @@ func constructAnti(n *plan.Node, typs []types.Type, proc *process.Process) *anti
 	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
 	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
 	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
+	for i := range n.SendMsgList {
+		if n.SendMsgList[i].MsgType == int32(process.MsgJoinMap) {
+			arg.JoinMapTag = n.SendMsgList[i].MsgTag
+		}
+	}
+	if arg.JoinMapTag <= 0 {
+		panic("wrong joinmap tag!")
+	}
 	return arg
 }
 
@@ -1491,6 +1601,14 @@ func constructProductL2(n *plan.Node, typs []types.Type, proc *process.Process) 
 	arg.Typs = typs
 	arg.Result = result
 	arg.OnExpr = colexec.RewriteFilterExprList(n.OnList)
+	for i := range n.SendMsgList {
+		if n.SendMsgList[i].MsgType == int32(process.MsgJoinMap) {
+			arg.JoinMapTag = n.SendMsgList[i].MsgTag
+		}
+	}
+	if arg.JoinMapTag <= 0 {
+		panic("wrong joinmap tag!")
+	}
 	return arg
 }
 
@@ -1503,6 +1621,14 @@ func constructLoopJoin(n *plan.Node, typs []types.Type, proc *process.Process) *
 	arg.Typs = typs
 	arg.Result = result
 	arg.Cond = colexec.RewriteFilterExprList(n.OnList)
+	for i := range n.SendMsgList {
+		if n.SendMsgList[i].MsgType == int32(process.MsgJoinMap) {
+			arg.JoinMapTag = n.SendMsgList[i].MsgTag
+		}
+	}
+	if arg.JoinMapTag <= 0 {
+		panic("wrong joinmap tag!")
+	}
 	return arg
 }
 
@@ -1519,6 +1645,14 @@ func constructLoopSemi(n *plan.Node, typs []types.Type, proc *process.Process) *
 	arg.Typs = typs
 	arg.Result = result
 	arg.Cond = colexec.RewriteFilterExprList(n.OnList)
+	for i := range n.SendMsgList {
+		if n.SendMsgList[i].MsgType == int32(process.MsgJoinMap) {
+			arg.JoinMapTag = n.SendMsgList[i].MsgTag
+		}
+	}
+	if arg.JoinMapTag <= 0 {
+		panic("wrong joinmap tag!")
+	}
 	return arg
 }
 
@@ -1531,6 +1665,14 @@ func constructLoopLeft(n *plan.Node, typs []types.Type, proc *process.Process) *
 	arg.Typs = typs
 	arg.Result = result
 	arg.Cond = colexec.RewriteFilterExprList(n.OnList)
+	for i := range n.SendMsgList {
+		if n.SendMsgList[i].MsgType == int32(process.MsgJoinMap) {
+			arg.JoinMapTag = n.SendMsgList[i].MsgTag
+		}
+	}
+	if arg.JoinMapTag <= 0 {
+		panic("wrong joinmap tag!")
+	}
 	return arg
 }
 
@@ -1543,6 +1685,14 @@ func constructLoopSingle(n *plan.Node, typs []types.Type, proc *process.Process)
 	arg.Typs = typs
 	arg.Result = result
 	arg.Cond = colexec.RewriteFilterExprList(n.OnList)
+	for i := range n.SendMsgList {
+		if n.SendMsgList[i].MsgType == int32(process.MsgJoinMap) {
+			arg.JoinMapTag = n.SendMsgList[i].MsgTag
+		}
+	}
+	if arg.JoinMapTag <= 0 {
+		panic("wrong joinmap tag!")
+	}
 	return arg
 }
 
@@ -1559,6 +1709,14 @@ func constructLoopAnti(n *plan.Node, typs []types.Type, proc *process.Process) *
 	arg.Typs = typs
 	arg.Result = result
 	arg.Cond = colexec.RewriteFilterExprList(n.OnList)
+	for i := range n.SendMsgList {
+		if n.SendMsgList[i].MsgType == int32(process.MsgJoinMap) {
+			arg.JoinMapTag = n.SendMsgList[i].MsgTag
+		}
+	}
+	if arg.JoinMapTag <= 0 {
+		panic("wrong joinmap tag!")
+	}
 	return arg
 }
 
@@ -1578,10 +1736,18 @@ func constructLoopMark(n *plan.Node, typs []types.Type, proc *process.Process) *
 	arg.Typs = typs
 	arg.Result = result
 	arg.Cond = colexec.RewriteFilterExprList(n.OnList)
+	for i := range n.SendMsgList {
+		if n.SendMsgList[i].MsgType == int32(process.MsgJoinMap) {
+			arg.JoinMapTag = n.SendMsgList[i].MsgTag
+		}
+	}
+	if arg.JoinMapTag <= 0 {
+		panic("wrong joinmap tag!")
+	}
 	return arg
 }
 
-func constructJoinBuildOperator(c *Compile, op vm.Operator, isDup bool, isShuffle bool) vm.Operator {
+func constructJoinBuildOperator(c *Compile, op vm.Operator, isShuffle bool, mcpu int32) vm.Operator {
 	switch op.OpType() {
 	case vm.IndexJoin:
 		indexJoin := op.(*indexjoin.IndexJoin)
@@ -1594,19 +1760,19 @@ func constructJoinBuildOperator(c *Compile, op vm.Operator, isDup bool, isShuffl
 		return ret
 	default:
 		if isShuffle {
-			res := constructShuffleBuild(op, c.proc, isDup)
+			res := constructShuffleBuild(op, c.proc)
 			res.SetIdx(op.GetOperatorBase().GetIdx())
 			res.SetIsFirst(true)
 			return res
 		}
-		res := constructHashBuild(op, c.proc, isDup)
+		res := constructHashBuild(op, c.proc, mcpu)
 		res.SetIdx(op.GetOperatorBase().GetIdx())
 		res.SetIsFirst(true)
 		return res
 	}
 }
 
-func constructHashBuild(op vm.Operator, proc *process.Process, isDup bool) *hashbuild.HashBuild {
+func constructHashBuild(op vm.Operator, proc *process.Process, mcpu int32) *hashbuild.HashBuild {
 	// XXX BUG
 	// relation index of arg.Conditions should be rewritten to 0 here.
 	ret := hashbuild.NewArgument()
@@ -1617,7 +1783,6 @@ func constructHashBuild(op vm.Operator, proc *process.Process, isDup bool) *hash
 		ret.NeedHashMap = true
 		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
-		ret.IsDup = isDup
 		ret.HashOnPK = arg.HashOnPK
 		if arg.Cond == nil {
 			ret.NeedMergedBatch = false
@@ -1626,23 +1791,23 @@ func constructHashBuild(op vm.Operator, proc *process.Process, isDup bool) *hash
 			ret.NeedMergedBatch = true
 			ret.NeedAllocateSels = true
 		}
+		ret.JoinMapTag = arg.JoinMapTag
 
 	case vm.Mark:
 		arg := op.(*mark.MarkJoin)
 		ret.NeedHashMap = true
 		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
-		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = true
+		ret.JoinMapTag = arg.JoinMapTag
 
 	case vm.Join:
 		arg := op.(*join.InnerJoin)
 		ret.NeedHashMap = true
 		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
-		ret.IsDup = isDup
 		ret.HashOnPK = arg.HashOnPK
 
 		// to find if hashmap need to keep build batches for probe
@@ -1661,65 +1826,65 @@ func constructHashBuild(op vm.Operator, proc *process.Process, isDup bool) *hash
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
 		}
+		ret.JoinMapTag = arg.JoinMapTag
 
 	case vm.Left:
 		arg := op.(*left.LeftJoin)
 		ret.NeedHashMap = true
 		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
-		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = true
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
 		}
+		ret.JoinMapTag = arg.JoinMapTag
 
 	case vm.Right:
 		arg := op.(*right.RightJoin)
 		ret.NeedHashMap = true
 		ret.Typs = arg.RightTypes
 		ret.Conditions = arg.Conditions[1]
-		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = true
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
 		}
+		ret.JoinMapTag = arg.JoinMapTag
 
 	case vm.RightSemi:
 		arg := op.(*rightsemi.RightSemi)
 		ret.NeedHashMap = true
 		ret.Typs = arg.RightTypes
 		ret.Conditions = arg.Conditions[1]
-		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = true
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
 		}
+		ret.JoinMapTag = arg.JoinMapTag
 
 	case vm.RightAnti:
 		arg := op.(*rightanti.RightAnti)
 		ret.NeedHashMap = true
 		ret.Typs = arg.RightTypes
 		ret.Conditions = arg.Conditions[1]
-		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = true
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
 		}
+		ret.JoinMapTag = arg.JoinMapTag
 
 	case vm.Semi:
 		arg := op.(*semi.SemiJoin)
 		ret.NeedHashMap = true
 		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
-		ret.IsDup = isDup
 		ret.HashOnPK = arg.HashOnPK
 		if arg.Cond == nil {
 			ret.NeedMergedBatch = false
@@ -1731,89 +1896,91 @@ func constructHashBuild(op vm.Operator, proc *process.Process, isDup bool) *hash
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
 		}
+		ret.JoinMapTag = arg.JoinMapTag
 
 	case vm.Single:
 		arg := op.(*single.SingleJoin)
 		ret.NeedHashMap = true
 		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
-		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = true
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
 		}
+		ret.JoinMapTag = arg.JoinMapTag
 	case vm.Product:
 		arg := op.(*product.Product)
 		ret.NeedHashMap = false
 		ret.Typs = arg.Typs
-		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.NeedAllocateSels = true
+		ret.JoinMapTag = arg.JoinMapTag
 	case vm.ProductL2:
 		arg := op.(*productl2.Productl2)
 		ret.NeedHashMap = false
 		ret.Typs = arg.Typs
-		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.NeedAllocateSels = true
+		ret.JoinMapTag = arg.JoinMapTag
 	case vm.LoopAnti:
 		arg := op.(*loopanti.LoopAnti)
 		ret.NeedHashMap = false
 		ret.Typs = arg.Typs
-		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.NeedAllocateSels = true
+		ret.JoinMapTag = arg.JoinMapTag
 
 	case vm.LoopJoin:
 		arg := op.(*loopjoin.LoopJoin)
 		ret.NeedHashMap = false
 		ret.Typs = arg.Typs
-		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.NeedAllocateSels = true
+		ret.JoinMapTag = arg.JoinMapTag
 
 	case vm.LoopLeft:
 		arg := op.(*loopleft.LoopLeft)
 		ret.NeedHashMap = false
 		ret.Typs = arg.Typs
-		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.NeedAllocateSels = true
+		ret.JoinMapTag = arg.JoinMapTag
 
 	case vm.LoopSemi:
 		arg := op.(*loopsemi.LoopSemi)
 		ret.NeedHashMap = false
 		ret.Typs = arg.Typs
-		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.NeedAllocateSels = true
+		ret.JoinMapTag = arg.JoinMapTag
 
 	case vm.LoopSingle:
 		arg := op.(*loopsingle.LoopSingle)
 		ret.NeedHashMap = false
 		ret.Typs = arg.Typs
-		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.NeedAllocateSels = true
+		ret.JoinMapTag = arg.JoinMapTag
 
 	case vm.LoopMark:
 		arg := op.(*loopmark.LoopMark)
 		ret.NeedHashMap = false
 		ret.Typs = arg.Typs
-		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.NeedAllocateSels = true
+		ret.JoinMapTag = arg.JoinMapTag
 
 	default:
 		ret.Release()
 		panic(moerr.NewInternalError(proc.Ctx, "unsupport join type '%v'", op.OpType()))
 	}
+	ret.JoinMapRefCnt = mcpu
 	return ret
 }
 
-func constructShuffleBuild(op vm.Operator, proc *process.Process, isDup bool) *shufflebuild.ShuffleBuild {
+func constructShuffleBuild(op vm.Operator, proc *process.Process) *shufflebuild.ShuffleBuild {
 	ret := shufflebuild.NewArgument()
 
 	switch op.OpType() {
@@ -1821,7 +1988,6 @@ func constructShuffleBuild(op vm.Operator, proc *process.Process, isDup bool) *s
 		arg := op.(*anti.AntiJoin)
 		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
-		ret.IsDup = isDup
 		ret.HashOnPK = arg.HashOnPK
 		if arg.Cond == nil {
 			ret.NeedMergedBatch = false
@@ -1833,12 +1999,13 @@ func constructShuffleBuild(op vm.Operator, proc *process.Process, isDup bool) *s
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
 		}
+		ret.JoinMapTag = arg.JoinMapTag
+		ret.ShuffleIdx = arg.ShuffleIdx
 
 	case vm.Join:
 		arg := op.(*join.InnerJoin)
 		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
-		ret.IsDup = isDup
 		ret.HashOnPK = arg.HashOnPK
 
 		// to find if hashmap need to keep build batches for probe
@@ -1857,60 +2024,65 @@ func constructShuffleBuild(op vm.Operator, proc *process.Process, isDup bool) *s
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
 		}
+		ret.JoinMapTag = arg.JoinMapTag
+		ret.ShuffleIdx = arg.ShuffleIdx
 
 	case vm.Left:
 		arg := op.(*left.LeftJoin)
 		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
-		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = true
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
 		}
+		ret.JoinMapTag = arg.JoinMapTag
+		ret.ShuffleIdx = arg.ShuffleIdx
 
 	case vm.Right:
 		arg := op.(*right.RightJoin)
 		ret.Typs = arg.RightTypes
 		ret.Conditions = arg.Conditions[1]
-		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = true
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
 		}
+		ret.JoinMapTag = arg.JoinMapTag
+		ret.ShuffleIdx = arg.ShuffleIdx
 
 	case vm.RightSemi:
 		arg := op.(*rightsemi.RightSemi)
 		ret.Typs = arg.RightTypes
 		ret.Conditions = arg.Conditions[1]
-		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = true
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
 		}
+		ret.JoinMapTag = arg.JoinMapTag
+		ret.ShuffleIdx = arg.ShuffleIdx
 
 	case vm.RightAnti:
 		arg := op.(*rightanti.RightAnti)
 		ret.Typs = arg.RightTypes
 		ret.Conditions = arg.Conditions[1]
-		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = true
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
 		}
+		ret.JoinMapTag = arg.JoinMapTag
+		ret.ShuffleIdx = arg.ShuffleIdx
 
 	case vm.Semi:
 		arg := op.(*semi.SemiJoin)
 		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
-		ret.IsDup = isDup
 		ret.HashOnPK = arg.HashOnPK
 		if arg.Cond == nil {
 			ret.NeedMergedBatch = false
@@ -1922,6 +2094,8 @@ func constructShuffleBuild(op vm.Operator, proc *process.Process, isDup bool) *s
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
 		}
+		ret.JoinMapTag = arg.JoinMapTag
+		ret.ShuffleIdx = arg.ShuffleIdx
 
 	default:
 		ret.Release()

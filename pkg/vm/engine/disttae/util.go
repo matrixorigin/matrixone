@@ -1410,8 +1410,11 @@ func getConstExpr(oid int32, c *plan.Literal) *plan.Expr {
 }
 
 // ListTnService gets all tn service in the cluster
-func ListTnService(appendFn func(service *metadata.TNService)) {
-	mc := clusterservice.GetMOCluster()
+func ListTnService(
+	service string,
+	appendFn func(service *metadata.TNService),
+) {
+	mc := clusterservice.GetMOCluster(service)
 	mc.GetTNService(clusterservice.NewSelector(), func(tn metadata.TNService) bool {
 		if appendFn != nil {
 			appendFn(&tn)
