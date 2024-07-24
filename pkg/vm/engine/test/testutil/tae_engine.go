@@ -57,8 +57,6 @@ func (ts *TestTxnStorage) Shard() metadata.TNShard {
 func (ts *TestTxnStorage) Start() error { return nil }
 func (ts *TestTxnStorage) Close(destroy bool) error {
 	err := ts.GetDB().Close()
-	blockio.Stop()
-	blockio.ResetPipeline()
 	return err
 }
 func (ts *TestTxnStorage) Read(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
@@ -131,7 +129,7 @@ func NewTestTAEEngine(
 	ctx context.Context, moduleName string, t *testing.T,
 	rpcAgent *MockRPCAgent, opts *options.Options) (*TestTxnStorage, error) {
 
-	blockio.Start()
+	blockio.Start("")
 	handle := InitTxnHandle(ctx, moduleName, t, opts)
 	logtailServer, err := NewMockLogtailServer(
 		ctx, handle.GetDB(), defaultLogtailConfig(), runtime.DefaultRuntime(), rpcAgent.MockLogtailPRCServerFactory)
@@ -152,7 +150,7 @@ func NewTestTAEEngine(
 			DB: handle.GetDB(), T: t,
 		},
 	}
-	blockio.Start()
+	blockio.Start("")
 	return tc, nil
 }
 

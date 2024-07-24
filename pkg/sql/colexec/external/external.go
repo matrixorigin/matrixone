@@ -92,6 +92,7 @@ func (external *External) Prepare(proc *process.Process) error {
 		param.maxBatchSize = proc.GetLim().MaxMsgSize
 	}
 	param.maxBatchSize = uint64(float64(param.maxBatchSize) * 0.6)
+
 	if param.Extern == nil {
 		param.Extern = &tree.ExternParam{}
 		if err := json.Unmarshal([]byte(param.CreateSql), param.Extern); err != nil {
@@ -855,6 +856,49 @@ func getRealAttrCnt(attrs []string, cols []*plan.ColDef) int {
 	return len(attrs) - cnt
 }
 
+func checkLineValidRestrictive(param *ExternalParam, proc *process.Process, line []csvparser.Field, rowIdx int) error {
+	if param.ClusterTable != nil && param.ClusterTable.GetIsClusterTable() {
+		//the column account_id of the cluster table do need to be filled here
+		if len(line)+1 != getRealAttrCnt(param.Attrs, param.Cols) {
+			return moerr.NewInvalidInput(proc.Ctx, "the data of row %d contained is not equal to input columns", rowIdx+1)
+		}
+	} else {
+		if param.Extern.ExtTab {
+			if len(line) < getRealAttrCnt(param.Attrs, param.Cols) {
+				return moerr.NewInvalidInput(proc.Ctx, "the data of row %d contained is less than input columns", rowIdx+1)
+			}
+			return nil
+		}
+		if len(line) != len(param.TbColToDataCol) {
+			if len(line) != len(param.TbColToDataCol)+1 {
+				return moerr.NewInvalidInput(proc.Ctx, "the data of row %d contained is not equal to input columns", rowIdx+1)
+			}
+			field := line[len(line)-1]
+			if field.Val != "" {
+				return moerr.NewInvalidInput(proc.Ctx, "the data of row %d contained is not equal to input columns", rowIdx+1)
+			}
+		}
+	}
+	return nil
+}
+
+func checkLineStrict(param *ExternalParam) bool {
+	if param.Extern.Local || !param.StrictSqlMode {
+		return false
+	}
+	return true
+}
+
+// Data interpretation is nonrestrictive if the SQL mode is nonrestrictive or the IGNORE or LOCAL modifier is specified
+// todo IGNORE
+func checkLineValid(param *ExternalParam, proc *process.Process, line []csvparser.Field, rowIdx int) error {
+	if checkLineStrict(param) {
+		return checkLineValidRestrictive(param, proc, line, rowIdx)
+	}
+
+	return nil
+}
+
 func getBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Process) (*batch.Batch, error) {
 	bat, err := makeBatch(param, plh.batchSize, proc)
 	if err != nil {
@@ -876,16 +920,11 @@ func getBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 			}
 			plh.moCsvLineArray[rowIdx] = line
 		}
-		if param.ClusterTable != nil && param.ClusterTable.GetIsClusterTable() {
-			//the column account_id of the cluster table do need to be filled here
-			if len(line)+1 < getRealAttrCnt(param.Attrs, param.Cols) {
-				return nil, moerr.NewInternalError(proc.Ctx, ColumnCntLargerErrorInfo)
-			}
-		} else {
-			if !param.Extern.SysTable && len(line) < getRealAttrCnt(param.Attrs, param.Cols) {
-				return nil, moerr.NewInternalError(proc.Ctx, ColumnCntLargerErrorInfo)
-			}
+
+		if err := checkLineValid(param, proc, line, rowIdx); err != nil {
+			return nil, err
 		}
+
 		err = getOneRowData(bat, line, rowIdx, param, proc.GetMPool())
 		if err != nil {
 			return nil, err
@@ -1023,7 +1062,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 	colCnt := meta.BlockHeader().ColumnCount()
 	for i := 0; i < len(param.Attrs); i++ {
 		idxs[i] = uint16(param.Name2ColIndex[param.Attrs[i]])
-		if param.Extern.SysTable && idxs[i] >= colCnt {
+		if idxs[i] >= colCnt {
 			idxs[i] = 0
 		}
 	}
@@ -1036,7 +1075,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 
 	var sels []int32
 	for i := 0; i < len(param.Attrs); i++ {
-		if param.Extern.SysTable && uint16(param.Name2ColIndex[param.Attrs[i]]) >= colCnt {
+		if uint16(param.Name2ColIndex[param.Attrs[i]]) >= colCnt {
 			vecTmp, err = proc.AllocVectorOfRows(makeType(&param.Cols[i].Typ, false), rows, nil)
 			if err != nil {
 				return nil, err
@@ -1132,7 +1171,7 @@ func getZonemapBatch(ctx context.Context, param *ExternalParam, proc *process.Pr
 
 func scanZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
 	var err error
-	param.Filter.blockReader, err = blockio.NewFileReader(param.Extern.FileService, param.Fileparam.Filepath)
+	param.Filter.blockReader, err = blockio.NewFileReader(proc.GetService(), param.Extern.FileService, param.Fileparam.Filepath)
 	if err != nil {
 		return nil, err
 	}
@@ -1294,428 +1333,476 @@ func getNullFlag(nullMap map[string]([]string), attr, field string) bool {
 	return false
 }
 
-func getFieldFromLine(line []csvparser.Field, colIdx int, param *ExternalParam) csvparser.Field {
-	if catalog.ContainExternalHidenCol(param.Attrs[colIdx]) {
+func getFieldFromLine(line []csvparser.Field, colName string, param *ExternalParam) csvparser.Field {
+	if catalog.ContainExternalHidenCol(colName) {
 		return csvparser.Field{Val: param.Fileparam.Filepath}
 	}
-	return line[param.Name2ColIndex[param.Attrs[colIdx]]]
+	if param.Extern.ExtTab {
+		return line[param.Name2ColIndex[colName]]
+	}
+	return line[param.TbColToDataCol[colName]]
 }
 
-func getOneRowData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam, mp *mpool.MPool) error {
-	var buf bytes.Buffer
+// when len(line) >= len(param.TbColToDataCol), call this function to get one row data
+func getOneRowDataLineGECol(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam, mp *mpool.MPool) error {
 	for colIdx := range param.Attrs {
+		if err := getColData(bat, line, rowIdx, param, mp, colIdx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func getOneRowDataRestrictive(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam, mp *mpool.MPool) error {
+	return getOneRowDataLineGECol(bat, line, rowIdx, param, mp)
+}
+
+func getOneRowDataNonRestrictive(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam, mp *mpool.MPool) error {
+	if len(line) >= len(param.TbColToDataCol) {
+		return getOneRowDataLineGECol(bat, line, rowIdx, param, mp)
+	}
+
+	for colIdx, colName := range param.Attrs {
+		if param.TbColToDataCol[colName] < int32(len(line)) {
+			if err := getColData(bat, line, rowIdx, param, mp, colIdx); err != nil {
+				return err
+			}
+			continue
+		}
 		vec := bat.Vecs[colIdx]
 		if param.Cols[colIdx].Hidden {
 			nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			continue
 		}
-		field := getFieldFromLine(line, colIdx, param)
-		id := types.T(param.Cols[colIdx].Typ.Id)
-		if id != types.T_char && id != types.T_varchar && id != types.T_json &&
-			id != types.T_binary && id != types.T_varbinary && id != types.T_blob && id != types.T_text {
-			field.Val = strings.TrimSpace(field.Val)
+		nulls.Add(vec.GetNulls(), uint64(rowIdx))
+	}
+	return nil
+}
+
+func getOneRowData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam, mp *mpool.MPool) error {
+	if checkLineStrict(param) {
+		return getOneRowDataRestrictive(bat, line, rowIdx, param, mp)
+	}
+	return getOneRowDataNonRestrictive(bat, line, rowIdx, param, mp)
+}
+
+func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam, mp *mpool.MPool, colIdx int) error {
+	var buf bytes.Buffer
+
+	colName := param.Attrs[colIdx]
+	vec := bat.Vecs[colIdx]
+
+	if param.Cols[colIdx].Hidden {
+		nulls.Add(vec.GetNulls(), uint64(rowIdx))
+		return nil
+	}
+
+	field := getFieldFromLine(line, colName, param)
+	id := types.T(param.Cols[colIdx].Typ.Id)
+	if id != types.T_char && id != types.T_varchar && id != types.T_json &&
+		id != types.T_binary && id != types.T_varbinary && id != types.T_blob && id != types.T_text {
+		field.Val = strings.TrimSpace(field.Val)
+	}
+	isNullOrEmpty := field.IsNull || (getNullFlag(param.Extern.NullMap, param.Attrs[colIdx], field.Val))
+	if id != types.T_char && id != types.T_varchar &&
+		id != types.T_binary && id != types.T_varbinary && id != types.T_json && id != types.T_blob && id != types.T_text {
+		isNullOrEmpty = isNullOrEmpty || len(field.Val) == 0
+	}
+	if isNullOrEmpty {
+		nulls.Add(vec.GetNulls(), uint64(rowIdx))
+		return nil
+	}
+	if param.ParallelLoad {
+		buf.WriteString(field.Val)
+		bs := buf.Bytes()
+		err := vector.SetBytesAt(vec, rowIdx, bs, mp)
+		if err != nil {
+			return err
 		}
-		isNullOrEmpty := field.IsNull || (getNullFlag(param.Extern.NullMap, param.Attrs[colIdx], field.Val))
-		if id != types.T_char && id != types.T_varchar &&
-			id != types.T_binary && id != types.T_varbinary && id != types.T_json && id != types.T_blob && id != types.T_text {
-			isNullOrEmpty = isNullOrEmpty || len(field.Val) == 0
+		buf.Reset()
+		return nil
+	}
+
+	switch id {
+	case types.T_bool:
+		b, err := types.ParseBool(field.Val)
+		if err != nil {
+			return moerr.NewInternalError(param.Ctx, "the input value '%s' is not bool type for column %d", field.Val, colIdx)
 		}
-		if isNullOrEmpty {
-			nulls.Add(vec.GetNulls(), uint64(rowIdx))
-			continue
+		if err := vector.SetFixedAt(vec, rowIdx, b); err != nil {
+			return err
 		}
-		if param.ParallelLoad {
-			buf.WriteString(field.Val)
-			bs := buf.Bytes()
-			err := vector.SetBytesAt(vec, rowIdx, bs, mp)
-			if err != nil {
-				return err
-			}
-			buf.Reset()
-			continue
+	case types.T_bit:
+		if len(field.Val) > 8 {
+			return moerr.NewInternalError(param.Ctx, "data too long, len(val) = %v", len(field.Val))
 		}
 
-		switch id {
-		case types.T_bool:
-			b, err := types.ParseBool(field.Val)
-			if err != nil {
-				return moerr.NewInternalError(param.Ctx, "the input value '%s' is not bool type for column %d", field.Val, colIdx)
-			}
-			if err := vector.SetFixedAt(vec, rowIdx, b); err != nil {
+		width := param.Cols[colIdx].Typ.Width
+		var val uint64
+		for i := 0; i < len(field.Val); i++ {
+			val = (val << 8) | uint64(field.Val[i])
+		}
+		if val > uint64(1<<width-1) {
+			return moerr.NewInternalError(param.Ctx, "data too long, type width = %d, val = %b", width, val)
+		}
+		if err := vector.SetFixedAt(vec, rowIdx, val); err != nil {
+			return err
+		}
+		buf.Reset()
+	case types.T_int8:
+		d, err := strconv.ParseInt(field.Val, 10, 8)
+		if err == nil {
+			if err := vector.SetFixedAt(vec, rowIdx, int8(d)); err != nil {
 				return err
 			}
-		case types.T_bit:
-			if len(field.Val) > 8 {
-				return moerr.NewInternalError(param.Ctx, "data too long, len(val) = %v", len(field.Val))
+		} else {
+			if errors.Is(err, strconv.ErrRange) {
+				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+				return moerr.NewInternalError(param.Ctx, "the input value '%v' is not int8 type for column %d", field.Val, colIdx)
 			}
-
-			width := param.Cols[colIdx].Typ.Width
-			var val uint64
-			for i := 0; i < len(field.Val); i++ {
-				val = (val << 8) | uint64(field.Val[i])
+			f, err := strconv.ParseFloat(field.Val, 64)
+			if err != nil || f < math.MinInt8 || f > math.MaxInt8 {
+				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+				return moerr.NewInternalError(param.Ctx, "the input value '%v' is not int8 type for column %d", field.Val, colIdx)
 			}
-			if val > uint64(1<<width-1) {
-				return moerr.NewInternalError(param.Ctx, "data too long, type width = %d, val = %b", width, val)
-			}
-			if err := vector.SetFixedAt(vec, rowIdx, val); err != nil {
+			if err := vector.SetFixedAt(vec, rowIdx, int8(f)); err != nil {
 				return err
 			}
-			buf.Reset()
-		case types.T_int8:
-			d, err := strconv.ParseInt(field.Val, 10, 8)
-			if err == nil {
-				if err := vector.SetFixedAt(vec, rowIdx, int8(d)); err != nil {
-					return err
-				}
-			} else {
-				if errors.Is(err, strconv.ErrRange) {
-					logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not int8 type for column %d", field.Val, colIdx)
-				}
-				f, err := strconv.ParseFloat(field.Val, 64)
-				if err != nil || f < math.MinInt8 || f > math.MaxInt8 {
-					logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not int8 type for column %d", field.Val, colIdx)
-				}
-				if err := vector.SetFixedAt(vec, rowIdx, int8(f)); err != nil {
-					return err
-				}
-			}
-		case types.T_int16:
-			d, err := strconv.ParseInt(field.Val, 10, 16)
-			if err == nil {
-				if err := vector.SetFixedAt(vec, rowIdx, int16(d)); err != nil {
-					return err
-				}
-			} else {
-				if errors.Is(err, strconv.ErrRange) {
-					logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not int16 type for column %d", field.Val, colIdx)
-				}
-				f, err := strconv.ParseFloat(field.Val, 64)
-				if err != nil || f < math.MinInt16 || f > math.MaxInt16 {
-					logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not int16 type for column %d", field.Val, colIdx)
-				}
-				if err := vector.SetFixedAt(vec, rowIdx, int16(f)); err != nil {
-					return err
-				}
-			}
-		case types.T_int32:
-			d, err := strconv.ParseInt(field.Val, 10, 32)
-			if err == nil {
-				if err := vector.SetFixedAt(vec, rowIdx, int32(d)); err != nil {
-					return err
-				}
-			} else {
-				if errors.Is(err, strconv.ErrRange) {
-					logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not int32 type for column %d", field.Val, colIdx)
-				}
-				f, err := strconv.ParseFloat(field.Val, 64)
-				if err != nil || f < math.MinInt32 || f > math.MaxInt32 {
-					logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not int32 type for column %d", field.Val, colIdx)
-				}
-				if err := vector.SetFixedAt(vec, rowIdx, int32(f)); err != nil {
-					return err
-				}
-			}
-		case types.T_int64:
-			d, err := strconv.ParseInt(field.Val, 10, 64)
-			if err == nil {
-				if err := vector.SetFixedAt(vec, rowIdx, d); err != nil {
-					return err
-				}
-			} else {
-				if errors.Is(err, strconv.ErrRange) {
-					logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not int64 type for column %d", field.Val, colIdx)
-				}
-				f, err := strconv.ParseFloat(field.Val, 64)
-				if err != nil || f < math.MinInt64 || f > math.MaxInt64 {
-					logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not int64 type for column %d", field.Val, colIdx)
-				}
-				if err := vector.SetFixedAt(vec, rowIdx, int64(f)); err != nil {
-					return err
-				}
-			}
-		case types.T_uint8:
-			d, err := strconv.ParseUint(field.Val, 10, 8)
-			if err == nil {
-				if err := vector.SetFixedAt(vec, rowIdx, uint8(d)); err != nil {
-					return err
-				}
-			} else {
-				if errors.Is(err, strconv.ErrRange) {
-					logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not uint8 type for column %d", field.Val, colIdx)
-				}
-				f, err := strconv.ParseFloat(field.Val, 64)
-				if err != nil || f < 0 || f > math.MaxUint8 {
-					logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not uint8 type for column %d", field.Val, colIdx)
-				}
-				if err := vector.SetFixedAt(vec, rowIdx, uint8(f)); err != nil {
-					return err
-				}
-			}
-		case types.T_uint16:
-			d, err := strconv.ParseUint(field.Val, 10, 16)
-			if err == nil {
-				if err := vector.SetFixedAt(vec, rowIdx, uint16(d)); err != nil {
-					return err
-				}
-			} else {
-				if errors.Is(err, strconv.ErrRange) {
-					logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not uint16 type for column %d", field.Val, colIdx)
-				}
-				f, err := strconv.ParseFloat(field.Val, 64)
-				if err != nil || f < 0 || f > math.MaxUint16 {
-					logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not uint16 type for column %d", field.Val, colIdx)
-				}
-				if err := vector.SetFixedAt(vec, rowIdx, uint16(f)); err != nil {
-					return err
-				}
-			}
-		case types.T_uint32:
-			d, err := strconv.ParseUint(field.Val, 10, 32)
-			if err == nil {
-				if err := vector.SetFixedAt(vec, rowIdx, uint32(d)); err != nil {
-					return err
-				}
-			} else {
-				if errors.Is(err, strconv.ErrRange) {
-					logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not uint32 type for column %d", field.Val, colIdx)
-				}
-				f, err := strconv.ParseFloat(field.Val, 64)
-				if err != nil || f < 0 || f > math.MaxUint32 {
-					logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not uint32 type for column %d", field.Val, colIdx)
-				}
-				if err := vector.SetFixedAt(vec, rowIdx, uint32(f)); err != nil {
-					return err
-				}
-			}
-		case types.T_uint64:
-			d, err := strconv.ParseUint(field.Val, 10, 64)
-			if err == nil {
-				if err := vector.SetFixedAt(vec, rowIdx, d); err != nil {
-					return err
-				}
-			} else {
-				if errors.Is(err, strconv.ErrRange) {
-					logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not uint64 type for column %d", field.Val, colIdx)
-				}
-				f, err := strconv.ParseFloat(field.Val, 64)
-				if err != nil || f < 0 || f > math.MaxUint64 {
-					logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not uint64 type for column %d", field.Val, colIdx)
-				}
-				if err := vector.SetFixedAt(vec, rowIdx, uint64(f)); err != nil {
-					return err
-				}
-			}
-		case types.T_float32:
-			// origin float32 data type
-			if vec.GetType().Scale < 0 || vec.GetType().Width == 0 {
-				d, err := strconv.ParseFloat(field.Val, 32)
-				if err != nil {
-					logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not float32 type for column %d", field.Val, colIdx)
-				}
-				if err := vector.SetFixedAt(vec, rowIdx, float32(d)); err != nil {
-					return err
-				}
-			} else {
-				d, err := types.ParseDecimal128(field.Val, vec.GetType().Width, vec.GetType().Scale)
-				if err != nil {
-					logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not float32 type for column %d", field.Val, colIdx)
-				}
-				if err := vector.SetFixedAt(vec, rowIdx, float32(types.Decimal128ToFloat64(d, vec.GetType().Scale))); err != nil {
-					return err
-				}
-			}
-		case types.T_float64:
-			// origin float64 data type
-			if vec.GetType().Scale < 0 || vec.GetType().Width == 0 {
-				d, err := strconv.ParseFloat(field.Val, 64)
-				if err != nil {
-					logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not float64 type for column %d", field.Val, colIdx)
-				}
-				if err := vector.SetFixedAt(vec, rowIdx, d); err != nil {
-					return err
-				}
-			} else {
-				d, err := types.ParseDecimal128(field.Val, vec.GetType().Width, vec.GetType().Scale)
-				if err != nil {
-					logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not float64 type for column %d", field.Val, colIdx)
-				}
-				if err := vector.SetFixedAt(vec, rowIdx, types.Decimal128ToFloat64(d, vec.GetType().Scale)); err != nil {
-					return err
-				}
-			}
-		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
-			// XXX Memory accounting?
-			buf.WriteString(field.Val)
-			bs := buf.Bytes()
-			err := vector.SetBytesAt(vec, rowIdx, bs, mp)
-			if err != nil {
+		}
+	case types.T_int16:
+		d, err := strconv.ParseInt(field.Val, 10, 16)
+		if err == nil {
+			if err := vector.SetFixedAt(vec, rowIdx, int16(d)); err != nil {
 				return err
 			}
-			buf.Reset()
-		case types.T_array_float32:
-			arrBytes, err := types.StringToArrayToBytes[float32](field.Val)
-			if err != nil {
+		} else {
+			if errors.Is(err, strconv.ErrRange) {
+				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+				return moerr.NewInternalError(param.Ctx, "the input value '%v' is not int16 type for column %d", field.Val, colIdx)
+			}
+			f, err := strconv.ParseFloat(field.Val, 64)
+			if err != nil || f < math.MinInt16 || f > math.MaxInt16 {
+				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+				return moerr.NewInternalError(param.Ctx, "the input value '%v' is not int16 type for column %d", field.Val, colIdx)
+			}
+			if err := vector.SetFixedAt(vec, rowIdx, int16(f)); err != nil {
 				return err
 			}
-			err = vector.SetBytesAt(vec, rowIdx, arrBytes, mp)
-			if err != nil {
+		}
+	case types.T_int32:
+		d, err := strconv.ParseInt(field.Val, 10, 32)
+		if err == nil {
+			if err := vector.SetFixedAt(vec, rowIdx, int32(d)); err != nil {
 				return err
 			}
-			buf.Reset()
-		case types.T_array_float64:
-			arrBytes, err := types.StringToArrayToBytes[float64](field.Val)
-			if err != nil {
+		} else {
+			if errors.Is(err, strconv.ErrRange) {
+				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+				return moerr.NewInternalError(param.Ctx, "the input value '%v' is not int32 type for column %d", field.Val, colIdx)
+			}
+			f, err := strconv.ParseFloat(field.Val, 64)
+			if err != nil || f < math.MinInt32 || f > math.MaxInt32 {
+				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+				return moerr.NewInternalError(param.Ctx, "the input value '%v' is not int32 type for column %d", field.Val, colIdx)
+			}
+			if err := vector.SetFixedAt(vec, rowIdx, int32(f)); err != nil {
 				return err
 			}
-			err = vector.SetBytesAt(vec, rowIdx, arrBytes, mp)
-			if err != nil {
+		}
+	case types.T_int64:
+		d, err := strconv.ParseInt(field.Val, 10, 64)
+		if err == nil {
+			if err := vector.SetFixedAt(vec, rowIdx, d); err != nil {
 				return err
 			}
-			buf.Reset()
-		case types.T_json:
-			var jsonBytes []byte
-			if param.Extern.Format != tree.CSV {
-				jsonBytes = []byte(field.Val)
-			} else {
-				field.Val = fmt.Sprintf("%v", strings.Trim(field.Val, "\""))
-				byteJson, err := types.ParseStringToByteJson(field.Val)
-				if err != nil {
-					logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not json type for column %d", field.Val, colIdx)
-				}
-				jsonBytes, err = types.EncodeJson(byteJson)
-				if err != nil {
-					logutil.Errorf("encode json[%v] err:%v", field.Val, err)
-					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not json type for column %d", field.Val, colIdx)
-				}
+		} else {
+			if errors.Is(err, strconv.ErrRange) {
+				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+				return moerr.NewInternalError(param.Ctx, "the input value '%v' is not int64 type for column %d", field.Val, colIdx)
 			}
-
-			err := vector.SetBytesAt(vec, rowIdx, jsonBytes, mp)
-			if err != nil {
+			f, err := strconv.ParseFloat(field.Val, 64)
+			if err != nil || f < math.MinInt64 || f > math.MaxInt64 {
+				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+				return moerr.NewInternalError(param.Ctx, "the input value '%v' is not int64 type for column %d", field.Val, colIdx)
+			}
+			if err := vector.SetFixedAt(vec, rowIdx, int64(f)); err != nil {
 				return err
 			}
-		case types.T_date:
-			d, err := types.ParseDateCast(field.Val)
+		}
+	case types.T_uint8:
+		d, err := strconv.ParseUint(field.Val, 10, 8)
+		if err == nil {
+			if err := vector.SetFixedAt(vec, rowIdx, uint8(d)); err != nil {
+				return err
+			}
+		} else {
+			if errors.Is(err, strconv.ErrRange) {
+				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+				return moerr.NewInternalError(param.Ctx, "the input value '%v' is not uint8 type for column %d", field.Val, colIdx)
+			}
+			f, err := strconv.ParseFloat(field.Val, 64)
+			if err != nil || f < 0 || f > math.MaxUint8 {
+				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+				return moerr.NewInternalError(param.Ctx, "the input value '%v' is not uint8 type for column %d", field.Val, colIdx)
+			}
+			if err := vector.SetFixedAt(vec, rowIdx, uint8(f)); err != nil {
+				return err
+			}
+		}
+	case types.T_uint16:
+		d, err := strconv.ParseUint(field.Val, 10, 16)
+		if err == nil {
+			if err := vector.SetFixedAt(vec, rowIdx, uint16(d)); err != nil {
+				return err
+			}
+		} else {
+			if errors.Is(err, strconv.ErrRange) {
+				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+				return moerr.NewInternalError(param.Ctx, "the input value '%v' is not uint16 type for column %d", field.Val, colIdx)
+			}
+			f, err := strconv.ParseFloat(field.Val, 64)
+			if err != nil || f < 0 || f > math.MaxUint16 {
+				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+				return moerr.NewInternalError(param.Ctx, "the input value '%v' is not uint16 type for column %d", field.Val, colIdx)
+			}
+			if err := vector.SetFixedAt(vec, rowIdx, uint16(f)); err != nil {
+				return err
+			}
+		}
+	case types.T_uint32:
+		d, err := strconv.ParseUint(field.Val, 10, 32)
+		if err == nil {
+			if err := vector.SetFixedAt(vec, rowIdx, uint32(d)); err != nil {
+				return err
+			}
+		} else {
+			if errors.Is(err, strconv.ErrRange) {
+				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+				return moerr.NewInternalError(param.Ctx, "the input value '%v' is not uint32 type for column %d", field.Val, colIdx)
+			}
+			f, err := strconv.ParseFloat(field.Val, 64)
+			if err != nil || f < 0 || f > math.MaxUint32 {
+				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+				return moerr.NewInternalError(param.Ctx, "the input value '%v' is not uint32 type for column %d", field.Val, colIdx)
+			}
+			if err := vector.SetFixedAt(vec, rowIdx, uint32(f)); err != nil {
+				return err
+			}
+		}
+	case types.T_uint64:
+		d, err := strconv.ParseUint(field.Val, 10, 64)
+		if err == nil {
+			if err := vector.SetFixedAt(vec, rowIdx, d); err != nil {
+				return err
+			}
+		} else {
+			if errors.Is(err, strconv.ErrRange) {
+				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+				return moerr.NewInternalError(param.Ctx, "the input value '%v' is not uint64 type for column %d", field.Val, colIdx)
+			}
+			f, err := strconv.ParseFloat(field.Val, 64)
+			if err != nil || f < 0 || f > math.MaxUint64 {
+				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+				return moerr.NewInternalError(param.Ctx, "the input value '%v' is not uint64 type for column %d", field.Val, colIdx)
+			}
+			if err := vector.SetFixedAt(vec, rowIdx, uint64(f)); err != nil {
+				return err
+			}
+		}
+	case types.T_float32:
+		// origin float32 data type
+		if vec.GetType().Scale < 0 || vec.GetType().Width == 0 {
+			d, err := strconv.ParseFloat(field.Val, 32)
 			if err != nil {
 				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalError(param.Ctx, "the input value '%v' is not Date type for column %d", field.Val, colIdx)
+				return moerr.NewInternalError(param.Ctx, "the input value '%v' is not float32 type for column %d", field.Val, colIdx)
 			}
-			if err := vector.SetFixedAt(vec, rowIdx, d); err != nil {
+			if err := vector.SetFixedAt(vec, rowIdx, float32(d)); err != nil {
 				return err
 			}
-		case types.T_time:
-			d, err := types.ParseTime(field.Val, vec.GetType().Scale)
-			if err != nil {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalError(param.Ctx, "the input value '%v' is not Time type for column %d", field.Val, colIdx)
-			}
-			if err := vector.SetFixedAt(vec, rowIdx, d); err != nil {
-				return err
-			}
-		case types.T_datetime:
-			d, err := types.ParseDatetime(field.Val, vec.GetType().Scale)
-			if err != nil {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalError(param.Ctx, "the input value '%v' is not Datetime type for column %d", field.Val, colIdx)
-			}
-			if err := vector.SetFixedAt(vec, rowIdx, d); err != nil {
-				return err
-			}
-		case types.T_enum:
-			d, err := strconv.ParseUint(field.Val, 10, 16)
-			if err == nil {
-				if err := vector.SetFixedAt(vec, rowIdx, types.Enum(d)); err != nil {
-					return err
-				}
-			} else if errors.Is(err, strconv.ErrSyntax) {
-				v, err := types.ParseEnum(param.Cols[colIdx].Typ.Enumvalues, field.Val)
-				if err != nil {
-					logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-					return err
-				}
-				if err := vector.SetFixedAt(vec, rowIdx, types.Enum(v)); err != nil {
-					return err
-				}
-			} else {
-				if errors.Is(err, strconv.ErrRange) {
-					logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not uint16 type for column %d", field.Val, colIdx)
-				}
-				f, err := strconv.ParseFloat(field.Val, 64)
-				if err != nil || f < 0 || f > math.MaxUint16 {
-					logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not uint16 type for column %d", field.Val, colIdx)
-				}
-				if err := vector.SetFixedAt(vec, rowIdx, types.Enum(f)); err != nil {
-					return err
-				}
-			}
-		case types.T_decimal64:
-			d, err := types.ParseDecimal64(field.Val, vec.GetType().Width, vec.GetType().Scale)
-			if err != nil {
-				// we tolerate loss of digits.
-				if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
-					logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-					return moerr.NewInternalError(param.Ctx, "the input value '%v' is invalid Decimal64 type for column %d", field.Val, colIdx)
-				}
-			}
-			if err := vector.SetFixedAt(vec, rowIdx, d); err != nil {
-				return err
-			}
-		case types.T_decimal128:
+		} else {
 			d, err := types.ParseDecimal128(field.Val, vec.GetType().Width, vec.GetType().Scale)
 			if err != nil {
-				// we tolerate loss of digits.
-				if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
-					logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-					return moerr.NewInternalError(param.Ctx, "the input value '%v' is invalid Decimal128 type for column %d", field.Val, colIdx)
-				}
-			}
-			if err := vector.SetFixedAt(vec, rowIdx, d); err != nil {
-				return err
-			}
-		case types.T_timestamp:
-			t := time.Local
-			d, err := types.ParseTimestamp(t, field.Val, vec.GetType().Scale)
-			if err != nil {
 				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalError(param.Ctx, "the input value '%v' is not Timestamp type for column %d", field.Val, colIdx)
+				return moerr.NewInternalError(param.Ctx, "the input value '%v' is not float32 type for column %d", field.Val, colIdx)
 			}
-			if err := vector.SetFixedAt(vec, rowIdx, d); err != nil {
+			if err := vector.SetFixedAt(vec, rowIdx, float32(types.Decimal128ToFloat64(d, vec.GetType().Scale))); err != nil {
 				return err
 			}
-		case types.T_uuid:
-			d, err := types.ParseUuid(field.Val)
-			if err != nil {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalError(param.Ctx, "the input value '%v' is not uuid type for column %d", field.Val, colIdx)
-			}
-			if err := vector.SetFixedAt(vec, rowIdx, d); err != nil {
-				return err
-			}
-		default:
-			return moerr.NewInternalError(param.Ctx, "the value type %d is not support now", param.Cols[rowIdx].Typ.Id)
 		}
+	case types.T_float64:
+		// origin float64 data type
+		if vec.GetType().Scale < 0 || vec.GetType().Width == 0 {
+			d, err := strconv.ParseFloat(field.Val, 64)
+			if err != nil {
+				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+				return moerr.NewInternalError(param.Ctx, "the input value '%v' is not float64 type for column %d", field.Val, colIdx)
+			}
+			if err := vector.SetFixedAt(vec, rowIdx, d); err != nil {
+				return err
+			}
+		} else {
+			d, err := types.ParseDecimal128(field.Val, vec.GetType().Width, vec.GetType().Scale)
+			if err != nil {
+				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+				return moerr.NewInternalError(param.Ctx, "the input value '%v' is not float64 type for column %d", field.Val, colIdx)
+			}
+			if err := vector.SetFixedAt(vec, rowIdx, types.Decimal128ToFloat64(d, vec.GetType().Scale)); err != nil {
+				return err
+			}
+		}
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		// XXX Memory accounting?
+		buf.WriteString(field.Val)
+		bs := buf.Bytes()
+		err := vector.SetBytesAt(vec, rowIdx, bs, mp)
+		if err != nil {
+			return err
+		}
+		buf.Reset()
+	case types.T_array_float32:
+		arrBytes, err := types.StringToArrayToBytes[float32](field.Val)
+		if err != nil {
+			return err
+		}
+		err = vector.SetBytesAt(vec, rowIdx, arrBytes, mp)
+		if err != nil {
+			return err
+		}
+		buf.Reset()
+	case types.T_array_float64:
+		arrBytes, err := types.StringToArrayToBytes[float64](field.Val)
+		if err != nil {
+			return err
+		}
+		err = vector.SetBytesAt(vec, rowIdx, arrBytes, mp)
+		if err != nil {
+			return err
+		}
+		buf.Reset()
+	case types.T_json:
+		var jsonBytes []byte
+		if param.Extern.Format != tree.CSV {
+			jsonBytes = []byte(field.Val)
+		} else {
+			field.Val = fmt.Sprintf("%v", strings.Trim(field.Val, "\""))
+			byteJson, err := types.ParseStringToByteJson(field.Val)
+			if err != nil {
+				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+				return moerr.NewInternalError(param.Ctx, "the input value '%v' is not json type for column %d", field.Val, colIdx)
+			}
+			jsonBytes, err = types.EncodeJson(byteJson)
+			if err != nil {
+				logutil.Errorf("encode json[%v] err:%v", field.Val, err)
+				return moerr.NewInternalError(param.Ctx, "the input value '%v' is not json type for column %d", field.Val, colIdx)
+			}
+		}
+
+		err := vector.SetBytesAt(vec, rowIdx, jsonBytes, mp)
+		if err != nil {
+			return err
+		}
+	case types.T_date:
+		d, err := types.ParseDateCast(field.Val)
+		if err != nil {
+			logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+			return moerr.NewInternalError(param.Ctx, "the input value '%v' is not Date type for column %d", field.Val, colIdx)
+		}
+		if err := vector.SetFixedAt(vec, rowIdx, d); err != nil {
+			return err
+		}
+	case types.T_time:
+		d, err := types.ParseTime(field.Val, vec.GetType().Scale)
+		if err != nil {
+			logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+			return moerr.NewInternalError(param.Ctx, "the input value '%v' is not Time type for column %d", field.Val, colIdx)
+		}
+		if err := vector.SetFixedAt(vec, rowIdx, d); err != nil {
+			return err
+		}
+	case types.T_datetime:
+		d, err := types.ParseDatetime(field.Val, vec.GetType().Scale)
+		if err != nil {
+			logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+			return moerr.NewInternalError(param.Ctx, "the input value '%v' is not Datetime type for column %d", field.Val, colIdx)
+		}
+		if err := vector.SetFixedAt(vec, rowIdx, d); err != nil {
+			return err
+		}
+	case types.T_enum:
+		d, err := strconv.ParseUint(field.Val, 10, 16)
+		if err == nil {
+			if err := vector.SetFixedAt(vec, rowIdx, types.Enum(d)); err != nil {
+				return err
+			}
+		} else if errors.Is(err, strconv.ErrSyntax) {
+			v, err := types.ParseEnum(param.Cols[colIdx].Typ.Enumvalues, field.Val)
+			if err != nil {
+				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+				return err
+			}
+			if err := vector.SetFixedAt(vec, rowIdx, types.Enum(v)); err != nil {
+				return err
+			}
+		} else {
+			if errors.Is(err, strconv.ErrRange) {
+				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+				return moerr.NewInternalError(param.Ctx, "the input value '%v' is not uint16 type for column %d", field.Val, colIdx)
+			}
+			f, err := strconv.ParseFloat(field.Val, 64)
+			if err != nil || f < 0 || f > math.MaxUint16 {
+				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+				return moerr.NewInternalError(param.Ctx, "the input value '%v' is not uint16 type for column %d", field.Val, colIdx)
+			}
+			if err := vector.SetFixedAt(vec, rowIdx, types.Enum(f)); err != nil {
+				return err
+			}
+		}
+	case types.T_decimal64:
+		d, err := types.ParseDecimal64(field.Val, vec.GetType().Width, vec.GetType().Scale)
+		if err != nil {
+			// we tolerate loss of digits.
+			if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
+				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+				return moerr.NewInternalError(param.Ctx, "the input value '%v' is invalid Decimal64 type for column %d", field.Val, colIdx)
+			}
+		}
+		if err := vector.SetFixedAt(vec, rowIdx, d); err != nil {
+			return err
+		}
+	case types.T_decimal128:
+		d, err := types.ParseDecimal128(field.Val, vec.GetType().Width, vec.GetType().Scale)
+		if err != nil {
+			// we tolerate loss of digits.
+			if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
+				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+				return moerr.NewInternalError(param.Ctx, "the input value '%v' is invalid Decimal128 type for column %d", field.Val, colIdx)
+			}
+		}
+		if err := vector.SetFixedAt(vec, rowIdx, d); err != nil {
+			return err
+		}
+	case types.T_timestamp:
+		t := time.Local
+		d, err := types.ParseTimestamp(t, field.Val, vec.GetType().Scale)
+		if err != nil {
+			logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+			return moerr.NewInternalError(param.Ctx, "the input value '%v' is not Timestamp type for column %d", field.Val, colIdx)
+		}
+		if err := vector.SetFixedAt(vec, rowIdx, d); err != nil {
+			return err
+		}
+	case types.T_uuid:
+		d, err := types.ParseUuid(field.Val)
+		if err != nil {
+			logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+			return moerr.NewInternalError(param.Ctx, "the input value '%v' is not uuid type for column %d", field.Val, colIdx)
+		}
+		if err := vector.SetFixedAt(vec, rowIdx, d); err != nil {
+			return err
+		}
+	default:
+		return moerr.NewInternalError(param.Ctx, "the value type %d is not support now", param.Cols[rowIdx].Typ.Id)
 	}
 	return nil
 }

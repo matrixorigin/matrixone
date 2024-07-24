@@ -16,7 +16,6 @@ package testutil
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -31,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	logservice2 "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -68,17 +68,17 @@ func NewTestDisttaeEngine(ctx context.Context, mp *mpool.MPool,
 	initRuntime()
 
 	wait := make(chan struct{})
-	de.timestampWaiter = client.NewTimestampWaiter()
+	de.timestampWaiter = client.NewTimestampWaiter(runtime.GetLogger(""))
 
 	txnSender := service.NewTestSender(storage)
-	de.txnClient = client.NewTxnClient(txnSender, client.WithTimestampWaiter(de.timestampWaiter))
+	de.txnClient = client.NewTxnClient("", txnSender, client.WithTimestampWaiter(de.timestampWaiter))
 
 	de.txnClient.Resume()
 
 	hakeeper := newTestHAKeeperClient()
 	colexec.NewServer(hakeeper)
 
-	de.Engine = disttae.New(ctx, mp, fs, de.txnClient, hakeeper, nil, 0)
+	de.Engine = disttae.New(ctx, "", mp, fs, de.txnClient, hakeeper, nil, 0)
 	de.Engine.PushClient().LogtailRPCClientFactory = rpcAgent.MockLogtailRPCClientFactory
 
 	go func() {
@@ -336,9 +336,8 @@ func (de *TestDisttaeEngine) Close(ctx context.Context) {
 }
 
 func initRuntime() {
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, new(mockMOCluster))
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.LockService, new(mockLockService))
+	runtime.ServiceRuntime("").SetGlobalVariables(runtime.ClusterService, new(mockMOCluster))
+	runtime.ServiceRuntime("").SetGlobalVariables(runtime.LockService, new(mockLockService))
 }
 
 var _ clusterservice.MOCluster = new(mockMOCluster)

@@ -106,3 +106,7 @@ func (b *BindedEngine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool
 func (b *BindedEngine) GetMessageCenter() any {
 	return nil
 }
+
+func (b *BindedEngine) GetService() string {
+	return b.engine.GetService()
+}

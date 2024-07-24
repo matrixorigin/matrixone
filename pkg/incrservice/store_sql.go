@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -98,7 +97,7 @@ func (s *sqlStore) Allocate(
 	colName string,
 	count int,
 	txnOp client.TxnOperator,
-) (uint64, uint64, timestamp.Timestamp, error) {
+) (uint64, uint64, error) {
 	var current, next, step uint64
 	ok := false
 
@@ -149,8 +148,8 @@ func (s *sqlStore) Allocate(
 					if err != nil {
 						return err
 					}
-					trace.GetService().Sync()
-					getLogger().Fatal("BUG: read incr record invalid",
+					trace.GetService(s.ls.GetConfig().ServiceID).Sync()
+					getLogger(s.ls.GetConfig().ServiceID).Fatal("BUG: read incr record invalid",
 						zap.String("fetch-sql", fetchSQL),
 						zap.Any("account", accountID),
 						zap.Uint64("table", tableID),
@@ -191,8 +190,8 @@ func (s *sqlStore) Allocate(
 					if err != nil {
 						return err
 					}
-					trace.GetService().Sync()
-					getLogger().Fatal("BUG: update incr record returns invalid affected rows",
+					trace.GetService(s.ls.GetConfig().ServiceID).Sync()
+					getLogger(s.ls.GetConfig().ServiceID).Error("pre lock released by lock table changed",
 						zap.String("update-sql", sql),
 						zap.Any("account", accountID),
 						zap.Uint64("table", tableID),
@@ -200,6 +199,8 @@ func (s *sqlStore) Allocate(
 						zap.Uint64("affected-rows", res.AffectedRows),
 						zap.Duration("cost", time.Since(start)),
 						zap.Bool("ctx-done", ctxDone()))
+					retry = true
+					return moerr.NewTxnNeedRetryNoCtx()
 				}
 				res.Close()
 				return nil
@@ -213,7 +214,7 @@ func (s *sqlStore) Allocate(
 				continue
 			}
 
-			return 0, 0, timestamp.Timestamp{}, err
+			return 0, 0, err
 		}
 		if ok {
 			break
@@ -221,8 +222,7 @@ func (s *sqlStore) Allocate(
 	}
 
 	from, to := getNextRange(current, next, int(step))
-	commitTs := txnOp.GetOverview().Meta.CommitTS
-	return from, to, commitTs, nil
+	return from, to, nil
 }
 
 func (s *sqlStore) UpdateMinValue(

@@ -22,16 +22,16 @@ import (
 	"sync/atomic"
 	"time"
 
+	rt "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common/utils"
-	w "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
-
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
+	w "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
 )
 
 var (
@@ -84,26 +84,36 @@ func putReader(reader *objectio.ObjectReader) {
 // I did not switch pipeline.fetchFun and pipeline.prefetchFunc when
 // I stopped, so I need to execute ResetPipeline again
 
-var pipeline *IoPipeline
-
 type IOJobFactory func(context.Context, fetchParams) *tasks.Job
 
-func init() {
-	pipeline = NewIOPipeline()
-}
+func Start(sid string) {
+	r := rt.ServiceRuntime(sid)
+	_, ok := r.GetGlobalVariables("blockio")
+	if ok {
+		return
+	}
 
-func Start() {
+	pipeline := NewIOPipeline()
 	pipeline.Start()
 	pipeline.fetchFun = pipeline.doFetch
 	pipeline.prefetchFunc = pipeline.doPrefetch
+	r.SetGlobalVariables("blockio", pipeline)
 }
 
-func Stop() {
-	pipeline.Stop()
+func Stop(sid string) {
+	v, ok := rt.ServiceRuntime(sid).GetGlobalVariables("blockio")
+	if !ok {
+		return
+	}
+	v.(*IoPipeline).Stop()
 }
 
-func ResetPipeline() {
-	pipeline = NewIOPipeline()
+func MustGetPipeline(sid string) *IoPipeline {
+	v, ok := rt.ServiceRuntime(sid).GetGlobalVariables("blockio")
+	if !ok {
+		panic("blockio not started for " + sid)
+	}
+	return v.(*IoPipeline)
 }
 
 func makeName(location string) string {
@@ -504,4 +514,17 @@ func (p *IoPipeline) crontask(ctx context.Context) {
 	hb.Start()
 	<-ctx.Done()
 	hb.Stop()
+}
+
+func RunPipelineTest(
+	fn func(),
+) {
+	rt.RunTest(
+		"",
+		func(rt rt.Runtime) {
+			Start("")
+			defer Stop("")
+			fn()
+		},
+	)
 }

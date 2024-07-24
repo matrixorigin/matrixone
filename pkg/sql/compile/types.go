@@ -136,7 +136,7 @@ type Scope struct {
 	RemoteReceivRegInfos []RemoteReceivRegInfo
 
 	BuildIdx   int
-	ShuffleCnt int
+	ShuffleIdx int
 
 	PartialResults     []any
 	PartialResultTypes []types.T
@@ -202,8 +202,9 @@ type scopeContext struct {
 
 // anaylze information
 type anaylze struct {
-	// curr is the current index of plan
-	curr      int
+	// curNodeIdx is the current Node index when compilePlanScope
+	curNodeIdx int
+	// isFirst is the first opeator in pipeline for plan Node
 	isFirst   bool
 	qry       *plan.Query
 	analInfos []*process.AnalyzeInfo

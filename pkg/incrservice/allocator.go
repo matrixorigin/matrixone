@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"go.uber.org/zap"
 )
@@ -34,9 +33,12 @@ type allocator struct {
 	stopper *stopper.Stopper
 }
 
-func newValueAllocator(store IncrValueStore) valueAllocator {
+func newValueAllocator(
+	sid string,
+	store IncrValueStore,
+) valueAllocator {
 	a := &allocator{
-		logger:  getLogger(),
+		logger:  getLogger(sid).Named("incrservice"),
 		c:       make(chan action, 1024),
 		stopper: stopper.NewStopper("valueAllocator"),
 		store:   store,
@@ -57,13 +59,12 @@ func (a *allocator) allocate(
 	tableID uint64,
 	key string,
 	count int,
-	txnOp client.TxnOperator) (uint64, uint64, timestamp.Timestamp, error) {
+	txnOp client.TxnOperator) (uint64, uint64, error) {
 	c := make(chan struct{})
 	//UT test find race here
 	var from, to atomic.Uint64
 	var err error
 	var err2 atomic.Value
-	var lastAllocateAt timestamp.Timestamp
 	err = a.asyncAllocate(
 		ctx,
 		tableID,
@@ -72,15 +73,11 @@ func (a *allocator) allocate(
 		txnOp,
 		func(
 			v1, v2 uint64,
-			allocatedAt timestamp.Timestamp,
 			e error) {
 			from.Store(v1)
 			to.Store(v2)
 			if e != nil {
 				err2.Store(e)
-			}
-			if !allocatedAt.IsEmpty() {
-				lastAllocateAt = allocatedAt //TODO : check if this is correct
 			}
 			close(c)
 		})
@@ -88,10 +85,10 @@ func (a *allocator) allocate(
 		err = err2.Load().(error)
 	}
 	if err != nil {
-		return 0, 0, timestamp.Timestamp{}, err
+		return 0, 0, err
 	}
 	<-c
-	return from.Load(), to.Load(), lastAllocateAt, err
+	return from.Load(), to.Load(), err
 }
 
 func (a *allocator) asyncAllocate(
@@ -100,7 +97,7 @@ func (a *allocator) asyncAllocate(
 	col string,
 	count int,
 	txnOp client.TxnOperator,
-	apply func(uint64, uint64, timestamp.Timestamp, error)) error {
+	apply func(uint64, uint64, error)) error {
 	accountId, err := getAccountID(ctx)
 	if err != nil {
 		return err
@@ -167,7 +164,7 @@ func (a *allocator) doAllocate(act action) {
 	ctx, cancel := context.WithTimeout(ctx, time.Second*10)
 	defer cancel()
 
-	from, to, lastAllocateAt, err := a.store.Allocate(
+	from, to, err := a.store.Allocate(
 		ctx,
 		act.tableID,
 		act.col,
@@ -183,7 +180,7 @@ func (a *allocator) doAllocate(act action) {
 			zap.Error(err))
 	}
 
-	act.applyAllocate(from, to, lastAllocateAt, err)
+	act.applyAllocate(from, to, err)
 }
 
 func (a *allocator) doUpdate(act action) {
@@ -226,7 +223,7 @@ type action struct {
 	col           string
 	count         int
 	minValue      uint64
-	applyAllocate func(uint64, uint64, timestamp.Timestamp, error)
+	applyAllocate func(uint64, uint64, error)
 	applyUpdate   func(error)
 }
 

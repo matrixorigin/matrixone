@@ -201,6 +201,8 @@ func (ds *debugStats) AddFlushBytes(b uint64) {
 type MysqlProtocolImpl struct {
 	m sync.Mutex
 
+	sid string
+
 	//TODO: make it global
 	io IOPackage
 
@@ -2357,14 +2359,16 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow(mrs *MysqlResultSet, rowId
 					return err
 				}
 			}
+			// XXX: This is so strange, why we need to handle this case here?
+			//
 			// case defines.MYSQL_TYPE_TIMESTAMP:
 			// 	if value, err := mrs.GetString(rowIdx, i); err != nil {
 			// 		return nil, err
 			// 	} else {
 			// 		data = err = mp.appendStringLenEnc(data, value)
-			if err != nil {
-				return err
-			}
+			//; if err != nil {
+			// 	return err
+			// }
 		// 	}
 		default:
 			return moerr.NewInternalError(mp.ctx, "type is not supported in binary text result row")
@@ -2979,9 +2983,10 @@ func generate_salt(n int) []byte {
 	}
 	return buf
 }
-func NewMysqlClientProtocol(connectionID uint32, tcp *Conn, maxBytesToFlush int, SV *config.FrontendParameters) *MysqlProtocolImpl {
+func NewMysqlClientProtocol(sid string, connectionID uint32, tcp *Conn, maxBytesToFlush int, SV *config.FrontendParameters) *MysqlProtocolImpl {
 	salt := generate_salt(20)
 	mysql := &MysqlProtocolImpl{
+		sid:              sid,
 		io:               NewIOPackage(true),
 		tcpConn:          tcp,
 		salt:             salt,

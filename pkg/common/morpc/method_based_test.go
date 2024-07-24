@@ -112,34 +112,44 @@ func runRPCTests(
 	fn func(string, RPCClient, MethodBasedServer[*testMethodBasedMessage, *testMethodBasedMessage]),
 	opts ...HandlerOption[*testMethodBasedMessage, *testMethodBasedMessage]) {
 	defer leaktest.AfterTest(t)()
-	testSockets := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
-	assert.NoError(t, os.RemoveAll(testSockets[7:]))
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
 
-	s, err := NewMessageHandler(
-		"test",
-		testSockets,
-		Config{},
-		NewMessagePool(
-			func() *testMethodBasedMessage { return &testMethodBasedMessage{} },
-			func() *testMethodBasedMessage { return &testMethodBasedMessage{} }),
-		opts...)
-	require.NoError(t, err)
-	defer func() {
-		assert.NoError(t, s.Close())
-	}()
-	require.NoError(t, s.Start())
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			testSockets := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
+			assert.NoError(t, os.RemoveAll(testSockets[7:]))
 
-	cfg := Config{}
-	c, err := cfg.NewClient("ctl-service",
-		getLogger().RawLogger(),
-		func() Message { return &testMethodBasedMessage{} })
-	require.NoError(t, err)
-	defer func() {
-		assert.NoError(t, c.Close())
-	}()
+			s, err := NewMessageHandler(
+				sid,
+				"test",
+				testSockets,
+				Config{},
+				NewMessagePool(
+					func() *testMethodBasedMessage { return &testMethodBasedMessage{} },
+					func() *testMethodBasedMessage { return &testMethodBasedMessage{} }),
+				opts...,
+			)
+			require.NoError(t, err)
+			defer func() {
+				assert.NoError(t, s.Close())
+			}()
+			require.NoError(t, s.Start())
 
-	fn(testSockets, c, s)
+			cfg := Config{}
+			c, err := cfg.NewClient(
+				sid,
+				"ctl-service",
+				func() Message { return &testMethodBasedMessage{} },
+			)
+			require.NoError(t, err)
+			defer func() {
+				assert.NoError(t, c.Close())
+			}()
+
+			fn(testSockets, c, s)
+		},
+	)
 }
 
 type testMethodBasedMessage struct {

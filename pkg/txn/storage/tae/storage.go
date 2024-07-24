@@ -17,6 +17,7 @@ package taestorage
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -48,7 +49,9 @@ func NewTAEStorage(
 	logtailServerAddr string,
 	logtailServerCfg *options.LogtailServerCfg,
 ) (storage.TxnStorage, error) {
-
+	if rt.ServiceUUID() != opt.SID {
+		panic(fmt.Sprintf("service uuid mismatch, %s != %s", rt.ServiceUUID(), opt.SID))
+	}
 	taeHandler := rpc.NewTAEHandle(ctx, dataDir, opt)
 	tae := taeHandler.GetDB()
 	logtailer := logtail.NewLogtailer(ctx, tae.BGCheckpointRunner, tae.LogtailMgr, tae.Catalog)
@@ -57,7 +60,7 @@ func NewTAEStorage(
 		return nil, err
 	}
 
-	ss, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.StatusServer)
+	ss, ok := rt.GetGlobalVariables(runtime.StatusServer)
 	if ok {
 		ss.(*status.Server).SetLogtailServer(server)
 	}

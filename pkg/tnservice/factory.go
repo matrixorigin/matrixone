@@ -98,7 +98,7 @@ func (s *store) createLogServiceClientFactroy(shard metadata.TNShard) logservice
 func (s *store) newLogServiceClient(shard metadata.TNShard) (logservice.Client, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.LogService.ConnectTimeout.Duration)
 	defer cancel()
-	return logservice.NewClient(ctx, logservice.ClientConfig{
+	return logservice.NewClient(ctx, s.cfg.UUID, logservice.ClientConfig{
 		ReadOnly:         false,
 		LogShardID:       shard.LogShardID,
 		TNReplicaID:      shard.ReplicaID,
@@ -196,6 +196,7 @@ func (s *store) newTAEStorage(ctx context.Context, shard metadata.TNShard, facto
 		Ctx:               ctx,
 		MaxMessageSize:    max2LogServiceMsgSizeLimit,
 		TaskServiceGetter: s.GetTaskService,
+		SID:               s.cfg.UUID,
 	}
 
 	return taestorage.NewTAEStorage(
