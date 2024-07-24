@@ -444,9 +444,12 @@ func (c *Compile) runOnce() error {
 			return err
 		}
 	}
-	GetCompileService().startService(c)
+
+	if err = GetCompileService().recordRunningCompile(c); err != nil {
+		return err
+	}
 	defer func() {
-		_, _ = GetCompileService().endService(c)
+		_, _ = GetCompileService().removeRunningCompile(c)
 	}()
 
 	//c.printPipeline()

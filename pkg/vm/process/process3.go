@@ -140,6 +140,12 @@ func (proc *Process) GetLatestContext() context.Context {
 	return proc.Base.sqlContext.getLatestContext()
 }
 
+// GetQueryCtxFromProc returns the query context and its cancel function.
+// just for easy access.
+func GetQueryCtxFromProc(proc *Process) (context.Context, context.CancelFunc) {
+	return proc.Base.sqlContext.queryContext, proc.Base.sqlContext.queryCancel
+}
+
 // GetErrorFromQueryStatus return error if top context or query context with error.
 func (proc *Process) GetErrorFromQueryStatus() error {
 	base := proc.Base.GetContextBase()
