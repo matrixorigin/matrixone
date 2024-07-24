@@ -396,11 +396,11 @@ func (h *Handle) HandleCommitMerge(
 		for _, filepath := range locations {
 			reader, err := blockio.NewFileReader(h.db.Runtime.SID(), h.db.Runtime.Fs.Service, filepath)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			bats, releases, err := reader.LoadAllColumns(ctx, nil, nil)
 			if err != nil {
-				return nil, err
+				return err
 			}
 
 			for _, bat := range bats {

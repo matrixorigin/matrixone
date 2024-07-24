@@ -226,7 +226,7 @@ func handleCNMerge(
 			return Result{}, err
 		}
 
-		resp, err := txnWrite(proc.Ctx, txnOp, payload)
+		resp, err := txnWrite(proc.Ctx, proc.GetService(), txnOp, payload)
 		if err != nil {
 			return Result{}, err
 		}
@@ -279,7 +279,7 @@ func handleCNMerge(
 				return Result{}, err
 			}
 
-			resp, err := txnWrite(proc.Ctx, txnOp, payload)
+			resp, err := txnWrite(proc.Ctx, proc.GetService(), txnOp, payload)
 			if err != nil {
 				return Result{}, err
 			}
@@ -311,7 +311,7 @@ func handleCNMerge(
 				return Result{}, err
 			}
 
-			resp, err := txnWrite(proc.Ctx, txnOp, payload)
+			resp, err := txnWrite(proc.Ctx, proc.GetService(), txnOp, payload)
 			if err != nil {
 				return Result{}, err
 			}
@@ -327,9 +327,9 @@ func handleCNMerge(
 	return Result{}, nil
 }
 
-func txnWrite(ctx context.Context, txnOp client.TxnOperator, payload []byte) (*rpc.SendResult, error) {
+func txnWrite(ctx context.Context, service string, txnOp client.TxnOperator, payload []byte) (*rpc.SendResult, error) {
 	var target metadata.TNShard
-	cluster := clusterservice.GetMOCluster()
+	cluster := clusterservice.GetMOCluster(service)
 	cluster.GetTNService(clusterservice.NewSelector(),
 		func(store metadata.TNService) bool {
 			for _, shard := range store.Shards {
