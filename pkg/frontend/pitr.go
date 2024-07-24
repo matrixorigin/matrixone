@@ -657,6 +657,11 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (e
 		return err
 	}
 
+	// check the restore level
+	if err = checkPitrValidOrNot(pitr, stmt); err != nil {
+		return err
+	}
+
 	restoreLevel = stmt.Level
 
 	// restore as a txn
@@ -1435,7 +1440,7 @@ func addTimeSpan(length int, unit string) (time.Time, error) {
 	}
 }
 
-func checkPitrValidOrNot(ctx context.Context, bh BackgroundExec, pitrRecord *pitrRecord, stmt *tree.RestorePitr) (err error) {
+func checkPitrValidOrNot(pitrRecord *pitrRecord, stmt *tree.RestorePitr) (err error) {
 	restoreLevel := stmt.Level
 	switch restoreLevel {
 	case tree.RESTORELEVELACCOUNT:
