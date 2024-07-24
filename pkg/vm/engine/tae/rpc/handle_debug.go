@@ -397,11 +397,11 @@ func (h *Handle) HandleCommitMerge(
 		for _, filepath := range locations {
 			reader, err := blockio.NewFileReader(h.db.Runtime.Fs.Service, filepath)
 			if err != nil {
-				return
+				return nil, err
 			}
 			bats, releases, err := reader.LoadAllColumns(ctx, nil, nil)
 			if err != nil {
-				return
+				return nil, err
 			}
 
 			for _, bat := range bats {
@@ -421,7 +421,6 @@ func (h *Handle) HandleCommitMerge(
 			}
 			releases()
 			_ = h.db.Runtime.Fs.Service.Delete(ctx, filepath)
-			bats = nil
 		}
 	} else if req.Booking != nil {
 		booking = make(api.TransferMaps, len(req.Booking.Mappings))
