@@ -395,7 +395,7 @@ func (h *Handle) HandleCommitMerge(
 		}
 		locations := req.BookingLoc[idx:]
 		for _, filepath := range locations {
-			reader, err := blockio.NewFileReader(h.db.Runtime.Fs.Service, filepath)
+			reader, err := blockio.NewFileReader(h.db.Runtime.SID(), h.db.Runtime.Fs.Service, filepath)
 			if err != nil {
 				return nil, err
 			}
