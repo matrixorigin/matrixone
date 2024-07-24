@@ -625,45 +625,51 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 		in.Limit = t.LimitExpr
 	case *loopanti.LoopAnti:
 		in.Anti = &pipeline.AntiJoin{
-			Result: t.Result,
-			Expr:   t.Cond,
-			Types:  convertToPlanTypes(t.Typs),
+			Result:     t.Result,
+			Expr:       t.Cond,
+			Types:      convertToPlanTypes(t.Typs),
+			JoinMapTag: t.JoinMapTag,
 		}
 	case *loopjoin.LoopJoin:
 		relList, colList := getRelColList(t.Result)
 		in.Join = &pipeline.Join{
-			RelList: relList,
-			ColList: colList,
-			Expr:    t.Cond,
-			Types:   convertToPlanTypes(t.Typs),
+			RelList:    relList,
+			ColList:    colList,
+			Expr:       t.Cond,
+			Types:      convertToPlanTypes(t.Typs),
+			JoinMapTag: t.JoinMapTag,
 		}
 	case *loopleft.LoopLeft:
 		relList, colList := getRelColList(t.Result)
 		in.LeftJoin = &pipeline.LeftJoin{
-			RelList: relList,
-			ColList: colList,
-			Expr:    t.Cond,
-			Types:   convertToPlanTypes(t.Typs),
+			RelList:    relList,
+			ColList:    colList,
+			Expr:       t.Cond,
+			Types:      convertToPlanTypes(t.Typs),
+			JoinMapTag: t.JoinMapTag,
 		}
 	case *loopsemi.LoopSemi:
 		in.SemiJoin = &pipeline.SemiJoin{
-			Result: t.Result,
-			Expr:   t.Cond,
-			Types:  convertToPlanTypes(t.Typs),
+			Result:     t.Result,
+			Expr:       t.Cond,
+			Types:      convertToPlanTypes(t.Typs),
+			JoinMapTag: t.JoinMapTag,
 		}
 	case *loopsingle.LoopSingle:
 		relList, colList := getRelColList(t.Result)
 		in.SingleJoin = &pipeline.SingleJoin{
-			RelList: relList,
-			ColList: colList,
-			Expr:    t.Cond,
-			Types:   convertToPlanTypes(t.Typs),
+			RelList:    relList,
+			ColList:    colList,
+			Expr:       t.Cond,
+			Types:      convertToPlanTypes(t.Typs),
+			JoinMapTag: t.JoinMapTag,
 		}
 	case *loopmark.LoopMark:
 		in.MarkJoin = &pipeline.MarkJoin{
-			Expr:   t.Cond,
-			Types:  convertToPlanTypes(t.Typs),
-			Result: t.Result,
+			Expr:       t.Cond,
+			Types:      convertToPlanTypes(t.Typs),
+			Result:     t.Result,
+			JoinMapTag: t.JoinMapTag,
 		}
 	case *offset.Offset:
 		in.Offset = t.OffsetExpr
@@ -672,10 +678,19 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 	case *product.Product:
 		relList, colList := getRelColList(t.Result)
 		in.Product = &pipeline.Product{
-			RelList:   relList,
-			ColList:   colList,
-			Types:     convertToPlanTypes(t.Typs),
-			IsShuffle: t.IsShuffle,
+			RelList:    relList,
+			ColList:    colList,
+			Types:      convertToPlanTypes(t.Typs),
+			IsShuffle:  t.IsShuffle,
+			JoinMapTag: t.JoinMapTag,
+		}
+	case *productl2.Productl2:
+		relList, colList := getRelColList(t.Result)
+		in.ProductL2 = &pipeline.ProductL2{
+			RelList:    relList,
+			ColList:    colList,
+			Types:      convertToPlanTypes(t.Typs),
+			JoinMapTag: t.JoinMapTag,
 		}
 	case *projection.Projection:
 		in.ProjectList = t.Es
@@ -1048,6 +1063,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Result = t.Result
 		arg.Cond = t.Expr
 		arg.Typs = convertToTypes(t.Types)
+		arg.JoinMapTag = t.JoinMapTag
 		op = arg
 	case vm.LoopJoin:
 		t := opr.GetJoin()
@@ -1055,6 +1071,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.Cond = t.Expr
 		arg.Typs = convertToTypes(t.Types)
+		arg.JoinMapTag = t.JoinMapTag
 		op = arg
 	case vm.LoopLeft:
 		t := opr.GetLeftJoin()
@@ -1062,6 +1079,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.Cond = t.Expr
 		arg.Typs = convertToTypes(t.Types)
+		arg.JoinMapTag = t.JoinMapTag
 		op = arg
 	case vm.LoopSemi:
 		t := opr.GetSemiJoin()
@@ -1069,6 +1087,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Result = t.Result
 		arg.Cond = t.Expr
 		arg.Typs = convertToTypes(t.Types)
+		arg.JoinMapTag = t.JoinMapTag
 		op = arg
 	case vm.IndexJoin:
 		t := opr.GetIndexJoin()
@@ -1083,6 +1102,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.Cond = t.Expr
 		arg.Typs = convertToTypes(t.Types)
+		arg.JoinMapTag = t.JoinMapTag
 		op = arg
 	case vm.LoopMark:
 		t := opr.GetMarkJoin()
@@ -1090,6 +1110,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Result = t.Result
 		arg.Cond = t.Expr
 		arg.Typs = convertToTypes(t.Types)
+		arg.JoinMapTag = t.JoinMapTag
 		op = arg
 	case vm.Offset:
 		op = offset.NewArgument().WithOffset(opr.Offset)
@@ -1103,6 +1124,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.Typs = convertToTypes(t.Types)
 		arg.IsShuffle = t.IsShuffle
+		arg.JoinMapTag = t.JoinMapTag
 		op = arg
 	case vm.ProductL2:
 		t := opr.GetProductL2()
@@ -1110,6 +1132,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.Typs = convertToTypes(t.Types)
 		arg.OnExpr = t.Expr
+		arg.JoinMapTag = t.JoinMapTag
 		op = arg
 	case vm.Projection:
 		arg := projection.NewArgument()

@@ -68,17 +68,6 @@ type Iterator interface {
 	Find(start, count int, vecs []*vector.Vector) (vs []uint64, zvs []int64)
 }
 
-// JoinMap is used for join
-type JoinMap struct {
-	rowcnt           int64 // for debug purpose
-	refCnt           int64
-	multiSels        [][]int32
-	shm              *StrHashMap
-	ihm              *IntHashMap
-	runtimeFilter_In bool
-	valid            bool
-}
-
 // StrHashMap key is []byte, value is an uint64 value (starting from 1)
 //
 //	each time a new key is inserted, the hashtable returns a last-value+1 or, if the old key is inserted, the value corresponding to that key
