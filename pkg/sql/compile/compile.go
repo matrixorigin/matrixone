@@ -2841,7 +2841,7 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 		}
 		op := constructLimit(n)
 		op.SetIdx(c.anal.curNodeIdx)
-		op.SetIsFirst(c.anal.isFirst)
+		op.SetIsFirst(currentFirstFlag)
 		ss[i].setRootOperator(op)
 	}
 	c.anal.isFirst = false
