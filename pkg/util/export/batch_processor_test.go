@@ -118,6 +118,7 @@ func (s *dummyBuffer) ShouldFlush() bool {
 	}
 	return should
 }
+func (s *dummyBuffer) Size() int64 { return 0 }
 
 var waitGetBatchFinish = func() {}
 

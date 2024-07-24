@@ -286,6 +286,7 @@ type Buffer interface {
 	Reset()
 	IsEmpty() bool
 	ShouldFlush() bool
+	Size() int64
 	// GetBatch use bytes.Buffer to mitigate mem allocation and the returned bytes should own its data
 	GetBatch(ctx context.Context, buf *bytes.Buffer) any
 }

@@ -31,6 +31,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
+const thresholdDelta = 10 * mpool.KB
+
 var _ bp.ItemBuffer[bp.HasName, any] = &ContentBuffer{}
 var _ Buffer = &ContentBuffer{}
 
@@ -143,7 +145,7 @@ func (b *ContentBuffer) isEmpty() bool {
 func (b *ContentBuffer) ShouldFlush() bool {
 	b.mux.Lock()
 	defer b.mux.Unlock()
-	return b.buf.Len() > b.sizeThreshold
+	return b.buf.Len()+thresholdDelta > b.sizeThreshold
 }
 
 func (b *ContentBuffer) Size() int64 {
