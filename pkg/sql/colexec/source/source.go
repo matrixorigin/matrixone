@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -60,6 +61,14 @@ func (source *Source) Prepare(proc *process.Process) error {
 		}
 	}
 
+	source.Projection = make([]*colexec.Projection, len(source.ProjectList))
+	for i := range source.ProjectList {
+		source.Projection[i] = colexec.NewProjection(source.ProjectList[i].Project)
+		err := source.Projection[i].Prepare(proc)
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -90,6 +99,13 @@ func (source *Source) Call(proc *process.Process) (vm.CallResult, error) {
 		result.Status = vm.ExecNext
 	case end:
 		result.Status = vm.ExecStop
+	}
+
+	for i := range source.Projection {
+		result.Batch, err = source.Projection[i].Eval(result.Batch, proc)
+		if err != nil {
+			return result, err
+		}
 	}
 
 	return result, nil

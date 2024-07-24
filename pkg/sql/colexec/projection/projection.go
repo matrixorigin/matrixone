@@ -31,7 +31,12 @@ func (projection *Projection) String(buf *bytes.Buffer) {
 		if i > 0 {
 			buf.WriteString(",")
 		}
-		buf.WriteString(e.String())
+		for j, p := range e.Project {
+			if j > 0 {
+				buf.WriteString(",")
+			}
+			buf.WriteString(p.String())
+		}
 	}
 	buf.WriteString(")")
 }
@@ -41,8 +46,15 @@ func (projection *Projection) OpType() vm.OpType {
 }
 
 func (projection *Projection) Prepare(proc *process.Process) (err error) {
-	projection.Proj = colexec.NewProjection(projection.ProjectList)
-	return projection.Proj.Prepare(proc)
+	projection.Proj = make([]*colexec.Projection, len(projection.ProjectList))
+	for i := range projection.ProjectList {
+		projection.Proj[i] = colexec.NewProjection(projection.ProjectList[i].Project)
+		err = projection.Proj[i].Prepare(proc)
+		if err != nil {
+			return
+		}
+	}
+	return
 }
 
 func (projection *Projection) Call(proc *process.Process) (vm.CallResult, error) {
@@ -64,10 +76,13 @@ func (projection *Projection) Call(proc *process.Process) (vm.CallResult, error)
 	}
 	anal.Input(result.Batch, projection.GetIsFirst())
 
-	result.Batch, err = projection.Proj.Eval(result.Batch, proc)
-	if err != nil {
-		return result, err
+	for i := range projection.Proj {
+		result.Batch, err = projection.Proj[i].Eval(result.Batch, proc)
+		if err != nil {
+			return result, err
+		}
 	}
+
 	anal.Output(result.Batch, projection.GetIsLast())
 	return result, nil
 }

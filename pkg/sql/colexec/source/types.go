@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -35,10 +36,12 @@ type container struct {
 	buf    *batch.Batch
 }
 type Source struct {
-	ctr    *container
-	TblDef *plan.TableDef
-	Offset int64
-	Limit  int64
+	ctr         *container
+	TblDef      *plan.TableDef
+	Offset      int64
+	Limit       int64
+	ProjectList []*plan.ProjectList
+	Projection  []*colexec.Projection
 
 	// end     bool
 	attrs   []string
@@ -91,5 +94,11 @@ func (source *Source) Free(proc *process.Process, pipelineFailed bool, err error
 		}
 		source.ctr = nil
 	}
-
+	for i := range source.Projection {
+		if source.Projection[i] != nil {
+			source.Projection[i].Free()
+		}
+	}
+	source.Projection = nil
+	source.ProjectList = nil
 }

@@ -650,6 +650,10 @@ message OriginTableMessageForFuzzy {
 	repeated ColDef ParentUniqueCols = 2;
 }
 
+message ProjectList{
+	repeated Expr project = 1;
+}
+
 message Node {
 	enum NodeType {
 		UNKNOWN = 0;

@@ -15,6 +15,7 @@
 package colexec
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -30,10 +31,26 @@ type Projection struct {
 	MaxAllocSize int
 }
 
+func init() {
+	reuse.CreatePool[Projection](
+		func() *Projection {
+			return &Projection{}
+		},
+		func(a *Projection) {
+			*a = Projection{}
+		},
+		reuse.DefaultOptions[Projection]().
+			WithEnableChecker(),
+	)
+}
+
+func (projection Projection) TypeName() string {
+	return "project"
+}
+
 func NewProjection(ProjectList []*plan.Expr) *Projection {
-	projection := &Projection{
-		ProjectList: ProjectList,
-	}
+	projection := reuse.Alloc[Projection](nil)
+	projection.ProjectList = ProjectList
 	return projection
 }
 
@@ -56,6 +73,9 @@ func (projection *Projection) Prepare(proc *process.Process) (err error) {
 }
 
 func (projection *Projection) Eval(bat *batch.Batch, proc *process.Process) (*batch.Batch, error) {
+	if bat == nil || bat.IsEmpty() || bat.Last() {
+		return bat, nil
+	}
 
 	result := batch.NewWithSize(len(projection.ProjectList))
 	result.ShuffleIDX = bat.ShuffleIDX
@@ -84,4 +104,15 @@ func (projection *Projection) Eval(bat *batch.Batch, proc *process.Process) (*ba
 	projection.MaxAllocSize = max(projection.MaxAllocSize, newAlloc)
 	result.SetRowCount(bat.RowCount())
 	return result, nil
+}
+
+func (projection *Projection) Free() {
+	if projection != nil {
+		for i := range projection.ProjExecutors {
+			if projection.ProjExecutors[i] != nil {
+				projection.ProjExecutors[i].Free()
+			}
+		}
+		reuse.Free[Projection](projection, nil)
+	}
 }

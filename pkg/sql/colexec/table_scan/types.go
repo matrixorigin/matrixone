@@ -17,8 +17,8 @@ package table_scan
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -38,8 +38,8 @@ type TableScan struct {
 	Reader         engine.Reader
 	Attrs          []string
 	TableID        uint64
-	ProjectList    []*plan.Expr
-	Projection     *colexec.Projection
+	ProjectList    []*plan.ProjectList
+	Projection     []*colexec.Projection
 
 	vm.OperatorBase
 }
@@ -80,12 +80,12 @@ func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, er
 }
 
 func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err error) {
+	anal := proc.GetAnalyze(tableScan.GetIdx(), tableScan.GetParallelIdx(), tableScan.GetParallelMajor())
 	if tableScan.ctr != nil {
 		if tableScan.ctr.buf != nil {
 			tableScan.ctr.buf.Clean(proc.Mp())
 			tableScan.ctr.buf = nil
 		}
-		anal := proc.GetAnalyze(tableScan.GetIdx(), tableScan.GetParallelIdx(), tableScan.GetParallelMajor())
 		anal.Alloc(int64(tableScan.ctr.maxAllocSize))
 		if tableScan.ctr.msgReceiver != nil {
 			tableScan.ctr.msgReceiver.Free()
@@ -93,8 +93,13 @@ func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err
 		}
 		tableScan.ctr = nil
 	}
-	if tableScan.Projection != nil {
-		tableScan.Projection = nil
+	for i := range tableScan.Projection {
+		if tableScan.Projection[i] == nil {
+			continue
+		}
+		anal.Alloc(int64(tableScan.Projection[i].MaxAllocSize))
+		tableScan.Projection[i].Free()
 	}
+	tableScan.Projection = nil
 	tableScan.ProjectList = nil
 }

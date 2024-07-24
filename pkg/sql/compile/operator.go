@@ -313,6 +313,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		if op.E == nil {
 			op.E = t.E
 		}
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.Semi:
@@ -463,6 +464,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Limit = t.Limit
 		op.Offset = t.Offset
 		op.Configs = t.Configs
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.Connector:
@@ -556,11 +558,15 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.SetInfo(&info)
 		return op
 	case vm.TableScan:
+		t := sourceOp.(*table_scan.TableScan)
 		op := table_scan.NewArgument()
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.ValueScan:
+		t := sourceOp.(*value_scan.ValueScan)
 		op := value_scan.NewArgument()
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	default:
@@ -776,7 +782,7 @@ func constructInsert(n *plan.Node, eg engine.Engine) (*insert.Insert, error) {
 
 func constructProjection(n *plan.Node) *projection.Projection {
 	arg := projection.NewArgument()
-	arg.ProjectList = n.ProjectList
+	arg.ProjectList = []*plan.ProjectList{{Project: n.ProjectList}}
 	return arg
 }
 

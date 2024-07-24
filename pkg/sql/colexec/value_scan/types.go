@@ -17,6 +17,8 @@ package value_scan
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -27,8 +29,10 @@ type container struct {
 	idx int
 }
 type ValueScan struct {
-	ctr    *container
-	Batchs []*batch.Batch
+	ctr         *container
+	Batchs      []*batch.Batch
+	ProjectList []*plan.ProjectList
+	Projection  []*colexec.Projection
 
 	vm.OperatorBase
 }
@@ -79,4 +83,11 @@ func (valueScan *ValueScan) Free(proc *process.Process, pipelineFailed bool, err
 		valueScan.ctr.idx = 0
 		valueScan.ctr = nil
 	}
+	for i := range valueScan.Projection {
+		if valueScan.Projection[i] != nil {
+			valueScan.Projection[i].Free()
+		}
+	}
+	valueScan.Projection = nil
+	valueScan.ProjectList = nil
 }

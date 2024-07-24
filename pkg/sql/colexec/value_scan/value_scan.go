@@ -17,6 +17,7 @@ package value_scan
 import (
 	"bytes"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -34,6 +35,14 @@ func (valueScan *ValueScan) OpType() vm.OpType {
 
 func (valueScan *ValueScan) Prepare(proc *process.Process) (err error) {
 	valueScan.ctr = new(container)
+	valueScan.Projection = make([]*colexec.Projection, len(valueScan.ProjectList))
+	for i := range valueScan.ProjectList {
+		valueScan.Projection[i] = colexec.NewProjection(valueScan.ProjectList[i].Project)
+		err = valueScan.Projection[i].Prepare(proc)
+		if err != nil {
+			return
+		}
+	}
 	return nil
 }
 
@@ -58,6 +67,14 @@ func (valueScan *ValueScan) Call(proc *process.Process) (vm.CallResult, error) {
 			valueScan.Batchs[valueScan.ctr.idx-1] = nil
 		}
 		valueScan.ctr.idx += 1
+	}
+
+	var err error
+	for i := range valueScan.Projection {
+		result.Batch, err = valueScan.Projection[i].Eval(result.Batch, proc)
+		if err != nil {
+			return result, err
+		}
 	}
 
 	return result, nil

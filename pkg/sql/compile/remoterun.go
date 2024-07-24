@@ -672,6 +672,7 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 		if in.Filter == nil {
 			in.Filter = t.E
 		}
+		in.ProjectList = t.ProjectList
 	case *semi.SemiJoin:
 		in.SemiJoin = &pipeline.SemiJoin{
 			Result:                 t.Result,
@@ -778,10 +779,13 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 			Limit:  t.Limit,
 			Offset: t.Offset,
 		}
+		in.ProjectList = t.ProjectList
 	case *table_scan.TableScan:
 		in.TableScan = &pipeline.TableScan{}
+		in.ProjectList = t.ProjectList
 	case *value_scan.ValueScan:
 		in.ValueScan = &pipeline.ValueScan{}
+		in.ProjectList = t.ProjectList
 	default:
 		return -1, nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", op.OpType()))
 	}
@@ -1089,6 +1093,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 	case vm.Filter:
 		arg := filter.NewArgument()
 		arg.E = opr.Filter
+		arg.ProjectList = opr.ProjectList
 		op = arg
 	case vm.Semi:
 		t := opr.GetSemiJoin()
@@ -1196,11 +1201,14 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.TblDef = t.TblDef
 		arg.Limit = t.Limit
 		arg.Offset = t.Offset
+		arg.ProjectList = opr.ProjectList
 		op = arg
 	case vm.TableScan:
 		op = table_scan.NewArgument()
+		op.(*table_scan.TableScan).ProjectList = opr.ProjectList
 	case vm.ValueScan:
 		op = value_scan.NewArgument()
+		op.(*value_scan.ValueScan).ProjectList = opr.ProjectList
 	default:
 		return op, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", opr.Op))
 	}

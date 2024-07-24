@@ -26,10 +26,12 @@ import (
 var _ vm.Operator = new(Filter)
 
 type Filter struct {
-	ctr     *container
-	E       *plan.Expr
-	exeExpr *plan.Expr
-	IsEnd   bool
+	ctr         *container
+	E           *plan.Expr
+	exeExpr     *plan.Expr
+	IsEnd       bool
+	ProjectList []*plan.ProjectList
+	Projection  []*colexec.Projection
 
 	vm.OperatorBase
 }
@@ -87,6 +89,13 @@ func (filter *Filter) Free(proc *process.Process, pipelineFailed bool, err error
 		filter.ctr.cleanExecutor()
 		filter.ctr = nil
 	}
+	for i := range filter.Projection {
+		if filter.Projection[i] != nil {
+			filter.Projection[i].Free()
+		}
+	}
+	filter.Projection = nil
+	filter.ProjectList = nil
 }
 
 func (ctr *container) cleanExecutor() {

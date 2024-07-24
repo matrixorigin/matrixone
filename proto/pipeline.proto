@@ -405,7 +405,7 @@ message Instruction{
   PreInsert pre_insert               = 19;
   PreInsertUnique pre_insert_unique  = 20;
   repeated plan.OrderBySpec order_by = 21;
-  repeated plan.Expr    project_list = 22;
+  repeated plan.ProjectList    project_list = 22;
   plan.Expr    filter = 23;
   plan.Expr    limit = 24;
   plan.Expr    offset = 25;

@@ -95,9 +95,11 @@ type Group struct {
 	NeedEval     bool // need to projection the aggregate column
 	PreAllocSize uint64
 
-	Exprs []*plan.Expr // group Expressions
-	Types []types.Type
-	Aggs  []aggexec.AggFuncExecExpression
+	Exprs       []*plan.Expr // group Expressions
+	Types       []types.Type
+	Aggs        []aggexec.AggFuncExecExpression
+	ProjectList []*plan.ProjectList
+	Projection  []*colexec.Projection
 
 	vm.OperatorBase
 }
@@ -171,6 +173,13 @@ func (group *Group) Free(proc *process.Process, pipelineFailed bool, err error) 
 		ctr.cleanGroupVectors()
 		group.ctr = nil
 	}
+	for i := range group.Projection {
+		if group.Projection[i] != nil {
+			group.Projection[i].Free()
+		}
+	}
+	group.Projection = nil
+	group.ProjectList = nil
 }
 
 func (ctr *container) cleanBatch(mp *mpool.MPool) {

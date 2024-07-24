@@ -32,8 +32,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
@@ -2385,13 +2387,30 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 		}
 		switch ss[i].RootOp.(type) {
 		case *projection.Projection:
-			c.setProjection(n, ss[i])
+			if ss[i].RootOp.(*projection.Projection).ProjectList == nil {
+				ss[i].RootOp.(*projection.Projection).ProjectList = make([]*plan.ProjectList, 0)
+			}
+			ss[i].RootOp.(*projection.Projection).ProjectList = append(ss[i].RootOp.(*projection.Projection).ProjectList, &plan.ProjectList{Project: n.ProjectList})
 		case *table_scan.TableScan:
 			if ss[i].RootOp.(*table_scan.TableScan).ProjectList == nil {
-				ss[i].RootOp.(*table_scan.TableScan).ProjectList = n.ProjectList
-			} else {
-				c.setProjection(n, ss[i])
+				ss[i].RootOp.(*table_scan.TableScan).ProjectList = make([]*plan.ProjectList, 0)
 			}
+			ss[i].RootOp.(*table_scan.TableScan).ProjectList = append(ss[i].RootOp.(*table_scan.TableScan).ProjectList, &plan.ProjectList{Project: n.ProjectList})
+		case *value_scan.ValueScan:
+			if ss[i].RootOp.(*value_scan.ValueScan).ProjectList == nil {
+				ss[i].RootOp.(*value_scan.ValueScan).ProjectList = make([]*plan.ProjectList, 0)
+			}
+			ss[i].RootOp.(*value_scan.ValueScan).ProjectList = append(ss[i].RootOp.(*value_scan.ValueScan).ProjectList, &plan.ProjectList{Project: n.ProjectList})
+		case *filter.Filter:
+			if ss[i].RootOp.(*filter.Filter).ProjectList == nil {
+				ss[i].RootOp.(*filter.Filter).ProjectList = make([]*plan.ProjectList, 0)
+			}
+			ss[i].RootOp.(*filter.Filter).ProjectList = append(ss[i].RootOp.(*filter.Filter).ProjectList, &plan.ProjectList{Project: n.ProjectList})
+		case *source.Source:
+			if ss[i].RootOp.(*source.Source).ProjectList == nil {
+				ss[i].RootOp.(*source.Source).ProjectList = make([]*plan.ProjectList, 0)
+			}
+			ss[i].RootOp.(*source.Source).ProjectList = append(ss[i].RootOp.(*source.Source).ProjectList, &plan.ProjectList{Project: n.ProjectList})
 		default:
 			c.setProjection(n, ss[i])
 		}

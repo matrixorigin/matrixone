@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -124,6 +125,15 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 		ctr.typ = HStr
 	}
 
+	group.Projection = make([]*colexec.Projection, len(group.ProjectList))
+	for i := range group.ProjectList {
+		group.Projection[i] = colexec.NewProjection(group.ProjectList[i].Project)
+		err := group.Projection[i].Prepare(proc)
+		if err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -136,7 +146,19 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 	anal.Start()
 	defer anal.Stop()
 
-	return group.ctr.processGroupByAndAgg(group, proc, anal, group.GetIsFirst(), group.GetIsLast())
+	result, err := group.ctr.processGroupByAndAgg(group, proc, anal, group.GetIsFirst(), group.GetIsLast())
+	if err != nil {
+		return result, err
+	}
+
+	for i := range group.Projection {
+		result.Batch, err = group.Projection[i].Eval(result.Batch, proc)
+		if err != nil {
+			return result, err
+		}
+	}
+
+	return result, nil
 }
 
 // compute the `agg(expression)List group by expressionList`.
