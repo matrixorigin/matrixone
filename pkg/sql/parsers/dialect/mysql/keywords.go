@@ -631,5 +631,11 @@ func init() {
 		"mo_ts":                      MO_TS,
 		"restore":                    RESTORE,
 		"pitr":                       PITR,
+		"cdc":                        CDC,
+		"taskname":                   TASKNAME,
+		"sourceuri":                  SOURCEURI,
+		"sinktype":                   SINKTYPE,
+		"sinkuri":                    SINKURI,
+		"restart":                    RESTART,
 	}
 }
