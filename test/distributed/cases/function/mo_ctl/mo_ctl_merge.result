@@ -158,6 +158,88 @@ rows_cnt    bit_cast(min as int)    bit_cast(max as int)
 4    105    120
 2    116    126
 drop table t1;
+
+create table p_table_01(col1 int,col2 varchar(25),col3 decimal(6,2))partition by key(col2)partitions 4;
+insert into p_table_01 values (1,'mod',78.9),(2,'proto',0.34),(3,'mod',6.5),(4,'mode',9.0),(5,'make',662.9),(6,'io',88.92);
+select mo_ctl('dn', 'flush', 'mo_ctl_merge.%!%p0%!%p_table_01');
+mo_ctl(dn, flush, mo_ctl_merge.%!%p0%!%p_table_01)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select mo_ctl('dn', 'flush', 'mo_ctl_merge.%!%p1%!%p_table_01');
+mo_ctl(dn, flush, mo_ctl_merge.%!%p1%!%p_table_01)
+\{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select mo_ctl('dn', 'flush', 'mo_ctl_merge.%!%p2%!%p_table_01');
+mo_ctl(dn, flush, mo_ctl_merge.%!%p2%!%p_table_01)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select mo_ctl('dn', 'flush', 'mo_ctl_merge.%!%p3%!%p_table_01');
+mo_ctl(dn, flush, mo_ctl_merge.%!%p3%!%p_table_01)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+insert into p_table_01 values (1,'mod',78.9),(2,'proto',0.34),(3,'mod',6.5),(4,'mode',9.0),(5,'make',662.9),(6,'io',88.92);
+select mo_ctl('dn', 'flush', 'mo_ctl_merge.%!%p0%!%p_table_01');
+mo_ctl(dn, flush, mo_ctl_merge.%!%p0%!%p_table_01)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select mo_ctl('dn', 'flush', 'mo_ctl_merge.%!%p1%!%p_table_01');
+mo_ctl(dn, flush, mo_ctl_merge.%!%p1%!%p_table_01)
+\{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select mo_ctl('dn', 'flush', 'mo_ctl_merge.%!%p2%!%p_table_01');
+mo_ctl(dn, flush, mo_ctl_merge.%!%p2%!%p_table_01)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select mo_ctl('dn', 'flush', 'mo_ctl_merge.%!%p3%!%p_table_01');
+mo_ctl(dn, flush, mo_ctl_merge.%!%p3%!%p_table_01)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select * from `%!%p0%!%p_table_01`;
+col1    col2    col3
+5    make    662.90
+5    make    662.90
+select * from `%!%p1%!%p_table_01`;
+col1    col2    col3
+2    proto    0.34
+2    proto    0.34
+select * from `%!%p2%!%p_table_01`;
+col1    col2    col3
+1    mod    78.90
+3    mod    6.50
+4    mode    9.00
+1    mod    78.90
+3    mod    6.50
+4    mode    9.00
+select * from `%!%p3%!%p_table_01`;
+col1    col2    col3
+6    io    88.92
+6    io    88.92
+select rows_cnt from metadata_scan('mo_ctl_merge.%!%p0%!%p_table_01', 'col1') g;
+rows_cnt
+1
+1
+select rows_cnt from metadata_scan('mo_ctl_merge.%!%p1%!%p_table_01', 'col1') g;
+rows_cnt
+1
+1
+select rows_cnt from metadata_scan('mo_ctl_merge.%!%p2%!%p_table_01', 'col1') g;
+rows_cnt
+3
+3
+select rows_cnt from metadata_scan('mo_ctl_merge.%!%p3%!%p_table_01', 'col1') g;
+rows_cnt
+1
+1
+select mo_ctl('cn', 'mergeobjects', 't:mo_ctl_merge.p_table_01');
+mo_ctl(cn, mergeobjects, t:mo_ctl_merge.p_table_01)
+internal error: no matching objects\ninternal error: no matching objects\ninternal error: no matching objects\ninternal error: no matching objects\n
+select sleep(1);
+sleep(1)
+0
+select rows_cnt from metadata_scan('mo_ctl_merge.%!%p0%!%p_table_01', 'col1') g;
+rows_cnt
+2
+select rows_cnt from metadata_scan('mo_ctl_merge.%!%p1%!%p_table_01', 'col1') g;
+rows_cnt
+2
+select rows_cnt from metadata_scan('mo_ctl_merge.%!%p2%!%p_table_01', 'col1') g;
+rows_cnt
+6
+select rows_cnt from metadata_scan('mo_ctl_merge.%!%p3%!%p_table_01', 'col1') g;
+rows_cnt
+2
 select mo_ctl('dn', 'inspect', 'policy');
 mo_ctl(dn, inspect, policy)
 \nmsg: success. arg (*) maxMergeObjN: 16, maxOsizeObj: 128MB, minOsizeQualified: 110MB, offloadToCnSize: 80000MB, hints: [Auto]\n\n<empty>
