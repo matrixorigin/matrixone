@@ -42,7 +42,6 @@ func (rightJoin *RightJoin) OpType() vm.OpType {
 func (rightJoin *RightJoin) Prepare(proc *process.Process) (err error) {
 	rightJoin.ctr = new(container)
 	rightJoin.ctr.InitReceiver(proc, false)
-	rightJoin.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
 	rightJoin.ctr.vecs = make([]*vector.Vector, len(rightJoin.Conditions[0]))
 
 	rightJoin.ctr.evecs = make([]evalVector, len(rightJoin.Conditions[0]))
@@ -288,10 +287,9 @@ func (ctr *container) probe(ap *RightJoin, proc *process.Process, anal process.A
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
-		copy(ctr.inBuckets, hashmap.OneUInt8s)
-		vals, zvals := itr.Find(i, n, ctr.vecs, ctr.inBuckets)
+		vals, zvals := itr.Find(i, n, ctr.vecs)
 		for k := 0; k < n; k++ {
-			if ctr.inBuckets[k] == 0 || zvals[k] == 0 || vals[k] == 0 {
+			if zvals[k] == 0 || vals[k] == 0 {
 				continue
 			}
 			if ap.HashOnPK {

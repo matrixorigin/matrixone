@@ -66,11 +66,6 @@ type container struct {
 	// End: Join working is over
 	state int
 
-	// in the probe stage, when we invoke func find to find rows in the hashtable,it will modify the
-	// inBuckets Slice, inBuckets[i] means the i-th row is whether in the bucket
-	// 0 means no, 1 means yes
-	inBuckets []uint8
-
 	// store the all batch from the build table
 	bat     *batch.Batch
 	rbat    *batch.Batch
