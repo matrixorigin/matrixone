@@ -67,7 +67,7 @@ func (leftJoin *LeftJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(anal); err != nil {
+			if err := leftJoin.build(anal, proc); err != nil {
 				return result, err
 			}
 			ctr.state = Probe
@@ -118,17 +118,12 @@ func (leftJoin *LeftJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) receiveHashMap(anal process.Analyze) error {
-	msg := ctr.ReceiveFromSingleReg(1, anal)
-	if msg.Err != nil {
-		return msg.Err
-	}
-	bat := msg.Batch
-	if bat != nil && bat.AuxData != nil {
-		ctr.mp = bat.DupJmAuxData()
+func (leftJoin *LeftJoin) receiveHashMap(anal process.Analyze, proc *process.Process) {
+	ctr := leftJoin.ctr
+	ctr.mp = proc.ReceiveJoinMap(anal, leftJoin.JoinMapTag, leftJoin.IsShuffle, leftJoin.ShuffleIdx)
+	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
-	return nil
 }
 
 func (ctr *container) receiveBatch(anal process.Analyze) error {
@@ -153,12 +148,9 @@ func (ctr *container) receiveBatch(anal process.Analyze) error {
 	return nil
 }
 
-func (ctr *container) build(anal process.Analyze) error {
-	err := ctr.receiveHashMap(anal)
-	if err != nil {
-		return err
-	}
-	return ctr.receiveBatch(anal)
+func (leftJoin *LeftJoin) build(anal process.Analyze, proc *process.Process) error {
+	leftJoin.receiveHashMap(anal, proc)
+	return leftJoin.ctr.receiveBatch(anal)
 }
 
 func (ctr *container) emptyProbe(ap *LeftJoin, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {

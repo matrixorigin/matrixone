@@ -141,17 +141,12 @@ func (markJoin *MarkJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) receiveHashMap(anal process.Analyze) error {
-	msg := ctr.ReceiveFromSingleReg(1, anal)
-	if msg.Err != nil {
-		return msg.Err
-	}
-	bat := msg.Batch
-	if bat != nil && bat.AuxData != nil {
-		ctr.mp = bat.DupJmAuxData()
+func (markJoin *MarkJoin) receiveHashMap(anal process.Analyze, proc *process.Process) {
+	ctr := markJoin.ctr
+	ctr.mp = proc.ReceiveJoinMap(anal, markJoin.JoinMapTag, false, 0)
+	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
-	return nil
 }
 
 func (ctr *container) receiveBatch(ap *MarkJoin, proc *process.Process, anal process.Analyze) error {
@@ -181,10 +176,7 @@ func (ctr *container) receiveBatch(ap *MarkJoin, proc *process.Process, anal pro
 }
 
 func (ctr *container) build(ap *MarkJoin, proc *process.Process, anal process.Analyze) error {
-	err := ctr.receiveHashMap(anal)
-	if err != nil {
-		return err
-	}
+	ap.receiveHashMap(anal, proc)
 	return ctr.receiveBatch(ap, proc, anal)
 }
 
@@ -434,8 +426,7 @@ func (ctr *container) EvalEntire(pbat, bat *batch.Batch, idx int, proc *process.
 
 // collect the idx of tuple which contains null values
 func (ctr *container) evalNullSels(bat *batch.Batch) {
-	joinMap := bat.AuxData.(*hashmap.JoinMap)
-	jmSels := joinMap.Sels()
+	jmSels := ctr.mp.Sels()
 	selsMap := make(map[int32]bool)
 	for _, sel := range jmSels {
 		for _, i := range sel {
