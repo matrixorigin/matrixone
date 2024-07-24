@@ -799,7 +799,7 @@ func constructProjection(n *plan.Node) *projection.Projection {
 	return arg
 }
 
-func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Context, fileList []string, FileSize []int64, fileOffset []*pipeline.FileOffset) *external.External {
+func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Context, fileList []string, FileSize []int64, fileOffset []*pipeline.FileOffset, strictSqlMode bool) *external.External {
 	var attrs []string
 
 	for _, col := range n.TableDef.Cols {
@@ -812,6 +812,7 @@ func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Contex
 	if n.ExternScan != nil {
 		tbColToDataCol = n.ExternScan.TbColToDataCol
 	}
+
 	return external.NewArgument().WithEs(
 		&external.ExternalParam{
 			ExParamConst: external.ExParamConst{
@@ -826,6 +827,7 @@ func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Contex
 				FileList:        fileList,
 				FileSize:        FileSize,
 				ClusterTable:    n.GetClusterTable(),
+				StrictSqlMode:   strictSqlMode,
 			},
 			ExParam: external.ExParam{
 				Fileparam: new(external.ExFileparam),
