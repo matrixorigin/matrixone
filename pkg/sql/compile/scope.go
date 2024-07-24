@@ -631,10 +631,10 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 				case process.RuntimeFilter_PASS:
 					continue
 				case process.RuntimeFilter_DROP:
-					fmt.Printf("xxxx handleRunTimeFilter:Drop, txn:%s, table:%s.needExpandRanges:%v\n",
-						c.proc.GetTxnOperator().Txn().DebugString(),
-						s.DataSource.TableDef.Name,
-						s.NodeInfo.NeedExpandRanges)
+					//fmt.Printf("xxxx handleRunTimeFilter:Drop, txn:%s, table:%s.needExpandRanges:%v\n",
+					//	c.proc.GetTxnOperator().Txn().DebugString(),
+					//	s.DataSource.TableDef.Name,
+					//	s.NodeInfo.NeedExpandRanges)
 					return nil
 				case process.RuntimeFilter_IN:
 					inExpr := plan2.MakeInExpr(c.proc.Ctx, spec.Expr, msg.Card, msg.Data, spec.MatchPrefix)
@@ -1281,18 +1281,18 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 			s.NodeInfo.Data,
 			scanUsedCpuNumber,
 			s.TxnOffset)
-		if s.DataSource.TableDef.Name == "bugt" {
-			fmt.Printf("xxxx build readers finished, "+
-				"sql:%s, txn:%s, table:%s, scanusednum:%d, readers num :%d, blkCnt:%d, hasMemBlk:%v, err:%v",
-				sql,
-				c.proc.GetTxnOperator().Txn().DebugString(),
-				s.DataSource.TableDef.Name,
-				scanUsedCpuNumber,
-				len(readers),
-				s.NodeInfo.Data.BlkCnt(),
-				s.NodeInfo.Data.GetDataBlk(0).IsMemBlk(),
-				err)
-		}
+		//if s.DataSource.TableDef.Name == "bugt" {
+		//	fmt.Printf("xxxx build readers finished, "+
+		//		"sql:%s, txn:%s, table:%s, scanusednum:%d, readers num :%d, blkCnt:%d, hasMemBlk:%v, err:%v",
+		//		sql,
+		//		c.proc.GetTxnOperator().Txn().DebugString(),
+		//		s.DataSource.TableDef.Name,
+		//		scanUsedCpuNumber,
+		//		len(readers),
+		//		s.NodeInfo.Data.BlkCnt(),
+		//		s.NodeInfo.Data.GetDataBlk(0).IsMemBlk(),
+		//		err)
+		//}
 
 		if err != nil {
 			return

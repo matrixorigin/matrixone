@@ -33,7 +33,8 @@ type MemPKFilterInProgress struct {
 	isVec   bool
 	isValid bool
 	TS      types.TS
-	Spec    logtailreplay.PrimaryKeyMatchSpec
+
+	SpecFactory func(f *MemPKFilterInProgress) logtailreplay.PrimaryKeyMatchSpec
 }
 
 func newMemPKFilterInProgress(
@@ -241,24 +242,34 @@ func (f *MemPKFilterInProgress) tryConstructPrimaryKeyIndexIterInProgress(ts tim
 		return
 	}
 
-	var spec logtailreplay.PrimaryKeyMatchSpec
-
 	switch f.op {
 	case function.EQUAL, function.PREFIX_EQ:
-		spec = logtailreplay.Prefix(f.packed[0])
+		//spec = logtailreplay.Prefix(f.packed[0])
+		f.SpecFactory = func(f *MemPKFilterInProgress) logtailreplay.PrimaryKeyMatchSpec {
+			return logtailreplay.Prefix(f.packed[0])
+		}
 
 	case function.IN, function.PREFIX_IN:
 		// may be it's better to iterate rows instead.
 		if len(f.packed) > 128 {
 			return
 		}
-		spec = logtailreplay.InKind(f.packed, f.op)
+		//spec = logtailreplay.InKind(f.packed, f.op)
+		f.SpecFactory = func(f *MemPKFilterInProgress) logtailreplay.PrimaryKeyMatchSpec {
+			return logtailreplay.InKind(f.packed, f.op)
+		}
 
 	case function.LESS_EQUAL, function.LESS_THAN:
-		spec = logtailreplay.LessKind(f.packed[0], f.op == function.LESS_EQUAL)
+		//spec = logtailreplay.LessKind(f.packed[0], f.op == function.LESS_EQUAL)
+		f.SpecFactory = func(f *MemPKFilterInProgress) logtailreplay.PrimaryKeyMatchSpec {
+			return logtailreplay.LessKind(f.packed[0], f.op == function.LESS_EQUAL)
+		}
 
 	case function.GREAT_EQUAL, function.GREAT_THAN:
-		spec = logtailreplay.GreatKind(f.packed[0], f.op == function.GREAT_EQUAL)
+		//spec = logtailreplay.GreatKind(f.packed[0], f.op == function.GREAT_EQUAL)
+		f.SpecFactory = func(f *MemPKFilterInProgress) logtailreplay.PrimaryKeyMatchSpec {
+			return logtailreplay.GreatKind(f.packed[0], f.op == function.GREAT_EQUAL)
+		}
 
 	case function.BETWEEN, rangeLeftOpen, rangeRightOpen, rangeBothOpen, function.PREFIX_BETWEEN:
 		var kind int
@@ -275,8 +286,10 @@ func (f *MemPKFilterInProgress) tryConstructPrimaryKeyIndexIterInProgress(ts tim
 			kind = 4
 		}
 
-		spec = logtailreplay.BetweenKind(f.packed[0], f.packed[1], kind)
+		//spec = logtailreplay.BetweenKind(f.packed[0], f.packed[1], kind)
+		f.SpecFactory = func(f *MemPKFilterInProgress) logtailreplay.PrimaryKeyMatchSpec {
+			return logtailreplay.BetweenKind(f.packed[0], f.packed[1], kind)
+		}
 	}
 
-	f.Spec = spec
 }

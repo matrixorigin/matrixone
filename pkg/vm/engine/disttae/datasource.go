@@ -714,6 +714,9 @@ type LocalDataSource struct {
 	ranges []*objectio.BlockInfoInProgress
 	pState *logtailreplay.PartitionState
 
+	memPKFilter *MemPKFilterInProgress
+
+	pStateRowsDelIter logtailreplay.RowsIter
 	pStateRowsInsIter logtailreplay.RowsIter
 
 	// load deletes only once for each blk
@@ -941,7 +944,10 @@ func (ls *LocalDataSource) Next(
 	filter any, mp *mpool.MPool, vp engine.VectorPool,
 	bat *batch.Batch) (*objectio.BlockInfoInProgress, engine.DataState, error) {
 
-	memFilter := filter.(MemPKFilterInProgress)
+	if ls.memPKFilter == nil {
+		ff := filter.(MemPKFilterInProgress)
+		ls.memPKFilter = &ff
+	}
 
 	if len(cols) == 0 {
 		return nil, engine.End, nil
@@ -950,7 +956,7 @@ func (ls *LocalDataSource) Next(
 	for {
 		switch ls.iteratePhase {
 		case engine.InMem:
-			err := ls.iterateInMemData(ctx, cols, types, seqNums, memFilter, bat, mp, vp)
+			err := ls.iterateInMemData(ctx, cols, types, seqNums, bat, mp, vp)
 			if bat.RowCount() == 0 && err == nil {
 				ls.iteratePhase = engine.Persisted
 				continue
@@ -975,7 +981,7 @@ func (ls *LocalDataSource) Next(
 
 func (ls *LocalDataSource) iterateInMemData(
 	ctx context.Context, cols []string, colTypes []types.Type,
-	seqNums []uint16, memFilter MemPKFilterInProgress, bat *batch.Batch,
+	seqNums []uint16, bat *batch.Batch,
 	mp *mpool.MPool, vp engine.VectorPool) error {
 
 	defer func() {
@@ -998,7 +1004,7 @@ func (ls *LocalDataSource) iterateInMemData(
 		return nil
 	}
 
-	if err := ls.filterInMemCommittedInserts(colTypes, seqNums, memFilter, mp, bat); err != nil {
+	if err := ls.filterInMemCommittedInserts(colTypes, seqNums, mp, bat); err != nil {
 		return err
 	}
 
@@ -1043,14 +1049,15 @@ func (ls *LocalDataSource) filterUncommittedInMemInserts(seqNums []uint16, mp *m
 		}
 	}
 
-	bat.SetRowCount(insertsBat.RowCount())
+	if len(bat.Vecs) != 0 {
+		bat.SetRowCount(bat.Vecs[0].Length())
+	}
 
 	return nil
 }
 
 func (ls *LocalDataSource) filterInMemCommittedInserts(
-	colTypes []types.Type, seqNums []uint16,
-	memFilter MemPKFilterInProgress, mp *mpool.MPool, bat *batch.Batch) error {
+	colTypes []types.Type, seqNums []uint16, mp *mpool.MPool, bat *batch.Batch) error {
 
 	var (
 		err          error
@@ -1064,10 +1071,11 @@ func (ls *LocalDataSource) filterInMemCommittedInserts(
 	}
 
 	if ls.pStateRowsInsIter == nil {
-		if memFilter.Spec.Move == nil {
-			ls.pStateRowsInsIter = ls.pState.NewRowsIter(memFilter.TS, nil, false)
+		if ls.memPKFilter.SpecFactory == nil {
+			ls.pStateRowsInsIter = ls.pState.NewRowsIter(ls.snapshotTS, nil, false)
 		} else {
-			ls.pStateRowsInsIter = ls.pState.NewPrimaryKeyIter(memFilter.TS, memFilter.Spec)
+			ls.pStateRowsInsIter = ls.pState.NewPrimaryKeyIter(
+				ls.memPKFilter.TS, ls.memPKFilter.SpecFactory(ls.memPKFilter))
 		}
 	}
 
@@ -1407,8 +1415,18 @@ func (ls *LocalDataSource) applyWorkspaceRawRowIdDeletes(
 func (ls *LocalDataSource) applyPStateInMemDeletes(
 	bid objectio.Blockid, offsets []int32) (leftRows []int32, deletedRows []int64) {
 
+	var delIter logtailreplay.RowsIter
+
+	if ls.memPKFilter.SpecFactory == nil {
+		delIter = ls.pState.NewRowsIter(ls.snapshotTS, &bid, true)
+	} else {
+		delIter = ls.pState.NewPrimaryKeyDelIter(
+			ls.memPKFilter.TS,
+			ls.memPKFilter.SpecFactory(ls.memPKFilter), bid)
+	}
+
 	leftRows = offsets
-	delIter := ls.pState.NewRowsIter(ls.snapshotTS, &bid, true)
+
 	for delIter.Next() {
 		_, o := delIter.Entry().RowID.Decode()
 		leftRows, deletedRows = fastApplyDeletedRows(leftRows, deletedRows, o)
