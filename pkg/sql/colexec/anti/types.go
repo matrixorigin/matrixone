@@ -73,8 +73,9 @@ type AntiJoin struct {
 	Conditions         [][]*plan.Expr
 	HashOnPK           bool
 	IsShuffle          bool
+	ShuffleIdx         int32
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
-
+	JoinMapTag         int32
 	vm.OperatorBase
 }
 

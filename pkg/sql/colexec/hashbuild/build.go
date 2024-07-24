@@ -109,34 +109,29 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 			ctr.state = SendHashMap
 
 		case SendHashMap:
-			result.Batch = batch.NewWithSize(0)
-
-			if ctr.inputBatchRowCount > 0 {
+			if ap.NeedHashMap {
 				var jm *hashmap.JoinMap
-				if ap.NeedHashMap {
+				if ctr.inputBatchRowCount > 0 {
 					if ctr.keyWidth <= 8 {
-						jm = hashmap.NewJoinMap(ctr.multiSels, nil, ctr.intHashMap, nil, ctr.hasNull, ap.IsDup)
+						jm = hashmap.NewJoinMap(ctr.multiSels, ctr.intHashMap, nil)
 					} else {
-						jm = hashmap.NewJoinMap(ctr.multiSels, nil, nil, ctr.strHashMap, ctr.hasNull, ap.IsDup)
+						jm = hashmap.NewJoinMap(ctr.multiSels, nil, ctr.strHashMap)
 					}
 					jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
-					result.Batch.AuxData = jm
+
+					jm.SetRowCount(int64(ctr.inputBatchRowCount))
+					jm.IncRef(ap.JoinMapRefCnt)
 				}
+				if ap.JoinMapTag <= 0 {
+					panic("wrong joinmap message tag!")
+				}
+				proc.SendMessage(process.JoinMapMsg{JoinMapPtr: jm, Tag: ap.JoinMapTag})
 				ctr.intHashMap = nil
 				ctr.strHashMap = nil
 				ctr.multiSels = nil
-			} else {
-				ctr.cleanHashMap()
 			}
-
-			// this is just a dummy batch to indicate that the batch is must not empty.
-			// we should make sure this batch can be sent to the next join operator in other pipelines.
-			if result.Batch.IsEmpty() && ap.NeedHashMap {
-				result.Batch.AddRowCount(1)
-			}
-
 			ctr.state = SendBatch
-			return result, nil
+
 		case SendBatch:
 			if ctr.batchIdx >= len(ctr.batches) {
 				ctr.state = End
@@ -286,11 +281,7 @@ func (ctr *container) buildHashmap(ap *HashBuild, proc *process.Process) error {
 			return err
 		}
 		for k, v := range vals[:n] {
-			if zvals[k] == 0 {
-				ctr.hasNull = true
-				continue
-			}
-			if v == 0 {
+			if zvals[k] == 0 || v == 0 {
 				continue
 			}
 			ai := int64(v) - 1

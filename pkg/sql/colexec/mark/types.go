@@ -153,9 +153,9 @@ type MarkJoin struct {
 	Typs []types.Type
 	Cond *plan.Expr
 
-	OnList   []*plan.Expr
-	HashOnPK bool
-
+	OnList     []*plan.Expr
+	HashOnPK   bool
+	JoinMapTag int32
 	vm.OperatorBase
 }
 
