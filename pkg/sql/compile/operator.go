@@ -229,6 +229,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Result = t.Result
 		op.Cond = t.Cond
 		op.Typs = t.Typs
+		op.JoinMapTag = t.JoinMapTag
 		op.SetInfo(&info)
 		return op
 	case vm.LoopJoin:
@@ -237,6 +238,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Result = t.Result
 		op.Cond = t.Cond
 		op.Typs = t.Typs
+		op.JoinMapTag = t.JoinMapTag
 		op.SetInfo(&info)
 		return op
 	case vm.IndexJoin:
@@ -253,6 +255,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Cond = t.Cond
 		op.Typs = t.Typs
 		op.Result = t.Result
+		op.JoinMapTag = t.JoinMapTag
 		op.SetInfo(&info)
 		return op
 	case vm.LoopSemi:
@@ -261,6 +264,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Result = t.Result
 		op.Cond = t.Cond
 		op.Typs = t.Typs
+		op.JoinMapTag = t.JoinMapTag
 		op.SetInfo(&info)
 		return op
 	case vm.LoopSingle:
@@ -269,6 +273,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Result = t.Result
 		op.Cond = t.Cond
 		op.Typs = t.Typs
+		op.JoinMapTag = t.JoinMapTag
 		op.SetInfo(&info)
 		return op
 	case vm.LoopMark:
@@ -277,6 +282,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Result = t.Result
 		op.Cond = t.Cond
 		op.Typs = t.Typs
+		op.JoinMapTag = t.JoinMapTag
 		op.SetInfo(&info)
 		return op
 	case vm.Offset:
@@ -297,6 +303,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Result = t.Result
 		op.Typs = t.Typs
 		op.IsShuffle = t.IsShuffle
+		op.JoinMapTag = t.JoinMapTag
 		op.SetInfo(&info)
 		return op
 	case vm.ProductL2:
@@ -305,6 +312,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Result = t.Result
 		op.Typs = t.Typs
 		op.OnExpr = t.OnExpr
+		op.JoinMapTag = t.JoinMapTag
 		op.SetInfo(&info)
 		return op
 	case vm.Projection:
@@ -1842,21 +1850,21 @@ func constructHashBuild(op vm.Operator, proc *process.Process, mcpu int32) *hash
 		ret.Typs = arg.Typs
 		ret.NeedMergedBatch = true
 		ret.NeedAllocateSels = true
-		ret.JoinMapTag = 0
+		ret.JoinMapTag = arg.JoinMapTag
 	case vm.ProductL2:
 		arg := op.(*productl2.Productl2)
 		ret.NeedHashMap = false
 		ret.Typs = arg.Typs
 		ret.NeedMergedBatch = true
 		ret.NeedAllocateSels = true
-		ret.JoinMapTag = 0
+		ret.JoinMapTag = arg.JoinMapTag
 	case vm.LoopAnti:
 		arg := op.(*loopanti.LoopAnti)
 		ret.NeedHashMap = false
 		ret.Typs = arg.Typs
 		ret.NeedMergedBatch = true
 		ret.NeedAllocateSels = true
-		ret.JoinMapTag = 0
+		ret.JoinMapTag = arg.JoinMapTag
 
 	case vm.LoopJoin:
 		arg := op.(*loopjoin.LoopJoin)
@@ -1864,7 +1872,7 @@ func constructHashBuild(op vm.Operator, proc *process.Process, mcpu int32) *hash
 		ret.Typs = arg.Typs
 		ret.NeedMergedBatch = true
 		ret.NeedAllocateSels = true
-		ret.JoinMapTag = 0
+		ret.JoinMapTag = arg.JoinMapTag
 
 	case vm.LoopLeft:
 		arg := op.(*loopleft.LoopLeft)
@@ -1872,7 +1880,7 @@ func constructHashBuild(op vm.Operator, proc *process.Process, mcpu int32) *hash
 		ret.Typs = arg.Typs
 		ret.NeedMergedBatch = true
 		ret.NeedAllocateSels = true
-		ret.JoinMapTag = 0
+		ret.JoinMapTag = arg.JoinMapTag
 
 	case vm.LoopSemi:
 		arg := op.(*loopsemi.LoopSemi)
@@ -1880,7 +1888,7 @@ func constructHashBuild(op vm.Operator, proc *process.Process, mcpu int32) *hash
 		ret.Typs = arg.Typs
 		ret.NeedMergedBatch = true
 		ret.NeedAllocateSels = true
-		ret.JoinMapTag = 0
+		ret.JoinMapTag = arg.JoinMapTag
 
 	case vm.LoopSingle:
 		arg := op.(*loopsingle.LoopSingle)
@@ -1888,7 +1896,7 @@ func constructHashBuild(op vm.Operator, proc *process.Process, mcpu int32) *hash
 		ret.Typs = arg.Typs
 		ret.NeedMergedBatch = true
 		ret.NeedAllocateSels = true
-		ret.JoinMapTag = 0
+		ret.JoinMapTag = arg.JoinMapTag
 
 	case vm.LoopMark:
 		arg := op.(*loopmark.LoopMark)
@@ -1896,7 +1904,7 @@ func constructHashBuild(op vm.Operator, proc *process.Process, mcpu int32) *hash
 		ret.Typs = arg.Typs
 		ret.NeedMergedBatch = true
 		ret.NeedAllocateSels = true
-		ret.JoinMapTag = 0
+		ret.JoinMapTag = arg.JoinMapTag
 
 	default:
 		ret.Release()
