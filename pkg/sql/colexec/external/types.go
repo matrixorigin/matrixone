@@ -51,6 +51,7 @@ type ExParamConst struct {
 	IgnoreLine      int
 	IgnoreLineTag   int
 	ParallelLoad    bool
+	StrictSqlMode   bool
 	maxBatchSize    uint64
 	Idx             int
 	CreateSql       string
