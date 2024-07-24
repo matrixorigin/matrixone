@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -104,7 +105,12 @@ func HandleShardingReadStatus(
 	if err != nil {
 		return nil, err
 	}
-	return buffer.EncodeStatsInfo(info), nil
+
+	bys, err := info.Marshal()
+	if err != nil {
+		return nil, err
+	}
+	return buffer.EncodeBytes(bys), nil
 }
 
 // HandleShardingReadApproxObjectsNum handles sharding read ApproxObjectsNum
@@ -160,7 +166,9 @@ func HandleShardingReadRanges(
 	if err != nil {
 		return nil, err
 	}
-	return buffer.EncodeRanges(ranges), nil
+
+	bys := []byte(*ranges.(*objectio.BlockInfoSlice))
+	return buffer.EncodeBytes(bys), nil
 }
 
 // HandleShardingReadGetColumMetadataScanInfo handles sharding read GetColumMetadataScanInfo
@@ -188,7 +196,15 @@ func HandleShardingReadGetColumMetadataScanInfo(
 	if err != nil {
 		return nil, err
 	}
-	return buffer.EncodeColumMetadataScanInfo(infos), nil
+
+	v := &plan.MetadataScanInfos{
+		Infos: infos,
+	}
+	bys, err := v.Marshal()
+	if err != nil {
+		panic(err)
+	}
+	return buffer.EncodeBytes(bys), nil
 }
 
 // HandleShardingReadReader handles sharding read Reader
@@ -307,7 +323,12 @@ func HandleShardingReadMergeObjects(
 	if err != nil {
 		return nil, err
 	}
-	return buffer.EncodeMergeCommitEntry(entry), nil
+
+	bys, err := entry.Marshal()
+	if err != nil {
+		return nil, err
+	}
+	return buffer.EncodeBytes(bys), nil
 }
 
 func getTxnTable(
