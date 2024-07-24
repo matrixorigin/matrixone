@@ -16,22 +16,24 @@ package hashmap
 
 import (
 	"sync/atomic"
-
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
-func NewJoinMap(sels [][]int32, expr *plan.Expr, ihm *IntHashMap, shm *StrHashMap, hasNull bool, isDup bool) *JoinMap {
-	cnt := int64(1)
+func NewJoinMap(sels [][]int32, ihm *IntHashMap, shm *StrHashMap) *JoinMap {
 	return &JoinMap{
-		cnt:       &cnt,
+		refCnt:    0,
 		shm:       shm,
 		ihm:       ihm,
-		expr:      expr,
 		multiSels: sels,
-		hasNull:   hasNull,
-		dupCnt:    new(int64),
-		isDup:     isDup,
+		valid:     true,
 	}
+}
+
+func (jm *JoinMap) SetRowCount(cnt int64) {
+	jm.rowcnt = cnt
+}
+
+func (jm *JoinMap) GetRowCount() int64 {
+	return jm.rowcnt
 }
 
 func (jm *JoinMap) SetPushedRuntimeFilterIn(b bool) {
@@ -46,91 +48,39 @@ func (jm *JoinMap) Sels() [][]int32 {
 	return jm.multiSels
 }
 
-func (jm *JoinMap) Expr() *plan.Expr {
-	return jm.expr
-}
-
-func (jm *JoinMap) HasNull() bool {
-	return jm.hasNull
-}
-
-func (jm *JoinMap) IsDup() bool {
-	return jm.isDup
-}
-
 func (jm *JoinMap) NewIterator() Iterator {
 	if jm.shm == nil {
 		return &intHashMapIterator{
-			mp: jm.ihm,
-			m:  jm.ihm.m,
-		}
-	} else {
-		return &strHashmapIterator{
-			mp: jm.shm,
-			m:  jm.shm.m,
-		}
-	}
-}
-
-func (jm *JoinMap) Dup() *JoinMap {
-	if jm.shm == nil {
-		m0 := &IntHashMap{
+			mp:      jm.ihm,
 			m:       jm.ihm.m,
-			hashMap: jm.ihm.hashMap,
-			hasNull: jm.ihm.hasNull,
 			keys:    make([]uint64, UnitLimit),
 			keyOffs: make([]uint32, UnitLimit),
 			values:  make([]uint64, UnitLimit),
 			zValues: make([]int64, UnitLimit),
 			hashes:  make([]uint64, UnitLimit),
 		}
-		jm0 := &JoinMap{
-			ihm:       m0,
-			expr:      jm.expr,
-			multiSels: jm.multiSels,
-			hasNull:   jm.hasNull,
-			cnt:       jm.cnt,
-		}
-		if atomic.AddInt64(jm.dupCnt, -1) == 0 {
-			jm.ihm = nil
-			jm.multiSels = nil
-		}
-		return jm0
 	} else {
-		m0 := &StrHashMap{
+		return &strHashmapIterator{
+			mp:            jm.shm,
 			m:             jm.shm.m,
-			hashMap:       jm.shm.hashMap,
-			hasNull:       jm.shm.hasNull,
 			values:        make([]uint64, UnitLimit),
 			zValues:       make([]int64, UnitLimit),
 			keys:          make([][]byte, UnitLimit),
 			strHashStates: make([][3]uint64, UnitLimit),
 		}
-		jm0 := &JoinMap{
-			shm:       m0,
-			expr:      jm.expr,
-			multiSels: jm.multiSels,
-			hasNull:   jm.hasNull,
-			cnt:       jm.cnt,
-		}
-		if atomic.AddInt64(jm.dupCnt, -1) == 0 {
-			jm.shm = nil
-			jm.multiSels = nil
-		}
-		return jm0
 	}
 }
 
-func (jm *JoinMap) IncRef(ref int64) {
-	atomic.AddInt64(jm.cnt, ref)
+func (jm *JoinMap) IncRef(cnt int32) {
+	atomic.AddInt64(&jm.refCnt, int64(cnt))
 }
 
-func (jm *JoinMap) SetDupCount(ref int64) {
-	atomic.AddInt64(jm.dupCnt, ref)
+func (jm *JoinMap) IsValid() bool {
+	return jm.valid
 }
 
 func (jm *JoinMap) Free() {
-	if atomic.AddInt64(jm.cnt, -1) != 0 {
+	if atomic.AddInt64(&jm.refCnt, -1) != 0 {
 		return
 	}
 	for i := range jm.multiSels {
@@ -142,6 +92,7 @@ func (jm *JoinMap) Free() {
 	} else {
 		jm.shm.Free()
 	}
+	jm.valid = false
 }
 
 func (jm *JoinMap) Size() int64 {

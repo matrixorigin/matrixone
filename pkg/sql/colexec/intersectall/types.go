@@ -34,9 +34,6 @@ type container struct {
 	// helper data structure during probe
 	counter []uint64
 
-	// process mark
-	inBuckets []uint8
-
 	// built for the smaller of the two relations
 	hashTable *hashmap.StrHashMap
 
