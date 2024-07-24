@@ -14,24 +14,6 @@
 
 package compile
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-)
-
-func (c *Compile) compileOnduplicateKey(n *plan.Node, ss []*Scope) ([]*Scope, error) {
-	rs := c.newMergeScope(ss)
-	arg := constructOnduplicateKey(n, c.e)
-
-	currentFirstFlag := c.anal.isFirst
-	arg.SetIdx(c.anal.curNodeIdx)
-	arg.SetIsFirst(currentFirstFlag)
-	rs.ReplaceLeafOp(arg)
-	c.anal.isFirst = false
-
-	ss = []*Scope{rs}
-	return ss, nil
-}
-
 // ----------------------------------------------------------------------------------------------------------------------
 // Node expand mode when compiling plan scope
 type NodeExpandType int

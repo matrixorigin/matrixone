@@ -143,7 +143,7 @@ type SessionInfo struct {
 	SessionId            uuid.UUID
 }
 
-// AnalyzeInfo  analyze information for query
+// AnalyzeInfo  operatorAnalyzer information for query
 type AnalyzeInfo struct {
 	// NodeId, index of query's node list
 	NodeId int32

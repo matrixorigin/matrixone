@@ -174,7 +174,6 @@ func (a *operatorAnalyzer) S3IOInputCount(count int) {
 	if a.op != nil {
 		a.op.TotalS3InputCount += int64(count)
 	}
-
 }
 
 func (a *operatorAnalyzer) S3IOOutputCount(count int) {
