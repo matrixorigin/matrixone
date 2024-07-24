@@ -113,7 +113,9 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 			if ctr.inputBatchRowCount > 0 {
 				jm = process.NewJoinMap(ctr.multiSels, ctr.intHashMap, ctr.strHashMap, ctr.batches, proc.Mp())
 				jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
-				jm.SetRowCount(int64(ctr.inputBatchRowCount))
+				if ap.NeedMergedBatch {
+					jm.SetRowCount(int64(ctr.inputBatchRowCount))
+				}
 				jm.IncRef(ap.JoinMapRefCnt)
 			}
 			if ap.JoinMapTag <= 0 {

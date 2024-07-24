@@ -128,9 +128,10 @@ func (shuffleBuild *ShuffleBuild) Call(proc *process.Process) (vm.CallResult, er
 			var jm *process.JoinMap
 			if ctr.inputBatchRowCount > 0 {
 				jm = process.NewJoinMap(ctr.multiSels, ctr.intHashMap, ctr.strHashMap, ctr.batches, proc.Mp())
-				jm.SetRowCount(int64(ctr.inputBatchRowCount))
+				if ap.NeedMergedBatch {
+					jm.SetRowCount(int64(ctr.inputBatchRowCount))
+				}
 				jm.IncRef(1)
-
 			}
 			proc.SendMessage(process.JoinMapMsg{JoinMapPtr: jm, IsShuffle: true, ShuffleIdx: ap.ShuffleIdx, Tag: ap.JoinMapTag})
 
