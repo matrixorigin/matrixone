@@ -101,35 +101,7 @@ func (tbl *txnTable) stats(ctx context.Context) (*pb.StatsInfo, error) {
 		return nil, err
 	}
 	e := tbl.db.getEng()
-	var partitionsTableDef []*plan2.TableDef
-	var approxObjectNum int64
-	if tbl.partitioned > 0 {
-		partitionInfo := &plan2.PartitionByDef{}
-		if err := partitionInfo.UnMarshalPartitionInfo([]byte(tbl.partition)); err != nil {
-			logutil.Errorf("failed to unmarshal partition table: %v", err)
-			return nil, err
-		}
-		for _, partitionTableName := range partitionInfo.PartitionTableNames {
-			partitionTable, err := tbl.db.Relation(ctx, partitionTableName, nil)
-			if err != nil {
-				return nil, err
-			}
-			ptbl, ok := partitionTable.(*txnTable)
-			if !ok {
-				delegate := partitionTable.(*txnTableDelegate)
-				ptbl = delegate.origin
-			}
-			partitionsTableDef = append(partitionsTableDef, ptbl.tableDef)
-			ps, err := ptbl.getPartitionState(ctx)
-			if err != nil {
-				return nil, err
-			}
-			approxObjectNum += int64(ps.ApproxObjectsNum())
-		}
-	} else {
-		approxObjectNum = int64(partitionState.ApproxObjectsNum())
-	}
-
+	approxObjectNum := int64(partitionState.ApproxObjectsNum())
 	if approxObjectNum == 0 {
 		// There are no objects flushed yet.
 		return nil, nil
@@ -138,7 +110,6 @@ func (tbl *txnTable) stats(ctx context.Context) (*pb.StatsInfo, error) {
 	stats := plan2.NewStatsInfo()
 	req := newUpdateStatsRequest(
 		tbl.tableDef,
-		partitionsTableDef,
 		partitionState,
 		e.fs,
 		types.TimestampToTS(tbl.db.op.SnapshotTS()),
