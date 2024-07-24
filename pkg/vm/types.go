@@ -273,6 +273,9 @@ type Operator interface {
 	AppendChild(child Operator)
 
 	GetOperatorBase() *OperatorBase
+
+	// Encapsulate the setting of operator analyze control properties
+	//setAnalyzeControl(nodeIdx int32, isFirst bool)
 }
 
 type OperatorBase struct {
