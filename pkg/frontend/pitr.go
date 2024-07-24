@@ -658,7 +658,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (e
 	}
 
 	// check the restore level
-	if err = checkPitrValidOrNot(pitr, stmt); err != nil {
+	if err = checkPitrValidOrNot(pitr, stmt, tenantInfo); err != nil {
 		return err
 	}
 
@@ -1440,7 +1440,7 @@ func addTimeSpan(length int, unit string) (time.Time, error) {
 	}
 }
 
-func checkPitrValidOrNot(pitrRecord *pitrRecord, stmt *tree.RestorePitr) (err error) {
+func checkPitrValidOrNot(pitrRecord *pitrRecord, stmt *tree.RestorePitr, tenantInfo *TenantInfo) (err error) {
 	restoreLevel := stmt.Level
 	switch restoreLevel {
 	case tree.RESTORELEVELACCOUNT:
@@ -1450,13 +1450,32 @@ func checkPitrValidOrNot(pitrRecord *pitrRecord, stmt *tree.RestorePitr) (err er
 			if pitrRecord.level == tree.PITRLEVELDATABASE.String() || pitrRecord.level == tree.PITRLEVELTABLE.String() {
 				return moerr.NewInternalErrorNoCtx("restore level %v is not allowed for account restore", pitrRecord.level)
 			}
+			if pitrRecord.level == tree.PITRLEVELACCOUNT.String() && pitrRecord.accountId != uint64(tenantInfo.TenantID) {
+				return moerr.NewInternalErrorNoCtx("pitr %s is not allowed to restore account %v", pitrRecord.pitrName, tenantInfo.GetTenant())
+			}
 		}
 	case tree.RESTORELEVELDATABASE:
 		// check the level
 		if pitrRecord.level == tree.PITRLEVELTABLE.String() {
 			return moerr.NewInternalErrorNoCtx("restore level %v is not allowed for database restore", pitrRecord.level)
 		}
+		if pitrRecord.level == tree.PITRLEVELACCOUNT.String() && pitrRecord.accountId != uint64(tenantInfo.TenantID) {
+			return moerr.NewInternalErrorNoCtx("pitr %s is not allowed to restore account %v database %v", pitrRecord.pitrName, tenantInfo.GetTenant(), string(stmt.DatabaseName))
+		}
+		if pitrRecord.level == tree.PITRLEVELDATABASE.String() && pitrRecord.databaseName != string(stmt.DatabaseName) {
+			return moerr.NewInternalErrorNoCtx("pitr %s is not allowed to restore database %v", pitrRecord.pitrName, string(stmt.DatabaseName))
+		}
 	case tree.RESTORELEVELTABLE:
+		// check the level
+		if pitrRecord.level == tree.PITRLEVELACCOUNT.String() && pitrRecord.accountId != uint64(tenantInfo.TenantID) {
+			return moerr.NewInternalErrorNoCtx("pitr %s is not allowed to restore account %v database %v table %v", pitrRecord.pitrName, tenantInfo.GetTenant(), string(stmt.DatabaseName), string(stmt.TableName))
+		}
+		if pitrRecord.level == tree.PITRLEVELDATABASE.String() && pitrRecord.databaseName != string(stmt.DatabaseName) {
+			return moerr.NewInternalErrorNoCtx("pitr %s is not allowed to restore database %v table %v", pitrRecord.pitrName, string(stmt.DatabaseName), string(stmt.TableName))
+		}
+		if pitrRecord.level == tree.PITRLEVELTABLE.String() && (pitrRecord.databaseName != string(stmt.DatabaseName) || pitrRecord.tableName != string(stmt.TableName)) {
+			return moerr.NewInternalErrorNoCtx("pitr %s is not allowed to restore table %v.%v", pitrRecord.pitrName, string(stmt.DatabaseName), string(stmt.TableName))
+		}
 	default:
 		return moerr.NewInternalErrorNoCtx("unknown restore level %v", restoreLevel.String())
 	}
