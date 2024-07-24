@@ -41,7 +41,7 @@ import (
 // It can be modified by calling Process.ReplaceTopCtx() method, but should be careful to avoid modifying it after the query starts.
 //
 // There should be announced that the returning Process owns an empty query context field.
-// This will be created and refreshed by calling Process.RefreshQueryCtx() method.
+// This will be created and refreshed by calling Process.BuildQueryCtx() method.
 func NewTopProcess(
 	topContext context.Context, // this should be a query-lifecycle or session-lifecycle context.
 	mp *mpool.MPool,
@@ -115,12 +115,12 @@ func (proc *Process) NewNoContextChildProc(dataEntryCount int) *Process {
 // This is used for parallel execution, which will make a new child process to run a pipeline directly.
 func (proc *Process) NewContextChildProc(dataEntryCount int) *Process {
 	child := proc.NewNoContextChildProc(dataEntryCount)
-	child.RebuildContext(proc.Ctx)
+	child.BuildPipelineContext(proc.Ctx)
 	return child
 }
 
-// RebuildContext cleans the old context and creates a new one from the input parent context.
-func (proc *Process) RebuildContext(parentContext context.Context) context.Context {
+// BuildPipelineContext cleans the old pipeline context and creates a new one from the input parent context.
+func (proc *Process) BuildPipelineContext(parentContext context.Context) context.Context {
 	if proc.Cancel != nil {
 		proc.Cancel()
 	}
@@ -200,8 +200,8 @@ func (qbCtx *QueryBaseContext) SaveToTopContext(key, value any) context.Context 
 	return qbCtx.outerContext
 }
 
-// RefreshQueryCtx refreshes the query context and cancellation method after the outer context was ready to run the query.
-func (qbCtx *QueryBaseContext) RefreshQueryCtx() context.Context {
+// BuildQueryCtx refreshes the query context and cancellation method after the outer context was ready to run the query.
+func (qbCtx *QueryBaseContext) BuildQueryCtx() context.Context {
 	qbCtx.queryContext, qbCtx.queryCancel = context.WithCancel(qbCtx.outerContext)
 	return qbCtx.queryContext
 }
@@ -214,6 +214,7 @@ func (qbCtx *QueryBaseContext) SaveToQueryContext(key, value any) context.Contex
 	return qbCtx.queryContext
 }
 
+// WithCounterSetToQueryContext sets the counter set to the query context.
 func (qbCtx *QueryBaseContext) WithCounterSetToQueryContext(sets ...*perfcounter.CounterSet) context.Context {
 	qbCtx.queryContext = perfcounter.WithCounterSet(qbCtx.queryContext, sets...)
 	return qbCtx.queryContext

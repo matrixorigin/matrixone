@@ -24,9 +24,10 @@ import (
 // 1. the context of all pipelines can be controlled by the query context.
 // 2. if there's a data transfer between two pipelines, the lifecycle of the sender's context ends with the receiver's termination.
 func (c *Compile) InitPipelineContextToExecuteQuery() {
-	queryContext := c.proc.Base.GetContextBase().RefreshQueryCtx()
-	queryContext = c.proc.Base.GetContextBase().SaveToQueryContext(defines.EngineKey{}, c.e)
-	queryContext = c.proc.Base.GetContextBase().WithCounterSetToQueryContext(c.counterSet)
+	contextBase := c.proc.Base.GetContextBase()
+	queryContext := contextBase.BuildQueryCtx()
+	queryContext = contextBase.SaveToQueryContext(defines.EngineKey{}, c.e)
+	queryContext = contextBase.WithCounterSetToQueryContext(c.counterSet)
 
 	// build pipeline context.
 	for _, pipeline := range c.scope {
@@ -37,7 +38,7 @@ func (c *Compile) InitPipelineContextToExecuteQuery() {
 // buildContextFromParentCtx build the context for the pipeline tree.
 // the input parameter is the whole tree's parent context.
 func (s *Scope) buildContextFromParentCtx(parentCtx context.Context) {
-	receiverCtx := s.Proc.RebuildContext(parentCtx)
+	receiverCtx := s.Proc.BuildPipelineContext(parentCtx)
 
 	// build context for receiver.
 	for _, prePipeline := range s.PreScopes {

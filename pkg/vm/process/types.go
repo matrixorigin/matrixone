@@ -356,10 +356,15 @@ type BaseProcess struct {
 // one or more pipeline will be generated for one query,
 // and one pipeline has one process instance.
 type Process struct {
-	Base             *BaseProcess
-	Reg              Register
-	Ctx              context.Context
-	Cancel           context.CancelFunc
+	Base *BaseProcess
+	Reg  Register
+
+	// Ctx and Cancel are pipeline's context and cancel function.
+	// Every pipeline has its own context, and the lifecycle of the pipeline is controlled by the context.
+	Ctx    context.Context
+	Cancel context.CancelFunc
+
+	// TODO: move to dispatch operator.
 	DispatchNotifyCh chan *WrapCs
 }
 
