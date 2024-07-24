@@ -681,10 +681,14 @@ func (v *Vector) PreExtend(rows int, mp *mpool.MPool) error {
 // PreExtendArea use to expand the mpool and area of vector
 // extraAreaSize: the size of area to be extended
 // mp: mpool
-func (v *Vector) PreExtendArea(extraAreaSize int, mp *mpool.MPool) error {
-
+func (v *Vector) PreExtendWithArea(rows int, extraAreaSize int, mp *mpool.MPool) error {
 	if v.class == CONSTANT {
 		return nil
+	}
+
+	// pre-extend vector, the fixed len part
+	if err := v.PreExtend(rows, mp); err != nil {
+		return err
 	}
 
 	// check if required size is already satisfied
