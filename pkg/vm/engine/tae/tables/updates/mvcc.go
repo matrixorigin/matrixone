@@ -86,25 +86,6 @@ func (n *AppendMVCCHandle) ReleaseAppends() {
 	n.appends = nil
 }
 
-// wait by prepareTS
-// only used in commit queue
-func (n *AppendMVCCHandle) NeedWaitCommittingLocked(txn txnif.TxnReader) (needWait bool, txnToWait txnif.TxnReader) {
-	n.appends.ForEach(func(un *AppendNode) bool {
-		if un.IsSameTxn(txn) {
-			return false
-		}
-		needWait, txnToWait = un.NeedWaitCommitting(txn.GetPrepareTS())
-		if needWait {
-			return false
-		}
-		if un.IsVisible(txn) {
-			return false
-		}
-		return true
-	}, false)
-	return
-}
-
 // only for internal usage
 // given a row, it returns the append node which contains the row
 func (n *AppendMVCCHandle) GetAppendNodeByRow(row uint32) (an *AppendNode) {
