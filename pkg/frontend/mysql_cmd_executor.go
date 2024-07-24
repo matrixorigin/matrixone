@@ -173,7 +173,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	// add by #9907, set the result of last_query_id(), this will pass those isCmdFieldListSql() from client.
 	// fixme: this op leads all internal/background executor got NULL result if call last_query_id().
 	if sqlType != constant.InternalSql {
-		ses.pushQueryId(types.Uuid(stmID).ToString())
+		ses.pushQueryId(types.Uuid(stmID).String())
 	}
 
 	// -------------------------------------
@@ -1080,13 +1080,6 @@ func createPrepareStmt(
 		}
 		// do not save ap query now()
 		if comp != nil && !comp.IsTpQuery() {
-			comp.SetIsPrepare(false)
-			comp.Release()
-			comp = nil
-		}
-
-		// @xxx when refactor prepare finish, remove this code
-		if comp != nil {
 			comp.SetIsPrepare(false)
 			comp.Release()
 			comp = nil

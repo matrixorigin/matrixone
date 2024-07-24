@@ -162,7 +162,7 @@ func NewService(
 	}
 
 	// start I/O pipeline
-	blockio.Start()
+	blockio.Start(cfg.UUID)
 
 	s := &store{
 		cfg:                 cfg,
@@ -259,7 +259,7 @@ func (s *store) Close() error {
 		err = errors.Join(err, ts.Close())
 	}
 	// stop I/O pipeline
-	blockio.Stop()
+	blockio.Stop(s.cfg.UUID)
 	return err
 }
 

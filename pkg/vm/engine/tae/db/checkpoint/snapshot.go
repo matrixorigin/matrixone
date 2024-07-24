@@ -16,13 +16,14 @@ package checkpoint
 
 import (
 	"context"
+	"sort"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"sort"
 )
 
 type GetCheckpointRange = func(snapshot types.TS, files []*MetaFile) ([]*MetaFile, int, error)
@@ -51,6 +52,7 @@ func AllAfterAndGCheckpoint(snapshot types.TS, files []*MetaFile) ([]*MetaFile, 
 
 func ListSnapshotCheckpoint(
 	ctx context.Context,
+	sid string,
 	fs fileservice.FileService,
 	snapshot types.TS,
 	tid uint64,
@@ -63,7 +65,7 @@ func ListSnapshotCheckpoint(
 	if len(files) == 0 {
 		return nil, nil
 	}
-	return ListSnapshotCheckpointWithMeta(ctx, fs, files, idx, types.TS{}, false)
+	return ListSnapshotCheckpointWithMeta(ctx, sid, fs, files, idx, types.TS{}, false)
 }
 
 func ListSnapshotMeta(
@@ -141,13 +143,14 @@ func ListSnapshotMetaWithDiskCleaner(
 
 func ListSnapshotCheckpointWithMeta(
 	ctx context.Context,
+	sid string,
 	fs fileservice.FileService,
 	files []*MetaFile,
 	idx int,
 	gcStage types.TS,
 	isAll bool,
 ) ([]*CheckpointEntry, error) {
-	reader, err := blockio.NewFileReader(fs, CheckpointDir+files[idx].name)
+	reader, err := blockio.NewFileReader(sid, fs, CheckpointDir+files[idx].name)
 	if err != nil {
 		return nil, nil
 	}

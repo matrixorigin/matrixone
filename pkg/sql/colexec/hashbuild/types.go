@@ -40,7 +40,6 @@ const (
 type container struct {
 	state              int
 	keyWidth           int // keyWidth is the width of hash columns, it determines which hash map to use.
-	hasNull            bool
 	runtimeFilterIn    bool
 	multiSels          [][]int32
 	batches            []*batch.Batch
@@ -60,15 +59,15 @@ type container struct {
 type HashBuild struct {
 	ctr *container
 	// need to generate a push-down filter expression
-	NeedExpr         bool
-	NeedHashMap      bool
-	IsDup            bool
-	HashOnPK         bool
-	NeedMergedBatch  bool
-	NeedAllocateSels bool
-	Typs             []types.Type
-	Conditions       []*plan.Expr
-
+	NeedExpr          bool
+	NeedHashMap       bool
+	HashOnPK          bool
+	NeedMergedBatch   bool
+	NeedAllocateSels  bool
+	Typs              []types.Type
+	Conditions        []*plan.Expr
+	JoinMapTag        int32
+	JoinMapRefCnt     int32
 	RuntimeFilterSpec *pbplan.RuntimeFilterSpec
 	vm.OperatorBase
 }
@@ -111,12 +110,10 @@ func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, er
 func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := hashBuild.ctr
 	proc.FinalizeRuntimeFilter(hashBuild.RuntimeFilterSpec, pipelineFailed, err)
+	proc.FinalizeJoinMapMessage(hashBuild.JoinMapTag, false, 0, pipelineFailed, err)
 	if ctr != nil {
 		ctr.cleanBatches(proc)
 		ctr.cleanEvalVectors()
-		if !hashBuild.NeedHashMap {
-			ctr.cleanHashMap()
-		}
 		hashBuild.ctr = nil
 	}
 }

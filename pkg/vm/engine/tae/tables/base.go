@@ -554,7 +554,7 @@ func (blk *baseObject) Prefetch(idxes []uint16, blkID uint16) error {
 		if err != nil {
 			return err
 		}
-		return blockio.Prefetch(idxes, []uint16{key.ID()}, blk.rt.Fs.Service, key)
+		return blockio.Prefetch(blk.rt.SID(), idxes, []uint16{key.ID()}, blk.rt.Fs.Service, key)
 	}
 }
 

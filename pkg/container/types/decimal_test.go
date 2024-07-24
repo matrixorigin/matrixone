@@ -154,6 +154,26 @@ func TestParseFormat(t *testing.T) {
 		panic("wrong")
 	}
 }
+
+func decimalFormat[T DecimalWithFormat](x T, scale int32) string {
+	return x.Format(scale)
+}
+
+func TestDecimalFormat(t *testing.T) {
+	d64 := Decimal64(0)
+	d128 := Decimal128{0, 0}
+
+	d64str := decimalFormat(d64, 5)
+	if d64str != "0.00000" {
+		t.Error("Decimal64 format failed")
+	}
+
+	d128str := decimalFormat(d128, 5)
+	if d128str != "0.00000" {
+		t.Error("Decimal128 format failed")
+	}
+}
+
 func BenchmarkFor(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 	}

@@ -45,8 +45,6 @@ type container struct {
 	state   int
 	lastrow int
 
-	inBuckets []uint8
-
 	batches       []*batch.Batch
 	batchRowCount int
 	rbat          *batch.Batch
@@ -77,8 +75,9 @@ type LeftJoin struct {
 
 	HashOnPK           bool
 	IsShuffle          bool
+	ShuffleIdx         int32
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
-
+	JoinMapTag         int32
 	vm.OperatorBase
 }
 
