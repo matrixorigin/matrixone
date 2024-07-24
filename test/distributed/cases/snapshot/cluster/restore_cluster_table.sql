@@ -398,6 +398,7 @@ select operation_role_id,operation_user_id from mo_catalog.mo_role_grant;
 -- @session
 
 restore cluster from snapshot cluster_level_snapshot;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 
 use db02;
 select * from department_id;
@@ -521,6 +522,7 @@ drop table if exists t2;
 create cluster table t2(a int);
 insert into t2 values (1,6),(2,6),(3,6);
 restore cluster from snapshot cluster_level_snapshot;
+select user_id,user_name,creator,owner,default_role from mo_catalog.mo_user;
 
 use mo_catalog;
 show tables like 't1';
