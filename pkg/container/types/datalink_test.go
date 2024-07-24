@@ -24,40 +24,38 @@ func TestParseDatalink(t *testing.T) {
 	type testCase struct {
 		name          string
 		data          string
-		wantUrlParts  []string
-		wantUrlParams map[string]string
+		wantMoUrl     string
+		wantUrlParams []int
 		wantFileExt   string
 	}
 	tests := []testCase{
 		{
-			name:         "Test1 - S3",
-			data:         "s3://bucket/prefix/path/a.txt?offset=0&size=10",
-			wantUrlParts: []string{"s3", "", "bucket", "/prefix/path/a.txt"},
-			wantUrlParams: map[string]string{
-				"offset": "0",
-				"size":   "10",
-			},
-			wantFileExt: ".txt",
+			name:          "Test1 - File",
+			data:          "file:///a/b/c/1.txt",
+			wantMoUrl:     "/a/b/c/1.txt",
+			wantUrlParams: []int{0, -1},
+			wantFileExt:   ".txt",
 		},
 		{
-			name:         "Test2 - STAGE",
-			data:         "stage://database/stage_name/a.txt?offset=0&size=10",
-			wantUrlParts: []string{"stage", "", "database", "/stage_name/a.txt"},
-			wantUrlParams: map[string]string{
-				"offset": "0",
-				"size":   "10",
-			},
-			wantFileExt: ".txt",
+			name:          "Test2 - File",
+			data:          "file:///a/b/c/1.txt?offset=1&size=2",
+			wantMoUrl:     "/a/b/c/1.txt",
+			wantUrlParams: []int{1, 2},
+			wantFileExt:   ".txt",
 		},
 		{
-			name:         "Test3 - STAGE with Current Database",
-			data:         "stage:///stage_name/a.txt?offset=0&size=10",
-			wantUrlParts: []string{"stage", "", "", "/stage_name/a.txt"},
-			wantUrlParams: map[string]string{
-				"offset": "0",
-				"size":   "10",
-			},
-			wantFileExt: ".txt",
+			name:          "Test3 - File",
+			data:          "file:///a/b/c/1.txt?offset=1",
+			wantMoUrl:     "/a/b/c/1.txt",
+			wantUrlParams: []int{1, -1},
+			wantFileExt:   ".txt",
+		},
+		{
+			name:          "Test4 - File",
+			data:          "file:///a/b/c/1.txt?size=2",
+			wantMoUrl:     "/a/b/c/1.txt",
+			wantUrlParams: []int{0, 2},
+			wantFileExt:   ".txt",
 		},
 	}
 	for _, tt := range tests {
@@ -66,47 +64,14 @@ func TestParseDatalink(t *testing.T) {
 			if err != nil {
 				t.Errorf("ParseDatalink() error = %v", err)
 			}
-			if !reflect.DeepEqual(got1, tt.wantUrlParts) {
-				t.Errorf("ParseDatalink() = %v, want %v", got1, tt.wantUrlParts)
+			if !reflect.DeepEqual(got1, tt.wantMoUrl) {
+				t.Errorf("ParseDatalink() = %v, want %v", got1, tt.wantMoUrl)
 			}
 			if !reflect.DeepEqual(got2, tt.wantUrlParams) {
 				t.Errorf("ParseDatalink() = %v, want %v", got2, tt.wantUrlParams)
 			}
 			if !reflect.DeepEqual(got3, tt.wantFileExt) {
 				t.Errorf("ParseDatalink() = %v, want %v", got3, tt.wantFileExt)
-			}
-		})
-	}
-}
-
-func TestConvertS3UrlToFsS3Url(t *testing.T) {
-	type args struct {
-		s3Url string
-	}
-	tests := []struct {
-		name    string
-		args    args
-		want    string
-		wantErr bool
-	}{
-		{
-			name: "Test1 - S3 URL",
-			args: args{
-				s3Url: "s3://vector_bucket/prefix/path/img.png?region=us-east-2&key=xxx&secret=xxx&offset=0&size=-1",
-			},
-			want:    "s3,,us-east-2,vector_bucket,xxx,xxx,prefix/path:img.png",
-			wantErr: false,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := ConvertS3DatalinkToFsS3Url(tt.args.s3Url)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("ConvertS3DatalinkToFsS3Url() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-			if got != tt.want {
-				t.Errorf("ConvertS3DatalinkToFsS3Url() got = %v, want %v", got, tt.want)
 			}
 		})
 	}
