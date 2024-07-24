@@ -398,7 +398,7 @@ func canUsePkFilter(builder *QueryBuilder, ctx CompilerContext, stmt *tree.Inser
 		isCompound = len(tableDef.Pkey.Names) > 1
 	}
 
-	if !config.CNPrimaryCheck {
+	if !config.CNPrimaryCheck.Load() {
 		return false // break condition 0
 	}
 

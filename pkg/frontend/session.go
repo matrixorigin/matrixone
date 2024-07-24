@@ -48,7 +48,13 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-var MaxPrepareNumberInOneSession int = 100000
+var (
+	MaxPrepareNumberInOneSession atomic.Uint32
+)
+
+func init() {
+	MaxPrepareNumberInOneSession.Store(100000)
+}
 
 // TODO: this variable should be configure by set variable
 const MoDefaultErrorCount = 64
@@ -915,7 +921,7 @@ func (ses *Session) SetPrepareStmt(ctx context.Context, name string, prepareStmt
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	if stmt, ok := ses.prepareStmts[name]; !ok {
-		if len(ses.prepareStmts) >= MaxPrepareNumberInOneSession {
+		if len(ses.prepareStmts) >= int(MaxPrepareNumberInOneSession.Load()) {
 			return moerr.NewInvalidState(ctx, "too many prepared statement, max %d", MaxPrepareNumberInOneSession)
 		}
 	} else {

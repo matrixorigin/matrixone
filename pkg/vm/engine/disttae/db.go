@@ -79,7 +79,7 @@ func (e *Engine) init(ctx context.Context) error {
 	{ // mo_database
 		part := e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}]
 		cols, err := genColumns(0, catalog.MO_DATABASE, catalog.MO_CATALOG, catalog.MO_DATABASE_ID,
-			catalog.MO_CATALOG_ID, catalog.MoDatabaseTableDefs)
+			catalog.MO_CATALOG_ID, catalog.GetDefines(e.service).MoDatabaseTableDefs)
 		if err != nil {
 			return err
 		}
@@ -140,7 +140,7 @@ func (e *Engine) init(ctx context.Context) error {
 	{ // mo_tables
 		part := e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}]
 		cols, err := genColumns(0, catalog.MO_TABLES, catalog.MO_CATALOG, catalog.MO_TABLES_ID,
-			catalog.MO_CATALOG_ID, catalog.MoTablesTableDefs)
+			catalog.MO_CATALOG_ID, catalog.GetDefines(e.service).MoTablesTableDefs)
 		if err != nil {
 			return err
 		}
@@ -200,7 +200,7 @@ func (e *Engine) init(ctx context.Context) error {
 	{ // mo_columns
 		part := e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}]
 		cols, err := genColumns(0, catalog.MO_COLUMNS, catalog.MO_CATALOG, catalog.MO_COLUMNS_ID,
-			catalog.MO_CATALOG_ID, catalog.MoColumnsTableDefs)
+			catalog.MO_CATALOG_ID, catalog.GetDefines(e.service).MoColumnsTableDefs)
 		if err != nil {
 			return err
 		}

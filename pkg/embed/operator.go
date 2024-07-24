@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -365,6 +366,7 @@ func (op *operator) initRuntime() error {
 		runtime.WithClock(op.reset.clock),
 	)
 	runtime.SetupServiceBasedRuntime(op.sid, rt)
+	catalog.SetupDefines(op.sid)
 	op.reset.rt = rt
 	return nil
 }
