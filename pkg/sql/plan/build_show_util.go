@@ -61,7 +61,7 @@ func ConstructCreateTableSQL(ctx CompilerContext, tableDef *plan.TableDef, snaps
 		if col.Hidden {
 			continue
 		}
-		colNameOrigin := col.GetUserInputName()
+		colNameOrigin := col.GetOriginCaseName()
 		colNameToOriginName[col.Name] = colNameOrigin
 		colIdToOriginName[col.ColId] = colNameOrigin
 		if colNameOrigin == catalog.Row_ID {
@@ -237,7 +237,7 @@ func ConstructCreateTableSQL(ctx CompilerContext, tableDef *plan.TableDef, snaps
 
 		fkColIdToOriginName := make(map[uint64]string)
 		for _, col := range fkTableDef.Cols {
-			fkColIdToOriginName[col.ColId] = col.GetUserInputName()
+			fkColIdToOriginName[col.ColId] = col.GetOriginCaseName()
 		}
 		fkColOriginNames := make([]string, len(fk.ForeignCols))
 		for i, colId := range fk.ForeignCols {

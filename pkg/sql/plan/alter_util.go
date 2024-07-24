@@ -165,7 +165,7 @@ func FindColumn(cols []*ColDef, name string) *ColDef {
 // FindColumnByOriginName finds column in cols by origin name.
 func FindColumnByOriginName(cols []*ColDef, originName string) *ColDef {
 	for _, col := range cols {
-		if col.GetUserInputName() == originName {
+		if col.GetOriginCaseName() == originName {
 			return col
 		}
 	}

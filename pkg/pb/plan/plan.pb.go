@@ -2978,7 +2978,7 @@ type ColDef struct {
 	Header    string `protobuf:"bytes,16,opt,name=header,proto3" json:"header,omitempty"`
 	TblName   string `protobuf:"bytes,17,opt,name=tbl_name,json=tblName,proto3" json:"tbl_name,omitempty"`
 	DbName    string `protobuf:"bytes,18,opt,name=db_name,json=dbName,proto3" json:"db_name,omitempty"`
-	// get origin_name by ColDef.GetUserInputName(), letter case: origin
+	// get origin_name by ColDef.GetOriginCaseName(), letter case: origin
 	OriginName           string   `protobuf:"bytes,19,opt,name=origin_name,json=originName,proto3" json:"origin_name,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`

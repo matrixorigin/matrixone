@@ -2402,7 +2402,7 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 		colTyp := col.GetTyp()
 		exeCols[i] = &engine.AttributeDef{
 			Attr: engine.Attribute{
-				Name:          col.GetUserInputName(),
+				Name:          col.GetOriginCaseName(),
 				Alg:           alg,
 				Type:          types.New(types.T(colTyp.GetId()), colTyp.GetWidth(), colTyp.GetScale()),
 				Default:       planCols[i].GetDefault(),

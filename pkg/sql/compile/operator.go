@@ -679,7 +679,7 @@ func constructPreInsert(ns []*plan.Node, n *plan.Node, eg engine.Engine, proc *p
 		if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
 			continue
 		}
-		attrs = append(attrs, col.GetUserInputName())
+		attrs = append(attrs, col.GetOriginCaseName())
 	}
 
 	ctx := proc.Ctx
@@ -775,7 +775,7 @@ func constructInsert(n *plan.Node, eg engine.Engine) (*insert.Insert, error) {
 	var attrs []string
 	for _, col := range oldCtx.TableDef.Cols {
 		if col.Name != catalog.Row_ID {
-			attrs = append(attrs, col.GetUserInputName())
+			attrs = append(attrs, col.GetOriginCaseName())
 		}
 	}
 	newCtx := &insert.InsertCtx{
@@ -804,7 +804,7 @@ func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Contex
 
 	for _, col := range n.TableDef.Cols {
 		if !col.Hidden {
-			attrs = append(attrs, col.GetUserInputName())
+			attrs = append(attrs, col.GetOriginCaseName())
 		}
 	}
 
@@ -848,7 +848,7 @@ func constructStream(n *plan.Node, p [2]int64) *source.Source {
 func constructTableFunction(n *plan.Node) *table_function.TableFunction {
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
-		attrs[j] = col.GetUserInputName()
+		attrs[j] = col.GetOriginCaseName()
 	}
 	arg := table_function.NewArgument()
 	arg.Attrs = attrs

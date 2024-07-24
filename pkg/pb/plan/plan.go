@@ -113,7 +113,7 @@ func (t *Type) IsEmpty() bool {
 		t.Enumvalues == "")
 }
 
-func (def *ColDef) GetUserInputName() string {
+func (def *ColDef) GetOriginCaseName() string {
 	if def.OriginName == "" {
 		return def.Name
 	}

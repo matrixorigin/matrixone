@@ -238,7 +238,7 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, fileList []string
 	var buf bytes.Buffer
 	mp := proc.GetMPool()
 	for i := 0; i < num; i++ {
-		bat.Attrs[i] = node.TableDef.Cols[i].GetUserInputName()
+		bat.Attrs[i] = node.TableDef.Cols[i].GetOriginCaseName()
 		if bat.Attrs[i] == STATEMENT_ACCOUNT {
 			typ := types.New(types.T(node.TableDef.Cols[i].Typ.Id), node.TableDef.Cols[i].Typ.Width, node.TableDef.Cols[i].Typ.Scale)
 			bat.Vecs[i], err = proc.AllocVectorOfRows(typ, len(fileList), nil)

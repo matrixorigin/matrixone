@@ -1724,7 +1724,7 @@ func GetExplainColumns(ctx context.Context, explainColName string) ([]*plan2.Col
 	for i, col := range cols {
 		c := new(MysqlColumn)
 		c.SetName(col.Name)
-		c.SetOrgName(col.GetUserInputName())
+		c.SetOrgName(col.GetOriginCaseName())
 		err = convertEngineTypeToMysqlType(ctx, types.T(col.Typ.Id), c)
 		if err != nil {
 			return nil, nil, err

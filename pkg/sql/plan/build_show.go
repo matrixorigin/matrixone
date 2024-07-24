@@ -501,7 +501,7 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 		if col.Hidden {
 			continue
 		}
-		colNameOrigin := col.GetUserInputName()
+		colNameOrigin := col.GetOriginCaseName()
 		colIdToOriginName[col.ColId] = colNameOrigin
 		colNameToOriginName[col.Name] = colNameOrigin
 	}

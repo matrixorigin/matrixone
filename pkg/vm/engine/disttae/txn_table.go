@@ -1953,7 +1953,7 @@ func (tbl *txnTable) newReader(
 
 	seqnumMp := make(map[string]int)
 	for _, coldef := range tbl.tableDef.Cols {
-		seqnumMp[coldef.GetUserInputName()] = int(coldef.Seqnum)
+		seqnumMp[coldef.GetOriginCaseName()] = int(coldef.Seqnum)
 	}
 
 	mp := make(map[string]types.Type)

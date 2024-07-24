@@ -266,7 +266,7 @@ message ColDef {
 
 	string tbl_name = 17;
 	string db_name = 18;
-	// get origin_name by ColDef.GetUserInputName(), letter case: origin
+	// get origin_name by ColDef.GetOriginCaseName(), letter case: origin
 	string origin_name = 19;
 }
 
