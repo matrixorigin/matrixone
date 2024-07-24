@@ -105,8 +105,7 @@ func (s *Scope) Reset(c *Compile) error {
 		return err
 	}
 	for _, scope := range s.PreScopes {
-		err := scope.Reset(c)
-		if err != nil {
+		if err = scope.Reset(c); err != nil {
 			return err
 		}
 	}
@@ -114,18 +113,6 @@ func (s *Scope) Reset(c *Compile) error {
 }
 
 func (s *Scope) resetForReuse(c *Compile) (err error) {
-	if s.Proc != nil {
-		newctx, cancel := context.WithCancel(c.proc.Ctx)
-		s.Proc.Base = c.proc.Base
-		s.Proc.Ctx = newctx
-		s.Proc.Cancel = cancel
-	}
-
-	for i := 0; i < len(s.Proc.Reg.MergeReceivers); i++ {
-		s.Proc.Reg.MergeReceivers[i].Ctx = s.Proc.Ctx
-		s.Proc.Reg.MergeReceivers[i].CleanChannel(s.Proc.GetMPool())
-	}
-
 	vm.HandleAllOp(s.RootOp, func(parentOp vm.Operator, op vm.Operator) error {
 		if op.OpType() == vm.Output {
 			op.(*output.Output).Func = c.fill

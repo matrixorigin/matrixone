@@ -47,7 +47,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
@@ -169,9 +168,6 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	c.proc = proc
 	c.fill = fill
 	c.sql = sql
-	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, c.counterSet)
-
-	c.proc.Ctx = context.WithValue(c.proc.Ctx, defines.EngineKey{}, c.e)
 	c.affectRows.Store(0)
 
 	for _, info := range c.anal.analInfos {
@@ -272,8 +268,10 @@ func (c *Compile) NeedInitTempEngine() bool {
 func (c *Compile) SetTempEngine(tempEngine engine.Engine, tempStorage *memorystorage.Storage) {
 	e := c.e.(*engine.EntireEngine)
 	e.TempEngine = tempEngine
-	if c.proc.Ctx != nil && c.proc.Ctx.Value(defines.TemporaryTN{}) == nil {
-		c.proc.Ctx = context.WithValue(c.proc.Ctx, defines.TemporaryTN{}, tempStorage)
+
+	contextBase := c.proc.Base.GetContextBase()
+	if topContext := contextBase.GetTopCtx(); topContext.Value(defines.TemporaryTN{}) == nil {
+		contextBase.SaveToTopContext(defines.TemporaryTN{}, tempStorage)
 	}
 }
 

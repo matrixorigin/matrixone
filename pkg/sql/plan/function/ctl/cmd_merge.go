@@ -172,33 +172,34 @@ func handleMerge() handleFunc {
 				}
 			}()
 
+			ctx := proc.Ctx
 			if a.accountId != math.MaxUint64 {
-				proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(a.accountId))
+				ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(a.accountId))
 			}
 
 			var rel engine.Relation
 			tblId, err1 := strconv.ParseUint(a.tbl, 10, 64)
 			if err1 == nil {
-				_, _, rel, err = proc.GetSessionInfo().StorageEngine.GetRelationById(proc.Ctx, txnOp, tblId)
+				_, _, rel, err = proc.GetSessionInfo().StorageEngine.GetRelationById(ctx, txnOp, tblId)
 				if err != nil {
 					logutil.Errorf("mergeblocks err on cn, tblId %d, err %s", tblId, err.Error())
 					return nil, err
 				}
 			} else {
 				var database engine.Database
-				database, err = proc.GetSessionInfo().StorageEngine.Database(proc.Ctx, a.db, txnOp)
+				database, err = proc.GetSessionInfo().StorageEngine.Database(ctx, a.db, txnOp)
 				if err != nil {
 					logutil.Errorf("mergeblocks err on cn, db %s, err %s", a.db, err.Error())
 					return nil, err
 				}
-				rel, err = database.Relation(proc.Ctx, a.tbl, nil)
+				rel, err = database.Relation(ctx, a.tbl, nil)
 				if err != nil {
 					logutil.Errorf("mergeblocks err on cn, table %s, err %s", a.db, err.Error())
 					return nil, err
 				}
 			}
 
-			entry, err := rel.MergeObjects(proc.Ctx, a.objs, a.filter, uint32(a.targetObjSize))
+			entry, err := rel.MergeObjects(ctx, a.objs, a.filter, uint32(a.targetObjSize))
 			if err != nil {
 				merge.CleanUpUselessFiles(entry, proc.GetFileService())
 				return nil, err

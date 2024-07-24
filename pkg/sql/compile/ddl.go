@@ -45,22 +45,22 @@ import (
 )
 
 func (s *Scope) CreateDatabase(c *Compile) error {
-	var span trace.Span
-	c.proc.Ctx, span = trace.Start(c.proc.Ctx, "CreateDatabase")
+	ctx, span := trace.Start(c.proc.Ctx, "CreateDatabase")
 	defer span.End()
+
 	dbName := s.Plan.GetDdl().GetCreateDatabase().GetDatabase()
-	if _, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator()); err == nil {
+	if _, err := c.e.Database(ctx, dbName, c.proc.GetTxnOperator()); err == nil {
 		if s.Plan.GetDdl().GetCreateDatabase().GetIfNotExists() {
 			return nil
 		}
-		return moerr.NewDBAlreadyExists(c.proc.Ctx, dbName)
+		return moerr.NewDBAlreadyExists(ctx, dbName)
 	}
 
 	if err := lockMoDatabase(c, dbName); err != nil {
 		return err
 	}
 
-	ctx := context.WithValue(c.proc.Ctx, defines.SqlKey{}, s.Plan.GetDdl().GetCreateDatabase().GetSql())
+	ctx = context.WithValue(ctx, defines.SqlKey{}, s.Plan.GetDdl().GetCreateDatabase().GetSql())
 	datType := ""
 	if s.Plan.GetDdl().GetCreateDatabase().SubscriptionOption != nil {
 		datType = catalog.SystemDBTypeSubscription

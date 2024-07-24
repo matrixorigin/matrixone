@@ -42,7 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
@@ -376,6 +375,7 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	}
 
 	runningCtx, runningCancel := context.WithDeadline(receiver.connectionCtx, deadline)
+	runningCtx = defines.AttachAccountId(runningCtx, pHelper.accountId)
 	proc := process.NewTopProcess(
 		runningCtx,
 		mp,
@@ -414,10 +414,8 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	c.anal = newAnaylze()
 	c.anal.analInfos = proc.Base.AnalInfos
 	c.addr = receiver.cnInformation.cnAddr
-	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, c.counterSet)
 
 	// a method to send back.
-	c.proc.Ctx = defines.AttachAccountId(c.proc.Ctx, pHelper.accountId)
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.fill = func(b *batch.Batch) error {
 		return receiver.sendBatch(b)
