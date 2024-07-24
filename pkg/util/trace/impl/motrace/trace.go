@@ -22,6 +22,7 @@
 package motrace
 
 import (
+	"bytes"
 	"context"
 	"sync/atomic"
 	"time"
@@ -267,10 +268,26 @@ func GetSQLExecutorFactory() func() ie.InternalExecutor {
 	return nil
 }
 
+// PipeImpl implements batchpipe.PipeImpl[batchpipe.HasName, any]
 type PipeImpl interface {
-	batchpipe.PipeImpl[batchpipe.HasName, any]
+	NewItemBuffer(name string) batchpipe.ItemBuffer[batchpipe.HasName, any]
+	// NewItemBatchHandler handle the StoreBatch from an ItemBuffer, for example, execute an insert sql.
+	// this handle may be running on multiple goroutine
+	NewItemBatchHandler(ctx context.Context) func(batch any)
+
 	// NewAggregator get new aggr
 	NewAggregator(context.Context, string) table.Aggregator
+}
+
+// Buffer implements batchpipe.ItemBuffer[batchpipe.HasName, any]
+type Buffer interface {
+	batchpipe.Reminder
+	Add(item batchpipe.HasName)
+	Reset()
+	IsEmpty() bool
+	ShouldFlush() bool
+	// GetBatch use bytes.Buffer to mitigate mem allocation and the returned bytes should own its data
+	GetBatch(ctx context.Context, buf *bytes.Buffer) any
 }
 
 type BatchProcessor interface {

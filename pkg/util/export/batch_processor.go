@@ -25,6 +25,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	morun "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -37,8 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/ring"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
-
-	"go.uber.org/zap"
 )
 
 // defaultRingBufferSize need 2^N value
@@ -61,7 +61,7 @@ type bufferHolder struct {
 	// name like a type
 	name string
 	// buffer is instance of batchpipe.ItemBuffer with its own elimination algorithm(like LRU, LFU)
-	buffer batchpipe.ItemBuffer[batchpipe.HasName, any]
+	buffer motrace.Buffer
 	// bufferPool
 	bufferPool *sync.Pool
 	bufferCnt  atomic.Int32
@@ -120,15 +120,15 @@ func (b *bufferHolder) Start() {
 	})
 }
 
-func (b *bufferHolder) getBuffer() batchpipe.ItemBuffer[batchpipe.HasName, any] {
+func (b *bufferHolder) getBuffer() motrace.Buffer {
 	b.c.allocBuffer()
 	b.bufferCnt.Add(1)
-	buffer := b.bufferPool.Get().(batchpipe.ItemBuffer[batchpipe.HasName, any])
+	buffer := b.bufferPool.Get().(motrace.Buffer)
 	b.logStatus("new buffer")
 	return buffer
 }
 
-func (b *bufferHolder) putBuffer(buffer batchpipe.ItemBuffer[batchpipe.HasName, any]) {
+func (b *bufferHolder) putBuffer(buffer motrace.Buffer) {
 	buffer.Reset()
 	b.bufferPool.Put(buffer)
 	b.bufferCnt.Add(-1)
@@ -146,7 +146,7 @@ func (b *bufferHolder) logStatus(msg string) {
 	}
 }
 
-func (b *bufferHolder) discardBuffer(buffer batchpipe.ItemBuffer[batchpipe.HasName, any]) {
+func (b *bufferHolder) discardBuffer(buffer motrace.Buffer) {
 	b.discardCnt.Add(1)
 	b.putBuffer(buffer)
 }
@@ -190,7 +190,7 @@ type bufferGenerateReq struct {
 	// itemName name of buffer's item
 	itemName string
 	// buffer keep content
-	buffer batchpipe.ItemBuffer[batchpipe.HasName, any]
+	buffer motrace.Buffer
 	// impl NewItemBatchHandler
 	b *bufferHolder
 }

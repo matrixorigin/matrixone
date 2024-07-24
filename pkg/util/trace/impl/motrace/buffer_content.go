@@ -32,6 +32,7 @@ import (
 )
 
 var _ bp.ItemBuffer[bp.HasName, any] = &ContentBuffer{}
+var _ Buffer = &ContentBuffer{}
 
 // ContentBuffer cache item as csv content, not raw object.
 type ContentBuffer struct {
