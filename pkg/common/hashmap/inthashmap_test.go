@@ -41,7 +41,7 @@ func TestIntHashMap_Iterator(t *testing.T) {
 		vs, _, err := itr.Insert(0, rowCount, vecs)
 		require.NoError(t, err)
 		require.Equal(t, []uint64{1, 1, 1, 2, 2, 2, 3, 3, 3, 4}, vs)
-		vs, _ = itr.Find(0, rowCount, vecs, nil)
+		vs, _ = itr.Find(0, rowCount, vecs)
 		require.Equal(t, []uint64{1, 1, 1, 2, 2, 2, 3, 3, 3, 4}, vs)
 		for _, vec := range vecs {
 			vec.Free(m)
@@ -62,7 +62,7 @@ func TestIntHashMap_Iterator(t *testing.T) {
 		vs, _, err := itr.Insert(0, Rows, vecs)
 		require.NoError(t, err)
 		require.Equal(t, []uint64{1, 2, 1, 3, 1, 4, 1, 5, 1, 6}, vs[:Rows])
-		vs, _ = itr.Find(0, Rows, vecs, nil)
+		vs, _ = itr.Find(0, Rows, vecs)
 		require.Equal(t, []uint64{1, 2, 1, 3, 1, 4, 1, 5, 1, 6}, vs[:Rows])
 		for _, vec := range vecs {
 			vec.Free(m)
@@ -82,7 +82,7 @@ func TestIntHashMap_Iterator(t *testing.T) {
 		vs, _, err := itr.Insert(0, Rows, vecs)
 		require.NoError(t, err)
 		require.Equal(t, []uint64{1, 2, 1, 3, 1, 4, 1, 5, 1, 6}, vs[:Rows])
-		vs, _ = itr.Find(0, Rows, vecs, nil)
+		vs, _ = itr.Find(0, Rows, vecs)
 		require.Equal(t, []uint64{1, 2, 1, 3, 1, 4, 1, 5, 1, 6}, vs[:Rows])
 		for _, vec := range vecs {
 			vec.Free(m)
@@ -102,7 +102,7 @@ func TestIntHashMap_Iterator(t *testing.T) {
 		vs, _, err := itr.Insert(0, Rows, vecs)
 		require.NoError(t, err)
 		require.Equal(t, []uint64{1, 2, 1, 3, 1, 4, 1, 5, 1, 6}, vs[:Rows])
-		vs, _ = itr.Find(0, Rows, vecs, nil)
+		vs, _ = itr.Find(0, Rows, vecs)
 		require.Equal(t, []uint64{1, 2, 1, 3, 1, 4, 1, 5, 1, 6}, vs[:Rows])
 		for _, vec := range vecs {
 			vec.Free(m)
@@ -122,7 +122,7 @@ func TestIntHashMap_Iterator(t *testing.T) {
 		vs, _, err := itr.Insert(0, Rows, vecs)
 		require.NoError(t, err)
 		require.Equal(t, []uint64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, vs[:Rows])
-		vs, _ = itr.Find(0, Rows, vecs, nil)
+		vs, _ = itr.Find(0, Rows, vecs)
 		require.Equal(t, []uint64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, vs[:Rows])
 		for _, vec := range vecs {
 			vec.Free(m)
@@ -142,7 +142,7 @@ func TestIntHashMap_Iterator(t *testing.T) {
 		vs, _, err := itr.Insert(0, Rows, vecs)
 		require.NoError(t, err)
 		require.Equal(t, []uint64{0, 1, 0, 2, 0, 3, 0, 4, 0, 5}, vs[:Rows])
-		vs, _ = itr.Find(0, Rows, vecs, nil)
+		vs, _ = itr.Find(0, Rows, vecs)
 		require.Equal(t, []uint64{0, 1, 0, 2, 0, 3, 0, 4, 0, 5}, vs[:Rows])
 		for _, vec := range vecs {
 			vec.Free(m)

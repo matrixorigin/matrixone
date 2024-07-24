@@ -47,8 +47,6 @@ type container struct {
 	state   int
 	lastpos int
 
-	inBuckets []uint8
-
 	batches       []*batch.Batch
 	batchRowCount int
 	rbat          *batch.Batch
@@ -88,9 +86,10 @@ type RightAnti struct {
 
 	HashOnPK           bool
 	IsShuffle          bool
+	ShuffleIdx         int32
 	IsMerger           bool
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
-
+	JoinMapTag         int32
 	vm.OperatorBase
 }
 
