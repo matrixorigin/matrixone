@@ -48,6 +48,12 @@ func WithRuntimeObjectFS(fs *objectio.ObjectFS) RuntimeOption {
 	}
 }
 
+func WithRuntimeLocalFS(fs *objectio.ObjectFS) RuntimeOption {
+	return func(r *Runtime) {
+		r.LocalFs = fs
+	}
+}
+
 func WithRuntimeTransferTable(tt *model.HashPageTable) RuntimeOption {
 	return func(r *Runtime) {
 		r.TransferTable = tt
@@ -73,7 +79,8 @@ type Runtime struct {
 		Transient *containers.VectorPool
 	}
 
-	Fs *objectio.ObjectFS
+	Fs      *objectio.ObjectFS
+	LocalFs *objectio.ObjectFS
 
 	TransferTable   *model.HashPageTable
 	TransferDelsMap *model.TransDelsForBlks
@@ -103,6 +110,13 @@ func (r *Runtime) fillDefaults() {
 	if r.VectorPool.Transient == nil {
 		r.VectorPool.Transient = MakeDefaultTransientPool("trasient-vector-pool")
 	}
+}
+
+func (r *Runtime) SID() string {
+	if r == nil {
+		return ""
+	}
+	return r.Options.SID
 }
 
 func (r *Runtime) PrintVectorPoolUsage() {

@@ -248,7 +248,7 @@ type MethodBasedMessage interface {
 type HandlerOption[REQ, RESP MethodBasedMessage] func(*methodBasedServer[REQ, RESP])
 
 // HandleFunc request handle func
-type HandleFunc[REQ, RESP MethodBasedMessage] func(context.Context, REQ, RESP) error
+type HandleFunc[REQ, RESP MethodBasedMessage] func(context.Context, REQ, RESP, *Buffer) error
 
 // MethodBasedServer receives and handle requests from MethodBasedClient.
 type MethodBasedServer[REQ, RESP MethodBasedMessage] interface {
@@ -259,7 +259,7 @@ type MethodBasedServer[REQ, RESP MethodBasedMessage] interface {
 	// RegisterMethod register request handler func
 	RegisterMethod(method uint32, handleFunc HandleFunc[REQ, RESP], async bool) MethodBasedServer[REQ, RESP]
 	// Handle handle at local
-	Handle(ctx context.Context, req REQ) RESP
+	Handle(ctx context.Context, req REQ, buf *Buffer) RESP
 }
 
 // MethodBasedClient is used for sending request by method.

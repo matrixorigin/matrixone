@@ -18,6 +18,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
@@ -30,8 +31,10 @@ const (
 	defaultTimeout = time.Second * 10
 )
 
-func GetService() ShardService {
-	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.ShardService)
+func GetService(
+	sid string,
+) ShardService {
+	v, ok := runtime.ServiceRuntime(sid).GetGlobalVariables(runtime.ShardService)
 	if !ok {
 		return &service{}
 	}
@@ -114,6 +117,7 @@ type ReadFunc func(
 	engine engine.Engine,
 	param pb.ReadParam,
 	ts timestamp.Timestamp,
+	buffer *morpc.Buffer,
 ) ([]byte, error)
 
 // ShardStorage is used to store metadata for Table Shards, handle read operations for
@@ -135,7 +139,7 @@ type ShardStorage interface {
 	// Ensure that subsequent reads have full log tail data.
 	WaitLogAppliedAt(ctx context.Context, ts timestamp.Timestamp) error
 	// Read read data with the given timestamp
-	Read(ctx context.Context, shard pb.TableShard, method int, param pb.ReadParam, ts timestamp.Timestamp) ([]byte, error)
+	Read(ctx context.Context, shard pb.TableShard, method int, param pb.ReadParam, ts timestamp.Timestamp, buffer *morpc.Buffer) ([]byte, error)
 }
 
 var (
@@ -154,6 +158,7 @@ const (
 	ReadRanges = 1
 	ReadStats  = 2
 	ReadRows   = 3
+	ReadSize   = 4
 )
 
 type ReadRequest struct {

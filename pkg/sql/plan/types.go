@@ -101,6 +101,9 @@ type CompilerContext interface {
 	GetAccountId() (uint32, error)
 	// GetContext get raw context.Context
 	GetContext() context.Context
+
+	// SetContext set raw context.Context
+	SetContext(ctx context.Context)
 	// GetDatabaseId Get database id
 	GetDatabaseId(dbName string, snapshot Snapshot) (uint64, error)
 

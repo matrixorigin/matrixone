@@ -854,7 +854,6 @@ func DeepCopyRuntimeFilterSpec(rf *plan.RuntimeFilterSpec) *plan.RuntimeFilterSp
 		MatchPrefix: rf.MatchPrefix,
 		UpperLimit:  rf.UpperLimit,
 		Expr:        DeepCopyExpr(rf.Expr),
-		Handled:     false,
 	}
 }
 

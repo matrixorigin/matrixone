@@ -21,6 +21,8 @@ import (
 	"sync/atomic"
 
 	"github.com/fagongzi/goetty/v2/buf"
+	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -40,13 +42,15 @@ type MemShardStorage struct {
 	waiter            client.TimestampWaiter
 }
 
-func NewMemShardStorage() ShardStorage {
+func NewMemShardStorage(
+	logger *log.MOLogger,
+) ShardStorage {
 	s := &MemShardStorage{
 		committed:         make(map[uint64]pb.ShardsMetadata),
 		uncommittedAdd:    make(map[uint64]pb.ShardsMetadata),
 		uncommittedDelete: make(map[uint64]struct{}),
 		kv:                mem.NewKV(),
-		waiter:            client.NewTimestampWaiter(),
+		waiter:            client.NewTimestampWaiter(logger),
 	}
 	s.id.Store(1000000000)
 	s.count.unsubscribe = make(map[uint64]int)
@@ -189,6 +193,7 @@ func (s *MemShardStorage) Read(
 	method int,
 	param pb.ReadParam,
 	ts timestamp.Timestamp,
+	buffer *morpc.Buffer,
 ) ([]byte, error) {
 	s.RLock()
 	defer s.RUnlock()

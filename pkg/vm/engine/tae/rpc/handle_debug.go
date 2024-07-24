@@ -23,7 +23,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
+	gc "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v1"
 
 	"github.com/google/shlex"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -179,7 +179,7 @@ func (h *Handle) HandleForceGlobalCheckpoint(
 
 	currTs := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 
-	err = h.db.ForceGlobalCheckpoint(ctx, currTs, timeout)
+	err = h.db.ForceGlobalCheckpoint(ctx, currTs, timeout, 0)
 	return nil, err
 }
 
@@ -422,7 +422,7 @@ func (h *Handle) HandleCommitMerge(
 		}
 	}
 
-	_, err = jobs.HandleMergeEntryInTxn(txn, txn.String(), req, h.db.Runtime)
+	_, err = jobs.HandleMergeEntryInTxn(ctx, txn, txn.String(), req, h.db.Runtime)
 	if err != nil {
 		return
 	}

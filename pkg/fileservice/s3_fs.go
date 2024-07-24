@@ -22,6 +22,7 @@ import (
 	"io"
 	"net/http/httptrace"
 	pathpkg "path"
+	"runtime"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -117,11 +118,20 @@ func NewS3FS(
 		concurrency,
 	)
 
+	// metrics
+	fs.storage = newObjectStorageMetrics(
+		fs.storage,
+		"s3",
+	)
+
+	// cache
 	if !noCache {
 		if err := fs.initCaches(ctx, cacheConfig); err != nil {
 			return nil, err
 		}
 	}
+
+	// allocator
 	if fs.memCache != nil {
 		fs.allocator = fs.memCache
 	} else {
@@ -169,6 +179,7 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 			*config.DiskPath,
 			int(*config.DiskCapacity),
 			s.perfCounterSets,
+			true,
 		)
 		if err != nil {
 			return err
@@ -319,7 +330,6 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	metric.FSWriteS3Counter.Add(float64(len(vector.Entries)))
 
 	tp := reuse.Alloc[tracePoint](nil)
 	defer reuse.Free(tp, nil)
@@ -801,10 +811,15 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 				if err != nil {
 					return err
 				}
-				*ptr = &readCloser{
+				ret := &readCloser{
 					r:         reader,
 					closeFunc: reader.Close,
 				}
+				// to avoid potential leaks
+				runtime.SetFinalizer(ret, func(_ *readCloser) {
+					_ = reader.Close() // ignore return
+				})
+				*ptr = ret
 			}
 		}
 

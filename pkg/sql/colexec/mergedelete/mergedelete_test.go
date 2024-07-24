@@ -145,7 +145,7 @@ func TestMergeDelete(t *testing.T) {
 	}
 	batch2.SetRowCount(3)
 
-	argument1 := Argument{
+	argument1 := MergeDelete{
 		ctr: &container{
 			delSource: &mockRelation{},
 		},
@@ -213,8 +213,8 @@ func TestMergeDelete(t *testing.T) {
 	require.Equal(t, int64(16+2*16), proc.GetMPool().CurrNB())
 }
 
-func resetChildren(arg *Argument, bat *batch.Batch) {
-	valueScanArg := &value_scan.Argument{
+func resetChildren(arg *MergeDelete, bat *batch.Batch) {
+	valueScanArg := &value_scan.ValueScan{
 		Batchs: []*batch.Batch{bat},
 	}
 	valueScanArg.Prepare(nil)

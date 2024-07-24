@@ -12,9 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package gc
+package v1
 
 import (
+	"time"
+
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -26,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"time"
 )
 
 const NotFoundLimit = 10
@@ -74,7 +75,7 @@ func (c *checker) Check() error {
 	checkpoints := c.cleaner.ckpClient.ICKPSeekLT(entry.GetEnd(), 40)
 	unconsumedTable := NewGCTable()
 	for _, ckp := range checkpoints {
-		_, data, err := logtail.LoadCheckpointEntriesFromKey(c.cleaner.ctx, c.cleaner.fs.Service,
+		_, data, err := logtail.LoadCheckpointEntriesFromKey(c.cleaner.ctx, c.cleaner.sid, c.cleaner.fs.Service,
 			ckp.GetLocation(), ckp.GetVersion(), nil, &types.TS{})
 		if err != nil {
 			logutil.Errorf("load checkpoint failed: %v", err)
@@ -153,12 +154,12 @@ func (c *checker) Check() error {
 		for itTable.Valid() {
 			table := itTable.Get().GetPayload()
 			itObject := table.MakeObjectIt(true)
-			for itObject.Valid() {
-				objectEntry := itObject.Get().GetPayload()
+			for itObject.Next() {
+				objectEntry := itObject.Item()
 				stats := objectEntry.GetObjectStats()
 				delete(allObjects, stats.ObjectName().String())
-				itObject.Next()
 			}
+			itObject.Release()
 			it2 := table.GetDeleteList().Items()
 			for _, itt := range it2 {
 				_, _, _, err = itt.VisitDeletes(c.cleaner.ctx, maxTs, end, bat, nil, true, false)

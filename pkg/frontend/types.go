@@ -20,7 +20,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fagongzi/goetty/v2"
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -42,6 +41,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util"
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -116,6 +116,7 @@ type PrepareStmt struct {
 	PreparePlan    *plan.Plan
 	PrepareStmt    tree.Statement
 	ParamTypes     []byte
+	IsCloudNonuser bool
 	IsInsertValues bool
 	InsertBat      *batch.Batch
 	proc           *process.Process
@@ -254,15 +255,25 @@ type SessionAllocator struct {
 }
 
 func NewSessionAllocator(pu *config.ParameterUnit) *SessionAllocator {
-	allocator := malloc.NewManagedAllocator(
-		malloc.NewSizeBoundedAllocator(
-			malloc.GetDefault(nil),
-			uint64(pu.SV.GuestMmuLimitation),
-			nil,
-		),
+	// default
+	allocator := malloc.GetDefault(nil)
+	// size bounded
+	allocator = malloc.NewSizeBoundedAllocator(
+		allocator,
+		uint64(pu.SV.GuestMmuLimitation),
+		nil,
+	)
+	// with metrics
+	allocator = malloc.NewMetricsAllocator(
+		allocator,
+		metric.MallocCounterSessionAllocateBytes,
+		metric.MallocGaugeSessionInuseBytes,
+		metric.MallocCounterSessionAllocateObjects,
+		metric.MallocGaugeSessionInuseObjects,
 	)
 	ret := &SessionAllocator{
-		allocator: allocator,
+		// managed
+		allocator: malloc.NewManagedAllocator(allocator),
 	}
 	return ret
 }
@@ -279,6 +290,7 @@ var _ FeSession = &Session{}
 var _ FeSession = &backSession{}
 
 type FeSession interface {
+	GetService() string
 	GetTimeZone() *time.Location
 	GetStatsCache() *plan2.StatsCache
 	GetUserName() string
@@ -939,7 +951,8 @@ type MediaWriter interface {
 type MysqlReader interface {
 	MediaReader
 	Property
-	Read(options goetty.ReadOptions) (interface{}, error)
+	Read() ([]byte, error)
+	Free(buf []byte)
 	HandleHandshake(ctx context.Context, payload []byte) (bool, error)
 	Authenticate(ctx context.Context) error
 	ParseSendLongData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error

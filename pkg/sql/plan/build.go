@@ -33,7 +33,7 @@ func runBuildSelectByBinder(stmtType plan.Query_StatementType, ctx CompilerConte
 		v2.TxnStatementBuildSelectHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	builder := NewQueryBuilder(stmtType, ctx, isPrepareStmt, skipStats)
+	builder := NewQueryBuilder(stmtType, ctx, isPrepareStmt, true)
 	bindCtx := NewBindContext(builder, nil)
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()
@@ -46,6 +46,7 @@ func runBuildSelectByBinder(stmtType plan.Query_StatementType, ctx CompilerConte
 	ctx.SetViews(bindCtx.views)
 
 	builder.qry.Steps = append(builder.qry.Steps, rootId)
+	builder.skipStats = skipStats
 	query, err := builder.createQuery()
 	if err != nil {
 		return nil, err
@@ -217,6 +218,8 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 		return buildDropAccount(stmt, ctx, isPrepareStmt)
 	case *tree.ShowAccountUpgrade:
 		return buildShowAccountUpgrade(stmt, ctx)
+	case *tree.ShowPitr:
+		return buildShowPitr(stmt, ctx)
 	default:
 		return nil, moerr.NewInternalError(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
 	}

@@ -48,6 +48,7 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.Anti:                    "anti",
 	vm.Single:                  "single",
 	vm.Mark:                    "mark",
+	vm.IndexJoin:               "index join",
 	vm.LoopJoin:                "loop join",
 	vm.LoopLeft:                "loop left",
 	vm.LoopSemi:                "loop semi",
@@ -191,21 +192,21 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 	}
 
 	// explain the operator information
-	showInstruction := func(instruction vm.Instruction, mp map[*process.WaitRegister]int) string {
-		id := instruction.Op
+	showOperator := func(op vm.Operator, mp map[*process.WaitRegister]int) string {
+		id := op.OpType()
 		name, ok := debugInstructionNames[id]
 		if ok {
 			str := name
 			if id == vm.Connector {
 				var receiver = "unknown"
-				arg := instruction.Arg.(*connector.Argument)
+				arg := op.(*connector.Connector)
 				if receiverId, okk := mp[arg.Reg]; okk {
 					receiver = fmt.Sprintf("%d", receiverId)
 				}
 				str += fmt.Sprintf(" to MergeReceiver %s", receiver)
 			}
 			if id == vm.Dispatch {
-				arg := instruction.Arg.(*dispatch.Argument)
+				arg := op.(*dispatch.Dispatch)
 				chs := ""
 				for i := range arg.LocalRegs {
 					if i != 0 {
@@ -252,12 +253,15 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 			receiverStr = getReceiverStr(ss[i], ss[i].Proc.Reg.MergeReceivers)
 		}
 		str += fmt.Sprintf("Scope %d (Magic: %s, Receiver: %s): [", i+1, magicShow(ss[i].Magic), receiverStr)
-		for j, instruction := range ss[i].Instructions {
-			if j != 0 {
+
+		vm.HandleAllOp(ss[i].RootOp, func(parentOp vm.Operator, op vm.Operator) error {
+			if op.GetOperatorBase().NumChildren() != 0 {
 				str += " -> "
 			}
-			str += showInstruction(instruction, rmp)
-		}
+			str += showOperator(op, rmp)
+			return nil
+		})
+
 		str += "]"
 		if ss[i].DataSource != nil {
 			str += gapNextLine()

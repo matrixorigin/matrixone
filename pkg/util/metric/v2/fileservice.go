@@ -43,19 +43,10 @@ var (
 			Help:      "Total number of read count.",
 		}, []string{"type"})
 	FSReadS3Counter        = fsReadCounter.WithLabelValues("s3")
+	FSReadLocalCounter     = fsReadCounter.WithLabelValues("local")
 	FSReadHitMemCounter    = fsReadCounter.WithLabelValues("hit-mem")
 	FSReadHitDiskCounter   = fsReadCounter.WithLabelValues("hit-disk")
 	FSReadHitRemoteCounter = fsReadCounter.WithLabelValues("hit-remote")
-
-	fsWriteCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "mo",
-			Subsystem: "fs",
-			Name:      "write_total",
-			Help:      "Total number of write count.",
-		}, []string{"type"})
-	FSWriteS3Counter    = fsWriteCounter.WithLabelValues("s3")
-	FSWriteLocalCounter = fsWriteCounter.WithLabelValues("local")
 )
 
 var (
@@ -152,16 +143,16 @@ var (
 )
 
 var (
-	fsMallocLiveObjects = prometheus.NewGaugeVec(
+	FSObjectStorageOperations = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "mo",
 			Subsystem: "fs",
-			Name:      "malloc_live_objects",
-			Help:      "malloc live objects",
+			Name:      "object_storage_operations",
+			Help:      "object storage operations",
 		},
-		[]string{"type"},
+		[]string{
+			"name",
+			"op",
+		},
 	)
-	FSMallocLiveObjectsIOEntryData = fsMallocLiveObjects.WithLabelValues("io_entry_data")
-	FSMallocLiveObjectsBytes       = fsMallocLiveObjects.WithLabelValues("bytes")
-	FSMallocLiveObjectsMemoryCache = fsMallocLiveObjects.WithLabelValues("memory_cache")
 )

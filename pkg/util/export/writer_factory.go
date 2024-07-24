@@ -51,6 +51,8 @@ func (rw *reactWriter) GetContent() string {
 	return rw.w.GetContent()
 }
 
+func (rw *reactWriter) GetContentLength() int { return rw.w.GetContentLength() }
+
 func (rw *reactWriter) FlushAndClose() (int, error) {
 	n, err := rw.w.FlushAndClose()
 	if err == nil {

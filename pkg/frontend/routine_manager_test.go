@@ -17,15 +17,14 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"github.com/BurntSushi/toml"
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/stretchr/testify/require"
+	"net"
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/BurntSushi/toml"
-	"github.com/stretchr/testify/require"
-
-	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 )
 
 func create_test_server() *MOServer {
@@ -47,20 +46,19 @@ func create_test_server() *MOServer {
 }
 
 func Test_Closed(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	registerConn(clientConn)
+
 	mo := create_test_server()
 	getGlobalPu().SV.SkipCheckUser = true
 	wg := sync.WaitGroup{}
 	wg.Add(1)
 	cf := &CloseFlag{}
 	go func() {
-		cf.Open()
 		defer wg.Done()
-
-		err := mo.Start()
-		require.NoError(t, err)
-
-		for cf.IsOpened() {
-		}
+		mo.handleConn(serverConn)
 	}()
 
 	time.Sleep(100 * time.Millisecond)
@@ -71,7 +69,9 @@ func Test_Closed(t *testing.T) {
 
 	err = mo.Stop()
 	require.NoError(t, err)
+	closeDbConn(t, db)
+	serverConn.Close()
+	clientConn.Close()
 	wg.Wait()
 
-	closeDbConn(t, db)
 }

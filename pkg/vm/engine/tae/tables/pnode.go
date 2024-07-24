@@ -49,7 +49,7 @@ func newPersistedNode(object *baseObject) *persistedNode {
 func (node *persistedNode) close() {}
 
 func (node *persistedNode) Rows() (uint32, error) {
-	stats, err := node.object.meta.MustGetObjectStats()
+	stats, err := node.object.meta.Load().MustGetObjectStats()
 	if err != nil {
 		return 0, err
 	}
@@ -69,7 +69,7 @@ func (node *persistedNode) BatchDedup(
 }
 
 func (node *persistedNode) ContainsKey(ctx context.Context, key any, blkID uint32) (ok bool, err error) {
-	pkIndex, err := MakeImmuIndex(ctx, node.object.meta, nil, node.object.rt)
+	pkIndex, err := MakeImmuIndex(ctx, node.object.meta.Load(), nil, node.object.rt)
 	if err != nil {
 		return
 	}
@@ -150,7 +150,7 @@ func (node *persistedNode) GetRowByFilter(
 	filter *handle.Filter,
 	mp *mpool.MPool,
 ) (blkID uint16, row uint32, err error) {
-	for blkID = uint16(0); blkID < uint16(node.object.meta.BlockCnt()); blkID++ {
+	for blkID = uint16(0); blkID < uint16(node.object.meta.Load().BlockCnt()); blkID++ {
 		var ok bool
 		ok, err = node.ContainsKey(ctx, filter.Val, uint32(blkID))
 		if err != nil {
@@ -160,7 +160,7 @@ func (node *persistedNode) GetRowByFilter(
 			continue
 		}
 		// Note: sort key do not change
-		schema := node.object.meta.GetSchema()
+		schema := node.object.meta.Load().GetSchema()
 		var sortKey containers.Vector
 		sortKey, err = node.object.LoadPersistedColumnData(ctx, schema, schema.GetSingleSortKeyIdx(), mp, blkID)
 		if err != nil {
@@ -192,8 +192,8 @@ func (node *persistedNode) GetRowByFilter(
 		defer commitTSVec.Close()
 
 		// Load persisted deletes
-		view := containers.NewColumnView(0)
-		if err = node.object.FillPersistedDeletes(ctx, blkID, txn, view.BaseView, mp); err != nil {
+		view := containers.NewBatch()
+		if err = node.object.FillPersistedDeletes(ctx, blkID, txn, &view.Deletes, mp); err != nil {
 			return
 		}
 

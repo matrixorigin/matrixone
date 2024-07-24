@@ -23,6 +23,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -78,7 +79,7 @@ func (m *mockQueryService) Close() error {
 	return nil
 }
 
-func (m *mockQueryService) AddHandleFunc(method query.CmdMethod, h func(context.Context, *query.Request, *query.Response) error, async bool) {
+func (m *mockQueryService) AddHandleFunc(method query.CmdMethod, h func(context.Context, *query.Request, *query.Response, *morpc.Buffer) error, async bool) {
 }
 
 func (m *mockQueryService) AddReleaseFunc(method query.CmdMethod, f func()) {
@@ -114,8 +115,11 @@ func Test_gettingInfo(t *testing.T) {
 		Waiters:     nil,
 	}
 
-	selectStubs := gostub.Stub(&selectSuperTenant,
-		func(selector clusterservice.Selector,
+	selectStubs := gostub.Stub(
+		&selectSuperTenant,
+		func(
+			sid string,
+			selector clusterservice.Selector,
 			username string,
 			filter func(string) bool,
 			appendFn func(service *metadata.CNService)) {
@@ -127,8 +131,13 @@ func Test_gettingInfo(t *testing.T) {
 		})
 	defer selectStubs.Reset()
 
-	listTnStubs := gostub.Stub(&listTnService, func(appendFn func(service *metadata.TNService)) {
-	})
+	listTnStubs := gostub.Stub(
+		&listTnService,
+		func(
+			sid string,
+			appendFn func(service *metadata.TNService)) {
+		},
+	)
 	defer listTnStubs.Reset()
 
 	requestMultipleCnStubs := gostub.Stub(&requestMultipleCn,
@@ -295,7 +304,7 @@ func Test_gettingInfo(t *testing.T) {
 	type argsx struct {
 		in0  int
 		proc *process.Process
-		arg  *Argument
+		arg  *TableFunction
 	}
 	tests4 := []struct {
 		name    string
@@ -307,7 +316,7 @@ func Test_gettingInfo(t *testing.T) {
 			name: "",
 			args: argsx{
 				proc: testProc,
-				arg: &Argument{
+				arg: &TableFunction{
 					ctr: &container{
 						state:            dataProducing,
 						executorsForArgs: nil,
@@ -364,7 +373,7 @@ func Test_gettingInfo(t *testing.T) {
 			name: "",
 			args: argsx{
 				proc: testProc,
-				arg: &Argument{
+				arg: &TableFunction{
 					ctr: &container{
 						state:            dataProducing,
 						executorsForArgs: nil,
@@ -415,7 +424,7 @@ func Test_gettingInfo(t *testing.T) {
 			name: "",
 			args: argsx{
 				proc: testProc,
-				arg: &Argument{
+				arg: &TableFunction{
 					ctr: &container{
 						state:            dataProducing,
 						executorsForArgs: nil,
@@ -563,7 +572,7 @@ func Test_moConfigurationsCall(t *testing.T) {
 	type args struct {
 		in0  int
 		proc *process.Process
-		arg  *Argument
+		arg  *TableFunction
 	}
 	tests := []struct {
 		name    string
@@ -575,7 +584,7 @@ func Test_moConfigurationsCall(t *testing.T) {
 			name: "t1",
 			args: args{
 				proc: testProc,
-				arg: &Argument{
+				arg: &TableFunction{
 					ctr: &container{
 						state:            dataProducing,
 						executorsForArgs: nil,

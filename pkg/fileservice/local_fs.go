@@ -149,6 +149,7 @@ func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
 				*config.DiskPath,
 				int(*config.DiskCapacity),
 				l.perfCounterSets,
+				true,
 			)
 			if err != nil {
 				return err
@@ -171,8 +172,6 @@ func (l *LocalFS) Write(ctx context.Context, vector IOVector) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-
-	metric.FSWriteLocalCounter.Add(float64(len(vector.Entries)))
 
 	var err error
 	var bytesWritten int
@@ -477,6 +476,11 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 	}
 	defer file.Close()
 
+	numNotDoneEntries := 0
+	defer func() {
+		metric.FSReadLocalCounter.Add(float64(numNotDoneEntries))
+	}()
+
 	for i, entry := range vector.Entries {
 		if entry.Size == 0 {
 			return moerr.NewEmptyRangeNoCtx(path.File)
@@ -485,6 +489,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 		if entry.done {
 			continue
 		}
+		numNotDoneEntries++
 
 		if entry.WriterForRead != nil {
 			fileWithChecksum, put := NewFileWithChecksumOSFile(ctx, file, _BlockContentSize, l.perfCounterSets)

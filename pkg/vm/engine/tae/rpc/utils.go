@@ -258,7 +258,7 @@ func (h *Handle) prefetchDeleteRowID(_ context.Context, req *db.WriteReq) error 
 		}
 		pref.AddBlockWithType([]uint16{uint16(columnIdx), uint16(pkIdx)}, []uint16{location.ID()}, uint16(objectio.SchemaTombstone))
 	}
-	return blockio.PrefetchWithMerged(pref)
+	return blockio.PrefetchWithMerged(h.db.Opts.SID, pref)
 }
 
 func (h *Handle) prefetchMetadata(_ context.Context, req *db.WriteReq) (int, error) {
@@ -274,7 +274,7 @@ func (h *Handle) prefetchMetadata(_ context.Context, req *db.WriteReq) (int, err
 			return 0, err
 		}
 		if !objectio.IsSameObjectLocVsShort(loc, &objectName) {
-			err := blockio.PrefetchMeta(h.db.Runtime.Fs.Service, loc)
+			err := blockio.PrefetchMeta(h.db.Opts.SID, h.db.Runtime.Fs.Service, loc)
 			if err != nil {
 				return 0, err
 			}
@@ -355,14 +355,14 @@ func traverseCatalogForNewAccounts(c *catalog.Catalog, memo *logtail.TNUsageMemo
 			}
 
 			objIt := tblEntry.MakeObjectIt(true)
-			for objIt.Valid() {
-				objEntry := objIt.Get().GetPayload()
+			for objIt.Next() {
+				objEntry := objIt.Item()
 				// PXU TODO
 				if !objEntry.IsAppendable() && !objEntry.HasDropCommitted() && objEntry.IsCommitted() {
 					insUsage.Size += uint64(objEntry.GetCompSize())
 				}
-				objIt.Next()
 			}
+			objIt.Release()
 
 			if insUsage.Size > 0 {
 				memo.UpdateNewAccCache(insUsage, false)

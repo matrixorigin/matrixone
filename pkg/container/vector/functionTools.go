@@ -405,11 +405,11 @@ func (fr *FunctionResult[T]) PreExtendAndReset(targetSize int) error {
 			return err
 		}
 	}
-	fr.vec.Reset(fr.typ)
+	fr.vec.ResetWithSameType()
 
 	if !fr.isVarlena {
 		fr.length = 0
-		fr.vec.SetLength(targetSize)
+		fr.vec.length = targetSize
 		if targetSize > oldLength {
 			fr.cols = MustFixedCol[T](fr.vec)
 		}

@@ -68,7 +68,7 @@ func (s *allocateScheduler) doAllocate(
 			if t.shards[i].Replicas[j].CN == "" {
 				cn := getCN()
 				t.allocate(cn, i, j)
-				getLogger().Info("allocate shard",
+				r.logger.Info("allocate shard",
 					zap.String("shard", t.shards[i].String()),
 					zap.String("replica", t.shards[i].Replicas[j].String()),
 				)

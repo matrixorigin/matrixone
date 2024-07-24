@@ -33,12 +33,14 @@ func TestCmdPingTNWithEmptyTN(t *testing.T) {
 	ctx := context.Background()
 	initTestRuntime()
 	proc := process.New(ctx, nil, nil, nil, nil, nil, nil, nil, nil, nil)
-	result, err := handlePing()(proc,
+	result, err := handlePing()(
+		proc,
 		tn,
 		"",
 		func(ctx context.Context, proc *process.Process, cr []txn.CNOpRequest) ([]txn.CNOpResponse, error) {
 			return nil, nil
-		})
+		},
+	)
 	require.NoError(t, err)
 	assert.Equal(t,
 		Result{
@@ -109,7 +111,7 @@ func TestCmdPingTNWithParameter(t *testing.T) {
 }
 
 func initTestRuntime(shardIDs ...uint64) {
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	var shards = make([]metadata.TNShard, 0, len(shardIDs))
 	for _, id := range shardIDs {
 		shards = append(shards, metadata.TNShard{
@@ -118,6 +120,7 @@ func initTestRuntime(shardIDs ...uint64) {
 	}
 
 	cluster := clusterservice.NewMOCluster(
+		"",
 		nil,
 		0,
 		clusterservice.WithDisableRefresh(),
@@ -126,5 +129,5 @@ func initTestRuntime(shardIDs ...uint64) {
 				Shards: shards,
 			},
 		}))
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, cluster)
+	runtime.ServiceRuntime("").SetGlobalVariables(runtime.ClusterService, cluster)
 }

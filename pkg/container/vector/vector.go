@@ -70,7 +70,7 @@ type typedSlice struct {
 
 func (t *typedSlice) reset() {
 	t.Ptr = nil
-	t.Cap = -1
+	t.Cap = 0
 }
 
 func (t *typedSlice) setFromVector(v *Vector) {
@@ -98,13 +98,31 @@ func (v *Vector) SetSorted(b bool) {
 	v.sorted = b
 }
 
+// Reset update vector's fields with a specific type.
+// we should redefine the value of capacity and values-ptr because of the possible change in type.
 func (v *Vector) Reset(typ types.Type) {
+	originOid := v.typ.Oid
 	v.typ = typ
+
 	v.class = FLAT
 	if v.area != nil {
 		v.area = v.area[:0]
 	}
 
+	v.length = 0
+	v.nsp.Reset()
+	v.sorted = false
+
+	if originOid != v.typ.Oid {
+		v.col.reset()
+		v.setupFromData()
+	}
+}
+
+func (v *Vector) ResetWithSameType() {
+	if v.area != nil {
+		v.area = v.area[:0]
+	}
 	v.length = 0
 	v.nsp.Reset()
 	v.sorted = false
@@ -127,7 +145,7 @@ func (v *Vector) ResetWithNewType(t *types.Type) {
 	v.capacity = cap(v.data) / v.typ.TypeSize()
 	v.sorted = false
 	if oldTyp.Oid != t.Oid {
-		v.SetupColFromData()
+		v.setupFromData()
 	}
 }
 
@@ -287,6 +305,20 @@ func NewVec(typ types.Type) *Vector {
 	return vec
 }
 
+func NewVecWithData(
+	typ types.Type,
+	length int,
+	data []byte,
+	area []byte,
+) *Vector {
+	vec := NewVec(typ)
+	vec.length = length
+	vec.data = data
+	vec.area = area
+	vec.setupFromData()
+	return vec
+}
+
 func NewConstNull(typ types.Type, length int, mp *mpool.MPool) *Vector {
 	vec := NewVecFromReuse()
 	vec.typ = typ
@@ -402,15 +434,9 @@ func (v *Vector) IsConstNull() bool {
 func (v *Vector) GetArea() []byte {
 	return v.area
 }
-func (v *Vector) SetArea(a []byte) {
-	v.area = a
-}
 
 func (v *Vector) GetData() []byte {
 	return v.data
-}
-func (v *Vector) SetData(a []byte) {
-	v.data = a
 }
 
 func GetPtrAt[T any](v *Vector, idx int64) *T {
@@ -530,7 +556,7 @@ func (v *Vector) UnmarshalBinary(data []byte) error {
 	data = data[4:]
 	if dataLen > 0 {
 		v.data = data[:dataLen]
-		v.SetupColFromData()
+		v.setupFromData()
 		data = data[dataLen:]
 	}
 
@@ -587,7 +613,7 @@ func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 			return err
 		}
 		copy(v.data, data[:dataLen])
-		v.SetupColFromData()
+		v.setupFromData()
 		data = data[dataLen:]
 	}
 
@@ -633,7 +659,7 @@ func (v *Vector) ToConst(row, length int, mp *mpool.MPool) *Vector {
 
 	sz := v.typ.TypeSize()
 	w.data = v.data[row*sz : (row+1)*sz]
-	w.SetupColFromData()
+	w.setupFromData()
 	if v.typ.IsVarlen() {
 		w.area = v.area
 	}
@@ -650,6 +676,37 @@ func (v *Vector) PreExtend(rows int, mp *mpool.MPool) error {
 	}
 
 	return extend(v, rows, mp)
+}
+
+// PreExtendArea use to expand the mpool and area of vector
+// extraAreaSize: the size of area to be extended
+// mp: mpool
+func (v *Vector) PreExtendArea(extraAreaSize int, mp *mpool.MPool) error {
+
+	if v.class == CONSTANT {
+		return nil
+	}
+
+	// check if required size is already satisfied
+	area1 := v.GetArea()
+	voff := len(area1)
+	if voff+extraAreaSize <= cap(area1) {
+		return nil
+	}
+
+	// grow area
+	var err error
+	oldSz := len(area1)
+	area1, err = mp.Grow(area1, voff+extraAreaSize)
+	if err != nil {
+		return err
+	}
+	area1 = area1[:oldSz] // This is important.
+
+	// set area
+	v.area = area1
+
+	return nil
 }
 
 // Dup use to copy an identical vector
@@ -2649,7 +2706,7 @@ func SetConstFixed[T any](vec *Vector, val T, length int, mp *mpool.MPool) error
 	ToSlice(vec, &col)
 	col[0] = val
 	vec.data = vec.data[:cap(vec.data)]
-	vec.SetLength(length)
+	vec.length = length
 	return nil
 }
 
@@ -2668,7 +2725,7 @@ func SetConstBytes(vec *Vector, val []byte, length int, mp *mpool.MPool) error {
 		return err
 	}
 	vec.data = vec.data[:cap(vec.data)]
-	vec.SetLength(length)
+	vec.length = length
 	return nil
 }
 
@@ -2689,7 +2746,7 @@ func SetConstArray[T types.RealNumbers](vec *Vector, val []T, length int, mp *mp
 		return err
 	}
 	vec.data = vec.data[:cap(vec.data)]
-	vec.SetLength(length)
+	vec.length = length
 	return nil
 }
 
@@ -3077,7 +3134,7 @@ func shuffleFixed[T types.FixedSizeT](v *Vector, sels []int64, mp *mpool.MPool) 
 		return err
 	}
 	v.data = data
-	v.SetupColFromData()
+	v.setupFromData()
 	var ws []T
 	ToSlice(v, &ws)
 	ws = ws[:ns]
@@ -3136,7 +3193,7 @@ func (v *Vector) Window(start, end int) (*Vector, error) {
 	nulls.Range(v.nsp, uint64(start), uint64(end), uint64(start), w.nsp)
 	w.data = v.data[start*v.typ.TypeSize() : end*v.typ.TypeSize()]
 	w.length = end - start
-	w.SetupColFromData()
+	w.setupFromData()
 	if v.typ.IsVarlen() {
 		w.area = v.area
 	}
@@ -3212,7 +3269,7 @@ func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error
 		w.data = make([]byte, length)
 		copy(w.data, v.data[start*v.typ.TypeSize():end*v.typ.TypeSize()])
 		w.length = end - start
-		w.SetupColFromData()
+		w.setupFromData()
 		if v.typ.IsVarlen() {
 			w.area = make([]byte, len(v.area))
 			copy(w.area, v.area)
@@ -4128,7 +4185,7 @@ func BuildVarlenaNoInline(vec *Vector, v1 *types.Varlena, bs *[]byte, m *mpool.M
 	if voff+vlen <= cap(area1) || m == nil {
 		area1 = append(area1, *bs...)
 		v1.SetOffsetLen(uint32(voff), uint32(vlen))
-		vec.SetArea(area1)
+		vec.area = area1
 		return nil
 	}
 	var err error
@@ -4137,7 +4194,7 @@ func BuildVarlenaNoInline(vec *Vector, v1 *types.Varlena, bs *[]byte, m *mpool.M
 		return err
 	}
 	v1.SetOffsetLen(uint32(voff), uint32(vlen))
-	vec.SetArea(area1)
+	vec.area = area1
 	return nil
 }
 
