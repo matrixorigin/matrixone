@@ -457,18 +457,10 @@ func (tomV2 *tombstoneDataV2) Merge(other engine.Tombstoner) error {
 	return moerr.NewInternalErrorNoCtx("tombstone type mismatch")
 }
 
-type RelDataType uint8
-
-const (
-	RelDataV0 RelDataType = iota
-	RelDataV1
-	RelDataV2
-)
-
 func UnmarshalRelationData(data []byte) (engine.RelData, error) {
-	typ := RelDataType(data[0])
+	typ := engine.RelDataType(data[0])
 	switch typ {
-	case RelDataV1:
+	case engine.RelDataV1:
 		rd1 := buildRelationDataV1(nil)
 		if err := rd1.UnMarshal(data); err != nil {
 			return nil, err
@@ -485,7 +477,7 @@ type relationDataV0 struct {
 }
 
 type relationDataV1 struct {
-	typ RelDataType
+	typ engine.RelDataType
 	//blkList[0] is a empty block info
 	blkList []*objectio.BlockInfoInProgress
 
@@ -498,7 +490,7 @@ type relationDataV1 struct {
 
 func buildRelationDataV1(blkList []*objectio.BlockInfoInProgress) *relationDataV1 {
 	return &relationDataV1{
-		typ:     RelDataV1,
+		typ:     engine.RelDataV1,
 		blkList: blkList,
 		isEmpty: true,
 	}
