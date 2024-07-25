@@ -273,6 +273,7 @@ func BlockReadInner(
 		}
 
 		// assemble result batch only with selected rows
+		doExtendArea := len(selectRows) > 100
 		for i, col := range loaded.Vecs {
 			typ := *col.GetType()
 			if typ.Oid == types.T_Rowid {
@@ -284,7 +285,11 @@ func BlockReadInner(
 			} else {
 				result.Vecs[i] = vp.GetVector(typ)
 			}
-			if err = result.Vecs[i].PreExtendWithArea(len(selectRows), len(col.GetArea()), mp); err != nil {
+			extendAreaSize := 0
+			if doExtendArea {
+				extendAreaSize = len(col.GetArea())
+			}
+			if err = result.Vecs[i].PreExtendWithArea(len(selectRows), extendAreaSize, mp); err != nil {
 				break
 			}
 			if err = result.Vecs[i].Union(col, selectRows, mp); err != nil {
