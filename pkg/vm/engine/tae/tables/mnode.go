@@ -526,8 +526,6 @@ func (node *memoryNode) resolveInMemoryColumnDatas(
 	skipDeletes bool,
 	mp *mpool.MPool,
 ) (view *containers.Batch, err error) {
-	node.object.RLock()
-	defer node.object.RUnlock()
 	maxRow, visible, deSels, err := node.appendMVCC.GetVisibleRowLocked(ctx, txn)
 	if !visible || err != nil {
 		// blk.RUnlock()
@@ -642,8 +640,6 @@ func (node *memoryNode) getInMemoryValue(
 }
 
 func (node *memoryNode) allRowsCommittedBefore(ts types.TS) bool {
-	node.object.RLock()
-	defer node.object.RUnlock()
 	return node.appendMVCC.AllAppendsCommittedBefore(ts)
 }
 
@@ -810,6 +806,8 @@ func (node *objectMemoryNode) CollectAppendInRange(
 func (node *objectMemoryNode) CollectAppendInRangeWithBlockID(
 	blkOffset uint16, start, end types.TS, withAborted bool, mp *mpool.MPool,
 ) (batWithVer *containers.BatchWithVersion, err error) {
+	node.obj.RLock()
+	defer node.obj.RUnlock()
 	return node.getMemoryNode(blkOffset).CollectAppendInRange(start, end, withAborted, mp)
 }
 func (node *objectMemoryNode) EstimateMemSize() int {
@@ -839,6 +837,8 @@ func (node *objectMemoryNode) resolveInMemoryColumnData(
 	return node.getMemoryNode(blkID).resolveInMemoryColumnData(txn, readSchema, col, skipDeletes, mp)
 }
 func (node *objectMemoryNode) allRowsCommittedBefore(ts types.TS) bool {
+	node.obj.RLock()
+	defer node.obj.RUnlock()
 	return node.getLastNode().allRowsCommittedBefore(ts)
 }
 func (node *objectMemoryNode) resolveInMemoryColumnDatas(
@@ -850,6 +850,8 @@ func (node *objectMemoryNode) resolveInMemoryColumnDatas(
 	skipDeletes bool,
 	mp *mpool.MPool,
 ) (view *containers.Batch, err error) {
+	node.obj.RLock()
+	defer node.obj.RUnlock()
 	return node.getMemoryNode(blkID).resolveInMemoryColumnDatas(ctx, txn, readSchema, colIdxes, skipDeletes, mp)
 }
 func (node *objectMemoryNode) getwrteSchema() *catalog.Schema {
