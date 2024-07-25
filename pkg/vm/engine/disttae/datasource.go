@@ -745,10 +745,14 @@ type LocalDataSource struct {
 	memPKFilter       *MemPKFilterInProgress
 	pStateRowsInsIter logtailreplay.RowsIter
 
-	table *txnTable
-
-	txnOffset int
+	table     *txnTable
 	wsCursor  int
+	txnOffset int
+
+	rc struct {
+		WorkspaceLocked        bool
+		SkipPStateInMemDeletes bool
+	}
 
 	mp  *mpool.MPool
 	ctx context.Context
@@ -916,6 +920,13 @@ func (ls *LocalDataSource) filterUncommittedInMemInserts(
 		return nil
 	}
 
+	ls.table.getTxn().Lock()
+	ls.rc.WorkspaceLocked = true
+	defer func() {
+		ls.table.getTxn().Unlock()
+		ls.rc.WorkspaceLocked = false
+	}()
+
 	rows := 0
 	writes := ls.table.getTxn().writes
 	maxRows := int(options.DefaultBlockMaxRows)
@@ -943,15 +954,8 @@ func (ls *LocalDataSource) filterUncommittedInMemInserts(
 
 		rows += len(sels)
 
-		newSels := make([]int64, len(sels))
-		for i, sel := range sels {
-			newSels[i] = int64(sel)
-		}
-
-		entry.bat.Shrink(newSels, false)
-
 		for i, destVec := range bat.Vecs {
-			uf := vector.GetUnionAllFunction(*destVec.GetType(), mp)
+			uf := vector.GetUnionOneFunction(*destVec.GetType(), mp)
 
 			colIdx := int(seqNums[i])
 			if colIdx != objectio.SEQNUM_ROWID {
@@ -960,8 +964,10 @@ func (ls *LocalDataSource) filterUncommittedInMemInserts(
 				colIdx = 0
 			}
 
-			if err = uf(destVec, entry.bat.Vecs[colIdx]); err != nil {
-				return err
+			for j := range sels {
+				if err = uf(destVec, entry.bat.Vecs[colIdx], int64(j)); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -972,6 +978,11 @@ func (ls *LocalDataSource) filterUncommittedInMemInserts(
 
 func (ls *LocalDataSource) filterInMemCommittedInserts(
 	colTypes []types.Type, seqNums []uint16, mp *mpool.MPool, bat *batch.Batch) error {
+
+	ls.rc.SkipPStateInMemDeletes = true
+	defer func() {
+		ls.rc.SkipPStateInMemDeletes = false
+	}()
 
 	if bat.RowCount() >= int(options.DefaultBlockMaxRows) {
 		return nil
@@ -1163,6 +1174,12 @@ func (ls *LocalDataSource) applyWorkspaceEntryDeletes(
 
 	leftRows = offsets
 
+	// may have locked in `filterUncommittedInMemInserts`
+	if !ls.rc.WorkspaceLocked {
+		ls.table.getTxn().Lock()
+		defer ls.table.getTxn().Unlock()
+	}
+
 	done := false
 	writes := ls.table.getTxn().writes[:ls.txnOffset]
 
@@ -1271,6 +1288,10 @@ func (ls *LocalDataSource) applyWorkspaceRawRowIdDeletes(
 
 func (ls *LocalDataSource) applyPStateInMemDeletes(
 	bid objectio.Blockid, offsets []int32) (leftRows []int32, deletedRows []int64) {
+
+	if ls.rc.SkipPStateInMemDeletes {
+		return offsets, deletedRows
+	}
 
 	var delIter logtailreplay.RowsIter
 

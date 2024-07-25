@@ -74,13 +74,6 @@ func (tbl *txnTable) getEngine() engine.Engine {
 }
 
 func (tbl *txnTable) getTxn() *Transaction {
-	if tbl == nil {
-		fmt.Println("tbl is nil ")
-	}
-
-	if tbl.db == nil {
-		fmt.Println("db is nil ")
-	}
 	return tbl.db.getTxn()
 }
 
