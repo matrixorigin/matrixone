@@ -941,16 +941,19 @@ type LocalDataSource struct {
 	ranges []*objectio.BlockInfoInProgress
 	pState *logtailreplay.PartitionState
 
-	memPKFilter       *MemPKFilterInProgress
-	pStateRowsInsIter logtailreplay.RowsIter
+	memPKFilter *MemPKFilterInProgress
+	pStateRows  struct {
+		insIter logtailreplay.RowsIter
+	}
 
 	table     *txnTable
 	wsCursor  int
 	txnOffset int
 
+	// runtime config
 	rc struct {
-		WorkspaceLocked        bool
-		SkipPStateInMemDeletes bool
+		WorkspaceLocked   bool
+		SkipPStateDeletes bool
 	}
 
 	mp  *mpool.MPool
@@ -1007,7 +1010,7 @@ func (ls *LocalDataSource) HasTombstones(bid types.Blockid) bool {
 }
 
 func (ls *LocalDataSource) Close() {
-	ls.pStateRowsInsIter.Close()
+	ls.pStateRows.insIter.Close()
 }
 
 // ApplyTombstones check if any deletes exist in
@@ -1175,12 +1178,27 @@ func (ls *LocalDataSource) filterUncommittedInMemInserts(
 	return nil
 }
 
+//func (ls *LocalDataSource) batchApplyDeletesForPStateInsertRows() {
+//	slices.SortFunc(ls.pStateRows.rowIds, func(a, b types.Rowid) int {
+//		return a.Compare(b)
+//	})
+//
+//	cmp := func(a, b types.Rowid) bool {
+//		return (*a.BorrowBlockID()).Compare(*b.BorrowBlockID()) == 0
+//	}
+//
+//	rowIds := ls.pStateRows.rowIds
+//
+//}
+
 func (ls *LocalDataSource) filterInMemCommittedInserts(
 	colTypes []types.Type, seqNums []uint16, mp *mpool.MPool, bat *batch.Batch) error {
 
-	ls.rc.SkipPStateInMemDeletes = true
+	// in meme committed insert only need to apply deletes that exists
+	// in workspace and flushed to s3 but not commit.
+	ls.rc.SkipPStateDeletes = true
 	defer func() {
-		ls.rc.SkipPStateInMemDeletes = false
+		ls.rc.SkipPStateDeletes = false
 	}()
 
 	if bat.RowCount() >= int(options.DefaultBlockMaxRows) {
@@ -1198,17 +1216,17 @@ func (ls *LocalDataSource) filterInMemCommittedInserts(
 		appendFunctions[i] = vector.GetUnionOneFunction(colTypes[i], mp)
 	}
 
-	if ls.pStateRowsInsIter == nil {
+	if ls.pStateRows.insIter == nil {
 		if ls.memPKFilter.SpecFactory == nil {
-			ls.pStateRowsInsIter = ls.pState.NewRowsIter(ls.snapshotTS, nil, false)
+			ls.pStateRows.insIter = ls.pState.NewRowsIter(ls.snapshotTS, nil, false)
 		} else {
-			ls.pStateRowsInsIter = ls.pState.NewPrimaryKeyIter(
+			ls.pStateRows.insIter = ls.pState.NewPrimaryKeyIter(
 				ls.memPKFilter.TS, ls.memPKFilter.SpecFactory(ls.memPKFilter))
 		}
 	}
 
-	for ls.pStateRowsInsIter.Next() && appendedRows < int(options.DefaultBlockMaxRows) {
-		entry := ls.pStateRowsInsIter.Entry()
+	for ls.pStateRows.insIter.Next() && appendedRows < int(options.DefaultBlockMaxRows) {
+		entry := ls.pStateRows.insIter.Entry()
 		b, o := entry.RowID.Decode()
 
 		sel, err = ls.ApplyTombstonesInProgress(ls.ctx, b, []int32{int32(o)})
@@ -1418,7 +1436,7 @@ func (ls *LocalDataSource) applyWorkspaceFlushedS3Deletes(
 	s3FlushedDeletes.RWMutex.Lock()
 	defer s3FlushedDeletes.RWMutex.Unlock()
 
-	if len(s3FlushedDeletes.data[bid]) == 0 {
+	if len(s3FlushedDeletes.data[bid]) == 0 || ls.pState.BlockPersisted(bid) {
 		return
 	}
 
@@ -1488,7 +1506,7 @@ func (ls *LocalDataSource) applyWorkspaceRawRowIdDeletes(
 func (ls *LocalDataSource) applyPStateInMemDeletes(
 	bid objectio.Blockid, offsets []int32) (leftRows []int32, deletedRows []int64) {
 
-	if ls.rc.SkipPStateInMemDeletes {
+	if ls.rc.SkipPStateDeletes {
 		return offsets, deletedRows
 	}
 
@@ -1519,6 +1537,10 @@ func (ls *LocalDataSource) applyPStateInMemDeletes(
 
 func (ls *LocalDataSource) applyPStatePersistedDeltaLocation(
 	bid objectio.Blockid, offsets []int32) (leftRows []int32, deletedRows []int64, err error) {
+
+	if ls.rc.SkipPStateDeletes {
+		return offsets, deletedRows, nil
+	}
 
 	var deletes *nulls.Nulls
 	deltaLoc, commitTS, ok := ls.pState.GetBockDeltaLoc(bid)
