@@ -290,7 +290,7 @@ func ifAllArgsAreConstant(executor *FunctionExpressionExecutor) bool {
 
 type FoldExpr struct {
 	overloadID int64
-	folded     bool
+	folded     *vector.Vector
 	inRuntime  bool
 }
 
@@ -549,8 +549,8 @@ func (expr *FunctionExpressionExecutor) canConstantFold(proc *process.Process) b
 }
 
 func (expr *FunctionExpressionExecutor) constantFold(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
-	if expr.folded {
-		return expr.resultVector.GetResultVector(), nil
+	if expr.folded != nil {
+		return expr.folded, nil
 	}
 	if !expr.canConstantFold(proc) {
 		return nil, nil
@@ -586,8 +586,21 @@ func (expr *FunctionExpressionExecutor) constantFold(proc *process.Process, batc
 	if err = expr.evalFn(expr.parameterResults, expr.resultVector, proc, execLen, nil); err != nil {
 		return nil, err
 	}
-	expr.folded = true
-	return expr.resultVector.GetResultVector(), nil
+
+	oldResult := expr.resultVector.GetResultVector()
+	if execLen == 1 {
+		constResult := oldResult.ToConst(0, 1, proc.Mp())
+		defer constResult.Free(proc.GetMPool())
+		expr.folded, err = constResult.Dup(proc.GetMPool())
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		expr.folded = oldResult
+		expr.resultVector.SetResultVector(nil)
+	}
+
+	return expr.folded, nil
 }
 
 func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches []*batch.Batch, selectList []bool) (err error) {
@@ -737,7 +750,12 @@ func (expr *FunctionExpressionExecutor) Reset() {
 	for i := range expr.parameterExecutor {
 		expr.parameterExecutor[i].Reset()
 	}
-	expr.folded = false
+	if expr.folded != nil {
+		putMethod := expr.resultVector.GetPutVectorMethod()
+		if putMethod != nil {
+			putMethod(expr.folded)
+		}
+	}
 }
 
 func (expr *FunctionExpressionExecutor) Free() {

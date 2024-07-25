@@ -347,6 +347,7 @@ type FunctionResultWrapper interface {
 	GetResultVector() *Vector
 	Free()
 	PreExtendAndReset(size int) error
+	GetPutVectorMethod() func(vec *Vector)
 }
 
 var _ FunctionResultWrapper = &FunctionResult[int64]{}
@@ -391,6 +392,10 @@ func newResultFunc[T types.FixedSizeT](
 		f.isVarlena = true
 	}
 	return f
+}
+
+func (fr *FunctionResult[T]) GetPutVectorMethod() func(vec *Vector) {
+	return fr.putVectorMethod
 }
 
 func (fr *FunctionResult[T]) PreExtendAndReset(targetSize int) error {
