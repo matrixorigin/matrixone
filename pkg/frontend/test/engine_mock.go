@@ -213,6 +213,53 @@ func (m *MockTombstoner) EXPECT() *MockTombstonerMockRecorder {
 	return m.recorder
 }
 
+// ApplyCommitDeltaLoc mocks base method.
+func (m *MockTombstoner) ApplyCommitDeltaLoc(ctx context.Context, bid types.Blockid, rowsOffset []int32, apply func(context.Context, objectio.Location, []int32, *[]int32, *[]int64) error) ([]int32, []int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ApplyCommitDeltaLoc", ctx, bid, rowsOffset, apply)
+	ret0, _ := ret[0].([]int32)
+	ret1, _ := ret[1].([]int64)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// ApplyCommitDeltaLoc indicates an expected call of ApplyCommitDeltaLoc.
+func (mr *MockTombstonerMockRecorder) ApplyCommitDeltaLoc(ctx, bid, rowsOffset, apply interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ApplyCommitDeltaLoc", reflect.TypeOf((*MockTombstoner)(nil).ApplyCommitDeltaLoc), ctx, bid, rowsOffset, apply)
+}
+
+// ApplyInMemTombstones mocks base method.
+func (m *MockTombstoner) ApplyInMemTombstones(bid types.Blockid, rowsOffset []int32) ([]int32, []int64) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ApplyInMemTombstones", bid, rowsOffset)
+	ret0, _ := ret[0].([]int32)
+	ret1, _ := ret[1].([]int64)
+	return ret0, ret1
+}
+
+// ApplyInMemTombstones indicates an expected call of ApplyInMemTombstones.
+func (mr *MockTombstonerMockRecorder) ApplyInMemTombstones(bid, rowsOffset interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ApplyInMemTombstones", reflect.TypeOf((*MockTombstoner)(nil).ApplyInMemTombstones), bid, rowsOffset)
+}
+
+// ApplyPersistedTombstones mocks base method.
+func (m *MockTombstoner) ApplyPersistedTombstones(ctx context.Context, bid types.Blockid, rowsOffset []int32, apply func(context.Context, objectio.Location, types.TS, []int32, *[]int32, *[]int64) error) ([]int32, []int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ApplyPersistedTombstones", ctx, bid, rowsOffset, apply)
+	ret0, _ := ret[0].([]int32)
+	ret1, _ := ret[1].([]int64)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// ApplyPersistedTombstones indicates an expected call of ApplyPersistedTombstones.
+func (mr *MockTombstonerMockRecorder) ApplyPersistedTombstones(ctx, bid, rowsOffset, apply interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ApplyPersistedTombstones", reflect.TypeOf((*MockTombstoner)(nil).ApplyPersistedTombstones), ctx, bid, rowsOffset, apply)
+}
+
 // ApplyTombstones mocks base method.
 func (m *MockTombstoner) ApplyTombstones(rows []types.Rowid, load1 func(types.Blockid, objectio.Location, types.TS) (*nulls.Nulls, error), load2 func(objectio.Location) (*nulls.Nulls, error)) ([]int64, error) {
 	m.ctrl.T.Helper()
@@ -226,6 +273,22 @@ func (m *MockTombstoner) ApplyTombstones(rows []types.Rowid, load1 func(types.Bl
 func (mr *MockTombstonerMockRecorder) ApplyTombstones(rows, load1, load2 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ApplyTombstones", reflect.TypeOf((*MockTombstoner)(nil).ApplyTombstones), rows, load1, load2)
+}
+
+// ApplyUncommitDeltaLoc mocks base method.
+func (m *MockTombstoner) ApplyUncommitDeltaLoc(ctx context.Context, bid types.Blockid, rowsOffset []int32, apply func(context.Context, objectio.Location, []int32, *[]int32, *[]int64) error) ([]int32, []int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ApplyUncommitDeltaLoc", ctx, bid, rowsOffset, apply)
+	ret0, _ := ret[0].([]int32)
+	ret1, _ := ret[1].([]int64)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// ApplyUncommitDeltaLoc indicates an expected call of ApplyUncommitDeltaLoc.
+func (mr *MockTombstonerMockRecorder) ApplyUncommitDeltaLoc(ctx, bid, rowsOffset, apply interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ApplyUncommitDeltaLoc", reflect.TypeOf((*MockTombstoner)(nil).ApplyUncommitDeltaLoc), ctx, bid, rowsOffset, apply)
 }
 
 // HasTombstones mocks base method.
@@ -484,6 +547,130 @@ func (m *MockRelData) SetDataBlk(i int, blk *objectio.BlockInfoInProgress) {
 func (mr *MockRelDataMockRecorder) SetDataBlk(i, blk interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetDataBlk", reflect.TypeOf((*MockRelData)(nil).SetDataBlk), i, blk)
+}
+
+// UnMarshal mocks base method.
+func (m *MockRelData) UnMarshal(buf []byte) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UnMarshal", buf)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// UnMarshal indicates an expected call of UnMarshal.
+func (mr *MockRelDataMockRecorder) UnMarshal(buf interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UnMarshal", reflect.TypeOf((*MockRelData)(nil).UnMarshal), buf)
+}
+
+// MockDataSource is a mock of DataSource interface.
+type MockDataSource struct {
+	ctrl     *gomock.Controller
+	recorder *MockDataSourceMockRecorder
+}
+
+// MockDataSourceMockRecorder is the mock recorder for MockDataSource.
+type MockDataSourceMockRecorder struct {
+	mock *MockDataSource
+}
+
+// NewMockDataSource creates a new mock instance.
+func NewMockDataSource(ctrl *gomock.Controller) *MockDataSource {
+	mock := &MockDataSource{ctrl: ctrl}
+	mock.recorder = &MockDataSourceMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockDataSource) EXPECT() *MockDataSourceMockRecorder {
+	return m.recorder
+}
+
+// ApplyTombstones mocks base method.
+func (m *MockDataSource) ApplyTombstones(rows []types.Rowid) ([]int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ApplyTombstones", rows)
+	ret0, _ := ret[0].([]int64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ApplyTombstones indicates an expected call of ApplyTombstones.
+func (mr *MockDataSourceMockRecorder) ApplyTombstones(rows interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ApplyTombstones", reflect.TypeOf((*MockDataSource)(nil).ApplyTombstones), rows)
+}
+
+// ApplyTombstonesInProgress mocks base method.
+func (m *MockDataSource) ApplyTombstonesInProgress(ctx context.Context, bid objectio.Blockid, rowsOffset []int32) ([]int32, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ApplyTombstonesInProgress", ctx, bid, rowsOffset)
+	ret0, _ := ret[0].([]int32)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ApplyTombstonesInProgress indicates an expected call of ApplyTombstonesInProgress.
+func (mr *MockDataSourceMockRecorder) ApplyTombstonesInProgress(ctx, bid, rowsOffset interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ApplyTombstonesInProgress", reflect.TypeOf((*MockDataSource)(nil).ApplyTombstonesInProgress), ctx, bid, rowsOffset)
+}
+
+// Close mocks base method.
+func (m *MockDataSource) Close() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "Close")
+}
+
+// Close indicates an expected call of Close.
+func (mr *MockDataSourceMockRecorder) Close() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Close", reflect.TypeOf((*MockDataSource)(nil).Close))
+}
+
+// GetTombstonesInProgress mocks base method.
+func (m *MockDataSource) GetTombstonesInProgress(ctx context.Context, bid objectio.Blockid) ([]int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetTombstonesInProgress", ctx, bid)
+	ret0, _ := ret[0].([]int64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetTombstonesInProgress indicates an expected call of GetTombstonesInProgress.
+func (mr *MockDataSourceMockRecorder) GetTombstonesInProgress(ctx, bid interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTombstonesInProgress", reflect.TypeOf((*MockDataSource)(nil).GetTombstonesInProgress), ctx, bid)
+}
+
+// HasTombstones mocks base method.
+func (m *MockDataSource) HasTombstones(bid types.Blockid) bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "HasTombstones", bid)
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// HasTombstones indicates an expected call of HasTombstones.
+func (mr *MockDataSourceMockRecorder) HasTombstones(bid interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HasTombstones", reflect.TypeOf((*MockDataSource)(nil).HasTombstones), bid)
+}
+
+// Next mocks base method.
+func (m *MockDataSource) Next(ctx context.Context, cols []string, types []types.Type, seqNums []uint16, memFilter any, mp *mpool.MPool, vp engine.VectorPool, bat *batch.Batch) (*objectio.BlockInfoInProgress, engine.DataState, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Next", ctx, cols, types, seqNums, memFilter, mp, vp, bat)
+	ret0, _ := ret[0].(*objectio.BlockInfoInProgress)
+	ret1, _ := ret[1].(engine.DataState)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// Next indicates an expected call of Next.
+func (mr *MockDataSourceMockRecorder) Next(ctx, cols, types, seqNums, memFilter, mp, vp, bat interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Next", reflect.TypeOf((*MockDataSource)(nil).Next), ctx, cols, types, seqNums, memFilter, mp, vp, bat)
 }
 
 // MockRanges is a mock of Ranges interface.
@@ -886,21 +1073,6 @@ func (mr *MockRelationMockRecorder) MergeObjects(ctx, objstats, policyName, targ
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MergeObjects", reflect.TypeOf((*MockRelation)(nil).MergeObjects), ctx, objstats, policyName, targetObjSize)
 }
 
-// NewReader mocks base method.
-func (m *MockRelation) NewReader(arg0 context.Context, arg1 int, arg2 *plan.Expr, arg3 []byte, arg4 bool, arg5 int) ([]engine.Reader, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "NewReader", arg0, arg1, arg2, arg3, arg4, arg5)
-	ret0, _ := ret[0].([]engine.Reader)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// NewReader indicates an expected call of NewReader.
-func (mr *MockRelationMockRecorder) NewReader(arg0, arg1, arg2, arg3, arg4, arg5 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NewReader", reflect.TypeOf((*MockRelation)(nil).NewReader), arg0, arg1, arg2, arg3, arg4, arg5)
-}
-
 // PrimaryKeysMayBeModified mocks base method.
 func (m *MockRelation) PrimaryKeysMayBeModified(ctx context.Context, from, to types.TS, keyVector *vector.Vector) (bool, error) {
 	m.ctrl.T.Helper()
@@ -914,21 +1086,6 @@ func (m *MockRelation) PrimaryKeysMayBeModified(ctx context.Context, from, to ty
 func (mr *MockRelationMockRecorder) PrimaryKeysMayBeModified(ctx, from, to, keyVector interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PrimaryKeysMayBeModified", reflect.TypeOf((*MockRelation)(nil).PrimaryKeysMayBeModified), ctx, from, to, keyVector)
-}
-
-// Ranges mocks base method.
-func (m *MockRelation) Ranges(arg0 context.Context, arg1 []*plan.Expr, arg2 int) (engine.Ranges, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Ranges", arg0, arg1, arg2)
-	ret0, _ := ret[0].(engine.Ranges)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// Ranges indicates an expected call of Ranges.
-func (mr *MockRelationMockRecorder) Ranges(arg0, arg1, arg2 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Ranges", reflect.TypeOf((*MockRelation)(nil).Ranges), arg0, arg1, arg2)
 }
 
 // RangesInProgress mocks base method.

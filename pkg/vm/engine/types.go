@@ -583,10 +583,15 @@ const (
 
 type Tombstoner interface {
 	Type() TombstoneType
+
 	IsEmpty() bool
+
 	MarshalWithBuf(w *bytes.Buffer) (uint32, error)
+
 	UnMarshal(buf []byte) error
+
 	HasTombstones(bid types.Blockid) bool
+
 	ApplyTombstones(
 		rows []types.Rowid,
 		load1 func(
@@ -594,22 +599,76 @@ type Tombstoner interface {
 			loc objectio.Location,
 			committs types.TS) (*nulls.Nulls, error),
 		load2 func(loc objectio.Location) (*nulls.Nulls, error)) ([]int64, error)
+
+	ApplyInMemTombstones(
+		bid types.Blockid,
+		rowsOffset []int32,
+	) (left []int32, deleted []int64)
+
+	ApplyPersistedTombstones(
+		ctx context.Context,
+		bid types.Blockid,
+		rowsOffset []int32,
+		apply func(
+			ctx2 context.Context,
+			loc objectio.Location,
+			cts types.TS,
+			rowsOffset []int32,
+			left *[]int32,
+			deleted *[]int64) (err error),
+	) (left []int32, deleted []int64, err error)
+
+	ApplyUncommitDeltaLoc(
+		ctx context.Context,
+		bid types.Blockid,
+		rowsOffset []int32,
+		apply func(
+			ctx2 context.Context,
+			loc objectio.Location,
+			rowsOffset []int32,
+			left *[]int32,
+			deleted *[]int64) (err error),
+	) (left []int32, deleted []int64, err error)
+
+	ApplyCommitDeltaLoc(
+		ctx context.Context,
+		bid types.Blockid,
+		rowsOffset []int32,
+		apply func(
+			ctx2 context.Context,
+			loc objectio.Location,
+			rowsOffset []int32,
+			left *[]int32,
+			deleted *[]int64) (err error),
+	) (left []int32, deleted []int64, err error)
+
 	Merge(other Tombstoner) error
 }
 
 type RelData interface {
 	MarshalToBytes() []byte
+
+	UnMarshal(buf []byte) error
+
 	AttachTombstones(tombstones Tombstoner) error
+
 	GetTombstones() Tombstoner
+
 	ForeachDataBlk(begin, end int, f func(blk *objectio.BlockInfoInProgress) error) error
+
 	GetDataBlk(i int) *objectio.BlockInfoInProgress
+
 	SetDataBlk(i int, blk *objectio.BlockInfoInProgress)
+
 	DataBlkSlice(begin, end int) RelData
+
 	// GroupByPartitionNum TODO::remove it after refactor of partition table.
 	GroupByPartitionNum() map[int16]RelData
-	//DataBlkClone(begin, end int) RelData
+
 	AppendDataBlk(blk *objectio.BlockInfoInProgress)
+
 	BuildEmptyRelData() RelData
+
 	BlkCnt() int
 }
 
