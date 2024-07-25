@@ -40,6 +40,8 @@ func (c *Compile) Compile(
 	execTopContext context.Context,
 	queryPlan *plan.Plan,
 	resultWriteBack func(batch *batch.Batch) error) (err error) {
+	// clear the last query context to avoid process reuse.
+	c.proc.CleanLastQueryContext()
 
 	// statistical information record and trace.
 	compileStart := time.Now()
@@ -121,6 +123,9 @@ func (c *Compile) Compile(
 
 // Run executes the pipeline and returns the result.
 func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
+	// clear the last query context to avoid process reuse.
+	c.proc.CleanLastQueryContext()
+
 	// the runC is the final object for executing the query.
 	// If a rerun occurs, it may differ from the original c, so we need to release it.
 	var runC = c

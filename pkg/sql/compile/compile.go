@@ -165,8 +165,10 @@ func (c *Compile) GetMessageCenter() *process.MessageCenter {
 }
 
 func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch) error, sql string) {
-	proc.Ctx = nil
+	// clean up the process for a new query.
+	proc.CleanLastQueryContext()
 	c.proc = proc
+
 	c.fill = fill
 	c.sql = sql
 	c.affectRows.Store(0)
@@ -184,7 +186,7 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	}
 
 	c.MessageBoard = c.MessageBoard.Reset()
-	proc.Base.MessageBoard = c.MessageBoard
+	c.proc.Base.MessageBoard = c.MessageBoard
 	c.counterSet.Reset()
 
 	for _, f := range c.fuzzys {

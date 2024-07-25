@@ -152,18 +152,6 @@ func (proc *Process) OperatorOutofMemory(size int64) bool {
 	return proc.Mp().Cap() < size
 }
 
-func (proc *Process) ResetContextFromParent(parent context.Context) context.Context {
-	newctx, cancel := context.WithCancel(parent)
-
-	proc.Ctx = newctx
-	proc.Cancel = cancel
-
-	for i := range proc.Reg.MergeReceivers {
-		proc.Reg.MergeReceivers[i].Ctx = newctx
-	}
-	return newctx
-}
-
 func (proc *Process) GetAnalyze(idx, parallelIdx int, parallelMajor bool) Analyze {
 	if idx >= len(proc.Base.AnalInfos) || idx < 0 {
 		return &operatorAnalyzer{analInfo: nil, parallelIdx: parallelIdx, parallelMajor: parallelMajor}

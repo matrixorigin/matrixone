@@ -30,12 +30,12 @@ func (c *Compile) InitPipelineContextToExecuteQuery() {
 	queryContext = contextBase.WithCounterSetToQueryContext(c.counterSet)
 
 	// build pipeline context.
-	c.proc.Ctx, c.proc.Cancel = context.WithCancel(queryContext)
+	currentContext := c.proc.BuildPipelineContext(queryContext)
 	for _, pipeline := range c.scope {
 		if pipeline.Proc == nil {
 			continue
 		}
-		pipeline.buildContextFromParentCtx(c.proc.Ctx)
+		pipeline.buildContextFromParentCtx(currentContext)
 	}
 }
 

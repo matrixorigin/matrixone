@@ -164,6 +164,16 @@ func (proc *Process) GetErrorFromQueryStatus() error {
 	return nil
 }
 
+// CleanLastQueryContext cleans the context and cancel function for process reuse.
+func (proc *Process) CleanLastQueryContext() {
+	if proc.Base.sqlContext.queryCancel != nil {
+		proc.Base.sqlContext.queryCancel()
+	}
+	proc.Base.sqlContext.queryContext = nil
+	proc.Base.sqlContext.queryCancel = nil
+	proc.Ctx, proc.Cancel = nil, nil
+}
+
 // Free cleans the process.
 // todo: consider to use it instead of other method like `FreeVectors` next day.
 func (proc *Process) Free() {
