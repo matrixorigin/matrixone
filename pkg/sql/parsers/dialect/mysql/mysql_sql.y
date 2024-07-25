@@ -480,7 +480,7 @@ import (
 %token <str> PITR
 
 // CDC
-%token <str> CDC TASKNAME SOURCEURI SINKTYPE SINKURI RESTART
+%token <str> CDC
 
 %type <statement> stmt block_stmt block_type_stmt normal_stmt
 %type <statements> stmt_list stmt_list_return
@@ -973,10 +973,19 @@ backup_timestamp_opt:
     }
 
 create_cdc_stmt:
-    CREATE CDC not_exists_opt STRING STRING STRING STRING STRING create_cdc_opts
+    CREATE CDC not_exists_opt STRING STRING STRING STRING STRING '{' create_cdc_opts '}'
     {
-        $$ = tree.NewCreateCDC($3, $4, $5, $6, $7, $8, $9)
+        $$ = &tree.CreateCDC{
+             		IfNotExists: $3,
+             		TaskName:    $4,
+             		SourceUri:   $5,
+             		SinkType:    $6,
+             		SinkUri:     $7,
+             		Tables:      $8,
+             		Option:      $10,
+             	}
     }
+
 create_cdc_opts:
     create_cdc_opt
     {
@@ -1031,7 +1040,7 @@ all_cdc_opt:
                     TaskName: "",
         }
     }
-|   TASKNAME STRING
+|   TASK STRING
     {
         $$ = &tree.AllOrNotCDC{
             All: false,
@@ -1040,7 +1049,7 @@ all_cdc_opt:
     }
 
 resume_cdc_stmt:
-    RESUME CDC STRING TASKNAME STRING
+    RESUME CDC STRING TASK STRING
     {
         $$ = &tree.ResumeCDC{
                     SourceUri:   $3,
@@ -1049,7 +1058,7 @@ resume_cdc_stmt:
     }
 
 restart_cdc_stmt:
-    RESUME CDC STRING TASKNAME STRING STRING
+    RESUME CDC STRING TASK STRING STRING
     {
         $$ = &tree.RestartCDC{
                     SourceUri:   $3,
@@ -12266,11 +12275,6 @@ non_reserved_keyword:
 |	PERCENT
 |	OWNERSHIP
 |   MO_TS
-|   TASKNAME
-|   SOURCEURI
-|   SINKTYPE
-|   SINKURI
-|   RESTART
 
 func_not_keyword:
     DATE_ADD

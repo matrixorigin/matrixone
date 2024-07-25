@@ -15,31 +15,22 @@
 package tree
 
 import (
-	"encoding/json"
 	"fmt"
-	"strconv"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 )
 
-//	func init() {
-//		reuse.CreatePool[BackupStart](
-//			func() *BackupStart { return &BackupStart{} },
-//			func(b *BackupStart) { b.reset() },
-//			reuse.DefaultOptions[BackupStart](), //.
-//		) //WithEnableChecker()
-//	}
-
-type FilterConfig struct {
-	Rules            []string `mapstructure:"rules"`
-	OperationFilters []struct {
-		Matcher         []string `mapstructure:"matcher"`
-		IgnoreOperation []string `mapstructure:"ignore-operation"`
-	} `mapstructure:"operation-filters"`
+func init() {
+	reuse.CreatePool[DropCDC](
+		func() *DropCDC { return &DropCDC{} },
+		func(d *DropCDC) { d.reset() },
+		reuse.DefaultOptions[DropCDC](), //.
+	) //WithEnableChecker()
 }
 
 type CreateCDCOption struct {
 	StartTs                string
 	EndTs                  string
-	Full                   bool
+	NoFull                 bool
 	FullConcurrency        int
 	IncrementalConcurrency int
 	FullTaskRetry          string
@@ -59,8 +50,7 @@ type CreateCDC struct {
 	SinkType    string
 	SinkUri     string
 	Tables      string
-	Option      *CreateCDCOption
-	Filter      *FilterConfig
+	Option      []string
 }
 
 func (node *CreateCDC) Format(ctx *FmtCtx) {
@@ -70,67 +60,12 @@ func (node *CreateCDC) Format(ctx *FmtCtx) {
 	ctx.WriteString(fmt.Sprintf("'%s' ", node.SinkType))
 	ctx.WriteString(fmt.Sprintf("'%s' ", node.SinkUri))
 	ctx.WriteString(fmt.Sprintf("'%s' ", node.Tables))
-	ctx.WriteString(fmt.Sprintf("\"StartTS\"='%s',", node.Option.StartTs))
-	ctx.WriteString(fmt.Sprintf("\"EndTS\"='%s',", node.Option.EndTs))
-	ctx.WriteString(fmt.Sprintf("\"Full\"='%t',", node.Option.Full))
-	ctx.WriteString(fmt.Sprintf("\"FullConcurrency\"='%d',", node.Option.FullConcurrency))
-	ctx.WriteString(fmt.Sprintf("\"IncrementalConcurrency\"='%d',", node.Option.IncrementalConcurrency))
-	ctx.WriteString(fmt.Sprintf("\"ConfigFile\"='%s',", node.Option.ConfigFile))
-	ctx.WriteString(fmt.Sprintf("\"FullTaskRetry\"='%s',", node.Option.FullTaskRetry))
-	ctx.WriteString(fmt.Sprintf("\"IncrementalTaskRetry\"='%s',", node.Option.IncrementalTaskRetry))
-	ctx.WriteString(fmt.Sprintf("\"FullDDLRetry\"='%d',", node.Option.FullDDLRetry))
-	ctx.WriteString(fmt.Sprintf("\"FullDMLRetry\"='%d',", node.Option.FullDMLRetry))
-	ctx.WriteString(fmt.Sprintf("\"IncrementalDDLRetry\"='%d',", node.Option.IncrementalDDLRetry))
-	ctx.WriteString(fmt.Sprintf("\"IncrementalDMLRetry\"='%d',", node.Option.IncrementalDMLRetry))
-	ctx.WriteString(fmt.Sprintf("\"Filter\"='%s',", node.Filter))
+	ctx.WriteString("{ ")
+	for i := 0; i < len(node.Option)-1; i += 2 {
+		ctx.WriteString(fmt.Sprintf("\"%s\"='%s',", node.Option[i], node.Option[i+1]))
+	}
+	ctx.WriteString("}")
 	ctx.WriteByte(';')
-}
-
-func NewCreateCDC(IfNotExists bool, TaskName string, SourceUri string, SinkType string, SinkUri string, Tables string, Options []string) *CreateCDC {
-	node := &CreateCDC{
-		IfNotExists: IfNotExists,
-		TaskName:    TaskName,
-		SourceUri:   SourceUri,
-		SinkType:    SinkType,
-		SinkUri:     SinkUri,
-		Tables:      Tables,
-	}
-	createCDCOpt := CreateCDCOption{}
-	for op := 0; op < len(Options)-1; {
-		switch Options[op] {
-		case "StartTS":
-			createCDCOpt.StartTs = Options[op+1]
-		case "EndTs":
-			createCDCOpt.EndTs = Options[op+1]
-		case "Full":
-			createCDCOpt.Full = Options[op+1] == "true"
-		case "FullConcurrency":
-			createCDCOpt.FullConcurrency, _ = strconv.Atoi(Options[op+1])
-		case "IncrementalConcurrency":
-			createCDCOpt.IncrementalConcurrency, _ = strconv.Atoi(Options[op+1])
-		case "ConfigFile":
-			createCDCOpt.ConfigFile = Options[op+1]
-		case "FullTaskRetry":
-			createCDCOpt.FullTaskRetry = Options[op+1]
-		case "IncrementalTaskRetry":
-			createCDCOpt.IncrementalTaskRetry = Options[op+1]
-		case "FullDDLRetry":
-			createCDCOpt.FullDDLRetry, _ = strconv.Atoi(Options[op+1])
-		case "FullDMLRetry":
-			createCDCOpt.FullDMLRetry, _ = strconv.Atoi(Options[op+1])
-		case "IncrementalDDLRetry":
-			createCDCOpt.IncrementalDDLRetry, _ = strconv.Atoi(Options[op+1])
-		case "IncrementalDMLRetry":
-			createCDCOpt.IncrementalDMLRetry, _ = strconv.Atoi(Options[op+1])
-		case "Filter":
-			filterConfig := FilterConfig{}
-			_ = json.Unmarshal([]byte(Options[op+1]), &filterConfig)
-			node.Filter = &filterConfig
-		}
-		op += 2
-	}
-	node.Option = &createCDCOpt
-	return node
 }
 
 func (node *CreateCDC) GetStatementType() string { return "Create CDC" }
@@ -143,15 +78,13 @@ func (node *CreateCDC) reset() {
 	if node.Option != nil {
 		node.Option = nil
 	}
-	if node.Filter != nil {
-		node.Filter = nil
-	}
 	*node = CreateCDC{}
 }
 
-//	func (node *CreateCDC) Free() {
-//		reuse.Free[BackupStart](node, nil)
-//	}
+func (node *DropCDC) Free() {
+	reuse.Free[DropCDC](node, nil)
+}
+
 type AllOrNotCDC struct {
 	TaskName string
 	All      bool
@@ -166,9 +99,9 @@ func (node *ShowCDC) Format(ctx *FmtCtx) {
 	ctx.WriteString("show cdc ")
 	ctx.WriteString(fmt.Sprintf("'%s'", node.SourceUri))
 	if node.Option.All {
-		ctx.WriteString("all")
+		ctx.WriteString(" all")
 	} else {
-		ctx.WriteString(" taskname ")
+		ctx.WriteString(" task ")
 		ctx.WriteString(fmt.Sprintf("'%s'", node.Option.TaskName))
 	}
 	ctx.WriteByte(';')
@@ -197,9 +130,9 @@ func (node *PauseCDC) Format(ctx *FmtCtx) {
 	ctx.WriteString("pause cdc ")
 	ctx.WriteString(fmt.Sprintf("'%s'", node.SourceUri))
 	if node.Option.All {
-		ctx.WriteString("all")
+		ctx.WriteString(" all")
 	} else {
-		ctx.WriteString(" taskname ")
+		ctx.WriteString(" task ")
 		ctx.WriteString(fmt.Sprintf("'%s'", node.Option.TaskName))
 	}
 	ctx.WriteByte(';')
@@ -228,9 +161,9 @@ func (node *DropCDC) Format(ctx *FmtCtx) {
 	ctx.WriteString("drop cdc ")
 	ctx.WriteString(fmt.Sprintf("'%s'", node.SourceUri))
 	if node.Option.All {
-		ctx.WriteString("all")
+		ctx.WriteString(" all")
 	} else {
-		ctx.WriteString(" taskname ")
+		ctx.WriteString(" task ")
 		ctx.WriteString(fmt.Sprintf("'%s'", node.Option.TaskName))
 	}
 	ctx.WriteByte(';')
@@ -258,7 +191,7 @@ type ResumeCDC struct {
 func (node *ResumeCDC) Format(ctx *FmtCtx) {
 	ctx.WriteString("resume cdc ")
 	ctx.WriteString(fmt.Sprintf("'%s'", node.SourceUri))
-	ctx.WriteString(" taskname ")
+	ctx.WriteString(" task ")
 	ctx.WriteString(fmt.Sprintf("'%s'", node.TaskName))
 	ctx.WriteByte(';')
 }
@@ -282,7 +215,7 @@ type RestartCDC struct {
 func (node *RestartCDC) Format(ctx *FmtCtx) {
 	ctx.WriteString("resume cdc ")
 	ctx.WriteString(fmt.Sprintf("'%s'", node.SourceUri))
-	ctx.WriteString(" taskname ")
+	ctx.WriteString(" task ")
 	ctx.WriteString(fmt.Sprintf("'%s'", node.TaskName))
 	ctx.WriteString(" 'restart'")
 	ctx.WriteByte(';')
