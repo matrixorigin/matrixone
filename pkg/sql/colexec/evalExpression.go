@@ -167,7 +167,6 @@ func newExpressionExecutor(proc *process.Process, planExpr *plan.Expr, inRuntime
 		}
 
 		executor := NewFunctionExpressionExecutor()
-		executor.inRuntime = inRuntime
 		executor.fid, _ = function.DecodeOverloadID(overloadID)
 		executor.overloadID = overloadID
 		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
@@ -185,6 +184,17 @@ func newExpressionExecutor(proc *process.Process, planExpr *plan.Expr, inRuntime
 			}
 			executor.SetParameter(i, subExecutor)
 		}
+
+		if t.F.GetFunc().GetObjName() == "regexp_substr" {
+			fmt.Print("dddd")
+		}
+
+		_, err = executor.constantFold(proc, nil, nil)
+		if err != nil {
+			executor.Free()
+			return nil, err
+		}
+		executor.inRuntime = inRuntime
 
 		// IF all parameters here were constant. and this function can be folded.
 		// 	there is a better way to convert it as a FixedVectorExpressionExecutor.
@@ -519,6 +529,9 @@ func (expr *FunctionExpressionExecutor) canConstantFold(proc *process.Process) b
 	if overload.CannotFold() {
 		return false
 	}
+	if expr.folded != nil {
+		return true
+	}
 	if expr.inRuntime {
 		for _, paramE := range expr.parameterExecutor {
 			if subExpr, ok := paramE.(*FunctionExpressionExecutor); ok {
@@ -575,7 +588,7 @@ func (expr *FunctionExpressionExecutor) constantFold(proc *process.Process, batc
 			execLen = firstParam.Length()
 		}
 	}
-	if execLen < batches[0].RowCount() {
+	if len(batches) > 0 && execLen < batches[0].RowCount() {
 		execLen = batches[0].RowCount()
 	}
 
@@ -842,7 +855,7 @@ func (expr *ColumnExpressionExecutor) IsColumnExpr() bool {
 }
 
 func (expr *FixedVectorExpressionExecutor) Eval(_ *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
-	if !expr.fixed {
+	if !expr.fixed && len(batches) > 0 {
 		expr.resultVector.SetLength(batches[0].RowCount())
 	}
 	return expr.resultVector, nil
