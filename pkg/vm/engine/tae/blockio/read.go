@@ -46,6 +46,7 @@ type BlockReadFilter struct {
 // ReadByFilter only read block data from storage by filter, don't apply deletes.
 func ReadDataByFilter(
 	ctx context.Context,
+	sid string,
 	info *objectio.BlockInfoInProgress,
 	ds engine.DataSource,
 	columns []uint16,
@@ -145,6 +146,7 @@ func ReadByFilter(
 // BlockDataRead only read block data from storage, don't apply deletes.
 func BlockDataRead(
 	ctx context.Context,
+	sid string,
 	info *objectio.BlockInfoInProgress,
 	ds engine.DataSource,
 	columns []uint16,
@@ -177,17 +179,17 @@ func BlockDataRead(
 
 	if searchFunc != nil {
 		if sels, err = ReadDataByFilter(
-			ctx, info, ds, filterSeqnums, filterColTypes,
+			ctx, sid, info, ds, filterSeqnums, filterColTypes,
 			types.TimestampToTS(ts), searchFunc, fs, mp, tableName,
 		); err != nil {
 			return nil, err
 		}
 		v2.TaskSelReadFilterTotal.Inc()
 		if len(sels) == 0 {
-			RecordReadFilterSelectivity(1, 1)
+			RecordReadFilterSelectivity(sid, 1, 1)
 			v2.TaskSelReadFilterHit.Inc()
 		} else {
-			RecordReadFilterSelectivity(0, 1)
+			RecordReadFilterSelectivity(sid, 0, 1)
 		}
 
 		if len(sels) == 0 {
@@ -204,7 +206,7 @@ func BlockDataRead(
 	}
 
 	columnBatch, err := BlockDataReadInner(
-		ctx, info, ds, columns, colTypes,
+		ctx, sid, info, ds, columns, colTypes,
 		types.TimestampToTS(ts), sels, fs, mp, vp, policy,
 	)
 	if err != nil {
@@ -331,6 +333,7 @@ func BlockCompactionRead(
 // BlockDataReadInner only read data,don't apply deletes.
 func BlockDataReadInner(
 	ctx context.Context,
+	sid string,
 	info *objectio.BlockInfoInProgress,
 	ds engine.DataSource,
 	columns []uint16,
@@ -386,7 +389,7 @@ func BlockDataReadInner(
 			} else {
 				result.Vecs[i] = vp.GetVector(typ)
 			}
-			if err = result.Vecs[i].PreExtendArea(len(col.GetArea()), mp); err != nil {
+			if err = result.Vecs[i].PreExtendWithArea(len(selectRows), len(col.GetArea()), mp); err != nil {
 				break
 			}
 			if err = result.Vecs[i].Union(col, selectRows, mp); err != nil {

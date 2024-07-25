@@ -785,7 +785,6 @@ func (r *readerInProgress) Read(
 ) (bat *batch.Batch, err error) {
 
 	start := time.Now()
-	status := engine.InMem
 	defer func() {
 		if r.columns.extraRowIdAdded && bat != nil {
 			rowIDVec := bat.Vecs[r.columns.rowIdColIdx]
@@ -793,20 +792,6 @@ func (r *readerInProgress) Read(
 			bat.Vecs = append(bat.Vecs[:r.columns.rowIdColIdx], bat.Vecs[r.columns.rowIdColIdx+1:]...)
 			bat.Attrs = bat.Attrs[1:]
 		}
-		status++
-		//if r.tableDef.Name == "bugt" {
-		//	logutil.Info("xxxx Reader.Read",
-		//		zap.String("txn", r.proc.GetTxnOperator().Txn().DebugString()),
-		//		zap.String("table", r.tableDef.Name),
-		//		zap.Int("status", int(status)),
-		//		zap.String("read batch rowCnt", func() string {
-		//			if bat == nil {
-		//				return "nil"
-		//			}
-		//			return strconv.Itoa(bat.RowCount())
-		//		}()))
-		//}
-
 		v2.TxnBlockReaderDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
@@ -860,14 +845,11 @@ func (r *readerInProgress) Read(
 		return nil, err
 	}
 	if state == engine.End {
-		status = engine.End
 		return nil, nil
 	}
 	if state == engine.InMem {
-		status = engine.InMem
 		return bat, nil
 	}
-	status = engine.Persisted
 	//read block
 	filter := r.withFilterMixin.filterState.filter
 
@@ -884,7 +866,7 @@ func (r *readerInProgress) Read(
 	}
 
 	bat, err = blockio.BlockDataRead(
-		statsCtx, blkInfo, r.source, r.columns.seqnums, r.columns.colTypes, r.ts,
+		statsCtx, r.withFilterMixin.proc.GetService(), blkInfo, r.source, r.columns.seqnums, r.columns.colTypes, r.ts,
 		r.filterState.seqnums,
 		r.filterState.colTypes,
 		filter,

@@ -19,7 +19,6 @@ import (
 	"context"
 	"slices"
 	"sort"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -1273,37 +1272,37 @@ func loadBlockDeletesByDeltaLoc(
 	snapshotTS, blockCommitTS types.TS) (deleteMask *nulls.Nulls, err error) {
 
 	var (
-		rows             *nulls.Nulls
-		bisect           time.Duration
+		rows *nulls.Nulls
+		//bisect           time.Duration
 		release          func()
 		persistedByCN    bool
 		persistedDeletes *batch.Batch
 	)
 
 	if !deltaLoc.IsEmpty() {
-		t1 := time.Now()
+		//t1 := time.Now()
 
 		if persistedDeletes, persistedByCN, release, err = blockio.ReadBlockDelete(ctx, deltaLoc, fs); err != nil {
 			return nil, err
 		}
 		defer release()
 
-		readCost := time.Since(t1)
+		//readCost := time.Since(t1)
 
 		if persistedByCN {
 			rows = blockio.EvalDeleteRowsByTimestampForDeletesPersistedByCN(persistedDeletes, snapshotTS, blockCommitTS)
 		} else {
-			t2 := time.Now()
+			//t2 := time.Now()
 			rows = blockio.EvalDeleteRowsByTimestamp(persistedDeletes, snapshotTS, &blockId)
-			bisect = time.Since(t2)
+			//bisect = time.Since(t2)
 		}
 
 		if rows != nil {
 			deleteMask = rows
 		}
 
-		readTotal := time.Since(t1)
-		blockio.RecordReadDel(readTotal, readCost, bisect)
+		//readTotal := time.Since(t1)
+		//blockio.RecordReadDel(readTotal, readCost, bisect)
 	}
 
 	return deleteMask, nil
