@@ -71,6 +71,7 @@ func TestTables1(t *testing.T) {
 	t.Log(toAppend)
 
 	_, err = handle.GetAppender()
+	assert.NoError(t, err)
 	_, _, toAppend, err = appender.PrepareAppend(rows, nil)
 	assert.Equal(t, schema.BlockMaxRows, toAppend)
 	assert.Nil(t, err)
