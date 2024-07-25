@@ -46,11 +46,11 @@ type container struct {
 }
 
 type LoopSingle struct {
-	ctr    *container
-	Cond   *plan.Expr
-	Typs   []types.Type
-	Result []colexec.ResultPos
-
+	ctr        *container
+	Cond       *plan.Expr
+	Typs       []types.Type
+	Result     []colexec.ResultPos
+	JoinMapTag int32
 	vm.OperatorBase
 }
 
