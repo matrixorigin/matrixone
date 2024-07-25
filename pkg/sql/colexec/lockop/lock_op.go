@@ -77,7 +77,7 @@ func (lockOp *LockOp) Prepare(proc *process.Process) error {
 		lockOp.ctr.rt.fetchers = append(lockOp.ctr.rt.fetchers,
 			GetFetchRowsFunc(lockOp.targets[idx].primaryColumnType))
 	}
-	lockOp.ctr.rt.parker = types.NewPacker(proc.Mp())
+	lockOp.ctr.rt.parker = types.NewPacker()
 	lockOp.ctr.rt.retryError = nil
 	lockOp.ctr.rt.step = stepLock
 	if lockOp.block {
@@ -310,8 +310,8 @@ func LockTable(
 	if !txnOp.Txn().IsPessimistic() {
 		return nil
 	}
-	parker := types.NewPacker(proc.Mp())
-	defer parker.FreeMem()
+	parker := types.NewPacker()
+	defer parker.Close()
 
 	opts := DefaultLockOptions(parker).
 		WithLockTable(true, changeDef).
@@ -356,8 +356,8 @@ func LockRows(
 		return nil
 	}
 
-	parker := types.NewPacker(proc.Mp())
-	defer parker.FreeMem()
+	parker := types.NewPacker()
+	defer parker.Close()
 
 	opts := DefaultLockOptions(parker).
 		WithLockTable(false, false).
@@ -865,7 +865,7 @@ func (lockOp *LockOp) Free(proc *process.Process, pipelineFailed bool, err error
 	if lockOp.ctr != nil {
 		if lockOp.ctr.rt != nil {
 			if lockOp.ctr.rt.parker != nil {
-				lockOp.ctr.rt.parker.FreeMem()
+				lockOp.ctr.rt.parker.Close()
 			}
 			lockOp.ctr.rt.retryError = nil
 			lockOp.cleanCachedBatch(proc)
