@@ -74,13 +74,6 @@ func (node *CreateCDC) GetQueryType() string { return QueryTypeOth }
 
 func (node CreateCDC) TypeName() string { return "tree.CreateCDC" }
 
-func (node *CreateCDC) reset() {
-	if node.Option != nil {
-		node.Option = nil
-	}
-	*node = CreateCDC{}
-}
-
 func (node *DropCDC) Free() {
 	reuse.Free[DropCDC](node, nil)
 }
@@ -113,13 +106,6 @@ func (node *ShowCDC) GetQueryType() string { return QueryTypeOth }
 
 func (node ShowCDC) TypeName() string { return "tree.ShowCDC" }
 
-func (node *ShowCDC) reset() {
-	if node.Option != nil {
-		node.Option = nil
-	}
-	*node = ShowCDC{}
-}
-
 type PauseCDC struct {
 	statementImpl
 	SourceUri string
@@ -143,13 +129,6 @@ func (node *PauseCDC) GetStatementType() string { return "Pause CDC" }
 func (node *PauseCDC) GetQueryType() string { return QueryTypeOth }
 
 func (node PauseCDC) TypeName() string { return "tree.PauseCDC" }
-
-func (node *PauseCDC) reset() {
-	if node.Option != nil {
-		node.Option = nil
-	}
-	*node = PauseCDC{}
-}
 
 type DropCDC struct {
 	statementImpl
@@ -209,10 +188,6 @@ func (node *ResumeCDC) GetQueryType() string { return QueryTypeOth }
 
 func (node ResumeCDC) TypeName() string { return "tree.ResumeCDC" }
 
-func (node *ResumeCDC) reset() {
-	*node = ResumeCDC{}
-}
-
 type RestartCDC struct {
 	statementImpl
 	SourceUri string
@@ -233,7 +208,3 @@ func (node *RestartCDC) GetStatementType() string { return "Restart CDC" }
 func (node *RestartCDC) GetQueryType() string { return QueryTypeOth }
 
 func (node RestartCDC) TypeName() string { return "tree.RestartCDC" }
-
-func (node *RestartCDC) reset() {
-	*node = RestartCDC{}
-}
