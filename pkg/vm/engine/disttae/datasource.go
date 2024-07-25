@@ -1132,6 +1132,9 @@ func (ls *LocalDataSource) filterUncommittedInMemInserts(
 	rows := 0
 	writes := ls.table.getTxn().writes
 	maxRows := int(options.DefaultBlockMaxRows)
+	if len(writes) == 0 {
+		return nil
+	}
 
 	for ; ls.wsCursor < ls.txnOffset &&
 		rows+writes[ls.wsCursor].bat.RowCount() <= maxRows; ls.wsCursor++ {
