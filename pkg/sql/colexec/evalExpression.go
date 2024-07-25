@@ -185,11 +185,11 @@ func newExpressionExecutor(proc *process.Process, planExpr *plan.Expr, inRuntime
 			executor.SetParameter(i, subExecutor)
 		}
 
-		_, err = executor.constantFold(proc, nil, nil)
-		if err != nil {
-			executor.Free()
-			return nil, err
-		}
+		// _, err = executor.constantFold(proc, nil, nil)
+		// if err != nil {
+		// 	executor.Free()
+		// 	return nil, err
+		// }
 		executor.inRuntime = inRuntime
 
 		// IF all parameters here were constant. and this function can be folded.
@@ -525,16 +525,8 @@ func (expr *FunctionExpressionExecutor) canConstantFold(proc *process.Process) b
 	if overload.CannotFold() {
 		return false
 	}
-	if expr.folded != nil {
-		return true
-	}
 	if expr.inRuntime {
 		for _, paramE := range expr.parameterExecutor {
-			if subExpr, ok := paramE.(*FunctionExpressionExecutor); ok {
-				if !subExpr.canConstantFold(proc) {
-					return false
-				}
-			}
 			if _, ok := paramE.(*ColumnExpressionExecutor); ok {
 				return false
 			}
@@ -544,11 +536,6 @@ func (expr *FunctionExpressionExecutor) canConstantFold(proc *process.Process) b
 			return false
 		}
 		for _, paramE := range expr.parameterExecutor {
-			if subExpr, ok := paramE.(*FunctionExpressionExecutor); ok {
-				if !subExpr.canConstantFold(proc) {
-					return false
-				}
-			}
 			if _, ok := paramE.(*FixedVectorExpressionExecutor); !ok {
 				return false
 			}
@@ -557,16 +544,36 @@ func (expr *FunctionExpressionExecutor) canConstantFold(proc *process.Process) b
 	return true
 }
 
-func (expr *FunctionExpressionExecutor) constantFold(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
+func (expr *FunctionExpressionExecutor) constantFold(proc *process.Process, batches []*batch.Batch) (*vector.Vector, error) {
 	if expr.folded != nil {
 		return expr.folded, nil
 	}
-	if !expr.canConstantFold(proc) {
+
+	allFunCanFold := true
+	for i := range expr.parameterExecutor {
+		if fe, ok := expr.parameterExecutor[i].(*FunctionExpressionExecutor); ok {
+			result, err := fe.constantFold(proc, batches)
+			if err != nil {
+				return nil, err
+			}
+			if result == nil {
+				allFunCanFold = false
+			}
+		}
+	}
+
+	var err error
+	if !allFunCanFold || !expr.canConstantFold(proc) {
 		return nil, nil
 	}
-	var err error
+
 	for i := range expr.parameterExecutor {
-		expr.parameterResults[i], err = expr.parameterExecutor[i].Eval(proc, batches, selectList)
+		if fe, ok := expr.parameterExecutor[i].(*FunctionExpressionExecutor); ok {
+			expr.parameterResults[i] = fe.resultVector.GetResultVector()
+			continue
+		}
+
+		expr.parameterResults[i], err = expr.parameterExecutor[i].Eval(proc, batches, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -683,7 +690,7 @@ func (expr *FunctionExpressionExecutor) EvalCase(proc *process.Process, batches 
 }
 
 func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
-	vec, err := expr.constantFold(proc, batches, selectList)
+	vec, err := expr.constantFold(proc, batches)
 	if err != nil {
 		return nil, err
 	}
