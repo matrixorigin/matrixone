@@ -3813,7 +3813,7 @@ func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 			connector.NewArgument().
 				WithReg(s.Proc.Reg.MergeReceivers[0]),
 		)
-		s.Proc.Reg.MergeReceivers = append(s.Proc.Reg.MergeReceivers[:1], s.Proc.Reg.MergeReceivers[s.BuildIdx:]...)
+		s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:1]
 		s.BuildIdx = 1
 	} else {
 		rs.setRootOperator(constructDispatchLocal(false, false, false, extraRegisters(ss, 0)))
@@ -3823,7 +3823,7 @@ func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 	return rs
 }
 
-func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope, mcpu int32) *Scope {
+func (c *Compile) newJoinBuildScope(s *Scope, mcpu int32) *Scope {
 	rs := newScope(Merge)
 	buildLen := len(s.Proc.Reg.MergeReceivers) - s.BuildIdx
 	rs.Proc = process.NewFromProc(s.Proc, s.Proc.Ctx, buildLen)
