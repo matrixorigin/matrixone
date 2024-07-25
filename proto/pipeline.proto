@@ -331,6 +331,7 @@ message Product {
   repeated int32 col_list = 2;
   repeated plan.Type  types = 3 [(gogoproto.nullable) = false];
   bool is_shuffle =4;
+  int32 join_map_tag = 5;
 }
 
 message ProductL2 {
@@ -338,6 +339,7 @@ message ProductL2 {
   repeated int32 col_list = 2;
   repeated plan.Type  types = 3 [(gogoproto.nullable) = false];
   plan.Expr  expr = 4;
+  int32 join_map_tag = 5;
 }
 
 message IndexJoin {
