@@ -3836,21 +3836,6 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope, mcpu int32) *Scope {
 	rs.setRootOperator(mergeOp)
 	rs.setRootOperator(constructJoinBuildOperator(c, vm.GetLeafOp(s.RootOp), s.ShuffleIdx > 0, mcpu))
 
-	if ss == nil { // unparallel, send the hashtable to join scope directly
-		s.Proc.Reg.MergeReceivers[s.BuildIdx] = &process.WaitRegister{
-			Ctx: s.Proc.Ctx,
-			Ch:  make(chan *process.RegisterMessage, 1),
-		}
-		rs.setRootOperator(
-			connector.NewArgument().
-				WithReg(s.Proc.Reg.MergeReceivers[s.BuildIdx]),
-		)
-		s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:s.BuildIdx+1]
-	} else {
-		rs.setRootOperator(
-			constructDispatchLocal(true, false, false, extraRegisters(ss, s.BuildIdx)),
-		)
-	}
 	rs.IsEnd = true
 
 	return rs
