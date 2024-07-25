@@ -157,6 +157,13 @@ type DropCDC struct {
 	Option    *AllOrNotCDC
 }
 
+func NewDropCDC(sourceUri string, option *AllOrNotCDC) *DropCDC {
+	drop := reuse.Alloc[DropCDC](nil)
+	drop.SourceUri = sourceUri
+	drop.Option = option
+	return drop
+}
+
 func (node *DropCDC) Format(ctx *FmtCtx) {
 	ctx.WriteString("drop cdc ")
 	ctx.WriteString(fmt.Sprintf("'%s'", node.SourceUri))

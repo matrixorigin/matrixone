@@ -1026,10 +1026,7 @@ pause_cdc_stmt:
 drop_cdc_stmt:
     DROP CDC STRING all_cdc_opt
     {
-        $$ = &tree.DropCDC{
-                    SourceUri:   $3,
-                    Option:      $4,
-        }
+        $$ = tree.NewDropCDC($3, $4)
     }
 
 all_cdc_opt:
