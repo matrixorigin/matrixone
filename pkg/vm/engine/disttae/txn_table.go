@@ -544,7 +544,8 @@ func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) (e
 // LoadDeletesForMemBlocksIn loads deletes for memory blocks whose data resides in PartitionState.rows
 func (tbl *txnTable) LoadDeletesForMemBlocksIn(
 	state *logtailreplay.PartitionState,
-	deletesRowId map[types.Rowid]uint8) error {
+	deletesRowId map[types.Rowid]uint8,
+) error {
 
 	tbl.getTxn().blockId_tn_delete_metaLoc_batch.RLock()
 	defer tbl.getTxn().blockId_tn_delete_metaLoc_batch.RUnlock()
@@ -603,7 +604,9 @@ func (tbl *txnTable) resetSnapshot() {
 }
 
 // CollectTombstones collects in memory tombstones and tombstone objects.
-func (tbl *txnTable) CollectTombstones(ctx context.Context, txnOffset int) (engine.Tombstoner, error) {
+func (tbl *txnTable) CollectTombstones(
+	ctx context.Context, txnOffset int,
+) (engine.Tombstoner, error) {
 	tombstone := buildTombstoneV1()
 
 	offset := txnOffset
@@ -667,7 +670,11 @@ func (tbl *txnTable) CollectTombstones(ctx context.Context, txnOffset int) (engi
 	return tombstone, nil
 }
 
-func (tbl *txnTable) RangesInProgress(ctx context.Context, exprs []*plan.Expr, txnOffset int) (data engine.RelData, err error) {
+func (tbl *txnTable) RangesInProgress(
+	ctx context.Context,
+	exprs []*plan.Expr,
+	txnOffset int,
+) (data engine.RelData, err error) {
 	sid := tbl.proc.Load().GetService()
 	start := time.Now()
 	seq := tbl.db.op.NextSequence()
@@ -781,7 +788,11 @@ func (tbl *txnTable) RangesInProgress(ctx context.Context, exprs []*plan.Expr, t
 //   - ctx: Context used to control the lifecycle of the request.
 //   - exprs: A slice of expressions used to filter data.
 //   - txnOffset: Transaction offset used to specify the starting position for reading data.
-func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr, txnOffset int) (ranges engine.Ranges, err error) {
+func (tbl *txnTable) Ranges(
+	ctx context.Context,
+	exprs []*plan.Expr,
+	txnOffset int,
+) (ranges engine.Ranges, err error) {
 	sid := tbl.proc.Load().GetService()
 	start := time.Now()
 	seq := tbl.db.op.NextSequence()
@@ -1618,7 +1629,9 @@ func (tbl *txnTable) UpdateConstraint(ctx context.Context, c *engine.ConstraintD
 	return nil
 }
 
-func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, constraint [][]byte) error {
+func (tbl *txnTable) AlterTable(
+	ctx context.Context, c *engine.ConstraintDef, constraint [][]byte,
+) error {
 	if tbl.db.op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("cannot alter table in snapshot operation")
 	}
@@ -1994,7 +2007,8 @@ func (tbl *txnTable) ensureSeqnumsAndTypesExpectRowid() {
 
 // TODO:: do prefetch read and parallel compaction
 func (tbl *txnTable) compaction(
-	compactedBlks map[objectio.ObjectLocation][]int64) ([]objectio.BlockInfo, []objectio.ObjectStats, error) {
+	compactedBlks map[objectio.ObjectLocation][]int64,
+) ([]objectio.BlockInfo, []objectio.ObjectStats, error) {
 	s3writer := &colexec.S3Writer{}
 	s3writer.SetTableName(tbl.tableName)
 	s3writer.SetSchemaVer(tbl.version)
@@ -2032,7 +2046,9 @@ func (tbl *txnTable) compaction(
 	return createdBlks, stats, nil
 }
 
-func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) error {
+func (tbl *txnTable) Delete(
+	ctx context.Context, bat *batch.Batch, name string,
+) error {
 	if tbl.db.op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("delete operation is not allowed in snapshot transaction")
 	}
@@ -2083,8 +2099,11 @@ func (tbl *txnTable) GetDBID(ctx context.Context) uint64 {
 
 // for ut
 func BuildLocalDataSource(
-	ctx context.Context, rel engine.Relation,
-	ranges engine.RelData, txnOffset int) (source engine.DataSource, err error) {
+	ctx context.Context,
+	rel engine.Relation,
+	ranges engine.RelData,
+	txnOffset int,
+) (source engine.DataSource, err error) {
 
 	var (
 		ok  bool
@@ -2101,7 +2120,8 @@ func BuildLocalDataSource(
 func (tbl *txnTable) buildLocalDataSource(
 	ctx context.Context,
 	txnOffset int,
-	relData engine.RelData) (source engine.DataSource, err error) {
+	relData engine.RelData,
+) (source engine.DataSource, err error) {
 
 	tbl.getTxn().blockId_tn_delete_metaLoc_batch.RLock()
 	defer tbl.getTxn().blockId_tn_delete_metaLoc_batch.RUnlock()
@@ -2137,7 +2157,8 @@ func (tbl *txnTable) BuildReaders(
 	expr *plan.Expr,
 	relData engine.RelData,
 	num int,
-	txnOffset int) ([]engine.Reader, error) {
+	txnOffset int,
+) ([]engine.Reader, error) {
 	proc := p.(*process.Process)
 	//copy from NewReader.
 	if plan2.IsFalseExpr(expr) {
@@ -2336,7 +2357,8 @@ func (tbl *txnTable) newBlockReader(
 	filter blockio.BlockReadFilter,
 	blkInfos []*objectio.BlockInfo,
 	proc *process.Process,
-	orderedScan bool) ([]engine.Reader, error) {
+	orderedScan bool,
+) ([]engine.Reader, error) {
 	rds := make([]engine.Reader, num)
 	ts := tbl.db.op.SnapshotTS()
 	tableDef := tbl.GetTableDef(ctx)
@@ -2734,7 +2756,8 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(
 	ctx context.Context,
 	from types.TS,
 	to types.TS,
-	keysVector *vector.Vector) (bool, error) {
+	keysVector *vector.Vector,
+) (bool, error) {
 	if tbl.db.op.IsSnapOp() {
 		return false,
 			moerr.NewInternalErrorNoCtx("primary key modification is not allowed in snapshot transaction")
@@ -2778,7 +2801,8 @@ func (tbl *txnTable) transferDeletes(
 	ctx context.Context,
 	state *logtailreplay.PartitionState,
 	deleteObjs,
-	createObjs map[objectio.ObjectNameShort]struct{}) error {
+	createObjs map[objectio.ObjectNameShort]struct{},
+) error {
 	var blks []objectio.BlockInfo
 	sid := tbl.proc.Load().GetService()
 	{
@@ -2873,8 +2897,9 @@ func (tbl *txnTable) transferDeletes(
 	return nil
 }
 
-func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
-	blks []objectio.BlockInfo) (types.Rowid, bool, error) {
+func (tbl *txnTable) readNewRowid(
+	vec *vector.Vector, row int, blks []objectio.BlockInfo,
+) (types.Rowid, bool, error) {
 	var auxIdCnt int32
 	var typ plan.Type
 	var rowid types.Rowid
@@ -2958,7 +2983,12 @@ func (tbl *txnTable) newPkFilter(pkExpr, constExpr *plan.Expr) (*plan.Expr, erro
 	return plan2.BindFuncExprImplByPlanExpr(tbl.proc.Load().Ctx, "=", []*plan.Expr{pkExpr, constExpr})
 }
 
-func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, policyName string, targetObjSize uint32) (*api.MergeCommitEntry, error) {
+func (tbl *txnTable) MergeObjects(
+	ctx context.Context,
+	objstats []objectio.ObjectStats,
+	policyName string,
+	targetObjSize uint32,
+) (*api.MergeCommitEntry, error) {
 	snapshot := types.TimestampToTS(tbl.getTxn().op.SnapshotTS())
 	state, err := tbl.getPartitionState(ctx)
 	if err != nil {
@@ -3188,7 +3218,12 @@ func dumpTransferInfo(ctx context.Context, taskHost *cnMergeTask) (err error) {
 	return
 }
 
-func applyMergePolicy(ctx context.Context, policyName string, sortKeyPos int, objInfos []logtailreplay.ObjectInfo) ([]logtailreplay.ObjectInfo, error) {
+func applyMergePolicy(
+	ctx context.Context,
+	policyName string,
+	sortKeyPos int,
+	objInfos []logtailreplay.ObjectInfo,
+) ([]logtailreplay.ObjectInfo, error) {
 	arg := cutBetween(policyName, "(", ")")
 	if strings.HasPrefix(policyName, "small") {
 		size := uint32(110 * common.Const1MBytes)
