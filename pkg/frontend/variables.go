@@ -3609,11 +3609,6 @@ type UserDefinedVar struct {
 }
 
 func autocommitValue(ses FeSession) (bool, error) {
-	// always true for backSession
-	if _, ok := ses.(*backSession); ok {
-		return true, nil
-	}
-
 	value, err := ses.GetSessionSysVar("autocommit")
 	if err != nil {
 		return false, err
