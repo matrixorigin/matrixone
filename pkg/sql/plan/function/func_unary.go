@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"os"
 	"runtime"
 	"strconv"
 	"strings"
@@ -47,6 +48,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
 	"github.com/matrixorigin/matrixone/pkg/version"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/unidoc/unipdf/v3/common/license"
+	"github.com/unidoc/unipdf/v3/extractor"
+	"github.com/unidoc/unipdf/v3/model"
 )
 
 func AbsUInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -1012,6 +1016,49 @@ func ChunkString(text, mode string) string {
 	return "[" + strings.Join(chunkStrings, ", ") + "]"
 }
 
+func unipdfExtractText(inputPath string) string {
+	var result string
+
+	// Make sure to load your metered License API key prior to using the library.
+	// If you need a key, you can sign up and create a free one at https://cloud.unidoc.io
+	err := license.SetMeteredKey(`YOUR_KEY_HERE`)
+	if err != nil {
+	}
+
+	f, err := os.Open(inputPath)
+	if err != nil {
+	}
+
+	defer f.Close()
+
+	pdfReader, err := model.NewPdfReader(f)
+	if err != nil {
+	}
+
+	numPages, err := pdfReader.GetNumPages()
+	if err != nil {
+	}
+
+	for i := 0; i < numPages; i++ {
+		pageNum := i + 1
+
+		page, err := pdfReader.GetPage(pageNum)
+		if err != nil {
+		}
+
+		ex, err := extractor.New(page)
+		if err != nil {
+		}
+
+		text, err := ex.ExtractText()
+		if err != nil {
+		}
+		result += text
+	}
+
+	return result
+}
+
 func Chunk(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	source := vector.GenerateFunctionStrParameter(parameters[0])
 	chunkTypeParam := vector.GenerateFunctionStrParameter(parameters[1])
@@ -1029,30 +1076,45 @@ func Chunk(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 			continue
 		}
 
-		Filepath := string(inputBytes)
+		var input string
+		// s3 load file switch
+		var s3_load_file_switch = false
 
-		fs := proc.GetFileService()
-		r, err := ReadFromFile(Filepath, fs)
-		if err != nil {
-			return err
-		}
-		defer r.Close()
-		ctx, err := io.ReadAll(r)
-		if err != nil {
-			return err
-		}
-		if len(ctx) > 65536 /*blob size*/ {
-			return moerr.NewInternalError(proc.Ctx, "Data too long for blob")
-		}
-		if len(ctx) == 0 {
-			if err = rs.AppendBytes(nil, true); err != nil {
+		// unipdf switch
+		var uni_pdf_switch = false
+
+		// s3 Load file logic
+		if s3_load_file_switch {
+			Filepath := string(inputBytes)
+
+			fs := proc.GetFileService()
+			r, err := ReadFromFile(Filepath, fs)
+			if err != nil {
 				return err
 			}
-			return nil
+			defer r.Close()
+			ctx, err := io.ReadAll(r)
+			if err != nil {
+				return err
+			}
+			if len(ctx) > 65536 /*blob size*/ {
+				return moerr.NewInternalError(proc.Ctx, "Data too long for blob")
+			}
+			if len(ctx) == 0 {
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				return nil
+			}
+
+			input = string(ctx)
 		}
 
-		input := string(ctx)
-
+		// unipdf logic
+		if uni_pdf_switch {
+			Filepath := string(inputBytes)
+			input = unipdfExtractText(Filepath)
+		}
 		chunkType := string(chunkTypeBytes)
 		resultStr := ChunkString(input, chunkType)
 		if err := rs.AppendMustBytesValue([]byte(resultStr)); err != nil {
