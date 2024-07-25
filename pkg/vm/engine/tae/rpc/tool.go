@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/spf13/cobra"
 	"path/filepath"
 	"strconv"
@@ -129,6 +130,9 @@ func (c *MoInspectArg) PrepareCommand() *cobra.Command {
 
 	table := TableArg{}
 	moInspectCmd.AddCommand(table.PrepareCommand())
+
+	ckp := CheckpointArg{}
+	moInspectCmd.AddCommand(ckp.PrepareCommand())
 
 	return moInspectCmd
 }
@@ -280,7 +284,7 @@ func (c *moObjStatArg) Usage() (res string) {
 	res += "  -l, --level=0:\n"
 	res += "    The level of detail of the information, should be 0(brief), 1(standard), 2(detailed)\n"
 	res += "  --local=false:\n"
-	res += "    Whether it is a local file, if true, use local fs to read file\n"
+	res += "    If the file is downloaded from a standalone machine, you should use this flag\n"
 
 	return
 }
@@ -394,7 +398,7 @@ func (c *moObjStatArg) GetBriefStat(obj *objectio.ObjectMeta) (res string, err e
 		Rows:         header.Rows(),
 		Cols:         header.ColumnCount(),
 		BlkCnt:       data.BlockCount(),
-		Size:         formatBytes(ext.Length()),
+		Size:         formatBytes(ext.Length()), // todo change size
 		OriginalSize: formatBytes(ext.OriginSize()),
 	}
 
@@ -929,6 +933,96 @@ func (c *tableStatArg) Run() (err error) {
 	}
 
 	c.res = string(data)
+
+	return
+}
+
+type CheckpointArg struct {
+}
+
+func (c *CheckpointArg) PrepareCommand() *cobra.Command {
+	checkpointCmd := &cobra.Command{
+		Use:   "ckp",
+		Short: "checkpoint",
+		Long:  "Display information about a given checkpoint",
+		Run:   RunFactory(c),
+	}
+
+	checkpointCmd.SetUsageTemplate(c.Usage())
+
+	stat := ckpStatArg{}
+	checkpointCmd.AddCommand(stat.PrepareCommand())
+
+	return checkpointCmd
+}
+
+func (c *CheckpointArg) FromCommand(cmd *cobra.Command) (err error) {
+	return nil
+}
+
+func (c *CheckpointArg) String() string {
+	return "table"
+}
+
+func (c *CheckpointArg) Usage() (res string) {
+	res += "Available Commands:\n"
+	res += fmt.Sprintf("  %-5v show table information\n", "stat")
+
+	res += "\n"
+	res += "Usage:\n"
+	res += "inspect table [flags] [options]\n"
+
+	res += "\n"
+	res += "Use \"mo-tool inspect table <command> --help\" for more information about a given command.\n"
+
+	return
+}
+
+func (c *CheckpointArg) Run() error {
+	return nil
+}
+
+type ckpStatArg struct {
+	ctx  *inspectContext
+	name string
+	res  string
+}
+
+func (c *ckpStatArg) PrepareCommand() *cobra.Command {
+	ckpStatCmd := &cobra.Command{
+		Use:   "stat",
+		Short: "checkpoint stat",
+		Long:  "Display information about a given checkpoint",
+		Run:   RunFactory(c),
+	}
+
+	ckpStatCmd.SetUsageTemplate(c.Usage())
+
+	ckpStatCmd.Flags().StringP("name", "n", "", "checkpoint file name")
+
+	return ckpStatCmd
+}
+
+func (c *ckpStatArg) FromCommand(cmd *cobra.Command) (err error) {
+	c.name, _ = cmd.Flags().GetString("name")
+	if cmd.Flag("ictx") != nil {
+		c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
+
+	}
+	return nil
+}
+
+func (c *ckpStatArg) String() string {
+	return c.res
+}
+
+func (c *ckpStatArg) Usage() (res string) {
+
+	return
+}
+
+func (c *ckpStatArg) Run() (err error) {
+	c.res, err = checkpoint.GetCheckpointStat(context.Background(), c.ctx.db.Runtime, c.name)
 
 	return
 }
