@@ -304,7 +304,11 @@ func (h *Handle) HandleCommit(
 		}
 		common.DoIfInfoEnabled(func() {
 			if time.Since(start) > MAX_ALLOWED_TXN_LATENCY {
-				logutil.Info("Commit with long latency", zap.Duration("duration", time.Since(start)), zap.String("debug", meta.DebugString()))
+				logutil.Warn(
+					"SLOW-LOG",
+					zap.Duration("commit-latency", time.Since(start)),
+					zap.String("txn", meta.DebugString()),
+				)
 			}
 		})
 	}()
