@@ -96,6 +96,8 @@ func NewMergeObjectsEntry(
 
 func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) {
 	k := 0
+	pagesToSet := make([]*model.TransferHashPage, 0)
+	bts := time.Now().Add(time.Hour)
 	for _, obj := range entry.droppedObjs {
 		ioVector := model.InitTransferPageIO()
 		pages := make([]*model.TransferHashPage, 0, obj.BlockCnt())
@@ -111,7 +113,7 @@ func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) {
 			isTransient := !tblEntry.GetLastestSchema().HasPK()
 			id := obj.AsCommonID()
 			id.SetBlockOffset(uint16(j))
-			page := model.NewTransferHashPage(id, time.Now(), isTransient, entry.rt.LocalFs.Service, model.GetTTL(), model.GetDiskTTL())
+			page := model.NewTransferHashPage(id, bts, isTransient, entry.rt.LocalFs.Service, model.GetTTL(), model.GetDiskTTL())
 			mapping := make(map[uint32][]byte, len(m))
 			for srcRow, dst := range m {
 				objID := entry.createdObjs[dst.ObjIdx].ID()
@@ -129,15 +131,26 @@ func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) {
 			duration += time.Since(start)
 
 			entry.pageIds = append(entry.pageIds, id)
-			_ = entry.rt.TransferTable.AddPage(page)
+			entry.rt.TransferTable.AddPage(page)
 			pages = append(pages, page)
 		}
 
 		start = time.Now()
 		model.WriteTransferPage(ctx, entry.rt.LocalFs.Service, pages, *ioVector)
+		pagesToSet = append(pagesToSet, pages...)
 		duration += time.Since(start)
 		v2.TransferPageMergeLatencyHistogram.Observe(duration.Seconds())
 	}
+
+	now := time.Now()
+	for _, page := range pagesToSet {
+		if page.BornTS() != bts {
+			page.SetBornTS(now.Add(time.Minute))
+		} else {
+			page.SetBornTS(now)
+		}
+	}
+
 	if k != len(entry.transMappings.Mappings) {
 		logutil.Fatal(fmt.Sprintf("k %v, mapping %v", k, len(entry.transMappings.Mappings)))
 	}
