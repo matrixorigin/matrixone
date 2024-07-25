@@ -2286,15 +2286,7 @@ func (c *Compile) compileJoin(node, left, right *plan.Node, ns []*plan.Node, pro
 	if c.IsTpQuery() {
 		//construct join build operator for tp join
 		buildScopes[0].setRootOperator(constructJoinBuildOperator(c, vm.GetLeafOp(rs[0].RootOp), false, 1))
-		rs[0].Proc.Reg.MergeReceivers[1] = &process.WaitRegister{
-			Ctx: rs[0].Proc.Ctx,
-			Ch:  make(chan *process.RegisterMessage, 1),
-		}
-		buildScopes[0].setRootOperator(
-			connector.NewArgument().
-				WithReg(rs[0].Proc.Reg.MergeReceivers[1]),
-		)
-		rs[0].Proc.Reg.MergeReceivers = rs[0].Proc.Reg.MergeReceivers[:2]
+		rs[0].Proc.Reg.MergeReceivers = rs[0].Proc.Reg.MergeReceivers[:1]
 		buildScopes[0].IsEnd = true
 	}
 	return rs
