@@ -43,7 +43,6 @@ func (markJoin *MarkJoin) Prepare(proc *process.Process) error {
 	var err error
 	markJoin.ctr = new(container)
 	markJoin.ctr.InitReceiver(proc, false)
-	markJoin.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
 	markJoin.ctr.evecs = make([]evalVector, len(markJoin.Conditions[0]))
 	markJoin.ctr.vecs = make([]*vector.Vector, len(markJoin.Conditions[0]))
 	markJoin.ctr.bat = batch.NewWithSize(len(markJoin.Typs))
@@ -233,16 +232,12 @@ func (ctr *container) probe(bat *batch.Batch, ap *MarkJoin, proc *process.Proces
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
-		copy(ctr.inBuckets, hashmap.OneUInt8s)
-		vals, zvals := itr.Find(i, n, ctr.vecs, ctr.inBuckets)
+		vals, zvals := itr.Find(i, n, ctr.vecs)
 		var condState otyp
 		// var condNonEq otyp
 		// var condEq otyp
 		var err error
 		for k := 0; k < n; k++ {
-			if ctr.inBuckets[k] == 0 {
-				continue
-			}
 			if zvals[k] == 0 { // 2.1 : probe tuple has null
 				condState, err = ctr.EvalEntire(bat, ctr.bat, i+k, proc, ctr.rewriteCond)
 				if err != nil {
