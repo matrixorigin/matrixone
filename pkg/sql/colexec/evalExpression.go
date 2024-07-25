@@ -285,14 +285,14 @@ func EvalExpressionOnce(proc *process.Process, planExpr *plan.Expr, batches []*b
 	return nv, nil
 }
 
-func ifAllArgsAreConstant(executor *FunctionExpressionExecutor) bool {
-	for _, paramE := range executor.parameterExecutor {
-		if _, ok := paramE.(*FixedVectorExpressionExecutor); !ok {
-			return false
-		}
-	}
-	return true
-}
+// func ifAllArgsAreConstant(executor *FunctionExpressionExecutor) bool {
+// 	for _, paramE := range executor.parameterExecutor {
+// 		if _, ok := paramE.(*FixedVectorExpressionExecutor); !ok {
+// 			return false
+// 		}
+// 	}
+// 	return true
+// }
 
 type FoldExpr struct {
 	overloadID int64
