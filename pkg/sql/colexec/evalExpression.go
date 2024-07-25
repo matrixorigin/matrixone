@@ -185,10 +185,6 @@ func newExpressionExecutor(proc *process.Process, planExpr *plan.Expr, inRuntime
 			executor.SetParameter(i, subExecutor)
 		}
 
-		if t.F.GetFunc().GetObjName() == "regexp_substr" {
-			fmt.Print("dddd")
-		}
-
 		_, err = executor.constantFold(proc, nil, nil)
 		if err != nil {
 			executor.Free()
