@@ -82,9 +82,6 @@ type container struct {
 
 	// Result batch of intersec column execute operator
 	btc *batch.Batch
-
-	// process bucket mark
-	inBuckets []uint8
 }
 
 func (intersect *Intersect) Reset(proc *process.Process, pipelineFailed bool, err error) {

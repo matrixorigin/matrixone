@@ -43,10 +43,11 @@ type container struct {
 }
 
 type Product struct {
-	ctr       *container
-	Typs      []types.Type
-	Result    []colexec.ResultPos
-	IsShuffle bool
+	ctr        *container
+	Typs       []types.Type
+	Result     []colexec.ResultPos
+	IsShuffle  bool
+	JoinMapTag int32
 	vm.OperatorBase
 }
 
