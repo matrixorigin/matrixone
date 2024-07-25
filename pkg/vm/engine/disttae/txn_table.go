@@ -74,6 +74,13 @@ func (tbl *txnTable) getEngine() engine.Engine {
 }
 
 func (tbl *txnTable) getTxn() *Transaction {
+	if tbl == nil {
+		fmt.Println("tbl is nil ")
+	}
+
+	if tbl.db == nil {
+		fmt.Println("db is nil ")
+	}
 	return tbl.db.getTxn()
 }
 
@@ -2102,13 +2109,6 @@ func (tbl *txnTable) buildLocalDataSource(
 	txnOffset int,
 	relData engine.RelData) (source engine.DataSource, err error) {
 
-	proc := tbl.proc.Load()
-
-	state, err := tbl.getPartitionState(ctx)
-	if err != nil {
-		return nil, err
-	}
-
 	tbl.getTxn().blockId_tn_delete_metaLoc_batch.RLock()
 	defer tbl.getTxn().blockId_tn_delete_metaLoc_batch.RUnlock()
 
@@ -2128,18 +2128,10 @@ func (tbl *txnTable) buildLocalDataSource(
 	}
 	source, err = NewLocalDataSource(
 		ctx,
-		proc.Mp(),
-		types.TimestampToTS(tbl.getTxn().op.SnapshotTS()),
-		tbl.getTxn().engine.fs,
-		tbl.db.databaseId,
-		tbl.tableId,
+		tbl,
+		txnOffset,
 		ranges,
-		state,
-		tbl.getTxn().deletedBlocks.offsets,
-		tbl.getTxn().blockId_tn_delete_metaLoc_batch.data,
-		tbl.getTxn().writes[:txnOffset],
 		skipReadMem,
-		tbl.tableName,
 	)
 
 	return source, err
