@@ -259,6 +259,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	}
 	query.DetectSqls = sqls
 	reduceSinkSinkScanNodes(query)
+	builder.tempOptimizeForDML()
 	query.StmtType = plan.Query_INSERT
 
 	pn := &Plan{
