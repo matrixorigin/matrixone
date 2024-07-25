@@ -141,7 +141,7 @@ type SessionInfo struct {
 	SessionId            uuid.UUID
 }
 
-// AnalyzeInfo  analyze information for query
+// AnalyzeInfo  operatorAnalyzer information for query
 type AnalyzeInfo struct {
 	// NodeId, index of query's node list
 	NodeId int32
@@ -485,7 +485,8 @@ func (proc *Process) GetTxnOperator() client.TxnOperator {
 	return proc.Base.TxnOperator
 }
 
-type analyze struct {
+// Operator Resource Analzyer
+type operatorAnalyzer struct {
 	parallelMajor        bool
 	parallelIdx          int
 	start                time.Time

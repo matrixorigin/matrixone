@@ -200,6 +200,15 @@ func (s *Scope) Run(c *Compile) (err error) {
 	if s.DataSource.isConst {
 		_, err = p.ConstRun(s.DataSource.Bat, s.Proc)
 	} else {
+		if s.DataSource.R == nil {
+			s.NodeInfo.Data = s.NodeInfo.Data[:0]
+			readers, _, err := s.getReaders(c, 1)
+			if err != nil {
+				return err
+			}
+			s.DataSource.R = readers[0]
+		}
+
 		var tag int32
 		if s.DataSource.node != nil && len(s.DataSource.node.RecvMsgList) > 0 {
 			tag = s.DataSource.node.RecvMsgList[0].MsgTag
@@ -449,7 +458,7 @@ func buildJoinParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	}
 	mcpu := s.NodeInfo.Mcpu
 	if mcpu <= 1 { // no need to parallel
-		buildScope := c.newJoinBuildScope(s, nil)
+		buildScope := c.newJoinBuildScope(s, nil, 1)
 		s.PreScopes = append(s.PreScopes, buildScope)
 		if s.BuildIdx > 1 {
 			probeScope := c.newJoinProbeScope(s, nil)
@@ -472,7 +481,7 @@ func buildJoinParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		ss[i].Proc = process.NewFromProc(s.Proc, s.Proc.Ctx, 2)
 		ss[i].Proc.Reg.MergeReceivers[1].Ch = make(chan *process.RegisterMessage, 10)
 	}
-	probeScope, buildScope := c.newJoinProbeScope(s, ss), c.newJoinBuildScope(s, ss)
+	probeScope, buildScope := c.newJoinProbeScope(s, ss), c.newJoinBuildScope(s, ss, int32(mcpu))
 
 	ns, err := newParallelScope(c, s, ss)
 	if err != nil {

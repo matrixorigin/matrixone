@@ -48,10 +48,11 @@ type container struct {
 }
 
 type LoopJoin struct {
-	ctr    *container
-	Cond   *plan.Expr
-	Result []colexec.ResultPos
-	Typs   []types.Type
+	ctr        *container
+	Cond       *plan.Expr
+	Result     []colexec.ResultPos
+	Typs       []types.Type
+	JoinMapTag int32
 	vm.OperatorBase
 }
 

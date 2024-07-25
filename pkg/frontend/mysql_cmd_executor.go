@@ -33,6 +33,9 @@ import (
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -66,8 +69,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 )
 
 func createDropDatabaseErrorInfo() string {
@@ -173,7 +174,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	// add by #9907, set the result of last_query_id(), this will pass those isCmdFieldListSql() from client.
 	// fixme: this op leads all internal/background executor got NULL result if call last_query_id().
 	if sqlType != constant.InternalSql {
-		ses.pushQueryId(types.Uuid(stmID).ToString())
+		ses.pushQueryId(types.Uuid(stmID).String())
 	}
 
 	// -------------------------------------
@@ -441,6 +442,8 @@ func getDataFromPipeline(obj FeSession, execCtx *ExecCtx, bat *batch.Batch) erro
 		n,
 		tTime)
 
+	stats := statistic.StatsInfoFromContext(execCtx.reqCtx)
+	stats.AddOutputTimeConsumption(tTime)
 	return nil
 }
 
@@ -1080,13 +1083,6 @@ func createPrepareStmt(
 		}
 		// do not save ap query now()
 		if comp != nil && !comp.IsTpQuery() {
-			comp.SetIsPrepare(false)
-			comp.Release()
-			comp = nil
-		}
-
-		// @xxx when refactor prepare finish, remove this code
-		if comp != nil {
 			comp.SetIsPrepare(false)
 			comp.Release()
 			comp = nil

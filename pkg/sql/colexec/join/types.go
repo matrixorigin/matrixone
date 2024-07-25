@@ -15,7 +15,6 @@
 package join
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -44,10 +43,8 @@ type container struct {
 
 	state int
 
-	inBuckets []uint8
-
 	batches       []*batch.Batch
-	batchRowCount int
+	batchRowCount int64
 	lastrow       int
 	rbat          *batch.Batch
 
@@ -62,7 +59,7 @@ type container struct {
 	evecs []evalVector
 	vecs  []*vector.Vector
 
-	mp  *hashmap.JoinMap
+	mp  *process.JoinMap
 	bat *batch.Batch
 
 	maxAllocSize int64
@@ -77,8 +74,9 @@ type InnerJoin struct {
 
 	HashOnPK           bool
 	IsShuffle          bool
+	ShuffleIdx         int32
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
-
+	JoinMapTag         int32
 	vm.OperatorBase
 }
 
@@ -146,9 +144,6 @@ func (ctr *container) cleanExprExecutor() {
 }
 
 func (ctr *container) cleanBatch(proc *process.Process) {
-	for i := range ctr.batches {
-		proc.PutBatch(ctr.batches[i])
-	}
 	ctr.batches = nil
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
