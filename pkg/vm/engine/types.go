@@ -37,11 +37,9 @@ import (
 type Nodes []Node
 
 type Node struct {
-	Mcpu   int
-	Id     string `json:"id"`
-	Addr   string `json:"address"`
-	Header objectio.InfoHeader
-	//Data             []byte `json:"payload"`
+	Mcpu             int
+	Id               string `json:"id"`
+	Addr             string `json:"address"`
 	Data             RelData
 	NeedExpandRanges bool
 }
@@ -621,6 +619,14 @@ type Tombstoner interface {
 	Merge(other Tombstoner) error
 }
 
+type RelDataType uint8
+
+const (
+	InvalidRelData RelDataType = iota
+	RelDataV1
+	RelDataV2
+)
+
 type RelData interface {
 	MarshalToBytes() []byte
 
@@ -708,7 +714,7 @@ type Relation interface {
 	// first parameter: Context
 	// second parameter: Slice of expressions used to filter the data.
 	// third parameter: Transaction offset used to specify the starting position for reading data.
-	//Ranges(context.Context, []*plan.Expr, int) (Ranges, error)
+	Ranges(context.Context, []*plan.Expr, int) (Ranges, error)
 
 	//RangesInProgress will substitute the Ranges function in the future.
 	RangesInProgress(context.Context, []*plan.Expr, int) (RelData, error)
@@ -886,4 +892,60 @@ type EntireEngine struct {
 
 func IsMemtable(tblRange []byte) bool {
 	return bytes.Equal(tblRange, objectio.EmptyBlockInfoBytes)
+}
+
+type InvalidRelationData struct {
+	typ RelDataType
+}
+
+func BuildInvalidRelData() RelData {
+	return &InvalidRelationData{InvalidRelData}
+}
+
+func (rd *InvalidRelationData) MarshalToBytes() []byte {
+	panic("Not Supported")
+}
+
+func (rd *InvalidRelationData) UnMarshal(buf []byte) error {
+	panic("Not Supported")
+}
+
+func (rd *InvalidRelationData) AttachTombstones(tombstones Tombstoner) error {
+	panic("Not Supported")
+}
+
+func (rd *InvalidRelationData) GetTombstones() Tombstoner {
+	panic("Not Supported")
+}
+
+func (rd *InvalidRelationData) ForeachDataBlk(begin, end int, f func(blk *objectio.BlockInfoInProgress) error) error {
+	panic("Not Supported")
+}
+
+func (rd *InvalidRelationData) GetDataBlk(i int) *objectio.BlockInfoInProgress {
+	panic("Not Supported")
+}
+
+func (rd *InvalidRelationData) SetDataBlk(i int, blk *objectio.BlockInfoInProgress) {
+	panic("Not Supported")
+}
+
+func (rd *InvalidRelationData) DataBlkSlice(begin, end int) RelData {
+	panic("Not Supported")
+}
+
+func (rd *InvalidRelationData) GroupByPartitionNum() map[int16]RelData {
+	panic("Not Supported")
+}
+
+func (rd *InvalidRelationData) AppendDataBlk(blk *objectio.BlockInfoInProgress) {
+	panic("Not Supported")
+}
+
+func (rd *InvalidRelationData) BuildEmptyRelData() RelData {
+	return &InvalidRelationData{InvalidRelData}
+}
+
+func (rd *InvalidRelationData) BlkCnt() int {
+	return 0
 }
