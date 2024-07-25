@@ -315,6 +315,7 @@ func WriteTransferPage(ctx context.Context, fs fileservice.FileService, pages []
 		}
 		logutil.Errorf("[TransferPage] write transfer page error, page count %v", len(pages))
 	}
+	now := time.Now()
 	for i, page := range pages {
 		path := Path{
 			Name:   ioVector.FilePath,
@@ -322,5 +323,6 @@ func WriteTransferPage(ctx context.Context, fs fileservice.FileService, pages []
 			Size:   ioVector.Entries[i].Size,
 		}
 		page.SetPath(path)
+		page.SetBornTS(now)
 	}
 }

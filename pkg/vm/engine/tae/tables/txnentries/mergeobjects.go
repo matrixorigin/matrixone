@@ -129,12 +129,14 @@ func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) {
 			duration += time.Since(start)
 
 			entry.pageIds = append(entry.pageIds, id)
-			_ = entry.rt.TransferTable.AddPage(page)
 			pages = append(pages, page)
 		}
 
 		start = time.Now()
 		model.WriteTransferPage(ctx, entry.rt.LocalFs.Service, pages, *ioVector)
+		for _, page := range pages {
+			entry.rt.TransferTable.AddPage(page)
+		}
 		duration += time.Since(start)
 		v2.TransferPageMergeLatencyHistogram.Observe(duration.Seconds())
 	}

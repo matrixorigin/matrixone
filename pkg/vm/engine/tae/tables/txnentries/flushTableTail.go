@@ -152,12 +152,14 @@ func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) {
 		}
 		duration += time.Since(start)
 
-		entry.rt.TransferTable.AddPage(page)
 		pages = append(pages, page)
 	}
 
 	start = time.Now()
 	model.WriteTransferPage(ctx, entry.rt.LocalFs.Service, pages, *ioVector)
+	for _, page := range pages {
+		entry.rt.TransferTable.AddPage(page)
+	}
 	duration += time.Since(start)
 	v2.TransferPageFlushLatencyHistogram.Observe(duration.Seconds())
 }
