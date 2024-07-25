@@ -33,6 +33,9 @@ import (
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -66,8 +69,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 )
 
 func createDropDatabaseErrorInfo() string {
@@ -441,6 +442,8 @@ func getDataFromPipeline(obj FeSession, execCtx *ExecCtx, bat *batch.Batch) erro
 		n,
 		tTime)
 
+	stats := statistic.StatsInfoFromContext(execCtx.reqCtx)
+	stats.AddOutputTimeConsumption(tTime)
 	return nil
 }
 
