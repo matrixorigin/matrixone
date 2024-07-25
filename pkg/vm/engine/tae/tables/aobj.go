@@ -114,7 +114,10 @@ func (obj *aobject) PPString(level common.PPLevel, depth int, prefix string, blk
 	if level >= common.PPL1 {
 		obj.RLock()
 		var appendstr, deletestr string
-		appendstr = obj.getLastAppendMVCC().StringLocked()
+		node := obj.node.Load()
+		if !node.IsPersisted() {
+			appendstr = node.MustMNode().getLastNode().appendMVCC.StringLocked()
+		}
 		if mvcc := obj.tryGetMVCC(); mvcc != nil {
 			if blkid >= 0 {
 				deletestr = mvcc.StringBlkLocked(level, 0, "", blkid)
