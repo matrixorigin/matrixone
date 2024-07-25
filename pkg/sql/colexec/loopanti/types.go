@@ -47,11 +47,11 @@ type container struct {
 }
 
 type LoopAnti struct {
-	ctr    *container
-	Result []int32
-	Cond   *plan.Expr
-	Typs   []types.Type
-
+	ctr        *container
+	Result     []int32
+	Cond       *plan.Expr
+	Typs       []types.Type
+	JoinMapTag int32
 	vm.OperatorBase
 }
 
