@@ -35,11 +35,8 @@ var (
 		//output: "upgrade account acc1 with retry 5",
 		//input:  "upgrade account 'acc1'",
 		//output: "upgrade account acc1",
-
-		input:  "create table t2(a int, b datalink);",
-		output: "create table t2 (a int, b datalink)",
-		//input:  "show upgrade",
-		//output: "show upgrade",
+		input:  "show upgrade",
+		output: "show upgrade",
 	}
 )
 
@@ -196,6 +193,9 @@ var (
 	}, {
 		input:  "show index from t1 from db",
 		output: "show index from t1 from db",
+	}, {
+		input:  "create table t2(a int, b datalink);",
+		output: "create table t2 (a int, b datalink)",
 	}, {
 		input:  "select * from (SELECT * FROM (SELECT 1, 2, 3)) AS t1",
 		output: "select * from (select * from (select 1, 2, 3)) as t1",
