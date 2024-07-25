@@ -18,9 +18,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"strings"
 
 	"go.uber.org/zap"
 
@@ -102,7 +103,13 @@ func (b *basePKFilter) String() string {
 		b.valid, name[b.op], b.lb, b.ub, b.vec, b.oid.String())
 }
 
-func evalValue(exprImpl *plan.Expr_F, tblDef *plan.TableDef, isVec bool, pkName string, proc *process.Process) (
+func evalValue(
+	exprImpl *plan.Expr_F,
+	tblDef *plan.TableDef,
+	isVec bool,
+	pkName string,
+	proc *process.Process,
+) (
 	ok bool, oid types.T, vals [][]byte) {
 	var val []byte
 	var col *plan.Expr_Col
@@ -139,7 +146,9 @@ func evalValue(exprImpl *plan.Expr_F, tblDef *plan.TableDef, isVec bool, pkName 
 	return true, types.T(tblDef.Cols[colPos].Typ.Id), vals
 }
 
-func mergeBaseFilterInKind(left, right basePKFilter, isOR bool, proc *process.Process) (ret basePKFilter) {
+func mergeBaseFilterInKind(
+	left, right basePKFilter, isOR bool, proc *process.Process,
+) (ret basePKFilter) {
 	var ok bool
 	var va, vb *vector.Vector
 	ret.vec = vector.NewVec(left.oid.ToType())
@@ -314,7 +323,9 @@ func mergeBaseFilterInKind(left, right basePKFilter, isOR bool, proc *process.Pr
 // left op in (">", ">=", "=", "<", "<="), right op in (">", ">=", "=", "<", "<=")
 // left op AND right op
 // left op OR right op
-func mergeFilters(left, right basePKFilter, connector int, proc *process.Process) (finalFilter basePKFilter) {
+func mergeFilters(
+	left, right basePKFilter, connector int, proc *process.Process,
+) (finalFilter basePKFilter) {
 	defer func() {
 		finalFilter.oid = left.oid
 	}()
@@ -1489,7 +1500,8 @@ func ForeachCommittedObjects(
 	createObjs map[objectio.ObjectNameShort]struct{},
 	delObjs map[objectio.ObjectNameShort]struct{},
 	p *logtailreplay.PartitionState,
-	onObj func(info logtailreplay.ObjectInfo) error) (err error) {
+	onObj func(info logtailreplay.ObjectInfo) error,
+) (err error) {
 	for obj := range createObjs {
 		if objInfo, ok := p.GetObject(obj); ok {
 			if err = onObj(objInfo); err != nil {
@@ -1544,8 +1556,10 @@ func ForeachSnapshotObjects(
 }
 
 func ConstructObjStatsByLoadObjMeta(
-	ctx context.Context, metaLoc objectio.Location,
-	fs fileservice.FileService) (stats objectio.ObjectStats, dataMeta objectio.ObjectDataMeta, err error) {
+	ctx context.Context,
+	metaLoc objectio.Location,
+	fs fileservice.FileService,
+) (stats objectio.ObjectStats, dataMeta objectio.ObjectDataMeta, err error) {
 
 	// 1. load object meta
 	var meta objectio.ObjectMeta
@@ -1574,7 +1588,9 @@ func ConstructObjStatsByLoadObjMeta(
 }
 
 // getDatabasesExceptDeleted remove databases delete in the txn from the CatalogCache
-func getDatabasesExceptDeleted(accountId uint32, cache *cache.CatalogCache, txn *Transaction) []string {
+func getDatabasesExceptDeleted(
+	accountId uint32, cache *cache.CatalogCache, txn *Transaction,
+) []string {
 	//first get all delete tables
 	deleteDatabases := make(map[string]any)
 	txn.deletedDatabaseMap.Range(func(k, _ any) bool {
@@ -1755,7 +1771,9 @@ func MakeFunctionExprForTest(name string, args []*plan.Expr) *plan.Expr {
 	}
 }
 
-func MakeInExprForTest[T any](arg0 *plan.Expr, vals []T, oid types.T, mp *mpool.MPool) *plan.Expr {
+func MakeInExprForTest[T any](
+	arg0 *plan.Expr, vals []T, oid types.T, mp *mpool.MPool,
+) *plan.Expr {
 	vec := vector.NewVec(oid.ToType())
 	for _, val := range vals {
 		_ = vector.AppendAny(vec, val, false, mp)
