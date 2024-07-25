@@ -31,6 +31,8 @@ func (s *taeStorage) Write(
 	switch op {
 	case uint32(apipb.OpCode_OpPreCommit):
 		return HandleWrite(ctx, txnMeta, payload, s.taeHandler.HandlePreCommitWrite)
+	case uint32(apipb.OpCode_OpCommitMerge):
+		return HandleWrite(ctx, txnMeta, payload, s.taeHandler.HandleCommitMerge)
 	default:
 		return nil, moerr.NewNotSupported(ctx, "unknown write op: %v", op)
 	}
