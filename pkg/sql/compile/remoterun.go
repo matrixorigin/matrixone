@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -192,10 +191,6 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 		Addr:    s.NodeInfo.Addr,
 		Mcpu:    int32(s.NodeInfo.Mcpu),
 		Payload: string(s.NodeInfo.Data.MarshalToBytes()),
-		Type: objectio.EncodeInfoHeader(objectio.InfoHeader{
-			Type:    objectio.BlockInfoType,
-			Version: objectio.V1},
-		),
 	}
 	ctx.pipe = p
 	ctx.scope = s
@@ -359,7 +354,6 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			return nil, err
 		}
 		s.NodeInfo.Data = relData
-		s.NodeInfo.Header = objectio.DecodeInfoHeader(p.Node.Type)
 	}
 	s.Proc = process.NewFromProc(proc, proc.Ctx, int(p.ChildrenCount))
 	{

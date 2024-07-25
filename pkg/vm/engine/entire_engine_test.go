@@ -19,6 +19,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -27,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
-	"github.com/stretchr/testify/assert"
 )
 
 const (
@@ -289,12 +290,6 @@ func (e *testEngine) NewBlockReader(_ context.Context, _ int, _ timestamp.Timest
 	} else {
 		e.parent.state = e.parent.state - e.parent.step*e.parent.state
 	}
-	return nil, nil
-}
-
-func (e *testEngine) BuildBlockReaders(
-	ctx context.Context, proc any, ts timestamp.Timestamp,
-	expr *plan.Expr, def *plan.TableDef, relData RelData, num int) ([]Reader, error) {
 	return nil, nil
 }
 
