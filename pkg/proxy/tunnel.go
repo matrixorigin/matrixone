@@ -590,7 +590,10 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 				rotated = false
 			}
 
-			p.mu.inTxn = checkTxnStatus(buf)
+			inTxn, ok := checkTxnStatus(buf)
+			if ok {
+				p.mu.inTxn = inTxn
+			}
 			if !p.mu.inTxn && p.tun.transferIntent.Load() && !rotated {
 				peer.wg.Add(1)
 				p.transferred = true
@@ -755,7 +758,10 @@ func handleEOFPacket(msg []byte) bool {
 	return txnStatus(binary.LittleEndian.Uint16(msg[7:]))
 }
 
-func checkTxnStatus(msg []byte) bool {
+// the first return value is the txn status, and the second return value
+// indicates if we can get the txn status from the packet.
+func checkTxnStatus(msg []byte) (bool, bool) {
+	ok := true
 	inTxn := true
 	// For the server->client pipe, we get the transaction status from the
 	// OK and EOF packet, which is used in connection transfer. If the session
@@ -764,6 +770,8 @@ func checkTxnStatus(msg []byte) bool {
 		inTxn = handleOKPacket(msg)
 	} else if isEOFPacket(msg) {
 		inTxn = handleEOFPacket(msg)
+	} else {
+		ok = false
 	}
-	return inTxn
+	return inTxn, ok
 }

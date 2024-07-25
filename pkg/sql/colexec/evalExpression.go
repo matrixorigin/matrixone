@@ -218,9 +218,11 @@ func newExpressionExecutor(proc *process.Process, planExpr *plan.Expr, inRuntime
 		// 		fixed := NewFixedVectorExpressionExecutor(mp, false, nil)
 
 		// 		if execLen == 1 {
-		// 			// ToConst just returns a new pointer to the same memory.
+		// 			// ToConst may returns a new pointer to the same memory.
 		// 			// so we need to duplicate it.
-		// 			fixed.resultVector, err = result.ToConst(0, 1, mp).Dup(mp)
+		// 			constResult := result.ToConst(0, 1, mp)
+		// 			defer constResult.Free(mp)
+		// 			fixed.resultVector, err = constResult.Dup(mp)
 		// 		} else {
 		// 			fixed.fixed = true
 		// 			fixed.resultVector = result
