@@ -4116,6 +4116,15 @@ func strToUuid(
 	return nil
 }
 
+func ConvertJsonBytes(inBytes []byte) ([]byte, error) {
+	s := convertByteSliceToString(inBytes)
+	json, err := types.ParseStringToByteJson(s)
+	if err != nil {
+		return nil, err
+	}
+	return types.EncodeJson(json)
+}
+
 func strToJson(
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
@@ -4128,12 +4137,7 @@ func strToJson(
 				return err
 			}
 		} else {
-			s := convertByteSliceToString(v)
-			json, err := types.ParseStringToByteJson(s)
-			if err != nil {
-				return err
-			}
-			val, err := types.EncodeJson(json)
+			val, err := ConvertJsonBytes(v)
 			if err != nil {
 				return err
 			}

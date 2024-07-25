@@ -212,7 +212,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		stmt.Param.Parallel = false
 	}
 	if stmt.Param.Parallel && (getCompressType(stmt.Param, fileName) != tree.NOCOMPRESS || stmt.Local) {
-		projectNode.ProjectList = makeCastExpr(stmt, fileName, originTableDef)
+		projectNode.ProjectList = makeCastExpr(stmt, fileName, originTableDef, projectNode)
 	}
 	lastNodeId = builder.appendNode(projectNode, bindCtx)
 	builder.qry.LoadTag = true
@@ -259,6 +259,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	}
 	query.DetectSqls = sqls
 	reduceSinkSinkScanNodes(query)
+	builder.tempOptimizeForDML()
 	query.StmtType = plan.Query_INSERT
 
 	pn := &Plan{
@@ -416,25 +417,22 @@ func getCompressType(param *tree.ExternParam, filepath string) string {
 	}
 }
 
-func makeCastExpr(stmt *tree.Load, fileName string, tableDef *TableDef) []*plan.Expr {
+func makeCastExpr(stmt *tree.Load, fileName string, tableDef *TableDef, node *plan.Node) []*plan.Expr {
 	ret := make([]*plan.Expr, 0)
 	stringTyp := &plan.Type{
 		Id: int32(types.T_varchar),
 	}
 	for i := 0; i < len(tableDef.Cols); i++ {
-		typ := tableDef.Cols[i].Typ
-		expr := &plan.Expr{
-			Typ: *stringTyp,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: 0,
-					ColPos: int32(i),
-				},
-			},
+		typ := node.ProjectList[i].Typ
+		expr := node.ProjectList[i].Expr
+		planExpr := &plan.Expr{
+			Typ:  *stringTyp,
+			Expr: expr,
 		}
 
-		expr, _ = makePlan2CastExpr(stmt.Param.Ctx, expr, typ)
-		ret = append(ret, expr)
+		planExpr, _ = makePlan2CastExpr(stmt.Param.Ctx, planExpr, typ)
+		ret = append(ret, planExpr)
 	}
+
 	return ret
 }

@@ -95,15 +95,13 @@ func New(
 		packerPool: fileservice.NewPool(
 			128,
 			func() *types.Packer {
-				return types.NewPacker(mp)
+				return types.NewPacker()
 			},
 			func(packer *types.Packer) {
 				packer.Reset()
-				packer.FreeMem()
 			},
 			func(packer *types.Packer) {
-				packer.Reset()
-				packer.FreeMem()
+				packer.Close()
 			},
 		),
 	}
