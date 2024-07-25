@@ -561,13 +561,29 @@ func (expr *FunctionExpressionExecutor) constantFold(proc *process.Process, batc
 		if err != nil {
 			return nil, err
 		}
+		if fixExe, ok := expr.parameterExecutor[i].(*FixedVectorExpressionExecutor); ok {
+			if !fixExe.fixed {
+				expr.parameterResults[i].SetLength(1)
+			}
+		}
 	}
 
-	if err = expr.resultVector.PreExtendAndReset(batches[0].RowCount()); err != nil {
+	execLen := 1
+	if len(expr.parameterResults) > 0 {
+		firstParam := expr.parameterResults[0]
+		if !firstParam.IsConst() {
+			execLen = firstParam.Length()
+		}
+	}
+	if execLen < batches[0].RowCount() {
+		execLen = batches[0].RowCount()
+	}
+
+	if err = expr.resultVector.PreExtendAndReset(execLen); err != nil {
 		return nil, err
 	}
 
-	if err = expr.evalFn(expr.parameterResults, expr.resultVector, proc, batches[0].RowCount(), nil); err != nil {
+	if err = expr.evalFn(expr.parameterResults, expr.resultVector, proc, execLen, nil); err != nil {
 		return nil, err
 	}
 	expr.folded = true
