@@ -96,7 +96,7 @@ func NewMergeObjectsEntry(
 
 func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) {
 	k := 0
-	pagesToSet := make([]*model.TransferHashPage, 0)
+	pagesToSet := make([][]*model.TransferHashPage, 0, len(entry.droppedObjs))
 	bts := time.Now().Add(time.Hour)
 	for _, obj := range entry.droppedObjs {
 		ioVector := model.InitTransferPageIO()
@@ -137,17 +137,19 @@ func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) {
 
 		start = time.Now()
 		model.WriteTransferPage(ctx, entry.rt.LocalFs.Service, pages, *ioVector)
-		pagesToSet = append(pagesToSet, pages...)
+		pagesToSet = append(pagesToSet, pages)
 		duration += time.Since(start)
 		v2.TransferPageMergeLatencyHistogram.Observe(duration.Seconds())
 	}
 
 	now := time.Now()
-	for _, page := range pagesToSet {
-		if page.BornTS() != bts {
-			page.SetBornTS(now.Add(time.Minute))
-		} else {
-			page.SetBornTS(now)
+	for _, pages := range pagesToSet {
+		for _, page := range pages {
+			if page.BornTS() != bts {
+				page.SetBornTS(now.Add(time.Minute))
+			} else {
+				page.SetBornTS(now)
+			}
 		}
 	}
 
