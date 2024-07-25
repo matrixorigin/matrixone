@@ -48,7 +48,8 @@ func (t *Table) BuildReaders(
 	expr *plan.Expr,
 	relData engine.RelData,
 	parallel int,
-	_ int) (readers []engine.Reader, err error) {
+	_ int,
+	_ bool) (readers []engine.Reader, err error) {
 
 	readers = make([]engine.Reader, parallel)
 	var shardIDs []uint64

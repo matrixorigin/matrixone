@@ -253,7 +253,8 @@ func (tbl *txnTableDelegate) BuildReaders(
 	expr *plan.Expr,
 	relData engine.RelData,
 	num int,
-	txnOffset int) ([]engine.Reader, error) {
+	txnOffset int,
+	orderBy bool) ([]engine.Reader, error) {
 	if tbl.isLocal() {
 		return tbl.origin.BuildReaders(
 			ctx,
@@ -262,6 +263,7 @@ func (tbl *txnTableDelegate) BuildReaders(
 			relData,
 			num,
 			txnOffset,
+			orderBy,
 		)
 	}
 	return nil, nil

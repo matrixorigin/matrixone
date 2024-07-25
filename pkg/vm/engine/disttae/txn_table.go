@@ -2158,20 +2158,35 @@ func (tbl *txnTable) BuildReaders(
 	relData engine.RelData,
 	num int,
 	txnOffset int,
+	orderBy bool,
 ) ([]engine.Reader, error) {
 	proc := p.(*process.Process)
 	//copy from NewReader.
 	if plan2.IsFalseExpr(expr) {
 		return []engine.Reader{new(emptyReader)}, nil
 	}
+
+	if orderBy {
+		if num != 1 {
+			return nil, moerr.NewInternalErrorNoCtx("orderBy only support one reader")
+		}
+	}
+
 	//relData maybe is nil, indicate that only read data from memory.
 	if relData == nil || relData.BlkCnt() == 0 {
-		relData = buildRelationDataV1([]*objectio.BlockInfoInProgress{&objectio.EmptyBlockInfoInProgress})
+		if tbl.tableName == "statement_info" && orderBy {
+			logutil.Infof("xxxx txn:%s, relData is nil or empty",
+				tbl.db.op.Txn().DebugString())
+		}
+		relData = buildRelationDataV1(
+			[]*objectio.BlockInfoInProgress{&objectio.EmptyBlockInfoInProgress})
 	}
+
 	blkCnt := relData.BlkCnt()
 	if blkCnt < num {
 		return nil, moerr.NewInternalErrorNoCtx("not enough blocks")
 	}
+
 	scanType := determineScanType(relData, num)
 	def := tbl.GetTableDef(ctx)
 	mod := blkCnt % num
@@ -2199,6 +2214,10 @@ func (tbl *txnTable) BuildReaders(
 		)
 		rd.scanType = scanType
 		rds = append(rds, rd)
+	}
+	if tbl.tableName == "statement_info" && orderBy {
+		logutil.Infof("xxxx txn:%s, build local readers:%d, blks:%d",
+			tbl.db.op.Txn().DebugString(), len(rds), blkCnt)
 	}
 	return rds, nil
 }

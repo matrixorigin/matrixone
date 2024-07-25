@@ -759,26 +759,16 @@ func (r *readerInProgress) Close() error {
 }
 
 func (r *readerInProgress) SetOrderBy(orderby []*plan.OrderBySpec) {
-	r.OrderBy = orderby
+	//r.OrderBy = orderby
+	r.source.SetOrderBy(orderby)
 }
 
 func (r *readerInProgress) GetOrderBy() []*plan.OrderBySpec {
-	return r.OrderBy
+	return r.source.GetOrderBy()
 }
 
 func (r *readerInProgress) SetFilterZM(zm objectio.ZoneMap) {
-	if !r.filterZM.IsInited() {
-		r.filterZM = zm.Clone()
-		return
-	}
-	if r.desc && r.filterZM.CompareMax(zm) < 0 {
-		r.filterZM = zm.Clone()
-		return
-	}
-	if !r.desc && r.filterZM.CompareMin(zm) > 0 {
-		r.filterZM = zm.Clone()
-		return
-	}
+	r.source.SetFilterZM(zm)
 }
 
 func (r *readerInProgress) Read(

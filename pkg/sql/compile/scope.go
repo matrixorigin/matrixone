@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -573,6 +574,11 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	if scanUsedCpuNumber == 1 {
 		s.Magic = Normal
 		s.DataSource.R = readers[0]
+		if s.DataSource.TableDef.Name == "statement_info" {
+			logutil.Infof("xxxx txn :%s , set order by :%v",
+				s.Proc.GetTxnOperator().Txn().DebugString(),
+				len(s.DataSource.OrderBy) > 0)
+		}
 		s.DataSource.R.SetOrderBy(s.DataSource.OrderBy)
 		return s, nil
 	}
@@ -1246,7 +1252,8 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 			s.DataSource.FilterExpr,
 			s.NodeInfo.Data,
 			scanUsedCpuNumber,
-			s.TxnOffset)
+			s.TxnOffset,
+			len(s.DataSource.OrderBy) > 0)
 
 		if err != nil {
 			return
@@ -1337,7 +1344,8 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 				s.DataSource.FilterExpr,
 				s.NodeInfo.Data,
 				scanUsedCpuNumber,
-				s.TxnOffset)
+				s.TxnOffset,
+				len(s.DataSource.OrderBy) > 0)
 			if err != nil {
 				return
 			}
@@ -1357,7 +1365,7 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 					mp[int16(num)],
 					scanUsedCpuNumber,
 					s.TxnOffset,
-				)
+					len(s.DataSource.OrderBy) > 0)
 				if err != nil {
 					return
 				}

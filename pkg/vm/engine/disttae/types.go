@@ -805,6 +805,11 @@ type blockSortHelper struct {
 	zm  index.ZM
 }
 
+type blockSortHelperInProgress struct {
+	blk *objectio.BlockInfoInProgress
+	zm  index.ZM
+}
+
 type blockReader struct {
 	withFilterMixin
 

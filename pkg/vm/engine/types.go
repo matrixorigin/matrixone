@@ -686,6 +686,12 @@ type DataSource interface {
 	GetTombstonesInProgress(
 		ctx context.Context, bid objectio.Blockid) (deletedRows []int64, err error)
 
+	SetOrderBy(orderby []*plan.OrderBySpec)
+
+	GetOrderBy() []*plan.OrderBySpec
+
+	SetFilterZM(zm objectio.ZoneMap)
+
 	Close()
 }
 
@@ -769,7 +775,8 @@ type Relation interface {
 		expr *plan.Expr,
 		relData RelData,
 		num int,
-		txnOffset int) ([]Reader, error)
+		txnOffset int,
+		orderBy bool) ([]Reader, error)
 
 	TableColumns(ctx context.Context) ([]*Attribute, error)
 
