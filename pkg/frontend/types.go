@@ -57,6 +57,7 @@ type ComputationRunner interface {
 	Run(ts uint64) (*util.RunResult, error)
 }
 
+// compile.Compile should implement ComputationRunner to support Run method.
 var _ ComputationRunner = &compile.Compile{}
 
 // ComputationWrapper is the wrapper of the computation

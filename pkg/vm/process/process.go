@@ -18,9 +18,6 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"io"
-	"time"
-
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -28,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -36,76 +32,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/util"
-	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"io"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
 
 const DefaultBatchSize = 8192
-
-// New creates a new Process.
-// A process stores the execution context.
-func New(
-	ctx context.Context,
-	m *mpool.MPool,
-	txnClient client.TxnClient,
-	txnOperator client.TxnOperator,
-	fileService fileservice.FileService,
-	lockService lockservice.LockService,
-	queryClient qclient.QueryClient,
-	hakeeper logservice.CNHAKeeperClient,
-	udfService udf.Service,
-	aicm *defines.AutoIncrCacheManager) *Process {
-	sid := ""
-	if lockService != nil {
-		sid = lockService.GetConfig().ServiceID
-	}
-
-	baseProcess := &BaseProcess{
-		mp:             m,
-		TxnClient:      txnClient,
-		FileService:    fileService,
-		IncrService:    incrservice.GetAutoIncrementService(sid),
-		UnixTime:       time.Now().UnixNano(),
-		LastInsertID:   new(uint64),
-		LockService:    lockService,
-		Aicm:           aicm,
-		vp:             initCachedVectorPool(),
-		valueScanBatch: make(map[[16]byte]*batch.Batch),
-		QueryClient:    queryClient,
-		Hakeeper:       hakeeper,
-		UdfService:     udfService,
-		logger:         util.GetLogger(sid), // TODO: set by input
-		TxnOperator:    txnOperator,
-	}
-	return &Process{
-		Ctx:  ctx,
-		Base: baseProcess,
-	}
-}
-
-// NewFromProc create a new Process based on another process.
-func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
-	proc := new(Process)
-	newctx, cancel := context.WithCancel(ctx)
-	proc.Base = p.Base
-	// reg and cancel
-	proc.Ctx = newctx
-	proc.Cancel = cancel
-	proc.Reg.MergeReceivers = make([]*WaitRegister, regNumber)
-	for i := 0; i < regNumber; i++ {
-		proc.Reg.MergeReceivers[i] = &WaitRegister{
-			Ctx: newctx,
-			Ch:  make(chan *RegisterMessage, 1),
-		}
-	}
-	proc.DispatchNotifyCh = make(chan *WrapCs)
-	return proc
-}
 
 func (wreg *WaitRegister) CleanChannel(m *mpool.MPool) {
 	for len(wreg.Ch) > 0 {

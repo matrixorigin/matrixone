@@ -246,7 +246,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch) erro
 			cwft.compile.SetOriginSQL(originSQL)
 		} else {
 			// retComp
-			cwft.proc.Ctx = execCtx.reqCtx
+			cwft.proc.Base.GetContextBase().ReplaceTopCtx(execCtx.reqCtx)
 			retComp.Reset(cwft.proc, getStatementStartAt(execCtx.reqCtx), fill, cwft.ses.GetSql())
 			cwft.compile = retComp
 		}
@@ -271,9 +271,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch) erro
 func updateTempStorageInCtx(execCtx *ExecCtx, proc *process.Process, tempStorage *memorystorage.Storage) {
 	if execCtx != nil && execCtx.reqCtx != nil {
 		execCtx.reqCtx = attachValue(execCtx.reqCtx, defines.TemporaryTN{}, tempStorage)
-	}
-	if proc != nil && proc.Ctx != nil {
-		proc.Ctx = attachValue(proc.Ctx, defines.TemporaryTN{}, tempStorage)
+		proc.Base.GetContextBase().ReplaceTopCtx(execCtx.reqCtx)
 	}
 }
 
