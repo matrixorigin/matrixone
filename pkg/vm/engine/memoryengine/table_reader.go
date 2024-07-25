@@ -350,6 +350,10 @@ func (rd *MemRelationData) MarshalToBytes() []byte {
 	panic("Not Support")
 }
 
+func (rd MemRelationData) UnMarshal(buf []byte) error {
+	panic("Not Support")
+}
+
 func (rd *MemRelationData) AttachTombstones(tombstones engine.Tombstoner) error {
 	panic("Not Support")
 }
