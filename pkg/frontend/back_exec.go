@@ -657,8 +657,6 @@ func newBackSession(ses FeSession, txnOp TxnOperator, db string, callBack output
 			respr:          defResper,
 		},
 	}
-	backSes.gSysVars = ses.GetGlobalSysVars()
-	backSes.sesSysVars = ses.GetSessionSysVars()
 	backSes.uuid, _ = uuid.NewV7()
 	return backSes
 }
