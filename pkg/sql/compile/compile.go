@@ -4114,13 +4114,6 @@ func (c *Compile) expandRangesInProgress(
 					relData.AppendDataBlk(blk)
 					return nil
 				})
-				// add partition number into objectio.BlockInfo.
-				//blkSlice := subranges.(*objectio.BlockInfoSliceInProgress)
-				//for j := 1; j < subranges.Len(); j++ {
-				//	blkInfo := blkSlice.Get(j)
-				//	blkInfo.PartitionNum = i
-				//	ranges.Append(blkSlice.GetBytes(j))
-				//}
 			}
 		} else {
 			partitionInfo := n.TableDef.Partition
@@ -4223,9 +4216,6 @@ func (c *Compile) generateNodesInProgress(n *plan.Node) (engine.Nodes, []any, []
 		}
 	} else {
 		// add current CN
-		//fmt.Printf("xxxx expand ranges will be in run stage, txn:%s, table:%s\n",
-		//	txnOp.Txn().DebugString(), n.TableDef.Name)
-
 		nodes = append(nodes, engine.Node{
 			Addr: c.addr,
 			Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
@@ -4238,13 +4228,8 @@ func (c *Compile) generateNodesInProgress(n *plan.Node) (engine.Nodes, []any, []
 	expectedLen := relData.BlkCnt()
 	c.proc.Debugf(ctx, "cn generateNodes, tbl %d ranges is %d", tblId, expectedLen)
 
-	//fmt.Printf("xxxx expand ranges in compile stage, txn:%s, table:%s, ranges:%d.\n",
-	//	txnOp.Txn().DebugString(), n.TableDef.Name, expectedLen)
-
 	// if len(ranges) == 0 indicates that it's a temporary table.
 	if relData.BlkCnt() == 0 && n.TableDef.TableType != catalog.SystemOrdinaryRel {
-		//logutil.Infof("xxxx temporary table %s.%s has no data, txn:%s",
-		//	n.ObjRef.SchemaName, n.TableDef.Name, txnOp.Txn().DebugString())
 		nodes = make(engine.Nodes, len(c.cnList))
 		for i, node := range c.cnList {
 			nodes[i] = engine.Node{
@@ -4261,22 +4246,14 @@ func (c *Compile) generateNodesInProgress(n *plan.Node) (engine.Nodes, []any, []
 	// for an ordered scan, put all paylonds in current CN
 	// or sometimes force on one CN
 	if isLaunchMode(c.cnList) || len(n.OrderBy) > 0 || relData.BlkCnt() < plan2.BlockThresholdForOneCN || n.Stats.ForceOneCN {
-		//fmt.Printf("xxxx put ranges in current CN, txn:%s, table:%s.\n",
-		//	txnOp.Txn().DebugString(), n.TableDef.Name)
 		return putBlocksInCurrentCN(c, relData, n), partialResults, partialResultTypes, nil
 	}
 	// disttae engine
 	if engineType == engine.Disttae {
-
-		//fmt.Printf("xxxx shuffle Blocks to multi CN, txn:%s, table:%s.\n",
-		//	txnOp.Txn().DebugString(), n.TableDef.Name)
-
 		nodes, err := shuffleBlocksToMultiCN(c, rel, relData, n)
 		return nodes, partialResults, partialResultTypes, err
 	}
 	// maybe temp table on memengine , just put payloads in average
-	//fmt.Printf("xxxx put blocks in average, txn:%s, table:%s.\n",
-	//	txnOp.Txn().DebugString(), n.TableDef.Name)
 	return putBlocksInAverage(c, relData, n), partialResults, partialResultTypes, nil
 }
 
@@ -4371,30 +4348,18 @@ func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelD
 	//nodes[0].Data = append(nodes[0].Data, ranges.GetBytes(0)...)
 	nodes[0].Data = relData.BuildEmptyRelData()
 	nodes[0].Data.AppendDataBlk(&objectio.EmptyBlockInfoInProgress)
-	//*ranges = ranges.Slice(1, ranges.Len())
 	// only memory table block
 	if nodes[0].Data.BlkCnt() == 1 {
 		return nodes, nil
 	}
 	// only one cn
 	if len(c.cnList) == 1 {
-		//nodes[0].Data = append(nodes[0].Data, ranges.GetAllBytes()...)
 		relData.ForeachDataBlk(1, relData.BlkCnt(), func(blk *objectio.BlockInfoInProgress) error {
 			nodes[0].Data.AppendDataBlk(blk)
 			return nil
 		})
 		return nodes, nil
 	}
-
-	// put dirty blocks which can't be distributed remotely in current CN.
-	//newRanges := make(objectio.BlockInfoSlice, 0, ranges.Len())
-	//for i := 0; i < ranges.Len(); i++ {
-	//	if ranges.Get(i).CanRemote {
-	//		newRanges = append(newRanges, ranges.GetBytes(i)...)
-	//	} else {
-	//		nodes[0].Data = append(nodes[0].Data, ranges.GetBytes(i)...)
-	//	}
-	//}
 
 	// add the rest of CNs in list
 	for i := range c.cnList {
@@ -4431,7 +4396,6 @@ func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelD
 			minWorkLoad = nodes[i].Data.BlkCnt() / objectio.BlockInfoSize
 		}
 		if nodes[i].Data.BlkCnt() > 0 {
-			//TODO::attach tombstones to remote CNs
 			if i != 0 {
 				tombstone, err := collectTombstones(c, n, rel)
 				if err != nil {
@@ -4477,7 +4441,6 @@ func shuffleBlocksByRange(c *Compile, relData engine.RelData, n *plan.Node, node
 	var init bool
 	var index uint64
 	return relData.ForeachDataBlk(1, relData.BlkCnt(), func(blk *objectio.BlockInfoInProgress) error {
-		//unmarshalledBlockInfo := ranges.Get(i)
 		location := blk.MetaLocation()
 		fs, err := fileservice.Get[fileservice.FileService](c.proc.Base.FileService, defines.SharedFileServiceName)
 		if err != nil {
@@ -4493,9 +4456,7 @@ func shuffleBlocksByRange(c *Compile, relData engine.RelData, n *plan.Node, node
 		zm := blkMeta.MustGetColumn(uint16(n.Stats.HashmapStats.ShuffleColIdx)).ZoneMap()
 		if !zm.IsInited() {
 			// a block with all null will send to first CN
-			//nodes[0].Data = append(nodes[0].Data, ranges.GetBytes(i)...)
 			nodes[0].Data.AppendDataBlk(blk)
-			//continue
 			return nil
 		}
 		if !init {

@@ -631,10 +631,6 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 				case process.RuntimeFilter_PASS:
 					continue
 				case process.RuntimeFilter_DROP:
-					//fmt.Printf("xxxx handleRunTimeFilter:Drop, txn:%s, table:%s.needExpandRanges:%v\n",
-					//	c.proc.GetTxnOperator().Txn().DebugString(),
-					//	s.DataSource.TableDef.Name,
-					//	s.NodeInfo.NeedExpandRanges)
 					return nil
 				case process.RuntimeFilter_IN:
 					inExpr := plan2.MakeInExpr(c.proc.Ctx, spec.Expr, msg.Card, msg.Data, spec.MatchPrefix)
@@ -698,30 +694,15 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		if err != nil {
 			return err
 		}
-		//fmt.Printf("xxxx expand ranges in run time filter, txn:%s, table:%s, blkCnt:%d, hasMemBlk:%v.\n",
-		//	c.proc.GetTxnOperator().Txn().DebugString(),
-		//	s.DataSource.TableDef.Name,
-		//	relData.BlkCnt(),
-		//	relData.GetDataBlk(0).IsMemBlk())
 		//FIXME:: Do need to attache tombstones? No, because the scope runs on local CN
 		//relData.AttachTombstones()
 		s.NodeInfo.Data = relData
 
 	} else if len(inExprList) > 0 {
-		//fmt.Printf("xxxx Before appyly run time filter, txn:%s, table:%s, blkCnt:%d, hasMemBlk:%v.\n",
-		//	c.proc.GetTxnOperator().Txn().DebugString(),
-		//	s.DataSource.TableDef.Name,
-		//	s.NodeInfo.Data.BlkCnt(),
-		//	s.NodeInfo.Data.GetDataBlk(0).IsMemBlk())
 		s.NodeInfo.Data, err = ApplyRuntimeFilters(c.proc.Ctx, s.Proc, s.DataSource.TableDef, s.NodeInfo.Data, exprs, filters)
 		if err != nil {
 			return err
 		}
-		//fmt.Printf("xxxx after appyly run time filter, txn:%s, table:%s, blkCnt:%d, hasMemBlk:%v.\n",
-		//	c.proc.GetTxnOperator().Txn().DebugString(),
-		//	s.DataSource.TableDef.Name,
-		//	s.NodeInfo.Data.BlkCnt(),
-		//	s.NodeInfo.Data.GetDataBlk(0).IsMemBlk())
 	}
 	return nil
 }
@@ -1228,29 +1209,10 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 		if err != nil {
 			return
 		}
-
-		//readers, err = c.e.NewBlockReader(
-		//	ctx,
-		//	scanUsedCpuNumber,
-		//	s.DataSource.Timestamp,
-		//	s.DataSource.FilterExpr,
-		//	nil,
-		//	s.NodeInfo.Data,
-		//	s.DataSource.TableDef,
-		//	c.proc)
-		//if err != nil {
-		//	return
-		//}
-
 	// Reader can be generated from local relation.
 	case s.DataSource.Rel != nil && s.DataSource.TableDef.Partition == nil:
 		switch s.DataSource.Rel.GetEngineType() {
 		case engine.Disttae:
-			//blkSlice := objectio.BlockInfoSlice(s.NodeInfo.Data)
-			//fmt.Printf("xxxx start to build readers, txn:%s, table:%s. DataIsEmpty:%v",
-			//	c.proc.GetTxnOperator().Txn().DebugString(),
-			//	s.DataSource.TableDef.Name,
-			//	s.NodeInfo.Data == nil)
 			//Run time filter had already dropped it
 			if s.NodeInfo.Data == nil {
 				scanUsedCpuNumber = 1
@@ -1258,7 +1220,6 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 				scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, s.NodeInfo.Data.BlkCnt())
 			}
 		case engine.Memory:
-			//idSlice := memoryengine.ShardIdSlice(s.NodeInfo.Data)
 			if s.NodeInfo.Data == nil {
 				scanUsedCpuNumber = 1
 			} else {
@@ -1270,10 +1231,6 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 		if len(s.DataSource.OrderBy) > 0 {
 			scanUsedCpuNumber = 1
 		}
-		sql := c.originSQL
-		if sql == "" {
-			sql = c.sql
-		}
 		readers, err = s.DataSource.Rel.BuildReaders(
 			c.proc.Ctx,
 			c.proc,
@@ -1281,33 +1238,10 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 			s.NodeInfo.Data,
 			scanUsedCpuNumber,
 			s.TxnOffset)
-		//if s.DataSource.TableDef.Name == "bugt" {
-		//	fmt.Printf("xxxx build readers finished, "+
-		//		"sql:%s, txn:%s, table:%s, scanusednum:%d, readers num :%d, blkCnt:%d, hasMemBlk:%v, err:%v",
-		//		sql,
-		//		c.proc.GetTxnOperator().Txn().DebugString(),
-		//		s.DataSource.TableDef.Name,
-		//		scanUsedCpuNumber,
-		//		len(readers),
-		//		s.NodeInfo.Data.BlkCnt(),
-		//		s.NodeInfo.Data.GetDataBlk(0).IsMemBlk(),
-		//		err)
-		//}
 
 		if err != nil {
 			return
 		}
-
-		//readers, err = s.DataSource.Rel.NewReader(
-		//	c.proc.Ctx,
-		//	scanUsedCpuNumber,
-		//	s.DataSource.FilterExpr,
-		//	s.NodeInfo.Data,
-		//	len(s.DataSource.OrderBy) > 0,
-		//	s.TxnOffset)
-		//if err != nil {
-		//	return
-		//}
 
 	// Should get relation first to generate Reader.
 	// FIXME:: s.NodeInfo.Rel == nil, partition table? -- this is an old comment, I just do a copy here.
@@ -1372,16 +1306,12 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 			} else {
 				scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, s.NodeInfo.Data.BlkCnt())
 			}
-			//blkSlice := objectio.BlockInfoSlice(s.NodeInfo.Data)
-			//scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, s.NodeInfo.Data.BlkCnt())
 		case engine.Memory:
 			if s.NodeInfo.Data == nil {
 				scanUsedCpuNumber = 1
 			} else {
 				scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, s.NodeInfo.Data.BlkCnt())
 			}
-			//idSlice := memoryengine.ShardIdSlice(s.NodeInfo.Data)
-			//scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, s.NodeInfo.Data.BlkCnt())
 		default:
 			scanUsedCpuNumber = 1
 		}
@@ -1399,12 +1329,6 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 				s.NodeInfo.Data,
 				scanUsedCpuNumber,
 				s.TxnOffset)
-			//mainRds, err = rel.NewReader(ctx,
-			//	scanUsedCpuNumber,
-			//	s.DataSource.FilterExpr,
-			//	s.NodeInfo.Data,
-			//	len(s.DataSource.OrderBy) > 0,
-			//	s.TxnOffset)
 			if err != nil {
 				return
 			}
@@ -1429,16 +1353,6 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 					return
 				}
 				readers = append(readers, subRds...)
-				//memRds, err = subRel.NewReader(ctx,
-				//	scanUsedCpuNumber,
-				//	s.DataSource.FilterExpr,
-				//	dirtyRanges[num],
-				//	len(s.DataSource.OrderBy) > 0,
-				//	s.TxnOffset)
-				//if err != nil {
-				//	return
-				//}
-				//readers = append(readers, memRds...)
 			}
 		}
 
@@ -1448,11 +1362,6 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 
 	//for partition table.
 	if len(readers) != scanUsedCpuNumber {
-		//fmt.Printf("xxxx start to merge readers, txn:%s, table:%s,cpu num:%d, readers:%d",
-		//	c.proc.GetTxnOperator().Txn().DebugString(),
-		//	s.DataSource.TableDef.Name,
-		//	scanUsedCpuNumber,
-		//	len(readers))
 		newReaders := make([]engine.Reader, 0, scanUsedCpuNumber)
 		step := len(readers) / scanUsedCpuNumber
 		for i := 0; i < len(readers); i += step {

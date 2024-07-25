@@ -213,22 +213,6 @@ func (m *MockTombstoner) EXPECT() *MockTombstonerMockRecorder {
 	return m.recorder
 }
 
-// ApplyCommitDeltaLoc mocks base method.
-func (m *MockTombstoner) ApplyCommitDeltaLoc(ctx context.Context, bid types.Blockid, rowsOffset []int32, apply func(context.Context, objectio.Location, []int32, *[]int32, *[]int64) error) ([]int32, []int64, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ApplyCommitDeltaLoc", ctx, bid, rowsOffset, apply)
-	ret0, _ := ret[0].([]int32)
-	ret1, _ := ret[1].([]int64)
-	ret2, _ := ret[2].(error)
-	return ret0, ret1, ret2
-}
-
-// ApplyCommitDeltaLoc indicates an expected call of ApplyCommitDeltaLoc.
-func (mr *MockTombstonerMockRecorder) ApplyCommitDeltaLoc(ctx, bid, rowsOffset, apply interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ApplyCommitDeltaLoc", reflect.TypeOf((*MockTombstoner)(nil).ApplyCommitDeltaLoc), ctx, bid, rowsOffset, apply)
-}
-
 // ApplyInMemTombstones mocks base method.
 func (m *MockTombstoner) ApplyInMemTombstones(bid types.Blockid, rowsOffset []int32) ([]int32, []int64) {
 	m.ctrl.T.Helper()
@@ -273,22 +257,6 @@ func (m *MockTombstoner) ApplyTombstones(rows []types.Rowid, load1 func(types.Bl
 func (mr *MockTombstonerMockRecorder) ApplyTombstones(rows, load1, load2 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ApplyTombstones", reflect.TypeOf((*MockTombstoner)(nil).ApplyTombstones), rows, load1, load2)
-}
-
-// ApplyUncommitDeltaLoc mocks base method.
-func (m *MockTombstoner) ApplyUncommitDeltaLoc(ctx context.Context, bid types.Blockid, rowsOffset []int32, apply func(context.Context, objectio.Location, []int32, *[]int32, *[]int64) error) ([]int32, []int64, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ApplyUncommitDeltaLoc", ctx, bid, rowsOffset, apply)
-	ret0, _ := ret[0].([]int32)
-	ret1, _ := ret[1].([]int64)
-	ret2, _ := ret[2].(error)
-	return ret0, ret1, ret2
-}
-
-// ApplyUncommitDeltaLoc indicates an expected call of ApplyUncommitDeltaLoc.
-func (mr *MockTombstonerMockRecorder) ApplyUncommitDeltaLoc(ctx, bid, rowsOffset, apply interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ApplyUncommitDeltaLoc", reflect.TypeOf((*MockTombstoner)(nil).ApplyUncommitDeltaLoc), ctx, bid, rowsOffset, apply)
 }
 
 // HasTombstones mocks base method.
@@ -1071,6 +1039,21 @@ func (m *MockRelation) MergeObjects(ctx context.Context, objstats []objectio.Obj
 func (mr *MockRelationMockRecorder) MergeObjects(ctx, objstats, policyName, targetObjSize interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MergeObjects", reflect.TypeOf((*MockRelation)(nil).MergeObjects), ctx, objstats, policyName, targetObjSize)
+}
+
+// NewReader mocks base method.
+func (m *MockRelation) NewReader(arg0 context.Context, arg1 int, arg2 *plan.Expr, arg3 []byte, arg4 bool, arg5 int) ([]engine.Reader, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "NewReader", arg0, arg1, arg2, arg3, arg4, arg5)
+	ret0, _ := ret[0].([]engine.Reader)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// NewReader indicates an expected call of NewReader.
+func (mr *MockRelationMockRecorder) NewReader(arg0, arg1, arg2, arg3, arg4, arg5 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NewReader", reflect.TypeOf((*MockRelation)(nil).NewReader), arg0, arg1, arg2, arg3, arg4, arg5)
 }
 
 // PrimaryKeysMayBeModified mocks base method.

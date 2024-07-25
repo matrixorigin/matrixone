@@ -220,31 +220,6 @@ func (tomV1 *tombstoneDataV1) HasTombstones(bid types.Blockid) bool {
 	return false
 }
 
-func (tomV1 *tombstoneDataV1) ApplyCommitDeltaLoc(
-	ctx context.Context,
-	bid types.Blockid,
-	rowsOffset []int32,
-	apply func(
-		ctx2 context.Context,
-		loc objectio.Location,
-		rowsOffset []int32,
-		left *[]int32,
-		deleted *[]int64) (err error),
-) (left []int32, deleted []int64, err error) {
-
-	tomV1.initMap()
-
-	if loc, ok := tomV1.blk2DeltaLoc[bid]; ok {
-		err = apply(ctx, loc, rowsOffset, &left, &deleted)
-		if err != nil {
-			return
-		}
-	}
-
-	return
-
-}
-
 func (tomV1 *tombstoneDataV1) ApplyInMemTombstones(
 	bid types.Blockid,
 	rowsOffset []int32) (left []int32, deleted []int64) {
@@ -297,32 +272,6 @@ func (tomV1 *tombstoneDataV1) ApplyPersistedTombstones(
 			return
 		}
 	}
-	return
-}
-
-func (tomV1 *tombstoneDataV1) ApplyUncommitDeltaLoc(
-	ctx context.Context,
-	bid types.Blockid,
-	rowsOffset []int32,
-	apply func(
-		ctx2 context.Context,
-		loc objectio.Location,
-		rowsOffset []int32,
-		left *[]int32,
-		deleted *[]int64) (err error),
-) (left []int32, deleted []int64, err error) {
-
-	tomV1.initMap()
-
-	if locs, ok := tomV1.blk2UncommitDeltaLocs[bid]; ok {
-		for _, loc := range locs {
-			err = apply(ctx, loc, rowsOffset, &left, &deleted)
-			if err != nil {
-				return
-			}
-		}
-	}
-
 	return
 }
 
@@ -480,34 +429,6 @@ func (tomV2 *tombstoneDataV2) ApplyPersistedTombstones(
 		ctx2 context.Context,
 		loc objectio.Location,
 		cts types.TS,
-		rowsOffset []int32,
-		left *[]int32,
-		deleted *[]int64) (err error),
-) (left []int32, deleted []int64, err error) {
-	panic("implement me")
-}
-
-func (tomV2 *tombstoneDataV2) ApplyCommitDeltaLoc(
-	ctx context.Context,
-	bid types.Blockid,
-	rowsOffset []int32,
-	apply func(
-		ctx2 context.Context,
-		loc objectio.Location,
-		rowsOffset []int32,
-		left *[]int32,
-		deleted *[]int64) (err error),
-) (left []int32, deleted []int64, err error) {
-	panic("implement me")
-}
-
-func (tomV2 *tombstoneDataV2) ApplyUncommitDeltaLoc(
-	ctx context.Context,
-	bid types.Blockid,
-	rowsOffset []int32,
-	apply func(
-		ctx2 context.Context,
-		loc objectio.Location,
 		rowsOffset []int32,
 		left *[]int32,
 		deleted *[]int64) (err error),
