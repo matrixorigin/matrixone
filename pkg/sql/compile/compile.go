@@ -3671,10 +3671,6 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 	rs := make([]*Scope, length)
 	idx := 0
 	for i := range probeScopes {
-		if probeScopes[i].IsEnd {
-			rs[i] = probeScopes[i]
-			continue
-		}
 		rs[i] = newScope(Remote)
 		rs[i].IsJoin = true
 		rs[i].NodeInfo = probeScopes[i].NodeInfo
