@@ -478,3 +478,21 @@ collecttime    value    account    interval
 2024-05-14 09:34:00    0.011274    018f7528_f9a0_75c5_b88f_1fbda12e34ea    1
 drop table m_user;
 drop database prepare_test;
+CREATE TABLE prepare.workbook (
+`id` VARCHAR(128) NOT NULL,
+`account_id` VARCHAR(128) DEFAULT NULL,
+`sql_user` VARCHAR(128) DEFAULT NULL,
+`name` VARCHAR(255) DEFAULT NULL,
+`created_at` DATETIME DEFAULT NULL,
+`updated_at` DATETIME DEFAULT NULL,
+PRIMARY KEY (`id`),
+UNIQUE KEY `unq_account_name` (`account_id`,`sql_user`,`name`)
+);
+insert into prepare.workbook values("f7945612-e27f-4bd8-b372-8cc596ea8eb6","018f7a6b_162b_7492_b5f0_cce7193ace7f","admin","mo","2023-09-03","2023-09-05");
+prepare __mo_stmt_id_23 from SELECT count(*) FROM prepare.workbook WHERE account_id = ? AND sql_user = ? AND id = ? ;
+set @account_id='018f7a6b_162b_7492_b5f0_cce7193ace7f';
+set @user='admin';
+set @id='f7945612-e27f-4bd8-b372-8cc596ea8eb6';
+execute __mo_stmt_id_23 using @account_id,@user,@id;
+count(*)
+1

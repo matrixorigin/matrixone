@@ -16,7 +16,9 @@ package compile
 
 import (
 	"context"
+	"slices"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -24,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -45,6 +48,12 @@ type compilerContext struct {
 	dbOfView, nameOfView string
 	sql                  string
 	mu                   sync.Mutex
+
+	lower int64
+}
+
+func (c *compilerContext) GetLowerCaseTableNames() int64 {
+	return c.lower
 }
 
 func (c *compilerContext) GetViews() []string {
@@ -91,19 +100,6 @@ func (c *compilerContext) SetQueryingSubscription(meta *plan.SubscriptionMeta) {
 
 func (c *compilerContext) GetQueryingSubscription() *plan.SubscriptionMeta {
 	return nil
-}
-
-func newCompilerContext(
-	ctx context.Context,
-	defaultDB string,
-	eng engine.Engine,
-	proc *process.Process) *compilerContext {
-	return &compilerContext{
-		ctx:       ctx,
-		defaultDB: defaultDB,
-		engine:    eng,
-		proc:      proc,
-	}
 }
 
 func (c *compilerContext) ResolveUdf(name string, ast []*plan.Expr) (*function.Udf, error) {
@@ -240,11 +236,11 @@ func (c *compilerContext) GetUserName() string {
 }
 
 func (c *compilerContext) GetAccountId() (uint32, error) {
-	return defines.GetAccountId(c.ctx)
+	return defines.GetAccountId(c.proc.Ctx)
 }
 
 func (c *compilerContext) GetContext() context.Context {
-	return c.ctx
+	return c.proc.Ctx
 }
 
 func (c *compilerContext) ResolveById(tableId uint64, snapshot plan.Snapshot) (objRef *plan.ObjectRef, tableDef *plan.TableDef) {
@@ -267,6 +263,12 @@ func (c *compilerContext) ResolveById(tableId uint64, snapshot plan.Snapshot) (o
 }
 
 func (c *compilerContext) Resolve(dbName string, tableName string, snapshot plan.Snapshot) (*plan.ObjectRef, *plan.TableDef) {
+	// In order to be compatible with various GUI clients and BI tools, lower case db and table name if it's a mysql system table
+	if slices.Contains(mysql.CaseInsensitiveDbs, strings.ToLower(dbName)) {
+		dbName = strings.ToLower(dbName)
+		tableName = strings.ToLower(tableName)
+	}
+
 	dbName, err := c.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
 		return nil, nil

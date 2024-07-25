@@ -89,9 +89,9 @@ type tableAndSize struct {
 // A: A checkpoint runner organizes and manages	all checkpoint-related behaviors. It roughly
 //    does the following things:
 //    - Manage the life cycle of all checkpoints and provide some query interfaces.
-//    - A cron job periodically collects and analyzes dirty blocks, and flushes eligibl dirty
+//    - A cron job periodically collects and analyzes dirty blocks, and flushes eligible dirty
 //      blocks to the remote storage
-//    - The cron job peridically test whether a new checkpoint can be created. If it is not
+//    - The cron job periodically test whether a new checkpoint can be created. If it is not
 //      satisfied, it will wait for next trigger. Otherwise, it will start the process of
 //      creating a checkpoint.
 
@@ -155,11 +155,11 @@ type tableAndSize struct {
 //    8. Schedule to remove stale checkpoint meta objects
 
 // Q: How to boot from the checkpoints?
-// A: When a meta version is created, it contains all information of the previouse version. So we always
+// A: When a meta version is created, it contains all information of the previous version. So we always
 //
 //	delete the stale versions when a new version is created. Over time, the number of objects under
 //	`ckp/` is small.
-//	1. List all meta objects under `ckp/`. Get the latest meta object and read all checkpoint informations
+//	1. List all meta objects under `ckp/`. Get the latest meta object and read all checkpoint information
 //	   from the meta object.
 //	2. Apply the latest global checkpoint
 //	3. Apply the incremental checkpoint start from the version right after the global checkpoint to the
@@ -193,12 +193,14 @@ type runner struct {
 		checkpointBlockRows int
 		checkpointSize      int
 
+		startupLatency time.Duration
+
 		reservedWALEntryCount uint64
 	}
 
 	ctx context.Context
 
-	// logtail sourcer
+	// logtail source
 	source    logtail.Collector
 	catalog   *catalog.Catalog
 	rt        *dbutils.Runtime
@@ -230,8 +232,15 @@ type runner struct {
 
 	objMemSizeList []tableAndSize
 
+	checkpointMetaFiles struct {
+		sync.RWMutex
+		files map[string]struct{}
+	}
+
 	onceStart sync.Once
 	onceStop  sync.Once
+
+	openTime time.Time
 }
 
 func NewRunner(
@@ -248,6 +257,7 @@ func NewRunner(
 		source:    source,
 		observers: new(observers),
 		wal:       wal,
+		openTime:  time.Now(),
 	}
 	r.storage.entries = btree.NewBTreeGOptions(func(a, b *CheckpointEntry) bool {
 		return a.end.Less(&b.end)
@@ -273,6 +283,7 @@ func NewRunner(
 	r.globalCheckpointQueue = sm.NewSafeQueue(r.options.checkpointQueueSize, 100, r.onGlobalCheckpointEntries)
 	r.gcCheckpointQueue = sm.NewSafeQueue(100, 100, r.onGCCheckpointEntries)
 	r.postCheckpointQueue = sm.NewSafeQueue(1000, 1, r.onPostCheckpointEntries)
+	r.checkpointMetaFiles.files = make(map[string]struct{})
 	return r
 }
 
@@ -294,6 +305,28 @@ func (r *runner) String() string {
 	_, _ = fmt.Fprintf(&buf, "checkpointSize=%v, ", r.options.checkpointSize)
 	_, _ = fmt.Fprintf(&buf, ">")
 	return buf.String()
+}
+
+func (r *runner) AddCheckpointMetaFile(name string) {
+	r.checkpointMetaFiles.Lock()
+	defer r.checkpointMetaFiles.Unlock()
+	r.checkpointMetaFiles.files[name] = struct{}{}
+}
+
+func (r *runner) RemoveCheckpointMetaFile(name string) {
+	r.checkpointMetaFiles.Lock()
+	defer r.checkpointMetaFiles.Unlock()
+	delete(r.checkpointMetaFiles.files, name)
+}
+
+func (r *runner) GetCheckpointMetaFiles() map[string]struct{} {
+	r.checkpointMetaFiles.RLock()
+	defer r.checkpointMetaFiles.RUnlock()
+	files := make(map[string]struct{})
+	for k, v := range r.checkpointMetaFiles.files {
+		files[k] = v
+	}
+	return files
 }
 
 // Only used in UT
@@ -371,7 +404,7 @@ func (r *runner) gcCheckpointEntries(ts types.TS) {
 func (r *runner) onIncrementalCheckpointEntries(items ...any) {
 	now := time.Now()
 	entry := r.MaxCheckpoint()
-	// In some unit tests, ckp is managed manually, and ckp deletiton (CleanPenddingCheckpoint)
+	// In some unit tests, ckp is managed manually, and ckp deletion (CleanPendingCheckpoint)
 	// can be called when the queue still has unexecuted task.
 	// Add `entry == nil` here as protective codes
 	if entry == nil || entry.GetState() != ST_Running {
@@ -533,6 +566,11 @@ func (r *runner) saveCheckpoint(start, end types.TS, ckpLSN, truncateLSN uint64)
 
 	// TODO: checkpoint entry should maintain the location
 	_, err = writer.WriteEnd(r.ctx)
+	if err != nil {
+		return
+	}
+	fileName := blockio.EncodeCheckpointMetadataFileNameWithoutDir(PrefixMetadata, start, end)
+	r.AddCheckpointMetaFile(fileName)
 	return
 }
 
@@ -729,6 +767,11 @@ func (r *runner) tryScheduleIncrementalCheckpoint(start, end types.TS) {
 
 func (r *runner) tryScheduleCheckpoint(endts types.TS) {
 	if r.disabled.Load() {
+		logutil.Infof("Checkpoint is disable")
+		return
+	}
+	if time.Since(r.openTime) < r.options.startupLatency {
+		logutil.Infof("Checkpoint is disable. TN has been running for %v, startup latency %v", time.Since(r.openTime), r.options.startupLatency)
 		return
 	}
 	entry := r.MaxCheckpoint()
@@ -817,6 +860,9 @@ func (r *runner) fillDefaults() {
 	}
 	if r.options.checkpointSize <= 0 {
 		r.options.checkpointSize = logtail.DefaultCheckpointSize
+	}
+	if r.options.startupLatency <= 0 {
+		r.options.startupLatency = time.Minute * 5
 	}
 }
 

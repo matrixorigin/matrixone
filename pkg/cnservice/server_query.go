@@ -77,6 +77,7 @@ func (s *service) initQueryCommandHandler() {
 	s.queryService.AddHandleFunc(query.CmdMethod_GetPipelineInfo, s.handleGetPipelineInfo, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_MigrateConnFrom, s.handleMigrateConnFrom, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_MigrateConnTo, s.handleMigrateConnTo, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_ReloadAutoIncrementCache, s.handleReloadAutoIncrementCache, false)
 }
 
 func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *query.Response) error {
@@ -91,7 +92,7 @@ func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *
 	if accountMgr == nil {
 		return moerr.NewInternalError(ctx, "account routine manager not initialized")
 	}
-
+	logutil.Infof("[set suspend] handle set account id %d, version %d to kill queue, ", req.KillConnRequest.AccountID, req.KillConnRequest.Version)
 	accountMgr.EnKillQueue(req.KillConnRequest.AccountID, req.KillConnRequest.Version)
 	return nil
 }
@@ -429,4 +430,15 @@ func (s *service) handleMigrateConnTo(
 		Success: true,
 	}
 	return nil
+}
+
+func (s *service) handleReloadAutoIncrementCache(
+	ctx context.Context,
+	req *query.Request,
+	resp *query.Response,
+) error {
+	return s.incrservice.Reload(
+		ctx,
+		req.ReloadAutoIncrementCache.TableID,
+	)
 }

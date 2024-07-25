@@ -110,6 +110,7 @@ func (ar *AccountRoutineManager) EnKillQueue(tenantID int64, version uint64) {
 	KillRecord := NewKillRecord(time.Now(), version)
 	ar.killQueueMu.Lock()
 	defer ar.killQueueMu.Unlock()
+	logutil.Infof("[set suspend] set account id %d, version %d to kill queue at time %v, ", tenantID, version, KillRecord.killTime)
 	ar.killIdQueue[tenantID] = KillRecord
 
 }
@@ -124,6 +125,7 @@ func (ar *AccountRoutineManager) AlterRoutineStatue(tenantID int64, status strin
 	if rts, ok := ar.accountId2Routine[tenantID]; ok {
 		for rt := range rts {
 			if status == "restricted" {
+				logutil.Infof("[set restricted] alter routine, set account id %d, connection id %d restricted", tenantID, rt.getConnectionID())
 				rt.setResricted(true)
 			} else {
 				rt.setResricted(false)
@@ -296,31 +298,34 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 When the io is closed, the Closed will be called.
 */
 func (rm *RoutineManager) Closed(rs goetty.IOSession) {
-	ses := rm.getRoutine(rs).getSession()
-	ses.Debugf(rm.getCtx(), "clean resource of the connection %d:%s", rs.ID(), rs.RemoteAddress())
+	rt := rm.deleteRoutine(rs)
+	if rt == nil {
+		return
+	}
+
 	defer func() {
 		v2.CloseRoutineCounter.Inc()
-		ses.Debugf(rm.getCtx(), "resource of the connection %d:%s has been cleaned", rs.ID(), rs.RemoteAddress())
 	}()
-	rt := rm.deleteRoutine(rs)
 
-	if rt != nil {
-		ses := rt.getSession()
-		if ses != nil {
-			rt.decreaseCount(func() {
-				account := ses.GetTenantInfo()
-				accountName := sysAccountName
-				if account != nil {
-					accountName = account.GetTenant()
-				}
-				metric.ConnectionCounter(accountName).Dec()
-				rm.accountRoutine.deleteRoutine(int64(account.GetTenantID()), rt)
-			})
-			rm.sessionManager.RemoveSession(ses)
-			ses.Debugf(rm.getCtx(), "the io session was closed.")
-		}
-		rt.cleanup()
+	ses := rt.getSession()
+	if ses != nil {
+		ses.Debugf(rm.getCtx(), "clean resource of the connection %d:%s", rs.ID(), rs.RemoteAddress())
+		defer func() {
+			ses.Debugf(rm.getCtx(), "resource of the connection %d:%s has been cleaned", rs.ID(), rs.RemoteAddress())
+		}()
+		rt.decreaseCount(func() {
+			account := ses.GetTenantInfo()
+			accountName := sysAccountName
+			if account != nil {
+				accountName = account.GetTenant()
+			}
+			metric.ConnectionCounter(accountName).Dec()
+			rm.accountRoutine.deleteRoutine(int64(account.GetTenantID()), rt)
+		})
+		rm.sessionManager.RemoveSession(ses)
+		ses.Debugf(rm.getCtx(), "the io session was closed.")
 	}
+	rt.cleanup()
 }
 
 /*
@@ -394,8 +399,10 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 
 	length := packet.Length
 	payload := packet.Payload
+	payloads := make([][]byte, 1)
+	payloads[0] = payload
 	for uint32(length) == MaxPayloadSize {
-		msg, err = protocol.Read(goetty.ReadOptions{})
+		msg, err = protocol.Read(goetty.ReadOptions{Timeout: getGlobalPu().SV.SessionTimeout.Duration})
 		if err != nil {
 			ses.Error(ctx,
 				"Failed to read message",
@@ -414,8 +421,29 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 
 		protocol.SetU8(SEQUENCEID, uint8(packet.SequenceID+1))
 		seq = protocol.GetU8(SEQUENCEID)
-		payload = append(payload, packet.Payload...)
+		payloads = append(payloads, packet.Payload)
 		length = packet.Length
+	}
+
+	//combine these payloads
+	if len(payloads) > 1 {
+		tLen := 0
+		for _, bytes := range payloads {
+			tLen += len(bytes)
+		}
+		alloc := getGlobalSessionAlloc()
+		var temp []byte
+		temp, err = alloc.Alloc(tLen)
+		defer alloc.Free(temp)
+		if err != nil {
+			return err
+		}
+		offset := 0
+		for _, bytes := range payloads {
+			copy(temp[offset:offset+len(bytes)], bytes)
+			offset += len(bytes)
+		}
+		payload = temp
 	}
 
 	// finish handshake process
@@ -556,6 +584,7 @@ func (rm *RoutineManager) KillRoutineConnections() {
 			for rt, version := range rtMap {
 				if rt != nil && ((version+1)%math.MaxUint64)-1 <= killRecord.version {
 					//kill connect of this routine
+					logutil.Infof("[kill connection] do kill connection account id %d, version %d, connection id %d, ", account, killRecord.version, rt.getConnectionID())
 					rt.killConnection(false)
 					ar.deleteRoutine(account, rt)
 				}

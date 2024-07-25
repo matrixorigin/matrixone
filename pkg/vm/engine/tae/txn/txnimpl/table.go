@@ -21,20 +21,19 @@ import (
 	"runtime/trace"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/util"
-	"go.uber.org/zap"
-
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-
 	"github.com/RoaringBitmap/roaring"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/moprobe"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/util"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -287,21 +286,6 @@ func (tbl *txnTable) recurTransferDelete(
 		}
 		memo[blockID] = page2
 	}
-
-	rowID, ok = page2.Item().Transfer(offset)
-	if !ok {
-		err := moerr.NewTxnWWConflictNoCtx(0, "")
-		msg := fmt.Sprintf("table-%d blk-%d delete row-%d depth-%d",
-			newID.TableID,
-			newID.BlockID,
-			offset,
-			depth)
-		logutil.Warnf("[ts=%s]TransferDeleteNode: %v",
-			tbl.store.txn.GetStartTS().ToString(),
-			msg)
-		return err
-	}
-	blockID, offset = rowID.Decode()
 	newID = &common.ID{
 		DbID:    id.DbID,
 		TableID: id.TableID,
@@ -349,7 +333,7 @@ func (tbl *txnTable) TransferDeleteRows(
 	memo := make(map[types.Blockid]*common.PinnedItem[*model.TransferHashPage])
 	common.DoIfInfoEnabled(func() {
 		logutil.Info("[Start]",
-			common.AnyField("txn-start-ts", tbl.store.txn.GetStartTS().ToString()),
+			common.AnyField("txn-ctx", tbl.store.txn.Repr()),
 			common.OperationField("transfer-deletes"),
 			common.OperandField(id.BlockString()),
 			common.AnyField("phase", phase))
@@ -357,7 +341,7 @@ func (tbl *txnTable) TransferDeleteRows(
 	defer func() {
 		common.DoIfInfoEnabled(func() {
 			logutil.Info("[End]",
-				common.AnyField("txn-start-ts", tbl.store.txn.GetStartTS().ToString()),
+				common.AnyField("txn-ctx", tbl.store.txn.Repr()),
 				common.OperationField("transfer-deletes"),
 				common.OperandField(id.BlockString()),
 				common.AnyField("phase", phase),
@@ -589,7 +573,9 @@ func (tbl *txnTable) AddDeleteNode(id *common.ID, node txnif.DeleteNode) error {
 }
 
 func (tbl *txnTable) Append(ctx context.Context, data *containers.Batch) (err error) {
+	var dedupDur float64
 	if tbl.schema.HasPK() && !tbl.schema.IsSecondaryIndexTable() {
+		now := time.Now()
 		dedupType := tbl.store.txn.GetDedupType()
 		if dedupType == txnif.FullDedup {
 			//do PK deduplication check against txn's work space.
@@ -616,11 +602,19 @@ func (tbl *txnTable) Append(ctx context.Context, data *containers.Batch) (err er
 				return
 			}
 		}
+		dedupDur += time.Since(now).Seconds()
 	}
+
 	if tbl.tableSpace == nil {
 		tbl.tableSpace = newTableSpace(tbl)
 	}
-	return tbl.tableSpace.Append(data)
+
+	dur, err := tbl.tableSpace.Append(data)
+	dedupDur += dur
+
+	v2.TxnTNAppendDeduplicateDurationHistogram.Observe(dedupDur)
+
+	return err
 }
 func (tbl *txnTable) AddObjsWithMetaLoc(ctx context.Context, stats containers.Vector) (err error) {
 	return stats.Foreach(func(v any, isNull bool, row int) error {

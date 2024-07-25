@@ -21,14 +21,15 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func Test_getSqlForAccountInfo(t *testing.T) {
@@ -48,7 +49,7 @@ func Test_getSqlForAccountInfo(t *testing.T) {
 	}
 
 	for _, a := range args {
-		one, err := parsers.ParseOne(context.Background(), dialect.MYSQL, a.s, 1, 0)
+		one, err := parsers.ParseOne(context.Background(), dialect.MYSQL, a.s, 1)
 		assert.NoError(t, err)
 		sa1 := one.(*tree.ShowAccounts)
 		r1 := getSqlForAccountInfo(sa1.Like, -1)

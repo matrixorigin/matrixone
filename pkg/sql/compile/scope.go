@@ -17,33 +17,25 @@ package compile
 import (
 	"context"
 	"fmt"
-	"strings"
-
-	"hash/crc32"
 	goruntime "runtime"
 	"runtime/debug"
+	"strings"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
+	"github.com/panjf2000/ants/v2"
+	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
@@ -55,15 +47,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
-	"github.com/panjf2000/ants/v2"
-	"go.uber.org/zap"
 )
 
 func newScope(magic magicType) *Scope {
@@ -105,7 +101,7 @@ func (s *Scope) initDataSource(c *Compile) (err error) {
 		if s.DataSource.Bat != nil {
 			return
 		}
-		bat, err := constructValueScanBatch(s.Proc.Ctx, c.proc, s.DataSource.node)
+		bat, err := constructValueScanBatch(c.proc, s.DataSource.node)
 		if err != nil {
 			return err
 		}
@@ -125,7 +121,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 	defer func() {
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(s.Proc.Ctx, e)
-			c.proc.Error(c.ctx, "panic in scope run",
+			c.proc.Error(c.proc.Ctx, "panic in scope run",
 				zap.String("sql", c.sql),
 				zap.String("error", err.Error()))
 		}
@@ -207,7 +203,7 @@ func (s *Scope) SetOperatorInfoRecursively(cb func() int32) {
 func (s *Scope) MergeRun(c *Compile) error {
 	var wg sync.WaitGroup
 
-	errChan := make(chan error, len(s.PreScopes))
+	preScopeResultReceiveChan := make(chan error, len(s.PreScopes))
 	for i := range s.PreScopes {
 		wg.Add(1)
 		scope := s.PreScopes[i]
@@ -218,30 +214,47 @@ func (s *Scope) MergeRun(c *Compile) error {
 
 			switch scope.Magic {
 			case Normal:
-				errChan <- scope.Run(c)
+				preScopeResultReceiveChan <- scope.Run(c)
 			case Merge, MergeInsert:
-				errChan <- scope.MergeRun(c)
+				preScopeResultReceiveChan <- scope.MergeRun(c)
 			case Remote:
-				errChan <- scope.RemoteRun(c)
+				preScopeResultReceiveChan <- scope.RemoteRun(c)
 			case Parallel:
-				errChan <- scope.ParallelRun(c)
+				preScopeResultReceiveChan <- scope.ParallelRun(c)
 			default:
-				errChan <- moerr.NewInternalError(c.ctx, "unexpected scope Magic %d", scope.Magic)
+				preScopeResultReceiveChan <- moerr.NewInternalError(c.proc.Ctx, "unexpected scope Magic %d", scope.Magic)
 			}
 		})
 		if errSubmit != nil {
-			errChan <- errSubmit
+			preScopeResultReceiveChan <- errSubmit
 			wg.Done()
 		}
 	}
 
 	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
-	var errReceiveChan chan error
+	var notifyMessageResultReceiveChan chan notifyMessageResult
 	if len(s.RemoteReceivRegInfos) > 0 {
-		errReceiveChan = make(chan error, len(s.RemoteReceivRegInfos))
-		s.notifyAndReceiveFromRemote(&wg, errReceiveChan)
+		notifyMessageResultReceiveChan = make(chan notifyMessageResult, len(s.RemoteReceivRegInfos))
+		s.sendNotifyMessage(&wg, notifyMessageResultReceiveChan)
 	}
-	defer wg.Wait()
+
+	defer func() {
+		// should wait all the notify-message-routine and preScopes done.
+		wg.Wait()
+
+		// not necessary, but we still clean the preScope error channel here.
+		for len(preScopeResultReceiveChan) > 0 {
+			<-preScopeResultReceiveChan
+		}
+
+		// clean the notifyMessageResultReceiveChan to make sure all the rpc-sender can be closed.
+		for len(notifyMessageResultReceiveChan) > 0 {
+			result := <-notifyMessageResultReceiveChan
+			if result.sender != nil {
+				result.sender.close()
+			}
+		}
+	}()
 
 	p := pipeline.NewMerge(s.Instructions, s.Reg)
 	if _, err := p.MergeRun(s.Proc); err != nil {
@@ -259,7 +272,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 	remoteScopeCount := len(s.RemoteReceivRegInfos)
 	if remoteScopeCount == 0 {
 		for i := 0; i < len(s.PreScopes); i++ {
-			if err := <-errChan; err != nil {
+			if err := <-preScopeResultReceiveChan; err != nil {
 				return err
 			}
 		}
@@ -268,15 +281,18 @@ func (s *Scope) MergeRun(c *Compile) error {
 
 	for {
 		select {
-		case err := <-errChan:
+		case err := <-preScopeResultReceiveChan:
 			if err != nil {
 				return err
 			}
 			preScopeCount--
 
-		case err := <-errReceiveChan:
-			if err != nil {
-				return err
+		case result := <-notifyMessageResultReceiveChan:
+			if result.sender != nil {
+				result.sender.close()
+			}
+			if result.err != nil {
+				return result.err
 			}
 			remoteScopeCount--
 		}
@@ -313,7 +329,7 @@ func (s *Scope) RemoteRun(c *Compile) error {
 		p.Cleanup(s.Proc, err != nil, err)
 	}
 
-	// sender should be closed after cleanup (tell the sub-pipeline that query was done).
+	// sender should be closed after cleanup (tell the children-pipeline that query was done).
 	if sender != nil {
 		sender.close()
 	}
@@ -450,7 +466,7 @@ func buildLoadParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		ss[i].DataSource = &Source{
 			isConst: true,
 		}
-		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
+		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.proc.Ctx, 0, c.anal.Nodes())
 		if err := ss[i].initDataSource(c); err != nil {
 			return nil, err
 		}
@@ -471,7 +487,7 @@ func buildLoadParallelRun(s *Scope, c *Compile) (*Scope, error) {
 func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	// unexpected case.
 	if s.IsRemote && len(s.DataSource.OrderBy) > 0 {
-		return nil, moerr.NewInternalError(c.ctx, "ordered scan cannot run in remote.")
+		return nil, moerr.NewInternalError(c.proc.Ctx, "ordered scan cannot run in remote.")
 	}
 
 	// receive runtime filter and optimized the datasource.
@@ -489,8 +505,8 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 
 	// If this was a remote-run pipeline. Reader should be generated from Engine.
 	case s.IsRemote:
-		// this cannot use c.ctx directly, please refer to `default case`.
-		ctx := c.ctx
+		// this cannot use c.proc.Ctx directly, please refer to `default case`.
+		ctx := c.proc.Ctx
 		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
 			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 		}
@@ -504,7 +520,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 
 		readers, err = c.e.NewBlockReader(
 			ctx, scanUsedCpuNumber,
-			s.DataSource.Timestamp, s.DataSource.FilterExpr, s.NodeInfo.Data, s.DataSource.TableDef, c.proc)
+			s.DataSource.Timestamp, s.DataSource.FilterExpr, nil, s.NodeInfo.Data, s.DataSource.TableDef, c.proc)
 		if err != nil {
 			return nil, err
 		}
@@ -525,7 +541,12 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 			scanUsedCpuNumber = 1
 		}
 
-		readers, err = s.NodeInfo.Rel.NewReader(c.ctx, scanUsedCpuNumber, s.DataSource.FilterExpr, s.NodeInfo.Data, len(s.DataSource.OrderBy) > 0)
+		readers, err = s.NodeInfo.Rel.NewReader(c.proc.Ctx,
+			scanUsedCpuNumber,
+			s.DataSource.FilterExpr,
+			s.NodeInfo.Data,
+			len(s.DataSource.OrderBy) > 0,
+			s.TxnOffset)
 		if err != nil {
 			return nil, err
 		}
@@ -533,10 +554,10 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	// Should get relation first to generate Reader.
 	// FIXME:: s.NodeInfo.Rel == nil, partition table? -- this is an old comment, I just do a copy here.
 	default:
-		// This cannot modify the c.ctx here, but I don't know why.
+		// This cannot modify the c.proc.Ctx here, but I don't know why.
 		// Maybe there are some account related things stores in the context (using the context.WithValue),
 		// and modify action will change the account.
-		ctx := c.ctx
+		ctx := c.proc.Ctx
 
 		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
 			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
@@ -553,8 +574,13 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 			if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
 				if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
 					n.ScanSnapshot.TS.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
+					if c.proc.GetCloneTxnOperator() != nil {
+						txnOp = c.proc.GetCloneTxnOperator()
+					} else {
+						txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanSnapshot.TS)
+						c.proc.SetCloneTxnOperator(txnOp)
+					}
 
-					txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanSnapshot.TS)
 					if n.ScanSnapshot.Tenant != nil {
 						ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.Tenant.TenantID)
 					}
@@ -594,8 +620,12 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		}
 
 		if rel.GetEngineType() == engine.Memory || s.DataSource.PartitionRelationNames == nil {
-			mainRds, err1 := rel.NewReader(
-				ctx, scanUsedCpuNumber, s.DataSource.FilterExpr, s.NodeInfo.Data, len(s.DataSource.OrderBy) > 0)
+			mainRds, err1 := rel.NewReader(ctx,
+				scanUsedCpuNumber,
+				s.DataSource.FilterExpr,
+				s.NodeInfo.Data,
+				len(s.DataSource.OrderBy) > 0,
+				s.TxnOffset)
 			if err1 != nil {
 				return nil, err1
 			}
@@ -622,9 +652,12 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 
 			if len(cleanRanges) > 0 {
 				// create readers for reading clean blocks from the main table.
-				mainRds, err1 := rel.NewReader(
-					ctx,
-					scanUsedCpuNumber, s.DataSource.FilterExpr, cleanRanges, len(s.DataSource.OrderBy) > 0)
+				mainRds, err1 := rel.NewReader(ctx,
+					scanUsedCpuNumber,
+					s.DataSource.FilterExpr,
+					cleanRanges,
+					len(s.DataSource.OrderBy) > 0,
+					s.TxnOffset)
 				if err1 != nil {
 					return nil, err1
 				}
@@ -636,7 +669,12 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 				if err1 != nil {
 					return nil, err1
 				}
-				memRds, err2 := subRel.NewReader(ctx, scanUsedCpuNumber, s.DataSource.FilterExpr, dirtyRanges[num], len(s.DataSource.OrderBy) > 0)
+				memRds, err2 := subRel.NewReader(ctx,
+					scanUsedCpuNumber,
+					s.DataSource.FilterExpr,
+					dirtyRanges[num],
+					len(s.DataSource.OrderBy) > 0,
+					s.TxnOffset)
 				if err2 != nil {
 					return nil, err2
 				}
@@ -667,7 +705,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	}
 
 	if len(s.DataSource.OrderBy) > 0 {
-		return nil, moerr.NewInternalError(c.ctx, "ordered scan must run in only one parallel.")
+		return nil, moerr.NewInternalError(c.proc.Ctx, "ordered scan must run in only one parallel.")
 	}
 
 	// return a pipeline which merge result from scanUsedCpuNumber scan.
@@ -682,7 +720,8 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 			Attributes:   s.DataSource.Attributes,
 			AccountId:    s.DataSource.AccountId,
 		}
-		readerScopes[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
+		readerScopes[i].Proc = process.NewWithAnalyze(s.Proc, c.proc.Ctx, 0, c.anal.Nodes())
+		readerScopes[i].TxnOffset = s.TxnOffset
 	}
 
 	mergeFromParallelScanScope, errNew := newParallelScope(c, s, readerScopes)
@@ -733,7 +772,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 					s.DataSource.FilterExpr = plan2.MakeFalseExpr()
 					return nil
 				case process.RuntimeFilter_IN:
-					inExpr := plan2.MakeInExpr(c.ctx, spec.Expr, msg.Card, msg.Data, spec.MatchPrefix)
+					inExpr := plan2.MakeInExpr(c.proc.Ctx, spec.Expr, msg.Card, msg.Data, spec.MatchPrefix)
 					inExprList = append(inExprList, inExpr)
 
 					// TODO: implement BETWEEN expression
@@ -804,7 +843,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 			s.NodeInfo.Rel = nil
 		}
 	} else if len(inExprList) > 0 {
-		s.NodeInfo.Data, err = ApplyRuntimeFilters(c.ctx, s.Proc, s.DataSource.TableDef, s.NodeInfo.Data, exprs, filters)
+		s.NodeInfo.Data, err = ApplyRuntimeFilters(c.proc.Ctx, s.Proc, s.DataSource.TableDef, s.NodeInfo.Data, exprs, filters)
 		if err != nil {
 			return err
 		}
@@ -1112,9 +1151,19 @@ func (s *Scope) appendInstruction(in vm.Instruction) {
 	}
 }
 
-func (s *Scope) notifyAndReceiveFromRemote(wg *sync.WaitGroup, errChan chan error) {
+// the result of sendNotifyMessage routine.
+// we set sender here because we need to close the sender after canceling the context
+// to avoid misreport error (it was possible if there are more than one stream between two compute nodes).
+type notifyMessageResult struct {
+	sender *messageSenderOnClient
+	err    error
+}
+
+// sendNotifyMessage create n routines to notify the remote nodes where their receivers are.
+// and keep receiving the data until the query was done or data is ended.
+func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMessageResult) {
 	// if context has done, it means the user or other part of the pipeline stops this query.
-	closeWithError := func(err error, reg *process.WaitRegister) {
+	closeWithError := func(err error, reg *process.WaitRegister, sender *messageSenderOnClient) {
 		if reg != nil {
 			select {
 			case <-s.Proc.Ctx.Done():
@@ -1124,9 +1173,9 @@ func (s *Scope) notifyAndReceiveFromRemote(wg *sync.WaitGroup, errChan chan erro
 
 		select {
 		case <-s.Proc.Ctx.Done():
-			errChan <- nil
+			resultChan <- notifyMessageResult{err: nil, sender: sender}
 		default:
-			errChan <- err
+			resultChan <- notifyMessageResult{err: err, sender: sender}
 		}
 		wg.Done()
 	}
@@ -1135,7 +1184,7 @@ func (s *Scope) notifyAndReceiveFromRemote(wg *sync.WaitGroup, errChan chan erro
 	// to notify the remote dispatch executor where its remote receivers are.
 	// dispatch operator will use this stream connection to send data back.
 	//
-	// function `cnMessageHandle` at file `scopeRemoteRun.go` will handle the notification.
+	// function `cnMessageHandle` at file `remoterunServer.go` will handle the notification.
 	for i := range s.RemoteReceivRegInfos {
 		wg.Add(1)
 
@@ -1146,108 +1195,61 @@ func (s *Scope) notifyAndReceiveFromRemote(wg *sync.WaitGroup, errChan chan erro
 
 		errSubmit := ants.Submit(
 			func() {
-				streamSender, errStream := cnclient.GetStreamSender(fromAddr)
-				if errStream != nil {
-					s.Proc.Errorf(s.Proc.Ctx, "Failed to get stream sender txnID=%s, err=%v",
-						s.Proc.TxnOperator.Txn().DebugString(), errStream)
-					closeWithError(errStream, s.Proc.Reg.MergeReceivers[receiverIdx])
+
+				sender, err := newMessageSenderOnClient(s.Proc.Ctx, fromAddr, s.Proc.Mp(), nil)
+				if err != nil {
+					closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], nil)
 					return
 				}
-				defer streamSender.Close(true)
 
 				message := cnclient.AcquireMessage()
-				message.Id = streamSender.ID()
-				message.Cmd = pbpipeline.Method_PrepareDoneNotifyMessage
-				message.Sid = pbpipeline.Status_Last
+				message.SetID(sender.streamSender.ID())
+				message.SetMessageType(pbpipeline.Method_PrepareDoneNotifyMessage)
+				message.NeedNotReply = false
 				message.Uuid = uuid
 
-				if errSend := streamSender.Send(s.Proc.Ctx, message); errSend != nil {
-					closeWithError(errSend, s.Proc.Reg.MergeReceivers[receiverIdx])
+				if errSend := sender.streamSender.Send(sender.ctx, message); errSend != nil {
+					closeWithError(errSend, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
 					return
 				}
+				sender.safeToClose = false
+				sender.alreadyClose = false
 
-				messagesReceive, errReceive := streamSender.Receive()
-				if errReceive != nil {
-					closeWithError(errReceive, s.Proc.Reg.MergeReceivers[receiverIdx])
-					return
-				}
-
-				err := receiveMsgAndForward(s.Proc, messagesReceive, s.Proc.Reg.MergeReceivers[receiverIdx].Ch)
-				closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx])
+				err = receiveMsgAndForward(s.Proc, sender, s.Proc.Reg.MergeReceivers[receiverIdx].Ch)
+				closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
 			},
 		)
 
 		if errSubmit != nil {
-			errChan <- errSubmit
+			resultChan <- notifyMessageResult{err: errSubmit, sender: nil}
 			wg.Done()
 		}
 	}
 }
 
-func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, forwardCh chan *process.RegisterMessage) error {
-	var val morpc.Message
-	var dataBuffer []byte
-	var ok bool
-	var m *pbpipeline.Message
-
+func receiveMsgAndForward(proc *process.Process, sender *messageSenderOnClient, forwardCh chan *process.RegisterMessage) error {
 	for {
-		select {
-		case <-proc.Ctx.Done():
-			return nil
-
-		case val, ok = <-receiveCh:
-			if val == nil || !ok {
-				return moerr.NewStreamClosedNoCtx()
-			}
-		}
-
-		m, ok = val.(*pbpipeline.Message)
-		if !ok {
-			panic("unexpected message type for cn-server")
-		}
-
-		// receive an end message from remote
-		if err := pbpipeline.GetMessageErrorInfo(m); err != nil {
+		bat, end, err := sender.receiveBatch()
+		if err != nil {
 			return err
 		}
-
-		// end message
-		if m.IsEndMessage() {
+		if end {
 			return nil
 		}
 
-		// normal receive
-		if dataBuffer == nil {
-			dataBuffer = m.Data
+		if forwardCh == nil {
+			// used for delete.
+			// I don't know what is that.
+			proc.SetInputBatch(bat)
 		} else {
-			dataBuffer = append(dataBuffer, m.Data...)
-		}
+			msg := &process.RegisterMessage{Batch: bat}
+			select {
+			case <-proc.Ctx.Done():
+				bat.Clean(proc.Mp())
+				return nil
 
-		switch m.GetSid() {
-		case pbpipeline.Status_WaitingNext:
-			continue
-		case pbpipeline.Status_Last:
-			if m.Checksum != crc32.ChecksumIEEE(dataBuffer) {
-				return moerr.NewInternalError(proc.Ctx, "Packages delivered by morpc is broken")
+			case forwardCh <- msg:
 			}
-			bat, err := decodeBatch(proc.Mp(), dataBuffer)
-			if err != nil {
-				return err
-			}
-			if forwardCh == nil {
-				// used for delete
-				proc.SetInputBatch(bat)
-			} else {
-				msg := &process.RegisterMessage{Batch: bat}
-				select {
-				case <-proc.Ctx.Done():
-					bat.Clean(proc.Mp())
-					return nil
-
-				case forwardCh <- msg:
-				}
-			}
-			dataBuffer = nil
 		}
 	}
 }

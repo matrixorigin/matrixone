@@ -2238,13 +2238,13 @@ func (data *CheckpointData) PrefetchFrom(
 	if version < CheckpointVersion4 {
 		return prefetchCheckpointData(ctx, version, service, key)
 	}
-	blocks := vector.MustBytesCol(data.bats[TNMetaIDX].GetVectorByName(CheckpointMetaAttr_BlockLocation).GetDownstreamVector())
+	blocks, area := vector.MustVarlenaRawData(data.bats[TNMetaIDX].GetVectorByName(CheckpointMetaAttr_BlockLocation).GetDownstreamVector())
 	dataType := vector.MustFixedCol[uint16](data.bats[TNMetaIDX].GetVectorByName(CheckpointMetaAttr_SchemaType).GetDownstreamVector())
 	var pref blockio.PrefetchParams
 	locations := make(map[string][]blockIdx)
 	checkpointSize := uint64(0)
-	for i := 0; i < len(blocks); i++ {
-		location := objectio.Location(blocks[i])
+	for i := range blocks {
+		location := objectio.Location(blocks[i].GetByteSlice(area))
 		if location.IsEmpty() {
 			continue
 		}
@@ -3136,7 +3136,13 @@ func (collector *GlobalCollector) VisitObj(entry *catalog.ObjectEntry) error {
 
 func (collector *BaseCollector) visitTombstone(entry data.Tombstone) {
 	// If ctx is used when collect in memory deletes.
-	_, start, end, err := entry.VisitDeletes(context.Background(), collector.start, collector.end, collector.data.bats[BLKMetaInsertIDX], collector.data.bats[BLKMetaInsertTxnIDX], true)
+	_, start, end, err := entry.VisitDeletes(
+		context.Background(),
+		collector.start,
+		collector.end,
+		collector.data.bats[BLKMetaInsertIDX],
+		collector.data.bats[BLKMetaInsertTxnIDX],
+		true, false)
 	if err != nil {
 		panic(err)
 	}
@@ -3160,6 +3166,21 @@ func (collector *BaseCollector) VisitTombstone(entry data.Tombstone) (err error)
 	return nil
 }
 
+func (collector *BaseCollector) VisitGlobalTombstone(entry data.Tombstone) (err error) {
+	_, start, end, err := entry.VisitDeletes(
+		context.Background(),
+		collector.start,
+		collector.end,
+		collector.data.bats[BLKMetaInsertIDX],
+		collector.data.bats[BLKMetaInsertTxnIDX],
+		true, true)
+	if err != nil {
+		panic(err)
+	}
+	collector.data.UpdateBlkMeta(entry.GetObject().(*catalog.ObjectEntry).GetTable().ID, int32(start), int32(end), 0, 0)
+	return nil
+}
+
 func (collector *GlobalCollector) VisitTombstone(entry data.Tombstone) error {
 	obj := entry.GetObject().(*catalog.ObjectEntry)
 	if collector.isEntryDeletedBeforeThreshold(obj.BaseEntryImpl) && !obj.InMemoryDeletesExisted() && obj.IsDeletesFlushedBefore(collector.versionThershold) {
@@ -3171,7 +3192,7 @@ func (collector *GlobalCollector) VisitTombstone(entry data.Tombstone) error {
 	if collector.isEntryDeletedBeforeThreshold(obj.GetTable().GetDB().BaseEntryImpl) {
 		return nil
 	}
-	return collector.BaseCollector.VisitTombstone(entry)
+	return collector.BaseCollector.VisitGlobalTombstone(entry)
 }
 
 func (collector *BaseCollector) OrphanData() *CheckpointData {

@@ -20,14 +20,9 @@ import (
 	"io"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-	"github.com/prashantv/gostub"
-
 	"github.com/BurntSushi/toml"
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/assert"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -41,8 +36,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/prashantv/gostub"
+	"github.com/stretchr/testify/assert"
 )
 
 func newLocalETLFS(t *testing.T, fsName string) fileservice.FileService {
@@ -173,7 +171,7 @@ func Test_saveQueryResultMeta(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	asts, err := parsers.Parse(ctx, dialect.MYSQL, "select a,b,c from t", 1, 0)
+	asts, err := parsers.Parse(ctx, dialect.MYSQL, "select a,b,c from t", 1)
 	assert.Nil(t, err)
 
 	ses.ast = asts[0]

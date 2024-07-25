@@ -163,7 +163,8 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		checkpoint.WithMinIncrementalInterval(opts.CheckpointCfg.IncrementalInterval),
 		checkpoint.WithGlobalMinCount(int(opts.CheckpointCfg.GlobalMinCount)),
 		checkpoint.WithGlobalVersionInterval(opts.CheckpointCfg.GlobalVersionInterval),
-		checkpoint.WithReserveWALEntryCount(opts.CheckpointCfg.ReservedWALEntryCount))
+		checkpoint.WithReserveWALEntryCount(opts.CheckpointCfg.ReservedWALEntryCount),
+		checkpoint.WithStartupLatancy(opts.CheckpointCfg.StartupLatency))
 
 	now := time.Now()
 	checkpointed, ckpLSN, valid, err := db.BGCheckpointRunner.Replay(dataFactory)
@@ -206,7 +207,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 			ts := types.BuildTS(time.Now().UTC().UnixNano()-int64(opts.GCCfg.GCTTL), 0)
 			endTS := checkpoint.GetEnd()
 			return !endTS.GreaterEq(&ts)
-		})
+		}, gc2.CheckerKeyTTL)
 	db.DiskCleaner = gc2.NewDiskCleaner(cleaner)
 	db.DiskCleaner.Start()
 	// Init gc manager at last

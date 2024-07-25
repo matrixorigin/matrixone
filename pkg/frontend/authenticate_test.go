@@ -28,6 +28,11 @@ import (
 	"github.com/fagongzi/goetty/v2"
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/golang/mock/gomock"
+	"github.com/prashantv/gostub"
+	"github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -43,10 +48,6 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/prashantv/gostub"
-	"github.com/smartystreets/goconvey/convey"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestGetTenantInfo(t *testing.T) {
@@ -6103,7 +6104,7 @@ func TestDoSetSecondaryRoleAll(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql := getSqlForgetUserRolesExpectPublicRole(publicRoleID, ses.GetTenantInfo().UserID)
+		sql := getSqlForgetUserRolesExpectPublicRole(publicRoleID, ses.GetTenantInfo().GetUserID())
 		mrs := newMrsForPasswordOfUser([][]interface{}{
 			{"6", "role5"},
 		})
@@ -6144,7 +6145,7 @@ func TestDoSetSecondaryRoleAll(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql := getSqlForgetUserRolesExpectPublicRole(publicRoleID, ses.GetTenantInfo().UserID)
+		sql := getSqlForgetUserRolesExpectPublicRole(publicRoleID, ses.GetTenantInfo().GetUserID())
 		mrs := newMrsForPasswordOfUser([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
@@ -6642,13 +6643,9 @@ func TestSetGlobalSysVar(t *testing.T) {
 		convey.So(value, convey.ShouldEqual, 0)
 
 		// new session, both GetSession/GlobalSysVar equal 0
-		sql = getSqlForGetSystemVariablesWithAccount(sysAccountID)
-		mrs = newMrsForSystemVariablesOfAccount([][]interface{}{
-			{"autocommit", "0"},
-		})
-		bh.sql2result[sql] = mrs
-
 		ses2 := newSes(nil, ctrl)
+		ses2.sesSysVars.sysVars["autocommit"] = 0
+		ses2.gSysVars.sysVars["autocommit"] = 0
 		value, err = ses2.GetSessionSysVar("autocommit")
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(value, convey.ShouldEqual, 0)
@@ -8201,27 +8198,6 @@ func newMrsForPrivilegeWGO(rows [][]interface{}) *MysqlResultSet {
 	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
 
 	mrs.AddColumn(col1)
-
-	for _, row := range rows {
-		mrs.AddRow(row)
-	}
-
-	return mrs
-}
-
-func newMrsForSystemVariablesOfAccount(rows [][]interface{}) *MysqlResultSet {
-	mrs := &MysqlResultSet{}
-
-	col1 := &MysqlColumn{}
-	col1.SetName("variable_name")
-	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-
-	col2 := &MysqlColumn{}
-	col2.SetName("variable_value")
-	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-
-	mrs.AddColumn(col1)
-	mrs.AddColumn(col2)
 
 	for _, row := range rows {
 		mrs.AddRow(row)

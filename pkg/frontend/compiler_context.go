@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -33,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -43,6 +45,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+var _ plan2.CompilerContext = &TxnCompilerContext{}
 
 type TxnCompilerContext struct {
 	dbName               string
@@ -57,7 +61,13 @@ type TxnCompilerContext struct {
 	mu      sync.Mutex
 }
 
-var _ plan2.CompilerContext = &TxnCompilerContext{}
+func (tcc *TxnCompilerContext) GetLowerCaseTableNames() int64 {
+	lower := int64(0)
+	if val, err := tcc.execCtx.ses.GetSessionSysVar("lower_case_table_names"); err != nil {
+		lower = val.(int64)
+	}
+	return lower
+}
 
 func (tcc *TxnCompilerContext) SetExecCtx(execCtx *ExecCtx) {
 	tcc.mu.Lock()
@@ -223,6 +233,11 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 		return nil, nil, err
 	}
 
+	start := time.Now()
+	defer func() {
+		v2.GetRelationDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
 	ses := tcc.GetSession()
 	txn := tcc.GetTxnHandler().GetTxn()
 	tempCtx := tcc.execCtx.reqCtx
@@ -257,6 +272,8 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 		tempCtx = defines.AttachAccountId(tempCtx, uint32(sysAccountID))
 	}
 
+	start1 := time.Now()
+
 	//open database
 	db, err := tcc.GetTxnHandler().GetStorage().Database(tempCtx, dbName, txn)
 	if err != nil {
@@ -267,11 +284,15 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 		return nil, nil, err
 	}
 
+	v2.OpenDBDurationHistogram.Observe(time.Since(start1).Seconds())
+
 	// tableNames, err := db.Relations(ctx)
 	// if err != nil {
 	// 	return nil, nil, err
 	// }
 	// logDebugf(ses.GetDebugString(), "dbName %v tableNames %v", dbName, tableNames)
+
+	start2 := time.Now()
 
 	//open table
 	table, err := db.Relation(tempCtx, tableName, nil)
@@ -287,10 +308,17 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 			table = tmpTable
 		}
 	}
+
+	v2.OpenTableDurationHistogram.Observe(time.Since(start2).Seconds())
+
 	return tempCtx, table, nil
 }
 
 func (tcc *TxnCompilerContext) getTmpRelation(ctx context.Context, tableName string) (engine.Relation, error) {
+	start := time.Now()
+	defer func() {
+		v2.GetTmpTableDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 	e := tcc.execCtx.ses.GetTxnHandler().GetStorage()
 	txn := tcc.execCtx.ses.GetTxnHandler().GetTxn()
 	db, err := e.Database(ctx, defines.TEMPORARY_DBNAME, txn)
@@ -305,6 +333,10 @@ func (tcc *TxnCompilerContext) getTmpRelation(ctx context.Context, tableName str
 }
 
 func (tcc *TxnCompilerContext) ensureDatabaseIsNotEmpty(dbName string, checkSub bool, snapshot plan2.Snapshot) (string, *plan.SubscriptionMeta, error) {
+	start := time.Now()
+	defer func() {
+		v2.EnsureDatabaseDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 	if len(dbName) == 0 {
 		dbName = tcc.DefaultDatabase()
 	}
@@ -375,8 +407,17 @@ func (tcc *TxnCompilerContext) ResolveSubscriptionTableById(tableId uint64, pubm
 func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot plan2.Snapshot) (*plan2.ObjectRef, *plan2.TableDef) {
 	start := time.Now()
 	defer func() {
-		v2.TxnStatementResolveDurationHistogram.Observe(time.Since(start).Seconds())
+		end := time.Since(start).Seconds()
+		v2.TxnStatementResolveDurationHistogram.Observe(end)
+		v2.TotalResolveDurationHistogram.Observe(end)
 	}()
+
+	// In order to be compatible with various GUI clients and BI tools, lower case db and table name if it's a mysql system table
+	if slices.Contains(mysql.CaseInsensitiveDbs, strings.ToLower(dbName)) {
+		dbName = strings.ToLower(dbName)
+		tableName = strings.ToLower(tableName)
+	}
+
 	dbName, sub, err := tcc.ensureDatabaseIsNotEmpty(dbName, true, snapshot)
 	if err != nil {
 		return nil, nil
@@ -830,14 +871,17 @@ func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, 
 	}
 	// paths
 	vec = bats[0].Vecs[1]
-	str := vec.UnsafeGetStringAt(0)
+	str := vec.GetStringAt(0)
 	return r.ResultCols, str, nil
 }
 
 func (tcc *TxnCompilerContext) GetSubscriptionMeta(dbName string, snapshot plan2.Snapshot) (*plan.SubscriptionMeta, error) {
 	tempCtx := tcc.execCtx.reqCtx
 	txn := tcc.GetTxnHandler().GetTxn()
-
+	start := time.Now()
+	defer func() {
+		v2.GetSubMetaDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 	if plan2.IsSnapshotValid(&snapshot) && snapshot.TS.Less(txn.Txn().SnapshotTS) {
 		txn = txn.CloneSnapshotOp(*snapshot.TS)
 

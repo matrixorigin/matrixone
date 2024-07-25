@@ -23,6 +23,8 @@ import (
 	"sync/atomic"
 	"unsafe"
 
+	"github.com/tidwall/btree"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -32,8 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/tidwall/btree"
 )
 
 type PartitionState struct {
@@ -476,9 +476,9 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 			p.objectIndexByTS.Set(e)
 		}
 		//prefetch the object meta
-		if err := blockio.PrefetchMeta(fs, objEntry.Location()); err != nil {
-			logutil.Errorf("prefetch object meta failed. %v", err)
-		}
+		// if err := blockio.PrefetchMeta(fs, objEntry.Location()); err != nil {
+		// 	logutil.Errorf("prefetch object meta failed. %v", err)
+		// }
 
 		p.dataObjects.Set(objEntry)
 		{
@@ -526,7 +526,7 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 						p.rows.Delete(entry)
 
 						// delete the row's primary index
-						if objEntry.EntryState && len(entry.PrimaryIndexBytes) > 0 {
+						if len(entry.PrimaryIndexBytes) > 0 {
 							p.primaryIndex.Delete(&PrimaryIndexEntry{
 								Bytes:      entry.PrimaryIndexBytes,
 								RowEntryID: entry.ID,
@@ -797,7 +797,7 @@ func (p *PartitionState) HandleMetadataInsert(
 						p.rows.Delete(entry)
 
 						// delete the row's primary index
-						if isAppendable && len(entry.PrimaryIndexBytes) > 0 {
+						if len(entry.PrimaryIndexBytes) > 0 {
 							p.primaryIndex.Delete(&PrimaryIndexEntry{
 								Bytes:      entry.PrimaryIndexBytes,
 								RowEntryID: entry.ID,

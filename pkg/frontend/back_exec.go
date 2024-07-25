@@ -31,8 +31,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -40,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -74,7 +77,7 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 	if err != nil {
 		return err
 	}
-	statements, err := mysql.Parse(ctx, sql, v.(int64), 0)
+	statements, err := mysql.Parse(ctx, sql, v.(int64))
 	if err != nil {
 		return err
 	}
@@ -96,11 +99,23 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 			}
 		}
 	}
+
+	var isRestore bool
+	if _, ok := statements[0].(*tree.Insert); ok {
+		if strings.Contains(sql, "MO_TS =") {
+			isRestore = true
+		}
+	}
+
+	userInput := &UserInput{
+		sql:       sql,
+		isRestore: isRestore,
+	}
 	execCtx := ExecCtx{
 		reqCtx: ctx,
 		ses:    back.backSes,
 	}
-	return doComQueryInBack(back.backSes, &execCtx, &UserInput{sql: sql})
+	return doComQueryInBack(back.backSes, &execCtx, userInput)
 }
 
 func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uint32, toAccount uint32) error {
@@ -121,7 +136,7 @@ func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uin
 	if err != nil {
 		return err
 	}
-	statements, err := mysql.Parse(ctx, sql, v.(int64), 0)
+	statements, err := mysql.Parse(ctx, sql, v.(int64))
 	if err != nil {
 		return err
 	}
@@ -179,6 +194,11 @@ func (back *backExec) GetExecResultBatches() []*batch.Batch {
 }
 
 func (back *backExec) ClearExecResultBatches() {
+	for _, bat := range back.backSes.resultBatches {
+		if bat != nil {
+			bat.Clean(back.backSes.pool)
+		}
+	}
 	back.backSes.resultBatches = nil
 }
 
@@ -206,7 +226,7 @@ func doComQueryInBack(backSes *backSession, execCtx *ExecCtx,
 		getGlobalPu().QueryClient,
 		getGlobalPu().HAKeeperClient,
 		getGlobalPu().UdfService,
-		getGlobalAic())
+		getGlobalAicm())
 	proc.Id = backSes.getNextProcessId()
 	proc.Lim.Size = getGlobalPu().SV.ProcessLimitationSize
 	proc.Lim.BatchRows = getGlobalPu().SV.ProcessLimitationBatchRows
@@ -370,6 +390,12 @@ func executeStmtInBack(backSes *backSession,
 
 	execCtx.ses.EnterFPrint(94)
 	defer execCtx.ses.ExitFPrint(94)
+
+	err = disttae.CheckTxnIsValid(execCtx.ses.GetTxnHandler().GetTxn())
+	if err != nil {
+		return err
+	}
+
 	if ret, err = execCtx.cw.Compile(execCtx, backSes.GetOutputCallback(execCtx)); err != nil {
 		return
 	}
@@ -410,12 +436,7 @@ func executeStmtInBack(backSes *backSession,
 			return err
 		}
 	case tree.OUTPUT_UNDEFINED:
-		isExecute := false
-		switch execCtx.stmt.(type) {
-		case *tree.Execute:
-			isExecute = true
-		}
-		if !isExecute {
+		if _, ok := execCtx.stmt.(*tree.Execute); !ok {
 			return moerr.NewInternalError(execCtx.reqCtx, "need set result type for %s", execCtx.sqlOfStmt)
 		}
 	}
@@ -642,7 +663,7 @@ func newBackSession(ses FeSession, txnOp TxnOperator, db string, callBack output
 	return backSes
 }
 
-func (backSes *backSession) getCachedPlan(sql string) *cachedPlan {
+func (backSes *backSession) getCachedPlan(sql [32]byte) *cachedPlan {
 	return nil
 }
 
@@ -695,10 +716,6 @@ func (backSes *backSession) getNextProcessId() string {
 }
 
 func (backSes *backSession) cleanCache() {
-}
-
-func (backSes *backSession) GetUpstream() FeSession {
-	return backSes.upstream
 }
 
 func (backSes *backSession) getCNLabels() map[string]string {

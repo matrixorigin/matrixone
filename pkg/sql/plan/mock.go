@@ -30,6 +30,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+var _ CompilerContext = &MockCompilerContext{}
+
 type MockCompilerContext struct {
 	objects         map[string]*ObjectRef
 	tables          map[string]*TableDef
@@ -40,6 +42,10 @@ type MockCompilerContext struct {
 
 	// ctx default: nil
 	ctx context.Context
+}
+
+func (m *MockCompilerContext) GetLowerCaseTableNames() int64 {
+	return 1
 }
 
 func (m *MockCompilerContext) GetViews() []string {
@@ -306,6 +312,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	}
 	moSchema["mo_tables"] = &Schema{
 		cols: []col{
+			{"rel_id", types.T_uint64, false, 64, 0},
 			{"reldatabase", types.T_varchar, false, 50, 0},
 			{"relname", types.T_varchar, false, 50, 0},
 			{"relkind", types.T_varchar, false, 50, 0},

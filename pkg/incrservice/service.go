@@ -138,14 +138,10 @@ func (s *service) Reset(
 		return err
 	}
 	if len(cols) == 0 {
-		rows, err := s.store.SelectAll(ctx, oldTableID, txnOp)
-		if err != nil {
-			return err
-		}
 		s.logger.Info("no columns found",
 			zap.Uint64("table-id", oldTableID),
 			zap.String("txn", txnOp.Txn().DebugString()),
-			zap.String("rows", rows))
+		)
 	}
 
 	if !keep {
@@ -229,6 +225,27 @@ func (s *service) CurrentValue(
 	return ts.currentValue(ctx, tableID, col)
 }
 
+func (s *service) Reload(
+	ctx context.Context,
+	tableID uint64,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	c, ok := s.mu.tables[tableID]
+	if !ok {
+		return nil
+	}
+
+	if err := c.close(); err != nil {
+		return err
+	}
+
+	// drop cache, will be reloaded when next query
+	delete(s.mu.tables, tableID)
+	return nil
+}
+
 func (s *service) Close() {
 	s.stopper.Stop()
 
@@ -276,22 +293,12 @@ func (s *service) getCommittedTableCache(
 		return nil, moerr.NewNoSuchTableNoCtx("", fmt.Sprintf("%d", tableID))
 	}
 
-	txnOp := s.store.NewTxnOperator(ctx)
-	if txnOp != nil {
-		defer txnOp.Rollback(ctx)
-	}
-	s.logger.Info("try to get columns", zap.Uint64("tableId", tableID), zap.String("txn", txnOp.Txn().DebugString()))
-
-	cols, err := s.store.GetColumns(ctx, tableID, txnOp)
+	cols, err := s.store.GetColumns(ctx, tableID, nil)
 	if err != nil {
 		return nil, err
 	}
 	if len(cols) == 0 {
-		table, err := s.store.SelectAll(ctx, tableID, txnOp)
-		if err != nil {
-			return nil, err
-		}
-		return nil, moerr.NewNoSuchTableNoCtx("", table)
+		return nil, moerr.NewNoSuchTableNoCtx("", fmt.Sprintf("%d", tableID))
 	}
 
 	c, err = newTableCache(

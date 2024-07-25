@@ -153,7 +153,7 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 }
 
 func (resper *MysqlResp) respColumnDefsWithoutFlush(ses *Session, execCtx *ExecCtx, columns []any) (err error) {
-	if execCtx.skipRespClient {
+	if execCtx.inMigration {
 		return nil
 	}
 	//!!!carefully to use
@@ -200,16 +200,17 @@ func (resper *MysqlResp) respStreamResultRow(ses *Session,
 	execCtx *ExecCtx) (err error) {
 	ses.EnterFPrint(70)
 	defer ses.ExitFPrint(70)
-	if execCtx.skipRespClient {
+	if execCtx.inMigration {
 		return nil
 	}
+
 	switch statement := execCtx.stmt.(type) {
 	case *tree.Select:
 		if len(execCtx.proc.SessionInfo.SeqAddValues) != 0 {
 			ses.AddSeqValues(execCtx.proc)
 		}
 		ses.SetSeqLastValue(execCtx.proc)
-		err2 := resper.mysqlRrWr.WriteEOFOrOK(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
+		err2 := resper.mysqlRrWr.WriteEOFOrOK(0, checkMoreResultSet(ses.getStatusAfterTxnIsEnded(execCtx.reqCtx), execCtx.isLastStmt))
 		if err2 != nil {
 			err = moerr.NewInternalError(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
 			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
@@ -248,13 +249,13 @@ func (resper *MysqlResp) respStreamResultRow(ses *Session,
 			return
 		}
 
-		err = resper.mysqlRrWr.WriteEOFOrOK(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
+		err = resper.mysqlRrWr.WriteEOFOrOK(0, checkMoreResultSet(ses.getStatusAfterTxnIsEnded(execCtx.reqCtx), execCtx.isLastStmt))
 		if err != nil {
 			return
 		}
 
 	default:
-		err = resper.mysqlRrWr.WriteEOFOrOK(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
+		err = resper.mysqlRrWr.WriteEOFOrOK(0, checkMoreResultSet(ses.getStatusAfterTxnIsEnded(execCtx.reqCtx), execCtx.isLastStmt))
 		if err != nil {
 			return
 		}
@@ -267,7 +268,7 @@ func (resper *MysqlResp) respPrebuildResultRow(ses *Session,
 	execCtx *ExecCtx) (err error) {
 	ses.EnterFPrint(71)
 	defer ses.ExitFPrint(71)
-	if execCtx.skipRespClient {
+	if execCtx.inMigration {
 		return nil
 	}
 	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
@@ -282,7 +283,7 @@ func (resper *MysqlResp) respMixedResultRow(ses *Session,
 	execCtx *ExecCtx) (err error) {
 	ses.EnterFPrint(72)
 	defer ses.ExitFPrint(72)
-	if execCtx.skipRespClient {
+	if execCtx.inMigration {
 		return nil
 	}
 	//!!!the columnDef has been sent after the compiling ends. It should not be sent here again.
@@ -294,7 +295,8 @@ func (resper *MysqlResp) respMixedResultRow(ses *Session,
 			zap.Error(err))
 		return err
 	}
-	err = resper.mysqlRrWr.WriteEOFOrOK(0, ses.getStatusAfterTxnIsEnded(execCtx.reqCtx))
+
+	err = resper.mysqlRrWr.WriteEOFOrOK(0, checkMoreResultSet(ses.getStatusAfterTxnIsEnded(execCtx.reqCtx), execCtx.isLastStmt))
 	if err != nil {
 		return
 	}

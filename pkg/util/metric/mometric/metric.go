@@ -135,6 +135,7 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 	}
 
 	enable = true
+	frontendServerStarted = initOpts.frontendServerStarted
 	SetUpdateStorageUsageInterval(initOpts.updateInterval)
 	SetStorageUsageCheckNewInterval(initOpts.checkNewInterval)
 	logutil.Debugf("metric with ExportInterval: %v", initOpts.exportInterval)
@@ -374,6 +375,8 @@ type InitOptions struct {
 	checkNewInterval time.Duration
 	// internalGatherInterval, handle metric.SubSystemMO gather interval
 	internalGatherInterval time.Duration
+	// frontendServerStarted, function return bool, represent server started or not
+	frontendServerStarted func() bool
 }
 
 type InitOption func(*InitOptions)
@@ -416,6 +419,12 @@ func withCheckNewInterval(interval time.Duration) InitOption {
 func WithInternalGatherInterval(interval time.Duration) InitOption {
 	return InitOption(func(options *InitOptions) {
 		options.internalGatherInterval = interval
+	})
+}
+
+func WithFrontendServerStarted(f func() bool) InitOption {
+	return InitOption(func(options *InitOptions) {
+		options.frontendServerStarted = f
 	})
 }
 

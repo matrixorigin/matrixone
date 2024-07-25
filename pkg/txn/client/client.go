@@ -429,9 +429,19 @@ func (client *txnClient) SyncLatestCommitTS(ts timestamp.Timestamp) {
 	if client.timestampWaiter != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
 		defer cancel()
-		_, err := client.timestampWaiter.GetTimestamp(ctx, ts)
-		if err != nil {
-			util.GetLogger().Fatal("wait latest commit ts failed", zap.Error(err))
+		for {
+			_, err := client.timestampWaiter.GetTimestamp(ctx, ts)
+			if err != nil {
+				// If the error is moerr.ErrWaiterPaused, retry to get the timestamp,
+				// but not FATAL immediately.
+				if moerr.IsMoErrCode(err, moerr.ErrWaiterPaused) {
+					time.Sleep(time.Second)
+					continue
+				} else {
+					util.GetLogger().Fatal("wait latest commit ts failed", zap.Error(err))
+				}
+			}
+			break
 		}
 	}
 	client.atomic.forceSyncCommitTimes.Add(1)
@@ -561,21 +571,38 @@ func (client *txnClient) Resume() {
 	}
 }
 
+// NodeRunningPipelineManager to avoid packages import cycles.
+type NodeRunningPipelineManager interface {
+	PauseService()
+	KillAllQueriesWithError(err error)
+	ResumeService()
+}
+
+var runningPipelines NodeRunningPipelineManager
+
+func SetRunningPipelineManagement(m NodeRunningPipelineManager) {
+	runningPipelines = m
+}
+
 func (client *txnClient) AbortAllRunningTxn() {
 	client.mu.Lock()
+	runningPipelines.PauseService()
+
 	ops := make([]*txnOperator, 0, len(client.mu.activeTxns))
 	for _, op := range client.mu.activeTxns {
 		ops = append(ops, op)
 	}
 	waitOps := append(([]*txnOperator)(nil), client.mu.waitActiveTxns...)
 	client.mu.waitActiveTxns = client.mu.waitActiveTxns[:0]
-	client.mu.Unlock()
-
 	if client.timestampWaiter != nil {
 		// Cancel all waiters, means that all waiters do not need to wait for
 		// the newer timestamp from logtail consumer.
 		client.timestampWaiter.Pause()
 	}
+	runningPipelines.KillAllQueriesWithError(nil)
+
+	client.mu.Unlock()
+	runningPipelines.ResumeService()
 
 	for _, op := range ops {
 		op.cannotCleanWorkspace = true

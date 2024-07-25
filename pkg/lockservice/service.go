@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/list"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"go.uber.org/zap"
 )
 
 // WithWait setup wait func to wait some condition ready
@@ -298,6 +299,7 @@ func (s *service) checkCanMoveGroupTables() {
 	}
 	s.mu.restartTime, _ = s.clock.Now()
 	s.mu.status = pb.Status_ServiceLockWaiting
+	logStatusChange(s.mu.status, pb.Status_ServiceLockWaiting)
 }
 
 func (s *service) incRef(group uint32, table uint64) {
@@ -321,13 +323,14 @@ func (s *service) canLockOnServiceStatus(
 		tableID = shardingByRow(rows[0])
 	}
 	if !s.validGroupTable(opts.Group, tableID) {
-		return false
-	}
-	if s.activeTxnHolder.empty() {
+		logCanLockOnService(s.serviceID)
 		return false
 	}
 	if s.activeTxnHolder.hasActiveTxn(txnID) {
 		return true
+	}
+	if s.activeTxnHolder.empty() {
+		return false
 	}
 	if opts.SnapShotTs.LessEq(s.getRestartTime()) {
 		return true
@@ -357,6 +360,10 @@ func (s *service) GetConfig() Config {
 }
 
 func (s *service) Close() error {
+	defer getLogger().InfoAction("close lock service",
+		zap.String("service", s.serviceID),
+	)
+
 	var err error
 	s.stopOnce.Do(func() {
 		s.stopper.Stop()
@@ -384,6 +391,7 @@ func (s *service) Close() error {
 func (s *service) setStatus(status pb.Status) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	logStatusChange(s.mu.status, status)
 	s.mu.status = status
 }
 
@@ -391,6 +399,16 @@ func (s *service) getStatus() pb.Status {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.mu.status
+}
+
+func (s *service) topGroupTables() []pb.LockTable {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.mu.groupTables) == 0 {
+		return nil
+	}
+	g := s.mu.groupTables[0]
+	return g
 }
 
 func (s *service) popGroupTables() []pb.LockTable {
@@ -504,11 +522,14 @@ func (s *service) getLockTableWithCreate(
 		return v, nil
 	}
 
+	wait := false
+	get := true
 	var c chan struct{}
 	fn := func() lockTable {
 		s.mu.Lock()
 		waitC := s.getAllocatingC(group, tableID, true)
 		if waitC != nil {
+			wait = true
 			s.mu.Unlock()
 			<-waitC
 			s.mu.Lock()
@@ -516,6 +537,7 @@ func (s *service) getLockTableWithCreate(
 
 		v := s.tableGroups.get(group, tableID)
 		if v == nil {
+			get = false
 			c = make(chan struct{})
 			m, ok := s.mu.allocating[group]
 			if !ok {
@@ -548,13 +570,51 @@ func (s *service) getLockTableWithCreate(
 		return nil, err
 	}
 
-	v := s.tableGroups.set(group, tableID, s.createLockTableByBind(bind))
+	s.tableGroups.iter(
+		func(id uint64, lt lockTable) bool {
+			if id == tableID {
+				getLogger().Info("lock table not found, check",
+					zap.String("service", s.serviceID),
+					zap.String("bind", lt.getBind().DebugString()),
+					zap.String("table-groups", fmt.Sprintf("%p", s.tableGroups)),
+				)
+			}
+			return true
+		},
+	)
+
+	getLogger().Info("lock table not found, start create new",
+		zap.String("service", s.serviceID),
+		zap.Uint32("group", group),
+		zap.String("bind", bind.DebugString()),
+		zap.Bool("wait", wait),
+		zap.Bool("get", get),
+		zap.String("table-groups", fmt.Sprintf("%p", s.tableGroups)),
+	)
+
+	new := s.createLockTableByBind(bind)
+	v := s.tableGroups.set(group, tableID, new)
+
+	getLogger().Info("lock table not found, create new",
+		zap.String("service", s.serviceID),
+		zap.Uint32("group", group),
+		zap.String("bind", bind.DebugString()),
+		zap.String("current", fmt.Sprintf("%p", v)),
+		zap.String("table-groups", fmt.Sprintf("%p", s.tableGroups)),
+		zap.String("new", fmt.Sprintf("%p", new)),
+	)
 	return v, nil
 }
 
 func (s *service) handleBindChanged(newBind pb.LockTable) {
 	new := s.createLockTableByBind(newBind)
-	s.tableGroups.set(newBind.Group, newBind.Table, new)
+	current := s.tableGroups.set(newBind.Group, newBind.Table, new)
+	getLogger().Info("lock table bind changed, create new",
+		zap.String("service", s.serviceID),
+		zap.String("new-bind", newBind.DebugString()),
+		zap.String("current", fmt.Sprintf("%p", current)),
+		zap.String("new", fmt.Sprintf("%p", new)),
+	)
 }
 
 func (s *service) createLockTableByBind(bind pb.LockTable) lockTable {
@@ -926,6 +986,7 @@ func (m *lockTableHolders) mustGetHolder(group uint32) *lockTableHolder {
 	}
 	h = &lockTableHolder{
 		service: m.service,
+		group:   group,
 		tables:  map[uint64]lockTable{},
 	}
 	m.holders[group] = h
@@ -953,6 +1014,7 @@ func (m *lockTableHolders) removeWithFilter(filter func(uint64, lockTable) bool)
 
 type lockTableHolder struct {
 	sync.RWMutex
+	group   uint32
 	service string
 	tables  map[uint64]lockTable
 }
@@ -1002,6 +1064,12 @@ func (m *lockTableHolder) removeWithFilter(filter func(uint64, lockTable) bool) 
 	defer m.Unlock()
 	for id, v := range m.tables {
 		if filter(id, v) {
+			getLogger().Info("lock table removed",
+				zap.String("service", m.service),
+				zap.Uint32("group", m.group),
+				zap.String("bind", v.getBind().DebugString()),
+				zap.String("current", fmt.Sprintf("%p", v)),
+			)
 			v.close()
 			delete(m.tables, id)
 		}

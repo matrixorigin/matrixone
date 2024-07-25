@@ -102,9 +102,9 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	if tableDef.TableType == catalog.SystemViewRel {
 		var newStmt *tree.ShowCreateView
 		if stmt.Name.NumParts == 1 {
-			newStmt = tree.NewShowCreateView(tree.SetUnresolvedObjectName(1, [3]string{tblName, "", ""}))
+			newStmt = tree.NewShowCreateView(tree.NewUnresolvedObjectName(tblName))
 		} else if stmt.Name.NumParts == 2 {
-			newStmt = tree.NewShowCreateView(tree.SetUnresolvedObjectName(2, [3]string{tblName, dbName, ""}))
+			newStmt = tree.NewShowCreateView(tree.NewUnresolvedObjectName(dbName, tblName))
 		}
 		if len(stmt.SnapshotName) > 0 {
 			newStmt.SnapshotName = stmt.SnapshotName
@@ -112,15 +112,6 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 
 		return buildShowCreateView(newStmt, ctx)
 	}
-
-	// sql := `
-	// 	SELECT *
-	// 		FROM %s.mo_tables mt JOIN %s.mo_columns mc
-	// 			ON mt.relname = mc.att_relname and mt.reldatabase=mc.att_database
-	// 	WHERE mt.reldatabase = '%s' AND mt.relname = '%s'
-	// `
-	// sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName)
-	// logutil.Info(sql)
 
 	ddlStr, err := ConstructCreateTableSQL(tableObjRef, tableDef, *snapshot, ctx)
 	if err != nil {
@@ -208,7 +199,7 @@ func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, e
 	if stmt.Like != nil {
 		// append filter [AND datname like stmt.Like] to WHERE clause
 		likeExpr := stmt.Like
-		likeExpr.Left = tree.SetUnresolvedName("datname")
+		likeExpr.Left = tree.NewUnresolvedColName("datname")
 		return returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
 	}
 
@@ -308,7 +299,7 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 	if stmt.Like != nil {
 		// append filter [AND relname like stmt.Like] to WHERE clause
 		likeExpr := stmt.Like
-		likeExpr.Left = tree.SetUnresolvedName("relname")
+		likeExpr.Left = tree.NewUnresolvedColName("relname")
 		return returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
 	}
 
@@ -503,17 +494,17 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	}
 	var keyStr string
 	if dbName == catalog.MO_CATALOG && tblName == catalog.MO_DATABASE {
-		keyStr = "case when attname = '" + catalog.SystemDBAttr_ID + "' then 'PRI' else '' END as `Key`"
+		keyStr = "case when col.attname = '" + catalog.SystemDBAttr_ID + "' then 'PRI' else '' END as `Key`"
 	} else if dbName == catalog.MO_CATALOG && tblName == catalog.MO_TABLES {
-		keyStr = "case when attname = '" + catalog.SystemRelAttr_ID + "' then 'PRI' else '' END as `Key`"
+		keyStr = "case when col.attname = '" + catalog.SystemRelAttr_ID + "' then 'PRI' else '' END as `Key`"
 	} else if dbName == catalog.MO_CATALOG && tblName == catalog.MO_COLUMNS {
-		keyStr = "case when attname = '" + catalog.SystemColAttr_UniqName + "' then 'PRI' else '' END as `Key`"
+		keyStr = "case when col.attname = '" + catalog.SystemColAttr_UniqName + "' then 'PRI' else '' END as `Key`"
 	} else {
 		if tableDef.Pkey != nil || len(tableDef.Fkeys) != 0 || len(tableDef.Indexes) != 0 {
 			keyStr += "case"
 			if tableDef.Pkey != nil {
 				for _, name := range tableDef.Pkey.Names {
-					keyStr += " when attname = "
+					keyStr += " when col.attname = "
 					keyStr += "'" + name + "'"
 					keyStr += " then 'PRI'"
 				}
@@ -528,7 +519,7 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 				}
 				for _, fk := range tableDef.Fkeys {
 					for _, colId := range fk.Cols {
-						keyStr += " when attname = "
+						keyStr += " when col.attname = "
 						keyStr += "'" + colIdToName[colId] + "'"
 						keyStr += " then 'MUL'"
 					}
@@ -540,21 +531,21 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 					if indexdef.Unique {
 						if isPrimaryKey(tableDef, indexdef.Parts) {
 							for _, name := range indexdef.Parts {
-								keyStr += " when attname = "
+								keyStr += " when col.attname = "
 								keyStr += "'" + name + "'"
 								keyStr += " then 'PRI'"
 							}
 						} else if isMultiplePriKey(indexdef) {
-							keyStr += " when attname = "
+							keyStr += " when col.attname = "
 							keyStr += "'" + name + "'"
 							keyStr += " then 'MUL'"
 						} else {
-							keyStr += " when attname = "
+							keyStr += " when col.attname = "
 							keyStr += "'" + name + "'"
 							keyStr += " then 'UNI'"
 						}
 					} else {
-						keyStr += " when attname = "
+						keyStr += " when col.attname = "
 						keyStr += "'" + name + "'"
 						keyStr += " then 'MUL'"
 					}
@@ -570,23 +561,23 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 
 	var sql string
 	if accountId == catalog.System_Account {
-		mustShowTable := "att_relname = 'mo_database' or att_relname = 'mo_tables' or att_relname = 'mo_columns'"
+		mustShowTable := "col.att_relname = 'mo_database' or col.att_relname = 'mo_tables' or col.att_relname = 'mo_columns'"
 		clusterTable := ""
 		if util.TableIsClusterTable(tableDef.GetTableType()) {
-			clusterTable = fmt.Sprintf(" or att_relname = '%s'", tblName)
+			clusterTable = fmt.Sprintf(" or col.att_relname = '%s'", tblName)
 		}
-		accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
-		sql = "SELECT attname `Field`, CASE WHEN LENGTH(attr_enum) > 0 THEN mo_show_visible_bin_enum(atttyp, attr_enum) ELSE mo_show_visible_bin(atttyp, 3) END AS `Type`, iff(attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(att_default, 1) `Default`, '' `Extra`,  att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND (%s) AND att_is_hidden = 0 ORDER BY attnum"
+		accountClause := fmt.Sprintf("col.account_id = %v or (col.account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
+		sql = "SELECT col.attname `Field`, CASE WHEN LENGTH(col.attr_enum) > 0 THEN mo_show_visible_bin_enum(col.atttyp, col.attr_enum) ELSE mo_show_visible_bin(col.atttyp, 3) END AS `Type`, iff(col.attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(col.att_default, 1) `Default`, CASE WHEN tbl.relkind = 'r' and col.att_is_auto_increment = 1 THEN 'auto_increment' ELSE '' END AS `Extra`,  col.att_comment `Comment` FROM %s.mo_columns col left join %s.mo_tables tbl ON col.att_relname_id = tbl.rel_id WHERE col.att_database = '%s' AND col.att_relname = '%s' AND (%s) AND col.att_is_hidden = 0 ORDER BY col.attnum"
 		if stmt.Full {
-			sql = "SELECT attname `Field`, CASE WHEN LENGTH(attr_enum) > 0 THEN mo_show_visible_bin_enum(atttyp, attr_enum) ELSE mo_show_visible_bin(atttyp, 3) END AS `Type`, null `Collation`, iff(attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(att_default, 1) `Default`,  '' `Extra`,'select,insert,update,references' `Privileges`, att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND (%s) AND att_is_hidden = 0 ORDER BY attnum"
+			sql = "SELECT col.attname `Field`, CASE WHEN LENGTH(col.attr_enum) > 0 THEN mo_show_visible_bin_enum(col.atttyp, col.attr_enum) ELSE mo_show_visible_bin(col.atttyp, 3) END AS `Type`, null `Collation`, iff(col.attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(col.att_default, 1) `Default`, CASE WHEN tbl.relkind = 'r' and col.att_is_auto_increment = 1 THEN 'auto_increment' ELSE '' END AS `Extra`,'select,insert,update,references' `Privileges`, col.att_comment `Comment` FROM %s.mo_columns col left join %s.mo_tables tbl ON col.att_relname_id = tbl.rel_id WHERE col.att_database = '%s' AND col.att_relname = '%s' AND (%s) AND col.att_is_hidden = 0 ORDER BY col.attnum"
 		}
-		sql = fmt.Sprintf(sql, keyStr, MO_CATALOG_DB_NAME, dbName, tblName, accountClause)
+		sql = fmt.Sprintf(sql, keyStr, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName, accountClause)
 	} else {
-		sql = "SELECT attname `Field`, CASE WHEN LENGTH(attr_enum) > 0 THEN mo_show_visible_bin_enum(atttyp, attr_enum) ELSE mo_show_visible_bin(atttyp, 3) END AS `Type`, iff(attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(att_default, 1) `Default`, '' `Extra`,  att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND att_is_hidden = 0 ORDER BY attnum"
+		sql = "SELECT col.attname `Field`, CASE WHEN LENGTH(col.attr_enum) > 0 THEN mo_show_visible_bin_enum(col.atttyp, col.attr_enum) ELSE mo_show_visible_bin(col.atttyp, 3) END AS `Type`, iff(col.attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(col.att_default, 1) `Default`, CASE WHEN col.att_is_auto_increment = 1 THEN 'auto_increment' ELSE '' END AS `Extra`,  col.att_comment `Comment` FROM %s.mo_columns col left join %s.mo_tables tbl ON col.att_relname_id = tbl.rel_id WHERE col.att_database = '%s' AND col.att_relname = '%s' AND col.att_is_hidden = 0 ORDER BY col.attnum"
 		if stmt.Full {
-			sql = "SELECT attname `Field`, CASE WHEN LENGTH(attr_enum) > 0 THEN mo_show_visible_bin_enum(atttyp, attr_enum) ELSE mo_show_visible_bin(atttyp, 3) END AS `Type`, null `Collation`, iff(attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(att_default, 1) `Default`,  '' `Extra`,'select,insert,update,references' `Privileges`, att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND att_is_hidden = 0 ORDER BY attnum"
+			sql = "SELECT col.attname `Field`, CASE WHEN LENGTH(col.attr_enum) > 0 THEN mo_show_visible_bin_enum(col.atttyp, col.attr_enum) ELSE mo_show_visible_bin(col.atttyp, 3) END AS `Type`, null `Collation`, iff(col.attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(col.att_default, 1) `Default`, CASE WHEN col.att_is_auto_increment = 1 THEN 'auto_increment' ELSE '' END AS `Extra`,'select,insert,update,references' `Privileges`, col.att_comment `Comment` FROM %s.mo_columns col left join %s.mo_tables tbl ON col.att_relname_id = tbl.rel_id WHERE col.att_database = '%s' AND col.att_relname = '%s' AND col.att_is_hidden = 0 ORDER BY col.attnum"
 		}
-		sql = fmt.Sprintf(sql, keyStr, MO_CATALOG_DB_NAME, dbName, tblName)
+		sql = fmt.Sprintf(sql, keyStr, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName)
 	}
 
 	if stmt.Where != nil {
@@ -596,7 +587,7 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	if stmt.Like != nil {
 		// append filter [AND ma.attname like stmt.Like] to WHERE clause
 		likeExpr := stmt.Like
-		likeExpr.Left = tree.SetUnresolvedName("attname")
+		likeExpr.Left = tree.NewUnresolvedColName("attname")
 		return returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
 	}
 
@@ -673,7 +664,7 @@ func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Pla
 	if stmt.Like != nil {
 		// append filter [AND ma.relname like stmt.Like] to WHERE clause
 		likeExpr := stmt.Like
-		likeExpr.Left = tree.SetUnresolvedName("relname")
+		likeExpr.Left = tree.NewUnresolvedColName("relname")
 		return returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
 	}
 
@@ -728,7 +719,7 @@ func buildShowFunctionOrProcedureStatus(stmt *tree.ShowFunctionOrProcedureStatus
 	if stmt.Like != nil {
 		// append filter [AND ma.attname like stmt.Like] to WHERE clause
 		likeExpr := stmt.Like
-		likeExpr.Left = tree.SetUnresolvedName("name")
+		likeExpr.Left = tree.NewUnresolvedColName("name")
 		return returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
 	}
 
@@ -756,7 +747,7 @@ func buildShowTriggers(stmt *tree.ShowTarget, ctx CompilerContext) (*Plan, error
 	if stmt.Like != nil {
 		// append filter [AND ma.attname like stmt.Like] to WHERE clause
 		likeExpr := stmt.Like
-		likeExpr.Left = tree.SetUnresolvedName("event_object_table")
+		likeExpr.Left = tree.NewUnresolvedColName("event_object_table")
 		return returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
 	}
 
@@ -872,7 +863,7 @@ func buildShowRoles(stmt *tree.ShowRolesStmt, ctx CompilerContext) (*Plan, error
 	if stmt.Like != nil {
 		// append filter [AND mo_role.role_name like stmt.Like] to WHERE clause
 		likeExpr := stmt.Like
-		likeExpr.Left = tree.SetUnresolvedName("role_name")
+		likeExpr.Left = tree.NewUnresolvedColName("role_name")
 		return returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
 	}
 
@@ -886,7 +877,7 @@ func buildShowStages(stmt *tree.ShowStages, ctx CompilerContext) (*Plan, error) 
 	if stmt.Like != nil {
 		// append filter [AND mo_stages.stage_name like stmt.Like] to WHERE clause
 		likeExpr := stmt.Like
-		likeExpr.Left = tree.SetUnresolvedName("stage_name")
+		likeExpr.Left = tree.NewUnresolvedColName("stage_name")
 		return returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
 	}
 
@@ -1053,7 +1044,7 @@ func returnByLikeAndSQL(ctx CompilerContext, sql string, like *tree.ComparisonEx
 }
 
 func getRewriteSQLStmt(ctx CompilerContext, sql string) (tree.Statement, error) {
-	newStmts, err := parsers.Parse(ctx.GetContext(), dialect.MYSQL, sql, 1, 0)
+	newStmts, err := parsers.Parse(ctx.GetContext(), dialect.MYSQL, sql, 1)
 	if err != nil {
 		return nil, err
 	}

@@ -594,7 +594,7 @@ func (svet SystemVariableEnumType) String() string {
 
 func (svet SystemVariableEnumType) Convert(value interface{}) (interface{}, error) {
 	cv1 := func(x int) (interface{}, error) {
-		if x >= 0 && x <= len(svet.id2TagName) {
+		if x >= 0 && x < len(svet.id2TagName) {
 			return svet.id2TagName[x], nil
 		}
 		return nil, errorConvertToEnumFailed
@@ -957,13 +957,15 @@ type GlobalSysVarsMgr struct {
 func (m *GlobalSysVarsMgr) Get(accountId uint32, ses *Session, ctx context.Context) (*SystemVariables, error) {
 	m.Lock()
 	defer m.Unlock()
-	// get from gSysVarsDefs && table if absent
-	if _, ok := m.accountsGlobalSysVarsMap[accountId]; !ok {
-		sysVars, err := ses.getGlobalSysVars(ctx)
-		if err != nil {
-			return nil, err
-		}
 
+	sysVars, err := ses.getGlobalSysVars(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if _, ok := m.accountsGlobalSysVarsMap[accountId]; ok {
+		m.accountsGlobalSysVarsMap[accountId].sysVars = sysVars
+	} else {
 		m.accountsGlobalSysVarsMap[accountId] = &SystemVariables{sysVars: sysVars}
 	}
 	return m.accountsGlobalSysVarsMap[accountId], nil
@@ -3494,14 +3496,6 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableBoolType("disable_txn_trace"),
 		Default:           int64(0),
-	},
-	"keep_user_target_list_in_result": {
-		Name:              "keep_user_target_list_in_result",
-		Scope:             ScopeBoth,
-		Dynamic:           true,
-		SetVarHintApplies: false,
-		Type:              InitSystemVariableIntType("keep_user_target_list_in_result", 0, 2, false),
-		Default:           int64(1),
 	},
 	"experimental_ivf_index": {
 		Name:              "experimental_ivf_index",

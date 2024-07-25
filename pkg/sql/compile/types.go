@@ -15,12 +15,12 @@
 package compile
 
 import (
-	"context"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -50,6 +50,7 @@ const (
 	Parallel
 	CreateDatabase
 	CreateTable
+	CreateView
 	CreateIndex
 	DropDatabase
 	DropTable
@@ -121,6 +122,8 @@ type Scope struct {
 	PreScopes []*Scope
 	// NodeInfo contains the information about the remote node.
 	NodeInfo engine.Node
+	// TxnOffset represents the transaction's write offset, specifying the starting position for reading data.
+	TxnOffset int
 	// Instructions contains command list of this scope.
 	Instructions vm.Instructions
 	// Proc contains the execution context.
@@ -243,12 +246,17 @@ type Compile struct {
 	sql       string
 	originSQL string
 
+	// queryStatus is a structure to record query has done.
+	queryStatus queryDoneWaiter
+
 	anal *anaylze
 	// e db engine instance.
-	e   engine.Engine
-	ctx context.Context
+	e engine.Engine
+
 	// proc stores the execution context.
 	proc *process.Process
+	// TxnOffset read starting offset position within the transaction during the execute current statement
+	TxnOffset int
 
 	MessageBoard *process.MessageBoard
 

@@ -23,6 +23,9 @@ import (
 	"github.com/fagongzi/goetty/v2"
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -39,8 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 )
 
 const (
@@ -249,12 +250,8 @@ func NewSessionAllocator(pu *config.ParameterUnit) *SessionAllocator {
 	return ret
 }
 
-func (s *SessionAllocator) Alloc(capacity int) []byte {
-	alloc, err := s.mp.Alloc(capacity)
-	if err != nil {
-		panic(err)
-	}
-	return alloc
+func (s *SessionAllocator) Alloc(capacity int) ([]byte, error) {
+	return s.mp.Alloc(capacity)
 }
 
 func (s SessionAllocator) Free(bs []byte) {
@@ -331,14 +328,14 @@ type FeSession interface {
 	DisableTrace() bool
 	Close()
 	Clear()
-	getCachedPlan(sql string) *cachedPlan
+	getCachedPlan(sql [32]byte) *cachedPlan
 
 	GetFPrints() footPrints
 	ResetFPrints()
 	EnterFPrint(idx int)
 	ExitFPrint(idx int)
-	SetStaticTxnId(id []byte)
-	GetStaticTxnId() uuid.UUID
+	SetStaticTxnInfo(string)
+	GetStaticTxnInfo() string
 	GetShareTxnBackgroundExec(ctx context.Context, newRawBatch bool) BackgroundExec
 	SessionLogger
 }
@@ -386,12 +383,13 @@ type ExecCtx struct {
 	cws             []ComputationWrapper
 	input           *UserInput
 	//In the session migration, skip the response to the client
-	skipRespClient bool
+	inMigration bool
 	//In the session migration, executeParamTypes for the EXECUTE stmt should be migrated
 	//from the old session to the new session.
 	executeParamTypes []byte
 	resper            Responser
 	results           []ExecResult
+	isIssue3482       bool
 }
 
 // outputCallBackFunc is the callback function to send the result to the client.
@@ -456,7 +454,7 @@ type feSessionImpl struct {
 	fprints      footPrints
 	respr        Responser
 	//refreshed once
-	staticTxnId uuid.UUID
+	staticTxnInfo string
 }
 
 func (ses *feSessionImpl) ResetFPrints() {
@@ -700,6 +698,11 @@ func (ses *feSessionImpl) GetUpstream() FeSession {
 
 // ClearResultBatches does not call Batch.Clear().
 func (ses *feSessionImpl) ClearResultBatches() {
+	for _, bat := range ses.resultBatches {
+		if bat != nil {
+			bat.Clean(ses.pool)
+		}
+	}
 	ses.resultBatches = nil
 }
 
@@ -733,19 +736,22 @@ func (ses *feSessionImpl) GetGlobalSysVar(name string) (interface{}, error) {
 
 func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interface{}) (err error) {
 	name = strings.ToLower(name)
-	if sv, ok := gSysVarsDefs[name]; !ok {
-		return moerr.NewInternalErrorNoCtx(errorSystemVariableDoesNotExist())
-	} else {
-		if sv.Scope == ScopeSession {
-			return moerr.NewInternalErrorNoCtx(errorSystemVariableIsSession())
-		}
-		if !sv.GetDynamic() {
-			return moerr.NewInternalErrorNoCtx(errorSystemVariableIsReadOnly())
-		}
 
-		if val, err = sv.GetType().Convert(val); err != nil {
-			return err
-		}
+	def, ok := gSysVarsDefs[name]
+	if !ok {
+		return moerr.NewInternalErrorNoCtx(errorSystemVariableDoesNotExist())
+	}
+
+	if def.Scope == ScopeSession {
+		return moerr.NewInternalErrorNoCtx(errorSystemVariableIsSession())
+	}
+
+	if !def.GetDynamic() {
+		return moerr.NewInternalErrorNoCtx(errorSystemVariableIsReadOnly())
+	}
+
+	if val, err = def.GetType().Convert(val); err != nil {
+		return err
 	}
 
 	// save to table first
@@ -853,11 +859,11 @@ func (ses *feSessionImpl) GetResponser() Responser {
 	return ses.respr
 }
 
-func (ses *feSessionImpl) SetStaticTxnId(id []byte) {
-	copy(ses.staticTxnId[:], id)
+func (ses *feSessionImpl) SetStaticTxnInfo(info string) {
+	ses.staticTxnInfo = info
 }
-func (ses *feSessionImpl) GetStaticTxnId() uuid.UUID {
-	return ses.staticTxnId
+func (ses *feSessionImpl) GetStaticTxnInfo() string {
+	return ses.staticTxnInfo
 }
 
 func (ses *Session) GetDebugString() string {

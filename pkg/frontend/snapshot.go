@@ -415,6 +415,12 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 			return
 		}
 	}
+
+	// checks if the given context has been canceled.
+	if err = CancelCheck(ctx); err != nil {
+		return
+	}
+
 	return
 }
 
@@ -471,7 +477,7 @@ func restoreToAccount(
 		}
 
 		// do some op to pub database
-		if err := checkPubAndDropPubRecord(ctx, bh, snapshotName, dbName); err != nil {
+		if err := checkPubAndDropPubRecord(toCtx, bh, snapshotName, dbName); err != nil {
 			return err
 		}
 
@@ -588,6 +594,11 @@ func restoreToDatabaseOrTable(
 			continue
 		}
 
+		// checks if the given context has been canceled.
+		if err = CancelCheck(ctx); err != nil {
+			return
+		}
+
 		if err = recreateTable(ctx, bh, snapshotName, tblInfo, toAccountId); err != nil {
 			return
 		}
@@ -619,6 +630,12 @@ func restoreSystemDatabase(
 		}
 
 		getLogger().Info(fmt.Sprintf("[%s] start to restore system table: %v.%v", snapshotName, moCatalog, tblInfo.tblName))
+
+		// checks if the given context has been canceled.
+		if err = CancelCheck(ctx); err != nil {
+			return
+		}
+
 		if err = recreateTable(ctx, bh, snapshotName, tblInfo, toAccountId); err != nil {
 			return
 		}
@@ -670,7 +687,7 @@ func restoreViews(
 
 	g := topsort{next: make(map[string][]string)}
 	for key, view := range viewMap {
-		stmts, err := parsers.Parse(ctx, dialect.MYSQL, view.createSql, 1, 0)
+		stmts, err := parsers.Parse(ctx, dialect.MYSQL, view.createSql, 1)
 		if err != nil {
 			return err
 		}
@@ -700,7 +717,7 @@ func restoreViews(
 		if tblInfo, ok := viewMap[key]; ok {
 			getLogger().Info(fmt.Sprintf("[%s] start to restore view: %v", snapshotName, tblInfo.tblName))
 
-			if err = bh.Exec(toCtx, "use "+tblInfo.dbName); err != nil {
+			if err = bh.Exec(toCtx, "use `"+tblInfo.dbName+"`"); err != nil {
 				return err
 			}
 
@@ -730,7 +747,7 @@ func recreateTable(
 
 	ctx = defines.AttachAccountId(ctx, toAccountId)
 
-	if err = bh.Exec(ctx, fmt.Sprintf("use %s", tblInfo.dbName)); err != nil {
+	if err = bh.Exec(ctx, fmt.Sprintf("use `%s`", tblInfo.dbName)); err != nil {
 		return
 	}
 
@@ -747,16 +764,22 @@ func recreateTable(
 
 	// insert data
 	insertIntoSql := fmt.Sprintf(restoreTableDataFmt, tblInfo.dbName, tblInfo.tblName, tblInfo.dbName, tblInfo.tblName, snapshotName)
+	beginTime := time.Now()
 	getLogger().Info(fmt.Sprintf("[%s] start to insert select table: %v, insert sql: %s", snapshotName, tblInfo.tblName, insertIntoSql))
 
 	if curAccountId == toAccountId {
 		if err = bh.Exec(ctx, insertIntoSql); err != nil {
 			return
 		}
+		getLogger().Info(fmt.Sprintf("[%s] insert select table: %v, cost: %v", snapshotName, tblInfo.tblName, time.Since(beginTime)))
 	} else {
+		insertIntoSql := fmt.Sprintf(restoreTableDataFmt, tblInfo.dbName, tblInfo.tblName, tblInfo.dbName, tblInfo.tblName, snapshotName)
+		beginTime := time.Now()
+		getLogger().Info(fmt.Sprintf("[%s] start to insert select table: %v, insert sql: %s", snapshotName, tblInfo.tblName, insertIntoSql))
 		if err = bh.ExecRestore(ctx, insertIntoSql, curAccountId, toAccountId); err != nil {
 			return
 		}
+		getLogger().Info(fmt.Sprintf("[%s] insert select table: %v, cost: %v", snapshotName, tblInfo.tblName, time.Since(beginTime)))
 	}
 	return
 }

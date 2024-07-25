@@ -124,6 +124,7 @@ func (txn *Transaction) WriteBatch(
 		if tableId != catalog.MO_DATABASE_ID &&
 			tableId != catalog.MO_TABLES_ID && tableId != catalog.MO_COLUMNS_ID {
 			txn.workspaceSize += uint64(bat.Size())
+			txn.insertCount += bat.RowCount()
 		}
 	}
 	e := Entry{
@@ -391,8 +392,16 @@ func (txn *Transaction) checkDup() error {
 func (txn *Transaction) dumpBatchLocked(offset int) error {
 	var size uint64
 	var pkCount int
-	if txn.workspaceSize < WorkspaceThreshold {
-		return nil
+
+	if offset < 0 {
+		if txn.workspaceSize < WorkspaceThreshold &&
+			txn.insertCount < InsertEntryThreshold {
+			return nil
+		}
+	} else {
+		if txn.workspaceSize < WorkspaceThreshold {
+			return nil
+		}
 	}
 
 	dumpAll := offset < 0
@@ -555,9 +564,9 @@ func (txn *Transaction) insertPosForCNBlock(
 	b *batch.Batch,
 	dbName string,
 	tbName string) error {
-	blks := vector.MustBytesCol(vec)
+	blks, area := vector.MustVarlenaRawData(vec)
 	for i, blk := range blks {
-		blkInfo := *objectio.DecodeBlockInfo(blk)
+		blkInfo := *objectio.DecodeBlockInfo(blk.GetByteSlice(area))
 		txn.cnBlkId_Pos[blkInfo.BlockID] = Pos{
 			bat:       b,
 			accountId: id,
@@ -805,6 +814,7 @@ func (txn *Transaction) mergeTxnWorkspaceLocked() error {
 	if len(txn.batchSelectList) > 0 {
 		for _, e := range txn.writes {
 			if sels, ok := txn.batchSelectList[e.bat]; ok {
+				txn.insertCount -= e.bat.RowCount() - len(sels)
 				e.bat.Shrink(sels, false)
 				delete(txn.batchSelectList, e.bat)
 			}
@@ -1219,4 +1229,12 @@ func (txn *Transaction) CloneSnapshotWS() client.Workspace {
 
 func (txn *Transaction) BindTxnOp(op client.TxnOperator) {
 	txn.op = op
+}
+
+func (txn *Transaction) SetHaveDDL(haveDDL bool) {
+	txn.haveDDL.Store(haveDDL)
+}
+
+func (txn *Transaction) GetHaveDDL() bool {
+	return txn.haveDDL.Load()
 }

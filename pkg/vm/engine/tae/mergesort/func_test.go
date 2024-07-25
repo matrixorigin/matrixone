@@ -19,7 +19,6 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -47,23 +46,24 @@ func TestReshapeBatches(t *testing.T) {
 	fromLayout := []uint32{2000, 4000, 6000}
 	toLayout := []uint32{8192, 3808}
 
-	batches := make([]*batch.Batch, len(fromLayout))
+	batches := make([]*containers.Batch, len(fromLayout))
 	for i := range fromLayout {
-		batches[i] = batch.NewWithSize(batchSize)
+		batches[i] = containers.NewBatch()
 		for j := 0; j < batchSize; j++ {
 			vec := containers.MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
 			for k := uint32(0); k < fromLayout[i]; k++ {
 				vec.Append(int32(k), false)
 			}
-			batches[i].Vecs[j] = vec.GetDownstreamVector()
-			batches[i].SetRowCount(vec.Length())
+			batches[i].Vecs = append(batches[i].Vecs, vec)
+			batches[i].Attrs = append(batches[i].Attrs, "")
 		}
 	}
 
 	var m1, m2 runtime.MemStats
 	runtime.GC()
 	runtime.ReadMemStats(&m1)
-	retBatch, releaseF := ReshapeBatches(batches, fromLayout, toLayout, pool)
+	retBatch, releaseF, _, err := ReshapeBatches(batches, toLayout, pool)
+	require.NoError(t, err)
 	runtime.ReadMemStats(&m2)
 	t.Log("total:", m2.TotalAlloc-m1.TotalAlloc)
 	t.Log("mallocs:", m2.Mallocs-m1.Mallocs)

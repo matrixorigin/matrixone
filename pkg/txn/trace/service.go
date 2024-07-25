@@ -20,6 +20,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	stRuntime "runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -94,6 +95,7 @@ type service struct {
 	entryC     chan event
 	txnActionC chan event
 	statementC chan event
+	txnErrorC  chan string
 
 	loadC  chan loadAction
 	seq    atomic.Uint64
@@ -136,14 +138,15 @@ func NewService(
 	}
 
 	s := &service{
-		stopper:  stopper.NewStopper("txn-trace"),
-		cn:       cn,
-		client:   client,
-		clock:    clock,
-		executor: executor,
-		dir:      dataDir,
-		logger:   runtime.ProcessLevelRuntime().Logger().Named("txn-trace"),
-		loadC:    make(chan loadAction, 100000),
+		stopper:   stopper.NewStopper("txn-trace"),
+		cn:        cn,
+		client:    client,
+		clock:     clock,
+		executor:  executor,
+		dir:       dataDir,
+		logger:    runtime.ProcessLevelRuntime().Logger().Named("txn-trace"),
+		loadC:     make(chan loadAction, 100000),
+		txnErrorC: make(chan string, stRuntime.NumCPU()*10),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -180,6 +183,9 @@ func NewService(
 		panic(err)
 	}
 	if err := s.stopper.RunTask(s.watch); err != nil {
+		panic(err)
+	}
+	if err := s.stopper.RunTask(s.handleTxnError); err != nil {
 		panic(err)
 	}
 	return s, nil
@@ -405,7 +411,7 @@ func (s *service) watch(ctx context.Context) {
 	defer ticker.Stop()
 
 	fetch := func() ([]string, []string, error) {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
 		defer cancel()
 		var features []string
 		var states []string
@@ -496,7 +502,7 @@ func (s *service) updateState(feature, state string) error {
 		return moerr.NewNotSupportedNoCtx("feature %s", feature)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
 	defer cancel()
 
 	now, _ := s.clock.Now()

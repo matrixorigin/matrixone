@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -464,11 +465,15 @@ func (db *txnDB) PrePrepare(ctx context.Context) (err error) {
 			return
 		}
 	}
+
+	now := time.Now()
 	for _, table := range db.tables {
 		if err = table.PrePrepareDedup(ctx); err != nil {
 			return
 		}
 	}
+	v2.TxnTNPrePrepareDeduplicateDurationHistogram.Observe(time.Since(now).Seconds())
+
 	for _, table := range db.tables {
 		if err = table.PrePrepare(); err != nil {
 			return

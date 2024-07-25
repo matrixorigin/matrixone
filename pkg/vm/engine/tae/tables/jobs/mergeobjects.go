@@ -17,7 +17,9 @@ package jobs
 import (
 	"context"
 	"fmt"
+	"go.uber.org/zap"
 	"strings"
+	"time"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -63,6 +65,8 @@ type mergeObjectsTask struct {
 	attrs      []string
 
 	targetObjSize uint32
+
+	createAt time.Time
 }
 
 func NewMergeObjectsTask(
@@ -84,6 +88,8 @@ func NewMergeObjectsTask(
 		blkCnt:       make([]int, len(mergedObjs)),
 
 		targetObjSize: targetObjSize,
+
+		createAt: time.Now(),
 	}
 	for i, obj := range mergedObjs {
 		task.mergedBlkCnt[i] = task.totalMergedBlkCnt
@@ -174,64 +180,6 @@ func (task *mergeObjectsTask) GetMPool() *mpool.MPool {
 
 func (task *mergeObjectsTask) HostHintName() string { return "DN" }
 
-func (task *mergeObjectsTask) PrepareData(ctx context.Context) ([]*batch.Batch, []*nulls.Nulls, func(), error) {
-	var err error
-	views := make([]*containers.BlockView, task.totalMergedBlkCnt)
-	releaseF := func() {
-		for _, view := range views {
-			if view != nil {
-				view.Close()
-			}
-		}
-	}
-	defer func() {
-		if err != nil {
-			releaseF()
-		}
-	}()
-	schema := task.rel.Schema().(*catalog.Schema)
-	idxs := make([]int, 0, len(schema.ColDefs)-1)
-	attrs := make([]string, 0, len(schema.ColDefs)-1)
-	for _, def := range schema.ColDefs {
-		if def.IsPhyAddr() {
-			continue
-		}
-		idxs = append(idxs, def.Idx)
-		attrs = append(attrs, def.Name)
-	}
-	for i, obj := range task.mergedObjsHandle {
-
-		maxBlockOffset := task.totalMergedBlkCnt
-		if i != len(task.mergedObjs)-1 {
-			maxBlockOffset = task.mergedBlkCnt[i+1]
-		}
-		minBlockOffset := task.mergedBlkCnt[i]
-
-		for j := 0; j < maxBlockOffset-minBlockOffset; j++ {
-			if views[minBlockOffset+j], err = obj.GetColumnDataByIds(ctx, uint16(j), idxs, common.MergeAllocator); err != nil {
-				return nil, nil, nil, err
-			}
-		}
-	}
-
-	batches := make([]*batch.Batch, 0, task.totalMergedBlkCnt)
-	dels := make([]*nulls.Nulls, 0, task.totalMergedBlkCnt)
-	for _, view := range views {
-		batch := batch.New(true, attrs)
-		if len(attrs) != len(view.Columns) {
-			panic(fmt.Sprintf("mismatch %v, %v, %v", attrs, len(attrs), len(view.Columns)))
-		}
-		for i, col := range view.Columns {
-			batch.Vecs[i] = col.GetData().GetDownstreamVector()
-		}
-		batch.SetRowCount(view.Columns[0].Length())
-		batches = append(batches, batch)
-		dels = append(dels, view.DeleteMask)
-	}
-
-	return batches, dels, releaseF, nil
-}
-
 func (task *mergeObjectsTask) LoadNextBatch(ctx context.Context, objIdx uint32) (*batch.Batch, *nulls.Nulls, func(), error) {
 	if objIdx >= uint32(len(task.mergedObjs)) {
 		panic("invalid objIdx")
@@ -319,16 +267,29 @@ func (task *mergeObjectsTask) DoTransfer() bool {
 	return task.doTransfer
 }
 
+func (task *mergeObjectsTask) Name() string {
+	return fmt.Sprintf("[MT-%d]-%d-%s", task.ID(), task.rel.ID(), task.schema.Name)
+}
+
 func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 	phaseDesc := ""
 	defer func() {
 		if err != nil {
-			logutil.Error("[DoneWithErr] Mergeblocks", common.OperationField(task.Name()),
-				common.AnyField("error", err),
-				common.AnyField("phase", phaseDesc),
+			logutil.Error("[MERGE-ERR]",
+				zap.String("task", task.Name()),
+				zap.String("phase", phaseDesc),
+				zap.Error(err),
 			)
 		}
 	}()
+
+	if time.Since(task.createAt) > time.Second*10 {
+		logutil.Warn(
+			"[MERGE-SLOW-SCHED]",
+			zap.String("task", task.Name()),
+			common.AnyField("duration", time.Since(task.createAt)),
+		)
+	}
 
 	schema := task.rel.Schema().(*catalog.Schema)
 	sortkeyPos := -1
@@ -336,12 +297,12 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 		sortkeyPos = schema.GetSingleSortKeyIdx()
 	}
 	phaseDesc = "1-DoMergeAndWrite"
-	if err = mergesort.DoMergeAndWrite(ctx, sortkeyPos, int(schema.BlockMaxRows), task); err != nil {
+	if err = mergesort.DoMergeAndWrite(ctx, task.txn.String(), sortkeyPos, task); err != nil {
 		return err
 	}
 
 	phaseDesc = "2-HandleMergeEntryInTxn"
-	if task.createdBObjs, err = HandleMergeEntryInTxn(task.txn, task.commitEntry, task.rt); err != nil {
+	if task.createdBObjs, err = HandleMergeEntryInTxn(task.txn, task.Name(), task.commitEntry, task.rt); err != nil {
 		return err
 	}
 
@@ -351,7 +312,7 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 	return nil
 }
 
-func HandleMergeEntryInTxn(txn txnif.AsyncTxn, entry *api.MergeCommitEntry, rt *dbutils.Runtime) ([]*catalog.ObjectEntry, error) {
+func HandleMergeEntryInTxn(txn txnif.AsyncTxn, taskName string, entry *api.MergeCommitEntry, rt *dbutils.Runtime) ([]*catalog.ObjectEntry, error) {
 	database, err := txn.GetDatabaseByID(entry.DbId)
 	if err != nil {
 		return nil, err
@@ -398,6 +359,7 @@ func HandleMergeEntryInTxn(txn txnif.AsyncTxn, entry *api.MergeCommitEntry, rt *
 
 	txnEntry, err := txnentries.NewMergeObjectsEntry(
 		txn,
+		taskName,
 		rel,
 		mergedObjs,
 		createdObjs,
@@ -415,10 +377,10 @@ func HandleMergeEntryInTxn(txn txnif.AsyncTxn, entry *api.MergeCommitEntry, rt *
 	return createdObjs, nil
 }
 
-func (task *mergeObjectsTask) GetTotalSize() uint32 {
-	totalSize := uint32(0)
+func (task *mergeObjectsTask) GetTotalSize() uint64 {
+	totalSize := uint64(0)
 	for _, obj := range task.mergedObjs {
-		totalSize += uint32(obj.GetOriginSize())
+		totalSize += uint64(obj.GetOriginSize())
 	}
 	return totalSize
 }

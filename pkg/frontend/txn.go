@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 )
 
@@ -325,6 +326,10 @@ func (th *TxnHandler) createUnsafe(execCtx *ExecCtx) error {
 		execCtx.ses.SetTxnId(dumpUUID[:])
 	} else {
 		execCtx.ses.SetTxnId(th.txnOp.Txn().ID)
+		err = disttae.CheckTxnIsValid(th.txnOp)
+		if err != nil {
+			return err
+		}
 	}
 	return err
 }
@@ -358,8 +363,8 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 		connectionID = execCtx.resper.GetU32(CONNID)
 	}
 	if execCtx.ses.GetTenantInfo() != nil {
-		accountID = execCtx.ses.GetTenantInfo().TenantID
-		userName = execCtx.ses.GetTenantInfo().User
+		accountID = execCtx.ses.GetTenantInfo().GetTenantID()
+		userName = execCtx.ses.GetTenantInfo().GetUser()
 	}
 	sessionInfo := execCtx.ses.GetDebugString()
 	opts = append(opts,
@@ -499,6 +504,7 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 		defer execCtx.ses.ExitFPrint(79)
 		commitTs := th.txnOp.Txn().CommitTS
 		execCtx.ses.SetTxnId(th.txnOp.Txn().ID)
+		setFPrints(th.txnOp, execCtx.ses.GetFPrints())
 		err = th.txnOp.Commit(ctx2)
 		if err != nil {
 			th.invalidateTxnUnsafe()
@@ -543,6 +549,7 @@ func (th *TxnHandler) Rollback(execCtx *ExecCtx) error {
 		defer execCtx.ses.ExitFPrint(85)
 		//non derived statement
 		if th.txnOp != nil && !execCtx.ses.IsDerivedStmt() {
+			setFPrints(th.txnOp, execCtx.ses.GetFPrints())
 			err = th.txnOp.GetWorkspace().RollbackLastStatement(th.txnCtx)
 			if err != nil {
 				err4 := th.rollbackUnsafe(execCtx)
@@ -603,6 +610,7 @@ func (th *TxnHandler) rollbackUnsafe(execCtx *ExecCtx) error {
 		execCtx.ses.EnterFPrint(84)
 		defer execCtx.ses.ExitFPrint(84)
 		execCtx.ses.SetTxnId(th.txnOp.Txn().ID)
+		setFPrints(th.txnOp, execCtx.ses.GetFPrints())
 		err = th.txnOp.Rollback(ctx2)
 		if err != nil {
 			th.invalidateTxnUnsafe()

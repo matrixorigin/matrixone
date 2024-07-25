@@ -44,8 +44,8 @@ type DisposableVecPool interface {
 
 type MergeTaskHost interface {
 	DisposableVecPool
+	Name() string
 	HostHintName() string
-	PrepareData(context.Context) ([]*batch.Batch, []*nulls.Nulls, func(), error)
 	GetCommitEntry() *api.MergeCommitEntry
 	PrepareNewWriter() *blockio.BlockWriter
 	DoTransfer() bool
@@ -54,7 +54,7 @@ type MergeTaskHost interface {
 	GetAccBlkCnts() []int
 	GetSortKeyType() types.Type
 	LoadNextBatch(ctx context.Context, objIdx uint32) (*batch.Batch, *nulls.Nulls, func(), error)
-	GetTotalSize() uint32
+	GetTotalSize() uint64 // total size of all objects, definitely there are cases where the size exceeds 4G, so use uint64
 	GetTotalRowCnt() uint32
 	GetBlockMaxRows() uint32
 	GetObjectMaxBlocks() uint16
@@ -108,30 +108,32 @@ func GetNewWriter(
 
 func DoMergeAndWrite(
 	ctx context.Context,
+	txnInfo string,
 	sortkeyPos int,
-	blkMaxRow int,
 	mergehost MergeTaskHost,
 ) (err error) {
 	now := time.Now()
-	/*out args, keep the transfer infomation*/
+	/*out args, keep the transfer information*/
 	commitEntry := mergehost.GetCommitEntry()
 	fromObjsDesc := ""
 	for _, o := range commitEntry.MergedObjs {
 		obj := objectio.ObjectStats(o)
 		fromObjsDesc = fmt.Sprintf("%s%s,", fromObjsDesc, common.ShortObjId(*obj.ObjectName().ObjectId()))
 	}
-	tableDesc := fmt.Sprintf("%v-%v", commitEntry.TblId, commitEntry.TableName)
-	logutil.Info("[Start] Mergeblocks",
-		zap.String("table", tableDesc),
-		zap.String("on", mergehost.HostHintName()),
-		zap.String("txn-start-ts", commitEntry.StartTs.DebugString()),
-		zap.String("from-objs", fromObjsDesc),
+	logutil.Info(
+		"[MERGE-START]",
+		zap.String("task", mergehost.Name()),
+		common.AnyField("txn-info", txnInfo),
+		common.AnyField("host", mergehost.HostHintName()),
+		common.AnyField("timestamp", commitEntry.StartTs.DebugString()),
+		common.AnyField("objs", fromObjsDesc),
 	)
 	phaseDesc := "prepare data"
 	defer func() {
 		if err != nil {
-			logutil.Error("[DoneWithErr] Mergeblocks",
-				zap.String("table", tableDesc),
+			logutil.Error(
+				"[MERGE-ERROR]",
+				zap.String("task", mergehost.Name()),
 				zap.Error(err),
 				zap.String("phase", phaseDesc),
 			)
@@ -144,139 +146,32 @@ func DoMergeAndWrite(
 	}
 
 	if hasSortKey {
-		if err := mergeObjs(ctx, mergehost, sortkeyPos); err != nil {
+		if err = mergeObjs(ctx, mergehost, sortkeyPos); err != nil {
 			return err
 		}
-
-		toObjsDesc := ""
-		for _, o := range commitEntry.CreatedObjs {
-			obj := objectio.ObjectStats(o)
-			toObjsDesc += fmt.Sprintf("%s(%v)Rows(%v),",
-				common.ShortObjId(*obj.ObjectName().ObjectId()),
-				obj.BlkCnt(),
-				obj.Rows())
-		}
-
-		logutil.Info("[Done] Mergeblocks",
-			zap.String("table", tableDesc),
-			zap.String("on", mergehost.HostHintName()),
-			zap.String("txn-start-ts", commitEntry.StartTs.DebugString()),
-			zap.String("to-objs", toObjsDesc),
-			common.DurationField(time.Since(now)))
-		return
-	}
-
-	// batches is read from disk, dels is read from disk and memory
-	//
-	// batches[i] means the i-th non-appendable block to be merged and
-	// it has no rowid
-	batches, dels, release, err := mergehost.PrepareData(ctx)
-	if err != nil {
-		return err
-	}
-	defer release()
-
-	if mergehost.DoTransfer() {
-		initTransferMapping(commitEntry, len(batches))
-	}
-
-	fromLayout := make([]uint32, len(batches))
-	totalRowCount := 0
-
-	mpool := mergehost.GetMPool()
-	// iter all block to get basic info, do shrink if needed
-	for i := range batches {
-		rowCntBeforeApplyDelete := batches[i].RowCount()
-		del := dels[i]
-		if del != nil && del.Count() > 0 {
-			// dup vector before apply delete. old b will be freed in releaseF
-			newb, err := batches[i].Dup(mpool)
-			if err != nil {
-				return err
-			}
-			defer newb.Clean(mpool) // whoever create new vector, should clean it
-			batches[i] = newb
-			batches[i].Shrink(del.ToI64Arrary(), true)
-			// skip empty batch
-			if batches[i].RowCount() == 0 {
-				continue
-			}
-		}
-		if mergehost.DoTransfer() {
-			AddSortPhaseMapping(commitEntry.Booking, i, rowCntBeforeApplyDelete, del, nil)
-		}
-		fromLayout[i] = uint32(batches[i].RowCount())
-		totalRowCount += batches[i].RowCount()
-	}
-
-	if totalRowCount == 0 {
-		logutil.Info("[Done] Mergeblocks due to all deleted",
-			zap.String("table", tableDesc),
-			zap.String("txn-start-ts", commitEntry.StartTs.DebugString()))
-		if mergehost.DoTransfer() {
-			CleanTransMapping(commitEntry.Booking)
-		}
-		return
-	}
-
-	// -------------------------- phase 1
-	phaseDesc = "reshape, one column"
-	toLayout := arrangeToLayout(totalRowCount, blkMaxRow)
-
-	retBatches, releaseF := ReshapeBatches(batches, fromLayout, toLayout, mergehost)
-	defer releaseF()
-	if mergehost.DoTransfer() {
-		UpdateMappingAfterMerge(commitEntry.Booking, nil, toLayout)
-	}
-
-	// -------------------------- phase 2
-	phaseDesc = "new writer to write down"
-	writer := mergehost.PrepareNewWriter()
-	for _, bat := range retBatches {
-		_, err = writer.WriteBatch(bat)
-		if err != nil {
+	} else {
+		if err = reshape(ctx, mergehost); err != nil {
 			return err
 		}
 	}
 
-	if _, _, err = writer.Sync(ctx); err != nil {
-		return err
+	toObjsDesc := ""
+	for _, o := range commitEntry.CreatedObjs {
+		obj := objectio.ObjectStats(o)
+		toObjsDesc += fmt.Sprintf("%s(%v)Rows(%v),",
+			common.ShortObjId(*obj.ObjectName().ObjectId()),
+			obj.BlkCnt(),
+			obj.Rows())
 	}
 
-	// no tomestone actually
-	cobjstats := writer.GetObjectStats()[:objectio.SchemaTombstone]
-	for _, cobj := range cobjstats {
-		commitEntry.CreatedObjs = append(commitEntry.CreatedObjs, cobj.Clone().Marshal())
-	}
-	cobj := fmt.Sprintf("%s(%v)Rows(%v)",
-		common.ShortObjId(*cobjstats[0].ObjectName().ObjectId()),
-		cobjstats[0].BlkCnt(),
-		cobjstats[0].Rows())
-	logutil.Info("[Done] Mergeblocks",
-		zap.String("table", tableDesc),
-		zap.String("on", mergehost.HostHintName()),
-		zap.String("txn-start-ts", commitEntry.StartTs.DebugString()),
-		zap.String("to-objs", cobj),
-		common.DurationField(time.Since(now)))
-
+	logutil.Info(
+		"[MERGE-END]",
+		zap.String("task", mergehost.Name()),
+		common.AnyField("to-objs", toObjsDesc),
+		common.DurationField(time.Since(now)),
+	)
 	return nil
 
-}
-
-// layout [blkMaxRow, blkMaxRow, blkMaxRow,..., blkMaxRow, totalRowCount - blkMaxRow*N]
-func arrangeToLayout(totalRowCount int, blkMaxRow int) []uint32 {
-	toLayout := make([]uint32, 0, totalRowCount/blkMaxRow)
-	unconsumed := totalRowCount
-	for unconsumed > 0 {
-		if unconsumed > blkMaxRow {
-			toLayout = append(toLayout, uint32(blkMaxRow))
-			unconsumed -= blkMaxRow
-		} else {
-			toLayout = append(toLayout, uint32(unconsumed))
-			unconsumed = 0
-		}
-	}
-	return toLayout
 }
 
 // not defined in api.go to avoid import cycle
@@ -301,19 +196,15 @@ func CleanTransMapping(b *api.BlkTransferBooking) {
 	}
 }
 
-func AddSortPhaseMapping(b *api.BlkTransferBooking, idx int, originRowCnt int, deletes *nulls.Nulls, mapping []int64) {
+func AddSortPhaseMapping(b *api.BlkTransferBooking, idx int, originRowCnt int, mapping []int64) {
 	// TODO: remove panic check
 	if mapping != nil {
-		deletecnt := 0
-		if deletes != nil {
-			deletecnt = deletes.GetCardinality()
-		}
-		if len(mapping) != originRowCnt-deletecnt {
-			panic(fmt.Sprintf("mapping length %d != originRowCnt %d - deletes %s", len(mapping), originRowCnt, deletes))
+		if len(mapping) != originRowCnt {
+			panic(fmt.Sprintf("mapping length %d != originRowCnt %d", len(mapping), originRowCnt))
 		}
 		// mapping sortedVec[i] = originalVec[sortMapping[i]]
 		// transpose it, originalVec[sortMapping[i]] = sortedVec[i]
-		// [9 4 8 5 2 6 0 7 3 1](orignVec)  -> [6 9 4 8 1 3 5 7 2 0](sortedVec)
+		// [9 4 8 5 2 6 0 7 3 1](originalVec)  -> [6 9 4 8 1 3 5 7 2 0](sortedVec)
 		// [0 1 2 3 4 5 6 7 8 9](sortedVec) -> [0 1 2 3 4 5 6 7 8 9](originalVec)
 		// TODO: use a more efficient way to transpose, in place
 		transposedMapping := make([]int64, len(mapping))
@@ -322,24 +213,18 @@ func AddSortPhaseMapping(b *api.BlkTransferBooking, idx int, originRowCnt int, d
 		}
 		mapping = transposedMapping
 	}
-	posInVecApplyDeletes := 0
 	targetMapping := b.Mappings[idx].M
 	for origRow := 0; origRow < originRowCnt; origRow++ {
-		if deletes != nil && deletes.Contains(uint64(origRow)) {
-			// this row has been deleted, skip its mapping
-			continue
-		}
 		if mapping == nil {
 			// no sort phase, the mapping is 1:1, just use posInVecApplyDeletes
-			targetMapping[int32(origRow)] = api.TransDestPos{BlkIdx: -1, RowIdx: int32(posInVecApplyDeletes)}
+			targetMapping[int32(origRow)] = api.TransDestPos{BlkIdx: -1, RowIdx: int32(origRow)}
 		} else {
-			targetMapping[int32(origRow)] = api.TransDestPos{BlkIdx: -1, RowIdx: int32(mapping[posInVecApplyDeletes])}
+			targetMapping[int32(origRow)] = api.TransDestPos{BlkIdx: -1, RowIdx: int32(mapping[origRow])}
 		}
-		posInVecApplyDeletes++
 	}
 }
 
-func UpdateMappingAfterMerge(b *api.BlkTransferBooking, mapping, toLayout []uint32) {
+func UpdateMappingAfterMerge(b *api.BlkTransferBooking, mapping []int, toLayout []uint32) {
 	bisectHaystack := make([]uint32, 0, len(toLayout)+1)
 	bisectHaystack = append(bisectHaystack, 0)
 	for _, x := range toLayout {
@@ -368,18 +253,18 @@ func UpdateMappingAfterMerge(b *api.BlkTransferBooking, mapping, toLayout []uint
 
 	for _, mcontainer := range b.Mappings {
 		m := mcontainer.M
-		var curTotal int32   // index in the flatten src array
-		var destTotal uint32 // index in the flatten merged array
+		size := len(m)
+		var curTotal int32 // index in the flatten src array
 		for srcRow := range m {
 			curTotal = totalHandledRows + m[srcRow].RowIdx
-			if mapping == nil {
-				destTotal = uint32(curTotal)
+			destTotal := mapping[curTotal]
+			if destTotal == -1 {
+				delete(m, srcRow)
 			} else {
-				destTotal = mapping[curTotal]
+				destBlkIdx, destRowIdx := bisectPinpoint(uint32(destTotal))
+				m[srcRow] = api.TransDestPos{BlkIdx: int32(destBlkIdx), RowIdx: int32(destRowIdx)}
 			}
-			destBlkIdx, destRowIdx := bisectPinpoint(destTotal)
-			m[srcRow] = api.TransDestPos{BlkIdx: int32(destBlkIdx), RowIdx: int32(destRowIdx)}
 		}
-		totalHandledRows += int32(len(m))
+		totalHandledRows += int32(size)
 	}
 }

@@ -142,12 +142,34 @@ func NewSnapshotMeta() *SnapshotMeta {
 	}
 }
 
+func (sm *SnapshotMeta) CopyObjectsLocked() map[uint64]map[objectio.Segmentid]*objectInfo {
+	objects := make(map[uint64]map[objectio.Segmentid]*objectInfo)
+	for k, v := range sm.objects {
+		objects[k] = make(map[objectio.Segmentid]*objectInfo)
+		for kk, vv := range v {
+			objects[k][kk] = vv
+		}
+	}
+	return objects
+}
+
+func (sm *SnapshotMeta) CopyTablesLocked() map[uint32]map[uint64]*TableInfo {
+	tables := make(map[uint32]map[uint64]*TableInfo)
+	for k, v := range sm.tables {
+		tables[k] = make(map[uint64]*TableInfo)
+		for kk, vv := range v {
+			tables[k][kk] = vv
+		}
+	}
+	return tables
+}
+
 func (sm *SnapshotMeta) updateTableInfo(data *CheckpointData) {
-	insTable, _, _, _, delTableTxn := data.GetTblBatchs()
+	insTable, insTableTxn, _, _, delTableTxn := data.GetTblBatchs()
 	insAccIDs := vector.MustFixedCol[uint32](insTable.GetVectorByName(catalog2.SystemColAttr_AccID).GetDownstreamVector())
 	insTIDs := vector.MustFixedCol[uint64](insTable.GetVectorByName(catalog2.SystemRelAttr_ID).GetDownstreamVector())
 	insDBIDs := vector.MustFixedCol[uint64](insTable.GetVectorByName(catalog2.SystemRelAttr_DBID).GetDownstreamVector())
-	insCreateAts := vector.MustFixedCol[types.Timestamp](insTable.GetVectorByName(catalog2.SystemRelAttr_CreateAt).GetDownstreamVector())
+	insCreateAts := vector.MustFixedCol[types.TS](insTableTxn.GetVectorByName(txnbase.SnapshotAttr_CommitTS).GetDownstreamVector())
 	insTableNameVec := insTable.GetVectorByName(catalog2.SystemRelAttr_Name).GetDownstreamVector()
 	insTableArea := insTableNameVec.GetArea()
 	insTableNames := vector.MustFixedCol[types.Varlena](insTableNameVec)
@@ -167,8 +189,7 @@ func (sm *SnapshotMeta) updateTableInfo(data *CheckpointData) {
 			sm.tables[accID] = make(map[uint64]*TableInfo)
 		}
 		dbid := insDBIDs[i]
-		create := insCreateAts[i]
-		createAt := types.BuildTS(create.Unix(), 0)
+		createAt := insCreateAts[i]
 		if sm.tables[accID][tid] != nil {
 			continue
 		}
@@ -210,7 +231,7 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 		logutil.Infof("[UpdateSnapshot] cost %v", time.Since(now))
 	}()
 	sm.updateTableInfo(data)
-	if sm.tid == 0 {
+	if sm.tid == 0 && len(sm.tides) == 0 {
 		return sm
 	}
 	ins := data.GetObjectBatchs()
@@ -282,7 +303,8 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileServ
 		logutil.Infof("[GetSnapshot] cost %v", time.Since(now))
 	}()
 	sm.RLock()
-	objects := sm.objects
+	objects := sm.CopyObjectsLocked()
+	tables := sm.CopyTablesLocked()
 	sm.RUnlock()
 	snapshotList := make(map[uint32]containers.Vector)
 	idxes := []uint16{ColTS, ColLevel, ColObjId}
@@ -308,7 +330,7 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileServ
 				}
 				checkpointTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 				bat, err := blockio.BlockRead(ctx, &blk, nil, idxes, colTypes, checkpointTS.ToTimestamp(),
-					nil, nil, blockio.ReadFilter{}, fs, mp, nil, fileservice.Policy(0))
+					nil, nil, blockio.BlockReadFilter{}, fs, mp, nil, fileservice.Policy(0))
 				if err != nil {
 					return nil, err
 				}
@@ -322,7 +344,7 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileServ
 					acct := acctList[r]
 					snapshotType := typeList[r]
 					if snapshotType == SnapshotTypeCluster {
-						for account := range sm.tables {
+						for account := range tables {
 							if snapshotList[account] == nil {
 								snapshotList[account] = containers.MakeVector(types.T_TS.ToType(), mp)
 							}
@@ -452,7 +474,7 @@ func (sm *SnapshotMeta) SaveTableInfo(name string, fs fileservice.FileService) (
 				bat.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector(),
 				table.deleteAt, false, common.DebugAllocator)
 
-			if table.tid == sm.tid {
+			if _, ok := sm.tides[table.tid]; ok {
 				vector.AppendFixed[uint32](
 					snapTableBat.GetVectorByName(catalog2.SystemColAttr_AccID).GetDownstreamVector(),
 					table.accID, false, common.DebugAllocator)
@@ -493,6 +515,8 @@ func (sm *SnapshotMeta) SaveTableInfo(name string, fs fileservice.FileService) (
 }
 
 func (sm *SnapshotMeta) RebuildTableInfo(ins *containers.Batch) {
+	sm.Lock()
+	defer sm.Unlock()
 	insTIDs := vector.MustFixedCol[uint64](ins.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
 	insAccIDs := vector.MustFixedCol[uint32](ins.GetVectorByName(catalog2.SystemColAttr_AccID).GetDownstreamVector())
 	insDBIDs := vector.MustFixedCol[uint64](ins.GetVectorByName(catalog2.SystemRelAttr_DBID).GetDownstreamVector())
@@ -520,13 +544,24 @@ func (sm *SnapshotMeta) RebuildTableInfo(ins *containers.Batch) {
 }
 
 func (sm *SnapshotMeta) RebuildTid(ins *containers.Batch) {
+	sm.Lock()
+	defer sm.Unlock()
 	insTIDs := vector.MustFixedCol[uint64](ins.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
-	if ins.Length() != 1 {
+	accIDs := vector.MustFixedCol[uint32](ins.GetVectorByName(catalog2.SystemColAttr_AccID).GetDownstreamVector())
+	if ins.Length() < 1 {
 		logutil.Warnf("RebuildTid unexpected length %d", ins.Length())
 		return
 	}
 	logutil.Infof("RebuildTid tid %d", insTIDs[0])
 	sm.SetTid(insTIDs[0])
+	for i := 0; i < ins.Length(); i++ {
+		tid := insTIDs[i]
+		accid := accIDs[i]
+		if _, ok := sm.tides[tid]; !ok {
+			sm.tides[tid] = struct{}{}
+			logutil.Info("[RebuildSnapshotTid]", zap.Uint64("tid", tid), zap.Uint32("account id", accid))
+		}
+	}
 }
 
 func (sm *SnapshotMeta) Rebuild(ins *containers.Batch) {
@@ -772,8 +807,8 @@ func isSnapshotRefers(table *TableInfo, snapVec []types.TS) bool {
 		mid := left + (right-left)/2
 		snapTS := snapVec[mid]
 		if snapTS.GreaterEq(&table.createAt) && snapTS.Less(&table.deleteAt) {
-			logutil.Infof("isSnapshotRefers: %s, create %v, drop %v",
-				snapTS.ToString(), table.createAt.ToString(), table.deleteAt.ToString())
+			logutil.Infof("isSnapshotRefers: %s, create %v, drop %v, tid %d",
+				snapTS.ToString(), table.createAt.ToString(), table.deleteAt.ToString(), table.tid)
 			return true
 		} else if snapTS.Less(&table.createAt) {
 			left = mid + 1

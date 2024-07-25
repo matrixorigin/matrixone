@@ -13,10 +13,10 @@ create publication pub5 database t account accx comment 'test';
 show publications;
 publication    database    create_time    update_time    sub_account    comments
 pub5    t    2024-05-30 22:59:02    null    accx    test
-pub4    t    2024-05-30 22:59:02    null    acc0,acc1,accx    
-pub3    t    2024-05-30 22:59:02    null    acc0,acc1    
-pub2    t    2024-05-30 22:59:02    null    *    
-pub1    t    2024-05-30 22:59:02    null    *    
+pub4    t    2024-05-30 22:59:02    null    acc0,acc1,accx
+pub3    t    2024-05-30 22:59:02    null    acc0,acc1
+pub2    t    2024-05-30 22:59:02    null    *
+pub1    t    2024-05-30 22:59:02    null    *
 show create publication pub1;
 Publication    Create Publication
 pub1    CREATE PUBLICATION pub1 DATABASE t ACCOUNT all
@@ -51,9 +51,9 @@ drop publication pub1;
 show publications;
 publication    database    create_time    update_time    sub_account    comments
 pub5    t    2024-05-30 22:59:02    2024-05-30 22:59:02    *    1212
-pub4    t    2024-05-30 22:59:02    2024-05-30 22:59:02    acc0,accx    
-pub3    t    2024-05-30 22:59:02    2024-05-30 22:59:02    acc0,acc1,accx    
-pub2    t    2024-05-30 22:59:02    null    *    
+pub4    t    2024-05-30 22:59:02    2024-05-30 22:59:02    acc0,accx
+pub3    t    2024-05-30 22:59:02    2024-05-30 22:59:02    acc0,acc1,accx
+pub2    t    2024-05-30 22:59:02    null    *
 create publication pub1 database t;
 create publication pub1 database t;
 Duplicate entry 'pub1' for key 'pub_name'
@@ -83,7 +83,7 @@ create view v1 as (select * from sys_tbl_1);
 create publication sys_pub_1 database sys_db_1;
 show publications;
 publication    database    create_time    update_time    sub_account    comments
-sys_pub_1    sys_db_1    2024-05-30 22:59:04    null    *    
+sys_pub_1    sys_db_1    2024-05-30 22:59:04    null    *
 select pub_name, database_name, account_list from mo_catalog.mo_pubs;
 pub_name    database_name    account_list
 sys_pub_1    sys_db_1    all
@@ -237,7 +237,7 @@ acc2_tbl_1
 desc acc2_tbl_1;
 Field    Type    Null    Key    Default    Extra    Comment
 q    TEXT(0)    YES        null        
-c    INT(32)    NO    PRI    null        
+c    INT(32)    NO    PRI    null    auto_increment    
 select * from acc2_tbl_1;
 q    c
 acc2    1
@@ -253,7 +253,7 @@ acc2_pub_1    acc2    acc2_db_1    2024-05-30 22:59:04    sub2    2024-05-30 22:
 desc acc2_tbl_1;
 Field    Type    Null    Key    Default    Extra    Comment
 q    TEXT(0)    YES        null        
-c    INT(32)    NO    PRI    null        
+c    INT(32)    NO    PRI    null    auto_increment
 select * from acc2_tbl_1;
 q    c
 acc2    1

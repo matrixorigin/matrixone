@@ -46,6 +46,8 @@ var (
 	CoreDumpMethod         = "COREDUMP"
 	InterceptCommitMethod  = "INTERCEPTCOMMIT"
 	MergeObjectsMethod     = "MERGEOBJECTS"
+	DisableCKPMethod       = "DISABLECKP"
+	DiskCleanerMethod      = "DISKCLEANER"
 
 	GetProtocolVersionMethod = "GETPROTOCOLVERSION"
 	SetProtocolVersionMethod = "SETPROTOCOLVERSION"
@@ -55,6 +57,8 @@ var (
 	UnsubscribeTable      = "UNSUBSCRIBE_TABLE"
 
 	HandleTxnTrace = strings.ToUpper("txn-trace")
+
+	ReloadAutoIncrementCache = strings.ToUpper("reload-auto-increment-cache")
 )
 
 var (
@@ -85,6 +89,8 @@ var (
 		CoreDumpMethod:         handleCoreDump,
 		InterceptCommitMethod:  handleInterceptCommit(),
 		MergeObjectsMethod:     handleMerge(),
+		DisableCKPMethod:       handleDisableCheckpoint(),
+		DiskCleanerMethod:      handleDiskCleaner(),
 
 		GetProtocolVersionMethod: handleGetProtocolVersion,
 		SetProtocolVersionMethod: handleSetProtocolVersion,
@@ -92,6 +98,8 @@ var (
 		GetLatestBind:            handleGetLatestBind,
 		UnsubscribeTable:         handleUnsubscribeTable,
 		HandleTxnTrace:           handleTxnTrace,
+
+		ReloadAutoIncrementCache: handleReloadAutoIncrementCache,
 	}
 )
 

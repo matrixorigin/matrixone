@@ -21,11 +21,12 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
-	"go.uber.org/zap"
 )
 
 // RelationName counter for the new connection
@@ -66,7 +67,12 @@ func (mo *MOServer) GetRoutineManager() *RoutineManager {
 
 func (mo *MOServer) Start() error {
 	logutil.Infof("Server Listening on : %s ", mo.addr)
-	return mo.app.Start()
+	err := mo.app.Start()
+	if err != nil {
+		return err
+	}
+	setMoServerStarted(true)
+	return nil
 }
 
 func (mo *MOServer) Stop() error {
@@ -80,6 +86,16 @@ func nextConnectionID() uint32 {
 var globalRtMgr atomic.Value
 var globalPu atomic.Value
 var globalAicm atomic.Value
+var moServerStarted atomic.Bool
+var globalSessionAlloc atomic.Value
+
+func getGlobalSessionAlloc() *SessionAllocator {
+	return globalSessionAlloc.Load().(*SessionAllocator)
+}
+
+func setGlobalSessionAlloc(s *SessionAllocator) {
+	globalSessionAlloc.Store(s)
+}
 
 func setGlobalRtMgr(rtMgr *RoutineManager) {
 	globalRtMgr.Store(rtMgr)
@@ -101,11 +117,19 @@ func setGlobalAicm(aicm *defines.AutoIncrCacheManager) {
 	globalAicm.Store(aicm)
 }
 
-func getGlobalAic() *defines.AutoIncrCacheManager {
+func getGlobalAicm() *defines.AutoIncrCacheManager {
 	if globalAicm.Load() != nil {
 		return globalAicm.Load().(*defines.AutoIncrCacheManager)
 	}
 	return nil
+}
+
+func MoServerIsStarted() bool {
+	return moServerStarted.Load()
+}
+
+func setMoServerStarted(b bool) {
+	moServerStarted.Store(b)
 }
 
 func NewMOServer(
@@ -117,6 +141,7 @@ func NewMOServer(
 ) *MOServer {
 	setGlobalPu(pu)
 	setGlobalAicm(aicm)
+	setGlobalSessionAlloc(NewSessionAllocator(pu))
 	codec := NewSqlCodec()
 	rm, err := NewRoutineManager(ctx)
 	if err != nil {
@@ -148,7 +173,7 @@ func NewMOServer(
 			goetty.WithSessionCodec(codec),
 			goetty.WithSessionLogger(logutil.GetGlobalLogger()),
 			goetty.WithSessionRWBUfferSize(DefaultRpcBufferSize, DefaultRpcBufferSize),
-			goetty.WithSessionAllocator(NewSessionAllocator(pu))),
+			goetty.WithSessionAllocator(getGlobalSessionAlloc())),
 		goetty.WithAppSessionAware(rm),
 		//when the readTimeout expires the goetty will close the tcp connection.
 		goetty.WithReadTimeout(pu.SV.SessionTimeout.Duration))

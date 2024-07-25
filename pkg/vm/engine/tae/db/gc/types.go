@@ -17,6 +17,7 @@ package gc
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 )
 
@@ -63,6 +64,16 @@ const (
 	GCDeleteTS       = "delete_time"
 	GCAttrTombstone  = "tombstone"
 	GCAttrVersion    = "version"
+)
+
+const (
+	AddChecker    = "add_checker"
+	RemoveChecker = "remove_checker"
+)
+
+const (
+	CheckerKeyTTL   = "ttl"
+	CheckerKeyMinTS = "min_ts"
 )
 
 var (
@@ -142,7 +153,8 @@ type Cleaner interface {
 	Replay() error
 	Process()
 	TryGC() error
-	AddChecker(checker func(item any) bool)
+	AddChecker(checker func(item any) bool, key string) int
+	RemoveChecker(key string) error
 	GetMaxConsumed() *checkpoint.CheckpointEntry
 	Stop()
 	// for test
@@ -155,4 +167,5 @@ type Cleaner interface {
 	DisableGCForTest()
 	SetCheckGC(enable bool)
 	GetMPool() *mpool.MPool
+	GetSnapshots() (map[uint32]containers.Vector, error)
 }

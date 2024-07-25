@@ -16,6 +16,7 @@ package logtailreplay
 
 import (
 	"bytes"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -41,7 +42,8 @@ func (p *PartitionState) ApproxObjectsNum() int {
 
 func (p *PartitionState) NewObjectsIter(ts types.TS) (ObjectsIter, error) {
 	if ts.Less(&p.minTS) {
-		return nil, moerr.NewTxnStaleNoCtx()
+		msg := fmt.Sprintf("(%s<%s)", ts.ToString(), p.minTS.ToString())
+		return nil, moerr.NewTxnStaleNoCtx(msg)
 	}
 	iter := p.dataObjects.Copy().Iter()
 	ret := &objectsIter{
@@ -156,7 +158,7 @@ func (p *PartitionState) GetChangedObjsBetween(
 	return
 }
 
-func (p *PartitionState) GetBockDeltaLoc(bid types.Blockid) (objectio.ObjectLocation, types.TS, bool) {
+func (p *PartitionState) GetBlockDeltaLoc(bid types.Blockid) (objectio.ObjectLocation, types.TS, bool) {
 	iter := p.blockDeltas.Copy().Iter()
 	defer iter.Release()
 

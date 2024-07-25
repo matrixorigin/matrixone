@@ -21,8 +21,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/panjf2000/ants/v2"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -49,11 +47,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/stack"
+	"github.com/matrixorigin/matrixone/pkg/version"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/panjf2000/ants/v2"
 )
 
 var _ engine.Engine = new(Engine)
@@ -66,7 +67,7 @@ func New(
 	cli client.TxnClient,
 	hakeeper logservice.CNHAKeeperClient,
 	keyRouter client2.KeyRouter[pb.StatsInfoKey],
-	threshold int,
+	updateWorkerFactor int,
 ) *Engine {
 	cluster := clusterservice.GetMOCluster()
 	services := cluster.GetAllTNServices()
@@ -120,8 +121,7 @@ func New(
 	e.gcPool = pool
 
 	e.globalStats = NewGlobalStats(ctx, e, keyRouter,
-		WithLogtailUpdateStatsThreshold(threshold),
-	)
+		WithUpdateWorkerFactor(updateWorkerFactor))
 
 	if err := e.init(ctx); err != nil {
 		panic(err)
@@ -134,9 +134,9 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	if op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("create database in snapshot txn")
 	}
-	txn := op.GetWorkspace().(*Transaction)
-	if txn == nil {
-		return moerr.NewTxnClosedNoCtx(op.Txn().ID)
+	txn, err := txnIsValid(op)
+	if err != nil {
+		return err
 	}
 	typ := getTyp(ctx)
 	sql := getSql(ctx)
@@ -235,9 +235,9 @@ func (e *Engine) DatabaseByAccountID(
 func (e *Engine) Database(ctx context.Context, name string,
 	op client.TxnOperator) (engine.Database, error) {
 	logDebugf(op.Txn(), "Engine.Database %s", name)
-	txn := op.GetWorkspace().(*Transaction)
-	if txn == nil || txn.op.Status() == txn2.TxnStatus_Aborted {
-		return nil, moerr.NewTxnClosedNoCtx(op.Txn().ID)
+	txn, err := txnIsValid(op)
+	if err != nil {
+		return nil, err
 	}
 	accountId, err := defines.GetAccountId(ctx)
 	if err != nil {
@@ -298,9 +298,9 @@ func (e *Engine) Database(ctx context.Context, name string,
 func (e *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]string, error) {
 	var dbs []string
 
-	txn := op.GetWorkspace().(*Transaction)
-	if txn == nil {
-		return nil, moerr.NewTxnClosed(ctx, op.Txn().ID)
+	txn, err := txnIsValid(op)
+	if err != nil {
+		return nil, err
 	}
 	accountId, err := defines.GetAccountId(ctx)
 	if err != nil {
@@ -348,9 +348,10 @@ func (e *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]string
 }
 
 func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error) {
-	txn := op.GetWorkspace().(*Transaction)
-	if txn == nil {
-		return "", "", moerr.NewTxnClosed(ctx, op.Txn().ID)
+	var txn *Transaction
+	txn, err = txnIsValid(op)
+	if err != nil {
+		return "", "", err
 	}
 	accountId, err := defines.GetAccountId(ctx)
 	if err != nil {
@@ -416,9 +417,10 @@ func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId
 }
 
 func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName, tableName string, rel engine.Relation, err error) {
-	txn := op.GetWorkspace().(*Transaction)
-	if txn == nil {
-		return "", "", nil, moerr.NewTxnClosed(ctx, op.Txn().ID)
+	var txn *Transaction
+	txn, err = txnIsValid(op)
+	if err != nil {
+		return "", "", nil, err
 	}
 	switch tableId {
 	case catalog.MO_DATABASE_ID:
@@ -544,14 +546,15 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 
 	var databaseId uint64
 	var rowId types.Rowid
+	var txn *Transaction
 	//var db *txnDatabase
 	if op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("delete database in snapshot txn")
 	}
 
-	txn := op.GetWorkspace().(*Transaction)
-	if txn == nil {
-		return moerr.NewTxnClosedNoCtx(op.Txn().ID)
+	txn, err = txnIsValid(op)
+	if err != nil {
+		return err
 	}
 
 	accountId, err := defines.GetAccountId(ctx)
@@ -699,11 +702,13 @@ func (e *Engine) Nodes(
 	// If the requested labels are empty, return all CN servers.
 	if len(cnLabel) == 0 {
 		cluster.GetCNService(selector, func(c metadata.CNService) bool {
-			nodes = append(nodes, engine.Node{
-				Mcpu: ncpu,
-				Id:   c.ServiceID,
-				Addr: c.PipelineServiceAddress,
-			})
+			if c.CommitID == version.CommitID {
+				nodes = append(nodes, engine.Node{
+					Mcpu: ncpu,
+					Id:   c.ServiceID,
+					Addr: c.PipelineServiceAddress,
+				})
+			}
 			return true
 		})
 		return nodes, nil
@@ -712,19 +717,23 @@ func (e *Engine) Nodes(
 	selector = clusterservice.NewSelector().SelectByLabel(cnLabel, clusterservice.EQ_Globbing)
 	if isInternal || strings.ToLower(tenant) == "sys" {
 		route.RouteForSuperTenant(selector, username, nil, func(s *metadata.CNService) {
-			nodes = append(nodes, engine.Node{
-				Mcpu: ncpu,
-				Id:   s.ServiceID,
-				Addr: s.PipelineServiceAddress,
-			})
+			if s.CommitID == version.CommitID {
+				nodes = append(nodes, engine.Node{
+					Mcpu: ncpu,
+					Id:   s.ServiceID,
+					Addr: s.PipelineServiceAddress,
+				})
+			}
 		})
 	} else {
 		route.RouteForCommonTenant(selector, nil, func(s *metadata.CNService) {
-			nodes = append(nodes, engine.Node{
-				Mcpu: ncpu,
-				Id:   s.ServiceID,
-				Addr: s.PipelineServiceAddress,
-			})
+			if s.CommitID == version.CommitID {
+				nodes = append(nodes, engine.Node{
+					Mcpu: ncpu,
+					Id:   s.ServiceID,
+					Addr: s.PipelineServiceAddress,
+				})
+			}
 		})
 	}
 	return nodes, nil
@@ -736,7 +745,15 @@ func (e *Engine) Hints() (h engine.Hints) {
 }
 
 func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp,
-	expr *plan.Expr, ranges []byte, tblDef *plan.TableDef, proc any) ([]engine.Reader, error) {
+	expr *plan.Expr, filter any, ranges []byte, tblDef *plan.TableDef, proc any) ([]engine.Reader, error) {
+	var blockReadPKFilter blockio.BlockReadFilter
+	if filter == nil {
+		// remote block reader
+		basePKFilter := constructBasePKFilter(expr, tblDef, proc.(*process.Process))
+		blockReadPKFilter = constructBlockReadPKFilter(tblDef.Pkey.PkeyColName, basePKFilter)
+		//fmt.Println("remote filter: ", basePKFilter.String(), blockReadPKFilter)
+	}
+
 	blkSlice := objectio.BlockInfoSlice(ranges)
 	rds := make([]engine.Reader, num)
 	blkInfos := make([]*objectio.BlockInfo, 0, blkSlice.Len())
@@ -748,7 +765,7 @@ func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Times
 			//FIXME::why set blk.EntryState = false ?
 			blk.EntryState = false
 			rds[i] = newBlockReader(
-				ctx, tblDef, ts, []*objectio.BlockInfo{blk}, expr, e.fs, proc.(*process.Process),
+				ctx, tblDef, ts, []*objectio.BlockInfo{blk}, expr, blockReadPKFilter, e.fs, proc.(*process.Process),
 			)
 		}
 		for j := len(blkInfos); j < num; j++ {
@@ -762,7 +779,7 @@ func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Times
 	if err != nil {
 		return nil, err
 	}
-	blockReaders := newBlockReaders(ctx, fs, tblDef, ts, num, expr, proc.(*process.Process))
+	blockReaders := newBlockReaders(ctx, fs, tblDef, ts, num, expr, blockReadPKFilter, proc.(*process.Process))
 	distributeBlocksToBlockReaders(blockReaders, num, len(blkInfos), infos, steps)
 	for i := 0; i < num; i++ {
 		rds[i] = blockReaders[i]
@@ -808,6 +825,10 @@ func (e *Engine) cleanMemoryTableWithTable(dbId, tblId uint64) {
 	// after we set it to empty, actually this part of memory was not immediately released.
 	// maybe a very old transaction still using that.
 	delete(e.partitions, [2]uint64{dbId, tblId})
+
+	//  When removing the PartitionState, you need to remove the tid in globalStats,
+	// When re-subscribing, globalStats will wait for the PartitionState to be consumed before updating the object state.
+	e.globalStats.RemoveTid(tblId)
 	logutil.Debugf("clean memory table of tbl[dbId: %d, tblId: %d]", dbId, tblId)
 }
 

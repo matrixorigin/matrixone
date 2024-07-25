@@ -1,9 +1,8 @@
-FROM matrixorigin/tester:go1.21.5-jdk8
+FROM matrixorigin/tester:go1.22.3-jdk8
 
 WORKDIR /
 
-RUN git clone https://github.com/matrixorigin/mo-tester.git && apt update && apt install -y mariadb-client
-
+RUN git clone https://github.com/matrixorigin/mo-tester.git
 COPY . /matrixone
 
 RUN cd mo-tester && sed -i 's/127.0.0.1/cn0/g' mo.yml

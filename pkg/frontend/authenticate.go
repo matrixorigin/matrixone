@@ -31,6 +31,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tidwall/btree"
+	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -39,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -48,14 +53,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
-	"github.com/tidwall/btree"
-	"go.uber.org/zap"
-	"golang.org/x/sync/errgroup"
 )
 
 type TenantInfo struct {
@@ -536,6 +540,10 @@ const (
 	dumpDefaultRoleID = moAdminRoleID
 
 	moCatalog = "mo_catalog"
+
+	SaveQueryResult    = "save_query_result"
+	QueryResultMaxsize = "query_result_maxsize"
+	QueryResultTimeout = "query_result_timeout"
 )
 
 type objectType int
@@ -1489,6 +1497,14 @@ var (
 		PrivilegeTypeUpgradeAccount: 0,
 	}
 )
+
+func init() {
+	tables := make([]string, 0)
+	for tbl := range predefinedTables {
+		tables = append(tables, tbl)
+	}
+	util.InitPredefinedTables(tables)
+}
 
 func getSqlForAccountIdAndStatus(ctx context.Context, accName string, check bool) (string, error) {
 	if check && accountNameIsInvalid(accName) {
@@ -2654,6 +2670,7 @@ func finishTxn(ctx context.Context, bh BackgroundExec, err error) error {
 		}
 		return err
 	}
+
 	if err == nil {
 		//normal COMMIT the transaction
 		err = bh.Exec(ctx, "commit;")
@@ -3038,7 +3055,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 	if accountExist {
 		if aa.StatusOption.Exist && aa.StatusOption.Option == tree.AccountStatusSuspend {
 			ses.getRoutineManager().accountRoutine.EnKillQueue(int64(targetAccountId), version)
-
+			logutil.Infof("[set suspend] set account id %d, version %d suspend", targetAccountId, version)
 			if err := postDropSuspendAccount(ctx, ses, aa.Name, int64(targetAccountId), version); err != nil {
 				ses.Errorf(ctx, "post alter account suspend error: %s", err.Error())
 			}
@@ -3048,6 +3065,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 			accountId2RoutineMap := ses.getRoutineManager().accountRoutine.deepCopyRoutineMap()
 			if rtMap, ok := accountId2RoutineMap[int64(targetAccountId)]; ok {
 				for rt := range rtMap {
+					logutil.Infof("[set restricted] set account id %d, connection id %d restricted", targetAccountId, rt.getConnectionID())
 					rt.setResricted(true)
 				}
 			}
@@ -3246,6 +3264,10 @@ func getSubscriptionMeta(ctx context.Context, dbName string, ses FeSession, txn 
 }
 
 func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, accName, pubName string) (subs *plan.SubscriptionMeta, err error) {
+	start := time.Now()
+	defer func() {
+		v2.CheckSubValidDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 	var (
@@ -4283,7 +4305,7 @@ func postDropSuspendAccount(
 	}
 	var nodes []string
 	currTenant := ses.GetTenantInfo().GetTenant()
-	currUser := ses.GetTenantInfo().User
+	currUser := ses.GetTenantInfo().GetUser()
 	labels := clusterservice.NewSelector().SelectByLabel(
 		map[string]string{"account": accountName}, clusterservice.Contain)
 	sysTenant := isSysTenant(currTenant)
@@ -4569,7 +4591,7 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 						rtnErr = finishTxn(ctx, bh, rtnErr)
 						if rtnErr == nil {
 							u := &function.NonSqlUdfBody{}
-							if json.Unmarshal([]byte(bodyStr), u) == nil && u.Import {
+							if json.Unmarshal([]byte(bodyStr), u) == nil && u.Imppkg/frontend/mysql_cmd_executor.goort {
 								rm(u.Body)
 							}
 						}
@@ -7591,6 +7613,10 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *createAccount) (er
 	if !(tenant.IsSysTenant() && tenant.IsMoAdminRole()) {
 		return moerr.NewInternalError(ctx, "tenant %s user %s role %s do not have the privilege to create the new account", tenant.GetTenant(), tenant.GetUser(), tenant.GetDefaultRole())
 	}
+	start := time.Now()
+	defer func() {
+		v2.TotalCreateDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 
 	//normalize the name
 	err = normalizeNameOfAccount(ctx, ca)
@@ -7632,6 +7658,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *createAccount) (er
 			return rtnErr
 		}
 
+		start1 := time.Now()
 		//USE the mo_catalog
 		// MOVE into txn, make sure only create ONE txn.
 		rtnErr = bh.Exec(ctx, "use mo_catalog;")
@@ -7656,6 +7683,10 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *createAccount) (er
 				return rtnErr
 			}
 		}
+
+		v2.Step1DurationHistogram.Observe(time.Since(start1).Seconds())
+
+		start2 := time.Now()
 
 		// create some tables and databases for new account
 		rtnErr = bh.Exec(newTenantCtx, createMoIndexesSql)
@@ -7691,6 +7722,8 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *createAccount) (er
 				return rtnErr
 			}
 		}
+
+		v2.Step2DurationHistogram.Observe(time.Since(start2).Seconds())
 
 		// create tables for new account
 		rtnErr = createTablesInMoCatalogOfGeneralTenant2(bh, ca, newTenantCtx, newTenant, getGlobalPu())
@@ -7808,10 +7841,17 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 }
 
 func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccount, newTenantCtx context.Context, newTenant *TenantInfo, pu *config.ParameterUnit) error {
+	start := time.Now()
+	defer func() {
+		v2.CreateTablesInMoCatalogDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 	var err error
 	var initDataSqls []string
 	newTenantCtx, span := trace.Debug(newTenantCtx, "createTablesInMoCatalogOfGeneralTenant2")
 	defer span.End()
+
+	start1 := time.Now()
+
 	//create tables for the tenant
 	for _, sql := range createSqls {
 		//only the SYS tenant has the table mo_account
@@ -7823,6 +7863,8 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 			return err
 		}
 	}
+
+	v2.ExecDDL1DurationHistogram.Observe(time.Since(start1).Seconds())
 
 	//initialize the default data of tables for the tenant
 	addSqlIntoSet := func(sql string) {
@@ -7891,6 +7933,13 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 	initMoUserGrant2 := fmt.Sprintf(initMoUserGrantFormat, publicRoleID, newTenant.GetUserID(), types.CurrentTimestamp().String2(time.UTC, 0), true)
 	addSqlIntoSet(initMoUserGrant2)
 
+	//step6: add new entries to the mo_mysql_compatibility_mode
+	addSqlIntoSet(addInitSystemVariablesSql(uint64(newTenant.GetTenantID()), newTenant.GetTenant(), SaveQueryResult, pu))
+	addSqlIntoSet(addInitSystemVariablesSql(uint64(newTenant.GetTenantID()), newTenant.GetTenant(), QueryResultMaxsize, pu))
+	addSqlIntoSet(addInitSystemVariablesSql(uint64(newTenant.GetTenantID()), newTenant.GetTenant(), QueryResultTimeout, pu))
+
+	start2 := time.Now()
+
 	//fill the mo_role, mo_user, mo_role_privs, mo_user_grant, mo_role_grant
 	for _, sql := range initDataSqls {
 		bh.ClearExecResultSet()
@@ -7899,11 +7948,17 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 			return err
 		}
 	}
+
+	v2.InitData1DurationHistogram.Observe(time.Since(start2).Seconds())
 	return nil
 }
 
 // createTablesInSystemOfGeneralTenant creates the database system and system_metrics as the external tables.
 func createTablesInSystemOfGeneralTenant(ctx context.Context, bh BackgroundExec, newTenant *TenantInfo) error {
+	start := time.Now()
+	defer func() {
+		v2.CreateTablesInSystemDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 	ctx, span := trace.Debug(ctx, "createTablesInSystemOfGeneralTenant")
 	defer span.End()
 
@@ -7928,6 +7983,10 @@ func createTablesInSystemOfGeneralTenant(ctx context.Context, bh BackgroundExec,
 
 // createTablesInInformationSchemaOfGeneralTenant creates the database information_schema and the views or tables.
 func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh BackgroundExec) error {
+	start := time.Now()
+	defer func() {
+		v2.CreateTablesInInfoSchemaDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 	ctx, span := trace.Debug(ctx, "createTablesInInformationSchemaOfGeneralTenant")
 	defer span.End()
 	//with new tenant
@@ -8962,7 +9021,7 @@ func doInterpretCall(ctx context.Context, ses *Session, call *tree.CallStmt) ([]
 		return nil, moerr.NewNoUDFNoCtx(string(call.Name.Name.ObjectName))
 	}
 
-	stmt, err := parsers.Parse(ctx, dialect.MYSQL, spBody, 1, 0)
+	stmt, err := parsers.Parse(ctx, dialect.MYSQL, spBody, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -9104,7 +9163,7 @@ func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.St
 }
 
 func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string, varValue interface{}) (err error) {
-	accountId := uint64(ses.GetTenantInfo().TenantID)
+	accountId := uint64(ses.GetTenantInfo().GetTenantID())
 	accountName := ses.GetTenantName()
 	varName = strings.ToLower(varName)
 	bh := ses.GetBackgroundExec(ctx)
@@ -9159,6 +9218,22 @@ func isSuperUser(username string) bool {
 	return u == dumpName || u == rootName
 }
 
+func addInitSystemVariablesSql(accountId uint64, accountName, variableName string, pu *config.ParameterUnit) string {
+	switch variableName {
+	case SaveQueryResult:
+		var val = "off"
+		if strings.ToLower(pu.SV.SaveQueryResult) == "on" {
+			val = "on"
+		}
+		return getSqlForInsertSysVarWithAccount(accountId, accountName, SaveQueryResult, val)
+	case QueryResultMaxsize:
+		return getSqlForInsertSysVarWithAccount(accountId, accountName, QueryResultMaxsize, getVariableValue(pu.SV.QueryResultMaxsize))
+	case QueryResultTimeout:
+		return getSqlForInsertSysVarWithAccount(accountId, accountName, QueryResultTimeout, getVariableValue(pu.SV.QueryResultTimeout))
+	}
+	return ""
+}
+
 // postAlterSessionStatus post alter all nodes session status which the tenant has been alter restricted or open.
 func postAlterSessionStatus(
 	ctx context.Context,
@@ -9166,6 +9241,7 @@ func postAlterSessionStatus(
 	accountName string,
 	tenantId int64,
 	status string) error {
+	logutil.Infof("[set restricted] post set account id %d status : %s", tenantId, status)
 	qc := getGlobalPu().QueryClient
 	if qc == nil {
 		return moerr.NewInternalError(ctx, "query client is not initialized")

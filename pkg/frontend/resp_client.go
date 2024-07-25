@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"math"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -29,7 +30,7 @@ func setResponse(ses *Session, isLastStmt bool, rspLen uint64) *Response {
 // response the client
 func respClientWhenSuccess(ses *Session,
 	execCtx *ExecCtx) (err error) {
-	if execCtx.skipRespClient {
+	if execCtx.inMigration {
 		return nil
 	}
 	err = execCtx.resper.RespPostMeta(execCtx, nil)
@@ -47,7 +48,7 @@ func respClientWhenSuccess(ses *Session,
 
 func (resper *MysqlResp) respClientWithoutFlush(ses *Session,
 	execCtx *ExecCtx) (err error) {
-	if execCtx.skipRespClient {
+	if execCtx.inMigration {
 		return nil
 	}
 	switch execCtx.stmt.StmtKind().RespType() {
@@ -162,6 +163,7 @@ const (
 type NullResp struct {
 	username string
 	database string
+	sync.Mutex
 }
 
 func (resper *NullResp) MysqlRrWr() MysqlRrWr {
@@ -170,6 +172,11 @@ func (resper *NullResp) MysqlRrWr() MysqlRrWr {
 }
 
 func (resper *NullResp) GetStr(id PropertyID) string {
+	if resper == nil {
+		return ""
+	}
+	resper.Lock()
+	defer resper.Unlock()
 	switch id {
 	case DBNAME:
 		return resper.database
@@ -182,6 +189,11 @@ func (resper *NullResp) GetStr(id PropertyID) string {
 	}
 }
 func (resper *NullResp) SetStr(id PropertyID, val string) {
+	if resper == nil {
+		return
+	}
+	resper.Lock()
+	defer resper.Unlock()
 	switch id {
 	case DBNAME:
 		resper.database = val

@@ -440,7 +440,7 @@ func TestGetSimpleExprValue(t *testing.T) {
 		ec.ses = ses
 		ses.txnCompileCtx.execCtx = ec
 		for _, kase := range kases {
-			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1, 0)
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1)
 			cvey.So(err, cvey.ShouldBeNil)
 
 			sv, ok := stmt.(*tree.SetVar)
@@ -480,7 +480,7 @@ func TestGetSimpleExprValue(t *testing.T) {
 		ec.ses = ses
 		ses.txnCompileCtx.execCtx = ec
 		for _, kase := range kases {
-			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1, 0)
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1)
 			cvey.So(err, cvey.ShouldBeNil)
 
 			sv, ok := stmt.(*tree.SetVar)
@@ -603,8 +603,8 @@ func TestGetExprValue(t *testing.T) {
 		binary.LittleEndian.PutUint64(id, 1)
 		ranges.Append(id)
 
-		table.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(&ranges, nil).AnyTimes()
-		table.EXPECT().NewReader(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, moerr.NewInvalidInputNoCtx("new reader failed")).AnyTimes()
+		table.EXPECT().Ranges(gomock.Any(), gomock.Any(), gomock.Any()).Return(&ranges, nil).AnyTimes()
+		table.EXPECT().NewReader(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, moerr.NewInvalidInputNoCtx("new reader failed")).AnyTimes()
 
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()
 		eng.EXPECT().Hints().Return(engine.Hints{
@@ -656,7 +656,7 @@ func TestGetExprValue(t *testing.T) {
 		ses.txnCompileCtx.execCtx = ec
 		for _, kase := range kases {
 			fmt.Println("++++>", kase.sql)
-			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1, 0)
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1)
 			cvey.So(err, cvey.ShouldBeNil)
 
 			sv, ok := stmt.(*tree.SetVar)
@@ -764,7 +764,7 @@ func TestGetExprValue(t *testing.T) {
 		ec.reqCtx = ctx
 		ses.txnCompileCtx.execCtx = ec
 		for _, kase := range kases {
-			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1, 0)
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1)
 			cvey.So(err, cvey.ShouldBeNil)
 
 			sv, ok := stmt.(*tree.SetVar)
@@ -1246,6 +1246,8 @@ func Test_convertRowsIntoBatch(t *testing.T) {
 				row[j] = types.Datetime(0)
 			case defines.MYSQL_TYPE_TIMESTAMP:
 				row[j] = types.Timestamp(0)
+			case defines.MYSQL_TYPE_ENUM:
+				row[j] = types.Enum(1)
 			default:
 				assert.True(t, false)
 			}
@@ -1282,9 +1284,18 @@ func Test_convertRowsIntoBatch(t *testing.T) {
 			case types.T_timestamp:
 				assert.Equal(t, mrs.Data[i][j].(types.Timestamp).String2(time.UTC, 0), row[j])
 				continue
+			case types.T_enum:
+				assert.Equal(t, mrs.Data[i][j].(types.Enum), row[j])
+				continue
 			}
 			assert.Equal(t, mrs.Data[i][j], row[j])
 		}
 
 	}
+}
+
+func Test_issue3482(t *testing.T) {
+	s := issue3482SqlPrefix + " "
+	ui := UserInput{sql: s}
+	assert.True(t, ui.isIssue3482Sql())
 }
