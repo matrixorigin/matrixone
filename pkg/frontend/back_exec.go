@@ -865,7 +865,7 @@ func (backSes *backSession) GetUserDefinedVar(name string) (*UserDefinedVar, err
 	return nil, moerr.NewInternalError(context.Background(), "do not support user defined var in background exec")
 }
 
-func (backSes *backSession) GetSessionVar(ctx context.Context, name string) (interface{}, error) {
+func (backSes *backSession) GetSessionSysVar(name string) (interface{}, error) {
 	switch strings.ToLower(name) {
 	case "autocommit":
 		return true, nil
