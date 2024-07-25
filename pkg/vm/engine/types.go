@@ -618,30 +618,6 @@ type Tombstoner interface {
 			deleted *[]int64) (err error),
 	) (left []int32, deleted []int64, err error)
 
-	ApplyUncommitDeltaLoc(
-		ctx context.Context,
-		bid types.Blockid,
-		rowsOffset []int32,
-		apply func(
-			ctx2 context.Context,
-			loc objectio.Location,
-			rowsOffset []int32,
-			left *[]int32,
-			deleted *[]int64) (err error),
-	) (left []int32, deleted []int64, err error)
-
-	ApplyCommitDeltaLoc(
-		ctx context.Context,
-		bid types.Blockid,
-		rowsOffset []int32,
-		apply func(
-			ctx2 context.Context,
-			loc objectio.Location,
-			rowsOffset []int32,
-			left *[]int32,
-			deleted *[]int64) (err error),
-	) (left []int32, deleted []int64, err error)
-
 	Merge(other Tombstoner) error
 }
 
@@ -779,7 +755,7 @@ type Relation interface {
 	// foruth parameter is the payload required by the engine
 	// fifth parameter is data blocks
 	// sixth parameter is transaction offset used to specify the starting position for reading data.
-	//NewReader(context.Context, int, *plan.Expr, []byte, bool, int) ([]Reader, error)
+	NewReader(context.Context, int, *plan.Expr, []byte, bool, int) ([]Reader, error)
 
 	BuildReaders(
 		ctx context.Context,

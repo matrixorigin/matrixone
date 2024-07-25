@@ -2138,8 +2138,12 @@ func (tbl *txnTable) BuildReaders(
 	num int,
 	txnOffset int) ([]engine.Reader, error) {
 	proc := p.(*process.Process)
+	//copy from NewReader.
+	if plan2.IsFalseExpr(expr) {
+		return []engine.Reader{new(emptyReader)}, nil
+	}
 	//relData maybe is nil, indicate that only read data from memory.
-	if relData == nil {
+	if relData == nil || relData.BlkCnt() == 0 {
 		relData = buildRelationDataV1([]*objectio.BlockInfoInProgress{&objectio.EmptyBlockInfoInProgress})
 	}
 	blkCnt := relData.BlkCnt()
