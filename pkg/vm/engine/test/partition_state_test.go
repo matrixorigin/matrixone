@@ -163,7 +163,7 @@ func Test_Append(t *testing.T) {
 
 	t.Logf("Append takes: %s", time.Since(now))
 	expectBlkCnt := (uint32(batchRows)*uint32(cnt)-1)/schema.BlockMaxRows + 1
-	expectObjCnt := 1
+	expectObjCnt := uint32(1)
 
 	{
 		txn, _ := taeEngine.GetDB().StartTxn(nil)
