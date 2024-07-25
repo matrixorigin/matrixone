@@ -525,7 +525,7 @@ func getValueInStr(value any) string {
 	case bytejson.ByteJson:
 		return v.String()
 	case types.Uuid:
-		return v.ToString()
+		return v.String()
 	case types.Decimal64:
 		return v.Format(0)
 	case types.Decimal128:

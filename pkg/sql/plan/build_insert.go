@@ -323,8 +323,9 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	}
 	query.DetectSqls = sqls
 	reduceSinkSinkScanNodes(query)
-	ReCalcQueryStats(builder, query)
-	reCheckifNeedLockWholeTable(builder)
+	builder.tempOptimizeForDML()
+	reCheckifNeedLockWholeTable(builder, stmt.IsRestore)
+
 	return &Plan{
 		Plan: &plan.Plan_Query{
 			Query: query,
@@ -707,7 +708,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 						Expr: &plan.Expr_Lit{
 							Lit: &plan.Literal{
 								Value: &plan.Literal_Sval{
-									Sval: val.ToString(),
+									Sval: val.String(),
 								},
 							},
 						},

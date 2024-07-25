@@ -435,7 +435,7 @@ func getValueFromVector(ctx context.Context, vec *vector.Vector, ses *Session, e
 		return byteJson.String(), nil
 	case types.T_uuid:
 		val := vector.MustFixedCol[types.Uuid](vec)[0]
-		return val.ToString(), nil
+		return val.String(), nil
 	case types.T_date:
 		val := vector.MustFixedCol[types.Date](vec)[0]
 		return val.String(), nil
