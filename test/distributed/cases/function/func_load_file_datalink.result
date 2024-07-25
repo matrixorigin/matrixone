@@ -1,0 +1,19 @@
+select load_file(cast('file://$resources/file_test/normal.txt' as datalink));
+load_file(cast(file:///Users/arjunsunilkumar/GolandProjects/matrixone/test/distributed/resources/file_test/normal.txt as datalink))
+Hello world!
+select load_file(cast('file://$resources/file_test/normal.txt?offset=0&size=3' as datalink));
+load_file(cast(file:///Users/arjunsunilkumar/GolandProjects/matrixone/test/distributed/resources/file_test/normal.txt?offset=0&size=3 as datalink))
+Hel
+create table t1(a int, b datalink);
+insert into t1 values(1, "wrong datalink url");
+unsupported url scheme  is not yet implemented
+insert into t1 values(1, 'file://$resources/file_test/normal.txt?offset=0&size=3');
+insert into t1 values(2, 'file://$resources/file_test/normal.txt');
+select * from t1;
+a    b
+1    file:///Users/arjunsunilkumar/GolandProjects/matrixone/test/distributed/resources/file_test/normal.txt?offset=0&size=3
+2    file:///Users/arjunsunilkumar/GolandProjects/matrixone/test/distributed/resources/file_test/normal.txt
+select a, load_file(b) from t1;
+a    load_file(b)
+1    Hel
+2    Hello world!

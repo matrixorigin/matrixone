@@ -965,10 +965,7 @@ func (t T) IsArrayRelate() bool {
 }
 
 func (t T) IsDatalink() bool {
-	if t == T_datalink {
-		return true
-	}
-	return false
+	return t == T_datalink
 }
 
 // IsDecimal return true if the types.T is decimal64 or decimal128
