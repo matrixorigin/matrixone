@@ -772,7 +772,7 @@ func (l *lockTableAllocator) handleGetBind(
 	resp *pb.Response,
 	cs morpc.ClientSession) {
 	if !l.canGetBind(req.GetBind.ServiceID) {
-		writeResponse(ctx, l.logger, cancel, resp, moerr.NewRetryForCNRollingRestart(), cs)
+		writeResponse(ctx, l.logger, cancel, resp, moerr.NewNewTxnInCNRollingRestart(), cs)
 		return
 	}
 	resp.GetBind.LockTable = l.Get(

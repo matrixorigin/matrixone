@@ -209,7 +209,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch) erro
 	if !cwft.ses.IsBackgroundSession() {
 		cwft.ses.SetPlan(cwft.plan)
 		if ids := isResultQuery(cwft.plan); ids != nil {
-			if err = checkPrivilege(ids, execCtx.reqCtx, cwft.ses.(*Session)); err != nil {
+			if err = checkPrivilege(cwft.ses.GetService(), ids, execCtx.reqCtx, cwft.ses.(*Session)); err != nil {
 				return nil, err
 			}
 		}

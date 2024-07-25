@@ -75,7 +75,7 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 	chit, ctotal := len(cols), len(mixin.tableDef.Cols)
 	v2.TaskSelColumnTotal.Add(float64(ctotal))
 	v2.TaskSelColumnHit.Add(float64(ctotal - chit))
-	blockio.RecordColumnSelectivity(chit, ctotal)
+	blockio.RecordColumnSelectivity(mixin.proc.GetService(), chit, ctotal)
 
 	mixin.columns.seqnums = make([]uint16, len(cols))
 	mixin.columns.colTypes = make([]types.Type, len(cols))
@@ -362,9 +362,9 @@ func (r *blockReader) Read(
 			// always true for now, will optimize this in the future
 			prefetchFile := r.scanType == SMALL || r.scanType == LARGE || r.scanType == NORMAL
 			if filter.Valid && blockInfo.Sorted {
-				err = blockio.BlockPrefetch(r.filterState.seqnums, r.fs, [][]*objectio.BlockInfo{r.infos[0]}, prefetchFile)
+				err = blockio.BlockPrefetch(r.withFilterMixin.proc.GetService(), r.filterState.seqnums, r.fs, [][]*objectio.BlockInfo{r.infos[0]}, prefetchFile)
 			} else {
-				err = blockio.BlockPrefetch(r.columns.seqnums, r.fs, [][]*objectio.BlockInfo{r.infos[0]}, prefetchFile)
+				err = blockio.BlockPrefetch(r.withFilterMixin.proc.GetService(), r.columns.seqnums, r.fs, [][]*objectio.BlockInfo{r.infos[0]}, prefetchFile)
 			}
 			if err != nil {
 				return nil, err
@@ -388,7 +388,7 @@ func (r *blockReader) Read(
 	}
 
 	bat, err = blockio.BlockRead(
-		statsCtx, blockInfo, r.buffer, r.columns.seqnums, r.columns.colTypes, r.ts,
+		statsCtx, r.withFilterMixin.proc.GetService(), blockInfo, r.buffer, r.columns.seqnums, r.columns.colTypes, r.ts,
 		r.filterState.seqnums,
 		r.filterState.colTypes,
 		filter,
@@ -524,7 +524,7 @@ func (r *blockMergeReader) prefetchDeletes() error {
 
 		}
 		delete(r.deletaLocs, name)
-		return blockio.PrefetchWithMerged(pref)
+		return blockio.PrefetchWithMerged(r.withFilterMixin.proc.GetService(), pref)
 	}
 	return nil
 }
@@ -785,7 +785,6 @@ func (r *readerInProgress) Read(
 ) (bat *batch.Batch, err error) {
 
 	start := time.Now()
-	status := engine.InMem
 	defer func() {
 		if r.columns.extraRowIdAdded && bat != nil {
 			rowIDVec := bat.Vecs[r.columns.rowIdColIdx]
@@ -793,20 +792,6 @@ func (r *readerInProgress) Read(
 			bat.Vecs = append(bat.Vecs[:r.columns.rowIdColIdx], bat.Vecs[r.columns.rowIdColIdx+1:]...)
 			bat.Attrs = bat.Attrs[1:]
 		}
-		status++
-		//if r.tableDef.Name == "bugt" {
-		//	logutil.Info("xxxx Reader.Read",
-		//		zap.String("txn", r.proc.GetTxnOperator().Txn().DebugString()),
-		//		zap.String("table", r.tableDef.Name),
-		//		zap.Int("status", int(status)),
-		//		zap.String("read batch rowCnt", func() string {
-		//			if bat == nil {
-		//				return "nil"
-		//			}
-		//			return strconv.Itoa(bat.RowCount())
-		//		}()))
-		//}
-
 		v2.TxnBlockReaderDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
@@ -860,14 +845,11 @@ func (r *readerInProgress) Read(
 		return nil, err
 	}
 	if state == engine.End {
-		status = engine.End
 		return nil, nil
 	}
 	if state == engine.InMem {
-		status = engine.InMem
 		return bat, nil
 	}
-	status = engine.Persisted
 	//read block
 	filter := r.withFilterMixin.filterState.filter
 
@@ -884,7 +866,7 @@ func (r *readerInProgress) Read(
 	}
 
 	bat, err = blockio.BlockDataRead(
-		statsCtx, blkInfo, r.source, r.columns.seqnums, r.columns.colTypes, r.ts,
+		statsCtx, r.withFilterMixin.proc.GetService(), blkInfo, r.source, r.columns.seqnums, r.columns.colTypes, r.ts,
 		r.filterState.seqnums,
 		r.filterState.colTypes,
 		filter,

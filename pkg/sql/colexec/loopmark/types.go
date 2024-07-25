@@ -46,10 +46,11 @@ type container struct {
 }
 
 type LoopMark struct {
-	ctr    *container
-	Cond   *plan.Expr
-	Typs   []types.Type
-	Result []int32
+	ctr        *container
+	Cond       *plan.Expr
+	Typs       []types.Type
+	Result     []int32
+	JoinMapTag int32
 	vm.OperatorBase
 }
 

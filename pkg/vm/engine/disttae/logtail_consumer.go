@@ -1832,6 +1832,7 @@ func consumeCkpsAndLogTail(
 	var closeCBs []func()
 	if entries, closeCBs, err = taeLogtail.LoadCheckpointEntries(
 		ctx,
+		engine.service,
 		lt.CkpLocation,
 		tableId, tableName,
 		databaseId, "", engine.mp, engine.fs); err != nil {

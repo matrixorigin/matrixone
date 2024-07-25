@@ -16,6 +16,7 @@ package blockio
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -46,6 +47,7 @@ type fetchParams struct {
 }
 
 func NewObjectReader(
+	sid string,
 	service fileservice.FileService,
 	key objectio.Location,
 	opts ...objectio.ReaderOptionFunc,
@@ -68,11 +70,15 @@ func NewObjectReader(
 	}
 	return &BlockReader{
 		reader: reader,
-		aio:    pipeline,
+		aio:    MustGetPipeline(sid),
 	}, nil
 }
 
-func NewFileReader(service fileservice.FileService, name string) (*BlockReader, error) {
+func NewFileReader(
+	sid string,
+	service fileservice.FileService,
+	name string,
+) (*BlockReader, error) {
 	reader, err := objectio.NewObjectReaderWithStr(
 		name,
 		service,
@@ -82,7 +88,7 @@ func NewFileReader(service fileservice.FileService, name string) (*BlockReader, 
 	}
 	return &BlockReader{
 		reader: reader,
-		aio:    pipeline,
+		aio:    MustGetPipeline(sid),
 	}, nil
 }
 
@@ -341,38 +347,61 @@ func (r *BlockReader) GetObjectReader() *objectio.ObjectReader {
 }
 
 // The caller has merged the block information that needs to be prefetched
-func PrefetchWithMerged(params PrefetchParams) error {
-	return pipeline.Prefetch(params)
+func PrefetchWithMerged(
+	sid string,
+	params PrefetchParams,
+) error {
+	return MustGetPipeline(sid).Prefetch(params)
 }
 
-func Prefetch(idxes []uint16, ids []uint16, service fileservice.FileService, key objectio.Location) error {
+func Prefetch(
+	sid string,
+	idxes []uint16,
+	ids []uint16,
+	service fileservice.FileService,
+	key objectio.Location,
+) error {
 	params, err := BuildPrefetchParams(service, key)
 	if err != nil {
 		return err
 	}
 	params.AddBlock(idxes, ids)
-	return pipeline.Prefetch(params)
+	return MustGetPipeline(sid).Prefetch(params)
 }
 
-func PrefetchTombstone(idxes []uint16, ids []uint16, service fileservice.FileService, key objectio.Location) error {
+func PrefetchTombstone(
+	sid string,
+	idxes []uint16,
+	ids []uint16,
+	service fileservice.FileService,
+	key objectio.Location,
+) error {
 	params, err := BuildPrefetchParams(service, key)
 	if err != nil {
 		return err
 	}
 	params.AddBlockWithType(idxes, ids, uint16(objectio.SchemaTombstone))
-	return pipeline.Prefetch(params)
+	return MustGetPipeline(sid).Prefetch(params)
 }
 
-func PrefetchMeta(service fileservice.FileService, key objectio.Location) error {
+func PrefetchMeta(
+	sid string,
+	service fileservice.FileService,
+	key objectio.Location,
+) error {
 	params, err := BuildPrefetchParams(service, key)
 	if err != nil {
 		return err
 	}
-	return pipeline.Prefetch(params)
+	return MustGetPipeline(sid).Prefetch(params)
 }
 
-func PrefetchFile(service fileservice.FileService, name string) error {
-	reader, err := NewFileReader(service, name)
+func PrefetchFile(
+	sid string,
+	service fileservice.FileService,
+	name string,
+) error {
+	reader, err := NewFileReader(sid, service, name)
 	if err != nil {
 		return err
 	}
@@ -388,5 +417,5 @@ func PrefetchFile(service fileservice.FileService, name string) error {
 		}
 		params.AddBlock(idxes, []uint16{bs[i].GetID()})
 	}
-	return PrefetchWithMerged(params)
+	return PrefetchWithMerged(sid, params)
 }
