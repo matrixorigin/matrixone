@@ -32,6 +32,9 @@ func (c *Compile) InitPipelineContextToExecuteQuery() {
 	// build pipeline context.
 	c.proc.Ctx, c.proc.Cancel = context.WithCancel(queryContext)
 	for _, pipeline := range c.scope {
+		if pipeline.Proc == nil {
+			continue
+		}
 		pipeline.buildContextFromParentCtx(c.proc.Ctx)
 	}
 }
