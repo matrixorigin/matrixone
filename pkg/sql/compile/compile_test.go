@@ -157,7 +157,7 @@ func TestCompile(t *testing.T) {
 		err := c.Compile(ctx, tc.pn, testPrint)
 		require.NoError(t, err)
 		c.getAffectedRows()
-		_, err = c.Run()
+		_, err = c.Run(0)
 		require.NoError(t, err)
 		// Enable memory check
 		tc.proc.FreeVectors()
@@ -192,7 +192,7 @@ func TestCompileWithFaults(t *testing.T) {
 	err = c.Compile(ctx, tc.pn, testPrint)
 	require.NoError(t, err)
 	c.getAffectedRows()
-	_, err = c.Run()
+	_, err = c.Run(0)
 	require.NoError(t, err)
 }
 

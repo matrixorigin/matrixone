@@ -46,10 +46,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const (
-	DefaultRpcBufferSize = 1 << 10
-)
-
 type (
 	TxnOperator = client.TxnOperator
 	TxnClient   = client.TxnClient
@@ -57,8 +53,11 @@ type (
 )
 
 type ComputationRunner interface {
+	// todo: remove the ts next day, that's useless.
 	Run(ts uint64) (*util.RunResult, error)
 }
+
+var _ ComputationRunner = &compile.Compile{}
 
 // ComputationWrapper is the wrapper of the computation
 type ComputationWrapper interface {

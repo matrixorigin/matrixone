@@ -120,7 +120,7 @@ func (c *Compile) Compile(
 }
 
 // Run executes the pipeline and returns the result.
-func (c *Compile) Run() (queryResult *util2.RunResult, err error) {
+func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	// the runC is the final object for executing the query.
 	// If a rerun occurs, it may differ from the original c, so we need to release it.
 	var runC = c

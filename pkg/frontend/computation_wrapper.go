@@ -296,7 +296,7 @@ func (cwft *TxnComputationWrapper) GetUUID() []byte {
 }
 
 func (cwft *TxnComputationWrapper) Run(ts uint64) (*util2.RunResult, error) {
-	runResult, err := cwft.compile.Run()
+	runResult, err := cwft.compile.Run(ts)
 	cwft.compile.Release()
 	cwft.runResult = runResult
 	cwft.compile = nil
@@ -400,7 +400,7 @@ func createCompile(
 	if len(getGlobalPu().ClusterNodes) > 0 {
 		addr = getGlobalPu().ClusterNodes[0].Addr
 	}
-	proc.Ctx = execCtx.reqCtx
+	proc.Base.GetContextBase().ReplaceTopCtx(execCtx.reqCtx)
 	proc.Base.FileService = getGlobalPu().FileService
 
 	var tenant string
