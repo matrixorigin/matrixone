@@ -288,13 +288,7 @@ func (bat *Batch) Dup(mp *mpool.MPool) (*Batch, error) {
 	//		}
 	//	}
 	//}
-	// if bat.AuxData != nil {
-	// 	if m, ok := bat.AuxData.(*hashmap.JoinMap); ok {
-	// rbat.AuxData = &hashmap.JoinMap{
-	// 	cnt: m
-	// }
-	// 	}
-	// }
+
 	return rbat, nil
 }
 

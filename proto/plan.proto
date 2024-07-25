@@ -1464,6 +1464,10 @@ message LockTables {
 
 message UnLockTables{}
 
+message MetadataScanInfos {
+	repeated MetadataScanInfo infos = 1;
+}
+
 message MetadataScanInfo {
 	enum MetadataScanInfoType {
 		COL_NAME      = 0;
