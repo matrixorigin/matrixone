@@ -16,14 +16,11 @@ package disttae
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"go.uber.org/zap"
-
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -33,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 func newTxnTableWithItem(
@@ -120,7 +118,7 @@ func (tbl *txnTableDelegate) Stats(
 		)
 	}
 
-	stats := plan2.NewStatsInfo()
+	var stats pb.StatsInfo
 	err := tbl.forwardRead(
 		ctx,
 		shardservice.ReadStats,
@@ -138,7 +136,7 @@ func (tbl *txnTableDelegate) Stats(
 	if err != nil {
 		return nil, err
 	}
-	return stats, nil
+	return &stats, nil
 }
 
 func (tbl *txnTableDelegate) Rows(
@@ -248,7 +246,7 @@ func (tbl *txnTableDelegate) GetColumMetadataScanInfo(
 		)
 	}
 
-	var m *plan.MetadataScanInfos
+	var m plan.MetadataScanInfos
 	err := tbl.forwardRead(
 		ctx,
 		shardservice.ReadGetColumMetadataScanInfo,
@@ -319,7 +317,7 @@ func (tbl *txnTableDelegate) NewReader(
 		shardservice.ReadReader,
 		func(param *shard.ReadParam) {
 			param.ReaderParam.Num = int32(num)
-			param.ReaderParam.Expr = expr
+			param.ReaderParam.Expr = *expr
 			param.ReaderParam.Ranges = ranges
 			param.ReaderParam.OrderedScan = orderedScan
 			param.ReaderParam.TxnOffset = int32(txnOffset)
@@ -401,7 +399,7 @@ func (tbl *txnTableDelegate) MergeObjects(
 		)
 	}
 
-	var entry *api.MergeCommitEntry
+	var entry api.MergeCommitEntry
 	err := tbl.forwardRead(
 		ctx,
 		shardservice.ReadMergeObjects,
@@ -425,7 +423,7 @@ func (tbl *txnTableDelegate) MergeObjects(
 	if err != nil {
 		return nil, err
 	}
-	return entry, nil
+	return &entry, nil
 }
 
 func (tbl *txnTableDelegate) TableDefs(

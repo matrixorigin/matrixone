@@ -263,7 +263,7 @@ message KeyParam {
 
 message ReaderParam {
     int32 num        = 1;
-    plan.Expr expr   = 2;
+    plan.Expr expr   = 2 [(gogoproto.nullable) = false];
     bytes ranges     = 3;
     bool orderedScan = 4;
     int32 txnOffset  = 5;

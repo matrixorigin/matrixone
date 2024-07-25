@@ -197,7 +197,7 @@ func HandleShardingReadGetColumMetadataScanInfo(
 		return nil, err
 	}
 
-	v := &plan.MetadataScanInfos{
+	v := plan.MetadataScanInfos{
 		Infos: infos,
 	}
 	bys, err := v.Marshal()
@@ -228,7 +228,7 @@ func HandleShardingReadReader(
 	_, err = tbl.NewReader(
 		ctx,
 		int(param.ReaderParam.Num),
-		param.ReaderParam.Expr,
+		&param.ReaderParam.Expr,
 		param.ReaderParam.Ranges,
 		param.ReaderParam.OrderedScan,
 		int(param.ReaderParam.TxnOffset),
