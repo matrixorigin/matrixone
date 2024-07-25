@@ -4591,7 +4591,7 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 						rtnErr = finishTxn(ctx, bh, rtnErr)
 						if rtnErr == nil {
 							u := &function.NonSqlUdfBody{}
-							if json.Unmarshal([]byte(bodyStr), u) == nil && u.Imppkg/frontend/mysql_cmd_executor.goort {
+							if json.Unmarshal([]byte(bodyStr), u) == nil && u.Import {
 								rm(u.Body)
 							}
 						}
