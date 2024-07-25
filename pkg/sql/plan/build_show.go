@@ -886,12 +886,6 @@ func buildShowStages(stmt *tree.ShowStages, ctx CompilerContext) (*Plan, error) 
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 
-func buildShowCDC(stmt *tree.ShowCDC, ctx CompilerContext) (*Plan, error) {
-	ddlType := plan.DataDefinition_SHOW_TARGET
-	sql := "SELECT 'TASK1' as `TASK_NAME`, 'mysql://dump:111@127.0.0.1:6001' as `SOURCE_URI`, 'mysql://root:123456@127.0.0.1:3306' as `SINK_URI`, 'loading' as `STATE`, '2024-05-10 02:06:08.01635' as `CHECKPOINT`"
-	return returnByRewriteSQL(ctx, sql, ddlType)
-}
-
 func buildShowSnapShots(stmt *tree.ShowSnapShots, ctx CompilerContext) (*Plan, error) {
 	ddlType := plan.DataDefinition_SHOW_TARGET
 	sql := fmt.Sprintf("SELECT sname as `SNAPSHOT_NAME`, CAST_NANO_TO_TIMESTAMP(ts) as `TIMESTAMP`,  level as `SNAPSHOT_LEVEL`, account_name as `ACCOUNT_NAME`, database_name as `DATABASE_NAME`, table_name as `TABLE_NAME` FROM %s.mo_snapshots ORDER BY ts DESC", MO_CATALOG_DB_NAME)

@@ -459,7 +459,7 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 	case *tree.DropCDC:
 	case *tree.RestartCDC:
 	case *tree.ResumeCDC:
-
+	case *tree.ShowCDC:
 	}
 	return
 }
