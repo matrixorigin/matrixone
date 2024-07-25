@@ -2264,7 +2264,7 @@ func executeStmtWithWorkspace(ses FeSession,
 		return nil
 	}
 
-	autocommit, err = autocommitValue(execCtx.reqCtx, ses)
+	autocommit, err = autocommitValue(ses)
 	if err != nil {
 		return err
 	}
