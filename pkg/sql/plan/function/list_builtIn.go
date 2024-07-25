@@ -2898,9 +2898,9 @@ var supportedMathBuiltIns = []FuncNew{
 		},
 	},
 
-	// function `chunk`
+	// function `embedding`
 	{
-		functionId: CHUNK,
+		functionId: EMBEDDING,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
