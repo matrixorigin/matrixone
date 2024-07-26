@@ -41,7 +41,7 @@ func (loopMark *LoopMark) Prepare(proc *process.Process) error {
 	var err error
 
 	loopMark.ctr = new(container)
-	loopMark.ctr.InitReceiver(proc, false)
+	loopMark.ctr.InitReceiver(proc, true)
 	loopMark.ctr.bat = batch.NewWithSize(len(loopMark.Typs))
 	for i, typ := range loopMark.Typs {
 		loopMark.ctr.bat.Vecs[i] = proc.GetVector(typ)

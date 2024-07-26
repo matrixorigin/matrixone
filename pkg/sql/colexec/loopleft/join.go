@@ -39,7 +39,7 @@ func (loopLeft *LoopLeft) Prepare(proc *process.Process) error {
 	var err error
 
 	loopLeft.ctr = new(container)
-	loopLeft.ctr.InitReceiver(proc, false)
+	loopLeft.ctr.InitReceiver(proc, true)
 	loopLeft.ctr.bat = batch.NewWithSize(len(loopLeft.Typs))
 	for i, typ := range loopLeft.Typs {
 		loopLeft.ctr.bat.Vecs[i] = proc.GetVector(typ)

@@ -39,7 +39,7 @@ func (loopSemi *LoopSemi) Prepare(proc *process.Process) error {
 	var err error
 
 	loopSemi.ctr = new(container)
-	loopSemi.ctr.InitReceiver(proc, false)
+	loopSemi.ctr.InitReceiver(proc, true)
 
 	if loopSemi.Cond != nil {
 		loopSemi.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopSemi.Cond)

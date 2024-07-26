@@ -39,7 +39,7 @@ func (singleJoin *SingleJoin) OpType() vm.OpType {
 
 func (singleJoin *SingleJoin) Prepare(proc *process.Process) (err error) {
 	singleJoin.ctr = new(container)
-	singleJoin.ctr.InitReceiver(proc, false)
+	singleJoin.ctr.InitReceiver(proc, true)
 	singleJoin.ctr.vecs = make([]*vector.Vector, len(singleJoin.Conditions[0]))
 
 	singleJoin.ctr.evecs = make([]evalVector, len(singleJoin.Conditions[0]))

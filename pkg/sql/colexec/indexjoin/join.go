@@ -37,7 +37,7 @@ func (indexJoin *IndexJoin) OpType() vm.OpType {
 func (indexJoin *IndexJoin) Prepare(proc *process.Process) (err error) {
 	ap := indexJoin
 	ap.ctr = new(container)
-	ap.ctr.InitReceiver(proc, false)
+	ap.ctr.InitReceiver(proc, true)
 	return err
 }
 

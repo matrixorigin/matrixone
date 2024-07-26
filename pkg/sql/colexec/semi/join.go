@@ -38,7 +38,7 @@ func (semiJoin *SemiJoin) OpType() vm.OpType {
 
 func (semiJoin *SemiJoin) Prepare(proc *process.Process) (err error) {
 	semiJoin.ctr = new(container)
-	semiJoin.ctr.InitReceiver(proc, false)
+	semiJoin.ctr.InitReceiver(proc, true)
 	semiJoin.ctr.vecs = make([]*vector.Vector, len(semiJoin.Conditions[0]))
 
 	semiJoin.ctr.evecs = make([]evalVector, len(semiJoin.Conditions[0]))

@@ -42,7 +42,7 @@ func (rightJoin *RightJoin) OpType() vm.OpType {
 
 func (rightJoin *RightJoin) Prepare(proc *process.Process) (err error) {
 	rightJoin.ctr = new(container)
-	rightJoin.ctr.InitReceiver(proc, false)
+	rightJoin.ctr.InitReceiver(proc, true)
 	rightJoin.ctr.vecs = make([]*vector.Vector, len(rightJoin.Conditions[0]))
 
 	rightJoin.ctr.evecs = make([]evalVector, len(rightJoin.Conditions[0]))

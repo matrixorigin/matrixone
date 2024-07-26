@@ -39,7 +39,7 @@ func (innerJoin *InnerJoin) OpType() vm.OpType {
 
 func (innerJoin *InnerJoin) Prepare(proc *process.Process) (err error) {
 	innerJoin.ctr = new(container)
-	innerJoin.ctr.InitReceiver(proc, false)
+	innerJoin.ctr.InitReceiver(proc, true)
 	innerJoin.ctr.vecs = make([]*vector.Vector, len(innerJoin.Conditions[0]))
 	innerJoin.ctr.evecs = make([]evalVector, len(innerJoin.Conditions[0]))
 	for i := range innerJoin.ctr.evecs {

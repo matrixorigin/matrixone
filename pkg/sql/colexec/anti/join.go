@@ -38,7 +38,7 @@ func (antiJoin *AntiJoin) OpType() vm.OpType {
 
 func (antiJoin *AntiJoin) Prepare(proc *process.Process) (err error) {
 	antiJoin.ctr = new(container)
-	antiJoin.ctr.InitReceiver(proc, false)
+	antiJoin.ctr.InitReceiver(proc, true)
 	antiJoin.ctr.vecs = make([]*vector.Vector, len(antiJoin.Conditions[0]))
 	antiJoin.ctr.executorForVecs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, antiJoin.Conditions[0])
 	if err != nil {

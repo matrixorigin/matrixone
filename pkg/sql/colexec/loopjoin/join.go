@@ -39,7 +39,7 @@ func (loopJoin *LoopJoin) Prepare(proc *process.Process) error {
 	var err error
 
 	loopJoin.ctr = new(container)
-	loopJoin.ctr.InitReceiver(proc, false)
+	loopJoin.ctr.InitReceiver(proc, true)
 
 	if loopJoin.Cond != nil {
 		loopJoin.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopJoin.Cond)
