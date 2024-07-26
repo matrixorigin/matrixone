@@ -670,6 +670,30 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (e
 		return err
 	}
 
+	if len(srcAccountName) > 0 {
+		fromAccount := string(stmt.SrcAccountName)
+		if len(fromAccount) == 0 {
+			fromAccount = pitr.accountName
+		}
+		fromAccountId := pitr.accountId
+		// check account exists or not
+		var accountExist bool
+		if accountExist, err = doCheckAccountExistsInPitrRestore(ctx, ses.GetService(), bh, pitrName, ts, fromAccount, uint32(fromAccountId)); err != nil {
+			return err
+		}
+		if !accountExist {
+			return moerr.NewInternalError(ctx, "account %s does not exist at timestamp %d", tenantInfo.GetTenant(), ts)
+		}
+		if srcAccountName == pitr.accountName {
+			// restore account to self
+
+		} else {
+			// restore account to new account
+
+		}
+
+	}
+
 	restoreLevel = stmt.Level
 
 	// restore self account
@@ -1453,6 +1477,21 @@ func checkPitrValidOrNot(pitrRecord *pitrRecord, stmt *tree.RestorePitr, tenantI
 			}
 			if pitrRecord.level == tree.PITRLEVELACCOUNT.String() && pitrRecord.accountId != uint64(tenantInfo.TenantID) {
 				return moerr.NewInternalErrorNoCtx("pitr %s is not allowed to restore account %v", pitrRecord.pitrName, tenantInfo.GetTenant())
+			}
+		} else {
+			// sys restore other account's pitr
+			// if the pitr level is cluster, the scource account can not be empty
+			if pitrRecord.level == tree.PITRLEVELCLUSTER.String() && len(stmt.SrcAccountName) == 0 {
+				return moerr.NewInternalErrorNoCtx("source account %s can not be empty when restore cluster level pitr %s", string(stmt.AccountName), pitrRecord.pitrName)
+			}
+			// if the pitr level is account, the scource account must be empty
+			if pitrRecord.level == tree.PITRLEVELACCOUNT.String() && len(stmt.SrcAccountName) > 0 {
+				return moerr.NewInternalErrorNoCtx("source account %s must be empty when restore account level pitr %s", string(stmt.AccountName), pitrRecord.pitrName)
+			}
+
+			// if the pitr level is database or table, return err
+			if pitrRecord.level == tree.PITRLEVELDATABASE.String() || pitrRecord.level == tree.PITRLEVELTABLE.String() {
+				return moerr.NewInternalErrorNoCtx("can not restore database or table level pitr %s with source account %s", pitrRecord.pitrName, string(stmt.AccountName))
 			}
 		}
 	case tree.RESTORELEVELDATABASE:
