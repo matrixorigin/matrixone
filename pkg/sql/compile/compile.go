@@ -2051,7 +2051,7 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	n := s.DataSource.node
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
-		attrs[j] = col.Name
+		attrs[j] = col.GetOriginCaseName()
 	}
 
 	//-----------------------------------------------------------------------------------------------------
