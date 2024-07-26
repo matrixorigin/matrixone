@@ -24,6 +24,7 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
+	"go.uber.org/zap"
 )
 
 type driverAppender struct {
@@ -123,7 +124,10 @@ func logSlowAppend() func() {
 	return func() {
 		elapsed := time.Since(start)
 		if elapsed >= slowAppend {
-			logutil.Warnf("append to logservice took %s", elapsed)
+			logutil.Warn(
+				"SLOW-LOG",
+				zap.Duration("append-wal", elapsed),
+			)
 		}
 	}
 }

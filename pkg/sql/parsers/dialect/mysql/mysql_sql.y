@@ -258,6 +258,7 @@ import (
     fillMode tree.FillMode
 
     snapshotObject tree.ObjectInfo
+    allCDCOption   *tree.AllOrNotCDC
 
 }
 
@@ -478,6 +479,9 @@ import (
 // PITR
 %token <str> PITR
 
+// CDC
+%token <str> CDC
+
 %type <statement> stmt block_stmt block_type_stmt normal_stmt
 %type <statements> stmt_list stmt_list_return
 %type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt truncate_table_stmt alter_sequence_stmt upgrade_stmt
@@ -511,6 +515,7 @@ import (
 %type <statement> load_extension_stmt
 %type <statement> kill_stmt
 %type <statement> backup_stmt snapshot_restore_stmt
+%type <statement> create_cdc_stmt show_cdc_stmt pause_cdc_stmt drop_cdc_stmt resume_cdc_stmt restart_cdc_stmt
 %type <rowsExprs> row_constructor_list
 %type <exprs>  row_constructor
 %type <exportParm> export_data_param_opt
@@ -620,7 +625,7 @@ import (
 %type <expr> sample_function_expr
 
 %type <unresolvedName> column_name column_name_unresolved normal_ident
-%type <strs> enum_values force_quote_opt force_quote_list infile_or_s3_param infile_or_s3_params credentialsparams credentialsparam
+%type <strs> enum_values force_quote_opt force_quote_list infile_or_s3_param infile_or_s3_params credentialsparams credentialsparam create_cdc_opt create_cdc_opts
 %type <str> charset_keyword db_name db_name_opt
 %type <str> backup_type_opt backup_timestamp_opt
 %type <str> not_keyword func_not_keyword
@@ -777,6 +782,7 @@ import (
 %type <userIdentified> user_identified user_identified_opt
 %type <accountRole> default_role_opt
 %type <snapshotObject> snapshot_object_opt
+%type <allCDCOption> all_cdc_opt
 
 %type <indexHintType> index_hint_type
 %type <indexHintScope> index_hint_scope
@@ -920,6 +926,9 @@ normal_stmt:
 |   backup_stmt
 |   snapshot_restore_stmt
 |   restore_pitr_stmt
+|   pause_cdc_stmt
+|   resume_cdc_stmt
+|   restart_cdc_stmt
 
 
 backup_stmt:
@@ -964,7 +973,96 @@ backup_timestamp_opt:
         $$ = $2
     }
 
+create_cdc_stmt:
+    CREATE CDC not_exists_opt STRING STRING STRING STRING STRING '{' create_cdc_opts '}'
+    {
+        $$ = &tree.CreateCDC{
+             		IfNotExists: $3,
+             		TaskName:    $4,
+             		SourceUri:   $5,
+             		SinkType:    $6,
+             		SinkUri:     $7,
+             		Tables:      $8,
+             		Option:      $10,
+             	}
+    }
 
+create_cdc_opts:
+    create_cdc_opt
+    {
+        $$ = $1
+    }
+|   create_cdc_opts ',' create_cdc_opt
+    {
+        $$ = append($1, $3...)
+    }
+create_cdc_opt:
+    {
+        $$ = []string{}
+    }
+|   STRING '=' STRING
+    {
+        $$ = append($$, $1)
+        $$ = append($$, $3)
+    }
+
+show_cdc_stmt:
+    SHOW CDC STRING all_cdc_opt
+    {
+        $$ = &tree.ShowCDC{
+                    SourceUri:   $3,
+                    Option:      $4,
+        }
+    }
+
+pause_cdc_stmt:
+    PAUSE CDC STRING all_cdc_opt
+    {
+        $$ = &tree.PauseCDC{
+                    SourceUri:   $3,
+                    Option:      $4,
+        }
+    }
+
+drop_cdc_stmt:
+    DROP CDC STRING all_cdc_opt
+    {
+        $$ = tree.NewDropCDC($3, $4)
+    }
+
+all_cdc_opt:
+    ALL
+    {
+        $$ = &tree.AllOrNotCDC{
+                    All: true,
+                    TaskName: "",
+        }
+    }
+|   TASK STRING
+    {
+        $$ = &tree.AllOrNotCDC{
+            All: false,
+            TaskName: $2,
+        }
+    }
+
+resume_cdc_stmt:
+    RESUME CDC STRING TASK STRING
+    {
+        $$ = &tree.ResumeCDC{
+                    SourceUri:   $3,
+                    TaskName:    $5,
+        }
+    }
+
+restart_cdc_stmt:
+    RESUME CDC STRING TASK STRING STRING
+    {
+        $$ = &tree.RestartCDC{
+                    SourceUri:   $3,
+                    TaskName:    $5,
+        }
+    }
 
 create_snapshot_stmt:
     CREATE SNAPSHOT not_exists_opt ident FOR snapshot_object_opt
@@ -3794,6 +3892,7 @@ show_stmt:
 |   show_connectors_stmt
 |   show_snapshots_stmt
 |   show_pitr_stmt
+|   show_cdc_stmt
 
 show_collation_stmt:
     SHOW COLLATION like_opt where_expression_opt
@@ -4294,6 +4393,7 @@ drop_ddl_stmt:
 |   drop_connector_stmt
 |   drop_snapshot_stmt
 |   drop_pitr_stmt
+|   drop_cdc_stmt
 
 drop_sequence_stmt:
     DROP SEQUENCE exists_opt table_name_list
@@ -5910,6 +6010,7 @@ create_stmt:
 |   create_stage_stmt
 |   create_snapshot_stmt
 |   create_pitr_stmt
+|   create_cdc_stmt
 
 create_ddl_stmt:
     create_table_stmt

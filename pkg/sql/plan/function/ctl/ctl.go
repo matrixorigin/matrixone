@@ -96,10 +96,13 @@ func MoCtl(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 	if err != nil {
 		return err
 	}
-	if command == InspectMethod || command == MergeObjectsMethod {
+	if command == InspectMethod {
 		obj := res.Data.([]any)[0].(*db.InspectResp)
 		err = rs.AppendBytes([]byte(obj.ConsoleString()), false)
 		return err
+	}
+	if command == MergeObjectsMethod {
+		return rs.AppendBytes(res.Data.([]byte), false)
 	}
 	err = rs.AppendBytes(json.Pretty(res), false)
 	return err

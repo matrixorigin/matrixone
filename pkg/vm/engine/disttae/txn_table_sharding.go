@@ -16,11 +16,11 @@ package disttae
 
 import (
 	"context"
-
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 func newTxnTableWithItem(
@@ -117,8 +118,25 @@ func (tbl *txnTableDelegate) Stats(
 		)
 	}
 
-	// TODO: forward
-	return nil, nil
+	var stats pb.StatsInfo
+	err := tbl.forwardRead(
+		ctx,
+		shardservice.ReadStats,
+		func(param *shard.ReadParam) {
+			param.StatsParam.Sync = sync
+		},
+		func(resp []byte) {
+			err := stats.Unmarshal(resp)
+			if err != nil {
+				panic(err)
+			}
+			// TODO: hash shard need to merge all shard in future
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &stats, nil
 }
 
 func (tbl *txnTableDelegate) Rows(
@@ -186,8 +204,35 @@ func (tbl *txnTableDelegate) Ranges(
 		)
 	}
 
-	// TODO: forward
-	return nil, nil
+	var rs []engine.Ranges
+
+	err := tbl.forwardRead(
+		ctx,
+		shardservice.ReadRanges,
+		func(param *shard.ReadParam) {
+			param.RangesParam.Exprs = exprs
+			param.RangesParam.TxnOffset = int32(n)
+		},
+		func(resp []byte) {
+			b := objectio.BlockInfoSlice(resp)
+			rs = append(rs, &b)
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	var ranges engine.Ranges
+	for i, subRanges := range rs {
+		blkSlice := subRanges.(*objectio.BlockInfoSlice)
+		for j := 1; j < subRanges.Len(); j++ {
+			blkInfo := blkSlice.Get(j)
+			blkInfo.PartitionNum = i
+			ranges.Append(blkSlice.GetBytes(j))
+		}
+	}
+
+	return ranges, nil
 }
 
 func (tbl *txnTableDelegate) GetColumMetadataScanInfo(
@@ -201,8 +246,25 @@ func (tbl *txnTableDelegate) GetColumMetadataScanInfo(
 		)
 	}
 
-	// TODO: forward
-	return nil, nil
+	var m plan.MetadataScanInfos
+	err := tbl.forwardRead(
+		ctx,
+		shardservice.ReadGetColumMetadataScanInfo,
+		func(param *shard.ReadParam) {
+			param.GetColumMetadataScanInfoParam.ColumnName = name
+		},
+		func(resp []byte) {
+			err := m.Unmarshal(resp)
+			if err != nil {
+				panic(err)
+			}
+			// TODO: hash shard need to merge all shard in future
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	return m.Infos, nil
 }
 
 func (tbl *txnTableDelegate) ApproxObjectsNum(
@@ -214,8 +276,21 @@ func (tbl *txnTableDelegate) ApproxObjectsNum(
 		)
 	}
 
-	// TODO: forward
-	return 0
+	num := 0
+	err := tbl.forwardRead(
+		ctx,
+		shardservice.ReadApproxObjectsNum,
+		func(param *shard.ReadParam) {},
+		func(resp []byte) {
+			num += buf.Byte2Int(resp)
+		},
+	)
+	if err != nil {
+		logutil.Info("approx objects num err",
+			zap.Error(err))
+		return 0
+	}
+	return num
 }
 
 func (tbl *txnTableDelegate) NewReader(
@@ -237,7 +312,24 @@ func (tbl *txnTableDelegate) NewReader(
 		)
 	}
 
-	// forward
+	err := tbl.forwardRead(
+		ctx,
+		shardservice.ReadReader,
+		func(param *shard.ReadParam) {
+			param.ReaderParam.Num = int32(num)
+			param.ReaderParam.Expr = *expr
+			param.ReaderParam.Ranges = ranges
+			param.ReaderParam.OrderedScan = orderedScan
+			param.ReaderParam.TxnOffset = int32(txnOffset)
+		},
+		func(resp []byte) {
+			// TODO:
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	// TODO:
 	return nil, nil
 }
 
@@ -256,8 +348,40 @@ func (tbl *txnTableDelegate) PrimaryKeysMayBeModified(
 		)
 	}
 
-	// TODO: forward
-	return false, nil
+	modify := false
+	err := tbl.forwardRead(
+		ctx,
+		shardservice.ReadPrimaryKeysMayBeModified,
+		func(param *shard.ReadParam) {
+			f, err := from.Marshal()
+			if err != nil {
+				panic(err)
+			}
+			t, err := to.Marshal()
+			if err != nil {
+				panic(err)
+			}
+			v, err := keyVector.MarshalBinary()
+			if err != nil {
+				panic(err)
+			}
+			param.PrimaryKeysMayBeModifiedParam.From = f
+			param.PrimaryKeysMayBeModifiedParam.To = t
+			param.PrimaryKeysMayBeModifiedParam.KeyVector = v
+		},
+		func(resp []byte) {
+			if modify {
+				return
+			}
+			if buf.Byte2Uint16(resp) > 0 {
+				modify = true
+			}
+		},
+	)
+	if err != nil {
+		return false, err
+	}
+	return modify, nil
 }
 
 func (tbl *txnTableDelegate) MergeObjects(
@@ -275,8 +399,31 @@ func (tbl *txnTableDelegate) MergeObjects(
 		)
 	}
 
-	// TODO: forward
-	return nil, nil
+	var entry api.MergeCommitEntry
+	err := tbl.forwardRead(
+		ctx,
+		shardservice.ReadMergeObjects,
+		func(param *shard.ReadParam) {
+			os := make([][]byte, len(objstats))
+			for i, o := range objstats {
+				os[i] = o.Marshal()
+			}
+			param.MergeObjectsParam.Objstats = os
+			param.MergeObjectsParam.PolicyName = policyName
+			param.MergeObjectsParam.TargetObjSize = targetObjSize
+		},
+		func(resp []byte) {
+			err := entry.Unmarshal(resp)
+			if err != nil {
+				panic(err)
+			}
+			// TODO: hash shard need to merge all shard in future
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &entry, nil
 }
 
 func (tbl *txnTableDelegate) TableDefs(
