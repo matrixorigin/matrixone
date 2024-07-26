@@ -3793,7 +3793,7 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 	return parent, children
 }
 
-func (c *Compile) newShuffleJoinProbeScope(s *Scope) *Scope {
+func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 	rs := newScope(Merge)
 	mergeOp := merge.NewArgument()
 	mergeOp.SetIdx(vm.GetLeafOp(s.RootOp).GetOperatorBase().GetIdx())
@@ -3804,35 +3804,22 @@ func (c *Compile) newShuffleJoinProbeScope(s *Scope) *Scope {
 		regTransplant(s, rs, i, i)
 	}
 
-	s.Proc.Reg.MergeReceivers[0] = &process.WaitRegister{
-		Ctx: s.Proc.Ctx,
-		Ch:  make(chan *process.RegisterMessage, shuffleChannelBufferSize),
+	if ss == nil {
+		s.Proc.Reg.MergeReceivers[0] = &process.WaitRegister{
+			Ctx: s.Proc.Ctx,
+			Ch:  make(chan *process.RegisterMessage, shuffleChannelBufferSize),
+		}
+		rs.setRootOperator(
+			connector.NewArgument().
+				WithReg(s.Proc.Reg.MergeReceivers[0]),
+		)
+		s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:1]
+		s.BuildIdx = 1
+	} else {
+		rs.setRootOperator(constructDispatchLocal(false, false, false, extraRegisters(ss, 0)))
 	}
-	rs.setRootOperator(
-		connector.NewArgument().
-			WithReg(s.Proc.Reg.MergeReceivers[0]),
-	)
-	s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:1]
-	s.BuildIdx = 1
-
 	rs.IsEnd = true
 
-	return rs
-}
-
-func (c *Compile) newBroadcastJoinProbeScope(s *Scope, ss []*Scope) *Scope {
-	rs := newScope(Merge)
-	mergeOp := merge.NewArgument()
-	mergeOp.SetIdx(vm.GetLeafOp(s.RootOp).GetOperatorBase().GetIdx())
-	mergeOp.SetIsFirst(true)
-	rs.setRootOperator(mergeOp)
-	rs.Proc = process.NewFromProc(s.Proc, s.Proc.Ctx, 1)
-	for i := 0; i < 1; i++ {
-		regTransplant(s, rs, i, i)
-	}
-
-	rs.setRootOperator(constructDispatchLocal(false, false, false, extraRegisters(ss, 0)))
-	rs.IsEnd = true
 	return rs
 }
 
