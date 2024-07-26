@@ -53,6 +53,7 @@ type mergeObjectsTask struct {
 	totalMergedBlkCnt int
 	createdBObjs      []*catalog.ObjectEntry
 	commitEntry       *api.MergeCommitEntry
+	transferMaps      api.TransferMaps
 	rel               handle.Relation
 	did, tid          uint64
 
@@ -188,7 +189,7 @@ func (task *mergeObjectsTask) LoadNextBatch(ctx context.Context, objIdx uint32) 
 		return nil, nil, nil, mergesort.ErrNoMoreBlocks
 	}
 	var err error
-	var view *containers.BlockView
+	var view *containers.Batch
 	releaseF := func() {
 		if view != nil {
 			view.Close()
@@ -205,17 +206,17 @@ func (task *mergeObjectsTask) LoadNextBatch(ctx context.Context, objIdx uint32) 
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	if len(task.attrs) != len(view.Columns) {
-		panic(fmt.Sprintf("mismatch %v, %v, %v", task.attrs, len(task.attrs), len(view.Columns)))
+	if len(task.attrs) != len(view.Vecs) {
+		panic(fmt.Sprintf("mismatch %v, %v, %v", task.attrs, len(task.attrs), len(view.Vecs)))
 	}
 	task.nMergedBlk[objIdx]++
 
 	bat := batch.New(true, task.attrs)
-	for i, col := range view.Columns {
-		bat.Vecs[i] = col.GetData().GetDownstreamVector()
+	for i, col := range view.Vecs {
+		bat.Vecs[i] = col.GetDownstreamVector()
 	}
-	bat.SetRowCount(view.Columns[0].Length())
-	return bat, view.DeleteMask, releaseF, nil
+	bat.SetRowCount(view.Vecs[0].Length())
+	return bat, view.Deletes, releaseF, nil
 }
 
 func (task *mergeObjectsTask) GetCommitEntry() *api.MergeCommitEntry {
@@ -223,6 +224,17 @@ func (task *mergeObjectsTask) GetCommitEntry() *api.MergeCommitEntry {
 		return task.prepareCommitEntry()
 	}
 	return task.commitEntry
+}
+
+func (task *mergeObjectsTask) InitTransferMaps(blkCnt int) {
+	task.transferMaps = make(api.TransferMaps, blkCnt)
+	for i := range task.transferMaps {
+		task.transferMaps[i] = make(api.TransferMap)
+	}
+}
+
+func (task *mergeObjectsTask) GetTransferMaps() *api.TransferMaps {
+	return &task.transferMaps
 }
 
 func (task *mergeObjectsTask) prepareCommitEntry() *api.MergeCommitEntry {
@@ -302,7 +314,7 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 	}
 
 	phaseDesc = "2-HandleMergeEntryInTxn"
-	if task.createdBObjs, err = HandleMergeEntryInTxn(task.txn, task.Name(), task.commitEntry, task.rt); err != nil {
+	if task.createdBObjs, err = HandleMergeEntryInTxn(ctx, task.txn, task.Name(), task.commitEntry, task.transferMaps, task.rt); err != nil {
 		return err
 	}
 
@@ -312,7 +324,14 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 	return nil
 }
 
-func HandleMergeEntryInTxn(txn txnif.AsyncTxn, taskName string, entry *api.MergeCommitEntry, rt *dbutils.Runtime) ([]*catalog.ObjectEntry, error) {
+func HandleMergeEntryInTxn(
+	ctx context.Context,
+	txn txnif.AsyncTxn,
+	taskName string,
+	entry *api.MergeCommitEntry,
+	booking api.TransferMaps,
+	rt *dbutils.Runtime,
+) ([]*catalog.ObjectEntry, error) {
 	database, err := txn.GetDatabaseByID(entry.DbId)
 	if err != nil {
 		return nil, err
@@ -358,12 +377,13 @@ func HandleMergeEntryInTxn(txn txnif.AsyncTxn, taskName string, entry *api.Merge
 	}
 
 	txnEntry, err := txnentries.NewMergeObjectsEntry(
+		ctx,
 		txn,
 		taskName,
 		rel,
 		mergedObjs,
 		createdObjs,
-		entry.Booking,
+		booking,
 		rt,
 	)
 	if err != nil {

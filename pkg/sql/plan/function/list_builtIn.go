@@ -596,7 +596,7 @@ var supportedStringBuiltIns = []FuncNew{
 					return types.T_json.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return JsonExtract
+					return newOpBuiltInJsonExtract().jsonExtract
 				},
 			},
 		},
@@ -669,6 +669,29 @@ var supportedStringBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return JsonUnquote
+				},
+			},
+		},
+	},
+
+	// function `json_row`
+	{
+		functionId: JSON_ROW,
+		class:      plan.Function_PRODUCE_NO_NULL,
+		layout:     STANDARD_FUNCTION,
+		// typechecking: always success
+		checkFn: func(_ []overload, inputs []types.Type) checkResult {
+			return newCheckResultWithSuccess(0)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInJsonRow().jsonRow
 				},
 			},
 		},

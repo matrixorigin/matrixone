@@ -70,7 +70,7 @@ type typedSlice struct {
 
 func (t *typedSlice) reset() {
 	t.Ptr = nil
-	t.Cap = -1
+	t.Cap = 0
 }
 
 func (t *typedSlice) setFromVector(v *Vector) {
@@ -98,13 +98,31 @@ func (v *Vector) SetSorted(b bool) {
 	v.sorted = b
 }
 
+// Reset update vector's fields with a specific type.
+// we should redefine the value of capacity and values-ptr because of the possible change in type.
 func (v *Vector) Reset(typ types.Type) {
+	originOid := v.typ.Oid
 	v.typ = typ
+
 	v.class = FLAT
 	if v.area != nil {
 		v.area = v.area[:0]
 	}
 
+	v.length = 0
+	v.nsp.Reset()
+	v.sorted = false
+
+	if originOid != v.typ.Oid {
+		v.col.reset()
+		v.setupFromData()
+	}
+}
+
+func (v *Vector) ResetWithSameType() {
+	if v.area != nil {
+		v.area = v.area[:0]
+	}
 	v.length = 0
 	v.nsp.Reset()
 	v.sorted = false
@@ -661,36 +679,29 @@ func (v *Vector) PreExtend(rows int, mp *mpool.MPool) error {
 }
 
 // PreExtendArea use to expand the mpool and area of vector
-func (v *Vector) PreExtendArea(rows int, mp *mpool.MPool) error {
+// extraAreaSize: the size of area to be extended
+// mp: mpool
+func (v *Vector) PreExtendWithArea(rows int, extraAreaSize int, mp *mpool.MPool) error {
+	if v.class == CONSTANT {
+		return nil
+	}
 
-	// expand mpool
+	// pre-extend vector, the fixed len part
 	if err := v.PreExtend(rows, mp); err != nil {
 		return err
 	}
 
-	// get the size required for storing new rows
-	var vSize int
-	switch v.typ.Oid {
-	case types.T_array_float32:
-		vSize = 4 * int(v.typ.Width)
-	case types.T_array_float64:
-		vSize = 8 * int(v.typ.Width)
-	default:
-		vSize = v.typ.TypeSize()
-	}
-	vlen := vSize * rows
-
 	// check if required size is already satisfied
 	area1 := v.GetArea()
 	voff := len(area1)
-	if voff+vlen <= cap(area1) {
+	if voff+extraAreaSize <= cap(area1) {
 		return nil
 	}
 
 	// grow area
 	var err error
 	oldSz := len(area1)
-	area1, err = mp.Grow(area1, voff+vlen)
+	area1, err = mp.Grow(area1, voff+extraAreaSize)
 	if err != nil {
 		return err
 	}

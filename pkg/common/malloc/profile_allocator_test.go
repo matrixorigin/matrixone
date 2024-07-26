@@ -19,7 +19,7 @@ import "testing"
 func TestProfileAllocator(t *testing.T) {
 	testAllocator(t, func() Allocator {
 		return NewProfileAllocator(
-			NewClassAllocator(NewFixedSizeMmapAllocator),
+			newUpstreamAllocatorForTest(),
 			NewProfiler[HeapSampleValues](),
 			1,
 		)
@@ -30,7 +30,7 @@ func BenchmarkProfileAllocator(b *testing.B) {
 	for _, n := range benchNs {
 		benchmarkAllocator(b, func() Allocator {
 			return NewProfileAllocator(
-				NewClassAllocator(NewFixedSizeMmapAllocator),
+				newUpstreamAllocatorForTest(),
 				NewProfiler[HeapSampleValues](),
 				1,
 			)
@@ -41,7 +41,7 @@ func BenchmarkProfileAllocator(b *testing.B) {
 func FuzzProfileAllocator(f *testing.F) {
 	fuzzAllocator(f, func() Allocator {
 		return NewProfileAllocator(
-			NewClassAllocator(NewFixedSizeMmapAllocator),
+			newUpstreamAllocatorForTest(),
 			NewProfiler[HeapSampleValues](),
 			1,
 		)

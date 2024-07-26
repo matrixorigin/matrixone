@@ -252,6 +252,7 @@ mo_user_defined_function
 mo_user_grant
 mo_variables
 mo_version
+mo_pitr
 show table_number from mo_catalog;
 Number of tables in mo_catalog
 28

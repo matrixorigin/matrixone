@@ -133,6 +133,23 @@ var (
 			obj_id bigint unsigned
 			)`, catalog.MO_CATALOG, catalog.MO_SNAPSHOTS)
 
+	MoCatalogMoPitrDDL = fmt.Sprintf(`CREATE TABLE %s.%s (
+			pitr_id uuid unique key,
+			pitr_name varchar(5000),
+			create_account bigint unsigned,
+			create_time timestamp,
+			modified_time timestamp,
+			level varchar(10),
+			account_id bigint unsigned,
+			account_name varchar(300),
+			database_name varchar(5000),
+			table_name varchar(5000),
+			obj_id bigint unsigned,
+			pitr_length tinyint unsigned,
+			pitr_unit varchar(10),
+			primary key(pitr_name, create_account)
+			)`, catalog.MO_CATALOG, catalog.MO_PITR)
+
 	MoCatalogMoPubsDDL = `create table mo_catalog.mo_pubs (
     		pub_name varchar(64) primary key,
     		database_name varchar(5000),

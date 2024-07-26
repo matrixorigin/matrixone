@@ -472,7 +472,7 @@ func vectorToString(vec *vector.Vector, rowIndex int) (string, error) {
 		return byteJson.String(), nil
 	case types.T_uuid:
 		val := vector.GetFixedAt[types.Uuid](vec, rowIndex)
-		return val.ToString(), nil
+		return val.String(), nil
 	case types.T_date:
 		val := vector.GetFixedAt[types.Date](vec, rowIndex)
 		return val.String(), nil

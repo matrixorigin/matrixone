@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -820,7 +821,12 @@ func newColumnExpr(pos int, typ plan.Type, name string) *plan.Expr {
 	}
 }
 
-func genWriteReqs(ctx context.Context, writes []Entry, op client.TxnOperator) ([]txn.TxnRequest, error) {
+func genWriteReqs(
+	ctx context.Context,
+	service string,
+	writes []Entry,
+	op client.TxnOperator,
+) ([]txn.TxnRequest, error) {
 	mq := make(map[string]DNStore)
 	mp := make(map[string][]*api.Entry)
 	v := ctx.Value(defines.PkCheckByTN{})
@@ -863,7 +869,7 @@ func genWriteReqs(ctx context.Context, writes []Entry, op client.TxnOperator) ([
 	}
 	reqs := make([]txn.TxnRequest, 0, len(mp))
 	for k := range mp {
-		trace.GetService().TxnCommit(op, mp[k])
+		trace.GetService(service).TxnCommit(op, mp[k])
 		payload, err := types.Encode(&api.PrecommitWriteCmd{EntryList: mp[k]})
 		if err != nil {
 			return nil, err
@@ -1044,7 +1050,7 @@ func genColumns(accountId uint32, tableName, databaseName string,
 		mp := make(map[string]int)
 		for i, def := range defs {
 			if attr, ok := def.(*engine.AttributeDef); ok {
-				mp[attr.Attr.Name] = i
+				mp[strings.ToLower(attr.Attr.Name)] = i
 			}
 		}
 		for _, def := range defs {

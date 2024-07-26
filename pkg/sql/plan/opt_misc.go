@@ -20,7 +20,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
@@ -861,7 +860,7 @@ func handleOptimizerHints(str string, builder *QueryBuilder) {
 }
 
 func (builder *QueryBuilder) parseOptimizeHints() {
-	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables("optimizer_hints")
+	v, ok := runtime.ServiceRuntime(builder.compCtx.GetProcess().GetService()).GetGlobalVariables("optimizer_hints")
 	if !ok {
 		return
 	}
@@ -885,4 +884,13 @@ func (builder *QueryBuilder) optimizeFilters(rootID int32) int32 {
 	ReCalcNodeStats(rootID, builder, false, true, true)
 	rewriteFilterListByStats(builder.GetContext(), rootID, builder)
 	return rootID
+}
+
+// plan for dml  don't go optimizer, which cause some problem, and this need refactoring
+// this is a temp solution to work around some bugs
+func (builder *QueryBuilder) tempOptimizeForDML() {
+	for _, rootID := range builder.qry.Steps {
+		ReCalcNodeStats(rootID, builder, true, false, true)
+		builder.handleHashMapMessages(rootID)
+	}
 }

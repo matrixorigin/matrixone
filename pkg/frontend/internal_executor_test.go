@@ -19,14 +19,13 @@ import (
 	"context"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func mockResultSet() *MysqlResultSet {
@@ -41,21 +40,25 @@ func mockResultSet() *MysqlResultSet {
 }
 
 func TestIe(t *testing.T) {
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			ctx := context.TODO()
+			pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+			setGlobalPu(pu)
+			executor := newIe(sid)
+			executor.ApplySessionOverride(ie.NewOptsBuilder().Username("dump").Finish())
+			sess := executor.newCmdSession(ctx, ie.NewOptsBuilder().Database("mo_catalog").Internal(true).Finish())
+			assert.Equal(t, "dump", sess.GetResponser().GetStr(USERNAME))
 
-	ctx := context.TODO()
-	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-	setGlobalPu(pu)
-	executor := newIe()
-	executor.ApplySessionOverride(ie.NewOptsBuilder().Username("dump").Finish())
-	sess := executor.newCmdSession(ctx, ie.NewOptsBuilder().Database("mo_catalog").Internal(true).Finish())
-	assert.Equal(t, "dump", sess.GetResponser().GetStr(USERNAME))
-
-	err := executor.Exec(ctx, "whatever", ie.NewOptsBuilder().Finish())
-	assert.Error(t, err)
-	res := executor.Query(ctx, "whatever", ie.NewOptsBuilder().Finish())
-	assert.Error(t, err)
-	assert.Equal(t, uint64(0), res.RowCount())
+			err := executor.Exec(ctx, "whatever", ie.NewOptsBuilder().Finish())
+			assert.Error(t, err)
+			res := executor.Query(ctx, "whatever", ie.NewOptsBuilder().Finish())
+			assert.Error(t, err)
+			assert.Equal(t, uint64(0), res.RowCount())
+		},
+	)
 }
 
 func TestIeProto(t *testing.T) {
@@ -63,7 +66,7 @@ func TestIeProto(t *testing.T) {
 	// Mock autoIncrCaches
 	setGlobalAicm(&defines.AutoIncrCacheManager{})
 
-	executor := NewInternalExecutor()
+	executor := NewInternalExecutor("")
 	p := executor.proto
 	assert.True(t, p.IsEstablished())
 	p.SetEstablished()

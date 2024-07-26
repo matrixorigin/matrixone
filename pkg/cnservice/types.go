@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -429,8 +430,10 @@ func (c *Config) Validate() error {
 	}
 
 	// TODO: remove this if rc is stable
-	moruntime.ProcessLevelRuntime().SetGlobalVariables(moruntime.EnableCheckInvalidRCErrors,
-		c.Txn.EnableCheckRCInvalidError)
+	moruntime.ServiceRuntime(c.UUID).SetGlobalVariables(
+		moruntime.EnableCheckInvalidRCErrors,
+		c.Txn.EnableCheckRCInvalidError,
+	)
 	return nil
 }
 
@@ -660,6 +663,7 @@ type service struct {
 		// counter recording the total number of running pipelines,
 		// details are not recorded for simplicity as suggested by @nnsgmsone
 		counter atomic.Int64
+		client  cnclient.PipelineClient
 	}
 }
 

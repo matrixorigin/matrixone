@@ -1513,7 +1513,7 @@ func UpgradePubSub() (err error) {
 					SubTime:      createdTime,
 				})
 			}
-		}
+			pkg/frontend/authenticate.go}
 		return
 	}()
 	if err != nil {

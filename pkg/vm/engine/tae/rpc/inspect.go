@@ -41,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
 type inspectContext struct {
@@ -96,6 +97,12 @@ func initCommand(_ context.Context, inspectCtx *inspectContext) *cobra.Command {
 	objPrune := &objectPruneArg{}
 	rootCmd.AddCommand(objPrune.PrepareCommand())
 
+	transfer := &transferArg{}
+	rootCmd.AddCommand(transfer.PrepareCommand())
+
+	inspect := &MoInspectArg{}
+	rootCmd.AddCommand(inspect.PrepareCommand())
+
 	return rootCmd
 }
 
@@ -116,8 +123,11 @@ func RunFactory[T InspectCmd](t T) func(cmd *cobra.Command, args []string) {
 			cmd.OutOrStdout().Write([]byte(fmt.Sprintf("parse err: %v", err)))
 			return
 		}
-		ctx := cmd.Flag("ictx").Value.(*inspectContext)
-		logutil.Infof("inpsect mo_ctl %s: %v by account %+v", cmd.Name(), t.String(), ctx.acinfo)
+		v := cmd.Flag("ictx")
+		if v != nil {
+			ctx := cmd.Flag("ictx").Value.(*inspectContext)
+			logutil.Infof("inpsect mo_ctl %s: %v by account %+v", cmd.Name(), t.String(), ctx.acinfo)
+		}
 		err := t.Run()
 		if err != nil {
 			cmd.OutOrStdout().Write(
@@ -125,7 +135,7 @@ func RunFactory[T InspectCmd](t T) func(cmd *cobra.Command, args []string) {
 			)
 		} else {
 			cmd.OutOrStdout().Write(
-				[]byte(fmt.Sprintf("success. arg %v", t.String())),
+				[]byte(fmt.Sprintf("%v", t.String())),
 			)
 		}
 	}
@@ -1233,7 +1243,7 @@ func storageUsageDetails(c *storageUsageHistoryArg) (err error) {
 	var usageDelData [][]logtail.UsageData
 
 	if usageInsData, usageDelData, err = logtail.GetStorageUsageHistory(
-		ctx, locations, versions,
+		ctx, c.ctx.db.Runtime.SID(), locations, versions,
 		c.ctx.db.Runtime.Fs.Service, common.DebugAllocator); err != nil {
 		return err
 	}
@@ -1390,5 +1400,45 @@ func storageUsageEliminateErrors(c *storageUsageHistoryArg) (err error) {
 	cnt := logtail.EliminateErrorsOnCache(c.ctx.db.Catalog, end)
 	c.ctx.out.Write([]byte(fmt.Sprintf("%d tables backed to the track. ", cnt)))
 
+	return nil
+}
+
+type transferArg struct {
+	mem  int
+	disk int
+	show bool
+}
+
+func (c *transferArg) PrepareCommand() *cobra.Command {
+	transferCmd := &cobra.Command{
+		Use:   "transfer",
+		Short: "set transfer ttl",
+		Run:   RunFactory(c),
+	}
+	transferCmd.Flags().IntP("mem", "m", 5, "set transfer page memory ttl (s)")
+	transferCmd.Flags().IntP("disk", "d", 3, "set transfer page disk ttl (min)")
+	transferCmd.Flags().BoolP("show", "s", false, "show transfer ttl")
+
+	return transferCmd
+}
+
+func (c *transferArg) FromCommand(cmd *cobra.Command) (err error) {
+	c.mem, _ = cmd.Flags().GetInt("mem")
+	c.disk, _ = cmd.Flags().GetInt("disk")
+	c.show, _ = cmd.Flags().GetBool("show")
+	return nil
+}
+
+func (c *transferArg) String() string {
+	return fmt.Sprintf("transfer page ttl, mem:%v, disk:%v", model.GetTTL(), model.GetDiskTTL())
+}
+
+func (c *transferArg) Run() error {
+	if c.show {
+		c.show = false
+		return nil
+	}
+	model.SetTTL(time.Duration(c.mem) * time.Second)
+	model.SetDiskTTL(time.Duration(c.disk) * time.Minute)
 	return nil
 }

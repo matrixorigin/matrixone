@@ -143,6 +143,9 @@ const (
 
 	// MO_SNAPSHOTS
 	MO_SNAPSHOTS = "mo_snapshots"
+
+	//MO_Pitr
+	MO_PITR = "mo_pitr"
 )
 
 const (

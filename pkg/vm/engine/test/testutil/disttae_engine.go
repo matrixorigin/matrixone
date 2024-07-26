@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	logservice2 "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -67,17 +68,17 @@ func NewTestDisttaeEngine(ctx context.Context, mp *mpool.MPool,
 	initRuntime()
 
 	wait := make(chan struct{})
-	de.timestampWaiter = client.NewTimestampWaiter()
+	de.timestampWaiter = client.NewTimestampWaiter(runtime.GetLogger(""))
 
 	txnSender := service.NewTestSender(storage)
-	de.txnClient = client.NewTxnClient(txnSender, client.WithTimestampWaiter(de.timestampWaiter))
+	de.txnClient = client.NewTxnClient("", txnSender, client.WithTimestampWaiter(de.timestampWaiter))
 
 	de.txnClient.Resume()
 
 	hakeeper := newTestHAKeeperClient()
 	colexec.NewServer(hakeeper)
 
-	de.Engine = disttae.New(ctx, mp, fs, de.txnClient, hakeeper, nil, 0)
+	de.Engine = disttae.New(ctx, "", mp, fs, de.txnClient, hakeeper, nil, 0)
 	de.Engine.PushClient().LogtailRPCClientFactory = rpcAgent.MockLogtailRPCClientFactory
 
 	go func() {
@@ -138,7 +139,7 @@ func (de *TestDisttaeEngine) waitLogtail(ctx context.Context) error {
 			return moerr.NewInternalErrorNoCtx("wait partition state waterline timeout")
 		case <-ticker.C:
 			latestAppliedTS := de.Engine.PushClient().LatestLogtailAppliedTime()
-			if latestAppliedTS.GreaterEq(ts) {
+			if latestAppliedTS.GreaterEq(ts) && de.Engine.PushClient().IsSubscriberReady() {
 				done = true
 			}
 		}
@@ -176,20 +177,25 @@ func (de *TestDisttaeEngine) analyzeDataObjects(state *logtailreplay.PartitionSt
 func (de *TestDisttaeEngine) analyzeInmemRows(state *logtailreplay.PartitionState,
 	stats *PartitionStateStats, ts types.TS) (err error) {
 
+	distinct := make(map[objectio.Blockid]struct{})
 	iter := state.NewRowsIter(ts, nil, false)
 	for iter.Next() {
 		stats.InmemRows.VisibleCnt++
+		distinct[iter.Entry().BlockID] = struct{}{}
 	}
 
+	stats.InmemRows.VisibleDistinctBlockCnt += len(distinct)
 	if err = iter.Close(); err != nil {
 		return
 	}
 
+	distinct = make(map[objectio.Blockid]struct{})
 	iter = state.NewRowsIter(ts, nil, true)
 	for iter.Next() {
+		distinct[iter.Entry().BlockID] = struct{}{}
 		stats.InmemRows.InvisibleCnt++
 	}
-
+	stats.InmemRows.InvisibleDistinctBlockCnt += len(distinct)
 	err = iter.Close()
 	return
 }
@@ -238,6 +244,40 @@ func (de *TestDisttaeEngine) analyzeTombstone(state *logtailreplay.PartitionStat
 		if outErr != nil {
 			return
 		}
+	}
+
+	stats.Details.DirtyBlocks = make(map[types.Blockid]struct{})
+	iter2 := state.NewDirtyBlocksIter()
+	for iter2.Next() {
+		item := iter2.Entry()
+		stats.Details.DirtyBlocks[item] = struct{}{}
+	}
+
+	return
+}
+
+func (de *TestDisttaeEngine) SubscribeTable(ctx context.Context, dbID, tbID uint64, setSubscribed bool) (err error) {
+	ticker := time.NewTicker(time.Second)
+	timeout := 5
+
+	for range ticker.C {
+		if timeout <= 0 {
+			logutil.Errorf("test disttae engine subscribe table err %v, timeout", err)
+			break
+		}
+
+		err = de.Engine.TryToSubscribeTable(ctx, dbID, tbID)
+		if err != nil {
+			timeout--
+			logutil.Errorf("test disttae engine subscribe table err %v, left trie %d", err, timeout)
+			continue
+		}
+
+		break
+	}
+
+	if err == nil && setSubscribed {
+		de.Engine.PushClient().SetSubscribeState(dbID, tbID, disttae.Subscribed)
 	}
 
 	return
@@ -296,9 +336,8 @@ func (de *TestDisttaeEngine) Close(ctx context.Context) {
 }
 
 func initRuntime() {
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, new(mockMOCluster))
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.LockService, new(mockLockService))
+	runtime.ServiceRuntime("").SetGlobalVariables(runtime.ClusterService, new(mockMOCluster))
+	runtime.ServiceRuntime("").SetGlobalVariables(runtime.LockService, new(mockLockService))
 }
 
 var _ clusterservice.MOCluster = new(mockMOCluster)

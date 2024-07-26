@@ -22,8 +22,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -33,7 +31,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"go.uber.org/zap"
 )
 
 const (
@@ -58,12 +58,17 @@ func TaskMetadata(jobName string, id task.TaskCode, args ...string) task.TaskMet
 }
 
 // CreateCronTask should init once in/with schema-init.
-func CreateCronTask(ctx context.Context, executorID task.TaskCode, taskService taskservice.TaskService) error {
+func CreateCronTask(
+	ctx context.Context,
+	service string,
+	executorID task.TaskCode,
+	taskService taskservice.TaskService,
+) error {
 	var err error
 	ctx, span := trace.Start(ctx, "MetricCreateCronTask")
 	defer span.End()
 	ctx = defines.AttachAccount(ctx, catalog.System_Account, catalog.System_User, catalog.System_Role)
-	logger := runtime.ProcessLevelRuntime().Logger().WithContext(ctx).Named(LoggerName)
+	logger := runtime.ServiceRuntime(service).Logger().WithContext(ctx).Named(LoggerName)
 	logger.Debug(fmt.Sprintf("init metric task with CronExpr: %s", StorageUsageTaskCronExpr))
 	if err = taskService.CreateCronTask(ctx, TaskMetadata(StorageUsageCronTask, executorID), StorageUsageTaskCronExpr); err != nil {
 		return err
@@ -72,9 +77,12 @@ func CreateCronTask(ctx context.Context, executorID task.TaskCode, taskService t
 }
 
 // GetMetricStorageUsageExecutor collect metric server_storage_usage
-func GetMetricStorageUsageExecutor(sqlExecutor func() ie.InternalExecutor) func(ctx context.Context, task task.Task) error {
+func GetMetricStorageUsageExecutor(
+	service string,
+	sqlExecutor func() ie.InternalExecutor,
+) func(ctx context.Context, task task.Task) error {
 	return func(ctx context.Context, task task.Task) error {
-		return CalculateStorageUsage(ctx, sqlExecutor)
+		return CalculateStorageUsage(ctx, service, sqlExecutor)
 	}
 }
 
@@ -85,6 +93,8 @@ const (
 	ColumnSize        = "size"         // result column in `show accounts`, or column in table mo_catalog.mo_account
 	ColumnCreatedTime = "created_time" // column in table mo_catalog.mo_account
 	ColumnStatus      = "status"       // column in table mo_catalog.mo_account
+
+	ColumnSnapshotSize = "snapshot_size" // result column in `show accounts`, or column in table mo_catalog.mo_account
 )
 
 var (
@@ -110,6 +120,7 @@ func GetUpdateStorageUsageInterval() time.Duration {
 func cleanStorageUsageMetric(logger *log.MOLogger, actor string) {
 	// clean metric data for next cron task.
 	metric.StorageUsageFactory.Reset()
+	metric.SnapshotUsageFactory.Reset()
 	logger.Info("clean storage usage metric", zap.String("actor", actor))
 }
 
@@ -117,13 +128,17 @@ func checkServerStarted(logger *log.MOLogger) bool {
 	return frontendServerStarted()
 }
 
-func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalExecutor) (err error) {
+func CalculateStorageUsage(
+	ctx context.Context,
+	service string,
+	sqlExecutor func() ie.InternalExecutor,
+) (err error) {
 	ctx, span := trace.Start(ctx, "MetricStorageUsage")
 	defer span.End()
 	ctx = defines.AttachAccount(ctx, catalog.System_Account, catalog.System_User, catalog.System_Role)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel() // quit CheckNewAccountSize goroutine
-	logger := runtime.ProcessLevelRuntime().Logger().WithContext(ctx).Named(LoggerNameMetricStorage)
+	logger := runtime.ServiceRuntime(service).Logger().WithContext(ctx).Named(LoggerNameMetricStorage)
 	logger.Info("started")
 	if !checkServerStarted(logger) {
 		logger.Info("mo server is not started yet, wait next schedule.")
@@ -133,6 +148,11 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 		logger.Info("finished", zap.Error(err))
 		cleanStorageUsageMetric(logger, "CalculateStorageUsage")
 	}()
+
+	// init metric value
+	v2.GetTraceCheckStorageUsageAllCounter().Add(0)
+	v2.GetTraceCheckStorageUsageNewCounter().Add(0)
+	v2.GetTraceCheckStorageUsageNewIncCounter().Add(0)
 
 	// start background task to check new account
 	go checkNewAccountSize(ctx, logger, sqlExecutor)
@@ -148,6 +168,7 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 			return ctx.Err()
 		case <-ticker.C:
 			logger.Info("start next round")
+			v2.GetTraceCheckStorageUsageAllCounter().Inc()
 		}
 
 		if !IsEnable() {
@@ -191,9 +212,15 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 			if err != nil {
 				return err
 			}
-			logger.Debug("storage_usage", zap.String("account", account), zap.Float64("sizeMB", sizeMB))
+			snapshotSizeMB, err := result.Float64ValueByName(ctx, rowIdx, ColumnSnapshotSize)
+			if err != nil && !isColumNotExistError(err) {
+				return err
+			}
+			logger.Debug("storage_usage", zap.String("account", account), zap.Float64("sizeMB", sizeMB),
+				zap.Float64("snapshot", snapshotSizeMB))
 
 			metric.StorageUsage(account).Set(sizeMB)
+			metric.SnapshotUsage(account).Set(snapshotSizeMB)
 		}
 
 		// next round
@@ -239,6 +266,7 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 			return
 		case now = <-next.C:
 			logger.Debug("start check new account")
+			v2.GetTraceCheckStorageUsageNewCounter().Inc()
 		}
 
 		// mysql> select * from mo_catalog.mo_account;
@@ -312,13 +340,21 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 				logger.Error("failed to fetch new account size", zap.Error(err), zap.String("account", account))
 				continue
 			}
+			snapshotSizeMB, err := showRet.Float64ValueByName(ctx, 0, ColumnSnapshotSize)
+			if err != nil && !isColumNotExistError(err) {
+				logger.Error("failed to fetch new account snapshot size", zap.Error(err), zap.String("account", account))
+				continue
+			}
 			// done query.
 
 			// update new accounts metric
 			logger.Info("new account storage_usage", zap.String("account", account), zap.Float64("sizeMB", sizeMB),
+				zap.Float64("snapshot", snapshotSizeMB),
 				zap.String("created_time", createdTime))
 
 			metric.StorageUsage(account).Set(sizeMB)
+			metric.SnapshotUsage(account).Set(snapshotSizeMB)
+			v2.GetTraceCheckStorageUsageNewIncCounter().Inc()
 		}
 
 	nextL:
@@ -326,4 +362,8 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 		next.Reset(GetStorageUsageCheckNewInterval())
 		logger.Debug("wait next round, check new account")
 	}
+}
+
+func isColumNotExistError(err error) bool {
+	return strings.Contains(err.Error(), "column name does not exist")
 }

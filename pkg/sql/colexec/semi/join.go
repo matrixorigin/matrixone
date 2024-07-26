@@ -39,7 +39,6 @@ func (semiJoin *SemiJoin) OpType() vm.OpType {
 func (semiJoin *SemiJoin) Prepare(proc *process.Process) (err error) {
 	semiJoin.ctr = new(container)
 	semiJoin.ctr.InitReceiver(proc, false)
-	semiJoin.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
 	semiJoin.ctr.vecs = make([]*vector.Vector, len(semiJoin.Conditions[0]))
 
 	semiJoin.ctr.evecs = make([]evalVector, len(semiJoin.Conditions[0]))
@@ -69,9 +68,7 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(anal); err != nil {
-				return result, err
-			}
+			semiJoin.build(anal, proc)
 			if ctr.mp == nil && !semiJoin.IsShuffle {
 				// for inner ,right and semi join, if hashmap is empty, we can finish this pipeline
 				// shuffle join can't stop early for this moment
@@ -134,47 +131,14 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) receiveHashMap(anal process.Analyze) error {
-	msg := ctr.ReceiveFromSingleReg(1, anal)
-	if msg.Err != nil {
-		return msg.Err
-	}
-	bat := msg.Batch
-	if bat != nil && bat.AuxData != nil {
-		ctr.mp = bat.DupJmAuxData()
+func (semiJoin *SemiJoin) build(anal process.Analyze, proc *process.Process) {
+	ctr := semiJoin.ctr
+	ctr.mp = proc.ReceiveJoinMap(anal, semiJoin.JoinMapTag, semiJoin.IsShuffle, semiJoin.ShuffleIdx)
+	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
-	return nil
-}
-
-func (ctr *container) receiveBatch(anal process.Analyze) error {
-	for {
-		msg := ctr.ReceiveFromSingleReg(1, anal)
-		if msg.Err != nil {
-			return msg.Err
-		}
-		bat := msg.Batch
-		if bat != nil {
-			ctr.batchRowCount += bat.RowCount()
-			ctr.batches = append(ctr.batches, bat)
-		} else {
-			break
-		}
-	}
-	for i := 0; i < len(ctr.batches)-1; i++ {
-		if ctr.batches[i].RowCount() != colexec.DefaultBatchSize {
-			panic("wrong batch received for hash build!")
-		}
-	}
-	return nil
-}
-
-func (ctr *container) build(anal process.Analyze) error {
-	err := ctr.receiveHashMap(anal)
-	if err != nil {
-		return err
-	}
-	return ctr.receiveBatch(anal)
+	ctr.batches = ctr.mp.GetBatches()
+	ctr.batchRowCount = ctr.mp.GetRowCount()
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *SemiJoin, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
@@ -209,10 +173,9 @@ func (ctr *container) probe(bat *batch.Batch, ap *SemiJoin, proc *process.Proces
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
-		copy(ctr.inBuckets, hashmap.OneUInt8s)
-		vals, zvals := itr.Find(i, n, ctr.vecs, ctr.inBuckets)
+		vals, zvals := itr.Find(i, n, ctr.vecs)
 		for k := 0; k < n; k++ {
-			if ctr.inBuckets[k] == 0 || zvals[k] == 0 || vals[k] == 0 {
+			if zvals[k] == 0 || vals[k] == 0 {
 				continue
 			}
 			if ap.Cond != nil {
@@ -275,8 +238,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *SemiJoin, proc *process.Proces
 		//eligible = eligible[:0]
 	}
 
-	for j := range ap.Result {
-		if err := ctr.rbat.Vecs[j].PreExtendArea(len(eligible), proc.Mp()); err != nil {
+	for j, pos := range ap.Result {
+		if err := ctr.rbat.Vecs[j].PreExtendWithArea(len(eligible), len(bat.Vecs[pos].GetArea()), proc.Mp()); err != nil {
 			return err
 		}
 	}
