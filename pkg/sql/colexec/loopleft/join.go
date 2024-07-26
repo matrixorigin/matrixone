@@ -75,7 +75,7 @@ func (loopLeft *LoopLeft) Call(proc *process.Process) (vm.CallResult, error) {
 				err = ctr.probe(loopLeft, proc, anal, loopLeft.GetIsLast(), &result)
 				return result, err
 			}
-			msg := ctr.ReceiveFromSingleReg(0, anal)
+			msg := ctr.ReceiveFromAllRegs(anal)
 			if msg.Err != nil {
 				return result, msg.Err
 			}

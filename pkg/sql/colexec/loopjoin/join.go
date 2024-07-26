@@ -76,7 +76,7 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				err = ctr.probe(loopJoin, proc, anal, loopJoin.GetIsLast(), &result)
 				return result, err
 			}
-			msg := ctr.ReceiveFromSingleReg(0, anal)
+			msg := ctr.ReceiveFromAllRegs(anal)
 			if msg.Err != nil {
 				return result, msg.Err
 			}

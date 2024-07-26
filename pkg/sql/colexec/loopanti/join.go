@@ -69,7 +69,7 @@ func (loopAnti *LoopAnti) Call(proc *process.Process) (vm.CallResult, error) {
 		case Probe:
 			var err error
 			if loopAnti.ctr.buf == nil {
-				msg := ctr.ReceiveFromSingleReg(0, anal)
+				msg := ctr.ReceiveFromAllRegs(anal)
 				if msg.Err != nil {
 					return result, msg.Err
 				}

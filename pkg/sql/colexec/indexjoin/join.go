@@ -56,7 +56,7 @@ func (indexJoin *IndexJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		switch ctr.state {
 
 		case Probe:
-			msg := ctr.ReceiveFromSingleReg(0, anal)
+			msg := ctr.ReceiveFromAllRegs(anal)
 			if msg.Err != nil {
 				return result, msg.Err
 			}

@@ -71,7 +71,7 @@ func (leftJoin *LeftJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Probe:
 			if leftJoin.ctr.bat == nil {
-				msg := ctr.ReceiveFromSingleReg(0, anal)
+				msg := ctr.ReceiveFromAllRegs(anal)
 				if msg.Err != nil {
 					return result, msg.Err
 				}

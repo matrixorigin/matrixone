@@ -83,7 +83,7 @@ func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Probe:
 			if rightJoin.ctr.buf == nil {
-				msg := ctr.ReceiveFromSingleReg(0, analyze)
+				msg := ctr.ReceiveFromAllRegs(analyze)
 				if msg.Err != nil {
 					return result, msg.Err
 				}
