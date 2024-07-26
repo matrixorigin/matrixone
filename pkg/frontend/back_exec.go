@@ -44,7 +44,6 @@ import (
 )
 
 type backExec struct {
-	gg
 	backSes *backSession
 }
 
