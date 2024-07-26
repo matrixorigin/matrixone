@@ -4622,7 +4622,7 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 					}
 					u := &function.NonSqlUdfBody{}
 					rtnErr = json.Unmarshal([]byte(bodyStr), u)
-					if rtnErr == nil && u.Import {
+					if json.Unmarshal([]byte(bodyStr), u) == nil && u.Import {
 						rm(u.Body)
 					}
 
@@ -4698,7 +4698,7 @@ func doDropFunctionWithDB(ctx context.Context, ses *Session, stmt tree.Statement
 
 				u := &function.NonSqlUdfBody{}
 				rtnErr = json.Unmarshal([]byte(bodyStr), u)
-				if rtnErr == nil && u.Import {
+				if json.Unmarshal([]byte(bodyStr), u) == nil && u.Import {
 					rm(u.Body)
 				}
 
