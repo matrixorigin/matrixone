@@ -721,10 +721,11 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 						Width:       col.Width,
 						Scale:       col.Scale,
 					},
-					Name:    col.Name,
-					Primary: idx == 0,
-					Hidden:  col.Name == catalog.Row_ID || col.Name == catalog.CPrimaryKeyColName,
-					Pkidx:   1,
+					Name:       strings.ToLower(col.Name),
+					OriginName: col.Name,
+					Primary:    idx == 0,
+					Hidden:     col.Name == catalog.Row_ID || col.Name == catalog.CPrimaryKeyColName,
+					Pkidx:      1,
 					Default: &plan.Default{
 						NullAbility: col.Nullable,
 					},
@@ -915,6 +916,9 @@ func (m *MockCompilerContext) Resolve(dbName string, tableName string, snapshot 
 				break
 			}
 		}
+	}
+	if tableDef != nil {
+		tableDef.DbName = dbName
 	}
 	return m.objects[name], tableDef
 }
