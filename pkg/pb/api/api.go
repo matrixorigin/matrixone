@@ -14,6 +14,8 @@
 package api
 
 import (
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -74,8 +76,9 @@ func NewAddColumnReq(did, tid uint64, name string, typ *plan.Type, insertAt int3
 		Operation: &AlterTableReq_AddColumn{
 			&AlterTableAddColumn{
 				Column: &plan.ColDef{
-					Name: name,
-					Typ:  *typ,
+					Name:       strings.ToLower(name),
+					OriginName: name,
+					Typ:        *typ,
 					Default: &plan.Default{
 						NullAbility:  true,
 						Expr:         nil,

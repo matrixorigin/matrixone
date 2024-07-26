@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -1049,7 +1050,7 @@ func genColumns(accountId uint32, tableName, databaseName string,
 		mp := make(map[string]int)
 		for i, def := range defs {
 			if attr, ok := def.(*engine.AttributeDef); ok {
-				mp[attr.Attr.Name] = i
+				mp[strings.ToLower(attr.Attr.Name)] = i
 			}
 		}
 		for _, def := range defs {
