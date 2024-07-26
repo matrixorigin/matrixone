@@ -47,7 +47,7 @@ func consumeEntry(
 
 	if state != nil {
 		t0 := time.Now()
-		state.HandleLogtailEntry(ctx, engine.fs, e, primarySeqnum, packer)
+		state.HandleLogtailEntry(ctx, engine.fs, e, primarySeqnum, packer, engine.mp)
 		v2.LogtailUpdatePartitonConsumeLogtailOneEntryLogtailReplayDurationHistogram.Observe(time.Since(t0).Seconds())
 	}
 
