@@ -85,9 +85,11 @@ func NewTopProcess(
 		UnixTime: time.Now().UnixNano(),
 	}
 
-	return &Process{
+	proc := &Process{
 		Base: Base,
 	}
+	proc.doPrepareForRunningWithoutPipeline()
+	return proc
 }
 
 // NewNoContextChildProc make a new child process without context field.
@@ -146,13 +148,14 @@ func (proc *Process) GetTopContext() context.Context {
 	return proc.Base.sqlContext.outerContext
 }
 
-// DoPrepareForRunningWithoutPipeline will create query context and a hack pipeline context for the process.
+// doPrepareForRunningWithoutPipeline will create a hack query context and pipeline context for the process.
 // It's used for the process that doesn't need to run a pipeline, like some DDL.
+// Or plan process that will run an expression evaluation directly.
 //
 // Everyone should be careful to call this method.
-func (proc *Process) DoPrepareForRunningWithoutPipeline() {
-	proc.Base.sqlContext.BuildQueryCtx()
-	proc.BuildPipelineContext(proc.Base.sqlContext.queryContext)
+func (proc *Process) doPrepareForRunningWithoutPipeline() {
+	proc.Base.sqlContext.queryContext = proc.Base.sqlContext.outerContext
+	proc.Ctx = proc.Base.sqlContext.outerContext
 }
 
 // GetQueryCtxFromProc returns the query context and its cancel function.
@@ -177,10 +180,9 @@ func (proc *Process) GetErrorFromQueryStatus() error {
 func (proc *Process) CleanLastQueryContext() {
 	if proc.Base.sqlContext.queryCancel != nil {
 		proc.Base.sqlContext.queryCancel()
+		proc.Base.sqlContext.queryCancel = nil
 	}
-	proc.Base.sqlContext.queryContext = nil
-	proc.Base.sqlContext.queryCancel = nil
-	proc.Ctx, proc.Cancel = nil, nil
+	proc.doPrepareForRunningWithoutPipeline()
 }
 
 // Free cleans the process.
