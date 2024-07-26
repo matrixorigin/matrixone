@@ -4687,7 +4687,6 @@ func doDropFunctionWithDB(ctx context.Context, ses *Session, stmt tree.Statement
 			}
 
 			handleArgMatch := func() (rtnErr error) {
-				//put it into the single transaction
 				defer func() {
 					if rtnErr == nil {
 						u := &function.NonSqlUdfBody{}
