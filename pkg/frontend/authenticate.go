@@ -5972,6 +5972,10 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.EmptyStmt:
 		objType = objectTypeNone
 		kind = privilegeKindNone
+	case *tree.CreateCDC, *tree.ShowCDC, *tree.PauseCDC, *tree.DropCDC, *tree.ResumeCDC, *tree.RestartCDC:
+		objType = objectTypeNone
+		kind = privilegeKindSpecial
+		special = specialTagAdmin
 	default:
 		panic(fmt.Sprintf("does not have the privilege definition of the statement %s", stmt))
 	}
@@ -7559,6 +7563,8 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 		case *tree.UpgradeStatement:
 			return tenant.IsMoAdminRole(), nil
 		case *tree.BackupStart:
+			return checkBackUpStartPrivilege()
+		case *tree.CreateCDC, *tree.ShowCDC, *tree.PauseCDC, *tree.DropCDC, *tree.ResumeCDC, *tree.RestartCDC:
 			return checkBackUpStartPrivilege()
 		}
 	}
