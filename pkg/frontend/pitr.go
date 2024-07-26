@@ -192,6 +192,14 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) erro
 		return err
 	}
 
+	err = bh.Exec(ctx, "begin;")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+	if err != nil {
+		return err
+	}
+
 	// 2.only sys can create cluster level pitr
 	tenantInfo := ses.GetTenantInfo()
 	currentAccount := tenantInfo.GetTenant()
@@ -234,14 +242,6 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) erro
 	}
 
 	// insert record to the system table
-	err = bh.Exec(ctx, "begin;")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
-		return err
-	}
-
 	// 1. get pitr id
 	newUUid, err := uuid.NewV7()
 	if err != nil {
@@ -623,6 +623,14 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (e
 	dbName := string(stmt.DatabaseName)
 	tblName := string(stmt.TableName)
 
+	// restore as a txn
+	if err = bh.Exec(ctx, "begin;"); err != nil {
+		return err
+	}
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+
 	// check if the pitr exists
 	tenantInfo := ses.GetTenantInfo()
 	pitrExist, err := checkPitrExistOrNot(ctx, bh, pitrName, uint64(tenantInfo.GetTenantID()))
@@ -663,14 +671,6 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (e
 	}
 
 	restoreLevel = stmt.Level
-
-	// restore as a txn
-	if err = bh.Exec(ctx, "begin;"); err != nil {
-		return err
-	}
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
 
 	// restore self account
 	// check account exists or not
@@ -737,6 +737,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (e
 		return
 	}
 	return
+
 }
 
 func restoreToAccountWithPitr(
