@@ -17,18 +17,16 @@ package logtailreplay
 import (
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 func BenchmarkEncode(b *testing.B) {
-	pool := mpool.MustNewZero()
-	packer := types.NewPacker(pool)
+	packer := types.NewPacker()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		EncodePrimaryKey(int64(i), packer)
 	}
 	b.StopTimer()
-	packer.FreeMem()
+	packer.Close()
 	b.StartTimer()
 }

@@ -454,6 +454,12 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 		if err = handleRestorePitr(ses, execCtx, st); err != nil {
 			return
 		}
+	case *tree.CreateCDC:
+	case *tree.PauseCDC:
+	case *tree.DropCDC:
+	case *tree.RestartCDC:
+	case *tree.ResumeCDC:
+	case *tree.ShowCDC:
 	}
 	return
 }

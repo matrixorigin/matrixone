@@ -70,7 +70,7 @@ func (e *Engine) init(ctx context.Context) error {
 			return err
 		}
 		state, done := part.MutateState()
-		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF, packer)
+		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF, packer, e.mp)
 		done()
 		e.catalog.InsertDatabase(bat)
 		bat.Clean(m)
@@ -97,7 +97,7 @@ func (e *Engine) init(ctx context.Context) error {
 			return err
 		}
 		state, done := part.MutateState()
-		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_TABLES_REL_ID_IDX, packer)
+		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_TABLES_REL_ID_IDX, packer, e.mp)
 		done()
 		e.catalog.InsertTable(bat)
 		bat.Clean(m)
@@ -131,7 +131,7 @@ func (e *Engine) init(ctx context.Context) error {
 			return err
 		}
 		state, done = part.MutateState()
-		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX, packer)
+		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX, packer, e.mp)
 		done()
 		e.catalog.InsertColumns(bat)
 		bat.Clean(m)
@@ -157,7 +157,7 @@ func (e *Engine) init(ctx context.Context) error {
 			return err
 		}
 		state, done := part.MutateState()
-		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_TABLES_REL_ID_IDX, packer)
+		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_TABLES_REL_ID_IDX, packer, e.mp)
 		done()
 		e.catalog.InsertTable(bat)
 		bat.Clean(m)
@@ -191,7 +191,7 @@ func (e *Engine) init(ctx context.Context) error {
 			return err
 		}
 		state, done = part.MutateState()
-		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX, packer)
+		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX, packer, e.mp)
 		done()
 		e.catalog.InsertColumns(bat)
 		bat.Clean(m)
@@ -217,7 +217,7 @@ func (e *Engine) init(ctx context.Context) error {
 			return err
 		}
 		state, done := part.MutateState()
-		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_TABLES_REL_ID_IDX, packer)
+		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_TABLES_REL_ID_IDX, packer, e.mp)
 		done()
 		e.catalog.InsertTable(bat)
 		bat.Clean(m)
@@ -251,7 +251,7 @@ func (e *Engine) init(ctx context.Context) error {
 			return err
 		}
 		state, done = part.MutateState()
-		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX, packer)
+		state.HandleRowsInsert(ctx, ibat, MO_PRIMARY_OFF+catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX, packer, e.mp)
 		done()
 		e.catalog.InsertColumns(bat)
 		bat.Clean(m)
