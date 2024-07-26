@@ -335,6 +335,14 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	snapshotName := string(stmt.SnapShotName)
 	toAccountName := string(stmt.ToAccountName)
 
+	// restore as a txn
+	if err = bh.Exec(ctx, "begin;"); err != nil {
+		return err
+	}
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+
 	// check snapshot
 	snapshot, err := getSnapshotByName(ctx, bh, snapshotName)
 	if err != nil {
@@ -387,14 +395,6 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	if needSkipDb(dbName) {
 		return moerr.NewInternalError(ctx, "can't restore db: %v", dbName)
 	}
-
-	// restore as a txn
-	if err = bh.Exec(ctx, "begin;"); err != nil {
-		return err
-	}
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
 
 	if snapshot.level == tree.RESTORELEVELCLUSTER.String() && len(srcAccountName) != 0 {
 		var srcAccountId uint32
