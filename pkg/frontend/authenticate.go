@@ -4630,7 +4630,10 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 					}
 					return rtnErr
 				}
-				return handleArgMatch()
+				err = handleArgMatch()
+				if err != nil {
+					return err
+				}
 			}
 		}
 	}
