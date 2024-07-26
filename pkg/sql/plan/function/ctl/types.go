@@ -87,7 +87,7 @@ var (
 		TraceSpanMethod:        handleTraceSpan,
 		CoreDumpMethod:         handleCoreDump,
 		InterceptCommitMethod:  handleInterceptCommit(),
-		MergeObjectsMethod:     handleMerge(),
+		MergeObjectsMethod:     handleCNMerge,
 		DiskCleanerMethod:      handleDiskCleaner(),
 
 		GetProtocolVersionMethod: handleGetProtocolVersion,
