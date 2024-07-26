@@ -112,8 +112,8 @@ func TestRelationDataV1_MarshalAndUnMarshal(t *testing.T) {
 			return false
 		}
 		for i := 0; i < len(rd1.blkList); i++ {
-			if bytes.Compare(objectio.EncodeBlockInfoInProgress(*rd1.blkList[i]),
-				objectio.EncodeBlockInfoInProgress(*rd2.blkList[i])) != 0 {
+			if !bytes.Equal(objectio.EncodeBlockInfoInProgress(*rd1.blkList[i]),
+				objectio.EncodeBlockInfoInProgress(*rd2.blkList[i])) {
 				return false
 			}
 		}

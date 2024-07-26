@@ -336,7 +336,7 @@ func (t *Table) Ranges(_ context.Context, _ []*plan.Expr, _ int) (engine.Ranges,
 	return &shards, nil
 }
 
-func (tbl *Table) CollectTombstones(ctx context.Context, txnOffset int) (engine.Tombstoner, error) {
+func (t *Table) CollectTombstones(ctx context.Context, txnOffset int) (engine.Tombstoner, error) {
 	panic("implement me")
 }
 

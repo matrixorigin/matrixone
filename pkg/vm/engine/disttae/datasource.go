@@ -473,11 +473,6 @@ func UnmarshalRelationData(data []byte) (engine.RelData, error) {
 	}
 }
 
-type relationDataV0 struct {
-	typ     uint8
-	blkList []*objectio.BlockInfo
-}
-
 type relationDataV1 struct {
 	typ engine.RelDataType
 	//blkList[0] is a empty block info
@@ -878,17 +873,17 @@ func (rs *RemoteDataSource) GetTombstonesInProgress(
 
 	_, dels, err = rs.applyUncommitDeltaLoc(ctx, bid, nil)
 	if err != nil {
-		return nil, err
+		return
 	}
 	deletedRows = append(deletedRows, dels...)
 
 	_, dels, err = rs.applyCommittedDeltaLoc(ctx, bid, nil)
 	if err != nil {
-		return nil, err
+		return
 	}
 	deletedRows = append(deletedRows, dels...)
 
-	return deletedRows, nil
+	return
 }
 
 func (rs *RemoteDataSource) HasTombstones(bid types.Blockid) bool {
@@ -1390,7 +1385,7 @@ func (ls *LocalDataSource) GetTombstonesInProgress(
 func fastApplyDeletedRows(
 	leftRows []int32, deletedRows []int64, o uint32,
 ) ([]int32, []int64) {
-	if leftRows != nil && len(leftRows) != 0 {
+	if len(leftRows) != 0 {
 		if x, found := sort.Find(len(leftRows), func(i int) int {
 			return int(int32(o) - leftRows[i])
 		}); found {
