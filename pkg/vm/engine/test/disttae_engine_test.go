@@ -30,6 +30,8 @@ import (
 )
 
 func Test_InsertRows(t *testing.T) {
+	catalog.SetupDefines("")
+
 	var (
 		accountId    = catalog.System_Account
 		tableName    = "test1"

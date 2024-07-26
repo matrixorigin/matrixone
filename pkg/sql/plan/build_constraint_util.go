@@ -1292,7 +1292,7 @@ func appendPrimaryConstraintPlan(
 	if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 {
 		// needCheck := true
 		needCheck := !builder.qry.LoadTag
-		useFuzzyFilter := config.CNPrimaryCheck
+		useFuzzyFilter := config.CNPrimaryCheck.Load()
 		if isUpdate {
 			needCheck = updatePkCol
 			useFuzzyFilter = false
@@ -1491,7 +1491,7 @@ func appendPrimaryConstraintPlan(
 	// The refactor that using fuzzy filter has not been completely finished, Update type Insert cannot directly use fuzzy filter for duplicate detection.
 	//  so the original logic is retained. should be deleted later
 	// make plan: sink_scan -> join -> filter	// check if pk is unique in rows & snapshot
-	if config.CNPrimaryCheck {
+	if config.CNPrimaryCheck.Load() {
 		if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 {
 			rfTag := builder.genNewMsgTag()
 
