@@ -463,7 +463,7 @@ func buildJoinParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		buildScope := c.newJoinBuildScope(s, 1)
 		s.PreScopes = append(s.PreScopes, buildScope)
 		if s.BuildIdx > 1 {
-			probeScope := c.newJoinProbeScope(s, nil)
+			probeScope := c.newShuffleJoinProbeScope(s, nil)
 			s.PreScopes = append(s.PreScopes, probeScope)
 		}
 		return s, nil
@@ -483,7 +483,7 @@ func buildJoinParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		ss[i].Proc = process.NewFromProc(s.Proc, s.Proc.Ctx, 2)
 		ss[i].Proc.Reg.MergeReceivers[1].Ch = make(chan *process.RegisterMessage, 10)
 	}
-	probeScope, buildScope := c.newJoinProbeScope(s, ss), c.newJoinBuildScope(s, int32(mcpu))
+	probeScope, buildScope := c.newBroadcastJoinProbeScope(s, ss), c.newJoinBuildScope(s, int32(mcpu))
 
 	ns, err := newParallelScope(c, s, ss)
 	if err != nil {
