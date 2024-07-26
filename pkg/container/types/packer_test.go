@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2024 - 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,31 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package testengine
+package types
 
-import (
-	"context"
-	"testing"
+import "testing"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-)
-
-func TestTestEngine(t *testing.T) {
-	runtime.RunTest(
-		"",
-		func(rt runtime.Runtime) {
-			catalog.SetupDefines("")
-			engine, client, compilerCtx := New(context.Background())
-			_ = engine
-			_ = client
-			_ = compilerCtx
-		},
-	)
+func BenchmarkPacker(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		packer := NewPacker()
+		packer.EncodeInt64(42)
+		packer.Close()
+	}
 }
 
-func BenchmarkNew(b *testing.B) {
+func BenchmarkPackerEncode(b *testing.B) {
+	packer := NewPacker()
+	defer packer.Close()
+	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		New(context.Background())
+		packer.EncodeInt64(42)
+		packer.Reset()
 	}
 }

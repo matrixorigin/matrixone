@@ -314,6 +314,10 @@ func (ip *internalProtocol) WriteEOFIF(warnings uint16, status uint16) error {
 	return nil
 }
 
+func (ip *internalProtocol) WriteEOFIFAndNoFlush(warnings uint16, status uint16) error {
+	return nil
+}
+
 func (ip *internalProtocol) WriteEOFOrOK(warnings uint16, status uint16) error {
 	return nil
 }
