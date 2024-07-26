@@ -395,6 +395,13 @@ func (mp *MysqlProtocolImpl) WriteEOF(warnings, status uint16) error {
 func (mp *MysqlProtocolImpl) WriteEOFIF(warnings uint16, status uint16) error {
 	return mp.SendEOFPacketIf(warnings, status)
 }
+func (mp *MysqlProtocolImpl) WriteEOFIFAndNoFlush(warnings uint16, status uint16) error {
+	if mp.capability&CLIENT_DEPRECATE_EOF == 0 {
+		data := mp.makeEOFPayload(warnings, status)
+		return mp.appendPacket(data)
+	}
+	return nil
+}
 
 func (mp *MysqlProtocolImpl) WriteEOFOrOK(warnings uint16, status uint16) error {
 	return mp.sendEOFOrOkPacket(warnings, status)
@@ -634,7 +641,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 		}
 	}
 	if numParams > 0 {
-		if err := mp.SendEOFPacketIf(0, mp.GetSession().GetTxnHandler().GetServerStatus()); err != nil {
+		if err := mp.WriteEOFIFAndNoFlush(0, mp.GetSession().GetTxnHandler().GetServerStatus()); err != nil {
 			return err
 		}
 	}
