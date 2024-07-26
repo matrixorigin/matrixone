@@ -38,7 +38,7 @@ func (product *Product) OpType() vm.OpType {
 func (product *Product) Prepare(proc *process.Process) error {
 	ap := product
 	ap.ctr = new(container)
-	ap.ctr.InitReceiver(proc, false)
+	ap.ctr.InitReceiver(proc, true)
 	return nil
 }
 
