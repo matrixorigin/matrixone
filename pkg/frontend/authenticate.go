@@ -4614,20 +4614,21 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 					continue
 				}
 				handleArgMatch := func() (rtnErr error) {
-					defer func() {
-						if rtnErr == nil {
-							u := &function.NonSqlUdfBody{}
-							if json.Unmarshal([]byte(bodyStr), u) == nil && u.Import {
-								rm(u.Body)
-							}
-						}
-					}()
 					sql = fmt.Sprintf(deleteUserDefinedFunctionFormat, funcId)
 
 					rtnErr = bh.Exec(ctx, sql)
 					if rtnErr != nil {
 						return rtnErr
 					}
+					u := &function.NonSqlUdfBody{}
+					rtnErr = json.Unmarshal([]byte(bodyStr), u)
+					if rtnErr != nil {
+						return rtnErr
+					}
+					if u.Import {
+						rtnErr = rm(u.Body)
+					}
+
 					return rtnErr
 				}
 				err = handleArgMatch()
@@ -4691,21 +4692,22 @@ func doDropFunctionWithDB(ctx context.Context, ses *Session, stmt tree.Statement
 			}
 
 			handleArgMatch := func() (rtnErr error) {
-				defer func() {
-					if rtnErr == nil {
-						u := &function.NonSqlUdfBody{}
-						if json.Unmarshal([]byte(bodyStr), u) == nil && u.Import {
-							rm(u.Body)
-						}
-					}
-				}()
-
 				sql = fmt.Sprintf(deleteUserDefinedFunctionFormat, funcId)
 
 				rtnErr = bh.Exec(ctx, sql)
 				if rtnErr != nil {
 					return rtnErr
 				}
+
+				u := &function.NonSqlUdfBody{}
+				rtnErr = json.Unmarshal([]byte(bodyStr), u)
+				if rtnErr != nil {
+					return rtnErr
+				}
+				if u.Import {
+					rm(u.Body)
+				}
+
 				return rtnErr
 			}
 
