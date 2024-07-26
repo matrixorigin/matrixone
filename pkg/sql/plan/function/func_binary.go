@@ -27,7 +27,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
@@ -2788,111 +2787,6 @@ func trimTrailing(src, cuts string) string {
 		src = src[:len(src)-len(cuts)]
 	}
 	return src
-}
-
-// JSON_EXTRACT
-func jsonExtractCheckFn(overloads []overload, inputs []types.Type) checkResult {
-	if len(inputs) > 1 {
-		ts := make([]types.Type, 0, len(inputs))
-		allMatch := true
-		for _, input := range inputs {
-			if input.Oid == types.T_json || input.Oid.IsMySQLString() {
-				ts = append(ts, input)
-			} else {
-				if canCast, _ := fixedImplicitTypeCast(input, types.T_varchar); canCast {
-					ts = append(ts, types.T_varchar.ToType())
-					allMatch = false
-				} else {
-					return newCheckResultWithFailure(failedFunctionParametersWrong)
-				}
-			}
-		}
-		if allMatch {
-			return newCheckResultWithSuccess(0)
-		}
-		return newCheckResultWithCast(0, ts)
-	}
-	return newCheckResultWithFailure(failedFunctionParametersWrong)
-}
-
-type computeFn func([]byte, []*bytejson.Path) (*bytejson.ByteJson, error)
-
-func computeJson(json []byte, paths []*bytejson.Path) (*bytejson.ByteJson, error) {
-	bj := types.DecodeJson(json)
-	return bj.Query(paths), nil
-}
-
-func computeString(json []byte, paths []*bytejson.Path) (*bytejson.ByteJson, error) {
-	bj, err := types.ParseSliceToByteJson(json)
-	if err != nil {
-		return nil, err
-	}
-	return bj.Query(paths), nil
-}
-
-func JsonExtract(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	jsonVec := parameters[0]
-	var fn computeFn
-	switch jsonVec.GetType().Oid {
-	case types.T_json:
-		fn = computeJson
-	default:
-		fn = computeString
-	}
-	jsonWrapper := vector.GenerateFunctionStrParameter(jsonVec)
-	pathWrapers := make([]vector.FunctionParameterWrapper[types.Varlena], len(parameters)-1)
-	rs := vector.MustFunctionResult[types.Varlena](result)
-	paths := make([]*bytejson.Path, len(parameters)-1)
-	for i := 0; i < len(parameters)-1; i++ {
-		pathWrapers[i] = vector.GenerateFunctionStrParameter(parameters[i+1])
-	}
-	for i := uint64(0); i < uint64(length); i++ {
-		jsonBytes, jIsNull := jsonWrapper.GetStrValue(i)
-		if jIsNull {
-			err := rs.AppendBytes(nil, true)
-			if err != nil {
-				return err
-			}
-			continue
-		}
-		skip := false
-		for j := 0; j < len(parameters)-1; j++ {
-			pathBytes, pIsNull := pathWrapers[j].GetStrValue(i)
-			if pIsNull {
-				skip = true
-				break
-			}
-			p, err := types.ParseStringToPath(string(pathBytes))
-			if err != nil {
-				return err
-			}
-			paths[j] = &p
-		}
-		if skip {
-			err := rs.AppendBytes(nil, true)
-			if err != nil {
-				return err
-			}
-			continue
-		}
-		out, err := fn(jsonBytes, paths)
-		if err != nil {
-			return err
-		}
-		if out.IsNull() {
-			err := rs.AppendBytes(nil, true)
-			if err != nil {
-				return err
-			}
-			continue
-		}
-		dt, _ := out.Marshal()
-		err = rs.AppendBytes(dt, false)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // SPLIT PART
