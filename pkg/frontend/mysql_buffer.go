@@ -453,30 +453,28 @@ func (c *Conn) Write(payload []byte) error {
 	}
 
 	var err error
-
-	if payload[0] != 0xFF {
-		err = c.Flush()
-		if err != nil {
-			return err
-		}
-	} else {
+	var header [4]byte
+	length := len(payload)
+	binary.LittleEndian.PutUint32(header[:], uint32(length))
+	if payload[0] == 0xFF {
 		if c.packetInBuf != 0 && len(c.fixBuf.data) >= HeaderLengthOfTheProtocol {
 			c.sequenceId = c.fixBuf.data[3]
 		}
+		header[3] = c.sequenceId
+		c.sequenceId += 1
+		err = c.WriteToConn(append(header[:], payload...))
+		return err
 	}
-
-	var header [4]byte
-
-	length := len(payload)
-	binary.LittleEndian.PutUint32(header[:], uint32(length))
 	header[3] = c.sequenceId
 	c.sequenceId += 1
-
-	err = c.WriteToConn(append(header[:], payload...))
+	err = c.Append(append(header[:], payload...)...)
 	if err != nil {
 		return err
 	}
-	c.ses.CountPacket(1)
+	err = c.Flush()
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
