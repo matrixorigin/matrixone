@@ -163,8 +163,7 @@ func requestStorageUsage(ctx context.Context, ses *Session, accIds [][]int64) (r
 		ses.proc.Base.QueryClient, ses.proc.Base.Hakeeper,
 		ses.proc.Base.UdfService, ses.proc.Base.Aicm,
 	)
-	queryCtx := proc.Base.GetContextBase().BuildQueryCtx()
-	proc.BuildPipelineContext(queryCtx)
+	proc.DoPrepareForRunningWithoutPipeline()
 
 	handler := ctl.GetTNHandlerFunc(api.OpCode_OpStorageUsage, whichTN, payload, responseUnmarshaler)
 	result, err := handler(proc, "DN", "", ctl.MoCtlTNCmdSender)

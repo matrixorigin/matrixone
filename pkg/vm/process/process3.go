@@ -146,6 +146,15 @@ func (proc *Process) GetTopContext() context.Context {
 	return proc.Base.sqlContext.outerContext
 }
 
+// DoPrepareForRunningWithoutPipeline will create query context and a hack pipeline context for the process.
+// It's used for the process that doesn't need to run a pipeline, like some DDL.
+//
+// Everyone should be careful to call this method.
+func (proc *Process) DoPrepareForRunningWithoutPipeline() {
+	proc.Base.sqlContext.BuildQueryCtx()
+	proc.BuildPipelineContext(proc.Base.sqlContext.queryContext)
+}
+
 // GetQueryCtxFromProc returns the query context and its cancel function.
 // just for easy access.
 func GetQueryCtxFromProc(proc *Process) (context.Context, context.CancelFunc) {

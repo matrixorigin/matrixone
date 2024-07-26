@@ -397,8 +397,7 @@ func (exec *txnExecutor) LockTable(table string) error {
 	proc.Base.SessionInfo.TimeZone = exec.opts.GetTimeZone()
 	proc.Base.SessionInfo.Buf = exec.s.buf
 
-	queryCtx := proc.Base.GetContextBase().BuildQueryCtx()
-	proc.BuildPipelineContext(queryCtx)
+	proc.DoPrepareForRunningWithoutPipeline()
 	defer func() {
 		proc.CleanValueScanBatchs()
 		proc.FreeVectors()
