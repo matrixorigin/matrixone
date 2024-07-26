@@ -463,7 +463,7 @@ func buildJoinParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		buildScope := c.newJoinBuildScope(s, 1)
 		s.PreScopes = append(s.PreScopes, buildScope)
 		if s.BuildIdx > 1 {
-			probeScope := c.newShuffleJoinProbeScope(s, nil)
+			probeScope := c.newShuffleJoinProbeScope(s)
 			s.PreScopes = append(s.PreScopes, probeScope)
 		}
 		return s, nil
