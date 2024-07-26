@@ -3813,13 +3813,10 @@ func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 			connector.NewArgument().
 				WithReg(s.Proc.Reg.MergeReceivers[0]),
 		)
-		s.Proc.Reg.MergeReceivers = append(s.Proc.Reg.MergeReceivers[:1], s.Proc.Reg.MergeReceivers[s.BuildIdx:]...)
-		s.BuildIdx = 1
 	} else {
 		rs.setRootOperator(constructDispatchLocal(false, false, false, extraRegisters(ss, 0)))
 	}
 	rs.IsEnd = true
-
 	return rs
 }
 
