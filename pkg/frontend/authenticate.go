@@ -56,7 +56,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
 	"github.com/tidwall/btree"
-	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
 

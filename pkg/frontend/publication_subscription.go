@@ -1437,7 +1437,7 @@ func UpgradePubSub() (err error) {
 	ctx := defines.AttachAccount(context.TODO(), uint32(sysAccountID), uint32(rootID), uint32(moAdminRoleID))
 	ses := &Session{
 		feSessionImpl: feSessionImpl{
-			txnHandler: InitTxnHandler(getGlobalPu().StorageEngine, ctx, nil),
+			txnHandler: InitTxnHandler("", getGlobalPu().StorageEngine, ctx, nil),
 		},
 	}
 	bh := ses.GetBackgroundExec(ctx)
@@ -1513,7 +1513,7 @@ func UpgradePubSub() (err error) {
 					SubTime:      createdTime,
 				})
 			}
-			pkg/frontend/authenticate.go}
+		}
 		return
 	}()
 	if err != nil {

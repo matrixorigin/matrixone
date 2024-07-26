@@ -28,8 +28,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/util"
-
 	"github.com/BurntSushi/toml"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
