@@ -50,6 +50,133 @@ const (
 	DefaultRpcBufferSize = 1 << 10
 )
 
+const (
+	FPHandleRequest = iota
+	FPExecRequest
+	FPDoComQuery
+	FPDoComQueryInBack
+	FPStmtWithResponse
+	FPStmtWithResponseCreateAsSelect
+	FPDispatchStmt
+	FPExecStmt
+	FPExecStmtBeforeCompile
+	FPExecStmtInBack
+	FPExecStmtInBackBeforeCompile
+	FPExecStmtWithTxn
+	FPExecStmtWithWorkspace
+	FPExecStmtWithWorkspaceBeforeStart
+	FPExecStmtWithWorkspaceBeforeEnd
+	FPExecStmtWithIncrStmt
+	FPExecStmtWithIncrStmtBeforeIncr
+	FPExecStmtInSameSession
+	FPExecInFrontEnd
+	FPExecInFrontEndInBack
+	FPInBackUse
+	FPInBackCreateDatabase
+	FPInBackDropDatabase
+	FPInBackGrant
+	FPInBackRevoke
+	FPStatusStmtInBack
+	FPCleanup
+	FPBeginTxn
+	FPSetRole
+	FPUse
+	FPPrepareStmt
+	FPPrepareString
+	FPCreateConnector
+	FPPauseDaemonTask
+	FPCancelDaemonTask
+	FPResumeDaemonTask
+	FPDropConnector
+	FPShowConnectors
+	FPDeallocate
+	FPReset
+	FPSetVar
+	FPShowVariables
+	FPShowErrors
+	FPAnalyzeStmt
+	FPExplainStmt
+	FPInternalCmdFieldList
+	FPCreatePublication
+	FPAlterPublication
+	FPDropPublication
+	FPShowSubscriptions
+	FPCreateStage
+	FPDropStage
+	FPAlterStage
+	FPCreateAccount
+	FPDropAccount
+	FPAlterAccount
+	FPAlterDataBaseConfig
+	FPCreateUser
+	FPDropUser
+	FPAlterUser
+	FPCreateRole
+	FPDropRole
+	FPCreateFunction
+	FPDropFunction
+	FPCreateProcedure
+	FPDropProcedure
+	FPCallStmt
+	FPGrant
+	FPRevoke
+	FPKill
+	FPShowAccounts
+	FPShowCollation
+	FPShowBackendServers
+	FPSetTransaction
+	FPBackupStart
+	FPCreateSnapShot
+	FPDropSnapShot
+	FPRestoreSnapShot
+	FPUpgradeStatement
+	FPCreatePitr
+	FPDropPitr
+	FPAlterPitr
+	FPRestorePitr
+	FPSetConnectionID
+	FPRollbackTxn
+	FPCommitTxn
+	FPFinishTxn
+	FPCommit
+	FPCommitBeforeCommitUnsafe
+	FPCommitUnsafe
+	FPCommitUnsafeBeforeCommit
+	FPCommitUnsafeBeforeCommitWithTxn
+	FPRollback
+	FPRollbackUnsafe1
+	FPRollbackUnsafe2
+	FPRollbackUnsafe
+	FPRollbackUnsafeBeforeRollback
+	FPRollbackUnsafeBeforeRollbackWithTxn
+	FPSetAutoCommit
+	FPResultRowStmt
+	FPResultRowStmtInBack
+	FPResultRowStmtSelect1
+	FPResultRowStmtSelect2
+	FPResultRowStmtExplainAnalyze1
+	FPResultRowStmtExplainAnalyze2
+	FPResultRowStmtDefault1
+	FPResultRowStmtDefault2
+	FPRespStreamResultRow
+	FPrespPrebuildResultRow
+	FPrespMixedResultRow
+	FPRespStatus
+	FPMigrate
+	FPMigrateDB
+	FPMigratePrepareStmt
+	FPGetBackgroundExec
+	FPGetShareTxnBackgroundExec
+	FPGetRawBatchBackgroundExec
+	FPBackExecExec
+	FPBackExecRestore
+	FPGetShareTxnBackgroundExecInBackSession
+	FPGetBackgroundExecInBackSession
+	FPInternalExecutorExec
+	FPInternalExecutorQuery
+	FPHandleAnalyzeStmt
+)
+
 type (
 	TxnOperator = client.TxnOperator
 	TxnClient   = client.TxnClient
@@ -484,6 +611,10 @@ type feSessionImpl struct {
 	respr        Responser
 	//refreshed once
 	staticTxnInfo string
+	// reserveCOnn is set true when TCP network on the session/routine should be
+	// reserved because the connection is still in use in proxy's connection cache.
+	// Default is false, means that the network connection should be closed.
+	reserveConn bool
 }
 
 func (ses *feSessionImpl) EnterFPrint(idx int) {
@@ -499,7 +630,7 @@ func (ses *feSessionImpl) ExitFPrint(idx int) {
 }
 
 func (ses *feSessionImpl) Close() {
-	if ses.respr != nil {
+	if ses.respr != nil && !ses.reserveConn {
 		ses.respr.Close()
 	}
 	ses.mrs = nil
@@ -895,6 +1026,10 @@ func (ses *feSessionImpl) GetStaticTxnInfo() string {
 	return ses.staticTxnInfo
 }
 
+func (ses *feSessionImpl) ReserveConn() {
+	ses.reserveConn = true
+}
+
 func (ses *Session) GetDebugString() string {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -916,6 +1051,9 @@ const (
 	CAPABILITY
 	ESTABLISHED
 	TLS_ESTABLISHED
+
+	// AuthString is the property authString in MysqlProtocolImpl.
+	AuthString
 )
 
 type Property interface {
@@ -984,6 +1122,8 @@ type MysqlWriter interface {
 	CalculateOutTrafficBytes(b bool) (int64, int64)
 	ResetStatistics()
 	UpdateCtx(ctx context.Context)
+	// Reset sets the session and reset some fields and stats.
+	Reset(ses *Session)
 }
 
 type MysqlRrWr interface {
