@@ -227,6 +227,7 @@ type moObjStatArg struct {
 	dir    string
 	name   string
 	id     int
+	col    int
 	fs     fileservice.FileService
 	reader *objectio.ObjectReader
 	res    string
@@ -243,7 +244,8 @@ func (c *moObjStatArg) PrepareCommand() *cobra.Command {
 
 	statCmd.SetUsageTemplate(c.Usage())
 
-	statCmd.Flags().IntP("id", "i", invalidId, "id")
+	statCmd.Flags().IntP("id", "i", invalidId, "block id")
+	statCmd.Flags().IntP("col", "c", invalidId, "column id")
 	statCmd.Flags().IntP("level", "l", brief, "level")
 	statCmd.Flags().StringP("name", "n", "", "name")
 	statCmd.Flags().BoolP("local", "", false, "local")
@@ -253,6 +255,7 @@ func (c *moObjStatArg) PrepareCommand() *cobra.Command {
 
 func (c *moObjStatArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.id, _ = cmd.Flags().GetInt("id")
+	c.col, _ = cmd.Flags().GetInt("col")
 	c.level, _ = cmd.Flags().GetInt("level")
 	c.local, _ = cmd.Flags().GetBool("local")
 	path, _ := cmd.Flags().GetString("name")
@@ -286,6 +289,8 @@ func (c *moObjStatArg) Usage() (res string) {
 	res += "    The path to the object file\n"
 	res += "  -i, --idx=invalidId:\n"
 	res += "    The sequence number of the block in the object\n"
+	res += "  -c, --col=invalidId:\n"
+	res += "    The sequence number of the column in the object\n"
 	res += "  -l, --level=0:\n"
 	res += "    The level of detail of the information, should be 0(brief), 1(standard), 2(detailed)\n"
 	res += "  --local=false:\n"
@@ -371,13 +376,17 @@ func (c *moObjStatArg) GetStat(ctx context.Context) (res string, err error) {
 		return
 	}
 
+	if c.level < standard && c.col != invalidId {
+		c.level = standard
+	}
+
+	if c.level < detailed && c.id != invalidId {
+		c.level = detailed
+	}
+
 	switch c.level {
 	case brief:
-		if c.id != invalidId {
-			res, err = c.GetStandardStat(&meta)
-		} else {
-			res, err = c.GetBriefStat(&meta)
-		}
+		res, err = c.GetBriefStat(&meta)
 	case standard:
 		res, err = c.GetStandardStat(&meta)
 	case detailed:
@@ -447,14 +456,24 @@ func (c *moObjStatArg) GetStandardStat(obj *objectio.ObjectMeta) (res string, er
 	var json = jsoniter.ConfigCompatibleWithStandardLibrary
 
 	colCnt := header.ColumnCount()
-	cols := make([]ColumnJson, colCnt)
-	for i := range colCnt {
-		col := data.MustGetColumn(i)
-		cols[i] = ColumnJson{
-			Index:       i,
+	if c.col != invalidId && c.col >= int(colCnt) {
+		return "", moerr.NewInfoNoCtx("invalid column count")
+	}
+	cols := make([]ColumnJson, 0, colCnt)
+	addColumn := func(idx uint16) {
+		col := data.MustGetColumn(idx)
+		cols = append(cols, ColumnJson{
+			Index:       uint16(c.col),
 			DataSize:    formatBytes(col.Location().Length()),
 			OriDataSize: formatBytes(col.Location().OriginSize()),
 			Zonemap:     col.ZoneMap().String(),
+		})
+	}
+	if c.col != invalidId {
+		addColumn(uint16(c.col))
+	} else {
+		for i := range colCnt {
+			addColumn(i)
 		}
 	}
 
@@ -505,22 +524,26 @@ func (c *moObjStatArg) GetDetailedStat(obj *objectio.ObjectMeta) (res string, er
 		}
 	}
 
-	res += fmt.Sprintf("object %v has %3d blocks\n", c.name, cnt)
 	blks := make([]BlockJson, 0, len(blocks))
 	for _, blk := range blocks {
-		cnt := blk.GetColumnCount()
-		res += fmt.Sprintf("block %3d has %3d cloumns\n", blk.GetID(), cnt)
+		colCnt := blk.GetColumnCount()
 
-		var cols []ColumnJson
-		for i := range cnt {
-			col := blk.ColumnMeta(i)
-			column := ColumnJson{
-				Index:   i,
-				Ndv:     col.Ndv(),
-				NullCnt: col.NullCnt(),
-				Zonemap: col.ZoneMap().String(),
+		cols := make([]ColumnJson, 0, colCnt)
+		addColumn := func(idx uint16) {
+			col := data.MustGetColumn(idx)
+			cols = append(cols, ColumnJson{
+				Index:       uint16(c.col),
+				DataSize:    formatBytes(col.Location().Length()),
+				OriDataSize: formatBytes(col.Location().OriginSize()),
+				Zonemap:     col.ZoneMap().String(),
+			})
+		}
+		if c.col != invalidId {
+			addColumn(uint16(c.col))
+		} else {
+			for i := range colCnt {
+				addColumn(i)
 			}
-			cols = append(cols, column)
 		}
 		blkjson := BlockJson{
 			Index:   blk.GetID(),
