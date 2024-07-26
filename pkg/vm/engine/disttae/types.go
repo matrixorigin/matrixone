@@ -781,8 +781,6 @@ type withFilterMixin struct {
 		// colNulls []bool
 
 		pkPos                    int // -1 means no primary key in columns
-		extraRowIdAdded          bool
-		rowIdColIdx              int
 		indexOfFirstSortedColumn int
 	}
 
