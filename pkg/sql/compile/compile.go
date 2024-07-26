@@ -1406,6 +1406,19 @@ func calculatePartitions(start, end, n int64) [][2]int64 {
 	return ps
 }
 
+func StrictSqlMode(proc *process.Process) (error, bool) {
+	mode, err := proc.GetResolveVariableFunc()("sql_mode", true, false)
+	if err != nil {
+		return err, false
+	}
+	if modeStr, ok := mode.(string); ok {
+		if strings.Contains(modeStr, "STRICT_TRANS_TABLES") || strings.Contains(modeStr, "STRICT_ALL_TABLES") {
+			return nil, true
+		}
+	}
+	return nil, false
+}
+
 func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 	if c.isPrepare {
 		return nil, cantCompileForPrepareErr
@@ -1461,6 +1474,11 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 		param.JsonData = n.ExternScan.JsonType
 	}
 
+	err, strictSqlMode := StrictSqlMode(c.proc)
+	if err != nil {
+		return nil, err
+	}
+
 	if param.ScanType == tree.S3 {
 		if !param.Init {
 			if err := plan2.InitS3Param(param); err != nil {
@@ -1481,7 +1499,7 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 			}
 		}
 	} else if param.ScanType == tree.INLINE {
-		return c.compileExternValueScan(n, param)
+		return c.compileExternValueScan(n, param, strictSqlMode)
 	} else {
 		if err := plan2.InitInfileParam(param); err != nil {
 			return nil, err
@@ -1491,7 +1509,6 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 	t = time.Now()
 	param.FileService = c.proc.Base.FileService
 	param.Ctx = c.proc.Ctx
-	var err error
 	var fileList []string
 	var fileSize []int64
 	if !param.Local && !param.Init {
@@ -1536,7 +1553,7 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 		return []*Scope{ret}, nil
 	}
 	if param.Parallel && (external.GetCompressType(param, fileList[0]) != tree.NOCOMPRESS || param.Local) {
-		return c.compileExternScanParallel(n, param, fileList, fileSize)
+		return c.compileExternScanParallel(n, param, fileList, fileSize, strictSqlMode)
 	}
 
 	t = time.Now()
@@ -1607,7 +1624,7 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 				fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, []int64{0, -1}...)
 			}
 		}
-		op := constructExternal(n, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp)
+		op := constructExternal(n, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp, strictSqlMode)
 		op.SetIdx(c.anal.curNodeIdx)
 		op.SetIsFirst(c.anal.isFirst)
 		ss[i].setRootOperator(op)
@@ -1631,14 +1648,14 @@ func (c *Compile) getParallelSizeForExternalScan(n *plan.Node, cpuNum int) int {
 	return cpuNum
 }
 
-func (c *Compile) compileExternValueScan(n *plan.Node, param *tree.ExternParam) ([]*Scope, error) {
+func (c *Compile) compileExternValueScan(n *plan.Node, param *tree.ExternParam, strictSqlMode bool) ([]*Scope, error) {
 	parallelSize := c.getParallelSizeForExternalScan(n, ncpu)
 	ss := make([]*Scope, parallelSize)
 	for i := 0; i < parallelSize; i++ {
 		ss[i] = c.constructLoadMergeScope()
 	}
 	s := c.constructScopeForExternal(c.addr, false)
-	op := constructExternal(n, param, c.proc.Ctx, nil, nil, nil)
+	op := constructExternal(n, param, c.proc.Ctx, nil, nil, nil, strictSqlMode)
 	op.SetIdx(c.anal.curNodeIdx)
 	op.SetIsFirst(c.anal.isFirst)
 	s.setRootOperator(op)
@@ -1651,7 +1668,7 @@ func (c *Compile) compileExternValueScan(n *plan.Node, param *tree.ExternParam) 
 }
 
 // construct one thread to read the file data, then dispatch to mcpu thread to get the filedata for insert
-func (c *Compile) compileExternScanParallel(n *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64) ([]*Scope, error) {
+func (c *Compile) compileExternScanParallel(n *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
 	param.Parallel = false
 	mcpu := c.cnList[0].Mcpu
 	ss := make([]*Scope, mcpu)
@@ -1664,7 +1681,7 @@ func (c *Compile) compileExternScanParallel(n *plan.Node, param *tree.ExternPara
 		fileOffsetTmp[i].Offset = make([]int64, 0)
 		fileOffsetTmp[i].Offset = append(fileOffsetTmp[i].Offset, []int64{0, -1}...)
 	}
-	extern := constructExternal(n, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp)
+	extern := constructExternal(n, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp, strictSqlMode)
 	extern.Es.ParallelLoad = true
 	scope := c.constructScopeForExternal("", false)
 	extern.SetIdx(c.anal.curNodeIdx)
@@ -1754,7 +1771,7 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	n := s.DataSource.node
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
-		attrs[j] = col.Name
+		attrs[j] = col.GetOriginCaseName()
 	}
 
 	//-----------------------------------------------------------------------------------------------------
@@ -2007,15 +2024,7 @@ func (c *Compile) compileJoin(node, left, right *plan.Node, ns []*plan.Node, pro
 	if c.IsTpQuery() {
 		//construct join build operator for tp join
 		buildScopes[0].setRootOperator(constructJoinBuildOperator(c, vm.GetLeafOp(rs[0].RootOp), false, 1))
-		rs[0].Proc.Reg.MergeReceivers[1] = &process.WaitRegister{
-			Ctx: rs[0].Proc.Ctx,
-			Ch:  make(chan *process.RegisterMessage, 1),
-		}
-		buildScopes[0].setRootOperator(
-			connector.NewArgument().
-				WithReg(rs[0].Proc.Reg.MergeReceivers[1]),
-		)
-		rs[0].Proc.Reg.MergeReceivers = rs[0].Proc.Reg.MergeReceivers[:2]
+		rs[0].Proc.Reg.MergeReceivers = rs[0].Proc.Reg.MergeReceivers[:1]
 		buildScopes[0].IsEnd = true
 	}
 	return rs
@@ -3400,10 +3409,6 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 	rs := make([]*Scope, length)
 	idx := 0
 	for i := range probeScopes {
-		if probeScopes[i].IsEnd {
-			rs[i] = probeScopes[i]
-			continue
-		}
 		rs[i] = newScope(Remote)
 		rs[i].IsJoin = true
 		rs[i].NodeInfo = probeScopes[i].NodeInfo
@@ -3569,21 +3574,6 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope, mcpu int32) *Scope {
 	rs.setRootOperator(mergeOp)
 	rs.setRootOperator(constructJoinBuildOperator(c, vm.GetLeafOp(s.RootOp), s.ShuffleIdx > 0, mcpu))
 
-	if ss == nil { // unparallel, send the hashtable to join scope directly
-		s.Proc.Reg.MergeReceivers[s.BuildIdx] = &process.WaitRegister{
-			Ctx: s.Proc.Ctx,
-			Ch:  make(chan *process.RegisterMessage, 1),
-		}
-		rs.setRootOperator(
-			connector.NewArgument().
-				WithReg(s.Proc.Reg.MergeReceivers[s.BuildIdx]),
-		)
-		s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:s.BuildIdx+1]
-	} else {
-		rs.setRootOperator(
-			constructDispatchLocal(true, false, false, extraRegisters(ss, s.BuildIdx)),
-		)
-	}
 	rs.IsEnd = true
 
 	return rs

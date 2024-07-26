@@ -162,7 +162,7 @@ func TestCallLockOpWithConflictWithRefreshNotEnabled(t *testing.T) {
 				arg2.ctr.rt.hasNewVersionInRange = testFunc
 				valueScan := arg.GetChildren(0).(*value_scan.ValueScan)
 				resetChildren(arg2, valueScan.Batchs[0])
-				defer arg2.ctr.rt.parker.FreeMem()
+				defer arg2.ctr.rt.parker.Close()
 
 				_, err = arg2.Call(proc)
 				assert.NoError(t, err)
@@ -232,7 +232,7 @@ func TestCallLockOpWithHasPrevCommit(t *testing.T) {
 				arg2.ctr.rt.hasNewVersionInRange = testFunc
 				valueScan := arg.GetChildren(0).(*value_scan.ValueScan)
 				resetChildren(arg2, valueScan.Batchs[0])
-				defer arg2.ctr.rt.parker.FreeMem()
+				defer arg2.ctr.rt.parker.Close()
 
 				_, err = arg2.Call(proc)
 				assert.NoError(t, err)
@@ -302,7 +302,7 @@ func TestCallLockOpWithHasPrevCommitLessMe(t *testing.T) {
 				arg2.ctr.rt.hasNewVersionInRange = testFunc
 				valueScan := arg.GetChildren(0).(*value_scan.ValueScan)
 				resetChildren(arg2, valueScan.Batchs[0])
-				defer arg2.ctr.rt.parker.FreeMem()
+				defer arg2.ctr.rt.parker.Close()
 
 				proc.GetTxnOperator().TxnRef().SnapshotTS = timestamp.Timestamp{PhysicalTime: math.MaxInt64}
 
@@ -345,7 +345,7 @@ func TestLockWithBlocking(t *testing.T) {
 			}
 			if end.Status == vm.ExecStop {
 				if arg.ctr.rt.parker != nil {
-					arg.ctr.rt.parker.FreeMem()
+					arg.ctr.rt.parker.Close()
 				}
 			}
 			return end.Status == vm.ExecStop, nil
@@ -365,8 +365,8 @@ func TestLockWithBlockingWithConflict(t *testing.T) {
 		tableID,
 		values,
 		func(proc *process.Process) {
-			parker := types.NewPacker(proc.Mp())
-			defer parker.FreeMem()
+			parker := types.NewPacker()
+			defer parker.Close()
 
 			parker.Reset()
 			parker.EncodeInt32(1)

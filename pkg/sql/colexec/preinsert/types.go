@@ -37,7 +37,8 @@ type PreInsert struct {
 	IsUpdate   bool
 	SchemaName string
 	TableDef   *pb.TableDef
-	Attrs      []string
+	// letter case: origin
+	Attrs []string
 
 	EstimatedRowCount int64
 

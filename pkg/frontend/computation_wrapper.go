@@ -148,7 +148,7 @@ func (cwft *TxnComputationWrapper) GetColumns(ctx context.Context) ([]interface{
 	for i, col := range cols {
 		c := new(MysqlColumn)
 		c.SetName(col.Name)
-		c.SetOrgName(col.Name)
+		c.SetOrgName(col.GetOriginCaseName())
 		c.SetTable(col.TblName)
 		c.SetOrgTable(col.TblName)
 		c.SetAutoIncr(col.Typ.AutoIncr)
