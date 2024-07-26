@@ -621,7 +621,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 	data = append(data, 0)
 	// warning count
 	data = append(data, 0, 0) // TODO support warning count
-	if err := mp.writePackets(data); err != nil {
+	if err := mp.appendPacket(data); err != nil {
 		return err
 	}
 
@@ -641,7 +641,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 		}
 	}
 	if numParams > 0 {
-		if err := mp.WriteEOFIFAndNoFlush(0, mp.GetSession().GetTxnHandler().GetServerStatus()); err != nil {
+		if err := mp.SendEOFPacketIf(0, mp.GetSession().GetTxnHandler().GetServerStatus()); err != nil {
 			return err
 		}
 	}
