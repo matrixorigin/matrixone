@@ -671,27 +671,86 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (e
 	}
 
 	if len(srcAccountName) > 0 {
-		fromAccount := string(stmt.SrcAccountName)
-		if len(fromAccount) == 0 {
-			fromAccount = pitr.accountName
+		restoreOtherAccount := func() (rtnErr error) {
+			fromAccount := string(stmt.SrcAccountName)
+			if len(fromAccount) == 0 {
+				fromAccount = pitr.accountName
+			}
+			toAccountId := uint32(pitr.accountId)
+			// check account exists or not
+			var accountExist bool
+			if accountExist, rtnErr = doCheckAccountExistsInPitrRestore(ctx, ses.GetService(), bh, pitrName, ts, fromAccount, toAccountId); err != nil {
+				return err
+			}
+			if !accountExist {
+				return moerr.NewInternalError(ctx, "account %s does not exist at timestamp %d", tenantInfo.GetTenant(), ts)
+			}
+			// mock snapshot
+			var snapshotName string
+			snapshotName, rtnErr = insertSnapshotRecord(ctx, ses.GetService(), bh, pitrName, ts, uint64(toAccountId), fromAccount)
+			defer func() {
+				deleteSnapshotRecord(ctx, ses.GetService(), bh, pitrName, snapshotName)
+			}()
+			if rtnErr != nil {
+				return rtnErr
+			}
+
+			if srcAccountName != pitr.accountName {
+				// restore account to self
+				toAccountId, rtnErr = getAccountId(ctx, bh, string(stmt.AccountName))
+				if rtnErr != nil {
+					return rtnErr
+				}
+			}
+
+			// drop foreign key related tables first
+			if err = deleteCurFkTables(ctx, ses.GetService(), bh, dbName, tblName, toAccountId); err != nil {
+				return
+			}
+
+			// get topo sorted tables with foreign key
+			sortedFkTbls, err := fkTablesTopoSort(ctx, bh, snapshotName, dbName, tblName)
+			if err != nil {
+				return
+			}
+
+			// get foreign key table infos
+			fkTableMap, err := getTableInfoMap(ctx, ses.GetService(), bh, snapshotName, dbName, tblName, sortedFkTbls)
+			if err != nil {
+				return
+			}
+
+			// collect views and tables during table restoration
+			viewMap := make(map[string]*tableInfo)
+
+			rtnErr = restoreToAccount(ctx, ses.GetService(), bh, snapshotName, toAccountId, fkTableMap, viewMap, ts)
+			if rtnErr != nil {
+				return rtnErr
+			}
+
+			if len(fkTableMap) > 0 {
+				if err = restoreTablesWithFk(ctx, ses.GetService(), bh, snapshotName, sortedFkTbls, fkTableMap, toAccountId, ts); err != nil {
+					return
+				}
+			}
+
+			if len(viewMap) > 0 {
+				if err = restoreViews(ctx, ses, bh, snapshotName, viewMap, toAccountId); err != nil {
+					return
+				}
+			}
+			// checks if the given context has been canceled.
+			if err = CancelCheck(ctx); err != nil {
+				return
+			}
+			return rtnErr
 		}
-		fromAccountId := pitr.accountId
-		// check account exists or not
-		var accountExist bool
-		if accountExist, err = doCheckAccountExistsInPitrRestore(ctx, ses.GetService(), bh, pitrName, ts, fromAccount, uint32(fromAccountId)); err != nil {
+
+		err = restoreOtherAccount()
+		if err != nil {
 			return err
 		}
-		if !accountExist {
-			return moerr.NewInternalError(ctx, "account %s does not exist at timestamp %d", tenantInfo.GetTenant(), ts)
-		}
-		if srcAccountName == pitr.accountName {
-			// restore account to self
-
-		} else {
-			// restore account to new account
-
-		}
-
+		return err
 	}
 
 	restoreLevel = stmt.Level
