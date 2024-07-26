@@ -3343,7 +3343,7 @@ func (c *Compile) compileDelete(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 	if err != nil {
 		return nil, err
 	}
-	arg.SetAnalyzeControl(c.anal.curNodeIdx, c.anal.isFirst)
+	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	c.anal.isFirst = false
 
 	if n.Stats.Cost*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) && !arg.DeleteCtx.CanTruncate {
