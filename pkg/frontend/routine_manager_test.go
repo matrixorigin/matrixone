@@ -50,9 +50,13 @@ func Test_Closed(t *testing.T) {
 	defer serverConn.Close()
 	defer clientConn.Close()
 	registerConn(clientConn)
-
-	mo := create_test_server()
-	getGlobalPu().SV.SkipCheckUser = true
+	pu, err := getParameterUnit("test/system_vars_config.toml", nil, nil)
+	pu.SV.SkipCheckUser = true
+	setGlobalPu(pu)
+	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+	temp, _ := NewRoutineManager(ctx)
+	setGlobalRtMgr(temp)
+	mo := createInnerServer()
 	wg := sync.WaitGroup{}
 	wg.Add(1)
 	cf := &CloseFlag{}
