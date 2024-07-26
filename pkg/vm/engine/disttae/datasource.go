@@ -1188,10 +1188,24 @@ func (ls *LocalDataSource) Next(
 				continue
 			}
 
+			if ls.table.tableName == "statement_info" {
+				logutil.Infof("xxxx Next-memory, table:%s,txn:%s,read batch'len:%d.",
+					ls.table.tableName,
+					ls.table.db.op.Txn().DebugString(),
+					bat.RowCount())
+			}
+
 			return nil, engine.InMem, nil
 
 		case engine.Persisted:
 			//local data source maybe has no blocks.
+			if ls.table.tableName == "statement_info" {
+				logutil.Infof("xxxx Next-Persisted, table:%s,txn:%s,len(ranges)=%d",
+					ls.table.tableName,
+					ls.table.db.op.Txn().DebugString(),
+					len(ls.ranges))
+			}
+
 			if len(ls.ranges) == 0 {
 				return nil, engine.End, nil
 			}

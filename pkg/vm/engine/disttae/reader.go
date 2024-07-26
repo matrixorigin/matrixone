@@ -780,6 +780,7 @@ func (r *readerInProgress) Read(
 ) (bat *batch.Batch, err error) {
 
 	start := time.Now()
+	var place engine.DataState
 	defer func() {
 		if r.columns.extraRowIdAdded && bat != nil {
 			rowIDVec := bat.Vecs[r.columns.rowIdColIdx]
@@ -788,6 +789,20 @@ func (r *readerInProgress) Read(
 			bat.Attrs = bat.Attrs[1:]
 		}
 		v2.TxnBlockReaderDurationHistogram.Observe(time.Since(start).Seconds())
+
+		if r.tableDef.Name == "statement_info" {
+			if bat != nil {
+				logutil.Infof("xxxx readerInProgress,read from %v, txn:%s, table:%s, "+
+					"read batch,batch's row cnt:%d, vector's row cnt:%d",
+					place,
+					r.proc.GetTxnOperator().Txn().DebugString(),
+					r.tableDef.Name,
+					bat.RowCount(),
+					bat.Vecs[0].Length(),
+				)
+			}
+		}
+
 	}()
 
 	// for ordered scan, sort blocklist by zonemap info, and then filter by zonemap
@@ -843,8 +858,10 @@ func (r *readerInProgress) Read(
 		return nil, nil
 	}
 	if state == engine.InMem {
+		place = state
 		return bat, nil
 	}
+	place = state
 	//read block
 	filter := r.withFilterMixin.filterState.filter
 
