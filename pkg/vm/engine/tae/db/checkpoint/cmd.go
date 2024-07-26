@@ -2,6 +2,7 @@ package checkpoint
 
 import (
 	"context"
+	jsoniter "github.com/json-iterator/go"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -60,7 +61,7 @@ func GetCheckpointStat(ctx context.Context, rt *dbutils.Runtime, name string) (r
 	closecbs := make([]func(), 0)
 	var readCount, _, _ int
 	_ = len(entries)
-	readfn := func(i int, readType uint16) (res string, err error) {
+	readfn := func(i int, readType uint16) (obj *logtail.ObjectInfoJson, err error) {
 		checkpointEntry := entries[i]
 		checkpointEntry.sid = rt.SID()
 		if checkpointEntry.end.Less(&maxGlobalEnd) {
@@ -92,7 +93,7 @@ func GetCheckpointStat(ctx context.Context, rt *dbutils.Runtime, name string) (r
 				entries[i] = checkpointEntry
 				closecbs = append(closecbs, func() { datas[i].CloseWhenLoadFromCache(checkpointEntry.version) })
 			}
-			res, err = datas[i].PrintMetaBatch()
+			obj, err = datas[i].PrintMetaBatch()
 		}
 		return
 	}
@@ -118,9 +119,26 @@ func GetCheckpointStat(ctx context.Context, rt *dbutils.Runtime, name string) (r
 	for i := 0; i < bat.Length(); i++ {
 		readfn(i, PrefetchData)
 	}
+	objs := make([]logtail.ObjectInfoJson, 0, bat.Length())
 	for i := 0; i < bat.Length(); i++ {
-		res, err = readfn(i, ReadData)
+		obj, _ := readfn(i, ReadData)
+		if len(obj.Tables) != 0 {
+			obj.Index = len(objs)
+			objs = append(objs, *obj)
+		}
 	}
+	var json = jsoniter.ConfigCompatibleWithStandardLibrary
+	checkpointJsoon := logtail.CheckpointInfoJson{
+		CheckpointDataCount: len(objs),
+		Data:                objs,
+	}
+	jsonData, err := json.MarshalIndent(checkpointJsoon, "", "  ")
+	if err != nil {
+		logutil.Infof("[checkpointStat] error: %v", err)
+		return
+	}
+
+	res = string(jsonData)
 
 	return
 }

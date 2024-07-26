@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/spf13/cobra"
@@ -1023,6 +1024,8 @@ func (c *ckpStatArg) Usage() (res string) {
 
 func (c *ckpStatArg) Run() (err error) {
 	c.res, err = checkpoint.GetCheckpointStat(context.Background(), c.ctx.db.Runtime, c.name)
-
+	if err != nil {
+		logutil.Infof("checkpoint stat err: %v", err)
+	}
 	return
 }
