@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 const initedSize = 4 * mpool.MB
@@ -108,6 +109,7 @@ func (w *CSVWriter) FlushAndClose() (int, error) {
 	if w.buf == nil || w.buf.Len() == 0 {
 		return 0, nil
 	}
+	v2.TraceMOLoggerExportCsvHistogram.Observe(float64(w.GetContentLength()))
 	n, err := w.writer.WriteString(util.UnsafeBytesToString(w.buf.Bytes()))
 	if err != nil {
 		return 0, err
@@ -120,6 +122,7 @@ func (w *CSVWriter) FlushAndClose() (int, error) {
 // FlushBuffer flush the input buf content into file.
 // The writer should NOT call function WriteRow, WriteStrings, FlushAndClose.
 func (w *CSVWriter) FlushBuffer(buf *bytes.Buffer) (int, error) {
+	v2.TraceMOLoggerExportCsvHistogram.Observe(float64(w.GetContentLength()))
 	n, err := w.writer.WriteString(util.UnsafeBytesToString(buf.Bytes()))
 	if err != nil {
 		return 0, err
