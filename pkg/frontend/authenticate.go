@@ -4545,6 +4545,14 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 		dbName = string(df.Name.Name.SchemaName)
 	}
 
+	err = bh.Exec(ctx, "begin;")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+	if err != nil {
+		return err
+	}
+
 	// authticate db exists
 	dbExists, err = checkDatabaseExistsOrNot(ctx, ses.GetBackgroundExec(ctx), dbName)
 	if err != nil {
@@ -4606,10 +4614,7 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 					continue
 				}
 				handleArgMatch := func() (rtnErr error) {
-					//put it into the single transaction
-					rtnErr = bh.Exec(ctx, "begin;")
 					defer func() {
-						rtnErr = finishTxn(ctx, bh, rtnErr)
 						if rtnErr == nil {
 							u := &function.NonSqlUdfBody{}
 							if json.Unmarshal([]byte(bodyStr), u) == nil && u.Import {
@@ -4617,10 +4622,6 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 							}
 						}
 					}()
-					if rtnErr != nil {
-						return rtnErr
-					}
-
 					sql = fmt.Sprintf(deleteUserDefinedFunctionFormat, funcId)
 
 					rtnErr = bh.Exec(ctx, sql)
@@ -4653,6 +4654,14 @@ func doDropFunctionWithDB(ctx context.Context, ses *Session, stmt tree.Statement
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
+	err = bh.Exec(ctx, "begin;")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+	if err != nil {
+		return err
+	}
+
 	// validate database name and signature (name + args)
 	bh.ClearExecResultSet()
 	sql = getSqlForCheckUdfWithDb(dbName)
@@ -4679,9 +4688,7 @@ func doDropFunctionWithDB(ctx context.Context, ses *Session, stmt tree.Statement
 
 			handleArgMatch := func() (rtnErr error) {
 				//put it into the single transaction
-				rtnErr = bh.Exec(ctx, "begin;")
 				defer func() {
-					rtnErr = finishTxn(ctx, bh, rtnErr)
 					if rtnErr == nil {
 						u := &function.NonSqlUdfBody{}
 						if json.Unmarshal([]byte(bodyStr), u) == nil && u.Import {
@@ -4689,9 +4696,6 @@ func doDropFunctionWithDB(ctx context.Context, ses *Session, stmt tree.Statement
 						}
 					}
 				}()
-				if rtnErr != nil {
-					return rtnErr
-				}
 
 				sql = fmt.Sprintf(deleteUserDefinedFunctionFormat, funcId)
 
@@ -4731,6 +4735,14 @@ func doDropProcedure(ctx context.Context, ses *Session, dp *tree.DropProcedure) 
 		dbName = string(dp.Name.Name.SchemaName)
 	}
 
+	err = bh.Exec(ctx, "begin;")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+	if err != nil {
+		return err
+	}
+
 	// validate database name and signature (name + args)
 	bh.ClearExecResultSet()
 	checkDatabase = fmt.Sprintf(checkStoredProcedureArgs, string(dp.Name.Name.ObjectName), dbName)
@@ -4751,15 +4763,6 @@ func doDropProcedure(ctx context.Context, ses *Session, dp *tree.DropProcedure) 
 			return err
 		}
 		handleArgMatch := func() (rtnErr error) {
-			//put it into the single transaction
-			rtnErr = bh.Exec(ctx, "begin;")
-			defer func() {
-				rtnErr = finishTxn(ctx, bh, rtnErr)
-			}()
-			if rtnErr != nil {
-				return rtnErr
-			}
-
 			sql = fmt.Sprintf(deleteStoredProcedureFormat, procId)
 
 			rtnErr = bh.Exec(ctx, sql)
