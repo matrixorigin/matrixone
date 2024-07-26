@@ -69,8 +69,6 @@ type BlockInfoInProgress struct {
 
 	//TODO:: remove it.
 	PartitionNum int16
-	//for temporary table, it'll be removed.
-	ShardID uint64
 }
 
 func (b *BlockInfoInProgress) MarshalWithBuf(w *bytes.Buffer) (uint32, error) {

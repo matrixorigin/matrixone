@@ -322,8 +322,8 @@ func (t *Table) GetEngineType() engine.EngineType {
 	return engine.Memory
 }
 
-func (t *Table) Ranges(_ context.Context, _ []*plan.Expr, _ int) (engine.Ranges, error) {
-	// return encoded shard ids
+func (t *Table) Ranges(_ context.Context, _ []*plan.Expr, _ int) (engine.RelData, error) {
+	rd := &MemRelationData{}
 	nodes := getTNServices(t.engine.cluster)
 	shards := make(ShardIdSlice, 0, len(nodes)*8)
 	for _, node := range nodes {
@@ -333,17 +333,17 @@ func (t *Table) Ranges(_ context.Context, _ []*plan.Expr, _ int) (engine.Ranges,
 			shards = append(shards, id...)
 		}
 	}
-	return &shards, nil
+	rd.shards = shards
+	return rd, nil
 }
 
 func (tbl *Table) CollectTombstones(ctx context.Context, txnOffset int) (engine.Tombstoner, error) {
-	panic("implement me")
+	panic("Not Support")
 }
 
 // for memory engine.
 type MemRelationData struct {
-	//typ RelDataType
-	blkList []*objectio.BlockInfoInProgress
+	shards ShardIdSlice
 }
 
 func (rd *MemRelationData) MarshalToBytes() []byte {
@@ -376,18 +376,15 @@ func (rd *MemRelationData) ForeachDataBlk(
 }
 
 func (rd *MemRelationData) GetDataBlk(i int) *objectio.BlockInfoInProgress {
-	return rd.blkList[i]
+	panic("Not Support")
 }
 
 func (rd *MemRelationData) SetDataBlk(i int, blk *objectio.BlockInfoInProgress) {
-	rd.blkList[i] = blk
+	panic("Not Support")
 }
 
 func (rd *MemRelationData) DataBlkSlice(i, j int) engine.RelData {
-	return &MemRelationData{
-		blkList: rd.blkList[i:j],
-	}
-
+	panic("Not Support")
 }
 
 // GroupByPartitionNum TODO::remove it after refactor of partition table.
@@ -396,7 +393,7 @@ func (rd *MemRelationData) GroupByPartitionNum() map[int16]engine.RelData {
 }
 
 func (rd *MemRelationData) AppendDataBlk(blk *objectio.BlockInfoInProgress) {
-	rd.blkList = append(rd.blkList, blk)
+	//rd.blkList = append(rd.blkList, blk)
 }
 
 func (rd *MemRelationData) BuildEmptyRelData() engine.RelData {
@@ -404,21 +401,7 @@ func (rd *MemRelationData) BuildEmptyRelData() engine.RelData {
 }
 
 func (rd *MemRelationData) BlkCnt() int {
-	return len(rd.blkList)
-}
-
-func (t *Table) RangesInProgress(_ context.Context, _ []*plan.Expr, _ int) (engine.RelData, error) {
-	rd := &MemRelationData{}
-	nodes := getTNServices(t.engine.cluster)
-	for _, node := range nodes {
-		for _, shard := range node.Shards {
-			block := &objectio.BlockInfoInProgress{
-				ShardID: shard.ShardID,
-			}
-			rd.blkList = append(rd.blkList, block)
-		}
-	}
-	return rd, nil
+	return rd.shards.Len()
 }
 
 type ShardIdSlice []byte

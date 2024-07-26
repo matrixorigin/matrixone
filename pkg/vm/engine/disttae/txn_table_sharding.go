@@ -178,7 +178,7 @@ func (tbl *txnTableDelegate) Ranges(
 	ctx context.Context,
 	exprs []*plan.Expr,
 	n int,
-) (engine.Ranges, error) {
+) (engine.RelData, error) {
 	if tbl.isLocal() {
 		return tbl.origin.Ranges(
 			ctx,
@@ -198,23 +198,6 @@ func (tbl *txnTableDelegate) CollectTombstones(ctx context.Context, txnOffset in
 			txnOffset,
 		)
 	}
-	// TODO: forward
-	return nil, nil
-}
-
-func (tbl *txnTableDelegate) RangesInProgress(
-	ctx context.Context,
-	exprs []*plan.Expr,
-	n int,
-) (engine.RelData, error) {
-	if tbl.isLocal() {
-		return tbl.origin.RangesInProgress(
-			ctx,
-			exprs,
-			n,
-		)
-	}
-
 	// TODO: forward
 	return nil, nil
 }

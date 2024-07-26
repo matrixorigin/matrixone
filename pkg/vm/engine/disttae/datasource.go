@@ -465,10 +465,10 @@ func UnmarshalRelationData(data []byte) (engine.RelData, error) {
 		if err := rd1.UnMarshal(data); err != nil {
 			return nil, err
 		}
+		return rd1, nil
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("unsupported relation data type")
 	}
-	panic("impossible path")
 }
 
 type relationDataV0 struct {
@@ -479,7 +479,8 @@ type relationDataV0 struct {
 type relationDataV1 struct {
 	typ engine.RelDataType
 	//blkList[0] is a empty block info
-	blkList []*objectio.BlockInfoInProgress
+	//blkList []*objectio.BlockInfoInProgress
+	blklist *objectio.BlockInfoSliceInProgress
 
 	//marshal tombstones if isEmpty is false, otherwise don't need to marshal tombstones
 	isEmpty      bool
@@ -488,10 +489,10 @@ type relationDataV1 struct {
 	tombstones engine.Tombstoner
 }
 
-func buildRelationDataV1(blkList []*objectio.BlockInfoInProgress) *relationDataV1 {
+func buildRelationDataV1(blkList *objectio.BlockInfoSliceInProgress) *relationDataV1 {
 	return &relationDataV1{
 		typ:     engine.RelDataV1,
-		blkList: blkList,
+		blklist: blkList,
 		isEmpty: true,
 	}
 }
@@ -499,24 +500,11 @@ func buildRelationDataV1(blkList []*objectio.BlockInfoInProgress) *relationDataV
 func (rd1 *relationDataV1) UnMarshal(data []byte) error {
 	data = data[1:]
 
-	blkCnt := types.DecodeUint32(data)
+	sizeofblks := types.DecodeUint32(data)
 	data = data[4:]
 
-	if blkCnt > 0 {
-
-		blkSize := types.DecodeUint32(data)
-		data = data[4:]
-
-		for i := uint32(0); i < blkCnt; i++ {
-			blk := &objectio.BlockInfoInProgress{}
-			err := blk.Unmarshal(data[:blkSize])
-			if err != nil {
-				return err
-			}
-			data = data[blkSize:]
-			rd1.blkList = append(rd1.blkList, blk)
-		}
-	}
+	*rd1.blklist = data[:sizeofblks]
+	data = data[sizeofblks:]
 
 	isEmpty := types.DecodeBool(data)
 	rd1.isEmpty = isEmpty
@@ -547,41 +535,24 @@ func (rd1 *relationDataV1) UnMarshal(data []byte) error {
 }
 
 func (rd1 *relationDataV1) MarshalWithBuf(w *bytes.Buffer) error {
-	var pos1 uint32
 	var pos2 uint32
 	typ := uint8(rd1.typ)
 	if _, err := w.Write(types.EncodeUint8(&typ)); err != nil {
 		return err
 	}
-	pos1 += 1
 	pos2 += 1
 
-	//len of blk list
-	length := uint32(len(rd1.blkList))
-	if _, err := w.Write(types.EncodeUint32(&length)); err != nil {
-		return err
-	}
-	pos1 += 4
-	pos2 += 4
-	// reserve the space: 4 bytes for block info
-	var sizeOfBlockInfo uint32
-	if _, err := w.Write(types.EncodeUint32(&sizeOfBlockInfo)); err != nil {
+	sizeofblks := uint32(rd1.blklist.Size())
+	if _, err := w.Write(types.EncodeUint32(&sizeofblks)); err != nil {
 		return err
 	}
 	pos2 += 4
 
-	for i, blk := range rd1.blkList {
-		space, err := blk.MarshalWithBuf(w)
-		if err != nil {
-			return err
-		}
-		if i == 0 {
-			sizeOfBlockInfo = space
-			//update the size of block info
-			copy(w.Bytes()[pos1:pos1+4], types.EncodeUint32(&sizeOfBlockInfo))
-		}
-		pos2 += space
+	//marshal blk list
+	if _, err := w.Write(*rd1.blklist); err != nil {
+		return err
 	}
+	pos2 += sizeofblks
 
 	if _, err := w.Write(types.EncodeBool(&rd1.isEmpty)); err != nil {
 		return err
@@ -662,6 +633,7 @@ func (rd1 *relationDataV1) DataBlkSlice(i, j int) engine.RelData {
 
 func (rd1 *relationDataV1) GroupByPartitionNum() map[int16]engine.RelData {
 	ret := make(map[int16]engine.RelData)
+
 	for _, blk := range rd1.blkList {
 		if blk.IsMemBlk() {
 			continue
@@ -703,7 +675,7 @@ func (rd1 *relationDataV1) BuildEmptyRelData() engine.RelData {
 }
 
 func (rd1 *relationDataV1) BlkCnt() int {
-	return len(rd1.blkList)
+	return rd1.blklist.Len()
 }
 
 type RemoteDataSource struct {

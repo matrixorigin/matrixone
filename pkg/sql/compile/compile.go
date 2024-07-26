@@ -4077,7 +4077,7 @@ func (c *Compile) expandRangesInProgress(
 	if err != nil {
 		return nil, err
 	}
-	relData, err = rel.RangesInProgress(ctx, blockFilterList, c.TxnOffset)
+	relData, err = rel.Ranges(ctx, blockFilterList, c.TxnOffset)
 	if err != nil {
 		return nil, err
 	}
@@ -4091,7 +4091,7 @@ func (c *Compile) expandRangesInProgress(
 				if err != nil {
 					return nil, err
 				}
-				subRelData, err := subrelation.RangesInProgress(ctx, n.BlockFilterList, c.TxnOffset)
+				subRelData, err := subrelation.Ranges(ctx, n.BlockFilterList, c.TxnOffset)
 				if err != nil {
 					return nil, err
 				}
@@ -4111,7 +4111,7 @@ func (c *Compile) expandRangesInProgress(
 				if err != nil {
 					return nil, err
 				}
-				subRelData, err := subrelation.RangesInProgress(ctx, n.BlockFilterList, c.TxnOffset)
+				subRelData, err := subrelation.Ranges(ctx, n.BlockFilterList, c.TxnOffset)
 				if err != nil {
 					return nil, err
 				}
