@@ -239,7 +239,7 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, fileList []string
 	var buf bytes.Buffer
 	mp := proc.GetMPool()
 	for i := 0; i < num; i++ {
-		bat.Attrs[i] = node.TableDef.Cols[i].Name
+		bat.Attrs[i] = node.TableDef.Cols[i].GetOriginCaseName()
 		if bat.Attrs[i] == STATEMENT_ACCOUNT {
 			typ := types.New(types.T(node.TableDef.Cols[i].Typ.Id), node.TableDef.Cols[i].Typ.Width, node.TableDef.Cols[i].Typ.Scale)
 			bat.Vecs[i], err = proc.AllocVectorOfRows(typ, len(fileList), nil)
@@ -1061,7 +1061,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 	meta := param.Zoneparam.bs[param.Zoneparam.offset].GetMeta()
 	colCnt := meta.BlockHeader().ColumnCount()
 	for i := 0; i < len(param.Attrs); i++ {
-		idxs[i] = uint16(param.Name2ColIndex[param.Attrs[i]])
+		idxs[i] = uint16(param.Name2ColIndex[strings.ToLower(param.Attrs[i])])
 		if idxs[i] >= colCnt {
 			idxs[i] = 0
 		}
@@ -1075,7 +1075,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 
 	var sels []int32
 	for i := 0; i < len(param.Attrs); i++ {
-		if uint16(param.Name2ColIndex[param.Attrs[i]]) >= colCnt {
+		if uint16(param.Name2ColIndex[strings.ToLower(param.Attrs[i])]) >= colCnt {
 			vecTmp, err = proc.AllocVectorOfRows(makeType(&param.Cols[i].Typ, false), rows, nil)
 			if err != nil {
 				return nil, err
@@ -1320,7 +1320,7 @@ func transJsonArray2Lines(ctx context.Context, str string, attrs []string, cols 
 	return res, nil
 }
 
-func getNullFlag(nullMap map[string]([]string), attr, field string) bool {
+func getNullFlag(nullMap map[string][]string, attr, field string) bool {
 	if nullMap == nil || len(nullMap[attr]) == 0 {
 		return false
 	}
@@ -1338,9 +1338,9 @@ func getFieldFromLine(line []csvparser.Field, colName string, param *ExternalPar
 		return csvparser.Field{Val: param.Fileparam.Filepath}
 	}
 	if param.Extern.ExtTab {
-		return line[param.Name2ColIndex[colName]]
+		return line[param.Name2ColIndex[strings.ToLower(colName)]]
 	}
-	return line[param.TbColToDataCol[colName]]
+	return line[param.TbColToDataCol[strings.ToLower(colName)]]
 }
 
 // when len(line) >= len(param.TbColToDataCol), call this function to get one row data
