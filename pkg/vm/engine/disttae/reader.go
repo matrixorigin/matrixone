@@ -63,7 +63,7 @@ func (mixin *withFilterMixin) reset() {
 // NOTE: here we assume the tryUpdate is always called with the same cols
 // for all blocks and it will only be updated once
 func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
-	if len(cols) == len(mixin.columns.seqnums) || mixin.columns.extraRowIdAdded {
+	if len(cols) == len(mixin.columns.seqnums) {
 		return
 	}
 
