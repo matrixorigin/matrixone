@@ -17,6 +17,7 @@ package disttae
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"slices"
 	"sort"
 
@@ -954,15 +955,16 @@ type LocalDataSource struct {
 
 	// runtime config
 	rc struct {
-		WorkspaceLocked   bool
-		SkipPStateDeletes bool
+		batchPrefetchCursor int
+		WorkspaceLocked     bool
+		SkipPStateDeletes   bool
 	}
 
 	mp  *mpool.MPool
 	ctx context.Context
 	fs  fileservice.FileService
 
-	cursor       int
+	rangesCursor int
 	snapshotTS   types.TS
 	iteratePhase engine.DataState
 }
@@ -1001,6 +1003,7 @@ func NewLocalDataSource(
 	if skipReadMem {
 		source.iteratePhase = engine.Persisted
 	}
+
 	return source, nil
 }
 
@@ -1047,6 +1050,9 @@ func (ls *LocalDataSource) Next(
 		return nil, engine.End, nil
 	}
 
+	// bathed prefetch block data and deletes
+	ls.batchPrefetch(seqNums)
+
 	for {
 		switch ls.iteratePhase {
 		case engine.InMem:
@@ -1063,9 +1069,9 @@ func (ls *LocalDataSource) Next(
 			return nil, engine.InMem, nil
 
 		case engine.Persisted:
-			if ls.cursor < len(ls.ranges) {
-				ls.cursor++
-				return ls.ranges[ls.cursor-1], engine.Persisted, nil
+			if ls.rangesCursor < len(ls.ranges) {
+				ls.rangesCursor++
+				return ls.ranges[ls.rangesCursor-1], engine.Persisted, nil
 			}
 
 			ls.iteratePhase = engine.End
@@ -1599,4 +1605,83 @@ func (ls *LocalDataSource) applyPStatePersistedDeltaLocation(
 	}
 
 	return leftRows, deletedRows, nil
+}
+
+func (ls *LocalDataSource) batchPrefetch(seqNums []uint16) {
+	if ls.rc.batchPrefetchCursor >= len(ls.ranges) ||
+		ls.rangesCursor < ls.rc.batchPrefetchCursor {
+		return
+	}
+
+	batchSize := min(1000, len(ls.ranges)-ls.rc.batchPrefetchCursor)
+
+	begin := ls.rc.batchPrefetchCursor
+	end := ls.rc.batchPrefetchCursor + batchSize
+
+	// prefetch blk data
+	err := blockio.BlockPrefetchInProgress(
+		ls.table.proc.Load().GetService(), seqNums, ls.fs,
+		[][]*objectio.BlockInfoInProgress{ls.ranges[begin:end]}, true)
+	if err != nil {
+		logutil.Errorf("pefetch block data: %s", err.Error())
+	}
+
+	// prefetch blk delta location
+	for idx := begin; idx < end; idx++ {
+		if loc, _, ok := ls.pState.GetBockDeltaLoc(ls.ranges[idx].BlockID); ok {
+			if err = blockio.PrefetchTombstone(
+				ls.table.proc.Load().GetService(), []uint16{0, 1, 2},
+				[]uint16{objectio.Location(loc[:]).ID()}, ls.fs, objectio.Location(loc[:])); err != nil {
+				logutil.Errorf("prefetch block delta location: %s", err.Error())
+			}
+		}
+	}
+
+	ls.table.getTxn().blockId_tn_delete_metaLoc_batch.RLock()
+	defer ls.table.getTxn().blockId_tn_delete_metaLoc_batch.RUnlock()
+
+	// prefetch cn flushed but not committed deletes
+	var ok bool
+	var bats []*batch.Batch
+	var locs []objectio.Location = make([]objectio.Location, 0)
+
+	pkColIdx := ls.table.tableDef.Pkey.PkeyColId
+
+	for idx := begin; idx < end; idx++ {
+		if bats, ok = ls.table.getTxn().blockId_tn_delete_metaLoc_batch.data[ls.ranges[idx].BlockID]; !ok {
+			continue
+		}
+
+		locs = locs[:0]
+		for _, bat := range bats {
+			vs, area := vector.MustVarlenaRawData(bat.GetVector(0))
+			for i := range vs {
+				location, err := blockio.EncodeLocationFromString(vs[i].UnsafeGetString(area))
+				if err != nil {
+					logutil.Errorf("prefetch cn flushed s3 deletes: %s", err.Error())
+				}
+				locs = append(locs, location)
+			}
+		}
+
+		if len(locs) == 0 {
+			continue
+		}
+
+		pref, err := blockio.BuildPrefetchParams(ls.fs, locs[0])
+		if err != nil {
+			logutil.Errorf("prefetch cn flushed s3 deletes: %s", err.Error())
+		}
+
+		for _, loc := range locs {
+			//rowId + pk
+			pref.AddBlockWithType([]uint16{0, uint16(pkColIdx)}, []uint16{loc.ID()}, uint16(objectio.SchemaTombstone))
+		}
+
+		if err = blockio.PrefetchWithMerged(ls.table.proc.Load().GetService(), pref); err != nil {
+			logutil.Errorf("prefetch cn flushed s3 deletes: %s", err.Error())
+		}
+	}
+
+	ls.rc.batchPrefetchCursor += batchSize
 }
