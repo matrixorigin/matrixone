@@ -17,9 +17,10 @@ package disttae
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"slices"
 	"sort"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -466,10 +467,10 @@ func UnmarshalRelationData(data []byte) (engine.RelData, error) {
 		if err := rd1.UnMarshal(data); err != nil {
 			return nil, err
 		}
+		return rd1, nil
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("unsupported relation data type")
 	}
-	panic("impossible path")
 }
 
 type relationDataV0 struct {
