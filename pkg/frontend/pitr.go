@@ -679,8 +679,8 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (e
 			toAccountId := uint32(pitr.accountId)
 			// check account exists or not
 			var accountExist bool
-			if accountExist, rtnErr = doCheckAccountExistsInPitrRestore(ctx, ses.GetService(), bh, pitrName, ts, fromAccount, toAccountId); err != nil {
-				return err
+			if accountExist, rtnErr = doCheckAccountExistsInPitrRestore(ctx, ses.GetService(), bh, pitrName, ts, fromAccount, toAccountId); rtnErr != nil {
+				return rtnErr
 			}
 			if !accountExist {
 				return moerr.NewInternalError(ctx, "account %s does not exist at timestamp %d", tenantInfo.GetTenant(), ts)
