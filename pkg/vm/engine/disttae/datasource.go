@@ -17,10 +17,6 @@ package disttae
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"slices"
-	"sort"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -29,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -36,6 +33,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"slices"
+	"sort"
 )
 
 type tombstoneDataV1 struct {
@@ -466,9 +465,12 @@ func UnmarshalRelationData(data []byte) (engine.RelData, error) {
 		if err := rd1.UnMarshal(data); err != nil {
 			return nil, err
 		}
+		return rd1, nil
+
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("unsupported relation data type")
 	}
+
 	panic("impossible path")
 }
 
