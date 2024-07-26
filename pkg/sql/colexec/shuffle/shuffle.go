@@ -198,7 +198,7 @@ func shuffleConstVectorByHash(ap *Shuffle, bat *batch.Batch) uint64 {
 	case types.T_uint16:
 		groupByCol := vector.MustFixedCol[uint16](groupByVec)
 		return plan2.SimpleInt64HashToRange(uint64(groupByCol[0]), lenRegs)
-	case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
+	case types.T_char, types.T_varchar, types.T_text:
 		groupByCol, area := vector.MustVarlenaRawData(groupByVec)
 		return plan2.SimpleCharHashToRange(groupByCol[0].GetByteSlice(area), lenRegs)
 	default:
@@ -274,7 +274,7 @@ func getShuffledSelsByHashWithNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 			}
 			sels[regIndex] = append(sels[regIndex], int32(row))
 		}
-	case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
+	case types.T_char, types.T_varchar, types.T_text:
 		groupByCol, area := vector.MustVarlenaRawData(groupByVec)
 		for row, v := range groupByCol {
 			var regIndex uint64 = 0
@@ -336,7 +336,7 @@ func getShuffledSelsByHashWithoutNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 			regIndex := plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
 			sels[regIndex] = append(sels[regIndex], int32(row))
 		}
-	case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
+	case types.T_char, types.T_varchar, types.T_text:
 		groupByCol, area := vector.MustVarlenaRawData(groupByVec)
 		for row, v := range groupByCol {
 			regIndex := plan2.SimpleCharHashToRange(v.GetByteSlice(area), lenRegs)
@@ -451,7 +451,7 @@ func allBatchInOneRange(ap *Shuffle, bat *batch.Batch) (bool, uint64) {
 		} else {
 			lastValueUnsigned = uint64(groupByCol[groupByVec.Length()-1])
 		}
-	case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
+	case types.T_char, types.T_varchar, types.T_text:
 		groupByCol, area := vector.MustVarlenaRawData(groupByVec)
 		firstValueUnsigned = plan2.VarlenaToUint64(&groupByCol[0], area)
 		if groupByVec.IsConst() {
@@ -581,7 +581,7 @@ func getShuffledSelsByRangeWithoutNull(ap *Shuffle, bat *batch.Batch) [][]int32 
 				sels[regIndex] = append(sels[regIndex], int32(row))
 			}
 		}
-	case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
+	case types.T_char, types.T_varchar, types.T_text:
 		groupByCol, area := vector.MustVarlenaRawData(groupByVec)
 		if area == nil {
 			if ap.ShuffleRangeUint64 != nil {
@@ -756,7 +756,7 @@ func getShuffledSelsByRangeWithNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 				sels[regIndex] = append(sels[regIndex], int32(row))
 			}
 		}
-	case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
+	case types.T_char, types.T_varchar, types.T_text:
 		groupByCol, area := vector.MustVarlenaRawData(groupByVec)
 		if area == nil {
 			if ap.ShuffleRangeUint64 != nil {
