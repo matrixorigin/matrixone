@@ -879,7 +879,9 @@ func readBlockData(
 	return
 }
 
-func ReadBlockDelete(ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService) (bat *batch.Batch, isPersistedByCN bool, release func(), err error) {
+func ReadBlockDelete(
+	ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService,
+) (bat *batch.Batch, isPersistedByCN bool, release func(), err error) {
 	isPersistedByCN, err = IsPersistedByCN(ctx, deltaloc, fs)
 	if err != nil {
 		return
@@ -888,7 +890,9 @@ func ReadBlockDelete(ctx context.Context, deltaloc objectio.Location, fs fileser
 	return
 }
 
-func ReadBlockDeleteBySchema(ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService, isPersistedByCN bool) (bat *batch.Batch, release func(), err error) {
+func ReadBlockDeleteBySchema(
+	ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService, isPersistedByCN bool,
+) (bat *batch.Batch, release func(), err error) {
 	var cols []uint16
 	if isPersistedByCN {
 		cols = []uint16{0, 1}
@@ -899,7 +903,9 @@ func ReadBlockDeleteBySchema(ctx context.Context, deltaloc objectio.Location, fs
 	return
 }
 
-func IsPersistedByCN(ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService) (bool, error) {
+func IsPersistedByCN(
+	ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService,
+) (bool, error) {
 	objectMeta, err := objectio.FastLoadObjectMeta(ctx, &deltaloc, false, fs)
 	if err != nil {
 		return false, err
@@ -913,7 +919,9 @@ func IsPersistedByCN(ctx context.Context, deltaloc objectio.Location, fs fileser
 	return columnCount == 2, nil
 }
 
-func EvalDeleteRowsByTimestamp(deletes *batch.Batch, ts types.TS, blockid *types.Blockid) (rows *nulls.Bitmap) {
+func EvalDeleteRowsByTimestamp(
+	deletes *batch.Batch, ts types.TS, blockid *types.Blockid,
+) (rows *nulls.Bitmap) {
 	if deletes == nil {
 		return
 	}
@@ -937,7 +945,9 @@ func EvalDeleteRowsByTimestamp(deletes *batch.Batch, ts types.TS, blockid *types
 	return
 }
 
-func EvalDeleteRowsByTimestampForDeletesPersistedByCN(deletes *batch.Batch, ts types.TS, committs types.TS) (rows *nulls.Bitmap) {
+func EvalDeleteRowsByTimestampForDeletesPersistedByCN(
+	deletes *batch.Batch, ts types.TS, committs types.TS,
+) (rows *nulls.Bitmap) {
 	if deletes == nil || ts.Less(&committs) {
 		return
 	}

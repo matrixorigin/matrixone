@@ -147,8 +147,13 @@ func (r *emptyReader) Close() error {
 	return nil
 }
 
-func (r *emptyReader) Read(_ context.Context, _ []string,
-	_ *plan.Expr, _ *mpool.MPool, _ engine.VectorPool) (*batch.Batch, error) {
+func (r *emptyReader) Read(
+	_ context.Context,
+	_ []string,
+	_ *plan.Expr,
+	_ *mpool.MPool,
+	_ engine.VectorPool,
+) (*batch.Batch, error) {
 	return nil, nil
 }
 
