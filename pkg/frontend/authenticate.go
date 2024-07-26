@@ -4632,7 +4632,6 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 					return err
 				}
 			}
-			return moerr.NewNoUDFNoCtx(string(df.Name.Name.ObjectName))
 		}
 	}
 	// no such function
