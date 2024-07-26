@@ -101,6 +101,7 @@ func (c *ContentWriter) FlushAndClose() (int, error) {
 	// main flow
 	n, err := c.sqlFlusher.FlushBuffer(c.buf)
 	if err != nil {
+		logutil.Error("failed to flush buffer as sql", zap.Error(err), logutil.TableField(c.tbl.Table), logutil.Discardable())
 		n, err = c.csvFlusher.FlushBuffer(c.buf)
 		if err != nil {
 			v2.TraceMOLoggerErrorFlushCounter.Inc()
