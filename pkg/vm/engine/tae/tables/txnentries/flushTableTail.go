@@ -164,8 +164,6 @@ func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) {
 		} else {
 			page.SetBornTS(now)
 		}
-	}
-	for _, page := range pages {
 		entry.rt.TransferTable.AddPage(page)
 	}
 	duration += time.Since(start)
