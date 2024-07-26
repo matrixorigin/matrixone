@@ -235,6 +235,7 @@ func (order *Order) Call(proc *process.Process) (vm.CallResult, error) {
 				continue
 			}
 
+			anal.Input(result.Batch, order.IsFirst)
 			enoughToSend, err := ctr.appendBatch(proc, result.Batch)
 			if err != nil {
 				result.Status = vm.ExecStop

@@ -30,6 +30,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/panjf2000/ants/v2"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -88,8 +91,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/panjf2000/ants/v2"
-	"go.uber.org/zap"
 )
 
 // Note: Now the cost going from stat is actually the number of rows, so we can only estimate a number for the size of each row.
@@ -2197,15 +2198,21 @@ func (c *Compile) compileTPUnion(n *plan.Node, ss []*Scope, children []*Scope) [
 		gn.GroupBy[i] = plan2.DeepCopyExpr(n.ProjectList[i])
 		gn.GroupBy[i].Typ.NotNullable = false
 	}
+
+	currentFirstFlag := c.anal.isFirst
 	op := constructGroup(c.proc.Ctx, gn, n, true, 0, c.proc)
 	op.SetIdx(c.anal.curNodeIdx)
+	op.SetIsFirst(currentFirstFlag)
 	rs[0].setRootOperator(op)
+	c.anal.isFirst = false
 
 	for i := range ss {
-		ss[i].setRootOperator(
-			connector.NewArgument().
-				WithReg(rs[0].Proc.Reg.MergeReceivers[i]),
-		)
+		// waring: `connector` operator is not used as an input/output analyze,
+		// and `connector` operator cannot play the role of IsFirst/IsLast
+		connArg := connector.NewArgument().WithReg(rs[0].Proc.Reg.MergeReceivers[i])
+		connArg.SetIdx(c.anal.curNodeIdx)
+		connArg.SetIsFirst(false)
+		ss[i].setRootOperator(connArg)
 		rs[0].PreScopes = append(rs[0].PreScopes, ss[i])
 	}
 	return rs
@@ -2215,6 +2222,7 @@ func (c *Compile) compileUnion(n *plan.Node, left []*Scope, right []*Scope) []*S
 	if c.IsSingleScope(left) && c.IsSingleScope(right) {
 		return c.compileTPUnion(n, left, right)
 	}
+
 	left = append(left, right...)
 	rs := c.newScopeListOnCurrentCN(1, int(n.Stats.BlockNum))
 	gn := new(plan.Node)
@@ -2224,16 +2232,26 @@ func (c *Compile) compileUnion(n *plan.Node, left []*Scope, right []*Scope) []*S
 		gn.GroupBy[i].Typ.NotNullable = false
 	}
 	idx := 0
+
+	currentFirstFlag := c.anal.isFirst
 	for i := range rs {
 		op := constructGroup(c.proc.Ctx, gn, n, true, 0, c.proc)
 		op.SetIdx(c.anal.curNodeIdx)
+		op.SetIsFirst(currentFirstFlag)
 		rs[i].setRootOperator(op)
 		if isSameCN(rs[i].NodeInfo.Addr, c.addr) {
 			idx = i
 		}
 	}
+	c.anal.isFirst = false
+
 	mergeChildren := c.newMergeScope(left)
-	mergeChildren.setRootOperator(constructDispatch(0, rs, c.addr, n, false))
+	// waring: `dispath` operator is not used as an input/output analyze,
+	// and `dispath` operator cannot play the role of IsFirst/IsLast
+	dispathArg := constructDispatch(0, rs, c.addr, n, false)
+	dispathArg.SetIdx(c.anal.curNodeIdx)
+	dispathArg.SetIsFirst(false)
+	mergeChildren.setRootOperator(dispathArg)
 	rs[idx].PreScopes = append(rs[idx].PreScopes, mergeChildren)
 	return rs
 }
@@ -2241,28 +2259,44 @@ func (c *Compile) compileUnion(n *plan.Node, left []*Scope, right []*Scope) []*S
 func (c *Compile) compileTpMinusAndIntersect(n *plan.Node, left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
 	rs := c.newScopeListOnCurrentCN(2, int(n.Stats.BlockNum))
 	rs[0].PreScopes = append(rs[0].PreScopes, left[0], right[0])
-	left[0].setRootOperator(
-		connector.NewArgument().
-			WithReg(rs[0].Proc.Reg.MergeReceivers[0]),
-	)
-	right[0].setRootOperator(
-		connector.NewArgument().
-			WithReg(rs[0].Proc.Reg.MergeReceivers[1]),
-	)
+
+	connectLeftArg := connector.NewArgument().WithReg(rs[0].Proc.Reg.MergeReceivers[0])
+	connectLeftArg.SetIdx(c.anal.curNodeIdx)
+	connectLeftArg.SetIsFirst(false)
+	left[0].setRootOperator(connectLeftArg)
+	//left[0].setRootOperator(
+	//	connector.NewArgument().
+	//		WithReg(rs[0].Proc.Reg.MergeReceivers[0]),
+	//)
+
+	connectRightArg := connector.NewArgument().WithReg(rs[0].Proc.Reg.MergeReceivers[1])
+	connectRightArg.SetIdx(c.anal.curNodeIdx)
+	connectRightArg.SetIsFirst(false)
+	right[0].setRootOperator(connectRightArg)
+	//right[0].setRootOperator(
+	//	connector.NewArgument().
+	//		WithReg(rs[0].Proc.Reg.MergeReceivers[1]),
+	//)
+
+	currentFirstFlag := c.anal.isFirst
 	switch nodeType {
 	case plan.Node_MINUS:
 		arg := minus.NewArgument()
-		arg.Idx = c.anal.curNodeIdx
+		arg.SetIdx(c.anal.curNodeIdx)
+		arg.SetIsFirst(currentFirstFlag)
 		rs[0].ReplaceLeafOp(arg)
 	case plan.Node_INTERSECT:
 		arg := intersect.NewArgument()
-		arg.Idx = c.anal.curNodeIdx
+		arg.SetIdx(c.anal.curNodeIdx)
+		arg.SetIsFirst(currentFirstFlag)
 		rs[0].ReplaceLeafOp(arg)
 	case plan.Node_INTERSECT_ALL:
 		arg := intersectall.NewArgument()
-		arg.Idx = c.anal.curNodeIdx
+		arg.SetIdx(c.anal.curNodeIdx)
+		arg.SetIsFirst(currentFirstFlag)
 		rs[0].ReplaceLeafOp(arg)
 	}
+	c.anal.isFirst = false
 	return rs
 }
 
@@ -2272,26 +2306,32 @@ func (c *Compile) compileMinusAndIntersect(n *plan.Node, left []*Scope, right []
 	}
 	rs := c.newScopeListOnCurrentCN(2, int(n.Stats.BlockNum))
 	rs = c.newJoinScopeListWithBucket(rs, left, right, n)
+
+	currentFirstFlag := c.anal.isFirst
 	switch nodeType {
 	case plan.Node_MINUS:
 		for i := range rs {
 			arg := minus.NewArgument()
-			arg.Idx = c.anal.curNodeIdx
+			arg.SetIdx(c.anal.curNodeIdx)
+			arg.SetIsFirst(currentFirstFlag)
 			rs[i].ReplaceLeafOp(arg)
 		}
 	case plan.Node_INTERSECT:
 		for i := range rs {
 			arg := intersect.NewArgument()
-			arg.Idx = c.anal.curNodeIdx
+			arg.SetIdx(c.anal.curNodeIdx)
+			arg.SetIsFirst(currentFirstFlag)
 			rs[i].ReplaceLeafOp(arg)
 		}
 	case plan.Node_INTERSECT_ALL:
 		for i := range rs {
 			arg := intersectall.NewArgument()
-			arg.Idx = c.anal.curNodeIdx
+			arg.SetIdx(c.anal.curNodeIdx)
+			arg.SetIsFirst(currentFirstFlag)
 			rs[i].ReplaceLeafOp(arg)
 		}
 	}
+	c.anal.isFirst = false
 	return rs
 }
 
@@ -2601,22 +2641,26 @@ func (c *Compile) compileBroadcastJoin(node, left, right *plan.Node, ns []*plan.
 func (c *Compile) compilePartition(n *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
-		c.anal.isFirst = currentFirstFlag
+		//c.anal.isFirst = currentFirstFlag
 		if containBrokenNode(ss[i]) {
 			ss[i] = c.newMergeScope([]*Scope{ss[i]})
 		}
 		op := constructOrder(n)
 		op.SetIdx(c.anal.curNodeIdx)
-		op.SetIsFirst(c.anal.isFirst)
+		op.SetIsFirst(currentFirstFlag)
 		ss[i].setRootOperator(op)
 	}
 	c.anal.isFirst = false
 
 	rs := c.newMergeScope(ss)
 
+	currentFirstFlag = c.anal.isFirst
 	arg := constructPartition(n)
-	arg.Idx = c.anal.curNodeIdx
+	arg.SetIdx(c.anal.curNodeIdx)
+	arg.SetIsFirst(currentFirstFlag)
 	rs.ReplaceLeafOp(arg)
+	c.anal.isFirst = false
+
 	return []*Scope{rs}
 }
 
@@ -2776,30 +2820,39 @@ func (c *Compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) compileWin(n *plan.Node, ss []*Scope) []*Scope {
 	rs := c.newMergeScope(ss)
+
+	currentFirstFlag := c.anal.isFirst
 	arg := constructWindow(c.proc.Ctx, n, c.proc)
 	arg.Idx = c.anal.curNodeIdx
-	arg.SetIsFirst(c.anal.isFirst)
+	arg.SetIsFirst(currentFirstFlag)
 	rs.ReplaceLeafOp(arg)
+	c.anal.isFirst = false
 
 	return []*Scope{rs}
 }
 
 func (c *Compile) compileTimeWin(n *plan.Node, ss []*Scope) []*Scope {
 	rs := c.newMergeScope(ss)
+
+	currentFirstFlag := c.anal.isFirst
 	arg := constructTimeWindow(c.proc.Ctx, n)
 	arg.Idx = c.anal.curNodeIdx
-	arg.SetIsFirst(c.anal.isFirst)
+	arg.SetIsFirst(currentFirstFlag)
 	rs.ReplaceLeafOp(arg)
+	c.anal.isFirst = false
 
 	return []*Scope{rs}
 }
 
 func (c *Compile) compileFill(n *plan.Node, ss []*Scope) []*Scope {
 	rs := c.newMergeScope(ss)
+
+	currentFirstFlag := c.anal.isFirst
 	arg := constructFill(n)
 	arg.Idx = c.anal.curNodeIdx
-	arg.SetIsFirst(c.anal.isFirst)
+	arg.SetIsFirst(currentFirstFlag)
 	rs.ReplaceLeafOp(arg)
+	c.anal.isFirst = false
 
 	return []*Scope{rs}
 }
@@ -2914,13 +2967,14 @@ func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scop
 }
 
 func (c *Compile) compileSample(n *plan.Node, ss []*Scope) []*Scope {
+	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
 		if containBrokenNode(ss[i]) {
 			ss[i] = c.newMergeScope([]*Scope{ss[i]})
 		}
 		op := constructSample(n, len(ss) != 1)
 		op.SetIdx(c.anal.curNodeIdx)
-		op.SetIsFirst(c.anal.isFirst)
+		op.SetIsFirst(currentFirstFlag)
 		ss[i].setRootOperator(op)
 	}
 	c.anal.isFirst = false
@@ -2932,10 +2986,12 @@ func (c *Compile) compileSample(n *plan.Node, ss []*Scope) []*Scope {
 
 	// should sample again if sample by rows.
 	if n.SampleFunc.Rows != plan2.NotSampleByRows {
+		currentFirstFlag = c.anal.isFirst
 		op := sample.NewMergeSample(constructSample(n, true), false)
 		op.SetIdx(c.anal.curNodeIdx)
 		op.SetIsFirst(c.anal.isFirst)
 		rs.setRootOperator(op)
+		c.anal.isFirst = false
 	}
 	return []*Scope{rs}
 }
@@ -3634,6 +3690,9 @@ func (c *Compile) newMergeRemoteScope(ss []*Scope, nodeinfo engine.Node) *Scope 
 	return rs
 }
 
+// newScopeListOnCurrentCN traverse the cnList and only generate Scope list for the current CN node
+// waing: newScopeListOnCurrentCN result is only used to build Scope and add one merge operator.
+// If other operators are added, please let @qingxinhome know
 func (c *Compile) newScopeListOnCurrentCN(childrenCount int, blocks int) []*Scope {
 	var ss []*Scope
 	currentFirstFlag := c.anal.isFirst
@@ -3647,25 +3706,13 @@ func (c *Compile) newScopeListOnCurrentCN(childrenCount int, blocks int) []*Scop
 	return ss
 }
 
-/*
-	func (c *Compile) newScopeList(childrenCount int, blocks int) []*Scope {
-		var ss []*Scope
-
-		currentFirstFlag := c.anal.isFirst
-		for _, cn := range c.cnList {
-			c.anal.isFirst = currentFirstFlag
-			ss = append(ss, c.newScopeListWithNode(c.generateCPUNumber(cn.Mcpu, blocks), childrenCount, cn.Addr)...)
-		}
-		return ss
-	}
-*/
 func (c *Compile) newScopeListForShuffleGroup(childrenCount int) ([]*Scope, []*Scope) {
 	parent := make([]*Scope, 0, len(c.cnList))
 	children := make([]*Scope, 0, len(c.cnList))
 
-	currentFirstFlag := c.anal.isFirst
+	//currentFirstFlag := c.anal.isFirst
 	for _, n := range c.cnList {
-		c.anal.isFirst = currentFirstFlag
+		//c.anal.isFirst = currentFirstFlag
 		scopes := c.newScopeListWithNode(plan2.GetShuffleDop(n.Mcpu), childrenCount, n.Addr)
 		for _, s := range scopes {
 			for _, rr := range s.Proc.Reg.MergeReceivers {
@@ -3678,22 +3725,25 @@ func (c *Compile) newScopeListForShuffleGroup(childrenCount int) ([]*Scope, []*S
 	return parent, children
 }
 
+// waing: newScopeListWithNode only used to build Scope with cpuNum and add one merge operator.
+// If other operators are added, please let @qingxinhome know
 func (c *Compile) newScopeListWithNode(mcpu, childrenCount int, addr string) []*Scope {
 	ss := make([]*Scope, mcpu)
-	currentFirstFlag := c.anal.isFirst
+	//currentFirstFlag := c.anal.isFirst
 	for i := range ss {
 		ss[i] = newScope(Remote)
 		ss[i].Magic = Remote
 		ss[i].NodeInfo.Addr = addr
 		ss[i].NodeInfo.Mcpu = 1 // ss is already the mcpu length so we don't need to parallel it
 		ss[i].Proc = process.NewFromProc(c.proc, c.proc.Ctx, childrenCount)
+
+		// The merge operator does not act as First/Last, It needs to handle its analyze status
 		merge := merge.NewArgument()
 		merge.SetIdx(c.anal.curNodeIdx)
-		merge.SetIsFirst(currentFirstFlag)
+		merge.SetIsFirst(false)
 		ss[i].setRootOperator(merge)
-
 	}
-	c.anal.isFirst = false
+	//c.anal.isFirst = false
 	return ss
 }
 
