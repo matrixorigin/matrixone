@@ -183,6 +183,8 @@ func NewFlushTableTailTask(
 				)
 				return nil, txnif.ErrTxnNeedRetry
 			}
+		} else if hdl.IsAppendable() && obj.HasDropCommitted() && !obj.InMemoryDeletesExisted() {
+			// skip dropped . refer to Collector.tryCompactTree
 		} else {
 			task.delSrcMetas = append(task.delSrcMetas, obj)
 			task.delSrcHandles = append(task.delSrcHandles, hdl)
