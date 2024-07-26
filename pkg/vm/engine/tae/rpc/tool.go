@@ -43,30 +43,34 @@ const (
 )
 
 type ColumnJson struct {
-	Index   uint16 `json:"col_index"`
-	Ndv     uint32 `json:"ndv,omitempty"`
-	NullCnt uint32 `json:"null_cnt,omitempty"`
-	Zonemap string `json:"zonemap,omitempty"`
-	Data    string `json:"data,omitempty"`
+	Index       uint16 `json:"col_index"`
+	Ndv         uint32 `json:"ndv,omitempty"`
+	NullCnt     uint32 `json:"null_count,omitempty"`
+	DataSize    string `json:"data_size,omitempty"`
+	OriDataSize string `json:"original_data_size,omitempty"`
+	Zonemap     string `json:"zonemap,omitempty"`
+	Data        string `json:"data,omitempty"`
 }
 
 type BlockJson struct {
-	Index   uint16       `json:"blk_index"`
-	Rows    uint32       `json:"rows,omitempty"`
-	Cols    uint16       `json:"cols,omitempty"`
+	Index   uint16       `json:"block_index"`
+	Rows    uint32       `json:"row_count,omitempty"`
+	Cols    uint16       `json:"column_count,omitempty"`
 	Columns []ColumnJson `json:"columns,omitempty"`
 }
 
 type ObjectJson struct {
-	Name         string       `json:"name"`
-	Rows         uint32       `json:"rows,omitempty"`
-	Cols         uint16       `json:"cols,omitempty"`
-	BlkCnt       uint32       `json:"blk_cnt,omitempty"`
-	Size         string       `json:"size,omitempty"`
-	OriginalSize string       `json:"original_size,omitempty"`
-	Zonemap      string       `json:"zonemap,omitempty"`
-	Columns      []ColumnJson `json:"columns,omitempty"`
-	Blocks       []BlockJson  `json:"blocks,omitempty"`
+	Name        string       `json:"name"`
+	Rows        uint32       `json:"row_count,omitempty"`
+	Cols        uint16       `json:"column_count,omitempty"`
+	BlkCnt      uint32       `json:"block_count,omitempty"`
+	MetaSize    string       `json:"meta_size,omitempty"`
+	OriMetaSize string       `json:"original_meta_size,omitempty"`
+	DataSize    string       `json:"data_size,omitempty"`
+	OriDataSize string       `json:"original_data_size,omitempty"`
+	Zonemap     string       `json:"zonemap,omitempty"`
+	Columns     []ColumnJson `json:"columns,omitempty"`
+	Blocks      []BlockJson  `json:"blocks,omitempty"`
 }
 
 type tableStatJson struct {
@@ -148,7 +152,7 @@ func (c *MoInspectArg) String() string {
 
 func (c *MoInspectArg) Usage() (res string) {
 	res += "Offline Commands:\n"
-	res += fmt.Sprintf("  %-8v show object information\n", "obj")
+	res += fmt.Sprintf("  %-8v show object information\n", "object")
 
 	res += "\n"
 	res += "Online Commands:\n"
@@ -173,8 +177,8 @@ type ObjArg struct {
 
 func (c *ObjArg) PrepareCommand() *cobra.Command {
 	objCmd := &cobra.Command{
-		Use:   "obj",
-		Short: "obj",
+		Use:   "object",
+		Short: "object",
 		Long:  "Display information about a given object",
 		Run:   RunFactory(c),
 	}
@@ -195,7 +199,7 @@ func (c *ObjArg) FromCommand(cmd *cobra.Command) (err error) {
 }
 
 func (c *ObjArg) String() string {
-	return "obj"
+	return "object"
 }
 
 func (c *ObjArg) Usage() (res string) {
@@ -205,10 +209,10 @@ func (c *ObjArg) Usage() (res string) {
 
 	res += "\n"
 	res += "Usage:\n"
-	res += "inspect obj [flags] [options]\n"
+	res += "inspect object [flags] [options]\n"
 
 	res += "\n"
-	res += "Use \"mo-tool inspect obj <command> --help\" for more information about a given command.\n"
+	res += "Use \"mo-tool inspect object <command> --help\" for more information about a given command.\n"
 
 	return
 }
@@ -232,7 +236,7 @@ type moObjStatArg struct {
 func (c *moObjStatArg) PrepareCommand() *cobra.Command {
 	var statCmd = &cobra.Command{
 		Use:   "stat",
-		Short: "obj stat",
+		Short: "object stat",
 		Long:  "Display status about a given object",
 		Run:   RunFactory(c),
 	}
@@ -268,13 +272,13 @@ func (c *moObjStatArg) String() string {
 func (c *moObjStatArg) Usage() (res string) {
 	res += "Examples:\n"
 	res += "  # Display information about object\n"
-	res += "  inspect obj stat -n /your/path/obj-name\n"
+	res += "  inspect object stat -n /your/path/obj-name\n"
 	res += "\n"
 	res += "  # Display information about object block idx with level 1\n"
-	res += "  inspect obj stat -n /your/path/obj-name -i idx -l 1\n"
+	res += "  inspect object stat -n /your/path/obj-name -i idx -l 1\n"
 	res += "\n"
 	res += "  # Display information about object with local fs\n"
-	res += "  inspect obj stat -n /your/path/obj-name --local\n"
+	res += "  inspect object stat -n /your/path/obj-name --local\n"
 
 	res += "\n"
 	res += "Options:\n"
@@ -382,9 +386,25 @@ func (c *moObjStatArg) GetStat(ctx context.Context) (res string, err error) {
 	return
 }
 
+func (c *moObjStatArg) GetObjSize(data *objectio.ObjectDataMeta) []string {
+	var dataSize, oriDataSize uint32
+	header := data.BlockHeader()
+	cnt := header.ColumnCount()
+
+	for i := range cnt {
+		col := data.MustGetColumn(i)
+		dataSize += col.Location().Length()
+		oriDataSize += col.Location().OriginSize()
+	}
+
+	return []string{
+		formatBytes(dataSize),
+		formatBytes(oriDataSize),
+	}
+}
+
 func (c *moObjStatArg) GetBriefStat(obj *objectio.ObjectMeta) (res string, err error) {
-	meta := *obj
-	data, ok := meta.DataMeta()
+	data, ok := (*obj).DataMeta()
 	if !ok {
 		err = moerr.NewInfoNoCtx("no data")
 		return
@@ -392,15 +412,18 @@ func (c *moObjStatArg) GetBriefStat(obj *objectio.ObjectMeta) (res string, err e
 
 	header := data.BlockHeader()
 	ext := c.reader.GetMetaExtent()
+	size := c.GetObjSize(&data)
 
 	var json = jsoniter.ConfigCompatibleWithStandardLibrary
 	o := ObjectJson{
-		Name:         c.name,
-		Rows:         header.Rows(),
-		Cols:         header.ColumnCount(),
-		BlkCnt:       data.BlockCount(),
-		Size:         formatBytes(ext.Length()), // todo change size
-		OriginalSize: formatBytes(ext.OriginSize()),
+		Name:        c.name,
+		Rows:        header.Rows(),
+		Cols:        header.ColumnCount(),
+		BlkCnt:      data.BlockCount(),
+		MetaSize:    formatBytes(ext.Length()),
+		OriMetaSize: formatBytes(ext.OriginSize()),
+		DataSize:    size[0],
+		OriDataSize: size[1],
 	}
 
 	data, err = json.MarshalIndent(o, "", "  ")
@@ -413,40 +436,13 @@ func (c *moObjStatArg) GetBriefStat(obj *objectio.ObjectMeta) (res string, err e
 }
 
 func (c *moObjStatArg) GetStandardStat(obj *objectio.ObjectMeta) (res string, err error) {
-	meta := *obj
-	data, ok := meta.DataMeta()
+	data, ok := (*obj).DataMeta()
 	if !ok {
 		err = moerr.NewInfoNoCtx("no data")
 		return
 	}
 
-	var blocks []objectio.BlockObject
-	cnt := data.BlockCount()
-
-	if c.id != invalidId {
-		if uint32(c.id) > cnt {
-			err = moerr.NewInfoNoCtx(fmt.Sprintf("id %3d out of block count %3d", c.id, cnt))
-			return
-		}
-		blocks = append(blocks, data.GetBlockMeta(uint32(c.id)))
-	} else {
-		for i := range cnt {
-			blk := data.GetBlockMeta(i)
-			blocks = append(blocks, blk)
-		}
-	}
-
 	header := data.BlockHeader()
-	ext := c.reader.GetMetaExtent()
-	blks := make([]BlockJson, 0, len(blocks))
-	for _, blk := range blocks {
-		blkjson := BlockJson{
-			Index: blk.GetID(),
-			Rows:  blk.GetRows(),
-			Cols:  blk.GetColumnCount(),
-		}
-		blks = append(blks, blkjson)
-	}
 
 	var json = jsoniter.ConfigCompatibleWithStandardLibrary
 
@@ -455,19 +451,26 @@ func (c *moObjStatArg) GetStandardStat(obj *objectio.ObjectMeta) (res string, er
 	for i := range colCnt {
 		col := data.MustGetColumn(i)
 		cols[i] = ColumnJson{
-			Index:   i,
-			Zonemap: col.ZoneMap().String(),
+			Index:       i,
+			DataSize:    formatBytes(col.Location().Length()),
+			OriDataSize: formatBytes(col.Location().OriginSize()),
+			Zonemap:     col.ZoneMap().String(),
 		}
 	}
+
+	ext := c.reader.GetMetaExtent()
+	size := c.GetObjSize(&data)
+
 	o := ObjectJson{
-		Name:         c.name,
-		Rows:         header.Rows(),
-		Cols:         header.ColumnCount(),
-		BlkCnt:       cnt,
-		Size:         formatBytes(ext.Length()),
-		OriginalSize: formatBytes(ext.OriginSize()),
-		Blocks:       blks,
-		Columns:      cols,
+		Name:        c.name,
+		Rows:        header.Rows(),
+		Cols:        header.ColumnCount(),
+		BlkCnt:      data.BlockCount(),
+		MetaSize:    formatBytes(ext.Length()),
+		OriMetaSize: formatBytes(ext.OriginSize()),
+		DataSize:    size[0],
+		OriDataSize: size[1],
+		Columns:     cols,
 	}
 
 	data, err = json.MarshalIndent(o, "", "  ")
@@ -481,8 +484,7 @@ func (c *moObjStatArg) GetStandardStat(obj *objectio.ObjectMeta) (res string, er
 }
 
 func (c *moObjStatArg) GetDetailedStat(obj *objectio.ObjectMeta) (res string, err error) {
-	meta := *obj
-	data, ok := meta.DataMeta()
+	data, ok := (*obj).DataMeta()
 	if !ok {
 		err = moerr.NewInfoNoCtx("no data")
 		return
@@ -530,27 +532,33 @@ func (c *moObjStatArg) GetDetailedStat(obj *objectio.ObjectMeta) (res string, er
 	}
 
 	header := data.BlockHeader()
-	ext := c.reader.GetMetaExtent()
 	var json = jsoniter.ConfigCompatibleWithStandardLibrary
 	colCnt := header.ColumnCount()
 	cols := make([]ColumnJson, colCnt)
 	for i := range colCnt {
 		col := data.MustGetColumn(i)
 		cols[i] = ColumnJson{
-			Index:   i,
-			Zonemap: col.ZoneMap().String(),
+			Index:       i,
+			DataSize:    formatBytes(col.Location().Length()),
+			OriDataSize: formatBytes(col.Location().OriginSize()),
+			Zonemap:     col.ZoneMap().String(),
 		}
 	}
 
+	ext := c.reader.GetMetaExtent()
+	size := c.GetObjSize(&data)
+
 	o := ObjectJson{
-		Name:         c.name,
-		Rows:         header.Rows(),
-		Cols:         header.ColumnCount(),
-		BlkCnt:       cnt,
-		Size:         formatBytes(ext.Length()),
-		OriginalSize: formatBytes(ext.OriginSize()),
-		Blocks:       blks,
-		Columns:      cols,
+		Name:        c.name,
+		Rows:        header.Rows(),
+		Cols:        header.ColumnCount(),
+		BlkCnt:      data.BlockCount(),
+		MetaSize:    formatBytes(ext.Length()),
+		OriMetaSize: formatBytes(ext.OriginSize()),
+		DataSize:    size[0],
+		OriDataSize: size[1],
+		Blocks:      blks,
+		Columns:     cols,
 	}
 
 	data, err = json.MarshalIndent(o, "", "  ")
@@ -579,7 +587,7 @@ type objGetArg struct {
 func (c *objGetArg) PrepareCommand() *cobra.Command {
 	var getCmd = &cobra.Command{
 		Use:   "get",
-		Short: "obj get",
+		Short: "object get",
 		Long:  "Display data about a given object",
 		Run:   RunFactory(c),
 	}
@@ -617,10 +625,10 @@ func (c *objGetArg) String() string {
 func (c *objGetArg) Usage() (res string) {
 	res += "Examples:\n"
 	res += "  # Display the data of the idxth block of this object\n"
-	res += "  inspect obj get -n /your/path/obj-name -i idx\n"
+	res += "  inspect object get -n /your/path/obj-name -i idx\n"
 	res += "\n"
 	res += "  # Display the data of the specified row and column of the idxth block of this object\n"
-	res += "  inspect obj get -n /your/path/obj-name -i idx -c \"1,2,4\" -r\"0,50\"\n"
+	res += "  inspect object get -n /your/path/obj-name -i idx -c \"1,2,4\" -r\"0,50\"\n"
 
 	res += "\n"
 	res += "Options:\n"
@@ -633,7 +641,7 @@ func (c *objGetArg) Usage() (res string) {
 	res += "  -r, --row='':\n"
 	res += "    Specify the rows to display, should be \"left,right\", means [left,right)\n"
 	res += "  --local=false:\n"
-	res += "    Whether it is a local file, if true, use local fs to read file\n"
+	res += "    If the file is downloaded from a standalone machine, you should use this flag\n"
 
 	return
 }
