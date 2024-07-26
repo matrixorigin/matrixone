@@ -3338,14 +3338,12 @@ func (c *Compile) compilePreInsertSK(n *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) compileDelete(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 	var arg *deletion.Deletion
+	currentFirstFlag := c.anal.isFirst
 	arg, err := constructDeletion(n, c.e)
 	if err != nil {
 		return nil, err
 	}
-
-	currentFirstFlag := c.anal.isFirst
-	arg.SetIdx(c.anal.curNodeIdx)
-	arg.SetIsFirst(currentFirstFlag)
+	arg.SetAnalyzeControl(c.anal.curNodeIdx, c.anal.isFirst)
 	c.anal.isFirst = false
 
 	if n.Stats.Cost*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) && !arg.DeleteCtx.CanTruncate {
@@ -3359,8 +3357,7 @@ func (c *Compile) compileDelete(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 			WithAddAffectedRows(arg.DeleteCtx.AddAffectedRows)
 
 		currentFirstFlag = c.anal.isFirst
-		mergeDeleteArg.SetIdx(c.anal.curNodeIdx)
-		mergeDeleteArg.SetIsFirst(currentFirstFlag)
+		mergeDeleteArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		rs.setRootOperator(mergeDeleteArg)
 		c.anal.isFirst = false
 
@@ -3521,11 +3518,10 @@ func (c *Compile) compileSinkNode(n *plan.Node, ss []*Scope, step int32) ([]*Sco
 
 func (c *Compile) compileOnduplicateKey(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 	rs := c.newMergeScope(ss)
-	arg := constructOnduplicateKey(n, c.e)
 
 	currentFirstFlag := c.anal.isFirst
-	arg.SetIdx(c.anal.curNodeIdx)
-	arg.SetIsFirst(currentFirstFlag)
+	arg := constructOnduplicateKey(n, c.e)
+	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.ReplaceLeafOp(arg)
 	c.anal.isFirst = false
 

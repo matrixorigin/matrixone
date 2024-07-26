@@ -222,7 +222,6 @@ func (order *Order) Call(proc *process.Process) (vm.CallResult, error) {
 	if ctr.state == vm.Build {
 		for {
 			result, err := vm.ChildrenCall(order.GetChildren(0), proc, anal)
-
 			if err != nil {
 				result.Status = vm.ExecStop
 				return result, err
