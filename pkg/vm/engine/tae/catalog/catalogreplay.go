@@ -31,6 +31,10 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	Backup_Object_Offset uint16 = 1000
+)
+
 //#region Replay related
 
 func (catalog *Catalog) ReplayCmd(
@@ -442,7 +446,7 @@ func (catalog *Catalog) onReplayCheckpointObject(
 		panic(err)
 	}
 	var obj *ObjectEntry
-	if entryNode.CreatedAt.Equal(&txnNode.End) {
+	if entryNode.DeletedAt.IsEmpty() {
 		obj = NewReplayObjectEntry()
 		obj.table = rel
 		obj.ObjectNode = ObjectNode{
@@ -456,16 +460,26 @@ func (catalog *Catalog) onReplayCheckpointObject(
 		obj.remainingRows = &common.FixedSampleIII[int]{}
 		obj.ObjectState = ObjectState_Create_ApplyCommit
 		rel.AddEntryLocked(obj)
-	}
-	if entryNode.DeletedAt.Equal(&txnNode.End) {
+	} else {
 		obj, err = rel.GetObjectByID(objid)
 		if err != nil {
-			panic(fmt.Sprintf("obj %v not existed, table:\n%v", objid.String(), rel.StringWithLevel(3)))
+			panic(fmt.Sprintf("obj %v, [%v %v %v] not existed, table:\n%v", objid.String(), entryNode.String(), objNode.String(), txnNode.String(), rel.StringWithLevel(3)))
 		}
 		obj.EntryMVCCNode = *entryNode
 		obj.ObjectMVCCNode = *objNode
 		obj.DeleteNode = *txnNode
 		obj.ObjectState = ObjectState_Delete_ApplyCommit
+	}
+	if !entryNode.CreatedAt.Equal(&txnNode.End) && !entryNode.DeletedAt.Equal(&txnNode.End) {
+		// In back up, aobj is replaced with naobj and its DeleteAt is removed.
+		// Before back up, txnNode.End equals DeleteAt of naobj.
+		// After back up, DeleteAt is empty.
+		if objid.Offset() == Backup_Object_Offset && entryNode.DeletedAt.IsEmpty() {
+			logutil.Warnf("obj %v, tbl %v-%d delete %v, create %v, end %v", objid.String(), rel.fullName, rel.ID, entryNode.CreatedAt.ToString(), entryNode.DeletedAt.ToString(), txnNode.End.ToString())
+		} else {
+			panic(fmt.Sprintf("logic error: obj %v, tbl %v-%d create %v, delete %v, end %v",
+				objid.String(), rel.fullName, rel.ID, entryNode.CreatedAt.ToString(), entryNode.DeletedAt.ToString(), txnNode.End.ToString()))
+		}
 	}
 	if obj.objData == nil {
 		obj.objData = dataFactory.MakeObjectFactory()(obj)
