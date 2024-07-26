@@ -3674,7 +3674,6 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 		rs[i] = newScope(Remote)
 		rs[i].IsJoin = true
 		rs[i].NodeInfo = probeScopes[i].NodeInfo
-		rs[i].BuildIdx = 1
 		if isSameCN(rs[i].NodeInfo.Addr, c.addr) {
 			idx = i
 		}
