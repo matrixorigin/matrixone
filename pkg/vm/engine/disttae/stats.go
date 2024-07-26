@@ -710,7 +710,7 @@ func updateInfoFromZoneMap(
 							maxvalue := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMaxBuf())
 							info.ShuffleRanges[idx].Update(minvalue, maxvalue, int64(meta.BlockHeader().Rows()), int64(objColMeta.NullCnt()))
 						}
-					case types.T_varchar, types.T_char, types.T_text, types.T_datalink:
+					case types.T_varchar, types.T_char, types.T_text:
 						info.ShuffleRanges[idx] = plan2.NewShuffleRange(true)
 						if info.ColumnZMs[idx].IsInited() {
 							info.ShuffleRanges[idx].UpdateString(info.ColumnZMs[idx].GetMinBuf(), info.ColumnZMs[idx].GetMaxBuf(), int64(meta.BlockHeader().Rows()), int64(objColMeta.NullCnt()))
@@ -736,7 +736,7 @@ func updateInfoFromZoneMap(
 						minvalue := getMinMaxValueByFloat64(info.DataTypes[idx], zm.GetMinBuf())
 						maxvalue := getMinMaxValueByFloat64(info.DataTypes[idx], zm.GetMaxBuf())
 						info.ShuffleRanges[idx].Update(minvalue, maxvalue, int64(meta.BlockHeader().Rows()), int64(objColMeta.NullCnt()))
-					case types.T_varchar, types.T_char, types.T_text, types.T_datalink:
+					case types.T_varchar, types.T_char, types.T_text:
 						info.ShuffleRanges[idx].UpdateString(zm.GetMinBuf(), zm.GetMaxBuf(), int64(meta.BlockHeader().Rows()), int64(objColMeta.NullCnt()))
 					}
 				}
