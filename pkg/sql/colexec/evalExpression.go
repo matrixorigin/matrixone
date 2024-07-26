@@ -515,30 +515,6 @@ func (expr *FunctionExpressionExecutor) Init(
 	return err
 }
 
-func (expr *FunctionExpressionExecutor) canConstantFold(proc *process.Process) bool {
-	overload, _ := function.GetFunctionById(proc.Ctx, expr.overloadID)
-	if overload.CannotFold() {
-		return false
-	}
-	if expr.inRuntime {
-		for _, paramE := range expr.parameterExecutor {
-			if _, ok := paramE.(*ColumnExpressionExecutor); ok {
-				return false
-			}
-		}
-	} else {
-		if overload.IsRealTimeRelated() {
-			return false
-		}
-		for _, paramE := range expr.parameterExecutor {
-			if _, ok := paramE.(*FixedVectorExpressionExecutor); !ok {
-				return false
-			}
-		}
-	}
-	return true
-}
-
 func (expr *FunctionExpressionExecutor) constantFold(proc *process.Process, batches []*batch.Batch) (*vector.Vector, error) {
 	if expr.folded != nil {
 		return expr.folded, nil
