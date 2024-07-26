@@ -700,7 +700,8 @@ func (rd1 *relationDataV1) AppendDataBlk(blk *objectio.BlockInfoInProgress) {
 
 func (rd1 *relationDataV1) BuildEmptyRelData() engine.RelData {
 	return &relationDataV1{
-		typ: rd1.typ,
+		typ:     rd1.typ,
+		isEmpty: true,
 	}
 }
 
