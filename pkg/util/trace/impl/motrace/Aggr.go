@@ -31,10 +31,10 @@ type Aggregator struct {
 	FilterFunc  func(i table.Item) bool
 }
 
-type key int
+type windowKey int
 
 const (
-	DurationKey key = iota
+	DurationKey windowKey = iota
 )
 
 func NewAggregator(ctx context.Context, windowSize time.Duration, newItemFunc func(i table.Item, ctx context.Context) table.Item, updateFunc func(ctx context.Context, existing, new table.Item), filterFunc func(i table.Item) bool) *Aggregator {
@@ -80,6 +80,8 @@ func (a *Aggregator) AddItem(i table.Item) (table.Item, error) {
 	return nil, nil
 }
 
+// GetResults return the aggr-ed result in Aggregator, but still keep in Aggregator
+// Needs co-operate with Close
 func (a *Aggregator) GetResults() []table.Item {
 	results := make([]table.Item, 0, len(a.Grouped))
 	for _, group := range a.Grouped {
@@ -90,12 +92,14 @@ func (a *Aggregator) GetResults() []table.Item {
 
 func (a *Aggregator) GetWindow() time.Duration { return a.WindowSize }
 
-func (a *Aggregator) GetResultsBeforeWindow(end time.Time) []table.Item {
+// PopResultsBeforeWindow return aggr-ed results in Aggregator, and remove from the Aggregator
+func (a *Aggregator) PopResultsBeforeWindow(end time.Time) []table.Item {
 	results := make([]table.Item, 0, len(a.Grouped))
 	for key, group := range a.Grouped {
 		if key.Before(end) {
 			results = append(results, group)
 		}
+		delete(a.Grouped, key)
 	}
 	return results
 }

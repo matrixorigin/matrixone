@@ -36,7 +36,7 @@ type Aggregator interface {
 	// else return i, err
 	AddItem(i Item) (Item, error)
 	GetResults() []Item
-	GetResultsBeforeWindow(end time.Time) []Item
+	PopResultsBeforeWindow(end time.Time) []Item
 	GetWindow() time.Duration
 	Close()
 }

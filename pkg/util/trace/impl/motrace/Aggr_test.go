@@ -431,3 +431,63 @@ func TestAggregator_MarkExported(t *testing.T) {
 		})
 	}
 }
+
+func TestAggregator_PopResultsBeforeWindow(t *testing.T) {
+	c := GetTracerProvider()
+	c.enableStmtMerge = true
+
+	var sessionId = [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x1}
+	const aggrWindow = 5 * time.Second
+
+	ctx := context.Background()
+	aggregator := NewAggregator(
+		ctx,
+		aggrWindow,
+		StatementInfoNew,
+		StatementInfoUpdate,
+		StatementInfoFilter,
+	)
+	var err error
+
+	fixedTime := time.Date(2023, time.June, 10, 12, 0, 1, 0, time.UTC)
+	for i := 0; i < 2; i++ {
+		_, err = aggregator.AddItem(&StatementInfo{
+			Account:       "MO",
+			User:          "moroot",
+			Database:      "system",
+			StatementType: "Select",
+			SqlSourceType: "external_sql",
+			SessionID:     sessionId,
+			Statement:     "SELECT 11",
+			ResponseAt:    fixedTime,
+			RequestAt:     fixedTime.Add(-10 * time.Millisecond),
+			Duration:      10 * time.Millisecond,
+			RowsRead:      1,
+			TransactionID: _1TxnID,
+			StatementID:   _1StmtID,
+			Status:        StatementStatusSuccess,
+			ExecPlan:      NewDummySerializableExecPlan(map[string]string{"key": "val"}, dummySerializeExecPlan, uuid.UUID(_2TraceID)),
+		})
+		if err != nil {
+			t.Fatalf("Unexpected error when adding item: %v", err)
+		}
+	}
+
+	// Get results from aggregator
+	results := aggregator.PopResultsBeforeWindow(time.Now().Truncate(aggrWindow))
+
+	// Test expected behavior
+	require.Equal(t, len(results), 1, "Expected 1 aggregated statements")
+
+	assert.Equal(t, "SELECT 11;\nSELECT 11", results[0].(*StatementInfo).StmtBuilder.String())
+
+	res := "/* " + strconv.FormatInt(results[0].(*StatementInfo).AggrCount, 10) + " queries */ \n" + results[0].(*StatementInfo).StmtBuilder.String()
+
+	assert.Equal(t, "/* 2 queries */ \nSELECT 11;\nSELECT 11", res)
+
+	assert.Equal(t, int64(2), results[0].(*StatementInfo).RowsRead)
+
+	// Pop Again, expect empty result
+	results = aggregator.PopResultsBeforeWindow(time.Now().Truncate(aggrWindow))
+	require.Equal(t, len(results), 0, "Expected 0 aggregated statements")
+}
