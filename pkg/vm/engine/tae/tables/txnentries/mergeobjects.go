@@ -131,7 +131,6 @@ func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) {
 			duration += time.Since(start)
 
 			entry.pageIds = append(entry.pageIds, id)
-			entry.rt.TransferTable.AddPage(page)
 			pages = append(pages, page)
 		}
 
@@ -150,6 +149,11 @@ func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) {
 			} else {
 				page.SetBornTS(now)
 			}
+		}
+	}
+	for _, pages := range pagesToSet {
+		for _, page := range pages {
+			entry.rt.TransferTable.AddPage(page)
 		}
 	}
 
