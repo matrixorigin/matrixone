@@ -985,6 +985,9 @@ func (c *CheckpointArg) PrepareCommand() *cobra.Command {
 	stat := ckpStatArg{}
 	checkpointCmd.AddCommand(stat.PrepareCommand())
 
+	list := ckpListArg{}
+	checkpointCmd.AddCommand(list.PrepareCommand())
+
 	return checkpointCmd
 }
 
@@ -1055,8 +1058,78 @@ func (c *ckpStatArg) Usage() (res string) {
 
 func (c *ckpStatArg) Run() (err error) {
 	c.res, err = checkpoint.GetCheckpointStat(context.Background(), c.ctx.db.Runtime, c.name)
+	c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
 	if err != nil {
 		logutil.Infof("checkpoint stat err: %v", err)
 	}
+	return
+}
+
+type CkpEntry struct {
+	LSN    string `json:"lsn"`
+	Detail string `json:"detail"`
+}
+
+type CkpEntries struct {
+	Count       int        `json:"count"`
+	Checkpoints []CkpEntry `json:"checkpoints"`
+}
+
+type ckpListArg struct {
+	ctx *inspectContext
+	res string
+}
+
+func (c *ckpListArg) PrepareCommand() *cobra.Command {
+	ckpStatCmd := &cobra.Command{
+		Use:   "list",
+		Short: "checkpoint list",
+		Long:  "Display all checkpoints",
+		Run:   RunFactory(c),
+	}
+
+	ckpStatCmd.SetUsageTemplate(c.Usage())
+
+	return ckpStatCmd
+}
+
+func (c *ckpListArg) FromCommand(cmd *cobra.Command) (err error) {
+	if cmd.Flag("ictx") != nil {
+		c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
+
+	}
+	return nil
+}
+
+func (c *ckpListArg) String() string {
+	return c.res
+}
+
+func (c *ckpListArg) Usage() (res string) {
+
+	return
+}
+
+func (c *ckpListArg) Run() (err error) {
+	entries := c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
+	ckpEntries := make([]CkpEntry, 0, len(entries))
+	for _, entry := range entries {
+		ckpEntries = append(ckpEntries, CkpEntry{
+			LSN:    entry.LSNString(),
+			Detail: entry.String(),
+		})
+	}
+
+	var json = jsoniter.ConfigCompatibleWithStandardLibrary
+	ckpEntriesJson := CkpEntries{
+		Count:       len(ckpEntries),
+		Checkpoints: ckpEntries,
+	}
+	jsonData, err := json.MarshalIndent(ckpEntriesJson, "", "  ")
+	if err != nil {
+		return
+	}
+	c.res = string(jsonData)
+
 	return
 }
