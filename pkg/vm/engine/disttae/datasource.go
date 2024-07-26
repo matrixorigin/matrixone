@@ -1008,26 +1008,15 @@ func NewLocalDataSource(
 }
 
 func (ls *LocalDataSource) HasTombstones(bid types.Blockid) bool {
-	if ls.iteratePhase == engine.InMem {
-		return false
-	}
-
-	return false
+	panic("implement me")
 }
 
 func (ls *LocalDataSource) Close() {
 	ls.pStateRows.insIter.Close()
 }
 
-// ApplyTombstones check if any deletes exist in
-//  1. unCommittedInmemDeletes:
-//     a. workspace writes
-//     b. flushed to s3
-//     c. raw rowId offset deletes (not flush yet)
-//  3. committedInmemDeletes
-//  4. committedPersistedTombstone
 func (ls *LocalDataSource) ApplyTombstones(rows []types.Rowid) (sel []int64, err error) {
-	return nil, nil
+	panic("implement me")
 }
 
 func (ls *LocalDataSource) Next(
@@ -1095,7 +1084,7 @@ func (ls *LocalDataSource) iterateInMemData(
 
 	bat.SetRowCount(0)
 
-	if err = ls.filterUncommittedInMemInserts(seqNums, mp, bat); err != nil {
+	if err = ls.filterInMemUnCommittedInserts(seqNums, mp, bat); err != nil {
 		return err
 	}
 
@@ -1133,7 +1122,7 @@ func checkWorkspaceEntryType(tbl *txnTable, entry Entry) int {
 	return -1
 }
 
-func (ls *LocalDataSource) filterUncommittedInMemInserts(
+func (ls *LocalDataSource) filterInMemUnCommittedInserts(
 	seqNums []uint16,
 	mp *mpool.MPool,
 	bat *batch.Batch,
@@ -1202,19 +1191,6 @@ func (ls *LocalDataSource) filterUncommittedInMemInserts(
 	return nil
 }
 
-//func (ls *LocalDataSource) batchApplyDeletesForPStateInsertRows() {
-//	slices.SortFunc(ls.pStateRows.rowIds, func(a, b types.Rowid) int {
-//		return a.Compare(b)
-//	})
-//
-//	cmp := func(a, b types.Rowid) bool {
-//		return (*a.BorrowBlockID()).Compare(*b.BorrowBlockID()) == 0
-//	}
-//
-//	rowIds := ls.pStateRows.rowIds
-//
-//}
-
 func (ls *LocalDataSource) filterInMemCommittedInserts(
 	colTypes []types.Type, seqNums []uint16, mp *mpool.MPool, bat *batch.Batch,
 ) error {
@@ -1250,7 +1226,7 @@ func (ls *LocalDataSource) filterInMemCommittedInserts(
 		}
 	}
 
-	for ls.pStateRows.insIter.Next() && appendedRows < int(options.DefaultBlockMaxRows) {
+	for appendedRows < int(options.DefaultBlockMaxRows) && ls.pStateRows.insIter.Next() {
 		entry := ls.pStateRows.insIter.Entry()
 		b, o := entry.RowID.Decode()
 
@@ -1346,6 +1322,13 @@ func loadBlockDeletesByDeltaLoc(
 	return deleteMask, nil
 }
 
+// ApplyTombstonesInProgress check if any deletes exist in
+//  1. unCommittedInmemDeletes:
+//     a. workspace writes
+//     b. flushed to s3
+//     c. raw rowId offset deletes (not flush yet)
+//  3. committedInmemDeletes
+//  4. committedPersistedTombstone
 func (ls *LocalDataSource) ApplyTombstonesInProgress(
 	ctx context.Context,
 	bid objectio.Blockid,
@@ -1424,7 +1407,7 @@ func (ls *LocalDataSource) applyWorkspaceEntryDeletes(
 
 	leftRows = offsets
 
-	// may have locked in `filterUncommittedInMemInserts`
+	// may have locked in `filterInMemUnCommittedInserts`
 	if !ls.rc.WorkspaceLocked {
 		ls.table.getTxn().Lock()
 		defer ls.table.getTxn().Unlock()
