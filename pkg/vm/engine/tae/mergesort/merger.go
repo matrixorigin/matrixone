@@ -141,7 +141,6 @@ func (m *merger[T]) merge(ctx context.Context) error {
 	bufferRowCnt := 0
 	objRowCnt := uint32(0)
 	mergedRowCnt := uint32(0)
-	commitEntry := m.host.GetCommitEntry()
 	transferMaps := m.host.GetTransferMaps()
 	for m.heap.Len() != 0 {
 		select {
