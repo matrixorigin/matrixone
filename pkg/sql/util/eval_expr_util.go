@@ -221,7 +221,11 @@ func SetBytesToAnyVector(ctx context.Context, val string, row int,
 		}
 		return vector.SetBytesAt(vec, row, v, proc.Mp())
 	case types.T_json:
-		return vector.SetBytesAt(vec, row, []byte(val), proc.Mp())
+		val, err := function.ConvertJsonBytes([]byte(val))
+		if err != nil {
+			return err
+		}
+		return vector.SetBytesAt(vec, row, val, proc.Mp())
 	case types.T_time:
 		v, err := types.ParseTime(val, vec.GetType().Scale)
 		if err != nil {

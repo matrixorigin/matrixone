@@ -630,3 +630,25 @@ func (node *ShowPitr) StmtKind() StmtKind {
 func (node *DropPitr) StmtKind() StmtKind {
 	return frontendStatusTyp
 }
+
+func (node *CreateCDC) StmtKind() StmtKind { return frontendStatusTyp }
+
+func (node *ShowCDC) StmtKind() StmtKind {
+	return defaultResRowTyp
+}
+
+func (node *PauseCDC) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (node *DropCDC) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (node *ResumeCDC) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (node *RestartCDC) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
