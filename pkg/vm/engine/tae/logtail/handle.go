@@ -75,18 +75,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -132,7 +129,13 @@ func HandleSyncLogTailReq(
 	logutil.Debugf("[Logtail] begin handle %+v", req)
 	defer func() {
 		if elapsed := time.Since(now); elapsed > 5*time.Second {
-			logutil.Infof("[Logtail] long pull cost %v, %v: %+v, %v ", elapsed, canRetry, req, err)
+			logutil.Warn(
+				"LOGTAIL-SLOW-PULL",
+				zap.Duration("duration", elapsed),
+				zap.Any("request", req),
+				zap.Bool("can-retry", canRetry),
+				zap.Error(err),
+			)
 		}
 		logutil.Debugf("[Logtail] end handle %d entries[%q], err %v", len(resp.Commands), resp.CkpLocation, err)
 	}()
@@ -187,10 +190,16 @@ func HandleSyncLogTailReq(
 	if canRetry && scope == ScopeUserTables { // check simple conditions first
 		_, name, forceFlush := fault.TriggerFault("logtail_max_size")
 		if (forceFlush && name == tableEntry.GetLastestSchemaLocked().Name) || resp.ProtoSize() > Size90M {
-			_ = ckpClient.FlushTable(ctx, did, tid, end)
+			flushErr := ckpClient.FlushTable(ctx, did, tid, end)
 			// try again after flushing
 			newResp, closeCB, err := HandleSyncLogTailReq(ctx, ckpClient, mgr, c, req, false)
-			logutil.Infof("[logtail] flush result: %d -> %d err: %v", resp.ProtoSize(), newResp.ProtoSize(), err)
+			logutil.Info(
+				"LOGTAIL-WITH-FLUSH",
+				zap.Any("flush-err", flushErr),
+				zap.Error(err),
+				zap.Int("from-size", resp.ProtoSize()),
+				zap.Int("to-size", newResp.ProtoSize()),
+			)
 			return newResp, closeCB, err
 		}
 	}
@@ -682,6 +691,7 @@ func GetMetaIdxesByVersion(ver uint32) []uint16 {
 }
 func LoadCheckpointEntries(
 	ctx context.Context,
+	sid string,
 	metLoc string,
 	tableID uint64,
 	tableName string,
@@ -716,12 +726,12 @@ func LoadCheckpointEntries(
 			return nil, nil, err
 		}
 		locations[i/2] = location
-		reader, err := blockio.NewObjectReader(fs, location)
+		reader, err := blockio.NewObjectReader(sid, fs, location)
 		if err != nil {
 			return nil, nil, err
 		}
 		readers[i/2] = reader
-		err = blockio.PrefetchMeta(fs, location)
+		err = blockio.PrefetchMeta(sid, fs, location)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -730,7 +740,7 @@ func LoadCheckpointEntries(
 	}
 
 	for i := range objectLocations {
-		data := NewCNCheckpointData()
+		data := NewCNCheckpointData(sid)
 		meteIdxSchema := checkpointDataReferVersions[versions[i]][MetaIDX]
 		idxes := make([]uint16, len(meteIdxSchema.attrs))
 		for attr := range meteIdxSchema.attrs {

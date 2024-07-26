@@ -168,3 +168,11 @@ func (m *MergeCommitEntry) MarshalBinary() ([]byte, error) {
 func (m *MergeCommitEntry) UnmarshalBinary(data []byte) error {
 	return m.Unmarshal(data)
 }
+
+// To reduce memory consumption
+
+type TransferMaps []TransferMap
+type TransferMap map[int32]TransferDestPos
+type TransferDestPos struct {
+	ObjIdx, BlkIdx, RowIdx int32
+}

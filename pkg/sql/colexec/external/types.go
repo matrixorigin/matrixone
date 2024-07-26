@@ -51,6 +51,7 @@ type ExParamConst struct {
 	IgnoreLine      int
 	IgnoreLineTag   int
 	ParallelLoad    bool
+	StrictSqlMode   bool
 	maxBatchSize    uint64
 	Idx             int
 	CreateSql       string
@@ -62,6 +63,7 @@ type ExParamConst struct {
 	FileOffset      []int64
 	FileOffsetTotal []*pipeline.FileOffset
 	Name2ColIndex   map[string]int32
+	TbColToDataCol  map[string]int32
 	Ctx             context.Context
 	Extern          *tree.ExternParam
 	tableDef        *plan.TableDef

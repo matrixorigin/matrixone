@@ -22,7 +22,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -289,13 +288,7 @@ func (bat *Batch) Dup(mp *mpool.MPool) (*Batch, error) {
 	//		}
 	//	}
 	//}
-	// if bat.AuxData != nil {
-	// 	if m, ok := bat.AuxData.(*hashmap.JoinMap); ok {
-	// rbat.AuxData = &hashmap.JoinMap{
-	// 	cnt: m
-	// }
-	// 	}
-	// }
+
 	return rbat, nil
 }
 
@@ -386,19 +379,5 @@ func (bat *Batch) ReplaceVector(oldVec *vector.Vector, newVec *vector.Vector) {
 }
 
 func (bat *Batch) IsEmpty() bool {
-	return bat.rowCount == 0 && bat.AuxData == nil && len(bat.Aggs) == 0
-}
-
-func (bat *Batch) DupJmAuxData() (ret *hashmap.JoinMap) {
-	if bat.AuxData == nil {
-		return
-	}
-	jm := bat.AuxData.(*hashmap.JoinMap)
-	if jm.IsDup() {
-		ret = jm.Dup()
-	} else {
-		ret = jm
-		bat.AuxData = nil
-	}
-	return
+	return bat.rowCount == 0 && len(bat.Aggs) == 0
 }

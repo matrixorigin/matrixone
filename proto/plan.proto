@@ -870,6 +870,7 @@ message ExternScan {
     string terminated = 6;
 	string json_type = 7;
     bytes  escaped_by = 8;
+	map<string, int32> TbColToDataCol = 9;
 }
 
 message LockTarget {
@@ -910,7 +911,6 @@ message RuntimeFilterSpec {
 	bool match_prefix = 2;
 	int32 upper_limit = 3;
 	Expr expr = 4;
-	bool handled = 5;
 }
 
 message IdList {
@@ -1453,6 +1453,10 @@ message LockTables {
 }
 
 message UnLockTables{}
+
+message MetadataScanInfos {
+	repeated MetadataScanInfo infos = 1;
+}
 
 message MetadataScanInfo {
 	enum MetadataScanInfoType {

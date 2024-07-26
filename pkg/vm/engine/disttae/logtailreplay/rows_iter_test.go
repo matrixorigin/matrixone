@@ -27,11 +27,11 @@ import (
 )
 
 func TestPartitionStateRowsIter(t *testing.T) {
-	state := NewPartitionState(false)
+	state := NewPartitionState("", false)
 	ctx := context.Background()
 	pool := mpool.MustNewZero()
-	packer := types.NewPacker(pool)
-	defer packer.FreeMem()
+	packer := types.NewPacker()
+	defer packer.Close()
 
 	{
 		// empty rows
@@ -265,11 +265,11 @@ func TestPartitionStateRowsIter(t *testing.T) {
 }
 
 func TestInsertAndDeleteAtTheSameTimestamp(t *testing.T) {
-	state := NewPartitionState(false)
+	state := NewPartitionState("", false)
 	ctx := context.Background()
 	pool := mpool.MustNewZero()
-	packer := types.NewPacker(pool)
-	defer packer.FreeMem()
+	packer := types.NewPacker()
+	defer packer.Close()
 
 	const num = 128
 
@@ -357,11 +357,11 @@ func TestInsertAndDeleteAtTheSameTimestamp(t *testing.T) {
 }
 
 func TestDeleteBeforeInsertAtTheSameTime(t *testing.T) {
-	state := NewPartitionState(false)
+	state := NewPartitionState("", false)
 	ctx := context.Background()
 	pool := mpool.MustNewZero()
-	packer := types.NewPacker(pool)
-	defer packer.FreeMem()
+	packer := types.NewPacker()
+	defer packer.Close()
 
 	const num = 128
 
@@ -449,11 +449,11 @@ func TestDeleteBeforeInsertAtTheSameTime(t *testing.T) {
 }
 
 func TestPrimaryKeyModifiedWithDeleteOnly(t *testing.T) {
-	state := NewPartitionState(false)
+	state := NewPartitionState("", false)
 	ctx := context.Background()
 	pool := mpool.MustNewZero()
-	packer := types.NewPacker(pool)
-	defer packer.FreeMem()
+	packer := types.NewPacker()
+	defer packer.Close()
 
 	const num = 128
 

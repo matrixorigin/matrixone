@@ -16,7 +16,6 @@ package rightsemi
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -47,10 +46,8 @@ type container struct {
 	state   int
 	lastpos int
 
-	inBuckets []uint8
-
 	batches       []*batch.Batch
-	batchRowCount int
+	batchRowCount int64
 	rbat          *batch.Batch
 
 	expr colexec.ExpressionExecutor
@@ -64,7 +61,7 @@ type container struct {
 	evecs []evalVector
 	vecs  []*vector.Vector
 
-	mp *hashmap.JoinMap
+	mp *process.JoinMap
 
 	matched *bitmap.Bitmap
 
@@ -90,8 +87,9 @@ type RightSemi struct {
 	IsMerger           bool
 	HashOnPK           bool
 	IsShuffle          bool
+	ShuffleIdx         int32
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
-
+	JoinMapTag         int32
 	vm.OperatorBase
 }
 
@@ -158,9 +156,6 @@ func (ctr *container) cleanExprExecutor() {
 }
 
 func (ctr *container) cleanBatch(proc *process.Process) {
-	for i := range ctr.batches {
-		proc.PutBatch(ctr.batches[i])
-	}
 	ctr.batches = nil
 
 	if ctr.rbat != nil {

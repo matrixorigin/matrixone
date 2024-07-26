@@ -125,7 +125,7 @@ func (c *mockClientConn) RawConn() net.Conn                  { return c.conn }
 func (c *mockClientConn) GetTenant() Tenant                  { return c.tenant }
 func (c *mockClientConn) SendErrToClient(err error)          {}
 func (c *mockClientConn) BuildConnWithServer(_ string) (ServerConn, error) {
-	cn, err := c.router.Route(context.TODO(), c.clientInfo, nil)
+	cn, err := c.router.Route(context.TODO(), "", c.clientInfo, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -331,7 +331,7 @@ func makeClientHandshakeResp() []byte {
 func TestClientConn_ConnectToBackend(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	rt := runtime.DefaultRuntime()
 	logger := rt.Logger()
 
