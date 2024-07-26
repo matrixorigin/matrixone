@@ -149,10 +149,6 @@ func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) {
 			} else {
 				page.SetBornTS(now)
 			}
-		}
-	}
-	for _, pages := range pagesToSet {
-		for _, page := range pages {
 			entry.rt.TransferTable.AddPage(page)
 		}
 	}
