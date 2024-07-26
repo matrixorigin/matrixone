@@ -134,7 +134,7 @@ func (b *BlockInfoInProgress) SetMetaLocation(metaLoc Location) {
 }
 
 func (b *BlockInfoInProgress) IsMemBlk() bool {
-	return bytes.Compare(EncodeBlockInfoInProgress(*b), EmptyBlockInfoInProgressBytes) == 0
+	return bytes.Equal(EncodeBlockInfoInProgress(*b), EmptyBlockInfoInProgressBytes)
 }
 
 func EncodeBlockInfoInProgress(info BlockInfoInProgress) []byte {
