@@ -2845,8 +2845,7 @@ func (data *CheckpointData) PrintMetaBatch() (res *ObjectInfoJson, err error) {
 	locationsVec := bat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchLocation)
 	for i := 0; i < tidVec.Length(); i++ {
 		tid := tidVec.Get(i).(uint64)
-		var locations BlockLocations
-		locations = locationsVec.Get(i).([]byte)
+		locations := locationsVec.Get(i).(BlockLocations)
 		it := locations.MakeIterator()
 		length := uint64(0)
 		for it.HasNext() {
