@@ -494,7 +494,7 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 		c.proc.SetPrepareExprList(nil)
 	}()
 
-	fmt.Printf("%x xxxx run sql: %s\n", txnOp.Txn().ID, sql)
+	//fmt.Printf("%x xxxx run sql: %s\n", txnOp.Txn().ID, sql)
 
 	var writeOffset uint64
 
@@ -2021,17 +2021,6 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) (*Sco
 	op.SetIsFirst(c.anal.isFirst)
 	s.setRootOperator(op)
 	s.Proc = process.NewFromProc(c.proc, c.proc.Ctx, 0)
-
-	if s.NodeInfo.Data == nil {
-		logutil.Infof("xxxx compileTableScanWithNode, "+
-			"txn:%s, table:%s, data is nil, cnid:%s,addr:%s, needexpand:%v",
-			s.Proc.GetTxnOperator().Txn().DebugString(),
-			s.DataSource.node.TableDef.Name,
-			s.NodeInfo.Id,
-			s.NodeInfo.Addr,
-			s.NodeInfo.NeedExpandRanges,
-		)
-	}
 	return s, nil
 }
 
@@ -4249,16 +4238,6 @@ func (c *Compile) generateNodesInProgress(n *plan.Node) (engine.Nodes, []any, []
 	// disttae engine
 	if engineType == engine.Disttae {
 		nodes, err := shuffleBlocksToMultiCN(c, rel, relData, n)
-
-		for _, node := range nodes {
-			logutil.Infof("xxxx generateNodes "+
-				"txn:%s, table:%s, node.Addr:%s, node.data:%d",
-				txnOp.Txn().DebugString(),
-				n.TableDef.Name,
-				node.Addr,
-				node.Data.BlkCnt())
-		}
-
 		return nodes, partialResults, partialResultTypes, err
 	}
 	// maybe temp table on memengine , just put payloads in average

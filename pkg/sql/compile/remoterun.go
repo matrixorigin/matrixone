@@ -186,15 +186,6 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 		// only encode the first one.
 		p.Qry = s.Plan
 	}
-
-	//if s.NodeInfo.Data == nil {
-	//	logutil.Infof("xxxx generatePipeline ,data is nil, "+
-	//		"txn:%s, nodeid:%s, nodeaddr:%s, needexpand:%v",
-	//		s.Proc.GetTxnOperator().Txn().DebugString(),
-	//		s.NodeInfo.Id,
-	//		s.NodeInfo.Addr,
-	//		s.NodeInfo.NeedExpandRanges)
-	//}
 	var data []byte
 	if s.NodeInfo.Data != nil {
 		data = s.NodeInfo.Data.MarshalToBytes()

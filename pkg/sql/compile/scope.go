@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -641,23 +640,6 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 				case process.RuntimeFilter_PASS:
 					continue
 				case process.RuntimeFilter_DROP:
-
-					var blkCnt int
-					if s.NodeInfo.Data == nil {
-						blkCnt = 0
-					} else {
-						blkCnt = s.NodeInfo.Data.BlkCnt()
-					}
-					logutil.Infof("xxxx txn:%s, table:%s, needExpandRanges:%v, "+
-						"s.nodeinfo.data:%v, blkCnt:%d,isRemote:%v, handleRuntimeFilter Drop",
-						s.Proc.GetTxnOperator().Txn().DebugString(),
-						s.DataSource.TableDef.Name,
-						s.NodeInfo.NeedExpandRanges,
-						s.NodeInfo.Data == nil,
-						blkCnt,
-						s.IsRemote,
-					)
-
 					return nil
 				case process.RuntimeFilter_IN:
 					inExpr := plan2.MakeInExpr(c.proc.Ctx, spec.Expr, msg.Card, msg.Data, spec.MatchPrefix)
@@ -1364,12 +1346,7 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 			var mp map[int16]engine.RelData
 			if s.NodeInfo.Data != nil {
 				mp = s.NodeInfo.Data.GroupByPartitionNum()
-			} else {
-				logutil.Infof("xxxx txn:%s, table:%s, buildReaders, data is nil",
-					s.Proc.GetTxnOperator().Txn().DebugString(),
-					s.DataSource.TableDef.Name)
 			}
-
 			var subRel engine.Relation
 			for num, relName := range s.DataSource.PartitionRelationNames {
 				subRel, err = db.Relation(ctx, relName, c.proc)
