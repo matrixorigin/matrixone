@@ -2023,8 +2023,14 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) (*Sco
 	s.Proc = process.NewFromProc(c.proc, c.proc.Ctx, 0)
 
 	if s.NodeInfo.Data == nil {
-		logutil.Infof("xxxx compileTableScanWithNode, txn:%s, table:%s, data is nil",
-			s.Proc.GetTxnOperator().Txn().DebugString(), s.DataSource.node.TableDef.Name)
+		logutil.Infof("xxxx compileTableScanWithNode, "+
+			"txn:%s, table:%s, data is nil, cnid:%s,addr:%s, needexpand:%v",
+			s.Proc.GetTxnOperator().Txn().DebugString(),
+			s.DataSource.node.TableDef.Name,
+			s.NodeInfo.Id,
+			s.NodeInfo.Addr,
+			s.NodeInfo.NeedExpandRanges,
+		)
 	}
 	return s, nil
 }
@@ -4227,6 +4233,7 @@ func (c *Compile) generateNodesInProgress(n *plan.Node) (engine.Nodes, []any, []
 				Id:   node.Id,
 				Addr: node.Addr,
 				Mcpu: c.generateCPUNumber(node.Mcpu, int(n.Stats.BlockNum)),
+				Data: engine.BuildEmptyRelData(),
 			}
 		}
 		return nodes, partialResults, partialResultTypes, nil
@@ -4242,6 +4249,15 @@ func (c *Compile) generateNodesInProgress(n *plan.Node) (engine.Nodes, []any, []
 	// disttae engine
 	if engineType == engine.Disttae {
 		nodes, err := shuffleBlocksToMultiCN(c, rel, relData, n)
+
+		for _, node := range nodes {
+			if node.Data == nil {
+				logutil.Infof("xxxx generateNodes,node.Data is nil, txn:%s, table:%s",
+					txnOp.Txn().DebugString(),
+					n.TableDef.Name)
+			}
+		}
+
 		return nodes, partialResults, partialResultTypes, err
 	}
 	// maybe temp table on memengine , just put payloads in average
