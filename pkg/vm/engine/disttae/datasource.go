@@ -756,6 +756,9 @@ func (rs *RemoteDataSource) applyInMemTombstones(
 	bid types.Blockid,
 	rowsOffset []int32,
 ) (leftRows []int32, deletedRows []int64) {
+	if rs.data.GetTombstones() == nil {
+		return rowsOffset, nil
+	}
 	return rs.data.GetTombstones().ApplyInMemTombstones(
 		bid,
 		rowsOffset)
@@ -794,6 +797,9 @@ func (rs *RemoteDataSource) applyUncommitDeltaLoc(
 			*left, *deleted = fastApplyDeletedRows(*left, *deleted, o)
 		}
 		return nil
+	}
+	if rs.data.GetTombstones() == nil {
+		return rowsOffset, nil, nil
 	}
 	return rs.data.GetTombstones().ApplyPersistedTombstones(
 		ctx,
@@ -835,7 +841,9 @@ func (rs *RemoteDataSource) applyCommittedDeltaLoc(
 		}
 		return nil
 	}
-
+	if rs.data.GetTombstones() == nil {
+		return rowsOffset, nil, nil
+	}
 	return rs.data.GetTombstones().ApplyPersistedTombstones(
 		ctx,
 		bid,
