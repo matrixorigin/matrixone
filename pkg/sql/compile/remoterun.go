@@ -358,13 +358,20 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			s.DataSource.Bat = bat
 		}
 	}
+	//var relData engine.RelData
 	if p.Node != nil {
 		s.NodeInfo.Id = p.Node.Id
 		s.NodeInfo.Addr = p.Node.Addr
 		s.NodeInfo.Mcpu = int(p.Node.Mcpu)
-		relData, err := disttae.UnmarshalRelationData([]byte(p.Node.Payload))
-		if err != nil {
-			return nil, err
+
+		bs := []byte(p.Node.Payload)
+		var relData engine.RelData
+		if len(bs) > 0 {
+			rd, err := disttae.UnmarshalRelationData(bs)
+			if err != nil {
+				return nil, err
+			}
+			relData = rd
 		}
 		s.NodeInfo.Data = relData
 	}
