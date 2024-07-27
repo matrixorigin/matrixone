@@ -176,13 +176,16 @@ func (m *EncodeBatch) unmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) err
 type Batch struct {
 	// For recursive CTE, 1 is last batch, 2 is end of batch
 	Recursive int32
-	// Ro if true, Attrs is read only
-	Ro         bool
+
 	ShuffleIDX int32 //used only in shuffle
 	// reference count, default is 1
 	Cnt int64
 	// Attrs column name list, letter case: origin
 	Attrs []string
+
+	// Very bad design, public.
+	BorrowedVecs bool
+
 	// Vecs col data
 	Vecs []*vector.Vector
 

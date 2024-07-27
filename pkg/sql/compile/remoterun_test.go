@@ -389,7 +389,6 @@ func Test_decodeBatch(t *testing.T) {
 
 	bat := &batch.Batch{
 		Recursive:  0,
-		Ro:         false,
 		ShuffleIDX: 0,
 		Cnt:        1,
 		Attrs:      []string{"1"},

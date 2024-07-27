@@ -86,9 +86,6 @@ func init() {
 				types.T_int8.ToType(),
 			},
 			arg: &Limit{
-				ctr: &container{
-					seen: 0,
-				},
 				LimitExpr: plan2.MakePlan2Uint64ConstExprWithType(12),
 				OperatorBase: vm.OperatorBase{
 					OperatorInfo: vm.OperatorInfo{

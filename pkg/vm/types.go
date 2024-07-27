@@ -279,6 +279,10 @@ func NewCallResult() CallResult {
 	}
 }
 
+func (r CallResult) Done() bool {
+	return r.Batch == nil || r.Batch.IsEmpty() || r.Batch.Last()
+}
+
 type OperatorInfo struct {
 	Idx           int // plan node index to which the pipeline operator belongs
 	ParallelIdx   int
