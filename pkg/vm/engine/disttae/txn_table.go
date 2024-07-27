@@ -775,9 +775,6 @@ func (tbl *txnTable) RangesInProgress(
 		return
 	}
 
-	logutil.Infof("xxxx RangesInProgress, return blks:%d, txn:%s, tbl:%s",
-		len(blocks), tbl.db.op.Txn().DebugString(), tbl.tableDef.Name)
-
 	return buildRelationDataV1(blocks), nil
 }
 
