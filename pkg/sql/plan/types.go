@@ -395,15 +395,17 @@ const (
 )
 
 type Binding struct {
-	tag            int32
-	nodeId         int32
-	db             string
-	table          string
-	tableID        uint64
-	cols           []string
-	colIsHidden    []bool
-	types          []*plan.Type
-	refCnts        []uint
+	tag     int32
+	nodeId  int32
+	db      string
+	table   string
+	tableID uint64
+	// lower case
+	cols        []string
+	colIsHidden []bool
+	types       []*plan.Type
+	refCnts     []uint
+	// lower case
 	colIdByName    map[string]int32
 	isClusterTable bool
 	defaults       []string
