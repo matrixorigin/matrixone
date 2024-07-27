@@ -152,8 +152,6 @@ func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) {
 			return
 		}
 		duration += time.Since(start)
-
-		entry.rt.TransferTable.AddPage(page)
 		pages = append(pages, page)
 	}
 
@@ -166,6 +164,7 @@ func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) {
 		} else {
 			page.SetBornTS(now)
 		}
+		entry.rt.TransferTable.AddPage(page)
 	}
 	duration += time.Since(start)
 	v2.TransferPageFlushLatencyHistogram.Observe(duration.Seconds())
