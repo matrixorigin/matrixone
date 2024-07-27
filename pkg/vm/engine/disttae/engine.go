@@ -741,6 +741,13 @@ func (e *Engine) BuildBlockReaders(
 	if blkCnt < num {
 		return nil, moerr.NewInternalErrorNoCtx("not enough blocks")
 	}
+
+	logutil.Infof("xxxx Build reomote blockReaders: table:%s, blkCnt: %d,cpu:%d, ts:%s",
+		def.Name,
+		blkCnt,
+		num,
+		ts.DebugString())
+
 	fs, err := fileservice.Get[fileservice.FileService](e.fs, defines.SharedFileServiceName)
 	if err != nil {
 		return nil, err

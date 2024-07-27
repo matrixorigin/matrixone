@@ -494,7 +494,7 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 		c.proc.SetPrepareExprList(nil)
 	}()
 
-	//fmt.Printf("%x xxxx run sql: %s\n", txnOp.Txn().ID, sql)
+	fmt.Printf("%x xxxx run sql: %s\n", txnOp.Txn().ID, sql)
 
 	var writeOffset uint64
 
@@ -4251,11 +4251,12 @@ func (c *Compile) generateNodesInProgress(n *plan.Node) (engine.Nodes, []any, []
 		nodes, err := shuffleBlocksToMultiCN(c, rel, relData, n)
 
 		for _, node := range nodes {
-			if node.Data == nil {
-				logutil.Infof("xxxx generateNodes,node.Data is nil, txn:%s, table:%s",
-					txnOp.Txn().DebugString(),
-					n.TableDef.Name)
-			}
+			logutil.Infof("xxxx generateNodes,node.Data is nil, "+
+				"txn:%s, table:%s, node.Addr:%s, node.data:%d",
+				txnOp.Txn().DebugString(),
+				n.TableDef.Name,
+				node.Addr,
+				node.Data.BlkCnt())
 		}
 
 		return nodes, partialResults, partialResultTypes, err
