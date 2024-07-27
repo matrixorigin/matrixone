@@ -1035,7 +1035,7 @@ func (blk *baseObject) PersistedCollectDeleteInRange(
 				retVec.PreExtend(sels.Length())
 				retVec.GetDownstreamVector().Union(
 					srcVec.GetDownstreamVector(),
-					vector.MustFixedCol[int32](sels.GetDownstreamVector()),
+					vector.MustFixedCol[int64](sels.GetDownstreamVector()),
 					retVec.GetAllocator(),
 				)
 			}

@@ -2334,7 +2334,7 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 	return nil
 }
 
-func (v *Vector) Union(w *Vector, sels []int32, mp *mpool.MPool) error {
+func (v *Vector) Union(w *Vector, sels []int64, mp *mpool.MPool) error {
 	if len(sels) == 0 {
 		return nil
 	}
