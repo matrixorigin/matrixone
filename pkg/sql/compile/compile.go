@@ -2021,6 +2021,11 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) (*Sco
 	op.SetIsFirst(c.anal.isFirst)
 	s.setRootOperator(op)
 	s.Proc = process.NewFromProc(c.proc, c.proc.Ctx, 0)
+
+	if s.NodeInfo.Data == nil {
+		logutil.Infof("xxxx compileTableScanWithNode, txn:%s, table:%s, data is nil",
+			s.Proc.GetTxnOperator().Txn().DebugString(), s.DataSource.node.TableDef.Name)
+	}
 	return s, nil
 }
 
