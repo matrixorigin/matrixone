@@ -4251,7 +4251,7 @@ func (c *Compile) generateNodesInProgress(n *plan.Node) (engine.Nodes, []any, []
 		nodes, err := shuffleBlocksToMultiCN(c, rel, relData, n)
 
 		for _, node := range nodes {
-			logutil.Infof("xxxx generateNodes,node.Data is nil, "+
+			logutil.Infof("xxxx generateNodes "+
 				"txn:%s, table:%s, node.Addr:%s, node.data:%d",
 				txnOp.Txn().DebugString(),
 				n.TableDef.Name,
@@ -4357,7 +4357,7 @@ func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelD
 	nodes[0].Data = relData.BuildEmptyRelData()
 	nodes[0].Data.AppendDataBlk(&objectio.EmptyBlockInfoInProgress)
 	// only memory table block
-	if nodes[0].Data.BlkCnt() == 1 {
+	if relData.BlkCnt() == 1 {
 		return nodes, nil
 	}
 	// only one cn
