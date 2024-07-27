@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -188,20 +187,23 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 		p.Qry = s.Plan
 	}
 
-	if s.NodeInfo.Data == nil {
-		logutil.Infof("xxxx generatePipeline ,data is nil, "+
-			"txn:%s, nodeid:%s, nodeaddr:%s, needexpand:%v",
-			s.Proc.GetTxnOperator().Txn().DebugString(),
-			s.NodeInfo.Id,
-			s.NodeInfo.Addr,
-			s.NodeInfo.NeedExpandRanges)
+	//if s.NodeInfo.Data == nil {
+	//	logutil.Infof("xxxx generatePipeline ,data is nil, "+
+	//		"txn:%s, nodeid:%s, nodeaddr:%s, needexpand:%v",
+	//		s.Proc.GetTxnOperator().Txn().DebugString(),
+	//		s.NodeInfo.Id,
+	//		s.NodeInfo.Addr,
+	//		s.NodeInfo.NeedExpandRanges)
+	//}
+	var data []byte
+	if s.NodeInfo.Data != nil {
+		data = s.NodeInfo.Data.MarshalToBytes()
 	}
-
 	p.Node = &pipeline.NodeInfo{
 		Id:      s.NodeInfo.Id,
 		Addr:    s.NodeInfo.Addr,
 		Mcpu:    int32(s.NodeInfo.Mcpu),
-		Payload: string(s.NodeInfo.Data.MarshalToBytes()),
+		Payload: string(data),
 	}
 	ctx.pipe = p
 	ctx.scope = s
