@@ -861,7 +861,7 @@ type readerInProgress struct {
 	scanType int
 
 	// for ordered scan
-	//desc     bool
+	desc     bool
 	blockZMS []index.ZM
 	//sorted   bool // blks need to be sorted by zonemap
 	OrderBy []*plan.OrderBySpec

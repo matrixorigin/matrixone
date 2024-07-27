@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -186,6 +187,13 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 		// only encode the first one.
 		p.Qry = s.Plan
 	}
+
+	if s.NodeInfo.Data == nil {
+		logutil.Infof("xxxx generatePipeline ,data is nil, txn:%s, table:%s",
+			s.Proc.GetTxnOperator().Txn().DebugString(),
+			s.DataSource.node.TableDef.Name)
+	}
+
 	p.Node = &pipeline.NodeInfo{
 		Id:      s.NodeInfo.Id,
 		Addr:    s.NodeInfo.Addr,
