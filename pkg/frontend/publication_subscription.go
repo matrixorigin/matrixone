@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -1435,10 +1436,17 @@ func UpgradePubSub() (err error) {
 	//         3. not in a1 and in a2: sub_name, sub_time, StatusNotAuthorized
 
 	ctx := defines.AttachAccount(context.TODO(), uint32(sysAccountID), uint32(rootID), uint32(moAdminRoleID))
+	sid := "upgrade pubsub"
+	pool, err := mpool.NewMPool(sid, getGlobalPu().SV.GuestMmuLimitation, mpool.NoFixed)
+	if err != nil {
+		return
+	}
 	ses := &Session{
 		feSessionImpl: feSessionImpl{
-			txnHandler: InitTxnHandler("", getGlobalPu().StorageEngine, ctx, nil),
+			pool:       pool,
+			txnHandler: InitTxnHandler(sid, getGlobalPu().StorageEngine, ctx, nil),
 		},
+		logger: getLogger(sid),
 	}
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
