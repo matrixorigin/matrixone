@@ -861,6 +861,9 @@ func (rs *RemoteDataSource) ApplyTombstonesInProgress(
 		return nil, err
 	}
 	rowsOffset, _, err = rs.applyCommittedDeltaLoc(ctx, bid, rowsOffset)
+	if err != nil {
+		return nil, err
+	}
 	return rowsOffset, nil
 }
 
