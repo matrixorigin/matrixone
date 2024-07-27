@@ -19,6 +19,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v1_3_0"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
@@ -297,6 +299,13 @@ func (s *service) asyncUpgradeTask(ctx context.Context) {
 			completed, err := fn()
 			if err == nil && completed {
 				s.upgrade.finalVersionCompleted.Store(true)
+
+				if v1_3_0.NeedUpgradePubSub {
+					if err = frontend.UpgradePubSub(); err != nil {
+						s.logger.Error("UpgradePubSub failed", zap.Error(err))
+						return
+					}
+				}
 				return
 			}
 			timer.Reset(s.upgrade.checkUpgradeDuration)

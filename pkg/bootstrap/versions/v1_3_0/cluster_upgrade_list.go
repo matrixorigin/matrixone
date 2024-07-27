@@ -26,6 +26,8 @@ var clusterUpgEntries = []versions.UpgradeEntry{
 	upg_mo_subs,
 }
 
+var NeedUpgradePubSub = false
+
 var upg_mo_pitr = versions.UpgradeEntry{
 	Schema:    catalog.MO_CATALOG,
 	TableName: catalog.MO_PITR,
@@ -58,6 +60,7 @@ var upg_mo_subs = versions.UpgradeEntry{
 		if isExist {
 			return true, nil
 		}
+		NeedUpgradePubSub = true
 		return false, nil
 	},
 }

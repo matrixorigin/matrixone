@@ -487,10 +487,6 @@ func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit, ai
 	}
 
 	s.createMOServer(cancelMoServerCtx, pu, aicm)
-
-	if err = frontend.UpgradePubSub(); err != nil {
-		return err
-	}
 	return nil
 }
 

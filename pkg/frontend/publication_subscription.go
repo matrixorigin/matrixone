@@ -1420,27 +1420,16 @@ func dropSubAccountNameInSubAccounts(ctx context.Context, bh BackgroundExec, pub
 }
 
 func UpgradePubSub() (err error) {
-	// get all accounts
-	// get (pubAccount, pubName) -> subscribed map: map[pub][]sub_info in all accounts
-	// for (pubAccount, pubName), subscribed_infos := range pub_sub_map
-	// 	   pubInfo := getPubInfo()
-	// 	   if pubInfo not exist:
-	// 	       for each sub_info in subscribed_infos
-	//		       insert into mo_subs with StatusDeleted
-	// 	   else:
-	//         a1 := authorized sub accounts
-	//         a2 := subscribed_infos
-	// 		   for account:
-	//         1. in a1 and in a2: sub_name, sub_time, StatusNormal
-	//         2. in a1 and not in a2: nil, nil, StatusNormal
-	//         3. not in a1 and in a2: sub_name, sub_time, StatusNotAuthorized
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*10)
+	ctx = defines.AttachAccount(ctx, uint32(sysAccountID), uint32(rootID), uint32(moAdminRoleID))
+	defer cancel()
 
-	ctx := defines.AttachAccount(context.TODO(), uint32(sysAccountID), uint32(rootID), uint32(moAdminRoleID))
 	sid := "upgrade pubsub"
 	pool, err := mpool.NewMPool(sid, getGlobalPu().SV.GuestMmuLimitation, mpool.NoFixed)
 	if err != nil {
 		return
 	}
+
 	ses := &Session{
 		feSessionImpl: feSessionImpl{
 			pool:       pool,
@@ -1448,8 +1437,16 @@ func UpgradePubSub() (err error) {
 		},
 		logger: getLogger(sid),
 	}
+
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
+
+	if err = bh.Exec(ctx, "begin;"); err != nil {
+		return
+	}
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
 
 	getSubInfoFromSql := func(ctx context.Context, sql string) (subName, pubAccountName, pubName string, err error) {
 		var ast []tree.Statement
@@ -1479,7 +1476,28 @@ func UpgradePubSub() (err error) {
 
 	_, accNameInfoMap, err := getAccounts(ctx, bh)
 
-	pubSubscribedInfoMap, err := func() (m map[string][]*pubsub.SubInfo, err error) {
+	// allPubInfos: pubAccountName#pubName -> pubInfo
+	allPubInfos, err := func() (map[string]*pubsub.PubInfo, error) {
+		allPubInfos := make(map[string]*pubsub.PubInfo)
+		for _, accountInfo := range accNameInfoMap {
+			newCtx := defines.AttachAccountId(ctx, uint32(accountInfo.Id))
+			pubInfos, err := getPubInfos(newCtx, bh, "")
+			if err != nil {
+				return nil, err
+			}
+
+			for _, pubInfo := range pubInfos {
+				allPubInfos[accountInfo.Name+"#"+pubInfo.PubName] = pubInfo
+			}
+		}
+		return allPubInfos, nil
+	}()
+	if err != nil {
+		return
+	}
+
+	// pubSubscribedInfos: pubAccountName#pubName -> subscribedInfos
+	pubSubscribedInfos, err := func() (subscribedInfos map[string][]*pubsub.SubInfo, err error) {
 		sql := "select dat_createsql, created_time, account_id from mo_catalog.mo_database where dat_type = 'subscription'"
 
 		bh.ClearExecResultSet()
@@ -1498,7 +1516,7 @@ func UpgradePubSub() (err error) {
 			createdTime                      string
 			subAccountId                     uint64
 		)
-		m = make(map[string][]*pubsub.SubInfo)
+		subscribedInfos = make(map[string][]*pubsub.SubInfo)
 		for _, result := range erArray {
 			for i := uint64(0); i < result.GetRowCount(); i++ {
 				if createSql, err = result.GetString(ctx, i, 0); err != nil {
@@ -1515,10 +1533,12 @@ func UpgradePubSub() (err error) {
 				}
 
 				key := pubAccountName + "#" + pubName
-				m[key] = append(m[key], &pubsub.SubInfo{
-					SubAccountId: int32(subAccountId),
-					SubName:      subName,
-					SubTime:      createdTime,
+				subscribedInfos[key] = append(subscribedInfos[key], &pubsub.SubInfo{
+					SubAccountId:   int32(subAccountId),
+					SubName:        subName,
+					SubTime:        createdTime,
+					PubAccountName: pubAccountName,
+					PubName:        pubName,
 				})
 			}
 		}
@@ -1528,89 +1548,150 @@ func UpgradePubSub() (err error) {
 		return
 	}
 
-	for pubKey, subscribedInfos := range pubSubscribedInfoMap {
-		split := strings.Split(pubKey, "#")
-		pubAccountName, pubName := split[0], split[1]
-
-		var pubInfo *pubsub.PubInfo
-		newCtx := defines.AttachAccountId(ctx, uint32(accNameInfoMap[pubAccountName].Id))
-		if pubInfo, err = getPubInfo(newCtx, bh, pubName); err != nil {
-			return
-		}
-
-		if pubInfo == nil {
-			for _, subscribedInfo := range subscribedInfos {
-				subInfo := &pubsub.SubInfo{
-					SubAccountId:   subscribedInfo.SubAccountId,
-					SubName:        subscribedInfo.SubName,
-					SubTime:        subscribedInfo.SubTime,
-					PubAccountName: pubAccountName,
-					PubName:        pubName,
-					Status:         pubsub.SubStatusDeleted,
-				}
-
-				insertSubsSql := generateInsertSql(subInfo)
-				if err = bh.Exec(ctx, insertSubsSql); err != nil {
-					return
-				}
+	getSubAccountIds := func(pubInfo *pubsub.PubInfo) (subAccountIds []int32) {
+		if pubInfo.SubAccountsStr == pubsub.AccountAll {
+			for _, accInfo := range accNameInfoMap {
+				subAccountIds = append(subAccountIds, accInfo.Id)
 			}
 		} else {
-			subAccountNames := pubInfo.GetSubAccountNames()
-			for _, subAccountName := range subAccountNames {
-				subInfo := &pubsub.SubInfo{
-					SubAccountId:   accNameInfoMap[subAccountName].Id,
-					SubName:        "",
-					SubTime:        "",
-					PubAccountName: pubAccountName,
-					PubName:        pubInfo.PubName,
-					PubDbName:      pubInfo.DbName,
-					PubTables:      pubInfo.TablesStr,
-					PubTime:        pubInfo.CreateTime,
-					PubComment:     pubInfo.Comment,
-					Status:         pubsub.SubStatusNormal,
-				}
-
-				idx := slices.IndexFunc(subscribedInfos, func(info *pubsub.SubInfo) bool {
-					return info.PubAccountName == subAccountName
-				})
-				if idx != -1 {
-					subInfo.SubName = subscribedInfos[idx].SubName
-					subInfo.SubTime = subscribedInfos[idx].SubTime
-				}
-
-				insertSubsSql := generateInsertSql(subInfo)
-				if err = bh.Exec(ctx, insertSubsSql); err != nil {
-					return
-				}
+			for _, accName := range pubInfo.GetSubAccountNames() {
+				subAccountIds = append(subAccountIds, accNameInfoMap[accName].Id)
 			}
+		}
+		return
+	}
 
-			for _, subscribedInfo := range subscribedInfos {
-				idx := slices.IndexFunc(subAccountNames, func(name string) bool {
-					return name == subscribedInfo.PubAccountName
-				})
-				if idx != -1 {
-					continue
-				}
+	var pub1, pub2, pub3 []string
+	for key := range allPubInfos {
+		if _, ok := pubSubscribedInfos[key]; ok {
+			pub2 = append(pub2, key)
+		} else {
+			pub1 = append(pub1, key)
+		}
+	}
+	for key := range pubSubscribedInfos {
+		if _, ok := pubSubscribedInfos[key]; !ok {
+			pub3 = append(pub3, key)
+		}
+	}
 
-				subInfo := &pubsub.SubInfo{
-					SubAccountId:   subscribedInfo.SubAccountId,
-					SubName:        subscribedInfo.SubName,
-					SubTime:        subscribedInfo.SubTime,
-					PubAccountName: pubAccountName,
-					PubName:        pubInfo.PubName,
-					PubDbName:      pubInfo.DbName,
-					PubTables:      pubInfo.TablesStr,
-					PubTime:        pubInfo.CreateTime,
-					PubComment:     pubInfo.Comment,
-					Status:         pubsub.SubStatusNotAuthorized,
-				}
+	// for pubs in:
+	// 	   in pub1(allPubInfos && ~pubSubscribedInfos) -> nil, nil, StatusNormal
+	//     in pub2(allPubInfos && pubSubscribedInfos)
+	//         a1 := authorized sub_accounts
+	//         a2 := subscribed_infos
+	// 	  	   for account:
+	//             1. in a1 and in a2 -> sub_name, sub_time, StatusDeleted
+	//             2. in a1 and not in a2 -> nil, nil, StatusNormal
+	//             3. not in a1 and in a2 -> StatusNotAuthorized
+	//     int pub3(~allPubInfos && pubSubscribedInfos) -> sub_name, sub_time, StatusDeleted
+	for _, pubKey := range pub1 {
+		split := strings.Split(pubKey, "#")
+		pubAccountName, pubName := split[0], split[1]
+		pubInfo := allPubInfos[pubKey]
 
-				insertSubsSql := generateInsertSql(subInfo)
-				if err = bh.Exec(ctx, insertSubsSql); err != nil {
-					return
-				}
+		for _, subAccountId := range getSubAccountIds(pubInfo) {
+			subInfo := &pubsub.SubInfo{
+				SubAccountId:   subAccountId,
+				PubAccountName: pubAccountName,
+				PubName:        pubName,
+				PubDbName:      pubInfo.DbName,
+				PubTables:      pubInfo.TablesStr,
+				PubTime:        pubInfo.CreateTime,
+				PubComment:     pubInfo.Comment,
+				Status:         pubsub.SubStatusNormal,
+			}
+			insertSubsSql := generateInsertSql(subInfo)
+			if err = bh.Exec(ctx, insertSubsSql); err != nil {
+				return
 			}
 		}
 	}
+
+	for _, pubKey := range pub2 {
+		split := strings.Split(pubKey, "#")
+		pubAccountName, pubName := split[0], split[1]
+		pubInfo := allPubInfos[pubKey]
+		subscribedInfos := pubSubscribedInfos[pubKey]
+
+		subAccountIds := getSubAccountIds(pubInfo)
+		for _, subAccountId := range subAccountIds {
+			subInfo := &pubsub.SubInfo{
+				SubAccountId:   subAccountId,
+				SubName:        "",
+				SubTime:        "",
+				PubAccountName: pubAccountName,
+				PubName:        pubName,
+				PubDbName:      pubInfo.DbName,
+				PubTables:      pubInfo.TablesStr,
+				PubTime:        pubInfo.CreateTime,
+				PubComment:     pubInfo.Comment,
+				Status:         pubsub.SubStatusNormal,
+			}
+
+			idx := slices.IndexFunc(subscribedInfos, func(info *pubsub.SubInfo) bool {
+				return info.SubAccountId == subAccountId
+			})
+			if idx != -1 {
+				subInfo.SubName = subscribedInfos[idx].SubName
+				subInfo.SubTime = subscribedInfos[idx].SubTime
+			}
+
+			insertSubsSql := generateInsertSql(subInfo)
+			if err = bh.Exec(ctx, insertSubsSql); err != nil {
+				return
+			}
+		}
+
+		for _, subscribedInfo := range subscribedInfos {
+			idx := slices.IndexFunc(subAccountIds, func(id int32) bool {
+				return id == subscribedInfo.SubAccountId
+			})
+			if idx != -1 {
+				continue
+			}
+
+			subInfo := &pubsub.SubInfo{
+				SubAccountId:   subscribedInfo.SubAccountId,
+				SubName:        subscribedInfo.SubName,
+				SubTime:        subscribedInfo.SubTime,
+				PubAccountName: pubAccountName,
+				PubName:        pubName,
+				PubDbName:      pubInfo.DbName,
+				PubTables:      pubInfo.TablesStr,
+				PubTime:        pubInfo.CreateTime,
+				PubComment:     pubInfo.Comment,
+				Status:         pubsub.SubStatusNotAuthorized,
+			}
+
+			insertSubsSql := generateInsertSql(subInfo)
+			if err = bh.Exec(ctx, insertSubsSql); err != nil {
+				return
+			}
+		}
+	}
+
+	for _, pubKey := range pub3 {
+		split := strings.Split(pubKey, "#")
+		pubAccountName, pubName := split[0], split[1]
+		subscribedInfos := pubSubscribedInfos[pubKey]
+
+		for _, subscribedInfo := range subscribedInfos {
+			subInfo := &pubsub.SubInfo{
+				SubAccountId:   subscribedInfo.SubAccountId,
+				SubName:        subscribedInfo.SubName,
+				SubTime:        subscribedInfo.SubTime,
+				PubAccountName: pubAccountName,
+				PubName:        pubName,
+				Status:         pubsub.SubStatusDeleted,
+			}
+
+			insertSubsSql := generateInsertSql(subInfo)
+			if err = bh.Exec(ctx, insertSubsSql); err != nil {
+				return
+			}
+		}
+	}
+
 	return
 }
