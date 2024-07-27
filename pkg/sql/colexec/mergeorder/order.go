@@ -33,6 +33,7 @@ const opName = "merge_order"
 
 func (ctr *container) mergeAndEvaluateOrderColumn(proc *process.Process, bat *batch.Batch) error {
 	ctr.batchList = append(ctr.batchList, bat)
+	// WTF is the following?
 	ctr.orderCols = append(ctr.orderCols, nil)
 	// if only one batch, no need to evaluate the order column.
 	if len(ctr.batchList) == 1 {
@@ -48,6 +49,8 @@ func (ctr *container) evaluateOrderColumn(proc *process.Process, index int) erro
 
 	ctr.orderCols[index] = make([]*vector.Vector, len(ctr.executors))
 	for i := 0; i < len(ctr.executors); i++ {
+		// XXX: this one eval is good enough, but what do I know.
+		// vec, err := ctr.executors[i].Eval(proc, inputs, nil)
 		vec, err := ctr.executors[i].EvalWithoutResultReusing(proc, inputs, nil)
 		if err != nil {
 			return err

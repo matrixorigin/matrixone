@@ -67,11 +67,15 @@ func (fill *Fill) Prepare(proc *process.Process) (err error) {
 			if err != nil {
 				return err
 			}
-			ctr.valVecs[i], err = exe.EvalWithoutResultReusing(proc, []*batch.Batch{b}, nil)
+
+			// eval and take result ownership.   This is called in prepare, therefore
+			// the bad case (col expression) won't happen.
+			res, err := exe.EvalWithoutResultReusing(proc, []*batch.Batch{b}, nil)
 			if err != nil {
 				exe.Free()
 				return err
 			}
+			ctr.valVecs[i] = res
 			exe.Free()
 		}
 		ctr.process = processValue
@@ -385,6 +389,10 @@ func processLinearCol(ctr *container, proc *process.Process, idx int) error {
 				return err
 			}
 			b.SetRowCount(1)
+
+			// XXX FUBAR
+			// This one I have no idea when it get called.  By all means it seems only
+			// happen in window function fill mode.
 			ctr.valVecs[idx], err = ctr.exes[idx].EvalWithoutResultReusing(proc, []*batch.Batch{b}, nil)
 			if err != nil {
 				return err

@@ -1600,29 +1600,26 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				}
 				return nil
 			}
-			if err := extend(v, w.length, mp); err != nil {
-				return err
-			}
-			if sz := len(v.area) + len(w.area); sz > cap(v.area) {
-				area, err := mp.Grow(v.area, sz)
-				if err != nil {
-					return err
-				}
-				v.area = area[:len(v.area)]
-			}
-			var vs []types.Varlena
-			ToSlice(v, &vs)
-			var err error
-			for i := range ws {
-				if nulls.Contains(w.nsp, uint64(i)) {
-					nulls.Add(v.nsp, uint64(v.length))
-				} else {
-					err = BuildVarlenaFromValena(v, &vs[v.length], &ws[i], &w.area, mp)
-					if err != nil {
-						return err
+
+			// extend vector, fast path.  First set the nulls.
+			if w.nsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.nsp, uint64(i)) {
+						nulls.Add(v.nsp, uint64(v.length+i))
 					}
 				}
-				v.length++
+			}
+			// brutal force it
+			origLen := v.length
+			origOffset := uint32(len(v.area))
+			v.data = append(v.data, w.data...)
+			v.area = append(v.area, w.area...)
+			v.length += w.length
+			if origOffset > 0 && len(w.area) > 0 {
+				vs := MustFixedCol[types.Varlena](v)
+				for i := origLen; i < v.length; i++ {
+					vs[i].AddOffset(origOffset)
+				}
 			}
 			return nil
 		}

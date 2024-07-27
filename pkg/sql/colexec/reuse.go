@@ -88,8 +88,12 @@ func (expr ColumnExpressionExecutor) TypeName() string {
 	return "ColumnExpressionExecutor"
 }
 
-func NewColumnExpressionExecutor() *ColumnExpressionExecutor {
+func NewColumnExpressionExecutor(mp *mpool.MPool, ridx, cidx int, typ types.Type) *ColumnExpressionExecutor {
 	ce := reuse.Alloc[ColumnExpressionExecutor](nil)
+	ce.mp = mp
+	ce.relIndex = ridx
+	ce.colIndex = cidx
+	ce.typ = typ
 	return ce
 }
 
@@ -111,8 +115,13 @@ func (expr VarExpressionExecutor) TypeName() string {
 	return "VarExpressionExecutor"
 }
 
-func NewVarExpressionExecutor() *VarExpressionExecutor {
+func NewVarExpressionExecutor(mp *mpool.MPool, name string, sys, global bool, typ types.Type) *VarExpressionExecutor {
 	ve := reuse.Alloc[VarExpressionExecutor](nil)
+	ve.mp = mp
+	ve.name = name
+	ve.system = sys
+	ve.global = global
+	ve.typ = typ
 	return ve
 }
 

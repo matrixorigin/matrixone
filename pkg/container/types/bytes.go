@@ -62,6 +62,14 @@ func (v *Varlena) SetOffsetLen(voff, vlen uint32) {
 	s[2] = vlen
 }
 
+func (v *Varlena) AddOffset(off uint32) {
+	if v.IsSmall() {
+		return
+	}
+	s := v.U32Slice()
+	s[1] += off
+}
+
 // do not use this function, will be deleted in the future
 // use BuildVarlenaFromValena or BuildVarlenaFromByteSlice instead
 func BuildVarlena(bs []byte, area []byte, m *mpool.MPool) (Varlena, []byte, error) {

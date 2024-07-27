@@ -122,6 +122,7 @@ func (ctr *container) build(ap *MergeTop, proc *process.Process, anal process.An
 			return false, nil
 		}
 
+		// XXX FUBAR
 		bat := msg.Batch
 		anal.Input(bat, isFirst)
 
@@ -132,6 +133,10 @@ func (ctr *container) build(ap *MergeTop, proc *process.Process, anal process.An
 				colIndex := ctr.executorsForOrderList[i].(*colexec.ColumnExpressionExecutor).GetColIndex()
 				ctr.poses = append(ctr.poses, int32(colIndex))
 			} else {
+				// XXX FUBAR
+				// We already checked IsColumnExpr, this must be some other expr vec, and it will
+				// be evaluated and added to bat.Vecs.   So large copy won't happen.  So the code
+				// is more or less OK but the API abstraction is so bad, it's hard to understand.
 				vec, err := ctr.executorsForOrderList[i].EvalWithoutResultReusing(proc, []*batch.Batch{bat}, nil)
 				if err != nil {
 					return false, err
