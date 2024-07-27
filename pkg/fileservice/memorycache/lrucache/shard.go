@@ -18,23 +18,24 @@ import (
 	"context"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache/lrucache/internal/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 )
 
-func (s *shard[K, V]) Set(ctx context.Context, h uint64, key K, value V) {
+func (s *shard[K, V]) Set(ctx context.Context, key K, value V) (inserted bool) {
 	size := int64(len(value.Bytes()))
 	item := s.allocItem()
-	item.h = h
 	item.Key = key
 	item.Value = value
 	item.Size = size
+
 	s.Lock()
 	defer s.Unlock()
-	if _, ok := s.kv.Get(h, key); ok {
+
+	if _, ok := s.kv[key]; ok {
 		return
 	}
-	s.kv.Set(h, key, item)
+
+	s.kv[key] = item
 	s.size += size
 	atomic.AddInt64(s.totalSize, size)
 	s.evicts.PushFront(item)
@@ -44,6 +45,8 @@ func (s *shard[K, V]) Set(ctx context.Context, h uint64, key K, value V) {
 	if atomic.LoadInt64(&s.size) >= s.capacity {
 		s.evict(ctx)
 	}
+
+	return true
 }
 
 func (s *shard[K, V]) evict(ctx context.Context) {
@@ -61,7 +64,7 @@ func (s *shard[K, V]) evict(ctx context.Context) {
 		if s.size <= s.capacity {
 			return
 		}
-		if s.kv.Len() == 0 {
+		if len(s.kv) == 0 {
 			return
 		}
 
@@ -70,7 +73,7 @@ func (s *shard[K, V]) evict(ctx context.Context) {
 			if elem == nil {
 				return
 			}
-			s.kv.Delete(elem.h, elem.Key)
+			delete(s.kv, elem.Key)
 			s.size -= elem.Size
 			atomic.AddInt64(s.totalSize, -elem.Size)
 			s.evicts.Remove(elem)
@@ -91,7 +94,7 @@ func (s *shard[K, V]) evict(ctx context.Context) {
 func (s *shard[K, V]) Get(ctx context.Context, h uint64, key K) (value V, ok bool) {
 	s.RLock()
 	defer s.RUnlock()
-	if elem, ok := s.kv.Get(h, key); ok {
+	if elem, ok := s.kv[key]; ok {
 		atomic.AddInt64(&elem.NumRead, 1)
 		if s.postGet != nil {
 			s.postGet(key, elem.Value)
@@ -105,7 +108,7 @@ func (s *shard[K, V]) Flush() {
 	s.Lock()
 	defer s.Unlock()
 	for elem := s.evicts.Back(); elem != nil; elem = s.evicts.Back() {
-		s.kv.Delete(elem.h, elem.Key)
+		delete(s.kv, elem.Key)
 		s.evicts.Remove(elem)
 		if s.postEvict != nil {
 			s.postEvict(elem.Key, elem.Value)
@@ -114,7 +117,7 @@ func (s *shard[K, V]) Flush() {
 	}
 	s.size = 0
 	s.evicts = newList[K, V]()
-	s.kv = hashmap.New[K, lruItem[K, V]](int(s.capacity))
+	s.kv = make(map[K]*lruItem[K, V])
 }
 
 func (s *shard[K, V]) allocItem() *lruItem[K, V] {
@@ -124,4 +127,33 @@ func (s *shard[K, V]) allocItem() *lruItem[K, V] {
 func (s *shard[K, V]) freeItem(item *lruItem[K, V]) {
 	item.NumRead = 0
 	s.pool.put(item)
+}
+
+func (s *shard[K, V]) evictOne() (evictedBytes int, evicted bool) {
+	s.Lock()
+	defer s.Unlock()
+
+	if s.size == 0 {
+		return
+	}
+	if len(s.kv) == 0 {
+		return
+	}
+
+	elem := s.evicts.Back()
+	if elem == nil {
+		return
+	}
+	delete(s.kv, elem.Key)
+	s.size -= elem.Size
+	evictedBytes = int(elem.Size)
+	evicted = true
+	atomic.AddInt64(s.totalSize, -elem.Size)
+	s.evicts.Remove(elem)
+	if s.postEvict != nil {
+		s.postEvict(elem.Key, elem.Value)
+	}
+	s.freeItem(elem)
+
+	return
 }
