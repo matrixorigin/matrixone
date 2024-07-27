@@ -14,20 +14,15 @@
 
 package malloc
 
-type ShardedAllocator []Allocator
+import "runtime"
 
-func NewShardedAllocator(numShards int, newShard func() Allocator) ShardedAllocator {
-	var ret ShardedAllocator
-	for i := 0; i < numShards; i++ {
-		ret = append(ret, newShard())
-	}
-	return ret
-}
-
-var _ Allocator = ShardedAllocator{}
-
-func (s ShardedAllocator) Allocate(size uint64, hints Hints) ([]byte, Deallocator, error) {
-	pid := runtime_procPin()
-	runtime_procUnpin()
-	return s[pid%len(s)].Allocate(size, hints)
+func newUpstreamAllocatorForTest() Allocator {
+	return NewShardedAllocator(
+		runtime.GOMAXPROCS(0),
+		func() Allocator {
+			return NewClassAllocator(
+				NewFixedSizeMmapAllocator,
+			)
+		},
+	)
 }
