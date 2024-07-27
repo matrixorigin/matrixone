@@ -189,9 +189,12 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 	}
 
 	if s.NodeInfo.Data == nil {
-		logutil.Infof("xxxx generatePipeline ,data is nil, txn:%s, table:%s",
+		logutil.Infof("xxxx generatePipeline ,data is nil, "+
+			"txn:%s, nodeid:%s, nodeaddr:%s, needexpand:%v",
 			s.Proc.GetTxnOperator().Txn().DebugString(),
-			s.DataSource.node.TableDef.Name)
+			s.NodeInfo.Id,
+			s.NodeInfo.Addr,
+			s.NodeInfo.NeedExpandRanges)
 	}
 
 	p.Node = &pipeline.NodeInfo{
