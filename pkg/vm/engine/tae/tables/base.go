@@ -1033,9 +1033,9 @@ func (blk *baseObject) PersistedCollectDeleteInRange(
 				retVec := bat.GetVectorByName(name)
 				srcVec := delBat.GetVectorByName(name)
 				retVec.PreExtend(sels.Length())
-				retVec.GetDownstreamVector().Union(
+				retVec.GetDownstreamVector().UnionInt32(
 					srcVec.GetDownstreamVector(),
-					vector.MustFixedCol[int64](sels.GetDownstreamVector()),
+					vector.MustFixedCol[int32](sels.GetDownstreamVector()),
 					retVec.GetAllocator(),
 				)
 			}
