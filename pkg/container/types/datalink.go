@@ -69,5 +69,13 @@ func ParseDatalink(fsPath string) (string, []int, string, error) {
 		}
 	}
 
+	if offsetSize[0] < 0 {
+		return "", nil, "", moerr.NewInternalErrorNoCtx("offset cannot be negative")
+	}
+
+	if offsetSize[1] < -1 {
+		return "", nil, "", moerr.NewInternalErrorNoCtx("size cannot be less than -1")
+	}
+
 	return moUrl, offsetSize, extension, nil
 }
