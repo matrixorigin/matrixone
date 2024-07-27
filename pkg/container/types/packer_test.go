@@ -1,4 +1,4 @@
-// Copyright 2023 Matrix Origin
+// Copyright 2024 - 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,21 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package logtailreplay
+package types
 
-import (
-	"testing"
+import "testing"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-)
+func BenchmarkPacker(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		packer := NewPacker()
+		packer.EncodeInt64(42)
+		packer.Close()
+	}
+}
 
-func BenchmarkEncode(b *testing.B) {
-	packer := types.NewPacker()
+func BenchmarkPackerEncode(b *testing.B) {
+	packer := NewPacker()
+	defer packer.Close()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		EncodePrimaryKey(int64(i), packer)
+		packer.EncodeInt64(42)
+		packer.Reset()
 	}
-	b.StopTimer()
-	packer.Close()
-	b.StartTimer()
 }
