@@ -186,11 +186,15 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 		// only encode the first one.
 		p.Qry = s.Plan
 	}
+	var data []byte
+	if s.NodeInfo.Data != nil {
+		data = s.NodeInfo.Data.MarshalToBytes()
+	}
 	p.Node = &pipeline.NodeInfo{
 		Id:      s.NodeInfo.Id,
 		Addr:    s.NodeInfo.Addr,
 		Mcpu:    int32(s.NodeInfo.Mcpu),
-		Payload: string(s.NodeInfo.Data.MarshalToBytes()),
+		Payload: string(data),
 	}
 	ctx.pipe = p
 	ctx.scope = s
@@ -345,13 +349,20 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			s.DataSource.Bat = bat
 		}
 	}
+	//var relData engine.RelData
 	if p.Node != nil {
 		s.NodeInfo.Id = p.Node.Id
 		s.NodeInfo.Addr = p.Node.Addr
 		s.NodeInfo.Mcpu = int(p.Node.Mcpu)
-		relData, err := disttae.UnmarshalRelationData([]byte(p.Node.Payload))
-		if err != nil {
-			return nil, err
+
+		bs := []byte(p.Node.Payload)
+		var relData engine.RelData
+		if len(bs) > 0 {
+			rd, err := disttae.UnmarshalRelationData(bs)
+			if err != nil {
+				return nil, err
+			}
+			relData = rd
 		}
 		s.NodeInfo.Data = relData
 	}

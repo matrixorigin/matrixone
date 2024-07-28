@@ -637,9 +637,7 @@ func (tbl *txnTable) CollectTombstones(
 				//deletes in txn.Write maybe comes from PartitionState.Rows ,
 				// PartitionReader need to skip them.
 				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
-				for _, v := range vs {
-					tombstone.inMemTombstones = append(tombstone.inMemTombstones, v)
-				}
+				tombstone.inMemTombstones = append(tombstone.inMemTombstones, vs...)
 			}
 		})
 
@@ -887,8 +885,6 @@ func (tbl *txnTable) rangesOnePart(
 
 	errCtx := errutil.ContextWithNoReport(ctx, true)
 
-	//hasDeletes := len(dirtyBlks) > 0
-
 	if err = ForeachSnapshotObjects(
 		tbl.db.op.SnapshotTS(),
 		func(obj logtailreplay.ObjectInfo, isCommitted bool) (err2 error) {
@@ -1019,10 +1015,6 @@ func (tbl *txnTable) collectUnCommittedObjects(txnOffset int) []objectio.ObjectS
 				unCommittedObjects = append(unCommittedObjects, stats)
 			}
 		})
-	if tbl.tableName == "bugt" {
-		//logutil.Infof("xxxx ranges:collect uncommitted objects, txn:%s, table:%s, txnOffset:%d, uncommitted objs:%d",
-		//	tbl.db.op.Txn().DebugString(), tbl.tableName, txnOffset, len(unCommittedObjects))
-	}
 
 	return unCommittedObjects
 }

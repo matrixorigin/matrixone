@@ -167,8 +167,8 @@ type Engine struct {
 	messageCenter *process.MessageCenter
 }
 
-func (t *Transaction) String() string {
-	return fmt.Sprintf("writes %v", t.writes)
+func (txn *Transaction) String() string {
+	return fmt.Sprintf("writes %v", txn.writes)
 }
 
 // Transaction represents a transaction
@@ -781,8 +781,6 @@ type withFilterMixin struct {
 		// colNulls []bool
 
 		pkPos                    int // -1 means no primary key in columns
-		extraRowIdAdded          bool
-		rowIdColIdx              int
 		indexOfFirstSortedColumn int
 	}
 
@@ -863,10 +861,10 @@ type readerInProgress struct {
 	scanType int
 
 	// for ordered scan
-	desc     bool
-	blockZMS []index.ZM
-	sorted   bool // blks need to be sorted by zonemap
-	OrderBy  []*plan.OrderBySpec
+	desc bool
+	//blockZMS []index.ZM
+	//sorted   bool // blks need to be sorted by zonemap
+	OrderBy []*plan.OrderBySpec
 
 	filterZM objectio.ZoneMap
 }

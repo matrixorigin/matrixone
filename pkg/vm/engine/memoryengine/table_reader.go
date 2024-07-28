@@ -337,8 +337,8 @@ func (t *Table) Ranges(_ context.Context, _ []*plan.Expr, _ int) (engine.RelData
 	return rd, nil
 }
 
-func (tbl *Table) CollectTombstones(ctx context.Context, txnOffset int) (engine.Tombstoner, error) {
-	panic("Not Support")
+func (t *Table) CollectTombstones(ctx context.Context, txnOffset int) (engine.Tombstoner, error) {
+	panic("implement me")
 }
 
 // for memory engine.

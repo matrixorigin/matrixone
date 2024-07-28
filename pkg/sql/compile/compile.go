@@ -4222,6 +4222,7 @@ func (c *Compile) generateNodesInProgress(n *plan.Node) (engine.Nodes, []any, []
 				Id:   node.Id,
 				Addr: node.Addr,
 				Mcpu: c.generateCPUNumber(node.Mcpu, int(n.Stats.BlockNum)),
+				Data: engine.BuildEmptyRelData(),
 			}
 		}
 		return nodes, partialResults, partialResultTypes, nil
@@ -4335,7 +4336,7 @@ func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelD
 	nodes[0].Data = relData.BuildEmptyRelData()
 	nodes[0].Data.AppendDataBlk(&objectio.EmptyBlockInfoInProgress)
 	// only memory table block
-	if nodes[0].Data.BlkCnt() == 1 {
+	if relData.BlkCnt() == 1 {
 		return nodes, nil
 	}
 	// only one cn

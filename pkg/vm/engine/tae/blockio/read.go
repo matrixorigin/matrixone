@@ -999,6 +999,32 @@ func BlockPrefetch(
 	return nil
 }
 
+func BlockPrefetchInProgress(
+	sid string,
+	idxes []uint16,
+	service fileservice.FileService,
+	infos [][]*objectio.BlockInfoInProgress,
+	prefetchFile bool,
+) error {
+	// Generate prefetch task
+	for i := range infos {
+		// build reader
+		pref, err := BuildPrefetchParams(service, infos[i][0].MetaLocation())
+		if err != nil {
+			return err
+		}
+		for _, info := range infos[i] {
+			pref.AddBlock(idxes, []uint16{info.MetaLocation().ID()})
+		}
+		pref.prefetchFile = prefetchFile
+		err = MustGetPipeline(sid).Prefetch(pref)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func RecordReadDel(
 	sid string,
 	total, read, bisect time.Duration,

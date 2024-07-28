@@ -79,7 +79,7 @@ func (e *Engine) NewBlockReader(_ context.Context, _ int, _ timestamp.Timestamp,
 	return nil, nil
 }
 
-func (b *Engine) BuildBlockReaders(
+func (e *Engine) BuildBlockReaders(
 	ctx context.Context,
 	proc any,
 	ts timestamp.Timestamp,

@@ -201,7 +201,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 		_, err = p.ConstRun(s.DataSource.Bat, s.Proc)
 	} else {
 		if s.DataSource.R == nil {
-			s.NodeInfo.Data = engine.BuildInvalidRelData()
+			s.NodeInfo.Data = engine.BuildEmptyRelData()
 			readers, _, err := s.buildReaders(c, 1)
 			if err != nil {
 				return err
@@ -1343,18 +1343,29 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 			}
 			readers = append(readers, mainRds...)
 		} else {
-			mp := s.NodeInfo.Data.GroupByPartitionNum()
+			var mp map[int16]engine.RelData
+			if s.NodeInfo.Data != nil {
+				mp = s.NodeInfo.Data.GroupByPartitionNum()
+			}
 			var subRel engine.Relation
 			for num, relName := range s.DataSource.PartitionRelationNames {
 				subRel, err = db.Relation(ctx, relName, c.proc)
 				if err != nil {
 					return
 				}
+
+				var subRelData engine.RelData
+				if s.NodeInfo.Data == nil {
+					subRelData = nil
+				} else {
+					subRelData = mp[int16(num)]
+				}
+
 				subRds, err = subRel.BuildReaders(
 					ctx,
 					c.proc,
 					s.DataSource.FilterExpr,
-					mp[int16(num)],
+					subRelData,
 					scanUsedCpuNumber,
 					s.TxnOffset,
 				)
