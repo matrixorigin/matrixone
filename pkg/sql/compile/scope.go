@@ -462,7 +462,15 @@ func buildJoinParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	if mcpu <= 1 { // no need to parallel
 		buildScope := c.newJoinBuildScope(s, 1)
 		s.PreScopes = append(s.PreScopes, buildScope)
+<<<<<<< HEAD
 		s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:s.BuildIdx]
+=======
+		if s.BuildIdx > 1 {
+			probeScope := c.newShuffleJoinProbeScope(s)
+			s.PreScopes = append(s.PreScopes, probeScope)
+		}
+		s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:1]
+>>>>>>> dfcc37d13f3e0e0140895836536ee26939eedbd9
 		return s, nil
 	}
 
