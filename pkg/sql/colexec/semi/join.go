@@ -38,6 +38,10 @@ func (semiJoin *SemiJoin) OpType() vm.OpType {
 
 func (semiJoin *SemiJoin) Prepare(proc *process.Process) (err error) {
 	semiJoin.ctr = new(container)
+<<<<<<< HEAD
+=======
+	semiJoin.ctr.InitReceiver(proc, true)
+>>>>>>> dfcc37d13f3e0e0140895836536ee26939eedbd9
 	semiJoin.ctr.vecs = make([]*vector.Vector, len(semiJoin.Conditions[0]))
 
 	semiJoin.ctr.evecs = make([]evalVector, len(semiJoin.Conditions[0]))
@@ -81,9 +85,15 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 		case Probe:
+<<<<<<< HEAD
 			result, err = semiJoin.Children[0].Call(proc)
 			if err != nil {
 				return result, err
+=======
+			msg := ctr.ReceiveFromAllRegs(anal)
+			if msg.Err != nil {
+				return result, msg.Err
+>>>>>>> dfcc37d13f3e0e0140895836536ee26939eedbd9
 			}
 			bat := result.Batch
 

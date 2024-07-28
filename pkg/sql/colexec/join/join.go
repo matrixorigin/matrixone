@@ -39,6 +39,10 @@ func (innerJoin *InnerJoin) OpType() vm.OpType {
 
 func (innerJoin *InnerJoin) Prepare(proc *process.Process) (err error) {
 	innerJoin.ctr = new(container)
+<<<<<<< HEAD
+=======
+	innerJoin.ctr.InitReceiver(proc, true)
+>>>>>>> dfcc37d13f3e0e0140895836536ee26939eedbd9
 	innerJoin.ctr.vecs = make([]*vector.Vector, len(innerJoin.Conditions[0]))
 	innerJoin.ctr.evecs = make([]evalVector, len(innerJoin.Conditions[0]))
 	for i := range innerJoin.ctr.evecs {
@@ -79,9 +83,15 @@ func (innerJoin *InnerJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 		case Probe:
 			if innerJoin.ctr.bat == nil {
+<<<<<<< HEAD
 				result, err = innerJoin.Children[0].Call(proc)
 				if err != nil {
 					return result, err
+=======
+				msg := ctr.ReceiveFromAllRegs(anal)
+				if msg.Err != nil {
+					return result, msg.Err
+>>>>>>> dfcc37d13f3e0e0140895836536ee26939eedbd9
 				}
 				bat := result.Batch
 				if bat == nil {

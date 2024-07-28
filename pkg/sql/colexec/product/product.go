@@ -38,6 +38,10 @@ func (product *Product) OpType() vm.OpType {
 func (product *Product) Prepare(proc *process.Process) error {
 	ap := product
 	ap.ctr = new(container)
+<<<<<<< HEAD
+=======
+	ap.ctr.InitReceiver(proc, true)
+>>>>>>> dfcc37d13f3e0e0140895836536ee26939eedbd9
 	return nil
 }
 
@@ -68,9 +72,15 @@ func (product *Product) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 				return result, nil
 			}
+<<<<<<< HEAD
 			result, err = product.Children[0].Call(proc)
 			if err != nil {
 				return result, err
+=======
+			msg = ctr.ReceiveFromAllRegs(anal)
+			if msg.Err != nil {
+				return result, msg.Err
+>>>>>>> dfcc37d13f3e0e0140895836536ee26939eedbd9
 			}
 			ctr.inBat = result.Batch
 			if ctr.inBat == nil {

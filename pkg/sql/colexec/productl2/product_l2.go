@@ -40,6 +40,10 @@ func (productl2 *Productl2) OpType() vm.OpType {
 func (productl2 *Productl2) Prepare(proc *process.Process) error {
 	ap := productl2
 	ap.ctr = new(container)
+<<<<<<< HEAD
+=======
+	ap.ctr.InitReceiver(proc, true)
+>>>>>>> dfcc37d13f3e0e0140895836536ee26939eedbd9
 	return nil
 }
 
@@ -70,9 +74,15 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 				return result, nil
 			}
+<<<<<<< HEAD
 			result, err = productl2.Children[0].Call(proc)
 			if err != nil {
 				return result, err
+=======
+			msg := ctr.ReceiveFromAllRegs(anal)
+			if msg.Err != nil {
+				return result, msg.Err
+>>>>>>> dfcc37d13f3e0e0140895836536ee26939eedbd9
 			}
 
 			ctr.inBat = result.Batch

@@ -37,6 +37,10 @@ func (indexJoin *IndexJoin) OpType() vm.OpType {
 func (indexJoin *IndexJoin) Prepare(proc *process.Process) (err error) {
 	ap := indexJoin
 	ap.ctr = new(container)
+<<<<<<< HEAD
+=======
+	ap.ctr.InitReceiver(proc, true)
+>>>>>>> dfcc37d13f3e0e0140895836536ee26939eedbd9
 	return err
 }
 
@@ -56,9 +60,15 @@ func (indexJoin *IndexJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		switch ctr.state {
 
 		case Probe:
+<<<<<<< HEAD
 			result, err = indexJoin.Children[0].Call(proc)
 			if err != nil {
 				return result, err
+=======
+			msg := ctr.ReceiveFromAllRegs(anal)
+			if msg.Err != nil {
+				return result, msg.Err
+>>>>>>> dfcc37d13f3e0e0140895836536ee26939eedbd9
 			}
 			bat := result.Batch
 			if bat == nil {

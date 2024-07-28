@@ -39,6 +39,10 @@ func (loopSemi *LoopSemi) Prepare(proc *process.Process) error {
 	var err error
 
 	loopSemi.ctr = new(container)
+<<<<<<< HEAD
+=======
+	loopSemi.ctr.InitReceiver(proc, true)
+>>>>>>> dfcc37d13f3e0e0140895836536ee26939eedbd9
 
 	if loopSemi.Cond != nil {
 		loopSemi.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopSemi.Cond)
@@ -72,9 +76,15 @@ func (loopSemi *LoopSemi) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Probe:
 			if loopSemi.ctr.buf == nil {
+<<<<<<< HEAD
 				result, err = loopSemi.Children[0].Call(proc)
 				if err != nil {
 					return result, err
+=======
+				msg := ctr.ReceiveFromAllRegs(anal)
+				if msg.Err != nil {
+					return result, msg.Err
+>>>>>>> dfcc37d13f3e0e0140895836536ee26939eedbd9
 				}
 				bat := result.Batch
 				if bat == nil {

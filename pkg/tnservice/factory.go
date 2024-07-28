@@ -118,6 +118,7 @@ func (s *store) newMemTxnStorage(
 		return nil, err
 	}
 	return memorystorage.NewMemoryStorage(
+		s.cfg.UUID,
 		mp,
 		s.rt.Clock(),
 		memoryengine.NewHakeeperIDGenerator(hakeeper),

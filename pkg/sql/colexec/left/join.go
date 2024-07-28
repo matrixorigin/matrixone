@@ -39,6 +39,10 @@ func (leftJoin *LeftJoin) OpType() vm.OpType {
 
 func (leftJoin *LeftJoin) Prepare(proc *process.Process) (err error) {
 	leftJoin.ctr = new(container)
+<<<<<<< HEAD
+=======
+	leftJoin.ctr.InitReceiver(proc, true)
+>>>>>>> dfcc37d13f3e0e0140895836536ee26939eedbd9
 	leftJoin.ctr.vecs = make([]*vector.Vector, len(leftJoin.Conditions[0]))
 
 	leftJoin.ctr.evecs = make([]evalVector, len(leftJoin.Conditions[0]))
@@ -71,9 +75,15 @@ func (leftJoin *LeftJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Probe:
 			if leftJoin.ctr.bat == nil {
+<<<<<<< HEAD
 				result, err = leftJoin.Children[0].Call(proc)
 				if err != nil {
 					return result, err
+=======
+				msg := ctr.ReceiveFromAllRegs(anal)
+				if msg.Err != nil {
+					return result, msg.Err
+>>>>>>> dfcc37d13f3e0e0140895836536ee26939eedbd9
 				}
 				bat := result.Batch
 				if bat == nil {
