@@ -111,7 +111,7 @@ func ApplyRuntimeFilters(
 	}
 	curr := 1 // Skip the first block which is always the memtable
 	for i := 1; i < relData.BlkCnt(); i++ {
-		blk := relData.GetDataBlk(i)
+		blk := relData.GetDataBlk(i).(*objectio.BlockInfoInProgress)
 		location := blk.MetaLocation()
 
 		if !objectio.IsSameObjectLocVsMeta(location, objDataMeta) {

@@ -60,9 +60,21 @@ func TestSubscribedTable(t *testing.T) {
 
 func TestBlockInfoSlice(t *testing.T) {
 	var data []byte
-	data = nil
+	s := string(data)
+	cnt := len(s)
+	require.Equal(t, 0, cnt)
+
+	data1 := data[:0]
+	cnt = len(data1)
+	require.Equal(t, 0, cnt)
+
 	blkSlice := objectio.BlockInfoSlice(data)
 	require.Equal(t, 0, len(blkSlice))
-	cnt := blkSlice.Len()
+	cnt = blkSlice.Len()
 	require.Equal(t, 0, cnt)
+
+	data = []byte{1, 2, 3, 4, 5, 6, 7, 8}
+	data1 = data[:0]
+	require.Equal(t, 0, len(data1))
+
 }

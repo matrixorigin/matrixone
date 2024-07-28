@@ -167,8 +167,8 @@ type Engine struct {
 	messageCenter *process.MessageCenter
 }
 
-func (t *Transaction) String() string {
-	return fmt.Sprintf("writes %v", t.writes)
+func (txn *Transaction) String() string {
+	return fmt.Sprintf("writes %v", txn.writes)
 }
 
 // Transaction represents a transaction
@@ -290,18 +290,18 @@ func (b *deletedBlocks) addDeletedBlocks(blockID *types.Blockid, offsets []int64
 	b.offsets[*blockID] = append(b.offsets[*blockID], offsets...)
 }
 
-func (b *deletedBlocks) hasDeletes(blockID *types.Blockid) bool {
-	b.RLock()
-	defer b.RUnlock()
-	_, ok := b.offsets[*blockID]
-	return ok
-}
+//func (b *deletedBlocks) hasDeletes(blockID *types.Blockid) bool {
+//	b.RLock()
+//	defer b.RUnlock()
+//	_, ok := b.offsets[*blockID]
+//	return ok
+//}
 
-func (b *deletedBlocks) isEmpty() bool {
-	b.RLock()
-	defer b.RUnlock()
-	return len(b.offsets) == 0
-}
+//func (b *deletedBlocks) isEmpty() bool {
+//	b.RLock()
+//	defer b.RUnlock()
+//	return len(b.offsets) == 0
+//}
 
 func (b *deletedBlocks) getDeletedOffsetsByBlock(blockID *types.Blockid, offsets *[]int64) {
 	b.RLock()
@@ -781,8 +781,6 @@ type withFilterMixin struct {
 		// colNulls []bool
 
 		pkPos                    int // -1 means no primary key in columns
-		extraRowIdAdded          bool
-		rowIdColIdx              int
 		indexOfFirstSortedColumn int
 	}
 
@@ -868,10 +866,10 @@ type readerInProgress struct {
 	scanType int
 
 	// for ordered scan
-	desc     bool
-	blockZMS []index.ZM
-	sorted   bool // blks need to be sorted by zonemap
-	OrderBy  []*plan.OrderBySpec
+	desc bool
+	//blockZMS []index.ZM
+	//sorted   bool // blks need to be sorted by zonemap
+	OrderBy []*plan.OrderBySpec
 
 	filterZM objectio.ZoneMap
 }

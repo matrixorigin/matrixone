@@ -69,8 +69,6 @@ type BlockInfoInProgress struct {
 
 	//TODO:: remove it.
 	PartitionNum int16
-	//for temporary table, it'll be removed.
-	ShardID uint64
 }
 
 func (b *BlockInfoInProgress) MarshalWithBuf(w *bytes.Buffer) (uint32, error) {
@@ -134,7 +132,7 @@ func (b *BlockInfoInProgress) SetMetaLocation(metaLoc Location) {
 }
 
 func (b *BlockInfoInProgress) IsMemBlk() bool {
-	return bytes.Compare(EncodeBlockInfoInProgress(*b), EmptyBlockInfoInProgressBytes) == 0
+	return bytes.Equal(EncodeBlockInfoInProgress(*b), EmptyBlockInfoInProgressBytes)
 }
 
 func EncodeBlockInfoInProgress(info BlockInfoInProgress) []byte {

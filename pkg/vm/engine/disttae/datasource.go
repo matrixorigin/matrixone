@@ -464,25 +464,21 @@ func UnmarshalRelationData(data []byte) (engine.RelData, error) {
 	typ := engine.RelDataType(data[0])
 	switch typ {
 	case engine.RelDataV1:
-		rd1 := buildRelationDataV1(nil)
+		rd1 := buildRelationDataV1()
 		if err := rd1.UnMarshal(data); err != nil {
 			return nil, err
 		}
+		return rd1, nil
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("unsupported relation data type")
 	}
-	panic("impossible path")
-}
-
-type relationDataV0 struct {
-	typ     uint8
-	blkList []*objectio.BlockInfo
 }
 
 type relationDataV1 struct {
 	typ engine.RelDataType
 	//blkList[0] is a empty block info
-	blkList []*objectio.BlockInfoInProgress
+	//blkList []*objectio.BlockInfoInProgress
+	blklist *objectio.BlockInfoSliceInProgress
 
 	//marshal tombstones if isEmpty is false, otherwise don't need to marshal tombstones
 	isEmpty      bool
@@ -491,10 +487,10 @@ type relationDataV1 struct {
 	tombstones engine.Tombstoner
 }
 
-func buildRelationDataV1(blkList []*objectio.BlockInfoInProgress) *relationDataV1 {
+func buildRelationDataV1() *relationDataV1 {
 	return &relationDataV1{
 		typ:     engine.RelDataV1,
-		blkList: blkList,
+		blklist: &objectio.BlockInfoSliceInProgress{},
 		isEmpty: true,
 	}
 }
@@ -502,24 +498,11 @@ func buildRelationDataV1(blkList []*objectio.BlockInfoInProgress) *relationDataV
 func (rd1 *relationDataV1) UnMarshal(data []byte) error {
 	data = data[1:]
 
-	blkCnt := types.DecodeUint32(data)
+	sizeofblks := types.DecodeUint32(data)
 	data = data[4:]
 
-	if blkCnt > 0 {
-
-		blkSize := types.DecodeUint32(data)
-		data = data[4:]
-
-		for i := uint32(0); i < blkCnt; i++ {
-			blk := &objectio.BlockInfoInProgress{}
-			err := blk.Unmarshal(data[:blkSize])
-			if err != nil {
-				return err
-			}
-			data = data[blkSize:]
-			rd1.blkList = append(rd1.blkList, blk)
-		}
-	}
+	*rd1.blklist = data[:sizeofblks]
+	data = data[sizeofblks:]
 
 	isEmpty := types.DecodeBool(data)
 	rd1.isEmpty = isEmpty
@@ -550,41 +533,24 @@ func (rd1 *relationDataV1) UnMarshal(data []byte) error {
 }
 
 func (rd1 *relationDataV1) MarshalWithBuf(w *bytes.Buffer) error {
-	var pos1 uint32
 	var pos2 uint32
 	typ := uint8(rd1.typ)
 	if _, err := w.Write(types.EncodeUint8(&typ)); err != nil {
 		return err
 	}
-	pos1 += 1
 	pos2 += 1
 
-	//len of blk list
-	length := uint32(len(rd1.blkList))
-	if _, err := w.Write(types.EncodeUint32(&length)); err != nil {
-		return err
-	}
-	pos1 += 4
-	pos2 += 4
-	// reserve the space: 4 bytes for block info
-	var sizeOfBlockInfo uint32
-	if _, err := w.Write(types.EncodeUint32(&sizeOfBlockInfo)); err != nil {
+	sizeofblks := uint32(rd1.blklist.Size())
+	if _, err := w.Write(types.EncodeUint32(&sizeofblks)); err != nil {
 		return err
 	}
 	pos2 += 4
 
-	for i, blk := range rd1.blkList {
-		space, err := blk.MarshalWithBuf(w)
-		if err != nil {
-			return err
-		}
-		if i == 0 {
-			sizeOfBlockInfo = space
-			//update the size of block info
-			copy(w.Bytes()[pos1:pos1+4], types.EncodeUint32(&sizeOfBlockInfo))
-		}
-		pos2 += space
+	//marshal blk list
+	if _, err := w.Write(*rd1.blklist); err != nil {
+		return err
 	}
+	pos2 += sizeofblks
 
 	if _, err := w.Write(types.EncodeBool(&rd1.isEmpty)); err != nil {
 		return err
@@ -635,9 +601,9 @@ func (rd1 *relationDataV1) GetTombstones() engine.Tombstoner {
 	return rd1.tombstones
 }
 
-func (rd1 *relationDataV1) ForeachDataBlk(begin, end int, f func(blk *objectio.BlockInfoInProgress) error) error {
+func (rd1 *relationDataV1) ForeachDataBlk(begin, end int, f func(blk any) error) error {
 	for i := begin; i < end; i++ {
-		err := f(rd1.blkList[i])
+		err := f(rd1.blklist.Get(i))
 		if err != nil {
 			return err
 		}
@@ -645,18 +611,19 @@ func (rd1 *relationDataV1) ForeachDataBlk(begin, end int, f func(blk *objectio.B
 	return nil
 }
 
-func (rd1 *relationDataV1) GetDataBlk(i int) *objectio.BlockInfoInProgress {
-	return rd1.blkList[i]
+func (rd1 *relationDataV1) GetDataBlk(i int) any {
+	return rd1.blklist.Get(i)
 }
 
-func (rd1 *relationDataV1) SetDataBlk(i int, blk *objectio.BlockInfoInProgress) {
-	rd1.blkList[i] = blk
+func (rd1 *relationDataV1) SetDataBlk(i int, blk any) {
+	rd1.blklist.Set(i, blk.(*objectio.BlockInfoInProgress))
 }
 
 func (rd1 *relationDataV1) DataBlkSlice(i, j int) engine.RelData {
+	blist := objectio.BlockInfoSliceInProgress(rd1.blklist.Slice(i, j))
 	return &relationDataV1{
 		typ:          rd1.typ,
-		blkList:      rd1.blkList[i:j],
+		blklist:      &blist,
 		isEmpty:      rd1.isEmpty,
 		tombstoneTyp: rd1.tombstoneTyp,
 		tombstones:   rd1.tombstones,
@@ -665,11 +632,12 @@ func (rd1 *relationDataV1) DataBlkSlice(i, j int) engine.RelData {
 
 func (rd1 *relationDataV1) GroupByPartitionNum() map[int16]engine.RelData {
 	ret := make(map[int16]engine.RelData)
-	for _, blk := range rd1.blkList {
-		if blk.IsMemBlk() {
-			continue
+	rd1.ForeachDataBlk(0, rd1.blklist.Len(), func(blk any) error {
+		blkinfo := blk.(*objectio.BlockInfoInProgress)
+		if blkinfo.IsMemBlk() {
+			return nil
 		}
-		partitionNum := blk.PartitionNum
+		partitionNum := blkinfo.PartitionNum
 		if _, ok := ret[partitionNum]; !ok {
 			ret[partitionNum] = &relationDataV1{
 				typ:          rd1.typ,
@@ -679,34 +647,27 @@ func (rd1 *relationDataV1) GroupByPartitionNum() map[int16]engine.RelData {
 			}
 			ret[partitionNum].AppendDataBlk(&objectio.EmptyBlockInfoInProgress)
 		}
-		ret[partitionNum].AppendDataBlk(blk)
-	}
+		ret[partitionNum].AppendDataBlk(blkinfo)
+		return nil
+	})
 	return ret
 }
 
-//func (rd1 *relationDataV1) DataBlkClone(i, j int) engine.RelData {
-//	var dst []*objectio.BlockInfoInProgress
-//	copy(dst, rd1.blkList[i:j])
-//	return &relationDataV1{
-//		typ:          rd1.typ,
-//		blkList:      dst,
-//		tombstoneTyp: rd1.tombstoneTyp,
-//		tombstones:   rd1.tombstones,
-//	}
-//}
-
-func (rd1 *relationDataV1) AppendDataBlk(blk *objectio.BlockInfoInProgress) {
-	rd1.blkList = append(rd1.blkList, blk)
+func (rd1 *relationDataV1) AppendDataBlk(blk any) {
+	blkinfo := blk.(*objectio.BlockInfoInProgress)
+	rd1.blklist.AppendBlockInfo(*blkinfo)
 }
 
 func (rd1 *relationDataV1) BuildEmptyRelData() engine.RelData {
 	return &relationDataV1{
-		typ: rd1.typ,
+		blklist: &objectio.BlockInfoSliceInProgress{},
+		typ:     rd1.typ,
+		isEmpty: true,
 	}
 }
 
 func (rd1 *relationDataV1) BlkCnt() int {
-	return len(rd1.blkList)
+	return rd1.blklist.Len()
 }
 
 type RemoteDataSource struct {
@@ -750,7 +711,7 @@ func (rs *RemoteDataSource) Next(
 		return nil, engine.End, nil
 	}
 	rs.cursor++
-	return rs.data.GetDataBlk(rs.cursor - 1), engine.Persisted, nil
+	return rs.data.GetDataBlk(rs.cursor - 1).(*objectio.BlockInfoInProgress), engine.Persisted, nil
 }
 
 func (rs *RemoteDataSource) Close() {
@@ -761,6 +722,9 @@ func (rs *RemoteDataSource) applyInMemTombstones(
 	bid types.Blockid,
 	rowsOffset []int32,
 ) (leftRows []int32, deletedRows []int64) {
+	if rs.data.GetTombstones() == nil {
+		return rowsOffset, nil
+	}
 	return rs.data.GetTombstones().ApplyInMemTombstones(
 		bid,
 		rowsOffset)
@@ -799,6 +763,9 @@ func (rs *RemoteDataSource) applyUncommitDeltaLoc(
 			*left, *deleted = fastApplyDeletedRows(*left, *deleted, o)
 		}
 		return nil
+	}
+	if rs.data.GetTombstones() == nil {
+		return rowsOffset, nil, nil
 	}
 	return rs.data.GetTombstones().ApplyPersistedTombstones(
 		ctx,
@@ -840,7 +807,9 @@ func (rs *RemoteDataSource) applyCommittedDeltaLoc(
 		}
 		return nil
 	}
-
+	if rs.data.GetTombstones() == nil {
+		return rowsOffset, nil, nil
+	}
 	return rs.data.GetTombstones().ApplyPersistedTombstones(
 		ctx,
 		bid,
@@ -866,6 +835,9 @@ func (rs *RemoteDataSource) ApplyTombstonesInProgress(
 		return nil, err
 	}
 	rowsOffset, _, err = rs.applyCommittedDeltaLoc(ctx, bid, rowsOffset)
+	if err != nil {
+		return nil, err
+	}
 	return rowsOffset, nil
 }
 
@@ -878,17 +850,17 @@ func (rs *RemoteDataSource) GetTombstonesInProgress(
 
 	_, dels, err = rs.applyUncommitDeltaLoc(ctx, bid, nil)
 	if err != nil {
-		return nil, err
+		return
 	}
 	deletedRows = append(deletedRows, dels...)
 
 	_, dels, err = rs.applyCommittedDeltaLoc(ctx, bid, nil)
 	if err != nil {
-		return nil, err
+		return
 	}
 	deletedRows = append(deletedRows, dels...)
 
-	return deletedRows, nil
+	return
 }
 
 func (rs *RemoteDataSource) HasTombstones(bid types.Blockid) bool {
@@ -969,15 +941,16 @@ type LocalDataSource struct {
 
 	// runtime config
 	rc struct {
-		WorkspaceLocked   bool
-		SkipPStateDeletes bool
+		batchPrefetchCursor int
+		WorkspaceLocked     bool
+		SkipPStateDeletes   bool
 	}
 
 	mp  *mpool.MPool
 	ctx context.Context
 	fs  fileservice.FileService
 
-	cursor       int
+	rangesCursor int
 	snapshotTS   types.TS
 	iteratePhase engine.DataState
 
@@ -1025,6 +998,7 @@ func NewLocalDataSource(
 	if skipReadMem {
 		source.iteratePhase = engine.Persisted
 	}
+
 	return source, nil
 }
 
@@ -1133,26 +1107,15 @@ func (ls *LocalDataSource) deleteFirstNBlocks(n int) {
 }
 
 func (ls *LocalDataSource) HasTombstones(bid types.Blockid) bool {
-	if ls.iteratePhase == engine.InMem {
-		return false
-	}
-
-	return false
+	panic("implement me")
 }
 
 func (ls *LocalDataSource) Close() {
 	ls.pStateRows.insIter.Close()
 }
 
-// ApplyTombstones check if any deletes exist in
-//  1. unCommittedInmemDeletes:
-//     a. workspace writes
-//     b. flushed to s3
-//     c. raw rowId offset deletes (not flush yet)
-//  3. committedInmemDeletes
-//  4. committedPersistedTombstone
 func (ls *LocalDataSource) ApplyTombstones(rows []types.Rowid) (sel []int64, err error) {
-	return nil, nil
+	panic("implement me")
 }
 
 func (ls *LocalDataSource) Next(
@@ -1175,6 +1138,9 @@ func (ls *LocalDataSource) Next(
 		return nil, engine.End, nil
 	}
 
+	// bathed prefetch block data and deletes
+	ls.batchPrefetch(seqNums)
+
 	for {
 		switch ls.iteratePhase {
 		case engine.InMem:
@@ -1188,28 +1154,16 @@ func (ls *LocalDataSource) Next(
 				continue
 			}
 
-			if ls.table.tableName == "statement_info" {
-				logutil.Infof("xxxx Next-memory, table:%s,txn:%s,read batch'len:%d.",
-					ls.table.tableName,
-					ls.table.db.op.Txn().DebugString(),
-					bat.RowCount())
-			}
-
 			return nil, engine.InMem, nil
 
 		case engine.Persisted:
-			//local data source maybe has no blocks.
-			if ls.table.tableName == "statement_info" {
-				logutil.Infof("xxxx Next-Persisted, table:%s,txn:%s,len(ranges)=%d",
-					ls.table.tableName,
-					ls.table.db.op.Txn().DebugString(),
-					len(ls.ranges))
-			}
-
-			if len(ls.ranges) == 0 {
+			//if ls.rangesCursor < len(ls.ranges) {
+			//	ls.rangesCursor++
+			//	return ls.ranges[ls.rangesCursor-1], engine.Persisted, nil
+			//}
+			if len(ls.ranges) == 0{
 				return nil, engine.End, nil
 			}
-
 			ls.handleOrderBy()
 
 			if len(ls.ranges) == 0 {
@@ -1273,7 +1227,7 @@ func (ls *LocalDataSource) iterateInMemData(
 
 	bat.SetRowCount(0)
 
-	if err = ls.filterUncommittedInMemInserts(seqNums, mp, bat); err != nil {
+	if err = ls.filterInMemUnCommittedInserts(seqNums, mp, bat); err != nil {
 		return err
 	}
 
@@ -1311,7 +1265,7 @@ func checkWorkspaceEntryType(tbl *txnTable, entry Entry) int {
 	return -1
 }
 
-func (ls *LocalDataSource) filterUncommittedInMemInserts(
+func (ls *LocalDataSource) filterInMemUnCommittedInserts(
 	seqNums []uint16,
 	mp *mpool.MPool,
 	bat *batch.Batch,
@@ -1380,19 +1334,6 @@ func (ls *LocalDataSource) filterUncommittedInMemInserts(
 	return nil
 }
 
-//func (ls *LocalDataSource) batchApplyDeletesForPStateInsertRows() {
-//	slices.SortFunc(ls.pStateRows.rowIds, func(a, b types.Rowid) int {
-//		return a.Compare(b)
-//	})
-//
-//	cmp := func(a, b types.Rowid) bool {
-//		return (*a.BorrowBlockID()).Compare(*b.BorrowBlockID()) == 0
-//	}
-//
-//	rowIds := ls.pStateRows.rowIds
-//
-//}
-
 func (ls *LocalDataSource) filterInMemCommittedInserts(
 	colTypes []types.Type, seqNums []uint16, mp *mpool.MPool, bat *batch.Batch,
 ) error {
@@ -1428,7 +1369,7 @@ func (ls *LocalDataSource) filterInMemCommittedInserts(
 		}
 	}
 
-	for ls.pStateRows.insIter.Next() && appendedRows < int(options.DefaultBlockMaxRows) {
+	for appendedRows < int(options.DefaultBlockMaxRows) && ls.pStateRows.insIter.Next() {
 		entry := ls.pStateRows.insIter.Entry()
 		b, o := entry.RowID.Decode()
 
@@ -1524,6 +1465,13 @@ func loadBlockDeletesByDeltaLoc(
 	return deleteMask, nil
 }
 
+// ApplyTombstonesInProgress check if any deletes exist in
+//  1. unCommittedInmemDeletes:
+//     a. workspace writes
+//     b. flushed to s3
+//     c. raw rowId offset deletes (not flush yet)
+//  3. committedInmemDeletes
+//  4. committedPersistedTombstone
 func (ls *LocalDataSource) ApplyTombstonesInProgress(
 	ctx context.Context,
 	bid objectio.Blockid,
@@ -1583,7 +1531,7 @@ func (ls *LocalDataSource) GetTombstonesInProgress(
 func fastApplyDeletedRows(
 	leftRows []int32, deletedRows []int64, o uint32,
 ) ([]int32, []int64) {
-	if leftRows != nil && len(leftRows) != 0 {
+	if len(leftRows) != 0 {
 		if x, found := sort.Find(len(leftRows), func(i int) int {
 			return int(int32(o) - leftRows[i])
 		}); found {
@@ -1602,7 +1550,7 @@ func (ls *LocalDataSource) applyWorkspaceEntryDeletes(
 
 	leftRows = offsets
 
-	// may have locked in `filterUncommittedInMemInserts`
+	// may have locked in `filterInMemUnCommittedInserts`
 	if !ls.rc.WorkspaceLocked {
 		ls.table.getTxn().Lock()
 		defer ls.table.getTxn().Unlock()
@@ -1783,4 +1731,83 @@ func (ls *LocalDataSource) applyPStatePersistedDeltaLocation(
 	}
 
 	return leftRows, deletedRows, nil
+}
+
+func (ls *LocalDataSource) batchPrefetch(seqNums []uint16) {
+	if ls.rc.batchPrefetchCursor >= len(ls.ranges) ||
+		ls.rangesCursor < ls.rc.batchPrefetchCursor {
+		return
+	}
+
+	batchSize := min(1000, len(ls.ranges)-ls.rc.batchPrefetchCursor)
+
+	begin := ls.rc.batchPrefetchCursor
+	end := ls.rc.batchPrefetchCursor + batchSize
+
+	// prefetch blk data
+	err := blockio.BlockPrefetchInProgress(
+		ls.table.proc.Load().GetService(), seqNums, ls.fs,
+		[][]*objectio.BlockInfoInProgress{ls.ranges[begin:end]}, true)
+	if err != nil {
+		logutil.Errorf("pefetch block data: %s", err.Error())
+	}
+
+	// prefetch blk delta location
+	for idx := begin; idx < end; idx++ {
+		if loc, _, ok := ls.pState.GetBockDeltaLoc(ls.ranges[idx].BlockID); ok {
+			if err = blockio.PrefetchTombstone(
+				ls.table.proc.Load().GetService(), []uint16{0, 1, 2},
+				[]uint16{objectio.Location(loc[:]).ID()}, ls.fs, objectio.Location(loc[:])); err != nil {
+				logutil.Errorf("prefetch block delta location: %s", err.Error())
+			}
+		}
+	}
+
+	ls.table.getTxn().blockId_tn_delete_metaLoc_batch.RLock()
+	defer ls.table.getTxn().blockId_tn_delete_metaLoc_batch.RUnlock()
+
+	// prefetch cn flushed but not committed deletes
+	var ok bool
+	var bats []*batch.Batch
+	var locs []objectio.Location = make([]objectio.Location, 0)
+
+	pkColIdx := ls.table.tableDef.Pkey.PkeyColId
+
+	for idx := begin; idx < end; idx++ {
+		if bats, ok = ls.table.getTxn().blockId_tn_delete_metaLoc_batch.data[ls.ranges[idx].BlockID]; !ok {
+			continue
+		}
+
+		locs = locs[:0]
+		for _, bat := range bats {
+			vs, area := vector.MustVarlenaRawData(bat.GetVector(0))
+			for i := range vs {
+				location, err := blockio.EncodeLocationFromString(vs[i].UnsafeGetString(area))
+				if err != nil {
+					logutil.Errorf("prefetch cn flushed s3 deletes: %s", err.Error())
+				}
+				locs = append(locs, location)
+			}
+		}
+
+		if len(locs) == 0 {
+			continue
+		}
+
+		pref, err := blockio.BuildPrefetchParams(ls.fs, locs[0])
+		if err != nil {
+			logutil.Errorf("prefetch cn flushed s3 deletes: %s", err.Error())
+		}
+
+		for _, loc := range locs {
+			//rowId + pk
+			pref.AddBlockWithType([]uint16{0, uint16(pkColIdx)}, []uint16{loc.ID()}, uint16(objectio.SchemaTombstone))
+		}
+
+		if err = blockio.PrefetchWithMerged(ls.table.proc.Load().GetService(), pref); err != nil {
+			logutil.Errorf("prefetch cn flushed s3 deletes: %s", err.Error())
+		}
+	}
+
+	ls.rc.batchPrefetchCursor += batchSize
 }
