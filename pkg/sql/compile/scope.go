@@ -699,7 +699,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 			newExprList = append(newExprList, s.DataSource.node.BlockFilterList...)
 		}
 
-		relData, err := c.expandRangesInProgress(s.DataSource.node, s.DataSource.Rel, newExprList)
+		relData, err := c.expandRanges(s.DataSource.node, s.DataSource.Rel, newExprList)
 		if err != nil {
 			return err
 		}

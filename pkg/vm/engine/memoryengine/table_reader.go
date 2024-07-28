@@ -52,8 +52,9 @@ func (t *Table) BuildReaders(
 
 	readers = make([]engine.Reader, parallel)
 	var shardIDs []uint64
-	relData.ForeachDataBlk(0, relData.BlkCnt(), func(blk *objectio.BlockInfoInProgress) error {
-		shardIDs = append(shardIDs, blk.ShardID)
+	relData.ForeachDataBlk(0, relData.BlkCnt(), func(blk any) error {
+		shardID := blk.(uint64)
+		shardIDs = append(shardIDs, shardID)
 		return nil
 	})
 
@@ -365,9 +366,9 @@ func (rd *MemRelationData) GetTombstones() engine.Tombstoner {
 func (rd *MemRelationData) ForeachDataBlk(
 	begin,
 	end int,
-	f func(blk *objectio.BlockInfoInProgress) error) error {
+	f func(blk any) error) error {
 	for i := begin; i < end; i++ {
-		err := f(rd.blkList[i])
+		err := f(rd.shards.Get(i))
 		if err != nil {
 			return err
 		}
@@ -375,11 +376,11 @@ func (rd *MemRelationData) ForeachDataBlk(
 	return nil
 }
 
-func (rd *MemRelationData) GetDataBlk(i int) *objectio.BlockInfoInProgress {
-	panic("Not Support")
+func (rd *MemRelationData) GetDataBlk(i int) any {
+	return rd.shards.Get(i)
 }
 
-func (rd *MemRelationData) SetDataBlk(i int, blk *objectio.BlockInfoInProgress) {
+func (rd *MemRelationData) SetDataBlk(i int, blk any) {
 	panic("Not Support")
 }
 
@@ -392,8 +393,12 @@ func (rd *MemRelationData) GroupByPartitionNum() map[int16]engine.RelData {
 	panic("Not Support")
 }
 
-func (rd *MemRelationData) AppendDataBlk(blk *objectio.BlockInfoInProgress) {
-	//rd.blkList = append(rd.blkList, blk)
+func (rd *MemRelationData) AppendDataBlk(blk any) {
+	shard := blk.(uint64)
+	id := make([]byte, 8)
+	binary.LittleEndian.PutUint64(id, shard)
+	rd.shards = append(rd.shards, id...)
+
 }
 
 func (rd *MemRelationData) BuildEmptyRelData() engine.RelData {

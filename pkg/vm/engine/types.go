@@ -636,18 +636,18 @@ type RelData interface {
 
 	GetTombstones() Tombstoner
 
-	ForeachDataBlk(begin, end int, f func(blk *objectio.BlockInfoInProgress) error) error
+	ForeachDataBlk(begin, end int, f func(blk any) error) error
 
-	GetDataBlk(i int) *objectio.BlockInfoInProgress
+	GetDataBlk(i int) any
 
-	SetDataBlk(i int, blk *objectio.BlockInfoInProgress)
+	SetDataBlk(i int, blk any)
 
 	DataBlkSlice(begin, end int) RelData
 
 	// GroupByPartitionNum TODO::remove it after refactor of partition table.
 	GroupByPartitionNum() map[int16]RelData
 
-	AppendDataBlk(blk *objectio.BlockInfoInProgress)
+	AppendDataBlk(blk any)
 
 	BuildEmptyRelData() RelData
 
@@ -918,15 +918,15 @@ func (rd *EmptyRelationData) GetTombstones() Tombstoner {
 	panic("Not Supported")
 }
 
-func (rd *EmptyRelationData) ForeachDataBlk(begin, end int, f func(blk *objectio.BlockInfoInProgress) error) error {
+func (rd *EmptyRelationData) ForeachDataBlk(begin, end int, f func(blk any) error) error {
 	panic("Not Supported")
 }
 
-func (rd *EmptyRelationData) GetDataBlk(i int) *objectio.BlockInfoInProgress {
+func (rd *EmptyRelationData) GetDataBlk(i int) any {
 	panic("Not Supported")
 }
 
-func (rd *EmptyRelationData) SetDataBlk(i int, blk *objectio.BlockInfoInProgress) {
+func (rd *EmptyRelationData) SetDataBlk(i int, blk any) {
 	panic("Not Supported")
 }
 
@@ -938,7 +938,7 @@ func (rd *EmptyRelationData) GroupByPartitionNum() map[int16]RelData {
 	panic("Not Supported")
 }
 
-func (rd *EmptyRelationData) AppendDataBlk(blk *objectio.BlockInfoInProgress) {
+func (rd *EmptyRelationData) AppendDataBlk(blk any) {
 	panic("Not Supported")
 }
 

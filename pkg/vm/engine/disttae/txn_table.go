@@ -1820,7 +1820,8 @@ func (tbl *txnTable) buildLocalDataSource(
 	relData.ForeachDataBlk(
 		0,
 		relData.BlkCnt(),
-		func(blk *objectio.BlockInfoInProgress) error {
+		func(b any) error {
+			blk := b.(*objectio.BlockInfoInProgress)
 			ranges = append(ranges, blk)
 			return nil
 		})
@@ -1856,7 +1857,8 @@ func (tbl *txnTable) BuildReaders(
 	}
 	//relData maybe is nil, indicate that only read data from memory.
 	if relData == nil || relData.BlkCnt() == 0 {
-		relData = buildRelationDataV1([]*objectio.BlockInfoInProgress{&objectio.EmptyBlockInfoInProgress})
+		s := objectio.BlockInfoSliceInProgress(objectio.EmptyBlockInfoInProgressBytes)
+		relData = buildRelationDataV1(&s)
 	}
 	blkCnt := relData.BlkCnt()
 	if blkCnt < num {

@@ -600,9 +600,9 @@ func (rd1 *relationDataV1) GetTombstones() engine.Tombstoner {
 	return rd1.tombstones
 }
 
-func (rd1 *relationDataV1) ForeachDataBlk(begin, end int, f func(blk *objectio.BlockInfoInProgress) error) error {
+func (rd1 *relationDataV1) ForeachDataBlk(begin, end int, f func(blk any) error) error {
 	for i := begin; i < end; i++ {
-		err := f(rd1.blkList[i])
+		err := f(rd1.blklist.Get(i))
 		if err != nil {
 			return err
 		}
@@ -610,18 +610,19 @@ func (rd1 *relationDataV1) ForeachDataBlk(begin, end int, f func(blk *objectio.B
 	return nil
 }
 
-func (rd1 *relationDataV1) GetDataBlk(i int) *objectio.BlockInfoInProgress {
-	return rd1.blkList[i]
+func (rd1 *relationDataV1) GetDataBlk(i int) any {
+	return rd1.blklist.Get(i)
 }
 
-func (rd1 *relationDataV1) SetDataBlk(i int, blk *objectio.BlockInfoInProgress) {
-	rd1.blkList[i] = blk
+func (rd1 *relationDataV1) SetDataBlk(i int, blk any) {
+	rd1.blklist.Set(i, blk.(*objectio.BlockInfoInProgress))
 }
 
 func (rd1 *relationDataV1) DataBlkSlice(i, j int) engine.RelData {
+	blist := objectio.BlockInfoSliceInProgress(rd1.blklist.Slice(i, j))
 	return &relationDataV1{
 		typ:          rd1.typ,
-		blkList:      rd1.blkList[i:j],
+		blklist:      &blist,
 		isEmpty:      rd1.isEmpty,
 		tombstoneTyp: rd1.tombstoneTyp,
 		tombstones:   rd1.tombstones,
@@ -630,12 +631,12 @@ func (rd1 *relationDataV1) DataBlkSlice(i, j int) engine.RelData {
 
 func (rd1 *relationDataV1) GroupByPartitionNum() map[int16]engine.RelData {
 	ret := make(map[int16]engine.RelData)
-
-	for _, blk := range rd1.blkList {
-		if blk.IsMemBlk() {
-			continue
+	rd1.ForeachDataBlk(0, rd1.blklist.Len(), func(blk any) error {
+		blkinfo := blk.(*objectio.BlockInfoInProgress)
+		if blkinfo.IsMemBlk() {
+			return nil
 		}
-		partitionNum := blk.PartitionNum
+		partitionNum := blkinfo.PartitionNum
 		if _, ok := ret[partitionNum]; !ok {
 			ret[partitionNum] = &relationDataV1{
 				typ:          rd1.typ,
@@ -645,24 +646,15 @@ func (rd1 *relationDataV1) GroupByPartitionNum() map[int16]engine.RelData {
 			}
 			ret[partitionNum].AppendDataBlk(&objectio.EmptyBlockInfoInProgress)
 		}
-		ret[partitionNum].AppendDataBlk(blk)
-	}
+		ret[partitionNum].AppendDataBlk(blkinfo)
+		return nil
+	})
 	return ret
 }
 
-//func (rd1 *relationDataV1) DataBlkClone(i, j int) engine.RelData {
-//	var dst []*objectio.BlockInfoInProgress
-//	copy(dst, rd1.blkList[i:j])
-//	return &relationDataV1{
-//		typ:          rd1.typ,
-//		blkList:      dst,
-//		tombstoneTyp: rd1.tombstoneTyp,
-//		tombstones:   rd1.tombstones,
-//	}
-//}
-
-func (rd1 *relationDataV1) AppendDataBlk(blk *objectio.BlockInfoInProgress) {
-	rd1.blkList = append(rd1.blkList, blk)
+func (rd1 *relationDataV1) AppendDataBlk(blk any) {
+	blkinfo := blk.(*objectio.BlockInfoInProgress)
+	rd1.blklist.AppendBlockInfo(*blkinfo)
 }
 
 func (rd1 *relationDataV1) BuildEmptyRelData() engine.RelData {
@@ -717,7 +709,7 @@ func (rs *RemoteDataSource) Next(
 		return nil, engine.End, nil
 	}
 	rs.cursor++
-	return rs.data.GetDataBlk(rs.cursor - 1), engine.Persisted, nil
+	return rs.data.GetDataBlk(rs.cursor - 1).(*objectio.BlockInfoInProgress), engine.Persisted, nil
 }
 
 func (rs *RemoteDataSource) Close() {
