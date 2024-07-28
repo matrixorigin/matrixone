@@ -138,9 +138,9 @@ func (markJoin *MarkJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (markjoin *MarkJoin) build(ap *MarkJoin, proc *process.Process, anal process.Analyze) error {
-	ctr := markjoin.ctr
-	mp := proc.ReceiveJoinMap(anal, markjoin.JoinMapTag, false, 0)
+func (markJoin *MarkJoin) build(ap *MarkJoin, proc *process.Process, anal process.Analyze) error {
+	ctr := markJoin.ctr
+	mp := proc.ReceiveJoinMap(anal, markJoin.JoinMapTag, false, 0)
 	if mp == nil {
 		return nil
 	}
