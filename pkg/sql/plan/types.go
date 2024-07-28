@@ -269,6 +269,7 @@ type BindContext struct {
 	isDistinct   bool
 	isCorrelated bool
 	hasSingleRow bool
+	withRollup   bool
 
 	parent     *BindContext
 	leftChild  *BindContext

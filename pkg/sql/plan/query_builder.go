@@ -2390,6 +2390,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				}
 
 				_, err = groupBinder.BindExpr(group, 0, true)
+				ctx.withRollup = clause.GroupBy.WithRollup
 				if err != nil {
 					return 0, err
 				}
@@ -2718,6 +2719,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 					Children:    []int32{nodeID},
 					GroupBy:     ctx.groups,
 					AggList:     ctx.aggregates,
+					WithRollup:  ctx.withRollup,
 					BindingTags: []int32{ctx.groupTag, ctx.aggregateTag},
 				}, ctx)
 			}

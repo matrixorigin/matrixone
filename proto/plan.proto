@@ -771,21 +771,22 @@ message Node {
 	repeated Expr group_by = 10;
 	repeated Expr grouping_set = 11;
 	repeated Expr agg_list = 12;
-
+	bool with_rollup = 13;
+	
 	// WINDOW
-	repeated Expr win_spec_list = 13;
+	repeated Expr win_spec_list = 14;
 
 	// SORT
-	repeated OrderBySpec order_by = 14;
+	repeated OrderBySpec order_by = 15;
 
 	// LIMIT
-	Expr limit = 15;
-	Expr offset = 16;
+	Expr limit = 16;
+	Expr offset = 17;
 
-	TableDef table_def = 17;
-	ObjectRef obj_ref = 18;
-	ObjectRef parent_obj_ref = 19;
-	RowsetData rowset_data = 20;
+	TableDef table_def = 18;
+	ObjectRef obj_ref = 19;
+	ObjectRef parent_obj_ref = 20;
+	RowsetData rowset_data = 21;
 
 	string extra_options = 22;
 	DeleteCtx delete_ctx = 23;

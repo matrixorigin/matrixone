@@ -86,13 +86,15 @@ type container struct {
 	keyWidth          int
 	groupVecsNullable bool
 
-	bat *batch.Batch
+	rollupBat *batch.Batch
+	bat       *batch.Batch
 }
 
 type Group struct {
 	ctr          *container
 	IsShuffle    bool // is shuffle group
 	NeedEval     bool // need to projection the aggregate column
+	NeedRollup   bool
 	PreAllocSize uint64
 
 	Exprs []*plan.Expr // group Expressions

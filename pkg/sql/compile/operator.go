@@ -1230,6 +1230,7 @@ func constructGroup(_ context.Context, n, cn *plan.Node, needEval bool, shuffleD
 	arg.Exprs = n.GroupBy
 	arg.IsShuffle = shuffleGroup
 	arg.PreAllocSize = preAllocSize
+	arg.NeedRollup = n.WithRollup
 	return arg
 }
 
