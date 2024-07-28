@@ -780,8 +780,15 @@ func (s *service) initShardService() {
 		s.sqlExecutor,
 		s.timestampWaiter,
 		map[int]shardservice.ReadFunc{
-			shardservice.ReadRows: disttae.HandleShardingReadRows,
-			shardservice.ReadSize: disttae.HandleShardingReadSize,
+			shardservice.ReadRows:                     disttae.HandleShardingReadRows,
+			shardservice.ReadSize:                     disttae.HandleShardingReadSize,
+			shardservice.ReadStats:                    disttae.HandleShardingReadStatus,
+			shardservice.ReadApproxObjectsNum:         disttae.HandleShardingReadApproxObjectsNum,
+			shardservice.ReadRanges:                   disttae.HandleShardingReadRanges,
+			shardservice.ReadGetColumMetadataScanInfo: disttae.HandleShardingReadGetColumMetadataScanInfo,
+			shardservice.ReadReader:                   disttae.HandleShardingReadReader,
+			shardservice.ReadPrimaryKeysMayBeModified: disttae.HandleShardingReadPrimaryKeysMayBeModified,
+			shardservice.ReadMergeObjects:             disttae.HandleShardingReadMergeObjects,
 		},
 		s.storeEngine,
 	)

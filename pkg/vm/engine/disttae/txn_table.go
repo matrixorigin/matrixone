@@ -104,35 +104,7 @@ func (tbl *txnTable) stats(ctx context.Context) (*pb.StatsInfo, error) {
 		return nil, err
 	}
 	e := tbl.db.getEng()
-	var partitionsTableDef []*plan2.TableDef
-	var approxObjectNum int64
-	if tbl.partitioned > 0 {
-		partitionInfo := &plan2.PartitionByDef{}
-		if err := partitionInfo.UnMarshalPartitionInfo([]byte(tbl.partition)); err != nil {
-			logutil.Errorf("failed to unmarshal partition table: %v", err)
-			return nil, err
-		}
-		for _, partitionTableName := range partitionInfo.PartitionTableNames {
-			partitionTable, err := tbl.db.Relation(ctx, partitionTableName, nil)
-			if err != nil {
-				return nil, err
-			}
-			ptbl, ok := partitionTable.(*txnTable)
-			if !ok {
-				delegate := partitionTable.(*txnTableDelegate)
-				ptbl = delegate.origin
-			}
-			partitionsTableDef = append(partitionsTableDef, ptbl.tableDef)
-			ps, err := ptbl.getPartitionState(ctx)
-			if err != nil {
-				return nil, err
-			}
-			approxObjectNum += int64(ps.ApproxObjectsNum())
-		}
-	} else {
-		approxObjectNum = int64(partitionState.ApproxObjectsNum())
-	}
-
+	approxObjectNum := int64(partitionState.ApproxObjectsNum())
 	if approxObjectNum == 0 {
 		// There are no objects flushed yet.
 		return nil, nil
@@ -141,7 +113,6 @@ func (tbl *txnTable) stats(ctx context.Context) (*pb.StatsInfo, error) {
 	stats := plan2.NewStatsInfo()
 	req := newUpdateStatsRequest(
 		tbl.tableDef,
-		partitionsTableDef,
 		partitionState,
 		e.fs,
 		types.TimestampToTS(tbl.db.op.SnapshotTS()),
@@ -1155,10 +1126,12 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 		name2index := make(map[string]int32)
 		for _, def := range tbl.defs {
 			if attr, ok := def.(*engine.AttributeDef); ok {
-				name2index[attr.Attr.Name] = i
+				name := strings.ToLower(attr.Attr.Name)
+				name2index[name] = i
 				cols = append(cols, &plan.ColDef{
-					ColId: attr.Attr.ID,
-					Name:  attr.Attr.Name,
+					ColId:      attr.Attr.ID,
+					Name:       name,
+					OriginName: attr.Attr.Name,
 					Typ: plan.Type{
 						Id:          int32(attr.Attr.Type.Oid),
 						Width:       attr.Attr.Type.Width,
@@ -1178,7 +1151,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 				})
 				if attr.Attr.ClusterBy {
 					clusterByDef = &plan.ClusterByDef{
-						Name: attr.Attr.Name,
+						Name: name,
 					}
 				}
 				if attr.Attr.Name == catalog.Row_ID {
@@ -1287,6 +1260,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			Version:       tbl.version,
 		}
 	}
+	tbl.tableDef.DbName = tbl.db.databaseName
 	return tbl.tableDef
 }
 
@@ -2132,7 +2106,7 @@ func (tbl *txnTable) newReader(
 
 	seqnumMp := make(map[string]int)
 	for _, coldef := range tbl.tableDef.Cols {
-		seqnumMp[coldef.Name] = int(coldef.Seqnum)
+		seqnumMp[coldef.GetOriginCaseName()] = int(coldef.Seqnum)
 	}
 
 	mp := make(map[string]types.Type)
@@ -2765,7 +2739,8 @@ func (tbl *txnTable) MergeObjects(
 
 	err = mergesort.DoMergeAndWrite(ctx, tbl.getTxn().op.Txn().DebugString(), sortkeyPos, taskHost)
 	if err != nil {
-		return nil, err
+		taskHost.commitEntry.Err = err.Error()
+		return taskHost.commitEntry, err
 	}
 
 	if !taskHost.DoTransfer() {

@@ -197,7 +197,7 @@ func (resper *MysqlResp) respColumnDefsWithoutFlush(ses *Session, execCtx *ExecC
 		mysql COM_QUERY response: End after the column has been sent.
 		send EOF packet
 	*/
-	err = resper.mysqlRrWr.WriteEOFIF(0, ses.GetTxnHandler().GetServerStatus())
+	err = resper.mysqlRrWr.WriteEOFIFAndNoFlush(0, ses.GetTxnHandler().GetServerStatus())
 	if err != nil {
 		return
 	}

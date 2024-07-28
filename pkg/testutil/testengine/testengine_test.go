@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 )
 
@@ -25,6 +26,7 @@ func TestTestEngine(t *testing.T) {
 	runtime.RunTest(
 		"",
 		func(rt runtime.Runtime) {
+			catalog.SetupDefines("")
 			engine, client, compilerCtx := New(context.Background())
 			_ = engine
 			_ = client

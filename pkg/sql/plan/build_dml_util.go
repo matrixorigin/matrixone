@@ -3837,8 +3837,8 @@ type FkReferDef struct {
 	Db       string //fk database name
 	Tbl      string //fk table name
 	Name     string //fk constraint name
-	Col      string //fk column name
-	ReferCol string //referenced column name
+	Col      string //fk column name, letter case: lower
+	ReferCol string //referenced column name, letter case: lower
 	OnDelete string //on delete action
 	OnUpdate string //on update action
 }
