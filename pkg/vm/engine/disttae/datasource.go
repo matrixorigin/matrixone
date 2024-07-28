@@ -463,7 +463,7 @@ func UnmarshalRelationData(data []byte) (engine.RelData, error) {
 	typ := engine.RelDataType(data[0])
 	switch typ {
 	case engine.RelDataV1:
-		rd1 := buildRelationDataV1(nil)
+		rd1 := buildRelationDataV1()
 		if err := rd1.UnMarshal(data); err != nil {
 			return nil, err
 		}
@@ -486,10 +486,10 @@ type relationDataV1 struct {
 	tombstones engine.Tombstoner
 }
 
-func buildRelationDataV1(blkList *objectio.BlockInfoSliceInProgress) *relationDataV1 {
+func buildRelationDataV1() *relationDataV1 {
 	return &relationDataV1{
 		typ:     engine.RelDataV1,
-		blklist: blkList,
+		blklist: &objectio.BlockInfoSliceInProgress{},
 		isEmpty: true,
 	}
 }
@@ -659,6 +659,7 @@ func (rd1 *relationDataV1) AppendDataBlk(blk any) {
 
 func (rd1 *relationDataV1) BuildEmptyRelData() engine.RelData {
 	return &relationDataV1{
+		blklist: &objectio.BlockInfoSliceInProgress{},
 		typ:     rd1.typ,
 		isEmpty: true,
 	}
