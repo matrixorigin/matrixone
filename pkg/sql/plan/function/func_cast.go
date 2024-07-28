@@ -50,6 +50,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_date, types.T_datetime,
 		types.T_time, types.T_timestamp,
 		types.T_array_float32, types.T_array_float64,
+		types.T_datalink,
 	},
 
 	types.T_bool: {
@@ -59,6 +60,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_datalink,
 	},
 
 	types.T_bit: {
@@ -71,6 +73,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_enum,
+		types.T_datalink,
 	},
 
 	types.T_int8: {
@@ -83,6 +86,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_datalink,
 	},
 
 	types.T_int16: {
@@ -95,6 +99,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_datalink,
 	},
 
 	types.T_int32: {
@@ -107,6 +112,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_datalink,
 	},
 
 	types.T_int64: {
@@ -119,6 +125,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_enum,
+		types.T_datalink,
 	},
 
 	types.T_uint8: {
@@ -131,6 +138,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_enum,
+		types.T_datalink,
 	},
 
 	types.T_uint16: {
@@ -143,6 +151,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_enum,
+		types.T_datalink,
 	},
 
 	types.T_uint32: {
@@ -155,6 +164,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_enum,
+		types.T_datalink,
 	},
 
 	types.T_uint64: {
@@ -167,6 +177,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_enum,
+		types.T_datalink,
 	},
 
 	types.T_float32: {
@@ -178,6 +189,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_datalink,
 	},
 
 	types.T_float64: {
@@ -189,6 +201,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_datalink,
 	},
 
 	types.T_date: {
@@ -197,6 +210,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_datalink,
 	},
 
 	types.T_datetime: {
@@ -206,6 +220,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_datalink,
 	},
 
 	types.T_timestamp: {
@@ -215,6 +230,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_datalink,
 	},
 
 	types.T_time: {
@@ -226,6 +242,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128,
 		types.T_binary, types.T_varbinary,
 		types.T_bit,
+		types.T_datalink,
 	},
 
 	types.T_decimal64: {
@@ -237,6 +254,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_time, types.T_timestamp,
+		types.T_datalink,
 	},
 
 	types.T_decimal128: {
@@ -247,6 +265,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_datalink,
 	},
 
 	types.T_char: {
@@ -262,6 +281,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_datalink,
 	},
 
 	types.T_varchar: {
@@ -278,6 +298,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_array_float32, types.T_array_float64,
+		types.T_datalink,
 	},
 
 	types.T_binary: {
@@ -292,6 +313,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_varbinary, types.T_binary,
+		types.T_datalink,
 	},
 
 	types.T_varbinary: {
@@ -306,6 +328,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_datalink,
 	},
 
 	types.T_blob: {
@@ -322,6 +345,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_array_float32, types.T_array_float64,
+		types.T_datalink,
 	},
 
 	types.T_text: {
@@ -339,14 +363,31 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_binary, types.T_varbinary,
 		types.T_array_float32, types.T_array_float64,
 	},
+	types.T_datalink: {
+		types.T_bit,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128,
+		types.T_bool,
+		types.T_json,
+		types.T_uuid,
+		types.T_text,
+		types.T_date, types.T_datetime,
+		types.T_time, types.T_timestamp,
+		types.T_char, types.T_varchar, types.T_blob, types.T_text,
+		types.T_binary, types.T_varbinary,
+		types.T_array_float32, types.T_array_float64,
+		types.T_datalink,
+	},
 
 	types.T_json: {
-		types.T_char, types.T_varchar, types.T_text,
+		types.T_char, types.T_varchar, types.T_text, types.T_datalink,
 	},
 
 	types.T_uuid: {
 		types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink,
 	},
 
 	types.T_TS: {
@@ -360,7 +401,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	types.T_enum: {
 		types.T_enum, types.T_uint16, types.T_uint8, types.T_uint32, types.T_uint64, types.T_uint128,
 		types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink,
 	},
 
 	types.T_array_float32: {
@@ -446,7 +487,7 @@ func NewCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	case types.T_timestamp:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](from)
 		err = timestampToOthers(proc, s, *toType, result, length, selectList)
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		s := vector.GenerateFunctionStrParameter(from)
 		err = strTypeToOthers(proc, s, *toType, result, length, selectList)
 	case types.T_array_float32, types.T_array_float64:
@@ -505,7 +546,7 @@ func scalarNullToOthers(ctx context.Context,
 		return appendNulls[uint64](result, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_text, types.T_json,
-		types.T_array_float32, types.T_array_float64:
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		return appendNulls[types.Varlena](result, length, selectList)
 	case types.T_float32:
 		return appendNulls[float32](result, length, selectList)
@@ -538,7 +579,7 @@ func boolToOthers(ctx context.Context,
 		rs := vector.MustFunctionResult[uint64](result)
 		return boolToInteger(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_binary,
-		types.T_varbinary, types.T_blob, types.T_text:
+		types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		// string type.
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return boolToStr(source, rs, length, toType)
@@ -617,7 +658,7 @@ func bitToOthers(ctx context.Context,
 		rs := vector.MustFunctionResult[types.Decimal128](result)
 		return unsignedToDecimal128(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_text,
-		types.T_binary, types.T_varbinary, types.T_blob:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return bitToStr(ctx, source, rs, length, toType)
 	case types.T_time:
@@ -683,7 +724,7 @@ func int8ToOthers(ctx context.Context,
 		rs := vector.MustFunctionResult[types.Decimal128](result)
 		return signedToDecimal128(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_text, types.T_varbinary:
+		types.T_binary, types.T_text, types.T_varbinary, types.T_datalink:
 		// string type.
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return signedToStr(ctx, source, rs, length, toType)
@@ -744,7 +785,7 @@ func int16ToOthers(ctx context.Context,
 		rs := vector.MustFunctionResult[types.Decimal128](result)
 		return signedToDecimal128(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_text, types.T_varbinary:
+		types.T_binary, types.T_text, types.T_varbinary, types.T_datalink:
 		// string type.
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return signedToStr(ctx, source, rs, length, toType)
@@ -805,7 +846,7 @@ func int32ToOthers(ctx context.Context,
 		rs := vector.MustFunctionResult[types.Decimal128](result)
 		return signedToDecimal128(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_text, types.T_varbinary:
+		types.T_binary, types.T_text, types.T_varbinary, types.T_datalink:
 		// string type.
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return signedToStr(ctx, source, rs, length, toType)
@@ -866,7 +907,7 @@ func int64ToOthers(ctx context.Context,
 		rs := vector.MustFunctionResult[types.Decimal128](result)
 		return signedToDecimal128(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		// string type.
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return signedToStr(ctx, source, rs, length, toType)
@@ -930,7 +971,7 @@ func uint8ToOthers(ctx context.Context,
 		rs := vector.MustFunctionResult[types.Decimal128](result)
 		return unsignedToDecimal128(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_text, types.T_varbinary:
+		types.T_binary, types.T_text, types.T_varbinary, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return unsignedToStr(ctx, source, rs, length, toType)
 	case types.T_time:
@@ -993,7 +1034,7 @@ func uint16ToOthers(ctx context.Context,
 		rs := vector.MustFunctionResult[types.Decimal128](result)
 		return unsignedToDecimal128(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_text, types.T_varbinary:
+		types.T_binary, types.T_text, types.T_varbinary, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return unsignedToStr(ctx, source, rs, length, toType)
 	case types.T_time:
@@ -1056,7 +1097,7 @@ func uint32ToOthers(ctx context.Context,
 		rs := vector.MustFunctionResult[types.Decimal128](result)
 		return unsignedToDecimal128(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_text, types.T_varbinary:
+		types.T_binary, types.T_text, types.T_varbinary, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return unsignedToStr(ctx, source, rs, length, toType)
 	case types.T_time:
@@ -1119,7 +1160,7 @@ func uint64ToOthers(ctx context.Context,
 		rs := vector.MustFunctionResult[types.Decimal128](result)
 		return unsignedToDecimal128(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_text, types.T_varbinary:
+		types.T_binary, types.T_text, types.T_varbinary, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return unsignedToStr(ctx, source, rs, length, toType)
 	case types.T_time:
@@ -1188,7 +1229,7 @@ func float32ToOthers(ctx context.Context,
 		rs := vector.MustFunctionResult[types.Decimal128](result)
 		return floatToDecimal128(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_text, types.T_varbinary:
+		types.T_binary, types.T_text, types.T_varbinary, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return floatToStr(ctx, source, rs, length, toType)
 	}
@@ -1248,7 +1289,7 @@ func float64ToOthers(ctx context.Context,
 		rs := vector.MustFunctionResult[types.Decimal128](result)
 		return floatToDecimal128(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_text, types.T_varbinary:
+		types.T_binary, types.T_text, types.T_varbinary, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return floatToStr(ctx, source, rs, length, toType)
 	}
@@ -1282,7 +1323,7 @@ func dateToOthers(proc *process.Process,
 		rs := vector.MustFunctionResult[types.Datetime](result)
 		return dateToDatetime(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return dateToStr(proc.Ctx, source, rs, length, toType)
 	}
@@ -1318,7 +1359,7 @@ func datetimeToOthers(proc *process.Process,
 		rs := vector.MustFunctionResult[types.Time](result)
 		return datetimeToTime(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return datetimeToStr(proc.Ctx, source, rs, length, toType)
 	case types.T_decimal64:
@@ -1358,7 +1399,7 @@ func timestampToOthers(proc *process.Process,
 		v.SetType(toType)
 		return rs.DupFromParameter(source, length)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return timestampToStr(proc.Ctx, source, rs, length, zone, toType)
 	case types.T_decimal64:
@@ -1414,7 +1455,7 @@ func timeToOthers(ctx context.Context,
 		v.SetType(toType)
 		return rs.DupFromParameter(source, length)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return timeToStr(ctx, source, rs, length, toType)
 	case types.T_decimal64:
@@ -1485,7 +1526,7 @@ func decimal64ToOthers(ctx context.Context,
 		rs := vector.MustFunctionResult[types.Time](result)
 		return decimal64ToTime(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return decimal64ToStr(ctx, source, rs, length, toType)
 	}
@@ -1550,7 +1591,7 @@ func decimal128ToOthers(ctx context.Context,
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return decimal128ToTimestamp(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return decimal128ToStr(ctx, source, rs, length, toType)
 	}
@@ -1647,7 +1688,7 @@ func strTypeToOthers(proc *process.Process,
 		}
 		return strToTimestamp(source, rs, zone, length, selectList)
 	case types.T_char, types.T_varchar, types.T_text,
-		types.T_binary, types.T_varbinary, types.T_blob:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return strToStr(ctx, source, rs, length, toType)
 	case types.T_array_float32:
@@ -1692,7 +1733,7 @@ func uuidToOthers(ctx context.Context,
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
 	switch toType.Oid {
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return uuidToStr(ctx, source, rs, length, toType)
 	}
@@ -1733,7 +1774,7 @@ func jsonToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[types.Varlena],
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
 	switch toType.Oid {
-	case types.T_char, types.T_varchar, types.T_text:
+	case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return jsonToStr(ctx, source, rs, length, selectList)
 	}
@@ -1747,7 +1788,7 @@ func enumToOthers(ctx context.Context,
 	case types.T_uint16, types.T_uint8, types.T_uint32, types.T_uint64, types.T_uint128:
 		rs := vector.MustFunctionResult[uint16](result)
 		return enumToUint16(source, rs, length, selectList)
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return enumToStr(ctx, source, rs, length, selectList)
 	case types.T_enum:
@@ -2055,7 +2096,7 @@ func bitToStr(
 				b = append(b, byte(0))
 			}
 		}
-		if len(b) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob {
+		if len(b) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 			return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 				"%v is larger than Dest length %v", v, toType.Width))
 		}
@@ -2255,7 +2296,7 @@ func signedToStr[T constraints.Integer](
 					result = append(result, 0)
 				}
 			}
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v, toType.Width))
 			}
@@ -2303,7 +2344,7 @@ func unsignedToStr[T constraints.Unsigned](
 					result = append(result, 0)
 				}
 			}
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v, toType.Width))
 			}
@@ -2353,7 +2394,7 @@ func floatToStr[T constraints.Float](
 					result = append(result, 0)
 				}
 			}
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v, toType.Width))
 			}
@@ -2946,7 +2987,7 @@ func dateToStr(
 					result = append(result, 0)
 				}
 			}
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.String(), toType.Width))
 			}
@@ -2995,7 +3036,7 @@ func datetimeToStr(
 					result = append(result, 0)
 				}
 			}
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.String(), toType.Width))
 			}
@@ -3045,7 +3086,7 @@ func timestampToStr(
 					result = append(result, 0)
 				}
 			}
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.String(), toType.Width))
 			}
@@ -3094,7 +3135,7 @@ func timeToStr(
 					result = append(result, 0)
 				}
 			}
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.String(), toType.Width))
 			}
@@ -3708,7 +3749,7 @@ func decimal64ToStr(
 					result = append(result, 0)
 				}
 			}
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.Format(fromType.Scale), toType.Width))
 			}
@@ -3757,7 +3798,7 @@ func decimal128ToStr(
 					result = append(result, 0)
 				}
 			}
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.Format(fromType.Scale), toType.Width))
 			}
@@ -4488,7 +4529,7 @@ func uuidToStr(
 					return moerr.NewDataTruncatedNoCtx("Uuid", "truncated for char/varchar")
 				}
 			}
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.String(), toType.Width))
 			}
@@ -4518,7 +4559,7 @@ func jsonToStr(
 			if err != nil {
 				return err
 			}
-			if len(val) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob {
+			if len(val) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", val, toType.Width))
 			}
@@ -4563,7 +4604,7 @@ func enumToStr(
 			}
 		} else {
 			result := strconv.FormatUint(uint64(v), 10)
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v, toType.Width))
 			}
