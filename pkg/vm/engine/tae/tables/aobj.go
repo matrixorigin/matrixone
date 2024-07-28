@@ -57,7 +57,7 @@ func newAObject(
 		obj.node.Store(node)
 		obj.FreezeAppend()
 	} else {
-		mnode := newMemoryNode(obj.baseObject)
+		mnode := newObjectMemoryNode(obj)
 		node := NewNode(mnode)
 		node.Ref()
 		obj.node.Store(node)
@@ -73,7 +73,75 @@ func (obj *aobject) IsAppendFrozen() bool {
 	return obj.frozen.Load()
 }
 
-func (obj *aobject) IsAppendable() bool {
+func (obj *aobject) CheckFlushTaskRetry(startts types.TS) bool {
+	if !obj.meta.Load().IsAppendable() {
+		panic("not support")
+	}
+	if obj.meta.Load().HasDropCommitted() {
+		panic("not support")
+	}
+	obj.RLock()
+	defer obj.RUnlock()
+	x := obj.getLastAppendMVCC().GetLatestAppendPrepareTSLocked()
+	return x.Greater(&startts)
+}
+func (obj *aobject) PreapreAppend(
+	txn txnif.AsyncTxn,
+	startRow, maxRow uint32,
+	batchSize int,
+) (an *updates.AppendNode, created bool) {
+	return obj.getLastAppendMVCC().AddAppendNodeLocked(txn, startRow, maxRow)
+}
+func (obj *aobject) getLastAppendMVCC() *updates.AppendMVCCHandle {
+	node := obj.PinNode()
+	defer node.Unref()
+	return node.MustMNode().getLastNode().appendMVCC
+}
+
+// only used in replay
+func (obj *aobject) mustGetAppendMVCC(blkID uint16) *updates.AppendMVCCHandle {
+	blkCount := obj.node.Load().MustMNode().blockCnt()
+	if blkCount < int(blkID) {
+		return nil
+	}
+	return obj.node.Load().MustMNode().getOrCreateNode(blkID).appendMVCC
+}
+func (obj *aobject) PPString(level common.PPLevel, depth int, prefix string, blkid int) string {
+	rows, err := obj.Rows()
+	if err != nil {
+		logutil.Warnf("get object rows failed, obj: %v, err: %v", obj.meta.Load().ID().String(), err)
+	}
+	s := fmt.Sprintf("%s | [Rows=%d]", obj.meta.Load().PPString(level, depth, prefix), rows)
+	if level >= common.PPL1 {
+		obj.RLock()
+		var appendstr, deletestr string
+		node := obj.node.Load()
+		if !node.IsPersisted() {
+			appendstr = node.MustMNode().getLastNode().appendMVCC.StringLocked()
+		}
+		if mvcc := obj.tryGetMVCC(); mvcc != nil {
+			if blkid >= 0 {
+				deletestr = mvcc.StringBlkLocked(level, 0, "", blkid)
+			} else {
+				deletestr = mvcc.String(level, 0, "")
+			}
+		}
+		obj.RUnlock()
+		if appendstr != "" {
+			s = fmt.Sprintf("%s\n Appends: %s", s, appendstr)
+		}
+		if deletestr != "" {
+			s = fmt.Sprintf("%s\n Deletes: %s", s, deletestr)
+		}
+	}
+	return s
+}
+func (obj *aobject) BlockCnt() int {
+	obj.RLock()
+	defer obj.RUnlock()
+	return obj.node.Load().MustMNode().blockCnt()
+}
+func (obj *aobject) IsAppendable(checkBlkCount bool) bool {
 	if obj.IsAppendFrozen() {
 		return false
 	}
@@ -82,8 +150,29 @@ func (obj *aobject) IsAppendable() bool {
 	if node.IsPersisted() {
 		return false
 	}
-	rows, _ := node.Rows()
-	return rows < obj.meta.Load().GetSchema().BlockMaxRows
+	if !checkBlkCount {
+		return true
+	}
+	return node.MustMNode().IsAppendable()
+}
+func (obj *aobject) GetNewBlock() {
+	obj.Lock()
+	defer obj.Unlock()
+	newNode := obj.node.Load().MustMNode().registerNodeLocked()
+	if newNode == nil {
+		panic("logic error")
+	}
+}
+
+func (obj *aobject) LastBlockRows() uint32 {
+	if obj.BlockCnt() == 0 {
+		return 0
+	}
+	row, err := obj.node.Load().MustMNode().getLastNode().Rows()
+	if err != nil {
+		panic(err)
+	}
+	return row
 }
 
 func (obj *aobject) PrepareCompactInfo() (result bool, reason string) {
@@ -92,7 +181,7 @@ func (obj *aobject) PrepareCompactInfo() (result bool, reason string) {
 		return
 	}
 	obj.FreezeAppend()
-	if !obj.meta.Load().PrepareCompact() || !obj.appendMVCC.PrepareCompact() {
+	if !obj.meta.Load().PrepareCompact() || !obj.getLastAppendMVCC().PrepareCompact() {
 		if !obj.meta.Load().PrepareCompact() {
 			reason = "meta preparecomp false"
 		} else {
@@ -138,12 +227,12 @@ func (obj *aobject) PrepareCompact() bool {
 			}
 			return false
 		}
-		if !obj.appendMVCC.PrepareCompact() /* all appends are committed */ {
+		if !obj.getLastAppendMVCC().PrepareCompact() /* all appends are committed */ {
 			if obj.meta.Load().CheckPrintPrepareCompactLocked(checkDuration) {
 				logutil.Infof("obj %v, data prepare compact failed", obj.meta.Load().ID().String())
 				if !obj.meta.Load().HasPrintedPrepareComapct.Load() {
 					obj.meta.Load().HasPrintedPrepareComapct.Store(true)
-					logutil.Infof("append MVCC %v", obj.appendMVCC.StringLocked())
+					logutil.Infof("append MVCC %v", obj.getLastAppendMVCC().StringLocked())
 				}
 			}
 			return false
@@ -167,12 +256,13 @@ func (obj *aobject) GetColumnDataByIds(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
 	readSchema any,
-	_ uint16,
+	blkOffset uint16,
 	colIdxes []int,
 	mp *mpool.MPool,
 ) (view *containers.Batch, err error) {
 	return obj.resolveColumnDatas(
 		ctx,
+		blkOffset,
 		txn,
 		readSchema.(*catalog.Schema),
 		colIdxes,
@@ -185,12 +275,13 @@ func (obj *aobject) GetColumnDataById(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
 	readSchema any,
-	_ uint16,
+	blkID uint16,
 	col int,
 	mp *mpool.MPool,
 ) (view *containers.Batch, err error) {
 	return obj.resolveColumnData(
 		ctx,
+		blkID,
 		txn,
 		readSchema.(*catalog.Schema),
 		col,
@@ -201,6 +292,7 @@ func (obj *aobject) GetColumnDataById(
 
 func (obj *aobject) resolveColumnDatas(
 	ctx context.Context,
+	blkOffset uint16,
 	txn txnif.TxnReader,
 	readSchema *catalog.Schema,
 	colIdxes []int,
@@ -212,7 +304,7 @@ func (obj *aobject) resolveColumnDatas(
 
 	if !node.IsPersisted() {
 		return node.MustMNode().resolveInMemoryColumnDatas(
-			ctx,
+			ctx, blkOffset,
 			txn, readSchema, colIdxes, skipDeletes, mp,
 		)
 	} else {
@@ -220,7 +312,7 @@ func (obj *aobject) resolveColumnDatas(
 			ctx,
 			txn,
 			readSchema,
-			0,
+			blkOffset,
 			colIdxes,
 			skipDeletes,
 			mp,
@@ -254,6 +346,7 @@ func (obj *aobject) CoarseCheckAllRowsCommittedBefore(ts types.TS) bool {
 
 func (obj *aobject) resolveColumnData(
 	ctx context.Context,
+	blkID uint16,
 	txn txnif.TxnReader,
 	readSchema *catalog.Schema,
 	col int,
@@ -265,14 +358,14 @@ func (obj *aobject) resolveColumnData(
 
 	if !node.IsPersisted() {
 		return node.MustMNode().resolveInMemoryColumnData(
-			txn, readSchema, col, skipDeletes, mp,
+			blkID, txn, readSchema, col, skipDeletes, mp,
 		)
 	} else {
 		return obj.ResolvePersistedColumnData(
 			ctx,
 			txn,
 			readSchema,
-			0,
+			blkID,
 			col,
 			skipDeletes,
 			mp,
@@ -284,7 +377,7 @@ func (obj *aobject) GetValue(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
 	readSchema any,
-	_ uint16,
+	blkID uint16,
 	row, col int,
 	mp *mpool.MPool,
 ) (v any, isNull bool, err error) {
@@ -292,10 +385,10 @@ func (obj *aobject) GetValue(
 	defer node.Unref()
 	schema := readSchema.(*catalog.Schema)
 	if !node.IsPersisted() {
-		return node.MustMNode().getInMemoryValue(txn, schema, row, col, mp)
+		return node.MustMNode().getInMemoryValue(txn, schema, blkID, row, col, mp)
 	} else {
 		return obj.getPersistedValue(
-			ctx, txn, schema, 0, row, col, true, mp,
+			ctx, txn, schema, blkID, row, col, true, mp,
 		)
 	}
 }
@@ -318,7 +411,7 @@ func (obj *aobject) GetByFilter(
 
 	node := obj.PinNode()
 	defer node.Unref()
-	_, offset, err = node.GetRowByFilter(ctx, txn, filter, mp)
+	blkID, offset, err = node.GetRowByFilter(ctx, txn, filter, mp)
 	return
 }
 
@@ -330,6 +423,7 @@ func (obj *aobject) BatchDedup(
 	rowmask *roaring.Bitmap,
 	precommit bool,
 	bf objectio.BloomFilter,
+	startBlkID uint16,
 	mp *mpool.MPool,
 ) (err error) {
 	defer func() {
@@ -347,6 +441,7 @@ func (obj *aobject) BatchDedup(
 			keys,
 			keysZM,
 			rowmask,
+			startBlkID,
 			bf,
 		)
 	} else {
@@ -372,6 +467,17 @@ func (obj *aobject) CollectAppendInRange(
 	node := obj.PinNode()
 	defer node.Unref()
 	return node.CollectAppendInRange(start, end, withAborted, mp)
+}
+
+func (obj *aobject) CollectAppendInRangeWithBlockID(
+	blkID uint16,
+	start, end types.TS,
+	withAborted bool,
+	mp *mpool.MPool,
+) (*containers.BatchWithVersion, error) {
+	node := obj.PinNode()
+	defer node.Unref()
+	return node.CollectAppendInRangeWithBlockID(blkID, start, end, withAborted, mp)
 }
 
 func (obj *aobject) estimateRawScore() (score int, dropped bool, err error) {
@@ -420,21 +526,26 @@ func (obj *aobject) RunCalibration() (score int, err error) {
 
 func (obj *aobject) OnReplayAppend(node txnif.AppendNode) (err error) {
 	an := node.(*updates.AppendNode)
-	obj.appendMVCC.OnReplayAppendNode(an)
+	blkID := an.GetID().GetBlockOffset()
+	appendMVCC := obj.mustGetAppendMVCC(blkID)
+	if appendMVCC == nil {
+		return nil
+	}
+	appendMVCC.OnReplayAppendNode(an)
 	return
 }
 
-func (obj *aobject) OnReplayAppendPayload(bat *containers.Batch) (err error) {
+func (obj *aobject) OnReplayAppendPayload(bat *containers.Batch, blkOffset uint16) (err error) {
 	appender, err := obj.MakeAppender()
 	if err != nil {
 		return
 	}
-	_, err = appender.ReplayAppend(bat, nil)
+	_, err = appender.ReplayAppend(bat, blkOffset, nil)
 	return
 }
 
 func (obj *aobject) MakeAppender() (appender data.ObjectAppender, err error) {
-	if obj == nil {
+	if obj == nil || !obj.IsAppendable(false) {
 		err = moerr.GetOkExpectedEOB()
 		return
 	}
@@ -454,7 +565,7 @@ func (obj *aobject) EstimateMemSize() (int, int) {
 	if objMVCC != nil {
 		dsize = objMVCC.EstimateMemSizeLocked()
 	}
-	asize := obj.appendMVCC.EstimateMemSizeLocked()
+	asize := 0
 	if !node.IsPersisted() {
 		asize += node.MustMNode().EstimateMemSize()
 	}
@@ -462,7 +573,11 @@ func (obj *aobject) EstimateMemSize() (int, int) {
 }
 
 func (obj *aobject) GetRowsOnReplay() uint64 {
-	rows := uint64(obj.appendMVCC.GetTotalRow())
+	appendRow, err := obj.node.Load().MustMNode().Rows()
+	if err != nil {
+		panic(err)
+	}
+	rows := uint64(appendRow)
 	stats := obj.meta.Load().GetObjectStats()
 	fileRows := uint64(stats.Rows())
 	if rows > fileRows {

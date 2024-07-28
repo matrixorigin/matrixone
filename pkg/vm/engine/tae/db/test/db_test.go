@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -675,7 +676,7 @@ func TestAddObjsWithMetaLoc(t *testing.T) {
 			return
 		})
 		assert.True(t, cntOfobj == 1)
-		assert.True(t, cntOfAobj == 2)
+		assert.True(t, cntOfAobj == 1)
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
 }
@@ -2521,7 +2522,7 @@ func TestSegDelLogtail(t *testing.T) {
 
 	require.Equal(t, api.Entry_Insert, resp.Commands[1].EntryType)
 	require.True(t, strings.HasSuffix(resp.Commands[1].TableName, "obj"))
-	require.Equal(t, uint32(6), resp.Commands[1].Bat.Vecs[0].Len) /* 2 Objects (create) + 4 (update object info) */
+	require.Equal(t, uint32(4), resp.Commands[1].Bat.Vecs[0].Len) /* 2 Objects (create) + 2 (update object info) */
 	// start ts should not be empty
 	startTSVec := resp.Commands[1].Bat.Vecs[9]
 	cnStartVec, err := vector.ProtoVectorToVector(startTSVec)
@@ -2555,7 +2556,7 @@ func TestSegDelLogtail(t *testing.T) {
 		require.Equal(t, uint32(1), ins.Vecs[0].Len)    // 1 deltaloc, skip blks without deltaloc
 		require.Nil(t, del)                             // 0  del
 		require.Nil(t, cnins)                           // 0  del
-		require.Equal(t, uint32(6), segdel.Vecs[0].Len) // 2 create + 4 update
+		require.Equal(t, uint32(4), segdel.Vecs[0].Len) // 2 create + 2 update
 		require.Equal(t, 12, len(segdel.Vecs))
 	}
 	check()
@@ -3385,7 +3386,7 @@ func TestImmutableIndexInAblk(t *testing.T) {
 	assert.NoError(t, err)
 
 	err = meta.GetObjectData().BatchDedup(
-		context.Background(), txn, bat.Vecs[1], nil, nil, false, objectio.BloomFilter{}, common.DefaultAllocator,
+		context.Background(), txn, bat.Vecs[1], nil, nil, false, objectio.BloomFilter{}, 0, common.DefaultAllocator,
 	)
 	assert.Error(t, err)
 }
@@ -3875,6 +3876,7 @@ func TestLogtailBasic(t *testing.T) {
 	schema := catalog.MockSchemaAll(2, -1)
 	schema.Name = "test"
 	schema.BlockMaxRows = 10
+	schema.ObjectMaxBlocks = 1
 	// craete 2 db and 2 tables
 	txn, _ := tae.StartTxn(nil)
 	todropdb, _ := txn.CreateDatabase("todrop", "", "")
@@ -3966,7 +3968,7 @@ func TestLogtailBasic(t *testing.T) {
 	// 10 Objects, every Object has 1 blocks
 	reader = logMgr.GetReader(firstWriteTs, lastWriteTs)
 	dirties := reader.GetDirtyByTable(dbID, tableID)
-	require.Equal(t, 10, len(dirties.Objs))
+	require.Equal(t, 1, len(dirties.Objs))
 	tots := func(ts types.TS) *timestamp.Timestamp {
 		return &timestamp.Timestamp{PhysicalTime: types.DecodeInt64(ts[4:12]), LogicalTime: types.DecodeUint32(ts[:4])}
 	}
@@ -6384,13 +6386,17 @@ func TestAlterFakePk(t *testing.T) {
 		// check non-exist column foreach
 		newSchema := obj.GetRelation().Schema()
 		blkdata := obj.GetMeta().(*catalog.ObjectEntry).GetObjectData()
-		sels := []uint32{1, 3}
+		sels := &nulls.Nulls{}
+		sels.Add(1)
+		sels.Add(3)
 		rows := make([]int, 0, 4)
-		blkdata.Foreach(context.Background(), newSchema, 0, 1 /*"add1" column*/, func(v any, isnull bool, row int) error {
+		view, err := blkdata.GetColumnDataById(ctx, txn, newSchema, 0, 1, common.DefaultAllocator)
+		view.Vecs[0].Foreach(func(v any, isnull bool, row int) error {
 			require.True(t, true)
 			rows = append(rows, row)
 			return nil
-		}, sels, common.DefaultAllocator)
+		}, sels)
+		view.Close()
 		require.Equal(t, []int{1, 3}, rows)
 		require.NoError(t, err)
 		require.NoError(t, txn.Commit(context.Background()))
@@ -7997,7 +8003,6 @@ func TestDedupSnapshot3(t *testing.T) {
 			err := rel.BatchDedup(bats[offset].Vecs[3])
 			txn.Commit(context.Background())
 			if err != nil {
-				logutil.Infof("err is %v", err)
 				return
 			}
 
@@ -9369,4 +9374,29 @@ func TestClearPersistTransferTable(t *testing.T) {
 			assert.True(t, errors.Is(err, moerr.GetOkExpectedEOB()))
 		},
 	)
+}
+
+func TestFlushAndReplay(t *testing.T) {
+	ctx := context.Background()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(13, 3)
+	schema.BlockMaxRows = 10
+	schema.ObjectMaxBlocks = 3
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 20)
+	bats := bat.Split(2)
+	currNB := common.MutMemAllocator.CurrNB()
+
+	tae.CreateRelAndAppend(bats[0], true)
+	ts1 := tae.TxnMgr.Now()
+	tae.DoAppend(bats[1])
+	tae.CompactBlocks(true)
+	assert.Equal(t, currNB, common.MutMemAllocator.CurrNB())
+	tae.BGCheckpointRunner.ForceIncrementalCheckpoint(ts1, true)
+	tae.CheckRowsByScan(20, false)
+	tae.Restart(ctx)
+	tae.CheckRowsByScan(20, false)
+	assert.Equal(t, currNB, common.MutMemAllocator.CurrNB())
 }
