@@ -28,7 +28,7 @@ type Projection struct {
 	ProjExecutors []ExpressionExecutor
 	uafs          []func(v, w *vector.Vector) error
 
-	MaxAllocSize int
+	MaxAllocSize int64
 }
 
 func init() {
@@ -101,7 +101,7 @@ func (projection *Projection) Eval(bat *batch.Batch, proc *process.Process) (*ba
 	if err != nil {
 		return nil, err
 	}
-	projection.MaxAllocSize = max(projection.MaxAllocSize, newAlloc)
+	projection.MaxAllocSize = max(projection.MaxAllocSize, int64(newAlloc))
 	result.SetRowCount(bat.RowCount())
 	return result, nil
 }

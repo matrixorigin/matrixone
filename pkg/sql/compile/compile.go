@@ -29,9 +29,27 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fill"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexjoin"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/join"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/left"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopleft"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopmark"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsemi"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsingle"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
@@ -2388,29 +2406,149 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 		switch ss[i].RootOp.(type) {
 		case *projection.Projection:
 			if ss[i].RootOp.(*projection.Projection).ProjectList == nil {
-				ss[i].RootOp.(*projection.Projection).ProjectList = make([]*plan.ProjectList, 0)
+				ss[i].RootOp.(*projection.Projection).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
 			}
-			ss[i].RootOp.(*projection.Projection).ProjectList = append(ss[i].RootOp.(*projection.Projection).ProjectList, &plan.ProjectList{Project: n.ProjectList})
 		case *table_scan.TableScan:
 			if ss[i].RootOp.(*table_scan.TableScan).ProjectList == nil {
-				ss[i].RootOp.(*table_scan.TableScan).ProjectList = make([]*plan.ProjectList, 0)
+				ss[i].RootOp.(*table_scan.TableScan).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
 			}
-			ss[i].RootOp.(*table_scan.TableScan).ProjectList = append(ss[i].RootOp.(*table_scan.TableScan).ProjectList, &plan.ProjectList{Project: n.ProjectList})
 		case *value_scan.ValueScan:
 			if ss[i].RootOp.(*value_scan.ValueScan).ProjectList == nil {
-				ss[i].RootOp.(*value_scan.ValueScan).ProjectList = make([]*plan.ProjectList, 0)
+				ss[i].RootOp.(*value_scan.ValueScan).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
 			}
-			ss[i].RootOp.(*value_scan.ValueScan).ProjectList = append(ss[i].RootOp.(*value_scan.ValueScan).ProjectList, &plan.ProjectList{Project: n.ProjectList})
+		case *fill.Fill:
+			if ss[i].RootOp.(*fill.Fill).ProjectList == nil {
+				ss[i].RootOp.(*fill.Fill).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
+			}
 		case *filter.Filter:
 			if ss[i].RootOp.(*filter.Filter).ProjectList == nil {
-				ss[i].RootOp.(*filter.Filter).ProjectList = make([]*plan.ProjectList, 0)
+				ss[i].RootOp.(*filter.Filter).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
 			}
-			ss[i].RootOp.(*filter.Filter).ProjectList = append(ss[i].RootOp.(*filter.Filter).ProjectList, &plan.ProjectList{Project: n.ProjectList})
 		case *source.Source:
 			if ss[i].RootOp.(*source.Source).ProjectList == nil {
-				ss[i].RootOp.(*source.Source).ProjectList = make([]*plan.ProjectList, 0)
+				ss[i].RootOp.(*source.Source).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
 			}
-			ss[i].RootOp.(*source.Source).ProjectList = append(ss[i].RootOp.(*source.Source).ProjectList, &plan.ProjectList{Project: n.ProjectList})
+		case *external.External:
+			if ss[i].RootOp.(*external.External).ProjectList == nil {
+				ss[i].RootOp.(*external.External).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
+			}
+		case *group.Group:
+			if ss[i].RootOp.(*group.Group).ProjectList == nil {
+				ss[i].RootOp.(*group.Group).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
+			}
+		case *mergegroup.MergeGroup:
+			if ss[i].RootOp.(*mergegroup.MergeGroup).ProjectList == nil {
+				ss[i].RootOp.(*mergegroup.MergeGroup).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
+			}
+		case *anti.AntiJoin:
+			if ss[i].RootOp.(*anti.AntiJoin).ProjectList == nil {
+				ss[i].RootOp.(*anti.AntiJoin).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
+			}
+		case *indexjoin.IndexJoin:
+			if ss[i].RootOp.(*indexjoin.IndexJoin).ProjectList == nil {
+				ss[i].RootOp.(*indexjoin.IndexJoin).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
+			}
+		case *join.InnerJoin:
+			if ss[i].RootOp.(*join.InnerJoin).ProjectList == nil {
+				ss[i].RootOp.(*join.InnerJoin).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
+			}
+		case *left.LeftJoin:
+			if ss[i].RootOp.(*left.LeftJoin).ProjectList == nil {
+				ss[i].RootOp.(*left.LeftJoin).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
+			}
+		case *loopanti.LoopAnti:
+			if ss[i].RootOp.(*loopanti.LoopAnti).ProjectList == nil {
+				ss[i].RootOp.(*loopanti.LoopAnti).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
+			}
+		case *loopjoin.LoopJoin:
+			if ss[i].RootOp.(*loopjoin.LoopJoin).ProjectList == nil {
+				ss[i].RootOp.(*loopjoin.LoopJoin).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
+			}
+		case *loopleft.LoopLeft:
+			if ss[i].RootOp.(*loopleft.LoopLeft).ProjectList == nil {
+				ss[i].RootOp.(*loopleft.LoopLeft).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
+			}
+		case *loopmark.LoopMark:
+			if ss[i].RootOp.(*loopmark.LoopMark).ProjectList == nil {
+				ss[i].RootOp.(*loopmark.LoopMark).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
+			}
+		case *loopsemi.LoopSemi:
+			if ss[i].RootOp.(*loopsemi.LoopSemi).ProjectList == nil {
+				ss[i].RootOp.(*loopsemi.LoopSemi).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
+			}
+		case *loopsingle.LoopSingle:
+			if ss[i].RootOp.(*loopsingle.LoopSingle).ProjectList == nil {
+				ss[i].RootOp.(*loopsingle.LoopSingle).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
+			}
+		case *mark.MarkJoin:
+			if ss[i].RootOp.(*mark.MarkJoin).ProjectList == nil {
+				ss[i].RootOp.(*mark.MarkJoin).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
+			}
+		case *product.Product:
+			if ss[i].RootOp.(*product.Product).ProjectList == nil {
+				ss[i].RootOp.(*product.Product).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
+			}
+		case *productl2.Productl2:
+			if ss[i].RootOp.(*productl2.Productl2).ProjectList == nil {
+				ss[i].RootOp.(*productl2.Productl2).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
+			}
+		case *semi.SemiJoin:
+			if ss[i].RootOp.(*semi.SemiJoin).ProjectList == nil {
+				ss[i].RootOp.(*semi.SemiJoin).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
+			}
+		case *single.SingleJoin:
+			if ss[i].RootOp.(*single.SingleJoin).ProjectList == nil {
+				ss[i].RootOp.(*single.SingleJoin).ProjectList = n.ProjectList
+			} else {
+				c.setProjection(n, ss[i])
+			}
+
 		default:
 			c.setProjection(n, ss[i])
 		}

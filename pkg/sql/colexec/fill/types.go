@@ -69,10 +69,12 @@ type container struct {
 type Fill struct {
 	ctr *container
 
-	ColLen   int
-	FillType plan.Node_FillType
-	FillVal  []*plan.Expr
-	AggIds   []int32
+	ColLen      int
+	FillType    plan.Node_FillType
+	FillVal     []*plan.Expr
+	AggIds      []int32
+	ProjectList []*plan.Expr
+	Projection  *colexec.Projection
 	vm.OperatorBase
 }
 
@@ -119,6 +121,13 @@ func (fill *Fill) Free(proc *process.Process, pipelineFailed bool, err error) {
 		ctr.cleanExes()
 
 		fill.ctr = nil
+	}
+	if fill.Projection != nil {
+		anal := proc.GetAnalyze(fill.GetIdx(), fill.GetParallelIdx(), fill.GetParallelMajor())
+		anal.Alloc(fill.Projection.MaxAllocSize)
+		fill.Projection.Free()
+		fill.Projection = nil
+		fill.ProjectList = nil
 	}
 }
 

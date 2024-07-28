@@ -38,8 +38,8 @@ type TableScan struct {
 	Reader         engine.Reader
 	Attrs          []string
 	TableID        uint64
-	ProjectList    []*plan.ProjectList
-	Projection     []*colexec.Projection
+	ProjectList    []*plan.Expr
+	Projection     *colexec.Projection
 
 	vm.OperatorBase
 }
@@ -93,13 +93,11 @@ func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err
 		}
 		tableScan.ctr = nil
 	}
-	for i := range tableScan.Projection {
-		if tableScan.Projection[i] == nil {
-			continue
-		}
-		anal.Alloc(int64(tableScan.Projection[i].MaxAllocSize))
-		tableScan.Projection[i].Free()
+
+	if tableScan.Projection != nil {
+		anal.Alloc(tableScan.Projection.MaxAllocSize)
+		tableScan.Projection.Free()
+		tableScan.Projection = nil
+		tableScan.ProjectList = nil
 	}
-	tableScan.Projection = nil
-	tableScan.ProjectList = nil
 }

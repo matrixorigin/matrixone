@@ -61,10 +61,9 @@ func (source *Source) Prepare(proc *process.Process) error {
 		}
 	}
 
-	source.Projection = make([]*colexec.Projection, len(source.ProjectList))
-	for i := range source.ProjectList {
-		source.Projection[i] = colexec.NewProjection(source.ProjectList[i].Project)
-		err := source.Projection[i].Prepare(proc)
+	if source.ProjectList != nil {
+		source.Projection = colexec.NewProjection(source.ProjectList)
+		err := source.Projection.Prepare(proc)
 		if err != nil {
 			return err
 		}
@@ -101,12 +100,9 @@ func (source *Source) Call(proc *process.Process) (vm.CallResult, error) {
 		result.Status = vm.ExecStop
 	}
 
-	for i := range source.Projection {
-		result.Batch, err = source.Projection[i].Eval(result.Batch, proc)
-		if err != nil {
-			return result, err
-		}
+	if source.Projection != nil {
+		result.Batch, err = source.Projection.Eval(result.Batch, proc)
 	}
 
-	return result, nil
+	return result, err
 }

@@ -48,10 +48,13 @@ type container struct {
 }
 
 type LoopLeft struct {
-	ctr    *container
-	Typs   []types.Type
-	Cond   *plan.Expr
-	Result []colexec.ResultPos
+	ctr         *container
+	Typs        []types.Type
+	Cond        *plan.Expr
+	Result      []colexec.ResultPos
+	ProjectList []*plan.Expr
+	Projection  *colexec.Projection
+
 	vm.OperatorBase
 }
 
@@ -95,6 +98,14 @@ func (loopLeft *LoopLeft) Free(proc *process.Process, pipelineFailed bool, err e
 		ctr.cleanExprExecutor()
 		ctr.FreeAllReg()
 		loopLeft.ctr = nil
+	}
+
+	if loopLeft.Projection != nil {
+		anal := proc.GetAnalyze(loopLeft.GetIdx(), loopLeft.GetParallelIdx(), loopLeft.GetParallelMajor())
+		anal.Alloc(loopLeft.Projection.MaxAllocSize)
+		loopLeft.Projection.Free()
+		loopLeft.Projection = nil
+		loopLeft.ProjectList = nil
 	}
 }
 

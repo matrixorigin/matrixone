@@ -25,8 +25,8 @@ import (
 var _ vm.Operator = new(Projection)
 
 type Projection struct {
-	ProjectList []*plan.ProjectList
-	Proj        []*colexec.Projection
+	ProjectList []*plan.Expr
+	Proj        *colexec.Projection
 	vm.OperatorBase
 }
 
@@ -66,14 +66,11 @@ func (projection *Projection) Reset(proc *process.Process, pipelineFailed bool, 
 }
 
 func (projection *Projection) Free(proc *process.Process, pipelineFailed bool, err error) {
-	for i := range projection.Proj {
-		if projection.Proj[i] == nil {
-			continue
-		}
+	if projection.Proj != nil {
 		anal := proc.GetAnalyze(projection.GetIdx(), projection.GetParallelIdx(), projection.GetParallelMajor())
-		anal.Alloc(int64(projection.Proj[i].MaxAllocSize))
-		projection.Proj[i].Free()
+		anal.Alloc(int64(projection.Proj.MaxAllocSize))
+		projection.Proj.Free()
+		projection.Proj = nil
+		projection.ProjectList = nil
 	}
-	projection.Proj = nil
-	projection.ProjectList = nil
 }

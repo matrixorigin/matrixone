@@ -56,6 +56,14 @@ func (markJoin *MarkJoin) Prepare(proc *process.Process) error {
 
 	if markJoin.Cond != nil {
 		markJoin.ctr.expr, err = colexec.NewExpressionExecutor(proc, markJoin.Cond)
+		if err != nil {
+			return err
+		}
+	}
+
+	if markJoin.ProjectList != nil {
+		markJoin.Projection = colexec.NewProjection(markJoin.ProjectList)
+		err = markJoin.Projection.Prepare(proc)
 	}
 	return err
 }
@@ -117,19 +125,27 @@ func (markJoin *MarkJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				proc.PutBatch(bat)
 				continue
 			}
+			anal.Input(bat, markJoin.GetIsFirst())
 			if ctr.bat == nil || ctr.bat.RowCount() == 0 {
-				if err = ctr.emptyProbe(bat, markJoin, proc, anal, markJoin.GetIsFirst(), markJoin.GetIsLast(), &result); err != nil {
+				if err = ctr.emptyProbe(bat, markJoin, proc, &result); err != nil {
 					bat.Clean(proc.Mp())
 					result.Status = vm.ExecStop
 					return result, err
 				}
 			} else {
-				if err = ctr.probe(bat, markJoin, proc, anal, markJoin.GetIsFirst(), markJoin.GetIsLast(), &result); err != nil {
+				if err = ctr.probe(bat, markJoin, proc, &result); err != nil {
 					bat.Clean(proc.Mp())
 					result.Status = vm.ExecStop
 					return result, err
 				}
 			}
+			if markJoin.Projection != nil {
+				result.Batch, err = markJoin.Projection.Eval(result.Batch, proc)
+				if err != nil {
+					return result, err
+				}
+			}
+			anal.Output(result.Batch, markJoin.GetIsLast())
 			proc.PutBatch(bat)
 			return result, nil
 
@@ -188,8 +204,7 @@ func (ctr *container) build(ap *MarkJoin, proc *process.Process, anal process.An
 	return ctr.receiveBatch(ap, proc, anal)
 }
 
-func (ctr *container) emptyProbe(bat *batch.Batch, ap *MarkJoin, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) (err error) {
-	anal.Input(bat, isFirst)
+func (ctr *container) emptyProbe(bat *batch.Batch, ap *MarkJoin, proc *process.Process, result *vm.CallResult) (err error) {
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
@@ -209,14 +224,12 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *MarkJoin, proc *process.P
 		}
 	}
 	ctr.rbat.AddRowCount(bat.RowCount())
-	anal.Output(ctr.rbat, isLast)
 
 	result.Batch = ctr.rbat
 	return nil
 }
 
-func (ctr *container) probe(bat *batch.Batch, ap *MarkJoin, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
-	anal.Input(bat, isFirst)
+func (ctr *container) probe(bat *batch.Batch, ap *MarkJoin, proc *process.Process, result *vm.CallResult) error {
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
@@ -300,7 +313,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *MarkJoin, proc *process.Proces
 		}
 	}
 	ctr.rbat.AddRowCount(bat.RowCount())
-	anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
 	return nil
 }

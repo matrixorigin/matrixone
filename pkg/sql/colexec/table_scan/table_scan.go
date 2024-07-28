@@ -43,13 +43,9 @@ func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 	if tableScan.TopValueMsgTag > 0 {
 		tableScan.ctr.msgReceiver = proc.NewMessageReceiver([]int32{tableScan.TopValueMsgTag}, tableScan.GetAddress())
 	}
-	tableScan.Projection = make([]*colexec.Projection, len(tableScan.ProjectList))
-	for i := range tableScan.ProjectList {
-		tableScan.Projection[i] = colexec.NewProjection(tableScan.ProjectList[i].Project)
-		err = tableScan.Projection[i].Prepare(proc)
-		if err != nil {
-			return
-		}
+	if tableScan.ProjectList != nil {
+		tableScan.Projection = colexec.NewProjection(tableScan.ProjectList)
+		err = tableScan.Projection.Prepare(proc)
 	}
 	return
 }
@@ -155,11 +151,8 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 
 	result.Batch = tableScan.ctr.buf
 	var err error
-	for i := range tableScan.Projection {
-		result.Batch, err = tableScan.Projection[i].Eval(result.Batch, proc)
-		if err != nil {
-			return result, err
-		}
+	if tableScan.Projection != nil {
+		result.Batch, err = tableScan.Projection.Eval(result.Batch, proc)
 	}
-	return result, nil
+	return result, err
 }

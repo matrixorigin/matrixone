@@ -495,6 +495,7 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 			IsShuffle:              t.IsShuffle,
 			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
 		}
+		in.ProjectList = t.ProjectList
 	case *shuffle.Shuffle:
 		in.Shuffle = &pipeline.Shuffle{}
 		in.Shuffle.ShuffleColIdx = t.ShuffleColIdx
@@ -544,6 +545,7 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 			Types:        convertToPlanTypes(t.Types),
 			Aggs:         convertToPipelineAggregates(t.Aggs),
 		}
+		in.ProjectList = t.ProjectList
 	case *sample.Sample:
 		t.ConvertToPipelineOperator(in)
 
@@ -560,6 +562,7 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 			HashOnPk:               t.HashOnPK,
 			IsShuffle:              t.IsShuffle,
 		}
+		in.ProjectList = t.ProjectList
 	case *left.LeftJoin:
 		relList, colList := getRelColList(t.Result)
 		in.LeftJoin = &pipeline.LeftJoin{
@@ -573,6 +576,7 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 			HashOnPk:               t.HashOnPK,
 			IsShuffle:              t.IsShuffle,
 		}
+		in.ProjectList = t.ProjectList
 	case *right.RightJoin:
 		rels, poses := getRelColList(t.Result)
 		in.RightJoin = &pipeline.RightJoin{
@@ -617,6 +621,7 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 			Expr:   t.Cond,
 			Types:  convertToPlanTypes(t.Typs),
 		}
+		in.ProjectList = t.ProjectList
 	case *loopjoin.LoopJoin:
 		relList, colList := getRelColList(t.Result)
 		in.Join = &pipeline.Join{
@@ -625,6 +630,7 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 			Expr:    t.Cond,
 			Types:   convertToPlanTypes(t.Typs),
 		}
+		in.ProjectList = t.ProjectList
 	case *loopleft.LoopLeft:
 		relList, colList := getRelColList(t.Result)
 		in.LeftJoin = &pipeline.LeftJoin{
@@ -633,12 +639,14 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 			Expr:    t.Cond,
 			Types:   convertToPlanTypes(t.Typs),
 		}
+		in.ProjectList = t.ProjectList
 	case *loopsemi.LoopSemi:
 		in.SemiJoin = &pipeline.SemiJoin{
 			Result: t.Result,
 			Expr:   t.Cond,
 			Types:  convertToPlanTypes(t.Typs),
 		}
+		in.ProjectList = t.ProjectList
 	case *loopsingle.LoopSingle:
 		relList, colList := getRelColList(t.Result)
 		in.SingleJoin = &pipeline.SingleJoin{
@@ -647,12 +655,14 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 			Expr:    t.Cond,
 			Types:   convertToPlanTypes(t.Typs),
 		}
+		in.ProjectList = t.ProjectList
 	case *loopmark.LoopMark:
 		in.MarkJoin = &pipeline.MarkJoin{
 			Expr:   t.Cond,
 			Types:  convertToPlanTypes(t.Typs),
 			Result: t.Result,
 		}
+		in.ProjectList = t.ProjectList
 	case *offset.Offset:
 		in.Offset = t.OffsetExpr
 	case *order.Order:
@@ -665,6 +675,7 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 			Types:     convertToPlanTypes(t.Typs),
 			IsShuffle: t.IsShuffle,
 		}
+		in.ProjectList = t.ProjectList
 	case *projection.Projection:
 		in.ProjectList = t.ProjectList
 	case *filter.Filter:
@@ -684,12 +695,14 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 			HashOnPk:               t.HashOnPK,
 			IsShuffle:              t.IsShuffle,
 		}
+		in.ProjectList = t.ProjectList
 	case *indexjoin.IndexJoin:
 		in.IndexJoin = &pipeline.IndexJoin{
 			Result:                 t.Result,
 			Types:                  convertToPlanTypes(t.Typs),
 			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
 		}
+		in.ProjectList = t.ProjectList
 	case *single.SingleJoin:
 		relList, colList := getRelColList(t.Result)
 		in.SingleJoin = &pipeline.SingleJoin{
@@ -702,6 +715,7 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
 			HashOnPk:               t.HashOnPK,
 		}
+		in.ProjectList = t.ProjectList
 	case *top.Top:
 		in.Limit = t.Limit
 		in.OrderBy = t.Fs
@@ -721,6 +735,7 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 		in.Agg = &pipeline.Group{
 			NeedEval: t.NeedEval,
 		}
+		in.ProjectList = t.ProjectList
 		EncodeMergeGroup(t, in.Agg)
 	case *mergelimit.MergeLimit:
 		in.Limit = t.Limit
@@ -747,6 +762,7 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 			OnList:    t.OnList,
 			HashOnPk:  t.HashOnPK,
 		}
+		in.ProjectList = t.ProjectList
 	case *table_function.TableFunction:
 		in.TableFunction = &pipeline.TableFunction{
 			Attrs:  t.Attrs,
@@ -773,6 +789,7 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 			FileList:        t.Es.FileList,
 			Filter:          t.Es.Filter.FilterExpr,
 		}
+		in.ProjectList = t.ProjectList
 	case *source.Source:
 		in.StreamScan = &pipeline.StreamScan{
 			TblDef: t.TblDef,
@@ -894,6 +911,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.HashOnPK = t.HashOnPk
 		arg.IsShuffle = t.IsShuffle
 		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
+		arg.ProjectList = opr.ProjectList
 		op = arg
 	case vm.Shuffle:
 		t := opr.GetShuffle()
@@ -955,6 +973,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Exprs = t.Exprs
 		arg.Types = convertToTypes(t.Types)
 		arg.Aggs = convertToAggregates(t.Aggs)
+		arg.ProjectList = opr.ProjectList
 		op = arg
 	case vm.Sample:
 		op = sample.GenerateFromPipelineOperator(opr)
@@ -969,6 +988,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
 		arg.HashOnPK = t.HashOnPk
 		arg.IsShuffle = t.IsShuffle
+		arg.ProjectList = opr.ProjectList
 		op = arg
 	case vm.Left:
 		t := opr.GetLeftJoin()
@@ -980,6 +1000,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
 		arg.HashOnPK = t.HashOnPk
 		arg.IsShuffle = t.IsShuffle
+		arg.ProjectList = opr.ProjectList
 		op = arg
 	case vm.Right:
 		t := opr.GetRightJoin()
@@ -1023,6 +1044,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Result = t.Result
 		arg.Cond = t.Expr
 		arg.Typs = convertToTypes(t.Types)
+		arg.ProjectList = opr.ProjectList
 		op = arg
 	case vm.LoopJoin:
 		t := opr.GetJoin()
@@ -1030,6 +1052,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.Cond = t.Expr
 		arg.Typs = convertToTypes(t.Types)
+		arg.ProjectList = opr.ProjectList
 		op = arg
 	case vm.LoopLeft:
 		t := opr.GetLeftJoin()
@@ -1037,6 +1060,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.Cond = t.Expr
 		arg.Typs = convertToTypes(t.Types)
+		arg.ProjectList = opr.ProjectList
 		op = arg
 	case vm.LoopSemi:
 		t := opr.GetSemiJoin()
@@ -1044,6 +1068,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Result = t.Result
 		arg.Cond = t.Expr
 		arg.Typs = convertToTypes(t.Types)
+		arg.ProjectList = opr.ProjectList
 		op = arg
 	case vm.IndexJoin:
 		t := opr.GetIndexJoin()
@@ -1051,6 +1076,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Result = t.Result
 		arg.Typs = convertToTypes(t.Types)
 		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
+		arg.ProjectList = opr.ProjectList
 		op = arg
 	case vm.LoopSingle:
 		t := opr.GetSingleJoin()
@@ -1058,6 +1084,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.Cond = t.Expr
 		arg.Typs = convertToTypes(t.Types)
+		arg.ProjectList = opr.ProjectList
 		op = arg
 	case vm.LoopMark:
 		t := opr.GetMarkJoin()
@@ -1065,6 +1092,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Result = t.Result
 		arg.Cond = t.Expr
 		arg.Typs = convertToTypes(t.Types)
+		arg.ProjectList = opr.ProjectList
 		op = arg
 	case vm.Offset:
 		op = offset.NewArgument().WithOffset(opr.Offset)
@@ -1078,6 +1106,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.Typs = convertToTypes(t.Types)
 		arg.IsShuffle = t.IsShuffle
+		arg.ProjectList = opr.ProjectList
 		op = arg
 	case vm.ProductL2:
 		t := opr.GetProductL2()
@@ -1085,6 +1114,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.Typs = convertToTypes(t.Types)
 		arg.OnExpr = t.Expr
+		arg.ProjectList = opr.ProjectList
 		op = arg
 	case vm.Projection:
 		arg := projection.NewArgument()
@@ -1105,6 +1135,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
 		arg.HashOnPK = t.HashOnPk
 		arg.IsShuffle = t.IsShuffle
+		arg.ProjectList = opr.ProjectList
 		op = arg
 	case vm.Single:
 		t := opr.GetSingleJoin()
@@ -1115,6 +1146,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Conditions = [][]*plan.Expr{t.LeftCond, t.RightCond}
 		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
 		arg.HashOnPK = t.HashOnPk
+		arg.ProjectList = opr.ProjectList
 		op = arg
 	case vm.Mark:
 		t := opr.GetMarkJoin()
@@ -1125,6 +1157,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Cond = t.Expr
 		arg.OnList = t.OnList
 		arg.HashOnPK = t.HashOnPk
+		arg.ProjectList = opr.ProjectList
 		op = arg
 	case vm.Top:
 		op = top.NewArgument().
@@ -1148,6 +1181,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 	case vm.MergeGroup:
 		arg := mergegroup.NewArgument()
 		arg.NeedEval = opr.Agg.NeedEval
+		arg.ProjectList = opr.ProjectList
 		op = arg
 		DecodeMergeGroup(op.(*mergegroup.MergeGroup), opr.Agg)
 	case vm.MergeLimit:
@@ -1195,12 +1229,14 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 				},
 			},
 		)
+		op.(*external.External).ProjectList = opr.ProjectList
 	case vm.Source:
 		t := opr.GetStreamScan()
 		arg := source.NewArgument()
 		arg.TblDef = t.TblDef
 		arg.Limit = t.Limit
 		arg.Offset = t.Offset
+		arg.ProjectList = opr.ProjectList
 		arg.ProjectList = opr.ProjectList
 		op = arg
 	case vm.TableScan:

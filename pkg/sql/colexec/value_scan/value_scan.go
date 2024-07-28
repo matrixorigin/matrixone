@@ -35,15 +35,11 @@ func (valueScan *ValueScan) OpType() vm.OpType {
 
 func (valueScan *ValueScan) Prepare(proc *process.Process) (err error) {
 	valueScan.ctr = new(container)
-	valueScan.Projection = make([]*colexec.Projection, len(valueScan.ProjectList))
-	for i := range valueScan.ProjectList {
-		valueScan.Projection[i] = colexec.NewProjection(valueScan.ProjectList[i].Project)
-		err = valueScan.Projection[i].Prepare(proc)
-		if err != nil {
-			return
-		}
+	if valueScan.ProjectList != nil {
+		valueScan.Projection = colexec.NewProjection(valueScan.ProjectList)
+		err = valueScan.Projection.Prepare(proc)
 	}
-	return nil
+	return
 }
 
 func (valueScan *ValueScan) Call(proc *process.Process) (vm.CallResult, error) {
@@ -70,12 +66,9 @@ func (valueScan *ValueScan) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	var err error
-	for i := range valueScan.Projection {
-		result.Batch, err = valueScan.Projection[i].Eval(result.Batch, proc)
-		if err != nil {
-			return result, err
-		}
+	if valueScan.Projection != nil {
+		result.Batch, err = valueScan.Projection.Eval(result.Batch, proc)
 	}
 
-	return result, nil
+	return result, err
 }

@@ -69,11 +69,13 @@ type container struct {
 }
 
 type InnerJoin struct {
-	ctr        *container
-	Result     []colexec.ResultPos
-	Typs       []types.Type
-	Cond       *plan.Expr
-	Conditions [][]*plan.Expr
+	ctr         *container
+	Result      []colexec.ResultPos
+	Typs        []types.Type
+	Cond        *plan.Expr
+	Conditions  [][]*plan.Expr
+	ProjectList []*plan.Expr
+	Projection  *colexec.Projection
 
 	HashOnPK           bool
 	IsShuffle          bool
@@ -119,6 +121,7 @@ func (innerJoin *InnerJoin) Reset(proc *process.Process, pipelineFailed bool, er
 
 func (innerJoin *InnerJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := innerJoin.ctr
+	anal := proc.GetAnalyze(innerJoin.GetIdx(), innerJoin.GetParallelIdx(), innerJoin.GetParallelMajor())
 	if ctr != nil {
 		ctr.cleanBatch(proc)
 		ctr.cleanEvalVectors()
@@ -126,7 +129,6 @@ func (innerJoin *InnerJoin) Free(proc *process.Process, pipelineFailed bool, err
 		ctr.cleanExprExecutor()
 		ctr.FreeAllReg()
 
-		anal := proc.GetAnalyze(innerJoin.GetIdx(), innerJoin.GetParallelIdx(), innerJoin.GetParallelMajor())
 		anal.Alloc(ctr.maxAllocSize)
 
 		if innerJoin.ctr.bat != nil {
@@ -135,6 +137,12 @@ func (innerJoin *InnerJoin) Free(proc *process.Process, pipelineFailed bool, err
 		}
 		innerJoin.ctr.lastrow = 0
 		innerJoin.ctr = nil
+	}
+	if innerJoin.Projection != nil {
+		anal.Alloc(innerJoin.Projection.MaxAllocSize)
+		innerJoin.Projection.Free()
+		innerJoin.Projection = nil
+		innerJoin.ProjectList = nil
 	}
 }
 

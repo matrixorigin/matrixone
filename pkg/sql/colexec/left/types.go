@@ -69,11 +69,13 @@ type container struct {
 }
 
 type LeftJoin struct {
-	ctr        *container
-	Result     []colexec.ResultPos
-	Typs       []types.Type
-	Cond       *plan.Expr
-	Conditions [][]*plan.Expr
+	ctr         *container
+	Result      []colexec.ResultPos
+	Typs        []types.Type
+	Cond        *plan.Expr
+	Conditions  [][]*plan.Expr
+	ProjectList []*plan.Expr
+	Projection  *colexec.Projection
 
 	HashOnPK           bool
 	IsShuffle          bool
@@ -119,6 +121,7 @@ func (leftJoin *LeftJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 
 func (leftJoin *LeftJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := leftJoin.ctr
+	anal := proc.GetAnalyze(leftJoin.GetIdx(), leftJoin.GetParallelIdx(), leftJoin.GetParallelMajor())
 	if ctr != nil {
 		ctr.cleanBatch(proc)
 		ctr.cleanHashMap()
@@ -126,7 +129,6 @@ func (leftJoin *LeftJoin) Free(proc *process.Process, pipelineFailed bool, err e
 		ctr.cleanEvalVectors()
 		ctr.FreeAllReg()
 
-		anal := proc.GetAnalyze(leftJoin.GetIdx(), leftJoin.GetParallelIdx(), leftJoin.GetParallelMajor())
 		anal.Alloc(ctr.maxAllocSize)
 
 		if leftJoin.ctr.bat != nil {
@@ -135,6 +137,12 @@ func (leftJoin *LeftJoin) Free(proc *process.Process, pipelineFailed bool, err e
 		}
 		leftJoin.ctr.lastrow = 0
 		leftJoin.ctr = nil
+	}
+	if leftJoin.Projection != nil {
+		anal.Alloc(leftJoin.Projection.MaxAllocSize)
+		leftJoin.Projection.Free()
+		leftJoin.Projection = nil
+		leftJoin.ProjectList = nil
 	}
 }
 

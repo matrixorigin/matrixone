@@ -125,12 +125,11 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 		ctr.typ = HStr
 	}
 
-	group.Projection = make([]*colexec.Projection, len(group.ProjectList))
-	for i := range group.ProjectList {
-		group.Projection[i] = colexec.NewProjection(group.ProjectList[i].Project)
-		err := group.Projection[i].Prepare(proc)
+	if group.ProjectList != nil {
+		group.Projection = colexec.NewProjection(group.ProjectList)
+		err = group.Projection.Prepare(proc)
 		if err != nil {
-			return err
+			return
 		}
 	}
 
@@ -151,8 +150,8 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, err
 	}
 
-	for i := range group.Projection {
-		result.Batch, err = group.Projection[i].Eval(result.Batch, proc)
+	if group.Projection != nil {
+		result.Batch, err = group.Projection.Eval(result.Batch, proc)
 		if err != nil {
 			return result, err
 		}

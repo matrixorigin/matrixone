@@ -30,8 +30,8 @@ type Filter struct {
 	E           *plan.Expr
 	exeExpr     *plan.Expr
 	IsEnd       bool
-	ProjectList []*plan.ProjectList
-	Projection  []*colexec.Projection
+	ProjectList []*plan.Expr
+	Projection  *colexec.Projection
 
 	vm.OperatorBase
 }
@@ -89,13 +89,13 @@ func (filter *Filter) Free(proc *process.Process, pipelineFailed bool, err error
 		filter.ctr.cleanExecutor()
 		filter.ctr = nil
 	}
-	for i := range filter.Projection {
-		if filter.Projection[i] != nil {
-			filter.Projection[i].Free()
-		}
+	if filter.Projection != nil {
+		anal := proc.GetAnalyze(filter.GetIdx(), filter.GetParallelIdx(), filter.GetParallelMajor())
+		anal.Alloc(filter.Projection.MaxAllocSize)
+		filter.Projection.Free()
+		filter.Projection = nil
+		filter.ProjectList = nil
 	}
-	filter.Projection = nil
-	filter.ProjectList = nil
 }
 
 func (ctr *container) cleanExecutor() {

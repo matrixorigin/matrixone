@@ -44,10 +44,13 @@ type container struct {
 }
 
 type Productl2 struct {
-	ctr    *container
-	Typs   []types.Type
-	Result []colexec.ResultPos
-	OnExpr *plan.Expr
+	ctr         *container
+	Typs        []types.Type
+	Result      []colexec.ResultPos
+	OnExpr      *plan.Expr
+	ProjectList []*plan.Expr
+	Projection  *colexec.Projection
+
 	vm.OperatorBase
 }
 
@@ -93,6 +96,13 @@ func (productl2 *Productl2) Free(proc *process.Process, pipelineFailed bool, err
 		ctr.cleanBatch(mp)
 		ctr.FreeAllReg()
 		productl2.ctr = nil
+	}
+	if productl2.Projection != nil {
+		anal := proc.GetAnalyze(productl2.GetIdx(), productl2.GetParallelIdx(), productl2.GetParallelMajor())
+		anal.Alloc(productl2.Projection.MaxAllocSize)
+		productl2.Projection.Free()
+		productl2.Projection = nil
+		productl2.ProjectList = nil
 	}
 }
 

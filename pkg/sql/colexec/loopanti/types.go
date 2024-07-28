@@ -47,10 +47,12 @@ type container struct {
 }
 
 type LoopAnti struct {
-	ctr    *container
-	Result []int32
-	Cond   *plan.Expr
-	Typs   []types.Type
+	ctr         *container
+	Result      []int32
+	Cond        *plan.Expr
+	Typs        []types.Type
+	ProjectList []*plan.Expr
+	Projection  *colexec.Projection
 
 	vm.OperatorBase
 }
@@ -101,6 +103,13 @@ func (loopAnti *LoopAnti) Free(proc *process.Process, pipelineFailed bool, err e
 		//}
 		loopAnti.ctr.lastrow = 0
 		loopAnti.ctr = nil
+	}
+	if loopAnti.Projection != nil {
+		anal := proc.GetAnalyze(loopAnti.GetIdx(), loopAnti.GetParallelIdx(), loopAnti.GetParallelMajor())
+		anal.Alloc(loopAnti.Projection.MaxAllocSize)
+		loopAnti.Projection.Free()
+		loopAnti.Projection = nil
+		loopAnti.ProjectList = nil
 	}
 }
 

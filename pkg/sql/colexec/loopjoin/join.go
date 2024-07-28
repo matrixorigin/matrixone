@@ -43,6 +43,14 @@ func (loopJoin *LoopJoin) Prepare(proc *process.Process) error {
 
 	if loopJoin.Cond != nil {
 		loopJoin.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopJoin.Cond)
+		if err != nil {
+			return err
+		}
+	}
+
+	if loopJoin.ProjectList != nil {
+		loopJoin.Projection = colexec.NewProjection(loopJoin.ProjectList)
+		err = loopJoin.Projection.Prepare(proc)
 	}
 	return err
 }
@@ -72,31 +80,41 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 		case Probe:
-			if ctr.inBat != nil {
-				err = ctr.probe(loopJoin, proc, anal, loopJoin.GetIsLast(), &result)
+			if ctr.inBat == nil {
+				msg := ctr.ReceiveFromSingleReg(0, anal)
+				if msg.Err != nil {
+					return result, msg.Err
+				}
+				ctr.inBat = msg.Batch
+				if ctr.inBat == nil {
+					ctr.state = End
+					continue
+				}
+				if ctr.inBat.IsEmpty() {
+					proc.PutBatch(ctr.inBat)
+					ctr.inBat = nil
+					continue
+				}
+				if ctr.bat == nil || ctr.bat.RowCount() == 0 {
+					proc.PutBatch(ctr.inBat)
+					ctr.inBat = nil
+					continue
+				}
+				anal.Input(ctr.inBat, loopJoin.GetIsFirst())
+			}
+
+			err = ctr.probe(loopJoin, proc, &result)
+			if err != nil {
 				return result, err
 			}
-			msg := ctr.ReceiveFromSingleReg(0, anal)
-			if msg.Err != nil {
-				return result, msg.Err
+
+			if loopJoin.Projection != nil {
+				result.Batch, err = loopJoin.Projection.Eval(result.Batch, proc)
+				if err != nil {
+					return result, err
+				}
 			}
-			ctr.inBat = msg.Batch
-			if ctr.inBat == nil {
-				ctr.state = End
-				continue
-			}
-			if ctr.inBat.IsEmpty() {
-				proc.PutBatch(ctr.inBat)
-				ctr.inBat = nil
-				continue
-			}
-			if ctr.bat == nil || ctr.bat.RowCount() == 0 {
-				proc.PutBatch(ctr.inBat)
-				ctr.inBat = nil
-				continue
-			}
-			anal.Input(ctr.inBat, loopJoin.GetIsFirst())
-			err = ctr.probe(loopJoin, proc, anal, loopJoin.GetIsLast(), &result)
+			anal.Output(result.Batch, loopJoin.GetIsLast())
 			return result, err
 		default:
 			result.Batch = nil
@@ -126,7 +144,7 @@ func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
 	return nil
 }
 
-func (ctr *container) probe(ap *LoopJoin, proc *process.Process, anal process.Analyze, isLast bool, result *vm.CallResult) error {
+func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.CallResult) error {
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
@@ -195,7 +213,6 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, anal process.An
 			}
 		}
 		if rowCountIncrease >= colexec.DefaultBatchSize {
-			anal.Output(ctr.rbat, isLast)
 			result.Batch = ctr.rbat
 			ctr.rbat.SetRowCount(rowCountIncrease)
 			ctr.probeIdx = i + 1
@@ -205,7 +222,6 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, anal process.An
 
 	ctr.probeIdx = 0
 	ctr.rbat.SetRowCount(rowCountIncrease)
-	anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
 	proc.PutBatch(ctr.inBat)
 	ctr.inBat = nil

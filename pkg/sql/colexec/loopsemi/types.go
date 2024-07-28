@@ -48,10 +48,13 @@ type container struct {
 }
 
 type LoopSemi struct {
-	ctr    *container
-	Result []int32
-	Cond   *plan.Expr
-	Typs   []types.Type
+	ctr         *container
+	Result      []int32
+	Cond        *plan.Expr
+	Typs        []types.Type
+	ProjectList []*plan.Expr
+	Projection  *colexec.Projection
+
 	vm.OperatorBase
 }
 
@@ -101,6 +104,14 @@ func (loopSemi *LoopSemi) Free(proc *process.Process, pipelineFailed bool, err e
 		//}
 		loopSemi.ctr.lastrow = 0
 		loopSemi.ctr = nil
+	}
+
+	if loopSemi.Projection != nil {
+		anal := proc.GetAnalyze(loopSemi.GetIdx(), loopSemi.GetParallelIdx(), loopSemi.GetParallelMajor())
+		anal.Alloc(loopSemi.Projection.MaxAllocSize)
+		loopSemi.Projection.Free()
+		loopSemi.Projection = nil
+		loopSemi.ProjectList = nil
 	}
 }
 

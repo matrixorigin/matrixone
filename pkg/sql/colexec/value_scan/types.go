@@ -31,8 +31,8 @@ type container struct {
 type ValueScan struct {
 	ctr         *container
 	Batchs      []*batch.Batch
-	ProjectList []*plan.ProjectList
-	Projection  []*colexec.Projection
+	ProjectList []*plan.Expr
+	Projection  *colexec.Projection
 
 	vm.OperatorBase
 }
@@ -83,11 +83,9 @@ func (valueScan *ValueScan) Free(proc *process.Process, pipelineFailed bool, err
 		valueScan.ctr.idx = 0
 		valueScan.ctr = nil
 	}
-	for i := range valueScan.Projection {
-		if valueScan.Projection[i] != nil {
-			valueScan.Projection[i].Free()
-		}
+	if valueScan.Projection != nil {
+		valueScan.Projection.Free()
+		valueScan.Projection = nil
+		valueScan.ProjectList = nil
 	}
-	valueScan.Projection = nil
-	valueScan.ProjectList = nil
 }

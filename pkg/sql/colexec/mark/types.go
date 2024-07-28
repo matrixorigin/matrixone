@@ -156,6 +156,9 @@ type MarkJoin struct {
 	OnList   []*plan.Expr
 	HashOnPK bool
 
+	ProjectList []*plan.Expr
+	Projection  *colexec.Projection
+
 	vm.OperatorBase
 }
 
@@ -196,6 +199,7 @@ func (markJoin *MarkJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 
 func (markJoin *MarkJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := markJoin.ctr
+	anal := proc.GetAnalyze(markJoin.GetIdx(), markJoin.GetParallelIdx(), markJoin.GetParallelMajor())
 	if ctr != nil {
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
@@ -205,9 +209,15 @@ func (markJoin *MarkJoin) Free(proc *process.Process, pipelineFailed bool, err e
 		ctr.cleanExprExecutor()
 		ctr.FreeAllReg()
 
-		anal := proc.GetAnalyze(markJoin.GetIdx(), markJoin.GetParallelIdx(), markJoin.GetParallelMajor())
 		anal.Alloc(ctr.maxAllocSize)
 		markJoin.ctr = nil
+	}
+
+	if markJoin.Projection != nil {
+		anal.Alloc(markJoin.Projection.MaxAllocSize)
+		markJoin.Projection.Free()
+		markJoin.Projection = nil
+		markJoin.ProjectList = nil
 	}
 }
 

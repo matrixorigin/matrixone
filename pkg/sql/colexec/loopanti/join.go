@@ -44,6 +44,14 @@ func (loopAnti *LoopAnti) Prepare(proc *process.Process) error {
 
 	if loopAnti.Cond != nil {
 		loopAnti.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopAnti.Cond)
+		if err != nil {
+			return err
+		}
+	}
+
+	if loopAnti.ProjectList != nil {
+		loopAnti.Projection = colexec.NewProjection(loopAnti.ProjectList)
+		err = loopAnti.Projection.Prepare(proc)
 	}
 	return err
 }
@@ -87,14 +95,25 @@ func (loopAnti *LoopAnti) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			if ctr.bat == nil || ctr.bat.RowCount() == 0 {
-				err = ctr.emptyProbe(loopAnti, proc, anal, loopAnti.GetIsFirst(), loopAnti.GetIsLast(), &result)
+				err = ctr.emptyProbe(loopAnti, proc, anal, loopAnti.GetIsFirst(), &result)
 			} else {
-				err = ctr.probe(loopAnti, proc, anal, loopAnti.GetIsFirst(), loopAnti.GetIsLast(), &result)
+				err = ctr.probe(loopAnti, proc, anal, loopAnti.GetIsFirst(), &result)
+			}
+			if err != nil {
+				return result, err
 			}
 			if loopAnti.ctr.lastrow == 0 {
 				proc.PutBatch(loopAnti.ctr.buf)
 				loopAnti.ctr.buf = nil
 			}
+
+			if loopAnti.Projection != nil {
+				result.Batch, err = loopAnti.Projection.Eval(result.Batch, proc)
+				if err != nil {
+					return result, err
+				}
+			}
+			anal.Output(result.Batch, loopAnti.GetIsLast())
 			return result, err
 		default:
 			result.Batch = nil
@@ -124,7 +143,7 @@ func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
 	return nil
 }
 
-func (ctr *container) emptyProbe(ap *LoopAnti, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
+func (ctr *container) emptyProbe(ap *LoopAnti, proc *process.Process, anal process.Analyze, isFirst bool, result *vm.CallResult) error {
 	anal.Input(ap.ctr.buf, isFirst)
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
@@ -141,13 +160,12 @@ func (ctr *container) emptyProbe(ap *LoopAnti, proc *process.Process, anal proce
 		}
 	}
 	ctr.rbat.AddRowCount(ap.ctr.buf.RowCount())
-	anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
 	ap.ctr.lastrow = 0
 	return nil
 }
 
-func (ctr *container) probe(ap *LoopAnti, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
+func (ctr *container) probe(ap *LoopAnti, proc *process.Process, anal process.Analyze, isFirst bool, result *vm.CallResult) error {
 	anal.Input(ap.ctr.buf, isFirst)
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
@@ -166,7 +184,6 @@ func (ctr *container) probe(ap *LoopAnti, proc *process.Process, anal process.An
 	for i := ap.ctr.lastrow; i < count; i++ {
 		if rowCountIncrease >= colexec.DefaultBatchSize {
 			ctr.rbat.SetRowCount(ctr.rbat.RowCount() + rowCountIncrease)
-			anal.Output(ctr.rbat, isLast)
 			result.Batch = ctr.rbat
 			ap.ctr.lastrow = i
 			return nil
@@ -199,7 +216,6 @@ func (ctr *container) probe(ap *LoopAnti, proc *process.Process, anal process.An
 		}
 	}
 	ctr.rbat.SetRowCount(ctr.rbat.RowCount() + rowCountIncrease)
-	anal.Output(ctr.rbat, isLast)
 
 	result.Batch = ctr.rbat
 	ap.ctr.lastrow = 0

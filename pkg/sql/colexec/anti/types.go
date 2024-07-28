@@ -74,6 +74,8 @@ type AntiJoin struct {
 	HashOnPK           bool
 	IsShuffle          bool
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
+	ProjectList        []*plan.Expr
+	Projection         *colexec.Projection
 
 	vm.OperatorBase
 }
@@ -115,6 +117,7 @@ func (antiJoin *AntiJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 
 func (antiJoin *AntiJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := antiJoin.ctr
+	anal := proc.GetAnalyze(antiJoin.GetIdx(), antiJoin.GetParallelIdx(), antiJoin.GetParallelMajor())
 	if ctr != nil {
 		ctr.cleanBatch(proc)
 		ctr.cleanEvalVectors()
@@ -122,12 +125,17 @@ func (antiJoin *AntiJoin) Free(proc *process.Process, pipelineFailed bool, err e
 		ctr.cleanExprExecutor()
 		ctr.FreeAllReg()
 
-		anal := proc.GetAnalyze(antiJoin.GetIdx(), antiJoin.GetParallelIdx(), antiJoin.GetParallelMajor())
 		anal.Alloc(ctr.maxAllocSize)
 
 		antiJoin.ctr.lastrow = 0
 
 		antiJoin.ctr = nil
+	}
+	if antiJoin.Projection != nil {
+		anal.Alloc(antiJoin.Projection.MaxAllocSize)
+		antiJoin.Projection.Free()
+		antiJoin.Projection = nil
+		antiJoin.ProjectList = nil
 	}
 }
 

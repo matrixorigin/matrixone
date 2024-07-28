@@ -40,8 +40,8 @@ type Source struct {
 	TblDef      *plan.TableDef
 	Offset      int64
 	Limit       int64
-	ProjectList []*plan.ProjectList
-	Projection  []*colexec.Projection
+	ProjectList []*plan.Expr
+	Projection  *colexec.Projection
 
 	// end     bool
 	attrs   []string
@@ -94,11 +94,11 @@ func (source *Source) Free(proc *process.Process, pipelineFailed bool, err error
 		}
 		source.ctr = nil
 	}
-	for i := range source.Projection {
-		if source.Projection[i] != nil {
-			source.Projection[i].Free()
-		}
+	if source.Projection != nil {
+		anal := proc.GetAnalyze(source.GetIdx(), source.GetParallelIdx(), source.GetParallelMajor())
+		anal.Alloc(source.Projection.MaxAllocSize)
+		source.Projection.Free()
+		source.Projection = nil
+		source.ProjectList = nil
 	}
-	source.Projection = nil
-	source.ProjectList = nil
 }

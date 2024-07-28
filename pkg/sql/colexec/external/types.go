@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
@@ -104,8 +105,10 @@ type container struct {
 	buf          *batch.Batch
 }
 type External struct {
-	ctr *container
-	Es  *ExternalParam
+	ctr         *container
+	Es          *ExternalParam
+	ProjectList []*plan.Expr
+	Projection  *colexec.Projection
 
 	vm.OperatorBase
 }
@@ -151,14 +154,20 @@ func (external *External) Reset(proc *process.Process, pipelineFailed bool, err 
 }
 
 func (external *External) Free(proc *process.Process, pipelineFailed bool, err error) {
+	anal := proc.GetAnalyze(external.GetIdx(), external.GetParallelIdx(), external.GetParallelMajor())
 	if external.ctr != nil {
 		if external.ctr.buf != nil {
 			external.ctr.buf.Clean(proc.Mp())
 			external.ctr.buf = nil
 		}
-		anal := proc.GetAnalyze(external.GetIdx(), external.GetParallelIdx(), external.GetParallelMajor())
 		anal.Alloc(int64(external.ctr.maxAllocSize))
 		external.ctr = nil
+	}
+	if external.Projection != nil {
+		anal.Alloc(external.Projection.MaxAllocSize)
+		external.Projection.Free()
+		external.Projection = nil
+		external.ProjectList = nil
 	}
 }
 

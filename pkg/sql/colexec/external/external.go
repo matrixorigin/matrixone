@@ -134,6 +134,13 @@ func (external *External) Prepare(proc *process.Process) error {
 	}
 	param.Filter.columnMap, _, _, _ = plan2.GetColumnsByExpr(param.Filter.FilterExpr, param.tableDef)
 	param.Filter.zonemappable = plan2.ExprIsZonemappable(proc.Ctx, param.Filter.FilterExpr)
+	if external.ProjectList != nil {
+		external.Projection = colexec.NewProjection(external.ProjectList)
+		err := external.Projection.Prepare(proc)
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -181,13 +188,19 @@ func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	if external.ctr.buf != nil {
-		anal.Output(external.ctr.buf, external.GetIsLast())
 		external.ctr.maxAllocSize = max(external.ctr.maxAllocSize, external.ctr.buf.Size())
 	}
 	result.Batch = external.ctr.buf
 	if result.Batch != nil {
 		result.Batch.ShuffleIDX = int32(param.Idx)
 	}
+	if external.Projection != nil {
+		result.Batch, err = external.Projection.Eval(result.Batch, proc)
+		if err != nil {
+			return result, err
+		}
+	}
+	anal.Output(result.Batch, external.GetIsLast())
 	return result, nil
 }
 

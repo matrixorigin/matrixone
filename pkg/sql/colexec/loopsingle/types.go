@@ -46,10 +46,12 @@ type container struct {
 }
 
 type LoopSingle struct {
-	ctr    *container
-	Cond   *plan.Expr
-	Typs   []types.Type
-	Result []colexec.ResultPos
+	ctr         *container
+	Cond        *plan.Expr
+	Typs        []types.Type
+	Result      []colexec.ResultPos
+	ProjectList []*plan.Expr
+	Projection  *colexec.Projection
 
 	vm.OperatorBase
 }
@@ -95,6 +97,13 @@ func (loopSingle *LoopSingle) Free(proc *process.Process, pipelineFailed bool, e
 		ctr.cleanExprExecutor()
 		ctr.FreeAllReg()
 		loopSingle.ctr = nil
+	}
+	if loopSingle.Projection != nil {
+		anal := proc.GetAnalyze(loopSingle.GetIdx(), loopSingle.GetParallelIdx(), loopSingle.GetParallelMajor())
+		anal.Alloc(loopSingle.Projection.MaxAllocSize)
+		loopSingle.Projection.Free()
+		loopSingle.Projection = nil
+		loopSingle.ProjectList = nil
 	}
 }
 

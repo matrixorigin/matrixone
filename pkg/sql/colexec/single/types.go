@@ -67,11 +67,13 @@ type container struct {
 }
 
 type SingleJoin struct {
-	ctr        *container
-	Typs       []types.Type
-	Cond       *plan.Expr
-	Conditions [][]*plan.Expr
-	Result     []colexec.ResultPos
+	ctr         *container
+	Typs        []types.Type
+	Cond        *plan.Expr
+	Conditions  [][]*plan.Expr
+	Result      []colexec.ResultPos
+	ProjectList []*plan.Expr
+	Projection  *colexec.Projection
 
 	HashOnPK           bool
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
@@ -116,6 +118,7 @@ func (singleJoin *SingleJoin) Reset(proc *process.Process, pipelineFailed bool, 
 
 func (singleJoin *SingleJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := singleJoin.ctr
+	anal := proc.GetAnalyze(singleJoin.GetIdx(), singleJoin.GetParallelIdx(), singleJoin.GetParallelMajor())
 	if ctr != nil {
 		ctr.cleanBatch(proc)
 		ctr.cleanEvalVectors()
@@ -123,9 +126,14 @@ func (singleJoin *SingleJoin) Free(proc *process.Process, pipelineFailed bool, e
 		ctr.cleanExprExecutor()
 		ctr.FreeAllReg()
 
-		anal := proc.GetAnalyze(singleJoin.GetIdx(), singleJoin.GetParallelIdx(), singleJoin.GetParallelMajor())
 		anal.Alloc(ctr.maxAllocSize)
 		singleJoin.ctr = nil
+	}
+	if singleJoin.Projection != nil {
+		anal.Alloc(singleJoin.Projection.MaxAllocSize)
+		singleJoin.Projection.Free()
+		singleJoin.Projection = nil
+		singleJoin.ProjectList = nil
 	}
 }
 

@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -59,6 +60,8 @@ type MergeGroup struct {
 
 	PartialResults     []any
 	PartialResultTypes []types.T
+	ProjectList        []*plan.Expr
+	Projection         *colexec.Projection
 
 	vm.OperatorBase
 }
@@ -111,6 +114,11 @@ func (mergeGroup *MergeGroup) Free(proc *process.Process, pipelineFailed bool, e
 		ctr.cleanBatch(mp)
 		ctr.cleanHashMap()
 		mergeGroup.ctr = nil
+	}
+	if mergeGroup.Projection != nil {
+		mergeGroup.Projection.Free()
+		mergeGroup.Projection = nil
+		mergeGroup.ProjectList = nil
 	}
 }
 

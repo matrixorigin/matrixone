@@ -131,6 +131,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.HashOnPK = t.HashOnPK
 		op.IsShuffle = t.IsShuffle
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.Group:
@@ -142,6 +143,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Exprs = t.Exprs
 		op.Types = t.Types
 		op.Aggs = t.Aggs
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.Sample:
@@ -159,6 +161,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
 		op.HashOnPK = t.HashOnPK
 		op.IsShuffle = t.IsShuffle
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.Left:
@@ -171,6 +174,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
 		op.HashOnPK = t.HashOnPK
 		op.IsShuffle = t.IsShuffle
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.Right:
@@ -222,6 +226,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Result = t.Result
 		op.Cond = t.Cond
 		op.Typs = t.Typs
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.LoopJoin:
@@ -230,6 +235,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Result = t.Result
 		op.Cond = t.Cond
 		op.Typs = t.Typs
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.IndexJoin:
@@ -238,6 +244,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Result = t.Result
 		op.Typs = t.Typs
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.LoopLeft:
@@ -246,6 +253,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Cond = t.Cond
 		op.Typs = t.Typs
 		op.Result = t.Result
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.LoopSemi:
@@ -254,6 +262,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Result = t.Result
 		op.Cond = t.Cond
 		op.Typs = t.Typs
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.LoopSingle:
@@ -262,6 +271,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Result = t.Result
 		op.Cond = t.Cond
 		op.Typs = t.Typs
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.LoopMark:
@@ -270,6 +280,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Result = t.Result
 		op.Cond = t.Cond
 		op.Typs = t.Typs
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.Offset:
@@ -290,6 +301,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Result = t.Result
 		op.Typs = t.Typs
 		op.IsShuffle = t.IsShuffle
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.ProductL2:
@@ -298,6 +310,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Result = t.Result
 		op.Typs = t.Typs
 		op.OnExpr = t.OnExpr
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.Projection:
@@ -326,6 +339,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
 		op.HashOnPK = t.HashOnPK
 		op.IsShuffle = t.IsShuffle
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.Single:
@@ -337,6 +351,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Conditions = t.Conditions
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
 		op.HashOnPK = t.HashOnPK
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.Top:
@@ -379,6 +394,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.NeedEval = t.NeedEval
 		op.PartialResults = t.PartialResults
 		op.PartialResultTypes = t.PartialResultTypes
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.MergeLimit:
@@ -415,6 +431,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Cond = t.Cond
 		op.OnList = t.OnList
 		op.HashOnPK = t.HashOnPK
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.TableFunction:
@@ -455,6 +472,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 				},
 			},
 		)
+		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.Source:
@@ -464,6 +482,7 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		op.Limit = t.Limit
 		op.Offset = t.Offset
 		op.Configs = t.Configs
+		op.ProjectList = t.ProjectList
 		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
@@ -782,7 +801,7 @@ func constructInsert(n *plan.Node, eg engine.Engine) (*insert.Insert, error) {
 
 func constructProjection(n *plan.Node) *projection.Projection {
 	arg := projection.NewArgument()
-	arg.ProjectList = []*plan.ProjectList{{Project: n.ProjectList}}
+	arg.ProjectList = n.ProjectList
 	return arg
 }
 

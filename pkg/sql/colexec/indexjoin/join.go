@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -38,6 +39,10 @@ func (indexJoin *IndexJoin) Prepare(proc *process.Process) (err error) {
 	ap := indexJoin
 	ap.ctr = new(container)
 	ap.ctr.InitReceiver(proc, false)
+	if indexJoin.ProjectList != nil {
+		indexJoin.Projection = colexec.NewProjection(indexJoin.ProjectList)
+		err = indexJoin.Projection.Prepare(proc)
+	}
 	return err
 }
 
@@ -87,7 +92,14 @@ func (indexJoin *IndexJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			indexJoin.ctr.buf.AddRowCount(bat.RowCount())
 			proc.PutBatch(bat)
 			result.Batch = indexJoin.ctr.buf
-			anal.Output(indexJoin.ctr.buf, indexJoin.GetIsLast())
+			if indexJoin.Projection != nil {
+				var err error
+				result.Batch, err = indexJoin.Projection.Eval(result.Batch, proc)
+				if err != nil {
+					return result, err
+				}
+			}
+			anal.Output(result.Batch, indexJoin.GetIsLast())
 			return result, nil
 
 		default:
