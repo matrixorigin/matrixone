@@ -39,10 +39,6 @@ func (loopLeft *LoopLeft) Prepare(proc *process.Process) error {
 	var err error
 
 	loopLeft.ctr = new(container)
-<<<<<<< HEAD
-=======
-	loopLeft.ctr.InitReceiver(proc, true)
->>>>>>> dfcc37d13f3e0e0140895836536ee26939eedbd9
 	loopLeft.ctr.bat = batch.NewWithSize(len(loopLeft.Typs))
 	for i, typ := range loopLeft.Typs {
 		loopLeft.ctr.bat.Vecs[i] = proc.GetVector(typ)
@@ -78,15 +74,9 @@ func (loopLeft *LoopLeft) Call(proc *process.Process) (vm.CallResult, error) {
 				err = ctr.probe(loopLeft, proc, anal, loopLeft.GetIsLast(), &result)
 				return result, err
 			}
-<<<<<<< HEAD
 			result, err = loopLeft.Children[0].Call(proc)
 			if err != nil {
 				return result, err
-=======
-			msg := ctr.ReceiveFromAllRegs(anal)
-			if msg.Err != nil {
-				return result, msg.Err
->>>>>>> dfcc37d13f3e0e0140895836536ee26939eedbd9
 			}
 
 			ctr.inBat = result.Batch

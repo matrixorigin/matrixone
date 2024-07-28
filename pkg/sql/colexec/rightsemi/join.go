@@ -39,7 +39,7 @@ func (rightSemi *RightSemi) OpType() vm.OpType {
 
 func (rightSemi *RightSemi) Prepare(proc *process.Process) (err error) {
 	rightSemi.ctr = new(container)
-	rightSemi.ctr.InitReceiver(proc, true)
+	rightSemi.ctr.InitReceiver(proc, false)
 	rightSemi.ctr.vecs = make([]*vector.Vector, len(rightSemi.Conditions[0]))
 	rightSemi.ctr.evecs = make([]evalVector, len(rightSemi.Conditions[0]))
 	for i := range rightSemi.ctr.evecs {
@@ -80,15 +80,9 @@ func (rightSemi *RightSemi) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 		case Probe:
-<<<<<<< HEAD
 			result, err = rightSemi.Children[0].Call(proc)
 			if err != nil {
 				return result, err
-=======
-			msg := ctr.ReceiveFromAllRegs(analyze)
-			if msg.Err != nil {
-				return result, msg.Err
->>>>>>> dfcc37d13f3e0e0140895836536ee26939eedbd9
 			}
 			bat := result.Batch
 

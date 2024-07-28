@@ -40,10 +40,6 @@ func (loopSingle *LoopSingle) Prepare(proc *process.Process) error {
 	var err error
 
 	loopSingle.ctr = new(container)
-<<<<<<< HEAD
-=======
-	loopSingle.ctr.InitReceiver(proc, true)
->>>>>>> dfcc37d13f3e0e0140895836536ee26939eedbd9
 	loopSingle.ctr.bat = batch.NewWithSize(len(loopSingle.Typs))
 	for i, typ := range loopSingle.Typs {
 		loopSingle.ctr.bat.Vecs[i] = proc.GetVector(typ)
@@ -75,15 +71,9 @@ func (loopSingle *LoopSingle) Call(proc *process.Process) (vm.CallResult, error)
 
 		case Probe:
 			var err error
-<<<<<<< HEAD
 			result, err = loopSingle.Children[0].Call(proc)
 			if err != nil {
 				return result, err
-=======
-			msg := ctr.ReceiveFromAllRegs(anal)
-			if msg.Err != nil {
-				return result, msg.Err
->>>>>>> dfcc37d13f3e0e0140895836536ee26939eedbd9
 			}
 			bat := result.Batch
 			if bat == nil {

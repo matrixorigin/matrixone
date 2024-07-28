@@ -39,10 +39,6 @@ func (singleJoin *SingleJoin) OpType() vm.OpType {
 
 func (singleJoin *SingleJoin) Prepare(proc *process.Process) (err error) {
 	singleJoin.ctr = new(container)
-<<<<<<< HEAD
-=======
-	singleJoin.ctr.InitReceiver(proc, true)
->>>>>>> dfcc37d13f3e0e0140895836536ee26939eedbd9
 	singleJoin.ctr.vecs = make([]*vector.Vector, len(singleJoin.Conditions[0]))
 
 	singleJoin.ctr.evecs = make([]evalVector, len(singleJoin.Conditions[0]))
@@ -77,15 +73,9 @@ func (singleJoin *SingleJoin) Call(proc *process.Process) (vm.CallResult, error)
 			ctr.state = Probe
 
 		case Probe:
-<<<<<<< HEAD
 			result, err = singleJoin.Children[0].Call(proc)
 			if err != nil {
 				return result, err
-=======
-			msg := ctr.ReceiveFromAllRegs(anal)
-			if msg.Err != nil {
-				return result, msg.Err
->>>>>>> dfcc37d13f3e0e0140895836536ee26939eedbd9
 			}
 			bat := result.Batch
 

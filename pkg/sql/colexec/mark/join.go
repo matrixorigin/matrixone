@@ -42,10 +42,6 @@ func (markJoin *MarkJoin) OpType() vm.OpType {
 func (markJoin *MarkJoin) Prepare(proc *process.Process) error {
 	var err error
 	markJoin.ctr = new(container)
-<<<<<<< HEAD
-=======
-	markJoin.ctr.InitReceiver(proc, true)
->>>>>>> dfcc37d13f3e0e0140895836536ee26939eedbd9
 	markJoin.ctr.evecs = make([]evalVector, len(markJoin.Conditions[0]))
 	markJoin.ctr.vecs = make([]*vector.Vector, len(markJoin.Conditions[0]))
 	markJoin.ctr.bat = batch.NewWithSize(len(markJoin.Typs))
@@ -105,15 +101,9 @@ func (markJoin *MarkJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			ctr.state = Probe
 
 		case Probe:
-<<<<<<< HEAD
 			result, err = markJoin.Children[0].Call(proc)
 			if err != nil {
 				return result, err
-=======
-			msg := ctr.ReceiveFromAllRegs(anal)
-			if msg.Err != nil {
-				return result, msg.Err
->>>>>>> dfcc37d13f3e0e0140895836536ee26939eedbd9
 			}
 			bat := result.Batch
 			if bat == nil {

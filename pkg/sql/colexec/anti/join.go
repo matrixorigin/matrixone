@@ -38,10 +38,6 @@ func (antiJoin *AntiJoin) OpType() vm.OpType {
 
 func (antiJoin *AntiJoin) Prepare(proc *process.Process) (err error) {
 	antiJoin.ctr = new(container)
-<<<<<<< HEAD
-=======
-	antiJoin.ctr.InitReceiver(proc, true)
->>>>>>> dfcc37d13f3e0e0140895836536ee26939eedbd9
 	antiJoin.ctr.vecs = make([]*vector.Vector, len(antiJoin.Conditions[0]))
 	antiJoin.ctr.executorForVecs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, antiJoin.Conditions[0])
 	if err != nil {
@@ -74,15 +70,9 @@ func (antiJoin *AntiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Probe:
 			if ap.ctr.bat == nil {
-<<<<<<< HEAD
 				result, err = antiJoin.Children[0].Call(proc)
 				if err != nil {
 					return result, err
-=======
-				msg := ctr.ReceiveFromAllRegs(anal)
-				if msg.Err != nil {
-					return result, msg.Err
->>>>>>> dfcc37d13f3e0e0140895836536ee26939eedbd9
 				}
 				bat := result.Batch
 				if bat == nil {
