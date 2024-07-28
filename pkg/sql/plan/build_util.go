@@ -205,6 +205,12 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 		case defines.MYSQL_TYPE_BLOB:
 			return plan.Type{Id: int32(types.T_blob)}, nil
 		case defines.MYSQL_TYPE_TEXT:
+			//NOTE: This is an important part where datatype is assigned to the column
+			fstr := strings.ToLower(n.InternalType.FamilyString)
+			if fstr == "datalink" {
+				return plan.Type{Id: int32(types.T_datalink)}, nil
+			}
+
 			return plan.Type{Id: int32(types.T_text)}, nil
 		case defines.MYSQL_TYPE_JSON:
 			return plan.Type{Id: int32(types.T_json)}, nil
