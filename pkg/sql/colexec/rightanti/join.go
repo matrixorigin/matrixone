@@ -125,6 +125,7 @@ func (rightAnti *RightAnti) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 				result.Batch = rightAnti.ctr.buf[rightAnti.ctr.lastpos]
 				rightAnti.ctr.lastpos++
+				result.Status = vm.ExecHasMore
 				return result, nil
 			}
 
