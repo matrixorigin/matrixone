@@ -2331,6 +2331,11 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 		}()
 	}
 
+	for i := range children {
+		mergeOp := merge.NewArgument()
+		children[i].setRootOperator(mergeOp)
+	}
+
 	switch node.JoinType {
 	case plan.Node_INNER:
 		for i := range children {
@@ -3520,10 +3525,10 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 	if len(ss) > 0 {
 		rs.Proc.Base.LoadTag = ss[0].Proc.Base.LoadTag
 	}
-	merge := merge.NewArgument()
-	merge.SetIdx(c.anal.curNodeIdx)
-	merge.SetIsFirst(c.anal.isFirst)
-	rs.setRootOperator(merge)
+	mergeOp := merge.NewArgument()
+	mergeOp.SetIdx(c.anal.curNodeIdx)
+	mergeOp.SetIsFirst(c.anal.isFirst)
+	rs.setRootOperator(mergeOp)
 	c.anal.isFirst = false
 
 	j := 0
@@ -3697,6 +3702,12 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 		mergeChildren.IsEnd = true
 		rs[idx].PreScopes = append(rs[idx].PreScopes, mergeChildren)
 	}
+
+	for i := range rs {
+		mergeOp := merge.NewArgument()
+		rs[i].setRootOperator(mergeOp)
+	}
+
 	return rs
 }
 
