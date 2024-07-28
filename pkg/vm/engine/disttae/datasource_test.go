@@ -35,7 +35,8 @@ func TestRelationDataV1_MarshalAndUnMarshal(t *testing.T) {
 	metaLoc := objectio.ObjectLocation(delLoc)
 	cts := types.BuildTSForTest(1, 1)
 
-	var blkInfos []*objectio.BlockInfoInProgress
+	//var blkInfos []*objectio.BlockInfoInProgress
+	relData := buildRelationDataV1()
 	blkNum := 10
 	for i := 0; i < blkNum; i++ {
 		blkID := types.NewBlockidWithObjectID(objID, uint16(blkNum))
@@ -47,10 +48,10 @@ func TestRelationDataV1_MarshalAndUnMarshal(t *testing.T) {
 			CommitTs:     *cts,
 			PartitionNum: int16(i),
 		}
-		blkInfos = append(blkInfos, &blkInfo)
+		//blkInfos = append(blkInfos, &blkInfo)
+		relData.AppendDataBlk(&blkInfo)
 	}
 
-	relData := buildRelationDataV1(blkInfos)
 	tombstoner := &tombstoneDataV1{
 		typ: engine.TombstoneV1,
 	}
@@ -111,12 +112,16 @@ func TestRelationDataV1_MarshalAndUnMarshal(t *testing.T) {
 			rd1.isEmpty != rd2.isEmpty || rd1.tombstoneTyp != rd2.tombstoneTyp {
 			return false
 		}
-		for i := 0; i < len(rd1.blkList); i++ {
-			if !bytes.Equal(objectio.EncodeBlockInfoInProgress(*rd1.blkList[i]),
-				objectio.EncodeBlockInfoInProgress(*rd2.blkList[i])) {
-				return false
-			}
+		//for i := 0; i < len(rd1.blkList); i++ {
+		//	if !bytes.Equal(objectio.EncodeBlockInfoInProgress(*rd1.blkList[i]),
+		//		objectio.EncodeBlockInfoInProgress(*rd2.blkList[i])) {
+		//		return false
+		//	}
+		//}
+		if !bytes.Equal(*rd1.blklist, *rd2.blklist) {
+			return false
 		}
+
 		return tomIsEqual(rd1.tombstones.(*tombstoneDataV1),
 			rd2.tombstones.(*tombstoneDataV1))
 

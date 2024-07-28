@@ -1857,8 +1857,9 @@ func (tbl *txnTable) BuildReaders(
 	}
 	//relData maybe is nil, indicate that only read data from memory.
 	if relData == nil || relData.BlkCnt() == 0 {
-		s := objectio.BlockInfoSliceInProgress(objectio.EmptyBlockInfoInProgressBytes)
-		relData = buildRelationDataV1(&s)
+		//s := objectio.BlockInfoSliceInProgress(objectio.EmptyBlockInfoInProgressBytes)
+		relData = buildRelationDataV1()
+		relData.AppendDataBlk(&objectio.EmptyBlockInfoInProgress)
 	}
 	blkCnt := relData.BlkCnt()
 	if blkCnt < num {
