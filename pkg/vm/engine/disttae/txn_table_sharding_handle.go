@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -167,7 +168,7 @@ func HandleShardingReadRanges(
 		return nil, err
 	}
 
-	bys := []byte(*ranges.(*objectio.BlockInfoSlice))
+	bys := ranges.MarshalToBytes()
 	return buffer.EncodeBytes(bys), nil
 }
 

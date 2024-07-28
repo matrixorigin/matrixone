@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+
 	"github.com/fagongzi/goetty/v2/buf"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -31,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 func newTxnTableWithItem(
@@ -205,7 +205,7 @@ func (tbl *txnTableDelegate) Ranges(
 		)
 	}
 
-	var rs []engine.Ranges
+	var rs []engine.RelData
 
 	err := tbl.forwardRead(
 		ctx,
@@ -215,25 +215,25 @@ func (tbl *txnTableDelegate) Ranges(
 			param.RangesParam.TxnOffset = int32(n)
 		},
 		func(resp []byte) {
-			b := objectio.BlockInfoSlice(resp)
-			rs = append(rs, &b)
+			data, err := UnmarshalRelationData(resp)
+			if err != nil {
+				panic(err)
+			}
+			rs = append(rs, data)
 		},
 	)
 	if err != nil {
 		return nil, err
 	}
 
-	var ranges engine.Ranges
-	for i, subRanges := range rs {
-		blkSlice := subRanges.(*objectio.BlockInfoSlice)
-		for j := 1; j < subRanges.Len(); j++ {
-			blkInfo := blkSlice.Get(j)
-			blkInfo.PartitionNum = i
-			ranges.Append(blkSlice.GetBytes(j))
-		}
+	ret := buildRelationDataV1()
+	for _, r := range rs {
+		r.ForeachDataBlk(0, r.BlkCnt(), func(blk any) error {
+			ret.AppendDataBlk(blk)
+			return nil
+		})
 	}
-
-	return ranges, nil
+	return ret, nil
 }
 
 func (tbl *txnTableDelegate) CollectTombstones(ctx context.Context, txnOffset int) (engine.Tombstoner, error) {
@@ -298,8 +298,9 @@ func (tbl *txnTableDelegate) ApproxObjectsNum(
 		},
 	)
 	if err != nil {
-		logutil.Info("approx objects num err",
-			zap.Error(err))
+		//logutil.Info("approx objects num err",
+		//	zap.Error(err))
+		logutil.Infof("approx objects num err: %v", err)
 		return 0
 	}
 	return num

@@ -242,6 +242,7 @@ func DecodeBlockInfo(buf []byte) *BlockInfo {
 	return (*BlockInfo)(unsafe.Pointer(&buf[0]))
 }
 
+// It's deprecated
 type BlockInfoSlice []byte
 
 func (s *BlockInfoSlice) Get(i int) *BlockInfo {
