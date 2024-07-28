@@ -1178,8 +1178,7 @@ func handleAlterPitr(ses *Session, execCtx *ExecCtx, ap *tree.AlterPitr) error {
 }
 
 func handleRestorePitr(ses *Session, execCtx *ExecCtx, rp *tree.RestorePitr) error {
-	//return doRestorePitr(execCtx.reqCtx, ses, rp)
-	return nil
+	return doRestorePitr(execCtx.reqCtx, ses, rp)
 }
 
 // handleCreateAccount creates a new user-level tenant in the context of the tenant SYS
@@ -1716,13 +1715,18 @@ func handleEmptyStmt(ses FeSession, execCtx *ExecCtx, stmt *tree.EmptyStmt) erro
 
 func GetExplainColumns(ctx context.Context, explainColName string) ([]*plan2.ColDef, []interface{}, error) {
 	cols := []*plan2.ColDef{
-		{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: explainColName},
+		{
+			Typ:        plan2.Type{Id: int32(types.T_varchar)},
+			Name:       strings.ToLower(explainColName),
+			OriginName: explainColName,
+		},
 	}
 	columns := make([]interface{}, len(cols))
 	var err error = nil
 	for i, col := range cols {
 		c := new(MysqlColumn)
 		c.SetName(col.Name)
+		c.SetOrgName(col.GetOriginCaseName())
 		err = convertEngineTypeToMysqlType(ctx, types.T(col.Typ.Id), c)
 		if err != nil {
 			return nil, nil, err

@@ -596,7 +596,7 @@ var supportedStringBuiltIns = []FuncNew{
 					return types.T_json.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return JsonExtract
+					return newOpBuiltInJsonExtract().jsonExtract
 				},
 			},
 		},

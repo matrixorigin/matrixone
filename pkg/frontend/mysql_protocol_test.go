@@ -2892,6 +2892,11 @@ func (fp *testMysqlWriter) WriteEOFIF(warnings uint16, status uint16) error {
 	panic("implement me")
 }
 
+func (fp *testMysqlWriter) WriteEOFIFAndNoFlush(warnings uint16, status uint16) error {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (fp *testMysqlWriter) WriteEOFOrOK(warnings uint16, status uint16) error {
 	//TODO implement me
 	panic("implement me")

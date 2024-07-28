@@ -15,13 +15,14 @@
 package util
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"strconv"
+	"strings"
 
 	"github.com/fagongzi/util/format"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -101,7 +102,7 @@ func FillCompositeKeyBatch(bat *batch.Batch, ckeyName string, keyParts []string,
 	cCBVectorMap := make(map[string]*vector.Vector)
 	for num, attrName := range bat.Attrs {
 		for _, elem := range keyParts {
-			if attrName == elem {
+			if strings.EqualFold(attrName, elem) {
 				cCBVectorMap[elem] = bat.Vecs[num]
 			}
 		}

@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
 func i82bool(v int8) bool {
@@ -46,6 +47,7 @@ func IsFakePkName(name string) bool {
 }
 
 type ColDef struct {
+	// letter case: origin
 	Name          string
 	Idx           int    // indicates its position in all coldefs
 	SeqNum        uint16 //
@@ -128,10 +130,11 @@ type Schema struct {
 	BlockMaxRows uint32
 	// for aobj, there're at most one blk
 	ObjectMaxBlocks uint16
+	AObjectMaxSize  int
 	Extra           *apipb.SchemaExtra
 
 	// do not write down, reconstruct them when reading
-	NameMap    map[string]int // name -> logical idx
+	NameMap    map[string]int // name(letter case: origin) -> logical idx
 	SeqnumMap  map[uint16]int // seqnum -> logical idx
 	SortKey    *SortKey
 	PhyAddrKey *ColDef
@@ -722,7 +725,7 @@ func (s *Schema) AppendSortColWithAttribute(attr engine.Attribute, sorIdx int, i
 
 func colDefFromPlan(col *plan.ColDef, idx int, seqnum uint16) *ColDef {
 	newcol := &ColDef{
-		Name:   col.Name,
+		Name:   col.GetOriginCaseName(),
 		Idx:    idx,
 		SeqNum: seqnum,
 		Type:   vector.ProtoTypeToType(&col.Typ),
@@ -855,6 +858,15 @@ func (s *Schema) Finalize(withoutPhyAddr bool) (err error) {
 	if s == nil {
 		err = moerr.NewConstraintViolationNoCtx("no schema")
 		return
+	}
+	if s.BlockMaxRows == 0 {
+		s.BlockMaxRows = options.DefaultBlockMaxRows
+	}
+	if s.ObjectMaxBlocks == 0 {
+		s.ObjectMaxBlocks = options.DefaultObjectPerSegment
+	}
+	if s.AObjectMaxSize == 0 {
+		s.AObjectMaxSize = options.DefaultAObjectMaxSize
 	}
 	if !withoutPhyAddr {
 		phyAddrDef := &ColDef{
