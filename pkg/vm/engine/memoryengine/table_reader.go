@@ -334,7 +334,7 @@ func (t *Table) Ranges(_ context.Context, _ []*plan.Expr, _ int) (engine.RelData
 			shards = append(shards, id...)
 		}
 	}
-	rd.shards = shards
+	rd.Shards = shards
 	return rd, nil
 }
 
@@ -344,7 +344,7 @@ func (t *Table) CollectTombstones(ctx context.Context, txnOffset int) (engine.To
 
 // for memory engine.
 type MemRelationData struct {
-	shards ShardIdSlice
+	Shards ShardIdSlice
 }
 
 func (rd *MemRelationData) MarshalToBytes() []byte {
@@ -368,7 +368,7 @@ func (rd *MemRelationData) ForeachDataBlk(
 	end int,
 	f func(blk any) error) error {
 	for i := begin; i < end; i++ {
-		err := f(rd.shards.Get(i))
+		err := f(rd.Shards.Get(i))
 		if err != nil {
 			return err
 		}
@@ -377,7 +377,7 @@ func (rd *MemRelationData) ForeachDataBlk(
 }
 
 func (rd *MemRelationData) GetDataBlk(i int) any {
-	return rd.shards.Get(i)
+	return rd.Shards.Get(i)
 }
 
 func (rd *MemRelationData) SetDataBlk(i int, blk any) {
@@ -397,7 +397,7 @@ func (rd *MemRelationData) AppendDataBlk(blk any) {
 	shard := blk.(uint64)
 	id := make([]byte, 8)
 	binary.LittleEndian.PutUint64(id, shard)
-	rd.shards = append(rd.shards, id...)
+	rd.Shards = append(rd.Shards, id...)
 
 }
 
@@ -406,7 +406,7 @@ func (rd *MemRelationData) BuildEmptyRelData() engine.RelData {
 }
 
 func (rd *MemRelationData) BlkCnt() int {
-	return rd.shards.Len()
+	return rd.Shards.Len()
 }
 
 type ShardIdSlice []byte

@@ -962,13 +962,13 @@ func (txn *Transaction) compactionBlksLocked() error {
 	return nil
 }
 
-func (txn *Transaction) hasDeletesOnUncommitedObject() bool {
-	return !txn.deletedBlocks.isEmpty()
-}
+//func (txn *Transaction) hasDeletesOnUncommitedObject() bool {
+//	return !txn.deletedBlocks.isEmpty()
+//}
 
-func (txn *Transaction) hasUncommittedDeletesOnBlock(id *types.Blockid) bool {
-	return txn.deletedBlocks.hasDeletes(id)
-}
+//func (txn *Transaction) hasUncommittedDeletesOnBlock(id *types.Blockid) bool {
+//	return txn.deletedBlocks.hasDeletes(id)
+//}
 
 // TODO::remove it after workspace refactor.
 func (txn *Transaction) getUncommittedS3Tombstone(locs *[]objectio.Location) error {
