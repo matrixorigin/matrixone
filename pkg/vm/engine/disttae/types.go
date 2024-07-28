@@ -290,18 +290,18 @@ func (b *deletedBlocks) addDeletedBlocks(blockID *types.Blockid, offsets []int64
 	b.offsets[*blockID] = append(b.offsets[*blockID], offsets...)
 }
 
-func (b *deletedBlocks) hasDeletes(blockID *types.Blockid) bool {
-	b.RLock()
-	defer b.RUnlock()
-	_, ok := b.offsets[*blockID]
-	return ok
-}
+//func (b *deletedBlocks) hasDeletes(blockID *types.Blockid) bool {
+//	b.RLock()
+//	defer b.RUnlock()
+//	_, ok := b.offsets[*blockID]
+//	return ok
+//}
 
-func (b *deletedBlocks) isEmpty() bool {
-	b.RLock()
-	defer b.RUnlock()
-	return len(b.offsets) == 0
-}
+//func (b *deletedBlocks) isEmpty() bool {
+//	b.RLock()
+//	defer b.RUnlock()
+//	return len(b.offsets) == 0
+//}
 
 func (b *deletedBlocks) getDeletedOffsetsByBlock(blockID *types.Blockid, offsets *[]int64) {
 	b.RLock()
