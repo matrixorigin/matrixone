@@ -40,7 +40,6 @@ func (rightAnti *RightAnti) OpType() vm.OpType {
 
 func (rightAnti *RightAnti) Prepare(proc *process.Process) (err error) {
 	rightAnti.ctr = new(container)
-	rightAnti.ctr.InitReceiver(proc, true)
 	rightAnti.ctr.vecs = make([]*vector.Vector, len(rightAnti.Conditions[0]))
 	rightAnti.ctr.evecs = make([]evalVector, len(rightAnti.Conditions[0]))
 	for i := range rightAnti.ctr.evecs {
@@ -67,6 +66,7 @@ func (rightAnti *RightAnti) Call(proc *process.Process) (vm.CallResult, error) {
 	defer analyze.Stop()
 	ctr := rightAnti.ctr
 	result := vm.NewCallResult()
+	var err error
 	for {
 		switch ctr.state {
 		case Build:
@@ -80,11 +80,11 @@ func (rightAnti *RightAnti) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 		case Probe:
-			msg := ctr.ReceiveFromAllRegs(analyze)
-			if msg.Err != nil {
-				return result, msg.Err
+			result, err = rightAnti.Children[0].Call(proc)
+			if err != nil {
+				return result, err
 			}
-			bat := msg.Batch
+			bat := result.Batch
 			if bat == nil {
 				ctr.state = SendLast
 				rightAnti.ctr.buf = nil

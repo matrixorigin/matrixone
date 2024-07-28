@@ -39,7 +39,6 @@ func (loopSemi *LoopSemi) Prepare(proc *process.Process) error {
 	var err error
 
 	loopSemi.ctr = new(container)
-	loopSemi.ctr.InitReceiver(proc, true)
 
 	if loopSemi.Cond != nil {
 		loopSemi.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopSemi.Cond)
@@ -57,6 +56,7 @@ func (loopSemi *LoopSemi) Call(proc *process.Process) (vm.CallResult, error) {
 	defer anal.Stop()
 	ctr := loopSemi.ctr
 	result := vm.NewCallResult()
+	var err error
 	for {
 		switch ctr.state {
 		case Build:
@@ -72,12 +72,11 @@ func (loopSemi *LoopSemi) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Probe:
 			if loopSemi.ctr.buf == nil {
-				msg := ctr.ReceiveFromAllRegs(anal)
-				if msg.Err != nil {
-					return result, msg.Err
+				result, err = loopSemi.Children[0].Call(proc)
+				if err != nil {
+					return result, err
 				}
-
-				bat := msg.Batch
+				bat := result.Batch
 				if bat == nil {
 					ctr.state = End
 					continue

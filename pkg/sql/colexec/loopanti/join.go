@@ -40,7 +40,6 @@ func (loopAnti *LoopAnti) Prepare(proc *process.Process) error {
 	var err error
 
 	loopAnti.ctr = new(container)
-	loopAnti.ctr.InitReceiver(proc, true)
 
 	if loopAnti.Cond != nil {
 		loopAnti.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopAnti.Cond)
@@ -69,11 +68,11 @@ func (loopAnti *LoopAnti) Call(proc *process.Process) (vm.CallResult, error) {
 		case Probe:
 			var err error
 			if loopAnti.ctr.buf == nil {
-				msg := ctr.ReceiveFromAllRegs(anal)
-				if msg.Err != nil {
-					return result, msg.Err
+				result, err = loopAnti.Children[0].Call(proc)
+				if err != nil {
+					return result, err
 				}
-				loopAnti.ctr.buf = msg.Batch
+				loopAnti.ctr.buf = result.Batch
 				if loopAnti.ctr.buf == nil {
 					ctr.state = End
 					continue

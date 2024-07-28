@@ -2285,7 +2285,7 @@ func (c *Compile) compileJoin(node, left, right *plan.Node, ns []*plan.Node, pro
 	rs := c.compileBroadcastJoin(node, left, right, ns, probeScopes, buildScopes)
 	if c.IsTpQuery() {
 		//construct join build operator for tp join
-		buildScopes[0].setRootOperator(constructJoinBuildOperator(c, vm.GetLeafOp(rs[0].RootOp), false, 1))
+		buildScopes[0].setRootOperator(constructJoinBuildOperator(c, vm.GetLeafOpParent(nil, rs[0].RootOp), false, 1))
 		rs[0].Proc.Reg.MergeReceivers = rs[0].Proc.Reg.MergeReceivers[:1]
 		buildScopes[0].IsEnd = true
 	}
@@ -3855,7 +3855,7 @@ func (c *Compile) newJoinBuildScope(s *Scope, mcpu int32) *Scope {
 	mergeOp.SetIdx(c.anal.curNodeIdx)
 	mergeOp.SetIsFirst(c.anal.isFirst)
 	rs.setRootOperator(mergeOp)
-	rs.setRootOperator(constructJoinBuildOperator(c, vm.GetLeafOp(s.RootOp), s.ShuffleIdx > 0, mcpu))
+	rs.setRootOperator(constructJoinBuildOperator(c, vm.GetLeafOpParent(nil, (s.RootOp)), s.ShuffleIdx > 0, mcpu))
 
 	rs.IsEnd = true
 
