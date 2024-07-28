@@ -283,7 +283,7 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 
 func doDropSnapshot(ctx context.Context, ses *Session, stmt *tree.DropSnapShot) (err error) {
 	var sql string
-	var stageExist bool
+	var snapshotExist bool
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -302,13 +302,13 @@ func doDropSnapshot(ctx context.Context, ses *Session, stmt *tree.DropSnapShot) 
 		return err
 	}
 
-	// check stage
-	stageExist, err = checkSnapShotExistOrNot(ctx, bh, string(stmt.Name))
+	// check snapshot exists or not
+	snapshotExist, err = checkSnapShotExistOrNot(ctx, bh, string(stmt.Name))
 	if err != nil {
 		return err
 	}
 
-	if !stageExist {
+	if !snapshotExist {
 		if !stmt.IfExists {
 			return moerr.NewInternalError(ctx, "snapshot %s does not exist", string(stmt.Name))
 		} else {
@@ -334,6 +334,14 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	tblName := string(stmt.TableName)
 	snapshotName := string(stmt.SnapShotName)
 	toAccountName := string(stmt.ToAccountName)
+
+	// restore as a txn
+	if err = bh.Exec(ctx, "begin;"); err != nil {
+		return err
+	}
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
 
 	// check snapshot
 	snapshot, err := getSnapshotByName(ctx, bh, snapshotName)
@@ -388,14 +396,6 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		return moerr.NewInternalError(ctx, "can't restore db: %v", dbName)
 	}
 
-	// restore as a txn
-	if err = bh.Exec(ctx, "begin;"); err != nil {
-		return err
-	}
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-
 	if snapshot.level == tree.RESTORELEVELCLUSTER.String() && len(srcAccountName) != 0 {
 		var srcAccountId uint32
 		srcAccountId, err = getAccountId(ctx, bh, srcAccountName)
@@ -430,7 +430,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	}
 
 	// get topo sorted tables with foreign key
-	sortedFkTbls, err := fkTablesTopoSort(ctx, ses.GetService(), bh, snapshotName, dbName, tblName)
+	sortedFkTbls, err := fkTablesTopoSort(ctx, bh, snapshotName, dbName, tblName)
 	if err != nil {
 		return
 	}
@@ -471,10 +471,6 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		}
 	}
 
-	if err != nil {
-		return
-	}
-
 	if snapshot.level == tree.RESTORELEVELCLUSTER.String() && len(srcAccountName) != 0 {
 		err = deleteSnapshotRecord(ctx, ses.GetService(), bh, snapshot.snapshotName, snapshotName)
 		if err != nil {
@@ -496,7 +492,7 @@ func deleteCurFkTables(ctx context.Context, sid string, bh BackgroundExec, dbNam
 	ctx = defines.AttachAccountId(ctx, toAccountId)
 
 	// get topo sorted tables with foreign key
-	sortedFkTbls, err := fkTablesTopoSort(ctx, sid, bh, "", dbName, tblName)
+	sortedFkTbls, err := fkTablesTopoSort(ctx, bh, "", dbName, tblName)
 	if err != nil {
 		return
 	}
@@ -1300,7 +1296,7 @@ func getTableInfoMap(
 	return
 }
 
-func fkTablesTopoSort(ctx context.Context, sid string, bh BackgroundExec, snapshotName string, dbName string, tblName string) (sortedTbls []string, err error) {
+func fkTablesTopoSort(ctx context.Context, bh BackgroundExec, snapshotName string, dbName string, tblName string) (sortedTbls []string, err error) {
 	// get foreign key deps from mo_catalog.mo_foreign_keys
 	fkDeps, err := getFkDeps(ctx, bh, snapshotName, dbName, tblName)
 	if err != nil {
@@ -1477,7 +1473,7 @@ func restoreAccountUsingClusterSnapshot(ctx context.Context, ses *Session, bh Ba
 	// get topo sorted tables with foreign key
 	var sortedFkTbls []string
 	var fkTableMap map[string]*tableInfo
-	sortedFkTbls, err = fkTablesTopoSort(ctx, ses.GetService(), bh, newSnapshot, "", "")
+	sortedFkTbls, err = fkTablesTopoSort(ctx, bh, newSnapshot, "", "")
 	if err != nil {
 		return err
 	}

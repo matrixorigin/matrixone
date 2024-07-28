@@ -38,6 +38,59 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestFlushAndTransfer(t *testing.T) {
+	var (
+		opts      testutil.TestOptions
+		accountId = uint32(0)
+		tableName = "test1"
+	)
+
+	// make sure that disabled all auto ckp and flush
+	opts.TaeEngineOptions = config.WithLongScanAndCKPOpts(nil)
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, accountId)
+	disttaeEngine, taeEngine, rpcAgent, _ := testutil.CreateEngines(ctx, opts, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeEngine.Close(true)
+		rpcAgent.Close()
+	}()
+
+	schema := catalog.MockSchema(3, 2)
+	schema.Name = tableName
+	schema.BlockMaxRows = 2
+	bat := catalog.MockBatch(schema, 4)
+	defer bat.Close()
+
+	taeEngine.BindSchema(schema)
+	testutil2.CreateRelationAndAppend(t, 0, taeEngine.GetDB(), "db", schema, bat, true)
+	t.Log(taeEngine.GetDB().Catalog.SimplePPString(3))
+	txn, rel := testutil2.GetRelation(t, 0, taeEngine.GetDB(), "db", tableName)
+	testutil2.CheckAllColRowsByScan(t, rel, 4, false)
+
+	// txn, rel := testutil2.GetRelation(t, 0, taeEngine.GetDB(), "db", tableName)
+	tbl := rel.GetMeta().(*catalog.TableEntry)
+	dbID := tbl.GetDB().ID
+	tbID := tbl.ID
+	txn.Commit(ctx)
+
+	err := disttaeEngine.SubscribeTable(ctx, dbID, tbID, false)
+	require.Nil(t, err)
+	stats, err := disttaeEngine.GetPartitionStateStats(ctx, tbID, dbID)
+	require.Nil(t, err)
+
+	fmt.Println(stats.String())
+
+	require.Equal(t, 4, stats.InmemRows.VisibleCnt)
+	require.Equal(t, 0, stats.DataObjectsVisible.ObjCnt)
+	testutil2.CompactBlocks(t, 0, taeEngine.GetDB(), "db", schema, true)
+	t.Log(taeEngine.GetDB().Catalog.SimplePPString(3))
+
+	stats, err = disttaeEngine.GetPartitionStateStats(ctx, tbID, dbID)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, stats.InmemRows.InvisibleCnt)
+	assert.Equal(t, 0, stats.InmemRows.VisibleCnt)
+}
+
 func Test_Append(t *testing.T) {
 	var (
 		opts         testutil.TestOptions
@@ -110,7 +163,7 @@ func Test_Append(t *testing.T) {
 
 	t.Logf("Append takes: %s", time.Since(now))
 	expectBlkCnt := (uint32(batchRows)*uint32(cnt)-1)/schema.BlockMaxRows + 1
-	expectObjCnt := expectBlkCnt
+	expectObjCnt := uint32(1)
 
 	{
 		txn, _ := taeEngine.GetDB().StartTxn(nil)

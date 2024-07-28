@@ -776,9 +776,9 @@ func TestDedup1(t *testing.T) {
 		assert.Nil(t, txn3.Commit(context.Background()))
 
 		err = rel.Append(context.Background(), bats[3])
-		assert.NoError(t, err)
-		err = txn.Commit(context.Background())
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict))
+		err = txn.Commit(context.Background())
+		assert.NoError(t, err)
 	}
 	t.Log(c.SimplePPString(common.PPL1))
 }
