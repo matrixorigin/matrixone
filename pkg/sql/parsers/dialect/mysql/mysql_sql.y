@@ -320,7 +320,7 @@ import (
 %token <str> REAL DOUBLE FLOAT_TYPE DECIMAL NUMERIC DECIMAL_VALUE
 %token <str> TIME TIMESTAMP DATETIME YEAR
 %token <str> CHAR VARCHAR BOOL CHARACTER VARBINARY NCHAR
-%token <str> TEXT TINYTEXT MEDIUMTEXT LONGTEXT
+%token <str> TEXT TINYTEXT MEDIUMTEXT LONGTEXT DATALINK
 %token <str> BLOB TINYBLOB MEDIUMBLOB LONGBLOB JSON ENUM UUID VECF32 VECF64
 %token <str> GEOMETRY POINT LINESTRING POLYGON GEOMETRYCOLLECTION MULTIPOINT MULTILINESTRING MULTIPOLYGON
 %token <str> INT1 INT2 INT3 INT4 INT8 S3OPTION STAGEOPTION
@@ -11404,6 +11404,18 @@ char_type:
             },
         }
     }
+|   DATALINK
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.BlobFamily,
+                FamilyString: $1,
+                Locale: &locale,
+                Oid:    uint32(defines.MYSQL_TYPE_TEXT),
+            },
+        }
+    }
 |   TEXT
     {
         locale := ""
@@ -11538,7 +11550,7 @@ char_type:
             },
         }
     }
-|   ENUM '(' enum_values ')'
+| ENUM '(' enum_values ')'
     {
         locale := ""
         $$ = &tree.T{

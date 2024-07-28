@@ -517,12 +517,12 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 		field := fields[idx]
 		id := types.T(col.Typ.Id)
 		if id != types.T_char && id != types.T_varchar && id != types.T_json &&
-			id != types.T_binary && id != types.T_varbinary && id != types.T_blob && id != types.T_text {
+			id != types.T_binary && id != types.T_varbinary && id != types.T_blob && id != types.T_text && id != types.T_datalink {
 			field.Val = strings.TrimSpace(field.Val)
 		}
 		isNullOrEmpty := field.IsNull || (getNullFlag(param.NullMap, col.Name, field.Val))
 		if id != types.T_char && id != types.T_varchar &&
-			id != types.T_binary && id != types.T_varbinary && id != types.T_json && id != types.T_blob && id != types.T_text {
+			id != types.T_binary && id != types.T_varbinary && id != types.T_json && id != types.T_blob && id != types.T_text && id != types.T_datalink {
 			isNullOrEmpty = isNullOrEmpty || len(field.Val) == 0
 		}
 		if isNullOrEmpty {
@@ -661,7 +661,7 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 				}
 
 			}
-		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 			continue
 		case types.T_array_float32:
 			_, err := types.StringToArrayToBytes[float32](field.Val)
@@ -1400,12 +1400,12 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 	field := getFieldFromLine(line, colName, param)
 	id := types.T(param.Cols[colIdx].Typ.Id)
 	if id != types.T_char && id != types.T_varchar && id != types.T_json &&
-		id != types.T_binary && id != types.T_varbinary && id != types.T_blob && id != types.T_text {
+		id != types.T_binary && id != types.T_varbinary && id != types.T_blob && id != types.T_text && id != types.T_datalink {
 		field.Val = strings.TrimSpace(field.Val)
 	}
 	isNullOrEmpty := field.IsNull || (getNullFlag(param.Extern.NullMap, param.Attrs[colIdx], field.Val))
 	if id != types.T_char && id != types.T_varchar &&
-		id != types.T_binary && id != types.T_varbinary && id != types.T_json && id != types.T_blob && id != types.T_text {
+		id != types.T_binary && id != types.T_varbinary && id != types.T_json && id != types.T_blob && id != types.T_text && id != types.T_datalink {
 		isNullOrEmpty = isNullOrEmpty || len(field.Val) == 0
 	}
 	if isNullOrEmpty {
@@ -1651,7 +1651,7 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 				return err
 			}
 		}
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		// XXX Memory accounting?
 		buf.WriteString(field.Val)
 		bs := buf.Bytes()

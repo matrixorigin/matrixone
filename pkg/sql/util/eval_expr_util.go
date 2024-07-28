@@ -206,7 +206,7 @@ func SetBytesToAnyVector(ctx context.Context, val string, row int,
 			return err
 		}
 		return vector.SetFixedAt(vec, row, v)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_binary, types.T_varbinary, types.T_text:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		return vector.SetBytesAt(vec, row, []byte(val), proc.Mp())
 	case types.T_array_float32:
 		v, err := types.StringToArrayToBytes[float32](val)
@@ -291,7 +291,7 @@ func SetInsertValue(proc *process.Process, numVal *tree.NumVal, vec *vector.Vect
 		return setInsertValueDecimal64(proc, numVal, vec)
 	case types.T_decimal128:
 		return setInsertValueDecimal128(proc, numVal, vec)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_binary, types.T_varbinary, types.T_text,
+	case types.T_char, types.T_varchar, types.T_blob, types.T_binary, types.T_varbinary, types.T_text, types.T_datalink,
 		types.T_array_float32, types.T_array_float64:
 		return setInsertValueString(proc, numVal, vec)
 	case types.T_json:
@@ -664,11 +664,18 @@ func setInsertValueString(proc *process.Process, numVal *tree.NumVal, vec *vecto
 	checkStrLen := func(s string) ([]byte, error) {
 		typ := vec.GetType()
 		destLen := int(typ.Width)
-		if typ.Oid != types.T_text && typ.Oid != types.T_binary && destLen != 0 && !typ.Oid.IsArrayRelate() {
+		if typ.Oid != types.T_text && typ.Oid != types.T_datalink && typ.Oid != types.T_binary && destLen != 0 && !typ.Oid.IsArrayRelate() {
 			if utf8.RuneCountInString(s) > destLen {
 				return nil, function.FormatCastErrorForInsertValue(proc.Ctx, s, *typ, fmt.Sprintf("Src length %v is larger than Dest length %v", len(s), destLen))
 			}
 		}
+		if typ.Oid.IsDatalink() {
+			_, _, _, err2 := types.ParseDatalink(s)
+			if err2 != nil {
+				return nil, err2
+			}
+		}
+
 		var v []byte
 		if typ.Oid.IsArrayRelate() {
 			// Assuming that input s is of type "[1,2,3]"

@@ -194,6 +194,9 @@ var (
 		input:  "show index from t1 from db",
 		output: "show index from t1 from db",
 	}, {
+		input:  "create table t2(a int, b datalink);",
+		output: "create table t2 (a int, b datalink)",
+	}, {
 		input:  "select * from (SELECT * FROM (SELECT 1, 2, 3)) AS t1",
 		output: "select * from (select * from (select 1, 2, 3)) as t1",
 	}, {

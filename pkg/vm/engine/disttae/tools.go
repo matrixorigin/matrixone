@@ -1396,7 +1396,7 @@ func transferSval(v string, oid types.T) (bool, any) {
 		return true, []byte(v)
 	case types.T_char, types.T_varchar:
 		return true, []byte(v)
-	case types.T_text, types.T_blob:
+	case types.T_text, types.T_blob, types.T_datalink:
 		return true, []byte(v)
 	case types.T_binary, types.T_varbinary:
 		return true, []byte(v)
