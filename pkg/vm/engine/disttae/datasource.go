@@ -1161,7 +1161,7 @@ func (ls *LocalDataSource) Next(
 			//	ls.rangesCursor++
 			//	return ls.ranges[ls.rangesCursor-1], engine.Persisted, nil
 			//}
-			if len(ls.ranges) == 0{
+			if len(ls.ranges) == 0 {
 				return nil, engine.End, nil
 			}
 			ls.handleOrderBy()
