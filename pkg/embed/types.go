@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2021-2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,31 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package testengine
+package embed
 
 import (
-	"context"
-	"testing"
-
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
-func TestTestEngine(t *testing.T) {
-	runtime.RunTest(
-		"",
-		func(rt runtime.Runtime) {
-			catalog.SetupDefines("")
-			engine, client, compilerCtx := New(context.Background())
-			_ = engine
-			_ = client
-			_ = compilerCtx
-		},
-	)
+// Cluster is the mo cluster interface
+type Cluster interface {
+	Start() error
+	Close() error
+	GetService(sid string) (ServiceOperator, error)
+	GetCNService(index int) (ServiceOperator, error)
+	ForeachServices(fn func(ServiceOperator) bool)
 }
 
-func BenchmarkNew(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		New(context.Background())
-	}
+type Option func(*cluster)
+
+type ServiceOperator interface {
+	ServiceID() string
+	ServiceType() metadata.ServiceType
+	Index() int
+	Adjust(func(*ServiceConfig))
+
+	Start() error
+	Close() error
 }

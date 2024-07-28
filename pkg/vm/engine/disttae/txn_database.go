@@ -195,15 +195,15 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		switch name {
 		case catalog.MO_DATABASE:
 			id := uint64(catalog.MO_DATABASE_ID)
-			defs := catalog.MoDatabaseTableDefs
+			defs := catalog.GetDefines(p.GetService()).MoDatabaseTableDefs
 			return db.openSysTable(p, id, name, defs), nil
 		case catalog.MO_TABLES:
 			id := uint64(catalog.MO_TABLES_ID)
-			defs := catalog.MoTablesTableDefs
+			defs := catalog.GetDefines(p.GetService()).MoTablesTableDefs
 			return db.openSysTable(p, id, name, defs), nil
 		case catalog.MO_COLUMNS:
 			id := uint64(catalog.MO_COLUMNS_ID)
-			defs := catalog.MoColumnsTableDefs
+			defs := catalog.GetDefines(p.GetService()).MoColumnsTableDefs
 			return db.openSysTable(p, id, name, defs), nil
 		}
 	}
@@ -514,11 +514,11 @@ func (db *txnDatabase) openSysTable(p *process.Process, id uint64, name string,
 	}
 	switch name {
 	case catalog.MO_DATABASE:
-		tbl.constraint = catalog.MoDatabaseConstraint
+		tbl.constraint = catalog.GetDefines(p.GetService()).MoDatabaseConstraint
 	case catalog.MO_TABLES:
-		tbl.constraint = catalog.MoTableConstraint
+		tbl.constraint = catalog.GetDefines(p.GetService()).MoTableConstraint
 	case catalog.MO_COLUMNS:
-		tbl.constraint = catalog.MoColumnConstraint
+		tbl.constraint = catalog.GetDefines(p.GetService()).MoColumnConstraint
 	}
 	tbl.GetTableDef(context.TODO())
 	tbl.proc.Store(p)
