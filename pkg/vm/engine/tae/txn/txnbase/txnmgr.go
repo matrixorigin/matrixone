@@ -204,11 +204,13 @@ func (mgr *TxnManager) GetOrCreateTxnWithMeta(
 		logutil.Warnf("StartTxn: %v", err)
 		return
 	}
-	if _, ok := mgr.IDMap.Load(util.UnsafeBytesToString(id)); !ok {
+	if value, ok := mgr.IDMap.Load(util.UnsafeBytesToString(id)); !ok {
 		store := mgr.TxnStoreFactory()
 		txn = mgr.TxnFactory(mgr, store, id, ts, ts)
 		store.BindTxn(txn)
 		mgr.IDMap.Store(util.UnsafeBytesToString(id), txn)
+	} else {
+		txn = value.(txnif.AsyncTxn)
 	}
 	return
 }

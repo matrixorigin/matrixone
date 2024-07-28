@@ -96,15 +96,13 @@ func New(
 		packerPool: fileservice.NewPool(
 			128,
 			func() *types.Packer {
-				return types.NewPacker(mp)
+				return types.NewPacker()
 			},
 			func(packer *types.Packer) {
 				packer.Reset()
-				packer.FreeMem()
 			},
 			func(packer *types.Packer) {
-				packer.Reset()
-				packer.FreeMem()
+				packer.Close()
 			},
 		),
 	}
@@ -392,7 +390,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 			databaseId:   catalog.MO_CATALOG_ID,
 			databaseName: catalog.MO_CATALOG,
 		}
-		defs := catalog.MoDatabaseTableDefs
+		defs := catalog.GetDefines(e.service).MoDatabaseTableDefs
 		return catalog.MO_CATALOG, catalog.MO_DATABASE,
 			db.openSysTable(nil, tableId, catalog.MO_DATABASE, defs), nil
 	case catalog.MO_TABLES_ID:
@@ -401,7 +399,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 			databaseId:   catalog.MO_CATALOG_ID,
 			databaseName: catalog.MO_CATALOG,
 		}
-		defs := catalog.MoTablesTableDefs
+		defs := catalog.GetDefines(e.service).MoTablesTableDefs
 		return catalog.MO_CATALOG, catalog.MO_TABLES,
 			db.openSysTable(nil, tableId, catalog.MO_TABLES, defs), nil
 	case catalog.MO_COLUMNS_ID:
@@ -410,7 +408,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 			databaseId:   catalog.MO_CATALOG_ID,
 			databaseName: catalog.MO_CATALOG,
 		}
-		defs := catalog.MoColumnsTableDefs
+		defs := catalog.GetDefines(e.service).MoColumnsTableDefs
 		return catalog.MO_CATALOG, catalog.MO_COLUMNS,
 			db.openSysTable(nil, tableId, catalog.MO_COLUMNS, defs), nil
 	}

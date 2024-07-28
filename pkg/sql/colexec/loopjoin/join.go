@@ -39,7 +39,7 @@ func (loopJoin *LoopJoin) Prepare(proc *process.Process) error {
 	var err error
 
 	loopJoin.ctr = new(container)
-	loopJoin.ctr.InitReceiver(proc, false)
+	loopJoin.ctr.InitReceiver(proc, true)
 
 	if loopJoin.Cond != nil {
 		loopJoin.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopJoin.Cond)
@@ -76,7 +76,7 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				err = ctr.probe(loopJoin, proc, anal, loopJoin.GetIsLast(), &result)
 				return result, err
 			}
-			msg := ctr.ReceiveFromSingleReg(0, anal)
+			msg := ctr.ReceiveFromAllRegs(anal)
 			if msg.Err != nil {
 				return result, msg.Err
 			}

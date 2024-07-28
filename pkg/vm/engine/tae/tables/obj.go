@@ -134,13 +134,14 @@ func (obj *object) BatchDedup(
 	rowmask *roaring.Bitmap,
 	precommit bool,
 	bf objectio.BloomFilter,
+	startBLKID uint16,
 	mp *mpool.MPool,
 ) (err error) {
 	defer func() {
 		if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
 			logutil.Infof("BatchDedup %s (%v)obj-%s: %v",
 				obj.meta.Load().GetTable().GetLastestSchemaLocked().Name,
-				obj.IsAppendable(),
+				obj.meta.Load().IsAppendable(),
 				obj.meta.Load().ID().String(),
 				err)
 		}
@@ -158,6 +159,9 @@ func (obj *object) BatchDedup(
 	)
 }
 
+func (blk *baseObject) CheckFlushTaskRetry(startts types.TS) bool {
+	panic("not support")
+}
 func (obj *object) GetValue(
 	ctx context.Context,
 	txn txnif.AsyncTxn,

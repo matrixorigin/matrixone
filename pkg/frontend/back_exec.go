@@ -982,7 +982,7 @@ func (sh *SqlHelper) GetSubscriptionMeta(dbName string) (*plan.SubscriptionMeta,
 }
 
 // Made for sequence func. nextval, setval.
-func (sh *SqlHelper) ExecSql(sql string) (ret []interface{}, err error) {
+func (sh *SqlHelper) ExecSql(sql string) (ret [][]interface{}, err error) {
 	var erArray []ExecResult
 
 	ctx := sh.ses.txnCompileCtx.execCtx.reqCtx
@@ -1010,5 +1010,5 @@ func (sh *SqlHelper) ExecSql(sql string) (ret []interface{}, err error) {
 		return nil, nil
 	}
 
-	return erArray[0].(*MysqlResultSet).Data[0], nil
+	return erArray[0].(*MysqlResultSet).Data, nil
 }
