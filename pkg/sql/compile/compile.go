@@ -681,7 +681,6 @@ func (c *Compile) SetIsPrepare(isPrepare bool) {
 	c.isPrepare = isPrepare
 }
 
-/*
 func (c *Compile) printPipeline() {
 	if c.IsTpQuery() {
 		fmt.Println("pipeline for tp query!")
@@ -690,7 +689,7 @@ func (c *Compile) printPipeline() {
 	}
 	fmt.Println(DebugShowScopes(c.scope))
 }
-*/
+
 // run once
 func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
@@ -715,7 +714,7 @@ func (c *Compile) runOnce() error {
 		_, _ = GetCompileService().endService(c)
 	}()
 
-	//c.printPipeline()
+	c.printPipeline()
 
 	for i := range c.scope {
 		wg.Add(1)
@@ -3644,6 +3643,12 @@ func (c *Compile) newScopeListForRightJoin(childrenCount int, bIdx int, leftScop
 	ss[0].Proc = process.NewFromProc(c.proc, c.proc.Ctx, childrenCount)
 	ss[0].NodeInfo = engine.Node{Addr: c.addr, Mcpu: maxCpuNum}
 	ss[0].BuildIdx = bIdx
+
+	for i := range ss {
+		mergeOp := merge.NewArgument()
+		ss[i].setRootOperator(mergeOp)
+	}
+
 	return ss
 }
 
