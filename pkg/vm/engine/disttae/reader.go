@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"sort"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -84,6 +85,7 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 	mixin.columns.indexOfFirstSortedColumn = -1
 
 	for i, column := range cols {
+		column = strings.ToLower(column)
 		if column == catalog.Row_ID {
 			mixin.columns.seqnums[i] = objectio.SEQNUM_ROWID
 			mixin.columns.colTypes[i] = objectio.RowidType

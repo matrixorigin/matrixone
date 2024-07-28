@@ -129,7 +129,13 @@ func HandleSyncLogTailReq(
 	logutil.Debugf("[Logtail] begin handle %+v", req)
 	defer func() {
 		if elapsed := time.Since(now); elapsed > 5*time.Second {
-			logutil.Infof("[Logtail] long pull cost %v, %v: %+v, %v ", elapsed, canRetry, req, err)
+			logutil.Warn(
+				"LOGTAIL-SLOW-PULL",
+				zap.Duration("duration", elapsed),
+				zap.Any("request", req),
+				zap.Bool("can-retry", canRetry),
+				zap.Error(err),
+			)
 		}
 		logutil.Debugf("[Logtail] end handle %d entries[%q], err %v", len(resp.Commands), resp.CkpLocation, err)
 	}()
@@ -184,10 +190,16 @@ func HandleSyncLogTailReq(
 	if canRetry && scope == ScopeUserTables { // check simple conditions first
 		_, name, forceFlush := fault.TriggerFault("logtail_max_size")
 		if (forceFlush && name == tableEntry.GetLastestSchemaLocked().Name) || resp.ProtoSize() > Size90M {
-			_ = ckpClient.FlushTable(ctx, did, tid, end)
+			flushErr := ckpClient.FlushTable(ctx, did, tid, end)
 			// try again after flushing
 			newResp, closeCB, err := HandleSyncLogTailReq(ctx, ckpClient, mgr, c, req, false)
-			logutil.Infof("[logtail] flush result: %d -> %d err: %v", resp.ProtoSize(), newResp.ProtoSize(), err)
+			logutil.Info(
+				"LOGTAIL-WITH-FLUSH",
+				zap.Any("flush-err", flushErr),
+				zap.Error(err),
+				zap.Int("from-size", resp.ProtoSize()),
+				zap.Int("to-size", newResp.ProtoSize()),
+			)
 			return newResp, closeCB, err
 		}
 	}

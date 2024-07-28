@@ -239,7 +239,7 @@ func checkColumnsPartitionType(ctx context.Context, tbInfo *TableDef, pi *plan.P
 			// When partitioning by [LINEAR] KEY, it is possible to use columns of any valid MySQL data type other than TEXT or BLOB
 			// as partitioning keys, because MySQL's internal key-hashing functions produce the correct data type from these types.
 			// See https://dev.mysql.com/doc/refman/8.0/en/partitioning-limitations.html
-			if t == types.T_blob || t == types.T_text || t == types.T_json {
+			if t == types.T_blob || t == types.T_text || t == types.T_json || t == types.T_datalink {
 				return moerr.NewBlobFieldInPartFunc(ctx)
 			}
 		} else {
@@ -252,7 +252,7 @@ func checkColumnsPartitionType(ctx context.Context, tbInfo *TableDef, pi *plan.P
 			//	TEXT and BLOB columns are not supported as partitioning columns.
 			// See https://dev.mysql.com/doc/refman/8.0/en/partitioning-columns.html
 			if t == types.T_float32 || t == types.T_float64 || t == types.T_decimal64 || t == types.T_decimal128 ||
-				t == types.T_timestamp || t == types.T_blob || t == types.T_text || t == types.T_json || t == types.T_enum {
+				t == types.T_timestamp || t == types.T_blob || t == types.T_text || t == types.T_json || t == types.T_enum || t == types.T_datalink {
 				return moerr.NewFieldTypeNotAllowedAsPartitionField(ctx, colName)
 			}
 		}

@@ -40,7 +40,7 @@ func (productl2 *Productl2) OpType() vm.OpType {
 func (productl2 *Productl2) Prepare(proc *process.Process) error {
 	ap := productl2
 	ap.ctr = new(container)
-	ap.ctr.InitReceiver(proc, false)
+	ap.ctr.InitReceiver(proc, true)
 	return nil
 }
 
@@ -70,7 +70,7 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 				return result, nil
 			}
-			msg := ctr.ReceiveFromSingleReg(0, anal)
+			msg := ctr.ReceiveFromAllRegs(anal)
 			if msg.Err != nil {
 				return result, msg.Err
 			}
