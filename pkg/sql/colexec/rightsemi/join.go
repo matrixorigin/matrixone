@@ -125,6 +125,7 @@ func (rightSemi *RightSemi) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 				result.Batch = rightSemi.ctr.buf[rightSemi.ctr.lastpos]
 				rightSemi.ctr.lastpos++
+				result.Status = vm.ExecHasMore
 				return result, nil
 			}
 
