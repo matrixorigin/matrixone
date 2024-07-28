@@ -497,7 +497,7 @@ func buildJoinParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		channel := make(chan *bitmap.Bitmap, mcpu)
 		for i := range ns.PreScopes {
 			s := ns.PreScopes[i]
-			switch arg := vm.GetLeafOp(s.RootOp).(type) {
+			switch arg := vm.GetLeafOpParent(nil, s.RootOp).(type) {
 			case *right.RightJoin:
 				arg.Channel = channel
 				arg.NumCPU = uint64(mcpu)
@@ -733,7 +733,7 @@ func (s *Scope) isRight() bool {
 	if s == nil {
 		return false
 	}
-	OpType := vm.GetLeafOp(s.RootOp).OpType()
+	OpType := vm.GetLeafOpParent(nil, s.RootOp).OpType()
 	return OpType == vm.Right || OpType == vm.RightSemi || OpType == vm.RightAnti
 }
 

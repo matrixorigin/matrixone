@@ -40,6 +40,7 @@ func (rightAnti *RightAnti) OpType() vm.OpType {
 
 func (rightAnti *RightAnti) Prepare(proc *process.Process) (err error) {
 	rightAnti.ctr = new(container)
+	rightAnti.ctr.InitReceiver(proc, false)
 	rightAnti.ctr.vecs = make([]*vector.Vector, len(rightAnti.Conditions[0]))
 	rightAnti.ctr.evecs = make([]evalVector, len(rightAnti.Conditions[0]))
 	for i := range rightAnti.ctr.evecs {
