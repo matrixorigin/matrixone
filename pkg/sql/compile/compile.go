@@ -2033,7 +2033,7 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	n := s.DataSource.node
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
-		attrs[j] = col.Name
+		attrs[j] = col.GetOriginCaseName()
 	}
 
 	//-----------------------------------------------------------------------------------------------------
@@ -2286,15 +2286,7 @@ func (c *Compile) compileJoin(node, left, right *plan.Node, ns []*plan.Node, pro
 	if c.IsTpQuery() {
 		//construct join build operator for tp join
 		buildScopes[0].setRootOperator(constructJoinBuildOperator(c, vm.GetLeafOp(rs[0].RootOp), false, 1))
-		rs[0].Proc.Reg.MergeReceivers[1] = &process.WaitRegister{
-			Ctx: rs[0].Proc.Ctx,
-			Ch:  make(chan *process.RegisterMessage, 1),
-		}
-		buildScopes[0].setRootOperator(
-			connector.NewArgument().
-				WithReg(rs[0].Proc.Reg.MergeReceivers[1]),
-		)
-		rs[0].Proc.Reg.MergeReceivers = rs[0].Proc.Reg.MergeReceivers[:2]
+		rs[0].Proc.Reg.MergeReceivers = rs[0].Proc.Reg.MergeReceivers[:1]
 		buildScopes[0].IsEnd = true
 	}
 	return rs
@@ -3679,10 +3671,6 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 	rs := make([]*Scope, length)
 	idx := 0
 	for i := range probeScopes {
-		if probeScopes[i].IsEnd {
-			rs[i] = probeScopes[i]
-			continue
-		}
 		rs[i] = newScope(Remote)
 		rs[i].IsJoin = true
 		rs[i].NodeInfo = probeScopes[i].NodeInfo
@@ -3805,7 +3793,7 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 	return parent, children
 }
 
-func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
+func (c *Compile) newShuffleJoinProbeScope(s *Scope) *Scope {
 	rs := newScope(Merge)
 	mergeOp := merge.NewArgument()
 	mergeOp.SetIdx(vm.GetLeafOp(s.RootOp).GetOperatorBase().GetIdx())
@@ -3816,26 +3804,36 @@ func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 		regTransplant(s, rs, i, i)
 	}
 
-	if ss == nil {
-		s.Proc.Reg.MergeReceivers[0] = &process.WaitRegister{
-			Ctx: s.Proc.Ctx,
-			Ch:  make(chan *process.RegisterMessage, shuffleChannelBufferSize),
-		}
-		rs.setRootOperator(
-			connector.NewArgument().
-				WithReg(s.Proc.Reg.MergeReceivers[0]),
-		)
-		s.Proc.Reg.MergeReceivers = append(s.Proc.Reg.MergeReceivers[:1], s.Proc.Reg.MergeReceivers[s.BuildIdx:]...)
-		s.BuildIdx = 1
-	} else {
-		rs.setRootOperator(constructDispatchLocal(false, false, false, extraRegisters(ss, 0)))
+	s.Proc.Reg.MergeReceivers[0] = &process.WaitRegister{
+		Ctx: s.Proc.Ctx,
+		Ch:  make(chan *process.RegisterMessage, shuffleChannelBufferSize),
 	}
+	rs.setRootOperator(
+		connector.NewArgument().
+			WithReg(s.Proc.Reg.MergeReceivers[0]),
+	)
+	s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:1]
 	rs.IsEnd = true
-
 	return rs
 }
 
-func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope, mcpu int32) *Scope {
+func (c *Compile) newBroadcastJoinProbeScope(s *Scope, ss []*Scope) *Scope {
+	rs := newScope(Merge)
+	mergeOp := merge.NewArgument()
+	mergeOp.SetIdx(vm.GetLeafOp(s.RootOp).GetOperatorBase().GetIdx())
+	mergeOp.SetIsFirst(true)
+	rs.setRootOperator(mergeOp)
+	rs.Proc = process.NewFromProc(s.Proc, s.Proc.Ctx, s.BuildIdx)
+	for i := 0; i < s.BuildIdx; i++ {
+		regTransplant(s, rs, i, i)
+	}
+
+	rs.setRootOperator(constructDispatchLocal(false, false, false, extraRegisters(ss, 0)))
+	rs.IsEnd = true
+	return rs
+}
+
+func (c *Compile) newJoinBuildScope(s *Scope, mcpu int32) *Scope {
 	rs := newScope(Merge)
 	buildLen := len(s.Proc.Reg.MergeReceivers) - s.BuildIdx
 	rs.Proc = process.NewFromProc(s.Proc, s.Proc.Ctx, buildLen)
@@ -3848,21 +3846,6 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope, mcpu int32) *Scope {
 	rs.setRootOperator(mergeOp)
 	rs.setRootOperator(constructJoinBuildOperator(c, vm.GetLeafOp(s.RootOp), s.ShuffleIdx > 0, mcpu))
 
-	if ss == nil { // unparallel, send the hashtable to join scope directly
-		s.Proc.Reg.MergeReceivers[s.BuildIdx] = &process.WaitRegister{
-			Ctx: s.Proc.Ctx,
-			Ch:  make(chan *process.RegisterMessage, 1),
-		}
-		rs.setRootOperator(
-			connector.NewArgument().
-				WithReg(s.Proc.Reg.MergeReceivers[s.BuildIdx]),
-		)
-		s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:s.BuildIdx+1]
-	} else {
-		rs.setRootOperator(
-			constructDispatchLocal(true, false, false, extraRegisters(ss, s.BuildIdx)),
-		)
-	}
 	rs.IsEnd = true
 
 	return rs

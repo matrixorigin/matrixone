@@ -655,12 +655,13 @@ func (entry *ObjectEntry) GetPKZoneMap(
 }
 
 func (entry *ObjectEntry) CheckPrintPrepareCompact() bool {
-	return entry.CheckPrintPrepareCompactLocked()
+
+	return entry.CheckPrintPrepareCompactLocked(30 * time.Minute)
 }
 
-func (entry *ObjectEntry) CheckPrintPrepareCompactLocked() bool {
+func (entry *ObjectEntry) CheckPrintPrepareCompactLocked(duration time.Duration) bool {
 	startTS := entry.GetLastMVCCNode().GetStart()
-	return startTS.Physical() < time.Now().UTC().UnixNano()-(time.Minute*30).Nanoseconds()
+	return startTS.Physical() < time.Now().UTC().UnixNano()-duration.Nanoseconds()
 }
 
 func (entry *ObjectEntry) PrintPrepareCompactDebugLog() {

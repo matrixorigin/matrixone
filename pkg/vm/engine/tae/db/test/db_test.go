@@ -8025,7 +8025,20 @@ func TestDedupSnapshot3(t *testing.T) {
 	}
 	wg.Wait()
 
-	tae.CheckRowsByScan(totalRows, false)
+	txn, rel := tae.GetRelation()
+	for _, def := range schema.ColDefs {
+		rows := testutil.GetColumnRowsByScan(t, rel, def.Idx, false)
+		if totalRows != rows {
+			t.Log(tae.Catalog.SimplePPString(common.PPL3))
+			it := rel.MakeObjectIt()
+			for it.Next() {
+				obj := it.GetObject()
+				t.Log(obj.GetMeta().(*catalog.ObjectEntry).GetObjectData().PPString(common.PPL3, 0, "", -1))
+			}
+		}
+		require.Equal(t, totalRows, rows)
+	}
+	require.NoError(t, txn.Commit(context.Background()))
 }
 
 func TestDeduplication(t *testing.T) {

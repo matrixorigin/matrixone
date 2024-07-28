@@ -33,11 +33,14 @@ func TestCatalogHandler(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	catalog.SetupDefines("")
+
 	// new
 	clock := clock.NewHLCClock(func() int64 {
 		return time.Now().UnixNano()
 	}, math.MaxInt64)
 	catalogHandler, err := NewCatalogHandler(
+		"",
 		NewMemHandler(
 			mpool.MustNewZero(),
 			clock,

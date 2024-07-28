@@ -692,6 +692,10 @@ func TestReplaceServerConn(t *testing.T) {
 
 func TestCheckTxnStatus(t *testing.T) {
 	inTxn, ok := checkTxnStatus(nil)
+	require.True(t, ok)
+	require.True(t, inTxn)
+
+	inTxn, ok = checkTxnStatus(makeErrPacket(8))
 	require.False(t, ok)
 	require.True(t, inTxn)
 
