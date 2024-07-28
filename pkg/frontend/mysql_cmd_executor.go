@@ -1178,8 +1178,7 @@ func handleAlterPitr(ses *Session, execCtx *ExecCtx, ap *tree.AlterPitr) error {
 }
 
 func handleRestorePitr(ses *Session, execCtx *ExecCtx, rp *tree.RestorePitr) error {
-	//return doRestorePitr(execCtx.reqCtx, ses, rp)
-	return nil
+	return doRestorePitr(execCtx.reqCtx, ses, rp)
 }
 
 // handleCreateAccount creates a new user-level tenant in the context of the tenant SYS
