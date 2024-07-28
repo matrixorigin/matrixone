@@ -19,6 +19,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -35,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
-	"github.com/stretchr/testify/require"
 )
 
 func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
@@ -114,7 +115,7 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 	_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
 	require.NoError(t, err)
 
-	ranges, err := relation.RangesInProgress(ctx, expr, txn.GetWorkspace().GetSnapshotWriteOffset())
+	ranges, err := relation.Ranges(ctx, expr, txn.GetWorkspace().GetSnapshotWriteOffset())
 	require.NoError(t, err)
 
 	reader, err := testutil.NewDefaultTableReader(
@@ -213,7 +214,7 @@ func TestReaderCanReadUncommittedInMemInsertAndDeletes(t *testing.T) {
 	//_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
 	//require.NoError(t, err)
 
-	ranges, err := relation.RangesInProgress(ctx, expr, txn.GetWorkspace().GetSnapshotWriteOffset())
+	ranges, err := relation.Ranges(ctx, expr, txn.GetWorkspace().GetSnapshotWriteOffset())
 	require.NoError(t, err)
 
 	reader, err := testutil.NewDefaultTableReader(
@@ -307,7 +308,7 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 		_, relation, txn, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.NoError(t, err)
 
-		ranges, err := relation.RangesInProgress(ctx, nil, txn.GetWorkspace().GetSnapshotWriteOffset())
+		ranges, err := relation.Ranges(ctx, nil, txn.GetWorkspace().GetSnapshotWriteOffset())
 		require.NoError(t, err)
 
 		reader, err := testutil.NewDefaultTableReader(
