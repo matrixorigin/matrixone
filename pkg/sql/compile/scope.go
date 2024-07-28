@@ -427,7 +427,7 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 	// probability 1: it's a JOIN pipeline.
 	case s.IsJoin:
 		parallelScope, err = buildJoinParallelRun(s, c)
-		fmt.Println(DebugShowScopes([]*Scope{parallelScope}))
+		//fmt.Println(DebugShowScopes([]*Scope{parallelScope}))
 
 	// probability 2: it's a LOAD pipeline.
 	case s.IsLoad:
