@@ -1857,15 +1857,12 @@ func (tbl *txnTable) BuildReaders(
 		return []engine.Reader{new(emptyReader)}, nil
 	}
 
-	if orderBy {
-		if num != 1 {
-			return nil, moerr.NewInternalErrorNoCtx("orderBy only support one reader")
-		}
+	if orderBy && num != 1 {
+		return nil, moerr.NewInternalErrorNoCtx("orderBy only support one reader")
 	}
 
 	//relData maybe is nil, indicate that only read data from memory.
 	if relData == nil || relData.BlkCnt() == 0 {
-		//s := objectio.BlockInfoSliceInProgress(objectio.EmptyBlockInfoInProgressBytes)
 		relData = buildRelationDataV1()
 		relData.AppendDataBlk(&objectio.EmptyBlockInfoInProgress)
 	}

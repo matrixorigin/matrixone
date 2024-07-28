@@ -1157,13 +1157,10 @@ func (ls *LocalDataSource) Next(
 			return nil, engine.InMem, nil
 
 		case engine.Persisted:
-			//if ls.rangesCursor < len(ls.ranges) {
-			//	ls.rangesCursor++
-			//	return ls.ranges[ls.rangesCursor-1], engine.Persisted, nil
-			//}
 			if len(ls.ranges) == 0 {
 				return nil, engine.End, nil
 			}
+
 			ls.handleOrderBy()
 
 			if len(ls.ranges) == 0 {
@@ -1172,15 +1169,8 @@ func (ls *LocalDataSource) Next(
 
 			blk := ls.ranges[0]
 			ls.deleteFirstNBlocks(1)
+
 			return blk, engine.Persisted, nil
-
-			//if ls.cursor < len(ls.ranges) {
-			//	ls.cursor++
-			//	return ls.ranges[ls.cursor-1], engine.Persisted, nil
-			//}
-
-			//ls.iteratePhase = engine.End
-			//continue
 
 		case engine.End:
 			return nil, ls.iteratePhase, nil
