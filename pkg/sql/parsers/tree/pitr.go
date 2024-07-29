@@ -243,8 +243,6 @@ func (node *RestorePitr) Format(ctx *FmtCtx) {
 		ctx.WriteString(" from account ")
 		node.SrcAccountName.Format(ctx)
 	}
-	ctx.WriteString(" timestamp = ")
-	ctx.WriteString(node.TimeStamp)
 }
 
 func (node *RestorePitr) GetStatementType() string { return "Restore PITR" }
