@@ -658,6 +658,23 @@ type RelData interface {
 	AppendBlockInfo(blk objectio.BlockInfoInProgress)
 }
 
+// ForRangeShardID [begin, end)
+func ForRangeShardID(
+	begin, end int,
+	relData RelData,
+	onShardID func(shardID uint64) (bool, error)) error {
+	slice := relData.GetShardIDList()
+
+	for idx := begin; idx < end; idx++ {
+		if ok, err := onShardID(slice[idx]); !ok || err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// ForRangeBlockInfo [begin, end)
 func ForRangeBlockInfo(
 	begin, end int,
 	relData RelData,
@@ -693,11 +710,6 @@ type DataSource interface {
 		mp *mpool.MPool,
 		vp VectorPool,
 		bat *batch.Batch) (*objectio.BlockInfoInProgress, DataState, error)
-
-	HasTombstones(bid types.Blockid) bool
-
-	// ApplyTombstones Apply tombstones into rows.
-	ApplyTombstones(rows []types.Rowid) ([]int64, error)
 
 	ApplyTombstonesInProgress(
 		ctx context.Context,

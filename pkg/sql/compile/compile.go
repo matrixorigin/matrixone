@@ -4313,9 +4313,9 @@ func putBlocksInAverage(c *Compile, relData engine.RelData, n *plan.Node) engine
 					})
 				}
 
-				engine.ForRangeBlockInfo(i, relData.DataCnt(), relData,
-					func(blk objectio.BlockInfoInProgress) (bool, error) {
-						nodes[0].Data.AppendBlockInfo(blk)
+				engine.ForRangeShardID(i, relData.DataCnt(), relData,
+					func(shardID uint64) (bool, error) {
+						nodes[0].Data.AppendShardID(shardID)
 						return true, nil
 					})
 
@@ -4328,9 +4328,9 @@ func putBlocksInAverage(c *Compile, relData engine.RelData, n *plan.Node) engine
 					Data: relData.BuildEmptyRelData(),
 				}
 
-				engine.ForRangeBlockInfo(i, relData.DataCnt(), relData,
-					func(blk objectio.BlockInfoInProgress) (bool, error) {
-						node.Data.AppendBlockInfo(blk)
+				engine.ForRangeShardID(i, relData.DataCnt(), relData,
+					func(shardID uint64) (bool, error) {
+						node.Data.AppendShardID(shardID)
 						return true, nil
 					})
 
@@ -4347,9 +4347,9 @@ func putBlocksInAverage(c *Compile, relData engine.RelData, n *plan.Node) engine
 				}
 				//nodes[0].Data = append(nodes[0].Data, ranges.Slice(i, i+step)...)
 
-				engine.ForRangeBlockInfo(i, i+step, relData,
-					func(blk objectio.BlockInfoInProgress) (bool, error) {
-						nodes[0].Data.AppendBlockInfo(blk)
+				engine.ForRangeShardID(i, i+step, relData,
+					func(shardID uint64) (bool, error) {
+						nodes[0].Data.AppendShardID(shardID)
 						return true, nil
 					})
 
@@ -4361,9 +4361,9 @@ func putBlocksInAverage(c *Compile, relData engine.RelData, n *plan.Node) engine
 					Data: relData.BuildEmptyRelData(),
 				}
 
-				engine.ForRangeBlockInfo(i, i+step, relData,
-					func(blk objectio.BlockInfoInProgress) (bool, error) {
-						node.Data.AppendBlockInfo(blk)
+				engine.ForRangeShardID(i, i+step, relData,
+					func(shardID uint64) (bool, error) {
+						node.Data.AppendShardID(shardID)
 						return true, nil
 					})
 

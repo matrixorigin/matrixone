@@ -19,6 +19,7 @@ import (
 	"context"
 	"slices"
 	"sort"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -1148,6 +1149,11 @@ func (ls *LocalDataSource) Next(
 	vp engine.VectorPool,
 	bat *batch.Batch,
 ) (*objectio.BlockInfoInProgress, engine.DataState, error) {
+
+	if strings.Contains(ls.table.tableName, "bmsql") {
+		x := 0
+		x++
+	}
 
 	if ls.memPKFilter == nil {
 		ff := filter.(MemPKFilter)

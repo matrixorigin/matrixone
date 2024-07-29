@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -329,6 +330,14 @@ func (r *reader) Read(
 		} else {
 			bat.Vecs[i] = vp.GetVector(r.columns.colTypes[i])
 		}
+	}
+
+	if strings.Contains(r.withFilterMixin.tableDef.Name, "bmsql") {
+		var ss = "nil"
+		if expr != nil {
+			ss = plan2.FormatExpr(expr)
+		}
+		fmt.Println(r.withFilterMixin.tableDef.Name, ss)
 	}
 
 	blkInfo, state, err := r.source.Next(
