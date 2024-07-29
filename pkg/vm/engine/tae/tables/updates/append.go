@@ -218,3 +218,6 @@ func (node *AppendNode) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	cmd = NewAppendCmd(id, node)
 	return
 }
+func (node *AppendNode) GetBlockOffset() uint16 {
+	return node.mvcc.blkOffset
+}

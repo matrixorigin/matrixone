@@ -3793,7 +3793,7 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 	return parent, children
 }
 
-func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
+func (c *Compile) newShuffleJoinProbeScope(s *Scope) *Scope {
 	rs := newScope(Merge)
 	mergeOp := merge.NewArgument()
 	mergeOp.SetIdx(vm.GetLeafOp(s.RootOp).GetOperatorBase().GetIdx())
@@ -3804,26 +3804,36 @@ func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 		regTransplant(s, rs, i, i)
 	}
 
-	if ss == nil {
-		s.Proc.Reg.MergeReceivers[0] = &process.WaitRegister{
-			Ctx: s.Proc.Ctx,
-			Ch:  make(chan *process.RegisterMessage, shuffleChannelBufferSize),
-		}
-		rs.setRootOperator(
-			connector.NewArgument().
-				WithReg(s.Proc.Reg.MergeReceivers[0]),
-		)
-		s.Proc.Reg.MergeReceivers = append(s.Proc.Reg.MergeReceivers[:1], s.Proc.Reg.MergeReceivers[s.BuildIdx:]...)
-		s.BuildIdx = 1
-	} else {
-		rs.setRootOperator(constructDispatchLocal(false, false, false, extraRegisters(ss, 0)))
+	s.Proc.Reg.MergeReceivers[0] = &process.WaitRegister{
+		Ctx: s.Proc.Ctx,
+		Ch:  make(chan *process.RegisterMessage, shuffleChannelBufferSize),
 	}
+	rs.setRootOperator(
+		connector.NewArgument().
+			WithReg(s.Proc.Reg.MergeReceivers[0]),
+	)
+	s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:1]
 	rs.IsEnd = true
-
 	return rs
 }
 
-func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope, mcpu int32) *Scope {
+func (c *Compile) newBroadcastJoinProbeScope(s *Scope, ss []*Scope) *Scope {
+	rs := newScope(Merge)
+	mergeOp := merge.NewArgument()
+	mergeOp.SetIdx(vm.GetLeafOp(s.RootOp).GetOperatorBase().GetIdx())
+	mergeOp.SetIsFirst(true)
+	rs.setRootOperator(mergeOp)
+	rs.Proc = process.NewFromProc(s.Proc, s.Proc.Ctx, s.BuildIdx)
+	for i := 0; i < s.BuildIdx; i++ {
+		regTransplant(s, rs, i, i)
+	}
+
+	rs.setRootOperator(constructDispatchLocal(false, false, false, extraRegisters(ss, 0)))
+	rs.IsEnd = true
+	return rs
+}
+
+func (c *Compile) newJoinBuildScope(s *Scope, mcpu int32) *Scope {
 	rs := newScope(Merge)
 	buildLen := len(s.Proc.Reg.MergeReceivers) - s.BuildIdx
 	rs.Proc = process.NewFromProc(s.Proc, s.Proc.Ctx, buildLen)
@@ -4684,7 +4694,7 @@ func shuffleBlocksByRange(c *Compile, ranges objectio.BlockInfoSlice, n *plan.No
 			switch zm.GetType() {
 			case types.T_int64, types.T_int32, types.T_int16:
 				shuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(n.Stats.HashmapStats.Ranges, len(c.cnList), n.Stats.HashmapStats.Nullcnt, int64(n.Stats.TableCnt))
-			case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit:
+			case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit, types.T_datalink:
 				shuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(n.Stats.HashmapStats.Ranges, len(c.cnList), n.Stats.HashmapStats.Nullcnt, int64(n.Stats.TableCnt))
 			}
 		}

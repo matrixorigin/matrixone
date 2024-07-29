@@ -1087,6 +1087,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					if colType.GetId() == int32(types.T_text) {
 						return moerr.NewNotSupported(ctx.GetContext(), "text type in primary key")
 					}
+					if colType.GetId() == int32(types.T_datalink) {
+						return moerr.NewNotSupported(ctx.GetContext(), "datalink type in primary key")
+					}
 					if colType.GetId() == int32(types.T_json) {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in primary key", colNameOrigin))
 					}
@@ -1472,6 +1475,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		if colMap[str].Typ.Id == int32(types.T_text) {
 			return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("TEXT column '%s' cannot be in index", str))
 		}
+		if colMap[str].Typ.Id == int32(types.T_datalink) {
+			return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("DATALINK column '%s' cannot be in index", str))
+		}
 		if colMap[str].Typ.Id == int32(types.T_json) {
 			return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", str))
 		}
@@ -1585,6 +1591,9 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			}
 			if colMap[name].Typ.Id == int32(types.T_text) {
 				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("TEXT column '%s' cannot be in index", nameOrigin))
+			}
+			if colMap[name].Typ.Id == int32(types.T_datalink) {
+				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("DATALINK column '%s' cannot be in index", nameOrigin))
 			}
 			if colMap[name].Typ.Id == int32(types.T_json) {
 				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", nameOrigin))
@@ -1840,6 +1849,9 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		}
 		if colMap[name].Typ.Id == int32(types.T_text) {
 			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("TEXT column '%s' cannot be in index", nameOrigin))
+		}
+		if colMap[name].Typ.Id == int32(types.T_datalink) {
+			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("DATALINK column '%s' cannot be in index", nameOrigin))
 		}
 		if colMap[name].Typ.Id == int32(types.T_json) {
 			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", nameOrigin))
@@ -3195,6 +3207,9 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					}
 					if colType.GetId() == int32(types.T_text) {
 						return nil, moerr.NewNotSupported(ctx.GetContext(), "text type in primary key")
+					}
+					if colType.GetId() == int32(types.T_datalink) {
+						return nil, moerr.NewNotSupported(ctx.GetContext(), "datalink type in primary key")
 					}
 					if colType.GetId() == int32(types.T_json) {
 						return nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in primary key", colNameOrigin))

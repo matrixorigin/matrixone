@@ -21,6 +21,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"io"
 	"math"
 	"runtime"
@@ -507,6 +508,10 @@ func JsonUnquote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 }
 
 func ReadFromFile(Filepath string, fs fileservice.FileService) (io.ReadCloser, error) {
+	return ReadFromFileOffsetSize(Filepath, fs, 0, -1)
+}
+
+func ReadFromFileOffsetSize(Filepath string, fs fileservice.FileService, offset, size int64) (io.ReadCloser, error) {
 	fs, readPath, err := fileservice.GetForETL(context.TODO(), fs, Filepath)
 	if fs == nil || err != nil {
 		return nil, err
@@ -517,8 +522,8 @@ func ReadFromFile(Filepath string, fs fileservice.FileService) (io.ReadCloser, e
 		FilePath: readPath,
 		Entries: []fileservice.IOEntry{
 			0: {
-				Offset:            0,
-				Size:              -1,
+				Offset:            offset, //0 - default
+				Size:              size,   //-1 - default
 				ReadCloserForRead: &r,
 			},
 		},
@@ -563,6 +568,64 @@ func LoadFile(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 
 	if err = rs.AppendBytes(ctx, false); err != nil {
 		return err
+	}
+	return nil
+}
+
+// LoadFileDatalink reads a file from the file service and returns the content as a blob.
+func LoadFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	filePathVec := vector.GenerateFunctionStrParameter(ivecs[0])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		_filePath, null1 := filePathVec.GetStrValue(i)
+		if null1 {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		filePath := util.UnsafeBytesToString(_filePath)
+		fs := proc.GetFileService()
+
+		moUrl, offsetSize, ext, err := types.ParseDatalink(filePath)
+		if err != nil {
+			return err
+		}
+		r, err := ReadFromFileOffsetSize(moUrl, fs, int64(offsetSize[0]), int64(offsetSize[1]))
+		if err != nil {
+			return err
+		}
+
+		defer r.Close()
+
+		fileBytes, err := io.ReadAll(r)
+		if err != nil {
+			return err
+		}
+
+		var contentBytes []byte
+		switch ext {
+		case ".csv", ".txt":
+			contentBytes = fileBytes
+			//nothing to do.
+		default:
+			return moerr.NewInvalidInput(proc.Ctx, "unsupported file extension: %s", ext)
+		}
+
+		if len(fileBytes) > 65536 /*blob size*/ {
+			return moerr.NewInternalError(proc.Ctx, "Data too long for blob")
+		}
+		if len(fileBytes) == 0 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			return nil
+		}
+
+		if err = rs.AppendBytes(contentBytes, false); err != nil {
+			return err
+		}
 	}
 	return nil
 }

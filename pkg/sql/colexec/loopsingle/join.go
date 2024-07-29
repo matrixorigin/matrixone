@@ -40,7 +40,7 @@ func (loopSingle *LoopSingle) Prepare(proc *process.Process) error {
 	var err error
 
 	loopSingle.ctr = new(container)
-	loopSingle.ctr.InitReceiver(proc, false)
+	loopSingle.ctr.InitReceiver(proc, true)
 	loopSingle.ctr.bat = batch.NewWithSize(len(loopSingle.Typs))
 	for i, typ := range loopSingle.Typs {
 		loopSingle.ctr.bat.Vecs[i] = proc.GetVector(typ)
@@ -72,7 +72,7 @@ func (loopSingle *LoopSingle) Call(proc *process.Process) (vm.CallResult, error)
 
 		case Probe:
 			var err error
-			msg := ctr.ReceiveFromSingleReg(0, anal)
+			msg := ctr.ReceiveFromAllRegs(anal)
 			if msg.Err != nil {
 				return result, msg.Err
 			}

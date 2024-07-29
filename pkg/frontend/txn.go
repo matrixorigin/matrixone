@@ -774,6 +774,7 @@ func (th *TxnHandler) createTempStorageUnsafe(ck clock.Clock) error {
 	}
 
 	ms, err := memorystorage.NewMemoryStorage(
+		th.service,
 		mpool.MustNewZeroNoFixed(),
 		ck,
 		memoryengine.RandomIDGenerator,
