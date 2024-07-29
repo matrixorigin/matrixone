@@ -946,7 +946,7 @@ type LocalDataSource struct {
 	ranges []*objectio.BlockInfoInProgress
 	pState *logtailreplay.PartitionState
 
-	memPKFilter *MemPKFilterInProgress
+	memPKFilter *MemPKFilter
 	pStateRows  struct {
 		insIter logtailreplay.RowsIter
 	}
@@ -1150,7 +1150,7 @@ func (ls *LocalDataSource) Next(
 ) (*objectio.BlockInfoInProgress, engine.DataState, error) {
 
 	if ls.memPKFilter == nil {
-		ff := filter.(MemPKFilterInProgress)
+		ff := filter.(MemPKFilter)
 		ls.memPKFilter = &ff
 	}
 

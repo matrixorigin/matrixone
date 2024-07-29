@@ -303,13 +303,6 @@ func (b *deletedBlocks) addDeletedBlocks(blockID *types.Blockid, offsets []int64
 //	return len(b.offsets) == 0
 //}
 
-func (b *deletedBlocks) getDeletedOffsetsByBlock(blockID *types.Blockid, offsets *[]int64) {
-	b.RLock()
-	defer b.RUnlock()
-	res := b.offsets[*blockID]
-	*offsets = append(*offsets, res...)
-}
-
 func (b *deletedBlocks) getDeletedRowIDs(rows *[]types.Rowid) {
 	b.RLock()
 	defer b.RUnlock()
@@ -794,13 +787,6 @@ type withFilterMixin struct {
 		hasNull  bool
 		record   bool
 	}
-
-	sels []int32
-}
-
-type blockSortHelper struct {
-	blk *objectio.BlockInfo
-	zm  index.ZM
 }
 
 type blockSortHelperInProgress struct {
@@ -818,7 +804,7 @@ type reader struct {
 	source engine.DataSource
 	ts     timestamp.Timestamp
 
-	memFilter MemPKFilterInProgress
+	memFilter MemPKFilter
 
 	scanType int
 }

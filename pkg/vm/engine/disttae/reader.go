@@ -52,7 +52,6 @@ func (mixin *withFilterMixin) reset() {
 	mixin.columns.indexOfFirstSortedColumn = -1
 	mixin.columns.seqnums = nil
 	mixin.columns.colTypes = nil
-	mixin.sels = nil
 }
 
 // when the reader.Read is called for a new block, it will always
@@ -289,6 +288,7 @@ func NewReader(
 }
 
 func (r *reader) Close() error {
+	r.withFilterMixin.reset()
 	return nil
 }
 

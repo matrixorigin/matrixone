@@ -232,7 +232,7 @@ func HandleShardingReadReader(
 	}
 	_, err = tbl.BuildReaders(
 		ctx,
-		tbl.proc,
+		tbl.proc.Load(),
 		&param.ReaderParam.Expr,
 		relData,
 		int(param.ReaderParam.Num),
