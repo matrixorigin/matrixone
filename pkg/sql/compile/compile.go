@@ -2316,7 +2316,7 @@ func (c *Compile) compileJoin(node, left, right *plan.Node, ns []*plan.Node, pro
 	rs := c.compileBroadcastJoin(node, left, right, ns, probeScopes, buildScopes)
 	if c.IsTpQuery() {
 		//construct join build operator for tp join
-		buildScopes[0].setRootOperator(constructJoinBuildOperator(c, vm.GetLeafOp(rs[0].RootOp), false, 1))
+		buildScopes[0].setRootOperator(constructJoinBuildOperator(c, vm.GetLeafOpParent(nil, rs[0].RootOp), false, 1))
 		rs[0].Proc.Reg.MergeReceivers = rs[0].Proc.Reg.MergeReceivers[:1]
 		buildScopes[0].IsEnd = true
 	}
@@ -2340,6 +2340,11 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 	}
 
 	shuffleJoins := c.newShuffleJoinScopeList(lefts, rights, node)
+
+	for i := range children {
+		mergeOp := merge.NewArgument()
+		children[i].setRootOperator(mergeOp)
+	}
 
 	switch node.JoinType {
 	case plan.Node_INNER:
@@ -3560,9 +3565,9 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 
 	// waring: `Merge` operator` is not used as an input/output analyze,
 	// and `Merge` operator cannot play the role of IsFirst/IsLast
-	merge := merge.NewArgument()
-	merge.SetAnalyzeControl(c.anal.curNodeIdx, false)
-	rs.setRootOperator(merge)
+	mergeOp := merge.NewArgument()
+	mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
+	rs.setRootOperator(mergeOp)
 	//c.anal.isFirst = false
 
 	j := 0
@@ -3672,6 +3677,12 @@ func (c *Compile) newScopeListForRightJoin(childrenCount int, bIdx int, leftScop
 	ss[0].Proc = process.NewFromProc(c.proc, c.proc.Ctx, childrenCount)
 	ss[0].NodeInfo = engine.Node{Addr: c.addr, Mcpu: maxCpuNum}
 	ss[0].BuildIdx = bIdx
+
+	for i := range ss {
+		mergeOp := merge.NewArgument()
+		ss[i].setRootOperator(mergeOp)
+	}
+
 	return ss
 }
 
@@ -3734,6 +3745,12 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 		mergeChildren.IsEnd = true
 		rs[idx].PreScopes = append(rs[idx].PreScopes, mergeChildren)
 	}
+
+	for i := range rs {
+		mergeOp := merge.NewArgument()
+		rs[i].setRootOperator(mergeOp)
+	}
+
 	return rs
 }
 
@@ -3853,7 +3870,7 @@ func (c *Compile) newJoinBuildScope(s *Scope, mcpu int32) *Scope {
 	mergeOp.SetIdx(c.anal.curNodeIdx)
 	mergeOp.SetIsFirst(c.anal.isFirst)
 	rs.setRootOperator(mergeOp)
-	rs.setRootOperator(constructJoinBuildOperator(c, vm.GetLeafOp(s.RootOp), s.ShuffleIdx > 0, mcpu))
+	rs.setRootOperator(constructJoinBuildOperator(c, vm.GetLeafOpParent(nil, (s.RootOp)), s.ShuffleIdx > 0, mcpu))
 
 	rs.IsEnd = true
 
