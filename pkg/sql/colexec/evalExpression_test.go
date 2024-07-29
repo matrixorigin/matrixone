@@ -210,8 +210,6 @@ func TestFunctionExpressionExecutor(t *testing.T) {
 		require.NoError(t, err)
 		_, err = executor.Eval(proc, nil, nil)
 		require.Equal(t, true, err == nil)
-		// _, ok := executor.(*FixedVectorExpressionExecutor)
-		// require.Equal(t, true, ok)
 		executor.Free()
 		proc.FreeVectors()
 		require.Equal(t, currNb, proc.Mp().CurrNB())
