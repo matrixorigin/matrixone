@@ -460,7 +460,7 @@ func (db *txnDatabase) createWithID(
 			note = noteForAlterIns(tbl.tableId, tbl.tableName)
 		}
 		rowidVec, err := txn.WriteBatch(
-			INSERT, note, 0, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
+			INSERT, note, accountId, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
 			catalog.MO_CATALOG, catalog.MO_COLUMNS, bat, txn.tnStores[0])
 		if err != nil {
 			bat.Clean(m)

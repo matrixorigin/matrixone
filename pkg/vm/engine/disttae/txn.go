@@ -1172,12 +1172,6 @@ func (txn *Transaction) transferDeletesLocked(ctx context.Context, commit bool) 
 		}
 
 		return txn.forEachTableHasDeletesLocked(func(tbl *txnTable) error {
-			if tbl.tableId == catalog.MO_DATABASE_ID ||
-				tbl.tableId == catalog.MO_TABLES_ID ||
-				tbl.tableId == catalog.MO_COLUMNS_ID {
-				// skip temporarily, let's believe the persisted transfer page will handle it.
-				return nil
-			}
 
 			ctx := tbl.proc.Load().Ctx
 			state, err := tbl.getPartitionState(ctx)
@@ -1354,7 +1348,7 @@ func (c *tableOpsChain) string() string {
 	defer c.RUnlock()
 	return stringifyMap(c.names, func(a1, a2 any) string {
 		k := a1.(tableKey)
-		return fmt.Sprintf("%v-%v-%v:%v", k.accountId, k.dbName, k.name, stringifySlice(a2, func(a any) string {
+		return fmt.Sprintf("%v-%v-%v-%v:%v", k.accountId, k.databaseId, k.dbName, k.name, stringifySlice(a2, func(a any) string {
 			op := a.(tableOp)
 			if op.kind == DELETE {
 				return fmt.Sprintf("DEL-%v@%v", op.tableId, op.statementId)

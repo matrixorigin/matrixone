@@ -116,7 +116,7 @@ func DoMergeAndWrite(
 	fromObjsDesc := ""
 	for _, o := range commitEntry.MergedObjs {
 		obj := objectio.ObjectStats(o)
-		fromObjsDesc = fmt.Sprintf("%s%s,", fromObjsDesc, common.ShortObjId(*obj.ObjectName().ObjectId()))
+		fromObjsDesc = fmt.Sprintf("%s%s,", fromObjsDesc, obj.ObjectName().ObjectId().ShortStringEx())
 	}
 	logutil.Info(
 		"[MERGE-START]",
@@ -155,7 +155,7 @@ func DoMergeAndWrite(
 	for _, o := range commitEntry.CreatedObjs {
 		obj := objectio.ObjectStats(o)
 		toObjsDesc += fmt.Sprintf("%s(%v)Rows(%v),",
-			common.ShortObjId(*obj.ObjectName().ObjectId()),
+			obj.ObjectName().ObjectId().ShortStringEx(),
 			obj.BlkCnt(),
 			obj.Rows())
 	}
