@@ -21,6 +21,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 
+	"golang.org/x/exp/constraints"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -28,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"golang.org/x/exp/constraints"
 )
 
 const opName = "time_window"
@@ -101,6 +102,7 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 	anal := proc.GetAnalyze(timeWin.GetIdx(), timeWin.GetParallelIdx(), timeWin.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
+
 	ctr := timeWin.ctr
 	var err error
 	var bat *batch.Batch
@@ -124,6 +126,7 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 				result.Status = vm.ExecStop
 				return result, nil
 			}
+			anal.Input(bat, timeWin.GetIsFirst())
 			ctr.pushBatch(bat)
 			if err = ctr.evalVecs(proc); err != nil {
 				return result, err
@@ -147,6 +150,7 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 				result.Status = vm.ExecStop
 				return result, nil
 			}
+			anal.Input(bat, timeWin.GetIsFirst())
 			ctr.pushBatch(bat)
 			if err = ctr.evalVecs(proc); err != nil {
 				return result, err
@@ -179,6 +183,7 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 
 			ctr.status = nextTag
 			result.Batch = ctr.rbat
+			anal.Output(result.Batch, timeWin.IsLast)
 			return result, nil
 
 		case evalLastCur:
@@ -195,6 +200,7 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			result.Batch = ctr.rbat
+			anal.Output(result.Batch, timeWin.IsLast)
 			return result, nil
 
 		case evalLastPre:
@@ -236,11 +242,13 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 
 			ctr.status = endTag
 			result.Batch = ctr.rbat
+			anal.Output(result.Batch, timeWin.IsLast)
 			return result, nil
 
 		case endTag:
 			result.Batch = nil
 			result.Status = vm.ExecStop
+			anal.Output(result.Batch, timeWin.IsLast)
 			return result, nil
 		}
 

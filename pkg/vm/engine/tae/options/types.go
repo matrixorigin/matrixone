@@ -35,7 +35,6 @@ const (
 	DefaultBlocksPerObject = uint16(256)
 
 	DefaultObjectPerSegment = uint16(512)
-	DefaultAObjectMaxSize   = 100 * mpool.MB
 
 	DefaultScannerInterval              = time.Second * 5
 	DefaultCheckpointFlushInterval      = time.Minute
