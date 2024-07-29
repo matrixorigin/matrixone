@@ -42,8 +42,13 @@ func (valueScan *ValueScan) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
+	anal := proc.GetAnalyze(valueScan.GetIdx(), valueScan.GetParallelIdx(), valueScan.GetParallelMajor())
+	anal.Start()
+	defer func() {
+		anal.Stop()
+	}()
+
 	result := vm.NewCallResult()
-	
 	if valueScan.ctr.idx < len(valueScan.Batchs) {
 		result.Batch = valueScan.Batchs[valueScan.ctr.idx]
 		if valueScan.ctr.idx > 0 {
@@ -53,5 +58,6 @@ func (valueScan *ValueScan) Call(proc *process.Process) (vm.CallResult, error) {
 		valueScan.ctr.idx += 1
 	}
 
+	anal.Input(result.Batch, valueScan.IsFirst)
 	return result, nil
 }

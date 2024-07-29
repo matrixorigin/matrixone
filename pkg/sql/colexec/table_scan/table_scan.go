@@ -136,7 +136,7 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		tableScan.ctr.buf = bat
 		break
 	}
-
 	result.Batch = tableScan.ctr.buf
+	anal.Input(result.Batch, tableScan.IsFirst)
 	return result, nil
 }

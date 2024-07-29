@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -1049,7 +1050,7 @@ func genColumns(accountId uint32, tableName, databaseName string,
 		mp := make(map[string]int)
 		for i, def := range defs {
 			if attr, ok := def.(*engine.AttributeDef); ok {
-				mp[attr.Attr.Name] = i
+				mp[strings.ToLower(attr.Attr.Name)] = i
 			}
 		}
 		for _, def := range defs {
@@ -1395,7 +1396,7 @@ func transferSval(v string, oid types.T) (bool, any) {
 		return true, []byte(v)
 	case types.T_char, types.T_varchar:
 		return true, []byte(v)
-	case types.T_text, types.T_blob:
+	case types.T_text, types.T_blob, types.T_datalink:
 		return true, []byte(v)
 	case types.T_binary, types.T_varbinary:
 		return true, []byte(v)

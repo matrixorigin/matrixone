@@ -28,8 +28,8 @@ func (s *showImpl) Free() {
 // SHOW CREATE TABLE statement
 type ShowCreateTable struct {
 	showImpl
-	Name         *UnresolvedObjectName
-	SnapshotName string
+	Name     *UnresolvedObjectName
+	AtTsExpr *AtTimeStamp
 }
 
 func (node *ShowCreateTable) Format(ctx *FmtCtx) {
@@ -47,8 +47,8 @@ func NewShowCreate(n *UnresolvedObjectName) *ShowCreateTable {
 // SHOW CREATE VIEW statement
 type ShowCreateView struct {
 	showImpl
-	Name         *UnresolvedObjectName
-	SnapshotName string
+	Name     *UnresolvedObjectName
+	AtTsExpr *AtTimeStamp
 }
 
 func (node *ShowCreateView) Format(ctx *FmtCtx) {
@@ -140,9 +140,9 @@ func NewShowColumns(e bool, f bool, t *UnresolvedObjectName, d string, l *Compar
 // the SHOW DATABASES statement.
 type ShowDatabases struct {
 	showImpl
-	Like         *ComparisonExpr
-	Where        *Where
-	SnapshotName string
+	Like     *ComparisonExpr
+	Where    *Where
+	AtTsExpr *AtTimeStamp
 }
 
 func (node *ShowDatabases) Format(ctx *FmtCtx) {
@@ -334,13 +334,13 @@ func (node *ShowSequences) GetQueryType() string     { return QueryTypeOth }
 // SHOW TABLES statement.
 type ShowTables struct {
 	showImpl
-	Ext          bool
-	Open         bool
-	Full         bool
-	DBName       string
-	Like         *ComparisonExpr
-	Where        *Where
-	SnapshotName string
+	Ext      bool
+	Open     bool
+	Full     bool
+	DBName   string
+	Like     *ComparisonExpr
+	Where    *Where
+	AtTsExpr *AtTimeStamp
 }
 
 func (node *ShowTables) Format(ctx *FmtCtx) {

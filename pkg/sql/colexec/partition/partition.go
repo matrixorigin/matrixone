@@ -104,8 +104,10 @@ func (partition *Partition) Call(proc *process.Process) (vm.CallResult, error) {
 			ok, err := ctr.pickAndSend(proc, &result)
 			if ok {
 				result.Status = vm.ExecStop
+				anal.Output(result.Batch, partition.IsLast)
 				return result, err
 			}
+			anal.Output(result.Batch, partition.IsLast)
 			return result, err
 
 		}

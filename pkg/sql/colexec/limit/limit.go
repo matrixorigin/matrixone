@@ -62,6 +62,10 @@ func (limit *Limit) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
+	anal := proc.GetAnalyze2(limit.GetIdx(), limit.GetParallelIdx(), limit.GetParallelMajor(), limit.OpStats)
+	anal.Start()
+	defer anal.Stop()
+
 	if limit.ctr.limit == 0 {
 		result := vm.NewCallResult()
 		result.Batch = nil
@@ -73,10 +77,6 @@ func (limit *Limit) Call(proc *process.Process) (vm.CallResult, error) {
 	if err != nil {
 		return result, err
 	}
-
-	anal := proc.GetAnalyze2(limit.GetIdx(), limit.GetParallelIdx(), limit.GetParallelMajor(), limit.OpStats)
-	anal.Start()
-	defer anal.Stop()
 
 	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() {
 		return result, nil

@@ -304,8 +304,9 @@ func buildSourceDefs(stmt *tree.CreateSource, ctx CompilerContext, createStream 
 		switch def := item.(type) {
 		case *tree.ColumnTableDef:
 			colName := def.Name.ColName()
+			colNameOrigin := def.Name.ColNameOrigin()
 			if _, ok := colMap[colName]; ok {
-				return moerr.NewInvalidInput(ctx.GetContext(), "duplicate column name: %s", colName)
+				return moerr.NewInvalidInput(ctx.GetContext(), "duplicate column name: %s", colNameOrigin)
 			}
 			colType, err := getTypeFromAst(ctx.GetContext(), def.Type)
 			if err != nil {
@@ -318,9 +319,10 @@ func buildSourceDefs(stmt *tree.CreateSource, ctx CompilerContext, createStream 
 				}
 			}
 			col := &ColDef{
-				Name: colName,
-				Alg:  plan.CompressType_Lz4,
-				Typ:  colType,
+				Name:       colName,
+				OriginName: colNameOrigin,
+				Alg:        plan.CompressType_Lz4,
+				Typ:        colType,
 			}
 			colMap[colName] = col
 			for _, attr := range def.Attributes {
@@ -690,13 +692,46 @@ func buildCreateSequence(stmt *tree.CreateSequence, ctx CompilerContext) (*Plan,
 
 func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error) {
 	if stmt.IsAsLike {
-		newStmt, err := rewriteForCreateTableLike(stmt, ctx)
+		var err error
+		oldTable := stmt.LikeTableName
+		newTable := stmt.Table
+		tblName := formatStr(string(oldTable.ObjectName))
+		dbName := formatStr(string(oldTable.SchemaName))
+
+		snapshot := &Snapshot{TS: &timestamp.Timestamp{}}
+		if dbName, err = databaseIsValid(getSuitableDBName(dbName, ""), ctx, *snapshot); err != nil {
+			return nil, err
+		}
+
+		// check if the database is a subscription
+		sub, err := ctx.GetSubscriptionMeta(dbName, *snapshot)
+		if err != nil {
+			return nil, err
+		}
+		if sub != nil {
+			ctx.SetQueryingSubscription(sub)
+			defer func() {
+				ctx.SetQueryingSubscription(nil)
+			}()
+		}
+
+		_, tableDef := ctx.Resolve(dbName, tblName, *snapshot)
+		if tableDef == nil {
+			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
+		}
+		if tableDef.TableType == catalog.SystemViewRel || tableDef.TableType == catalog.SystemExternalRel || tableDef.TableType == catalog.SystemClusterRel {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "%s.%s is not BASE TABLE", dbName, tblName)
+		}
+		tableDef.Name = string(newTable.ObjectName)
+
+		_, newStmt, err := ConstructCreateTableSQL(ctx, tableDef, *snapshot, false)
 		if err != nil {
 			return nil, err
 		}
 		if stmtLike, ok := newStmt.(*tree.CreateTable); ok {
 			return buildCreateTable(stmtLike, ctx)
 		}
+
 		return nil, moerr.NewInternalError(ctx.GetContext(), "rewrite for create table like failed")
 	}
 
@@ -1002,6 +1037,7 @@ func buildPartitionByClause(ctx context.Context, partitionBinder *PartitionBinde
 }
 
 func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *plan.CreateTable, asSelectCols []*ColDef) error {
+	// all below fields' key is lower case
 	var primaryKeys []string
 	var indexs []string
 	colMap := make(map[string]*ColDef)
@@ -1040,6 +1076,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			var comment string
 			var auto_incr bool
 			colName := def.Name.ColName()
+			// only used in error message and ColDef.OriginName
 			colNameOrigin := def.Name.ColNameOrigin()
 			for _, attr := range def.Attributes {
 				switch attribute := attr.(type) {
@@ -1049,6 +1086,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					}
 					if colType.GetId() == int32(types.T_text) {
 						return moerr.NewNotSupported(ctx.GetContext(), "text type in primary key")
+					}
+					if colType.GetId() == int32(types.T_datalink) {
+						return moerr.NewNotSupported(ctx.GetContext(), "datalink type in primary key")
 					}
 					if colType.GetId() == int32(types.T_json) {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in primary key", colNameOrigin))
@@ -1073,12 +1113,8 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					}
 				case *tree.AttributeUnique, *tree.AttributeUniqueKey:
 					uniqueIndexInfos = append(uniqueIndexInfos, &tree.UniqueIndex{
-						KeyParts: []*tree.KeyPart{
-							{
-								ColName: def.Name,
-							},
-						},
-						Name: colName,
+						KeyParts: []*tree.KeyPart{{ColName: def.Name}},
+						Name:     colName,
 					})
 					indexs = append(indexs, colName)
 				}
@@ -1109,18 +1145,19 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 
 			colType.AutoIncr = auto_incr
 			col := &ColDef{
-				Name:     colName,
-				Alg:      plan.CompressType_Lz4,
-				Typ:      colType,
-				Default:  defaultValue,
-				OnUpdate: onUpdateExpr,
-				Comment:  comment,
+				Name:       colName,
+				OriginName: colNameOrigin,
+				Alg:        plan.CompressType_Lz4,
+				Typ:        colType,
+				Default:    defaultValue,
+				OnUpdate:   onUpdateExpr,
+				Comment:    comment,
 			}
 			// if same name col in asSelectCols, overwrite it; add into colMap && createTable.TableDef.Cols later
 			if idx := slices.IndexFunc(asSelectCols, func(c *ColDef) bool { return c.Name == col.Name }); idx != -1 {
 				asSelectCols[idx] = col
 			} else {
-				colMap[col.Name] = col
+				colMap[colName] = col
 				createTable.TableDef.Cols = append(createTable.TableDef.Cols, col)
 
 				// get default val from ast node
@@ -1133,9 +1170,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 					defaultAttr.Format(fmtCtx)
 					// defaultAttr.Format start with "default ", trim first 8 chars
-					defaultMap[col.Name] = fmtCtx.String()[8:]
+					defaultMap[colName] = fmtCtx.String()[8:]
 				} else {
-					defaultMap[col.Name] = "NULL"
+					defaultMap[colName] = "NULL"
 				}
 			}
 		case *tree.PrimaryKeyIndex:
@@ -1438,6 +1475,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		if colMap[str].Typ.Id == int32(types.T_text) {
 			return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("TEXT column '%s' cannot be in index", str))
 		}
+		if colMap[str].Typ.Id == int32(types.T_datalink) {
+			return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("DATALINK column '%s' cannot be in index", str))
+		}
 		if colMap[str].Typ.Id == int32(types.T_json) {
 			return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", str))
 		}
@@ -1552,6 +1592,9 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			if colMap[name].Typ.Id == int32(types.T_text) {
 				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("TEXT column '%s' cannot be in index", nameOrigin))
 			}
+			if colMap[name].Typ.Id == int32(types.T_datalink) {
+				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("DATALINK column '%s' cannot be in index", nameOrigin))
+			}
 			if colMap[name].Typ.Id == int32(types.T_json) {
 				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", nameOrigin))
 			}
@@ -1641,7 +1684,6 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 }
 
 func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.Index, colMap map[string]*ColDef, pkeyName string, ctx CompilerContext) (err error) {
-
 	if len(pkeyName) == 0 {
 		return moerr.NewInternalErrorNoCtx("primary key cannot be empty for secondary index")
 	}
@@ -1797,8 +1839,8 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 
 	isPkAlreadyPresentInIndexParts := false
 	for _, keyPart := range indexInfo.KeyParts {
-		nameOrigin := keyPart.ColName.ColNameOrigin()
 		name := keyPart.ColName.ColName()
+		nameOrigin := keyPart.ColName.ColNameOrigin()
 		if _, ok := colMap[name]; !ok {
 			return nil, nil, moerr.NewInvalidInput(ctx.GetContext(), "column '%s' is not exist", nameOrigin)
 		}
@@ -1807,6 +1849,9 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		}
 		if colMap[name].Typ.Id == int32(types.T_text) {
 			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("TEXT column '%s' cannot be in index", nameOrigin))
+		}
+		if colMap[name].Typ.Id == int32(types.T_datalink) {
+			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("DATALINK column '%s' cannot be in index", nameOrigin))
 		}
 		if colMap[name].Typ.Id == int32(types.T_json) {
 			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", nameOrigin))
@@ -2844,6 +2889,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		switch opt := option.(type) {
 		case *tree.AlterOptionDrop:
 			alterTableDrop := new(plan.AlterTableDrop)
+			// lower case
 			constraintName := string(opt.Name)
 			if constraintNameAreWhiteSpaces(constraintName) {
 				return nil, moerr.NewInternalError(ctx.GetContext(), "Can't DROP '%s'; check that column/key exists", constraintName)
@@ -3117,6 +3163,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					},
 				},
 			}
+
 		case *tree.AlterOptionTableName:
 			oldName := tableDef.Name
 			newName := string(opt.Name.ToTableName().ObjectName)
@@ -3129,6 +3176,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				},
 			}
 			updateSqls = append(updateSqls, getSqlForRenameTable(databaseName, oldName, newName)...)
+
 		case *tree.AlterAddCol:
 			colType, err := getTypeFromAst(ctx.GetContext(), opt.Column.Type)
 			if err != nil {
@@ -3159,6 +3207,9 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					}
 					if colType.GetId() == int32(types.T_text) {
 						return nil, moerr.NewNotSupported(ctx.GetContext(), "text type in primary key")
+					}
+					if colType.GetId() == int32(types.T_datalink) {
+						return nil, moerr.NewNotSupported(ctx.GetContext(), "datalink type in primary key")
 					}
 					if colType.GetId() == int32(types.T_json) {
 						return nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in primary key", colNameOrigin))
@@ -3216,12 +3267,13 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 
 			colType.AutoIncr = auto_incr
 			col := &ColDef{
-				Name:     colName,
-				Alg:      plan.CompressType_Lz4,
-				Typ:      colType,
-				Default:  defaultValue,
-				OnUpdate: onUpdateExpr,
-				Comment:  comment,
+				Name:       colName,
+				OriginName: colNameOrigin,
+				Alg:        plan.CompressType_Lz4,
+				Typ:        colType,
+				Default:    defaultValue,
+				OnUpdate:   onUpdateExpr,
+				Comment:    comment,
 			}
 			colMap[col.Name] = col
 			preName := ""
@@ -3235,7 +3287,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			alterTable.Actions[i] = &plan.AlterTable_Action{
 				Action: &plan.AlterTable_Action_AddColumn{
 					AddColumn: &plan.AlterAddColumn{
-						Name:    colName,
+						Name:    colNameOrigin,
 						PreName: preName,
 						Type:    colType,
 						Pos:     int32(opt.Position.Typ),

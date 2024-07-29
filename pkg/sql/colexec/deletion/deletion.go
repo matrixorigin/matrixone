@@ -104,7 +104,6 @@ func (deletion *Deletion) remoteDelete(proc *process.Process) (vm.CallResult, er
 	if deletion.ctr.state == vm.Build {
 		for {
 			result, err := vm.ChildrenCall(deletion.GetChildren(0), proc, anal)
-
 			if err != nil {
 				return result, err
 			}
@@ -115,6 +114,7 @@ func (deletion *Deletion) remoteDelete(proc *process.Process) (vm.CallResult, er
 			if result.Batch.IsEmpty() {
 				continue
 			}
+			anal.Input(result.Batch, deletion.IsFirst)
 
 			if err = deletion.SplitBatch(proc, result.Batch); err != nil {
 				return result, err
@@ -209,17 +209,18 @@ func (deletion *Deletion) remoteDelete(proc *process.Process) (vm.CallResult, er
 }
 
 func (deletion *Deletion) normalDelete(proc *process.Process) (vm.CallResult, error) {
-	result, err := deletion.GetChildren(0).Call(proc)
+	anal := proc.GetAnalyze2(deletion.GetIdx(), deletion.GetParallelIdx(), deletion.GetParallelMajor(), deletion.OpStats)
+	anal.Start()
+	defer anal.Stop()
+
+	result, err := vm.ChildrenCall(deletion.GetChildren(0), proc, anal)
 	if err != nil {
 		return result, err
 	}
 	if result.Batch == nil || result.Batch.IsEmpty() {
 		return result, nil
 	}
-
-	anal := proc.GetAnalyze2(deletion.GetIdx(), deletion.GetParallelIdx(), deletion.GetParallelMajor(), deletion.OpStats)
-	anal.Start()
-	defer anal.Stop()
+	anal.Input(result.Batch, deletion.IsFirst)
 
 	bat := result.Batch
 	var affectedRows uint64

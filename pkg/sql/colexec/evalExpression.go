@@ -795,6 +795,12 @@ func generateConstExpressionExecutor(proc *process.Process, typ types.Type, con 
 					return nil, err1
 				}
 				vec, err = vector.NewConstArray(typ, array, 1, proc.Mp())
+			} else if typ.Oid == types.T_datalink {
+				_, _, _, err1 := types.ParseDatalink(sval)
+				if err1 != nil {
+					return nil, err1
+				}
+				vec, err = vector.NewConstBytes(constBinType, []byte(sval), 1, proc.Mp())
 			} else {
 				vec, err = vector.NewConstBytes(constSType, []byte(sval), 1, proc.Mp())
 			}

@@ -219,7 +219,8 @@ func (c *compilerContext) GetPrimaryKeyDef(
 	priDefs := make([]*plan.ColDef, 0, len(priKeys))
 	for _, key := range priKeys {
 		priDefs = append(priDefs, &plan.ColDef{
-			Name: key.Name,
+			Name:       strings.ToLower(key.Name),
+			OriginName: key.Name,
 			Typ: plan.Type{
 				Id:    int32(key.Type.Oid),
 				Width: key.Type.Width,
@@ -382,8 +383,9 @@ func (c *compilerContext) getTableDef(
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
 			col := &plan.ColDef{
-				ColId: attr.Attr.ID,
-				Name:  attr.Attr.Name,
+				ColId:      attr.Attr.ID,
+				Name:       strings.ToLower(attr.Attr.Name),
+				OriginName: attr.Attr.Name,
 				Typ: plan.Type{
 					Id:          int32(attr.Attr.Type.Oid),
 					Width:       attr.Attr.Type.Width,
@@ -407,7 +409,7 @@ func (c *compilerContext) getTableDef(
 			//}
 			if attr.Attr.ClusterBy {
 				clusterByDef = &plan.ClusterByDef{
-					Name: attr.Attr.Name,
+					Name: strings.ToLower(attr.Attr.Name),
 				}
 				//if util.JudgeIsCompositeClusterByColumn(attr.Attr.Name) {
 				//	continue

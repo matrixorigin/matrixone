@@ -140,9 +140,7 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 // compute the `agg(expression)List group by expressionList`.
-func (ctr *container) processGroupByAndAgg(
-	ap *Group, proc *process.Process, anal process.Analyze, isFirst, isLast bool) (vm.CallResult, error) {
-
+func (ctr *container) processGroupByAndAgg(ap *Group, proc *process.Process, anal process.Analyze, isFirst, isLast bool) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		// receive data from pre-operator.

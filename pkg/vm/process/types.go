@@ -364,7 +364,7 @@ type Process struct {
 
 type sqlHelper interface {
 	GetCompilerContext() any
-	ExecSql(string) ([]interface{}, error)
+	ExecSql(string) ([][]interface{}, error)
 	GetSubscriptionMeta(string) (sub *plan.SubscriptionMeta, err error)
 }
 
