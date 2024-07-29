@@ -42,7 +42,6 @@ func (markJoin *MarkJoin) OpType() vm.OpType {
 func (markJoin *MarkJoin) Prepare(proc *process.Process) error {
 	var err error
 	markJoin.ctr = new(container)
-	markJoin.ctr.InitReceiver(proc, true)
 	markJoin.ctr.evecs = make([]evalVector, len(markJoin.Conditions[0]))
 	markJoin.ctr.vecs = make([]*vector.Vector, len(markJoin.Conditions[0]))
 	markJoin.ctr.bat = batch.NewWithSize(len(markJoin.Typs))
@@ -96,18 +95,17 @@ func (markJoin *MarkJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(markJoin, proc, anal); err != nil {
+			if err := markJoin.build(markJoin, proc, anal); err != nil {
 				return result, err
 			}
 			ctr.state = Probe
 
 		case Probe:
-			msg := ctr.ReceiveFromAllRegs(anal)
-			if msg.Err != nil {
-				return result, msg.Err
+			result, err = markJoin.Children[0].Call(proc)
+			if err != nil {
+				return result, err
 			}
-
-			bat := msg.Batch
+			bat := result.Batch
 			if bat == nil {
 				ctr.state = End
 				continue
@@ -140,28 +138,28 @@ func (markJoin *MarkJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (markJoin *MarkJoin) receiveHashMap(anal process.Analyze, proc *process.Process) {
+func (markJoin *MarkJoin) build(ap *MarkJoin, proc *process.Process, anal process.Analyze) error {
 	ctr := markJoin.ctr
-	ctr.mp = proc.ReceiveJoinMap(anal, markJoin.JoinMapTag, false, 0)
-	if ctr.mp != nil {
-		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
+	mp := proc.ReceiveJoinMap(anal, markJoin.JoinMapTag, false, 0)
+	if mp == nil {
+		return nil
 	}
-}
-
-func (ctr *container) receiveBatch(ap *MarkJoin, proc *process.Process, anal process.Analyze) error {
-	msg := ctr.ReceiveFromSingleReg(1, anal)
-	if msg.Err != nil {
-		return msg.Err
-	}
-	bat := msg.Batch
+	batches := mp.GetBatches()
 	var err error
-	if bat != nil {
-		ctr.evalNullSels(bat)
-		ctr.nullWithBatch, err = DumpBatch(bat, proc, ctr.nullSels)
+	//maybe optimize this in the future
+	for i := range batches {
+		ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), batches[i])
 		if err != nil {
 			return err
 		}
-		if err = ctr.evalJoinBuildCondition(bat, proc); err != nil {
+	}
+	if ctr.bat != nil {
+		ctr.evalNullSels(ctr.bat)
+		ctr.nullWithBatch, err = DumpBatch(ctr.bat, proc, ctr.nullSels)
+		if err != nil {
+			return err
+		}
+		if err = ctr.evalJoinBuildCondition(ctr.bat, proc); err != nil {
 			return err
 		}
 		ctr.rewriteCond = colexec.RewriteFilterExprList(ap.OnList)
@@ -169,14 +167,8 @@ func (ctr *container) receiveBatch(ap *MarkJoin, proc *process.Process, anal pro
 			proc.PutBatch(ctr.bat)
 			ctr.bat = nil
 		}
-		ctr.bat = bat
 	}
 	return nil
-}
-
-func (ctr *container) build(ap *MarkJoin, proc *process.Process, anal process.Analyze) error {
-	ap.receiveHashMap(anal, proc)
-	return ctr.receiveBatch(ap, proc, anal)
 }
 
 func (ctr *container) emptyProbe(bat *batch.Batch, ap *MarkJoin, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) (err error) {
