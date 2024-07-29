@@ -2300,7 +2300,7 @@ func (tbl *txnTable) transferDeletes(
 				}
 			}
 			if beTransfered != toTransfer {
-				return moerr.NewInternalErrorNoCtx("%v-%v transfer deletes failed %v/%v", tbl.tableId, tbl.tableName, beTransfered, toTransfer)
+				return moerr.NewInternalErrorNoCtx("%v-%v transfer deletes failed %v/%v in %v blks", tbl.tableId, tbl.tableName, beTransfered, toTransfer, len(blks))
 			}
 		}
 	}

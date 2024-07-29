@@ -297,7 +297,7 @@ func getColPks(aid uint32, dbName, tblName string, cols []*plan.ColDef, packer *
 		packer.EncodeUint32(aid)
 		packer.EncodeStringType([]byte(dbName))
 		packer.EncodeStringType([]byte(tblName))
-		packer.EncodeStringType([]byte(col.Name))
+		packer.EncodeStringType([]byte(col.GetOriginCaseName()))
 		pks = append(pks, packer.Bytes())
 	}
 	return pks
