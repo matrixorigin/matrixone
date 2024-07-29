@@ -228,10 +228,8 @@ func (tbl *txnTableDelegate) Ranges(
 
 	ret := buildRelationDataV1()
 	for _, r := range rs {
-		blks := r.GetBlockInfoList()
-		for _, blk := range blks {
-			ret.AppendBlockInfo(*blk)
-		}
+		blks := r.GetBlockInfoSlice()
+		ret.blklist.Append(blks)
 	}
 	return ret, nil
 }

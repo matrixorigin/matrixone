@@ -443,8 +443,11 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 
 			if ranges.DataCnt() == 0 {
 				getValueFailed = true
-			} else if ranges.DataCnt() == 1 && ranges.GetBlockInfo(0).IsMemBlk() {
-				getValueFailed = true
+			} else if ranges.DataCnt() == 1 {
+				first := ranges.GetBlockInfo(0)
+				if first.IsMemBlk() {
+					getValueFailed = true
+				}
 			} else {
 				// BUG： if user delete the max or min value within the same txn, the result will be wrong.
 				tValues, _, er := rel.MaxAndMinValues(ctx)

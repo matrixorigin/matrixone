@@ -4106,11 +4106,12 @@ func (c *Compile) expandRanges(
 					return nil, err
 				}
 
-				blks := subRelData.GetBlockInfoList()[1:]
-				for _, blk := range blks {
-					blk.PartitionNum = int16(i)
-					relData.AppendBlockInfo(*blk)
-				}
+				engine.ForRangeBlockInfo(1, subRelData.DataCnt(), subRelData,
+					func(blk objectio.BlockInfoInProgress) (bool, error) {
+						blk.PartitionNum = int16(i)
+						relData.AppendBlockInfo(blk)
+						return true, nil
+					})
 			}
 		} else {
 			partitionInfo := n.TableDef.Partition
@@ -4127,11 +4128,12 @@ func (c *Compile) expandRanges(
 					return nil, err
 				}
 
-				blks := subRelData.GetBlockInfoList()[1:]
-				for _, blk := range blks {
-					blk.PartitionNum = int16(i)
-					relData.AppendBlockInfo(*blk)
-				}
+				engine.ForRangeBlockInfo(1, subRelData.DataCnt(), subRelData,
+					func(blk objectio.BlockInfoInProgress) (bool, error) {
+						blk.PartitionNum = int16(i)
+						relData.AppendBlockInfo(blk)
+						return true, nil
+					})
 			}
 		}
 	}
@@ -4271,10 +4273,11 @@ func putBlocksInAverage(c *Compile, relData engine.RelData, n *plan.Node) engine
 					})
 				}
 
-				blks := relData.GetBlockInfoList()[i:]
-				for _, blk := range blks {
-					nodes[0].Data.AppendBlockInfo(*blk)
-				}
+				engine.ForRangeBlockInfo(i, relData.DataCnt(), relData,
+					func(blk objectio.BlockInfoInProgress) (bool, error) {
+						nodes[0].Data.AppendBlockInfo(blk)
+						return true, nil
+					})
 
 			} else {
 
@@ -4285,10 +4288,11 @@ func putBlocksInAverage(c *Compile, relData engine.RelData, n *plan.Node) engine
 					Data: relData.BuildEmptyRelData(),
 				}
 
-				blks := relData.GetBlockInfoList()[i:]
-				for _, blk := range blks {
-					node.Data.AppendBlockInfo(*blk)
-				}
+				engine.ForRangeBlockInfo(i, relData.DataCnt(), relData,
+					func(blk objectio.BlockInfoInProgress) (bool, error) {
+						node.Data.AppendBlockInfo(blk)
+						return true, nil
+					})
 
 				nodes = append(nodes, node)
 			}
@@ -4302,10 +4306,12 @@ func putBlocksInAverage(c *Compile, relData engine.RelData, n *plan.Node) engine
 					})
 				}
 				//nodes[0].Data = append(nodes[0].Data, ranges.Slice(i, i+step)...)
-				blks := relData.GetBlockInfoList()[i : i+step]
-				for _, blk := range blks {
-					nodes[0].Data.AppendBlockInfo(*blk)
-				}
+
+				engine.ForRangeBlockInfo(i, i+step, relData,
+					func(blk objectio.BlockInfoInProgress) (bool, error) {
+						nodes[0].Data.AppendBlockInfo(blk)
+						return true, nil
+					})
 
 			} else {
 				node := engine.Node{
@@ -4315,10 +4321,11 @@ func putBlocksInAverage(c *Compile, relData engine.RelData, n *plan.Node) engine
 					Data: relData.BuildEmptyRelData(),
 				}
 
-				blks := relData.GetBlockInfoList()[i : i+step]
-				for _, blk := range blks {
-					node.Data.AppendBlockInfo(*blk)
-				}
+				engine.ForRangeBlockInfo(i, i+step, relData,
+					func(blk objectio.BlockInfoInProgress) (bool, error) {
+						node.Data.AppendBlockInfo(blk)
+						return true, nil
+					})
 
 				nodes = append(nodes, node)
 			}
@@ -4343,10 +4350,11 @@ func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelD
 	}
 	// only one cn
 	if len(c.cnList) == 1 {
-		blks := relData.GetBlockInfoList()[1:]
-		for _, blk := range blks {
-			nodes[0].Data.AppendBlockInfo(*blk)
-		}
+		engine.ForRangeBlockInfo(1, relData.DataCnt(), relData,
+			func(blk objectio.BlockInfoInProgress) (bool, error) {
+				nodes[0].Data.AppendBlockInfo(blk)
+				return true, nil
+			})
 
 		return nodes, nil
 	}
@@ -4413,13 +4421,14 @@ func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelD
 }
 
 func shuffleBlocksByHash(c *Compile, relData engine.RelData, nodes engine.Nodes) {
-	blks := relData.GetBlockInfoList()[1:]
-	for _, blk := range blks {
-		location := blk.MetaLocation()
-		objTimeStamp := location.Name()[:7]
-		index := plan2.SimpleCharHashToRange(objTimeStamp, uint64(len(c.cnList)))
-		nodes[index].Data.AppendBlockInfo(*blk)
-	}
+	engine.ForRangeBlockInfo(1, relData.DataCnt(), relData,
+		func(blk objectio.BlockInfoInProgress) (bool, error) {
+			location := blk.MetaLocation()
+			objTimeStamp := location.Name()[:7]
+			index := plan2.SimpleCharHashToRange(objTimeStamp, uint64(len(c.cnList)))
+			nodes[index].Data.AppendBlockInfo(blk)
+			return true, nil
+		})
 }
 
 func shuffleBlocksByRange(c *Compile, relData engine.RelData, n *plan.Node, nodes engine.Nodes) error {
@@ -4431,44 +4440,46 @@ func shuffleBlocksByRange(c *Compile, relData engine.RelData, n *plan.Node, node
 	var init bool
 	var index uint64
 
-	blks := relData.GetBlockInfoList()[1:]
-	for _, blk := range blks {
-		location := blk.MetaLocation()
-		fs, err := fileservice.Get[fileservice.FileService](c.proc.Base.FileService, defines.SharedFileServiceName)
-		if err != nil {
-			return err
-		}
-		if !objectio.IsSameObjectLocVsMeta(location, objDataMeta) {
-			if objMeta, err = objectio.FastLoadObjectMeta(c.proc.Ctx, &location, false, fs); err != nil {
-				return err
+	engine.ForRangeBlockInfo(1, relData.DataCnt(), relData,
+		func(blk objectio.BlockInfoInProgress) (bool, error) {
+			location := blk.MetaLocation()
+			fs, err := fileservice.Get[fileservice.FileService](c.proc.Base.FileService, defines.SharedFileServiceName)
+			if err != nil {
+				return false, err
 			}
-			objDataMeta = objMeta.MustDataMeta()
-		}
-		blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
-		zm := blkMeta.MustGetColumn(uint16(n.Stats.HashmapStats.ShuffleColIdx)).ZoneMap()
-		if !zm.IsInited() {
-			// a block with all null will send to first CN
-			nodes[0].Data.AppendBlockInfo(*blk)
-			return nil
-		}
-		if !init {
-			init = true
-			switch zm.GetType() {
-			case types.T_int64, types.T_int32, types.T_int16:
-				shuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(n.Stats.HashmapStats.Ranges, len(c.cnList), n.Stats.HashmapStats.Nullcnt, int64(n.Stats.TableCnt))
-			case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit, types.T_datalink:
-				shuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(n.Stats.HashmapStats.Ranges, len(c.cnList), n.Stats.HashmapStats.Nullcnt, int64(n.Stats.TableCnt))
+			if !objectio.IsSameObjectLocVsMeta(location, objDataMeta) {
+				if objMeta, err = objectio.FastLoadObjectMeta(c.proc.Ctx, &location, false, fs); err != nil {
+					return false, err
+				}
+				objDataMeta = objMeta.MustDataMeta()
 			}
-		}
-		if shuffleRangeUint64 != nil {
-			index = plan2.GetRangeShuffleIndexForZMUnsignedSlice(shuffleRangeUint64, zm)
-		} else if shuffleRangeInt64 != nil {
-			index = plan2.GetRangeShuffleIndexForZMSignedSlice(shuffleRangeInt64, zm)
-		} else {
-			index = plan2.GetRangeShuffleIndexForZM(n.Stats.HashmapStats.ShuffleColMin, n.Stats.HashmapStats.ShuffleColMax, zm, uint64(len(c.cnList)))
-		}
-		nodes[index].Data.AppendBlockInfo(*blk)
-	}
+			blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
+			zm := blkMeta.MustGetColumn(uint16(n.Stats.HashmapStats.ShuffleColIdx)).ZoneMap()
+			if !zm.IsInited() {
+				// a block with all null will send to first CN
+				nodes[0].Data.AppendBlockInfo(blk)
+				return false, nil
+			}
+			if !init {
+				init = true
+				switch zm.GetType() {
+				case types.T_int64, types.T_int32, types.T_int16:
+					shuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(n.Stats.HashmapStats.Ranges, len(c.cnList), n.Stats.HashmapStats.Nullcnt, int64(n.Stats.TableCnt))
+				case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit, types.T_datalink:
+					shuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(n.Stats.HashmapStats.Ranges, len(c.cnList), n.Stats.HashmapStats.Nullcnt, int64(n.Stats.TableCnt))
+				}
+			}
+			if shuffleRangeUint64 != nil {
+				index = plan2.GetRangeShuffleIndexForZMUnsignedSlice(shuffleRangeUint64, zm)
+			} else if shuffleRangeInt64 != nil {
+				index = plan2.GetRangeShuffleIndexForZMSignedSlice(shuffleRangeInt64, zm)
+			} else {
+				index = plan2.GetRangeShuffleIndexForZM(n.Stats.HashmapStats.ShuffleColMin, n.Stats.HashmapStats.ShuffleColMax, zm, uint64(len(c.cnList)))
+			}
+			nodes[index].Data.AppendBlockInfo(blk)
+			return true, nil
+		})
+
 	return nil
 }
 

@@ -243,15 +243,15 @@ type MemRelationData struct {
 	Shards ShardIdSlice
 }
 
-func (rd *MemRelationData) GetBlockInfoList() []*objectio.BlockInfoInProgress {
+func (rd *MemRelationData) GetBlockInfoSlice() objectio.BlockInfoSliceInProgress {
 	panic("not supported")
 }
 
-func (rd *MemRelationData) GetBlockInfo(i int) *objectio.BlockInfoInProgress {
+func (rd *MemRelationData) GetBlockInfo(i int) objectio.BlockInfoInProgress {
 	panic("not supported")
 }
 
-func (rd *MemRelationData) SetBlockInfo(i int, blk *objectio.BlockInfoInProgress) {
+func (rd *MemRelationData) SetBlockInfo(i int, blk objectio.BlockInfoInProgress) {
 	panic("not supported")
 }
 

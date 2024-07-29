@@ -448,10 +448,10 @@ func (mr *MockRelDataMockRecorder) DataSlice(begin, end interface{}) *gomock.Cal
 }
 
 // GetBlockInfo mocks base method.
-func (m *MockRelData) GetBlockInfo(i int) *objectio.BlockInfoInProgress {
+func (m *MockRelData) GetBlockInfo(i int) objectio.BlockInfoInProgress {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetBlockInfo", i)
-	ret0, _ := ret[0].(*objectio.BlockInfoInProgress)
+	ret0, _ := ret[0].(objectio.BlockInfoInProgress)
 	return ret0
 }
 
@@ -461,18 +461,18 @@ func (mr *MockRelDataMockRecorder) GetBlockInfo(i interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetBlockInfo", reflect.TypeOf((*MockRelData)(nil).GetBlockInfo), i)
 }
 
-// GetBlockInfoList mocks base method.
-func (m *MockRelData) GetBlockInfoList() []*objectio.BlockInfoInProgress {
+// GetBlockInfoSlice mocks base method.
+func (m *MockRelData) GetBlockInfoSlice() objectio.BlockInfoSliceInProgress {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetBlockInfoList")
-	ret0, _ := ret[0].([]*objectio.BlockInfoInProgress)
+	ret := m.ctrl.Call(m, "GetBlockInfoSlice")
+	ret0, _ := ret[0].(objectio.BlockInfoSliceInProgress)
 	return ret0
 }
 
-// GetBlockInfoList indicates an expected call of GetBlockInfoList.
-func (mr *MockRelDataMockRecorder) GetBlockInfoList() *gomock.Call {
+// GetBlockInfoSlice indicates an expected call of GetBlockInfoSlice.
+func (mr *MockRelDataMockRecorder) GetBlockInfoSlice() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetBlockInfoList", reflect.TypeOf((*MockRelData)(nil).GetBlockInfoList))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetBlockInfoSlice", reflect.TypeOf((*MockRelData)(nil).GetBlockInfoSlice))
 }
 
 // GetShardID mocks base method.
@@ -560,7 +560,7 @@ func (mr *MockRelDataMockRecorder) MarshalToBytes() *gomock.Call {
 }
 
 // SetBlockInfo mocks base method.
-func (m *MockRelData) SetBlockInfo(i int, blk *objectio.BlockInfoInProgress) {
+func (m *MockRelData) SetBlockInfo(i int, blk objectio.BlockInfoInProgress) {
 	m.ctrl.T.Helper()
 	m.ctrl.Call(m, "SetBlockInfo", i, blk)
 }
