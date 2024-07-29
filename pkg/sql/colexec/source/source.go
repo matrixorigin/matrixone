@@ -44,7 +44,7 @@ func (source *Source) Prepare(proc *process.Process) error {
 	source.types = make([]types.Type, len(source.TblDef.Cols))
 	source.Configs = make(map[string]interface{})
 	for i, col := range source.TblDef.Cols {
-		source.attrs[i] = col.Name
+		source.attrs[i] = col.GetOriginCaseName()
 		source.types[i] = types.Type{
 			Oid:   types.T(col.Typ.Id),
 			Scale: col.Typ.Scale,

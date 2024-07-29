@@ -129,6 +129,7 @@ func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) {
 	pages := make([]*model.TransferHashPage, 0, len(entry.transMappings.Mappings))
 	var duration time.Duration
 	var start time.Time
+	bts := time.Now().Add(time.Hour)
 	for i, mcontainer := range entry.transMappings.Mappings {
 		m := mcontainer.M
 		if len(m) == 0 {
@@ -136,7 +137,7 @@ func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) {
 		}
 		id := entry.ablksHandles[i].Fingerprint()
 		entry.pageIds = append(entry.pageIds, id)
-		page := model.NewTransferHashPage(id, time.Now(), isTransient, entry.rt.LocalFs.Service, model.GetTTL(), model.GetDiskTTL())
+		page := model.NewTransferHashPage(id, bts, isTransient, entry.rt.LocalFs.Service, model.GetTTL(), model.GetDiskTTL())
 		mapping := make(map[uint32][]byte, len(m))
 		for srcRow, dst := range m {
 			blkid := objectio.NewBlockidWithObjectID(entry.createdBlkHandles.GetID(), uint16(dst.BlkIdx))
@@ -151,13 +152,20 @@ func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) {
 			return
 		}
 		duration += time.Since(start)
-
-		entry.rt.TransferTable.AddPage(page)
 		pages = append(pages, page)
 	}
 
 	start = time.Now()
 	model.WriteTransferPage(ctx, entry.rt.LocalFs.Service, pages, *ioVector)
+	now := time.Now()
+	for _, page := range pages {
+		if page.BornTS() != bts {
+			page.SetBornTS(now.Add(time.Minute))
+		} else {
+			page.SetBornTS(now)
+		}
+		entry.rt.TransferTable.AddPage(page)
+	}
 	duration += time.Since(start)
 	v2.TransferPageFlushLatencyHistogram.Observe(duration.Seconds())
 }

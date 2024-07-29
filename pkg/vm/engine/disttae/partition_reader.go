@@ -41,10 +41,12 @@ type PartitionReader struct {
 	// inserted rows comes from txn.writes.
 	inserts []*batch.Batch
 	//deleted rows comes from txn.writes or partitionState.rows.
-	deletes  map[types.Rowid]uint8
-	iter     logtailreplay.RowsIter
+	deletes map[types.Rowid]uint8
+	iter    logtailreplay.RowsIter
+	// letter case: origin
 	seqnumMp map[string]int
-	typsMap  map[string]types.Type
+	// letter case: origin
+	typsMap map[string]types.Type
 }
 
 var _ engine.Reader = new(PartitionReader)

@@ -320,7 +320,7 @@ import (
 %token <str> REAL DOUBLE FLOAT_TYPE DECIMAL NUMERIC DECIMAL_VALUE
 %token <str> TIME TIMESTAMP DATETIME YEAR
 %token <str> CHAR VARCHAR BOOL CHARACTER VARBINARY NCHAR
-%token <str> TEXT TINYTEXT MEDIUMTEXT LONGTEXT
+%token <str> TEXT TINYTEXT MEDIUMTEXT LONGTEXT DATALINK
 %token <str> BLOB TINYBLOB MEDIUMBLOB LONGBLOB JSON ENUM UUID VECF32 VECF64
 %token <str> GEOMETRY POINT LINESTRING POLYGON GEOMETRYCOLLECTION MULTIPOINT MULTILINESTRING MULTIPOLYGON
 %token <str> INT1 INT2 INT3 INT4 INT8 S3OPTION STAGEOPTION
@@ -539,7 +539,7 @@ import (
 %type <statement> create_publication_stmt drop_publication_stmt alter_publication_stmt show_publications_stmt show_subscriptions_stmt
 %type <statement> create_stage_stmt drop_stage_stmt alter_stage_stmt
 %type <statement> create_snapshot_stmt drop_snapshot_stmt
-%type <statement> create_pitr_stmt drop_pitr_stmt show_pitr_stmt alter_pitr_stmt
+%type <statement> create_pitr_stmt drop_pitr_stmt show_pitr_stmt alter_pitr_stmt restore_pitr_stmt
 %type <str> urlparams
 %type <str> comment_opt view_list_opt view_opt security_opt view_tail check_type
 %type <subscriptionOption> subscription_opt
@@ -638,7 +638,7 @@ import (
 %type <unresolvedObjectName> table_name_unresolved
 %type <comparisionExpr> like_opt
 %type <fullOpt> full_opt
-%type <str> database_name_opt auth_string constraint_keyword_opt constraint_keyword snapshot_option_opt
+%type <str> database_name_opt auth_string constraint_keyword_opt constraint_keyword
 %type <userMiscOption> pwd_or_lck pwd_or_lck_opt
 //%type <userMiscOptions> pwd_or_lck_list
 
@@ -925,6 +925,7 @@ normal_stmt:
 |   kill_stmt
 |   backup_stmt
 |   snapshot_restore_stmt
+|   restore_pitr_stmt
 |   pause_cdc_stmt
 |   resume_cdc_stmt
 |   restart_cdc_stmt
@@ -1224,6 +1225,45 @@ snapshot_restore_stmt:
             SnapShotName: tree.Identifier($10.Compare()),
             ToAccountName: tree.Identifier($13.Compare()),
         }
+    }
+
+restore_pitr_stmt:
+   RESTORE FROM PITR ident STRING
+   {
+       $$ = &tree.RestorePitr{
+           Level: tree.RESTORELEVELACCOUNT,
+           Name: tree.Identifier($4.Compare()),
+           TimeStamp: $5,
+       }
+   }
+|  RESTORE DATABASE ident FROM PITR ident STRING
+   {
+       $$ = &tree.RestorePitr{
+            Level: tree.RESTORELEVELDATABASE,
+            DatabaseName: tree.Identifier($3.Compare()),
+            Name: tree.Identifier($6.Compare()),
+            TimeStamp: $7,
+       }
+   }
+|   RESTORE DATABASE ident TABLE ident FROM PITR ident STRING
+   {
+      $$ = &tree.RestorePitr{
+            Level: tree.RESTORELEVELTABLE,
+            DatabaseName: tree.Identifier($3.Compare()),
+            TableName: tree.Identifier($5.Compare()),
+            Name: tree.Identifier($8.Compare()),
+            TimeStamp: $9,
+       }
+   }
+|  RESTORE ACCOUNT ident FROM PITR ident STRING as_name_opt
+    {
+        $$ = &tree.RestorePitr{
+           Level: tree.RESTORELEVELACCOUNT,
+           AccountName: tree.Identifier($3.Compare()),
+           Name: tree.Identifier($6.Compare()),
+           TimeStamp: $7,
+           SrcAccountName: tree.Identifier($8.Compare()),
+       }
     }
 
 kill_stmt:
@@ -4128,7 +4168,7 @@ show_sequences_stmt:
     }
 
 show_tables_stmt:
-    SHOW full_opt TABLES database_name_opt like_opt where_expression_opt snapshot_option_opt
+    SHOW full_opt TABLES database_name_opt like_opt where_expression_opt table_snapshot_opt
     {
         $$ = &tree.ShowTables{
             Open: false,
@@ -4136,7 +4176,7 @@ show_tables_stmt:
             DBName: $4,
             Like: $5,
             Where: $6,
-            SnapshotName : $7,
+            AtTsExpr: $7,
         }
     }
 |   SHOW OPEN full_opt TABLES database_name_opt like_opt where_expression_opt
@@ -4151,12 +4191,12 @@ show_tables_stmt:
     }
 
 show_databases_stmt:
-    SHOW DATABASES like_opt where_expression_opt snapshot_option_opt
+    SHOW DATABASES like_opt where_expression_opt table_snapshot_opt
     {
         $$ = &tree.ShowDatabases{
             Like: $3, 
             Where: $4,
-            SnapshotName: $5,
+            AtTsExpr: $5,
         }
     }
 |   SHOW SCHEMAS like_opt where_expression_opt
@@ -4247,15 +4287,6 @@ table_column_name:
         $$ = $2
     }
 
-snapshot_option_opt:
-    {
-        $$ = ""
-    }
-|   '{' SNAPSHOT '=' STRING '}'
-    {
-        $$ = $4
-    }
-
 
 
 from_or_in:
@@ -4276,19 +4307,19 @@ full_opt:
     }
 
 show_create_stmt:
-    SHOW CREATE TABLE table_name_unresolved snapshot_option_opt
+    SHOW CREATE TABLE table_name_unresolved table_snapshot_opt
     {
         $$ = &tree.ShowCreateTable{
             Name: $4,
-            SnapshotName: $5,
+            AtTsExpr: $5,
         }
     }
 |
-    SHOW CREATE VIEW table_name_unresolved snapshot_option_opt
+    SHOW CREATE VIEW table_name_unresolved table_snapshot_opt
     {
         $$ = &tree.ShowCreateView{
             Name: $4,
-            SnapshotName: $5,
+            AtTsExpr: $5,
         }
     }
 |   SHOW CREATE DATABASE not_exists_opt db_name
@@ -8419,10 +8450,6 @@ table_snapshot_opt:
     {
         $$ = nil
     }
-|   '{' '}'
-    {
-        $$ = nil
-    }
 |   '{' TIMESTAMP '=' expression '}'
     {
         $$ = &tree.AtTimeStamp{
@@ -8435,6 +8462,7 @@ table_snapshot_opt:
         var Str = $4.Compare()
         $$ = &tree.AtTimeStamp{
             Type: tree.ATTIMESTAMPSNAPSHOT,
+            SnapshotName: yylex.(*Lexer).GetDbOrTblName($4.Origin()),
             Expr: tree.NewNumValWithType(constant.MakeString(Str), Str, false, tree.P_char),
         }
     }
@@ -8442,7 +8470,8 @@ table_snapshot_opt:
     {
         $$ = &tree.AtTimeStamp{
            Type: tree.ATTIMESTAMPSNAPSHOT,
-          Expr: tree.NewNumValWithType(constant.MakeString($4), $4, false, tree.P_char),
+           SnapshotName: $4,
+           Expr: tree.NewNumValWithType(constant.MakeString($4), $4, false, tree.P_char),
         }
     }
 |   '{' MO_TS '=' expression '}'
@@ -11385,6 +11414,18 @@ char_type:
             },
         }
     }
+|   DATALINK
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.BlobFamily,
+                FamilyString: $1,
+                Locale: &locale,
+                Oid:    uint32(defines.MYSQL_TYPE_TEXT),
+            },
+        }
+    }
 |   TEXT
     {
         locale := ""
@@ -11519,7 +11560,7 @@ char_type:
             },
         }
     }
-|   ENUM '(' enum_values ')'
+| ENUM '(' enum_values ')'
     {
         locale := ""
         $$ = &tree.T{

@@ -417,7 +417,7 @@ func getValueFromVector(ctx context.Context, vec *vector.Vector, ses *Session, e
 		return vector.MustFixedCol[float32](vec)[0], nil
 	case types.T_float64:
 		return vector.MustFixedCol[float64](vec)[0], nil
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_text, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_text, types.T_blob, types.T_datalink:
 		return vec.GetStringAt(0), nil
 	case types.T_array_float32:
 		return vector.GetArrayAt[float32](vec, 0), nil

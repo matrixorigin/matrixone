@@ -194,6 +194,9 @@ var (
 		input:  "show index from t1 from db",
 		output: "show index from t1 from db",
 	}, {
+		input:  "create table t2(a int, b datalink);",
+		output: "create table t2 (a int, b datalink)",
+	}, {
 		input:  "select * from (SELECT * FROM (SELECT 1, 2, 3)) AS t1",
 		output: "select * from (select * from (select 1, 2, 3)) as t1",
 	}, {
@@ -2949,6 +2952,26 @@ var (
 		{
 			input:  "alter pitr if exists `pitr01` range 2 'h'",
 			output: "alter pitr if exists pitr01 range 2  h",
+		},
+		{
+			input:  "restore from pitr pitr01 '2021-01-01 00:00:00'",
+			output: "restore self account from pitr pitr01 timestamp = 2021-01-01 00:00:00",
+		},
+		{
+			input:  "restore database db01 from pitr pitr01 '2021-01-01 00:00:00'",
+			output: "restore database db01 from pitr pitr01 timestamp = 2021-01-01 00:00:00",
+		},
+		{
+			input:  "restore database db01 table t01 from pitr pitr01 '2021-01-01 00:00:00'",
+			output: "restore database db01 table t01 from pitr pitr01 timestamp = 2021-01-01 00:00:00",
+		},
+		{
+			input:  "restore account acc01 from pitr pitr01 '2021-01-01 00:00:00'",
+			output: "restore account acc01 from pitr pitr01 timestamp = 2021-01-01 00:00:00",
+		},
+		{
+			input:  "restore account acc01 from pitr pitr01 '2021-01-01 00:00:00' acc02",
+			output: "restore account acc01 from pitr pitr01 timestamp = 2021-01-01 00:00:00 from account acc02",
 		},
 	}
 )

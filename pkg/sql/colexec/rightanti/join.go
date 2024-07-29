@@ -67,6 +67,7 @@ func (rightAnti *RightAnti) Call(proc *process.Process) (vm.CallResult, error) {
 	defer analyze.Stop()
 	ctr := rightAnti.ctr
 	result := vm.NewCallResult()
+	var err error
 	for {
 		switch ctr.state {
 		case Build:
@@ -80,11 +81,11 @@ func (rightAnti *RightAnti) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 		case Probe:
-			msg := ctr.ReceiveFromSingleReg(0, analyze)
-			if msg.Err != nil {
-				return result, msg.Err
+			result, err = rightAnti.Children[0].Call(proc)
+			if err != nil {
+				return result, err
 			}
-			bat := msg.Batch
+			bat := result.Batch
 			if bat == nil {
 				ctr.state = SendLast
 				rightAnti.ctr.buf = nil
@@ -124,6 +125,7 @@ func (rightAnti *RightAnti) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 				result.Batch = rightAnti.ctr.buf[rightAnti.ctr.lastpos]
 				rightAnti.ctr.lastpos++
+				result.Status = vm.ExecHasMore
 				return result, nil
 			}
 
