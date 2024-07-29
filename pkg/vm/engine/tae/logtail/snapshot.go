@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"sync"
@@ -155,29 +156,51 @@ func (d *DeltaLocDataSource) ApplyTombstonesInProgress(
 	bid objectio.Blockid,
 	rowsOffset []int32,
 ) ([]int32, error) {
-	return nil, nil
+	deleteMask, err := d.getAndApplyTombstonesInProgress(ctx, bid)
+	if err != nil {
+		return nil, err
+	}
+	var rows []int32
+	if !deleteMask.IsEmpty() {
+		for _, row := range rowsOffset {
+			if !deleteMask.Contains(uint64(row)) {
+				rows = append(rows, row)
+			}
+		}
+	}
+	return rows, nil
 }
 
 func (d *DeltaLocDataSource) GetTombstonesInProgress(
 	ctx context.Context, bid objectio.Blockid,
 ) (deletedRows []int64, err error) {
-	segment := bid.Segment()
-	deltaLoc := d.objectMeta[*segment].deltaLocation[uint32(bid.Sequence())]
-	if deltaLoc == nil {
-		return
-	}
-	logutil.Infof("deltaLoc: %v, id is %d", deltaLoc.String(), bid.Sequence())
-	deletes, _, release, err := blockio.ReadBlockDelete(ctx, *deltaLoc, d.fs)
+	var rows *nulls.Bitmap
+	rows, err = d.getAndApplyTombstonesInProgress(ctx, bid)
 	if err != nil {
 		return
 	}
-	defer release()
-	rows := blockio.EvalDeleteRowsByTimestamp(deletes, d.ts, &bid)
 	if rows.IsEmpty() {
 		return
 	}
 	deletedRows = rows.ToI64Arrary()
 	return
+}
+
+func (d *DeltaLocDataSource) getAndApplyTombstonesInProgress(
+	ctx context.Context, bid objectio.Blockid,
+) (*nulls.Bitmap, error) {
+	segment := bid.Segment()
+	deltaLoc := d.objectMeta[*segment].deltaLocation[uint32(bid.Sequence())]
+	if deltaLoc == nil {
+		return nil, nil
+	}
+	logutil.Infof("deltaLoc: %v, id is %d", deltaLoc.String(), bid.Sequence())
+	deletes, _, release, err := blockio.ReadBlockDelete(ctx, *deltaLoc, d.fs)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	return blockio.EvalDeleteRowsByTimestamp(deletes, d.ts, &bid), nil
 }
 
 func (d *DeltaLocDataSource) HasTombstones(bid types.Blockid) bool {
