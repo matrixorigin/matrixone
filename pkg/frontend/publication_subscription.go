@@ -1548,9 +1548,13 @@ func UpgradePubSub() (err error) {
 		return
 	}
 
-	getSubAccountIds := func(pubInfo *pubsub.PubInfo) (subAccountIds []int32) {
+	getSubAccountIds := func(pubInfo *pubsub.PubInfo, pubAccountName string) (subAccountIds []int32) {
 		if pubInfo.SubAccountsStr == pubsub.AccountAll {
 			for _, accInfo := range accNameInfoMap {
+				if accInfo.Name == pubAccountName {
+					continue
+				}
+
 				subAccountIds = append(subAccountIds, accInfo.Id)
 			}
 		} else {
@@ -1570,7 +1574,7 @@ func UpgradePubSub() (err error) {
 		}
 	}
 	for key := range pubSubscribedInfos {
-		if _, ok := pubSubscribedInfos[key]; !ok {
+		if _, ok := allPubInfos[key]; !ok {
 			pub3 = append(pub3, key)
 		}
 	}
@@ -1590,7 +1594,7 @@ func UpgradePubSub() (err error) {
 		pubAccountName, pubName := split[0], split[1]
 		pubInfo := allPubInfos[pubKey]
 
-		for _, subAccountId := range getSubAccountIds(pubInfo) {
+		for _, subAccountId := range getSubAccountIds(pubInfo, pubAccountName) {
 			subInfo := &pubsub.SubInfo{
 				SubAccountId:   subAccountId,
 				PubAccountName: pubAccountName,
@@ -1614,7 +1618,7 @@ func UpgradePubSub() (err error) {
 		pubInfo := allPubInfos[pubKey]
 		subscribedInfos := pubSubscribedInfos[pubKey]
 
-		subAccountIds := getSubAccountIds(pubInfo)
+		subAccountIds := getSubAccountIds(pubInfo, pubAccountName)
 		for _, subAccountId := range subAccountIds {
 			subInfo := &pubsub.SubInfo{
 				SubAccountId:   subAccountId,
@@ -1693,5 +1697,13 @@ func UpgradePubSub() (err error) {
 		}
 	}
 
+	// upgrade mo_pubs.table_list: "" ->  "*"
+	for _, accountInfo := range accNameInfoMap {
+		newCtx := defines.AttachAccountId(ctx, uint32(accountInfo.Id))
+		sql := "update mo_catalog.mo_pubs set table_list = '*'"
+		if err = bh.Exec(newCtx, sql); err != nil {
+			return
+		}
+	}
 	return
 }
