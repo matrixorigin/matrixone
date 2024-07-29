@@ -4105,12 +4105,12 @@ func (c *Compile) expandRanges(
 				if err != nil {
 					return nil, err
 				}
-				subRelData.ForeachDataBlk(1, subRelData.BlkCnt(), func(b any) error {
-					blk := b.(*objectio.BlockInfoInProgress)
+
+				blks := subRelData.GetBlockInfoList()[1:]
+				for _, blk := range blks {
 					blk.PartitionNum = int16(i)
-					relData.AppendDataBlk(blk)
-					return nil
-				})
+					relData.AppendBlockInfo(*blk)
+				}
 			}
 		} else {
 			partitionInfo := n.TableDef.Partition
@@ -4126,12 +4126,12 @@ func (c *Compile) expandRanges(
 				if err != nil {
 					return nil, err
 				}
-				subRelData.ForeachDataBlk(1, subRelData.BlkCnt(), func(b any) error {
-					blk := b.(*objectio.BlockInfoInProgress)
+
+				blks := subRelData.GetBlockInfoList()[1:]
+				for _, blk := range blks {
 					blk.PartitionNum = int16(i)
-					relData.AppendDataBlk(blk)
-					return nil
-				})
+					relData.AppendBlockInfo(*blk)
+				}
 			}
 		}
 	}
@@ -4223,11 +4223,11 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	}
 	// some log for finding a bug.
 	tblId := rel.GetTableID(ctx)
-	expectedLen := relData.BlkCnt()
+	expectedLen := relData.DataCnt()
 	c.proc.Debugf(ctx, "cn generateNodes, tbl %d ranges is %d", tblId, expectedLen)
 
 	// if len(ranges) == 0 indicates that it's a temporary table.
-	if relData.BlkCnt() == 0 && n.TableDef.TableType != catalog.SystemOrdinaryRel {
+	if relData.DataCnt() == 0 && n.TableDef.TableType != catalog.SystemOrdinaryRel {
 		nodes = make(engine.Nodes, len(c.cnList))
 		for i, node := range c.cnList {
 			nodes[i] = engine.Node{
@@ -4244,7 +4244,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	// for multi cn in launch mode, put all payloads in current CN, maybe delete this in the future
 	// for an ordered scan, put all paylonds in current CN
 	// or sometimes force on one CN
-	if isLaunchMode(c.cnList) || len(n.OrderBy) > 0 || relData.BlkCnt() < plan2.BlockThresholdForOneCN || n.Stats.ForceOneCN {
+	if isLaunchMode(c.cnList) || len(n.OrderBy) > 0 || relData.DataCnt() < plan2.BlockThresholdForOneCN || n.Stats.ForceOneCN {
 		return putBlocksInCurrentCN(c, relData, n), partialResults, partialResultTypes, nil
 	}
 	// disttae engine
@@ -4258,10 +4258,10 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 
 func putBlocksInAverage(c *Compile, relData engine.RelData, n *plan.Node) engine.Nodes {
 	var nodes engine.Nodes
-	step := (relData.BlkCnt() + len(c.cnList) - 1) / len(c.cnList)
-	for i := 0; i < relData.BlkCnt(); i += step {
+	step := (relData.DataCnt() + len(c.cnList) - 1) / len(c.cnList)
+	for i := 0; i < relData.DataCnt(); i += step {
 		j := i / step
-		if i+step >= relData.BlkCnt() {
+		if i+step >= relData.DataCnt() {
 			if isSameCN(c.cnList[j].Addr, c.addr) {
 				if len(nodes) == 0 {
 					nodes = append(nodes, engine.Node{
@@ -4270,10 +4270,12 @@ func putBlocksInAverage(c *Compile, relData engine.RelData, n *plan.Node) engine
 						Data: relData.BuildEmptyRelData(),
 					})
 				}
-				relData.ForeachDataBlk(i, relData.BlkCnt(), func(blk any) error {
-					nodes[0].Data.AppendDataBlk(blk)
-					return nil
-				})
+
+				blks := relData.GetBlockInfoList()[i:]
+				for _, blk := range blks {
+					nodes[0].Data.AppendBlockInfo(*blk)
+				}
+
 			} else {
 
 				node := engine.Node{
@@ -4282,10 +4284,12 @@ func putBlocksInAverage(c *Compile, relData engine.RelData, n *plan.Node) engine
 					Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
 					Data: relData.BuildEmptyRelData(),
 				}
-				relData.ForeachDataBlk(i, relData.BlkCnt(), func(blk any) error {
-					node.Data.AppendDataBlk(blk)
-					return nil
-				})
+
+				blks := relData.GetBlockInfoList()[i:]
+				for _, blk := range blks {
+					node.Data.AppendBlockInfo(*blk)
+				}
+
 				nodes = append(nodes, node)
 			}
 		} else {
@@ -4298,10 +4302,10 @@ func putBlocksInAverage(c *Compile, relData engine.RelData, n *plan.Node) engine
 					})
 				}
 				//nodes[0].Data = append(nodes[0].Data, ranges.Slice(i, i+step)...)
-				relData.ForeachDataBlk(i, i+step, func(blk any) error {
-					nodes[0].Data.AppendDataBlk(blk)
-					return nil
-				})
+				blks := relData.GetBlockInfoList()[i : i+step]
+				for _, blk := range blks {
+					nodes[0].Data.AppendBlockInfo(*blk)
+				}
 
 			} else {
 				node := engine.Node{
@@ -4310,10 +4314,12 @@ func putBlocksInAverage(c *Compile, relData engine.RelData, n *plan.Node) engine
 					Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
 					Data: relData.BuildEmptyRelData(),
 				}
-				relData.ForeachDataBlk(i, i+step, func(blk any) error {
-					node.Data.AppendDataBlk(blk)
-					return nil
-				})
+
+				blks := relData.GetBlockInfoList()[i : i+step]
+				for _, blk := range blks {
+					node.Data.AppendBlockInfo(*blk)
+				}
+
 				nodes = append(nodes, node)
 			}
 		}
@@ -4330,17 +4336,18 @@ func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelD
 	})
 	// add memory table block
 	nodes[0].Data = relData.BuildEmptyRelData()
-	nodes[0].Data.AppendDataBlk(&objectio.EmptyBlockInfoInProgress)
+	nodes[0].Data.AppendBlockInfo(objectio.EmptyBlockInfoInProgress)
 	// only memory table block
-	if relData.BlkCnt() == 1 {
+	if relData.DataCnt() == 1 {
 		return nodes, nil
 	}
 	// only one cn
 	if len(c.cnList) == 1 {
-		relData.ForeachDataBlk(1, relData.BlkCnt(), func(b any) error {
-			nodes[0].Data.AppendDataBlk(b)
-			return nil
-		})
+		blks := relData.GetBlockInfoList()[1:]
+		for _, blk := range blks {
+			nodes[0].Data.AppendBlockInfo(*blk)
+		}
+
 		return nodes, nil
 	}
 
@@ -4372,13 +4379,13 @@ func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelD
 	// remove empty node from nodes
 	var newNodes engine.Nodes
 	for i := range nodes {
-		if nodes[i].Data.BlkCnt() > maxWorkLoad {
-			maxWorkLoad = nodes[i].Data.BlkCnt() / objectio.BlockInfoSize
+		if nodes[i].Data.DataCnt() > maxWorkLoad {
+			maxWorkLoad = nodes[i].Data.DataCnt() / objectio.BlockInfoSize
 		}
-		if nodes[i].Data.BlkCnt() < minWorkLoad {
-			minWorkLoad = nodes[i].Data.BlkCnt() / objectio.BlockInfoSize
+		if nodes[i].Data.DataCnt() < minWorkLoad {
+			minWorkLoad = nodes[i].Data.DataCnt() / objectio.BlockInfoSize
 		}
-		if nodes[i].Data.BlkCnt() > 0 {
+		if nodes[i].Data.DataCnt() > 0 {
 			if i != 0 {
 				tombstone, err := collectTombstones(c, n, rel)
 				if err != nil {
@@ -4392,7 +4399,7 @@ func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelD
 	if minWorkLoad*2 < maxWorkLoad {
 		logstring := fmt.Sprintf("read table %v ,workload %v blocks among %v nodes not balanced, max %v, min %v,",
 			n.TableDef.Name,
-			relData.BlkCnt(),
+			relData.DataCnt(),
 			len(newNodes),
 			maxWorkLoad,
 			minWorkLoad)
@@ -4406,14 +4413,13 @@ func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelD
 }
 
 func shuffleBlocksByHash(c *Compile, relData engine.RelData, nodes engine.Nodes) {
-	relData.ForeachDataBlk(1, relData.BlkCnt(), func(b any) error {
-		blk := b.(*objectio.BlockInfoInProgress)
+	blks := relData.GetBlockInfoList()[1:]
+	for _, blk := range blks {
 		location := blk.MetaLocation()
 		objTimeStamp := location.Name()[:7]
 		index := plan2.SimpleCharHashToRange(objTimeStamp, uint64(len(c.cnList)))
-		nodes[index].Data.AppendDataBlk(blk)
-		return nil
-	})
+		nodes[index].Data.AppendBlockInfo(*blk)
+	}
 }
 
 func shuffleBlocksByRange(c *Compile, relData engine.RelData, n *plan.Node, nodes engine.Nodes) error {
@@ -4424,8 +4430,9 @@ func shuffleBlocksByRange(c *Compile, relData engine.RelData, n *plan.Node, node
 	var shuffleRangeInt64 []int64
 	var init bool
 	var index uint64
-	return relData.ForeachDataBlk(1, relData.BlkCnt(), func(b any) error {
-		blk := b.(*objectio.BlockInfoInProgress)
+
+	blks := relData.GetBlockInfoList()[1:]
+	for _, blk := range blks {
 		location := blk.MetaLocation()
 		fs, err := fileservice.Get[fileservice.FileService](c.proc.Base.FileService, defines.SharedFileServiceName)
 		if err != nil {
@@ -4441,7 +4448,7 @@ func shuffleBlocksByRange(c *Compile, relData engine.RelData, n *plan.Node, node
 		zm := blkMeta.MustGetColumn(uint16(n.Stats.HashmapStats.ShuffleColIdx)).ZoneMap()
 		if !zm.IsInited() {
 			// a block with all null will send to first CN
-			nodes[0].Data.AppendDataBlk(blk)
+			nodes[0].Data.AppendBlockInfo(*blk)
 			return nil
 		}
 		if !init {
@@ -4460,9 +4467,9 @@ func shuffleBlocksByRange(c *Compile, relData engine.RelData, n *plan.Node, node
 		} else {
 			index = plan2.GetRangeShuffleIndexForZM(n.Stats.HashmapStats.ShuffleColMin, n.Stats.HashmapStats.ShuffleColMax, zm, uint64(len(c.cnList)))
 		}
-		nodes[index].Data.AppendDataBlk(blk)
-		return nil
-	})
+		nodes[index].Data.AppendBlockInfo(*blk)
+	}
+	return nil
 }
 
 func putBlocksInCurrentCN(c *Compile, relData engine.RelData, n *plan.Node) engine.Nodes {

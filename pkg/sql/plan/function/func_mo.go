@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -442,9 +441,9 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 				return err
 			}
 
-			if ranges.BlkCnt() == 0 {
+			if ranges.DataCnt() == 0 {
 				getValueFailed = true
-			} else if ranges.BlkCnt() == 1 && ranges.GetDataBlk(0).(*objectio.BlockInfoInProgress).IsMemBlk() {
+			} else if ranges.DataCnt() == 1 && ranges.GetBlockInfo(0).IsMemBlk() {
 				getValueFailed = true
 			} else {
 				// BUG： if user delete the max or min value within the same txn, the result will be wrong.
