@@ -670,6 +670,89 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (e
 		return err
 	}
 
+	if len(srcAccountName) > 0 {
+		restoreOtherAccount := func() (rtnErr error) {
+			fromAccount := string(stmt.SrcAccountName)
+			if len(fromAccount) == 0 {
+				fromAccount = pitr.accountName
+			}
+			toAccountId := uint32(pitr.accountId)
+			// check account exists or not
+			var accountExist bool
+			if accountExist, rtnErr = doCheckAccountExistsInPitrRestore(ctx, ses.GetService(), bh, pitrName, ts, fromAccount, toAccountId); rtnErr != nil {
+				return rtnErr
+			}
+			if !accountExist {
+				return moerr.NewInternalError(ctx, "account %s does not exist at timestamp %d", tenantInfo.GetTenant(), ts)
+			}
+			// mock snapshot
+			var snapshotName string
+			snapshotName, rtnErr = insertSnapshotRecord(ctx, ses.GetService(), bh, pitrName, ts, uint64(toAccountId), fromAccount)
+			defer func() {
+				deleteSnapshotRecord(ctx, ses.GetService(), bh, pitrName, snapshotName)
+			}()
+			if rtnErr != nil {
+				return rtnErr
+			}
+
+			if srcAccountName != pitr.accountName {
+				// restore account to self
+				toAccountId, rtnErr = getAccountId(ctx, bh, string(stmt.AccountName))
+				if rtnErr != nil {
+					return rtnErr
+				}
+			}
+
+			// drop foreign key related tables first
+			if err = deleteCurFkTables(ctx, ses.GetService(), bh, dbName, tblName, toAccountId); err != nil {
+				return
+			}
+
+			// get topo sorted tables with foreign key
+			sortedFkTbls, err := fkTablesTopoSort(ctx, bh, snapshotName, dbName, tblName)
+			if err != nil {
+				return
+			}
+
+			// get foreign key table infos
+			fkTableMap, err := getTableInfoMap(ctx, ses.GetService(), bh, snapshotName, dbName, tblName, sortedFkTbls)
+			if err != nil {
+				return
+			}
+
+			// collect views and tables during table restoration
+			viewMap := make(map[string]*tableInfo)
+
+			rtnErr = restoreToAccount(ctx, ses.GetService(), bh, snapshotName, toAccountId, fkTableMap, viewMap, ts)
+			if rtnErr != nil {
+				return rtnErr
+			}
+
+			if len(fkTableMap) > 0 {
+				if err = restoreTablesWithFk(ctx, ses.GetService(), bh, snapshotName, sortedFkTbls, fkTableMap, toAccountId, ts); err != nil {
+					return
+				}
+			}
+
+			if len(viewMap) > 0 {
+				if err = restoreViews(ctx, ses, bh, snapshotName, viewMap, toAccountId); err != nil {
+					return
+				}
+			}
+			// checks if the given context has been canceled.
+			if err = CancelCheck(ctx); err != nil {
+				return
+			}
+			return rtnErr
+		}
+
+		err = restoreOtherAccount()
+		if err != nil {
+			return err
+		}
+		return err
+	}
+
 	restoreLevel = stmt.Level
 
 	// restore self account
@@ -1453,6 +1536,21 @@ func checkPitrValidOrNot(pitrRecord *pitrRecord, stmt *tree.RestorePitr, tenantI
 			}
 			if pitrRecord.level == tree.PITRLEVELACCOUNT.String() && pitrRecord.accountId != uint64(tenantInfo.TenantID) {
 				return moerr.NewInternalErrorNoCtx("pitr %s is not allowed to restore account %v", pitrRecord.pitrName, tenantInfo.GetTenant())
+			}
+		} else {
+			// sys restore other account's pitr
+			// if the pitr level is cluster, the scource account can not be empty
+			if pitrRecord.level == tree.PITRLEVELCLUSTER.String() && len(stmt.SrcAccountName) == 0 {
+				return moerr.NewInternalErrorNoCtx("source account %s can not be empty when restore cluster level pitr %s", string(stmt.AccountName), pitrRecord.pitrName)
+			}
+			// if the pitr level is account, the scource account must be empty
+			if pitrRecord.level == tree.PITRLEVELACCOUNT.String() && len(stmt.SrcAccountName) > 0 {
+				return moerr.NewInternalErrorNoCtx("source account %s must be empty when restore account level pitr %s", string(stmt.AccountName), pitrRecord.pitrName)
+			}
+
+			// if the pitr level is database or table, return err
+			if pitrRecord.level == tree.PITRLEVELDATABASE.String() || pitrRecord.level == tree.PITRLEVELTABLE.String() {
+				return moerr.NewInternalErrorNoCtx("can not restore database or table level pitr %s with source account %s", pitrRecord.pitrName, string(stmt.AccountName))
 			}
 		}
 	case tree.RESTORELEVELDATABASE:
