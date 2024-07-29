@@ -338,7 +338,7 @@ func (h *Handle) HandleCommitMerge(
 	ctx context.Context,
 	meta txn.TxnMeta,
 	req *api.MergeCommitEntry,
-	resp *db.InspectResp) (cb func(), err error) {
+	resp *db.InspectResp) (err error) {
 
 	defer func() {
 		if err != nil {
@@ -369,7 +369,6 @@ func (h *Handle) HandleCommitMerge(
 
 	defer func() {
 		if err != nil {
-			txn.Rollback(ctx)
 			resp.Message = err.Error()
 			merge.CleanUpUselessFiles(req, h.db.Runtime.Fs.Service)
 		}
@@ -397,11 +396,11 @@ func (h *Handle) HandleCommitMerge(
 		for _, filepath := range locations {
 			reader, err := blockio.NewFileReader(h.db.Runtime.SID(), h.db.Runtime.Fs.Service, filepath)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			bats, releases, err := reader.LoadAllColumns(ctx, nil, nil)
 			if err != nil {
-				return nil, err
+				return err
 			}
 
 			for _, bat := range bats {
@@ -442,7 +441,6 @@ func (h *Handle) HandleCommitMerge(
 	if err != nil {
 		return
 	}
-	err = txn.Commit(ctx)
 	if err == nil {
 		b := &bytes.Buffer{}
 		b.WriteString("merged success\n")
@@ -457,5 +455,5 @@ func (h *Handle) HandleCommitMerge(
 		}
 		resp.Message = b.String()
 	}
-	return nil, err
+	return err
 }

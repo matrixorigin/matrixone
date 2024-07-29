@@ -759,7 +759,8 @@ func handleEOFPacket(msg []byte) bool {
 }
 
 // the first return value is the txn status, and the second return value
-// indicates if we can get the txn status from the packet.
+// indicates if we can get the txn status from the packet. If it is a ERROR
+// packet, the second return value is false.
 func checkTxnStatus(msg []byte) (bool, bool) {
 	ok := true
 	inTxn := true
@@ -770,7 +771,7 @@ func checkTxnStatus(msg []byte) (bool, bool) {
 		inTxn = handleOKPacket(msg)
 	} else if isEOFPacket(msg) {
 		inTxn = handleEOFPacket(msg)
-	} else {
+	} else if isErrPacket(msg) {
 		ok = false
 	}
 	return inTxn, ok

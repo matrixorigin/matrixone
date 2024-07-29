@@ -81,7 +81,7 @@ func extractRowFromVector(ctx context.Context, ses FeSession, vec *vector.Vector
 		row[i] = vector.GetFixedAt[float32](vec, rowIndex)
 	case types.T_float64:
 		row[i] = vector.GetFixedAt[float64](vec, rowIndex)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
 		row[i] = copyBytes(vec.GetBytesAt(rowIndex), true)
 	case types.T_array_float32:
 		// NOTE: Don't merge it with T_varchar. You will get raw binary in the SQL output

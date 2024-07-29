@@ -19,6 +19,7 @@ import (
 	"regexp"
 	"strconv"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -35,22 +36,50 @@ const (
 	CatalogVersion_Curr uint32 = CatalogVersion_V1
 )
 
-func init() {
-	MoDatabaseTableDefs = make([]engine.TableDef, len(MoDatabaseSchema))
+type Defines struct {
+	// used by memengine or tae
+	MoDatabaseTableDefs []engine.TableDef
+	// used by memengine or tae
+	MoTablesTableDefs []engine.TableDef
+	// used by memengine or tae
+	MoColumnsTableDefs []engine.TableDef
+	// used by memengine or tae or cn
+	MoTableMetaDefs      []engine.TableDef
+	MoDatabaseConstraint []byte
+	MoTableConstraint    []byte
+	MoColumnConstraint   []byte
+}
+
+func SetupDefines(sid string) {
+	runtime.ServiceRuntime(sid).SetGlobalVariables("catalog_defines", newDefines())
+}
+
+func GetDefines(sid string) *Defines {
+	v, ok := runtime.ServiceRuntime(sid).GetGlobalVariables("catalog_defines")
+	if !ok {
+		panic("catalog_defines is not set: " + sid)
+	}
+	return v.(*Defines)
+}
+
+func newDefines() *Defines {
+	d := &Defines{}
+
+	d.MoDatabaseTableDefs = make([]engine.TableDef, len(MoDatabaseSchema))
 	for i, name := range MoDatabaseSchema {
-		MoDatabaseTableDefs[i] = newAttributeDef(name, MoDatabaseTypes[i], i == 0)
+		d.MoDatabaseTableDefs[i] = newAttributeDef(name, MoDatabaseTypes[i], i == 0)
 	}
-	MoTablesTableDefs = make([]engine.TableDef, len(MoTablesSchema))
+	d.MoTablesTableDefs = make([]engine.TableDef, len(MoTablesSchema))
 	for i, name := range MoTablesSchema {
-		MoTablesTableDefs[i] = newAttributeDef(name, MoTablesTypes[i], i == 0)
+		d.MoTablesTableDefs[i] = newAttributeDef(name, MoTablesTypes[i], i == 0)
 	}
-	MoColumnsTableDefs = make([]engine.TableDef, len(MoColumnsSchema))
+	d.MoColumnsTableDefs = make([]engine.TableDef, len(MoColumnsSchema))
 	for i, name := range MoColumnsSchema {
-		MoColumnsTableDefs[i] = newAttributeDef(name, MoColumnsTypes[i], i == 0)
+		d.MoColumnsTableDefs[i] = newAttributeDef(name, MoColumnsTypes[i], i == 0)
 	}
-	MoTableMetaDefs = make([]engine.TableDef, len(MoTableMetaSchema))
+	d.MoTableMetaDefs = make([]engine.TableDef, len(MoTableMetaSchema))
 	for i, name := range MoTableMetaSchema {
-		MoTableMetaDefs[i] = newAttributeDef(name, MoTableMetaTypes[i], i == 0)
+		d.MoTableMetaDefs[i] = newAttributeDef(name, MoTableMetaTypes[i], i == 0)
 	}
 
 	def := &engine.ConstraintDef{
@@ -65,7 +94,7 @@ func init() {
 			},
 		},
 	}
-	MoDatabaseConstraint, _ = def.MarshalBinary()
+	d.MoDatabaseConstraint, _ = def.MarshalBinary()
 
 	def = &engine.ConstraintDef{
 		Cts: []engine.Constraint{
@@ -79,7 +108,7 @@ func init() {
 			},
 		},
 	}
-	MoTableConstraint, _ = def.MarshalBinary()
+	d.MoTableConstraint, _ = def.MarshalBinary()
 
 	def = &engine.ConstraintDef{
 		Cts: []engine.Constraint{
@@ -93,7 +122,8 @@ func init() {
 			},
 		},
 	}
-	MoColumnConstraint, _ = def.MarshalBinary()
+	d.MoColumnConstraint, _ = def.MarshalBinary()
+	return d
 }
 
 func newAttributeDef(name string, typ types.Type, isPrimary bool) engine.TableDef {
@@ -466,7 +496,7 @@ func GenRows(bat *batch.Batch) [][]any {
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
-		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_json, types.T_text:
+		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_json, types.T_text, types.T_datalink:
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = vec.GetBytesAt(j)
 			}

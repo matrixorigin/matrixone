@@ -304,7 +304,11 @@ func (h *Handle) HandleCommit(
 		}
 		common.DoIfInfoEnabled(func() {
 			if time.Since(start) > MAX_ALLOWED_TXN_LATENCY {
-				logutil.Info("Commit with long latency", zap.Duration("duration", time.Since(start)), zap.String("debug", meta.DebugString()))
+				logutil.Warn(
+					"SLOW-LOG",
+					zap.Duration("commit-latency", time.Since(start)),
+					zap.String("txn", meta.DebugString()),
+				)
 			}
 		})
 	}()
@@ -342,7 +346,11 @@ func (h *Handle) HandleCommit(
 			if err != nil {
 				return
 			}
-			logutil.Infof("retry txn %X with new txn %X", string(meta.GetID()), txn.GetID())
+			logutil.Info(
+				"TAE-RETRY-TXN",
+				zap.String("old-txn", string(meta.GetID())),
+				zap.String("new-txn", txn.GetID()),
+			)
 			//Handle precommit-write command for 1PC
 			err = h.handleRequests(ctx, txn, txnCtx)
 			if err != nil && !moerr.IsMoErrCode(err, moerr.ErrTAENeedRetry) {
@@ -586,7 +594,11 @@ func (h *Handle) HandleWrite(
 				delete(metalocations, s.ObjectName().String())
 			}
 			if len(metalocations) != 0 {
-				logutil.Warnf("tbl %v, not receive stats of following locations %v", req.TableName, metalocations)
+				logutil.Warn(
+					"TAE-EMPTY-STATS",
+					zap.Any("locations", metalocations),
+					zap.String("table", req.TableName),
+				)
 				err = moerr.NewInternalError(ctx, "object stats doesn't match meta locations")
 				return
 			}
@@ -617,7 +629,11 @@ func (h *Handle) HandleWrite(
 			if tb.Schema().(*catalog.Schema).HasPK() {
 				idx := tb.Schema().(*catalog.Schema).GetSingleSortKeyIdx()
 				for i := 0; i < req.Batch.Vecs[0].Length(); i++ {
-					logutil.Infof("op1 %v, %v", txn.GetStartTS().ToString(), common.MoVectorToString(req.Batch.Vecs[idx], i))
+					logutil.Info(
+						"op1",
+						zap.String("start-ts", txn.GetStartTS().ToString()),
+						zap.String("pk", common.MoVectorToString(req.Batch.Vecs[idx], i)),
+					)
 				}
 			}
 		}
@@ -699,7 +715,12 @@ func (h *Handle) HandleWrite(
 		if tb.Schema().(*catalog.Schema).HasPK() {
 			for i := 0; i < rowIDVec.Length(); i++ {
 				rowID := objectio.HackBytes2Rowid(req.Batch.Vecs[0].GetRawBytesAt(i))
-				logutil.Infof("op2 %v %v %v", txn.GetStartTS().ToString(), common.MoVectorToString(req.Batch.Vecs[1], i), rowID.String())
+				logutil.Info(
+					"op2",
+					zap.String("start-ts", txn.GetStartTS().ToString()),
+					zap.String("pk", common.MoVectorToString(req.Batch.Vecs[1], i)),
+					zap.String("rowid", rowID.String()),
+				)
 			}
 		}
 	}

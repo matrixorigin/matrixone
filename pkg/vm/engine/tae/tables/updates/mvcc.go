@@ -57,15 +57,17 @@ func init() {
 type AppendMVCCHandle struct {
 	*sync.RWMutex
 	meta           *catalog.ObjectEntry
+	blkOffset      uint16
 	appends        *txnbase.MVCCSlice[*AppendNode]
 	appendListener func(txnif.AppendNode) error
 }
 
-func NewAppendMVCCHandle(meta *catalog.ObjectEntry) *AppendMVCCHandle {
+func NewAppendMVCCHandle(meta *catalog.ObjectEntry, mutex *sync.RWMutex, blkOffset uint16) *AppendMVCCHandle {
 	node := &AppendMVCCHandle{
-		RWMutex: &sync.RWMutex{},
-		meta:    meta,
-		appends: txnbase.NewMVCCSlice(NewEmptyAppendNode, CompareAppendNode),
+		RWMutex:   mutex,
+		meta:      meta,
+		blkOffset: blkOffset,
+		appends:   txnbase.NewMVCCSlice(NewEmptyAppendNode, CompareAppendNode),
 	}
 	return node
 }
@@ -993,13 +995,7 @@ func (n *MVCCHandle) InMemoryCollectDeleteInRange(
 	// for deleteNode version less than 2, pk doesn't exist in memory
 	// collect pk by block.Foreach
 	if len(deletes) != 0 {
-		logutil.Infof("visit deletes: collect pk by load, obj is %v", n.meta.ID().String())
-		pkIdx := pkDef.Idx
-		data := n.meta.GetObjectData()
-		data.Foreach(ctx, schema, n.blkID, pkIdx, func(v any, isNull bool, row int) error {
-			pk.Append(v, false)
-			return nil
-		}, deletes, mp)
+		panic("not support")
 	}
 	// batch: rowID, ts, pkVec, abort
 	bat = containers.NewBatch()

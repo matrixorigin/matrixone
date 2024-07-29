@@ -116,7 +116,7 @@ func TypeStringValue(t types.Type, v any, isNull bool, opts ...TypePrintOpt) str
 	case types.T_bit:
 		return fmt.Sprintf("%v", v)
 	case types.T_char, types.T_varchar,
-		types.T_binary, types.T_varbinary, types.T_text, types.T_blob:
+		types.T_binary, types.T_varbinary, types.T_text, types.T_blob, types.T_datalink:
 		buf := v.([]byte)
 		printable := true
 		for _, c := range buf {

@@ -77,6 +77,9 @@
 # pkg/defines
 /pkg/defines @daviszhen
 
+# pkg/embed
+/pkg/embed @zhangxu19830126
+
 # pkg/tnservice
 /pkg/tnservice @zhangxu19830126 @XuPeng-SH
 
