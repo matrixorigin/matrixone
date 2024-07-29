@@ -205,8 +205,8 @@ func (t *cnMergeTask) InitTransferMaps(blkCnt int) {
 	}
 }
 
-func (t *cnMergeTask) GetTransferMaps() *api.TransferMaps {
-	return &t.transferMaps
+func (t *cnMergeTask) GetTransferMaps() api.TransferMaps {
+	return t.transferMaps
 }
 
 // impl DisposableVecPool

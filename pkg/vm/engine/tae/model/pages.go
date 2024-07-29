@@ -17,7 +17,6 @@ package model
 import (
 	"bytes"
 	"context"
-	"encoding/gob"
 	"fmt"
 	"path"
 	"sync"
@@ -200,28 +199,45 @@ func (page *TransferHashPage) Marshal() []byte {
 	if m == nil {
 		panic("empty hashmap")
 	}
-	b := new(bytes.Buffer)
-	e := gob.NewEncoder(b)
 
-	// Encoding the map
-	err := e.Encode(m)
-	if err != nil {
-		panic(err)
+	b := new(bytes.Buffer)
+	size := uint64(len(*m))
+	if size == 0 {
+		return nil
+	}
+	marshalSize := 8 + size*(4+1+2+4)
+	b.Grow(int(marshalSize))
+	b.Write(types.EncodeUint64(&size))
+	for k, v := range *m {
+		b.Write(types.EncodeUint32(&k))
+		b.Write(types.EncodeUint8(&v.ObjIdx))
+		b.Write(types.EncodeUint16(&v.BlkIdx))
+		b.Write(types.EncodeUint32(&v.RowIdx))
 	}
 	return b.Bytes()
 }
 
 func (page *TransferHashPage) Unmarshal(data []byte) (*api.TransferMap, error) {
-	m := api.TransferMap{}
-	b := bytes.NewBuffer(data)
-	d := gob.NewDecoder(b)
-
-	// Decoding the serialized data
-	err := d.Decode(&m)
-	if err != nil {
-		return nil, err
+	if len(data) == 0 {
+		emptyMap := make(api.TransferMap)
+		return &emptyMap, nil
 	}
-	return &m, nil
+	b := bytes.NewBuffer(data)
+	size := types.DecodeUint64(b.Next(8))
+	transferMap := make(api.TransferMap, size)
+	for b.Len() != 0 {
+		k := types.DecodeUint32(b.Next(4))
+		vO := types.DecodeUint8(b.Next(1))
+		vB := types.DecodeUint16(b.Next(2))
+		vR := types.DecodeUint32(b.Next(4))
+
+		transferMap[k] = api.TransferDestPos{
+			ObjIdx: vO,
+			BlkIdx: vB,
+			RowIdx: vR,
+		}
+	}
+	return &transferMap, nil
 }
 
 func (page *TransferHashPage) SetPath(path Path) {

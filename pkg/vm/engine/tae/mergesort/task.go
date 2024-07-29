@@ -48,7 +48,7 @@ type MergeTaskHost interface {
 	HostHintName() string
 	GetCommitEntry() *api.MergeCommitEntry
 	InitTransferMaps(blkCnt int)
-	GetTransferMaps() *api.TransferMaps
+	GetTransferMaps() api.TransferMaps
 	PrepareNewWriter() *blockio.BlockWriter
 	DoTransfer() bool
 	GetObjectCnt() int

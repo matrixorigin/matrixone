@@ -158,7 +158,7 @@ func (m *merger[T]) merge(ctx context.Context) error {
 		}
 
 		if m.host.DoTransfer() {
-			(*transferMaps)[m.accObjBlkCnts[objIdx]+m.loadedObjBlkCnts[objIdx]-1][rowIdx] = api.TransferDestPos{
+			transferMaps[m.accObjBlkCnts[objIdx]+m.loadedObjBlkCnts[objIdx]-1][rowIdx] = api.TransferDestPos{
 				ObjIdx: uint8(m.stats.objCnt),
 				BlkIdx: uint16(m.stats.objBlkCnt),
 				RowIdx: uint32(m.stats.blkRowCnt),

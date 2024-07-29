@@ -75,7 +75,7 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 				}
 
 				if host.DoTransfer() {
-					(*transferMaps)[accObjBlkCnts[i]+loadedBlkCnt-1][uint32(j)] = api.TransferDestPos{
+					transferMaps[accObjBlkCnts[i]+loadedBlkCnt-1][uint32(j)] = api.TransferDestPos{
 						ObjIdx: uint8(stats.objCnt),
 						BlkIdx: uint16(stats.objBlkCnt),
 						RowIdx: uint32(stats.blkRowCnt),
