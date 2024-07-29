@@ -1079,21 +1079,6 @@ func (mr *MockRelationMockRecorder) MergeObjects(ctx, objstats, policyName, targ
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MergeObjects", reflect.TypeOf((*MockRelation)(nil).MergeObjects), ctx, objstats, policyName, targetObjSize)
 }
 
-// NewReader mocks base method.
-func (m *MockRelation) NewReader(arg0 context.Context, arg1 int, arg2 *plan.Expr, arg3 []byte, arg4 bool, arg5 int) ([]engine.Reader, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "NewReader", arg0, arg1, arg2, arg3, arg4, arg5)
-	ret0, _ := ret[0].([]engine.Reader)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// NewReader indicates an expected call of NewReader.
-func (mr *MockRelationMockRecorder) NewReader(arg0, arg1, arg2, arg3, arg4, arg5 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NewReader", reflect.TypeOf((*MockRelation)(nil).NewReader), arg0, arg1, arg2, arg3, arg4, arg5)
-}
-
 // PrimaryKeysMayBeModified mocks base method.
 func (m *MockRelation) PrimaryKeysMayBeModified(ctx context.Context, from, to types.TS, keyVector *vector.Vector) (bool, error) {
 	m.ctrl.T.Helper()
@@ -1732,21 +1717,6 @@ func (m *MockEngine) New(ctx context.Context, op client.TxnOperator) error {
 func (mr *MockEngineMockRecorder) New(ctx, op interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "New", reflect.TypeOf((*MockEngine)(nil).New), ctx, op)
-}
-
-// NewBlockReader mocks base method.
-func (m *MockEngine) NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp, expr *plan.Expr, blockReadPKFilter any, ranges []byte, tblDef *plan.TableDef, proc any) ([]engine.Reader, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "NewBlockReader", ctx, num, ts, expr, blockReadPKFilter, ranges, tblDef, proc)
-	ret0, _ := ret[0].([]engine.Reader)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// NewBlockReader indicates an expected call of NewBlockReader.
-func (mr *MockEngineMockRecorder) NewBlockReader(ctx, num, ts, expr, blockReadPKFilter, ranges, tblDef, proc interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NewBlockReader", reflect.TypeOf((*MockEngine)(nil).NewBlockReader), ctx, num, ts, expr, blockReadPKFilter, ranges, tblDef, proc)
 }
 
 // Nodes mocks base method.
