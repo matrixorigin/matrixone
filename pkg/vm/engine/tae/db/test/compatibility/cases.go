@@ -53,7 +53,7 @@ func init() {
 
 	PrepareCaseRegister(MakePrepareCase(
 		prepareDelete, "prepare-4", "prepare case delete",
-		schemaCfg{100, 2, 18, 13}, 93, longOpt,
+		schemaCfg{10, 2, 18, 13}, (10*3+1)*3, longOpt,
 	))
 	TestCaseRegister(
 		MakeTestCase(testDelete, "prepare-4", "test-4", "prepare-4=>test-4"),
@@ -270,7 +270,7 @@ func prepareDelete(tc PrepareCase, t *testing.T) {
 	tae.CreateRelAndAppend(bats[0], true)
 
 	schema := tc.GetSchema(t)
-	for i := 0; i < 11; i++ {
+	for i := 0; i < int(schema.BlockMaxRows+1); i++ {
 		txn, rel := tae.GetRelation()
 		v := testutil.GetSingleSortKeyValue(bats[0], schema, i)
 		filter := handle.NewEQFilter(v)
@@ -284,7 +284,7 @@ func prepareDelete(tc PrepareCase, t *testing.T) {
 
 	// compact
 	tae.DoAppend(bats[1])
-	for i := 0; i < 11; i++ {
+	for i := 0; i < int(schema.BlockMaxRows+1); i++ {
 		txn, rel := tae.GetRelation()
 		v := testutil.GetSingleSortKeyValue(bats[1], schema, i)
 		filter := handle.NewEQFilter(v)
@@ -296,7 +296,7 @@ func prepareDelete(tc PrepareCase, t *testing.T) {
 
 	// not compact
 	tae.DoAppend(bats[2])
-	for i := 0; i < 11; i++ {
+	for i := 0; i < int(schema.BlockMaxRows+1); i++ {
 		txn, rel := tae.GetRelation()
 		v := testutil.GetSingleSortKeyValue(bats[2], schema, i)
 		filter := handle.NewEQFilter(v)
@@ -489,14 +489,14 @@ func testDelete(tc TestCase, t *testing.T) {
 	bats := bat.Split(bat.Length())
 
 	schema := pc.GetSchema(t)
-	totalRows := bat.Length() - 33
+	totalRows := bat.Length() - int(schema.BlockMaxRows+1)*3
 	txn, rel := tae.GetRelation()
 	testutil.CheckAllColRowsByScan(t, rel, totalRows, true)
-	rows := 31
+	rows := schema.BlockMaxRows*3 + 1
 	for i := 0; i < 3; i++ {
 		for j := 0; j < int(rows); j++ {
 			err := rel.Append(context.Background(), bats[i*int(rows)+j])
-			if j < 11 {
+			if j < int(schema.BlockMaxRows+1) {
 				assert.NoError(t, err)
 			} else {
 				assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))

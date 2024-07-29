@@ -15,7 +15,6 @@
 package txnimpl
 
 import (
-	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -57,7 +56,7 @@ func TestComposedCmd(t *testing.T) {
 	controller := updates.NewMVCCHandle(objMvcc, 0)
 	ts := types.NextGlobalTsForTest()
 
-	appenderMvcc := updates.NewAppendMVCCHandle(obj, &sync.RWMutex{}, 0)
+	appenderMvcc := updates.NewAppendMVCCHandle(obj)
 
 	node := updates.MockAppendNode(ts, 0, 2515, appenderMvcc)
 	cmd := updates.NewAppendCmd(1, node)

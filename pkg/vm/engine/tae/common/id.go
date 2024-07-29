@@ -64,11 +64,6 @@ func (id *ID) SetBlockOffset(blkn uint16) {
 	copy(id.BlockID[types.ObjectBytesSize:], types.EncodeUint16(&blkn))
 }
 
-func (id *ID) GetBlockOffset() (blkn uint16) {
-	copy(types.EncodeUint16(&blkn), id.BlockID[types.ObjectBytesSize:])
-	return
-}
-
 func (id *ID) AsBlockID() *ID {
 	return &ID{
 		DbID:    id.DbID,

@@ -38,15 +38,14 @@ type NodeT interface {
 	ApplyAppend(
 		bat *containers.Batch,
 		txn txnif.AsyncTxn,
-		blkOffset uint16,
 	) (from int, err error)
 
 	GetDataWindow(
-		blkID uint16, readSchema *catalog.Schema, colIdxes []int, from, to uint32, mp *mpool.MPool,
+		readSchema *catalog.Schema, colIdxes []int, from, to uint32, mp *mpool.MPool,
 	) (bat *containers.Batch, err error)
 
-	// GetValueByRow(blkID uint16, readSchema *catalog.Schema, row, col int) (v any, isNull bool)
-	// GetRowsByKey(blkID uint16, key any) (rows []uint32, err error)
+	GetValueByRow(readSchema *catalog.Schema, row, col int) (v any, isNull bool)
+	GetRowsByKey(key any) (rows []uint32, err error)
 	BatchDedup(
 		ctx context.Context,
 		txn txnif.TxnReader,
@@ -54,7 +53,6 @@ type NodeT interface {
 		keys containers.Vector,
 		keysZM index.ZM,
 		rowmask *roaring.Bitmap,
-		startBLKID uint16,
 		bf objectio.BloomFilter,
 	) (err error)
 	ContainsKey(ctx context.Context, key any, blkID uint32) (ok bool, err error)
@@ -64,9 +62,6 @@ type NodeT interface {
 	GetRowByFilter(ctx context.Context, txn txnif.TxnReader, filter *handle.Filter, mp *mpool.MPool) (bid uint16, row uint32, err error)
 	CollectAppendInRange(
 		start, end types.TS, withAborted bool, mp *mpool.MPool,
-	) (batWithVer *containers.BatchWithVersion, err error)
-	CollectAppendInRangeWithBlockID(
-		blkOffset uint16, start, end types.TS, withAborted bool, mp *mpool.MPool,
 	) (batWithVer *containers.BatchWithVersion, err error)
 }
 
@@ -80,8 +75,8 @@ func NewNode(node NodeT) *Node {
 	}
 }
 
-func (n *Node) MustMNode() *objectMemoryNode {
-	return n.NodeT.(*objectMemoryNode)
+func (n *Node) MustMNode() *memoryNode {
+	return n.NodeT.(*memoryNode)
 }
 
 func (n *Node) MustPNode() *persistedNode {
