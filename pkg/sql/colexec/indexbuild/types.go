@@ -79,7 +79,7 @@ func (indexBuild *IndexBuild) Reset(proc *process.Process, pipelineFailed bool, 
 
 func (indexBuild *IndexBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := indexBuild.ctr
-	message.FinalizeRuntimeFilter(indexBuild.RuntimeFilterSpec, pipelineFailed, err, proc.Base.MessageBoard)
+	message.FinalizeRuntimeFilter(indexBuild.RuntimeFilterSpec, pipelineFailed, err, proc.GetMessageBoard())
 	if ctr != nil {
 		if ctr.batch != nil {
 			proc.PutBatch(ctr.batch)

@@ -345,7 +345,7 @@ type BaseProcess struct {
 	Hakeeper            logservice.CNHAKeeperClient
 	UdfService          udf.Service
 	WaitPolicy          lock.WaitPolicy
-	MessageBoard        *message.MessageBoard
+	messageBoard        *message.MessageBoard
 	logger              *log.MOLogger
 	TxnOperator         client.TxnOperator
 	CloneTxnOperator    client.TxnOperator
@@ -375,6 +375,14 @@ type WrapCs struct {
 	Uid          uuid.UUID
 	Cs           morpc.ClientSession
 	Err          chan error
+}
+
+func (proc *Process) GetMessageBoard() *message.MessageBoard {
+	return proc.Base.messageBoard
+}
+
+func (proc *Process) SetMessageBoard(mb *message.MessageBoard) {
+	proc.Base.messageBoard = mb
 }
 
 func (proc *Process) SetStmtProfile(sp *StmtProfile) {

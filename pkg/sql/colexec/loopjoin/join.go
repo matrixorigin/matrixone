@@ -113,7 +113,7 @@ func (loopJoin *LoopJoin) build(proc *process.Process, anal process.Analyze) err
 	ctr := loopJoin.ctr
 	start := time.Now()
 	defer anal.WaitStop(start)
-	mp := message.ReceiveJoinMap(loopJoin.JoinMapTag, false, 0, proc.Base.MessageBoard, proc.Ctx)
+	mp := message.ReceiveJoinMap(loopJoin.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
 	if mp == nil {
 		return nil
 	}

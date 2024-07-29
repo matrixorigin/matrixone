@@ -121,7 +121,7 @@ func (singleJoin *SingleJoin) build(anal process.Analyze, proc *process.Process)
 	ctr := singleJoin.ctr
 	start := time.Now()
 	defer anal.WaitStop(start)
-	ctr.mp = message.ReceiveJoinMap(singleJoin.JoinMapTag, false, 0, proc.Base.MessageBoard, proc.Ctx)
+	ctr.mp = message.ReceiveJoinMap(singleJoin.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}

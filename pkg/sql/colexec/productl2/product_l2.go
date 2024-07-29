@@ -111,7 +111,7 @@ func (productl2 *Productl2) build(proc *process.Process, anal process.Analyze) e
 	ctr := productl2.ctr
 	start := time.Now()
 	defer anal.WaitStop(start)
-	mp := message.ReceiveJoinMap(productl2.JoinMapTag, false, 0, proc.Base.MessageBoard, proc.Ctx)
+	mp := message.ReceiveJoinMap(productl2.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
 	if mp == nil {
 		return nil
 	}

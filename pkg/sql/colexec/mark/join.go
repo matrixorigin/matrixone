@@ -147,7 +147,7 @@ func (markJoin *MarkJoin) receiveHashMap(anal process.Analyze, proc *process.Pro
 	ctr := markJoin.ctr
 	start := time.Now()
 	defer anal.WaitStop(start)
-	ctr.mp = message.ReceiveJoinMap(markJoin.JoinMapTag, false, 0, proc.Base.MessageBoard, proc.Ctx)
+	ctr.mp = message.ReceiveJoinMap(markJoin.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}

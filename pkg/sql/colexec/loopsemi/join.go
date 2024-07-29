@@ -116,7 +116,7 @@ func (loopSemi *LoopSemi) build(proc *process.Process, anal process.Analyze) err
 	ctr := loopSemi.ctr
 	start := time.Now()
 	defer anal.WaitStop(start)
-	mp := message.ReceiveJoinMap(loopSemi.JoinMapTag, false, 0, proc.Base.MessageBoard, proc.Ctx)
+	mp := message.ReceiveJoinMap(loopSemi.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
 	if mp == nil {
 		return nil
 	}

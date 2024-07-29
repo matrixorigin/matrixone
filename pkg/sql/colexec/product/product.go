@@ -109,7 +109,7 @@ func (product *Product) build(proc *process.Process, anal process.Analyze) error
 	ctr := product.ctr
 	start := time.Now()
 	defer anal.WaitStop(start)
-	mp := message.ReceiveJoinMap(product.JoinMapTag, false, 0, proc.Base.MessageBoard, proc.Ctx)
+	mp := message.ReceiveJoinMap(product.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
 	if mp == nil {
 		return nil
 	}

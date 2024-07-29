@@ -126,7 +126,7 @@ func NewCompile(
 	c.tenant = tenant
 	c.uid = uid
 	c.sql = sql
-	c.proc.Base.MessageBoard = c.MessageBoard
+	c.proc.SetMessageBoard(c.MessageBoard)
 	c.stmt = stmt
 	c.addr = addr
 	c.isInternal = isInternal
@@ -192,7 +192,7 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	}
 
 	c.MessageBoard = c.MessageBoard.Reset()
-	proc.Base.MessageBoard = c.MessageBoard
+	proc.SetMessageBoard(c.MessageBoard)
 	c.counterSet.Reset()
 
 	for _, f := range c.fuzzys {

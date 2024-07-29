@@ -112,7 +112,7 @@ func (loopLeft *LoopLeft) build(proc *process.Process, anal process.Analyze) err
 	ctr := loopLeft.ctr
 	start := time.Now()
 	defer anal.WaitStop(start)
-	mp := message.ReceiveJoinMap(loopLeft.JoinMapTag, false, 0, proc.Base.MessageBoard, proc.Ctx)
+	mp := message.ReceiveJoinMap(loopLeft.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
 	if mp == nil {
 		return nil
 	}

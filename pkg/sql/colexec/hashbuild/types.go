@@ -108,8 +108,8 @@ func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, er
 
 func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := hashBuild.ctr
-	message.FinalizeRuntimeFilter(hashBuild.RuntimeFilterSpec, pipelineFailed, err, proc.Base.MessageBoard)
-	message.FinalizeJoinMapMessage(proc.Base.MessageBoard, hashBuild.JoinMapTag, false, 0, pipelineFailed, err)
+	message.FinalizeRuntimeFilter(hashBuild.RuntimeFilterSpec, pipelineFailed, err, proc.GetMessageBoard())
+	message.FinalizeJoinMapMessage(proc.GetMessageBoard(), hashBuild.JoinMapTag, false, 0, pipelineFailed, err)
 	if ctr != nil {
 		ctr.batches = nil
 		ctr.intHashMap = nil
