@@ -57,8 +57,6 @@ type evalVector struct {
 // we will give more one bool type vector as a marker col
 // so if you use mark join result, remember to get the last vector,that's what you want
 type container struct {
-	colexec.ReceiverOperator
-
 	// here, we will have three states:
 	// Build：we will use the right table to build a hashtable
 	// Probe: we will use the left table data to probe the hashtable
@@ -197,7 +195,6 @@ func (markJoin *MarkJoin) Free(proc *process.Process, pipelineFailed bool, err e
 		ctr.cleanEqVectors()
 		ctr.cleanHashMap()
 		ctr.cleanExprExecutor()
-		ctr.FreeAllReg()
 
 		anal := proc.GetAnalyze(markJoin.GetIdx(), markJoin.GetParallelIdx(), markJoin.GetParallelMajor())
 		anal.Alloc(ctr.maxAllocSize)
