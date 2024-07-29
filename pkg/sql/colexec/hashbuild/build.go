@@ -19,6 +19,8 @@ import (
 	"runtime"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -109,9 +111,9 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 			ctr.state = SendJoinMap
 
 		case SendJoinMap:
-			var jm *process.JoinMap
+			var jm *message.JoinMap
 			if ctr.inputBatchRowCount > 0 {
-				jm = process.NewJoinMap(ctr.multiSels, ctr.intHashMap, ctr.strHashMap, ctr.batches, proc.Mp())
+				jm = message.NewJoinMap(ctr.multiSels, ctr.intHashMap, ctr.strHashMap, ctr.batches, proc.Mp())
 				jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
 				if ap.NeedMergedBatch {
 					jm.SetRowCount(int64(ctr.inputBatchRowCount))
@@ -121,7 +123,7 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 			if ap.JoinMapTag <= 0 {
 				panic("wrong joinmap message tag!")
 			}
-			proc.SendMessage(process.JoinMapMsg{JoinMapPtr: jm, Tag: ap.JoinMapTag})
+			proc.SendMessage(message.JoinMapMsg{JoinMapPtr: jm, Tag: ap.JoinMapTag})
 
 			result.Batch = nil
 			result.Status = vm.ExecStop
@@ -344,15 +346,15 @@ func (ctr *container) handleRuntimeFilter(ap *HashBuild, proc *process.Process) 
 		return nil
 	}
 
-	var runtimeFilter process.RuntimeFilterMessage
+	var runtimeFilter message.RuntimeFilterMessage
 	runtimeFilter.Tag = ap.RuntimeFilterSpec.Tag
 
 	if ap.RuntimeFilterSpec.Expr == nil {
-		runtimeFilter.Typ = process.RuntimeFilter_PASS
+		runtimeFilter.Typ = message.RuntimeFilter_PASS
 		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
 		return nil
 	} else if ctr.inputBatchRowCount == 0 || len(ctr.uniqueJoinKeys) == 0 || ctr.uniqueJoinKeys[0].Length() == 0 {
-		runtimeFilter.Typ = process.RuntimeFilter_DROP
+		runtimeFilter.Typ = message.RuntimeFilter_DROP
 		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
 		return nil
 	}
@@ -380,7 +382,7 @@ func (ctr *container) handleRuntimeFilter(ap *HashBuild, proc *process.Process) 
 	}()
 
 	if hashmapCount > uint64(inFilterCardLimit) {
-		runtimeFilter.Typ = process.RuntimeFilter_PASS
+		runtimeFilter.Typ = message.RuntimeFilter_PASS
 		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
 		return nil
 	} else {
@@ -408,7 +410,7 @@ func (ctr *container) handleRuntimeFilter(ap *HashBuild, proc *process.Process) 
 			return err
 		}
 
-		runtimeFilter.Typ = process.RuntimeFilter_IN
+		runtimeFilter.Typ = message.RuntimeFilter_IN
 		runtimeFilter.Card = int32(vec.Length())
 		runtimeFilter.Data = data
 		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)

@@ -16,6 +16,7 @@ package shuffle
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -133,19 +134,19 @@ SENDLAST:
 
 func (shuffle *Shuffle) handleRuntimeFilter(proc *process.Process) error {
 	if shuffle.RuntimeFilterSpec != nil && !shuffle.ctr.runtimeFilterHandled {
-		shuffle.msgReceiver = proc.NewMessageReceiver([]int32{shuffle.RuntimeFilterSpec.Tag}, process.AddrBroadCastOnCurrentCN())
+		shuffle.msgReceiver = proc.NewMessageReceiver([]int32{shuffle.RuntimeFilterSpec.Tag}, message.AddrBroadCastOnCurrentCN())
 		msgs, ctxDone := shuffle.msgReceiver.ReceiveMessage(true, proc.Ctx)
 		if ctxDone {
 			shuffle.ctr.runtimeFilterHandled = true
 			return nil
 		}
 		for i := range msgs {
-			msg, ok := msgs[i].(process.RuntimeFilterMessage)
+			msg, ok := msgs[i].(message.RuntimeFilterMessage)
 			if !ok {
 				panic("expect runtime filter message, receive unknown message!")
 			}
 			switch msg.Typ {
-			case process.RuntimeFilter_PASS, process.RuntimeFilter_DROP:
+			case message.RuntimeFilter_PASS, message.RuntimeFilter_DROP:
 				shuffle.ctr.runtimeFilterHandled = true
 				continue
 			default:

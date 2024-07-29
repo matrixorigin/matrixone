@@ -21,6 +21,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -123,8 +125,8 @@ func New(
 	e.globalStats = NewGlobalStats(ctx, e, keyRouter,
 		WithUpdateWorkerFactor(updateWorkerFactor))
 
-	e.messageCenter = &process.MessageCenter{
-		StmtIDToBoard: make(map[uuid.UUID]*process.MessageBoard, 64),
+	e.messageCenter = &message.MessageCenter{
+		StmtIDToBoard: make(map[uuid.UUID]*message.MessageBoard, 64),
 		RwMutex:       &sync.Mutex{},
 	}
 

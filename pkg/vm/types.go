@@ -16,6 +16,7 @@ package vm
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -292,8 +293,8 @@ type OperatorInfo struct {
 	MaxParallel int32
 }
 
-func (info OperatorInfo) GetAddress() process.MessageAddress {
-	return process.MessageAddress{
+func (info OperatorInfo) GetAddress() message.MessageAddress {
+	return message.MessageAddress{
 		CnAddr:     info.CnAddr,
 		OperatorID: info.OperatorID,
 		ParallelID: info.ParallelID,

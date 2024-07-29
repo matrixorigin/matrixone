@@ -29,6 +29,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -154,13 +156,13 @@ func (c Compile) TypeName() string {
 	return "compile.Compile"
 }
 
-func (c *Compile) GetMessageCenter() *process.MessageCenter {
+func (c *Compile) GetMessageCenter() *message.MessageCenter {
 	if c == nil || c.e == nil {
 		return nil
 	}
 	m := c.e.GetMessageCenter()
 	if m != nil {
-		mc, ok := m.(*process.MessageCenter)
+		mc, ok := m.(*message.MessageCenter)
 		if ok {
 			return mc
 		}

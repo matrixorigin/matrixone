@@ -16,6 +16,7 @@ package process
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -343,7 +344,7 @@ type BaseProcess struct {
 	Hakeeper            logservice.CNHAKeeperClient
 	UdfService          udf.Service
 	WaitPolicy          lock.WaitPolicy
-	MessageBoard        *MessageBoard
+	MessageBoard        *message.MessageBoard
 	logger              *log.MOLogger
 	TxnOperator         client.TxnOperator
 	CloneTxnOperator    client.TxnOperator
