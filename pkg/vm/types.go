@@ -232,6 +232,11 @@ func (o *OperatorBase) SetIsLast(isLast bool) {
 	o.IsLast = isLast
 }
 
+func (o *OperatorBase) SetAnalyzeControl(nodeIdx int, isFirst bool) {
+	o.Idx = nodeIdx
+	o.IsFirst = isFirst
+}
+
 var CancelResult = CallResult{
 	Status: ExecStop,
 }
