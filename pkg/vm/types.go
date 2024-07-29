@@ -363,6 +363,11 @@ func (o *OperatorBase) SetIsFirst(isFirst bool) {
 	o.IsFirst = isFirst
 }
 
+func (o *OperatorBase) SetAnalyzeControl(nodeIdx int, isFirst bool) {
+	o.Idx = nodeIdx
+	o.IsFirst = isFirst
+}
+
 func (o *OperatorBase) GetIsLast() bool {
 	return o.IsLast
 }
