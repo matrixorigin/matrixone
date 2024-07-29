@@ -19,7 +19,6 @@ import (
 	"context"
 	"slices"
 	"sort"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -246,12 +245,12 @@ func (tomV1 *tombstoneDataV1) ApplyPersistedTombstones(
 	bid types.Blockid,
 	rowsOffset []int32,
 	apply func(
-		ctx2 context.Context,
-		loc objectio.Location,
-		cts types.TS,
-		rowsOffset []int32,
-		left *[]int32,
-		deleted *[]int64) (err error),
+	ctx2 context.Context,
+	loc objectio.Location,
+	cts types.TS,
+	rowsOffset []int32,
+	left *[]int32,
+	deleted *[]int64) (err error),
 ) (left []int32, deleted []int64, err error) {
 
 	tomV1.initMap()
@@ -319,9 +318,9 @@ func rowIdsToOffset(rowIds []types.Rowid, wantedType any) any {
 func (tomV1 *tombstoneDataV1) ApplyTombstones(
 	rows []types.Rowid,
 	loadCommit func(
-		bid types.Blockid,
-		loc objectio.Location,
-		committs types.TS) (*nulls.Nulls, error),
+	bid types.Blockid,
+	loc objectio.Location,
+	committs types.TS) (*nulls.Nulls, error),
 	loadUncommit func(loc objectio.Location) (*nulls.Nulls, error),
 ) ([]int64, error) {
 	tomV1.initMap()
@@ -429,12 +428,12 @@ func (tomV2 *tombstoneDataV2) ApplyPersistedTombstones(
 	bid types.Blockid,
 	rowsOffset []int32,
 	apply func(
-		ctx2 context.Context,
-		loc objectio.Location,
-		cts types.TS,
-		rowsOffset []int32,
-		left *[]int32,
-		deleted *[]int64) (err error),
+	ctx2 context.Context,
+	loc objectio.Location,
+	cts types.TS,
+	rowsOffset []int32,
+	left *[]int32,
+	deleted *[]int64) (err error),
 ) (left []int32, deleted []int64, err error) {
 	panic("implement me")
 }
@@ -442,9 +441,9 @@ func (tomV2 *tombstoneDataV2) ApplyPersistedTombstones(
 func (tomV2 *tombstoneDataV2) ApplyTombstones(
 	rows []types.Rowid,
 	load1 func(
-		bid types.Blockid,
-		loc objectio.Location,
-		committs types.TS) (*nulls.Nulls, error),
+	bid types.Blockid,
+	loc objectio.Location,
+	committs types.TS) (*nulls.Nulls, error),
 	load2 func(loc objectio.Location) (*nulls.Nulls, error)) ([]int64, error) {
 	panic("implement me")
 }
@@ -1149,11 +1148,6 @@ func (ls *LocalDataSource) Next(
 	vp engine.VectorPool,
 	bat *batch.Batch,
 ) (*objectio.BlockInfoInProgress, engine.DataState, error) {
-
-	if strings.Contains(ls.table.tableName, "bmsql") {
-		x := 0
-		x++
-	}
 
 	if ls.memPKFilter == nil {
 		ff := filter.(MemPKFilter)
