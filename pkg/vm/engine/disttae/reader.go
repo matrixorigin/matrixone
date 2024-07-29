@@ -752,26 +752,16 @@ func (r *readerInProgress) Close() error {
 }
 
 func (r *readerInProgress) SetOrderBy(orderby []*plan.OrderBySpec) {
-	r.OrderBy = orderby
+	//r.OrderBy = orderby
+	r.source.SetOrderBy(orderby)
 }
 
 func (r *readerInProgress) GetOrderBy() []*plan.OrderBySpec {
-	return r.OrderBy
+	return r.source.GetOrderBy()
 }
 
 func (r *readerInProgress) SetFilterZM(zm objectio.ZoneMap) {
-	if !r.filterZM.IsInited() {
-		r.filterZM = zm.Clone()
-		return
-	}
-	if r.desc && r.filterZM.CompareMax(zm) < 0 {
-		r.filterZM = zm.Clone()
-		return
-	}
-	if !r.desc && r.filterZM.CompareMin(zm) > 0 {
-		r.filterZM = zm.Clone()
-		return
-	}
+	r.source.SetFilterZM(zm)
 }
 
 func (r *readerInProgress) Read(
@@ -783,8 +773,23 @@ func (r *readerInProgress) Read(
 ) (bat *batch.Batch, err error) {
 
 	start := time.Now()
+	var place engine.DataState
 	defer func() {
 		v2.TxnBlockReaderDurationHistogram.Observe(time.Since(start).Seconds())
+
+		if r.tableDef.Name == "statement_info" {
+			if bat != nil {
+				logutil.Infof("xxxx readerInProgress,read from %v, txn:%s, table:%s, "+
+					"read batch,batch's row cnt:%d, vector's row cnt:%d",
+					place,
+					r.proc.GetTxnOperator().Txn().DebugString(),
+					r.tableDef.Name,
+					bat.RowCount(),
+					bat.Vecs[0].Length(),
+				)
+			}
+		}
+
 	}()
 
 	// for ordered scan, sort blocklist by zonemap info, and then filter by zonemap
@@ -835,8 +840,10 @@ func (r *readerInProgress) Read(
 		return nil, nil
 	}
 	if state == engine.InMem {
+		place = state
 		return bat, nil
 	}
+	place = state
 	//read block
 	filter := r.withFilterMixin.filterState.filter
 

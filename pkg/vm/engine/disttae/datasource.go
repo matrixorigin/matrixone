@@ -20,8 +20,6 @@ import (
 	"slices"
 	"sort"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -30,11 +28,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -911,6 +912,18 @@ func (rs *RemoteDataSource) ApplyTombstones(rows []types.Rowid) ([]int64, error)
 	return rs.data.GetTombstones().ApplyTombstones(rows, loadCommitted, loadUncommited)
 }
 
+func (rs *RemoteDataSource) SetOrderBy(orderby []*plan.OrderBySpec) {
+	panic("Not Support order by")
+}
+
+func (rs *RemoteDataSource) GetOrderBy() []*plan.OrderBySpec {
+	panic("Not Support order by")
+}
+
+func (rs *RemoteDataSource) SetFilterZM(zm objectio.ZoneMap) {
+	panic("Not Support order by")
+}
+
 // local data source
 
 type LocalDataSource struct {
@@ -940,6 +953,15 @@ type LocalDataSource struct {
 	rangesCursor int
 	snapshotTS   types.TS
 	iteratePhase engine.DataState
+
+	//TODO:: It's so ugly, need to refactor
+	//for order by
+	desc     bool
+	blockZMS []index.ZM
+	sorted   bool // blks need to be sorted by zonemap
+	OrderBy  []*plan.OrderBySpec
+
+	filterZM objectio.ZoneMap
 }
 
 func NewLocalDataSource(
@@ -978,6 +1000,110 @@ func NewLocalDataSource(
 	}
 
 	return source, nil
+}
+
+func (ls *LocalDataSource) SetOrderBy(orderby []*plan.OrderBySpec) {
+	ls.OrderBy = orderby
+}
+
+func (ls *LocalDataSource) GetOrderBy() []*plan.OrderBySpec {
+	return ls.OrderBy
+}
+
+func (ls *LocalDataSource) SetFilterZM(zm objectio.ZoneMap) {
+	if !ls.filterZM.IsInited() {
+		ls.filterZM = zm.Clone()
+		return
+	}
+	if ls.desc && ls.filterZM.CompareMax(zm) < 0 {
+		ls.filterZM = zm.Clone()
+		return
+	}
+	if !ls.desc && ls.filterZM.CompareMin(zm) > 0 {
+		ls.filterZM = zm.Clone()
+		return
+	}
+}
+
+func (ls *LocalDataSource) needReadBlkByZM(i int) bool {
+	zm := ls.blockZMS[i]
+	if !ls.filterZM.IsInited() || !zm.IsInited() {
+		return true
+	}
+	if ls.desc {
+		return ls.filterZM.CompareMax(zm) <= 0
+	} else {
+		return ls.filterZM.CompareMin(zm) >= 0
+	}
+}
+
+func (ls *LocalDataSource) getBlockZMs() {
+	orderByCol, _ := ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col)
+
+	def := ls.table.tableDef
+	orderByColIDX := int(def.Cols[int(orderByCol.Col.ColPos)].Seqnum)
+
+	ls.blockZMS = make([]index.ZM, len(ls.ranges))
+	var objDataMeta objectio.ObjectDataMeta
+	var location objectio.Location
+	for i := range ls.ranges {
+		location = ls.ranges[i].MetaLocation()
+		if !objectio.IsSameObjectLocVsMeta(location, objDataMeta) {
+			objMeta, err := objectio.FastLoadObjectMeta(ls.ctx, &location, false, ls.fs)
+			if err != nil {
+				panic("load object meta error when ordered scan!")
+			}
+			objDataMeta = objMeta.MustDataMeta()
+		}
+		blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
+		ls.blockZMS[i] = blkMeta.ColumnMeta(uint16(orderByColIDX)).ZoneMap()
+	}
+}
+
+func (ls *LocalDataSource) sortBlockList() {
+	helper := make([]*blockSortHelperInProgress, len(ls.ranges))
+	for i := range ls.ranges {
+		helper[i] = &blockSortHelperInProgress{}
+		helper[i].blk = ls.ranges[i]
+		helper[i].zm = ls.blockZMS[i]
+	}
+	if ls.desc {
+		sort.Slice(helper, func(i, j int) bool {
+			zm1 := helper[i].zm
+			if !zm1.IsInited() {
+				return true
+			}
+			zm2 := helper[j].zm
+			if !zm2.IsInited() {
+				return false
+			}
+			return zm1.CompareMax(zm2) > 0
+		})
+	} else {
+		sort.Slice(helper, func(i, j int) bool {
+			zm1 := helper[i].zm
+			if !zm1.IsInited() {
+				return true
+			}
+			zm2 := helper[j].zm
+			if !zm2.IsInited() {
+				return false
+			}
+			return zm1.CompareMin(zm2) < 0
+		})
+	}
+
+	for i := range helper {
+		ls.ranges[i] = helper[i].blk
+		ls.blockZMS[i] = helper[i].zm
+	}
+}
+
+func (ls *LocalDataSource) deleteFirstNBlocks(n int) {
+	ls.ranges = ls.ranges[n:]
+	if len(ls.OrderBy) > 0 {
+		ls.blockZMS = ls.blockZMS[n:]
+	}
 }
 
 func (ls *LocalDataSource) HasTombstones(bid types.Blockid) bool {
@@ -1031,16 +1157,50 @@ func (ls *LocalDataSource) Next(
 			return nil, engine.InMem, nil
 
 		case engine.Persisted:
-			if ls.rangesCursor < len(ls.ranges) {
-				ls.rangesCursor++
-				return ls.ranges[ls.rangesCursor-1], engine.Persisted, nil
+			if len(ls.ranges) == 0 {
+				return nil, engine.End, nil
 			}
 
-			ls.iteratePhase = engine.End
-			continue
+			ls.handleOrderBy()
+
+			if len(ls.ranges) == 0 {
+				return nil, engine.End, nil
+			}
+
+			blk := ls.ranges[0]
+			ls.deleteFirstNBlocks(1)
+
+			return blk, engine.Persisted, nil
 
 		case engine.End:
 			return nil, ls.iteratePhase, nil
+		}
+	}
+}
+
+func (ls *LocalDataSource) handleOrderBy() {
+	// for ordered scan, sort blocklist by zonemap info, and then filter by zonemap
+	if len(ls.OrderBy) > 0 {
+		if !ls.sorted {
+			ls.desc = ls.OrderBy[0].Flag&plan.OrderBySpec_DESC != 0
+			ls.getBlockZMs()
+			ls.sortBlockList()
+			ls.sorted = true
+		}
+		i := 0
+		for i < len(ls.ranges) {
+			if ls.needReadBlkByZM(i) {
+				break
+			}
+			i++
+		}
+		ls.deleteFirstNBlocks(i)
+
+		if ls.table.tableName == "statement_info" {
+			logutil.Infof("xxxx txn:%s, handle order by,delete blks:%d, rest blks:%d",
+				ls.table.db.op.Txn().DebugString(),
+				i,
+				len(ls.ranges))
 		}
 	}
 }

@@ -1823,22 +1823,29 @@ func (tbl *txnTable) BuildReaders(
 	relData engine.RelData,
 	num int,
 	txnOffset int,
+	orderBy bool,
 ) ([]engine.Reader, error) {
 	proc := p.(*process.Process)
 	//copy from NewReader.
 	if plan2.IsFalseExpr(expr) {
 		return []engine.Reader{new(emptyReader)}, nil
 	}
+
+	if orderBy && num != 1 {
+		return nil, moerr.NewInternalErrorNoCtx("orderBy only support one reader")
+	}
+
 	//relData maybe is nil, indicate that only read data from memory.
 	if relData == nil || relData.BlkCnt() == 0 {
-		//s := objectio.BlockInfoSliceInProgress(objectio.EmptyBlockInfoInProgressBytes)
 		relData = buildRelationDataV1()
 		relData.AppendDataBlk(&objectio.EmptyBlockInfoInProgress)
 	}
+
 	blkCnt := relData.BlkCnt()
 	if blkCnt < num {
 		return nil, moerr.NewInternalErrorNoCtx("not enough blocks")
 	}
+
 	scanType := determineScanType(relData, num)
 	def := tbl.GetTableDef(ctx)
 	mod := blkCnt % num

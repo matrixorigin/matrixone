@@ -803,6 +803,11 @@ type blockSortHelper struct {
 	zm  index.ZM
 }
 
+type blockSortHelperInProgress struct {
+	blk *objectio.BlockInfoInProgress
+	zm  index.ZM
+}
+
 type blockReader struct {
 	withFilterMixin
 
@@ -847,26 +852,9 @@ type readerInProgress struct {
 	source engine.DataSource
 	ts     timestamp.Timestamp
 
-	//FIXME:: prefetch blocks in DataSource?
-	//dontPrefetch bool
-	//infos       [][]*objectio.BlockInfo
-
-	// FIXME: could useful
-	//steps       []int
-	//currentStep int
-
 	memFilter MemPKFilterInProgress
-	//blockFilter blockio.BlockReadFilter
 
 	scanType int
-
-	// for ordered scan
-	desc bool
-	//blockZMS []index.ZM
-	//sorted   bool // blks need to be sorted by zonemap
-	OrderBy []*plan.OrderBySpec
-
-	filterZM objectio.ZoneMap
 }
 
 type mergeReader struct {

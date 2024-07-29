@@ -17,7 +17,6 @@ package table_scan
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -27,7 +26,6 @@ var _ vm.Operator = new(TableScan)
 
 type container struct {
 	maxAllocSize int
-	orderBy      []*plan.OrderBySpec
 	buf          *batch.Batch
 	msgReceiver  *process.MessageReceiver
 }
