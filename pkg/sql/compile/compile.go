@@ -2616,9 +2616,6 @@ func (c *Compile) compilePartition(n *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
 		//c.anal.isFirst = currentFirstFlag
-		if containBrokenNode(ss[i]) {
-			ss[i] = c.newMergeScope([]*Scope{ss[i]})
-		}
 		op := constructOrder(n)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].setRootOperator(op)
@@ -2690,26 +2687,6 @@ func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 	}
 }
 
-func containBrokenNode2(op vm.Operator) bool {
-	if vm.IsBrokenNode(op) {
-		return true
-	}
-	numChildren := op.GetOperatorBase().NumChildren()
-	if numChildren == 0 {
-		return false
-	}
-	for i := 0; i < numChildren; i++ {
-		if res := containBrokenNode2(op.GetOperatorBase().GetChildren(i)); res {
-			return true
-		}
-	}
-	return false
-}
-
-func containBrokenNode(s *Scope) bool {
-	return containBrokenNode2(s.RootOp)
-}
-
 func (c *Compile) compileTop(n *plan.Node, topN *plan.Expr, ss []*Scope) []*Scope {
 	// use topN TO make scope.
 	if c.IsSingleScope(ss) {
@@ -2724,9 +2701,6 @@ func (c *Compile) compileTop(n *plan.Node, topN *plan.Expr, ss []*Scope) []*Scop
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
 		//c.anal.isFirst = currentFirstFlag
-		if containBrokenNode(ss[i]) {
-			ss[i] = c.newMergeScope([]*Scope{ss[i]})
-		}
 		op := constructTop(n, topN)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].setRootOperator(op)
@@ -2763,9 +2737,6 @@ func (c *Compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
 		//c.anal.isFirst = currentFirstFlag
-		if containBrokenNode(ss[i]) {
-			ss[i] = c.newMergeScope([]*Scope{ss[i]})
-		}
 		order := constructOrder(n)
 		order.SetIdx(c.anal.curNodeIdx)
 		order.SetIsFirst(currentFirstFlag)
@@ -2831,12 +2802,6 @@ func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
 		return ss
 	}
 
-	for i := range ss {
-		if containBrokenNode(ss[i]) {
-			ss[i] = c.newMergeScope([]*Scope{ss[i]})
-		}
-	}
-
 	rs := c.newMergeScope(ss)
 
 	currentFirstFlag := c.anal.isFirst
@@ -2861,9 +2826,6 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
 		//c.anal.isFirst = currentFirstFlag
-		if containBrokenNode(ss[i]) {
-			ss[i] = c.newMergeScope([]*Scope{ss[i]})
-		}
 		op := constructLimit(n)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].setRootOperator(op)
@@ -2928,9 +2890,6 @@ func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scop
 func (c *Compile) compileSample(n *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
-		if containBrokenNode(ss[i]) {
-			ss[i] = c.newMergeScope([]*Scope{ss[i]})
-		}
 		op := constructSample(n, len(ss) != 1)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].setRootOperator(op)
@@ -2972,15 +2931,6 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node, 
 	// this group-operator sends its result to the merge-group-operator.
 	// todo: I cannot remove the merge-group action directly, because the merge-group action is used to fill the partial result.
 	if hasDistinct {
-		//currentFirstFlag := c.anal.isFirst
-		for i := range ss {
-			//c.anal.isFirst = currentFirstFlag
-			if containBrokenNode(ss[i]) {
-				ss[i] = c.newMergeScope([]*Scope{ss[i]})
-			}
-		}
-		//c.anal.isFirst = false
-
 		mergeToGroup := c.newMergeScope(ss)
 
 		currentFirstFlag := c.anal.isFirst
@@ -3007,10 +2957,6 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node, 
 	} else {
 		currentFirstFlag := c.anal.isFirst
 		for i := range ss {
-			//c.anal.isFirst = currentFirstFlag
-			if containBrokenNode(ss[i]) {
-				ss[i] = c.newMergeScope([]*Scope{ss[i]})
-			}
 			op := constructGroup(c.proc.Ctx, n, ns[n.Children[0]], false, 0, c.proc)
 			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			ss[i].setRootOperator(op)
@@ -3039,22 +2985,15 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node, 
 func (c *Compile) constructShuffleAndDispatch(ss, children []*Scope, n *plan.Node) {
 	j := 0
 	for i := range ss {
-		if containBrokenNode(ss[i]) {
-			isEnd := ss[i].IsEnd
-			ss[i] = c.newMergeScope([]*Scope{ss[i]})
-			ss[i].IsEnd = isEnd
-		}
-		if !ss[i].IsEnd {
-			shuffleArg := constructShuffleGroupArg(children, n)
-			shuffleArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
-			ss[i].setRootOperator(shuffleArg)
+		shuffleArg := constructShuffleGroupArg(children, n)
+		shuffleArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
+		ss[i].setRootOperator(shuffleArg)
 
-			dispatchArg := constructDispatch(j, children, ss[i].NodeInfo.Addr, n, false)
-			dispatchArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
-			ss[i].setRootOperator(dispatchArg)
-			j++
-			ss[i].IsEnd = true
-		}
+		dispatchArg := constructDispatch(j, children, ss[i].NodeInfo.Addr, n, false)
+		dispatchArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
+		ss[i].setRootOperator(dispatchArg)
+		j++
+		ss[i].IsEnd = true
 	}
 }
 
