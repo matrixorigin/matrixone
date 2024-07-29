@@ -1002,6 +1002,7 @@ func (c *CheckpointArg) String() string {
 func (c *CheckpointArg) Usage() (res string) {
 	res += "Available Commands:\n"
 	res += fmt.Sprintf("  %-5v show table information\n", "stat")
+	res += fmt.Sprintf("  %-5v display checkpoint or table information\n", "list")
 
 	res += "\n"
 	res += "Usage:\n"
@@ -1060,11 +1061,28 @@ func (c *ckpStatArg) String() string {
 }
 
 func (c *ckpStatArg) Usage() (res string) {
+	res += "Examples:\n"
+	res += "  # Display all table information for the given checkpoint\n"
+	res += "  inspect checkpoint stat -c ckp_lsn\n"
+	res += "  # Display information for the given table\n"
+	res += "  inspect checkpoint stat -c ckp_lsn -t tid\n"
+
+	res += "\n"
+	res += "Options:\n"
+	res += "  -c, --cid=invalidId:\n"
+	res += "    The lsn of checkpoint\n"
+	res += "  -t, --tid=invalidId:\n"
+	res += "    The id of table\n"
+	res += "  -a, --all=false:\n"
+	res += "    Show all tables\n"
 
 	return
 }
 
 func (c *ckpStatArg) Run() (err error) {
+	if c.ctx == nil {
+		return moerr.NewInfoNoCtx("it is an online command")
+	}
 	ctx := context.Background()
 	var checkpointJson *logtail.ObjectInfoJson
 	entries := c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
@@ -1162,11 +1180,23 @@ func (c *ckpListArg) String() string {
 }
 
 func (c *ckpListArg) Usage() (res string) {
+	res += "Examples:\n"
+	res += "  # Display all checkpoints in memory\n"
+	res += "  inspect checkpoint list\n"
+	res += "  # Display all tables for the given checkpoint\n"
+	res += "  inspect checkpoint list -c ckp_lsn\n"
 
+	res += "\n"
+	res += "Options:\n"
+	res += "  -c, --cid=invalidId:\n"
+	res += "    The lsn of checkpoint\n"
 	return
 }
 
 func (c *ckpListArg) Run() (err error) {
+	if c.ctx == nil {
+		return moerr.NewInfoNoCtx("it is an online command")
+	}
 	ctx := context.Background()
 	if c.cid == invalidId {
 		c.res, err = c.getCkpList()

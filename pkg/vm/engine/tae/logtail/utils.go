@@ -2790,27 +2790,11 @@ func (data *CheckpointData) GetTNBlkBatchs() (
 		data.bats[BLKTNMetaDeleteTxnIDX]
 }
 
-type tableAndLength struct {
-	tid    uint64
-	length uint64
-}
-
 type tableinfo struct {
 	tid    uint64
 	add    uint64
 	delete uint64
 	block  uint32
-}
-
-type blockinfo struct {
-	id    string
-	count uint64
-	delta map[string]*deltaLocinfo
-}
-
-type deltaLocinfo struct {
-	loction string
-	count   uint64
 }
 
 type TableInfoJson struct {
@@ -2869,8 +2853,10 @@ func (data *CheckpointData) PrintMetaBatch(id uint64) (res *ObjectInfoJson, err 
 		}
 	}
 
-	insTableIDs := vector.MustFixedCol[uint64](data.bats[ObjectInfoIDX].GetVectorByName(SnapshotAttr_TID).GetDownstreamVector())
-	insDeleteTSs := vector.MustFixedCol[types.TS](data.bats[ObjectInfoIDX].GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector())
+	insTableIDs := vector.MustFixedCol[uint64](
+		data.bats[ObjectInfoIDX].GetVectorByName(SnapshotAttr_TID).GetDownstreamVector())
+	insDeleteTSs := vector.MustFixedCol[types.TS](
+		data.bats[ObjectInfoIDX].GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector())
 	files := make(map[uint64]*tableinfo)
 	row := 0
 	for i := data.bats[ObjectInfoIDX].Length() - 1; i > 0; i-- {
