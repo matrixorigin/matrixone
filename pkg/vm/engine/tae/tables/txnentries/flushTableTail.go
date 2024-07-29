@@ -130,13 +130,13 @@ func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) {
 	var duration time.Duration
 	var start time.Time
 	bts := time.Now().Add(time.Hour)
-	objectIDs := []*objectio.ObjectId{entry.createdBlkHandles.GetID()}
 	for i, m := range entry.transMappings {
 		if len(m) == 0 {
 			continue
 		}
 		id := entry.ablksHandles[i].Fingerprint()
 		entry.pageIds = append(entry.pageIds, id)
+		objectIDs := []*objectio.ObjectId{entry.createdBlkHandles.GetID()}
 		page := model.NewTransferHashPage(id, bts, isTransient, entry.rt.LocalFs.Service, model.GetTTL(), model.GetDiskTTL(), objectIDs)
 		page.Train(m)
 
