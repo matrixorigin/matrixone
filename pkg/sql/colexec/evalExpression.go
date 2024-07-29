@@ -81,10 +81,6 @@ type ExpressionExecutor interface {
 	// it will be called after query has done.
 	Free()
 
-	// Reset should free folded vector
-	// it will be called before Executor reused.
-	Reset()
-
 	IsColumnExpr() bool
 }
 
@@ -357,9 +353,6 @@ func (expr *ParamExpressionExecutor) Free() {
 	reuse.Free[ParamExpressionExecutor](expr, nil)
 }
 
-func (expr *ParamExpressionExecutor) Reset() {
-}
-
 func (expr *ParamExpressionExecutor) IsColumnExpr() bool {
 	return false
 }
@@ -429,9 +422,6 @@ func (expr *VarExpressionExecutor) Free() {
 		expr.null = nil
 	}
 	reuse.Free[VarExpressionExecutor](expr, nil)
-}
-
-func (expr *VarExpressionExecutor) Reset() {
 }
 
 func (expr *VarExpressionExecutor) IsColumnExpr() bool {
@@ -657,6 +647,7 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 		if execLen == 1 {
 			oldResult := expr.resultVector.GetResultVector()
 			constResult := oldResult.ToConst(0, 1, proc.Mp())
+			expr.resultVector.Free()
 			defer constResult.Free(proc.GetMPool())
 			newResult, err := constResult.Dup(proc.GetMPool())
 			if err != nil {
@@ -696,16 +687,6 @@ func (expr *FunctionExpressionExecutor) Free() {
 		_ = expr.freeFn()
 	}
 	reuse.Free[FunctionExpressionExecutor](expr, nil)
-}
-
-func (expr *FunctionExpressionExecutor) Reset() {
-	if expr == nil {
-		return
-	}
-	for i := range expr.parameterExecutor {
-		expr.parameterExecutor[i].Reset()
-	}
-	expr.folded = false
 }
 
 func (expr *FunctionExpressionExecutor) SetParameter(index int, executor ExpressionExecutor) {
@@ -765,15 +746,12 @@ func (expr *ColumnExpressionExecutor) Free() {
 	reuse.Free[ColumnExpressionExecutor](expr, nil)
 }
 
-func (expr *ColumnExpressionExecutor) Reset() {
-}
-
 func (expr *ColumnExpressionExecutor) IsColumnExpr() bool {
 	return true
 }
 
 func (expr *FixedVectorExpressionExecutor) Eval(_ *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
-	if !expr.fixed {
+	if !expr.fixed && len(batches) > 0 {
 		expr.resultVector.SetLength(batches[0].RowCount())
 	}
 	return expr.resultVector, nil
@@ -797,9 +775,6 @@ func (expr *FixedVectorExpressionExecutor) Free() {
 	}
 	expr.resultVector.Free(expr.m)
 	expr.resultVector = nil
-}
-
-func (expr *FixedVectorExpressionExecutor) Reset() {
 }
 
 func (expr *FixedVectorExpressionExecutor) IsColumnExpr() bool {
