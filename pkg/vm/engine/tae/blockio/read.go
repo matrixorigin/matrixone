@@ -217,7 +217,8 @@ func BlockDataRead(
 	return columnBatch, nil
 }
 
-// BlockRead read block data from storage and apply deletes according given timestamp. Caller make sure metaloc is not empty
+// BlockRead read block data from storage and apply deletes according given timestamp.
+// Caller make sure metaloc is not empty
 func BlockRead(
 	ctx context.Context,
 	sid string,

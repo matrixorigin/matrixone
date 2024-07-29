@@ -312,7 +312,8 @@ func (tbl *txnTableDelegate) BuildReaders(
 	expr *plan.Expr,
 	relData engine.RelData,
 	num int,
-	txnOffset int) ([]engine.Reader, error) {
+	txnOffset int,
+	orderBy bool) ([]engine.Reader, error) {
 	if tbl.isLocal() {
 		return tbl.origin.BuildReaders(
 			ctx,
@@ -321,48 +322,9 @@ func (tbl *txnTableDelegate) BuildReaders(
 			relData,
 			num,
 			txnOffset,
+			orderBy,
 		)
 	}
-	return nil, nil
-}
-
-func (tbl *txnTableDelegate) NewReader(
-	ctx context.Context,
-	num int,
-	expr *plan.Expr,
-	ranges []byte,
-	orderedScan bool,
-	txnOffset int,
-) ([]engine.Reader, error) {
-	if tbl.isLocal() {
-		return tbl.origin.NewReader(
-			ctx,
-			num,
-			expr,
-			ranges,
-			orderedScan,
-			txnOffset,
-		)
-	}
-
-	err := tbl.forwardRead(
-		ctx,
-		shardservice.ReadReader,
-		func(param *shard.ReadParam) {
-			param.ReaderParam.Num = int32(num)
-			param.ReaderParam.Expr = *expr
-			param.ReaderParam.Ranges = ranges
-			param.ReaderParam.OrderedScan = orderedScan
-			param.ReaderParam.TxnOffset = int32(txnOffset)
-		},
-		func(resp []byte) {
-			// TODO:
-		},
-	)
-	if err != nil {
-		return nil, err
-	}
-	// TODO:
 	return nil, nil
 }
 

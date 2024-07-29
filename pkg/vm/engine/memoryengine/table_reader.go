@@ -48,7 +48,8 @@ func (t *Table) BuildReaders(
 	expr *plan.Expr,
 	relData engine.RelData,
 	parallel int,
-	_ int) (readers []engine.Reader, err error) {
+	_ int,
+	_ bool) (readers []engine.Reader, err error) {
 
 	readers = make([]engine.Reader, parallel)
 	var shardIDs = relData.GetShardIDList()
@@ -81,106 +82,6 @@ func (t *Table) BuildReaders(
 		idSet := make(map[uint64]bool)
 		for i := 0; i < len(shardIDs); i++ {
 			idSet[shardIDs[i]] = true
-		}
-		for _, store := range getTNServices(t.engine.cluster) {
-			for _, shard := range store.Shards {
-				if !idSet[shard.ShardID] {
-					continue
-				}
-				shards = append(shards, Shard{
-					TNShardRecord: metadata.TNShardRecord{
-						ShardID: shard.ShardID,
-					},
-					ReplicaID: shard.ReplicaID,
-					Address:   store.TxnServiceAddress,
-				})
-			}
-		}
-	}
-
-	resps, err := DoTxnRequest[NewTableIterResp](
-		ctx,
-		t.txnOperator,
-		true,
-		theseShards(shards),
-		OpNewTableIter,
-		&NewTableIterReq{
-			TableID: t.id,
-			Expr:    expr,
-		},
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	iterInfoSets := make([][]IterInfo, parallel)
-	for i, resp := range resps {
-		if resp.IterID == emptyID {
-			continue
-		}
-		iterInfo := IterInfo{
-			Shard:  shards[i],
-			IterID: resp.IterID,
-		}
-		iterInfoSets[i%parallel] = append(iterInfoSets[i%parallel], iterInfo)
-	}
-
-	for i, set := range iterInfoSets {
-		if len(set) == 0 {
-			readers[i] = new(TableReader)
-			continue
-		}
-		reader := &TableReader{
-			engine:      t.engine,
-			txnOperator: t.txnOperator,
-			ctx:         ctx,
-			iterInfos:   set,
-		}
-		readers[i] = reader
-	}
-
-	return
-}
-
-func (t *Table) NewReader(
-	ctx context.Context,
-	parallel int,
-	expr *plan.Expr,
-	bytes []byte,
-	_ bool,
-	txnOffset int) (readers []engine.Reader, err error) {
-
-	readers = make([]engine.Reader, parallel)
-	shardIDs := ShardIdSlice(bytes)
-
-	var shards []Shard
-	if len(shardIDs) == 0 {
-		switch t.id {
-
-		case catalog.MO_DATABASE_ID,
-			catalog.MO_TABLES_ID,
-			catalog.MO_COLUMNS_ID:
-			// sys table
-			var err error
-			shards, err = t.engine.anyShard()
-			if err != nil {
-				return nil, err
-			}
-
-		default:
-			// all
-			var err error
-			shards, err = t.engine.allShards()
-			if err != nil {
-				return nil, err
-			}
-		}
-
-	} else {
-		// some
-		idSet := make(map[uint64]bool)
-		for i := 0; i < shardIDs.Len(); i++ {
-			idSet[shardIDs.Get(i)] = true
 		}
 		for _, store := range getTNServices(t.engine.cluster) {
 			for _, shard := range store.Shards {

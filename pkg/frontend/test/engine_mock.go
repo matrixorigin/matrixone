@@ -662,6 +662,20 @@ func (mr *MockDataSourceMockRecorder) Close() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Close", reflect.TypeOf((*MockDataSource)(nil).Close))
 }
 
+// GetOrderBy mocks base method.
+func (m *MockDataSource) GetOrderBy() []*plan.OrderBySpec {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetOrderBy")
+	ret0, _ := ret[0].([]*plan.OrderBySpec)
+	return ret0
+}
+
+// GetOrderBy indicates an expected call of GetOrderBy.
+func (mr *MockDataSourceMockRecorder) GetOrderBy() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetOrderBy", reflect.TypeOf((*MockDataSource)(nil).GetOrderBy))
+}
+
 // GetTombstonesInProgress mocks base method.
 func (m *MockDataSource) GetTombstonesInProgress(ctx context.Context, bid objectio.Blockid) ([]int64, error) {
 	m.ctrl.T.Helper()
@@ -705,6 +719,30 @@ func (m *MockDataSource) Next(ctx context.Context, cols []string, types []types.
 func (mr *MockDataSourceMockRecorder) Next(ctx, cols, types, seqNums, memFilter, mp, vp, bat interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Next", reflect.TypeOf((*MockDataSource)(nil).Next), ctx, cols, types, seqNums, memFilter, mp, vp, bat)
+}
+
+// SetFilterZM mocks base method.
+func (m *MockDataSource) SetFilterZM(zm objectio.ZoneMap) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetFilterZM", zm)
+}
+
+// SetFilterZM indicates an expected call of SetFilterZM.
+func (mr *MockDataSourceMockRecorder) SetFilterZM(zm interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetFilterZM", reflect.TypeOf((*MockDataSource)(nil).SetFilterZM), zm)
+}
+
+// SetOrderBy mocks base method.
+func (m *MockDataSource) SetOrderBy(orderby []*plan.OrderBySpec) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetOrderBy", orderby)
+}
+
+// SetOrderBy indicates an expected call of SetOrderBy.
+func (mr *MockDataSourceMockRecorder) SetOrderBy(orderby interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetOrderBy", reflect.TypeOf((*MockDataSource)(nil).SetOrderBy), orderby)
 }
 
 // MockRanges is a mock of Ranges interface.
@@ -890,18 +928,18 @@ func (mr *MockRelationMockRecorder) ApproxObjectsNum(ctx interface{}) *gomock.Ca
 }
 
 // BuildReaders mocks base method.
-func (m *MockRelation) BuildReaders(ctx context.Context, proc any, expr *plan.Expr, relData engine.RelData, num, txnOffset int) ([]engine.Reader, error) {
+func (m *MockRelation) BuildReaders(ctx context.Context, proc any, expr *plan.Expr, relData engine.RelData, num, txnOffset int, orderBy bool) ([]engine.Reader, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "BuildReaders", ctx, proc, expr, relData, num, txnOffset)
+	ret := m.ctrl.Call(m, "BuildReaders", ctx, proc, expr, relData, num, txnOffset, orderBy)
 	ret0, _ := ret[0].([]engine.Reader)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // BuildReaders indicates an expected call of BuildReaders.
-func (mr *MockRelationMockRecorder) BuildReaders(ctx, proc, expr, relData, num, txnOffset interface{}) *gomock.Call {
+func (mr *MockRelationMockRecorder) BuildReaders(ctx, proc, expr, relData, num, txnOffset, orderBy interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BuildReaders", reflect.TypeOf((*MockRelation)(nil).BuildReaders), ctx, proc, expr, relData, num, txnOffset)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BuildReaders", reflect.TypeOf((*MockRelation)(nil).BuildReaders), ctx, proc, expr, relData, num, txnOffset, orderBy)
 }
 
 // CollectTombstones mocks base method.
@@ -1105,21 +1143,6 @@ func (m *MockRelation) MergeObjects(ctx context.Context, objstats []objectio.Obj
 func (mr *MockRelationMockRecorder) MergeObjects(ctx, objstats, policyName, targetObjSize interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MergeObjects", reflect.TypeOf((*MockRelation)(nil).MergeObjects), ctx, objstats, policyName, targetObjSize)
-}
-
-// NewReader mocks base method.
-func (m *MockRelation) NewReader(arg0 context.Context, arg1 int, arg2 *plan.Expr, arg3 []byte, arg4 bool, arg5 int) ([]engine.Reader, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "NewReader", arg0, arg1, arg2, arg3, arg4, arg5)
-	ret0, _ := ret[0].([]engine.Reader)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// NewReader indicates an expected call of NewReader.
-func (mr *MockRelationMockRecorder) NewReader(arg0, arg1, arg2, arg3, arg4, arg5 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NewReader", reflect.TypeOf((*MockRelation)(nil).NewReader), arg0, arg1, arg2, arg3, arg4, arg5)
 }
 
 // PrimaryKeysMayBeModified mocks base method.
@@ -1760,21 +1783,6 @@ func (m *MockEngine) New(ctx context.Context, op client.TxnOperator) error {
 func (mr *MockEngineMockRecorder) New(ctx, op interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "New", reflect.TypeOf((*MockEngine)(nil).New), ctx, op)
-}
-
-// NewBlockReader mocks base method.
-func (m *MockEngine) NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp, expr *plan.Expr, blockReadPKFilter any, ranges []byte, tblDef *plan.TableDef, proc any) ([]engine.Reader, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "NewBlockReader", ctx, num, ts, expr, blockReadPKFilter, ranges, tblDef, proc)
-	ret0, _ := ret[0].([]engine.Reader)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// NewBlockReader indicates an expected call of NewBlockReader.
-func (mr *MockEngineMockRecorder) NewBlockReader(ctx, num, ts, expr, blockReadPKFilter, ranges, tblDef, proc interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NewBlockReader", reflect.TypeOf((*MockEngine)(nil).NewBlockReader), ctx, num, ts, expr, blockReadPKFilter, ranges, tblDef, proc)
 }
 
 // Nodes mocks base method.

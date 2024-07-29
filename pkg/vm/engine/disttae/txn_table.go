@@ -779,11 +779,11 @@ var slowPathCounter atomic.Int64
 // notice that only clean blocks can be distributed into remote CNs.
 func (tbl *txnTable) rangesOnePart(
 	ctx context.Context,
-	state *logtailreplay.PartitionState,          // snapshot state of this transaction
-	tableDef *plan.TableDef,                      // table definition (schema)
-	exprs []*plan.Expr,                           // filter expression
+	state *logtailreplay.PartitionState, // snapshot state of this transaction
+	tableDef *plan.TableDef, // table definition (schema)
+	exprs []*plan.Expr, // filter expression
 	outBlocks *objectio.BlockInfoSliceInProgress, // output marshaled block list after filtering
-	proc *process.Process,                        // process of this transaction
+	proc *process.Process, // process of this transaction
 	txnOffset int,
 ) (err error) {
 	var done bool
@@ -1811,6 +1811,14 @@ func (tbl *txnTable) buildLocalDataSource(
 	return source, err
 }
 
+// BuildReaders BuildReader creates a new list of Readers to read data from the table.
+// Parameters:
+//   - ctx: Context used to control the lifecycle of the request.
+//   - num: The number of Readers to create.
+//   - expr: Expression used to filter data.
+//   - ranges: Byte array representing the data range to read.
+//   - orderedScan: Whether to scan the data in order.
+//   - txnOffset: Transaction offset used to specify the starting position for reading data.
 func (tbl *txnTable) BuildReaders(
 	ctx context.Context,
 	p any,
@@ -1818,12 +1826,18 @@ func (tbl *txnTable) BuildReaders(
 	relData engine.RelData,
 	num int,
 	txnOffset int,
+	orderBy bool,
 ) ([]engine.Reader, error) {
 	proc := p.(*process.Process)
 	//copy from NewReader.
 	if plan2.IsFalseExpr(expr) {
 		return []engine.Reader{new(emptyReader)}, nil
 	}
+
+	if orderBy && num != 1 {
+		return nil, moerr.NewInternalErrorNoCtx("orderBy only support one reader")
+	}
+
 	//relData maybe is nil, indicate that only read data from memory.
 	if relData == nil || relData.DataCnt() == 0 {
 		//s := objectio.BlockInfoSliceInProgress(objectio.EmptyBlockInfoInProgressBytes)
@@ -1834,6 +1848,7 @@ func (tbl *txnTable) BuildReaders(
 	if blkCnt < num {
 		return nil, moerr.NewInternalErrorNoCtx("not enough blocks")
 	}
+
 	scanType := determineScanType(relData, num)
 	def := tbl.GetTableDef(ctx)
 	mod := blkCnt % num
@@ -1850,7 +1865,7 @@ func (tbl *txnTable) BuildReaders(
 		if err != nil {
 			return nil, err
 		}
-		rd := NewReaderInProgress(
+		rd := NewReader(
 			ctx,
 			proc,
 			tbl.getTxn().engine,
@@ -1863,332 +1878,6 @@ func (tbl *txnTable) BuildReaders(
 		rds = append(rds, rd)
 	}
 	return rds, nil
-}
-
-// NewReader creates a new list of Readers to read data from the table.
-// Parameters:
-//   - ctx: Context used to control the lifecycle of the request.
-//   - num: The number of Readers to create.
-//   - expr: Expression used to filter data.
-//   - ranges: Byte array representing the data range to read.
-//   - orderedScan: Whether to scan the data in order.
-//   - txnOffset: Transaction offset used to specify the starting position for reading data.
-func (tbl *txnTable) NewReader(
-	ctx context.Context,
-	num int,
-	expr *plan.Expr,
-	ranges []byte,
-	orderedScan bool,
-	txnOffset int,
-) ([]engine.Reader, error) {
-	if plan2.IsFalseExpr(expr) {
-		return []engine.Reader{new(emptyReader)}, nil
-	}
-
-	if tbl.enableLogFilterExpr.Load() {
-		exprStr := "nil"
-		if expr != nil {
-			exprStr = plan2.FormatExpr(expr)
-		}
-		logutil.Info(
-			"TXN-FILTER-READER-LOG",
-			zap.String("name", tbl.tableDef.Name),
-			zap.String("expr", exprStr),
-			zap.Uint64("tbl-id", tbl.tableId),
-			zap.String("txn", tbl.db.op.Txn().DebugString()),
-		)
-	}
-
-	proc := tbl.proc.Load()
-	txn := tbl.getTxn()
-	ts := txn.op.SnapshotTS()
-	state, err := tbl.getPartitionState(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	baseFilter := newBasePKFilter(
-		expr,
-		tbl.tableDef,
-		proc,
-	)
-
-	memFilter := newMemPKFilter(
-		tbl.tableDef,
-		ts,
-		state,
-		txn.engine.packerPool,
-		baseFilter,
-	)
-
-	blockFilter := newBlockReadPKFilter(
-		tbl.tableDef.Pkey.PkeyColName,
-		baseFilter,
-	)
-
-	blkArray := objectio.BlockInfoSlice(ranges)
-	if !memFilter.IsValid {
-		return []engine.Reader{new(emptyReader)}, nil
-	}
-	if blkArray.Len() == 0 {
-		return tbl.newMergeReader(ctx, num, expr, memFilter, blockFilter, nil, txnOffset)
-	}
-	if blkArray.Len() == 1 && engine.IsMemtable(blkArray.GetBytes(0)) {
-		return tbl.newMergeReader(ctx, num, expr, memFilter, blockFilter, nil, txnOffset)
-	}
-	if blkArray.Len() > 1 && engine.IsMemtable(blkArray.GetBytes(0)) {
-		rds := make([]engine.Reader, num)
-		mrds := make([]mergeReader, num)
-		blkArray = blkArray.Slice(1, blkArray.Len())
-
-		var dirtyBlks []*objectio.BlockInfo
-		var cleanBlks []*objectio.BlockInfo
-		for i := 0; i < blkArray.Len(); i++ {
-			blkInfo := blkArray.Get(i)
-			if blkInfo.CanRemote {
-				cleanBlks = append(cleanBlks, blkInfo)
-				continue
-			}
-			dirtyBlks = append(dirtyBlks, blkInfo)
-		}
-		rds0, err := tbl.newMergeReader(ctx, num, expr, memFilter, blockFilter, dirtyBlks, txnOffset)
-		if err != nil {
-			return nil, err
-		}
-		for i, rd := range rds0 {
-			mrds[i].rds = append(mrds[i].rds, rd)
-		}
-
-		if len(cleanBlks) > 0 {
-			rds0, err = tbl.newBlockReader(ctx, num, expr, blockFilter, cleanBlks, proc, orderedScan)
-			if err != nil {
-				return nil, err
-			}
-		}
-		for i, rd := range rds0 {
-			mrds[i].rds = append(mrds[i].rds, rd)
-		}
-
-		for i := range rds {
-			rds[i] = &mrds[i]
-		}
-		return rds, nil
-	}
-	blkInfos := make([]*objectio.BlockInfo, 0, len(blkArray))
-	for i := 0; i < blkArray.Len(); i++ {
-		blkInfos = append(blkInfos, blkArray.Get(i))
-	}
-	return tbl.newBlockReader(ctx, num, expr, blockFilter, blkInfos, proc, orderedScan)
-}
-
-func (tbl *txnTable) newMergeReader(
-	ctx context.Context,
-	num int,
-	expr *plan.Expr,
-	memFilter memPKFilter,
-	blockFilter blockio.BlockReadFilter,
-	dirtyBlks []*objectio.BlockInfo,
-	txnOffset int, // Transaction writes offset used to specify the starting position for reading data.
-) ([]engine.Reader, error) {
-	rds := make([]engine.Reader, num)
-	mrds := make([]mergeReader, num)
-	rds0, err := tbl.newReader(
-		ctx,
-		num,
-		memFilter,
-		blockFilter,
-		expr,
-		dirtyBlks,
-		txnOffset)
-	if err != nil {
-		return nil, err
-	}
-	mrds[0].rds = append(mrds[0].rds, rds0...)
-
-	for i := range rds {
-		rds[i] = &mrds[i]
-	}
-
-	return rds, nil
-}
-
-func (tbl *txnTable) newBlockReader(
-	ctx context.Context,
-	num int,
-	expr *plan.Expr,
-	filter blockio.BlockReadFilter,
-	blkInfos []*objectio.BlockInfo,
-	proc *process.Process,
-	orderedScan bool,
-) ([]engine.Reader, error) {
-	rds := make([]engine.Reader, num)
-	ts := tbl.db.op.SnapshotTS()
-	tableDef := tbl.GetTableDef(ctx)
-
-	if len(blkInfos) < num || len(blkInfos) == 1 {
-		for i, blk := range blkInfos {
-			rds[i] = newBlockReader(
-				ctx,
-				tableDef,
-				ts,
-				[]*objectio.BlockInfo{blk},
-				expr,
-				filter,
-				tbl.getTxn().engine.fs,
-				proc,
-			)
-		}
-		for j := len(blkInfos); j < num; j++ {
-			rds[j] = &emptyReader{}
-		}
-		return rds, nil
-	}
-
-	fs, err := fileservice.Get[fileservice.FileService](
-		tbl.getTxn().engine.fs,
-		defines.SharedFileServiceName)
-	if err != nil {
-		return nil, err
-	}
-
-	if orderedScan {
-		if num != 1 {
-			panic("ordered scan must run in only one parallel")
-		}
-		rd := newBlockReader(ctx, tableDef, ts, blkInfos, expr, filter, fs, proc)
-		rd.dontPrefetch = true
-		return []engine.Reader{rd}, nil
-	}
-
-	infos, steps := groupBlocksToObjects(blkInfos, num)
-	blockReaders := newBlockReaders(
-		ctx,
-		fs,
-		tableDef,
-		ts,
-		num,
-		expr,
-		filter,
-		proc)
-	distributeBlocksToBlockReaders(blockReaders, num, len(blkInfos), infos, steps)
-	for i := 0; i < num; i++ {
-		rds[i] = blockReaders[i]
-	}
-	return rds, nil
-}
-
-func (tbl *txnTable) newReader(
-	ctx context.Context,
-	readerNumber int,
-	memFilter memPKFilter,
-	blockFilter blockio.BlockReadFilter,
-	expr *plan.Expr,
-	dirtyBlks []*objectio.BlockInfo,
-	txnOffset int, // Transaction writes offset used to specify the starting position for reading data.
-) ([]engine.Reader, error) {
-	txn := tbl.getTxn()
-	ts := txn.op.SnapshotTS()
-	fs := txn.engine.fs
-
-	readers := make([]engine.Reader, readerNumber)
-
-	seqnumMp := make(map[string]int)
-	for _, coldef := range tbl.tableDef.Cols {
-		seqnumMp[coldef.GetOriginCaseName()] = int(coldef.Seqnum)
-	}
-
-	mp := make(map[string]types.Type)
-	mp[catalog.Row_ID] = types.New(types.T_Rowid, 0, 0)
-	//FIXME::why did get type from the engine.AttributeDef,instead of plan.TableDef.Cols
-	for _, def := range tbl.defs {
-		attr, ok := def.(*engine.AttributeDef)
-		if !ok {
-			continue
-		}
-		mp[attr.Attr.Name] = attr.Attr.Type
-	}
-
-	partReader := &PartitionReader{
-		table:     tbl,
-		txnOffset: txnOffset,
-		iter:      memFilter.Iter,
-		seqnumMp:  seqnumMp,
-		typsMap:   mp,
-	}
-
-	proc := tbl.proc.Load()
-
-	readers[0] = partReader
-
-	if readerNumber == 1 {
-		for i := range dirtyBlks {
-			readers = append(
-				readers,
-				newBlockMergeReader(
-					ctx,
-					tbl,
-					memFilter,
-					blockFilter,
-					ts,
-					[]*objectio.BlockInfo{dirtyBlks[i]},
-					expr,
-					txnOffset,
-					fs,
-					proc,
-				),
-			)
-		}
-		return []engine.Reader{&mergeReader{readers}}, nil
-	}
-
-	if len(dirtyBlks) < readerNumber-1 {
-		for i := range dirtyBlks {
-			readers[i+1] = newBlockMergeReader(
-				ctx,
-				tbl,
-				memFilter,
-				blockFilter,
-				ts,
-				[]*objectio.BlockInfo{dirtyBlks[i]},
-				expr,
-				txnOffset,
-				fs,
-				proc,
-			)
-		}
-		for j := len(dirtyBlks) + 1; j < readerNumber; j++ {
-			readers[j] = &emptyReader{}
-		}
-		return readers, nil
-	}
-	//create readerNumber-1 blockReaders
-	blockReaders := newBlockReaders(
-		ctx,
-		fs,
-		tbl.tableDef,
-		ts,
-		readerNumber-1,
-		expr,
-		blockFilter,
-		proc)
-	objInfos, steps := groupBlocksToObjects(dirtyBlks, readerNumber-1)
-	blockReaders = distributeBlocksToBlockReaders(
-		blockReaders,
-		readerNumber-1,
-		len(dirtyBlks),
-		objInfos,
-		steps)
-	for i := range blockReaders {
-		bmr := &blockMergeReader{
-			blockReader: blockReaders[i],
-			table:       tbl,
-			txnOffset:   txnOffset,
-			pkFilter:    memFilter,
-			deletaLocs:  make(map[string][]objectio.Location),
-		}
-		readers[i+1] = bmr
-	}
-	return readers, nil
 }
 
 func (tbl *txnTable) getPartitionState(

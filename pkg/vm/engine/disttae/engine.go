@@ -54,7 +54,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -762,7 +761,7 @@ func (e *Engine) BuildBlockReaders(
 			fs,
 			ts,
 			shard)
-		rd := NewReaderInProgress(
+		rd := NewReader(
 			ctx,
 			proc,
 			e,
@@ -773,49 +772,6 @@ func (e *Engine) BuildBlockReaders(
 		)
 		rd.scanType = scanType
 		rds = append(rds, rd)
-	}
-	return rds, nil
-}
-
-func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp,
-	expr *plan.Expr, filter any, ranges []byte, tblDef *plan.TableDef, proc any) ([]engine.Reader, error) {
-	var blockReadPKFilter blockio.BlockReadFilter
-	if filter == nil {
-		// remote block reader
-		basePKFilter := newBasePKFilter(expr, tblDef, proc.(*process.Process))
-		blockReadPKFilter = newBlockReadPKFilter(tblDef.Pkey.PkeyColName, basePKFilter)
-		//fmt.Println("remote filter: ", basePKFilter.String(), blockReadPKFilter)
-	}
-
-	blkSlice := objectio.BlockInfoSlice(ranges)
-	rds := make([]engine.Reader, num)
-	blkInfos := make([]*objectio.BlockInfo, 0, blkSlice.Len())
-	for i := 0; i < blkSlice.Len(); i++ {
-		blkInfos = append(blkInfos, blkSlice.Get(i))
-	}
-	if len(blkInfos) < num || len(blkInfos) == 1 {
-		for i, blk := range blkInfos {
-			//FIXME::why set blk.EntryState = false ?
-			blk.EntryState = false
-			rds[i] = newBlockReader(
-				ctx, tblDef, ts, []*objectio.BlockInfo{blk}, expr, blockReadPKFilter, e.fs, proc.(*process.Process),
-			)
-		}
-		for j := len(blkInfos); j < num; j++ {
-			rds[j] = &emptyReader{}
-		}
-		return rds, nil
-	}
-
-	infos, steps := groupBlocksToObjects(blkInfos, num)
-	fs, err := fileservice.Get[fileservice.FileService](e.fs, defines.SharedFileServiceName)
-	if err != nil {
-		return nil, err
-	}
-	blockReaders := newBlockReaders(ctx, fs, tblDef, ts, num, expr, blockReadPKFilter, proc.(*process.Process))
-	distributeBlocksToBlockReaders(blockReaders, num, len(blkInfos), infos, steps)
-	for i := 0; i < num; i++ {
-		rds[i] = blockReaders[i]
 	}
 	return rds, nil
 }

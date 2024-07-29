@@ -226,13 +226,18 @@ func HandleShardingReadReader(
 		return nil, err
 	}
 
-	_, err = tbl.NewReader(
+	relData, err := UnmarshalRelationData(param.ReaderParam.Ranges)
+	if err != nil {
+		return nil, err
+	}
+	_, err = tbl.BuildReaders(
 		ctx,
-		int(param.ReaderParam.Num),
+		tbl.proc,
 		&param.ReaderParam.Expr,
-		param.ReaderParam.Ranges,
-		param.ReaderParam.OrderedScan,
+		relData,
+		int(param.ReaderParam.Num),
 		int(param.ReaderParam.TxnOffset),
+		param.ReaderParam.OrderedScan,
 	)
 	if err != nil {
 		return nil, err
