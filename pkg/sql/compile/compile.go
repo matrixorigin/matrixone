@@ -47,7 +47,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
@@ -2404,12 +2403,6 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 			continue
 		}
 		switch ss[i].RootOp.(type) {
-		case *projection.Projection:
-			if ss[i].RootOp.(*projection.Projection).ProjectList == nil {
-				ss[i].RootOp.(*projection.Projection).ProjectList = n.ProjectList
-			} else {
-				c.setProjection(n, ss[i])
-			}
 		case *table_scan.TableScan:
 			if ss[i].RootOp.(*table_scan.TableScan).ProjectList == nil {
 				ss[i].RootOp.(*table_scan.TableScan).ProjectList = n.ProjectList
@@ -2425,12 +2418,6 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 		case *fill.Fill:
 			if ss[i].RootOp.(*fill.Fill).ProjectList == nil {
 				ss[i].RootOp.(*fill.Fill).ProjectList = n.ProjectList
-			} else {
-				c.setProjection(n, ss[i])
-			}
-		case *filter.Filter:
-			if ss[i].RootOp.(*filter.Filter).ProjectList == nil {
-				ss[i].RootOp.(*filter.Filter).ProjectList = n.ProjectList
 			} else {
 				c.setProjection(n, ss[i])
 			}
