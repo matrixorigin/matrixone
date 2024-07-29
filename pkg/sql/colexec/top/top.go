@@ -128,7 +128,7 @@ func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 			if top.TopValueTag > 0 && top.updateTopValueZM() {
-				proc.SendMessage(message.TopValueMessage{TopValueZM: top.ctr.topValueZM, Tag: top.TopValueTag})
+				message.SendMessage(message.TopValueMessage{TopValueZM: top.ctr.topValueZM, Tag: top.TopValueTag}, proc.Base.MessageBoard)
 			}
 		}
 	}

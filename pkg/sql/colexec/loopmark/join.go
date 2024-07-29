@@ -17,6 +17,8 @@ package loopmark
 import (
 	"bytes"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -105,7 +107,7 @@ func (loopMark *LoopMark) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (loopMark *LoopMark) build(proc *process.Process, anal process.Analyze) error {
 	ctr := loopMark.ctr
-	mp := proc.ReceiveJoinMap(anal, loopMark.JoinMapTag, false, 0)
+	mp := message.ReceiveJoinMap(loopMark.JoinMapTag, false, 0, proc.Base.MessageBoard, proc.Ctx)
 	if mp == nil {
 		return nil
 	}

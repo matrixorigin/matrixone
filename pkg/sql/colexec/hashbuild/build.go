@@ -123,7 +123,7 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 			if ap.JoinMapTag <= 0 {
 				panic("wrong joinmap message tag!")
 			}
-			proc.SendMessage(message.JoinMapMsg{JoinMapPtr: jm, Tag: ap.JoinMapTag})
+			message.SendMessage(message.JoinMapMsg{JoinMapPtr: jm, Tag: ap.JoinMapTag}, proc.Base.MessageBoard)
 
 			result.Batch = nil
 			result.Status = vm.ExecStop
@@ -351,11 +351,11 @@ func (ctr *container) handleRuntimeFilter(ap *HashBuild, proc *process.Process) 
 
 	if ap.RuntimeFilterSpec.Expr == nil {
 		runtimeFilter.Typ = message.RuntimeFilter_PASS
-		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
+		message.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec, proc.Base.MessageBoard)
 		return nil
 	} else if ctr.inputBatchRowCount == 0 || len(ctr.uniqueJoinKeys) == 0 || ctr.uniqueJoinKeys[0].Length() == 0 {
 		runtimeFilter.Typ = message.RuntimeFilter_DROP
-		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
+		message.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec, proc.Base.MessageBoard)
 		return nil
 	}
 
@@ -383,7 +383,7 @@ func (ctr *container) handleRuntimeFilter(ap *HashBuild, proc *process.Process) 
 
 	if hashmapCount > uint64(inFilterCardLimit) {
 		runtimeFilter.Typ = message.RuntimeFilter_PASS
-		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
+		message.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec, proc.Base.MessageBoard)
 		return nil
 	} else {
 		// Composite primary key
@@ -413,7 +413,7 @@ func (ctr *container) handleRuntimeFilter(ap *HashBuild, proc *process.Process) 
 		runtimeFilter.Typ = message.RuntimeFilter_IN
 		runtimeFilter.Card = int32(vec.Length())
 		runtimeFilter.Data = data
-		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
+		message.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec, proc.Base.MessageBoard)
 		ctr.runtimeFilterIn = true
 	}
 	return nil

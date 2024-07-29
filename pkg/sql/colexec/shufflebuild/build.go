@@ -135,7 +135,7 @@ func (shuffleBuild *ShuffleBuild) Call(proc *process.Process) (vm.CallResult, er
 				}
 				jm.IncRef(1)
 			}
-			proc.SendMessage(message.JoinMapMsg{JoinMapPtr: jm, IsShuffle: true, ShuffleIdx: ap.ShuffleIdx, Tag: ap.JoinMapTag})
+			message.SendMessage(message.JoinMapMsg{JoinMapPtr: jm, IsShuffle: true, ShuffleIdx: ap.ShuffleIdx, Tag: ap.JoinMapTag}, proc.Base.MessageBoard)
 
 			result.Batch = nil
 			result.Status = vm.ExecStop
@@ -347,7 +347,7 @@ func (ctr *container) handleRuntimeFilter(ap *ShuffleBuild, proc *process.Proces
 	var runtimeFilter message.RuntimeFilterMessage
 	runtimeFilter.Tag = ap.RuntimeFilterSpec.Tag
 	runtimeFilter.Typ = message.RuntimeFilter_PASS
-	proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
+	message.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec, proc.Base.MessageBoard)
 	return nil
 }
 

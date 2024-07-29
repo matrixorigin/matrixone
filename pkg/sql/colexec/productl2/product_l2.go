@@ -16,6 +16,7 @@ package productl2
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -106,7 +107,7 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (productl2 *Productl2) build(proc *process.Process, anal process.Analyze) error {
 	ctr := productl2.ctr
-	mp := proc.ReceiveJoinMap(anal, productl2.JoinMapTag, false, 0)
+	mp := message.ReceiveJoinMap(productl2.JoinMapTag, false, 0, proc.Base.MessageBoard, proc.Ctx)
 	if mp == nil {
 		return nil
 	}

@@ -626,7 +626,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 
 	if len(s.DataSource.RuntimeFilterSpecs) > 0 {
 		for _, spec := range s.DataSource.RuntimeFilterSpecs {
-			msgReceiver := c.proc.NewMessageReceiver([]int32{spec.Tag}, message.AddrBroadCastOnCurrentCN())
+			msgReceiver := message.NewMessageReceiver([]int32{spec.Tag}, message.AddrBroadCastOnCurrentCN(), c.proc.Base.MessageBoard)
 			msgs, ctxDone := msgReceiver.ReceiveMessage(true, s.Proc.Ctx)
 			if ctxDone {
 				return nil

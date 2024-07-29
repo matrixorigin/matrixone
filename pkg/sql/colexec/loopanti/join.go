@@ -17,6 +17,8 @@ package loopanti
 import (
 	"bytes"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -106,7 +108,7 @@ func (loopAnti *LoopAnti) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (loopAnti *LoopAnti) build(proc *process.Process, anal process.Analyze) error {
 	ctr := loopAnti.ctr
-	mp := proc.ReceiveJoinMap(anal, loopAnti.JoinMapTag, false, 0)
+	mp := message.ReceiveJoinMap(loopAnti.JoinMapTag, false, 0, proc.Base.MessageBoard, proc.Ctx)
 	if mp == nil {
 		return nil
 	}

@@ -17,6 +17,8 @@ package loopjoin
 import (
 	"bytes"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -108,7 +110,7 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (loopJoin *LoopJoin) build(proc *process.Process, anal process.Analyze) error {
 	ctr := loopJoin.ctr
-	mp := proc.ReceiveJoinMap(anal, loopJoin.JoinMapTag, false, 0)
+	mp := message.ReceiveJoinMap(loopJoin.JoinMapTag, false, 0, proc.Base.MessageBoard, proc.Ctx)
 	if mp == nil {
 		return nil
 	}

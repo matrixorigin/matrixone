@@ -16,6 +16,7 @@ package loopleft
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -107,7 +108,7 @@ func (loopLeft *LoopLeft) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (loopLeft *LoopLeft) build(proc *process.Process, anal process.Analyze) error {
 	ctr := loopLeft.ctr
-	mp := proc.ReceiveJoinMap(anal, loopLeft.JoinMapTag, false, 0)
+	mp := message.ReceiveJoinMap(loopLeft.JoinMapTag, false, 0, proc.Base.MessageBoard, proc.Ctx)
 	if mp == nil {
 		return nil
 	}

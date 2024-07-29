@@ -17,6 +17,8 @@ package left
 import (
 	"bytes"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -117,7 +119,7 @@ func (leftJoin *LeftJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (leftJoin *LeftJoin) build(anal process.Analyze, proc *process.Process) {
 	ctr := leftJoin.ctr
-	ctr.mp = proc.ReceiveJoinMap(anal, leftJoin.JoinMapTag, leftJoin.IsShuffle, leftJoin.ShuffleIdx)
+	ctr.mp = message.ReceiveJoinMap(leftJoin.JoinMapTag, leftJoin.IsShuffle, leftJoin.ShuffleIdx, proc.Base.MessageBoard, proc.Ctx)
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}

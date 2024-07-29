@@ -127,11 +127,11 @@ func (ctr *container) handleRuntimeFilter(ap *IndexBuild, proc *process.Process)
 
 	if ap.RuntimeFilterSpec.Expr == nil {
 		runtimeFilter.Typ = message.RuntimeFilter_PASS
-		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
+		message.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec, proc.Base.MessageBoard)
 		return nil
 	} else if ctr.batch == nil || ctr.batch.RowCount() == 0 {
 		runtimeFilter.Typ = message.RuntimeFilter_DROP
-		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
+		message.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec, proc.Base.MessageBoard)
 		return nil
 	}
 
@@ -139,7 +139,7 @@ func (ctr *container) handleRuntimeFilter(ap *IndexBuild, proc *process.Process)
 
 	if ctr.batch.RowCount() > int(inFilterCardLimit) {
 		runtimeFilter.Typ = message.RuntimeFilter_PASS
-		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
+		message.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec, proc.Base.MessageBoard)
 		return nil
 	} else {
 		if len(ctr.batch.Vecs) != 1 {
@@ -155,7 +155,7 @@ func (ctr *container) handleRuntimeFilter(ap *IndexBuild, proc *process.Process)
 		runtimeFilter.Typ = message.RuntimeFilter_IN
 		runtimeFilter.Card = int32(vec.Length())
 		runtimeFilter.Data = data
-		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
+		message.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec, proc.Base.MessageBoard)
 	}
 	return nil
 }
