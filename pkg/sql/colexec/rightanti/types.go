@@ -138,7 +138,6 @@ func (rightAnti *RightAnti) Free(proc *process.Process, pipelineFailed bool, err
 		ctr.cleanEvalVectors()
 		ctr.cleanHashMap()
 		ctr.cleanExprExecutor()
-		ctr.FreeAllReg()
 		ctr.tmpBatches = nil
 
 		anal := proc.GetAnalyze(rightAnti.GetIdx(), rightAnti.GetParallelIdx(), rightAnti.GetParallelMajor())

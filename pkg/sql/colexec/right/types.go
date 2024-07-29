@@ -137,7 +137,6 @@ func (rightJoin *RightJoin) Free(proc *process.Process, pipelineFailed bool, err
 		ctr.cleanBatch(proc)
 		ctr.cleanHashMap()
 		ctr.cleanExprExecutor()
-		ctr.FreeAllReg()
 		ctr.cleanEvalVectors()
 
 		anal := proc.GetAnalyze(rightJoin.GetIdx(), rightJoin.GetParallelIdx(), rightJoin.GetParallelMajor())

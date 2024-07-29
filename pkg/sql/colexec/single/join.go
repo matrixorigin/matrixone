@@ -42,7 +42,6 @@ func (singleJoin *SingleJoin) OpType() vm.OpType {
 
 func (singleJoin *SingleJoin) Prepare(proc *process.Process) (err error) {
 	singleJoin.ctr = new(container)
-	singleJoin.ctr.InitReceiver(proc, true)
 	singleJoin.ctr.vecs = make([]*vector.Vector, len(singleJoin.Conditions[0]))
 
 	singleJoin.ctr.evecs = make([]evalVector, len(singleJoin.Conditions[0]))
@@ -69,6 +68,7 @@ func (singleJoin *SingleJoin) Call(proc *process.Process) (vm.CallResult, error)
 	defer anal.Stop()
 	ctr := singleJoin.ctr
 	result := vm.NewCallResult()
+	var err error
 	for {
 		switch ctr.state {
 		case Build:
@@ -76,11 +76,11 @@ func (singleJoin *SingleJoin) Call(proc *process.Process) (vm.CallResult, error)
 			ctr.state = Probe
 
 		case Probe:
-			msg := ctr.ReceiveFromAllRegs(anal)
-			if msg.Err != nil {
-				return result, msg.Err
+			result, err = singleJoin.Children[0].Call(proc)
+			if err != nil {
+				return result, err
 			}
-			bat := msg.Batch
+			bat := result.Batch
 
 			if bat == nil {
 				ctr.state = End

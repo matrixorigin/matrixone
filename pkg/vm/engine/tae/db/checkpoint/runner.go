@@ -901,7 +901,7 @@ func (r *runner) EstimateTableMemSize(table *catalog.TableEntry, tree *model.Tab
 	for _, obj := range tree.Objs {
 		object, err := table.GetObjectByID(obj.ID)
 		if err != nil {
-			panic(fmt.Sprintf("finding obj %v, err %v", obj.ID.String(), err))
+			panic(err)
 		}
 		a, d := object.GetObjectData().EstimateMemSize()
 		asize += a

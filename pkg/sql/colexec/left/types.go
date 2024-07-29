@@ -40,8 +40,6 @@ type evalVector struct {
 }
 
 type container struct {
-	colexec.ReceiverOperator
-
 	state   int
 	lastrow int
 
@@ -123,7 +121,6 @@ func (leftJoin *LeftJoin) Free(proc *process.Process, pipelineFailed bool, err e
 		ctr.cleanHashMap()
 		ctr.cleanExprExecutor()
 		ctr.cleanEvalVectors()
-		ctr.FreeAllReg()
 
 		anal := proc.GetAnalyze(leftJoin.GetIdx(), leftJoin.GetParallelIdx(), leftJoin.GetParallelMajor())
 		anal.Alloc(ctr.maxAllocSize)

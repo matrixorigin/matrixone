@@ -125,7 +125,6 @@ func NewAppendCmd(id uint32, app *AppendNode) *UpdateCmd {
 		cmdType: IOET_WALTxnCommand_AppendNode,
 		dest:    app.mvcc.meta.AsCommonID(),
 	}
-	impl.dest.SetBlockOffset(app.mvcc.blkOffset)
 	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(id, impl)
 	return impl
 }
@@ -283,7 +282,6 @@ func (c *UpdateCmd) ReadFrom(r io.Reader) (n int64, err error) {
 		n, err = c.delete.ReadFrom(r)
 	case IOET_WALTxnCommand_AppendNode:
 		n, err = c.append.ReadFrom(r)
-		c.append.id.SetBlockOffset(c.dest.GetBlockOffset())
 	}
 	n += 4 + common.IDSize
 	return
