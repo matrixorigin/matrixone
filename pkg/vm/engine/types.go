@@ -582,6 +582,8 @@ const (
 type Tombstoner interface {
 	Type() TombstoneType
 
+	Init()
+
 	IsEmpty() bool
 
 	MarshalWithBuf(w *bytes.Buffer) (uint32, error)

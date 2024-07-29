@@ -742,6 +742,9 @@ func (e *Engine) BuildBlockReaders(
 	if err != nil {
 		return nil, err
 	}
+
+	relData.GetTombstones().Init()
+
 	var (
 		rds   []engine.Reader
 		shard engine.RelData
