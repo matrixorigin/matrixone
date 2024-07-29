@@ -107,7 +107,7 @@ func GetCheckpointStat(ctx context.Context, rt *dbutils.Runtime, name string) (r
 				entries[i] = checkpointEntry
 				closecbs = append(closecbs, func() { datas[i].CloseWhenLoadFromCache(checkpointEntry.version) })
 			}
-			obj, err = datas[i].PrintMetaBatch()
+			obj, err = datas[i].PrintMetaBatch(0)
 		}
 		return
 	}

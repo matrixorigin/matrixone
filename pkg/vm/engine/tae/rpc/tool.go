@@ -24,9 +24,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/spf13/cobra"
 	"path/filepath"
 	"strconv"
@@ -1018,9 +1018,11 @@ func (c *CheckpointArg) Run() error {
 }
 
 type ckpStatArg struct {
-	ctx  *inspectContext
-	name string
-	res  string
+	ctx *inspectContext
+	cid uint64
+	tid uint64
+	all bool
+	res string
 }
 
 func (c *ckpStatArg) PrepareCommand() *cobra.Command {
@@ -1033,13 +1035,19 @@ func (c *ckpStatArg) PrepareCommand() *cobra.Command {
 
 	ckpStatCmd.SetUsageTemplate(c.Usage())
 
-	ckpStatCmd.Flags().StringP("name", "n", "", "checkpoint file name")
+	ckpStatCmd.Flags().IntP("cid", "c", invalidId, "checkpoint lsn")
+	ckpStatCmd.Flags().IntP("tid", "t", invalidId, "checkpoint tid")
+	ckpStatCmd.Flags().BoolP("all", "a", false, "checkpoint all tables")
 
 	return ckpStatCmd
 }
 
 func (c *ckpStatArg) FromCommand(cmd *cobra.Command) (err error) {
-	c.name, _ = cmd.Flags().GetString("name")
+	id, _ := cmd.Flags().GetInt("cid")
+	c.cid = uint64(id)
+	id, _ = cmd.Flags().GetInt("tid")
+	c.tid = uint64(id)
+	c.all, _ = cmd.Flags().GetBool("all")
 	if cmd.Flag("ictx") != nil {
 		c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
 
@@ -1057,17 +1065,62 @@ func (c *ckpStatArg) Usage() (res string) {
 }
 
 func (c *ckpStatArg) Run() (err error) {
-	c.res, err = checkpoint.GetCheckpointStat(context.Background(), c.ctx.db.Runtime, c.name)
-	c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
-	if err != nil {
-		logutil.Infof("checkpoint stat err: %v", err)
+	ctx := context.Background()
+	var checkpointJson *logtail.ObjectInfoJson
+	entries := c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
+	for _, entry := range entries {
+		if entry.LSN() == c.cid {
+			var data *logtail.CheckpointData
+			data, err = getCkpData(ctx, entry, c.ctx.db.Runtime.Fs)
+			if err != nil {
+				return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v, %v", c.cid, err))
+			}
+			if c.all {
+				c.tid = 0
+			} else if c.tid == invalidId {
+				return moerr.NewInfoNoCtx("no table id")
+			}
+			if checkpointJson, err = data.PrintMetaBatch(c.tid); err != nil {
+				return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v, %v", c.cid, err))
+			}
+		}
 	}
+
+	var json = jsoniter.ConfigCompatibleWithStandardLibrary
+	jsonData, err := json.MarshalIndent(checkpointJson, "", "  ")
+	if err != nil {
+		return
+	}
+	c.res = string(jsonData)
+
+	return
+}
+
+func getCkpData(ctx context.Context, entry *checkpoint.CheckpointEntry, fs *objectio.ObjectFS) (data *logtail.CheckpointData, err error) {
+	if data, err = entry.PrefetchMetaIdx(ctx, fs); err != nil {
+		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v", err))
+		return
+	}
+	if err = entry.ReadMetaIdx(ctx, fs, data); err != nil {
+		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v", err))
+		return
+	}
+	if err = entry.Prefetch(ctx, fs, data); err != nil {
+		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v", err))
+		return
+	}
+	if err = entry.Read(ctx, fs, data); err != nil {
+		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v", err))
+		return
+	}
+
 	return
 }
 
 type CkpEntry struct {
-	LSN    string `json:"lsn"`
-	Detail string `json:"detail"`
+	LSN    string   `json:"lsn"`
+	Detail string   `json:"detail"`
+	Table  []uint64 `json:"table,omitempty"`
 }
 
 type CkpEntries struct {
@@ -1077,6 +1130,7 @@ type CkpEntries struct {
 
 type ckpListArg struct {
 	ctx *inspectContext
+	cid uint64
 	res string
 }
 
@@ -1089,6 +1143,7 @@ func (c *ckpListArg) PrepareCommand() *cobra.Command {
 	}
 
 	ckpStatCmd.SetUsageTemplate(c.Usage())
+	ckpStatCmd.Flags().IntP("cid", "c", invalidId, "checkpoint id")
 
 	return ckpStatCmd
 }
@@ -1096,8 +1151,9 @@ func (c *ckpListArg) PrepareCommand() *cobra.Command {
 func (c *ckpListArg) FromCommand(cmd *cobra.Command) (err error) {
 	if cmd.Flag("ictx") != nil {
 		c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
-
 	}
+	id, _ := cmd.Flags().GetInt("cid")
+	c.cid = uint64(id)
 	return nil
 }
 
@@ -1111,6 +1167,17 @@ func (c *ckpListArg) Usage() (res string) {
 }
 
 func (c *ckpListArg) Run() (err error) {
+	ctx := context.Background()
+	if c.cid == invalidId {
+		c.res, err = c.getCkpList()
+	} else {
+		c.res, err = c.getTableList(ctx)
+	}
+
+	return
+}
+
+func (c *ckpListArg) getCkpList() (res string, err error) {
 	entries := c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
 	ckpEntries := make([]CkpEntry, 0, len(entries))
 	for _, entry := range entries {
@@ -1129,7 +1196,36 @@ func (c *ckpListArg) Run() (err error) {
 	if err != nil {
 		return
 	}
-	c.res = string(jsonData)
+	res = string(jsonData)
+
+	return
+}
+
+type TableIds struct {
+	Ids []uint64 `json:"tables"`
+}
+
+func (c *ckpListArg) getTableList(ctx context.Context) (res string, err error) {
+	entries := c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
+	var ids []uint64
+	for _, entry := range entries {
+		if entry.LSN() != c.cid {
+			continue
+		}
+
+		data, _ := getCkpData(ctx, entry, c.ctx.db.Runtime.Fs)
+		ids = data.GetTableIds()
+	}
+
+	var json = jsoniter.ConfigCompatibleWithStandardLibrary
+	tables := TableIds{
+		Ids: ids,
+	}
+	jsonData, err := json.MarshalIndent(tables, "", "  ")
+	if err != nil {
+		return
+	}
+	res = string(jsonData)
 
 	return
 }
