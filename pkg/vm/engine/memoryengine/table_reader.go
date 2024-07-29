@@ -52,8 +52,9 @@ func (t *Table) BuildReaders(
 
 	readers = make([]engine.Reader, parallel)
 	var shardIDs []uint64
-	relData.ForeachDataBlk(0, relData.BlkCnt(), func(blk *objectio.BlockInfoInProgress) error {
-		shardIDs = append(shardIDs, blk.ShardID)
+	relData.ForeachDataBlk(0, relData.BlkCnt(), func(blk any) error {
+		shardID := blk.(uint64)
+		shardIDs = append(shardIDs, shardID)
 		return nil
 	})
 
@@ -322,8 +323,8 @@ func (t *Table) GetEngineType() engine.EngineType {
 	return engine.Memory
 }
 
-func (t *Table) Ranges(_ context.Context, _ []*plan.Expr, _ int) (engine.Ranges, error) {
-	// return encoded shard ids
+func (t *Table) Ranges(_ context.Context, _ []*plan.Expr, _ int) (engine.RelData, error) {
+	rd := &MemRelationData{}
 	nodes := getTNServices(t.engine.cluster)
 	shards := make(ShardIdSlice, 0, len(nodes)*8)
 	for _, node := range nodes {
@@ -333,17 +334,17 @@ func (t *Table) Ranges(_ context.Context, _ []*plan.Expr, _ int) (engine.Ranges,
 			shards = append(shards, id...)
 		}
 	}
-	return &shards, nil
+	rd.Shards = shards
+	return rd, nil
 }
 
-func (tbl *Table) CollectTombstones(ctx context.Context, txnOffset int) (engine.Tombstoner, error) {
+func (t *Table) CollectTombstones(ctx context.Context, txnOffset int) (engine.Tombstoner, error) {
 	panic("implement me")
 }
 
 // for memory engine.
 type MemRelationData struct {
-	//typ RelDataType
-	blkList []*objectio.BlockInfoInProgress
+	Shards ShardIdSlice
 }
 
 func (rd *MemRelationData) MarshalToBytes() []byte {
@@ -365,9 +366,9 @@ func (rd *MemRelationData) GetTombstones() engine.Tombstoner {
 func (rd *MemRelationData) ForeachDataBlk(
 	begin,
 	end int,
-	f func(blk *objectio.BlockInfoInProgress) error) error {
+	f func(blk any) error) error {
 	for i := begin; i < end; i++ {
-		err := f(rd.blkList[i])
+		err := f(rd.Shards.Get(i))
 		if err != nil {
 			return err
 		}
@@ -375,19 +376,16 @@ func (rd *MemRelationData) ForeachDataBlk(
 	return nil
 }
 
-func (rd *MemRelationData) GetDataBlk(i int) *objectio.BlockInfoInProgress {
-	return rd.blkList[i]
+func (rd *MemRelationData) GetDataBlk(i int) any {
+	return rd.Shards.Get(i)
 }
 
-func (rd *MemRelationData) SetDataBlk(i int, blk *objectio.BlockInfoInProgress) {
-	rd.blkList[i] = blk
+func (rd *MemRelationData) SetDataBlk(i int, blk any) {
+	panic("Not Support")
 }
 
 func (rd *MemRelationData) DataBlkSlice(i, j int) engine.RelData {
-	return &MemRelationData{
-		blkList: rd.blkList[i:j],
-	}
-
+	panic("Not Support")
 }
 
 // GroupByPartitionNum TODO::remove it after refactor of partition table.
@@ -395,8 +393,12 @@ func (rd *MemRelationData) GroupByPartitionNum() map[int16]engine.RelData {
 	panic("Not Support")
 }
 
-func (rd *MemRelationData) AppendDataBlk(blk *objectio.BlockInfoInProgress) {
-	rd.blkList = append(rd.blkList, blk)
+func (rd *MemRelationData) AppendDataBlk(blk any) {
+	shard := blk.(uint64)
+	id := make([]byte, 8)
+	binary.LittleEndian.PutUint64(id, shard)
+	rd.Shards = append(rd.Shards, id...)
+
 }
 
 func (rd *MemRelationData) BuildEmptyRelData() engine.RelData {
@@ -404,21 +406,7 @@ func (rd *MemRelationData) BuildEmptyRelData() engine.RelData {
 }
 
 func (rd *MemRelationData) BlkCnt() int {
-	return len(rd.blkList)
-}
-
-func (t *Table) RangesInProgress(_ context.Context, _ []*plan.Expr, _ int) (engine.RelData, error) {
-	rd := &MemRelationData{}
-	nodes := getTNServices(t.engine.cluster)
-	for _, node := range nodes {
-		for _, shard := range node.Shards {
-			block := &objectio.BlockInfoInProgress{
-				ShardID: shard.ShardID,
-			}
-			rd.blkList = append(rd.blkList, block)
-		}
-	}
-	return rd, nil
+	return rd.Shards.Len()
 }
 
 type ShardIdSlice []byte

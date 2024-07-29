@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"math"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -741,10 +742,12 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) *plan.TableDef {
 	name2index := make(map[string]int32)
 	for _, def := range coldefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
-			name2index[attr.Attr.Name] = i
+			name := strings.ToLower(attr.Attr.Name)
+			name2index[name] = i
 			cols = append(cols, &plan.ColDef{
-				ColId: attr.Attr.ID,
-				Name:  attr.Attr.Name,
+				ColId:      attr.Attr.ID,
+				Name:       name,
+				OriginName: attr.Attr.Name,
 				Typ: plan.Type{
 					Id:          int32(attr.Attr.Type.Oid),
 					Width:       attr.Attr.Type.Width,
@@ -764,7 +767,7 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) *plan.TableDef {
 			})
 			if attr.Attr.ClusterBy {
 				clusterByDef = &plan.ClusterByDef{
-					Name: attr.Attr.Name,
+					Name: name,
 				}
 			}
 			i++

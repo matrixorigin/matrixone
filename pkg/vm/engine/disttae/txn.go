@@ -244,7 +244,7 @@ func checkPKDup(
 		vs := vector.MustFixedCol[types.Blockid](pk)
 		return checkPKDupGeneric[types.Blockid](mp, colType, vs, start, count)
 	case types.T_char, types.T_varchar, types.T_json,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		for i := start; i < start+count; i++ {
 			v := pk.UnsafeGetStringAt(i)
 			if _, ok := mp[v]; ok {
@@ -962,13 +962,13 @@ func (txn *Transaction) compactionBlksLocked() error {
 	return nil
 }
 
-func (txn *Transaction) hasDeletesOnUncommitedObject() bool {
-	return !txn.deletedBlocks.isEmpty()
-}
+//func (txn *Transaction) hasDeletesOnUncommitedObject() bool {
+//	return !txn.deletedBlocks.isEmpty()
+//}
 
-func (txn *Transaction) hasUncommittedDeletesOnBlock(id *types.Blockid) bool {
-	return txn.deletedBlocks.hasDeletes(id)
-}
+//func (txn *Transaction) hasUncommittedDeletesOnBlock(id *types.Blockid) bool {
+//	return txn.deletedBlocks.hasDeletes(id)
+//}
 
 // TODO::remove it after workspace refactor.
 func (txn *Transaction) getUncommittedS3Tombstone(locs *[]objectio.Location) error {

@@ -111,7 +111,7 @@ type txnTable struct {
 	logs        []wal.LogEntry
 
 	dedupedObjectHint uint64
-	dedupedBlockID    *types.Blockid
+	dedupedBlockID    uint16
 
 	txnEntries *txnEntries
 	csnStart   uint32
@@ -1012,7 +1012,7 @@ func (tbl *txnTable) PrePrepareDedup(ctx context.Context) (err error) {
 	return
 }
 
-func (tbl *txnTable) updateDedupedObjectHintAndBlockID(hint uint64, id *types.Blockid) {
+func (tbl *txnTable) updateDedupedObjectHintAndBlockID(hint uint64, id uint16) {
 	if tbl.dedupedObjectHint == 0 {
 		tbl.dedupedObjectHint = hint
 		tbl.dedupedBlockID = id
@@ -1023,7 +1023,7 @@ func (tbl *txnTable) updateDedupedObjectHintAndBlockID(hint uint64, id *types.Bl
 		tbl.dedupedObjectHint = hint
 		return
 	}
-	if tbl.dedupedObjectHint == hint && tbl.dedupedBlockID.Compare(*id) > 0 {
+	if tbl.dedupedObjectHint == hint && id > tbl.dedupedBlockID {
 		tbl.dedupedBlockID = id
 	}
 }
@@ -1081,14 +1081,21 @@ func (tbl *txnTable) DedupSnapByPK(ctx context.Context, keys containers.Vector, 
 		name objectio.ObjectNameShort
 		bf   objectio.BloomFilter
 	)
-	maxBlockID := &types.Blockid{}
+	maxBlockID := uint16(0)
 	for it.Next() {
 		objH := it.GetObject()
 		obj := objH.GetMeta().(*catalog.ObjectEntry)
 		objH.Close()
 		ObjectHint := obj.SortHint
-		if ObjectHint > maxObjectHint {
+		// the last appendable obj is appending and shouldn't be skipped
+		// the max object hint should equal id of last aobj
+		// naobj shouldn't count
+		if obj.IsAppendable() && ObjectHint > maxObjectHint {
 			maxObjectHint = ObjectHint
+			blkCount := obj.BlockCnt()
+			if blkCount > 0 {
+				maxBlockID = uint16(blkCount - 1)
+			}
 		}
 		objData := obj.GetObjectData()
 		if objData == nil {
@@ -1134,6 +1141,7 @@ func (tbl *txnTable) DedupSnapByPK(ctx context.Context, keys containers.Vector, 
 			rowmask,
 			false,
 			bf,
+			0,
 			common.WorkspaceAllocator,
 		); err != nil {
 			// logutil.Infof("%s, %s, %v", obj.String(), rowmask, err)
@@ -1150,14 +1158,15 @@ func (tbl *txnTable) DedupSnapByPK(ctx context.Context, keys containers.Vector, 
 func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objectio.Location, dedupAfterSnapshotTS bool) (err error) {
 	loaded := make(map[int]containers.Vector)
 	maxObjectHint := uint64(0)
-	maxBlockID := &types.Blockid{}
+	maxBlockID := uint16(0)
 	for i, loc := range metaLocs {
 		it := newObjectItOnSnap(tbl)
 		for it.Next() {
 			obj := it.GetObject().GetMeta().(*catalog.ObjectEntry)
 			ObjectHint := obj.SortHint
-			if ObjectHint > maxObjectHint {
+			if obj.IsAppendable() && ObjectHint > maxObjectHint {
 				maxObjectHint = ObjectHint
+				maxBlockID = uint16(obj.BlockCnt())
 			}
 			objData := obj.GetObjectData()
 			if objData == nil {
@@ -1210,6 +1219,7 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 				rowmask,
 				false,
 				objectio.BloomFilter{},
+				0,
 				common.WorkspaceAllocator,
 			); err != nil {
 				// logutil.Infof("%s, %s, %v", obj.String(), rowmask, err)
@@ -1239,6 +1249,10 @@ func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector, pksZM index.ZM)
 			obj := objIt.Item()
 			if obj.SortHint < tbl.dedupedObjectHint {
 				break
+			}
+			startBlkOffset := uint16(0)
+			if obj.SortHint == tbl.dedupedObjectHint {
+				startBlkOffset = tbl.dedupedBlockID
 			}
 			{
 				//FIXME:: Why need to wait committing here? waiting had happened at Dedup.
@@ -1273,6 +1287,7 @@ func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector, pksZM index.ZM)
 				rowmask,
 				true,
 				objectio.BloomFilter{},
+				startBlkOffset,
 				common.WorkspaceAllocator,
 			); err != nil {
 				return
@@ -1294,6 +1309,10 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, node InsertNode
 		}
 		if obj.SortHint < tbl.dedupedObjectHint {
 			break
+		}
+		startBlkOffset := uint16(0)
+		if obj.SortHint == tbl.dedupedObjectHint {
+			startBlkOffset = tbl.dedupedBlockID
 		}
 		{
 			//FIXME:: Why need to wait committing here? waiting had happened at Dedup.
@@ -1340,6 +1359,7 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, node InsertNode
 			rowmask,
 			true,
 			objectio.BloomFilter{},
+			startBlkOffset,
 			common.WorkspaceAllocator,
 		); err != nil {
 			return err

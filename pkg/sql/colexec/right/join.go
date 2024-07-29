@@ -42,7 +42,7 @@ func (rightJoin *RightJoin) OpType() vm.OpType {
 
 func (rightJoin *RightJoin) Prepare(proc *process.Process) (err error) {
 	rightJoin.ctr = new(container)
-	rightJoin.ctr.InitReceiver(proc, false)
+	rightJoin.ctr.InitReceiver(proc, true)
 	rightJoin.ctr.vecs = make([]*vector.Vector, len(rightJoin.Conditions[0]))
 
 	rightJoin.ctr.evecs = make([]evalVector, len(rightJoin.Conditions[0]))
@@ -83,7 +83,7 @@ func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Probe:
 			if rightJoin.ctr.buf == nil {
-				msg := ctr.ReceiveFromSingleReg(0, analyze)
+				msg := ctr.ReceiveFromAllRegs(analyze)
 				if msg.Err != nil {
 					return result, msg.Err
 				}

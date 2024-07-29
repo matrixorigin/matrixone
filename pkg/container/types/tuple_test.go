@@ -22,8 +22,6 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-
 	"github.com/stretchr/testify/require"
 )
 
@@ -41,8 +39,7 @@ func TestSimpleTupleAllTypes(t *testing.T) {
 	}
 	for _, test := range tests {
 		tuple := test.args
-		mp := mpool.MustNewZero()
-		packer := NewPacker(mp)
+		packer := NewPacker()
 		encodeBufToPacker(tuple, packer)
 		tt, _ := Unpack(packer.GetBuf())
 		require.Equal(t, tuple.String(), tt.String())
@@ -110,8 +107,8 @@ func TestSingleTypeTuple(t *testing.T) {
 	}
 	for _, test := range tests {
 		tuple := test.args
-		mp := mpool.MustNewZero()
-		packer := NewPacker(mp)
+		packer := NewPacker()
+		defer packer.Close()
 		encodeBufToPacker(tuple, packer)
 		tt, _ := Unpack(packer.GetBuf())
 		for i := range tuple {
@@ -140,8 +137,8 @@ func TestMulTypeTuple(t *testing.T) {
 
 	for _, test := range tests {
 		tuple := test.args
-		mp := mpool.MustNewZero()
-		packer := NewPacker(mp)
+		packer := NewPacker()
+		defer packer.Close()
 		encodeBufToPacker(tuple, packer)
 		tt, _ := Unpack(packer.GetBuf())
 		for i := range tuple {
@@ -169,18 +166,17 @@ func TestDecimalOrderTuple(t *testing.T) {
 	}
 	for _, test := range tests {
 		tuple := test.args
-		mp := mpool.MustNewZero()
-		packer := NewPacker(mp)
+		packer := NewPacker()
 		encodeBufToPacker(tuple, packer)
 		for i := 1; i < 10; i++ {
 			for j := i; j > 0; j-- {
 				left := make([]byte, 17)
 				right := make([]byte, 17)
-				copy(left, packer.buf[(j-1)*17:j*17])
-				copy(right, packer.buf[j*17:(j+1)*17])
+				copy(left, packer.buffer[(j-1)*17:j*17])
+				copy(right, packer.buffer[j*17:(j+1)*17])
 				if bytes.Compare(left, right) > 0 {
-					copy(packer.buf[(j-1)*17:j*17], right)
-					copy(packer.buf[j*17:(j+1)*17], left)
+					copy(packer.buffer[(j-1)*17:j*17], right)
+					copy(packer.buffer[j*17:(j+1)*17], left)
 				}
 			}
 		}

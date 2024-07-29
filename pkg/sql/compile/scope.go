@@ -201,7 +201,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 		_, err = p.ConstRun(s.DataSource.Bat, s.Proc)
 	} else {
 		if s.DataSource.R == nil {
-			s.NodeInfo.Data = engine.BuildInvalidRelData()
+			s.NodeInfo.Data = engine.BuildEmptyRelData()
 			readers, _, err := s.buildReaders(c, 1)
 			if err != nil {
 				return err
@@ -458,12 +458,13 @@ func buildJoinParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	}
 	mcpu := s.NodeInfo.Mcpu
 	if mcpu <= 1 { // no need to parallel
-		buildScope := c.newJoinBuildScope(s, nil, 1)
+		buildScope := c.newJoinBuildScope(s, 1)
 		s.PreScopes = append(s.PreScopes, buildScope)
 		if s.BuildIdx > 1 {
-			probeScope := c.newJoinProbeScope(s, nil)
+			probeScope := c.newShuffleJoinProbeScope(s)
 			s.PreScopes = append(s.PreScopes, probeScope)
 		}
+		s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:1]
 		return s, nil
 	}
 
@@ -478,10 +479,9 @@ func buildJoinParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	for i := 0; i < mcpu; i++ {
 		ss[i] = newScope(Merge)
 		ss[i].NodeInfo = s.NodeInfo
-		ss[i].Proc = process.NewFromProc(s.Proc, s.Proc.Ctx, 2)
-		ss[i].Proc.Reg.MergeReceivers[1].Ch = make(chan *process.RegisterMessage, 10)
+		ss[i].Proc = process.NewFromProc(s.Proc, s.Proc.Ctx, 1)
 	}
-	probeScope, buildScope := c.newJoinProbeScope(s, ss), c.newJoinBuildScope(s, ss, int32(mcpu))
+	probeScope, buildScope := c.newBroadcastJoinProbeScope(s, ss), c.newJoinBuildScope(s, int32(mcpu))
 
 	ns, err := newParallelScope(c, s, ss)
 	if err != nil {
@@ -699,7 +699,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 			newExprList = append(newExprList, s.DataSource.node.BlockFilterList...)
 		}
 
-		relData, err := c.expandRangesInProgress(s.DataSource.node, s.DataSource.Rel, newExprList)
+		relData, err := c.expandRanges(s.DataSource.node, s.DataSource.Rel, newExprList)
 		if err != nil {
 			return err
 		}
@@ -1343,18 +1343,29 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 			}
 			readers = append(readers, mainRds...)
 		} else {
-			mp := s.NodeInfo.Data.GroupByPartitionNum()
+			var mp map[int16]engine.RelData
+			if s.NodeInfo.Data != nil {
+				mp = s.NodeInfo.Data.GroupByPartitionNum()
+			}
 			var subRel engine.Relation
 			for num, relName := range s.DataSource.PartitionRelationNames {
 				subRel, err = db.Relation(ctx, relName, c.proc)
 				if err != nil {
 					return
 				}
+
+				var subRelData engine.RelData
+				if s.NodeInfo.Data == nil {
+					subRelData = nil
+				} else {
+					subRelData = mp[int16(num)]
+				}
+
 				subRds, err = subRel.BuildReaders(
 					ctx,
 					c.proc,
 					s.DataSource.FilterExpr,
-					mp[int16(num)],
+					subRelData,
 					scanUsedCpuNumber,
 					s.TxnOffset,
 				)

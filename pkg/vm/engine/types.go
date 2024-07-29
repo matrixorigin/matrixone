@@ -52,7 +52,7 @@ type Attribute struct {
 	IsRowId bool
 	// Column ID
 	ID uint64
-	// Name name of attribute
+	// Name name of attribute, letter case: origin
 	Name string
 	// Alg compression algorithm
 	Alg compress.T
@@ -117,7 +117,7 @@ func (node IndexT) ToString() string {
 }
 
 const (
-	Invalid IndexT = iota
+	Empty IndexT = iota
 	ZoneMap
 	BsiIndex
 )
@@ -622,7 +622,7 @@ type Tombstoner interface {
 type RelDataType uint8
 
 const (
-	InvalidRelData RelDataType = iota
+	EmptyRelData RelDataType = iota
 	RelDataV1
 	RelDataV2
 )
@@ -636,18 +636,18 @@ type RelData interface {
 
 	GetTombstones() Tombstoner
 
-	ForeachDataBlk(begin, end int, f func(blk *objectio.BlockInfoInProgress) error) error
+	ForeachDataBlk(begin, end int, f func(blk any) error) error
 
-	GetDataBlk(i int) *objectio.BlockInfoInProgress
+	GetDataBlk(i int) any
 
-	SetDataBlk(i int, blk *objectio.BlockInfoInProgress)
+	SetDataBlk(i int, blk any)
 
 	DataBlkSlice(begin, end int) RelData
 
 	// GroupByPartitionNum TODO::remove it after refactor of partition table.
 	GroupByPartitionNum() map[int16]RelData
 
-	AppendDataBlk(blk *objectio.BlockInfoInProgress)
+	AppendDataBlk(blk any)
 
 	BuildEmptyRelData() RelData
 
@@ -714,10 +714,10 @@ type Relation interface {
 	// first parameter: Context
 	// second parameter: Slice of expressions used to filter the data.
 	// third parameter: Transaction offset used to specify the starting position for reading data.
-	Ranges(context.Context, []*plan.Expr, int) (Ranges, error)
+	Ranges(context.Context, []*plan.Expr, int) (RelData, error)
 
 	//RangesInProgress will substitute the Ranges function in the future.
-	RangesInProgress(context.Context, []*plan.Expr, int) (RelData, error)
+	//RangesInProgress(context.Context, []*plan.Expr, int) (RelData, error)
 	CollectTombstones(ctx context.Context, txnOffset int) (Tombstoner, error)
 
 	TableDefs(context.Context) ([]TableDef, error)
@@ -894,58 +894,58 @@ func IsMemtable(tblRange []byte) bool {
 	return bytes.Equal(tblRange, objectio.EmptyBlockInfoBytes)
 }
 
-type InvalidRelationData struct {
+type EmptyRelationData struct {
 	typ RelDataType
 }
 
-func BuildInvalidRelData() RelData {
-	return &InvalidRelationData{InvalidRelData}
+func BuildEmptyRelData() RelData {
+	return &EmptyRelationData{EmptyRelData}
 }
 
-func (rd *InvalidRelationData) MarshalToBytes() []byte {
+func (rd *EmptyRelationData) MarshalToBytes() []byte {
 	panic("Not Supported")
 }
 
-func (rd *InvalidRelationData) UnMarshal(buf []byte) error {
+func (rd *EmptyRelationData) UnMarshal(buf []byte) error {
 	panic("Not Supported")
 }
 
-func (rd *InvalidRelationData) AttachTombstones(tombstones Tombstoner) error {
+func (rd *EmptyRelationData) AttachTombstones(tombstones Tombstoner) error {
 	panic("Not Supported")
 }
 
-func (rd *InvalidRelationData) GetTombstones() Tombstoner {
+func (rd *EmptyRelationData) GetTombstones() Tombstoner {
 	panic("Not Supported")
 }
 
-func (rd *InvalidRelationData) ForeachDataBlk(begin, end int, f func(blk *objectio.BlockInfoInProgress) error) error {
+func (rd *EmptyRelationData) ForeachDataBlk(begin, end int, f func(blk any) error) error {
 	panic("Not Supported")
 }
 
-func (rd *InvalidRelationData) GetDataBlk(i int) *objectio.BlockInfoInProgress {
+func (rd *EmptyRelationData) GetDataBlk(i int) any {
 	panic("Not Supported")
 }
 
-func (rd *InvalidRelationData) SetDataBlk(i int, blk *objectio.BlockInfoInProgress) {
+func (rd *EmptyRelationData) SetDataBlk(i int, blk any) {
 	panic("Not Supported")
 }
 
-func (rd *InvalidRelationData) DataBlkSlice(begin, end int) RelData {
+func (rd *EmptyRelationData) DataBlkSlice(begin, end int) RelData {
 	panic("Not Supported")
 }
 
-func (rd *InvalidRelationData) GroupByPartitionNum() map[int16]RelData {
+func (rd *EmptyRelationData) GroupByPartitionNum() map[int16]RelData {
 	panic("Not Supported")
 }
 
-func (rd *InvalidRelationData) AppendDataBlk(blk *objectio.BlockInfoInProgress) {
+func (rd *EmptyRelationData) AppendDataBlk(blk any) {
 	panic("Not Supported")
 }
 
-func (rd *InvalidRelationData) BuildEmptyRelData() RelData {
-	return &InvalidRelationData{InvalidRelData}
+func (rd *EmptyRelationData) BuildEmptyRelData() RelData {
+	return &EmptyRelationData{EmptyRelData}
 }
 
-func (rd *InvalidRelationData) BlkCnt() int {
+func (rd *EmptyRelationData) BlkCnt() int {
 	return 0
 }

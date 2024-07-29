@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -56,6 +57,7 @@ func setupServiceRuntime(
 		cfg.mustGetServiceUUID(),
 		r,
 	)
+	catalog.SetupDefines(cfg.mustGetServiceUUID())
 	return nil
 }
 

@@ -17,6 +17,11 @@ package disttae
 import (
 	"bytes"
 	"context"
+	"slices"
+	"sort"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -25,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -33,8 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"slices"
-	"sort"
 )
 
 type tombstoneDataV1 struct {
@@ -461,28 +463,21 @@ func UnmarshalRelationData(data []byte) (engine.RelData, error) {
 	typ := engine.RelDataType(data[0])
 	switch typ {
 	case engine.RelDataV1:
-		rd1 := buildRelationDataV1(nil)
+		rd1 := buildRelationDataV1()
 		if err := rd1.UnMarshal(data); err != nil {
 			return nil, err
 		}
 		return rd1, nil
-
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("unsupported relation data type")
 	}
-
-	panic("impossible path")
-}
-
-type relationDataV0 struct {
-	typ     uint8
-	blkList []*objectio.BlockInfo
 }
 
 type relationDataV1 struct {
 	typ engine.RelDataType
 	//blkList[0] is a empty block info
-	blkList []*objectio.BlockInfoInProgress
+	//blkList []*objectio.BlockInfoInProgress
+	blklist *objectio.BlockInfoSliceInProgress
 
 	//marshal tombstones if isEmpty is false, otherwise don't need to marshal tombstones
 	isEmpty      bool
@@ -491,10 +486,10 @@ type relationDataV1 struct {
 	tombstones engine.Tombstoner
 }
 
-func buildRelationDataV1(blkList []*objectio.BlockInfoInProgress) *relationDataV1 {
+func buildRelationDataV1() *relationDataV1 {
 	return &relationDataV1{
 		typ:     engine.RelDataV1,
-		blkList: blkList,
+		blklist: &objectio.BlockInfoSliceInProgress{},
 		isEmpty: true,
 	}
 }
@@ -502,24 +497,11 @@ func buildRelationDataV1(blkList []*objectio.BlockInfoInProgress) *relationDataV
 func (rd1 *relationDataV1) UnMarshal(data []byte) error {
 	data = data[1:]
 
-	blkCnt := types.DecodeUint32(data)
+	sizeofblks := types.DecodeUint32(data)
 	data = data[4:]
 
-	if blkCnt > 0 {
-
-		blkSize := types.DecodeUint32(data)
-		data = data[4:]
-
-		for i := uint32(0); i < blkCnt; i++ {
-			blk := &objectio.BlockInfoInProgress{}
-			err := blk.Unmarshal(data[:blkSize])
-			if err != nil {
-				return err
-			}
-			data = data[blkSize:]
-			rd1.blkList = append(rd1.blkList, blk)
-		}
-	}
+	*rd1.blklist = data[:sizeofblks]
+	data = data[sizeofblks:]
 
 	isEmpty := types.DecodeBool(data)
 	rd1.isEmpty = isEmpty
@@ -550,41 +532,24 @@ func (rd1 *relationDataV1) UnMarshal(data []byte) error {
 }
 
 func (rd1 *relationDataV1) MarshalWithBuf(w *bytes.Buffer) error {
-	var pos1 uint32
 	var pos2 uint32
 	typ := uint8(rd1.typ)
 	if _, err := w.Write(types.EncodeUint8(&typ)); err != nil {
 		return err
 	}
-	pos1 += 1
 	pos2 += 1
 
-	//len of blk list
-	length := uint32(len(rd1.blkList))
-	if _, err := w.Write(types.EncodeUint32(&length)); err != nil {
-		return err
-	}
-	pos1 += 4
-	pos2 += 4
-	// reserve the space: 4 bytes for block info
-	var sizeOfBlockInfo uint32
-	if _, err := w.Write(types.EncodeUint32(&sizeOfBlockInfo)); err != nil {
+	sizeofblks := uint32(rd1.blklist.Size())
+	if _, err := w.Write(types.EncodeUint32(&sizeofblks)); err != nil {
 		return err
 	}
 	pos2 += 4
 
-	for i, blk := range rd1.blkList {
-		space, err := blk.MarshalWithBuf(w)
-		if err != nil {
-			return err
-		}
-		if i == 0 {
-			sizeOfBlockInfo = space
-			//update the size of block info
-			copy(w.Bytes()[pos1:pos1+4], types.EncodeUint32(&sizeOfBlockInfo))
-		}
-		pos2 += space
+	//marshal blk list
+	if _, err := w.Write(*rd1.blklist); err != nil {
+		return err
 	}
+	pos2 += sizeofblks
 
 	if _, err := w.Write(types.EncodeBool(&rd1.isEmpty)); err != nil {
 		return err
@@ -635,9 +600,9 @@ func (rd1 *relationDataV1) GetTombstones() engine.Tombstoner {
 	return rd1.tombstones
 }
 
-func (rd1 *relationDataV1) ForeachDataBlk(begin, end int, f func(blk *objectio.BlockInfoInProgress) error) error {
+func (rd1 *relationDataV1) ForeachDataBlk(begin, end int, f func(blk any) error) error {
 	for i := begin; i < end; i++ {
-		err := f(rd1.blkList[i])
+		err := f(rd1.blklist.Get(i))
 		if err != nil {
 			return err
 		}
@@ -645,18 +610,19 @@ func (rd1 *relationDataV1) ForeachDataBlk(begin, end int, f func(blk *objectio.B
 	return nil
 }
 
-func (rd1 *relationDataV1) GetDataBlk(i int) *objectio.BlockInfoInProgress {
-	return rd1.blkList[i]
+func (rd1 *relationDataV1) GetDataBlk(i int) any {
+	return rd1.blklist.Get(i)
 }
 
-func (rd1 *relationDataV1) SetDataBlk(i int, blk *objectio.BlockInfoInProgress) {
-	rd1.blkList[i] = blk
+func (rd1 *relationDataV1) SetDataBlk(i int, blk any) {
+	rd1.blklist.Set(i, blk.(*objectio.BlockInfoInProgress))
 }
 
 func (rd1 *relationDataV1) DataBlkSlice(i, j int) engine.RelData {
+	blist := objectio.BlockInfoSliceInProgress(rd1.blklist.Slice(i, j))
 	return &relationDataV1{
 		typ:          rd1.typ,
-		blkList:      rd1.blkList[i:j],
+		blklist:      &blist,
 		isEmpty:      rd1.isEmpty,
 		tombstoneTyp: rd1.tombstoneTyp,
 		tombstones:   rd1.tombstones,
@@ -665,11 +631,12 @@ func (rd1 *relationDataV1) DataBlkSlice(i, j int) engine.RelData {
 
 func (rd1 *relationDataV1) GroupByPartitionNum() map[int16]engine.RelData {
 	ret := make(map[int16]engine.RelData)
-	for _, blk := range rd1.blkList {
-		if blk.IsMemBlk() {
-			continue
+	rd1.ForeachDataBlk(0, rd1.blklist.Len(), func(blk any) error {
+		blkinfo := blk.(*objectio.BlockInfoInProgress)
+		if blkinfo.IsMemBlk() {
+			return nil
 		}
-		partitionNum := blk.PartitionNum
+		partitionNum := blkinfo.PartitionNum
 		if _, ok := ret[partitionNum]; !ok {
 			ret[partitionNum] = &relationDataV1{
 				typ:          rd1.typ,
@@ -679,34 +646,27 @@ func (rd1 *relationDataV1) GroupByPartitionNum() map[int16]engine.RelData {
 			}
 			ret[partitionNum].AppendDataBlk(&objectio.EmptyBlockInfoInProgress)
 		}
-		ret[partitionNum].AppendDataBlk(blk)
-	}
+		ret[partitionNum].AppendDataBlk(blkinfo)
+		return nil
+	})
 	return ret
 }
 
-//func (rd1 *relationDataV1) DataBlkClone(i, j int) engine.RelData {
-//	var dst []*objectio.BlockInfoInProgress
-//	copy(dst, rd1.blkList[i:j])
-//	return &relationDataV1{
-//		typ:          rd1.typ,
-//		blkList:      dst,
-//		tombstoneTyp: rd1.tombstoneTyp,
-//		tombstones:   rd1.tombstones,
-//	}
-//}
-
-func (rd1 *relationDataV1) AppendDataBlk(blk *objectio.BlockInfoInProgress) {
-	rd1.blkList = append(rd1.blkList, blk)
+func (rd1 *relationDataV1) AppendDataBlk(blk any) {
+	blkinfo := blk.(*objectio.BlockInfoInProgress)
+	rd1.blklist.AppendBlockInfo(*blkinfo)
 }
 
 func (rd1 *relationDataV1) BuildEmptyRelData() engine.RelData {
 	return &relationDataV1{
-		typ: rd1.typ,
+		blklist: &objectio.BlockInfoSliceInProgress{},
+		typ:     rd1.typ,
+		isEmpty: true,
 	}
 }
 
 func (rd1 *relationDataV1) BlkCnt() int {
-	return len(rd1.blkList)
+	return rd1.blklist.Len()
 }
 
 type RemoteDataSource struct {
@@ -750,7 +710,7 @@ func (rs *RemoteDataSource) Next(
 		return nil, engine.End, nil
 	}
 	rs.cursor++
-	return rs.data.GetDataBlk(rs.cursor - 1), engine.Persisted, nil
+	return rs.data.GetDataBlk(rs.cursor - 1).(*objectio.BlockInfoInProgress), engine.Persisted, nil
 }
 
 func (rs *RemoteDataSource) Close() {
@@ -761,6 +721,9 @@ func (rs *RemoteDataSource) applyInMemTombstones(
 	bid types.Blockid,
 	rowsOffset []int32,
 ) (leftRows []int32, deletedRows []int64) {
+	if rs.data.GetTombstones() == nil {
+		return rowsOffset, nil
+	}
 	return rs.data.GetTombstones().ApplyInMemTombstones(
 		bid,
 		rowsOffset)
@@ -799,6 +762,9 @@ func (rs *RemoteDataSource) applyUncommitDeltaLoc(
 			*left, *deleted = fastApplyDeletedRows(*left, *deleted, o)
 		}
 		return nil
+	}
+	if rs.data.GetTombstones() == nil {
+		return rowsOffset, nil, nil
 	}
 	return rs.data.GetTombstones().ApplyPersistedTombstones(
 		ctx,
@@ -840,7 +806,9 @@ func (rs *RemoteDataSource) applyCommittedDeltaLoc(
 		}
 		return nil
 	}
-
+	if rs.data.GetTombstones() == nil {
+		return rowsOffset, nil, nil
+	}
 	return rs.data.GetTombstones().ApplyPersistedTombstones(
 		ctx,
 		bid,
@@ -866,6 +834,9 @@ func (rs *RemoteDataSource) ApplyTombstonesInProgress(
 		return nil, err
 	}
 	rowsOffset, _, err = rs.applyCommittedDeltaLoc(ctx, bid, rowsOffset)
+	if err != nil {
+		return nil, err
+	}
 	return rowsOffset, nil
 }
 
@@ -878,17 +849,17 @@ func (rs *RemoteDataSource) GetTombstonesInProgress(
 
 	_, dels, err = rs.applyUncommitDeltaLoc(ctx, bid, nil)
 	if err != nil {
-		return nil, err
+		return
 	}
 	deletedRows = append(deletedRows, dels...)
 
 	_, dels, err = rs.applyCommittedDeltaLoc(ctx, bid, nil)
 	if err != nil {
-		return nil, err
+		return
 	}
 	deletedRows = append(deletedRows, dels...)
 
-	return deletedRows, nil
+	return
 }
 
 func (rs *RemoteDataSource) HasTombstones(bid types.Blockid) bool {
@@ -1390,7 +1361,7 @@ func (ls *LocalDataSource) GetTombstonesInProgress(
 func fastApplyDeletedRows(
 	leftRows []int32, deletedRows []int64, o uint32,
 ) ([]int32, []int64) {
-	if leftRows != nil && len(leftRows) != 0 {
+	if len(leftRows) != 0 {
 		if x, found := sort.Find(len(leftRows), func(i int) int {
 			return int(int32(o) - leftRows[i])
 		}); found {

@@ -1990,7 +1990,7 @@ func (c *Compile) compileValueScan(n *plan.Node) ([]*Scope, error) {
 }
 
 func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
-	nodes, partialResults, partialResultTypes, err := c.generateNodesInProgress(n)
+	nodes, partialResults, partialResultTypes, err := c.generateNodes(n)
 	if err != nil {
 		return nil, err
 	}
@@ -2035,7 +2035,7 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	n := s.DataSource.node
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
-		attrs[j] = col.Name
+		attrs[j] = col.GetOriginCaseName()
 	}
 
 	//-----------------------------------------------------------------------------------------------------
@@ -3795,7 +3795,7 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 	return parent, children
 }
 
-func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
+func (c *Compile) newShuffleJoinProbeScope(s *Scope) *Scope {
 	rs := newScope(Merge)
 	mergeOp := merge.NewArgument()
 	mergeOp.SetIdx(vm.GetLeafOp(s.RootOp).GetOperatorBase().GetIdx())
@@ -3806,26 +3806,36 @@ func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 		regTransplant(s, rs, i, i)
 	}
 
-	if ss == nil {
-		s.Proc.Reg.MergeReceivers[0] = &process.WaitRegister{
-			Ctx: s.Proc.Ctx,
-			Ch:  make(chan *process.RegisterMessage, shuffleChannelBufferSize),
-		}
-		rs.setRootOperator(
-			connector.NewArgument().
-				WithReg(s.Proc.Reg.MergeReceivers[0]),
-		)
-		s.Proc.Reg.MergeReceivers = append(s.Proc.Reg.MergeReceivers[:1], s.Proc.Reg.MergeReceivers[s.BuildIdx:]...)
-		s.BuildIdx = 1
-	} else {
-		rs.setRootOperator(constructDispatchLocal(false, false, false, extraRegisters(ss, 0)))
+	s.Proc.Reg.MergeReceivers[0] = &process.WaitRegister{
+		Ctx: s.Proc.Ctx,
+		Ch:  make(chan *process.RegisterMessage, shuffleChannelBufferSize),
 	}
+	rs.setRootOperator(
+		connector.NewArgument().
+			WithReg(s.Proc.Reg.MergeReceivers[0]),
+	)
+	s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:1]
 	rs.IsEnd = true
-
 	return rs
 }
 
-func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope, mcpu int32) *Scope {
+func (c *Compile) newBroadcastJoinProbeScope(s *Scope, ss []*Scope) *Scope {
+	rs := newScope(Merge)
+	mergeOp := merge.NewArgument()
+	mergeOp.SetIdx(vm.GetLeafOp(s.RootOp).GetOperatorBase().GetIdx())
+	mergeOp.SetIsFirst(true)
+	rs.setRootOperator(mergeOp)
+	rs.Proc = process.NewFromProc(s.Proc, s.Proc.Ctx, s.BuildIdx)
+	for i := 0; i < s.BuildIdx; i++ {
+		regTransplant(s, rs, i, i)
+	}
+
+	rs.setRootOperator(constructDispatchLocal(false, false, false, extraRegisters(ss, 0)))
+	rs.IsEnd = true
+	return rs
+}
+
+func (c *Compile) newJoinBuildScope(s *Scope, mcpu int32) *Scope {
 	rs := newScope(Merge)
 	buildLen := len(s.Proc.Reg.MergeReceivers) - s.BuildIdx
 	rs.Proc = process.NewFromProc(s.Proc, s.Proc.Ctx, buildLen)
@@ -4034,7 +4044,7 @@ func collectTombstones(
 	return tombstone, nil
 }
 
-func (c *Compile) expandRangesInProgress(
+func (c *Compile) expandRanges(
 	n *plan.Node,
 	rel engine.Relation,
 	blockFilterList []*plan.Expr) (engine.RelData, error) {
@@ -4077,7 +4087,7 @@ func (c *Compile) expandRangesInProgress(
 	if err != nil {
 		return nil, err
 	}
-	relData, err = rel.RangesInProgress(ctx, blockFilterList, c.TxnOffset)
+	relData, err = rel.Ranges(ctx, blockFilterList, c.TxnOffset)
 	if err != nil {
 		return nil, err
 	}
@@ -4091,11 +4101,12 @@ func (c *Compile) expandRangesInProgress(
 				if err != nil {
 					return nil, err
 				}
-				subRelData, err := subrelation.RangesInProgress(ctx, n.BlockFilterList, c.TxnOffset)
+				subRelData, err := subrelation.Ranges(ctx, n.BlockFilterList, c.TxnOffset)
 				if err != nil {
 					return nil, err
 				}
-				subRelData.ForeachDataBlk(1, subRelData.BlkCnt(), func(blk *objectio.BlockInfoInProgress) error {
+				subRelData.ForeachDataBlk(1, subRelData.BlkCnt(), func(b any) error {
+					blk := b.(*objectio.BlockInfoInProgress)
 					blk.PartitionNum = int16(i)
 					relData.AppendDataBlk(blk)
 					return nil
@@ -4111,11 +4122,12 @@ func (c *Compile) expandRangesInProgress(
 				if err != nil {
 					return nil, err
 				}
-				subRelData, err := subrelation.RangesInProgress(ctx, n.BlockFilterList, c.TxnOffset)
+				subRelData, err := subrelation.Ranges(ctx, n.BlockFilterList, c.TxnOffset)
 				if err != nil {
 					return nil, err
 				}
-				subRelData.ForeachDataBlk(1, subRelData.BlkCnt(), func(blk *objectio.BlockInfoInProgress) error {
+				subRelData.ForeachDataBlk(1, subRelData.BlkCnt(), func(b any) error {
+					blk := b.(*objectio.BlockInfoInProgress)
 					blk.PartitionNum = int16(i)
 					relData.AppendDataBlk(blk)
 					return nil
@@ -4127,7 +4139,7 @@ func (c *Compile) expandRangesInProgress(
 
 }
 
-func (c *Compile) generateNodesInProgress(n *plan.Node) (engine.Nodes, []any, []types.T, error) {
+func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, error) {
 	var err error
 	var db engine.Database
 	var rel engine.Relation
@@ -4196,7 +4208,7 @@ func (c *Compile) generateNodesInProgress(n *plan.Node) (engine.Nodes, []any, []
 				},
 			}
 		}
-		relData, err = c.expandRangesInProgress(n, rel, n.BlockFilterList)
+		relData, err = c.expandRanges(n, rel, n.BlockFilterList)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -4222,6 +4234,7 @@ func (c *Compile) generateNodesInProgress(n *plan.Node) (engine.Nodes, []any, []
 				Id:   node.Id,
 				Addr: node.Addr,
 				Mcpu: c.generateCPUNumber(node.Mcpu, int(n.Stats.BlockNum)),
+				Data: engine.BuildEmptyRelData(),
 			}
 		}
 		return nodes, partialResults, partialResultTypes, nil
@@ -4257,8 +4270,7 @@ func putBlocksInAverage(c *Compile, relData engine.RelData, n *plan.Node) engine
 						Data: relData.BuildEmptyRelData(),
 					})
 				}
-				//nodes[0].Data = append(nodes[0].Data, ranges.Slice(i, ranges.Len())...)
-				relData.ForeachDataBlk(i, relData.BlkCnt(), func(blk *objectio.BlockInfoInProgress) error {
+				relData.ForeachDataBlk(i, relData.BlkCnt(), func(blk any) error {
 					nodes[0].Data.AppendDataBlk(blk)
 					return nil
 				})
@@ -4270,18 +4282,11 @@ func putBlocksInAverage(c *Compile, relData engine.RelData, n *plan.Node) engine
 					Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
 					Data: relData.BuildEmptyRelData(),
 				}
-				relData.ForeachDataBlk(i, relData.BlkCnt(), func(blk *objectio.BlockInfoInProgress) error {
+				relData.ForeachDataBlk(i, relData.BlkCnt(), func(blk any) error {
 					node.Data.AppendDataBlk(blk)
 					return nil
 				})
 				nodes = append(nodes, node)
-
-				//nodes = append(nodes, engine.Node{
-				//	Id:   c.cnList[j].Id,
-				//	Addr: c.cnList[j].Addr,
-				//	Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
-				//	Data: ranges.Slice(i, ranges.Len()),
-				//})
 			}
 		} else {
 			if isSameCN(c.cnList[j].Addr, c.addr) {
@@ -4293,7 +4298,7 @@ func putBlocksInAverage(c *Compile, relData engine.RelData, n *plan.Node) engine
 					})
 				}
 				//nodes[0].Data = append(nodes[0].Data, ranges.Slice(i, i+step)...)
-				relData.ForeachDataBlk(i, i+step, func(blk *objectio.BlockInfoInProgress) error {
+				relData.ForeachDataBlk(i, i+step, func(blk any) error {
 					nodes[0].Data.AppendDataBlk(blk)
 					return nil
 				})
@@ -4305,18 +4310,11 @@ func putBlocksInAverage(c *Compile, relData engine.RelData, n *plan.Node) engine
 					Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
 					Data: relData.BuildEmptyRelData(),
 				}
-				relData.ForeachDataBlk(i, i+step, func(blk *objectio.BlockInfoInProgress) error {
+				relData.ForeachDataBlk(i, i+step, func(blk any) error {
 					node.Data.AppendDataBlk(blk)
 					return nil
 				})
 				nodes = append(nodes, node)
-
-				//nodes = append(nodes, engine.Node{
-				//	Id:   c.cnList[j].Id,
-				//	Addr: c.cnList[j].Addr,
-				//	Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
-				//	Data: ranges.Slice(i, i+step),
-				//})
 			}
 		}
 	}
@@ -4331,17 +4329,16 @@ func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelD
 		Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
 	})
 	// add memory table block
-	//nodes[0].Data = append(nodes[0].Data, ranges.GetBytes(0)...)
 	nodes[0].Data = relData.BuildEmptyRelData()
 	nodes[0].Data.AppendDataBlk(&objectio.EmptyBlockInfoInProgress)
 	// only memory table block
-	if nodes[0].Data.BlkCnt() == 1 {
+	if relData.BlkCnt() == 1 {
 		return nodes, nil
 	}
 	// only one cn
 	if len(c.cnList) == 1 {
-		relData.ForeachDataBlk(1, relData.BlkCnt(), func(blk *objectio.BlockInfoInProgress) error {
-			nodes[0].Data.AppendDataBlk(blk)
+		relData.ForeachDataBlk(1, relData.BlkCnt(), func(b any) error {
+			nodes[0].Data.AppendDataBlk(b)
 			return nil
 		})
 		return nodes, nil
@@ -4409,7 +4406,8 @@ func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelD
 }
 
 func shuffleBlocksByHash(c *Compile, relData engine.RelData, nodes engine.Nodes) {
-	relData.ForeachDataBlk(1, relData.BlkCnt(), func(blk *objectio.BlockInfoInProgress) error {
+	relData.ForeachDataBlk(1, relData.BlkCnt(), func(b any) error {
+		blk := b.(*objectio.BlockInfoInProgress)
 		location := blk.MetaLocation()
 		objTimeStamp := location.Name()[:7]
 		index := plan2.SimpleCharHashToRange(objTimeStamp, uint64(len(c.cnList)))
@@ -4426,7 +4424,8 @@ func shuffleBlocksByRange(c *Compile, relData engine.RelData, n *plan.Node, node
 	var shuffleRangeInt64 []int64
 	var init bool
 	var index uint64
-	return relData.ForeachDataBlk(1, relData.BlkCnt(), func(blk *objectio.BlockInfoInProgress) error {
+	return relData.ForeachDataBlk(1, relData.BlkCnt(), func(b any) error {
+		blk := b.(*objectio.BlockInfoInProgress)
 		location := blk.MetaLocation()
 		fs, err := fileservice.Get[fileservice.FileService](c.proc.Base.FileService, defines.SharedFileServiceName)
 		if err != nil {
@@ -4450,7 +4449,7 @@ func shuffleBlocksByRange(c *Compile, relData engine.RelData, n *plan.Node, node
 			switch zm.GetType() {
 			case types.T_int64, types.T_int32, types.T_int16:
 				shuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(n.Stats.HashmapStats.Ranges, len(c.cnList), n.Stats.HashmapStats.Nullcnt, int64(n.Stats.TableCnt))
-			case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit:
+			case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit, types.T_datalink:
 				shuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(n.Stats.HashmapStats.Ranges, len(c.cnList), n.Stats.HashmapStats.Nullcnt, int64(n.Stats.TableCnt))
 			}
 		}
@@ -4461,7 +4460,6 @@ func shuffleBlocksByRange(c *Compile, relData engine.RelData, n *plan.Node, node
 		} else {
 			index = plan2.GetRangeShuffleIndexForZM(n.Stats.HashmapStats.ShuffleColMin, n.Stats.HashmapStats.ShuffleColMax, zm, uint64(len(c.cnList)))
 		}
-		//nodes[index].Data = append(nodes[index].Data, ranges.GetBytes(i)...)
 		nodes[index].Data.AppendDataBlk(blk)
 		return nil
 	})
