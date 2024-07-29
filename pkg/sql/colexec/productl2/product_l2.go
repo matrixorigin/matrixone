@@ -16,9 +16,10 @@ package productl2
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"math"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
