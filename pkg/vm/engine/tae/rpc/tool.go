@@ -974,7 +974,7 @@ type CheckpointArg struct {
 
 func (c *CheckpointArg) PrepareCommand() *cobra.Command {
 	checkpointCmd := &cobra.Command{
-		Use:   "ckp",
+		Use:   "checkpoint",
 		Short: "checkpoint",
 		Long:  "Display information about a given checkpoint",
 		Run:   RunFactory(c),

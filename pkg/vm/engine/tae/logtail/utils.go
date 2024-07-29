@@ -2807,7 +2807,6 @@ type TableInfoJson struct {
 }
 
 type ObjectInfoJson struct {
-	Index        int    `json:"index"`
 	TableCnt     int    `json:"table_count"`
 	ObjectCnt    uint64 `json:"object_count"`
 	ObjectAddCnt uint64 `json:"object_add_count"`
