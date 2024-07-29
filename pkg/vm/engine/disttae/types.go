@@ -808,45 +808,11 @@ type blockSortHelperInProgress struct {
 	zm  index.ZM
 }
 
-type blockReader struct {
-	withFilterMixin
-
-	// used for prefetch
-	dontPrefetch bool
-	infos        [][]*objectio.BlockInfo
-	steps        []int
-	currentStep  int
-
-	scanType int
-	// block list to scan
-	blks []*objectio.BlockInfo
-	//buffer for block's deletes
-	buffer []int64
-
-	// for ordered scan
-	desc     bool
-	blockZMS []index.ZM
-	OrderBy  []*plan.OrderBySpec
-	sorted   bool // blks need to be sorted by zonemap
-	filterZM objectio.ZoneMap
-}
-
-type blockMergeReader struct {
-	*blockReader
-	table     *txnTable
-	txnOffset int // Transaction writes offset used to specify the starting position for reading data.
-	pkFilter  memPKFilter
-	//for perfetch deletes
-	loaded     bool
-	pkidx      int
-	deletaLocs map[string][]objectio.Location
-}
-
 type SingleReaderInProgress struct {
-	R *readerInProgress
+	R *reader
 }
 
-type readerInProgress struct {
+type reader struct {
 	withFilterMixin
 
 	source engine.DataSource
