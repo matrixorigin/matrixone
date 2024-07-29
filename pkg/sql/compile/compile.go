@@ -2687,26 +2687,6 @@ func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 	}
 }
 
-func containBrokenNode2(op vm.Operator) bool {
-	if vm.IsBrokenNode(op) {
-		return true
-	}
-	numChildren := op.GetOperatorBase().NumChildren()
-	if numChildren == 0 {
-		return false
-	}
-	for i := 0; i < numChildren; i++ {
-		if res := containBrokenNode2(op.GetOperatorBase().GetChildren(i)); res {
-			return true
-		}
-	}
-	return false
-}
-
-func containBrokenNode(s *Scope) bool {
-	return containBrokenNode2(s.RootOp)
-}
-
 func (c *Compile) compileTop(n *plan.Node, topN *plan.Expr, ss []*Scope) []*Scope {
 	// use topN TO make scope.
 	if c.IsSingleScope(ss) {
