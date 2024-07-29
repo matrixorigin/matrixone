@@ -56,9 +56,10 @@ func DefaultTombstoneFactory(meta *catalog.ObjectEntry) data.Tombstone {
 type baseObject struct {
 	common.RefHelper
 	*sync.RWMutex
-	rt   *dbutils.Runtime
-	meta atomic.Pointer[catalog.ObjectEntry]
-	impl data.Object
+	rt         *dbutils.Runtime
+	meta       atomic.Pointer[catalog.ObjectEntry]
+	appendMVCC *updates.AppendMVCCHandle
+	impl       data.Object
 
 	node atomic.Pointer[Node]
 }
@@ -69,11 +70,13 @@ func newBaseObject(
 	rt *dbutils.Runtime,
 ) *baseObject {
 	blk := &baseObject{
-		impl:    impl,
-		rt:      rt,
-		RWMutex: &sync.RWMutex{},
+		impl:       impl,
+		rt:         rt,
+		appendMVCC: updates.NewAppendMVCCHandle(meta),
 	}
 	blk.meta.Store(meta)
+	blk.appendMVCC.SetAppendListener(blk.OnApplyAppend)
+	blk.RWMutex = blk.appendMVCC.RWMutex
 	return blk
 }
 
@@ -148,6 +151,26 @@ func (blk *baseObject) Rows() (int, error) {
 		return int(rows), err
 	}
 }
+func (blk *baseObject) Foreach(
+	ctx context.Context,
+	readSchema any,
+	blkID uint16,
+	colIdx int,
+	op func(v any, isNull bool, row int) error,
+	sels []uint32,
+	mp *mpool.MPool,
+) error {
+	node := blk.PinNode()
+	defer node.Unref()
+	schema := readSchema.(*catalog.Schema)
+	if !node.IsPersisted() {
+		blk.RLock()
+		defer blk.RUnlock()
+		return node.MustMNode().Foreach(schema, blkID, colIdx, op, sels, mp)
+	} else {
+		return node.MustPNode().Foreach(ctx, schema, blkID, colIdx, op, sels, mp)
+	}
+}
 
 func (blk *baseObject) TryUpgrade() (err error) {
 	node := blk.node.Load()
@@ -166,7 +189,19 @@ func (blk *baseObject) TryUpgrade() (err error) {
 	return
 }
 
-func (blk *baseObject) GetMeta() any              { return blk.meta.Load() }
+func (blk *baseObject) GetMeta() any { return blk.meta.Load() }
+func (blk *baseObject) CheckFlushTaskRetry(startts types.TS) bool {
+	if !blk.meta.Load().IsAppendable() {
+		panic("not support")
+	}
+	if blk.meta.Load().HasDropCommitted() {
+		panic("not support")
+	}
+	blk.RLock()
+	defer blk.RUnlock()
+	x := blk.appendMVCC.GetLatestAppendPrepareTSLocked()
+	return x.Greater(&startts)
+}
 func (blk *baseObject) GetFs() *objectio.ObjectFS { return blk.rt.Fs }
 func (blk *baseObject) GetID() *common.ID         { return blk.meta.Load().AsCommonID() }
 
@@ -781,7 +816,10 @@ func (blk *baseObject) PPString(level common.PPLevel, depth int, prefix string, 
 	s := fmt.Sprintf("%s | [Rows=%d]", blk.meta.Load().PPString(level, depth, prefix), rows)
 	if level >= common.PPL1 {
 		blk.RLock()
-		var deletestr string
+		var appendstr, deletestr string
+		if blk.appendMVCC != nil {
+			appendstr = blk.appendMVCC.StringLocked()
+		}
 		if mvcc := blk.tryGetMVCC(); mvcc != nil {
 			if blkid >= 0 {
 				deletestr = mvcc.StringBlkLocked(level, 0, "", blkid)
@@ -790,6 +828,9 @@ func (blk *baseObject) PPString(level common.PPLevel, depth int, prefix string, 
 			}
 		}
 		blk.RUnlock()
+		if appendstr != "" {
+			s = fmt.Sprintf("%s\n Appends: %s", s, appendstr)
+		}
 		if deletestr != "" {
 			s = fmt.Sprintf("%s\n Deletes: %s", s, deletestr)
 		}
@@ -1014,15 +1055,13 @@ func (blk *baseObject) OnReplayAppend(_ txnif.AppendNode) (err error) {
 	panic("not supported")
 }
 
-func (blk *baseObject) OnReplayAppendPayload(_ *containers.Batch, _ uint16) (err error) {
+func (blk *baseObject) OnReplayAppendPayload(_ *containers.Batch) (err error) {
 	panic("not supported")
 }
 
 func (blk *baseObject) MakeAppender() (appender data.ObjectAppender, err error) {
 	panic("not supported")
 }
-
-func (blk *baseObject) BlockCnt() int { panic("not support") }
 
 func (blk *baseObject) GetTotalChanges() int {
 	blk.RLock()
@@ -1034,7 +1073,7 @@ func (blk *baseObject) GetTotalChanges() int {
 	return int(objMVCC.GetDeleteCnt())
 }
 
-func (blk *baseObject) IsAppendable(bool) bool { return false }
+func (blk *baseObject) IsAppendable() bool { return false }
 
 func (blk *baseObject) MutationInfo() string {
 	rows, err := blk.Rows()
@@ -1057,11 +1096,6 @@ func (blk *baseObject) MutationInfo() string {
 
 func (blk *baseObject) CollectAppendInRange(
 	start, end types.TS, withAborted bool, mp *mpool.MPool,
-) (*containers.BatchWithVersion, error) {
-	return nil, nil
-}
-func (blk *baseObject) CollectAppendInRangeWithBlockID(
-	blkID uint16, start, end types.TS, withAborted bool, mp *mpool.MPool,
 ) (*containers.BatchWithVersion, error) {
 	return nil, nil
 }
