@@ -395,7 +395,6 @@ func Test_decodeBatch(t *testing.T) {
 		Attrs:      []string{"1"},
 		Vecs:       []*vector.Vector{vector.NewVec(types.T_int64.ToType())},
 		Aggs:       []aggexec.AggFuncExec{agg0},
-		AuxData:    nil,
 	}
 	bat.SetRowCount(1)
 	data, err := types.Encode(bat)

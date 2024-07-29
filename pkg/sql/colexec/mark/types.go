@@ -15,7 +15,6 @@
 package mark
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -66,11 +65,6 @@ type container struct {
 	// End: Join working is over
 	state int
 
-	// in the probe stage, when we invoke func find to find rows in the hashtable,it will modify the
-	// inBuckets Slice, inBuckets[i] means the i-th row is whether in the bucket
-	// 0 means no, 1 means yes
-	inBuckets []uint8
-
 	// store the all batch from the build table
 	bat     *batch.Batch
 	rbat    *batch.Batch
@@ -103,7 +97,7 @@ type container struct {
 	markVals  []bool
 	markNulls *nulls.Nulls
 
-	mp *hashmap.JoinMap
+	mp *process.JoinMap
 
 	nullWithBatch *batch.Batch
 	rewriteCond   *plan.Expr
@@ -153,9 +147,9 @@ type MarkJoin struct {
 	Typs []types.Type
 	Cond *plan.Expr
 
-	OnList   []*plan.Expr
-	HashOnPK bool
-
+	OnList     []*plan.Expr
+	HashOnPK   bool
+	JoinMapTag int32
 	vm.OperatorBase
 }
 

@@ -1,4 +1,4 @@
-// Copyright 2023 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,21 +12,4 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package mo_debug
-
-import (
-	"github.com/spf13/cobra"
-)
-
-func PrepareCommand() *cobra.Command {
-	rootCmd := &cobra.Command{
-		Use:        "debug",
-		Short:      "MO debug tool",
-		Long:       "MO debug tool. Helps to analyze MO problems like Goroutine, Txn, etc.",
-		SuggestFor: []string{"mo-tool"},
-		Version:    "0.1.0",
-	}
-
-	rootCmd.AddCommand(goroutineCMD)
-	return rootCmd
-}
+package colexec
