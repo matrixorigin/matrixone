@@ -55,7 +55,6 @@ type flushTableTailEntry struct {
 	dirtyLen           int
 	rt                 *dbutils.Runtime
 	dirtyEndTs         types.TS
-	aobjOffsets        []uint16
 
 	// use TxnMgr.Now as collectTs to do the first collect deletes,
 	// which is a relief for the second try in the commit queue
@@ -79,7 +78,6 @@ func NewFlushTableTailEntry(
 	nblksMetas []*catalog.ObjectEntry,
 	ablksHandles []handle.Object,
 	nblksHandles []handle.Object,
-	aobjOffsets []uint16,
 	createdBlkHandles handle.Object,
 	createdDeletesFile string,
 	createdMergeFile string,
@@ -95,7 +93,6 @@ func NewFlushTableTailEntry(
 		tableEntry:         tableEntry,
 		ablksMetas:         ablksMetas,
 		delSrcMetas:        nblksMetas,
-		aobjOffsets:        aobjOffsets,
 		ablksHandles:       ablksHandles,
 		delSrcHandles:      nblksHandles,
 		createdBlkHandles:  createdBlkHandles,
@@ -124,16 +121,6 @@ func NewFlushTableTailEntry(
 
 	return entry, nil
 }
-func (entry *flushTableTailEntry) getObjectOffset(blkOffset int) (int, uint16) {
-	prevOffset := 0
-	for i, offset := range entry.aobjOffsets {
-		if blkOffset < int(offset) {
-			return i - 1, uint16(blkOffset - prevOffset)
-		}
-		prevOffset = int(offset)
-	}
-	return len(entry.aobjOffsets) - 1, uint16(blkOffset - prevOffset)
-}
 
 // add transfer pages for dropped aobjects
 func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) {
@@ -148,9 +135,7 @@ func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) {
 		if len(m) == 0 {
 			continue
 		}
-		objOffset, blkOffset := entry.getObjectOffset(i)
-		id := entry.ablksHandles[objOffset].Fingerprint()
-		id.SetBlockOffset(blkOffset)
+		id := entry.ablksHandles[i].Fingerprint()
 		entry.pageIds = append(entry.pageIds, id)
 		page := model.NewTransferHashPage(id, bts, isTransient, entry.rt.LocalFs.Service, model.GetTTL(), model.GetDiskTTL())
 		mapping := make(map[uint32][]byte, len(m))
@@ -195,23 +180,14 @@ func (entry *flushTableTailEntry) collectDelsAndTransfer(from, to types.TS) (tra
 	if entry.createdBlkHandles == nil {
 		return
 	}
-	blkOffset := 0
-	for _, blk := range entry.ablksMetas {
-		blkCnt := blk.BlockCnt()
-		existed := false
-		for j := 0; j < blkCnt; j++ {
-			mapping := entry.transMappings.Mappings[blkOffset+j].M
-			if len(mapping) != 0 {
-				existed = true
-				break
-			}
-		}
-		if !existed {
-			blkOffset += blkCnt
-			continue
-		}
+	for i, blk := range entry.ablksMetas {
 		// For ablock, there is only one block in it.
 		// Checking the block mapping once is enough
+		mapping := entry.transMappings.Mappings[i].M
+		if len(mapping) == 0 {
+			// empty frozen aobjects, it can not has any more deletes
+			continue
+		}
 		dataBlock := blk.GetObjectData()
 		var bat *containers.Batch
 		bat, _, err = dataBlock.CollectDeleteInRange(
@@ -225,7 +201,6 @@ func (entry *flushTableTailEntry) collectDelsAndTransfer(from, to types.TS) (tra
 			return
 		}
 		if bat == nil || bat.Length() == 0 {
-			blkOffset += blkCnt
 			continue
 		}
 		rowid := vector.MustFixedCol[types.Rowid](bat.GetVectorByName(catalog.PhyAddrColumnName).GetDownstreamVector())
@@ -235,10 +210,9 @@ func (entry *flushTableTailEntry) collectDelsAndTransfer(from, to types.TS) (tra
 		transCnt += count
 		for i := 0; i < count; i++ {
 			row := rowid[i].GetRowOffset()
-			mapping := entry.transMappings.Mappings[blkOffset+int(rowid[i].GetBlockOffset())].M
 			destpos, ok := mapping[int32(row)]
 			if !ok {
-				panic(fmt.Sprintf("%s-%d find no transfer mapping for row %d, commit ts %v", blk.ID().String(), rowid[i].GetBlockOffset(), row, ts[i].ToString()))
+				panic(fmt.Sprintf("%s find no transfer mapping for row %d", blk.ID().String(), row))
 			}
 			blkID := objectio.NewBlockidWithObjectID(entry.createdBlkHandles.GetID(), uint16(destpos.BlkIdx))
 			entry.delTbls[destpos.BlkIdx] = blkID
@@ -252,7 +226,6 @@ func (entry *flushTableTailEntry) collectDelsAndTransfer(from, to types.TS) (tra
 		}
 		bat.Close()
 		entry.nextRoundDirties[blk] = struct{}{}
-		blkOffset += blkCnt
 	}
 	return
 }

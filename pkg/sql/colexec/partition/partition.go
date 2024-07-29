@@ -71,10 +71,11 @@ func (partition *Partition) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	ctr := partition.ctr
 	anal := proc.GetAnalyze(partition.GetIdx(), partition.GetParallelIdx(), partition.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
+
+	ctr := partition.ctr
 	result := vm.NewCallResult()
 	var err error
 	for {
@@ -103,8 +104,10 @@ func (partition *Partition) Call(proc *process.Process) (vm.CallResult, error) {
 			ok, err := ctr.pickAndSend(proc, &result)
 			if ok {
 				result.Status = vm.ExecStop
+				anal.Output(result.Batch, partition.IsLast)
 				return result, err
 			}
+			anal.Output(result.Batch, partition.IsLast)
 			return result, err
 
 		}

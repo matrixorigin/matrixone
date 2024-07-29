@@ -63,7 +63,6 @@ func (node *persistedNode) BatchDedup(
 	keys containers.Vector,
 	keysZM index.ZM,
 	rowmask *roaring.Bitmap,
-	_ uint16,
 	bf objectio.BloomFilter,
 ) (err error) {
 	panic("should not be called")
@@ -117,7 +116,7 @@ func (node *persistedNode) Foreach(
 }
 
 func (node *persistedNode) GetDataWindow(
-	blkID uint16, readSchema *catalog.Schema, colIdxes []int, from, to uint32, mp *mpool.MPool,
+	readSchema *catalog.Schema, colIdxes []int, from, to uint32, mp *mpool.MPool,
 ) (bat *containers.Batch, err error) {
 	panic("to be implemented")
 }
@@ -131,16 +130,15 @@ func (node *persistedNode) PrepareAppend(rows uint32) (n uint32, err error) {
 func (node *persistedNode) ApplyAppend(
 	_ *containers.Batch,
 	_ txnif.AsyncTxn,
-	_ uint16,
 ) (from int, err error) {
 	panic(moerr.NewInternalErrorNoCtx("not supported"))
 }
 
-func (node *persistedNode) GetValueByRow(_ uint16, _ *catalog.Schema, _, _ int) (v any, isNull bool) {
+func (node *persistedNode) GetValueByRow(_ *catalog.Schema, _, _ int) (v any, isNull bool) {
 	panic(moerr.NewInternalErrorNoCtx("todo"))
 }
 
-func (node *persistedNode) GetRowsByKey(blkid uint16, key any) ([]uint32, error) {
+func (node *persistedNode) GetRowsByKey(key any) ([]uint32, error) {
 	panic(moerr.NewInternalErrorNoCtx("todo"))
 }
 
@@ -227,10 +225,4 @@ func (node *persistedNode) CollectAppendInRange(
 ) (bat *containers.BatchWithVersion, err error) {
 	// logtail should have sent metaloc
 	return nil, nil
-}
-
-func (node *persistedNode) CollectAppendInRangeWithBlockID(
-	blkOffset uint16, start, end types.TS, withAborted bool, mp *mpool.MPool,
-) (bat *containers.BatchWithVersion, err error) {
-	panic("not support")
 }

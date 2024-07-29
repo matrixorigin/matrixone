@@ -16,7 +16,6 @@ package tables
 
 import (
 	"context"
-	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -41,29 +40,22 @@ func TestGetActiveRow(t *testing.T) {
 	db, _ := c.CreateDBEntry("db", "", "", nil)
 	table, _ := db.CreateTableEntry(schema, nil, nil)
 	obj, _ := table.CreateObject(nil, catalog.ES_Appendable, nil, nil)
-	mvcc := updates.NewAppendMVCCHandle(obj, &sync.RWMutex{}, 0)
+	mvcc := updates.NewAppendMVCCHandle(obj)
 	// blk := &dataBlock{
 	// 	mvcc: mvcc,
 	// }
 	b := &baseObject{
-		RWMutex: mvcc.RWMutex,
-	}
-	aobj := &aobject{
-		baseObject: b,
+		RWMutex:    mvcc.RWMutex,
+		appendMVCC: mvcc,
 	}
 	b.meta.Store(obj)
 	mnode := &memoryNode{
-		object:     aobj,
-		appendMVCC: mvcc,
-	}
-	objectMemoryNode := &objectMemoryNode{
-		blkMemoryNodes: []*memoryNode{mnode},
+		object: b,
 	}
 	blk := &aobject{baseObject: b}
-	objectMemoryNode.obj = blk
 
-	objectMemoryNode.Ref()
-	n := NewNode(objectMemoryNode)
+	mnode.Ref()
+	n := NewNode(mnode)
 	blk.node.Store(n)
 
 	// appendnode1 [0,1)
@@ -85,7 +77,7 @@ func TestGetActiveRow(t *testing.T) {
 	idx := indexwrapper.NewMutIndex(types.T_int8.ToType())
 	err := idx.BatchUpsert(vec.GetDownstreamVector(), 0)
 	assert.NoError(t, err)
-	blk.node.Load().MustMNode().getLastNode().pkIndex = idx
+	blk.node.Load().MustMNode().pkIndex = idx
 
 	node := blk.node.Load().MustMNode()
 	// row, err := blk.GetActiveRow(int8(1), ts2)
