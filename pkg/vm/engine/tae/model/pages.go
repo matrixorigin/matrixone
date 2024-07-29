@@ -124,7 +124,6 @@ func (page *TransferHashPage) TTL() uint8 {
 
 func (page *TransferHashPage) Close() {
 	logutil.Debugf("Closing %s", page.String())
-	page.Clear()
 	page.ClearPersistTable()
 	page.hashmap.Store(nil)
 }
@@ -259,7 +258,7 @@ func (page *TransferHashPage) loadTable() *api.HashPageMap {
 		return nil
 	}
 	page.hashmap.Store(m)
-	logutil.Infof("[TransferPage] load transfer page %v, since born %v", page.String(), time.Since(page.BornTS()))
+	logutil.Infof("[TransferPage] load transfer page %v", page.String())
 	v2.TaskMergeTransferPageLengthGauge.Add(float64(page.Length()))
 	return m
 }
