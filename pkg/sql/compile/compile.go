@@ -2341,9 +2341,9 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 
 	shuffleJoins := c.newShuffleJoinScopeList(lefts, rights, node)
 
-	for i := range children {
+	for i := range shuffleJoins {
 		mergeOp := merge.NewArgument()
-		children[i].setRootOperator(mergeOp)
+		shuffleJoins[i].setRootOperator(mergeOp)
 	}
 
 	switch node.JoinType {
