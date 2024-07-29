@@ -25,6 +25,8 @@ import (
 	"unsafe"
 
 	"github.com/docker/go-units"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -56,7 +58,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 const (
@@ -1183,9 +1184,12 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			cols = append(cols, rowIdCol)
 		}
 
+		tbl.Lock()
+		defer tbl.Unlock()
 		tbl.tableDef = &plan.TableDef{
 			TblId:         tbl.tableId,
 			Name:          tbl.tableName,
+			DbName:        tbl.db.databaseName,
 			Cols:          cols,
 			Name2ColIndex: name2index,
 			Defs:          defs,
@@ -1201,7 +1205,6 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			Version:       tbl.version,
 		}
 	}
-	tbl.tableDef.DbName = tbl.db.databaseName
 	return tbl.tableDef
 }
 
