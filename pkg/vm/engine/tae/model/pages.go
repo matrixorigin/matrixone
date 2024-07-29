@@ -17,13 +17,13 @@ package model
 import (
 	"bytes"
 	"context"
+	"encoding/gob"
 	"fmt"
 	"path"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -75,7 +75,8 @@ type TransferHashPage struct {
 	common.RefHelper
 	bornTS      time.Time
 	id          *common.ID // not include blk offset
-	hashmap     atomic.Pointer[api.HashPageMap]
+	objects     []*objectio.ObjectId
+	hashmap     atomic.Pointer[api.TransferMap]
 	path        Path
 	isTransient bool
 	fs          fileservice.FileService
@@ -83,7 +84,7 @@ type TransferHashPage struct {
 	diskTTL     time.Duration
 }
 
-func NewTransferHashPage(id *common.ID, ts time.Time, isTransient bool, fs fileservice.FileService, ttl, diskTTL time.Duration) *TransferHashPage {
+func NewTransferHashPage(id *common.ID, ts time.Time, isTransient bool, fs fileservice.FileService, ttl, diskTTL time.Duration, createdObjIDs []*objectio.ObjectId) *TransferHashPage {
 
 	page := &TransferHashPage{
 		bornTS:      ts,
@@ -92,10 +93,9 @@ func NewTransferHashPage(id *common.ID, ts time.Time, isTransient bool, fs files
 		fs:          fs,
 		ttl:         ttl,
 		diskTTL:     diskTTL,
+		objects:     createdObjIDs,
 	}
 
-	m := api.HashPageMap{M: make(map[uint32][]byte)}
-	page.hashmap.Store(&m)
 	page.OnZeroCB = page.Close
 
 	return page
@@ -133,7 +133,7 @@ func (page *TransferHashPage) Length() int {
 	if m == nil {
 		return 0
 	}
-	return len(m.M)
+	return len(*m)
 }
 
 func (page *TransferHashPage) String() string {
@@ -159,13 +159,12 @@ func (page *TransferHashPage) Clear() {
 	}
 
 	page.hashmap.Store(nil)
-	v2.TaskMergeTransferPageLengthGauge.Sub(float64(len(m.M)))
-	m.M = make(map[uint32][]byte)
+	v2.TaskMergeTransferPageLengthGauge.Sub(float64(len(*m)))
+	clear(*m)
 }
 
-func (page *TransferHashPage) Train(m map[uint32][]byte) {
-	hashmap := api.HashPageMap{M: m}
-	page.hashmap.Store(&hashmap)
+func (page *TransferHashPage) Train(m api.TransferMap) {
+	page.hashmap.Store(&m)
 	v2.TransferPageRowHistogram.Observe(float64(len(m)))
 }
 
@@ -181,14 +180,15 @@ func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) 
 	v2.TransferPageTotalHitHistogram.Observe(1)
 
 	memStart := time.Now()
-	var data []byte
+	var data api.TransferDestPos
 	if m == nil {
 		ok = false
 		return
 	}
-	data, ok = m.M[from]
+	data, ok = (*m)[from]
 	if ok {
-		dest = types.Rowid(data)
+		objID := page.objects[data.ObjIdx]
+		dest = objectio.NewRowIDWithObjectIDBlkNumAndRowID(*objID, data.BlkIdx, data.RowIdx)
 	}
 	memDuration := time.Since(memStart)
 	v2.TransferMemLatencyHistogram.Observe(memDuration.Seconds())
@@ -200,13 +200,24 @@ func (page *TransferHashPage) Marshal() []byte {
 	if m == nil {
 		panic("empty hashmap")
 	}
-	data, _ := proto.Marshal(m)
-	return data
+	b := new(bytes.Buffer)
+	e := gob.NewEncoder(b)
+
+	// Encoding the map
+	err := e.Encode(m)
+	if err != nil {
+		panic(err)
+	}
+	return b.Bytes()
 }
 
-func (page *TransferHashPage) Unmarshal(data []byte) (*api.HashPageMap, error) {
-	m := api.HashPageMap{}
-	err := proto.Unmarshal(data, &m)
+func (page *TransferHashPage) Unmarshal(data []byte) (*api.TransferMap, error) {
+	m := api.TransferMap{}
+	b := bytes.NewBuffer(data)
+	d := gob.NewDecoder(b)
+
+	// Decoding the serialized data
+	err := d.Decode(&m)
 	if err != nil {
 		return nil, err
 	}
@@ -217,7 +228,7 @@ func (page *TransferHashPage) SetPath(path Path) {
 	page.path = path
 }
 
-func (page *TransferHashPage) loadTable() *api.HashPageMap {
+func (page *TransferHashPage) loadTable() *api.TransferMap {
 	if page.path.Name == "" {
 		return nil
 	}

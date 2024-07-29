@@ -201,7 +201,7 @@ func (t *cnMergeTask) GetCommitEntry() *api.MergeCommitEntry {
 func (t *cnMergeTask) InitTransferMaps(blkCnt int) {
 	t.transferMaps = make(api.TransferMaps, blkCnt)
 	for i := range t.transferMaps {
-		t.transferMaps[i] = make(api.TransferMap)
+		t.transferMaps[i] = make(api.TransferMap, t.GetBlockMaxRows())
 	}
 }
 

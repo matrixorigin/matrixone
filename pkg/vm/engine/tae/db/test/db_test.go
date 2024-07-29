@@ -9247,17 +9247,20 @@ func TestPersistTransferTable(t *testing.T) {
 	sid := objectio.NewSegmentid()
 	id1 := common.ID{BlockID: *objectio.NewBlockid(sid, 1, 0)}
 	id2 := common.ID{BlockID: *objectio.NewBlockid(sid, 2, 0)}
+	createdObjs := []*objectio.ObjectId{objectio.NewObjectidWithSegmentIDAndNum(sid, 2)}
 
 	now := time.Now()
-	page := model.NewTransferHashPage(&id1, now, false, tae.Runtime.LocalFs.Service, time.Second, time.Minute)
+	page := model.NewTransferHashPage(&id1, now, false, tae.Runtime.LocalFs.Service, time.Second, time.Minute, createdObjs)
 	ids := make([]types.Rowid, 10)
-	m := make(map[uint32][]byte, 10)
+	transferMap := make(api.TransferMap)
 	for i := 0; i < 10; i++ {
+		transferMap[uint32(i)] = api.TransferDestPos{
+			RowIdx: uint32(i),
+		}
 		rowID := *objectio.NewRowid(&id2.BlockID, uint32(i))
-		m[uint32(i)] = rowID[:]
 		ids[i] = rowID
 	}
-	page.Train(m)
+	page.Train(transferMap)
 	tae.Runtime.TransferTable.AddPage(page)
 
 	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
@@ -9312,17 +9315,21 @@ func TestClearPersistTransferTable(t *testing.T) {
 
 			id1 := common.ID{BlockID: *objectio.NewBlockid(sid, 1, 0)}
 			id2 := common.ID{BlockID: *objectio.NewBlockid(sid, 2, 0)}
+			createdObjs := []*objectio.ObjectId{objectio.NewObjectidWithSegmentIDAndNum(sid, 2)}
 
 			now := time.Now()
-			page := model.NewTransferHashPage(&id1, now, false, tae.Runtime.LocalFs.Service, time.Second, 2*time.Second)
+			page := model.NewTransferHashPage(&id1, now, false, tae.Runtime.LocalFs.Service, time.Second, 2*time.Second, createdObjs)
 			ids := make([]types.Rowid, 10)
-			m := make(map[uint32][]byte, 10)
+			transferMap := make(api.TransferMap)
 			for i := 0; i < 10; i++ {
+				transferMap[uint32(i)] = api.TransferDestPos{
+					BlkIdx: 0,
+					RowIdx: uint32(i),
+				}
 				rowID := *objectio.NewRowid(&id2.BlockID, uint32(i))
-				m[uint32(i)] = rowID[:]
 				ids[i] = rowID
 			}
-			page.Train(m)
+			page.Train(transferMap)
 			tae.Runtime.TransferTable.AddPage(page)
 
 			name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
