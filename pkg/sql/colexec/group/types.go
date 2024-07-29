@@ -85,6 +85,7 @@ type container struct {
 	// keyWidth is the width of group by columns, it determines which hash map to use.
 	keyWidth          int
 	groupVecsNullable bool
+	rollupColumn      int
 
 	rollupBat *batch.Batch
 	bat       *batch.Batch

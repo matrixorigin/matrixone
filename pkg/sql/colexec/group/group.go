@@ -137,29 +137,60 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 	defer anal.Stop()
 
 	result, err := group.ctr.processGroupByAndAgg(group, proc, anal, group.GetIsFirst(), group.GetIsLast())
-	return result, err
-	// if err != nil {
-	// 	return result, err
-	// }
-	// return group.ctr.processRollup(result, group, proc)
+	if err != nil {
+		return result, err
+	}
+	return group.ctr.processRollup(result, group, proc)
 
 }
 
 func (ctr *container) processRollup(result vm.CallResult, ap *Group, proc *process.Process) (vm.CallResult, error) {
-	if ap.NeedRollup == false {
+	if result.Batch == nil || ap.NeedRollup == false {
 		return result, nil
 	}
-	ctr.initResultAndHashTable(&ctr.rollupBat, proc, ap)
-	if ctr.keyWidth < 8 {
-		ctr.processH8(result.Batch, proc, true)
-	} else {
-		ctr.processHStr(result.Batch, proc, true)
+	for i := range ctr.aggVecs {
+		for j := range ctr.aggVecs[i].Executor {
+			ctr.aggVecs[i].Vec[j] = ctr.bat.Vecs[len(ctr.groupVecs.Vec)+i]
+			ctr.aggVecs[i].Typ[j] = *ctr.bat.Vecs[len(ctr.groupVecs.Vec)+i].GetType()
+		}
 	}
-	// aggVectors, err := ctr.getAggResult()
-	// if err != nil {
-	// 	return result, err
-	// }
-	// ctr.bat.Vecs = append(ctr.bat.Vecs, aggVectors...)
+	for i := range ctr.groupVecs.Vec {
+		ctr.groupVecs.Vec[i] = ctr.bat.Vecs[i]
+	}
+	for k := len(ctr.groupVecs.Vec) - 1; k >= 0; k-- {
+		err := ctr.initResultAndHashTable(&ctr.rollupBat, proc, ap)
+		if err != nil {
+			return result, nil
+		}
+		ctr.rollupColumn = k
+		if ctr.keyWidth < 8 {
+			ctr.processH8(result.Batch, proc, true)
+		} else {
+			ctr.processHStr(result.Batch, proc, true)
+		}
+		aggVectors, err := ctr.getAggResult(ctr.rollupBat)
+		if err != nil {
+			return result, err
+		}
+		ctr.rollupBat.Vecs = append(ctr.rollupBat.Vecs, aggVectors...)
+		if ctr.rollupBat.RowCount() > 0 {
+			for i, vec := range result.Batch.Vecs {
+				sels := make([]int32, ctr.rollupBat.RowCount())
+				for j := 0; j < ctr.rollupBat.RowCount(); j++ {
+					sels[j] = int32(j)
+				}
+				if err := vec.Union(ctr.rollupBat.Vecs[i], sels, proc.Mp()); err != nil {
+					result.Batch.Clean(proc.Mp())
+					ctr.rollupBat.Clean(proc.Mp())
+					return result, err
+				}
+			}
+			ctr.rollupBat.Clean(proc.Mp())
+			ctr.rollupBat = nil
+		}
+	}
+	ctr.bat = nil
+	ctr.state = vm.End
 	return result, nil
 }
 
@@ -230,7 +261,7 @@ func (ctr *container) processGroupByAndAgg(
 			result := vm.NewCallResult()
 			// there is no need to do agg merge. and we can get agg result here.
 			if ap.NeedEval {
-				aggVectors, err := ctr.getAggResult()
+				aggVectors, err := ctr.getAggResult(ctr.bat)
 				if err != nil {
 					return result, err
 				}
@@ -243,8 +274,10 @@ func (ctr *container) processGroupByAndAgg(
 			}
 			anal.Output(ctr.bat, isLast)
 			result.Batch = ctr.bat
-			ctr.bat = nil
-			ctr.state = vm.End
+			if !ap.NeedRollup {
+				ctr.bat = nil
+				ctr.state = vm.End
+			}
 			return result, nil
 
 		// send an End-Message to tell the next operator all were done.
@@ -263,7 +296,6 @@ func (ctr *container) generateAggStructures(bat *batch.Batch, proc *process.Proc
 		bat.Aggs[i] = aggexec.MakeAgg(
 			proc,
 			ag.GetAggID(), ag.IsDistinct(), ctr.aggVecs[i].Typ...)
-
 		if config := ag.GetExtraConfig(); config != nil {
 			if err := bat.Aggs[i].SetExtraInformation(config, 0); err != nil {
 				return err
@@ -314,14 +346,12 @@ func (ctr *container) processH8(bat *batch.Batch, proc *process.Process, rollup 
 		if !rollup {
 			vals, _, err = itr.Insert(i, n, vecs)
 		} else {
-			for j := len(vecs) - 1; j >= 0; j-- {
-				rollVec := vecs[:j]
-				for k, vec := range vecs[j:] {
-					nullVec := vector.NewConstNull(ctr.groupVecs.Typ[j+k], vec.Length(), proc.Mp())
-					rollVec = append(rollVec, nullVec)
-				}
-				vals, _, err = itr.Insert(i, n, rollVec)
+			rollVec := vecs[:ctr.rollupColumn]
+			for k, vec := range vecs[ctr.rollupColumn:] {
+				nullVec := vector.NewConstNull(ctr.groupVecs.Typ[ctr.rollupColumn+k], vec.Length(), proc.Mp())
+				rollVec = append(rollVec, nullVec)
 			}
+			vals, _, err = itr.Insert(i, n, rollVec)
 		}
 		if err != nil {
 			return err
@@ -353,14 +383,12 @@ func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process, rollu
 		if !rollup {
 			vals, _, err = itr.Insert(i, n, vecs)
 		} else {
-			for j := len(vecs) - 1; j >= 0; j-- {
-				rollVec := vecs[:j]
-				for k, vec := range vecs[j:] {
-					nullVec := vector.NewConstNull(ctr.groupVecs.Typ[j+k], vec.Length(), proc.Mp())
-					rollVec = append(rollVec, nullVec)
-				}
-				vals, _, err = itr.Insert(i, n, rollVec)
+			rollVec := vecs[:ctr.rollupColumn]
+			for k, vec := range vecs[ctr.rollupColumn:] {
+				nullVec := vector.NewConstNull(ctr.groupVecs.Typ[ctr.rollupColumn+k], vec.Length(), proc.Mp())
+				rollVec = append(rollVec, nullVec)
 			}
+			vals, _, err = itr.Insert(i, n, rollVec)
 		}
 		if err != nil {
 			return err
@@ -446,18 +474,18 @@ func (ctr *container) evaluateAggAndGroupBy(
 	return ctr.initResultAndHashTable(&ctr.bat, proc, config)
 }
 
-func (ctr *container) getAggResult() ([]*vector.Vector, error) {
-	result := make([]*vector.Vector, len(ctr.bat.Aggs))
+func (ctr *container) getAggResult(bat *batch.Batch) ([]*vector.Vector, error) {
+	result := make([]*vector.Vector, len(bat.Aggs))
 
 	var err error
-	for i, ag := range ctr.bat.Aggs {
+	for i, ag := range bat.Aggs {
 		result[i], err = ag.Flush()
 		if err != nil {
 			return nil, err
 		}
 		ag.Free()
 	}
-	ctr.bat.Aggs = nil
+	bat.Aggs = nil
 
 	return result, nil
 }
