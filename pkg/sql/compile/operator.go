@@ -745,12 +745,12 @@ func constructPreInsertSk(n *plan.Node, proc *process.Process) *preinsertseconda
 	return op
 }
 
-func constructMergeblock(eg engine.Engine, insertArg *insert.Insert) *mergeblock.MergeBlock {
+func constructMergeblock(eg engine.Engine, n *plan.Node) *mergeblock.MergeBlock {
 	return mergeblock.NewArgument().
 		WithEngine(eg).
-		WithObjectRef(insertArg.InsertCtx.Ref).
-		WithParitionNames(insertArg.InsertCtx.PartitionTableNames).
-		WithAddAffectedRows(insertArg.InsertCtx.AddAffectedRows)
+		WithObjectRef(n.InsertCtx.Ref).
+		WithParitionNames(n.InsertCtx.PartitionTableNames).
+		WithAddAffectedRows(n.InsertCtx.AddAffectedRows)
 }
 
 func constructLockOp(n *plan.Node, eng engine.Engine) (*lockop.LockOp, error) {
@@ -778,7 +778,7 @@ func constructLockOp(n *plan.Node, eng engine.Engine) (*lockop.LockOp, error) {
 	return arg, nil
 }
 
-func constructInsert(n *plan.Node, eg engine.Engine) (*insert.Insert, error) {
+func constructInsert(n *plan.Node, eg engine.Engine) *insert.Insert {
 	oldCtx := n.InsertCtx
 	var attrs []string
 	for _, col := range oldCtx.TableDef.Cols {
@@ -798,7 +798,7 @@ func constructInsert(n *plan.Node, eg engine.Engine) (*insert.Insert, error) {
 	}
 	arg := insert.NewArgument()
 	arg.InsertCtx = newCtx
-	return arg, nil
+	return arg
 }
 
 func constructProjection(n *plan.Node) *projection.Projection {
