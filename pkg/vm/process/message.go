@@ -100,9 +100,8 @@ func (m *MessageBoard) SetMultiCN(center *MessageCenter, stmtId uuid.UUID) *Mess
 
 func (m *MessageBoard) Reset() *MessageBoard {
 	if m.multiCN {
-		m.MessageCenter.RwMutex.Lock()
-		delete(m.MessageCenter.StmtIDToBoard, m.stmtId)
-		m.MessageCenter.RwMutex.Unlock()
+		// other pipeline could still access thie messageBoard
+		// so reset current message board to a new one
 		return NewMessageBoard()
 	}
 	m.RwMutex.Lock()
