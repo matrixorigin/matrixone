@@ -88,10 +88,18 @@ type ExpressionExecutor interface {
 	IsColumnExpr() bool
 }
 
+func NewExpressionExecutorsFromPlanExpressionsInRuntime(proc *process.Process, planExprs []*plan.Expr) (executors []ExpressionExecutor, err error) {
+	return newExpressionExecutorsFromPlanExpressions(proc, planExprs, true)
+}
+
 func NewExpressionExecutorsFromPlanExpressions(proc *process.Process, planExprs []*plan.Expr) (executors []ExpressionExecutor, err error) {
+	return newExpressionExecutorsFromPlanExpressions(proc, planExprs, false)
+}
+
+func newExpressionExecutorsFromPlanExpressions(proc *process.Process, planExprs []*plan.Expr, inRuntime bool) (executors []ExpressionExecutor, err error) {
 	executors = make([]ExpressionExecutor, len(planExprs))
 	for i := range executors {
-		executors[i], err = NewExpressionExecutor(proc, planExprs[i])
+		executors[i], err = newExpressionExecutor(proc, planExprs[i], inRuntime)
 		if err != nil {
 			for j := 0; j < i; j++ {
 				executors[j].Free()

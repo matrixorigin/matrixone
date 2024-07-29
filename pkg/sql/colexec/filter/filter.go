@@ -48,9 +48,9 @@ func (filter *Filter) Prepare(proc *process.Process) (err error) {
 	}
 
 	if filter.exeExpr == nil {
-		filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{filter.E}))
+		filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressionsInRuntime(proc, colexec.SplitAndExprs([]*plan.Expr{filter.E}))
 	} else {
-		filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{filter.exeExpr}))
+		filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressionsInRuntime(proc, colexec.SplitAndExprs([]*plan.Expr{filter.exeExpr}))
 	}
 	return err
 }
