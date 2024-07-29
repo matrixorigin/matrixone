@@ -3175,20 +3175,16 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 
 // compilePreInsert Compile PreInsert Node and set it as the root operator for each Scope.
 func (c *Compile) compilePreInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*Scope, error) {
-	defer func() {
-		c.anal.isFirst = false
-	}()
 	currentFirstFlag := c.anal.isFirst
-
 	for i := range ss {
 		preInsertArg, err := constructPreInsert(ns, n, c.e, c.proc)
 		if err != nil {
 			return nil, err
 		}
-		preInsertArg.SetIdx(c.anal.curNodeIdx)
-		preInsertArg.SetIsFirst(currentFirstFlag)
+		preInsertArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].setRootOperator(preInsertArg)
 	}
+	c.anal.isFirst = false
 	return ss, nil
 }
 
