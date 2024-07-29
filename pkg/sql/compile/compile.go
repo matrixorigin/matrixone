@@ -2340,95 +2340,71 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 		leftTyps[i] = dupType(&expr.Typ)
 	}
 
-	parent, children := c.newShuffleJoinScopeList(lefts, rights, node)
-
-	lastOperator := make([]vm.Operator, 0, len(children))
-	if parent != nil {
-		for i := range children {
-			rootOp := children[i].RootOp
-			if rootOp.GetOperatorBase().NumChildren() == 0 {
-				children[i].RootOp = nil
-			} else {
-				children[i].RootOp = rootOp.GetOperatorBase().GetChildren(0)
-			}
-			rootOp.GetOperatorBase().SetChildren(nil)
-			lastOperator = append(lastOperator, rootOp)
-		}
-
-		defer func() {
-			// recovery the children's last operator
-			for i := range children {
-				children[i].doSetRootOperator(lastOperator[i])
-			}
-		}()
-	}
+	shuffleJoins := c.newShuffleJoinScopeList(lefts, rights, node)
 
 	switch node.JoinType {
 	case plan.Node_INNER:
-		for i := range children {
+		for i := range shuffleJoins {
 			op := constructJoin(node, rightTyps, c.proc)
-			op.ShuffleIdx = int32(children[i].ShuffleIdx)
+			op.ShuffleIdx = int32(shuffleJoins[i].ShuffleIdx)
 			op.SetIdx(c.anal.curNodeIdx)
-			children[i].setRootOperator(op)
+			shuffleJoins[i].setRootOperator(op)
 		}
 
 	case plan.Node_ANTI:
 		if node.BuildOnLeft {
-			for i := range children {
+			for i := range shuffleJoins {
 				op := constructRightAnti(node, rightTyps, c.proc)
-				op.ShuffleIdx = int32(children[i].ShuffleIdx)
+				op.ShuffleIdx = int32(shuffleJoins[i].ShuffleIdx)
 				op.SetIdx(c.anal.curNodeIdx)
-				children[i].setRootOperator(op)
+				shuffleJoins[i].setRootOperator(op)
 			}
 		} else {
-			for i := range children {
+			for i := range shuffleJoins {
 				op := constructAnti(node, rightTyps, c.proc)
-				op.ShuffleIdx = int32(children[i].ShuffleIdx)
+				op.ShuffleIdx = int32(shuffleJoins[i].ShuffleIdx)
 				op.SetIdx(c.anal.curNodeIdx)
-				children[i].setRootOperator(op)
+				shuffleJoins[i].setRootOperator(op)
 			}
 		}
 
 	case plan.Node_SEMI:
 		if node.BuildOnLeft {
-			for i := range children {
+			for i := range shuffleJoins {
 				op := constructRightSemi(node, rightTyps, c.proc)
-				op.ShuffleIdx = int32(children[i].ShuffleIdx)
+				op.ShuffleIdx = int32(shuffleJoins[i].ShuffleIdx)
 				op.SetIdx(c.anal.curNodeIdx)
-				children[i].setRootOperator(op)
+				shuffleJoins[i].setRootOperator(op)
 			}
 		} else {
-			for i := range children {
+			for i := range shuffleJoins {
 				op := constructSemi(node, rightTyps, c.proc)
-				op.ShuffleIdx = int32(children[i].ShuffleIdx)
+				op.ShuffleIdx = int32(shuffleJoins[i].ShuffleIdx)
 				op.SetIdx(c.anal.curNodeIdx)
-				children[i].setRootOperator(op)
+				shuffleJoins[i].setRootOperator(op)
 			}
 		}
 
 	case plan.Node_LEFT:
-		for i := range children {
+		for i := range shuffleJoins {
 			op := constructLeft(node, rightTyps, c.proc)
-			op.ShuffleIdx = int32(children[i].ShuffleIdx)
+			op.ShuffleIdx = int32(shuffleJoins[i].ShuffleIdx)
 			op.SetIdx(c.anal.curNodeIdx)
-			children[i].setRootOperator(op)
+			shuffleJoins[i].setRootOperator(op)
 		}
 
 	case plan.Node_RIGHT:
-		for i := range children {
+		for i := range shuffleJoins {
 			op := constructRight(node, leftTyps, rightTyps, c.proc)
-			op.ShuffleIdx = int32(children[i].ShuffleIdx)
+			op.ShuffleIdx = int32(shuffleJoins[i].ShuffleIdx)
 			op.SetIdx(c.anal.curNodeIdx)
-			children[i].setRootOperator(op)
+			shuffleJoins[i].setRootOperator(op)
 		}
 	default:
 		panic(moerr.NewNYI(c.proc.Ctx, fmt.Sprintf("shuffle join do not support join type '%v'", node.JoinType)))
 	}
 
-	if parent != nil {
-		return parent
-	}
-	return children
+	return shuffleJoins
 }
 
 func (c *Compile) compileBroadcastJoin(node, left, right *plan.Node, ns []*plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
@@ -3054,9 +3030,6 @@ func (c *Compile) constructShuffleAndDispatch(ss, children []*Scope, n *plan.Nod
 }
 
 func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
-	if len(c.cnList) > 1 {
-		n.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Normal
-	}
 
 	switch n.Stats.HashmapStats.ShuffleMethod {
 	case plan.ShuffleMethod_Reuse:
@@ -3778,19 +3751,18 @@ func (c *Compile) mergeShuffleJoinScopeList(child []*Scope) []*Scope {
 	return mergeScope
 }
 
-func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([]*Scope, []*Scope) {
+func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) []*Scope {
 	single := len(c.cnList) <= 1
 	if single {
 		n.Stats.HashmapStats.ShuffleTypeForMultiCN = plan.ShuffleTypeForMultiCN_Simple
 	}
 
-	var parent []*Scope
-	children := make([]*Scope, 0, len(c.cnList))
+	dop := plan2.GetShuffleDop(ncpu)
+	shuffleJoins := make([]*Scope, 0, len(c.cnList)*dop)
 	lnum := len(left)
 	sum := lnum + len(right)
 	shuffleIdx := 0
 	for _, cn := range c.cnList {
-		dop := plan2.GetShuffleDop(cn.Mcpu)
 		ss := make([]*Scope, dop)
 		for i := range ss {
 			ss[i] = newScope(Remote)
@@ -3805,22 +3777,19 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 				rr.Ch = make(chan *process.RegisterMessage, shuffleChannelBufferSize)
 			}
 		}
-		children = append(children, ss...)
-		if !single {
-			parent = append(parent, c.newMergeRemoteScope(ss, cn))
-		}
+		shuffleJoins = append(shuffleJoins, ss...)
 	}
 
 	currentFirstFlag := c.anal.isFirst
 	for i, scp := range left {
-		shuffleOp := constructShuffleJoinArg(children, n, true)
+		shuffleOp := constructShuffleJoinArg(shuffleJoins, n, true)
 		shuffleOp.SetIdx(c.anal.curNodeIdx)
 		scp.setRootOperator(shuffleOp)
-		scp.setRootOperator(constructDispatch(i, children, scp.NodeInfo.Addr, n, true))
+		scp.setRootOperator(constructDispatch(i, shuffleJoins, scp.NodeInfo.Addr, n, true))
 		scp.IsEnd = true
 
 		appended := false
-		for _, js := range children {
+		for _, js := range shuffleJoins {
 			if isSameCN(js.NodeInfo.Addr, scp.NodeInfo.Addr) {
 				js.PreScopes = append(js.PreScopes, scp)
 				appended = true
@@ -3829,21 +3798,21 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 		}
 		if !appended {
 			c.proc.Errorf(c.proc.Ctx, "no same addr scope to append left scopes")
-			children[0].PreScopes = append(children[0].PreScopes, scp)
+			shuffleJoins[0].PreScopes = append(shuffleJoins[0].PreScopes, scp)
 		}
 	}
 
 	c.anal.isFirst = currentFirstFlag
 	for i, scp := range right {
-		shuffleOp := constructShuffleJoinArg(children, n, false)
+		shuffleOp := constructShuffleJoinArg(shuffleJoins, n, false)
 		shuffleOp.SetIdx(c.anal.curNodeIdx)
 		scp.setRootOperator(shuffleOp)
 
-		scp.setRootOperator(constructDispatch(i+lnum, children, scp.NodeInfo.Addr, n, false))
+		scp.setRootOperator(constructDispatch(i+lnum, shuffleJoins, scp.NodeInfo.Addr, n, false))
 		scp.IsEnd = true
 
 		appended := false
-		for _, js := range children {
+		for _, js := range shuffleJoins {
 			if isSameCN(js.NodeInfo.Addr, scp.NodeInfo.Addr) {
 				js.PreScopes = append(js.PreScopes, scp)
 				appended = true
@@ -3852,10 +3821,10 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 		}
 		if !appended {
 			c.proc.Errorf(c.proc.Ctx, "no same addr scope to append right scopes")
-			children[0].PreScopes = append(children[0].PreScopes, scp)
+			shuffleJoins[0].PreScopes = append(shuffleJoins[0].PreScopes, scp)
 		}
 	}
-	return parent, children
+	return shuffleJoins
 }
 
 func (c *Compile) newBroadcastJoinProbeScope(s *Scope, ss []*Scope) *Scope {
