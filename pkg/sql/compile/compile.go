@@ -3590,21 +3590,13 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 	if len(ss) > 0 {
 		rs.Proc.Base.LoadTag = ss[0].Proc.Base.LoadTag
 	}
-<<<<<<< HEAD
-	mergeOp := merge.NewArgument()
-	mergeOp.SetIdx(c.anal.curNodeIdx)
-	mergeOp.SetIsFirst(c.anal.isFirst)
-	rs.setRootOperator(mergeOp)
-	c.anal.isFirst = false
-=======
 
 	// waring: `Merge` operator` is not used as an input/output analyze,
 	// and `Merge` operator cannot play the role of IsFirst/IsLast
-	merge := merge.NewArgument()
-	merge.SetAnalyzeControl(c.anal.curNodeIdx, false)
-	rs.setRootOperator(merge)
+	mergeOp := merge.NewArgument()
+	mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
+	rs.setRootOperator(mergeOp)
 	//c.anal.isFirst = false
->>>>>>> 6c071e522e8054248d758a965b5d787624e1c01c
 
 	j := 0
 	for i := range ss {
