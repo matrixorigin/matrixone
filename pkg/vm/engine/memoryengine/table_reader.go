@@ -260,7 +260,7 @@ func (rd *MemRelationData) AppendBlockInfo(blk objectio.BlockInfoInProgress) {
 }
 
 func (rd *MemRelationData) GetShardIDList() []uint64 {
-	ids := make([]uint64, 0, rd.Shards.Len())
+	ids := make([]uint64, rd.Shards.Len())
 	idsLen := rd.Shards.Len()
 
 	for idx := range idsLen {
