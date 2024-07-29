@@ -80,13 +80,6 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 	}()
 
 	result := vm.NewCallResult()
-	//select {
-	//case <-proc.Ctx.Done():
-	//	result.Batch = nil
-	//	result.Status = vm.ExecStop
-	//	return result, proc.Ctx.Err()
-	//default:
-	//}
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		e = err
 		return vm.CancelResult, err
@@ -143,7 +136,7 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		tableScan.ctr.buf = bat
 		break
 	}
-
 	result.Batch = tableScan.ctr.buf
+	anal.Input(result.Batch, tableScan.IsFirst)
 	return result, nil
 }
