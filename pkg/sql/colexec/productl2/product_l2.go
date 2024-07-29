@@ -40,7 +40,6 @@ func (productl2 *Productl2) OpType() vm.OpType {
 func (productl2 *Productl2) Prepare(proc *process.Process) error {
 	ap := productl2
 	ap.ctr = new(container)
-	ap.ctr.InitReceiver(proc, true)
 	return nil
 }
 
@@ -55,6 +54,7 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 	ap := productl2
 	ctr := ap.ctr
 	result := vm.NewCallResult()
+	var err error
 	for {
 		switch ctr.state {
 		case Build:
@@ -70,12 +70,12 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 				return result, nil
 			}
-			msg := ctr.ReceiveFromAllRegs(anal)
-			if msg.Err != nil {
-				return result, msg.Err
+			result, err = productl2.Children[0].Call(proc)
+			if err != nil {
+				return result, err
 			}
 
-			ctr.inBat = msg.Batch
+			ctr.inBat = result.Batch
 			if ctr.inBat == nil {
 				ctr.state = End
 				continue

@@ -42,9 +42,8 @@ func (rightJoin *RightJoin) OpType() vm.OpType {
 
 func (rightJoin *RightJoin) Prepare(proc *process.Process) (err error) {
 	rightJoin.ctr = new(container)
-	rightJoin.ctr.InitReceiver(proc, true)
 	rightJoin.ctr.vecs = make([]*vector.Vector, len(rightJoin.Conditions[0]))
-
+	rightJoin.ctr.InitReceiver(proc, false)
 	rightJoin.ctr.evecs = make([]evalVector, len(rightJoin.Conditions[0]))
 	for i := range rightJoin.Conditions[0] {
 		rightJoin.ctr.evecs[i].executor, err = colexec.NewExpressionExecutor(proc, rightJoin.Conditions[0][i])
@@ -69,6 +68,7 @@ func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	defer analyze.Stop()
 	ctr := rightJoin.ctr
 	result := vm.NewCallResult()
+	var err error
 	for {
 		switch ctr.state {
 		case Build:
@@ -83,11 +83,11 @@ func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Probe:
 			if rightJoin.ctr.buf == nil {
-				msg := ctr.ReceiveFromAllRegs(analyze)
-				if msg.Err != nil {
-					return result, msg.Err
+				result, err = rightJoin.Children[0].Call(proc)
+				if err != nil {
+					return result, err
 				}
-				bat := msg.Batch
+				bat := result.Batch
 
 				if bat == nil {
 					ctr.state = SendLast

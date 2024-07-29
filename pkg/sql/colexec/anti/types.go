@@ -34,8 +34,6 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
-
 	state int
 
 	hasNull       bool
@@ -117,7 +115,6 @@ func (antiJoin *AntiJoin) Free(proc *process.Process, pipelineFailed bool, err e
 		ctr.cleanEvalVectors()
 		ctr.cleanHashMap()
 		ctr.cleanExprExecutor()
-		ctr.FreeAllReg()
 
 		anal := proc.GetAnalyze(antiJoin.GetIdx(), antiJoin.GetParallelIdx(), antiJoin.GetParallelMajor())
 		anal.Alloc(ctr.maxAllocSize)
