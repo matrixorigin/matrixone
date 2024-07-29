@@ -37,7 +37,6 @@ func (indexJoin *IndexJoin) OpType() vm.OpType {
 func (indexJoin *IndexJoin) Prepare(proc *process.Process) (err error) {
 	ap := indexJoin
 	ap.ctr = new(container)
-	ap.ctr.InitReceiver(proc, true)
 	return err
 }
 
@@ -52,15 +51,16 @@ func (indexJoin *IndexJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	ap := indexJoin
 	ctr := ap.ctr
 	result := vm.NewCallResult()
+	var err error
 	for {
 		switch ctr.state {
 
 		case Probe:
-			msg := ctr.ReceiveFromAllRegs(anal)
-			if msg.Err != nil {
-				return result, msg.Err
+			result, err = indexJoin.Children[0].Call(proc)
+			if err != nil {
+				return result, err
 			}
-			bat := msg.Batch
+			bat := result.Batch
 			if bat == nil {
 				ctr.state = End
 				continue
