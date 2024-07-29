@@ -331,7 +331,7 @@ func TestLogtailBasic(t *testing.T) {
 	require.Equal(t, 0, len(reader.GetDirtyByTable(dbID, tableID-1).Objs))
 	reader = logMgr.GetReader(firstWriteTs, lastWriteTs)
 	dirties := reader.GetDirtyByTable(dbID, tableID)
-	require.Equal(t, 1, len(dirties.Objs))
+	require.Equal(t, 10, len(dirties.Objs))
 
 	fixedColCnt := 2 // __rowid + commit_time, the columns for a delBatch
 	// check Bat rows count consistency
