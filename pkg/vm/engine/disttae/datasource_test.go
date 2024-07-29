@@ -49,7 +49,7 @@ func TestRelationDataV1_MarshalAndUnMarshal(t *testing.T) {
 			PartitionNum: int16(i),
 		}
 		//blkInfos = append(blkInfos, &blkInfo)
-		relData.AppendDataBlk(&blkInfo)
+		relData.AppendBlockInfo(blkInfo)
 	}
 
 	tombstoner := &tombstoneDataV1{
@@ -107,8 +107,8 @@ func TestRelationDataV1_MarshalAndUnMarshal(t *testing.T) {
 		return true
 	}
 
-	isEqual := func(rd1 *relationDataV1, rd2 *relationDataV1) bool {
-		if rd1.typ != rd2.typ || rd1.BlkCnt() != rd2.BlkCnt() ||
+	isEqual := func(rd1 *relationDataBlkInfoListV1, rd2 *relationDataBlkInfoListV1) bool {
+		if rd1.typ != rd2.typ || rd1.DataCnt() != rd2.DataCnt() ||
 			rd1.isEmpty != rd2.isEmpty || rd1.tombstoneTyp != rd2.tombstoneTyp {
 			return false
 		}
@@ -126,6 +126,6 @@ func TestRelationDataV1_MarshalAndUnMarshal(t *testing.T) {
 			rd2.tombstones.(*tombstoneDataV1))
 
 	}
-	require.True(t, isEqual(relData, newRelData.(*relationDataV1)))
+	require.True(t, isEqual(relData, newRelData.(*relationDataBlkInfoListV1)))
 
 }

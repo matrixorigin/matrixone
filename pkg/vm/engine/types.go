@@ -623,35 +623,39 @@ type RelDataType uint8
 
 const (
 	EmptyRelData RelDataType = iota
-	RelDataV1
-	RelDataV2
+	RelDataShardIDList
+	RelDataBlkInfoListV1
+	RelDataObjInfoListV1
 )
 
 type RelData interface {
+	// general interface
+
+	GetType() RelDataType
 	MarshalToBytes() []byte
-
 	UnMarshal(buf []byte) error
-
 	AttachTombstones(tombstones Tombstoner) error
-
 	GetTombstones() Tombstoner
-
-	ForeachDataBlk(begin, end int, f func(blk any) error) error
-
-	GetDataBlk(i int) any
-
-	SetDataBlk(i int, blk any)
-
-	DataBlkSlice(begin, end int) RelData
+	DataSlice(begin, end int) RelData
 
 	// GroupByPartitionNum TODO::remove it after refactor of partition table.
 	GroupByPartitionNum() map[int16]RelData
-
-	AppendDataBlk(blk any)
-
 	BuildEmptyRelData() RelData
+	DataCnt() int
 
-	BlkCnt() int
+	// specified interface
+
+	// for memory engine shard id list
+	GetShardIDList() []uint64
+	GetShardID(i int) uint64
+	SetShardID(i int, id uint64)
+	AppendShardID(id uint64)
+
+	// for block info list
+	GetBlockInfoList() []*objectio.BlockInfoInProgress
+	GetBlockInfo(i int) *objectio.BlockInfoInProgress
+	SetBlockInfo(i int, blk *objectio.BlockInfoInProgress)
+	AppendBlockInfo(blk objectio.BlockInfoInProgress)
 }
 
 type DataState uint8
@@ -898,6 +902,42 @@ func BuildEmptyRelData() RelData {
 	return &EmptyRelationData{EmptyRelData}
 }
 
+func (rd *EmptyRelationData) GetShardIDList() []uint64 {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) GetShardID(i int) uint64 {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) SetShardID(i int, id uint64) {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) AppendShardID(id uint64) {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) GetBlockInfoList() []*objectio.BlockInfoInProgress {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) GetBlockInfo(i int) *objectio.BlockInfoInProgress {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) SetBlockInfo(i int, blk *objectio.BlockInfoInProgress) {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) AppendBlockInfo(blk objectio.BlockInfoInProgress) {
+	panic("not supported")
+}
+
+func (rd *EmptyRelationData) GetType() RelDataType {
+	return rd.typ
+}
+
 func (rd *EmptyRelationData) MarshalToBytes() []byte {
 	panic("Not Supported")
 }
@@ -926,7 +966,7 @@ func (rd *EmptyRelationData) SetDataBlk(i int, blk any) {
 	panic("Not Supported")
 }
 
-func (rd *EmptyRelationData) DataBlkSlice(begin, end int) RelData {
+func (rd *EmptyRelationData) DataSlice(begin, end int) RelData {
 	panic("Not Supported")
 }
 
@@ -942,6 +982,6 @@ func (rd *EmptyRelationData) BuildEmptyRelData() RelData {
 	return &EmptyRelationData{EmptyRelData}
 }
 
-func (rd *EmptyRelationData) BlkCnt() int {
+func (rd *EmptyRelationData) DataCnt() int {
 	return 0
 }
