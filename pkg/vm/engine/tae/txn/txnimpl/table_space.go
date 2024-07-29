@@ -113,12 +113,10 @@ func (space *tableSpace) ApplyAppend() (err error) {
 		defer bat.Close()
 		if destOff, err = ctx.driver.ApplyAppend(
 			bat,
-			ctx.blkOffset,
 			space.table.store.txn); err != nil {
 			return
 		}
 		id := ctx.driver.GetID()
-		id.SetBlockOffset(ctx.blkOffset)
 		ctx.node.AddApplyInfo(
 			ctx.start,
 			ctx.count,
@@ -199,7 +197,7 @@ func (space *tableSpace) prepareApplyANode(node *anode) error {
 		objID := appender.GetMeta().(*catalog.ObjectEntry).ID()
 		col := space.table.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
 		defer col.Close()
-		blkID := objectio.NewBlockidWithObjectID(objID, anode.GetBlockOffset())
+		blkID := objectio.NewBlockidWithObjectID(objID, 0)
 		if err = objectio.ConstructRowidColumnTo(
 			col.GetDownstreamVector(),
 			blkID,
@@ -213,12 +211,11 @@ func (space *tableSpace) prepareApplyANode(node *anode) error {
 			return err
 		}
 		ctx := &appendCtx{
-			driver:    appender,
-			node:      node,
-			anode:     anode,
-			start:     appended,
-			count:     toAppend,
-			blkOffset: anode.GetBlockOffset(),
+			driver: appender,
+			node:   node,
+			anode:  anode,
+			start:  appended,
+			count:  toAppend,
 		}
 		if created {
 			space.table.store.IncreateWriteCnt()

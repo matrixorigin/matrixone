@@ -15,7 +15,6 @@
 package updates
 
 import (
-	"sync"
 	"testing"
 
 	"github.com/RoaringBitmap/roaring"
@@ -38,7 +37,7 @@ func TestCompactBlockCmd(t *testing.T) {
 	table, _ := db.CreateTableEntry(schema, nil, nil)
 	obj, _ := table.CreateObject(nil, catalog.ES_Appendable, nil, nil)
 
-	controller := NewAppendMVCCHandle(obj, &sync.RWMutex{}, 0)
+	controller := NewAppendMVCCHandle(obj)
 
 	ts := types.NextGlobalTsForTest()
 	//node := MockAppendNode(341, 0, 2515, controller)
