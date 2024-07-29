@@ -3126,6 +3126,9 @@ func (collector *BaseCollector) VisitGlobalTombstone(entry data.Tombstone) (err 
 
 func (collector *GlobalCollector) VisitTombstone(entry data.Tombstone) error {
 	obj := entry.GetObject().(*catalog.ObjectEntry).GetLatestNode()
+	if obj == nil {
+		return nil
+	}
 	if obj.DeleteBefore(collector.versionThershold) && !obj.InMemoryDeletesExisted() && obj.IsDeletesFlushedBefore(collector.versionThershold) {
 		return nil
 	}

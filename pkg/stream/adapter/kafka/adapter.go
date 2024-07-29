@@ -817,7 +817,7 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 			}
 			cols := vector.MustFixedCol[float64](vec)
 			cols[rowIdx] = val
-		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 			var strVal string
 			strVal = fmt.Sprintf("%v", fieldValue)
 			buf.WriteString(strVal)

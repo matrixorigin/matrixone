@@ -125,7 +125,7 @@ func RegisterAnyValue2(id int64) {
 		nil, nil, nil,
 		aggAnyValueFill[types.Enum], aggAnyValueFills[types.Enum], aggAnyValueMerge[types.Enum], nil)
 
-	varLenList := []types.T{types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_binary, types.T_varbinary}
+	varLenList := []types.T{types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_datalink, types.T_binary, types.T_varbinary}
 	for _, t := range varLenList {
 		aggexec.RegisterAggFromBytesRetBytes(
 			aggexec.MakeSingleColumnAggInformation(id, t.ToType(), AnyValueReturnType, true),
@@ -143,7 +143,7 @@ var AnyValueSupportedTypes = []types.T{
 	types.T_decimal64, types.T_decimal128,
 	types.T_bool,
 	types.T_bit,
-	types.T_varchar, types.T_char, types.T_blob, types.T_text,
+	types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_datalink,
 	types.T_uuid,
 	types.T_binary, types.T_varbinary,
 	types.T_Rowid,

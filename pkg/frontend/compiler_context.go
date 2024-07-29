@@ -792,20 +792,57 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot plan2.Snapsh
 	if err != nil {
 		return nil, err
 	}
-	s, needUpdate := tcc.statsInCache(ctx, dbName, table, snapshot)
-	if s == nil {
+	cached, needUpdate := tcc.statsInCache(ctx, dbName, table, snapshot)
+	if cached == nil {
 		return nil, nil
 	}
-	if needUpdate {
-		s, err = table.Stats(ctx, true)
-		if err != nil {
-			return s, err
-		}
-		if s != nil {
-			tcc.UpdateStatsInCache(table.GetTableID(ctx), s)
+	if !needUpdate {
+		return cached, nil
+	}
+	tableDefs, err := table.TableDefs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var partitionInfo *plan.PartitionByDef
+	for _, def := range tableDefs {
+		if partitionDef, ok := def.(*engine.PartitionDef); ok {
+			if partitionDef.Partitioned > 0 {
+				p := &plan.PartitionByDef{}
+				err = p.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition))
+				if err != nil {
+					return nil, err
+				}
+				partitionInfo = p
+			}
+			break
 		}
 	}
-	return s, nil
+	var statsInfo *pb.StatsInfo
+	// This is a partition table.
+	if partitionInfo != nil {
+		statsInfo = plan2.NewStatsInfo()
+		for _, partitionTable := range partitionInfo.PartitionTableNames {
+			parCtx, parTable, err := tcc.getRelation(dbName, partitionTable, sub, snapshot)
+			if err != nil {
+				return cached, err
+			}
+			parStats, err := parTable.Stats(parCtx, true)
+			if err != nil {
+				return cached, err
+			}
+			statsInfo.Merge(parStats)
+		}
+	} else {
+		statsInfo, err = table.Stats(ctx, true)
+		if err != nil {
+			return cached, err
+		}
+	}
+	if statsInfo != nil {
+		tcc.UpdateStatsInCache(table.GetTableID(ctx), statsInfo)
+		return statsInfo, nil
+	}
+	return cached, nil
 }
 
 func (tcc *TxnCompilerContext) UpdateStatsInCache(tid uint64, s *pb.StatsInfo) {
