@@ -243,15 +243,15 @@ type MemRelationData struct {
 	Shards ShardIdSlice
 }
 
-func (rd *MemRelationData) GetBlockInfoList() []*objectio.BlockInfoInProgress {
+func (rd *MemRelationData) GetBlockInfoSlice() objectio.BlockInfoSliceInProgress {
 	panic("not supported")
 }
 
-func (rd *MemRelationData) GetBlockInfo(i int) *objectio.BlockInfoInProgress {
+func (rd *MemRelationData) GetBlockInfo(i int) objectio.BlockInfoInProgress {
 	panic("not supported")
 }
 
-func (rd *MemRelationData) SetBlockInfo(i int, blk *objectio.BlockInfoInProgress) {
+func (rd *MemRelationData) SetBlockInfo(i int, blk objectio.BlockInfoInProgress) {
 	panic("not supported")
 }
 
@@ -261,8 +261,10 @@ func (rd *MemRelationData) AppendBlockInfo(blk objectio.BlockInfoInProgress) {
 
 func (rd *MemRelationData) GetShardIDList() []uint64 {
 	ids := make([]uint64, 0, rd.Shards.Len())
-	for idx, shard := range ids {
-		ids[idx] = shard
+	idsLen := rd.Shards.Len()
+
+	for idx := range idsLen {
+		ids[idx] = rd.Shards.Get(idx)
 	}
 
 	return ids

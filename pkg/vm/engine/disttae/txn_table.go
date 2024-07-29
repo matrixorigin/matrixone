@@ -1789,9 +1789,9 @@ func (tbl *txnTable) buildLocalDataSource(
 
 	switch relData.GetType() {
 	case engine.RelDataBlkInfoListV1:
-		ranges := relData.GetBlockInfoList()
+		ranges := relData.GetBlockInfoSlice()
 		skipReadMem := !bytes.Equal(
-			objectio.EncodeBlockInfoInProgress(*ranges[0]), objectio.EmptyBlockInfoInProgressBytes)
+			objectio.EncodeBlockInfoInProgress(*ranges.Get(0)), objectio.EmptyBlockInfoInProgressBytes)
 
 		if tbl.db.op.IsSnapOp() {
 			txnOffset = tbl.getTxn().GetSnapshotWriteOffset()

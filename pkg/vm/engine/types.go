@@ -652,10 +652,27 @@ type RelData interface {
 	AppendShardID(id uint64)
 
 	// for block info list
-	GetBlockInfoList() []*objectio.BlockInfoInProgress
-	GetBlockInfo(i int) *objectio.BlockInfoInProgress
-	SetBlockInfo(i int, blk *objectio.BlockInfoInProgress)
+	GetBlockInfoSlice() objectio.BlockInfoSliceInProgress
+	GetBlockInfo(i int) objectio.BlockInfoInProgress
+	SetBlockInfo(i int, blk objectio.BlockInfoInProgress)
 	AppendBlockInfo(blk objectio.BlockInfoInProgress)
+}
+
+func ForRangeBlockInfo(
+	begin, end int,
+	relData RelData,
+	onBlock func(blk objectio.BlockInfoInProgress) (bool, error)) error {
+	slice := relData.GetBlockInfoSlice()
+	slice = slice.Slice(begin, end)
+	sliceLen := slice.Len()
+
+	for i := 0; i < sliceLen; i++ {
+		if ok, err := onBlock(*slice.Get(i)); !ok || err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 type DataState uint8
@@ -918,15 +935,15 @@ func (rd *EmptyRelationData) AppendShardID(id uint64) {
 	panic("not supported")
 }
 
-func (rd *EmptyRelationData) GetBlockInfoList() []*objectio.BlockInfoInProgress {
+func (rd *EmptyRelationData) GetBlockInfoSlice() objectio.BlockInfoSliceInProgress {
 	panic("not supported")
 }
 
-func (rd *EmptyRelationData) GetBlockInfo(i int) *objectio.BlockInfoInProgress {
+func (rd *EmptyRelationData) GetBlockInfo(i int) objectio.BlockInfoInProgress {
 	panic("not supported")
 }
 
-func (rd *EmptyRelationData) SetBlockInfo(i int, blk *objectio.BlockInfoInProgress) {
+func (rd *EmptyRelationData) SetBlockInfo(i int, blk objectio.BlockInfoInProgress) {
 	panic("not supported")
 }
 

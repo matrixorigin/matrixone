@@ -510,20 +510,16 @@ func (rd1 *relationDataBlkInfoListV1) AppendShardID(id uint64) {
 	panic("not supported")
 }
 
-func (rd1 *relationDataBlkInfoListV1) GetBlockInfoList() []*objectio.BlockInfoInProgress {
-	blks := make([]*objectio.BlockInfoInProgress, rd1.blklist.Len())
-	for idx := range blks {
-		blks[idx] = rd1.blklist.Get(idx)
-	}
-	return blks
+func (rd1 *relationDataBlkInfoListV1) GetBlockInfoSlice() objectio.BlockInfoSliceInProgress {
+	return rd1.blklist.GetAllBytes()
 }
 
-func (rd1 *relationDataBlkInfoListV1) GetBlockInfo(i int) *objectio.BlockInfoInProgress {
-	return rd1.blklist.Get(i)
+func (rd1 *relationDataBlkInfoListV1) GetBlockInfo(i int) objectio.BlockInfoInProgress {
+	return *rd1.blklist.Get(i)
 }
 
-func (rd1 *relationDataBlkInfoListV1) SetBlockInfo(i int, blk *objectio.BlockInfoInProgress) {
-	rd1.blklist.Set(i, blk)
+func (rd1 *relationDataBlkInfoListV1) SetBlockInfo(i int, blk objectio.BlockInfoInProgress) {
+	rd1.blklist.Set(i, &blk)
 }
 
 func (rd1 *relationDataBlkInfoListV1) AppendBlockInfo(blk objectio.BlockInfoInProgress) {
@@ -654,8 +650,10 @@ func (rd1 *relationDataBlkInfoListV1) DataSlice(i, j int) engine.RelData {
 func (rd1 *relationDataBlkInfoListV1) GroupByPartitionNum() map[int16]engine.RelData {
 	ret := make(map[int16]engine.RelData)
 
-	blks := rd1.GetBlockInfoList()
-	for _, blkInfo := range blks {
+	blks := rd1.GetBlockInfoSlice()
+	blksLen := blks.Len()
+	for idx := range blksLen {
+		blkInfo := blks.Get(idx)
 		if blkInfo.IsMemBlk() {
 			return nil
 		}
@@ -728,7 +726,8 @@ func (rs *RemoteDataSource) Next(
 		return nil, engine.End, nil
 	}
 	rs.cursor++
-	return rs.data.GetBlockInfo(rs.cursor - 1), engine.Persisted, nil
+	cur := rs.data.GetBlockInfo(rs.cursor - 1)
+	return &cur, engine.Persisted, nil
 }
 
 func (rs *RemoteDataSource) Close() {
@@ -947,7 +946,7 @@ type LocalDataSource struct {
 	ranges []*objectio.BlockInfoInProgress
 	pState *logtailreplay.PartitionState
 
-	memPKFilter *MemPKFilterInProgress
+	memPKFilter *MemPKFilter
 	pStateRows  struct {
 		insIter logtailreplay.RowsIter
 	}
@@ -985,7 +984,7 @@ func NewLocalDataSource(
 	ctx context.Context,
 	table *txnTable,
 	txnOffset int,
-	ranges []*objectio.BlockInfoInProgress,
+	rangesSlice objectio.BlockInfoSliceInProgress,
 	skipReadMem bool,
 ) (source *LocalDataSource, err error) {
 
@@ -995,9 +994,14 @@ func NewLocalDataSource(
 	source.mp = table.proc.Load().Mp()
 
 	if bytes.Equal(
-		objectio.EncodeBlockInfoInProgress(*ranges[0]),
+		objectio.EncodeBlockInfoInProgress(*rangesSlice.Get(0)),
 		objectio.EmptyBlockInfoInProgressBytes) {
-		ranges = ranges[1:]
+		rangesSlice = rangesSlice.Slice(1, rangesSlice.Len())
+	}
+
+	rangeLen := rangesSlice.Len()
+	for i := 0; i < rangeLen; i++ {
+		source.ranges = append(source.ranges, rangesSlice.Get(i))
 	}
 
 	state, err := table.getPartitionState(ctx)
@@ -1006,7 +1010,6 @@ func NewLocalDataSource(
 	}
 
 	source.table = table
-	source.ranges = ranges
 	source.pState = state
 	source.txnOffset = txnOffset
 	source.snapshotTS = types.TimestampToTS(table.getTxn().op.SnapshotTS())
@@ -1147,7 +1150,7 @@ func (ls *LocalDataSource) Next(
 ) (*objectio.BlockInfoInProgress, engine.DataState, error) {
 
 	if ls.memPKFilter == nil {
-		ff := filter.(MemPKFilterInProgress)
+		ff := filter.(MemPKFilter)
 		ls.memPKFilter = &ff
 	}
 
