@@ -761,14 +761,6 @@ type Relation interface {
 
 	GetDBID(context.Context) uint64
 
-	// NewReader It's deprecated.
-	// second parameter is the number of reader,
-	// third parameter is the filter extend,
-	// foruth parameter is the payload required by the engine
-	// fifth parameter is data blocks
-	// sixth parameter is transaction offset used to specify the starting position for reading data.
-	NewReader(context.Context, int, *plan.Expr, []byte, bool, int) ([]Reader, error)
-
 	BuildReaders(
 		ctx context.Context,
 		proc any,
@@ -850,9 +842,6 @@ type Engine interface {
 	// return value should not be cached
 	// since implementations may update hints after engine had initialized
 	Hints() Hints
-
-	//It's deprecated.
-	NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp, expr *plan.Expr, blockReadPKFilter any, ranges []byte, tblDef *plan.TableDef, proc any) ([]Reader, error)
 
 	BuildBlockReaders(
 		ctx context.Context,

@@ -192,7 +192,7 @@ func NewDefaultTableReader(
 		return nil, err
 	}
 
-	r := disttae.NewReaderInProgress(
+	r := disttae.NewReader(
 		ctx,
 		testutil2.NewProcessWithMPool("", mp),
 		e,

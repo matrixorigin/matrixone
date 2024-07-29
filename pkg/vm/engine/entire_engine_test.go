@@ -282,17 +282,6 @@ func (e *testEngine) Hints() (h Hints) {
 	return
 }
 
-func (e *testEngine) NewBlockReader(_ context.Context, _ int, _ timestamp.Timestamp,
-	_ *plan.Expr, _ any, _ []byte, _ *plan.TableDef, proc any) ([]Reader, error) {
-	e.parent.step = e.parent.step + 1
-	if e.name == origin {
-		e.parent.state = e.parent.state + e.parent.step*e.parent.state
-	} else {
-		e.parent.state = e.parent.state - e.parent.step*e.parent.state
-	}
-	return nil, nil
-}
-
 func (e *testEngine) GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error) {
 	return "", "", nil
 }
