@@ -4291,8 +4291,9 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	}
 	// disttae engine
 	if engineType == engine.Disttae {
-		nodes, err := shuffleBlocksToMultiCN(c, rel, relData, n)
-		return nodes, partialResults, partialResultTypes, err
+		//nodes, err := shuffleBlocksToMultiCN(c, rel, relData, n)
+		//return nodes, partialResults, partialResultTypes, err
+		return putBlocksInCurrentCN(c, relData, n), partialResults, partialResultTypes, nil
 	}
 	// maybe temp table on memengine , just put payloads in average
 	return putBlocksInAverage(c, relData, n), partialResults, partialResultTypes, nil
