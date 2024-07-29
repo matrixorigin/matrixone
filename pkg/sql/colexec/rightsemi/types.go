@@ -138,7 +138,7 @@ func (rightSemi *RightSemi) Free(proc *process.Process, pipelineFailed bool, err
 		ctr.cleanEvalVectors()
 		ctr.cleanHashMap()
 		ctr.cleanExprExecutor()
-		ctr.FreeAllReg()
+
 		ctr.tmpBatches = nil
 
 		anal := proc.GetAnalyze(rightSemi.GetIdx(), rightSemi.GetParallelIdx(), rightSemi.GetParallelMajor())
