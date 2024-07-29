@@ -38,7 +38,7 @@ func (antiJoin *AntiJoin) OpType() vm.OpType {
 
 func (antiJoin *AntiJoin) Prepare(proc *process.Process) (err error) {
 	antiJoin.ctr = new(container)
-	antiJoin.ctr.InitReceiver(proc, false)
+	antiJoin.ctr.InitReceiver(proc, true)
 	antiJoin.ctr.vecs = make([]*vector.Vector, len(antiJoin.Conditions[0]))
 	antiJoin.ctr.executorForVecs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, antiJoin.Conditions[0])
 	if err != nil {
@@ -65,14 +65,12 @@ func (antiJoin *AntiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			if err := antiJoin.build(anal, proc); err != nil {
-				return result, err
-			}
+			antiJoin.build(anal, proc)
 			ctr.state = Probe
 
 		case Probe:
 			if ap.ctr.bat == nil {
-				msg := ctr.ReceiveFromSingleReg(0, anal)
+				msg := ctr.ReceiveFromAllRegs(anal)
 				if msg.Err != nil {
 					return result, msg.Err
 				}
@@ -114,39 +112,14 @@ func (antiJoin *AntiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (antiJoin *AntiJoin) receiveHashMap(anal process.Analyze, proc *process.Process) {
+func (antiJoin *AntiJoin) build(anal process.Analyze, proc *process.Process) {
 	ctr := antiJoin.ctr
 	ctr.mp = proc.ReceiveJoinMap(anal, antiJoin.JoinMapTag, antiJoin.IsShuffle, antiJoin.ShuffleIdx)
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
-}
-
-func (ctr *container) receiveBatch(anal process.Analyze) error {
-	for {
-		msg := ctr.ReceiveFromSingleReg(1, anal)
-		if msg.Err != nil {
-			return msg.Err
-		}
-		bat := msg.Batch
-		if bat != nil {
-			ctr.batchRowCount += bat.RowCount()
-			ctr.batches = append(ctr.batches, bat)
-		} else {
-			break
-		}
-	}
-	for i := 0; i < len(ctr.batches)-1; i++ {
-		if ctr.batches[i].RowCount() != colexec.DefaultBatchSize {
-			panic("wrong batch received for hash build!")
-		}
-	}
-	return nil
-}
-
-func (antiJoin *AntiJoin) build(anal process.Analyze, proc *process.Process) error {
-	antiJoin.receiveHashMap(anal, proc)
-	return antiJoin.ctr.receiveBatch(anal)
+	ctr.batches = ctr.mp.GetBatches()
+	ctr.batchRowCount = ctr.mp.GetRowCount()
 }
 
 func (ctr *container) emptyProbe(ap *AntiJoin, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {

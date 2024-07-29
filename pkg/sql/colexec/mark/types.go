@@ -15,7 +15,6 @@
 package mark
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -98,7 +97,7 @@ type container struct {
 	markVals  []bool
 	markNulls *nulls.Nulls
 
-	mp *hashmap.JoinMap
+	mp *process.JoinMap
 
 	nullWithBatch *batch.Batch
 	rewriteCond   *plan.Expr

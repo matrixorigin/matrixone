@@ -39,7 +39,7 @@ func (innerJoin *InnerJoin) OpType() vm.OpType {
 
 func (innerJoin *InnerJoin) Prepare(proc *process.Process) (err error) {
 	innerJoin.ctr = new(container)
-	innerJoin.ctr.InitReceiver(proc, false)
+	innerJoin.ctr.InitReceiver(proc, true)
 	innerJoin.ctr.vecs = make([]*vector.Vector, len(innerJoin.Conditions[0]))
 	innerJoin.ctr.evecs = make([]evalVector, len(innerJoin.Conditions[0]))
 	for i := range innerJoin.ctr.evecs {
@@ -68,9 +68,8 @@ func (innerJoin *InnerJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			if err := innerJoin.build(anal, proc); err != nil {
-				return result, err
-			}
+			innerJoin.build(anal, proc)
+
 			if ctr.mp == nil && !innerJoin.IsShuffle {
 				// for inner ,right and semi join, if hashmap is empty, we can finish this pipeline
 				// shuffle join can't stop early for this moment
@@ -80,7 +79,7 @@ func (innerJoin *InnerJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 		case Probe:
 			if innerJoin.ctr.bat == nil {
-				msg := ctr.ReceiveFromSingleReg(0, anal)
+				msg := ctr.ReceiveFromAllRegs(anal)
 				if msg.Err != nil {
 					return result, msg.Err
 				}
@@ -125,40 +124,14 @@ func (innerJoin *InnerJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (innerJoin *InnerJoin) receiveHashMap(anal process.Analyze, proc *process.Process) {
+func (innerJoin *InnerJoin) build(anal process.Analyze, proc *process.Process) {
 	ctr := innerJoin.ctr
 	ctr.mp = proc.ReceiveJoinMap(anal, innerJoin.JoinMapTag, innerJoin.IsShuffle, innerJoin.ShuffleIdx)
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
-}
-
-func (innerJoin *InnerJoin) receiveBatch(anal process.Analyze) error {
-	ctr := innerJoin.ctr
-	for {
-		msg := ctr.ReceiveFromSingleReg(1, anal)
-		if msg.Err != nil {
-			return msg.Err
-		}
-		bat := msg.Batch
-		if bat != nil {
-			ctr.batchRowCount += bat.RowCount()
-			ctr.batches = append(ctr.batches, bat)
-		} else {
-			break
-		}
-	}
-	for i := 0; i < len(ctr.batches)-1; i++ {
-		if ctr.batches[i].RowCount() != colexec.DefaultBatchSize {
-			panic("wrong batch received for hash build!")
-		}
-	}
-	return nil
-}
-
-func (innerJoin *InnerJoin) build(anal process.Analyze, proc *process.Process) error {
-	innerJoin.receiveHashMap(anal, proc)
-	return innerJoin.receiveBatch(anal)
+	ctr.batches = ctr.mp.GetBatches()
+	ctr.batchRowCount = ctr.mp.GetRowCount()
 }
 
 func (ctr *container) probe(ap *InnerJoin, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {

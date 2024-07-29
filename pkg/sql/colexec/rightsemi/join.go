@@ -39,7 +39,7 @@ func (rightSemi *RightSemi) OpType() vm.OpType {
 
 func (rightSemi *RightSemi) Prepare(proc *process.Process) (err error) {
 	rightSemi.ctr = new(container)
-	rightSemi.ctr.InitReceiver(proc, false)
+	rightSemi.ctr.InitReceiver(proc, true)
 	rightSemi.ctr.vecs = make([]*vector.Vector, len(rightSemi.Conditions[0]))
 	rightSemi.ctr.evecs = make([]evalVector, len(rightSemi.Conditions[0]))
 	for i := range rightSemi.ctr.evecs {
@@ -70,9 +70,7 @@ func (rightSemi *RightSemi) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			if err := rightSemi.build(analyze, proc); err != nil {
-				return result, err
-			}
+			rightSemi.build(analyze, proc)
 			if ctr.mp == nil && !rightSemi.IsShuffle {
 				// for inner ,right and semi join, if hashmap is empty, we can finish this pipeline
 				// shuffle join can't stop early for this moment
@@ -82,7 +80,7 @@ func (rightSemi *RightSemi) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 		case Probe:
-			msg := ctr.ReceiveFromSingleReg(0, analyze)
+			msg := ctr.ReceiveFromAllRegs(analyze)
 			if msg.Err != nil {
 				return result, msg.Err
 			}
@@ -138,43 +136,18 @@ func (rightSemi *RightSemi) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (rightSemi *RightSemi) receiveHashMap(anal process.Analyze, proc *process.Process) {
+func (rightSemi *RightSemi) build(anal process.Analyze, proc *process.Process) {
 	ctr := rightSemi.ctr
 	ctr.mp = proc.ReceiveJoinMap(anal, rightSemi.JoinMapTag, rightSemi.IsShuffle, rightSemi.ShuffleIdx)
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
-}
-
-func (ctr *container) receiveBatch(anal process.Analyze) error {
-	for {
-		msg := ctr.ReceiveFromSingleReg(1, anal)
-		if msg.Err != nil {
-			return msg.Err
-		}
-		bat := msg.Batch
-		if bat != nil {
-			ctr.batchRowCount += bat.RowCount()
-			ctr.batches = append(ctr.batches, bat)
-		} else {
-			break
-		}
-	}
-	for i := 0; i < len(ctr.batches)-1; i++ {
-		if ctr.batches[i].RowCount() != colexec.DefaultBatchSize {
-			panic("wrong batch received for hash build!")
-		}
-	}
+	ctr.batches = ctr.mp.GetBatches()
+	ctr.batchRowCount = ctr.mp.GetRowCount()
 	if ctr.batchRowCount > 0 {
 		ctr.matched = &bitmap.Bitmap{}
-		ctr.matched.InitWithSize(int64(ctr.batchRowCount))
+		ctr.matched.InitWithSize(ctr.batchRowCount)
 	}
-	return nil
-}
-
-func (rightSemi *RightSemi) build(anal process.Analyze, proc *process.Process) error {
-	rightSemi.receiveHashMap(anal, proc)
-	return rightSemi.ctr.receiveBatch(anal)
 }
 
 func (ctr *container) sendLast(ap *RightSemi, proc *process.Process, analyze process.Analyze, _ bool, isLast bool) (bool, error) {

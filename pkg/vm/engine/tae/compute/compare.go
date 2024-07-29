@@ -105,7 +105,7 @@ func Compare(a, b []byte, t types.T, scale1, scale2 int32) int {
 	case types.T_uuid:
 		return types.CompareUuid(types.DecodeUuid(a), types.DecodeUuid(b))
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_json, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_json, types.T_text, types.T_datalink:
 		return CompareBytes(a, b)
 	case types.T_array_float32:
 		//Zone map comparator
@@ -172,7 +172,7 @@ func CompareGeneric(a, b any, t types.T) int {
 	case types.T_uuid:
 		return types.CompareUuid(a.(types.Uuid), b.(types.Uuid))
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_json, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_json, types.T_text, types.T_datalink:
 		return CompareBytes(a.([]byte), b.([]byte))
 	case types.T_array_float32:
 		// Used by GetRowByFilter in TAE.

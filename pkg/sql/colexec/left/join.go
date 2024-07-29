@@ -39,7 +39,7 @@ func (leftJoin *LeftJoin) OpType() vm.OpType {
 
 func (leftJoin *LeftJoin) Prepare(proc *process.Process) (err error) {
 	leftJoin.ctr = new(container)
-	leftJoin.ctr.InitReceiver(proc, false)
+	leftJoin.ctr.InitReceiver(proc, true)
 	leftJoin.ctr.vecs = make([]*vector.Vector, len(leftJoin.Conditions[0]))
 
 	leftJoin.ctr.evecs = make([]evalVector, len(leftJoin.Conditions[0]))
@@ -66,14 +66,12 @@ func (leftJoin *LeftJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			if err := leftJoin.build(anal, proc); err != nil {
-				return result, err
-			}
+			leftJoin.build(anal, proc)
 			ctr.state = Probe
 
 		case Probe:
 			if leftJoin.ctr.bat == nil {
-				msg := ctr.ReceiveFromSingleReg(0, anal)
+				msg := ctr.ReceiveFromAllRegs(anal)
 				if msg.Err != nil {
 					return result, msg.Err
 				}
@@ -117,39 +115,14 @@ func (leftJoin *LeftJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (leftJoin *LeftJoin) receiveHashMap(anal process.Analyze, proc *process.Process) {
+func (leftJoin *LeftJoin) build(anal process.Analyze, proc *process.Process) {
 	ctr := leftJoin.ctr
 	ctr.mp = proc.ReceiveJoinMap(anal, leftJoin.JoinMapTag, leftJoin.IsShuffle, leftJoin.ShuffleIdx)
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
-}
-
-func (ctr *container) receiveBatch(anal process.Analyze) error {
-	for {
-		msg := ctr.ReceiveFromSingleReg(1, anal)
-		if msg.Err != nil {
-			return msg.Err
-		}
-		bat := msg.Batch
-		if bat != nil {
-			ctr.batchRowCount += bat.RowCount()
-			ctr.batches = append(ctr.batches, bat)
-		} else {
-			break
-		}
-	}
-	for i := 0; i < len(ctr.batches)-1; i++ {
-		if ctr.batches[i].RowCount() != colexec.DefaultBatchSize {
-			panic("wrong batch received for hash build!")
-		}
-	}
-	return nil
-}
-
-func (leftJoin *LeftJoin) build(anal process.Analyze, proc *process.Process) error {
-	leftJoin.receiveHashMap(anal, proc)
-	return leftJoin.ctr.receiveBatch(anal)
+	ctr.batches = ctr.mp.GetBatches()
+	ctr.batchRowCount = ctr.mp.GetRowCount()
 }
 
 func (ctr *container) emptyProbe(ap *LeftJoin, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
