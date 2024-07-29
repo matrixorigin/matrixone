@@ -31,7 +31,6 @@ import (
 
 func New(ro bool, attrs []string) *Batch {
 	return &Batch{
-		Ro:       ro,
 		Cnt:      1,
 		Attrs:    attrs,
 		Vecs:     make([]*vector.Vector, len(attrs)),
@@ -47,7 +46,15 @@ func NewWithSize(n int) *Batch {
 	}
 }
 
+func (b *Batch) SetBorrowed() {
+	b.borrowedVecs = true
+}
+
+// What is the different between this one and SetRowCount?
 func SetLength(bat *Batch, n int) {
+	// XXX: we do not need to change length for vectors
+	// all we need to do is to set rowCount.   But I don't
+	// know if our code handles this correctly.
 	for _, vec := range bat.Vecs {
 		vec.SetLength(n)
 	}
@@ -112,6 +119,10 @@ func (bat *Batch) unmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 }
 
 func (bat *Batch) Shrink(sels []int64, negate bool) {
+	if bat.borrowedVecs {
+		panic("cannot shrink borrowed vectors")
+	}
+
 	if !negate {
 		if len(sels) == bat.rowCount {
 			return
@@ -128,6 +139,10 @@ func (bat *Batch) Shrink(sels []int64, negate bool) {
 }
 
 func (bat *Batch) Shuffle(sels []int64, m *mpool.MPool) error {
+	if bat.borrowedVecs {
+		panic("cannot shuffle borrowed vectors")
+	}
+
 	if len(sels) > 0 {
 		mp := make(map[*vector.Vector]uint8)
 		for _, vec := range bat.Vecs {
@@ -196,6 +211,7 @@ func (bat *Batch) Clean(m *mpool.MPool) {
 	if bat == EmptyBatch {
 		return
 	}
+
 	if atomic.LoadInt64(&bat.Cnt) == 0 {
 		// panic("batch is already cleaned")
 		return
@@ -203,9 +219,11 @@ func (bat *Batch) Clean(m *mpool.MPool) {
 	if atomic.AddInt64(&bat.Cnt, -1) > 0 {
 		return
 	}
-	for _, vec := range bat.Vecs {
-		if vec != nil {
-			vec.Free(m)
+	if !bat.borrowedVecs {
+		for _, vec := range bat.Vecs {
+			if vec != nil {
+				vec.Free(m)
+			}
 		}
 	}
 	for _, agg := range bat.Aggs {
@@ -308,6 +326,10 @@ func (bat *Batch) AppendWithCopy(ctx context.Context, mh *mpool.MPool, b *Batch)
 	if bat == nil {
 		return b.Dup(mh)
 	}
+	if bat.borrowedVecs {
+		panic("cannot append to borrowed vectors")
+	}
+
 	if len(bat.Vecs) != len(b.Vecs) {
 		return nil, moerr.NewInternalError(ctx, "unexpected error happens in batch append")
 	}
@@ -329,6 +351,11 @@ func (bat *Batch) Append(ctx context.Context, mh *mpool.MPool, b *Batch) (*Batch
 	if bat == nil {
 		return b, nil
 	}
+
+	if bat.borrowedVecs {
+		panic("cannot append to borrowed vectors")
+	}
+
 	if len(bat.Vecs) != len(b.Vecs) {
 		return nil, moerr.NewInternalError(ctx, "unexpected error happens in batch append")
 	}

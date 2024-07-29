@@ -24,16 +24,13 @@ import (
 
 var _ vm.Operator = new(Limit)
 
-type container struct {
-	seen          uint64 // seen is the number of tuples seen so far
-	limit         uint64
-	limitExecutor colexec.ExpressionExecutor
-}
 type Limit struct {
-	ctr       *container
+	vm.OperatorBase
 	LimitExpr *plan.Expr
 
-	vm.OperatorBase
+	seen          uint64 // number of tuples seen so far
+	limit         uint64
+	limitExecutor colexec.ExpressionExecutor
 }
 
 func (limit *Limit) GetOperatorBase() *vm.OperatorBase {
@@ -74,15 +71,11 @@ func (limit *Limit) Release() {
 
 func (limit *Limit) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	limit.Free(proc, pipelineFailed, err)
+	// TODO: we should call the reset method of limitExecutor
 }
 
 func (limit *Limit) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if limit.ctr != nil {
-		if limit.ctr.limitExecutor != nil {
-			limit.ctr.limitExecutor.Free()
-			limit.ctr.limitExecutor = nil
-		}
-		limit.ctr = nil
+	if limit != nil && limit.limitExecutor != nil {
+		limit.limitExecutor.Free()
 	}
-
 }

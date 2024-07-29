@@ -38,18 +38,19 @@ func (limit *Limit) OpType() vm.OpType {
 
 func (limit *Limit) Prepare(proc *process.Process) error {
 	var err error
-	limit.ctr = new(container)
-	if limit.ctr.limitExecutor == nil {
-		limit.ctr.limitExecutor, err = colexec.NewExpressionExecutor(proc, limit.LimitExpr)
+	if limit.limitExecutor == nil {
+		limit.limitExecutor, err = colexec.NewExpressionExecutor(proc, limit.LimitExpr)
 		if err != nil {
 			return err
 		}
 	}
-	vec, err := limit.ctr.limitExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+
+	vec, err := limit.limitExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 	if err != nil {
 		return err
 	}
-	limit.ctr.limit = uint64(vector.MustFixedCol[uint64](vec)[0])
+	limit.limit = uint64(vector.MustFixedCol[uint64](vec)[0])
+	limit.seen = 0
 
 	return nil
 }
@@ -61,43 +62,32 @@ func (limit *Limit) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	anal := proc.GetAnalyze(limit.GetIdx(), limit.GetParallelIdx(), limit.GetParallelMajor())
-	if limit.ctr.limit == 0 {
-		result := vm.NewCallResult()
-		result.Batch = nil
-		result.Status = vm.ExecStop
-		return result, nil
+	if limit.seen >= limit.limit {
+		return vm.CallResult{}, nil
 	}
 
+	// Get the input
 	result, err := limit.GetChildren(0).Call(proc)
-	if err != nil {
+	if err != nil || result.Done() {
 		return result, err
 	}
 
 	anal.Start()
 	defer anal.Stop()
 
-	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() {
-		return result, nil
-	}
-	bat := result.Batch
-	anal.Input(bat, limit.GetIsFirst())
+	anal.Input(result.Batch, limit.GetIsFirst())
 
-	if limit.ctr.seen >= limit.ctr.limit {
-		result.Batch = nil
+	length := result.Batch.RowCount()
+	newSeen := limit.seen + uint64(length)
+	if newSeen >= limit.limit { // limit - seen
+		// Truncate the batch, and set result to stop.
+		// Note that truncate batch is OK, because we did not touch the data in vectors
+		// even though we do touch the length of vectors.
+		batch.SetLength(result.Batch, int(limit.limit-limit.seen))
 		result.Status = vm.ExecStop
-		return result, nil
 	}
-	length := bat.RowCount()
-	newSeen := limit.ctr.seen + uint64(length)
-	if newSeen >= limit.ctr.limit { // limit - seen
-		batch.SetLength(bat, int(limit.ctr.limit-limit.ctr.seen))
-		limit.ctr.seen = newSeen
-		anal.Output(bat, limit.GetIsLast())
 
-		result.Status = vm.ExecStop
-		return result, nil
-	}
-	anal.Output(bat, limit.GetIsLast())
-	limit.ctr.seen = newSeen
+	limit.seen = newSeen
+	anal.Output(result.Batch, limit.GetIsLast())
 	return result, nil
 }
