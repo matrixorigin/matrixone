@@ -1206,7 +1206,7 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 
 		// determined how many cpus we should use.
 		//blkSlice := objectio.BlockInfoSliceInProgress(s.NodeInfo.Data)
-		scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, s.NodeInfo.Data.BlkCnt())
+		scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, s.NodeInfo.Data.DataCnt())
 		readers, err = c.e.BuildBlockReaders(
 			ctx,
 			c.proc,
@@ -1226,13 +1226,13 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 			if s.NodeInfo.Data == nil {
 				scanUsedCpuNumber = 1
 			} else {
-				scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, s.NodeInfo.Data.BlkCnt())
+				scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, s.NodeInfo.Data.DataCnt())
 			}
 		case engine.Memory:
 			if s.NodeInfo.Data == nil {
 				scanUsedCpuNumber = 1
 			} else {
-				scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, s.NodeInfo.Data.BlkCnt())
+				scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, s.NodeInfo.Data.DataCnt())
 			}
 		default:
 			scanUsedCpuNumber = 1
@@ -1313,13 +1313,13 @@ func (s *Scope) buildReaders(c *Compile, maxProvidedCpuNumber int) (readers []en
 			if s.NodeInfo.Data == nil {
 				scanUsedCpuNumber = 1
 			} else {
-				scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, s.NodeInfo.Data.BlkCnt())
+				scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, s.NodeInfo.Data.DataCnt())
 			}
 		case engine.Memory:
 			if s.NodeInfo.Data == nil {
 				scanUsedCpuNumber = 1
 			} else {
-				scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, s.NodeInfo.Data.BlkCnt())
+				scanUsedCpuNumber = DetermineRuntimeDOP(maxProvidedCpuNumber, s.NodeInfo.Data.DataCnt())
 			}
 		default:
 			scanUsedCpuNumber = 1

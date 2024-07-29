@@ -748,8 +748,8 @@ func (tbl *txnTable) Ranges(
 		return
 	}
 
-	data = &relationDataV1{
-		typ:     engine.RelDataV1,
+	data = &relationDataBlkInfoListV1{
+		typ:     engine.RelDataBlkInfoListV1,
 		blklist: &blocks,
 		isEmpty: true,
 	}
@@ -779,11 +779,11 @@ var slowPathCounter atomic.Int64
 // notice that only clean blocks can be distributed into remote CNs.
 func (tbl *txnTable) rangesOnePart(
 	ctx context.Context,
-	state *logtailreplay.PartitionState, // snapshot state of this transaction
-	tableDef *plan.TableDef, // table definition (schema)
-	exprs []*plan.Expr, // filter expression
+	state *logtailreplay.PartitionState,          // snapshot state of this transaction
+	tableDef *plan.TableDef,                      // table definition (schema)
+	exprs []*plan.Expr,                           // filter expression
 	outBlocks *objectio.BlockInfoSliceInProgress, // output marshaled block list after filtering
-	proc *process.Process, // process of this transaction
+	proc *process.Process,                        // process of this transaction
 	txnOffset int,
 ) (err error) {
 	var done bool
@@ -1787,31 +1787,26 @@ func (tbl *txnTable) buildLocalDataSource(
 	relData engine.RelData,
 ) (source engine.DataSource, err error) {
 
-	tbl.getTxn().blockId_tn_delete_metaLoc_batch.RLock()
-	defer tbl.getTxn().blockId_tn_delete_metaLoc_batch.RUnlock()
+	switch relData.GetType() {
+	case engine.RelDataBlkInfoListV1:
+		ranges := relData.GetBlockInfoList()
+		skipReadMem := !bytes.Equal(
+			objectio.EncodeBlockInfoInProgress(*ranges[0]), objectio.EmptyBlockInfoInProgressBytes)
 
-	var ranges []*objectio.BlockInfoInProgress
-	relData.ForeachDataBlk(
-		0,
-		relData.BlkCnt(),
-		func(b any) error {
-			blk := b.(*objectio.BlockInfoInProgress)
-			ranges = append(ranges, blk)
-			return nil
-		})
-	skipReadMem := !bytes.Equal(
-		objectio.EncodeBlockInfoInProgress(*ranges[0]), objectio.EmptyBlockInfoInProgressBytes)
+		if tbl.db.op.IsSnapOp() {
+			txnOffset = tbl.getTxn().GetSnapshotWriteOffset()
+		}
+		source, err = NewLocalDataSource(
+			ctx,
+			tbl,
+			txnOffset,
+			ranges,
+			skipReadMem,
+		)
 
-	if tbl.db.op.IsSnapOp() {
-		txnOffset = tbl.getTxn().GetSnapshotWriteOffset()
+	default:
+		logutil.Fatalf("unsupported rel data type: %v", relData.GetType())
 	}
-	source, err = NewLocalDataSource(
-		ctx,
-		tbl,
-		txnOffset,
-		ranges,
-		skipReadMem,
-	)
 
 	return source, err
 }
@@ -1830,12 +1825,12 @@ func (tbl *txnTable) BuildReaders(
 		return []engine.Reader{new(emptyReader)}, nil
 	}
 	//relData maybe is nil, indicate that only read data from memory.
-	if relData == nil || relData.BlkCnt() == 0 {
+	if relData == nil || relData.DataCnt() == 0 {
 		//s := objectio.BlockInfoSliceInProgress(objectio.EmptyBlockInfoInProgressBytes)
 		relData = buildRelationDataV1()
-		relData.AppendDataBlk(&objectio.EmptyBlockInfoInProgress)
+		relData.AppendBlockInfo(objectio.EmptyBlockInfoInProgress)
 	}
-	blkCnt := relData.BlkCnt()
+	blkCnt := relData.DataCnt()
 	if blkCnt < num {
 		return nil, moerr.NewInternalErrorNoCtx("not enough blocks")
 	}
@@ -1847,9 +1842,9 @@ func (tbl *txnTable) BuildReaders(
 	var rds []engine.Reader
 	for i := 0; i < num; i++ {
 		if i == 0 {
-			shard = relData.DataBlkSlice(i*divide, (i+1)*divide+mod)
+			shard = relData.DataSlice(i*divide, (i+1)*divide+mod)
 		} else {
-			shard = relData.DataBlkSlice(i*divide+mod, (i+1)*divide+mod)
+			shard = relData.DataSlice(i*divide+mod, (i+1)*divide+mod)
 		}
 		ds, err := tbl.buildLocalDataSource(ctx, txnOffset, shard)
 		if err != nil {

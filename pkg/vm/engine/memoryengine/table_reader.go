@@ -51,12 +51,7 @@ func (t *Table) BuildReaders(
 	_ int) (readers []engine.Reader, err error) {
 
 	readers = make([]engine.Reader, parallel)
-	var shardIDs []uint64
-	relData.ForeachDataBlk(0, relData.BlkCnt(), func(blk any) error {
-		shardID := blk.(uint64)
-		shardIDs = append(shardIDs, shardID)
-		return nil
-	})
+	var shardIDs = relData.GetShardIDList()
 
 	var shards []Shard
 	if len(shardIDs) == 0 {
@@ -347,8 +342,53 @@ type MemRelationData struct {
 	Shards ShardIdSlice
 }
 
+func (rd *MemRelationData) GetBlockInfoList() []*objectio.BlockInfoInProgress {
+	panic("not supported")
+}
+
+func (rd *MemRelationData) GetBlockInfo(i int) *objectio.BlockInfoInProgress {
+	panic("not supported")
+}
+
+func (rd *MemRelationData) SetBlockInfo(i int, blk *objectio.BlockInfoInProgress) {
+	panic("not supported")
+}
+
+func (rd *MemRelationData) AppendBlockInfo(blk objectio.BlockInfoInProgress) {
+	panic("not supported")
+}
+
+func (rd *MemRelationData) GetShardIDList() []uint64 {
+	ids := make([]uint64, 0, rd.Shards.Len())
+	for idx, shard := range ids {
+		ids[idx] = shard
+	}
+
+	return ids
+}
+
+func (rd *MemRelationData) GetShardID(i int) uint64 {
+	return rd.Shards.Get(i)
+}
+
+func (rd *MemRelationData) SetShardID(i int, id uint64) {
+	bb := make([]byte, 8)
+	binary.LittleEndian.PutUint64(bb, id)
+	rd.Shards.SetBytes(bb)
+}
+
+func (rd *MemRelationData) AppendShardID(id uint64) {
+	bb := make([]byte, 8)
+	binary.LittleEndian.PutUint64(bb, id)
+	rd.Shards.Append(bb)
+}
+
 func (rd *MemRelationData) MarshalToBytes() []byte {
 	panic("Not Support")
+}
+
+func (rd *MemRelationData) GetType() engine.RelDataType {
+	return engine.RelDataShardIDList
 }
 
 func (rd MemRelationData) UnMarshal(buf []byte) error {
@@ -363,28 +403,7 @@ func (rd *MemRelationData) GetTombstones() engine.Tombstoner {
 	panic("Not Support")
 }
 
-func (rd *MemRelationData) ForeachDataBlk(
-	begin,
-	end int,
-	f func(blk any) error) error {
-	for i := begin; i < end; i++ {
-		err := f(rd.Shards.Get(i))
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (rd *MemRelationData) GetDataBlk(i int) any {
-	return rd.Shards.Get(i)
-}
-
-func (rd *MemRelationData) SetDataBlk(i int, blk any) {
-	panic("Not Support")
-}
-
-func (rd *MemRelationData) DataBlkSlice(i, j int) engine.RelData {
+func (rd *MemRelationData) DataSlice(i, j int) engine.RelData {
 	panic("Not Support")
 }
 
@@ -393,19 +412,11 @@ func (rd *MemRelationData) GroupByPartitionNum() map[int16]engine.RelData {
 	panic("Not Support")
 }
 
-func (rd *MemRelationData) AppendDataBlk(blk any) {
-	shard := blk.(uint64)
-	id := make([]byte, 8)
-	binary.LittleEndian.PutUint64(id, shard)
-	rd.Shards = append(rd.Shards, id...)
-
-}
-
 func (rd *MemRelationData) BuildEmptyRelData() engine.RelData {
 	return &MemRelationData{}
 }
 
-func (rd *MemRelationData) BlkCnt() int {
+func (rd *MemRelationData) DataCnt() int {
 	return rd.Shards.Len()
 }
 

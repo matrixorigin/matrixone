@@ -718,9 +718,9 @@ func (e *Engine) Hints() (h engine.Hints) {
 
 func determineScanType(relData engine.RelData, num int) (scanType int) {
 	scanType = NORMAL
-	if relData.BlkCnt() < num*SMALLSCAN_THRESHOLD {
+	if relData.DataCnt() < num*SMALLSCAN_THRESHOLD {
 		scanType = SMALL
-	} else if (num * LARGESCAN_THRESHOLD) <= relData.BlkCnt() {
+	} else if (num * LARGESCAN_THRESHOLD) <= relData.DataCnt() {
 		scanType = LARGE
 	}
 	return
@@ -735,7 +735,7 @@ func (e *Engine) BuildBlockReaders(
 	relData engine.RelData,
 	num int) ([]engine.Reader, error) {
 	proc := p.(*process.Process)
-	blkCnt := relData.BlkCnt()
+	blkCnt := relData.DataCnt()
 	if blkCnt < num {
 		return nil, moerr.NewInternalErrorNoCtx("not enough blocks")
 	}
@@ -752,9 +752,9 @@ func (e *Engine) BuildBlockReaders(
 	divide := blkCnt / num
 	for i := 0; i < num; i++ {
 		if i == 0 {
-			shard = relData.DataBlkSlice(i*divide, (i+1)*divide+mod)
+			shard = relData.DataSlice(i*divide, (i+1)*divide+mod)
 		} else {
-			shard = relData.DataBlkSlice(i*divide+mod, (i+1)*divide+mod)
+			shard = relData.DataSlice(i*divide+mod, (i+1)*divide+mod)
 		}
 		ds := NewRemoteDataSource(
 			ctx,
