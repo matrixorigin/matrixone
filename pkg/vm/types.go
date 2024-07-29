@@ -305,30 +305,6 @@ func (info OperatorInfo) GetAddress() process.MessageAddress {
 	}
 }
 
-func IsBrokenNode(op Operator) bool {
-	switch op.OpType() {
-	case Order, MergeOrder, Partition:
-		return true
-	case Limit, MergeLimit:
-		return true
-	case Offset, MergeOffset:
-		return true
-	case Group, MergeGroup:
-		return true
-	case Sample:
-		return true
-	case Top, MergeTop:
-		return true
-	case Window:
-		return true
-	case TimeWin, Fill:
-		return true
-	case MergeRecursive:
-		return true
-	}
-	return false
-}
-
 func CannotRemote(op Operator) bool {
 	// todo: I think we should add more operators here.
 	return op.OpType() == LockOp
