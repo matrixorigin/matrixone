@@ -16,8 +16,9 @@ package process
 
 import (
 	"context"
-	"github.com/google/uuid"
 	"sync"
+
+	"github.com/google/uuid"
 )
 
 const ALLCN = "ALLCN"
@@ -74,7 +75,7 @@ type MessageBoard struct {
 
 func NewMessageBoard() *MessageBoard {
 	m := &MessageBoard{
-		Messages: make([]*Message, 0, 16),
+		Messages: make([]*Message, 0, 10240),
 		Waiters:  make([]chan bool, 0, 16),
 		RwMutex:  &sync.RWMutex{},
 	}
