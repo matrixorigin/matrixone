@@ -150,7 +150,7 @@ func newTestCase(flgs []bool, ts []types.Type, cs []*plan.Expr) buildTestCase {
 		Ctx: ctx,
 		Ch:  make(chan *process.RegisterMessage, 10),
 	}
-	proc.GetMessageBoard() = message.NewMessageBoard()
+	proc.SetMessageBoard(message.NewMessageBoard())
 	return buildTestCase{
 		types:  ts,
 		flgs:   flgs,
