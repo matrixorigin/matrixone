@@ -102,6 +102,7 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 	anal := proc.GetAnalyze(timeWin.GetIdx(), timeWin.GetParallelIdx(), timeWin.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
+
 	ctr := timeWin.ctr
 	var err error
 	var bat *batch.Batch
@@ -175,7 +176,6 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 		case evalTag:
 
 			if err = ctr.eval(ctr, timeWin, proc); err != nil {
-				//anal.Output(result.Batch, timeWin.IsLast)
 				return result, err
 			}
 
@@ -183,7 +183,7 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 
 			ctr.status = nextTag
 			result.Batch = ctr.rbat
-			//anal.Output(result.Batch, timeWin.IsLast)
+			anal.Output(result.Batch, timeWin.IsLast)
 			return result, nil
 
 		case evalLastCur:
@@ -200,7 +200,7 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			result.Batch = ctr.rbat
-			//anal.Output(result.Batch, timeWin.IsLast)
+			anal.Output(result.Batch, timeWin.IsLast)
 			return result, nil
 
 		case evalLastPre:
@@ -242,13 +242,13 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 
 			ctr.status = endTag
 			result.Batch = ctr.rbat
-			//anal.Output(result.Batch, timeWin.IsLast)
+			anal.Output(result.Batch, timeWin.IsLast)
 			return result, nil
 
 		case endTag:
 			result.Batch = nil
 			result.Status = vm.ExecStop
-			//anal.Output(result.Batch, timeWin.IsLast)
+			anal.Output(result.Batch, timeWin.IsLast)
 			return result, nil
 		}
 
