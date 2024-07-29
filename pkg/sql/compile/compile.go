@@ -3702,7 +3702,7 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 		s.PreScopes = append(s.PreScopes, probeScopes[i])
 		probeScopes[i].setRootOperator(
 			connector.NewArgument().
-				WithReg(rs[i].Proc.Reg.MergeReceivers[0]))
+				WithReg(s.Proc.Reg.MergeReceivers[0]))
 	}
 
 	// all join's first flag will setting in newLeftScope and newRightScope
