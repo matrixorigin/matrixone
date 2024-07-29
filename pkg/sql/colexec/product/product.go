@@ -17,6 +17,7 @@ package product
 import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 
@@ -105,6 +106,8 @@ func (product *Product) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (product *Product) build(proc *process.Process, anal process.Analyze) error {
 	ctr := product.ctr
+	start := time.Now()
+	defer anal.WaitStop(start)
 	mp := message.ReceiveJoinMap(product.JoinMapTag, false, 0, proc.Base.MessageBoard, proc.Ctx)
 	if mp == nil {
 		return nil

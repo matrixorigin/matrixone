@@ -16,6 +16,7 @@ package left
 
 import (
 	"bytes"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
@@ -119,6 +120,8 @@ func (leftJoin *LeftJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (leftJoin *LeftJoin) build(anal process.Analyze, proc *process.Process) {
 	ctr := leftJoin.ctr
+	start := time.Now()
+	defer anal.WaitStop(start)
 	ctr.mp = message.ReceiveJoinMap(leftJoin.JoinMapTag, leftJoin.IsShuffle, leftJoin.ShuffleIdx, proc.Base.MessageBoard, proc.Ctx)
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())

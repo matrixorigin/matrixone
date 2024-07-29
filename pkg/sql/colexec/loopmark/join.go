@@ -16,6 +16,7 @@ package loopmark
 
 import (
 	"bytes"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
@@ -107,6 +108,8 @@ func (loopMark *LoopMark) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (loopMark *LoopMark) build(proc *process.Process, anal process.Analyze) error {
 	ctr := loopMark.ctr
+	start := time.Now()
+	defer anal.WaitStop(start)
 	mp := message.ReceiveJoinMap(loopMark.JoinMapTag, false, 0, proc.Base.MessageBoard, proc.Ctx)
 	if mp == nil {
 		return nil

@@ -16,6 +16,7 @@ package loopsingle
 
 import (
 	"bytes"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
@@ -107,6 +108,8 @@ func (loopSingle *LoopSingle) Call(proc *process.Process) (vm.CallResult, error)
 
 func (loopSingle *LoopSingle) build(proc *process.Process, anal process.Analyze) error {
 	ctr := loopSingle.ctr
+	start := time.Now()
+	defer anal.WaitStop(start)
 	mp := message.ReceiveJoinMap(loopSingle.JoinMapTag, false, 0, proc.Base.MessageBoard, proc.Ctx)
 	if mp == nil {
 		return nil

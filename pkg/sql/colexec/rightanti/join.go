@@ -17,6 +17,7 @@ package rightanti
 import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 
@@ -138,6 +139,8 @@ func (rightAnti *RightAnti) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (rightAnti *RightAnti) build(anal process.Analyze, proc *process.Process) {
 	ctr := rightAnti.ctr
+	start := time.Now()
+	defer anal.WaitStop(start)
 	ctr.mp = message.ReceiveJoinMap(rightAnti.JoinMapTag, rightAnti.IsShuffle, rightAnti.ShuffleIdx, proc.Base.MessageBoard, proc.Ctx)
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())

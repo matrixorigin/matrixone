@@ -16,6 +16,7 @@ package rightsemi
 
 import (
 	"bytes"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
@@ -140,6 +141,8 @@ func (rightSemi *RightSemi) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (rightSemi *RightSemi) build(anal process.Analyze, proc *process.Process) {
 	ctr := rightSemi.ctr
+	start := time.Now()
+	defer anal.WaitStop(start)
 	ctr.mp = message.ReceiveJoinMap(rightSemi.JoinMapTag, rightSemi.IsShuffle, rightSemi.ShuffleIdx, proc.Base.MessageBoard, proc.Ctx)
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
