@@ -18,6 +18,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"sync"
 	"time"
 
@@ -109,6 +112,93 @@ var (
 		types.New(types.T_uint64, 0, 0),
 	}
 )
+
+type DeltaLocDataSource struct {
+	ctx        context.Context
+	fs         fileservice.FileService
+	ts         types.TS
+	objectMeta map[objectio.Segmentid]*objectInfo
+}
+
+func NewDeltaLocDataSource(
+	ctx context.Context,
+	fs fileservice.FileService,
+	ts types.TS,
+	objectMeta map[objectio.Segmentid]*objectInfo,
+) *DeltaLocDataSource {
+	return &DeltaLocDataSource{
+		ctx:        ctx,
+		fs:         fs,
+		ts:         ts,
+		objectMeta: objectMeta,
+	}
+}
+
+func (d *DeltaLocDataSource) Next(
+	_ context.Context,
+	_ []string,
+	_ []types.Type,
+	_ []uint16,
+	_ any,
+	_ *mpool.MPool,
+	_ engine.VectorPool,
+	_ *batch.Batch) (*objectio.BlockInfoInProgress, engine.DataState, error) {
+	return nil, engine.Persisted, nil
+}
+
+func (d *DeltaLocDataSource) Close() {
+
+}
+
+func (d *DeltaLocDataSource) ApplyTombstonesInProgress(
+	ctx context.Context,
+	bid objectio.Blockid,
+	rowsOffset []int32,
+) ([]int32, error) {
+	return nil, nil
+}
+
+func (d *DeltaLocDataSource) GetTombstonesInProgress(
+	ctx context.Context, bid objectio.Blockid,
+) (deletedRows []int64, err error) {
+	segment := bid.Segment()
+	deltaLoc := d.objectMeta[*segment].deltaLocation[uint32(bid.Sequence())]
+	if deltaLoc == nil {
+		return
+	}
+	logutil.Infof("deltaLoc: %v, id is %d", deltaLoc.String(), bid.Sequence())
+	deletes, _, release, err := blockio.ReadBlockDelete(ctx, *deltaLoc, d.fs)
+	if err != nil {
+		return
+	}
+	defer release()
+	rows := blockio.EvalDeleteRowsByTimestamp(deletes, d.ts, &bid)
+	if rows.IsEmpty() {
+		return
+	}
+	deletedRows = rows.ToI64Arrary()
+	return
+}
+
+func (d *DeltaLocDataSource) HasTombstones(bid types.Blockid) bool {
+	return true
+}
+
+func (d *DeltaLocDataSource) ApplyTombstones(rows []types.Rowid) ([]int64, error) {
+	return nil, nil
+}
+
+func (d *DeltaLocDataSource) SetOrderBy(orderby []*plan.OrderBySpec) {
+	panic("Not Support order by")
+}
+
+func (d *DeltaLocDataSource) GetOrderBy() []*plan.OrderBySpec {
+	panic("Not Support order by")
+}
+
+func (d *DeltaLocDataSource) SetFilterZM(zm objectio.ZoneMap) {
+	panic("Not Support order by")
+}
 
 type objectInfo struct {
 	stats         objectio.ObjectStats
@@ -315,23 +405,19 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, sid string, fs fileserv
 		snapshotSchemaTypes[ColObjId],
 	}
 	for _, objectMap := range objects {
+		checkpointTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+		ds := NewDeltaLocDataSource(ctx, fs, checkpointTS, objectMap)
 		for _, object := range objectMap {
 			location := object.stats.ObjectLocation()
 			name := object.stats.ObjectName()
 			for i := uint32(0); i < object.stats.BlkCnt(); i++ {
 				loc := objectio.BuildLocation(name, location.Extent(), 0, uint16(i))
-				blk := objectio.BlockInfo{
-					BlockID:   *objectio.BuildObjectBlockid(name, uint16(i)),
-					SegmentID: name.SegmentId(),
-					MetaLoc:   objectio.ObjectLocation(loc),
+				blk := objectio.BlockInfoInProgress{
+					BlockID: *objectio.BuildObjectBlockid(name, uint16(i)),
+					MetaLoc: objectio.ObjectLocation(loc),
 				}
-				if object.deltaLocation[i] != nil {
-					logutil.Infof("deltaLoc: %v, id is %d", object.deltaLocation[i].String(), i)
-					blk.DeltaLoc = objectio.ObjectLocation(*object.deltaLocation[i])
-				}
-				checkpointTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-				bat, err := blockio.BlockRead(ctx, sid, &blk, nil, idxes, colTypes, checkpointTS.ToTimestamp(),
-					nil, nil, blockio.BlockReadFilter{}, fs, mp, nil, fileservice.Policy(0))
+				bat, err := blockio.BlockDataRead(ctx, sid, &blk, ds, idxes, colTypes, checkpointTS.ToTimestamp(),
+					nil, nil, blockio.BlockReadFilter{}, fs, mp, nil, fileservice.Policy(0), "")
 				if err != nil {
 					return nil, err
 				}
