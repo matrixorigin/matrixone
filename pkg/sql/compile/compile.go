@@ -143,6 +143,7 @@ func (c *Compile) Release() {
 	if c == nil {
 		return
 	}
+	c.proc.CleanLastQueryContext()
 	GetCompileService().putCompile(c)
 }
 

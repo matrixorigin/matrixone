@@ -49,3 +49,18 @@ func (s *Scope) buildContextFromParentCtx(parentCtx context.Context) {
 		prePipeline.buildContextFromParentCtx(receiverCtx)
 	}
 }
+
+func (s *Scope) checkCtxValid() bool {
+	if s.Proc == nil {
+		return true
+	}
+	if s.Proc.Ctx == nil || s.Proc.Cancel == nil {
+		return false
+	}
+	for _, prePipeline := range s.PreScopes {
+		if !prePipeline.checkCtxValid() {
+			return false
+		}
+	}
+	return true
+}
