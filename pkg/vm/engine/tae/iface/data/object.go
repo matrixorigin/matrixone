@@ -51,13 +51,10 @@ type ObjectAppender interface {
 		txn txnif.AsyncTxn) (
 		node txnif.AppendNode, created bool, n uint32, err error)
 	ApplyAppend(bat *containers.Batch,
-		blkOffset uint16,
 		txn txnif.AsyncTxn,
 	) (int, error)
 	IsAppendable() bool
-	GetNewBlock()
 	ReplayAppend(bat *containers.Batch,
-		blkOffset uint16,
 		txn txnif.AsyncTxn) (int, error)
 	Close()
 }
@@ -65,7 +62,7 @@ type ObjectAppender interface {
 type ObjectReplayer interface {
 	OnReplayDelete(blkID uint16, node txnif.DeleteNode) (err error)
 	OnReplayAppend(node txnif.AppendNode) (err error)
-	OnReplayAppendPayload(bat *containers.Batch, blkOffset uint16) (err error)
+	OnReplayAppendPayload(bat *containers.Batch) (err error)
 }
 
 type Object interface {
@@ -76,12 +73,11 @@ type Object interface {
 
 	GetRowsOnReplay() uint64
 	GetID() *common.ID
-	IsAppendable(bool) bool
+	IsAppendable() bool
 	PrepareCompact() bool
 	PrepareCompactInfo() (bool, string)
 	GetDeltaPersistedTS() types.TS
 
-	BlockCnt() int
 	Rows() (int, error)
 	CheckFlushTaskRetry(startts types.TS) bool
 
@@ -122,7 +118,6 @@ type Object interface {
 		rowmask *roaring.Bitmap,
 		precommit bool,
 		bf objectio.BloomFilter,
-		startBlkID uint16,
 		mp *mpool.MPool,
 	) error
 	//TODO::
@@ -131,6 +126,15 @@ type Object interface {
 
 	GetByFilter(ctx context.Context, txn txnif.AsyncTxn, filter *handle.Filter, mp *mpool.MPool) (uint16, uint32, error)
 	GetValue(ctx context.Context, txn txnif.AsyncTxn, readSchema any, blkID uint16, row, col int, mp *mpool.MPool) (any, bool, error)
+	Foreach(
+		ctx context.Context,
+		readSchema any,
+		blkID uint16,
+		colIdx int,
+		op func(v any, isNull bool, row int) error,
+		sels []uint32,
+		mp *mpool.MPool,
+	) error
 	PPString(level common.PPLevel, depth int, prefix string, blkid int) string
 	EstimateMemSize() (int, int)
 	GetRuntime() *dbutils.Runtime
@@ -140,7 +144,6 @@ type Object interface {
 	GCInMemoryDeletesByTSForTest(types.TS)
 	UpgradeAllDeleteChain()
 	CollectAppendInRange(start, end types.TS, withAborted bool, mp *mpool.MPool) (*containers.BatchWithVersion, error)
-	CollectAppendInRangeWithBlockID(blkID uint16, start, end types.TS, withAborted bool, mp *mpool.MPool) (*containers.BatchWithVersion, error)
 	CollectDeleteInRange(ctx context.Context, start, end types.TS, withAborted bool, mp *mpool.MPool) (*containers.Batch, *bitmap.Bitmap, error)
 	CollectDeleteInRangeByBlock(ctx context.Context, blkID uint16, start, end types.TS, withAborted bool, mp *mpool.MPool) (*containers.Batch, error)
 	PersistedCollectDeleteInRange(

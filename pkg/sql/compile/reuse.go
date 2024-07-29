@@ -56,12 +56,12 @@ func init() {
 			WithEnableChecker(),
 	)
 
-	reuse.CreatePool[anaylze](
-		func() *anaylze {
-			return &anaylze{}
+	reuse.CreatePool[anaylzeModule](
+		func() *anaylzeModule {
+			return &anaylzeModule{}
 		},
-		func(a *anaylze) { *a = anaylze{} },
-		reuse.DefaultOptions[anaylze]().
+		func(a *anaylzeModule) { *a = anaylzeModule{} },
+		reuse.DefaultOptions[anaylzeModule]().
 			WithEnableChecker(),
 	)
 
