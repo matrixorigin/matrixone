@@ -432,12 +432,9 @@ func buildJoinParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	}
 	mcpu := s.NodeInfo.Mcpu
 	if mcpu <= 1 { // no need to parallel
-		buildScope := c.newJoinBuildScope(s, nil, 1)
+		buildScope := c.newJoinBuildScope(s, 1)
 		s.PreScopes = append(s.PreScopes, buildScope)
-		if s.BuildIdx > 1 {
-			probeScope := c.newJoinProbeScope(s, nil)
-			s.PreScopes = append(s.PreScopes, probeScope)
-		}
+		s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:s.BuildIdx]
 		return s, nil
 	}
 
@@ -452,10 +449,9 @@ func buildJoinParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	for i := 0; i < mcpu; i++ {
 		ss[i] = newScope(Merge)
 		ss[i].NodeInfo = s.NodeInfo
-		ss[i].Proc = s.Proc.NewContextChildProc(2)
-		ss[i].Proc.Reg.MergeReceivers[1].Ch = make(chan *process.RegisterMessage, 10)
+		ss[i].Proc = s.Proc.NewContextChildProc(1)
 	}
-	probeScope, buildScope := c.newJoinProbeScope(s, ss), c.newJoinBuildScope(s, ss, int32(mcpu))
+	probeScope, buildScope := c.newBroadcastJoinProbeScope(s, ss), c.newJoinBuildScope(s, int32(mcpu))
 
 	ns, err := newParallelScope(c, s, ss)
 	if err != nil {

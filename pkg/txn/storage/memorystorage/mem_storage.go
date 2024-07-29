@@ -21,13 +21,14 @@ import (
 )
 
 func NewMemoryStorage(
+	sid string,
 	mheap *mpool.MPool,
 	clock clock.Clock,
 	idGenerator memoryengine.IDGenerator,
 ) (*Storage, error) {
 
 	memHandler := NewMemHandler(mheap, clock, idGenerator)
-	catalogHandler, err := NewCatalogHandler(memHandler)
+	catalogHandler, err := NewCatalogHandler(sid, memHandler)
 	if err != nil {
 		return nil, err
 	}

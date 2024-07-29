@@ -39,7 +39,7 @@ func otherCompareOperatorSupports(typ1, typ2 types.Type) bool {
 	case types.T_char, types.T_varchar:
 	case types.T_date, types.T_datetime:
 	case types.T_timestamp, types.T_time:
-	case types.T_blob, types.T_text:
+	case types.T_blob, types.T_text, types.T_datalink:
 	case types.T_binary, types.T_varbinary:
 	case types.T_uuid:
 	case types.T_Rowid:
@@ -64,7 +64,7 @@ func equalAndNotEqualOperatorSupports(typ1, typ2 types.Type) bool {
 	case types.T_char, types.T_varchar:
 	case types.T_date, types.T_datetime:
 	case types.T_timestamp, types.T_time:
-	case types.T_blob, types.T_text:
+	case types.T_blob, types.T_text, types.T_datalink:
 	case types.T_binary, types.T_varbinary:
 	case types.T_json:
 	case types.T_uuid:
@@ -134,7 +134,7 @@ func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		return opBinaryFixedFixedToFixed[float64, float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
 			return a == b
 		}, selectList)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text, types.T_binary, types.T_varbinary:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
 		if parameters[0].GetArea() == nil && parameters[1].GetArea() == nil {
 			return compareVarlenaEqual(parameters, rs, proc, length, selectList)
 		}
@@ -631,7 +631,7 @@ func greatThanFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		return opBinaryFixedFixedToFixed[float64, float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
 			return a > b
 		}, selectList)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_datalink:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return bytes.Compare(a, b) > 0
 		}, selectList)
@@ -741,7 +741,7 @@ func greatEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapp
 		return opBinaryFixedFixedToFixed[float64, float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
 			return a >= b
 		}, selectList)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_datalink:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return bytes.Compare(a, b) >= 0
 		}, selectList)
@@ -851,7 +851,7 @@ func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 		return opBinaryFixedFixedToFixed[float64, float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
 			return a != b
 		}, selectList)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text, types.T_datalink:
 		return opBinaryStrStrToFixed[bool](parameters, rs, proc, length, func(a, b string) bool {
 			return a != b
 		}, selectList)
@@ -961,7 +961,7 @@ func lessThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 		return opBinaryFixedFixedToFixed[float64, float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
 			return a < b
 		}, selectList)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_datalink:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return bytes.Compare(a, b) < 0
 		}, selectList)
@@ -1071,7 +1071,7 @@ func lessEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		return opBinaryFixedFixedToFixed[float64, float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
 			return a <= b
 		}, selectList)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_datalink:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return bytes.Compare(a, b) <= 0
 		}, selectList)

@@ -30,11 +30,15 @@ type objectAppender struct {
 func newAppender(aobj *aobject) *objectAppender {
 	appender := new(objectAppender)
 	appender.obj = aobj
-	rows, _ := aobj.Rows()
+	rows := aobj.LastBlockRows()
 	appender.rows = uint32(rows)
 	return appender
 }
-
+func (appender *objectAppender) GetNewBlock() {
+	appender.placeholder = 0
+	appender.rows = 0
+	appender.obj.GetNewBlock()
+}
 func (appender *objectAppender) GetMeta() any {
 	return appender.obj.meta.Load()
 }
@@ -64,7 +68,7 @@ func (appender *objectAppender) Close() {
 func (appender *objectAppender) IsSameColumns(other any) bool {
 	n := appender.obj.PinNode()
 	defer n.Unref()
-	return n.MustMNode().writeSchema.IsSameColumns(other.(*catalog.Schema))
+	return n.MustMNode().getwrteSchema().IsSameColumns(other.(*catalog.Schema))
 }
 
 func (appender *objectAppender) PrepareAppend(
@@ -82,7 +86,7 @@ func (appender *objectAppender) PrepareAppend(
 	}
 	appender.obj.Lock()
 	defer appender.obj.Unlock()
-	node, created = appender.obj.appendMVCC.AddAppendNodeLocked(
+	node, created = appender.obj.getLastAppendMVCC().AddAppendNodeLocked(
 		txn,
 		appender.rows+appender.placeholder,
 		appender.placeholder+appender.rows+n)
@@ -91,8 +95,13 @@ func (appender *objectAppender) PrepareAppend(
 }
 func (appender *objectAppender) ReplayAppend(
 	bat *containers.Batch,
+	blkOffset uint16,
 	txn txnif.AsyncTxn) (from int, err error) {
-	if from, err = appender.ApplyAppend(bat, txn); err != nil {
+	blkCount := appender.obj.BlockCnt()
+	if blkCount < int(blkOffset) {
+		return 0, nil
+	}
+	if from, err = appender.ApplyAppend(bat, blkOffset, txn); err != nil {
 		return
 	}
 	// TODO: Remove ReplayAppend
@@ -101,6 +110,7 @@ func (appender *objectAppender) ReplayAppend(
 }
 func (appender *objectAppender) ApplyAppend(
 	bat *containers.Batch,
+	blkOffset uint16,
 	txn txnif.AsyncTxn) (from int, err error) {
 	n := appender.obj.PinNode()
 	defer n.Unref()
@@ -108,15 +118,15 @@ func (appender *objectAppender) ApplyAppend(
 	node := n.MustMNode()
 	appender.obj.Lock()
 	defer appender.obj.Unlock()
-	from, err = node.ApplyAppend(bat, txn)
+	from, err = node.ApplyAppend(bat, txn, blkOffset)
 
-	schema := node.writeSchema
+	schema := node.getwrteSchema()
 	for _, colDef := range schema.ColDefs {
 		if colDef.IsPhyAddr() {
 			continue
 		}
 		if colDef.IsRealPrimary() && !schema.IsSecondaryIndexTable() {
-			if err = node.pkIndex.BatchUpsert(bat.Vecs[colDef.Idx].GetDownstreamVector(), from); err != nil {
+			if err = node.getMemoryNode(blkOffset).pkIndex.BatchUpsert(bat.Vecs[colDef.Idx].GetDownstreamVector(), from); err != nil {
 				panic(err)
 			}
 		}

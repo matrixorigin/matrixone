@@ -968,6 +968,7 @@ type MysqlWriter interface {
 	WriteOKtWithEOF(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error
 	WriteEOF(warnings, status uint16) error
 	WriteEOFIF(warnings uint16, status uint16) error
+	WriteEOFIFAndNoFlush(warnings uint16, status uint16) error
 	WriteEOFOrOK(warnings uint16, status uint16) error
 	WriteERR(errorCode uint16, sqlState, errorMessage string) error
 	WriteLengthEncodedNumber(uint64) error
