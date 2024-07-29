@@ -702,10 +702,10 @@ var slowPathCounter atomic.Int64
 func (tbl *txnTable) rangesOnePart(
 	ctx context.Context,
 	state *logtailreplay.PartitionState, // snapshot state of this transaction
-	tableDef *plan.TableDef, // table definition (schema)
-	exprs []*plan.Expr, // filter expression
-	outBlocks *objectio.BlockInfoSlice, // output marshaled block list after filtering
-	proc *process.Process, // process of this transaction
+	tableDef *plan.TableDef,             // table definition (schema)
+	exprs []*plan.Expr,                  // filter expression
+	outBlocks *objectio.BlockInfoSlice,  // output marshaled block list after filtering
+	proc *process.Process,               // process of this transaction
 	txnOffset int,
 ) (err error) {
 	var done bool
@@ -1184,8 +1184,6 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			cols = append(cols, rowIdCol)
 		}
 
-		tbl.Lock()
-		defer tbl.Unlock()
 		tbl.tableDef = &plan.TableDef{
 			TblId:         tbl.tableId,
 			Name:          tbl.tableName,
