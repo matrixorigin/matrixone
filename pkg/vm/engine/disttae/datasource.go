@@ -68,7 +68,7 @@ func buildTombstoneV1() *tombstoneDataV1 {
 	}
 }
 
-func (tomV1 *tombstoneDataV1) initMap() {
+func (tomV1 *tombstoneDataV1) Init() {
 	if !tomV1.init {
 		tomV1.blk2DeltaLoc = make(map[types.Blockid]objectio.Location)
 		tomV1.blk2CommitTS = make(map[types.Blockid]types.TS)
@@ -209,7 +209,7 @@ func (tomV1 *tombstoneDataV1) MarshalWithBuf(w *bytes.Buffer) (uint32, error) {
 }
 
 func (tomV1 *tombstoneDataV1) HasTombstones(bid types.Blockid) bool {
-	tomV1.initMap()
+
 	if _, ok := tomV1.blk2DeltaLoc[bid]; ok {
 		return true
 	}
@@ -225,8 +225,6 @@ func (tomV1 *tombstoneDataV1) HasTombstones(bid types.Blockid) bool {
 func (tomV1 *tombstoneDataV1) ApplyInMemTombstones(
 	bid types.Blockid, rowsOffset []int32,
 ) (left []int32, deleted []int64) {
-
-	tomV1.initMap()
 
 	left = rowsOffset
 
@@ -245,15 +243,13 @@ func (tomV1 *tombstoneDataV1) ApplyPersistedTombstones(
 	bid types.Blockid,
 	rowsOffset []int32,
 	apply func(
-	ctx2 context.Context,
-	loc objectio.Location,
-	cts types.TS,
-	rowsOffset []int32,
-	left *[]int32,
-	deleted *[]int64) (err error),
+		ctx2 context.Context,
+		loc objectio.Location,
+		cts types.TS,
+		rowsOffset []int32,
+		left *[]int32,
+		deleted *[]int64) (err error),
 ) (left []int32, deleted []int64, err error) {
-
-	tomV1.initMap()
 
 	if locs, ok := tomV1.blk2UncommitDeltaLocs[bid]; ok {
 		for _, loc := range locs {
@@ -318,12 +314,11 @@ func rowIdsToOffset(rowIds []types.Rowid, wantedType any) any {
 func (tomV1 *tombstoneDataV1) ApplyTombstones(
 	rows []types.Rowid,
 	loadCommit func(
-	bid types.Blockid,
-	loc objectio.Location,
-	committs types.TS) (*nulls.Nulls, error),
+		bid types.Blockid,
+		loc objectio.Location,
+		committs types.TS) (*nulls.Nulls, error),
 	loadUncommit func(loc objectio.Location) (*nulls.Nulls, error),
 ) ([]int64, error) {
-	tomV1.initMap()
 
 	left := make([]types.Rowid, 0)
 	blockId, _ := rows[0].Decode()
@@ -400,6 +395,10 @@ func buildTombstoneV2() *tombstoneDataV2 {
 	}
 }
 
+func (tomV2 *tombstoneDataV2) Init() {
+	panic("implement me")
+}
+
 func (tomV2 *tombstoneDataV2) IsEmpty() bool {
 	panic("implement me")
 }
@@ -428,12 +427,12 @@ func (tomV2 *tombstoneDataV2) ApplyPersistedTombstones(
 	bid types.Blockid,
 	rowsOffset []int32,
 	apply func(
-	ctx2 context.Context,
-	loc objectio.Location,
-	cts types.TS,
-	rowsOffset []int32,
-	left *[]int32,
-	deleted *[]int64) (err error),
+		ctx2 context.Context,
+		loc objectio.Location,
+		cts types.TS,
+		rowsOffset []int32,
+		left *[]int32,
+		deleted *[]int64) (err error),
 ) (left []int32, deleted []int64, err error) {
 	panic("implement me")
 }
@@ -441,9 +440,9 @@ func (tomV2 *tombstoneDataV2) ApplyPersistedTombstones(
 func (tomV2 *tombstoneDataV2) ApplyTombstones(
 	rows []types.Rowid,
 	load1 func(
-	bid types.Blockid,
-	loc objectio.Location,
-	committs types.TS) (*nulls.Nulls, error),
+		bid types.Blockid,
+		loc objectio.Location,
+		committs types.TS) (*nulls.Nulls, error),
 	load2 func(loc objectio.Location) (*nulls.Nulls, error)) ([]int64, error) {
 	panic("implement me")
 }
