@@ -751,6 +751,12 @@ func (expr *FunctionExpressionExecutor) Free() {
 	if expr == nil {
 		return
 	}
+	if expr.folded != nil {
+		putMethod := expr.resultVector.GetPutVectorMethod()
+		if putMethod != nil {
+			putMethod(expr.folded)
+		}
+	}
 	if expr.resultVector != nil {
 		expr.resultVector.Free()
 		expr.resultVector = nil
