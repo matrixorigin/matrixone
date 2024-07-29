@@ -743,7 +743,9 @@ func (e *Engine) BuildBlockReaders(
 		return nil, err
 	}
 
-	relData.GetTombstones().Init()
+	if relData.GetTombstones() != nil {
+		relData.GetTombstones().Init()
+	}
 
 	var (
 		rds   []engine.Reader
