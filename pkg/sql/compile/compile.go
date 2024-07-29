@@ -3286,31 +3286,23 @@ func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*
 
 func (c *Compile) compilePreInsertUk(n *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
-	defer func() {
-		c.anal.isFirst = false
-	}()
-
 	for i := range ss {
 		preInsertUkArg := constructPreInsertUk(n, c.proc)
-		preInsertUkArg.SetIdx(c.anal.curNodeIdx)
-		preInsertUkArg.SetIsFirst(currentFirstFlag)
+		preInsertUkArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].setRootOperator(preInsertUkArg)
 	}
+	c.anal.isFirst = false
 	return ss
 }
 
 func (c *Compile) compilePreInsertSK(n *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
-	defer func() {
-		c.anal.isFirst = false
-	}()
-
 	for i := range ss {
 		preInsertSkArg := constructPreInsertSk(n, c.proc)
-		preInsertSkArg.SetIdx(c.anal.curNodeIdx)
-		preInsertSkArg.SetIsFirst(currentFirstFlag)
+		preInsertSkArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].setRootOperator(preInsertSkArg)
 	}
+	c.anal.isFirst = false
 	return ss
 }
 
