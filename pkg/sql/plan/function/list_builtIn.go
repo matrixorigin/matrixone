@@ -1723,6 +1723,48 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `encode`
+	{
+		functionId: ENCODE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_blob.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Encode
+				},
+			},
+		},
+	},
+
+	// function `decode`
+	{
+		functionId: DECODE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_blob, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Decode
+				},
+			},
+		},
+	},
+
 	// function `trim`
 	{
 		functionId: TRIM,
