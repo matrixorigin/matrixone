@@ -16,6 +16,7 @@ package shuffle
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"

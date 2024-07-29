@@ -16,8 +16,9 @@ package vm
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"

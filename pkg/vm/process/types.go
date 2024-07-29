@@ -16,11 +16,12 @@ package process
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"io"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/google/uuid"
