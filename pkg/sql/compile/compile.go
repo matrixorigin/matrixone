@@ -3690,9 +3690,6 @@ func (c *Compile) newMergeRemoteScopeByCN(ss []*Scope) []*Scope {
 		}
 		if len(currentSS) > 0 {
 			mergeScope := c.newMergeRemoteScope(currentSS, cn)
-			if len(currentSS) == 1 {
-				mergeScope.NodeInfo.Mcpu = currentSS[0].NodeInfo.Mcpu
-			}
 			rs = append(rs, mergeScope)
 		}
 	}
@@ -3704,6 +3701,7 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 	rs := c.newMergeRemoteScopeByCN(probeScopes)
 	for i := range rs {
 		rs[i].IsJoin = true
+		rs[i].NodeInfo.Mcpu = c.generateCPUNumber(ncpu, int(n.Stats.BlockNum))
 		rs[i].BuildIdx = len(rs[i].Proc.Reg.MergeReceivers)
 		w := &process.WaitRegister{
 			Ctx: rs[i].Proc.Ctx,
