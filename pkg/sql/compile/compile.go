@@ -3517,6 +3517,7 @@ func (c *Compile) newDeleteMergeScope(arg *deletion.Deletion, ss []*Scope) *Scop
 func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 	rs := newScope(Merge)
 	rs.NodeInfo = getEngineNode(c)
+	rs.NodeInfo.Mcpu = 1 //merge scope is single parallel by default
 	rs.PreScopes = ss
 	cnt := 0
 	for _, s := range ss {
