@@ -393,19 +393,20 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 
 		location := obj.Location()
 		objName := location.Name().String()
-
 		if name == AllColumns && obj.StatsValid() {
 			// no need to load object meta
 			for _, col := range needCols {
 				infoList = append(infoList, &plan.MetadataScanInfo{
-					ColName:    col.Name,
-					IsHidden:   col.Hidden,
-					ObjectName: objName,
-					ObjLoc:     location,
-					CreateTs:   createTs,
-					DeleteTs:   deleteTs,
-					RowCnt:     int64(obj.Rows()),
-					ZoneMap:    objectio.EmptyZm[:],
+					ColName:      col.Name,
+					IsHidden:     col.Hidden,
+					ObjectName:   objName,
+					ObjLoc:       location,
+					CreateTs:     createTs,
+					DeleteTs:     deleteTs,
+					RowCnt:       int64(obj.Rows()),
+					ZoneMap:      objectio.EmptyZm[:],
+					CompressSize: int64(obj.ObjectStats.Size()),
+					OriginSize:   int64(obj.ObjectStats.OriginSize()),
 				})
 			}
 			return nil
