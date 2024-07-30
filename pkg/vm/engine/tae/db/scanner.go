@@ -158,10 +158,6 @@ func (scanner *dbScanner) onObject(entry *catalog.ObjectEntry) (err error) {
 }
 
 func (scanner *dbScanner) onTable(entry *catalog.TableEntry) (err error) {
-	if entry.IsVirtual() {
-		err = moerr.GetOkStopCurrRecur()
-		return
-	}
 	scanner.tablemask.Clear()
 	for i, op := range scanner.ops {
 		// If the specified op was masked OnDatabase. skip it

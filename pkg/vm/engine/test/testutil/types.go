@@ -16,6 +16,8 @@ package testutil
 
 import (
 	"fmt"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
@@ -80,4 +82,5 @@ func (s *PartitionStateStats) String() string {
 
 type TestOptions struct {
 	TaeEngineOptions *options.Options
+	Timeout          time.Duration
 }
