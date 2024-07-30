@@ -172,7 +172,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		return err
 
 	case pipeline.Method_PipelineMessage:
-		runCompile, _, errBuildCompile := receiver.newCompile()
+		runCompile, errBuildCompile := receiver.newCompile()
 		if errBuildCompile != nil {
 			return errBuildCompile
 		}
@@ -198,6 +198,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		defer func() {
 			_, _ = GetCompileService().removeRunningCompile(runCompile)
 		}()
+
 		err = s.ParallelRun(runCompile)
 		if err == nil {
 			// record the number of s3 requests
@@ -363,22 +364,16 @@ func (receiver *messageReceiverOnServer) acquireMessage() (*pipeline.Message, er
 }
 
 // newCompile make and return a new compile to run a pipeline.
-func (receiver *messageReceiverOnServer) newCompile() (*Compile, context.CancelFunc, error) {
+func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	// compile is almost surely wanting a small or middle pool.  Later.
 	mp, err := mpool.NewMPool("compile", 0, mpool.NoFixed)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	pHelper, cnInfo := receiver.procBuildHelper, receiver.cnInformation
 
 	// required deadline.
-	deadline, ok := receiver.messageCtx.Deadline()
-	if !ok {
-		return nil, nil, moerr.NewInternalError(receiver.messageCtx, "message context need a deadline.")
-	}
-
-	runningCtx, runningCancel := context.WithDeadline(receiver.connectionCtx, deadline)
-	runningCtx = defines.AttachAccountId(runningCtx, pHelper.accountId)
+	runningCtx := defines.AttachAccountId(receiver.messageCtx, pHelper.accountId)
 	proc := process.NewTopProcess(
 		runningCtx,
 		mp,
@@ -423,7 +418,7 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, context.CancelF
 		return receiver.sendBatch(b)
 	}
 
-	return c, runningCancel, nil
+	return c, nil
 }
 
 func (receiver *messageReceiverOnServer) sendError(

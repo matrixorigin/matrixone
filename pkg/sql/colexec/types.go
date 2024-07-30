@@ -15,6 +15,7 @@
 package colexec
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"reflect"
 	"sync"
@@ -71,7 +72,7 @@ type rpcClientItem struct {
 
 type runningPipelineInfo struct {
 	alreadyDone bool
-	runningProc *process.Process
+	queryCancel context.CancelFunc
 
 	isDispatch bool
 	receiver   *process.WrapCs
@@ -86,8 +87,9 @@ func (info *runningPipelineInfo) cancelPipeline() {
 		info.receiver.Unlock()
 
 	} else {
-		_, cancel := process.GetQueryCtxFromProc(info.runningProc)
-		cancel()
+		if info.queryCancel != nil {
+			info.queryCancel()
+		}
 	}
 }
 
