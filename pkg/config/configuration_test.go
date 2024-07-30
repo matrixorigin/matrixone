@@ -64,13 +64,13 @@ func TestObservabilityParameters_SetDefaultValues1(t *testing.T) {
 					LongQueryTime:          0.0,
 					DisableStmtAggregation: false,
 				}
-				cfg.SelectAggrThreshold.UnmarshalText([]byte("200ms"))
+				cfg.SelectAggThreshold.UnmarshalText([]byte("200ms"))
 				return cfg
 			},
 			check: func(t *testing.T, cfg *ObservabilityParameters) {
 				cfg.SetDefaultValues("test")
 				require.Equal(t, false, cfg.DisableStmtAggregation)
-				require.Equal(t, 200*time.Millisecond, cfg.SelectAggrThreshold.Duration)
+				require.Equal(t, 200*time.Millisecond, cfg.SelectAggThreshold.Duration)
 				require.Equal(t, 0.2, cfg.LongQueryTime)
 			},
 		},
@@ -81,13 +81,13 @@ func TestObservabilityParameters_SetDefaultValues1(t *testing.T) {
 					LongQueryTime:          1.0,
 					DisableStmtAggregation: false,
 				}
-				cfg.SelectAggrThreshold.UnmarshalText([]byte("200ms"))
+				cfg.SelectAggThreshold.UnmarshalText([]byte("200ms"))
 				return cfg
 			},
 			check: func(t *testing.T, cfg *ObservabilityParameters) {
 				cfg.SetDefaultValues("test")
 				require.Equal(t, false, cfg.DisableStmtAggregation)
-				require.Equal(t, 200*time.Millisecond, cfg.SelectAggrThreshold.Duration)
+				require.Equal(t, 200*time.Millisecond, cfg.SelectAggThreshold.Duration)
 				require.Equal(t, 1.0, cfg.LongQueryTime)
 			},
 		},
@@ -98,13 +98,13 @@ func TestObservabilityParameters_SetDefaultValues1(t *testing.T) {
 					LongQueryTime:          0.0,
 					DisableStmtAggregation: true,
 				}
-				cfg.SelectAggrThreshold.UnmarshalText([]byte("200ms"))
+				cfg.SelectAggThreshold.UnmarshalText([]byte("200ms"))
 				return cfg
 			},
 			check: func(t *testing.T, cfg *ObservabilityParameters) {
 				cfg.SetDefaultValues("test")
 				require.Equal(t, true, cfg.DisableStmtAggregation)
-				require.Equal(t, 200*time.Millisecond, cfg.SelectAggrThreshold.Duration)
+				require.Equal(t, 200*time.Millisecond, cfg.SelectAggThreshold.Duration)
 				require.Equal(t, 0.0, cfg.LongQueryTime)
 			},
 		},
@@ -115,13 +115,13 @@ func TestObservabilityParameters_SetDefaultValues1(t *testing.T) {
 					LongQueryTime:          1.0,
 					DisableStmtAggregation: true,
 				}
-				cfg.SelectAggrThreshold.UnmarshalText([]byte("200ms"))
+				cfg.SelectAggThreshold.UnmarshalText([]byte("200ms"))
 				return cfg
 			},
 			check: func(t *testing.T, cfg *ObservabilityParameters) {
 				cfg.SetDefaultValues("test")
 				require.Equal(t, true, cfg.DisableStmtAggregation)
-				require.Equal(t, 200*time.Millisecond, cfg.SelectAggrThreshold.Duration)
+				require.Equal(t, 200*time.Millisecond, cfg.SelectAggThreshold.Duration)
 				require.Equal(t, 1.0, cfg.LongQueryTime)
 			},
 		},

@@ -470,25 +470,25 @@ type ObservabilityParameters struct {
 
 	// StatusPort defines which port the mo status server (for metric etc.) listens on and clients connect to
 	// Start listen with EnableMetricToProm is true.
-	StatusPort int `toml:"statusPort" user_setting:"advanced"`
+	StatusPort int `toml:"status-port" user_setting:"advanced"`
 
 	// EnableMetricToProm default is false. if true, metrics can be scraped through host:status/metrics endpoint
-	EnableMetricToProm bool `toml:"enableMetricToProm" user_setting:"advanced"`
+	EnableMetricToProm bool `toml:"enable-metric-to-prom" user_setting:"advanced"`
 
 	// DisableMetric default is false. if false, enable metric at booting
-	DisableMetric bool `toml:"disableMetric" user_setting:"advanced"`
+	DisableMetric bool `toml:"disable-metric" user_setting:"advanced"`
 
 	// DisableTrace default is false. if false, enable trace at booting
-	DisableTrace bool `toml:"disableTrace" user_setting:"advanced"`
+	DisableTrace bool `toml:"disable-Trace" user_setting:"advanced"`
 
 	// EnableTraceDebug default is false. With true, system will check all the children span is ended, which belong to the closing span.
-	EnableTraceDebug bool `toml:"enableTraceDebug"`
+	EnableTraceDebug bool `toml:"enable-trace-debug"`
 
 	// TraceExportInterval default is 15s.
-	TraceExportInterval int `toml:"traceExportInterval"`
+	TraceExportInterval int `toml:"trace-export-interval"`
 
 	// LongQueryTime default is 0.0 sec. if 0.0f, record every query. Record with exec time longer than LongQueryTime.
-	LongQueryTime float64 `toml:"longQueryTime" user_setting:"advanced"`
+	LongQueryTime float64 `toml:"long-query-time" user_setting:"advanced"`
 
 	// MetricExportInterval default is 15 sec.
 	MetricExportInterval int `toml:"metric-export-interval"`
@@ -500,54 +500,75 @@ type ObservabilityParameters struct {
 	MetricInternalGatherInterval toml.Duration `toml:"metric-internal-gather-interval"`
 
 	// MetricStorageUsageUpdateInterval, default: 15 min
-	MetricStorageUsageUpdateInterval toml.Duration `toml:"metricStorageUsageUpdateInterval"`
+	MetricStorageUsageUpdateInterval toml.Duration `toml:"metric-storage-usage-update-interval"`
 
 	// MetricStorageUsageCheckNewInterval, default: 1 min
-	MetricStorageUsageCheckNewInterval toml.Duration `toml:"metricStorageUsageCheckNewInterval"`
+	MetricStorageUsageCheckNewInterval toml.Duration `toml:"metric-storage-usage-check-new-interval"`
 
 	// MergeCycle default: 300 sec (5 minutes).
 	// PS: only used while MO init.
-	MergeCycle toml.Duration `toml:"mergeCycle"`
+	MergeCycle toml.Duration `toml:"merge-cycle"`
 
 	// DisableSpan default: false. Disable span collection
-	DisableSpan bool `toml:"disableSpan"`
+	DisableSpan bool `toml:"disable-span"`
+
+	DisableSpanProfile bool `toml:"disable-span-profile"`
 
 	// DisableError default: false. Disable error collection
-	DisableError bool `toml:"disableError"`
+	DisableError bool `toml:"disable-error"`
 
 	// LongSpanTime default: 500 ms. Only record span, which duration >= LongSpanTime
-	LongSpanTime toml.Duration `toml:"longSpanTime"`
+	LongSpanTime toml.Duration `toml:"long-span-time"`
 
 	// SkipRunningStmt default: false. Skip status:Running entry while collect statement_info
-	SkipRunningStmt bool `toml:"skipRunningStmt"`
+	SkipRunningStmt bool `toml:"skip-running-stmt"`
 
 	// If disabled, the logs will be written to files stored in s3
-	DisableSqlWriter bool `toml:"disableSqlWriter"`
+	DisableSqlWriter bool `toml:"disable-sql-writer"`
 
 	// DisableStmtAggregation ctrl statement aggregation. If disabled, the statements will not be aggregated.
-	// If false, LongQueryTime is NO less than SelectAggrThreshold
-	DisableStmtAggregation bool `toml:"disableStmtAggregation"`
+	// If false, LongQueryTime is NO less than SelectAggThreshold
+	DisableStmtAggregation bool `toml:"disable-stmt-aggregation"`
 
 	// Seconds to aggregate the statements
-	AggregationWindow toml.Duration `toml:"aggregationWindow"`
+	AggregationWindow toml.Duration `toml:"aggregation-window"`
 
-	// SelectAggrThreshold Duration to filter statements for aggregation
-	SelectAggrThreshold toml.Duration `toml:"selectAggrThreshold"`
+	// SelectAggThreshold Duration to filter statements for aggregation
+	SelectAggThreshold toml.Duration `toml:"select-agg-threshold"`
 
 	// Disable merge statements
-	EnableStmtMerge bool `toml:"enableStmtMerge"`
+	EnableStmtMerge bool `toml:"enable-stmt-merge"`
 
 	// LabelSelector
-	LabelSelector map[string]string `toml:"labelSelector"`
+	LabelSelector map[string]string `toml:"label-selector"`
 
 	// estimate tcp network packet cost
-	TCPPacket bool `toml:"tcpPacket"`
+	TCPPacket bool `toml:"tcp-packet"`
 
 	// for cu calculation
 	CU   OBCUConfig `toml:"cu"`
 	CUv1 OBCUConfig `toml:"cu_v1"`
 
 	OBCollectorConfig
+
+	ObservabilityOldParameters
+}
+
+// ObservabilityOldParameters will remove after 1.3.0
+type ObservabilityOldParameters struct {
+	StatusPortV12         int  `toml:"statusPort" user_setting:"advanced"`
+	EnableMetricToPromV12 bool `toml:"enableMetricToProm"`
+
+	// part statement_info
+	DisableSpanV12         bool          `toml:"disableSpan"`
+	EnableStmtMergeV12     bool          `toml:"enableStmtMerge"`
+	AggregationWindowV12   toml.Duration `toml:"aggregationWindow"`
+	SelectAggrThresholdV12 toml.Duration `toml:"selectAggrThreshold"`
+	LongQueryTimeV12       float64       `toml:"longQueryTime" user_setting:"advanced"`
+	SkipRunningStmtV12     bool          `toml:"skipRunningStmt"`
+
+	// part labelSelector
+	LabelSelectorV12 map[string]string `toml:"labelSelector"`
 }
 
 func NewObservabilityParameters() *ObservabilityParameters {
@@ -574,13 +595,22 @@ func NewObservabilityParameters() *ObservabilityParameters {
 		DisableSqlWriter:                   false,
 		DisableStmtAggregation:             false,
 		AggregationWindow:                  toml.Duration{},
-		SelectAggrThreshold:                toml.Duration{},
+		SelectAggThreshold:                 toml.Duration{},
 		EnableStmtMerge:                    false,
-		LabelSelector:                      map[string]string{defaultLoggerLabelKey: defaultLoggerLabelVal}, /*role=logging_cn*/
+		LabelSelector:                      map[string]string{}, /*default: role=logging_cn*/
 		TCPPacket:                          true,
 		CU:                                 *NewOBCUConfig(),
 		CUv1:                               *NewOBCUConfig(),
 		OBCollectorConfig:                  *NewOBCollectorConfig(),
+		ObservabilityOldParameters: ObservabilityOldParameters{
+			StatusPortV12:          defaultStatusPort,
+			EnableMetricToPromV12:  false,
+			AggregationWindowV12:   toml.Duration{},
+			SelectAggrThresholdV12: toml.Duration{},
+			LongQueryTimeV12:       defaultLongQueryTime,
+			SkipRunningStmtV12:     defaultSkipRunningStmt,
+			LabelSelectorV12:       map[string]string{},
+		},
 	}
 	op.MetricInternalGatherInterval.Duration = defaultMetricInternalGatherInterval
 	op.MetricStorageUsageUpdateInterval.Duration = defaultMetricUpdateStorageUsageInterval
@@ -588,7 +618,11 @@ func NewObservabilityParameters() *ObservabilityParameters {
 	op.MergeCycle.Duration = defaultMergeCycle
 	op.LongSpanTime.Duration = defaultLongSpanTime
 	op.AggregationWindow.Duration = defaultAggregationWindow
-	op.SelectAggrThreshold.Duration = defaultSelectThreshold
+	op.SelectAggThreshold.Duration = defaultSelectThreshold
+	// old part
+	op.AggregationWindowV12.Duration = defaultAggregationWindow
+	op.SelectAggrThresholdV12.Duration = defaultSelectThreshold
+	// END> old part
 	return op
 }
 
@@ -639,16 +673,58 @@ func (op *ObservabilityParameters) SetDefaultValues(version string) {
 		op.AggregationWindow.Duration = defaultAggregationWindow
 	}
 
-	if op.SelectAggrThreshold.Duration <= 0 {
-		op.SelectAggrThreshold.Duration = defaultSelectThreshold
+	if op.SelectAggThreshold.Duration <= 0 {
+		op.SelectAggThreshold.Duration = defaultSelectThreshold
 	}
 
-	// this loop must after SelectAggrThreshold and DisableStmtAggregation
+	if len(op.LabelSelector) == 0 {
+		op.LabelSelector[defaultLoggerLabelKey] = defaultLoggerLabelVal
+	}
+
+	// this loop must after SelectAggThreshold and DisableStmtAggregation
 	if !op.DisableStmtAggregation {
-		val := float64(op.SelectAggrThreshold.Duration) / float64(time.Second)
+		val := float64(op.SelectAggThreshold.Duration) / float64(time.Second)
 		if op.LongQueryTime <= val {
 			op.LongQueryTime = val
 		}
+	}
+
+	// check old config
+	op.setDefaultByOld()
+
+}
+
+func (op *ObservabilityParameters) setDefaultByOld() {
+	// port prom-export
+	if op.StatusPort == defaultStatusPort && op.StatusPortV12 != defaultStatusPort {
+		op.StatusPort = op.StatusPortV12
+	}
+	if op.EnableMetricToProm == false && op.EnableMetricToPromV12 {
+		op.EnableMetricToPromV12 = true
+	}
+
+	// part statement_info
+	if op.DisableSpan == false && op.DisableSpanV12 == true {
+		op.DisableSpan = true
+	}
+	if op.EnableStmtMerge == false && op.EnableStmtMerge != op.EnableStmtMergeV12 {
+		op.EnableStmtMerge = op.EnableStmtMergeV12
+	}
+	if op.AggregationWindow.Duration == defaultAggregationWindow && op.AggregationWindow.Duration != op.AggregationWindowV12.Duration {
+		op.AggregationWindow = op.AggregationWindowV12
+	}
+	if op.SelectAggThreshold.Duration == defaultSelectThreshold && op.SelectAggThreshold.Duration != op.SelectAggrThresholdV12.Duration {
+		op.SelectAggThreshold = op.SelectAggrThresholdV12
+	}
+	if op.LongQueryTime == defaultLongQueryTime && op.LongQueryTime != op.LongQueryTimeV12 {
+		op.LongQueryTime = op.LongQueryTimeV12
+	}
+	if op.SkipRunningStmt == defaultSkipRunningStmt && op.SkipRunningStmt != op.SkipRunningStmtV12 {
+		op.SkipRunningStmt = op.SkipRunningStmtV12
+	}
+	// part labelSelector
+	for k, v := range op.LabelSelectorV12 {
+		op.LabelSelector[k] = v
 	}
 }
 

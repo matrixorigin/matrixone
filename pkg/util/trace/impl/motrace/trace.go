@@ -67,7 +67,7 @@ func InitWithConfig(ctx context.Context, SV *config.ObservabilityParameters, opt
 		WithSQLWriterDisable(SV.DisableSqlWriter),
 		WithAggregatorDisable(SV.DisableStmtAggregation),
 		WithAggregatorWindow(SV.AggregationWindow.Duration),
-		WithSelectThreshold(SV.SelectAggrThreshold.Duration),
+		WithSelectThreshold(SV.SelectAggThreshold.Duration),
 		WithStmtMergeEnable(SV.EnableStmtMerge),
 		WithCUConfig(SV.CU, SV.CUv1),
 		WithTCPPacket(SV.TCPPacket),
