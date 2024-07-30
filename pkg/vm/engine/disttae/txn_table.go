@@ -2579,10 +2579,10 @@ func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.Objec
 
 		for i, m := range taskHost.transferMaps {
 			for r, pos := range m {
-				taskHost.commitEntry.Booking.Mappings[i].M[r] = api.TransDestPos{
-					ObjIdx: pos.ObjIdx,
-					BlkIdx: pos.BlkIdx,
-					RowIdx: pos.RowIdx,
+				taskHost.commitEntry.Booking.Mappings[i].M[int32(r)] = api.TransDestPos{
+					ObjIdx: int32(pos.ObjIdx),
+					BlkIdx: int32(pos.BlkIdx),
+					RowIdx: int32(pos.RowIdx),
 				}
 			}
 		}
@@ -2613,7 +2613,13 @@ func dumpTransferInfo(ctx context.Context, taskHost *cnMergeTask) (err error) {
 			}
 		}
 	}()
+
+	return dumpTransferMaps(ctx, taskHost)
+}
+
+func dumpTransferMaps(ctx context.Context, taskHost *cnMergeTask) error {
 	bookingMaps := taskHost.transferMaps
+
 	blkCnt := int32(len(bookingMaps))
 	totalRows := 0
 
@@ -2629,15 +2635,14 @@ func dumpTransferInfo(ctx context.Context, taskHost *cnMergeTask) (err error) {
 	}
 
 	columns := []string{"src_blk", "src_row", "dest_obj", "dest_blk", "dest_row"}
+	colTypes := []types.T{types.T_int32, types.T_uint32, types.T_uint8, types.T_uint16, types.T_uint32}
 	batchSize := min(200*mpool.MB/len(columns)/int(unsafe.Sizeof(int32(0))), totalRows)
-
 	buffer := batch.New(true, columns)
-
 	releases := make([]func(), len(columns))
 	for i := range columns {
-		t := types.T_int32.ToType()
+		t := colTypes[i].ToType()
 		vec, release := taskHost.GetVector(&t)
-		err = vec.PreExtend(batchSize, taskHost.GetMPool())
+		err := vec.PreExtend(batchSize, taskHost.GetMPool())
 		if err != nil {
 			return err
 		}
@@ -2701,7 +2706,7 @@ func dumpTransferInfo(ctx context.Context, taskHost *cnMergeTask) (err error) {
 	}
 
 	taskHost.commitEntry.Booking = nil
-	return
+	return nil
 }
 
 func applyMergePolicy(ctx context.Context, policyName string, sortKeyPos int, objInfos []logtailreplay.ObjectInfo) ([]logtailreplay.ObjectInfo, error) {
