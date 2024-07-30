@@ -185,15 +185,19 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		}
 		s = appendWriteBackOperator(runCompile, s)
 		runCompile.InitPipelineContextToExecuteQuery()
+		runCompile.scope = []*Scope{s}
 
 		defer func() {
-			runCompile.proc.FreeVectors()
-			runCompile.proc.CleanValueScanBatchs()
-			runCompile.proc.Base.AnalInfos = nil
-			runCompile.anal.analInfos = nil
-
+			runCompile.clear()
 			runCompile.Release()
-			s.release()
+		}()
+
+		// running pipeline.
+		if err = GetCompileService().recordRunningCompile(runCompile); err != nil {
+			return err
+		}
+		defer func() {
+			_, _ = GetCompileService().removeRunningCompile(runCompile)
 		}()
 		err = s.ParallelRun(runCompile)
 		if err == nil {
