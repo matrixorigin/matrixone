@@ -92,6 +92,7 @@ func newCNMergeTask(
 		return nil, err
 	}
 
+	logutil.Infof("newCNMergeTask: %v", tbl.tableName)
 	proc := tbl.proc.Load()
 	attrs := make([]string, 0, len(tbl.seqnums))
 	for i := 0; i < len(tbl.tableDef.Cols)-1; i++ {
