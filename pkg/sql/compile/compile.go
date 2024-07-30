@@ -83,6 +83,7 @@ import (
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -562,8 +563,15 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	v2.TxnStatementTotalCounter.Inc()
 	runC = c
 	for {
+		_, sarg, exist := fault.TriggerFault("runOnce_fail")
+		enableRetry := exist && !c.isInternal && strings.HasPrefix(c.originSQL, sarg) && retryTimes < 1
 		if err = runC.runOnce(); err == nil {
-			break
+			if enableRetry {
+				logutil.Info("runOnce_fail triggered, retrying", zap.Any("sql", c.originSQL))
+				err = moerr.NewTxnNeedRetry(c.proc.Ctx)
+			} else {
+				break
+			}
 		}
 
 		c.fatalLog(retryTimes, err)
@@ -616,7 +624,6 @@ func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 	c.proc.GetTxnOperator().ResetRetry(true)
 	c.proc.GetTxnOperator().GetWorkspace().IncrSQLCount()
 
-	// clear the workspace of the failed statement
 	if e := c.proc.GetTxnOperator().GetWorkspace().RollbackLastStatement(c.proc.Ctx); e != nil {
 		return nil, e
 	}
