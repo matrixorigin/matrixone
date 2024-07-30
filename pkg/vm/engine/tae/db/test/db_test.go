@@ -3996,7 +3996,6 @@ func TestTxnIdempotent(t *testing.T) {
 // insert 200 rows and do quick compaction
 // expect that there are some dirty tables at first and then zero dirty table found
 func TestWatchDirty(t *testing.T) {
-	t.Skip("skip this test because it's not stable")
 	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
