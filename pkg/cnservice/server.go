@@ -463,6 +463,7 @@ func (s *service) handleRequest(
 			s.aicm,
 			s.acquireMessage)
 		if err != nil {
+			// todo: there is a dangerous point here, the req may be very large.
 			logutil.Infof("error occurred while handling the pipeline message, "+
 				"msg is %v, error is %v",
 				req, err)

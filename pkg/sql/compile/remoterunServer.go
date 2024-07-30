@@ -172,8 +172,6 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		return err
 
 	case pipeline.Method_PipelineMessage:
-		logutil.Infof("pipeline message get, receiver is %p", receiver)
-
 		runCompile, errBuildCompile := receiver.newCompile()
 		if errBuildCompile != nil {
 			return errBuildCompile
@@ -186,7 +184,6 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		}
 		s = appendWriteBackOperator(runCompile, s)
 
-		logutil.Infof("start to init pipeline, receiver is %p", receiver)
 		runCompile.scope = []*Scope{s}
 		runCompile.InitPipelineContextToExecuteQuery()
 		defer func() {
@@ -196,7 +193,6 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 
 		colexec.Get().RecordBuiltPipeline(receiver.clientSession, receiver.messageId, runCompile.proc)
 
-		logutil.Infof("start to record running compile, receiver is %p", receiver)
 		// running pipeline.
 		if err = GetCompileService().recordRunningCompile(runCompile); err != nil {
 			return err
@@ -205,7 +201,6 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 			_, _ = GetCompileService().removeRunningCompile(runCompile)
 		}()
 
-		logutil.Infof("start tot run pipeline, receiver is %p", receiver)
 		err = s.ParallelRun(runCompile)
 		if err == nil {
 			// record the number of s3 requests
