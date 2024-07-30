@@ -473,13 +473,13 @@ func (expr *FunctionExpressionExecutor) canFold(proc *process.Process) bool {
 			return false
 		}
 		for _, paramE := range expr.parameterExecutor {
-			if _, ok := paramE.(*FixedVectorExpressionExecutor); !ok {
-				return false
-			}
 			if fe, ok := paramE.(*FunctionExpressionExecutor); ok {
 				if !fe.folded {
 					return false
 				}
+			}
+			if _, ok := paramE.(*FixedVectorExpressionExecutor); !ok {
+				return false
 			}
 		}
 	}
