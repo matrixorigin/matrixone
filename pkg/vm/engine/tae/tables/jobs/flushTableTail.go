@@ -55,6 +55,7 @@ var FlushTableTailTaskFactory = func(
 	metas []*catalog.ObjectEntry, rt *dbutils.Runtime, endTs types.TS, /* end of dirty range*/
 ) tasks.TxnTaskFactory {
 	return func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
+		txn.GetMemo().IsFlushOrMerge = true
 		return NewFlushTableTailTask(ctx, txn, metas, rt, endTs)
 	}
 }

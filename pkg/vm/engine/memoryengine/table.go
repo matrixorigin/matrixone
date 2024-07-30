@@ -415,7 +415,7 @@ func (t *Table) UpdateConstraint(context.Context, *engine.ConstraintDef) error {
 	return nil
 }
 
-func (t *Table) AlterTable(ctx context.Context, c *engine.ConstraintDef, constraint [][]byte) error {
+func (t *Table) AlterTable(ctx context.Context, c *engine.ConstraintDef, reqs []*api.AlterTableReq) error {
 	// implement me
 	return nil
 }
