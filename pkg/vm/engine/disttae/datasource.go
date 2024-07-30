@@ -40,7 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type tombstoneDataV1 struct {
+type tombstoneDataWithDeltaLoc struct {
 	typ engine.TombstoneType
 	//in memory tombstones
 	inMemTombstones []types.Rowid
@@ -62,56 +62,56 @@ type tombstoneDataV1 struct {
 	blk2UncommitDeltaLocs map[types.Blockid][]objectio.Location
 }
 
-func buildTombstoneV1() *tombstoneDataV1 {
-	return &tombstoneDataV1{
-		typ: engine.TombstoneV1,
+func buildTombstoneWithDeltaLoc() *tombstoneDataWithDeltaLoc {
+	return &tombstoneDataWithDeltaLoc{
+		typ: engine.TombstoneWithDeltaLoc,
 	}
 }
 
-func (tomV1 *tombstoneDataV1) Init() {
-	if !tomV1.init {
-		tomV1.blk2DeltaLoc = make(map[types.Blockid]objectio.Location)
-		tomV1.blk2CommitTS = make(map[types.Blockid]types.TS)
-		tomV1.blk2RowID = make(map[types.Blockid][]types.Rowid)
-		tomV1.blk2UncommitDeltaLocs = make(map[types.Blockid][]objectio.Location)
-		tomV1.rowIDs = make(map[types.Rowid]struct{})
-		for i, loc := range tomV1.committedDeltalocs {
+func (tomb *tombstoneDataWithDeltaLoc) Init() {
+	if !tomb.init {
+		tomb.blk2DeltaLoc = make(map[types.Blockid]objectio.Location)
+		tomb.blk2CommitTS = make(map[types.Blockid]types.TS)
+		tomb.blk2RowID = make(map[types.Blockid][]types.Rowid)
+		tomb.blk2UncommitDeltaLocs = make(map[types.Blockid][]objectio.Location)
+		tomb.rowIDs = make(map[types.Rowid]struct{})
+		for i, loc := range tomb.committedDeltalocs {
 			blkID := *objectio.BuildObjectBlockid(loc.Name(), loc.ID())
-			tomV1.blk2DeltaLoc[blkID] = loc
-			tomV1.blk2CommitTS[blkID] = tomV1.commitTS[i]
+			tomb.blk2DeltaLoc[blkID] = loc
+			tomb.blk2CommitTS[blkID] = tomb.commitTS[i]
 		}
-		for _, loc := range tomV1.uncommittedDeltaLocs {
+		for _, loc := range tomb.uncommittedDeltaLocs {
 			blkID := *objectio.BuildObjectBlockid(loc.Name(), loc.ID())
-			tomV1.blk2UncommitDeltaLocs[blkID] = append(tomV1.blk2UncommitDeltaLocs[blkID], loc)
+			tomb.blk2UncommitDeltaLocs[blkID] = append(tomb.blk2UncommitDeltaLocs[blkID], loc)
 		}
-		for _, row := range tomV1.inMemTombstones {
+		for _, row := range tomb.inMemTombstones {
 			blkID, _ := row.Decode()
-			tomV1.blk2RowID[blkID] = append(tomV1.blk2RowID[blkID], row)
-			tomV1.rowIDs[row] = struct{}{}
+			tomb.blk2RowID[blkID] = append(tomb.blk2RowID[blkID], row)
+			tomb.rowIDs[row] = struct{}{}
 		}
-		tomV1.init = true
+		tomb.init = true
 	}
 }
 
-func (tomV1 *tombstoneDataV1) IsEmpty() bool {
-	if len(tomV1.inMemTombstones) == 0 &&
-		len(tomV1.committedDeltalocs) == 0 &&
-		len(tomV1.uncommittedDeltaLocs) == 0 {
+func (tomb *tombstoneDataWithDeltaLoc) IsEmpty() bool {
+	if len(tomb.inMemTombstones) == 0 &&
+		len(tomb.committedDeltalocs) == 0 &&
+		len(tomb.uncommittedDeltaLocs) == 0 {
 		return true
 	}
 	return false
 }
 
-func (tomV1 *tombstoneDataV1) UnMarshal(buf []byte) error {
+func (tomb *tombstoneDataWithDeltaLoc) UnMarshal(buf []byte) error {
 
-	tomV1.typ = engine.TombstoneType(types.DecodeUint8(buf))
+	tomb.typ = engine.TombstoneType(types.DecodeUint8(buf))
 	buf = buf[1:]
 
 	rowIDCnt := types.DecodeUint32(buf)
 	buf = buf[4:]
 	for i := 0; i < int(rowIDCnt); i++ {
 		rowid := types.DecodeFixed[types.Rowid](buf[:types.RowidSize])
-		tomV1.inMemTombstones = append(tomV1.inMemTombstones, rowid)
+		tomb.inMemTombstones = append(tomb.inMemTombstones, rowid)
 		buf = buf[types.RowidSize:]
 	}
 
@@ -119,7 +119,7 @@ func (tomV1 *tombstoneDataV1) UnMarshal(buf []byte) error {
 	buf = buf[4:]
 	for i := 0; i < int(cntOfUncommit); i++ {
 		loc := objectio.Location(buf[:objectio.LocationLen])
-		tomV1.uncommittedDeltaLocs = append(tomV1.uncommittedDeltaLocs, loc)
+		tomb.uncommittedDeltaLocs = append(tomb.uncommittedDeltaLocs, loc)
 		buf = buf[objectio.LocationLen:]
 	}
 
@@ -127,7 +127,7 @@ func (tomV1 *tombstoneDataV1) UnMarshal(buf []byte) error {
 	buf = buf[4:]
 	for i := 0; i < int(cntOfCommit); i++ {
 		loc := objectio.Location(buf[:objectio.LocationLen])
-		tomV1.committedDeltalocs = append(tomV1.committedDeltalocs, loc)
+		tomb.committedDeltalocs = append(tomb.committedDeltalocs, loc)
 		buf = buf[objectio.LocationLen:]
 	}
 
@@ -136,54 +136,54 @@ func (tomV1 *tombstoneDataV1) UnMarshal(buf []byte) error {
 		buf = buf[4:]
 		for i := 0; i < int(cntOfCommitTS); i++ {
 			ts := types.DecodeFixed[types.TS](buf[:types.TxnTsSize])
-			tomV1.commitTS = append(tomV1.commitTS, ts)
+			tomb.commitTS = append(tomb.commitTS, ts)
 			buf = buf[types.TxnTsSize:]
 		}
 	}
 	return nil
 }
 
-func (tomV1 *tombstoneDataV1) MarshalWithBuf(w *bytes.Buffer) (uint32, error) {
+func (tomb *tombstoneDataWithDeltaLoc) MarshalWithBuf(w *bytes.Buffer) (uint32, error) {
 	var size uint32
-	typ := uint8(tomV1.typ)
+	typ := uint8(tomb.typ)
 	if _, err := w.Write(types.EncodeUint8(&typ)); err != nil {
 		return 0, err
 	}
 	size += 1
 
-	length := uint32(len(tomV1.inMemTombstones))
+	length := uint32(len(tomb.inMemTombstones))
 	if _, err := w.Write(types.EncodeUint32(&length)); err != nil {
 		return 0, err
 	}
 	size += 4
 
-	for _, row := range tomV1.inMemTombstones {
+	for _, row := range tomb.inMemTombstones {
 		if _, err := w.Write(types.EncodeFixed(row)); err != nil {
 			return 0, err
 		}
 		size += types.RowidSize
 	}
 
-	length = uint32(len(tomV1.uncommittedDeltaLocs))
+	length = uint32(len(tomb.uncommittedDeltaLocs))
 	if _, err := w.Write(types.EncodeUint32(&length)); err != nil {
 		return 0, err
 	}
 	size += 4
 
-	for _, loc := range tomV1.uncommittedDeltaLocs {
+	for _, loc := range tomb.uncommittedDeltaLocs {
 		if _, err := w.Write(types.EncodeSlice([]byte(loc))); err != nil {
 			return 0, err
 		}
 		size += uint32(objectio.LocationLen)
 	}
 
-	length = uint32(len(tomV1.committedDeltalocs))
+	length = uint32(len(tomb.committedDeltalocs))
 	if _, err := w.Write(types.EncodeUint32(&length)); err != nil {
 		return 0, err
 	}
 	size += 4
 
-	for _, loc := range tomV1.committedDeltalocs {
+	for _, loc := range tomb.committedDeltalocs {
 		if _, err := w.Write(types.EncodeSlice([]byte(loc))); err != nil {
 			return 0, err
 		}
@@ -191,13 +191,13 @@ func (tomV1 *tombstoneDataV1) MarshalWithBuf(w *bytes.Buffer) (uint32, error) {
 	}
 
 	if length > 0 {
-		length = uint32(len(tomV1.commitTS))
+		length = uint32(len(tomb.commitTS))
 		if _, err := w.Write(types.EncodeUint32(&length)); err != nil {
 			return 0, err
 		}
 		size += 4
 
-		for _, ts := range tomV1.commitTS {
+		for _, ts := range tomb.commitTS {
 			if _, err := w.Write(types.EncodeFixed(ts)); err != nil {
 				return 0, err
 			}
@@ -208,21 +208,7 @@ func (tomV1 *tombstoneDataV1) MarshalWithBuf(w *bytes.Buffer) (uint32, error) {
 
 }
 
-func (tomV1 *tombstoneDataV1) HasTombstones(bid types.Blockid) bool {
-
-	if _, ok := tomV1.blk2DeltaLoc[bid]; ok {
-		return true
-	}
-	if _, ok := tomV1.blk2RowID[bid]; ok {
-		return true
-	}
-	if _, ok := tomV1.blk2UncommitDeltaLocs[bid]; ok {
-		return true
-	}
-	return false
-}
-
-func (tomV1 *tombstoneDataV1) ApplyInMemTombstones(
+func (tomb *tombstoneDataWithDeltaLoc) ApplyInMemTombstones(
 	bid types.Blockid,
 	rowsOffset []int32,
 	deleted *nulls.Nulls,
@@ -230,7 +216,7 @@ func (tomV1 *tombstoneDataV1) ApplyInMemTombstones(
 
 	left = rowsOffset
 
-	if rowIDs, ok := tomV1.blk2RowID[bid]; ok {
+	if rowIDs, ok := tomb.blk2RowID[bid]; ok {
 		for _, row := range rowIDs {
 			_, o := row.Decode()
 			left = fastApplyDeletedRows(left, deleted, o)
@@ -240,7 +226,7 @@ func (tomV1 *tombstoneDataV1) ApplyInMemTombstones(
 	return
 }
 
-func (tomV1 *tombstoneDataV1) ApplyPersistedTombstones(
+func (tomb *tombstoneDataWithDeltaLoc) ApplyPersistedTombstones(
 	ctx context.Context,
 	bid types.Blockid,
 	rowsOffset []int32,
@@ -254,7 +240,7 @@ func (tomV1 *tombstoneDataV1) ApplyPersistedTombstones(
 		deleted *nulls.Nulls) (err error),
 ) (left []int32, err error) {
 
-	if locs, ok := tomV1.blk2UncommitDeltaLocs[bid]; ok {
+	if locs, ok := tomb.blk2UncommitDeltaLocs[bid]; ok {
 		for _, loc := range locs {
 			err = apply(ctx, loc, types.TS{}, rowsOffset, &left, mask)
 			if err != nil {
@@ -263,8 +249,8 @@ func (tomV1 *tombstoneDataV1) ApplyPersistedTombstones(
 		}
 	}
 
-	if loc, ok := tomV1.blk2DeltaLoc[bid]; ok {
-		cts, ok := tomV1.blk2CommitTS[bid]
+	if loc, ok := tomb.blk2DeltaLoc[bid]; ok {
+		cts, ok := tomb.blk2CommitTS[bid]
 		if !ok {
 			panic("commit ts not found")
 		}
@@ -314,152 +300,16 @@ func rowIdsToOffset(rowIds []types.Rowid, wantedType any) any {
 	return nil
 }
 
-func (tomV1 *tombstoneDataV1) ApplyTombstones(
-	rows []types.Rowid,
-	loadCommit func(
-		bid types.Blockid,
-		loc objectio.Location,
-		committs types.TS) (*nulls.Nulls, error),
-	loadUncommit func(loc objectio.Location) (*nulls.Nulls, error),
-) ([]int64, error) {
-
-	left := make([]types.Rowid, 0)
-	blockId, _ := rows[0].Decode()
-
-	var (
-		commitTombstones *nulls.Nulls
-		err              error
-	)
-
-	uncommitTombstones := nulls.NewWithSize(0)
-
-	if _, ok := tomV1.blk2DeltaLoc[blockId]; ok {
-		commitTombstones, err = loadCommit(
-			blockId,
-			tomV1.blk2DeltaLoc[blockId],
-			tomV1.blk2CommitTS[blockId])
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	if _, ok := tomV1.blk2UncommitDeltaLocs[blockId]; ok {
-		for _, loc := range tomV1.blk2UncommitDeltaLocs[blockId] {
-			tombstones, err := loadUncommit(loc)
-			if err != nil {
-				return nil, err
-			}
-			uncommitTombstones.Merge(tombstones)
-		}
-	}
-
-	for _, row := range rows {
-		if _, ok := tomV1.rowIDs[row]; ok {
-			continue
-		}
-		_, offset := row.Decode()
-		if commitTombstones != nil && commitTombstones.Contains(uint64(offset)) {
-			continue
-		}
-		if uncommitTombstones.Contains(uint64(offset)) {
-			continue
-		}
-		left = append(left, row)
-	}
-	return rowIdsToOffset(left, int64(0)).([]int64), nil
+func (tomb *tombstoneDataWithDeltaLoc) Type() engine.TombstoneType {
+	return tomb.typ
 }
 
-func (tomV1 *tombstoneDataV1) Type() engine.TombstoneType {
-	return tomV1.typ
-}
-
-func (tomV1 *tombstoneDataV1) Merge(other engine.Tombstoner) error {
-	if v, ok := other.(*tombstoneDataV1); ok {
-		tomV1.inMemTombstones = append(tomV1.inMemTombstones, v.inMemTombstones...)
-		tomV1.committedDeltalocs = append(tomV1.committedDeltalocs, v.committedDeltalocs...)
-		tomV1.uncommittedDeltaLocs = append(tomV1.uncommittedDeltaLocs, v.uncommittedDeltaLocs...)
-		tomV1.commitTS = append(tomV1.commitTS, v.commitTS...)
-	}
-	return moerr.NewInternalErrorNoCtx("tombstone type mismatch")
-}
-
-var _ engine.Tombstoner = buildTombstoneV2()
-
-type tombstoneDataV2 struct {
-	typ engine.TombstoneType
-	//tombstones
-	inMemTombstones []types.Rowid
-	tombstoneObjs   []objectio.ObjectStats
-}
-
-func buildTombstoneV2() *tombstoneDataV2 {
-	return &tombstoneDataV2{
-		typ: engine.TombstoneV2,
-	}
-}
-
-func (tomV2 *tombstoneDataV2) Init() {
-	panic("implement me")
-}
-
-func (tomV2 *tombstoneDataV2) IsEmpty() bool {
-	panic("implement me")
-}
-
-func (tomV2 *tombstoneDataV2) MarshalWithBuf(w *bytes.Buffer) (uint32, error) {
-	panic("implement me")
-}
-
-func (tomV2 *tombstoneDataV2) UnMarshal(buf []byte) error {
-	panic("implement me")
-}
-
-func (tomV2 *tombstoneDataV2) HasTombstones(bid types.Blockid) bool {
-	panic("implement me")
-}
-
-func (tomV2 *tombstoneDataV2) ApplyInMemTombstones(
-	bid types.Blockid,
-	rowsOffset []int32,
-	deleted *nulls.Nulls,
-) (left []int32) {
-	panic("implement me")
-}
-
-func (tomV2 *tombstoneDataV2) ApplyPersistedTombstones(
-	ctx context.Context,
-	bid types.Blockid,
-	rowsOffset []int32,
-	mask *nulls.Nulls,
-	apply func(
-		ctx2 context.Context,
-		loc objectio.Location,
-		cts types.TS,
-		rowsOffset []int32,
-		left *[]int32,
-		deleted *nulls.Nulls) (err error),
-) (left []int32, err error) {
-	panic("implement me")
-}
-
-func (tomV2 *tombstoneDataV2) ApplyTombstones(
-	rows []types.Rowid,
-	load1 func(
-		bid types.Blockid,
-		loc objectio.Location,
-		committs types.TS) (*nulls.Nulls, error),
-	load2 func(loc objectio.Location) (*nulls.Nulls, error)) ([]int64, error) {
-	panic("implement me")
-}
-
-func (tomV2 *tombstoneDataV2) Type() engine.TombstoneType {
-	return tomV2.typ
-}
-
-func (tomV2 *tombstoneDataV2) Merge(other engine.Tombstoner) error {
-	if v, ok := other.(*tombstoneDataV2); ok {
-		tomV2.inMemTombstones = append(tomV2.inMemTombstones, v.inMemTombstones...)
-		tomV2.tombstoneObjs = append(tomV2.tombstoneObjs, v.tombstoneObjs...)
+func (tomb *tombstoneDataWithDeltaLoc) Merge(other engine.Tombstoner) error {
+	if v, ok := other.(*tombstoneDataWithDeltaLoc); ok {
+		tomb.inMemTombstones = append(tomb.inMemTombstones, v.inMemTombstones...)
+		tomb.committedDeltalocs = append(tomb.committedDeltalocs, v.committedDeltalocs...)
+		tomb.uncommittedDeltaLocs = append(tomb.uncommittedDeltaLocs, v.uncommittedDeltaLocs...)
+		tomb.commitTS = append(tomb.commitTS, v.commitTS...)
 	}
 	return moerr.NewInternalErrorNoCtx("tombstone type mismatch")
 }
@@ -467,20 +317,20 @@ func (tomV2 *tombstoneDataV2) Merge(other engine.Tombstoner) error {
 func UnmarshalRelationData(data []byte) (engine.RelData, error) {
 	typ := engine.RelDataType(data[0])
 	switch typ {
-	case engine.RelDataBlkInfoListV1:
-		rd1 := buildRelationDataV1()
-		if err := rd1.UnMarshal(data); err != nil {
+	case engine.RelDataBlockList:
+		relData := buildRelationDataV1()
+		if err := relData.UnMarshal(data); err != nil {
 			return nil, err
 		}
-		return rd1, nil
+		return relData, nil
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("unsupported relation data type")
 	}
 }
 
-var _ engine.RelData = new(relationDataBlkInfoListV1)
+var _ engine.RelData = new(blockListRelData)
 
-type relationDataBlkInfoListV1 struct {
+type blockListRelData struct {
 	typ engine.RelDataType
 	//blkList[0] is a empty block info
 	//blkList []*objectio.BlockInfoInProgress
@@ -493,72 +343,70 @@ type relationDataBlkInfoListV1 struct {
 	tombstones engine.Tombstoner
 }
 
-func buildRelationDataV1() *relationDataBlkInfoListV1 {
-	return &relationDataBlkInfoListV1{
-		typ:     engine.RelDataBlkInfoListV1,
+func buildRelationDataV1() *blockListRelData {
+	return &blockListRelData{
+		typ:     engine.RelDataBlockList,
 		blklist: &objectio.BlockInfoSliceInProgress{},
 		isEmpty: true,
 	}
 }
 
-func (rd1 *relationDataBlkInfoListV1) GetShardIDList() []uint64 {
+func (relData *blockListRelData) GetShardIDList() []uint64 {
 	panic("not supported")
 }
-func (rd1 *relationDataBlkInfoListV1) GetShardID(i int) uint64 {
+func (relData *blockListRelData) GetShardID(i int) uint64 {
 	panic("not supported")
 }
-func (rd1 *relationDataBlkInfoListV1) SetShardID(i int, id uint64) {
+func (relData *blockListRelData) SetShardID(i int, id uint64) {
 	panic("not supported")
 }
-func (rd1 *relationDataBlkInfoListV1) AppendShardID(id uint64) {
+func (relData *blockListRelData) AppendShardID(id uint64) {
 	panic("not supported")
 }
 
-func (rd1 *relationDataBlkInfoListV1) GetBlockInfoSlice() objectio.BlockInfoSliceInProgress {
-	return rd1.blklist.GetAllBytes()
+func (relData *blockListRelData) GetBlockInfoSlice() objectio.BlockInfoSliceInProgress {
+	return relData.blklist.GetAllBytes()
 }
 
-func (rd1 *relationDataBlkInfoListV1) GetBlockInfo(i int) objectio.BlockInfoInProgress {
-	return *rd1.blklist.Get(i)
+func (relData *blockListRelData) GetBlockInfo(i int) objectio.BlockInfoInProgress {
+	return *relData.blklist.Get(i)
 }
 
-func (rd1 *relationDataBlkInfoListV1) SetBlockInfo(i int, blk objectio.BlockInfoInProgress) {
-	rd1.blklist.Set(i, &blk)
+func (relData *blockListRelData) SetBlockInfo(i int, blk objectio.BlockInfoInProgress) {
+	relData.blklist.Set(i, &blk)
 }
 
-func (rd1 *relationDataBlkInfoListV1) AppendBlockInfo(blk objectio.BlockInfoInProgress) {
-	rd1.blklist.AppendBlockInfo(blk)
+func (relData *blockListRelData) AppendBlockInfo(blk objectio.BlockInfoInProgress) {
+	relData.blklist.AppendBlockInfo(blk)
 }
 
-func (rd1 *relationDataBlkInfoListV1) UnMarshal(data []byte) error {
+func (relData *blockListRelData) UnMarshal(data []byte) error {
 	data = data[1:]
 
 	sizeofblks := types.DecodeUint32(data)
 	data = data[4:]
 
-	*rd1.blklist = data[:sizeofblks]
+	*relData.blklist = data[:sizeofblks]
 	data = data[sizeofblks:]
 
 	isEmpty := types.DecodeBool(data)
-	rd1.isEmpty = isEmpty
+	relData.isEmpty = isEmpty
 	data = data[1:]
 
 	if !isEmpty {
 		tombstoneTyp := engine.TombstoneType(types.DecodeUint8(data))
-		rd1.tombstoneTyp = tombstoneTyp
+		relData.tombstoneTyp = tombstoneTyp
 		data = data[1:]
 
 		size := types.DecodeUint32(data)
 		data = data[4:]
 		switch tombstoneTyp {
-		case engine.TombstoneV1:
-			tombstoner := buildTombstoneV1()
+		case engine.TombstoneWithDeltaLoc:
+			tombstoner := buildTombstoneWithDeltaLoc()
 			if err := tombstoner.UnMarshal(data[:size]); err != nil {
 				return err
 			}
-			rd1.AttachTombstones(tombstoner)
-		case engine.TombstoneV2:
-			return moerr.NewInternalErrorNoCtx("unsupported tombstone type")
+			relData.AttachTombstones(tombstoner)
 		default:
 			return moerr.NewInternalErrorNoCtx("unsupported tombstone type")
 		}
@@ -567,33 +415,33 @@ func (rd1 *relationDataBlkInfoListV1) UnMarshal(data []byte) error {
 	return nil
 }
 
-func (rd1 *relationDataBlkInfoListV1) MarshalWithBuf(w *bytes.Buffer) error {
+func (relData *blockListRelData) MarshalWithBuf(w *bytes.Buffer) error {
 	var pos2 uint32
-	typ := uint8(rd1.typ)
+	typ := uint8(relData.typ)
 	if _, err := w.Write(types.EncodeUint8(&typ)); err != nil {
 		return err
 	}
 	pos2 += 1
 
-	sizeofblks := uint32(rd1.blklist.Size())
+	sizeofblks := uint32(relData.blklist.Size())
 	if _, err := w.Write(types.EncodeUint32(&sizeofblks)); err != nil {
 		return err
 	}
 	pos2 += 4
 
 	//marshal blk list
-	if _, err := w.Write(*rd1.blklist); err != nil {
+	if _, err := w.Write(*relData.blklist); err != nil {
 		return err
 	}
 	pos2 += sizeofblks
 
-	if _, err := w.Write(types.EncodeBool(&rd1.isEmpty)); err != nil {
+	if _, err := w.Write(types.EncodeBool(&relData.isEmpty)); err != nil {
 		return err
 	}
 	pos2 += 1
 
-	if !rd1.isEmpty {
-		typ := uint8(rd1.tombstoneTyp)
+	if !relData.isEmpty {
+		typ := uint8(relData.tombstoneTyp)
 		if _, err := w.Write(types.EncodeUint8(&typ)); err != nil {
 			return err
 		}
@@ -605,7 +453,7 @@ func (rd1 *relationDataBlkInfoListV1) MarshalWithBuf(w *bytes.Buffer) error {
 			return err
 		}
 
-		space, err := rd1.tombstones.MarshalWithBuf(w)
+		space, err := relData.tombstones.MarshalWithBuf(w)
 		if err != nil {
 			return err
 		}
@@ -616,45 +464,45 @@ func (rd1 *relationDataBlkInfoListV1) MarshalWithBuf(w *bytes.Buffer) error {
 	return nil
 }
 
-func (rd1 *relationDataBlkInfoListV1) GetType() engine.RelDataType {
-	return rd1.typ
+func (relData *blockListRelData) GetType() engine.RelDataType {
+	return relData.typ
 }
 
-func (rd1 *relationDataBlkInfoListV1) MarshalToBytes() []byte {
+func (relData *blockListRelData) MarshalToBytes() []byte {
 	var w bytes.Buffer
-	if err := rd1.MarshalWithBuf(&w); err != nil {
+	if err := relData.MarshalWithBuf(&w); err != nil {
 		return nil
 	}
 	buf := w.Bytes()
 	return buf
 }
 
-func (rd1 *relationDataBlkInfoListV1) AttachTombstones(tombstones engine.Tombstoner) error {
-	rd1.tombstones = tombstones
-	rd1.tombstoneTyp = tombstones.Type()
-	rd1.isEmpty = tombstones.IsEmpty()
+func (relData *blockListRelData) AttachTombstones(tombstones engine.Tombstoner) error {
+	relData.tombstones = tombstones
+	relData.tombstoneTyp = tombstones.Type()
+	relData.isEmpty = tombstones.IsEmpty()
 	return nil
 }
 
-func (rd1 *relationDataBlkInfoListV1) GetTombstones() engine.Tombstoner {
-	return rd1.tombstones
+func (relData *blockListRelData) GetTombstones() engine.Tombstoner {
+	return relData.tombstones
 }
 
-func (rd1 *relationDataBlkInfoListV1) DataSlice(i, j int) engine.RelData {
-	blist := objectio.BlockInfoSliceInProgress(rd1.blklist.Slice(i, j))
-	return &relationDataBlkInfoListV1{
-		typ:          rd1.typ,
+func (relData *blockListRelData) DataSlice(i, j int) engine.RelData {
+	blist := objectio.BlockInfoSliceInProgress(relData.blklist.Slice(i, j))
+	return &blockListRelData{
+		typ:          relData.typ,
 		blklist:      &blist,
-		isEmpty:      rd1.isEmpty,
-		tombstoneTyp: rd1.tombstoneTyp,
-		tombstones:   rd1.tombstones,
+		isEmpty:      relData.isEmpty,
+		tombstoneTyp: relData.tombstoneTyp,
+		tombstones:   relData.tombstones,
 	}
 }
 
-func (rd1 *relationDataBlkInfoListV1) GroupByPartitionNum() map[int16]engine.RelData {
+func (relData *blockListRelData) GroupByPartitionNum() map[int16]engine.RelData {
 	ret := make(map[int16]engine.RelData)
 
-	blks := rd1.GetBlockInfoSlice()
+	blks := relData.GetBlockInfoSlice()
 	blksLen := blks.Len()
 	for idx := range blksLen {
 		blkInfo := blks.Get(idx)
@@ -663,11 +511,11 @@ func (rd1 *relationDataBlkInfoListV1) GroupByPartitionNum() map[int16]engine.Rel
 		}
 		partitionNum := blkInfo.PartitionNum
 		if _, ok := ret[partitionNum]; !ok {
-			ret[partitionNum] = &relationDataBlkInfoListV1{
-				typ:          rd1.typ,
-				isEmpty:      rd1.isEmpty,
-				tombstoneTyp: rd1.tombstoneTyp,
-				tombstones:   rd1.tombstones,
+			ret[partitionNum] = &blockListRelData{
+				typ:          relData.typ,
+				isEmpty:      relData.isEmpty,
+				tombstoneTyp: relData.tombstoneTyp,
+				tombstones:   relData.tombstones,
 			}
 			ret[partitionNum].AppendBlockInfo(objectio.EmptyBlockInfoInProgress)
 		}
@@ -677,16 +525,16 @@ func (rd1 *relationDataBlkInfoListV1) GroupByPartitionNum() map[int16]engine.Rel
 	return ret
 }
 
-func (rd1 *relationDataBlkInfoListV1) BuildEmptyRelData() engine.RelData {
-	return &relationDataBlkInfoListV1{
+func (relData *blockListRelData) BuildEmptyRelData() engine.RelData {
+	return &blockListRelData{
 		blklist: &objectio.BlockInfoSliceInProgress{},
-		typ:     rd1.typ,
+		typ:     relData.typ,
 		isEmpty: true,
 	}
 }
 
-func (rd1 *relationDataBlkInfoListV1) DataCnt() int {
-	return rd1.blklist.Len()
+func (relData *blockListRelData) DataCnt() int {
+	return relData.blklist.Len()
 }
 
 type RemoteDataSource struct {
@@ -858,55 +706,6 @@ func (rs *RemoteDataSource) GetTombstonesInProgress(
 	}
 
 	return mask, nil
-}
-
-func (rs *RemoteDataSource) HasTombstones(bid types.Blockid) bool {
-	return rs.data.GetTombstones().HasTombstones(bid)
-}
-
-// ApplyTombstones Apply tombstones into rows.
-// Notice that rows should come from the same block.
-func (rs *RemoteDataSource) ApplyTombstones(rows []types.Rowid) ([]int64, error) {
-	loadCommitted := func(
-		bid types.Blockid,
-		loc objectio.Location,
-		committs types.TS) (*nulls.Nulls, error) {
-		tombstones, err := loadBlockDeletesByDeltaLoc(
-			rs.ctx,
-			rs.fs,
-			bid,
-			loc,
-			rs.ts,
-			committs,
-		)
-		if err != nil {
-			return nil, err
-		}
-		return tombstones, nil
-	}
-	loadUncommited := func(loc objectio.Location) (*nulls.Nulls, error) {
-		rowIdBat, release, err := blockio.LoadTombstoneColumns(
-			rs.ctx,
-			[]uint16{0},
-			nil,
-			rs.fs,
-			loc,
-			rs.proc.GetMPool())
-		if err != nil {
-			return nil, err
-		}
-		defer release()
-
-		offsets := nulls.NewWithSize(0)
-		rowids := vector.MustFixedCol[types.Rowid](rowIdBat.GetVector(0))
-
-		for _, rowid := range rowids {
-			row := rowid.GetRowOffset()
-			offsets.Add(uint64(row))
-		}
-		return offsets, nil
-	}
-	return rs.data.GetTombstones().ApplyTombstones(rows, loadCommitted, loadUncommited)
 }
 
 func (rs *RemoteDataSource) SetOrderBy(orderby []*plan.OrderBySpec) {
@@ -1109,16 +908,8 @@ func (ls *LocalDataSource) deleteFirstNBlocks(n int) {
 	}
 }
 
-func (ls *LocalDataSource) HasTombstones(bid types.Blockid) bool {
-	panic("implement me")
-}
-
 func (ls *LocalDataSource) Close() {
 	ls.pStateRows.insIter.Close()
-}
-
-func (ls *LocalDataSource) ApplyTombstones(rows []types.Rowid) (sel []int64, err error) {
-	panic("implement me")
 }
 
 func (ls *LocalDataSource) Next(

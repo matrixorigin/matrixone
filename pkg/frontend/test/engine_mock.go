@@ -242,15 +242,6 @@ func (mr *MockTombstonerMockRecorder) ApplyPersistedTombstones(ctx, bid, rowsOff
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ApplyPersistedTombstones", reflect.TypeOf((*MockTombstoner)(nil).ApplyPersistedTombstones), ctx, bid, rowsOffset, mask, apply)
 }
 
-// ApplyTombstones mocks base method.
-func (m *MockTombstoner) ApplyTombstones(rows []types.Rowid, load1 func(types.Blockid, objectio.Location, types.TS) (*nulls.Nulls, error), load2 func(objectio.Location) (*nulls.Nulls, error)) ([]int64, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ApplyTombstones", rows, load1, load2)
-	ret0, _ := ret[0].([]int64)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
 // ApplyTombstones indicates an expected call of ApplyTombstones.
 func (mr *MockTombstonerMockRecorder) ApplyTombstones(rows, load1, load2 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()

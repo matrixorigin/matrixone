@@ -578,7 +578,7 @@ func (tbl *txnTable) resetSnapshot() {
 func (tbl *txnTable) CollectTombstones(
 	ctx context.Context, txnOffset int,
 ) (engine.Tombstoner, error) {
-	tombstone := buildTombstoneV1()
+	tombstone := buildTombstoneWithDeltaLoc()
 
 	offset := txnOffset
 	if tbl.db.op.IsSnapOp() {
@@ -748,8 +748,8 @@ func (tbl *txnTable) Ranges(
 		return
 	}
 
-	data = &relationDataBlkInfoListV1{
-		typ:     engine.RelDataBlkInfoListV1,
+	data = &blockListRelData{
+		typ:     engine.RelDataBlockList,
 		blklist: &blocks,
 		isEmpty: true,
 	}
@@ -1788,7 +1788,7 @@ func (tbl *txnTable) buildLocalDataSource(
 ) (source engine.DataSource, err error) {
 
 	switch relData.GetType() {
-	case engine.RelDataBlkInfoListV1:
+	case engine.RelDataBlockList:
 		ranges := relData.GetBlockInfoSlice()
 		skipReadMem := !bytes.Equal(
 			objectio.EncodeBlockInfoInProgress(*ranges.Get(0)), objectio.EmptyBlockInfoInProgressBytes)
