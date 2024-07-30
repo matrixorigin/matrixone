@@ -16,8 +16,11 @@ package function
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/md5"
 	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -1116,6 +1119,88 @@ func octFloat[T constraints.Float](xs T) (types.Decimal128, error) {
 		}
 	}
 	return res, nil
+}
+
+func generateSHAKey(key []byte) []byte {
+	// return 32 bytes SHA256 checksum of the key
+	hash := sha256.Sum256(key)
+	return hash[:]
+}
+
+func generateInitializationVector(key []byte, length int) []byte {
+	data := append(key, byte(length))
+	hash := sha256.Sum256(data)
+	return hash[:aes.BlockSize]
+}
+
+// encode function encrypts a string, returns a binary string of the same length of the original string.
+// https://dev.mysql.com/doc/refman/5.7/en/encryption-functions.html#function_encode
+func encodeByAES(plaintext []byte, key []byte, null bool, rs *vector.FunctionResult[types.Varlena]) error {
+	if null {
+		return rs.AppendMustNullForBytesResult()
+	}
+	fixedKey := generateSHAKey(key)
+	block, err := aes.NewCipher(fixedKey)
+	if err != nil {
+		return err
+	}
+	initializationVector := generateInitializationVector(key, len(plaintext))
+	ciphertext := make([]byte, len(plaintext))
+	stream := cipher.NewCTR(block, initializationVector)
+	stream.XORKeyStream(ciphertext, plaintext)
+	return rs.AppendMustBytesValue(ciphertext)
+}
+
+func Encode(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	source := vector.GenerateFunctionStrParameter(parameters[0])
+	key := vector.GenerateFunctionStrParameter(parameters[1])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		data, nullData := source.GetStrValue(i)
+		keyData, nullKey := key.GetStrValue(i)
+		if err := encodeByAES(data, keyData, nullData || nullKey, rs); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// decode function decodes an encoded string and returns the original string
+// https://dev.mysql.com/doc/refman/5.7/en/encryption-functions.html#function_decode
+func decodeByAES(ciphertext []byte, key []byte, null bool, rs *vector.FunctionResult[types.Varlena]) error {
+	if null {
+		return rs.AppendMustNullForBytesResult()
+	}
+	fixedKey := generateSHAKey(key)
+	block, err := aes.NewCipher(fixedKey)
+	if err != nil {
+		return err
+	}
+	iv := generateInitializationVector(key, len(ciphertext))
+	plaintext := make([]byte, len(ciphertext))
+	stream := cipher.NewCTR(block, iv)
+	stream.XORKeyStream(plaintext, ciphertext)
+	return rs.AppendMustBytesValue(plaintext)
+}
+
+func Decode(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	source := vector.GenerateFunctionStrParameter(parameters[0])
+	key := vector.GenerateFunctionStrParameter(parameters[1])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		data, nullData := source.GetStrValue(i)
+		keyData, nullKey := key.GetStrValue(i)
+		if err := decodeByAES(data, keyData, nullData || nullKey, rs); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func DateToMonth(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

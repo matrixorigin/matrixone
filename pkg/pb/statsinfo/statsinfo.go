@@ -34,7 +34,7 @@ func (sc *StatsInfo) NeedUpdate(currentApproxObjNum int64) bool {
 }
 
 func (sc *StatsInfo) Merge(newInfo *StatsInfo) {
-	if sc == nil {
+	if sc == nil || newInfo == nil {
 		return
 	}
 	// TODO: do not handle ShuffleRange for now.
