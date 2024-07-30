@@ -3710,7 +3710,6 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 		}
 		rs[i].Proc.Reg.MergeReceivers = append(rs[i].Proc.Reg.MergeReceivers, w)
 	}
-	r
 	// all join's first flag will setting in newLeftScope and newRightScope
 	// so we set it to false now
 	if c.IsTpQuery() {
