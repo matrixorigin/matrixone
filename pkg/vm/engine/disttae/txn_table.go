@@ -17,6 +17,7 @@ package disttae
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"strconv"
 	"strings"
@@ -2263,6 +2264,15 @@ func (tbl *txnTable) transferDeletes(
 		}
 	}
 
+	genPkString := func(bs []byte) string {
+		if tbl.GetTableDef(ctx).Pkey.PkeyColName == catalog.CPrimaryKeyColName {
+			tuple, _, _, _ := types.DecodeTuple(bs)
+			return tuple.ErrString(nil)
+		} else {
+			return hex.EncodeToString(bs)
+		}
+	}
+
 	for _, entry := range tbl.getTxn().writes {
 		if entry.tableId != tbl.tableId {
 			continue
@@ -2294,12 +2304,28 @@ func (tbl *txnTable) transferDeletes(
 						rowids[i] = newId
 						beTransfered++
 					} else {
-						logutil.Infof("%v-%v transfer deletes failed, note: %v, oldrowid: %v",
-							tbl.tableId, tbl.tableName, entry.note, rowids[i].ShortStringEx())
+						logutil.Info("transfer deletes rowid failed",
+							zap.String("oldrowid", rowids[i].ShortStringEx()),
+							zap.String("pk", genPkString(pkVec.GetBytesAt(i))))
 					}
 				}
 			}
 			if beTransfered != toTransfer {
+				var idx int
+				detail := stringifySlice(rowids, func(a any) string {
+					rid := a.(types.Rowid)
+					pk := genPkString(pkVec.GetBytesAt(idx))
+					idx++
+					return fmt.Sprintf("%s:%s", pk, rid.ShortStringEx())
+				})
+				logutil.Error("transfer deletes failed", zap.String("note", entry.note),
+					zap.Uint64("tid", tbl.tableId),
+					zap.String("tname", tbl.tableName),
+					zap.String("blks", stringifySlice(blks, func(a any) string {
+						info := a.(objectio.BlockInfo)
+						return info.String()
+					})),
+					zap.String("detail", detail))
 				return moerr.NewInternalErrorNoCtx("%v-%v transfer deletes failed %v/%v in %v blks", tbl.tableId, tbl.tableName, beTransfered, toTransfer, len(blks))
 			}
 		}
