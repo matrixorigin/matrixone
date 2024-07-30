@@ -16,6 +16,7 @@ package function
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"testing"
@@ -2874,6 +2875,166 @@ func TestOctInt64(t *testing.T) {
 	}
 	//TODO: I am excluding scalar testcase, as per our last discussion on WeCom: https://github.com/m-schen/matrixone/blob/0a48ec5488caff6fd918ad558ebe054eba745be8/pkg/sql/plan/function/builtin/unary/oct_test.go#L176
 	//TODO: Previous OctFloat didn't have testcase. Should we add new testcases?
+}
+
+func TestDecode(t *testing.T) {
+	testCases := initDecodeTestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Decode)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initDecodeTestCase() []tcTemp {
+	regularCases := []struct {
+		info  string
+		data  []string
+		keys  []string
+		wants []string
+	}{
+		{
+			info: "test decode - simple text",
+			data: []string{
+				"",
+				"MatrixOne",
+				"MatrixOne",
+				"MatrixOne123",
+				"MatrixOne#%$%^",
+				"MatrixOne",
+				"分布式データベース",
+				"MatrixOne",
+				"MatrixOne数据库",
+			},
+			keys: []string{
+				"",
+				"1234567890123456",
+				"asdfjasfwefjfjkj",
+				"123456789012345678901234",
+				"*^%YTu1234567",
+				"",
+				"pass1234@#$%%^^&",
+				"密匙",
+				"数据库passwd12345667",
+			},
+			wants: []string{
+				"",
+				"973F9E44B6330489C7",
+				"BDE957D76C42800E16",
+				"928248DD2211D7DB886AD0FE",
+				"A5A0BE100EB06512E4422A51DC9C",
+				"549D65E48BD9A29CE9",
+				"D1D6913ED82E228022A08CD2DCB8869118819FECFE2008176625BB",
+				"6B406CBF644FCB9BCA",
+				"34B8B67B8C4EDF31009142BC6346E3C32B0C",
+			},
+		},
+	}
+
+	var testInputs = make([]tcTemp, 0, len(regularCases))
+	for _, c := range regularCases {
+		realWants := make([]string, len(c.wants))
+		for i, want := range c.wants {
+			bytes, err := hex.DecodeString(want)
+			if err != nil {
+				fmt.Printf("decode string error: %v", err)
+			}
+
+			realWants[i] = string(bytes)
+		}
+		testInputs = append(testInputs, tcTemp{
+			info: c.info,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_blob.ToType(), c.data, []bool{}),
+				NewFunctionTestInput(types.T_varchar.ToType(), c.keys, []bool{}),
+			},
+			expect: NewFunctionTestResult(types.T_blob.ToType(), false, realWants, []bool{}),
+		})
+	}
+
+	return testInputs
+}
+
+func TestEncode(t *testing.T) {
+	testCases := initEncodeTestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Encode)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initEncodeTestCase() []tcTemp {
+	regularCases := []struct {
+		info  string
+		data  []string
+		keys  []string
+		wants []string
+	}{
+		{
+			info: "test encode - simple text",
+			data: []string{
+				"",
+				"MatrixOne",
+				"MatrixOne",
+				"MatrixOne123",
+				"MatrixOne#%$%^",
+				"MatrixOne",
+				"分布式データベース",
+				"MatrixOne",
+				"MatrixOne数据库",
+			},
+			keys: []string{
+				"",
+				"1234567890123456",
+				"asdfjasfwefjfjkj",
+				"123456789012345678901234",
+				"*^%YTu1234567",
+				"",
+				"pass1234@#$%%^^&",
+				"密匙",
+				"数据库passwd12345667",
+			},
+			wants: []string{
+				"",
+				"973F9E44B6330489C7",
+				"BDE957D76C42800E16",
+				"928248DD2211D7DB886AD0FE",
+				"A5A0BE100EB06512E4422A51DC9C",
+				"549D65E48BD9A29CE9",
+				"D1D6913ED82E228022A08CD2DCB8869118819FECFE2008176625BB",
+				"6B406CBF644FCB9BCA",
+				"34B8B67B8C4EDF31009142BC6346E3C32B0C",
+			},
+		},
+	}
+
+	var testInputs = make([]tcTemp, 0, len(regularCases))
+	for _, c := range regularCases {
+		realWants := make([]string, len(c.wants))
+		for i, want := range c.wants {
+			bytes, err := hex.DecodeString(want)
+			if err != nil {
+				fmt.Printf("decode string error: %v", err)
+			}
+
+			realWants[i] = string(bytes)
+		}
+		testInputs = append(testInputs, tcTemp{
+			info: c.info,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), c.data, []bool{}),
+				NewFunctionTestInput(types.T_varchar.ToType(), c.keys, []bool{}),
+			},
+			expect: NewFunctionTestResult(types.T_blob.ToType(), false, realWants, []bool{}),
+		})
+	}
+
+	return testInputs
 }
 
 // Month
