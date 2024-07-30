@@ -681,6 +681,7 @@ func (c *Compile) SetIsPrepare(isPrepare bool) {
 	c.isPrepare = isPrepare
 }
 
+/*
 func (c *Compile) printPipeline() {
 	if c.IsTpQuery() {
 		fmt.Println("pipeline for tp query!")
@@ -689,7 +690,7 @@ func (c *Compile) printPipeline() {
 	}
 	fmt.Println(DebugShowScopes(c.scope))
 }
-
+*/
 // run once
 func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
@@ -714,7 +715,7 @@ func (c *Compile) runOnce() error {
 		_, _ = GetCompileService().endService(c)
 	}()
 
-	c.printPipeline()
+	//c.printPipeline()
 
 	for i := range c.scope {
 		wg.Add(1)
@@ -3709,7 +3710,7 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 		}
 		rs[i].Proc.Reg.MergeReceivers = append(rs[i].Proc.Reg.MergeReceivers, w)
 	}
-
+	r
 	// all join's first flag will setting in newLeftScope and newRightScope
 	// so we set it to false now
 	if c.IsTpQuery() {
