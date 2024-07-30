@@ -377,6 +377,9 @@ func (s *MOSpan) doProfile() {
 	if s.doneProfile {
 		return
 	}
+	if !s.tracer.provider.enableSpanProfile {
+		return
+	}
 	factory := s.tracer.provider.writerFactory
 	ctx := DefaultContext()
 	// do profile goroutine txt

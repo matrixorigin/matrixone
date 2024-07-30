@@ -512,7 +512,8 @@ type ObservabilityParameters struct {
 	// DisableSpan default: false. Disable span collection
 	DisableSpan bool `toml:"disable-span"`
 
-	DisableSpanProfile bool `toml:"disable-span-profile"`
+	// EnableSpanProfile default: false. Do NOT profile by default.
+	EnableSpanProfile bool `toml:"enable-span-profile"`
 
 	// DisableError default: false. Disable error collection
 	DisableError bool `toml:"disable-error"`
@@ -589,6 +590,7 @@ func NewObservabilityParameters() *ObservabilityParameters {
 		MetricStorageUsageCheckNewInterval: toml.Duration{},
 		MergeCycle:                         toml.Duration{},
 		DisableSpan:                        false,
+		EnableSpanProfile:                  false,
 		DisableError:                       false,
 		LongSpanTime:                       toml.Duration{},
 		SkipRunningStmt:                    defaultSkipRunningStmt,
@@ -704,7 +706,7 @@ func (op *ObservabilityParameters) setDefaultByOld() {
 	}
 
 	// part statement_info
-	if op.DisableSpan == false && op.DisableSpanV12 == true {
+	if op.DisableSpan == false && op.DisableSpanV12 {
 		op.DisableSpan = true
 	}
 	if op.EnableStmtMerge == false && op.EnableStmtMerge != op.EnableStmtMergeV12 {
