@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -141,7 +142,7 @@ type PushClient struct {
 
 	consumeErrC chan error
 	receiver    []routineController
-	eng         *Engine
+	eng         SimpleEngine
 
 	LogtailRPCClientFactory func(string, string, morpc.RPCClient) (morpc.RPCClient, morpc.Stream, error)
 }
@@ -287,7 +288,7 @@ func (c *PushClient) validLogTailMustApplied(snapshotTS timestamp.Timestamp) {
 
 func (c *PushClient) toSubscribeTable(
 	ctx context.Context,
-	tbl *txnTable) (ps *logtailreplay.PartitionState, err error) {
+	tbl SimpleRelation) (ps *logtailreplay.PartitionState, err error) {
 
 	tableId := tbl.tableId
 	/*
@@ -941,7 +942,7 @@ func (s *subscribedTable) isSubscribed(dbId, tblId uint64) bool {
 func (c *PushClient) loadAndConsumeLatestCkp(
 	ctx context.Context,
 	tableId uint64,
-	tbl *txnTable) (SubscribeState, *logtailreplay.PartitionState, error) {
+	tbl SimpleRelation) (SubscribeState, *logtailreplay.PartitionState, error) {
 
 	//part, err := c.eng.lazyLoadLatestCkp(ctx, tbl)
 	//if err != nil {
@@ -1683,7 +1684,7 @@ func (e *Engine) consumeUpdateLogTail(
 // updatePartitionOfPush is the partition update method of log tail push model.
 func updatePartitionOfPush(
 	ctx context.Context,
-	e *Engine,
+	e SimpleEngine,
 	tl *logtail.TableLogtail,
 	lazyLoad bool,
 	receiveAt time.Time) (err error) {
@@ -1696,7 +1697,7 @@ func updatePartitionOfPush(
 	// after consume the logtail, enqueue it to global stats.
 	defer func() {
 		t0 := time.Now()
-		e.globalStats.enqueue(tl)
+		e.Enqueue(tl)
 		v2.LogtailUpdatePartitonEnqueueGlobalStatsDurationHistogram.Observe(time.Since(t0).Seconds())
 	}()
 
@@ -1794,7 +1795,7 @@ func updatePartitionOfPush(
 func consumeLogTail(
 	ctx context.Context,
 	primarySeqnum int,
-	engine *Engine,
+	engine SimpleEngine,
 	state *logtailreplay.PartitionState,
 	lt *logtail.TableLogtail,
 ) error {
@@ -1822,7 +1823,7 @@ func parseCkpDuration(lt *logtail.TableLogtail) (start types.TS, end types.TS) {
 func consumeCkpsAndLogTail(
 	ctx context.Context,
 	primarySeqnum int,
-	engine *Engine,
+	engine SimpleEngine,
 	state *logtailreplay.PartitionState,
 	lt *logtail.TableLogtail,
 	databaseId uint64,
@@ -1833,10 +1834,10 @@ func consumeCkpsAndLogTail(
 	var closeCBs []func()
 	if entries, closeCBs, err = taeLogtail.LoadCheckpointEntries(
 		ctx,
-		engine.service,
+		engine.GetService(),
 		lt.CkpLocation,
 		tableId, tableName,
-		databaseId, "", engine.mp, engine.fs); err != nil {
+		databaseId, "", engine.GetMPool(), engine.GetFS()); err != nil {
 		return
 	}
 	defer func() {
@@ -1856,12 +1857,12 @@ func consumeCkpsAndLogTail(
 func hackConsumeLogtail(
 	ctx context.Context,
 	primarySeqnum int,
-	engine *Engine,
+	engine SimpleEngine,
 	state *logtailreplay.PartitionState,
 	lt *logtail.TableLogtail) error {
 
 	var packer *types.Packer
-	put := engine.packerPool.Get(&packer)
+	put := engine.Get(&packer)
 	defer put.Put()
 
 	t0 := time.Now()
@@ -1880,14 +1881,14 @@ func hackConsumeLogtail(
 					packer.EncodeUint32(acc)
 					packer.EncodeStringType(names.GetBytesAt(i))
 					packer.EncodeStringType(databases.GetBytesAt(i))
-					if err := vector.AppendBytes(vec, packer.Bytes(), false, engine.mp); err != nil {
+					if err := vector.AppendBytes(vec, packer.Bytes(), false, engine.GetMPool()); err != nil {
 						panic(err)
 					}
 					packer.Reset()
 				}
 				hackVec, _ := vector.VectorToProtoVector(vec)
 				lt.Commands[i].Bat.Vecs = append(lt.Commands[i].Bat.Vecs, hackVec)
-				vec.Free(engine.mp)
+				vec.Free(engine.GetMPool())
 			}
 			if lt.Commands[i].EntryType == api.Entry_Delete {
 				continue
@@ -1914,14 +1915,14 @@ func hackConsumeLogtail(
 				for i, acc := range accounts {
 					packer.EncodeUint32(acc)
 					packer.EncodeStringType(names.GetBytesAt(i))
-					if err := vector.AppendBytes(vec, packer.Bytes(), false, engine.mp); err != nil {
+					if err := vector.AppendBytes(vec, packer.Bytes(), false, engine.GetMPool()); err != nil {
 						panic(err)
 					}
 					packer.Reset()
 				}
 				hackVec, _ := vector.VectorToProtoVector(vec)
 				lt.Commands[i].Bat.Vecs = append(lt.Commands[i].Bat.Vecs, hackVec)
-				vec.Free(engine.mp)
+				vec.Free(engine.GetMPool())
 			}
 			if lt.Commands[i].EntryType == api.Entry_Delete {
 				continue

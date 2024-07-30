@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -164,6 +165,26 @@ type Engine struct {
 
 	//for message on multiCN, use uuid to get the messageBoard
 	messageCenter *process.MessageCenter
+}
+
+var _ SimpleEngine = new(Engine)
+
+type SimpleEngine interface {
+	Enqueue(tail *logtail.TableLogtail)
+	GetOrCreateLatestPart(databaseId uint64, tableId uint64) *logtailreplay.Partition
+	getLatestCatalogCache() *cache.CatalogCache
+	Get(ptr **types.Packer) fileservice.PutBack[*types.Packer]
+	GetMPool() *mpool.MPool
+	GetFS() fileservice.FileService
+	GetService() string
+	LazyLoadLatestCkp(ctx context.Context, tblHandler SimpleRelation) (*logtailreplay.Partition, error)
+}
+
+var _ SimpleRelation = new(txnTable)
+var _ SimpleRelation = new(txnTableDelegate)
+
+type SimpleRelation interface {
+	engine.Relation
 }
 
 // Transaction represents a transaction

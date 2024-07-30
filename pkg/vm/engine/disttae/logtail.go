@@ -31,7 +31,7 @@ import (
 func consumeEntry(
 	ctx context.Context,
 	primarySeqnum int,
-	engine *Engine,
+	engine SimpleEngine,
 	cache *cache.CatalogCache,
 	state *logtailreplay.PartitionState,
 	e *api.Entry,
@@ -42,12 +42,12 @@ func consumeEntry(
 	}()
 
 	var packer *types.Packer
-	put := engine.packerPool.Get(&packer)
+	put := engine.Get(&packer)
 	defer put.Put()
 
 	if state != nil {
 		t0 := time.Now()
-		state.HandleLogtailEntry(ctx, engine.fs, e, primarySeqnum, packer, engine.mp)
+		state.HandleLogtailEntry(ctx, engine.GetFS(), e, primarySeqnum, packer, engine.GetMPool())
 		v2.LogtailUpdatePartitonConsumeLogtailOneEntryLogtailReplayDurationHistogram.Observe(time.Since(t0).Seconds())
 	}
 

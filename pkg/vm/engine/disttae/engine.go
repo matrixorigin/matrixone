@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/panjf2000/ants/v2"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -36,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -54,7 +57,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/panjf2000/ants/v2"
 )
 
 var _ engine.Engine = new(Engine)
@@ -826,5 +828,21 @@ func (e *Engine) GetMessageCenter() any {
 }
 
 func (e *Engine) FS() fileservice.FileService {
+	return e.fs
+}
+
+func (e *Engine) Enqueue(tl *logtail.TableLogtail) {
+	e.globalStats.enqueue(tl)
+}
+
+func (e *Engine) Get(ptr **types.Packer) fileservice.PutBack[*types.Packer] {
+	return e.packerPool.Get(ptr)
+}
+
+func (e *Engine) GetMPool() *mpool.MPool {
+	return e.mp
+}
+
+func (e *Engine) GetFS() fileservice.FileService {
 	return e.fs
 }
