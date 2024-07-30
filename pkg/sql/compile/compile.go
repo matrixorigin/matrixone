@@ -3716,7 +3716,10 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 		c.anal.isFirst = false
 		for i := range rs {
 			if isSameCN(rs[i].NodeInfo.Addr, c.addr) {
-				mergeBuild := c.newMergeScope(buildScopes)
+				mergeBuild := buildScopes[0]
+				if len(buildScopes) > 1 {
+					mergeBuild = c.newMergeScope(buildScopes)
+				}
 				mergeBuild.setRootOperator(constructDispatch(rs[i].BuildIdx, rs, c.addr, n, false))
 				mergeBuild.IsEnd = true
 				rs[i].PreScopes = append(rs[i].PreScopes, mergeBuild)
