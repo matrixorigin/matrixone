@@ -151,7 +151,7 @@ func BlockDataReadNoCopy(
 	ds engine.DataSource,
 	columns []uint16,
 	colTypes []types.Type,
-	ts timestamp.Timestamp,
+	ts types.TS,
 	fs fileservice.FileService,
 	mp *mpool.MPool,
 	vp engine.VectorPool,
@@ -169,16 +169,24 @@ func BlockDataReadNoCopy(
 		err        error
 	)
 
+	defer func() {
+		if err != nil {
+			if release != nil {
+				release()
+			}
+		}
+	}()
+
 	// read block data from storage specified by meta location
 	if loaded, rowidPos, deleteMask, release, err = readBlockDataInprogress(
-		ctx, columns, colTypes, info, types.TimestampToTS(ts), fs, mp, vp, policy,
+		ctx, columns, colTypes, info, ts, fs, mp, vp, policy,
 	); err != nil {
-		return nil, nil, release, err
+		return nil, nil, nil, err
 	}
 	//tombstones, err := ds.GetTombstones(ctx, info.BlockID)
 	tombstones, err := ds.GetTombstonesInProgress(ctx, info.BlockID)
 	if err != nil {
-		return nil, nil, release, err
+		return nil, nil, nil, err
 	}
 
 	// merge deletes from tombstones
@@ -189,11 +197,15 @@ func BlockDataReadNoCopy(
 		if loaded.Vecs[rowidPos], err = buildRowidColumnInProgress(
 			info, nil, mp, vp,
 		); err != nil {
-			return nil, nil, release, err
+
+			return nil, nil, nil, err
 		}
 	}
 
-	return loaded, &deleteMask, release, nil
+	return loaded, &deleteMask, func() {
+		release()
+		loaded.Vecs[rowidPos].Free(mp)
+	}, nil
 }
 
 // BlockDataRead only read block data from storage, don't apply deletes.
