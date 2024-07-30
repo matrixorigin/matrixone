@@ -1700,7 +1700,7 @@ func (ls *LocalDataSource) applyPStateInMemDeletes(
 
 	var delIter logtailreplay.RowsIter
 
-	if ls.memPKFilter.SpecFactory == nil {
+	if ls.memPKFilter == nil || ls.memPKFilter.SpecFactory == nil {
 		delIter = ls.pState.NewRowsIter(ls.snapshotTS, &bid, true)
 	} else {
 		delIter = ls.pState.NewPrimaryKeyDelIter(
