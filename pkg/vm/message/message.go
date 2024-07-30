@@ -75,7 +75,7 @@ type MessageBoard struct {
 
 func NewMessageBoard() *MessageBoard {
 	m := &MessageBoard{
-		Messages: make([]*Message, 0, 10240),
+		Messages: make([]*Message, 0, 16),
 		Waiters:  make([]chan bool, 0, 16),
 		RwMutex:  &sync.RWMutex{},
 	}
@@ -100,6 +100,9 @@ func (m *MessageBoard) SetMultiCN(center *MessageCenter, stmtId uuid.UUID) *Mess
 
 func (m *MessageBoard) Reset() *MessageBoard {
 	if m.multiCN {
+		m.MessageCenter.RwMutex.Lock()
+		delete(m.MessageCenter.StmtIDToBoard, m.stmtId)
+		m.MessageCenter.RwMutex.Unlock()
 		// other pipeline could still access thie messageBoard
 		// so reset current message board to a new one
 		return NewMessageBoard()
