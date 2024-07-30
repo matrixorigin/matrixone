@@ -60,6 +60,6 @@ func init() {
 	)
 }
 
-func (intersect UnionAll) TypeName() string {
+func (unionall UnionAll) TypeName() string {
 	return opName
 }
