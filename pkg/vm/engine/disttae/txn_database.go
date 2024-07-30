@@ -68,7 +68,7 @@ func (db *txnDatabase) Relations(ctx context.Context) ([]string, error) {
 	}
 	sql := fmt.Sprintf(catalog.MoTablesInDBQueryFormat, aid, db.databaseName)
 
-	res, err := execReadSql(ctx, db.op, sql)
+	res, err := execReadSql(ctx, db.op, sql, false)
 	if err != nil {
 		return nil, err
 	}
@@ -214,7 +214,8 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 	colPKs = getColPks(accountId, db.databaseName, name, toDelTbl.tableDef.Cols, packer)
 
 	// 1.1 table rowid
-	res, err := execReadSql(ctx, db.op, fmt.Sprintf(catalog.MoTablesRowidQueryFormat, accountId, db.databaseName, name))
+	sql := fmt.Sprintf(catalog.MoTablesRowidQueryFormat, accountId, db.databaseName, name)
+	res, err := execReadSql(ctx, db.op, sql, true)
 	if err != nil {
 		return nil, err
 	}
@@ -224,6 +225,7 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 				bat := a.(*batch.Batch)
 				return common.MoBatchToString(bat, 10)
 			})),
+			zap.String("sql", sql),
 			zap.Uint64("did", db.databaseId),
 			zap.Uint64("tid", rel.GetTableID(ctx)),
 			zap.String("workspace", db.getTxn().PPString()))
@@ -232,7 +234,7 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 	rowid = vector.GetFixedAt[types.Rowid](res.Batches[0].Vecs[0], 0)
 
 	// 1.2 table column rowids
-	res, err = execReadSql(ctx, db.op, fmt.Sprintf(catalog.MoColumnsRowidsQueryFormat, accountId, db.databaseName, name, id))
+	res, err = execReadSql(ctx, db.op, fmt.Sprintf(catalog.MoColumnsRowidsQueryFormat, accountId, db.databaseName, name, id), true)
 	if err != nil {
 		return nil, err
 	}
@@ -538,7 +540,7 @@ func (db *txnDatabase) loadTableFromStorage(
 	{
 		tblSql := fmt.Sprintf(catalog.MoTablesAllQueryFormat, accountID, db.databaseName, name)
 		var res executor.Result
-		res, err = execReadSql(ctx, db.op, tblSql)
+		res, err = execReadSql(ctx, db.op, tblSql, false)
 		if err != nil {
 			return
 		}
@@ -565,7 +567,7 @@ func (db *txnDatabase) loadTableFromStorage(
 		// fresh columns
 		colSql := fmt.Sprintf(catalog.MoColumnsAllQueryFormat, accountID, db.databaseName, name, tblid)
 		var res executor.Result
-		res, err = execReadSql(ctx, db.op, colSql)
+		res, err = execReadSql(ctx, db.op, colSql, false)
 		if err != nil {
 			return
 		}

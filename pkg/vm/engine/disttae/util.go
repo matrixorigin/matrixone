@@ -1756,7 +1756,7 @@ func stringifyMap(req any, f func(any, any) string) string {
 	return buf.String()
 }
 
-func execReadSql(ctx context.Context, op client.TxnOperator, sql string) (executor.Result, error) {
+func execReadSql(ctx context.Context, op client.TxnOperator, sql string, disableLog bool) (executor.Result, error) {
 	// copy from compile.go runSqlWithResult
 	service := op.GetWorkspace().(*Transaction).proc.GetService()
 	v, ok := moruntime.ServiceRuntime(service).GetGlobalVariables(moruntime.InternalSQLExecutor)
@@ -1769,6 +1769,9 @@ func execReadSql(ctx context.Context, op client.TxnOperator, sql string) (execut
 		WithDisableIncrStatement().
 		WithTxn(op).
 		WithTimeZone(proc.GetSessionInfo().TimeZone)
+	if disableLog {
+		opts = opts.WithStatementOption(executor.StatementOption{}.WithDisableLog())
+	}
 	return exec.Exec(ctx, sql, opts)
 }
 

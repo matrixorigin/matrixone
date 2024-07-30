@@ -626,7 +626,7 @@ func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) error {
 	_ = e.New(ctx, op)
 
 	// read databases
-	result, err := execReadSql(ctx, op, catalog.MoDatabaseBatchQuery)
+	result, err := execReadSql(ctx, op, catalog.MoDatabaseBatchQuery, true)
 	if err != nil {
 		return err
 	}
@@ -645,7 +645,7 @@ func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) error {
 	}
 
 	// read tables
-	result, err = execReadSql(ctx, op, catalog.MoTablesBatchQuery)
+	result, err = execReadSql(ctx, op, catalog.MoTablesBatchQuery, true)
 	if err != nil {
 		return err
 	}
@@ -660,7 +660,7 @@ func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) error {
 	}
 
 	// read columns
-	result, err = execReadSql(ctx, op, catalog.MoColumnsBatchQuery)
+	result, err = execReadSql(ctx, op, catalog.MoColumnsBatchQuery, true)
 	if err != nil {
 		return err
 	}

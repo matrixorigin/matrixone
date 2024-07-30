@@ -199,7 +199,7 @@ func (e *Engine) loadDatabaseFromStorage(
 				zap.String("sql", sql), zap.Duration("cost", time.Since(now)))
 		}
 	}()
-	res, err := execReadSql(ctx, op, sql)
+	res, err := execReadSql(ctx, op, sql, false)
 	if err != nil {
 		return nil, err
 	}
@@ -302,7 +302,7 @@ func (e *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]string
 	}
 	sql := fmt.Sprintf(catalog.MoDatabasesInEngineQueryFormat, aid)
 
-	res, err := execReadSql(ctx, op, sql)
+	res, err := execReadSql(ctx, op, sql, false)
 	if err != nil {
 		return nil, err
 	}
@@ -372,7 +372,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 			// not found in cache, try storage
 			sql := fmt.Sprintf(catalog.MoTablesQueryNameById, accountId, tableId)
 			tblanmes, dbnames := []string{}, []string{}
-			result, err := execReadSql(ctx, op, sql)
+			result, err := execReadSql(ctx, op, sql, false)
 			if err != nil {
 				return "", "", nil, err
 			}
@@ -460,11 +460,20 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	if err != nil {
 		return err
 	}
-	res, err := execReadSql(ctx, op, fmt.Sprintf(catalog.MoDatabaseRowidQueryFormat, accountId, name))
+	res, err := execReadSql(ctx, op, fmt.Sprintf(catalog.MoDatabaseRowidQueryFormat, accountId, name), true)
 	if err != nil {
 		return err
 	}
 	if len(res.Batches) != 1 || res.Batches[0].Vecs[0].Length() != 1 {
+		logutil.Error("FIND_TABLE deleteDatabaseError",
+			zap.String("bat", stringifySlice(res.Batches, func(a any) string {
+				bat := a.(*batch.Batch)
+				return common.MoBatchToString(bat, 10)
+			})),
+			zap.Uint32("accountId", accountId),
+			zap.String("name", name),
+			zap.Uint64("did", databaseId),
+			zap.String("workspace", op.GetWorkspace().PPString()))
 		panic("delete table failed: query failed")
 	}
 	rowId := vector.GetFixedAt[types.Rowid](res.Batches[0].Vecs[0], 0)

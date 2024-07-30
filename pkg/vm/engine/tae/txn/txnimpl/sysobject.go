@@ -15,31 +15,13 @@
 package txnimpl
 
 import (
-	"context"
 	"fmt"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 )
-
-type txnSysObject struct {
-	*txnObject
-	table   *txnTable
-	catalog *catalog.Catalog
-}
-
-func newSysObject(table *txnTable, meta *catalog.ObjectEntry) *txnSysObject {
-	obj := &txnSysObject{
-		txnObject: newObject(table, meta),
-		table:     table,
-		catalog:   meta.GetTable().GetCatalog(),
-	}
-	return obj
-}
 
 func bool2i8(v bool) int8 {
 	if v {
@@ -47,24 +29,6 @@ func bool2i8(v bool) int8 {
 	} else {
 		return int8(0)
 	}
-}
-
-func (obj *txnSysObject) isSysTable() bool {
-	return isSysTable(obj.table.entry.GetLastestSchemaLocked().Name)
-}
-
-func (obj *txnSysObject) GetTotalChanges() int {
-	if obj.isSysTable() {
-		panic("not supported")
-	}
-	return obj.txnObject.GetTotalChanges()
-}
-
-func (obj *txnSysObject) RangeDelete(blkID uint16, start, end uint32, dt handle.DeleteType, mp *mpool.MPool) (err error) {
-	if obj.isSysTable() {
-		panic("not supported")
-	}
-	return obj.txnObject.RangeDelete(blkID, start, end, dt, mp)
 }
 
 func FillColumnRow(table *catalog.TableEntry, node *catalog.MVCCNode[*catalog.TableMVCCNode], attr string, colData containers.Vector) {
@@ -227,28 +191,4 @@ func FillDBRow(db *catalog.DBEntry, _ *catalog.MVCCNode[*catalog.EmptyMVCCNode],
 	default:
 		panic(fmt.Sprintf("unexpected colname %q. if add new catalog def, fill it in this switch", attr))
 	}
-}
-
-func (obj *txnSysObject) GetColumnDataById(
-	ctx context.Context, blkID uint16, colIdx int, mp *mpool.MPool,
-) (view *containers.Batch, err error) {
-	return obj.txnObject.GetColumnDataById(ctx, blkID, colIdx, mp)
-}
-
-func (obj *txnSysObject) Prefetch(idxes []int) error {
-	return nil
-}
-
-func (obj *txnSysObject) GetColumnDataByName(
-	ctx context.Context, blkID uint16, attr string, mp *mpool.MPool,
-) (view *containers.Batch, err error) {
-	colIdx := obj.entry.GetSchema().GetColIdx(attr)
-	return obj.GetColumnDataById(ctx, blkID, colIdx, mp)
-}
-
-func (obj *txnSysObject) GetColumnDataByNames(
-	ctx context.Context, blkID uint16, attrs []string, mp *mpool.MPool,
-) (view *containers.Batch, err error) {
-	obj.txnObject.GetColumnDataByNames(ctx, blkID, attrs, mp)
-	return
 }
