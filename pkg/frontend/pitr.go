@@ -787,6 +787,10 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (e
 
 	// restore according the restore level
 	switch restoreLevel {
+	case tree.RESTORELEVELCLUSTER:
+		if err = restoreToCluster(ctx, ses, bh, pitrName, ts); err != nil {
+			return
+		}
 	case tree.RESTORELEVELACCOUNT:
 		if err = restoreToAccountWithPitr(ctx, ses.GetService(), bh, pitrName, ts, fkTableMap, viewMap, tenantInfo.TenantID); err != nil {
 			return
