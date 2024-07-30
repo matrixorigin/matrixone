@@ -88,11 +88,9 @@ func newCNMergeTask(
 	relData.AppendBlockInfo(objectio.EmptyBlockInfoInProgress)
 	source, err := tbl.buildLocalDataSource(ctx, 0, relData)
 	if err != nil {
-		logutil.Infof("buildLocalDataSource failed: %v", err.Error())
 		return nil, err
 	}
 
-	logutil.Infof("newCNMergeTask: %v", tbl.tableName)
 	proc := tbl.proc.Load()
 	attrs := make([]string, 0, len(tbl.seqnums))
 	for i := 0; i < len(tbl.tableDef.Cols)-1; i++ {
@@ -267,7 +265,6 @@ func (t *cnMergeTask) readblock(ctx context.Context, info *objectio.BlockInfoInP
 		logutil.Infof("read block data failed: %v", err.Error())
 		return
 	}
-	logutil.Infof("read block data success")
 	bat.SetAttributes(t.colattrs)
 	return
 }
