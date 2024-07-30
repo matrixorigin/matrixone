@@ -104,8 +104,12 @@ func CnServerMessageHandler(
 		err = handlePipelineMessage(&receiver)
 	} else {
 		if err = handlePipelineMessage(&receiver); err != nil {
+			logutil.Infof("send error message to client, err is %s", err.Error())
+
 			err = receiver.sendError(err)
 		} else {
+			logutil.Infof("send end message to client")
+
 			err = receiver.sendEndMessage()
 		}
 	}
@@ -198,6 +202,8 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		defer func() {
 			_, _ = GetCompileService().removeRunningCompile(runCompile)
 		}()
+
+		logutil.Infof("start to run pipeline for sql %s", runCompile.sql)
 		err = s.ParallelRun(runCompile)
 		if err == nil {
 			// record the number of s3 requests
