@@ -538,7 +538,9 @@ func (l *lockTableAllocator) cleanCommitState(ctx context.Context) {
 					services = append(services, key.(string))
 				} else if time.Since(at) > removeDisconnectDuration {
 					c.states.Range(func(key, value any) bool {
-						logCleanCannotCommitTxn(key.(string), int(value.(ctlState)))
+						if value.(ctlState) == cannotCommitState {
+							logCleanCannotCommitTxn(key.(string), int(value.(ctlState)))
+						}
 						return true
 					})
 					l.ctl.Delete(key)
@@ -575,7 +577,9 @@ func (l *lockTableAllocator) cleanCommitState(ctx context.Context) {
 					c := value.(*commitCtl)
 					c.states.Range(func(key, value any) bool {
 						if _, ok := m[key.(string)]; !ok {
-							logCleanCannotCommitTxn(key.(string), int(value.(ctlState)))
+							if value.(ctlState) == cannotCommitState {
+								logCleanCannotCommitTxn(key.(string), int(value.(ctlState)))
+							}
 							c.states.Delete(key)
 						}
 						return true
