@@ -701,15 +701,15 @@ func (op *ObservabilityParameters) setDefaultByOld() {
 	if op.StatusPort == defaultStatusPort && op.StatusPortV12 != defaultStatusPort {
 		op.StatusPort = op.StatusPortV12
 	}
-	if op.EnableMetricToProm == false && op.EnableMetricToPromV12 {
+	if !op.EnableMetricToProm && op.EnableMetricToPromV12 {
 		op.EnableMetricToPromV12 = true
 	}
 
 	// part statement_info
-	if op.DisableSpan == false && op.DisableSpanV12 {
+	if !op.DisableSpan && op.DisableSpanV12 {
 		op.DisableSpan = true
 	}
-	if op.EnableStmtMerge == false && op.EnableStmtMerge != op.EnableStmtMergeV12 {
+	if !op.EnableStmtMerge && op.EnableStmtMerge != op.EnableStmtMergeV12 {
 		op.EnableStmtMerge = op.EnableStmtMergeV12
 	}
 	if op.AggregationWindow.Duration == defaultAggregationWindow && op.AggregationWindow.Duration != op.AggregationWindowV12.Duration {
