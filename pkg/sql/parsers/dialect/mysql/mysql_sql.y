@@ -1255,6 +1255,16 @@ restore_pitr_stmt:
             TimeStamp: $9,
        }
    }
+|  RESTORE ACCOUNT ident FROM PITR ident STRING as_name_opt
+    {
+        $$ = &tree.RestorePitr{
+           Level: tree.RESTORELEVELACCOUNT,
+           AccountName: tree.Identifier($3.Compare()),
+           Name: tree.Identifier($6.Compare()),
+           TimeStamp: $7,
+           SrcAccountName: tree.Identifier($8.Compare()),
+       }
+    }
 
 kill_stmt:
     KILL kill_opt INTEGRAL statement_id_opt

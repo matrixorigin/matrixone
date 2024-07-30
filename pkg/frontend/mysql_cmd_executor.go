@@ -2664,6 +2664,16 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	ses.SetSql(input.getSql())
 	input.genHash()
 
+	sqlLen := len(input.getSql())
+	if sqlLen != 0 {
+		v2.TotalSQLLengthHistogram.Observe(float64(sqlLen))
+		if strings.HasPrefix(input.sql, "LOAD DATA INLINE") {
+			v2.LoadDataInlineSQLLengthHistogram.Observe(float64(sqlLen))
+		} else {
+			v2.OtherSQLLengthHistogram.Observe(float64(sqlLen))
+		}
+	}
+
 	//the ses.GetUserName returns the user_name with the account_name.
 	//here,we only need the user_name.
 	userNameOnly := rootName
