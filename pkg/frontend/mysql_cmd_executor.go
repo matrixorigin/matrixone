@@ -2775,6 +2775,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		execCtx.stmt = nil
 		execCtx.cw = nil
 		execCtx.cws = nil
+		execCtx.runner = nil
 		if !Cached {
 			for i := 0; i < len(cws); i++ {
 				cws[i].Free()
