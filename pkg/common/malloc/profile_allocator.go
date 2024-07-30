@@ -16,9 +16,7 @@ package malloc
 
 import (
 	"runtime"
-	"sync"
 	"sync/atomic"
-	"unsafe"
 
 	"github.com/google/pprof/profile"
 )
@@ -74,10 +72,10 @@ func (h *HeapSampleValues) Values() []int64 {
 }
 
 type ProfileAllocator struct {
-	upstream Allocator
-	profiler *Profiler[HeapSampleValues, *HeapSampleValues]
-	fraction uint32
-	funcPool sync.Pool
+	upstream        Allocator
+	profiler        *Profiler[HeapSampleValues, *HeapSampleValues]
+	fraction        uint32
+	deallocatorPool *ClosureDeallocatorPool[profileDeallocateArgs, *profileDeallocateArgs]
 }
 
 func NewProfileAllocator(
@@ -85,25 +83,18 @@ func NewProfileAllocator(
 	profiler *Profiler[HeapSampleValues, *HeapSampleValues],
 	fraction uint32,
 ) *ProfileAllocator {
-	ret := &ProfileAllocator{
+	return &ProfileAllocator{
 		upstream: upstream,
 		profiler: profiler,
 		fraction: fraction,
-	}
 
-	ret.funcPool = sync.Pool{
-		New: func() any {
-			argumented := new(argumentedFuncDeallocator[profileDeallocateArgs])
-			argumented.fn = func(_ unsafe.Pointer, hints Hints, args profileDeallocateArgs) {
+		deallocatorPool: NewClosureDeallocatorPool(
+			func(hints Hints, args *profileDeallocateArgs) {
 				args.values.InuseBytes.Add(int64(-args.size))
 				args.values.InuseObjects.Add(-1)
-				ret.funcPool.Put(argumented)
-			}
-			return argumented
-		},
+			},
+		),
 	}
-
-	return ret
 }
 
 type profileDeallocateArgs struct {
@@ -111,9 +102,13 @@ type profileDeallocateArgs struct {
 	size   uint64
 }
 
+func (profileDeallocateArgs) As(Trait) bool {
+	return false
+}
+
 var _ Allocator = new(ProfileAllocator)
 
-func (p *ProfileAllocator) Allocate(size uint64, hints Hints) (unsafe.Pointer, Deallocator, error) {
+func (p *ProfileAllocator) Allocate(size uint64, hints Hints) ([]byte, Deallocator, error) {
 	ptr, dec, err := p.upstream.Allocate(size, hints)
 	if err != nil {
 		return nil, nil, err
@@ -124,10 +119,11 @@ func (p *ProfileAllocator) Allocate(size uint64, hints Hints) (unsafe.Pointer, D
 	values.AllocatedObjects.Add(1)
 	values.InuseBytes.Add(int64(size))
 	values.InuseObjects.Add(int64(1))
-	fn := p.funcPool.Get().(*argumentedFuncDeallocator[profileDeallocateArgs])
-	fn.SetArgument(profileDeallocateArgs{
-		values: values,
-		size:   size,
-	})
-	return ptr, ChainDeallocator(dec, fn), nil
+	return ptr, ChainDeallocator(
+		dec,
+		p.deallocatorPool.Get(profileDeallocateArgs{
+			values: values,
+			size:   size,
+		}),
+	), nil
 }

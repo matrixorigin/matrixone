@@ -14,20 +14,10 @@
 
 package malloc
 
-type ShardedAllocator []Allocator
-
-func NewShardedAllocator(numShards int, newShard func() Allocator) ShardedAllocator {
-	var ret ShardedAllocator
-	for i := 0; i < numShards; i++ {
-		ret = append(ret, newShard())
-	}
-	return ret
+type Trait interface {
+	IsTrait()
 }
 
-var _ Allocator = ShardedAllocator{}
-
-func (s ShardedAllocator) Allocate(size uint64, hints Hints) ([]byte, Deallocator, error) {
-	pid := runtime_procPin()
-	runtime_procUnpin()
-	return s[pid%len(s)].Allocate(size, hints)
+type TraitHolder interface {
+	As(trait Trait) bool
 }

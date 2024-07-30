@@ -16,41 +16,54 @@ package malloc
 
 import (
 	"sync"
-	"unsafe"
 )
 
 type fixedSizeSyncPoolAllocator struct {
-	size uint64
-	pool sync.Pool
+	size            uint64
+	pool            sync.Pool
+	deallocatorPool *ClosureDeallocatorPool[fixedSizeSyncPoolDeallocatorArgs, *fixedSizeSyncPoolDeallocatorArgs]
 }
 
-func NewFixedSizeSyncPoolAllocator(size uint64) *fixedSizeSyncPoolAllocator {
-	return &fixedSizeSyncPoolAllocator{
+type fixedSizeSyncPoolDeallocatorArgs struct {
+	slice *[]byte
+}
+
+func (fixedSizeSyncPoolDeallocatorArgs) As(Trait) bool {
+	return false
+}
+
+func NewFixedSizeSyncPoolAllocator(size uint64) (ret *fixedSizeSyncPoolAllocator) {
+	ret = &fixedSizeSyncPoolAllocator{
 		size: size,
+
 		pool: sync.Pool{
 			New: func() any {
-				ptr := unsafe.Pointer(unsafe.SliceData(make([]byte, size)))
-				return ptr
+				slice := make([]byte, size)
+				return &slice
 			},
 		},
+
+		deallocatorPool: NewClosureDeallocatorPool(
+			func(hint Hints, args *fixedSizeSyncPoolDeallocatorArgs) {
+				if hint&DoNotReuse > 0 {
+					return
+				}
+				ret.pool.Put(args.slice)
+			},
+		),
 	}
+
+	return
 }
 
 var _ FixedSizeAllocator = new(fixedSizeSyncPoolAllocator)
 
-func (f *fixedSizeSyncPoolAllocator) Allocate(hint Hints) (unsafe.Pointer, Deallocator, error) {
-	ptr := f.pool.Get().(unsafe.Pointer)
+func (f *fixedSizeSyncPoolAllocator) Allocate(hint Hints) ([]byte, Deallocator, error) {
+	slice := f.pool.Get().(*[]byte)
 	if hint&NoClear == 0 {
-		clear(unsafe.Slice((*byte)(ptr), f.size))
+		clear(*slice)
 	}
-	return ptr, f, nil
-}
-
-var _ Deallocator = new(fixedSizeSyncPoolAllocator)
-
-func (f *fixedSizeSyncPoolAllocator) Deallocate(ptr unsafe.Pointer, hint Hints) {
-	if hint&DoNotReuse > 0 {
-		return
-	}
-	f.pool.Put(ptr)
+	return *slice, f.deallocatorPool.Get(fixedSizeSyncPoolDeallocatorArgs{
+		slice: slice,
+	}), nil
 }

@@ -85,7 +85,7 @@ func NewMemoryCache(
 			}
 		}
 	}
-	return memorycache.NewCache(capacity, postSetFn, postGetFn, postEvictFn, getMallocAllocator())
+	return memorycache.NewCache(capacity, postSetFn, postGetFn, postEvictFn, getMemoryCacheAllocator())
 }
 
 var _ IOVectorCache = new(MemCache)
