@@ -2235,7 +2235,6 @@ func (data *CheckpointData) ReadTNMetaBatch(
 				return
 			}
 			data.bats[TNMetaIDX] = bats[0]
-			logutil.Info("yyyy tnmeta", zap.String("bat", bats[0].PPString(10)))
 		}
 	}
 	return
