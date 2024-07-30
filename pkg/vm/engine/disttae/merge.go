@@ -263,8 +263,10 @@ func (t *cnMergeTask) readblock(ctx context.Context, info *objectio.BlockInfoInP
 		ctx, "", info, t.ds, t.colseqnums, t.coltypes,
 		info.CommitTs, t.fs, t.proc.GetMPool(), nil, fileservice.Policy(0))
 	if err != nil {
+		logutil.Infof("read block data failed: %v", err.Error())
 		return
 	}
+	logutil.Infof("read block data success")
 	bat.SetAttributes(t.colattrs)
 	return
 }
