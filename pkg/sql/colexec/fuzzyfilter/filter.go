@@ -157,13 +157,13 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 	for {
 		switch ctr.state {
 		case Build:
-
 			buildIdx := fuzzyFilter.BuildIdx
 
 			msg := ctr.ReceiveFromSingleReg(buildIdx, anal)
 			if msg.Err != nil {
 				return result, msg.Err
 			}
+			anal.Input(msg.Batch, fuzzyFilter.IsFirst)
 
 			bat := msg.Batch
 			if bat == nil {
@@ -199,13 +199,13 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 			ctr.state = Probe
 
 		case Probe:
-
 			probeIdx := fuzzyFilter.getProbeIdx()
 
 			msg := ctr.ReceiveFromSingleReg(probeIdx, anal)
 			if msg.Err != nil {
 				return result, msg.Err
 			}
+			anal.Input(msg.Batch, fuzzyFilter.IsFirst)
 
 			bat := msg.Batch
 			if bat == nil {
@@ -213,6 +213,7 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 				// this will happen in such case:create unique index from a table that unique col have no data
 				if ctr.rbat == nil || ctr.collisionCnt == 0 {
 					result.Status = vm.ExecStop
+					anal.Output(result.Batch, fuzzyFilter.IsLast)
 					return result, nil
 				}
 
@@ -224,6 +225,7 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 				if err := fuzzyFilter.Callback(ctr.rbat); err != nil {
 					return result, err
 				} else {
+					anal.Output(result.Batch, fuzzyFilter.IsLast)
 					return result, nil
 				}
 			}
@@ -246,6 +248,7 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 			continue
 		case End:
 			result.Status = vm.ExecStop
+			anal.Output(result.Batch, fuzzyFilter.IsLast)
 			return result, nil
 		}
 	}

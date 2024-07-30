@@ -2895,11 +2895,11 @@ func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scop
 	all := []*Scope{l, r}
 	rs := c.newMergeScope(all)
 
-	vm.GetLeafOp(rs.RootOp).GetOperatorBase().SetIdx(c.anal.curNodeIdx)
-
+	currentFirstFlag := c.anal.isFirst
 	op := constructFuzzyFilter(n, ns[n.Children[0]], ns[n.Children[1]])
-	op.SetIdx(c.anal.curNodeIdx)
+	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(op)
+	c.anal.isFirst = false
 
 	fuzzyCheck, err := newFuzzyCheck(n)
 	if err != nil {
@@ -2917,10 +2917,8 @@ func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scop
 		if err := fuzzyCheck.fill(c.proc.Ctx, bat); err != nil {
 			return err
 		}
-
 		return nil
 	}
-
 	return []*Scope{rs}, nil
 }
 
