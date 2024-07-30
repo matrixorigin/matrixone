@@ -294,6 +294,7 @@ func doComQueryInBack(backSes *backSession, execCtx *ExecCtx,
 		execCtx.stmt = nil
 		execCtx.cw = nil
 		execCtx.cws = nil
+		execCtx.runner = nil
 		for i := 0; i < len(cws); i++ {
 			cws[i].Free()
 		}
