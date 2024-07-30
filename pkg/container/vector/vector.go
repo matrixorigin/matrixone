@@ -681,6 +681,10 @@ func (v *Vector) PreExtend(rows int, mp *mpool.MPool) error {
 // PreExtendArea use to expand the mpool and area of vector
 // extraAreaSize: the size of area to be extended
 // mp: mpool
+//
+// Note the semantics of this function is very bad -- it extends
+// v.data by rows.   Means v.data is really BIGGER now.   However
+// v.area is extended Cap, but not Len.  This is a very bad design.
 func (v *Vector) PreExtendWithArea(rows int, extraAreaSize int, mp *mpool.MPool) error {
 	if v.class == CONSTANT {
 		return nil
@@ -1600,29 +1604,38 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				}
 				return nil
 			}
-			if err := extend(v, w.length, mp); err != nil {
+
+			vLen := v.length
+			vDataSz := vLen * v.typ.TypeSize()
+			wLen := w.length
+			wDataSz := wLen * w.typ.TypeSize()
+			origAreaSz := len(v.area)
+
+			if err := v.PreExtendWithArea(w.length, len(w.area), mp); err != nil {
 				return err
 			}
-			if sz := len(v.area) + len(w.area); sz > cap(v.area) {
-				area, err := mp.Grow(v.area, sz)
-				if err != nil {
-					return err
-				}
-				v.area = area[:len(v.area)]
-			}
-			var vs []types.Varlena
-			ToSlice(v, &vs)
-			var err error
-			for i := range ws {
-				if nulls.Contains(w.nsp, uint64(i)) {
-					nulls.Add(v.nsp, uint64(v.length))
-				} else {
-					err = BuildVarlenaFromValena(v, &vs[v.length], &ws[i], &w.area, mp)
-					if err != nil {
-						return err
+
+			if w.nsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.nsp, uint64(i)) {
+						nulls.Add(v.nsp, uint64(i+v.length))
 					}
 				}
-				v.length++
+			}
+
+			v.data = v.data[:vDataSz+wDataSz]
+			copy(v.data[vDataSz:], w.data[:wDataSz])
+			if len(w.area) > 0 {
+				v.area = v.area[:origAreaSz+len(w.area)]
+				copy(v.area[origAreaSz:], w.area)
+			}
+			v.length += w.length
+
+			if origAreaSz > 0 && len(w.area) > 0 {
+				vs := MustFixedCol[types.Varlena](v)
+				for i := vLen; i < v.length; i++ {
+					vs[i].AddOffset(uint32(origAreaSz))
+				}
 			}
 			return nil
 		}

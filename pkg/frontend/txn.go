@@ -20,6 +20,7 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -772,6 +773,8 @@ func (th *TxnHandler) createTempStorageUnsafe(ck clock.Clock) error {
 		TxnServiceAddress: tnAddr,
 		Shards:            shards,
 	}
+
+	catalog.SetupDefines(th.service)
 
 	ms, err := memorystorage.NewMemoryStorage(
 		th.service,
