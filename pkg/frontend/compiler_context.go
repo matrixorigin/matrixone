@@ -26,8 +26,6 @@ import (
 	"sync"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -44,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 var _ plan2.CompilerContext = &TxnCompilerContext{}
@@ -168,6 +167,10 @@ func (tcc *TxnCompilerContext) GetAccountId() (uint32, error) {
 
 func (tcc *TxnCompilerContext) GetContext() context.Context {
 	return tcc.execCtx.reqCtx
+}
+
+func (tcc *TxnCompilerContext) SetContext(ctx context.Context) {
+	tcc.execCtx.reqCtx = ctx
 }
 
 func (tcc *TxnCompilerContext) DatabaseExists(name string, snapshot plan2.Snapshot) bool {
@@ -455,7 +458,6 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 	if tableDef.IsTemporary {
 		tableDef.Name = tableName
 	}
-	tableDef.DbName = dbName
 
 	// convert
 	var subscriptionName string
@@ -751,7 +753,8 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string,
 	priDefs := make([]*plan2.ColDef, 0, len(priKeys))
 	for _, key := range priKeys {
 		priDefs = append(priDefs, &plan2.ColDef{
-			Name: key.Name,
+			Name:       strings.ToLower(key.Name),
+			OriginName: key.Name,
 			Typ: plan2.Type{
 				Id:    int32(key.Type.Oid),
 				Width: key.Type.Width,
@@ -789,20 +792,57 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot plan2.Snapsh
 	if err != nil {
 		return nil, err
 	}
-	s, needUpdate := tcc.statsInCache(ctx, dbName, table, snapshot)
-	if s == nil {
+	cached, needUpdate := tcc.statsInCache(ctx, dbName, table, snapshot)
+	if cached == nil {
 		return nil, nil
 	}
-	if needUpdate {
-		s, err = table.Stats(ctx, true)
-		if err != nil {
-			return s, err
-		}
-		if s != nil {
-			tcc.UpdateStatsInCache(table.GetTableID(ctx), s)
+	if !needUpdate {
+		return cached, nil
+	}
+	tableDefs, err := table.TableDefs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var partitionInfo *plan.PartitionByDef
+	for _, def := range tableDefs {
+		if partitionDef, ok := def.(*engine.PartitionDef); ok {
+			if partitionDef.Partitioned > 0 {
+				p := &plan.PartitionByDef{}
+				err = p.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition))
+				if err != nil {
+					return nil, err
+				}
+				partitionInfo = p
+			}
+			break
 		}
 	}
-	return s, nil
+	var statsInfo *pb.StatsInfo
+	// This is a partition table.
+	if partitionInfo != nil {
+		statsInfo = plan2.NewStatsInfo()
+		for _, partitionTable := range partitionInfo.PartitionTableNames {
+			parCtx, parTable, err := tcc.getRelation(dbName, partitionTable, sub, snapshot)
+			if err != nil {
+				return cached, err
+			}
+			parStats, err := parTable.Stats(parCtx, true)
+			if err != nil {
+				return cached, err
+			}
+			statsInfo.Merge(parStats)
+		}
+	} else {
+		statsInfo, err = table.Stats(ctx, true)
+		if err != nil {
+			return cached, err
+		}
+	}
+	if statsInfo != nil {
+		tcc.UpdateStatsInCache(table.GetTableID(ctx), statsInfo)
+		return statsInfo, nil
+	}
+	return cached, nil
 }
 
 func (tcc *TxnCompilerContext) UpdateStatsInCache(tid uint64, s *pb.StatsInfo) {
@@ -866,7 +906,7 @@ func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, 
 	// get file size
 	path := catalog.BuildQueryResultMetaPath(proc.GetSessionInfo().Account, uuid)
 	// read meta's meta
-	reader, err := blockio.NewFileReader(proc.Base.FileService, path)
+	reader, err := blockio.NewFileReader(proc.GetService(), proc.Base.FileService, path)
 	if err != nil {
 		return nil, "", err
 	}

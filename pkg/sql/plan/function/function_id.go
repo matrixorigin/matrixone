@@ -281,6 +281,7 @@ const (
 	JSON_EXTRACT
 	JSON_QUOTE
 	JSON_UNQUOTE
+	JSON_ROW
 	JQ
 	TRY_JQ
 	WASM
@@ -578,6 +579,8 @@ var functionIdRegister = map[string]int32{
 	"collation":                      COLLATION,
 	"json_extract":                   JSON_EXTRACT,
 	"json_quote":                     JSON_QUOTE,
+	"json_unquote":                   JSON_UNQUOTE,
+	"json_row":                       JSON_ROW,
 	"jq":                             JQ,
 	"try_jq":                         TRY_JQ,
 	"wasm":                           WASM,
@@ -627,7 +630,6 @@ var functionIdRegister = map[string]int32{
 	"locate":                         LOCATE,
 	"curdate":                        CURRENT_DATE,
 	"current_date":                   CURRENT_DATE,
-	"json_unquote":                   JSON_UNQUOTE,
 	"ascii":                          ASCII,
 	"replace":                        REPLACE,
 	"mo_table_rows":                  MO_TABLE_ROWS,

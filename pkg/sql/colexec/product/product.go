@@ -38,7 +38,6 @@ func (product *Product) OpType() vm.OpType {
 func (product *Product) Prepare(proc *process.Process) error {
 	ap := product
 	ap.ctr = new(container)
-	ap.ctr.InitReceiver(proc, false)
 	return nil
 }
 
@@ -53,27 +52,27 @@ func (product *Product) Call(proc *process.Process) (vm.CallResult, error) {
 	ap := product
 	ctr := ap.ctr
 	result := vm.NewCallResult()
-	var msg *process.RegisterMessage
+	var err error
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(proc, anal); err != nil {
+			if err = product.build(proc, anal); err != nil {
 				return result, err
 			}
 			ctr.state = Probe
 
 		case Probe:
 			if ctr.inBat != nil {
-				if err := ctr.probe(ap, proc, anal, product.GetIsLast(), &result); err != nil {
+				if err = ctr.probe(ap, proc, anal, product.GetIsLast(), &result); err != nil {
 					return result, err
 				}
 				return result, nil
 			}
-			msg = ctr.ReceiveFromSingleReg(0, anal)
-			if msg.Err != nil {
-				return result, msg.Err
+			result, err = product.Children[0].Call(proc)
+			if err != nil {
+				return result, err
 			}
-			ctr.inBat = msg.Batch
+			ctr.inBat = result.Batch
 			if ctr.inBat == nil {
 				ctr.state = End
 				continue
@@ -102,22 +101,20 @@ func (product *Product) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
+func (product *Product) build(proc *process.Process, anal process.Analyze) error {
+	ctr := product.ctr
+	mp := proc.ReceiveJoinMap(anal, product.JoinMapTag, false, 0)
+	if mp == nil {
+		return nil
+	}
+	batches := mp.GetBatches()
 	var err error
-	for {
-		msg := ctr.ReceiveFromSingleReg(1, anal)
-		if msg.Err != nil {
-			return msg.Err
-		}
-		bat := msg.Batch
-		if bat == nil {
-			break
-		}
-		ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), bat)
+	//maybe optimize this in the future
+	for i := range batches {
+		ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), batches[i])
 		if err != nil {
 			return err
 		}
-		proc.PutBatch(bat)
 	}
 	return nil
 }

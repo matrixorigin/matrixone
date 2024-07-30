@@ -92,4 +92,17 @@ var (
 	InitData1DurationHistogram                = createAccountDurationHistogram.WithLabelValues("init-data1")
 	CreateTablesInSystemDurationHistogram     = createAccountDurationHistogram.WithLabelValues("create-tables-in-system")
 	CreateTablesInInfoSchemaDurationHistogram = createAccountDurationHistogram.WithLabelValues("create-tables-in-info-schema")
+
+	sqlLengthHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "frontend",
+			Name:      "input_sql_length",
+			Help:      "Bucketed histogram of Input SQL Length",
+			Buckets:   getDurationBuckets(),
+		}, []string{"label"})
+
+	TotalSQLLengthHistogram          = sqlLengthHistogram.WithLabelValues("total-sql-length")
+	LoadDataInlineSQLLengthHistogram = sqlLengthHistogram.WithLabelValues("load-data-inline-sql-length")
+	OtherSQLLengthHistogram          = sqlLengthHistogram.WithLabelValues("other-sql-length")
 )

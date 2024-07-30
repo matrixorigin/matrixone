@@ -179,10 +179,10 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 		arg0AsColNameVec, _ := vector.NewConstBytes(inVecType, []byte(getColSeqFromColDef(colDefs[args[0].GetCol().GetColPos()])), inExprListLen, mp)
 
 		// c. (serial_full("0","value1"), serial_full("0","value2"), serial_full("0","value3"))
-		ps := types.NewPackerArray(inExprListLen, mp)
+		ps := types.NewPackerArray(inExprListLen)
 		defer func() {
 			for _, p := range ps {
-				p.FreeMem()
+				p.Close()
 			}
 		}()
 		function.SerialHelper(arg0AsColNameVec, nil, ps, true)

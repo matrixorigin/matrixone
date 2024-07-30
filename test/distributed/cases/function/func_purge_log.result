@@ -4,16 +4,16 @@ select purge_log('rawlog', '2023-06-30') a;
 not supported: only support sys account
 select REGEXP_REPLACE(a, '[0-9]+', '*') a from (select mo_ctl('dn', 'inspect', 'objprune -t system_metrics.metric -d 2021h') a) a;
 a
-\nmsg: success. arg prune: table *-metric, *h*m*s ago, cacheLen *\n\ntotal: *, stale: *, selected: *, no valid objs to prune
+\nmsg: prune: table *-metric, *h*m*s ago, cacheLen *\n\ntotal: *, stale: *, selected: *, no valid objs to prune
 select REGEXP_REPLACE(a, '[0-9]+', '*') a from (select purge_log('rawlog', '2021-02-01') a) a;
 a
-\nmsg: success. arg prune: table *-rawlog, *h*m*s ago, cacheLen *\n\ntotal: *, stale: *, selected: *, no valid objs to prune
+\nmsg: prune: table *-rawlog, *h*m*s ago, cacheLen *\n\ntotal: *, stale: *, selected: *, no valid objs to prune
 select REGEXP_REPLACE(a, '[0-9]+', '*') a from (select purge_log('statement_info', '2021-02-01') a) a;
 a
-\nmsg: success. arg prune: table *-statement_info, *h*m*s ago, cacheLen *\n\ntotal: *, stale: *, selected: *, no valid objs to prune
+\nmsg: prune: table *-statement_info, *h*m*s ago, cacheLen *\n\ntotal: *, stale: *, selected: *, no valid objs to prune
 select REGEXP_REPLACE(a, '[0-9]+', '*') a from (select purge_log('metric', '2021-02-01') a) a;
 a
-\nmsg: success. arg prune: table *-metric, *h*m*s ago, cacheLen *\n\ntotal: *, stale: *, selected: *, no valid objs to prune
+\nmsg: prune: table *-metric, *h*m*s ago, cacheLen *\n\ntotal: *, stale: *, selected: *, no valid objs to prune
 select purge_log('rawlog,statement_info,metric', '2021-02-01') a;
 not supported: table name contains comma.
 select purge_log('rawlog_not_exist', '2023-06-30') a;

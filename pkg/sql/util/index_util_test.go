@@ -116,7 +116,7 @@ func TestBuildUniqueKeyBatch(t *testing.T) {
 			require.Equal(t, test.vecs[0].UnsafeGetRawData(), b.Vecs[0].UnsafeGetRawData())
 		}
 		for _, p := range packers.ps {
-			p.FreeMem()
+			p.Close()
 		}
 	}
 }
@@ -186,7 +186,7 @@ func TestCompactUniqueKeyBatch(t *testing.T) {
 			require.Equal(t, 2, b.Vecs[0].Length())
 		}
 		for _, p := range packers.ps {
-			p.FreeMem()
+			p.Close()
 		}
 	}
 }

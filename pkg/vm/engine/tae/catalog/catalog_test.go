@@ -16,6 +16,7 @@ package catalog
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"sync"
 	"testing"
@@ -414,4 +415,25 @@ func TestAlterSchema(t *testing.T) {
 	require.Equal(t, uint16(5), schema.GetSingleSortKey().SeqNum)
 	require.Equal(t, 5, schema.GetSingleSortKeyIdx())
 
+}
+
+func randomTxnID(t *testing.T) []byte {
+	bytes := make([]byte, 8)
+	_, err := rand.Read(bytes)
+	require.NoError(t, err)
+	return bytes
+}
+
+func TestTxnManager_GetOrCreateTxnWithMeta(t *testing.T) {
+	mockCatalog := MockCatalog()
+	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(mockCatalog), MockTxnFactory(mockCatalog), types.NewMockHLCClock(1))
+	txn1 := randomTxnID(t)
+	ts := *types.BuildTSForTest(10, 0)
+	meta, err := txnMgr.GetOrCreateTxnWithMeta(nil, txn1, ts)
+	require.NoError(t, err)
+	require.Equal(t, string(txn1), meta.GetID())
+
+	meta2, err := txnMgr.GetOrCreateTxnWithMeta(nil, txn1, ts)
+	require.NoError(t, err)
+	require.Equal(t, string(txn1), meta2.GetID())
 }

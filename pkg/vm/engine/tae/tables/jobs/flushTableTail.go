@@ -72,7 +72,7 @@ type flushTableTailTask struct {
 	dbid uint64
 
 	// record the row mapping from deleted blocks to created blocks
-	transMappings *api.BlkTransferBooking
+	transMappings api.TransferMaps
 	doTransfer    bool
 
 	aObjMetas         []*catalog.ObjectEntry
@@ -183,6 +183,8 @@ func NewFlushTableTailTask(
 				)
 				return nil, txnif.ErrTxnNeedRetry
 			}
+		} else if hdl.IsAppendable() && obj.HasDropCommitted() && !obj.InMemoryDeletesExisted() {
+			// skip dropped . refer to Collector.tryCompactTree
 		} else {
 			task.delSrcMetas = append(task.delSrcMetas, obj)
 			task.delSrcHandles = append(task.delSrcHandles, hdl)
@@ -191,7 +193,10 @@ func NewFlushTableTailTask(
 
 	task.doTransfer = !strings.Contains(task.schema.Comment, pkgcatalog.MO_COMMENT_NO_DEL_HINT)
 	if task.doTransfer {
-		task.transMappings = mergesort.NewBlkTransferBooking(len(task.aObjHandles))
+		task.transMappings = make(api.TransferMaps, len(task.aObjHandles))
+		for i := range len(task.aObjHandles) {
+			task.transMappings[i] = make(api.TransferMap)
+		}
 	}
 
 	tblEntry := rel.GetMeta().(*catalog.TableEntry)

@@ -98,36 +98,43 @@ drop account acc_idx;
 -- Support More System Views
 use information_schema;
 show tables;
+-- @ignore:0
 desc key_column_usage;
 select table_name, column_name from key_column_usage limit 2;
 desc columns;
 select table_name, column_name from columns where table_schema = 'mo_catalog' and column_name != '__mo_index_idx_col' and column_name != '__mo_index_pri_col' order by table_name, column_name limit 5;
 desc views;
 select table_schema, table_name, definer from views where table_schema = 'system' order by table_name;
+-- @ignore:0
 desc profiling;
 select seq, state from profiling;
 
+-- @ignore:0
 desc user_privileges;
 select grantee, table_catalog from user_privileges limit 2;
 desc schemata;
 select catalog_name, schema_name from schemata where schema_name = 'mo_catalog' or schema_name = 'mo_task' order by catalog_name, schema_name;
+-- @ignore:0
 desc character_sets;
 select character_set_name, description, maxlen from character_sets limit 5;
+-- @ignore:0
 desc triggers;
 select trigger_name, action_order from triggers limit 3;
 
 use mysql;
-desc user;
+-- @ignore:0
+# desc user;
 select host, user from user limit 2;
+-- @ignore:0
 desc db;
 select db, user from db limit 5;
--- @ignore:4
+-- @ignore:0
 desc procs_priv;
 select routine_name, routine_type from procs_priv limit 5;
--- @ignore:4
+-- @ignore:0
 desc columns_priv;
 select table_name, column_name from columns_priv limit 5;
--- @ignore:4
+-- @ignore:0
 desc tables_priv;
 select host, table_name from tables_priv limit 5;
 

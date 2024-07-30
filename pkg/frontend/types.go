@@ -41,6 +41,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util"
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -115,6 +116,7 @@ type PrepareStmt struct {
 	PreparePlan    *plan.Plan
 	PrepareStmt    tree.Statement
 	ParamTypes     []byte
+	IsCloudNonuser bool
 	IsInsertValues bool
 	InsertBat      *batch.Batch
 	proc           *process.Process
@@ -253,15 +255,25 @@ type SessionAllocator struct {
 }
 
 func NewSessionAllocator(pu *config.ParameterUnit) *SessionAllocator {
-	allocator := malloc.NewManagedAllocator(
-		malloc.NewSizeBoundedAllocator(
-			malloc.GetDefault(nil),
-			uint64(pu.SV.GuestMmuLimitation),
-			nil,
-		),
+	// default
+	allocator := malloc.GetDefault(nil)
+	// size bounded
+	allocator = malloc.NewSizeBoundedAllocator(
+		allocator,
+		uint64(pu.SV.GuestMmuLimitation),
+		nil,
+	)
+	// with metrics
+	allocator = malloc.NewMetricsAllocator(
+		allocator,
+		metric.MallocCounterSessionAllocateBytes,
+		metric.MallocGaugeSessionInuseBytes,
+		metric.MallocCounterSessionAllocateObjects,
+		metric.MallocGaugeSessionInuseObjects,
 	)
 	ret := &SessionAllocator{
-		allocator: allocator,
+		// managed
+		allocator: malloc.NewManagedAllocator(allocator),
 	}
 	return ret
 }
@@ -278,6 +290,7 @@ var _ FeSession = &Session{}
 var _ FeSession = &backSession{}
 
 type FeSession interface {
+	GetService() string
 	GetTimeZone() *time.Location
 	GetStatsCache() *plan2.StatsCache
 	GetUserName() string
@@ -955,6 +968,7 @@ type MysqlWriter interface {
 	WriteOKtWithEOF(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error
 	WriteEOF(warnings, status uint16) error
 	WriteEOFIF(warnings uint16, status uint16) error
+	WriteEOFIFAndNoFlush(warnings uint16, status uint16) error
 	WriteEOFOrOK(warnings uint16, status uint16) error
 	WriteERR(errorCode uint16, sqlState, errorMessage string) error
 	WriteLengthEncodedNumber(uint64) error

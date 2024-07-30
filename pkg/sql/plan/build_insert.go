@@ -190,11 +190,11 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 			if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
 				continue
 			}
-			attrs = append(attrs, col.Name)
+			attrs = append(attrs, col.GetOriginCaseName())
 			insertColCount++
 		}
 		for _, col := range tableDef.Cols {
-			attrs = append(attrs, col.Name)
+			attrs = append(attrs, col.GetOriginCaseName())
 		}
 		attrs = append(attrs, catalog.Row_ID)
 		uniqueColWithIdx := GetUniqueColAndIdxFromTableDef(tableDef)
@@ -323,8 +323,9 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	}
 	query.DetectSqls = sqls
 	reduceSinkSinkScanNodes(query)
-	ReCalcQueryStats(builder, query)
-	reCheckifNeedLockWholeTable(builder)
+	builder.tempOptimizeForDML()
+	reCheckifNeedLockWholeTable(builder, stmt.IsRestore)
+
 	return &Plan{
 		Plan: &plan.Plan_Query{
 			Query: query,
@@ -398,7 +399,7 @@ func canUsePkFilter(builder *QueryBuilder, ctx CompilerContext, stmt *tree.Inser
 		isCompound = len(tableDef.Pkey.Names) > 1
 	}
 
-	if !config.CNPrimaryCheck {
+	if !config.CNPrimaryCheck.Load() {
 		return false // break condition 0
 	}
 
@@ -707,7 +708,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 						Expr: &plan.Expr_Lit{
 							Lit: &plan.Literal{
 								Value: &plan.Literal_Sval{
-									Sval: val.ToString(),
+									Sval: val.String(),
 								},
 							},
 						},

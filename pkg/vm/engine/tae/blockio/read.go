@@ -44,6 +44,7 @@ type BlockReadFilter struct {
 
 func ReadByFilter(
 	ctx context.Context,
+	sid string,
 	info *objectio.BlockInfo,
 	inputDeletes []int64,
 	columns []uint16,
@@ -85,7 +86,7 @@ func ReadByFilter(
 			deleteMask = rows
 		}
 		readtotal := time.Since(now)
-		RecordReadDel(readtotal, readcost, bisect)
+		RecordReadDel(sid, readtotal, readcost, bisect)
 	}
 
 	if deleteMask == nil {
@@ -115,6 +116,7 @@ func ReadByFilter(
 // BlockRead read block data from storage and apply deletes according given timestamp. Caller make sure metaloc is not empty
 func BlockRead(
 	ctx context.Context,
+	sid string,
 	info *objectio.BlockInfo,
 	inputDeletes []int64,
 	columns []uint16,
@@ -146,17 +148,17 @@ func BlockRead(
 
 	if searchFunc != nil {
 		if sels, err = ReadByFilter(
-			ctx, info, inputDeletes, filterSeqnums, filterColTypes,
+			ctx, sid, info, inputDeletes, filterSeqnums, filterColTypes,
 			types.TimestampToTS(ts), searchFunc, fs, mp,
 		); err != nil {
 			return nil, err
 		}
 		v2.TaskSelReadFilterTotal.Inc()
 		if len(sels) == 0 {
-			RecordReadFilterSelectivity(1, 1)
+			RecordReadFilterSelectivity(sid, 1, 1)
 			v2.TaskSelReadFilterHit.Inc()
 		} else {
-			RecordReadFilterSelectivity(0, 1)
+			RecordReadFilterSelectivity(sid, 0, 1)
 		}
 
 		if len(sels) == 0 {
@@ -173,7 +175,7 @@ func BlockRead(
 	}
 
 	columnBatch, err := BlockReadInner(
-		ctx, info, inputDeletes, columns, colTypes,
+		ctx, sid, info, inputDeletes, columns, colTypes,
 		types.TimestampToTS(ts), sels, fs, mp, vp, policy,
 	)
 	if err != nil {
@@ -226,6 +228,7 @@ func BlockCompactionRead(
 
 func BlockReadInner(
 	ctx context.Context,
+	sid string,
 	info *objectio.BlockInfo,
 	inputDeleteRows []int64,
 	columns []uint16,
@@ -270,6 +273,7 @@ func BlockReadInner(
 		}
 
 		// assemble result batch only with selected rows
+		doExtendArea := len(selectRows) > 100
 		for i, col := range loaded.Vecs {
 			typ := *col.GetType()
 			if typ.Oid == types.T_Rowid {
@@ -281,7 +285,11 @@ func BlockReadInner(
 			} else {
 				result.Vecs[i] = vp.GetVector(typ)
 			}
-			if err = result.Vecs[i].PreExtendArea(len(selectRows), mp); err != nil {
+			extendAreaSize := 0
+			if doExtendArea {
+				extendAreaSize = len(col.GetArea())
+			}
+			if err = result.Vecs[i].PreExtendWithArea(len(selectRows), extendAreaSize, mp); err != nil {
 				break
 			}
 			if err = result.Vecs[i].Union(col, selectRows, mp); err != nil {
@@ -326,7 +334,7 @@ func BlockReadInner(
 		deleteMask.Merge(rows)
 
 		readtotal := time.Since(now)
-		RecordReadDel(readtotal, readcost, bisect)
+		RecordReadDel(sid, readtotal, readcost, bisect)
 
 		if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 			logutil.Debugf(
@@ -601,7 +609,13 @@ func EvalDeleteRowsByTimestampForDeletesPersistedByCN(deletes *batch.Batch, ts t
 // columns  Which columns should be taken for columns
 // service  fileservice
 // infos [s3object name][block]
-func BlockPrefetch(idxes []uint16, service fileservice.FileService, infos [][]*objectio.BlockInfo, prefetchFile bool) error {
+func BlockPrefetch(
+	sid string,
+	idxes []uint16,
+	service fileservice.FileService,
+	infos [][]*objectio.BlockInfo,
+	prefetchFile bool,
+) error {
 	// Generate prefetch task
 	for i := range infos {
 		// build reader
@@ -613,14 +627,14 @@ func BlockPrefetch(idxes []uint16, service fileservice.FileService, infos [][]*o
 			pref.AddBlock(idxes, []uint16{info.MetaLocation().ID()})
 			if !info.DeltaLocation().IsEmpty() {
 				// Need to read all delete
-				err = PrefetchTombstone([]uint16{0, 1, 2}, []uint16{info.DeltaLocation().ID()}, service, info.DeltaLocation())
+				err = PrefetchTombstone(sid, []uint16{0, 1, 2}, []uint16{info.DeltaLocation().ID()}, service, info.DeltaLocation())
 				if err != nil {
 					return err
 				}
 			}
 		}
 		pref.prefetchFile = prefetchFile
-		err = pipeline.Prefetch(pref)
+		err = MustGetPipeline(sid).Prefetch(pref)
 		if err != nil {
 			return err
 		}
@@ -628,24 +642,36 @@ func BlockPrefetch(idxes []uint16, service fileservice.FileService, infos [][]*o
 	return nil
 }
 
-func RecordReadDel(total, read, bisect time.Duration) {
-	pipeline.stats.selectivityStats.RecordReadDel(total, read, bisect)
+func RecordReadDel(
+	sid string,
+	total, read, bisect time.Duration,
+) {
+	MustGetPipeline(sid).stats.selectivityStats.RecordReadDel(total, read, bisect)
 }
 
-func RecordReadFilterSelectivity(hit, total int) {
-	pipeline.stats.selectivityStats.RecordReadFilterSelectivity(hit, total)
+func RecordReadFilterSelectivity(
+	sid string,
+	hit, total int,
+) {
+	MustGetPipeline(sid).stats.selectivityStats.RecordReadFilterSelectivity(hit, total)
 }
 
-func RecordBlockSelectivity(hit, total int) {
-	pipeline.stats.selectivityStats.RecordBlockSelectivity(hit, total)
+func RecordBlockSelectivity(
+	sid string,
+	hit, total int,
+) {
+	MustGetPipeline(sid).stats.selectivityStats.RecordBlockSelectivity(hit, total)
 }
 
-func RecordColumnSelectivity(hit, total int) {
-	pipeline.stats.selectivityStats.RecordColumnSelectivity(hit, total)
+func RecordColumnSelectivity(
+	sid string,
+	hit, total int,
+) {
+	MustGetPipeline(sid).stats.selectivityStats.RecordColumnSelectivity(hit, total)
 }
 
-func ExportSelectivityString() string {
-	return pipeline.stats.selectivityStats.ExportString()
+func ExportSelectivityString(sid string) string {
+	return MustGetPipeline(sid).stats.selectivityStats.ExportString()
 }
 
 func FindIntervalForBlock(rowids []types.Rowid, id *types.Blockid) (start int, end int) {

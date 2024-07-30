@@ -143,6 +143,8 @@ func processValue(ctr *container, ap *Fill, proc *process.Process, anal process.
 		result.Status = vm.ExecStop
 		return result, nil
 	}
+	anal.Input(ctr.buf, ap.IsFirst)
+
 	for i := 0; i < ap.ColLen; i++ {
 		for j := 0; j < ctr.buf.Vecs[i].Length(); j++ {
 			if ctr.buf.Vecs[i].IsNull(uint64(j)) {
@@ -152,7 +154,9 @@ func processValue(ctr *container, ap *Fill, proc *process.Process, anal process.
 			}
 		}
 	}
+
 	result.Batch = ctr.buf
+	anal.Output(ctr.buf, ap.IsLast)
 	return result, nil
 }
 
@@ -270,6 +274,8 @@ func processPrev(ctr *container, ap *Fill, proc *process.Process, anal process.A
 		result.Status = vm.ExecStop
 		return result, nil
 	}
+	anal.Input(ctr.buf, ap.IsFirst)
+
 	for i := 0; i < ap.ColLen; i++ {
 		for j := 0; j < ctr.buf.Vecs[i].Length(); j++ {
 			if ctr.buf.Vecs[i].IsNull(uint64(j)) {
@@ -295,6 +301,7 @@ func processPrev(ctr *container, ap *Fill, proc *process.Process, anal process.A
 		}
 	}
 	result.Batch = ctr.buf
+	anal.Output(result.Batch, ap.IsLast)
 	return result, nil
 }
 
@@ -449,6 +456,8 @@ func processNext(ctr *container, ap *Fill, proc *process.Process, anal process.A
 		result.Status = vm.ExecStop
 		return result, nil
 	}
+	anal.Input(ctr.buf, ap.IsFirst)
+
 	for i := range ctr.bats[0].Vecs {
 		if err = processNextCol(ctr, i, proc); err != nil {
 			return result, err
@@ -458,6 +467,8 @@ func processNext(ctr *container, ap *Fill, proc *process.Process, anal process.A
 	result.Batch = ctr.bats[ctr.idx]
 	result.Status = vm.ExecNext
 	ctr.idx++
+
+	anal.Output(result.Batch, ap.IsLast)
 	return result, nil
 }
 
@@ -483,6 +494,7 @@ func processLinear(ctr *container, ap *Fill, proc *process.Process, anal process
 		if msg.Batch == nil {
 			break
 		}
+		anal.Input(msg.Batch, ap.IsFirst)
 		ctr.bats = append(ctr.bats, msg.Batch)
 	}
 	if len(ctr.bats) == 0 {
@@ -499,6 +511,8 @@ func processLinear(ctr *container, ap *Fill, proc *process.Process, anal process
 	result.Batch = ctr.bats[ctr.idx]
 	result.Status = vm.ExecNext
 	ctr.idx++
+
+	anal.Output(result.Batch, ap.IsLast)
 	return result, nil
 }
 
@@ -518,7 +532,10 @@ func processDefault(ctr *container, ap *Fill, proc *process.Process, anal proces
 		result.Status = vm.ExecStop
 		return result, nil
 	}
+	anal.Input(ctr.buf, ap.IsFirst)
 	result.Batch = ctr.buf
+
+	anal.Output(result.Batch, ap.IsLast)
 	return result, nil
 }
 
@@ -571,7 +588,7 @@ func appendValue(v, w *vector.Vector, j int, proc *process.Process) error {
 		err = vector.AppendFixed[types.Rowid](v, vector.GetFixedAt[types.Rowid](w, j), false, proc.Mp())
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
 		types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64:
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		err = vector.AppendBytes(v, w.GetBytesAt(j), false, proc.Mp())
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function set value in fill query", v.GetType()))
@@ -631,7 +648,7 @@ func setValue(v, w *vector.Vector, i, j int, proc *process.Process) error {
 		err = vector.SetFixedAt[types.Rowid](v, i, vector.GetFixedAt[types.Rowid](w, j))
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
 		types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64:
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		err = vector.SetBytesAt(v, i, w.GetBytesAt(j), proc.Mp())
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function set value in fill query", v.GetType()))

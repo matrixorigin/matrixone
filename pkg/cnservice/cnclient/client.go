@@ -40,8 +40,10 @@ func (cfg *PipelineConfig) fill() {
 	}
 }
 
-func GetPipelineClient() PipelineClient {
-	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.PipelineClient)
+func GetPipelineClient(
+	sid string,
+) PipelineClient {
+	v, ok := runtime.ServiceRuntime(sid).GetGlobalVariables(runtime.PipelineClient)
 	if !ok {
 		return nil
 	}
@@ -55,6 +57,7 @@ type pipelineClient struct {
 }
 
 func NewPipelineClient(
+	sid string,
 	localServiceAddress string,
 	cfg *PipelineConfig,
 ) (PipelineClient, error) {
@@ -68,8 +71,10 @@ func NewPipelineClient(
 	}
 
 	codec := morpc.NewMessageCodec(
+		sid,
 		func() morpc.Message { return AcquireMessage() },
-		morpc.WithCodecMaxBodySize(int(cfg.RPC.MaxMessageSize)))
+		morpc.WithCodecMaxBodySize(int(cfg.RPC.MaxMessageSize)),
+	)
 	factory := morpc.NewGoettyBasedBackendFactory(
 		codec,
 		morpc.WithBackendGoettyOptions(

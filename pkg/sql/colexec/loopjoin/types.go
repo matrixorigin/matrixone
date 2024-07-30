@@ -35,8 +35,6 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
-
 	state    int
 	probeIdx int
 	bat      *batch.Batch
@@ -48,10 +46,11 @@ type container struct {
 }
 
 type LoopJoin struct {
-	ctr    *container
-	Cond   *plan.Expr
-	Result []colexec.ResultPos
-	Typs   []types.Type
+	ctr        *container
+	Cond       *plan.Expr
+	Result     []colexec.ResultPos
+	Typs       []types.Type
+	JoinMapTag int32
 	vm.OperatorBase
 }
 
@@ -93,7 +92,6 @@ func (loopJoin *LoopJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 func (loopJoin *LoopJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := loopJoin.ctr
 	if ctr != nil {
-		ctr.FreeAllReg()
 		ctr.cleanBatch(proc.Mp())
 		ctr.cleanExprExecutor()
 		loopJoin.ctr = nil
