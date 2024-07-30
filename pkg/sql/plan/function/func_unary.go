@@ -1023,7 +1023,7 @@ func createGeminiEmbedding(ctx context.Context, input string) ([]float32, error)
 	if err != nil {
 		panic(err)
 	}
-	return res, nil
+	return res.Embedding.Values, nil
 }
 
 func createOllamaEmbedding(ctx context.Context, input string) ([]float32, error) {
@@ -1082,21 +1082,46 @@ func EmbeddingOp(parameters []*vector.Vector, result vector.FunctionResultWrappe
 			continue
 		}
 
-		input := string(inputBytes)
-		embeddingFloats, err := createErnieEmbedding(ctx, input)
+		model, err := proc.GetResolveVariableFunc()("vector_embedding_model", true, false)
 		if err != nil {
 			return err
 		}
+		modelStr, ok := model.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type for vector_embedding_model: %T", model)
+		}
 
-		// TODO Note float64 is for Ernie, and float32 is for gemini and ollama
-		embeddingBytes := types.ArrayToBytes[float64](embeddingFloats)
+		input := string(inputBytes)
+		var embeddingBytes []byte
+		switch modelStr {
+		case "ollama":
+			embeddingFloats, err := createOllamaEmbedding(ctx, input)
+			if err != nil {
+				return err
+			}
+			embeddingBytes = types.ArrayToBytes[float32](embeddingFloats)
+		case "gemini":
+			embeddingFloats, err := createGeminiEmbedding(ctx, input)
+			if err != nil {
+				return err
+			}
+			embeddingBytes = types.ArrayToBytes[float32](embeddingFloats)
+		case "ernie":
+			embeddingFloats, err := createErnieEmbedding(ctx, input)
+			if err != nil {
+				return err
+			}
+			embeddingBytes = types.ArrayToBytes[float64](embeddingFloats)
+		default:
+			return fmt.Errorf("unsupported embedding model: %s", modelStr)
+		}
 
 		if err := rs.AppendBytes(embeddingBytes, false); err != nil {
 			return err
 		}
 	}
-
 	return nil
+
 }
 
 func Md5(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

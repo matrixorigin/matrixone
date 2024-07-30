@@ -2973,9 +2973,9 @@ var supportedMathBuiltIns = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				args:       []types.T{types.T_varchar, types.T_varchar, types.T_int64},
+				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_text.ToType()
+					return types.T_array_float32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return EmbeddingOp
