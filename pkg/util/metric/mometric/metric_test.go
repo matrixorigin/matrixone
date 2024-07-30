@@ -26,11 +26,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 
+	"github.com/matrixorigin/matrixone/pkg/config"
 	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/matrixorigin/matrixone/pkg/config"
 )
 
 func TestMetric(t *testing.T) {
