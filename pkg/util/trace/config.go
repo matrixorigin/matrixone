@@ -259,6 +259,10 @@ type SpanConfig struct {
 	hungThreshold time.Duration
 	Extra         []zap.Field `json:"-"`
 
+	// backOffStrategy set by WithConstBackOff
+	backOffStrategy BackOffStrategy
+	backOffInterval time.Duration
+
 	// ProfileSystemStatusFn is used to get status information.
 	ProfileSystemStatusFn func() ([]byte, error)
 }
@@ -274,6 +278,25 @@ const (
 	ProfileFlagTrace
 	ProfileFlagSystemStatus
 )
+
+type BackOffStrategy uint
+
+const (
+	NoneBackOffStrategy BackOffStrategy = 1 << iota
+	ConstBackOffStrategy
+)
+
+var backOff2String = map[BackOffStrategy]string{
+	NoneBackOffStrategy:  "none",
+	ConstBackOffStrategy: "const",
+}
+
+func (s BackOffStrategy) String() string {
+	if val, ok := backOff2String[s]; ok {
+		return val
+	}
+	return "unknown"
+}
 
 func (c *SpanConfig) Reset() {
 	c.SpanContext.Reset()
@@ -339,6 +362,18 @@ func (c *SpanConfig) ProfileTraceSecs() time.Duration {
 // ProfileSystemStatus return the value set by WithProfileSystemStatus.
 func (c *SpanConfig) ProfileSystemStatus() bool {
 	return c.profileFlag&ProfileFlagSystemStatus > 0
+}
+
+func (c *SpanConfig) BackOffStrategy() (BackOffStrategy, func() BackOff) {
+	switch c.backOffStrategy {
+	case NoneBackOffStrategy:
+		return c.backOffStrategy, nil
+	case ConstBackOffStrategy:
+		return c.backOffStrategy, func() BackOff {
+			return NewLinearBackoff(c.backOffInterval)
+		}
+	}
+	return NoneBackOffStrategy, nil
 }
 
 // SpanStartOption applies an option to a SpanConfig. These options are applicable
@@ -490,6 +525,15 @@ func WithStatementExtra(txnID uuid.UUID, stmID uuid.UUID, stm string) SpanEndOpt
 	})
 }
 
+// WithConstBackOff set the const interval duration
+// if interval = 0, means no backoff
+func WithConstBackOff(interval time.Duration) SpanStartOption {
+	return spanOptionFunc(func(cfg *SpanConfig) {
+		cfg.backOffStrategy = ConstBackOffStrategy
+		cfg.backOffInterval = interval
+	})
+}
+
 type Resource struct {
 	m map[string]any
 }
@@ -616,3 +660,42 @@ func (tf TraceFlags) WithSampled(sampled bool) TraceFlags { // nolint:revive  //
 func (tf TraceFlags) String() string {
 	return hex.EncodeToString([]byte{byte(tf)}[:])
 }
+
+type BackOff interface {
+	Count(float64) bool
+}
+
+var _ BackOff = (*ConstBackOff)(nil)
+
+type ConstBackOff struct {
+	mux      sync.Mutex
+	interval time.Duration
+	next     time.Time
+}
+
+func (b *ConstBackOff) Count(_ float64) bool {
+	b.mux.Lock()
+	defer b.mux.Unlock()
+	now := time.Now()
+	if b.check(now) {
+		b.next = now.Add(b.interval)
+		return true
+	}
+	return false
+}
+
+func (b *ConstBackOff) check(t time.Time) bool {
+	return t.After(b.next)
+}
+
+func NewLinearBackoff(interval time.Duration) *ConstBackOff {
+	return &ConstBackOff{interval: interval, next: time.Now()}
+}
+
+var _ BackOff = (*NoneBackOff)(nil)
+
+type NoneBackOff struct{}
+
+func (b NoneBackOff) Count(f float64) bool { return true }
+
+// fixme implement ExponentialBackOff, you can see https://pkg.go.dev/github.com/cenkalti/backoff/v4#NewExponentialBackOff

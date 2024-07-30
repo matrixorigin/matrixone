@@ -25,6 +25,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"path"
 	"sync"
 	"time"
 	"unsafe"
@@ -47,6 +48,9 @@ var _ trace.Tracer = &MOTracer{}
 type MOTracer struct {
 	trace.TracerConfig
 	provider *MOTracerProvider
+
+	mux              sync.Mutex
+	profileBackupOff map[string]trace.BackOff
 }
 
 // Start starts a Span and returns it along with a context containing it.
@@ -118,6 +122,18 @@ func (t *MOTracer) IsEnable(opts ...trace.SpanStartOption) bool {
 	}
 
 	return enable
+}
+
+func (t *MOTracer) GetBackOff(name string, strategy trace.BackOffStrategy, factory func() trace.BackOff) trace.BackOff {
+	key := path.Join(name, strategy.String())
+	t.mux.Lock()
+	defer t.mux.Unlock()
+	b, exist := t.profileBackupOff[key]
+	if !exist {
+		b = factory()
+		t.profileBackupOff[key] = b
+	}
+	return b
 }
 
 var _ trace.Span = (*MOHungSpan)(nil)
@@ -379,6 +395,12 @@ func (s *MOSpan) doProfile() {
 	}
 	if !s.tracer.provider.enableSpanProfile {
 		return
+	}
+	if backoff, factory := s.BackOffStrategy(); backoff > trace.NoneBackOffStrategy {
+		b := s.tracer.GetBackOff(s.Name, backoff, factory)
+		if !b.Count(1) {
+			return
+		}
 	}
 	factory := s.tracer.provider.writerFactory
 	ctx := DefaultContext()
