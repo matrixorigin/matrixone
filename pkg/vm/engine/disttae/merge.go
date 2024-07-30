@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"strings"
 	"sync/atomic"
 
@@ -44,7 +45,7 @@ type cnMergeTask struct {
 	host   *txnTable
 	// txn
 	snapshot types.TS // start ts, fixed
-	state    *logtailreplay.PartitionState
+	ds       engine.DataSource
 	proc     *process.Process
 
 	// schema
@@ -104,6 +105,7 @@ func newCNMergeTask(
 		blkIters[i] = NewStatsBlkIter(&objInfo.ObjectStats, meta.MustDataMeta())
 	}
 
+	source, err := NewLocalDataSource(ctx, tbl, state, fs)
 	return &cnMergeTask{
 		taskId:      gTaskID.Add(1),
 		host:        tbl,
