@@ -2820,7 +2820,7 @@ type CheckpointInfoJson struct {
 }
 
 const (
-	invalid = 0x3f3f3f3f
+	invalid = 0xffffff
 )
 
 func (data *CheckpointData) GetCheckpointMetaInfo(id uint64, limit int) (res *ObjectInfoJson, err error) {

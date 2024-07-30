@@ -35,8 +35,8 @@ import (
 )
 
 const (
-	invalidId    = 0x3f3f3f3f
-	invalidLimit = 0x3f3f3f3f
+	invalidId    = 0xffffff
+	invalidLimit = 0xffffff
 
 	brief    = 0
 	standard = 1
