@@ -519,6 +519,7 @@ func init() {
 		"max":                        MAX,
 		"median":                     MEDIAN,
 		"mid":                        MID,
+		"grouping":                   GROUPING,
 		"now":                        NOW,
 		"position":                   POSITION,
 		"pump":                       PUMP,

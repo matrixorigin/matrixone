@@ -484,4 +484,10 @@ var supportedAggInNewFramework = []FuncNew{
 			},
 		},
 	},
+
+	// {
+	// 	functionId: GROUPING,
+	// 	class:      plan.Function_AGG,
+	// 	layout:     STANDARD_FUNCTION,
+	// }
 }
