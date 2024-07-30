@@ -86,7 +86,8 @@ func (info *runningPipelineInfo) cancelPipeline() {
 		info.receiver.Unlock()
 
 	} else {
-		info.runningProc.Cancel()
+		_, cancel := process.GetQueryCtxFromProc(info.runningProc)
+		cancel()
 	}
 }
 

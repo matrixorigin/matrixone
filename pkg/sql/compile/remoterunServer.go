@@ -172,11 +172,10 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		return err
 
 	case pipeline.Method_PipelineMessage:
-		runCompile, errBuildCompile := receiver.newCompile()
+		runCompile, _, errBuildCompile := receiver.newCompile()
 		if errBuildCompile != nil {
 			return errBuildCompile
 		}
-		colexec.Get().RecordBuiltPipeline(receiver.clientSession, receiver.messageId, runCompile.proc)
 
 		// decode and running the pipeline.
 		s, err := decodeScope(receiver.scopeData, runCompile.proc, true, runCompile.e)
@@ -184,13 +183,13 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 			return err
 		}
 		s = appendWriteBackOperator(runCompile, s)
-		runCompile.InitPipelineContextToExecuteQuery()
 		runCompile.scope = []*Scope{s}
-
+		runCompile.InitPipelineContextToExecuteQuery()
 		defer func() {
 			runCompile.clear()
 			runCompile.Release()
 		}()
+		colexec.Get().RecordBuiltPipeline(receiver.clientSession, receiver.messageId, runCompile.proc)
 
 		// running pipeline.
 		if err = GetCompileService().recordRunningCompile(runCompile); err != nil {
@@ -364,18 +363,18 @@ func (receiver *messageReceiverOnServer) acquireMessage() (*pipeline.Message, er
 }
 
 // newCompile make and return a new compile to run a pipeline.
-func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
+func (receiver *messageReceiverOnServer) newCompile() (*Compile, context.CancelFunc, error) {
 	// compile is almost surely wanting a small or middle pool.  Later.
 	mp, err := mpool.NewMPool("compile", 0, mpool.NoFixed)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	pHelper, cnInfo := receiver.procBuildHelper, receiver.cnInformation
 
 	// required deadline.
 	deadline, ok := receiver.messageCtx.Deadline()
 	if !ok {
-		return nil, moerr.NewInternalError(receiver.messageCtx, "message context need a deadline.")
+		return nil, nil, moerr.NewInternalError(receiver.messageCtx, "message context need a deadline.")
 	}
 
 	runningCtx, runningCancel := context.WithDeadline(receiver.connectionCtx, deadline)
@@ -391,7 +390,6 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 		cnInfo.hakeeper,
 		cnInfo.udfService,
 		cnInfo.aicm)
-	proc.Cancel = runningCancel
 	proc.Base.UnixTime = pHelper.unixTime
 	proc.Base.Id = pHelper.id
 	proc.Base.Lim = pHelper.lim
@@ -425,7 +423,7 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 		return receiver.sendBatch(b)
 	}
 
-	return c, nil
+	return c, runningCancel, nil
 }
 
 func (receiver *messageReceiverOnServer) sendError(
