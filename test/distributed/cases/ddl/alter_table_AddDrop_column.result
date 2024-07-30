@@ -525,7 +525,11 @@ insert into transaction03 values(3,1);
 insert into transaction03 values(4,2);
 alter table transaction03 rename to `transaction04`;
 select * from transaction04;
-SQL parser error: table "transaction04" does not exist
+c    d
+3    1
+4    2
+1    1
+2    2
 use isolation;
 invalid database isolation
 select * from transaction04;
