@@ -200,12 +200,13 @@ func BlockDataReadNoCopy(
 
 			return nil, nil, nil, err
 		}
+		release = func() {
+			release()
+			loaded.Vecs[rowidPos].Free(mp)
+		}
 	}
 
-	return loaded, &deleteMask, func() {
-		release()
-		loaded.Vecs[rowidPos].Free(mp)
-	}, nil
+	return loaded, &deleteMask, release, nil
 }
 
 // BlockDataRead only read block data from storage, don't apply deletes.
