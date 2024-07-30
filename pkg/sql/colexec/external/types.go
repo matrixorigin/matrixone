@@ -165,7 +165,7 @@ func (external *External) Free(proc *process.Process, pipelineFailed bool, err e
 	}
 	if external.Projection != nil {
 		anal.Alloc(external.Projection.MaxAllocSize)
-		external.Projection.Free()
+		external.Projection.Free(proc)
 		external.Projection = nil
 		external.ProjectList = nil
 	}

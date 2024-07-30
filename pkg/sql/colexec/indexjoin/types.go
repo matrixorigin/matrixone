@@ -96,7 +96,7 @@ func (indexJoin *IndexJoin) Free(proc *process.Process, pipelineFailed bool, err
 	if indexJoin.Projection != nil {
 		anal := proc.GetAnalyze(indexJoin.GetIdx(), indexJoin.GetParallelIdx(), indexJoin.GetParallelMajor())
 		anal.Alloc(indexJoin.Projection.MaxAllocSize)
-		indexJoin.Projection.Free()
+		indexJoin.Projection.Free(proc)
 		indexJoin.Projection = nil
 		indexJoin.ProjectList = nil
 	}

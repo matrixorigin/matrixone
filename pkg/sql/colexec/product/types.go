@@ -100,7 +100,7 @@ func (product *Product) Free(proc *process.Process, pipelineFailed bool, err err
 	if product.Projection != nil {
 		anal := proc.GetAnalyze(product.GetIdx(), product.GetParallelIdx(), product.GetParallelMajor())
 		anal.Alloc(product.Projection.MaxAllocSize)
-		product.Projection.Free()
+		product.Projection.Free(proc)
 		product.Projection = nil
 		product.ProjectList = nil
 	}

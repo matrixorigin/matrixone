@@ -24,6 +24,7 @@ import (
 )
 
 type Projection struct {
+	bat           *batch.Batch
 	ProjectList   []*plan.Expr
 	ProjExecutors []ExpressionExecutor
 	uafs          []func(v, w *vector.Vector) error
@@ -77,13 +78,13 @@ func (projection *Projection) Eval(bat *batch.Batch, proc *process.Process) (*ba
 		return bat, nil
 	}
 
-	result := batch.NewWithSize(len(projection.ProjectList))
-	result.ShuffleIDX = bat.ShuffleIDX
+	projection.bat = batch.NewWithSize(len(projection.ProjectList))
+	projection.bat.ShuffleIDX = bat.ShuffleIDX
 
 	for i := range projection.ProjExecutors {
 		vec, err := projection.ProjExecutors[i].Eval(proc, []*batch.Batch{bat}, nil)
 		if err != nil {
-			for _, newV := range result.Vecs {
+			for _, newV := range projection.bat.Vecs {
 				if newV != nil {
 					for k, oldV := range bat.Vecs {
 						if oldV != nil && newV == oldV {
@@ -92,26 +93,31 @@ func (projection *Projection) Eval(bat *batch.Batch, proc *process.Process) (*ba
 					}
 				}
 			}
-			result = nil
+			proc.PutBatch(projection.bat)
+			projection.bat = nil
 			return nil, err
 		}
-		result.Vecs[i] = vec
+		projection.bat.Vecs[i] = vec
 	}
-	newAlloc, err := FixProjectionResult(proc, projection.ProjExecutors, projection.uafs, result, bat)
+	newAlloc, err := FixProjectionResult(proc, projection.ProjExecutors, projection.uafs, projection.bat, bat)
 	if err != nil {
 		return nil, err
 	}
 	projection.MaxAllocSize = max(projection.MaxAllocSize, int64(newAlloc))
-	result.SetRowCount(bat.RowCount())
-	return result, nil
+	projection.bat.SetRowCount(bat.RowCount())
+	return projection.bat, nil
 }
 
-func (projection *Projection) Free() {
+func (projection *Projection) Free(proc *process.Process) {
 	if projection != nil {
 		for i := range projection.ProjExecutors {
 			if projection.ProjExecutors[i] != nil {
 				projection.ProjExecutors[i].Free()
 			}
+		}
+		if projection.bat != nil {
+			proc.PutBatch(projection.bat)
+			projection.bat = nil
 		}
 		reuse.Free[Projection](projection, nil)
 	}

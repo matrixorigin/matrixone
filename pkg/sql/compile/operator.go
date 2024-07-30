@@ -326,7 +326,6 @@ func dupOperator(sourceOp vm.Operator, regMap map[*process.WaitRegister]*process
 		if op.E == nil {
 			op.E = t.E
 		}
-		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
 	case vm.Semi:

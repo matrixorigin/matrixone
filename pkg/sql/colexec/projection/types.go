@@ -69,7 +69,7 @@ func (projection *Projection) Free(proc *process.Process, pipelineFailed bool, e
 	if projection.Proj != nil {
 		anal := proc.GetAnalyze(projection.GetIdx(), projection.GetParallelIdx(), projection.GetParallelMajor())
 		anal.Alloc(int64(projection.Proj.MaxAllocSize))
-		projection.Proj.Free()
+		projection.Proj.Free(proc)
 		projection.Proj = nil
 		projection.ProjectList = nil
 	}

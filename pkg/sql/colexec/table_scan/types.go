@@ -96,7 +96,7 @@ func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err
 
 	if tableScan.Projection != nil {
 		anal.Alloc(tableScan.Projection.MaxAllocSize)
-		tableScan.Projection.Free()
+		tableScan.Projection.Free(proc)
 		tableScan.Projection = nil
 		tableScan.ProjectList = nil
 	}

@@ -133,7 +133,7 @@ func (antiJoin *AntiJoin) Free(proc *process.Process, pipelineFailed bool, err e
 	}
 	if antiJoin.Projection != nil {
 		anal.Alloc(antiJoin.Projection.MaxAllocSize)
-		antiJoin.Projection.Free()
+		antiJoin.Projection.Free(proc)
 		antiJoin.Projection = nil
 		antiJoin.ProjectList = nil
 	}

@@ -104,7 +104,7 @@ func (loopJoin *LoopJoin) Free(proc *process.Process, pipelineFailed bool, err e
 	if loopJoin.Projection != nil {
 		anal := proc.GetAnalyze(loopJoin.GetIdx(), loopJoin.GetParallelIdx(), loopJoin.GetParallelMajor())
 		anal.Alloc(loopJoin.Projection.MaxAllocSize)
-		loopJoin.Projection.Free()
+		loopJoin.Projection.Free(proc)
 		loopJoin.Projection = nil
 		loopJoin.ProjectList = nil
 	}

@@ -116,7 +116,7 @@ func (mergeGroup *MergeGroup) Free(proc *process.Process, pipelineFailed bool, e
 		mergeGroup.ctr = nil
 	}
 	if mergeGroup.Projection != nil {
-		mergeGroup.Projection.Free()
+		mergeGroup.Projection.Free(proc)
 		mergeGroup.Projection = nil
 		mergeGroup.ProjectList = nil
 	}

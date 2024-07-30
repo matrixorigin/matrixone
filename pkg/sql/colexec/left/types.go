@@ -140,7 +140,7 @@ func (leftJoin *LeftJoin) Free(proc *process.Process, pipelineFailed bool, err e
 	}
 	if leftJoin.Projection != nil {
 		anal.Alloc(leftJoin.Projection.MaxAllocSize)
-		leftJoin.Projection.Free()
+		leftJoin.Projection.Free(proc)
 		leftJoin.Projection = nil
 		leftJoin.ProjectList = nil
 	}

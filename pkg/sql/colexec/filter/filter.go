@@ -59,13 +59,6 @@ func (filter *Filter) Prepare(proc *process.Process) (err error) {
 	}
 	filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{filterExpr}))
 
-	if filter.ProjectList != nil {
-		filter.Projection = colexec.NewProjection(filter.ProjectList)
-		err = filter.Projection.Prepare(proc)
-		if err != nil {
-			return
-		}
-	}
 	return err
 }
 
@@ -171,12 +164,6 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 	}
 
-	if filter.Projection != nil {
-		result.Batch, err = filter.Projection.Eval(result.Batch, proc)
-		if err != nil {
-			return result, err
-		}
-	}
 	return result, nil
 }
 

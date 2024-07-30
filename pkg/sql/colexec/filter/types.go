@@ -26,12 +26,10 @@ import (
 var _ vm.Operator = new(Filter)
 
 type Filter struct {
-	ctr         *container
-	E           *plan.Expr
-	exeExpr     *plan.Expr
-	IsEnd       bool
-	ProjectList []*plan.Expr
-	Projection  *colexec.Projection
+	ctr     *container
+	E       *plan.Expr
+	exeExpr *plan.Expr
+	IsEnd   bool
 
 	vm.OperatorBase
 }
@@ -88,13 +86,6 @@ func (filter *Filter) Free(proc *process.Process, pipelineFailed bool, err error
 	if filter.ctr != nil {
 		filter.ctr.cleanExecutor()
 		filter.ctr = nil
-	}
-	if filter.Projection != nil {
-		anal := proc.GetAnalyze(filter.GetIdx(), filter.GetParallelIdx(), filter.GetParallelMajor())
-		anal.Alloc(filter.Projection.MaxAllocSize)
-		filter.Projection.Free()
-		filter.Projection = nil
-		filter.ProjectList = nil
 	}
 }
 

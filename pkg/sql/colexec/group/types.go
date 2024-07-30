@@ -174,7 +174,7 @@ func (group *Group) Free(proc *process.Process, pipelineFailed bool, err error) 
 		group.ctr = nil
 	}
 	if group.Projection != nil {
-		group.Projection.Free()
+		group.Projection.Free(proc)
 		group.Projection = nil
 		group.ProjectList = nil
 	}
