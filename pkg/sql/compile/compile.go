@@ -1806,6 +1806,7 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 
 	if len(fileList) == 0 {
 		ret := newScope(Normal)
+		ret.NodeInfo = getEngineNode(c)
 		ret.DataSource = &Source{isConst: true, node: n}
 
 		currentFirstFlag := c.anal.isFirst
@@ -1986,6 +1987,7 @@ func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) compileValueScan(n *plan.Node) ([]*Scope, error) {
 	ds := newScope(Normal)
+	ds.NodeInfo = getEngineNode(c)
 	ds.DataSource = &Source{isConst: true, node: n}
 	ds.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
 	ds.Proc = process.NewFromProc(c.proc, c.proc.Ctx, 0)
