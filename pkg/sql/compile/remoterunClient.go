@@ -17,8 +17,6 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"runtime/debug"
 	"sync/atomic"
 	"time"
 
@@ -292,7 +290,6 @@ func (sender *messageSenderOnClient) receiveMessage() (morpc.Message, error) {
 		if !ok || val == nil {
 			sender.safeToClose = true
 			sender.alreadyClose = true
-			logutil.Infof("[cms] receiveMessage find sender %p close, stack is %s ", sender, string(debug.Stack()))
 			return nil, moerr.NewStreamClosed(sender.ctx)
 		}
 		return val, nil
@@ -430,8 +427,6 @@ func mergeAnalyseInfo(target *anaylze, ana *pipeline.AnalysisList) {
 
 func (sender *messageSenderOnClient) close() {
 	sender.waitingTheStopResponse()
-
-	logutil.Infof("[cms] close the message sender %p on client, stack is %s ", sender, string(debug.Stack()))
 
 	if sender.ctxCancel != nil {
 		sender.ctxCancel()
