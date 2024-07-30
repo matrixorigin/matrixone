@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"strings"
 	"sync/atomic"
@@ -87,6 +88,7 @@ func newCNMergeTask(
 	relData.AppendBlockInfo(objectio.EmptyBlockInfoInProgress)
 	source, err := tbl.buildLocalDataSource(ctx, 0, relData)
 	if err != nil {
+		logutil.Infof("buildLocalDataSource failed: %v", err.Error())
 		return nil, err
 	}
 
