@@ -214,34 +214,32 @@ func (m *MockTombstoner) EXPECT() *MockTombstonerMockRecorder {
 }
 
 // ApplyInMemTombstones mocks base method.
-func (m *MockTombstoner) ApplyInMemTombstones(bid types.Blockid, rowsOffset []int32) ([]int32, []int64) {
+func (m *MockTombstoner) ApplyInMemTombstones(bid types.Blockid, rowsOffset []int32, deleted *nulls.Nulls) []int32 {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ApplyInMemTombstones", bid, rowsOffset)
+	ret := m.ctrl.Call(m, "ApplyInMemTombstones", bid, rowsOffset, deleted)
 	ret0, _ := ret[0].([]int32)
-	ret1, _ := ret[1].([]int64)
-	return ret0, ret1
+	return ret0
 }
 
 // ApplyInMemTombstones indicates an expected call of ApplyInMemTombstones.
-func (mr *MockTombstonerMockRecorder) ApplyInMemTombstones(bid, rowsOffset interface{}) *gomock.Call {
+func (mr *MockTombstonerMockRecorder) ApplyInMemTombstones(bid, rowsOffset, deleted interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ApplyInMemTombstones", reflect.TypeOf((*MockTombstoner)(nil).ApplyInMemTombstones), bid, rowsOffset)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ApplyInMemTombstones", reflect.TypeOf((*MockTombstoner)(nil).ApplyInMemTombstones), bid, rowsOffset, deleted)
 }
 
 // ApplyPersistedTombstones mocks base method.
-func (m *MockTombstoner) ApplyPersistedTombstones(ctx context.Context, bid types.Blockid, rowsOffset []int32, apply func(context.Context, objectio.Location, types.TS, []int32, *[]int32, *[]int64) error) ([]int32, []int64, error) {
+func (m *MockTombstoner) ApplyPersistedTombstones(ctx context.Context, bid types.Blockid, rowsOffset []int32, mask *nulls.Nulls, apply func(context.Context, objectio.Location, types.TS, []int32, *[]int32, *nulls.Nulls) error) ([]int32, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ApplyPersistedTombstones", ctx, bid, rowsOffset, apply)
+	ret := m.ctrl.Call(m, "ApplyPersistedTombstones", ctx, bid, rowsOffset, mask, apply)
 	ret0, _ := ret[0].([]int32)
-	ret1, _ := ret[1].([]int64)
-	ret2, _ := ret[2].(error)
-	return ret0, ret1, ret2
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
 // ApplyPersistedTombstones indicates an expected call of ApplyPersistedTombstones.
-func (mr *MockTombstonerMockRecorder) ApplyPersistedTombstones(ctx, bid, rowsOffset, apply interface{}) *gomock.Call {
+func (mr *MockTombstonerMockRecorder) ApplyPersistedTombstones(ctx, bid, rowsOffset, mask, apply interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ApplyPersistedTombstones", reflect.TypeOf((*MockTombstoner)(nil).ApplyPersistedTombstones), ctx, bid, rowsOffset, apply)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ApplyPersistedTombstones", reflect.TypeOf((*MockTombstoner)(nil).ApplyPersistedTombstones), ctx, bid, rowsOffset, mask, apply)
 }
 
 // ApplyTombstones mocks base method.
@@ -271,6 +269,18 @@ func (m *MockTombstoner) HasTombstones(bid types.Blockid) bool {
 func (mr *MockTombstonerMockRecorder) HasTombstones(bid interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HasTombstones", reflect.TypeOf((*MockTombstoner)(nil).HasTombstones), bid)
+}
+
+// Init mocks base method.
+func (m *MockTombstoner) Init() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "Init")
+}
+
+// Init indicates an expected call of Init.
+func (mr *MockTombstonerMockRecorder) Init() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Init", reflect.TypeOf((*MockTombstoner)(nil).Init))
 }
 
 // IsEmpty mocks base method.
@@ -620,21 +630,6 @@ func (m *MockDataSource) EXPECT() *MockDataSourceMockRecorder {
 	return m.recorder
 }
 
-// ApplyTombstones mocks base method.
-func (m *MockDataSource) ApplyTombstones(rows []types.Rowid) ([]int64, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ApplyTombstones", rows)
-	ret0, _ := ret[0].([]int64)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// ApplyTombstones indicates an expected call of ApplyTombstones.
-func (mr *MockDataSourceMockRecorder) ApplyTombstones(rows interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ApplyTombstones", reflect.TypeOf((*MockDataSource)(nil).ApplyTombstones), rows)
-}
-
 // ApplyTombstonesInProgress mocks base method.
 func (m *MockDataSource) ApplyTombstonesInProgress(ctx context.Context, bid objectio.Blockid, rowsOffset []int32) ([]int32, error) {
 	m.ctrl.T.Helper()
@@ -677,10 +672,10 @@ func (mr *MockDataSourceMockRecorder) GetOrderBy() *gomock.Call {
 }
 
 // GetTombstonesInProgress mocks base method.
-func (m *MockDataSource) GetTombstonesInProgress(ctx context.Context, bid objectio.Blockid) ([]int64, error) {
+func (m *MockDataSource) GetTombstonesInProgress(ctx context.Context, bid objectio.Blockid) (*nulls.Nulls, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetTombstonesInProgress", ctx, bid)
-	ret0, _ := ret[0].([]int64)
+	ret0, _ := ret[0].(*nulls.Nulls)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -689,20 +684,6 @@ func (m *MockDataSource) GetTombstonesInProgress(ctx context.Context, bid object
 func (mr *MockDataSourceMockRecorder) GetTombstonesInProgress(ctx, bid interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTombstonesInProgress", reflect.TypeOf((*MockDataSource)(nil).GetTombstonesInProgress), ctx, bid)
-}
-
-// HasTombstones mocks base method.
-func (m *MockDataSource) HasTombstones(bid types.Blockid) bool {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "HasTombstones", bid)
-	ret0, _ := ret[0].(bool)
-	return ret0
-}
-
-// HasTombstones indicates an expected call of HasTombstones.
-func (mr *MockDataSourceMockRecorder) HasTombstones(bid interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HasTombstones", reflect.TypeOf((*MockDataSource)(nil).HasTombstones), bid)
 }
 
 // Next mocks base method.

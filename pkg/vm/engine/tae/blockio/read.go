@@ -414,9 +414,7 @@ func BlockDataReadInner(
 	}
 
 	// merge deletes from tombstones
-	for _, row := range tombstones {
-		deleteMask.Add(uint64(row))
-	}
+	deleteMask.Merge(tombstones)
 
 	// Note: it always goes here if no filter or the block is not sorted
 

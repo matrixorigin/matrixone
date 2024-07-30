@@ -173,7 +173,7 @@ func (d *DeltaLocDataSource) ApplyTombstonesInProgress(
 
 func (d *DeltaLocDataSource) GetTombstonesInProgress(
 	ctx context.Context, bid objectio.Blockid,
-) (deletedRows []int64, err error) {
+) (deletedRows *nulls.Nulls, err error) {
 	var rows *nulls.Bitmap
 	rows, err = d.getAndApplyTombstonesInProgress(ctx, bid)
 	if err != nil {
@@ -182,8 +182,7 @@ func (d *DeltaLocDataSource) GetTombstonesInProgress(
 	if rows.IsEmpty() {
 		return
 	}
-	deletedRows = rows.ToI64Arrary()
-	return
+	return rows, nil
 }
 
 func (d *DeltaLocDataSource) getAndApplyTombstonesInProgress(
