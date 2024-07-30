@@ -116,6 +116,8 @@ func (mergeGroup *MergeGroup) Free(proc *process.Process, pipelineFailed bool, e
 		mergeGroup.ctr = nil
 	}
 	if mergeGroup.Projection != nil {
+		anal := proc.GetAnalyze(mergeGroup.GetIdx(), mergeGroup.GetParallelIdx(), mergeGroup.GetParallelMajor())
+		anal.Alloc(mergeGroup.Projection.MaxAllocSize)
 		mergeGroup.Projection.Free(proc)
 		mergeGroup.Projection = nil
 		mergeGroup.ProjectList = nil

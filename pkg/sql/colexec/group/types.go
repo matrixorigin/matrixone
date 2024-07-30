@@ -174,6 +174,8 @@ func (group *Group) Free(proc *process.Process, pipelineFailed bool, err error) 
 		group.ctr = nil
 	}
 	if group.Projection != nil {
+		anal := proc.GetAnalyze(group.GetIdx(), group.GetParallelIdx(), group.GetParallelMajor())
+		anal.Alloc(group.Projection.MaxAllocSize)
 		group.Projection.Free(proc)
 		group.Projection = nil
 		group.ProjectList = nil

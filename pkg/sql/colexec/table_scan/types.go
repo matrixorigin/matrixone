@@ -81,12 +81,13 @@ func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, er
 
 func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err error) {
 	anal := proc.GetAnalyze(tableScan.GetIdx(), tableScan.GetParallelIdx(), tableScan.GetParallelMajor())
+	allocSize := int64(0)
 	if tableScan.ctr != nil {
 		if tableScan.ctr.buf != nil {
 			tableScan.ctr.buf.Clean(proc.Mp())
 			tableScan.ctr.buf = nil
 		}
-		anal.Alloc(int64(tableScan.ctr.maxAllocSize))
+		allocSize += int64(tableScan.ctr.maxAllocSize)
 		if tableScan.ctr.msgReceiver != nil {
 			tableScan.ctr.msgReceiver.Free()
 			tableScan.ctr.msgReceiver = nil
@@ -95,9 +96,10 @@ func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err
 	}
 
 	if tableScan.Projection != nil {
-		anal.Alloc(tableScan.Projection.MaxAllocSize)
+		allocSize += tableScan.Projection.MaxAllocSize
 		tableScan.Projection.Free(proc)
 		tableScan.Projection = nil
 		tableScan.ProjectList = nil
 	}
+	anal.Alloc(allocSize)
 }

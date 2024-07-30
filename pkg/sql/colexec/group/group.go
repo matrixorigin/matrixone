@@ -145,7 +145,7 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 	anal.Start()
 	defer anal.Stop()
 
-	result, err := group.ctr.processGroupByAndAgg(group, proc, anal, group.GetIsFirst(), group.GetIsLast())
+	result, err := group.ctr.processGroupByAndAgg(group, proc, anal, group.GetIsFirst())
 	if err != nil {
 		return result, err
 	}
@@ -157,12 +157,13 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 	}
 
+	anal.Output(result.Batch, group.GetIsLast())
 	return result, nil
 }
 
 // compute the `agg(expression)List group by expressionList`.
 func (ctr *container) processGroupByAndAgg(
-	ap *Group, proc *process.Process, anal process.Analyze, isFirst, isLast bool) (vm.CallResult, error) {
+	ap *Group, proc *process.Process, anal process.Analyze, isFirst bool) (vm.CallResult, error) {
 
 	for {
 		switch ctr.state {
@@ -238,7 +239,6 @@ func (ctr *container) processGroupByAndAgg(
 					anal.Alloc(int64(vec.Size()))
 				}
 			}
-			anal.Output(ctr.bat, isLast)
 			result.Batch = ctr.bat
 
 			ctr.bat = nil

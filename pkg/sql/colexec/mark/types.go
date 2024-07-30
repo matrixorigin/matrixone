@@ -200,6 +200,7 @@ func (markJoin *MarkJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 func (markJoin *MarkJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := markJoin.ctr
 	anal := proc.GetAnalyze(markJoin.GetIdx(), markJoin.GetParallelIdx(), markJoin.GetParallelMajor())
+	allocSize := int64(0)
 	if ctr != nil {
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
@@ -209,16 +210,17 @@ func (markJoin *MarkJoin) Free(proc *process.Process, pipelineFailed bool, err e
 		ctr.cleanExprExecutor()
 		ctr.FreeAllReg()
 
-		anal.Alloc(ctr.maxAllocSize)
+		allocSize += ctr.maxAllocSize
 		markJoin.ctr = nil
 	}
 
 	if markJoin.Projection != nil {
-		anal.Alloc(markJoin.Projection.MaxAllocSize)
+		allocSize += markJoin.Projection.MaxAllocSize
 		markJoin.Projection.Free(proc)
 		markJoin.Projection = nil
 		markJoin.ProjectList = nil
 	}
+	anal.Alloc(allocSize)
 }
 
 func (ctr *container) cleanExprExecutor() {

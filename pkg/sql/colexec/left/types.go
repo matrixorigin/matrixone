@@ -122,6 +122,7 @@ func (leftJoin *LeftJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 func (leftJoin *LeftJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := leftJoin.ctr
 	anal := proc.GetAnalyze(leftJoin.GetIdx(), leftJoin.GetParallelIdx(), leftJoin.GetParallelMajor())
+	allocSize := int64(0)
 	if ctr != nil {
 		ctr.cleanBatch(proc)
 		ctr.cleanHashMap()
@@ -129,7 +130,7 @@ func (leftJoin *LeftJoin) Free(proc *process.Process, pipelineFailed bool, err e
 		ctr.cleanEvalVectors()
 		ctr.FreeAllReg()
 
-		anal.Alloc(ctr.maxAllocSize)
+		allocSize += ctr.maxAllocSize
 
 		if leftJoin.ctr.bat != nil {
 			proc.PutBatch(leftJoin.ctr.bat)
@@ -139,11 +140,12 @@ func (leftJoin *LeftJoin) Free(proc *process.Process, pipelineFailed bool, err e
 		leftJoin.ctr = nil
 	}
 	if leftJoin.Projection != nil {
-		anal.Alloc(leftJoin.Projection.MaxAllocSize)
+		allocSize += leftJoin.Projection.MaxAllocSize
 		leftJoin.Projection.Free(proc)
 		leftJoin.Projection = nil
 		leftJoin.ProjectList = nil
 	}
+	anal.Alloc(allocSize)
 }
 
 func (ctr *container) cleanExprExecutor() {

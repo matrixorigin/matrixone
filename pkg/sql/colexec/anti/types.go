@@ -118,6 +118,7 @@ func (antiJoin *AntiJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 func (antiJoin *AntiJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := antiJoin.ctr
 	anal := proc.GetAnalyze(antiJoin.GetIdx(), antiJoin.GetParallelIdx(), antiJoin.GetParallelMajor())
+	allocSize := int64(0)
 	if ctr != nil {
 		ctr.cleanBatch(proc)
 		ctr.cleanEvalVectors()
@@ -125,18 +126,19 @@ func (antiJoin *AntiJoin) Free(proc *process.Process, pipelineFailed bool, err e
 		ctr.cleanExprExecutor()
 		ctr.FreeAllReg()
 
-		anal.Alloc(ctr.maxAllocSize)
+		allocSize += ctr.maxAllocSize
 
 		antiJoin.ctr.lastrow = 0
 
 		antiJoin.ctr = nil
 	}
 	if antiJoin.Projection != nil {
-		anal.Alloc(antiJoin.Projection.MaxAllocSize)
+		allocSize += antiJoin.Projection.MaxAllocSize
 		antiJoin.Projection.Free(proc)
 		antiJoin.Projection = nil
 		antiJoin.ProjectList = nil
 	}
+	anal.Alloc(allocSize)
 }
 
 func (ctr *container) cleanExprExecutor() {

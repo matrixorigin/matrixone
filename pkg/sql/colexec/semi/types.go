@@ -121,6 +121,7 @@ func (semiJoin *SemiJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 func (semiJoin *SemiJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := semiJoin.ctr
 	anal := proc.GetAnalyze(semiJoin.GetIdx(), semiJoin.GetParallelIdx(), semiJoin.GetParallelMajor())
+	allocSize := int64(0)
 	if ctr != nil {
 		ctr.cleanBatch(proc)
 		ctr.cleanEvalVectors()
@@ -128,16 +129,17 @@ func (semiJoin *SemiJoin) Free(proc *process.Process, pipelineFailed bool, err e
 		ctr.cleanExprExecutor()
 		ctr.FreeAllReg()
 
-		anal.Alloc(ctr.maxAllocSize)
+		allocSize += ctr.maxAllocSize
 
 		semiJoin.ctr = nil
 	}
 	if semiJoin.Projection != nil {
-		anal.Alloc(semiJoin.Projection.MaxAllocSize)
+		allocSize += semiJoin.Projection.MaxAllocSize
 		semiJoin.Projection.Free(proc)
 		semiJoin.Projection = nil
 		semiJoin.ProjectList = nil
 	}
+	anal.Alloc(allocSize)
 }
 
 func (ctr *container) cleanExprExecutor() {

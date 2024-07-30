@@ -154,5 +154,7 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 	if tableScan.Projection != nil {
 		result.Batch, err = tableScan.Projection.Eval(result.Batch, proc)
 	}
+
+	anal.Output(result.Batch, tableScan.IsLast)
 	return result, err
 }
