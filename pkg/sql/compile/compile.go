@@ -3686,11 +3686,13 @@ func (c *Compile) newMergeRemoteScopeByCN(ss []*Scope) []*Scope {
 				currentSS = append(currentSS, ss[j])
 			}
 		}
-		mergeScope := c.newMergeRemoteScope(currentSS, cn)
-		if len(currentSS) == 1 {
-			mergeScope.NodeInfo.Mcpu = currentSS[0].NodeInfo.Mcpu
+		if len(currentSS) > 0 {
+			mergeScope := c.newMergeRemoteScope(currentSS, cn)
+			if len(currentSS) == 1 {
+				mergeScope.NodeInfo.Mcpu = currentSS[0].NodeInfo.Mcpu
+			}
+			rs = append(rs, mergeScope)
 		}
-		rs = append(rs, mergeScope)
 	}
 
 	return rs
