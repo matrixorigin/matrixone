@@ -275,9 +275,7 @@ func (rd *MemRelationData) GetShardID(i int) uint64 {
 }
 
 func (rd *MemRelationData) SetShardID(i int, id uint64) {
-	bb := make([]byte, 8)
-	binary.LittleEndian.PutUint64(bb, id)
-	rd.Shards.SetBytes(bb)
+	rd.Shards.Set(i, id)
 }
 
 func (rd *MemRelationData) AppendShardID(id uint64) {
@@ -326,6 +324,11 @@ func (rd *MemRelationData) DataCnt() int {
 type ShardIdSlice []byte
 
 var _ engine.Ranges = (*ShardIdSlice)(nil)
+
+func (s *ShardIdSlice) Set(i int, id uint64) {
+	buf := (*s)[i*8:]
+	binary.LittleEndian.PutUint64(buf, id)
+}
 
 func (s *ShardIdSlice) GetBytes(i int) []byte {
 	return (*s)[i*8 : (i+1)*8]

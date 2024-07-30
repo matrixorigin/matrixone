@@ -603,20 +603,22 @@ type Tombstoner interface {
 	ApplyInMemTombstones(
 		bid types.Blockid,
 		rowsOffset []int32,
-	) (left []int32, deleted []int64)
+		deleted *nulls.Nulls,
+	) (left []int32)
 
 	ApplyPersistedTombstones(
 		ctx context.Context,
 		bid types.Blockid,
 		rowsOffset []int32,
+		mask *nulls.Nulls,
 		apply func(
 			ctx2 context.Context,
 			loc objectio.Location,
 			cts types.TS,
 			rowsOffset []int32,
 			left *[]int32,
-			deleted *[]int64) (err error),
-	) (left []int32, deleted []int64, err error)
+			deleted *nulls.Nulls) (err error),
+	) (left []int32, err error)
 
 	Merge(other Tombstoner) error
 }
@@ -719,7 +721,7 @@ type DataSource interface {
 		rowsOffset []int32) ([]int32, error)
 
 	GetTombstonesInProgress(
-		ctx context.Context, bid objectio.Blockid) (deletedRows []int64, err error)
+		ctx context.Context, bid objectio.Blockid) (deletedRows *nulls.Nulls, err error)
 
 	SetOrderBy(orderby []*plan.OrderBySpec)
 
