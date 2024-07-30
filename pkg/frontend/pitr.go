@@ -642,12 +642,6 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (e
 		return moerr.NewInternalError(ctx, "pitr %s does not exist", pitrName)
 	}
 
-	// check privilege
-	// only sys account can restore other account's pitr
-	if len(srcAccountName) != 0 && tenantInfo.GetTenant() != sysAccountName {
-		return moerr.NewInternalError(ctx, "only sys account can restore other account's pitr")
-	}
-
 	// check if the database can be restore
 	if len(dbName) != 0 && needSkipDb(dbName) {
 		return moerr.NewInternalError(ctx, "database %s can not be restore", dbName)
@@ -1550,6 +1544,10 @@ func checkPitrValidOrNot(pitrRecord *pitrRecord, stmt *tree.RestorePitr, tenantI
 			}
 			if pitrRecord.level == tree.PITRLEVELACCOUNT.String() && pitrRecord.accountId != uint64(tenantInfo.TenantID) {
 				return moerr.NewInternalErrorNoCtx("pitr %s is not allowed to restore account %v", pitrRecord.pitrName, tenantInfo.GetTenant())
+			}
+			// if the pitr level is cluster, the tenant must be sys account
+			if pitrRecord.level == tree.PITRLEVELCLUSTER.String() && tenantInfo.GetTenantID() != sysAccountID {
+				return moerr.NewInternalErrorNoCtx("account %s is not allowed to restore cluster level pitr %s", tenantInfo.GetTenant(), pitrRecord.pitrName)
 			}
 		} else {
 			// sys restore other account's pitr
