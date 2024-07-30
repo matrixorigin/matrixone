@@ -143,6 +143,72 @@ func ReadByFilter(
 	return
 }
 
+// BlockDataReadNoCopy only read block data from storage, don't apply deletes.
+func BlockDataReadNoCopy(
+	ctx context.Context,
+	sid string,
+	info *objectio.BlockInfoInProgress,
+	ds engine.DataSource,
+	columns []uint16,
+	colTypes []types.Type,
+	ts types.TS,
+	fs fileservice.FileService,
+	mp *mpool.MPool,
+	vp engine.VectorPool,
+	policy fileservice.Policy,
+) (*batch.Batch, *nulls.Bitmap, func(), error) {
+	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+		logutil.Debugf("read block %s, columns %v, types %v", info.BlockID.String(), columns, colTypes)
+	}
+
+	var (
+		rowidPos   int
+		deleteMask nulls.Bitmap
+		loaded     *batch.Batch
+		release    func()
+		err        error
+	)
+
+	defer func() {
+		if err != nil {
+			if release != nil {
+				release()
+			}
+		}
+	}()
+
+	// read block data from storage specified by meta location
+	if loaded, rowidPos, deleteMask, release, err = readBlockDataInprogress(
+		ctx, columns, colTypes, info, ts, fs, mp, vp, policy,
+	); err != nil {
+		return nil, nil, nil, err
+	}
+	//tombstones, err := ds.GetTombstones(ctx, info.BlockID)
+	tombstones, err := ds.GetTombstonesInProgress(ctx, info.BlockID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	// merge deletes from tombstones
+	deleteMask.Merge(tombstones)
+
+	// build rowid column if needed
+	if rowidPos >= 0 {
+		if loaded.Vecs[rowidPos], err = buildRowidColumnInProgress(
+			info, nil, mp, vp,
+		); err != nil {
+
+			return nil, nil, nil, err
+		}
+		release = func() {
+			release()
+			loaded.Vecs[rowidPos].Free(mp)
+		}
+	}
+
+	return loaded, &deleteMask, release, nil
+}
+
 // BlockDataRead only read block data from storage, don't apply deletes.
 func BlockDataRead(
 	ctx context.Context,
