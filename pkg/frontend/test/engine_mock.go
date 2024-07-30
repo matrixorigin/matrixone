@@ -343,17 +343,17 @@ func (mr *MockRelationMockRecorder) AddTableDef(arg0, arg1 interface{}) *gomock.
 }
 
 // AlterTable mocks base method.
-func (m *MockRelation) AlterTable(ctx context.Context, c *engine.ConstraintDef, constraint [][]byte) error {
+func (m *MockRelation) AlterTable(arg0 context.Context, arg1 *engine.ConstraintDef, arg2 []*api.AlterTableReq) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "AlterTable", ctx, c, constraint)
+	ret := m.ctrl.Call(m, "AlterTable", arg0, arg1, arg2)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // AlterTable indicates an expected call of AlterTable.
-func (mr *MockRelationMockRecorder) AlterTable(ctx, c, constraint interface{}) *gomock.Call {
+func (mr *MockRelationMockRecorder) AlterTable(arg0, arg1, arg2 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AlterTable", reflect.TypeOf((*MockRelation)(nil).AlterTable), ctx, c, constraint)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AlterTable", reflect.TypeOf((*MockRelation)(nil).AlterTable), arg0, arg1, arg2)
 }
 
 // ApproxObjectsNum mocks base method.

@@ -176,6 +176,12 @@ func (r *Rowid) String() string {
 	return fmt.Sprintf("%s-%d", b.String(), s)
 }
 
+func (r *Rowid) ShortStringEx() string {
+	b := (*Blockid)(unsafe.Pointer(&r[0]))
+	s := DecodeUint32(r[BlockidSize:])
+	return fmt.Sprintf("%s-%d", b.ShortStringEx(), s)
+}
+
 func (b Blockid) Less(than Blockid) bool {
 	return b.Compare(than) < 0
 }
