@@ -1527,6 +1527,16 @@ func addTimeSpan(length int, unit string) (time.Time, error) {
 func checkPitrValidOrNot(pitrRecord *pitrRecord, stmt *tree.RestorePitr, tenantInfo *TenantInfo) (err error) {
 	restoreLevel := stmt.Level
 	switch restoreLevel {
+	case tree.RESTORELEVELCLUSTER:
+		// check the level
+		// if the pitr level is account/ database/table, return err
+		if pitrRecord.level == tree.PITRLEVELACCOUNT.String() || pitrRecord.level == tree.PITRLEVELDATABASE.String() || pitrRecord.level == tree.PITRLEVELTABLE.String() {
+			return moerr.NewInternalErrorNoCtx("restore level %v is not allowed for cluster restore", pitrRecord.level)
+		}
+		// if the accout not sys account, return err
+		if tenantInfo.GetTenantID() != sysAccountID {
+			return moerr.NewInternalErrorNoCtx("account %s is not allowed to restore cluster level pitr %s", tenantInfo.GetTenant(), pitrRecord.pitrName)
+		}
 	case tree.RESTORELEVELACCOUNT:
 
 		if len(stmt.AccountName) == 0 { // restore self account
@@ -1539,6 +1549,10 @@ func checkPitrValidOrNot(pitrRecord *pitrRecord, stmt *tree.RestorePitr, tenantI
 			}
 		} else {
 			// sys restore other account's pitr
+			// if the accout not sys account, return err
+			if tenantInfo.GetTenantID() != sysAccountID {
+				return moerr.NewInternalErrorNoCtx("account %s is not allowed to restore other account %s", tenantInfo.GetTenant(), string(stmt.AccountName))
+			}
 			// if the pitr level is cluster, the scource account can not be empty
 			if pitrRecord.level == tree.PITRLEVELCLUSTER.String() && len(stmt.SrcAccountName) == 0 {
 				return moerr.NewInternalErrorNoCtx("source account %s can not be empty when restore cluster level pitr %s", string(stmt.AccountName), pitrRecord.pitrName)
