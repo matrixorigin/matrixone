@@ -73,6 +73,7 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.Minus:                   "minus",
 	vm.Intersect:               "intersect",
 	vm.IntersectAll:            "intersect all",
+	vm.UnionAll:                "union all",
 	vm.HashBuild:               "hash build",
 	vm.ShuffleBuild:            "shuffle build",
 	vm.IndexBuild:              "index build",
@@ -202,9 +203,9 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 				op.GetOperatorBase().IsFirst,
 				op.GetOperatorBase().IsLast)
 
-			if op.GetOperatorBase().OpStats != nil {
-				str += op.GetOperatorBase().OpStats.String()
-			}
+			//if op.GetOperatorBase().OpStats != nil {
+			//	str += op.GetOperatorBase().OpStats.String()
+			//}
 
 			if id == vm.Connector {
 				var receiver = "unknown"

@@ -1449,7 +1449,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 
 		c.setAnalyzeCurrent(left, int(curNodeIdx))
 		c.setAnalyzeCurrent(right, int(curNodeIdx))
-		ss = c.compileSort(n, c.compileUnionAll(left, right))
+		ss = c.compileSort(n, c.compileUnionAll(n, left, right))
 		return ss, nil
 	case plan.Node_DELETE:
 		if n.DeleteCtx.CanTruncate {
@@ -2324,9 +2324,15 @@ func (c *Compile) compileMinusAndIntersect(n *plan.Node, left []*Scope, right []
 	return rs
 }
 
-func (c *Compile) compileUnionAll(ss []*Scope, children []*Scope) []*Scope {
+func (c *Compile) compileUnionAll(node *plan.Node, ss []*Scope, children []*Scope) []*Scope {
 	rs := c.newMergeScope(append(ss, children...))
-	vm.GetLeafOp(rs.RootOp).GetOperatorBase().SetIdx(c.anal.curNodeIdx)
+
+	currentFirstFlag := c.anal.isFirst
+	op := constructUnionAll(node)
+	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+	rs.setRootOperator(op)
+	c.anal.isFirst = false
+
 	return []*Scope{rs}
 }
 

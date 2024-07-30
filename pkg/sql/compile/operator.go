@@ -17,7 +17,9 @@ package compile
 import (
 	"context"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
 
 	"github.com/google/uuid"
 
@@ -1131,6 +1133,11 @@ func constructMark(n *plan.Node, typs []types.Type, proc *process.Process) *mark
 func constructOrder(n *plan.Node) *order.Order {
 	arg := order.NewArgument()
 	arg.OrderBySpec = n.OrderBy
+	return arg
+}
+
+func constructUnionAll(_ *plan.Node) *unionall.UnionAll {
+	arg := unionall.NewArgument()
 	return arg
 }
 

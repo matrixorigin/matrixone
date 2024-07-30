@@ -75,6 +75,7 @@ const (
 	Minus
 	Intersect
 	IntersectAll
+	UnionAll
 
 	HashBuild
 	ShuffleBuild

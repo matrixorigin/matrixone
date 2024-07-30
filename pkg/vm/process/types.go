@@ -489,13 +489,27 @@ func (proc *Process) GetTxnOperator() client.TxnOperator {
 
 // Operator Resource Analzyer
 type operatorAnalyzer struct {
-	parallelMajor        bool
-	parallelIdx          int
+	parallelMajor bool
+	parallelIdx   int
+
+	isFirst              bool
+	isLast               bool
 	start                time.Time
 	wait                 time.Duration
 	analInfo             *AnalyzeInfo
 	op                   *OperatorStats
 	childrenCallDuration time.Duration
+}
+
+func NewOperatorAnalyzer(parallelMajor bool, parallelIdx int, isFirst bool, isLast bool, analInfo *AnalyzeInfo, op *OperatorStats) *operatorAnalyzer {
+	return &operatorAnalyzer{
+		parallelMajor: parallelMajor,
+		parallelIdx:   parallelIdx,
+		isFirst:       isFirst,
+		isLast:        isLast,
+		analInfo:      analInfo,
+		op:            op,
+	}
 }
 
 func (si *SessionInfo) GetUser() string {
@@ -698,11 +712,4 @@ func (ps *OperatorStats) String() string {
 		ps.TotalS3OutputCount,
 		ps.TotalNetworkIO,
 		ps.TotalScanTime)
-}
-
-// AnalyzeLockWaitTime encapsulates the logic for recording the waiting time of the analyzer
-func AnalyzeLockWaitTime(analyze Analyze, start time.Time) {
-	if analyze != nil {
-		analyze.WaitStop(start)
-	}
 }
