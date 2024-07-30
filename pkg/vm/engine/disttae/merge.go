@@ -201,12 +201,12 @@ func (t *cnMergeTask) GetCommitEntry() *api.MergeCommitEntry {
 func (t *cnMergeTask) InitTransferMaps(blkCnt int) {
 	t.transferMaps = make(api.TransferMaps, blkCnt)
 	for i := range t.transferMaps {
-		t.transferMaps[i] = make(api.TransferMap)
+		t.transferMaps[i] = make(api.TransferMap, t.GetBlockMaxRows())
 	}
 }
 
-func (t *cnMergeTask) GetTransferMaps() *api.TransferMaps {
-	return &t.transferMaps
+func (t *cnMergeTask) GetTransferMaps() api.TransferMaps {
+	return t.transferMaps
 }
 
 // impl DisposableVecPool
