@@ -114,24 +114,57 @@ var (
 	}
 )
 
-type DeltaLocDataSource struct {
-	ctx        context.Context
-	fs         fileservice.FileService
-	ts         types.TS
+type DeltaSource interface {
+	GetDeltaLoc(bid objectio.Blockid) objectio.Location
+}
+
+type BlockMapDeltaSource struct {
+	blockMeta map[objectio.Blockid]objectio.Location
+}
+
+func (b *BlockMapDeltaSource) GetDeltaLoc(bid objectio.Blockid) objectio.Location {
+	return b.blockMeta[bid]
+}
+
+func NewBMapDeltaSource(blockMeta map[objectio.Blockid]objectio.Location) DeltaSource {
+	return &BlockMapDeltaSource{
+		blockMeta: blockMeta,
+	}
+}
+
+type ObjectMapDeltaSource struct {
 	objectMeta map[objectio.Segmentid]*objectInfo
+}
+
+func NewOMapDeltaSource(objectMeta map[objectio.Segmentid]*objectInfo) DeltaSource {
+	return &ObjectMapDeltaSource{
+		objectMeta: objectMeta,
+	}
+}
+
+func (m *ObjectMapDeltaSource) GetDeltaLoc(bid objectio.Blockid) objectio.Location {
+	segment := bid.Segment()
+	return *m.objectMeta[*segment].deltaLocation[uint32(bid.Sequence())]
+}
+
+type DeltaLocDataSource struct {
+	ctx context.Context
+	fs  fileservice.FileService
+	ts  types.TS
+	ds  DeltaSource
 }
 
 func NewDeltaLocDataSource(
 	ctx context.Context,
 	fs fileservice.FileService,
 	ts types.TS,
-	objectMeta map[objectio.Segmentid]*objectInfo,
+	ds DeltaSource,
 ) *DeltaLocDataSource {
 	return &DeltaLocDataSource{
-		ctx:        ctx,
-		fs:         fs,
-		ts:         ts,
-		objectMeta: objectMeta,
+		ctx: ctx,
+		fs:  fs,
+		ts:  ts,
+		ds:  ds,
 	}
 }
 
@@ -179,7 +212,7 @@ func (d *DeltaLocDataSource) GetTombstonesInProgress(
 	if err != nil {
 		return
 	}
-	if rows.IsEmpty() {
+	if rows == nil || rows.IsEmpty() {
 		return
 	}
 	return rows, nil
@@ -188,13 +221,12 @@ func (d *DeltaLocDataSource) GetTombstonesInProgress(
 func (d *DeltaLocDataSource) getAndApplyTombstonesInProgress(
 	ctx context.Context, bid objectio.Blockid,
 ) (*nulls.Bitmap, error) {
-	segment := bid.Segment()
-	deltaLoc := d.objectMeta[*segment].deltaLocation[uint32(bid.Sequence())]
-	if deltaLoc == nil {
+	deltaLoc := d.ds.GetDeltaLoc(bid)
+	if deltaLoc.IsEmpty() {
 		return nil, nil
 	}
 	logutil.Infof("deltaLoc: %v, id is %d", deltaLoc.String(), bid.Sequence())
-	deletes, _, release, err := blockio.ReadBlockDelete(ctx, *deltaLoc, d.fs)
+	deletes, _, release, err := blockio.ReadBlockDelete(ctx, deltaLoc, d.fs)
 	if err != nil {
 		return nil, err
 	}
@@ -428,7 +460,7 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, sid string, fs fileserv
 	}
 	for _, objectMap := range objects {
 		checkpointTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-		ds := NewDeltaLocDataSource(ctx, fs, checkpointTS, objectMap)
+		ds := NewDeltaLocDataSource(ctx, fs, checkpointTS, NewOMapDeltaSource(objectMap))
 		for _, object := range objectMap {
 			location := object.stats.ObjectLocation()
 			name := object.stats.ObjectName()

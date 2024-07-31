@@ -205,7 +205,7 @@ func BlockDataReadNoCopy(
 			loaded.Vecs[rowidPos].Free(mp)
 		}
 	}
-
+	loaded.SetRowCount(loaded.Vecs[0].Length())
 	return loaded, &deleteMask, release, nil
 }
 
@@ -273,80 +273,6 @@ func BlockDataRead(
 
 	columnBatch, err := BlockDataReadInner(
 		ctx, sid, info, ds, columns, colTypes,
-		types.TimestampToTS(ts), sels, fs, mp, vp, policy,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	columnBatch.SetRowCount(columnBatch.Vecs[0].Length())
-	return columnBatch, nil
-}
-
-// BlockRead read block data from storage and apply deletes according given timestamp.
-// Caller make sure metaloc is not empty
-func BlockRead(
-	ctx context.Context,
-	sid string,
-	info *objectio.BlockInfo,
-	inputDeletes []int64,
-	columns []uint16,
-	colTypes []types.Type,
-	ts timestamp.Timestamp,
-	filterSeqnums []uint16,
-	filterColTypes []types.Type,
-	filter BlockReadFilter,
-	fs fileservice.FileService,
-	mp *mpool.MPool,
-	vp engine.VectorPool,
-	policy fileservice.Policy,
-) (*batch.Batch, error) {
-	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
-		logutil.Debugf("read block %s, columns %v, types %v", info.BlockID.String(), columns, colTypes)
-	}
-
-	var (
-		sels []int32
-		err  error
-	)
-
-	var searchFunc ReadFilterSearchFuncType
-	if (filter.HasFakePK || !info.Sorted) && filter.UnSortedSearchFunc != nil {
-		searchFunc = filter.UnSortedSearchFunc
-	} else if info.Sorted && filter.SortedSearchFunc != nil {
-		searchFunc = filter.SortedSearchFunc
-	}
-
-	if searchFunc != nil {
-		if sels, err = ReadByFilter(
-			ctx, sid, info, inputDeletes, filterSeqnums, filterColTypes,
-			types.TimestampToTS(ts), searchFunc, fs, mp,
-		); err != nil {
-			return nil, err
-		}
-		v2.TaskSelReadFilterTotal.Inc()
-		if len(sels) == 0 {
-			RecordReadFilterSelectivity(sid, 1, 1)
-			v2.TaskSelReadFilterHit.Inc()
-		} else {
-			RecordReadFilterSelectivity(sid, 0, 1)
-		}
-
-		if len(sels) == 0 {
-			result := batch.NewWithSize(len(colTypes))
-			for i, typ := range colTypes {
-				if vp == nil {
-					result.Vecs[i] = vector.NewVec(typ)
-				} else {
-					result.Vecs[i] = vp.GetVector(typ)
-				}
-			}
-			return result, nil
-		}
-	}
-
-	columnBatch, err := BlockReadInner(
-		ctx, sid, info, inputDeletes, columns, colTypes,
 		types.TimestampToTS(ts), sels, fs, mp, vp, policy,
 	)
 	if err != nil {
@@ -427,7 +353,6 @@ func BlockDataReadInner(
 		return
 	}
 	defer release()
-
 	// assemble result batch for return
 	result = batch.NewWithSize(len(loaded.Vecs))
 
@@ -834,7 +759,6 @@ func readBlockDataInprogress(
 		if loaded, release, err = LoadColumns(ctx, cols, typs, fs, info.MetaLocation(), m, policy); err != nil {
 			return
 		}
-
 		colPos := 0
 		result = batch.NewWithSize(len(colTypes))
 		for i, typ := range colTypes {

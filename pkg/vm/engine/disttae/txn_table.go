@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"strconv"
 	"strings"
 	"sync"
@@ -2154,8 +2155,10 @@ func (tbl *txnTable) transferDeletes(
 	deleteObjs,
 	createObjs map[objectio.ObjectNameShort]struct{},
 ) error {
-	var blks []objectio.BlockInfo
+	var blks []objectio.BlockInfoInProgress
+	deltaMap := make(map[objectio.Blockid]objectio.Location)
 	sid := tbl.proc.Load().GetService()
+	var ds *logtail.DeltaLocDataSource
 	{
 		fs, err := fileservice.Get[fileservice.FileService](
 			tbl.proc.Load().GetFileService(),
@@ -2167,6 +2170,7 @@ func (tbl *txnTable) transferDeletes(
 		var objMeta objectio.ObjectMeta
 		for name := range createObjs {
 			if obj, ok := state.GetObject(name); ok {
+				objectStats := obj.ObjectStats
 				location := obj.Location()
 				if objMeta, err = objectio.FastLoadObjectMeta(
 					ctx,
@@ -2176,28 +2180,26 @@ func (tbl *txnTable) transferDeletes(
 					return err
 				}
 				objDataMeta = objMeta.MustDataMeta()
-				blkCnt := objDataMeta.BlockCount()
-				for i := 0; i < int(blkCnt); i++ {
+				for i := 0; i < int(objectStats.BlkCnt()); i++ {
 					blkMeta := objDataMeta.GetBlockMeta(uint32(i))
-					bid := *blkMeta.GetBlockID(obj.Location().Name())
 					metaLoc := blockio.EncodeLocation(
 						obj.Location().Name(),
 						obj.Location().Extent(),
 						blkMeta.GetRows(),
 						blkMeta.GetID(),
 					)
-					blkInfo := objectio.BlockInfo{
-						BlockID:    bid,
+					bid := objectio.BuildObjectBlockid(objectStats.ObjectName(), uint16(i))
+					blkInfo := objectio.BlockInfoInProgress{
+						BlockID:    *bid,
 						EntryState: obj.EntryState,
 						Sorted:     obj.Sorted,
 						MetaLoc:    *(*[objectio.LocationLen]byte)(unsafe.Pointer(&metaLoc[0])),
 						CommitTs:   obj.CommitTS,
-						SegmentID:  *obj.ObjectShortName().Segmentid(),
 					}
 					if obj.HasDeltaLoc {
 						deltaLoc, commitTs, ok := state.GetBockDeltaLoc(blkInfo.BlockID)
 						if ok {
-							blkInfo.DeltaLoc = deltaLoc
+							deltaMap[blkInfo.BlockID] = deltaLoc[:]
 							blkInfo.CommitTs = commitTs
 						}
 					}
@@ -2205,6 +2207,10 @@ func (tbl *txnTable) transferDeletes(
 				}
 			}
 		}
+		ds = logtail.NewDeltaLocDataSource(
+			ctx, fs, types.TimestampToTS(tbl.db.op.SnapshotTS()),
+			logtail.NewBMapDeltaSource(deltaMap))
+
 	}
 
 	for _, entry := range tbl.getTxn().writes {
@@ -2220,7 +2226,7 @@ func (tbl *txnTable) transferDeletes(
 				blkid, _ := rowid.Decode()
 				if _, ok := deleteObjs[*objectio.ShortName(&blkid)]; ok {
 					toTransfer++
-					newId, ok, err := tbl.readNewRowid(pkVec, i, blks)
+					newId, ok, err := tbl.readNewRowid(pkVec, i, blks, ds)
 					if err != nil {
 						return err
 					}
@@ -2249,7 +2255,7 @@ func (tbl *txnTable) transferDeletes(
 }
 
 func (tbl *txnTable) readNewRowid(
-	vec *vector.Vector, row int, blks []objectio.BlockInfo,
+	vec *vector.Vector, row int, blks []objectio.BlockInfoInProgress, ds *logtail.DeltaLocDataSource,
 ) (types.Rowid, bool, error) {
 	var auxIdCnt int32
 	var typ plan.Type
@@ -2302,11 +2308,10 @@ func (tbl *txnTable) readNewRowid(
 			continue
 		}
 		// rowid + pk
-		bat, err := blockio.BlockRead(
-			tbl.proc.Load().Ctx, tbl.proc.Load().GetService(), &blk, nil, columns, colTypes,
-			tbl.db.op.SnapshotTS(),
+		bat, err := blockio.BlockDataRead(
+			tbl.proc.Load().Ctx, tbl.proc.Load().GetService(), &blk, ds, columns, colTypes, tbl.db.op.SnapshotTS(),
 			nil, nil, blockio.BlockReadFilter{},
-			tbl.getTxn().engine.fs, tbl.proc.Load().Mp(), tbl.proc.Load(), fileservice.Policy(0),
+			tbl.getTxn().engine.fs, tbl.proc.Load().Mp(), tbl.proc.Load(), fileservice.Policy(0), "",
 		)
 		if err != nil {
 			return rowid, false, err
