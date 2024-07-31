@@ -3821,7 +3821,7 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 	return parent, children
 }
 
-func (c *Compile) newShuffleJoinProbeScope(s *Scope) *Scope {
+func (c *Compile) newJoinProbeScopeWithBidx(s *Scope) *Scope {
 	rs := newScope(Merge)
 	mergeOp := merge.NewArgument()
 	mergeOp.SetIdx(vm.GetLeafOp(s.RootOp).GetOperatorBase().GetIdx())
