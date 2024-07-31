@@ -144,7 +144,14 @@ func NewOMapDeltaSource(objectMeta map[objectio.Segmentid]*objectInfo) DeltaSour
 
 func (m *ObjectMapDeltaSource) GetDeltaLoc(bid objectio.Blockid) objectio.Location {
 	segment := bid.Segment()
-	return *m.objectMeta[*segment].deltaLocation[uint32(bid.Sequence())]
+	oInfo, ok := m.objectMeta[*segment]
+	if !ok {
+		return objectio.Location{}
+	}
+	if oInfo.deltaLocation == nil {
+		return objectio.Location{}
+	}
+	return *oInfo.deltaLocation[uint32(bid.Sequence())]
 }
 
 type DeltaLocDataSource struct {
