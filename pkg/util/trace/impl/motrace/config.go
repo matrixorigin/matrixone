@@ -177,7 +177,7 @@ func WithLongQueryTime(secs float64) tracerProviderOption {
 	})
 }
 
-func WithLongSpanTime(d time.Duration) tracerProviderOption {
+func WithLongSpanTime(d time.Duration) TracerProviderOption {
 	return tracerProviderOption(func(cfg *tracerProviderConfig) {
 		cfg.longSpanTime = d
 	})

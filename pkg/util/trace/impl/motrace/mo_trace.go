@@ -49,8 +49,8 @@ type MOTracer struct {
 	trace.TracerConfig
 	provider *MOTracerProvider
 
-	mux              sync.Mutex
-	profileBackupOff map[string]BackOff
+	mux            sync.Mutex
+	profileBackOff map[string]BackOff
 }
 
 // Start starts a Span and returns it along with a context containing it.
@@ -128,17 +128,17 @@ func (t *MOTracer) GetBackOff(name string, strategy trace.BackOffStrategy, cfg *
 	key := path.Join(name, strategy.String())
 	t.mux.Lock()
 	defer t.mux.Unlock()
-	b, exist := t.profileBackupOff[key]
+	b, exist := t.profileBackOff[key]
 	if !exist {
 		switch strategy {
 		case trace.ConstBackOffStrategy:
-			b = NewLinearBackoff(cfg.Interval)
+			b = NewConstBackoff(cfg.Interval)
 		case trace.NoneBackOffStrategy:
 			fallthrough
 		default:
 			b = NoneBackOff{}
 		}
-		t.profileBackupOff[key] = b
+		t.profileBackOff[key] = b
 	}
 	return b
 }
@@ -517,6 +517,7 @@ type ConstBackOff struct {
 	mux      sync.Mutex
 	interval time.Duration
 	next     time.Time
+	count    uint64
 }
 
 func (b *ConstBackOff) Count() bool {
@@ -525,6 +526,7 @@ func (b *ConstBackOff) Count() bool {
 	now := time.Now()
 	if b.check(now) {
 		b.next = now.Add(b.interval)
+		b.count++
 		return true
 	}
 	return false
@@ -534,8 +536,8 @@ func (b *ConstBackOff) check(t time.Time) bool {
 	return t.After(b.next)
 }
 
-func NewLinearBackoff(interval time.Duration) *ConstBackOff {
-	return &ConstBackOff{interval: interval, next: time.Now()}
+func NewConstBackoff(interval time.Duration) *ConstBackOff {
+	return &ConstBackOff{interval: interval, next: time.Now(), count: 0}
 }
 
 var _ BackOff = (*NoneBackOff)(nil)
