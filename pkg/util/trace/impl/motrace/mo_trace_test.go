@@ -224,7 +224,7 @@ func TestMOSpan_End(t *testing.T) {
 	defer s.Reset()
 
 	ctx := context.TODO()
-	p := newMOTracerProvider(WithLongSpanTime(time.Hour), EnableTracer(true))
+	p := newMOTracerProvider(WithLongSpanTime(time.Hour), EnableTracer(true), EnableSpanProfile(true))
 	tracer := &MOTracer{
 		TracerConfig: trace.TracerConfig{Name: "test"},
 		provider:     p,
@@ -370,7 +370,7 @@ func TestMOSpan_doProfile(t *testing.T) {
 		tracer *MOTracer
 	}
 
-	p := newMOTracerProvider(WithFSWriterFactory(&dummyFileWriterFactory{}), EnableTracer(true))
+	p := newMOTracerProvider(WithFSWriterFactory(&dummyFileWriterFactory{}), EnableTracer(true), EnableSpanProfile(true))
 	tracer := p.Tracer("test").(*MOTracer)
 	ctx := context.TODO()
 
@@ -493,7 +493,7 @@ func TestMOSpan_DisalbeProfile_doProfile(t *testing.T) {
 		tracer *MOTracer
 	}
 
-	p := newMOTracerProvider(WithFSWriterFactory(&dummyFileWriterFactory{}), EnableTracer(true), WithLongSpanTime(10*time.Second), WithSpanProfile(false))
+	p := newMOTracerProvider(WithFSWriterFactory(&dummyFileWriterFactory{}), EnableTracer(true), WithLongSpanTime(10*time.Second), EnableSpanProfile(false))
 	tracer := p.Tracer("test").(*MOTracer)
 	ctx := context.TODO()
 
@@ -551,7 +551,7 @@ func TestMOSpan_doProfile_ConstBackOff(t *testing.T) {
 		tracer *MOTracer
 	}
 
-	p := newMOTracerProvider(WithFSWriterFactory(&dummyFileWriterFactory{}), EnableTracer(true), WithLongSpanTime(10*time.Second), WithSpanProfile(true))
+	p := newMOTracerProvider(WithFSWriterFactory(&dummyFileWriterFactory{}), EnableTracer(true), WithLongSpanTime(10*time.Second), EnableSpanProfile(true))
 	tracer := p.Tracer("test").(*MOTracer)
 	ctx := context.TODO()
 

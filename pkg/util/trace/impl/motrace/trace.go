@@ -62,7 +62,7 @@ func InitWithConfig(ctx context.Context, SV *config.ObservabilityParameters, opt
 		WithLongQueryTime(SV.LongQueryTime),
 		WithLongSpanTime(SV.LongSpanTime.Duration),
 		WithSpanDisable(SV.DisableSpan),
-		WithSpanProfile(SV.EnableSpanProfile),
+		EnableSpanProfile(SV.EnableSpanProfile),
 		WithErrorDisable(SV.DisableError),
 		WithSkipRunningStmt(SV.SkipRunningStmt),
 		WithSQLWriterDisable(SV.DisableSqlWriter),

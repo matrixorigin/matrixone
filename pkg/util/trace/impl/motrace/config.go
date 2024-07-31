@@ -189,7 +189,7 @@ func WithSpanDisable(disable bool) tracerProviderOption {
 	}
 }
 
-func WithSpanProfile(enable bool) tracerProviderOption {
+func EnableSpanProfile(enable bool) tracerProviderOption {
 	return func(cfg *tracerProviderConfig) {
 		cfg.enableSpanProfile = enable
 	}
