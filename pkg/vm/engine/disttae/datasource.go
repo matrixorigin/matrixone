@@ -751,12 +751,16 @@ type LocalDataSource struct {
 type SkipCheckPolicy uint64
 
 const (
-	SkipCheckWorkSpace = 1 << iota
-	SkipCheckCommittedInMem
-	SkipCheckCommittedS3
+	SkipUncommitedInMemory = 1 << iota
+	SkipCommittedInMemory
+	SkipUncommitedS3
+	SkipCommittedS3
 )
 
-const SkipCheckAll = SkipCheckWorkSpace | SkipCheckCommittedInMem | SkipCheckCommittedS3
+const (
+	CheckAll             = 0
+	CheckCommittedS3Only = SkipUncommitedInMemory | SkipCommittedInMemory | SkipUncommitedS3
+)
 
 func NewLocalDataSource(
 	ctx context.Context,
@@ -1291,21 +1295,21 @@ func (ls *LocalDataSource) GetTombstonesInProgress(
 	deletedRows = &nulls.Nulls{}
 	deletedRows.InitWithSize(8192)
 
-	if ls.checkPolicy&SkipCheckWorkSpace == 0 {
+	if ls.checkPolicy&SkipUncommitedInMemory == 0 {
 		ls.applyWorkspaceEntryDeletes(bid, nil, deletedRows)
 	}
-	if ls.checkPolicy&SkipCheckCommittedS3 == 0 {
+	if ls.checkPolicy&SkipUncommitedS3 == 0 {
 		_, err = ls.applyWorkspaceFlushedS3Deletes(bid, nil, deletedRows)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	if ls.checkPolicy&SkipCheckWorkSpace == 0 {
+	if ls.checkPolicy&SkipUncommitedInMemory == 0 {
 		ls.applyWorkspaceRawRowIdDeletes(bid, nil, deletedRows)
 	}
 
-	if ls.checkPolicy&SkipCheckCommittedInMem == 0 {
+	if ls.checkPolicy&SkipCommittedInMemory == 0 {
 		ls.applyPStateInMemDeletes(bid, nil, deletedRows)
 	}
 

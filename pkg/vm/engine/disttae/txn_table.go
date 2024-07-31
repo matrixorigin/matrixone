@@ -25,8 +25,6 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-
 	"github.com/docker/go-units"
 	"go.uber.org/zap"
 
@@ -1809,7 +1807,7 @@ func BuildLocalDataSource(
 		tbl = rel.(*txnTableDelegate).origin
 	}
 
-	return tbl.buildLocalDataSource(ctx, txnOffset, ranges, SkipCheckPolicy(0))
+	return tbl.buildLocalDataSource(ctx, txnOffset, ranges, CheckAll)
 }
 
 func (tbl *txnTable) buildLocalDataSource(
@@ -1893,7 +1891,7 @@ func (tbl *txnTable) BuildReaders(
 		} else {
 			shard = relData.DataSlice(i*divide+mod, (i+1)*divide+mod)
 		}
-		ds, err := tbl.buildLocalDataSource(ctx, txnOffset, shard, 0)
+		ds, err := tbl.buildLocalDataSource(ctx, txnOffset, shard, CheckAll)
 		if err != nil {
 			return nil, err
 		}
@@ -1984,7 +1982,6 @@ func (tbl *txnTable) PKPersistedBetween(
 	//only check data objects.
 	delObjs, cObjs := p.GetChangedObjsBetween(from.Next(), types.MaxTs())
 	isFakePK := tbl.GetTableDef(ctx).Pkey.PkeyColName == catalog.FakePrimaryKeyColName
-
 	if err := ForeachCommittedObjects(cObjs, delObjs, p,
 		func(obj logtailreplay.ObjectInfo) (err2 error) {
 			var zmCkecked bool
@@ -2053,9 +2050,8 @@ func (tbl *txnTable) PKPersistedBetween(
 					blk.EntryState = obj.EntryState
 					blk.CommitTs = obj.CommitTS
 					if obj.HasDeltaLoc {
-						deltaLoc, commitTs, ok := p.GetBockDeltaLoc(blk.BlockID)
+						_, commitTs, ok := p.GetBockDeltaLoc(blk.BlockID)
 						if ok {
-							blk.DeltaLoc = deltaLoc
 							blk.CommitTs = commitTs
 						}
 					}
@@ -2188,9 +2184,9 @@ func (tbl *txnTable) transferDeletes(
 ) error {
 	var blks []objectio.BlockInfoInProgress
 	sid := tbl.proc.Load().GetService()
-	relData := buildRelationDataV1()
+	relData := buildBlockListRelationData()
 	relData.AppendBlockInfo(objectio.EmptyBlockInfoInProgress)
-	ds, err := tbl.buildLocalDataSource(ctx, 0, relData, SkipCheckPolicy(SkipCheckAll))
+	ds, err := tbl.buildLocalDataSource(ctx, 0, relData, SkipCheckPolicy(CheckCommittedS3Only))
 	if err != nil {
 		return err
 	}
@@ -2230,6 +2226,12 @@ func (tbl *txnTable) transferDeletes(
 						Sorted:     obj.Sorted,
 						MetaLoc:    *(*[objectio.LocationLen]byte)(unsafe.Pointer(&metaLoc[0])),
 						CommitTs:   obj.CommitTS,
+					}
+					if obj.HasDeltaLoc {
+						_, commitTs, ok := state.GetBockDeltaLoc(blkInfo.BlockID)
+						if ok {
+							blkInfo.CommitTs = commitTs
+						}
 					}
 					blks = append(blks, blkInfo)
 				}
