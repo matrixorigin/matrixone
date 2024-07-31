@@ -2973,6 +2973,10 @@ var (
 			input:  "restore account acc01 from pitr pitr01 '2021-01-01 00:00:00' acc02",
 			output: "restore account acc01 from pitr pitr01 timestamp = 2021-01-01 00:00:00 from account acc02",
 		},
+		{
+			input:  "restore cluster from pitr pitr01 '2021-01-01 00:00:00'",
+			output: "restore cluster from pitr pitr01 timestamp = 2021-01-01 00:00:00",
+		},
 	}
 )
 
