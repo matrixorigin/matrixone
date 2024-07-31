@@ -69,6 +69,7 @@ message StatsInfo {
 message StatsInfoKey {
   uint64 DatabaseID = 1;
   uint64 TableID = 2;
+  uint32 AccId = 3;
 }
 
 message StatsInfoKeys {
