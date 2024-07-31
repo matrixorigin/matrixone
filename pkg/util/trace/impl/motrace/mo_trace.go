@@ -283,12 +283,11 @@ func (s *MOSpan) FillRow(ctx context.Context, row *table.Row) {
 	if len(s.ExtraFields) > 0 {
 		encoder := getEncoder()
 		buf, err := encoder.EncodeEntry(zapcore.Entry{}, s.ExtraFields)
+		if err != nil {
+			_ = moerr.ConvertGoError(ctx, err)
+		}
 		if buf != nil {
 			defer buf.Free()
-		}
-		if err != nil {
-			moerr.ConvertGoError(ctx, err)
-		} else {
 			row.SetColumnVal(extraCol, table.StringField(buf.String()))
 		}
 	}
@@ -405,7 +404,7 @@ func (s *MOSpan) doProfile() {
 	}
 	if backoff, cfg := s.BackOffStrategy(); backoff > trace.NoneBackOffStrategy {
 		b := s.tracer.GetBackOff(s.Name, backoff, cfg)
-		if !b.Count(1) {
+		if !b.Count() {
 			return
 		}
 	}
@@ -486,12 +485,6 @@ func (s *MOSpan) ParentSpanContext() trace.SpanContext {
 	return s.SpanConfig.Parent.SpanContext()
 }
 
-const timestampFormatter = "2006-01-02 15:04:05.000000"
-
-func Time2DatetimeString(t time.Time) string {
-	return t.Format(timestampFormatter)
-}
-
 var jsonEncoder zapcore.Encoder
 var jsonEncoderInit sync.Once
 
@@ -515,7 +508,7 @@ type BackOff interface {
 	// Count do the event count
 	// return true, means not in backoff cycle. You can run your code.
 	// return false, means you should skip this time.
-	Count(float64) bool
+	Count() bool
 }
 
 var _ BackOff = (*ConstBackOff)(nil)
@@ -526,7 +519,7 @@ type ConstBackOff struct {
 	next     time.Time
 }
 
-func (b *ConstBackOff) Count(_ float64) bool {
+func (b *ConstBackOff) Count() bool {
 	b.mux.Lock()
 	defer b.mux.Unlock()
 	now := time.Now()
@@ -549,6 +542,6 @@ var _ BackOff = (*NoneBackOff)(nil)
 
 type NoneBackOff struct{}
 
-func (b NoneBackOff) Count(f float64) bool { return true }
+func (b NoneBackOff) Count() bool { return true }
 
 // fixme implement ExponentialBackOff, you can see https://pkg.go.dev/github.com/cenkalti/backoff/v4#NewExponentialBackOff
