@@ -35,37 +35,104 @@ type fixedSizeMmapAllocator struct {
 	buffer1 chan unsafe.Pointer
 	// buffer2 buffers MADV_DONTNEED objects
 	buffer2 chan unsafe.Pointer
+
+	deallocatorPool *ClosureDeallocatorPool[fixedSizeMmapDeallocatorArgs, *fixedSizeMmapDeallocatorArgs]
 }
+
+type fixedSizeMmapDeallocatorArgs struct {
+	length uint64
+	ptr    unsafe.Pointer
+}
+
+func (f fixedSizeMmapDeallocatorArgs) As(trait Trait) bool {
+	if info, ok := trait.(*MmapInfo); ok {
+		info.Addr = f.ptr
+		info.Length = f.length
+		return true
+	}
+	return false
+}
+
+type MmapInfo struct {
+	Addr   unsafe.Pointer
+	Length uint64
+}
+
+func (*MmapInfo) IsTrait() {}
 
 func NewFixedSizeMmapAllocator(
 	size uint64,
-) *fixedSizeMmapAllocator {
+) (ret *fixedSizeMmapAllocator) {
+
 	// if size is larger than smallClassCap, num1 will be zero, buffer1 will be empty
 	num1 := smallClassCap / size
 	if num1 > maxBuffer1Cap {
 		// don't buffer too much, since chans with larger buffer consume more memory
 		num1 = maxBuffer1Cap
 	}
-	ret := &fixedSizeMmapAllocator{
+
+	ret = &fixedSizeMmapAllocator{
 		size:    size,
 		buffer1: make(chan unsafe.Pointer, num1),
 		buffer2: make(chan unsafe.Pointer, buffer2Cap),
+
+		deallocatorPool: NewClosureDeallocatorPool(
+			func(hints Hints, args *fixedSizeMmapDeallocatorArgs) {
+
+				if hints&DoNotReuse > 0 {
+					if err := unix.Munmap(
+						unsafe.Slice((*byte)(args.ptr), size),
+					); err != nil {
+						panic(err)
+					}
+					return
+				}
+
+				select {
+
+				case ret.buffer1 <- args.ptr:
+					// buffer in buffer1
+
+				default:
+
+					ret.freeMem(args.ptr)
+
+					select {
+
+					case ret.buffer2 <- args.ptr:
+						// buffer in buffer2
+
+					default:
+						// unmap
+						if err := unix.Munmap(
+							unsafe.Slice((*byte)(args.ptr), size),
+						); err != nil {
+							panic(err)
+						}
+
+					}
+
+				}
+
+			},
+		),
 	}
+
 	return ret
 }
 
 var _ FixedSizeAllocator = new(fixedSizeMmapAllocator)
 
-func (f *fixedSizeMmapAllocator) Allocate(hints Hints) (ptr unsafe.Pointer, dec Deallocator, err error) {
+func (f *fixedSizeMmapAllocator) Allocate(hints Hints) (slice []byte, dec Deallocator, err error) {
 
 	select {
 
 	case ptr := <-f.buffer1:
 		// from buffer1
+		slice = unsafe.Slice((*byte)(ptr), f.size)
 		if hints&NoClear == 0 {
-			clear(unsafe.Slice((*byte)(ptr), f.size))
+			clear(slice)
 		}
-		return ptr, f, nil
 
 	default:
 
@@ -74,11 +141,11 @@ func (f *fixedSizeMmapAllocator) Allocate(hints Hints) (ptr unsafe.Pointer, dec 
 		case ptr := <-f.buffer2:
 			// from buffer2
 			f.reuseMem(ptr, hints)
-			return ptr, f, nil
+			slice = unsafe.Slice((*byte)(ptr), f.size)
 
 		default:
 			// allocate new
-			data, err := unix.Mmap(
+			slice, err = unix.Mmap(
 				-1, 0,
 				int(f.size),
 				unix.PROT_READ|unix.PROT_WRITE,
@@ -87,50 +154,13 @@ func (f *fixedSizeMmapAllocator) Allocate(hints Hints) (ptr unsafe.Pointer, dec 
 			if err != nil {
 				return nil, nil, err
 			}
-			return unsafe.Pointer(unsafe.SliceData(data)), f, nil
-
-		}
-
-	}
-}
-
-var _ Deallocator = new(fixedSizeMmapAllocator)
-
-func (f *fixedSizeMmapAllocator) Deallocate(ptr unsafe.Pointer, hints Hints) {
-
-	if hints&DoNotReuse > 0 {
-		if err := unix.Munmap(
-			unsafe.Slice((*byte)(ptr), f.size),
-		); err != nil {
-			panic(err)
-		}
-		return
-	}
-
-	select {
-
-	case f.buffer1 <- ptr:
-		// buffer in buffer1
-
-	default:
-
-		f.freeMem(ptr)
-
-		select {
-
-		case f.buffer2 <- ptr:
-			// buffer in buffer2
-
-		default:
-			// unmap
-			if err := unix.Munmap(
-				unsafe.Slice((*byte)(ptr), f.size),
-			); err != nil {
-				panic(err)
-			}
 
 		}
 
 	}
 
+	return slice, f.deallocatorPool.Get(fixedSizeMmapDeallocatorArgs{
+		ptr:    unsafe.Pointer(unsafe.SliceData(slice)),
+		length: f.size,
+	}), nil
 }

@@ -16,34 +16,34 @@ package malloc
 
 import "testing"
 
-func TestProfileAllocator(t *testing.T) {
+func TestRandomAllocator(t *testing.T) {
 	testAllocator(t, func() Allocator {
-		return NewProfileAllocator(
+		return NewRandomAllocator(
 			newUpstreamAllocatorForTest(),
-			NewProfiler[HeapSampleValues](),
-			1,
+			newUpstreamAllocatorForTest(),
+			10,
 		)
 	})
 }
 
-func BenchmarkProfileAllocator(b *testing.B) {
+func BenchmarkRandomAllocator(b *testing.B) {
 	for _, n := range benchNs {
 		benchmarkAllocator(b, func() Allocator {
-			return NewProfileAllocator(
+			return NewRandomAllocator(
 				newUpstreamAllocatorForTest(),
-				NewProfiler[HeapSampleValues](),
-				1,
+				newUpstreamAllocatorForTest(),
+				10,
 			)
 		}, n)
 	}
 }
 
-func FuzzProfileAllocator(f *testing.F) {
+func FuzzRandomAllocator(f *testing.F) {
 	fuzzAllocator(f, func() Allocator {
-		return NewProfileAllocator(
+		return NewRandomAllocator(
 			newUpstreamAllocatorForTest(),
-			NewProfiler[HeapSampleValues](),
-			1,
+			newUpstreamAllocatorForTest(),
+			10,
 		)
 	})
 }

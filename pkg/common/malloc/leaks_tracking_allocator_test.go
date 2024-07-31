@@ -15,56 +15,71 @@
 package malloc
 
 import (
+	"bytes"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
 )
 
-func TestSizeBoundedAllocator(t *testing.T) {
+func TestLeaksTrackingAllocator(t *testing.T) {
 	testAllocator(t, func() Allocator {
-		return NewSizeBoundedAllocator(
+		tracker := new(LeaksTracker)
+		return NewLeaksTrackingAllocator(
 			newUpstreamAllocatorForTest(),
-			1<<40,
-			nil,
+			tracker,
 		)
 	})
 
-	t.Run("out of space", func(t *testing.T) {
-		allocator := NewSizeBoundedAllocator(
+	t.Run("report", func(t *testing.T) {
+		tracker := new(LeaksTracker)
+		allocator := NewLeaksTrackingAllocator(
 			newUpstreamAllocatorForTest(),
-			24,
-			nil,
+			tracker,
 		)
-		_, d1, err := allocator.Allocate(12, NoHints)
-		assert.Nil(t, err)
-		_, _, err = allocator.Allocate(12, NoHints)
-		assert.Nil(t, err)
-		_, _, err = allocator.Allocate(12, NoHints)
-		assert.ErrorContains(t, err, "out of space")
-		d1.Deallocate(NoHints)
-		_, _, err = allocator.Allocate(12, NoHints)
-		assert.Nil(t, err)
+
+		_, dec, err := allocator.Allocate(42, NoHints)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		buf := new(bytes.Buffer)
+		leaks := tracker.ReportLeaks(buf)
+		if !leaks {
+			t.Fatal()
+		}
+		if len(buf.Bytes()) == 0 {
+			t.Fatal()
+		}
+
+		dec.Deallocate(NoHints)
+		buf = new(bytes.Buffer)
+		leaks = tracker.ReportLeaks(buf)
+		if leaks {
+			t.Fatal()
+		}
+		if len(buf.Bytes()) != 0 {
+			t.Fatal()
+		}
+
 	})
 }
 
-func BenchmarkSizeBoundedAllocator(b *testing.B) {
+func BenchmarkLeaksTrackingAllocator(b *testing.B) {
 	for _, n := range benchNs {
 		benchmarkAllocator(b, func() Allocator {
-			return NewSizeBoundedAllocator(
+			tracker := new(LeaksTracker)
+			return NewLeaksTrackingAllocator(
 				newUpstreamAllocatorForTest(),
-				1<<40,
-				nil,
+				tracker,
 			)
 		}, n)
 	}
 }
 
-func FuzzSizeBoundedAllocator(f *testing.F) {
+func FuzzLeaksTrackingAllocator(f *testing.F) {
 	fuzzAllocator(f, func() Allocator {
-		return NewSizeBoundedAllocator(
+		tracker := new(LeaksTracker)
+		return NewLeaksTrackingAllocator(
 			newUpstreamAllocatorForTest(),
-			1<<40,
-			nil,
+			tracker,
 		)
 	})
 }

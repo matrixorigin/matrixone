@@ -14,20 +14,26 @@
 
 package malloc
 
-type ShardedAllocator []Allocator
+import "testing"
 
-func NewShardedAllocator(numShards int, newShard func() Allocator) ShardedAllocator {
-	var ret ShardedAllocator
-	for i := 0; i < numShards; i++ {
-		ret = append(ret, newShard())
+func BenchmarkTraitAs(b *testing.B) {
+	allocator := NewReadOnlyAllocator(
+		NewClassAllocator(NewFixedSizeMmapAllocator),
+	)
+	_, dec, err := allocator.Allocate(42, NoHints)
+	if err != nil {
+		b.Fatal(err)
 	}
-	return ret
-}
+	b.ResetTimer()
 
-var _ Allocator = ShardedAllocator{}
-
-func (s ShardedAllocator) Allocate(size uint64, hints Hints) ([]byte, Deallocator, error) {
-	pid := runtime_procPin()
-	runtime_procUnpin()
-	return s[pid%len(s)].Allocate(size, hints)
+	var freeze Freezer
+	var info MmapInfo
+	for i := 0; i < b.N; i++ {
+		if !dec.As(&freeze) {
+			b.Fatal()
+		}
+		if !dec.As(&info) {
+			b.Fatal()
+		}
+	}
 }

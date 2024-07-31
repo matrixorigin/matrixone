@@ -31,10 +31,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
-
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -75,7 +73,7 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 	//logutil.Debugf("-->bh:%s", sql)
 	v, err := back.backSes.GetSessionSysVar("lower_case_table_names")
 	if err != nil {
-		return err
+		v = int64(1)
 	}
 	statements, err := mysql.Parse(ctx, sql, v.(int64))
 	if err != nil {
@@ -135,7 +133,7 @@ func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uin
 	//logutil.Debugf("-->bh:%s", sql)
 	v, err := back.backSes.GetSessionSysVar("lower_case_table_names")
 	if err != nil {
-		return err
+		v = int64(1)
 	}
 	statements, err := mysql.Parse(ctx, sql, v.(int64))
 	if err != nil {
@@ -660,8 +658,6 @@ func newBackSession(ses FeSession, txnOp TxnOperator, db string, callBack output
 			respr:          defResper,
 		},
 	}
-	backSes.gSysVars = ses.GetGlobalSysVars()
-	backSes.sesSysVars = ses.GetSessionSysVars()
 	backSes.uuid, _ = uuid.NewV7()
 	return backSes
 }
@@ -847,10 +843,12 @@ func (backSes *backSession) GetUserDefinedVar(name string) (*UserDefinedVar, err
 	return nil, moerr.NewInternalError(context.Background(), "do not support user defined var in background exec")
 }
 
-func (backSes *backSession) GetSessionVar(ctx context.Context, name string) (interface{}, error) {
+func (backSes *backSession) GetSessionSysVar(name string) (interface{}, error) {
 	switch strings.ToLower(name) {
 	case "autocommit":
 		return true, nil
+	case "lower_case_table_names":
+		return int64(1), nil
 	}
 	return nil, nil
 }
