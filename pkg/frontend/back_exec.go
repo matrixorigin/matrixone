@@ -115,6 +115,7 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 		reqCtx: ctx,
 		ses:    back.backSes,
 	}
+	defer execCtx.Close()
 	return doComQueryInBack(back.backSes, &execCtx, userInput)
 }
 
@@ -169,6 +170,7 @@ func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uin
 		reqCtx: ctx,
 		ses:    back.backSes,
 	}
+	defer execCtx.Close()
 	return doComQueryInBack(back.backSes, &execCtx, userInput)
 }
 

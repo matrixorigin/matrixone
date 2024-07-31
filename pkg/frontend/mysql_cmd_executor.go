@@ -936,6 +936,7 @@ func handleAnalyzeStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeStmt) e
 		ses:    ses,
 		reqCtx: execCtx.reqCtx,
 	}
+	defer tempExecCtx.Close()
 	return doComQuery(ses, &tempExecCtx, &UserInput{sql: sql})
 }
 
@@ -2231,6 +2232,7 @@ func executeStmtWithResponse(ses *Session,
 			ses:    ses,
 			reqCtx: execCtx.reqCtx,
 		}
+		defer tempExecCtx.Close()
 		if err = doComQuery(ses, &tempExecCtx, &UserInput{sql: sql}); err != nil {
 			return err
 		}
