@@ -226,7 +226,7 @@ func (tbl *txnTableDelegate) Ranges(
 		return nil, err
 	}
 
-	ret := buildRelationDataV1()
+	ret := buildBlockListRelationData()
 	for _, r := range rs {
 		blks := r.GetBlockInfoSlice()
 		ret.blklist.Append(blks)
@@ -234,7 +234,9 @@ func (tbl *txnTableDelegate) Ranges(
 	return ret, nil
 }
 
-func (tbl *txnTableDelegate) CollectTombstones(ctx context.Context, txnOffset int) (engine.Tombstoner, error) {
+func (tbl *txnTableDelegate) CollectTombstones(
+	ctx context.Context,
+	txnOffset int) (engine.Tombstoner, error) {
 	if tbl.isLocal() {
 		return tbl.origin.CollectTombstones(
 			ctx,

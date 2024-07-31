@@ -18,13 +18,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 
 	"github.com/docker/go-units"
 	"go.uber.org/zap"
@@ -609,12 +610,15 @@ func (tbl *txnTable) CollectTombstones(
 				//deletes in txn.Write maybe comes from PartitionState.Rows ,
 				// PartitionReader need to skip them.
 				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
-				tombstone.inMemTombstones = append(tombstone.inMemTombstones, vs...)
+				for _, v := range vs {
+					bid, o := v.Decode()
+					tombstone.inMemTombstones[bid] = append(tombstone.inMemTombstones[bid], int32(o))
+				}
 			}
 		})
 
 	//collect uncommitted in-memory tombstones belongs to blocks persisted by CN writing S3
-	tbl.getTxn().deletedBlocks.getDeletedRowIDs(&tombstone.inMemTombstones)
+	tbl.getTxn().deletedBlocks.getDeletedRowIDs(tombstone.inMemTombstones)
 
 	//collect committed in-memory tombstones from partition state.
 	state, err := tbl.getPartitionState(ctx)
@@ -626,17 +630,18 @@ func (tbl *txnTable) CollectTombstones(
 		iter := state.NewRowsIter(types.TimestampToTS(ts), nil, true)
 		for iter.Next() {
 			entry := iter.Entry()
-			tombstone.inMemTombstones = append(tombstone.inMemTombstones, entry.RowID)
+			bid, o := entry.RowID.Decode()
+			tombstone.inMemTombstones[bid] = append(tombstone.inMemTombstones[bid], int32(o))
 		}
 		iter.Close()
 	}
 
 	//collect uncommitted persisted tombstones.
-	if err := tbl.getTxn().getUncommittedS3Tombstone(&tombstone.uncommittedDeltaLocs); err != nil {
+	if err := tbl.getTxn().getUncommittedS3Tombstone(tombstone.blk2UncommitLoc); err != nil {
 		return nil, err
 	}
 	//collect committed persisted tombstones from partition state.
-	state.GetTombstoneDeltaLocs(&tombstone.committedDeltalocs, &tombstone.commitTS)
+	state.GetTombstoneDeltaLocs(tombstone.blk2CommitLoc)
 	return tombstone, nil
 }
 
@@ -752,7 +757,6 @@ func (tbl *txnTable) Ranges(
 	data = &blockListRelData{
 		typ:     engine.RelDataBlockList,
 		blklist: &blocks,
-		isEmpty: true,
 	}
 
 	return
@@ -1762,6 +1766,32 @@ func (tbl *txnTable) GetDBID(ctx context.Context) uint64 {
 	return tbl.db.databaseId
 }
 
+// for test
+func buildRemoteDS(
+	ctx context.Context,
+	tbl *txnTable,
+	txnOffset int,
+	relData engine.RelData,
+) (source engine.DataSource, err error) {
+
+	tombstones, err := tbl.CollectTombstones(ctx, txnOffset)
+	if err != nil {
+		return nil, err
+	}
+	//tombstones.Init()
+
+	relData.AttachTombstones(tombstones)
+
+	source = NewRemoteDataSource(
+		ctx,
+		tbl.proc.Load(),
+		tbl.getTxn().engine.fs,
+		tbl.db.op.SnapshotTS(),
+		relData,
+	)
+	return
+}
+
 // for ut
 func BuildLocalDataSource(
 	ctx context.Context,
@@ -1841,8 +1871,7 @@ func (tbl *txnTable) BuildReaders(
 
 	//relData maybe is nil, indicate that only read data from memory.
 	if relData == nil || relData.DataCnt() == 0 {
-		//s := objectio.BlockInfoSliceInProgress(objectio.EmptyBlockInfoInProgressBytes)
-		relData = buildRelationDataV1()
+		relData = buildBlockListRelationData()
 		relData.AppendBlockInfo(objectio.EmptyBlockInfoInProgress)
 	}
 	blkCnt := relData.DataCnt()

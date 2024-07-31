@@ -290,25 +290,12 @@ func (b *deletedBlocks) addDeletedBlocks(blockID *types.Blockid, offsets []int64
 	b.offsets[*blockID] = append(b.offsets[*blockID], offsets...)
 }
 
-//func (b *deletedBlocks) hasDeletes(blockID *types.Blockid) bool {
-//	b.RLock()
-//	defer b.RUnlock()
-//	_, ok := b.offsets[*blockID]
-//	return ok
-//}
-
-//func (b *deletedBlocks) isEmpty() bool {
-//	b.RLock()
-//	defer b.RUnlock()
-//	return len(b.offsets) == 0
-//}
-
-func (b *deletedBlocks) getDeletedRowIDs(rows *[]types.Rowid) {
+func (b *deletedBlocks) getDeletedRowIDs(mp map[types.Blockid][]int32) {
 	b.RLock()
 	defer b.RUnlock()
 	for bid, offsets := range b.offsets {
 		for _, offset := range offsets {
-			*rows = append(*rows, *types.NewRowid(&bid, uint32(offset)))
+			mp[bid] = append(mp[bid], int32(offset))
 		}
 	}
 }
