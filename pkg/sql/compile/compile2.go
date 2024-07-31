@@ -34,8 +34,8 @@ import (
 	"time"
 )
 
-// Compile generates the node level execution pipeline from the query plan.
-// and the final pipeline will be stored in the attribute `scope` of Compile object.
+// Compile generates the node level execution pipeline from the query plan,
+// and the final pipeline will be stored in the attribute `scope` of a Compile object.
 func (c *Compile) Compile(
 	execTopContext context.Context,
 	queryPlan *plan.Plan,
@@ -125,8 +125,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	// clear the last query context to avoid process reuse.
 	c.proc.ResetQueryContext()
 
-	// the runC is the final object for executing the query.
-	// If a rerun occurs, it may differ from the original c, so we need to release it.
+	// the runC is the final object for executing the query, it's not always the same as c because of retry.
 	var runC = c
 
 	var executeSQL = c.originSQL
@@ -147,6 +146,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		txnOperator.EnterRunSql()
 	}
 	defer func() {
+		// if a rerun occurs, it differs from the original c, so we need to release it.
 		if runC != c {
 			runC.Release()
 		}
@@ -238,7 +238,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		}
 	}
 
-	if err = c.proc.GetQueryContextError(); err != nil {
+	if err = runC.proc.GetQueryContextError(); err != nil {
 		return nil, err
 	}
 	queryResult.AffectRows = runC.getAffectedRows()
@@ -248,6 +248,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	return queryResult, err
 }
 
+// prepareRetry rebuild a new Compile object for retrying the query.
 func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 	v2.TxnStatementRetryCounter.Inc()
 	c.proc.GetTxnOperator().ResetRetry(true)
