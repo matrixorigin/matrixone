@@ -34,8 +34,6 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
-
 	state    int
 	probeIdx int
 	bat      *batch.Batch // build batch
@@ -92,7 +90,6 @@ func (productl2 *Productl2) Free(proc *process.Process, pipelineFailed bool, err
 	if ctr != nil {
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
-		ctr.FreeAllReg()
 		productl2.ctr = nil
 	}
 }
