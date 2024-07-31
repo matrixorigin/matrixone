@@ -29,6 +29,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
 	"github.com/google/uuid"
 	"github.com/panjf2000/ants/v2"
 	"go.uber.org/zap"
@@ -125,7 +127,7 @@ func NewCompile(
 	c.tenant = tenant
 	c.uid = uid
 	c.sql = sql
-	c.proc.Base.MessageBoard = c.MessageBoard
+	c.proc.SetMessageBoard(c.MessageBoard)
 	c.stmt = stmt
 	c.addr = addr
 	c.isInternal = isInternal
@@ -155,13 +157,13 @@ func (c Compile) TypeName() string {
 	return "compile.Compile"
 }
 
-func (c *Compile) GetMessageCenter() *process.MessageCenter {
+func (c *Compile) GetMessageCenter() *message.MessageCenter {
 	if c == nil || c.e == nil {
 		return nil
 	}
 	m := c.e.GetMessageCenter()
 	if m != nil {
-		mc, ok := m.(*process.MessageCenter)
+		mc, ok := m.(*message.MessageCenter)
 		if ok {
 			return mc
 		}
@@ -191,7 +193,7 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	}
 
 	c.MessageBoard = c.MessageBoard.Reset()
-	proc.Base.MessageBoard = c.MessageBoard
+	proc.SetMessageBoard(c.MessageBoard)
 	c.counterSet.Reset()
 
 	for _, f := range c.fuzzys {
