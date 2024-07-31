@@ -175,7 +175,9 @@ func (m *MergeCommitEntry) UnmarshalBinary(data []byte) error {
 // To reduce memory consumption
 
 type TransferMaps []TransferMap
-type TransferMap map[int32]TransferDestPos
+type TransferMap map[uint32]TransferDestPos
 type TransferDestPos struct {
-	ObjIdx, BlkIdx, RowIdx int32
+	ObjIdx uint8
+	BlkIdx uint16
+	RowIdx uint32
 }

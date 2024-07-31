@@ -622,7 +622,7 @@ type Relation interface {
 	// only ConstraintDef can be modified
 	UpdateConstraint(context.Context, *ConstraintDef) error
 
-	AlterTable(ctx context.Context, c *ConstraintDef, constraint [][]byte) error
+	AlterTable(context.Context, *ConstraintDef, []*api.AlterTableReq) error
 
 	// Support renaming tables within explicit transactions (CN worspace)
 	TableRenameInTxn(ctx context.Context, constraint [][]byte) error

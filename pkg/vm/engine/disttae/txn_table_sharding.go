@@ -57,7 +57,6 @@ func newTxnTableWithItem(
 		createSql:     item.CreateSql,
 		constraint:    item.Constraint,
 		rowid:         item.Rowid,
-		rowids:        item.Rowids,
 		lastTS:        db.op.SnapshotTS(),
 	}
 	tbl.proc.Store(process)
@@ -495,9 +494,9 @@ func (tbl *txnTableDelegate) DelTableDef(
 func (tbl *txnTableDelegate) AlterTable(
 	ctx context.Context,
 	c *engine.ConstraintDef,
-	constraint [][]byte,
+	reqs []*api.AlterTableReq,
 ) error {
-	return tbl.origin.AlterTable(ctx, c, constraint)
+	return tbl.origin.AlterTable(ctx, c, reqs)
 }
 
 func (tbl *txnTableDelegate) UpdateConstraint(
