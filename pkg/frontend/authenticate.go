@@ -3266,7 +3266,7 @@ func doCreateStage(ctx context.Context, ses *Session, cs *tree.CreateStage) (err
 		}
 	} else {
 		// format credentials and hash it
-		credentials = HashPassWord(formatCredentials(cs.Credentials))
+		credentials = formatCredentials(cs.Credentials)
 
 		if !cs.Status.Exist {
 			StageStatus = "disabled"
@@ -3276,6 +3276,11 @@ func doCreateStage(ctx context.Context, ses *Session, cs *tree.CreateStage) (err
 
 		if cs.Comment.Exist {
 			comment = cs.Comment.Comment
+		}
+
+		if !(strings.HasPrefix(cs.Url, function.STAGE_PROTOCOL+"://") || strings.HasPrefix(cs.Url, function.S3_PROTOCOL+"://") ||
+			strings.HasPrefix(cs.Url, function.FILE_PROTOCOL+":///")) {
+			return moerr.NewBadConfig(ctx, "URL protocol only supports stage://, s3:// and file:///")
 		}
 
 		sql, err = getSqlForInsertIntoMoStages(ctx, string(cs.Name), cs.Url, credentials, StageStatus, types.CurrentTimestamp().String2(time.UTC, 0), comment)
@@ -3295,87 +3300,23 @@ func doCreateStage(ctx context.Context, ses *Session, cs *tree.CreateStage) (err
 func doCheckFilePath(ctx context.Context, ses *Session, ep *tree.ExportParam) (err error) {
 	//var err error
 	var filePath string
-	var sql string
-	var erArray []ExecResult
-	var stageName string
-	var stageStatus string
-	var url string
 	if ep == nil {
-		return err
-	}
-
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
-
-	err = bh.Exec(ctx, "begin;")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
 		return err
 	}
 
 	// detect filepath contain stage or not
 	filePath = ep.FilePath
-	if !strings.Contains(filePath, ":") {
-		// the filepath is the target path
-		sql = getSqlForCheckStageStatus(ctx, "enabled")
-		bh.ClearExecResultSet()
-		err = bh.Exec(ctx, sql)
+	if strings.HasPrefix(filePath, function.STAGE_PROTOCOL+"://") {
+		// stage:// URL
+		s, err := function.UrlToStageDef(filePath, ses.proc)
 		if err != nil {
 			return err
 		}
 
-		erArray, err = getResultSet(ctx, bh)
+		// s.ToPath() returns the fileservice filepath, i.e. s3,...:/path for S3 or /path for local file
+		ses.ep.userConfig.StageFilePath, _, err = s.ToPath()
 		if err != nil {
 			return err
-		}
-
-		// if have stage enabled
-		if execResultArrayHasData(erArray) {
-			return moerr.NewInternalError(ctx, "stage exists, please try to check and use a stage instead")
-		} else {
-			// use the filepath
-			return err
-		}
-	} else {
-		stageName = strings.Split(filePath, ":")[0]
-		// check the stage status
-		sql, err = getSqlForCheckStageStatusWithStageName(ctx, stageName)
-		if err != nil {
-			return err
-		}
-		bh.ClearExecResultSet()
-		err = bh.Exec(ctx, sql)
-		if err != nil {
-			return err
-		}
-
-		erArray, err = getResultSet(ctx, bh)
-		if err != nil {
-			return err
-		}
-		if execResultArrayHasData(erArray) {
-			stageStatus, err = erArray[0].GetString(ctx, 0, 1)
-			if err != nil {
-				return err
-			}
-
-			// is the stage staus is disabled
-			if stageStatus == tree.StageStatusDisabled.String() {
-				return moerr.NewInternalError(ctx, "stage '%s' is invalid, please check", stageName)
-			} else if stageStatus == tree.StageStatusEnabled.String() {
-				// replace the filepath using stage url
-				url, err = erArray[0].GetString(ctx, 0, 0)
-				if err != nil {
-					return err
-				}
-
-				filePath = strings.Replace(filePath, stageName+":", url, 1)
-				ses.ep.userConfig.StageFilePath = filePath
-			}
-		} else {
-			return moerr.NewInternalError(ctx, "stage '%s' is not exists, please check", stageName)
 		}
 	}
 	return err
@@ -3440,6 +3381,11 @@ func doAlterStage(ctx context.Context, ses *Session, as *tree.AlterStage) (err e
 		}
 	} else {
 		if as.UrlOption.Exist {
+			if !(strings.HasPrefix(as.UrlOption.Url, function.STAGE_PROTOCOL+"://") ||
+				strings.HasPrefix(as.UrlOption.Url, function.S3_PROTOCOL+"://") ||
+				strings.HasPrefix(as.UrlOption.Url, function.FILE_PROTOCOL+":///")) {
+				return moerr.NewBadConfig(ctx, "URL protocol only supports stage://, s3:// and file:///")
+			}
 			sql = getsqlForUpdateStageUrl(string(as.Name), as.UrlOption.Url)
 			err = bh.Exec(ctx, sql)
 			if err != nil {
@@ -3448,7 +3394,7 @@ func doAlterStage(ctx context.Context, ses *Session, as *tree.AlterStage) (err e
 		}
 
 		if as.CredentialsOption.Exist {
-			credentials = HashPassWord(formatCredentials(as.CredentialsOption))
+			credentials = formatCredentials(as.CredentialsOption)
 			sql = getsqlForUpdateStageCredentials(string(as.Name), credentials)
 			err = bh.Exec(ctx, sql)
 			if err != nil {

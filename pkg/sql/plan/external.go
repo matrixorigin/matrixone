@@ -185,7 +185,7 @@ func getExternalStats(node *plan.Node, builder *QueryBuilder) *Stats {
 			return DefaultHugeStats()
 		}
 	} else {
-		if err = InitInfileParam(param); err != nil {
+		if err = InitInfileOrStageParam(param, builder.compCtx.GetProcess()); err != nil {
 			return DefaultHugeStats()
 		}
 	}
