@@ -112,6 +112,8 @@ func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 			bat := result.Batch
+			anal.Input(bat, top.IsFirst)
+
 			if bat == nil {
 				ctr.state = vm.Eval
 				break

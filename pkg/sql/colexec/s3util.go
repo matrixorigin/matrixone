@@ -472,7 +472,7 @@ func (w *S3Writer) SortAndFlush(proc *process.Process) error {
 			merge = newMerge(len(w.Bats), sort.Decimal128Less, getFixedCols[types.Decimal128](w.Bats, pos), nulls)
 		case types.T_uuid:
 			merge = newMerge(len(w.Bats), sort.UuidLess, getFixedCols[types.Uuid](w.Bats, pos), nulls)
-		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+		case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_datalink:
 			merge = newMerge(len(w.Bats), sort.GenericLess[string], getStrCols(w.Bats, pos), nulls)
 			//TODO: check if we need T_array here? T_json is missing here.
 			// Update Oct 20 2023: I don't think it is necessary to add T_array here. Keeping this comment,

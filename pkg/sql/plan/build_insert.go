@@ -190,11 +190,11 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 			if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
 				continue
 			}
-			attrs = append(attrs, col.Name)
+			attrs = append(attrs, col.GetOriginCaseName())
 			insertColCount++
 		}
 		for _, col := range tableDef.Cols {
-			attrs = append(attrs, col.Name)
+			attrs = append(attrs, col.GetOriginCaseName())
 		}
 		attrs = append(attrs, catalog.Row_ID)
 		uniqueColWithIdx := GetUniqueColAndIdxFromTableDef(tableDef)
@@ -399,7 +399,7 @@ func canUsePkFilter(builder *QueryBuilder, ctx CompilerContext, stmt *tree.Inser
 		isCompound = len(tableDef.Pkey.Names) > 1
 	}
 
-	if !config.CNPrimaryCheck {
+	if !config.CNPrimaryCheck.Load() {
 		return false // break condition 0
 	}
 

@@ -80,11 +80,11 @@ func (rightSemi *RightSemi) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 		case Probe:
-			msg := ctr.ReceiveFromSingleReg(0, analyze)
-			if msg.Err != nil {
-				return result, msg.Err
+			result, err = rightSemi.Children[0].Call(proc)
+			if err != nil {
+				return result, err
 			}
-			bat := msg.Batch
+			bat := result.Batch
 
 			if bat == nil {
 				ctr.state = SendLast
@@ -125,6 +125,7 @@ func (rightSemi *RightSemi) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 				result.Batch = rightSemi.ctr.buf[rightSemi.ctr.lastpos]
 				rightSemi.ctr.lastpos++
+				result.Status = vm.ExecHasMore
 				return result, nil
 			}
 

@@ -39,8 +39,6 @@ type evalVector struct {
 }
 
 type container struct {
-	colexec.ReceiverOperator
-
 	state int
 
 	batches       []*batch.Batch
@@ -121,7 +119,6 @@ func (semiJoin *SemiJoin) Free(proc *process.Process, pipelineFailed bool, err e
 		ctr.cleanEvalVectors()
 		ctr.cleanHashMap()
 		ctr.cleanExprExecutor()
-		ctr.FreeAllReg()
 
 		anal := proc.GetAnalyze(semiJoin.GetIdx(), semiJoin.GetParallelIdx(), semiJoin.GetParallelMajor())
 		anal.Alloc(ctr.maxAllocSize)

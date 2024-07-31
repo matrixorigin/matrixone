@@ -27,7 +27,7 @@ import (
 )
 
 func TestPartitionStateRowsIter(t *testing.T) {
-	state := NewPartitionState("", false)
+	state := NewPartitionState("", false, 42)
 	ctx := context.Background()
 	pool := mpool.MustNewZero()
 	packer := types.NewPacker()
@@ -80,7 +80,7 @@ func TestPartitionStateRowsIter(t *testing.T) {
 				mustVectorToProto(tsVec),
 				mustVectorToProto(vec1),
 			},
-		}, 0, packer)
+		}, 0, packer, pool)
 	}
 
 	// rows iter
@@ -133,7 +133,7 @@ func TestPartitionStateRowsIter(t *testing.T) {
 				mustVectorToProto(tsVec),
 				mustVectorToProto(vec1),
 			},
-		}, 0, packer)
+		}, 0, packer, pool)
 	}
 
 	// rows iter
@@ -166,7 +166,7 @@ func TestPartitionStateRowsIter(t *testing.T) {
 				mustVectorToProto(rowIDVec),
 				mustVectorToProto(tsVec),
 			},
-		}, packer)
+		}, packer, pool)
 	}
 
 	for i := 0; i < num; i++ {
@@ -242,7 +242,7 @@ func TestPartitionStateRowsIter(t *testing.T) {
 				mustVectorToProto(rowIDVec),
 				mustVectorToProto(tsVec),
 			},
-		}, packer)
+		}, packer, pool)
 	}
 
 	for i := 0; i < num; i++ {
@@ -265,7 +265,7 @@ func TestPartitionStateRowsIter(t *testing.T) {
 }
 
 func TestInsertAndDeleteAtTheSameTimestamp(t *testing.T) {
-	state := NewPartitionState("", false)
+	state := NewPartitionState("", false, 42)
 	ctx := context.Background()
 	pool := mpool.MustNewZero()
 	packer := types.NewPacker()
@@ -296,7 +296,7 @@ func TestInsertAndDeleteAtTheSameTimestamp(t *testing.T) {
 				mustVectorToProto(tsVec),
 				mustVectorToProto(vec1),
 			},
-		}, 0, packer)
+		}, 0, packer, pool)
 	}
 
 	{
@@ -313,7 +313,7 @@ func TestInsertAndDeleteAtTheSameTimestamp(t *testing.T) {
 				mustVectorToProto(rowIDVec),
 				mustVectorToProto(tsVec),
 			},
-		}, packer)
+		}, packer, pool)
 	}
 
 	{
@@ -357,7 +357,7 @@ func TestInsertAndDeleteAtTheSameTimestamp(t *testing.T) {
 }
 
 func TestDeleteBeforeInsertAtTheSameTime(t *testing.T) {
-	state := NewPartitionState("", false)
+	state := NewPartitionState("", false, 42)
 	ctx := context.Background()
 	pool := mpool.MustNewZero()
 	packer := types.NewPacker()
@@ -385,7 +385,7 @@ func TestDeleteBeforeInsertAtTheSameTime(t *testing.T) {
 				mustVectorToProto(rowIDVec),
 				mustVectorToProto(tsVec),
 			},
-		}, packer)
+		}, packer, pool)
 	}
 
 	{
@@ -405,7 +405,7 @@ func TestDeleteBeforeInsertAtTheSameTime(t *testing.T) {
 				mustVectorToProto(tsVec),
 				mustVectorToProto(vec1),
 			},
-		}, 0, packer)
+		}, 0, packer, pool)
 	}
 
 	{
@@ -449,7 +449,7 @@ func TestDeleteBeforeInsertAtTheSameTime(t *testing.T) {
 }
 
 func TestPrimaryKeyModifiedWithDeleteOnly(t *testing.T) {
-	state := NewPartitionState("", false)
+	state := NewPartitionState("", false, 42)
 	ctx := context.Background()
 	pool := mpool.MustNewZero()
 	packer := types.NewPacker()
@@ -480,7 +480,7 @@ func TestPrimaryKeyModifiedWithDeleteOnly(t *testing.T) {
 				mustVectorToProto(tsVec),
 				mustVectorToProto(primaryKeyVec), // with primary key
 			},
-		}, packer)
+		}, packer, pool)
 	}
 
 	// should be detectable

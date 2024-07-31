@@ -69,6 +69,10 @@ type BlockInfo struct {
 	PartitionNum int
 }
 
+func (b *BlockInfo) String() string {
+	return fmt.Sprintf("[A-%v][R-%v]blk-%s", b.EntryState, b.CanRemote, b.BlockID.ShortStringEx())
+}
+
 func (b *BlockInfo) MetaLocation() Location {
 	return b.MetaLoc[:]
 }

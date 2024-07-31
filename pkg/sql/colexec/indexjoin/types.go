@@ -19,7 +19,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -32,7 +31,6 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
 	state int
 	buf   *batch.Batch
 }
@@ -83,7 +81,6 @@ func (indexJoin *IndexJoin) Reset(proc *process.Process, pipelineFailed bool, er
 func (indexJoin *IndexJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := indexJoin.ctr
 	if ctr != nil {
-		ctr.FreeAllReg()
 		if indexJoin.ctr.buf != nil {
 			indexJoin.ctr.buf.Clean(proc.Mp())
 			indexJoin.ctr.buf = nil

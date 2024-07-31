@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2021-2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,4 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package catalog
+package embed
+
+func WithConfigs(
+	configs []string,
+) Option {
+	return func(c *cluster) {
+		c.files = configs
+	}
+}
+
+func WithPreStart(
+	f func(ServiceOperator),
+) Option {
+	return func(c *cluster) {
+		c.options.preStart = f
+	}
+}
+
+func WithCNCount(
+	cn int,
+) Option {
+	return func(c *cluster) {
+		c.options.cn = cn
+	}
+}

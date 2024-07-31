@@ -176,7 +176,7 @@ func init() {
 	}
 
 	for _, oid := range []types.T{types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
-		types.T_json, types.T_blob, types.T_text,
+		types.T_json, types.T_blob, types.T_text, types.T_datalink,
 		types.T_array_float32, types.T_array_float64} {
 		replaceMethods[oid] = func(toVec, fromVec *vector.Vector, row1, row2 int, mp *mpool.MPool) error {
 			return vector.SetBytesAt(toVec, row1, fromVec.GetBytesAt(row2), mp)
