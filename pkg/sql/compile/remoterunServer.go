@@ -222,6 +222,8 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 				reuse.Free[process.AnalyzeInfo](runCompile.proc.Base.AnalInfos[i], nil)
 			}
 		}
+		runCompile.proc.Base.AnalInfos = nil
+		runCompile.anal.analInfos = nil
 		return err
 
 	case pipeline.Method_StopSending:
