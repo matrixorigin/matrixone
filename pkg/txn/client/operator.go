@@ -200,6 +200,12 @@ func WithBeginAutoCommit(begin, autocommit bool) TxnOption {
 	}
 }
 
+func WithSkipPushClientReady() TxnOption {
+	return func(tc *txnOperator) {
+		tc.skipWaitPushClient = true
+	}
+}
+
 type txnOperator struct {
 	sid                  string
 	logger               *log.MOLogger
@@ -241,6 +247,8 @@ type txnOperator struct {
 	fprints         footPrints
 
 	waitActiveCost time.Duration
+
+	skipWaitPushClient bool
 }
 
 func newTxnOperator(
