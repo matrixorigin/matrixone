@@ -106,7 +106,7 @@ func NewTestDisttaeEngine(ctx context.Context, mp *mpool.MPool,
 		return nil, err
 	}
 
-	err = de.Engine.InitLogTailPushModel(ctx, de.timestampWaiter)
+	err = disttae.InitLogTailPushModel(ctx, de.Engine, de.timestampWaiter)
 	if err != nil {
 		return nil, err
 	}

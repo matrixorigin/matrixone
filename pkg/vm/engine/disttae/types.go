@@ -170,6 +170,7 @@ type Engine struct {
 var _ SimpleEngine = new(Engine)
 
 type SimpleEngine interface {
+	init(ctx context.Context) error
 	Enqueue(tail *logtail.TableLogtail)
 	GetOrCreateLatestPart(databaseId uint64, tableId uint64) *logtailreplay.Partition
 	getLatestCatalogCache() *cache.CatalogCache
@@ -177,14 +178,33 @@ type SimpleEngine interface {
 	GetMPool() *mpool.MPool
 	GetFS() fileservice.FileService
 	GetService() string
-	LazyLoadLatestCkp(ctx context.Context, tblHandler SimpleRelation) (*logtailreplay.Partition, error)
+	getTNServices() []DNStore
+	setPushClientStatus(ready bool)
+	abortAllRunningTxn()
+	CopyPartitions() map[[2]uint64]*logtailreplay.Partition
+	cleanMemoryTableWithTable(dbId, tblId uint64)
+	PushClient() *PushClient
 }
 
-var _ SimpleRelation = new(txnTable)
-var _ SimpleRelation = new(txnTableDelegate)
+var _ SimpleEngine = new(CdcEngine)
 
-type SimpleRelation interface {
-	engine.Relation
+type CdcEngine struct {
+	sync.RWMutex
+	service string
+
+	//latest partitions which be protected by e.Lock().
+	partitions map[[2]uint64]*logtailreplay.Partition
+
+	//latest catalog will be loaded from TN when engine is initialized.
+	catalog *cache.CatalogCache
+
+	packerPool *fileservice.Pool[*types.Packer]
+
+	mp *mpool.MPool
+
+	fs fileservice.FileService
+
+	pClient PushClient
 }
 
 // Transaction represents a transaction

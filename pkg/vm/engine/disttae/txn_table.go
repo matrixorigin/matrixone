@@ -25,6 +25,8 @@ import (
 	"unsafe"
 
 	"github.com/docker/go-units"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -56,7 +58,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 const (
@@ -1697,6 +1698,10 @@ func (tbl *txnTable) GetDBID(ctx context.Context) uint64 {
 	return tbl.db.databaseId
 }
 
+func (tbl *txnTable) GetDBName() string {
+	return tbl.db.databaseName
+}
+
 // NewReader creates a new list of Readers to read data from the table.
 // Parameters:
 //   - ctx: Context used to control the lifecycle of the request.
@@ -2254,7 +2259,7 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(
 		return false,
 			moerr.NewInternalErrorNoCtx("primary key modification is not allowed in snapshot transaction")
 	}
-	part, err := tbl.getTxn().engine.LazyLoadLatestCkp(ctx, tbl)
+	part, err := LazyLoadLatestCkp(ctx, tbl.getTxn().engine, tbl)
 	if err != nil {
 		return false, err
 	}
@@ -2799,4 +2804,12 @@ func (tbl *txnTable) getCommittedRows(
 		return rows, nil
 	}
 	return uint64(s.TableCnt) + rows, nil
+}
+
+func (tbl *txnTable) GetOldTableID() uint64 {
+	return tbl.oldTableId
+}
+
+func (tbl *txnTable) GetPrimarySeqNum() int {
+	return tbl.primarySeqnum
 }

@@ -41,6 +41,18 @@ type Table struct {
 	tableName    string
 }
 
+func (t *Table) GetOldTableID() uint64 {
+	return 0
+}
+
+func (t *Table) GetDBName() string {
+	return t.databaseName
+}
+
+func (t *Table) GetPrimarySeqNum() int {
+	return 0
+}
+
 var _ engine.Relation = new(Table)
 
 func (t *Table) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error) {

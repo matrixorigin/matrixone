@@ -22,6 +22,11 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+
+	"github.com/panjf2000/ants/v2"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -33,9 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
-	"github.com/panjf2000/ants/v2"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestFlushAndTransfer(t *testing.T) {
@@ -317,7 +319,7 @@ func Test_Bug_CheckpointInsertObjectOverwrittenMergeDeletedObject(t *testing.T) 
 				engineTbl, err := engineDB.Relation(ctx, tableName, nil)
 				require.Nil(t, err)
 
-				_, err = disttaeEngine.Engine.LazyLoadLatestCkp(ctx, engineTbl)
+				_, err = disttae.LazyLoadLatestCkp(ctx, disttaeEngine.Engine, engineTbl)
 				require.Nil(t, err)
 
 				stats, err := disttaeEngine.GetPartitionStateStats(ctx, rel.ID(), database.GetID())
@@ -554,7 +556,7 @@ func Test_EmptyObjectStats(t *testing.T) {
 		engineTbl, err := engineDB.Relation(ctx, tableName, nil)
 		require.Nil(t, err)
 
-		_, err = disttaeEngine.Engine.LazyLoadLatestCkp(ctx, engineTbl)
+		_, err = disttae.LazyLoadLatestCkp(ctx, disttaeEngine.Engine, engineTbl)
 		require.Nil(t, err)
 
 		stats, err := disttaeEngine.GetPartitionStateStats(ctx, rel.ID(), database.GetID())

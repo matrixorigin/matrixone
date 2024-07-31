@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	taeLogtail "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
@@ -187,10 +188,10 @@ type connector struct {
 	signal chan struct{}
 
 	client *PushClient
-	engine *Engine
+	engine SimpleEngine
 }
 
-func newConnector(c *PushClient, e *Engine) *connector {
+func newConnector(c *PushClient, e SimpleEngine) *connector {
 	co := &connector{
 		signal: make(chan struct{}),
 		client: c,
@@ -216,7 +217,7 @@ func (c *connector) run(ctx context.Context) {
 func (c *PushClient) init(
 	serviceAddr string,
 	timestampWaiter client.TimestampWaiter,
-	e *Engine,
+	e SimpleEngine,
 ) error {
 
 	c.serviceID = e.GetService()
@@ -288,9 +289,9 @@ func (c *PushClient) validLogTailMustApplied(snapshotTS timestamp.Timestamp) {
 
 func (c *PushClient) toSubscribeTable(
 	ctx context.Context,
-	tbl SimpleRelation) (ps *logtailreplay.PartitionState, err error) {
+	tbl engine.Relation) (ps *logtailreplay.PartitionState, err error) {
 
-	tableId := tbl.tableId
+	tableId := tbl.GetTableID(ctx)
 	/*
 		if the table is truncated once or more than once,
 		it is suitable to use the old table id to sync logtail.
@@ -316,17 +317,17 @@ func (c *PushClient) toSubscribeTable(
 		select count(*) from t1; // sync logtail for the new id failed.
 	*/
 	var oldId uint64
-	if tbl.oldTableId != 0 {
-		oldId = tbl.oldTableId
-		tableId = tbl.oldTableId
+	if tbl.GetOldTableID() != 0 {
+		oldId = tbl.GetOldTableID()
+		tableId = tbl.GetOldTableID()
 	}
 
 	//if table has been subscribed, return quickly.
-	if ps, ok := c.isSubscribed(tbl.db.databaseId, oldId, tbl.tableId); ok {
+	if ps, ok := c.isSubscribed(tbl.GetDBID(ctx), oldId, tbl.GetTableID(ctx)); ok {
 		return ps, nil
 	}
 
-	state, err := c.toSubIfUnsubscribed(ctx, tbl.db.databaseId, tableId)
+	state, err := c.toSubIfUnsubscribed(ctx, tbl.GetDBID(ctx), tableId)
 	if err != nil {
 		return nil, err
 	}
@@ -339,7 +340,7 @@ func (c *PushClient) toSubscribeTable(
 
 		case Subscribing:
 			//wait for the next possible state: subscribed or unsubscribed or unsubscribing or Subscribing
-			state, err = c.waitUntilSubscribingChanged(ctx, tbl.db.databaseId, tableId)
+			state, err = c.waitUntilSubscribingChanged(ctx, tbl.GetDBID(ctx), tableId)
 			if err != nil {
 				return nil, err
 			}
@@ -351,7 +352,7 @@ func (c *PushClient) toSubscribeTable(
 		case Unsubscribing:
 			//need to wait for unsubscribe succeed for making the subscribe and unsubscribe execute in order,
 			// otherwise the partition state will leak log tails.
-			state, err = c.waitUntilUnsubscribingChanged(ctx, tbl.db.databaseId, tableId)
+			state, err = c.waitUntilUnsubscribingChanged(ctx, tbl.GetDBID(ctx), tableId)
 			if err != nil {
 				return nil, err
 			}
@@ -359,7 +360,7 @@ func (c *PushClient) toSubscribeTable(
 		case Subscribed:
 			//if table has been subscribed, return the ps.
 			logutil.Infof("%s subscribe tbl[db: %d, tbl: %d, %s] succeed",
-				logTag, tbl.db.databaseId, tbl.tableId, tbl.tableName)
+				logTag, tbl.GetDBID(ctx), tbl.GetTableID(ctx), tbl.GetTableName())
 			return
 
 		case Unsubscribed:
@@ -507,7 +508,7 @@ func (c *PushClient) resume() {
 	}
 }
 
-func (c *PushClient) receiveOneLogtail(ctx context.Context, e *Engine) error {
+func (c *PushClient) receiveOneLogtail(ctx context.Context, e SimpleEngine) error {
 	ctx, cancel := context.WithTimeout(ctx, maxTimeToWaitServerResponse)
 	defer cancel()
 
@@ -551,7 +552,7 @@ func (c *PushClient) receiveOneLogtail(ctx context.Context, e *Engine) error {
 	return nil
 }
 
-func (c *PushClient) receiveLogtails(ctx context.Context, e *Engine) {
+func (c *PushClient) receiveLogtails(ctx context.Context, e SimpleEngine) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -576,7 +577,7 @@ func (c *PushClient) receiveLogtails(ctx context.Context, e *Engine) {
 	}
 }
 
-func (c *PushClient) startConsumers(ctx context.Context, e *Engine) {
+func (c *PushClient) startConsumers(ctx context.Context, e SimpleEngine) {
 	// new parallelNums routine to consume log tails.
 	for i := range c.receiver {
 		c.receiver[i] = c.createRoutineToConsumeLogTails(ctx, i, consumerBufferLength, e)
@@ -604,7 +605,7 @@ func (c *PushClient) sendConnectSig() {
 	}
 }
 
-func (c *PushClient) run(ctx context.Context, e *Engine) {
+func (c *PushClient) run(ctx context.Context, e SimpleEngine) {
 	go c.receiveLogtails(ctx, e)
 
 	// for the first time connector.
@@ -647,7 +648,7 @@ func (c *PushClient) waitTimestamp() {
 	}
 }
 
-func (c *PushClient) connect(ctx context.Context, e *Engine) {
+func (c *PushClient) connect(ctx context.Context, e SimpleEngine) {
 	if c.connector.first.Load() {
 		c.startConsumers(ctx, e)
 
@@ -825,7 +826,7 @@ func (c *PushClient) unusedTableGCTicker(ctx context.Context) {
 	}()
 }
 
-func (c *PushClient) partitionStateGCTicker(ctx context.Context, e *Engine) {
+func (c *PushClient) partitionStateGCTicker(ctx context.Context, e SimpleEngine) {
 	go func() {
 		ticker := time.NewTicker(gcPartitionStateTicker)
 		for {
@@ -843,12 +844,7 @@ func (c *PushClient) partitionStateGCTicker(ctx context.Context, e *Engine) {
 					continue
 				}
 			}
-			parts := make(map[[2]uint64]*logtailreplay.Partition)
-			e.Lock()
-			for ids, part := range e.partitions {
-				parts[ids] = part
-			}
-			e.Unlock()
+			parts := e.CopyPartitions()
 			ts := types.BuildTS(time.Now().UTC().UnixNano()-gcPartitionStateTimer.Nanoseconds()*5, 0)
 			logutil.Infof("%s GC partition_state %v", logTag, ts.ToString())
 			for ids, part := range parts {
@@ -867,7 +863,7 @@ type SubTableID struct {
 // subscribedTable used to record table subscribed status.
 // only if m[table T] = true, T has been subscribed.
 type subscribedTable struct {
-	eng   *Engine
+	eng   SimpleEngine
 	mutex sync.Mutex
 
 	// value is table's latest use time.
@@ -942,22 +938,18 @@ func (s *subscribedTable) isSubscribed(dbId, tblId uint64) bool {
 func (c *PushClient) loadAndConsumeLatestCkp(
 	ctx context.Context,
 	tableId uint64,
-	tbl SimpleRelation) (SubscribeState, *logtailreplay.PartitionState, error) {
+	tbl engine.Relation) (SubscribeState, *logtailreplay.PartitionState, error) {
 
-	//part, err := c.eng.lazyLoadLatestCkp(ctx, tbl)
-	//if err != nil {
-	//	return InvalidSubState, nil, err
-	//}
 	c.subscribed.mutex.Lock()
 	defer c.subscribed.mutex.Unlock()
-	v, exist := c.subscribed.m[SubTableID{DatabaseID: tbl.db.databaseId, TableID: tableId}]
+	v, exist := c.subscribed.m[SubTableID{DatabaseID: tbl.GetDBID(ctx), TableID: tableId}]
 	if exist && (v.SubState == SubRspReceived || v.SubState == Subscribed) {
-		part, err := c.eng.LazyLoadLatestCkp(ctx, tbl)
+		part, err := LazyLoadLatestCkp(ctx, c.eng, tbl)
 		if err != nil {
 			return InvalidSubState, nil, err
 		}
 		//update latest time
-		c.subscribed.m[SubTableID{DatabaseID: tbl.db.databaseId, TableID: tableId}] = SubTableStatus{
+		c.subscribed.m[SubTableID{DatabaseID: tbl.GetDBID(ctx), TableID: tableId}] = SubTableStatus{
 			SubState:   Subscribed,
 			LatestTime: time.Now(),
 		}
@@ -968,12 +960,12 @@ func (c *PushClient) loadAndConsumeLatestCkp(
 		if !c.subscriber.ready.Load() {
 			return Unsubscribed, nil, moerr.NewInternalError(ctx, "log tail subscriber is not ready")
 		}
-		c.subscribed.m[SubTableID{DatabaseID: tbl.db.databaseId, TableID: tableId}] = SubTableStatus{
+		c.subscribed.m[SubTableID{DatabaseID: tbl.GetDBID(ctx), TableID: tableId}] = SubTableStatus{
 			SubState: Subscribing,
 		}
-		if err := c.subscribeTable(ctx, api.TableID{DbId: tbl.db.databaseId, TbId: tableId}); err != nil {
+		if err := c.subscribeTable(ctx, api.TableID{DbId: tbl.GetDBID(ctx), TbId: tableId}); err != nil {
 			//restore the table status.
-			delete(c.subscribed.m, SubTableID{DatabaseID: tbl.db.databaseId, TableID: tableId})
+			delete(c.subscribed.m, SubTableID{DatabaseID: tbl.GetDBID(ctx), TableID: tableId})
 			return Unsubscribed, nil, err
 		}
 		return Subscribing, nil, nil
@@ -1115,7 +1107,7 @@ type syncLogTailTimestamp struct {
 	ready                  atomic.Bool
 	tList                  []atomic.Pointer[timestamp.Timestamp]
 	latestAppliedLogTailTS atomic.Pointer[timestamp.Timestamp]
-	e                      *Engine
+	e                      SimpleEngine
 }
 
 func (r *syncLogTailTimestamp) initLogTailTimestamp(timestampWaiter client.TimestampWaiter) {
@@ -1357,7 +1349,7 @@ func waitServerReady(addr string) {
 	}
 }
 
-func (e *Engine) InitLogTailPushModel(ctx context.Context, timestampWaiter client.TimestampWaiter) error {
+func InitLogTailPushModel(ctx context.Context, e SimpleEngine, timestampWaiter client.TimestampWaiter) error {
 	tnStores := e.getTNServices()
 	if len(tnStores) == 0 {
 		return moerr.NewInternalError(ctx, "no TN store found")
@@ -1376,22 +1368,22 @@ func (e *Engine) InitLogTailPushModel(ctx context.Context, timestampWaiter clien
 		}
 
 		// get log tail service address.
-		if err := e.pClient.init(logTailServerAddr, timestampWaiter, e); err != nil {
+		if err := e.PushClient().init(logTailServerAddr, timestampWaiter, e); err != nil {
 			logutil.Errorf("%s client init failed, err is %s", logTag, err)
 			continue
 		}
 		break
 	}
-	e.pClient.eng = e
-	e.pClient.subscribed.eng = e
+	e.PushClient().eng = e
+	e.PushClient().subscribed.eng = e
 
-	go e.pClient.connector.run(ctx)
+	go e.PushClient().connector.run(ctx)
 
 	// Start a goroutine that never stops to receive logtail from TN logtail server.
-	go e.pClient.run(ctx, e)
+	go e.PushClient().run(ctx, e)
 
-	e.pClient.unusedTableGCTicker(ctx)
-	e.pClient.partitionStateGCTicker(ctx, e)
+	e.PushClient().unusedTableGCTicker(ctx)
+	e.PushClient().partitionStateGCTicker(ctx, e)
 	return nil
 }
 
@@ -1401,7 +1393,7 @@ func ifShouldNotDistribute(dbId, tblId uint64) bool {
 
 func dispatchSubscribeResponse(
 	ctx context.Context,
-	e *Engine,
+	e SimpleEngine,
 	response *logtail.SubscribeResponse,
 	recRoutines []routineController,
 	receiveAt time.Time) error {
@@ -1420,7 +1412,7 @@ func dispatchSubscribeResponse(
 			}
 		}()
 
-		if err := e.consumeSubscribeResponse(ctx, response, false, receiveAt); err != nil {
+		if err := consumeSubscribeResponse(ctx, e, response, false, receiveAt); err != nil {
 			return err
 		}
 		if len(lt.CkpLocation) == 0 {
@@ -1429,13 +1421,13 @@ func dispatchSubscribeResponse(
 			c := e.getLatestCatalogCache()
 			c.UpdateDuration(types.TS{}, types.MaxTs())
 		}
-		e.pClient.subscribed.setTableSubscribed(tbl.DbId, tbl.TbId)
+		e.PushClient().subscribed.setTableSubscribed(tbl.DbId, tbl.TbId)
 	} else {
 		routineIndex := tbl.TbId % consumerNumber
 		recRoutines[routineIndex].sendSubscribeResponse(ctx, response, receiveAt)
 	}
 	// no matter how we consume the response, should update all timestamp.
-	e.pClient.receivedLogTailTime.updateTimestamp(consumerNumber, *lt.Ts, receiveAt)
+	e.PushClient().receivedLogTailTime.updateTimestamp(consumerNumber, *lt.Ts, receiveAt)
 	for _, rc := range recRoutines {
 		rc.updateTimeFromT(*lt.Ts, receiveAt)
 	}
@@ -1444,7 +1436,7 @@ func dispatchSubscribeResponse(
 
 func dispatchUpdateResponse(
 	ctx context.Context,
-	e *Engine,
+	e SimpleEngine,
 	response *logtail.UpdateResponse,
 	recRoutines []routineController,
 	receiveAt time.Time) error {
@@ -1454,7 +1446,7 @@ func dispatchUpdateResponse(
 	for i := 0; i < len(list); i++ {
 		table := list[i].Table
 		if table.TbId == catalog.MO_DATABASE_ID {
-			if err := e.consumeUpdateLogTail(ctx, list[i], false, receiveAt); err != nil {
+			if err := consumeUpdateLogTail(ctx, e, list[i], false, receiveAt); err != nil {
 				return err
 			}
 		}
@@ -1462,7 +1454,7 @@ func dispatchUpdateResponse(
 	for i := 0; i < len(list); i++ {
 		table := list[i].Table
 		if table.TbId == catalog.MO_TABLES_ID {
-			if err := e.consumeUpdateLogTail(ctx, list[i], false, receiveAt); err != nil {
+			if err := consumeUpdateLogTail(ctx, e, list[i], false, receiveAt); err != nil {
 				return err
 			}
 		}
@@ -1470,7 +1462,7 @@ func dispatchUpdateResponse(
 	for i := 0; i < len(list); i++ {
 		table := list[i].Table
 		if table.TbId == catalog.MO_COLUMNS_ID {
-			if err := e.consumeUpdateLogTail(ctx, list[i], false, receiveAt); err != nil {
+			if err := consumeUpdateLogTail(ctx, e, list[i], false, receiveAt); err != nil {
 				return err
 			}
 		}
@@ -1485,7 +1477,7 @@ func dispatchUpdateResponse(
 		recRoutines[recIndex].sendTableLogTail(list[index], receiveAt)
 	}
 	// should update all the timestamp.
-	e.pClient.receivedLogTailTime.updateTimestamp(consumerNumber, *response.To, receiveAt)
+	e.PushClient().receivedLogTailTime.updateTimestamp(consumerNumber, *response.To, receiveAt)
 	for _, rc := range recRoutines {
 		rc.updateTimeFromT(*response.To, receiveAt)
 	}
@@ -1500,7 +1492,7 @@ func dispatchUpdateResponse(
 
 func dispatchUnSubscribeResponse(
 	_ context.Context,
-	_ *Engine,
+	_ SimpleEngine,
 	response *logtail.UnSubscribeResponse,
 	recRoutines []routineController,
 	receiveAt time.Time) error {
@@ -1573,10 +1565,10 @@ func (rc *routineController) close() {
 }
 
 func (c *PushClient) createRoutineToConsumeLogTails(
-	ctx context.Context, routineId int, signalBufferLength int, e *Engine,
+	ctx context.Context, routineId int, signalBufferLength int, e SimpleEngine,
 ) routineController {
 
-	singleRoutineToConsumeLogTail := func(ctx context.Context, engine *Engine, receiver *routineController, errRet chan error) {
+	singleRoutineToConsumeLogTail := func(ctx context.Context, engine SimpleEngine, receiver *routineController, errRet chan error) {
 		errHappen := false
 		for {
 			select {
@@ -1611,9 +1603,20 @@ func (c *PushClient) createRoutineToConsumeLogTails(
 	return controller
 }
 
+func (c *PushClient) setStatusUnlock(ready bool) {
+	c.receivedLogTailTime.ready.Store(ready)
+	if c.subscriber != nil {
+		if ready {
+			c.subscriber.setReady()
+		} else {
+			c.subscriber.setNotReady()
+		}
+	}
+}
+
 // a signal to control the routine which is responsible for consuming log tail.
 type routineControlCmd interface {
-	action(ctx context.Context, e *Engine, ctrl *routineController) error
+	action(ctx context.Context, e SimpleEngine, ctrl *routineController) error
 }
 
 type cmdToConsumeSub struct {
@@ -1633,39 +1636,40 @@ type cmdToConsumeUnSub struct {
 	receiveAt time.Time
 }
 
-func (cmd cmdToConsumeSub) action(ctx context.Context, e *Engine, ctrl *routineController) error {
+func (cmd cmdToConsumeSub) action(ctx context.Context, e SimpleEngine, ctrl *routineController) error {
 	response := cmd.log
-	if err := e.consumeSubscribeResponse(ctx, response, true, cmd.receiveAt); err != nil {
+	if err := consumeSubscribeResponse(ctx, e, response, true, cmd.receiveAt); err != nil {
 		return err
 	}
 	lt := response.GetLogtail()
 	tbl := lt.GetTable()
-	e.pClient.subscribed.setTableSubRspReceived(tbl.DbId, tbl.TbId)
+	e.PushClient().subscribed.setTableSubRspReceived(tbl.DbId, tbl.TbId)
 	return nil
 }
 
-func (cmd cmdToConsumeLog) action(ctx context.Context, e *Engine, ctrl *routineController) error {
+func (cmd cmdToConsumeLog) action(ctx context.Context, e SimpleEngine, ctrl *routineController) error {
 	response := cmd.log
-	if err := e.consumeUpdateLogTail(ctx, response, true, cmd.receiveAt); err != nil {
+	if err := consumeUpdateLogTail(ctx, e, response, true, cmd.receiveAt); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (cmd cmdToUpdateTime) action(ctx context.Context, e *Engine, ctrl *routineController) error {
-	e.pClient.receivedLogTailTime.updateTimestamp(ctrl.routineId, cmd.time, cmd.receiveAt)
+func (cmd cmdToUpdateTime) action(ctx context.Context, e SimpleEngine, ctrl *routineController) error {
+	e.PushClient().receivedLogTailTime.updateTimestamp(ctrl.routineId, cmd.time, cmd.receiveAt)
 	return nil
 }
 
-func (cmd cmdToConsumeUnSub) action(ctx context.Context, e *Engine, _ *routineController) error {
+func (cmd cmdToConsumeUnSub) action(ctx context.Context, e SimpleEngine, ctrl *routineController) error {
 	table := cmd.log.Table
 	//e.cleanMemoryTableWithTable(table.DbId, table.TbId)
-	e.pClient.subscribed.setTableUnsubscribe(table.DbId, table.TbId)
+	e.PushClient().subscribed.setTableUnsubscribe(table.DbId, table.TbId)
 	return nil
 }
 
-func (e *Engine) consumeSubscribeResponse(
+func consumeSubscribeResponse(
 	ctx context.Context,
+	e SimpleEngine,
 	rp *logtail.SubscribeResponse,
 	lazyLoad bool,
 	receiveAt time.Time) error {
@@ -1673,8 +1677,9 @@ func (e *Engine) consumeSubscribeResponse(
 	return updatePartitionOfPush(ctx, e, &lt, lazyLoad, receiveAt)
 }
 
-func (e *Engine) consumeUpdateLogTail(
+func consumeUpdateLogTail(
 	ctx context.Context,
+	e SimpleEngine,
 	rp logtail.TableLogtail,
 	lazyLoad bool,
 	receiveAt time.Time) error {

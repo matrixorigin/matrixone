@@ -16,7 +16,10 @@ package disttae
 
 import (
 	"context"
+
 	"github.com/fagongzi/goetty/v2/buf"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -30,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 func newTxnTableWithItem(
@@ -621,4 +623,16 @@ func (tbl *txnTableDelegate) forwardRead(
 	}
 
 	return nil
+}
+
+func (tbl *txnTableDelegate) GetOldTableID() uint64 {
+	return tbl.origin.oldTableId
+}
+
+func (tbl *txnTableDelegate) GetDBName() string {
+	return tbl.origin.GetDBName()
+}
+
+func (tbl *txnTableDelegate) GetPrimarySeqNum() int {
+	return tbl.origin.GetPrimarySeqNum()
 }

@@ -658,6 +658,10 @@ type Relation interface {
 
 	ApproxObjectsNum(ctx context.Context) int
 	MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, policyName string, targetObjSize uint32) (*api.MergeCommitEntry, error)
+
+	GetOldTableID() uint64
+	GetDBName() string
+	GetPrimarySeqNum() int
 }
 
 type Reader interface {

@@ -761,8 +761,7 @@ func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Times
 }
 
 func (e *Engine) getTNServices() []DNStore {
-	cluster := clusterservice.GetMOCluster(e.service)
-	return cluster.GetAllTNServices()
+	return getTNServices(e.service)
 }
 
 func (e *Engine) setPushClientStatus(ready bool) {
@@ -775,14 +774,7 @@ func (e *Engine) setPushClientStatus(ready bool) {
 		e.cli.Pause()
 	}
 
-	e.pClient.receivedLogTailTime.ready.Store(ready)
-	if e.pClient.subscriber != nil {
-		if ready {
-			e.pClient.subscriber.setReady()
-		} else {
-			e.pClient.subscriber.setNotReady()
-		}
-	}
+	e.pClient.setStatusUnlock(ready)
 }
 
 func (e *Engine) abortAllRunningTxn() {
@@ -792,17 +784,7 @@ func (e *Engine) abortAllRunningTxn() {
 }
 
 func (e *Engine) cleanMemoryTableWithTable(dbId, tblId uint64) {
-	e.Lock()
-	defer e.Unlock()
-	// XXX it's probably not a good way to do that.
-	// after we set it to empty, actually this part of memory was not immediately released.
-	// maybe a very old transaction still using that.
-	delete(e.partitions, [2]uint64{dbId, tblId})
-
-	//  When removing the PartitionState, you need to remove the tid in globalStats,
-	// When re-subscribing, globalStats will wait for the PartitionState to be consumed before updating the object state.
-	e.globalStats.RemoveTid(tblId)
-	logutil.Debugf("clean memory table of tbl[dbId: %d, tblId: %d]", dbId, tblId)
+	cleanMemoryTableWithTableLock(&e.RWMutex, e.partitions, e.globalStats, dbId, tblId)
 }
 
 func (e *Engine) PushClient() *PushClient {
@@ -845,4 +827,8 @@ func (e *Engine) GetMPool() *mpool.MPool {
 
 func (e *Engine) GetFS() fileservice.FileService {
 	return e.fs
+}
+
+func (e *Engine) CopyPartitions() map[[2]uint64]*logtailreplay.Partition {
+	return copyPartitionsLock(&e.RWMutex, e.partitions)
 }
