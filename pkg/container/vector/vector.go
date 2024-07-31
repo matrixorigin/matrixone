@@ -672,7 +672,7 @@ func (v *Vector) ToConst(row, length int, mp *mpool.MPool) *Vector {
 // PreExtend use to expand the capacity of the vector
 func (v *Vector) PreExtend(rows int, mp *mpool.MPool) error {
 	if v.class == CONSTANT {
-		return nil
+		panic(moerr.NewInternalErrorNoCtx("cannot extend a const vector"))
 	}
 
 	return extend(v, rows, mp)
@@ -682,10 +682,6 @@ func (v *Vector) PreExtend(rows int, mp *mpool.MPool) error {
 // extraAreaSize: the size of area to be extended
 // mp: mpool
 func (v *Vector) PreExtendWithArea(rows int, extraAreaSize int, mp *mpool.MPool) error {
-	if v.class == CONSTANT {
-		return nil
-	}
-
 	// pre-extend vector, the fixed len part
 	if err := v.PreExtend(rows, mp); err != nil {
 		return err
