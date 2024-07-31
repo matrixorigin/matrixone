@@ -224,7 +224,6 @@ type AppendNode interface {
 	TxnEntry
 	GetStartRow() uint32
 	GetMaxRow() uint32
-	GetBlockOffset() uint16
 }
 
 type DeleteNode interface {
@@ -307,7 +306,7 @@ type TxnStore interface {
 	ObserveTxn(
 		visitDatabase func(db any),
 		visitTable func(tbl any),
-		rotateTable func(dbName, tblName string, dbid, tid uint64),
+		rotateTable func(aid uint32, dbName, tblName string, dbid, tid uint64, pkSeqnum uint16),
 		visitMetadata func(block any),
 		visitObject func(obj any),
 		visitAppend func(bat any),

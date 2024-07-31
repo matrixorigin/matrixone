@@ -344,33 +344,6 @@ func NewStandaloneObject(table *TableEntry, ts types.TS) *ObjectEntry {
 	return e
 }
 
-func NewSysObjectEntry(table *TableEntry, id types.Uuid) *ObjectEntry {
-	e := &ObjectEntry{
-		table: table,
-		ObjectNode: ObjectNode{
-			state: ES_Appendable,
-		},
-		EntryMVCCNode: EntryMVCCNode{
-			CreatedAt: types.SystemDBTS,
-		},
-		CreateNode:  *txnbase.NewTxnMVCCNodeWithTS(types.SystemDBTS),
-		ObjectState: ObjectState_Create_ApplyCommit,
-	}
-	var bid types.Blockid
-	schema := table.GetLastestSchemaLocked()
-	if schema.Name == SystemTableSchema.Name {
-		bid = SystemBlock_Table_ID
-	} else if schema.Name == SystemDBSchema.Name {
-		bid = SystemBlock_DB_ID
-	} else if schema.Name == SystemColumnSchema.Name {
-		bid = SystemBlock_Columns_ID
-	} else {
-		panic("not supported")
-	}
-	objectio.SetObjectStatsObjectName(&e.ObjectStats, objectio.BuildObjectNameWithObjectID(bid.Object()))
-	return e
-}
-
 func (entry *ObjectEntry) GetLocation() objectio.Location {
 	location := entry.ObjectStats.ObjectLocation()
 	return location
@@ -449,33 +422,10 @@ func (entry *ObjectEntry) IsVisible(txn txnif.TxnReader) bool {
 	return entry.CreateNode.IsVisible(txn)
 }
 func (entry *ObjectEntry) BlockCnt() int {
-	if entry.IsLocal {
+	if entry.IsAppendable() {
 		return 1
 	}
-	lastNode := entry.GetLatestNode()
-	if lastNode == nil {
-		logutil.Warnf("obj %v not found", entry.StringWithLevel(3))
-		if !entry.ObjectMVCCNode.IsEmpty() {
-			return int(entry.BlkCnt())
-		}
-		return 0
-	}
-	if lastNode.objData == nil {
-		if lastNode.GetTable().db.isSys {
-			return 1
-		} else {
-			panic(fmt.Sprintf("logic err obj %v-%d %v doesn't have data",
-				lastNode.GetTable().fullName, lastNode.GetTable().ID, lastNode.ID().String()))
-		}
-	}
-	if lastNode.ObjectMVCCNode.IsEmpty() {
-		if !lastNode.IsAppendable() {
-			logutil.Warnf("[Metadata] get block count when naobj is creating")
-			return 0
-		}
-		return lastNode.objData.BlockCnt()
-	}
-	return int(lastNode.getBlockCntFromStats())
+	return int(entry.getBlockCntFromStats())
 }
 
 func (entry *ObjectEntry) getBlockCntFromStats() (blkCnt uint32) {
@@ -533,9 +483,9 @@ func (entry *ObjectEntry) PrepareRollback() (err error) {
 		panic("logic error")
 	}
 	switch lastNode.ObjectState {
-	case ObjectState_Create_Active, ObjectState_Create_PrepareCommit:
+	case ObjectState_Create_Active:
 		entry.table.link.Delete(lastNode)
-	case ObjectState_Delete_Active, ObjectState_Delete_PrepareCommit:
+	case ObjectState_Delete_Active:
 		newEntry := entry.Clone()
 		newEntry.DeleteNode.Reset()
 		entry.table.link.Update(newEntry, entry)

@@ -287,6 +287,9 @@ func (proc *Process) PutVector(vec *vector.Vector) {
 //
 // If the get operation fails, it allocates a new vector to return.
 func (proc *Process) GetVector(typ types.Type) *vector.Vector {
+	if typ.Oid == types.T_any {
+		return vector.NewVec(typ)
+	}
 	if vec := proc.Base.vp.getVectorFromPool(typ); vec != nil {
 		vec.Reset(typ)
 		return vec

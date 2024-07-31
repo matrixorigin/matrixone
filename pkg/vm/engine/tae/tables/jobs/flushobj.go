@@ -33,7 +33,7 @@ import (
 
 type flushObjTask struct {
 	*tasks.BaseTask
-	data      []*containers.Batch
+	data      *containers.Batch
 	delta     *containers.Batch
 	meta      *catalog.ObjectEntry
 	fs        *objectio.ObjectFS
@@ -56,7 +56,7 @@ func NewFlushObjTask(
 	seqnums []uint16,
 	fs *objectio.ObjectFS,
 	meta *catalog.ObjectEntry,
-	data []*containers.Batch,
+	data *containers.Batch,
 	delta *containers.Batch,
 	isAObj bool,
 	parentTask string,
@@ -99,21 +99,17 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 		writer.SetSortKey(uint16(task.meta.GetSchema().GetSingleSortKeyIdx()))
 	}
 
+	cnBatch := containers.ToCNBatch(task.data)
+	for _, vec := range cnBatch.Vecs {
+		if vec == nil {
+			// this task has been canceled
+			return nil
+		}
+	}
 	inst := time.Now()
-	length := 0
-	for _, data := range task.data {
-		cnBatch := containers.ToCNBatch(data)
-		for _, vec := range cnBatch.Vecs {
-			if vec == nil {
-				// this task has been canceled
-				return nil
-			}
-		}
-		_, err = writer.WriteBatch(cnBatch)
-		if err != nil {
-			return err
-		}
-		length += data.Length()
+	_, err = writer.WriteBatch(cnBatch)
+	if err != nil {
+		return err
 	}
 	if task.delta != nil {
 		cnBatch := containers.ToCNBatch(task.delta)
@@ -136,7 +132,7 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 	}
 	ioT := time.Since(inst)
 	if time.Since(task.createAt) > SlowFlushIOTask {
-		irow, drow := length, 0
+		irow, drow := task.data.Length(), 0
 		if task.delta != nil {
 			drow = task.delta.Length()
 		}

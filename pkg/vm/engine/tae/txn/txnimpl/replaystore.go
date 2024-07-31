@@ -172,7 +172,7 @@ func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, observer wal.Repla
 		bat := data.CloneWindow(int(start), int(info.GetSrcLen()))
 		bat.Compact()
 		defer bat.Close()
-		if err = blk.GetObjectData().OnReplayAppendPayload(bat, id.GetBlockOffset()); err != nil {
+		if err = blk.GetObjectData().OnReplayAppendPayload(bat); err != nil {
 			panic(err)
 		}
 	}

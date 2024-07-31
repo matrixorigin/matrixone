@@ -232,6 +232,11 @@ func (o *OperatorBase) SetIsLast(isLast bool) {
 	o.IsLast = isLast
 }
 
+func (o *OperatorBase) SetAnalyzeControl(nodeIdx int, isFirst bool) {
+	o.Idx = nodeIdx
+	o.IsFirst = isFirst
+}
+
 var CancelResult = CallResult{
 	Status: ExecStop,
 }
@@ -298,30 +303,6 @@ func (info OperatorInfo) GetAddress() process.MessageAddress {
 		OperatorID: info.OperatorID,
 		ParallelID: info.ParallelID,
 	}
-}
-
-func IsBrokenNode(op Operator) bool {
-	switch op.OpType() {
-	case Order, MergeOrder, Partition:
-		return true
-	case Limit, MergeLimit:
-		return true
-	case Offset, MergeOffset:
-		return true
-	case Group, MergeGroup:
-		return true
-	case Sample:
-		return true
-	case Top, MergeTop:
-		return true
-	case Window:
-		return true
-	case TimeWin, Fill:
-		return true
-	case MergeRecursive:
-		return true
-	}
-	return false
 }
 
 func CannotRemote(op Operator) bool {
