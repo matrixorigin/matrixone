@@ -93,9 +93,9 @@ type dirtyBlocksIter struct {
 }
 
 func (p *PartitionState) NewDirtyBlocksIter() BlocksIter {
-	iter := p.dirtyBlocks.Copy().Iter()
+	//iter := p.dirtyBlocks.Copy().Iter()
 	ret := &dirtyBlocksIter{
-		iter: iter,
+		iter: btree.IterG[types.Blockid]{},
 	}
 	return ret
 }

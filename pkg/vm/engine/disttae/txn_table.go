@@ -25,8 +25,6 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-
 	"github.com/docker/go-units"
 	"go.uber.org/zap"
 
@@ -926,12 +924,12 @@ func (tbl *txnTable) rangesOnePart(
 				blk.Sorted = obj.Sorted
 				blk.EntryState = obj.EntryState
 				blk.CommitTs = obj.CommitTS
-				if obj.HasDeltaLoc {
-					_, commitTs, ok := state.GetBockDeltaLoc(blk.BlockID)
-					if ok {
-						blk.CommitTs = commitTs
-					}
-				}
+				//if obj.HasDeltaLoc {
+				//	_, commitTs, ok := state.GetBockDeltaLoc(blk.BlockID)
+				//	if ok {
+				//		blk.CommitTs = commitTs
+				//	}
+				//}
 
 				outBlocks.AppendBlockInfo(blk)
 
@@ -1809,13 +1807,14 @@ func BuildLocalDataSource(
 		tbl = rel.(*txnTableDelegate).origin
 	}
 
-	return tbl.buildLocalDataSource(ctx, txnOffset, ranges)
+	return tbl.buildLocalDataSource(ctx, txnOffset, ranges, CheckAll)
 }
 
 func (tbl *txnTable) buildLocalDataSource(
 	ctx context.Context,
 	txnOffset int,
 	relData engine.RelData,
+	policy SkipCheckPolicy,
 ) (source engine.DataSource, err error) {
 
 	switch relData.GetType() {
@@ -1833,6 +1832,7 @@ func (tbl *txnTable) buildLocalDataSource(
 			txnOffset,
 			ranges,
 			skipReadMem,
+			policy,
 		)
 
 	default:
@@ -1891,7 +1891,7 @@ func (tbl *txnTable) BuildReaders(
 		} else {
 			shard = relData.DataSlice(i*divide+mod, (i+1)*divide+mod)
 		}
-		ds, err := tbl.buildLocalDataSource(ctx, txnOffset, shard)
+		ds, err := tbl.buildLocalDataSource(ctx, txnOffset, shard, CheckAll)
 		if err != nil {
 			return nil, err
 		}
@@ -1977,12 +1977,11 @@ func (tbl *txnTable) PKPersistedBetween(
 		bf   objectio.BloomFilter
 	)
 
-	candidateBlks := make(map[types.Blockid]*objectio.BlockInfo)
+	candidateBlks := make(map[types.Blockid]*objectio.BlockInfoInProgress)
 
 	//only check data objects.
 	delObjs, cObjs := p.GetChangedObjsBetween(from.Next(), types.MaxTs())
 	isFakePK := tbl.GetTableDef(ctx).Pkey.PkeyColName == catalog.FakePrimaryKeyColName
-
 	if err := ForeachCommittedObjects(cObjs, delObjs, p,
 		func(obj logtailreplay.ObjectInfo) (err2 error) {
 			var zmCkecked bool
@@ -2027,8 +2026,8 @@ func (tbl *txnTable) PKPersistedBetween(
 				}
 			}
 
-			ForeachBlkInObjStatsList(false, meta,
-				func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
+			ForeachBlkInObjStatsListInProgress(false, meta,
+				func(blk objectio.BlockInfoInProgress, blkMeta objectio.BlockObject) bool {
 					if !blkMeta.IsEmpty() &&
 						!blkMeta.MustGetColumn(uint16(primaryIdx)).ZoneMap().AnyIn(keys) {
 						return true
@@ -2051,9 +2050,8 @@ func (tbl *txnTable) PKPersistedBetween(
 					blk.EntryState = obj.EntryState
 					blk.CommitTs = obj.CommitTS
 					if obj.HasDeltaLoc {
-						deltaLoc, commitTs, ok := p.GetBockDeltaLoc(blk.BlockID)
+						_, commitTs, ok := p.GetBockDeltaLoc(blk.BlockID)
 						if ok {
-							blk.DeltaLoc = deltaLoc
 							blk.CommitTs = commitTs
 						}
 					}
@@ -2185,9 +2183,13 @@ func (tbl *txnTable) transferDeletes(
 	createObjs map[objectio.ObjectNameShort]struct{},
 ) error {
 	var blks []objectio.BlockInfoInProgress
-	deltaMap := make(map[objectio.Blockid]objectio.Location)
 	sid := tbl.proc.Load().GetService()
-	var ds *logtail.DeltaLocDataSource
+	relData := buildBlockListRelationData()
+	relData.AppendBlockInfo(objectio.EmptyBlockInfoInProgress)
+	ds, err := tbl.buildLocalDataSource(ctx, 0, relData, SkipCheckPolicy(CheckCommittedS3Only))
+	if err != nil {
+		return err
+	}
 	{
 		fs, err := fileservice.Get[fileservice.FileService](
 			tbl.proc.Load().GetFileService(),
@@ -2226,9 +2228,8 @@ func (tbl *txnTable) transferDeletes(
 						CommitTs:   obj.CommitTS,
 					}
 					if obj.HasDeltaLoc {
-						deltaLoc, commitTs, ok := state.GetBockDeltaLoc(blkInfo.BlockID)
+						_, commitTs, ok := state.GetBockDeltaLoc(blkInfo.BlockID)
 						if ok {
-							deltaMap[blkInfo.BlockID] = deltaLoc[:]
 							blkInfo.CommitTs = commitTs
 						}
 					}
@@ -2236,9 +2237,6 @@ func (tbl *txnTable) transferDeletes(
 				}
 			}
 		}
-		ds = logtail.NewDeltaLocDataSource(
-			ctx, fs, types.TimestampToTS(tbl.db.op.SnapshotTS()),
-			logtail.NewBMapDeltaSource(deltaMap))
 
 	}
 
@@ -2284,7 +2282,7 @@ func (tbl *txnTable) transferDeletes(
 }
 
 func (tbl *txnTable) readNewRowid(
-	vec *vector.Vector, row int, blks []objectio.BlockInfoInProgress, ds *logtail.DeltaLocDataSource,
+	vec *vector.Vector, row int, blks []objectio.BlockInfoInProgress, ds engine.DataSource,
 ) (types.Rowid, bool, error) {
 	var auxIdCnt int32
 	var typ plan.Type
