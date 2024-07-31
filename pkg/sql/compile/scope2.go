@@ -25,9 +25,9 @@ import (
 // 2. if there's a data transfer between two pipelines, the lifecycle of the sender's context ends with the receiver's termination.
 func (c *Compile) InitPipelineContextToExecuteQuery() {
 	contextBase := c.proc.Base.GetContextBase()
-	queryContext := contextBase.BuildQueryCtx()
-	queryContext = contextBase.SaveToQueryContext(defines.EngineKey{}, c.e)
-	queryContext = contextBase.WithCounterSetToQueryContext(c.counterSet)
+	contextBase.BuildQueryCtx()
+	contextBase.SaveToQueryContext(defines.EngineKey{}, c.e)
+	queryContext := contextBase.WithCounterSetToQueryContext(c.counterSet)
 
 	// build pipeline context.
 	currentContext := c.proc.BuildPipelineContext(queryContext)
@@ -48,19 +48,4 @@ func (s *Scope) buildContextFromParentCtx(parentCtx context.Context) {
 	for _, prePipeline := range s.PreScopes {
 		prePipeline.buildContextFromParentCtx(receiverCtx)
 	}
-}
-
-func (s *Scope) checkCtxValid() bool {
-	if s.Proc == nil {
-		return true
-	}
-	if s.Proc.Ctx == nil || s.Proc.Cancel == nil {
-		return false
-	}
-	for _, prePipeline := range s.PreScopes {
-		if !prePipeline.checkCtxValid() {
-			return false
-		}
-	}
-	return true
 }

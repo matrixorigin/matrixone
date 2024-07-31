@@ -113,12 +113,14 @@ func (s *Scope) Reset(c *Compile) error {
 }
 
 func (s *Scope) resetForReuse(c *Compile) (err error) {
-	vm.HandleAllOp(s.RootOp, func(parentOp vm.Operator, op vm.Operator) error {
+	if err = vm.HandleAllOp(s.RootOp, func(parentOp vm.Operator, op vm.Operator) error {
 		if op.OpType() == vm.Output {
 			op.(*output.Output).Func = c.fill
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
 
 	if s.DataSource != nil {
 		if s.DataSource.isConst {
@@ -573,7 +575,6 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		ReleaseScopes(readerScopes)
 		return nil, err
 	}
-	//mergeFromParallelScanScope.buildContextFromParentCtx(s.Proc.Ctx)
 	return mergeFromParallelScanScope, nil
 }
 
@@ -707,13 +708,13 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 	var flg bool
 	var toReleaseOpRoot vm.Operator
 	defer func() {
-		vm.HandleAllOp(toReleaseOpRoot, func(parentOp, op vm.Operator) error {
+		_ = vm.HandleAllOp(toReleaseOpRoot, func(parentOp, op vm.Operator) error {
 			op.Release()
 			return nil
 		})
 	}()
 
-	vm.HandleAllOp(s.RootOp, func(parentOp vm.Operator, op vm.Operator) error {
+	if err := vm.HandleAllOp(s.RootOp, func(parentOp vm.Operator, op vm.Operator) error {
 		if flg {
 			return nil
 		}
@@ -932,7 +933,9 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 			}
 		}
 		return nil
-	})
+	}); err != nil {
+		return nil, err
+	}
 
 	if !flg {
 		newArg := merge.NewArgument()
@@ -953,10 +956,12 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 		}
 		otherOp := s.RootOp.GetOperatorBase().GetChildren(0)
 		s.RootOp.GetOperatorBase().SetChild(newArg, 0)
-		vm.HandleAllOp(otherOp, func(parentOp vm.Operator, op vm.Operator) error {
+		if err := vm.HandleAllOp(otherOp, func(parentOp vm.Operator, op vm.Operator) error {
 			op.Release()
 			return nil
-		})
+		}); err != nil {
+			return nil, err
+		}
 	}
 	s.Magic = Merge
 	s.PreScopes = ss
