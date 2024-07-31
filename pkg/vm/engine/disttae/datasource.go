@@ -710,8 +710,8 @@ func (rs *RemoteDataSource) SetFilterZM(zm objectio.ZoneMap) {
 // local data source
 
 type LocalDataSource struct {
-	ranges []*objectio.BlockInfoInProgress
-	pState *logtailreplay.PartitionState
+	rangeSlice objectio.BlockInfoSliceInProgress
+	pState     *logtailreplay.PartitionState
 
 	memPKFilter *MemPKFilter
 	pStateRows  struct {
@@ -784,10 +784,7 @@ func NewLocalDataSource(
 			rangesSlice = rangesSlice.Slice(1, rangesSlice.Len())
 		}
 
-		rangeLen := rangesSlice.Len()
-		for i := 0; i < rangeLen; i++ {
-			source.ranges = append(source.ranges, rangesSlice.Get(i))
-		}
+		source.rangeSlice = rangesSlice
 	}
 
 	state, err := table.getPartitionState(ctx)
@@ -849,11 +846,12 @@ func (ls *LocalDataSource) getBlockZMs() {
 	def := ls.table.tableDef
 	orderByColIDX := int(def.Cols[int(orderByCol.Col.ColPos)].Seqnum)
 
-	ls.blockZMS = make([]index.ZM, len(ls.ranges))
+	sliceLen := ls.rangeSlice.Len()
+	ls.blockZMS = make([]index.ZM, sliceLen)
 	var objDataMeta objectio.ObjectDataMeta
 	var location objectio.Location
-	for i := range ls.ranges {
-		location = ls.ranges[i].MetaLocation()
+	for i := ls.rangesCursor; i < sliceLen; i++ {
+		location = ls.rangeSlice.Get(i).MetaLocation()
 		if !objectio.IsSameObjectLocVsMeta(location, objDataMeta) {
 			objMeta, err := objectio.FastLoadObjectMeta(ls.ctx, &location, false, ls.fs)
 			if err != nil {
@@ -867,12 +865,15 @@ func (ls *LocalDataSource) getBlockZMs() {
 }
 
 func (ls *LocalDataSource) sortBlockList() {
-	helper := make([]*blockSortHelperInProgress, len(ls.ranges))
-	for i := range ls.ranges {
+	sliceLen := ls.rangeSlice.Len()
+	helper := make([]*blockSortHelperInProgress, sliceLen)
+	for i := range sliceLen {
 		helper[i] = &blockSortHelperInProgress{}
-		helper[i].blk = ls.ranges[i]
+		helper[i].blk = ls.rangeSlice.Get(i)
 		helper[i].zm = ls.blockZMS[i]
 	}
+	ls.rangeSlice = make(objectio.BlockInfoSliceInProgress, ls.rangeSlice.Size())
+
 	if ls.desc {
 		sort.Slice(helper, func(i, j int) bool {
 			zm1 := helper[i].zm
@@ -900,20 +901,26 @@ func (ls *LocalDataSource) sortBlockList() {
 	}
 
 	for i := range helper {
-		ls.ranges[i] = helper[i].blk
+		ls.rangeSlice.Set(i, helper[i].blk)
+		//ls.ranges[i] = helper[i].blk
 		ls.blockZMS[i] = helper[i].zm
 	}
 }
 
 func (ls *LocalDataSource) deleteFirstNBlocks(n int) {
-	ls.ranges = ls.ranges[n:]
-	if len(ls.OrderBy) > 0 {
-		ls.blockZMS = ls.blockZMS[n:]
-	}
+	ls.rangesCursor += n
+	//ls.rangeSlice = ls.rangeSlice.Slice(n, ls.rangeSlice.Len())
+	//ls.ranges = ls.ranges[n:]
+	//if len(ls.OrderBy) > 0 {
+	//	ls.blockZMS = ls.blockZMS[n:]
+	//}
 }
 
 func (ls *LocalDataSource) Close() {
-	ls.pStateRows.insIter.Close()
+	if ls.pStateRows.insIter != nil {
+		ls.pStateRows.insIter.Close()
+		ls.pStateRows.insIter = nil
+	}
 }
 
 func (ls *LocalDataSource) Next(
@@ -955,18 +962,18 @@ func (ls *LocalDataSource) Next(
 			return nil, engine.InMem, nil
 
 		case engine.Persisted:
-			if len(ls.ranges) == 0 {
+			if ls.rangesCursor >= ls.rangeSlice.Len() {
 				return nil, engine.End, nil
 			}
 
 			ls.handleOrderBy()
 
-			if len(ls.ranges) == 0 {
+			if ls.rangesCursor >= ls.rangeSlice.Len() {
 				return nil, engine.End, nil
 			}
 
-			blk := ls.ranges[0]
-			ls.deleteFirstNBlocks(1)
+			blk := ls.rangeSlice.Get(ls.rangesCursor)
+			ls.rangesCursor++
 
 			return blk, engine.Persisted, nil
 
@@ -985,20 +992,21 @@ func (ls *LocalDataSource) handleOrderBy() {
 			ls.sortBlockList()
 			ls.sorted = true
 		}
-		i := 0
-		for i < len(ls.ranges) {
+		i := ls.rangesCursor
+		sliceLen := ls.rangeSlice.Len()
+		for i < sliceLen {
 			if ls.needReadBlkByZM(i) {
 				break
 			}
 			i++
 		}
-		ls.deleteFirstNBlocks(i)
+		ls.rangesCursor = i
 
 		if ls.table.tableName == "statement_info" {
 			logutil.Infof("xxxx txn:%s, handle order by,delete blks:%d, rest blks:%d",
 				ls.table.db.op.Txn().DebugString(),
 				i,
-				len(ls.ranges))
+				ls.rangeSlice.Len()-ls.rangesCursor)
 		}
 	}
 }
@@ -1554,27 +1562,31 @@ func (ls *LocalDataSource) applyPStatePersistedDeltaLocation(
 }
 
 func (ls *LocalDataSource) batchPrefetch(seqNums []uint16) {
-	if ls.rc.batchPrefetchCursor >= len(ls.ranges) ||
+	if ls.rc.batchPrefetchCursor >= ls.rangeSlice.Len() ||
 		ls.rangesCursor < ls.rc.batchPrefetchCursor {
 		return
 	}
 
-	batchSize := min(1000, len(ls.ranges)-ls.rc.batchPrefetchCursor)
+	batchSize := min(1000, ls.rangeSlice.Len()-ls.rangesCursor)
 
-	begin := ls.rc.batchPrefetchCursor
-	end := ls.rc.batchPrefetchCursor + batchSize
+	begin := ls.rangesCursor
+	end := ls.rangesCursor + batchSize
+
+	blks := make([]*objectio.BlockInfoInProgress, end-begin)
+	for idx := begin; idx < end; idx++ {
+		blks[idx-begin] = ls.rangeSlice.Get(idx)
+	}
 
 	// prefetch blk data
-	err := blockio.BlockPrefetchInProgress(
-		ls.table.proc.Load().GetService(), seqNums, ls.fs,
-		[][]*objectio.BlockInfoInProgress{ls.ranges[begin:end]}, true)
+	err := blockio.BlockPrefetch(
+		ls.table.proc.Load().GetService(), seqNums, ls.fs, blks, true)
 	if err != nil {
 		logutil.Errorf("pefetch block data: %s", err.Error())
 	}
 
 	// prefetch blk delta location
 	for idx := begin; idx < end; idx++ {
-		if loc, _, ok := ls.pState.GetBockDeltaLoc(ls.ranges[idx].BlockID); ok {
+		if loc, _, ok := ls.pState.GetBockDeltaLoc(ls.rangeSlice.Get(idx).BlockID); ok {
 			if err = blockio.PrefetchTombstone(
 				ls.table.proc.Load().GetService(), []uint16{0, 1, 2},
 				[]uint16{objectio.Location(loc[:]).ID()}, ls.fs, objectio.Location(loc[:])); err != nil {
@@ -1594,7 +1606,7 @@ func (ls *LocalDataSource) batchPrefetch(seqNums []uint16) {
 	pkColIdx := ls.table.tableDef.Pkey.PkeyColId
 
 	for idx := begin; idx < end; idx++ {
-		if bats, ok = ls.table.getTxn().blockId_tn_delete_metaLoc_batch.data[ls.ranges[idx].BlockID]; !ok {
+		if bats, ok = ls.table.getTxn().blockId_tn_delete_metaLoc_batch.data[ls.rangeSlice.Get(idx).BlockID]; !ok {
 			continue
 		}
 
@@ -1629,5 +1641,5 @@ func (ls *LocalDataSource) batchPrefetch(seqNums []uint16) {
 		}
 	}
 
-	ls.rc.batchPrefetchCursor += batchSize
+	ls.rc.batchPrefetchCursor = end
 }
