@@ -255,7 +255,7 @@ func (c *compilerContext) GetContext() context.Context {
 }
 
 func (c *compilerContext) SetContext(ctx context.Context) {
-	c.proc.Base.GetContextBase().ReplaceTopCtx(ctx)
+	c.proc.ReplaceTopCtx(ctx)
 }
 
 func (c *compilerContext) ResolveById(tableId uint64, snapshot plan.Snapshot) (objRef *plan.ObjectRef, tableDef *plan.TableDef) {

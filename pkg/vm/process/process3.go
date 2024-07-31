@@ -137,14 +137,19 @@ func (proc *Process) BuildPipelineContext(parentContext context.Context) context
 	return proc.Ctx
 }
 
-func (proc *Process) GetLatestContext() context.Context {
-	if proc.Ctx != nil {
-		return proc.Ctx
-	}
-	return proc.Base.sqlContext.getLatestContext()
+func (proc *Process) GetTopContext() context.Context {
+	return proc.Base.sqlContext.outerContext
 }
 
-func (proc *Process) GetTopContext() context.Context {
+// ReplaceTopCtx sets the new top context.
+func (proc *Process) ReplaceTopCtx(topCtx context.Context) {
+	proc.Base.sqlContext.outerContext = topCtx
+}
+
+// SaveToTopContext for easy access to change the top context.
+// it's same to a combined operator list like `GetTopContext() + ReplaceTopCtx() + GetTopContext()`.
+func (proc *Process) SaveToTopContext(key, value any) context.Context {
+	proc.Base.sqlContext.outerContext = context.WithValue(proc.Base.sqlContext.outerContext, key, value)
 	return proc.Base.sqlContext.outerContext
 }
 
@@ -200,35 +205,19 @@ func (proc *Process) Free() {
 type QueryBaseContext struct {
 	// outerContext represents the top context for a query that originates from the session client directly.
 	// It encompasses a wealth of information, including accountID, userID and more.
-	// Additionally, we use this context to reconstruct the query context once query needs rerun due to specific errors.
+	// Additionally, we use this context to reconstruct the query context once query needs to run or rerun.
 	outerContext context.Context
 
 	// queryContext is the parent context for all pipeline contexts, with the queryCancel serving as its cancellation method.
 	// we can terminate the whole query by calling this cancel function.
 	//
-	// This context was generated at the beginning of each query preparation to create a pipeline from the plan tree.
-	// In the case of a prepared SQL statement, the generation of this context and cancellation method precedes the execution of the pipeline.
+	// Once query was began to run, the query context and query cancel will be refreshed by calling BuildQueryCtx() method.
 	queryContext context.Context
 	queryCancel  context.CancelFunc
 }
 
 func (bp *BaseProcess) GetContextBase() *QueryBaseContext {
 	return &bp.sqlContext
-}
-
-func (qbCtx *QueryBaseContext) GetTopCtx() context.Context {
-	return qbCtx.outerContext
-}
-
-// ReplaceTopCtx sets the new top context.
-func (qbCtx *QueryBaseContext) ReplaceTopCtx(topCtx context.Context) {
-	qbCtx.outerContext = topCtx
-}
-
-// SaveToTopContext for easy access to change the top context.
-func (qbCtx *QueryBaseContext) SaveToTopContext(key, value any) context.Context {
-	qbCtx.outerContext = context.WithValue(qbCtx.outerContext, key, value)
-	return qbCtx.outerContext
 }
 
 // BuildQueryCtx refreshes the query context and cancellation method after the outer context was ready to run the query.
@@ -249,11 +238,4 @@ func (qbCtx *QueryBaseContext) SaveToQueryContext(key, value any) context.Contex
 func (qbCtx *QueryBaseContext) WithCounterSetToQueryContext(sets ...*perfcounter.CounterSet) context.Context {
 	qbCtx.queryContext = perfcounter.WithCounterSet(qbCtx.queryContext, sets...)
 	return qbCtx.queryContext
-}
-
-func (qbCtx *QueryBaseContext) getLatestContext() context.Context {
-	if qbCtx.queryContext != nil {
-		return qbCtx.queryContext
-	}
-	return qbCtx.outerContext
 }

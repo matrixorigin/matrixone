@@ -2677,7 +2677,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	ses.tStmt = nil
 
 	proc := ses.proc
-	proc.Base.GetContextBase().ReplaceTopCtx(execCtx.reqCtx)
+	proc.ReplaceTopCtx(execCtx.reqCtx)
 
 	proc.CopyVectorPool(ses.proc)
 	proc.CopyValueScanBatch(ses.proc)

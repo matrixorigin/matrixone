@@ -99,13 +99,12 @@ func (c *Compile) Compile(
 	c.pn = queryPlan
 
 	// replace the original top context with the input one to avoid any value modification.
-	queryContextManager := c.proc.Base.GetContextBase()
-	queryContextManager.ReplaceTopCtx(execTopContext)
+	c.proc.ReplaceTopCtx(execTopContext)
 
 	// with values.
-	topContext := queryContextManager.SaveToTopContext(defines.EngineKey{}, c.e)
+	topContext := c.proc.SaveToTopContext(defines.EngineKey{}, c.e)
 	topContext = perfcounter.WithCounterSet(topContext, c.counterSet)
-	queryContextManager.ReplaceTopCtx(topContext)
+	c.proc.ReplaceTopCtx(topContext)
 
 	// from plan to scope.
 	if c.scope, err = c.compileScope(queryPlan); err != nil {
@@ -160,9 +159,8 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	}()
 
 	// update the top context with some trace information and values.
-	queryContextManager := c.proc.Base.GetContextBase()
-	execTopContext, span := trace.Start(queryContextManager.GetTopCtx(), "Compile.Run", trace.WithKind(trace.SpanKindStatement))
-	queryContextManager.ReplaceTopCtx(execTopContext)
+	execTopContext, span := trace.Start(c.proc.GetTopContext(), "Compile.Run", trace.WithKind(trace.SpanKindStatement))
+	c.proc.ReplaceTopCtx(execTopContext)
 
 	// statistical information record and trace.
 	runStart := time.Now()

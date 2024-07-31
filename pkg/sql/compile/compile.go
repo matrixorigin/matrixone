@@ -278,9 +278,8 @@ func (c *Compile) SetTempEngine(tempEngine engine.Engine, tempStorage *memorysto
 	e := c.e.(*engine.EntireEngine)
 	e.TempEngine = tempEngine
 
-	contextBase := c.proc.Base.GetContextBase()
-	if topContext := contextBase.GetTopCtx(); topContext.Value(defines.TemporaryTN{}) == nil {
-		contextBase.SaveToTopContext(defines.TemporaryTN{}, tempStorage)
+	if topContext := c.proc.GetTopContext(); topContext.Value(defines.TemporaryTN{}) == nil {
+		c.proc.SaveToTopContext(defines.TemporaryTN{}, tempStorage)
 	}
 }
 
