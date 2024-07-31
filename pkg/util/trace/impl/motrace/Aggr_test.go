@@ -426,6 +426,9 @@ func TestAggregator_DisableAgg(t *testing.T) {
 			// Check all records' exported value.
 			results := aggregator.GetResults()
 			require.Equal(t, 0, len(results))
+			for i := 1; i < tt.fields.elems; i++ {
+				require.Equal(t, false, stmts[i].exported)
+			}
 		})
 	}
 }
