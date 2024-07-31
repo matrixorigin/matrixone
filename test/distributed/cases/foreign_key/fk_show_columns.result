@@ -2,20 +2,20 @@ drop account if exists fk_show_column;
 create account fk_show_column admin_name 'root' identified by '111';
 desc	mo_catalog.mo_database                ;
 Field    Type    Null    Key    Default    Extra    Comment
-dat_id    BIGINT UNSIGNED(0)    YES    PRI    null        
-datname    VARCHAR(5000)    YES        null        
+dat_id    BIGINT UNSIGNED(0)    YES        null        
+datname    VARCHAR(5000)    YES    PRI    null        
 dat_catalog_name    VARCHAR(5000)    YES        null        
 dat_createsql    VARCHAR(5000)    YES        null        
 owner    INT UNSIGNED(0)    YES        null        
 creator    INT UNSIGNED(0)    YES        null        
 created_time    TIMESTAMP(0)    YES        null        
-account_id    INT UNSIGNED(0)    YES        null        
+account_id    INT UNSIGNED(0)    YES    PRI    null        
 dat_type    VARCHAR(32)    YES        null        
 desc	mo_catalog.mo_tables                  ;
 Field    Type    Null    Key    Default    Extra    Comment
-rel_id    BIGINT UNSIGNED(0)    YES    PRI    null        
-relname    VARCHAR(5000)    YES        null        
-reldatabase    VARCHAR(5000)    YES        null        
+rel_id    BIGINT UNSIGNED(0)    YES        null        
+relname    VARCHAR(5000)    YES    PRI    null        
+reldatabase    VARCHAR(5000)    YES    PRI    null        
 reldatabase_id    BIGINT UNSIGNED(0)    YES        null        
 relpersistence    VARCHAR(5000)    YES        null        
 relkind    VARCHAR(5000)    YES        null        
@@ -24,7 +24,7 @@ rel_createsql    TEXT(0)    YES        null
 created_time    TIMESTAMP(0)    YES        null        
 creator    INT UNSIGNED(0)    YES        null        
 owner    INT UNSIGNED(0)    YES        null        
-account_id    INT UNSIGNED(0)    YES        null        
+account_id    INT UNSIGNED(0)    YES    PRI    null        
 partitioned    TINYINT(0)    YES        null        
 partition_info    BLOB(0)    YES        null        
 viewdef    VARCHAR(5000)    YES        null        
@@ -33,13 +33,13 @@ rel_version    INT UNSIGNED(0)    YES        null
 catalog_version    INT UNSIGNED(0)    YES        null        
 desc	mo_catalog.mo_columns                 ;
 Field    Type    Null    Key    Default    Extra    Comment
-att_uniq_name    VARCHAR(256)    YES    PRI    null        
-account_id    INT UNSIGNED(0)    YES        null        
+att_uniq_name    VARCHAR(256)    YES        null        
+account_id    INT UNSIGNED(0)    YES    PRI    null        
 att_database_id    BIGINT UNSIGNED(0)    YES        null        
-att_database    VARCHAR(256)    YES        null        
+att_database    VARCHAR(256)    YES    PRI    null        
 att_relname_id    BIGINT UNSIGNED(0)    YES        null        
-att_relname    VARCHAR(256)    YES        null        
-attname    VARCHAR(256)    YES        null        
+att_relname    VARCHAR(256)    YES    PRI    null        
+attname    VARCHAR(256)    YES    PRI    null        
 atttyp    VARCHAR(256)    YES        null        
 attnum    INT(0)    YES        null        
 att_length    INT(0)    YES        null        
@@ -121,7 +121,7 @@ function_id    INT(32)    NO    PRI    null    auto_increment
 name    VARCHAR(100)    YES    UNI    null        
 owner    INT UNSIGNED(32)    YES        null        
 args    JSON(0)    YES        null        
-rettype    VARCHAR(20)    YES        null        
+retType    VARCHAR(20)    YES        null        
 body    TEXT(0)    YES        null        
 language    VARCHAR(20)    YES        null        
 db    VARCHAR(100)    YES        null        
@@ -320,20 +320,20 @@ table_name    VARCHAR(5000)    YES        null
 obj_id    BIGINT UNSIGNED(64)    YES        null        
 show columns from	mo_catalog.mo_database                ;
 Field    Type    Null    Key    Default    Extra    Comment
-dat_id    BIGINT UNSIGNED(0)    YES    PRI    null        
-datname    VARCHAR(5000)    YES        null        
+dat_id    BIGINT UNSIGNED(0)    YES        null        
+datname    VARCHAR(5000)    YES    PRI    null        
 dat_catalog_name    VARCHAR(5000)    YES        null        
 dat_createsql    VARCHAR(5000)    YES        null        
 owner    INT UNSIGNED(0)    YES        null        
 creator    INT UNSIGNED(0)    YES        null        
 created_time    TIMESTAMP(0)    YES        null        
-account_id    INT UNSIGNED(0)    YES        null        
+account_id    INT UNSIGNED(0)    YES    PRI    null        
 dat_type    VARCHAR(32)    YES        null        
 show columns from	mo_catalog.mo_tables                  ;
 Field    Type    Null    Key    Default    Extra    Comment
-rel_id    BIGINT UNSIGNED(0)    YES    PRI    null        
-relname    VARCHAR(5000)    YES        null        
-reldatabase    VARCHAR(5000)    YES        null        
+rel_id    BIGINT UNSIGNED(0)    YES        null        
+relname    VARCHAR(5000)    YES    PRI    null        
+reldatabase    VARCHAR(5000)    YES    PRI    null        
 reldatabase_id    BIGINT UNSIGNED(0)    YES        null        
 relpersistence    VARCHAR(5000)    YES        null        
 relkind    VARCHAR(5000)    YES        null        
@@ -342,7 +342,7 @@ rel_createsql    TEXT(0)    YES        null
 created_time    TIMESTAMP(0)    YES        null        
 creator    INT UNSIGNED(0)    YES        null        
 owner    INT UNSIGNED(0)    YES        null        
-account_id    INT UNSIGNED(0)    YES        null        
+account_id    INT UNSIGNED(0)    YES    PRI    null        
 partitioned    TINYINT(0)    YES        null        
 partition_info    BLOB(0)    YES        null        
 viewdef    VARCHAR(5000)    YES        null        
@@ -351,13 +351,13 @@ rel_version    INT UNSIGNED(0)    YES        null
 catalog_version    INT UNSIGNED(0)    YES        null        
 show columns from	mo_catalog.mo_columns                 ;
 Field    Type    Null    Key    Default    Extra    Comment
-att_uniq_name    VARCHAR(256)    YES    PRI    null        
-account_id    INT UNSIGNED(0)    YES        null        
+att_uniq_name    VARCHAR(256)    YES        null        
+account_id    INT UNSIGNED(0)    YES    PRI    null        
 att_database_id    BIGINT UNSIGNED(0)    YES        null        
-att_database    VARCHAR(256)    YES        null        
+att_database    VARCHAR(256)    YES    PRI    null        
 att_relname_id    BIGINT UNSIGNED(0)    YES        null        
-att_relname    VARCHAR(256)    YES        null        
-attname    VARCHAR(256)    YES        null        
+att_relname    VARCHAR(256)    YES    PRI    null        
+attname    VARCHAR(256)    YES    PRI    null        
 atttyp    VARCHAR(256)    YES        null        
 attnum    INT(0)    YES        null        
 att_length    INT(0)    YES        null        
@@ -439,7 +439,7 @@ function_id    INT(32)    NO    PRI    null    auto_increment
 name    VARCHAR(100)    YES    UNI    null        
 owner    INT UNSIGNED(32)    YES        null        
 args    JSON(0)    YES        null        
-rettype    VARCHAR(20)    YES        null        
+retType    VARCHAR(20)    YES        null        
 body    TEXT(0)    YES        null        
 language    VARCHAR(20)    YES        null        
 db    VARCHAR(100)    YES        null        
@@ -638,20 +638,20 @@ table_name    VARCHAR(5000)    YES        null
 obj_id    BIGINT UNSIGNED(64)    YES        null        
 desc	mo_catalog.mo_database                ;
 Field    Type    Null    Key    Default    Extra    Comment
-dat_id    BIGINT UNSIGNED(0)    YES    PRI    null        
-datname    VARCHAR(5000)    YES        null        
+dat_id    BIGINT UNSIGNED(0)    YES        null        
+datname    VARCHAR(5000)    YES    PRI    null        
 dat_catalog_name    VARCHAR(5000)    YES        null        
 dat_createsql    VARCHAR(5000)    YES        null        
 owner    INT UNSIGNED(0)    YES        null        
 creator    INT UNSIGNED(0)    YES        null        
 created_time    TIMESTAMP(0)    YES        null        
-account_id    INT UNSIGNED(0)    YES        null        
+account_id    INT UNSIGNED(0)    YES    PRI    null        
 dat_type    VARCHAR(32)    YES        null        
 desc	mo_catalog.mo_tables                  ;
 Field    Type    Null    Key    Default    Extra    Comment
-rel_id    BIGINT UNSIGNED(0)    YES    PRI    null        
-relname    VARCHAR(5000)    YES        null        
-reldatabase    VARCHAR(5000)    YES        null        
+rel_id    BIGINT UNSIGNED(0)    YES        null        
+relname    VARCHAR(5000)    YES    PRI    null        
+reldatabase    VARCHAR(5000)    YES    PRI    null        
 reldatabase_id    BIGINT UNSIGNED(0)    YES        null        
 relpersistence    VARCHAR(5000)    YES        null        
 relkind    VARCHAR(5000)    YES        null        
@@ -660,7 +660,7 @@ rel_createsql    TEXT(0)    YES        null
 created_time    TIMESTAMP(0)    YES        null        
 creator    INT UNSIGNED(0)    YES        null        
 owner    INT UNSIGNED(0)    YES        null        
-account_id    INT UNSIGNED(0)    YES        null        
+account_id    INT UNSIGNED(0)    YES    PRI    null        
 partitioned    TINYINT(0)    YES        null        
 partition_info    BLOB(0)    YES        null        
 viewdef    VARCHAR(5000)    YES        null        
@@ -669,13 +669,13 @@ rel_version    INT UNSIGNED(0)    YES        null
 catalog_version    INT UNSIGNED(0)    YES        null        
 desc	mo_catalog.mo_columns                 ;
 Field    Type    Null    Key    Default    Extra    Comment
-att_uniq_name    VARCHAR(256)    YES    PRI    null        
-account_id    INT UNSIGNED(0)    YES        null        
+att_uniq_name    VARCHAR(256)    YES        null        
+account_id    INT UNSIGNED(0)    YES    PRI    null        
 att_database_id    BIGINT UNSIGNED(0)    YES        null        
-att_database    VARCHAR(256)    YES        null        
+att_database    VARCHAR(256)    YES    PRI    null        
 att_relname_id    BIGINT UNSIGNED(0)    YES        null        
-att_relname    VARCHAR(256)    YES        null        
-attname    VARCHAR(256)    YES        null        
+att_relname    VARCHAR(256)    YES    PRI    null        
+attname    VARCHAR(256)    YES    PRI    null        
 atttyp    VARCHAR(256)    YES        null        
 attnum    INT(0)    YES        null        
 att_length    INT(0)    YES        null        
@@ -748,7 +748,7 @@ function_id    INT(32)    NO    PRI    null    auto_increment
 name    VARCHAR(100)    YES    UNI    null        
 owner    INT UNSIGNED(32)    YES        null        
 args    JSON(0)    YES        null        
-rettype    VARCHAR(20)    YES        null        
+retType    VARCHAR(20)    YES        null        
 body    TEXT(0)    YES        null        
 language    VARCHAR(20)    YES        null        
 db    VARCHAR(100)    YES        null        
@@ -947,20 +947,20 @@ table_name    VARCHAR(5000)    YES        null
 obj_id    BIGINT UNSIGNED(64)    YES        null        
 show columns from	mo_catalog.mo_database                ;
 Field    Type    Null    Key    Default    Extra    Comment
-dat_id    BIGINT UNSIGNED(0)    YES    PRI    null        
-datname    VARCHAR(5000)    YES        null        
+dat_id    BIGINT UNSIGNED(0)    YES        null        
+datname    VARCHAR(5000)    YES    PRI    null        
 dat_catalog_name    VARCHAR(5000)    YES        null        
 dat_createsql    VARCHAR(5000)    YES        null        
 owner    INT UNSIGNED(0)    YES        null        
 creator    INT UNSIGNED(0)    YES        null        
 created_time    TIMESTAMP(0)    YES        null        
-account_id    INT UNSIGNED(0)    YES        null        
+account_id    INT UNSIGNED(0)    YES    PRI    null        
 dat_type    VARCHAR(32)    YES        null        
 show columns from	mo_catalog.mo_tables                  ;
 Field    Type    Null    Key    Default    Extra    Comment
-rel_id    BIGINT UNSIGNED(0)    YES    PRI    null        
-relname    VARCHAR(5000)    YES        null        
-reldatabase    VARCHAR(5000)    YES        null        
+rel_id    BIGINT UNSIGNED(0)    YES        null        
+relname    VARCHAR(5000)    YES    PRI    null        
+reldatabase    VARCHAR(5000)    YES    PRI    null        
 reldatabase_id    BIGINT UNSIGNED(0)    YES        null        
 relpersistence    VARCHAR(5000)    YES        null        
 relkind    VARCHAR(5000)    YES        null        
@@ -969,7 +969,7 @@ rel_createsql    TEXT(0)    YES        null
 created_time    TIMESTAMP(0)    YES        null        
 creator    INT UNSIGNED(0)    YES        null        
 owner    INT UNSIGNED(0)    YES        null        
-account_id    INT UNSIGNED(0)    YES        null        
+account_id    INT UNSIGNED(0)    YES    PRI    null        
 partitioned    TINYINT(0)    YES        null        
 partition_info    BLOB(0)    YES        null        
 viewdef    VARCHAR(5000)    YES        null        
@@ -978,13 +978,13 @@ rel_version    INT UNSIGNED(0)    YES        null
 catalog_version    INT UNSIGNED(0)    YES        null        
 show columns from	mo_catalog.mo_columns                 ;
 Field    Type    Null    Key    Default    Extra    Comment
-att_uniq_name    VARCHAR(256)    YES    PRI    null        
-account_id    INT UNSIGNED(0)    YES        null        
+att_uniq_name    VARCHAR(256)    YES        null        
+account_id    INT UNSIGNED(0)    YES    PRI    null        
 att_database_id    BIGINT UNSIGNED(0)    YES        null        
-att_database    VARCHAR(256)    YES        null        
+att_database    VARCHAR(256)    YES    PRI    null        
 att_relname_id    BIGINT UNSIGNED(0)    YES        null        
-att_relname    VARCHAR(256)    YES        null        
-attname    VARCHAR(256)    YES        null        
+att_relname    VARCHAR(256)    YES    PRI    null        
+attname    VARCHAR(256)    YES    PRI    null        
 atttyp    VARCHAR(256)    YES        null        
 attnum    INT(0)    YES        null        
 att_length    INT(0)    YES        null        
@@ -1057,7 +1057,7 @@ function_id    INT(32)    NO    PRI    null    auto_increment
 name    VARCHAR(100)    YES    UNI    null        
 owner    INT UNSIGNED(32)    YES        null        
 args    JSON(0)    YES        null        
-rettype    VARCHAR(20)    YES        null        
+retType    VARCHAR(20)    YES        null        
 body    TEXT(0)    YES        null        
 language    VARCHAR(20)    YES        null        
 db    VARCHAR(100)    YES        null        

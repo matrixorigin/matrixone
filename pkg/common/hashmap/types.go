@@ -65,18 +65,7 @@ type Iterator interface {
 	// Find vecs[start, start+count) in hashmap
 	// vs  : the number of rows corresponding to each value in the hash table (start with 1, and 0 means not found.)
 	// zvs : if zvs[i] is 0 indicates the presence null, 1 indicates the absence of a null.
-	Find(start, count int, vecs []*vector.Vector, inBuckets []uint8) (vs []uint64, zvs []int64)
-}
-
-// JoinMap is used for join
-type JoinMap struct {
-	rowcnt           int64 // for debug purpose
-	refCnt           int64
-	multiSels        [][]int32
-	shm              *StrHashMap
-	ihm              *IntHashMap
-	runtimeFilter_In bool
-	valid            bool
+	Find(start, count int, vecs []*vector.Vector) (vs []uint64, zvs []int64)
 }
 
 // StrHashMap key is []byte, value is an uint64 value (starting from 1)

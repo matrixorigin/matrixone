@@ -1,4 +1,4 @@
-// Copyright 2021 - 2023 Matrix Origin
+// Copyright 2021 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,23 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package cache
+package mo_inspect
 
 import (
-	"testing"
-
-	"github.com/lni/goutils/leaktest"
-	"github.com/stretchr/testify/require"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/rpc"
+	"github.com/spf13/cobra"
 )
 
-func TestNewTableGuard(t *testing.T) {
-	defer leaktest.AfterTest(t)()
-	g := newTableGuard()
-	require.NotNil(t, g)
-}
+func PrepareCommand() *cobra.Command {
+	inspect := rpc.MoInspectArg{}
 
-func TestTableGuardGC(t *testing.T) {
-	defer leaktest.AfterTest(t)()
-	g := newTableGuard()
-	require.NotNil(t, g)
+	return inspect.PrepareCommand()
 }

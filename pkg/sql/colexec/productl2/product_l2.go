@@ -40,7 +40,6 @@ func (productl2 *Productl2) OpType() vm.OpType {
 func (productl2 *Productl2) Prepare(proc *process.Process) error {
 	ap := productl2
 	ap.ctr = new(container)
-	ap.ctr.InitReceiver(proc, false)
 	return nil
 }
 
@@ -55,10 +54,11 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 	ap := productl2
 	ctr := ap.ctr
 	result := vm.NewCallResult()
+	var err error
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(proc, anal); err != nil {
+			if err := productl2.build(proc, anal); err != nil {
 				return result, err
 			}
 			ctr.state = Probe
@@ -70,12 +70,12 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 				return result, nil
 			}
-			msg := ctr.ReceiveFromSingleReg(0, anal)
-			if msg.Err != nil {
-				return result, msg.Err
+			result, err = productl2.Children[0].Call(proc)
+			if err != nil {
+				return result, err
 			}
 
-			ctr.inBat = msg.Batch
+			ctr.inBat = result.Batch
 			if ctr.inBat == nil {
 				ctr.state = End
 				continue
@@ -104,22 +104,20 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
+func (productl2 *Productl2) build(proc *process.Process, anal process.Analyze) error {
+	ctr := productl2.ctr
+	mp := proc.ReceiveJoinMap(anal, productl2.JoinMapTag, false, 0)
+	if mp == nil {
+		return nil
+	}
+	batches := mp.GetBatches()
 	var err error
-	for {
-		msg := ctr.ReceiveFromSingleReg(1, anal)
-		if msg.Err != nil {
-			return msg.Err
-		}
-		bat := msg.Batch
-		if bat == nil {
-			break
-		}
-		ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), bat)
+	//maybe optimize this in the future
+	for i := range batches {
+		ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), batches[i])
 		if err != nil {
 			return err
 		}
-		proc.PutBatch(bat)
 	}
 	return nil
 }

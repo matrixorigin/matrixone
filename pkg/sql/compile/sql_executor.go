@@ -357,12 +357,16 @@ func (exec *txnExecutor) Exec(
 		return executor.Result{}, err
 	}
 
-	logutil.Info("sql_executor exec",
-		zap.String("sql", sql),
-		zap.String("txn-id", hex.EncodeToString(exec.opts.Txn().Txn().ID)),
-		zap.Duration("duration", time.Since(receiveAt)),
-		zap.Uint64("AffectedRows", runResult.AffectRows),
-	)
+	if !statementOption.DisableLog() {
+		logutil.Info("sql_executor exec",
+			zap.String("sql", sql),
+			zap.String("txn-id", hex.EncodeToString(exec.opts.Txn().Txn().ID)),
+			zap.Duration("duration", time.Since(receiveAt)),
+			zap.Int("BatchSize", len(batches)),
+			zap.Uint64("AffectedRows", runResult.AffectRows),
+		)
+	}
+
 	result.LastInsertID = proc.GetLastInsertID()
 	result.Batches = batches
 	result.AffectedRows = runResult.AffectRows
