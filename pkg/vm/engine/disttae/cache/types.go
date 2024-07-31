@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -35,16 +36,13 @@ const (
 	MO_TIMESTAMP_IDX = 1
 )
 
-type TableKey struct {
+type TableChangeQuery struct {
 	AccountId  uint32
 	DatabaseId uint64
 	Name       string
-}
-
-type TableVersion struct {
-	Version uint32
-	Ts      *timestamp.Timestamp
-	TableId uint64
+	Version    uint32
+	TableId    uint64
+	Ts         timestamp.Timestamp
 }
 
 // catalog cache
@@ -62,22 +60,21 @@ type CatalogCache struct {
 // database cache:
 //
 //		. get by database key
-//	    . del by rowid
+//	    . del by consulting cpkey
 //	    . gc by timestamp
 type databaseCache struct {
 	data       *btree.BTreeG[*DatabaseItem]
-	rowidIndex *btree.BTreeG[*DatabaseItem]
+	cpkeyIndex *btree.BTreeG[*DatabaseItem]
 }
 
 // table cache:
 //
 //		. get by table key
-//	    . del by rowid
+//	    . del by consulting cpkey
 //	    . gc by timestamp
 type tableCache struct {
 	data       *btree.BTreeG[*TableItem]
-	rowidIndex *btree.BTreeG[*TableItem]
-	tableGuard *tableGuard
+	cpkeyIndex *btree.BTreeG[*TableItem]
 }
 
 type DatabaseItem struct {
@@ -85,15 +82,14 @@ type DatabaseItem struct {
 	AccountId uint32
 	Name      string
 	Ts        timestamp.Timestamp
+	deleted   bool // Mark if it is a delete
 
 	// database value
 	Id        uint64
-	Rowid     types.Rowid
 	Typ       string
 	CreateSql string
-
-	// Mark if it is a delete
-	deleted bool
+	Rowid     types.Rowid
+	CPKey     []byte
 }
 
 type TableItem struct {
@@ -102,23 +98,17 @@ type TableItem struct {
 	DatabaseId uint64
 	Name       string
 	Ts         timestamp.Timestamp
+	deleted    bool // Mark if it is a delete
 
 	// table value
-	Id       uint64
-	TableDef *plan.TableDef
-	Defs     []engine.TableDef
-	Rowid    types.Rowid
-	Version  uint32
-	/*
-		Rowids in mo_columns from replayed logtail.
+	Id           uint64
+	TableDef     *plan.TableDef
+	Defs         []engine.TableDef
+	Version      uint32
+	DatabaseName string
 
-		CORNER CASE:
-		create table t1(a int);
-		begin;
-		drop table t1;
-		show tables; //no table t1. no item for t1 in mo_columns also.
-	*/
-	Rowids []types.Rowid
+	Rowid types.Rowid
+	CPKey []byte
 
 	// table def
 	Kind           string
@@ -135,44 +125,41 @@ type TableItem struct {
 	PrimarySeqnum int
 	// clusterBy key
 	ClusterByIdx int
-
-	// Mark if it is a delete
-	deleted bool
 }
 
-type tableItemKey struct {
-	AccountId    uint32
-	DatabaseId   uint64
-	Name         string
-	Id           uint64
-	PhysicalTime uint64
-	LogicalTime  uint32
-	NodeId       uint32
+type noSliceTs struct {
+	pTime  int64
+	lTime  uint32
+	nodeId uint32
 }
 
-type column struct {
-	name            string
-	typ             []byte
-	num             int32
-	comment         string
-	hasDef          int8
-	defaultExpr     []byte
-	constraintType  string
-	isHidden        int8
-	isAutoIncrement int8
-	hasUpdate       int8
-	updateExpr      []byte
-	isClusterBy     int8
-	seqnum          uint16
-	rowid           types.Rowid //rowid for a column in mo_columns
-	enumValues      string
+func (s *noSliceTs) fromTs(ts *timestamp.Timestamp) {
+	s.pTime = ts.PhysicalTime
+	s.lTime = ts.LogicalTime
+	s.nodeId = ts.NodeID
 }
 
-type columns []column
+func (s *noSliceTs) toTs() timestamp.Timestamp {
+	return timestamp.Timestamp{
+		PhysicalTime: s.pTime,
+		LogicalTime:  s.lTime,
+		NodeID:       s.nodeId,
+	}
+}
 
-func (cols columns) Len() int           { return len(cols) }
-func (cols columns) Swap(i, j int)      { cols[i], cols[j] = cols[j], cols[i] }
-func (cols columns) Less(i, j int) bool { return cols[i].num < cols[j].num }
+type TableItemKey struct {
+	AccountId  uint32
+	DatabaseId uint64
+	Name       string
+	Id         uint64
+	Ts         noSliceTs
+}
+
+type Columns []catalog.Column
+
+func (cols Columns) Len() int           { return len(cols) }
+func (cols Columns) Swap(i, j int)      { cols[i], cols[j] = cols[j], cols[i] }
+func (cols Columns) Less(i, j int) bool { return cols[i].Num < cols[j].Num }
 
 func databaseItemLess(a, b *DatabaseItem) bool {
 	if a.AccountId < b.AccountId {
@@ -188,14 +175,9 @@ func databaseItemLess(a, b *DatabaseItem) bool {
 		return false
 	}
 	if a.Ts.Equal(b.Ts) {
-		if a.Id > b.Id {
+		if !a.deleted && b.deleted {
 			return true
 		}
-		if a.Id < b.Id {
-			return false
-		}
-		// for the same database id, the delete item is head.
-		return a.deleted
 	}
 	return a.Ts.Greater(b.Ts)
 }
@@ -219,49 +201,53 @@ func tableItemLess(a, b *TableItem) bool {
 	if a.Name > b.Name {
 		return false
 	}
-	if a.Ts.Equal(b.Ts) {
-		/*
-			The TN use the table id to distinguish different tables.
-			For operation on mo_tables, the rowid is the serialized bytes of the table id.
-			So, the rowid is unique for each table in mo_tables. We can use it to sort the items.
-			To be clear, the comparation a.Id < b.Id does not means the table a.Id is created before the table b.Id.
-			We just use it to reserve the items yielded by the truncate on same table multiple times in one txn.
 
-			CORNER CASE:
+	// Let's think about how to arrange items for the same name table.
+	// how many types of items does a table have?
+	// 1. create table (deleted=false, ts=t1, tid=x1, rowid=r1)
+	// 2. drop table (deleted=true, ts=t2, tid=x1, rowid=r1)
+	// 3. truncate
+	//    1. drop table (delete=true, ts=t1, tid=x1， rowid=r1)
+	//    2. create table (delete=false, ts=t1, tid=x2, rowid=r2)
+	// 4. alter table
+	//    1. delete table row (delete=true, ts=t1，tid=x1, rowid=r1)
+	//    2. create table row (delete=false, ts=t1, tid=x1, rowid=r2)
+	//
+	// Note: What logtail in mo_tables/mo_columns will CN receive is exactly dependent on what CN sends to TN.
+	// No matter how many ddl operations happened in one txn, it will eventually generate at most a pair of delete and insert batch.
+	// --- example1:
+	// begin;
+	// truncate table t1; (drop x1, create t1 with tid x2)
+	// truncate table t1; (drop x2, create t1 with tid x3)
+	// alter table t1 comment 'new comment1'; (as x3 is created in the txn, adjust its create batch with new comment1)
+	// alter table t1 comment 'new comment1'; (as x3 is created in the txn, adjust its create batch again)
+	// commit;
+	// --- TN received requests to drop x1 and create x3
+	// --- TN replayed logtail as:
+	// drop table t1 (delete=true, ts=t1, tid=x1, rowid=r1)
+	// create table t1 (delete=false, ts=t1, tid=x3, rowid=r2, comment='new comment2')
+	//
+	// Order rule:
+	// 1. By timestamp descending (order by txn)
+	// 2. By delete flag, delete is behind of insert (check the last status in the txn)
+	//
+	// Given the order of the items, it is simple to lookup a table by name:
+	// 1. Find the first item with the same name, if it is not deleted, return found, not found otherwise.
 
-			create table t1(a int); //table id x.
-			begin;
-			truncate t1;//table id x changed to x1
-			truncate t1;//table id x1 changed to x2
-			truncate t1;//table id x2 changed to x3
-			commit;//catalog.insertTable(table id x1,x2,x3). catalog.deleteTable(table id x,x1,x2)
-
-			In above case, the TN does not keep the order of multiple insertTable (or deleteTable).
-			That is ,it may generate the insertTable order like: x3,x2,x1.
-			In previous design without sort on the table id, the item x3,x2 will be overwritten by the x1.
-			Then the item x3 will be lost. The TN will not know the table x3. It is wrong!
-			With sort on the table id, the item x3,x2,x1 will be reserved.
-		*/
-		// the logtail is unordered, so we need to sort the items by table id.
-		// the larger table id is created later.
-		if a.Id > b.Id {
+	if a.Ts.Equal(b.Ts) { // happen in the same txn. it is a delete and a insert.
+		if !a.deleted && b.deleted {
 			return true
 		}
-		if a.Id < b.Id {
-			return false
-		}
-		// for the same table id, the delete item is head.
-		return a.deleted
 	}
 	return a.Ts.Greater(b.Ts)
 }
 
-func databaseItemRowidLess(a, b *DatabaseItem) bool {
-	return bytes.Compare(a.Rowid[:], b.Rowid[:]) < 0
+func databaseItemCPKeyLess(a, b *DatabaseItem) bool {
+	return bytes.Compare(a.CPKey[:], b.CPKey[:]) < 0
 }
 
-func tableItemRowidLess(a, b *TableItem) bool {
-	return bytes.Compare(a.Rowid[:], b.Rowid[:]) < 0
+func tableItemCPKeyLess(a, b *TableItem) bool {
+	return bytes.Compare(a.CPKey[:], b.CPKey[:]) < 0
 }
 
 // copyTableItem copies src to dst
@@ -281,10 +267,6 @@ func copyTableItem(dst, src *TableItem) {
 	dst.PrimarySeqnum = src.PrimarySeqnum
 	dst.Version = src.Version
 	copy(dst.Rowid[:], src.Rowid[:])
-	dst.Rowids = make([]types.Rowid, len(src.Rowids))
-	for i, rowid := range src.Rowids {
-		copy(dst.Rowids[i][:], rowid[:])
-	}
 }
 
 func copyDatabaseItem(dest, src *DatabaseItem) {

@@ -139,6 +139,10 @@ func (w *Ws) GetHaveDDL() bool {
 	return false
 }
 
+func (w *Ws) PPString() string {
+	return ""
+}
+
 func TestCompile(t *testing.T) {
 	c, err := cnclient.NewPipelineClient("", "test", &cnclient.PipelineConfig{})
 	require.NoError(t, err)
