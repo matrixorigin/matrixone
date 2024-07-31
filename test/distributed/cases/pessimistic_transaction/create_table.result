@@ -32,18 +32,18 @@ create index ACT_IDX_IDENT_LNK_SCOPE on ACT_RU_IDENTITYLINK(SCOPE_ID_, SCOPE_TYP
 create index ACT_IDX_IDENT_LNK_SUB_SCOPE on ACT_RU_IDENTITYLINK(SUB_SCOPE_ID_, SCOPE_TYPE_);
 desc ACT_RU_IDENTITYLINK;
 Field    Type    Null    Key    Default    Extra    Comment
-id_    VARCHAR(64)    YES    PRI    null        
-rev_    INT(32)    YES        null        
-group_id_    VARCHAR(255)    YES    MUL    null        
-type_    VARCHAR(255)    YES        null        
-user_id_    VARCHAR(255)    YES    MUL    null        
-task_id_    VARCHAR(64)    YES        null        
-proc_inst_id_    VARCHAR(64)    YES        null        
-proc_def_id_    VARCHAR(64)    YES        null        
-scope_id_    VARCHAR(255)    YES    MUL    null        
-sub_scope_id_    VARCHAR(255)    YES    MUL    null        
-scope_type_    VARCHAR(255)    YES        null        
-scope_definition_id_    VARCHAR(255)    YES        null        
+ID_    VARCHAR(64)    NO    PRI    null        
+REV_    INT(32)    YES        null        
+GROUP_ID_    VARCHAR(255)    YES    MUL    null        
+TYPE_    VARCHAR(255)    YES        null        
+USER_ID_    VARCHAR(255)    YES    MUL    null        
+TASK_ID_    VARCHAR(64)    YES        null        
+PROC_INST_ID_    VARCHAR(64)    YES        null        
+PROC_DEF_ID_    VARCHAR(64)    YES        null        
+SCOPE_ID_    VARCHAR(255)    YES    MUL    null        
+SUB_SCOPE_ID_    VARCHAR(255)    YES    MUL    null        
+SCOPE_TYPE_    VARCHAR(255)    YES        null        
+SCOPE_DEFINITION_ID_    VARCHAR(255)    YES        null        
 SELECT @@session.transaction_read_only;
 @@transaction_read_only
 0
@@ -68,7 +68,7 @@ NULL AS SELF_REFERENCING_COL_NAME,
 NULL AS REF_GENERATION
 FROM INFORMATION_SCHEMA.TABLES
 WHERE TABLE_SCHEMA = 'ry_flowable' AND TABLE_NAME LIKE 'act_ru_identitylink';
-TABLE_CAT    TABLE_SCHEM    table_name    TABLE_TYPE    REMARKS    TYPE_CAT    TYPE_SCHEM    TYPE_NAME    SELF_REFERENCING_COL_NAME    REF_GENERATION
+TABLE_CAT    TABLE_SCHEM    TABLE_NAME    TABLE_TYPE    REMARKS    TYPE_CAT    TYPE_SCHEM    TYPE_NAME    SELF_REFERENCING_COL_NAME    REF_GENERATION
 ry_flowable    null    act_ru_identitylink    TABLE        null    null    null    null    null
 commit;
 show tables;

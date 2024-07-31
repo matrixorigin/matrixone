@@ -233,8 +233,8 @@ func (task *mergeObjectsTask) InitTransferMaps(blkCnt int) {
 	}
 }
 
-func (task *mergeObjectsTask) GetTransferMaps() *api.TransferMaps {
-	return &task.transferMaps
+func (task *mergeObjectsTask) GetTransferMaps() api.TransferMaps {
+	return task.transferMaps
 }
 
 func (task *mergeObjectsTask) prepareCommitEntry() *api.MergeCommitEntry {

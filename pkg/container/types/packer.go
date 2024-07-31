@@ -18,30 +18,35 @@ import (
 	"bytes"
 	"encoding/binary"
 	"math"
+	"runtime"
 	"slices"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 )
 
-const PackerMemUnit = 64
-
 type Packer struct {
 	buffer            []byte
 	bufferDeallocator malloc.Deallocator
-	allocator         malloc.Allocator
 }
 
+var packerAllocator = malloc.NewShardedAllocator(
+	runtime.GOMAXPROCS(0),
+	func() malloc.Allocator {
+		return malloc.NewClassAllocator(
+			malloc.NewFixedSizeSyncPoolAllocator,
+		)
+	},
+)
+
 func NewPacker() *Packer {
-	allocator := malloc.GetDefault(nil)
-	bs, dec, err := allocator.Allocate(PackerMemUnit, malloc.NoHints)
+	bs, dec, err := packerAllocator.Allocate(4096, malloc.NoClear)
 	if err != nil {
 		panic(err)
 	}
 	return &Packer{
 		buffer:            bs[:0],
 		bufferDeallocator: dec,
-		allocator:         allocator,
 	}
 }
 
@@ -68,13 +73,19 @@ func (p *Packer) ensureSize(n int) {
 	if len(p.buffer)+n <= cap(p.buffer) {
 		return
 	}
-	newBuffer, newDec, err := p.allocator.Allocate(uint64(len(p.buffer)+n), malloc.NoHints)
+	p.ensureSizeSlow(n)
+}
+
+func (p *Packer) ensureSizeSlow(n int) {
+	newBuffer, newDec, err := packerAllocator.Allocate(uint64(cap(p.buffer)+n), malloc.NoClear)
 	if err != nil {
 		panic(err)
 	}
 	newBuffer = newBuffer[:len(p.buffer)]
 	copy(newBuffer, p.buffer)
-	p.bufferDeallocator.Deallocate(malloc.NoHints)
+	if p.bufferDeallocator != nil {
+		p.bufferDeallocator.Deallocate(malloc.NoHints)
+	}
 	p.buffer = newBuffer
 	p.bufferDeallocator = newDec
 }

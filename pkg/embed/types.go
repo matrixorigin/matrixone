@@ -1,4 +1,4 @@
-// Copyright 2021 - 2023 Matrix Origin
+// Copyright 2021-2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,23 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package cache
+package embed
 
 import (
-	"testing"
-
-	"github.com/lni/goutils/leaktest"
-	"github.com/stretchr/testify/require"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
-func TestNewTableGuard(t *testing.T) {
-	defer leaktest.AfterTest(t)()
-	g := newTableGuard()
-	require.NotNil(t, g)
+// Cluster is the mo cluster interface
+type Cluster interface {
+	Start() error
+	Close() error
+	GetService(sid string) (ServiceOperator, error)
+	GetCNService(index int) (ServiceOperator, error)
+	ForeachServices(fn func(ServiceOperator) bool)
 }
 
-func TestTableGuardGC(t *testing.T) {
-	defer leaktest.AfterTest(t)()
-	g := newTableGuard()
-	require.NotNil(t, g)
+type Option func(*cluster)
+
+type ServiceOperator interface {
+	ServiceID() string
+	ServiceType() metadata.ServiceType
+	Index() int
+	Adjust(func(*ServiceConfig))
+
+	Start() error
+	Close() error
 }
