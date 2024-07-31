@@ -170,12 +170,6 @@ func SpanContextWithIDs(tid TraceID, sid SpanID) SpanContext {
 	return SpanContext{TraceID: tid, SpanID: sid, Kind: SpanKindInternal}
 }
 
-const (
-	FlagProfileGoroutine = 1 << iota
-	FlagProfileHeap
-	FlagProfileCpu
-)
-
 type MoCtledState struct {
 	Enable    bool
 	Threshold time.Duration
@@ -269,7 +263,7 @@ type SpanConfig struct {
 
 const (
 	ProfileFlagGoroutine = 1 << iota
-	ProfileFlagThreadcreate
+	ProfileFlagThreadCreate
 	ProfileFlagHeap
 	ProfileFlagAllocs
 	ProfileFlagBlock
@@ -334,7 +328,7 @@ func (c *SpanConfig) ProfileHeap() bool {
 }
 
 func (c *SpanConfig) ProfileThreadCreate() bool {
-	return c.profileFlag&ProfileFlagThreadcreate > 0
+	return c.profileFlag&ProfileFlagThreadCreate > 0
 }
 
 func (c *SpanConfig) ProfileAllocs() bool {
@@ -394,13 +388,13 @@ func (f spanOptionFunc) ApplySpanStart(cfg *SpanConfig) {
 	f(cfg)
 }
 
-func WithNewRoot(newRoot bool) spanOptionFunc {
+func WithNewRoot(newRoot bool) SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
 		cfg.NewRoot = newRoot
 	})
 }
 
-func WithKind(kind SpanKind) spanOptionFunc {
+func WithKind(kind SpanKind) SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
 		cfg.Kind = kind
 	})
@@ -437,11 +431,11 @@ func WithProfileHeap() SpanStartOption {
 	})
 }
 
-// WithProfileThreadCreate requests dump pprof/threadcreate. It will trigger profile.ProfileThreadcreate() in Span.End().
+// WithProfileThreadCreate requests dump pprof/ThreadCreate. It will trigger profile.ProfileRuntime(profile.THREADCREATE, ...) or profile.ProfileThreadcreate() in Span.End().
 // More details in MOSpan.doProfile.
 func WithProfileThreadCreate() SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
-		cfg.profileFlag |= ProfileFlagThreadcreate
+		cfg.profileFlag |= ProfileFlagThreadCreate
 	})
 }
 
@@ -641,7 +635,7 @@ func (tf TraceFlags) IsSampled() bool {
 	return tf&FlagsSampled == FlagsSampled
 }
 
-// WithSampled sets the sampling bit in a new copy of the TraceFlags.
+// WithSampled sets the sampling a bit in a new copy of the TraceFlags.
 func (tf TraceFlags) WithSampled(sampled bool) TraceFlags { // nolint:revive  // sampled is not a control flag.
 	if sampled {
 		return tf | FlagsSampled
