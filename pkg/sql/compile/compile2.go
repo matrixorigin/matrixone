@@ -41,7 +41,7 @@ func (c *Compile) Compile(
 	queryPlan *plan.Plan,
 	resultWriteBack func(batch *batch.Batch) error) (err error) {
 	// clear the last query context to avoid process reuse.
-	c.proc.CleanLastQueryContext()
+	c.proc.ResetQueryContext()
 
 	// statistical information record and trace.
 	compileStart := time.Now()
@@ -117,13 +117,13 @@ func (c *Compile) Compile(
 		}
 	}
 
-	return c.proc.GetErrorFromQueryStatus()
+	return c.proc.GetQueryContextError()
 }
 
 // Run executes the pipeline and returns the result.
 func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	// clear the last query context to avoid process reuse.
-	c.proc.CleanLastQueryContext()
+	c.proc.ResetQueryContext()
 
 	// the runC is the final object for executing the query.
 	// If a rerun occurs, it may differ from the original c, so we need to release it.
@@ -238,7 +238,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		}
 	}
 
-	if err = c.proc.GetErrorFromQueryStatus(); err != nil {
+	if err = c.proc.GetQueryContextError(); err != nil {
 		return nil, err
 	}
 	queryResult.AffectRows = runC.getAffectedRows()

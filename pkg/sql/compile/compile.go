@@ -144,7 +144,7 @@ func (c *Compile) Release() {
 		return
 	}
 	if c.proc != nil {
-		c.proc.CleanLastQueryContext()
+		c.proc.ResetQueryContext()
 	}
 	GetCompileService().putCompile(c)
 }
@@ -169,7 +169,7 @@ func (c *Compile) GetMessageCenter() *process.MessageCenter {
 
 func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch) error, sql string) {
 	// clean up the process for a new query.
-	proc.CleanLastQueryContext()
+	proc.ResetQueryContext()
 	c.proc = proc
 
 	c.fill = fill

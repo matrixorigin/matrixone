@@ -313,8 +313,6 @@ func (sp *StmtProfile) GetStmtId() uuid.UUID {
 	return sp.stmtId
 }
 
-// BaseProcess is the common part of process.
-// each query share only 1 instance of BaseProcess
 type BaseProcess struct {
 	// sqlContext includes the client context and the query context.
 	sqlContext QueryBaseContext
@@ -356,6 +354,7 @@ type BaseProcess struct {
 // one or more pipeline will be generated for one query,
 // and one pipeline has one process instance.
 type Process struct {
+	// BaseProcess is the common part of one process, and it's shared by all its children processes.
 	Base *BaseProcess
 	Reg  Register
 
