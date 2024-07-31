@@ -23,6 +23,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -120,7 +121,7 @@ func (s *MPoolStats) RecordManyFrees(tag string, nfree, sz int64) int64 {
 
 const (
 	NumFixedPool = 5
-	kMemHdrSz    = 16
+	kMemHdrSz    = 24
 	kStripeSize  = 128
 	B            = 1
 	KB           = 1024
@@ -135,10 +136,11 @@ var PoolElemSize = [NumFixedPool]int32{64, 128, 256, 512, 1024}
 
 // Memory header, kMemHdrSz bytes.
 type memHdr struct {
-	poolId       int64
-	allocSz      int32
-	fixedPoolIdx int8
-	guard        [3]uint8
+	poolId           int64
+	allocSz          int32
+	fixedPoolIdx     int8
+	guard            [3]uint8
+	freeStacktraceID uint64
 }
 
 func init() {
@@ -236,6 +238,7 @@ func (fp *fixedPool) alloc(sz int32) *memHdr {
 		for i := range bs {
 			bs[i] = 0
 		}
+		pHdr.freeStacktraceID = 0
 		return pHdr
 	}
 }
@@ -622,6 +625,24 @@ func (mp *MPool) Free(bs []byte) {
 		}
 		(otherPool.(*MPool)).Free(bs)
 		return
+	}
+
+	// check double free
+	stackID := malloc.GetStacktraceID(1)
+	if lastFreeStacktraceID := atomic.SwapUint64(&pHdr.freeStacktraceID, uint64(stackID)); lastFreeStacktraceID != 0 {
+		msg := malloc.StacktraceID(lastFreeStacktraceID).String()
+		switch {
+
+		//// known cases TODO
+		//case strings.Contains(msg, "pkg/frontend.(*PrepareStmt).Close"),
+		//	strings.Contains(msg, "pkg/vm/engine/tae/mergesort.SortBlockColumns"):
+
+		default:
+			panic(fmt.Sprintf(
+				"double free.\n=== last free stack trace begin ===\n%s\n--- last free stack trace end ---",
+				msg,
+			))
+		}
 	}
 
 	atomic.AddInt32(&mp.inUseCount, 1)
