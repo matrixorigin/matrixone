@@ -33,7 +33,7 @@ update table01 set col1 = 100 where col2 = 2413242;
 -- @ignore:10,11,12
 show table status;
 drop table table01;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 -- @session
 
@@ -58,7 +58,7 @@ create account test_tenant_2 admin_name 'test_account' identified by '111';
 -- @session:id=3&user=test_tenant_1:test_account&password=111
 drop database if exists sub_database01;
 create database sub_database01 from sys publication publication01;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 use sub_database01;
 show tables;
@@ -78,7 +78,7 @@ select * from t2;
 -- @session:id=5&user=test_tenant_2:test_account&password=111
 drop database if exists sub_database01;
 create database sub_database01 from sys publication publication01;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 use sub_database01;
 show tables;
@@ -100,7 +100,7 @@ show publications;
 -- @session:id=4&user=test_tenant_1:test_account&password=111
 drop database if exists sub_database02;
 create database sub_database02 from sys publication publication02;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions all;
 use sub_database02;
 show tables;
@@ -110,7 +110,7 @@ select * from table03;
 -- @session:id=7&user=test_tenant_2:test_account&password=111
 drop database if exists sub_database02;
 create database sub_database02 from sys publication publication02;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions all;
 use sub_database02;
 show tables;
@@ -133,7 +133,7 @@ show publications;
 -- @session:id=8&user=test_tenant_1:test_account&password=111
 drop database if exists sub_database03;
 create database sub_database03 from sys publication publication03;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions all;
 use sub_database03;
 show tables;
@@ -144,7 +144,7 @@ show table status;
 -- @session
 
 -- @session:id=9&user=test_tenant_2:test_account&password=111
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions all;
 -- @session
 
@@ -154,7 +154,7 @@ alter publication publication03 account all;
 show publications;
 
 -- @session:id=10&user=test_tenant_2:test_account&password=111
--- @ignore:3,4,5
+-- @ignore:5,7
 show subscriptions all;
 create database sub_database03 from sys publication publication03;
 use sub_database03;

@@ -462,7 +462,7 @@ drop publication if exists pub05;
 create publication pub05 database db09 account acc02 comment 'publish db09';
 drop publication if exists pub06;
 create publication pub06 database db10 account acc02 comment 'publish db10';
--- @ignore:2
+-- @ignore:5,6
 show publications;
 -- @session
 
@@ -478,7 +478,7 @@ select * from index02;
 restore account acc01 from snapshot sp05;
 
 -- @session:id=9&user=acc01:test_account&password=111
--- @ignore:2
+-- @ignore:5,6
 show publications;
 show databases like 'db%';
 -- @session
@@ -488,7 +488,7 @@ create account acc03 admin_name 'test_account' identified by '111';
 restore account acc01 from snapshot sp05 to account acc03;
 -- @bvt:issue#16497
 -- @session:id=11&user=acc03:test_account&password=111
--- @ignore:2
+-- @ignore:5,6
 show publications;
 show databases like 'db%';
 -- @session

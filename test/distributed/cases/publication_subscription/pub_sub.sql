@@ -11,7 +11,7 @@ insert into repub01 values (1);
 -- @session:id=1&user=test_tenant_1:test_account&password=111
 drop database if exists resub01;
 create database resub01 from sys publication publication01;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions all;
 -- @session
 
@@ -40,7 +40,7 @@ alter publication publication01 database republication01;
 show publications;
 
 -- @session:id=3&user=test_tenant_1:test_account&password=111
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions all;
 use resub01;
 show tables;

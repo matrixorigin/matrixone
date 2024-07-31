@@ -29,24 +29,24 @@ show publications like '%1';
 show create publication pub1;
 
 -- @session:id=1&user=acc1:admin1&password=test123
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions all;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions all like '%1';
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions all like 'pub%';
 
 create database syssub1 from sys publication pub1;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions all;
 
 use syssub1;
 show tables;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions all;
 -- @ignore:10
 show table status;
@@ -61,43 +61,43 @@ select * from t1;
 show publications;
 alter publication pub1 account acc3 comment 'this is a pub';
 -- @session:id=1&user=acc1:admin1&password=test123
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions all;
 use syssub1;
 -- @session
 -- @session:id=2&user=acc2:admin2&password=test456
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions all;
 -- @session
 -- @session:id=3&user=acc3:admin3&password=test789
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions all;
 -- @session
 
 # drop
 drop publication pub1;
 -- @session:id=1&user=acc1:admin1&password=test123
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions all;
 use syssub1;
 -- @session
 -- @session:id=2&user=acc2:admin2&password=test456
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions all;
 -- @session
 -- @session:id=3&user=acc3:admin3&password=test789
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions all;
 -- @session
 
 # recreate with another db
 create publication pub1 database db2 account acc1,acc2 comment 'this is a recreated pub';
 -- @session:id=1&user=acc1:admin1&password=test123
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions all;
 use syssub1;
 show tables;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions all;
 -- @ignore:10
 show table status;
@@ -108,11 +108,11 @@ show create table t1;
 select * from t1;
 -- @session
 -- @session:id=2&user=acc2:admin2&password=test456
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions all;
 -- @session
 -- @session:id=3&user=acc3:admin3&password=test789
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions all;
 -- @session
 
@@ -120,33 +120,34 @@ show subscriptions all;
 ########### pub all ###########
 # create publication to all accounts
 create publication pub_all database db1 account all;
+-- @ignore:5,7
 show subscriptions all;
 -- @session:id=1&user=acc1:admin1&password=test123
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions all;
 use syssub1;
 -- @session
 -- @session:id=2&user=acc2:admin2&password=test456
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions all;
 -- @session
 -- @session:id=3&user=acc3:admin3&password=test789
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions all;
 -- @session
 
 alter publication pub_all account acc1,acc2;
 -- @session:id=1&user=acc1:admin1&password=test123
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions all;
 use syssub1;
 -- @session
 -- @session:id=2&user=acc2:admin2&password=test456
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions all;
 -- @session
 -- @session:id=3&user=acc3:admin3&password=test789
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions all;
 -- @session
 
@@ -159,7 +160,7 @@ create publication pub_to_not_exist database db1 account not_exist;
 ########### duplicate sub ###########
 -- @session:id=1&user=acc1:admin1&password=test123
 create database syssub1dup from sys publication pub1;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions all;
 create database syssub1dup from sys publication pub1;
 -- @session
@@ -168,10 +169,10 @@ create database syssub1dup from sys publication pub1;
 ########### pub part of the tables ###########
 create publication pub_part_tbls database db1 table t1 account acc1;
 -- @session:id=1&user=acc1:admin1&password=test123
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions all;
 create database sys_sub_part_tbls from sys publication pub_part_tbls;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 
 show full tables from sys_sub_part_tbls;

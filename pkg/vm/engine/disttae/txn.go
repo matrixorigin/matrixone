@@ -980,11 +980,12 @@ func (txn *Transaction) forEachTableHasDeletesLocked(f func(tbl *txnTable) error
 		if _, ok := tables[e.tableId]; ok {
 			continue
 		}
-		db, err := txn.engine.Database(txn.proc.Ctx, e.databaseName, txn.op)
+		ctx := defines.AttachAccountId(txn.proc.Ctx, e.accountId)
+		db, err := txn.engine.Database(ctx, e.databaseName, txn.op)
 		if err != nil {
 			return err
 		}
-		rel, err := db.Relation(txn.proc.Ctx, e.tableName, nil)
+		rel, err := db.Relation(ctx, e.tableName, nil)
 		if err != nil {
 			return err
 		}

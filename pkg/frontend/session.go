@@ -100,9 +100,6 @@ const (
 	TSCheckDbNameEnd        TS = "TSCheckDbNameEnd"
 	TSInitGlobalSysVarStart TS = "TSInitGlobalSysVarStart"
 	TSInitGlobalSysVarEnd   TS = "TSInitGlobalSysVarEnd"
-
-	// pub sub
-	//TS
 )
 
 type Session struct {

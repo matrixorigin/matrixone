@@ -793,6 +793,19 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 			if err = vector.AppendBytesList(bat.Vecs[colIdx], vData, nil, pool); err != nil {
 				return nil, nil, err
 			}
+		case types.T_int8:
+			vData := make([]int8, cnt)
+			for rowIdx, row := range rows {
+				if row[colIdx] == nil {
+					nsp.Add(uint64(rowIdx))
+					continue
+				}
+				vData[rowIdx] = row[colIdx].(int8)
+			}
+			err := vector.AppendFixedList[int8](bat.Vecs[colIdx], vData, nil, pool)
+			if err != nil {
+				return nil, nil, err
+			}
 		case types.T_int16:
 			vData := make([]int16, cnt)
 			for rowIdx, row := range rows {
@@ -975,6 +988,11 @@ func mysqlColDef2PlanResultColDef(cols []Column) (*plan.ResultColDef, []types.Ty
 				Id: int32(types.T_text),
 			}
 			tType = types.New(types.T_text, types.MaxVarcharLen, 0)
+		case defines.MYSQL_TYPE_TINY:
+			pType = plan.Type{
+				Id: int32(types.T_int8),
+			}
+			tType = types.New(types.T_int8, 0, 0)
 		case defines.MYSQL_TYPE_SHORT:
 			pType = plan.Type{
 				Id: int32(types.T_int16),

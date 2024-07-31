@@ -5,38 +5,25 @@ create account acc1 admin_name 'root' identified by '111';
 create account acc2 admin_name 'root' identified by '111';
 create database t;
 create publication pub1 database t account all;
-create publication pub2 database t account all;
 create publication pub3 database t account acc0,acc1;
 create publication pub4 database t account acc0,acc1,accx;
-create publication pub5 database t account accx comment 'test';
 -- @ignore:5,6
 show publications;
 show create publication pub1;
-show create publication pub2;
-show create publication pub5;
 alter publication pub1 account acc0,acc1;
 show create publication pub1;
-alter publication pub2 account drop acc1;
-show create publication pub2;
 alter publication pub3 account add accx;
 show create publication pub3;
-alter publication pub4 account drop acc1,acc2;
-show create publication pub4;
-alter publication pub5 account all comment '1212';
-show create publication pub5;
 drop publication pub1;
 -- @ignore:5,6
 show publications;
-create publication pub1 database t;
-create publication pub1 database t;
+create publication pub1 database t account all;
+create publication pub1 database t account all;
 alter publication pub1 account `all`;
 show create publication pub1;
 show create publication pubx;
 drop publication pub1;
-drop publication pub2;
 drop publication pub3;
-drop publication pub4;
-drop publication pub5;
 drop account acc0;
 drop account acc1;
 drop account acc2;
@@ -52,7 +39,7 @@ use sys_db_1;
 create table sys_tbl_1(a int primary key );
 insert into sys_tbl_1 values(1),(2),(3);
 create view v1 as (select * from sys_tbl_1);
-create publication sys_pub_1 database sys_db_1;
+create publication sys_pub_1 database sys_db_1 account all;
 -- @ignore:5,6
 show publications;
 
@@ -148,7 +135,7 @@ create database acc2_db_1;
 use acc2_db_1;
 create table acc2_tbl_1(q text,c int primary key auto_increment);
 insert into acc2_tbl_1(q) values ('acc2'),('acc1'),('acc0'),('sys');
-create publication acc2_pub_1 database acc2_db_1;
+create publication acc2_pub_1 database acc2_db_1 account sys,acc0,acc1;
 -- @session
 
 -- sys 创建订阅获取acc2的发布
@@ -172,7 +159,7 @@ select * from acc2_tbl_1;
 
 -- acc2限制只能sys租户使用发布,并新增数据
 -- @session:id=4&user=acc2:root&password=111
-alter publication acc2_pub_1 account `sys`;
+alter publication acc2_pub_1 account sys;
 use acc2_db_1;
 create table acc2_tbl_2(c text);
 insert into acc2_tbl_1(q) values ('mo');

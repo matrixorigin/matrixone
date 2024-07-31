@@ -60,7 +60,7 @@ create database sub1 from sys publication sys_pub_1;
 show databases;
 -- @session
 
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 use sys_db_1;
 alter table sys_tbl_1 drop primary key;
