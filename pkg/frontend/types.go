@@ -422,7 +422,6 @@ type ExecCtx struct {
 }
 
 func (execCtx *ExecCtx) Close() {
-	execCtx.reqCtx = nil
 	execCtx.prepareStmt = nil
 	execCtx.runResult = nil
 	execCtx.stmt = nil
