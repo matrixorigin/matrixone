@@ -140,7 +140,7 @@ func TestGroup(t *testing.T) {
 		// 	}
 		// }
 		tc.arg.Free(tc.proc, false, nil)
-		tc.proc.FreeVectors()
+		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }

@@ -417,23 +417,15 @@ func (proc *Process) GetValueScanBatch(key uuid.UUID) *batch.Batch {
 }
 
 func (proc *Process) CleanValueScanBatchs() {
-	for k, bat := range proc.Base.valueScanBatch {
-		bat.SetCnt(1)
-		bat.Clean(proc.Mp())
-		delete(proc.Base.valueScanBatch, k)
-	}
-}
-
-func (proc *Process) GetValueScanBatchs() []*batch.Batch {
-	var bats []*batch.Batch
-
+	mp := proc.Mp()
 	for k, bat := range proc.Base.valueScanBatch {
 		if bat != nil {
-			bats = append(bats, bat)
+			bat.SetCnt(1)
+			bat.Clean(mp)
 		}
+		// todo: why not remake the map after all clean ?
 		delete(proc.Base.valueScanBatch, k)
 	}
-	return bats
 }
 
 func (proc *Process) GetPrepareParamsAt(i int) ([]byte, error) {

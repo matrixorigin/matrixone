@@ -550,7 +550,7 @@ func executeStmtInSameSession(ctx context.Context, ses *Session, execCtx *ExecCt
 		ses.ReplaceDerivedStmt(prevDerivedStmt)
 		//@todo we need to improve: make one session, one proc, one txnOperator
 		p := ses.GetTxnCompileCtx().GetProcess()
-		p.FreeVectors()
+		p.Free()
 		execCtx.proc = proc
 		ses.GetTxnHandler().SetOptionBits(prevOptionBits)
 		ses.GetTxnHandler().SetServerStatus(prevServerStatus)

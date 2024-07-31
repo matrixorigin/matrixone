@@ -160,7 +160,7 @@ func TestCompile(t *testing.T) {
 		_, err = c.Run(0)
 		require.NoError(t, err)
 		// Enable memory check
-		tc.proc.FreeVectors()
+		tc.proc.Free()
 		//FIXME:
 		//!!!GOD!!!
 		//Sometimes it is 0.

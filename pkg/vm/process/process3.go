@@ -186,16 +186,11 @@ func (proc *Process) CleanLastQueryContext() {
 }
 
 // Free cleans the process.
-// todo: consider to use it instead of other method like `FreeVectors` next day.
 func (proc *Process) Free() {
 	if proc == nil {
 		return
 	}
-	for _, bat := range proc.GetValueScanBatchs() {
-		if bat != nil {
-			bat.Clean(proc.Base.mp)
-		}
-	}
+	proc.CleanValueScanBatchs()
 
 	// we should free the vector pool at the end,
 	// avoid any free action before will put memories into the pool.

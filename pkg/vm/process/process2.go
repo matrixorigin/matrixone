@@ -66,8 +66,3 @@ func (proc *Process) GetVector(typ types.Type) *vector.Vector {
 	}
 	return vector.NewVec(typ)
 }
-
-// FreeVectors release the vector pool.
-func (proc *Process) FreeVectors() {
-	proc.Base.vp.free(proc.Base.mp)
-}

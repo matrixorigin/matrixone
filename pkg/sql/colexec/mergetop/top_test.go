@@ -117,7 +117,7 @@ func TestTop(t *testing.T) {
 		// 	}
 		// }
 		tc.arg.Free(tc.proc, false, nil)
-		tc.proc.FreeVectors()
+		tc.proc.Free()
 		require.Equal(t, tc.proc.Mp().CurrNB(), int64(0))
 	}
 }
@@ -153,7 +153,7 @@ func BenchmarkTop(b *testing.B) {
 				}
 			}
 			tc.arg.Free(tc.proc, false, nil)
-			tc.proc.FreeVectors()
+			tc.proc.Free()
 		}
 	}
 }

@@ -824,7 +824,7 @@ func TestGetPkExprValue(t *testing.T) {
 	require.True(t, canEval)
 	require.True(t, equalToValFn([]int64{1}, val))
 
-	proc.FreeVectors()
+	proc.Free()
 	require.Zero(t, m.CurrNB())
 }
 
@@ -926,7 +926,7 @@ func TestEvalExprListToVec(t *testing.T) {
 			tc.expects[i].Free(m)
 		}
 	}
-	proc.FreeVectors()
+	proc.Free()
 	require.Zero(t, m.CurrNB())
 }
 
