@@ -16,6 +16,9 @@ package loopsingle
 
 import (
 	"bytes"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -103,7 +106,9 @@ func (loopSingle *LoopSingle) Call(proc *process.Process) (vm.CallResult, error)
 
 func (loopSingle *LoopSingle) build(proc *process.Process, anal process.Analyze) error {
 	ctr := loopSingle.ctr
-	mp := proc.ReceiveJoinMap(anal, loopSingle.JoinMapTag, false, 0)
+	start := time.Now()
+	defer anal.WaitStop(start)
+	mp := message.ReceiveJoinMap(loopSingle.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
 	if mp == nil {
 		return nil
 	}
