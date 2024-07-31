@@ -646,7 +646,7 @@ func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 	}()
 	if defChanged {
 		var pn *plan2.Plan
-		pn, e = c.buildPlanFunc()
+		pn, e = c.buildPlanFunc(c.proc.Ctx)
 		if e != nil {
 			return nil, e
 		}
@@ -4952,7 +4952,7 @@ func (c *Compile) SetOriginSQL(sql string) {
 	c.originSQL = sql
 }
 
-func (c *Compile) SetBuildPlanFunc(buildPlanFunc func() (*plan2.Plan, error)) {
+func (c *Compile) SetBuildPlanFunc(buildPlanFunc func(ctx context.Context) (*plan2.Plan, error)) {
 	c.buildPlanFunc = buildPlanFunc
 }
 
