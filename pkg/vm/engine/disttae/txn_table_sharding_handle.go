@@ -168,7 +168,11 @@ func HandleShardingReadRanges(
 		return nil, err
 	}
 
-	bys := ranges.MarshalToBytes()
+	bys, err := ranges.MarshalBinary()
+	if err != nil {
+		return nil, err
+	}
+
 	return buffer.EncodeBytes(bys), nil
 }
 

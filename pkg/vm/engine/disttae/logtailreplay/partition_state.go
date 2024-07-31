@@ -160,7 +160,7 @@ type ObjectInfo struct {
 func (o ObjectInfo) String() string {
 	return fmt.Sprintf(
 		"%s; entryState: %v; sorted: %v; commitTS: %s; createTS: %s; deleteTS: %s",
-		o.ObjectStats.String(), o.EntryState, o.CommitTS.ToString(),
+		o.ObjectStats.String(), o.EntryState, o.Sorted, o.CommitTS.ToString(),
 		o.CreateTime.ToString(), o.DeleteTime.ToString())
 }
 

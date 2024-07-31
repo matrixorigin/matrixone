@@ -70,7 +70,7 @@ func (tomb *tombstoneDataWithDeltaLoc) HasTombstones() bool {
 	return true
 }
 
-func (tomb *tombstoneDataWithDeltaLoc) UnMarshal(buf []byte) error {
+func (tomb *tombstoneDataWithDeltaLoc) UnmarshalBinary(buf []byte) error {
 	tomb.typ = engine.TombstoneType(types.DecodeUint8(buf))
 	buf = buf[1:]
 
@@ -135,7 +135,7 @@ func (tomb *tombstoneDataWithDeltaLoc) UnMarshal(buf []byte) error {
 
 }
 
-func (tomb *tombstoneDataWithDeltaLoc) MarshalWithBuf(w *bytes.Buffer) (uint32, error) {
+func (tomb *tombstoneDataWithDeltaLoc) MarshalBinaryWithBuffer(w *bytes.Buffer) (uint32, error) {
 
 	var size uint32
 	typ := uint8(tomb.typ)
@@ -336,7 +336,7 @@ func UnmarshalRelationData(data []byte) (engine.RelData, error) {
 	switch typ {
 	case engine.RelDataBlockList:
 		relData := buildBlockListRelationData()
-		if err := relData.UnMarshal(data); err != nil {
+		if err := relData.UnmarshalBinary(data); err != nil {
 			return nil, err
 		}
 		return relData, nil
@@ -396,7 +396,7 @@ func (relData *blockListRelData) AppendBlockInfo(blk objectio.BlockInfoInProgres
 	relData.blklist.AppendBlockInfo(blk)
 }
 
-func (relData *blockListRelData) UnMarshal(data []byte) error {
+func (relData *blockListRelData) UnmarshalBinary(data []byte) error {
 	data = data[1:]
 
 	sizeofblks := types.DecodeUint32(data)
@@ -419,7 +419,7 @@ func (relData *blockListRelData) UnMarshal(data []byte) error {
 		switch tombstoneTyp {
 		case engine.TombstoneWithDeltaLoc:
 			tombstoner := buildTombstoneWithDeltaLoc()
-			if err := tombstoner.UnMarshal(data[:size]); err != nil {
+			if err := tombstoner.UnmarshalBinary(data[:size]); err != nil {
 				return err
 			}
 			relData.AttachTombstones(tombstoner)
@@ -431,7 +431,7 @@ func (relData *blockListRelData) UnMarshal(data []byte) error {
 	return nil
 }
 
-func (relData *blockListRelData) MarshalWithBuf(w *bytes.Buffer) error {
+func (relData *blockListRelData) MarshalBinaryWithBuffer(w *bytes.Buffer) error {
 	var pos2 uint32
 	typ := uint8(relData.typ)
 	if _, err := w.Write(types.EncodeUint8(&typ)); err != nil {
@@ -469,7 +469,7 @@ func (relData *blockListRelData) MarshalWithBuf(w *bytes.Buffer) error {
 			return err
 		}
 
-		space, err := relData.tombstones.MarshalWithBuf(w)
+		space, err := relData.tombstones.MarshalBinaryWithBuffer(w)
 		if err != nil {
 			return err
 		}
@@ -484,13 +484,13 @@ func (relData *blockListRelData) GetType() engine.RelDataType {
 	return relData.typ
 }
 
-func (relData *blockListRelData) MarshalToBytes() []byte {
+func (relData *blockListRelData) MarshalBinary() ([]byte, error) {
 	var w bytes.Buffer
-	if err := relData.MarshalWithBuf(&w); err != nil {
-		return nil
+	if err := relData.MarshalBinaryWithBuffer(&w); err != nil {
+		return nil, err
 	}
 	buf := w.Bytes()
-	return buf
+	return buf, nil
 }
 
 func (relData *blockListRelData) AttachTombstones(tombstones engine.Tombstoner) error {

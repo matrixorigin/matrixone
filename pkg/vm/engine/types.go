@@ -583,9 +583,9 @@ type Tombstoner interface {
 
 	HasTombstones() bool
 
-	MarshalWithBuf(w *bytes.Buffer) (uint32, error)
+	MarshalBinaryWithBuffer(w *bytes.Buffer) (uint32, error)
 
-	UnMarshal(buf []byte) error
+	UnmarshalBinary(buf []byte) error
 
 	ApplyInMemTombstones(
 		bid types.Blockid,
@@ -620,8 +620,8 @@ type RelData interface {
 	// general interface
 
 	GetType() RelDataType
-	MarshalToBytes() []byte
-	UnMarshal(buf []byte) error
+	MarshalBinary() ([]byte, error)
+	UnmarshalBinary(buf []byte) error
 	AttachTombstones(tombstones Tombstoner) error
 	GetTombstones() Tombstoner
 	DataSlice(begin, end int) RelData
@@ -955,11 +955,11 @@ func (rd *EmptyRelationData) GetType() RelDataType {
 	return rd.typ
 }
 
-func (rd *EmptyRelationData) MarshalToBytes() []byte {
+func (rd *EmptyRelationData) MarshalBinary() ([]byte, error) {
 	panic("Not Supported")
 }
 
-func (rd *EmptyRelationData) UnMarshal(buf []byte) error {
+func (rd *EmptyRelationData) UnmarshalBinary(buf []byte) error {
 	panic("Not Supported")
 }
 

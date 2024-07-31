@@ -188,7 +188,9 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 	}
 	var data []byte
 	if s.NodeInfo.Data != nil {
-		data = s.NodeInfo.Data.MarshalToBytes()
+		if data, err = s.NodeInfo.Data.MarshalBinary(); err != nil {
+			return nil, -1, err
+		}
 	}
 	p.Node = &pipeline.NodeInfo{
 		Id:      s.NodeInfo.Id,

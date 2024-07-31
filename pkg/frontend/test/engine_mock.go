@@ -256,19 +256,19 @@ func (mr *MockTombstonerMockRecorder) HasTombstones() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HasTombstones", reflect.TypeOf((*MockTombstoner)(nil).HasTombstones))
 }
 
-// MarshalWithBuf mocks base method.
-func (m *MockTombstoner) MarshalWithBuf(w *bytes.Buffer) (uint32, error) {
+// MarshalBinaryWithBuffer mocks base method.
+func (m *MockTombstoner) MarshalBinaryWithBuffer(w *bytes.Buffer) (uint32, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "MarshalWithBuf", w)
+	ret := m.ctrl.Call(m, "MarshalBinaryWithBuffer", w)
 	ret0, _ := ret[0].(uint32)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// MarshalWithBuf indicates an expected call of MarshalWithBuf.
-func (mr *MockTombstonerMockRecorder) MarshalWithBuf(w interface{}) *gomock.Call {
+// MarshalBinaryWithBuffer indicates an expected call of MarshalBinaryWithBuffer.
+func (mr *MockTombstonerMockRecorder) MarshalBinaryWithBuffer(w interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MarshalWithBuf", reflect.TypeOf((*MockTombstoner)(nil).MarshalWithBuf), w)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MarshalBinaryWithBuffer", reflect.TypeOf((*MockTombstoner)(nil).MarshalBinaryWithBuffer), w)
 }
 
 // Merge mocks base method.
@@ -299,18 +299,18 @@ func (mr *MockTombstonerMockRecorder) Type() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Type", reflect.TypeOf((*MockTombstoner)(nil).Type))
 }
 
-// UnMarshal mocks base method.
-func (m *MockTombstoner) UnMarshal(buf []byte) error {
+// UnmarshalBinary mocks base method.
+func (m *MockTombstoner) UnmarshalBinary(buf []byte) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "UnMarshal", buf)
+	ret := m.ctrl.Call(m, "UnmarshalBinary", buf)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-// UnMarshal indicates an expected call of UnMarshal.
-func (mr *MockTombstonerMockRecorder) UnMarshal(buf interface{}) *gomock.Call {
+// UnmarshalBinary indicates an expected call of UnmarshalBinary.
+func (mr *MockTombstonerMockRecorder) UnmarshalBinary(buf interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UnMarshal", reflect.TypeOf((*MockTombstoner)(nil).UnMarshal), buf)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UnmarshalBinary", reflect.TypeOf((*MockTombstoner)(nil).UnmarshalBinary), buf)
 }
 
 // MockRelData is a mock of RelData interface.
@@ -514,18 +514,19 @@ func (mr *MockRelDataMockRecorder) GroupByPartitionNum() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GroupByPartitionNum", reflect.TypeOf((*MockRelData)(nil).GroupByPartitionNum))
 }
 
-// MarshalToBytes mocks base method.
-func (m *MockRelData) MarshalToBytes() []byte {
+// MarshalBinary mocks base method.
+func (m *MockRelData) MarshalBinary() ([]byte, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "MarshalToBytes")
+	ret := m.ctrl.Call(m, "MarshalBinary")
 	ret0, _ := ret[0].([]byte)
-	return ret0
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
-// MarshalToBytes indicates an expected call of MarshalToBytes.
-func (mr *MockRelDataMockRecorder) MarshalToBytes() *gomock.Call {
+// MarshalBinary indicates an expected call of MarshalBinary.
+func (mr *MockRelDataMockRecorder) MarshalBinary() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MarshalToBytes", reflect.TypeOf((*MockRelData)(nil).MarshalToBytes))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MarshalBinary", reflect.TypeOf((*MockRelData)(nil).MarshalBinary))
 }
 
 // SetBlockInfo mocks base method.
@@ -552,18 +553,18 @@ func (mr *MockRelDataMockRecorder) SetShardID(i, id interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetShardID", reflect.TypeOf((*MockRelData)(nil).SetShardID), i, id)
 }
 
-// UnMarshal mocks base method.
-func (m *MockRelData) UnMarshal(buf []byte) error {
+// UnmarshalBinary mocks base method.
+func (m *MockRelData) UnmarshalBinary(buf []byte) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "UnMarshal", buf)
+	ret := m.ctrl.Call(m, "UnmarshalBinary", buf)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-// UnMarshal indicates an expected call of UnMarshal.
-func (mr *MockRelDataMockRecorder) UnMarshal(buf interface{}) *gomock.Call {
+// UnmarshalBinary indicates an expected call of UnmarshalBinary.
+func (mr *MockRelDataMockRecorder) UnmarshalBinary(buf interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UnMarshal", reflect.TypeOf((*MockRelData)(nil).UnMarshal), buf)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UnmarshalBinary", reflect.TypeOf((*MockRelData)(nil).UnmarshalBinary), buf)
 }
 
 // MockDataSource is a mock of DataSource interface.
