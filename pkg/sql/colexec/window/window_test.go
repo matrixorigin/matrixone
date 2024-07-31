@@ -117,7 +117,7 @@ func newTestCase(flgs []bool, ts []types.Type, exprs []*plan.Expr, aggs []aggexe
 	}
 	return winTestCase{
 		flgs: flgs,
-		proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
+		proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
 		arg: &Window{
 			WinSpecList: exprs,
 			Types:       ts,

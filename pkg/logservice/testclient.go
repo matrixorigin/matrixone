@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/lni/vfs"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -33,6 +34,9 @@ func NewTestService(fs vfs.FS) (*Service, ClientConfig, error) {
 	cfg.FS = fs
 	cfg.LogServicePort = 9000
 	cfg.DisableWorkers = true
+
+	runtime.SetupServiceBasedRuntime(cfg.UUID, runtime.ServiceRuntime(""))
+
 	service, err := NewService(cfg,
 		newFS(),
 		nil,

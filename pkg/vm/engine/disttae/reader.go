@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -73,7 +74,7 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string, blkCnt int) {
 	chit, ctotal := len(cols), len(mixin.tableDef.Cols)
 	v2.TaskSelColumnTotal.Add(float64(ctotal))
 	v2.TaskSelColumnHit.Add(float64(ctotal - chit))
-	blockio.RecordColumnSelectivity(chit, ctotal)
+	blockio.RecordColumnSelectivity(mixin.proc.GetService(), chit, ctotal)
 
 	mixin.columns.seqnums = make([]uint16, len(cols))
 	mixin.columns.colTypes = make([]types.Type, len(cols))
@@ -81,6 +82,7 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string, blkCnt int) {
 	mixin.columns.pkPos = -1
 	mixin.columns.indexOfFirstSortedColumn = -1
 	for i, column := range cols {
+		column = strings.ToLower(column)
 		if column == catalog.Row_ID {
 			mixin.columns.seqnums[i] = objectio.SEQNUM_ROWID
 			mixin.columns.colTypes[i] = objectio.RowidType
@@ -153,7 +155,7 @@ func newBlockReader(
 	proc *process.Process,
 ) *blockReader {
 	for _, blk := range blks {
-		trace.GetService().TxnReadBlock(
+		trace.GetService(proc.GetService()).TxnReadBlock(
 			proc.GetTxnOperator(),
 			tableDef.TblId,
 			blk.BlockID[:])
@@ -343,9 +345,9 @@ func (r *blockReader) Read(
 			// always true for now, will optimize this in the future
 			prefetchFile := r.scanType == SMALL || r.scanType == LARGE || r.scanType == NORMAL
 			if filter.Valid && blockInfo.Sorted {
-				err = blockio.BlockPrefetch(r.filterState.seqnums, r.fs, [][]*objectio.BlockInfo{r.infos[0]}, prefetchFile)
+				err = blockio.BlockPrefetch(r.withFilterMixin.proc.GetService(), r.filterState.seqnums, r.fs, [][]*objectio.BlockInfo{r.infos[0]}, prefetchFile)
 			} else {
-				err = blockio.BlockPrefetch(r.columns.seqnums, r.fs, [][]*objectio.BlockInfo{r.infos[0]}, prefetchFile)
+				err = blockio.BlockPrefetch(r.withFilterMixin.proc.GetService(), r.columns.seqnums, r.fs, [][]*objectio.BlockInfo{r.infos[0]}, prefetchFile)
 			}
 			if err != nil {
 				return nil, err
@@ -369,7 +371,7 @@ func (r *blockReader) Read(
 	}
 
 	bat, err = blockio.BlockRead(
-		statsCtx, blockInfo, r.buffer, r.columns.seqnums, r.columns.colTypes, r.ts,
+		statsCtx, r.withFilterMixin.proc.GetService(), blockInfo, r.buffer, r.columns.seqnums, r.columns.colTypes, r.ts,
 		r.filterState.seqnums,
 		r.filterState.colTypes,
 		filter,
@@ -505,7 +507,7 @@ func (r *blockMergeReader) prefetchDeletes() error {
 
 		}
 		delete(r.deletaLocs, name)
-		return blockio.PrefetchWithMerged(pref)
+		return blockio.PrefetchWithMerged(r.withFilterMixin.proc.GetService(), pref)
 	}
 	return nil
 }

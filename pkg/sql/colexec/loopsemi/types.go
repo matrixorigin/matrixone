@@ -35,8 +35,6 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
-
 	state   int
 	lastrow int
 	bat     *batch.Batch
@@ -52,9 +50,9 @@ type LoopSemi struct {
 	Result      []int32
 	Cond        *plan.Expr
 	Typs        []types.Type
+	JoinMapTag  int32
 	ProjectList []*plan.Expr
 	Projection  *colexec.Projection
-
 	vm.OperatorBase
 }
 
@@ -97,7 +95,6 @@ func (loopSemi *LoopSemi) Free(proc *process.Process, pipelineFailed bool, err e
 	if ctr := loopSemi.ctr; ctr != nil {
 		ctr.cleanBatch(proc.Mp())
 		ctr.cleanExprExecutor()
-		ctr.FreeAllReg()
 		//if arg.ctr.buf != nil {
 		//proc.PutBatch(arg.ctr.buf)
 		//arg.ctr.buf = nil

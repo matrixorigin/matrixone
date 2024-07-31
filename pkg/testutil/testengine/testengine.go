@@ -16,6 +16,7 @@ package testengine
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 
@@ -40,8 +41,7 @@ func New(
 	compilerContext plan.CompilerContext,
 ) {
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	ck := runtime.ProcessLevelRuntime().Clock()
+	ck := runtime.ServiceRuntime("").Clock()
 	addr := "1"
 	services := []metadata.TNService{{
 		ServiceID:         uuid.NewString(),
@@ -53,12 +53,13 @@ func New(
 			},
 		},
 	}}
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService,
-		clusterservice.NewMOCluster(nil, 0,
+	runtime.ServiceRuntime("").SetGlobalVariables(runtime.ClusterService,
+		clusterservice.NewMOCluster("", nil, 0,
 			clusterservice.WithDisableRefresh(),
 			clusterservice.WithServices(nil, services)))
 
 	storage, err := memorystorage.NewMemoryStorage(
+		"",
 		mpool.MustNewZeroNoFixed(),
 		ck,
 		memoryengine.RandomIDGenerator,
@@ -76,11 +77,12 @@ func New(
 
 	e := memoryengine.New(
 		ctx,
+		"",
 		memoryengine.NewDefaultShardPolicy(
 			mpool.MustNewZeroNoFixed(),
 		),
 		memoryengine.RandomIDGenerator,
-		clusterservice.GetMOCluster(),
+		clusterservice.GetMOCluster(""),
 	)
 
 	txnOp, err := client.New(ctx, timestamp.Timestamp{})

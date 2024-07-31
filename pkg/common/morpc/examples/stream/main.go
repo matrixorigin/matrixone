@@ -98,5 +98,5 @@ func startServer() error {
 }
 
 func newCodec() morpc.Codec {
-	return morpc.NewMessageCodec(func() morpc.Message { return &message.ExampleMessage{} })
+	return morpc.NewMessageCodec("", func() morpc.Message { return &message.ExampleMessage{} })
 }

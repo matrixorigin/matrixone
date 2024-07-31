@@ -317,7 +317,7 @@ dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    cr
 275154    test    def    create database test    0    1    2024-05-15 14:05:10    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp05'} where att_database = 'test';
 attname
-__mo_index_pri_col
+__mo_index_idx_col
 __mo_rowid
 col1
 col2
@@ -328,7 +328,7 @@ col1
 col2
 col3
 __mo_rowid
-__mo_index_idx_col
+__mo_index_pri_col
 drop snapshot sp05;
 drop snapshot sp04;
 drop snapshot sp03;
@@ -531,7 +531,7 @@ select * from testsnap_03 {snapshot = 'sp04'} where jobTitle = 'President';
 employeenumber    lastname    firstname    extension    email    officecode    reportsto    jobtitle
 1002    Murphy    Diane    x5800    dmurphy@classicmodelcars.com    1    null    President
 select employeeNumber,lastName,firstName,extension from testsnap_03 {snapshot = 'sp04'} where extension = 'x4611';
-employeenumber    lastname    firstname    extension
+employeeNumber    lastName    firstName    extension
 1056    Patterson    Mary    x4611
 select count(*) from testsnap_03 {snapshot = 'sp04'} where employeeNumber > 1000;
 count(*)
@@ -576,18 +576,18 @@ dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    cr
 275321    test03    def    create database test03    0    1    2024-05-15 14:05:13    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp04'} where att_database = 'test03';
 attname
+__mo_index_pri_col
 __mo_fake_pk_col
 __mo_rowid
 email
-employeenumber
+employeeNumber
 extension
-firstname
-jobtitle
-lastname
-officecode
-reportsto
+firstName
+jobTitle
+lastName
+officeCode
+reportsTo
 __mo_rowid
-__mo_index_pri_col
 __mo_index_idx_col
 drop table testsnap_03;
 drop table testsnap_04;
@@ -607,7 +607,7 @@ drop snapshot if exists sp06;
 create snapshot sp06 for account sys;
 select count(*) from mo_catalog.mo_tables{snapshot = sp06} where reldatabase = 'mo_catalog';
 count(*)
-36
+38
 select * from mo_catalog.mo_database{snapshot = sp06} where datname = 'mo_catalog';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
 1    mo_catalog    mo_catalog        0    0    2024-06-03 10:16:00    0

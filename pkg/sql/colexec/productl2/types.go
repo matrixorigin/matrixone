@@ -34,8 +34,6 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
-
 	state    int
 	probeIdx int
 	bat      *batch.Batch // build batch
@@ -48,9 +46,9 @@ type Productl2 struct {
 	Typs        []types.Type
 	Result      []colexec.ResultPos
 	OnExpr      *plan.Expr
+	JoinMapTag  int32
 	ProjectList []*plan.Expr
 	Projection  *colexec.Projection
-
 	vm.OperatorBase
 }
 
@@ -94,7 +92,6 @@ func (productl2 *Productl2) Free(proc *process.Process, pipelineFailed bool, err
 	if ctr != nil {
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
-		ctr.FreeAllReg()
 		productl2.ctr = nil
 	}
 	if productl2.Projection != nil {

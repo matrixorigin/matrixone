@@ -33,35 +33,36 @@ func ChangeColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 	tableDef := alterPlan.CopyTableDef
 
 	// get the original column name
-	originalColName := spec.OldColumnName.ColName()
+	oldColName := spec.OldColumnName.ColName()
+	oldColNameOrigin := spec.OldColumnName.ColNameOrigin()
 
 	specNewColumn := spec.NewColumn
 	// get the new column name
 	newColName := specNewColumn.Name.ColName()
+	newColNameOrigin := specNewColumn.Name.ColNameOrigin()
 
 	// Check whether original column has existed.
-	col := FindColumn(tableDef.Cols, originalColName)
-	if col == nil || col.Hidden {
-		return moerr.NewBadFieldError(ctx.GetContext(), spec.OldColumnName.ColNameOrigin(), alterPlan.TableDef.Name)
+	oldCol := FindColumn(tableDef.Cols, oldColName)
+	if oldCol == nil || oldCol.Hidden {
+		return moerr.NewBadFieldError(ctx.GetContext(), oldColNameOrigin, alterPlan.TableDef.Name)
 	}
 
-	if isColumnWithPartition(col.Name, tableDef.Partition) {
+	if isColumnWithPartition(oldColName, tableDef.Partition) {
 		return moerr.NewNotSupported(ctx.GetContext(), "unsupport alter partition part column currently")
 	}
 
 	// If you want to rename the original column name to new name, you need to first check if the new name already exists.
-	if newColName != originalColName {
-		newcol := FindColumn(tableDef.Cols, newColName)
-		if newcol != nil {
-			return moerr.NewErrDupFieldName(ctx.GetContext(), newColName)
-		}
+	if newColName != oldColName && FindColumn(tableDef.Cols, newColName) != nil {
+		return moerr.NewErrDupFieldName(ctx.GetContext(), newColName)
+	}
 
-		//change the name of the column in the foreign key constraint
+	//change the name of the column in the foreign key constraint
+	if newColNameOrigin != oldColNameOrigin {
 		alterCtx.UpdateSqls = append(alterCtx.UpdateSqls,
 			getSqlForRenameColumn(alterPlan.Database,
 				alterPlan.TableDef.Name,
-				originalColName,
-				newColName)...)
+				oldColNameOrigin,
+				newColNameOrigin)...)
 	}
 
 	colType, err := getTypeFromAst(ctx.GetContext(), specNewColumn.Type)
@@ -74,42 +75,44 @@ func ChangeColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 		return err
 	}
 
-	newCol, err := buildChangeColumnAndConstraint(ctx, alterPlan, col, specNewColumn, colType)
+	newCol, err := buildChangeColumnAndConstraint(ctx, alterPlan, oldCol, specNewColumn, colType)
 	if err != nil {
 		return err
 	}
 
 	// check new column foreign key constraints
-	if err = CheckModifyColumnForeignkeyConstraint(ctx, tableDef, col, newCol); err != nil {
+	if err = CheckModifyColumnForeignkeyConstraint(ctx, tableDef, oldCol, newCol); err != nil {
 		return err
 	}
 
-	if err = checkChangeTypeCompatible(ctx.GetContext(), &col.Typ, &newCol.Typ); err != nil {
+	if err = checkChangeTypeCompatible(ctx.GetContext(), &oldCol.Typ, &newCol.Typ); err != nil {
 		return err
 	}
 
-	if err = checkModifyNewColumn(ctx.GetContext(), tableDef, col, newCol, spec.Position); err != nil {
+	if err = checkModifyNewColumn(ctx.GetContext(), tableDef, oldCol, newCol, spec.Position); err != nil {
 		return err
 	}
 
-	handleClusterByKey(ctx.GetContext(), alterPlan, newColName, originalColName)
+	handleClusterByKey(ctx.GetContext(), alterPlan, newColName, oldColName)
 
-	delete(alterCtx.alterColMap, col.Name)
-	alterCtx.alterColMap[newCol.Name] = selectExpr{
+	delete(alterCtx.alterColMap, oldColName)
+	alterCtx.alterColMap[newColName] = selectExpr{
 		sexprType: columnName,
-		sexprStr:  col.Name,
+		sexprStr:  oldColName,
 	}
 
-	if tmpCol, ok := alterCtx.changColDefMap[col.ColId]; ok {
-		tmpCol.Name = newCol.Name
+	if tmpCol, ok := alterCtx.changColDefMap[oldCol.ColId]; ok {
+		tmpCol.Name = newColName
+		tmpCol.OriginName = newColNameOrigin
 	}
 	return nil
 }
 
 // buildChangeColumnAndConstraint Build the changed new column definition, and check its column level integrity constraints,
 // and check other table level constraints, such as primary keys, indexes, etc
-func buildChangeColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable, originalCol *ColDef, specNewColumn *tree.ColumnTableDef, colType plan.Type) (*ColDef, error) {
+func buildChangeColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable, oldCol *ColDef, specNewColumn *tree.ColumnTableDef, colType plan.Type) (*ColDef, error) {
 	newColName := specNewColumn.Name.ColName()
+	newColNameOrigin := specNewColumn.Name.ColNameOrigin()
 	// Check if the new column name is valid and conflicts with internal hidden columns
 	err := CheckColumnNameValid(ctx.GetContext(), newColName)
 	if err != nil {
@@ -117,12 +120,13 @@ func buildChangeColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTa
 	}
 
 	newCol := &ColDef{
-		ColId:     originalCol.ColId,
-		Primary:   originalCol.Primary,
-		ClusterBy: originalCol.ClusterBy,
-		Name:      newColName,
-		Typ:       colType,
-		Alg:       plan.CompressType_Lz4,
+		ColId:      oldCol.ColId,
+		Primary:    oldCol.Primary,
+		ClusterBy:  oldCol.ClusterBy,
+		Name:       newColName,
+		OriginName: newColNameOrigin,
+		Typ:        colType,
+		Alg:        plan.CompressType_Lz4,
 	}
 
 	hasDefaultValue := false
@@ -150,7 +154,7 @@ func buildChangeColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTa
 		case *tree.AttributeComment:
 			comment := attribute.CMT.String()
 			if getNumOfCharacters(comment) > maxLengthOfColumnComment {
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "comment for column '%s' is too long", specNewColumn.Name.ColNameOrigin())
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "comment for column '%s' is too long", newColNameOrigin)
 			}
 			newCol.Comment = comment
 		case *tree.AttributeAutoIncrement:
@@ -211,7 +215,7 @@ func buildChangeColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTa
 		}
 	}
 	if auto_incr && hasDefaultValue {
-		return nil, moerr.NewErrInvalidDefault(ctx.GetContext(), specNewColumn.Name.ColNameOrigin())
+		return nil, moerr.NewErrInvalidDefault(ctx.GetContext(), newColNameOrigin)
 	}
 	if !hasDefaultValue {
 		defaultValue, err := buildDefaultExpr(specNewColumn, colType, ctx.GetProcess())
@@ -223,11 +227,11 @@ func buildChangeColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTa
 
 	// If the column name of the table changes, it is necessary to check if it is associated
 	// with the index key. If it is an index key column, column name replacement is required.
-	if newColName != originalCol.Name {
+	if newColName != oldCol.Name {
 		for _, indexInfo := range alterPlan.CopyTableDef.Indexes {
 			for j, partCol := range indexInfo.Parts {
 				partCol = catalog.ResolveAlias(partCol)
-				if partCol == originalCol.Name {
+				if partCol == oldCol.Name {
 					indexInfo.Parts[j] = newColName
 				}
 			}
@@ -235,7 +239,7 @@ func buildChangeColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTa
 
 		primaryKeyDef := alterPlan.CopyTableDef.Pkey
 		for j, partCol := range primaryKeyDef.Names {
-			if partCol == originalCol.Name {
+			if partCol == oldCol.Name {
 				primaryKeyDef.Names[j] = newColName
 				break
 			}
@@ -244,7 +248,7 @@ func buildChangeColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTa
 
 	if alterPlan.CopyTableDef.Pkey != nil {
 		for _, partCol := range alterPlan.CopyTableDef.Pkey.Names {
-			if partCol == newCol.Name {
+			if partCol == newColName {
 				newCol.Default.NullAbility = false
 				newCol.NotNull = true
 				break
@@ -269,8 +273,8 @@ func CheckColumnNameValid(ctx context.Context, colName string) error {
 
 // handleClusterByKey Process the cluster by table. If the cluster by key name is modified, proceed with the process
 func handleClusterByKey(ctx context.Context, alterPlan *plan.AlterTable, newColName string, originalColName string) error {
-	if alterPlan.CopyTableDef.ClusterBy != nil && alterPlan.CopyTableDef.ClusterBy.Name != "" {
-		clusterBy := alterPlan.CopyTableDef.ClusterBy
+	clusterBy := alterPlan.CopyTableDef.ClusterBy
+	if clusterBy != nil && clusterBy.Name != "" {
 		var clNames []string
 		if util.JudgeIsCompositeClusterByColumn(clusterBy.Name) {
 			clNames = util.SplitCompositeClusterByColumnName(clusterBy.Name)

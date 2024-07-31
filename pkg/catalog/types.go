@@ -140,6 +140,9 @@ const (
 
 	// MO_SNAPSHOTS
 	MO_SNAPSHOTS = "mo_snapshots"
+
+	//MO_Pitr
+	MO_PITR = "mo_pitr"
 )
 
 const (
@@ -738,19 +741,6 @@ var (
 		MO_COLUMNS_ATT_SEQNUM_IDX,
 		MO_COLUMNS_ATT_ENUM_IDX,
 	}
-
-	// used by memengine or tae
-	MoDatabaseTableDefs = []engine.TableDef{}
-	// used by memengine or tae
-	MoTablesTableDefs = []engine.TableDef{}
-	// used by memengine or tae
-	MoColumnsTableDefs = []engine.TableDef{}
-	// used by memengine or tae or cn
-	MoTableMetaDefs = []engine.TableDef{}
-
-	MoDatabaseConstraint = []byte{}
-	MoTableConstraint    = []byte{}
-	MoColumnConstraint   = []byte{}
 )
 
 var (

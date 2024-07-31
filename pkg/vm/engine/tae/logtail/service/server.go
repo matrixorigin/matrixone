@@ -132,18 +132,25 @@ type LogtailServer struct {
 	stopper    *stopper.Stopper
 }
 
-func defaultRPCServerFactory(name string, address string, logtailServer *LogtailServer,
-	options ...morpc.ServerOption) (morpc.RPCServer, error) {
-
+func defaultRPCServerFactory(
+	name string,
+	address string,
+	logtailServer *LogtailServer,
+	options ...morpc.ServerOption,
+) (morpc.RPCServer, error) {
 	codecOpts := []morpc.CodecOption{
 		morpc.WithCodecMaxBodySize(int(logtailServer.cfg.RpcMaxMessageSize)),
 	}
 	if logtailServer.cfg.RpcEnableChecksum {
 		codecOpts = append(codecOpts, morpc.WithCodecEnableChecksum())
 	}
-	codec := morpc.NewMessageCodec(func() morpc.Message {
-		return logtailServer.pool.requests.Acquire()
-	}, codecOpts...)
+	codec := morpc.NewMessageCodec(
+		logtailServer.rt.ServiceUUID(),
+		func() morpc.Message {
+			return logtailServer.pool.requests.Acquire()
+		},
+		codecOpts...,
+	)
 
 	rpc, err := morpc.NewRPCServer(LogtailServiceRPCName, address, codec,
 		morpc.WithServerLogger(logtailServer.logger.RawLogger()),

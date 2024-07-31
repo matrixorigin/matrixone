@@ -15,7 +15,6 @@
 package mark
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -58,18 +57,11 @@ type evalVector struct {
 // we will give more one bool type vector as a marker col
 // so if you use mark join result, remember to get the last vector,that's what you want
 type container struct {
-	colexec.ReceiverOperator
-
 	// here, we will have three states:
 	// Build：we will use the right table to build a hashtable
 	// Probe: we will use the left table data to probe the hashtable
 	// End: Join working is over
 	state int
-
-	// in the probe stage, when we invoke func find to find rows in the hashtable,it will modify the
-	// inBuckets Slice, inBuckets[i] means the i-th row is whether in the bucket
-	// 0 means no, 1 means yes
-	inBuckets []uint8
 
 	// store the all batch from the build table
 	bat     *batch.Batch
@@ -103,7 +95,7 @@ type container struct {
 	markVals  []bool
 	markNulls *nulls.Nulls
 
-	mp *hashmap.JoinMap
+	mp *process.JoinMap
 
 	nullWithBatch *batch.Batch
 	rewriteCond   *plan.Expr
@@ -153,12 +145,11 @@ type MarkJoin struct {
 	Typs []types.Type
 	Cond *plan.Expr
 
-	OnList   []*plan.Expr
-	HashOnPK bool
-
+	OnList      []*plan.Expr
+	HashOnPK    bool
+	JoinMapTag  int32
 	ProjectList []*plan.Expr
 	Projection  *colexec.Projection
-
 	vm.OperatorBase
 }
 
@@ -208,7 +199,6 @@ func (markJoin *MarkJoin) Free(proc *process.Process, pipelineFailed bool, err e
 		ctr.cleanEqVectors()
 		ctr.cleanHashMap()
 		ctr.cleanExprExecutor()
-		ctr.FreeAllReg()
 
 		allocSize += ctr.maxAllocSize
 		markJoin.ctr = nil

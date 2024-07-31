@@ -162,9 +162,7 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 // compute the `agg(expression)List group by expressionList`.
-func (ctr *container) processGroupByAndAgg(
-	ap *Group, proc *process.Process, anal process.Analyze, isFirst bool) (vm.CallResult, error) {
-
+func (ctr *container) processGroupByAndAgg(ap *Group, proc *process.Process, anal process.Analyze, isFirst bool) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		// receive data from pre-operator.
@@ -257,6 +255,7 @@ func (ctr *container) processGroupByAndAgg(
 }
 
 func (ctr *container) generateAggStructures(proc *process.Process, group *Group) error {
+
 	for i, ag := range group.Aggs {
 		ctr.bat.Aggs[i] = aggexec.MakeAgg(
 			proc,

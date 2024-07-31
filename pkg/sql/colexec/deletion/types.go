@@ -370,7 +370,7 @@ func getNonNullValue(col *vector.Vector, row uint32) any {
 	case types.T_Blockid:
 		return vector.GetFixedAt[types.Blockid](col, int(row))
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64:
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		return col.GetBytesAt(int(row))
 	default:
 		// return vector.ErrVecTypeNotSupport

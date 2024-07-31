@@ -59,7 +59,7 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		seq = txnOp.NextSequence()
 	}
 
-	trace.GetService().AddTxnDurationAction(
+	trace.GetService(proc.GetService()).AddTxnDurationAction(
 		txnOp,
 		client.TableScanEvent,
 		seq,
@@ -74,7 +74,7 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 
 		cost := time.Since(start)
 
-		trace.GetService().AddTxnDurationAction(
+		trace.GetService(proc.GetService()).AddTxnDurationAction(
 			txnOp,
 			client.TableScanEvent,
 			seq,
@@ -85,13 +85,6 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 	}()
 
 	result := vm.NewCallResult()
-	//select {
-	//case <-proc.Ctx.Done():
-	//	result.Batch = nil
-	//	result.Status = vm.ExecStop
-	//	return result, proc.Ctx.Err()
-	//default:
-	//}
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		e = err
 		return vm.CancelResult, err
@@ -132,7 +125,7 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 			continue
 		}
 
-		trace.GetService().TxnRead(
+		trace.GetService(proc.GetService()).TxnRead(
 			proc.GetTxnOperator(),
 			proc.GetTxnOperator().Txn().SnapshotTS,
 			tableScan.TableID,
@@ -150,6 +143,7 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	result.Batch = tableScan.ctr.buf
+	anal.Input(result.Batch, tableScan.IsFirst)
 	var err error
 	if tableScan.Projection != nil {
 		result.Batch, err = tableScan.Projection.Eval(result.Batch, proc)
@@ -157,4 +151,5 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 
 	anal.Output(result.Batch, tableScan.IsLast)
 	return result, err
+
 }

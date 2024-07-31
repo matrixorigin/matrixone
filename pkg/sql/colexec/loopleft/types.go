@@ -35,8 +35,6 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
-
 	state    int
 	probeIdx int
 	bat      *batch.Batch
@@ -52,9 +50,9 @@ type LoopLeft struct {
 	Typs        []types.Type
 	Cond        *plan.Expr
 	Result      []colexec.ResultPos
+	JoinMapTag  int32
 	ProjectList []*plan.Expr
 	Projection  *colexec.Projection
-
 	vm.OperatorBase
 }
 
@@ -96,7 +94,6 @@ func (loopLeft *LoopLeft) Free(proc *process.Process, pipelineFailed bool, err e
 	if ctr := loopLeft.ctr; ctr != nil {
 		ctr.cleanBatch(proc.Mp())
 		ctr.cleanExprExecutor()
-		ctr.FreeAllReg()
 		loopLeft.ctr = nil
 	}
 

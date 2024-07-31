@@ -29,13 +29,12 @@ import (
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/lni/goutils/leaktest"
-	"github.com/stretchr/testify/require"
-
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/pb/proxy"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/stretchr/testify/require"
 )
 
 var testSlat = []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0}
@@ -238,6 +237,7 @@ func (s *testCNServer) Start() error {
 					connID: cid,
 					conn:   c,
 					mysqlProto: frontend.NewMysqlClientProtocol(
+						"",
 						cid, ios, 0, &fp),
 					sessionVars: make(map[string]string),
 					labels:      make(map[string]string),
@@ -287,6 +287,8 @@ func testHandle(h *testHandler) {
 				h.handleStopTxn()
 			} else if strings.HasPrefix(string(packet.Payload[1:]), "kill connection") {
 				h.handleKillConn()
+			} else if strings.Contains(string(packet.Payload[1:]), "processlist") {
+				h.handleShowProcesslist()
 			} else {
 				h.handleCommon()
 			}
@@ -418,6 +420,51 @@ func (h *testHandler) handleStartTxn() {
 func (h *testHandler) handleStopTxn() {
 	h.status &= ^frontend.SERVER_STATUS_IN_TRANS
 	h.handleCommon()
+}
+
+func (h *testHandler) handleShowProcesslist() {
+	h.mysqlProto.SetSequenceID(1)
+	err := h.mysqlProto.SendColumnCountPacket(2)
+	if err != nil {
+		_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeErrPayload(0, "", err.Error()))
+		return
+	}
+	cols := []*plan.ColDef{
+		{Typ: plan.Type{Id: int32(types.T_varchar)}, Name: "node_id"},
+		{Typ: plan.Type{Id: int32(types.T_varchar)}, Name: "host"},
+	}
+	columns := make([]interface{}, len(cols))
+	res := &frontend.MysqlResultSet{}
+	for i, col := range cols {
+		c := new(frontend.MysqlColumn)
+		c.SetName(col.Name)
+		c.SetOrgName(col.Name)
+		c.SetTable(col.Typ.Table)
+		c.SetOrgTable(col.Typ.Table)
+		c.SetAutoIncr(col.Typ.AutoIncr)
+		c.SetSchema("")
+		c.SetDecimal(col.Typ.Scale)
+		columns[i] = c
+		res.AddColumn(c)
+	}
+	for _, c := range columns {
+		if err := h.mysqlProto.SendColumnDefinitionPacket(context.TODO(), c.(frontend.Column), 3); err != nil {
+			_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeErrPayload(0, "", err.Error()))
+			return
+		}
+	}
+	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeEOFPayload(0, h.status))
+	row := make([]interface{}, 2)
+	row[0] = "node1"
+	row[1] = "host1"
+	res.AddRow(row)
+	ses := &frontend.Session{}
+	h.mysqlProto.SetSession(ses)
+	if err := h.mysqlProto.SendResultSetTextBatchRow(res, res.GetRowCount()); err != nil {
+		_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeErrPayload(0, "", err.Error()))
+		return
+	}
+	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeEOFPayload(0, h.status))
 }
 
 func (s *testCNServer) Stop() error {

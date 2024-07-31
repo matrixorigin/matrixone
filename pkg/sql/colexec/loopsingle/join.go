@@ -40,7 +40,6 @@ func (loopSingle *LoopSingle) Prepare(proc *process.Process) error {
 	var err error
 
 	loopSingle.ctr = new(container)
-	loopSingle.ctr.InitReceiver(proc, false)
 	loopSingle.ctr.bat = batch.NewWithSize(len(loopSingle.Typs))
 	for i, typ := range loopSingle.Typs {
 		loopSingle.ctr.bat.Vecs[i] = proc.GetVector(typ)
@@ -73,19 +72,18 @@ func (loopSingle *LoopSingle) Call(proc *process.Process) (vm.CallResult, error)
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(proc, anal); err != nil {
+			if err := loopSingle.build(proc, anal); err != nil {
 				return result, err
 			}
 			ctr.state = Probe
 
 		case Probe:
 			var err error
-			msg := ctr.ReceiveFromSingleReg(0, anal)
-			if msg.Err != nil {
-				return result, msg.Err
+			result, err = loopSingle.Children[0].Call(proc)
+			if err != nil {
+				return result, err
 			}
-
-			bat := msg.Batch
+			bat := result.Batch
 			if bat == nil {
 				ctr.state = End
 				continue
@@ -123,22 +121,20 @@ func (loopSingle *LoopSingle) Call(proc *process.Process) (vm.CallResult, error)
 	}
 }
 
-func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
+func (loopSingle *LoopSingle) build(proc *process.Process, anal process.Analyze) error {
+	ctr := loopSingle.ctr
+	mp := proc.ReceiveJoinMap(anal, loopSingle.JoinMapTag, false, 0)
+	if mp == nil {
+		return nil
+	}
+	batches := mp.GetBatches()
 	var err error
-	for {
-		msg := ctr.ReceiveFromSingleReg(1, anal)
-		if msg.Err != nil {
-			return msg.Err
-		}
-		bat := msg.Batch
-		if bat == nil {
-			break
-		}
-		ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), bat)
+	//maybe optimize this in the future
+	for i := range batches {
+		ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), batches[i])
 		if err != nil {
 			return err
 		}
-		proc.PutBatch(bat)
 	}
 	return nil
 }

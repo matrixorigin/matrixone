@@ -510,4 +510,12 @@ execute stmt1 using @value1;
 count(*)
 5000000
 deallocate prepare stmt1;
+create table t (a int, b json);
+prepare st1 from 'insert into t values (?, ?)';
+set @a = 1;
+set @b = '[1,2]';
+execute st1 using @a, @b;
+select * from t;
+a    b
+1    [1, 2]
 drop database prepare_test;

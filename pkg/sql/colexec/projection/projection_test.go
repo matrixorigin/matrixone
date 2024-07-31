@@ -47,7 +47,7 @@ var (
 func init() {
 	tcs = []projectionTestCase{
 		{
-			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_int8.ToType(),
 			},

@@ -32,7 +32,6 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
 	state int
 	buf   *batch.Batch
 }
@@ -86,7 +85,6 @@ func (indexJoin *IndexJoin) Reset(proc *process.Process, pipelineFailed bool, er
 func (indexJoin *IndexJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := indexJoin.ctr
 	if ctr != nil {
-		ctr.FreeAllReg()
 		if indexJoin.ctr.buf != nil {
 			indexJoin.ctr.buf.Clean(proc.Mp())
 			indexJoin.ctr.buf = nil

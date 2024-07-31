@@ -20,28 +20,24 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"math/rand"
 	"os"
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/google/uuid"
-	"go.uber.org/zap"
-
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	mo_config "github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -54,6 +50,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
+	"go.uber.org/zap"
 )
 
 type CloseFlag struct {
@@ -420,7 +417,7 @@ func getValueFromVector(ctx context.Context, vec *vector.Vector, ses *Session, e
 		return vector.MustFixedCol[float32](vec)[0], nil
 	case types.T_float64:
 		return vector.MustFixedCol[float64](vec)[0], nil
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_text, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_text, types.T_blob, types.T_datalink:
 		return vec.GetStringAt(0), nil
 	case types.T_array_float32:
 		return vector.GetArrayAt[float32](vec, 0), nil
@@ -438,7 +435,7 @@ func getValueFromVector(ctx context.Context, vec *vector.Vector, ses *Session, e
 		return byteJson.String(), nil
 	case types.T_uuid:
 		val := vector.MustFixedCol[types.Uuid](vec)[0]
-		return val.ToString(), nil
+		return val.String(), nil
 	case types.T_date:
 		val := vector.MustFixedCol[types.Date](vec)[0]
 		return val.String(), nil
@@ -525,20 +522,8 @@ func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string
 	ses.SetTStmt(nil)
 }
 
-var logger *log.MOLogger
-var loggerOnce sync.Once
-
-func getLogger() *log.MOLogger {
-	loggerOnce.Do(initLogger)
-	return logger
-}
-
-func initLogger() {
-	rt := moruntime.ProcessLevelRuntime()
-	if rt == nil {
-		rt = moruntime.DefaultRuntime()
-	}
-	logger = rt.Logger().Named("frontend")
+func getLogger(sid string) *log.MOLogger {
+	return moruntime.GetLogger(sid)
 }
 
 // appendSessionField append session id, transaction id and statement id to the fields

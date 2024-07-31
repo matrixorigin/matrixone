@@ -42,8 +42,7 @@ type container struct {
 	joinBat *batch.Batch
 	expr    colexec.ExpressionExecutor
 	cfs     []func(*vector.Vector, *vector.Vector, int64, int) error
-	colexec.ReceiverOperator
-	buf *batch.Batch
+	buf     *batch.Batch
 }
 
 type LoopAnti struct {
@@ -51,9 +50,9 @@ type LoopAnti struct {
 	Result      []int32
 	Cond        *plan.Expr
 	Typs        []types.Type
+	JoinMapTag  int32
 	ProjectList []*plan.Expr
 	Projection  *colexec.Projection
-
 	vm.OperatorBase
 }
 
@@ -96,7 +95,6 @@ func (loopAnti *LoopAnti) Free(proc *process.Process, pipelineFailed bool, err e
 	if ctr := loopAnti.ctr; ctr != nil {
 		ctr.cleanBatch(proc.Mp())
 		ctr.cleanExprExecutor()
-		ctr.FreeAllReg()
 		//	if arg.ctr.buf != nil {
 		//	proc.PutBatch(arg.ctr.buf)
 		//	arg.ctr.buf = nil

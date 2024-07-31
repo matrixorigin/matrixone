@@ -36,11 +36,11 @@ type TableScan struct {
 	ctr            *container
 	TopValueMsgTag int32
 	Reader         engine.Reader
-	Attrs          []string
-	TableID        uint64
-	ProjectList    []*plan.Expr
-	Projection     *colexec.Projection
-
+	// letter case: origin
+	Attrs       []string
+	TableID     uint64
+	ProjectList []*plan.Expr
+	Projection  *colexec.Projection
 	vm.OperatorBase
 }
 

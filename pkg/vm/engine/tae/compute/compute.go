@@ -241,7 +241,7 @@ func GetOffsetByVal(data containers.Vector, v any, skipmask *nulls.Bitmap) (offs
 			skipmask)
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_json, types.T_text,
-		types.T_array_float32, types.T_array_float64:
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		// data is retrieved from DN vector, hence T_array can be handled here.
 		val := v.([]byte)
 		start, end := 0, data.Length()-1

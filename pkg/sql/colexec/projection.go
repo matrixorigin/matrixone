@@ -116,7 +116,7 @@ func (projection *Projection) Free(proc *process.Process) {
 			}
 		}
 		if projection.bat != nil {
-			projection.bat.Clean(proc.Mp())
+			//projection.bat.Clean(proc.Mp())
 			projection.bat = nil
 		}
 		reuse.Free[Projection](projection, nil)
