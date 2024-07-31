@@ -254,6 +254,8 @@ type StatsInfo struct {
 	PlanDuration      time.Duration `json:"PlanDuration"`
 	CompileDuration   time.Duration `json:"CompileDuration"`
 	ExecutionDuration time.Duration `json:"ExecutionDuration"`
+	// Statistics on the time consumption of the output operator in generating data for query statements
+	OutputDuration int64 `json:"OutputDuration"`
 
 	//PipelineTimeConsumption      time.Duration
 	//PipelineBlockTimeConsumption time.Duration
@@ -322,6 +324,13 @@ func (stats *StatsInfo) ExecutionEnd() {
 	}
 	stats.ExecutionEndTime = time.Now()
 	stats.ExecutionDuration = stats.ExecutionEndTime.Sub(stats.ExecutionStartTime)
+}
+
+func (stats *StatsInfo) AddOutputTimeConsumption(d time.Duration) {
+	if stats == nil {
+		return
+	}
+	atomic.AddInt64(&stats.OutputDuration, int64(d))
 }
 
 func (stats *StatsInfo) AddIOAccessTimeConsumption(d time.Duration) {
