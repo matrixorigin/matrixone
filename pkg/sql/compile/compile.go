@@ -83,6 +83,7 @@ import (
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -562,8 +563,15 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	v2.TxnStatementTotalCounter.Inc()
 	runC = c
 	for {
+		_, sarg, exist := fault.TriggerFault("runOnce_fail")
+		enableRetry := exist && !c.isInternal && strings.HasPrefix(c.originSQL, sarg) && retryTimes < 1
 		if err = runC.runOnce(); err == nil {
-			break
+			if enableRetry {
+				logutil.Info("runOnce_fail triggered, retrying", zap.Any("sql", c.originSQL))
+				err = moerr.NewTxnNeedRetry(c.proc.Ctx)
+			} else {
+				break
+			}
 		}
 
 		c.fatalLog(retryTimes, err)
@@ -616,7 +624,6 @@ func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 	c.proc.GetTxnOperator().ResetRetry(true)
 	c.proc.GetTxnOperator().GetWorkspace().IncrSQLCount()
 
-	// clear the workspace of the failed statement
 	if e := c.proc.GetTxnOperator().GetWorkspace().RollbackLastStatement(c.proc.Ctx); e != nil {
 		return nil, e
 	}
@@ -1807,6 +1814,7 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 
 	if len(fileList) == 0 {
 		ret := newScope(Normal)
+		ret.NodeInfo = getEngineNode(c)
 		ret.DataSource = &Source{isConst: true, node: n}
 
 		currentFirstFlag := c.anal.isFirst
@@ -1987,6 +1995,7 @@ func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) compileValueScan(n *plan.Node) ([]*Scope, error) {
 	ds := newScope(Normal)
+	ds.NodeInfo = getEngineNode(c)
 	ds.DataSource = &Source{isConst: true, node: n}
 	ds.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
 	ds.Proc = process.NewFromProc(c.proc, c.proc.Ctx, 0)
@@ -2448,10 +2457,6 @@ func (c *Compile) compileBroadcastJoin(node, left, right *plan.Node, ns []*plan.
 	leftTyps := make([]types.Type, len(left.ProjectList))
 	for i, expr := range left.ProjectList {
 		leftTyps[i] = dupType(&expr.Typ)
-	}
-
-	if plan2.IsShuffleChildren(left, ns) {
-		probeScopes = c.mergeShuffleJoinScopeList(probeScopes)
 	}
 
 	switch node.JoinType {
@@ -3681,57 +3686,58 @@ func (c *Compile) newJoinScopeListWithBucket(rs, left, right []*Scope, n *plan.N
 	return rs
 }
 
-func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []*Scope, n *plan.Node) []*Scope {
-	length := len(probeScopes)
-	rs := make([]*Scope, length)
-	idx := 0
-	for i := range probeScopes {
-		rs[i] = newScope(Remote)
-		rs[i].IsJoin = true
-		rs[i].NodeInfo = probeScopes[i].NodeInfo
-		rs[i].BuildIdx = 1
-		if isSameCN(rs[i].NodeInfo.Addr, c.addr) {
-			idx = i
+func (c *Compile) newMergeRemoteScopeByCN(ss []*Scope) []*Scope {
+	rs := make([]*Scope, 0, len(c.cnList))
+	for i := range c.cnList {
+		cn := c.cnList[i]
+		currentSS := make([]*Scope, 0, cn.Mcpu)
+		for j := range ss {
+			if isSameCN(ss[j].NodeInfo.Addr, cn.Addr) {
+				currentSS = append(currentSS, ss[j])
+			}
 		}
-		rs[i].PreScopes = []*Scope{probeScopes[i]}
-		rs[i].Proc = process.NewFromProc(c.proc, c.proc.Ctx, 2)
-		probeScopes[i].setRootOperator(
-			connector.NewArgument().
-				WithReg(rs[i].Proc.Reg.MergeReceivers[0]))
+		if len(currentSS) > 0 {
+			mergeScope := c.newMergeRemoteScope(currentSS, cn)
+			rs = append(rs, mergeScope)
+		}
 	}
 
+	return rs
+}
+
+func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []*Scope, n *plan.Node) []*Scope {
+	rs := c.newMergeRemoteScopeByCN(probeScopes)
+	for i := range rs {
+		rs[i].IsJoin = true
+		rs[i].NodeInfo.Mcpu = c.generateCPUNumber(ncpu, int(n.Stats.BlockNum))
+		rs[i].BuildIdx = len(rs[i].Proc.Reg.MergeReceivers)
+		w := &process.WaitRegister{
+			Ctx: rs[i].Proc.Ctx,
+			Ch:  make(chan *process.RegisterMessage, 10),
+		}
+		rs[i].Proc.Reg.MergeReceivers = append(rs[i].Proc.Reg.MergeReceivers, w)
+	}
 	// all join's first flag will setting in newLeftScope and newRightScope
 	// so we set it to false now
 	if c.IsTpQuery() {
 		rs[0].PreScopes = append(rs[0].PreScopes, buildScopes[0])
 	} else {
 		c.anal.isFirst = false
-		mergeChildren := c.newMergeScope(buildScopes)
-
-		mergeChildren.setRootOperator(constructDispatch(1, rs, c.addr, n, false))
-		mergeChildren.IsEnd = true
-		rs[idx].PreScopes = append(rs[idx].PreScopes, mergeChildren)
-	}
-
-	for i := range rs {
-		mergeOp := merge.NewArgument()
-		rs[i].setRootOperator(mergeOp)
+		for i := range rs {
+			if isSameCN(rs[i].NodeInfo.Addr, c.addr) {
+				mergeBuild := buildScopes[0]
+				if len(buildScopes) > 1 {
+					mergeBuild = c.newMergeScope(buildScopes)
+				}
+				mergeBuild.setRootOperator(constructDispatch(rs[i].BuildIdx, rs, c.addr, n, false))
+				mergeBuild.IsEnd = true
+				rs[i].PreScopes = append(rs[i].PreScopes, mergeBuild)
+				break
+			}
+		}
 	}
 
 	return rs
-}
-
-func (c *Compile) mergeShuffleJoinScopeList(child []*Scope) []*Scope {
-	lenCN := len(c.cnList)
-	dop := len(child) / lenCN
-	mergeScope := make([]*Scope, 0, lenCN)
-	for i, n := range c.cnList {
-		start := i * dop
-		end := start + dop
-		ss := child[start:end]
-		mergeScope = append(mergeScope, c.newMergeRemoteScope(ss, n))
-	}
-	return mergeScope
 }
 
 func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([]*Scope, []*Scope) {
