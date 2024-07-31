@@ -41,7 +41,6 @@ func (loopMark *LoopMark) Prepare(proc *process.Process) error {
 	var err error
 
 	loopMark.ctr = new(container)
-	loopMark.ctr.InitReceiver(proc, true)
 	loopMark.ctr.bat = batch.NewWithSize(len(loopMark.Typs))
 	for i, typ := range loopMark.Typs {
 		loopMark.ctr.bat.Vecs[i] = proc.GetVector(typ)
@@ -73,12 +72,11 @@ func (loopMark *LoopMark) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Probe:
 			var err error
-			msg := ctr.ReceiveFromAllRegs(anal)
-			if msg.Err != nil {
-				return result, msg.Err
+			result, err = loopMark.Children[0].Call(proc)
+			if err != nil {
+				return result, err
 			}
-
-			bat := msg.Batch
+			bat := result.Batch
 			if bat == nil {
 				ctr.state = End
 				continue
