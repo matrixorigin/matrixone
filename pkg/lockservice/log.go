@@ -18,12 +18,12 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
-	"sync"
-
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"go.uber.org/zap"
+	"sync"
 )
 
 var (
@@ -510,7 +510,7 @@ func logCleanCannotCommitTxn(
 	logger := getWithSkipLogger()
 	if logger.Enabled(zap.InfoLevel) {
 		logger.Info("clean cannot commit txn",
-			zap.String("txnID", txnID),
+			zap.String("txnID", hex.EncodeToString(util.UnsafeStringToBytes(txnID))),
 			zap.Int("state", state))
 	}
 }

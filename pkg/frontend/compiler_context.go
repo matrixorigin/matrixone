@@ -62,11 +62,11 @@ type TxnCompilerContext struct {
 }
 
 func (tcc *TxnCompilerContext) GetLowerCaseTableNames() int64 {
-	lower := int64(0)
-	if val, err := tcc.execCtx.ses.GetSessionSysVar("lower_case_table_names"); err != nil {
-		lower = val.(int64)
+	val, err := tcc.execCtx.ses.GetSessionSysVar("lower_case_table_names")
+	if err != nil {
+		val = int64(1)
 	}
-	return lower
+	return val.(int64)
 }
 
 func (tcc *TxnCompilerContext) SetExecCtx(execCtx *ExecCtx) {
