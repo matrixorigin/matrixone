@@ -574,8 +574,9 @@ func (def *StreamConfigsDef) ToPBVersion() ConstraintPB {
 type TombstoneType uint8
 
 const (
-	InvalidTombstoneData TombstoneType = iota
-	TombstoneWithDeltaLoc
+	EmptyTombstone TombstoneType = iota
+	TombstoneV1
+	TombstoneV2
 )
 
 type Tombstoner interface {
@@ -588,6 +589,16 @@ type Tombstoner interface {
 	MarshalWithBuf(w *bytes.Buffer) (uint32, error)
 
 	UnMarshal(buf []byte) error
+
+	HasTombstones(bid types.Blockid) bool
+
+	ApplyTombstones(
+		rows []types.Rowid,
+		load1 func(
+			bid types.Blockid,
+			loc objectio.Location,
+			committs types.TS) (*nulls.Nulls, error),
+		load2 func(loc objectio.Location) (*nulls.Nulls, error)) ([]int64, error)
 
 	ApplyInMemTombstones(
 		bid types.Blockid,
@@ -615,9 +626,10 @@ type Tombstoner interface {
 type RelDataType uint8
 
 const (
-	RelDataEmpty RelDataType = iota
+	EmptyRelData RelDataType = iota
 	RelDataShardIDList
-	RelDataBlockList
+	RelDataBlkInfoListV1
+	RelDataObjInfoListV1
 )
 
 type RelData interface {
@@ -920,7 +932,7 @@ type EmptyRelationData struct {
 }
 
 func BuildEmptyRelData() RelData {
-	return &EmptyRelationData{RelDataEmpty}
+	return &EmptyRelationData{EmptyRelData}
 }
 
 func (rd *EmptyRelationData) GetShardIDList() []uint64 {
@@ -1000,7 +1012,7 @@ func (rd *EmptyRelationData) AppendDataBlk(blk any) {
 }
 
 func (rd *EmptyRelationData) BuildEmptyRelData() RelData {
-	return &EmptyRelationData{RelDataEmpty}
+	return &EmptyRelationData{EmptyRelData}
 }
 
 func (rd *EmptyRelationData) DataCnt() int {
