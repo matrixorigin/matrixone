@@ -159,7 +159,7 @@ func getS3ServiceFromProvider(provider string) (string, error) {
 }
 
 func runSql(proc *process.Process, sql string) (executor.Result, error) {
-	v, ok := moruntime.ProcessLevelRuntime().GetGlobalVariables(moruntime.InternalSQLExecutor)
+	v, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
 		panic("missing lock service")
 	}
