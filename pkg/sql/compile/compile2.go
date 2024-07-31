@@ -34,6 +34,13 @@ import (
 	"time"
 )
 
+// I create this file to store the two most important entry functions for the Compile struct and their helper functions.
+// These functions are used to build the pipeline from the query plan and execute the pipeline respectively.
+//
+// The reason I put these two functions into separate files is that the original file contained too much code about
+// how to create a pipeline and how to determine certain flags from the Compile struct.
+// Such a huge file is hard to read and understand for developers who are not familiar with the codebase.
+
 // Compile generates the node level execution pipeline from the query plan,
 // and the final pipeline will be stored in the attribute `scope` of a Compile object.
 func (c *Compile) Compile(
@@ -289,4 +296,36 @@ func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 		return nil, e
 	}
 	return runC, nil
+}
+
+// InitPipelineContextToExecuteQuery initializes the context for each pipeline tree.
+//
+// the entire process must follow these rules:
+// 1. the query context can control the context of all pipelines.
+// 2. if there's a data transfer between two pipelines, the lifecycle of the sender's context ends with the receiver's termination.
+func (c *Compile) InitPipelineContextToExecuteQuery() {
+	contextBase := c.proc.Base.GetContextBase()
+	contextBase.BuildQueryCtx()
+	contextBase.SaveToQueryContext(defines.EngineKey{}, c.e)
+	queryContext := contextBase.WithCounterSetToQueryContext(c.counterSet)
+
+	// build pipeline context.
+	currentContext := c.proc.BuildPipelineContext(queryContext)
+	for _, pipeline := range c.scope {
+		if pipeline.Proc == nil {
+			continue
+		}
+		pipeline.buildContextFromParentCtx(currentContext)
+	}
+}
+
+// buildContextFromParentCtx build the context for the pipeline tree.
+// the input parameter is the whole tree's parent context.
+func (s *Scope) buildContextFromParentCtx(parentCtx context.Context) {
+	receiverCtx := s.Proc.BuildPipelineContext(parentCtx)
+
+	// build context for receiver.
+	for _, prePipeline := range s.PreScopes {
+		prePipeline.buildContextFromParentCtx(receiverCtx)
+	}
 }
