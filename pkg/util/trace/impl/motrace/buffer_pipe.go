@@ -167,9 +167,9 @@ func genETLData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, fa
 			writerMap[row.GetAccount()] = w
 		}
 		w.WriteRow(row)
-		if check, is := item.(table.NeedCheckWrite); is && check.NeedCheckWrite() {
+		if check, is := item.(table.NeedAck); is && check.NeedCheckAck() {
 			if writer, support := w.(table.AfterWrite); support {
-				writer.AddAfter(check.GetCheckWriteHook())
+				writer.AddAfter(check.GetAckHook())
 			}
 		}
 		row.Free()

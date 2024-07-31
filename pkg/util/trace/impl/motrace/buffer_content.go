@@ -46,7 +46,7 @@ type ContentBuffer struct {
 
 	formatter *db_holder.CSVWriter
 
-	checkWriteHook []table.CheckWriteHook
+	checkWriteHook []table.AckHook
 }
 
 func NewContentBuffer(opts ...BufferOption) *ContentBuffer {
@@ -118,8 +118,8 @@ func (b *ContentBuffer) Add(i bp.HasName) {
 	}
 
 	// keep checkWriteHook, push checkWriteHook to the writer while GenBatch
-	if check, is := i.(table.NeedCheckWrite); is && check.NeedCheckWrite() {
-		b.checkWriteHook = append(b.checkWriteHook, check.GetCheckWriteHook())
+	if check, is := i.(table.NeedAck); is && check.NeedCheckAck() {
+		b.checkWriteHook = append(b.checkWriteHook, check.GetAckHook())
 	}
 }
 

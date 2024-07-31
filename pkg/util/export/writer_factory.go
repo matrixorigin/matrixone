@@ -37,7 +37,7 @@ type reactWriter struct {
 	setter table.BufferSettable
 
 	// implement AfterWrite
-	afters []table.CheckWriteHook
+	afters []table.AckHook
 }
 
 func newWriter(ctx context.Context, w table.RowWriter) *reactWriter {
@@ -79,7 +79,7 @@ func (rw *reactWriter) SetBuffer(buf *bytes.Buffer, callback func(*bytes.Buffer)
 
 func (rw *reactWriter) NeedBuffer() bool { return rw.setter != nil }
 
-func (rw *reactWriter) AddAfter(hook table.CheckWriteHook) {
+func (rw *reactWriter) AddAfter(hook table.AckHook) {
 	rw.afters = append(rw.afters, hook)
 }
 
