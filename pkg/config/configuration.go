@@ -480,7 +480,7 @@ type ObservabilityParameters struct {
 	DisableMetric bool `toml:"disable-metric" user_setting:"advanced"`
 
 	// DisableTrace default is false. if false, enable trace at booting
-	DisableTrace bool `toml:"disable-Trace" user_setting:"advanced"`
+	DisableTrace bool `toml:"disable-trace" user_setting:"advanced"`
 
 	// EnableTraceDebug default is false. With true, system will check all the children span is ended, which belong to the closing span.
 	EnableTraceDebug bool `toml:"enable-trace-debug"`
@@ -513,7 +513,7 @@ type ObservabilityParameters struct {
 	// DisableSpan default: false. Disable span collection
 	DisableSpan bool `toml:"disable-span"`
 
-	// EnableSpanProfile default: false. Do NOT profile by default.
+	// EnableSpanProfile default: false. Do NO profile by default.
 	EnableSpanProfile bool `toml:"enable-span-profile"`
 
 	// DisableError default: false. Disable error collection
@@ -562,8 +562,13 @@ type ObservabilityOldParameters struct {
 	StatusPortV12         int  `toml:"statusPort" user_setting:"advanced"`
 	EnableMetricToPromV12 bool `toml:"enableMetricToProm"`
 
+	// part Trace
+	DisableMetricV12 bool `toml:"disableMetric" user_setting:"advanced"`
+	DisableTraceV12  bool `toml:"disableTrace"`
+	DisableErrorV12  bool `toml:"disableError"`
+	DisableSpanV12   bool `toml:"disableSpan"`
+
 	// part statement_info
-	DisableSpanV12            bool          `toml:"disableSpan"`
 	EnableStmtMergeV12        bool          `toml:"enableStmtMerge"`
 	DisableStmtAggregationV12 bool          `toml:"disableStmtAggregation"`
 	AggregationWindowV12      toml.Duration `toml:"aggregationWindow"`
@@ -741,8 +746,11 @@ func (op *ObservabilityParameters) resetConfigByOld() {
 	// port prom-export
 	resetIntConfig(&op.StatusPort, defaultStatusPort, op.StatusPortV12)
 	resetBoolConfig(&op.EnableMetricToProm, false, op.EnableMetricToPromV12)
-	// part statement_info
+	resetBoolConfig(&op.DisableMetric, false, op.DisableMetricV12)
+	resetBoolConfig(&op.DisableTrace, false, op.DisableTraceV12)
+	resetBoolConfig(&op.DisableError, false, op.DisableErrorV12)
 	resetBoolConfig(&op.DisableSpan, false, op.DisableSpanV12)
+	// part statement_info
 	resetBoolConfig(&op.EnableStmtMerge, false, op.EnableStmtMergeV12)
 	resetBoolConfig(&op.DisableStmtAggregation, false, op.DisableStmtAggregationV12)
 	resetDurationConfig(&op.AggregationWindow.Duration, defaultAggregationWindow, op.AggregationWindowV12.Duration)

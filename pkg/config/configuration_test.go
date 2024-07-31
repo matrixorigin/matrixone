@@ -73,6 +73,10 @@ func TestObservabilityParameters_SetDefaultValues1(t *testing.T) {
 				require.Equal(t, false, cfg.DisableStmtAggregation)
 				require.Equal(t, 200*time.Millisecond, cfg.SelectAggThreshold.Duration)
 				require.Equal(t, 0.2, cfg.LongQueryTime)
+				require.Equal(t, false, cfg.DisableMetric)
+				require.Equal(t, false, cfg.DisableTrace)
+				require.Equal(t, false, cfg.DisableError)
+				require.Equal(t, false, cfg.DisableSpan)
 			},
 		},
 		{
@@ -130,8 +134,11 @@ func TestObservabilityParameters_SetDefaultValues1(t *testing.T) {
 				cfg.ObservabilityOldParameters = ObservabilityOldParameters{
 					StatusPortV12:         123,
 					EnableMetricToPromV12: true,
+					DisableMetricV12:      true,
+					DisableTraceV12:       true,
+					DisableErrorV12:       true,
+					DisableSpanV12:        true,
 					// part statement_info
-					DisableSpanV12:            true,
 					EnableStmtMergeV12:        true,
 					DisableStmtAggregationV12: true,
 					AggregationWindowV12:      toml.Duration{Duration: time.Minute},
@@ -148,6 +155,9 @@ func TestObservabilityParameters_SetDefaultValues1(t *testing.T) {
 			check: func(t *testing.T, cfg *ObservabilityParameters) {
 				require.Equal(t, 123, cfg.StatusPort)
 				require.Equal(t, true, cfg.EnableMetricToProm)
+				require.Equal(t, true, cfg.DisableMetric)
+				require.Equal(t, true, cfg.DisableTrace)
+				require.Equal(t, true, cfg.DisableError)
 				require.Equal(t, true, cfg.DisableSpan)
 				require.Equal(t, true, cfg.EnableStmtMerge)
 				require.Equal(t, true, cfg.DisableStmtAggregation)
@@ -164,6 +174,9 @@ func TestObservabilityParameters_SetDefaultValues1(t *testing.T) {
 				cfg := NewObservabilityParameters()
 				cfg.StatusPort = 7101
 				cfg.EnableMetricToProm = true
+				cfg.DisableMetric = true
+				cfg.DisableTrace = true
+				cfg.DisableError = true
 				cfg.DisableSpan = true
 				cfg.EnableStmtMerge = true
 				cfg.DisableStmtAggregation = true
@@ -178,8 +191,12 @@ func TestObservabilityParameters_SetDefaultValues1(t *testing.T) {
 				cfg.ObservabilityOldParameters = ObservabilityOldParameters{
 					StatusPortV12:         123,
 					EnableMetricToPromV12: true,
+					// part trace
+					DisableMetricV12: true,
+					DisableTraceV12:  true,
+					DisableErrorV12:  true,
+					DisableSpanV12:   true,
 					// part statement_info
-					DisableSpanV12:            true,
 					EnableStmtMergeV12:        true,
 					DisableStmtAggregationV12: true,
 					AggregationWindowV12:      toml.Duration{Duration: time.Minute},
@@ -196,6 +213,9 @@ func TestObservabilityParameters_SetDefaultValues1(t *testing.T) {
 			check: func(t *testing.T, cfg *ObservabilityParameters) {
 				require.Equal(t, 7101, cfg.StatusPort)
 				require.Equal(t, true, cfg.EnableMetricToProm)
+				require.Equal(t, true, cfg.DisableMetric)
+				require.Equal(t, true, cfg.DisableTrace)
+				require.Equal(t, true, cfg.DisableError)
 				require.Equal(t, true, cfg.DisableSpan)
 				require.Equal(t, true, cfg.EnableStmtMerge)
 				require.Equal(t, true, cfg.DisableStmtAggregation)
