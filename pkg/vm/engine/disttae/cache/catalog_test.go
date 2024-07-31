@@ -31,53 +31,62 @@ const (
 	Rows = 10
 )
 
-func TestGC(t *testing.T) {
-	mp := mpool.MustNewZero()
+func TestCrossDBGet(t *testing.T) {
 	cc := NewCatalog()
-	// insert databases
-	dbBat := newTestDatabaseBatch(mp)
-	cc.InsertDatabase(dbBat)
-	// insert tables
-	tblBat := newTestTableBatch(mp)
-	colBat := newTestColumnBatch(t, tblBat, mp)
-	cc.InsertTable(tblBat)
-	cc.InsertColumns(colBat)
-	cc.GC(timestamp.Timestamp{
-		PhysicalTime: 100,
+	cc.tables.data.Set(&TableItem{
+		AccountId:  1,
+		DatabaseId: 272885,
+		Name:       "customer",
+		Ts:         timestamp.Timestamp{PhysicalTime: 100},
 	})
-	{
-		timestamps := vector.MustFixedCol[types.TS](dbBat.GetVector(MO_TIMESTAMP_IDX))
-		names := vector.InefficientMustStrCol(dbBat.GetVector(catalog.MO_DATABASE_DAT_NAME_IDX + MO_OFF))
-		accounts := vector.MustFixedCol[uint32](dbBat.GetVector(catalog.MO_DATABASE_ACCOUNT_ID_IDX + MO_OFF))
-		key := new(DatabaseItem)
-		for i, account := range accounts {
-			key.Name = names[i]
-			key.AccountId = account
-			key.Ts = timestamps[i].ToTimestamp()
-			ok := cc.GetDatabase(key)
-			require.Equal(t, false, ok)
-		}
-	}
-	{
+	cc.tables.data.Set(&TableItem{
+		AccountId:  1,
+		DatabaseId: 272885,
+		Name:       "date",
+		Ts:         timestamp.Timestamp{PhysicalTime: 110},
+	})
+	cc.tables.data.Set(&TableItem{
+		AccountId:  1,
+		DatabaseId: 272885,
+		Name:       "lineorder",
+		Ts:         timestamp.Timestamp{PhysicalTime: 120},
+	})
+	require.False(t, cc.GetTable(&TableItem{
+		AccountId:  1,
+		DatabaseId: 272817,
+		Name:       "customer",
+		Ts:         timestamp.Timestamp{PhysicalTime: 200},
+	}))
+	require.True(t, cc.GetTable(&TableItem{
+		AccountId:  1,
+		DatabaseId: 272885,
+		Name:       "customer",
+		Ts:         timestamp.Timestamp{PhysicalTime: 200},
+	}))
+}
 
-		timestamps := vector.MustFixedCol[types.TS](tblBat.GetVector(MO_TIMESTAMP_IDX))
-		accounts := vector.MustFixedCol[uint32](tblBat.GetVector(catalog.MO_TABLES_ACCOUNT_ID_IDX + MO_OFF))
-		names := vector.InefficientMustStrCol(tblBat.GetVector(catalog.MO_TABLES_REL_NAME_IDX + MO_OFF))
-		databaseIds := vector.MustFixedCol[uint64](tblBat.GetVector(catalog.MO_TABLES_RELDATABASE_ID_IDX + MO_OFF))
-		key := new(TableItem)
-		for i, account := range accounts {
-			key.Name = names[i]
-			key.AccountId = account
-			key.DatabaseId = databaseIds[i]
-			key.Ts = timestamps[i].ToTimestamp()
-			ok := cc.GetTable(key)
-			require.Equal(t, false, ok)
-		}
-	}
-	dbBat.Clean(mp)
-	tblBat.Clean(mp)
-	colBat.Clean(mp)
-	require.Equal(t, int64(0), mp.CurrNB())
+func TestCrossAccGet(t *testing.T) {
+	cc := NewCatalog()
+	cc.databases.data.Set(&DatabaseItem{
+		AccountId: 1,
+		Name:      "ssb_1g",
+		Ts:        timestamp.Timestamp{PhysicalTime: 100},
+	})
+	cc.databases.data.Set(&DatabaseItem{
+		AccountId: 1,
+		Name:      "tpch_1g",
+		Ts:        timestamp.Timestamp{PhysicalTime: 110},
+	})
+	require.False(t, cc.GetDatabase(&DatabaseItem{
+		AccountId: 0,
+		Name:      "ssb_1g",
+		Ts:        timestamp.Timestamp{PhysicalTime: 200},
+	}))
+	require.True(t, cc.GetDatabase(&DatabaseItem{
+		AccountId: 1,
+		Name:      "ssb_1g",
+		Ts:        timestamp.Timestamp{PhysicalTime: 200},
+	}))
 }
 
 func TestTables(t *testing.T) {
@@ -175,7 +184,14 @@ func TestDatabaseCache(t *testing.T) {
 			timestamps[i] = types.BuildTS(timestamps[i].Physical()+10, timestamps[i].Logical())
 		}
 	}
-	cc.DeleteDatabase(bat)
+	{
+		delBat := batch.NewWithSize(3)
+		delBat.Vecs[0] = bat.Vecs[0]
+		delBat.Vecs[1] = bat.Vecs[1]
+		delBat.Vecs[2] = bat.Vecs[catalog.MO_DATABASE_CPKEY_IDX+MO_OFF]
+		cc.DeleteDatabase(delBat)
+	}
+
 	// test delete
 	for i, account := range accounts {
 		key.Name = names[i]
@@ -192,13 +208,24 @@ func TestTableInsert(t *testing.T) {
 	mp := mpool.MustNewZero()
 	cc := NewCatalog()
 	bat := newTestTableBatch(mp)
-	colBat := newTestColumnBatch(t, bat, mp)
-	cc.InsertTable(bat)
-	cc.InsertColumns(colBat)
 	timestamps := vector.MustFixedCol[types.TS](bat.GetVector(MO_TIMESTAMP_IDX))
 	accounts := vector.MustFixedCol[uint32](bat.GetVector(catalog.MO_TABLES_ACCOUNT_ID_IDX + MO_OFF))
 	names := vector.InefficientMustStrCol(bat.GetVector(catalog.MO_TABLES_REL_NAME_IDX + MO_OFF))
 	databaseIds := vector.MustFixedCol[uint64](bat.GetVector(catalog.MO_TABLES_RELDATABASE_ID_IDX + MO_OFF))
+
+	cstrs := vector.MustFixedCol[types.Varlena](bat.GetVector(catalog.MO_TABLES_CONSTRAINT_IDX + MO_OFF))
+	partitioned := vector.MustFixedCol[int8](bat.GetVector(catalog.MO_TABLES_PARTITIONED_IDX + MO_OFF))
+	empty, _, _ := types.BuildVarlena([]byte{}, nil, nil)
+	for i := range accounts {
+		// avoid unmarshal error
+		cstrs[i] = empty
+		partitioned[i] = 0
+	}
+
+	colBat := newTestColumnBatch(t, bat, mp)
+	cc.InsertTable(bat)
+	cc.InsertColumns(colBat)
+
 	key := new(TableItem)
 	// test get
 	for i, account := range accounts {
@@ -208,14 +235,22 @@ func TestTableInsert(t *testing.T) {
 		key.Ts = timestamps[i].ToTimestamp()
 		ok := cc.GetTable(key)
 		require.Equal(t, true, ok)
-		require.Equal(t, 11, len(key.Defs))
+		require.Equal(t, 13, len(key.Defs), i)
 	}
 	{ // set the deletion time
 		for i := range timestamps {
 			timestamps[i] = types.BuildTS(timestamps[i].Physical()+10, timestamps[i].Logical())
 		}
 	}
-	cc.DeleteTable(bat)
+
+	{
+		delBat := batch.NewWithSize(3)
+		delBat.Vecs[0] = bat.Vecs[0]
+		delBat.Vecs[1] = bat.Vecs[1]
+		delBat.Vecs[2] = bat.Vecs[catalog.MO_TABLES_CPKEY_IDX+MO_OFF]
+		cc.DeleteTable(delBat)
+	}
+
 	{ // set the query time
 		for i := range timestamps {
 			timestamps[i] = types.BuildTS(timestamps[i].Physical()+10, timestamps[i].Logical())
