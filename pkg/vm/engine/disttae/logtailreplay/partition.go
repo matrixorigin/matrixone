@@ -60,6 +60,7 @@ func (p *Partition) CanServe(ts types.TS) bool {
 
 func NewPartition(
 	service string,
+	id uint64,
 ) *Partition {
 	lock := make(chan struct{}, 1)
 	lock <- struct{}{}
@@ -67,7 +68,7 @@ func NewPartition(
 		lock: lock,
 	}
 	ret.mu.start = types.MaxTs()
-	ret.state.Store(NewPartitionState(service, false))
+	ret.state.Store(NewPartitionState(service, false, id))
 	return ret
 }
 
