@@ -207,12 +207,23 @@ func (p *PartitionState) GetObject(name objectio.ObjectNameShort) (ObjectInfo, b
 	return ObjectInfo{}, false
 }
 
-func (p *PartitionState) GetTombstoneDeltaLocs(locs *[]objectio.Location, commitTS *[]types.TS) {
+type BlockDeltaInfo struct {
+	//the commit ts of location.
+	Cts types.TS
+	Loc objectio.Location
+}
+
+func (p *PartitionState) GetTombstoneDeltaLocs(mp map[types.Blockid]BlockDeltaInfo) (err error) {
 	iter := p.blockDeltas.Copy().Iter()
 	defer iter.Release()
+
 	for ok := iter.First(); ok; ok = iter.Next() {
 		item := iter.Item()
-		*locs = append(*locs, item.DeltaLocation())
-		*commitTS = append(*commitTS, item.CommitTs)
+		mp[item.BlockID] = BlockDeltaInfo{
+			Loc: item.DeltaLoc[:],
+			Cts: item.CommitTs,
+		}
 	}
+
+	return nil
 }

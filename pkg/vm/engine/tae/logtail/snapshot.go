@@ -18,12 +18,15 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sync"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"sync"
-	"time"
+
+	"go.uber.org/zap"
 
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -37,7 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"go.uber.org/zap"
 )
 
 const (
@@ -239,14 +241,6 @@ func (d *DeltaLocDataSource) getAndApplyTombstonesInProgress(
 	}
 	defer release()
 	return blockio.EvalDeleteRowsByTimestamp(deletes, d.ts, &bid), nil
-}
-
-func (d *DeltaLocDataSource) HasTombstones(bid types.Blockid) bool {
-	return true
-}
-
-func (d *DeltaLocDataSource) ApplyTombstones(rows []types.Rowid) ([]int64, error) {
-	return nil, nil
 }
 
 func (d *DeltaLocDataSource) SetOrderBy(orderby []*plan.OrderBySpec) {

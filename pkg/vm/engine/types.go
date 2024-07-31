@@ -581,9 +581,7 @@ const (
 type Tombstoner interface {
 	Type() TombstoneType
 
-	Init()
-
-	IsEmpty() bool
+	HasTombstones() bool
 
 	MarshalWithBuf(w *bytes.Buffer) (uint32, error)
 
@@ -605,10 +603,8 @@ type Tombstoner interface {
 			loc objectio.Location,
 			cts types.TS,
 			rowsOffset []int32,
-			left *[]int32,
-			deleted *nulls.Nulls) (err error),
+			deleted *nulls.Nulls) (left []int32, err error),
 	) (left []int32, err error)
-
 	Merge(other Tombstoner) error
 }
 

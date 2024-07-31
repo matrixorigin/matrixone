@@ -17,10 +17,11 @@ package disttae
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"strings"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -84,7 +85,7 @@ func newCNMergeTask(
 	targets []logtailreplay.ObjectInfo,
 	targetObjSize uint32,
 ) (*cnMergeTask, error) {
-	relData := buildRelationDataV1()
+	relData := buildBlockListRelationData()
 	relData.AppendBlockInfo(objectio.EmptyBlockInfoInProgress)
 	source, err := tbl.buildLocalDataSource(ctx, 0, relData)
 	if err != nil {
