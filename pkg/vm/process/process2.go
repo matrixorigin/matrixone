@@ -40,11 +40,11 @@ import (
 // Each developer should watch that, do not call this function twice during the query execution.
 // Use Process.NewContextChildProc() and Process.NewNoContextChildProc() to create a new child process instead.
 //
-// the returning Process will hold a top context, which is session-client level context.
+// The returning Process will hold a top context, which is session-client level context.
 // It can be modified by calling Process.ReplaceTopCtx() method, but should be careful to avoid modifying it after the query starts.
 //
 // There should be announced that the returning Process owns a hack query context field and pipeline context to avoid nil pointer panic.
-// These two filed will be really created and refreshed once pipeline was going to start, by calling process.BuildQueryCtx() and process.BuildPipelineContext() method.
+// These two filed will be really created and refreshed when the pipeline was going to start, by calling process.BuildQueryCtx() and process.BuildPipelineContext() method.
 func NewTopProcess(
 	topContext context.Context, // this should be a query-lifecycle or session-lifecycle context.
 	mp *mpool.MPool,
