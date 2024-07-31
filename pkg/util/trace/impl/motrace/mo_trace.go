@@ -50,7 +50,7 @@ type MOTracer struct {
 	provider *MOTracerProvider
 
 	mux              sync.Mutex
-	profileBackupOff map[string]trace.BackOff
+	profileBackupOff map[string]BackOff
 }
 
 // Start starts a Span and returns it along with a context containing it.
@@ -124,13 +124,20 @@ func (t *MOTracer) IsEnable(opts ...trace.SpanStartOption) bool {
 	return enable
 }
 
-func (t *MOTracer) GetBackOff(name string, strategy trace.BackOffStrategy, factory func() trace.BackOff) trace.BackOff {
+func (t *MOTracer) GetBackOff(name string, strategy trace.BackOffStrategy, cfg *trace.BackOffConfig) BackOff {
 	key := path.Join(name, strategy.String())
 	t.mux.Lock()
 	defer t.mux.Unlock()
 	b, exist := t.profileBackupOff[key]
 	if !exist {
-		b = factory()
+		switch strategy {
+		case trace.ConstBackOffStrategy:
+			b = NewLinearBackoff(cfg.Interval)
+		case trace.NoneBackOffStrategy:
+			fallthrough
+		default:
+			b = NoneBackOff{}
+		}
 		t.profileBackupOff[key] = b
 	}
 	return b
@@ -396,8 +403,8 @@ func (s *MOSpan) doProfile() {
 	if !s.tracer.provider.enableSpanProfile {
 		return
 	}
-	if backoff, factory := s.BackOffStrategy(); backoff > trace.NoneBackOffStrategy {
-		b := s.tracer.GetBackOff(s.Name, backoff, factory)
+	if backoff, cfg := s.BackOffStrategy(); backoff > trace.NoneBackOffStrategy {
+		b := s.tracer.GetBackOff(s.Name, backoff, cfg)
 		if !b.Count(1) {
 			return
 		}
@@ -503,3 +510,45 @@ func getEncoder() zapcore.Encoder {
 	})
 	return jsonEncoder.Clone()
 }
+
+type BackOff interface {
+	// Count do the event count
+	// return true, means not in backoff cycle. You can run your code.
+	// return false, means you should skip this time.
+	Count(float64) bool
+}
+
+var _ BackOff = (*ConstBackOff)(nil)
+
+type ConstBackOff struct {
+	mux      sync.Mutex
+	interval time.Duration
+	next     time.Time
+}
+
+func (b *ConstBackOff) Count(_ float64) bool {
+	b.mux.Lock()
+	defer b.mux.Unlock()
+	now := time.Now()
+	if b.check(now) {
+		b.next = now.Add(b.interval)
+		return true
+	}
+	return false
+}
+
+func (b *ConstBackOff) check(t time.Time) bool {
+	return t.After(b.next)
+}
+
+func NewLinearBackoff(interval time.Duration) *ConstBackOff {
+	return &ConstBackOff{interval: interval, next: time.Now()}
+}
+
+var _ BackOff = (*NoneBackOff)(nil)
+
+type NoneBackOff struct{}
+
+func (b NoneBackOff) Count(f float64) bool { return true }
+
+// fixme implement ExponentialBackOff, you can see https://pkg.go.dev/github.com/cenkalti/backoff/v4#NewExponentialBackOff

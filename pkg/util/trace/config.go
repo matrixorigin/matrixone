@@ -261,7 +261,7 @@ type SpanConfig struct {
 
 	// backOffStrategy set by WithConstBackOff
 	backOffStrategy BackOffStrategy
-	backOffInterval time.Duration
+	backOffConfig   *BackOffConfig
 
 	// ProfileSystemStatusFn is used to get status information.
 	ProfileSystemStatusFn func() ([]byte, error)
@@ -364,16 +364,8 @@ func (c *SpanConfig) ProfileSystemStatus() bool {
 	return c.profileFlag&ProfileFlagSystemStatus > 0
 }
 
-func (c *SpanConfig) BackOffStrategy() (BackOffStrategy, func() BackOff) {
-	switch c.backOffStrategy {
-	case NoneBackOffStrategy:
-		return c.backOffStrategy, nil
-	case ConstBackOffStrategy:
-		return c.backOffStrategy, func() BackOff {
-			return NewLinearBackoff(c.backOffInterval)
-		}
-	}
-	return NoneBackOffStrategy, nil
+func (c *SpanConfig) BackOffStrategy() (BackOffStrategy, *BackOffConfig) {
+	return c.backOffStrategy, c.backOffConfig
 }
 
 // SpanStartOption applies an option to a SpanConfig. These options are applicable
@@ -530,7 +522,9 @@ func WithStatementExtra(txnID uuid.UUID, stmID uuid.UUID, stm string) SpanEndOpt
 func WithConstBackOff(interval time.Duration) SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
 		cfg.backOffStrategy = ConstBackOffStrategy
-		cfg.backOffInterval = interval
+		cfg.backOffConfig = &BackOffConfig{
+			Interval: interval,
+		}
 	})
 }
 
@@ -661,41 +655,6 @@ func (tf TraceFlags) String() string {
 	return hex.EncodeToString([]byte{byte(tf)}[:])
 }
 
-type BackOff interface {
-	Count(float64) bool
+type BackOffConfig struct {
+	Interval time.Duration // for ConstBackoff
 }
-
-var _ BackOff = (*ConstBackOff)(nil)
-
-type ConstBackOff struct {
-	mux      sync.Mutex
-	interval time.Duration
-	next     time.Time
-}
-
-func (b *ConstBackOff) Count(_ float64) bool {
-	b.mux.Lock()
-	defer b.mux.Unlock()
-	now := time.Now()
-	if b.check(now) {
-		b.next = now.Add(b.interval)
-		return true
-	}
-	return false
-}
-
-func (b *ConstBackOff) check(t time.Time) bool {
-	return t.After(b.next)
-}
-
-func NewLinearBackoff(interval time.Duration) *ConstBackOff {
-	return &ConstBackOff{interval: interval, next: time.Now()}
-}
-
-var _ BackOff = (*NoneBackOff)(nil)
-
-type NoneBackOff struct{}
-
-func (b NoneBackOff) Count(f float64) bool { return true }
-
-// fixme implement ExponentialBackOff, you can see https://pkg.go.dev/github.com/cenkalti/backoff/v4#NewExponentialBackOff
