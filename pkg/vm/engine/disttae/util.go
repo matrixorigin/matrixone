@@ -1350,44 +1350,6 @@ func ListTnService(
 	})
 }
 
-// util function for object stats
-
-// ForeachBlkInObjStatsList receives an object info list,
-// and visits each blk of these object info by OnBlock,
-// until the onBlock returns false or all blks have been enumerated.
-// when onBlock returns a false,
-// the next argument decides whether continue onBlock on the next stats or exit foreach completely.
-func ForeachBlkInObjStatsList(
-	next bool,
-	dataMeta objectio.ObjectDataMeta,
-	onBlock func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool,
-	objects ...objectio.ObjectStats,
-) {
-	stop := false
-	objCnt := len(objects)
-
-	for idx := 0; idx < objCnt && !stop; idx++ {
-		iter := NewStatsBlkIter(&objects[idx], dataMeta)
-		pos := uint32(0)
-		for iter.Next() {
-			blk := iter.Entry()
-			var meta objectio.BlockObject
-			if !dataMeta.IsEmpty() {
-				meta = dataMeta.GetBlockMeta(pos)
-			}
-			pos++
-			if !onBlock(blk, meta) {
-				stop = true
-				break
-			}
-		}
-
-		if stop && next {
-			stop = false
-		}
-	}
-}
-
 func ForeachBlkInObjStatsListInProgress(
 	next bool,
 	dataMeta objectio.ObjectDataMeta,

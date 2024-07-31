@@ -1977,7 +1977,7 @@ func (tbl *txnTable) PKPersistedBetween(
 		bf   objectio.BloomFilter
 	)
 
-	candidateBlks := make(map[types.Blockid]*objectio.BlockInfo)
+	candidateBlks := make(map[types.Blockid]*objectio.BlockInfoInProgress)
 
 	//only check data objects.
 	delObjs, cObjs := p.GetChangedObjsBetween(from.Next(), types.MaxTs())
@@ -2026,8 +2026,8 @@ func (tbl *txnTable) PKPersistedBetween(
 				}
 			}
 
-			ForeachBlkInObjStatsList(false, meta,
-				func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
+			ForeachBlkInObjStatsListInProgress(false, meta,
+				func(blk objectio.BlockInfoInProgress, blkMeta objectio.BlockObject) bool {
 					if !blkMeta.IsEmpty() &&
 						!blkMeta.MustGetColumn(uint16(primaryIdx)).ZoneMap().AnyIn(keys) {
 						return true

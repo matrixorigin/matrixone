@@ -117,21 +117,8 @@ var (
 )
 
 type DeltaSource interface {
-	GetDeltaLoc(bid objectio.Blockid) objectio.Location
-}
-
-type BlockMapDeltaSource struct {
-	blockMeta map[objectio.Blockid]objectio.Location
-}
-
-func (b *BlockMapDeltaSource) GetDeltaLoc(bid objectio.Blockid) objectio.Location {
-	return b.blockMeta[bid]
-}
-
-func NewBMapDeltaSource(blockMeta map[objectio.Blockid]objectio.Location) DeltaSource {
-	return &BlockMapDeltaSource{
-		blockMeta: blockMeta,
-	}
+	GetDeltaLoc(bid objectio.Blockid) (objectio.Location, types.TS)
+	SetTS(ts types.TS)
 }
 
 type ObjectMapDeltaSource struct {
@@ -144,16 +131,20 @@ func NewOMapDeltaSource(objectMeta map[objectio.Segmentid]*objectInfo) DeltaSour
 	}
 }
 
-func (m *ObjectMapDeltaSource) GetDeltaLoc(bid objectio.Blockid) objectio.Location {
+func (m *ObjectMapDeltaSource) GetDeltaLoc(bid objectio.Blockid) (objectio.Location, types.TS) {
 	segment := bid.Segment()
 	oInfo, ok := m.objectMeta[*segment]
 	if !ok {
-		return objectio.Location{}
+		return objectio.Location{}, types.TS{}
 	}
 	if oInfo.deltaLocation == nil {
-		return objectio.Location{}
+		return objectio.Location{}, types.TS{}
 	}
-	return *oInfo.deltaLocation[uint32(bid.Sequence())]
+	return *oInfo.deltaLocation[uint32(bid.Sequence())], types.TS{}
+}
+
+func (m *ObjectMapDeltaSource) SetTS(ts types.TS) {
+	panic("implement me")
 }
 
 type DeltaLocDataSource struct {
@@ -230,7 +221,7 @@ func (d *DeltaLocDataSource) GetTombstonesInProgress(
 func (d *DeltaLocDataSource) getAndApplyTombstonesInProgress(
 	ctx context.Context, bid objectio.Blockid,
 ) (*nulls.Bitmap, error) {
-	deltaLoc := d.ds.GetDeltaLoc(bid)
+	deltaLoc, ts := d.ds.GetDeltaLoc(bid)
 	if deltaLoc.IsEmpty() {
 		return nil, nil
 	}
@@ -240,7 +231,10 @@ func (d *DeltaLocDataSource) getAndApplyTombstonesInProgress(
 		return nil, err
 	}
 	defer release()
-	return blockio.EvalDeleteRowsByTimestamp(deletes, d.ts, &bid), nil
+	if ts.IsEmpty() {
+		ts = d.ts
+	}
+	return blockio.EvalDeleteRowsByTimestamp(deletes, ts, &bid), nil
 }
 
 func (d *DeltaLocDataSource) SetOrderBy(orderby []*plan.OrderBySpec) {

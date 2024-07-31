@@ -4515,6 +4515,25 @@ func TestDirtyWatchRace(t *testing.T) {
 	wg.Wait()
 }
 
+type TestBlockReadDeltaSource struct {
+	deltaLoc objectio.Location
+	testTs   types.TS
+}
+
+func (b *TestBlockReadDeltaSource) SetTS(ts types.TS) {
+	b.testTs = ts
+}
+
+func (b *TestBlockReadDeltaSource) GetDeltaLoc(bid objectio.Blockid) (objectio.Location, types.TS) {
+	return b.deltaLoc, b.testTs
+}
+
+func NewTestBlockReadSource(deltaLoc objectio.Location) logtail.DeltaSource {
+	return &TestBlockReadDeltaSource{
+		deltaLoc: deltaLoc,
+	}
+}
+
 func TestBlockRead(t *testing.T) {
 	blockio.RunPipelineTest(
 		func() {
@@ -4555,18 +4574,17 @@ func TestBlockRead(t *testing.T) {
 			deltaloc := rel.GetMeta().(*catalog.TableEntry).TryGetTombstone(*blkEntry.ID()).GetLatestDeltaloc(0)
 			assert.False(t, objStats.IsEmpty())
 			assert.NotEmpty(t, deltaloc)
-
+			testDS := NewTestBlockReadSource(deltaloc)
+			ds := logtail.NewDeltaLocDataSource(ctx, tae.DB.Runtime.Fs.Service, beforeDel, testDS)
 			bid, _ := blkEntry.ID(), blkEntry.ID()
 
 			info := &objectio.BlockInfoInProgress{
-				BlockID: *objectio.NewBlockidWithObjectID(bid, 0),
-				//SegmentID:  *sid.Segment(),
+				BlockID:    *objectio.NewBlockidWithObjectID(bid, 0),
 				EntryState: true,
 			}
 			metaloc := objStats.ObjectLocation()
 			metaloc.SetRows(schema.BlockMaxRows)
 			info.SetMetaLocation(metaloc)
-			//info.SetDeltaLocation(deltaloc)
 
 			columns := make([]string, 0)
 			colIdxs := make([]uint16, 0)
@@ -4587,12 +4605,6 @@ func TestBlockRead(t *testing.T) {
 			err = blockio.BlockPrefetch("", colIdxs, fs, infos, false)
 			assert.NoError(t, err)
 
-			blks := map[objectio.Blockid]objectio.Location{
-				info.BlockID: deltaloc,
-			}
-
-			ds := logtail.NewDeltaLocDataSource(ctx, fs, beforeDel, logtail.NewBMapDeltaSource(blks))
-
 			b1, err := blockio.BlockDataReadInner(
 				context.Background(), "", info, ds, colIdxs, colTyps,
 				beforeDel, nil, fs, pool, nil, fileservice.Policy(0),
@@ -4601,7 +4613,7 @@ func TestBlockRead(t *testing.T) {
 			assert.Equal(t, len(columns), len(b1.Vecs))
 			assert.Equal(t, 20, b1.Vecs[0].Length())
 
-			ds = logtail.NewDeltaLocDataSource(ctx, fs, afterFirstDel, logtail.NewBMapDeltaSource(blks))
+			testDS.SetTS(afterFirstDel)
 
 			b2, err := blockio.BlockDataReadInner(
 				context.Background(), "", info, ds, colIdxs, colTyps,
@@ -4610,7 +4622,7 @@ func TestBlockRead(t *testing.T) {
 			assert.NoError(t, err)
 			assert.Equal(t, 19, b2.Vecs[0].Length())
 
-			ds = logtail.NewDeltaLocDataSource(ctx, fs, afterSecondDel, logtail.NewBMapDeltaSource(blks))
+			testDS.SetTS(afterSecondDel)
 
 			b3, err := blockio.BlockDataReadInner(
 				context.Background(), "", info, ds, colIdxs, colTyps,
@@ -4619,7 +4631,6 @@ func TestBlockRead(t *testing.T) {
 			assert.NoError(t, err)
 			assert.Equal(t, len(columns), len(b2.Vecs))
 			assert.Equal(t, 16, b3.Vecs[0].Length())
-
 			// read rowid column only
 			b4, err := blockio.BlockDataReadInner(
 				context.Background(), "", info,
