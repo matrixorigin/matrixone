@@ -40,7 +40,6 @@ func (loopAnti *LoopAnti) Prepare(proc *process.Process) error {
 	var err error
 
 	loopAnti.ctr = new(container)
-	loopAnti.ctr.InitReceiver(proc, false)
 
 	if loopAnti.Cond != nil {
 		loopAnti.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopAnti.Cond)
@@ -61,7 +60,7 @@ func (loopAnti *LoopAnti) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(proc, anal); err != nil {
+			if err := loopAnti.build(proc, anal); err != nil {
 				return result, err
 			}
 			ctr.state = Probe
@@ -69,11 +68,11 @@ func (loopAnti *LoopAnti) Call(proc *process.Process) (vm.CallResult, error) {
 		case Probe:
 			var err error
 			if loopAnti.ctr.buf == nil {
-				msg := ctr.ReceiveFromSingleReg(0, anal)
-				if msg.Err != nil {
-					return result, msg.Err
+				result, err = loopAnti.Children[0].Call(proc)
+				if err != nil {
+					return result, err
 				}
-				loopAnti.ctr.buf = msg.Batch
+				loopAnti.ctr.buf = result.Batch
 				if loopAnti.ctr.buf == nil {
 					ctr.state = End
 					continue
@@ -104,22 +103,20 @@ func (loopAnti *LoopAnti) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
+func (loopAnti *LoopAnti) build(proc *process.Process, anal process.Analyze) error {
+	ctr := loopAnti.ctr
+	mp := proc.ReceiveJoinMap(anal, loopAnti.JoinMapTag, false, 0)
+	if mp == nil {
+		return nil
+	}
+	batches := mp.GetBatches()
 	var err error
-	for {
-		msg := ctr.ReceiveFromSingleReg(1, anal)
-		if msg.Err != nil {
-			return msg.Err
-		}
-		bat := msg.Batch
-		if bat == nil {
-			break
-		}
-		ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), bat)
+	//maybe optimize this in the future
+	for i := range batches {
+		ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), batches[i])
 		if err != nil {
 			return err
 		}
-		proc.PutBatch(bat)
 	}
 	return nil
 }

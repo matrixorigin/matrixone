@@ -112,6 +112,7 @@ type migration struct {
 // clientConn is the connection between proxy and client.
 type clientConn struct {
 	ctx context.Context
+	sid string
 	log *log.MOLogger
 	// counterSet counts the events in proxy.
 	counterSet *counterSet
@@ -185,6 +186,7 @@ func newClientConn(
 	}
 	c := &clientConn{
 		ctx:            ctx,
+		sid:            cfg.UUID,
 		counterSet:     cs,
 		conn:           conn,
 		haKeeperClient: haKeeperClient,
@@ -214,7 +216,7 @@ func newClientConn(
 	if err != nil {
 		return nil, err
 	}
-	c.mysqlProto = frontend.NewMysqlClientProtocol(c.connID, ios, 0, &fp)
+	c.mysqlProto = frontend.NewMysqlClientProtocol(cfg.UUID, c.connID, ios, 0, &fp)
 	if cfg.TLSEnabled {
 		tlsConfig, err := frontend.ConstructTLSConfig(
 			ctx, cfg.TLSCAFile, cfg.TLSCertFile, cfg.TLSKeyFile)
@@ -379,7 +381,7 @@ func (c *clientConn) handleKillQuery(e *killQueryEvent, resp chan<- []byte) erro
 	}
 	cn.connID = cid
 
-	return c.connAndExec(cn, fmt.Sprintf("KILL QUERY %d", e.connID), resp)
+	return c.connAndExec(cn, e.stmt, resp)
 }
 
 // handleSetVar handles the set variable event.
@@ -424,7 +426,7 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 		// Select the best CN server from backend.
 		//
 		// NB: The selected CNServer must have label hash in it.
-		cn, err = c.router.Route(c.ctx, c.clientInfo, filterFn)
+		cn, err = c.router.Route(c.ctx, c.sid, c.clientInfo, filterFn)
 		if err != nil {
 			v2.ProxyConnectRouteFailCounter.Inc()
 			c.log.Error("route failed", zap.Error(err))

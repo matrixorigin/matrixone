@@ -405,7 +405,7 @@ func (fr *FunctionResult[T]) PreExtendAndReset(targetSize int) error {
 			return err
 		}
 	}
-	fr.vec.Reset(fr.typ)
+	fr.vec.ResetWithSameType()
 
 	if !fr.isVarlena {
 		fr.length = 0
@@ -520,7 +520,7 @@ func NewFunctionResultWrapper(
 
 	switch typ.Oid {
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary,
-		types.T_array_float32, types.T_array_float64:
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		// IF STRING type.
 		return newResultFunc[types.Varlena](v, getVectorMethod, putVectorMethod, mp)
 	case types.T_json:

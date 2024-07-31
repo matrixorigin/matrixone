@@ -21,13 +21,14 @@ import (
 	"os/user"
 	"path/filepath"
 	"testing"
+	"time"
 
-	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -90,37 +91,81 @@ func GetDefaultTNShard() metadata.TNShard {
 	}
 }
 
-func TableDefBySchema(schema *catalog.Schema) ([]engine.TableDef, error) {
-	var defs = make([]engine.TableDef, 0)
-	for idx := range schema.ColDefs {
-		if schema.ColDefs[idx].Name == catalog2.Row_ID {
-			continue
-		}
+type EnginePack struct {
+	D       *TestDisttaeEngine
+	T       *TestTxnStorage
+	R       *MockRPCAgent
+	Mp      *mpool.MPool
+	Ctx     context.Context
+	t       *testing.T
+	cancelF func()
+}
 
-		defs = append(defs, &engine.AttributeDef{
-			Attr: engine.Attribute{
-				Type:          schema.ColDefs[idx].Type,
-				IsRowId:       schema.ColDefs[idx].Name == catalog2.Row_ID,
-				Name:          schema.ColDefs[idx].Name,
-				ID:            uint64(schema.ColDefs[idx].Idx),
-				Primary:       schema.ColDefs[idx].IsPrimary(),
-				IsHidden:      schema.ColDefs[idx].IsHidden(),
-				Seqnum:        schema.ColDefs[idx].SeqNum,
-				ClusterBy:     schema.ColDefs[idx].ClusterBy,
-				AutoIncrement: schema.ColDefs[idx].AutoIncrement,
-			},
-		})
+func InitEnginePack(opts TestOptions, t *testing.T) *EnginePack {
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, uint32(0))
+	timeout := opts.Timeout
+	if timeout == 0 {
+		timeout = 5 * time.Minute
 	}
-
-	if schema.Constraint != nil {
-		var con engine.ConstraintDef
-		err := con.UnmarshalBinary(schema.Constraint)
-		if err != nil {
-			return nil, err
-		}
-
-		defs = append(defs, &con)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	pack := &EnginePack{
+		Ctx:     ctx,
+		t:       t,
+		cancelF: cancel,
 	}
+	pack.D, pack.T, pack.R, pack.Mp = CreateEngines(pack.Ctx, opts, t)
+	return pack
+}
 
-	return defs, nil
+func (p *EnginePack) Close() {
+	p.cancelF()
+	p.D.Close(p.Ctx)
+	p.T.Close(true)
+	p.R.Close()
+}
+
+func (p *EnginePack) StartCNTxn(opts ...client.TxnOption) client.TxnOperator {
+	op, err := p.D.NewTxnOperator(p.Ctx, p.D.Now(), opts...)
+	require.NoError(p.t, err)
+	require.NoError(p.t, p.D.Engine.New(p.Ctx, op))
+	return op
+}
+
+func (p *EnginePack) CreateDB(txnop client.TxnOperator, dbname string) engine.Database {
+	err := p.D.Engine.Create(p.Ctx, dbname, txnop)
+	require.NoError(p.t, err)
+	db, err := p.D.Engine.Database(p.Ctx, dbname, txnop)
+	require.NoError(p.t, err)
+	return db
+}
+
+func (p *EnginePack) CreateDBAndTables(txnop client.TxnOperator, dbname string, schema ...*catalog2.Schema) (engine.Database, []engine.Relation) {
+	db := p.CreateDB(txnop, dbname)
+	rels := make([]engine.Relation, 0, len(schema))
+	for _, s := range schema {
+		defs, err := catalog2.SchemaToDefs(s)
+		require.NoError(p.t, err)
+		require.NoError(p.t, db.Create(p.Ctx, s.Name, defs))
+		tbl, err := db.Relation(p.Ctx, s.Name, nil)
+		require.NoError(p.t, err)
+		rels = append(rels, tbl)
+	}
+	return db, rels
+}
+
+func (p *EnginePack) CreateTableInDB(txnop client.TxnOperator, dbname string, schema *catalog2.Schema) engine.Relation {
+	db, err := p.D.Engine.Database(p.Ctx, dbname, txnop)
+	require.NoError(p.t, err)
+	defs, err := catalog2.SchemaToDefs(schema)
+	require.NoError(p.t, err)
+	require.NoError(p.t, db.Create(p.Ctx, schema.Name, defs))
+	tbl, err := db.Relation(p.Ctx, schema.Name, nil)
+	require.NoError(p.t, err)
+	return tbl
+}
+
+func (p *EnginePack) DeleteTableInDB(txnop client.TxnOperator, dbname, tblname string) {
+	db, err := p.D.Engine.Database(p.Ctx, dbname, txnop)
+	require.NoError(p.t, err)
+	require.NoError(p.t, db.Delete(p.Ctx, tblname))
 }

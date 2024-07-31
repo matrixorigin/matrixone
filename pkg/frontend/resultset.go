@@ -513,13 +513,15 @@ func (mrs *MysqlResultSet) GetString(ctx context.Context, rindex, cindex uint64)
 	case bytejson.ByteJson:
 		return v.String(), nil
 	case types.Uuid:
-		return v.ToString(), nil
+		return v.String(), nil
 	case types.Blockid:
 		return v.String(), nil
 	case types.TS:
 		return v.ToString(), nil
 	case types.Enum:
 		return strconv.FormatUint(uint64(v), 10), nil
+	case types.Rowid:
+		return v.String(), nil
 	default:
 		return "", moerr.NewInternalError(ctx, "unsupported type %d ", v)
 	}

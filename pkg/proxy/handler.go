@@ -49,6 +49,9 @@ type handler struct {
 	haKeeperClient logservice.ProxyHAKeeperClient
 	// ipNetList is the list of ip net, which is parsed from CIDRs.
 	ipNetList []*net.IPNet
+	// SQLWorker works for the SQL selection. It connects to some
+	// CN server and query for some information.
+	sqlWorker SQLWorker
 }
 
 var ErrNoAvailableCNServers = moerr.NewInternalErrorNoCtx("no available CN servers")
@@ -61,9 +64,10 @@ func newProxyHandler(
 	st *stopper.Stopper,
 	cs *counterSet,
 	haKeeperClient logservice.ProxyHAKeeperClient,
+	test bool,
 ) (*handler, error) {
 	// Create the MO cluster.
-	mc := clusterservice.NewMOCluster(haKeeperClient, cfg.Cluster.RefreshInterval.Duration)
+	mc := clusterservice.NewMOCluster(cfg.UUID, haKeeperClient, cfg.Cluster.RefreshInterval.Duration)
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
 
 	// Create the rebalancer.
@@ -76,22 +80,31 @@ func newProxyHandler(
 		opts = append(opts, withRebalancerDisabled())
 	}
 
-	re, err := newRebalancer(st, rt.Logger(), mc, opts...)
+	re, err := newRebalancer(cfg.UUID, st, rt.Logger(), mc, opts...)
 	if err != nil {
 		return nil, err
 	}
 
-	ru := newRouter(mc, re, false,
-		withConnectTimeout(cfg.ConnectTimeout.Duration),
-		withAuthTimeout(cfg.AuthTimeout.Duration),
-	)
+	// The SQL worker is mainly used in router currently.
+	sw := newSQLWorker()
+
+	var ru Router
+	if test {
+		ru = newRouter(mc, re, re.connManager, false)
+	} else {
+		ru = newRouter(mc, re, sw, false,
+			withConnectTimeout(cfg.ConnectTimeout.Duration),
+			withAuthTimeout(cfg.AuthTimeout.Duration),
+		)
+	}
+
 	// Decorate the router if plugin is enabled
 	if cfg.Plugin != nil {
-		p, err := newRPCPlugin(cfg.Plugin.Backend, cfg.Plugin.Timeout)
+		p, err := newRPCPlugin(cfg.UUID, cfg.Plugin.Backend, cfg.Plugin.Timeout)
 		if err != nil {
 			return nil, err
 		}
-		ru = newPluginRouter(ru, p)
+		ru = newPluginRouter(cfg.UUID, ru, p)
 	}
 
 	var ipNetList []*net.IPNet
@@ -116,6 +129,7 @@ func newProxyHandler(
 		rebalancer:     re,
 		haKeeperClient: haKeeperClient,
 		ipNetList:      ipNetList,
+		sqlWorker:      sw,
 	}, nil
 }
 

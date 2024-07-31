@@ -15,8 +15,14 @@
 package stats
 
 import (
-	"go.uber.org/zap"
 	"sync"
+	"sync/atomic"
+
+	"go.uber.org/zap"
+)
+
+var (
+	SkipPanicONDuplicate atomic.Bool
 )
 
 // Registry holds mapping between FamilyName and Family
@@ -36,6 +42,9 @@ func (r *Registry) Register(familyName string, opts ...Options) {
 	defer r.Unlock()
 
 	if _, exists := r.families[familyName]; exists {
+		if SkipPanicONDuplicate.Load() {
+			return
+		}
 		panic("Duplicate Family Name " + familyName)
 	}
 

@@ -20,12 +20,11 @@ import (
 	"reflect"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"go.uber.org/zap"
 )
 
 func (s *Service) handleCommands(cmds []pb.ScheduleCommand) {
@@ -159,7 +158,7 @@ func (s *Service) heartbeat(ctx context.Context) {
 		if reflect.DeepEqual(s.cfg.HAKeeperClientConfig, HAKeeperClientConfig{}) {
 			panic("empty HAKeeper client config")
 		}
-		cc, err := NewLogHAKeeperClient(ctx2, s.cfg.GetHAKeeperClientConfig())
+		cc, err := NewLogHAKeeperClient(ctx2, s.cfg.UUID, s.cfg.GetHAKeeperClientConfig())
 		if err != nil {
 			s.runtime.Logger().Error("failed to create HAKeeper client", zap.Error(err))
 			return

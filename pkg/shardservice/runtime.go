@@ -18,6 +18,7 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
@@ -29,13 +30,18 @@ import (
 // Shards and CNs, and so on.
 type rt struct {
 	sync.RWMutex
+	logger *log.MOLogger
 	env    Env
 	tables map[uint64]*table
 	cns    map[string]*cn
 }
 
-func newRuntime(env Env) *rt {
+func newRuntime(
+	env Env,
+	logger *log.MOLogger,
+) *rt {
 	return &rt{
+		logger: logger,
 		env:    env,
 		tables: make(map[uint64]*table, 256),
 		cns:    make(map[string]*cn, 256),
@@ -177,7 +183,7 @@ func (r *rt) get(
 }
 
 func (r *rt) deleteTableLocked(t *table) {
-	getLogger().Info("remove table shards",
+	r.logger.Info("remove table shards",
 		zap.Uint64("table", t.id),
 		tableShardsField("shards", t.metadata),
 		tableShardSliceField("binds", t.shards))

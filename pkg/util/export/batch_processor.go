@@ -319,10 +319,14 @@ type MOCollector struct {
 
 type MOCollectorOption func(*MOCollector)
 
-func NewMOCollector(ctx context.Context, opts ...MOCollectorOption) *MOCollector {
+func NewMOCollector(
+	ctx context.Context,
+	service string,
+	opts ...MOCollectorOption,
+) *MOCollector {
 	c := &MOCollector{
 		ctx:            ctx,
-		logger:         morun.ProcessLevelRuntime().Logger().Named(LoggerNameMOCollector).With(logutil.Discardable()),
+		logger:         morun.ServiceRuntime(service).Logger().Named(LoggerNameMOCollector).With(logutil.Discardable()),
 		buffers:        make(map[string]*bufferHolder),
 		awakeQueue:     ring.NewRingBuffer[batchpipe.HasName](defaultRingBufferSize),
 		awakeGenerate:  make(chan generateReq, 16),

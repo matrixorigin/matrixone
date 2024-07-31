@@ -74,8 +74,9 @@ func NewTableName(name Identifier, prefix ObjectNamePrefix, AtTsExpr *AtTimeStam
 }
 
 type AtTimeStamp struct {
-	Type ATTimeStampType
-	Expr Expr
+	Type         ATTimeStampType
+	SnapshotName string
+	Expr         Expr
 }
 
 func (node *AtTimeStamp) Format(ctx *FmtCtx) {

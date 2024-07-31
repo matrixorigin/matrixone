@@ -43,7 +43,6 @@ func (shuffleBuild *ShuffleBuild) Prepare(proc *process.Process) (err error) {
 	if shuffleBuild.RuntimeFilterSpec == nil {
 		panic("there must be runtime filter in shuffle build!")
 	}
-	shuffleBuild.RuntimeFilterSpec.Handled = false
 	shuffleBuild.ctr = new(container)
 
 	shuffleBuild.ctr.vecs = make([][]*vector.Vector, 0)
@@ -120,44 +119,22 @@ func (shuffleBuild *ShuffleBuild) Call(proc *process.Process) (vm.CallResult, er
 			} else if ap.ctr.strHashMap != nil {
 				anal.Alloc(ap.ctr.strHashMap.Size())
 			}
-			ctr.state = SendHashMap
+			ctr.state = SendJoinMap
 
-		case SendHashMap:
-			result.Batch = batch.NewWithSize(0)
-
+		case SendJoinMap:
+			if ap.JoinMapTag <= 0 {
+				panic("wrong joinmap message tag!")
+			}
+			var jm *process.JoinMap
 			if ctr.inputBatchRowCount > 0 {
-				var jm *hashmap.JoinMap
-				if ctr.keyWidth <= 8 {
-					jm = hashmap.NewJoinMap(ctr.multiSels, nil, ctr.intHashMap, nil, ctr.hasNull, ap.IsDup)
-				} else {
-					jm = hashmap.NewJoinMap(ctr.multiSels, nil, nil, ctr.strHashMap, ctr.hasNull, ap.IsDup)
+				jm = process.NewJoinMap(ctr.multiSels, ctr.intHashMap, ctr.strHashMap, ctr.batches, proc.Mp())
+				if ap.NeedMergedBatch {
+					jm.SetRowCount(int64(ctr.inputBatchRowCount))
 				}
-				jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
-				result.Batch.AuxData = jm
-				ctr.intHashMap = nil
-				ctr.strHashMap = nil
-				ctr.multiSels = nil
-			} else {
-				ctr.cleanHashMap()
+				jm.IncRef(1)
 			}
+			proc.SendMessage(process.JoinMapMsg{JoinMapPtr: jm, IsShuffle: true, ShuffleIdx: ap.ShuffleIdx, Tag: ap.JoinMapTag})
 
-			// this is just a dummy batch to indicate that the batch is must not empty.
-			// we should make sure this batch can be sent to the next join operator in other pipelines.
-			if result.Batch.IsEmpty() {
-				result.Batch.AddRowCount(1)
-			}
-
-			ctr.state = SendBatch
-			return result, nil
-		case SendBatch:
-			if ctr.batchIdx >= len(ctr.batches) {
-				ctr.state = End
-			} else {
-				result.Batch = ctr.batches[ctr.batchIdx]
-				ctr.batchIdx++
-			}
-			return result, nil
-		default:
 			result.Batch = nil
 			result.Status = vm.ExecStop
 			return result, nil
@@ -303,11 +280,7 @@ func (ctr *container) buildHashmap(ap *ShuffleBuild, proc *process.Process) erro
 			return err
 		}
 		for k, v := range vals[:n] {
-			if zvals[k] == 0 {
-				ctr.hasNull = true
-				continue
-			}
-			if v == 0 {
+			if zvals[k] == 0 || v == 0 {
 				continue
 			}
 			ai := int64(v) - 1
@@ -367,11 +340,6 @@ func (ctr *container) buildHashmap(ap *ShuffleBuild, proc *process.Process) erro
 func (ctr *container) handleRuntimeFilter(ap *ShuffleBuild, proc *process.Process) error {
 	if ap.RuntimeFilterSpec == nil {
 		panic("there must be runtime filter in shuffle build!")
-	}
-	// only shuffle build operator with parallelIdx = 0 send this runtime filter
-	if ap.GetParallelIdx() != 0 {
-		ap.RuntimeFilterSpec.Handled = true
-		return nil
 	}
 	//only support runtime filter pass for now in shuffle join
 	var runtimeFilter process.RuntimeFilterMessage

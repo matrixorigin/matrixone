@@ -82,7 +82,7 @@ type Handler interface {
 		meta txn.TxnMeta,
 		req *apipb.MergeCommitEntry,
 		resp *db.InspectResp,
-	) (func(), error)
+	) error
 
 	HandleForceCheckpoint(
 		ctx context.Context,

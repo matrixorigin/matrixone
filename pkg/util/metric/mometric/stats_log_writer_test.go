@@ -91,7 +91,7 @@ func TestStatsLogWriter(t *testing.T) {
 	stats.Register("MockServiceStats", stats.WithLogExporter(serviceLogExporter))
 
 	//2.1 Setup a Runtime
-	runtime.SetupProcessLevelRuntime(runtime.NewRuntime(metadata.ServiceType_CN, "test", logutil.GetGlobalLogger()))
+	runtime.SetupServiceBasedRuntime("", runtime.NewRuntime(metadata.ServiceType_CN, "test", logutil.GetGlobalLogger()))
 
 	//2.2 Create custom Hook logger
 	type threadSafeWrittenLog struct {
@@ -101,7 +101,7 @@ func TestStatsLogWriter(t *testing.T) {
 	}
 
 	writtenLogs := threadSafeWrittenLog{}
-	customLogger := runtime.ProcessLevelRuntime().Logger().WithOptions(zap.Hooks(func(entry zapcore.Entry) error {
+	customLogger := runtime.ServiceRuntime("").Logger().WithOptions(zap.Hooks(func(entry zapcore.Entry) error {
 		writtenLogs.Lock()
 		defer writtenLogs.Unlock()
 		writtenLogs.content = append(writtenLogs.content, entry)
@@ -180,8 +180,8 @@ func TestWriteBlkReadStats(t *testing.T) {
 	}
 
 	writtenLogs := threadSafeWrittenLog{}
-	runtime.SetupProcessLevelRuntime(runtime.NewRuntime(metadata.ServiceType_CN, "test", logutil.GetGlobalLogger()))
-	s.logger = runtime.ProcessLevelRuntime().Logger().WithOptions(zap.Hooks(func(entry zapcore.Entry) error {
+	runtime.SetupServiceBasedRuntime("", runtime.NewRuntime(metadata.ServiceType_CN, "test", logutil.GetGlobalLogger()))
+	s.logger = runtime.ServiceRuntime("").Logger().WithOptions(zap.Hooks(func(entry zapcore.Entry) error {
 		writtenLogs.Lock()
 		defer writtenLogs.Unlock()
 		writtenLogs.content = append(writtenLogs.content, entry)

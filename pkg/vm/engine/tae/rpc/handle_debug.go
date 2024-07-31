@@ -22,14 +22,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
-
 	"github.com/google/shlex"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -39,6 +37,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
+	gc "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
@@ -338,7 +338,7 @@ func (h *Handle) HandleCommitMerge(
 	ctx context.Context,
 	meta txn.TxnMeta,
 	req *api.MergeCommitEntry,
-	resp *db.InspectResp) (cb func(), err error) {
+	resp *db.InspectResp) (err error) {
 
 	defer func() {
 		if err != nil {
@@ -352,6 +352,7 @@ func (h *Handle) HandleCommitMerge(
 	}()
 	txn, err := h.db.GetOrCreateTxnWithMeta(nil, meta.GetID(),
 		types.TimestampToTS(meta.GetSnapshotTS()))
+	txn.GetMemo().IsFlushOrMerge = true
 	if err != nil {
 		return
 	}
@@ -369,64 +370,78 @@ func (h *Handle) HandleCommitMerge(
 
 	defer func() {
 		if err != nil {
-			txn.Rollback(ctx)
 			resp.Message = err.Error()
 			merge.CleanUpUselessFiles(req, h.db.Runtime.Fs.Service)
 		}
 	}()
 
+	var booking api.TransferMaps
 	if len(req.BookingLoc) > 0 {
 		// load transfer info from s3
 		if req.Booking != nil {
 			logutil.Error("mergeblocks err booking loc is not empty, but booking is not nil")
 		}
-		if len(req.BookingLoc) == objectio.LocationLen {
-			loc := objectio.Location(req.BookingLoc)
-			var bat *batch.Batch
-			var release func()
-			bat, release, err = blockio.LoadTombstoneColumns(ctx, []uint16{0}, nil, h.db.Runtime.Fs.Service, loc, nil)
+
+		blkCnt := types.DecodeInt32(util.UnsafeStringToBytes(req.BookingLoc[0]))
+		rowsCnt := make([]int32, blkCnt)
+		idx := 1
+		for i := range blkCnt {
+			rowsCnt[i] = types.DecodeInt32(util.UnsafeStringToBytes(req.BookingLoc[idx]))
+			idx++
+		}
+		booking = make(api.TransferMaps, blkCnt)
+		for i := range blkCnt {
+			booking[i] = make(api.TransferMap, rowsCnt[i])
+		}
+		locations := req.BookingLoc[idx:]
+		for _, filepath := range locations {
+			reader, err := blockio.NewFileReader(h.db.Runtime.SID(), h.db.Runtime.Fs.Service, filepath)
 			if err != nil {
-				return
+				return err
 			}
-			req.Booking = &api.BlkTransferBooking{}
-			err = req.Booking.Unmarshal(bat.Vecs[0].GetBytesAt(0))
+			bats, releases, err := reader.LoadAllColumns(ctx, nil, nil)
 			if err != nil {
-				release()
-				return
+				return err
 			}
-			release()
-			h.db.Runtime.Fs.Service.Delete(ctx, loc.Name().String())
-			bat = nil
-		} else {
-			// it has to copy to concat
-			idx := 0
-			locations := req.BookingLoc
-			data := make([]byte, 0, 2<<30)
-			for ; idx < len(locations); idx += objectio.LocationLen {
-				loc := objectio.Location(locations[idx : idx+objectio.LocationLen])
-				var bat *batch.Batch
-				var release func()
-				bat, release, err = blockio.LoadTombstoneColumns(ctx, []uint16{0}, nil, h.db.Runtime.Fs.Service, loc, nil)
-				if err != nil {
-					return
+
+			for _, bat := range bats {
+				for i := range bat.RowCount() {
+					srcBlk := vector.GetFixedAt[int32](bat.Vecs[0], i)
+					srcRow := vector.GetFixedAt[uint32](bat.Vecs[1], i)
+					destObj := vector.GetFixedAt[uint8](bat.Vecs[2], i)
+					destBlk := vector.GetFixedAt[uint16](bat.Vecs[3], i)
+					destRow := vector.GetFixedAt[uint32](bat.Vecs[4], i)
+
+					booking[srcBlk][srcRow] = api.TransferDestPos{
+						ObjIdx: destObj,
+						BlkIdx: destBlk,
+						RowIdx: destRow,
+					}
 				}
-				data = append(data, bat.Vecs[0].GetBytesAt(0)...)
-				release()
-				h.db.Runtime.Fs.Service.Delete(ctx, loc.Name().String())
-				bat = nil
 			}
-			req.Booking = &api.BlkTransferBooking{}
-			if err = req.Booking.Unmarshal(data); err != nil {
-				return
+			releases()
+			_ = h.db.Runtime.Fs.Service.Delete(ctx, filepath)
+		}
+	} else if req.Booking != nil {
+		booking = make(api.TransferMaps, len(req.Booking.Mappings))
+		for i := range booking {
+			booking[i] = make(api.TransferMap)
+		}
+		for i, m := range req.Booking.Mappings {
+			for r, pos := range m.M {
+				booking[i][uint32(r)] = api.TransferDestPos{
+					ObjIdx: uint8(pos.ObjIdx),
+					BlkIdx: uint16(pos.BlkIdx),
+					RowIdx: uint32(pos.RowIdx),
+				}
 			}
 		}
 	}
 
-	_, err = jobs.HandleMergeEntryInTxn(ctx, txn, txn.String(), req, h.db.Runtime)
+	_, err = jobs.HandleMergeEntryInTxn(ctx, txn, txn.String(), req, booking, h.db.Runtime)
 	if err != nil {
 		return
 	}
-	err = txn.Commit(ctx)
 	if err == nil {
 		b := &bytes.Buffer{}
 		b.WriteString("merged success\n")
@@ -441,5 +456,5 @@ func (h *Handle) HandleCommitMerge(
 		}
 		resp.Message = b.String()
 	}
-	return nil, err
+	return err
 }

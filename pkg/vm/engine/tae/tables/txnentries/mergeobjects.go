@@ -43,7 +43,7 @@ type mergeObjectsEntry struct {
 	relation      handle.Relation
 	droppedObjs   []*catalog.ObjectEntry
 	createdObjs   []*catalog.ObjectEntry
-	transMappings *api.BlkTransferBooking
+	transMappings api.TransferMaps
 	skipTransfer  bool
 
 	rt                   *dbutils.Runtime
@@ -60,7 +60,7 @@ func NewMergeObjectsEntry(
 	taskName string,
 	relation handle.Relation,
 	droppedObjs, createdObjs []*catalog.ObjectEntry,
-	transMappings *api.BlkTransferBooking,
+	transMappings api.TransferMaps,
 	rt *dbutils.Runtime,
 ) (*mergeObjectsEntry, error) {
 	totalCreatedBlkCnt := 0
@@ -96,13 +96,19 @@ func NewMergeObjectsEntry(
 
 func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) {
 	k := 0
+	pagesToSet := make([][]*model.TransferHashPage, 0, len(entry.droppedObjs))
+	bts := time.Now().Add(time.Hour)
+	createdObjIDs := make([]*objectio.ObjectId, 0, len(entry.createdObjs))
+	for _, obj := range entry.createdObjs {
+		createdObjIDs = append(createdObjIDs, obj.ID())
+	}
 	for _, obj := range entry.droppedObjs {
 		ioVector := model.InitTransferPageIO()
 		pages := make([]*model.TransferHashPage, 0, obj.BlockCnt())
 		var duration time.Duration
 		var start time.Time
 		for j := 0; j < obj.BlockCnt(); j++ {
-			m := entry.transMappings.Mappings[k].M
+			m := entry.transMappings[k]
 			k++
 			if len(m) == 0 {
 				continue
@@ -111,15 +117,8 @@ func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) {
 			isTransient := !tblEntry.GetLastestSchema().HasPK()
 			id := obj.AsCommonID()
 			id.SetBlockOffset(uint16(j))
-			page := model.NewTransferHashPage(id, time.Now(), isTransient, entry.rt.LocalFs.Service, model.GetTTL(), model.GetDiskTTL())
-			mapping := make(map[uint32][]byte, len(m))
-			for srcRow, dst := range m {
-				objID := entry.createdObjs[dst.ObjIdx].ID()
-				blkID := objectio.NewBlockidWithObjectID(objID, uint16(dst.BlkIdx))
-				rowID := objectio.NewRowid(blkID, uint32(dst.RowIdx))
-				mapping[uint32(srcRow)] = rowID[:]
-			}
-			page.Train(mapping)
+			page := model.NewTransferHashPage(id, bts, isTransient, entry.rt.LocalFs.Service, model.GetTTL(), model.GetDiskTTL(), createdObjIDs)
+			page.Train(m)
 
 			start = time.Now()
 			err := model.AddTransferPage(page, ioVector)
@@ -129,17 +128,30 @@ func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) {
 			duration += time.Since(start)
 
 			entry.pageIds = append(entry.pageIds, id)
-			_ = entry.rt.TransferTable.AddPage(page)
 			pages = append(pages, page)
 		}
 
 		start = time.Now()
 		model.WriteTransferPage(ctx, entry.rt.LocalFs.Service, pages, *ioVector)
+		pagesToSet = append(pagesToSet, pages)
 		duration += time.Since(start)
 		v2.TransferPageMergeLatencyHistogram.Observe(duration.Seconds())
 	}
-	if k != len(entry.transMappings.Mappings) {
-		logutil.Fatal(fmt.Sprintf("k %v, mapping %v", k, len(entry.transMappings.Mappings)))
+
+	now := time.Now()
+	for _, pages := range pagesToSet {
+		for _, page := range pages {
+			if page.BornTS() != bts {
+				page.SetBornTS(now.Add(time.Minute))
+			} else {
+				page.SetBornTS(now)
+			}
+			entry.rt.TransferTable.AddPage(page)
+		}
+	}
+
+	if k != len(entry.transMappings) {
+		logutil.Fatal(fmt.Sprintf("k %v, mapping %v", k, len(entry.transMappings)))
 	}
 }
 
@@ -223,15 +235,15 @@ func (entry *mergeObjectsEntry) transferObjectDeletes(
 		row := rowid[i].GetRowOffset()
 		blkOffsetInObj := int(rowid[i].GetBlockOffset())
 		blkOffset := blkOffsetBase + blkOffsetInObj
-		mapping := entry.transMappings.Mappings[blkOffset].M
+		mapping := entry.transMappings[blkOffset]
 		if len(mapping) == 0 {
 			// this block had been all deleted, skip
 			// Note: it is possible that the block is empty, but not the object
 			continue
 		}
-		destpos, ok := mapping[int32(row)]
+		destpos, ok := mapping[row]
 		if !ok {
-			_min, _max := int32(math.MaxInt32), int32(0)
+			_min, _max := uint32(math.MaxUint32), uint32(0)
 			for k := range mapping {
 				if k < _min {
 					_min = k
@@ -247,8 +259,8 @@ func (entry *mergeObjectsEntry) transferObjectDeletes(
 		if entry.delTbls[*entry.createdObjs[destpos.ObjIdx].ID()] == nil {
 			entry.delTbls[*entry.createdObjs[destpos.ObjIdx].ID()] = make(map[uint16]struct{})
 		}
-		entry.delTbls[*entry.createdObjs[destpos.ObjIdx].ID()][uint16(destpos.BlkIdx)] = struct{}{}
-		blkID := objectio.NewBlockidWithObjectID(entry.createdObjs[destpos.ObjIdx].ID(), uint16(destpos.BlkIdx))
+		entry.delTbls[*entry.createdObjs[destpos.ObjIdx].ID()][destpos.BlkIdx] = struct{}{}
+		blkID := objectio.NewBlockidWithObjectID(entry.createdObjs[destpos.ObjIdx].ID(), destpos.BlkIdx)
 		entry.rt.TransferDelsMap.SetDelsForBlk(*blkID, int(destpos.RowIdx), entry.txn.GetPrepareTS(), ts[i])
 		var targetObj handle.Object
 		targetObj, err = entry.relation.GetObject(entry.createdObjs[destpos.ObjIdx].ID())
@@ -256,7 +268,7 @@ func (entry *mergeObjectsEntry) transferObjectDeletes(
 			return
 		}
 		if err = targetObj.RangeDelete(
-			uint16(destpos.BlkIdx), uint32(destpos.RowIdx), uint32(destpos.RowIdx), handle.DT_MergeCompact, common.MergeAllocator,
+			destpos.BlkIdx, destpos.RowIdx, destpos.RowIdx, handle.DT_MergeCompact, common.MergeAllocator,
 		); err != nil {
 			return
 		}
@@ -290,7 +302,7 @@ func (entry *mergeObjectsEntry) collectDelsAndTransfer(from, to types.TS) (trans
 		hasMappingInThisObj := false
 		blkCnt := dropped.BlockCnt()
 		for iblk := 0; iblk < blkCnt; iblk++ {
-			if len(entry.transMappings.Mappings[blksOffsetBase+iblk].M) != 0 {
+			if len(entry.transMappings[blksOffsetBase+iblk]) != 0 {
 				hasMappingInThisObj = true
 				break
 			}
