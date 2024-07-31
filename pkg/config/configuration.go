@@ -162,6 +162,7 @@ var (
 	// defaultLoggerLabelKey and defaultLoggerLabelVal
 	defaultLoggerLabelKey = "role"
 	defaultLoggerLabelVal = "logging_cn"
+	defaultLoggerMap      = map[string]string{defaultLoggerLabelKey: defaultLoggerLabelVal}
 
 	// largestEntryLimit is the max size for reading file to csv buf
 	LargestEntryLimit = 10 * 1024 * 1024
@@ -556,17 +557,19 @@ type ObservabilityParameters struct {
 }
 
 // ObservabilityOldParameters will remove after 1.3.0
+// all item default false, 0, nil
 type ObservabilityOldParameters struct {
 	StatusPortV12         int  `toml:"statusPort" user_setting:"advanced"`
 	EnableMetricToPromV12 bool `toml:"enableMetricToProm"`
 
 	// part statement_info
-	DisableSpanV12         bool          `toml:"disableSpan"`
-	EnableStmtMergeV12     bool          `toml:"enableStmtMerge"`
-	AggregationWindowV12   toml.Duration `toml:"aggregationWindow"`
-	SelectAggrThresholdV12 toml.Duration `toml:"selectAggrThreshold"`
-	LongQueryTimeV12       float64       `toml:"longQueryTime" user_setting:"advanced"`
-	SkipRunningStmtV12     bool          `toml:"skipRunningStmt"`
+	DisableSpanV12            bool          `toml:"disableSpan"`
+	EnableStmtMergeV12        bool          `toml:"enableStmtMerge"`
+	DisableStmtAggregationV12 bool          `toml:"disableStmtAggregation"`
+	AggregationWindowV12      toml.Duration `toml:"aggregationWindow"`
+	SelectAggThresholdV12     toml.Duration `toml:"selectAggrThreshold"`
+	LongQueryTimeV12          float64       `toml:"longQueryTime" user_setting:"advanced"`
+	SkipRunningStmtV12        bool          `toml:"skipRunningStmt"`
 
 	// part labelSelector
 	LabelSelectorV12 map[string]string `toml:"labelSelector"`
@@ -604,15 +607,7 @@ func NewObservabilityParameters() *ObservabilityParameters {
 		CU:                                 *NewOBCUConfig(),
 		CUv1:                               *NewOBCUConfig(),
 		OBCollectorConfig:                  *NewOBCollectorConfig(),
-		ObservabilityOldParameters: ObservabilityOldParameters{
-			StatusPortV12:          defaultStatusPort,
-			EnableMetricToPromV12:  false,
-			AggregationWindowV12:   toml.Duration{},
-			SelectAggrThresholdV12: toml.Duration{},
-			LongQueryTimeV12:       defaultLongQueryTime,
-			SkipRunningStmtV12:     defaultSkipRunningStmt,
-			LabelSelectorV12:       map[string]string{},
-		},
+		//ObservabilityOldParameters // default as false/0/nil
 	}
 	op.MetricInternalGatherInterval.Duration = defaultMetricInternalGatherInterval
 	op.MetricStorageUsageUpdateInterval.Duration = defaultMetricUpdateStorageUsageInterval
@@ -621,10 +616,6 @@ func NewObservabilityParameters() *ObservabilityParameters {
 	op.LongSpanTime.Duration = defaultLongSpanTime
 	op.AggregationWindow.Duration = defaultAggregationWindow
 	op.SelectAggThreshold.Duration = defaultSelectThreshold
-	// old part
-	op.AggregationWindowV12.Duration = defaultAggregationWindow
-	op.SelectAggrThresholdV12.Duration = defaultSelectThreshold
-	// END> old part
 	return op
 }
 
@@ -680,8 +671,19 @@ func (op *ObservabilityParameters) SetDefaultValues(version string) {
 	}
 
 	if len(op.LabelSelector) == 0 {
-		op.LabelSelector[defaultLoggerLabelKey] = defaultLoggerLabelVal
+		op.LabelSelector = make(map[string]string)
+		for k, v := range defaultLoggerMap {
+			op.LabelSelector[k] = v
+		}
 	}
+
+	// reset by old config
+	// should before calculated logic
+	op.resetConfigByOld()
+
+	// ===========================
+	// calculated logic
+	// ===========================
 
 	// this loop must after SelectAggThreshold and DisableStmtAggregation
 	if !op.DisableStmtAggregation {
@@ -691,43 +693,64 @@ func (op *ObservabilityParameters) SetDefaultValues(version string) {
 		}
 	}
 
-	// check old config
-	op.setDefaultByOld()
-
 }
 
-func (op *ObservabilityParameters) setDefaultByOld() {
-	// port prom-export
-	if op.StatusPort == defaultStatusPort && op.StatusPortV12 != defaultStatusPort {
-		op.StatusPort = op.StatusPortV12
+// resetConfigByOld reset the ObservabilityParameters by ObservabilityOldParameters, which all default false, or nil, or 0.
+func (op *ObservabilityParameters) resetConfigByOld() {
+	resetIntConfig := func(target *int, defaultVal int, setVal int) {
+		if *target == defaultVal && setVal > 0 {
+			*target = setVal
+		}
 	}
-	if !op.EnableMetricToProm && op.EnableMetricToPromV12 {
-		op.EnableMetricToPromV12 = true
+	resetBoolConfig := func(target *bool, defaultVal bool, setVal bool) {
+		if *target == defaultVal && setVal {
+			*target = setVal
+		}
 	}
+	resetDurationConfig := func(target *time.Duration, defaultVal time.Duration, setVal time.Duration) {
+		if *target == defaultVal && setVal > 0 {
+			*target = setVal
+		}
+	}
+	resetFloat64Config := func(target *float64, defaultVal float64, setVal float64) {
+		if *target == defaultVal && setVal > 0 {
+			*target = setVal
+		}
+	}
+	resetMapConfig := func(target map[string]string, defaultVal map[string]string, setVal map[string]string) {
+		eq := true
+		// check eq
+		if len(target) == len(defaultVal) {
+			for k, v := range defaultVal {
+				if target[k] != v {
+					eq = false
+					break
+				}
+			}
+		}
+		if eq {
+			for k, _ := range target {
+				delete(target, k)
+			}
+			for k, v := range setVal {
+				target[k] = v
+			}
 
+		}
+	}
+	// port prom-export
+	resetIntConfig(&op.StatusPort, defaultStatusPort, op.StatusPortV12)
+	resetBoolConfig(&op.EnableMetricToProm, false, op.EnableMetricToPromV12)
 	// part statement_info
-	if !op.DisableSpan && op.DisableSpanV12 {
-		op.DisableSpan = true
-	}
-	if !op.EnableStmtMerge && op.EnableStmtMerge != op.EnableStmtMergeV12 {
-		op.EnableStmtMerge = op.EnableStmtMergeV12
-	}
-	if op.AggregationWindow.Duration == defaultAggregationWindow && op.AggregationWindow.Duration != op.AggregationWindowV12.Duration {
-		op.AggregationWindow = op.AggregationWindowV12
-	}
-	if op.SelectAggThreshold.Duration == defaultSelectThreshold && op.SelectAggThreshold.Duration != op.SelectAggrThresholdV12.Duration {
-		op.SelectAggThreshold = op.SelectAggrThresholdV12
-	}
-	if op.LongQueryTime == defaultLongQueryTime && op.LongQueryTime != op.LongQueryTimeV12 {
-		op.LongQueryTime = op.LongQueryTimeV12
-	}
-	if op.SkipRunningStmt == defaultSkipRunningStmt && op.SkipRunningStmt != op.SkipRunningStmtV12 {
-		op.SkipRunningStmt = op.SkipRunningStmtV12
-	}
+	resetBoolConfig(&op.DisableSpan, false, op.DisableSpanV12)
+	resetBoolConfig(&op.EnableStmtMerge, false, op.EnableStmtMergeV12)
+	resetBoolConfig(&op.DisableStmtAggregation, false, op.DisableStmtAggregationV12)
+	resetDurationConfig(&op.AggregationWindow.Duration, defaultAggregationWindow, op.AggregationWindowV12.Duration)
+	resetDurationConfig(&op.SelectAggThreshold.Duration, defaultSelectThreshold, op.SelectAggThresholdV12.Duration)
+	resetFloat64Config(&op.LongQueryTime, defaultLongQueryTime, op.LongQueryTimeV12)
+	resetBoolConfig(&op.SkipRunningStmt, defaultSkipRunningStmt, op.SkipRunningStmtV12)
 	// part labelSelector
-	for k, v := range op.LabelSelectorV12 {
-		op.LabelSelector[k] = v
-	}
+	resetMapConfig(op.LabelSelector, defaultLoggerMap, op.LabelSelectorV12)
 }
 
 type OBCollectorConfig struct {
