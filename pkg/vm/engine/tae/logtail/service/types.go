@@ -14,11 +14,15 @@
 
 package service
 
-import "github.com/matrixorigin/matrixone/pkg/pb/api"
+import (
+	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+)
 
 // TableID comes from api.TableID
 type TableID string
 
 func MarshalTableID(table *api.TableID) TableID {
-	return TableID(table.String())
+	return TableID(fmt.Sprintf("%d-%d", table.DbId, table.TbId))
 }
