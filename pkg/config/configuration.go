@@ -729,7 +729,7 @@ func (op *ObservabilityParameters) resetConfigByOld() {
 			}
 		}
 		if eq {
-			for k, _ := range target {
+			for k := range target {
 				delete(target, k)
 			}
 			for k, v := range setVal {
