@@ -868,12 +868,22 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 
 		bat.Shrink(sels, false)
 		execCtx.proc.Mp().PutSels(sels)
-		v0 := vector.MustStrCol(bat.Vecs[0])
-		v1 := vector.MustStrCol(bat.Vecs[1])
-		rows = rows[:len(v0)]
-		for i := range v0 {
-			rows[i][0] = v0[i]
-			rows[i][1] = v1[i]
+		v0 := vector.GenerateFunctionStrParameter(bat.Vecs[0])
+		v1 := vector.GenerateFunctionStrParameter(bat.Vecs[1])
+		rows = rows[:bat.Vecs[0].Length()]
+		for i := range rows {
+			s0, isNull := v0.GetStrValue(uint64(i))
+			if isNull {
+				rows[i][0] = ""
+			} else {
+				rows[i][0] = s0
+			}
+			s1, isNull := v1.GetStrValue(uint64(i))
+			if isNull {
+				rows[i][1] = ""
+			} else {
+				rows[i][1] = s1
+			}
 		}
 	}
 
@@ -893,11 +903,7 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 handle show variables
 */
 func handleShowVariables(ses FeSession, execCtx *ExecCtx, sv *tree.ShowVariables) error {
-	err := doShowVariables(ses.(*Session), execCtx, sv)
-	if err != nil {
-		return err
-	}
-	return err
+	return doShowVariables(ses.(*Session), execCtx, sv)
 }
 
 func handleAnalyzeStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeStmt) error {
@@ -1492,22 +1498,22 @@ func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *
 
 		bat.Shrink(sels, false)
 		proc.Mp().PutSels(sels)
-		v0 := vector.MustStrCol(bat.Vecs[0])
-		v1 := vector.MustStrCol(bat.Vecs[1])
+		v0, area0 := vector.MustVarlenaRawData(bat.Vecs[0])
+		v1, area1 := vector.MustVarlenaRawData(bat.Vecs[1])
 		v2 := vector.MustFixedCol[int64](bat.Vecs[2])
-		v3 := vector.MustStrCol(bat.Vecs[3])
-		v4 := vector.MustStrCol(bat.Vecs[4])
+		v3, area3 := vector.MustVarlenaRawData(bat.Vecs[3])
+		v4, area4 := vector.MustVarlenaRawData(bat.Vecs[4])
 		v5 := vector.MustFixedCol[int32](bat.Vecs[5])
-		v6 := vector.MustStrCol(bat.Vecs[6])
+		v6, area6 := vector.MustVarlenaRawData(bat.Vecs[6])
 		rows = rows[:len(v0)]
 		for i := range v0 {
-			rows[i][0] = v0[i]
-			rows[i][1] = v1[i]
+			rows[i][0] = v0[i].UnsafeGetString(area0)
+			rows[i][1] = v1[i].UnsafeGetString(area1)
 			rows[i][2] = v2[i]
-			rows[i][3] = v3[i]
-			rows[i][4] = v4[i]
+			rows[i][3] = v3[i].UnsafeGetString(area3)
+			rows[i][4] = v4[i].UnsafeGetString(area4)
 			rows[i][5] = v5[i]
-			rows[i][6] = v6[i]
+			rows[i][6] = v6[i].UnsafeGetString(area6)
 		}
 	}
 
@@ -1887,7 +1893,7 @@ func checkModify(plan0 *plan.Plan, ses FeSession) bool {
 
 var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
 	var cws []ComputationWrapper = nil
-	if cached := ses.getCachedPlan(execCtx.input.getSql()); cached != nil {
+	if cached := ses.getCachedPlan(execCtx.input.getHash()); cached != nil {
 		for i, stmt := range cached.stmts {
 			tcw := InitTxnComputationWrapper(ses, stmt, proc)
 			tcw.plan = cached.plans[i]
@@ -1965,6 +1971,10 @@ func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, s
 	var err error
 	if ses.GetTenantInfo() != nil {
 		ses.SetPrivilege(determinePrivilegeSetOfStatement(stmt))
+
+		if ses.getRoutine() != nil && ses.getRoutine().isRestricted() {
+			logutil.Infof("account %d routine %d is restricted, can not execute the statement", ses.GetAccountId(), ses.getRoutine().getConnectionID())
+		}
 
 		// can or not execute in retricted status
 		if ses.getRoutine() != nil && ses.getRoutine().isRestricted() && !ses.GetPrivilege().canExecInRestricted {
@@ -2290,7 +2300,7 @@ func executeStmtWithWorkspace(ses FeSession,
 	if execCtx.inMigration {
 		autocommit = true
 	} else {
-		autocommit, err = autocommitValue(execCtx.reqCtx, ses)
+		autocommit, err = autocommitValue(ses)
 		if err != nil {
 			return err
 		}
@@ -2587,6 +2597,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	beginInstant := time.Now()
 	execCtx.reqCtx = appendStatementAt(execCtx.reqCtx, beginInstant)
 	input.genSqlSourceType(ses)
+	input.genHash()
 	ses.SetShowStmtType(NotShowStatement)
 	resper := ses.GetResponser()
 	ses.SetSql(input.getSql())
@@ -2795,7 +2806,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 	} // end of for
 
-	if canCache && !ses.isCached(input.getSql()) {
+	if canCache && !ses.isCached(input.getHash()) {
 		plans := make([]*plan.Plan, len(cws))
 		stmts := make([]tree.Statement, len(cws))
 		for i, cw := range cws {
@@ -2808,7 +2819,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 			cw.Clear()
 		}
 		Cached = true
-		ses.cachePlan(input.getSql(), stmts, plans)
+		ses.cachePlan(input.getHash(), stmts, plans)
 	}
 
 	return nil

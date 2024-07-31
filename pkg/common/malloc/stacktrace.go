@@ -22,7 +22,9 @@ import (
 	"unsafe"
 )
 
-func getStacktraceID(skip int) uint64 {
+type StacktraceID uint64
+
+func GetStacktraceID(skip int) StacktraceID {
 	pcs := pcs1024Pool.Get().(*[]uintptr)
 	defer func() {
 		*pcs = (*pcs)[:cap(*pcs)]
@@ -42,7 +44,7 @@ func getStacktraceID(skip int) uint64 {
 			unsafe.Slice((*byte)(unsafe.Pointer(&pc)), unsafe.Sizeof(pc)),
 		)
 	}
-	id := hasher.Sum64()
+	id := StacktraceID(hasher.Sum64())
 
 	if _, ok := stackIDToInfo.Load(id); ok {
 		return id
@@ -63,9 +65,9 @@ var pcs1024Pool = sync.Pool{
 	},
 }
 
-func stackInfo(id uint64) []byte {
-	if v, ok := stackIDToInfo.Load(id); ok {
-		return v.([]byte)
+func (s StacktraceID) String() string {
+	if v, ok := stackIDToInfo.Load(s); ok {
+		return string(v.([]byte))
 	}
 	panic("bad stack id")
 }

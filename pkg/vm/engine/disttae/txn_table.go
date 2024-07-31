@@ -297,7 +297,7 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 func ForeachVisibleDataObject(
 	state *logtailreplay.PartitionState,
 	ts types.TS,
-	fn func(index int, obj logtailreplay.ObjectEntry) error,
+	fn func(obj logtailreplay.ObjectEntry) error,
 	executor ConcurrentExecutor,
 ) (err error) {
 	iter, err := state.NewObjectsIter(ts)
@@ -305,23 +305,20 @@ func ForeachVisibleDataObject(
 		return err
 	}
 	defer iter.Close()
-	var i int
 	var wg sync.WaitGroup
 	for iter.Next() {
-		var j = i
 		entry := iter.Entry()
 		if executor != nil {
 			wg.Add(1)
 			executor.AppendTask(func() error {
 				defer wg.Done()
-				return fn(j, entry)
+				return fn(entry)
 			})
 		} else {
-			if err = fn(j, entry); err != nil {
+			if err = fn(entry); err != nil {
 				break
 			}
 		}
-		i++
 	}
 	if executor != nil {
 		wg.Wait()
@@ -364,7 +361,7 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 		return nil, nil, err
 	}
 	var updateMu sync.Mutex
-	onObjFn := func(_ int, obj logtailreplay.ObjectEntry) error {
+	onObjFn := func(obj logtailreplay.ObjectEntry) error {
 		var err error
 		location := obj.Location()
 		if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
@@ -449,7 +446,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 	}
 	infoList := make([]*plan.MetadataScanInfo, 0, state.ApproxObjectsNum())
 	var updateMu sync.Mutex
-	onObjFn := func(_ int, obj logtailreplay.ObjectEntry) error {
+	onObjFn := func(obj logtailreplay.ObjectEntry) error {
 		createTs, err := obj.CreateTime.Marshal()
 		if err != nil {
 			return err
@@ -551,9 +548,9 @@ func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) (e
 		return nil
 	}
 	for _, bat := range bats {
-		vs := vector.MustStrCol(bat.GetVector(0))
+		vs, area := vector.MustVarlenaRawData(bat.GetVector(0))
 		for _, deltaLoc := range vs {
-			location, err := blockio.EncodeLocationFromString(deltaLoc)
+			location, err := blockio.EncodeLocationFromString(deltaLoc.UnsafeGetString(area))
 			if err != nil {
 				return err
 			}
@@ -592,9 +589,9 @@ func (tbl *txnTable) LoadDeletesForMemBlocksIn(
 			continue
 		}
 		for _, bat := range bats {
-			vs := vector.MustStrCol(bat.GetVector(0))
+			vs, area := vector.MustVarlenaRawData(bat.GetVector(0))
 			for _, metalLoc := range vs {
-				location, err := blockio.EncodeLocationFromString(metalLoc)
+				location, err := blockio.EncodeLocationFromString(metalLoc.UnsafeGetString(area))
 				if err != nil {
 					return err
 				}
@@ -2014,30 +2011,33 @@ func (tbl *txnTable) getPartitionState(
 ) (*logtailreplay.PartitionState, error) {
 	if !tbl.db.op.IsSnapOp() {
 		if tbl._partState.Load() == nil {
-			if err := tbl.updateLogtail(ctx); err != nil {
+			ps, err := tbl.tryToSubscribe(ctx)
+			if err != nil {
 				return nil, err
 			}
-			tbl._partState.Store(tbl.getTxn().engine.
-				getOrCreateLatestPart(tbl.db.databaseId, tbl.tableId).Snapshot())
+			if ps == nil {
+				ps = tbl.getTxn().engine.getOrCreateLatestPart(tbl.db.databaseId, tbl.tableId).Snapshot()
+			}
+			tbl._partState.Store(ps)
 		}
 		return tbl._partState.Load(), nil
 	}
 
 	// for snapshot txnOp
 	if tbl._partState.Load() == nil {
-		p, err := tbl.getTxn().engine.getOrCreateSnapPart(
+		ps, err := tbl.getTxn().engine.getOrCreateSnapPart(
 			ctx,
 			tbl,
 			types.TimestampToTS(tbl.db.op.Txn().SnapshotTS))
 		if err != nil {
 			return nil, err
 		}
-		tbl._partState.Store(p.Snapshot())
+		tbl._partState.Store(ps)
 	}
 	return tbl._partState.Load(), nil
 }
 
-func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
+func (tbl *txnTable) tryToSubscribe(ctx context.Context) (ps *logtailreplay.PartitionState, err error) {
 	defer func() {
 		if err == nil {
 			tbl.getTxn().engine.globalStats.notifyLogtailUpdate(tbl.tableId)
@@ -2047,51 +2047,14 @@ func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
 	// if the table is created in this txn, skip
 	accountId, err := defines.GetAccountId(ctx)
 	if err != nil {
-		return err
+		return
 	}
 	if _, created := tbl.getTxn().createMap.Load(
 		genTableKey(accountId, tbl.tableName, tbl.db.databaseId)); created {
 		return
 	}
 
-	tableId := tbl.tableId
-	/*
-		if the table is truncated once or more than once,
-		it is suitable to use the old table id to sync logtail.
-
-		CORNER CASE 1:
-		create table t1(a int);
-		begin;
-		truncate t1; //table id changed. there is no new table id in DN.
-		select count(*) from t1; // sync logtail for the new id failed.
-
-		CORNER CASE 2:
-		create table t1(a int);
-		begin;
-		select count(*) from t1; // sync logtail for the old succeeded.
-		truncate t1; //table id changed. there is no new table id in DN.
-		select count(*) from t1; // not sync logtail this time.
-
-		CORNER CASE 3:
-		create table t1(a int);
-		begin;
-		truncate t1; //table id changed. there is no new table id in DN.
-		truncate t1; //table id changed. there is no new table id in DN.
-		select count(*) from t1; // sync logtail for the new id failed.
-	*/
-	if tbl.oldTableId != 0 {
-		tableId = tbl.oldTableId
-	}
-
-	if err = tbl.getTxn().engine.UpdateOfPush(ctx, tbl.db.databaseId, tableId,
-		tbl.db.op.SnapshotTS()); err != nil {
-		return
-	}
-	if _, err = tbl.getTxn().engine.lazyLoadLatestCkp(ctx, tbl); err != nil {
-		return
-	}
-
-	return nil
+	return tbl.getTxn().engine.PushClient().toSubscribeTable(ctx, tbl)
 }
 
 func (tbl *txnTable) PKPersistedBetween(

@@ -139,21 +139,16 @@ type connManager struct {
 	// It is mainly used in CN server draining.
 	cnTunnels cnTunnels
 
-	// Map from connection ID to CN server.
+	// Map from connection ID to CN server. It is used for testing.
 	connIDServers map[uint32]*CNServer
-
-	// transferredConnIDs keeps the connection IDs that are transferred.
-	// We don't remove these IDs when close connection.
-	transferredConnIDs map[uint32]struct{}
 }
 
 // newConnManager creates a new connManager.
 func newConnManager() *connManager {
 	m := &connManager{
-		conns:              make(map[LabelHash]*connInfo),
-		connIDServers:      make(map[uint32]*CNServer),
-		transferredConnIDs: make(map[uint32]struct{}),
-		cnTunnels:          make(cnTunnels),
+		conns:         make(map[LabelHash]*connInfo),
+		cnTunnels:     make(cnTunnels),
+		connIDServers: make(map[uint32]*CNServer),
 	}
 	return m
 }
@@ -197,12 +192,7 @@ func (m *connManager) connect(cn *CNServer, t *tunnel) {
 		m.conns[cn.hash] = newConnInfo(cn.reqLabel)
 	}
 	m.conns[cn.hash].cnTunnels.add(cn.uuid, t)
-	if _, ok := m.connIDServers[cn.connID]; ok {
-		// this connection is transferred to a new CN server.
-		m.transferredConnIDs[cn.connID] = struct{}{}
-	} else {
-		m.connIDServers[cn.connID] = cn
-	}
+	m.connIDServers[cn.connID] = cn
 
 	if _, ok := m.cnTunnels[cn.uuid]; !ok {
 		m.cnTunnels[cn.uuid] = make(tunnelSet)
@@ -219,11 +209,7 @@ func (m *connManager) disconnect(cn *CNServer, t *tunnel) {
 		ci.cnTunnels.del(cn.uuid, t)
 	}
 	delete(m.cnTunnels[cn.uuid], t)
-	if _, ok := m.transferredConnIDs[cn.connID]; !ok {
-		delete(m.connIDServers, cn.connID)
-	} else {
-		delete(m.transferredConnIDs, cn.connID)
-	}
+	delete(m.connIDServers, cn.connID)
 }
 
 // count returns the total connection count.
@@ -272,17 +258,6 @@ func (m *connManager) getLabelInfo(hash LabelHash) labelInfo {
 	return ci.label
 }
 
-// getCNServerByConnID returns a CN server which has the connection ID.
-func (m *connManager) getCNServerByConnID(connID uint32) *CNServer {
-	m.Lock()
-	defer m.Unlock()
-	cn, ok := m.connIDServers[connID]
-	if ok {
-		return cn
-	}
-	return nil
-}
-
 func (m *connManager) getTunnelsByCNID(id string) []*tunnel {
 	m.Lock()
 	defer m.Unlock()
@@ -295,4 +270,14 @@ func (m *connManager) getTunnelsByCNID(id string) []*tunnel {
 		tuns = append(tuns, tun)
 	}
 	return tuns
+}
+
+func (m *connManager) GetCNServerByConnID(connID uint32) (*CNServer, error) {
+	m.Lock()
+	defer m.Unlock()
+	cn, ok := m.connIDServers[connID]
+	if !ok {
+		return nil, nil
+	}
+	return cn, nil
 }

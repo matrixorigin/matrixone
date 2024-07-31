@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -3054,7 +3055,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 	if accountExist {
 		if aa.StatusOption.Exist && aa.StatusOption.Option == tree.AccountStatusSuspend {
 			ses.getRoutineManager().accountRoutine.EnKillQueue(int64(targetAccountId), version)
-
+			logutil.Infof("[set suspend] set account id %d, version %d suspend", targetAccountId, version)
 			if err := postDropSuspendAccount(ctx, ses, aa.Name, int64(targetAccountId), version); err != nil {
 				ses.Errorf(ctx, "post alter account suspend error: %s", err.Error())
 			}
@@ -3064,6 +3065,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 			accountId2RoutineMap := ses.getRoutineManager().accountRoutine.deepCopyRoutineMap()
 			if rtMap, ok := accountId2RoutineMap[int64(targetAccountId)]; ok {
 				for rt := range rtMap {
+					logutil.Infof("[set restricted] set account id %d, connection id %d restricted", targetAccountId, rt.getConnectionID())
 					rt.setResricted(true)
 				}
 			}
@@ -9239,6 +9241,7 @@ func postAlterSessionStatus(
 	accountName string,
 	tenantId int64,
 	status string) error {
+	logutil.Infof("[set restricted] post set account id %d status : %s", tenantId, status)
 	qc := getGlobalPu().QueryClient
 	if qc == nil {
 		return moerr.NewInternalError(ctx, "query client is not initialized")
