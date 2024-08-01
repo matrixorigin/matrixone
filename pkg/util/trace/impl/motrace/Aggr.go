@@ -98,8 +98,9 @@ func (a *Aggregator) GetResults() []table.Item {
 
 func (a *Aggregator) GetWindow() time.Duration { return a.WindowSize }
 
-// PopResultsBeforeWindow return aggr-ed results in Aggregator, and remove from the Aggregator
-// Those items need to be free-ed after calling by caller.
+// PopResultsBeforeWindow implements table.Aggregator.
+// return grouped items in Aggregator, and remove them from the Aggregator.
+// Those items NEED to be free by caller.
 func (a *Aggregator) PopResultsBeforeWindow(end time.Time) []table.Item {
 	a.mux.Lock()
 	defer a.mux.Unlock()

@@ -35,7 +35,10 @@ type Aggregator interface {
 	// If aggregated, return nil, nil
 	// else return i, err
 	AddItem(i Item) (Item, error)
+	// GetResults return all grouped items.
 	GetResults() []Item
+	// PopResultsBeforeWindow return grouped items in Aggregator, and remove them from the Aggregator.
+	// Those items NEED to be free by caller.
 	PopResultsBeforeWindow(end time.Time) []Item
 	GetWindow() time.Duration
 	Close()
