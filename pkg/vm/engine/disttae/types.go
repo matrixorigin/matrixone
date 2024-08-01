@@ -242,7 +242,7 @@ type CdcEngine struct {
 
 	pClient PushClient
 
-	cli client.TxnClient
+	//cli client.TxnClient
 }
 
 // Transaction represents a transaction

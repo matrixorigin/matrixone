@@ -81,7 +81,7 @@ func (e *Engine) init(ctx context.Context) error {
 func initEngine(
 	ctx context.Context,
 	service string,
-	catCache *cache.CatalogCache,
+	metaCache *cache.CatalogCache,
 	partitions map[[2]uint64]*logtailreplay.Partition,
 	mp *mpool.MPool,
 	packerPool *fileservice.Pool[*types.Packer],
@@ -111,7 +111,7 @@ func initEngine(
 		state, done := part.MutateState()
 		state.HandleRowsInsert(ctx, ibat, catalog.MO_DATABASE_CPKEY_IDX, packer, mp)
 		done()
-		catCache.InsertDatabase(bat)
+		metaCache.InsertDatabase(bat)
 	}
 
 	{ // init mo_database table
@@ -142,7 +142,7 @@ func initEngine(
 		state, done := part.MutateState()
 		state.HandleRowsInsert(ctx, ibat, catalog.MO_TABLES_CPKEY_IDX, packer, mp)
 		done()
-		catCache.InsertTable(bat) // cache
+		metaCache.InsertTable(bat) // cache
 		// do not clean the bat because the the partition state will be holding the bat
 
 		// insert into mo_columns partition
@@ -165,7 +165,7 @@ func initEngine(
 		state, done = part.MutateState()
 		state.HandleRowsInsert(ctx, ibat, catalog.MO_COLUMNS_ATT_CPKEY_IDX, packer, mp)
 		done()
-		catCache.InsertColumns(bat)
+		metaCache.InsertColumns(bat)
 	}
 
 	{ // init mo_tables table
@@ -198,7 +198,7 @@ func initEngine(
 		state, done := part.MutateState()
 		state.HandleRowsInsert(ctx, ibat, catalog.MO_TABLES_CPKEY_IDX, packer, mp)
 		done()
-		catCache.InsertTable(bat)
+		metaCache.InsertTable(bat)
 
 		part = partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}]
 		bat, err = catalog.GenCreateColumnTuples(cols, mp, packer)
@@ -213,7 +213,7 @@ func initEngine(
 		state, done = part.MutateState()
 		state.HandleRowsInsert(ctx, ibat, catalog.MO_COLUMNS_ATT_CPKEY_IDX, packer, mp)
 		done()
-		catCache.InsertColumns(bat)
+		metaCache.InsertColumns(bat)
 	}
 
 	{ // mo_columns
@@ -246,7 +246,7 @@ func initEngine(
 		state, done := part.MutateState()
 		state.HandleRowsInsert(ctx, ibat, catalog.MO_TABLES_CPKEY_IDX, packer, mp)
 		done()
-		catCache.InsertTable(bat)
+		metaCache.InsertTable(bat)
 
 		part = partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}]
 		bat, err = catalog.GenCreateColumnTuples(cols, mp, packer)
@@ -258,9 +258,10 @@ func initEngine(
 			bat.Clean(mp)
 			return err
 		}
+		state, done = part.MutateState()
 		state.HandleRowsInsert(ctx, ibat, catalog.MO_COLUMNS_ATT_CPKEY_IDX, packer, mp)
 		done()
-		catCache.InsertColumns(bat)
+		metaCache.InsertColumns(bat)
 	}
 
 	return nil

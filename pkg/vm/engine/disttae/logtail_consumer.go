@@ -617,11 +617,11 @@ func (c *PushClient) waitTimestamp() {
 	}
 }
 
-func (c *PushClient) replayCatalogCache(ctx context.Context, e SimpleEngine) error {
+func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) error {
 	// replay mo_catalog cache
 	ts := c.receivedLogTailTime.getTimestamp()
 	typeTs := types.TimestampToTS(ts)
-	op, err := e.Cli().New(ctx, timestamp.Timestamp{}, client.WithSkipPushClientReady(), client.WithSnapshotTS(ts))
+	op, err := e.cli.New(ctx, timestamp.Timestamp{}, client.WithSkipPushClientReady(), client.WithSnapshotTS(ts))
 	if err != nil {
 		return err
 	}
@@ -717,8 +717,10 @@ func (c *PushClient) connect(ctx context.Context, e SimpleEngine) {
 			}
 			c.waitTimestamp()
 
-			if err := c.replayCatalogCache(ctx, e); err != nil {
-				panic(err)
+			if cnEng, ok := e.(*Engine); ok {
+				if err := c.replayCatalogCache(ctx, cnEng); err != nil {
+					panic(err)
+				}
 			}
 
 			e.setPushClientStatus(true)
@@ -772,8 +774,10 @@ func (c *PushClient) connect(ctx context.Context, e SimpleEngine) {
 
 		c.waitTimestamp()
 
-		if err := c.replayCatalogCache(ctx, e); err != nil {
-			panic(err)
+		if cnEng, ok := e.(*Engine); ok {
+			if err := c.replayCatalogCache(ctx, cnEng); err != nil {
+				panic(err)
+			}
 		}
 
 		e.setPushClientStatus(true)

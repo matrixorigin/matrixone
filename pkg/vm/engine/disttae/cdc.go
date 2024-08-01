@@ -32,7 +32,7 @@ func NewCdcEngine(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 	etlFs fileservice.FileService,
-	cli client.TxnClient,
+	// cli client.TxnClient,
 ) *CdcEngine {
 	cdcEng := &CdcEngine{
 		service: service,
@@ -50,7 +50,7 @@ func NewCdcEngine(
 				packer.Close()
 			},
 		),
-		cli: cli,
+		//cli: cli,
 	}
 
 	if err := cdcEng.init(ctx); err != nil {
@@ -129,7 +129,8 @@ func (cdcEng *CdcEngine) PushClient() *PushClient {
 }
 
 func (cdcEng *CdcEngine) Cli() client.TxnClient {
-	return cdcEng.cli
+	//return cdcEng.cli
+	panic("usp")
 }
 
 func (cdcEng *CdcEngine) New(ctx context.Context, op client.TxnOperator) error {
