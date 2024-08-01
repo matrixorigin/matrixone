@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 )
@@ -242,12 +241,12 @@ func FillTableRow(table *catalog.TableEntry, node *catalog.MVCCNode[*catalog.Tab
 	case pkgcatalog.SystemRelAttr_CatalogVersion:
 		colData.Append(schema.CatalogVersion, false)
 	case catalog.AccountIDDbNameTblName:
-		packer := types.NewPacker(common.WorkspaceAllocator)
+		packer := types.NewPacker()
 		packer.EncodeUint32(schema.AcInfo.TenantID)
 		packer.EncodeStringType([]byte(table.GetDB().GetName()))
 		packer.EncodeStringType([]byte(schema.Name))
 		colData.Append(packer.Bytes(), false)
-		packer.FreeMem()
+		packer.Close()
 	default:
 		panic("unexpected colname. if add new catalog def, fill it in this switch")
 	}
@@ -301,11 +300,11 @@ func FillDBRow(db *catalog.DBEntry, _ *catalog.MVCCNode[*catalog.EmptyMVCCNode],
 	case pkgcatalog.SystemDBAttr_Type:
 		colData.Append([]byte(db.GetDatType()), false)
 	case catalog.AccountIDDbName:
-		packer := types.NewPacker(common.WorkspaceAllocator)
+		packer := types.NewPacker()
 		packer.EncodeUint32(db.GetTenantID())
 		packer.EncodeStringType([]byte(db.GetName()))
 		colData.Append(packer.Bytes(), false)
-		packer.FreeMem()
+		packer.Close()
 	default:
 		panic("unexpected colname. if add new catalog def, fill it in this switch")
 	}

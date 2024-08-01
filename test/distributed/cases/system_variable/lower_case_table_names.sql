@@ -105,4 +105,38 @@ select * from `Tt`;
 drop database test;
 -- @session
 
+
+-- @session:id=7&user=a1:admin1&password=test123
+# it is 0 now
+select @@lower_case_table_names;
+
+select table_name from INFORMATION_SCHEMA.TABLES limit 0;
+select table_name from INFORMATION_SCHEMA.tables limit 0;
+select table_name from information_schema.TABLES limit 0;
+select table_name from information_schema.tables limit 0;
+
+use INFORMATION_SCHEMA;
+use information_schema;
+select table_name from TABLES limit 0;
+select table_name from tables limit 0;
+
+# reset to 1
+set global lower_case_table_names = 1;
+-- @session
+
+-- @session:id=8&user=a1:admin1&password=test123
+# default value is 1
+select @@lower_case_table_names;
+
+select table_name from INFORMATION_SCHEMA.TABLES limit 0;
+select table_name from INFORMATION_SCHEMA.tables limit 0;
+select table_name from information_schema.TABLES limit 0;
+select table_name from information_schema.tables limit 0;
+
+use INFORMATION_SCHEMA;
+use information_schema;
+select table_name from TABLES limit 0;
+select table_name from tables limit 0;
+-- @session
+
 drop account a1;

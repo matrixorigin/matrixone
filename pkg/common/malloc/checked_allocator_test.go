@@ -19,22 +19,19 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-	"unsafe"
 )
 
 func TestCheckedAllocator(t *testing.T) {
 	testAllocator(t, func() Allocator {
 		return NewCheckedAllocator(
-			NewClassAllocator(NewFixedSizeMmapAllocator),
-			1,
+			newUpstreamAllocatorForTest(),
 		)
 	})
 
 	// missing free
 	t.Run("missing free", func(t *testing.T) {
 		allocator := NewCheckedAllocator(
-			NewClassAllocator(NewFixedSizeMmapAllocator),
-			1,
+			newUpstreamAllocatorForTest(),
 		)
 		ptr, dec, err := allocator.Allocate(42, NoHints)
 		if err != nil {
@@ -42,7 +39,7 @@ func TestCheckedAllocator(t *testing.T) {
 		}
 		// comment the following line to trigger a missing-free panic
 		// this panic will be raised in SetFinalizer func so it's not recoverable and not testable
-		dec.Deallocate(ptr, NoHints)
+		dec.Deallocate(NoHints)
 		_ = ptr
 		_ = dec
 		runtime.GC()
@@ -61,32 +58,29 @@ func TestCheckedAllocator(t *testing.T) {
 			}
 		}()
 		allocator := NewCheckedAllocator(
-			NewClassAllocator(NewFixedSizeMmapAllocator),
-			1,
+			newUpstreamAllocatorForTest(),
 		)
-		ptr, dec, err := allocator.Allocate(42, NoHints)
+		_, dec, err := allocator.Allocate(42, NoHints)
 		if err != nil {
 			t.Fatal(err)
 		}
-		dec.Deallocate(ptr, NoHints)
-		dec.Deallocate(ptr, NoHints)
+		dec.Deallocate(NoHints)
+		dec.Deallocate(NoHints)
 	})
 
 	// use after free
 	t.Run("use after free", func(t *testing.T) {
 		allocator := NewCheckedAllocator(
-			NewClassAllocator(NewFixedSizeMmapAllocator),
-			1,
+			newUpstreamAllocatorForTest(),
 		)
-		ptr, dec, err := allocator.Allocate(42, NoHints)
+		slice, dec, err := allocator.Allocate(42, NoHints)
 		if err != nil {
 			t.Fatal(err)
 		}
-		slice := unsafe.Slice((*byte)(ptr), 42)
 		for i := range slice {
 			slice[i] = byte(i)
 		}
-		dec.Deallocate(ptr, NoHints)
+		dec.Deallocate(NoHints)
 		// zero or segfault
 		//for i := range slice {
 		//	if slice[i] != 0 {
@@ -101,8 +95,7 @@ func BenchmarkCheckedAllocator(b *testing.B) {
 	for _, n := range benchNs {
 		benchmarkAllocator(b, func() Allocator {
 			return NewCheckedAllocator(
-				NewClassAllocator(NewFixedSizeMmapAllocator),
-				1,
+				newUpstreamAllocatorForTest(),
 			)
 		}, n)
 	}
@@ -111,8 +104,7 @@ func BenchmarkCheckedAllocator(b *testing.B) {
 func FuzzCheckedAllocator(f *testing.F) {
 	fuzzAllocator(f, func() Allocator {
 		return NewCheckedAllocator(
-			NewClassAllocator(NewFixedSizeMmapAllocator),
-			1,
+			newUpstreamAllocatorForTest(),
 		)
 	})
 }

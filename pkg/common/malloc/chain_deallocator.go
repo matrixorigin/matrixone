@@ -16,19 +16,27 @@ package malloc
 
 import (
 	"sync"
-	"unsafe"
 )
 
 type chainDeallocator []Deallocator
 
 var _ Deallocator = &chainDeallocator{}
 
-func (c *chainDeallocator) Deallocate(ptr unsafe.Pointer, hints Hints) {
+func (c *chainDeallocator) Deallocate(hints Hints) {
 	for i := len(*c) - 1; i >= 0; i-- {
-		(*c)[i].Deallocate(ptr, hints)
+		(*c)[i].Deallocate(hints)
 	}
 	*c = (*c)[:0]
 	chainDeallocatorPool.Put(c)
+}
+
+func (c chainDeallocator) As(target Trait) bool {
+	for _, dec := range c {
+		if ok := dec.As(target); ok {
+			return true
+		}
+	}
+	return false
 }
 
 func ChainDeallocator(dec1 Deallocator, dec2 Deallocator) Deallocator {
