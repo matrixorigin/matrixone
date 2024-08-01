@@ -16,14 +16,19 @@ package logtailreplay
 
 import (
 	"regexp"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 )
 
-var metaTableMatchRegexp = regexp.MustCompile(`\_\d+\_(meta|seg)`)
+var metaTableMatchRegexp = regexp.MustCompile(`\_\d+\_(meta|obj)`)
 var blkTableMatchRegexp = regexp.MustCompile(`\_\d+\_meta`)
 var objTableMatchRegexp = regexp.MustCompile(`\_\d+\_obj`)
+
+func IsTransferredDels(name string) bool {
+	return strings.HasPrefix(name, "trans_del")
+}
 
 func IsMetaTable(name string) bool {
 	return metaTableMatchRegexp.MatchString(name)

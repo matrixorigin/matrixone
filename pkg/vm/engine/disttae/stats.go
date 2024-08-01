@@ -314,6 +314,7 @@ func (gs *GlobalStats) triggerUpdate(key pb.StatsInfoKey, force bool) {
 
 func (gs *GlobalStats) consumeLogtail(tail *logtail.TableLogtail) {
 	key := pb.StatsInfoKey{
+		AccId:      tail.Table.AccId,
 		DatabaseID: tail.Table.DbId,
 		TableID:    tail.Table.TbId,
 	}
@@ -518,7 +519,7 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 		gs.doneUpdate(key, updated)
 	}()
 
-	table := gs.engine.getLatestCatalogCache().GetTableById(key.DatabaseID, key.TableID)
+	table := gs.engine.GetLatestCatalogCache().GetTableById(key.AccId, key.DatabaseID, key.TableID)
 	// table or its definition is nil, means that the table is created but not committed yet.
 	if table == nil || table.TableDef == nil {
 		logutil.Errorf("cannot get table by ID %v", key)

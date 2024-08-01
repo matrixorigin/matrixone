@@ -16,6 +16,9 @@ package anti
 
 import (
 	"bytes"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -134,7 +137,9 @@ func (antiJoin *AntiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (antiJoin *AntiJoin) build(anal process.Analyze, proc *process.Process) {
 	ctr := antiJoin.ctr
-	ctr.mp = proc.ReceiveJoinMap(anal, antiJoin.JoinMapTag, antiJoin.IsShuffle, antiJoin.ShuffleIdx)
+	start := time.Now()
+	defer anal.WaitStop(start)
+	ctr.mp = message.ReceiveJoinMap(antiJoin.JoinMapTag, antiJoin.IsShuffle, antiJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}

@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -95,7 +96,7 @@ type container struct {
 	markVals  []bool
 	markNulls *nulls.Nulls
 
-	mp *process.JoinMap
+	mp *message.JoinMap
 
 	nullWithBatch *batch.Batch
 	rewriteCond   *plan.Expr

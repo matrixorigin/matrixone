@@ -16,6 +16,8 @@ package mark
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -156,7 +158,9 @@ func (markJoin *MarkJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (markJoin *MarkJoin) build(ap *MarkJoin, proc *process.Process, anal process.Analyze) error {
 	ctr := markJoin.ctr
-	mp := proc.ReceiveJoinMap(anal, markJoin.JoinMapTag, false, 0)
+	start := time.Now()
+	defer anal.WaitStop(start)
+	mp := message.ReceiveJoinMap(markJoin.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
 	if mp == nil {
 		return nil
 	}

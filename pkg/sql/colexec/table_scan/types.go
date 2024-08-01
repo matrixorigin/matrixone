@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -30,7 +31,7 @@ type container struct {
 	maxAllocSize int
 	orderBy      []*plan.OrderBySpec
 	buf          *batch.Batch
-	msgReceiver  *process.MessageReceiver
+	msgReceiver  *message.MessageReceiver
 }
 type TableScan struct {
 	ctr            *container
