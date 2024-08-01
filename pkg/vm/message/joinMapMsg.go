@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package process
+package message
 
 import (
+	"context"
 	"sync/atomic"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -155,12 +155,10 @@ func (t JoinMapMsg) GetReceiverAddr() MessageAddress {
 	return AddrBroadCastOnCurrentCN()
 }
 
-func (proc *Process) ReceiveJoinMap(anal Analyze, tag int32, isShuffle bool, shuffleIdx int32) *JoinMap {
-	start := time.Now()
-	defer anal.WaitStop(start)
-	msgReceiver := proc.NewMessageReceiver([]int32{tag}, AddrBroadCastOnCurrentCN())
+func ReceiveJoinMap(tag int32, isShuffle bool, shuffleIdx int32, mb *MessageBoard, ctx context.Context) *JoinMap {
+	msgReceiver := NewMessageReceiver([]int32{tag}, AddrBroadCastOnCurrentCN(), mb)
 	for {
-		msgs, ctxDone := msgReceiver.ReceiveMessage(true, proc.Ctx)
+		msgs, ctxDone := msgReceiver.ReceiveMessage(true, ctx)
 		if ctxDone {
 			return nil
 		}
@@ -186,8 +184,8 @@ func (proc *Process) ReceiveJoinMap(anal Analyze, tag int32, isShuffle bool, shu
 	}
 }
 
-func (proc *Process) FinalizeJoinMapMessage(tag int32, isShuffle bool, shuffleIdx int32, pipelineFailed bool, err error) {
+func FinalizeJoinMapMessage(mb *MessageBoard, tag int32, isShuffle bool, shuffleIdx int32, pipelineFailed bool, err error) {
 	if pipelineFailed || err != nil {
-		proc.SendMessage(JoinMapMsg{JoinMapPtr: nil, IsShuffle: isShuffle, ShuffleIdx: shuffleIdx, Tag: tag})
+		SendMessage(JoinMapMsg{JoinMapPtr: nil, IsShuffle: isShuffle, ShuffleIdx: shuffleIdx, Tag: tag}, mb)
 	}
 }
