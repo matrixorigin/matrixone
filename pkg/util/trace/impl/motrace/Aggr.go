@@ -16,6 +16,7 @@ package motrace
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -24,6 +25,7 @@ import (
 
 type Aggregator struct {
 	ctx         context.Context
+	mux         sync.Mutex
 	Grouped     map[table.WindowKey]table.Item
 	WindowSize  time.Duration
 	NewItemFunc func(i table.Item, ctx context.Context) table.Item
@@ -65,6 +67,8 @@ func (a *Aggregator) Close() {
 }
 
 func (a *Aggregator) AddItem(i table.Item) (table.Item, error) {
+	a.mux.Lock()
+	defer a.mux.Unlock()
 	if !a.FilterFunc(i) {
 		return i, ErrFilteredOut
 	}
@@ -83,6 +87,8 @@ func (a *Aggregator) AddItem(i table.Item) (table.Item, error) {
 // GetResults return the aggr-ed result in Aggregator, but still keep in Aggregator
 // Needs co-operate with Close
 func (a *Aggregator) GetResults() []table.Item {
+	a.mux.Lock()
+	defer a.mux.Lock()
 	results := make([]table.Item, 0, len(a.Grouped))
 	for _, group := range a.Grouped {
 		results = append(results, group)
@@ -95,12 +101,14 @@ func (a *Aggregator) GetWindow() time.Duration { return a.WindowSize }
 // PopResultsBeforeWindow return aggr-ed results in Aggregator, and remove from the Aggregator
 // Those items need to be free-ed after calling by caller.
 func (a *Aggregator) PopResultsBeforeWindow(end time.Time) []table.Item {
+	a.mux.Lock()
+	defer a.mux.Lock()
 	results := make([]table.Item, 0, len(a.Grouped))
 	for key, group := range a.Grouped {
 		if key.Before(end) {
 			results = append(results, group)
+			delete(a.Grouped, key) // fix mem-leak issue
 		}
-		delete(a.Grouped, key)
 	}
 	return results
 }
