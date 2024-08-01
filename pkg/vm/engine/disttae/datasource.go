@@ -391,6 +391,22 @@ func buildBlockListRelationData() *blockListRelData {
 	}
 }
 
+func (relData *blockListRelData) String() string {
+	var w bytes.Buffer
+	w.WriteString(fmt.Sprintf("RelData[%d]<\n", relData.typ))
+	if relData.blklist != nil {
+		w.WriteString(fmt.Sprintf("\tBlockList: %s\n", relData.blklist.String()))
+	} else {
+		w.WriteString("\tBlockList: nil\n")
+	}
+	if relData.tombstones != nil {
+		w.WriteString(relData.tombstones.StringWithPrefix("\t"))
+	} else {
+		w.WriteString("\tTombstones: nil\n")
+	}
+	return w.String()
+}
+
 func (relData *blockListRelData) GetShardIDList() []uint64 {
 	panic("not supported")
 }
