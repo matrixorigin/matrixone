@@ -753,7 +753,6 @@ func (tbl *txnTable) Ranges(
 	}
 
 	data = &blockListRelData{
-		typ:     engine.RelDataBlockList,
 		blklist: blocks,
 	}
 

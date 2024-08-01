@@ -79,7 +79,7 @@ func TestRelationDataV1_MarshalAndUnMarshal(t *testing.T) {
 	require.Nil(t, err)
 
 	tomIsEqual := func(t1 *tombstoneDataWithDeltaLoc, t2 *tombstoneDataWithDeltaLoc) bool {
-		if t1.typ != t2.typ ||
+		if t1.Type() != t2.Type() ||
 			len(t1.inMemTombstones) != len(t2.inMemTombstones) ||
 			len(t1.blk2UncommitLoc) != len(t2.blk2UncommitLoc) ||
 			len(t1.blk2CommitLoc) != len(t2.blk2CommitLoc) {
@@ -135,7 +135,7 @@ func TestRelationDataV1_MarshalAndUnMarshal(t *testing.T) {
 
 	isEqual := func(rd1 *blockListRelData, rd2 *blockListRelData) bool {
 
-		if rd1.typ != rd2.typ || rd1.DataCnt() != rd2.DataCnt() {
+		if rd1.GetType() != rd2.GetType() || rd1.DataCnt() != rd2.DataCnt() {
 			return false
 		}
 
