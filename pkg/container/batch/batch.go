@@ -191,19 +191,15 @@ func (bat *Batch) GetSubBatch(cols []string) *Batch {
 }
 
 func (bat *Batch) Clean(m *mpool.MPool) {
-	if bat == EmptyBatch {
+	// we use `!= 0` but not `>0` to avoid the situation that the batch was cleaned more than required.
+	if bat == EmptyBatch || atomic.AddInt64(&bat.Cnt, -1) != 0 {
 		return
 	}
-	if atomic.LoadInt64(&bat.Cnt) == 0 {
-		// panic("batch is already cleaned")
-		return
-	}
-	if atomic.AddInt64(&bat.Cnt, -1) > 0 {
-		return
-	}
+
 	for _, vec := range bat.Vecs {
 		if vec != nil {
 			vec.Free(m)
+			bat.ReplaceVector(vec, nil)
 		}
 	}
 	for _, agg := range bat.Aggs {
@@ -211,9 +207,10 @@ func (bat *Batch) Clean(m *mpool.MPool) {
 			agg.Free()
 		}
 	}
-	bat.Attrs = nil
-	bat.rowCount = 0
+	bat.Aggs = nil
 	bat.Vecs = nil
+	bat.Attrs = nil
+	bat.SetRowCount(0)
 }
 
 func (bat *Batch) Last() bool {
