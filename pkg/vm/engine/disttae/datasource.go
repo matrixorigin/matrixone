@@ -335,6 +335,20 @@ func (tomb *tombstoneDataWithDeltaLoc) Merge(other engine.Tombstoner) error {
 	return moerr.NewInternalErrorNoCtx("tombstone type mismatch")
 }
 
+func UnmarshalTombstoneData(data []byte) (engine.Tombstoner, error) {
+	typ := engine.TombstoneType(data[0])
+	switch typ {
+	case engine.TombstoneWithDeltaLoc:
+		tomb := buildTombstoneWithDeltaLoc()
+		if err := tomb.UnmarshalBinary(data); err != nil {
+			return nil, err
+		}
+		return tomb, nil
+	default:
+		return nil, moerr.NewInternalErrorNoCtx("unsupported tombstone type")
+	}
+}
+
 func UnmarshalRelationData(data []byte) (engine.RelData, error) {
 	typ := engine.RelDataType(data[0])
 	switch typ {
@@ -357,9 +371,6 @@ type blockListRelData struct {
 	//blkList []*objectio.BlockInfoInProgress
 	blklist objectio.BlockInfoSliceInProgress
 
-	//marshal tombstones if isEmpty is false, otherwise don't need to marshal tombstones
-	hasTombstones bool
-	tombstoneTyp  engine.TombstoneType
 	//tombstones
 	tombstones engine.Tombstoner
 }
@@ -416,7 +427,7 @@ func (relData *blockListRelData) AppendBlockInfo(blk objectio.BlockInfoInProgres
 	relData.blklist.AppendBlockInfo(blk)
 }
 
-func (relData *blockListRelData) UnmarshalBinary(data []byte) error {
+func (relData *blockListRelData) UnmarshalBinary(data []byte) (err error) {
 	data = data[1:]
 
 	sizeofblks := types.DecodeUint32(data)
@@ -425,80 +436,48 @@ func (relData *blockListRelData) UnmarshalBinary(data []byte) error {
 	relData.blklist = data[:sizeofblks]
 	data = data[sizeofblks:]
 
-	hasTombstones := types.DecodeBool(data)
-	relData.hasTombstones = hasTombstones
-	data = data[1:]
+	tombstoneLen := types.DecodeUint32(data)
+	data = data[4:]
 
-	if hasTombstones {
-		tombstoneTyp := engine.TombstoneType(types.DecodeUint8(data))
-		relData.tombstoneTyp = tombstoneTyp
-		data = data[1:]
-
-		size := types.DecodeUint32(data)
-		data = data[4:]
-		switch tombstoneTyp {
-		case engine.TombstoneWithDeltaLoc:
-			tombstoner := buildTombstoneWithDeltaLoc()
-			if err := tombstoner.UnmarshalBinary(data[:size]); err != nil {
-				return err
-			}
-			relData.AttachTombstones(tombstoner)
-		default:
-			return moerr.NewInternalErrorNoCtx("unsupported tombstone type")
-		}
+	if tombstoneLen == 0 {
+		return
 	}
 
-	return nil
+	relData.tombstones, err = UnmarshalTombstoneData(data[:tombstoneLen])
+	return
 }
 
-func (relData *blockListRelData) MarshalBinaryWithBuffer(w *bytes.Buffer) error {
-	var pos2 uint32
+func (relData *blockListRelData) MarshalBinaryWithBuffer(w *bytes.Buffer) (err error) {
 	typ := uint8(relData.typ)
-	if _, err := w.Write(types.EncodeUint8(&typ)); err != nil {
-		return err
+	if _, err = w.Write(types.EncodeUint8(&typ)); err != nil {
+		return
 	}
-	pos2 += 1
 
 	sizeofblks := uint32(relData.blklist.Size())
-	if _, err := w.Write(types.EncodeUint32(&sizeofblks)); err != nil {
-		return err
+	if _, err = w.Write(types.EncodeUint32(&sizeofblks)); err != nil {
+		return
 	}
-	pos2 += 4
 
-	//marshal blk list
-	if _, err := w.Write(relData.blklist); err != nil {
-		return err
+	// marshal blk list
+	if _, err = w.Write(relData.blklist); err != nil {
+		return
 	}
-	pos2 += sizeofblks
 
-	if _, err := w.Write(types.EncodeBool(&relData.hasTombstones)); err != nil {
-		return err
+	// marshal tombstones
+	offset := w.Len()
+	tombstoneLen := uint32(0)
+	if _, err = w.Write(types.EncodeUint32(&tombstoneLen)); err != nil {
+		return
 	}
-	pos2 += 1
-
-	if relData.hasTombstones {
-		typ := uint8(relData.tombstoneTyp)
-		if _, err := w.Write(types.EncodeUint8(&typ)); err != nil {
-			return err
+	if relData.tombstones != nil {
+		if err = relData.tombstones.MarshalBinaryWithBuffer(w); err != nil {
+			return
 		}
-		pos2 += 1
-
-		var sizeOfTombstones uint32
-		// reserve the space: 4 bytes for size of tombstones.
-		if _, err := w.Write(types.EncodeUint32(&sizeOfTombstones)); err != nil {
-			return err
-		}
-
-		offset := w.Len()
-		if err := relData.tombstones.MarshalBinaryWithBuffer(w); err != nil {
-			return err
-		}
-		space := uint32(w.Len() - offset)
-		//update the size of tombstones.
-		copy(w.Bytes()[pos2:pos2+4], types.EncodeUint32(&space))
-
+		tombstoneLen = uint32(w.Len() - offset)
+		buf := w.Bytes()
+		copy(buf[offset:], types.EncodeUint32(&tombstoneLen))
 	}
-	return nil
+	return
 }
 
 func (relData *blockListRelData) GetType() engine.RelDataType {
@@ -516,8 +495,6 @@ func (relData *blockListRelData) MarshalBinary() ([]byte, error) {
 
 func (relData *blockListRelData) AttachTombstones(tombstones engine.Tombstoner) error {
 	relData.tombstones = tombstones
-	relData.tombstoneTyp = tombstones.Type()
-	relData.hasTombstones = tombstones.HasTombstones()
 	return nil
 }
 
@@ -528,11 +505,9 @@ func (relData *blockListRelData) GetTombstones() engine.Tombstoner {
 func (relData *blockListRelData) DataSlice(i, j int) engine.RelData {
 	blist := objectio.BlockInfoSliceInProgress(relData.blklist.Slice(i, j))
 	return &blockListRelData{
-		typ:           relData.typ,
-		blklist:       blist,
-		hasTombstones: relData.hasTombstones,
-		tombstoneTyp:  relData.tombstoneTyp,
-		tombstones:    relData.tombstones,
+		typ:        relData.typ,
+		blklist:    blist,
+		tombstones: relData.tombstones,
 	}
 }
 
@@ -549,10 +524,8 @@ func (relData *blockListRelData) GroupByPartitionNum() map[int16]engine.RelData 
 		partitionNum := blkInfo.PartitionNum
 		if _, ok := ret[partitionNum]; !ok {
 			ret[partitionNum] = &blockListRelData{
-				typ:           relData.typ,
-				hasTombstones: relData.hasTombstones,
-				tombstoneTyp:  relData.tombstoneTyp,
-				tombstones:    relData.tombstones,
+				typ:        relData.typ,
+				tombstones: relData.tombstones,
 			}
 			ret[partitionNum].AppendBlockInfo(objectio.EmptyBlockInfoInProgress)
 		}
