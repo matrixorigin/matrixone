@@ -589,8 +589,10 @@ func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
 	case *plan.Expr_F:
 		funcImpl := exprImpl.F
 		switch funcImpl.Func.GetObjName() {
-		case "like", "json_extract":
-			w += 64
+		case "json_extract":
+			w += 256
+		case "like":
+			w += 32
 		case "cast":
 			w += 8
 		case "in":
