@@ -67,7 +67,7 @@ type BlockInfoInProgress struct {
 	PartitionNum int16
 }
 
-func (b *BlockInfoProgress) String() string {
+func (b *BlockInfoInProgress) String() string {
 	return fmt.Sprintf("[A-%v]blk-%s", b.EntryState, b.BlockID.ShortStringEx())
 }
 
