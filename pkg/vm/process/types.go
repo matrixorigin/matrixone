@@ -21,6 +21,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/google/uuid"
 	"go.uber.org/zap/zapcore"
@@ -343,7 +345,7 @@ type BaseProcess struct {
 	Hakeeper            logservice.CNHAKeeperClient
 	UdfService          udf.Service
 	WaitPolicy          lock.WaitPolicy
-	MessageBoard        *MessageBoard
+	messageBoard        *message.MessageBoard
 	logger              *log.MOLogger
 	TxnOperator         client.TxnOperator
 	CloneTxnOperator    client.TxnOperator
@@ -373,6 +375,14 @@ type WrapCs struct {
 	Uid          uuid.UUID
 	Cs           morpc.ClientSession
 	Err          chan error
+}
+
+func (proc *Process) GetMessageBoard() *message.MessageBoard {
+	return proc.Base.messageBoard
+}
+
+func (proc *Process) SetMessageBoard(mb *message.MessageBoard) {
+	proc.Base.messageBoard = mb
 }
 
 func (proc *Process) SetStmtProfile(sp *StmtProfile) {

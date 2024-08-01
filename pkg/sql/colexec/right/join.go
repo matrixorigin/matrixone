@@ -16,6 +16,9 @@ package right
 
 import (
 	"bytes"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 
@@ -140,7 +143,9 @@ func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (rightJoin *RightJoin) build(anal process.Analyze, proc *process.Process) {
 	ctr := rightJoin.ctr
-	ctr.mp = proc.ReceiveJoinMap(anal, rightJoin.JoinMapTag, rightJoin.IsShuffle, rightJoin.ShuffleIdx)
+	start := time.Now()
+	defer anal.WaitStop(start)
+	ctr.mp = message.ReceiveJoinMap(rightJoin.JoinMapTag, rightJoin.IsShuffle, rightJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
