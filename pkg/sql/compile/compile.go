@@ -3564,7 +3564,7 @@ func (c *Compile) newMergeRemoteScope(ss []*Scope, nodeinfo engine.Node) *Scope 
 	// reset rs's info to remote
 	rs.Magic = Remote
 	rs.NodeInfo.Addr = nodeinfo.Addr
-	rs.NodeInfo.Mcpu = nodeinfo.Mcpu
+	rs.NodeInfo.Mcpu = 1 //merge scope is single parallel by default
 
 	return rs
 }
