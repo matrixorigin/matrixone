@@ -123,7 +123,7 @@ const (
 	FIRST_VALUE
 	FLOOR
 	GREATEST
-	GROUPING_ID
+	GROUPING
 	HASH
 	HASH_AGG
 	HEX_DECODE
@@ -597,6 +597,7 @@ var functionIdRegister = map[string]int32{
 	"serial":                         SERIAL,
 	"serial_full":                    SERIAL_FULL,
 	"serial_extract":                 SERIAL_EXTRACT,
+	"grouping":                       GROUPING,
 	"hash_value":                     HASH,
 	"bin":                            BIN,
 	"datediff":                       DATEDIFF,

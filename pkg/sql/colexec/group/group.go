@@ -140,6 +140,75 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 
 }
 
+func (ctr *container) processRollup(result vm.CallResult, ap *Group, proc *process.Process) (vm.CallResult, error) {
+	if result.Batch == nil || !ap.NeedRollup {
+		return result, nil
+	}
+	for i := range ctr.aggVecs {
+		for j := range ctr.aggVecs[i].Executor {
+			ctr.aggVecs[i].Vec[j] = ctr.bat.Vecs[len(ctr.groupVecs.Vec)+i]
+			ctr.aggVecs[i].Typ[j] = *ctr.bat.Vecs[len(ctr.groupVecs.Vec)+i].GetType()
+		}
+	}
+	for i := range ctr.groupVecs.Vec {
+		ctr.groupVecs.Vec[i] = ctr.bat.Vecs[i]
+	}
+	originCount := result.Batch.RowCount()
+	rollupCount := 0
+	for k := len(ctr.groupVecs.Vec) - 1; k >= 0; k-- {
+		err := ctr.initResultAndHashTable(&ctr.rollupBat, proc, ap)
+		if err != nil {
+			return result, nil
+		}
+		ctr.rollupColumn = k
+		if ctr.keyWidth < 8 {
+			ctr.processH8(result.Batch, proc, true)
+		} else {
+			ctr.processHStr(result.Batch, proc, true)
+		}
+		aggVectors, err := ctr.getAggResult(ctr.rollupBat)
+		if err != nil {
+			return result, err
+		}
+		ctr.rollupBat.Vecs = append(ctr.rollupBat.Vecs, aggVectors...)
+		if ctr.rollupBat.RowCount() > 0 {
+			rollupCount += ctr.rollupBat.RowCount()
+			for i, vec := range result.Batch.Vecs {
+				sels := make([]int32, ctr.rollupBat.RowCount())
+				for j := 0; j < ctr.rollupBat.RowCount(); j++ {
+					sels[j] = int32(j)
+				}
+				if err := vec.Union(ctr.rollupBat.Vecs[i], sels, proc.Mp()); err != nil {
+					result.Batch.Clean(proc.Mp())
+					ctr.rollupBat.Clean(proc.Mp())
+					return result, err
+				}
+			}
+			ctr.rollupBat.Clean(proc.Mp())
+			ctr.rollupBat = nil
+		}
+	}
+	v := vector.NewVec(types.T_bool.ToType())
+	for i := 0; i < originCount; i++ {
+		newv, err := vector.NewConstFixed(types.T_bool.ToType(), false, 1, proc.Mp())
+		if err != nil {
+			return result, err
+		}
+		v.UnionOne(newv, 0, proc.Mp())
+	}
+	for i := 0; i < rollupCount; i++ {
+		newv, err := vector.NewConstFixed(types.T_bool.ToType(), true, 1, proc.Mp())
+		if err != nil {
+			return result, err
+		}
+		v.UnionOne(newv, 0, proc.Mp())
+	}
+	result.Batch.Vecs = append(result.Batch.Vecs, v)
+	ctr.bat = nil
+	ctr.state = vm.End
+	return result, nil
+}
+
 // compute the `agg(expression)List group by expressionList`.
 func (ctr *container) processGroupByAndAgg(
 	ap *Group, proc *process.Process, anal process.Analyze, isFirst, isLast bool) (vm.CallResult, error) {
