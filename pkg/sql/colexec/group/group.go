@@ -136,62 +136,8 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 	anal.Start()
 	defer anal.Stop()
 
-	result, err := group.ctr.processGroupByAndAgg(group, proc, anal, group.GetIsFirst(), group.GetIsLast())
-	if err != nil {
-		return result, err
-	}
-	return group.ctr.processRollup(result, group, proc)
+	return group.ctr.processGroupByAndAgg(group, proc, anal, group.GetIsFirst(), group.GetIsLast())
 
-}
-
-func (ctr *container) processRollup(result vm.CallResult, ap *Group, proc *process.Process) (vm.CallResult, error) {
-	if result.Batch == nil || ap.NeedRollup == false {
-		return result, nil
-	}
-	for i := range ctr.aggVecs {
-		for j := range ctr.aggVecs[i].Executor {
-			ctr.aggVecs[i].Vec[j] = ctr.bat.Vecs[len(ctr.groupVecs.Vec)+i]
-			ctr.aggVecs[i].Typ[j] = *ctr.bat.Vecs[len(ctr.groupVecs.Vec)+i].GetType()
-		}
-	}
-	for i := range ctr.groupVecs.Vec {
-		ctr.groupVecs.Vec[i] = ctr.bat.Vecs[i]
-	}
-	for k := len(ctr.groupVecs.Vec) - 1; k >= 0; k-- {
-		err := ctr.initResultAndHashTable(&ctr.rollupBat, proc, ap)
-		if err != nil {
-			return result, nil
-		}
-		ctr.rollupColumn = k
-		if ctr.keyWidth < 8 {
-			ctr.processH8(result.Batch, proc, true)
-		} else {
-			ctr.processHStr(result.Batch, proc, true)
-		}
-		aggVectors, err := ctr.getAggResult(ctr.rollupBat)
-		if err != nil {
-			return result, err
-		}
-		ctr.rollupBat.Vecs = append(ctr.rollupBat.Vecs, aggVectors...)
-		if ctr.rollupBat.RowCount() > 0 {
-			for i, vec := range result.Batch.Vecs {
-				sels := make([]int32, ctr.rollupBat.RowCount())
-				for j := 0; j < ctr.rollupBat.RowCount(); j++ {
-					sels[j] = int32(j)
-				}
-				if err := vec.Union(ctr.rollupBat.Vecs[i], sels, proc.Mp()); err != nil {
-					result.Batch.Clean(proc.Mp())
-					ctr.rollupBat.Clean(proc.Mp())
-					return result, err
-				}
-			}
-			ctr.rollupBat.Clean(proc.Mp())
-			ctr.rollupBat = nil
-		}
-	}
-	ctr.bat = nil
-	ctr.state = vm.End
-	return result, nil
 }
 
 // compute the `agg(expression)List group by expressionList`.
@@ -243,6 +189,23 @@ func (ctr *container) processGroupByAndAgg(
 						err = moerr.NewInternalError(proc.Ctx, "unexpected hashmap typ for group-operator.")
 					}
 				}
+				if err != nil {
+					return result, err
+				}
+
+				if ap.NeedRollup {
+					for i := len(ctr.groupVecs.Vec) - 1; i >= 0; i-- {
+						ctr.rollupColumn = i
+						switch ctr.typ {
+						case H8:
+							err = ctr.processH8(bat, proc, true)
+						case HStr:
+							err = ctr.processHStr(bat, proc, true)
+						default:
+							err = moerr.NewInternalError(proc.Ctx, "unexpected hashmap typ for group-operator.")
+						}
+					}
+				}
 
 				if err != nil {
 					return result, err
@@ -272,12 +235,37 @@ func (ctr *container) processGroupByAndAgg(
 					anal.Alloc(int64(vec.Size()))
 				}
 			}
+			if ap.NeedRollup {
+				aggVectors, err := ctr.getAggResult(ctr.rollupBat)
+				if err != nil {
+					return result, err
+				}
+				ctr.rollupBat.Vecs = append(ctr.rollupBat.Vecs, aggVectors...)
+
+				// analyze.
+				for _, vec := range aggVectors {
+					anal.Alloc(int64(vec.Size()))
+				}
+
+				for i, vec := range ctr.bat.Vecs {
+					sels := make([]int32, ctr.rollupBat.RowCount())
+					for j := 0; j < ctr.rollupBat.RowCount(); j++ {
+						sels[j] = int32(j)
+					}
+					if err := vec.Union(ctr.rollupBat.Vecs[i], sels, proc.Mp()); err != nil {
+						result.Batch.Clean(proc.Mp())
+						ctr.rollupBat.Clean(proc.Mp())
+						return result, err
+					}
+				}
+
+			}
+
 			anal.Output(ctr.bat, isLast)
 			result.Batch = ctr.bat
-			if !ap.NeedRollup {
-				ctr.bat = nil
-				ctr.state = vm.End
-			}
+			ctr.bat = nil
+			ctr.state = vm.End
+
 			return result, nil
 
 		// send an End-Message to tell the next operator all were done.
@@ -330,7 +318,12 @@ func (ctr *container) processH0() error {
 // processH8 do group by aggregation with int hashmap.
 func (ctr *container) processH8(bat *batch.Batch, proc *process.Process, rollup bool) error {
 	count := bat.RowCount()
-	itr := ctr.intHashMap.NewIterator()
+	var itr hashmap.Iterator
+	if !rollup {
+		itr = ctr.intHashMap.NewIterator()
+	} else {
+		itr = ctr.rollupIntMap.NewIterator()
+	}
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		if i%(hashmap.UnitLimit*32) == 0 {
 			runtime.Gosched()
@@ -339,13 +332,15 @@ func (ctr *container) processH8(bat *batch.Batch, proc *process.Process, rollup 
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
-		rows := ctr.intHashMap.GroupCount()
 		vecs := ctr.groupVecs.Vec
+		var rows uint64
 		var vals []uint64
 		var err error
 		if !rollup {
+			rows = ctr.intHashMap.GroupCount()
 			vals, _, err = itr.Insert(i, n, vecs)
 		} else {
+			rows = ctr.rollupIntMap.GroupCount()
 			rollVec := vecs[:ctr.rollupColumn]
 			for k, vec := range vecs[ctr.rollupColumn:] {
 				nullVec := vector.NewConstNull(ctr.groupVecs.Typ[ctr.rollupColumn+k], vec.Length(), proc.Mp())
@@ -366,7 +361,12 @@ func (ctr *container) processH8(bat *batch.Batch, proc *process.Process, rollup 
 // processHStr do group by aggregation with string hashmap.
 func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process, rollup bool) error {
 	count := bat.RowCount()
-	itr := ctr.strHashMap.NewIterator()
+	var itr hashmap.Iterator
+	if !rollup {
+		itr = ctr.strHashMap.NewIterator()
+	} else {
+		itr = ctr.rollupStrMap.NewIterator()
+	}
 
 	for i := 0; i < count; i += hashmap.UnitLimit { // batch
 		if i%(hashmap.UnitLimit*32) == 0 {
@@ -376,13 +376,15 @@ func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process, rollu
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
-		rows := ctr.strHashMap.GroupCount()
 		vecs := ctr.groupVecs.Vec
+		var rows uint64
 		var vals []uint64
 		var err error
 		if !rollup {
+			rows = ctr.strHashMap.GroupCount()
 			vals, _, err = itr.Insert(i, n, vecs)
 		} else {
+			rows = ctr.rollupStrMap.GroupCount()
 			rollVec := vecs[:ctr.rollupColumn]
 			for k, vec := range vecs[ctr.rollupColumn:] {
 				nullVec := vector.NewConstNull(ctr.groupVecs.Typ[ctr.rollupColumn+k], vec.Length(), proc.Mp())
@@ -471,7 +473,17 @@ func (ctr *container) evaluateAggAndGroupBy(
 	// we set this code here because we need to get the result of group-by columns.
 	// todo: in fact, the group-by column result is same as Argument.Expr,
 	//  move codes to the end of prepare stage is also good.
-	return ctr.initResultAndHashTable(&ctr.bat, proc, config)
+	err = ctr.initResultAndHashTable(&ctr.bat, proc, config)
+	if err != nil {
+		return err
+	}
+	if config.NeedRollup {
+		err = ctr.initResultAndHashTable(&ctr.rollupBat, proc, config)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (ctr *container) getAggResult(bat *batch.Batch) ([]*vector.Vector, error) {
@@ -539,6 +551,30 @@ func (ctr *container) initResultAndHashTable(bat **batch.Batch, proc *process.Pr
 		if config.PreAllocSize > 0 {
 			if err = ctr.strHashMap.PreAlloc(config.PreAllocSize, proc.Mp()); err != nil {
 				return err
+			}
+		}
+	}
+
+	if config.NeedRollup {
+		switch {
+		case ctr.keyWidth <= 8:
+			if ctr.rollupIntMap, err = hashmap.NewIntHashMap(ctr.groupVecsNullable, proc.Mp()); err != nil {
+				return err
+			}
+			if config.PreAllocSize > 0 {
+				if err = ctr.rollupIntMap.PreAlloc(config.PreAllocSize, proc.Mp()); err != nil {
+					return err
+				}
+			}
+
+		default:
+			if ctr.rollupStrMap, err = hashmap.NewStrMap(ctr.groupVecsNullable, proc.Mp()); err != nil {
+				return err
+			}
+			if config.PreAllocSize > 0 {
+				if err = ctr.rollupStrMap.PreAlloc(config.PreAllocSize, proc.Mp()); err != nil {
+					return err
+				}
 			}
 		}
 	}

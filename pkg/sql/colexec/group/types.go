@@ -75,8 +75,10 @@ type container struct {
 	inserted  []uint8
 	zInserted []uint8
 
-	intHashMap *hashmap.IntHashMap
-	strHashMap *hashmap.StrHashMap
+	intHashMap   *hashmap.IntHashMap
+	strHashMap   *hashmap.StrHashMap
+	rollupStrMap *hashmap.StrHashMap
+	rollupIntMap *hashmap.IntHashMap
 	// idx        *index.LowCardinalityIndex
 
 	aggVecs   []ExprEvalVector
