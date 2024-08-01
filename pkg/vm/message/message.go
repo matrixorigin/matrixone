@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package process
+package message
 
 import (
 	"context"
-	"github.com/google/uuid"
 	"sync"
+
+	"github.com/google/uuid"
 )
 
 const ALLCN = "ALLCN"
@@ -102,6 +103,8 @@ func (m *MessageBoard) Reset() *MessageBoard {
 		m.MessageCenter.RwMutex.Lock()
 		delete(m.MessageCenter.StmtIDToBoard, m.stmtId)
 		m.MessageCenter.RwMutex.Unlock()
+		// other pipeline could still access thie messageBoard
+		// so reset current message board to a new one
 		return NewMessageBoard()
 	}
 	m.RwMutex.Lock()
@@ -121,8 +124,15 @@ type MessageReceiver struct {
 	waiter   chan bool
 }
 
-func (proc *Process) SendMessage(m Message) {
-	mb := proc.Base.MessageBoard
+func NewMessageReceiver(tags []int32, addr MessageAddress, mb *MessageBoard) *MessageReceiver {
+	return &MessageReceiver{
+		tags: tags,
+		addr: &addr,
+		mb:   mb,
+	}
+}
+
+func SendMessage(m Message, mb *MessageBoard) {
 	if m.GetReceiverAddr().CnAddr == CURRENTCN { // message for current CN
 		mb.RwMutex.Lock()
 		mb.Messages = append(mb.Messages, &m)
@@ -138,14 +148,6 @@ func (proc *Process) SendMessage(m Message) {
 	} else {
 		//todo: send message to other CN, need to lookup cnlist
 		panic("unsupported message yet!")
-	}
-}
-
-func (proc *Process) NewMessageReceiver(tags []int32, addr MessageAddress) *MessageReceiver {
-	return &MessageReceiver{
-		tags: tags,
-		addr: &addr,
-		mb:   proc.Base.MessageBoard,
 	}
 }
 

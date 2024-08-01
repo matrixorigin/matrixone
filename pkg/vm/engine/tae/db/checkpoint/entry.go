@@ -86,6 +86,10 @@ func (e *CheckpointEntry) LSNString() string {
 	return fmt.Sprintf("ckp %d, truncate %d", e.ckpLSN, e.truncateLSN)
 }
 
+func (e *CheckpointEntry) LSN() uint64 {
+	return e.ckpLSN
+}
+
 func (e *CheckpointEntry) GetStart() types.TS { return e.start }
 func (e *CheckpointEntry) GetEnd() types.TS   { return e.end }
 func (e *CheckpointEntry) GetState() State {

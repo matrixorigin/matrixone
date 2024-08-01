@@ -48,7 +48,7 @@ type MergeTaskHost interface {
 	HostHintName() string
 	GetCommitEntry() *api.MergeCommitEntry
 	InitTransferMaps(blkCnt int)
-	GetTransferMaps() *api.TransferMaps
+	GetTransferMaps() api.TransferMaps
 	PrepareNewWriter() *blockio.BlockWriter
 	DoTransfer() bool
 	GetObjectCnt() int
@@ -116,7 +116,7 @@ func DoMergeAndWrite(
 	fromObjsDesc := ""
 	for _, o := range commitEntry.MergedObjs {
 		obj := objectio.ObjectStats(o)
-		fromObjsDesc = fmt.Sprintf("%s%s,", fromObjsDesc, common.ShortObjId(*obj.ObjectName().ObjectId()))
+		fromObjsDesc = fmt.Sprintf("%s%s,", fromObjsDesc, obj.ObjectName().ObjectId().ShortStringEx())
 	}
 	logutil.Info(
 		"[MERGE-START]",
@@ -155,7 +155,7 @@ func DoMergeAndWrite(
 	for _, o := range commitEntry.CreatedObjs {
 		obj := objectio.ObjectStats(o)
 		toObjsDesc += fmt.Sprintf("%s(%v)Rows(%v),",
-			common.ShortObjId(*obj.ObjectName().ObjectId()),
+			obj.ObjectName().ObjectId().ShortStringEx(),
 			obj.BlkCnt(),
 			obj.Rows())
 	}
@@ -171,27 +171,13 @@ func DoMergeAndWrite(
 
 // not defined in api.go to avoid import cycle
 
-func NewBlkTransferBooking(size int) *api.BlkTransferBooking {
-	mappings := make([]api.BlkTransMap, size)
-	for i := 0; i < size; i++ {
-		mappings[i] = api.BlkTransMap{
-			M: make(map[int32]api.TransDestPos),
-		}
-	}
-	return &api.BlkTransferBooking{
-		Mappings: mappings,
+func CleanTransMapping(b api.TransferMaps) {
+	for i := 0; i < len(b); i++ {
+		b[i] = make(api.TransferMap)
 	}
 }
 
-func CleanTransMapping(b *api.BlkTransferBooking) {
-	for i := 0; i < len(b.Mappings); i++ {
-		b.Mappings[i] = api.BlkTransMap{
-			M: make(map[int32]api.TransDestPos),
-		}
-	}
-}
-
-func AddSortPhaseMapping(b *api.BlkTransferBooking, idx int, originRowCnt int, mapping []int64) {
+func AddSortPhaseMapping(b api.TransferMaps, idx int, originRowCnt int, mapping []int64) {
 	// TODO: remove panic check
 	if mapping != nil {
 		if len(mapping) != originRowCnt {
@@ -208,18 +194,18 @@ func AddSortPhaseMapping(b *api.BlkTransferBooking, idx int, originRowCnt int, m
 		}
 		mapping = transposedMapping
 	}
-	targetMapping := b.Mappings[idx].M
+	targetMapping := b[idx]
 	for origRow := 0; origRow < originRowCnt; origRow++ {
 		if mapping == nil {
 			// no sort phase, the mapping is 1:1, just use posInVecApplyDeletes
-			targetMapping[int32(origRow)] = api.TransDestPos{BlkIdx: -1, RowIdx: int32(origRow)}
+			targetMapping[uint32(origRow)] = api.TransferDestPos{RowIdx: uint32(origRow)}
 		} else {
-			targetMapping[int32(origRow)] = api.TransDestPos{BlkIdx: -1, RowIdx: int32(mapping[origRow])}
+			targetMapping[uint32(origRow)] = api.TransferDestPos{RowIdx: uint32(mapping[origRow])}
 		}
 	}
 }
 
-func UpdateMappingAfterMerge(b *api.BlkTransferBooking, mapping []int, toLayout []uint32) {
+func UpdateMappingAfterMerge(b api.TransferMaps, mapping []int, toLayout []uint32) {
 	bisectHaystack := make([]uint32, 0, len(toLayout)+1)
 	bisectHaystack = append(bisectHaystack, 0)
 	for _, x := range toLayout {
@@ -244,12 +230,11 @@ func UpdateMappingAfterMerge(b *api.BlkTransferBooking, mapping []int, toLayout 
 		return blkIdx, rows
 	}
 
-	var totalHandledRows int32
+	var totalHandledRows uint32
 
-	for _, mcontainer := range b.Mappings {
-		m := mcontainer.M
+	for _, m := range b {
 		size := len(m)
-		var curTotal int32 // index in the flatten src array
+		var curTotal uint32 // index in the flatten src array
 		for srcRow := range m {
 			curTotal = totalHandledRows + m[srcRow].RowIdx
 			destTotal := mapping[curTotal]
@@ -257,9 +242,9 @@ func UpdateMappingAfterMerge(b *api.BlkTransferBooking, mapping []int, toLayout 
 				delete(m, srcRow)
 			} else {
 				destBlkIdx, destRowIdx := bisectPinpoint(uint32(destTotal))
-				m[srcRow] = api.TransDestPos{BlkIdx: int32(destBlkIdx), RowIdx: int32(destRowIdx)}
+				m[srcRow] = api.TransferDestPos{BlkIdx: uint16(destBlkIdx), RowIdx: destRowIdx}
 			}
 		}
-		totalHandledRows += int32(size)
+		totalHandledRows += uint32(size)
 	}
 }
