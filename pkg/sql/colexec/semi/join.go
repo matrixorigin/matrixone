@@ -16,6 +16,9 @@ package semi
 
 import (
 	"bytes"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -133,7 +136,9 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (semiJoin *SemiJoin) build(anal process.Analyze, proc *process.Process) {
 	ctr := semiJoin.ctr
-	ctr.mp = proc.ReceiveJoinMap(anal, semiJoin.JoinMapTag, semiJoin.IsShuffle, semiJoin.ShuffleIdx)
+	start := time.Now()
+	defer anal.WaitStop(start)
+	ctr.mp = message.ReceiveJoinMap(semiJoin.JoinMapTag, semiJoin.IsShuffle, semiJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}

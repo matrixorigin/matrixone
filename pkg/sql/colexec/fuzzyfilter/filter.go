@@ -17,6 +17,8 @@ package fuzzyfilter
 import (
 	"bytes"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -309,13 +311,13 @@ func (fuzzyFilter *FuzzyFilter) handleRuntimeFilter(proc *process.Process) error
 		return nil
 	}
 
-	var runtimeFilter process.RuntimeFilterMessage
+	var runtimeFilter message.RuntimeFilterMessage
 	runtimeFilter.Tag = fuzzyFilter.RuntimeFilterSpec.Tag
 
 	//                                                 the number of data insert is greater than inFilterCardLimit
 	if fuzzyFilter.RuntimeFilterSpec.Expr == nil || ctr.pass2RuntimeFilter == nil {
-		runtimeFilter.Typ = process.RuntimeFilter_PASS
-		proc.SendRuntimeFilter(runtimeFilter, fuzzyFilter.RuntimeFilterSpec)
+		runtimeFilter.Typ = message.RuntimeFilter_PASS
+		message.SendRuntimeFilter(runtimeFilter, fuzzyFilter.RuntimeFilterSpec, proc.GetMessageBoard())
 		return nil
 	}
 
@@ -331,9 +333,9 @@ func (fuzzyFilter *FuzzyFilter) handleRuntimeFilter(proc *process.Process) error
 		return err
 	}
 
-	runtimeFilter.Typ = process.RuntimeFilter_IN
+	runtimeFilter.Typ = message.RuntimeFilter_IN
 	runtimeFilter.Data = data
-	proc.SendRuntimeFilter(runtimeFilter, fuzzyFilter.RuntimeFilterSpec)
+	message.SendRuntimeFilter(runtimeFilter, fuzzyFilter.RuntimeFilterSpec, proc.GetMessageBoard())
 	return nil
 }
 
