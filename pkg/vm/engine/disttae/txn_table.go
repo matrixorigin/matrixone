@@ -1828,14 +1828,7 @@ func (tbl *txnTable) buildLocalDataSource(
 		}
 
 		if skipReadMem && engine.GetForceBuildRemoteDS() {
-			//fmt.Println("remote")
-			//source = NewRemoteDataSource(
-			//	ctx,
-			//	tbl.proc.Load(),
-			//	tbl.getTxn().engine.fs,
-			//	tbl.getTxn().op.SnapshotTS(),
-			//	relData,
-			//)
+			source, err = buildRemoteDS(ctx, tbl, txnOffset, relData)
 		} else {
 			source, err = NewLocalDataSource(
 				ctx,
