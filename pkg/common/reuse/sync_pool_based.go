@@ -36,16 +36,20 @@ func newSyncPoolBased[T ReusableObject](
 		pool: sync.Pool{
 			New: func() any {
 				v := new()
-				c.created(v)
-				runtime.SetFinalizer(
-					v,
-					func(v *T) {
-						if opts.gcRecover != nil {
-							defer opts.gcRecover()
-						}
-						c.gc(v)
-						opts.release(v)
-					})
+
+				if enableChecker.Load() && c.enable {
+					c.created(v)
+					runtime.SetFinalizer(
+						v,
+						func(v *T) {
+							if opts.gcRecover != nil {
+								defer opts.gcRecover()
+							}
+							c.gc(v)
+							opts.release(v)
+						})
+				}
+
 				return v
 			},
 		},
