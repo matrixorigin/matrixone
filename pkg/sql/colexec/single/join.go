@@ -16,6 +16,9 @@ package single
 
 import (
 	"bytes"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -116,7 +119,9 @@ func (singleJoin *SingleJoin) Call(proc *process.Process) (vm.CallResult, error)
 }
 func (singleJoin *SingleJoin) build(anal process.Analyze, proc *process.Process) {
 	ctr := singleJoin.ctr
-	ctr.mp = proc.ReceiveJoinMap(anal, singleJoin.JoinMapTag, false, 0)
+	start := time.Now()
+	defer anal.WaitStop(start)
+	ctr.mp = message.ReceiveJoinMap(singleJoin.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
