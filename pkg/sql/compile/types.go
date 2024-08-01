@@ -228,7 +228,7 @@ func (a anaylzeModule) TypeName() string {
 	return "compile.anaylzeModule"
 }
 
-func newAnaylze() *anaylzeModule {
+func newAnaylzeModule() *anaylzeModule {
 	return reuse.Alloc[anaylzeModule](nil)
 }
 
