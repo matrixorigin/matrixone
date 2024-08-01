@@ -21,7 +21,7 @@ import (
 	"sort"
 	"strconv"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
@@ -618,7 +618,7 @@ func (ndesc *NodeDescribeImpl) GetSendMessageInfo(ctx context.Context, options *
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		first := true
 		for _, v := range ndesc.Node.SendMsgList {
-			if v.GetMsgType() == int32(process.MsgJoinMap) {
+			if v.GetMsgType() == int32(message.MsgJoinMap) {
 				continue
 			}
 			if first {
@@ -642,7 +642,7 @@ func (ndesc *NodeDescribeImpl) GetRecvMessageInfo(ctx context.Context, options *
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		first := true
 		for _, v := range ndesc.Node.RecvMsgList {
-			if v.GetMsgType() == int32(process.MsgJoinMap) {
+			if v.GetMsgType() == int32(message.MsgJoinMap) {
 				continue
 			}
 			if first {

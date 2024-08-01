@@ -24,6 +24,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
 	"github.com/panjf2000/ants/v2"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -197,7 +199,7 @@ type Engine struct {
 	globalStats *GlobalStats
 
 	//for message on multiCN, use uuid to get the messageBoard
-	messageCenter *process.MessageCenter
+	messageCenter *message.MessageCenter
 }
 
 // Transaction represents a transaction
