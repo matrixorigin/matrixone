@@ -25,6 +25,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -44,11 +47,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 )
 
-var MaxPrepareNumberInOneSession int = 100000
+var (
+	MaxPrepareNumberInOneSession atomic.Uint32
+)
+
+func init() {
+	MaxPrepareNumberInOneSession.Store(100000)
+}
 
 // TODO: this variable should be configure by set variable
 const MoDefaultErrorCount = 64
@@ -239,6 +246,10 @@ type Session struct {
 	proxyAddr  string
 
 	disableTrace bool
+
+	// disableAgg co-operate with RecordStatement
+	// more can see Benchmark_RecordStatement_IsTrue()
+	disableAgg bool
 }
 
 func (ses *Session) InitSystemVariables(ctx context.Context) (err error) {
@@ -915,8 +926,8 @@ func (ses *Session) SetPrepareStmt(ctx context.Context, name string, prepareStmt
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	if stmt, ok := ses.prepareStmts[name]; !ok {
-		if len(ses.prepareStmts) >= MaxPrepareNumberInOneSession {
-			return moerr.NewInvalidState(ctx, "too many prepared statement, max %d", MaxPrepareNumberInOneSession)
+		if len(ses.prepareStmts) >= int(MaxPrepareNumberInOneSession.Load()) {
+			return moerr.NewInvalidState(ctx, "too many prepared statement, max %d", MaxPrepareNumberInOneSession.Load())
 		}
 	} else {
 		stmt.Close()

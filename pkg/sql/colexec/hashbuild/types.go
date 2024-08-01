@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -32,8 +33,7 @@ var _ vm.Operator = new(HashBuild)
 const (
 	BuildHashMap = iota
 	HandleRuntimeFilter
-	SendHashMap
-	SendBatch
+	SendJoinMap
 	End
 )
 
@@ -43,7 +43,6 @@ type container struct {
 	runtimeFilterIn    bool
 	multiSels          [][]int32
 	batches            []*batch.Batch
-	batchIdx           int
 	inputBatchRowCount int
 	tmpBatch           *batch.Batch
 
@@ -109,20 +108,16 @@ func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, er
 
 func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := hashBuild.ctr
-	proc.FinalizeRuntimeFilter(hashBuild.RuntimeFilterSpec, pipelineFailed, err)
-	proc.FinalizeJoinMapMessage(hashBuild.JoinMapTag, false, 0, pipelineFailed, err)
+	message.FinalizeRuntimeFilter(hashBuild.RuntimeFilterSpec, pipelineFailed, err, proc.GetMessageBoard())
+	message.FinalizeJoinMapMessage(proc.GetMessageBoard(), hashBuild.JoinMapTag, false, 0, pipelineFailed, err)
 	if ctr != nil {
-		ctr.cleanBatches(proc)
+		ctr.batches = nil
+		ctr.intHashMap = nil
+		ctr.strHashMap = nil
+		ctr.multiSels = nil
 		ctr.cleanEvalVectors()
 		hashBuild.ctr = nil
 	}
-}
-
-func (ctr *container) cleanBatches(proc *process.Process) {
-	for i := range ctr.batches {
-		proc.PutBatch(ctr.batches[i])
-	}
-	ctr.batches = nil
 }
 
 func (ctr *container) cleanEvalVectors() {

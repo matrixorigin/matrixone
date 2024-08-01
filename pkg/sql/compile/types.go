@@ -19,6 +19,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
 	"github.com/google/uuid"
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -200,8 +202,8 @@ type scopeContext struct {
 	regs     map[*process.WaitRegister]int32
 }
 
-// anaylze information
-type anaylze struct {
+// anaylzeModule information
+type anaylzeModule struct {
 	// curNodeIdx is the current Node index when compilePlanScope
 	curNodeIdx int
 	// isFirst is the first opeator in pipeline for plan Node
@@ -210,27 +212,27 @@ type anaylze struct {
 	analInfos []*process.AnalyzeInfo
 }
 
-func (a *anaylze) S3IOInputCount(idx int, count int64) {
+func (a *anaylzeModule) S3IOInputCount(idx int, count int64) {
 	atomic.AddInt64(&a.analInfos[idx].S3IOInputCount, count)
 }
 
-func (a *anaylze) S3IOOutputCount(idx int, count int64) {
+func (a *anaylzeModule) S3IOOutputCount(idx int, count int64) {
 	atomic.AddInt64(&a.analInfos[idx].S3IOOutputCount, count)
 }
 
-func (a *anaylze) Nodes() []*process.AnalyzeInfo {
+func (a *anaylzeModule) Nodes() []*process.AnalyzeInfo {
 	return a.analInfos
 }
 
-func (a anaylze) TypeName() string {
-	return "compile.anaylze"
+func (a anaylzeModule) TypeName() string {
+	return "compile.anaylzeModule"
 }
 
-func newAnaylze() *anaylze {
-	return reuse.Alloc[anaylze](nil)
+func newAnaylze() *anaylzeModule {
+	return reuse.Alloc[anaylzeModule](nil)
 }
 
-func (a *anaylze) release() {
+func (a *anaylzeModule) release() {
 	// there are 3 situations to release analyzeInfo
 	// 1 is free analyzeInfo of Local CN when release analyze
 	// 2 is free analyzeInfo of remote CN before transfer back
@@ -239,7 +241,7 @@ func (a *anaylze) release() {
 	for i := range a.analInfos {
 		reuse.Free[process.AnalyzeInfo](a.analInfos[i], nil)
 	}
-	reuse.Free[anaylze](a, nil)
+	reuse.Free[anaylzeModule](a, nil)
 }
 
 // Compile contains all the information needed for compilation.
@@ -270,7 +272,7 @@ type Compile struct {
 	// queryStatus is a structure to record query has done.
 	queryStatus queryDoneWaiter
 
-	anal *anaylze
+	anal *anaylzeModule
 	// e db engine instance.
 	e engine.Engine
 
@@ -279,7 +281,7 @@ type Compile struct {
 	// TxnOffset read starting offset position within the transaction during the execute current statement
 	TxnOffset int
 
-	MessageBoard *process.MessageBoard
+	MessageBoard *message.MessageBoard
 
 	cnList engine.Nodes
 	// ast

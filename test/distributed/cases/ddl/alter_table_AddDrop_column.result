@@ -171,12 +171,12 @@ alter table truncate01 add column col3 int unsigned after col1 ;
 alter table truncate01 add column colF binary first;
 show create table truncate01;
 Table    Create Table
-truncate01    CREATE TABLE `truncate01` (\n  `colf` BINARY(1) DEFAULT NULL,\n  `col1` INT DEFAULT NULL,\n  `col3` INT UNSIGNED DEFAULT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL\n)
+truncate01    CREATE TABLE `truncate01` (\n  `colF` BINARY(1) DEFAULT NULL,\n  `col1` INT DEFAULT NULL,\n  `col3` INT UNSIGNED DEFAULT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL\n)
 alter table truncate01 drop column col3;
 alter table truncate01 drop column col1;
 show create table truncate01;
 Table    Create Table
-truncate01    CREATE TABLE `truncate01` (\n  `colf` BINARY(1) DEFAULT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL\n)
+truncate01    CREATE TABLE `truncate01` (\n  `colF` BINARY(1) DEFAULT NULL,\n  `col2` DECIMAL(38,0) DEFAULT NULL\n)
 drop table truncate01;
 drop table if exists T1;
 create table t1(id int PRIMARY KEY,name VARCHAR(255),age int);
@@ -525,7 +525,11 @@ insert into transaction03 values(3,1);
 insert into transaction03 values(4,2);
 alter table transaction03 rename to `transaction04`;
 select * from transaction04;
-SQL parser error: table "transaction04" does not exist
+c    d
+3    1
+4    2
+1    1
+2    2
 use isolation;
 invalid database isolation
 select * from transaction04;

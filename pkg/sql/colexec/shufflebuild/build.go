@@ -19,6 +19,8 @@ import (
 	"runtime"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -119,37 +121,22 @@ func (shuffleBuild *ShuffleBuild) Call(proc *process.Process) (vm.CallResult, er
 			} else if ap.ctr.strHashMap != nil {
 				anal.Alloc(ap.ctr.strHashMap.Size())
 			}
-			ctr.state = SendHashMap
+			ctr.state = SendJoinMap
 
-		case SendHashMap:
+		case SendJoinMap:
 			if ap.JoinMapTag <= 0 {
 				panic("wrong joinmap message tag!")
 			}
-			var jm *hashmap.JoinMap
+			var jm *message.JoinMap
 			if ctr.inputBatchRowCount > 0 {
-				if ctr.keyWidth <= 8 {
-					jm = hashmap.NewJoinMap(ctr.multiSels, ctr.intHashMap, nil)
-				} else {
-					jm = hashmap.NewJoinMap(ctr.multiSels, nil, ctr.strHashMap)
+				jm = message.NewJoinMap(ctr.multiSels, ctr.intHashMap, ctr.strHashMap, ctr.batches, proc.Mp())
+				if ap.NeedMergedBatch {
+					jm.SetRowCount(int64(ctr.inputBatchRowCount))
 				}
-				jm.SetRowCount(int64(ctr.inputBatchRowCount))
 				jm.IncRef(1)
-				ctr.intHashMap = nil
-				ctr.strHashMap = nil
-				ctr.multiSels = nil
 			}
-			proc.SendMessage(process.JoinMapMsg{JoinMapPtr: jm, IsShuffle: true, ShuffleIdx: ap.ShuffleIdx, Tag: ap.JoinMapTag})
-			ctr.state = SendBatch
+			message.SendMessage(message.JoinMapMsg{JoinMapPtr: jm, IsShuffle: true, ShuffleIdx: ap.ShuffleIdx, Tag: ap.JoinMapTag}, proc.GetMessageBoard())
 
-		case SendBatch:
-			if ctr.batchIdx >= len(ctr.batches) {
-				ctr.state = End
-			} else {
-				result.Batch = ctr.batches[ctr.batchIdx]
-				ctr.batchIdx++
-			}
-			return result, nil
-		default:
 			result.Batch = nil
 			result.Status = vm.ExecStop
 			return result, nil
@@ -357,10 +344,10 @@ func (ctr *container) handleRuntimeFilter(ap *ShuffleBuild, proc *process.Proces
 		panic("there must be runtime filter in shuffle build!")
 	}
 	//only support runtime filter pass for now in shuffle join
-	var runtimeFilter process.RuntimeFilterMessage
+	var runtimeFilter message.RuntimeFilterMessage
 	runtimeFilter.Tag = ap.RuntimeFilterSpec.Tag
-	runtimeFilter.Typ = process.RuntimeFilter_PASS
-	proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
+	runtimeFilter.Typ = message.RuntimeFilter_PASS
+	message.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec, proc.GetMessageBoard())
 	return nil
 }
 

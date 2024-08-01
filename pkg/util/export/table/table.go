@@ -722,7 +722,7 @@ func (r *Row) Reset() {
 		case types.T_float64:
 			r.Columns[idx] = Float64Field(0)
 		case types.T_char, types.T_varchar,
-			types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+			types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 			r.Columns[idx] = StringField(typ.Default)
 		case types.T_json:
 			r.Columns[idx] = StringField(typ.Default)
@@ -778,7 +778,7 @@ func (r *Row) ToStrings() []string {
 		case types.T_float64:
 			col[idx] = strconv.FormatFloat(r.Columns[idx].GetFloat64(), 'f', -1, 64)
 		case types.T_char, types.T_varchar,
-			types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+			types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 			switch r.Columns[idx].Type {
 			case TBytes:
 				// hack way for json column, avoid early copy. pls see more in BytesTIPs
@@ -878,7 +878,7 @@ func (r *Row) Size() (size int64) {
 		case types.T_float64:
 			size += 8
 		case types.T_char, types.T_varchar,
-			types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+			types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 			size += int64(len(r.Columns[idx].String))
 		case types.T_json:
 			size += int64(len(r.Columns[idx].String))

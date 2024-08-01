@@ -245,7 +245,7 @@ func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector) {
 		} else {
 			genericSort(col, os, uuidGreater)
 		}
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
 		data, area := vector.MustVarlenaRawData(vec)
 		col := struct {
 			data []types.Varlena
