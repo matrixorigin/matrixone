@@ -177,9 +177,8 @@ func CleanUpUselessFiles(entry *api.MergeCommitEntry, fs fileservice.FileService
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	if len(entry.BookingLoc) != 0 {
-		loc := objectio.Location(entry.BookingLoc)
-		_ = fs.Delete(ctx, loc.Name().String())
+	for _, filepath := range entry.BookingLoc {
+		_ = fs.Delete(ctx, filepath)
 	}
 	if len(entry.CreatedObjs) != 0 {
 		for _, obj := range entry.CreatedObjs {
