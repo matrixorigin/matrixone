@@ -570,25 +570,16 @@ func (tbl *txnTable) CollectTombstones(
 	//collect in memory
 
 	//collect uncommitted in-memory tombstones from txn.writes
-	tbl.getTxn().ForEachTableWrites(tbl.db.databaseId, tbl.tableId,
-		offset, func(entry Entry) {
-			if entry.typ == INSERT || entry.typ == INSERT_TXN {
+	tbl.getTxn().ForEachTableWrites(
+		tbl.db.databaseId,
+		tbl.tableId,
+		offset,
+		func(entry Entry) {
+			if entry.typ != DELETE {
 				return
 			}
 			//entry.typ == DELETE
 			if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
-				/*
-					CASE:
-					create table t1(a int);
-					begin;
-					truncate t1; //txnDatabase.Truncate will DELETE mo_tables
-					show tables; // t1 must be shown
-				*/
-				if entry.IsGeneratedByTruncate() {
-					return
-				}
-				//deletes in txn.Write maybe comes from PartitionState.Rows ,
-				// PartitionReader need to skip them.
 				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
 				for _, v := range vs {
 					bid, o := v.Decode()
@@ -2221,7 +2212,7 @@ func (tbl *txnTable) transferDeletes(
 					zap.Uint64("tid", tbl.tableId),
 					zap.String("tname", tbl.tableName),
 					zap.String("blks", stringifySlice(blks, func(a any) string {
-						info := a.(objectio.BlockInfo)
+						info := a.(objectio.BlockInfoInProgress)
 						return info.String()
 					})),
 					zap.String("detail", detail))

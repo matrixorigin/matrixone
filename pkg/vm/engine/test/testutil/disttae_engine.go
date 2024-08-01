@@ -16,13 +16,14 @@ package testutil
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -376,7 +377,7 @@ func (de *TestDisttaeEngine) GetTable(ctx context.Context, databaseName, tableNa
 
 func (de *TestDisttaeEngine) CreateDatabaseAndTable(
 	ctx context.Context, databaseName,
-	tableName string, schema *catalog.Schema) (
+	tableName string, schema *catalog2.Schema) (
 	database engine.Database, table engine.Relation, err error) {
 
 	var txn client.TxnOperator

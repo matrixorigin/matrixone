@@ -1093,7 +1093,7 @@ func checkWorkspaceEntryType(tbl *txnTable, entry Entry) int {
 		return -1
 	}
 
-	if entry.typ == INSERT || entry.typ == INSERT_TXN {
+	if entry.typ == INSERT {
 		if entry.bat == nil || entry.bat.IsEmpty() {
 			return -1
 		}
@@ -1104,11 +1104,7 @@ func checkWorkspaceEntryType(tbl *txnTable, entry Entry) int {
 		return INSERT
 	}
 
-	if entry.IsGeneratedByTruncate() {
-		return -1
-	}
-
-	if (entry.typ == DELETE || entry.typ == DELETE_TXN) && entry.fileName == "" {
+	if (entry.typ == DELETE) && entry.fileName == "" {
 		return DELETE
 	}
 

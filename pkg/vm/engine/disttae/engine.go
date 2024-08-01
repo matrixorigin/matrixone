@@ -22,10 +22,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/panjf2000/ants/v2"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/google/uuid"
-	"github.com/panjf2000/ants/v2"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -55,11 +58,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/panjf2000/ants/v2"
-	"go.uber.org/zap"
 )
 
 var _ engine.Engine = new(Engine)

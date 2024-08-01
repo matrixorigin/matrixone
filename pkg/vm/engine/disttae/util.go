@@ -21,8 +21,9 @@ import (
 	"reflect"
 	"strings"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -38,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -1430,8 +1432,8 @@ func (i *StatsBlkIter) Entry() objectio.BlockInfoInProgress {
 
 	loc := objectio.BuildLocation(i.name, i.extent, i.curBlkRows, uint16(i.cur))
 	blk := objectio.BlockInfoInProgress{
-		BlockID:   *objectio.BuildObjectBlockid(i.name, uint16(i.cur)),
-		MetaLoc:   objectio.ObjectLocation(loc),
+		BlockID: *objectio.BuildObjectBlockid(i.name, uint16(i.cur)),
+		MetaLoc: objectio.ObjectLocation(loc),
 	}
 	return blk
 }

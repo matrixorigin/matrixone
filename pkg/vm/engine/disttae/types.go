@@ -701,7 +701,7 @@ func (e *Entry) String() string {
 	}
 	return fmt.Sprintf("Entry{type:%v, note:%v, table:%v, db:%v, account:%v, tableId:%v, dbId:%v, bat:%v, fileName:%v}",
 		typesNames[e.typ], e.note, e.tableName, e.databaseName, e.accountId, e.tableId, e.databaseId, batinfo, e.fileName)
-	}
+}
 
 func (e *Entry) DatabaseId() uint64 {
 	return e.databaseId
