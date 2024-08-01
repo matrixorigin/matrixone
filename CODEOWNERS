@@ -194,6 +194,7 @@
 /pkg/vm/engine @XuPeng-SH
 /pkg/vm/pipeline @m-schen
 /pkg/vm/process @m-schen @XuPeng-SH @aunjgr
+/pkg/vm/message @badboynt1
 /pkg/vm/engine/disttae @XuPeng-SH @triump2020
 /pkg/vm/engine/disttae/logtailreplay @reusee @triump2020
 /pkg/vm/engine/tae @XuPeng-SH
