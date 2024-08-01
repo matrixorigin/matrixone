@@ -167,7 +167,9 @@ func (srv *ServiceOfCompile) ResumeService() {
 func (srv *ServiceOfCompile) KillAllQueriesWithError(err error) {
 	logutil.Infof("compile service starts to kill all running queries.")
 	start := time.Now()
-	defer logutil.Infof("compile service has killed all running queries, time cost: %.2f s", time.Since(start).Seconds())
+	defer func() {
+		logutil.Infof("compile service has killed all running queries, time cost: %.2f s", time.Since(start).Seconds())
+	}()
 
 	for _, v := range srv.aliveCompiles {
 		v.kill(err)
