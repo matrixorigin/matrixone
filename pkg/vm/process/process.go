@@ -320,15 +320,11 @@ func (proc *Process) AppendToFixedSizeFromOffset(dst *batch.Batch, src *batch.Ba
 }
 
 func (proc *Process) PutBatch(bat *batch.Batch) {
-	if bat == batch.EmptyBatch {
+	// we use `!= 0` but not `>0` to avoid the situation that the batch was cleaned more than required.
+	if bat == batch.EmptyBatch || atomic.AddInt64(&bat.Cnt, -1) != 0 {
 		return
 	}
-	if atomic.LoadInt64(&bat.Cnt) == 0 {
-		panic("put batch with zero cnt")
-	}
-	if atomic.AddInt64(&bat.Cnt, -1) > 0 {
-		return
-	}
+
 	for _, vec := range bat.Vecs {
 		if vec != nil {
 			// very large vectors should not put back into pool, which cause these memory can not release.
@@ -351,6 +347,7 @@ func (proc *Process) PutBatch(bat *batch.Batch) {
 			agg.Free()
 		}
 	}
+	bat.Aggs = nil
 	bat.Vecs = nil
 	bat.Attrs = nil
 	bat.SetRowCount(0)
