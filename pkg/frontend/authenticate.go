@@ -1458,10 +1458,7 @@ const (
 
 	updateStageCommentFormat = `update mo_catalog.mo_stages set comment = '%s'  where stage_name = '%s' order by stage_id;`
 
-	getDbIdAndTypFormat         = `select dat_id,dat_type from mo_catalog.mo_database where datname = '%s' and account_id = %d;`
-	insertIntoMoPubsFormat      = `insert into mo_catalog.mo_pubs(pub_name,database_name,database_id,all_table,table_list,account_list,created_time,owner,creator,comment) values ('%s','%s',%d,%t,'%s','%s',now(),%d,%d,'%s');`
 	getPubInfoFormat            = `select account_list,comment,database_name,database_id from mo_catalog.mo_pubs where pub_name = '%s';`
-	dropPubFormat               = `delete from mo_catalog.mo_pubs where pub_name = '%s';`
 	getAccountIdAndStatusFormat = `select account_id,status from mo_catalog.mo_account where account_name = '%s';`
 	getPubInfoForSubFormat      = `select database_name,account_list from mo_catalog.mo_pubs where pub_name = "%s";`
 	getDbPubCountFormat         = `select count(1) from mo_catalog.mo_pubs where database_name = '%s';`
@@ -1828,26 +1825,6 @@ func getSqlForgetUserRolesExpectPublicRole(pRoleId int, userId uint32) string {
 	return fmt.Sprintf(getUserRolesExpectPublicRoleFormat, pRoleId, userId)
 }
 
-func getSqlForGetDbIdAndType(ctx context.Context, dbName string, checkNameValid bool, account_id uint64) (string, error) {
-	if checkNameValid {
-		err := inputNameIsInvalid(ctx, dbName)
-		if err != nil {
-			return "", err
-		}
-	}
-	return fmt.Sprintf(getDbIdAndTypFormat, dbName, account_id), nil
-}
-
-func getSqlForInsertIntoMoPubs(ctx context.Context, pubName, databaseName string, databaseId uint64, allTable bool, tableList, accountList string, owner, creator uint32, comment string, checkNameValid bool) (string, error) {
-	if checkNameValid {
-		err := inputNameIsInvalid(ctx, pubName, databaseName)
-		if err != nil {
-			return "", err
-		}
-	}
-	return fmt.Sprintf(insertIntoMoPubsFormat, pubName, databaseName, databaseId, allTable, tableList, accountList, owner, creator, comment), nil
-}
-
 func getSqlForGetPubInfo(ctx context.Context, pubName string, checkNameValid bool) (string, error) {
 	if checkNameValid {
 		err := inputNameIsInvalid(ctx, pubName)
@@ -1856,16 +1833,6 @@ func getSqlForGetPubInfo(ctx context.Context, pubName string, checkNameValid boo
 		}
 	}
 	return fmt.Sprintf(getPubInfoFormat, pubName), nil
-}
-
-func getSqlForDropPubInfo(ctx context.Context, pubName string, checkNameValid bool) (string, error) {
-	if checkNameValid {
-		err := inputNameIsInvalid(ctx, pubName)
-		if err != nil {
-			return "", err
-		}
-	}
-	return fmt.Sprintf(dropPubFormat, pubName), nil
 }
 
 func getSqlForDbPubCount(ctx context.Context, dbName string) (string, error) {

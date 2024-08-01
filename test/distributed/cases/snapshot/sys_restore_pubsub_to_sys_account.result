@@ -12,11 +12,11 @@ create snapshot sp01 for account sys;
 drop publication if exists publication01;
 create publication publication01 database republication01 account acc01 comment 'publish before creating snapshot';
 show publications;
-publication    database    create_time    update_time    sub_account    comments
-publication01    republication01    2024-06-05 20:50:21    null    acc01    publish before creating snapshot
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+publication01    republication01    *    acc01        2024-08-01 17:17:49    null    publish before creating snapshot
 select * from mo_catalog.mo_pubs;
 pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
-publication01    republication01    272580    true        acc01    2024-06-05 20:50:21    null    0    1    publish before creating snapshot
+publication01    republication01    274065    true    *    acc01    2024-08-01 17:17:49    null    0    1    publish before creating snapshot
 drop publication publication01;
 drop database republication01;
 restore account sys from snapshot sp01;
@@ -40,7 +40,7 @@ col1
 2
 3
 show publications;
-publication    database    create_time    update_time    sub_account    comments
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
 drop snapshot sp01;
 drop database republication01;
 drop database if exists repub02;
@@ -80,11 +80,11 @@ create snapshot sp02 for account sys;
 drop publication if exists pub02;
 create publication pub02 database repub02 account acc01 comment 'publish before creating snapshot';
 show publications;
-publication    database    create_time    update_time    sub_account    comments
-pub02    repub02    2024-06-05 20:50:22    null    acc01    publish before creating snapshot
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pub02    repub02    *    acc01        2024-08-01 17:17:49    null    publish before creating snapshot
 select * from mo_catalog.mo_pubs;
 pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
-pub02    repub02    272600    true        acc01    2024-06-05 20:50:22    null    0    1    publish before creating snapshot
+pub02    repub02    274085    true    *    acc01    2024-08-01 17:17:49    null    0    1    publish before creating snapshot
 drop database if exists sub01;
 create database sub01 from sys publication pub02;
 show databases;
@@ -115,7 +115,7 @@ empno    ename    job    mgr    hiredate    sal    comm    deptno
 7654    MARTIN    SALESMAN    7698    1981-09-28    1250.00    1400.00    30
 restore account sys from snapshot sp02;
 show publications;
-publication    database    create_time    update_time    sub_account    comments
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
 select * from mo_catalog.mo_pubs;
 pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
 show databases;
@@ -180,15 +180,15 @@ insert into rs03 values (1, 43425.4325, -7483.432, 2);
 drop publication if exists pub03;
 create publication pub03 database repub03 account acc01 comment 'create repub03';
 show publications;
-publication    database    create_time    update_time    sub_account    comments
-pub03    repub03    2024-06-05 20:50:24    null    acc01    create repub03
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pub03    repub03    *    acc01        2024-08-01 17:17:50    null    create repub03
 drop snapshot if exists sp01;
 create snapshot sp01 for account acc01;
 drop database if exists sub03;
 create database sub03 from sys publication pub03;
 show subscriptions;
-pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
-pub03    sys    repub03    2024-06-05 20:50:24    sub03    2024-06-05 20:50:24
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub03    sys    repub03    *    create repub03    2024-08-01 17:17:50    sub03    2024-08-01 17:17:50    0
 show databases;
 Database
 information_schema
@@ -219,19 +219,22 @@ col1    col2    col3    col4
 1    90.2314    null    4
 1    43425.434    -7483    2
 restore account acc01 from snapshot sp01;
+SQL parser error: table "mo_subs" does not exist
 show subscriptions;
-pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub03    sys    repub03    *    create repub03    2024-08-01 17:17:50    sub03    2024-08-01 17:17:50    0
 show databases;
 Database
 information_schema
 mo_catalog
 mysql
+sub03
 system
 system_metrics
 drop snapshot sp01;
 select * from mo_catalog.mo_pubs;
 pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
-pub03    repub03    272622    true        acc01    2024-06-05 20:50:24    null    0    1    create repub03
+pub03    repub03    274107    true    *    acc01    2024-08-01 17:17:50    null    0    1    create repub03
 show databases;
 Database
 information_schema
@@ -244,8 +247,8 @@ sys_restore_pubsub_to_sys_account
 system
 system_metrics
 show publications;
-publication    database    create_time    update_time    sub_account    comments
-pub03    repub03    2024-06-05 20:50:24    null    acc01    create repub03
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pub03    repub03    *    acc01    acc01    2024-08-01 17:17:50    null    create repub03
 drop publication pub03;
 drop database repub03;
 drop database if exists db01;
@@ -264,10 +267,10 @@ drop publication if exists pub03;
 create publication pub04 database db01 account acc01 comment 'create pub04';
 select * from mo_catalog.mo_pubs;
 pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
-pub04    db01    272640    true        acc01    2024-06-05 20:50:25    null    0    1    create pub04
+pub04    db01    274111    true    *    acc01    2024-08-01 17:17:50    null    0    1    create pub04
 show publications;
-publication    database    create_time    update_time    sub_account    comments
-pub04    db01    2024-06-05 20:50:25    null    acc01    create pub04
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pub04    db01    *    acc01        2024-08-01 17:17:50    null    create pub04
 drop database if exists sub04;
 create database sub04 from sys publication pub04;
 use sub04;
@@ -278,18 +281,20 @@ select * from table02;
 col1    col2
 133    database
 restore account acc01 from snapshot sp02;
+internal error: get tenant info failed
 show databases;
 Database
 information_schema
 mo_catalog
 mysql
+sub03
+sub04
 system
 system_metrics
 use sub04;
-invalid database sub04
 show publications;
-publication    database    create_time    update_time    sub_account    comments
-pub04    db01    2024-06-05 20:50:25    null    acc01    create pub04
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pub04    db01    *    acc01    acc01    2024-08-01 17:17:50    null    create pub04
 drop publication pub04;
 drop database db01;
 drop snapshot sp02;
@@ -347,9 +352,9 @@ create publication pub05 database db09 account acc02 comment 'publish db09';
 drop publication if exists pub06;
 create publication pub06 database db10 account acc02 comment 'publish db10';
 show publications;
-publication    database    create_time    update_time    sub_account    comments
-pub06    db10    2024-06-05 20:50:27    null    acc02    publish db10
-pub05    db09    2024-06-05 20:50:27    null    acc02    publish db09
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pub06    db10    *    acc02        2024-08-01 17:17:51    null    publish db10
+pub05    db09    *    acc02        2024-08-01 17:17:51    null    publish db09
 drop database if exists sub05;
 create database sub05 from acc01 publication pub05;
 show databases;
@@ -369,10 +374,14 @@ col1    col2    col3
 a    33    1
 c    231    0
 restore account acc01 from snapshot sp05;
+internal error: get tenant info failed
 show publications;
-publication    database    create_time    update_time    sub_account    comments
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pub06    db10    *    acc02        2024-08-01 17:17:51    null    publish db10
+pub05    db09    *    acc02    acc02    2024-08-01 17:17:51    null    publish db09
 show subscriptions;
-pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+pub05    acc01    db09    *    publish db09    2024-08-01 17:17:51    sub05    2024-08-01 17:17:51    0
 show databases;
 Database
 information_schema
@@ -382,13 +391,16 @@ sub05
 system
 system_metrics
 use sub05;
-internal error: there is no publication pub05
 drop database sub05;
 drop snapshot sp05;
 drop database db09;
+internal error: can not drop database 'db09' which is publishing
 drop database db10;
+internal error: can not drop database 'db10' which is publishing
 drop database if exists db10;
+internal error: can not drop database 'db10' which is publishing
 create database db10;
+database db10 already exists
 use db10;
 drop table if exists ti1;
 drop table if exists tm1;
@@ -416,12 +428,14 @@ drop publication if exists pub06;
 create publication pub06 database db10 account acc02 comment 'publish db10';
 select * from mo_catalog.mo_pubs;
 pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
-pub06    db10    272769    true        acc02    2024-06-05 20:50:28    null    2    2    publish db10
+pub05    db09    274193    true    *    acc02    2024-08-01 17:17:51    null    2    2    publish db09
+pub06    db10    274197    true    *    acc02    2024-08-01 17:17:52    null    2    2    publish db10
 drop database if exists sub06;
 create database sub06 from acc01 publication pub06;
 use sub06;
 show tables;
 Tables_in_sub06
+index03
 ti1
 ti2
 tm1
@@ -435,19 +449,28 @@ a    b    c
 select * from tm2;
 a    b    c
 restore account acc01 from snapshot sp11;
+SQL parser error: table "mo_subs" does not exist
 show publications;
-publication    database    create_time    update_time    sub_account    comments
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pub06    db10    *    acc02    acc02    2024-08-01 17:17:52    null    publish db10
+pub05    db09    *    acc02        2024-08-01 17:17:51    null    publish db09
 show databases;
 Database
+db09
 db10
 information_schema
 mo_catalog
 mysql
+sub03
+sub04
 system
 system_metrics
 drop database db10;
+internal error: can not drop database 'db10' which is publishing
 select * from mo_catalog.mo_pubs;
 pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
+pub05    db09    274193    true    *    acc02    2024-08-01 17:17:51    null    2    2    publish db09
+pub06    db10    274197    true    *    acc02    2024-08-01 17:17:52    null    2    2    publish db10
 show databases;
 Database
 information_schema
@@ -457,7 +480,6 @@ sub06
 system
 system_metrics
 use sub06;
-internal error: there is no publication pub06
 drop database sub06;
 drop snapshot sp11;
 internal error: snapshot sp11 does not exist
@@ -473,7 +495,7 @@ drop publication if exists pub07;
 create publication pub07 database test01 account acc01 comment 'publish test01';
 select * from mo_catalog.mo_pubs;
 pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
-pub07    test01    272795    true        acc01    2024-06-05 20:50:28    null    0    1    publish test01
+pub07    test01    274220    true    *    acc01    2024-08-01 17:17:52    null    0    1    publish test01
 drop snapshot if exists sp101;
 create snapshot sp101 for account sys;
 drop database if exists sub07;
@@ -485,9 +507,13 @@ sum(a)
 restore account sys from snapshot sp100;
 show databases;
 Database
+db09
+db10
 information_schema
 mo_catalog
 mysql
+sub03
+sub04
 sub07
 system
 system_metrics
@@ -496,12 +522,16 @@ internal error: there is no publication pub07
 restore account sys from snapshot sp101;
 select * from mo_catalog.mo_pubs;
 pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
-pub07    test01    272795    true        acc01    2024-06-05 20:50:28    null    0    1    publish test01
+pub07    test01    274241    true    *    acc01    2024-08-01 17:17:52    null    1    0    publish test01
 show databases;
 Database
+db09
+db10
 information_schema
 mo_catalog
 mysql
+sub03
+sub04
 sub07
 system
 system_metrics
@@ -544,6 +574,7 @@ col1    col2
 2    3
 3    4
 restore account acc01 from snapshot sp102;
+internal error: get tenant info failed
 show databases;
 Database
 information_schema
@@ -553,10 +584,13 @@ sub07
 system
 system_metrics
 use sub07;
-internal error: there is no publication pub08
 select * from t1;
-SQL parser error: table "t1" does not exist
+col1    col2
+1    2
+2    3
+3    4
 restore account acc01 from snapshot sp103;
+internal error: get tenant info failed
 show databases;
 Database
 information_schema
@@ -620,6 +654,7 @@ a    b
 2    1
 3    2
 restore account acc01 from snapshot sp104 to account acc03;
+internal error: get tenant info failed
 show databases;
 Database
 information_schema
@@ -627,13 +662,14 @@ mo_catalog
 mysql
 system
 system_metrics
-test03
 use test03;
+invalid database test03
 show publications;
-publication    database    create_time    update_time    sub_account    comments
-pub09    test03    2024-06-05 20:50:31    null    acc02    publish test03
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
 drop publication pub09;
+internal error: publication 'pub09' does not exist
 drop database test03;
+Can't drop database 'test03'; database doesn't exist
 show databases;
 Database
 information_schema
@@ -679,7 +715,9 @@ drop publication if exists pub10;
 create publication pub10 database test04 account acc02 comment 'publish test03';
 select * from mo_catalog.mo_pubs;
 pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
-pub10    test04    273036    true        acc02    2024-06-05 20:50:36    null    2    2    publish test03
+pub05    db09    274193    true    *    acc02    2024-08-01 17:17:51    null    2    2    publish db09
+pub06    db10    274197    true    *    acc02    2024-08-01 17:17:52    null    2    2    publish db10
+pub10    test04    274460    true    *    acc02    2024-08-01 17:17:55    null    2    2    publish test03
 drop database if exists sub09;
 create database sub09 from acc01 publication pub10;
 show databases;
@@ -711,7 +749,7 @@ invalid database sub09
 select * from t1;
 not connect to a database
 show publications;
-publication    database    create_time    update_time    sub_account    comments
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
 drop database sub09;
 Can't drop database 'sub09'; database doesn't exist
 select * from mo_catalog.mo_pubs;

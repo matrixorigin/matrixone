@@ -35,6 +35,8 @@ type PubInfo struct {
 	SubAccountsStr string
 	CreateTime     string
 	UpdateTime     string
+	Owner          uint32
+	Creator        uint32
 	Comment        string
 }
 
@@ -53,6 +55,18 @@ func (pubInfo *PubInfo) InSubAccounts(accountName string) bool {
 		}
 	}
 	return false
+}
+
+func (pubInfo *PubInfo) GetCreateSql() string {
+	sql := "CREATE PUBLICATION " + pubInfo.PubName + " DATABASE " + pubInfo.DbName
+	if pubInfo.TablesStr != TableAll {
+		sql += " TABLE " + pubInfo.TablesStr
+	}
+	sql += " ACCOUNT " + pubInfo.SubAccountsStr
+	if len(pubInfo.Comment) > 0 {
+		sql += " COMMENT '" + pubInfo.Comment + "'"
+	}
+	return sql
 }
 
 type SubInfo struct {

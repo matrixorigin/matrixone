@@ -1311,25 +1311,25 @@ func splitKey(key string) (string, string) {
 	return parts[0], ""
 }
 
-type topsort struct {
+type toposort struct {
 	next map[string][]string
 }
 
-func (g *topsort) addVertex(v string) {
+func (g *toposort) addVertex(v string) {
 	if _, ok := g.next[v]; ok {
 		return
 	}
 	g.next[v] = make([]string, 0)
 }
 
-func (g *topsort) addEdge(from, to string) {
+func (g *toposort) addEdge(from, to string) {
 	if _, ok := g.next[from]; !ok {
 		g.next[from] = make([]string, 0)
 	}
 	g.next[from] = append(g.next[from], to)
 }
 
-func (g *topsort) sort() (ans []string, err error) {
+func (g *toposort) sort() (ans []string, err error) {
 	inDegree := make(map[string]uint)
 	for u := range g.next {
 		inDegree[u] = 0
