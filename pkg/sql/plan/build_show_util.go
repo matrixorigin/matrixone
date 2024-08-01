@@ -414,7 +414,7 @@ func FormatColType(colType plan.Type) string {
 		}
 
 	case types.T_float64, types.T_float32:
-		if colType.Scale != -1 {
+		if colType.Width > 0 && colType.Scale != -1 {
 			suffix = fmt.Sprintf("(%d,%d)", colType.Width, colType.Scale)
 		}
 
