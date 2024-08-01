@@ -16,6 +16,9 @@ package single
 
 import (
 	"bytes"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -39,7 +42,6 @@ func (singleJoin *SingleJoin) OpType() vm.OpType {
 
 func (singleJoin *SingleJoin) Prepare(proc *process.Process) (err error) {
 	singleJoin.ctr = new(container)
-	singleJoin.ctr.InitReceiver(proc, false)
 	singleJoin.ctr.vecs = make([]*vector.Vector, len(singleJoin.Conditions[0]))
 
 	singleJoin.ctr.evecs = make([]evalVector, len(singleJoin.Conditions[0]))
@@ -66,20 +68,19 @@ func (singleJoin *SingleJoin) Call(proc *process.Process) (vm.CallResult, error)
 	defer anal.Stop()
 	ctr := singleJoin.ctr
 	result := vm.NewCallResult()
+	var err error
 	for {
 		switch ctr.state {
 		case Build:
-			if err := singleJoin.build(anal, proc); err != nil {
-				return result, err
-			}
+			singleJoin.build(anal, proc)
 			ctr.state = Probe
 
 		case Probe:
-			msg := ctr.ReceiveFromSingleReg(0, anal)
-			if msg.Err != nil {
-				return result, msg.Err
+			result, err = singleJoin.Children[0].Call(proc)
+			if err != nil {
+				return result, err
 			}
-			bat := msg.Batch
+			bat := result.Batch
 
 			if bat == nil {
 				ctr.state = End
@@ -116,40 +117,16 @@ func (singleJoin *SingleJoin) Call(proc *process.Process) (vm.CallResult, error)
 		}
 	}
 }
-
-func (singleJoin *SingleJoin) receiveHashMap(anal process.Analyze, proc *process.Process) {
+func (singleJoin *SingleJoin) build(anal process.Analyze, proc *process.Process) {
 	ctr := singleJoin.ctr
-	ctr.mp = proc.ReceiveJoinMap(anal, singleJoin.JoinMapTag, false, 0)
+	start := time.Now()
+	defer anal.WaitStop(start)
+	ctr.mp = message.ReceiveJoinMap(singleJoin.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
-}
-
-func (ctr *container) receiveBatch(anal process.Analyze) error {
-	for {
-		msg := ctr.ReceiveFromSingleReg(1, anal)
-		if msg.Err != nil {
-			return msg.Err
-		}
-		bat := msg.Batch
-		if bat != nil {
-			ctr.batchRowCount += bat.RowCount()
-			ctr.batches = append(ctr.batches, bat)
-		} else {
-			break
-		}
-	}
-	for i := 0; i < len(ctr.batches)-1; i++ {
-		if ctr.batches[i].RowCount() != colexec.DefaultBatchSize {
-			panic("wrong batch received for hash build!")
-		}
-	}
-	return nil
-}
-
-func (singleJoin *SingleJoin) build(anal process.Analyze, proc *process.Process) error {
-	singleJoin.receiveHashMap(anal, proc)
-	return singleJoin.ctr.receiveBatch(anal)
+	ctr.batches = ctr.mp.GetBatches()
+	ctr.batchRowCount = ctr.mp.GetRowCount()
 }
 
 func (ctr *container) emptyProbe(bat *batch.Batch, ap *SingleJoin, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {

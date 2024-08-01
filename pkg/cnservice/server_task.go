@@ -22,7 +22,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -249,16 +248,6 @@ func (s *service) registerExecutorsLocked() {
 		return
 	}
 
-	pu := config.NewParameterUnit(
-		&s.cfg.Frontend,
-		nil,
-		nil,
-		nil)
-	pu.StorageEngine = s.storeEngine
-	pu.TxnClient = s._txnClient
-	s.cfg.Frontend.SetDefaultValues()
-	pu.FileService = s.fileService
-	pu.LockService = s.lockService
 	ieFactory := func() ie.InternalExecutor {
 		return frontend.NewInternalExecutor(s.cfg.UUID)
 	}

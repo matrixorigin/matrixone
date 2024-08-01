@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -29,14 +30,15 @@ type container struct {
 	maxAllocSize int
 	orderBy      []*plan.OrderBySpec
 	buf          *batch.Batch
-	msgReceiver  *process.MessageReceiver
+	msgReceiver  *message.MessageReceiver
 }
 type TableScan struct {
 	ctr            *container
 	TopValueMsgTag int32
 	Reader         engine.Reader
-	Attrs          []string
-	TableID        uint64
+	// letter case: origin
+	Attrs   []string
+	TableID uint64
 
 	vm.OperatorBase
 }

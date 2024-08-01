@@ -15,7 +15,6 @@
 package anti
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -23,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -35,13 +35,11 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
-
 	state int
 
 	hasNull       bool
 	batches       []*batch.Batch
-	batchRowCount int
+	batchRowCount int64
 	rbat          *batch.Batch
 
 	expr colexec.ExpressionExecutor
@@ -55,7 +53,7 @@ type container struct {
 	executorForVecs []colexec.ExpressionExecutor
 	vecs            []*vector.Vector
 
-	mp *hashmap.JoinMap
+	mp *message.JoinMap
 
 	maxAllocSize int64
 	bat          *batch.Batch
@@ -118,7 +116,6 @@ func (antiJoin *AntiJoin) Free(proc *process.Process, pipelineFailed bool, err e
 		ctr.cleanEvalVectors()
 		ctr.cleanHashMap()
 		ctr.cleanExprExecutor()
-		ctr.FreeAllReg()
 
 		anal := proc.GetAnalyze(antiJoin.GetIdx(), antiJoin.GetParallelIdx(), antiJoin.GetParallelMajor())
 		anal.Alloc(ctr.maxAllocSize)
@@ -137,9 +134,6 @@ func (ctr *container) cleanExprExecutor() {
 }
 
 func (ctr *container) cleanBatch(proc *process.Process) {
-	for i := range ctr.batches {
-		proc.PutBatch(ctr.batches[i])
-	}
 	ctr.batches = nil
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)

@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -32,8 +33,7 @@ var _ vm.Operator = new(ShuffleBuild)
 const (
 	ReceiveBatch = iota
 	BuildHashMap
-	SendHashMap
-	SendBatch
+	SendJoinMap
 	End
 )
 
@@ -42,7 +42,6 @@ type container struct {
 	keyWidth           int // keyWidth is the width of hash columns, it determines which hash map to use.
 	multiSels          [][]int32
 	batches            []*batch.Batch
-	batchIdx           int
 	inputBatchRowCount int
 	tmpBatch           *batch.Batch
 	executor           []colexec.ExpressionExecutor
@@ -105,20 +104,16 @@ func (shuffleBuild *ShuffleBuild) Reset(proc *process.Process, pipelineFailed bo
 
 func (shuffleBuild *ShuffleBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := shuffleBuild.ctr
-	proc.FinalizeRuntimeFilter(shuffleBuild.RuntimeFilterSpec, pipelineFailed, err)
-	proc.FinalizeJoinMapMessage(shuffleBuild.JoinMapTag, true, shuffleBuild.ShuffleIdx, pipelineFailed, err)
+	message.FinalizeRuntimeFilter(shuffleBuild.RuntimeFilterSpec, pipelineFailed, err, proc.GetMessageBoard())
+	message.FinalizeJoinMapMessage(proc.GetMessageBoard(), shuffleBuild.JoinMapTag, true, shuffleBuild.ShuffleIdx, pipelineFailed, err)
 	if ctr != nil {
-		ctr.cleanBatches(proc)
+		ctr.intHashMap = nil
+		ctr.strHashMap = nil
+		ctr.multiSels = nil
+		ctr.batches = nil
 		ctr.cleanEvalVectors()
 		shuffleBuild.ctr = nil
 	}
-}
-
-func (ctr *container) cleanBatches(proc *process.Process) {
-	for i := range ctr.batches {
-		proc.PutBatch(ctr.batches[i])
-	}
-	ctr.batches = nil
 }
 
 func (ctr *container) cleanEvalVectors() {

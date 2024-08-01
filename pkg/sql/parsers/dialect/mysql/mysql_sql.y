@@ -258,6 +258,7 @@ import (
     fillMode tree.FillMode
 
     snapshotObject tree.ObjectInfo
+    allCDCOption   *tree.AllOrNotCDC
 
 }
 
@@ -319,7 +320,7 @@ import (
 %token <str> REAL DOUBLE FLOAT_TYPE DECIMAL NUMERIC DECIMAL_VALUE
 %token <str> TIME TIMESTAMP DATETIME YEAR
 %token <str> CHAR VARCHAR BOOL CHARACTER VARBINARY NCHAR
-%token <str> TEXT TINYTEXT MEDIUMTEXT LONGTEXT
+%token <str> TEXT TINYTEXT MEDIUMTEXT LONGTEXT DATALINK
 %token <str> BLOB TINYBLOB MEDIUMBLOB LONGBLOB JSON ENUM UUID VECF32 VECF64
 %token <str> GEOMETRY POINT LINESTRING POLYGON GEOMETRYCOLLECTION MULTIPOINT MULTILINESTRING MULTIPOLYGON
 %token <str> INT1 INT2 INT3 INT4 INT8 S3OPTION STAGEOPTION
@@ -478,6 +479,9 @@ import (
 // PITR
 %token <str> PITR
 
+// CDC
+%token <str> CDC
+
 %type <statement> stmt block_stmt block_type_stmt normal_stmt
 %type <statements> stmt_list stmt_list_return
 %type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt truncate_table_stmt alter_sequence_stmt upgrade_stmt
@@ -511,6 +515,7 @@ import (
 %type <statement> load_extension_stmt
 %type <statement> kill_stmt
 %type <statement> backup_stmt snapshot_restore_stmt
+%type <statement> create_cdc_stmt show_cdc_stmt pause_cdc_stmt drop_cdc_stmt resume_cdc_stmt restart_cdc_stmt
 %type <rowsExprs> row_constructor_list
 %type <exprs>  row_constructor
 %type <exportParm> export_data_param_opt
@@ -534,7 +539,7 @@ import (
 %type <statement> create_publication_stmt drop_publication_stmt alter_publication_stmt show_publications_stmt show_subscriptions_stmt
 %type <statement> create_stage_stmt drop_stage_stmt alter_stage_stmt
 %type <statement> create_snapshot_stmt drop_snapshot_stmt
-%type <statement> create_pitr_stmt drop_pitr_stmt show_pitr_stmt alter_pitr_stmt
+%type <statement> create_pitr_stmt drop_pitr_stmt show_pitr_stmt alter_pitr_stmt restore_pitr_stmt
 %type <str> urlparams
 %type <str> comment_opt view_list_opt view_opt security_opt view_tail check_type
 %type <subscriptionOption> subscription_opt
@@ -620,7 +625,7 @@ import (
 %type <expr> sample_function_expr
 
 %type <unresolvedName> column_name column_name_unresolved normal_ident
-%type <strs> enum_values force_quote_opt force_quote_list infile_or_s3_param infile_or_s3_params credentialsparams credentialsparam
+%type <strs> enum_values force_quote_opt force_quote_list infile_or_s3_param infile_or_s3_params credentialsparams credentialsparam create_cdc_opt create_cdc_opts
 %type <str> charset_keyword db_name db_name_opt
 %type <str> backup_type_opt backup_timestamp_opt
 %type <str> not_keyword func_not_keyword
@@ -633,7 +638,7 @@ import (
 %type <unresolvedObjectName> table_name_unresolved
 %type <comparisionExpr> like_opt
 %type <fullOpt> full_opt
-%type <str> database_name_opt auth_string constraint_keyword_opt constraint_keyword snapshot_option_opt
+%type <str> database_name_opt auth_string constraint_keyword_opt constraint_keyword
 %type <userMiscOption> pwd_or_lck pwd_or_lck_opt
 //%type <userMiscOptions> pwd_or_lck_list
 
@@ -777,6 +782,7 @@ import (
 %type <userIdentified> user_identified user_identified_opt
 %type <accountRole> default_role_opt
 %type <snapshotObject> snapshot_object_opt
+%type <allCDCOption> all_cdc_opt
 
 %type <indexHintType> index_hint_type
 %type <indexHintScope> index_hint_scope
@@ -919,6 +925,10 @@ normal_stmt:
 |   kill_stmt
 |   backup_stmt
 |   snapshot_restore_stmt
+|   restore_pitr_stmt
+|   pause_cdc_stmt
+|   resume_cdc_stmt
+|   restart_cdc_stmt
 
 
 backup_stmt:
@@ -963,7 +973,96 @@ backup_timestamp_opt:
         $$ = $2
     }
 
+create_cdc_stmt:
+    CREATE CDC not_exists_opt STRING STRING STRING STRING STRING '{' create_cdc_opts '}'
+    {
+        $$ = &tree.CreateCDC{
+             		IfNotExists: $3,
+             		TaskName:    $4,
+             		SourceUri:   $5,
+             		SinkType:    $6,
+             		SinkUri:     $7,
+             		Tables:      $8,
+             		Option:      $10,
+             	}
+    }
 
+create_cdc_opts:
+    create_cdc_opt
+    {
+        $$ = $1
+    }
+|   create_cdc_opts ',' create_cdc_opt
+    {
+        $$ = append($1, $3...)
+    }
+create_cdc_opt:
+    {
+        $$ = []string{}
+    }
+|   STRING '=' STRING
+    {
+        $$ = append($$, $1)
+        $$ = append($$, $3)
+    }
+
+show_cdc_stmt:
+    SHOW CDC STRING all_cdc_opt
+    {
+        $$ = &tree.ShowCDC{
+                    SourceUri:   $3,
+                    Option:      $4,
+        }
+    }
+
+pause_cdc_stmt:
+    PAUSE CDC STRING all_cdc_opt
+    {
+        $$ = &tree.PauseCDC{
+                    SourceUri:   $3,
+                    Option:      $4,
+        }
+    }
+
+drop_cdc_stmt:
+    DROP CDC STRING all_cdc_opt
+    {
+        $$ = tree.NewDropCDC($3, $4)
+    }
+
+all_cdc_opt:
+    ALL
+    {
+        $$ = &tree.AllOrNotCDC{
+                    All: true,
+                    TaskName: "",
+        }
+    }
+|   TASK STRING
+    {
+        $$ = &tree.AllOrNotCDC{
+            All: false,
+            TaskName: $2,
+        }
+    }
+
+resume_cdc_stmt:
+    RESUME CDC STRING TASK STRING
+    {
+        $$ = &tree.ResumeCDC{
+                    SourceUri:   $3,
+                    TaskName:    $5,
+        }
+    }
+
+restart_cdc_stmt:
+    RESUME CDC STRING TASK STRING STRING
+    {
+        $$ = &tree.RestartCDC{
+                    SourceUri:   $3,
+                    TaskName:    $5,
+        }
+    }
 
 create_snapshot_stmt:
     CREATE SNAPSHOT not_exists_opt ident FOR snapshot_object_opt
@@ -1125,6 +1224,53 @@ snapshot_restore_stmt:
             TableName: tree.Identifier($7.Compare()),
             SnapShotName: tree.Identifier($10.Compare()),
             ToAccountName: tree.Identifier($13.Compare()),
+        }
+    }
+
+restore_pitr_stmt:
+   RESTORE FROM PITR ident STRING
+   {
+       $$ = &tree.RestorePitr{
+           Level: tree.RESTORELEVELACCOUNT,
+           Name: tree.Identifier($4.Compare()),
+           TimeStamp: $5,
+       }
+   }
+|  RESTORE DATABASE ident FROM PITR ident STRING
+   {
+       $$ = &tree.RestorePitr{
+            Level: tree.RESTORELEVELDATABASE,
+            DatabaseName: tree.Identifier($3.Compare()),
+            Name: tree.Identifier($6.Compare()),
+            TimeStamp: $7,
+       }
+   }
+|   RESTORE DATABASE ident TABLE ident FROM PITR ident STRING
+   {
+      $$ = &tree.RestorePitr{
+            Level: tree.RESTORELEVELTABLE,
+            DatabaseName: tree.Identifier($3.Compare()),
+            TableName: tree.Identifier($5.Compare()),
+            Name: tree.Identifier($8.Compare()),
+            TimeStamp: $9,
+       }
+   }
+|  RESTORE ACCOUNT ident FROM PITR ident STRING as_name_opt
+    {
+        $$ = &tree.RestorePitr{
+           Level: tree.RESTORELEVELACCOUNT,
+           AccountName: tree.Identifier($3.Compare()),
+           Name: tree.Identifier($6.Compare()),
+           TimeStamp: $7,
+           SrcAccountName: tree.Identifier($8.Compare()),
+       }
+    }
+|  RESTORE CLUSTER FROM PITR ident STRING
+    {
+        $$ = &tree.RestorePitr{
+            Level: tree.RESTORELEVELCLUSTER,
+            Name: tree.Identifier($5.Compare()),
+            TimeStamp: $6,
         }
     }
 
@@ -3764,6 +3910,7 @@ show_stmt:
 |   show_connectors_stmt
 |   show_snapshots_stmt
 |   show_pitr_stmt
+|   show_cdc_stmt
 
 show_collation_stmt:
     SHOW COLLATION like_opt where_expression_opt
@@ -4029,7 +4176,7 @@ show_sequences_stmt:
     }
 
 show_tables_stmt:
-    SHOW full_opt TABLES database_name_opt like_opt where_expression_opt snapshot_option_opt
+    SHOW full_opt TABLES database_name_opt like_opt where_expression_opt table_snapshot_opt
     {
         $$ = &tree.ShowTables{
             Open: false,
@@ -4037,7 +4184,7 @@ show_tables_stmt:
             DBName: $4,
             Like: $5,
             Where: $6,
-            SnapshotName : $7,
+            AtTsExpr: $7,
         }
     }
 |   SHOW OPEN full_opt TABLES database_name_opt like_opt where_expression_opt
@@ -4052,12 +4199,12 @@ show_tables_stmt:
     }
 
 show_databases_stmt:
-    SHOW DATABASES like_opt where_expression_opt snapshot_option_opt
+    SHOW DATABASES like_opt where_expression_opt table_snapshot_opt
     {
         $$ = &tree.ShowDatabases{
             Like: $3, 
             Where: $4,
-            SnapshotName: $5,
+            AtTsExpr: $5,
         }
     }
 |   SHOW SCHEMAS like_opt where_expression_opt
@@ -4148,15 +4295,6 @@ table_column_name:
         $$ = $2
     }
 
-snapshot_option_opt:
-    {
-        $$ = ""
-    }
-|   '{' SNAPSHOT '=' STRING '}'
-    {
-        $$ = $4
-    }
-
 
 
 from_or_in:
@@ -4177,19 +4315,19 @@ full_opt:
     }
 
 show_create_stmt:
-    SHOW CREATE TABLE table_name_unresolved snapshot_option_opt
+    SHOW CREATE TABLE table_name_unresolved table_snapshot_opt
     {
         $$ = &tree.ShowCreateTable{
             Name: $4,
-            SnapshotName: $5,
+            AtTsExpr: $5,
         }
     }
 |
-    SHOW CREATE VIEW table_name_unresolved snapshot_option_opt
+    SHOW CREATE VIEW table_name_unresolved table_snapshot_opt
     {
         $$ = &tree.ShowCreateView{
             Name: $4,
-            SnapshotName: $5,
+            AtTsExpr: $5,
         }
     }
 |   SHOW CREATE DATABASE not_exists_opt db_name
@@ -4273,6 +4411,7 @@ drop_ddl_stmt:
 |   drop_connector_stmt
 |   drop_snapshot_stmt
 |   drop_pitr_stmt
+|   drop_cdc_stmt
 
 drop_sequence_stmt:
     DROP SEQUENCE exists_opt table_name_list
@@ -5889,6 +6028,7 @@ create_stmt:
 |   create_stage_stmt
 |   create_snapshot_stmt
 |   create_pitr_stmt
+|   create_cdc_stmt
 
 create_ddl_stmt:
     create_table_stmt
@@ -8318,10 +8458,6 @@ table_snapshot_opt:
     {
         $$ = nil
     }
-|   '{' '}'
-    {
-        $$ = nil
-    }
 |   '{' TIMESTAMP '=' expression '}'
     {
         $$ = &tree.AtTimeStamp{
@@ -8334,6 +8470,7 @@ table_snapshot_opt:
         var Str = $4.Compare()
         $$ = &tree.AtTimeStamp{
             Type: tree.ATTIMESTAMPSNAPSHOT,
+            SnapshotName: yylex.(*Lexer).GetDbOrTblName($4.Origin()),
             Expr: tree.NewNumValWithType(constant.MakeString(Str), Str, false, tree.P_char),
         }
     }
@@ -8341,7 +8478,8 @@ table_snapshot_opt:
     {
         $$ = &tree.AtTimeStamp{
            Type: tree.ATTIMESTAMPSNAPSHOT,
-          Expr: tree.NewNumValWithType(constant.MakeString($4), $4, false, tree.P_char),
+           SnapshotName: $4,
+           Expr: tree.NewNumValWithType(constant.MakeString($4), $4, false, tree.P_char),
         }
     }
 |   '{' MO_TS '=' expression '}'
@@ -11284,6 +11422,18 @@ char_type:
             },
         }
     }
+|   DATALINK
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.BlobFamily,
+                FamilyString: $1,
+                Locale: &locale,
+                Oid:    uint32(defines.MYSQL_TYPE_TEXT),
+            },
+        }
+    }
 |   TEXT
     {
         locale := ""
@@ -11418,7 +11568,7 @@ char_type:
             },
         }
     }
-|   ENUM '(' enum_values ')'
+| ENUM '(' enum_values ')'
     {
         locale := ""
         $$ = &tree.T{

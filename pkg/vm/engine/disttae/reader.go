@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -81,6 +82,7 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string, blkCnt int) {
 	mixin.columns.pkPos = -1
 	mixin.columns.indexOfFirstSortedColumn = -1
 	for i, column := range cols {
+		column = strings.ToLower(column)
 		if column == catalog.Row_ID {
 			mixin.columns.seqnums[i] = objectio.SEQNUM_ROWID
 			mixin.columns.colTypes[i] = objectio.RowidType
@@ -168,6 +170,8 @@ func newBlockReader(
 		},
 		blks: blks,
 	}
+	r.tableName = tableDef.Name
+	r.tid = tableDef.TblId
 	r.filterState.expr = filterExpr
 	r.filterState.filter = filter
 	return r
@@ -375,6 +379,7 @@ func (r *blockReader) Read(
 		filter,
 		r.fs, mp, vp, policy,
 	)
+
 	if err != nil {
 		return nil, err
 	}
@@ -567,10 +572,7 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 		r.table.db.databaseId,
 		r.table.tableId,
 		txnOffset, func(entry Entry) {
-			if entry.isGeneratedByTruncate() {
-				return
-			}
-			if (entry.typ == DELETE || entry.typ == DELETE_TXN) && entry.fileName == "" {
+			if entry.typ == DELETE && entry.fileName == "" {
 				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
 				for _, v := range vs {
 					id, offset := v.Decode()

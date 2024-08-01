@@ -187,6 +187,7 @@ message PreInsertSecondaryIndex{
 }
 
 message OnDuplicateKey{
+  // letter case: origin
   repeated string attrs = 1;
   int32 insert_col_count = 2;
   repeated plan.Expr unique_col_check_expr = 3;
@@ -331,6 +332,7 @@ message Product {
   repeated int32 col_list = 2;
   repeated plan.Type  types = 3 [(gogoproto.nullable) = false];
   bool is_shuffle =4;
+  int32 join_map_tag = 5;
 }
 
 message ProductL2 {
@@ -338,6 +340,7 @@ message ProductL2 {
   repeated int32 col_list = 2;
   repeated plan.Type  types = 3 [(gogoproto.nullable) = false];
   plan.Expr  expr = 4;
+  int32 join_map_tag = 5;
 }
 
 message IndexJoin {

@@ -19,6 +19,8 @@ import (
 	"runtime"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -106,41 +108,23 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 			if err := ctr.handleRuntimeFilter(ap, proc); err != nil {
 				return result, err
 			}
-			ctr.state = SendHashMap
+			ctr.state = SendJoinMap
 
-		case SendHashMap:
-			if ap.NeedHashMap {
-				var jm *hashmap.JoinMap
-				if ctr.inputBatchRowCount > 0 {
-					if ctr.keyWidth <= 8 {
-						jm = hashmap.NewJoinMap(ctr.multiSels, ctr.intHashMap, nil)
-					} else {
-						jm = hashmap.NewJoinMap(ctr.multiSels, nil, ctr.strHashMap)
-					}
-					jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
-
+		case SendJoinMap:
+			var jm *message.JoinMap
+			if ctr.inputBatchRowCount > 0 {
+				jm = message.NewJoinMap(ctr.multiSels, ctr.intHashMap, ctr.strHashMap, ctr.batches, proc.Mp())
+				jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
+				if ap.NeedMergedBatch {
 					jm.SetRowCount(int64(ctr.inputBatchRowCount))
-					jm.IncRef(ap.JoinMapRefCnt)
 				}
-				if ap.JoinMapTag <= 0 {
-					panic("wrong joinmap message tag!")
-				}
-				proc.SendMessage(process.JoinMapMsg{JoinMapPtr: jm, Tag: ap.JoinMapTag})
-				ctr.intHashMap = nil
-				ctr.strHashMap = nil
-				ctr.multiSels = nil
+				jm.IncRef(ap.JoinMapRefCnt)
 			}
-			ctr.state = SendBatch
+			if ap.JoinMapTag <= 0 {
+				panic("wrong joinmap message tag!")
+			}
+			message.SendMessage(message.JoinMapMsg{JoinMapPtr: jm, Tag: ap.JoinMapTag}, proc.GetMessageBoard())
 
-		case SendBatch:
-			if ctr.batchIdx >= len(ctr.batches) {
-				ctr.state = End
-			} else {
-				result.Batch = ctr.batches[ctr.batchIdx]
-				ctr.batchIdx++
-			}
-			return result, nil
-		default:
 			result.Batch = nil
 			result.Status = vm.ExecStop
 			return result, nil
@@ -362,16 +346,16 @@ func (ctr *container) handleRuntimeFilter(ap *HashBuild, proc *process.Process) 
 		return nil
 	}
 
-	var runtimeFilter process.RuntimeFilterMessage
+	var runtimeFilter message.RuntimeFilterMessage
 	runtimeFilter.Tag = ap.RuntimeFilterSpec.Tag
 
 	if ap.RuntimeFilterSpec.Expr == nil {
-		runtimeFilter.Typ = process.RuntimeFilter_PASS
-		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
+		runtimeFilter.Typ = message.RuntimeFilter_PASS
+		message.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec, proc.GetMessageBoard())
 		return nil
 	} else if ctr.inputBatchRowCount == 0 || len(ctr.uniqueJoinKeys) == 0 || ctr.uniqueJoinKeys[0].Length() == 0 {
-		runtimeFilter.Typ = process.RuntimeFilter_DROP
-		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
+		runtimeFilter.Typ = message.RuntimeFilter_DROP
+		message.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec, proc.GetMessageBoard())
 		return nil
 	}
 
@@ -398,8 +382,8 @@ func (ctr *container) handleRuntimeFilter(ap *HashBuild, proc *process.Process) 
 	}()
 
 	if hashmapCount > uint64(inFilterCardLimit) {
-		runtimeFilter.Typ = process.RuntimeFilter_PASS
-		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
+		runtimeFilter.Typ = message.RuntimeFilter_PASS
+		message.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec, proc.GetMessageBoard())
 		return nil
 	} else {
 		// Composite primary key
@@ -426,10 +410,10 @@ func (ctr *container) handleRuntimeFilter(ap *HashBuild, proc *process.Process) 
 			return err
 		}
 
-		runtimeFilter.Typ = process.RuntimeFilter_IN
+		runtimeFilter.Typ = message.RuntimeFilter_IN
 		runtimeFilter.Card = int32(vec.Length())
 		runtimeFilter.Data = data
-		proc.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec)
+		message.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec, proc.GetMessageBoard())
 		ctr.runtimeFilterIn = true
 	}
 	return nil

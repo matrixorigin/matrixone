@@ -16,6 +16,9 @@ package rightsemi
 
 import (
 	"bytes"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -70,9 +73,7 @@ func (rightSemi *RightSemi) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			if err := rightSemi.build(analyze, proc); err != nil {
-				return result, err
-			}
+			rightSemi.build(analyze, proc)
 			if ctr.mp == nil && !rightSemi.IsShuffle {
 				// for inner ,right and semi join, if hashmap is empty, we can finish this pipeline
 				// shuffle join can't stop early for this moment
@@ -82,11 +83,11 @@ func (rightSemi *RightSemi) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 		case Probe:
-			msg := ctr.ReceiveFromSingleReg(0, analyze)
-			if msg.Err != nil {
-				return result, msg.Err
+			result, err = rightSemi.Children[0].Call(proc)
+			if err != nil {
+				return result, err
 			}
-			bat := msg.Batch
+			bat := result.Batch
 
 			if bat == nil {
 				ctr.state = SendLast
@@ -127,6 +128,7 @@ func (rightSemi *RightSemi) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 				result.Batch = rightSemi.ctr.buf[rightSemi.ctr.lastpos]
 				rightSemi.ctr.lastpos++
+				result.Status = vm.ExecHasMore
 				return result, nil
 			}
 
@@ -138,43 +140,20 @@ func (rightSemi *RightSemi) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (rightSemi *RightSemi) receiveHashMap(anal process.Analyze, proc *process.Process) {
+func (rightSemi *RightSemi) build(anal process.Analyze, proc *process.Process) {
 	ctr := rightSemi.ctr
-	ctr.mp = proc.ReceiveJoinMap(anal, rightSemi.JoinMapTag, rightSemi.IsShuffle, rightSemi.ShuffleIdx)
+	start := time.Now()
+	defer anal.WaitStop(start)
+	ctr.mp = message.ReceiveJoinMap(rightSemi.JoinMapTag, rightSemi.IsShuffle, rightSemi.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
-}
-
-func (ctr *container) receiveBatch(anal process.Analyze) error {
-	for {
-		msg := ctr.ReceiveFromSingleReg(1, anal)
-		if msg.Err != nil {
-			return msg.Err
-		}
-		bat := msg.Batch
-		if bat != nil {
-			ctr.batchRowCount += bat.RowCount()
-			ctr.batches = append(ctr.batches, bat)
-		} else {
-			break
-		}
-	}
-	for i := 0; i < len(ctr.batches)-1; i++ {
-		if ctr.batches[i].RowCount() != colexec.DefaultBatchSize {
-			panic("wrong batch received for hash build!")
-		}
-	}
+	ctr.batches = ctr.mp.GetBatches()
+	ctr.batchRowCount = ctr.mp.GetRowCount()
 	if ctr.batchRowCount > 0 {
 		ctr.matched = &bitmap.Bitmap{}
-		ctr.matched.InitWithSize(int64(ctr.batchRowCount))
+		ctr.matched.InitWithSize(ctr.batchRowCount)
 	}
-	return nil
-}
-
-func (rightSemi *RightSemi) build(anal process.Analyze, proc *process.Process) error {
-	rightSemi.receiveHashMap(anal, proc)
-	return rightSemi.ctr.receiveBatch(anal)
 }
 
 func (ctr *container) sendLast(ap *RightSemi, proc *process.Process, analyze process.Analyze, _ bool, isLast bool) (bool, error) {

@@ -68,6 +68,7 @@ pitr04    2024-07-18 07:20:30    2024-07-18 07:20:30    account    sys          
 pitr05    2024-07-18 07:20:30    2024-07-18 07:20:30    cluster                1    h
 pitr10    2024-07-18 07:20:30    2024-07-18 07:20:30    database    sys    db01        1    h
 pitr12    2024-07-18 07:20:30    2024-07-18 07:20:30    table    sys    db01    table01    1    h
+drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
 drop pitr if exists pitr14;
 create pitr pitr14 for account acc01 range 1 'h';
@@ -217,6 +218,7 @@ show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
 select * from mo_catalog.mo_pitr;
 pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
+drop account if exists acc02;
 create account acc02 admin_name = 'test_account' identified by '111';
 create pitr pitr01 range 1 'h';
 show pitr;

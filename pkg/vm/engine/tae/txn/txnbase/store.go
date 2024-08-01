@@ -162,7 +162,7 @@ func (store *NoopTxnStore) HasCatalogChanges() bool                      { retur
 func (store *NoopTxnStore) ObserveTxn(
 	visitDatabase func(db any),
 	visitTable func(tbl any),
-	rotateTable func(dbName, tblName string, dbid, tid uint64),
+	rotateTable func(aid uint32, dbName, tblName string, dbid, tid uint64, pkSeqnum uint16),
 	visitMetadata func(block any),
 	visitObject func(any),
 	visitAppend func(bat any),

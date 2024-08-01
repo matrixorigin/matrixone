@@ -33,8 +33,6 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
-
 	state    int
 	probeIdx int
 	bat      *batch.Batch
@@ -43,10 +41,11 @@ type container struct {
 }
 
 type Product struct {
-	ctr       *container
-	Typs      []types.Type
-	Result    []colexec.ResultPos
-	IsShuffle bool
+	ctr        *container
+	Typs       []types.Type
+	Result     []colexec.ResultPos
+	IsShuffle  bool
+	JoinMapTag int32
 	vm.OperatorBase
 }
 
@@ -90,7 +89,6 @@ func (product *Product) Free(proc *process.Process, pipelineFailed bool, err err
 	if ctr != nil {
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
-		ctr.FreeAllReg()
 		product.ctr = nil
 	}
 }
