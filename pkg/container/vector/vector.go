@@ -678,19 +678,10 @@ func (v *Vector) PreExtend(rows int, mp *mpool.MPool) error {
 	return extend(v, rows, mp)
 }
 
-// PreExtendArea use to expand the mpool and area of vector
-// extraAreaSize: the size of area to be extended
-// mp: mpool
-func (v *Vector) PreExtendWithArea(rows int, extraAreaSize int, mp *mpool.MPool) error {
-	if v.class == CONSTANT {
+func (v *Vector) PreExtendArea(extraAreaSize int, mp *mpool.MPool) error {
+	if extraAreaSize == 0 || v.class == CONSTANT {
 		return nil
 	}
-
-	// pre-extend vector, the fixed len part
-	if err := v.PreExtend(rows, mp); err != nil {
-		return err
-	}
-
 	// check if required size is already satisfied
 	area1 := v.GetArea()
 	voff := len(area1)
@@ -711,6 +702,21 @@ func (v *Vector) PreExtendWithArea(rows int, extraAreaSize int, mp *mpool.MPool)
 	v.area = area1
 
 	return nil
+}
+
+// PreExtendArea use to expand the mpool and area of vector
+// extraAreaSize: the size of area to be extended
+// mp: mpool
+func (v *Vector) PreExtendWithArea(rows int, extraAreaSize int, mp *mpool.MPool) error {
+	if v.class == CONSTANT {
+		return nil
+	}
+
+	// pre-extend vector, the fixed len part
+	if err := v.PreExtend(rows, mp); err != nil {
+		return err
+	}
+	return v.PreExtendArea(extraAreaSize, mp)
 }
 
 // Dup use to copy an identical vector
@@ -2334,6 +2340,17 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 	return nil
 }
 
+func (v *Vector) calTotalAreaLen(sels []int32, wCol []types.Varlena) int {
+	var totalAreaLen int
+	for _, sel := range sels {
+		if wCol[sel][0] > types.VarlenaInlineSize {
+			_, vlen := wCol[sel].OffsetLen()
+			totalAreaLen += int(vlen)
+		}
+	}
+	return totalAreaLen
+}
+
 func (v *Vector) Union(w *Vector, sels []int32, mp *mpool.MPool) error {
 	if len(sels) == 0 {
 		return nil
@@ -2373,26 +2390,30 @@ func (v *Vector) Union(w *Vector, sels []int32, mp *mpool.MPool) error {
 	}
 
 	if v.GetType().IsVarlen() {
-		var err error
 		var vCol, wCol []types.Varlena
 		ToSlice(v, &vCol)
 		ToSlice(w, &wCol)
+
+		if len(w.GetArea()) != 0 {
+			totalAreaLen := v.calTotalAreaLen(sels, wCol)
+			if err := v.PreExtendArea(totalAreaLen, mp); err != nil {
+				return err
+			}
+		}
+
 		if !w.GetNulls().EmptyByFlag() {
 			for i, sel := range sels {
 				if w.nsp.Contains(uint64(sel)) {
 					nulls.Add(v.nsp, uint64(oldLen+i))
 					continue
 				}
-				err = BuildVarlenaFromValena(v, &vCol[oldLen+i], &wCol[sel], &w.area, mp)
-				if err != nil {
+				if err := BuildVarlenaFromValena(v, &vCol[oldLen+i], &wCol[sel], &w.area, mp); err != nil {
 					return err
 				}
 			}
 		} else {
 			for i, sel := range sels {
-
-				err = BuildVarlenaFromValena(v, &vCol[oldLen+i], &wCol[sel], &w.area, mp)
-				if err != nil {
+				if err := BuildVarlenaFromValena(v, &vCol[oldLen+i], &wCol[sel], &w.area, mp); err != nil {
 					return err
 				}
 			}
@@ -2494,6 +2515,32 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 		var vCol, wCol []types.Varlena
 		ToSlice(v, &vCol)
 		ToSlice(w, &wCol)
+
+		if len(w.GetArea()) != 0 {
+			var totalAreaLen int
+			if flags == nil {
+				for i := 0; i < cnt; i++ {
+					if wCol[int(offset)+i][0] > types.VarlenaInlineSize {
+						_, vlen := wCol[int(offset)+i].OffsetLen()
+						totalAreaLen += int(vlen)
+					}
+				}
+			} else {
+				for i := range flags {
+					if flags[i] == 0 {
+						continue
+					}
+					if wCol[int(offset)+i][0] > types.VarlenaInlineSize {
+						_, vlen := wCol[int(offset)+i].OffsetLen()
+						totalAreaLen += int(vlen)
+					}
+				}
+			}
+			if err := v.PreExtendArea(totalAreaLen, mp); err != nil {
+				return err
+			}
+		}
+
 		if !w.nsp.EmptyByFlag() {
 			if flags == nil {
 				for i := 0; i < cnt; i++ {
@@ -2526,8 +2573,7 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 		} else {
 			if flags == nil {
 				for i := 0; i < cnt; i++ {
-					err = BuildVarlenaFromValena(v, &vCol[v.length], &wCol[int(offset)+i], &w.area, mp)
-					if err != nil {
+					if err := BuildVarlenaFromValena(v, &vCol[v.length], &wCol[int(offset)+i], &w.area, mp); err != nil {
 						return err
 					}
 					v.length++
@@ -2537,10 +2583,10 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 					if flags[i] == 0 {
 						continue
 					}
-					err = BuildVarlenaFromValena(v, &vCol[v.length], &wCol[int(offset)+i], &w.area, mp)
-					if err != nil {
-						return err
+					if err := BuildVarlenaFromValena(v, &vCol[v.length], &wCol[int(offset)+i], &w.area, mp); err != nil {
+						return nil
 					}
+
 					v.length++
 				}
 			}
