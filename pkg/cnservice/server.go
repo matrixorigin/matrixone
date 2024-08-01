@@ -789,6 +789,7 @@ func (s *service) initShardService() {
 			shardservice.ReadReader:                   disttae.HandleShardingReadReader,
 			shardservice.ReadPrimaryKeysMayBeModified: disttae.HandleShardingReadPrimaryKeysMayBeModified,
 			shardservice.ReadMergeObjects:             disttae.HandleShardingReadMergeObjects,
+			shardservice.ReadVisibleObjectStats:       disttae.HandleShardingReadVisibleObjectStats,
 		},
 		s.storeEngine,
 	)

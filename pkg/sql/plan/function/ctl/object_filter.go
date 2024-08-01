@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package logtailreplay
+package ctl
 
 import (
 	"fmt"
@@ -20,11 +20,12 @@ import (
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 )
 
 type Filter interface {
-	Filter([]ObjectInfo) []ObjectInfo
+	Filter([]objectio.ObjectStats) []objectio.ObjectStats
 }
 
 func NewSmall(threshold uint32) Filter {
@@ -39,7 +40,7 @@ type small struct {
 	threshold uint32
 }
 
-func (s *small) Filter(objs []ObjectInfo) []ObjectInfo {
+func (s *small) Filter(objs []objectio.ObjectStats) []objectio.ObjectStats {
 	n := 0
 	for _, obj := range objs {
 		if obj.OriginSize() > s.threshold {
@@ -58,7 +59,7 @@ type overlap struct {
 	maxEntries int
 }
 
-func (o *overlap) Filter(objs []ObjectInfo) []ObjectInfo {
+func (o *overlap) Filter(objs []objectio.ObjectStats) []objectio.ObjectStats {
 	if len(objs) == 0 {
 		return nil
 	}
@@ -77,7 +78,7 @@ func (o *overlap) Filter(objs []ObjectInfo) []ObjectInfo {
 		return compute.CompareGeneric(a.max, b.max, o.t)
 	})
 
-	set := entrySet{entries: make([]ObjectInfo, 0), maxValue: minValue(o.t)}
+	set := entrySet{entries: make([]objectio.ObjectStats, 0), maxValue: minValue(o.t)}
 	for _, interval := range o.intervals {
 		if len(set.entries) == 0 || compute.CompareGeneric(set.maxValue, interval.min, o.t) > 0 {
 			set.add(o.t, interval)
@@ -150,11 +151,11 @@ func minValue(t types.T) any {
 
 type entryInterval struct {
 	min, max any
-	entry    ObjectInfo
+	entry    objectio.ObjectStats
 }
 
 type entrySet struct {
-	entries  []ObjectInfo
+	entries  []objectio.ObjectStats
 	maxValue any
 }
 

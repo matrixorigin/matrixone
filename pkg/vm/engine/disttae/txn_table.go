@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"strconv"
 	"strings"
 	"sync"
@@ -2419,64 +2420,25 @@ func (tbl *txnTable) newPkFilter(pkExpr, constExpr *plan.Expr) (*plan.Expr, erro
 	return plan2.BindFuncExprImplByPlanExpr(tbl.proc.Load().Ctx, "=", []*plan.Expr{pkExpr, constExpr})
 }
 
-func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, policyName string, targetObjSize uint32) (*api.MergeCommitEntry, error) {
+func (tbl *txnTable) MergeObjects(ctx context.Context, objStats []objectio.ObjectStats, targetObjSize uint32) (*api.MergeCommitEntry, error) {
+	if len(objStats) < 2 {
+		return nil, moerr.NewInternalErrorNoCtx("no matching objects")
+	}
 	snapshot := types.TimestampToTS(tbl.getTxn().op.SnapshotTS())
 	state, err := tbl.getPartitionState(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	sortkeyPos := -1
-	sortkeyIsPK := false
-	if tbl.primaryIdx >= 0 && tbl.tableDef.Cols[tbl.primaryIdx].Name != catalog.FakePrimaryKeyColName {
-		if tbl.clusterByIdx < 0 {
-			sortkeyPos = tbl.primaryIdx
-			sortkeyIsPK = true
-		} else {
-			panic(fmt.Sprintf("bad schema pk %v, ck %v", tbl.primaryIdx, tbl.clusterByIdx))
+	sortKeyPos, sortKeyIsPK := tbl.getSortKeyPosAndSortKeyIsPK()
+	objInfos := make([]logtailreplay.ObjectInfo, 0, len(objStats))
+	for _, objstat := range objStats {
+		info, exist := state.GetObject(*objstat.ObjectShortName())
+		if !exist || (!info.DeleteTime.IsEmpty() && info.DeleteTime.LessEq(&snapshot)) {
+			logutil.Errorf("object not visible: %s", info.String())
+			return nil, moerr.NewInternalErrorNoCtx("object %s not exist", objstat.ObjectName().String())
 		}
-	} else if tbl.clusterByIdx >= 0 {
-		sortkeyPos = tbl.clusterByIdx
-		sortkeyIsPK = false
-	}
-
-	var objInfos []logtailreplay.ObjectInfo
-	if len(objstats) != 0 {
-		objInfos = make([]logtailreplay.ObjectInfo, 0, len(objstats))
-		for _, objstat := range objstats {
-			info, exist := state.GetObject(*objstat.ObjectShortName())
-			if !exist || (!info.DeleteTime.IsEmpty() && info.DeleteTime.LessEq(&snapshot)) {
-				logutil.Errorf("object not visible: %s", info.String())
-				return nil, moerr.NewInternalErrorNoCtx("object %s not exist", objstat.ObjectName().String())
-			}
-			objInfos = append(objInfos, info)
-		}
-	} else {
-		objInfos = make([]logtailreplay.ObjectInfo, 0, len(objstats))
-		iter, err := state.NewObjectsIter(snapshot, true)
-		if err != nil {
-			logutil.Errorf("txn: %s, error: %v", tbl.db.op.Txn().DebugString(), err)
-			return nil, err
-		}
-		for iter.Next() {
-			obj := iter.Entry().ObjectInfo
-			if obj.EntryState {
-				continue
-			}
-			if sortkeyPos != -1 {
-				sortKeyZM := obj.SortKeyZoneMap()
-				if !sortKeyZM.IsInited() {
-					continue
-				}
-			}
-			objInfos = append(objInfos, obj)
-		}
-		if len(policyName) != 0 {
-			objInfos, err = applyMergePolicy(ctx, policyName, sortkeyPos, objInfos)
-			if err != nil {
-				return nil, err
-			}
-		}
+		objInfos = append(objInfos, info)
 	}
 
 	if len(objInfos) < 2 {
@@ -2487,14 +2449,14 @@ func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.Objec
 
 	taskHost, err := newCNMergeTask(
 		ctx, tbl, snapshot, state, // context
-		sortkeyPos, sortkeyIsPK, // schema
+		sortKeyPos, sortKeyIsPK, // schema
 		objInfos, // targets
 		targetObjSize)
 	if err != nil {
 		return nil, err
 	}
 
-	err = mergesort.DoMergeAndWrite(ctx, tbl.getTxn().op.Txn().DebugString(), sortkeyPos, taskHost)
+	err = mergesort.DoMergeAndWrite(ctx, tbl.getTxn().op.Txn().DebugString(), sortKeyPos, taskHost)
 	if err != nil {
 		taskHost.commitEntry.Err = err.Error()
 		return taskHost.commitEntry, err
@@ -2548,6 +2510,54 @@ func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.Objec
 
 	// commit this to tn
 	return taskHost.commitEntry, nil
+}
+
+func (tbl *txnTable) GetVisibleObjectStats(ctx context.Context) ([]objectio.ObjectStats, error) {
+	snapshot := types.TimestampToTS(tbl.getTxn().op.SnapshotTS())
+	state, err := tbl.getPartitionState(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	sortKeyPos, _ := tbl.getSortKeyPosAndSortKeyIsPK()
+
+	objStats := make([]objectio.ObjectStats, 0, tbl.ApproxObjectsNum(ctx))
+	iter, err := state.NewObjectsIter(snapshot, true)
+	if err != nil {
+		logutil.Errorf("txn: %s, error: %v", tbl.db.op.Txn().DebugString(), err)
+		return nil, err
+	}
+	for iter.Next() {
+		obj := iter.Entry().ObjectInfo
+		if obj.EntryState {
+			continue
+		}
+		if sortKeyPos != -1 {
+			sortKeyZM := obj.SortKeyZoneMap()
+			if !sortKeyZM.IsInited() {
+				continue
+			}
+		}
+		objStats = append(objStats, obj.ObjectStats)
+	}
+	return objStats, nil
+}
+
+func (tbl *txnTable) getSortKeyPosAndSortKeyIsPK() (int, bool) {
+	sortKeyPos := -1
+	sortKeyIsPK := false
+	if tbl.primaryIdx >= 0 && tbl.tableDef.Cols[tbl.primaryIdx].Name != catalog.FakePrimaryKeyColName {
+		if tbl.clusterByIdx < 0 {
+			sortKeyPos = tbl.primaryIdx
+			sortKeyIsPK = true
+		} else {
+			panic(fmt.Sprintf("bad schema pk %v, ck %v", tbl.primaryIdx, tbl.clusterByIdx))
+		}
+	} else if tbl.clusterByIdx >= 0 {
+		sortKeyPos = tbl.clusterByIdx
+		sortKeyIsPK = false
+	}
+	return sortKeyPos, sortKeyIsPK
 }
 
 func dumpTransferInfo(ctx context.Context, taskHost *cnMergeTask) (err error) {
@@ -2655,7 +2665,7 @@ func dumpTransferMaps(ctx context.Context, taskHost *cnMergeTask) error {
 	return nil
 }
 
-func applyMergePolicy(ctx context.Context, policyName string, sortKeyPos int, objInfos []logtailreplay.ObjectInfo) ([]logtailreplay.ObjectInfo, error) {
+func applyMergePolicy(ctx context.Context, policyName string, sortKeyPos int, objInfos []objectio.ObjectStats) ([]objectio.ObjectStats, error) {
 	arg := cutBetween(policyName, "(", ")")
 	if strings.HasPrefix(policyName, "small") {
 		size := uint32(110 * common.Const1MBytes)
@@ -2663,17 +2673,17 @@ func applyMergePolicy(ctx context.Context, policyName string, sortKeyPos int, ob
 		if err == nil && 10*common.Const1MBytes < i && i < 250*common.Const1MBytes {
 			size = uint32(i)
 		}
-		return logtailreplay.NewSmall(size).Filter(objInfos), nil
+		return ctl.NewSmall(size).Filter(objInfos), nil
 	} else if strings.HasPrefix(policyName, "overlap") {
 		if sortKeyPos == -1 {
 			return objInfos, nil
 		}
-		maxObjects := 100
+		maxObjects := 10
 		i, err := strconv.Atoi(arg)
 		if err == nil {
 			maxObjects = i
 		}
-		return logtailreplay.NewOverlap(maxObjects).Filter(objInfos), nil
+		return ctl.NewOverlap(maxObjects).Filter(objInfos), nil
 	}
 
 	return nil, moerr.NewInvalidInput(ctx, "invalid merge policy name")

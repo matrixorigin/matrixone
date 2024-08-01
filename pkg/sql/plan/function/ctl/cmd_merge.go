@@ -24,8 +24,10 @@ import (
 	"time"
 
 	"github.com/docker/go-units"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -199,6 +201,7 @@ func handleCNMerge(
 		proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(a.accountId))
 	}
 
+	target := getTNShard(proc.GetService())
 	switch a.mergeType {
 	case objectMergeType:
 		tblId, err := strconv.ParseUint(a.tbl, 10, 64)
@@ -211,7 +214,7 @@ func handleCNMerge(
 			return Result{}, err
 		}
 
-		entry, err := rel.MergeObjects(proc.Ctx, a.objs, a.filter, uint32(a.targetObjSize))
+		entry, err := rel.MergeObjects(proc.Ctx, a.objs, uint32(a.targetObjSize))
 		if err != nil {
 			merge.CleanUpUselessFiles(entry, proc.GetFileService())
 			if entry == nil {
@@ -226,7 +229,7 @@ func handleCNMerge(
 			return Result{}, err
 		}
 
-		resp, err := txnWrite(proc.Ctx, proc.GetService(), txnOp, payload)
+		resp, err := txnWrite(proc.Ctx, target, txnOp, payload)
 		if err != nil {
 			return Result{}, err
 		}
@@ -245,33 +248,36 @@ func handleCNMerge(
 		}
 		rel, err := database.Relation(proc.Ctx, a.tbl, nil)
 		if err != nil {
-			logutil.Errorf("mergeblocks err on cn, table %s, err %s", a.db, err.Error())
+			logutil.Errorf("mergeblocks err on cn, table %s, err %s", a.tbl, err.Error())
 			return Result{}, err
 		}
 
-		var engineDefs []engine.TableDef
-		engineDefs, err = rel.TableDefs(proc.Ctx)
+		partitionInfo, err := getRelPartitionInfo(proc.Ctx, rel)
 		if err != nil {
+			logutil.Errorf("mergeblocks err on cn, table %s, err %s", a.tbl, err.Error())
 			return Result{}, err
-		}
-		var partitionInfo *plan.PartitionByDef
-		for _, def := range engineDefs {
-			if partitionDef, ok := def.(*engine.PartitionDef); ok {
-				if partitionDef.Partitioned > 0 {
-					p := &plan.PartitionByDef{}
-					err = p.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition))
-					if err != nil {
-						return Result{}, err
-					}
-					partitionInfo = p
-				}
-			}
 		}
 
 		if partitionInfo == nil {
-			entry, err := rel.MergeObjects(proc.Ctx, a.objs, a.filter, uint32(a.targetObjSize))
+			stats, err := rel.GetVisibleObjectStats(proc.Ctx)
 			if err != nil {
 				return Result{}, err
+			}
+			if a.filter != "" {
+				stats, err = applyMergePolicy(proc.Ctx, a.filter, getSortKeyPos(proc.Ctx, rel), stats)
+				if err != nil {
+					return Result{}, err
+				}
+			}
+
+			entry, err := rel.MergeObjects(proc.Ctx, stats, uint32(a.targetObjSize))
+			if err != nil {
+				merge.CleanUpUselessFiles(entry, proc.GetFileService())
+				if entry == nil {
+					entry = &api.MergeCommitEntry{
+						Err: err.Error(),
+					}
+				}
 			}
 
 			payload, err := entry.MarshalBinary()
@@ -279,7 +285,7 @@ func handleCNMerge(
 				return Result{}, err
 			}
 
-			resp, err := txnWrite(proc.Ctx, proc.GetService(), txnOp, payload)
+			resp, err := txnWrite(proc.Ctx, target, txnOp, payload)
 			if err != nil {
 				return Result{}, err
 			}
@@ -299,11 +305,26 @@ func handleCNMerge(
 			if err != nil {
 				return Result{}, err
 			}
-			entry, err := prel.MergeObjects(proc.Ctx, a.objs, a.filter, uint32(a.targetObjSize))
+			stats, err := prel.GetVisibleObjectStats(proc.Ctx)
 			if err != nil {
+				return Result{}, err
+			}
+			if a.filter != "" {
+				stats, err = applyMergePolicy(proc.Ctx, a.filter, getSortKeyPos(proc.Ctx, prel), stats)
+				if err != nil {
+					return Result{}, err
+				}
+			}
+			entry, err := prel.MergeObjects(proc.Ctx, stats, uint32(a.targetObjSize))
+			if err != nil {
+				merge.CleanUpUselessFiles(entry, proc.GetFileService())
+				if entry == nil {
+					entry = &api.MergeCommitEntry{
+						Err: err.Error(),
+					}
+				}
 				resultBuffer.WriteString(err.Error())
 				resultBuffer.WriteString("\n")
-				continue
 			}
 
 			payload, err := entry.MarshalBinary()
@@ -311,7 +332,7 @@ func handleCNMerge(
 				return Result{}, err
 			}
 
-			resp, err := txnWrite(proc.Ctx, proc.GetService(), txnOp, payload)
+			resp, err := txnWrite(proc.Ctx, target, txnOp, payload)
 			if err != nil {
 				return Result{}, err
 			}
@@ -327,7 +348,7 @@ func handleCNMerge(
 	return Result{}, nil
 }
 
-func txnWrite(ctx context.Context, service string, txnOp client.TxnOperator, payload []byte) (*rpc.SendResult, error) {
+func getTNShard(service string) metadata.TNShard {
 	var target metadata.TNShard
 	cluster := clusterservice.GetMOCluster(service)
 	cluster.GetTNService(clusterservice.NewSelector(),
@@ -344,7 +365,31 @@ func txnWrite(ctx context.Context, service string, txnOp client.TxnOperator, pay
 			}
 			return true
 		})
+	return target
+}
 
+func getRelPartitionInfo(ctx context.Context, rel engine.Relation) (*plan.PartitionByDef, error) {
+	engineDefs, err := rel.TableDefs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var partitionInfo *plan.PartitionByDef
+	for _, def := range engineDefs {
+		if partitionDef, ok := def.(*engine.PartitionDef); ok {
+			if partitionDef.Partitioned > 0 {
+				p := &plan.PartitionByDef{}
+				err = p.UnMarshalPartitionInfo(util.UnsafeStringToBytes(partitionDef.Partition))
+				if err != nil {
+					return nil, err
+				}
+				partitionInfo = p
+			}
+		}
+	}
+	return partitionInfo, nil
+}
+
+func txnWrite(ctx context.Context, target metadata.TNShard, txnOp client.TxnOperator, payload []byte) (*rpc.SendResult, error) {
 	return txnOp.Write(ctx, []txn.TxnRequest{{
 		CNRequest: &txn.CNOpRequest{
 			OpCode:  uint32(api.OpCode_OpCommitMerge),
@@ -359,4 +404,55 @@ func txnWrite(ctx context.Context, service string, txnOp client.TxnOperator, pay
 			RetryInterval: int64(time.Second),
 		},
 	}})
+}
+
+func applyMergePolicy(ctx context.Context, policyName string, sortKeyPos int, objInfos []objectio.ObjectStats) ([]objectio.ObjectStats, error) {
+	arg := cutBetween(policyName, "(", ")")
+	if strings.HasPrefix(policyName, "small") {
+		size := uint32(110 * common.Const1MBytes)
+		i, err := units.RAMInBytes(arg)
+		if err == nil && 10*common.Const1MBytes < i && i < 250*common.Const1MBytes {
+			size = uint32(i)
+		}
+		return NewSmall(size).Filter(objInfos), nil
+	} else if strings.HasPrefix(policyName, "overlap") {
+		if sortKeyPos == -1 {
+			return objInfos, nil
+		}
+		maxObjects := 10
+		i, err := strconv.Atoi(arg)
+		if err == nil {
+			maxObjects = i
+		}
+		return NewOverlap(maxObjects).Filter(objInfos), nil
+	}
+
+	return nil, moerr.NewInvalidInput(ctx, "invalid merge policy name")
+}
+
+func cutBetween(s, start, end string) string {
+	i := strings.Index(s, start)
+	if i >= 0 {
+		j := strings.Index(s[i:], end)
+		if j >= 0 {
+			return s[i+len(start) : i+j]
+		}
+	}
+	return ""
+}
+
+func getSortKeyPos(ctx context.Context, rel engine.Relation) int {
+	def := rel.GetTableDef(ctx)
+	cols := def.Cols
+	for i, col := range cols {
+		if col.Primary && col.Name != catalog.FakePrimaryKeyColName {
+			if col.ClusterBy {
+				panic("bad schema")
+			}
+			return i
+		} else if col.ClusterBy {
+			return i
+		}
+	}
+	return -1
 }
