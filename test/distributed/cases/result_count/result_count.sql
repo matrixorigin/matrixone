@@ -5,6 +5,7 @@ create account bvt_result_count admin_name 'admin' identified by '111';
 -- case 1
 -- @session:id=2&user=bvt_result_count:admin&password=111
 -- transaction sql
+set disable_agg_statement = on;
 begin;
 rollback;
 commit;
