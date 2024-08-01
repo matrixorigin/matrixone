@@ -140,7 +140,7 @@ func TestRelationDataV1_MarshalAndUnMarshal(t *testing.T) {
 			return false
 		}
 
-		if !bytes.Equal(*rd1.blklist, *rd2.blklist) {
+		if !bytes.Equal(rd1.blklist, rd2.blklist) {
 			return false
 		}
 

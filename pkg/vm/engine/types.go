@@ -587,7 +587,7 @@ type Tombstoner interface {
 
 	HasTombstones() bool
 
-	MarshalBinaryWithBuffer(w *bytes.Buffer) (uint32, error)
+	MarshalBinaryWithBuffer(w *bytes.Buffer) error
 
 	UnmarshalBinary(buf []byte) error
 
