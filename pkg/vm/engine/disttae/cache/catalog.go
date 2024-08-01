@@ -20,8 +20,7 @@ import (
 	"sync"
 	"time"
 
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/tidwall/btree"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -32,8 +31,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/tidwall/btree"
 )
 
 func NewCatalog() *CatalogCache {
@@ -841,6 +841,7 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 	return &plan.TableDef{
 		TblId:         tblItem.Id,
 		Name:          tblItem.Name,
+		DbName:        tblItem.DatabaseName,
 		Cols:          cols,
 		Name2ColIndex: name2index,
 		Defs:          defs,
