@@ -16,6 +16,9 @@ package loopsemi
 
 import (
 	"bytes"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -110,7 +113,9 @@ func (loopSemi *LoopSemi) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (loopSemi *LoopSemi) build(proc *process.Process, anal process.Analyze) error {
 	ctr := loopSemi.ctr
-	mp := proc.ReceiveJoinMap(anal, loopSemi.JoinMapTag, false, 0)
+	start := time.Now()
+	defer anal.WaitStop(start)
+	mp := message.ReceiveJoinMap(loopSemi.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
 	if mp == nil {
 		return nil
 	}
