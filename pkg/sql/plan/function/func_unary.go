@@ -15,6 +15,7 @@
 package function
 
 import (
+	"container/list"
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"io"
 	"math"
+	"path"
 	"runtime"
 	"strconv"
 	"strings"
@@ -1731,5 +1733,109 @@ func LastDay(
 			}
 		}
 	}
+	return nil
+}
+
+func StageList(
+	ivecs []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+) error {
+	ctx := proc.Ctx
+	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	filepath, null := p1.GetStrValue(0)
+	if null {
+		if err := rs.AppendBytes(nil, true); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	s, err := UrlToStageDef(string(filepath), proc)
+	if err != nil {
+		return err
+	}
+
+	fs := proc.GetFileService()
+	fspath, _, err := s.ToPath()
+	if err != nil {
+		return err
+	}
+
+	idx := strings.LastIndex(fspath, fileservice.ServiceNameSeparator)
+
+	var service, pattern string
+	if idx == -1 {
+		service = ""
+		pattern = fspath
+	} else {
+		service = fspath[:idx]
+		pattern = fspath[idx+1:]
+	}
+
+	pattern = path.Clean("/" + pattern)
+
+	sep := "/"
+	pathDir := strings.Split(pattern, sep)
+	l := list.New()
+	l2 := list.New()
+	if pathDir[0] == "" {
+		l.PushBack(sep)
+	} else {
+		l.PushBack(pathDir[0])
+	}
+
+	for i := 1; i < len(pathDir); i++ {
+		length := l.Len()
+		for j := 0; j < length; j++ {
+			prefix := l.Front().Value.(string)
+			p := fileservice.JoinPath(service, prefix)
+			etlfs, readpath, err := fileservice.GetForETL(ctx, fs, p)
+			if err != nil {
+				return err
+			}
+			entries, err := etlfs.List(ctx, readpath)
+			if err != nil {
+				return err
+			}
+			for _, entry := range entries {
+				if !entry.IsDir && i+1 != len(pathDir) {
+					continue
+				}
+				if entry.IsDir && i+1 == len(pathDir) {
+					continue
+				}
+				matched, err := path.Match(pathDir[i], entry.Name)
+				if err != nil {
+					return err
+				}
+				if !matched {
+					continue
+				}
+				l.PushBack(path.Join(l.Front().Value.(string), entry.Name))
+				if !entry.IsDir {
+					l2.PushBack(entry.Size)
+				}
+			}
+			l.Remove(l.Front())
+		}
+	}
+	length = l.Len()
+
+	//fileList := make([]string)
+	//fileSize := make([]int64)
+	for j := 0; j < length; j++ {
+		if err := rs.AppendBytes([]byte(l.Front().Value.(string)), false); err != nil {
+			return err
+		}
+		//fileList = append(fileList, l.Front().Value.(string))
+		l.Remove(l.Front())
+		//fileSize = append(fileSize, l2.Front().Value.(int64))
+		l2.Remove(l2.Front())
+	}
+
 	return nil
 }
