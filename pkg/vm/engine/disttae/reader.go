@@ -288,6 +288,7 @@ func NewReader(
 }
 
 func (r *reader) Close() error {
+	r.source.Close()
 	r.withFilterMixin.reset()
 	return nil
 }
@@ -316,6 +317,9 @@ func (r *reader) Read(
 	start := time.Now()
 	defer func() {
 		v2.TxnBlockReaderDurationHistogram.Observe(time.Since(start).Seconds())
+		if bat == nil {
+			r.Close()
+		}
 	}()
 
 	r.tryUpdateColumns(cols)
