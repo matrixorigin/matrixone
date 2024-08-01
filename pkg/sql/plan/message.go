@@ -16,7 +16,7 @@ package plan
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 )
 
 func (builder *QueryBuilder) gatherLeavesForMessageFromTopToScan(nodeID int32) int32 {
@@ -80,7 +80,7 @@ func (builder *QueryBuilder) handleMessgaeFromTopToScan(nodeID int32) {
 	}
 
 	msgTag := builder.genNewMsgTag()
-	msgHeader := &plan.MsgHeader{MsgTag: msgTag, MsgType: int32(process.MsgTopValue)}
+	msgHeader := &plan.MsgHeader{MsgTag: msgTag, MsgType: int32(message.MsgTopValue)}
 	node.SendMsgList = append(node.SendMsgList, msgHeader)
 	scanNode.RecvMsgList = append(scanNode.RecvMsgList, msgHeader)
 	scanNode.OrderBy = append(scanNode.OrderBy, DeepCopyOrderBy(node.OrderBy[0]))
@@ -102,7 +102,7 @@ func (builder *QueryBuilder) handleHashMapMessages(nodeID int32) {
 	}
 
 	msgTag := builder.genNewMsgTag()
-	msgHeader := &plan.MsgHeader{MsgTag: msgTag, MsgType: int32(process.MsgJoinMap)}
+	msgHeader := &plan.MsgHeader{MsgTag: msgTag, MsgType: int32(message.MsgJoinMap)}
 	node.SendMsgList = append(node.SendMsgList, msgHeader)
 }
 
