@@ -1265,6 +1265,14 @@ restore_pitr_stmt:
            SrcAccountName: tree.Identifier($8.Compare()),
        }
     }
+|  RESTORE CLUSTER FROM PITR ident STRING
+    {
+        $$ = &tree.RestorePitr{
+            Level: tree.RESTORELEVELCLUSTER,
+            Name: tree.Identifier($5.Compare()),
+            TimeStamp: $6,
+        }
+    }
 
 kill_stmt:
     KILL kill_opt INTEGRAL statement_id_opt
