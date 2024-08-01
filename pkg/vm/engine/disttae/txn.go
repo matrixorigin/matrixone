@@ -523,7 +523,7 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 		} else {
 			table = tbl.(*txnTable)
 		}
-		fileName := objectio.DecodeBlockInfo(
+		fileName := objectio.DecodeBlockInfoInProgress(
 			blockInfo.Vecs[0].GetBytesAt(0)).
 			MetaLocation().Name().String()
 		err = table.getTxn().WriteFileLocked(
@@ -591,7 +591,7 @@ func (txn *Transaction) insertPosForCNBlock(
 	tbName string) error {
 	blks, area := vector.MustVarlenaRawData(vec)
 	for i := range blks {
-		blkInfo := *objectio.DecodeBlockInfo(blks[i].GetByteSlice(area))
+		blkInfo := *objectio.DecodeBlockInfoInProgress(blks[i].GetByteSlice(area))
 		txn.cnBlkId_Pos[blkInfo.BlockID] = Pos{
 			bat:       b,
 			accountId: id,
@@ -625,10 +625,10 @@ func (txn *Transaction) WriteFileLocked(
 
 		blkInfosVec := bat.Vecs[0]
 		for idx := 0; idx < blkInfosVec.Length(); idx++ {
-			blkInfo := *objectio.DecodeBlockInfo(blkInfosVec.GetBytesAt(idx))
+			blkInfo := *objectio.DecodeBlockInfoInProgress(blkInfosVec.GetBytesAt(idx))
 			vector.AppendBytes(newBat.Vecs[0], []byte(blkInfo.MetaLocation().String()),
 				false, txn.proc.Mp())
-			colexec.Get().PutCnSegment(&blkInfo.SegmentID, colexec.CnBlockIdType)
+			colexec.Get().PutCnSegment(blkInfo.BlockID.Segment(), colexec.CnBlockIdType)
 		}
 
 		// append obj stats, may multiple
@@ -901,7 +901,7 @@ func (txn *Transaction) compactionBlksLocked() error {
 			for _, blkInfo := range createdBlks {
 				vector.AppendBytes(
 					bat.GetVector(0),
-					objectio.EncodeBlockInfo(blkInfo),
+					objectio.EncodeBlockInfoInProgress(blkInfo),
 					false,
 					tbl.getTxn().proc.GetMPool())
 			}

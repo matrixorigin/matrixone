@@ -46,15 +46,11 @@ func DecodeInfoHeader(h uint32) InfoHeader {
 }
 
 var (
-	EmptyBlockInfo      = BlockInfo{}
-	EmptyBlockInfoBytes = EncodeBlockInfo(EmptyBlockInfo)
-
 	EmptyBlockInfoInProgress      = BlockInfoInProgress{}
 	EmptyBlockInfoInProgressBytes = EncodeBlockInfoInProgress(EmptyBlockInfoInProgress)
 )
 
 const (
-	BlockInfoSize           = int(unsafe.Sizeof(EmptyBlockInfo))
 	BlockInfoSizeInProgress = int(unsafe.Sizeof(EmptyBlockInfoInProgress))
 )
 
@@ -195,70 +191,23 @@ func (s *BlockInfoSliceInProgress) String() string {
 	return buf.String()
 }
 
-// BlockInfo TODO::It's deprecated, and will be removed.
-type BlockInfo struct {
-	BlockID types.Blockid
-	//It's used to indicate whether the block is appendable block or non-appendable blk for reader.
-	// for appendable block, the data visibility in the block is determined by the commit ts and abort ts.
-	EntryState bool
-	Sorted     bool
-	MetaLoc    ObjectLocation
-	DeltaLoc   ObjectLocation
-	CommitTs   types.TS
-	SegmentID  types.Uuid
-
-	//TODO:: putting them here is a bad idea, remove
-	//this block can be distributed to remote nodes.
-	CanRemote    bool
-	PartitionNum int
-}
-
-func (b *BlockInfo) MetaLocation() Location {
-	return b.MetaLoc[:]
-}
-
-func (b *BlockInfo) SetMetaLocation(metaLoc Location) {
-	b.MetaLoc = *(*[LocationLen]byte)(unsafe.Pointer(&metaLoc[0]))
-}
-
-func (b *BlockInfo) DeltaLocation() Location {
-	return b.DeltaLoc[:]
-}
-
-func (b *BlockInfo) SetDeltaLocation(deltaLoc Location) {
-	b.DeltaLoc = *(*[LocationLen]byte)(unsafe.Pointer(&deltaLoc[0]))
-}
-
-// XXX info is passed in by value.   The use of unsafe here will cost
-// an allocation and copy.  BlockInfo is not small therefore this is
-// not exactly cheap.   However, caller of this function will keep a
-// reference to the buffer.  See txnTable.rangesOnePart.
-// ranges is *[][]byte.
-func EncodeBlockInfo(info BlockInfo) []byte {
-	return unsafe.Slice((*byte)(unsafe.Pointer(&info)), BlockInfoSize)
-}
-
-func DecodeBlockInfo(buf []byte) *BlockInfo {
-	return (*BlockInfo)(unsafe.Pointer(&buf[0]))
-}
-
 // It's deprecated
 type BlockInfoSlice []byte
 
-func (s *BlockInfoSlice) Get(i int) *BlockInfo {
-	return DecodeBlockInfo((*s)[i*BlockInfoSize:])
+func (s *BlockInfoSlice) Get(i int) *BlockInfoInProgress {
+	return DecodeBlockInfoInProgress((*s)[i*BlockInfoSizeInProgress:])
 }
 
 func (s *BlockInfoSlice) GetBytes(i int) []byte {
-	return (*s)[i*BlockInfoSize : (i+1)*BlockInfoSize]
+	return (*s)[i*BlockInfoSizeInProgress : (i+1)*BlockInfoSizeInProgress]
 }
 
-func (s *BlockInfoSlice) Set(i int, info *BlockInfo) {
-	copy((*s)[i*BlockInfoSize:], EncodeBlockInfo(*info))
+func (s *BlockInfoSlice) Set(i int, info *BlockInfoInProgress) {
+	copy((*s)[i*BlockInfoSizeInProgress:], EncodeBlockInfoInProgress(*info))
 }
 
 func (s *BlockInfoSlice) Len() int {
-	return len(*s) / BlockInfoSize
+	return len(*s) / BlockInfoSizeInProgress
 }
 
 func (s *BlockInfoSlice) Size() int {
@@ -266,15 +215,15 @@ func (s *BlockInfoSlice) Size() int {
 }
 
 func (s *BlockInfoSlice) Slice(i, j int) []byte {
-	return (*s)[i*BlockInfoSize : j*BlockInfoSize]
+	return (*s)[i*BlockInfoSizeInProgress : j*BlockInfoSizeInProgress]
 }
 
 func (s *BlockInfoSlice) Append(bs []byte) {
 	*s = append(*s, bs...)
 }
 
-func (s *BlockInfoSlice) AppendBlockInfo(info BlockInfo) {
-	*s = append(*s, EncodeBlockInfo(info)...)
+func (s *BlockInfoSlice) AppendBlockInfo(info BlockInfoInProgress) {
+	*s = append(*s, EncodeBlockInfoInProgress(info)...)
 }
 
 func (s *BlockInfoSlice) SetBytes(bs []byte) {

@@ -4428,10 +4428,10 @@ func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelD
 	var newNodes engine.Nodes
 	for i := range nodes {
 		if nodes[i].Data.DataCnt() > maxWorkLoad {
-			maxWorkLoad = nodes[i].Data.DataCnt() / objectio.BlockInfoSize
+			maxWorkLoad = nodes[i].Data.DataCnt() / objectio.BlockInfoSizeInProgress
 		}
 		if nodes[i].Data.DataCnt() < minWorkLoad {
-			minWorkLoad = nodes[i].Data.DataCnt() / objectio.BlockInfoSize
+			minWorkLoad = nodes[i].Data.DataCnt() / objectio.BlockInfoSizeInProgress
 		}
 		if nodes[i].Data.DataCnt() > 0 {
 			if i != 0 {

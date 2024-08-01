@@ -120,17 +120,6 @@ func (r RowEntry) Less(than RowEntry) bool {
 	return false
 }
 
-type BlockEntry struct {
-	objectio.BlockInfo
-
-	CreateTime types.TS
-	DeleteTime types.TS
-}
-
-func (b BlockEntry) Less(than BlockEntry) bool {
-	return b.BlockID.Compare(than.BlockID) < 0
-}
-
 type BlockDeltaEntry struct {
 	BlockID types.Blockid
 
