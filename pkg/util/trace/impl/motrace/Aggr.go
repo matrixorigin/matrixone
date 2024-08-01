@@ -93,6 +93,7 @@ func (a *Aggregator) GetResults() []table.Item {
 func (a *Aggregator) GetWindow() time.Duration { return a.WindowSize }
 
 // PopResultsBeforeWindow return aggr-ed results in Aggregator, and remove from the Aggregator
+// Those items need to be free-ed after calling by caller.
 func (a *Aggregator) PopResultsBeforeWindow(end time.Time) []table.Item {
 	results := make([]table.Item, 0, len(a.Grouped))
 	for key, group := range a.Grouped {
