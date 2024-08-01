@@ -454,7 +454,7 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 
 				// BUG: if user drop the col and add it back with the same name within the same txn, the result will be wrong.
 				for j := range tableColumns {
-					if tableColumns[j].Name == columnStr {
+					if strings.EqualFold(tableColumns[j].Name, columnStr) {
 						strval := getValueInStr(tValues[j][minMaxIdx])
 						if err = rs.AppendMustBytesValue(functionUtil.QuickStrToBytes(strval)); err != nil {
 							return err
@@ -525,7 +525,7 @@ func getValueInStr(value any) string {
 	case bytejson.ByteJson:
 		return v.String()
 	case types.Uuid:
-		return v.ToString()
+		return v.String()
 	case types.Decimal64:
 		return v.Format(0)
 	case types.Decimal128:
@@ -576,6 +576,7 @@ var (
 		"mo_pubs":                     0,
 		"mo_stages":                   0,
 		"mo_snapshots":                0,
+		"mo_pitr":                     0,
 	}
 )
 

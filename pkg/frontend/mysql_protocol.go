@@ -201,6 +201,8 @@ func (ds *debugStats) AddFlushBytes(b uint64) {
 type MysqlProtocolImpl struct {
 	m sync.Mutex
 
+	sid string
+
 	//TODO: make it global
 	io IOPackage
 
@@ -392,6 +394,13 @@ func (mp *MysqlProtocolImpl) WriteEOF(warnings, status uint16) error {
 
 func (mp *MysqlProtocolImpl) WriteEOFIF(warnings uint16, status uint16) error {
 	return mp.SendEOFPacketIf(warnings, status)
+}
+func (mp *MysqlProtocolImpl) WriteEOFIFAndNoFlush(warnings uint16, status uint16) error {
+	if mp.capability&CLIENT_DEPRECATE_EOF == 0 {
+		data := mp.makeEOFPayload(warnings, status)
+		return mp.appendPacket(data)
+	}
+	return nil
 }
 
 func (mp *MysqlProtocolImpl) WriteEOFOrOK(warnings uint16, status uint16) error {
@@ -614,7 +623,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 	data = append(data, 0)
 	// warning count
 	data = append(data, 0, 0) // TODO support warning count
-	if err := mp.writePackets(data); err != nil {
+	if err := mp.appendPacket(data); err != nil {
 		return err
 	}
 
@@ -642,6 +651,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 	for i := 0; i < numColumns; i++ {
 		column := new(MysqlColumn)
 		column.SetName(columns[i].Name)
+		column.SetOrgName(columns[i].GetOriginCaseName())
 
 		err = convertEngineTypeToMysqlType(ctx, types.T(columns[i].Typ.Id), column)
 		if err != nil {
@@ -2364,14 +2374,16 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow(mrs *MysqlResultSet, rowId
 					return err
 				}
 			}
+			// XXX: This is so strange, why we need to handle this case here?
+			//
 			// case defines.MYSQL_TYPE_TIMESTAMP:
 			// 	if value, err := mrs.GetString(rowIdx, i); err != nil {
 			// 		return nil, err
 			// 	} else {
 			// 		data = err = mp.appendStringLenEnc(data, value)
-			if err != nil {
-				return err
-			}
+			//; if err != nil {
+			// 	return err
+			// }
 		// 	}
 		default:
 			return moerr.NewInternalError(mp.ctx, "type is not supported in binary text result row")
@@ -2986,9 +2998,10 @@ func generate_salt(n int) []byte {
 	}
 	return buf
 }
-func NewMysqlClientProtocol(connectionID uint32, tcp *Conn, maxBytesToFlush int, SV *config.FrontendParameters) *MysqlProtocolImpl {
+func NewMysqlClientProtocol(sid string, connectionID uint32, tcp *Conn, maxBytesToFlush int, SV *config.FrontendParameters) *MysqlProtocolImpl {
 	salt := generate_salt(20)
 	mysql := &MysqlProtocolImpl{
+		sid:              sid,
 		io:               NewIOPackage(true),
 		tcpConn:          tcp,
 		salt:             salt,

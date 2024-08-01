@@ -44,7 +44,6 @@ func (intersect *Intersect) Prepare(proc *process.Process) error {
 	if err != nil {
 		return err
 	}
-	intersect.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
 	return nil
 }
 
@@ -185,17 +184,12 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 				n = hashmap.UnitLimit
 			}
 
-			copy(c.inBuckets, hashmap.OneUInt8s)
 			copy(needInsert, resetsNeedInsert)
 			insertcnt := 0
 
-			vs, zs := itr.Find(i, n, btc.Vecs, c.inBuckets)
+			vs, zs := itr.Find(i, n, btc.Vecs)
 
 			for j, v := range vs {
-				// not in the processed bucket
-				if c.inBuckets[j] == 0 {
-					continue
-				}
 
 				// null value
 				if zs[j] == 0 {

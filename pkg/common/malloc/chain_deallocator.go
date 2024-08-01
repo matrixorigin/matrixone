@@ -30,6 +30,15 @@ func (c *chainDeallocator) Deallocate(hints Hints) {
 	chainDeallocatorPool.Put(c)
 }
 
+func (c chainDeallocator) As(target Trait) bool {
+	for _, dec := range c {
+		if ok := dec.As(target); ok {
+			return true
+		}
+	}
+	return false
+}
+
 func ChainDeallocator(dec1 Deallocator, dec2 Deallocator) Deallocator {
 	if chain1, ok := dec1.(*chainDeallocator); ok {
 		if chain2, ok := dec2.(*chainDeallocator); ok {

@@ -41,10 +41,12 @@ type PartitionReader struct {
 	// inserted rows comes from txn.writes.
 	inserts []*batch.Batch
 	//deleted rows comes from txn.writes or partitionState.rows.
-	deletes  map[types.Rowid]uint8
-	iter     logtailreplay.RowsIter
+	deletes map[types.Rowid]uint8
+	iter    logtailreplay.RowsIter
+	// letter case: origin
 	seqnumMp map[string]int
-	typsMap  map[string]types.Type
+	// letter case: origin
+	typsMap map[string]types.Type
 }
 
 var _ engine.Reader = new(PartitionReader)
@@ -83,11 +85,14 @@ func (p *PartitionReader) prepare() error {
 
 		p.table.getTxn().forEachTableWrites(p.table.db.databaseId, p.table.tableId,
 			txnOffset, func(entry Entry) {
-				if entry.typ == INSERT || entry.typ == INSERT_TXN {
+				if entry.typ == INSERT {
 					if entry.bat == nil || entry.bat.IsEmpty() {
 						return
 					}
 					if entry.bat.Attrs[0] == catalog.BlockMeta_MetaLoc {
+						return
+					}
+					if sels, ok := txn.batchSelectList[entry.bat]; ok && len(sels) == 0 {
 						return
 					}
 					inserts = append(inserts, entry.bat)
@@ -95,16 +100,6 @@ func (p *PartitionReader) prepare() error {
 				}
 				//entry.typ == DELETE
 				if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
-					/*
-						CASE:
-						create table t1(a int);
-						begin;
-						truncate t1; //txnDatabase.Truncate will DELETE mo_tables
-						show tables; // t1 must be shown
-					*/
-					if entry.isGeneratedByTruncate() {
-						return
-					}
 					//deletes in txn.Write maybe comes from PartitionState.Rows ,
 					// PartitionReader need to skip them.
 					vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
@@ -113,6 +108,21 @@ func (p *PartitionReader) prepare() error {
 					}
 				}
 			})
+
+		// for theory completeness, here is the code to load deletes from txn.batchSelectList.
+		// for b, sels := range txn.batchSelectList {
+		// 	if v := b.GetVector(0); len(sels) > 0 && v.GetType().Oid == types.T_Rowid {
+		// 		rids := vector.MustFixedCol[types.Rowid](v)
+		// 		// sels is sorted. pick the rowids which are not in sels.
+		// 		for i, j := 0, 0; i < v.Length(); i++ {
+		// 			if int64(i) != sels[j] {
+		// 				deletes[rids[i]] = 0
+		// 			} else {
+		// 				j++
+		// 			}
+		// 		}
+		// 	}
+		// }
 		//deletes maybe comes from PartitionState.rows, PartitionReader need to skip them;
 		// so, here only load deletes which don't belong to PartitionState.blks.
 		if err := p.table.LoadDeletesForMemBlocksIn(p.table._partState.Load(), deletes); err != nil {
@@ -180,7 +190,6 @@ func (p *PartitionReader) Read(
 			}
 		}
 
-		logutil.Debugf("read %v with %v", colNames, p.seqnumMp)
 		//		CORNER CASE:
 		//		if some rowIds[j] is in p.deletes above, then some rows has been filtered.
 		//		the bat.RowCount() is not always the right value for the result batch b.

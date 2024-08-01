@@ -21,6 +21,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/google/uuid"
 	"go.uber.org/zap/zapcore"
@@ -44,10 +46,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-)
-
-const (
-	VectorLimit = 32
 )
 
 // Analyze analyzes information for operator
@@ -145,7 +143,7 @@ type SessionInfo struct {
 	SessionId            uuid.UUID
 }
 
-// AnalyzeInfo  analyze information for query
+// AnalyzeInfo  operatorAnalyzer information for query
 type AnalyzeInfo struct {
 	// NodeId, index of query's node list
 	NodeId int32
@@ -324,7 +322,7 @@ type BaseProcess struct {
 	// Id, query id.
 	Id              string
 	Lim             Limitation
-	vp              *vectorPool
+	vp              *cachedVectorPool
 	mp              *mpool.MPool
 	prepareBatch    *batch.Batch
 	prepareExprList any
@@ -334,8 +332,6 @@ type BaseProcess struct {
 	TxnClient           client.TxnClient
 	AnalInfos           []*AnalyzeInfo
 	SessionInfo         SessionInfo
-	Ctx                 context.Context
-	Cancel              context.CancelFunc
 	FileService         fileservice.FileService
 	LockService         lockservice.LockService
 	IncrService         incrservice.AutoIncrementService
@@ -349,7 +345,7 @@ type BaseProcess struct {
 	Hakeeper            logservice.CNHAKeeperClient
 	UdfService          udf.Service
 	WaitPolicy          lock.WaitPolicy
-	MessageBoard        *MessageBoard
+	messageBoard        *message.MessageBoard
 	logger              *log.MOLogger
 	TxnOperator         client.TxnOperator
 	CloneTxnOperator    client.TxnOperator
@@ -366,17 +362,9 @@ type Process struct {
 	DispatchNotifyCh chan *WrapCs
 }
 
-type vectorPool struct {
-	sync.Mutex
-	vecs map[uint8][]*vector.Vector
-
-	// max vector count limit for each type in pool.
-	Limit int
-}
-
 type sqlHelper interface {
 	GetCompilerContext() any
-	ExecSql(string) ([]interface{}, error)
+	ExecSql(string) ([][]interface{}, error)
 	GetSubscriptionMeta(string) (sub *plan.SubscriptionMeta, err error)
 }
 
@@ -387,6 +375,14 @@ type WrapCs struct {
 	Uid          uuid.UUID
 	Cs           morpc.ClientSession
 	Err          chan error
+}
+
+func (proc *Process) GetMessageBoard() *message.MessageBoard {
+	return proc.Base.messageBoard
+}
+
+func (proc *Process) SetMessageBoard(mb *message.MessageBoard) {
+	proc.Base.messageBoard = mb
 }
 
 func (proc *Process) SetStmtProfile(sp *StmtProfile) {
@@ -499,7 +495,8 @@ func (proc *Process) GetTxnOperator() client.TxnOperator {
 	return proc.Base.TxnOperator
 }
 
-type analyze struct {
+// Operator Resource Analzyer
+type operatorAnalyzer struct {
 	parallelMajor        bool
 	parallelIdx          int
 	start                time.Time

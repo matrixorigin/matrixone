@@ -53,7 +53,7 @@ type Attribute struct {
 	IsRowId bool
 	// Column ID
 	ID uint64
-	// Name name of attribute
+	// Name name of attribute, letter case: origin
 	Name string
 	// Alg compression algorithm
 	Alg compress.T
@@ -622,7 +622,7 @@ type Relation interface {
 	// only ConstraintDef can be modified
 	UpdateConstraint(context.Context, *ConstraintDef) error
 
-	AlterTable(ctx context.Context, c *ConstraintDef, constraint [][]byte) error
+	AlterTable(context.Context, *ConstraintDef, []*api.AlterTableReq) error
 
 	// Support renaming tables within explicit transactions (CN worspace)
 	TableRenameInTxn(ctx context.Context, constraint [][]byte) error
@@ -732,6 +732,8 @@ type Engine interface {
 	Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo
 
 	GetMessageCenter() any
+
+	GetService() string
 }
 
 type VectorPool interface {

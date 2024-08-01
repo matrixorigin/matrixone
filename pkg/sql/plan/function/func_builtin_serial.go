@@ -33,11 +33,11 @@ func (op *opSerial) tryExpand(length int, mp *mpool.MPool) {
 	if len(op.ps) < length {
 		// close the current packer array
 		for _, p := range op.ps {
-			p.FreeMem()
+			p.Close()
 		}
 
 		// create a new packer array with the new length
-		op.ps = types.NewPackerArray(length, mp)
+		op.ps = types.NewPackerArray(length)
 	}
 
 	for _, p := range op.ps {
@@ -46,12 +46,8 @@ func (op *opSerial) tryExpand(length int, mp *mpool.MPool) {
 }
 
 func (op *opSerial) Close() error {
-	if op.ps == nil {
-		return nil
-	}
-
 	for _, p := range op.ps {
-		p.FreeMem()
+		p.Close()
 	}
 	return nil
 }

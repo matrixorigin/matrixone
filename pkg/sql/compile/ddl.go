@@ -20,9 +20,6 @@ import (
 	"math"
 	"strings"
 
-	"go.uber.org/zap"
-	"golang.org/x/exp/constraints"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -43,6 +40,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
+	"golang.org/x/exp/constraints"
 )
 
 func (s *Scope) CreateDatabase(c *Compile) error {
@@ -483,7 +482,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 
 			//1. build and update constraint def
 			for _, indexDef := range indexTableDef.Indexes {
-				insertSql, err := makeInsertSingleIndexSQL(c.e, c.proc, databaseId, tblId, indexDef)
+				insertSql, err := makeInsertSingleIndexSQL(c.e, c.proc, databaseId, tblId, indexDef, tableDef)
 				if err != nil {
 					return err
 				}
@@ -598,9 +597,10 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 		case *plan.AlterTable_Action_AddColumn:
 			alterKinds = append(alterKinds, api.AlterKind_AddColumn)
 			col := &plan.ColDef{
-				Name: act.AddColumn.Name,
-				Alg:  plan.CompressType_Lz4,
-				Typ:  act.AddColumn.Type,
+				Name:       strings.ToLower(act.AddColumn.Name),
+				OriginName: act.AddColumn.Name,
+				Alg:        plan.CompressType_Lz4,
+				Typ:        act.AddColumn.Type,
 			}
 			var pos int32
 			cols, pos, err = getAddColPos(cols, col, act.AddColumn.PreName, act.AddColumn.Pos)
@@ -694,7 +694,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 
 	var addColIdx int
 	var dropColIdx int
-	constraint := make([][]byte, 0)
+	reqs := make([]*api.AlterTableReq, 0)
 	for _, kind := range alterKinds {
 		var req *api.AlterTableReq
 		switch kind {
@@ -721,14 +721,10 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			req = api.NewAddPartitionReq(rel.GetDBID(c.proc.Ctx), rel.GetTableID(c.proc.Ctx), changePartitionDef)
 		default:
 		}
-		tmp, err := req.Marshal()
-		if err != nil {
-			return err
-		}
-		constraint = append(constraint, tmp)
+		reqs = append(reqs, req)
 	}
 
-	err = rel.AlterTable(c.proc.Ctx, newCt, constraint)
+	err = rel.AlterTable(c.proc.Ctx, newCt, reqs)
 	if err != nil {
 		return err
 	}
@@ -867,7 +863,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 	}
 
-	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
+	if err = lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
 		c.proc.Info(c.proc.Ctx, "createTable",
 			zap.String("databaseName", c.db),
 			zap.String("tableName", qry.GetTableDef().GetName()),
@@ -876,7 +872,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		return err
 	}
 
-	if err := dbSource.Create(context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
+	if err = dbSource.Create(context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
 		c.proc.Info(c.proc.Ctx, "createTable",
 			zap.String("databaseName", c.db),
 			zap.String("tableName", qry.GetTableDef().GetName()),
@@ -956,7 +952,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		var colNameToId = make(map[string]uint64)
 		for _, def := range newTableDef {
 			if attr, ok := def.(*engine.AttributeDef); ok {
-				colNameToId[attr.Attr.Name] = attr.Attr.ID
+				colNameToId[strings.ToLower(attr.Attr.Name)] = attr.Attr.ID
 			}
 		}
 		//old colId -> colName
@@ -994,8 +990,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 					//colName -> new colId
 					newDef.ForeignCols[j] = colNameToId[colName]
 				}
-			} else {
-				copy(newDef.ForeignCols, fkey.ForeignCols)
 			}
 
 			//refresh child table column id
@@ -1105,7 +1099,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		var colNameToId = make(map[string]uint64)
 		for _, def := range newTableDef {
 			if attr, ok := def.(*engine.AttributeDef); ok {
-				colNameToId[attr.Attr.Name] = attr.Attr.ID
+				colNameToId[strings.ToLower(attr.Attr.Name)] = attr.Attr.ID
 			}
 		}
 		//1.1 update the column id of the column names in this table.
@@ -1287,6 +1281,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 	err = maybeCreateAutoIncrement(
 		c.proc.Ctx,
+		c.proc.GetService(),
 		dbSource,
 		qry.GetTableDef(),
 		c.proc.GetTxnOperator(),
@@ -1300,7 +1295,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		return nil
 	}
 
-	return shardservice.GetService().Create(
+	return shardservice.GetService(c.proc.GetService()).Create(
 		c.proc.Ctx,
 		qry.GetTableDef().TblId,
 		c.proc.GetTxnOperator(),
@@ -1317,7 +1312,7 @@ func (s *Scope) CreateView(c *Compile) error {
 	// convert the plan's defs to the execution's defs
 	exeDefs, err := planDefsToExeDefs(qry.GetTableDef())
 	if err != nil {
-		getLogger().Info("createView",
+		getLogger(s.Proc.GetService()).Info("createView",
 			zap.String("databaseName", c.db),
 			zap.String("viewName", qry.GetTableDef().GetName()),
 			zap.Error(err),
@@ -1346,7 +1341,7 @@ func (s *Scope) CreateView(c *Compile) error {
 		if qry.GetReplace() {
 			err = c.runSql(fmt.Sprintf("drop view if exists %s", viewName))
 			if err != nil {
-				getLogger().Info("createView",
+				getLogger(s.Proc.GetService()).Info("createView",
 					zap.String("databaseName", c.db),
 					zap.String("viewName", qry.GetTableDef().GetName()),
 					zap.Error(err),
@@ -1354,7 +1349,7 @@ func (s *Scope) CreateView(c *Compile) error {
 				return err
 			}
 		} else {
-			getLogger().Info("createView",
+			getLogger(s.Proc.GetService()).Info("createView",
 				zap.String("databaseName", c.db),
 				zap.String("viewName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1370,7 +1365,7 @@ func (s *Scope) CreateView(c *Compile) error {
 			if qry.GetIfNotExists() {
 				return nil
 			}
-			getLogger().Info("createView",
+			getLogger(s.Proc.GetService()).Info("createView",
 				zap.String("databaseName", c.db),
 				zap.String("viewName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1380,7 +1375,7 @@ func (s *Scope) CreateView(c *Compile) error {
 	}
 
 	if err = lockMoTable(c, dbName, viewName, lock.LockMode_Exclusive); err != nil {
-		getLogger().Info("createView",
+		getLogger(s.Proc.GetService()).Info("createView",
 			zap.String("databaseName", c.db),
 			zap.String("viewName", qry.GetTableDef().GetName()),
 			zap.Error(err),
@@ -1389,7 +1384,7 @@ func (s *Scope) CreateView(c *Compile) error {
 	}
 
 	if err = dbSource.Create(context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql), viewName, append(exeCols, exeDefs...)); err != nil {
-		getLogger().Info("createView",
+		getLogger(s.Proc.GetService()).Info("createView",
 			zap.String("databaseName", c.db),
 			zap.String("viewName", qry.GetTableDef().GetName()),
 			zap.Error(err),
@@ -1483,6 +1478,7 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 
 	return maybeCreateAutoIncrement(
 		c.proc.Ctx,
+		c.proc.GetService(),
 		tmpDBSource,
 		qry.GetTableDef(),
 		c.proc.GetTxnOperator(),
@@ -1518,6 +1514,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		return err
 	}
 	tableId := r.GetTableID(c.proc.Ctx)
+	tableDef := r.GetTableDef(c.proc.Ctx)
 
 	originalTableDef := plan2.DeepCopyTableDef(qry.TableDef, true)
 	indexInfo := qry.GetIndex() // IndexInfo is named same as planner's IndexInfo
@@ -1587,7 +1584,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 
 	// generate inserts into mo_indexes metadata
 	for _, indexDef := range indexTableDef.Indexes {
-		sql, err := makeInsertSingleIndexSQL(c.e, c.proc, databaseId, tableId, indexDef)
+		sql, err := makeInsertSingleIndexSQL(c.e, c.proc, databaseId, tableId, indexDef, tableDef)
 		if err != nil {
 			return err
 		}
@@ -2036,7 +2033,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		}
 	}
 	if containAuto {
-		err = incrservice.GetAutoIncrementService(c.proc.Ctx).Reset(
+		err = incrservice.GetAutoIncrementService(c.proc.GetService()).Reset(
 			c.proc.Ctx,
 			oldId,
 			newId,
@@ -2245,7 +2242,7 @@ func (s *Scope) DropTable(c *Compile) error {
 				}
 			}
 			if containAuto {
-				err := incrservice.GetAutoIncrementService(c.proc.Ctx).Delete(
+				err := incrservice.GetAutoIncrementService(c.proc.GetService()).Delete(
 					c.proc.Ctx,
 					rel.GetTableID(c.proc.Ctx),
 					c.proc.GetTxnOperator())
@@ -2254,7 +2251,7 @@ func (s *Scope) DropTable(c *Compile) error {
 				}
 			}
 
-			if err := shardservice.GetService().Delete(
+			if err := shardservice.GetService(c.proc.GetService()).Delete(
 				c.proc.Ctx,
 				rel.GetTableID(c.proc.Ctx),
 				c.proc.GetTxnOperator(),
@@ -2291,7 +2288,7 @@ func (s *Scope) DropTable(c *Compile) error {
 			}
 			if containAuto {
 				// When drop table 'mo_catalog.mo_indexes', there is no need to delete the auto increment data
-				err := incrservice.GetAutoIncrementService(c.proc.Ctx).Delete(
+				err := incrservice.GetAutoIncrementService(c.proc.GetService()).Delete(
 					c.proc.Ctx,
 					rel.GetTableID(c.proc.Ctx),
 					c.proc.GetTxnOperator())
@@ -2300,7 +2297,7 @@ func (s *Scope) DropTable(c *Compile) error {
 				}
 			}
 
-			if err := shardservice.GetService().Delete(
+			if err := shardservice.GetService(c.proc.GetService()).Delete(
 				c.proc.Ctx,
 				rel.GetTableID(c.proc.Ctx),
 				c.proc.GetTxnOperator(),
@@ -2401,7 +2398,7 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 		colTyp := col.GetTyp()
 		exeCols[i] = &engine.AttributeDef{
 			Attr: engine.Attribute{
-				Name:          col.Name,
+				Name:          col.GetOriginCaseName(),
 				Alg:           alg,
 				Type:          types.New(types.T(colTyp.GetId()), colTyp.GetWidth(), colTyp.GetScale()),
 				Default:       planCols[i].GetDefault(),
@@ -2514,13 +2511,14 @@ func (s *Scope) AlterSequence(c *Compile) error {
 	if rel, err := dbSource.Relation(c.proc.Ctx, tblName, nil); err == nil {
 		// sequence table exists
 		// get pre sequence table row values
-		values, err = c.proc.GetSessionInfo().SqlHelper.ExecSql(fmt.Sprintf("select * from `%s`.`%s`", dbName, tblName))
+		_values, err := c.proc.GetSessionInfo().SqlHelper.ExecSql(fmt.Sprintf("select * from `%s`.`%s`", dbName, tblName))
 		if err != nil {
 			return err
 		}
-		if values == nil {
+		if _values == nil {
 			return moerr.NewInternalError(c.proc.Ctx, "Failed to get sequence meta data.")
 		}
+		values = _values[0]
 
 		// get pre curval
 
@@ -3199,6 +3197,7 @@ func lockRows(
 
 func maybeCreateAutoIncrement(
 	ctx context.Context,
+	sid string,
 	db engine.Database,
 	def *plan.TableDef,
 	txnOp client.TxnOperator,
@@ -3218,7 +3217,7 @@ func maybeCreateAutoIncrement(
 		return nil
 	}
 
-	return incrservice.GetAutoIncrementService(ctx).Create(
+	return incrservice.GetAutoIncrementService(sid).Create(
 		ctx,
 		def.TblId,
 		cols,
