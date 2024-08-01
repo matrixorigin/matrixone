@@ -24,6 +24,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -38,7 +39,9 @@ import (
 	logservice2 "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/service"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -61,7 +64,6 @@ type TestDisttaeEngine struct {
 func NewTestDisttaeEngine(ctx context.Context, mp *mpool.MPool,
 	fs fileservice.FileService, rpcAgent *MockRPCAgent, storage *TestTxnStorage) (*TestDisttaeEngine, error) {
 	de := new(TestDisttaeEngine)
-
 	de.logtailReceiver = make(chan morpc.Message)
 	de.broken = make(chan struct{})
 
@@ -80,6 +82,7 @@ func NewTestDisttaeEngine(ctx context.Context, mp *mpool.MPool,
 	hakeeper := newTestHAKeeperClient()
 	colexec.NewServer(hakeeper)
 
+	catalog.SetupDefines("")
 	de.Engine = disttae.New(ctx, "", mp, fs, de.txnClient, hakeeper, nil, 0)
 	de.Engine.PushClient().LogtailRPCClientFactory = rpcAgent.MockLogtailRPCClientFactory
 
@@ -113,8 +116,19 @@ func NewTestDisttaeEngine(ctx context.Context, mp *mpool.MPool,
 		return nil, err
 	}
 
+	qc, _ := qclient.NewQueryClient("", morpc.Config{})
+	sqlExecutor := compile.NewSQLExecutor(
+		"127.0.0.1:2000",
+		de.Engine,
+		mp,
+		de.txnClient,
+		fs,
+		qc,
+		hakeeper,
+		nil, //s.udfService
+	)
+	runtime.ServiceRuntime("").SetGlobalVariables(runtime.InternalSQLExecutor, sqlExecutor)
 	//err = de.prevSubscribeSysTables(ctx, rpcAgent)
-
 	return de, err
 }
 

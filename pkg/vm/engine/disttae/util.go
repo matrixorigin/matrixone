@@ -18,15 +18,15 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -41,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -1767,4 +1768,86 @@ func MakeInExprForTest[T any](
 			},
 		},
 	}
+}
+
+func stringifySlice(req any, f func(any) string) string {
+	buf := &bytes.Buffer{}
+	v := reflect.ValueOf(req)
+	buf.WriteRune('[')
+	if v.Kind() == reflect.Slice {
+		for i := 0; i < v.Len(); i++ {
+			if i > 0 {
+				buf.WriteRune(',')
+			}
+			buf.WriteString(f(v.Index(i).Interface()))
+		}
+	}
+	buf.WriteRune(']')
+	buf.WriteString(fmt.Sprintf("[%d]", v.Len()))
+	return buf.String()
+}
+
+func stringifyMap(req any, f func(any, any) string) string {
+	buf := &bytes.Buffer{}
+	v := reflect.ValueOf(req)
+	buf.WriteRune('{')
+	if v.Kind() == reflect.Map {
+		keys := v.MapKeys()
+		for i, key := range keys {
+			if i > 0 {
+				buf.WriteRune(',')
+			}
+			buf.WriteString(f(key.Interface(), v.MapIndex(key).Interface()))
+		}
+	}
+	buf.WriteRune('}')
+	buf.WriteString(fmt.Sprintf("[%d]", v.Len()))
+	return buf.String()
+}
+
+func execReadSql(ctx context.Context, op client.TxnOperator, sql string, disableLog bool) (executor.Result, error) {
+	// copy from compile.go runSqlWithResult
+	service := op.GetWorkspace().(*Transaction).proc.GetService()
+	v, ok := moruntime.ServiceRuntime(service).GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if !ok {
+		panic("missing lock service")
+	}
+	exec := v.(executor.SQLExecutor)
+	proc := op.GetWorkspace().(*Transaction).proc
+	opts := executor.Options{}.
+		WithDisableIncrStatement().
+		WithTxn(op).
+		WithTimeZone(proc.GetSessionInfo().TimeZone)
+	if disableLog {
+		opts = opts.WithStatementOption(executor.StatementOption{}.WithDisableLog())
+	}
+	return exec.Exec(ctx, sql, opts)
+}
+
+func fillTsVecForSysTableQueryBatch(bat *batch.Batch, ts types.TS, m *mpool.MPool) error {
+	tsvec := vector.NewVec(types.T_TS.ToType())
+	for i := 0; i < bat.RowCount(); i++ {
+		if err := vector.AppendFixed(tsvec, ts, false, m); err != nil {
+			tsvec.Free(m)
+			return err
+		}
+	}
+	bat.Vecs = append([]*vector.Vector{bat.Vecs[0] /*rowid*/, tsvec}, bat.Vecs[1:]...)
+	return nil
+}
+
+func isColumnsBatchPerfectlySplitted(bs []*batch.Batch) bool {
+	tidIdx := cache.MO_OFF + catalog.MO_COLUMNS_ATT_RELNAME_ID_IDX
+	if len(bs) == 1 {
+		return true
+	}
+	prevTableId := vector.GetFixedAt[uint64](bs[0].Vecs[tidIdx], bs[0].RowCount()-1)
+	for _, b := range bs[1:] {
+		firstId := vector.GetFixedAt[uint64](b.Vecs[tidIdx], 0)
+		if firstId == prevTableId {
+			return false
+		}
+		prevTableId = vector.GetFixedAt[uint64](b.Vecs[tidIdx], b.RowCount()-1)
+	}
+	return true
 }

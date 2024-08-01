@@ -22,6 +22,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -425,6 +427,7 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 	// probability 1: it's a JOIN pipeline.
 	case s.IsJoin:
 		parallelScope, err = buildJoinParallelRun(s, c)
+		//fmt.Println(DebugShowScopes([]*Scope{parallelScope}))
 
 	// probability 2: it's a LOAD pipeline.
 	case s.IsLoad:
@@ -433,6 +436,7 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 	// probability 3: it's a SCAN pipeline.
 	case s.DataSource != nil:
 		parallelScope, err = buildScanParallelRun(s, c)
+		//fmt.Println(DebugShowScopes([]*Scope{parallelScope}))
 
 	// others.
 	default:
@@ -489,7 +493,7 @@ func buildJoinParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		channel := make(chan *bitmap.Bitmap, mcpu)
 		for i := range ns.PreScopes {
 			s := ns.PreScopes[i]
-			switch arg := vm.GetLeafOp(s.RootOp).(type) {
+			switch arg := vm.GetLeafOpParent(nil, s.RootOp).(type) {
 			case *right.RightJoin:
 				arg.Channel = channel
 				arg.NumCPU = uint64(mcpu)
@@ -618,26 +622,26 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 	var err error
 	var inExprList []*plan.Expr
 	exprs := make([]*plan.Expr, 0, len(s.DataSource.RuntimeFilterSpecs))
-	filters := make([]process.RuntimeFilterMessage, 0, len(exprs))
+	filters := make([]message.RuntimeFilterMessage, 0, len(exprs))
 
 	if len(s.DataSource.RuntimeFilterSpecs) > 0 {
 		for _, spec := range s.DataSource.RuntimeFilterSpecs {
-			msgReceiver := c.proc.NewMessageReceiver([]int32{spec.Tag}, process.AddrBroadCastOnCurrentCN())
+			msgReceiver := message.NewMessageReceiver([]int32{spec.Tag}, message.AddrBroadCastOnCurrentCN(), c.proc.GetMessageBoard())
 			msgs, ctxDone := msgReceiver.ReceiveMessage(true, s.Proc.Ctx)
 			if ctxDone {
 				return nil
 			}
 			for i := range msgs {
-				msg, ok := msgs[i].(process.RuntimeFilterMessage)
+				msg, ok := msgs[i].(message.RuntimeFilterMessage)
 				if !ok {
 					panic("expect runtime filter message, receive unknown message!")
 				}
 				switch msg.Typ {
-				case process.RuntimeFilter_PASS:
+				case message.RuntimeFilter_PASS:
 					continue
-				case process.RuntimeFilter_DROP:
+				case message.RuntimeFilter_DROP:
 					return nil
-				case process.RuntimeFilter_IN:
+				case message.RuntimeFilter_IN:
 					inExpr := plan2.MakeInExpr(c.proc.Ctx, spec.Expr, msg.Card, msg.Data, spec.MatchPrefix)
 					inExprList = append(inExprList, inExpr)
 
@@ -727,7 +731,7 @@ func (s *Scope) isRight() bool {
 	if s == nil {
 		return false
 	}
-	OpType := vm.GetLeafOp(s.RootOp).OpType()
+	OpType := vm.GetLeafOpParent(nil, s.RootOp).OpType()
 	return OpType == vm.Right || OpType == vm.RightSemi || OpType == vm.RightAnti
 }
 

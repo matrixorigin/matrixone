@@ -83,7 +83,9 @@ func (p *Packer) ensureSizeSlow(n int) {
 	}
 	newBuffer = newBuffer[:len(p.buffer)]
 	copy(newBuffer, p.buffer)
-	p.bufferDeallocator.Deallocate(malloc.NoHints)
+	if p.bufferDeallocator != nil {
+		p.bufferDeallocator.Deallocate(malloc.NoHints)
+	}
 	p.buffer = newBuffer
 	p.bufferDeallocator = newDec
 }

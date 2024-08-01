@@ -534,6 +534,10 @@ type TableID struct {
 	DbId                 uint64   `protobuf:"varint,1,opt,name=db_id,json=dbId,proto3" json:"db_id,omitempty"`
 	TbId                 uint64   `protobuf:"varint,2,opt,name=tb_id,json=tbId,proto3" json:"tb_id,omitempty"`
 	PartitionId          uint64   `protobuf:"varint,3,opt,name=partition_id,json=partitionId,proto3" json:"partition_id,omitempty"`
+	AccId                uint32   `protobuf:"varint,4,opt,name=acc_id,json=accId,proto3" json:"acc_id,omitempty"`
+	DbName               string   `protobuf:"bytes,5,opt,name=db_name,json=dbName,proto3" json:"db_name,omitempty"`
+	TbName               string   `protobuf:"bytes,6,opt,name=tb_name,json=tbName,proto3" json:"tb_name,omitempty"`
+	PrimarySeqnum        uint32   `protobuf:"varint,7,opt,name=primary_seqnum,json=primarySeqnum,proto3" json:"primary_seqnum,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
 	XXX_sizecache        int32    `json:"-"`
@@ -589,6 +593,34 @@ func (m *TableID) GetTbId() uint64 {
 func (m *TableID) GetPartitionId() uint64 {
 	if m != nil {
 		return m.PartitionId
+	}
+	return 0
+}
+
+func (m *TableID) GetAccId() uint32 {
+	if m != nil {
+		return m.AccId
+	}
+	return 0
+}
+
+func (m *TableID) GetDbName() string {
+	if m != nil {
+		return m.DbName
+	}
+	return ""
+}
+
+func (m *TableID) GetTbName() string {
+	if m != nil {
+		return m.TbName
+	}
+	return ""
+}
+
+func (m *TableID) GetPrimarySeqnum() uint32 {
+	if m != nil {
+		return m.PrimarySeqnum
 	}
 	return 0
 }
@@ -2778,6 +2810,30 @@ func (m *TableID) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	if m.XXX_unrecognized != nil {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.PrimarySeqnum != 0 {
+		i = encodeVarintApi(dAtA, i, uint64(m.PrimarySeqnum))
+		i--
+		dAtA[i] = 0x38
+	}
+	if len(m.TbName) > 0 {
+		i -= len(m.TbName)
+		copy(dAtA[i:], m.TbName)
+		i = encodeVarintApi(dAtA, i, uint64(len(m.TbName)))
+		i--
+		dAtA[i] = 0x32
+	}
+	if len(m.DbName) > 0 {
+		i -= len(m.DbName)
+		copy(dAtA[i:], m.DbName)
+		i = encodeVarintApi(dAtA, i, uint64(len(m.DbName)))
+		i--
+		dAtA[i] = 0x2a
+	}
+	if m.AccId != 0 {
+		i = encodeVarintApi(dAtA, i, uint64(m.AccId))
+		i--
+		dAtA[i] = 0x20
 	}
 	if m.PartitionId != 0 {
 		i = encodeVarintApi(dAtA, i, uint64(m.PartitionId))

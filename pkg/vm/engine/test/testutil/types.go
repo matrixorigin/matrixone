@@ -17,6 +17,8 @@ package testutil
 import (
 	"context"
 	"fmt"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -85,6 +87,7 @@ func (s *PartitionStateStats) String() string {
 
 type TestOptions struct {
 	TaeEngineOptions *options.Options
+	Timeout          time.Duration
 }
 
 func GetS3SharedFileServiceOption(ctx context.Context, dir string) (*options.Options, error) {

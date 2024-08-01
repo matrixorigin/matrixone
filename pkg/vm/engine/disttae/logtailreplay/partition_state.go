@@ -40,6 +40,7 @@ type PartitionState struct {
 	service string
 
 	// also modify the Copy method if adding fields
+	tid uint64
 
 	// data
 	rows *btree.BTreeG[RowEntry] // use value type to avoid locking on elements
@@ -268,12 +269,14 @@ func (b ObjectIndexByTSEntry) Less(than ObjectIndexByTSEntry) bool {
 func NewPartitionState(
 	service string,
 	noData bool,
+	tid uint64,
 ) *PartitionState {
 	opts := btree.Options{
 		Degree: 64,
 	}
 	return &PartitionState{
 		service:      service,
+		tid:          tid,
 		noData:       noData,
 		rows:         btree.NewBTreeGOptions((RowEntry).Less, opts),
 		dataObjects:  btree.NewBTreeGOptions((ObjectEntry).Less, opts),
@@ -288,6 +291,7 @@ func NewPartitionState(
 func (p *PartitionState) Copy() *PartitionState {
 	state := PartitionState{
 		service:      p.service,
+		tid:          p.tid,
 		rows:         p.rows.Copy(),
 		dataObjects:  p.dataObjects.Copy(),
 		blockDeltas:  p.blockDeltas.Copy(),

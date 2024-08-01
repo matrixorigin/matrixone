@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -27,7 +28,7 @@ var _ vm.Operator = new(TableScan)
 type container struct {
 	maxAllocSize int
 	buf          *batch.Batch
-	msgReceiver  *process.MessageReceiver
+	msgReceiver  *message.MessageReceiver
 }
 type TableScan struct {
 	ctr            *container

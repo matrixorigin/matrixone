@@ -138,6 +138,10 @@ func StatementInfoFilter(i Item) bool {
 		return false
 	}
 
+	if statementInfo.disableAgg {
+		return false
+	}
+
 	// Do not aggr the running statement
 	if statementInfo.Status == StatementStatusRunning {
 		return false
@@ -226,6 +230,10 @@ type StatementInfo struct {
 	jsonByte   []byte
 	statsArray statistic.StatsArray
 	stated     bool
+
+	// disableAgg true, do NOT aggregate statement
+	// co-operate with Aggregator and StatementInfoFilter
+	disableAgg bool
 
 	// skipTxnOnce, readonly, for flow control
 	// see more on NeedSkipTxn() and SkipTxnId()
@@ -393,6 +401,8 @@ func (s *StatementInfo) CloneWithoutExecPlan() *StatementInfo {
 	stmt.jsonByte = nil // without ExecPlan
 	stmt.statsArray = s.statsArray
 	stmt.stated = s.stated
+	// part: disableAgg ctl
+	stmt.disableAgg = s.disableAgg
 	// part: skipTxn ctrl
 	stmt.skipTxnOnce = s.skipTxnOnce
 	stmt.skipTxnID = s.skipTxnID
@@ -592,6 +602,8 @@ func (s *StatementInfo) MarkResponseAt() {
 		s.Duration = s.ResponseAt.Sub(s.RequestAt)
 	}
 }
+
+func (s *StatementInfo) DisableAgg() { s.disableAgg = true }
 
 // TcpIpv4HeaderSize default tcp header bytes.
 const TcpIpv4HeaderSize = 66

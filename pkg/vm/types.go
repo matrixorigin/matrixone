@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -297,36 +299,12 @@ type OperatorInfo struct {
 	MaxParallel int32
 }
 
-func (info OperatorInfo) GetAddress() process.MessageAddress {
-	return process.MessageAddress{
+func (info OperatorInfo) GetAddress() message.MessageAddress {
+	return message.MessageAddress{
 		CnAddr:     info.CnAddr,
 		OperatorID: info.OperatorID,
 		ParallelID: info.ParallelID,
 	}
-}
-
-func IsBrokenNode(op Operator) bool {
-	switch op.OpType() {
-	case Order, MergeOrder, Partition:
-		return true
-	case Limit, MergeLimit:
-		return true
-	case Offset, MergeOffset:
-		return true
-	case Group, MergeGroup:
-		return true
-	case Sample:
-		return true
-	case Top, MergeTop:
-		return true
-	case Window:
-		return true
-	case TimeWin, Fill:
-		return true
-	case MergeRecursive:
-		return true
-	}
-	return false
 }
 
 func CannotRemote(op Operator) bool {

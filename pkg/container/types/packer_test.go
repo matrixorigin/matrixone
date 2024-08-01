@@ -16,6 +16,31 @@ package types
 
 import "testing"
 
+func TestPacker(t *testing.T) {
+	packer := NewPacker()
+	defer packer.Close()
+	for i := 0; i < 65536; i++ {
+		packer.EncodeInt64(int64(i))
+	}
+	bs := packer.Bytes()
+	if len(bs) != 261887 {
+		t.Fatalf("got %v", len(bs))
+	}
+}
+
+func TestClosedPackerIsOK(t *testing.T) {
+	packer := NewPacker()
+	packer.Close()
+	for i := 0; i < 65536; i++ {
+		packer.EncodeInt64(int64(i))
+	}
+	bs := packer.Bytes()
+	if len(bs) != 261887 {
+		t.Fatalf("got %v", len(bs))
+	}
+	packer.Close()
+}
+
 func BenchmarkPacker(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		packer := NewPacker()

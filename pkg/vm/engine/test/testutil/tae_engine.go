@@ -96,9 +96,10 @@ func (ts *TestTxnStorage) Commit(ctx context.Context, request *txn.TxnRequest, r
 
 	prepareResponse(request, response)
 
-	_, err := ts.txnHandler.HandleCommit(ctx, request.Txn)
+	cts, err := ts.txnHandler.HandleCommit(ctx, request.Txn)
 	if err == nil {
 		response.Txn.Status = txn.TxnStatus_Committed
+		response.Txn.CommitTS = cts
 	} else {
 		response.Txn.Status = txn.TxnStatus_Aborted
 	}
