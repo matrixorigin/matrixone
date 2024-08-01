@@ -54,13 +54,14 @@ func (preInsertUnique *PreInsertUnique) Call(proc *process.Process) (vm.CallResu
 		return vm.CancelResult, err
 	}
 
-	result, err := preInsertUnique.GetChildren(0).Call(proc)
-	if err != nil {
-		return result, err
-	}
 	analy := proc.GetAnalyze(preInsertUnique.GetIdx(), preInsertUnique.GetParallelIdx(), preInsertUnique.GetParallelMajor())
 	analy.Start()
 	defer analy.Stop()
+
+	result, err := vm.ChildrenCall(preInsertUnique.Children[0], proc, analy)
+	if err != nil {
+		return result, err
+	}
 
 	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() {
 		return result, nil

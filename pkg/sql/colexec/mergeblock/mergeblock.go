@@ -56,16 +56,17 @@ func (mergeBlock *MergeBlock) Call(proc *process.Process) (vm.CallResult, error)
 		return vm.CancelResult, err
 	}
 
-	var err error
-	ap := mergeBlock
-	result, err := mergeBlock.GetChildren(0).Call(proc)
-	if err != nil {
-		return result, err
-	}
-
 	anal := proc.GetAnalyze(mergeBlock.GetIdx(), mergeBlock.GetParallelIdx(), mergeBlock.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
+
+	var err error
+	ap := mergeBlock
+
+	result, err := vm.ChildrenCall(mergeBlock.Children[0], proc, anal)
+	if err != nil {
+		return result, err
+	}
 
 	if result.Batch == nil {
 		result.Status = vm.ExecStop

@@ -54,13 +54,14 @@ func (preInsertSecIdx *PreInsertSecIdx) Call(proc *process.Process) (vm.CallResu
 		return vm.CancelResult, err
 	}
 
-	result, err := preInsertSecIdx.GetChildren(0).Call(proc)
-	if err != nil {
-		return result, err
-	}
 	analy := proc.GetAnalyze(preInsertSecIdx.GetIdx(), preInsertSecIdx.GetParallelIdx(), preInsertSecIdx.GetParallelMajor())
 	analy.Start()
 	defer analy.Stop()
+
+	result, err := vm.ChildrenCall(preInsertSecIdx.Children[0], proc, analy)
+	if err != nil {
+		return result, err
+	}
 
 	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() {
 		return result, nil
