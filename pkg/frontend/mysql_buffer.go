@@ -270,7 +270,6 @@ func (c *Conn) Read() ([]byte, error) {
 		}
 
 		payloads = append(payloads, payload)
-		payload = nil
 
 		if uint32(packetLength) != MaxPayloadSize {
 			break
