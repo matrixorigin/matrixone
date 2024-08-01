@@ -3155,12 +3155,12 @@ func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*
 			c.anal.isFirst = false
 
 			insertArg := constructInsert(n, c.e)
-			defer insertArg.Release()
 			insertArg.ToWriteS3 = true
 			insertArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			currentFirstFlag = false
 
 			rs := c.newInsertMergeScope(insertArg, ss)
+			insertArg.Release()
 			rs.Magic = MergeInsert
 
 			mergeInsertArg := constructMergeblock(c.e, n)
