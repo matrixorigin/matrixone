@@ -540,6 +540,13 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 		}
 		for _, partitionTableName := range partitionInfo.PartitionTableNames {
 			partitionTable := gs.engine.getLatestCatalogCache().GetTableByName(key.DatabaseID, partitionTableName)
+			// If the table def is nil, means that the partition table is just created and the
+			// table columns are not updated in the table cache. So do not need to update stats
+			// of the newly created table and use the default stats.
+			if partitionTable == nil || partitionTable.TableDef == nil {
+				logutil.Errorf("cannot get partition table by name %s, key %v", partitionTableName, key)
+				return
+			}
 			partitionsTableDef = append(partitionsTableDef, partitionTable.TableDef)
 			ps := gs.engine.getOrCreateLatestPart(key.DatabaseID, partitionTable.Id).Snapshot()
 			approxObjectNum += int64(ps.ApproxObjectsNum())
