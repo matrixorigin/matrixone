@@ -35,8 +35,6 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
-
 	state   int
 	bat     *batch.Batch
 	rbat    *batch.Batch
@@ -93,7 +91,6 @@ func (loopSingle *LoopSingle) Free(proc *process.Process, pipelineFailed bool, e
 	if ctr := loopSingle.ctr; ctr != nil {
 		ctr.cleanBatch(proc.Mp())
 		ctr.cleanExprExecutor()
-		ctr.FreeAllReg()
 		loopSingle.ctr = nil
 	}
 }

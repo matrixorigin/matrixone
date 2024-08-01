@@ -33,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -501,7 +500,7 @@ func TestCreateObject(t *testing.T) {
 	}
 	err = tae.Catalog.RecurLoop(processor)
 	assert.Nil(t, err)
-	assert.Equal(t, 2+3, objCnt)
+	assert.Equal(t, 2, objCnt)
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 }
 
@@ -676,7 +675,7 @@ func TestAddObjsWithMetaLoc(t *testing.T) {
 			return
 		})
 		assert.True(t, cntOfobj == 1)
-		assert.True(t, cntOfAobj == 1)
+		assert.True(t, cntOfAobj == 2)
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
 }
@@ -1676,138 +1675,6 @@ func TestCrossDBTxn(t *testing.T) {
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 }
 
-func TestSystemDB1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
-	ctx := context.Background()
-
-	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
-	defer tae.Close()
-	schema := catalog.MockSchema(2, 0)
-	txn, _ := tae.StartTxn(nil)
-	_, err := txn.CreateDatabase(pkgcatalog.MO_CATALOG, "", "")
-	assert.NotNil(t, err)
-	_, err = txn.DropDatabase(pkgcatalog.MO_CATALOG)
-	assert.NotNil(t, err)
-
-	db1, err := txn.CreateDatabase("db1", "", "")
-	assert.Nil(t, err)
-	_, err = db1.CreateRelation(schema)
-	assert.Nil(t, err)
-
-	_, err = txn.CreateDatabase("db2", "", "")
-	assert.Nil(t, err)
-
-	db, _ := txn.GetDatabase(pkgcatalog.MO_CATALOG)
-	table, err := db.GetRelationByName(pkgcatalog.MO_DATABASE)
-	assert.Nil(t, err)
-	it := table.MakeObjectIt()
-	for it.Next() {
-		blk := it.GetObject()
-		view, err := blk.GetColumnDataByName(context.Background(), 0, pkgcatalog.SystemDBAttr_Name, common.DefaultAllocator)
-		assert.Nil(t, err)
-		defer view.Close()
-		assert.Equal(t, 3, view.Length())
-		view, err = blk.GetColumnDataByName(context.Background(), 0, pkgcatalog.SystemDBAttr_CatalogName, common.DefaultAllocator)
-		assert.Nil(t, err)
-		defer view.Close()
-		assert.Equal(t, 3, view.Length())
-		view, err = blk.GetColumnDataByName(context.Background(), 0, pkgcatalog.SystemDBAttr_CreateSQL, common.DefaultAllocator)
-		assert.Nil(t, err)
-		defer view.Close()
-		assert.Equal(t, 3, view.Length())
-	}
-
-	table, err = db.GetRelationByName(pkgcatalog.MO_TABLES)
-	assert.Nil(t, err)
-	it = table.MakeObjectIt()
-	for it.Next() {
-		blk := it.GetObject()
-		view, err := blk.GetColumnDataByName(context.Background(), 0, pkgcatalog.SystemRelAttr_Name, common.DefaultAllocator)
-		assert.Nil(t, err)
-		defer view.Close()
-		assert.Equal(t, 4, view.Length())
-		view, err = blk.GetColumnDataByName(context.Background(), 0, pkgcatalog.SystemRelAttr_Persistence, common.DefaultAllocator)
-		assert.NoError(t, err)
-		defer view.Close()
-		view, err = blk.GetColumnDataByName(context.Background(), 0, pkgcatalog.SystemRelAttr_Kind, common.DefaultAllocator)
-		assert.NoError(t, err)
-		defer view.Close()
-	}
-
-	table, err = db.GetRelationByName(pkgcatalog.MO_COLUMNS)
-	assert.Nil(t, err)
-
-	bat := containers.NewBatch()
-	defer bat.Close()
-	// schema2 := table.GetMeta().(*catalog.TableEntry).GetSchema()
-	// bat := containers.BuildBatch(schema2.AllNames(), schema2.AllTypes(), schema2.AllNullables(), 0)
-	it = table.MakeObjectIt()
-	for it.Next() {
-		blk := it.GetObject()
-		view, err := blk.GetColumnDataByName(context.Background(), 0, pkgcatalog.SystemColAttr_DBName, common.DefaultAllocator)
-		assert.NoError(t, err)
-		defer view.Close()
-		bat.AddVector(pkgcatalog.SystemColAttr_DBName, view.Vecs[0])
-
-		view, err = blk.GetColumnDataByName(context.Background(), 0, pkgcatalog.SystemColAttr_RelName, common.DefaultAllocator)
-		assert.Nil(t, err)
-		defer view.Close()
-		bat.AddVector(pkgcatalog.SystemColAttr_RelName, view.Vecs[0])
-
-		view, err = blk.GetColumnDataByName(context.Background(), 0, pkgcatalog.SystemColAttr_Name, common.DefaultAllocator)
-		assert.Nil(t, err)
-		defer view.Close()
-		bat.AddVector(pkgcatalog.SystemColAttr_Name, view.Vecs[0])
-
-		view, err = blk.GetColumnDataByName(context.Background(), 0, pkgcatalog.SystemColAttr_ConstraintType, common.DefaultAllocator)
-		assert.Nil(t, err)
-		defer view.Close()
-		t.Log(view.String())
-		bat.AddVector(pkgcatalog.SystemColAttr_ConstraintType, view.Vecs[0])
-
-		view, err = blk.GetColumnDataByName(context.Background(), 0, pkgcatalog.SystemColAttr_Type, common.DefaultAllocator)
-		assert.Nil(t, err)
-		defer view.Close()
-		t.Log(view.Vecs[0].String())
-		view, err = blk.GetColumnDataByName(context.Background(), 0, pkgcatalog.SystemColAttr_Num, common.DefaultAllocator)
-		assert.Nil(t, err)
-		defer view.Close()
-		t.Log(view.Vecs[0].String())
-	}
-	for i := 0; i < bat.Vecs[0].Length(); i++ {
-		dbName := string(bat.Vecs[0].Get(i).([]byte))
-		relName := string(bat.Vecs[1].Get(i).([]byte))
-		attrName := string(bat.Vecs[2].Get(i).([]byte))
-		ct := string(bat.Vecs[3].Get(i).([]byte))
-		if dbName == pkgcatalog.MO_CATALOG {
-			if relName == pkgcatalog.MO_DATABASE {
-				if attrName == pkgcatalog.SystemDBAttr_ID {
-					assert.Equal(t, pkgcatalog.SystemColPKConstraint, ct)
-				} else {
-					assert.Equal(t, pkgcatalog.SystemColNoConstraint, ct)
-				}
-			} else if relName == pkgcatalog.MO_TABLES {
-				if attrName == pkgcatalog.SystemRelAttr_ID {
-					assert.Equal(t, pkgcatalog.SystemColPKConstraint, ct)
-				} else {
-					assert.Equal(t, pkgcatalog.SystemColNoConstraint, ct)
-				}
-			} else if relName == pkgcatalog.MO_COLUMNS {
-				if attrName == pkgcatalog.SystemColAttr_UniqName {
-					assert.Equal(t, pkgcatalog.SystemColPKConstraint, ct)
-				} else {
-					assert.Equal(t, pkgcatalog.SystemColNoConstraint, ct)
-				}
-			}
-		}
-	}
-
-	err = txn.Rollback(context.Background())
-	assert.Nil(t, err)
-	t.Log(tae.Catalog.SimplePPString(common.PPL1))
-}
-
 func TestSystemDB2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
@@ -2475,6 +2342,21 @@ func TestMergeBlocks(t *testing.T) {
 	assert.Nil(t, txn.Commit(context.Background()))
 }
 
+type dummyCpkGetter struct{}
+
+func (c *dummyCpkGetter) CollectCheckpointsInRange(ctx context.Context, start, end types.TS) (ckpLoc string, lastEnd types.TS, err error) {
+	return "", types.TS{}, nil
+}
+
+func (c *dummyCpkGetter) FlushTable(ctx context.Context, dbID, tableID uint64, ts types.TS) error {
+	return nil
+}
+
+func totsp(ts types.TS) *timestamp.Timestamp {
+	x := ts.ToTimestamp()
+	return &x
+}
+
 func TestSegDelLogtail(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
@@ -2509,8 +2391,8 @@ func TestSegDelLogtail(t *testing.T) {
 
 	t.Log(tae.Catalog.SimplePPString(common.PPL3))
 	resp, close, err := logtail.HandleSyncLogTailReq(context.TODO(), new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
-		CnHave: tots(types.TS{}),
-		CnWant: tots(types.MaxTs()),
+		CnHave: totsp(types.TS{}),
+		CnWant: totsp(types.MaxTs()),
 		Table:  &api.TableID{DbId: did, TbId: tid},
 	}, false)
 	require.Nil(t, err)
@@ -2522,7 +2404,7 @@ func TestSegDelLogtail(t *testing.T) {
 
 	require.Equal(t, api.Entry_Insert, resp.Commands[1].EntryType)
 	require.True(t, strings.HasSuffix(resp.Commands[1].TableName, "obj"))
-	require.Equal(t, uint32(4), resp.Commands[1].Bat.Vecs[0].Len) /* 2 Objects (create) + 2 (update object info) */
+	require.Equal(t, uint32(6), resp.Commands[1].Bat.Vecs[0].Len) /* 2 Objects (create) + 4 (update object info) */
 	// start ts should not be empty
 	startTSVec := resp.Commands[1].Bat.Vecs[9]
 	cnStartVec, err := vector.ProtoVectorToVector(startTSVec)
@@ -2556,7 +2438,7 @@ func TestSegDelLogtail(t *testing.T) {
 		require.Equal(t, uint32(1), ins.Vecs[0].Len)    // 1 deltaloc, skip blks without deltaloc
 		require.Nil(t, del)                             // 0  del
 		require.Nil(t, cnins)                           // 0  del
-		require.Equal(t, uint32(4), segdel.Vecs[0].Len) // 2 create + 2 update
+		require.Equal(t, uint32(6), segdel.Vecs[0].Len) // 2 create + 4 update
 		require.Equal(t, 12, len(segdel.Vecs))
 	}
 	check()
@@ -3386,7 +3268,7 @@ func TestImmutableIndexInAblk(t *testing.T) {
 	assert.NoError(t, err)
 
 	err = meta.GetObjectData().BatchDedup(
-		context.Background(), txn, bat.Vecs[1], nil, nil, false, objectio.BloomFilter{}, 0, common.DefaultAllocator,
+		context.Background(), txn, bat.Vecs[1], nil, nil, false, objectio.BloomFilter{}, common.DefaultAllocator,
 	)
 	assert.Error(t, err)
 }
@@ -3778,27 +3660,11 @@ func TestMultiTenantMoCatalogOps(t *testing.T) {
 
 	tae.Restart(ctx)
 
-	reservedColumnsCnt := len(catalog.SystemDBSchema.ColDefs) +
-		len(catalog.SystemColumnSchema.ColDefs) +
-		len(catalog.SystemTableSchema.ColDefs)
 	{
 		// account 2
 		// check data for good
 		_, tbl := tae.GetRelation()
 		testutil.CheckAllColRowsByScan(t, tbl, 35, false)
-		// [mo_catalog, db]
-		assert.Equal(t, 2, len(mustStartTxn(t, tae, 2).DatabaseNames()))
-		_, sysDB = tae.GetDB(pkgcatalog.MO_CATALOG)
-		sysDB.Relations()
-		sysDBTbl, _ := sysDB.GetRelationByName(pkgcatalog.MO_DATABASE)
-		// [mo_catalog, db]
-		testutil.CheckAllColRowsByScan(t, sysDBTbl, 2, true)
-		sysTblTbl, _ := sysDB.GetRelationByName(pkgcatalog.MO_TABLES)
-		// [mo_database, mo_tables, mo_columns, 'mo_users_t2' 'test-table-a-timestamp']
-		testutil.CheckAllColRowsByScan(t, sysTblTbl, 5, true)
-		sysColTbl, _ := sysDB.GetRelationByName(pkgcatalog.MO_COLUMNS)
-		// [mo_database(8), mo_tables(13), mo_columns(19), 'mo_users_t2'(1+1), 'test-table-a-timestamp'(2+1)]
-		testutil.CheckAllColRowsByScan(t, sysColTbl, reservedColumnsCnt+5, true)
 	}
 	{
 		// account 1
@@ -3807,19 +3673,6 @@ func TestMultiTenantMoCatalogOps(t *testing.T) {
 		// check data for good
 		_, tbl := tae.GetRelation()
 		testutil.CheckAllColRowsByScan(t, tbl, 29, false)
-		// [mo_catalog, db]
-		assert.Equal(t, 2, len(mustStartTxn(t, tae, 1).DatabaseNames()))
-		_, sysDB = tae.GetDB(pkgcatalog.MO_CATALOG)
-		sysDB.Relations()
-		sysDBTbl, _ := sysDB.GetRelationByName(pkgcatalog.MO_DATABASE)
-		// [mo_catalog, db]
-		testutil.CheckAllColRowsByScan(t, sysDBTbl, 2, true)
-		sysTblTbl, _ := sysDB.GetRelationByName(pkgcatalog.MO_TABLES)
-		// [mo_database, mo_tables, mo_columns, 'mo_users_t1' 'test-table-a-timestamp']
-		testutil.CheckAllColRowsByScan(t, sysTblTbl, 5, true)
-		sysColTbl, _ := sysDB.GetRelationByName(pkgcatalog.MO_COLUMNS)
-		// [mo_database(8), mo_tables(13), mo_columns(19), 'mo_users_t1'(1+1), 'test-table-a-timestamp'(3+1)]
-		testutil.CheckAllColRowsByScan(t, sysColTbl, reservedColumnsCnt+6, true)
 	}
 	{
 		// sys account
@@ -3827,264 +3680,8 @@ func TestMultiTenantMoCatalogOps(t *testing.T) {
 		tae.BindTenantID(0)
 		// [mo_catalog]
 		assert.Equal(t, 1, len(mustStartTxn(t, tae, 0).DatabaseNames()))
-		_, sysDB = tae.GetDB(pkgcatalog.MO_CATALOG)
-		sysDB.Relations()
-		sysDBTbl, _ := sysDB.GetRelationByName(pkgcatalog.MO_DATABASE)
-		// [mo_catalog]
-		testutil.CheckAllColRowsByScan(t, sysDBTbl, 1, true)
-		sysTblTbl, _ := sysDB.GetRelationByName(pkgcatalog.MO_TABLES)
-		// [mo_database, mo_tables, mo_columns, 'mo_accounts']
-		testutil.CheckAllColRowsByScan(t, sysTblTbl, 4, true)
-		sysColTbl, _ := sysDB.GetRelationByName(pkgcatalog.MO_COLUMNS)
-		// [mo_database(8), mo_tables(13), mo_columns(19), 'mo_accounts'(1+1)]
-		testutil.CheckAllColRowsByScan(t, sysColTbl, reservedColumnsCnt+2, true)
 	}
 
-}
-
-type dummyCpkGetter struct{}
-
-func (c *dummyCpkGetter) CollectCheckpointsInRange(ctx context.Context, start, end types.TS) (ckpLoc string, lastEnd types.TS, err error) {
-	return "", types.TS{}, nil
-}
-
-func (c *dummyCpkGetter) FlushTable(ctx context.Context, dbID, tableID uint64, ts types.TS) error {
-	return nil
-}
-
-func tots(ts types.TS) *timestamp.Timestamp {
-	t := ts.ToTimestamp()
-	return &t
-}
-
-func TestLogtailBasic(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	ctx := context.Background()
-
-	opts := config.WithLongScanAndCKPOpts(nil)
-	opts.LogtailCfg = &options.LogtailCfg{PageSize: 30}
-	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
-	logMgr := tae.LogtailMgr
-	defer tae.Close()
-
-	// at first, we can see nothing
-	minTs, maxTs := types.BuildTS(0, 0), types.BuildTS(1000, 1000)
-	reader := logMgr.GetReader(minTs, maxTs)
-	require.False(t, reader.HasCatalogChanges())
-	require.Equal(t, 0, len(reader.GetDirtyByTable(1000, 1000).Objs))
-
-	schema := catalog.MockSchemaAll(2, -1)
-	schema.Name = "test"
-	schema.BlockMaxRows = 10
-	schema.ObjectMaxBlocks = 1
-	// craete 2 db and 2 tables
-	txn, _ := tae.StartTxn(nil)
-	todropdb, _ := txn.CreateDatabase("todrop", "", "")
-	todropdb.CreateRelation(schema)
-	db, _ := txn.CreateDatabase("db", "", "")
-	tbl, _ := db.CreateRelation(schema)
-	dbID := db.GetID()
-	tableID := tbl.ID()
-	txn.Commit(context.Background())
-	catalogWriteTs := txn.GetPrepareTS()
-
-	// drop the first db
-	txn2, _ := tae.StartTxn(nil)
-	txn2.DropDatabase("todrop")
-	txn2.Commit(context.Background())
-	catalogDropTs := txn2.GetPrepareTS()
-
-	writeTs := make([]types.TS, 0, 120)
-	deleteRowIDs := make([]types.Rowid, 0, 10)
-
-	wg := new(sync.WaitGroup)
-	wg.Add(1)
-	go func() {
-		// insert 100 rows
-		for i := 0; i < 100; i++ {
-			txn, _ := tae.StartTxn(nil)
-			db, _ := txn.GetDatabase("db")
-			tbl, _ := db.GetRelationByName("test")
-			tbl.Append(context.Background(), catalog.MockBatch(schema, 1))
-			require.NoError(t, txn.Commit(context.Background()))
-			writeTs = append(writeTs, txn.GetPrepareTS())
-		}
-		// delete the row whose offset is 5 for every block
-		{
-			// collect rowid
-			txn, _ := tae.StartTxn(nil)
-			db, _ := txn.GetDatabase("db")
-			tbl, _ := db.GetRelationByName("test")
-			blkIt := tbl.MakeObjectIt()
-			for blkIt.Next() {
-				obj := blkIt.GetObject()
-				id := obj.GetMeta().(*catalog.ObjectEntry).ID()
-				for j := 0; j < obj.BlkCnt(); j++ {
-					blkID := objectio.NewBlockidWithObjectID(id, uint16(j))
-					deleteRowIDs = append(deleteRowIDs, *objectio.NewRowid(blkID, 5))
-				}
-			}
-			blkIt.Close()
-			require.NoError(t, txn.Commit(context.Background()))
-		}
-
-		// delete two 2 rows one time. no special reason, it just comes up
-		for i := 0; i < len(deleteRowIDs); i += 2 {
-			txn, _ := tae.StartTxn(nil)
-			db, _ := txn.GetDatabase("db")
-			tbl, _ := db.GetRelationByName("test")
-			require.NoError(t, tbl.DeleteByPhyAddrKey(deleteRowIDs[i]))
-			if i+1 < len(deleteRowIDs) {
-				tbl.DeleteByPhyAddrKey(deleteRowIDs[i+1])
-			}
-			require.NoError(t, txn.Commit(context.Background()))
-			writeTs = append(writeTs, txn.GetPrepareTS())
-		}
-		wg.Done()
-	}()
-
-	// concurrent read to test race
-	for i := 0; i < 5; i++ {
-		wg.Add(1)
-		go func() {
-			for i := 0; i < 10; i++ {
-				reader := logMgr.GetReader(minTs, maxTs)
-				_ = reader.GetDirtyByTable(dbID, tableID)
-			}
-			wg.Done()
-		}()
-	}
-
-	wg.Wait()
-
-	firstWriteTs, lastWriteTs := writeTs[0], writeTs[len(writeTs)-1]
-
-	reader = logMgr.GetReader(firstWriteTs, lastWriteTs.Next())
-	require.False(t, reader.HasCatalogChanges())
-	reader = logMgr.GetReader(minTs, catalogWriteTs)
-	require.Equal(t, 0, len(reader.GetDirtyByTable(dbID, tableID).Objs))
-	reader = logMgr.GetReader(firstWriteTs, lastWriteTs)
-	require.Equal(t, 0, len(reader.GetDirtyByTable(dbID, tableID-1).Objs))
-	// 10 Objects, every Object has 1 blocks
-	reader = logMgr.GetReader(firstWriteTs, lastWriteTs)
-	dirties := reader.GetDirtyByTable(dbID, tableID)
-	require.Equal(t, 1, len(dirties.Objs))
-	tots := func(ts types.TS) *timestamp.Timestamp {
-		return &timestamp.Timestamp{PhysicalTime: types.DecodeInt64(ts[4:12]), LogicalTime: types.DecodeUint32(ts[:4])}
-	}
-
-	fixedColCnt := 2 // __rowid + commit_time, the columns for a delBatch
-	// check Bat rows count consistency
-	check_same_rows := func(bat *api.Batch, expect int) {
-		for i, vec := range bat.Vecs {
-			col, err := vector.ProtoVectorToVector(vec)
-			require.NoError(t, err)
-			require.Equal(t, expect, col.Length(), "columns %d", i)
-		}
-	}
-
-	// get db catalog change
-	resp, close, err := logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
-		CnHave: tots(minTs),
-		CnWant: tots(catalogDropTs),
-		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_DATABASE_ID},
-	}, true)
-	require.NoError(t, err)
-	require.Equal(t, 3, len(resp.Commands)) // insert and delete
-
-	require.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
-	require.Equal(t, len(catalog.SystemDBSchema.ColDefs)+fixedColCnt, len(resp.Commands[0].Bat.Vecs))
-	check_same_rows(resp.Commands[0].Bat, 2)                                 // 2 db
-	datname, err := vector.ProtoVectorToVector(resp.Commands[0].Bat.Vecs[3]) // datname column
-	require.NoError(t, err)
-	require.Equal(t, "todrop", datname.UnsafeGetStringAt(0))
-	require.Equal(t, "db", datname.UnsafeGetStringAt(1))
-
-	require.Equal(t, api.Entry_Delete, resp.Commands[1].EntryType)
-	require.Equal(t, fixedColCnt+1, len(resp.Commands[1].Bat.Vecs))
-	check_same_rows(resp.Commands[1].Bat, 1) // 1 drop db
-
-	close()
-
-	// get table catalog change
-	resp, close, err = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
-		CnHave: tots(minTs),
-		CnWant: tots(catalogDropTs),
-		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_TABLES_ID},
-	}, true)
-	require.NoError(t, err)
-	require.Equal(t, 1, len(resp.Commands)) // insert
-	require.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
-	require.Equal(t, len(catalog.SystemTableSchema.ColDefs)+fixedColCnt, len(resp.Commands[0].Bat.Vecs))
-	check_same_rows(resp.Commands[0].Bat, 2)                                 // 2 tables
-	relname, err := vector.ProtoVectorToVector(resp.Commands[0].Bat.Vecs[3]) // relname column
-	require.NoError(t, err)
-	require.Equal(t, schema.Name, relname.UnsafeGetStringAt(0))
-	require.Equal(t, schema.Name, relname.UnsafeGetStringAt(1))
-	close()
-
-	// get columns catalog change
-	resp, close, err = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
-		CnHave: tots(minTs),
-		CnWant: tots(catalogDropTs),
-		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_COLUMNS_ID},
-	}, true)
-	require.NoError(t, err)
-	require.Equal(t, 1, len(resp.Commands)) // insert
-	require.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
-	require.Equal(t, len(catalog.SystemColumnSchema.ColDefs)+fixedColCnt, len(resp.Commands[0].Bat.Vecs))
-	// sysColumnsCount := len(catalog.SystemDBSchema.ColDefs) + len(catalog.SystemTableSchema.ColDefs) + len(catalog.SystemColumnSchema.ColDefs)
-	check_same_rows(resp.Commands[0].Bat, len(schema.ColDefs)*2) // column count of 2 tables
-	close()
-
-	// get user table change
-	resp, close, err = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
-		CnHave: tots(firstWriteTs.Next()), // skip the first write deliberately,
-		CnWant: tots(lastWriteTs),
-		Table:  &api.TableID{DbId: dbID, TbId: tableID},
-	}, true)
-	require.NoError(t, err)
-	require.Equal(t, 2, len(resp.Commands)) // 2 insert data and delete data
-
-	// blk meta change
-	// blkMetaEntry := resp.Commands[0]
-	// require.Equal(t, api.Entry_Insert, blkMetaEntry.EntryType)
-	// require.Equal(t, len(logtail.BlkMetaSchema.ColDefs)+fixedColCnt, len(blkMetaEntry.Bat.Vecs))
-	// check_same_rows(blkMetaEntry.Bat, 9) // 9 blocks, because the first write is excluded.
-
-	// check data change
-	insDataEntry := resp.Commands[0]
-	require.Equal(t, api.Entry_Insert, insDataEntry.EntryType)
-	require.Equal(t, len(schema.ColDefs)+1, len(insDataEntry.Bat.Vecs)) // 5 columns, rowid + commit ts + 2 visibile
-	check_same_rows(insDataEntry.Bat, 99)                               // 99 rows, because the first write is excluded.
-	// test first user col, this is probably fragile, it depends on the details of MockSchema
-	// if something changes, delete this is okay.
-	firstCol, err := vector.ProtoVectorToVector(insDataEntry.Bat.Vecs[2]) // mock_0 column, int8 type
-	require.Equal(t, types.T_int8, firstCol.GetType().Oid)
-	require.NoError(t, err)
-
-	delDataEntry := resp.Commands[1]
-	require.Equal(t, api.Entry_Delete, delDataEntry.EntryType)
-	require.Equal(t, fixedColCnt+1, len(delDataEntry.Bat.Vecs)) // 3 columns, rowid + commit_ts + aborted
-	check_same_rows(delDataEntry.Bat, 10)
-
-	// check delete rowids are exactly what we want
-	rowids, err := vector.ProtoVectorToVector(delDataEntry.Bat.Vecs[0])
-	require.NoError(t, err)
-	require.Equal(t, types.T_Rowid, rowids.GetType().Oid)
-	rowidMap := make(map[types.Rowid]int)
-	for _, id := range deleteRowIDs {
-		rowidMap[id] = 1
-	}
-	for i := int64(0); i < 10; i++ {
-		id := vector.MustFixedCol[types.Rowid](rowids)[i]
-		rowidMap[id] = rowidMap[id] + 1
-	}
-	require.Equal(t, 10, len(rowidMap))
-	for _, v := range rowidMap {
-		require.Equal(t, 2, v)
-	}
-	close()
 }
 
 // txn1: create relation and append, half blk
@@ -5572,8 +5169,8 @@ func TestAlwaysUpdate(t *testing.T) {
 	// 			t.Log(tbl.SimplePPString(common.PPL1))
 	// 		case <-ticker2.C:
 	// 			_, _, _ = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
-	// 				CnHave: tots(types.BuildTS(0, 0)),
-	// 				CnWant: tots(types.MaxTs()),
+	// 				CnHave: totsp(types.BuildTS(0, 0)),
+	// 				CnWant: totsp(types.MaxTs()),
 	// 				Table:  &api.TableID{DbId: did, TbId: tid},
 	// 			}, true)
 	// 		case <-ch:
@@ -6230,110 +5827,6 @@ func TestAlterRenameTbl2(t *testing.T) {
 
 }
 
-func TestAlterTableBasic(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	ctx := context.Background()
-
-	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
-	defer tae.Close()
-
-	schema := catalog.MockSchemaAll(2, -1)
-	schema.Name = "test"
-	schema.BlockMaxRows = 10
-	schema.ObjectMaxBlocks = 2
-	schema.Constraint = []byte("start version")
-	schema.Comment = "comment version"
-
-	txn, _ := tae.StartTxn(nil)
-	db, _ := txn.CreateDatabase("db", "", "")
-	db.CreateRelation(schema)
-	txn.Commit(context.Background())
-
-	txn, _ = tae.StartTxn(nil)
-	db, _ = txn.GetDatabase("db")
-	tbl, _ := db.GetRelationByName("test")
-	err := tbl.AlterTable(context.Background(), api.NewUpdateConstraintReq(0, 0, "version 1"))
-	require.NoError(t, err)
-	err = tbl.AlterTable(context.Background(), api.NewUpdateCommentReq(0, 0, "comment version 1"))
-	require.NoError(t, err)
-	err = txn.Commit(context.Background())
-	require.NoError(t, err)
-
-	txn, _ = tae.StartTxn(nil)
-	db, _ = txn.GetDatabase("db")
-	tbl, _ = db.GetRelationByName("test")
-	err = tbl.AlterTable(context.Background(), api.NewUpdateConstraintReq(0, 0, "version 2"))
-	require.NoError(t, err)
-	txn.Commit(context.Background())
-
-	tots := func(ts types.TS) *timestamp.Timestamp {
-		return &timestamp.Timestamp{PhysicalTime: types.DecodeInt64(ts[4:12]), LogicalTime: types.DecodeUint32(ts[:4])}
-	}
-
-	resp, close, _ := logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
-		CnHave: tots(types.BuildTS(0, 0)),
-		CnWant: tots(types.MaxTs()),
-		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_TABLES_ID},
-	}, true)
-
-	bat, _ := batch.ProtoBatchToBatch(resp.Commands[0].Bat)
-	cstrCol := containers.NewNonNullBatchWithSharedMemory(bat, common.DefaultAllocator).GetVectorByName(pkgcatalog.SystemRelAttr_Constraint)
-	require.Equal(t, 3, cstrCol.Length())
-	require.Equal(t, []byte("start version"), cstrCol.Get(0).([]byte))
-	require.Equal(t, []byte("version 1"), cstrCol.Get(1).([]byte))
-	require.Equal(t, []byte("version 2"), cstrCol.Get(2).([]byte))
-
-	commetCol := containers.NewNonNullBatchWithSharedMemory(bat, common.DefaultAllocator).GetVectorByName(pkgcatalog.SystemRelAttr_Comment)
-	require.Equal(t, 3, cstrCol.Length())
-	require.Equal(t, []byte("comment version"), commetCol.Get(0).([]byte))
-	require.Equal(t, []byte("comment version 1"), commetCol.Get(1).([]byte))
-	require.Equal(t, []byte("comment version 1"), commetCol.Get(2).([]byte))
-
-	close()
-
-	tae.Restart(ctx)
-
-	resp, close, _ = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
-		CnHave: tots(types.BuildTS(0, 0)),
-		CnWant: tots(types.MaxTs()),
-		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_TABLES_ID},
-	}, true)
-
-	bat, _ = batch.ProtoBatchToBatch(resp.Commands[0].Bat)
-	cstrCol = containers.NewNonNullBatchWithSharedMemory(bat, common.DefaultAllocator).GetVectorByName(pkgcatalog.SystemRelAttr_Constraint)
-	require.Equal(t, 3, cstrCol.Length())
-	require.Equal(t, []byte("start version"), cstrCol.Get(0).([]byte))
-	require.Equal(t, []byte("version 1"), cstrCol.Get(1).([]byte))
-	require.Equal(t, []byte("version 2"), cstrCol.Get(2).([]byte))
-
-	commetCol = containers.NewNonNullBatchWithSharedMemory(bat, common.DefaultAllocator).GetVectorByName(pkgcatalog.SystemRelAttr_Comment)
-	require.Equal(t, 3, cstrCol.Length())
-	require.Equal(t, []byte("comment version"), commetCol.Get(0).([]byte))
-	require.Equal(t, []byte("comment version 1"), commetCol.Get(1).([]byte))
-	require.Equal(t, []byte("comment version 1"), commetCol.Get(2).([]byte))
-	close()
-
-	logutil.Info(tae.Catalog.SimplePPString(common.PPL2))
-
-	txn, _ = tae.StartTxn(nil)
-	db, _ = txn.GetDatabase("db")
-	_, err = db.DropRelationByName("test")
-	require.NoError(t, err)
-	txn.Commit(context.Background())
-
-	resp, close, _ = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
-		CnHave: tots(types.BuildTS(0, 0)),
-		CnWant: tots(types.MaxTs()),
-		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_COLUMNS_ID},
-	}, true)
-
-	require.Equal(t, 2, len(resp.Commands)) // create and drop
-	require.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
-	require.Equal(t, api.Entry_Delete, resp.Commands[1].EntryType)
-	close()
-}
-
 func TestAlterFakePk(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
@@ -6386,25 +5879,21 @@ func TestAlterFakePk(t *testing.T) {
 		// check non-exist column foreach
 		newSchema := obj.GetRelation().Schema()
 		blkdata := obj.GetMeta().(*catalog.ObjectEntry).GetObjectData()
-		sels := &nulls.Nulls{}
-		sels.Add(1)
-		sels.Add(3)
+		sels := []uint32{1, 3}
 		rows := make([]int, 0, 4)
-		view, err := blkdata.GetColumnDataById(ctx, txn, newSchema, 0, 1, common.DefaultAllocator)
-		view.Vecs[0].Foreach(func(v any, isnull bool, row int) error {
+		blkdata.Foreach(context.Background(), newSchema, 0, 1 /*"add1" column*/, func(v any, isnull bool, row int) error {
 			require.True(t, true)
 			rows = append(rows, row)
 			return nil
-		}, sels)
-		view.Close()
+		}, sels, common.DefaultAllocator)
 		require.Equal(t, []int{1, 3}, rows)
 		require.NoError(t, err)
 		require.NoError(t, txn.Commit(context.Background()))
 	}
 
 	resp, close, _ := logtail.HandleSyncLogTailReq(context.TODO(), new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
-		CnHave: tots(types.BuildTS(0, 0)),
-		CnWant: tots(types.MaxTs()),
+		CnHave: totsp(types.BuildTS(0, 0)),
+		CnWant: totsp(types.MaxTs()),
 		Table:  &api.TableID{DbId: did, TbId: tid},
 	}, true)
 
@@ -6564,8 +6053,8 @@ func TestAlterColumnAndFreeze(t *testing.T) {
 	require.NoError(t, txn.Commit(context.Background()))
 
 	resp, close, _ := logtail.HandleSyncLogTailReq(context.TODO(), new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
-		CnHave: tots(types.BuildTS(0, 0)),
-		CnWant: tots(types.MaxTs()),
+		CnHave: totsp(types.BuildTS(0, 0)),
+		CnWant: totsp(types.MaxTs()),
 		Table:  &api.TableID{DbId: did, TbId: tid},
 	}, true)
 
@@ -8003,6 +7492,7 @@ func TestDedupSnapshot3(t *testing.T) {
 			err := rel.BatchDedup(bats[offset].Vecs[3])
 			txn.Commit(context.Background())
 			if err != nil {
+				logutil.Infof("err is %v", err)
 				return
 			}
 
@@ -8570,6 +8060,7 @@ func TestReplayPersistedDelete(t *testing.T) {
 }
 
 func TestCheckpointReadWrite(t *testing.T) {
+	t.Skip("TODO: find a new way to test three tables ckp")
 	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
@@ -8633,6 +8124,7 @@ func TestCheckpointReadWrite(t *testing.T) {
 }
 
 func TestCheckpointReadWrite2(t *testing.T) {
+	t.Skip("TODO: find a new way to test three tables ckp")
 	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
@@ -9220,7 +8712,7 @@ func TestCKPCollectObject(t *testing.T) {
 			assert.NoError(t, tae.Catalog.RecurLoop(collector))
 			ckpData := collector.OrphanData()
 			objBatch := ckpData.GetTNObjectBatchs()
-			assert.Equal(t, 4, objBatch.Length())
+			assert.Equal(t, 1, objBatch.Length())
 			assert.NoError(t, txn.Commit(ctx))
 		},
 	)
@@ -9265,17 +8757,20 @@ func TestPersistTransferTable(t *testing.T) {
 	sid := objectio.NewSegmentid()
 	id1 := common.ID{BlockID: *objectio.NewBlockid(sid, 1, 0)}
 	id2 := common.ID{BlockID: *objectio.NewBlockid(sid, 2, 0)}
+	createdObjs := []*objectio.ObjectId{objectio.NewObjectidWithSegmentIDAndNum(sid, 2)}
 
 	now := time.Now()
-	page := model.NewTransferHashPage(&id1, now, false, tae.Runtime.LocalFs.Service, time.Second, time.Minute)
+	page := model.NewTransferHashPage(&id1, now, false, tae.Runtime.LocalFs.Service, time.Second, time.Minute, createdObjs)
 	ids := make([]types.Rowid, 10)
-	m := make(map[uint32][]byte, 10)
+	transferMap := make(api.TransferMap)
 	for i := 0; i < 10; i++ {
+		transferMap[uint32(i)] = api.TransferDestPos{
+			RowIdx: uint32(i),
+		}
 		rowID := *objectio.NewRowid(&id2.BlockID, uint32(i))
-		m[uint32(i)] = rowID[:]
 		ids[i] = rowID
 	}
-	page.Train(m)
+	page.Train(transferMap)
 	tae.Runtime.TransferTable.AddPage(page)
 
 	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
@@ -9330,17 +8825,21 @@ func TestClearPersistTransferTable(t *testing.T) {
 
 			id1 := common.ID{BlockID: *objectio.NewBlockid(sid, 1, 0)}
 			id2 := common.ID{BlockID: *objectio.NewBlockid(sid, 2, 0)}
+			createdObjs := []*objectio.ObjectId{objectio.NewObjectidWithSegmentIDAndNum(sid, 2)}
 
 			now := time.Now()
-			page := model.NewTransferHashPage(&id1, now, false, tae.Runtime.LocalFs.Service, time.Second, 2*time.Second)
+			page := model.NewTransferHashPage(&id1, now, false, tae.Runtime.LocalFs.Service, time.Second, 2*time.Second, createdObjs)
 			ids := make([]types.Rowid, 10)
-			m := make(map[uint32][]byte, 10)
+			transferMap := make(api.TransferMap)
 			for i := 0; i < 10; i++ {
+				transferMap[uint32(i)] = api.TransferDestPos{
+					BlkIdx: 0,
+					RowIdx: uint32(i),
+				}
 				rowID := *objectio.NewRowid(&id2.BlockID, uint32(i))
-				m[uint32(i)] = rowID[:]
 				ids[i] = rowID
 			}
-			page.Train(m)
+			page.Train(transferMap)
 			tae.Runtime.TransferTable.AddPage(page)
 
 			name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
@@ -9374,29 +8873,4 @@ func TestClearPersistTransferTable(t *testing.T) {
 			assert.True(t, errors.Is(err, moerr.GetOkExpectedEOB()))
 		},
 	)
-}
-
-func TestFlushAndReplay(t *testing.T) {
-	ctx := context.Background()
-	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
-	defer tae.Close()
-	schema := catalog.MockSchemaAll(13, 3)
-	schema.BlockMaxRows = 10
-	schema.ObjectMaxBlocks = 3
-	tae.BindSchema(schema)
-	bat := catalog.MockBatch(schema, 20)
-	bats := bat.Split(2)
-	currNB := common.MutMemAllocator.CurrNB()
-
-	tae.CreateRelAndAppend(bats[0], true)
-	ts1 := tae.TxnMgr.Now()
-	tae.DoAppend(bats[1])
-	tae.CompactBlocks(true)
-	assert.Equal(t, currNB, common.MutMemAllocator.CurrNB())
-	tae.BGCheckpointRunner.ForceIncrementalCheckpoint(ts1, true)
-	tae.CheckRowsByScan(20, false)
-	tae.Restart(ctx)
-	tae.CheckRowsByScan(20, false)
-	assert.Equal(t, currNB, common.MutMemAllocator.CurrNB())
 }

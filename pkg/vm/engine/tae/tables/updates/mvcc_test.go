@@ -16,7 +16,6 @@ package updates
 
 import (
 	"context"
-	"sync"
 	"testing"
 	"time"
 
@@ -36,7 +35,7 @@ func TestMutationControllerAppend(t *testing.T) {
 	db, _ := c.CreateDBEntry("db", "", "", nil)
 	table, _ := db.CreateTableEntry(schema, nil, nil)
 	obj, _ := table.CreateObject(nil, catalog.ES_Appendable, nil, nil)
-	mc := NewAppendMVCCHandle(obj, &sync.RWMutex{}, 0)
+	mc := NewAppendMVCCHandle(obj)
 
 	nodeCnt := 10000
 	rowsPerNode := uint32(5)
@@ -91,7 +90,7 @@ func TestGetVisibleRow(t *testing.T) {
 	db, _ := c.CreateDBEntry("db", "", "", nil)
 	table, _ := db.CreateTableEntry(schema, nil, nil)
 	obj, _ := table.CreateObject(nil, catalog.ES_Appendable, nil, nil)
-	n := NewAppendMVCCHandle(obj, &sync.RWMutex{}, 0)
+	n := NewAppendMVCCHandle(obj)
 	an1, _ := n.AddAppendNodeLocked(nil, 0, 1)
 	an1.Start = types.BuildTS(1, 0)
 	an1.Prepare = types.BuildTS(1, 0)

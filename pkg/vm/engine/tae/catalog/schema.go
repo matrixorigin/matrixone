@@ -130,7 +130,6 @@ type Schema struct {
 	BlockMaxRows uint32
 	// for aobj, there're at most one blk
 	ObjectMaxBlocks uint16
-	AObjectMaxSize  int
 	Extra           *apipb.SchemaExtra
 
 	// do not write down, reconstruct them when reading
@@ -143,13 +142,16 @@ type Schema struct {
 }
 
 func NewEmptySchema(name string) *Schema {
-	return &Schema{
+	schema := &Schema{
 		Name:      name,
 		ColDefs:   make([]*ColDef, 0),
 		NameMap:   make(map[string]int),
 		SeqnumMap: make(map[uint16]int),
 		Extra:     &apipb.SchemaExtra{},
 	}
+	schema.BlockMaxRows = options.DefaultBlockMaxRows
+	schema.ObjectMaxBlocks = options.DefaultBlocksPerObject
+	return schema
 }
 
 func (s *Schema) Clone() *Schema {
@@ -318,7 +320,6 @@ func (s *Schema) getFakePrimaryKey() *ColDef {
 	idx, ok := s.NameMap[pkgcatalog.FakePrimaryKeyColName]
 	if !ok {
 		// should just call logutil.Fatal
-		logutil.Debugf("fake primary key not existed: %v", s.String())
 		panic("fake primary key not existed")
 	}
 	return s.ColDefs[idx]
@@ -330,6 +331,14 @@ func (s *Schema) GetPrimaryKey() *ColDef {
 		return s.ColDefs[s.SortKey.GetSingleIdx()]
 	}
 	return s.getFakePrimaryKey()
+}
+
+func (s *Schema) HasPKOrFakePK() bool {
+	if s.HasPK() {
+		return true
+	}
+	_, ok := s.NameMap[pkgcatalog.FakePrimaryKeyColName]
+	return ok
 }
 
 func (s *Schema) MustGetExtraBytes() []byte {
@@ -858,15 +867,6 @@ func (s *Schema) Finalize(withoutPhyAddr bool) (err error) {
 	if s == nil {
 		err = moerr.NewConstraintViolationNoCtx("no schema")
 		return
-	}
-	if s.BlockMaxRows == 0 {
-		s.BlockMaxRows = options.DefaultBlockMaxRows
-	}
-	if s.ObjectMaxBlocks == 0 {
-		s.ObjectMaxBlocks = options.DefaultObjectPerSegment
-	}
-	if s.AObjectMaxSize == 0 {
-		s.AObjectMaxSize = options.DefaultAObjectMaxSize
 	}
 	if !withoutPhyAddr {
 		phyAddrDef := &ColDef{

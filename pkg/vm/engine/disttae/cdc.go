@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 )
@@ -31,6 +32,7 @@ func NewCdcEngine(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 	etlFs fileservice.FileService,
+	cli client.TxnClient,
 ) *CdcEngine {
 	cdcEng := &CdcEngine{
 		service: service,
@@ -48,6 +50,7 @@ func NewCdcEngine(
 				packer.Close()
 			},
 		),
+		cli: cli,
 	}
 
 	if err := cdcEng.init(ctx); err != nil {
@@ -75,13 +78,13 @@ func (cdcEng *CdcEngine) GetOrCreateLatestPart(databaseId uint64, tableId uint64
 	defer cdcEng.Unlock()
 	partition, ok := cdcEng.partitions[[2]uint64{databaseId, tableId}]
 	if !ok { // create a new table
-		partition = logtailreplay.NewPartition(cdcEng.service)
+		partition = logtailreplay.NewPartition(cdcEng.service, tableId)
 		cdcEng.partitions[[2]uint64{databaseId, tableId}] = partition
 	}
 	return partition
 }
 
-func (cdcEng *CdcEngine) getLatestCatalogCache() *cache.CatalogCache {
+func (cdcEng *CdcEngine) GetLatestCatalogCache() *cache.CatalogCache {
 	return cdcEng.catalog
 }
 
@@ -123,4 +126,12 @@ func (cdcEng *CdcEngine) cleanMemoryTableWithTable(dbId, tblId uint64) {
 
 func (cdcEng *CdcEngine) PushClient() *PushClient {
 	return &cdcEng.pClient
+}
+
+func (cdcEng *CdcEngine) Cli() client.TxnClient {
+	return cdcEng.cli
+}
+
+func (cdcEng *CdcEngine) New(ctx context.Context, op client.TxnOperator) error {
+	panic("usp")
 }

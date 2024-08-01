@@ -55,6 +55,10 @@ func consumeEntry(
 		return nil
 	}
 
+	if !engine.PushClient().receivedLogTailTime.ready.Load() {
+		return nil
+	}
+
 	t0 := time.Now()
 	if e.EntryType == api.Entry_Insert {
 		switch e.TableId {
@@ -80,13 +84,13 @@ func consumeEntry(
 
 	switch e.TableId {
 	case catalog.MO_TABLES_ID:
-		bat, _ := batch.ProtoBatchToBatch(e.Bat)
-		if cache != nil {
+		if cache != nil && !logtailreplay.IsTransferredDels(e.TableName) {
+			bat, _ := batch.ProtoBatchToBatch(e.Bat)
 			cache.DeleteTable(bat)
 		}
 	case catalog.MO_DATABASE_ID:
-		bat, _ := batch.ProtoBatchToBatch(e.Bat)
-		if cache != nil {
+		if cache != nil && !logtailreplay.IsTransferredDels(e.TableName) {
+			bat, _ := batch.ProtoBatchToBatch(e.Bat)
 			cache.DeleteDatabase(bat)
 		}
 	}

@@ -427,6 +427,7 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 	// probability 1: it's a JOIN pipeline.
 	case s.IsJoin:
 		parallelScope, err = buildJoinParallelRun(s, c)
+		//fmt.Println(DebugShowScopes([]*Scope{parallelScope}))
 
 	// probability 2: it's a LOAD pipeline.
 	case s.IsLoad:
@@ -435,6 +436,7 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 	// probability 3: it's a SCAN pipeline.
 	case s.DataSource != nil:
 		parallelScope, err = buildScanParallelRun(s, c)
+		//fmt.Println(DebugShowScopes([]*Scope{parallelScope}))
 
 	// others.
 	default:
@@ -462,11 +464,7 @@ func buildJoinParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	if mcpu <= 1 { // no need to parallel
 		buildScope := c.newJoinBuildScope(s, 1)
 		s.PreScopes = append(s.PreScopes, buildScope)
-		if s.BuildIdx > 1 {
-			probeScope := c.newShuffleJoinProbeScope(s)
-			s.PreScopes = append(s.PreScopes, probeScope)
-		}
-		s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:1]
+		s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:s.BuildIdx]
 		return s, nil
 	}
 
@@ -495,7 +493,7 @@ func buildJoinParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		channel := make(chan *bitmap.Bitmap, mcpu)
 		for i := range ns.PreScopes {
 			s := ns.PreScopes[i]
-			switch arg := vm.GetLeafOp(s.RootOp).(type) {
+			switch arg := vm.GetLeafOpParent(nil, s.RootOp).(type) {
 			case *right.RightJoin:
 				arg.Channel = channel
 				arg.NumCPU = uint64(mcpu)
@@ -731,7 +729,7 @@ func (s *Scope) isRight() bool {
 	if s == nil {
 		return false
 	}
-	OpType := vm.GetLeafOp(s.RootOp).OpType()
+	OpType := vm.GetLeafOpParent(nil, s.RootOp).OpType()
 	return OpType == vm.Right || OpType == vm.RightSemi || OpType == vm.RightAnti
 }
 
