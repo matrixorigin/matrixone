@@ -549,11 +549,15 @@ func TestAggregator_PopResultsBeforeWindow(t *testing.T) {
 		}
 	}
 
-	// Get results from aggregator
-	results := aggregator.PopResultsBeforeWindow(time.Now().Truncate(aggrWindow))
+	// Get results from aggregator, which in long ago window
+	results := aggregator.PopResultsBeforeWindow(time.Now().Add(-time.Hour).Truncate(aggrWindow))
+	require.Equalf(t, 0, len(results), "Expected 0 aggregated statements: but got: %d", len(results))
+	require.Equalf(t, 1, len(aggregator.Grouped), "Expected 1 left in aggregator, but got: %d", len(aggregator.Grouped))
 
-	// Test expected behavior
+	// Get results from aggregator
+	results = aggregator.PopResultsBeforeWindow(time.Now().Truncate(aggrWindow))
 	require.Equal(t, len(results), 1, "Expected 1 aggregated statements")
+	require.Equalf(t, 0, len(aggregator.Grouped), "Expected 0 left in aggregator, but got: %d", len(aggregator.Grouped))
 
 	assert.Equal(t, "SELECT 11;\nSELECT 11", results[0].(*StatementInfo).StmtBuilder.String())
 

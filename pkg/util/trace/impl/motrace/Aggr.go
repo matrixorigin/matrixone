@@ -88,7 +88,7 @@ func (a *Aggregator) AddItem(i table.Item) (table.Item, error) {
 // Needs co-operate with Close
 func (a *Aggregator) GetResults() []table.Item {
 	a.mux.Lock()
-	defer a.mux.Lock()
+	defer a.mux.Unlock()
 	results := make([]table.Item, 0, len(a.Grouped))
 	for _, group := range a.Grouped {
 		results = append(results, group)
@@ -102,7 +102,7 @@ func (a *Aggregator) GetWindow() time.Duration { return a.WindowSize }
 // Those items need to be free-ed after calling by caller.
 func (a *Aggregator) PopResultsBeforeWindow(end time.Time) []table.Item {
 	a.mux.Lock()
-	defer a.mux.Lock()
+	defer a.mux.Unlock()
 	results := make([]table.Item, 0, len(a.Grouped))
 	for key, group := range a.Grouped {
 		if key.Before(end) {
