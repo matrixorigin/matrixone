@@ -4434,7 +4434,7 @@ func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelD
 			minWorkLoad = nodes[i].Data.DataCnt() / objectio.BlockInfoSizeInProgress
 		}
 		if nodes[i].Data.DataCnt() > 0 {
-			if i != 0 {
+			if nodes[i].Addr != c.addr {
 				tombstone, err := collectTombstones(c, n, rel)
 				if err != nil {
 					return nil, err

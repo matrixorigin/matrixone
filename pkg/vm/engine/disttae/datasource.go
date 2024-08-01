@@ -638,7 +638,7 @@ func (rs *RemoteDataSource) Next(
 }
 
 func (rs *RemoteDataSource) Close() {
-
+	rs.cursor = 0
 }
 
 func (rs *RemoteDataSource) applyInMemTombstones(
