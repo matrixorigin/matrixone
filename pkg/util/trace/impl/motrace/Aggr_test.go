@@ -357,6 +357,82 @@ func TestAggregatorWithStmtMerge(t *testing.T) {
 
 }
 
+func TestAggregator_DisableAgg(t *testing.T) {
+	type fields struct {
+		elems int
+	}
+	tests := []struct {
+		name   string
+		fields fields
+		//want   []Item
+	}{
+		{
+			name:   "normal",
+			fields: fields{elems: 5},
+		},
+		{
+			name:   "normal_100",
+			fields: fields{elems: 100},
+		},
+	}
+
+	const aggrWindow = 5 * time.Second
+
+	var err error
+	var sessionId = [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x1}
+	var ctx = context.TODO()
+	// Aggregate some Select
+	var fixedTime = time.Date(2023, time.June, 10, 12, 0, 1, 0, time.UTC)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+
+			aggregator := NewAggregator(
+				ctx,
+				aggrWindow,
+				StatementInfoNew,
+				StatementInfoUpdate,
+				StatementInfoFilter,
+			)
+
+			var stmts []*StatementInfo
+			for i := 0; i < tt.fields.elems; i++ {
+				stmt := &StatementInfo{
+					Account:       "MO",
+					User:          "moroot",
+					Database:      "system",
+					StatementType: "Select",
+					SqlSourceType: "external_sql",
+					SessionID:     sessionId,
+					Statement:     "SELECT 11",
+					ResponseAt:    fixedTime,
+					RequestAt:     fixedTime.Add(-10 * time.Millisecond),
+					Duration:      10 * time.Millisecond,
+					TransactionID: _1TxnID,
+					StatementID:   _1StmtID,
+					Status:        StatementStatusSuccess,
+					ExecPlan:      NewDummySerializableExecPlan(map[string]string{"key": "val"}, dummySerializeExecPlan, uuid.UUID(_2TraceID)),
+					/* ****************** */
+					// THE Key param.
+					disableAgg: true,
+					/* ****************** */
+				}
+				stmts = append(stmts, stmt)
+				_, err = aggregator.AddItem(stmt)
+				require.Equal(t, err, ErrFilteredOut)
+			}
+
+			// Get results from aggregator
+			// Check all records' exported value.
+			results := aggregator.GetResults()
+			require.Equal(t, 0, len(results))
+			for i := 1; i < tt.fields.elems; i++ {
+				require.Equal(t, false, stmts[i].exported)
+			}
+		})
+	}
+}
+
 func TestAggregator_MarkExported(t *testing.T) {
 	type fields struct {
 		elems int
