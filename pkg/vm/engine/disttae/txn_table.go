@@ -2608,7 +2608,7 @@ func dumpTransferMaps(ctx context.Context, taskHost *cnMergeTask) error {
 			objRowCnt++
 
 			if objRowCnt*len(columns)*int(unsafe.Sizeof(int32(0))) > 200*mpool.MB {
-				filename := blockio.EncodeTmpFileName("tmp", "merge", time.Now().UTC().Unix())
+				filename := blockio.EncodeTmpFileName("tmp", "merge", time.Now().UTC().UnixMilli())
 				writer, err := objectio.NewObjectWriterSpecial(objectio.WriterTmp, filename, taskHost.fs)
 				if err != nil {
 					return err
