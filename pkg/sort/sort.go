@@ -291,6 +291,17 @@ func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector) {
 		} else {
 			genericSort(col, os, blockidGreater)
 		}
+	case types.T_json:
+		data, area := vector.MustVarlenaRawData(vec)
+		col := struct {
+			data []types.Varlena
+			area []byte
+		}{data: data, area: area}
+		if !desc {
+			genericSort(col, os, varlenaLess)
+		} else {
+			genericSort(col, os, varlenaGreater)
+		}
 	}
 }
 
