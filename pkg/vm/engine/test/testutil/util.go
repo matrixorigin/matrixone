@@ -255,7 +255,7 @@ func (p *EnginePack) CreateDB(txnop client.TxnOperator, dbname string) engine.Da
 	return db
 }
 
-func (p *EnginePack) CreateDBAndTables(txnop client.TxnOperator, dbname string, schema ...*catalog2.Schema) (engine.Database, []engine.Relation) {
+func (p *EnginePack) CreateDBAndTables(txnop client.TxnOperator, dbname string, schema ...*catalog.Schema) (engine.Database, []engine.Relation) {
 	db := p.CreateDB(txnop, dbname)
 	rels := make([]engine.Relation, 0, len(schema))
 	for _, s := range schema {
