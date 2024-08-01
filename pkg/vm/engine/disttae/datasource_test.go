@@ -69,6 +69,7 @@ func TestRelationDataV1_MarshalAndUnMarshal(t *testing.T) {
 	}
 
 	tombstoner := buildTombstoner()
+	t.Log(tombstoner.String())
 
 	relData.AttachTombstones(tombstoner)
 	buf, err := relData.MarshalBinary()

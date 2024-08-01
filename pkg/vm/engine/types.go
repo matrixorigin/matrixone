@@ -580,6 +580,7 @@ const (
 
 type Tombstoner interface {
 	Type() TombstoneType
+	String() string
 
 	HasTombstones() bool
 

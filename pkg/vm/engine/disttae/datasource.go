@@ -17,6 +17,7 @@ package disttae
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"slices"
 	"sort"
 
@@ -59,6 +60,29 @@ func buildTombstoneWithDeltaLoc() *tombstoneDataWithDeltaLoc {
 		blk2UncommitLoc: make(map[types.Blockid][]objectio.Location),
 		blk2CommitLoc:   make(map[types.Blockid]logtailreplay.BlockDeltaInfo),
 	}
+}
+
+func (tomb *tombstoneDataWithDeltaLoc) String() string {
+	return tomb.StringWithPrefix("")
+}
+
+func (tomb *tombstoneDataWithDeltaLoc) StringWithPrefix(prefix string) string {
+	var w bytes.Buffer
+	w.WriteString(fmt.Sprintf("%sTombstone[%d]<\n", prefix, tomb.typ))
+	w.WriteString(fmt.Sprintf("\t%sInMemTombstones: \n", prefix))
+	for bid, offsets := range tomb.inMemTombstones {
+		w.WriteString(fmt.Sprintf("\t\t%sblk:%s, offsets:%v\n", prefix, bid.String(), offsets))
+	}
+	w.WriteString(fmt.Sprintf("\t%sBlk2UncommitLoc: \n", prefix))
+	for bid, locs := range tomb.blk2UncommitLoc {
+		w.WriteString(fmt.Sprintf("\t\t%sblk:%s, locs:%v\n", prefix, bid.String(), locs))
+	}
+	w.WriteString(fmt.Sprintf("\t%sBlk2CommitLoc: \n", prefix))
+	for bid, loc := range tomb.blk2CommitLoc {
+		w.WriteString(fmt.Sprintf("\t\t%sblk:%s, loc:%v, cts:%d\n", prefix, bid.String(), loc.Loc, loc.Cts))
+	}
+	w.WriteString(fmt.Sprintf("%s>\n", prefix))
+	return w.String()
 }
 
 func (tomb *tombstoneDataWithDeltaLoc) HasTombstones() bool {
