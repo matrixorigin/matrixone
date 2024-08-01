@@ -173,7 +173,6 @@ func (external *External) Free(proc *process.Process, pipelineFailed bool, err e
 		allocSize += external.Projection.MaxAllocSize
 		external.Projection.Free(proc)
 		external.Projection = nil
-		external.ProjectList = nil
 	}
 	anal.Alloc(allocSize)
 }

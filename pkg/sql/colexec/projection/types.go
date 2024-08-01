@@ -71,6 +71,5 @@ func (projection *Projection) Free(proc *process.Process, pipelineFailed bool, e
 		anal.Alloc(int64(projection.Proj.MaxAllocSize))
 		projection.Proj.Free(proc)
 		projection.Proj = nil
-		projection.ProjectList = nil
 	}
 }

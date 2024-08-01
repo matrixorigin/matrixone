@@ -178,7 +178,6 @@ func (group *Group) Free(proc *process.Process, pipelineFailed bool, err error) 
 		anal.Alloc(group.Projection.MaxAllocSize)
 		group.Projection.Free(proc)
 		group.Projection = nil
-		group.ProjectList = nil
 	}
 }
 

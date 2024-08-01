@@ -127,7 +127,6 @@ func (fill *Fill) Free(proc *process.Process, pipelineFailed bool, err error) {
 		anal.Alloc(fill.Projection.MaxAllocSize)
 		fill.Projection.Free(proc)
 		fill.Projection = nil
-		fill.ProjectList = nil
 	}
 }
 

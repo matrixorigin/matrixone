@@ -86,6 +86,5 @@ func (valueScan *ValueScan) Free(proc *process.Process, pipelineFailed bool, err
 	if valueScan.Projection != nil {
 		valueScan.Projection.Free(proc)
 		valueScan.Projection = nil
-		valueScan.ProjectList = nil
 	}
 }

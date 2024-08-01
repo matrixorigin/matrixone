@@ -120,7 +120,6 @@ func (mergeGroup *MergeGroup) Free(proc *process.Process, pipelineFailed bool, e
 		anal.Alloc(mergeGroup.Projection.MaxAllocSize)
 		mergeGroup.Projection.Free(proc)
 		mergeGroup.Projection = nil
-		mergeGroup.ProjectList = nil
 	}
 }
 

@@ -398,7 +398,6 @@ func (c *Compile) run(s *Scope) error {
 	if s == nil {
 		return nil
 	}
-	fmt.Println(DebugShowScopes([]*Scope{s}))
 	switch s.Magic {
 	case Normal:
 		defer c.fillAnalyzeInfo()

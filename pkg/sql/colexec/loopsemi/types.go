@@ -108,7 +108,6 @@ func (loopSemi *LoopSemi) Free(proc *process.Process, pipelineFailed bool, err e
 		anal.Alloc(loopSemi.Projection.MaxAllocSize)
 		loopSemi.Projection.Free(proc)
 		loopSemi.Projection = nil
-		loopSemi.ProjectList = nil
 	}
 }
 

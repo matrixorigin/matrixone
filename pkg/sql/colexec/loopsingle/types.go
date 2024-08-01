@@ -100,7 +100,6 @@ func (loopSingle *LoopSingle) Free(proc *process.Process, pipelineFailed bool, e
 		anal.Alloc(loopSingle.Projection.MaxAllocSize)
 		loopSingle.Projection.Free(proc)
 		loopSingle.Projection = nil
-		loopSingle.ProjectList = nil
 	}
 }
 

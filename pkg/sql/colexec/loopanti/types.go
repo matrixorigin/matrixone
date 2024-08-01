@@ -107,7 +107,6 @@ func (loopAnti *LoopAnti) Free(proc *process.Process, pipelineFailed bool, err e
 		anal.Alloc(loopAnti.Projection.MaxAllocSize)
 		loopAnti.Projection.Free(proc)
 		loopAnti.Projection = nil
-		loopAnti.ProjectList = nil
 	}
 }
 

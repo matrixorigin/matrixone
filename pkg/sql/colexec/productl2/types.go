@@ -99,7 +99,6 @@ func (productl2 *Productl2) Free(proc *process.Process, pipelineFailed bool, err
 		anal.Alloc(productl2.Projection.MaxAllocSize)
 		productl2.Projection.Free(proc)
 		productl2.Projection = nil
-		productl2.ProjectList = nil
 	}
 }
 

@@ -100,7 +100,6 @@ func (loopMark *LoopMark) Free(proc *process.Process, pipelineFailed bool, err e
 		anal.Alloc(loopMark.Projection.MaxAllocSize)
 		loopMark.Projection.Free(proc)
 		loopMark.Projection = nil
-		loopMark.ProjectList = nil
 	}
 }
 

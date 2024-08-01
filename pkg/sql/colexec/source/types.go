@@ -99,6 +99,5 @@ func (source *Source) Free(proc *process.Process, pipelineFailed bool, err error
 		anal.Alloc(source.Projection.MaxAllocSize)
 		source.Projection.Free(proc)
 		source.Projection = nil
-		source.ProjectList = nil
 	}
 }
