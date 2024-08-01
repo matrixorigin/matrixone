@@ -172,10 +172,6 @@ func (proc *Process) AllocVectorOfRows(typ types.Type, nele int, nsp *nulls.Null
 	return vec, nil
 }
 
-func (proc *Process) WithSpanContext(sc trace.SpanContext) {
-	proc.Ctx = trace.ContextWithSpanContext(proc.Ctx, sc)
-}
-
 func (proc *Process) CopyValueScanBatch(src *Process) {
 	proc.Base.valueScanBatch = src.Base.valueScanBatch
 }
