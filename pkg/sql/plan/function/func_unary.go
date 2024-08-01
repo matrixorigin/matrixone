@@ -1011,7 +1011,7 @@ func Unhex(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 func createGeminiEmbedding(ctx context.Context, input string) ([]float32, error) {
 	//Access your API key as an environment variable (tbd)
 	//Currently, replace the placeholder with yours
-	client, err := genai.NewClient(ctx, option.WithAPIKey("your_gemini_api_key"))
+	client, err := genai.NewClient(ctx, option.WithAPIKey("AIzaSyB1UQ_hzKKmedA5HCcHT9l3JMAW_IyiMh4"))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -1042,8 +1042,8 @@ func createOllamaEmbedding(ctx context.Context, input string) ([]float32, error)
 
 func createErnieEmbedding(ctx context.Context, input string) ([]float64, error) {
 	// set Qianfan's Access Key and Secret Key
-	os.Setenv("QIANFAN_ACCESS_KEY", "")
-	os.Setenv("QIANFAN_SECRET_KEY", "")
+	os.Setenv("QIANFAN_ACCESS_KEY", "772e36c529874893818234746b9dad7d")
+	os.Setenv("QIANFAN_SECRET_KEY", "a0037096e4434e99aa7445ec1917e6d8")
 
 	embed := qianfan.NewEmbedding(
 		qianfan.WithModel("Embedding-V1"),
