@@ -20,6 +20,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
 	"github.com/google/uuid"
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -280,7 +282,7 @@ type Compile struct {
 	// TxnOffset read starting offset position within the transaction during the execute current statement
 	TxnOffset int
 
-	MessageBoard *process.MessageBoard
+	MessageBoard *message.MessageBoard
 
 	cnList engine.Nodes
 	// ast
