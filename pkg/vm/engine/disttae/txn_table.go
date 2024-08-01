@@ -1826,14 +1826,26 @@ func (tbl *txnTable) buildLocalDataSource(
 		if tbl.db.op.IsSnapOp() {
 			txnOffset = tbl.getTxn().GetSnapshotWriteOffset()
 		}
-		source, err = NewLocalDataSource(
-			ctx,
-			tbl,
-			txnOffset,
-			ranges,
-			skipReadMem,
-			policy,
-		)
+
+		if skipReadMem && engine.GetForceBuildRemoteDS() {
+			//fmt.Println("remote")
+			//source = NewRemoteDataSource(
+			//	ctx,
+			//	tbl.proc.Load(),
+			//	tbl.getTxn().engine.fs,
+			//	tbl.getTxn().op.SnapshotTS(),
+			//	relData,
+			//)
+		} else {
+			source, err = NewLocalDataSource(
+				ctx,
+				tbl,
+				txnOffset,
+				ranges,
+				skipReadMem,
+				policy,
+			)
+		}
 
 	default:
 		logutil.Fatalf("unsupported rel data type: %v", relData.GetType())

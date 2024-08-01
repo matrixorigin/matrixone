@@ -42,6 +42,7 @@ enum OpCode {
     OpInterceptCommit  = 2010;
     OpCommitMerge      = 2011;
     OpDiskDiskCleaner   = 2012;
+    OpReader = 2013;
 }
 
 // TNPingRequest ping request
