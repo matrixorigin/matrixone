@@ -195,7 +195,7 @@ func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, e
 	var sql string
 	snapshotSpec := ""
 
-	snapshot := &Snapshot{TS: &timestamp.Timestamp{}}
+	var snapshot *Snapshot
 	if stmt.AtTsExpr != nil {
 		if snapshot, err = getTimeStampByTsHint(ctx, stmt.AtTsExpr); err != nil {
 			return nil, err
