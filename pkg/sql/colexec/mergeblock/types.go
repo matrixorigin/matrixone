@@ -185,7 +185,7 @@ func splitObjectStats(mergeBlock *MergeBlock, proc *process.Process,
 			continue
 		}
 
-		blkInfo := objectio.DecodeBlockInfo(blkVec.GetBytesAt(idx))
+		blkInfo := objectio.DecodeBlockInfoInProgress(blkVec.GetBytesAt(idx))
 		if objectio.IsSameObjectLocVsMeta(blkInfo.MetaLocation(), objDataMeta) {
 			continue
 		}
@@ -221,7 +221,7 @@ func (mergeBlock *MergeBlock) Split(proc *process.Process, bat *batch.Batch) err
 	for i := range tblIdx { // append s3 writer returned blk info
 		if tblIdx[i] >= 0 {
 			if mergeBlock.AddAffectedRows {
-				blkInfo := objectio.DecodeBlockInfo(blkInfosVec.GetBytesAt(i))
+				blkInfo := objectio.DecodeBlockInfoInProgress(blkInfosVec.GetBytesAt(i))
 				mergeBlock.affectedRows += uint64(blkInfo.MetaLocation().Rows())
 			}
 			vector.AppendBytes(mergeBlock.container.mp[int(tblIdx[i])].Vecs[0],

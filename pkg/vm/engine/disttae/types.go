@@ -271,7 +271,7 @@ type Pos struct {
 	tbName    string
 	dbName    string
 	offset    int64
-	blkInfo   objectio.BlockInfo
+	blkInfo   objectio.BlockInfoInProgress
 }
 
 // FIXME: The map inside this one will be accessed concurrently, using

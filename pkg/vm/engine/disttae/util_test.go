@@ -37,10 +37,10 @@ import (
 
 func TestBlockMetaMarshal(t *testing.T) {
 	location := []byte("test")
-	var info objectio.BlockInfo
+	var info objectio.BlockInfoInProgress
 	info.SetMetaLocation(location)
-	data := objectio.EncodeBlockInfo(info)
-	info2 := objectio.DecodeBlockInfo(data)
+	data := objectio.EncodeBlockInfoInProgress(info)
+	info2 := objectio.DecodeBlockInfoInProgress(data)
 	require.Equal(t, info, *info2)
 }
 
