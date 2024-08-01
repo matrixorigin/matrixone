@@ -237,7 +237,7 @@ func (rt *Routine) handleRequest(req *Request) error {
 	execCtx := ExecCtx{
 		ses: ses,
 	}
-
+	defer execCtx.Close()
 	v2.StartHandleRequestCounter.Inc()
 	defer func() {
 		v2.EndHandleRequestCounter.Inc()
@@ -340,6 +340,7 @@ func (rt *Routine) handleRequest(req *Request) error {
 			ses:    ses,
 			txnOpt: FeTxnOption{byRollback: true},
 		}
+		defer tempExecCtx.Close()
 		err = ses.GetTxnHandler().Rollback(&tempExecCtx)
 		if err != nil {
 			ses.Error(tenantCtx,
@@ -425,6 +426,7 @@ func (rt *Routine) cleanup() {
 				ses:    ses,
 				txnOpt: FeTxnOption{byRollback: true},
 			}
+			defer tempExecCtx.Close()
 			err := ses.GetTxnHandler().Rollback(&tempExecCtx)
 			if err != nil {
 				ses.Error(tempExecCtx.reqCtx,
