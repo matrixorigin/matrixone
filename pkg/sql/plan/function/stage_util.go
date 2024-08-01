@@ -312,9 +312,25 @@ func UrlToStageDef(furl string, proc *process.Process) (s StageDef, err error) {
 }
 
 func stageListWithWildcard(service string, pattern string, proc *process.Process) (fileList []string, err error) {
+	const wildcards = "*?"
 	const sep = "/"
 	fs := proc.GetFileService()
-	pathDir := strings.Split(pattern, sep)
+
+	idx := strings.IndexAny(pattern, wildcards)
+	if idx == -1 {
+		return nil, moerr.NewInternalError(proc.Ctx, "pattern without wildcard")
+	}
+
+	var pathDir []string
+	idx = strings.LastIndex(pattern[:idx], sep)
+	if idx == -1 {
+		pathDir = append(pathDir, "")
+		pathDir = append(pathDir, strings.Split(pattern, sep)...)
+	} else {
+		pathDir = append(pathDir, pattern[:idx])
+		pathDir = append(pathDir, strings.Split(pattern[idx+1:], sep)...)
+	}
+
 	l := list.New()
 	l2 := list.New()
 	if pathDir[0] == "" {
