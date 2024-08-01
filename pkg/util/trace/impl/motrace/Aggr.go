@@ -69,13 +69,13 @@ func (a *Aggregator) AddItem(i table.Item) (table.Item, error) {
 		return i, ErrFilteredOut
 	}
 
-	group, exists := a.Grouped[i.Key(a.WindowSize)]
+	groupedItem, exists := a.Grouped[i.Key(a.WindowSize)]
 	if !exists {
 		orignal_key := i.Key(a.WindowSize)
-		group = a.NewItemFunc(i, a.ctx)
-		a.Grouped[orignal_key] = group
+		groupedItem = a.NewItemFunc(i, a.ctx)
+		a.Grouped[orignal_key] = groupedItem
 	} else {
-		a.UpdateFunc(a.ctx, group, i)
+		a.UpdateFunc(a.ctx, groupedItem, i)
 	}
 	return nil, nil
 }

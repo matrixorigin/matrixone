@@ -111,13 +111,15 @@ func (t batchETLHandler) NewItemBatchHandler(ctx context.Context) func(b any) {
 func (t batchETLHandler) NewAggregator(ctx context.Context, name string) table.Aggregator {
 	switch name {
 	case MOStatementType, SingleStatementTable.GetName():
-		return NewAggregator(
-			ctx,
-			GetTracerProvider().aggregationWindow,
-			StatementInfoNew,
-			StatementInfoUpdate,
-			StatementInfoFilter,
-		)
+		if !GetTracerProvider().disableStmtAggregation {
+			return NewAggregator(
+				ctx,
+				GetTracerProvider().aggregationWindow,
+				StatementInfoNew,
+				StatementInfoUpdate,
+				StatementInfoFilter,
+			)
+		}
 	case MOErrorType:
 	case MOSpanType:
 	case MOLogType:
