@@ -417,10 +417,11 @@ func (bj ByteJson) querySimple(path *Path) ByteJson {
 				return Null
 			}
 			cnt := cur.GetElemCnt()
-			idx, _, last := sub.idx.genIndex(cnt)
-			if idx == subPathIdxALL {
-				panic("bytejson simple path should not contain *")
-			} else if (last && idx < 0) || cnt <= idx {
+			idx, _, _ := sub.idx.genIndex(cnt)
+			// don't bother checking last -- idx < 0 and not last means the path
+			// is not valid, we should have caught this earlier.
+			// if (last && idx < 0) || cnt <= idx {
+			if idx < 0 || cnt <= idx {
 				// out of range
 				return Null
 			} else {
@@ -445,7 +446,10 @@ func (bj ByteJson) QuerySimple(paths []*Path) ByteJson {
 		out := make([]ByteJson, 0, len(paths))
 		for _, path := range paths {
 			tmp := bj.querySimple(path)
-			out = append(out, tmp)
+			// strange behavior, skipping Null value.
+			if !tmp.IsNull() {
+				out = append(out, tmp)
+			}
 		}
 		// strange behavior, we actually return Null instead of an array of nulls.
 		if checkAllNull(out) {
