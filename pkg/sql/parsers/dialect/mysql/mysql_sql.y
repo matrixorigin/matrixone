@@ -40,7 +40,7 @@ import (
     alterTableOptions tree.AlterTableOptions
     alterTableOption tree.AlterTableOption
     alterPartitionOption  tree.AlterPartitionOption
-    alterColPosition *tree.ColumnPosition
+    alterColPosition *tree.ColumnPosition  
     alterColumnOrderBy []*tree.AlterColumnOrder
     alterColumnOrder *tree.AlterColumnOrder
 
@@ -9829,13 +9829,19 @@ function_call_aggregate:
             WindowSpec: $6,
         }
     }
-|   GROUPING '(' func_type_opt expression ')' window_spec_opt
+|   GROUPING '(' func_type_opt column_list ')' window_spec_opt
     {
         name := tree.NewUnresolvedColName($1)
+        var columnList tree.Exprs
+        for _, columnStr := range $4{
+            column := tree.NewUnresolvedColName(string(columnStr))
+            columnList = append(columnList, column)
+        }
+
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
-            Exprs: tree.Exprs{$4},
+            Exprs: columnList,
             Type: $3,
             WindowSpec: $6,
         }

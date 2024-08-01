@@ -145,7 +145,7 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 func (ctr *container) processRollup(result vm.CallResult, ap *Group, proc *process.Process) (vm.CallResult, error) {
-	if result.Batch == nil || ap.NeedRollup == false {
+	if result.Batch == nil || !ap.NeedRollup {
 		return result, nil
 	}
 	for i := range ctr.aggVecs {
@@ -157,6 +157,8 @@ func (ctr *container) processRollup(result vm.CallResult, ap *Group, proc *proce
 	for i := range ctr.groupVecs.Vec {
 		ctr.groupVecs.Vec[i] = ctr.bat.Vecs[i]
 	}
+	originCount := result.Batch.RowCount()
+	rollupCount := 0
 	for k := len(ctr.groupVecs.Vec) - 1; k >= 0; k-- {
 		err := ctr.initResultAndHashTable(&ctr.rollupBat, proc, ap)
 		if err != nil {
@@ -174,6 +176,7 @@ func (ctr *container) processRollup(result vm.CallResult, ap *Group, proc *proce
 		}
 		ctr.rollupBat.Vecs = append(ctr.rollupBat.Vecs, aggVectors...)
 		if ctr.rollupBat.RowCount() > 0 {
+			rollupCount += ctr.rollupBat.RowCount()
 			for i, vec := range result.Batch.Vecs {
 				sels := make([]int32, ctr.rollupBat.RowCount())
 				for j := 0; j < ctr.rollupBat.RowCount(); j++ {
@@ -189,6 +192,22 @@ func (ctr *container) processRollup(result vm.CallResult, ap *Group, proc *proce
 			ctr.rollupBat = nil
 		}
 	}
+	v := vector.NewVec(types.T_bool.ToType())
+	for i := 0; i < originCount; i++ {
+		newv, err := vector.NewConstFixed(types.T_bool.ToType(), false, 1, proc.Mp())
+		if err != nil {
+			return result, err
+		}
+		v.UnionOne(newv, 0, proc.Mp())
+	}
+	for i := 0; i < rollupCount; i++ {
+		newv, err := vector.NewConstFixed(types.T_bool.ToType(), true, 1, proc.Mp())
+		if err != nil {
+			return result, err
+		}
+		v.UnionOne(newv, 0, proc.Mp())
+	}
+	result.Batch.Vecs = append(result.Batch.Vecs, v)
 	ctr.bat = nil
 	ctr.state = vm.End
 	return result, nil
