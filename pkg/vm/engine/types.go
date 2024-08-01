@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -1007,4 +1008,23 @@ func (rd *EmptyRelationData) BuildEmptyRelData() RelData {
 
 func (rd *EmptyRelationData) DataCnt() int {
 	return 0
+}
+
+var forceBuildRemoteDS atomic.Bool
+var forceShuffleReader atomic.Bool
+
+func SetForceBuildRemoteDS(force bool) {
+	forceBuildRemoteDS.Store(force)
+}
+
+func GetForceBuildRemoteDS() bool {
+	return forceBuildRemoteDS.Load()
+}
+
+func SetForceShuffleReader(force bool) {
+	forceShuffleReader.Store(force)
+}
+
+func GetForceShuffleReader() bool {
+	return forceShuffleReader.Load()
 }

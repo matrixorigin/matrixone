@@ -80,6 +80,7 @@ func (s *service) initQueryCommandHandler() {
 	s.queryService.AddHandleFunc(query.CmdMethod_MigrateConnTo, s.handleMigrateConnTo, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_ReloadAutoIncrementCache, s.handleReloadAutoIncrementCache, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_GetReplicaCount, s.handleGetReplicaCount, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_CtlReader, s.handleCtlReader, false)
 }
 
 func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
@@ -118,8 +119,15 @@ func (s *service) handleAlterAccount(ctx context.Context, req *query.Request, re
 
 func (s *service) handleTraceSpan(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
 	resp.TraceSpanResponse = new(query.TraceSpanResponse)
-	resp.TraceSpanResponse.Resp = ctl.SelfProcess(
+	resp.TraceSpanResponse.Resp = ctl.UpdateCurrentCNTraceSpan(
 		req.TraceSpanRequest.Cmd, req.TraceSpanRequest.Spans, req.TraceSpanRequest.Threshold)
+	return nil
+}
+
+func (s *service) handleCtlReader(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
+	resp.CtlReaderResponse = new(query.CtlReaderResponse)
+	resp.CtlReaderResponse.Resp = ctl.UpdateCurrentCNReader(
+		req.CtlReaderRequest.Cmd, req.CtlReaderRequest.Cfg)
 	return nil
 }
 

@@ -845,6 +845,20 @@ func NewLocalDataSource(
 	return source, nil
 }
 
+func (ls *LocalDataSource) String() string {
+	blks := make([]*objectio.BlockInfoInProgress, ls.rangeSlice.Len())
+	for i := range blks {
+		blks[i] = ls.rangeSlice.Get(i)
+	}
+
+	return fmt.Sprintf("snapshot: %s, phase: %v, txnOffset: %d, rangeCursor: %d, blk list: %v",
+		ls.snapshotTS.ToString(),
+		ls.iteratePhase,
+		ls.txnOffset,
+		ls.rangesCursor,
+		blks)
+}
+
 func (ls *LocalDataSource) SetOrderBy(orderby []*plan.OrderBySpec) {
 	ls.OrderBy = orderby
 }
