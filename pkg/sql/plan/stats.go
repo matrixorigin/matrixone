@@ -600,7 +600,7 @@ func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
 		case "<>", "!=":
 			w += 2
 		case "<", "<=":
-			w += 15
+			w += 1.5
 		default:
 			w += 1
 		}
