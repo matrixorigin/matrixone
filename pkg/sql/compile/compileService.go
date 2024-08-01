@@ -17,8 +17,10 @@ package compile
 import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	txnClient "github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"time"
 )
 
 // todo: Move it to a CN level structure next day.
@@ -163,6 +165,10 @@ func (srv *ServiceOfCompile) ResumeService() {
 }
 
 func (srv *ServiceOfCompile) KillAllQueriesWithError(err error) {
+	logutil.Infof("compile service starts to kill all running queries.")
+	start := time.Now()
+	defer logutil.Infof("compile service has killed all running queries, time cost: %.2f s", time.Since(start).Seconds())
+
 	for _, v := range srv.aliveCompiles {
 		v.kill(err)
 	}
