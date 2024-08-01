@@ -25,6 +25,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -44,8 +47,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 )
 
 var (
@@ -245,6 +246,10 @@ type Session struct {
 	proxyAddr  string
 
 	disableTrace bool
+
+	// disableAgg co-operate with RecordStatement
+	// more can see Benchmark_RecordStatement_IsTrue()
+	disableAgg bool
 }
 
 func (ses *Session) InitSystemVariables(ctx context.Context) (err error) {
