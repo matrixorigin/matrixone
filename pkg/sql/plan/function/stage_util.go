@@ -15,10 +15,12 @@
 package function
 
 import (
+	"container/list"
 	"context"
 	"encoding/csv"
 	"fmt"
 	"net/url"
+	"path"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -47,15 +49,13 @@ const S3_PROVIDER_MINIO = "minio"
 const S3_SERVICE = "s3"
 const MINIO_SERVICE = "minio"
 
-
 type StageDef struct {
 	Id          uint32
 	Name        string
 	Url         *url.URL
 	Credentials map[string]string
-	Status    string
+	Status      string
 }
-
 
 func (s *StageDef) GetCredentials(key string, defval string) (string, bool) {
 	if s.Credentials == nil {
@@ -175,7 +175,7 @@ func runSql(proc *process.Process, sql string) (executor.Result, error) {
 	return exec.Exec(proc.Ctx, sql, opts)
 }
 
-func credentialsToMap(cred string) (map[string]string, error)  {
+func credentialsToMap(cred string) (map[string]string, error) {
 	if len(cred) == 0 {
 		return nil, nil
 	}
@@ -309,4 +309,102 @@ func UrlToStageDef(furl string, proc *process.Process) (s StageDef, err error) {
 	s.Url.RawQuery = query
 
 	return s, nil
+}
+
+func stageListWithWildcard(service string, pattern string, proc *process.Process) (fileList []string, err error) {
+	const sep = "/"
+	fs := proc.GetFileService()
+	pathDir := strings.Split(pattern, sep)
+	l := list.New()
+	l2 := list.New()
+	if pathDir[0] == "" {
+		l.PushBack(sep)
+	} else {
+		l.PushBack(pathDir[0])
+	}
+
+	for i := 1; i < len(pathDir); i++ {
+		length := l.Len()
+		for j := 0; j < length; j++ {
+			prefix := l.Front().Value.(string)
+			p := fileservice.JoinPath(service, prefix)
+			etlfs, readpath, err := fileservice.GetForETL(proc.Ctx, fs, p)
+			if err != nil {
+				return nil, err
+			}
+			entries, err := etlfs.List(proc.Ctx, readpath)
+			if err != nil {
+				return nil, err
+			}
+			for _, entry := range entries {
+				if !entry.IsDir && i+1 != len(pathDir) {
+					continue
+				}
+				if entry.IsDir && i+1 == len(pathDir) {
+					continue
+				}
+				matched, err := path.Match(pathDir[i], entry.Name)
+				if err != nil {
+					return nil, err
+				}
+				if !matched {
+					continue
+				}
+				l.PushBack(path.Join(l.Front().Value.(string), entry.Name))
+				if !entry.IsDir {
+					l2.PushBack(entry.Size)
+				}
+			}
+			l.Remove(l.Front())
+		}
+	}
+	length := l.Len()
+
+	for j := 0; j < length; j++ {
+		fileList = append(fileList, l.Front().Value.(string))
+		l.Remove(l.Front())
+		//fileSize = append(fileSize, l2.Front().Value.(int64))
+		l2.Remove(l2.Front())
+	}
+
+	return fileList, nil
+}
+
+func stageListWithoutWildcard(service string, pattern string, proc *process.Process) (fileList []string, err error) {
+
+	fs := proc.GetFileService()
+	p := fileservice.JoinPath(service, pattern)
+	etlfs, readpath, err := fileservice.GetForETL(proc.Ctx, fs, p)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := etlfs.List(proc.Ctx, readpath)
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range entries {
+		fileList = append(fileList, path.Join(pattern, entry.Name))
+	}
+
+	return fileList, nil
+}
+
+func StageListWithPattern(service string, pattern string, proc *process.Process) (fileList []string, err error) {
+	const wildcards = "*?"
+	const sep = "/"
+
+	idx := strings.IndexAny(pattern, wildcards)
+	if idx == -1 {
+		// no wildcard in pattern
+		fileList, err = stageListWithoutWildcard(service, pattern, proc)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		fileList, err = stageListWithWildcard(service, pattern, proc)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return fileList, nil
 }

@@ -15,7 +15,6 @@
 package function
 
 import (
-	"container/list"
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
@@ -1743,7 +1742,6 @@ func StageList(
 	length int,
 	selectList *FunctionSelectList,
 ) error {
-	ctx := proc.Ctx
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	filepath, null := p1.GetStrValue(0)
@@ -1759,7 +1757,6 @@ func StageList(
 		return err
 	}
 
-	fs := proc.GetFileService()
 	fspath, _, err := s.ToPath()
 	if err != nil {
 		return err
@@ -1778,63 +1775,18 @@ func StageList(
 
 	pattern = path.Clean("/" + pattern)
 
-	sep := "/"
-	pathDir := strings.Split(pattern, sep)
-	l := list.New()
-	l2 := list.New()
-	if pathDir[0] == "" {
-		l.PushBack(sep)
-	} else {
-		l.PushBack(pathDir[0])
+	const wildcards = "*?"
+	const sep = "/"
+
+	fileList, err := StageListWithPattern(service, pattern, proc)
+	if err != nil {
+		return err
 	}
 
-	for i := 1; i < len(pathDir); i++ {
-		length := l.Len()
-		for j := 0; j < length; j++ {
-			prefix := l.Front().Value.(string)
-			p := fileservice.JoinPath(service, prefix)
-			etlfs, readpath, err := fileservice.GetForETL(ctx, fs, p)
-			if err != nil {
-				return err
-			}
-			entries, err := etlfs.List(ctx, readpath)
-			if err != nil {
-				return err
-			}
-			for _, entry := range entries {
-				if !entry.IsDir && i+1 != len(pathDir) {
-					continue
-				}
-				if entry.IsDir && i+1 == len(pathDir) {
-					continue
-				}
-				matched, err := path.Match(pathDir[i], entry.Name)
-				if err != nil {
-					return err
-				}
-				if !matched {
-					continue
-				}
-				l.PushBack(path.Join(l.Front().Value.(string), entry.Name))
-				if !entry.IsDir {
-					l2.PushBack(entry.Size)
-				}
-			}
-			l.Remove(l.Front())
-		}
-	}
-	length = l.Len()
-
-	//fileList := make([]string)
-	//fileSize := make([]int64)
-	for j := 0; j < length; j++ {
-		if err := rs.AppendBytes([]byte(l.Front().Value.(string)), false); err != nil {
+	for _, f := range fileList {
+		if err := rs.AppendBytes([]byte(f), false); err != nil {
 			return err
 		}
-		//fileList = append(fileList, l.Front().Value.(string))
-		l.Remove(l.Front())
-		//fileSize = append(fileSize, l2.Front().Value.(int64))
-		l2.Remove(l2.Front())
 	}
 
 	return nil
