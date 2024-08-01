@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -39,8 +40,6 @@ type evalVector struct {
 }
 
 type container struct {
-	colexec.ReceiverOperator
-
 	state int
 
 	batches       []*batch.Batch
@@ -58,7 +57,7 @@ type container struct {
 	evecs []evalVector
 	vecs  []*vector.Vector
 
-	mp *process.JoinMap
+	mp *message.JoinMap
 
 	maxAllocSize int64
 }
@@ -118,7 +117,6 @@ func (singleJoin *SingleJoin) Free(proc *process.Process, pipelineFailed bool, e
 		ctr.cleanEvalVectors()
 		ctr.cleanHashMap()
 		ctr.cleanExprExecutor()
-		ctr.FreeAllReg()
 
 		anal := proc.GetAnalyze(singleJoin.GetIdx(), singleJoin.GetParallelIdx(), singleJoin.GetParallelMajor())
 		anal.Alloc(ctr.maxAllocSize)

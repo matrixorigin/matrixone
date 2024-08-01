@@ -352,6 +352,7 @@ func (h *Handle) HandleCommitMerge(
 	}()
 	txn, err := h.db.GetOrCreateTxnWithMeta(nil, meta.GetID(),
 		types.TimestampToTS(meta.GetSnapshotTS()))
+	txn.GetMemo().IsFlushOrMerge = true
 	if err != nil {
 		return
 	}
@@ -406,10 +407,10 @@ func (h *Handle) HandleCommitMerge(
 			for _, bat := range bats {
 				for i := range bat.RowCount() {
 					srcBlk := vector.GetFixedAt[int32](bat.Vecs[0], i)
-					srcRow := vector.GetFixedAt[int32](bat.Vecs[1], i)
-					destObj := vector.GetFixedAt[int32](bat.Vecs[2], i)
-					destBlk := vector.GetFixedAt[int32](bat.Vecs[3], i)
-					destRow := vector.GetFixedAt[int32](bat.Vecs[4], i)
+					srcRow := vector.GetFixedAt[uint32](bat.Vecs[1], i)
+					destObj := vector.GetFixedAt[uint8](bat.Vecs[2], i)
+					destBlk := vector.GetFixedAt[uint16](bat.Vecs[3], i)
+					destRow := vector.GetFixedAt[uint32](bat.Vecs[4], i)
 
 					booking[srcBlk][srcRow] = api.TransferDestPos{
 						ObjIdx: destObj,
@@ -428,10 +429,10 @@ func (h *Handle) HandleCommitMerge(
 		}
 		for i, m := range req.Booking.Mappings {
 			for r, pos := range m.M {
-				booking[i][r] = api.TransferDestPos{
-					ObjIdx: pos.ObjIdx,
-					BlkIdx: pos.BlkIdx,
-					RowIdx: pos.RowIdx,
+				booking[i][uint32(r)] = api.TransferDestPos{
+					ObjIdx: uint8(pos.ObjIdx),
+					BlkIdx: uint16(pos.BlkIdx),
+					RowIdx: uint32(pos.RowIdx),
 				}
 			}
 		}

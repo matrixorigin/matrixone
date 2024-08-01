@@ -16,6 +16,9 @@ package semi
 
 import (
 	"bytes"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -38,7 +41,6 @@ func (semiJoin *SemiJoin) OpType() vm.OpType {
 
 func (semiJoin *SemiJoin) Prepare(proc *process.Process) (err error) {
 	semiJoin.ctr = new(container)
-	semiJoin.ctr.InitReceiver(proc, true)
 	semiJoin.ctr.vecs = make([]*vector.Vector, len(semiJoin.Conditions[0]))
 
 	semiJoin.ctr.evecs = make([]evalVector, len(semiJoin.Conditions[0]))
@@ -65,6 +67,7 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	defer anal.Stop()
 	ctr := semiJoin.ctr
 	result := vm.NewCallResult()
+	var err error
 	for {
 		switch ctr.state {
 		case Build:
@@ -81,11 +84,11 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 		case Probe:
-			msg := ctr.ReceiveFromAllRegs(anal)
-			if msg.Err != nil {
-				return result, msg.Err
+			result, err = semiJoin.Children[0].Call(proc)
+			if err != nil {
+				return result, err
 			}
-			bat := msg.Batch
+			bat := result.Batch
 
 			if bat == nil {
 				ctr.state = End
@@ -133,7 +136,9 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (semiJoin *SemiJoin) build(anal process.Analyze, proc *process.Process) {
 	ctr := semiJoin.ctr
-	ctr.mp = proc.ReceiveJoinMap(anal, semiJoin.JoinMapTag, semiJoin.IsShuffle, semiJoin.ShuffleIdx)
+	start := time.Now()
+	defer anal.WaitStop(start)
+	ctr.mp = message.ReceiveJoinMap(semiJoin.JoinMapTag, semiJoin.IsShuffle, semiJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}

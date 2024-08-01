@@ -21,6 +21,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -32,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	testutil2 "github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -203,4 +205,83 @@ func NewDefaultTableReader(
 	)
 
 	return &disttae.SingleReaderInProgress{R: r}, nil
+}
+
+type EnginePack struct {
+	D       *TestDisttaeEngine
+	T       *TestTxnStorage
+	R       *MockRPCAgent
+	Mp      *mpool.MPool
+	Ctx     context.Context
+	t       *testing.T
+	cancelF func()
+}
+
+func InitEnginePack(opts TestOptions, t *testing.T) *EnginePack {
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, uint32(0))
+	timeout := opts.Timeout
+	if timeout == 0 {
+		timeout = 5 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	pack := &EnginePack{
+		Ctx:     ctx,
+		t:       t,
+		cancelF: cancel,
+	}
+	pack.D, pack.T, pack.R, pack.Mp = CreateEngines(pack.Ctx, opts, t)
+	return pack
+}
+
+func (p *EnginePack) Close() {
+	p.cancelF()
+	p.D.Close(p.Ctx)
+	p.T.Close(true)
+	p.R.Close()
+}
+
+func (p *EnginePack) StartCNTxn(opts ...client.TxnOption) client.TxnOperator {
+	op, err := p.D.NewTxnOperator(p.Ctx, p.D.Now(), opts...)
+	require.NoError(p.t, err)
+	require.NoError(p.t, p.D.Engine.New(p.Ctx, op))
+	return op
+}
+
+func (p *EnginePack) CreateDB(txnop client.TxnOperator, dbname string) engine.Database {
+	err := p.D.Engine.Create(p.Ctx, dbname, txnop)
+	require.NoError(p.t, err)
+	db, err := p.D.Engine.Database(p.Ctx, dbname, txnop)
+	require.NoError(p.t, err)
+	return db
+}
+
+func (p *EnginePack) CreateDBAndTables(txnop client.TxnOperator, dbname string, schema ...*catalog2.Schema) (engine.Database, []engine.Relation) {
+	db := p.CreateDB(txnop, dbname)
+	rels := make([]engine.Relation, 0, len(schema))
+	for _, s := range schema {
+		defs, err := catalog.SchemaToDefs(s)
+		require.NoError(p.t, err)
+		require.NoError(p.t, db.Create(p.Ctx, s.Name, defs))
+		tbl, err := db.Relation(p.Ctx, s.Name, nil)
+		require.NoError(p.t, err)
+		rels = append(rels, tbl)
+	}
+	return db, rels
+}
+
+func (p *EnginePack) CreateTableInDB(txnop client.TxnOperator, dbname string, schema *catalog.Schema) engine.Relation {
+	db, err := p.D.Engine.Database(p.Ctx, dbname, txnop)
+	require.NoError(p.t, err)
+	defs, err := catalog.SchemaToDefs(schema)
+	require.NoError(p.t, err)
+	require.NoError(p.t, db.Create(p.Ctx, schema.Name, defs))
+	tbl, err := db.Relation(p.Ctx, schema.Name, nil)
+	require.NoError(p.t, err)
+	return tbl
+}
+
+func (p *EnginePack) DeleteTableInDB(txnop client.TxnOperator, dbname, tblname string) {
+	db, err := p.D.Engine.Database(p.Ctx, dbname, txnop)
+	require.NoError(p.t, err)
+	require.NoError(p.t, db.Delete(p.Ctx, tblname))
 }

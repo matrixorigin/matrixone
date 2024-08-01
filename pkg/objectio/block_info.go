@@ -67,6 +67,10 @@ type BlockInfoInProgress struct {
 	PartitionNum int16
 }
 
+func (b *BlockInfoProgress) String() string {
+	return fmt.Sprintf("[A-%v]blk-%s", b.EntryState, b.BlockID.ShortStringEx())
+}
+
 func (b *BlockInfoInProgress) MarshalWithBuf(w *bytes.Buffer) (uint32, error) {
 	var space uint32
 	if _, err := w.Write(types.EncodeFixed(b.BlockID)); err != nil {

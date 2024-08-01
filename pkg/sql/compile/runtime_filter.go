@@ -17,6 +17,8 @@ package compile
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -56,14 +58,14 @@ func ApplyRuntimeFilters(
 	tableDef *plan.TableDef,
 	relData engine.RelData,
 	exprs []*plan.Expr,
-	runtimeFilters []process.RuntimeFilterMessage,
+	runtimeFilters []message.RuntimeFilterMessage,
 ) (engine.RelData, error) {
 	var err error
 	evaluators := make([]RuntimeFilterEvaluator, len(runtimeFilters))
 
 	for i, filter := range runtimeFilters {
 		switch filter.Typ {
-		case process.RuntimeFilter_IN:
+		case message.RuntimeFilter_IN:
 			vec := vector.NewVec(types.T_any.ToType())
 			err = vec.UnmarshalBinary(filter.Data)
 			if err != nil {
@@ -73,7 +75,7 @@ func ApplyRuntimeFilters(
 				InList: vec,
 			}
 
-		case process.RuntimeFilter_MIN_MAX:
+		case message.RuntimeFilter_MIN_MAX:
 			evaluators[i] = &RuntimeZonemapFilter{
 				Zm: filter.Data,
 			}
