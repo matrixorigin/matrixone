@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -221,6 +222,7 @@ func (tbl *txnTableDelegate) Ranges(
 		return nil, err
 	}
 
+	// XXX this is a bug.
 	var ranges engine.Ranges
 	for i, subRanges := range rs {
 		blkSlice := subRanges.(*objectio.BlockInfoSlice)
