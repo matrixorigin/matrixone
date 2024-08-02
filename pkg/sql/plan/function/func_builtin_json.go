@@ -26,6 +26,7 @@ type opBuiltInJsonExtract struct {
 	npath    int
 	pathStrs []string
 	paths    []*bytejson.Path
+	simple   bool
 }
 
 func newOpBuiltInJsonExtract() *opBuiltInJsonExtract {
@@ -57,19 +58,32 @@ func jsonExtractCheckFn(overloads []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithFailure(failedFunctionParametersWrong)
 }
 
-type computeFn func([]byte, []*bytejson.Path) (*bytejson.ByteJson, error)
+type computeFn func([]byte, []*bytejson.Path) (bytejson.ByteJson, error)
 
-func computeJson(json []byte, paths []*bytejson.Path) (*bytejson.ByteJson, error) {
+func computeJson(json []byte, paths []*bytejson.Path) (bytejson.ByteJson, error) {
 	bj := types.DecodeJson(json)
 	return bj.Query(paths), nil
 }
 
-func computeString(json []byte, paths []*bytejson.Path) (*bytejson.ByteJson, error) {
+func computeString(json []byte, paths []*bytejson.Path) (bytejson.ByteJson, error) {
 	bj, err := types.ParseSliceToByteJson(json)
 	if err != nil {
-		return nil, err
+		return bytejson.Null, err
 	}
 	return bj.Query(paths), nil
+}
+
+func computeJsonSimple(json []byte, paths []*bytejson.Path) (bytejson.ByteJson, error) {
+	bj := types.DecodeJson(json)
+	return bj.QuerySimple(paths), nil
+}
+
+func computeStringSimple(json []byte, paths []*bytejson.Path) (bytejson.ByteJson, error) {
+	bj, err := types.ParseSliceToByteJson(json)
+	if err != nil {
+		return bytejson.Null, err
+	}
+	return bj.QuerySimple(paths), nil
 }
 
 func (op *opBuiltInJsonExtract) buildPath(params []*vector.Vector, length int) error {
@@ -123,8 +137,16 @@ func (op *opBuiltInJsonExtract) buildPath(params []*vector.Vector, length int) e
 	}
 
 	if op.allConst {
-		return op.buildOnePath(pathWrapers, 0, op.pathStrs, op.paths)
+		if err := op.buildOnePath(pathWrapers, 0, op.pathStrs, op.paths); err != nil {
+			return err
+		}
+		op.simple = true
+		for _, p := range op.paths {
+			op.simple = op.simple && p.IsSimple()
+		}
+		return nil
 	} else {
+		op.simple = false
 		for i := 0; i < length; i++ {
 			strs := op.pathStrs[i*op.npath : (i+1)*op.npath]
 			paths := op.paths[i*op.npath : (i+1)*op.npath]
@@ -172,20 +194,29 @@ func (op *opBuiltInJsonExtract) buildOnePath(paramWrappers []vector.FunctionPara
 
 func (op *opBuiltInJsonExtract) jsonExtract(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	var err error
-	jsonVec := parameters[0]
 	var fn computeFn
-	switch jsonVec.GetType().Oid {
-	case types.T_json:
-		fn = computeJson
-	default:
-		fn = computeString
-	}
+
+	jsonVec := parameters[0]
 	jsonWrapper := vector.GenerateFunctionStrParameter(jsonVec)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	// build all paths
 	if err = op.buildPath(parameters, length); err != nil {
 		return err
+	}
+
+	if op.simple {
+		if jsonVec.GetType().Oid == types.T_json {
+			fn = computeJsonSimple
+		} else {
+			fn = computeStringSimple
+		}
+	} else {
+		if jsonVec.GetType().Oid == types.T_json {
+			fn = computeJson
+		} else {
+			fn = computeString
+		}
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
@@ -213,8 +244,7 @@ func (op *opBuiltInJsonExtract) jsonExtract(parameters []*vector.Vector, result 
 					return err
 				}
 			} else {
-				dt, _ := out.Marshal()
-				if err = rs.AppendBytes(dt, false); err != nil {
+				if err = rs.AppendByteJson(out, false); err != nil {
 					return err
 				}
 			}

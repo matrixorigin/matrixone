@@ -738,6 +738,7 @@ func (mp *MPool) Grow2(old []byte, old2 []byte, sz int) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	copy(ret[len1:len1+len2], old2)
 	return ret, nil
 }
