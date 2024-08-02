@@ -692,9 +692,9 @@ func (c *Compile) SetIsPrepare(isPrepare bool) {
 
 func (c *Compile) printPipeline() {
 	if c.IsTpQuery() {
-		fmt.Println("pipeline for tp query!")
+		fmt.Println("pipeline for tp query, current CN addr ", c.addr)
 	} else {
-		fmt.Println("pipeline for ap query!")
+		fmt.Println("pipeline for ap query, current CN addr ", c.addr)
 	}
 	fmt.Println(DebugShowScopes(c.scope))
 }
@@ -2693,7 +2693,7 @@ func (c *Compile) compileTop(n *plan.Node, topN *plan.Expr, ss []*Scope) []*Scop
 		ss[i].setRootOperator(op)
 	}
 	c.anal.isFirst = false
-
+	ss = c.mergeShuffleScopesIfNeeded(ss)
 	rs := c.newMergeScope(ss)
 
 	currentFirstFlag = c.anal.isFirst
@@ -3665,6 +3665,18 @@ func (c *Compile) newJoinScopeListWithBucket(rs, left, right []*Scope, n *plan.N
 	}
 	rs[idx].PreScopes = append(rs[idx].PreScopes, leftMerge, rightMerge)
 	return rs
+}
+
+func (c *Compile) mergeShuffleScopesIfNeeded(ss []*Scope) []*Scope {
+	if len(ss) <= len(c.cnList) {
+		return ss
+	}
+	for i := range ss {
+		if ss[i].NodeInfo.Mcpu != 1 {
+			return ss
+		}
+	}
+	return c.mergeScopesByCN(ss)
 }
 
 func (c *Compile) mergeScopesByCN(ss []*Scope) []*Scope {
