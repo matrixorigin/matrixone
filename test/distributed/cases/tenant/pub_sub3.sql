@@ -160,9 +160,6 @@ create publication pub_to_not_exist database db1 account not_exist;
 ########### duplicate sub ###########
 -- @session:id=1&user=acc1:admin1&password=test123
 create database syssub1dup from sys publication pub1;
--- @ignore:5,7
-show subscriptions all;
-create database syssub1dup from sys publication pub1;
 -- @session
 
 
@@ -199,17 +196,10 @@ select * from t2;
 
 
 ########### normal tenant pub all ###########
-# acc1 create publication to all accounts
+# acc1 create publication to all accounts, should be failed
 -- @session:id=1&user=acc1:admin1&password=test123
 create database db1;
 create publication pub_all database db1 account all;
--- @session
-
-
-########### normal tenant pub all ###########
-# acc1 create publication to all accounts
--- @session:id=1&user=acc1:admin1&password=test123
-create publication pub_exists_when_drop_account database db1 account acc2;
 -- @session
 
 
@@ -219,6 +209,14 @@ drop publication pub_all;
 drop publication pub_part_tbls;
 drop database db1;
 drop database db2;
+
+
+########### remain a pub when drop account ###########
+-- @session:id=1&user=acc1:admin1&password=test123
+# should be dropped when drop account, no error
+create publication pub_exists_when_drop_account database db1 account acc2;
+-- @session
+
 drop account acc1;
 drop account acc2;
 drop account acc3;

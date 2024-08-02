@@ -98,7 +98,7 @@ use sub_db2;
 show tables;
 select * from t2;
 
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 -- @session
 
@@ -107,7 +107,7 @@ create database sub_db2 from sys publication pubname2;
 use sub_db2;
 show tables;
 select * from t2;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 -- @session
 
@@ -129,7 +129,7 @@ show tables;
 show databases like 'sub_db2';
 use sub_db2;
 show tables;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 -- @session
 
@@ -137,7 +137,7 @@ show subscriptions;
 show databases like 'sub_db2';
 use sub_db2;
 show tables;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 -- @session
 
@@ -155,7 +155,7 @@ show tables;
 show databases like 'sub_db2';
 use sub_db2;
 show tables;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 -- @session
 
@@ -163,7 +163,7 @@ show subscriptions;
 show databases like 'sub_db2';
 use sub_db2;
 show tables;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 -- @session
 
@@ -221,7 +221,7 @@ use sub_db2;
 show tables;
 select * from t2;
 
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 -- @session
 
@@ -230,7 +230,7 @@ create database sub_db2 from sys publication pubname2;
 use sub_db2;
 show tables;
 select * from t2;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 -- @session
 
@@ -248,7 +248,7 @@ show tables;
 show databases like 'sub_db2';
 use sub_db2;
 show tables;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 -- @session
 
@@ -256,7 +256,7 @@ show subscriptions;
 show databases like 'sub_db2';
 use sub_db2;
 show tables;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 -- @session
 
@@ -295,7 +295,7 @@ create database sub_db1 from sys publication pubname1;
 use sub_db1;
 show tables;
 
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 -- @session
 
@@ -325,7 +325,7 @@ create database sub_db2 from sys publication pubname2;
 use sub_db2;
 show tables;
 select * from t2;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 -- @session
 
@@ -334,7 +334,7 @@ create database sub_db2 from sys publication pubname2;
 use sub_db2;
 show tables;
 select * from t2;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 -- @session
 
@@ -352,7 +352,7 @@ show tables;
 show databases like 'sub_db2';
 use sub_db2;
 show tables;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 -- @session
 
@@ -361,7 +361,7 @@ show databases like 'sub_db2';
 use sub_db2;
 show tables;
 
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 -- @session
 
@@ -374,7 +374,7 @@ show tables;
 show databases like 'sub_db2';
 use sub_db2;
 show tables;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 -- @session
 
@@ -383,7 +383,7 @@ show databases like 'sub_db2';
 use sub_db2;
 show tables;
 
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 -- @session
 

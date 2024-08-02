@@ -48,7 +48,7 @@ select pub_name, database_name, account_list from mo_catalog.mo_pubs;
 -- @session:id=2&user=acc0:root&password=111
 create database sub1 from sys publication sys_pub_1;
 show databases;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 use sub1;
 show tables;
@@ -66,7 +66,7 @@ select pub_name, database_name, account_list from mo_catalog.mo_pubs;
 -- @session:id=3&user=acc1:root&password=111
 create database sub1 from sys publication sys_pub_1;
 show databases;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 use sub1;
 show tables;
@@ -80,7 +80,7 @@ alter publication sys_pub_1 account acc1;
 select pub_name, database_name, account_list from mo_catalog.mo_pubs;
 -- acc0 订阅
 -- @session:id=2&user=acc0:root&password=111
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 select * from sub1.sys_tbl_1;
 use sub1;
@@ -88,7 +88,7 @@ use sub1;
 
 -- acc1 订阅
 -- @session:id=3&user=acc1:root&password=111
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 use sub1;
 desc sys_tbl_1;
@@ -101,7 +101,7 @@ select pub_name, database_name, account_list from mo_catalog.mo_pubs;
 
 -- acc0 订阅
 -- @session:id=2&user=acc0:root&password=111
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 use sub1;
 desc sys_tbl_1;
@@ -120,7 +120,7 @@ create table sys_tbl_2(b text);
 
 -- 查看acc0是否能感知新数据
 -- @session:id=2&user=acc0:root&password=111
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 use sub1;
 desc sys_tbl_1;
@@ -141,7 +141,7 @@ create publication acc2_pub_1 database acc2_db_1 account sys,acc0,acc1;
 -- sys 创建订阅获取acc2的发布
 create database sub2 from acc2 publication acc2_pub_1;
 use sub2;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 show tables;
 desc acc2_tbl_1;
@@ -151,7 +151,7 @@ select * from acc2_tbl_1;
 -- @session:id=2&user=acc0:root&password=111
 create database sub2 from acc2 publication acc2_pub_1;
 use sub2;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 desc acc2_tbl_1;
 select * from acc2_tbl_1;

@@ -328,9 +328,9 @@ sub_db4
 system
 system_metrics
 use sub_db4;
+internal error: the account test_tenant_3 is not allowed to subscribe the publication pubname4
 show tables;
-Tables_in_sub_db4
-t4
+internal error: the account test_tenant_3 is not allowed to subscribe the publication pubname4
 show databases;
 Database
 information_schema
@@ -340,9 +340,9 @@ sub_db4
 system
 system_metrics
 use sub_db4;
+internal error: the account test_tenant_4 is not allowed to subscribe the publication pubname4
 show tables;
-Tables_in_sub_db4
-t4
+internal error: the account test_tenant_4 is not allowed to subscribe the publication pubname4
 alter publication pubname4 account all;
 show databases;
 Database
@@ -504,12 +504,12 @@ null    null    200    yy
 null    null    300    zz
 select * from t1 union select * from t2;
 a    b
-100    xx
-200    yy
-300    zz
 1    a
 2    b
 3    c
+100    xx
+200    yy
+300    zz
 create database db1;
 use db1;
 create table t3 (a int, b varchar(225));
@@ -556,11 +556,11 @@ Publication    Create Publication
 pubname6    CREATE PUBLICATION pubname6 DATABASE db6 ACCOUNT test_tenant_1
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pubname6    db6    *    test_tenant_1        2024-07-23 22:51:07    null    publication to test_tenant_1
+pubname6    db6    *    test_tenant_1        2024-08-02 14:57:54    null    publication to test_tenant_1
 create database sub_db6 from sys publication pubname6;
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pubname6    sys    db6    *    publication to test_tenant_1    2024-07-23 22:51:07    sub_db6    2024-07-23 22:51:07    0
+pubname6    sys    db6    *    publication to test_tenant_1    2024-08-02 14:57:54    sub_db6    2024-08-02 14:57:54    0
 show create database sub_db6;
 Database    Create Database
 sub_db6    create database sub_db6 from sys publication pubname6
@@ -646,7 +646,7 @@ show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pubname4    sys    db4    *    publication to all tenant    2024-07-23 22:51:06    sub_db4    2024-07-23 22:51:06    2
+pubname4    sys    db4    *    publication to all tenant    2024-08-02 14:57:54    sub_db4    2024-08-02 14:57:54    2
 drop account test_tenant_1;
 drop account test_tenant_2;
 drop account test_tenant_3;

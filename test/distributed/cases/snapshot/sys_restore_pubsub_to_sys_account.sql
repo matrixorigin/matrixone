@@ -148,7 +148,7 @@ drop snapshot if exists sp01;
 create snapshot sp01 for account acc01;
 drop database if exists sub03;
 create database sub03 from sys publication pub03;
--- @ignore:3,5
+-- @ignore:5,7
 show subscriptions;
 show databases;
 use sub03;
@@ -156,7 +156,7 @@ show tables;
 select * from rs02;
 select * from rs03;
 restore account acc01 from snapshot sp01;
--- @ignore:3
+-- @ignore:5,7
 show subscriptions;
 show databases;
 drop snapshot sp01;
@@ -298,7 +298,7 @@ show publications;
 -- @session
 
 -- @session:id=2&user=acc02:test_account&password=111
--- @ignore:3
+-- @ignore:5,7
 show subscriptions;
 show databases;
 use sub05;
