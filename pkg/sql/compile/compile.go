@@ -3478,6 +3478,27 @@ func (c *Compile) newDeleteMergeScope(arg *deletion.Deletion, ss []*Scope) *Scop
 	return c.newMergeScope(rs)
 }
 
+// ensure all scopes are in the same CN, reduce unnecessary channel
+func (c *Compile) newMergeScopeByCN(ss []*Scope, nodeinfo engine.Node) *Scope {
+	rs := newScope(Remote)
+	rs.NodeInfo.Addr = nodeinfo.Addr
+	rs.NodeInfo.Mcpu = 1 // merge scope is single parallel by default
+	rs.PreScopes = ss
+	rs.Proc = process.NewFromProc(c.proc, c.proc.Ctx, 1)
+	mergeOp := merge.NewArgument()
+	mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
+	rs.setRootOperator(mergeOp)
+	for i := range ss {
+		// waring: `connector` operator is not used as an input/output analyze,
+		// and `connector` operator cannot play the role of IsFirst/IsLast
+		connArg := connector.NewArgument().WithReg(rs.Proc.Reg.MergeReceivers[0])
+		connArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
+		ss[i].setRootOperator(connArg)
+		ss[i].IsEnd = true
+	}
+	return rs
+}
+
 func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 	rs := newScope(Merge)
 	rs.NodeInfo = getEngineNode(c)
@@ -3646,7 +3667,7 @@ func (c *Compile) newJoinScopeListWithBucket(rs, left, right []*Scope, n *plan.N
 	return rs
 }
 
-func (c *Compile) newMergeRemoteScopeByCN(ss []*Scope) []*Scope {
+func (c *Compile) mergeScopesByCN(ss []*Scope) []*Scope {
 	rs := make([]*Scope, 0, len(c.cnList))
 	for i := range c.cnList {
 		cn := c.cnList[i]
@@ -3657,7 +3678,7 @@ func (c *Compile) newMergeRemoteScopeByCN(ss []*Scope) []*Scope {
 			}
 		}
 		if len(currentSS) > 0 {
-			mergeScope := c.newMergeRemoteScope(currentSS, cn)
+			mergeScope := c.newMergeScopeByCN(currentSS, cn)
 			rs = append(rs, mergeScope)
 		}
 	}
@@ -3666,7 +3687,7 @@ func (c *Compile) newMergeRemoteScopeByCN(ss []*Scope) []*Scope {
 }
 
 func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []*Scope, n *plan.Node) []*Scope {
-	rs := c.newMergeRemoteScopeByCN(probeScopes)
+	rs := c.mergeScopesByCN(probeScopes)
 	for i := range rs {
 		rs[i].IsJoin = true
 		rs[i].NodeInfo.Mcpu = c.generateCPUNumber(ncpu, int(n.Stats.BlockNum))
