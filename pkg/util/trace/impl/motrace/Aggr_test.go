@@ -513,19 +513,20 @@ func TestAggregator_PopResultsBeforeWindow(t *testing.T) {
 	c.enableStmtMerge = true
 
 	var sessionId = [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x1}
-	const aggrWindow = 5 * time.Second
+	const aggWindow = 5 * time.Second
 
 	ctx := context.Background()
 	aggregator := NewAggregator(
 		ctx,
-		aggrWindow,
+		aggWindow,
 		StatementInfoNew,
 		StatementInfoUpdate,
 		StatementInfoFilter,
 	)
 	var err error
 
-	fixedTime := time.Date(2023, time.June, 10, 12, 0, 1, 0, time.UTC)
+	//fixedTime := time.Date(2023, time.June, 10, 12, 0, 1, 0, time.UTC)
+	fixedTime := time.Now().Truncate(time.Second)
 	for i := 0; i < 2; i++ {
 		_, err = aggregator.AddItem(&StatementInfo{
 			Account:       "MO",
@@ -550,12 +551,12 @@ func TestAggregator_PopResultsBeforeWindow(t *testing.T) {
 	}
 
 	// Get results from aggregator, which in long ago window
-	results := aggregator.PopResultsBeforeWindow(time.Now().Add(-time.Hour).Truncate(aggrWindow))
+	results := aggregator.PopResultsBeforeWindow(time.Now().Add(-time.Hour).Truncate(aggWindow))
 	require.Equalf(t, 0, len(results), "Expected 0 aggregated statements: but got: %d", len(results))
 	require.Equalf(t, 1, len(aggregator.Grouped), "Expected 1 left in aggregator, but got: %d", len(aggregator.Grouped))
 
 	// Get results from aggregator
-	results = aggregator.PopResultsBeforeWindow(time.Now().Truncate(aggrWindow))
+	results = aggregator.PopResultsBeforeWindow(time.Now().Truncate(aggWindow))
 	require.Equal(t, len(results), 1, "Expected 1 aggregated statements")
 	require.Equalf(t, 0, len(aggregator.Grouped), "Expected 0 left in aggregator, but got: %d", len(aggregator.Grouped))
 
@@ -568,6 +569,6 @@ func TestAggregator_PopResultsBeforeWindow(t *testing.T) {
 	assert.Equal(t, int64(2), results[0].(*StatementInfo).RowsRead)
 
 	// Pop Again, expect empty result
-	results = aggregator.PopResultsBeforeWindow(time.Now().Truncate(aggrWindow))
+	results = aggregator.PopResultsBeforeWindow(time.Now().Truncate(aggWindow))
 	require.Equal(t, len(results), 0, "Expected 0 aggregated statements")
 }
