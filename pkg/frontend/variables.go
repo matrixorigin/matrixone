@@ -3507,6 +3507,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("experimental_ivf_index"),
 		Default:           int64(0),
 	},
+	"disable_agg_statement": {
+		Name:              "disable_agg_statement",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: true,
+		Type:              InitSystemVariableBoolType("disable_agg_statement"),
+		Default:           int64(0),
+	},
 }
 
 func updateTimeZone(ctx context.Context, sess *Session, sv *SystemVariables, name string, val interface{}) error {
