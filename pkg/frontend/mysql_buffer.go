@@ -70,7 +70,6 @@ type Conn struct {
 	id                    uint64
 	conn                  net.Conn
 	localAddr, remoteAddr string
-	connected             bool
 	sequenceId            uint8
 	header                [4]byte
 	// static buffer block
@@ -109,7 +108,6 @@ func NewIOSession(conn net.Conn, pu *config.ParameterUnit) (*Conn, error) {
 		conn:            conn,
 		localAddr:       conn.RemoteAddr().String(),
 		remoteAddr:      conn.LocalAddr().String(),
-		connected:       true,
 		fixBuf:          &ListBlock{},
 		dynamicBuf:      list.New(),
 		allocator:       &BufferAllocator{allocator: getGlobalSessionAlloc()},
@@ -139,22 +137,16 @@ func (c *Conn) UseConn(conn net.Conn) {
 	c.conn = conn
 }
 func (c *Conn) Disconnect() error {
-	if !c.connected {
-		return nil
-	}
+
 	return c.closeConn()
 }
 
 func (c *Conn) Close() error {
-	if !c.connected {
-		return nil
-	}
 
 	err := c.closeConn()
 	if err != nil {
 		return err
 	}
-	c.connected = false
 
 	// Free all allocated memory
 	c.allocator.Free(c.fixBuf.data)
@@ -184,9 +176,7 @@ func (c *Conn) CheckAllowedPacketSize(totalLength int, allowedPacketSize int) er
 
 // ReadLoadLocalPacket just for processLoadLocal, reuse memory, and not merge 16MB packets
 func (c *Conn) ReadLoadLocalPacket() ([]byte, error) {
-	if !c.connected {
-		return nil, moerr.NewInternalError(moerr.Context(), "The IOSession connection has been closed")
-	}
+
 	var err error
 	var packetLength int
 	defer func() {
@@ -226,9 +216,7 @@ func (c *Conn) ReadLoadLocalPacket() ([]byte, error) {
 
 // Read reads the complete packet including process the > 16MB packet. return the payload
 func (c *Conn) Read() ([]byte, error) {
-	if !c.connected {
-		return nil, moerr.NewInternalError(moerr.Context(), "The IOSession connection has been closed")
-	}
+
 	// Requests > 16MB
 	payloads := make([][]byte, 0)
 	totalLength := 0
@@ -515,9 +503,6 @@ func (c *Conn) Flush() error {
 // Write Only OK, EOF, ERROR needs to be sent immediately
 func (c *Conn) Write(payload []byte) error {
 	defer c.Reset()
-	if !c.connected {
-		return moerr.NewInternalError(moerr.Context(), "The IOSession connection has been closed")
-	}
 
 	var err error
 	var header [4]byte
