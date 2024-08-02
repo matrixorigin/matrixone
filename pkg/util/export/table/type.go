@@ -25,7 +25,10 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 )
+
+const DefaultWriterBufferSize = 10 * mpool.MB
 
 type MergeLogType string
 

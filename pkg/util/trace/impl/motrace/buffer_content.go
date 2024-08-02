@@ -54,7 +54,7 @@ func NewContentBuffer(opts ...BufferOption) *ContentBuffer {
 		ctx: context.Background(),
 		BufferConfig: BufferConfig{
 			Reminder:       bp.NewConstantClock(defaultClock),
-			sizeThreshold:  10 * mpool.MB,
+			sizeThreshold:  table.DefaultWriterBufferSize,
 			filterItemFunc: noopFilterItemFunc,
 			genBatchFunc:   noopGenBatchSQL,
 		},

@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	bp "github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
@@ -257,12 +256,14 @@ type genBatchFunc func(context.Context, []IBuffer2SqlItem, *bytes.Buffer, table.
 var noopFilterItemFunc = func(IBuffer2SqlItem) {}
 var noopGenBatchSQL = genBatchFunc(func(context.Context, []IBuffer2SqlItem, *bytes.Buffer, table.WriterFactory) any { return "" })
 
+// NewItemBuffer
+// deprecated, pls use NewContentBuffer
 func NewItemBuffer(opts ...BufferOption) *itemBuffer {
 	b := &itemBuffer{
 		buf: make([]IBuffer2SqlItem, 0, 10240),
 		BufferConfig: BufferConfig{
 			Reminder:       bp.NewConstantClock(defaultClock),
-			sizeThreshold:  10 * mpool.MB,
+			sizeThreshold:  table.DefaultWriterBufferSize,
 			filterItemFunc: noopFilterItemFunc,
 			genBatchFunc:   noopGenBatchSQL,
 		},
@@ -314,7 +315,7 @@ func (b *itemBuffer) isEmpty() bool {
 func (b *itemBuffer) ShouldFlush() bool {
 	b.mux.Lock()
 	defer b.mux.Unlock()
-	return b.size > int64(b.sizeThreshold)
+	return b.size+thresholdDelta > int64(b.sizeThreshold)
 }
 
 func (b *itemBuffer) Size() int64 {

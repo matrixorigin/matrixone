@@ -140,7 +140,7 @@ func (f *SQLFlusher) FlushBuffer(buf *bytes.Buffer) (int, error) {
 		return 0, err
 	}
 
-	sqlCsv := bytes.NewBuffer(make([]byte, 0, 10*mpool.MB))
+	sqlCsv := bytes.NewBuffer(make([]byte, 0, table.DefaultWriterBufferSize))
 	for i := 0; i < buf.Len(); i++ {
 		c := buf.Bytes()[i]
 		if sqlCsv.Cap() == sqlCsv.Len() {
