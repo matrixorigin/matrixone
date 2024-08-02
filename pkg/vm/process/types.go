@@ -88,8 +88,10 @@ func NewRegMsg(bat *batch.Batch) *RegisterMessage {
 
 // WaitRegister channel
 type WaitRegister struct {
+	// Ctx, context for data receiver.
 	Ctx context.Context
-	Ch  chan *RegisterMessage
+	// Ch, data receiver channel, receiver will wait for data from this channel.
+	Ch chan *RegisterMessage
 }
 
 // Register used in execution pipeline and shared with all operators of the same pipeline.
