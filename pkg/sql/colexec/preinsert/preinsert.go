@@ -50,13 +50,15 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	result, err := preInsert.GetChildren(0).Call(proc)
+	anal := proc.GetAnalyze(preInsert.GetIdx(), preInsert.GetParallelIdx(), preInsert.GetParallelMajor())
+	anal.Start()
+	defer anal.Stop()
+
+	result, err := vm.ChildrenCall(preInsert.GetChildren(0), proc, anal)
 	if err != nil {
 		return result, err
 	}
-	analy := proc.GetAnalyze(preInsert.GetIdx(), preInsert.GetParallelIdx(), preInsert.GetParallelMajor())
-	analy.Start()
-	defer analy.Stop()
+	anal.Input(result.Batch, preInsert.IsFirst)
 
 	if result.Batch == nil || result.Batch.IsEmpty() {
 		return result, nil
@@ -118,6 +120,7 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 	}
 
 	result.Batch = preInsert.ctr.buf
+	anal.Output(result.Batch, preInsert.IsLast)
 	return result, nil
 }
 
