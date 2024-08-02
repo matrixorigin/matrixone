@@ -202,6 +202,26 @@ func handleCNMerge(
 	}
 
 	target := getTNShard(proc.GetService())
+	fs := proc.GetFileService()
+	mergeAndWrite := func(rel engine.Relation, stats []objectio.ObjectStats) (*rpc.SendResult, error) {
+		entry, err := rel.MergeObjects(proc.Ctx, stats, uint32(a.targetObjSize))
+		if err != nil {
+			merge.CleanUpUselessFiles(entry, fs)
+			if entry == nil {
+				entry = &api.MergeCommitEntry{
+					Err: err.Error(),
+				}
+			}
+		}
+
+		payload, err := entry.MarshalBinary()
+		if err != nil {
+			return nil, err
+		}
+
+		return txnWrite(proc.Ctx, target, txnOp, payload)
+	}
+
 	switch a.mergeType {
 	case objectMergeType:
 		tblId, err := strconv.ParseUint(a.tbl, 10, 64)
@@ -214,22 +234,7 @@ func handleCNMerge(
 			return Result{}, err
 		}
 
-		entry, err := rel.MergeObjects(proc.Ctx, a.objs, uint32(a.targetObjSize))
-		if err != nil {
-			merge.CleanUpUselessFiles(entry, proc.GetFileService())
-			if entry == nil {
-				entry = &api.MergeCommitEntry{
-					Err: err.Error(),
-				}
-			}
-		}
-
-		payload, err := entry.MarshalBinary()
-		if err != nil {
-			return Result{}, err
-		}
-
-		resp, err := txnWrite(proc.Ctx, target, txnOp, payload)
+		resp, err := mergeAndWrite(rel, a.objs)
 		if err != nil {
 			return Result{}, err
 		}
@@ -264,41 +269,65 @@ func handleCNMerge(
 				return Result{}, err
 			}
 			if a.filter != "" {
-				stats, err = applyMergePolicy(proc.Ctx, a.filter, getSortKeyPos(proc.Ctx, rel), stats)
-				if err != nil {
-					return Result{}, err
-				}
-			}
-
-			entry, err := rel.MergeObjects(proc.Ctx, stats, uint32(a.targetObjSize))
-			if err != nil {
-				merge.CleanUpUselessFiles(entry, proc.GetFileService())
-				if entry == nil {
-					entry = &api.MergeCommitEntry{
-						Err: err.Error(),
+				buffer := new(bytes.Buffer)
+				var errOut error
+				hasSuccess := false
+				for {
+					stats, err = applyMergePolicy(proc.Ctx, a.filter, getSortKeyPos(proc.Ctx, rel), stats)
+					if err != nil {
+						errOut = errors.Join(errOut, err)
+						break
 					}
+					resp, err := mergeAndWrite(rel, stats)
+					if err != nil {
+						errOut = errors.Join(errOut, err)
+						break
+					}
+					buffer.WriteString(string(resp.Responses[0].CNOpResponse.Payload))
+					buffer.WriteString("\n")
+					resp.Release()
+					hasSuccess = true
 				}
+
+				if !hasSuccess {
+					return Result{}, errOut
+				}
+				return Result{
+					Method: MergeObjectsMethod,
+					Data:   buffer.Bytes(),
+				}, nil
 			}
 
-			payload, err := entry.MarshalBinary()
-			if err != nil {
-				return Result{}, err
+			size := 10
+			slicedstats := sliceStats(stats, size)
+			buffer := new(bytes.Buffer)
+			var errOut error
+			hasSuccess := false
+			for _, stats := range slicedstats {
+				resp, err := mergeAndWrite(rel, stats)
+				if err != nil {
+					errOut = errors.Join(errOut, err)
+					continue
+				}
+				buffer.WriteString(string(resp.Responses[0].CNOpResponse.Payload))
+				buffer.WriteString("\n")
+				resp.Release()
+				hasSuccess = true
 			}
-
-			resp, err := txnWrite(proc.Ctx, target, txnOp, payload)
-			if err != nil {
-				return Result{}, err
+			if !hasSuccess {
+				return Result{}, errOut
 			}
-			defer resp.Release()
 			return Result{
 				Method: MergeObjectsMethod,
-				Data:   resp.Responses[0].CNOpResponse.Payload,
+				Data:   buffer.Bytes(),
 			}, nil
 		}
 
 		// check if the current table is partitioned
 		var prel engine.Relation
-		var resultBuffer bytes.Buffer
+		var buffer bytes.Buffer
+		var errOut error
+		hasSuccess := false
 		// for partition table, run merge on each partition table separately.
 		for _, partitionTable := range partitionInfo.PartitionTableNames {
 			prel, err = database.Relation(proc.Ctx, partitionTable, nil)
@@ -310,39 +339,45 @@ func handleCNMerge(
 				return Result{}, err
 			}
 			if a.filter != "" {
-				stats, err = applyMergePolicy(proc.Ctx, a.filter, getSortKeyPos(proc.Ctx, prel), stats)
-				if err != nil {
-					return Result{}, err
-				}
-			}
-			entry, err := prel.MergeObjects(proc.Ctx, stats, uint32(a.targetObjSize))
-			if err != nil {
-				merge.CleanUpUselessFiles(entry, proc.GetFileService())
-				if entry == nil {
-					entry = &api.MergeCommitEntry{
-						Err: err.Error(),
+				for {
+					stats, err = applyMergePolicy(proc.Ctx, a.filter, getSortKeyPos(proc.Ctx, prel), stats)
+					if err != nil {
+						errOut = errors.Join(errOut, err)
+						break
 					}
+					resp, err := mergeAndWrite(prel, stats)
+					if err != nil {
+						errOut = errors.Join(errOut, err)
+						break
+					}
+					buffer.WriteString(string(resp.Responses[0].CNOpResponse.Payload))
+					buffer.WriteString("\n")
+					resp.Release()
+					hasSuccess = true
 				}
-				resultBuffer.WriteString(err.Error())
-				resultBuffer.WriteString("\n")
+				continue
 			}
 
-			payload, err := entry.MarshalBinary()
-			if err != nil {
-				return Result{}, err
+			size := 10
+			slicedstats := sliceStats(stats, size)
+			for _, stats := range slicedstats {
+				resp, err := mergeAndWrite(prel, stats)
+				if err != nil {
+					errOut = errors.Join(errOut, err)
+					continue
+				}
+				buffer.WriteString(string(resp.Responses[0].CNOpResponse.Payload))
+				buffer.WriteString("\n")
+				resp.Release()
+				hasSuccess = true
 			}
-
-			resp, err := txnWrite(proc.Ctx, target, txnOp, payload)
-			if err != nil {
-				return Result{}, err
-			}
-			resultBuffer.WriteString(string(resp.Responses[0].CNOpResponse.Payload))
-			resultBuffer.WriteString("\n")
-			resp.Release()
+		}
+		if !hasSuccess {
+			return Result{}, errOut
 		}
 		return Result{
 			Method: MergeObjectsMethod,
-			Data:   resultBuffer.Bytes(),
+			Data:   buffer.Bytes(),
 		}, nil
 	}
 	return Result{}, nil
@@ -366,6 +401,20 @@ func getTNShard(service string) metadata.TNShard {
 			return true
 		})
 	return target
+}
+
+func sliceStats(stats []objectio.ObjectStats, size int) [][]objectio.ObjectStats {
+	var j int
+	targetSize := len(stats)/size + 1
+	slicedstats := make([][]objectio.ObjectStats, 0, targetSize)
+	for i := 0; i < len(stats); i += size {
+		j += size
+		if j > len(stats) {
+			j = len(stats)
+		}
+		slicedstats = append(slicedstats, stats[i:j])
+	}
+	return slicedstats
 }
 
 func getRelPartitionInfo(ctx context.Context, rel engine.Relation) (*plan.PartitionByDef, error) {
