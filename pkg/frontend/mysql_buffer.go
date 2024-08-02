@@ -189,6 +189,12 @@ func (c *Conn) ReadLoadLocalPacket() ([]byte, error) {
 	}
 	var err error
 	var packetLength int
+	defer func() {
+		if err != nil {
+			c.allocator.Free(c.loadLocalBuf)
+			c.loadLocalBuf = nil
+		}
+	}()
 	err = c.ReadBytes(c.header[:], HeaderLengthOfTheProtocol)
 	if err != nil {
 		return nil, err
