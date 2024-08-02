@@ -22,6 +22,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -461,7 +463,19 @@ func buildJoinParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		return s, nil
 	}
 	mcpu := s.NodeInfo.Mcpu
-	if mcpu <= 1 { // no need to parallel
+
+	if s.ShuffleIdx > 0 { //shuffle join
+		buildScope := c.newJoinBuildScope(s, 1)
+		s.PreScopes = append(s.PreScopes, buildScope)
+		if s.BuildIdx > 1 {
+			probeScope := c.newJoinProbeScopeWithBidx(s)
+			s.PreScopes = append(s.PreScopes, probeScope)
+		}
+		s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:1]
+		return s, nil
+	}
+
+	if mcpu <= 1 { // broadcast join with no parallel
 		buildScope := c.newJoinBuildScope(s, 1)
 		s.PreScopes = append(s.PreScopes, buildScope)
 		s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:s.BuildIdx]
@@ -622,26 +636,26 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 	var err error
 	var inExprList []*plan.Expr
 	exprs := make([]*plan.Expr, 0, len(s.DataSource.RuntimeFilterSpecs))
-	filters := make([]process.RuntimeFilterMessage, 0, len(exprs))
+	filters := make([]message.RuntimeFilterMessage, 0, len(exprs))
 
 	if len(s.DataSource.RuntimeFilterSpecs) > 0 {
 		for _, spec := range s.DataSource.RuntimeFilterSpecs {
-			msgReceiver := c.proc.NewMessageReceiver([]int32{spec.Tag}, process.AddrBroadCastOnCurrentCN())
+			msgReceiver := message.NewMessageReceiver([]int32{spec.Tag}, message.AddrBroadCastOnCurrentCN(), c.proc.GetMessageBoard())
 			msgs, ctxDone := msgReceiver.ReceiveMessage(true, s.Proc.Ctx)
 			if ctxDone {
 				return nil
 			}
 			for i := range msgs {
-				msg, ok := msgs[i].(process.RuntimeFilterMessage)
+				msg, ok := msgs[i].(message.RuntimeFilterMessage)
 				if !ok {
 					panic("expect runtime filter message, receive unknown message!")
 				}
 				switch msg.Typ {
-				case process.RuntimeFilter_PASS:
+				case message.RuntimeFilter_PASS:
 					continue
-				case process.RuntimeFilter_DROP:
+				case message.RuntimeFilter_DROP:
 					return nil
-				case process.RuntimeFilter_IN:
+				case message.RuntimeFilter_IN:
 					inExpr := plan2.MakeInExpr(c.proc.Ctx, spec.Expr, msg.Card, msg.Data, spec.MatchPrefix)
 					inExprList = append(inExprList, inExpr)
 

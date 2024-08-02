@@ -22,6 +22,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -124,8 +126,8 @@ func New(
 	e.globalStats = NewGlobalStats(ctx, e, keyRouter,
 		WithUpdateWorkerFactor(updateWorkerFactor))
 
-	e.messageCenter = &process.MessageCenter{
-		StmtIDToBoard: make(map[uuid.UUID]*process.MessageBoard, 64),
+	e.messageCenter = &message.MessageCenter{
+		StmtIDToBoard: make(map[uuid.UUID]*message.MessageBoard, 64),
 		RwMutex:       &sync.Mutex{},
 	}
 
@@ -170,7 +172,7 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	}
 	// non-io operations do not need to pass context
 	note := noteForCreate(uint64(accountId), name)
-	if _, err = txn.WriteBatch(INSERT, note, accountId, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
+	if _, err = txn.WriteBatch(INSERT, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
 		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.tnStores[0]); err != nil {
 		bat.Clean(txn.proc.Mp())
 		return err
@@ -489,7 +491,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 
 	if bat = txn.deleteBatch(bat, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID); bat.RowCount() > 0 {
 		note := noteForDrop(uint64(accountId), name)
-		if _, err := txn.WriteBatch(DELETE, note, accountId, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
+		if _, err := txn.WriteBatch(DELETE, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
 			catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.tnStores[0]); err != nil {
 			bat.Clean(txn.proc.Mp())
 			return err
@@ -531,6 +533,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		databaseMap:        new(sync.Map),
 		deletedDatabaseMap: new(sync.Map),
 		tableOps:           newTableOps(),
+		tablesInVain:       make(map[uint64]int),
 		rowId: [6]uint32{
 			types.DecodeUint32(bytes[0:4]),
 			types.DecodeUint32(bytes[4:8]),
