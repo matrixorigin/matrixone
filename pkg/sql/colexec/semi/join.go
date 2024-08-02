@@ -195,7 +195,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *SemiJoin, proc *process.Proces
 	itr := ctr.mp.NewIterator()
 
 	rowCountIncrease := 0
-	eligible := make([]int32, 0) // eligible := make([]int32, 0, hashmap.UnitLimit)
+	eligible := make([]int64, 0) // eligible := make([]int32, 0, hashmap.UnitLimit)
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {
@@ -260,7 +260,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *SemiJoin, proc *process.Proces
 					continue
 				}
 			}
-			eligible = append(eligible, int32(i+k))
+			eligible = append(eligible, int64(i+k))
 			rowCountIncrease++
 		}
 		//eligible = eligible[:0]

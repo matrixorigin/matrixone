@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -834,6 +835,8 @@ func convertToPipelineInstruction(op vm.Operator, ctx *scopeContext, ctxId int32
 	case *value_scan.ValueScan:
 		in.ValueScan = &pipeline.ValueScan{}
 		in.ProjectList = t.ProjectList
+	case *unionall.UnionAll:
+		in.UnionAll = &pipeline.UnionAll{}
 	default:
 		return -1, nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", op.OpType()))
 	}
@@ -1300,6 +1303,8 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 	case vm.ValueScan:
 		op = value_scan.NewArgument()
 		op.(*value_scan.ValueScan).ProjectList = opr.ProjectList
+	case vm.UnionAll:
+		op = unionall.NewArgument()
 	default:
 		return op, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", opr.Op))
 	}
