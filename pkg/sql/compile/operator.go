@@ -18,9 +18,12 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shufflebuild"
@@ -745,12 +748,12 @@ func constructPreInsertSk(n *plan.Node, proc *process.Process) *preinsertseconda
 	return op
 }
 
-func constructMergeblock(eg engine.Engine, insertArg *insert.Insert) *mergeblock.MergeBlock {
+func constructMergeblock(eg engine.Engine, n *plan.Node) *mergeblock.MergeBlock {
 	return mergeblock.NewArgument().
 		WithEngine(eg).
-		WithObjectRef(insertArg.InsertCtx.Ref).
-		WithParitionNames(insertArg.InsertCtx.PartitionTableNames).
-		WithAddAffectedRows(insertArg.InsertCtx.AddAffectedRows)
+		WithObjectRef(n.InsertCtx.Ref).
+		WithParitionNames(n.InsertCtx.PartitionTableNames).
+		WithAddAffectedRows(n.InsertCtx.AddAffectedRows)
 }
 
 func constructLockOp(n *plan.Node, eng engine.Engine) (*lockop.LockOp, error) {
@@ -778,7 +781,7 @@ func constructLockOp(n *plan.Node, eng engine.Engine) (*lockop.LockOp, error) {
 	return arg, nil
 }
 
-func constructInsert(n *plan.Node, eg engine.Engine) (*insert.Insert, error) {
+func constructInsert(n *plan.Node, eg engine.Engine) *insert.Insert {
 	oldCtx := n.InsertCtx
 	var attrs []string
 	for _, col := range oldCtx.TableDef.Cols {
@@ -798,7 +801,7 @@ func constructInsert(n *plan.Node, eg engine.Engine) (*insert.Insert, error) {
 	}
 	arg := insert.NewArgument()
 	arg.InsertCtx = newCtx
-	return arg, nil
+	return arg
 }
 
 func constructProjection(n *plan.Node) *projection.Projection {
@@ -895,7 +898,7 @@ func constructJoin(n *plan.Node, typs []types.Type, proc *process.Process) *join
 	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
 	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
 	for i := range n.SendMsgList {
-		if n.SendMsgList[i].MsgType == int32(process.MsgJoinMap) {
+		if n.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
 			arg.JoinMapTag = n.SendMsgList[i].MsgTag
 		}
 	}
@@ -924,7 +927,7 @@ func constructSemi(n *plan.Node, typs []types.Type, proc *process.Process) *semi
 	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
 	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
 	for i := range n.SendMsgList {
-		if n.SendMsgList[i].MsgType == int32(process.MsgJoinMap) {
+		if n.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
 			arg.JoinMapTag = n.SendMsgList[i].MsgTag
 		}
 	}
@@ -949,7 +952,7 @@ func constructLeft(n *plan.Node, typs []types.Type, proc *process.Process) *left
 	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
 	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
 	for i := range n.SendMsgList {
-		if n.SendMsgList[i].MsgType == int32(process.MsgJoinMap) {
+		if n.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
 			arg.JoinMapTag = n.SendMsgList[i].MsgTag
 		}
 	}
@@ -975,7 +978,7 @@ func constructRight(n *plan.Node, left_typs, right_typs []types.Type, proc *proc
 	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
 	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
 	for i := range n.SendMsgList {
-		if n.SendMsgList[i].MsgType == int32(process.MsgJoinMap) {
+		if n.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
 			arg.JoinMapTag = n.SendMsgList[i].MsgTag
 		}
 	}
@@ -1001,7 +1004,7 @@ func constructRightSemi(n *plan.Node, right_typs []types.Type, proc *process.Pro
 	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
 	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
 	for i := range n.SendMsgList {
-		if n.SendMsgList[i].MsgType == int32(process.MsgJoinMap) {
+		if n.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
 			arg.JoinMapTag = n.SendMsgList[i].MsgTag
 		}
 	}
@@ -1026,7 +1029,7 @@ func constructRightAnti(n *plan.Node, right_typs []types.Type, proc *process.Pro
 	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
 	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
 	for i := range n.SendMsgList {
-		if n.SendMsgList[i].MsgType == int32(process.MsgJoinMap) {
+		if n.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
 			arg.JoinMapTag = n.SendMsgList[i].MsgTag
 		}
 	}
@@ -1050,7 +1053,7 @@ func constructSingle(n *plan.Node, typs []types.Type, proc *process.Process) *si
 	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
 	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
 	for i := range n.SendMsgList {
-		if n.SendMsgList[i].MsgType == int32(process.MsgJoinMap) {
+		if n.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
 			arg.JoinMapTag = n.SendMsgList[i].MsgTag
 		}
 	}
@@ -1069,7 +1072,7 @@ func constructProduct(n *plan.Node, typs []types.Type, proc *process.Process) *p
 	arg.Typs = typs
 	arg.Result = result
 	for i := range n.SendMsgList {
-		if n.SendMsgList[i].MsgType == int32(process.MsgJoinMap) {
+		if n.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
 			arg.JoinMapTag = n.SendMsgList[i].MsgTag
 		}
 	}
@@ -1098,7 +1101,7 @@ func constructAnti(n *plan.Node, typs []types.Type, proc *process.Process) *anti
 	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
 	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
 	for i := range n.SendMsgList {
-		if n.SendMsgList[i].MsgType == int32(process.MsgJoinMap) {
+		if n.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
 			arg.JoinMapTag = n.SendMsgList[i].MsgTag
 		}
 	}
@@ -1135,6 +1138,11 @@ func constructMark(n *plan.Node, typs []types.Type, proc *process.Process) *mark
 func constructOrder(n *plan.Node) *order.Order {
 	arg := order.NewArgument()
 	arg.OrderBySpec = n.OrderBy
+	return arg
+}
+
+func constructUnionAll(_ *plan.Node) *unionall.UnionAll {
+	arg := unionall.NewArgument()
 	return arg
 }
 
@@ -1602,7 +1610,7 @@ func constructProductL2(n *plan.Node, typs []types.Type, proc *process.Process) 
 	arg.Result = result
 	arg.OnExpr = colexec.RewriteFilterExprList(n.OnList)
 	for i := range n.SendMsgList {
-		if n.SendMsgList[i].MsgType == int32(process.MsgJoinMap) {
+		if n.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
 			arg.JoinMapTag = n.SendMsgList[i].MsgTag
 		}
 	}
@@ -1622,7 +1630,7 @@ func constructLoopJoin(n *plan.Node, typs []types.Type, proc *process.Process) *
 	arg.Result = result
 	arg.Cond = colexec.RewriteFilterExprList(n.OnList)
 	for i := range n.SendMsgList {
-		if n.SendMsgList[i].MsgType == int32(process.MsgJoinMap) {
+		if n.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
 			arg.JoinMapTag = n.SendMsgList[i].MsgTag
 		}
 	}
@@ -1646,7 +1654,7 @@ func constructLoopSemi(n *plan.Node, typs []types.Type, proc *process.Process) *
 	arg.Result = result
 	arg.Cond = colexec.RewriteFilterExprList(n.OnList)
 	for i := range n.SendMsgList {
-		if n.SendMsgList[i].MsgType == int32(process.MsgJoinMap) {
+		if n.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
 			arg.JoinMapTag = n.SendMsgList[i].MsgTag
 		}
 	}
@@ -1666,7 +1674,7 @@ func constructLoopLeft(n *plan.Node, typs []types.Type, proc *process.Process) *
 	arg.Result = result
 	arg.Cond = colexec.RewriteFilterExprList(n.OnList)
 	for i := range n.SendMsgList {
-		if n.SendMsgList[i].MsgType == int32(process.MsgJoinMap) {
+		if n.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
 			arg.JoinMapTag = n.SendMsgList[i].MsgTag
 		}
 	}
@@ -1686,7 +1694,7 @@ func constructLoopSingle(n *plan.Node, typs []types.Type, proc *process.Process)
 	arg.Result = result
 	arg.Cond = colexec.RewriteFilterExprList(n.OnList)
 	for i := range n.SendMsgList {
-		if n.SendMsgList[i].MsgType == int32(process.MsgJoinMap) {
+		if n.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
 			arg.JoinMapTag = n.SendMsgList[i].MsgTag
 		}
 	}
@@ -1710,7 +1718,7 @@ func constructLoopAnti(n *plan.Node, typs []types.Type, proc *process.Process) *
 	arg.Result = result
 	arg.Cond = colexec.RewriteFilterExprList(n.OnList)
 	for i := range n.SendMsgList {
-		if n.SendMsgList[i].MsgType == int32(process.MsgJoinMap) {
+		if n.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
 			arg.JoinMapTag = n.SendMsgList[i].MsgTag
 		}
 	}
@@ -1737,7 +1745,7 @@ func constructLoopMark(n *plan.Node, typs []types.Type, proc *process.Process) *
 	arg.Result = result
 	arg.Cond = colexec.RewriteFilterExprList(n.OnList)
 	for i := range n.SendMsgList {
-		if n.SendMsgList[i].MsgType == int32(process.MsgJoinMap) {
+		if n.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
 			arg.JoinMapTag = n.SendMsgList[i].MsgTag
 		}
 	}
