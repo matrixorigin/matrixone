@@ -18,18 +18,19 @@ import (
 	"sync"
 
 	"github.com/dolthub/maphash"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 )
 
 type LRU[K comparable, V BytesLike] struct {
 	size     int64
-	capacity int64
+	capacity fscache.CapacityFunc
 	shards   []shard[K, V]
 	hasher   maphash.Hasher[K]
 }
 
 type shard[K comparable, V BytesLike] struct {
 	sync.RWMutex
-	capacity  int64
+	capacity  fscache.CapacityFunc
 	size      int64
 	totalSize *int64
 	evicts    *list[K, V]
