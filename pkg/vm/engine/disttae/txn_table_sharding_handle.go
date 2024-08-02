@@ -17,6 +17,7 @@ package disttae
 import (
 	"bytes"
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -135,9 +136,6 @@ func HandleShardingReadApproxObjectsNum(
 	num := tbl.ApproxObjectsNum(
 		ctx,
 	)
-	if err != nil {
-		return nil, err
-	}
 	return buffer.EncodeInt(num), nil
 }
 

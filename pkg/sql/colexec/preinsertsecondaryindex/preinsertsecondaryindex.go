@@ -54,13 +54,15 @@ func (preInsertSecIdx *PreInsertSecIdx) Call(proc *process.Process) (vm.CallResu
 		return vm.CancelResult, err
 	}
 
-	result, err := preInsertSecIdx.GetChildren(0).Call(proc)
+	anal := proc.GetAnalyze(preInsertSecIdx.GetIdx(), preInsertSecIdx.GetParallelIdx(), preInsertSecIdx.GetParallelMajor())
+	anal.Start()
+	defer anal.Stop()
+
+	result, err := vm.ChildrenCall(preInsertSecIdx.GetChildren(0), proc, anal)
 	if err != nil {
 		return result, err
 	}
-	analy := proc.GetAnalyze(preInsertSecIdx.GetIdx(), preInsertSecIdx.GetParallelIdx(), preInsertSecIdx.GetParallelMajor())
-	analy.Start()
-	defer analy.Stop()
+	anal.Input(result.Batch, preInsertSecIdx.IsFirst)
 
 	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() {
 		return result, nil
@@ -121,6 +123,8 @@ func (preInsertSecIdx *PreInsertSecIdx) Call(proc *process.Process) (vm.CallResu
 			return result, err
 		}
 	}
+
 	result.Batch = preInsertSecIdx.ctr.buf
+	anal.Output(result.Batch, preInsertSecIdx.IsLast)
 	return result, nil
 }
