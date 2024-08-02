@@ -1442,9 +1442,9 @@ const (
 
 	checkStageFormat = `select stage_id, stage_name from mo_catalog.mo_stages where stage_name = "%s" order by stage_id;`
 
-	checkStageStatusFormat = `select stage_id, stage_name from mo_catalog.mo_stages where stage_status = "%s" order by stage_id;`
+	//checkStageStatusFormat = `select stage_id, stage_name from mo_catalog.mo_stages where stage_status = "%s" order by stage_id;`
 
-	checkStageStatusWithStageNameFormat = `select url, stage_status from mo_catalog.mo_stages where stage_name = "%s" order by stage_id;`
+	//checkStageStatusWithStageNameFormat = `select url, stage_status from mo_catalog.mo_stages where stage_name = "%s" order by stage_id;`
 
 	dropStageFormat = `delete from mo_catalog.mo_stages where stage_name = '%s' order by stage_id;`
 
@@ -1522,13 +1522,17 @@ func getSqlForCheckStage(ctx context.Context, stage string) (string, error) {
 	return fmt.Sprintf(checkStageFormat, stage), nil
 }
 
+/*
 func getSqlForCheckStageStatus(ctx context.Context, status string) string {
 	return fmt.Sprintf(checkStageStatusFormat, status)
 }
+*/
 
 func getSqlForCheckUdfWithDb(dbName string) string {
 	return fmt.Sprintf(checkUdfWithDb, dbName)
 }
+
+/*
 func getSqlForCheckStageStatusWithStageName(ctx context.Context, stage string) (string, error) {
 	err := inputNameIsInvalid(ctx, stage)
 	if err != nil {
@@ -1536,6 +1540,7 @@ func getSqlForCheckStageStatusWithStageName(ctx context.Context, stage string) (
 	}
 	return fmt.Sprintf(checkStageStatusWithStageNameFormat, stage), nil
 }
+*/
 
 func getSqlForInsertIntoMoStages(ctx context.Context, stageName, url, credentials, status, createdTime, comment string) (string, error) {
 	err := inputNameIsInvalid(ctx, stageName)
