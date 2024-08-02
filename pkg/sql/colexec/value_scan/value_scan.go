@@ -59,5 +59,6 @@ func (valueScan *ValueScan) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	anal.Input(result.Batch, valueScan.IsFirst)
+	anal.Output(result.Batch, valueScan.IsLast)
 	return result, nil
 }
