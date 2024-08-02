@@ -225,7 +225,7 @@ func ConstructRowidColumnTo(
 func ConstructRowidColumnToWithSels(
 	vec *vector.Vector,
 	id *Blockid,
-	sels []int32,
+	sels []int64,
 	mp *mpool.MPool,
 ) (err error) {
 	if err = vec.PreExtend(len(sels), mp); err != nil {
