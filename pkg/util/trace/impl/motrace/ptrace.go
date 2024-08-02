@@ -60,7 +60,7 @@ func (p *MOTracerProvider) Tracer(instrumentationName string, opts ...trace.Trac
 		TracerConfig: trace.TracerConfig{Name: instrumentationName},
 		provider:     p,
 		// init mapper
-		profileBackOff: map[string]BackOff{},
+		profileBackOff: make(map[string]BackOff, 8),
 	}
 	for _, opt := range opts {
 		opt.Apply(&tracer.TracerConfig)
