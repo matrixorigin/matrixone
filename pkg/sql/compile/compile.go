@@ -3479,12 +3479,14 @@ func (c *Compile) newDeleteMergeScope(arg *deletion.Deletion, ss []*Scope) *Scop
 }
 
 // ensure all scopes are in the same CN, reduce unnecessary channel
+/*
 func (c *Compile) newMergeScopeByCN(ss []*Scope, nodeinfo engine.Node) *Scope {
 	rs := newScope(Remote)
 	rs.NodeInfo.Addr = nodeinfo.Addr
 	rs.NodeInfo.Mcpu = 1 // merge scope is single parallel by default
 	rs.PreScopes = ss
 	rs.Proc = process.NewFromProc(c.proc, c.proc.Ctx, 1)
+	rs.Proc.Reg.MergeReceivers[0].Ch = make(chan *process.RegisterMessage, len(ss))
 	mergeOp := merge.NewArgument()
 	mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 	rs.setRootOperator(mergeOp)
@@ -3498,6 +3500,7 @@ func (c *Compile) newMergeScopeByCN(ss []*Scope, nodeinfo engine.Node) *Scope {
 	}
 	return rs
 }
+*/
 
 func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 	rs := newScope(Merge)
@@ -3668,7 +3671,7 @@ func (c *Compile) newJoinScopeListWithBucket(rs, left, right []*Scope, n *plan.N
 }
 
 func (c *Compile) mergeShuffleScopesIfNeeded(ss []*Scope) []*Scope {
-	if len(ss) <= len(c.cnList) {
+	if len(c.cnList) == 1 || len(ss) <= len(c.cnList) {
 		return ss
 	}
 	for i := range ss {
@@ -3690,7 +3693,7 @@ func (c *Compile) mergeScopesByCN(ss []*Scope) []*Scope {
 			}
 		}
 		if len(currentSS) > 0 {
-			mergeScope := c.newMergeScopeByCN(currentSS, cn)
+			mergeScope := c.newMergeRemoteScope(currentSS, cn)
 			rs = append(rs, mergeScope)
 		}
 	}
