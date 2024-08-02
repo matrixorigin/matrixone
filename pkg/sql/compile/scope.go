@@ -17,28 +17,24 @@ package compile
 import (
 	"context"
 	"fmt"
-	"strings"
-
 	goruntime "runtime"
 	"runtime/debug"
+	"strings"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
@@ -58,7 +54,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
@@ -377,7 +377,7 @@ func (s *Scope) RemoteRun(c *Compile) error {
 		return s.ParallelRun(c)
 	}
 
-	runtime.ProcessLevelRuntime().Logger().
+	runtime.ServiceRuntime(s.Proc.GetService()).Logger().
 		Debug("remote run pipeline",
 			zap.String("local-address", c.addr),
 			zap.String("remote-address", s.NodeInfo.Addr))
@@ -429,6 +429,7 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 	// probability 1: it's a JOIN pipeline.
 	case s.IsJoin:
 		parallelScope, err = buildJoinParallelRun(s, c)
+		//fmt.Println(DebugShowScopes([]*Scope{parallelScope}))
 
 	// probability 2: it's a LOAD pipeline.
 	case s.IsLoad:
@@ -437,6 +438,7 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 	// probability 3: it's a SCAN pipeline.
 	case s.DataSource != nil:
 		parallelScope, err = buildScanParallelRun(s, c)
+		//fmt.Println(DebugShowScopes([]*Scope{parallelScope}))
 
 	// others.
 	default:
@@ -461,13 +463,22 @@ func buildJoinParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		return s, nil
 	}
 	mcpu := s.NodeInfo.Mcpu
-	if mcpu <= 1 { // no need to parallel
-		buildScope := c.newJoinBuildScope(s, nil)
+
+	if s.ShuffleIdx > 0 { //shuffle join
+		buildScope := c.newJoinBuildScope(s, 1)
 		s.PreScopes = append(s.PreScopes, buildScope)
 		if s.BuildIdx > 1 {
-			probeScope := c.newJoinProbeScope(s, nil)
+			probeScope := c.newJoinProbeScopeWithBidx(s)
 			s.PreScopes = append(s.PreScopes, probeScope)
 		}
+		s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:1]
+		return s, nil
+	}
+
+	if mcpu <= 1 { // broadcast join with no parallel
+		buildScope := c.newJoinBuildScope(s, 1)
+		s.PreScopes = append(s.PreScopes, buildScope)
+		s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:s.BuildIdx]
 		return s, nil
 	}
 
@@ -482,10 +493,9 @@ func buildJoinParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	for i := 0; i < mcpu; i++ {
 		ss[i] = newScope(Merge)
 		ss[i].NodeInfo = s.NodeInfo
-		ss[i].Proc = process.NewFromProc(s.Proc, s.Proc.Ctx, 2)
-		ss[i].Proc.Reg.MergeReceivers[1].Ch = make(chan *process.RegisterMessage, 10)
+		ss[i].Proc = process.NewFromProc(s.Proc, s.Proc.Ctx, 1)
 	}
-	probeScope, buildScope := c.newJoinProbeScope(s, ss), c.newJoinBuildScope(s, ss)
+	probeScope, buildScope := c.newBroadcastJoinProbeScope(s, ss), c.newJoinBuildScope(s, int32(mcpu))
 
 	ns, err := newParallelScope(c, s, ss)
 	if err != nil {
@@ -497,7 +507,7 @@ func buildJoinParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		channel := make(chan *bitmap.Bitmap, mcpu)
 		for i := range ns.PreScopes {
 			s := ns.PreScopes[i]
-			switch arg := vm.GetLeafOp(s.RootOp).(type) {
+			switch arg := vm.GetLeafOpParent(nil, s.RootOp).(type) {
 			case *right.RightJoin:
 				arg.Channel = channel
 				arg.NumCPU = uint64(mcpu)
@@ -626,26 +636,26 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 	var err error
 	var inExprList []*plan.Expr
 	exprs := make([]*plan.Expr, 0, len(s.DataSource.RuntimeFilterSpecs))
-	filters := make([]process.RuntimeFilterMessage, 0, len(exprs))
+	filters := make([]message.RuntimeFilterMessage, 0, len(exprs))
 
 	if len(s.DataSource.RuntimeFilterSpecs) > 0 {
 		for _, spec := range s.DataSource.RuntimeFilterSpecs {
-			msgReceiver := c.proc.NewMessageReceiver([]int32{spec.Tag}, process.AddrBroadCastOnCurrentCN())
+			msgReceiver := message.NewMessageReceiver([]int32{spec.Tag}, message.AddrBroadCastOnCurrentCN(), c.proc.GetMessageBoard())
 			msgs, ctxDone := msgReceiver.ReceiveMessage(true, s.Proc.Ctx)
 			if ctxDone {
 				return nil
 			}
 			for i := range msgs {
-				msg, ok := msgs[i].(process.RuntimeFilterMessage)
+				msg, ok := msgs[i].(message.RuntimeFilterMessage)
 				if !ok {
 					panic("expect runtime filter message, receive unknown message!")
 				}
 				switch msg.Typ {
-				case process.RuntimeFilter_PASS:
+				case message.RuntimeFilter_PASS:
 					continue
-				case process.RuntimeFilter_DROP:
+				case message.RuntimeFilter_DROP:
 					return nil
-				case process.RuntimeFilter_IN:
+				case message.RuntimeFilter_IN:
 					inExpr := plan2.MakeInExpr(c.proc.Ctx, spec.Expr, msg.Card, msg.Data, spec.MatchPrefix)
 					inExprList = append(inExprList, inExpr)
 
@@ -733,7 +743,7 @@ func (s *Scope) isRight() bool {
 	if s == nil {
 		return false
 	}
-	OpType := vm.GetLeafOp(s.RootOp).OpType()
+	OpType := vm.GetLeafOpParent(nil, s.RootOp).OpType()
 	return OpType == vm.Right || OpType == vm.RightSemi || OpType == vm.RightAnti
 }
 
@@ -1099,7 +1109,13 @@ func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMess
 		errSubmit := ants.Submit(
 			func() {
 
-				sender, err := newMessageSenderOnClient(s.Proc.Ctx, fromAddr, s.Proc.Mp(), nil)
+				sender, err := newMessageSenderOnClient(
+					s.Proc.Ctx,
+					s.Proc.GetService(),
+					fromAddr,
+					s.Proc.Mp(),
+					nil,
+				)
 				if err != nil {
 					closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], nil)
 					return
@@ -1140,11 +1156,7 @@ func receiveMsgAndForward(proc *process.Process, sender *messageSenderOnClient, 
 			return nil
 		}
 
-		if forwardCh == nil {
-			// used for delete.
-			// I don't know what is that.
-			proc.SetInputBatch(bat)
-		} else {
+		if forwardCh != nil {
 			msg := &process.RegisterMessage{Batch: bat}
 			select {
 			case <-proc.Ctx.Done():

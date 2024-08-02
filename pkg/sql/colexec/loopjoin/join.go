@@ -16,6 +16,9 @@ package loopjoin
 
 import (
 	"bytes"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -39,7 +42,6 @@ func (loopJoin *LoopJoin) Prepare(proc *process.Process) error {
 	var err error
 
 	loopJoin.ctr = new(container)
-	loopJoin.ctr.InitReceiver(proc, false)
 
 	if loopJoin.Cond != nil {
 		loopJoin.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopJoin.Cond)
@@ -61,7 +63,7 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(proc, anal); err != nil {
+			if err := loopJoin.build(proc, anal); err != nil {
 				return result, err
 			}
 			if ctr.bat == nil {
@@ -76,11 +78,11 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				err = ctr.probe(loopJoin, proc, anal, loopJoin.GetIsLast(), &result)
 				return result, err
 			}
-			msg := ctr.ReceiveFromSingleReg(0, anal)
-			if msg.Err != nil {
-				return result, msg.Err
+			result, err = loopJoin.Children[0].Call(proc)
+			if err != nil {
+				return result, err
 			}
-			ctr.inBat = msg.Batch
+			ctr.inBat = result.Batch
 			if ctr.inBat == nil {
 				ctr.state = End
 				continue
@@ -106,22 +108,22 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
+func (loopJoin *LoopJoin) build(proc *process.Process, anal process.Analyze) error {
+	ctr := loopJoin.ctr
+	start := time.Now()
+	defer anal.WaitStop(start)
+	mp := message.ReceiveJoinMap(loopJoin.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
+	if mp == nil {
+		return nil
+	}
+	batches := mp.GetBatches()
 	var err error
-	for {
-		msg := ctr.ReceiveFromSingleReg(1, anal)
-		if msg.Err != nil {
-			return msg.Err
-		}
-		bat := msg.Batch
-		if bat == nil {
-			break
-		}
-		ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), bat)
+	//maybe optimize this in the future
+	for i := range batches {
+		ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), batches[i])
 		if err != nil {
 			return err
 		}
-		proc.PutBatch(bat)
 	}
 	return nil
 }

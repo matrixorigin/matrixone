@@ -25,6 +25,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -44,8 +45,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
-	"github.com/google/uuid"
 )
 
 func builtInDateDiff(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
@@ -395,7 +394,7 @@ func builtInInternalCharacterSet(parameters []*vector.Vector, result vector.Func
 				return err
 			}
 			if typ.Oid == types.T_varchar || typ.Oid == types.T_char ||
-				typ.Oid == types.T_blob || typ.Oid == types.T_text {
+				typ.Oid == types.T_blob || typ.Oid == types.T_text || typ.Oid == types.T_datalink {
 				if err := rs.Append(int64(typ.Scale), false); err != nil {
 					return err
 				}
@@ -532,7 +531,7 @@ func builtInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWr
 		return moerr.NewNotSupported(proc.Ctx, "only support sys account")
 	}
 
-	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.InternalSQLExecutor)
+	v, ok := runtime.ServiceRuntime(proc.GetService()).GetGlobalVariables(runtime.InternalSQLExecutor)
 	if !ok {
 		return moerr.NewNotSupported(proc.Ctx, "no implement sqlExecutor")
 	}
@@ -1488,23 +1487,25 @@ func SerialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 			}
 		}
 	case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64:
-		vs := vector.ExpandStrCol(v)
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		if hasNull {
-			for i := range vs {
-				if v.IsNull(uint64(i)) {
+			fv := vector.GenerateFunctionStrParameter(v)
+			for i, j := uint64(0), uint64(v.Length()); i < j; i++ {
+				value, null := fv.GetStrValue(i)
+				if null {
 					if isFull {
 						ps[i].EncodeNull()
 					} else {
-						nulls.Add(bitMap, uint64(i))
+						nulls.Add(bitMap, i)
 					}
-				} else {
-					ps[i].EncodeStringType([]byte(vs[i]))
+					continue
 				}
+				ps[i].EncodeStringType(value)
 			}
 		} else {
+			vs := vector.ExpandBytesCol(v)
 			for i := range vs {
-				ps[i].EncodeStringType([]byte(vs[i]))
+				ps[i].EncodeStringType(vs[i])
 			}
 		}
 	}
@@ -1577,7 +1578,7 @@ func builtInSerialExtract(parameters []*vector.Vector, result vector.FunctionRes
 		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
 
 	case types.T_json, types.T_char, types.T_varchar, types.T_text,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_array_float32, types.T_array_float64:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_array_float32, types.T_array_float64, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return serialExtractForString(p1, p2, rs, proc, length, selectList)
 	}

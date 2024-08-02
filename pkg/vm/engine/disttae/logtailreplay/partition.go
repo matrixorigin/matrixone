@@ -21,10 +21,9 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 )
 
 // a partition corresponds to a dn
@@ -59,14 +58,17 @@ func (p *Partition) CanServe(ts types.TS) bool {
 	return ts.GreaterEq(&p.mu.start) && ts.LessEq(&p.mu.end)
 }
 
-func NewPartition() *Partition {
+func NewPartition(
+	service string,
+	id uint64,
+) *Partition {
 	lock := make(chan struct{}, 1)
 	lock <- struct{}{}
 	ret := &Partition{
 		lock: lock,
 	}
 	ret.mu.start = types.MaxTs()
-	ret.state.Store(NewPartitionState(false))
+	ret.state.Store(NewPartitionState(service, false, id))
 	return ret
 }
 

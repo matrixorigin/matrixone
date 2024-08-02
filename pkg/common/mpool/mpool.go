@@ -412,7 +412,7 @@ func NewMPool(tag string, cap int64, flag int) (*MPool, error) {
 			return nil, moerr.NewInternalErrorNoCtx("mpool cap %d too small", cap)
 		}
 		if cap > GlobalCap() {
-			return nil, moerr.NewInternalErrorNoCtx("mpool cap %d too big, global cap %d", cap, globalCap)
+			return nil, moerr.NewInternalErrorNoCtx("mpool cap %d too big, global cap %d", cap, globalCap.Load())
 		}
 	}
 
@@ -507,16 +507,16 @@ func DeleteMPool(mp *MPool) {
 }
 
 var nextPool int64
-var globalCap int64
+var globalCap atomic.Int64
 var globalStats MPoolStats
 var globalPools sync.Map
 var crossPoolFreeCounter atomic.Int64
 
 func InitCap(cap int64) {
 	if cap < GB {
-		globalCap = GB
+		globalCap.Store(GB)
 	} else {
-		globalCap = cap
+		globalCap.Store(cap)
 	}
 }
 
@@ -527,11 +527,13 @@ func TotalCrossPoolFreeCounter() int64 {
 func GlobalStats() *MPoolStats {
 	return &globalStats
 }
+
 func GlobalCap() int64 {
-	if globalCap == 0 {
+	n := globalCap.Load()
+	if n == 0 {
 		return PB
 	}
-	return globalCap
+	return n
 }
 
 func sizeToIdx(size int) int {
@@ -738,6 +740,7 @@ func (mp *MPool) Grow2(old []byte, old2 []byte, sz int) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	copy(ret[len1:len1+len2], old2)
 	return ret, nil
 }

@@ -9,11 +9,11 @@ desc tb_emp6;
 Field    Type    Null    Key    Default    Extra    Comment
 id    INT(32)    NO    PRI    null        
 name    VARCHAR(25)    YES        null        
-deptid    INT(32)    YES    MUL    null        
+deptId    INT(32)    YES    MUL    null        
 salary    FLOAT(0)    YES        null        
 show create table tb_emp6;
 Table    Create Table
-tb_emp6    CREATE TABLE `tb_emp6` (\n  `id` INT NOT NULL,\n  `name` VARCHAR(25) DEFAULT NULL,\n  `deptid` INT DEFAULT NULL,\n  `salary` FLOAT DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  CONSTRAINT `fk_emp_dept1` FOREIGN KEY (`deptid`) REFERENCES `tb_dept1` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+tb_emp6    CREATE TABLE `tb_emp6` (\n  `id` INT NOT NULL,\n  `name` VARCHAR(25) DEFAULT NULL,\n  `deptId` INT DEFAULT NULL,\n  `salary` FLOAT DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  CONSTRAINT `fk_emp_dept1` FOREIGN KEY (`deptId`) REFERENCES `tb_dept1` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 drop database if exists db2;
 create database db2;
 use db2;

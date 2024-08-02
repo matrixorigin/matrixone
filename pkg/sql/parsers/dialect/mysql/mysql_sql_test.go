@@ -194,6 +194,9 @@ var (
 		input:  "show index from t1 from db",
 		output: "show index from t1 from db",
 	}, {
+		input:  "create table t2(a int, b datalink);",
+		output: "create table t2 (a int, b datalink)",
+	}, {
 		input:  "select * from (SELECT * FROM (SELECT 1, 2, 3)) AS t1",
 		output: "select * from (select * from (select 1, 2, 3)) as t1",
 	}, {
@@ -2509,6 +2512,33 @@ var (
 			output: "restore account account_01 from snapshot snapshot_01 to account account_02",
 		},
 		{
+			input: `create cdc 'test_create_task' 'mysql://dump:111@127.0.0.1:6001' 'mysql' 'mysql://root:123456@127.0.0.1:3306' 'a,b' { "StartTS"='',"EndTS"='',"NoFull"='false',"FullConcurrency"='16',"IncrementalConcurrency"='16',"ConfigFile"='',"FullTaskRetry"='',"IncrementalTaskRetry"='',"FullDDLRetry"='0',"FullDMLRetry"='0',"IncrementalDDLRetry"='0',"IncrementalDMLRetry"='0',};`,
+		},
+		{
+			input: `show cdc 'mysql://dump:111@127.0.0.1:6001' all;`,
+		},
+		{
+			input: `show cdc 'mysql://dump:111@127.0.0.1:6001' task 't1';`,
+		},
+		{
+			input: `drop cdc 'mysql://dump:111@127.0.0.1:6001' all;`,
+		},
+		{
+			input: `drop cdc 'mysql://dump:111@127.0.0.1:6001' task 't1';`,
+		},
+		{
+			input: `pause cdc 'mysql://dump:111@127.0.0.1:6001' all;`,
+		},
+		{
+			input: `pause cdc 'mysql://dump:111@127.0.0.1:6001' task 't1';`,
+		},
+		{
+			input: `resume cdc 'mysql://dump:111@127.0.0.1:6001' task 't1';`,
+		},
+		{
+			input: `resume cdc 'mysql://dump:111@127.0.0.1:6001' task 't1' 'restart';`,
+		},
+		{
 			input: "alter publication pub1 account add acc0, acc1",
 		},
 		{
@@ -2883,6 +2913,69 @@ var (
 		{
 			input:  "explain analyze verbose force execute st",
 			output: "explain (analyze,verbose) execute st",
+		},
+		{
+			input:  "create pitr `pitr1` for cluster range 1 'd'",
+			output: "create pitr pitr1 for cluster range 1  d",
+		},
+		{
+			input:  "create pitr `pitr2` for account acc01 range 1 'd'",
+			output: "create pitr pitr2 for account acc01 range 1  d",
+		},
+		{
+			input:  "create pitr `pitr3` range 1 'h'",
+			output: "create pitr pitr3 for self account range 1  h",
+		},
+		{
+			input:  "create pitr `pitr4` for database db01 range 1 'h'",
+			output: "create pitr pitr4 for database db01 range 1  h",
+		},
+		{
+			input:  "create pitr `pitr5` for database db01 table t01 range 1 'h'",
+			output: "create pitr pitr5 for database db01 table t01 range 1  h",
+		},
+		{
+			input: "show pitr",
+		},
+		{
+			input:  "drop pitr `pitr1`",
+			output: "drop pitr pitr1",
+		},
+		{
+			input:  "drop pitr if exists `pitr2`",
+			output: "drop pitr if exists pitr2",
+		},
+		{
+			input:  "alter pitr `pitr3` range 2 'h'",
+			output: "alter pitr pitr3 range 2  h",
+		},
+		{
+			input:  "alter pitr if exists `pitr01` range 2 'h'",
+			output: "alter pitr if exists pitr01 range 2  h",
+		},
+		{
+			input:  "restore from pitr pitr01 '2021-01-01 00:00:00'",
+			output: "restore self account from pitr pitr01 timestamp = 2021-01-01 00:00:00",
+		},
+		{
+			input:  "restore database db01 from pitr pitr01 '2021-01-01 00:00:00'",
+			output: "restore database db01 from pitr pitr01 timestamp = 2021-01-01 00:00:00",
+		},
+		{
+			input:  "restore database db01 table t01 from pitr pitr01 '2021-01-01 00:00:00'",
+			output: "restore database db01 table t01 from pitr pitr01 timestamp = 2021-01-01 00:00:00",
+		},
+		{
+			input:  "restore account acc01 from pitr pitr01 '2021-01-01 00:00:00'",
+			output: "restore account acc01 from pitr pitr01 timestamp = 2021-01-01 00:00:00",
+		},
+		{
+			input:  "restore account acc01 from pitr pitr01 '2021-01-01 00:00:00' acc02",
+			output: "restore account acc01 from pitr pitr01 timestamp = 2021-01-01 00:00:00 from account acc02",
+		},
+		{
+			input:  "restore cluster from pitr pitr01 '2021-01-01 00:00:00'",
+			output: "restore cluster from pitr pitr01 timestamp = 2021-01-01 00:00:00",
 		},
 	}
 )

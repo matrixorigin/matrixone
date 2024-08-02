@@ -32,7 +32,7 @@ func newBlockReadPKFilter(
 	}
 
 	var readFilter blockio.BlockReadFilter
-	var sortedSearchFunc, unSortedSearchFunc func(*vector.Vector) []int32
+	var sortedSearchFunc, unSortedSearchFunc func(*vector.Vector) []int64
 
 	readFilter.HasFakePK = pkName == catalog.FakePrimaryKeyColName
 
@@ -167,7 +167,7 @@ func newBlockReadPKFilter(
 			sortedSearchFunc = vector.FixedSizedBinarySearchOffsetByValFactory(vector.MustFixedCol[types.Decimal128](vec), types.CompareDecimal128)
 			unSortedSearchFunc = vector.FixedSizeLinearSearchOffsetByValFactory(vector.MustFixedCol[types.Decimal128](vec), types.CompareDecimal128)
 		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-			types.T_array_float32, types.T_array_float64:
+			types.T_array_float32, types.T_array_float64, types.T_datalink:
 			sortedSearchFunc = vector.VarlenBinarySearchOffsetByValFactory(vector.InefficientMustBytesCol(vec))
 			unSortedSearchFunc = vector.VarlenLinearSearchOffsetByValFactory(vector.InefficientMustBytesCol(vec))
 		case types.T_enum:
@@ -404,7 +404,7 @@ func newBlockReadPKFilter(
 
 			sortedSearchFunc = vector.CollectOffsetsByBetweenWithCompareFactory(val1, val2, types.CompareDecimal128)
 			unSortedSearchFunc = vector.FixedSizedLinearCollectOffsetsByBetweenFactory(val1, val2, types.CompareDecimal128)
-		case types.T_text:
+		case types.T_text, types.T_datalink:
 			lb := string(basePKFilter.lb)
 			ub := string(basePKFilter.ub)
 			sortedSearchFunc = vector.CollectOffsetsByBetweenFactory(lb, ub, hint)
@@ -423,10 +423,10 @@ func newBlockReadPKFilter(
 	}
 
 	if sortedSearchFunc != nil {
-		readFilter.SortedSearchFunc = func(vecs []*vector.Vector) []int32 {
+		readFilter.SortedSearchFunc = func(vecs []*vector.Vector) []int64 {
 			return sortedSearchFunc(vecs[0])
 		}
-		readFilter.UnSortedSearchFunc = func(vecs []*vector.Vector) []int32 {
+		readFilter.UnSortedSearchFunc = func(vecs []*vector.Vector) []int64 {
 			return unSortedSearchFunc(vecs[0])
 		}
 		readFilter.Valid = true

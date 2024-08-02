@@ -251,9 +251,10 @@ mo_user_defined_function
 mo_user_grant
 mo_variables
 mo_version
+mo_pitr
 show table_number from mo_catalog;
 Number of tables in mo_catalog
-27
+28
 show column_number from mo_database;
 Number of columns in mo_database
 9

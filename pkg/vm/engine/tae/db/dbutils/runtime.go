@@ -112,6 +112,13 @@ func (r *Runtime) fillDefaults() {
 	}
 }
 
+func (r *Runtime) SID() string {
+	if r == nil {
+		return ""
+	}
+	return r.Options.SID
+}
+
 func (r *Runtime) PrintVectorPoolUsage() {
 	var w bytes.Buffer
 	w.WriteString(r.VectorPool.Transient.String())

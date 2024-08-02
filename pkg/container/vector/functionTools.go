@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
@@ -405,7 +406,7 @@ func (fr *FunctionResult[T]) PreExtendAndReset(targetSize int) error {
 			return err
 		}
 	}
-	fr.vec.Reset(fr.typ)
+	fr.vec.ResetWithSameType()
 
 	if !fr.isVarlena {
 		fr.length = 0
@@ -435,6 +436,15 @@ func (fr *FunctionResult[T]) AppendBytes(val []byte, isnull bool) error {
 		return AppendBytes(fr.vec, val, isnull, fr.mp)
 	} else if !isnull {
 		return SetConstBytes(fr.vec, val, fr.vec.Length(), fr.mp)
+	}
+	return nil
+}
+
+func (fr *FunctionResult[T]) AppendByteJson(bj bytejson.ByteJson, isnull bool) error {
+	if !fr.vec.IsConst() {
+		return AppendByteJson(fr.vec, bj, isnull, fr.mp)
+	} else if !isnull {
+		return SetConstByteJson(fr.vec, bj, fr.vec.Length(), fr.mp)
 	}
 	return nil
 }
@@ -520,7 +530,7 @@ func NewFunctionResultWrapper(
 
 	switch typ.Oid {
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary,
-		types.T_array_float32, types.T_array_float64:
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		// IF STRING type.
 		return newResultFunc[types.Varlena](v, getVectorMethod, putVectorMethod, mp)
 	case types.T_json:

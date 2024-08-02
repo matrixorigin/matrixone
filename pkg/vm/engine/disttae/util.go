@@ -18,10 +18,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -36,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -281,7 +286,7 @@ func mergeBaseFilterInKind(left, right basePKFilter, isOR bool, proc *process.Pr
 			vector.Intersection2VectorOrdered(a, b, ret.vec.(*vector.Vector), proc.Mp(), func(x, y types.Decimal128) int { return types.CompareDecimal128(x, y) })
 		}
 
-	case types.T_varchar, types.T_char, types.T_json, types.T_binary, types.T_text:
+	case types.T_varchar, types.T_char, types.T_json, types.T_binary, types.T_text, types.T_datalink:
 		if isOR {
 			vector.Union2VectorValen(va, vb, ret.vec.(*vector.Vector), proc.Mp())
 		} else {
@@ -841,7 +846,7 @@ func getPkExpr(
 	return nil
 }
 
-func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []int32 {
+func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []int64 {
 	mp := make(map[any]bool)
 	switch pk.GetType().Oid {
 	case types.T_bool:
@@ -960,7 +965,7 @@ func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []in
 			mp[v] = true
 		}
 	case types.T_char, types.T_varchar, types.T_json,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		if pk.IsConst() {
 			for i := 0; i < pk.Length(); i++ {
 				v := pk.UnsafeGetStringAt(i)
@@ -988,177 +993,177 @@ func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []in
 		panic(moerr.NewInternalErrorNoCtx("%s not supported", pk.GetType().String()))
 	}
 
-	return func(vec *vector.Vector) []int32 {
-		var sels []int32
+	return func(vec *vector.Vector) []int64 {
+		var sels []int64
 		switch vec.GetType().Oid {
 		case types.T_bool:
 			vs := vector.MustFixedCol[bool](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_bit:
 			vs := vector.MustFixedCol[uint64](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_int8:
 			vs := vector.MustFixedCol[int8](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_int16:
 			vs := vector.MustFixedCol[int16](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_int32:
 			vs := vector.MustFixedCol[int32](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_int64:
 			vs := vector.MustFixedCol[int64](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_uint8:
 			vs := vector.MustFixedCol[uint8](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_uint16:
 			vs := vector.MustFixedCol[uint16](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_uint32:
 			vs := vector.MustFixedCol[uint32](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_uint64:
 			vs := vector.MustFixedCol[uint64](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_decimal64:
 			vs := vector.MustFixedCol[types.Decimal64](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_decimal128:
 			vs := vector.MustFixedCol[types.Decimal128](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_uuid:
 			vs := vector.MustFixedCol[types.Uuid](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_float32:
 			vs := vector.MustFixedCol[float32](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_float64:
 			vs := vector.MustFixedCol[float64](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_date:
 			vs := vector.MustFixedCol[types.Date](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_timestamp:
 			vs := vector.MustFixedCol[types.Timestamp](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_time:
 			vs := vector.MustFixedCol[types.Time](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_datetime:
 			vs := vector.MustFixedCol[types.Datetime](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_enum:
 			vs := vector.MustFixedCol[types.Enum](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_TS:
 			vs := vector.MustFixedCol[types.TS](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_Rowid:
 			vs := vector.MustFixedCol[types.Rowid](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_Blockid:
 			vs := vector.MustFixedCol[types.Blockid](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_char, types.T_varchar, types.T_json,
-			types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+			types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 			if pk.IsConst() {
 				for i := 0; i < pk.Length(); i++ {
 					v := pk.UnsafeGetStringAt(i)
 					if mp[v] {
-						sels = append(sels, int32(i))
+						sels = append(sels, int64(i))
 					}
 				}
 			} else {
@@ -1167,7 +1172,7 @@ func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []in
 				for i := 0; i < len(vs); i++ {
 					v := vs[i].UnsafeGetString(area)
 					if mp[v] {
-						sels = append(sels, int32(i))
+						sels = append(sels, int64(i))
 					}
 				}
 			}
@@ -1175,14 +1180,14 @@ func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []in
 			for i := 0; i < vec.Length(); i++ {
 				v := types.ArrayToString[float32](vector.GetArrayAt[float32](vec, i))
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_array_float64:
 			for i := 0; i < vec.Length(); i++ {
 				v := types.ArrayToString[float64](vector.GetArrayAt[float64](vec, i))
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		default:
@@ -1199,7 +1204,7 @@ func getNonSortedPKSearchFuncByPKVec(
 	searchPKFunc := LinearSearchOffsetByValFactory(vec)
 
 	if searchPKFunc != nil {
-		return func(vecs []*vector.Vector) []int32 {
+		return func(vecs []*vector.Vector) []int64 {
 			return searchPKFunc(vecs[0])
 		}
 	}
@@ -1410,8 +1415,11 @@ func getConstExpr(oid int32, c *plan.Literal) *plan.Expr {
 }
 
 // ListTnService gets all tn service in the cluster
-func ListTnService(appendFn func(service *metadata.TNService)) {
-	mc := clusterservice.GetMOCluster()
+func ListTnService(
+	service string,
+	appendFn func(service *metadata.TNService),
+) {
+	mc := clusterservice.GetMOCluster(service)
 	mc.GetTNService(clusterservice.NewSelector(), func(tn metadata.TNService) bool {
 		if appendFn != nil {
 			appendFn(&tn)
@@ -1601,25 +1609,6 @@ func ConstructObjStatsByLoadObjMeta(
 	return
 }
 
-// getDatabasesExceptDeleted remove databases delete in the txn from the CatalogCache
-func getDatabasesExceptDeleted(accountId uint32, cache *cache.CatalogCache, txn *Transaction) []string {
-	//first get all delete tables
-	deleteDatabases := make(map[string]any)
-	txn.deletedDatabaseMap.Range(func(k, _ any) bool {
-		key := k.(databaseKey)
-		if key.accountId == accountId {
-			deleteDatabases[key.name] = nil
-		}
-		return true
-	})
-
-	dbs := cache.Databases(accountId, txn.op.SnapshotTS())
-	dbs = removeIf[string](dbs, func(t string) bool {
-		return find[string](deleteDatabases, t)
-	})
-	return dbs
-}
-
 // removeIf removes the elements that pred is true.
 func removeIf[T any](data []T, pred func(t T) bool) []T {
 	if len(data) == 0 {
@@ -1730,4 +1719,86 @@ func (e *concurrentExecutor) Run(ctx context.Context) {
 // GetConcurrency implements the ConcurrentExecutor interface.
 func (e *concurrentExecutor) GetConcurrency() int {
 	return e.concurrency
+}
+
+func stringifySlice(req any, f func(any) string) string {
+	buf := &bytes.Buffer{}
+	v := reflect.ValueOf(req)
+	buf.WriteRune('[')
+	if v.Kind() == reflect.Slice {
+		for i := 0; i < v.Len(); i++ {
+			if i > 0 {
+				buf.WriteRune(',')
+			}
+			buf.WriteString(f(v.Index(i).Interface()))
+		}
+	}
+	buf.WriteRune(']')
+	buf.WriteString(fmt.Sprintf("[%d]", v.Len()))
+	return buf.String()
+}
+
+func stringifyMap(req any, f func(any, any) string) string {
+	buf := &bytes.Buffer{}
+	v := reflect.ValueOf(req)
+	buf.WriteRune('{')
+	if v.Kind() == reflect.Map {
+		keys := v.MapKeys()
+		for i, key := range keys {
+			if i > 0 {
+				buf.WriteRune(',')
+			}
+			buf.WriteString(f(key.Interface(), v.MapIndex(key).Interface()))
+		}
+	}
+	buf.WriteRune('}')
+	buf.WriteString(fmt.Sprintf("[%d]", v.Len()))
+	return buf.String()
+}
+
+func execReadSql(ctx context.Context, op client.TxnOperator, sql string, disableLog bool) (executor.Result, error) {
+	// copy from compile.go runSqlWithResult
+	service := op.GetWorkspace().(*Transaction).proc.GetService()
+	v, ok := moruntime.ServiceRuntime(service).GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if !ok {
+		panic(fmt.Sprintf("missing sql executor in service %q", service))
+	}
+	exec := v.(executor.SQLExecutor)
+	proc := op.GetWorkspace().(*Transaction).proc
+	opts := executor.Options{}.
+		WithDisableIncrStatement().
+		WithTxn(op).
+		WithTimeZone(proc.GetSessionInfo().TimeZone)
+	if disableLog {
+		opts = opts.WithStatementOption(executor.StatementOption{}.WithDisableLog())
+	}
+	return exec.Exec(ctx, sql, opts)
+}
+
+func fillTsVecForSysTableQueryBatch(bat *batch.Batch, ts types.TS, m *mpool.MPool) error {
+	tsvec := vector.NewVec(types.T_TS.ToType())
+	for i := 0; i < bat.RowCount(); i++ {
+		if err := vector.AppendFixed(tsvec, ts, false, m); err != nil {
+			tsvec.Free(m)
+			return err
+		}
+	}
+	bat.Vecs = append([]*vector.Vector{bat.Vecs[0] /*rowid*/, tsvec}, bat.Vecs[1:]...)
+	return nil
+}
+
+func isColumnsBatchPerfectlySplitted(bs []*batch.Batch) bool {
+	tidIdx := cache.MO_OFF + catalog.MO_COLUMNS_ATT_RELNAME_ID_IDX
+	if len(bs) == 1 {
+		return true
+	}
+	prevTableId := vector.GetFixedAt[uint64](bs[0].Vecs[tidIdx], bs[0].RowCount()-1)
+	for _, b := range bs[1:] {
+		firstId := vector.GetFixedAt[uint64](b.Vecs[tidIdx], 0)
+		if firstId == prevTableId {
+			return false
+		}
+		prevTableId = vector.GetFixedAt[uint64](b.Vecs[tidIdx], b.RowCount()-1)
+	}
+	return true
 }

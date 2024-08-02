@@ -113,8 +113,8 @@ func (c *Config) Adjust() {
 
 // NewClient create client from config
 func (c Config) NewClient(
+	sid string,
 	name string,
-	logger *zap.Logger,
 	responseFactory func() Message) (RPCClient, error) {
 	var codecOpts []CodecOption
 	codecOpts = append(codecOpts,
@@ -127,17 +127,26 @@ func (c Config) NewClient(
 	}
 
 	codec := NewMessageCodec(
+		sid,
 		responseFactory,
-		codecOpts...)
-	bf := NewGoettyBasedBackendFactory(codec, c.getBackendOptions(logger.Named(name))...)
-	return NewClient(name, bf, c.getClientOptions(logger.Named(name))...)
+		codecOpts...,
+	)
+	bf := NewGoettyBasedBackendFactory(
+		codec,
+		c.getBackendOptions(getLogger(sid).RawLogger().Named(name))...,
+	)
+	return NewClient(
+		name,
+		bf,
+		c.getClientOptions(getLogger(sid).RawLogger().Named(name))...,
+	)
 }
 
 // NewServer new rpc server
 func (c Config) NewServer(
+	sid string,
 	name string,
 	address string,
-	logger *zap.Logger,
 	requestFactory func() Message,
 	responseReleaseFunc func(Message),
 	opts ...ServerOption) (RPCServer, error) {
@@ -151,7 +160,7 @@ func (c Config) NewServer(
 		codecOpts = append(codecOpts, WithCodecEnableCompress(malloc.GetDefault(nil)))
 	}
 	opts = append(opts,
-		WithServerLogger(logger.Named(name)),
+		WithServerLogger(getLogger(sid).RawLogger().Named(name)),
 		WithServerGoettyOptions(goetty.WithSessionReleaseMsgFunc(func(v interface{}) {
 			m := v.(RPCMessage)
 			if !m.InternalMessage() {
@@ -161,8 +170,9 @@ func (c Config) NewServer(
 	return NewRPCServer(
 		name,
 		address,
-		NewMessageCodec(requestFactory, codecOpts...),
-		opts...)
+		NewMessageCodec(sid, requestFactory, codecOpts...),
+		opts...,
+	)
 }
 
 func (c Config) getBackendOptions(logger *zap.Logger) []BackendOption {

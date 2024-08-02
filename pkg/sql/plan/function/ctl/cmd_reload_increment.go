@@ -38,7 +38,7 @@ func handleReloadAutoIncrementCache(
 	}
 
 	qt := proc.GetQueryClient()
-	mc := clusterservice.GetMOCluster()
+	mc := clusterservice.GetMOCluster(proc.GetService())
 	var addrs []string
 	mc.GetCNService(
 		clusterservice.NewSelector(),

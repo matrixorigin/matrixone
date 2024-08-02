@@ -141,7 +141,7 @@ func minValue(t types.T) any {
 	case types.T_Blockid:
 		return types.Blockid{}
 	case types.T_char, types.T_varchar, types.T_json,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		return []byte{}
 	default:
 		panic(fmt.Sprintf("unsupported type: %v", t))

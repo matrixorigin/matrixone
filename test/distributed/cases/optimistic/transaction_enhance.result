@@ -217,11 +217,16 @@ create table atomic_table_14(c1 int,c2 varchar(25));
 insert into atomic_table_14 values (3,"a"),(4,"b"),(5,"c");
 start transaction ;
 alter table atomic_table_14 add  index key1(c1);
+use transaction_enhance;
 drop table atomic_table_14;
+use transaction_enhance;
 insert into atomic_table_14 values (6,"a"),(7,"b");
-
+no such table transaction_enhance.atomic_table_14
 select * from atomic_table_14;
-
+c1    c2
+3    a
+4    b
+5    c
 commit;
 w-w conflict
 select * from atomic_table_14;
@@ -235,7 +240,7 @@ drop table atomic_table_15;
 select * from atomic_table_15;
 c1    c2
 commit;
-internal error: w-w conflict: truncate error
+w-w conflict
 select * from atomic_table_15;
 SQL parser error: table "atomic_table_15" does not exist
 drop table if exists atomic_table_16;
@@ -306,7 +311,7 @@ drop table atomic_table_18;
 select * from atomic_table_18;
 c1    c2
 commit;
-internal error: w-w conflict: truncate error
+w-w conflict
 select * from atomic_table_18;
 SQL parser error: table "atomic_table_18" does not exist
 create table atomic_table_18(c1 int,c2 varchar(25));

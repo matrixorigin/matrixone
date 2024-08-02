@@ -49,7 +49,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var MaxPrepareNumberInOneSession int = 100000
+var (
+	MaxPrepareNumberInOneSession atomic.Uint32
+)
+
+func init() {
+	MaxPrepareNumberInOneSession.Store(100000)
+}
 
 // TODO: this variable should be configure by set variable
 const MoDefaultErrorCount = 64
@@ -106,6 +112,7 @@ const (
 type Session struct {
 	feSessionImpl
 
+	service    string
 	logger     *log.MOLogger
 	logLevel   zapcore.Level
 	loggerOnce sync.Once
@@ -127,7 +134,8 @@ type Session struct {
 	// this map is maintained at the session level to cache configuration results.
 	configs map[string]interface{}
 
-	lastStmtId uint32
+	prepareStmts map[string]*PrepareStmt
+	lastStmtId   uint32
 
 	priv *privilege
 
@@ -142,7 +150,6 @@ type Session struct {
 	mu   sync.Mutex
 	rwmu sync.RWMutex
 
-	prepareStmts map[string]*PrepareStmt
 	lastInsertID uint64
 
 	// tStmt is used only to record the StatementInfo
@@ -239,6 +246,10 @@ type Session struct {
 	proxyAddr  string
 
 	disableTrace bool
+
+	// disableAgg co-operate with RecordStatement
+	// more can see Benchmark_RecordStatement_IsTrue()
+	disableAgg bool
 }
 
 func (ses *Session) InitSystemVariables(ctx context.Context) (err error) {
@@ -474,14 +485,20 @@ func (e *errInfo) length() int {
 	return len(e.codes)
 }
 
-func NewSession(connCtx context.Context, proto MysqlRrWr, mp *mpool.MPool) *Session {
+func NewSession(
+	connCtx context.Context,
+	service string,
+	proto MysqlRrWr,
+	mp *mpool.MPool,
+) *Session {
 	//if the sharedTxnHandler exists,we use its txnCtx and txnOperator in this session.
 	//Currently, we only use the sharedTxnHandler in the background session.
 	var txnOp TxnOperator
 	var err error
-	txnHandler := InitTxnHandler(getGlobalPu().StorageEngine, connCtx, txnOp)
+	txnHandler := InitTxnHandler(service, getGlobalPu().StorageEngine, connCtx, txnOp)
 
 	ses := &Session{
+		service: service,
 		feSessionImpl: feSessionImpl{
 			pool:       mp,
 			txnHandler: txnHandler,
@@ -552,6 +569,10 @@ func NewSession(connCtx context.Context, proto MysqlRrWr, mp *mpool.MPool) *Sess
 		ss.Close()
 	})
 	return ses
+}
+
+func (ses *Session) GetService() string {
+	return ses.service
 }
 
 func (ses *Session) Close() {
@@ -905,8 +926,8 @@ func (ses *Session) SetPrepareStmt(ctx context.Context, name string, prepareStmt
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	if stmt, ok := ses.prepareStmts[name]; !ok {
-		if len(ses.prepareStmts) >= MaxPrepareNumberInOneSession {
-			return moerr.NewInvalidState(ctx, "too many prepared statement, max %d", MaxPrepareNumberInOneSession)
+		if len(ses.prepareStmts) >= int(MaxPrepareNumberInOneSession.Load()) {
+			return moerr.NewInvalidState(ctx, "too many prepared statement, max %d", MaxPrepareNumberInOneSession.Load())
 		}
 	} else {
 		stmt.Close()
@@ -1676,7 +1697,7 @@ func (ses *Session) GetLogLevel() zapcore.Level {
 func (ses *Session) initLogger() {
 	ses.loggerOnce.Do(func() {
 		if ses.logger == nil {
-			ses.logger = getLogger()
+			ses.logger = getLogger(ses.service)
 		}
 		config := logutil.GetDefaultConfig()
 		ses.logLevel = config.GetLevel().Level()

@@ -467,7 +467,7 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 				} else {
 					writeByte = appendBytes(writeByte, []byte(strconv.FormatFloat(float64(val), 'f', int(vec.GetType().Scale), 64)), symbol[j], closeby, flag[j])
 				}
-			case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
+			case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
 				value := addEscapeToString(vec.GetBytesAt(i))
 				writeByte = appendBytes(writeByte, value, symbol[j], closeby, true)
 			case types.T_array_float32:
@@ -503,7 +503,7 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 				val := vector.GetFixedAt[types.Decimal128](vec, i).Format(scale)
 				writeByte = appendBytes(writeByte, []byte(val), symbol[j], closeby, flag[j])
 			case types.T_uuid:
-				val := vector.GetFixedAt[types.Uuid](vec, i).ToString()
+				val := vector.GetFixedAt[types.Uuid](vec, i).String()
 				writeByte = appendBytes(writeByte, []byte(val), symbol[j], closeby, flag[j])
 			case types.T_Rowid:
 				val := vector.GetFixedAt[types.Rowid](vec, i)

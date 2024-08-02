@@ -19,8 +19,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/mohae/deepcopy"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -32,12 +30,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/mohae/deepcopy"
 )
 
 var (
@@ -58,7 +56,11 @@ type TxnComputationWrapper struct {
 	paramVals []any
 }
 
-func InitTxnComputationWrapper(ses FeSession, stmt tree.Statement, proc *process.Process) *TxnComputationWrapper {
+func InitTxnComputationWrapper(
+	ses FeSession,
+	stmt tree.Statement,
+	proc *process.Process,
+) *TxnComputationWrapper {
 	uuid, _ := uuid.NewV7()
 	return &TxnComputationWrapper{
 		stmt: stmt,
@@ -146,7 +148,7 @@ func (cwft *TxnComputationWrapper) GetColumns(ctx context.Context) ([]interface{
 	for i, col := range cols {
 		c := new(MysqlColumn)
 		c.SetName(col.Name)
-		c.SetOrgName(col.Name)
+		c.SetOrgName(col.GetOriginCaseName())
 		c.SetTable(col.TblName)
 		c.SetOrgTable(col.TblName)
 		c.SetAutoIncr(col.Typ.AutoIncr)
@@ -171,13 +173,17 @@ func (cwft *TxnComputationWrapper) GetColumns(ctx context.Context) ([]interface{
 	return columns, err
 }
 
-func GetClock() clock.Clock {
-	rt := runtime.ProcessLevelRuntime()
-	return rt.Clock()
-}
-
 func (cwft *TxnComputationWrapper) GetServerStatus() uint16 {
 	return uint16(cwft.ses.GetTxnHandler().GetServerStatus())
+}
+
+func checkResultQueryPrivilege(proc *process.Process, p *plan.Plan, reqCtx context.Context, sid string, ses *Session) error {
+	var ids []string
+	var err error
+	if ids, err = isResultQuery(proc, p); err != nil || ids == nil {
+		return err
+	}
+	return checkPrivilege(sid, ids, reqCtx, ses)
 }
 
 func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch) error) (interface{}, error) {
@@ -211,10 +217,8 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch) erro
 	}
 	if !cwft.ses.IsBackgroundSession() {
 		cwft.ses.SetPlan(cwft.plan)
-		if ids := isResultQuery(cwft.plan); ids != nil {
-			if err = checkPrivilege(ids, execCtx.reqCtx, cwft.ses.(*Session)); err != nil {
-				return nil, err
-			}
+		if err := checkResultQueryPrivilege(cwft.proc, cwft.plan, execCtx.reqCtx, cwft.ses.GetService(), cwft.ses.(*Session)); err != nil {
+			return nil, err
 		}
 	}
 
@@ -222,6 +226,9 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch) erro
 		executePlan := cwft.plan.GetDcl().GetExecute()
 		retComp, plan, stmt, sql, err := replacePlan(execCtx.reqCtx, cwft.ses.(*Session), cwft, executePlan)
 		if err != nil {
+			return nil, err
+		}
+		if err := checkResultQueryPrivilege(cwft.proc, plan, execCtx.reqCtx, cwft.ses.GetService(), cwft.ses.(*Session)); err != nil {
 			return nil, err
 		}
 		originSQL = sql
@@ -457,7 +464,7 @@ func createCompile(
 	// check if it is necessary to initialize the temporary engine
 	if !ses.GetTxnHandler().HasTempEngine() && retCompile.NeedInitTempEngine() {
 		// 0. init memory-non-dist storage
-		err = ses.GetTxnHandler().CreateTempStorage(GetClock())
+		err = ses.GetTxnHandler().CreateTempStorage(runtime.ServiceRuntime(ses.GetService()).Clock())
 		if err != nil {
 			return
 		}
