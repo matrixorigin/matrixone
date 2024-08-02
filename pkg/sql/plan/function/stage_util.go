@@ -205,6 +205,7 @@ func StageLoadCatalog(proc *process.Process, stagename string) (s StageDef, err 
 	}
 	defer res.Close()
 
+	var reslist []StageDef
 	const id_idx = 0
 	const name_idx = 1
 	const url_idx = 2
@@ -230,13 +231,17 @@ func StageLoadCatalog(proc *process.Process, stagename string) (s StageDef, err 
 					stage_status := string(batch.Vecs[status_idx].GetBytesAt(i))
 
 					//logutil.Infof("CATALOG: ID %d,  stage %s url %s cred %s", stage_id, stage_name, stage_url, stage_cred)
-					return StageDef{stage_id, stage_name, stage_url, credmap, stage_status}, nil
+					reslist = append(reslist, StageDef{stage_id, stage_name, stage_url, credmap, stage_status})
 				}
 			}
 		}
 	}
 
-	return StageDef{}, moerr.NewBadConfig(context.TODO(), "Stage %s not found", stagename)
+	if reslist == nil {
+		return StageDef{}, moerr.NewBadConfig(context.TODO(), "Stage %s not found", stagename)
+	}
+
+	return reslist[0], nil
 }
 
 func UrlToPath(furl string, proc *process.Process) (path string, query string, err error) {
