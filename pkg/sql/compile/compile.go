@@ -1160,6 +1160,7 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) (*Scope
 		if c.IsSingleScope(ss) {
 			rs = ss[0]
 		} else {
+			ss = c.mergeShuffleScopesIfNeeded(ss)
 			rs = c.newMergeScope(ss)
 		}
 		updateScopesLastFlag([]*Scope{rs})
@@ -2731,6 +2732,7 @@ func (c *Compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
 	}
 	c.anal.isFirst = false
 
+	ss = c.mergeShuffleScopesIfNeeded(ss)
 	rs := c.newMergeScope(ss)
 
 	currentFirstFlag = c.anal.isFirst
@@ -2819,6 +2821,7 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 	}
 	c.anal.isFirst = false
 
+	ss = c.mergeShuffleScopesIfNeeded(ss)
 	rs := c.newMergeScope(ss)
 
 	currentFirstFlag = c.anal.isFirst
@@ -2916,6 +2919,7 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node, 
 	// this group-operator sends its result to the merge-group-operator.
 	// todo: I cannot remove the merge-group action directly, because the merge-group action is used to fill the partial result.
 	if hasDistinct {
+		ss = c.mergeShuffleScopesIfNeeded(ss)
 		mergeToGroup := c.newMergeScope(ss)
 
 		currentFirstFlag := c.anal.isFirst
@@ -2948,6 +2952,7 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node, 
 		}
 		c.anal.isFirst = false
 
+		ss = c.mergeShuffleScopesIfNeeded(ss)
 		rs := c.newMergeScope(ss)
 
 		currentFirstFlag = c.anal.isFirst
@@ -3723,6 +3728,7 @@ func (c *Compile) newBroadcastJoinScopeList(probeScopes []*Scope, buildScopes []
 			if isSameCN(rs[i].NodeInfo.Addr, c.addr) {
 				mergeBuild := buildScopes[0]
 				if len(buildScopes) > 1 {
+					buildScopes = c.mergeShuffleScopesIfNeeded(buildScopes)
 					mergeBuild = c.newMergeScope(buildScopes)
 				}
 				mergeBuild.setRootOperator(constructDispatch(rs[i].BuildIdx, rs, c.addr, n, false))
