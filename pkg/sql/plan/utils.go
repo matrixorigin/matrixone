@@ -1524,7 +1524,7 @@ func InitStageS3Param(param *tree.ExternParam, s function.StageDef) error {
 	}
 
 	// optional
-	param.S3Param.Provider, found = s.GetCredentials(function.PARAMKEY_PROVIDER, function.S3_PROVIDER_AMAZON)
+	param.S3Param.Provider, _ = s.GetCredentials(function.PARAMKEY_PROVIDER, function.S3_PROVIDER_AMAZON)
 	param.CompressType, _ = s.GetCredentials(function.PARAMKEY_COMPRESSION, "auto")
 
 	
