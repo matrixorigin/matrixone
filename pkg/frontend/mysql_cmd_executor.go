@@ -256,6 +256,9 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 	} else {
 		sqlType = constant.ExternSql
 	}
+	// [!WARNING]
+	// after Call EndStatement, MUST reset ses.tStmt = nil
+	// avoid call EndStatement again in logStatementStringStatus()
 	if len(envStmt) > 0 {
 		for i, sql := range envStmt {
 			if i < len(sqlTypes) {
@@ -274,6 +277,7 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 		}
 		ses.tStmt.EndStatement(ctx, retErr, 0, 0, 0)
 	}
+	ses.SetTStmt(nil) // see [!WARNING] above
 
 	tenant := ses.GetTenantInfo()
 	if tenant == nil {
