@@ -1775,9 +1775,6 @@ func StageList(
 
 	pattern = path.Clean("/" + pattern)
 
-	const wildcards = "*?"
-	const sep = "/"
-
 	fileList, err := StageListWithPattern(service, pattern, proc)
 	if err != nil {
 		return err
