@@ -18,9 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"slices"
-	"sort"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -39,6 +36,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"math"
+	"slices"
+	"sort"
 )
 
 type tombstoneDataWithDeltaLoc struct {
@@ -1042,9 +1042,29 @@ func (ls *LocalDataSource) iterateInMemData(
 	return nil
 }
 
+const (
+	batRowsAllDeleted  = DELETE
+	batRowsAllRetained = INSERT
+	batRowsHaveDeletes = math.MaxInt32
+)
+
 func checkWorkspaceEntryType(tbl *txnTable, entry Entry) int {
 	if entry.DatabaseId() != tbl.db.databaseId || entry.TableId() != tbl.tableId {
 		return -1
+	}
+
+	// within a txn, the later statement could delete the previous
+	// inserted rows, the left rows will be recorded in `batSelectList`.
+	// if no rows left, this bat can be seen deleted.
+	//
+	// Note that: some row have been deleted, but some left
+	if left, ok := tbl.getTxn().batchSelectList[entry.bat]; ok {
+		// all rows have deleted in this bat
+		if len(left) == 0 {
+			return batRowsAllDeleted
+		} else {
+			return batRowsHaveDeletes
+		}
 	}
 
 	if entry.typ == INSERT {
@@ -1055,11 +1075,11 @@ func checkWorkspaceEntryType(tbl *txnTable, entry Entry) int {
 			return -1
 		}
 
-		return INSERT
+		return batRowsAllRetained
 	}
 
 	if (entry.typ == DELETE) && entry.fileName == "" {
-		return DELETE
+		return batRowsAllDeleted
 	}
 
 	return -1
@@ -1089,18 +1109,30 @@ func (ls *LocalDataSource) filterInMemUnCommittedInserts(
 		return nil
 	}
 
+	var retainedRowIds []types.Rowid = make([]types.Rowid, maxRows)
+
 	for ; ls.wsCursor < ls.txnOffset &&
 		rows+writes[ls.wsCursor].bat.RowCount() <= maxRows; ls.wsCursor++ {
 		entry := ls.table.getTxn().writes[ls.wsCursor]
 
-		if checkWorkspaceEntryType(ls.table, entry) != INSERT {
+		retainedRowIds = retainedRowIds[:0]
+
+		if t := checkWorkspaceEntryType(ls.table, entry); t == batRowsHaveDeletes {
+			leftInserts := ls.table.getTxn().batchSelectList[entry.bat]
+			for i := range leftInserts {
+				rowId := vector.GetFixedAt[types.Rowid](entry.bat.Vecs[0], int(leftInserts[i]))
+				retainedRowIds[i] = rowId
+			}
+
+		} else if t == batRowsAllRetained {
+			retainedRowIds = vector.MustFixedCol[types.Rowid](entry.bat.Vecs[0])
+		} else {
 			continue
 		}
 
-		insRowIDs := vector.MustFixedCol[types.Rowid](entry.bat.Vecs[0])
-		offsets := rowIdsToOffset(insRowIDs, int32(0)).([]int32)
+		offsets := rowIdsToOffset(retainedRowIds, int32(0)).([]int32)
 
-		b, _ := insRowIDs[0].Decode()
+		b, _ := retainedRowIds[0].Decode()
 		sels, err := ls.ApplyTombstonesInProgress(ls.ctx, b, offsets)
 		if err != nil {
 			return err

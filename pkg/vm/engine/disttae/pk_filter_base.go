@@ -26,7 +26,7 @@ import (
 
 // TODO(ghs) workaround for special tables, remove later
 var (
-	specialPattern *regexp.Regexp = regexp.MustCompile(`mo_tables|mo_database|_mo_columns`)
+	specialPattern *regexp.Regexp = regexp.MustCompile(`mo_tables|mo_database|mo_columns`)
 )
 
 func newBasePKFilter(
