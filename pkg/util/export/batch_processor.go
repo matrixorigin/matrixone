@@ -607,7 +607,6 @@ var awakeBufferFactory = func(c *MOCollector) func(holder *bufferHolder) {
 		if req == nil {
 			return
 		}
-		c.logger.Info("generate req", zap.String("type", req.typ()), zap.Int64("size", req.(*bufferGenerateReq).buffer.Size()))
 		if holder.name != motrace.RawLogTbl {
 			select {
 			case c.awakeGenerate <- req:
