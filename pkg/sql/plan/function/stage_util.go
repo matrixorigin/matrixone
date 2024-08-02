@@ -412,7 +412,6 @@ func stageListWithoutWildcard(service string, pattern string, proc *process.Proc
 
 func StageListWithPattern(service string, pattern string, proc *process.Process) (fileList []string, err error) {
 	const wildcards = "*?"
-	const sep = "/"
 
 	idx := strings.IndexAny(pattern, wildcards)
 	if idx == -1 {
