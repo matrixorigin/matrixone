@@ -200,7 +200,7 @@ func (ctr *container) probe(ap *AntiJoin, proc *process.Process, anal process.An
 	count := ap.ctr.bat.RowCount()
 	mSels := ctr.mp.Sels()
 	itr := ctr.mp.NewIterator()
-	eligible := make([]int32, 0, hashmap.UnitLimit)
+	eligible := make([]int64, 0, hashmap.UnitLimit)
 	for i := ap.ctr.lastrow; i < count; i += hashmap.UnitLimit {
 		if ctr.rbat.RowCount() >= colexec.DefaultBatchSize {
 			anal.Output(ctr.rbat, isLast)
@@ -220,7 +220,7 @@ func (ctr *container) probe(ap *AntiJoin, proc *process.Process, anal process.An
 				continue
 			}
 			if vals[k] == 0 {
-				eligible = append(eligible, int32(i+k))
+				eligible = append(eligible, int64(i+k))
 				rowCountIncrease++
 				continue
 			}
@@ -276,7 +276,7 @@ func (ctr *container) probe(ap *AntiJoin, proc *process.Process, anal process.An
 						continue
 					}
 				}
-				eligible = append(eligible, int32(i+k))
+				eligible = append(eligible, int64(i+k))
 				rowCountIncrease++
 			}
 		}
