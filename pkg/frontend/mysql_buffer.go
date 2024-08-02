@@ -105,14 +105,15 @@ func NewIOSession(conn net.Conn, pu *config.ParameterUnit) (*Conn, error) {
 	}
 
 	c := &Conn{
-		conn:            conn,
-		localAddr:       conn.RemoteAddr().String(),
-		remoteAddr:      conn.LocalAddr().String(),
-		fixBuf:          &ListBlock{},
-		dynamicBuf:      list.New(),
-		allocator:       &BufferAllocator{allocator: getGlobalSessionAlloc()},
-		timeout:         pu.SV.SessionTimeout.Duration,
-		maxBytesToFlush: int(pu.SV.MaxBytesInOutbufToFlush * 1024),
+		conn:              conn,
+		localAddr:         conn.RemoteAddr().String(),
+		remoteAddr:        conn.LocalAddr().String(),
+		fixBuf:            &ListBlock{},
+		dynamicBuf:        list.New(),
+		allocator:         &BufferAllocator{allocator: getGlobalSessionAlloc()},
+		timeout:           pu.SV.SessionTimeout.Duration,
+		maxBytesToFlush:   int(pu.SV.MaxBytesInOutbufToFlush * 1024),
+		allowedPacketSize: int(MaxPayloadSize),
 	}
 	var err error
 	c.fixBuf.data, err = c.allocator.Alloc(fixBufferSize)
