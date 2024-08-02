@@ -443,7 +443,6 @@ func processNext(ctr *container, ap *Fill, proc *process.Process, anal process.A
 		if err != nil {
 			return result, err
 		}
-		ctr.buf = result.Batch
 		if result.Batch == nil {
 			break
 		}
