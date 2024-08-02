@@ -1512,7 +1512,6 @@ func InitStageS3Param(param *tree.ExternParam, s function.StageDef) error {
 		return moerr.NewBadConfig(param.Ctx, "Credentials %s not found", function.PARAMKEY_AWS_SECRET_KEY)
 	}
 
-
 	param.S3Param.Region, found = s.GetCredentials(function.PARAMKEY_AWS_REGION, "")
 	if !found {
 		return moerr.NewBadConfig(param.Ctx, "Credentials %s not found", function.PARAMKEY_AWS_REGION)
@@ -1527,7 +1526,6 @@ func InitStageS3Param(param *tree.ExternParam, s function.StageDef) error {
 	param.S3Param.Provider, _ = s.GetCredentials(function.PARAMKEY_PROVIDER, function.S3_PROVIDER_AMAZON)
 	param.CompressType, _ = s.GetCredentials(function.PARAMKEY_COMPRESSION, "auto")
 
-	
 	for i := 0; i < len(param.Option); i += 2 {
 		switch strings.ToLower(param.Option[i]) {
 		case "format":
