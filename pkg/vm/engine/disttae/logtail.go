@@ -16,6 +16,8 @@ package disttae
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"time"
 
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -46,6 +48,10 @@ func consumeEntry(
 	defer put.Put()
 
 	if state != nil {
+		if engine.IsCdcEngine() {
+			fmt.Fprintln(os.Stderr, "====> cdc handle logtail before")
+			defer fmt.Fprintln(os.Stderr, "====> cdc handle logtail after")
+		}
 		t0 := time.Now()
 		state.HandleLogtailEntry(ctx, engine.GetFS(), e, primarySeqnum, packer, engine.GetMPool())
 		v2.LogtailUpdatePartitonConsumeLogtailOneEntryLogtailReplayDurationHistogram.Observe(time.Since(t0).Seconds())

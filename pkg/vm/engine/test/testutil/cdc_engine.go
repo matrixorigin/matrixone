@@ -18,28 +18,19 @@ import (
 	"context"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/lockservice"
-	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/lock"
-	logservice2 "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/service"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -47,8 +38,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
-type TestDisttaeEngine struct {
-	Engine          *disttae.Engine
+type TestCdcEngine struct {
+	Engine          *disttae.CdcEngine
 	logtailReceiver chan morpc.Message
 	broken          chan struct{}
 	wg              sync.WaitGroup
@@ -59,9 +50,9 @@ type TestDisttaeEngine struct {
 	timestampWaiter client.TimestampWaiter
 }
 
-func NewTestDisttaeEngine(ctx context.Context, mp *mpool.MPool,
-	fs fileservice.FileService, rpcAgent *MockRPCAgent, storage *TestTxnStorage) (*TestDisttaeEngine, error) {
-	de := new(TestDisttaeEngine)
+func NewTestCdcEngine(ctx context.Context, mp *mpool.MPool,
+	fs fileservice.FileService, rpcAgent *MockRPCAgent, storage *TestTxnStorage) (*TestCdcEngine, error) {
+	de := new(TestCdcEngine)
 	de.logtailReceiver = make(chan morpc.Message)
 	de.broken = make(chan struct{})
 
@@ -81,7 +72,7 @@ func NewTestDisttaeEngine(ctx context.Context, mp *mpool.MPool,
 	colexec.NewServer(hakeeper)
 
 	catalog.SetupDefines("")
-	de.Engine = disttae.New(ctx, "", mp, fs, de.txnClient, hakeeper, nil, 0)
+	de.Engine = disttae.NewCdcEngine(ctx, "", mp, fs, nil)
 	de.Engine.PushClient().LogtailRPCClientFactory = rpcAgent.MockLogtailRPCClientFactory
 
 	go func() {
@@ -114,77 +105,6 @@ func NewTestDisttaeEngine(ctx context.Context, mp *mpool.MPool,
 		return nil, err
 	}
 
-	qc, _ := qclient.NewQueryClient("", morpc.Config{})
-	sqlExecutor := compile.NewSQLExecutor(
-		"127.0.0.1:2000",
-		de.Engine,
-		mp,
-		de.txnClient,
-		fs,
-		qc,
-		hakeeper,
-		nil, //s.udfService
-	)
-	runtime.ServiceRuntime("").SetGlobalVariables(runtime.InternalSQLExecutor, sqlExecutor)
-	//err = de.prevSubscribeSysTables(ctx, rpcAgent)
-	return de, err
-}
-
-func NewTestDisttaeEngine2(ctx context.Context, mp *mpool.MPool,
-	fs fileservice.FileService, rpcAgent *MockRPCAgent, storage *TestTxnStorage) (*TestDisttaeEngine, error) {
-	de := new(TestDisttaeEngine)
-	de.logtailReceiver = make(chan morpc.Message)
-	de.broken = make(chan struct{})
-
-	de.ctx, de.cancel = context.WithCancel(ctx)
-
-	initRuntime()
-
-	wait := make(chan struct{})
-	de.timestampWaiter = client.NewTimestampWaiter(runtime.GetLogger(""))
-
-	txnSender := service.NewTestSender(storage)
-	de.txnClient = client.NewTxnClient("", txnSender, client.WithTimestampWaiter(de.timestampWaiter))
-
-	de.txnClient.Resume()
-
-	hakeeper := newTestHAKeeperClient()
-	colexec.NewServer(hakeeper)
-
-	catalog.SetupDefines("")
-	de.Engine = disttae.New(ctx, "", mp, fs, de.txnClient, hakeeper, nil, 0)
-	de.Engine.PushClient().LogtailRPCClientFactory = rpcAgent.MockLogtailRPCClientFactory
-
-	go func() {
-		done := false
-		for !done {
-			select {
-			case <-wait:
-				done = true
-			default:
-				de.timestampWaiter.NotifyLatestCommitTS(de.Now())
-				time.Sleep(time.Millisecond * 100)
-			}
-		}
-	}()
-
-	op, err := de.txnClient.New(ctx, types.TS{}.ToTimestamp())
-	if err != nil {
-		return nil, err
-	}
-
-	close(wait)
-
-	de.txnOperator = op
-	if err = de.Engine.New(ctx, op); err != nil {
-		return nil, err
-	}
-
-	//err = disttae.InitLogTailPushModel(ctx, de.Engine, de.timestampWaiter)
-	//if err != nil {
-	//	return nil, err
-	//}
-	//
 	//qc, _ := qclient.NewQueryClient("", morpc.Config{})
 	//sqlExecutor := compile.NewSQLExecutor(
 	//	"127.0.0.1:2000",
@@ -201,7 +121,7 @@ func NewTestDisttaeEngine2(ctx context.Context, mp *mpool.MPool,
 	return de, err
 }
 
-func (de *TestDisttaeEngine) NewTxnOperator(ctx context.Context,
+func (de *TestCdcEngine) NewTxnOperator(ctx context.Context,
 	commitTS timestamp.Timestamp, opts ...client.TxnOption) (client.TxnOperator, error) {
 	op, err := de.txnClient.New(ctx, commitTS, opts...)
 
@@ -211,7 +131,7 @@ func (de *TestDisttaeEngine) NewTxnOperator(ctx context.Context,
 	return op, err
 }
 
-func (de *TestDisttaeEngine) waitLogtail(ctx context.Context) error {
+func (de *TestCdcEngine) waitLogtail(ctx context.Context) error {
 	ts := de.Now()
 	ticker := time.NewTicker(time.Second)
 	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
@@ -233,7 +153,7 @@ func (de *TestDisttaeEngine) waitLogtail(ctx context.Context) error {
 	return nil
 }
 
-func (de *TestDisttaeEngine) analyzeDataObjects(state *logtailreplay.PartitionState,
+func (de *TestCdcEngine) analyzeDataObjects(state *logtailreplay.PartitionState,
 	stats *PartitionStateStats, ts types.TS) (err error) {
 
 	iter, err := state.NewObjectsIter(ts, false)
@@ -259,7 +179,7 @@ func (de *TestDisttaeEngine) analyzeDataObjects(state *logtailreplay.PartitionSt
 	return
 }
 
-func (de *TestDisttaeEngine) analyzeInmemRows(state *logtailreplay.PartitionState,
+func (de *TestCdcEngine) analyzeInmemRows(state *logtailreplay.PartitionState,
 	stats *PartitionStateStats, ts types.TS) (err error) {
 
 	distinct := make(map[objectio.Blockid]struct{})
@@ -285,7 +205,7 @@ func (de *TestDisttaeEngine) analyzeInmemRows(state *logtailreplay.PartitionStat
 	return
 }
 
-func (de *TestDisttaeEngine) analyzeCheckpoint(state *logtailreplay.PartitionState,
+func (de *TestCdcEngine) analyzeCheckpoint(state *logtailreplay.PartitionState,
 	stats *PartitionStateStats, ts types.TS) (err error) {
 
 	ckps := state.Checkpoints()
@@ -301,7 +221,7 @@ func (de *TestDisttaeEngine) analyzeCheckpoint(state *logtailreplay.PartitionSta
 	return
 }
 
-func (de *TestDisttaeEngine) analyzeTombstone(state *logtailreplay.PartitionState,
+func (de *TestCdcEngine) analyzeTombstone(state *logtailreplay.PartitionState,
 	stats *PartitionStateStats, ts types.TS) (outErr error) {
 
 	iter, err := state.NewObjectsIter(ts, true)
@@ -341,7 +261,7 @@ func (de *TestDisttaeEngine) analyzeTombstone(state *logtailreplay.PartitionStat
 	return
 }
 
-func (de *TestDisttaeEngine) SubscribeTable(ctx context.Context, dbID, tbID uint64, setSubscribed bool) (err error) {
+func (de *TestCdcEngine) SubscribeTable(ctx context.Context, dbID, tbID uint64, setSubscribed bool) (err error) {
 	ticker := time.NewTicker(time.Second)
 	timeout := 5
 
@@ -368,7 +288,7 @@ func (de *TestDisttaeEngine) SubscribeTable(ctx context.Context, dbID, tbID uint
 	return
 }
 
-func (de *TestDisttaeEngine) GetPartitionStateStats(ctx context.Context, databaseId, tableId uint64) (
+func (de *TestCdcEngine) GetPartitionStateStats(ctx context.Context, databaseId, tableId uint64) (
 	stats PartitionStateStats, err error) {
 
 	if err = de.waitLogtail(ctx); err != nil {
@@ -404,119 +324,18 @@ func (de *TestDisttaeEngine) GetPartitionStateStats(ctx context.Context, databas
 	return
 }
 
-func (de *TestDisttaeEngine) GetTxnOperator() client.TxnOperator {
+func (de *TestCdcEngine) GetTxnOperator() client.TxnOperator {
 	return de.txnOperator
 }
 
-func (de *TestDisttaeEngine) Now() timestamp.Timestamp {
+func (de *TestCdcEngine) Now() timestamp.Timestamp {
 	return timestamp.Timestamp{PhysicalTime: time.Now().UnixNano()}
 }
 
-func (de *TestDisttaeEngine) Close(ctx context.Context) {
+func (de *TestCdcEngine) Close(ctx context.Context) {
 	de.timestampWaiter.Close()
 	de.txnClient.Close()
 	close(de.logtailReceiver)
 	de.cancel()
 	de.wg.Wait()
-}
-
-func initRuntime() {
-	runtime.ServiceRuntime("").SetGlobalVariables(runtime.ClusterService, new(mockMOCluster))
-	runtime.ServiceRuntime("").SetGlobalVariables(runtime.LockService, new(mockLockService))
-}
-
-var _ clusterservice.MOCluster = new(mockMOCluster)
-
-type mockMOCluster struct {
-}
-
-func (mc *mockMOCluster) GetCNService(
-	selector clusterservice.Selector, apply func(metadata.CNService) bool) {
-}
-func (mc *mockMOCluster) GetTNService(
-	selector clusterservice.Selector, apply func(metadata.TNService) bool) {
-}
-func (mc *mockMOCluster) GetAllTNServices() []metadata.TNService {
-	return []metadata.TNService{{
-		LogTailServiceAddress: disttae.FakeLogtailServerAddress,
-		Shards:                []metadata.TNShard{GetDefaultTNShard()},
-	}}
-}
-func (mc *mockMOCluster) GetCNServiceWithoutWorkingState(
-	selector clusterservice.Selector, apply func(metadata.CNService) bool) {
-}
-func (mc *mockMOCluster) ForceRefresh(sync bool)                                        {}
-func (mc *mockMOCluster) Close()                                                        {}
-func (mc *mockMOCluster) DebugUpdateCNLabel(uuid string, kvs map[string][]string) error { return nil }
-func (mc *mockMOCluster) DebugUpdateCNWorkState(uuid string, state int) error           { return nil }
-func (mc *mockMOCluster) RemoveCN(id string)                                            {}
-func (mc *mockMOCluster) AddCN(metadata.CNService)                                      {}
-func (mc *mockMOCluster) UpdateCN(metadata.CNService)                                   {}
-
-var _ lockservice.LockService = new(mockLockService)
-
-type mockLockService struct {
-}
-
-func (ml *mockLockService) GetServiceID() string          { return "" }
-func (ml *mockLockService) GetConfig() lockservice.Config { return lockservice.Config{} }
-func (ml *mockLockService) Lock(ctx context.Context, tableID uint64, rows [][]byte,
-	txnID []byte, options lock.LockOptions) (lock.Result, error) {
-	return lock.Result{}, nil
-}
-func (ml *mockLockService) Unlock(ctx context.Context, txnID []byte,
-	commitTS timestamp.Timestamp, mutations ...lock.ExtraMutation) error {
-	return nil
-}
-func (ml *mockLockService) IsOrphanTxn(context.Context, []byte) (bool, error) { return false, nil }
-func (ml *mockLockService) Close() error                                      { return nil }
-func (ml *mockLockService) GetWaitingList(ctx context.Context, txnID []byte) (bool, []lock.WaitTxn, error) {
-	return false, nil, nil
-}
-func (ml *mockLockService) ForceRefreshLockTableBinds(targets []uint64, matcher func(bind lock.LockTable) bool) {
-}
-func (ml *mockLockService) GetLockTableBind(group uint32, tableID uint64) (lock.LockTable, error) {
-	return lock.LockTable{}, nil
-}
-func (ml *mockLockService) IterLocks(func(tableID uint64, keys [][]byte, lock lockservice.Lock) bool) {
-}
-func (ml *mockLockService) CloseRemoteLockTable(group uint32, tableID uint64, version uint64) (bool, error) {
-	return false, nil
-}
-
-var _ logservice.CNHAKeeperClient = new(testHAKeeperClient)
-
-type testHAKeeperClient struct {
-	id atomic.Uint64
-}
-
-func newTestHAKeeperClient() *testHAKeeperClient {
-	ha := &testHAKeeperClient{}
-	ha.id.Store(0x3fff)
-	return ha
-}
-
-func (ha *testHAKeeperClient) Close() error { return nil }
-func (ha *testHAKeeperClient) AllocateID(ctx context.Context) (uint64, error) {
-	return ha.id.Add(1), nil
-}
-func (ha *testHAKeeperClient) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
-	return 0, nil
-}
-func (ha *testHAKeeperClient) AllocateIDByKeyWithBatch(ctx context.Context, key string, batch uint64) (uint64, error) {
-	return 0, nil
-}
-func (ha *testHAKeeperClient) GetClusterDetails(ctx context.Context) (logservice2.ClusterDetails, error) {
-	return logservice2.ClusterDetails{}, nil
-}
-func (ha *testHAKeeperClient) GetClusterState(ctx context.Context) (logservice2.CheckerState, error) {
-	return logservice2.CheckerState{}, nil
-}
-
-func (ha *testHAKeeperClient) GetBackupData(ctx context.Context) ([]byte, error) {
-	return nil, nil
-}
-
-func (ha *testHAKeeperClient) SendCNHeartbeat(ctx context.Context, hb logservice2.CNStoreHeartbeat) (logservice2.CommandBatch, error) {
-	return logservice2.CommandBatch{}, nil
 }

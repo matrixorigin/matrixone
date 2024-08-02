@@ -31,6 +31,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tidwall/btree"
+	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -55,9 +59,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
-	"github.com/tidwall/btree"
-	"go.uber.org/zap"
-	"golang.org/x/sync/errgroup"
 )
 
 type TenantInfo struct {
@@ -904,6 +905,7 @@ var (
 		"mo_transactions":             0,
 		"mo_cache":                    0,
 		"mo_snapshots":                0,
+		"mo_cdc_task":                 0,
 	}
 	sysAccountTables = map[string]struct{}{
 		catalog.MOVersionTable:       {},
@@ -938,6 +940,7 @@ var (
 		"mo_cache":                    0,
 		"mo_foreign_keys":             0,
 		"mo_snapshots":                0,
+		"mo_cdc_task":                 0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = MoCatalogMoAutoIncrTableDDL
@@ -970,6 +973,7 @@ var (
 		MoCatalogMoVariablesDDL,
 		MoCatalogMoTransactionsDDL,
 		MoCatalogMoCacheDDL,
+		MoCatalogMoCdcTaskDDL,
 	}
 
 	//drop tables for the tenant
@@ -989,6 +993,7 @@ var (
 		`drop view if exists mo_catalog.mo_transactions;`,
 		`drop view if exists mo_catalog.mo_cache;`,
 		`drop table if exists mo_catalog.mo_snapshots;`,
+		`drop table if exists mo_catalog.mo_cdc_task;`,
 	}
 	dropMoMysqlCompatibilityModeSql = `drop table if exists mo_catalog.mo_mysql_compatibility_mode;`
 	dropMoPubsSql                   = `drop table if exists mo_catalog.mo_pubs;`

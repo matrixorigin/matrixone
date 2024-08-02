@@ -754,3 +754,7 @@ func (e *Engine) CopyPartitions() map[[2]uint64]*logtailreplay.Partition {
 func (e *Engine) Cli() client.TxnClient {
 	return e.cli
 }
+
+func (e *Engine) IsCdcEngine() bool {
+	return false
+}

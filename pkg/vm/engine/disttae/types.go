@@ -204,6 +204,7 @@ type Engine struct {
 var _ SimpleEngine = new(Engine)
 
 type SimpleEngine interface {
+	engine.Engine
 	Cli() client.TxnClient
 	init(ctx context.Context) error
 	Enqueue(tail *logtail.TableLogtail)
@@ -220,6 +221,9 @@ type SimpleEngine interface {
 	cleanMemoryTableWithTable(dbId, tblId uint64)
 	PushClient() *PushClient
 	New(ctx context.Context, op client.TxnOperator) error
+	FS() fileservice.FileService
+	TryToSubscribeTable(ctx context.Context, dbID, tbID uint64) error
+	IsCdcEngine() bool
 }
 
 var _ SimpleEngine = new(CdcEngine)
@@ -238,11 +242,23 @@ type CdcEngine struct {
 
 	mp *mpool.MPool
 
-	fs fileservice.FileService
+	fs    fileservice.FileService
+	etlFs fileservice.FileService
 
 	pClient PushClient
 
-	//cli client.TxnClient
+	cli client.TxnClient
+
+	cdcId string
+}
+
+var _ engine.Relation = new(CdcRelation)
+
+type CdcRelation struct {
+	db, table     string
+	dbId, tableId uint64
+	cdcEng        *CdcEngine
+	_partState    atomic.Pointer[logtailreplay.PartitionState]
 }
 
 // Transaction represents a transaction

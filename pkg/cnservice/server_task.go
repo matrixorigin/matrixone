@@ -20,6 +20,8 @@ import (
 	"strings"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
@@ -37,7 +39,6 @@ import (
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
-	"go.uber.org/zap"
 )
 
 func (s *service) adjustSQLAddress() {
@@ -295,4 +296,16 @@ func (s *service) registerExecutorsLocked() {
 			return err
 		},
 	)
+	s.task.runner.RegisterExecutor(task.TaskCode_InitCdc,
+		frontend.RegisterCdcExecutor(
+			s.logger,
+			ts,
+			ieFactory,
+			s.task.runner.Attach,
+			s.createTxnClient,
+			s.cfg.UUID,
+			s.fileService,
+			s._txnClient,
+			s.storeEngine,
+		))
 }

@@ -455,6 +455,11 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (err error) {
 			return
 		}
 	case *tree.CreateCDC:
+		ses.EnterFPrint(124)
+		defer ses.ExitFPrint(124)
+		if err = handleCreateCdc(ses, execCtx, st); err != nil {
+			return
+		}
 	case *tree.PauseCDC:
 	case *tree.DropCDC:
 	case *tree.RestartCDC:

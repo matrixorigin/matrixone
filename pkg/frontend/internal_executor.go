@@ -121,6 +121,14 @@ func (res *internalExecResult) Value(ctx context.Context, ridx uint64, cidx uint
 	return res.resultSet.GetValue(ctx, ridx, cidx)
 }
 
+func (res *internalExecResult) StrValue(ctx context.Context, ridx uint64, cidx uint64) (string, error) {
+	return res.resultSet.GetString(ctx, ridx, cidx)
+}
+
+func (res *internalExecResult) U64Value(ctx context.Context, ridx uint64, cidx uint64) (uint64, error) {
+	return res.resultSet.GetUint64(ctx, ridx, cidx)
+}
+
 func (res *internalExecResult) ValueByName(ctx context.Context, ridx uint64, col string) (interface{}, error) {
 	return res.resultSet.GetValueByName(ctx, ridx, col)
 }

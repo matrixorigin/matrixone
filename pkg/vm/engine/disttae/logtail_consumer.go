@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -145,11 +146,16 @@ type PushClient struct {
 	eng         SimpleEngine
 
 	LogtailRPCClientFactory func(string, string, morpc.RPCClient) (morpc.RPCClient, morpc.Stream, error)
+	cdcId                   string
 }
 
 type State struct {
 	LatestTS  timestamp.Timestamp
 	SubTables map[SubTableID]SubTableStatus
+}
+
+func (c *PushClient) IsCdc() bool {
+	return c.cdcId != ""
 }
 
 func (c *PushClient) LatestLogtailAppliedTime() timestamp.Timestamp {
@@ -701,6 +707,7 @@ func (c *PushClient) connect(ctx context.Context, e SimpleEngine) {
 		c.startConsumers(ctx, e)
 
 		for {
+			fmt.Fprintln(os.Stderr, "====>", c.cdcId, "connect 1")
 			err := c.subSysTables(ctx)
 			if err != nil {
 				c.pause(false)
@@ -735,6 +742,7 @@ func (c *PushClient) connect(ctx context.Context, e SimpleEngine) {
 
 	logutil.Infof("%s %s: clean finished, start to reconnect to tn log tail service", logTag, c.serviceID)
 	for {
+		fmt.Fprintln(os.Stderr, "====>", c.cdcId, "connect 2")
 		if ctx.Err() != nil {
 			logutil.Infof("%s mo context has done, exit log tail receive routine", logTag)
 			return
@@ -961,7 +969,8 @@ func (c *PushClient) toSubIfUnsubscribed(ctx context.Context, dbId, tblId uint64
 	_, ok := c.subscribed.m[SubTableID{DatabaseID: dbId, TableID: tblId}]
 	if !ok {
 		if !c.subscriber.ready.Load() {
-			return Unsubscribed, moerr.NewInternalError(ctx, "log tail subscriber is not ready")
+			return Unsubscribed, moerr.NewInternalError(ctx, "log tail subscriber is not ready"+
+				fmt.Sprintf("%v %v", c.cdcId, c.subscriber.ready.Load()))
 		}
 		c.subscribed.m[SubTableID{DatabaseID: dbId, TableID: tblId}] = SubTableStatus{
 			SubState: Subscribing,
@@ -1666,8 +1675,10 @@ func (c *PushClient) setStatusUnlock(ready bool) {
 	if c.subscriber != nil {
 		if ready {
 			c.subscriber.setReady()
+			fmt.Fprintf(os.Stderr, "sub ready %v %v\n", c.cdcId, c.subscriber.ready.Load())
 		} else {
 			c.subscriber.setNotReady()
+			fmt.Fprintf(os.Stderr, "sub not ready %v %v\n", c.cdcId, c.subscriber.ready.Load())
 		}
 	}
 }

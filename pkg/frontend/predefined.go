@@ -194,6 +194,43 @@ var (
 				primary key(stage_id)
 			)`
 
+	MoCatalogMoCdcTaskDDL = `create table mo_catalog.mo_cdc_task (
+    			account_id bigint unsigned,			
+    			task_id uuid,
+    			task_name varchar(1000),
+    			source_uri varchar(65535) not null,
+    			source_password  varchar(1000),
+    			sink_uri varchar(65535) not null,
+    			sink_type      varchar(20),
+    			sink_password  varchar(1000),
+    			sink_ssl_ca_path varchar(65535),
+    			sink_ssl_cert_path varchar(65535),
+    			sink_ssl_key_path varchar(65535),
+    			tables varchar(65535) not null,
+    			filters varchar(65535),
+    			opfilters varchar(65535),
+    			source_state varchar(20),
+    			sink_state varchar(20),
+    			start_ts bigint unsigned,
+    			start_ts_str varchar(1000),
+    			end_ts bigint unsigned,
+    			end_ts_str varchar(1000),
+    			config_file varchar(65535),
+    			task_create_time datetime,
+    			state varchar(20),
+    			checkpoint bigint unsigned,
+    			checkpoint_str varchar(1000),
+    			full_config varchar(1000),
+    			incr_config varchar(1000),
+    			reserved0 varchar(65535),
+    			reserved1 varchar(65535),
+    			reserved2 varchar(65535),
+    			reserved3 varchar(65535),
+    			reserved4 varchar(65535),
+    			primary key(account_id,task_id),
+    			unique key(account_id, task_name)
+			)`
+
 	MoCatalogMoSessionsDDL       = `CREATE VIEW mo_catalog.mo_sessions AS SELECT node_id, conn_id, session_id, account, user, host, db, session_start, command, info, txn_id, statement_id, statement_type, query_type, sql_source_type, query_start, client_host, role, proxy_host FROM mo_sessions() AS mo_sessions_tmp`
 	MoCatalogMoConfigurationsDDL = `CREATE VIEW mo_catalog.mo_configurations AS SELECT node_type, node_id, name, current_value, default_value, internal FROM mo_configurations() AS mo_configurations_tmp`
 	MoCatalogMoLocksDDL          = `CREATE VIEW mo_catalog.mo_locks AS SELECT cn_id, txn_id, table_id, lock_key, lock_content, lock_mode, lock_status, lock_wait FROM mo_locks() AS mo_locks_tmp`
