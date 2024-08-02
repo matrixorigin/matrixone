@@ -56,16 +56,18 @@ func (mergeBlock *MergeBlock) Call(proc *process.Process) (vm.CallResult, error)
 		return vm.CancelResult, err
 	}
 
-	var err error
-	ap := mergeBlock
-	result, err := mergeBlock.GetChildren(0).Call(proc)
-	if err != nil {
-		return result, err
-	}
-
 	anal := proc.GetAnalyze(mergeBlock.GetIdx(), mergeBlock.GetParallelIdx(), mergeBlock.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
+
+	var err error
+	ap := mergeBlock
+
+	result, err := vm.ChildrenCall(mergeBlock.GetChildren(0), proc, anal)
+	if err != nil {
+		return result, err
+	}
+	anal.Input(result.Batch, mergeBlock.IsFirst)
 
 	if result.Batch == nil {
 		result.Status = vm.ExecStop
@@ -118,5 +120,6 @@ func (mergeBlock *MergeBlock) Call(proc *process.Process) (vm.CallResult, error)
 		ap.container.mp2[0] = ap.container.mp2[0][:0]
 	}
 
+	anal.Output(result.Batch, mergeBlock.IsLast)
 	return result, nil
 }
