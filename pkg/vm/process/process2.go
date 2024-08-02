@@ -26,6 +26,7 @@ import (
 // when this batch is no longer in use, places all vectors into the pool.
 func (proc *Process) PutBatch(bat *batch.Batch) {
 	// situations that batch was still in use.
+	// we use `!= 0` but not `>0` to avoid the situation that the batch was cleaned more than required.
 	if bat == batch.EmptyBatch || atomic.AddInt64(&bat.Cnt, -1) != 0 {
 		return
 	}
