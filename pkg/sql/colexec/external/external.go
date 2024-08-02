@@ -1073,7 +1073,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 	}
 	filepathBytes := []byte(param.Fileparam.Filepath)
 
-	var sels []int32
+	var sels []int64
 	for i := 0; i < len(param.Attrs); i++ {
 		if uint16(param.Name2ColIndex[strings.ToLower(param.Attrs[i])]) >= colCnt {
 			vecTmp, err = proc.AllocVectorOfRows(makeType(&param.Cols[i].Typ, false), rows, nil)
@@ -1103,9 +1103,9 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 		if cap(sels) >= vecTmp.Length() {
 			sels = sels[:vecTmp.Length()]
 		} else {
-			sels = make([]int32, vecTmp.Length())
+			sels = make([]int64, vecTmp.Length())
 
-			for j, k := int32(0), int32(len(sels)); j < k; j++ {
+			for j, k := int64(0), int64(len(sels)); j < k; j++ {
 				sels[j] = j
 			}
 		}
