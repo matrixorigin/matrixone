@@ -3620,6 +3620,7 @@ func (c *Compile) newScopeListForRightJoin(node *plan.Node) []*Scope {
 
 func (c *Compile) newJoinScopeListOnCurrentCN(rs, left, right []*Scope, n *plan.Node) []*Scope {
 	// construct left
+	left = c.mergeShuffleScopesIfNeeded(left)
 	leftMerge := c.newMergeScope(left)
 	leftDispatch := constructDispatch(0, rs, c.addr, n, false)
 	leftDispatch.SetAnalyzeControl(c.anal.curNodeIdx, false)
@@ -3627,6 +3628,7 @@ func (c *Compile) newJoinScopeListOnCurrentCN(rs, left, right []*Scope, n *plan.
 	leftMerge.IsEnd = true
 
 	// construct right
+	right = c.mergeShuffleScopesIfNeeded(right)
 	rightMerge := c.newMergeScope(right)
 	rightDispatch := constructDispatch(1, rs, c.addr, n, false)
 	leftDispatch.SetAnalyzeControl(c.anal.curNodeIdx, false)
