@@ -46,7 +46,6 @@ func (timeWin *TimeWin) OpType() vm.OpType {
 func (timeWin *TimeWin) Prepare(proc *process.Process) (err error) {
 	timeWin.ctr = new(container)
 	ctr := timeWin.ctr
-	ctr.InitReceiver(proc, true)
 
 	ctr.aggExe = make([]colexec.ExpressionExecutor, len(timeWin.Aggs))
 	for i, ag := range timeWin.Aggs {
@@ -106,18 +105,17 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 	ctr := timeWin.ctr
 	var err error
 	var bat *batch.Batch
-	var msg *process.RegisterMessage
 
 	result := vm.NewCallResult()
 	for {
 
 		switch ctr.status {
 		case dataTag:
-			msg = ctr.ReceiveFromAllRegs(anal)
-			if msg.Err != nil {
-				return result, msg.Err
+			result, err := timeWin.GetChildren(0).Call(proc)
+			if err != nil {
+				return result, err
 			}
-			bat := msg.Batch
+			bat := result.Batch
 			if bat == nil {
 				if ctr.cur == hasGrow {
 					ctr.status = evalLastCur
@@ -140,11 +138,11 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 
 			ctr.status = evalTag
 		case initTag:
-			msg = ctr.ReceiveFromAllRegs(anal)
-			if msg.Err != nil {
-				return result, msg.Err
+			result, err := timeWin.GetChildren(0).Call(proc)
+			if err != nil {
+				return result, err
 			}
-			bat = msg.Batch
+			bat = result.Batch
 			if bat == nil {
 				result.Batch = nil
 				result.Status = vm.ExecStop

@@ -46,7 +46,6 @@ func (window *Window) OpType() vm.OpType {
 
 func (window *Window) Prepare(proc *process.Process) (err error) {
 	window.ctr = new(container)
-	window.ctr.InitReceiver(proc, true)
 
 	ctr := window.ctr
 	ctr.aggVecs = make([]group.ExprEvalVector, len(window.Aggs))
@@ -76,22 +75,21 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 	defer anal.Stop()
 	result := vm.NewCallResult()
 	var bat *batch.Batch
-	var msg *process.RegisterMessage
 
 	for {
 		switch ctr.status {
 		case receiveAll:
 			for {
-				msg = ctr.ReceiveFromAllRegs(anal)
-				if msg.Err != nil {
-					return result, msg.Err
+				result, err := window.GetChildren(0).Call(proc)
+				if err != nil {
+					return result, err
 				}
 
-				if msg.Batch == nil {
+				if result.Batch == nil {
 					ctr.status = eval
 					break
 				}
-				bat = msg.Batch
+				bat = result.Batch
 				if ctr.bat == nil {
 					ctr.bat = bat
 					continue
@@ -107,17 +105,17 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.bat.AddRowCount(bat.RowCount())
 			}
 		case receive:
-			msg = ctr.ReceiveFromAllRegs(anal)
-			if msg.Err != nil {
-				return result, msg.Err
+			result, err := window.GetChildren(0).Call(proc)
+			if err != nil {
+				return result, err
 			}
-			if msg.Batch == nil {
+			if result.Batch == nil {
 				ctr.status = done
 			} else {
 				ctr.status = eval
 			}
-			anal.Input(msg.Batch, window.GetIsFirst())
-			ctr.bat = msg.Batch
+			anal.Input(result.Batch, window.GetIsFirst())
+			ctr.bat = result.Batch
 		case eval:
 			if err = ctr.evalAggVector(ctr.bat, proc); err != nil {
 				return result, err

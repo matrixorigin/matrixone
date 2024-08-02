@@ -42,7 +42,6 @@ func (fill *Fill) OpType() vm.OpType {
 func (fill *Fill) Prepare(proc *process.Process) (err error) {
 	fill.ctr = new(container)
 	ctr := fill.ctr
-	ctr.InitReceiver(proc, true)
 
 	f := true
 	for i := len(fill.AggIds) - 1; i >= 0; i-- {
@@ -128,16 +127,15 @@ func resetColRef(expr *plan.Expr, idx int) {
 
 func processValue(ctr *container, ap *Fill, proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
 	var err error
-	result := vm.NewCallResult()
 	if ctr.buf != nil {
 		proc.PutBatch(ctr.buf)
 		ctr.buf = nil
 	}
-	msg := ctr.ReceiveFromAllRegs(anal)
-	if msg.Err != nil {
-		return result, msg.Err
+	result, err := ap.GetChildren(0).Call(proc)
+	if err != nil {
+		return result, err
 	}
-	ctr.buf = msg.Batch
+	ctr.buf = result.Batch
 	if ctr.buf == nil {
 		result.Batch = nil
 		result.Status = vm.ExecStop
@@ -259,16 +257,15 @@ func processNextCol(ctr *container, idx int, proc *process.Process) error {
 
 func processPrev(ctr *container, ap *Fill, proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
 	var err error
-	result := vm.NewCallResult()
 	if ctr.buf != nil {
 		proc.PutBatch(ctr.buf)
 		ctr.buf = nil
 	}
-	msg := ctr.ReceiveFromAllRegs(anal)
-	if msg.Err != nil {
-		return result, msg.Err
+	result, err := ap.GetChildren(0).Call(proc)
+	if err != nil {
+		return result, err
 	}
-	ctr.buf = msg.Batch
+	ctr.buf = result.Batch
 	if ctr.buf == nil {
 		result.Batch = nil
 		result.Status = vm.ExecStop
@@ -442,14 +439,15 @@ func processNext(ctr *container, ap *Fill, proc *process.Process, anal process.A
 		return result, nil
 	}
 	for {
-		msg := ctr.ReceiveFromAllRegs(anal)
-		if msg.Err != nil {
-			return result, msg.Err
+		result, err = ap.GetChildren(0).Call(proc)
+		if err != nil {
+			return result, err
 		}
-		if msg.Batch == nil {
+		ctr.buf = result.Batch
+		if result.Batch == nil {
 			break
 		}
-		ctr.bats = append(ctr.bats, msg.Batch)
+		ctr.bats = append(ctr.bats, result.Batch)
 	}
 	if len(ctr.bats) == 0 {
 		result.Batch = nil
@@ -487,15 +485,15 @@ func processLinear(ctr *container, ap *Fill, proc *process.Process, anal process
 		return result, nil
 	}
 	for {
-		msg := ctr.ReceiveFromAllRegs(anal)
-		if msg.Err != nil {
-			return result, msg.Err
+		result, err = ap.GetChildren(0).Call(proc)
+		if err != nil {
+			return result, err
 		}
-		if msg.Batch == nil {
+		if result.Batch == nil {
 			break
 		}
-		anal.Input(msg.Batch, ap.IsFirst)
-		ctr.bats = append(ctr.bats, msg.Batch)
+		anal.Input(result.Batch, ap.IsFirst)
+		ctr.bats = append(ctr.bats, result.Batch)
 	}
 	if len(ctr.bats) == 0 {
 		result.Batch = nil
@@ -517,16 +515,15 @@ func processLinear(ctr *container, ap *Fill, proc *process.Process, anal process
 }
 
 func processDefault(ctr *container, ap *Fill, proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
-	result := vm.NewCallResult()
 	if ctr.buf != nil {
 		proc.PutBatch(ctr.buf)
 		ctr.buf = nil
 	}
-	msg := ctr.ReceiveFromAllRegs(anal)
-	if msg.Err != nil {
-		return result, msg.Err
+	result, err := ap.GetChildren(0).Call(proc)
+	if err != nil {
+		return result, err
 	}
-	ctr.buf = msg.Batch
+	ctr.buf = result.Batch
 	if ctr.buf == nil {
 		result.Batch = nil
 		result.Status = vm.ExecStop
