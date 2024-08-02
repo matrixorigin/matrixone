@@ -102,10 +102,11 @@ func (insert *Insert) insert_s3(proc *process.Process, anal process.Analyze) (vm
 	if insert.ctr.state == vm.Build {
 		for {
 			result, err := vm.ChildrenCall(insert.GetChildren(0), proc, anal)
-
 			if err != nil {
 				return result, err
 			}
+			anal.Input(result.Batch, insert.IsFirst)
+
 			if result.Batch == nil {
 				insert.ctr.state = vm.Eval
 				break
@@ -185,10 +186,12 @@ func (insert *Insert) insert_s3(proc *process.Process, anal process.Analyze) (vm
 		}
 		insert.ctr.state = vm.End
 		insert.ctr.buf = result.Batch
+		anal.Output(result.Batch, insert.IsLast)
 		return result, nil
 	}
 
 	if insert.ctr.state == vm.End {
+		anal.Output(result.Batch, insert.IsLast)
 		return result, nil
 	}
 
@@ -197,10 +200,11 @@ func (insert *Insert) insert_s3(proc *process.Process, anal process.Analyze) (vm
 
 func (insert *Insert) insert_table(proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
 	result, err := vm.ChildrenCall(insert.GetChildren(0), proc, anal)
-
 	if err != nil {
 		return result, err
 	}
+	anal.Input(result.Batch, insert.IsFirst)
+
 	if result.Batch == nil || result.Batch.IsEmpty() {
 		return result, nil
 	}
@@ -248,6 +252,7 @@ func (insert *Insert) insert_table(proc *process.Process, anal process.Analyze) 
 		atomic.AddUint64(&insert.affectedRows, affectedRows)
 	}
 	// `insertBat` does not include partition expression columns
+	anal.Output(result.Batch, insert.IsLast)
 	return result, nil
 }
 
