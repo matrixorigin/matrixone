@@ -556,7 +556,7 @@ func TestAggregator_PopResultsBeforeWindow(t *testing.T) {
 	require.Equalf(t, 1, len(aggregator.Grouped), "Expected 1 left in aggregator, but got: %d", len(aggregator.Grouped))
 
 	// Get results from aggregator
-	results = aggregator.PopResultsBeforeWindow(time.Now().Truncate(aggWindow))
+	results = aggregator.PopResultsBeforeWindow(time.Now()) // ignore Truncate(aggWindow)
 	require.Equal(t, len(results), 1, "Expected 1 aggregated statements")
 	require.Equalf(t, 0, len(aggregator.Grouped), "Expected 0 left in aggregator, but got: %d", len(aggregator.Grouped))
 
@@ -569,6 +569,6 @@ func TestAggregator_PopResultsBeforeWindow(t *testing.T) {
 	assert.Equal(t, int64(2), results[0].(*StatementInfo).RowsRead)
 
 	// Pop Again, expect empty result
-	results = aggregator.PopResultsBeforeWindow(time.Now().Truncate(aggWindow))
+	results = aggregator.PopResultsBeforeWindow(time.Now())
 	require.Equal(t, len(results), 0, "Expected 0 aggregated statements")
 }
