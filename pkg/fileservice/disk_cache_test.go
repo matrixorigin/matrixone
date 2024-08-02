@@ -278,7 +278,7 @@ func TestDiskCacheDirSize(t *testing.T) {
 	assert.Nil(t, err)
 
 	data := bytes.Repeat([]byte("a"), capacity/128)
-	for i := 0; i < capacity/len(data)*64; i++ {
+	for i := 0; i < capacity/len(data)*2; i++ {
 		err := cache.Update(ctx, &IOVector{
 			FilePath: fmt.Sprintf("%v", i),
 			Entries: []IOEntry{

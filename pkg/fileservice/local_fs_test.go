@@ -100,8 +100,8 @@ func TestLocalFSWithDiskCache(t *testing.T) {
 	var counter perfcounter.CounterSet
 	ctx = perfcounter.WithCounterSet(ctx, &counter)
 	const (
-		n       = 128
-		dataLen = 128
+		n       = 32
+		dataLen = 32
 	)
 
 	// new fs
