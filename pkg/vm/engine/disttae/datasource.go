@@ -252,12 +252,12 @@ func (tomb *tombstoneDataWithDeltaLoc) ApplyPersistedTombstones(
 	rowsOffset []int32,
 	mask *nulls.Nulls,
 	apply func(
-		ctx context.Context,
-		loc objectio.Location,
-		cts types.TS,
-		rowsOffset []int32,
-		deleted *nulls.Nulls,
-	) (left []int32, err error),
+	ctx context.Context,
+	loc objectio.Location,
+	cts types.TS,
+	rowsOffset []int32,
+	deleted *nulls.Nulls,
+) (left []int32, err error),
 ) (left []int32, err error) {
 
 	if locs, ok := tomb.blk2UncommitLoc[bid]; ok {
@@ -1402,12 +1402,35 @@ func (ls *LocalDataSource) applyWorkspaceEntryDeletes(
 	done := false
 	writes := ls.table.getTxn().writes[:ls.txnOffset]
 
+	var delRowIds []types.Rowid = make([]types.Rowid, options.DefaultBlockMaxRows)
+
 	for idx := range writes {
-		if checkWorkspaceEntryType(ls.table, writes[idx]) != DELETE {
+		delRowIds = delRowIds[:0]
+
+		if t := checkWorkspaceEntryType(ls.table, writes[idx]); t == batRowsHaveDeletes {
+			rowIds := vector.MustFixedCol[types.Rowid](writes[idx].bat.Vecs[0])
+			left := ls.table.getTxn().batchSelectList[writes[idx].bat]
+
+			for i := range rowIds {
+				dd := true
+				for j := range left {
+					if int64(i) == left[j] {
+						dd = false
+						break
+					}
+				}
+
+				if dd {
+					delRowIds = append(delRowIds, rowIds[i])
+				}
+			}
+
+		} else if t == batRowsAllDeleted {
+			delRowIds = vector.MustFixedCol[types.Rowid](writes[idx].bat.Vecs[0])
+		} else {
 			continue
 		}
 
-		delRowIds := vector.MustFixedCol[types.Rowid](writes[idx].bat.Vecs[0])
 		for _, delRowId := range delRowIds {
 			b, o := delRowId.Decode()
 			if bid.Compare(b) != 0 {
