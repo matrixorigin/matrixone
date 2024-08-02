@@ -3177,7 +3177,7 @@ func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*
 				// reset the channel buffer of sink for load
 				dataScope.Proc.Reg.MergeReceivers[0].Ch = make(chan *process.RegisterMessage, dataScope.NodeInfo.Mcpu)
 			}
-			parallelSize := c.getParallelSizeForExternalScan(n, dataScope.NodeInfo.Mcpu)
+			parallelSize := c.getParallelSizeForExternalScan(n, ncpu)
 			scopes := make([]*Scope, 0, parallelSize)
 			regs := make([]*process.WaitRegister, 0, parallelSize)
 			for i := 0; i < parallelSize; i++ {
@@ -3196,7 +3196,7 @@ func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*
 				regs = append(regs, scopes[i].Proc.Reg.MergeReceivers...)
 			}
 
-			if c.anal.qry.LoadTag && n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle && dataScope.NodeInfo.Mcpu == parallelSize {
+			if c.anal.qry.LoadTag && n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle && dataScope.NodeInfo.Mcpu == parallelSize && parallelSize > 1 {
 				_, arg := constructDispatchLocalAndRemote(0, scopes, c.addr)
 				arg.FuncId = dispatch.ShuffleToAllFunc
 				arg.ShuffleType = plan2.ShuffleToLocalMatchedReg
@@ -3509,6 +3509,7 @@ func (c *Compile) newDeleteMergeScope(arg *deletion.Deletion, ss []*Scope) *Scop
 func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 	rs := newScope(Merge)
 	rs.NodeInfo = getEngineNode(c)
+	rs.NodeInfo.Mcpu = 1 //merge scope is single parallel by default
 	rs.PreScopes = ss
 	cnt := 0
 	for _, s := range ss {
@@ -3548,7 +3549,7 @@ func (c *Compile) newMergeRemoteScope(ss []*Scope, nodeinfo engine.Node) *Scope 
 	// reset rs's info to remote
 	rs.Magic = Remote
 	rs.NodeInfo.Addr = nodeinfo.Addr
-	rs.NodeInfo.Mcpu = nodeinfo.Mcpu
+	rs.NodeInfo.Mcpu = 1 //merge scope is single parallel by default
 
 	return rs
 }
