@@ -15,16 +15,18 @@
 package process
 
 import (
+	"sync/atomic"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"sync/atomic"
 )
 
 // PutBatch updates the reference count of the batch.
 // when this batch is no longer in use, places all vectors into the pool.
 func (proc *Process) PutBatch(bat *batch.Batch) {
 	// situations that batch was still in use.
+	// we use `!= 0` but not `>0` to avoid the situation that the batch was cleaned more than required.
 	if bat == batch.EmptyBatch || atomic.AddInt64(&bat.Cnt, -1) != 0 {
 		return
 	}
@@ -60,6 +62,9 @@ func (proc *Process) PutVector(vec *vector.Vector) {
 //
 // If the get operation fails, it allocates a new vector to return.
 func (proc *Process) GetVector(typ types.Type) *vector.Vector {
+	if typ.Oid == types.T_any {
+		return vector.NewVec(typ)
+	}
 	if vec := proc.Base.vp.getVectorFromPool(typ); vec != nil {
 		vec.Reset(typ)
 		return vec

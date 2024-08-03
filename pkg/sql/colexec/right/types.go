@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -62,7 +63,7 @@ type container struct {
 	evecs []evalVector
 	vecs  []*vector.Vector
 
-	mp *process.JoinMap
+	mp *message.JoinMap
 
 	matched *bitmap.Bitmap
 
@@ -136,7 +137,6 @@ func (rightJoin *RightJoin) Free(proc *process.Process, pipelineFailed bool, err
 		ctr.cleanBatch(proc)
 		ctr.cleanHashMap()
 		ctr.cleanExprExecutor()
-		ctr.FreeAllReg()
 		ctr.cleanEvalVectors()
 
 		anal := proc.GetAnalyze(rightJoin.GetIdx(), rightJoin.GetParallelIdx(), rightJoin.GetParallelMajor())

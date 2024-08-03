@@ -16,6 +16,9 @@ package join
 
 import (
 	"bytes"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -39,7 +42,6 @@ func (innerJoin *InnerJoin) OpType() vm.OpType {
 
 func (innerJoin *InnerJoin) Prepare(proc *process.Process) (err error) {
 	innerJoin.ctr = new(container)
-	innerJoin.ctr.InitReceiver(proc, false)
 	innerJoin.ctr.vecs = make([]*vector.Vector, len(innerJoin.Conditions[0]))
 	innerJoin.ctr.evecs = make([]evalVector, len(innerJoin.Conditions[0]))
 	for i := range innerJoin.ctr.evecs {
@@ -65,6 +67,7 @@ func (innerJoin *InnerJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	defer anal.Stop()
 	ctr := innerJoin.ctr
 	result := vm.NewCallResult()
+	var err error
 	for {
 		switch ctr.state {
 		case Build:
@@ -79,11 +82,11 @@ func (innerJoin *InnerJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 		case Probe:
 			if innerJoin.ctr.bat == nil {
-				msg := ctr.ReceiveFromSingleReg(0, anal)
-				if msg.Err != nil {
-					return result, msg.Err
+				result, err = innerJoin.Children[0].Call(proc)
+				if err != nil {
+					return result, err
 				}
-				bat := msg.Batch
+				bat := result.Batch
 				if bat == nil {
 					ctr.state = End
 					continue
@@ -126,7 +129,9 @@ func (innerJoin *InnerJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (innerJoin *InnerJoin) build(anal process.Analyze, proc *process.Process) {
 	ctr := innerJoin.ctr
-	ctr.mp = proc.ReceiveJoinMap(anal, innerJoin.JoinMapTag, innerJoin.IsShuffle, innerJoin.ShuffleIdx)
+	start := time.Now()
+	defer anal.WaitStop(start)
+	ctr.mp = message.ReceiveJoinMap(innerJoin.JoinMapTag, innerJoin.IsShuffle, innerJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}

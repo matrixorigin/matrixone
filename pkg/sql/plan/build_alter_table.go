@@ -410,6 +410,7 @@ func buildNotNullColumnVal(col *ColDef) string {
 	} else if col.Typ.Id == int32(types.T_varchar) ||
 		col.Typ.Id == int32(types.T_char) ||
 		col.Typ.Id == int32(types.T_text) ||
+		col.Typ.Id == int32(types.T_datalink) ||
 		col.Typ.Id == int32(types.T_binary) ||
 		col.Typ.Id == int32(types.T_blob) {
 		defaultValue = "''"

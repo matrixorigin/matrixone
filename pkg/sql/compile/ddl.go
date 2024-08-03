@@ -708,7 +708,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 
 	var addColIdx int
 	var dropColIdx int
-	constraint := make([][]byte, 0)
+	reqs := make([]*api.AlterTableReq, 0)
 	for _, kind := range alterKinds {
 		var req *api.AlterTableReq
 		switch kind {
@@ -735,14 +735,10 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			req = api.NewAddPartitionReq(rel.GetDBID(c.proc.Ctx), rel.GetTableID(c.proc.Ctx), changePartitionDef)
 		default:
 		}
-		tmp, err := req.Marshal()
-		if err != nil {
-			return err
-		}
-		constraint = append(constraint, tmp)
+		reqs = append(reqs, req)
 	}
 
-	err = rel.AlterTable(c.proc.Ctx, newCt, constraint)
+	err = rel.AlterTable(c.proc.Ctx, newCt, reqs)
 	if err != nil {
 		return err
 	}
@@ -2529,13 +2525,14 @@ func (s *Scope) AlterSequence(c *Compile) error {
 	if rel, err := dbSource.Relation(c.proc.Ctx, tblName, nil); err == nil {
 		// sequence table exists
 		// get pre sequence table row values
-		values, err = c.proc.GetSessionInfo().SqlHelper.ExecSql(fmt.Sprintf("select * from `%s`.`%s`", dbName, tblName))
+		_values, err := c.proc.GetSessionInfo().SqlHelper.ExecSql(fmt.Sprintf("select * from `%s`.`%s`", dbName, tblName))
 		if err != nil {
 			return err
 		}
-		if values == nil {
+		if _values == nil {
 			return moerr.NewInternalError(c.proc.Ctx, "Failed to get sequence meta data.")
 		}
+		values = _values[0]
 
 		// get pre curval
 

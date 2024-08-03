@@ -18,6 +18,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -165,7 +166,7 @@ var (
 	// largestEntryLimit is the max size for reading file to csv buf
 	LargestEntryLimit = 10 * 1024 * 1024
 
-	CNPrimaryCheck = false
+	CNPrimaryCheck atomic.Bool
 )
 
 // FrontendParameters of the frontend

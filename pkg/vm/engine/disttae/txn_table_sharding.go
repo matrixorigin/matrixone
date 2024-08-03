@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -57,7 +58,6 @@ func newTxnTableWithItem(
 		createSql:     item.CreateSql,
 		constraint:    item.Constraint,
 		rowid:         item.Rowid,
-		rowids:        item.Rowids,
 		lastTS:        db.op.SnapshotTS(),
 	}
 	tbl.proc.Store(process)
@@ -222,6 +222,7 @@ func (tbl *txnTableDelegate) Ranges(
 		return nil, err
 	}
 
+	// XXX this is a bug.
 	var ranges engine.Ranges
 	for i, subRanges := range rs {
 		blkSlice := subRanges.(*objectio.BlockInfoSlice)
@@ -495,9 +496,9 @@ func (tbl *txnTableDelegate) DelTableDef(
 func (tbl *txnTableDelegate) AlterTable(
 	ctx context.Context,
 	c *engine.ConstraintDef,
-	constraint [][]byte,
+	reqs []*api.AlterTableReq,
 ) error {
-	return tbl.origin.AlterTable(ctx, c, constraint)
+	return tbl.origin.AlterTable(ctx, c, reqs)
 }
 
 func (tbl *txnTableDelegate) UpdateConstraint(

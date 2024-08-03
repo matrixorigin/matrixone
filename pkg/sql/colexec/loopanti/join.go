@@ -16,6 +16,9 @@ package loopanti
 
 import (
 	"bytes"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -40,7 +43,6 @@ func (loopAnti *LoopAnti) Prepare(proc *process.Process) error {
 	var err error
 
 	loopAnti.ctr = new(container)
-	loopAnti.ctr.InitReceiver(proc, false)
 
 	if loopAnti.Cond != nil {
 		loopAnti.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopAnti.Cond)
@@ -69,11 +71,11 @@ func (loopAnti *LoopAnti) Call(proc *process.Process) (vm.CallResult, error) {
 		case Probe:
 			var err error
 			if loopAnti.ctr.buf == nil {
-				msg := ctr.ReceiveFromSingleReg(0, anal)
-				if msg.Err != nil {
-					return result, msg.Err
+				result, err = loopAnti.Children[0].Call(proc)
+				if err != nil {
+					return result, err
 				}
-				loopAnti.ctr.buf = msg.Batch
+				loopAnti.ctr.buf = result.Batch
 				if loopAnti.ctr.buf == nil {
 					ctr.state = End
 					continue
@@ -106,7 +108,9 @@ func (loopAnti *LoopAnti) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (loopAnti *LoopAnti) build(proc *process.Process, anal process.Analyze) error {
 	ctr := loopAnti.ctr
-	mp := proc.ReceiveJoinMap(anal, loopAnti.JoinMapTag, false, 0)
+	start := time.Now()
+	defer anal.WaitStop(start)
+	mp := message.ReceiveJoinMap(loopAnti.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
 	if mp == nil {
 		return nil
 	}

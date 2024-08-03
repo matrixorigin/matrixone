@@ -73,8 +73,9 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	dbName := stmt.Name.GetDBName()
 
 	snapshot := &Snapshot{TS: &timestamp.Timestamp{}}
-	if len(stmt.SnapshotName) > 0 {
-		if snapshot, err = ctx.ResolveSnapshotWithSnapshotName(stmt.SnapshotName); err != nil {
+
+	if stmt.AtTsExpr != nil {
+		if snapshot, err = getTimeStampByTsHint(ctx, stmt.AtTsExpr); err != nil {
 			return nil, err
 		}
 	}
@@ -109,8 +110,8 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		} else if stmt.Name.NumParts == 2 {
 			newStmt = tree.NewShowCreateView(tree.NewUnresolvedObjectName(dbName, tblName))
 		}
-		if len(stmt.SnapshotName) > 0 {
-			newStmt.SnapshotName = stmt.SnapshotName
+		if stmt.AtTsExpr != nil {
+			newStmt.AtTsExpr = stmt.AtTsExpr
 		}
 
 		return buildShowCreateView(newStmt, ctx)
@@ -144,8 +145,8 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 	dbName := stmt.Name.GetDBName()
 
 	snapshot := &Snapshot{TS: &timestamp.Timestamp{}}
-	if len(stmt.SnapshotName) > 0 {
-		if snapshot, err = ctx.ResolveSnapshotWithSnapshotName(stmt.SnapshotName); err != nil {
+	if stmt.AtTsExpr != nil {
+		if snapshot, err = getTimeStampByTsHint(ctx, stmt.AtTsExpr); err != nil {
 			return nil, err
 		}
 	}
@@ -193,14 +194,22 @@ func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, e
 
 	var sql string
 	snapshotSpec := ""
-	if len(stmt.SnapshotName) > 0 {
-		snapshot, err := ctx.ResolveSnapshotWithSnapshotName(stmt.SnapshotName)
-		if err != nil {
+
+	snapshot := &Snapshot{TS: &timestamp.Timestamp{}}
+	if stmt.AtTsExpr != nil {
+		if snapshot, err = getTimeStampByTsHint(ctx, stmt.AtTsExpr); err != nil {
 			return nil, err
 		}
-		accountId = snapshot.Tenant.TenantID
-		snapshotSpec = fmt.Sprintf("{snapshot = '%s'}", stmt.SnapshotName)
+
+		if stmt.AtTsExpr.Type == tree.ATTIMESTAMPSNAPSHOT {
+			accountId = snapshot.Tenant.TenantID
+			snapshotSpec = fmt.Sprintf("{snapshot = '%s'}", stmt.AtTsExpr.SnapshotName)
+		} else {
+			snapshotSpec = fmt.Sprintf("{MO_TS = %d}", snapshot.TS.PhysicalTime)
+		}
+
 	}
+
 	// Any account should show database MO_CATALOG_DB_NAME
 	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and datname = '%s')", accountId, MO_CATALOG_DB_NAME)
 	sql = fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database %s where (%s) ORDER BY %s", MO_CATALOG_DB_NAME, snapshotSpec, accountClause, catalog.SystemDBAttr_Name)
@@ -254,12 +263,18 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 
 	snapshot := &Snapshot{TS: &timestamp.Timestamp{}}
 	snapshotSpec := ""
-	if len(stmt.SnapshotName) > 0 {
-		if snapshot, err = ctx.ResolveSnapshotWithSnapshotName(stmt.SnapshotName); err != nil {
+	if stmt.AtTsExpr != nil {
+		if snapshot, err = getTimeStampByTsHint(ctx, stmt.AtTsExpr); err != nil {
 			return nil, err
 		}
-		accountId = snapshot.Tenant.TenantID
-		snapshotSpec = fmt.Sprintf("{snapshot = '%s'}", stmt.SnapshotName)
+
+		if stmt.AtTsExpr.Type == tree.ATTIMESTAMPSNAPSHOT {
+			accountId = snapshot.Tenant.TenantID
+			snapshotSpec = fmt.Sprintf("{snapshot = '%s'}", stmt.AtTsExpr.SnapshotName)
+		} else {
+			snapshotSpec = fmt.Sprintf("{MO_TS = %d}", snapshot.TS.PhysicalTime)
+		}
+
 	}
 
 	dbName, err := databaseIsValid(stmt.DBName, ctx, *snapshot)
@@ -515,63 +530,56 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	}
 
 	var keyStr string
-	if dbName == catalog.MO_CATALOG && tblName == catalog.MO_DATABASE {
-		keyStr = "case when col.attname = '" + catalog.SystemDBAttr_ID + "' then 'PRI' else '' END as `Key`"
-	} else if dbName == catalog.MO_CATALOG && tblName == catalog.MO_TABLES {
-		keyStr = "case when col.attname = '" + catalog.SystemRelAttr_ID + "' then 'PRI' else '' END as `Key`"
-	} else if dbName == catalog.MO_CATALOG && tblName == catalog.MO_COLUMNS {
-		keyStr = "case when col.attname = '" + catalog.SystemColAttr_UniqName + "' then 'PRI' else '' END as `Key`"
-	} else {
-		if tableDef.Pkey != nil || len(tableDef.Fkeys) != 0 || len(tableDef.Indexes) != 0 {
-			keyStr += "case"
-			if tableDef.Pkey != nil {
-				for _, name := range tableDef.Pkey.Names {
-					name = colNameToOriginName[name]
+	if tableDef.Pkey != nil || len(tableDef.Fkeys) != 0 || len(tableDef.Indexes) != 0 {
+		keyStr += "case"
+		if tableDef.Pkey != nil {
+			for _, name := range tableDef.Pkey.Names {
+				name = colNameToOriginName[name]
+				keyStr += " when col.attname = "
+				keyStr += "'" + name + "'"
+				keyStr += " then 'PRI'"
+			}
+		}
+		if len(tableDef.Fkeys) != 0 {
+
+			for _, fk := range tableDef.Fkeys {
+				for _, colId := range fk.Cols {
 					keyStr += " when col.attname = "
-					keyStr += "'" + name + "'"
-					keyStr += " then 'PRI'"
+					keyStr += "'" + colIdToOriginName[colId] + "'"
+					keyStr += " then 'MUL'"
 				}
 			}
-			if len(tableDef.Fkeys) != 0 {
-				for _, fk := range tableDef.Fkeys {
-					for _, colId := range fk.Cols {
-						keyStr += " when col.attname = "
-						keyStr += "'" + colIdToOriginName[colId] + "'"
-						keyStr += " then 'MUL'"
-					}
-				}
-			}
-			if tableDef.Indexes != nil {
-				for _, indexDef := range tableDef.Indexes {
-					name := colNameToOriginName[indexDef.Parts[0]]
-					if indexDef.Unique {
-						if isPrimaryKey(tableDef, indexDef.Parts) {
-							for _, name = range indexDef.Parts {
-								name = colNameToOriginName[name]
-								keyStr += " when col.attname = "
-								keyStr += "'" + name + "'"
-								keyStr += " then 'PRI'"
-							}
-						} else if isMultiplePriKey(indexDef) {
+		}
+		if tableDef.Indexes != nil {
+			for _, indexDef := range tableDef.Indexes {
+				name := colNameToOriginName[indexDef.Parts[0]]
+				if indexDef.Unique {
+					if isPrimaryKey(tableDef, indexDef.Parts) {
+						for _, name = range indexDef.Parts {
+							name = colNameToOriginName[name]
 							keyStr += " when col.attname = "
 							keyStr += "'" + name + "'"
-							keyStr += " then 'MUL'"
-						} else {
-							keyStr += " when col.attname = "
-							keyStr += "'" + name + "'"
-							keyStr += " then 'UNI'"
+							keyStr += " then 'PRI'"
 						}
-					} else {
+					} else if isMultiplePriKey(indexDef) {
 						keyStr += " when col.attname = "
 						keyStr += "'" + name + "'"
 						keyStr += " then 'MUL'"
+					} else {
+						keyStr += " when col.attname = "
+						keyStr += "'" + name + "'"
+						keyStr += " then 'UNI'"
 					}
+				} else {
+					keyStr += " when col.attname = "
+					keyStr += "'" + name + "'"
+					keyStr += " then 'MUL'"
 				}
 			}
-			keyStr += " else '' END as `Key`"
-		} else {
-			keyStr = "'' as `Key`"
 		}
+		keyStr += " else '' END as `Key`"
+	} else {
+		keyStr = "'' as `Key`"
 	}
 
 	ddlType := plan.DataDefinition_SHOW_COLUMNS

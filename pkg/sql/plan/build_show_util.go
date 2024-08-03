@@ -410,7 +410,7 @@ func FormatColType(colType plan.Type) string {
 		}
 
 	case types.T_float64, types.T_float32:
-		if colType.Scale != -1 {
+		if colType.Width > 0 && colType.Scale != -1 {
 			suffix = fmt.Sprintf("(%d,%d)", colType.Width, colType.Scale)
 		}
 
@@ -458,4 +458,9 @@ func formatStr(str string) string {
 		return "'" + strings.Replace(tmp[1:strLen-1], "'", "''", -1) + "'"
 	}
 	return strings.Replace(tmp, "'", "''", -1)
+}
+
+func getTimeStampByTsHint(ctx CompilerContext, AtTsExpr *tree.AtTimeStamp) (snapshot *plan.Snapshot, err error) {
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+	return builder.resolveTsHint(AtTsExpr)
 }

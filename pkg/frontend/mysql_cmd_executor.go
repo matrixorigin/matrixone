@@ -234,6 +234,9 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if stm.IsMoLogger() && stm.StatementType == "Load" && len(stm.Statement) > 128 {
 		stm.Statement = envStmt[:40] + "..." + envStmt[len(envStmt)-70:]
 	}
+	if ses.disableAgg {
+		stm.DisableAgg()
+	}
 	stm.Report(ctx) // pls keep it simple: Only call Report twice at most.
 	ses.SetTStmt(stm)
 
@@ -695,6 +698,13 @@ func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error
 				return err
 			}
 			runtime.ServiceRuntime(ses.service).SetGlobalVariables("runtime_filter_limit_bloom_filter", value)
+		} else if name == "disable_agg_statement" {
+			err = setVarFunc(assign.System, assign.Global, name, value, sql)
+			if err != nil {
+				return err
+			}
+			boolVal := InitSystemVariableBoolType("_")
+			ses.disableAgg = boolVal.IsTrue(value)
 		} else {
 			err = setVarFunc(assign.System, assign.Global, name, value, sql)
 			if err != nil {
@@ -1163,8 +1173,7 @@ func handleAlterPitr(ses *Session, execCtx *ExecCtx, ap *tree.AlterPitr) error {
 }
 
 func handleRestorePitr(ses *Session, execCtx *ExecCtx, rp *tree.RestorePitr) error {
-	//return doRestorePitr(execCtx.reqCtx, ses, rp)
-	return nil
+	return doRestorePitr(execCtx.reqCtx, ses, rp)
 }
 
 // handleCreateAccount creates a new user-level tenant in the context of the tenant SYS
@@ -2650,6 +2659,16 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	ses.SetSql(input.getSql())
 	input.genHash()
 
+	sqlLen := len(input.getSql())
+	if sqlLen != 0 {
+		v2.TotalSQLLengthHistogram.Observe(float64(sqlLen))
+		if strings.HasPrefix(input.sql, "LOAD DATA INLINE") {
+			v2.LoadDataInlineSQLLengthHistogram.Observe(float64(sqlLen))
+		} else {
+			v2.OtherSQLLengthHistogram.Observe(float64(sqlLen))
+		}
+	}
+
 	//the ses.GetUserName returns the user_name with the account_name.
 	//here,we only need the user_name.
 	userNameOnly := rootName
@@ -3162,6 +3181,8 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 		col.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
 	case types.T_array_float32, types.T_array_float64:
 		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	case types.T_datalink:
+		col.SetColumnType(defines.MYSQL_TYPE_TEXT)
 	case types.T_binary:
 		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 	case types.T_varbinary:
@@ -3189,6 +3210,8 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 	case types.T_Blockid:
 		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 	case types.T_enum:
+		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	case types.T_Rowid:
 		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 	default:
 		return moerr.NewInternalError(ctx, "RunWhileSend : unsupported type %d", engineType)

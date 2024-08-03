@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -40,7 +42,7 @@ func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 	tableScan.ctr = new(container)
 	tableScan.ctr.orderBy = tableScan.Reader.GetOrderBy()
 	if tableScan.TopValueMsgTag > 0 {
-		tableScan.ctr.msgReceiver = proc.NewMessageReceiver([]int32{tableScan.TopValueMsgTag}, tableScan.GetAddress())
+		tableScan.ctr.msgReceiver = message.NewMessageReceiver([]int32{tableScan.TopValueMsgTag}, tableScan.GetAddress(), proc.GetMessageBoard())
 	}
 	return nil
 }
@@ -80,13 +82,6 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 	}()
 
 	result := vm.NewCallResult()
-	//select {
-	//case <-proc.Ctx.Done():
-	//	result.Batch = nil
-	//	result.Status = vm.ExecStop
-	//	return result, proc.Ctx.Err()
-	//default:
-	//}
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		e = err
 		return vm.CancelResult, err
@@ -102,7 +97,7 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		if tableScan.ctr.msgReceiver != nil {
 			msgs, _ := tableScan.ctr.msgReceiver.ReceiveMessage(false, proc.Ctx)
 			for i := range msgs {
-				msg, ok := msgs[i].(process.TopValueMessage)
+				msg, ok := msgs[i].(message.TopValueMessage)
 				if !ok {
 					panic("only support top value message in table scan!")
 				}
@@ -143,7 +138,8 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		tableScan.ctr.buf = bat
 		break
 	}
-
 	result.Batch = tableScan.ctr.buf
+	anal.Input(result.Batch, tableScan.IsFirst)
+	anal.Output(result.Batch, tableScan.IsLast)
 	return result, nil
 }

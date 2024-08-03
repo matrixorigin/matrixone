@@ -106,4 +106,17 @@ var (
 	DropPubHistogram   = pubSubDurationHistogram.WithLabelValues("drop-pub")
 	ShowPubHistogram   = pubSubDurationHistogram.WithLabelValues("show-pub")
 	ShowSubHistogram   = pubSubDurationHistogram.WithLabelValues("show-sub")
+
+	sqlLengthHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "frontend",
+			Name:      "input_sql_length",
+			Help:      "Bucketed histogram of Input SQL Length",
+			Buckets:   getDurationBuckets(),
+		}, []string{"label"})
+
+	TotalSQLLengthHistogram          = sqlLengthHistogram.WithLabelValues("total-sql-length")
+	LoadDataInlineSQLLengthHistogram = sqlLengthHistogram.WithLabelValues("load-data-inline-sql-length")
+	OtherSQLLengthHistogram          = sqlLengthHistogram.WithLabelValues("other-sql-length")
 )

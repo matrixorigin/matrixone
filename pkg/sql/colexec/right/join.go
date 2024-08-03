@@ -16,6 +16,9 @@ package right
 
 import (
 	"bytes"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 
@@ -42,9 +45,8 @@ func (rightJoin *RightJoin) OpType() vm.OpType {
 
 func (rightJoin *RightJoin) Prepare(proc *process.Process) (err error) {
 	rightJoin.ctr = new(container)
-	rightJoin.ctr.InitReceiver(proc, false)
 	rightJoin.ctr.vecs = make([]*vector.Vector, len(rightJoin.Conditions[0]))
-
+	rightJoin.ctr.InitReceiver(proc, false)
 	rightJoin.ctr.evecs = make([]evalVector, len(rightJoin.Conditions[0]))
 	for i := range rightJoin.Conditions[0] {
 		rightJoin.ctr.evecs[i].executor, err = colexec.NewExpressionExecutor(proc, rightJoin.Conditions[0][i])
@@ -69,6 +71,7 @@ func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	defer analyze.Stop()
 	ctr := rightJoin.ctr
 	result := vm.NewCallResult()
+	var err error
 	for {
 		switch ctr.state {
 		case Build:
@@ -83,11 +86,11 @@ func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Probe:
 			if rightJoin.ctr.buf == nil {
-				msg := ctr.ReceiveFromSingleReg(0, analyze)
-				if msg.Err != nil {
-					return result, msg.Err
+				result, err = rightJoin.Children[0].Call(proc)
+				if err != nil {
+					return result, err
 				}
-				bat := msg.Batch
+				bat := result.Batch
 
 				if bat == nil {
 					ctr.state = SendLast
@@ -140,7 +143,9 @@ func (rightJoin *RightJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (rightJoin *RightJoin) build(anal process.Analyze, proc *process.Process) {
 	ctr := rightJoin.ctr
-	ctr.mp = proc.ReceiveJoinMap(anal, rightJoin.JoinMapTag, rightJoin.IsShuffle, rightJoin.ShuffleIdx)
+	start := time.Now()
+	defer anal.WaitStop(start)
+	ctr.mp = message.ReceiveJoinMap(rightJoin.JoinMapTag, rightJoin.IsShuffle, rightJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}

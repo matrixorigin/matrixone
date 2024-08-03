@@ -268,6 +268,9 @@ type Workspace interface {
 
 	SetHaveDDL(flag bool)
 	GetHaveDDL() bool
+
+	// debug & test
+	PPString() string
 }
 
 // TxnOverview txn overview include meta and status

@@ -16,6 +16,9 @@ package rightsemi
 
 import (
 	"bytes"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -80,11 +83,11 @@ func (rightSemi *RightSemi) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 		case Probe:
-			msg := ctr.ReceiveFromSingleReg(0, analyze)
-			if msg.Err != nil {
-				return result, msg.Err
+			result, err = rightSemi.Children[0].Call(proc)
+			if err != nil {
+				return result, err
 			}
-			bat := msg.Batch
+			bat := result.Batch
 
 			if bat == nil {
 				ctr.state = SendLast
@@ -125,6 +128,7 @@ func (rightSemi *RightSemi) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 				result.Batch = rightSemi.ctr.buf[rightSemi.ctr.lastpos]
 				rightSemi.ctr.lastpos++
+				result.Status = vm.ExecHasMore
 				return result, nil
 			}
 
@@ -138,7 +142,9 @@ func (rightSemi *RightSemi) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (rightSemi *RightSemi) build(anal process.Analyze, proc *process.Process) {
 	ctr := rightSemi.ctr
-	ctr.mp = proc.ReceiveJoinMap(anal, rightSemi.JoinMapTag, rightSemi.IsShuffle, rightSemi.ShuffleIdx)
+	start := time.Now()
+	defer anal.WaitStop(start)
+	ctr.mp = message.ReceiveJoinMap(rightSemi.JoinMapTag, rightSemi.IsShuffle, rightSemi.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}

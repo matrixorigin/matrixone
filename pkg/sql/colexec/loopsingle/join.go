@@ -16,6 +16,9 @@ package loopsingle
 
 import (
 	"bytes"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -40,7 +43,6 @@ func (loopSingle *LoopSingle) Prepare(proc *process.Process) error {
 	var err error
 
 	loopSingle.ctr = new(container)
-	loopSingle.ctr.InitReceiver(proc, false)
 	loopSingle.ctr.bat = batch.NewWithSize(len(loopSingle.Typs))
 	for i, typ := range loopSingle.Typs {
 		loopSingle.ctr.bat.Vecs[i] = proc.GetVector(typ)
@@ -72,12 +74,11 @@ func (loopSingle *LoopSingle) Call(proc *process.Process) (vm.CallResult, error)
 
 		case Probe:
 			var err error
-			msg := ctr.ReceiveFromSingleReg(0, anal)
-			if msg.Err != nil {
-				return result, msg.Err
+			result, err = loopSingle.Children[0].Call(proc)
+			if err != nil {
+				return result, err
 			}
-
-			bat := msg.Batch
+			bat := result.Batch
 			if bat == nil {
 				ctr.state = End
 				continue
@@ -105,7 +106,9 @@ func (loopSingle *LoopSingle) Call(proc *process.Process) (vm.CallResult, error)
 
 func (loopSingle *LoopSingle) build(proc *process.Process, anal process.Analyze) error {
 	ctr := loopSingle.ctr
-	mp := proc.ReceiveJoinMap(anal, loopSingle.JoinMapTag, false, 0)
+	start := time.Now()
+	defer anal.WaitStop(start)
+	mp := message.ReceiveJoinMap(loopSingle.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
 	if mp == nil {
 		return nil
 	}
