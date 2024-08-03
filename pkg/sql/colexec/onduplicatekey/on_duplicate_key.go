@@ -72,7 +72,6 @@ func (onDuplicatekey *OnDuplicatekey) Call(proc *process.Process) (vm.CallResult
 				anal.Input(bat, onDuplicatekey.GetIsFirst())
 				err = resetInsertBatchForOnduplicateKey(proc, bat, onDuplicatekey)
 				if err != nil {
-					bat.Clean(proc.Mp())
 					return result, err
 				}
 

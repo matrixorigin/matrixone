@@ -86,7 +86,11 @@ func (partition *Partition) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.indexList = make([]int64, len(ctr.batchList))
 				ctr.status = eval
 			} else {
-				if err = ctr.mergeAndEvaluateOrderColumn(proc, result.Batch); err != nil {
+				bat, err := result.Batch.Dup(proc.Mp())
+				if err != nil {
+					return result, err
+				}
+				if err = ctr.mergeAndEvaluateOrderColumn(proc, bat); err != nil {
 					return result, err
 				}
 			}

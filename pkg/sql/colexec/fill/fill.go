@@ -135,12 +135,16 @@ func processValue(ctr *container, ap *Fill, proc *process.Process, anal process.
 	if err != nil {
 		return result, err
 	}
-	ctr.buf = result.Batch
-	if ctr.buf == nil {
+	if result.Batch == nil {
 		result.Batch = nil
 		result.Status = vm.ExecStop
 		return result, nil
 	}
+	ctr.buf, err = result.Batch.Dup(proc.Mp())
+	if err != nil {
+		return result, err
+	}
+
 	anal.Input(ctr.buf, ap.IsFirst)
 
 	for i := 0; i < ap.ColLen; i++ {
@@ -265,13 +269,16 @@ func processPrev(ctr *container, ap *Fill, proc *process.Process, anal process.A
 	if err != nil {
 		return result, err
 	}
-	ctr.buf = result.Batch
-	if ctr.buf == nil {
+	if result.Batch == nil {
 		result.Batch = nil
 		result.Status = vm.ExecStop
 		return result, nil
 	}
 	anal.Input(ctr.buf, ap.IsFirst)
+	ctr.buf, err = result.Batch.Dup(proc.Mp())
+	if err != nil {
+		return result, err
+	}
 
 	for i := 0; i < ap.ColLen; i++ {
 		for j := 0; j < ctr.buf.Vecs[i].Length(); j++ {
@@ -446,7 +453,11 @@ func processNext(ctr *container, ap *Fill, proc *process.Process, anal process.A
 		if result.Batch == nil {
 			break
 		}
-		ctr.bats = append(ctr.bats, result.Batch)
+		appBat, err := result.Batch.Dup(proc.Mp())
+		if err != nil {
+			return result, err
+		}
+		ctr.bats = append(ctr.bats, appBat)
 	}
 	if len(ctr.bats) == 0 {
 		result.Batch = nil
@@ -492,7 +503,11 @@ func processLinear(ctr *container, ap *Fill, proc *process.Process, anal process
 			break
 		}
 		anal.Input(result.Batch, ap.IsFirst)
-		ctr.bats = append(ctr.bats, result.Batch)
+		appBat, err := result.Batch.Dup(proc.Mp())
+		if err != nil {
+			return result, err
+		}
+		ctr.bats = append(ctr.bats, appBat)
 	}
 	if len(ctr.bats) == 0 {
 		result.Batch = nil
@@ -522,16 +537,17 @@ func processDefault(ctr *container, ap *Fill, proc *process.Process, anal proces
 	if err != nil {
 		return result, err
 	}
-	ctr.buf = result.Batch
-	if ctr.buf == nil {
+	if result.Batch == nil {
 		result.Batch = nil
 		result.Status = vm.ExecStop
 		return result, nil
 	}
 	anal.Input(ctr.buf, ap.IsFirst)
-	result.Batch = ctr.buf
-
 	anal.Output(result.Batch, ap.IsLast)
+	ctr.buf, err = result.Batch.Dup(proc.Mp())
+	if err != nil {
+		return result, err
+	}
 	return result, nil
 }
 

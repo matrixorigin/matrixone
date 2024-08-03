@@ -115,14 +115,17 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 			if err != nil {
 				return result, err
 			}
-			bat := result.Batch
-			if bat == nil {
+			if result.Batch == nil {
 				if ctr.cur == hasGrow {
 					ctr.status = evalLastCur
 					continue
 				}
 				result.Status = vm.ExecStop
 				return result, nil
+			}
+			bat, err = result.Batch.Dup(proc.Mp())
+			if err != nil {
+				return result, err
 			}
 			anal.Input(bat, timeWin.GetIsFirst())
 			ctr.pushBatch(bat)
@@ -142,11 +145,13 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 			if err != nil {
 				return result, err
 			}
-			bat = result.Batch
-			if bat == nil {
-				result.Batch = nil
+			if result.Batch == nil {
 				result.Status = vm.ExecStop
 				return result, nil
+			}
+			bat, err = result.Batch.Dup(proc.Mp())
+			if err != nil {
+				return result, err
 			}
 			anal.Input(bat, timeWin.GetIsFirst())
 			ctr.pushBatch(bat)
