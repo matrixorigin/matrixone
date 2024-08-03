@@ -51,6 +51,13 @@ type node[V any] struct {
 
 type nodes[V any] []*node[V]
 
+// BufferConfig keep static config.
+type BufferConfig struct {
+	// goScheduleCnt how many ops will trigger runtime.Gosched.
+	// zero, means each time try-op will call runtime.Gosched
+	goScheduleCnt uint64
+}
+
 // RingBuffer is a MPMC buffer that achieves threadsafety with CAS operations
 // only.  A put on full or get on empty call will block until an item
 // is put or retrieved.  Calling Dispose on the RingBuffer will unblock
@@ -58,6 +65,7 @@ type nodes[V any] []*node[V]
 // described here: http://www.1024cores.net/home/lock-free-algorithms/queues/bounded-mpmc-queue
 // with some minor additions.
 type RingBuffer[V any] struct {
+	BufferConfig
 	_              [8]uint64
 	queue          uint64
 	_              [8]uint64
@@ -107,6 +115,7 @@ func (rb *RingBuffer[V]) Offer(item V) (bool, error) {
 
 func (rb *RingBuffer[V]) put(item V, offer bool) (bool, error) {
 	var n *node[V]
+	var count uint64
 	pos := atomic.LoadUint64(&rb.queue)
 L:
 	for {
@@ -129,7 +138,11 @@ L:
 			return false, nil
 		}
 
-		runtime.Gosched() // free up the cpu before the next iteration
+		count++
+		if count >= rb.goScheduleCnt {
+			count = 0
+			runtime.Gosched() // free up the cpu before the next iteration
+		}
 	}
 
 	n.data = item
@@ -165,6 +178,7 @@ func (rb *RingBuffer[V]) MustGet() V {
 func (rb *RingBuffer[V]) Poll(timeout time.Duration) (V, bool, error) {
 	// zero value for type parameters.
 	var zero V
+	var count uint64
 
 	var (
 		n     *node[V]
@@ -195,7 +209,11 @@ L:
 			return zero, false, ErrTimeout
 		}
 
-		runtime.Gosched() // free up the cpu before the next iteration
+		count++
+		if count >= rb.goScheduleCnt {
+			count = 0
+			runtime.Gosched() // free up the cpu before the next iteration
+		}
 	}
 	data := n.data
 	n.data = zero
@@ -228,8 +246,25 @@ func (rb *RingBuffer[V]) IsDisposed() bool {
 
 // NewRingBuffer will allocate, initialize, and return a ring buffer
 // with the specified size.
-func NewRingBuffer[V any](size uint64) *RingBuffer[V] {
-	rb := &RingBuffer[V]{}
+func NewRingBuffer[V any](size uint64, options ...BufferOption) *RingBuffer[V] {
+	rb := &RingBuffer[V]{
+		BufferConfig: BufferConfig{goScheduleCnt: 1e3},
+	}
+	for _, opt := range options {
+		opt.apply(&rb.BufferConfig)
+	}
 	rb.init(size)
 	return rb
+}
+
+type BufferOption func(cfg *BufferConfig)
+
+func (o BufferOption) apply(cfg *BufferConfig) {
+	o(cfg)
+}
+
+func WithScheduleCount(cnt uint64) BufferOption {
+	return func(cfg *BufferConfig) {
+		cfg.goScheduleCnt = cnt
+	}
 }

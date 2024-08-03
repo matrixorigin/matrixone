@@ -327,7 +327,7 @@ func NewMOCollector(
 		ctx:            ctx,
 		logger:         morun.ServiceRuntime(service).Logger().Named(LoggerNameMOCollector).With(logutil.Discardable()),
 		buffers:        make(map[string]*bufferHolder),
-		awakeQueue:     ring.NewRingBuffer[batchpipe.HasName](defaultRingBufferSize),
+		awakeQueue:     ring.NewRingBuffer[batchpipe.HasName](defaultRingBufferSize, ring.WithScheduleCount(1e5 /*~=1ms/10us*/)),
 		awakeGenerate:  make(chan generateReq, 16),
 		awakeBatch:     make(chan exportReq),
 		stopCh:         make(chan struct{}),
