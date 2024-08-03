@@ -1701,13 +1701,22 @@ func buildRemoteDS(
 	//tombstones.Init()
 
 	relData.AttachTombstones(tombstones)
+	buf, err := relData.MarshalBinary()
+	if err != nil {
+		return
+	}
+
+	newRelData, err := UnmarshalRelationData(buf)
+	if err != nil {
+		return
+	}
 
 	source = NewRemoteDataSource(
 		ctx,
 		tbl.proc.Load(),
 		tbl.getTxn().engine.fs,
 		tbl.db.op.SnapshotTS(),
-		relData,
+		newRelData,
 	)
 	return
 }
