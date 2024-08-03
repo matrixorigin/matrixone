@@ -537,13 +537,13 @@ func (c *MOCollector) releaseBuffer() {
 // doCollect handle all item accept work, send it to the corresponding buffer
 // goroutine worker
 func (c *MOCollector) doCollect(idx int) {
-	var startWait time.Time
+	var startWait = time.Now()
 	defer c.stopWait.Done()
 	ctx, span := trace.Start(c.ctx, "MOCollector.doCollect")
 	defer span.End()
 	c.logger.Debug("doCollect %dth: start", zap.Int("idx", idx))
 
-	startWait = time.Now()
+loop:
 	for {
 		select {
 		default:
@@ -587,7 +587,7 @@ func (c *MOCollector) doCollect(idx int) {
 			v2.TraceCollectorConsumeDurationHistogram.Observe(time.Since(start).Seconds())
 			startWait = time.Now() // next Round
 		case <-c.stopCh:
-			break
+			break loop
 		}
 	}
 	c.logger.Debug("doCollect: Done.", zap.Int("idx", idx))
