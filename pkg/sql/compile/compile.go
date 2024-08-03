@@ -4338,54 +4338,12 @@ func putBlocksInAverage(c *Compile, relData engine.RelData, n *plan.Node) engine
 	return nodes
 }
 
-func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelData, n *plan.Node) (engine.Nodes, error) {
-	var nodes engine.Nodes
-	// add current CN
-	nodes = append(nodes, engine.Node{
-		Addr: c.addr,
-		Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
-	})
-	// add memory table block
-	nodes[0].Data = relData.BuildEmptyRelData()
-	nodes[0].Data.AppendBlockInfo(objectio.EmptyBlockInfoInProgress)
-	// only memory table block
-	if relData.DataCnt() == 1 {
-		return nodes, nil
-	}
-	// only one cn
-	if len(c.cnList) == 1 {
-		engine.ForRangeBlockInfo(1, relData.DataCnt(), relData,
-			func(blk objectio.BlockInfoInProgress) (bool, error) {
-				nodes[0].Data.AppendBlockInfo(blk)
-				return true, nil
-			})
-
-		return nodes, nil
-	}
-
-	// add the rest of CNs in list
-	for i := range c.cnList {
-		if c.cnList[i].Addr != c.addr {
-			nodes = append(nodes, engine.Node{
-				Id:   c.cnList[i].Id,
-				Addr: c.cnList[i].Addr,
-				Mcpu: c.generateCPUNumber(c.cnList[i].Mcpu, int(n.Stats.BlockNum)),
-				Data: relData.BuildEmptyRelData(),
-			})
-		}
-	}
-
-	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Addr < nodes[j].Addr })
-
-	if n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle && n.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Range {
-		err := shuffleBlocksByRange(c, relData, n, nodes)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		shuffleBlocksByHash(c, relData, nodes)
-	}
-
+func removeEmtpyNodes(
+	c *Compile,
+	n *plan.Node,
+	rel engine.Relation,
+	relData engine.RelData,
+	nodes engine.Nodes) (engine.Nodes, error) {
 	minWorkLoad := math.MaxInt32
 	maxWorkLoad := 0
 	// remove empty node from nodes
@@ -4424,6 +4382,103 @@ func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelD
 	return newNodes, nil
 }
 
+func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelData, n *plan.Node) (engine.Nodes, error) {
+	var nodes engine.Nodes
+	// add current CN
+	nodes = append(nodes, engine.Node{
+		Addr: c.addr,
+		Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
+	})
+	// add memory table block
+	nodes[0].Data = relData.BuildEmptyRelData()
+	nodes[0].Data.AppendBlockInfo(objectio.EmptyBlockInfoInProgress)
+	// only memory table block
+	if relData.DataCnt() == 1 {
+		return nodes, nil
+	}
+	// only one cn
+	if len(c.cnList) == 1 {
+		engine.ForRangeBlockInfo(1, relData.DataCnt(), relData,
+			func(blk objectio.BlockInfoInProgress) (bool, error) {
+				nodes[0].Data.AppendBlockInfo(blk)
+				return true, nil
+			})
+
+		return nodes, nil
+	}
+
+	// add the rest of CNs in list
+	for i := range c.cnList {
+		if c.cnList[i].Addr != c.addr {
+			nodes = append(nodes, engine.Node{
+				Id:   c.cnList[i].Id,
+				Addr: c.cnList[i].Addr,
+				Mcpu: c.generateCPUNumber(c.cnList[i].Mcpu, int(n.Stats.BlockNum)),
+				Data: relData.BuildEmptyRelData(),
+			})
+		}
+	}
+
+	if force, tids, cnt := engine.GetForceShuffleReader(); force {
+		for _, tid := range tids {
+			if tid == n.TableDef.TblId {
+				shuffleBlocksByMoCtl(relData, cnt, nodes)
+				return removeEmtpyNodes(c, n, rel, relData, nodes)
+			}
+		}
+	}
+
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Addr < nodes[j].Addr })
+
+	if n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle && n.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Range {
+		err := shuffleBlocksByRange(c, relData, n, nodes)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		shuffleBlocksByHash(c, relData, nodes)
+	}
+
+	return removeEmtpyNodes(c, n, rel, relData, nodes)
+
+	//minWorkLoad := math.MaxInt32
+	//maxWorkLoad := 0
+	//// remove empty node from nodes
+	//var newNodes engine.Nodes
+	//for i := range nodes {
+	//	if nodes[i].Data.DataCnt() > maxWorkLoad {
+	//		maxWorkLoad = nodes[i].Data.DataCnt() / objectio.BlockInfoSizeInProgress
+	//	}
+	//	if nodes[i].Data.DataCnt() < minWorkLoad {
+	//		minWorkLoad = nodes[i].Data.DataCnt() / objectio.BlockInfoSizeInProgress
+	//	}
+	//	if nodes[i].Data.DataCnt() > 0 {
+	//		if nodes[i].Addr != c.addr {
+	//			tombstone, err := collectTombstones(c, n, rel)
+	//			if err != nil {
+	//				return nil, err
+	//			}
+	//			nodes[i].Data.AttachTombstones(tombstone)
+	//		}
+	//		newNodes = append(newNodes, nodes[i])
+	//	}
+	//}
+	//if minWorkLoad*2 < maxWorkLoad {
+	//	logstring := fmt.Sprintf("read table %v ,workload %v blocks among %v nodes not balanced, max %v, min %v,",
+	//		n.TableDef.Name,
+	//		relData.DataCnt(),
+	//		len(newNodes),
+	//		maxWorkLoad,
+	//		minWorkLoad)
+	//	logstring = logstring + " cnlist: "
+	//	for i := range c.cnList {
+	//		logstring = logstring + c.cnList[i].Addr + " "
+	//	}
+	//	c.proc.Warnf(c.proc.Ctx, logstring)
+	//}
+	//return newNodes, nil
+}
+
 func shuffleBlocksByHash(c *Compile, relData engine.RelData, nodes engine.Nodes) {
 	engine.ForRangeBlockInfo(1, relData.DataCnt(), relData,
 		func(blk objectio.BlockInfoInProgress) (bool, error) {
@@ -4433,6 +4488,31 @@ func shuffleBlocksByHash(c *Compile, relData engine.RelData, nodes engine.Nodes)
 			nodes[index].Data.AppendBlockInfo(blk)
 			return true, nil
 		})
+}
+
+// Just for test
+func shuffleBlocksByMoCtl(relData engine.RelData, cnt int, nodes engine.Nodes) error {
+	if cnt > relData.DataCnt()-1 {
+		return moerr.NewInternalErrorNoCtx(
+			"Invalid Parameter, distribute count:%d, block count:%d",
+			cnt,
+			relData.DataCnt()-1)
+	}
+
+	if len(nodes) < 2 {
+		return moerr.NewInternalErrorNoCtx("Invalid count of nodes")
+	}
+
+	engine.ForRangeBlockInfo(
+		1,
+		cnt,
+		relData,
+		func(blk objectio.BlockInfoInProgress) (bool, error) {
+			nodes[1].Data.AppendBlockInfo(blk)
+			return true, nil
+		})
+
+	return nil
 }
 
 func shuffleBlocksByRange(c *Compile, relData engine.RelData, n *plan.Node, nodes engine.Nodes) error {
