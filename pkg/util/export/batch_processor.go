@@ -543,7 +543,6 @@ func (c *MOCollector) doCollect(idx int) {
 	defer span.End()
 	c.logger.Debug("doCollect %dth: start", zap.Int("idx", idx))
 
-loop:
 	startWait = time.Now()
 	for {
 		select {
@@ -560,7 +559,7 @@ loop:
 					v2.TraceCollectorEmptyCounter.Inc()
 				}
 				time.Sleep(time.Millisecond)
-				continue loop
+				continue
 			}
 			start := time.Now()
 			v2.TraceCollectorConsumeDelayDurationHistogram.Observe(start.Sub(startWait).Seconds())
