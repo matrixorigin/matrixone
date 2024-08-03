@@ -61,6 +61,14 @@ func buildTombstoneWithDeltaLoc() *tombstoneDataWithDeltaLoc {
 	}
 }
 
+func (tomb *tombstoneDataWithDeltaLoc) HasAnyInMemoryTombstone() bool {
+	return tomb != nil && len(tomb.inMemTombstones) > 0
+}
+
+func (tomb *tombstoneDataWithDeltaLoc) HasAnyTombstoneFile() bool {
+	return tomb != nil && (len(tomb.blk2CommitLoc) > 0 || len(tomb.blk2UncommitLoc) > 0)
+}
+
 func (tomb *tombstoneDataWithDeltaLoc) String() string {
 	return tomb.StringWithPrefix("")
 }
@@ -603,7 +611,8 @@ func (rs *RemoteDataSource) applyInMemTombstones(
 	rowsOffset []int32,
 	deletedRows *nulls.Nulls,
 ) (leftRows []int32) {
-	if rs.data.GetTombstones() == nil {
+	tombstones := rs.data.GetTombstones()
+	if tombstones == nil || !tombstones.HasAnyInMemoryTombstone() {
 		return rowsOffset
 	}
 	return rs.data.GetTombstones().ApplyInMemTombstones(
@@ -618,6 +627,10 @@ func (rs *RemoteDataSource) applyPersistedTombstones(
 	rowsOffset []int32,
 	mask *nulls.Nulls,
 ) (leftRows []int32, err error) {
+	tombstones := rs.data.GetTombstones()
+	if tombstones == nil || !tombstones.HasAnyTombstoneFile() {
+		return rowsOffset, nil
+	}
 
 	apply := func(
 		ctx context.Context,
@@ -645,9 +658,6 @@ func (rs *RemoteDataSource) applyPersistedTombstones(
 		return
 	}
 
-	if rs.data.GetTombstones() == nil {
-		return rowsOffset, nil
-	}
 	return rs.data.GetTombstones().ApplyPersistedTombstones(
 		ctx,
 		bid,
