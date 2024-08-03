@@ -1085,7 +1085,9 @@ func (txn *Transaction) getCachedTable(
 
 func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 	logDebugf(txn.op.Txn(), "Transaction.Commit")
-	txn.IncrStatementID(ctx, true)
+	if err := txn.IncrStatementID(ctx, true); err != nil {
+		return nil, err
+	}
 	defer txn.delTransaction()
 	if txn.readOnly.Load() {
 		return nil, nil
@@ -1177,6 +1179,8 @@ func (txn *Transaction) GetSnapshotWriteOffset() int {
 	return txn.snapshotWriteOffset
 }
 
+type UT_ForceTransCheck struct{}
+
 func (txn *Transaction) transferDeletesLocked(ctx context.Context, commit bool) error {
 	var latestTs timestamp.Timestamp
 	txn.timestamps = append(txn.timestamps, txn.op.SnapshotTS())
@@ -1191,7 +1195,9 @@ func (txn *Transaction) transferDeletesLocked(ctx context.Context, commit bool) 
 		}
 		if commit {
 			if time.Since(txn.start) < time.Second*5 {
-				return nil
+				if ctx.Value(UT_ForceTransCheck{}) == nil {
+					return nil
+				}
 			}
 			//It's important to push the snapshot ts to the latest ts
 			if err := txn.op.UpdateSnapshot(
