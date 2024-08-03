@@ -33,8 +33,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 )
 
@@ -326,7 +328,7 @@ func buildColumnMap(ctx context.Context, rs *plan.ResultColDef) (string, error) 
 	return buf.String(), nil
 }
 
-func isResultQuery(p *plan.Plan) []string {
+func isResultQuery(proc *process.Process, p *plan.Plan) ([]string, error) {
 	var uuids []string = nil
 	if q, ok := p.Plan.(*plan.Plan_Query); ok {
 		for _, n := range q.Query.Nodes {
@@ -336,12 +338,20 @@ func isResultQuery(p *plan.Plan) []string {
 				}
 			} else if n.NodeType == plan.Node_FUNCTION_SCAN {
 				if n.TableDef.TblFunc.Name == "meta_scan" {
-					uuids = append(uuids, n.TableDef.Name)
+					// calculate uuid
+					vec, err := colexec.EvalExpressionOnce(proc, n.TblFuncExprList[0], []*batch.Batch{batch.EmptyForConstFoldBatch})
+					if err != nil {
+						return nil, err
+					}
+					uuid := vector.MustFixedCol[types.Uuid](vec)[0]
+					vec.Free(proc.GetMPool())
+
+					uuids = append(uuids, uuid.String())
 				}
 			}
 		}
 	}
-	return uuids
+	return uuids, nil
 }
 
 func checkPrivilege(sid string, uuids []string, reqCtx context.Context, ses *Session) error {
