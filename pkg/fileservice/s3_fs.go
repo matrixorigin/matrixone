@@ -30,6 +30,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -150,7 +151,7 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 	if *config.MemoryCapacity > DisableCacheCapacity {
 		s.memCache = NewMemCache(
 			NewMemoryCache(
-				int64(*config.MemoryCapacity),
+				fscache.ConstCapacity(int64(*config.MemoryCapacity)),
 				config.CheckOverlaps,
 				&config.CacheCallbacks,
 			),
@@ -168,7 +169,7 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 		s.diskCache, err = NewDiskCache(
 			ctx,
 			*config.DiskPath,
-			int(*config.DiskCapacity),
+			fscache.ConstCapacity(int64(*config.DiskCapacity)),
 			s.perfCounterSets,
 			true,
 		)

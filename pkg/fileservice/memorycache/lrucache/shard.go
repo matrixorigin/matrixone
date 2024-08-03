@@ -42,7 +42,7 @@ func (s *shard[K, V]) Set(ctx context.Context, key K, value V) (inserted bool) {
 	if s.postSet != nil {
 		s.postSet(key, value)
 	}
-	if atomic.LoadInt64(&s.size) >= s.capacity {
+	if atomic.LoadInt64(&s.size) >= s.capacity() {
 		s.evict(ctx)
 	}
 
@@ -61,7 +61,7 @@ func (s *shard[K, V]) evict(ctx context.Context) {
 	}()
 
 	for {
-		if s.size <= s.capacity {
+		if s.size <= s.capacity() {
 			return
 		}
 		if len(s.kv) == 0 {
