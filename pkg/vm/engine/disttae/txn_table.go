@@ -1701,13 +1701,22 @@ func buildRemoteDS(
 	//tombstones.Init()
 
 	relData.AttachTombstones(tombstones)
+	buf, err := relData.MarshalBinary()
+	if err != nil {
+		return
+	}
+
+	newRelData, err := UnmarshalRelationData(buf)
+	if err != nil {
+		return
+	}
 
 	source = NewRemoteDataSource(
 		ctx,
 		tbl.proc.Load(),
 		tbl.getTxn().engine.fs,
 		tbl.db.op.SnapshotTS(),
-		relData,
+		newRelData,
 	)
 	return
 }
@@ -1749,10 +1758,16 @@ func (tbl *txnTable) buildLocalDataSource(
 			txnOffset = tbl.getTxn().GetSnapshotWriteOffset()
 		}
 
-		// TODO check tbl name
-		//force, tbls := engine.GetForceBuildRemoteDS()
-		if skipReadMem {
-			//source, err = buildRemoteDS(ctx, tbl, txnOffset, relData)
+		forceBuildRemoteDS := false
+		if force, tbls := engine.GetForceBuildRemoteDS(); force {
+			for _, t := range tbls {
+				if t == tbl.tableId {
+					forceBuildRemoteDS = true
+				}
+			}
+		}
+		if skipReadMem && forceBuildRemoteDS {
+			source, err = buildRemoteDS(ctx, tbl, txnOffset, relData)
 		} else {
 			source, err = NewLocalDataSource(
 				ctx,
