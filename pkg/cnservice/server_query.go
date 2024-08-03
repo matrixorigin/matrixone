@@ -16,6 +16,8 @@ package cnservice
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -126,8 +128,13 @@ func (s *service) handleTraceSpan(ctx context.Context, req *query.Request, resp 
 
 func (s *service) handleCtlReader(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
 	resp.CtlReaderResponse = new(query.CtlReaderResponse)
+
+	extra := strings.Split(types.DecodeStringSlice(req.CtlReaderRequest.Extra)[0], ":")
+	extra = append([]string{req.CtlReaderRequest.Cfg}, extra...)
+	
 	resp.CtlReaderResponse.Resp = ctl.UpdateCurrentCNReader(
-		req.CtlReaderRequest.Cmd, req.CtlReaderRequest.Cfg)
+		req.CtlReaderRequest.Cmd, extra...)
+
 	return nil
 }
 
