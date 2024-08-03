@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -40,8 +39,6 @@ const (
 )
 
 type container struct {
-	colexec.ReceiverOperator
-
 	state     int
 	typ       int
 	inserted  []uint8
@@ -107,7 +104,6 @@ func (mergeGroup *MergeGroup) Free(proc *process.Process, pipelineFailed bool, e
 	ctr := mergeGroup.ctr
 	if ctr != nil {
 		mp := proc.Mp()
-		ctr.FreeMergeTypeOperator(pipelineFailed)
 		ctr.cleanBatch(mp)
 		ctr.cleanHashMap()
 		mergeGroup.ctr = nil
