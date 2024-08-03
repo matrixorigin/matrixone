@@ -1156,6 +1156,7 @@ func genPubTablesStr(ctx context.Context, bh BackgroundExec, dbName string, tabl
 		}
 		tablesNames = append(tablesNames, tblName)
 	}
+	slices.Sort(tablesNames)
 
 	pubTablesStr = strings.Join(tablesNames, pubsub.Sep)
 	return

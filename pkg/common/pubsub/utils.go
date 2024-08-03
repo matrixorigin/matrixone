@@ -1,6 +1,7 @@
 package pubsub
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -41,5 +42,6 @@ func JoinAccounts(accountMap map[int32]*AccountInfo) string {
 	for _, acc := range accountMap {
 		accountNames = append(accountNames, acc.Name)
 	}
+	slices.Sort(accountNames)
 	return strings.Join(accountNames, Sep)
 }
