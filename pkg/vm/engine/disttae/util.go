@@ -770,7 +770,7 @@ func getPkExpr(
 	return nil
 }
 
-func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []int32 {
+func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []int64 {
 	mp := make(map[any]bool)
 	switch pk.GetType().Oid {
 	case types.T_bool:
@@ -917,168 +917,168 @@ func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []in
 		panic(moerr.NewInternalErrorNoCtx("%s not supported", pk.GetType().String()))
 	}
 
-	return func(vec *vector.Vector) []int32 {
-		var sels []int32
+	return func(vec *vector.Vector) []int64 {
+		var sels []int64
 		switch vec.GetType().Oid {
 		case types.T_bool:
 			vs := vector.MustFixedCol[bool](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_bit:
 			vs := vector.MustFixedCol[uint64](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_int8:
 			vs := vector.MustFixedCol[int8](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_int16:
 			vs := vector.MustFixedCol[int16](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_int32:
 			vs := vector.MustFixedCol[int32](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_int64:
 			vs := vector.MustFixedCol[int64](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_uint8:
 			vs := vector.MustFixedCol[uint8](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_uint16:
 			vs := vector.MustFixedCol[uint16](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_uint32:
 			vs := vector.MustFixedCol[uint32](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_uint64:
 			vs := vector.MustFixedCol[uint64](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_decimal64:
 			vs := vector.MustFixedCol[types.Decimal64](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_decimal128:
 			vs := vector.MustFixedCol[types.Decimal128](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_uuid:
 			vs := vector.MustFixedCol[types.Uuid](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_float32:
 			vs := vector.MustFixedCol[float32](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_float64:
 			vs := vector.MustFixedCol[float64](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_date:
 			vs := vector.MustFixedCol[types.Date](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_timestamp:
 			vs := vector.MustFixedCol[types.Timestamp](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_time:
 			vs := vector.MustFixedCol[types.Time](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_datetime:
 			vs := vector.MustFixedCol[types.Datetime](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_enum:
 			vs := vector.MustFixedCol[types.Enum](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_TS:
 			vs := vector.MustFixedCol[types.TS](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_Rowid:
 			vs := vector.MustFixedCol[types.Rowid](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_Blockid:
 			vs := vector.MustFixedCol[types.Blockid](vec)
 			for i, v := range vs {
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_char, types.T_varchar, types.T_json,
@@ -1087,7 +1087,7 @@ func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []in
 				for i := 0; i < pk.Length(); i++ {
 					v := pk.UnsafeGetStringAt(i)
 					if mp[v] {
-						sels = append(sels, int32(i))
+						sels = append(sels, int64(i))
 					}
 				}
 			} else {
@@ -1096,7 +1096,7 @@ func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []in
 				for i := 0; i < len(vs); i++ {
 					v := vs[i].UnsafeGetString(area)
 					if mp[v] {
-						sels = append(sels, int32(i))
+						sels = append(sels, int64(i))
 					}
 				}
 			}
@@ -1104,14 +1104,14 @@ func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []in
 			for i := 0; i < vec.Length(); i++ {
 				v := types.ArrayToString[float32](vector.GetArrayAt[float32](vec, i))
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		case types.T_array_float64:
 			for i := 0; i < vec.Length(); i++ {
 				v := types.ArrayToString[float64](vector.GetArrayAt[float64](vec, i))
 				if mp[v] {
-					sels = append(sels, int32(i))
+					sels = append(sels, int64(i))
 				}
 			}
 		default:
@@ -1128,7 +1128,7 @@ func getNonSortedPKSearchFuncByPKVec(
 	searchPKFunc := LinearSearchOffsetByValFactory(vec)
 
 	if searchPKFunc != nil {
-		return func(vecs []*vector.Vector) []int32 {
+		return func(vecs []*vector.Vector) []int64 {
 			return searchPKFunc(vecs[0])
 		}
 	}

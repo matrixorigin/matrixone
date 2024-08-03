@@ -18,6 +18,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
+	"slices"
+	"sort"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -36,9 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"math"
-	"slices"
-	"sort"
 )
 
 type tombstoneDataWithDeltaLoc struct {
@@ -232,9 +233,9 @@ func (tomb *tombstoneDataWithDeltaLoc) MarshalBinaryWithBuffer(w *bytes.Buffer) 
 
 func (tomb *tombstoneDataWithDeltaLoc) ApplyInMemTombstones(
 	bid types.Blockid,
-	rowsOffset []int32,
+	rowsOffset []int64,
 	deleted *nulls.Nulls,
-) (left []int32) {
+) (left []int64) {
 	left = rowsOffset
 
 	if rowOffsets, ok := tomb.inMemTombstones[bid]; ok {
@@ -249,16 +250,16 @@ func (tomb *tombstoneDataWithDeltaLoc) ApplyInMemTombstones(
 func (tomb *tombstoneDataWithDeltaLoc) ApplyPersistedTombstones(
 	ctx context.Context,
 	bid types.Blockid,
-	rowsOffset []int32,
+	rowsOffset []int64,
 	mask *nulls.Nulls,
 	apply func(
 		ctx context.Context,
 		loc objectio.Location,
 		cts types.TS,
-		rowsOffset []int32,
+		rowsOffset []int64,
 		deleted *nulls.Nulls,
-	) (left []int32, err error),
-) (left []int32, err error) {
+	) (left []int64, err error),
+) (left []int64, err error) {
 
 	if locs, ok := tomb.blk2UncommitLoc[bid]; ok {
 		for _, loc := range locs {
@@ -597,9 +598,9 @@ func (rs *RemoteDataSource) Close() {
 
 func (rs *RemoteDataSource) applyInMemTombstones(
 	bid types.Blockid,
-	rowsOffset []int32,
+	rowsOffset []int64,
 	deletedRows *nulls.Nulls,
-) (leftRows []int32) {
+) (leftRows []int64) {
 	if rs.data.GetTombstones() == nil {
 		return rowsOffset
 	}
@@ -612,16 +613,16 @@ func (rs *RemoteDataSource) applyInMemTombstones(
 func (rs *RemoteDataSource) applyPersistedTombstones(
 	ctx context.Context,
 	bid types.Blockid,
-	rowsOffset []int32,
+	rowsOffset []int64,
 	mask *nulls.Nulls,
-) (leftRows []int32, err error) {
+) (leftRows []int64, err error) {
 
 	apply := func(
 		ctx context.Context,
 		loc objectio.Location,
 		cts types.TS,
-		rowsOffset []int32,
-		deleted *nulls.Nulls) (left []int32, err error) {
+		rowsOffset []int64,
+		deleted *nulls.Nulls) (left []int64, err error) {
 
 		deletes, err := loadBlockDeletesByDeltaLoc(ctx, rs.fs, bid, loc, rs.ts, cts)
 		if err != nil {
@@ -656,10 +657,10 @@ func (rs *RemoteDataSource) applyPersistedTombstones(
 func (rs *RemoteDataSource) ApplyTombstonesInProgress(
 	ctx context.Context,
 	bid objectio.Blockid,
-	rowsOffset []int32,
-) (left []int32, err error) {
+	rowsOffset []int64,
+) (left []int64, err error) {
 
-	slices.SortFunc(rowsOffset, func(a, b int32) int {
+	slices.SortFunc(rowsOffset, func(a, b int64) int {
 		return int(a - b)
 	})
 
@@ -1129,7 +1130,7 @@ func (ls *LocalDataSource) filterInMemUnCommittedInserts(
 			continue
 		}
 
-		offsets := rowIdsToOffset(retainedRowIds, int32(0)).([]int32)
+		offsets := rowIdsToOffset(retainedRowIds, int64(0)).([]int64)
 
 		b, _ := retainedRowIds[0].Decode()
 		sels, err := ls.ApplyTombstonesInProgress(ls.ctx, b, offsets)
@@ -1182,7 +1183,7 @@ func (ls *LocalDataSource) filterInMemCommittedInserts(
 
 	var (
 		err          error
-		sel          []int32
+		sel          []int64
 		appendedRows = bat.RowCount()
 	)
 
@@ -1204,7 +1205,7 @@ func (ls *LocalDataSource) filterInMemCommittedInserts(
 		entry := ls.pStateRows.insIter.Entry()
 		b, o := entry.RowID.Decode()
 
-		sel, err = ls.ApplyTombstonesInProgress(ls.ctx, b, []int32{int32(o)})
+		sel, err = ls.ApplyTombstonesInProgress(ls.ctx, b, []int64{int64(o)})
 		if err != nil {
 			return err
 		}
@@ -1306,10 +1307,10 @@ func loadBlockDeletesByDeltaLoc(
 func (ls *LocalDataSource) ApplyTombstonesInProgress(
 	ctx context.Context,
 	bid objectio.Blockid,
-	rowsOffset []int32,
-) ([]int32, error) {
+	rowsOffset []int64,
+) ([]int64, error) {
 
-	slices.SortFunc(rowsOffset, func(a, b int32) int {
+	slices.SortFunc(rowsOffset, func(a, b int64) int {
 		return int(a - b)
 	})
 
@@ -1367,13 +1368,13 @@ func (ls *LocalDataSource) GetTombstonesInProgress(
 // will return the rows which applied deletes if the `leftRows` is not empty,
 // or the deletes will only record into the `deleteRows` bitmap.
 func fastApplyDeletedRows(
-	leftRows []int32,
+	leftRows []int64,
 	deletedRows *nulls.Nulls,
 	o uint32,
-) []int32 {
+) []int64 {
 	if len(leftRows) != 0 {
 		if x, found := sort.Find(len(leftRows), func(i int) int {
-			return int(int32(o) - leftRows[i])
+			return int(int64(o) - leftRows[i])
 		}); found {
 			leftRows = append(leftRows[:x], leftRows[x+1:]...)
 		}
@@ -1386,9 +1387,9 @@ func fastApplyDeletedRows(
 
 func (ls *LocalDataSource) applyWorkspaceEntryDeletes(
 	bid objectio.Blockid,
-	offsets []int32,
+	offsets []int64,
 	deletedRows *nulls.Nulls,
-) (leftRows []int32) {
+) (leftRows []int64) {
 
 	leftRows = offsets
 
@@ -1458,13 +1459,13 @@ func applyDeletesWithinDeltaLocations(
 	bid objectio.Blockid,
 	snapshotTS types.TS,
 	blkCommitTS types.TS,
-	offsets []int32,
+	offsets []int64,
 	deletedRows *nulls.Nulls,
 	locations ...objectio.Location,
-) (leftRows []int32, err error) {
+) (leftRows []int64, err error) {
 
 	if offsets != nil {
-		leftRows = make([]int32, 0, len(offsets))
+		leftRows = make([]int64, 0, len(offsets))
 	}
 
 	var mask *nulls.Nulls
@@ -1492,9 +1493,9 @@ func applyDeletesWithinDeltaLocations(
 
 func (ls *LocalDataSource) applyWorkspaceFlushedS3Deletes(
 	bid objectio.Blockid,
-	offsets []int32,
+	offsets []int64,
 	deletedRows *nulls.Nulls,
-) (leftRows []int32, err error) {
+) (leftRows []int64, err error) {
 
 	leftRows = offsets
 	var locations []objectio.Location
@@ -1537,9 +1538,9 @@ func (ls *LocalDataSource) applyWorkspaceFlushedS3Deletes(
 
 func (ls *LocalDataSource) applyWorkspaceRawRowIdDeletes(
 	bid objectio.Blockid,
-	offsets []int32,
+	offsets []int64,
 	deletedRows *nulls.Nulls,
-) (leftRows []int32) {
+) (leftRows []int64) {
 
 	leftRows = offsets
 
@@ -1559,9 +1560,9 @@ func (ls *LocalDataSource) applyWorkspaceRawRowIdDeletes(
 
 func (ls *LocalDataSource) applyPStateInMemDeletes(
 	bid objectio.Blockid,
-	offsets []int32,
+	offsets []int64,
 	deletedRows *nulls.Nulls,
-) (leftRows []int32) {
+) (leftRows []int64) {
 
 	if ls.rc.SkipPStateDeletes {
 		return offsets
@@ -1594,9 +1595,9 @@ func (ls *LocalDataSource) applyPStateInMemDeletes(
 
 func (ls *LocalDataSource) applyPStatePersistedDeltaLocation(
 	bid objectio.Blockid,
-	offsets []int32,
+	offsets []int64,
 	deletedRows *nulls.Nulls,
-) (leftRows []int32, err error) {
+) (leftRows []int64, err error) {
 
 	if ls.rc.SkipPStateDeletes {
 		return offsets, nil

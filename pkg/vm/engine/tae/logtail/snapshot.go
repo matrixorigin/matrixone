@@ -187,13 +187,13 @@ func (d *DeltaLocDataSource) Close() {
 func (d *DeltaLocDataSource) ApplyTombstonesInProgress(
 	ctx context.Context,
 	bid objectio.Blockid,
-	rowsOffset []int32,
-) ([]int32, error) {
+	rowsOffset []int64,
+) ([]int64, error) {
 	deleteMask, err := d.getAndApplyTombstonesInProgress(ctx, bid)
 	if err != nil {
 		return nil, err
 	}
-	var rows []int32
+	var rows []int64
 	if !deleteMask.IsEmpty() {
 		for _, row := range rowsOffset {
 			if !deleteMask.Contains(uint64(row)) {

@@ -34,7 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
-type ReadFilterSearchFuncType func([]*vector.Vector) []int32
+type ReadFilterSearchFuncType func([]*vector.Vector) []int64
 
 type BlockReadFilter struct {
 	HasFakePK          bool
@@ -56,7 +56,7 @@ func ReadDataByFilter(
 	fs fileservice.FileService,
 	mp *mpool.MPool,
 	tableName string,
-) (sels []int32, err error) {
+) (sels []int64, err error) {
 	bat, release, err := LoadColumns(ctx, columns, colTypes, fs, info.MetaLocation(), mp, fileservice.Policy(0))
 	if err != nil {
 		return
@@ -161,7 +161,7 @@ func BlockDataRead(
 	}
 
 	var (
-		sels []int32
+		sels []int64
 		err  error
 	)
 
@@ -261,7 +261,7 @@ func BlockDataReadInner(
 	columns []uint16,
 	colTypes []types.Type,
 	ts types.TS,
-	selectRows []int32, // if selectRows is not empty, it was already filtered by filter
+	selectRows []int64, // if selectRows is not empty, it was already filtered by filter
 	fs fileservice.FileService,
 	mp *mpool.MPool,
 	vp engine.VectorPool,
@@ -415,7 +415,7 @@ func getRowsIdIndex(colIndexes []uint16, colTypes []types.Type) (int, []uint16, 
 
 func buildRowidColumnInProgress(
 	info *objectio.BlockInfoInProgress,
-	sels []int32,
+	sels []int64,
 	m *mpool.MPool,
 	vp engine.VectorPool,
 ) (col *vector.Vector, err error) {

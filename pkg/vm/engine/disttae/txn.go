@@ -850,6 +850,14 @@ func (txn *Transaction) mergeTxnWorkspaceLocked() error {
 			}
 		}
 	}
+	if len(txn.tablesInVain) > 0 {
+		for i, e := range txn.writes {
+			if _, ok := txn.tablesInVain[e.tableId]; e.bat != nil && ok {
+				e.bat.Clean(txn.proc.GetMPool())
+				txn.writes[i].bat = nil
+			}
+		}
+	}
 	return txn.compactionBlksLocked()
 }
 
@@ -996,17 +1004,18 @@ func (txn *Transaction) forEachTableHasDeletesLocked(f func(tbl *txnTable) error
 	tables := make(map[uint64]*txnTable)
 	for i := 0; i < len(txn.writes); i++ {
 		e := txn.writes[i]
-		if e.typ != DELETE || e.fileName != "" {
+		if e.typ != DELETE || e.fileName != "" || e.bat == nil || e.bat.RowCount() == 0 {
 			continue
 		}
 		if _, ok := tables[e.tableId]; ok {
 			continue
 		}
-		db, err := txn.engine.Database(txn.proc.Ctx, e.databaseName, txn.op)
+		ctx := context.WithValue(txn.proc.Ctx, defines.TenantIDKey{}, e.accountId)
+		db, err := txn.engine.Database(ctx, e.databaseName, txn.op)
 		if err != nil {
 			return err
 		}
-		rel, err := db.Relation(txn.proc.Ctx, e.tableName, nil)
+		rel, err := db.Relation(ctx, e.tableName, nil)
 		if err != nil {
 			return err
 		}
@@ -1148,9 +1157,11 @@ func (txn *Transaction) delTransaction() {
 func (txn *Transaction) rollbackTableOpLocked() {
 	txn.tableOps.rollbackLastStatement(txn.statementID)
 
-	txn.tablesInVain = removeIf(txn.tablesInVain, func(t tableOp) bool {
-		return t.statementId == txn.statementID
-	})
+	for k, v := range txn.tablesInVain {
+		if v == txn.statementID {
+			delete(txn.tablesInVain, k)
+		}
+	}
 }
 
 func (txn *Transaction) clearTableCache() {
@@ -1243,6 +1254,7 @@ func (txn *Transaction) CloneSnapshotWS() client.Workspace {
 		databaseMap:        new(sync.Map),
 		deletedDatabaseMap: new(sync.Map),
 		tableOps:           newTableOps(),
+		tablesInVain:       make(map[uint64]int),
 		deletedBlocks: &deletedBlocks{
 			offsets: map[types.Blockid][]int64{},
 		},

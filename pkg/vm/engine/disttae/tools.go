@@ -57,14 +57,6 @@ func genWriteReqs(
 	var tnID string
 	var tn metadata.TNService
 	entries := make([]*api.Entry, 0, len(writes))
-	isDropped := func(id uint64) bool {
-		for _, op := range tablesInVain {
-			if op.tableId == id {
-				return true
-			}
-		}
-		return false
-	}
 	for _, e := range writes {
 		if tnID == "" {
 			tnID = e.tnStore.ServiceID
@@ -74,9 +66,6 @@ func genWriteReqs(
 			panic(fmt.Sprintf("txnCommit contains entries from different TNs, %s != %s", tnID, e.tnStore.ServiceID))
 		}
 		if e.bat == nil || e.bat.IsEmpty() {
-			continue
-		}
-		if isDropped(e.tableId) { // cancel dml and alter request
 			continue
 		}
 		e.pkChkByTN = pkChkByTN
@@ -94,7 +83,7 @@ func genWriteReqs(
 		// the txn wrote a delete & insert batch due to alter, and the insert batch was cancelled by dropping.
 		// the table should be dropped in TN, so we need to reset the delete batch to normal delete.
 		isAlter, typ, id, name := noteSplitAlter(e.note)
-		if isAlter && typ == DELETE && isDropped(id) {
+		if _, deleted := tablesInVain[id]; deleted && isAlter && typ == DELETE {
 			// reset to normal delete, this will lead to dropping table in TN
 			e.note = noteForDrop(id, name)
 		} else if isAlter {

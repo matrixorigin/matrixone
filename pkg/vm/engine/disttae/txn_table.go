@@ -2180,11 +2180,16 @@ func (tbl *txnTable) transferDeletes(
 			rowids := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
 			beTransfered := 0
 			toTransfer := 0
+			notFound := false
 			for i, rowid := range rowids {
 				blkid, _ := rowid.Decode()
 				if _, ok := deleteObjs[*objectio.ShortName(&blkid)]; ok {
 					toTransfer++
-					newId, ok, err := tbl.readNewRowid(pkVec, i, blks, ds)
+					f := genPkString
+					if notFound {
+						f = nil
+					}
+					newId, ok, err := tbl.readNewRowid(pkVec, i, blks, ds, f)
 					if err != nil {
 						return err
 					}
@@ -2202,6 +2207,7 @@ func (tbl *txnTable) transferDeletes(
 						rowids[i] = newId
 						beTransfered++
 					} else {
+						notFound = true
 						logutil.Info("transfer deletes rowid failed",
 							zap.String("oldrowid", rowids[i].ShortStringEx()),
 							zap.String("pk", genPkString(pkVec.GetBytesAt(i))))
@@ -2232,7 +2238,11 @@ func (tbl *txnTable) transferDeletes(
 }
 
 func (tbl *txnTable) readNewRowid(
-	vec *vector.Vector, row int, blks []objectio.BlockInfoInProgress, ds engine.DataSource,
+	vec *vector.Vector,
+	row int,
+	blks []objectio.BlockInfoInProgress,
+	ds engine.DataSource,
+	genPkStr func([]byte) string,
 ) (types.Rowid, bool, error) {
 	var auxIdCnt int32
 	var typ plan.Type
@@ -2306,6 +2316,19 @@ func (tbl *txnTable) readNewRowid(
 				return rowids[i], true, nil
 			}
 		}
+		if genPkStr != nil && len(blks) == 1 {
+			var idx int
+			rowids := vector.MustFixedCol[types.Rowid](bat.Vecs[0])
+			detail := stringifySlice(rowids, func(a any) string {
+				rid := a.(types.Rowid)
+				pk := genPkStr(bat.Vecs[1].GetBytesAt(idx))
+				idx++
+				return fmt.Sprintf("%s:%s", pk, rid.ShortStringEx())
+			})
+			logutil.Error("transfer deletes rowid not found",
+				zap.String("batContent", detail))
+		}
+
 		vec.Free(tbl.proc.Load().Mp())
 		bat.Clean(tbl.proc.Load().Mp())
 	}

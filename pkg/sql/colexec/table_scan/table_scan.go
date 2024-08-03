@@ -139,5 +139,6 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 	result.Batch = tableScan.ctr.buf
 	anal.Input(result.Batch, tableScan.IsFirst)
+	anal.Output(result.Batch, tableScan.IsLast)
 	return result, nil
 }
