@@ -261,9 +261,11 @@ func (tomb *tombstoneDataWithDeltaLoc) ApplyPersistedTombstones(
 	) (left []int64, err error),
 ) (left []int64, err error) {
 
+	left = rowsOffset
+
 	if locs, ok := tomb.blk2UncommitLoc[bid]; ok {
 		for _, loc := range locs {
-			left, err = apply(ctx, loc, types.TS{}, rowsOffset, mask)
+			left, err = apply(ctx, loc, types.TS{}, left, mask)
 			if err != nil {
 				return
 			}
@@ -271,7 +273,7 @@ func (tomb *tombstoneDataWithDeltaLoc) ApplyPersistedTombstones(
 	}
 
 	if loc, ok := tomb.blk2CommitLoc[bid]; ok {
-		left, err = apply(ctx, loc.Loc, loc.Cts, rowsOffset, mask)
+		left, err = apply(ctx, loc.Loc, loc.Cts, left, mask)
 		if err != nil {
 			return
 		}
@@ -1049,9 +1051,9 @@ const (
 	batRowsHaveDeletes = math.MaxInt32
 )
 
-func checkWorkspaceEntryType(tbl *txnTable, entry Entry) int {
+func checkWorkspaceEntryType(tbl *txnTable, entry Entry, isInsert bool) bool {
 	if entry.DatabaseId() != tbl.db.databaseId || entry.TableId() != tbl.tableId {
-		return -1
+		return false
 	}
 
 	// within a txn, the later statement could delete the previous
@@ -1059,31 +1061,25 @@ func checkWorkspaceEntryType(tbl *txnTable, entry Entry) int {
 	// if no rows left, this bat can be seen deleted.
 	//
 	// Note that: some row have been deleted, but some left
-	if left, ok := tbl.getTxn().batchSelectList[entry.bat]; ok {
-		// all rows have deleted in this bat
-		if len(left) == 0 {
-			return batRowsAllDeleted
-		} else {
-			return batRowsHaveDeletes
+	if isInsert {
+		if entry.typ != INSERT ||
+			entry.bat == nil ||
+			entry.bat.IsEmpty() ||
+			entry.bat.Attrs[0] == catalog.BlockMeta_MetaLoc {
+			return false
 		}
+		if left, exist := tbl.getTxn().batchSelectList[entry.bat]; exist && len(left) == 0 {
+			// all rows have deleted in this bat
+			return false
+		} else if len(left) > 0 {
+			// FIXME: if len(left) > 0, we need to exclude the deleted rows in this batch
+			logutil.Fatal("FIXME: implement later")
+		}
+		return true
 	}
 
-	if entry.typ == INSERT {
-		if entry.bat == nil || entry.bat.IsEmpty() {
-			return -1
-		}
-		if entry.bat.Attrs[0] == catalog.BlockMeta_MetaLoc {
-			return -1
-		}
-
-		return batRowsAllRetained
-	}
-
-	if (entry.typ == DELETE) && entry.fileName == "" {
-		return batRowsAllDeleted
-	}
-
-	return -1
+	// handle delete entry
+	return (entry.typ == DELETE) && (entry.fileName == "")
 }
 
 func (ls *LocalDataSource) filterInMemUnCommittedInserts(
@@ -1112,24 +1108,22 @@ func (ls *LocalDataSource) filterInMemUnCommittedInserts(
 
 	var retainedRowIds []types.Rowid
 
-	for ; ls.wsCursor < ls.txnOffset &&
-		rows+writes[ls.wsCursor].bat.RowCount() <= maxRows; ls.wsCursor++ {
-		entry := ls.table.getTxn().writes[ls.wsCursor]
-
-		if t := checkWorkspaceEntryType(ls.table, entry); t == batRowsHaveDeletes {
-			leftInserts := ls.table.getTxn().batchSelectList[entry.bat]
-			retainedRowIds = make([]types.Rowid, len(leftInserts))
-			for i := range leftInserts {
-				rowId := vector.GetFixedAt[types.Rowid](entry.bat.Vecs[0], int(leftInserts[i]))
-				retainedRowIds[i] = rowId
-			}
-
-		} else if t == batRowsAllRetained {
-			retainedRowIds = vector.MustFixedCol[types.Rowid](entry.bat.Vecs[0])
-		} else {
+	for ; ls.wsCursor < ls.txnOffset; ls.wsCursor++ {
+		if writes[ls.wsCursor].bat == nil {
 			continue
 		}
 
+		if rows+writes[ls.wsCursor].bat.RowCount() > maxRows {
+			break
+		}
+
+		entry := ls.table.getTxn().writes[ls.wsCursor]
+
+		if ok := checkWorkspaceEntryType(ls.table, entry, true); !ok {
+			continue
+		}
+
+		retainedRowIds = vector.MustFixedCol[types.Rowid](entry.bat.Vecs[0])
 		offsets := rowIdsToOffset(retainedRowIds, int64(0)).([]int64)
 
 		b, _ := retainedRowIds[0].Decode()
@@ -1405,31 +1399,11 @@ func (ls *LocalDataSource) applyWorkspaceEntryDeletes(
 	var delRowIds []types.Rowid
 
 	for idx := range writes {
-		if t := checkWorkspaceEntryType(ls.table, writes[idx]); t == batRowsHaveDeletes {
-			rowIds := vector.MustFixedCol[types.Rowid](writes[idx].bat.Vecs[0])
-			left := ls.table.getTxn().batchSelectList[writes[idx].bat]
-			delRowIds = make([]types.Rowid, 0, len(rowIds)-len(left))
-
-			for i := range rowIds {
-				dd := true
-				for j := range left {
-					if int64(i) == left[j] {
-						dd = false
-						break
-					}
-				}
-
-				if dd {
-					delRowIds = append(delRowIds, rowIds[i])
-				}
-			}
-
-		} else if t == batRowsAllDeleted {
-			delRowIds = vector.MustFixedCol[types.Rowid](writes[idx].bat.Vecs[0])
-		} else {
+		if ok := checkWorkspaceEntryType(ls.table, writes[idx], false); !ok {
 			continue
 		}
 
+		delRowIds = vector.MustFixedCol[types.Rowid](writes[idx].bat.Vecs[0])
 		for _, delRowId := range delRowIds {
 			b, o := delRowId.Decode()
 			if bid.Compare(b) != 0 {

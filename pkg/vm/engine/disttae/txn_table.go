@@ -1749,8 +1749,10 @@ func (tbl *txnTable) buildLocalDataSource(
 			txnOffset = tbl.getTxn().GetSnapshotWriteOffset()
 		}
 
-		if skipReadMem && engine.GetForceBuildRemoteDS() {
-			source, err = buildRemoteDS(ctx, tbl, txnOffset, relData)
+		// TODO check tbl name
+		//force, tbls := engine.GetForceBuildRemoteDS()
+		if skipReadMem {
+			//source, err = buildRemoteDS(ctx, tbl, txnOffset, relData)
 		} else {
 			source, err = NewLocalDataSource(
 				ctx,
