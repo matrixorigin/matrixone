@@ -19,10 +19,11 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -584,6 +585,9 @@ const (
 
 type Tombstoner interface {
 	Type() TombstoneType
+	HasAnyInMemoryTombstone() bool
+	HasAnyTombstoneFile() bool
+
 	String() string
 	StringWithPrefix(string) string
 
