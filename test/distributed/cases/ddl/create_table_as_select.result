@@ -1542,16 +1542,8 @@ Table    Create Table
 test01    CREATE TABLE `test01` (\n  `col1` TINYINT DEFAULT NULL,\n  `col2` SMALLINT DEFAULT NULL,\n  `col3` INT DEFAULT NULL,\n  `col4` BIGINT DEFAULT NULL,\n  `col5` TINYINT UNSIGNED DEFAULT NULL,\n  `col6` SMALLINT UNSIGNED DEFAULT NULL,\n  `col7` INT UNSIGNED DEFAULT NULL,\n  `col8` BIGINT UNSIGNED DEFAULT NULL,\n  `col9` FLOAT DEFAULT NULL,\n  `col10` DOUBLE DEFAULT NULL\n)
 create publication publication01 database test account all;
 show publications;
-<<<<<<< HEAD
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-publication01    test    *    *        2024-07-29 12:24:50    null    
-||||||| b7f14cb62
-publication    database    create_time    update_time    sub_account    comments
-publication01    test    2024-07-04 14:37:01    null    *    
-=======
-publication    database    create_time    update_time    sub_account    comments
-publication01    test    2024-08-01 14:33:19    null    *    
->>>>>>> mo/main
+publication01    test    *    *        2024-08-03 15:29:02    null    
 drop table if exists test02;
 create table test02 as select * from test01;
 select * from test02;
@@ -1572,16 +1564,8 @@ a    b    c    d
 2    3    b    test publication
 3    4    c    324243243
 show publications;
-<<<<<<< HEAD
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-sys_pub_1    test    *    *        2024-07-29 12:24:51    null    
-||||||| b7f14cb62
-publication    database    create_time    update_time    sub_account    comments
-sys_pub_1    test    2024-07-04 14:37:02    null    *    
-=======
-publication    database    create_time    update_time    sub_account    comments
-sys_pub_1    test    2024-08-01 14:33:20    null    *    
->>>>>>> mo/main
+sys_pub_1    test    *    *        2024-08-03 15:29:02    null    
 select pub_name, database_name, account_list from mo_catalog.mo_pubs;
 pub_name    database_name    account_list
 sys_pub_1    test    all

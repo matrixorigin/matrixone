@@ -58,6 +58,7 @@ select * from t1;
 -- @session
 
 # alter authorized account
+-- @ignore:5,6
 show publications;
 alter publication pub1 account acc3 comment 'this is a pub';
 -- @session:id=1&user=acc1:admin1&password=test123

@@ -11,8 +11,8 @@ create publication pub4 database t account acc0,acc1,accx;
 internal error: not existed account name 'accx'
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub3    t    *    acc0,acc1        2024-08-01 17:20:09    null    
-pub1    t    *    *        2024-08-01 17:20:09    null    
+pub3    t    *    acc0,acc1        2024-08-03 15:44:49    null    
+pub1    t    *    *        2024-08-03 15:44:49    null    
 show create publication pub1;
 Publication    Create Publication
 pub1    CREATE PUBLICATION pub1 DATABASE t ACCOUNT all
@@ -28,7 +28,7 @@ pub3    CREATE PUBLICATION pub3 DATABASE t ACCOUNT acc0,acc1
 drop publication pub1;
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub3    t    *    acc0,acc1        2024-08-01 17:20:09    null    
+pub3    t    *    acc0,acc1        2024-08-03 15:44:49    null    
 create publication pub1 database t account all;
 create publication pub1 database t account all;
 Duplicate entry 'pub1' for key 'pub_name'
@@ -56,7 +56,7 @@ create view v1 as (select * from sys_tbl_1);
 create publication sys_pub_1 database sys_db_1 account all;
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-sys_pub_1    sys_db_1    *    *        2024-08-01 17:20:11    null    
+sys_pub_1    sys_db_1    *    *        2024-08-03 15:44:51    null    
 select pub_name, database_name, account_list from mo_catalog.mo_pubs;
 pub_name    database_name    account_list
 sys_pub_1    sys_db_1    all
@@ -71,7 +71,7 @@ system
 system_metrics
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-sys_pub_1    sys    sys_db_1    *        2024-08-01 17:20:11    sub1    2024-08-01 17:20:11    0
+sys_pub_1    sys    sys_db_1    *        2024-08-03 15:44:51    sub1    2024-08-03 15:44:51    0
 use sub1;
 show tables;
 Tables_in_sub1
@@ -117,7 +117,7 @@ system
 system_metrics
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-sys_pub_1    sys    sys_db_1    *        2024-08-01 17:20:11    sub1    2024-08-01 17:20:11    0
+sys_pub_1    sys    sys_db_1    *        2024-08-03 15:44:51    sub1    2024-08-03 15:44:51    0
 use sub1;
 show tables;
 Tables_in_sub1
@@ -141,14 +141,14 @@ pub_name    database_name    account_list
 sys_pub_1    sys_db_1    acc1
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-sys_pub_1    sys    sys_db_1    *        2024-08-01 17:20:12    sub1    2024-08-01 17:20:11    1
+sys_pub_1    sys    sys_db_1    *        2024-08-03 15:44:51    sub1    2024-08-03 15:44:51    1
 select * from sub1.sys_tbl_1;
 SQL parser error: table "sys_tbl_1" does not exist
 use sub1;
 internal error: the account acc0 is not allowed to subscribe the publication sys_pub_1
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-sys_pub_1    sys    sys_db_1    *        2024-08-01 17:20:12    sub1    2024-08-01 17:20:11    0
+sys_pub_1    sys    sys_db_1    *        2024-08-03 15:44:51    sub1    2024-08-03 15:44:51    0
 use sub1;
 desc sys_tbl_1;
 Field    Type    Null    Key    Default    Extra    Comment
@@ -164,7 +164,7 @@ pub_name    database_name    account_list
 sys_pub_1    sys_db_1    acc1,acc0
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-sys_pub_1    sys    sys_db_1    *        2024-08-01 17:20:12    sub1    2024-08-01 17:20:11    0
+sys_pub_1    sys    sys_db_1    *        2024-08-03 15:44:51    sub1    2024-08-03 15:44:51    0
 use sub1;
 desc sys_tbl_1;
 Field    Type    Null    Key    Default    Extra    Comment
@@ -181,7 +181,7 @@ insert into sys_tbl_1 values(4);
 create table sys_tbl_2(b text);
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-sys_pub_1    sys    sys_db_1    *        2024-08-01 17:20:12    sub1    2024-08-01 17:20:11    0
+sys_pub_1    sys    sys_db_1    *        2024-08-03 15:44:51    sub1    2024-08-03 15:44:51    0
 use sub1;
 desc sys_tbl_1;
 Field    Type    Null    Key    Default    Extra    Comment
@@ -204,7 +204,7 @@ create database sub2 from acc2 publication acc2_pub_1;
 use sub2;
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-acc2_pub_1    acc2    acc2_db_1    *        2024-08-01 17:20:12    sub2    2024-08-01 17:20:12    0
+acc2_pub_1    acc2    acc2_db_1    *        2024-08-03 15:44:51    sub2    2024-08-03 15:44:51    0
 show tables;
 Tables_in_sub2
 acc2_tbl_1
@@ -222,8 +222,8 @@ create database sub2 from acc2 publication acc2_pub_1;
 use sub2;
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-acc2_pub_1    acc2    acc2_db_1    *        2024-08-01 17:20:12    sub2    2024-08-01 17:20:12    0
-sys_pub_1    sys    sys_db_1    *        2024-08-01 17:20:12    sub1    2024-08-01 17:20:11    0
+acc2_pub_1    acc2    acc2_db_1    *        2024-08-03 15:44:51    sub2    2024-08-03 15:44:51    0
+sys_pub_1    sys    sys_db_1    *        2024-08-03 15:44:51    sub1    2024-08-03 15:44:51    0
 desc acc2_tbl_1;
 Field    Type    Null    Key    Default    Extra    Comment
 q    TEXT(0)    YES        null        
@@ -235,19 +235,15 @@ acc1    2
 acc0    3
 sys    4
 alter publication acc2_pub_1 account sys;
-SQL parser error: table "mo_subs" does not exist
 use acc2_db_1;
 create table acc2_tbl_2(c text);
 insert into acc2_tbl_1(q) values ('mo');
 create database sub2 from acc2 publication acc2_pub_1;
+internal error: the account acc1 is not allowed to subscribe the publication acc2_pub_1
 select * from sub2.acc2_tbl_1;
-q    c
-acc2    1
-acc1    2
-acc0    3
-sys    4
-mo    5
+SQL parser error: table "acc2_tbl_1" does not exist
 use sub2;
+internal error: the account acc0 is not allowed to subscribe the publication acc2_pub_1
 show tables;
 Tables_in_sub2
 acc2_tbl_1
@@ -260,9 +256,7 @@ c
 drop database acc2_db_1;
 internal error: can not drop database 'acc2_db_1' which is publishing
 drop publication acc2_pub_1;
-SQL parser error: table "mo_subs" does not exist
 drop database acc2_db_1;
-internal error: can not drop database 'acc2_db_1' which is publishing
 drop account acc0;
 drop account acc1;
 drop account acc2;
@@ -272,10 +266,8 @@ drop database sub2;
 create database sub_db4 from no_exists publication pubname4;
 internal error: there is no publication account no_exists
 create database db1;
-create publication pubname4 database db1 comment 'publication to all tenant';
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 48 near " comment 'publication to all tenant';";
+create publication pubname4 database db1 account all comment 'publication to all tenant';
 create database sub_db4 from sys publication pubname4;
 internal error: can not subscribe to self
 drop publication pubname4;
-internal error: publication 'pubname4' does not exist
 drop database db1;
