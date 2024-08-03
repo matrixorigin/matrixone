@@ -87,6 +87,7 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 	anal := proc.GetAnalyze(hashBuild.GetIdx(), hashBuild.GetParallelIdx(), hashBuild.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
+
 	result := vm.NewCallResult()
 	ap := hashBuild
 	ctr := ap.ctr
