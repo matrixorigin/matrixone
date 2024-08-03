@@ -28,6 +28,8 @@ var (
 	ErrDisposed = moerr.NewInvalidStateNoCtx("ring buffer closed")
 	// ErrTimeout ring buffer timeout
 	ErrTimeout = moerr.NewInvalidStateNoCtx("ring buffer timeout")
+	// ErrEmpty ring buffer is empty
+	ErrEmpty = moerr.NewInvalidStateNoCtx("ring buffer is empty")
 )
 
 // roundUp takes a uint64 greater than 0 and rounds it up to the next
@@ -176,6 +178,14 @@ func (rb *RingBuffer[V]) MustGet() V {
 // error will be returned if the queue is disposed or a timeout occurs. A
 // non-positive timeout will block indefinitely.
 func (rb *RingBuffer[V]) Poll(timeout time.Duration) (V, bool, error) {
+	return rb.poll(timeout, false)
+}
+
+func (rb *RingBuffer[V]) Pop() (V, bool, error) {
+	return rb.poll(0, true)
+}
+
+func (rb *RingBuffer[V]) poll(timeout time.Duration, once bool) (V, bool, error) {
 	// zero value for type parameters.
 	var zero V
 	var count uint64
@@ -203,6 +213,10 @@ L:
 			}
 		default:
 			pos = atomic.LoadUint64(&rb.dequeue)
+		}
+
+		if once {
+			return zero, false, ErrEmpty
 		}
 
 		if timeout > 0 && time.Since(start) >= timeout {

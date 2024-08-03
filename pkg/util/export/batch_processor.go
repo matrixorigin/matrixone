@@ -327,7 +327,7 @@ func NewMOCollector(
 		ctx:            ctx,
 		logger:         morun.ServiceRuntime(service).Logger().Named(LoggerNameMOCollector).With(logutil.Discardable()),
 		buffers:        make(map[string]*bufferHolder),
-		awakeQueue:     ring.NewRingBuffer[batchpipe.HasName](defaultRingBufferSize, ring.WithScheduleCount(1e5 /*~=1ms/10us*/)),
+		awakeQueue:     ring.NewRingBuffer[batchpipe.HasName](defaultRingBufferSize, ring.WithScheduleCount(1e5 /*~=1ms/10ns*/)),
 		awakeGenerate:  make(chan generateReq, 16),
 		awakeBatch:     make(chan exportReq),
 		stopCh:         make(chan struct{}),
@@ -545,7 +545,7 @@ loop:
 	for {
 		select {
 		default:
-			i, got, err := c.awakeQueue.Poll(time.Second)
+			i, got, err := c.awakeQueue.Pop()
 			if !got {
 				if errors.Is(err, ring.ErrDisposed) {
 					v2.TraceCollectorDisposedCounter.Inc()
@@ -553,6 +553,7 @@ loop:
 				if errors.Is(err, ring.ErrTimeout) {
 					v2.TraceCollectorTimeoutCounter.Inc()
 				}
+				time.Sleep(time.Millisecond)
 				continue
 			}
 			start := time.Now()
