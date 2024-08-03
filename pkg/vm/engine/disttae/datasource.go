@@ -1106,8 +1106,15 @@ func (ls *LocalDataSource) filterInMemUnCommittedInserts(
 
 	var retainedRowIds []types.Rowid
 
-	for ; ls.wsCursor < ls.txnOffset &&
-		rows+writes[ls.wsCursor].bat.RowCount() <= maxRows; ls.wsCursor++ {
+	for ; ls.wsCursor < ls.txnOffset; ls.wsCursor++ {
+		if writes[ls.wsCursor].bat == nil {
+			continue
+		}
+
+		if rows+writes[ls.wsCursor].bat.RowCount() > maxRows {
+			break
+		}
+
 		entry := ls.table.getTxn().writes[ls.wsCursor]
 
 		if ok := checkWorkspaceEntryType(ls.table, entry, true); !ok {
