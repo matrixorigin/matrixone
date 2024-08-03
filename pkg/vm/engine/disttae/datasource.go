@@ -1022,13 +1022,6 @@ func (ls *LocalDataSource) handleOrderBy() {
 			i++
 		}
 		ls.rangesCursor = i
-
-		if ls.table.tableName == "statement_info" {
-			logutil.Infof("xxxx txn:%s, handle order by,delete blks:%d, rest blks:%d",
-				ls.table.db.op.Txn().DebugString(),
-				i,
-				ls.rangeSlice.Len()-ls.rangesCursor)
-		}
 	}
 }
 
