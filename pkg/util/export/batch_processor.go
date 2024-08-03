@@ -537,11 +537,14 @@ func (c *MOCollector) releaseBuffer() {
 // doCollect handle all item accept work, send it to the corresponding buffer
 // goroutine worker
 func (c *MOCollector) doCollect(idx int) {
+	var startWait time.Time
 	defer c.stopWait.Done()
 	ctx, span := trace.Start(c.ctx, "MOCollector.doCollect")
 	defer span.End()
 	c.logger.Debug("doCollect %dth: start", zap.Int("idx", idx))
+
 loop:
+	startWait = time.Now()
 	for {
 		select {
 		default:
@@ -553,10 +556,14 @@ loop:
 				if errors.Is(err, ring.ErrTimeout) {
 					v2.TraceCollectorTimeoutCounter.Inc()
 				}
+				if errors.Is(err, ring.ErrEmpty) {
+					v2.TraceCollectorEmptyCounter.Inc()
+				}
 				time.Sleep(time.Millisecond)
-				continue
+				continue loop
 			}
 			start := time.Now()
+			v2.TraceCollectorConsumeDelayDurationHistogram.Observe(start.Sub(startWait).Seconds())
 			c.mux.RLock()
 			if buf, has := c.buffers[i.GetName()]; !has {
 				c.logger.Debug("doCollect: init buffer", zap.Int("idx", idx), zap.String("item", i.GetName()))
@@ -579,8 +586,9 @@ loop:
 				c.mux.RUnlock()
 			}
 			v2.TraceCollectorConsumeDurationHistogram.Observe(time.Since(start).Seconds())
+			startWait = time.Now() // next Round
 		case <-c.stopCh:
-			break loop
+			break
 		}
 	}
 	c.logger.Debug("doCollect: Done.", zap.Int("idx", idx))

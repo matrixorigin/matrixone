@@ -99,6 +99,16 @@ func (c *DashboardCreator) initTraceMoLoggerExportDataRow() dashboard.Option {
 		}),
 	)
 
+	panels = append(panels, c.withMultiGraph(
+		"ETLMerge files",
+		3,
+		[]string{
+			`sum(delta(` + c.getMetricWithFilter("mo_trace_collector_status_total", "") + `[$interval:1m])) by(type)`,
+		},
+		[]string{
+			"{{ type }}",
+		}))
+
 	return dashboard.Row(
 		"MOLogger Export",
 		panels...,
@@ -111,6 +121,7 @@ func (c *DashboardCreator) initTraceCollectorOverviewRow() dashboard.Option {
 		[]string{
 			c.getMetricWithFilter(`mo_trace_collector_duration_seconds_bucket`, `type="collect"`),
 			c.getMetricWithFilter(`mo_trace_collector_duration_seconds_bucket`, `type="consume"`),
+			c.getMetricWithFilter(`mo_trace_collector_duration_seconds_bucket`, `type="consume_delay"`),
 			c.getMetricWithFilter(`mo_trace_collector_duration_seconds_bucket`, `type="generate_awake"`),
 			c.getMetricWithFilter(`mo_trace_collector_duration_seconds_bucket`, `type="generate_awake_discard"`),
 			c.getMetricWithFilter(`mo_trace_collector_duration_seconds_bucket`, `type="generate_delay"`),
@@ -121,6 +132,7 @@ func (c *DashboardCreator) initTraceCollectorOverviewRow() dashboard.Option {
 		[]string{
 			"collect",
 			"consume",
+			"consume_delay",
 			"generate_awake",
 			"generate_awake_discard",
 			"generate_delay",

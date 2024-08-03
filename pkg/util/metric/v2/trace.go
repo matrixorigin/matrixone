@@ -42,6 +42,7 @@ var (
 		}, []string{"type"})
 	TraceCollectorCollectDurationHistogram              = traceCollectorDurationHistogram.WithLabelValues("collect")
 	TraceCollectorConsumeDurationHistogram              = traceCollectorDurationHistogram.WithLabelValues("consume")
+	TraceCollectorConsumeDelayDurationHistogram         = traceCollectorDurationHistogram.WithLabelValues("consume_delay")
 	TraceCollectorGenerateAwareDurationHistogram        = traceCollectorDurationHistogram.WithLabelValues("generate_awake")
 	TraceCollectorGenerateAwareDiscardDurationHistogram = traceCollectorDurationHistogram.WithLabelValues("generate_awake_discard")
 	TraceCollectorGenerateDelayDurationHistogram        = traceCollectorDurationHistogram.WithLabelValues("generate_delay")
@@ -82,6 +83,7 @@ var (
 		}, []string{"type"})
 	TraceCollectorDisposedCounter = traceCollectorStatusCounter.WithLabelValues("disposed")
 	TraceCollectorTimeoutCounter  = traceCollectorStatusCounter.WithLabelValues("timeout")
+	TraceCollectorEmptyCounter    = traceCollectorStatusCounter.WithLabelValues("empty")
 
 	traceNegativeCUCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
