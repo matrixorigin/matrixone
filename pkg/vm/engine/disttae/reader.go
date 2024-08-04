@@ -258,7 +258,7 @@ func NewReader(
 	)
 
 	packerPool := e.packerPool
-	memFilter := newMemPKFilterInProgress(
+	memFilter := newMemPKFilter(
 		tableDef,
 		ts,
 		packerPool,

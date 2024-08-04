@@ -85,9 +85,9 @@ func newCNMergeTask(
 	targets []logtailreplay.ObjectInfo,
 	targetObjSize uint32,
 ) (*cnMergeTask, error) {
-	relData := buildBlockListRelationData()
+	relData := NewEmptyBlockListRelationData()
 	relData.AppendBlockInfo(objectio.EmptyBlockInfoInProgress)
-	source, err := tbl.buildLocalDataSource(ctx, 0, relData, CheckAll)
+	source, err := tbl.buildLocalDataSource(ctx, 0, relData, Policy_CheckAll)
 	if err != nil {
 		return nil, err
 	}
@@ -181,7 +181,7 @@ func (t *cnMergeTask) GetSortKeyType() types.Type {
 func (t *cnMergeTask) LoadNextBatch(ctx context.Context, objIdx uint32) (*batch.Batch, *nulls.Nulls, func(), error) {
 	iter := t.blkIters[objIdx]
 	if iter.Next() {
-		blk := iter.EntryInProgress()
+		blk := iter.Entry()
 		// update delta location
 		obj := t.targets[objIdx]
 		blk.Sorted = obj.Sorted

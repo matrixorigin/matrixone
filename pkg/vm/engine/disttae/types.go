@@ -836,13 +836,10 @@ type withFilterMixin struct {
 	}
 }
 
-type blockSortHelperInProgress struct {
+// FIXME: no pointer here
+type blockSortHelper struct {
 	blk *objectio.BlockInfoInProgress
 	zm  index.ZM
-}
-
-type SingleReaderInProgress struct {
-	R *reader
 }
 
 type reader struct {

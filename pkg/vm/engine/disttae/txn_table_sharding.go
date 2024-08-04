@@ -225,7 +225,7 @@ func (tbl *txnTableDelegate) Ranges(
 		return nil, err
 	}
 
-	ret := buildBlockListRelationData()
+	ret := NewEmptyBlockListRelationData()
 	for _, r := range rs {
 		blks := r.GetBlockInfoSlice()
 		ret.blklist.Append(blks)

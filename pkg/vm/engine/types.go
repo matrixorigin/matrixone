@@ -708,15 +708,18 @@ type DataSource interface {
 		memFilter any,
 		mp *mpool.MPool,
 		vp VectorPool,
-		bat *batch.Batch) (*objectio.BlockInfoInProgress, DataState, error)
+		bat *batch.Batch,
+	) (*objectio.BlockInfoInProgress, DataState, error)
 
-	ApplyTombstonesInProgress(
+	ApplyTombstones(
 		ctx context.Context,
 		bid objectio.Blockid,
-		rowsOffset []int64) ([]int64, error)
+		rowsOffset []int64,
+	) ([]int64, error)
 
-	GetTombstonesInProgress(
-		ctx context.Context, bid objectio.Blockid) (deletedRows *nulls.Nulls, err error)
+	GetTombstones(
+		ctx context.Context, bid objectio.Blockid,
+	) (deletedRows *nulls.Nulls, err error)
 
 	SetOrderBy(orderby []*plan.OrderBySpec)
 
@@ -754,8 +757,6 @@ type Relation interface {
 	// third parameter: Transaction offset used to specify the starting position for reading data.
 	Ranges(context.Context, []*plan.Expr, int) (RelData, error)
 
-	//RangesInProgress will substitute the Ranges function in the future.
-	//RangesInProgress(context.Context, []*plan.Expr, int) (RelData, error)
 	CollectTombstones(ctx context.Context, txnOffset int) (Tombstoner, error)
 
 	TableDefs(context.Context) ([]TableDef, error)

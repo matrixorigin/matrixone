@@ -631,19 +631,19 @@ func (m *MockDataSource) EXPECT() *MockDataSourceMockRecorder {
 	return m.recorder
 }
 
-// ApplyTombstonesInProgress mocks base method.
-func (m *MockDataSource) ApplyTombstonesInProgress(ctx context.Context, bid objectio.Blockid, rowsOffset []int64) ([]int64, error) {
+// ApplyTombstones mocks base method.
+func (m *MockDataSource) ApplyTombstones(ctx context.Context, bid objectio.Blockid, rowsOffset []int64) ([]int64, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ApplyTombstonesInProgress", ctx, bid, rowsOffset)
+	ret := m.ctrl.Call(m, "ApplyTombstones", ctx, bid, rowsOffset)
 	ret0, _ := ret[0].([]int64)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// ApplyTombstonesInProgress indicates an expected call of ApplyTombstonesInProgress.
-func (mr *MockDataSourceMockRecorder) ApplyTombstonesInProgress(ctx, bid, rowsOffset interface{}) *gomock.Call {
+// ApplyTombstones indicates an expected call of ApplyTombstones.
+func (mr *MockDataSourceMockRecorder) ApplyTombstones(ctx, bid, rowsOffset interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ApplyTombstonesInProgress", reflect.TypeOf((*MockDataSource)(nil).ApplyTombstonesInProgress), ctx, bid, rowsOffset)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ApplyTombstones", reflect.TypeOf((*MockDataSource)(nil).ApplyTombstones), ctx, bid, rowsOffset)
 }
 
 // Close mocks base method.
@@ -672,19 +672,19 @@ func (mr *MockDataSourceMockRecorder) GetOrderBy() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetOrderBy", reflect.TypeOf((*MockDataSource)(nil).GetOrderBy))
 }
 
-// GetTombstonesInProgress mocks base method.
-func (m *MockDataSource) GetTombstonesInProgress(ctx context.Context, bid objectio.Blockid) (*nulls.Nulls, error) {
+// GetTombstones mocks base method.
+func (m *MockDataSource) GetTombstones(ctx context.Context, bid objectio.Blockid) (*nulls.Nulls, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetTombstonesInProgress", ctx, bid)
+	ret := m.ctrl.Call(m, "GetTombstones", ctx, bid)
 	ret0, _ := ret[0].(*nulls.Nulls)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// GetTombstonesInProgress indicates an expected call of GetTombstonesInProgress.
-func (mr *MockDataSourceMockRecorder) GetTombstonesInProgress(ctx, bid interface{}) *gomock.Call {
+// GetTombstones indicates an expected call of GetTombstones.
+func (mr *MockDataSourceMockRecorder) GetTombstones(ctx, bid interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTombstonesInProgress", reflect.TypeOf((*MockDataSource)(nil).GetTombstonesInProgress), ctx, bid)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTombstones", reflect.TypeOf((*MockDataSource)(nil).GetTombstones), ctx, bid)
 }
 
 // Next mocks base method.

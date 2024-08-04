@@ -35,7 +35,7 @@ func TestRelationDataV1_MarshalAndUnMarshal(t *testing.T) {
 	metaLoc := objectio.ObjectLocation(delLoc)
 	cts := types.BuildTSForTest(1, 1)
 
-	relData := buildBlockListRelationData()
+	relData := NewEmptyBlockListRelationData()
 	blkNum := 10
 	for i := 0; i < blkNum; i++ {
 		blkID := types.NewBlockidWithObjectID(objID, uint16(blkNum))
@@ -51,7 +51,7 @@ func TestRelationDataV1_MarshalAndUnMarshal(t *testing.T) {
 	}
 
 	buildTombstoner := func() *tombstoneDataWithDeltaLoc {
-		tombstoner := buildTombstoneWithDeltaLoc()
+		tombstoner := NewEmptyTombstoneWithDeltaLoc()
 
 		for i := 0; i < 10; i++ {
 			bid := types.BuildTestBlockid(int64(i), 1)

@@ -560,7 +560,7 @@ func (tbl *txnTable) resetSnapshot() {
 func (tbl *txnTable) CollectTombstones(
 	ctx context.Context, txnOffset int,
 ) (engine.Tombstoner, error) {
-	tombstone := buildTombstoneWithDeltaLoc()
+	tombstone := NewEmptyTombstoneWithDeltaLoc()
 
 	offset := txnOffset
 	if tbl.db.op.IsSnapOp() {
@@ -884,7 +884,7 @@ func (tbl *txnTable) rangesOnePart(
 				meta = objMeta.MustDataMeta()
 			}
 
-			ForeachBlkInObjStatsListInProgress(true, meta, func(blk objectio.BlockInfoInProgress, blkMeta objectio.BlockObject) bool {
+			ForeachBlkInObjStatsList(true, meta, func(blk objectio.BlockInfoInProgress, blkMeta objectio.BlockObject) bool {
 				skipBlk := false
 
 				if auxIdCnt > 0 {
@@ -1738,14 +1738,14 @@ func BuildLocalDataSource(
 		tbl = rel.(*txnTableDelegate).origin
 	}
 
-	return tbl.buildLocalDataSource(ctx, txnOffset, ranges, CheckAll)
+	return tbl.buildLocalDataSource(ctx, txnOffset, ranges, Policy_CheckAll)
 }
 
 func (tbl *txnTable) buildLocalDataSource(
 	ctx context.Context,
 	txnOffset int,
 	relData engine.RelData,
-	policy SkipCheckPolicy,
+	policy TombstoneApplyPolicy,
 ) (source engine.DataSource, err error) {
 
 	switch relData.GetType() {
@@ -1815,7 +1815,7 @@ func (tbl *txnTable) BuildReaders(
 
 	//relData maybe is nil, indicate that only read data from memory.
 	if relData == nil || relData.DataCnt() == 0 {
-		relData = buildBlockListRelationData()
+		relData = NewEmptyBlockListRelationData()
 		relData.AppendBlockInfo(objectio.EmptyBlockInfoInProgress)
 	}
 	blkCnt := relData.DataCnt()
@@ -1835,7 +1835,7 @@ func (tbl *txnTable) BuildReaders(
 		} else {
 			shard = relData.DataSlice(i*divide+mod, (i+1)*divide+mod)
 		}
-		ds, err := tbl.buildLocalDataSource(ctx, txnOffset, shard, CheckAll)
+		ds, err := tbl.buildLocalDataSource(ctx, txnOffset, shard, Policy_CheckAll)
 		if err != nil {
 			return nil, err
 		}
@@ -1965,7 +1965,7 @@ func (tbl *txnTable) PKPersistedBetween(
 				}
 			}
 
-			ForeachBlkInObjStatsListInProgress(false, meta,
+			ForeachBlkInObjStatsList(false, meta,
 				func(blk objectio.BlockInfoInProgress, blkMeta objectio.BlockObject) bool {
 					if !blkMeta.IsEmpty() &&
 						!blkMeta.MustGetColumn(uint16(primaryIdx)).ZoneMap().AnyIn(keys) {
@@ -2123,9 +2123,9 @@ func (tbl *txnTable) transferDeletes(
 ) error {
 	var blks []objectio.BlockInfoInProgress
 	sid := tbl.proc.Load().GetService()
-	relData := buildBlockListRelationData()
+	relData := NewEmptyBlockListRelationData()
 	relData.AppendBlockInfo(objectio.EmptyBlockInfoInProgress)
-	ds, err := tbl.buildLocalDataSource(ctx, 0, relData, SkipCheckPolicy(CheckCommittedS3Only))
+	ds, err := tbl.buildLocalDataSource(ctx, 0, relData, TombstoneApplyPolicy(Policy_CheckCommittedS3Only))
 	if err != nil {
 		return err
 	}

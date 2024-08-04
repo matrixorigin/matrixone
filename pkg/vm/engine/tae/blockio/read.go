@@ -64,8 +64,7 @@ func ReadDataByFilter(
 	defer release()
 
 	sels = searchFunc(bat.Vecs)
-	//sels, err = ds.ApplyTombstones(ctx, info.BlockID, sels)
-	sels, err = ds.ApplyTombstonesInProgress(ctx, info.BlockID, sels)
+	sels, err = ds.ApplyTombstones(ctx, info.BlockID, sels)
 	if err != nil {
 		return
 	}
@@ -107,13 +106,12 @@ func BlockDataReadNoCopy(
 	}()
 
 	// read block data from storage specified by meta location
-	if loaded, rowidPos, deleteMask, release, err = readBlockDataInprogress(
+	if loaded, rowidPos, deleteMask, release, err = readBlockData(
 		ctx, columns, colTypes, info, ts, fs, mp, vp, policy,
 	); err != nil {
 		return nil, nil, nil, err
 	}
-	//tombstones, err := ds.GetTombstones(ctx, info.BlockID)
-	tombstones, err := ds.GetTombstonesInProgress(ctx, info.BlockID)
+	tombstones, err := ds.GetTombstones(ctx, info.BlockID)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -123,7 +121,7 @@ func BlockDataReadNoCopy(
 
 	// build rowid column if needed
 	if rowidPos >= 0 {
-		if loaded.Vecs[rowidPos], err = buildRowidColumnInProgress(
+		if loaded.Vecs[rowidPos], err = buildRowidColumn(
 			info, nil, mp, vp,
 		); err != nil {
 
@@ -276,7 +274,7 @@ func BlockDataReadInner(
 	)
 
 	// read block data from storage specified by meta location
-	if loaded, rowidPos, deleteMask, release, err = readBlockDataInprogress(
+	if loaded, rowidPos, deleteMask, release, err = readBlockData(
 		ctx, columns, colTypes, info, ts, fs, mp, vp, policy,
 	); err != nil {
 		return
@@ -291,7 +289,7 @@ func BlockDataReadInner(
 
 		// build rowid column if needed
 		if rowidPos >= 0 {
-			if loaded.Vecs[rowidPos], err = buildRowidColumnInProgress(
+			if loaded.Vecs[rowidPos], err = buildRowidColumn(
 				info, selectRows, mp, vp,
 			); err != nil {
 				return
@@ -327,8 +325,7 @@ func BlockDataReadInner(
 		return
 	}
 
-	//tombstones, err := ds.GetTombstones(ctx, info.BlockID)
-	tombstones, err := ds.GetTombstonesInProgress(ctx, info.BlockID)
+	tombstones, err := ds.GetTombstones(ctx, info.BlockID)
 	if err != nil {
 		return
 	}
@@ -350,7 +347,7 @@ func BlockDataReadInner(
 
 	// build rowid column if needed
 	if rowidPos >= 0 {
-		if loaded.Vecs[rowidPos], err = buildRowidColumnInProgress(
+		if loaded.Vecs[rowidPos], err = buildRowidColumn(
 			info, nil, mp, vp,
 		); err != nil {
 			return
@@ -413,7 +410,7 @@ func getRowsIdIndex(colIndexes []uint16, colTypes []types.Type) (int, []uint16, 
 	return idx, idxes, typs
 }
 
-func buildRowidColumnInProgress(
+func buildRowidColumn(
 	info *objectio.BlockInfoInProgress,
 	sels []int64,
 	m *mpool.MPool,
@@ -447,7 +444,7 @@ func buildRowidColumnInProgress(
 	return
 }
 
-func readBlockDataInprogress(
+func readBlockData(
 	ctx context.Context,
 	colIndexes []uint16,
 	colTypes []types.Type,
@@ -603,6 +600,7 @@ func EvalDeleteRowsByTimestampForDeletesPersistedByCN(
 // columns  Which columns should be taken for columns
 // service  fileservice
 // infos [s3object name][block]
+// FIXME: using objectio.BlockInfoSlice
 func BlockPrefetch(
 	sid string,
 	idxes []uint16,

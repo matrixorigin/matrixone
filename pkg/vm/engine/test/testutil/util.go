@@ -185,7 +185,7 @@ func NewDefaultTableReader(
 	snapshotTS timestamp.Timestamp,
 	e *disttae.Engine,
 	txnOffset int,
-) (*disttae.SingleReaderInProgress, error) {
+) (engine.Reader, error) {
 
 	tblDef := PlanTableDefBySchema(schema, rel.GetTableID(ctx), databaseName)
 
@@ -194,7 +194,7 @@ func NewDefaultTableReader(
 		return nil, err
 	}
 
-	r := disttae.NewReader(
+	return disttae.NewReader(
 		ctx,
 		testutil2.NewProcessWithMPool("", mp),
 		e,
@@ -202,9 +202,7 @@ func NewDefaultTableReader(
 		snapshotTS,
 		expr,
 		source,
-	)
-
-	return &disttae.SingleReaderInProgress{R: r}, nil
+	), nil
 }
 
 type EnginePack struct {

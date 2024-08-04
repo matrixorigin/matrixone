@@ -37,7 +37,7 @@ type MemPKFilter struct {
 	SpecFactory func(f *MemPKFilter) logtailreplay.PrimaryKeyMatchSpec
 }
 
-func newMemPKFilterInProgress(
+func newMemPKFilter(
 	tableDef *plan.TableDef,
 	ts timestamp.Timestamp,
 	packerPool *fileservice.Pool[*types.Packer],
@@ -213,7 +213,7 @@ func newMemPKFilterInProgress(
 		return
 	}
 
-	filter.tryConstructPrimaryKeyIndexIterInProgress(ts)
+	filter.tryConstructPrimaryKeyIndexIter(ts)
 	return
 }
 
@@ -237,7 +237,7 @@ func (f *MemPKFilter) SetFullData(op int, isVec bool, val ...[]byte) {
 	f.isValid = true
 }
 
-func (f *MemPKFilter) tryConstructPrimaryKeyIndexIterInProgress(ts timestamp.Timestamp) {
+func (f *MemPKFilter) tryConstructPrimaryKeyIndexIter(ts timestamp.Timestamp) {
 	if !f.isValid {
 		return
 	}

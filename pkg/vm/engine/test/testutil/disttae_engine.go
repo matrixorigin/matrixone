@@ -63,8 +63,13 @@ type TestDisttaeEngine struct {
 	timestampWaiter client.TimestampWaiter
 }
 
-func NewTestDisttaeEngine(ctx context.Context, mp *mpool.MPool,
-	fs fileservice.FileService, rpcAgent *MockRPCAgent, storage *TestTxnStorage) (*TestDisttaeEngine, error) {
+func NewTestDisttaeEngine(
+	ctx context.Context,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+	rpcAgent *MockRPCAgent,
+	storage *TestTxnStorage,
+) (*TestDisttaeEngine, error) {
 	de := new(TestDisttaeEngine)
 	de.logtailReceiver = make(chan morpc.Message)
 	de.broken = make(chan struct{})
@@ -134,8 +139,11 @@ func NewTestDisttaeEngine(ctx context.Context, mp *mpool.MPool,
 	return de, err
 }
 
-func (de *TestDisttaeEngine) NewTxnOperator(ctx context.Context,
-	commitTS timestamp.Timestamp, opts ...client.TxnOption) (client.TxnOperator, error) {
+func (de *TestDisttaeEngine) NewTxnOperator(
+	ctx context.Context,
+	commitTS timestamp.Timestamp,
+	opts ...client.TxnOption,
+) (client.TxnOperator, error) {
 	op, err := de.txnClient.New(ctx, commitTS, opts...)
 	if err != nil {
 		return nil, err
@@ -198,8 +206,11 @@ func (de *TestDisttaeEngine) analyzeDataObjects(state *logtailreplay.PartitionSt
 	return
 }
 
-func (de *TestDisttaeEngine) analyzeInmemRows(state *logtailreplay.PartitionState,
-	stats *PartitionStateStats, ts types.TS) (err error) {
+func (de *TestDisttaeEngine) analyzeInmemRows(
+	state *logtailreplay.PartitionState,
+	stats *PartitionStateStats,
+	ts types.TS,
+) (err error) {
 
 	distinct := make(map[objectio.Blockid]struct{})
 	iter := state.NewRowsIter(ts, nil, false)
@@ -224,8 +235,11 @@ func (de *TestDisttaeEngine) analyzeInmemRows(state *logtailreplay.PartitionStat
 	return
 }
 
-func (de *TestDisttaeEngine) analyzeCheckpoint(state *logtailreplay.PartitionState,
-	stats *PartitionStateStats, ts types.TS) (err error) {
+func (de *TestDisttaeEngine) analyzeCheckpoint(
+	state *logtailreplay.PartitionState,
+	stats *PartitionStateStats,
+	ts types.TS,
+) (err error) {
 
 	ckps := state.Checkpoints()
 	for x := range ckps {
@@ -240,15 +254,18 @@ func (de *TestDisttaeEngine) analyzeCheckpoint(state *logtailreplay.PartitionSta
 	return
 }
 
-func (de *TestDisttaeEngine) analyzeTombstone(state *logtailreplay.PartitionState,
-	stats *PartitionStateStats, ts types.TS) (outErr error) {
+func (de *TestDisttaeEngine) analyzeTombstone(
+	state *logtailreplay.PartitionState,
+	stats *PartitionStateStats,
+	ts types.TS,
+) (outErr error) {
 
 	iter, err := state.NewObjectsIter(ts, true)
 	if err != nil {
 		return nil
 	}
 	for iter.Next() {
-		disttae.ForeachBlkInObjStatsListInProgress(false, nil, func(blk objectio.BlockInfoInProgress, blkMeta objectio.BlockObject) bool {
+		disttae.ForeachBlkInObjStatsList(false, nil, func(blk objectio.BlockInfoInProgress, blkMeta objectio.BlockObject) bool {
 			loc, _, ok := state.GetBockDeltaLoc(blk.BlockID)
 			if ok {
 				bat, _, release, err := blockio.ReadBlockDelete(context.Background(), loc[:], de.Engine.FS())
@@ -279,7 +296,9 @@ func (de *TestDisttaeEngine) analyzeTombstone(state *logtailreplay.PartitionStat
 	return
 }
 
-func (de *TestDisttaeEngine) SubscribeTable(ctx context.Context, dbID, tbID uint64, setSubscribed bool) (err error) {
+func (de *TestDisttaeEngine) SubscribeTable(
+	ctx context.Context, dbID, tbID uint64, setSubscribed bool,
+) (err error) {
 	ticker := time.NewTicker(time.Second)
 	timeout := 5
 
@@ -306,7 +325,9 @@ func (de *TestDisttaeEngine) SubscribeTable(ctx context.Context, dbID, tbID uint
 	return
 }
 
-func (de *TestDisttaeEngine) GetPartitionStateStats(ctx context.Context, databaseId, tableId uint64) (
+func (de *TestDisttaeEngine) GetPartitionStateStats(
+	ctx context.Context, databaseId, tableId uint64,
+) (
 	stats PartitionStateStats, err error) {
 
 	if err = de.waitLogtail(ctx); err != nil {
@@ -358,8 +379,15 @@ func (de *TestDisttaeEngine) Close(ctx context.Context) {
 	de.wg.Wait()
 }
 
-func (de *TestDisttaeEngine) GetTable(ctx context.Context, databaseName, tableName string) (
-	database engine.Database, relation engine.Relation, txn client.TxnOperator, err error) {
+func (de *TestDisttaeEngine) GetTable(
+	ctx context.Context,
+	databaseName, tableName string,
+) (
+	database engine.Database,
+	relation engine.Relation,
+	txn client.TxnOperator,
+	err error,
+) {
 
 	if txn, err = de.NewTxnOperator(ctx, de.Now()); err != nil {
 		return nil, nil, nil, err
@@ -377,9 +405,14 @@ func (de *TestDisttaeEngine) GetTable(ctx context.Context, databaseName, tableNa
 }
 
 func (de *TestDisttaeEngine) CreateDatabaseAndTable(
-	ctx context.Context, databaseName,
-	tableName string, schema *catalog2.Schema) (
-	database engine.Database, table engine.Relation, err error) {
+	ctx context.Context,
+	databaseName, tableName string,
+	schema *catalog2.Schema,
+) (
+	database engine.Database,
+	table engine.Relation,
+	err error,
+) {
 
 	var txn client.TxnOperator
 

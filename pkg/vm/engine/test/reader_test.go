@@ -129,7 +129,7 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 
 	resultHit := 0
 	for idx := 0; idx < blockCnt; idx++ {
-		ret, err := reader.R.Read(ctx, []string{schema.ColDefs[primaryKeyIdx].Name}, expr[0], mp, nil)
+		ret, err := reader.Read(ctx, []string{schema.ColDefs[primaryKeyIdx].Name}, expr[0], mp, nil)
 		require.NoError(t, err)
 
 		if ret != nil {
@@ -226,7 +226,7 @@ func TestReaderCanReadUncommittedInMemInsertAndDeletes(t *testing.T) {
 		disttaeEngine.Engine, 1)
 	require.NoError(t, err)
 
-	ret, err := reader.R.Read(ctx, []string{schema.ColDefs[primaryKeyIdx].Name}, expr[0], mp, nil)
+	ret, err := reader.Read(ctx, []string{schema.ColDefs[primaryKeyIdx].Name}, expr[0], mp, nil)
 	require.NoError(t, err)
 
 	require.Equal(t, 1, int(ret.RowCount()))
@@ -320,7 +320,7 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 			disttaeEngine.Engine, 0)
 		require.NoError(t, err)
 
-		ret, err := reader.R.Read(ctx, []string{schema.ColDefs[primaryKeyIdx].Name}, nil, mp, nil)
+		ret, err := reader.Read(ctx, []string{schema.ColDefs[primaryKeyIdx].Name}, nil, mp, nil)
 		require.NoError(t, err)
 
 		require.Equal(t, 2, ret.RowCount())
