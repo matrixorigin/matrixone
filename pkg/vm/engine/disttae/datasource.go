@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"math"
 	"slices"
 	"sort"
 
@@ -419,15 +418,6 @@ func (ls *LocalDataSource) sortBlockList() {
 	}
 }
 
-func (ls *LocalDataSource) deleteFirstNBlocks(n int) {
-	ls.rangesCursor += n
-	//ls.rangeSlice = ls.rangeSlice.Slice(n, ls.rangeSlice.Len())
-	//ls.ranges = ls.ranges[n:]
-	//if len(ls.OrderBy) > 0 {
-	//	ls.blockZMS = ls.blockZMS[n:]
-	//}
-}
-
 func (ls *LocalDataSource) Close() {
 	if ls.pStateRows.insIter != nil {
 		ls.pStateRows.insIter.Close()
@@ -538,12 +528,6 @@ func (ls *LocalDataSource) iterateInMemData(
 
 	return nil
 }
-
-const (
-	batRowsAllDeleted  = DELETE
-	batRowsAllRetained = INSERT
-	batRowsHaveDeletes = math.MaxInt32
-)
 
 func checkWorkspaceEntryType(tbl *txnTable, entry Entry, isInsert bool) bool {
 	if entry.DatabaseId() != tbl.db.databaseId || entry.TableId() != tbl.tableId {
