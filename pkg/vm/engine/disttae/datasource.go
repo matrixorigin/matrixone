@@ -54,6 +54,10 @@ const (
 	Policy_CheckCommittedS3Only = Policy_SkipUncommitedInMemory | Policy_SkipCommittedInMemory | Policy_SkipUncommitedS3
 )
 
+const (
+	batchPrefetchSize = 1000
+)
+
 func NewRemoteDataSource(
 	ctx context.Context,
 	proc *process.Process,
@@ -124,19 +128,22 @@ type RemoteDataSource struct {
 	fs fileservice.FileService
 	ts types.TS
 
-	cursor int
-	data   engine.RelData
+	batchPrefetchCursor int
+	cursor              int
+	data                engine.RelData
 }
 
 func (rs *RemoteDataSource) Next(
 	_ context.Context,
 	_ []string,
 	_ []types.Type,
-	_ []uint16,
+	seqNums []uint16,
 	_ any,
 	_ *mpool.MPool,
 	_ engine.VectorPool,
 	_ *batch.Batch) (*objectio.BlockInfo, engine.DataState, error) {
+
+	rs.batchPrefetch(seqNums)
 
 	if rs.cursor >= rs.data.DataCnt() {
 		return nil, engine.End, nil
@@ -144,6 +151,37 @@ func (rs *RemoteDataSource) Next(
 	rs.cursor++
 	cur := rs.data.GetBlockInfo(rs.cursor - 1)
 	return &cur, engine.Persisted, nil
+}
+
+func (rs *RemoteDataSource) batchPrefetch(seqNums []uint16) {
+	if rs.batchPrefetchCursor >= rs.data.DataCnt() ||
+		rs.cursor < rs.batchPrefetchCursor {
+		return
+	}
+
+	bathSize := min(batchPrefetchSize, rs.data.DataCnt()-rs.cursor)
+
+	begin := rs.batchPrefetchCursor
+	end := begin + bathSize
+
+	bids := make([]objectio.Blockid, end-begin)
+	blks := make([]*objectio.BlockInfo, end-begin)
+	for idx := begin; idx < end; idx++ {
+		blk := rs.data.GetBlockInfo(idx)
+		blks[idx-begin] = &blk
+		bids[idx-begin] = blk.BlockID
+	}
+
+	// prefetch blk data
+	err := blockio.BlockPrefetch(
+		rs.proc.GetService(), seqNums, rs.fs, blks, true)
+	if err != nil {
+		logutil.Errorf("pefetch block data: %s", err.Error())
+	}
+
+	rs.data.GetTombstones().PrefetchTombstones(rs.proc.GetService(), rs.fs, bids)
+
+	rs.batchPrefetchCursor = end
 }
 
 func (rs *RemoteDataSource) Close() {
@@ -1077,7 +1115,7 @@ func (ls *LocalDataSource) batchPrefetch(seqNums []uint16) {
 		return
 	}
 
-	batchSize := min(1000, ls.rangeSlice.Len()-ls.rangesCursor)
+	batchSize := min(batchPrefetchSize, ls.rangeSlice.Len()-ls.rangesCursor)
 
 	begin := ls.rangesCursor
 	end := ls.rangesCursor + batchSize
