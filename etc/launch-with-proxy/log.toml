@@ -26,4 +26,4 @@ name = "ETL"
 backend = "DISK-ETL"
 
 [observability]
-statusPort = 7001
+status-port = 7001

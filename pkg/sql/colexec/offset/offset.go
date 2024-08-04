@@ -59,7 +59,11 @@ func (offset *Offset) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	result, err := offset.GetChildren(0).Call(proc)
+	anal := proc.GetAnalyze(offset.GetIdx(), offset.GetParallelIdx(), offset.GetParallelMajor())
+	anal.Start()
+	defer anal.Stop()
+
+	result, err := vm.ChildrenCall(offset.GetChildren(0), proc, anal)
 	if err != nil {
 		return result, err
 	}
@@ -67,9 +71,6 @@ func (offset *Offset) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, nil
 	}
 	bat := result.Batch
-	anal := proc.GetAnalyze(offset.GetIdx(), offset.GetParallelIdx(), offset.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
 	anal.Input(bat, offset.GetIsFirst())
 
 	if offset.ctr.seen > offset.ctr.offset {
