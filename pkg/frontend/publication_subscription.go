@@ -320,19 +320,19 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 		return moerr.NewInternalError(ctx, "only admin can alter publication")
 	}
 
-	accIdInfoMap, accNameInfoMap, err := getAccounts(ctx, bh)
-	if err != nil {
-		return
-	}
-	// delete current tenant
-	delete(accIdInfoMap, int32(tenantInfo.TenantID))
-
 	if err = bh.Exec(ctx, "begin;"); err != nil {
 		return err
 	}
 	defer func() {
 		err = finishTxn(ctx, bh, err)
 	}()
+
+	accIdInfoMap, accNameInfoMap, err := getAccounts(ctx, bh)
+	if err != nil {
+		return
+	}
+	// delete current tenant
+	delete(accIdInfoMap, int32(tenantInfo.TenantID))
 
 	pubName := string(ap.Name)
 	pub, err := getPubInfo(ctx, bh, pubName)
@@ -1151,7 +1151,7 @@ func genPubTablesStr(ctx context.Context, bh BackgroundExec, dbName string, tabl
 	for _, tableName := range table {
 		tblName := string(tableName.ObjectName)
 		if !tablesInDb[tblName] {
-			err = moerr.NewInternalError(ctx, "table '%s' not exists", tableName)
+			err = moerr.NewInternalError(ctx, "table '%s' not exists", tblName)
 			return
 		}
 		tablesNames = append(tablesNames, tblName)
