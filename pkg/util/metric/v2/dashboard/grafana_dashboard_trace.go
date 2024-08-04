@@ -48,12 +48,12 @@ func (c *DashboardCreator) initTraceMoLoggerExportDataRow() dashboard.Option {
 	// export data bytes
 	panels := c.getMultiHistogram(
 		[]string{
-			c.getMetricWithFilter(`mo_trace_mologger_export_data_bytes_bucket`, `type="sql"`),
 			c.getMetricWithFilter(`mo_trace_mologger_export_data_bytes_bucket`, `type="csv"`),
+			c.getMetricWithFilter(`mo_trace_mologger_export_data_bytes_bucket`, `type="sql"`),
 		},
 		[]string{
-			"sql",
 			"csv",
+			"sql",
 		},
 		[]float64{0.50, 0.99},
 		[]float32{3, 3},
