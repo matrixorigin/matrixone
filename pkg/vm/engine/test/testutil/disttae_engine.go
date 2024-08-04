@@ -265,7 +265,7 @@ func (de *TestDisttaeEngine) analyzeTombstone(
 		return nil
 	}
 	for iter.Next() {
-		disttae.ForeachBlkInObjStatsList(false, nil, func(blk objectio.BlockInfoInProgress, blkMeta objectio.BlockObject) bool {
+		disttae.ForeachBlkInObjStatsList(false, nil, func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
 			loc, _, ok := state.GetBockDeltaLoc(blk.BlockID)
 			if ok {
 				bat, _, release, err := blockio.ReadBlockDelete(context.Background(), loc[:], de.Engine.FS())

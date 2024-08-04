@@ -176,7 +176,7 @@ func (d *DeltaLocDataSource) Next(
 	_ any,
 	_ *mpool.MPool,
 	_ engine.VectorPool,
-	_ *batch.Batch) (*objectio.BlockInfoInProgress, engine.DataState, error) {
+	_ *batch.Batch) (*objectio.BlockInfo, engine.DataState, error) {
 	return nil, engine.Persisted, nil
 }
 
@@ -461,7 +461,7 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, sid string, fs fileserv
 			name := object.stats.ObjectName()
 			for i := uint32(0); i < object.stats.BlkCnt(); i++ {
 				loc := objectio.BuildLocation(name, location.Extent(), 0, uint16(i))
-				blk := objectio.BlockInfoInProgress{
+				blk := objectio.BlockInfo{
 					BlockID: *objectio.BuildObjectBlockid(name, uint16(i)),
 					MetaLoc: objectio.ObjectLocation(loc),
 				}

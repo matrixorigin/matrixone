@@ -39,7 +39,7 @@ func TestRelationDataV1_MarshalAndUnMarshal(t *testing.T) {
 	blkNum := 10
 	for i := 0; i < blkNum; i++ {
 		blkID := types.NewBlockidWithObjectID(objID, uint16(blkNum))
-		blkInfo := objectio.BlockInfoInProgress{
+		blkInfo := objectio.BlockInfo{
 			BlockID:      *blkID,
 			EntryState:   true,
 			Sorted:       false,

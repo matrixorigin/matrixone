@@ -86,7 +86,7 @@ func newCNMergeTask(
 	targetObjSize uint32,
 ) (*cnMergeTask, error) {
 	relData := NewEmptyBlockListRelationData()
-	relData.AppendBlockInfo(objectio.EmptyBlockInfoInProgress)
+	relData.AppendBlockInfo(objectio.EmptyBlockInfo)
 	source, err := tbl.buildLocalDataSource(ctx, 0, relData, Policy_CheckAll)
 	if err != nil {
 		return nil, err
@@ -257,7 +257,7 @@ func (t *cnMergeTask) PrepareNewWriter() *blockio.BlockWriter {
 }
 
 // readblock reads block data. there is no rowid column, no ablk
-func (t *cnMergeTask) readblock(ctx context.Context, info *objectio.BlockInfoInProgress) (bat *batch.Batch, dels *nulls.Nulls, release func(), err error) {
+func (t *cnMergeTask) readblock(ctx context.Context, info *objectio.BlockInfo) (bat *batch.Batch, dels *nulls.Nulls, release func(), err error) {
 	// read data
 	bat, dels, release, err = blockio.BlockDataReadNoCopy(
 		ctx, "", info, t.ds, t.colseqnums, t.coltypes,

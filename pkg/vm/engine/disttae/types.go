@@ -296,7 +296,7 @@ type Pos struct {
 	tbName    string
 	dbName    string
 	offset    int64
-	blkInfo   objectio.BlockInfoInProgress
+	blkInfo   objectio.BlockInfo
 }
 
 // FIXME: The map inside this one will be accessed concurrently, using
@@ -838,7 +838,7 @@ type withFilterMixin struct {
 
 // FIXME: no pointer here
 type blockSortHelper struct {
-	blk *objectio.BlockInfoInProgress
+	blk *objectio.BlockInfo
 	zm  index.ZM
 }
 

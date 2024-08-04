@@ -37,10 +37,10 @@ import (
 
 func TestBlockMetaMarshal(t *testing.T) {
 	location := []byte("test")
-	var info objectio.BlockInfoInProgress
+	var info objectio.BlockInfo
 	info.SetMetaLocation(location)
-	data := objectio.EncodeBlockInfoInProgress(info)
-	info2 := objectio.DecodeBlockInfoInProgress(data)
+	data := objectio.EncodeBlockInfo(info)
+	info2 := objectio.DecodeBlockInfo(data)
 	require.Equal(t, info, *info2)
 }
 
@@ -321,7 +321,7 @@ func TestForeachBlkInObjStatsList(t *testing.T) {
 	statsList := mockStatsList(t, 100)
 
 	count := 0
-	ForeachBlkInObjStatsList(false, nil, func(blk objectio.BlockInfoInProgress, _ objectio.BlockObject) bool {
+	ForeachBlkInObjStatsList(false, nil, func(blk objectio.BlockInfo, _ objectio.BlockObject) bool {
 		count++
 		return false
 	}, statsList...)
@@ -329,7 +329,7 @@ func TestForeachBlkInObjStatsList(t *testing.T) {
 	require.Equal(t, count, 1)
 
 	count = 0
-	ForeachBlkInObjStatsList(true, nil, func(blk objectio.BlockInfoInProgress, _ objectio.BlockObject) bool {
+	ForeachBlkInObjStatsList(true, nil, func(blk objectio.BlockInfo, _ objectio.BlockObject) bool {
 		count++
 		return false
 	}, statsList...)
@@ -337,7 +337,7 @@ func TestForeachBlkInObjStatsList(t *testing.T) {
 	require.Equal(t, count, len(statsList))
 
 	count = 0
-	ForeachBlkInObjStatsList(true, nil, func(blk objectio.BlockInfoInProgress, _ objectio.BlockObject) bool {
+	ForeachBlkInObjStatsList(true, nil, func(blk objectio.BlockInfo, _ objectio.BlockObject) bool {
 		count++
 		return true
 	}, statsList...)
@@ -350,7 +350,7 @@ func TestForeachBlkInObjStatsList(t *testing.T) {
 	require.Equal(t, count, 0)
 
 	count = 0
-	ForeachBlkInObjStatsList(false, nil, func(blk objectio.BlockInfoInProgress, _ objectio.BlockObject) bool {
+	ForeachBlkInObjStatsList(false, nil, func(blk objectio.BlockInfo, _ objectio.BlockObject) bool {
 		count++
 		return true
 	}, statsList...)

@@ -42,13 +42,13 @@ func UnmarshalRelationData(data []byte) (engine.RelData, error) {
 
 func NewEmptyBlockListRelationData() *blockListRelData {
 	return &blockListRelData{
-		blklist: objectio.BlockInfoSliceInProgress{},
+		blklist: objectio.BlockInfoSlice{},
 	}
 }
 
 type blockListRelData struct {
 	// blkList[0] is a empty block info
-	blklist objectio.BlockInfoSliceInProgress
+	blklist objectio.BlockInfoSlice
 
 	// tombstones
 	tombstones engine.Tombstoner
@@ -83,19 +83,19 @@ func (relData *blockListRelData) AppendShardID(id uint64) {
 	panic("not supported")
 }
 
-func (relData *blockListRelData) GetBlockInfoSlice() objectio.BlockInfoSliceInProgress {
+func (relData *blockListRelData) GetBlockInfoSlice() objectio.BlockInfoSlice {
 	return relData.blklist.GetAllBytes()
 }
 
-func (relData *blockListRelData) GetBlockInfo(i int) objectio.BlockInfoInProgress {
+func (relData *blockListRelData) GetBlockInfo(i int) objectio.BlockInfo {
 	return *relData.blklist.Get(i)
 }
 
-func (relData *blockListRelData) SetBlockInfo(i int, blk objectio.BlockInfoInProgress) {
+func (relData *blockListRelData) SetBlockInfo(i int, blk objectio.BlockInfo) {
 	relData.blklist.Set(i, &blk)
 }
 
-func (relData *blockListRelData) AppendBlockInfo(blk objectio.BlockInfoInProgress) {
+func (relData *blockListRelData) AppendBlockInfo(blk objectio.BlockInfo) {
 	relData.blklist.AppendBlockInfo(blk)
 }
 
@@ -179,7 +179,7 @@ func (relData *blockListRelData) GetTombstones() engine.Tombstoner {
 }
 
 func (relData *blockListRelData) DataSlice(i, j int) engine.RelData {
-	blist := objectio.BlockInfoSliceInProgress(relData.blklist.Slice(i, j))
+	blist := objectio.BlockInfoSlice(relData.blklist.Slice(i, j))
 	return &blockListRelData{
 		blklist:    blist,
 		tombstones: relData.tombstones,
@@ -201,7 +201,7 @@ func (relData *blockListRelData) GroupByPartitionNum() map[int16]engine.RelData 
 			ret[partitionNum] = &blockListRelData{
 				tombstones: relData.tombstones,
 			}
-			ret[partitionNum].AppendBlockInfo(objectio.EmptyBlockInfoInProgress)
+			ret[partitionNum].AppendBlockInfo(objectio.EmptyBlockInfo)
 		}
 		ret[partitionNum].AppendBlockInfo(*blkInfo)
 	}
@@ -211,7 +211,7 @@ func (relData *blockListRelData) GroupByPartitionNum() map[int16]engine.RelData 
 
 func (relData *blockListRelData) BuildEmptyRelData() engine.RelData {
 	return &blockListRelData{
-		blklist: objectio.BlockInfoSliceInProgress{},
+		blklist: objectio.BlockInfoSlice{},
 	}
 }
 

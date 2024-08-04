@@ -990,7 +990,7 @@ func TryFastFilterBlocks(
 	snapshot *logtailreplay.PartitionState,
 	uncommittedObjects []objectio.ObjectStats,
 	//dirtyBlocks *map[types.Blockid]struct{},
-	outBlocks *objectio.BlockInfoSliceInProgress,
+	outBlocks *objectio.BlockInfoSlice,
 	fs fileservice.FileService,
 	proc *process.Process,
 ) (ok bool, err error) {
@@ -1033,7 +1033,7 @@ func ExecuteBlockFilter(
 	snapshot *logtailreplay.PartitionState,
 	uncommittedObjects []objectio.ObjectStats,
 	//dirtyBlocks *map[types.Blockid]struct{},
-	outBlocks *objectio.BlockInfoSliceInProgress,
+	outBlocks *objectio.BlockInfoSlice,
 	fs fileservice.FileService,
 	proc *process.Process,
 	highSelectivityHint bool,
@@ -1158,7 +1158,7 @@ func ExecuteBlockFilter(
 					rows = blkMeta.GetRows()
 				}
 				loc := objectio.BuildLocation(name, extent, rows, uint16(pos))
-				blk := objectio.BlockInfoInProgress{
+				blk := objectio.BlockInfo{
 					BlockID: *objectio.BuildObjectBlockid(name, uint16(pos)),
 					MetaLoc: objectio.ObjectLocation(loc),
 				}

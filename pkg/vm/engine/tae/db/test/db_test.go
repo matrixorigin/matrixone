@@ -4177,7 +4177,7 @@ func TestBlockRead(t *testing.T) {
 			ds := logtail.NewDeltaLocDataSource(ctx, tae.DB.Runtime.Fs.Service, beforeDel, testDS)
 			bid, _ := blkEntry.ID(), blkEntry.ID()
 
-			info := &objectio.BlockInfoInProgress{
+			info := &objectio.BlockInfo{
 				BlockID:    *objectio.NewBlockidWithObjectID(bid, 0),
 				EntryState: true,
 			}
@@ -4199,7 +4199,7 @@ func TestBlockRead(t *testing.T) {
 			fs := tae.DB.Runtime.Fs.Service
 			pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 			assert.NoError(t, err)
-			infos := make([]*objectio.BlockInfoInProgress, 0)
+			infos := make([]*objectio.BlockInfo, 0)
 			infos = append(infos, info)
 			err = blockio.BlockPrefetch("", colIdxs, fs, infos, false)
 			assert.NoError(t, err)

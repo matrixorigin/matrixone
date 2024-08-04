@@ -364,7 +364,7 @@ func (m *MockRelData) EXPECT() *MockRelDataMockRecorder {
 }
 
 // AppendBlockInfo mocks base method.
-func (m *MockRelData) AppendBlockInfo(blk objectio.BlockInfoInProgress) {
+func (m *MockRelData) AppendBlockInfo(blk objectio.BlockInfo) {
 	m.ctrl.T.Helper()
 	m.ctrl.Call(m, "AppendBlockInfo", blk)
 }
@@ -444,10 +444,10 @@ func (mr *MockRelDataMockRecorder) DataSlice(begin, end interface{}) *gomock.Cal
 }
 
 // GetBlockInfo mocks base method.
-func (m *MockRelData) GetBlockInfo(i int) objectio.BlockInfoInProgress {
+func (m *MockRelData) GetBlockInfo(i int) objectio.BlockInfo {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetBlockInfo", i)
-	ret0, _ := ret[0].(objectio.BlockInfoInProgress)
+	ret0, _ := ret[0].(objectio.BlockInfo)
 	return ret0
 }
 
@@ -458,10 +458,10 @@ func (mr *MockRelDataMockRecorder) GetBlockInfo(i interface{}) *gomock.Call {
 }
 
 // GetBlockInfoSlice mocks base method.
-func (m *MockRelData) GetBlockInfoSlice() objectio.BlockInfoSliceInProgress {
+func (m *MockRelData) GetBlockInfoSlice() objectio.BlockInfoSlice {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetBlockInfoSlice")
-	ret0, _ := ret[0].(objectio.BlockInfoSliceInProgress)
+	ret0, _ := ret[0].(objectio.BlockInfoSlice)
 	return ret0
 }
 
@@ -557,7 +557,7 @@ func (mr *MockRelDataMockRecorder) MarshalBinary() *gomock.Call {
 }
 
 // SetBlockInfo mocks base method.
-func (m *MockRelData) SetBlockInfo(i int, blk objectio.BlockInfoInProgress) {
+func (m *MockRelData) SetBlockInfo(i int, blk objectio.BlockInfo) {
 	m.ctrl.T.Helper()
 	m.ctrl.Call(m, "SetBlockInfo", i, blk)
 }
@@ -688,10 +688,10 @@ func (mr *MockDataSourceMockRecorder) GetTombstones(ctx, bid interface{}) *gomoc
 }
 
 // Next mocks base method.
-func (m *MockDataSource) Next(ctx context.Context, cols []string, types []types.Type, seqNums []uint16, memFilter any, mp *mpool.MPool, vp engine.VectorPool, bat *batch.Batch) (*objectio.BlockInfoInProgress, engine.DataState, error) {
+func (m *MockDataSource) Next(ctx context.Context, cols []string, types []types.Type, seqNums []uint16, memFilter any, mp *mpool.MPool, vp engine.VectorPool, bat *batch.Batch) (*objectio.BlockInfo, engine.DataState, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Next", ctx, cols, types, seqNums, memFilter, mp, vp, bat)
-	ret0, _ := ret[0].(*objectio.BlockInfoInProgress)
+	ret0, _ := ret[0].(*objectio.BlockInfo)
 	ret1, _ := ret[1].(engine.DataState)
 	ret2, _ := ret[2].(error)
 	return ret0, ret1, ret2

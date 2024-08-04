@@ -4083,7 +4083,7 @@ func (c *Compile) expandRanges(
 				}
 
 				engine.ForRangeBlockInfo(1, subRelData.DataCnt(), subRelData,
-					func(blk objectio.BlockInfoInProgress) (bool, error) {
+					func(blk objectio.BlockInfo) (bool, error) {
 						blk.PartitionNum = int16(i)
 						relData.AppendBlockInfo(blk)
 						return true, nil
@@ -4105,7 +4105,7 @@ func (c *Compile) expandRanges(
 				}
 
 				engine.ForRangeBlockInfo(1, subRelData.DataCnt(), subRelData,
-					func(blk objectio.BlockInfoInProgress) (bool, error) {
+					func(blk objectio.BlockInfo) (bool, error) {
 						blk.PartitionNum = int16(i)
 						relData.AppendBlockInfo(blk)
 						return true, nil
@@ -4322,10 +4322,10 @@ func removeEmtpyNodes(
 	var newNodes engine.Nodes
 	for i := range nodes {
 		if nodes[i].Data.DataCnt() > maxWorkLoad {
-			maxWorkLoad = nodes[i].Data.DataCnt() / objectio.BlockInfoSizeInProgress
+			maxWorkLoad = nodes[i].Data.DataCnt() / objectio.BlockInfoSize
 		}
 		if nodes[i].Data.DataCnt() < minWorkLoad {
-			minWorkLoad = nodes[i].Data.DataCnt() / objectio.BlockInfoSizeInProgress
+			minWorkLoad = nodes[i].Data.DataCnt() / objectio.BlockInfoSize
 		}
 		if nodes[i].Data.DataCnt() > 0 {
 			if nodes[i].Addr != c.addr {
@@ -4363,7 +4363,7 @@ func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelD
 	})
 	// add memory table block
 	nodes[0].Data = relData.BuildEmptyRelData()
-	nodes[0].Data.AppendBlockInfo(objectio.EmptyBlockInfoInProgress)
+	nodes[0].Data.AppendBlockInfo(objectio.EmptyBlockInfo)
 	// only memory table block
 	if relData.DataCnt() == 1 {
 		return nodes, nil
@@ -4371,7 +4371,7 @@ func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelD
 	// only one cn
 	if len(c.cnList) == 1 {
 		engine.ForRangeBlockInfo(1, relData.DataCnt(), relData,
-			func(blk objectio.BlockInfoInProgress) (bool, error) {
+			func(blk objectio.BlockInfo) (bool, error) {
 				nodes[0].Data.AppendBlockInfo(blk)
 				return true, nil
 			})
@@ -4419,10 +4419,10 @@ func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelD
 	//var newNodes engine.Nodes
 	//for i := range nodes {
 	//	if nodes[i].Data.DataCnt() > maxWorkLoad {
-	//		maxWorkLoad = nodes[i].Data.DataCnt() / objectio.BlockInfoSizeInProgress
+	//		maxWorkLoad = nodes[i].Data.DataCnt() / objectio.BlockInfoSize
 	//	}
 	//	if nodes[i].Data.DataCnt() < minWorkLoad {
-	//		minWorkLoad = nodes[i].Data.DataCnt() / objectio.BlockInfoSizeInProgress
+	//		minWorkLoad = nodes[i].Data.DataCnt() / objectio.BlockInfoSize
 	//	}
 	//	if nodes[i].Data.DataCnt() > 0 {
 	//		if nodes[i].Addr != c.addr {
@@ -4453,7 +4453,7 @@ func shuffleBlocksToMultiCN(c *Compile, rel engine.Relation, relData engine.RelD
 
 func shuffleBlocksByHash(c *Compile, relData engine.RelData, nodes engine.Nodes) {
 	engine.ForRangeBlockInfo(1, relData.DataCnt(), relData,
-		func(blk objectio.BlockInfoInProgress) (bool, error) {
+		func(blk objectio.BlockInfo) (bool, error) {
 			location := blk.MetaLocation()
 			objTimeStamp := location.Name()[:7]
 			index := plan2.SimpleCharHashToRange(objTimeStamp, uint64(len(c.cnList)))
@@ -4479,7 +4479,7 @@ func shuffleBlocksByMoCtl(relData engine.RelData, cnt int, nodes engine.Nodes) e
 		1,
 		cnt,
 		relData,
-		func(blk objectio.BlockInfoInProgress) (bool, error) {
+		func(blk objectio.BlockInfo) (bool, error) {
 			nodes[1].Data.AppendBlockInfo(blk)
 			return true, nil
 		})
@@ -4497,7 +4497,7 @@ func shuffleBlocksByRange(c *Compile, relData engine.RelData, n *plan.Node, node
 	var index uint64
 
 	engine.ForRangeBlockInfo(1, relData.DataCnt(), relData,
-		func(blk objectio.BlockInfoInProgress) (bool, error) {
+		func(blk objectio.BlockInfo) (bool, error) {
 			location := blk.MetaLocation()
 			fs, err := fileservice.Get[fileservice.FileService](c.proc.Base.FileService, defines.SharedFileServiceName)
 			if err != nil {

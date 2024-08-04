@@ -639,7 +639,7 @@ func (tbl *txnTable) Ranges(
 	start := time.Now()
 	seq := tbl.db.op.NextSequence()
 
-	var blocks objectio.BlockInfoSliceInProgress
+	var blocks objectio.BlockInfoSlice
 
 	trace.GetService(sid).AddTxnDurationAction(
 		tbl.db.op,
@@ -720,7 +720,7 @@ func (tbl *txnTable) Ranges(
 		return
 	}
 
-	blocks.AppendBlockInfo(objectio.EmptyBlockInfoInProgress)
+	blocks.AppendBlockInfo(objectio.EmptyBlockInfo)
 
 	if err = tbl.rangesOnePart(
 		ctx,
@@ -766,7 +766,7 @@ func (tbl *txnTable) rangesOnePart(
 	state *logtailreplay.PartitionState, // snapshot state of this transaction
 	tableDef *plan.TableDef, // table definition (schema)
 	exprs []*plan.Expr, // filter expression
-	outBlocks *objectio.BlockInfoSliceInProgress, // output marshaled block list after filtering
+	outBlocks *objectio.BlockInfoSlice, // output marshaled block list after filtering
 	proc *process.Process, // process of this transaction
 	txnOffset int,
 ) (err error) {
@@ -884,7 +884,7 @@ func (tbl *txnTable) rangesOnePart(
 				meta = objMeta.MustDataMeta()
 			}
 
-			ForeachBlkInObjStatsList(true, meta, func(blk objectio.BlockInfoInProgress, blkMeta objectio.BlockObject) bool {
+			ForeachBlkInObjStatsList(true, meta, func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
 				skipBlk := false
 
 				if auxIdCnt > 0 {
@@ -1487,7 +1487,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 	if bat.Attrs[0] == catalog.BlockMeta_BlockInfo {
 		tbl.getTxn().hasS3Op.Store(true)
 		//bocks maybe come from different S3 object, here we just need to make sure fileName is not Nil.
-		fileName := objectio.DecodeBlockInfoInProgress(bat.Vecs[0].GetBytesAt(0)).MetaLocation().Name().String()
+		fileName := objectio.DecodeBlockInfo(bat.Vecs[0].GetBytesAt(0)).MetaLocation().Name().String()
 		return tbl.getTxn().WriteFile(
 			INSERT,
 			tbl.accountId,
@@ -1597,7 +1597,7 @@ func (tbl *txnTable) ensureSeqnumsAndTypesExpectRowid() {
 // TODO:: do prefetch read and parallel compaction
 func (tbl *txnTable) compaction(
 	compactedBlks map[objectio.ObjectLocation][]int64,
-) ([]objectio.BlockInfoInProgress, []objectio.ObjectStats, error) {
+) ([]objectio.BlockInfo, []objectio.ObjectStats, error) {
 	s3writer := &colexec.S3Writer{}
 	s3writer.SetTableName(tbl.tableName)
 	s3writer.SetSchemaVer(tbl.version)
@@ -1752,7 +1752,7 @@ func (tbl *txnTable) buildLocalDataSource(
 	case engine.RelDataBlockList:
 		ranges := relData.GetBlockInfoSlice()
 		skipReadMem := !bytes.Equal(
-			objectio.EncodeBlockInfoInProgress(*ranges.Get(0)), objectio.EmptyBlockInfoInProgressBytes)
+			objectio.EncodeBlockInfo(*ranges.Get(0)), objectio.EmptyBlockInfoBytes)
 
 		if tbl.db.op.IsSnapOp() {
 			txnOffset = tbl.getTxn().GetSnapshotWriteOffset()
@@ -1816,7 +1816,7 @@ func (tbl *txnTable) BuildReaders(
 	//relData maybe is nil, indicate that only read data from memory.
 	if relData == nil || relData.DataCnt() == 0 {
 		relData = NewEmptyBlockListRelationData()
-		relData.AppendBlockInfo(objectio.EmptyBlockInfoInProgress)
+		relData.AppendBlockInfo(objectio.EmptyBlockInfo)
 	}
 	blkCnt := relData.DataCnt()
 	if blkCnt < num {
@@ -1916,7 +1916,7 @@ func (tbl *txnTable) PKPersistedBetween(
 		bf   objectio.BloomFilter
 	)
 
-	candidateBlks := make(map[types.Blockid]*objectio.BlockInfoInProgress)
+	candidateBlks := make(map[types.Blockid]*objectio.BlockInfo)
 
 	//only check data objects.
 	delObjs, cObjs := p.GetChangedObjsBetween(from.Next(), types.MaxTs())
@@ -1966,7 +1966,7 @@ func (tbl *txnTable) PKPersistedBetween(
 			}
 
 			ForeachBlkInObjStatsList(false, meta,
-				func(blk objectio.BlockInfoInProgress, blkMeta objectio.BlockObject) bool {
+				func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
 					if !blkMeta.IsEmpty() &&
 						!blkMeta.MustGetColumn(uint16(primaryIdx)).ZoneMap().AnyIn(keys) {
 						return true
@@ -2121,10 +2121,10 @@ func (tbl *txnTable) transferDeletes(
 	deleteObjs,
 	createObjs map[objectio.ObjectNameShort]struct{},
 ) error {
-	var blks []objectio.BlockInfoInProgress
+	var blks []objectio.BlockInfo
 	sid := tbl.proc.Load().GetService()
 	relData := NewEmptyBlockListRelationData()
-	relData.AppendBlockInfo(objectio.EmptyBlockInfoInProgress)
+	relData.AppendBlockInfo(objectio.EmptyBlockInfo)
 	ds, err := tbl.buildLocalDataSource(ctx, 0, relData, TombstoneApplyPolicy(Policy_CheckCommittedS3Only))
 	if err != nil {
 		return err
@@ -2159,7 +2159,7 @@ func (tbl *txnTable) transferDeletes(
 						blkMeta.GetID(),
 					)
 					bid := objectio.BuildObjectBlockid(objectStats.ObjectName(), uint16(i))
-					blkInfo := objectio.BlockInfoInProgress{
+					blkInfo := objectio.BlockInfo{
 						BlockID:    *bid,
 						EntryState: obj.EntryState,
 						Sorted:     obj.Sorted,
@@ -2243,7 +2243,7 @@ func (tbl *txnTable) transferDeletes(
 					zap.Uint64("tid", tbl.tableId),
 					zap.String("tname", tbl.tableName),
 					zap.String("blks", stringifySlice(blks, func(a any) string {
-						info := a.(objectio.BlockInfoInProgress)
+						info := a.(objectio.BlockInfo)
 						return info.String()
 					})),
 					zap.String("detail", detail))
@@ -2257,7 +2257,7 @@ func (tbl *txnTable) transferDeletes(
 func (tbl *txnTable) readNewRowid(
 	vec *vector.Vector,
 	row int,
-	blks []objectio.BlockInfoInProgress,
+	blks []objectio.BlockInfo,
 	ds engine.DataSource,
 	genPkStr func([]byte) string,
 ) (types.Rowid, bool, error) {

@@ -649,7 +649,7 @@ func (w *S3Writer) writeEndBlocks(proc *process.Process) error {
 		if err := vector.AppendBytes(
 			w.blockInfoBat.Vecs[1],
 			//[]byte(metaLoc),
-			objectio.EncodeBlockInfoInProgress(blkInfo),
+			objectio.EncodeBlockInfo(blkInfo),
 			false,
 			proc.GetMPool()); err != nil {
 			return err
@@ -675,13 +675,13 @@ func (w *S3Writer) writeEndBlocks(proc *process.Process) error {
 
 // WriteEndBlocks writes batches in buffer to fileservice(aka s3 in this feature) and get meta data about block on fileservice and put it into metaLocBat
 // For more information, please refer to the comment about func WriteEnd in Writer interface
-func (w *S3Writer) WriteEndBlocks(proc *process.Process) ([]objectio.BlockInfoInProgress, []objectio.ObjectStats, error) {
+func (w *S3Writer) WriteEndBlocks(proc *process.Process) ([]objectio.BlockInfo, []objectio.ObjectStats, error) {
 	blocks, _, err := w.writer.Sync(proc.Ctx)
 	logutil.Debugf("write s3 table %q: %v, %v", w.tablename, w.seqnums, w.attrs)
 	if err != nil {
 		return nil, nil, err
 	}
-	blkInfos := make([]objectio.BlockInfoInProgress, 0, len(blocks))
+	blkInfos := make([]objectio.BlockInfo, 0, len(blocks))
 	//TODO::block id ,segment id and location should be get from BlockObject.
 	for j := range blocks {
 		location := blockio.EncodeLocation(
@@ -692,7 +692,7 @@ func (w *S3Writer) WriteEndBlocks(proc *process.Process) ([]objectio.BlockInfoIn
 		)
 
 		sid := location.Name().SegmentId()
-		blkInfo := objectio.BlockInfoInProgress{
+		blkInfo := objectio.BlockInfo{
 			BlockID: *objectio.NewBlockid(
 				&sid,
 				location.Name().Num(),

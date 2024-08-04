@@ -75,7 +75,7 @@ func NewLocalDataSource(
 	ctx context.Context,
 	table *txnTable,
 	txnOffset int,
-	rangesSlice objectio.BlockInfoSliceInProgress,
+	rangesSlice objectio.BlockInfoSlice,
 	skipReadMem bool,
 	policy TombstoneApplyPolicy,
 ) (source *LocalDataSource, err error) {
@@ -88,8 +88,8 @@ func NewLocalDataSource(
 
 	if rangesSlice != nil && rangesSlice.Len() > 0 {
 		if bytes.Equal(
-			objectio.EncodeBlockInfoInProgress(*rangesSlice.Get(0)),
-			objectio.EmptyBlockInfoInProgressBytes) {
+			objectio.EncodeBlockInfo(*rangesSlice.Get(0)),
+			objectio.EmptyBlockInfoBytes) {
 			rangesSlice = rangesSlice.Slice(1, rangesSlice.Len())
 		}
 
@@ -137,7 +137,7 @@ func (rs *RemoteDataSource) Next(
 	_ any,
 	_ *mpool.MPool,
 	_ engine.VectorPool,
-	_ *batch.Batch) (*objectio.BlockInfoInProgress, engine.DataState, error) {
+	_ *batch.Batch) (*objectio.BlockInfo, engine.DataState, error) {
 
 	if rs.cursor >= rs.data.DataCnt() {
 		return nil, engine.End, nil
@@ -264,7 +264,7 @@ func (rs *RemoteDataSource) SetFilterZM(_ objectio.ZoneMap) {
 // --------------------------------------------------------------------------------
 
 type LocalDataSource struct {
-	rangeSlice objectio.BlockInfoSliceInProgress
+	rangeSlice objectio.BlockInfoSlice
 	pState     *logtailreplay.PartitionState
 
 	memPKFilter *MemPKFilter
@@ -303,7 +303,7 @@ type LocalDataSource struct {
 }
 
 func (ls *LocalDataSource) String() string {
-	blks := make([]*objectio.BlockInfoInProgress, ls.rangeSlice.Len())
+	blks := make([]*objectio.BlockInfo, ls.rangeSlice.Len())
 	for i := range blks {
 		blks[i] = ls.rangeSlice.Get(i)
 	}
@@ -384,7 +384,7 @@ func (ls *LocalDataSource) sortBlockList() {
 		helper[i].blk = ls.rangeSlice.Get(i)
 		helper[i].zm = ls.blockZMS[i]
 	}
-	ls.rangeSlice = make(objectio.BlockInfoSliceInProgress, ls.rangeSlice.Size())
+	ls.rangeSlice = make(objectio.BlockInfoSlice, ls.rangeSlice.Size())
 
 	if ls.desc {
 		sort.Slice(helper, func(i, j int) bool {
@@ -444,7 +444,7 @@ func (ls *LocalDataSource) Next(
 	mp *mpool.MPool,
 	vp engine.VectorPool,
 	bat *batch.Batch,
-) (*objectio.BlockInfoInProgress, engine.DataState, error) {
+) (*objectio.BlockInfo, engine.DataState, error) {
 
 	if ls.memPKFilter == nil {
 		ff := filter.(MemPKFilter)
@@ -1098,7 +1098,7 @@ func (ls *LocalDataSource) batchPrefetch(seqNums []uint16) {
 	begin := ls.rangesCursor
 	end := ls.rangesCursor + batchSize
 
-	blks := make([]*objectio.BlockInfoInProgress, end-begin)
+	blks := make([]*objectio.BlockInfo, end-begin)
 	for idx := begin; idx < end; idx++ {
 		blks[idx-begin] = ls.rangeSlice.Get(idx)
 	}

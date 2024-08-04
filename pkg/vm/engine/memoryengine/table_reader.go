@@ -247,19 +247,19 @@ func (rd *MemRelationData) String() string {
 	return "RelData[M]"
 }
 
-func (rd *MemRelationData) GetBlockInfoSlice() objectio.BlockInfoSliceInProgress {
+func (rd *MemRelationData) GetBlockInfoSlice() objectio.BlockInfoSlice {
 	panic("not supported")
 }
 
-func (rd *MemRelationData) GetBlockInfo(i int) objectio.BlockInfoInProgress {
+func (rd *MemRelationData) GetBlockInfo(i int) objectio.BlockInfo {
 	panic("not supported")
 }
 
-func (rd *MemRelationData) SetBlockInfo(i int, blk objectio.BlockInfoInProgress) {
+func (rd *MemRelationData) SetBlockInfo(i int, blk objectio.BlockInfo) {
 	panic("not supported")
 }
 
-func (rd *MemRelationData) AppendBlockInfo(blk objectio.BlockInfoInProgress) {
+func (rd *MemRelationData) AppendBlockInfo(blk objectio.BlockInfo) {
 	panic("not supported")
 }
 
