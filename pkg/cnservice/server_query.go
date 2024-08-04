@@ -131,7 +131,7 @@ func (s *service) handleCtlReader(ctx context.Context, req *query.Request, resp 
 
 	extra := strings.Split(types.DecodeStringSlice(req.CtlReaderRequest.Extra)[0], ":")
 	extra = append([]string{req.CtlReaderRequest.Cfg}, extra...)
-	
+
 	resp.CtlReaderResponse.Resp = ctl.UpdateCurrentCNReader(
 		req.CtlReaderRequest.Cmd, extra...)
 
