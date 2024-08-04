@@ -957,13 +957,13 @@ type GlobalSysVarsMgr struct {
 
 // Get return sys vars of accountId
 func (m *GlobalSysVarsMgr) Get(accountId uint32, ses *Session, ctx context.Context) (*SystemVariables, error) {
-	m.Lock()
-	defer m.Unlock()
-
 	sysVars, err := ses.getGlobalSysVars(ctx)
 	if err != nil {
 		return nil, err
 	}
+
+	m.Lock()
+	defer m.Unlock()
 
 	if _, ok := m.accountsGlobalSysVarsMap[accountId]; ok {
 		m.accountsGlobalSysVarsMap[accountId].sysVars = sysVars
