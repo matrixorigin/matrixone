@@ -224,7 +224,7 @@ func TestMOSpan_End(t *testing.T) {
 	defer s.Reset()
 
 	ctx := context.TODO()
-	p := newMOTracerProvider(WithLongSpanTime(time.Hour), EnableTracer(true))
+	p := newMOTracerProvider(WithLongSpanTime(time.Hour), EnableTracer(true), EnableSpanProfile(true))
 	tracer := &MOTracer{
 		TracerConfig: trace.TracerConfig{Name: "test"},
 		provider:     p,
@@ -370,7 +370,7 @@ func TestMOSpan_doProfile(t *testing.T) {
 		tracer *MOTracer
 	}
 
-	p := newMOTracerProvider(WithFSWriterFactory(&dummyFileWriterFactory{}), EnableTracer(true))
+	p := newMOTracerProvider(WithFSWriterFactory(&dummyFileWriterFactory{}), EnableTracer(true), EnableSpanProfile(true))
 	tracer := p.Tracer("test").(*MOTracer)
 	ctx := context.TODO()
 
@@ -482,6 +482,183 @@ func TestMOSpan_doProfile(t *testing.T) {
 			t.Logf("span.LongTimeThreshold: %v, duration: %v, needRecord: %v, needProfile: %v, doneProfile: %v",
 				ms.LongTimeThreshold, ms.Duration, ms.needRecord, ms.NeedProfile(), ms.doneProfile)
 			require.Equal(t, tt.want, s.(*MOSpan).doneProfile)
+		})
+	}
+}
+
+func TestMOSpan_DisalbeProfile_doProfile(t *testing.T) {
+	type fields struct {
+		opts   []trace.SpanStartOption
+		ctx    context.Context
+		tracer *MOTracer
+	}
+
+	p := newMOTracerProvider(WithFSWriterFactory(&dummyFileWriterFactory{}), EnableTracer(true), WithLongSpanTime(10*time.Second), EnableSpanProfile(false))
+	tracer := p.Tracer("test").(*MOTracer)
+	ctx := context.TODO()
+
+	prepareCheckCpu := func(t *testing.T) {
+		if runtime.NumCPU() < 4 {
+			t.Skip("machine's performance too low to handle time sensitive case, issue #11864")
+		}
+	}
+
+	tests := []struct {
+		name    string
+		fields  fields
+		prepare func(t *testing.T)
+		// check
+		exist bool
+		want  bool
+	}{
+		{
+			name: "normal_needRecord",
+			fields: fields{
+				opts: []trace.SpanStartOption{
+					trace.WithProfileGoroutine(), // it will dump file into ETL folder.
+					trace.WithConstBackOff(10 * time.Millisecond),
+					trace.WithLongTimeThreshold(time.Millisecond), // trigger NeedRecord
+				},
+				ctx:    ctx,
+				tracer: tracer,
+			},
+			prepare: prepareCheckCpu,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.prepare != nil {
+				tt.prepare(t)
+			}
+			_, s := tt.fields.tracer.Start(tt.fields.ctx, tt.name, tt.fields.opts...)
+			ms, _ := s.(*MOSpan)
+			t.Logf("span.LongTimeThreshold: %v", ms.LongTimeThreshold)
+			time.Sleep(20 * time.Millisecond)
+			s.End()
+			t.Logf("(skip by EnableSpanProfile: false) span.LongTimeThreshold: %v, duration: %v, needRecord: %v, needProfile: %v, doneProfile: %v",
+				ms.LongTimeThreshold, ms.Duration, ms.needRecord, ms.NeedProfile(), ms.doneProfile)
+
+			require.Equal(t, true, ms.needRecord)
+			require.Equal(t, true, ms.NeedProfile())
+			require.Equal(t, false, ms.doneProfile)
+		})
+	}
+}
+func TestMOSpan_doProfile_ConstBackOff(t *testing.T) {
+	type fields struct {
+		opts   []trace.SpanStartOption
+		ctx    context.Context
+		tracer *MOTracer
+	}
+
+	p := newMOTracerProvider(WithFSWriterFactory(&dummyFileWriterFactory{}), EnableTracer(true), WithLongSpanTime(10*time.Second), EnableSpanProfile(true))
+	tracer := p.Tracer("test").(*MOTracer)
+	ctx := context.TODO()
+
+	prepareCheckCpu := func(t *testing.T) {
+		if runtime.NumCPU() < 4 {
+			t.Skip("machine's performance too low to handle time sensitive case, issue #11864")
+		}
+	}
+
+	tests := []struct {
+		name    string
+		fields  fields
+		prepare func(t *testing.T)
+		// check
+		exist   bool // exist BackOff instance.
+		want    bool // want BackOff
+		profile bool // is doneProfile.
+	}{
+		{
+			name: "normal_no_backOff_DoneProfile",
+			fields: fields{
+				opts: []trace.SpanStartOption{
+					trace.WithProfileGoroutine(), // it will dump file into ETL folder.
+					trace.WithLongTimeThreshold(time.Millisecond),
+				},
+				ctx:    ctx,
+				tracer: tracer,
+			},
+			prepare: prepareCheckCpu,
+			exist:   false,
+			want:    false,
+			profile: true,
+		},
+		{
+			name: "normal_no_needRecord_noProfile",
+			fields: fields{
+				opts: []trace.SpanStartOption{
+					trace.WithProfileGoroutine(), // it will dump file into ETL folder.
+					trace.WithConstBackOff(10 * time.Millisecond),
+					// default LongTimeThreshold = 10s
+					// trace.WithLongTimeThreshold(time.Millisecond),
+				},
+				ctx:    ctx,
+				tracer: tracer,
+			},
+			prepare: prepareCheckCpu,
+			exist:   false,
+			want:    false,
+			profile: false,
+		},
+		{
+			// name must same as follows case.
+			// case 'normal_needRecord'
+			name: "normal_needRecord",
+			fields: fields{
+				opts: []trace.SpanStartOption{
+					trace.WithProfileGoroutine(), // it will dump file into ETL folder.
+					trace.WithConstBackOff(10 * time.Minute),
+					trace.WithLongTimeThreshold(time.Millisecond), // trigger NeedRecord
+				},
+				ctx:    ctx,
+				tracer: tracer,
+			},
+			prepare: prepareCheckCpu,
+			exist:   true,
+			want:    true,
+			profile: true,
+		},
+		{
+			// name must same as above case. The 'name' is for tracer.profileBackOff mapper
+			// case 'normal_needRecord#01', SkipProfile
+			name: "normal_needRecord",
+			fields: fields{
+				opts: []trace.SpanStartOption{
+					trace.WithProfileGoroutine(), // it will dump file into ETL folder.
+					trace.WithConstBackOff(10 * time.Minute),
+					trace.WithLongTimeThreshold(time.Millisecond), // trigger NeedRecord
+				},
+				ctx:    ctx,
+				tracer: tracer,
+			},
+			prepare: prepareCheckCpu,
+			exist:   true,
+			want:    false,
+			profile: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.prepare != nil {
+				tt.prepare(t)
+			}
+			_, s := tt.fields.tracer.Start(tt.fields.ctx, tt.name, tt.fields.opts...)
+			ms, _ := s.(*MOSpan)
+			t.Logf("span.LongTimeThreshold: %v", ms.LongTimeThreshold)
+			time.Sleep(20 * time.Millisecond)
+			s.End()
+			t.Logf("(already free-ed) span.LongTimeThreshold: %v, duration: %v, needRecord: %v, needProfile: %v, doneProfile: %v",
+				ms.LongTimeThreshold, ms.Duration, ms.needRecord, ms.NeedProfile(), ms.doneProfile)
+
+			key := path.Join(tt.name, trace.ConstBackOffStrategy.String())
+			b, exist := tt.fields.tracer.profileBackOff[key]
+			require.Equal(t, tt.exist, exist)
+			if tt.want {
+				require.Equal(t, uint64(1), b.(*ConstBackOff).count)
+			}
+			require.Equal(t, tt.profile, s.(*MOSpan).doneProfile)
 		})
 	}
 }
@@ -675,5 +852,61 @@ func TestMOCtledKindPassDown(t *testing.T) {
 	_, span := tracer.Start(specialCtx, "child span")
 	defer span.End()
 	require.NotEqual(t, span.SpanContext().Kind, specialSpan.SpanContext().Kind)
+
+}
+
+func TestConstBackOff_Count(t *testing.T) {
+
+	t.Run("Normal Count", func(t *testing.T) {
+		base := 100 * time.Millisecond
+		b := NewConstBackoff(base)
+		_1time := b.Count()
+		time.Sleep(time.Second)
+		_2time := b.Count()
+		require.Equal(t, true, _1time)
+		require.Equal(t, true, _2time)
+	})
+
+	t.Run("Count 2 times", func(t *testing.T) {
+		base := time.Hour
+		b := NewConstBackoff(base)
+		_1time := b.Count()
+		_2time := b.Count()
+		require.Equal(t, true, _1time)
+		require.Equal(t, false, _2time)
+	})
+
+	t.Run("check", func(t *testing.T) {
+		base := time.Minute
+		now := time.Now()
+		b := ConstBackOff{
+			interval: base,
+			next:     now,
+		}
+		_1time := b.check(now)
+		require.Equal(t, false, _1time)
+		_2time := b.check(now.Add(time.Millisecond))
+		require.Equal(t, true, _2time)
+		require.Equal(t, now, b.next)
+	})
+
+	t.Run("Count in multi cycle", func(t *testing.T) {
+		base := 10 * time.Millisecond
+		b := NewConstBackoff(base)
+
+		runTime := time.Second
+		now := time.Now()
+		end := now.Add(runTime)
+		cnt := uint64(0)
+		for time.Now().Before(end) {
+			if b.Count() {
+				cnt++
+			}
+		}
+		require.Equal(t, cnt, b.count)
+		maxCnt := uint64(runTime / base)
+		require.Lessf(t, b.count, maxCnt+1, "current(%d) should < max+1(%d)", b.count, maxCnt+1)
+		t.Logf("run in 1s, base on interval %v, count: %d (max: %d)", base, cnt, maxCnt)
+	})
 
 }
