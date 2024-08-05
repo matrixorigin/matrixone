@@ -19,7 +19,7 @@ import (
 	"io"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/assert"
 )
@@ -58,7 +58,7 @@ func TestCacheExample(t *testing.T) {
 			{
 				Offset: 0,
 				Size:   2,
-				ToCacheData: func(_ io.Reader, data []byte, allocator CacheDataAllocator) (memorycache.CacheData, error) {
+				ToCacheData: func(_ io.Reader, data []byte, allocator CacheDataAllocator) (fscache.Data, error) {
 					cacheData := allocator.Alloc(len(data))
 					copy(cacheData.Bytes(), data)
 					return cacheData, nil

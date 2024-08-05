@@ -319,9 +319,9 @@ func (exec *txnExecutor) Exec(
 	c.SetOriginSQL(sql)
 	defer c.Release()
 	c.disableRetry = exec.opts.DisableIncrStatement()
-	c.SetBuildPlanFunc(func() (*plan.Plan, error) {
+	c.SetBuildPlanFunc(func(ctx context.Context) (*plan.Plan, error) {
 		return plan.BuildPlan(
-			exec.s.getCompileContext(exec.ctx, proc, exec.getDatabase(), lower),
+			exec.s.getCompileContext(ctx, proc, exec.getDatabase(), lower),
 			stmts[0], false)
 	})
 

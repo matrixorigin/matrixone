@@ -33,16 +33,16 @@ func (tableFunction *TableFunction) Call(proc *process.Process) (vm.CallResult, 
 		return vm.CancelResult, err
 	}
 
+	anal := proc.GetAnalyze(tableFunction.GetIdx(), tableFunction.GetParallelIdx(), tableFunction.GetParallelMajor())
+	anal.Start()
+	defer anal.Stop()
+
 	tblArg := tableFunction
 	var (
 		f bool
 		e error
 	)
 	idx := tableFunction.GetIdx()
-
-	anal := proc.GetAnalyze(tableFunction.GetIdx(), tableFunction.GetParallelIdx(), tableFunction.GetParallelMajor())
-	anal.Start()
-	defer anal.Stop()
 
 	result, err := vm.ChildrenCall(tableFunction.GetChildren(0), proc, anal)
 	if err != nil {

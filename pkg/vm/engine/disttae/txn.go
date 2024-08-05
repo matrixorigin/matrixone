@@ -39,6 +39,7 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
@@ -630,7 +631,7 @@ func (txn *Transaction) WriteFileLocked(
 			blkInfo := *objectio.DecodeBlockInfo(blkInfosVec.GetBytesAt(idx))
 			vector.AppendBytes(newBat.Vecs[0], []byte(blkInfo.MetaLocation().String()),
 				false, txn.proc.Mp())
-			colexec.Get().PutCnSegment(&blkInfo.SegmentID, colexec.CnBlockIdType)
+			colexec.Get().PutCnSegment(blkInfo.BlockID.Segment(), colexec.CnBlockIdType)
 		}
 
 		// append obj stats, may multiple
@@ -970,12 +971,32 @@ func (txn *Transaction) compactionBlksLocked() error {
 	return nil
 }
 
-func (txn *Transaction) hasDeletesOnUncommitedObject() bool {
-	return !txn.deletedBlocks.isEmpty()
-}
+//func (txn *Transaction) hasDeletesOnUncommitedObject() bool {
+//	return !txn.deletedBlocks.isEmpty()
+//}
 
-func (txn *Transaction) hasUncommittedDeletesOnBlock(id *types.Blockid) bool {
-	return txn.deletedBlocks.hasDeletes(id)
+//func (txn *Transaction) hasUncommittedDeletesOnBlock(id *types.Blockid) bool {
+//	return txn.deletedBlocks.hasDeletes(id)
+//}
+
+// TODO::remove it after workspace refactor.
+func (txn *Transaction) getUncommittedS3Tombstone(mp map[types.Blockid][]objectio.Location) (err error) {
+	txn.blockId_tn_delete_metaLoc_batch.RLock()
+	defer txn.blockId_tn_delete_metaLoc_batch.RUnlock()
+
+	for bid, bats := range txn.blockId_tn_delete_metaLoc_batch.data {
+		for _, b := range bats {
+			vs, area := vector.MustVarlenaRawData(b.GetVector(0))
+			for i := range vs {
+				loc, err := blockio.EncodeLocationFromString(vs[i].UnsafeGetString(area))
+				if err != nil {
+					return err
+				}
+				mp[bid] = append(mp[bid], loc)
+			}
+		}
+	}
+	return nil
 }
 
 // TODO:: refactor in next PR, to make it more efficient and include persisted deletes in S3
@@ -1014,7 +1035,7 @@ func (txn *Transaction) forEachTableHasDeletesLocked(f func(tbl *txnTable) error
 	return nil
 }
 
-func (txn *Transaction) forEachTableWrites(databaseId uint64, tableId uint64, offset int, f func(Entry)) {
+func (txn *Transaction) ForEachTableWrites(databaseId uint64, tableId uint64, offset int, f func(Entry)) {
 	txn.Lock()
 	defer txn.Unlock()
 	for i := 0; i < offset; i++ {
@@ -1064,7 +1085,9 @@ func (txn *Transaction) getCachedTable(
 
 func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 	logDebugf(txn.op.Txn(), "Transaction.Commit")
-	txn.IncrStatementID(ctx, true)
+	if err := txn.IncrStatementID(ctx, true); err != nil {
+		return nil, err
+	}
 	defer txn.delTransaction()
 	if txn.readOnly.Load() {
 		return nil, nil
@@ -1156,6 +1179,8 @@ func (txn *Transaction) GetSnapshotWriteOffset() int {
 	return txn.snapshotWriteOffset
 }
 
+type UT_ForceTransCheck struct{}
+
 func (txn *Transaction) transferDeletesLocked(ctx context.Context, commit bool) error {
 	var latestTs timestamp.Timestamp
 	txn.timestamps = append(txn.timestamps, txn.op.SnapshotTS())
@@ -1170,7 +1195,9 @@ func (txn *Transaction) transferDeletesLocked(ctx context.Context, commit bool) 
 		}
 		if commit {
 			if time.Since(txn.start) < time.Second*5 {
-				return nil
+				if ctx.Value(UT_ForceTransCheck{}) == nil {
+					return nil
+				}
 			}
 			//It's important to push the snapshot ts to the latest ts
 			if err := txn.op.UpdateSnapshot(
@@ -1228,6 +1255,7 @@ func (txn *Transaction) CloneSnapshotWS() client.Workspace {
 		proc:     txn.proc,
 		engine:   txn.engine,
 		tnStores: txn.tnStores,
+		idGen:    txn.idGen,
 
 		tableCache:         new(sync.Map),
 		databaseMap:        new(sync.Map),
