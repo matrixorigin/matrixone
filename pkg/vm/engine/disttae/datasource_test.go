@@ -20,12 +20,13 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 )
 
-func TestTombstoneData_MarshalAndUnmarshal(t *testing.T) {
+func TestTombstoneData1(t *testing.T) {
 	location1 := objectio.NewRandomLocation(1, 1111)
 	location2 := objectio.NewRandomLocation(2, 2222)
 	location3 := objectio.NewRandomLocation(3, 3333)
@@ -45,6 +46,7 @@ func TestTombstoneData_MarshalAndUnmarshal(t *testing.T) {
 		rowids = append(rowids, *rowid)
 	}
 
+	// Test AppendInMemory and AppendFiles and SortInMemory
 	tombstones1 := NewEmptyTombstoneData()
 	err := tombstones1.AppendInMemory(rowids...)
 	require.Nil(t, err)
@@ -75,6 +77,7 @@ func TestTombstoneData_MarshalAndUnmarshal(t *testing.T) {
 		require.True(t, last.Le(tombstones2.rowids[i]))
 	}
 
+	// Test Merge
 	tombstones1.Merge(tombstones2)
 	tombstones1.SortInMemory()
 	last = tombstones1.rowids[0]
@@ -82,6 +85,7 @@ func TestTombstoneData_MarshalAndUnmarshal(t *testing.T) {
 		require.True(t, last.Le(tombstones1.rowids[i]))
 	}
 
+	// Test MarshalBinary and UnmarshalBinary
 	var w bytes.Buffer
 	err = tombstones1.MarshalBinaryWithBuffer(&w)
 	require.NoError(t, err)
@@ -91,6 +95,37 @@ func TestTombstoneData_MarshalAndUnmarshal(t *testing.T) {
 	require.Equal(t, tombstones1.Type(), tombstonesCopy.Type())
 
 	require.Equal(t, tombstones1.String(), tombstonesCopy.String())
+
+	// Test AppendInMemory
+	// inMemTombstones:
+	//    blk1_0: [0, 1, 2, 3],
+	//    blk1_1: [0, 1, 2],
+	//    blk1_2: [0, 1, 2],
+	//    blk2_0: [0, 1, 2, 3]
+
+	// case 1: target is blk1_3 and rowsOffset is [0, 1, 2, 3]
+	// expect: left is [0, 1, 2, 3]. no rows are deleted
+	target := types.NewBlockidWithObjectID(obj1, 3)
+	rowsOffset := []int64{0, 1, 2, 3}
+	left := tombstones1.ApplyInMemTombstones(
+		*target,
+		rowsOffset,
+		nil,
+	)
+	require.Equal(t, left, rowsOffset)
+
+	// case 2: target is blk1_3 and deleted rows is [5]
+	// expect: left is [0, 1, 2, 3], deleted rows is [5]. no rows are deleted
+	deleted := nulls.NewWithSize(0)
+	deleted.Add(5)
+	left = tombstones1.ApplyInMemTombstones(
+		*target,
+		nil,
+		deleted,
+	)
+	require.Equal(t, 0, len(left))
+	require.True(t, deleted.Contains(5))
+	require.True(t, deleted.Count() == 1)
 }
 
 func TestRelationDataV1_MarshalAndUnMarshal(t *testing.T) {
