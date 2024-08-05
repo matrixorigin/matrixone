@@ -425,7 +425,3 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 		logger.Debug("wait next round, check new account")
 	}
 }
-
-func isColumNotExistError(err error) bool {
-	return strings.Contains(err.Error(), "column name does not exist")
-}
