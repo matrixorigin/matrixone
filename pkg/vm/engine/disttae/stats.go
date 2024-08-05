@@ -186,7 +186,16 @@ func NewGlobalStats(
 	return s
 }
 
-func (gs *GlobalStats) ShouldUpdate(key pb.StatsInfoKey, entryNum int64) bool {
+// shouldTrigger returns true only if key already exists in the map.
+func (gs *GlobalStats) shouldTrigger(key pb.StatsInfoKey) bool {
+	gs.mu.Lock()
+	defer gs.mu.Unlock()
+	_, ok := gs.mu.statsInfoMap[key]
+	return ok
+}
+
+// checkTriggerCond checks the condition that if we should trigger the stats update.
+func (gs *GlobalStats) checkTriggerCond(key pb.StatsInfoKey, entryNum int64) bool {
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
 	info, ok := gs.mu.statsInfoMap[key]
@@ -319,7 +328,9 @@ func (gs *GlobalStats) consumeLogtail(tail *logtail.TableLogtail) {
 		TableID:    tail.Table.TbId,
 	}
 	if len(tail.CkpLocation) > 0 {
-		gs.triggerUpdate(key, false)
+		if gs.shouldTrigger(key) {
+			gs.triggerUpdate(key, false)
+		}
 	} else if tail.Table != nil {
 		var triggered bool
 		for _, cmd := range tail.Commands {
@@ -327,7 +338,9 @@ func (gs *GlobalStats) consumeLogtail(tail *logtail.TableLogtail) {
 				logtailreplay.IsObjTable(cmd.TableName) ||
 				logtailreplay.IsMetaTable(cmd.TableName) {
 				triggered = true
-				gs.triggerUpdate(key, false)
+				if gs.shouldTrigger(key) {
+					gs.triggerUpdate(key, false)
+				}
 				break
 			}
 		}
@@ -336,9 +349,11 @@ func (gs *GlobalStats) consumeLogtail(tail *logtail.TableLogtail) {
 		} else {
 			gs.tableLogtailCounter[key]++
 		}
-		if !triggered && gs.ShouldUpdate(key, gs.tableLogtailCounter[key]) {
+		if !triggered && gs.checkTriggerCond(key, gs.tableLogtailCounter[key]) {
 			gs.tableLogtailCounter[key] = 0
-			gs.triggerUpdate(key, false)
+			if gs.shouldTrigger(key) {
+				gs.triggerUpdate(key, false)
+			}
 		}
 	}
 }
