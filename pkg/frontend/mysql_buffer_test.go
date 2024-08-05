@@ -240,6 +240,7 @@ func TestMySQLBufferWriteRows(t *testing.T) {
 
 func TestMySQLBufferMaxAllowedPacket(t *testing.T) {
 	var err error
+	var remain bool
 	sv, err := getSystemVariables("test/system_vars_config.toml")
 	sv.SessionTimeout.Duration = 5 * time.Minute
 	if err != nil {
@@ -269,27 +270,52 @@ func TestMySQLBufferMaxAllowedPacket(t *testing.T) {
 		}()
 		go func() {
 			var err error
-			fieldSizes := []int{int(MaxPayloadSize) / 2, int(MaxPayloadSize), int(MaxPayloadSize) * 2}
-			for i := 0; i < 3; i++ {
-				err = cWriter.BeginPacket()
-				if err != nil {
-					return
-				}
-				exceptRow := generateRandomBytes(fieldSizes[i])
-				exceptPayload = append(exceptPayload, exceptRow)
-				err = cWriter.Append(exceptRow...)
-				if err != nil {
-					return
-				}
-				err = cWriter.FinishedPacket()
-				if err != nil {
-					return
-				}
-			}
-			err = cWriter.Flush()
+
+			err = cWriter.BeginPacket()
 			if err != nil {
-				return
+				panic(err)
 			}
+			exceptRow := generateRandomBytes(int(MaxPayloadSize) / 2)
+			exceptPayload = append(exceptPayload, exceptRow)
+			err = cWriter.Append(exceptRow...)
+			if err != nil {
+				panic(err)
+			}
+			err = cWriter.FinishedPacket()
+			if err != nil {
+				panic(err)
+			}
+
+			err = cWriter.BeginPacket()
+			if err != nil {
+				panic(err)
+			}
+			exceptRow = generateRandomBytes(int(MaxPayloadSize))
+			exceptPayload = append(exceptPayload, exceptRow)
+			err = cWriter.Append(exceptRow...)
+			if err != nil {
+				panic(err)
+			}
+			err = cWriter.FinishedPacket()
+			if err != nil {
+				panic(err)
+			}
+
+			err = cWriter.BeginPacket()
+			if err != nil {
+				panic(err)
+			}
+			exceptRow = generateRandomBytes(int(MaxPayloadSize) * 2)
+			exceptPayload = append(exceptPayload, exceptRow)
+			err = cWriter.Append(exceptRow...)
+			if err != nil {
+				panic(err)
+			}
+			err = cWriter.FinishedPacket()
+			if err != nil {
+				panic(err)
+			}
+
 		}()
 
 		var data []byte
@@ -301,6 +327,9 @@ func TestMySQLBufferMaxAllowedPacket(t *testing.T) {
 		convey.So(reflect.DeepEqual(data, exceptPayload[1]), convey.ShouldBeTrue)
 		data, err = cReader.Read()
 		convey.So(err, convey.ShouldNotBeNil)
+		for remain, _ = hasData(server); remain; remain, _ = hasData(server) {
+			_, _ = cReader.conn.Read(make([]byte, int(MaxPayloadSize*2)))
+		}
 	})
 
 	convey.Convey("test read big packet", t, func() {
@@ -326,26 +355,34 @@ func TestMySQLBufferMaxAllowedPacket(t *testing.T) {
 		}()
 		go func() {
 			var err error
-			fieldSizes := []int{int(MaxPayloadSize) * 2, int(MaxPayloadSize) * 4}
-			for i := 0; i < 2; i++ {
-				err = cWriter.BeginPacket()
-				if err != nil {
-					return
-				}
-				exceptRow := generateRandomBytes(fieldSizes[i])
-				exceptPayload = append(exceptPayload, exceptRow)
-				err = cWriter.Append(exceptRow...)
-				if err != nil {
-					return
-				}
-				err = cWriter.FinishedPacket()
-				if err != nil {
-					return
-				}
-			}
-			err = cWriter.Flush()
+			err = cWriter.BeginPacket()
 			if err != nil {
-				return
+				panic(err)
+			}
+			exceptRow := generateRandomBytes(int(MaxPayloadSize) * 2)
+			exceptPayload = append(exceptPayload, exceptRow)
+			err = cWriter.Append(exceptRow...)
+			if err != nil {
+				panic(err)
+			}
+			err = cWriter.FinishedPacket()
+			if err != nil {
+				panic(err)
+			}
+
+			err = cWriter.BeginPacket()
+			if err != nil {
+				panic(err)
+			}
+			exceptRow = generateRandomBytes(int(MaxPayloadSize) * 4)
+			exceptPayload = append(exceptPayload, exceptRow)
+			err = cWriter.Append(exceptRow...)
+			if err != nil {
+				panic(err)
+			}
+			err = cWriter.FinishedPacket()
+			if err != nil {
+				panic(err)
 			}
 		}()
 
@@ -355,5 +392,8 @@ func TestMySQLBufferMaxAllowedPacket(t *testing.T) {
 		convey.So(reflect.DeepEqual(data, exceptPayload[0]), convey.ShouldBeTrue)
 		data, err = cReader.Read()
 		convey.So(err, convey.ShouldNotBeNil)
+		for remain, _ = hasData(server); remain; remain, _ = hasData(server) {
+			_, _ = cReader.conn.Read(make([]byte, int(MaxPayloadSize*2)))
+		}
 	})
 }
