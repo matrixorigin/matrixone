@@ -98,7 +98,7 @@
 # pkg/lockservice
 /pkg/lockservice @zhangxu19830126
 
-# pkg/shardservice 
+# pkg/shardservice
 /pkg/shardservice @zhangxu19830126
 
 # pkg/logservice
@@ -131,7 +131,7 @@
 /pkg/sort @aunjgr @m-schen
 
 # pkg/bootstrap
-/pkg/bootstrap @daviszhen @zhangxu19830126 @qingxinhome
+/pkg/bootstrap @daviszhen @zhangxu19830126 @qingxinhome @LeftHandCold
 
 # pkg/sql
 /pkg/sql @aunjgr
