@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 )
@@ -30,7 +31,7 @@ func TestDefaultSqlWriter_WriteRowRecords(t *testing.T) {
 		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
 	}
 	defer db.Close()
-	mock.ExpectExec(regexp.QuoteMeta(`OAD DATA INLINE FORMAT='csv', DATA='record1
+	mock.ExpectExec(regexp.QuoteMeta(`LOAD DATA INLINE FORMAT='csv', DATA='record1
 ' INTO TABLE testDB.testTable`)).WillReturnResult(sqlmock.NewResult(1, 1))
 	db_holder.SetDBConn(db)
 

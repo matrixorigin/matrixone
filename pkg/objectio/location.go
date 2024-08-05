@@ -15,6 +15,7 @@
 package objectio
 
 import (
+	"bytes"
 	"fmt"
 	"unsafe"
 
@@ -94,4 +95,65 @@ func (l Location) String() string {
 		return string(l)
 	}
 	return fmt.Sprintf("%v_%v_%d_%d", l.Name().String(), l.Extent(), l.Rows(), l.ID())
+}
+
+func DecodeLocation(buf []byte) *Location {
+	location := Location(buf)
+	return &location
+}
+
+func EncodeLocation(location Location) []byte {
+	return location[:]
+}
+
+type LocationSlice []byte
+
+func (s *LocationSlice) Get(i int) *Location {
+	return DecodeLocation((*s)[i*LocationLen : i*LocationLen+LocationLen])
+}
+
+func (s *LocationSlice) GetBytes(i int) []byte {
+	return (*s)[i*LocationLen : (i+1)*LocationLen]
+}
+
+func (s *LocationSlice) Set(i int, location *Location) {
+	copy((*s)[i*LocationLen:], EncodeLocation(*location))
+}
+
+func (s *LocationSlice) Len() int {
+	return len(*s) / LocationLen
+}
+
+func (s *LocationSlice) Size() int {
+	return len(*s)
+}
+
+func (s *LocationSlice) Slice(i, j int) []byte {
+	return (*s)[i*LocationLen : j*LocationLen]
+}
+
+func (s *LocationSlice) Append(bs []byte) {
+	*s = append(*s, bs...)
+}
+
+func (s *LocationSlice) AppendLocation(location Location) {
+	*s = append(*s, EncodeLocation(location)...)
+}
+
+func (s *LocationSlice) SetBytes(bs []byte) {
+	*s = bs
+}
+
+func (s *LocationSlice) GetAllBytes() []byte {
+	return *s
+}
+
+func (s *LocationSlice) String() string {
+	var buf bytes.Buffer
+	buf.WriteString(fmt.Sprintf("LocationSlice[Len=%d]:\n", s.Len()))
+	for i := 0; i < s.Len(); i++ {
+		buf.WriteString(s.Get(i).String())
+		buf.WriteByte('\n')
+	}
+	return buf.String()
 }

@@ -61,7 +61,7 @@ func mustDecimal128(v types.Decimal128, err error) types.Decimal128 {
 	return v
 }
 
-func StatementInfoNew(i Item, ctx context.Context) Item {
+func StatementInfoNew(i table.Item, ctx context.Context) table.Item {
 	if s, ok := i.(*StatementInfo); ok {
 
 		// execute the stat plan
@@ -87,7 +87,7 @@ func StatementInfoNew(i Item, ctx context.Context) Item {
 	return nil
 }
 
-func StatementInfoUpdate(ctx context.Context, existing, new Item) {
+func StatementInfoUpdate(ctx context.Context, existing, new table.Item) {
 
 	e := existing.(*StatementInfo)
 	n := new.(*StatementInfo)
@@ -129,7 +129,7 @@ func StatementInfoUpdate(ctx context.Context, existing, new Item) {
 	n.exported = true
 }
 
-func StatementInfoFilter(i Item) bool {
+func StatementInfoFilter(i table.Item) bool {
 	// Attempt to perform a type assertion to *StatementInfo
 	statementInfo, ok := i.(*StatementInfo)
 
@@ -249,6 +249,10 @@ type Key struct {
 	SqlSourceType string
 }
 
+func (k Key) Before(end time.Time) bool {
+	return k.Window.Before(end)
+}
+
 var stmtPool = sync.Pool{
 	New: func() any {
 		return &StatementInfo{}
@@ -267,7 +271,7 @@ type Statistic struct {
 	BytesScan int64
 }
 
-func (s *StatementInfo) Key(duration time.Duration) interface{} {
+func (s *StatementInfo) Key(duration time.Duration) table.WindowKey {
 	return Key{SessionID: s.SessionID, StatementType: s.StatementType, Window: s.ResponseAt.Truncate(duration), Status: s.Status, SqlSourceType: s.SqlSourceType}
 }
 

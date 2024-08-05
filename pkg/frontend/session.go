@@ -437,7 +437,9 @@ func (ses *Session) ResetPacketCounter() {
 
 // SetTStmt do set the Session.tStmt
 // 1. init-set at RecordStatement, which means the statement is started.
-// 2. reset at logStatementStringStatus, which means the statement is finished.
+// 2. reset nil, means the statement is finished.
+//   - case 1: logStatementStringStatus()
+//   - case 2: RecordParseErrorStatement()
 func (ses *Session) SetTStmt(stmt *motrace.StatementInfo) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -1588,6 +1590,7 @@ func (d *dbMigration) Migrate(ctx context.Context, ses *Session) error {
 		inMigration: true,
 		ses:         ses,
 	}
+	defer tempExecCtx.Close()
 	return doComQuery(ses, tempExecCtx, &UserInput{sql: "use `" + d.db + "`"})
 }
 
@@ -1620,6 +1623,7 @@ func (p *prepareStmtMigration) Migrate(ctx context.Context, ses *Session) error 
 		ses:               ses,
 		executeParamTypes: p.paramTypes,
 	}
+	defer tempExecCtx.Close()
 	return doComQuery(ses, tempExecCtx, &UserInput{sql: p.sql})
 }
 

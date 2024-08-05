@@ -15,6 +15,7 @@
 package export
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"time"
@@ -26,20 +27,29 @@ import (
 
 var _ table.RowWriter = (*reactWriter)(nil)
 var _ table.AfterWrite = (*reactWriter)(nil)
+var _ table.BufferSettable = (*reactWriter)(nil)
 
 // reactWriter implement table.AfterWrite, it can react before/after FlushAndClose
 type reactWriter struct {
 	ctx context.Context
 	w   table.RowWriter
+	// implement table.BufferSettable
+	setter table.BufferSettable
 
 	// implement AfterWrite
-	afters []table.CheckWriteHook
+	afters []table.AckHook
 }
 
 func newWriter(ctx context.Context, w table.RowWriter) *reactWriter {
+	var setter table.BufferSettable = nil
+	if s, ok := w.(table.BufferSettable); ok && s.NeedBuffer() {
+		setter = s
+	}
 	return &reactWriter{
 		ctx: ctx,
 		w:   w,
+		// implement table.BufferSettable
+		setter: setter,
 	}
 }
 
@@ -63,7 +73,13 @@ func (rw *reactWriter) FlushAndClose() (int, error) {
 	return n, err
 }
 
-func (rw *reactWriter) AddAfter(hook table.CheckWriteHook) {
+func (rw *reactWriter) SetBuffer(buf *bytes.Buffer, callback func(*bytes.Buffer)) {
+	rw.setter.SetBuffer(buf, callback)
+}
+
+func (rw *reactWriter) NeedBuffer() bool { return rw.setter != nil }
+
+func (rw *reactWriter) AddAfter(hook table.AckHook) {
 	rw.afters = append(rw.afters, hook)
 }
 
@@ -81,7 +97,9 @@ func GetWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string, ena
 			}
 			cw := etl.NewCSVWriter(ctx, etl.NewFSWriter(ctx, fs, options...))
 			if enableSqlWriter {
-				return newWriter(ctx, etl.NewSqlWriter(ctx, tbl, cw))
+				// return newWriter(ctx, etl.NewSqlWriter(ctx, tbl, cw))
+				// new version
+				return newWriter(ctx, etl.NewContentWriter(ctx, tbl, cw))
 			} else {
 				return newWriter(ctx, cw)
 			}

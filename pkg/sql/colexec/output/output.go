@@ -41,15 +41,14 @@ func (output *Output) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	ap := output
-	result, err := output.GetChildren(0).Call(proc)
-	if err != nil {
-		return result, err
-	}
-
 	anal := proc.GetAnalyze(output.GetIdx(), output.GetParallelIdx(), output.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
+
+	result, err := vm.ChildrenCall(output.GetChildren(0), proc, anal)
+	if err != nil {
+		return result, err
+	}
 
 	if result.Batch == nil {
 		result.Status = vm.ExecStop
@@ -61,7 +60,7 @@ func (output *Output) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 	bat := result.Batch
 
-	if err := ap.Func(bat); err != nil {
+	if err = output.Func(bat); err != nil {
 		result.Status = vm.ExecStop
 		return result, err
 	}
