@@ -16,7 +16,6 @@ package mergelimit
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -27,10 +26,8 @@ import (
 var _ vm.Operator = new(MergeLimit)
 
 type container struct {
-	colexec.ReceiverOperator
 	seen          uint64
 	limit         uint64
-	buf           *batch.Batch
 	limitExecutor colexec.ExpressionExecutor
 }
 
@@ -84,14 +81,9 @@ func (mergeLimit *MergeLimit) Reset(proc *process.Process, pipelineFailed bool, 
 
 func (mergeLimit *MergeLimit) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if mergeLimit.ctr != nil {
-		mergeLimit.ctr.FreeMergeTypeOperator(pipelineFailed)
 		if mergeLimit.ctr.limitExecutor != nil {
 			mergeLimit.ctr.limitExecutor.Free()
 			mergeLimit.ctr.limitExecutor = nil
-		}
-		if mergeLimit.ctr.buf != nil {
-			mergeLimit.ctr.buf.Clean(proc.Mp())
-			mergeLimit.ctr.buf = nil
 		}
 		mergeLimit.ctr = nil
 	}

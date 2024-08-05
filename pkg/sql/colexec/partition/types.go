@@ -72,7 +72,6 @@ func (partition *Partition) Release() {
 }
 
 type container struct {
-	colexec.ReceiverOperator
 
 	// operator status
 	status int

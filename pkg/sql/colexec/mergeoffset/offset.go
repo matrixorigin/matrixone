@@ -39,7 +39,6 @@ func (mergeOffset *MergeOffset) OpType() vm.OpType {
 func (mergeOffset *MergeOffset) Prepare(proc *process.Process) error {
 	var err error
 	mergeOffset.ctr = new(container)
-	mergeOffset.ctr.InitReceiver(proc, true)
 	if mergeOffset.ctr.offsetExecutor == nil {
 		mergeOffset.ctr.offsetExecutor, err = colexec.NewExpressionExecutor(proc, mergeOffset.Offset)
 		if err != nil {
@@ -65,47 +64,37 @@ func (mergeOffset *MergeOffset) Call(proc *process.Process) (vm.CallResult, erro
 	anal.Start()
 	defer anal.Stop()
 
-	result := vm.NewCallResult()
-	var msg *process.RegisterMessage
-	if mergeOffset.ctr.buf != nil {
-		proc.PutBatch(mergeOffset.ctr.buf)
-		mergeOffset.ctr.buf = nil
-	}
-
 	for {
-		msg = mergeOffset.ctr.ReceiveFromAllRegs(anal)
-		if msg.Err != nil {
-			// WTF, nil?
-			result.Status = vm.ExecStop
-			return result, msg.Err
+		result, err := mergeOffset.GetChildren(0).Call(proc)
+		if err != nil {
+			return result, err
 		}
 
-		if msg.Batch == nil {
-			result.Batch = nil
-			result.Status = vm.ExecStop
-			return result, nil
+		if result.Batch == nil {
+			return result, err
 		}
 
-		mergeOffset.ctr.buf = msg.Batch
-		anal.Input(mergeOffset.ctr.buf, mergeOffset.GetIsFirst())
+		anal.Input(result.Batch, mergeOffset.GetIsFirst())
 		if mergeOffset.ctr.seen > mergeOffset.ctr.offset {
-			anal.Output(mergeOffset.ctr.buf, mergeOffset.GetIsLast())
-			result.Batch = mergeOffset.ctr.buf
+			anal.Output(result.Batch, mergeOffset.GetIsLast())
 			return result, nil
 		}
-		length := mergeOffset.ctr.buf.RowCount()
+		length := result.Batch.RowCount()
 		// bat = PartOne + PartTwo, and PartTwo is required.
 		if mergeOffset.ctr.seen+uint64(length) > mergeOffset.ctr.offset {
 			sels := newSels(int64(mergeOffset.ctr.offset-mergeOffset.ctr.seen), int64(length)-int64(mergeOffset.ctr.offset-mergeOffset.ctr.seen), proc)
 			mergeOffset.ctr.seen += uint64(length)
-			mergeOffset.ctr.buf.Shrink(sels, false)
+			buf, err := result.Batch.Dup(proc.GetMPool())
+			if err != nil {
+				return result, err
+			}
+			buf.Shrink(sels, false)
 			proc.Mp().PutSels(sels)
-			anal.Output(mergeOffset.ctr.buf, mergeOffset.GetIsLast())
-			result.Batch = mergeOffset.ctr.buf
+			anal.Output(buf, mergeOffset.GetIsLast())
+			result.Batch = buf
 			return result, nil
 		}
 		mergeOffset.ctr.seen += uint64(length)
-		proc.PutBatch(mergeOffset.ctr.buf)
 	}
 }
 
