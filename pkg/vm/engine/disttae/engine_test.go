@@ -81,13 +81,13 @@ func TestTransaction(t *testing.T) {
 	}
 	// fmt.Printf("%v", blks)
 
-	_, _ = txn.getRow(ctx, 0, 0, nil, nil, makeFunctionExprForTest(">", []*plan.Expr{
-		makeColExprForTest(0, types.T_int64),
+	_, _ = txn.getRow(ctx, 0, 0, nil, nil, MakeFunctionExprForTest(">", []*plan.Expr{
+		MakeColExprForTest(0, types.T_int64),
 		plan2.MakePlan2Int64ConstExprWithType(20),
 	}), nil)
 
-	_, _ = txn.getRows(ctx, 0, 0, nil, nil, makeFunctionExprForTest(">", []*plan.Expr{
-		makeColExprForTest(0, types.T_int64),
+	_, _ = txn.getRows(ctx, 0, 0, nil, nil, MakeFunctionExprForTest(">", []*plan.Expr{
+		MakeColExprForTest(0, types.T_int64),
 		plan2.MakePlan2Int64ConstExprWithType(20),
 	}), nil)
 
