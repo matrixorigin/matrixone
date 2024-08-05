@@ -76,7 +76,7 @@ func Test_InsertRows(t *testing.T) {
 	schema := catalog2.MockSchemaAll(10, 0)
 	schema.Name = tableName
 
-	defs, err := catalog2.SchemaToDefs(schema)
+	defs, err := testutil.EngineTableDefBySchema(schema)
 	require.Nil(t, err)
 
 	err = db.Create(ctx, tableName, defs)

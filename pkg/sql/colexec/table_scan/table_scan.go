@@ -40,7 +40,6 @@ func (tableScan *TableScan) OpType() vm.OpType {
 
 func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 	tableScan.ctr = new(container)
-	tableScan.ctr.orderBy = tableScan.Reader.GetOrderBy()
 	if tableScan.TopValueMsgTag > 0 {
 		tableScan.ctr.msgReceiver = message.NewMessageReceiver([]int32{tableScan.TopValueMsgTag}, tableScan.GetAddress(), proc.GetMessageBoard())
 	}
