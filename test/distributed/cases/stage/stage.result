@@ -273,43 +273,15 @@ R_REGIONKEY  INTEGER NOT NULL,
 R_NAME       CHAR(25) NOT NULL,
 R_COMMENT    VARCHAR(152)
 ) INFILE 'stage://sub_local_stage/stage_table*.csv' fields terminated by ',' IGNORE 1 LINES;
-select * from stage_ext_table;
-r_regionkey    r_name    r_comment
-0    AFRICA    lar deposits. blithely final packages cajole. regular waters are final requests. regular accounts are according to 
-1    AMERICA    hs use ironic, even requests. s
-2    ASIA    ges. thinly even pinto beans ca
-3    EUROPE    ly final courts cajole furiously final excuse
-4    MIDDLE EAST    uickly special accounts cajole carefully blithely close requests. carefully final asymptotes haggle furiousl
-0    AFRICA    lar deposits. blithely final packages cajole. regular waters are final requests. regular accounts are according to 
-1    AMERICA    hs use ironic, even requests. s
-2    ASIA    ges. thinly even pinto beans ca
-3    EUROPE    ly final courts cajole furiously final excuse
-4    MIDDLE EAST    uickly special accounts cajole carefully blithely close requests. carefully final asymptotes haggle furiousl
-0    AFRICA    lar deposits. blithely final packages cajole. regular waters are final requests. regular accounts are according to 
-1    AMERICA    hs use ironic, even requests. s
-2    ASIA    ges. thinly even pinto beans ca
-3    EUROPE    ly final courts cajole furiously final excuse
-4    MIDDLE EAST    uickly special accounts cajole carefully blithely close requests. carefully final asymptotes haggle furiousl
-0    AFRICA    lar deposits. blithely final packages cajole. regular waters are final requests. regular accounts are according to 
-1    AMERICA    hs use ironic, even requests. s
-2    ASIA    ges. thinly even pinto beans ca
-3    EUROPE    ly final courts cajole furiously final excuse
-4    MIDDLE EAST    uickly special accounts cajole carefully blithely close requests. carefully final asymptotes haggle furiousl
-0    AFRICA    lar deposits. blithely final packages cajole. regular waters are final requests. regular accounts are according to 
-1    AMERICA    hs use ironic, even requests. s
-2    ASIA    ges. thinly even pinto beans ca
-3    EUROPE    ly final courts cajole furiously final excuse
-4    MIDDLE EAST    uickly special accounts cajole carefully blithely close requests. carefully final asymptotes haggle furiousl
-0    AFRICA    lar deposits. blithely final packages cajole. regular waters are final requests. regular accounts are according to 
-1    AMERICA    hs use ironic, even requests. s
-2    ASIA    ges. thinly even pinto beans ca
-3    EUROPE    ly final courts cajole furiously final excuse
-4    MIDDLE EAST    uickly special accounts cajole carefully blithely close requests. carefully final asymptotes haggle furiousl
-0    AFRICA    lar deposits. blithely final packages cajole. regular waters are final requests. regular accounts are according to 
-1    AMERICA    hs use ironic, even requests. s
-2    ASIA    ges. thinly even pinto beans ca
-3    EUROPE    ly final courts cajole furiously final excuse
-4    MIDDLE EAST    uickly special accounts cajole carefully blithely close requests. carefully final asymptotes haggle furiousl
+select count(*) from stage_ext_table;
+count(*)
+35
+select count(stage_list('stage://sub_local_stage/'));
+count(stage_list(stage://sub_local_stage/))
+7
+select count(stage_list('stage://sub_local_stage/stage_table*.csv'));
+count(stage_list(stage://sub_local_stage/stage_table*.csv))
+7
 drop stage local_stage;
 drop stage sub_local_stage;
 drop database sdb;
