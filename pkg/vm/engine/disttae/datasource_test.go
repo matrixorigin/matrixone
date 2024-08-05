@@ -49,7 +49,22 @@ func TestTombstoneData_MarshalAndUnmarshal(t *testing.T) {
 	require.Nil(t, err)
 	err = tombstones.AppendFiles(location1, location2)
 	require.Nil(t, err)
-	t.Log(tombstones.String())
+
+	tombstones.SortInMemory()
+	last := tombstones.rowids[0]
+	for i := 1; i < len(tombstones.rowids); i++ {
+		require.True(t, last.Le(tombstones.rowids[i]))
+	}
+
+	var w bytes.Buffer
+	err = tombstones.MarshalBinaryWithBuffer(&w)
+	require.NoError(t, err)
+
+	tombstones2, err := UnmarshalTombstoneData(w.Bytes())
+	require.NoError(t, err)
+	require.Equal(t, tombstones.Type(), tombstones2.Type())
+
+	require.Equal(t, tombstones.String(), tombstones2.String())
 }
 
 func TestRelationDataV1_MarshalAndUnMarshal(t *testing.T) {

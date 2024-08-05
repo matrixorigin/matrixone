@@ -42,6 +42,12 @@ func UnmarshalTombstoneData(data []byte) (engine.Tombstoner, error) {
 			return nil, err
 		}
 		return tomb, nil
+	case engine.TombstoneData:
+		tomb := new(tombstoneData)
+		if err := tomb.UnmarshalBinary(data); err != nil {
+			return nil, err
+		}
+		return tomb, nil
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("unsupported tombstone type")
 	}
@@ -69,7 +75,12 @@ type tombstoneData struct {
 }
 
 func (tomb *tombstoneData) MarshalBinaryWithBuffer(buf *bytes.Buffer) (err error) {
-	buf.Grow(4*2 + len(tomb.rowids)*types.RowidSize + len(tomb.files)*objectio.LocationLen)
+	buf.Grow(1 + 4*2 + len(tomb.rowids)*types.RowidSize + len(tomb.files)*objectio.LocationLen)
+
+	typ := uint8(tomb.Type())
+	if _, err = buf.Write(types.EncodeUint8(&typ)); err != nil {
+		return
+	}
 
 	size := uint32(len(tomb.rowids))
 	if _, err = buf.Write(types.EncodeUint32(&size)); err != nil {
@@ -88,6 +99,12 @@ func (tomb *tombstoneData) MarshalBinaryWithBuffer(buf *bytes.Buffer) (err error
 }
 
 func (tomb *tombstoneData) UnmarshalBinary(buf []byte) error {
+	typ := engine.TombstoneType(types.DecodeUint8(buf))
+	if typ != engine.TombstoneData {
+		return moerr.NewInternalErrorNoCtx("UnmarshalBinary TombstoneData with %v", typ)
+	}
+	buf = buf[1:]
+
 	size := types.DecodeUint32(buf)
 	buf = buf[4:]
 	tomb.rowids = types.DecodeSlice[types.Rowid](buf[:size*types.RowidSize])
