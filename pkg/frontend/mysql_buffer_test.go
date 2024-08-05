@@ -49,7 +49,7 @@ func generateRandomBytes(n int) []byte {
 	return data
 }
 
-func TestMySQLProtocolRead(t *testing.T) {
+func TestMySQLBufferRead(t *testing.T) {
 	var err error
 	server, client := net.Pipe()
 	defer server.Close()
@@ -106,7 +106,72 @@ func TestMySQLProtocolRead(t *testing.T) {
 
 }
 
-func TestMySQLProtocolWriteRows(t *testing.T) {
+func TestMySQLBufferReadLoadLocal(t *testing.T) {
+	var err error
+	sv, err := getSystemVariables("test/system_vars_config.toml")
+	sv.SessionTimeout.Duration = 5 * time.Minute
+	if err != nil {
+		panic(err)
+	}
+	pu := config.NewParameterUnit(sv, nil, nil, nil)
+	setGlobalSessionAlloc(NewSessionAllocator(pu))
+	convey.Convey("test read load local packet", t, func() {
+		server, client := net.Pipe()
+		defer server.Close()
+		defer client.Close()
+		cWriter, _ := NewIOSession(client, pu)
+		cReader, _ := NewIOSession(server, pu)
+
+		exceptPayload := make([][]byte, 0)
+		actualPayload := make([][]byte, 0)
+		go func() {
+			var err error
+			fieldSizes := []int{1000, 2000, 1000}
+			for i := 0; i < 3; i++ {
+				exceptRow := make([]byte, 0)
+				err = cWriter.BeginPacket()
+				if err != nil {
+					panic(err)
+				}
+				field := generateRandomBytes(fieldSizes[i])
+				exceptRow = append(exceptRow, field...)
+				err = cWriter.Append(field...)
+				if err != nil {
+					panic(err)
+				}
+				exceptPayload = append(exceptPayload, exceptRow)
+				err = cWriter.FinishedPacket()
+				if err != nil {
+					panic(err)
+				}
+			}
+			err = cWriter.Flush()
+			if err != nil {
+				panic(err)
+			}
+		}()
+
+		var err error
+		var data []byte
+		for i := 0; i < 3; i++ {
+			data, err = cReader.ReadLoadLocalPacket()
+			payload := make([]byte, len(data))
+			copy(payload, data)
+			if err != nil {
+				panic(err)
+			}
+			actualPayload = append(actualPayload, payload)
+		}
+		remain, err := hasData(server)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(reflect.DeepEqual(actualPayload, exceptPayload), convey.ShouldBeTrue)
+		convey.So(remain, convey.ShouldBeFalse)
+
+	})
+
+}
+
+func TestMySQLBufferWriteRows(t *testing.T) {
 	var err error
 	sv, err := getSystemVariables("test/system_vars_config.toml")
 	sv.SessionTimeout.Duration = 5 * time.Minute
@@ -171,4 +236,124 @@ func TestMySQLProtocolWriteRows(t *testing.T) {
 
 	})
 
+}
+
+func TestMySQLBufferMaxAllowedPacket(t *testing.T) {
+	var err error
+	sv, err := getSystemVariables("test/system_vars_config.toml")
+	sv.SessionTimeout.Duration = 5 * time.Minute
+	if err != nil {
+		panic(err)
+	}
+	pu := config.NewParameterUnit(sv, nil, nil, nil)
+	setGlobalSessionAlloc(NewSessionAllocator(pu))
+	convey.Convey("test read over packet", t, func() {
+		server, client := net.Pipe()
+		defer server.Close()
+		defer client.Close()
+		cWriter, _ := NewIOSession(client, pu)
+		cReader, _ := NewIOSession(server, pu)
+		ses := &Session{}
+		ses.respr = &MysqlResp{
+			mysqlRrWr: &MysqlProtocolImpl{io: NewIOPackage(true), tcpConn: cReader},
+		}
+		cReader.ses = ses
+		exceptPayload := make([][]byte, 0)
+		go func() {
+			for {
+				_, err := cWriter.Read()
+				if err != nil {
+					return
+				}
+			}
+		}()
+		go func() {
+			var err error
+			fieldSizes := []int{int(MaxPayloadSize) / 2, int(MaxPayloadSize), int(MaxPayloadSize) * 2}
+			for i := 0; i < 3; i++ {
+				err = cWriter.BeginPacket()
+				if err != nil {
+					return
+				}
+				exceptRow := generateRandomBytes(fieldSizes[i])
+				exceptPayload = append(exceptPayload, exceptRow)
+				err = cWriter.Append(exceptRow...)
+				if err != nil {
+					return
+				}
+				err = cWriter.FinishedPacket()
+				if err != nil {
+					return
+				}
+			}
+			err = cWriter.Flush()
+			if err != nil {
+				return
+			}
+		}()
+
+		var data []byte
+		data, err = cReader.Read()
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(reflect.DeepEqual(data, exceptPayload[0]), convey.ShouldBeTrue)
+		data, err = cReader.Read()
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(reflect.DeepEqual(data, exceptPayload[1]), convey.ShouldBeTrue)
+		data, err = cReader.Read()
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+
+	convey.Convey("test read big packet", t, func() {
+		server, client := net.Pipe()
+		defer server.Close()
+		defer client.Close()
+		cWriter, _ := NewIOSession(client, pu)
+		cReader, _ := NewIOSession(server, pu)
+		ses := &Session{}
+		ses.respr = &MysqlResp{
+			mysqlRrWr: &MysqlProtocolImpl{io: NewIOPackage(true), tcpConn: cReader},
+		}
+		cReader.ses = ses
+		cReader.allowedPacketSize = int(MaxPayloadSize) * 3
+		exceptPayload := make([][]byte, 0)
+		go func() {
+			for {
+				_, err := cWriter.Read()
+				if err != nil {
+					return
+				}
+			}
+		}()
+		go func() {
+			var err error
+			fieldSizes := []int{int(MaxPayloadSize) * 2, int(MaxPayloadSize) * 4}
+			for i := 0; i < 2; i++ {
+				err = cWriter.BeginPacket()
+				if err != nil {
+					return
+				}
+				exceptRow := generateRandomBytes(fieldSizes[i])
+				exceptPayload = append(exceptPayload, exceptRow)
+				err = cWriter.Append(exceptRow...)
+				if err != nil {
+					return
+				}
+				err = cWriter.FinishedPacket()
+				if err != nil {
+					return
+				}
+			}
+			err = cWriter.Flush()
+			if err != nil {
+				return
+			}
+		}()
+
+		var data []byte
+		data, err = cReader.Read()
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(reflect.DeepEqual(data, exceptPayload[0]), convey.ShouldBeTrue)
+		data, err = cReader.Read()
+		convey.So(err, convey.ShouldNotBeNil)
+	})
 }

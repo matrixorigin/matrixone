@@ -159,12 +159,9 @@ func (c *Conn) Close() error {
 	getGlobalRtMgr().Closed(c)
 	return nil
 }
-func (c *Conn) CheckAllowedPacketSize(totalLength int, allowedPacketSize int) error {
-	if c.allowedPacketSize == 0 {
-		return nil
-	}
+func (c *Conn) CheckAllowedPacketSize(totalLength int) error {
 	var err error
-	if totalLength > allowedPacketSize {
+	if totalLength > c.allowedPacketSize {
 		errMsg := moerr.MysqlErrorMsgRefer[moerr.ER_SERVER_NET_PACKET_TOO_LARGE]
 		err = c.ses.GetResponser().MysqlRrWr().WriteERR(errMsg.ErrorCode, strings.Join(errMsg.SqlStates, ","), errMsg.ErrorMsgOrFormat)
 		if err != nil {
@@ -245,7 +242,7 @@ func (c *Conn) Read() ([]byte, error) {
 			break
 		}
 		totalLength += packetLength
-		err = c.CheckAllowedPacketSize(totalLength, c.allowedPacketSize)
+		err = c.CheckAllowedPacketSize(totalLength)
 		if err != nil {
 			return nil, err
 		}
