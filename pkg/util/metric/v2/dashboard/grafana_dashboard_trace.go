@@ -99,16 +99,6 @@ func (c *DashboardCreator) initTraceMoLoggerExportDataRow() dashboard.Option {
 		}),
 	)
 
-	panels = append(panels, c.withMultiGraph(
-		"ETLMerge files",
-		3,
-		[]string{
-			`sum(delta(` + c.getMetricWithFilter("mo_trace_collector_status_total", "") + `[$interval:1m])) by(type)`,
-		},
-		[]string{
-			"{{ type }}",
-		}))
-
 	return dashboard.Row(
 		"MOLogger Export",
 		panels...,
@@ -223,6 +213,39 @@ func (c *DashboardCreator) initTraceCollectorOverviewRow() dashboard.Option {
 			[]string{"{{ type }}"}),
 
 		// ------------- next row ------------
+		c.withMultiGraph(
+			"MoLogger Consume - Rate",
+			3,
+			[]string{
+				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_duration_seconds_count", `type="consume"`) + `[$interval:1m]))`,
+			},
+			[]string{
+				"comsume",
+			}),
+
+		c.withMultiGraph(
+			"MoLogger Consume - Check error",
+			3,
+			[]string{
+				`sum(rate(` + c.getMetricWithFilter("mo_trace_collector_status_total", "") + `[$interval:1m])) by(type)`,
+			},
+			[]string{
+				"{{ type }}",
+			}),
+
+		c.withMultiGraph(
+			"MoLogger Consume - Check Cost (avg)",
+			3,
+			[]string{
+				`sum(delta(` + c.getMetricWithFilter("mo_trace_collector_duration_seconds_sum", `type="consume_delay"`) + `[$interval:1m]))` +
+					`/` +
+					`sum(delta(mo_trace_collector_status_total[$interval:1m]))`,
+			},
+			[]string{
+				"{{ type }}",
+			},
+			axis.Unit("s"),
+		),
 	)
 }
 
