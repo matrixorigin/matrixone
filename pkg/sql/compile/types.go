@@ -15,6 +15,7 @@
 package compile
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -299,7 +300,7 @@ type Compile struct {
 	// cnLabel is the CN labels which is received from proxy when build connection.
 	cnLabel map[string]string
 
-	buildPlanFunc func() (*plan2.Plan, error)
+	buildPlanFunc func(ctx context.Context) (*plan2.Plan, error)
 	startAt       time.Time
 	// use for duplicate check
 	fuzzys []*fuzzyCheck
