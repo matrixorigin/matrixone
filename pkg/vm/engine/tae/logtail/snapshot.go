@@ -333,6 +333,7 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileServ
 			if dataMeta.BlockHeader().ColumnCount() != MaxColSnapshot {
 				logutil.Warn("[GetSnapshot] column count not match",
 					zap.Uint64("table id", tid),
+					zap.Uint16("column count", dataMeta.BlockHeader().ColumnCount()),
 					zap.String("object name", name.String()))
 				continue
 			}
