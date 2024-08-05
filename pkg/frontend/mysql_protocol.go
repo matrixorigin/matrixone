@@ -345,7 +345,6 @@ func (mp *MysqlProtocolImpl) Write(execCtx *ExecCtx, bat *batch.Batch) error {
 	//Reference the shared ResultColumns of the session among multi-thread.
 	sesMrs := execCtx.ses.GetMysqlResultSet()
 	mrs.Columns = sesMrs.Columns
-	mrs.Name2Index = sesMrs.Name2Index
 
 	//group row
 	mrs.Data = make([][]interface{}, countOfResultSet)

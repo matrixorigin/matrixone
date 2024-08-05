@@ -133,6 +133,9 @@ func CalculateStorageUsage(
 	service string,
 	sqlExecutor func() ie.InternalExecutor,
 ) (err error) {
+	var name2idx map[string]uint64
+	var account string
+	var sizeMB, snapshotSizeMB float64
 	ctx, span := trace.Start(ctx, "MetricStorageUsage")
 	defer span.End()
 	ctx = defines.AttachAccount(ctx, catalog.System_Account, catalog.System_User, catalog.System_Role)
@@ -203,19 +206,45 @@ func CalculateStorageUsage(
 		}
 		logger.Debug("collect storage_usage cnt", zap.Uint64("cnt", cnt))
 		metric.StorageUsageFactory.Reset()
+		if name2idx == nil {
+			name2idx = make(map[string]uint64)
+			for colIdx := uint64(0); colIdx < result.ColumnCount(); colIdx++ {
+				colName, _, _, err := result.Column(ctx, colIdx)
+				if err != nil {
+					return err
+				}
+				name2idx[colName] = colIdx
+			}
+		}
+
 		for rowIdx := uint64(0); rowIdx < cnt; rowIdx++ {
-			account, err := result.StringValueByName(ctx, rowIdx, ColumnAccountName)
-			if err != nil {
-				return err
+			if accountIdx, ok := name2idx[ColumnAccountName]; ok != true {
+				account = ""
+			} else {
+				account, err = result.GetString(ctx, rowIdx, accountIdx)
+				if err != nil {
+					return err
+				}
 			}
-			sizeMB, err := result.Float64ValueByName(ctx, rowIdx, ColumnSize)
-			if err != nil {
-				return err
+
+			if sizeMBIdx, ok := name2idx[ColumnSize]; ok != true {
+				sizeMB = 0.0
+			} else {
+				sizeMB, err = result.GetFloat64(ctx, rowIdx, sizeMBIdx)
+				if err != nil {
+					return err
+				}
 			}
-			snapshotSizeMB, err := result.Float64ValueByName(ctx, rowIdx, ColumnSnapshotSize)
-			if err != nil && !isColumNotExistError(err) {
-				return err
+
+			if snapshotSizeMBIdx, ok := name2idx[ColumnSnapshotSize]; ok != true {
+				snapshotSizeMB = 0.0
+			} else {
+				snapshotSizeMB, err = result.GetFloat64(ctx, rowIdx, snapshotSizeMBIdx)
+				if err != nil {
+					return err
+				}
 			}
+
 			logger.Debug("storage_usage", zap.String("account", account), zap.Float64("sizeMB", sizeMB),
 				zap.Float64("snapshot", snapshotSizeMB))
 
@@ -258,6 +287,9 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 	var next = time.NewTicker(interval)
 	var lastCheckTime = time.Now().Add(-time.Second)
 	var newAccountCnt uint64
+	var name2idx map[string]uint64
+	var account, createdTime string
+	var sizeMB, snapshotSizeMB float64
 	for {
 		select {
 		case <-ctx.Done():
@@ -302,16 +334,36 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 			goto nextL
 		}
 		logger.Debug("collect new account cnt", zap.Uint64("cnt", newAccountCnt))
+
+		if name2idx == nil {
+			name2idx = make(map[string]uint64)
+			for colIdx := uint64(0); colIdx < result.ColumnCount(); colIdx++ {
+				colName, _, _, err := result.Column(ctx, colIdx)
+				if err != nil {
+					continue
+				}
+				name2idx[colName] = colIdx
+			}
+		}
+
 		for rowIdx := uint64(0); rowIdx < result.RowCount(); rowIdx++ {
 
-			account, err := result.StringValueByName(ctx, rowIdx, ColumnAccountName)
-			if err != nil {
-				continue
+			if accountIdx, ok := name2idx[ColumnAccountName]; ok != true {
+				account = ""
+			} else {
+				account, err = result.GetString(ctx, rowIdx, accountIdx)
+				if err != nil {
+					continue
+				}
 			}
 
-			createdTime, err := result.StringValueByName(ctx, rowIdx, ColumnCreatedTime)
-			if err != nil {
-				continue
+			if createdTimeIdx, ok := name2idx[ColumnCreatedTime]; ok != true {
+				createdTime = ""
+			} else {
+				createdTime, err = result.GetString(ctx, rowIdx, createdTimeIdx)
+				if err != nil {
+					continue
+				}
 			}
 
 			// query single account's storage
@@ -335,16 +387,26 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 				logger.Warn("failed to fetch new account size, not exist.")
 				continue
 			}
-			sizeMB, err := showRet.Float64ValueByName(ctx, 0, ColumnSize)
-			if err != nil {
-				logger.Error("failed to fetch new account size", zap.Error(err), zap.String("account", account))
-				continue
+			if sizeMBIdx, ok := name2idx[ColumnSize]; ok != true {
+				sizeMB = 0.0
+			} else {
+				sizeMB, err = result.GetFloat64(ctx, 0, sizeMBIdx)
+				if err != nil {
+					logger.Error("failed to fetch new account size", zap.Error(err), zap.String("account", account))
+					continue
+				}
 			}
-			snapshotSizeMB, err := showRet.Float64ValueByName(ctx, 0, ColumnSnapshotSize)
-			if err != nil && !isColumNotExistError(err) {
-				logger.Error("failed to fetch new account snapshot size", zap.Error(err), zap.String("account", account))
-				continue
+
+			if snapshotSizeMBIdx, ok := name2idx[ColumnSnapshotSize]; ok != true {
+				snapshotSizeMB = 0.0
+			} else {
+				snapshotSizeMB, err = result.GetFloat64(ctx, 0, snapshotSizeMBIdx)
+				if err != nil {
+					logger.Error("failed to fetch new account size", zap.Error(err), zap.String("account", account))
+					continue
+				}
 			}
+
 			// done query.
 
 			// update new accounts metric
