@@ -28,43 +28,69 @@ import (
 func TestTombstoneData_MarshalAndUnmarshal(t *testing.T) {
 	location1 := objectio.NewRandomLocation(1, 1111)
 	location2 := objectio.NewRandomLocation(2, 2222)
+	location3 := objectio.NewRandomLocation(3, 3333)
 
 	obj1 := objectio.NewObjectid()
 	obj2 := objectio.NewObjectid()
 	blk1_0 := objectio.NewBlockidWithObjectID(obj1, 0)
 	blk1_1 := objectio.NewBlockidWithObjectID(obj1, 1)
+	blk1_2 := objectio.NewBlockidWithObjectID(obj1, 2)
 	blk2_0 := objectio.NewBlockidWithObjectID(obj2, 0)
 
 	rowids := make([]types.Rowid, 0)
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 4; i++ {
 		rowid := types.NewRowid(blk1_0, uint32(i))
-		rowids = append(rowids, *rowid)
-		rowid = types.NewRowid(blk1_1, uint32(i))
 		rowids = append(rowids, *rowid)
 		rowid = types.NewRowid(blk2_0, uint32(i))
 		rowids = append(rowids, *rowid)
 	}
-	tombstones := NewEmptyTombstoneData()
-	err := tombstones.AppendInMemory(rowids...)
+
+	tombstones1 := NewEmptyTombstoneData()
+	err := tombstones1.AppendInMemory(rowids...)
 	require.Nil(t, err)
-	err = tombstones.AppendFiles(location1, location2)
+	err = tombstones1.AppendFiles(location1, location2)
 	require.Nil(t, err)
 
-	tombstones.SortInMemory()
-	last := tombstones.rowids[0]
-	for i := 1; i < len(tombstones.rowids); i++ {
-		require.True(t, last.Le(tombstones.rowids[i]))
+	tombstones1.SortInMemory()
+	last := tombstones1.rowids[0]
+	for i := 1; i < len(tombstones1.rowids); i++ {
+		require.True(t, last.Le(tombstones1.rowids[i]))
+	}
+
+	tombstones2 := NewEmptyTombstoneData()
+	rowids = rowids[:0]
+	for i := 0; i < 3; i++ {
+		rowid := types.NewRowid(blk1_1, uint32(i))
+		rowids = append(rowids, *rowid)
+		rowid = types.NewRowid(blk1_2, uint32(i))
+		rowids = append(rowids, *rowid)
+	}
+	err = tombstones2.AppendInMemory(rowids...)
+	require.Nil(t, err)
+	err = tombstones2.AppendFiles(location3)
+	require.Nil(t, err)
+	tombstones2.SortInMemory()
+	last = tombstones2.rowids[0]
+	for i := 1; i < len(tombstones2.rowids); i++ {
+		require.True(t, last.Le(tombstones2.rowids[i]))
+	}
+
+	tombstones1.Merge(tombstones2)
+	tombstones1.SortInMemory()
+	last = tombstones1.rowids[0]
+	for i := 1; i < len(tombstones1.rowids); i++ {
+		require.True(t, last.Le(tombstones1.rowids[i]))
 	}
 
 	var w bytes.Buffer
-	err = tombstones.MarshalBinaryWithBuffer(&w)
+	err = tombstones1.MarshalBinaryWithBuffer(&w)
 	require.NoError(t, err)
 
-	tombstones2, err := UnmarshalTombstoneData(w.Bytes())
+	tombstonesCopy, err := UnmarshalTombstoneData(w.Bytes())
 	require.NoError(t, err)
-	require.Equal(t, tombstones.Type(), tombstones2.Type())
+	require.Equal(t, tombstones1.Type(), tombstonesCopy.Type())
 
-	require.Equal(t, tombstones.String(), tombstones2.String())
+	require.Equal(t, tombstones1.String(), tombstonesCopy.String())
 }
 
 func TestRelationDataV1_MarshalAndUnMarshal(t *testing.T) {
