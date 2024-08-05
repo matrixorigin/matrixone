@@ -250,7 +250,7 @@ func (mgr *TxnManager) heartbeat(ctx context.Context) {
 		case <-heartbeatTicker.C:
 			op := mgr.newHeartbeatOpTxn(ctx)
 			op.Txn.(*Txn).Add(1)
-			_, err := mgr.PreparingSM.EnqueueRecevied(op)
+			_, err := mgr.PreparingSM.EnqueueReceived(op)
 			if err != nil {
 				panic(err)
 			}
@@ -277,7 +277,7 @@ func (mgr *TxnManager) newHeartbeatOpTxn(ctx context.Context) *OpTxn {
 }
 
 func (mgr *TxnManager) OnOpTxn(op *OpTxn) (err error) {
-	_, err = mgr.PreparingSM.EnqueueRecevied(op)
+	_, err = mgr.PreparingSM.EnqueueReceived(op)
 	return
 }
 
