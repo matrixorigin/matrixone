@@ -102,16 +102,15 @@ func makeMockVecs() []*vector.Vector {
 // new batchs with schema : (a int, b uuid, c varchar, d json, e datetime)
 func MakeMockBatchs() *batch.Batch {
 	bat := batch.New(true, []string{"a", "b", "c", "d", "e"})
-	bat.SetRowCount(1)
 	vecs := makeMockVecs()
 	bat.Vecs = vecs
+	bat.SetRowCount(vecs[0].Length())
 	return bat
 }
 
 // new batchs with schema : (a int, b uuid, c varchar, d json, e date)
 func MakeMockBatchsWithRowID() *batch.Batch {
 	bat := batch.New(true, []string{catalog.Row_ID, "a", "b", "c", "d", "e"})
-	bat.SetRowCount(1)
 	vecs := makeMockVecs()
 
 	uuid1 := objectio.NewSegmentid()
@@ -122,6 +121,7 @@ func MakeMockBatchsWithRowID() *batch.Batch {
 	for i := range vecs {
 		bat.Vecs[i+1] = vecs[i]
 	}
+	bat.SetRowCount(vecs[0].Length())
 	return bat
 }
 
@@ -129,10 +129,10 @@ func MakeMockBatchsWithRowID() *batch.Batch {
 // vecs[0] is null,  use for test preinsert...
 func MakeMockBatchsWithNullVec() *batch.Batch {
 	bat := batch.New(true, []string{"a", "b", "c", "d", "e"})
-	bat.SetRowCount(1)
 	vecs := makeMockVecs()
 	vecs[0] = testutil.MakeInt32Vector([]int32{1, 1}, []uint64{0, 1})
 	bat.Vecs = vecs
+	bat.SetRowCount(vecs[0].Length())
 	return bat
 }
 
