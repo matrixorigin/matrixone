@@ -2099,6 +2099,9 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 		if n.ObjRef.PubInfo != nil {
 			ctx = defines.AttachAccountId(ctx, uint32(n.ObjRef.PubInfo.TenantId))
 		}
+		if util.TableIsLoggingTable(n.ObjRef.SchemaName, n.ObjRef.ObjName) {
+			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+		}
 		db, err = c.e.Database(ctx, n.ObjRef.SchemaName, txnOp)
 		if err != nil {
 			panic(err)
