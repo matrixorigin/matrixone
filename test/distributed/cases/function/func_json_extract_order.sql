@@ -31,4 +31,65 @@ select * from t_json order by json_extract(c2, '$.panel_no') , json_extract(c2, 
 --t6
  select * from t_json order by json_extract(c2, '$.panel_no') , json_extract(c2, '$.area') desc;
 
+
+CREATE TABLE data_table (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  json_data JSON NOT NULL
+);
+
+INSERT INTO data_table (json_data)
+VALUES
+  ('{"value": 100}'),
+  ('{"value": -200}'),
+  ('{"value": 150.5}'),
+  ('{"value": 0}'),
+  ('{"value": -99.9}'),
+  ('{"value": 50}'),
+  ('{"value": 300}');
+
+INSERT INTO data_table (json_data)
+VALUES
+  ('{"value": 1000000000000}'),
+  ('{"value": -2000000000000}'),
+  ('{"value": 1500000000000.5}'),
+  ('{"value": 0}'),
+  ('{"value": -999999999999.9}'),
+  ('{"value": 500000000000}'),
+  ('{"value": 3000000000000}');
+
+select JSON_EXTRACT(json_data, '$.value') from data_table;
+
+SELECT id, json_data
+FROM data_table
+ORDER BY JSON_EXTRACT(json_data, '$.value') ASC;
+
+SELECT id, json_data
+FROM data_table
+ORDER BY JSON_EXTRACT(json_data, '$.value') DESC;
+
+INSERT INTO data_table (json_data)
+VALUES
+  ('{"value": "1000000000000"}'),
+  ('{"value": "-2000000000000"}'),
+  ('{"value": "1500000000000.5"}'),
+  ('{"value": "0"}'),
+  ('{"value": "-999999999999.9"}'),
+  ('{"value": "500000000000"}'),
+  ('{"value": "3000000000000"}'),
+  ('{"value":"A2"}'),
+  ('{"value":"A1"}'),
+  ('{"value":"A3"}'),
+  ('{"value":""}'),
+  ('{"value":null}');
+
+select JSON_EXTRACT(json_data, '$.value') from data_table;
+
+SELECT id, json_data
+FROM data_table
+ORDER BY JSON_EXTRACT(json_data, '$.value') ASC;
+
+SELECT id, json_data
+FROM data_table
+ORDER BY JSON_EXTRACT(json_data, '$.value') DESC;
+
 drop database if exists test;
