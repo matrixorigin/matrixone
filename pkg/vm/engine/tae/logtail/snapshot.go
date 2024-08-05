@@ -51,6 +51,8 @@ const (
 	ColDatabaseName
 	ColTableName
 	ColObjId
+
+	MaxColSnapshot
 )
 
 var (
@@ -313,10 +315,27 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileServ
 		snapshotSchemaTypes[ColLevel],
 		snapshotSchemaTypes[ColObjId],
 	}
-	for _, objectMap := range objects {
+	for tid, objectMap := range objects {
 		for _, object := range objectMap {
 			location := object.stats.ObjectLocation()
 			name := object.stats.ObjectName()
+			meta, err := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
+			if err != nil {
+				return nil, err
+			}
+			dataMeta, ok := meta.DataMeta()
+			if !ok {
+				logutil.Warn("[GetSnapshot] dataMeta not found",
+					zap.Uint64("table id", tid),
+					zap.String("object name", name.String()))
+				continue
+			}
+			if dataMeta.BlockHeader().ColumnCount() != MaxColSnapshot {
+				logutil.Warn("[GetSnapshot] column count not match",
+					zap.Uint64("table id", tid),
+					zap.String("object name", name.String()))
+				continue
+			}
 			for i := uint32(0); i < object.stats.BlkCnt(); i++ {
 				loc := objectio.BuildLocation(name, location.Extent(), 0, uint16(i))
 				blk := objectio.BlockInfo{
